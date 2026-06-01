@@ -226,3 +226,4 @@ CLI는 그래픽 패널에 없는 기능(전체 슬래시 명령, MCP 세부 설
 > 더 강력한 자동화(멀티 에이전트, autopilot)가 필요하면 [03. oh-my-claudecode 설치](./03-oh-my-claudecode-설치.md)로 진행.
 
 > 문제가 생기면 [99. 트러블슈팅](./99-troubleshooting.md) 참고.
+깃허브 작업
