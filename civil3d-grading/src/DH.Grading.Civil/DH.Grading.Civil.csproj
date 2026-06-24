@@ -1,0 +1,68 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <UseWPF>true</UseWPF>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>DH.Grading.Civil</AssemblyName>
+    <RootNamespace>DH.Grading.Civil</RootNamespace>
+    <!-- Civil3D는 .NET 어셈블리 직접 빌드를 막지 않도록 CS1701 등 경고 완화 -->
+    <NoWarn>$(NoWarn);CS1701;CS1702</NoWarn>
+    <!-- NuGet 의존성(NetTopologySuite 등)을 출력(bin)에 복사 → 플러그인과 함께 배포되도록 -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <!--
+    Civil3D 2026 / AutoCAD 2026 관리형 DLL을 빌드타임만 참조한다(런타임 미복사: Private=false).
+    실행은 설치된 Civil3D 2026이 자기 DLL을 로드한다.
+    설치 경로가 다르면 아래 AcadDir 한 줄만 바꾸면 된다.
+  -->
+  <PropertyGroup>
+    <!-- AutoCAD 기본 DLL은 설치 루트, Civil3D DLL은 그 아래 C3D 폴더에 있다. -->
+    <AcadDir Condition="'$(AcadDir)' == ''">C:\Program Files\Autodesk\AutoCAD 2026\</AcadDir>
+    <CivilDir Condition="'$(CivilDir)' == ''">$(AcadDir)C3D\</CivilDir>
+    <AcaDir Condition="'$(AcaDir)' == ''">$(AcadDir)ACA\</AcaDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="acmgd">
+      <HintPath>$(AcadDir)acmgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="acdbmgd">
+      <HintPath>$(AcadDir)acdbmgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="accoremgd">
+      <HintPath>$(AcadDir)accoremgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="AdWindows">
+      <HintPath>$(AcadDir)AdWindows.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- AEC 기반 클래스(Entity 등) — Civil3D 타입이 상속하므로 필수 -->
+    <Reference Include="AecBaseMgd">
+      <HintPath>$(AcaDir)AecBaseMgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- Civil3D 도메인 API (C3D 하위 폴더) -->
+    <Reference Include="AeccDbMgd">
+      <HintPath>$(CivilDir)AeccDbMgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DH.Grading.Core\DH.Grading.Core.csproj" />
+  </ItemGroup>
+
+  <!-- 리본 버튼 아이콘(PNG)을 DLL에 포함 -->
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\*.png" />
+  </ItemGroup>
+
+</Project>

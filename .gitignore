@@ -1,0 +1,22 @@
+# Claude Code 개인 로컬 설정 (권한 등) — 커밋 제외
+.claude/settings.local.json
+
+# OMC 상태/세션 아티팩트
+.omc/
+
+# Python
+__pycache__/
+*.pyc
+
+# .NET 빌드 산출물 (소스만 커밋)
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+
+# 빌드된 플러그인 번들 DLL (소스에서 재생성)
+DH.Grading.bundle/Contents/*.dll
+
+# 개발용 진단 덤프
+dhgrade_debug.txt
+
