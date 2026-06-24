@@ -40,8 +40,10 @@ public static class NtsGrading
         var cutDay = DaylightPolygon(boundary, plane, ground, p, gf, up: true);
         var fillDay = DaylightPolygon(boundary, plane, ground, p, gf, up: false);
 
-        // 계획면 경계(평지 가장자리)
-        var platform = Weed(PlatformRing(boundary, plane));
+        double densifyStep = Math.Max(0.25, Math.Min(p.CellSize, 0.5));
+
+        // 계획면 경계(평지 가장자리) — ≈0.5m로 촘촘히(첫 비탈 platform→bench1이 큰 삼각형으로 각지지 않게).
+        var platform = Weed(PlatformRing(boundary, plane, densifyStep));
         if (platform.Count >= 3) result.BenchRings.Add(platform);
 
         var bp = new BufferParameters
@@ -51,9 +53,11 @@ public static class NtsGrading
             QuadrantSegments = 12,
         };
 
-        // ② 단 모서리 = Buffer 오프셋 ∩ daylight 클립 → 브레이크라인
-        if (cutDay != null) AddClippedBenches(result, basePoly, plane, p, bp, cutDay, up: true);
-        if (fillDay != null) AddClippedBenches(result, basePoly, plane, p, bp, fillDay, up: false);
+        // ② 단 모서리 = Buffer 오프셋 → 1cm Safe-Zone 2D클립(자문답변 #4) → 3D Z-clipping(자문답변 #3) → 브레이크라인.
+        //    Safe-Zone: 단이 daylight 브레이크라인에 1cm 전에 멈춰 교차 0(0.1m는 강제채움이었으나 1cm는 TIN이 융합).
+        //    Z-clip: 단이 원지반과 만나는 곳서 스스로 소멸(pinch-out) → '강제 채움'·'수직 벽' 차단.
+        if (cutDay != null) AddClippedBenches(result, basePoly, plane, p, bp, cutDay, ground, up: true);
+        if (fillDay != null) AddClippedBenches(result, basePoly, plane, p, bp, fillDay, ground, up: false);
 
         // 외곽 daylight = 절토 ∪ 성토 daylight (Z=원지반).  [0624-ah: af 복원]
         // ag에서 basePoly를 합쳐 Outer 경계를 만들었더니 전환부에서 daylight∪계획면 합집합이 꼬여
@@ -79,19 +83,25 @@ public static class NtsGrading
         return result;
     }
 
-    /// <summary>한 방향(절토/성토) 단 모서리 링을 Buffer로 만들고 daylight로 클립해 브레이크라인 arc로 추가.</summary>
+    /// <summary>
+    /// 한 방향(절토/성토) 단 모서리 링을 Buffer로 만들고, ①1cm Safe-Zone 2D클립(자문답변 #4) →
+    /// ②원지반 고도 기준 3D Z-clipping(자문답변 #3)으로 브레이크라인 arc를 만든다.
+    /// Safe-Zone(daylight 1cm 인셋): 단이 daylight 브레이크라인에 닿기 1cm 전에 멈춰 교차 0(0.1m는
+    /// 큰 구멍→강제채움이지만 1cm는 TIN이 매끄럽게 융합). Z-clip: 원지반과 만나는 곳서 스스로 소멸(pinch-out).
+    /// </summary>
     private static void AddClippedBenches(HybridResult result, Polygon basePoly, Plane plane, GradingParams p,
-        BufferParameters bp, Geometry dayPoly, bool up)
+        BufferParameters bp, Geometry dayPoly, IGroundSurface ground, bool up)
     {
         double slope = Math.Max(up ? p.CutSlope : p.FillSlope, p.MinSlope);
         double slopeRun = Math.Max(p.BenchHeight * slope, p.MinFaceRun);
         double period = slopeRun + p.BenchWidth;
         double zdir = up ? 1.0 : -1.0;
+        double densifyStep = Math.Max(0.25, Math.Min(p.CellSize, 0.5));
+        var gf = new GeometryFactory();
 
-        // daylight를 0.1m 안쪽으로 줄여 클립 → 단 arc 끝점이 daylight 브레이크라인에 안 닿음
-        // ("브레이크라인이 점과 교차" 오류 차단). 줄여서 비면 원본 사용.
-        Geometry clip = dayPoly;
-        try { var c2 = dayPoly.Buffer(-0.1); if (!c2.IsEmpty) clip = c2; } catch { }
+        // 1cm Safe-Zone: daylight를 1cm만 안쪽으로 줄여 단 끝점이 daylight 뼈대에 1cm 전 멈추게(교차 회피).
+        Geometry safeZone = dayPoly;
+        try { var inset = dayPoly.Buffer(-0.01); if (!inset.IsEmpty) safeZone = inset; } catch { }
 
         for (int k = 1; k <= p.MaxBenches; k++)
         {
@@ -103,17 +113,82 @@ public static class NtsGrading
                 try { g = basePoly.Buffer(d, bp); } catch { continue; }
                 var pg = LargestPolygon(g);
                 if (pg == null) continue;
-                Geometry inside;
-                try { inside = pg.ExteriorRing.Intersection(clip); } catch { continue; } // daylight 안쪽(0.1m 인셋)만
-                foreach (var arc in ExtractLines(inside))
+
+                // ① 1cm Safe-Zone(2D)으로 클립 → daylight 1cm 안쪽까지만(여러 열린 조각으로 나올 수 있음).
+                Geometry clipped;
+                try { clipped = pg.ExteriorRing.Intersection(safeZone); } catch { continue; }
+
+                foreach (var line in ExtractLines(clipped))
                 {
-                    var pts = new List<Point3>(arc.Count);
-                    foreach (var c in arc) pts.Add(new Point3(c.X, c.Y, plane.At(c.X, c.Y) + zOff));
-                    var w = Weed(pts);
-                    if (w.Count >= 2) result.BenchRings.Add(w);
+                    // 촘촘히(≈0.5m) → 원지반 고도를 충분히 샘플해 pinch-out 좌표가 정밀.
+                    Coordinate[] coords;
+                    try { coords = NetTopologySuite.Densify.Densifier.Densify(gf.CreateLineString(line.ToArray()), densifyStep).Coordinates; }
+                    catch { coords = line.ToArray(); }
+
+                    // ② 3D Z-clip → 원지반과 만나는 곳서 소멸.
+                    foreach (var seg in ClipRingByGround(coords, plane, zOff, ground, up))
+                    {
+                        var w = Weed(seg);
+                        if (w.Count >= 2) result.BenchRings.Add(w);
+                    }
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// 단 링(2D)을 원지반 고도 기준으로 잘라 유효 구간만 3D 브레이크라인 arc들로 반환(자문답변 #3 Z-clipping).
+    /// 절토 단: 원지반이 단고 이상(zg≥benchZ)인 곳만 유효. 성토 단: 원지반이 단고 이하(zg≤benchZ)인 곳만 유효.
+    /// 유효↔무효 경계에서 (원지반−단고)=0 이 되는 점을 선형 보간해 단의 끝점(소멸점)으로 삼는다.
+    /// </summary>
+    private static List<List<Point3>> ClipRingByGround(Coordinate[] coords, Plane plane, double zOff,
+        IGroundSurface ground, bool up)
+    {
+        var segments = new List<List<Point3>>();
+        var cur = new List<Point3>();
+        bool wasInside = false, havePrev = false;
+        double pX = 0, pY = 0, pDiff = 0;
+
+        foreach (var c in coords)
+        {
+            double benchZ = plane.At(c.X, c.Y) + zOff;
+            double diff;
+            bool inside;
+            if (ground.TryGetElevation(c.X, c.Y, out double zg))
+            {
+                diff = up ? zg - benchZ : benchZ - zg; // ≥0 이면 유효(땅속에 존재하는 단)
+                inside = diff >= 0;
+            }
+            else { diff = -1; inside = false; } // 원지반 범위 밖 → 무효
+
+            if (inside)
+            {
+                if (!wasInside && havePrev) // 무효→유효 진입: 소멸점 보간
+                    cur.Add(InterpAtGround(pX, pY, pDiff, c.X, c.Y, diff, plane, zOff));
+                cur.Add(new Point3(c.X, c.Y, benchZ));
+            }
+            else if (wasInside && havePrev) // 유효→무효 이탈: 소멸점 보간 후 arc 종료
+            {
+                cur.Add(InterpAtGround(pX, pY, pDiff, c.X, c.Y, diff, plane, zOff));
+                if (cur.Count >= 2) segments.Add(cur);
+                cur = new List<Point3>();
+            }
+
+            wasInside = inside; havePrev = true; pX = c.X; pY = c.Y; pDiff = diff;
+        }
+        if (cur.Count >= 2) segments.Add(cur);
+        return segments;
+    }
+
+    /// <summary>두 점 사이에서 diff(부호조정된 원지반−단고)가 0이 되는 XY를 선형보간. Z=그 자리의 단고(=원지반).</summary>
+    private static Point3 InterpAtGround(double x1, double y1, double v1, double x2, double y2, double v2,
+        Plane plane, double zOff)
+    {
+        double denom = v2 - v1;
+        double t = Math.Abs(denom) < 1e-12 ? 0.0 : (0 - v1) / denom;
+        t = Math.Clamp(t, 0, 1);
+        double x = x1 + (x2 - x1) * t, y = y1 + (y2 - y1) * t;
+        return new Point3(x, y, plane.At(x, y) + zOff);
     }
 
     /// <summary>한 방향 daylight 폴리곤 — 경계 촘촘+볼록코너 부채꼴 ray-march → Buffer(0) 꼬임 정리.</summary>
@@ -232,11 +307,22 @@ public static class NtsGrading
         return LargestPolygon(g) ?? gf.CreatePolygon(coords);
     }
 
-    private static List<Point3> PlatformRing(IReadOnlyList<Point3> boundary, Plane plane)
+    private static List<Point3> PlatformRing(IReadOnlyList<Point3> boundary, Plane plane, double step)
     {
-        var r = new List<Point3>(boundary.Count + 1);
-        foreach (var v in boundary) r.Add(new Point3(v.X, v.Y, plane.At(v.X, v.Y)));
-        r.Add(r[0]);
+        var r = new List<Point3>();
+        int n = boundary.Count;
+        for (int i = 0; i < n; i++)
+        {
+            var a = boundary[i]; var b = boundary[(i + 1) % n];
+            double dx = b.X - a.X, dy = b.Y - a.Y;
+            int steps = Math.Max(1, (int)Math.Ceiling(Math.Sqrt(dx * dx + dy * dy) / step));
+            for (int s = 0; s < steps; s++) // 끝점은 다음 변 시작점에서 추가(중복 회피)
+            {
+                double t = (double)s / steps, x = a.X + dx * t, y = a.Y + dy * t;
+                r.Add(new Point3(x, y, plane.At(x, y)));
+            }
+        }
+        r.Add(new Point3(boundary[0].X, boundary[0].Y, plane.At(boundary[0].X, boundary[0].Y))); // 닫기
         return r;
     }
 

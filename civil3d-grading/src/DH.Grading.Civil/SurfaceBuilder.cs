@@ -521,16 +521,15 @@ public static class SurfaceBuilder
         var seen = new HashSet<(long, long)>();
         int lines = 0;
         foreach (var ring in rings)
-            if (AddLoopBreakline(tin, ring, seen)) lines++; // 단 모서리(비교차)
+            if (AddLoopBreakline(tin, ring, seen)) lines++; // 단 모서리(Z-clip + 1cm Safe-Zone → daylight와 비교차)
 
-        // [0624-ah: af 복원] daylight를 브레이크라인으로도 추가 → toe(원지반과 만나는 선)가 crisp.
-        //   단 모서리는 daylight 0.1m 안쪽 인셋이라 daylight 브레이크라인과 교차하지 않음(교차 오류 0 유지).
-        //   ag에서 이걸 빼고 Outer 전용으로 했더니 toe가 뭉개졌다 → 복원.
+        // [0624-aj·자문답변 #4] daylight = Breakline + Outer 둘 다. 단 arc는 1cm Safe-Zone으로 daylight
+        //   브레이크라인에 닿기 1cm 전 멈춰 교차 0이면서, 1cm 틈은 TIN이 매끄럽게 융합 → 각짐·이중경계 해소.
         if (outerBoundary != null && outerBoundary.Count >= 3)
-            AddLoopBreakline(tin, outerBoundary, seen);
+            AddLoopBreakline(tin, outerBoundary, seen); // 외곽 뼈대(Breakline)
         tin.Rebuild();
 
-        // daylight = 외부 경계(파괴식): 바깥 삼각형을 잘라 graded 영역만 남김.
+        // daylight = 외부 경계(파괴식, 가위): 바깥 삼각형을 잘라 graded 영역만 남김.
         if (outerBoundary != null && outerBoundary.Count >= 3)
         {
             var pc = new Point3dCollection();
