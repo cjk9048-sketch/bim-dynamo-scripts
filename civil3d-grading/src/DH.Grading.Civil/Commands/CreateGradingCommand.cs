@@ -77,7 +77,7 @@ public sealed class CreateGradingCommand
                 day = h.Daylight;
                 dayN = day.Count;
 
-                // [0624-ah: af 복원] 단 모서리 + daylight를 브레이크라인으로, daylight는 Outer 경계로도 사용.
+                // [0624-aj] 단=Z-clip+1cm Safe-Zone 브레이크라인. daylight=Breakline+Outer 둘 다(자문답변 #4).
                 (gradeId, lines) = SurfaceBuilder.BuildSurfaceFromRings(db, tr, h.BenchRings, day, "정지면_DHGrade");
                 tr.Commit();
             }
@@ -94,10 +94,10 @@ public sealed class CreateGradingCommand
             }
 
             string msg =
-                $"Hybrid 통합 정지면 생성 완료  [버전 0624-ah·af복원(daylight Breakline+Outer, basePoly합집합 제거)]\n\n" +
+                $"Hybrid 통합 정지면 생성 완료  [버전 0624-aj·Z클립+1cm SafeZone(자문3+4)]\n\n" +
                 $"· '정지면_DHGrade'(절토·성토 통합): 단 모서리 브레이크라인 {lines:N0}개\n" +
-                $"· 정지경계(daylight): {dayN:N0}점 (Breakline+Outer)\n" +
-                $"· 단=Buffer∩daylight 클립(crisp·벽없음), 라운드코너 자동, 0.05m 세척\n\n" +
+                $"· 정지경계(daylight): {dayN:N0}점 (Breakline+Outer 둘 다)\n" +
+                $"· 단=Buffer→1cm SafeZone→3D Z-clip(원지반서 pinch-out, 각짐·이중경계·강제채움 0), 0.05m 세척\n\n" +
                 $"단높이 {p.BenchHeight}m / 소단 {p.BenchWidth}m / 절토 1:{p.CutSlope} / 성토 1:{p.FillSlope} / 단수 N≤{p.MaxBenches}";
             ed.WriteMessage("\n" + msg.Replace("\n\n", "\n"));
             AcadApp.ShowAlertDialog(msg);
