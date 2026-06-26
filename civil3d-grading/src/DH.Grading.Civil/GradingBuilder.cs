@@ -62,8 +62,38 @@ public static class GradingBuilder
         tin.Rebuild();
     }
 
-    /// <summary>여러 daylight 고리(골짜기/구간이 여러 개)를 각각 Outer 경계로 추가 — 모든 구간이 보존되도록 클립.</summary>
-    public static void ClipByDaylightLoops(Transaction tr, ObjectId surfId, IEnumerable<IReadOnlyList<Point3>> loops)
+    /// <summary>
+    /// daylight 구간이 N개면 구간마다 '별도 면'을 만들어 각자 단일 Outer 경계로 클립한다.
+    /// (한 면에 Outer 경계를 여러 개 넣으면 첫 경계가 나머지 구간을 지워버려 누락되므로.)
+    /// firstSurfId(이미 만든 오버사이즈)는 첫 구간에 재사용, 나머지는 rings로 새로 생성. 모두 innerHole(폴리곤) Hide.
+    /// </summary>
+    public static List<ObjectId> BuildClippedRegions(Database db, Transaction tr,
+        IReadOnlyList<List<Point3>> rings, string name, ObjectId firstSurfId,
+        IReadOnlyList<IReadOnlyList<Point3>> daylightLoops, IReadOnlyList<Point3>? innerHole)
+    {
+        var ids = new List<ObjectId>();
+        if (daylightLoops == null || daylightLoops.Count == 0)
+        {
+            // daylight 없음 = 이 사면이 원지반과 아예 안 만남(예: 전부 절토라 성토 불필요) → 면 삭제·제외.
+            if (!firstSurfId.IsNull)
+                try { if (tr.GetObject(firstSurfId, OpenMode.ForWrite) is AcadEntity e) e.Erase(); } catch { }
+            return ids; // 빈 리스트 → 합성에서 제외
+        }
+        for (int i = 0; i < daylightLoops.Count; i++)
+        {
+            var loop = daylightLoops[i];
+            if (loop == null || loop.Count < 3) continue;
+            ObjectId sid = (i == 0 && !firstSurfId.IsNull) ? firstSurfId : BuildVirtualSlope(db, tr, rings, name);
+            ClipByDaylightLoops(tr, sid, new[] { loop }, innerHole); // 단일 Outer + 폴리곤 Hide
+            ids.Add(sid);
+        }
+        return ids;
+    }
+
+    /// <summary>여러 daylight 고리를 각각 Outer 경계로 추가(모든 구간 보존). innerHole(계획폴리곤)은 Hide 경계로
+    /// 뚫어 폴리곤 내부 삼각망 제거 → 사면이 도넛(고리)이 되어 Pad와 겹치지 않음(절토/성토 합성 충돌 방지).</summary>
+    public static void ClipByDaylightLoops(Transaction tr, ObjectId surfId, IEnumerable<IReadOnlyList<Point3>> loops,
+        IReadOnlyList<Point3>? innerHole = null)
     {
         if (surfId.IsNull || loops == null) return;
         var tin = (TinSurface)tr.GetObject(surfId, OpenMode.ForWrite);
@@ -74,6 +104,8 @@ public static class GradingBuilder
             AddOuterBoundary(tin, loop, nonDestructive: true);
             any = true;
         }
+        if (any && innerHole != null && innerHole.Count >= 3) // 계획폴리곤 내부 = 구멍(삼각망 제거)
+            AddBoundary(tin, innerHole, CivilSurfaceBoundaryType.Hide, nonDestructive: true);
         if (any) tin.Rebuild();
     }
 
@@ -81,22 +113,39 @@ public static class GradingBuilder
     /// [설계도 Phase 4] Paste 순서 합성 — 빈 Final에 ①원지반 ②성토 ③절토 ④Pad 순으로 PasteSurface.
     /// 마지막 Pad가 가운데를 도장 찍어 내부 구멍 연산 없이 완벽 채움. 스냅샷으로 원본 의존을 끊어 임시면을 지울 수 있게 함.
     /// </summary>
-    public static ObjectId Composite(Database db, Transaction tr, string name, IReadOnlyList<ObjectId> pasteOrder,
-        out bool snapshotOk)
+    public static ObjectId Composite(Database db, Transaction tr, string name,
+        IReadOnlyList<(ObjectId id, string label)> pasteOrder, out bool snapshotOk, out string log,
+        IReadOnlyList<Point3>? padBreakline = null)
     {
         snapshotOk = false;
+        var sb = new System.Text.StringBuilder();
         ObjectId id = TinSurface.Create(db, UniqueName(db, tr, name));
         var final = (TinSurface)tr.GetObject(id, OpenMode.ForWrite);
-        foreach (var sid in pasteOrder)
+        foreach (var (sid, label) in pasteOrder)
         {
-            if (sid.IsNull) continue;
-            try { final.PasteSurface(sid); } catch { /* 이 면 paste 실패해도 나머지 진행 */ }
+            if (sid.IsNull) { sb.Append($"{label}:없음 "); continue; }
+            try
+            {
+                final.PasteSurface(sid);
+                // ★각 면 paste 직후 스냅샷으로 '굳히기' → 쌓인 paste 연산 위에 다음 면을 붙일 때의 충돌(절토 실패) 방지.
+                Freeze(final);
+                sb.Append($"{label}:OK ");
+            }
+            catch (System.Exception ex) { sb.Append($"{label}:실패({ex.Message}) "); } // 실패해도 나머지 진행
         }
-        final.Rebuild();
-        // 스냅샷 = 현재 결과를 동결 → 임시 원본면(가상사면/Pad)을 지워도 Final 데이터 유지.
-        // 실패(미지원) 시 false 반환 → 호출부가 임시면을 '지우지 않고' 유지(paste 참조 깨짐 방지).
-        try { final.CreateSnapshot(); final.Rebuild(); snapshotOk = true; } catch { snapshotOk = false; }
+        log = sb.ToString().Trim();
+        // 계획폴리곤을 브레이크라인으로 추가 → 바닥(Pad)과 사면의 경계가 칼같이 떨어짐(JACK 제안).
+        if (padBreakline != null && padBreakline.Count >= 3) { AddRingBreakline(final, padBreakline); try { final.Rebuild(); } catch { } }
+        try { Freeze(final); snapshotOk = true; } catch { snapshotOk = false; }
         return id;
+    }
+
+    /// <summary>표면을 스냅샷으로 동결(이미 있으면 갱신) → 데이터 평탄화. paste 연산 누적 충돌 방지.</summary>
+    private static void Freeze(TinSurface s)
+    {
+        try { s.CreateSnapshot(); }
+        catch { try { s.RebuildSnapshot(); } catch { } } // 이미 스냅샷 있으면 갱신
+        try { s.Rebuild(); } catch { }
     }
 
     /// <summary>임시 표면(가상사면·Pad)을 일괄 삭제(설계도 Phase 5). 원지반/Final은 제외.</summary>
@@ -151,12 +200,15 @@ public static class GradingBuilder
     }
 
     private static void AddOuterBoundary(TinSurface tin, IReadOnlyList<Point3> ring, bool nonDestructive)
+        => AddBoundary(tin, ring, CivilSurfaceBoundaryType.Outer, nonDestructive);
+
+    private static void AddBoundary(TinSurface tin, IReadOnlyList<Point3> ring, CivilSurfaceBoundaryType type, bool nonDestructive)
     {
         if (ring.Count < 3) return;
         var pc = new Point3dCollection();
         foreach (var pt in ring) pc.Add(new Point3d(pt.X, pt.Y, pt.Z));
         var f = ring[0]; pc.Add(new Point3d(f.X, f.Y, f.Z));
-        try { tin.BoundariesDefinition.AddBoundaries(pc, 1.0, CivilSurfaceBoundaryType.Outer, nonDestructive); } catch { }
+        try { tin.BoundariesDefinition.AddBoundaries(pc, 1.0, type, nonDestructive); } catch { }
     }
 
     private static string UniqueName(Database db, Transaction tr, string baseName)

@@ -53,7 +53,8 @@ public sealed class CreateGradingCommand
             GradingParams p;
             VirtualSlope cut, fill;
             System.Collections.Generic.List<System.Collections.Generic.List<Point3>> cutDaylight = new(), fillDaylight = new();
-            ObjectId cutId = ObjectId.Null, fillId = ObjectId.Null, padId = ObjectId.Null;
+            System.Collections.Generic.List<ObjectId> cutIds = new(), fillIds = new(); // 구간별 면(여러 구간 지원)
+            ObjectId padId = ObjectId.Null;
 
             // ── TX1: 입력 받기 + 오버사이즈 가상면/Pad 생성 + daylight 비파괴 클립 ──
             using (Transaction tr = db.TransactionManager.StartTransaction())
@@ -76,26 +77,30 @@ public sealed class CreateGradingCommand
 
                 if (cut.HasSlope)
                 {
-                    cutId = GradingBuilder.BuildVirtualSlope(db, tr, cut.Rings, "가상절토_DH");
-                    cutDaylight = DaylightExtractor.ExtractTrueDaylight(tr, cutId, groundId, boundary); // 실제 면-원지반 교선(부지 연결 구간만)
-                    GradingBuilder.ClipByDaylightLoops(tr, cutId, cutDaylight);
+                    var cutId = GradingBuilder.BuildVirtualSlope(db, tr, cut.Rings, "가상절토_DH");
+                    cutDaylight = DaylightExtractor.ExtractTrueDaylight(tr, cutId, groundId, boundary); // 실제 면-원지반 교선
+                    cutIds = GradingBuilder.BuildClippedRegions(db, tr, cut.Rings, "가상절토_DH", cutId, cutDaylight, null); // Hide 없음(폴리곤 평평바닥 포함)
                 }
                 if (fill.HasSlope)
                 {
-                    fillId = GradingBuilder.BuildVirtualSlope(db, tr, fill.Rings, "가상성토_DH");
-                    fillDaylight = DaylightExtractor.ExtractTrueDaylight(tr, fillId, groundId, boundary); // 실제 면-원지반 교선(부지 연결 구간만)
-                    GradingBuilder.ClipByDaylightLoops(tr, fillId, fillDaylight);
+                    var fillId = GradingBuilder.BuildVirtualSlope(db, tr, fill.Rings, "가상성토_DH");
+                    fillDaylight = DaylightExtractor.ExtractTrueDaylight(tr, fillId, groundId, boundary); // 실제 면-원지반 교선
+                    fillIds = GradingBuilder.BuildClippedRegions(db, tr, fill.Rings, "가상성토_DH", fillId, fillDaylight, null); // Hide 없음(폴리곤 평평바닥 포함)
                 }
                 padId = GradingBuilder.BuildFlatPad(db, tr, boundary, pad, "본체Pad_DH");
                 tr.Commit();
             }
 
             // ── TX2: Paste 순서 합성(원지반 → 성토 → 절토 → Pad) ──
-            bool snapshotOk;
+            bool snapshotOk; string pasteLog;
+            // Paste 순서: 원지반 → 절토(구간들) → 성토(구간들) → Pad
+            var pasteOrder = new System.Collections.Generic.List<(ObjectId, string)> { (groundId, "원지반") };
+            foreach (var id in cutIds) pasteOrder.Add((id, "절토"));
+            foreach (var id in fillIds) pasteOrder.Add((id, "성토"));
+            pasteOrder.Add((padId, "Pad"));
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
-                GradingBuilder.Composite(db, tr, "정지면_DHGrade",
-                    new[] { groundId, fillId, cutId, padId }, out snapshotOk);
+                GradingBuilder.Composite(db, tr, "정지면_DHGrade", pasteOrder, out snapshotOk, out pasteLog); // 폴리곤 브레이크라인 제거(이벤트 경고 방지·바닥경계는 평지 링이 이미 담당)
                 tr.Commit();
             }
 
@@ -104,7 +109,11 @@ public sealed class CreateGradingCommand
             {
                 // 중간면 정리: 스냅샷 성공 + '유지 안 함' 설정일 때만. 기본은 유지(오류 확인용).
                 if (snapshotOk && !GradingSettings.KeepIntermediateSurfaces)
-                    GradingBuilder.EraseSurfaces(tr, new[] { cutId, fillId, padId });
+                {
+                    var temp = new System.Collections.Generic.List<ObjectId>(cutIds);
+                    temp.AddRange(fillIds); temp.Add(padId);
+                    GradingBuilder.EraseSurfaces(tr, temp);
+                }
                 var loops = new System.Collections.Generic.List<System.Collections.Generic.IReadOnlyList<Point3>>();
                 foreach (var lp in cutDaylight) if (lp.Count >= 2) loops.Add(lp);
                 foreach (var lp in fillDaylight) if (lp.Count >= 2) loops.Add(lp);
@@ -112,15 +121,12 @@ public sealed class CreateGradingCommand
                 tr.Commit();
             }
 
+            string terrace = p.MountainTerrace ? $" · 계단식 산지(대소단 {p.TerraceInterval}m/{p.TerraceWidth}m)" : "";
             string msg =
-                $"정지면 생성 완료  [버전 0626-e·실측daylight+핀셋톱니제거(턴70°·4m)]\n\n" +
-                $"· '정지면_DHGrade' = 원지반 → 성토 → 절토 → Pad 순으로 Paste 합성\n" +
-                $"· 절토 가상면 {(cut.HasSlope ? "생성" : "없음")} / 성토 가상면 {(fill.HasSlope ? "생성" : "없음")}\n" +
-                $"· daylight(초록 'DH-정지경계') = 원지반과 만나는 toe 교차선\n" +
-                $"· 중간 지표면: {(GradingSettings.KeepIntermediateSurfaces ? "유지(오류 확인용) — 가상절토_DH/가상성토_DH/본체Pad_DH" : (snapshotOk ? "정리 완료(스냅샷)" : "보류 — 스냅샷 미지원이라 유지"))}\n\n" +
-                $"단높이 {p.BenchHeight}m / 소단 {p.BenchWidth}m / 절토 1:{p.CutSlope} / 성토 1:{p.FillSlope} / 단수 N≤{p.MaxBenches}" +
-                (p.MountainTerrace ? $"\n· 계단식 산지 적용 ON: 수직 누적 {p.TerraceInterval}m마다 대소단(폭 {p.TerraceWidth}m)" : "");
-            ed.WriteMessage("\n" + msg.Replace("\n\n", "\n"));
+                $"정지면 생성 완료 — '정지면_DHGrade'\n" +
+                $"절토 {cutIds.Count}구간 / 성토 {fillIds.Count}구간\n" +
+                $"단높이 {p.BenchHeight}m · 소단 {p.BenchWidth}m · 절토 1:{p.CutSlope} · 성토 1:{p.FillSlope}{terrace}";
+            ed.WriteMessage("\n" + msg);
             AcadApp.ShowAlertDialog(msg);
         }
         catch (System.Exception ex)

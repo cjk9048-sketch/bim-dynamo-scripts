@@ -15,7 +15,6 @@ public sealed class GradingDialog : Window
     private readonly TextBox _benchWidth;
     private readonly TextBox _cutSlope;
     private readonly TextBox _fillSlope;
-    private readonly TextBox _cellSize;
     private readonly CheckBox _miterConvex;
     private readonly CheckBox _mountainTerrace;
     private readonly TextBox _terraceInterval;
@@ -44,7 +43,6 @@ public sealed class GradingDialog : Window
         _benchWidth = AddRow(root, "소단폭 (m)", GradingSettings.BenchWidth, "계단참(평평한 띠) 너비");
         _cutSlope = AddRow(root, "절토구배  1 :", GradingSettings.CutSlope, "수직1 : 수평n (땅을 깎는 비탈)");
         _fillSlope = AddRow(root, "성토구배  1 :", GradingSettings.FillSlope, "수직1 : 수평n (흙을 쌓는 비탈)");
-        _cellSize = AddRow(root, "격자 해상도 (m)", GradingSettings.CellSize, "작을수록 매끈·느림 (소규모 부지 0.25~0.1)");
 
         _miterConvex = new CheckBox
         {
@@ -133,7 +131,6 @@ public sealed class GradingDialog : Window
             !TryParse(_benchWidth, "소단폭", out double bw, positive: false) ||
             !TryParse(_cutSlope, "절토구배", out double cs, positive: false) ||
             !TryParse(_fillSlope, "성토구배", out double fs, positive: false) ||
-            !TryParse(_cellSize, "격자 해상도", out double cz, positive: true) ||
             !TryParse(_terraceInterval, "대소단 간격", out double ti, positive: true) ||
             !TryParse(_terraceWidth, "대소단 폭", out double tw, positive: false))
             return;
@@ -142,7 +139,6 @@ public sealed class GradingDialog : Window
         GradingSettings.BenchWidth = bw;
         GradingSettings.CutSlope = cs;
         GradingSettings.FillSlope = fs;
-        GradingSettings.CellSize = cz;
         GradingSettings.MiterConvex = _miterConvex.IsChecked == true;
         GradingSettings.MountainTerrace = _mountainTerrace.IsChecked == true;
         GradingSettings.TerraceInterval = ti;
