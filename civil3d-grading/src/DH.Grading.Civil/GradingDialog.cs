@@ -17,6 +17,9 @@ public sealed class GradingDialog : Window
     private readonly TextBox _fillSlope;
     private readonly TextBox _cellSize;
     private readonly CheckBox _miterConvex;
+    private readonly CheckBox _mountainTerrace;
+    private readonly TextBox _terraceInterval;
+    private readonly TextBox _terraceWidth;
 
     public GradingDialog(string okText = "확인")
     {
@@ -51,6 +54,18 @@ public sealed class GradingDialog : Window
             ToolTip = "튀어나온(볼록) 모서리를 직각으로 각지게 정지. 해제하면 둥글게(라운드). 들어간(오목) 모서리는 항상 직각.",
         };
         root.Children.Add(_miterConvex);
+
+        _mountainTerrace = new CheckBox
+        {
+            Content = "계단식 산지 적용 (산지전용허가법)",
+            IsChecked = GradingSettings.MountainTerrace,
+            Margin = new Thickness(0, 8, 0, 4),
+            ToolTip = "체크 시 사면 수직 누적이 아래 '대소단 간격'에 닿을 때마다 일반 소단 대신 큰 평탄(대소단)을 넣습니다.",
+        };
+        root.Children.Add(_mountainTerrace);
+
+        _terraceInterval = AddRow(root, "대소단 간격 (m)", GradingSettings.TerraceInterval, "수직 누적 이 높이마다 대소단 (법정 15m)");
+        _terraceWidth = AddRow(root, "대소단 폭 (m)", GradingSettings.TerraceWidth, "큰 평탄 구간의 너비 (법정 15m)");
 
         root.Children.Add(new TextBlock
         {
@@ -118,7 +133,9 @@ public sealed class GradingDialog : Window
             !TryParse(_benchWidth, "소단폭", out double bw, positive: false) ||
             !TryParse(_cutSlope, "절토구배", out double cs, positive: false) ||
             !TryParse(_fillSlope, "성토구배", out double fs, positive: false) ||
-            !TryParse(_cellSize, "격자 해상도", out double cz, positive: true))
+            !TryParse(_cellSize, "격자 해상도", out double cz, positive: true) ||
+            !TryParse(_terraceInterval, "대소단 간격", out double ti, positive: true) ||
+            !TryParse(_terraceWidth, "대소단 폭", out double tw, positive: false))
             return;
 
         GradingSettings.BenchHeight = bh;
@@ -127,6 +144,9 @@ public sealed class GradingDialog : Window
         GradingSettings.FillSlope = fs;
         GradingSettings.CellSize = cz;
         GradingSettings.MiterConvex = _miterConvex.IsChecked == true;
+        GradingSettings.MountainTerrace = _mountainTerrace.IsChecked == true;
+        GradingSettings.TerraceInterval = ti;
+        GradingSettings.TerraceWidth = tw;
 
         DialogResult = true;
         Close();
