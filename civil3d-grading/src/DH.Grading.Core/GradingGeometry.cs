@@ -46,8 +46,12 @@ public static class GradingGeometry
         var shape = FilletConcaveCorners(boundary, p);
         var basePoly = ToPolygon(shape, padPlane, gf);
 
+        // densify 간격(m) — 링을 이 간격으로 촘촘히 채워 삼각망을 곱게. 직선 구간에 점이 2개뿐이면 잘릴 때
+        // 큰 톱니가 생기므로 일정 간격으로 점을 채운다(사면 재생성 ①의 핵심).
+        double dens = Math.Max(0.3, Math.Min(p.VertexSpacing, 1.0));
+
         // 평지(계획 부지) 경계 링 — Z=계획고. (가상면의 안쪽 평탄부)
-        var platform = Weed(PadRing(shape, padPlane));
+        var platform = Densify(Weed(PadRing(shape, padPlane)), dens);
         if (platform.Count >= 3) result.Rings.Add(platform);
 
         // 계단 링(오버사이즈) — 원지반 무시, MaxBenches 단까지 끝까지.
@@ -74,7 +78,7 @@ public static class GradingGeometry
             double zOff = zdir * rise;
             foreach (var c in pg.ExteriorRing.Coordinates)
                 pts.Add(new Point3(c.X, c.Y, padPlane.At(c.X, c.Y) + zOff));
-            var w = Weed(pts);
+            var w = Densify(Weed(pts), dens);
             if (w.Count >= 3) { result.Rings.Add(w); result.HasSlope = true; }
         }
 
@@ -118,17 +122,22 @@ public static class GradingGeometry
         // ★채택 규칙(JACK)★: daylight 고리(2D)가 계획 폴리곤(2D)과 ①닿거나(touch/overlap) ②폴리곤을 안에 포함하면
         // 그 고리만 경계로 채택. 그 외(부지와 무관한 먼 교선)는 버림. ToPolygon이 XY만 써서 2D(고도 무시)로 판정.
         Polygon boundaryPoly = ToPolygon(boundary, default, gf);
-        var kept = new List<Geometry> { boundaryPoly }; // ★계획 폴리곤을 항상 포함(union)해 절대 잘라먹지 않음★
+        // 계획폴리곤과 닿거나/포함하는 '활성 face'만 채택(먼 엉뚱한 교선 제외).
+        var kept = new List<Geometry>();
+        bool anyFace = false;
         foreach (var obj in polygonizer.GetPolygons())
         {
             if (obj is not Polygon pg || pg.Area < 1.0) continue; // 1m² 미만 노이즈 제외
             bool touches = false, containsPoly = false;
             try { touches = pg.Intersects(boundaryPoly); } catch { }      // ① 닿음/겹침
             try { containsPoly = pg.Contains(boundaryPoly); } catch { }   // ② 폴리곤이 고리 안에 포함
-            if (touches || containsPoly) kept.Add(pg);                    // 둘 중 하나면 채택
+            if (touches || containsPoly) { kept.Add(pg); anyFace = true; } // 둘 중 하나면 채택
         }
+        if (!anyFace) return result; // 진짜 사면 face 없음 → 경계 없음
 
-        // 채택 face ∪ 계획 폴리곤 → footprint. 계획 폴리곤이 항상 온전히 포함되어 pad가 잘리지 않음.
+        // ★계획 폴리곤을 포함(union)★ — 여러 절토/성토 구간을 폴리곤이 하나로 연결해 '경계 1개'로 단순화.
+        // 가운데(폴리곤 내부)는 ClipByDaylightLoops의 Hide가 뚫어 Pad가 채움. (JACK 제안: 구간별 분리 대신 단순)
+        kept.Add(boundaryPoly);
         Geometry footprint;
         try { footprint = UnaryUnionOp.Union((IEnumerable<Geometry>)kept); }
         catch { footprint = boundaryPoly; }
@@ -160,143 +169,6 @@ public static class GradingGeometry
         if ((d1 >= 0) == (d2 >= 0)) return;      // 같은 쪽 → 0교차 없음
         double t = d1 / (d1 - d2);               // p1 + t·(p2−p1)에서 diff=0
         outp.Add(new Coordinate(p1.X + (p2.X - p1.X) * t, p1.Y + (p2.Y - p1.Y) * t));
-    }
-
-    // ── (구) daylight ray-march 예측 (미사용 — True Intersection으로 대체) ──
-    private static Geometry? DaylightPolygon(IReadOnlyList<Point3> boundary, Plane plane, IGroundSurface ground,
-        GradingParams p, GeometryFactory gf, bool up, StepProfile profile)
-    {
-        int nb = boundary.Count;
-        double ccw = Math.Sign(SignedArea(boundary)); if (ccw == 0) ccw = 1;
-        double maxReach = profile.MaxDist; // 프로파일 끝(대소단 포함)까지 ray-march
-        double marchStep = Math.Max(0.2, Math.Min(p.CellSize, 0.4));
-        double sampleStep = Math.Max(0.25, Math.Min(p.CellSize, 0.4));
-
-        var nrm = new (double x, double y)[nb];
-        for (int i = 0; i < nb; i++)
-        {
-            var a = boundary[i]; var b = boundary[(i + 1) % nb];
-            double ex = b.X - a.X, ey = b.Y - a.Y, len = Math.Sqrt(ex * ex + ey * ey);
-            nrm[i] = len < 1e-9 ? (0.0, 0.0) : (ccw > 0 ? ey / len : -ey / len, ccw > 0 ? -ex / len : ex / len);
-        }
-
-        var srcs = new List<Coordinate>();
-        var toes = new List<Coordinate>();
-        void March(double px, double py, double nx, double ny)
-        {
-            var d = MarchDaylight(px, py, nx, ny, plane, ground, p, up, maxReach, marchStep, profile);
-            srcs.Add(new Coordinate(px, py));
-            toes.Add(new Coordinate(d.X, d.Y));
-        }
-
-        for (int i = 0; i < nb; i++)
-        {
-            if (nrm[i].x == 0 && nrm[i].y == 0) continue;
-            var a = boundary[i]; var b = boundary[(i + 1) % nb];
-            double ex = b.X - a.X, ey = b.Y - a.Y, len = Math.Sqrt(ex * ex + ey * ey);
-            int pe = (i - 1 + nb) % nb;
-            while ((nrm[pe].x == 0 && nrm[pe].y == 0) && pe != i) pe = (pe - 1 + nb) % nb;
-            if (!(nrm[pe].x == 0 && nrm[pe].y == 0))
-            {
-                double cross = nrm[pe].x * nrm[i].y - nrm[pe].y * nrm[i].x;
-                double dot = nrm[pe].x * nrm[i].x + nrm[pe].y * nrm[i].y;
-                if (cross * ccw > 1e-9) // 볼록 코너 부채꼴
-                {
-                    double turn = Math.Atan2(cross, dot);
-                    int steps = Math.Max(1, (int)Math.Ceiling(Math.Abs(turn) / 0.20));
-                    for (int s = 1; s < steps; s++)
-                    {
-                        double th = turn * s / steps;
-                        double cx = nrm[pe].x * Math.Cos(th) - nrm[pe].y * Math.Sin(th);
-                        double cy = nrm[pe].x * Math.Sin(th) + nrm[pe].y * Math.Cos(th);
-                        March(a.X, a.Y, cx, cy);
-                    }
-                }
-            }
-            int samples = Math.Max(1, (int)Math.Ceiling(len / sampleStep));
-            for (int s = 0; s < samples; s++)
-            {
-                double t = (double)s / samples;
-                March(a.X + ex * t, a.Y + ey * t, nrm[i].x, nrm[i].y);
-            }
-        }
-        if (srcs.Count < 2) return null;
-
-        // 인접 (경계점,toe) 쌍으로 만든 국소 quad들의 합집합 = 견고한 daylight footprint(만 구간도 추종).
-        var polys = new List<Geometry> { ToPolygon(boundary, plane, gf) };
-        int m = srcs.Count;
-        for (int i = 0; i < m; i++)
-        {
-            int j = (i + 1) % m;
-            var quad = new[] { srcs[i], srcs[j], toes[j], toes[i], srcs[i] };
-            try
-            {
-                Geometry poly = gf.CreatePolygon(quad);
-                if (!poly.IsValid) poly = poly.Buffer(0);
-                if (!poly.IsEmpty) polys.Add(poly);
-            }
-            catch { }
-        }
-        try
-        {
-            Geometry u = NetTopologySuite.Operation.Union.UnaryUnionOp.Union((IEnumerable<Geometry>)polys);
-            return u == null || u.IsEmpty ? null : (Geometry?)LargestPolygon(u) ?? u;
-        }
-        catch { return null; }
-    }
-
-    private static Point3 MarchDaylight(double px, double py, double nx, double ny, Plane plane,
-        IGroundSurface ground, GradingParams p, bool up, double maxReach, double step, StepProfile profile)
-    {
-        double zdir = up ? 1.0 : -1.0;
-        double baseZ = plane.At(px, py);
-        if (ground.TryGetElevation(px, py, out double g0))
-        {
-            bool thisSide = up ? (g0 > baseZ + 1e-6) : (g0 < baseZ - 1e-6);
-            if (!thisSide) return new Point3(px, py, g0); // 이쪽 단 아님 → 경계에서 닫음(전환부 수렴)
-        }
-        double prevDiff = double.NaN, prevT = 0;
-        double lastX = px, lastY = py;
-        int steps = Math.Max(4, (int)Math.Ceiling(maxReach / step));
-        for (int s = 1; s <= steps; s++)
-        {
-            double d = maxReach * s / steps;
-            double qx = px + nx * d, qy = py + ny * d;
-            if (!ground.TryGetElevation(qx, qy, out double gq)) break;
-            lastX = qx; lastY = qy;
-            double h = profile.RiseAt(d); // 계단 프로파일(대소단 포함) 누적 수직높이
-            double grade = baseZ + zdir * h;
-            double diff = up ? grade - gq : gq - grade;
-            if (diff >= 0) // 정지면이 원지반을 만남(toe)
-            {
-                double denom = diff - prevDiff;
-                double f = double.IsNaN(prevDiff) || Math.Abs(denom) < 1e-12 ? 1.0 : (0 - prevDiff) / denom;
-                double dd = prevT + (d - prevT) * f;
-                return new Point3(px + nx * dd, py + ny * dd, 0);
-            }
-            prevDiff = diff; prevT = d;
-        }
-        return new Point3(lastX, lastY, 0);
-    }
-
-    /// <summary>거리 d에서의 계단 프로파일 누적 수직변화량(절댓값) — 비탈(선형)+소단(평탄) 반복.</summary>
-    public static double Height(double d, double benchHeight, double benchWidth, double slopeN, int maxBenches)
-    {
-        if (d <= 0) return 0;
-        double slopeRun = benchHeight * slopeN;
-        if (slopeRun <= 1e-9)
-        {
-            double periodV = Math.Max(benchWidth, 1e-9);
-            int stepsV = Math.Min((int)Math.Floor(d / periodV) + 1, maxBenches);
-            return stepsV * benchHeight;
-        }
-        double period = slopeRun + benchWidth;
-        int full = (int)Math.Floor(d / period);
-        if (full >= maxBenches) return maxBenches * benchHeight;
-        double rem = d - full * period;
-        double h = full * benchHeight;
-        h += rem <= slopeRun ? (rem / slopeRun) * benchHeight : benchHeight;
-        return h;
     }
 
     // ── NTS 유틸 ──
@@ -341,6 +213,28 @@ public static class GradingGeometry
             if (dx * dx + dy * dy >= WeedDist * WeedDist) outp.Add(pts[i]);
         }
         outp.Add(pts[^1]);
+        return outp;
+    }
+
+    /// <summary>링을 maxSeg 간격으로 촘촘히 채운다 — 긴 직선 구간에 중간점을 선형보간(Z 포함)으로 삽입.
+    /// 삼각망이 곱게 생성되어, daylight로 잘라도 큰 톱니/이빨이 생기지 않음(사면 재생성 ①의 핵심).</summary>
+    private static List<Point3> Densify(List<Point3> loop, double maxSeg)
+    {
+        if (loop.Count < 2 || maxSeg <= 1e-6) return loop;
+        var outp = new List<Point3>(loop.Count * 2);
+        for (int i = 0; i < loop.Count - 1; i++)
+        {
+            var a = loop[i]; var b = loop[i + 1];
+            outp.Add(a);
+            double dx = b.X - a.X, dy = b.Y - a.Y, len = Math.Sqrt(dx * dx + dy * dy);
+            int sub = (int)Math.Floor(len / maxSeg);
+            for (int s = 1; s <= sub; s++)
+            {
+                double t = (double)s / (sub + 1);
+                outp.Add(new Point3(a.X + dx * t, a.Y + dy * t, a.Z + (b.Z - a.Z) * t));
+            }
+        }
+        outp.Add(loop[^1]);
         return outp;
     }
 
