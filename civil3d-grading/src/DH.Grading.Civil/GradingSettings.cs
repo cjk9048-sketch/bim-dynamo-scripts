@@ -19,8 +19,12 @@ public static class GradingSettings
     public static double MinFaceRun = 0.005;   // 비탈 최소 수평폭 절대 바닥 (m) — 안전장치
     public static bool MiterConvex = true;     // 사면형상 — true=직각(기본, 볼록 모서리 마이터), false=라운드
     public static double MiterLimit = 2.0;     // 직각 모서리 최대 연장 비율 — 넘으면 라운드 폴백
+    public static bool MountainTerrace = false;     // 계단식 산지 적용(산지전용허가법) — 수직 누적 15m마다 대소단
+    public static double TerraceInterval = 15.0;    // 대소단 수직 간격 (m) — 법정 15m
+    public static double TerraceWidth = 15.0;       // 대소단 폭 (m) — 법정 15m
     public static double HatchShort = 1.0;     // 노리선 짧은선 간격 (m, 길이=사면폭 절반)
     public static double HatchLong = 5.0;      // 노리선 긴선 간격 (m, 길이=사면폭 전체)
+    public static bool KeepIntermediateSurfaces = true; // true=중간 지표면(가상절토/가상성토/Pad) 유지(오류 확인용). false=최종면만 남기고 정리
 
     public static GradingParams ToParams() => new()
     {
@@ -35,5 +39,8 @@ public static class GradingSettings
         MinFaceRun = MinFaceRun,
         MiterConvex = MiterConvex,
         MiterLimit = MiterLimit,
+        MountainTerrace = MountainTerrace,
+        TerraceInterval = TerraceInterval,
+        TerraceWidth = TerraceWidth,
     };
 }

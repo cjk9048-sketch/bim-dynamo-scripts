@@ -9,9 +9,6 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: ExtensionApplication(typeof(DH.Grading.Civil.RibbonApp))]
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.CreateGradingCommand))]
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.GradingSettingsCommand))]
-[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SlopeHatchCommand))]
-[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.NativeGradingCommand))]
-[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ExportShpCommand))]
 
 namespace DH.Grading.Civil;
 
@@ -57,10 +54,6 @@ public sealed class RibbonApp : IExtensionApplication
                 "정지\n설정", "DHGRADESET ", "단높이·소단폭·구배·격자 해상도를 설정", "Settings32.png"));
             src.Items.Add(MakeButton(
                 "정지면\n생성", "DHGRADE ", "계획 폴리곤+원지반 → 계단식 절성토 TIN Surface 생성", "Grade32.png"));
-            src.Items.Add(MakeButton(
-                "노리선", "DHSLOPE ", "사면(경사·수직)에 평면 노리선 생성(소단 제외). 짧은선 1m·긴선 5m", "Hatch32.png"));
-            src.Items.Add(MakeButton(
-                "SHP\n내보내기", "DHSHP ", "정지 영역을 계획지표면·소단·사면 평면 폴리곤 SHP로 폴더에 저장(InfraWorks용)", "Hatch32.png"));
         }
         catch
         {
