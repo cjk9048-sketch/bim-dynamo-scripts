@@ -55,6 +55,7 @@ public sealed class CreateGradingCommand
             System.Collections.Generic.List<System.Collections.Generic.List<Point3>> cutDaylight = new(), fillDaylight = new();
             System.Collections.Generic.List<ObjectId> cutIds = new(), fillIds = new(); // 구간별 면(여러 구간 지원)
             ObjectId padId = ObjectId.Null;
+            CachedGroundSurface? ground = null; // TX1에서 캐싱 → TX3 daylight union 그리기에 재사용(트랜잭션 독립)
 
             // ── TX1: 입력 받기 + 오버사이즈 가상면/Pad 생성 + daylight 비파괴 클립 ──
             using (Transaction tr = db.TransactionManager.StartTransaction())
@@ -67,7 +68,7 @@ public sealed class CreateGradingCommand
                 }
 
                 var groundTin = (TinSurface)tr.GetObject(groundId, OpenMode.ForRead);
-                var ground = new CachedGroundSurface(groundTin); // 원지반 삼각형 메모리 캐싱(빠른 표고조회)
+                ground = new CachedGroundSurface(groundTin); // 원지반 삼각형 메모리 캐싱(빠른 표고조회)
                 p = BuildParams(boundary, ground);
                 var pad = Plane.Fit(boundary); // 계획 부지 평탄면
 
@@ -114,10 +115,14 @@ public sealed class CreateGradingCommand
                     temp.AddRange(fillIds); temp.Add(padId);
                     GradingBuilder.EraseSurfaces(tr, temp);
                 }
-                var loops = new System.Collections.Generic.List<System.Collections.Generic.IReadOnlyList<Point3>>();
-                foreach (var lp in cutDaylight) if (lp.Count >= 2) loops.Add(lp);
-                foreach (var lp in fillDaylight) if (lp.Count >= 2) loops.Add(lp);
-                GradingBuilder.DrawDaylight(db, tr, loops);
+                var rawLoops = new System.Collections.Generic.List<System.Collections.Generic.IReadOnlyList<Point3>>();
+                foreach (var lp in cutDaylight) if (lp.Count >= 3) rawLoops.Add(lp);
+                foreach (var lp in fillDaylight) if (lp.Count >= 3) rawLoops.Add(lp);
+                // 절토+성토 daylight를 union → 부지를 감싸는 바깥 외곽선만(두 선이 닿는 지점 안쪽 섬·겹침선 제거, JACK).
+                var outlines = (ground != null)
+                    ? GradingGeometry.MergeDaylightOutlines(rawLoops, boundary, ground)
+                    : rawLoops.ConvertAll(l => new System.Collections.Generic.List<Point3>(l));
+                GradingBuilder.DrawDaylight(db, tr, outlines);
                 tr.Commit();
             }
 

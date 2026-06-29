@@ -42,7 +42,7 @@ public static class GradingGeometry
 
         // [오목 코너 정밀 필렛] 부지 외곽선의 오목(reflex) 코너 '정점만' 인식해 베지어 원호로 부드럽게 치환.
         // 동심 오프셋(아래 Buffer)이 오목 코너에서 계단(소단·사면)을 비트는 것을 방지. 직선·볼록 코너의 정점은
-        // 그대로 보존하므로 직선이 곡률지는 부작용이 전혀 없다(전역 closing 방식의 단점 제거).
+        // 그대로 보존하므로 직선이 곡률지는 부작용이 전혀 없다. ※성토 생성에 필수(제거 시 성토부 누락 — 검증됨).
         var shape = FilletConcaveCorners(boundary, p);
         var basePoly = ToPolygon(shape, padPlane, gf);
 
@@ -142,8 +142,8 @@ public static class GradingGeometry
         try { footprint = UnaryUnionOp.Union((IEnumerable<Geometry>)kept); }
         catch { footprint = boundaryPoly; }
         if (footprint == null || footprint.IsEmpty) return result;
+        try { var bf = footprint.Buffer(0); if (bf != null && !bf.IsEmpty) footprint = bf; } catch { } // 자기교차 정리
 
-        // (DP 단순화는 지형 디테일까지 직선화해 폐기. 톱니는 별도 로직으로 해결.)
         for (int i = 0; i < footprint.NumGeometries; i++)
         {
             if (footprint.GetGeometryN(i) is not Polygon fp || fp.Area < 1.0) continue;
@@ -153,10 +153,103 @@ public static class GradingGeometry
                 double gz = otherSurf.TryGetElevation(co.X, co.Y, out double z) ? z : 0.0;
                 ring.Add(new Point3(co.X, co.Y, gz));
             }
-            var w = RemoveSawtooth(Weed(ring), 4.0); // 핀셋: 급반전(톱니) 꼭짓점만 제거(완만한 디테일은 턴<90°라 보존)
+            // ★폭0 슬릿/self-touching 반도 제거★ — 가상면↔원지반 교선이 한 점을 두 번 지나면 daylight에 폭0 슬릿이
+            // 생기고, 이 daylight로 TIN을 클립하면 지표면이 섬으로 갈라진다(JACK 지적). 클립·그리기 공통으로 여기서 정제.
+            var deslit = RemovePinchSlits(ring, 0.05);
+            var weeded = Weed(deslit);
+            var w = RemoveSawtooth(weeded, 4.0); // 핀셋: 급반전(톱니) 꼭짓점만 제거(완만한 디테일은 턴<90°라 보존)
+            // ★8자(자기교차) 방지★ — 단순화가 좁은 목에서 두 벽을 가로질러 경계를 8자로 꼬을 수 있다.
+            // 톱니제거본→Weed본→슬릿제거본 순으로 '단순(simple)한 첫 후보'를 채택(셋 다 꼬이면 그 고리는 버림).
+            List<Point3>? simple = RingIsSimple(w, gf) ? w
+                                 : RingIsSimple(weeded, gf) ? weeded
+                                 : RingIsSimple(deslit, gf) ? deslit
+                                 : null;
+            if (simple != null && simple.Count >= 3) result.Add(simple);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// 절토+성토 daylight 루프들을 하나로 union해 '부지를 감싸는 바깥 외곽선'만 추출한다.
+    /// 절토선과 성토선이 부지 경계를 따라 겹치며 닿는 지점 안쪽에 생기던 섬·겹침선·구멍을 전부 메워 제거한다(JACK 요청).
+    /// 그리기(시각 확인) 전용 — 정지면 TIN 클립은 절/성 각각의 daylight를 그대로 쓴다.
+    /// </summary>
+    public static List<List<Point3>> MergeDaylightOutlines(IEnumerable<IReadOnlyList<Point3>> loops,
+        IReadOnlyList<Point3> boundary, IGroundSurface ground)
+    {
+        var gf = NtsFactory();
+        var polys = new List<Geometry>();
+        foreach (var lp in loops)
+        {
+            if (lp == null || lp.Count < 3) continue;
+            var coords = new Coordinate[lp.Count + 1];
+            for (int i = 0; i < lp.Count; i++) coords[i] = new Coordinate(lp[i].X, lp[i].Y);
+            coords[lp.Count] = new Coordinate(lp[0].X, lp[0].Y);
+            Geometry g = gf.CreatePolygon(coords);
+            if (!g.IsValid) { try { g = g.Buffer(0); } catch { continue; } } // 자기교차 루프 정리
+            if (g != null && !g.IsEmpty) polys.Add(g);
+        }
+        // ★연결고리★ 계획 경계(부지)도 합집합에 넣는다. 절토 daylight와 성토 daylight가 한 점에서만 닿아도
+        // 그 사이를 '부지'가 항상 채우므로 둘이 부지를 통해 반드시 이어져 외곽 하나가 된다(끊김·둥글어짐 없음).
+        if (boundary != null && boundary.Count >= 3) polys.Add(ToPolygon(boundary, default, gf));
+        var result = new List<List<Point3>>();
+        if (polys.Count == 0) return result;
+
+        Geometry merged;
+        try { merged = UnaryUnionOp.Union((IEnumerable<Geometry>)polys); } // 절토 ∪ 성토 ∪ 부지 → 부지가 둘을 잇는 외곽 하나
+        catch { return result; }
+        try { var bf = merged.Buffer(0); if (bf != null && !bf.IsEmpty) merged = bf; } catch { } // 위상 정리만(오프셋 왜곡 방지)
+
+        for (int i = 0; i < merged.NumGeometries; i++)
+        {
+            if (merged.GetGeometryN(i) is not Polygon fp || fp.Area < 1.0) continue; // 외곽(ExteriorRing)만 — 내부 구멍/섬 무시
+            var ring = new List<Point3>();
+            foreach (var co in fp.ExteriorRing.Coordinates)
+            {
+                double gz = ground.TryGetElevation(co.X, co.Y, out double z) ? z : 0.0;
+                ring.Add(new Point3(co.X, co.Y, gz));
+            }
+            var deslit = RemovePinchSlits(ring, 0.05); // ★폭0 슬릿/self-touching 반도 제거 — 평행선·섬의 진짜 원인
+            var w = Weed(deslit);
+            if (!RingIsSimple(w, gf)) w = deslit; // 8자 방지(union 외곽이라 거의 항상 simple)
             if (w.Count >= 3) result.Add(w);
         }
         return result;
+    }
+
+    /// <summary>
+    /// 외곽 ring이 한 점을 두 번 지나며(self-touching) 만든 '폭0 슬릿/가느다란 반도'를 제거한다.
+    /// union이 절토·성토를 폭0 경계로만 이어붙이면 외곽선에 평행 슬릿(+끝 섬)이 생기는데, 거의 일치하는
+    /// 비인접 점쌍(pinch)에서 더 작은 쪽 구간을 잘라 본체만 남긴다(JACK: 닿는 점 안쪽 섬 제거). tol=겹침판정(m).
+    /// </summary>
+    private static List<Point3> RemovePinchSlits(List<Point3> ring, double tol)
+    {
+        var pts = new List<Point3>(ring);
+        if (pts.Count > 1 && Dist2(pts[0], pts[^1]) < 1e-9) pts.RemoveAt(pts.Count - 1); // 닫힘 중복점 제거
+        for (int guard = 0; guard < ring.Count; guard++)
+        {
+            int n = pts.Count;
+            if (n < 4) break;
+            int bi = -1, bj = -1; double bd = tol;
+            for (int i = 0; i < n; i++)
+                for (int j = i + 2; j < n; j++)
+                {
+                    if (i == 0 && j == n - 1) continue; // 링 wrap 인접 제외
+                    double d = Dist2(pts[i], pts[j]);
+                    if (d < bd) { bd = d; bi = i; bj = j; }
+                }
+            if (bi < 0) break;                          // 더 이상 겹침점 없음
+            int lenA = bj - bi, lenB = n - lenA;        // [bi..bj] vs 나머지
+            if (lenA <= lenB) pts.RemoveRange(bi + 1, lenA);     // 작은 슬릿 구간 제거
+            else pts = pts.GetRange(bi, bj - bi + 1);            // 본체가 [bi..bj]면 그쪽만 남김
+        }
+        return pts;
+    }
+
+    private static double Dist2(Point3 a, Point3 b)
+    {
+        double dx = a.X - b.X, dy = a.Y - b.Y;
+        return Math.Sqrt(dx * dx + dy * dy);
     }
 
     // mesh 정점 p(=원지반 표고 p.Z)에서 otherSurf(가상면)와의 높이차. 범위 밖이면 NaN(교차 없음).
@@ -292,6 +385,21 @@ public static class GradingGeometry
     /// '작고 뾰족한 톱니'로 보고 그 점만 제거. 완만한 굴곡(턴<90°)과 크게 삐져나온 진짜 지형 특징은 보존.
     /// 전역 단순화(DP)와 달리 톱니 꼭짓점만 국소 제거 → 90% 좋은 선은 그대로.
     /// </summary>
+    /// <summary>점 목록을 닫힌 링 폴리곤으로 만들었을 때 자기교차 없이 단순(simple)·유효한지.</summary>
+    private static bool RingIsSimple(List<Point3> pts, GeometryFactory gf)
+    {
+        if (pts.Count < 4) return false;
+        try
+        {
+            var coords = new Coordinate[pts.Count + 1];
+            for (int i = 0; i < pts.Count; i++) coords[i] = new Coordinate(pts[i].X, pts[i].Y);
+            coords[pts.Count] = new Coordinate(pts[0].X, pts[0].Y);
+            var poly = gf.CreatePolygon(coords);
+            return poly.IsValid && poly.IsSimple;
+        }
+        catch { return false; }
+    }
+
     private static List<Point3> RemoveSawtooth(List<Point3> loop, double maxDev)
     {
         if (loop.Count < 5) return loop;
