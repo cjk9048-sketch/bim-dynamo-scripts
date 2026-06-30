@@ -105,7 +105,8 @@ public static class GradingGeometry
         var polys = new List<Geometry>();
         foreach (var (a, b, c) in tris)
         {
-            double da = Diff(a, virtualSurf), db = Diff(b, virtualSurf), dc = Diff(c, virtualSurf);
+            // 삼각형 정점이 어느 표면 것이든 그 XY에서 (가상면Z − 원지반Z)를 평가 — 양쪽 표면 정점이 모두 평가점.
+            double da = DiffVG(a, virtualSurf, groundSurf), db = DiffVG(b, virtualSurf, groundSurf), dc = DiffVG(c, virtualSurf, groundSurf);
             var poly = PositivePart(a, da * sign, b, db * sign, c, dc * sign, gf);
             if (poly != null && !poly.IsEmpty) polys.Add(poly);
         }
@@ -270,6 +271,11 @@ public static class GradingGeometry
     // mesh 정점 p(=원지반 표고 p.Z)에서 otherSurf(가상면)와의 높이차. 범위 밖이면 NaN(교차 없음).
     private static double Diff(Point3 p, IGroundSurface otherSurf)
         => otherSurf.TryGetElevation(p.X, p.Y, out double oz) ? oz - p.Z : double.NaN;
+
+    // 점 p의 XY에서 (가상면Z − 원지반Z). 정점 출처(원지반/가상면) 무관하게 두 표면을 직접 샘플 → 양쪽 표면
+    // 삼각망을 한 마칭 메시로 섞어도 일관. 어느 한쪽이라도 범위 밖이면 NaN(영역 밖).
+    private static double DiffVG(Point3 p, IGroundSurface v, IGroundSurface g)
+        => (v.TryGetElevation(p.X, p.Y, out double vz) && g.TryGetElevation(p.X, p.Y, out double gz)) ? vz - gz : double.NaN;
 
     private static void ZeroCross(Point3 p1, double d1, Point3 p2, double d2, List<Coordinate> outp)
     {
