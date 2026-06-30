@@ -13,7 +13,7 @@ namespace DH.Grading.Civil;
 public static class DaylightExtractor
 {
     public static List<List<Point3>> ExtractTrueDaylight(Transaction tr, ObjectId virtualSlopeId,
-        ObjectId groundId, IReadOnlyList<Point3> boundary)
+        ObjectId groundId, IReadOnlyList<Point3> boundary, double sign)
     {
         // 가상 계단면을 빠른 표고 샘플러로 캐싱(+XY 범위로 후보 원지반 삼각형 한정).
         var vtin = (TinSurface)tr.GetObject(virtualSlopeId, OpenMode.ForRead);
@@ -22,6 +22,7 @@ public static class DaylightExtractor
 
         // 원지반의 '촘촘한' 삼각망을 마칭 메시로 사용(가상면 bbox 안의 삼각형만 — 성능).
         var gtin = (TinSurface)tr.GetObject(groundId, OpenMode.ForRead);
+        var groundSampler = new CachedGroundSurface(gtin); // daylight 점 표고를 원지반에서 보간하기 위한 샘플러
         var groundTris = new List<(Point3 a, Point3 b, Point3 c)>();
         var col = gtin.GetTriangles(false);
         foreach (TinSurfaceTriangle t in col)
@@ -39,6 +40,6 @@ public static class DaylightExtractor
             catch { }
             finally { t.Dispose(); }
         }
-        return GradingGeometry.ExtractDaylightFromMesh(groundTris, virtualSampler, boundary);
+        return GradingGeometry.ExtractDaylightFromMesh(groundTris, virtualSampler, groundSampler, boundary, sign);
     }
 }

@@ -94,55 +94,44 @@ public static class GradingGeometry
     /// 캐드 '지표면 최소거리'급 정밀도. 부지 연결 고리만 채택(+계획 폴리곤 union).
     /// </summary>
     public static List<List<Point3>> ExtractDaylightFromMesh(IReadOnlyList<(Point3 a, Point3 b, Point3 c)> tris,
-        IGroundSurface otherSurf, IReadOnlyList<Point3> boundary)
+        IGroundSurface virtualSurf, IGroundSurface groundSurf, IReadOnlyList<Point3> boundary, double sign)
     {
         var gf = NtsFactory();
         var result = new List<List<Point3>>();
-        var lines = new List<Geometry>();
+
+        // ★영역 기반 daylight(재설계)★ 각 원지반 삼각형에서 '정지작업 영향 영역'(Diff×sign>0 — 성토는 가상면이
+        // 원지반보다 높은 곳, 절토는 낮은 곳)을 폴리곤으로 잘라 모은다. union한 영역의 '바깥 외곽선'이 곧 daylight다.
+        // 교선이든 측량 경계든 옹벽(수직)이든 '영역의 경계'라 항상 닫혀, 사면 누락·사선·섬이 원천 차단된다.
+        var polys = new List<Geometry>();
         foreach (var (a, b, c) in tris)
         {
-            double da = Diff(a, otherSurf), db = Diff(b, otherSurf), dc = Diff(c, otherSurf);
-            var cuts = new List<Coordinate>(2);
-            ZeroCross(a, da, b, db, cuts);
-            ZeroCross(b, db, c, dc, cuts);
-            ZeroCross(c, dc, a, da, cuts);
-            if (cuts.Count == 2 && !cuts[0].Equals2D(cuts[1]))
-                lines.Add(gf.CreateLineString(new[] { cuts[0], cuts[1] }));
+            double da = Diff(a, virtualSurf), db = Diff(b, virtualSurf), dc = Diff(c, virtualSurf);
+            var poly = PositivePart(a, da * sign, b, db * sign, c, dc * sign, gf);
+            if (poly != null && !poly.IsEmpty) polys.Add(poly);
         }
-        if (lines.Count == 0) return result;
+        if (polys.Count == 0) return result;
 
-        var polygonizer = new Polygonizer();
-        try
-        {
-            Geometry noded = UnaryUnionOp.Union((IEnumerable<Geometry>)lines); // 선분 노드 정리
-            polygonizer.Add(noded);
-        }
+        Geometry area;
+        try { area = UnaryUnionOp.Union((IEnumerable<Geometry>)polys); } // 영향 삼각형 조각 → 하나의 영역
         catch { return result; }
+        try { var bf = area.Buffer(0); if (bf != null && !bf.IsEmpty) area = bf; } catch { }
 
-        // ★채택 규칙(JACK)★: daylight 고리(2D)가 계획 폴리곤(2D)과 ①닿거나(touch/overlap) ②폴리곤을 안에 포함하면
-        // 그 고리만 경계로 채택. 그 외(부지와 무관한 먼 교선)는 버림. ToPolygon이 XY만 써서 2D(고도 무시)로 판정.
+        // 계획 경계와 닿는(연결된) 영역만 채택 — 부지와 무관한 먼 영역 제외.
         Polygon boundaryPoly = ToPolygon(boundary, default, gf);
-        // 계획폴리곤과 닿거나/포함하는 '활성 face'만 채택(먼 엉뚱한 교선 제외).
         var kept = new List<Geometry>();
-        bool anyFace = false;
-        foreach (var obj in polygonizer.GetPolygons())
+        for (int i = 0; i < area.NumGeometries; i++)
         {
-            if (obj is not Polygon pg || pg.Area < 1.0) continue; // 1m² 미만 노이즈 제외
-            bool touches = false, containsPoly = false;
-            try { touches = pg.Intersects(boundaryPoly); } catch { }      // ① 닿음/겹침
-            try { containsPoly = pg.Contains(boundaryPoly); } catch { }   // ② 폴리곤이 고리 안에 포함
-            if (touches || containsPoly) { kept.Add(pg); anyFace = true; } // 둘 중 하나면 채택
+            if (area.GetGeometryN(i) is not Polygon pg || pg.Area < 1.0) continue; // 1m² 미만 노이즈 제외
+            bool touch = false; try { touch = pg.Intersects(boundaryPoly); } catch { }
+            if (touch) kept.Add(pg);
         }
-        if (!anyFace) return result; // 진짜 사면 face 없음 → 경계 없음
+        if (kept.Count == 0) return result;
 
-        // ★계획 폴리곤을 포함(union)★ — 여러 절토/성토 구간을 폴리곤이 하나로 연결해 '경계 1개'로 단순화.
-        // 가운데(폴리곤 내부)는 ClipByDaylightLoops의 Hide가 뚫어 Pad가 채움. (JACK 제안: 구간별 분리 대신 단순)
-        kept.Add(boundaryPoly);
         Geometry footprint;
         try { footprint = UnaryUnionOp.Union((IEnumerable<Geometry>)kept); }
-        catch { footprint = boundaryPoly; }
+        catch { footprint = kept[0]; }
         if (footprint == null || footprint.IsEmpty) return result;
-        try { var bf = footprint.Buffer(0); if (bf != null && !bf.IsEmpty) footprint = bf; } catch { } // 자기교차 정리
+        try { var bf = footprint.Buffer(0); if (bf != null && !bf.IsEmpty) footprint = bf; } catch { }
 
         for (int i = 0; i < footprint.NumGeometries; i++)
         {
@@ -150,16 +139,13 @@ public static class GradingGeometry
             var ring = new List<Point3>();
             foreach (var co in fp.ExteriorRing.Coordinates)
             {
-                double gz = otherSurf.TryGetElevation(co.X, co.Y, out double z) ? z : 0.0;
+                double gz = groundSurf.TryGetElevation(co.X, co.Y, out double z) ? z : 0.0; // daylight 표고 = 원지반
                 ring.Add(new Point3(co.X, co.Y, gz));
             }
-            // ★폭0 슬릿/self-touching 반도 제거★ — 가상면↔원지반 교선이 한 점을 두 번 지나면 daylight에 폭0 슬릿이
-            // 생기고, 이 daylight로 TIN을 클립하면 지표면이 섬으로 갈라진다(JACK 지적). 클립·그리기 공통으로 여기서 정제.
-            var deslit = RemovePinchSlits(ring, 0.05);
+            var deslit = RemovePinchSlits(ring, 0.05);     // 폭0 슬릿/self-touching 반도 제거(섬 방지)
             var weeded = Weed(deslit);
-            var w = RemoveSawtooth(weeded, 4.0); // 핀셋: 급반전(톱니) 꼭짓점만 제거(완만한 디테일은 턴<90°라 보존)
-            // ★8자(자기교차) 방지★ — 단순화가 좁은 목에서 두 벽을 가로질러 경계를 8자로 꼬을 수 있다.
-            // 톱니제거본→Weed본→슬릿제거본 순으로 '단순(simple)한 첫 후보'를 채택(셋 다 꼬이면 그 고리는 버림).
+            var w = RemoveSawtooth(weeded, 4.0);           // 급반전 톱니 꼭짓점만 제거
+            // 단순화가 좁은 목을 8자로 꼬면: 톱니제거본→Weed본→슬릿제거본 순으로 simple한 첫 후보 채택
             List<Point3>? simple = RingIsSimple(w, gf) ? w
                                  : RingIsSimple(weeded, gf) ? weeded
                                  : RingIsSimple(deslit, gf) ? deslit
@@ -167,6 +153,35 @@ public static class GradingGeometry
             if (simple != null && simple.Count >= 3) result.Add(simple);
         }
         return result;
+    }
+
+    /// <summary>삼각형(정점 신호값 a,b,c)에서 '값&gt;0'인 부분만 남긴 볼록 폴리곤(2D). 부호 바뀌는 변은 0교차점에서 절단.
+    /// NaN(가상면이 그 원지반 점을 안 덮음)은 영역 밖(음수)으로 처리.</summary>
+    private static Polygon? PositivePart(Point3 A, double a, Point3 B, double b, Point3 C, double c, GeometryFactory gf)
+    {
+        if (double.IsNaN(a)) a = -1; if (double.IsNaN(b)) b = -1; if (double.IsNaN(c)) c = -1;
+        if (a <= 0 && b <= 0 && c <= 0) return null;
+        var pts = new List<Coordinate>(5);
+        void Edge(Point3 p, double pv, Point3 q, double qv)
+        {
+            if (pv > 0) pts.Add(new Coordinate(p.X, p.Y));
+            if ((pv > 0) != (qv > 0))
+            {
+                double t = pv / (pv - qv);                 // 값 0이 되는 지점(원지반=가상면 교차)
+                pts.Add(new Coordinate(p.X + (q.X - p.X) * t, p.Y + (q.Y - p.Y) * t));
+            }
+        }
+        Edge(A, a, B, b); Edge(B, b, C, c); Edge(C, c, A, a);
+        if (pts.Count < 3) return null;
+        var coords = new Coordinate[pts.Count + 1];
+        for (int i = 0; i < pts.Count; i++) coords[i] = pts[i];
+        coords[pts.Count] = new Coordinate(pts[0].X, pts[0].Y);
+        try
+        {
+            var p = gf.CreatePolygon(coords);
+            return p.IsValid ? p : p.Buffer(0) as Polygon; // 드문 퇴화 삼각형 정리
+        }
+        catch { return null; }
     }
 
     /// <summary>

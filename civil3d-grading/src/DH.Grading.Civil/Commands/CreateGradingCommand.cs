@@ -79,13 +79,13 @@ public sealed class CreateGradingCommand
                 if (cut.HasSlope)
                 {
                     var cutId = GradingBuilder.BuildVirtualSlope(db, tr, cut.Rings, "가상절토_DH");
-                    cutDaylight = DaylightExtractor.ExtractTrueDaylight(tr, cutId, groundId, boundary); // 실제 면-원지반 교선
+                    cutDaylight = DaylightExtractor.ExtractTrueDaylight(tr, cutId, groundId, boundary, -1.0); // 절토 영역(가상면<원지반)
                     cutIds = GradingBuilder.BuildClippedRegions(db, tr, cut.Rings, "가상절토_DH", cutId, cutDaylight, null); // Hide 없음(폴리곤 평평바닥 포함)
                 }
                 if (fill.HasSlope)
                 {
                     var fillId = GradingBuilder.BuildVirtualSlope(db, tr, fill.Rings, "가상성토_DH");
-                    fillDaylight = DaylightExtractor.ExtractTrueDaylight(tr, fillId, groundId, boundary); // 실제 면-원지반 교선
+                    fillDaylight = DaylightExtractor.ExtractTrueDaylight(tr, fillId, groundId, boundary, 1.0); // 성토 영역(가상면>원지반)
                     fillIds = GradingBuilder.BuildClippedRegions(db, tr, fill.Rings, "가상성토_DH", fillId, fillDaylight, null); // Hide 없음(폴리곤 평평바닥 포함)
                 }
                 padId = GradingBuilder.BuildFlatPad(db, tr, boundary, pad, "본체Pad_DH");
