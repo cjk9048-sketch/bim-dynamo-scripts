@@ -9,6 +9,8 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: ExtensionApplication(typeof(DH.Grading.Civil.RibbonApp))]
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.CreateGradingCommand))]
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.GradingSettingsCommand))]
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SurfaceIntersectionCommand))] // DHXSEC(지표면 교선 TEST)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SlopeLineCommand))]           // DHSLOPELINE(노리선)
 
 namespace DH.Grading.Civil;
 
@@ -54,6 +56,8 @@ public sealed class RibbonApp : IExtensionApplication
                 "정지\n설정", "DHGRADESET ", "단높이·소단폭·구배·격자 해상도를 설정", "Settings32.png"));
             src.Items.Add(MakeButton(
                 "정지면\n생성", "DHGRADE ", "계획 폴리곤+원지반 → 계단식 절성토 TIN Surface 생성", "Grade32.png"));
+            src.Items.Add(MakeButton(
+                "지표면\n교선", "DHXSEC ", "[TEST] 지표면 2개 선택 → 면-면 교선(daylight) 3D 폴리선 생성", "Grade32.png"));
         }
         catch
         {

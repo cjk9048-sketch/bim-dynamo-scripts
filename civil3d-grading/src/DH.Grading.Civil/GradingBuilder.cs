@@ -180,6 +180,34 @@ public static class GradingBuilder
         }
     }
 
+    /// <summary>노리선(노란 'DH-노리선')+소단선(흰 'DH-소단')을 그린다 — DHSLOPELINE 전용.</summary>
+    public static void DrawSlopeHatch(Database db, Transaction tr,
+        IEnumerable<(Point3 A, Point3 B)> ticks, IEnumerable<IReadOnlyList<Point3>> benchLines)
+    {
+        ObjectId tickLayer = EnsureLayer(db, tr, "DH-노리선", 2);  // 노란
+        ObjectId benchLayer = EnsureLayer(db, tr, "DH-소단", 7);   // 흰
+        EraseOnLayer(db, tr, "DH-노리선");
+        EraseOnLayer(db, tr, "DH-소단");
+        var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+
+        foreach (var (a, b) in ticks)
+        {
+            var ln = new Line(new Point3d(a.X, a.Y, a.Z), new Point3d(b.X, b.Y, b.Z)) { LayerId = tickLayer };
+            ms.AppendEntity(ln); tr.AddNewlyCreatedDBObject(ln, true);
+        }
+        foreach (var loop in benchLines)
+        {
+            if (loop == null || loop.Count < 2) continue;
+            var pl = new Polyline3d { LayerId = benchLayer };
+            ms.AppendEntity(pl); tr.AddNewlyCreatedDBObject(pl, true);
+            foreach (var p in loop)
+            {
+                var v = new PolylineVertex3d(new Point3d(p.X, p.Y, p.Z));
+                pl.AppendVertex(v); tr.AddNewlyCreatedDBObject(v, true);
+            }
+        }
+    }
+
     // ── helpers ──
     private static void AddRingBreakline(TinSurface tin, IReadOnlyList<Point3> loop)
     {
