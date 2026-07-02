@@ -35,6 +35,14 @@ public sealed class SurfaceIntersectionCommand
         var r2 = ed.GetEntity(peo2);
         if (r2.Status != PromptStatus.OK) return;
 
+        // 계획 폴리곤(선택 사항): 주어지면 계획과 무관한 잡선 삭제 + 닿는 루프는 계획과 합집합 경계로.
+        var peo3 = new PromptEntityOptions("\n계획 폴리곤 선택(잡선 정리·합집합 경계) — 건너뛰려면 Enter: ") { AllowNone = true };
+        peo3.SetRejectMessage("\n닫힌 폴리라인(2D/3D) 또는 피처라인을 선택하세요.");
+        peo3.AddAllowedClass(typeof(Autodesk.AutoCAD.DatabaseServices.Polyline), false);
+        peo3.AddAllowedClass(typeof(Polyline3d), false);
+        peo3.AddAllowedClass(typeof(Autodesk.Civil.DatabaseServices.FeatureLine), false);
+        var r3 = ed.GetEntity(peo3);
+
         try
         {
             System.Collections.Generic.List<System.Collections.Generic.List<Point3>> loops;
@@ -42,12 +50,27 @@ public sealed class SurfaceIntersectionCommand
             {
                 var a = (TinSurface)tr.GetObject(r1.ObjectId, OpenMode.ForRead);
                 var b = (TinSurface)tr.GetObject(r2.ObjectId, OpenMode.ForRead);
-                loops = RawTriangleIntersectionFinder.GetExactDaylight(a, b);
+                System.Collections.Generic.List<Point3>? plan =
+                    r3.Status == PromptStatus.OK ? BoundaryReader.Read(tr, r3.ObjectId) : null;
+                loops = RawTriangleIntersectionFinder.GetExactDaylight(a, b, plan);
                 GradingBuilder.DrawDaylight(db, tr, loops); // 'DH-정지경계'(초록) 3D 폴리선
+                GradingBuilder.DrawDebugSpans(db, tr, RawTriangleIntersectionFinder.LastCutSpans); // 'DH-진단'(빨강) 잘린 선분
+                GradingBuilder.DrawDebugSpans(db, tr, RawTriangleIntersectionFinder.LastBridgeSpans, "DH-틈메움", 4); // 하늘색: 틈메움 연결
                 tr.Commit();
             }
-            int pts = 0; foreach (var l in loops) pts += l.Count;
-            string msg = $"[지표면 교선] 폴리선 {loops.Count}개 / 총 {pts}점\n레이어 'DH-정지경계'(초록)에 3D 폴리선 생성";
+            int pts = 0, closedN = 0, openN = 0;
+            foreach (var l in loops)
+            {
+                pts += l.Count;
+                // DrawDaylight와 동일 기준(첫~끝 ≤10cm·정점 3개 이상)으로 폐합 판정.
+                var f = l[0]; var e = l[l.Count - 1];
+                double gx = f.X - e.X, gy = f.Y - e.Y;
+                bool dup = gx * gx + gy * gy < 1e-12;
+                if (gx * gx + gy * gy < 0.10 * 0.10 && (dup ? l.Count - 1 : l.Count) >= 3) closedN++; else openN++;
+            }
+            string warn = openN > 0 ? $"\n※ 열린(미폐합) 선 {openN}개 — 닫힘=아니오인 선이 있으면 교선 누락 의심!" : "\n모든 교선이 폐합(닫힘=예)입니다.";
+            string msg = $"[지표면 교선] 폴리선 {loops.Count}개(닫힘 {closedN} / 열림 {openN}) / 총 {pts}점{warn}\n" +
+                $"[진단] {RawTriangleIntersectionFinder.LastDiag}\n레이어 'DH-정지경계'(초록)에 3D 폴리선 생성";
             ed.WriteMessage("\n" + msg);
             AcadApp.ShowAlertDialog(msg);
         }
