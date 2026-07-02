@@ -13,17 +13,92 @@ namespace DH.Grading.Civil;
 /// </summary>
 public static class GradingBuilder
 {
+    /// <summary>직전 BuildVirtualSlope의 TIN 실측 검증 결과 — 의도한 링 Z와 실제 TIN 표고 대조(진단로그용).</summary>
+    public static string LastVerify { get; private set; } = "";
+
     /// <summary>오버사이즈 가상 사면 TIN — 계단 링을 Standard 브레이크라인으로(동심 비교차 → 톱니 0).
     /// cornerLines(코너 능선)를 주면 열린 브레이크라인으로 추가 — 코너 모따기(사선) 방지(직각 모드).</summary>
     public static ObjectId BuildVirtualSlope(Database db, Transaction tr, IReadOnlyList<List<Point3>> rings, string name,
         IReadOnlyList<List<Point3>>? cornerLines = null)
     {
+        // [재실행 정리] 같은 이름(및 _2, _3… 번호 변형)의 옛 DH 가상면을 먼저 삭제 — 실행마다 쌓여
+        // 옛 표면을 보고 "안 생겼다"고 오인하는 혼란 방지(JACK). 항상 최신 하나만 남는다.
+        EraseSurfacesByBaseName(tr, name);
         ObjectId id = TinSurface.Create(db, UniqueName(db, tr, name));
         var tin = (TinSurface)tr.GetObject(id, OpenMode.ForWrite);
         foreach (var ring in rings) AddRingBreakline(tin, ring);
+        int intended = rings.Count;
         if (cornerLines != null)
+        {
             foreach (var cl in cornerLines) AddOpenBreakline(tin, cl);
+            intended += cornerLines.Count;
+        }
         tin.Rebuild();
+
+        // [TIN 실측 검증] 의도한 링 점 Z vs 실제 TIN 표고 — 불일치가 어느 방향에 몰렸는지 기록(비대칭 원인 추적).
+        var vb = new System.Text.StringBuilder();
+        try
+        {
+            int defCount = -1;
+            try { defCount = tin.BreaklinesDefinition.Count; } catch { }
+            vb.AppendLine($"  브레이크라인 의도 {intended} / 정의됨 {defCount}");
+            // 부지 중심(첫 링 평균)
+            double cx = 0, cy = 0; int cn = 0;
+            foreach (var pt in rings[0]) { cx += pt.X; cy += pt.Y; cn++; }
+            cx /= Math.Max(cn, 1); cy /= Math.Max(cn, 1);
+            for (int r = 0; r < rings.Count; r++)
+            {
+                var ring = rings[r];
+                int sample = 0, bad = 0;
+                int e = 0, w = 0, n2 = 0, s2 = 0;
+                double maxErr = 0;
+                for (int i = 0; i < ring.Count; i += 5) // 5점 간격 표본
+                {
+                    var pt = ring[i];
+                    double zTin;
+                    try { zTin = tin.FindElevationAtXY(pt.X, pt.Y); } catch { continue; }
+                    sample++;
+                    double err = Math.Abs(zTin - pt.Z);
+                    if (err > 0.05)
+                    {
+                        bad++;
+                        if (err > maxErr) maxErr = err;
+                        double dx = pt.X - cx, dy = pt.Y - cy;
+                        if (Math.Abs(dx) >= Math.Abs(dy)) { if (dx > 0) e++; else w++; }
+                        else { if (dy > 0) n2++; else s2++; }
+                    }
+                }
+                if (bad > 0)
+                    vb.AppendLine($"  링{r}: 표본 {sample} 중 불일치 {bad} (동{e}/서{w}/북{n2}/남{s2}) 최대오차 {maxErr:F2}m");
+            }
+            // [격자 탐침] ①부지 내부 6×6 ②계단 전체(최외곽 링 bbox) 16×16 — TIN 실측 Z 숫자 지도.
+            // '어느 쪽이 안 생겼나'를 스샷 없이 수치로 직접 포착(비대칭 원인 추적).
+            void Grid(string title, IReadOnlyList<Point3> extent, int nDiv)
+            {
+                double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+                foreach (var pt in extent)
+                { if (pt.X < minX) minX = pt.X; if (pt.X > maxX) maxX = pt.X; if (pt.Y < minY) minY = pt.Y; if (pt.Y > maxY) maxY = pt.Y; }
+                vb.AppendLine($"  [{title} {nDiv}×{nDiv}] X {minX:F1}~{maxX:F1} / Y {minY:F1}~{maxY:F1} (위=북)");
+                for (int gy = nDiv - 1; gy >= 0; gy--)
+                {
+                    var row = new System.Text.StringBuilder("    ");
+                    for (int gx = 0; gx < nDiv; gx++)
+                    {
+                        double x = minX + (maxX - minX) * (gx + 0.5) / nDiv;
+                        double y = minY + (maxY - minY) * (gy + 0.5) / nDiv;
+                        string cell;
+                        try { cell = tin.FindElevationAtXY(x, y).ToString("F1"); }
+                        catch { cell = "----"; }
+                        row.Append(cell.PadLeft(7));
+                    }
+                    vb.AppendLine(row.ToString());
+                }
+            }
+            Grid("부지 내부", rings[0], 6);
+            Grid("계단 전체", rings[rings.Count - 1], 16);
+        }
+        catch (System.Exception ex) { vb.AppendLine("  검증 실패: " + ex.Message); }
+        LastVerify = vb.ToString();
         return id;
     }
 
@@ -127,6 +202,24 @@ public static class GradingBuilder
         var f = pc[0];
         pc.Add(new Point3d(f.X, f.Y, f.Z));
         try { tin.BreaklinesDefinition.AddStandardBreaklines(pc, 1.0, 0.0, 0.0, 0.0); } catch { }
+    }
+
+    /// <summary>이름이 baseName 또는 baseName_N 인 지표면을 모두 삭제(잠긴/참조 중이면 그 항목만 건너뜀).</summary>
+    private static void EraseSurfacesByBaseName(Transaction tr, string baseName)
+    {
+        var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+        var victims = new List<ObjectId>();
+        foreach (ObjectId sid in civilDoc.GetSurfaceIds())
+        {
+            if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
+            string nm = s.Name;
+            if (nm == baseName || (nm.StartsWith(baseName + "_") && int.TryParse(nm.Substring(baseName.Length + 1), out _)))
+                victims.Add(sid);
+        }
+        foreach (var sid in victims)
+        {
+            try { (tr.GetObject(sid, OpenMode.ForWrite) as AcadEntity)?.Erase(); } catch { }
+        }
     }
 
     private static string UniqueName(Database db, Transaction tr, string baseName)
