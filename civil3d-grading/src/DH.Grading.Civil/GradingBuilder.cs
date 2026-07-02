@@ -32,16 +32,40 @@ public static class GradingBuilder
         foreach (var loop in loops)
         {
             if (loop == null || loop.Count < 2) continue;
+            // 폐합 판정: 첫~끝 간격 ≤10cm면 '닫힘=예' 속성으로 닫는다(중복 정점 X → 속성창에 닫힘=예).
+            // 열린 교선을 강제로 닫으면 시작~끝 대각선(허공 지름길)이 그려지므로 열린 선은 열린 채로 둔다.
+            var f = loop[0]; var l = loop[loop.Count - 1];
+            double gx = f.X - l.X, gy = f.Y - l.Y;
+            double gapSq = gx * gx + gy * gy;
+            int count = loop.Count;
+            if (gapSq < 1e-12) count--; // 끝점=첫점 중복이면 정점 하나 생략(닫힘 속성이 연결 담당)
+            if (count < 2) continue;    // 정점 1개짜리 방어(리뷰 L-6)
+            bool closed = (gapSq < 0.10 * 0.10) && count >= 3;
+
             var pl = new Polyline3d { LayerId = layerId };
             ms.AppendEntity(pl); tr.AddNewlyCreatedDBObject(pl, true);
-            foreach (var p in loop)
+            for (int i = 0; i < count; i++)
             {
+                var p = loop[i];
                 var v = new PolylineVertex3d(new Point3d(p.X, p.Y, p.Z));
                 pl.AppendVertex(v); tr.AddNewlyCreatedDBObject(v, true);
             }
-            var f = loop[0];
-            var vc = new PolylineVertex3d(new Point3d(f.X, f.Y, f.Z));
-            pl.AppendVertex(vc); tr.AddNewlyCreatedDBObject(vc, true); // 닫기
+            if (closed) pl.Closed = true;
+        }
+    }
+
+    /// <summary>[진단] 표시용 선분 그리기 — 기본: 지름길 컷(빨강 'DH-진단'). 틈메움 연결선은 'DH-틈메움'(하늘색 4)로.
+    /// 끊긴 자리에 빨간 선이 있으면 '필터가 자른 것', 없으면 '그 구간 교선이 아예 생성 안 된 것'.</summary>
+    public static void DrawDebugSpans(Database db, Transaction tr, IEnumerable<(Point3 A, Point3 B)> spans,
+        string layer = "DH-진단", short aci = 1)
+    {
+        ObjectId layerId = EnsureLayer(db, tr, layer, aci);
+        EraseOnLayer(db, tr, layer);
+        var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+        foreach (var (a, b) in spans)
+        {
+            var ln = new Line(new Point3d(a.X, a.Y, a.Z), new Point3d(b.X, b.Y, b.Z)) { LayerId = layerId };
+            ms.AppendEntity(ln); tr.AddNewlyCreatedDBObject(ln, true);
         }
     }
 
