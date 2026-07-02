@@ -11,6 +11,9 @@ public sealed class VirtualSlope
 {
     /// <summary>계단 모서리 링(평지 경계 + k단 사면끝/소단끝 오프셋). Z=padZ±kH, 원지반 무시·끝까지(클립 없음).</summary>
     public List<List<Point3>> Rings { get; } = new();
+    /// <summary>코너 능선(힙) — 부지 코너에서 바깥 대각선으로 각 링의 코너 점을 꿰는 열린 브레이크라인.
+    /// TIN이 코너를 대각 삼각형으로 깎는(모따기처럼 보이는) 것을 막아 벽·소단이 각지게 딱 떨어지게 한다(직각 모드).</summary>
+    public List<List<Point3>> CornerLines { get; } = new();
     /// <summary>실제 계단이 생겼는지(평지 외 사면 링 존재).</summary>
     public bool HasSlope { get; set; }
 }
@@ -38,10 +41,12 @@ public static class GradingGeometry
         var result = new VirtualSlope();
         var gf = NtsFactory();
 
-        // [오목 코너 정밀 필렛] 부지 외곽선의 오목(reflex) 코너 '정점만' 인식해 베지어 원호로 부드럽게 치환.
-        // 동심 오프셋(아래 Buffer)이 오목 코너에서 계단(소단·사면)을 비트는 것을 방지. 직선·볼록 코너의 정점은
-        // 그대로 보존하므로 직선이 곡률지는 부작용이 전혀 없다. ※성토 생성에 필수(제거 시 성토부 누락 — 검증됨).
-        var shape = FilletConcaveCorners(boundary, p);
+        // [오목 코너] 필렛 없이 원본 코너 유지(직각·라운드 공통) — Civil 부지정지처럼 오목부가 각지게 딱 떨어진다
+        // (바깥 오프셋에서 오목 코너는 두 변 오프셋의 '교차'로 자연히 선명 — join 스타일은 볼록 코너에만 적용됨).
+        // ※옛 베지어 필렛(FilletConcaveCorners)은 ray-march daylight 시절 안전장치 — 현행 파이프라인
+        //   (링 브레이크라인 + 코너 능선 + DHXSEC 경계)에서는 오목부를 사선으로 깎는 부작용만 남아 미사용(JACK).
+        //   성토 누락 재발 시 이 지점부터 재검토.
+        IReadOnlyList<Point3> shape = boundary;
         var basePoly = ToPolygon(shape, padPlane, gf);
 
         // densify 간격(m) — 링을 이 간격으로 촘촘히 채워 삼각망을 곱게. 직선 구간에 점이 2개뿐이면 잘릴 때
@@ -65,6 +70,7 @@ public static class GradingGeometry
         var profile = StepProfile.Build(p, slope);
         double zdir = up ? 1.0 : -1.0;
 
+        var ringSeq = new List<(double dist, double rise, List<Point3> ring)>(); // 코너 능선 추적용(=TIN에 들어가는 실제 점)
         foreach (var (dist, rise) in profile.Edges) // 각 사면끝 / 소단끝(또는 대소단끝) 모서리
         {
             if (dist <= 1e-9) continue;
@@ -77,7 +83,62 @@ public static class GradingGeometry
             foreach (var c in pg.ExteriorRing.Coordinates)
                 pts.Add(new Point3(c.X, c.Y, padPlane.At(c.X, c.Y) + zOff));
             var w = Densify(Weed(pts), dens);
-            if (w.Count >= 3) { result.Rings.Add(w); result.HasSlope = true; }
+            if (w.Count >= 3) { result.Rings.Add(w); result.HasSlope = true; ringSeq.Add((dist, rise, w)); }
+        }
+
+        // [코너 능선(힙/계곡) 브레이크라인] 링 자체는 코너가 한 점으로 정확하지만(NTS 검증됨), 링 사이 TIN
+        // 삼각화가 코너에서 대각 삼각형을 만들어 모따기(사선)처럼 보인다. 부지 각 코너에서 출발해
+        // '각 링의 뾰족 정점(꺾임>20°, 같은 볼록/오목 방향)을 직전 위치에서 가장 가까운 것으로 추적'하는
+        // 열린 브레이크라인을 강제 → 삼각망이 능선/계곡선에서 접혀 각지게 딱 떨어진다(JACK).
+        // ※마이터 '공식' 예측이 아니라 실제 링 정점 추적 — 라운드 모드에서 인접 볼록 원호가 커지며 오목 정점이
+        //   밀려나도 끝까지 따라간다(몇 단 이후 다시 사선이 되던 문제 수정). 끝점은 TIN에 들어가는 실제 점이라
+        //   1mm 반올림 차이로 인한 '브레이크라인 교차' 거부도 없다.
+        // 적용: 직각 모드=모든 코너 / 라운드 모드=오목 코너만(볼록은 원호가 정상).
+        if (result.HasSlope)
+        {
+            int nC = shape.Count;
+            double ccwS = Math.Sign(SignedArea(shape)); if (ccwS == 0) ccwS = 1;
+            for (int i = 0; i < nC; i++)
+            {
+                var a = shape[(i - 1 + nC) % nC]; var b = shape[i]; var c = shape[(i + 1) % nC];
+                double v1x = b.X - a.X, v1y = b.Y - a.Y, l1 = Math.Sqrt(v1x * v1x + v1y * v1y);
+                double v2x = c.X - b.X, v2y = c.Y - b.Y, l2 = Math.Sqrt(v2x * v2x + v2y * v2y);
+                if (l1 < 1e-9 || l2 < 1e-9) continue;
+                if ((v1x * v2x + v1y * v2y) / (l1 * l2) > 0.985) continue; // 거의 직선(<10°) — 능선 불필요
+                bool reflexCorner = (v1x * v2y - v1y * v2x) * ccwS < 0;    // 오목(reflex) 코너 여부
+                if (!p.MiterConvex && !reflexCorner) continue;             // 라운드 모드: 볼록 코너는 원호 유지
+
+                var line = new List<Point3> { new Point3(b.X, b.Y, padPlane.At(b.X, b.Y)) };
+                double px = b.X, py = b.Y, prevDist = 0;
+                foreach (var (dist, rise, ring) in ringSeq)
+                {
+                    int m = ring.Count;
+                    // 닫힘 중복(첫=끝) 제외한 유효 정점 수
+                    if (m >= 2 && Math.Abs(ring[0].X - ring[m - 1].X) < 1e-9 && Math.Abs(ring[0].Y - ring[m - 1].Y) < 1e-9) m--;
+                    if (m < 3) break;
+                    double ringCcw = Math.Sign(SignedArea(ring)); if (ringCcw == 0) ringCcw = 1;
+                    double maxJump = (dist - prevDist) * 3.5 + 0.5; // 코너 정점의 링당 이동 상한(마이터 배율 여유)
+                    double bestD2 = maxJump * maxJump; int bestJ = -1;
+                    for (int j = 0; j < m; j++)
+                    {
+                        var pp = ring[(j - 1 + m) % m]; var pc = ring[j]; var pn = ring[(j + 1) % m];
+                        double e1x = pc.X - pp.X, e1y = pc.Y - pp.Y, e1l = Math.Sqrt(e1x * e1x + e1y * e1y);
+                        double e2x = pn.X - pc.X, e2y = pn.Y - pc.Y, e2l = Math.Sqrt(e2x * e2x + e2y * e2y);
+                        if (e1l < 1e-9 || e2l < 1e-9) continue;
+                        if ((e1x * e2x + e1y * e2y) / (e1l * e2l) > 0.94) continue; // 꺾임 20° 미만 = 직선/원호 통과점
+                        bool vReflex = (e1x * e2y - e1y * e2x) * ringCcw < 0;
+                        if (vReflex != reflexCorner) continue; // 볼록/오목 방향 일치하는 정점만
+                        double ddx = pc.X - px, ddy = pc.Y - py;
+                        double d2 = ddx * ddx + ddy * ddy;
+                        if (d2 < bestD2) { bestD2 = d2; bestJ = j; }
+                    }
+                    if (bestJ < 0) break; // 이 단에서 코너 소멸(오목 닫힘/원호화/MitreLimit 폴백) → 중단
+                    px = ring[bestJ].X; py = ring[bestJ].Y;
+                    line.Add(new Point3(px, py, ring[bestJ].Z)); // Z까지 링 점 그대로 공유
+                    prevDist = dist;
+                }
+                if (line.Count >= 2) result.CornerLines.Add(line);
+            }
         }
 
         // daylight는 여기서 예측하지 않는다. 가상 계단면 TIN을 만든 뒤 DaylightExtractor.ExtractTrueDaylight로

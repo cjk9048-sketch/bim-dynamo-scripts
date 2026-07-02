@@ -67,8 +67,8 @@ public sealed class CreateGradingCommand
             var cut = GradingGeometry.Build(boundary, pad, ground, p, up: true);
             var fill = GradingGeometry.Build(boundary, pad, ground, p, up: false);
 
-            if (cut.HasSlope) GradingBuilder.BuildVirtualSlope(db, tr, cut.Rings, "가상절토_DH");
-            if (fill.HasSlope) GradingBuilder.BuildVirtualSlope(db, tr, fill.Rings, "가상성토_DH");
+            if (cut.HasSlope) GradingBuilder.BuildVirtualSlope(db, tr, cut.Rings, "가상절토_DH", cut.CornerLines);
+            if (fill.HasSlope) GradingBuilder.BuildVirtualSlope(db, tr, fill.Rings, "가상성토_DH", fill.CornerLines);
 
             tr.Commit();
 

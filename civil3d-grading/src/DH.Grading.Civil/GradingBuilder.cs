@@ -13,14 +13,27 @@ namespace DH.Grading.Civil;
 /// </summary>
 public static class GradingBuilder
 {
-    /// <summary>오버사이즈 가상 사면 TIN — 계단 링을 Standard 브레이크라인으로(동심 비교차 → 톱니 0).</summary>
-    public static ObjectId BuildVirtualSlope(Database db, Transaction tr, IReadOnlyList<List<Point3>> rings, string name)
+    /// <summary>오버사이즈 가상 사면 TIN — 계단 링을 Standard 브레이크라인으로(동심 비교차 → 톱니 0).
+    /// cornerLines(코너 능선)를 주면 열린 브레이크라인으로 추가 — 코너 모따기(사선) 방지(직각 모드).</summary>
+    public static ObjectId BuildVirtualSlope(Database db, Transaction tr, IReadOnlyList<List<Point3>> rings, string name,
+        IReadOnlyList<List<Point3>>? cornerLines = null)
     {
         ObjectId id = TinSurface.Create(db, UniqueName(db, tr, name));
         var tin = (TinSurface)tr.GetObject(id, OpenMode.ForWrite);
         foreach (var ring in rings) AddRingBreakline(tin, ring);
+        if (cornerLines != null)
+            foreach (var cl in cornerLines) AddOpenBreakline(tin, cl);
         tin.Rebuild();
         return id;
+    }
+
+    /// <summary>열린 브레이크라인(코너 능선 등) — 링과 달리 닫지 않는다.</summary>
+    private static void AddOpenBreakline(TinSurface tin, IReadOnlyList<Point3> pts)
+    {
+        if (pts.Count < 2) return;
+        var pc = new Point3dCollection();
+        foreach (var pt in pts) pc.Add(new Point3d(pt.X, pt.Y, pt.Z));
+        try { tin.BreaklinesDefinition.AddStandardBreaklines(pc, 1.0, 0.0, 0.0, 0.0); } catch { }
     }
 
     /// <summary>daylight/교선 외곽선을 초록 폴리라인으로(시각 확인용). 레이어 'DH-정지경계'.</summary>
