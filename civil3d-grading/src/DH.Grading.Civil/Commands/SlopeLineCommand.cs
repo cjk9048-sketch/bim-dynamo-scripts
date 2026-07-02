@@ -50,11 +50,10 @@ public sealed class SlopeLineCommand
             var groundTin = (TinSurface)tr.GetObject(rSurf.ObjectId, OpenMode.ForRead);
             var ground = new CachedGroundSurface(groundTin);
             var p = CreateGradingCommand.BuildParams(boundary, ground);
-            var pad = Plane.Fit(boundary);
 
-            // 정지면과 동일하게 사면을 재구성(절토/성토) → 링에서 노리선·소단선 생성.
-            var cut = GradingGeometry.Build(boundary, pad, ground, p, up: true);
-            var fill = GradingGeometry.Build(boundary, pad, ground, p, up: false);
+            // 정지면과 동일하게 사면을 재구성(절토/성토) → 링에서 노리선·소단선 생성. (계획고=경계 Z 추종)
+            var cut = GradingGeometry.Build(boundary, ground, p, up: true);
+            var fill = GradingGeometry.Build(boundary, ground, p, up: false);
 
             var ticks = new System.Collections.Generic.List<(Point3 A, Point3 B)>();
             var benches = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();

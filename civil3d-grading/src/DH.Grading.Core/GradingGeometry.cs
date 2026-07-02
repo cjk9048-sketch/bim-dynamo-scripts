@@ -29,8 +29,13 @@ public static class GradingGeometry
 {
     private const double WeedDist = 0.05;
 
-    /// <summary>한 방향(절토 up=true / 성토 up=false) 가상 사면을 만든다. padPlane=계획 부지 평탄면.</summary>
-    public static VirtualSlope Build(IReadOnlyList<Point3> boundary, Plane padPlane, IGroundSurface ground,
+    /// <summary>직전 Build 진단(3D 계획선·플래토·완화 상태) — DHGRADE_진단.log로 기록(스샷 없이 분석, JACK).</summary>
+    public static string LastDiag { get; private set; } = "";
+
+    /// <summary>한 방향(절토 up=true / 성토 up=false) 가상 사면을 만든다.
+    /// 계획고 Z는 평면 근사가 아니라 '그 위치에서 가장 가까운 경계 위 점의 Z'(선형보간)를 따른다 —
+    /// 3D 폴리선(단차·경사 계획선)도 평균으로 기울지 않고 단차 그대로 정지된다(JACK).</summary>
+    public static VirtualSlope Build(IReadOnlyList<Point3> boundary, IGroundSurface ground,
         GradingParams p, bool up)
     {
         if (boundary == null || boundary.Count < 3)
@@ -40,6 +45,10 @@ public static class GradingGeometry
 
         var result = new VirtualSlope();
         var gf = NtsFactory();
+        var dbg = new System.Text.StringBuilder();
+        dbg.AppendLine($"방향={(up ? "절토(up)" : "성토(down)")} · 경계 {boundary.Count}점");
+        for (int i = 0; i < boundary.Count; i++)
+            dbg.AppendLine($"  경계[{i}] ({boundary[i].X:F2}, {boundary[i].Y:F2}, Z={boundary[i].Z:F3})");
 
         // [오목 코너] 필렛 없이 원본 코너 유지(직각·라운드 공통) — Civil 부지정지처럼 오목부가 각지게 딱 떨어진다
         // (바깥 오프셋에서 오목 코너는 두 변 오프셋의 '교차'로 자연히 선명 — join 스타일은 볼록 코너에만 적용됨).
@@ -47,15 +56,72 @@ public static class GradingGeometry
         //   (링 브레이크라인 + 코너 능선 + DHXSEC 경계)에서는 오목부를 사선으로 깎는 부작용만 남아 미사용(JACK).
         //   성토 누락 재발 시 이 지점부터 재검토.
         IReadOnlyList<Point3> shape = boundary;
-        var basePoly = ToPolygon(shape, padPlane, gf);
+        var basePoly = ToPolygon(shape, gf);
 
         // densify 간격(m) — 링을 이 간격으로 촘촘히 채워 삼각망을 곱게. 직선 구간에 점이 2개뿐이면 잘릴 때
         // 큰 톱니가 생기므로 일정 간격으로 점을 채운다(사면 재생성 ①의 핵심).
         double dens = Math.Max(0.3, Math.Min(p.VertexSpacing, 1.0));
 
-        // 평지(계획 부지) 경계 링 — Z=계획고. (가상면의 안쪽 평탄부)
-        var platform = Densify(Weed(PadRing(shape, padPlane)), dens);
+        // 평지(계획 부지) 경계 링 — Z=경계 정점의 실제 계획고(3D 폴리선 그대로). 내부는 TIN이 보간.
+        var platform = Densify(Weed(PadRing(shape)), dens);
         if (platform.Count >= 3) result.Rings.Add(platform);
+
+        // [같은 레벨 정점 직선 브레이크라인 — 3D 계획선] 경계의 '같은 Z 연속 구간(플래토)' 양 끝 정점을
+        // 부지 안쪽 직선으로 연결 → 상단·하단이 각각 평평하게 유지되고 전환 사면이 그 사이 좁은 띠로 갇힘
+        // (Civil 부지정지 동작과 동일, JACK 지시).
+        {
+            const double zTol = 0.005;
+            int nV = shape.Count;
+            // Z가 바뀌는 첫 지점을 시작점으로 순환 순회하며 플래토 구간 수집
+            int start = -1;
+            for (int i = 0; i < nV; i++)
+                if (Math.Abs(shape[i].Z - shape[(i - 1 + nV) % nV].Z) > zTol) { start = i; break; }
+            if (start < 0) dbg.AppendLine("  플래토: 전체 단일 레벨(평면 계획선) → 직선 브레이크라인 불필요");
+            if (start >= 0) // start<0 = 전체가 한 레벨(평면) → 불필요
+            {
+                int idx = start;
+                while (idx < start + nV)
+                {
+                    int runBegin = idx;
+                    double z0 = shape[runBegin % nV].Z;
+                    while (idx + 1 < start + nV && Math.Abs(shape[(idx + 1) % nV].Z - z0) <= zTol) idx++;
+                    int runEnd = idx;
+                    if (runEnd > runBegin) // 정점 2개 이상 플래토
+                    {
+                        var s = shape[runBegin % nV]; var e = shape[runEnd % nV];
+                        double ddx = s.X - e.X, ddy = s.Y - e.Y;
+                        if (ddx * ddx + ddy * ddy > 1e-6)
+                        {
+                            bool inside = false;
+                            try
+                            {
+                                var ls = gf.CreateLineString(new[] { new Coordinate(s.X, s.Y), new Coordinate(e.X, e.Y) });
+                                inside = basePoly.Covers(ls); // 부지 안을 지나는 경우만(오목부에서 밖으로 나가면 제외)
+                            }
+                            catch { }
+                            dbg.AppendLine($"  플래토 Z={z0:F3} 정점[{runBegin % nV}..{runEnd % nV}] 직선 {(inside ? "추가" : "탈락(부지 밖 통과)")} " +
+                                $"({s.X:F1},{s.Y:F1})→({e.X:F1},{e.Y:F1})");
+                            if (inside)
+                                result.CornerLines.Add(new List<Point3> { new Point3(s.X, s.Y, s.Z), new Point3(e.X, e.Y, e.Z) });
+                        }
+                        else dbg.AppendLine($"  플래토 Z={z0:F3} 정점[{runBegin % nV}..{runEnd % nV}] — 양끝 동일점, 생략");
+                    }
+                    idx++;
+                }
+            }
+        }
+
+        // 링 Z 완화용 최대 경사 — 경계 전환부(Z가 다른 변)의 경사 중 최댓값. 없으면 완화 불필요(평면 계획선).
+        double maxGrad = 0;
+        for (int i = 0; i < shape.Count; i++)
+        {
+            var a = shape[i]; var b2 = shape[(i + 1) % shape.Count];
+            double dz = Math.Abs(b2.Z - a.Z);
+            if (dz < 0.01) continue;
+            double dl = Math.Sqrt((b2.X - a.X) * (b2.X - a.X) + (b2.Y - a.Y) * (b2.Y - a.Y));
+            if (dl > 1e-6) maxGrad = Math.Max(maxGrad, dz / dl);
+        }
+        dbg.AppendLine($"  완화 최대경사(maxGrad)={maxGrad:F3} ({(maxGrad > 0 ? "전환부 있음" : "평면 계획선 — 완화 없음")})");
 
         // 계단 링(오버사이즈) — 원지반 무시, MaxBenches 단까지 끝까지.
         // StepProfile이 각 모서리의 (수평거리 dist, 누적 수직높이 rise)를 정의 — 일반 모드는 사면끝/소단끝 반복,
@@ -81,8 +147,12 @@ public static class GradingGeometry
             var pts = new List<Point3>();
             double zOff = zdir * rise;
             foreach (var c in pg.ExteriorRing.Coordinates)
-                pts.Add(new Point3(c.X, c.Y, padPlane.At(c.X, c.Y) + zOff));
+                pts.Add(new Point3(c.X, c.Y, BoundaryZAt(shape, c.X, c.Y) + zOff)); // 최근접 경계 Z 기준(단차 추종)
             var w = Densify(Weed(pts), dens);
+            int relaxed = RelaxRingZ(w, maxGrad); // 상·하단 영향권 경계의 Z 점프를 전환부 경사로 완화(벤치 누락 밴드 방지)
+            double zMin = double.MaxValue, zMax = double.MinValue;
+            foreach (var wp in w) { if (wp.Z < zMin) zMin = wp.Z; if (wp.Z > zMax) zMax = wp.Z; }
+            dbg.AppendLine($"  링 d={dist:F1} rise={rise:F1}: 점{w.Count} Z[{zMin:F2}..{zMax:F2}] 완화 {relaxed}점");
             if (w.Count >= 3) { result.Rings.Add(w); result.HasSlope = true; ringSeq.Add((dist, rise, w)); }
         }
 
@@ -108,7 +178,7 @@ public static class GradingGeometry
                 bool reflexCorner = (v1x * v2y - v1y * v2x) * ccwS < 0;    // 오목(reflex) 코너 여부
                 if (!p.MiterConvex && !reflexCorner) continue;             // 라운드 모드: 볼록 코너는 원호 유지
 
-                var line = new List<Point3> { new Point3(b.X, b.Y, padPlane.At(b.X, b.Y)) };
+                var line = new List<Point3> { new Point3(b.X, b.Y, b.Z) }; // 시작 = 경계 정점의 실제 계획고
                 double px = b.X, py = b.Y, prevDist = 0;
                 foreach (var (dist, rise, ring) in ringSeq)
                 {
@@ -138,11 +208,12 @@ public static class GradingGeometry
                     prevDist = dist;
                 }
                 if (line.Count >= 2) result.CornerLines.Add(line);
+                dbg.AppendLine($"  코너[{i}] ({b.X:F1},{b.Y:F1}) {(reflexCorner ? "오목" : "볼록")} 능선 {line.Count}점");
             }
         }
 
-        // daylight는 여기서 예측하지 않는다. 가상 계단면 TIN을 만든 뒤 DaylightExtractor.ExtractTrueDaylight로
-        // 실제 삼각망과 원지반의 교선을 추출한다(True Intersection).
+        dbg.AppendLine($"  결과: 링 {result.Rings.Count} · 코너/플래토선 {result.CornerLines.Count} · HasSlope={result.HasSlope}");
+        LastDiag = dbg.ToString();
         return result;
     }
 
@@ -151,7 +222,56 @@ public static class GradingGeometry
         // PrecisionModel(1000) = 1mm 스냅 → 소수점 미세 단차 위상오류 차단(설계도 방어로직 1).
         => new(new PrecisionModel(1000.0));
 
-    private static Polygon ToPolygon(IReadOnlyList<Point3> boundary, Plane plane, GeometryFactory gf)
+    /// <summary>[링 Z 완화] 최근접 경계 Z는 상·하단 경계 영향권이 만나는 중간 지대에서 계단식으로 점프한다
+    /// (벤치가 안 보이는 매끈한 전단 밴드의 원인). 링을 따라 |dZ/ds|를 경계 전환부 최대 경사로 제한(양방향)
+    /// → Civil처럼 일정 폭의 전환 사면 쐐기가 생기고 벤치가 연속된다.</summary>
+    private static int RelaxRingZ(List<Point3> ring, double maxGrad)
+    {
+        if (maxGrad <= 1e-9 || ring.Count < 3) return 0;
+        int n = ring.Count, total = 0;
+        for (int pass = 0; pass < 4; pass++)
+        {
+            bool changed = false;
+            for (int i = 0; i < n; i++) // 정방향(순환)
+            {
+                var a = ring[i]; var b = ring[(i + 1) % n];
+                double d = Math.Sqrt((b.X - a.X) * (b.X - a.X) + (b.Y - a.Y) * (b.Y - a.Y));
+                double zmax = a.Z + maxGrad * d;
+                if (b.Z > zmax + 1e-9) { ring[(i + 1) % n] = new Point3(b.X, b.Y, zmax); changed = true; total++; }
+            }
+            for (int i = n - 1; i >= 0; i--) // 역방향(순환)
+            {
+                var a = ring[(i + 1) % n]; var b = ring[i];
+                double d = Math.Sqrt((b.X - a.X) * (b.X - a.X) + (b.Y - a.Y) * (b.Y - a.Y));
+                double zmax = a.Z + maxGrad * d;
+                if (b.Z > zmax + 1e-9) { ring[i] = new Point3(b.X, b.Y, zmax); changed = true; total++; }
+            }
+            if (!changed) break;
+        }
+        return total;
+    }
+
+    /// <summary>임의 (x,y)에서 '가장 가까운 경계(폐합 폴리선) 위 점'의 Z를 선형보간으로 구한다 —
+    /// 3D 계획선의 단차/경사가 계단 링까지 그대로 이어지게 하는 계획고 기준(평면 근사 대체).</summary>
+    private static double BoundaryZAt(IReadOnlyList<Point3> boundary, double x, double y)
+    {
+        int n = boundary.Count;
+        double bestD2 = double.MaxValue, bestZ = boundary[0].Z;
+        for (int i = 0; i < n; i++)
+        {
+            var a = boundary[i]; var b = boundary[(i + 1) % n];
+            double vx = b.X - a.X, vy = b.Y - a.Y;
+            double len2 = vx * vx + vy * vy;
+            double t = len2 < 1e-12 ? 0 : ((x - a.X) * vx + (y - a.Y) * vy) / len2;
+            t = t < 0 ? 0 : (t > 1 ? 1 : t);
+            double qx = a.X + t * vx, qy = a.Y + t * vy;
+            double d2 = (x - qx) * (x - qx) + (y - qy) * (y - qy);
+            if (d2 < bestD2) { bestD2 = d2; bestZ = a.Z + t * (b.Z - a.Z); }
+        }
+        return bestZ;
+    }
+
+    private static Polygon ToPolygon(IReadOnlyList<Point3> boundary, GeometryFactory gf)
     {
         var coords = new Coordinate[boundary.Count + 1];
         for (int i = 0; i < boundary.Count; i++) coords[i] = new Coordinate(boundary[i].X, boundary[i].Y);
@@ -161,10 +281,10 @@ public static class GradingGeometry
         return LargestPolygon(g) ?? gf.CreatePolygon(coords);
     }
 
-    private static List<Point3> PadRing(IReadOnlyList<Point3> boundary, Plane plane)
+    private static List<Point3> PadRing(IReadOnlyList<Point3> boundary)
     {
         var r = new List<Point3>(boundary.Count + 1);
-        foreach (var v in boundary) r.Add(new Point3(v.X, v.Y, plane.At(v.X, v.Y)));
+        foreach (var v in boundary) r.Add(new Point3(v.X, v.Y, v.Z)); // 3D 계획선 Z 그대로
         r.Add(r[0]);
         return r;
     }

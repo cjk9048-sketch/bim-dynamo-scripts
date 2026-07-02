@@ -61,14 +61,31 @@ public sealed class CreateGradingCommand
             var groundTin = (TinSurface)tr.GetObject(groundId, OpenMode.ForRead);
             var ground = new CachedGroundSurface(groundTin); // 원지반 표고 캐싱(단수 계산용)
             var p = BuildParams(boundary, ground);
-            var pad = Plane.Fit(boundary); // 계획 부지 평탄면
 
             // 정지 설정에 따라 오버사이즈 가상 절토/성토면(계단 링)을 계산 → TIN 브레이크라인으로 생성.
-            var cut = GradingGeometry.Build(boundary, pad, ground, p, up: true);
-            var fill = GradingGeometry.Build(boundary, pad, ground, p, up: false);
+            // 계획고는 평면 근사가 아니라 '경계 3D 폴리선의 Z'를 그대로 추종 — 단차 계획선도 단차대로 정지(JACK).
+            var cut = GradingGeometry.Build(boundary, ground, p, up: true);
+            string diagCut = GradingGeometry.LastDiag;
+            var fill = GradingGeometry.Build(boundary, ground, p, up: false);
+            string diagFill = GradingGeometry.LastDiag;
+            // [검증로그] 스샷 없이 분석 가능하게 실행마다 기록(JACK) — DHXSEC_진단.log와 같은 방식.
+            try
+            {
+                System.IO.File.WriteAllText(@"C:\Users\user\Desktop\AI\civil3d-grading\DHGRADE_진단.log",
+                    "[DHGRADE 진단]\n\n■ 절토\n" + diagCut + "\n■ 성토\n" + diagFill);
+            }
+            catch { }
 
-            if (cut.HasSlope) GradingBuilder.BuildVirtualSlope(db, tr, cut.Rings, "가상절토_DH", cut.CornerLines);
-            if (fill.HasSlope) GradingBuilder.BuildVirtualSlope(db, tr, fill.Rings, "가상성토_DH", fill.CornerLines);
+            string verifyCut = "", verifyFill = "";
+            if (cut.HasSlope) { GradingBuilder.BuildVirtualSlope(db, tr, cut.Rings, "가상절토_DH", cut.CornerLines); verifyCut = GradingBuilder.LastVerify; }
+            if (fill.HasSlope) { GradingBuilder.BuildVirtualSlope(db, tr, fill.Rings, "가상성토_DH", fill.CornerLines); verifyFill = GradingBuilder.LastVerify; }
+            // 검증 로그에 TIN 실측 대조 결과 덧붙임(비대칭/누락 방향 추적)
+            try
+            {
+                System.IO.File.AppendAllText(@"C:\Users\user\Desktop\AI\civil3d-grading\DHGRADE_진단.log",
+                    "\n■ TIN 실측검증(절토)\n" + verifyCut + "\n■ TIN 실측검증(성토)\n" + verifyFill);
+            }
+            catch { }
 
             tr.Commit();
 
