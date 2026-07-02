@@ -9,9 +9,9 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 namespace DH.Grading.Civil.Commands;
 
 /// <summary>
-/// "정지면 생성"(DHGRADE) — [설계도] NTS 기반 무결점 정지면.
-/// ①입력(계획폴리곤+원지반) ②오버사이즈 가상 절토/성토면(브레이크라인, 톱니0)
-/// ③NTS daylight(원지반과의 toe 교차선) ④비파괴 클립 ⑤Paste 순서 합성(원지반→성토→절토→Pad) ⑥임시 정리.
+/// "정지면 생성"(DHGRADE) — [현재 범위] 정지 설정(단높이·소단·구배·계단식)에 따라
+/// 계획 폴리곤에서 오버사이즈 가상 절토/성토 지표면(TIN)을 생성하는 데까지만 수행한다.
+/// (경계/daylight/클립/합성/Pad는 다음 단계에서 다시 설계 — 지금은 가상 대지표면까지만.)
 /// </summary>
 public sealed class CreateGradingCommand
 {
@@ -49,99 +49,45 @@ public sealed class CreateGradingCommand
 
         try
         {
-            System.Collections.Generic.List<Point3> boundary;
-            GradingParams p;
-            VirtualSlope cut, fill;
-            System.Collections.Generic.List<System.Collections.Generic.List<Point3>> cutDaylight = new(), fillDaylight = new();
-            System.Collections.Generic.List<ObjectId> cutIds = new(), fillIds = new(); // 구간별 면(여러 구간 지원)
-            ObjectId padId = ObjectId.Null;
-            CachedGroundSurface? ground = null; // TX1에서 캐싱 → TX3 daylight union 그리기에 재사용(트랜잭션 독립)
+            using Transaction tr = db.TransactionManager.StartTransaction();
 
-            // ── TX1: 입력 받기 + 오버사이즈 가상면/Pad 생성 + daylight 비파괴 클립 ──
-            using (Transaction tr = db.TransactionManager.StartTransaction())
+            var boundary = BoundaryReader.Read(tr, rPoly.ObjectId);
+            if (boundary.Count < 3)
             {
-                boundary = BoundaryReader.Read(tr, rPoly.ObjectId);
-                if (boundary.Count < 3)
-                {
-                    ed.WriteMessage("\n경계 정점이 3개 미만입니다. 닫힌 폴리곤인지 확인하세요.");
-                    return;
-                }
-
-                var groundTin = (TinSurface)tr.GetObject(groundId, OpenMode.ForRead);
-                ground = new CachedGroundSurface(groundTin); // 원지반 삼각형 메모리 캐싱(빠른 표고조회)
-                p = BuildParams(boundary, ground);
-                var pad = Plane.Fit(boundary); // 계획 부지 평탄면
-
-                // 가상 절토/성토면(원지반 무시·오버사이즈) + 각자 daylight(toe 교차선).
-                cut = GradingGeometry.Build(boundary, pad, ground, p, up: true);
-                fill = GradingGeometry.Build(boundary, pad, ground, p, up: false);
-
-                if (cut.HasSlope)
-                {
-                    var cutId = GradingBuilder.BuildVirtualSlope(db, tr, cut.Rings, "가상절토_DH");
-                    cutDaylight = DaylightExtractor.ExtractTrueDaylight(tr, cutId, groundId, boundary, -1.0); // 절토 영역(가상면<원지반)
-                    cutIds = GradingBuilder.BuildClippedRegions(db, tr, cut.Rings, "가상절토_DH", cutId, cutDaylight, null); // Hide 없음(폴리곤 평평바닥 포함)
-                }
-                if (fill.HasSlope)
-                {
-                    var fillId = GradingBuilder.BuildVirtualSlope(db, tr, fill.Rings, "가상성토_DH");
-                    fillDaylight = DaylightExtractor.ExtractTrueDaylight(tr, fillId, groundId, boundary, 1.0); // 성토 영역(가상면>원지반)
-                    fillIds = GradingBuilder.BuildClippedRegions(db, tr, fill.Rings, "가상성토_DH", fillId, fillDaylight, null); // Hide 없음(폴리곤 평평바닥 포함)
-                }
-                padId = GradingBuilder.BuildFlatPad(db, tr, boundary, pad, "본체Pad_DH");
-                tr.Commit();
+                ed.WriteMessage("\n경계 정점이 3개 미만입니다. 닫힌 폴리곤인지 확인하세요.");
+                return;
             }
 
-            // ── TX2: Paste 순서 합성(원지반 → 성토 → 절토 → Pad) ──
-            bool snapshotOk; string pasteLog;
-            // Paste 순서: 원지반 → 절토(구간들) → 성토(구간들) → Pad
-            var pasteOrder = new System.Collections.Generic.List<(ObjectId, string)> { (groundId, "원지반") };
-            foreach (var id in cutIds) pasteOrder.Add((id, "절토"));
-            foreach (var id in fillIds) pasteOrder.Add((id, "성토"));
-            pasteOrder.Add((padId, "Pad"));
-            using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                GradingBuilder.Composite(db, tr, "정지면_DHGrade", pasteOrder, out snapshotOk, out pasteLog); // 폴리곤 브레이크라인 제거(이벤트 경고 방지·바닥경계는 평지 링이 이미 담당)
-                tr.Commit();
-            }
+            var groundTin = (TinSurface)tr.GetObject(groundId, OpenMode.ForRead);
+            var ground = new CachedGroundSurface(groundTin); // 원지반 표고 캐싱(단수 계산용)
+            var p = BuildParams(boundary, ground);
+            var pad = Plane.Fit(boundary); // 계획 부지 평탄면
 
-            // ── TX3: 임시면 정리(스냅샷 성공 시) + daylight 초록선 ──
-            using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                // 중간면 정리: 스냅샷 성공 + '유지 안 함' 설정일 때만. 기본은 유지(오류 확인용).
-                if (snapshotOk && !GradingSettings.KeepIntermediateSurfaces)
-                {
-                    var temp = new System.Collections.Generic.List<ObjectId>(cutIds);
-                    temp.AddRange(fillIds); temp.Add(padId);
-                    GradingBuilder.EraseSurfaces(tr, temp);
-                }
-                var rawLoops = new System.Collections.Generic.List<System.Collections.Generic.IReadOnlyList<Point3>>();
-                foreach (var lp in cutDaylight) if (lp.Count >= 3) rawLoops.Add(lp);
-                foreach (var lp in fillDaylight) if (lp.Count >= 3) rawLoops.Add(lp);
-                // 절토+성토 daylight를 union → 부지를 감싸는 바깥 외곽선만(두 선이 닿는 지점 안쪽 섬·겹침선 제거, JACK).
-                var outlines = (ground != null)
-                    ? GradingGeometry.MergeDaylightOutlines(rawLoops, boundary, ground)
-                    : rawLoops.ConvertAll(l => new System.Collections.Generic.List<Point3>(l));
-                GradingBuilder.DrawDaylight(db, tr, outlines);
-                tr.Commit();
-            }
+            // 정지 설정에 따라 오버사이즈 가상 절토/성토면(계단 링)을 계산 → TIN 브레이크라인으로 생성.
+            var cut = GradingGeometry.Build(boundary, pad, ground, p, up: true);
+            var fill = GradingGeometry.Build(boundary, pad, ground, p, up: false);
+
+            if (cut.HasSlope) GradingBuilder.BuildVirtualSlope(db, tr, cut.Rings, "가상절토_DH");
+            if (fill.HasSlope) GradingBuilder.BuildVirtualSlope(db, tr, fill.Rings, "가상성토_DH");
+
+            tr.Commit();
 
             string terrace = p.MountainTerrace ? $" · 계단식 산지(대소단 {p.TerraceInterval}m/{p.TerraceWidth}m)" : "";
             string msg =
-                $"정지면 생성 완료 — '정지면_DHGrade'\n" +
-                $"절토 {cutIds.Count}구간 / 성토 {fillIds.Count}구간\n" +
-                $"단높이 {p.BenchHeight}m · 소단 {p.BenchWidth}m · 절토 1:{p.CutSlope} · 성토 1:{p.FillSlope}{terrace}";
+                $"가상 지표면 생성 완료 — 절토 {(cut.HasSlope ? "가상절토_DH" : "없음")} / 성토 {(fill.HasSlope ? "가상성토_DH" : "없음")}\n" +
+                $"단높이 {p.BenchHeight}m · 소단 {p.BenchWidth}m · 절토 1:{p.CutSlope} · 성토 1:{p.FillSlope}{terrace}\n" +
+                $"※ 경계·daylight·합성 없이 '오버사이즈 가상 대지표면'까지만 생성했습니다.";
             ed.WriteMessage("\n" + msg);
             AcadApp.ShowAlertDialog(msg);
         }
         catch (System.Exception ex)
         {
             ed.WriteMessage("\n[DHGRADE 오류] " + ex.Message);
-            AcadApp.ShowAlertDialog("정지면 생성 중 오류:\n" + ex.Message);
+            AcadApp.ShowAlertDialog("가상 지표면 생성 중 오류:\n" + ex.Message);
         }
     }
 
-    /// <summary>설정값을 읽고, 원지반/계획고 표고차로 필요한 최대 단수를 좁혀 매개변수를 만든다(+1단 여유).</summary>
+    /// <summary>설정값을 읽고, 원지반/계획고 표고차로 필요한 최대 단수를 좁혀 매개변수를 만든다(+여유단).</summary>
     public static GradingParams BuildParams(System.Collections.Generic.List<Point3> boundary, CachedGroundSurface ground)
     {
         double designMin = double.MaxValue, designMax = double.MinValue;
@@ -153,8 +99,7 @@ public sealed class CreateGradingCommand
             var (gMin, gMax) = ground.ElevationRange();
             double maxDiff = System.Math.Max(System.Math.Abs(gMax - designMin), System.Math.Abs(gMin - designMax));
             int needed = (int)System.Math.Ceiling(maxDiff / System.Math.Max(GradingSettings.BenchHeight, 1e-6)) + 2; // +2단 여유
-            // 대소단(15m 평탄)은 사면을 바깥으로 밀어 daylight가 더 멀리(더 낮은/높은 원지반)에서 만나게 한다.
-            // 그만큼 추가 단수가 필요 → 대소단 개수 + 여유만큼 budget을 늘려 가상면이 원지반을 확실히 관통(오버사이즈)하게 함.
+            // 대소단(15m 평탄)은 사면을 바깥으로 더 밀어내므로 추가 단수가 필요 → budget을 늘려 오버사이즈 보장.
             if (GradingSettings.MountainTerrace && GradingSettings.TerraceInterval > 1e-6)
             {
                 int terraces = (int)System.Math.Floor(maxDiff / GradingSettings.TerraceInterval);
