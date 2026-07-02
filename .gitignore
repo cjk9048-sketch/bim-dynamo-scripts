@@ -20,3 +20,4 @@ __pycache__/
 # 개발용 진단 덤프
 dhgrade_debug.txt
 
+DHXSEC_진단.log
