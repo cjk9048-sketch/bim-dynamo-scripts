@@ -102,6 +102,123 @@ public static class GradingBuilder
         return id;
     }
 
+    /// <summary>교선(폐합 루프)을 가상면의 Outer 경계로 주입(비파괴 = 경계선에서 삼각형 정밀 절단) 후 Rebuild.
+    /// 경계는 표면 정의에 저장되므로 이후 다른 표면 작업/재그리기에 영향받지 않는다.</summary>
+    public static void AddOuterBoundary(TinSurface tin, IReadOnlyList<Point3> ring)
+    {
+        int n = ring.Count;
+        if (n >= 2)
+        {
+            var f = ring[0]; var l = ring[n - 1];
+            if ((f.X - l.X) * (f.X - l.X) + (f.Y - l.Y) * (f.Y - l.Y) < 1e-12) n--; // 중복 닫음점 제거(길이 0 변 방지, 리뷰 M-1)
+        }
+        if (n < 3) return;
+        var pc = new Point3dCollection();
+        for (int i = 0; i < n; i++) pc.Add(new Point3d(ring[i].X, ring[i].Y, ring[i].Z));
+        // nonDestructive=true: 경계에 걸친 삼각형을 경계선에서 '정밀 절단'(정점 삽입).
+        // ※false로 A/B 실험 결과 절토까지 톱니(걸친 삼각형 통째 제거) — true가 올바른 의미로 확정(2026-07-03).
+        //   성토가 경계 밖으로 튀어나오던 문제는 별개 원인 → VerifyBoundaryClip 실측으로 추적.
+        tin.BoundariesDefinition.AddBoundaries(pc, 1.0, Autodesk.Civil.SurfaceBoundaryType.Outer, true);
+        tin.Rebuild();
+    }
+
+    /// <summary>[검증] 경계 주입 후 표면이 경계선대로 잘렸는지 실측 — 링 표본의 안(25cm)·밖(25cm~8m) 표고 유무.
+    /// 밖에 표면이 남아 있으면(outHit) 경계가 안 먹은 것, 안이 비면(inMiss) 과도 절단.</summary>
+    public static string VerifyBoundaryClip(TinSurface tin, IReadOnlyList<Point3> ring)
+    {
+        bool TryElev(double x, double y) { try { tin.FindElevationAtXY(x, y); return true; } catch { return false; } }
+        int n = ring.Count;
+        if (n >= 2)
+        {
+            var f0 = ring[0]; var l0 = ring[n - 1];
+            if ((f0.X - l0.X) * (f0.X - l0.X) + (f0.Y - l0.Y) * (f0.Y - l0.Y) < 1e-12) n--; // 닫음 중복 제외
+        }
+        if (n < 3) return "  [경계 정합 검증] 링 정점 부족\n";
+        double area = 0;
+        for (int i = 0; i < n; i++)
+        { var a = ring[i]; var b = ring[(i + 1) % n]; area += a.X * b.Y - b.X * a.Y; }
+        double s = area > 0 ? 1.0 : -1.0; // CCW면 내부는 진행방향 왼쪽
+        int samples = 0, outHit = 0, inMiss = 0; double maxSpill = 0; string worst = "";
+        int step = System.Math.Max(1, n / 200);
+        for (int i = 0; i < n; i += step)
+        {
+            var a = ring[i]; var b = ring[(i + 1) % n];
+            double ex = b.X - a.X, ey = b.Y - a.Y;
+            double el = System.Math.Sqrt(ex * ex + ey * ey); if (el < 1e-9) continue;
+            double mx = (a.X + b.X) * 0.5, my = (a.Y + b.Y) * 0.5;
+            double nx = s * (-ey / el), ny = s * (ex / el); // 내부 방향 법선
+            samples++;
+            if (!TryElev(mx + nx * 0.25, my + ny * 0.25)) inMiss++;
+            if (TryElev(mx - nx * 0.25, my - ny * 0.25))
+            {
+                outHit++;
+                double spill = 0.25;
+                foreach (var dOut in new[] { 0.5, 1.0, 2.0, 4.0, 8.0 })
+                { if (TryElev(mx - nx * dOut, my - ny * dOut)) spill = dOut; else break; }
+                if (spill > maxSpill) { maxSpill = spill; worst = $"({(mx - nx * spill):F1},{(my - ny * spill):F1})"; }
+            }
+        }
+        return $"  [경계 정합 검증] 표본 {samples} · 경계밖 표면존재 {outHit}(최대 {maxSpill:F1}m 이탈{(worst == "" ? "" : " 예 " + worst)}) · 경계안 비어있음 {inMiss}\n";
+    }
+
+    /// <summary>기존 경계 정의를 모두 제거하고 새 Outer(+선택 Hide)로 교체 — paste 거부 시 정규화 링 재주입용.</summary>
+    public static void ReplaceOuterBoundary(TinSurface tin, IReadOnlyList<Point3> ring, IReadOnlyList<Point3>? hideRing = null)
+    {
+        try { var bd = tin.BoundariesDefinition; while (bd.Count > 0) bd.RemoveAt(0); } catch { }
+        AddOuterBoundary(tin, ring);
+        if (hideRing != null) AddHideBoundary(tin, hideRing);
+        try { tin.Rebuild(); } catch { }
+    }
+
+    /// <summary>내부 숨김(Hide) 경계 — 링 안쪽을 도넛처럼 뚫는다(절토면에서 pad 제거 → 성토와 겹침 제거).</summary>
+    public static void AddHideBoundary(TinSurface tin, IReadOnlyList<Point3> ring)
+    {
+        int n = ring.Count;
+        if (n >= 2)
+        {
+            var f = ring[0]; var l = ring[n - 1];
+            if ((f.X - l.X) * (f.X - l.X) + (f.Y - l.Y) * (f.Y - l.Y) < 1e-12) n--; // 중복 닫음점 제거
+        }
+        if (n < 3) return;
+        var pc = new Point3dCollection();
+        for (int i = 0; i < n; i++) pc.Add(new Point3d(ring[i].X, ring[i].Y, ring[i].Z));
+        tin.BoundariesDefinition.AddBoundaries(pc, 1.0, Autodesk.Civil.SurfaceBoundaryType.Hide, true);
+        tin.Rebuild();
+    }
+
+    /// <summary>최종 합성 — 빈 TIN에 pasteOrder 순서로 PasteSurface(각 단계 스냅샷 굳히기).
+    /// paste별 성공/실패와 Civil 예외 메시지를 log로 반환(병합 느낌표 원인 특정용, JACK 검증 지시).</summary>
+    public static ObjectId Composite(Database db, Transaction tr, string name,
+        IReadOnlyList<(ObjectId id, string label)> pasteOrder, out string log, bool freezeEach = true)
+    {
+        var sb = new System.Text.StringBuilder();
+        EraseSurfacesByBaseName(tr, name); // 재실행 스택 방지
+        ObjectId id = TinSurface.Create(db, UniqueName(db, tr, name));
+        var final = (TinSurface)tr.GetObject(id, OpenMode.ForWrite);
+        foreach (var (sid, label) in pasteOrder)
+        {
+            if (sid.IsNull) { sb.Append($"{label}:없음  "); continue; }
+            try
+            {
+                final.PasteSurface(sid);
+                if (freezeEach) Freeze(final); // paste 직후 스냅샷 굳히기(조합 실험 대상)
+                else { try { final.Rebuild(); } catch { } }
+                sb.Append($"{label}:OK  ");
+            }
+            catch (System.Exception ex) { sb.Append($"{label}:실패[{ex.GetType().Name}] {ex.Message}  "); }
+        }
+        try { Freeze(final); } catch { }
+        log = sb.ToString().Trim();
+        return id;
+    }
+
+    private static void Freeze(TinSurface s)
+    {
+        try { s.CreateSnapshot(); }
+        catch { try { s.RebuildSnapshot(); } catch { } } // 이미 스냅샷 있으면 갱신
+        try { s.Rebuild(); } catch { }
+    }
+
     /// <summary>열린 브레이크라인(코너 능선 등) — 링과 달리 닫지 않는다.</summary>
     private static void AddOpenBreakline(TinSurface tin, IReadOnlyList<Point3> pts)
     {

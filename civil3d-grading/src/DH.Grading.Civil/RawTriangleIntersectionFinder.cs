@@ -118,12 +118,15 @@ public static class RawTriangleIntersectionFinder
         tree.Build();
 
         var rawSegments = new ConcurrentBag<(Point3, Point3)>();
+        // [영역 조각] 삼각형쌍 overlap을 d=0 반평면으로 정밀히 잘라 부호별 면 조각을 수집(경계 조립용).
+        // 선 잇기와 달리 '면'이라 갈림길·끊김이 있어도 합집합 폐합이 구성상 보장된다.
+        var posParts = new ConcurrentBag<Geometry>(); // d=zA−zB > 0 쪽(성토 가상면 기준)
+        var negParts = new ConcurrentBag<Geometry>(); // d < 0 쪽(절토)
         int exSkip = 0; // 교차 실패로 버린 삼각형쌍(0이 아니면 그 자리 교선 누락 가능 — 진단용)
         Parallel.ForEach(aTris, a =>
         {
             foreach (var b in tree.Query(a.Poly.EnvelopeInternal))
             {
-                if (a.MinZ > b.MaxZ + 1e-6 || a.MaxZ < b.MinZ - 1e-6) continue;
                 Geometry overlap;
                 try { overlap = a.Poly.Intersection(b.Poly); }
                 catch
@@ -139,6 +142,11 @@ public static class RawTriangleIntersectionFinder
                 if (overlap.IsEmpty) continue; // Area 필터 없음(옹벽 누락 방지)
 
                 double dA = a.Plane.A - b.Plane.A, dB = a.Plane.B - b.Plane.B, dC = a.Plane.C - b.Plane.C;
+                // [중요] 면 조각 수집은 Z-겹침 필터 '앞'에서 — 성토/절토가 두꺼운 구역(가상면과 원지반 높이가
+                // 안 겹침)도 영역에는 포함돼야 한다. 필터 뒤에 두면 그 구역 조각이 통째로 빠져 합집합 외곽선이
+                // 디테일을 잃고 직선으로 질러감(성토 경계 부정확·각진 잘림의 원인 — 정합검증으로 확정).
+                CollectSignedParts(overlap, dA, dB, dC, posParts, negParts);
+                if (a.MinZ > b.MaxZ + 1e-6 || a.MaxZ < b.MinZ - 1e-6) continue; // 높이 안 겹침 → '교선'만 없음(조각은 위에서 수집)
                 if (Math.Abs(dA) < 1e-12 && Math.Abs(dB) < 1e-12) continue; // 완전 평행 → 교선 부정(스킵)
 
                 // [수치 안정화] 예전 방식(평면차 직선을 ±1000m로 늘려 overlap에 클립)은 두 면이 거의 접선(완만↔완만)일 때
@@ -306,7 +314,7 @@ public static class RawTriangleIntersectionFinder
             foreach (var hl in hullLoops) if (TryProject(hl, p, 1.0, out _, out _)) return true;
             return false;
         }
-        bool OnBothSurfaces(Point3 p, Point3 q)
+        bool OnBothSurfaces(Point3 p, Point3 q, double relax = 1.0)
         {
             double len = Math.Sqrt((p.X - q.X) * (p.X - q.X) + (p.Y - q.Y) * (p.Y - q.Y));
             int n = Math.Max(4, (int)Math.Ceiling(len / 0.5));
@@ -316,7 +324,7 @@ public static class RawTriangleIntersectionFinder
                 double x = p.X + (q.X - p.X) * t, y = p.Y + (q.Y - p.Y) * t;
                 var d = DiffAt(x, y);
                 if (!d.HasValue) return false; // 한쪽 표면 밖 → 연결 금지
-                if (Math.Abs(d.Value) > Math.Max(BaseTol * 2, TolAt(x, y, d.Value))) return false; // 표면에서 이탈 → 금지
+                if (Math.Abs(d.Value) > Math.Max(BaseTol * 2 * relax, TolAt(x, y, d.Value) * relax)) return false; // 표면에서 이탈 → 금지
             }
             return true;
         }
@@ -350,7 +358,10 @@ public static class RawTriangleIntersectionFinder
                 // (가상면이 원지반보다 클 때 가장자리 끝들이 줄줄이 이어져 거대 루프가 되는 것 방지.
                 //  범위 안 케이스는 끝이 가장자리에 없으므로 영향 없음.)
                 if (NearHull(ei.p) && NearHull(ej.p)) continue;
-                if (!OnBothSurfaces(ei.p, ej.p)) continue;
+                bool okBridge = OnBothSurfaces(ei.p, ej.p);
+                // 같은 체인의 소형 자기 틈(≤5m)은 완화 검증(±0.5m급) — 접선 잔차로 정상 폐합이 막히는 것 방지.
+                if (!okBridge && ei.li == ej.li && d2 <= 5.0 * 5.0) okBridge = OnBothSurfaces(ei.p, ej.p, 8.0);
+                if (!okBridge) continue;
                 LastBridgeSpans.Add((ei.p, ej.p)); // 시각 진단용(하늘색)
                 dbg.AppendLine($"  틈메움: 체인{ei.li}{(ei.start ? "시" : "끝")} ↔ 체인{ej.li}{(ej.start ? "시" : "끝")} 거리{Math.Sqrt(d2):F2}m ({ei.p.X:F1},{ei.p.Y:F1})→({ej.p.X:F1},{ej.p.Y:F1})");
                 if (ei.li == ej.li)
@@ -407,7 +418,9 @@ public static class RawTriangleIntersectionFinder
                     if (!TryProject(planRingT, v, 1e9, out _, out var pj)) continue;
                     double ddx = v.X - pj.X, ddy = v.Y - pj.Y;
                     double dist = Math.Sqrt(ddx * ddx + ddy * ddy);
-                    if (dist < 0.5) continue; // 계획 경계에 붙은 점(띠 폭 0) — 정보 없음
+                    // ※'0.5m 미만 버림' 규칙 삭제 — 수직 옹벽은 띠 폭이 25cm뿐이라 정답 표본이 전부 버려져
+                    //   띠부호가 잡음 표본으로 뒤집혔음(성토가 절토 조각을 모으던 원인, 2026-07-03 로그 확정).
+                    //   무의미한 표본은 아래 |d|>0.02 필터가 거른다.
                     double mx = (v.X + pj.X) * 0.5, my = (v.Y + pj.Y) * 0.5; // 띠 내부 중간점
                     try { if (planPoly.Contains(gfSnap.CreatePoint(new Coordinate(mx, my)))) continue; } catch { }
                     var d = DiffAt(mx, my);
@@ -540,79 +553,114 @@ public static class RawTriangleIntersectionFinder
         // ① 계획과 닿지도, 계획을 포함하지도 않는 루프/선은 삭제(잡선 정리).
         // ② 양끝이 계획 경계에 닿는 '열린' 교선은 계획 경계를 따라 먼저 폐합(방향은 합집합이 흡수 → 짧은 쪽).
         // ③ 계획과 닿는 폐합 루프 전부 + 계획폴리곤을 '한 번에 합집합' → 바깥 외곽선(구멍 제거).
-        int dropped = 0, unioned = 0, planClosed = 0;
+        int dropped = 0, unioned = 0, planClosed = 0, inCut = 0;
         if (planPoly != null)
         {
-            var planRing = new List<Point3>(); // 계획 외곽 링(투영·폐합 경로용)
+            // [계획 내부 구간 제거] 최종 경계 = 계획 ∪ 절/성토 영역이므로 계획 '안'을 지나는 교선 구간은 불필요.
+            // 3D 단차 계획면에선 전환띠 교선이 부지 안에서 분기(차수 3+)해 병합이 조각나던 원인(JACK 보고).
+            // 계획 밖 구간만 남기면 잘린 끝이 정확히 계획 경계 위에 놓여, 아래 기존 '계획 경계 폐합'이 그대로 이어붙인다.
             {
-                var rc2 = planPoly.ExteriorRing.Coordinates;
-                for (int i = 0; i < rc2.Length - 1; i++) planRing.Add(new Point3(rc2[i].X, rc2[i].Y, 0));
-            }
-            var keepAside = new List<List<Point3>>(); // 폐합 불가한 열린 선 등 — 그대로 유지(열림 진단)
-            var fallback = new List<List<Point3>>();  // 합집합 실패 시 복원용
-            var unionParts = new List<Geometry> { planPoly };
-            int touching = 0;
-            foreach (var ln0 in result)
-            {
-                var ln = ln0;
-                double cdx = ln[0].X - ln[ln.Count - 1].X, cdy = ln[0].Y - ln[ln.Count - 1].Y;
-                bool closed = ln.Count >= 4 && cdx * cdx + cdy * cdy < 1e-12;
-                // ② 열린 선 + 양끝이 계획 경계 가까이(≤1.5m) → 계획 경계 경로(짧은 쪽)로 폐합
-                if (!closed && ln.Count >= 2 && planRing.Count >= 3)
+                var kept = new List<List<Point3>>();
+                foreach (var ln in result)
                 {
-                    var f0 = ln[0]; var l0 = ln[ln.Count - 1];
-                    if (TryProject(planRing, l0, HullSnap, out int segL2, out var projL2) &&
-                        TryProject(planRing, f0, HullSnap, out int segF2, out var projF2))
+                    Geometry gd;
+                    try
                     {
-                        var fw2 = HullPath(planRing, segL2, projL2, segF2, projF2, true);
-                        var bw2 = HullPath(planRing, segL2, projL2, segF2, projF2, false);
-                        var pick2 = PathLen(fw2) <= PathLen(bw2) ? fw2 : bw2;
-                        ln = new List<Point3>(ln);
-                        ln.AddRange(pick2);
-                        ln.Add(ln[0]);
-                        closed = true; planClosed++;
+                        var cs = new Coordinate[ln.Count];
+                        for (int i = 0; i < ln.Count; i++) cs[i] = new Coordinate(ln[i].X, ln[i].Y);
+                        gd = gfSnap.CreateLineString(cs).Difference(planPoly);
                     }
-                }
-                Geometry? g = null;
-                try
-                {
-                    var cs = new Coordinate[ln.Count];
-                    for (int i = 0; i < ln.Count; i++) cs[i] = new Coordinate(ln[i].X, ln[i].Y);
-                    g = closed ? gfSnap.CreatePolygon(cs).Buffer(0) : (Geometry)gfSnap.CreateLineString(cs);
-                }
-                catch { }
-                if (g == null || g.IsEmpty) { dbg.AppendLine("  [계획] 지오메트리 실패 → 보존"); keepAside.Add(ln); continue; } // 판정 불가 → 보존
-                if (!g.Intersects(planPoly)) { dbg.AppendLine($"  [계획] 무관(점{ln.Count}) → 삭제"); dropped++; continue; }   // 계획과 무관 → 삭제
-                if (closed && (g is Polygon || g is MultiPolygon)) { dbg.AppendLine($"  [계획] 폐합(점{ln.Count}, 면적 {g.Area:F0}㎡) → 합집합"); unionParts.Add(g); fallback.Add(ln); touching++; }
-                else { dbg.AppendLine($"  [계획] 열린 채 닿음(점{ln.Count}) → 유지"); keepAside.Add(ln); } // 폐합 불가한 열린 선 → 유지
-            }
-            var final = new List<List<Point3>>();
-            if (touching > 0)
-            {
-                try
-                {
-                    var u = NetTopologySuite.Operation.Union.UnaryUnionOp.Union(unionParts);
-                    dbg.AppendLine($"  [합집합] 입력 {unionParts.Count}개(계획 {planPoly.Area:F0}㎡ 포함) → 결과 {u.GeometryType}, 면적 {u.Area:F0}㎡");
-                    void EmitExterior(Geometry gg) // 합집합 결과의 바깥 외곽선(들)만 채택
+                    catch { kept.Add(ln); continue; }
+                    bool any = false;
+                    void CollectLs(Geometry gg)
                     {
-                        if (gg is Polygon pg && pg.Area > 1e-6)
+                        if (gg is LineString ls2 && ls2.Coordinates.Length >= 2 && ls2.Length > 0.05)
                         {
-                            dbg.AppendLine($"    외곽선 채택: 면적 {pg.Area:F0}㎡ · 정점 {pg.ExteriorRing.Coordinates.Length}");
-                            var ring = pg.ExteriorRing.Coordinates;
-                            var np = new List<Point3>(ring.Length);
-                            foreach (var c in ring) np.Add(new Point3(c.X, c.Y, SurfZ(c)));
-                            final.Add(np);
+                            var np = new List<Point3>(ls2.Coordinates.Length);
+                            foreach (var c in ls2.Coordinates) np.Add(new Point3(c.X, c.Y, SurfZ(c)));
+                            kept.Add(np); any = true;
                         }
-                        else if (gg is GeometryCollection gcol)
-                            foreach (var sub in gcol.Geometries) EmitExterior(sub);
+                        else if (gg is GeometryCollection gc2)
+                            foreach (var sub in gc2.Geometries) CollectLs(sub);
                     }
-                    EmitExterior(u);
-                    unioned = touching;
+                    CollectLs(gd);
+                    if (!any) inCut++; // 전부 계획 내부 → 제거
                 }
-                catch { final.AddRange(fallback); } // 합집합 실패 → 폐합 루프 원본 유지
+                result = kept;
             }
-            final.AddRange(keepAside);
-            result = final;
+            dbg.AppendLine($"[계획 내부 컷] 전부내부 제거 {inCut} · 남은 체인 {result.Count}");
+            DumpChains("계획 클립 후");
+
+            // [영역 조립 — 전천후 경계 만들기] 경계를 '교선 선 잇기'가 아니라 '면 조각 합집합'으로 만든다.
+            // 각 삼각형쌍 overlap을 d=0 반평면으로 정밀 클립한 부호별 조각(CollectSignedParts)이 이미 있으므로,
+            // (절/성토 방향에 맞는 조각 전부) ∪ 계획폴리곤 → 계획과 닿는 덩어리의 바깥 외곽선만 출력.
+            // 면 조각이라 갈림길·끊김·V코너가 있어도 폐합이 '구성상' 보장 — 표면이 어떻게 생겼든 옳게(JACK).
+            // 규칙 그대로: 계획과 닿거나 포함하는 조각은 '전부' 합집합, 동떨어진 조각은 삭제.
+            try
+            {
+                var parts = new List<Geometry>(bandSign < 0 ? negParts : posParts);
+                dbg.AppendLine($"  [영역 조립] 부호 {(bandSign < 0 ? "음(절토)" : "양(성토)")} 면 조각 {parts.Count}개 + 계획폴리곤 합집합");
+                parts.Add(planPoly);
+                var u2 = NetTopologySuite.Operation.Union.UnaryUnionOp.Union(parts);
+                // [핀치 제거 — 조건부] 링이 자기접촉(8자 조임)하면 Civil PasteSurface가 Failure로 거부(실측:
+                // 절토). 단, 멀쩡한 링에 침식-팽창을 쓰면 오히려 망가짐(실측: 성토가 반대로 실패) →
+                // '비단순/무효로 진단된 경우에만' 5mm 침식-팽창 적용.
+                bool NeedsPinchFix(Geometry gg)
+                {
+                    if (gg is Polygon pg2)
+                    {
+                        try
+                        {
+                            if (!pg2.IsValid) return true;
+                            if (!pg2.ExteriorRing.IsSimple) return true;
+                        }
+                        catch { return true; }
+                        return false;
+                    }
+                    if (gg is GeometryCollection gc4)
+                        foreach (var s4 in gc4.Geometries) if (NeedsPinchFix(s4)) return true;
+                    return false;
+                }
+                if (NeedsPinchFix(u2))
+                {
+                    dbg.AppendLine("  [핀치 감지] 자기접촉/무효 링 → 5mm 침식-팽창 정규화");
+                    try { u2 = u2.Buffer(-0.005).Buffer(0.005); } catch { }
+                }
+                var final = new List<List<Point3>>();
+                int excl = 0; double exclArea = 0;
+                void EmitExterior(Geometry gg) // 계획과 닿는 합집합 덩어리의 바깥 외곽선만 출력
+                {
+                    if (gg is Polygon pg && pg.Area > 0.5) // 0.5㎡ 미만 부스러기는 무시
+                    {
+                        if (!pg.Intersects(planPoly)) { excl++; exclArea += pg.Area; return; }
+                        // 단순화(스무딩) 없음 — 경계 정확도 최우선(JACK: 흰선(최소거리)과 일치해야).
+                        // 과거 '각진 잘림'의 진짜 원인은 조각 Z필터 누락·띠부호 반전이었고 단순화는 잘못된 처방이었음.
+                        bool simple = true, valid = true;
+                        try { simple = pg.ExteriorRing.IsSimple; valid = pg.IsValid; } catch { }
+                        dbg.AppendLine($"    외곽선 채택: 면적 {pg.Area:F0}㎡ · 정점 {pg.ExteriorRing.Coordinates.Length} · 단순={simple} 유효={valid}");
+                        var ring2 = pg.ExteriorRing.Coordinates;
+                        var np = new List<Point3>(ring2.Length);
+                        foreach (var c in ring2)
+                        {
+                            // 경계 Z는 '두 번째 표면(원지반)' 기준 — 옹벽에서는 가상면 Z가 25cm 폭 안에서 0~5m를
+                            // 오르내려 평균 Z가 널뛰면 3D 폴리선이 툭툭 꺾여 보임(JACK). 교선의 실제 높이 = 원지반.
+                            double zOut = samplerB.TryGetElevation(c.X, c.Y, out double zb2) ? zb2 : SurfZ(c);
+                            np.Add(new Point3(c.X, c.Y, zOut));
+                        }
+                        final.Add(np);
+                    }
+                    else if (gg is GeometryCollection gcol)
+                        foreach (var sub in gcol.Geometries) EmitExterior(sub);
+                }
+                EmitExterior(u2);
+                dbg.AppendLine($"    제외(계획 무관): {excl}개 · 합계 {exclArea:F0}㎡");
+                unioned = final.Count;
+                result = final;
+            }
+            catch (System.Exception exAsm)
+            {
+                dbg.AppendLine("  [영역 조립] 실패: " + exAsm.Message + " — 원 교선 유지");
+            }
         }
         // 진단: 끊김이 남으면 이 숫자로 원인 특정(교차예외↑=삼각형 교차 실패 / 지름길컷↑=검증이 자름 / 틈메움=접선지대 연결 / 경계폐합=측량 범위 밖 폐합).
         LastDiag = $"원세그 {segLines.Count} · 교차예외 {exSkip} · 병합선 {mergedLines} · 접힘제거 {foldsRemoved} · 지름길컷 {bogusCuts} · 틈메움 {bridged} · 경계폐합 {hullClosed} · 계획삭제 {dropped} · 계획폐합 {planClosed} · 계획합집합 {unioned} · 띠부호 {bandSign} · 출력 {result.Count}";
@@ -771,6 +819,111 @@ public static class RawTriangleIntersectionFinder
     {
         double dx = p.X - q.X, dy = p.Y - q.Y;
         if (dx * dx + dy * dy > 1e-10) bag.Add((p, q)); // 길이 0(접점 중복)은 버림
+    }
+
+    /// <summary>경계 링 정규화(5mm 침식-팽창) — NTS로는 '정상'인데 Civil PasteSurface만 거부하는
+    /// 미세 자기접촉을 끊는다. 가장 큰 폴리곤의 외곽선 반환(실패 시 null). Z는 최근접 원본 정점 Z(클립은 XY만 사용).</summary>
+    public static List<Point3>? CleanRing(IReadOnlyList<Point3> ring)
+    {
+        try
+        {
+            int n = ring.Count;
+            if (n >= 2)
+            {
+                var f0 = ring[0]; var l0 = ring[n - 1];
+                if ((f0.X - l0.X) * (f0.X - l0.X) + (f0.Y - l0.Y) * (f0.Y - l0.Y) < 1e-12) n--;
+            }
+            if (n < 3) return null;
+            var cs = new Coordinate[n + 1];
+            for (int i = 0; i < n; i++) cs[i] = new Coordinate(ring[i].X, ring[i].Y);
+            cs[n] = new Coordinate(ring[0].X, ring[0].Y);
+            var cleaned = gfSnap.CreatePolygon(cs).Buffer(0).Buffer(-0.005).Buffer(0.005);
+            Polygon? best = null; double ba = 0;
+            void Pick(Geometry gg)
+            {
+                if (gg is Polygon pg && pg.Area > ba) { ba = pg.Area; best = pg; }
+                else if (gg is GeometryCollection gc) foreach (var s in gc.Geometries) Pick(s);
+            }
+            Pick(cleaned);
+            if (best == null) return null;
+            var rc = best.ExteriorRing.Coordinates;
+            var outp = new List<Point3>(rc.Length);
+            foreach (var c in rc)
+            {
+                double z = ring[0].Z, bd2 = double.MaxValue;
+                for (int i = 0; i < n; i++)
+                {
+                    double dx = ring[i].X - c.X, dy = ring[i].Y - c.Y;
+                    double d2 = dx * dx + dy * dy;
+                    if (d2 < bd2) { bd2 = d2; z = ring[i].Z; }
+                }
+                outp.Add(new Point3(c.X, c.Y, z));
+            }
+            return outp.Count >= 4 ? outp : null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>overlap(볼록)을 선형 필드 d=dA·x+dB·y+dC 의 부호별 반평면으로 정밀 클립해 면 조각 수집.
+    /// d는 overlap 안에서 선형이므로 경계 교차점 보간이 정확 — 경계 조립의 원재료(폐합 구성 보장).</summary>
+    private static void CollectSignedParts(Geometry overlap, double dA, double dB, double dC,
+        ConcurrentBag<Geometry> pos, ConcurrentBag<Geometry> neg)
+    {
+        if (overlap is Polygon opg)
+        {
+            var pp = HalfPlanePart(opg, dA, dB, dC, +1);
+            if (pp != null) pos.Add(pp);
+            var np = HalfPlanePart(opg, dA, dB, dC, -1);
+            if (np != null) neg.Add(np);
+        }
+        else if (overlap is GeometryCollection gc)
+        {
+            foreach (var g in gc.Geometries) CollectSignedParts(g, dA, dB, dC, pos, neg);
+        }
+    }
+
+    private static Polygon? HalfPlanePart(Polygon overlap, double dA, double dB, double dC, int sign)
+    {
+        // [중요] 좌표를 1mm 격자에 스냅 — 이웃 조각의 공유 변이 '정확히' 일치해야 수천 개 합집합이
+        // 실오라기(0㎡ 슬리버) 없이 깨끗하게 붙는다(스냅 없이는 fp 오차로 잔가시가 폭증 — 실측 확인).
+        static double R(double v) => Math.Round(v * 1000.0) / 1000.0;
+        var src = overlap.ExteriorRing.Coordinates; // 닫힘(첫=끝)
+        var outPts = new List<Coordinate>(src.Length + 4);
+        void Push(double x, double y)
+        {
+            double rx = R(x), ry = R(y);
+            if (outPts.Count > 0)
+            {
+                var last = outPts[outPts.Count - 1];
+                if (last.X == rx && last.Y == ry) return; // 스냅으로 겹친 중복점 제거
+            }
+            outPts.Add(new Coordinate(rx, ry));
+        }
+        for (int i = 0; i < src.Length - 1; i++)
+        {
+            var a = src[i]; var b = src[i + 1];
+            double da = (dA * a.X + dB * a.Y + dC) * sign;
+            double db2 = (dA * b.X + dB * b.Y + dC) * sign;
+            bool ina = da >= 0, inb = db2 >= 0;
+            if (ina) Push(a.X, a.Y);
+            if (ina != inb)
+            {
+                double t = da / (da - db2); // 부호가 다르면 안정
+                Push(a.X + t * (b.X - a.X), a.Y + t * (b.Y - a.Y));
+            }
+        }
+        // 닫음 중복 정리 후 최소 정점 확인
+        if (outPts.Count >= 2 && outPts[0].X == outPts[outPts.Count - 1].X && outPts[0].Y == outPts[outPts.Count - 1].Y)
+            outPts.RemoveAt(outPts.Count - 1);
+        if (outPts.Count < 3) return null;
+        outPts.Add(new Coordinate(outPts[0].X, outPts[0].Y));
+        try
+        {
+            var p = gfSnap.CreatePolygon(outPts.ToArray());
+            if (p.Area < 1e-6) return null; // 스냅 후 퇴화 조각 버림
+            return p.IsValid ? p : p.Buffer(0) as Polygon;
+        }
+        catch { return null; }
     }
 
     /// <summary>접힘(폴백) 제거 — 진행 방향이 거의 180°(≈177°+) 되꺾이고 **짧은 쪽 다리가 0.2m 미만**인 꼭짓점만

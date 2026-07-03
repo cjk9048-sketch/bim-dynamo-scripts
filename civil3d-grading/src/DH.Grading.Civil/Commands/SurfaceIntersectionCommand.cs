@@ -54,8 +54,9 @@ public sealed class SurfaceIntersectionCommand
                     r3.Status == PromptStatus.OK ? BoundaryReader.Read(tr, r3.ObjectId) : null;
                 loops = RawTriangleIntersectionFinder.GetExactDaylight(a, b, plan);
                 GradingBuilder.DrawDaylight(db, tr, loops); // 'DH-정지경계'(초록) 3D 폴리선
-                GradingBuilder.DrawDebugSpans(db, tr, RawTriangleIntersectionFinder.LastCutSpans); // 'DH-진단'(빨강) 잘린 선분
-                GradingBuilder.DrawDebugSpans(db, tr, RawTriangleIntersectionFinder.LastBridgeSpans, "DH-틈메움", 4); // 하늘색: 틈메움 연결
+                // 진단선(빨강/하늘) 표시는 종료 — 잔재만 청소(오류로 오인 방지, JACK). 데이터는 로그에 있음.
+                GradingBuilder.DrawDebugSpans(db, tr, System.Array.Empty<(Point3, Point3)>());
+                GradingBuilder.DrawDebugSpans(db, tr, System.Array.Empty<(Point3, Point3)>(), "DH-틈메움", 4);
                 tr.Commit();
             }
             int pts = 0, closedN = 0, openN = 0;
