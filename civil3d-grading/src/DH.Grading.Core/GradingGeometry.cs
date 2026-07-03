@@ -123,6 +123,31 @@ public static class GradingGeometry
         }
         dbg.AppendLine($"  완화 최대경사(maxGrad)={maxGrad:F3} ({(maxGrad > 0 ? "전환부 있음" : "평면 계획선 — 완화 없음")})");
 
+        // [단차 경계선 레이] 전환변이 시작/끝나는 경계 정점(한쪽 변 평탄+한쪽 변 경사)에서 평탄 변의
+        // 바깥 수직 방향으로 레이를 정의 — 각 링과의 교점을 링 정점으로 '삽입'하고 꿰어 브레이크라인으로.
+        // 링 점 간격(0.3~1m) 사이에 경계가 떨어지면 접힘이 뭉개져 '단차경계 뚜렷하지 않음'이 되는 것 방지(JACK).
+        var breakRays = new List<(Point3 v, double nx, double ny)>();
+        {
+            int nB = shape.Count;
+            for (int i = 0; i < nB; i++)
+            {
+                var prevV = shape[(i - 1 + nB) % nB]; var v = shape[i]; var nextV = shape[(i + 1) % nB];
+                bool flatIn = Math.Abs(v.Z - prevV.Z) < 0.01, flatOut = Math.Abs(nextV.Z - v.Z) < 0.01;
+                if (flatIn == flatOut) continue; // 전환 시작/끝 정점만
+                double ex = flatIn ? v.X - prevV.X : nextV.X - v.X;
+                double ey = flatIn ? v.Y - prevV.Y : nextV.Y - v.Y;
+                double el = Math.Sqrt(ex * ex + ey * ey); if (el < 1e-9) continue;
+                double cx1 = ey / el, cy1 = -ex / el; // 수직 후보
+                bool inside1 = false;
+                try { inside1 = basePoly.Contains(gf.CreatePoint(new Coordinate(v.X + cx1 * 0.5, v.Y + cy1 * 0.5))); } catch { }
+                double nx = inside1 ? -cx1 : cx1, ny = inside1 ? -cy1 : cy1; // 바깥쪽 선택
+                breakRays.Add((v, nx, ny));
+            }
+            dbg.AppendLine($"  단차 경계선 레이 {breakRays.Count}개");
+        }
+        var transLines = new List<List<Point3>>();
+        foreach (var br in breakRays) transLines.Add(new List<Point3> { new Point3(br.v.X, br.v.Y, br.v.Z) });
+
         // 계단 링(오버사이즈) — 원지반 무시, MaxBenches 단까지 끝까지.
         // StepProfile이 각 모서리의 (수평거리 dist, 누적 수직높이 rise)를 정의 — 일반 모드는 사면끝/소단끝 반복,
         // 계단식 산지 모드는 누적 15m마다 대소단(큰 평탄)을 끼워 넣는다. 한 곳에서 정의해 daylight와 공유.
@@ -147,9 +172,52 @@ public static class GradingGeometry
             var pts = new List<Point3>();
             double zOff = zdir * rise;
             foreach (var c in pg.ExteriorRing.Coordinates)
-                pts.Add(new Point3(c.X, c.Y, BoundaryZAt(shape, c.X, c.Y) + zOff)); // 최근접 경계 Z 기준(단차 추종)
+                pts.Add(new Point3(c.X, c.Y, 0)); // Z는 densify '후' 재계산(아래) — 아래 주석 참조
             var w = Densify(Weed(pts), dens);
-            int relaxed = RelaxRingZ(w, maxGrad); // 상·하단 영향권 경계의 Z 점프를 전환부 경사로 완화(벤치 누락 밴드 방지)
+
+            // [단차 경계 교점 삽입] 각 레이와 이 링의 교점을 정확한 XY로 링에 삽입 — 접힘 위치 보장.
+            var ringHits = new List<(int ray, double px, double py)>();
+            for (int rb = 0; rb < breakRays.Count; rb++)
+            {
+                var (v, nx, ny) = breakRays[rb];
+                int bestI = -1; double bestScore = double.MaxValue, bpx = 0, bpy = 0;
+                for (int si = 0; si < w.Count - 1; si++)
+                {
+                    var a = w[si]; var b3 = w[si + 1];
+                    double sx = b3.X - a.X, sy = b3.Y - a.Y;
+                    double den = sx * ny - sy * nx;
+                    if (Math.Abs(den) < 1e-12) continue;
+                    double t = (sx * (a.Y - v.Y) - sy * (a.X - v.X)) / den; // 레이 파라미터(바깥 거리)
+                    double u = (nx * (a.Y - v.Y) - ny * (a.X - v.X)) / den; // 세그먼트 파라미터
+                    if (u < -1e-9 || u > 1 + 1e-9 || t < 0.05) continue;
+                    double score = Math.Abs(t - dist); // 이 링의 오프셋 거리와 가장 맞는 교점
+                    if (score < bestScore)
+                    { bestScore = score; bestI = si; bpx = v.X + nx * t; bpy = v.Y + ny * t; }
+                }
+                if (bestI >= 0 && bestScore < dist) // 링 반대편(엉뚱한 교점) 배제
+                {
+                    w.Insert(bestI + 1, new Point3(bpx, bpy, 0));
+                    ringHits.Add((rb, bpx, bpy));
+                }
+            }
+
+            // [중요] Z는 촘촘해진 '모든' 점에서 각자 최근접 경계 Z로 계산해야 한다.
+            // 원시 링 정점(직선 변은 양 끝 2개뿐)에만 Z를 주고 densify가 직선 보간하면, 한 직선 변이
+            // 상·하단 Z영역을 모두 지날 때 전환부가 변 전체 길이의 완만한 경사로로 퍼짐(남쪽 면
+            // '계단 안 생김'의 원인 — 격자 로그로 확정). 점별 재계산이면 전환부가 원래 폭으로 유지된다.
+            for (int wi = 0; wi < w.Count; wi++)
+                w[wi] = new Point3(w[wi].X, w[wi].Y, BoundaryZAt(shape, w[wi].X, w[wi].Y) + zOff);
+            int relaxed = RelaxRingZ(w, maxGrad); // 영향권 경계의 잔여 Z 점프를 전환부 경사로 완화
+
+            // 단차 경계선에 이 링의 교점(최종 Z 포함)을 수집 — 링 정점과 완전 동일 좌표(교차 거부 불가)
+            foreach (var (ray, px, py) in ringHits)
+            {
+                for (int wi = 0; wi < w.Count; wi++)
+                {
+                    if (Math.Abs(w[wi].X - px) < 1e-9 && Math.Abs(w[wi].Y - py) < 1e-9)
+                    { transLines[ray].Add(w[wi]); break; }
+                }
+            }
             double zMin = double.MaxValue, zMax = double.MinValue;
             foreach (var wp in w) { if (wp.Z < zMin) zMin = wp.Z; if (wp.Z > zMax) zMax = wp.Z; }
             dbg.AppendLine($"  링 d={dist:F1} rise={rise:F1}: 점{w.Count} Z[{zMin:F2}..{zMax:F2}] 완화 {relaxed}점");
@@ -210,6 +278,13 @@ public static class GradingGeometry
                 if (line.Count >= 2) result.CornerLines.Add(line);
                 dbg.AppendLine($"  코너[{i}] ({b.X:F1},{b.Y:F1}) {(reflexCorner ? "오목" : "볼록")} 능선 {line.Count}점");
             }
+        }
+
+        // 단차 경계선(전환 띠 모서리) 브레이크라인 등록
+        for (int tl = 0; tl < transLines.Count; tl++)
+        {
+            if (transLines[tl].Count >= 2) result.CornerLines.Add(transLines[tl]);
+            dbg.AppendLine($"  단차경계선[{tl}] {transLines[tl].Count}점 시작({transLines[tl][0].X:F1},{transLines[tl][0].Y:F1})");
         }
 
         dbg.AppendLine($"  결과: 링 {result.Rings.Count} · 코너/플래토선 {result.CornerLines.Count} · HasSlope={result.HasSlope}");
