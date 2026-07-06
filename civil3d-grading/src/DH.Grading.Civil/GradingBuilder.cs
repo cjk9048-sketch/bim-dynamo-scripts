@@ -274,7 +274,7 @@ public static class GradingBuilder
         }
     }
 
-    /// <summary>노리선(노란 'DH-노리선')+소단선(흰 'DH-소단')을 그린다 — DHSLOPELINE 전용.</summary>
+    /// <summary>노리선(노란 'DH-노리선')+소단선(흰 'DH-소단')을 그린다 — DHGRADE 4단계·DHSLOPELINE 공용.</summary>
     public static void DrawSlopeHatch(Database db, Transaction tr,
         IEnumerable<(Point3 A, Point3 B)> ticks, IEnumerable<IReadOnlyList<Point3>> benchLines)
     {
@@ -300,6 +300,64 @@ public static class GradingBuilder
                 pl.AppendVertex(v); tr.AddNewlyCreatedDBObject(v, true);
             }
         }
+    }
+
+    /// <summary>사면선·소단선 3D폴리선(ralplan Phase A) — 절/성토별 레이어 4개, 재실행 시 자기 레이어 청소.
+    /// 사면선: 절토=색250(진회)/성토=색8(회) · 소단선: 절토=색1(빨강)/성토=색30(주황).</summary>
+    public static void DrawSlopeEdges(Database db, Transaction tr,
+        IEnumerable<IReadOnlyList<Point3>> cutSlopeLines, IEnumerable<IReadOnlyList<Point3>> cutBermLines,
+        IEnumerable<IReadOnlyList<Point3>> fillSlopeLines, IEnumerable<IReadOnlyList<Point3>> fillBermLines)
+    {
+        var sets = new (string Layer, short Aci, IEnumerable<IReadOnlyList<Point3>> Lines)[]
+        {
+            ("DH-사면선-절토", 250, cutSlopeLines),
+            ("DH-소단선-절토", 1,   cutBermLines),
+            ("DH-사면선-성토", 8,   fillSlopeLines),
+            ("DH-소단선-성토", 30,  fillBermLines),
+        };
+        foreach (var (layer, aci, lines) in sets) Draw3dPolys(db, tr, layer, aci, lines);
+    }
+
+    /// <summary>부지 내부 단차 전환사면(Phase F) 모서리 — 상단=DH-사면선-전환(색6)/하단=DH-소단선-전환(색4).</summary>
+    public static void DrawTransitionEdges(Database db, Transaction tr,
+        IEnumerable<IReadOnlyList<Point3>> crestLines, IEnumerable<IReadOnlyList<Point3>> toeLines)
+    {
+        Draw3dPolys(db, tr, "DH-사면선-전환", 6, crestLines);
+        Draw3dPolys(db, tr, "DH-소단선-전환", 4, toeLines);
+    }
+
+    /// <summary>레이어 보장+청소 후 3D 폴리선 일괄 작도(사면선/소단선/전환선 공용).</summary>
+    private static void Draw3dPolys(Database db, Transaction tr, string layer, short aci,
+        IEnumerable<IReadOnlyList<Point3>> lines)
+    {
+        ObjectId layerId = EnsureLayer(db, tr, layer, aci);
+        EraseOnLayer(db, tr, layer);
+        var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+        foreach (var loop in lines)
+        {
+            if (loop == null || loop.Count < 2) continue;
+            var pl = new Polyline3d { LayerId = layerId };
+            ms.AppendEntity(pl); tr.AddNewlyCreatedDBObject(pl, true);
+            foreach (var p in loop)
+            {
+                var v = new PolylineVertex3d(new Point3d(p.X, p.Y, p.Z));
+                pl.AppendVertex(v); tr.AddNewlyCreatedDBObject(v, true);
+            }
+        }
+    }
+
+    /// <summary>이름(또는 이름_숫자)의 지표면 존재 여부 — DHNORI/DHINFRA 실행 게이트 ③용.</summary>
+    public static bool SurfaceExistsByBaseName(Transaction tr, string baseName)
+    {
+        var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+        foreach (ObjectId sid in civilDoc.GetSurfaceIds())
+        {
+            if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
+            string nm = s.Name;
+            if (nm == baseName || (nm.StartsWith(baseName + "_") && int.TryParse(nm.Substring(baseName.Length + 1), out _)))
+                return true;
+        }
+        return false;
     }
 
     // ── helpers ──

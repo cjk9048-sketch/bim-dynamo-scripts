@@ -16,6 +16,11 @@ public sealed class VirtualSlope
     public List<List<Point3>> CornerLines { get; } = new();
     /// <summary>실제 계단이 생겼는지(평지 외 사면 링 존재).</summary>
     public bool HasSlope { get; set; }
+
+    /// <summary>부지 내부 단차 전환사면(ralplan Phase F) — 3D 계획선의 플래토(같은 Z 구간) 직선 쌍으로
+    /// 정의되는 전환 띠: Crest=높은 플래토 직선, Toe=낮은 플래토 직선(둘 다 densify됨).
+    /// 절/성토 무관하게 경계에서만 유도되므로 up 양방향 Build 결과가 동일 — 한 번만 소비할 것.</summary>
+    public List<(List<Point3> Crest, List<Point3> Toe)> TransitionFaces { get; } = new();
 }
 
 /// <summary>
@@ -69,6 +74,9 @@ public static class GradingGeometry
         // [같은 레벨 정점 직선 브레이크라인 — 3D 계획선] 경계의 '같은 Z 연속 구간(플래토)' 양 끝 정점을
         // 부지 안쪽 직선으로 연결 → 상단·하단이 각각 평평하게 유지되고 전환 사면이 그 사이 좁은 띠로 갇힘
         // (Civil 부지정지 동작과 동일, JACK 지시).
+        // 전환사면 추출용 — '모든' 레벨 run을 순환 순서대로 수집(채택 여부 플래그 포함).
+        // 전부 수집해야 (i,i+1) 순환쌍 = 원 경계상 실제 인접(사이에 전환변 하나)이 보장된다(리뷰 M-1).
+        var plateaus = new List<(double Z, Point3 S, Point3 E, bool Inside)>();
         {
             const double zTol = 0.005;
             int nV = shape.Count;
@@ -86,28 +94,57 @@ public static class GradingGeometry
                     double z0 = shape[runBegin % nV].Z;
                     while (idx + 1 < start + nV && Math.Abs(shape[(idx + 1) % nV].Z - z0) <= zTol) idx++;
                     int runEnd = idx;
+                    bool accepted = false;
+                    var rs = shape[runBegin % nV]; var re = shape[runEnd % nV];
                     if (runEnd > runBegin) // 정점 2개 이상 플래토
                     {
-                        var s = shape[runBegin % nV]; var e = shape[runEnd % nV];
-                        double ddx = s.X - e.X, ddy = s.Y - e.Y;
+                        double ddx = rs.X - re.X, ddy = rs.Y - re.Y;
                         if (ddx * ddx + ddy * ddy > 1e-6)
                         {
                             bool inside = false;
                             try
                             {
-                                var ls = gf.CreateLineString(new[] { new Coordinate(s.X, s.Y), new Coordinate(e.X, e.Y) });
+                                var ls = gf.CreateLineString(new[] { new Coordinate(rs.X, rs.Y), new Coordinate(re.X, re.Y) });
                                 inside = basePoly.Covers(ls); // 부지 안을 지나는 경우만(오목부에서 밖으로 나가면 제외)
                             }
                             catch { }
                             dbg.AppendLine($"  플래토 Z={z0:F3} 정점[{runBegin % nV}..{runEnd % nV}] 직선 {(inside ? "추가" : "탈락(부지 밖 통과)")} " +
-                                $"({s.X:F1},{s.Y:F1})→({e.X:F1},{e.Y:F1})");
+                                $"({rs.X:F1},{rs.Y:F1})→({re.X:F1},{re.Y:F1})");
                             if (inside)
-                                result.CornerLines.Add(new List<Point3> { new Point3(s.X, s.Y, s.Z), new Point3(e.X, e.Y, e.Z) });
+                            {
+                                result.CornerLines.Add(new List<Point3> { new Point3(rs.X, rs.Y, rs.Z), new Point3(re.X, re.Y, re.Z) });
+                                accepted = true;
+                            }
                         }
                         else dbg.AppendLine($"  플래토 Z={z0:F3} 정점[{runBegin % nV}..{runEnd % nV}] — 양끝 동일점, 생략");
                     }
+                    plateaus.Add((z0, rs, re, accepted)); // 탈락/단일점 run도 인접성 판정 위해 자리 유지
                     idx++;
                 }
+            }
+        }
+
+        // [내부 전환사면 추출 — ralplan Phase F] 원 경계상 '실제 인접'(사이에 전환변 하나) 플래토 쌍 중
+        // 둘 다 부지 안 직선으로 채택되고 Z가 다른 쌍 = 전환 띠 하나(리뷰 M-1: 탈락 run이 사이에 있으면
+        // 쌍 안 만듦 — 전체 run 목록의 순환 인접만 사용). Crest=높은 쪽, Toe=낮은 쪽(densify —
+        // NearestOnRing이 정점 스냅이므로 필수). 2-플래토는 (0,1)·(1,0)이 같은 쌍 → 무순서 dedupe로 1개만.
+        if (plateaus.Count >= 2)
+        {
+            var seenPair = new HashSet<(int, int)>();
+            for (int i = 0; i < plateaus.Count; i++)
+            {
+                int j = (i + 1) % plateaus.Count;
+                var pa = plateaus[i]; var pb = plateaus[j];
+                if (!pa.Inside || !pb.Inside) continue;       // 둘 다 채택된 플래토 직선일 때만
+                if (Math.Abs(pa.Z - pb.Z) <= 0.005) continue; // 같은 레벨 — 전환 없음
+                var key = i < j ? (i, j) : (j, i);
+                if (!seenPair.Add(key)) continue;
+                var hi = pa.Z >= pb.Z ? pa : pb;
+                var lo = pa.Z >= pb.Z ? pb : pa;
+                var crest = Densify(new List<Point3> { hi.S, hi.E }, dens);
+                var toe = Densify(new List<Point3> { lo.S, lo.E }, dens);
+                result.TransitionFaces.Add((crest, toe));
+                dbg.AppendLine($"  전환사면[{result.TransitionFaces.Count - 1}] crest Z={hi.Z:F2}({crest.Count}점) ↔ toe Z={lo.Z:F2}({toe.Count}점)");
             }
         }
 

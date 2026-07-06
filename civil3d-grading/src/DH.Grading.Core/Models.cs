@@ -39,9 +39,10 @@ public sealed class GradingParams
 
     /// <summary>
     /// 비탈 최소 구배 n (1:n). 구배 0(수직 옹벽) 입력 시 이 비율로 살짝 눕혀 TIN 붕괴를 막는다.
-    /// 기본 0.01 → 단높이에 비례(단높이 5m면 0.05m, 3m면 0.03m 폭). 실제 Civil3D 관행과 동일.
+    /// 기본 0.05(JACK) — 0.05 미만은 Civil3D TIN이 예기치 못한 오류를 내는 사례가 있어 이 값을 하한으로 고정.
+    /// (단높이 5m면 수평 0.25m 폭 — 사실상 수직 옹벽.)
     /// </summary>
-    public double MinSlope { get; init; } = 0.01;
+    public double MinSlope { get; init; } = 0.05;
 
     /// <summary>비탈 최소 수평폭 절대 바닥 (m) — 단높이가 매우 작을 때만 작동하는 안전장치.</summary>
     public double MinFaceRun { get; init; } = 0.005;

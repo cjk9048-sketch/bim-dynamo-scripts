@@ -554,6 +554,33 @@ public static class RawTriangleIntersectionFinder
         // ② 양끝이 계획 경계에 닿는 '열린' 교선은 계획 경계를 따라 먼저 폐합(방향은 합집합이 흡수 → 짧은 쪽).
         // ③ 계획과 닿는 폐합 루프 전부 + 계획폴리곤을 '한 번에 합집합' → 바깥 외곽선(구멍 제거).
         int dropped = 0, unioned = 0, planClosed = 0, inCut = 0;
+
+        // [경계 Z 버그 수정 — 합집합경계.png] 최종 경계 중 '계획폴리곤을 따라가는 구간'의 Z는 원지반이 아니라
+        // 계획선의 계획고여야 한다(원지반 Z를 주면 계획선 위 초록선이 엉뚱한 높이로 떠오름 — JACK 보고).
+        // 점이 계획 경계에서 tol(2cm) 이내면 계획 폴리선 최근접점 Z(선형보간)를 반환.
+        // ※2cm 이내의 진짜 daylight 점이라도 그 자리는 절/성토 깊이≈0(패드 모서리)이라 계획고가 더 정확하다.
+        bool TryPlanZ(double x, double y, double tol, out double z)
+        {
+            z = 0;
+            if (plan == null || plan.Count < 2) return false;
+            double bestD2 = double.MaxValue, bestZ = 0;
+            int nP = plan.Count;
+            for (int i = 0; i < nP; i++)
+            {
+                var a = plan[i]; var b = plan[(i + 1) % nP];
+                double vx = b.X - a.X, vy = b.Y - a.Y;
+                double len2 = vx * vx + vy * vy;
+                double t = len2 < 1e-12 ? 0 : ((x - a.X) * vx + (y - a.Y) * vy) / len2;
+                t = t < 0 ? 0 : (t > 1 ? 1 : t);
+                double qx = a.X + t * vx, qy = a.Y + t * vy;
+                double d2 = (x - qx) * (x - qx) + (y - qy) * (y - qy);
+                if (d2 < bestD2) { bestD2 = d2; bestZ = a.Z + t * (b.Z - a.Z); }
+            }
+            if (bestD2 > tol * tol) return false;
+            z = bestZ;
+            return true;
+        }
+
         if (planPoly != null)
         {
             // [계획 내부 구간 제거] 최종 경계 = 계획 ∪ 절/성토 영역이므로 계획 '안'을 지나는 교선 구간은 불필요.
@@ -577,7 +604,8 @@ public static class RawTriangleIntersectionFinder
                         if (gg is LineString ls2 && ls2.Coordinates.Length >= 2 && ls2.Length > 0.05)
                         {
                             var np = new List<Point3>(ls2.Coordinates.Length);
-                            foreach (var c in ls2.Coordinates) np.Add(new Point3(c.X, c.Y, SurfZ(c)));
+                            foreach (var c in ls2.Coordinates) // 잘린 끝점은 계획 경계 위 → 계획고
+                                np.Add(new Point3(c.X, c.Y, TryPlanZ(c.X, c.Y, 0.02, out double zp2) ? zp2 : SurfZ(c)));
                             kept.Add(np); any = true;
                         }
                         else if (gg is GeometryCollection gc2)
@@ -642,9 +670,12 @@ public static class RawTriangleIntersectionFinder
                         var np = new List<Point3>(ring2.Length);
                         foreach (var c in ring2)
                         {
-                            // 경계 Z는 '두 번째 표면(원지반)' 기준 — 옹벽에서는 가상면 Z가 25cm 폭 안에서 0~5m를
-                            // 오르내려 평균 Z가 널뛰면 3D 폴리선이 툭툭 꺾여 보임(JACK). 교선의 실제 높이 = 원지반.
-                            double zOut = samplerB.TryGetElevation(c.X, c.Y, out double zb2) ? zb2 : SurfZ(c);
+                            // 경계 Z 우선순위: ①계획 경계 위 구간 = 계획고(TryPlanZ — 합집합경계.png 버그 수정)
+                            // ②그 외(daylight) = '두 번째 표면(원지반)' 기준 — 옹벽에서는 가상면 Z가 25cm 폭 안에서
+                            //   0~5m를 오르내려 평균 Z가 널뛰면 3D 폴리선이 툭툭 꺾여 보임(JACK). 교선의 실제 높이=원지반.
+                            double zOut = TryPlanZ(c.X, c.Y, 0.02, out double zp)
+                                ? zp
+                                : samplerB.TryGetElevation(c.X, c.Y, out double zb2) ? zb2 : SurfZ(c);
                             np.Add(new Point3(c.X, c.Y, zOut));
                         }
                         final.Add(np);
