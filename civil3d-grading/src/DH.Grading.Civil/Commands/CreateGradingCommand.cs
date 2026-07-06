@@ -103,6 +103,8 @@ public sealed class CreateGradingCommand
             // 그리기의 레이어 청소(EraseOnLayer)가 앞서 그린 성토 교선을 지우는 일이 없도록(JACK 지적).
             var allLoops = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
             var injectedRings = new System.Collections.Generic.Dictionary<string, (ObjectId id, System.Collections.Generic.List<Point3> ring)>();
+            // 표면별 '최종' 경계 링(정규화 재주입 시 갱신) — 4단계 노리선 클립 기준(§0-HH 다음 단계)
+            var finalRings = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<Point3>>();
             string bndMsg = "", diagX = "";
             bool anyMissed = false;
             using (Transaction tr2 = db.TransactionManager.StartTransaction())
@@ -143,6 +145,7 @@ public sealed class CreateGradingCommand
                             {
                                 GradingBuilder.AddOuterBoundary(vs, best);
                                 injectedRings[label] = (vsId, best); // 합성 실패 시 정규화 재주입용
+                                finalRings[label] = best;            // 노리선 클립 기준
                                 bndMsg += $"\n{label}: 교선 경계 주입 완료 (면적 {bestArea:F0}㎡)";
                                 diagX += GradingBuilder.VerifyBoundaryClip(vs, best); // 잘림 정합 실측(스샷 없이 판정)
                             }
@@ -174,7 +177,9 @@ public sealed class CreateGradingCommand
                 // [겹침 제거 — 도넛] 성토·절토가 pad(계획 내부)를 둘 다 가지면 최종 합성의 마지막 paste가
                 // SurfaceException(Failure)으로 깨짐(실측). 성토가 pad를 담당하고, 절토는 계획 내부를 Hide로
                 // 뚫어 바깥 계단 띠만 남긴다 → 두 면이 전혀 안 겹쳐 합성 안정(옛 0-BB '도넛' 검증 해법).
-                if (!cutId.IsNull && !fillId.IsNull)
+                // [순수 절토/성토 — JACK] 성토가 실제로 있을 때만(finalRing 有) 도넛을 건다. 순수 절토면
+                // 성토가 pad를 안 채우므로 절토를 뚫으면 계획부지가 구멍남(스샷). → 둘 다 실제일 때만 Hide.
+                if (!cutId.IsNull && !fillId.IsNull && finalRings.ContainsKey("절토") && finalRings.ContainsKey("성토"))
                 {
                     try
                     {
@@ -203,6 +208,12 @@ public sealed class CreateGradingCommand
             try
             {
                 using Transaction tr3 = db.TransactionManager.StartTransaction();
+                // [절토/성토 한쪽만 있는 경우 — JACK] 순수 절토(또는 성토) 부지는 반대쪽 표면이 지반과 안 만나
+                // daylight(경계)가 안 생김 → 오버사이즈 표면이 클립 없이 억지로 합성돼 줄무늬 오류(스샷3·4).
+                // 유효 경계(finalRing)가 주입된 표면만 합성하고, 없는 쪽 가상표면은 지운다.
+                if (!fillId.IsNull && !finalRings.ContainsKey("성토")) { EraseSurface(tr3, fillId); fillId = ObjectId.Null; bndMsg += "\n성토: daylight 없음 — 순수 절토 부지로 판단, 성토 가상면 제거"; }
+                if (!cutId.IsNull && !finalRings.ContainsKey("절토")) { EraseSurface(tr3, cutId); cutId = ObjectId.Null; bndMsg += "\n절토: daylight 없음 — 순수 성토 부지로 판단, 절토 가상면 제거"; }
+
                 // [적응형 합성] 실측 확정: 표면마다 paste가 받아주는 링이 다름(성토=원본 OK/정규화 실패,
                 // 절토=원본 실패/정규화 OK — NTS 검사로는 구분 불가). → paste 결과로 판단해 실패한 표면만
                 // 경계를 5mm 정규화 링으로 교체하고 재시도(표면당 1회).
@@ -221,6 +232,7 @@ public sealed class CreateGradingCommand
                     if (cleanedR == null) { pasteLog += $"\n  → {failLabel} 링 정규화 실패"; break; }
                     var vsT = (TinSurface)tr3.GetObject(info.id, OpenMode.ForWrite);
                     GradingBuilder.ReplaceOuterBoundary(vsT, cleanedR, failLabel == "절토" ? boundary : null); // 절토는 도넛(Hide) 재적용
+                    finalRings[failLabel] = cleanedR; // 노리선 클립도 최종(정규화) 링 기준으로
                     pasteLog += $"\n  → {failLabel} 경계 정규화 재주입(정점 {cleanedR.Count})";
                     injectedRings.Remove(failLabel); // 같은 표면 재정규화 무한루프 방지
                 }
@@ -235,15 +247,52 @@ public sealed class CreateGradingCommand
             }
             catch { }
 
+            // ── 4단계: 결과 번들 저장(ralplan Phase 0) — 노리선 작도는 DHNORI(노리선 버튼)로 이관 ──
+            // 저장 시점 = 3단계의 모든 복구·정규화 종단점 이후(finalRings가 정규화 재주입까지 반영된 상태).
+            // 내부 링은 boundary+params에서 결정적 재계산 가능하므로 재현 불가능한 finalRing만 저장.
+            string bundleMsg = "";
+            try
+            {
+                var fp = GradingBundle.Fingerprint(boundary);
+                var bundle = new GradingBundle
+                {
+                    PlanHandle = rPoly.ObjectId.Handle.ToString(),
+                    VertexCount = fp.N,
+                    CentroidX = fp.Cx, CentroidY = fp.Cy,
+                    BboxMinX = fp.MinX, BboxMinY = fp.MinY, BboxMaxX = fp.MaxX, BboxMaxY = fp.MaxY,
+                    Perimeter = fp.Perim, Diagonal = fp.Diag,
+                    Boundary = boundary,
+                    Params = p,
+                    CutHasSlope = cut.HasSlope,
+                    FillHasSlope = fill.HasSlope,
+                    CutFinalRing = finalRings.TryGetValue("절토", out var cr) ? cr : null,
+                    FillFinalRing = finalRings.TryGetValue("성토", out var fr) ? fr : null,
+                };
+                using Transaction tr4 = db.TransactionManager.StartTransaction();
+                GradingBundleStore.Save(db, tr4, bundle);
+                tr4.Commit();
+                bundleMsg = $"번들 저장 v{GradingBundleStore.Version} — 경계 {boundary.Count}점 · " +
+                            $"절토링 {(bundle.CutFinalRing?.Count ?? 0)}점 · 성토링 {(bundle.FillFinalRing?.Count ?? 0)}점" +
+                            "\n→ [노리선]·[INFRAWORKS] 버튼이 이 번들을 사용합니다";
+            }
+            catch (System.Exception ex) { bundleMsg = "번들 저장 실패 — " + ex.Message; }
+            try
+            {
+                System.IO.File.AppendAllText(@"C:\Users\user\Desktop\AI\civil3d-grading\DHGRADE_진단.log",
+                    "\n■ 번들 저장(4단계)\n  " + bundleMsg.Replace("\n", "\n  ") + "\n");
+            }
+            catch { }
+
             string terrace = p.MountainTerrace ? $" · 계단식 산지(대소단 {p.TerraceInterval}m/{p.TerraceWidth}m)" : "";
-            string headline = anyMissed
+            string headline = (anyMissed
                 ? "⚠ 정지면 일부 경계 미적용 — 가상면이 잘리지 않았습니다" // [리뷰 M-2] 정상 완료로 오인 방지
-                : "정지면 생성 완료";
+                : "정지면 생성 완료") + $"  [DH.Grading {GradingSettings.Version}]";
             string msg =
                 $"{headline} — 절토 {(cut.HasSlope ? "가상절토_DH" : "없음")} / 성토 {(fill.HasSlope ? "가상성토_DH" : "없음")}\n" +
                 $"단높이 {p.BenchHeight}m · 소단 {p.BenchWidth}m · 절토 1:{p.CutSlope} · 성토 1:{p.FillSlope}{terrace}" +
                 bndMsg +
-                $"\n합성(정지면_DH): {pasteLog}";
+                $"\n합성(정지면_DH): {pasteLog}" +
+                $"\n{bundleMsg}";
             ed.WriteMessage("\n" + msg);
             AcadApp.ShowAlertDialog(msg);
         }
@@ -252,6 +301,13 @@ public sealed class CreateGradingCommand
             ed.WriteMessage("\n[DHGRADE 오류] " + ex.Message);
             AcadApp.ShowAlertDialog("가상 지표면 생성 중 오류:\n" + ex.Message);
         }
+    }
+
+    /// <summary>가상표면(ObjectId)을 지운다 — daylight 없는 억지 생성 표면 정리용.</summary>
+    private static void EraseSurface(Transaction tr, ObjectId id)
+    {
+        try { if (!id.IsNull && tr.GetObject(id, OpenMode.ForWrite) is Autodesk.AutoCAD.DatabaseServices.Entity e) e.Erase(); }
+        catch { }
     }
 
     /// <summary>설정값을 읽고, 원지반/계획고 표고차로 필요한 최대 단수를 좁혀 매개변수를 만든다(+여유단).</summary>

@@ -67,7 +67,7 @@ public sealed class GradingDialog : Window
 
         root.Children.Add(new TextBlock
         {
-            Text = "※ 구배 숫자가 클수록 완만 (1:1.5 = 1m당 옆 1.5m). 구배 0 = 거의 수직 옹벽.",
+            Text = "※ 구배 숫자가 클수록 완만 (1:1.5 = 1m당 옆 1.5m). 0.05 이하 입력은 자동으로 0.05(수직 옹벽)로 처리.",
             TextWrapping = TextWrapping.Wrap,
             Foreground = new SolidColorBrush(Color.FromRgb(0x66, 0x66, 0x66)),
             Margin = new Thickness(0, 6, 0, 14),
@@ -134,6 +134,12 @@ public sealed class GradingDialog : Window
             !TryParse(_terraceInterval, "대소단 간격", out double ti, positive: true) ||
             !TryParse(_terraceWidth, "대소단 폭", out double tw, positive: false))
             return;
+
+        // [구배 하한 0.05 — JACK] 사용자가 0.05 이하(거의 수직 옹벽)를 넣어도 무조건 0.05로 처리.
+        // 그 아래는 Civil3D TIN이 예기치 못한 오류를 내는 사례가 있어 미연 방지. (0 입력=옹벽 의도 → 0.05)
+        const double slopeFloor = 0.05;
+        if (cs > 0 && cs < slopeFloor) cs = slopeFloor; else if (cs == 0) cs = slopeFloor;
+        if (fs > 0 && fs < slopeFloor) fs = slopeFloor; else if (fs == 0) fs = slopeFloor;
 
         GradingSettings.BenchHeight = bh;
         GradingSettings.BenchWidth = bw;

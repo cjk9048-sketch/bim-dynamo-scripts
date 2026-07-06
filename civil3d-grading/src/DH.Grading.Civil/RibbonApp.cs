@@ -1,5 +1,6 @@
-using System.Reflection;
+using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.Runtime;
@@ -10,7 +11,9 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.CreateGradingCommand))]
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.GradingSettingsCommand))]
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SurfaceIntersectionCommand))] // DHXSEC(지표면 교선 TEST)
-[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SlopeLineCommand))]           // DHSLOPELINE(노리선)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SlopeLineCommand))]           // DHSLOPELINE(노리선 수동, 레거시)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.NoriCommand))]                // DHNORI(노리선 버튼 — 번들 기반)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.InfraworksCommand))]          // DHINFRA(INFRAWORKS SHP 내보내기)
 
 namespace DH.Grading.Civil;
 
@@ -53,11 +56,13 @@ public sealed class RibbonApp : IExtensionApplication
             tab.Panels.Add(new RibbonPanel { Source = src });
 
             src.Items.Add(MakeButton(
-                "정지\n설정", "DHGRADESET ", "단높이·소단폭·구배·격자 해상도를 설정", "Settings32.png"));
+                "정지\n설정", "DHGRADESET ", "단높이·소단폭·구배·격자 해상도를 설정", "설정"));
             src.Items.Add(MakeButton(
-                "정지면\n생성", "DHGRADE ", "계획 폴리곤+원지반 → 계단식 절성토 TIN Surface 생성", "Grade32.png"));
+                "정지면\n생성", "DHGRADE ", "계획 폴리곤+원지반 → 계단식 절성토 TIN Surface 생성", "정지면"));
             src.Items.Add(MakeButton(
-                "지표면\n교선", "DHXSEC ", "[TEST] 지표면 2개 선택 → 면-면 교선(daylight) 3D 폴리선 생성", "Grade32.png"));
+                "노리선", "DHNORI ", "정지 결과(번들)로 사면선·소단선·노리선을 한 번에 작도 — DHGRADE 실행 후 사용", "노리선"));
+            src.Items.Add(MakeButton(
+                "INFRA\nWORKS", "DHINFRA ", "InfraWorks용 SHP 일괄 내보내기(옹벽선·면폴리곤·계획면·순절/성토) — DHGRADE 실행 후 사용", "infra"));
         }
         catch
         {
@@ -65,14 +70,14 @@ public sealed class RibbonApp : IExtensionApplication
         }
     }
 
-    private static RibbonButton MakeButton(string text, string command, string tooltip, string icon)
+    private static RibbonButton MakeButton(string text, string command, string tooltip, string glyph)
     {
         return new RibbonButton
         {
             Text = text,
             ShowText = true,
             ShowImage = true,
-            LargeImage = LoadIcon(icon),
+            LargeImage = MakeGlyph(glyph),
             Size = RibbonItemSize.Large,
             Orientation = System.Windows.Controls.Orientation.Vertical,
             ToolTip = tooltip,
@@ -81,21 +86,60 @@ public sealed class RibbonApp : IExtensionApplication
         };
     }
 
-    /// <summary>DLL에 포함된 PNG 아이콘 로드(없으면 null).</summary>
-    private static BitmapImage? LoadIcon(string fileName)
+    /// <summary>버튼 아이콘을 런타임에 그려 각 명령을 직관적으로 구분(PNG 리소스 대신, JACK 요청).
+    /// 설정=슬라이더 / 정지면=계단 / 노리선=사면+빗금 / infra=상자+내보내기 화살표.</summary>
+    private static ImageSource? MakeGlyph(string kind)
     {
         try
         {
-            var asm = Assembly.GetExecutingAssembly();
-            using var stream = asm.GetManifestResourceStream($"DH.Grading.Civil.Resources.{fileName}");
-            if (stream == null) return null;
-            var bmp = new BitmapImage();
-            bmp.BeginInit();
-            bmp.StreamSource = stream;
-            bmp.CacheOption = BitmapCacheOption.OnLoad;
-            bmp.EndInit();
-            bmp.Freeze();
-            return bmp;
+            const int S = 32;
+            Pen P(byte r, byte g, byte b) => new(new SolidColorBrush(Color.FromRgb(r, g, b)), 2.2)
+            { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
+
+            var dv = new DrawingVisual();
+            using (var dc = dv.RenderOpen())
+            {
+                dc.DrawRectangle(Brushes.Transparent, null, new Rect(0, 0, S, S)); // 투명 배경
+                switch (kind)
+                {
+                    case "설정": // 슬라이더 3줄 + 노브(회색)
+                        var gy = P(0x9e, 0xb0, 0xc4);
+                        for (int i = 0; i < 3; i++)
+                        {
+                            double y = 8 + i * 8;
+                            dc.DrawLine(gy, new Point(5, y), new Point(27, y));
+                            dc.DrawEllipse(Brushes.White, gy, new Point(9 + i * 7, y), 2.6, 2.6);
+                        }
+                        break;
+                    case "정지면": // 계단(초록) — 절성토 계단 정지면
+                        var gr = P(0x6a, 0xc8, 0x7a);
+                        var st = new[] { new Point(4, 27), new Point(4, 21), new Point(12, 21),
+                            new Point(12, 15), new Point(20, 15), new Point(20, 9), new Point(28, 9) };
+                        for (int i = 0; i + 1 < st.Length; i++) dc.DrawLine(gr, st[i], st[i + 1]);
+                        break;
+                    case "노리선": // 사면(대각선, 주황) + 빗금 틱
+                        var or = P(0xf0, 0xa8, 0x3a);
+                        dc.DrawLine(or, new Point(6, 27), new Point(27, 6));
+                        for (int i = 1; i <= 3; i++)
+                        {
+                            double t = i / 4.0;
+                            var bp = new Point(6 + 21 * t, 27 - 21 * t);
+                            dc.DrawLine(or, bp, new Point(bp.X + 4.5, bp.Y + 4.5)); // 빗금(사면 아래로)
+                        }
+                        break;
+                    default: // infra: 상자 + 내보내기 화살표(파랑)
+                        var bl = P(0x4a, 0x90, 0xe2);
+                        dc.DrawRectangle(null, bl, new Rect(5, 13, 13, 14)); // 파일 상자
+                        dc.DrawLine(bl, new Point(15, 8), new Point(28, 8));  // 화살 축
+                        dc.DrawLine(bl, new Point(24, 4), new Point(28, 8));  // 화살촉
+                        dc.DrawLine(bl, new Point(24, 12), new Point(28, 8));
+                        break;
+                }
+            }
+            var rtb = new RenderTargetBitmap(S, S, 96, 96, PixelFormats.Pbgra32);
+            rtb.Render(dv);
+            rtb.Freeze();
+            return rtb;
         }
         catch { return null; }
     }
