@@ -110,37 +110,81 @@ public static class GradingPolygons
     }
 
     /// <summary>끝점이 snapTol 이내로 맞닿는 폴리선들을 하나로 이어붙인다(각 단의 직선 crest+사선 daylight를
-    /// 한 옹벽선으로 조인 — ARRAY용, JACK). snapTol은 소단폭보다 작아야 인접 단끼리 잘못 안 붙는다.</summary>
-    public static List<List<Point3>> JoinPolylines(IReadOnlyList<IReadOnlyList<Point3>> lines, double snapTol)
+    /// 한 옹벽선으로 조인 — ARRAY용, JACK). benchLevels가 있으면 **단별로 그룹핑해 같은 단끼리만 조인**한다
+    /// (코너에서 인접 단이 XY로 가까워도 병합 안 됨 — 2단·3단 합쳐지던 버그 수정). 근접 폐합 루프는 닫는다.</summary>
+    public static List<List<Point3>> JoinPolylines(IReadOnlyList<IReadOnlyList<Point3>> lines, double snapTol,
+        IReadOnlyList<double>? benchLevels = null)
     {
-        var pool = new List<List<Point3>>();
-        foreach (var l in lines) if (l != null && l.Count >= 2) pool.Add(new List<Point3>(l));
+        // 단별 그룹핑 — 각 선의 단 = band(maxZ − eps)(crest Z_k와 그 아래 daylight가 같은 단으로 묶임).
+        int Band(double z) { int b = 0; if (benchLevels != null) foreach (var L in benchLevels) if (z >= L - 1e-6) b++; return b; }
+        int Key(IReadOnlyList<Point3> l) { double mz = double.MinValue; foreach (var p in l) if (p.Z > mz) mz = p.Z; return Band(mz - 0.01); }
+
+        var groups = new Dictionary<int, List<List<Point3>>>();
+        foreach (var l in lines)
+        {
+            if (l == null || l.Count < 2) continue;
+            int k = benchLevels == null || benchLevels.Count == 0 ? 0 : Key(l);
+            (groups.TryGetValue(k, out var g) ? g : groups[k] = new List<List<Point3>>()).Add(new List<Point3>(l));
+        }
+
         var result = new List<List<Point3>>();
         double tol2 = snapTol * snapTol;
+        // 근접 폐합은 '거의 맞닿은' 이음매만(느슨하면 소단 너머 억지 폐합). 정확 끝점 병합 방침에 맞춰 좁게.
+        double closeGap = System.Math.Max(0.3, snapTol * 2);
         bool Near(Point3 a, Point3 b) => (a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y) <= tol2;
 
-        while (pool.Count > 0)
+        foreach (var key in groups.Keys)
         {
-            var chain = pool[0]; pool.RemoveAt(0);
-            bool extended = true;
-            while (extended)
+            var pool = groups[key];
+            while (pool.Count > 0)
             {
-                extended = false;
-                for (int i = 0; i < pool.Count; i++)
+                var chain = pool[0]; pool.RemoveAt(0);
+                bool extended = true;
+                while (extended)
                 {
-                    var cand = pool[i];
-                    Point3 cs = chain[0], ce = chain[chain.Count - 1], ds = cand[0], de = cand[cand.Count - 1];
-                    if (Near(ce, ds)) { chain.AddRange(cand.GetRange(1, cand.Count - 1)); }
-                    else if (Near(ce, de)) { cand.Reverse(); chain.AddRange(cand.GetRange(1, cand.Count - 1)); }
-                    else if (Near(cs, de)) { var nc = new List<Point3>(cand); nc.AddRange(chain.GetRange(1, chain.Count - 1)); chain = nc; }
-                    else if (Near(cs, ds)) { var nc = new List<Point3>(cand); nc.Reverse(); nc.AddRange(chain.GetRange(1, chain.Count - 1)); chain = nc; }
-                    else continue;
-                    pool.RemoveAt(i); extended = true; break;
+                    extended = false;
+                    for (int i = 0; i < pool.Count; i++)
+                    {
+                        var cand = pool[i];
+                        Point3 cs = chain[0], ce = chain[chain.Count - 1], ds = cand[0], de = cand[cand.Count - 1];
+                        if (Near(ce, ds)) { chain.AddRange(cand.GetRange(1, cand.Count - 1)); }
+                        else if (Near(ce, de)) { cand.Reverse(); chain.AddRange(cand.GetRange(1, cand.Count - 1)); }
+                        else if (Near(cs, de)) { var nc = new List<Point3>(cand); nc.AddRange(chain.GetRange(1, chain.Count - 1)); chain = nc; }
+                        else if (Near(cs, ds)) { var nc = new List<Point3>(cand); nc.Reverse(); nc.AddRange(chain.GetRange(1, chain.Count - 1)); chain = nc; }
+                        else continue;
+                        pool.RemoveAt(i); extended = true; break;
+                    }
+                }
+                // [밴드 클램프-분할] 조인 결과가 자기 단 밴드[lo,hi] 밖(소단 노이즈로 dip)으로 삐지면 그 부분을
+                //   빼고 in-band 연속 구간만 남긴다(V자 소단횡단 제거). benchLevels 있을 때만.
+                foreach (var seg in ClampSplitToBand(chain, benchLevels, key))
+                {
+                    // 근접 폐합 루프 닫기(1단 둘레 한 바퀴) — 끝-시작 간격이 작고 선이 그 10배 이상 길면 닫는다.
+                    double gap = Dist2D(seg[0], seg[seg.Count - 1]);
+                    if (gap > 1e-6 && gap < closeGap && Length2D(seg) > gap * 10) seg.Add(seg[0]);
+                    result.Add(seg);
                 }
             }
-            result.Add(chain);
         }
         return result;
+    }
+
+    /// <summary>조인된 선을 자기 단 밴드[levels[key-1], levels[key]] 밖 점을 빼고 in-band 연속 구간만 반환.
+    /// benchLevels 없으면 원본 그대로. 소단 노이즈로 dip한 V자(소단횡단) 구간 제거용.</summary>
+    private static List<List<Point3>> ClampSplitToBand(List<Point3> line, IReadOnlyList<double>? levels, int key)
+    {
+        if (levels == null || levels.Count == 0) return new List<List<Point3>> { line };
+        double lo = (key >= 1 && key <= levels.Count ? levels[key - 1] : double.MinValue) - 0.05;
+        double hi = (key < levels.Count ? levels[key] : double.MaxValue) + 0.05;
+        var outp = new List<List<Point3>>();
+        var cur = new List<Point3>();
+        foreach (var p in line)
+        {
+            if (p.Z >= lo && p.Z <= hi) cur.Add(p);
+            else { if (cur.Count >= 2) outp.Add(cur); cur = new List<Point3>(); }
+        }
+        if (cur.Count >= 2) outp.Add(cur);
+        return outp.Count > 0 ? outp : new List<List<Point3>> { line };
     }
 
     /// <summary>
@@ -193,27 +237,180 @@ public static class GradingPolygons
         var perBench = new List<List<Point3>>();
         foreach (var run in runs) perBench.AddRange(SplitAtLevels(run, benchLevels));
 
-        // [소단(수평) 구간 제거 — JACK 1원칙] 소단은 Z가 일정(수평). 옹벽선이 소단을 만나면 거기서 끝나야
-        //   하고 소단 위로 그어지면 안 됨. daylight 선에서 Z가 일정한(소단) 구간을 잘라 사면(Z 변하는)
-        //   구간만 남긴다 → 각 단마다 사면 옹벽선 하나. 추가로 헤어핀 짧은 횡단·양끝 꼬리도 정리.
+        // [소단(berm) 레벨 구간 제거 — JACK 1원칙] 소단은 단 경계 표고(crest Z). 토우(아래 소단)에 '수평으로 길게
+        //   눕는' 구간(진짜 소단 횡단)만 제거해 각 단이 소단 위로 안 넘어가게. ※단, 급하게 내려오며 소단을 찍고
+        //   끝나는 정상 꼬리는 유지 → 옹벽선이 소단까지 도달(끝이 소단에 못 미치던 버그 수정, 0710). 바닥(pad=최저
+        //   레벨)은 제외(실제 바닥 옹벽면 유지). CSV 실측으로 V자 소단횡단 소거 확인.
+        double pad = double.MaxValue;
+        if (benchLevels != null) foreach (var L in benchLevels) if (L < pad) pad = L;
+        double minLen = System.Math.Max(2.5, bermWidth * 2.5);
         var cleaned = new List<List<Point3>>();
         foreach (var run in perBench)
-            foreach (var pc in SplitDropBermCrossings(run, bermWidth))
+        {
+            var pieces = benchLevels != null && benchLevels.Count > 1
+                ? RemoveToeRuns(run, benchLevels, pad, minLen)
+                : new List<List<Point3>> { new List<Point3>(run) };
+            foreach (var pc in pieces)
             {
-                var t = TrimFlatZEnds(pc); // 소단(수평 Z) 꼬리 제거 — 소단 위 선 금지(1원칙)
-                if (t.Count >= 2 && Length2D(t) >= System.Math.Max(2.5, bermWidth * 2.5)) cleaned.Add(t);
+                var t = TrimFlatZEnds(pc, bermWidth); // 끝의 짧은 수평 꼬리 추가 정리
+                SnapEndsToLevels(t, benchLevels, finalRing); // 끝점을 소단(토우)/crest 레벨에 딱 닿게 연장
+                if (t.Count < 2) continue;
+                // [바닥 닿는 끝 조각 유지 — 절토-성토 경계 버그 수정, 0713] 절토가 얕아지는 경계에서 최하단
+                //   (pad에 닿는) 사선 조각이 minLen(2.5m) 미만이라 통째 버려져 빨간선이 소단에서 끊기던 문제.
+                //   → 조각이 바닥(pad+0.5) 근처까지 내려오고(실제 내려오는 면: Z변화≥0.8m) 있으면 minLen을 1m로 완화.
+                double tmin = double.MaxValue, tmax = double.MinValue;
+                foreach (var p in t) { if (p.Z < tmin) tmin = p.Z; if (p.Z > tmax) tmax = p.Z; }
+                double useMin = (benchLevels != null && tmin <= pad + 0.5 && tmax - tmin >= 0.8) ? 1.0 : minLen;
+                if (Length2D(t) >= useMin) cleaned.Add(t);
             }
+        }
+        LastDaylightDiag = $"raw {runs.Count}런({runs.Sum(Length2D):F0}m) → 단분할 {perBench.Count} → 토우제거·정리 {cleaned.Count}조각({cleaned.Sum(Length2D):F0}m)";
         return cleaned;
     }
 
-    /// <summary>조각 양끝의 '소단(수평, Z 일정)' 세그먼트 제거 — 사면선이 소단 위로 그어지지 않게(JACK 1원칙).
-    /// Z 변화가 거의 없는(|dZ|<0.05m) 끝 세그먼트를 반복 제거해 사면(Z 변하는) 구간만 남긴다.</summary>
-    private static List<Point3> TrimFlatZEnds(IReadOnlyList<Point3> line)
+    /// <summary>조각에서 '아래(토우) 소단 레벨에 수평으로 눕는' 구간만 제거 — 소단 횡단 제거(JACK 1원칙).
+    /// 아래 레벨 = minZ 근처 단 경계 표고. 그게 바닥(pad)이면 제거 안 함(바닥 옹벽면 유지). crest쪽(위 레벨)은
+    /// 안 건드려 crest선과 이어짐. ※핵심: 토우 밴드(±0.5m)에 들어와도 **수평길이≥minLen 이면서 거의 평탄(Z변화
+    /// &lt;0.3m)** 일 때만 '소단 눕기'로 보고 제거한다. 급강하로 소단을 찍고 끝나는 정상 꼬리·짧은 run은 유지 →
+    /// 옹벽선 끝이 소단까지 도달(끝이 0.5m 못 미치던 버그 수정, 0710).</summary>
+    private static List<List<Point3>> RemoveToeRuns(IReadOnlyList<Point3> line, IReadOnlyList<double> levels, double pad, double minLen)
+    {
+        if (line.Count < 2) return new List<List<Point3>>();
+        double zmin = double.MaxValue; foreach (var p in line) if (p.Z < zmin) zmin = p.Z;
+        double lower = double.MinValue;
+        foreach (var L in levels) if (L <= zmin + 0.3 && L > lower) lower = L;
+        if (lower == double.MinValue || System.Math.Abs(lower - pad) < 1e-6)
+            return new List<List<Point3>> { new List<Point3>(line) }; // 바닥 레벨 → 유지
+
+        var result = new List<List<Point3>>();
+        bool Near(double z) => System.Math.Abs(z - lower) < 0.5;
+        int i = 0;
+        var cur = new List<Point3> { line[0] };
+        while (i + 1 < line.Count)
+        {
+            if (Near(line[i].Z) && Near(line[i + 1].Z))
+            {
+                // 토우 밴드 내 연속 run [i..j] 수집.
+                int j = i;
+                while (j + 1 < line.Count && Near(line[j + 1].Z)) j++;
+                // '소단 눕기' 판정: 수평길이 충분(≥minLen) + 거의 평탄(Z변화<0.3m). 둘 다 만족할 때만 제거.
+                //   급강하 꼬리(Z변화 큼)·짧은 run은 유지 → 옹벽선이 소단(토우)까지 도달.
+                double hlen = 0, zlo = line[i].Z, zhi = line[i].Z;
+                for (int k = i; k < j; k++) hlen += Dist2D(line[k], line[k + 1]);
+                for (int k = i; k <= j; k++) { if (line[k].Z < zlo) zlo = line[k].Z; if (line[k].Z > zhi) zhi = line[k].Z; }
+                if (hlen >= minLen && zhi - zlo < 0.3)
+                { if (cur.Count >= 2) result.Add(cur); cur = new List<Point3> { line[j] }; i = j; } // 소단 눕기 → 제거
+                else { cur.Add(line[i + 1]); i++; }                                                  // 정상 꼬리 → 유지
+            }
+            else { cur.Add(line[i + 1]); i++; }
+        }
+        if (cur.Count >= 2) result.Add(cur);
+        return result;
+    }
+
+    /// <summary>선의 양 끝점이 단 레벨(소단=토우 또는 crest)에 가깝게(≤0.6m) 못 미쳐 끝나면, 그 레벨까지 연장한 점을
+    /// 끝에 덧붙인다 — 옹벽선 끝이 소단에 딱 닿게(끝이 미세하게 못 미치던 것 보정, 0710/0713). 연장점 선택 우선순위:
+    /// ①마지막 선분 방향 선형 연장(XY≤0.35m면 채택, 내부단에서 정확) ②과연장(바닥단: 토우가 경계 따라 완만→수직
+    /// 급변, 실측 9.7m 스파이크)이면 원본 finalRing에서 그 레벨(±0.05m)의 실제 토우점을 2m 이내에서 찾아 복원(가장
+    /// 정확) ③없으면 tip 바로 아래로 수직 내림(수직 절토벽 가정). 이미 도달(≤1mm)했거나 레벨에서 먼(사면 중간 끊김,
+    /// &gt;0.6m) 끝점은 건드리지 않는다. in-place 수정.</summary>
+    private static void SnapEndsToLevels(List<Point3> line, IReadOnlyList<double>? levels, IReadOnlyList<Point3>? finalRing = null)
+    {
+        if (levels == null || levels.Count == 0 || line.Count < 2) return;
+        const double maxXYext = 0.35; // 선분방향 연장 스파이크 방지 상한
+        const double toeSnap = 2.0;   // 원본 토우점 복원 반경
+        double Nearest(double z)
+        { double best = z, bd = double.MaxValue; foreach (var L in levels) { double d = System.Math.Abs(L - z); if (d < bd) { bd = d; best = L; } } return best; }
+        // finalRing에서 tip 근처(≤2m)·targetZ(±0.05m)인 실제 토우점을 찾는다(없으면 null).
+        Point3? RealToe(Point3 tip, double targetZ)
+        {
+            if (finalRing == null) return null;
+            Point3? best = null; double bd = toeSnap * toeSnap;
+            foreach (var p in finalRing)
+            {
+                if (System.Math.Abs(p.Z - targetZ) > 0.05) continue;
+                double d = (p.X - tip.X) * (p.X - tip.X) + (p.Y - tip.Y) * (p.Y - tip.Y);
+                if (d < bd) { bd = d; best = p; }
+            }
+            return best;
+        }
+        // tip을 targetZ까지 연장한 점. ①마지막 선분 방향 연장(XY≤상한) ②원본 토우점 복원 ③수직 내림(gap≤0.45만).
+        //   토우복원이 안 되고 gap이 크면(0.45~0.7) 수직내림은 오배치 위험 → 연장 포기(null).
+        Point3? Extend(Point3 tip, Point3 prev, double targetZ)
+        {
+            double dz = tip.Z - prev.Z;
+            if (System.Math.Abs(dz) >= 1e-6)
+            {
+                double f = (targetZ - prev.Z) / dz; // prev 기준 보간계수(끝 너머면 f>1)
+                double nx = prev.X + (tip.X - prev.X) * f, ny = prev.Y + (tip.Y - prev.Y) * f;
+                double ext = System.Math.Sqrt((nx - tip.X) * (nx - tip.X) + (ny - tip.Y) * (ny - tip.Y));
+                if (ext <= maxXYext) return new Point3(nx, ny, targetZ); // 선분방향 연장
+            }
+            var toe = RealToe(tip, targetZ);
+            if (toe is Point3 tp) return tp;                                   // 원본 토우 복원(정확)
+            return System.Math.Abs(targetZ - tip.Z) <= 0.45                    // 수직 내림은 gap 작을 때만
+                ? new Point3(tip.X, tip.Y, targetZ) : (Point3?)null;
+        }
+        // 시작 끝: line[0]을 line[1] 반대로 연장
+        double t0 = Nearest(line[0].Z), g0 = System.Math.Abs(t0 - line[0].Z);
+        if (g0 > 1e-3 && g0 <= 0.7) { var p = Extend(line[0], line[1], t0); if (p is Point3 pp) line.Insert(0, pp); }
+        // 끝 끝: line[n-1]을 line[n-2] 반대로 연장
+        int n = line.Count; double t1 = Nearest(line[n - 1].Z), g1 = System.Math.Abs(t1 - line[n - 1].Z);
+        if (g1 > 1e-3 && g1 <= 0.7) { var p = Extend(line[n - 1], line[n - 2], t1); if (p is Point3 pp) line.Add(pp); }
+    }
+
+    /// <summary>선에서 '짧은 수평(소단)' 구간을 잘라 버리고 사면·긴수평 구간만 조각으로 반환(JACK 1원칙).
+    /// 수평 run(|dZ|<0.05)이 소단 규모(≤2.5m)면 소단으로 보고 그 자리에서 분할·제거(위치 무관),
+    /// 긴 수평 run은 레벨지형 위 실제 옹벽면이므로 유지. 헤어핀 분할과 달리 긴 면을 파편화하지 않는다.</summary>
+    private static List<List<Point3>> RemoveShortFlatBerms(IReadOnlyList<Point3> line, double bermWidth)
+    {
+        var result = new List<List<Point3>>();
+        if (line.Count < 2) return result;
+        const double flat = 0.05;
+        double maxBerm = System.Math.Max(2.5, bermWidth * 2.5);
+        int i = 0;
+        var cur = new List<Point3> { line[0] };
+        while (i + 1 < line.Count)
+        {
+            if (System.Math.Abs(line[i + 1].Z - line[i].Z) < flat) // 수평 run 시작
+            {
+                int j = i; double flen = 0;
+                while (j + 1 < line.Count && System.Math.Abs(line[j + 1].Z - line[j].Z) < flat)
+                { flen += Dist2D(line[j], line[j + 1]); j++; }
+                if (flen < maxBerm)
+                { if (cur.Count >= 2) result.Add(cur); cur = new List<Point3> { line[j] }; i = j; } // 짧은 수평=소단 → 분할·제거
+                else
+                { for (int k = i; k < j; k++) cur.Add(line[k + 1]); i = j; } // 긴 수평=옹벽면 → 유지
+            }
+            else { cur.Add(line[i + 1]); i++; }
+        }
+        if (cur.Count >= 2) result.Add(cur);
+        return result;
+    }
+
+    /// <summary>DaylightRuns 단계별 진단(옹벽선 누락 추적) — DHINFRA 로그에 기록.</summary>
+    public static string LastDaylightDiag = "";
+
+    /// <summary>조각 양끝의 '소단(짧은 수평, Z 일정)' 꼬리만 제거 — 사면선이 소단 위로 안 그어지게(JACK 1원칙).
+    /// ★핵심: 끝의 수평 run이 '짧을 때만'(≤소단 규모) 통째 제거. 긴 수평은 레벨지형 위 실제 옹벽면이므로 유지
+    /// (평평한 면의 옹벽선이 통째 사라지던 버그 수정 — 맨아래 단 한 면 누락). |dZ|<0.05m = 수평으로 간주.</summary>
+    private static List<Point3> TrimFlatZEnds(IReadOnlyList<Point3> line, double bermWidth)
     {
         var pc = new List<Point3>(line);
-        const double flat = 0.05; // 이보다 작은 Z변화 = 소단(수평)으로 간주
-        while (pc.Count >= 3 && System.Math.Abs(pc[1].Z - pc[0].Z) < flat) pc.RemoveAt(0);
-        while (pc.Count >= 3 && System.Math.Abs(pc[pc.Count - 1].Z - pc[pc.Count - 2].Z) < flat) pc.RemoveAt(pc.Count - 1);
+        const double flat = 0.05;
+        double maxBerm = System.Math.Max(2.5, bermWidth * 2.5); // 이보다 긴 수평 run = 레벨 옹벽면 → 유지
+        // 앞끝 수평 run
+        {
+            int j = 0; double len = 0;
+            while (j + 1 < pc.Count && System.Math.Abs(pc[j + 1].Z - pc[j].Z) < flat) { len += Dist2D(pc[j], pc[j + 1]); j++; }
+            if (j >= 1 && j < pc.Count - 1 && len < maxBerm) pc.RemoveRange(0, j); // 짧은 수평(소단)만 통째 제거
+        }
+        // 뒤끝 수평 run
+        {
+            int j = pc.Count - 1; double len = 0;
+            while (j - 1 >= 0 && System.Math.Abs(pc[j].Z - pc[j - 1].Z) < flat) { len += Dist2D(pc[j - 1], pc[j]); j--; }
+            if (j <= pc.Count - 2 && j > 0 && len < maxBerm) pc.RemoveRange(j + 1, pc.Count - 1 - j);
+        }
         return pc;
     }
 
