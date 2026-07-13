@@ -116,6 +116,7 @@ public sealed class InfraworksCommand
                     var allWall = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
                     foreach (var l in wallLines) allWall.Add(new System.Collections.Generic.List<Point3>(l));
                     int dayCount = 0;
+                    System.Collections.Generic.List<double>? levelList = null;
                     if (up)
                     {
                         // 단 경계 표고(crest Z들) — daylight를 단별로 분리하는 기준(각 링 평균 Z의 고유값)
@@ -125,18 +126,29 @@ public sealed class InfraworksCommand
                             double z = 0; foreach (var pt in ring) z += pt.Z; z /= System.Math.Max(ring.Count, 1);
                             levels.Add(System.Math.Round(z, 2));
                         }
-                        var day = GradingPolygons.DaylightRuns(finalRing, bundle.Boundary, 0.1,
-                            bundle.Params.BenchWidth, new System.Collections.Generic.List<double>(levels));
+                        levelList = new System.Collections.Generic.List<double>(levels);
+                        // tol 0.02 — 수직 옹벽은 daylight가 경계에 바짝 붙음(2m 올라가도 수평 0.1m).
+                        // 0.1이면 바닥단 옹벽선이 통째 배제됨(진단 확인). 0.02로 실제 경계일치만 배제.
+                        var day = GradingPolygons.DaylightRuns(finalRing, bundle.Boundary, 0.02,
+                            bundle.Params.BenchWidth, levelList);
                         allWall.AddRange(day);
                         dayCount = day.Count;
                     }
-                    // snapTol은 소단폭보다 작게 — 같은 단의 직선+사선만 붙고, 인접 단끼리는 안 붙음
-                    double snapTol = System.Math.Min(0.5, System.Math.Max(0.15, bundle.Params.BenchWidth * 0.5));
-                    var joined = GradingPolygons.JoinPolylines(allWall, snapTol);
+                    // [아키텍트 재설계 — 정확 끝점 병합] 느슨한 조인(1.0/2.5m)은 코너에서 crest↔지표절단을 소단 너머로
+                    //   붙여 '소단 횡단선'을 만들었음(16회 반복 실패의 근본). crest∩D와 지표절단은 절단 전이점에서 끝점을
+                    //   공유하므로 **정확 끝점(0.15m)** 병합이면 소단 횡단 없이 단별로 이어짐(CSV 프로토타입 검증).
+                    double snapTol = 0.15;
+                    var joined = GradingPolygons.JoinPolylines(allWall, snapTol, levelList);
+                    // [진단 덤프 — Claude 분석용] 원본 finalRing·경계·단레벨·크레스트·조인결과 CSV로 저장 →
+                    //   스샷 없이 파이프라인 재현·분석 가능(JACK 요청). 절토만(옹벽선 대상).
+                    if (up)
+                        try { DumpDaylightDiag(folder, label, finalRing, bundle.Boundary, levelList, wallLines, joined); }
+                        catch { }
                     var lineFeats = joined.Select((l, idx) =>
                         ((IReadOnlyList<Point3>)l, new object?[] { $"{label}옹벽선", idx + 1 })).ToList();
                     ShapefileWriter.WritePolylinesZ(System.IO.Path.Combine(folder, $"옹벽선_{label}"), lineFeats, lineFields, wkt);
                     log.AppendLine($"옹벽선_{label}.shp: 조인 {joined.Count}개(원본 직선 {wallLines.Count}+지표절단 {dayCount}, 구배 {slopeN:F2}≤0.1)");
+                    if (up) log.AppendLine($"    [daylight 진단] {GradingPolygons.LastDaylightDiag}");
                 }
                 else log.AppendLine($"옹벽선_{label}: 구배 {slopeN:F2}>0.1 (일반 사면) — 옹벽선 생략");
             }
@@ -171,6 +183,37 @@ public sealed class InfraworksCommand
             ed.WriteMessage("\n[DHINFRA 오류] " + ex.Message);
             AcadApp.ShowAlertDialog("INFRAWORKS 내보내기 중 오류:\n" + ex.Message);
         }
+    }
+
+    /// <summary>[진단] 옹벽선 daylight 파이프라인 입력·출력을 CSV로 덤프 — Claude가 스샷 없이 재현·분석용.
+    /// 섹션: BOUNDARY / FINALRING / LEVELS / CREST(직선) / JOINED(최종). 각 점 (idx,x,y,z).</summary>
+    private static void DumpDaylightDiag(string folder, string label,
+        System.Collections.Generic.IReadOnlyList<Point3> finalRing,
+        System.Collections.Generic.IReadOnlyList<Point3> boundary,
+        System.Collections.Generic.List<double>? levels,
+        System.Collections.Generic.List<System.Collections.Generic.List<Point3>> crest,
+        System.Collections.Generic.List<System.Collections.Generic.List<Point3>> joined)
+    {
+        var sb = new System.Text.StringBuilder();
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        void Sec(string name, System.Collections.Generic.IEnumerable<System.Collections.Generic.IReadOnlyList<Point3>> polys)
+        {
+            sb.AppendLine($"# {name}");
+            int pi = 0;
+            foreach (var p in polys)
+            {
+                foreach (var pt in p) sb.AppendLine(string.Create(ci, $"{pi},{pt.X:R},{pt.Y:R},{pt.Z:R}"));
+                pi++;
+            }
+        }
+        Sec("BOUNDARY", new[] { boundary });
+        Sec("FINALRING", new[] { finalRing });
+        sb.AppendLine("# LEVELS");
+        if (levels != null) sb.AppendLine(string.Join(",", levels.ConvertAll(v => v.ToString("R", ci))));
+        Sec("CREST", crest);
+        Sec("JOINED", joined);
+        System.IO.File.WriteAllText(
+            System.IO.Path.Combine(folder, $"_옹벽선진단_{label}.csv"), sb.ToString());
     }
 
     private static double Area2D(IReadOnlyList<Point3> ring)
