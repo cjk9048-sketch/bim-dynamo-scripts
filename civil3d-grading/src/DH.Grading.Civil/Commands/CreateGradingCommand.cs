@@ -111,15 +111,18 @@ public sealed class CreateGradingCommand
             {
                 var groundTin2 = (TinSurface)tr2.GetObject(groundId, OpenMode.ForRead);
 
-                void InjectBoundary(ObjectId vsId, string label)
+                // ── [JACK 합집합 재설계] 1) 양쪽 표면의 '순수 닫힌 교선'을 먼저 계산 ──
+                //   (계획합집합·면조각 없음 — 스텝 검증으로 정확 확인된 경로)
+                var groundSampler2 = new CachedGroundSurface(groundTin2);
+                var pureLoops = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<System.Collections.Generic.List<Point3>>>();
+                var vsIdOf = new System.Collections.Generic.Dictionary<string, ObjectId>();
+                void ComputePure(ObjectId vsId, string label)
                 {
                     if (vsId.IsNull) return;
-                    // [리뷰 H-1] 표면별 try/catch 격리 — 절토 쪽 실패가 이미 성공한 성토 경계·초록선까지
-                    // 롤백시키지 않도록. 실패해도 다른 표면 처리와 DrawDaylight는 계속 진행된다.
                     try
                     {
                         var vs = (TinSurface)tr2.GetObject(vsId, OpenMode.ForWrite);
-                        var loops = RawTriangleIntersectionFinder.GetExactDaylight(vs, groundTin2, boundary);
+                        var loops = RawTriangleIntersectionFinder.GetExactDaylight(vs, groundTin2, null);
                         diagX += $"\n■ 교선({label})\n" + RawTriangleIntersectionFinder.LastDiag + "\n";
                         try // [리뷰 L-1] 상세 진단이 다음 호출에 덮이지 않게 표면별 사본 보존
                         {
@@ -127,42 +130,7 @@ public sealed class CreateGradingCommand
                                 $@"C:\Users\user\Desktop\AI\civil3d-grading\DHXSEC_진단_{label}.log", true);
                         }
                         catch { }
-                        // 가장 큰 '폐합' 루프를 Outer 경계로(비파괴 정밀 클립). 경계는 표면 정의에 저장 — 이후 작업에 안전.
-                        System.Collections.Generic.List<Point3>? best = null; double bestArea = 0;
-                        foreach (var lp in loops)
-                        {
-                            if (lp.Count < 4) continue;
-                            var f = lp[0]; var l = lp[lp.Count - 1];
-                            if ((f.X - l.X) * (f.X - l.X) + (f.Y - l.Y) * (f.Y - l.Y) > 1e-12) continue; // 열린 선 제외
-                            double area = 0;
-                            for (int i = 0; i < lp.Count - 1; i++) area += lp[i].X * lp[i + 1].Y - lp[i + 1].X * lp[i].Y;
-                            area = System.Math.Abs(area * 0.5);
-                            if (area > bestArea) { bestArea = area; best = lp; }
-                        }
-                        if (best != null)
-                        {
-                            try
-                            {
-                                GradingBuilder.AddOuterBoundary(vs, best);
-                                injectedRings[label] = (vsId, best); // 합성 실패 시 정규화 재주입용
-                                finalRings[label] = best;            // 노리선 클립 기준
-                                bndMsg += $"\n{label}: 교선 경계 주입 완료 (면적 {bestArea:F0}㎡)";
-                                diagX += GradingBuilder.VerifyBoundaryClip(vs, best); // 잘림 정합 실측(스샷 없이 판정)
-                            }
-                            catch (System.Exception ex)
-                            {
-                                anyMissed = true;
-                                bndMsg += $"\n{label}: 경계 주입 실패 — {ex.Message}";
-                            }
-                        }
-                        else
-                        {
-                            anyMissed = true;
-                            bndMsg += loops.Count == 0
-                                ? $"\n{label}: 교선이 생성되지 않음 — 경계 미적용"
-                                : $"\n{label}: 폐합 교선 없음 — 경계 미적용(열린 교선 {loops.Count}개)";
-                        }
-                        allLoops.AddRange(loops);
+                        pureLoops[label] = loops; vsIdOf[label] = vsId;
                     }
                     catch (System.Exception ex)
                     {
@@ -170,9 +138,57 @@ public sealed class CreateGradingCommand
                         bndMsg += $"\n{label}: 교선 생성 실패 — {ex.Message}";
                     }
                 }
+                ComputePure(fillId, "성토");
+                ComputePure(cutId, "절토");
 
-                InjectBoundary(fillId, "성토");
-                InjectBoundary(cutId, "절토");
+                // ── 2) [링 2개 분리 — JACK 확정 구조] 같은 링에 두 역할을 시키던 것이 근본 버그였음.
+                //   ⓐ finalRing(초록선·번들·옹벽선용) = '순수 닫힌 교선'(전이선 지형대로 정확 — 스텝 검증).
+                //   ⓑ 클립용 링(표면 자르기·합성용) = 교선 ∪ 계획 '전체'(기존 검증 방식 — 클립은 2D라 sticking 무해,
+                //      pad 덮음·다조각 병합·잡루프 제외 + 자문의 GeometrySnapper·중복정점 제거·Z 역투영 반영). ──
+                var clipLoopsDraw = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>(); // 클립링 시각화(하늘색)
+                System.Collections.Generic.List<Point3>? Largest(System.Collections.Generic.IReadOnlyList<System.Collections.Generic.List<Point3>> rs, out double area)
+                {
+                    System.Collections.Generic.List<Point3>? best = null; area = 0;
+                    foreach (var r in rs)
+                    {
+                        double a = 0;
+                        for (int i = 0; i < r.Count - 1; i++) a += r[i].X * r[i + 1].Y - r[i + 1].X * r[i].Y;
+                        a = System.Math.Abs(a * 0.5);
+                        if (a > area) { area = a; best = r; }
+                    }
+                    return best;
+                }
+                foreach (var label in pureLoops.Keys)
+                {
+                    string oppL = label == "성토" ? "절토" : "성토";
+                    // [JACK 목적② + 짜투리 제거] 계획과 무관한 루프·미세 조각(<5㎡)을 순수 루프에서 필터.
+                    var own = RawTriangleIntersectionFinder.FilterPlanRelated(pureLoops[label], boundary, 5.0, out string fdiag);
+                    diagX += $"\n■ 루프필터({label}) {fdiag}\n";
+                    var opp = pureLoops.TryGetValue(oppL, out var ol) ? ol
+                        : new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
+                    // ⓐ finalRing = 순수 교선 최대 루프(전이선 정확) — 초록선은 필터된 순수 루프 전부 그림.
+                    var pureBest = Largest(own, out double pureArea);
+                    if (pureBest != null) { finalRings[label] = pureBest; allLoops.AddRange(own); }
+                    // ⓑ 클립용 = 교선 ∪ 계획 전체(+스냅·정제) → 표면 Outer 경계 주입.
+                    var clipRings = RawTriangleIntersectionFinder.UnionLoopsWithPlan(
+                        own, opp, boundary, groundSampler2, out string udiag, subtractOpposite: false);
+                    diagX += $"\n■ 클립링({label}) {udiag}\n";
+                    var clipBest = Largest(clipRings, out double clipArea);
+                    if (clipBest != null && pureBest != null)
+                    {
+                        try
+                        {
+                            var vs2 = (TinSurface)tr2.GetObject(vsIdOf[label], OpenMode.ForWrite);
+                            GradingBuilder.AddOuterBoundary(vs2, clipBest);
+                            injectedRings[label] = (vsIdOf[label], clipBest);
+                            clipLoopsDraw.Add(clipBest); // 하늘색 참고선으로 표시(JACK: 클립링 눈으로 확인)
+                            bndMsg += $"\n{label}: 클립경계 주입(∪계획 {clipArea:F0}㎡) · finalRing=순수교선 {pureArea:F0}㎡";
+                            diagX += GradingBuilder.VerifyBoundaryClip(vs2, clipBest);
+                        }
+                        catch (System.Exception ex) { anyMissed = true; bndMsg += $"\n{label}: 클립경계 주입 실패 — {ex.Message}"; }
+                    }
+                    else { anyMissed = true; bndMsg += $"\n{label}: 링 생성 실패(순수 {own.Count}·클립 {clipRings.Count}) — {udiag}"; }
+                }
 
                 // [겹침 제거 — 도넛] 성토·절토가 pad(계획 내부)를 둘 다 가지면 최종 합성의 마지막 paste가
                 // SurfaceException(Failure)으로 깨짐(실측). 성토가 pad를 담당하고, 절토는 계획 내부를 Hide로
@@ -190,7 +206,9 @@ public sealed class CreateGradingCommand
                     catch (System.Exception ex) { bndMsg += $"\n절토 도넛 실패 — {ex.Message}"; }
                 }
 
-                GradingBuilder.DrawDaylight(db, tr2, allLoops); // 마지막에 한 번만 그림
+                // [JACK] 경계선은 기본 숨김(레이어 Off) — 데이터는 유지(옹벽선·노리선용), 화면은 깨끗하게.
+                GradingBuilder.DrawDaylight(db, tr2, allLoops, "DH-정지경계", 3, layerOff: true);   // 초록=순수교선 finalRing
+                GradingBuilder.DrawDaylight(db, tr2, clipLoopsDraw, "DH-클립경계", 4, layerOff: true); // 하늘색=클립링(∪계획)
                 // 과거 진단선(빨강/하늘) 잔재 청소 — 오류로 오인 방지(JACK)
                 GradingBuilder.DrawDebugSpans(db, tr2, System.Array.Empty<(Point3, Point3)>());
                 GradingBuilder.DrawDebugSpans(db, tr2, System.Array.Empty<(Point3, Point3)>(), "DH-틈메움", 4);
@@ -203,6 +221,7 @@ public sealed class CreateGradingCommand
             }
             catch { }
 
+            // [링 2개 구조 — 전체 파이프라인 복원] 클립링으로 표면 클립·합성, finalRing(순수교선)은 번들·초록선용.
             // ── 3단계: 최종 합성(원지반 → 성토 → 절토 순 Paste) — 병합 느낌표의 실제 원인을 로그로 특정(JACK) ──
             string pasteLog = "";
             try
@@ -232,7 +251,7 @@ public sealed class CreateGradingCommand
                     if (cleanedR == null) { pasteLog += $"\n  → {failLabel} 링 정규화 실패"; break; }
                     var vsT = (TinSurface)tr3.GetObject(info.id, OpenMode.ForWrite);
                     GradingBuilder.ReplaceOuterBoundary(vsT, cleanedR, failLabel == "절토" ? boundary : null); // 절토는 도넛(Hide) 재적용
-                    finalRings[failLabel] = cleanedR; // 노리선 클립도 최종(정규화) 링 기준으로
+                    // [링 2개 구조] finalRings는 순수교선 유지 — 클립링 정규화는 injected(클립)에만 반영.
                     pasteLog += $"\n  → {failLabel} 경계 정규화 재주입(정점 {cleanedR.Count})";
                     injectedRings.Remove(failLabel); // 같은 표면 재정규화 무한루프 방지
                 }

@@ -229,10 +229,14 @@ public static class GradingBuilder
     }
 
     /// <summary>daylight/교선 외곽선을 초록 폴리라인으로(시각 확인용). 레이어 'DH-정지경계'.</summary>
-    public static void DrawDaylight(Database db, Transaction tr, IEnumerable<IReadOnlyList<Point3>> loops)
+    public static void DrawDaylight(Database db, Transaction tr, IEnumerable<IReadOnlyList<Point3>> loops,
+        string layerName = "DH-정지경계", short colorIndex = 3, bool layerOff = false)
     {
-        ObjectId layerId = EnsureLayer(db, tr, "DH-정지경계", 3);
-        EraseOnLayer(db, tr, "DH-정지경계");
+        ObjectId layerId = EnsureLayer(db, tr, layerName, colorIndex);
+        // [JACK] 기본 숨김 옵션 — 데이터(선)는 남기되 레이어를 꺼서 화면은 깨끗하게. 필요 시 레이어 켜서 확인.
+        if (layerOff)
+            try { var ltr = (LayerTableRecord)tr.GetObject(layerId, OpenMode.ForWrite); ltr.IsOff = true; } catch { }
+        EraseOnLayer(db, tr, layerName);
         var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
         foreach (var loop in loops)
         {

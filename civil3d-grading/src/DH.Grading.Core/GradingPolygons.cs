@@ -205,7 +205,11 @@ public static class GradingPolygons
 
         var isDay = new bool[count];
         for (int i = 0; i < count; i++)
-            isDay[i] = DistToBoundary(finalRing[i], boundary) > tol; // 계획경계에서 떨어짐 = 지반쪽(daylight)
+            // [JACK 0714 — finalRing=순수교선 대응] daylight = ①계획경계에서 떨어져 있고 ②계획폴리곤 '밖'.
+            //   순수교선 finalRing은 절성토 전이선(계획 안쪽 대각선)을 포함하는데, 그 자리는 절토깊이 0(옹벽 없음)
+            //   → 안쪽 점을 daylight로 치면 계획 내부에 옹벽선·소단횡단이 생김(실측). 밖(진짜 벽면)만 daylight.
+            isDay[i] = DistToBoundary(finalRing[i], boundary) > tol
+                && !PointInPolygon(finalRing[i], boundary);
 
         // 시작 오프셋: 닫힌 링이면 '계획경계 구간'에서 시작해 daylight run이 이음새에서 안 쪼개지게.
         int start = 0;
@@ -511,6 +515,20 @@ public static class GradingPolygons
         for (int i = 0; i < count; i++) r.Add(ring[i]);
         if (closeLoop && count > 0) r.Add(ring[0]);
         return r;
+    }
+
+    /// <summary>점이 폴리곤(XY) 내부인지 — 레이캐스팅. 경계 위 점은 결과가 임의일 수 있으나
+    /// DaylightRuns에선 경계 근접점(tol)이 먼저 걸러져 문제 없음.</summary>
+    private static bool PointInPolygon(Point3 p, IReadOnlyList<Point3> poly)
+    {
+        bool inside = false; int n = poly.Count;
+        for (int i = 0, j = n - 1; i < n; j = i++)
+        {
+            double xi = poly[i].X, yi = poly[i].Y, xj = poly[j].X, yj = poly[j].Y;
+            if ((yi > p.Y) != (yj > p.Y) && p.X < (xj - xi) * (p.Y - yi) / (yj - yi) + xi)
+                inside = !inside;
+        }
+        return inside;
     }
 
     private static double DistToBoundary(Point3 p, IReadOnlyList<Point3> boundary)
