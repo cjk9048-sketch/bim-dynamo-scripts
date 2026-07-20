@@ -28,8 +28,8 @@ public static class WallBlockDwg
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
                 var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForWrite);
-                ObjectId defBlock = MakeBoxDef(db, tr, bt, "DH_원스톤블록", blockW, blockD, blockH);
-                ObjectId defHalf = MakeBoxDef(db, tr, bt, "DH_원스톤반블록", blockW * 0.5, blockD, blockH);
+                ObjectId defBlock = MakeHexDef(db, tr, bt, "DH_원스톤블록", blockW, blockD, blockH);
+                ObjectId defHalf = MakeHexDef(db, tr, bt, "DH_원스톤반블록", blockW * 0.5, blockD, blockH);
                 ObjectId defCap = MakeBoxDef(db, tr, bt, "DH_캡블록", blockW, capD, capT);
                 ObjectId defHalfCap = MakeBoxDef(db, tr, bt, "DH_캡반블록", blockW * 0.5, capD, capT);
                 var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
@@ -58,9 +58,63 @@ public static class WallBlockDwg
         tr.AddNewlyCreatedDBObject(br, true);
     }
 
-    /// <summary>단순 직육면체 블록정의 — 원점=전면 하단 중앙, X∈[−w/2,w/2], Y∈[0,d], Z∈[0,h].
-    /// (실제 원스톤은 뒤가 좁아지는 사다리꼴 — LOD 350에서 보이는 건 전면뿐이라 v1은 박스.
-    ///  나중에 제조사 블록 DWG로 이 정의만 교체하면 전체가 상세화됨.)</summary>
+    // 육각형 평면 상수(JACK 0720 실물 사진 — 블록 사이 V홈 입체감): 전면 모따기(한쪽), 어깨 깊이, 후면 폭 비율.
+    private const double FrontChamfer = 0.03;   // 전면이 좌우 30mm씩 좁음 → 이웃과 60mm V홈
+    private const double ShoulderDepth = 0.06;  // 이 깊이에서 최대폭(이웃과 실제로 닿는 어깨)
+    private const double RearRatio = 0.65;      // 후면 폭 = 최대폭×0.65 (뒤로 좁아지는 사다리꼴 — 곡선 대응)
+
+    /// <summary>육각형 평면 기둥 블록정의 — 원점=전면 하단 중앙. 평면(XY): 전면(폭 w−2모따기, y=0) →
+    /// 어깨(폭 w, y=어깨깊이) → 후면(폭 w×비율, y=d). 이웃 블록과는 어깨만 닿아 전면 이음부가 V홈으로
+    /// 들어감(실물 보강토 입체감). 제조사 블록 DWG로 이 정의만 교체하면 전체가 상세화됨.</summary>
+    private static ObjectId MakeHexDef(Database db, Transaction tr, BlockTable bt, string name,
+        double w, double d, double h)
+    {
+        double ch = System.Math.Min(FrontChamfer, w * 0.2);          // 반블록 등 좁은 폭 보호
+        double ys = System.Math.Min(ShoulderDepth, d * 0.4);
+        double wf = w - 2 * ch, wb = w * RearRatio;
+
+        var btr = new BlockTableRecord { Name = name, Origin = Point3d.Origin };
+        ObjectId id = bt.Add(btr);
+        tr.AddNewlyCreatedDBObject(btr, true);
+
+        // 평면 외곽 — CCW(전면 y=0에서 +X로 진행) → Region 법선 +Z → Extrude가 위로.
+        var pl = new Polyline(6);
+        pl.AddVertexAt(0, new Point2d(-wf / 2, 0), 0, 0, 0);
+        pl.AddVertexAt(1, new Point2d(wf / 2, 0), 0, 0, 0);
+        pl.AddVertexAt(2, new Point2d(w / 2, ys), 0, 0, 0);
+        pl.AddVertexAt(3, new Point2d(wb / 2, d), 0, 0, 0);
+        pl.AddVertexAt(4, new Point2d(-wb / 2, d), 0, 0, 0);
+        pl.AddVertexAt(5, new Point2d(-w / 2, ys), 0, 0, 0);
+        pl.Closed = true;
+
+        // [소유권 주의] DBObjectCollection은 담긴 엔티티의 소유자가 아니며, 버전에 따라 Dispose 동작이
+        // 달라 using으로 감싸면 이중 해제(=AutoCAD 크래시) 위험. Autodesk 표준대로 컬렉션은 GC에 맡기고
+        // 우리가 만든 엔티티(pl·region)만 명시적으로 Dispose한다.
+        Solid3d sol;
+        try
+        {
+            var curves = new DBObjectCollection { pl };
+            DBObjectCollection regions = Region.CreateFromCurves(curves);
+            if (regions.Count == 0)
+                throw new Autodesk.AutoCAD.Runtime.Exception(
+                    Autodesk.AutoCAD.Runtime.ErrorStatus.InvalidInput, $"{name}: 단면 Region 생성 실패");
+            var region = (Region)regions[0];
+            for (int i = 1; i < regions.Count; i++) (regions[i] as DBObject)?.Dispose(); // 여분 조각(정상시 없음)
+            try
+            {
+                sol = new Solid3d();
+                sol.Extrude(region, h, 0);                            // XY 단면 → +Z로 h
+            }
+            finally { region.Dispose(); }
+        }
+        finally { pl.Dispose(); }
+
+        btr.AppendEntity(sol);
+        tr.AddNewlyCreatedDBObject(sol, true);
+        return id;
+    }
+
+    /// <summary>단순 직육면체 블록정의(캡용) — 원점=전면 하단 중앙, X∈[−w/2,w/2], Y∈[0,d], Z∈[0,h].</summary>
     private static ObjectId MakeBoxDef(Database db, Transaction tr, BlockTable bt, string name,
         double w, double d, double h)
     {

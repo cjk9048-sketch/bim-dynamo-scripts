@@ -110,7 +110,9 @@ public static class WallBlocks
                         double station = cursor + w * 0.5;
                         cursor += w + gap;
                         if (!face.Flush && station + w * 0.5 > face.End + 1e-9) break; // 닫힌 링 이음새 걸침 제외
-                        var (x, y, ringZ, nx, ny) = walk.At(station);
+                        // 벽면 범위 밖(오목 코너 보정으로 교점이 넘어갈 때)은 링을 따라 꺾지 말고 벽면 직선
+                        // 연장선으로 — At()은 링을 랩해 다음 벽면으로 돌아가므로 이웃 벽 블록과 겹침(치명).
+                        var (x, y, ringZ, nx, ny) = SampleFace(walk, face, station);
                         if (!ground.TryGetElevation(x, y, out double g)) { col++; continue; }
 
                         double toe, crest;
@@ -143,10 +145,35 @@ public static class WallBlocks
         return result;
     }
 
+    /// <summary>벽면 위 station 표본 — 벽면 내부는 링을 따르되, 관통/보정으로 [Start,End] 밖이면
+    /// 벽면 끝점에서 그 방향으로 직선 연장(링 따라 꺾이면 이웃 벽 블록과 겹침 → 치명). 법선은 그 끝점 값 유지.</summary>
+    private static (double x, double y, double z, double nx, double ny) SampleFace(
+        RingWalk walk, FaceRun face, double station)
+    {
+        if (station >= face.Start - 1e-9 && station <= face.End + 1e-9)
+            return walk.At(station);
+        if (station < face.Start)
+        {
+            var p = walk.At(face.Start);
+            var (ux, uy, _, _) = walk.ChordDir(face.Start + 0.005, face.Start + 0.3);
+            double e = station - face.Start;                          // 음수 — 시작 이전으로 역연장
+            return (p.x + ux * e, p.y + uy * e, p.z, p.nx, p.ny);
+        }
+        else
+        {   // face.End는 다음 벽면이 시작하는 스테이션 — At()이 다음 변의 법선을 주므로 살짝 앞에서 표본.
+            const double back = 1e-4;
+            var p = walk.At(face.End - back);
+            var (ux, uy, _, _) = walk.ChordDir(face.End - 0.3, face.End - 0.005);
+            double e = station - (face.End - back);                  // 양수 — 끝 이후로 연장
+            return (p.x + ux * e, p.y + uy * e, p.z, p.nx, p.ny);
+        }
+    }
+
     /// <summary>벽면 1개 — 링 호길이 [Start, End] 구간(End는 Start보다 크며 링 길이를 넘어 랩 가능).
     /// Flush=양끝이 모서리(플러시 배치 대상). *DeltaUnit=뒷물림 단위량(off=1)당 시작/끝 스테이션 보정
     /// (전면 오프셋 선 교점 — 층마다 off를 곱해 사용).</summary>
-    private readonly record struct FaceRun(double Start, double End, bool Flush, double StartDeltaUnit, double EndDeltaUnit);
+    private readonly record struct FaceRun(
+        double Start, double End, bool Flush, double StartDeltaUnit, double EndDeltaUnit);
 
     private static List<FaceRun> BuildFaces(RingWalk walk, List<double> corners)
     {
