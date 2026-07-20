@@ -65,14 +65,16 @@ public static class WallBlockDwg
     }
 
     // ── 재질 색(JACK 0720 확정, 실물 사진 Capture_0720_164259) ──
-    // 기본 콘크리트, 그리고 **8층 콘크리트 + 2층 버건디**를 반복해 사진과 같은 두 줄짜리 띠를 만든다.
+    // 기본 콘크리트, 그리고 **15층 콘크리트 + 2층 버건디**를 반복해 사진과 같은 두 줄짜리 띠를 만든다.
+    // (JACK 0720: 8+2 → 15+2로 변경 — 띠 간격을 넓힘.)
     // 절토/성토는 색을 구분하지 않는다(둘 다 같은 제품).
     private static readonly Color ConcreteRgb = Color.FromRgb(198, 194, 186);
     private static readonly Color BurgundyRgb = Color.FromRgb(0x85, 0x58, 0x52);
-    private const int BandPeriod = 10;   // 한 주기 = 콘크리트 8 + 버건디 2
-    private const int BandConcrete = 8;  // 주기 앞부분(콘크리트) 층수
+    private const int BandConcrete = 15;                       // 주기 앞부분(콘크리트) 층수
+    private const int BandBurgundy = 2;                        // 띠(버건디) 층수
+    private const int BandPeriod = BandConcrete + BandBurgundy; // 한 주기
 
-    /// <summary>이 층이 버건디 띠인가 — 단(bench)마다 최하층부터 8층 콘크리트 → 2층 버건디 반복.
+    /// <summary>이 층이 버건디 띠인가 — 단(bench)마다 최하층부터 15층 콘크리트 → 2층 버건디 반복.
     /// ※기준점은 각 단의 토우(최하층). 단마다 다시 세므로 띠는 단별로 같은 높이에 온다.
     /// 물량 CSV도 같은 규칙으로 색상을 세야 하므로 public.</summary>
     public static bool IsBandCourse(int course) => course % BandPeriod >= BandConcrete;
