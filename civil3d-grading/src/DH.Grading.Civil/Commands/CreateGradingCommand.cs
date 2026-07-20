@@ -226,6 +226,7 @@ public sealed class CreateGradingCommand
             // [링 2개 구조 — 전체 파이프라인 복원] 클립링으로 표면 클립·합성, finalRing(순수교선)은 번들·초록선용.
             // ── 3단계: 최종 합성(원지반 → 성토 → 절토 순 Paste) — 병합 느낌표의 실제 원인을 로그로 특정(JACK) ──
             string pasteLog = "";
+            ObjectId finalSurfId = ObjectId.Null;
             try
             {
                 using Transaction tr3 = db.TransactionManager.StartTransaction();
@@ -244,7 +245,7 @@ public sealed class CreateGradingCommand
                 bool ok = false;
                 for (int attempt = 1; attempt <= 3; attempt++)
                 {
-                    GradingBuilder.Composite(db, tr3, "정지면_DH", order, out string lg, true, groundId);
+                    finalSurfId = GradingBuilder.Composite(db, tr3, "정지면_DH", order, out string lg, true, groundId);
                     pasteLog += $"\n  시도{attempt}: {lg}";
                     if (!lg.Contains("실패")) { ok = true; break; }
                     string? failLabel = lg.Contains("성토:실패") ? "성토" : lg.Contains("절토:실패") ? "절토" : null;
@@ -306,17 +307,30 @@ public sealed class CreateGradingCommand
             }
             catch { }
 
+            // 상세 진단은 전부 로그로(위 AppendAllText들). 팝업은 **성패 + 토량**만 — 공용 배포용(JACK 0720).
+            bool gradeOk = pasteLog.Contains("합성 성공") && !anyMissed;
+
+            // ── 토량 산출(체적표면: 원지반=기준, 정지면=비교) ──
+            // 합성이 실패했으면 정지면이 온전하지 않아 **틀린 물량이 조용히 나온다** → 아예 계산하지 않는다.
+            string volMsg = gradeOk
+                ? ComputeVolumes(db, groundId, finalSurfId)
+                : "토량: 정지면이 완성되지 않아 산출하지 않았습니다";
+            string headline = gradeOk ? "정지면 생성 완료" : "⚠ 정지면 생성 — 확인 필요";
+            var box = new System.Text.StringBuilder();
+            box.AppendLine(headline);
+            box.AppendLine();
+            box.AppendLine(volMsg);
+            if (!gradeOk)
+                box.AppendLine("\n자세한 내용은 DHGRADE_진단.log를 확인하세요.");
+            string msg = box.ToString().TrimEnd();
+
+            // 명령창(ed)에는 기존 상세 정보를 그대로 남긴다 — 필요할 때 바로 볼 수 있게.
             string terrace = p.MountainTerrace ? $" · 계단식 산지(대소단 {p.TerraceInterval}m/{p.TerraceWidth}m)" : "";
-            string headline = (anyMissed
-                ? "⚠ 정지면 일부 경계 미적용 — 가상면이 잘리지 않았습니다" // [리뷰 M-2] 정상 완료로 오인 방지
-                : "정지면 생성 완료") + $"  [DH.Grading {GradingSettings.Version}]";
-            string msg =
-                $"{headline} — 절토 {(cut.HasSlope ? "가상절토_DH" : "없음")} / 성토 {(fill.HasSlope ? "가상성토_DH" : "없음")}\n" +
-                $"단높이 {p.BenchHeight}m · 소단 {p.BenchWidth}m · 절토 1:{p.CutSlope} · 성토 1:{p.FillSlope}{terrace}" +
-                bndMsg +
-                $"\n합성(정지면_DH): {pasteLog}" +
-                $"\n{bundleMsg}";
-            ed.WriteMessage("\n" + msg);
+            ed.WriteMessage("\n" + headline + $"  [DH.Grading {GradingSettings.Version}]" +
+                $"\n{volMsg}" +
+                $"\n절토 {(cut.HasSlope ? "가상절토_DH" : "없음")} / 성토 {(fill.HasSlope ? "가상성토_DH" : "없음")}" +
+                $"\n단높이 {p.BenchHeight}m · 소단 {p.BenchWidth}m · 절토 1:{p.CutSlope} · 성토 1:{p.FillSlope}{terrace}" +
+                bndMsg + $"\n합성(정지면_DH): {pasteLog}\n{bundleMsg}");
             AcadApp.ShowAlertDialog(msg);
         }
         catch (System.Exception ex)
@@ -331,6 +345,58 @@ public sealed class CreateGradingCommand
     {
         try { if (!id.IsNull && tr.GetObject(id, OpenMode.ForWrite) is Autodesk.AutoCAD.DatabaseServices.Entity e) e.Erase(); }
         catch { }
+    }
+
+    /// <summary>토량 산출용 임시 체적표면 이름 — 계산 후 즉시 지우며, 남아 있으면 다음 실행이 청소한다.</summary>
+    private const string TempVolumeName = "_DH토량임시";
+
+    /// <summary>토량 산출 — Civil3D 체적표면(기준=원지반, 비교=정지면)을 임시로 만들어 절토/성토/순토량을 읽고 지운다.
+    /// 부호 규약: 정지면이 원지반보다 낮으면 절토(파냄), 높으면 성토(쌓음). 순토량 = 성토 − 절토
+    /// (양수면 흙이 모자라 반입, 음수면 남아 반출). 팝업에 보여줄 유일한 수치라 실패해도 작업은 계속한다.</summary>
+    private static string ComputeVolumes(Database db, ObjectId groundId, ObjectId designId)
+    {
+        if (groundId.IsNull || designId.IsNull) return "토량: 계산 불가 (표면 없음)";
+        ObjectId volId = ObjectId.Null;
+        try
+        {
+            double cut, fill;
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                // 이전 실행이 비정상 종료돼 남은 임시 체적표면이 있으면 먼저 청소(도면 오염 방지).
+                GradingBuilder.EraseSurfacesByBaseName(tr, TempVolumeName);
+                volId = Autodesk.Civil.DatabaseServices.TinVolumeSurface.Create(
+                    GradingBuilder.UniqueName(db, tr, TempVolumeName), groundId, designId);
+                var vs = (Autodesk.Civil.DatabaseServices.TinVolumeSurface)tr.GetObject(volId, OpenMode.ForRead);
+                var vp = vs.GetVolumeProperties();
+                cut = vp.UnadjustedCutVolume;
+                fill = vp.UnadjustedFillVolume;
+                tr.Commit();
+            }
+            // 임시 체적표면 제거(도면에 남기지 않음) — 실패해도 수치는 이미 확보.
+            try
+            {
+                using Transaction tr2 = db.TransactionManager.StartTransaction();
+                EraseSurface(tr2, volId);
+                tr2.Commit();
+            }
+            catch { }
+
+            double net = fill - cut;
+            string netWord = net >= 0 ? "부족(반입)" : "여유(반출)";
+            var ci = System.Globalization.CultureInfo.InvariantCulture;
+            return string.Create(ci, $"절토량 : {cut,12:N0} ㎥\n성토량 : {fill,12:N0} ㎥\n순토량 : {System.Math.Abs(net),12:N0} ㎥  ({netWord})");
+        }
+        catch (System.Exception ex)
+        {
+            try
+            {
+                using Transaction tr3 = db.TransactionManager.StartTransaction();
+                EraseSurface(tr3, volId);
+                tr3.Commit();
+            }
+            catch { }
+            return "토량: 계산 실패 — " + ex.Message;
+        }
     }
 
     /// <summary>설정값을 읽고, 원지반/계획고 표고차로 필요한 최대 단수를 좁혀 매개변수를 만든다(+여유단).</summary>

@@ -267,9 +267,9 @@ public sealed class InfraworksCommand
                 log.AppendLine("옹벽물량.csv: 단레벨별 정수 개수");
             }
 
-            string msg = "INFRAWORKS SHP 내보내기 완료" + note + "\n" + log.ToString().TrimEnd();
-            ed.WriteMessage("\n" + msg);
-            AcadApp.ShowAlertDialog(msg);
+            // 팝업은 성패 + 저장 위치만 — 파일별 개수·진단은 명령창과 로그로(공용 배포용, JACK 0720).
+            AcadApp.ShowAlertDialog("INFRAWORKS 내보내기 완료\n\n저장 위치: " + folder);
+            ed.WriteMessage("\n" + "INFRAWORKS SHP 내보내기 완료" + note + "\n" + log.ToString().TrimEnd());
             try
             {
                 System.IO.File.AppendAllText(@"C:\Users\user\Desktop\AI\civil3d-grading\DHGRADE_진단.log",
