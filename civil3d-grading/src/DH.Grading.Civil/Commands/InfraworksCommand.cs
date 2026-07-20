@@ -10,11 +10,12 @@ namespace DH.Grading.Civil.Commands;
 /// <summary>
 /// "INFRAWORKS" 버튼(DHINFRA) — 정지 결과(번들)에서 InfraWorks용 SHP를 한 번에 작성+내보내기(ralplan Phase B~E).
 /// 산출(선택 폴더에, .shp/.dbf/.shx/.prj/.cpg 세트):
-///   · 계획면.shp            — 계획폴리곤(Z=0, 계획문 5번)
-///   · 순절토.shp/순성토.shp — 절/성토 경계−계획폴리곤 도넛(Z=0, 계획문 6번)
-///   · 면폴리곤_절토/성토.shp — 사면·소단 띠 폴리곤(KIND/LEVEL/ELEV 속성, Z=0, 계획문 4번)
-///   · 사면선_절토/성토.shp   — 옹벽 ARRAY 경로용 사면 상단(crest) 3D 폴리선(PolylineZ, 계획문 3번)
-///   · 사면선_전환.shp        — 내부 단차 전환사면 상단선(있을 때만)
+///   · 계획면.shp             — 계획폴리곤(Z=0)
+///   · 사면_절토/성토.shp     — 사면 띠 폴리곤(KIND/LEVEL/ELEV, Z=0) — 사면 모드일 때만
+///   · 소단_절토/성토.shp     — 소단 띠 폴리곤(KIND/LEVEL/ELEV, Z=0)
+///   · 옹벽선_절토/성토.shp   — 옹벽 ARRAY 경로용 벽 상단 3D 폴리선(PolylineZ) — 옹벽 모드일 때만
+///   · 옹벽선_전환.shp        — 내부 단차 전환사면 상단선(옹벽 프로젝트, 있을 때만)
+/// ※ [JACK 0720] 사면·소단 별도 레이어 분리 — 구 면폴리곤_*(통합)·순절토/순성토.shp는 폐지.
 /// 좌표계 .prj = 설정 ExportEpsg(기본 5186 중부원점 — JACK 확인). 실행 게이트는 DHNORI와 동일(유령선 차단).
 /// </summary>
 public sealed class InfraworksCommand
@@ -125,18 +126,37 @@ public sealed class InfraworksCommand
                 transFaces ??= vs.TransitionFaces;
                 if (!vs.HasSlope) { log.AppendLine($"{label}: 링 복원 실패 — 띠/사면선 생략"); continue; }
 
-                // ③ 면폴리곤_절토/성토.shp — 링쌍 strip ∩ (각 영역 도넛) (KIND/LEVEL/ELEV, Z=0)
+                // ③ 사면_절토/성토.shp + 소단_절토/성토.shp — 링쌍 strip ∩ (각 영역 도넛) (KIND/LEVEL/ELEV, Z=0)
+                //    [JACK 0720] 사면·소단을 별도 SHP(=InfraWorks 별도 레이어)로 분리(구 면폴리곤_* 통합파일 폐지).
                 //    옹벽 모드 = 소단만(벽면은 옹벽선이 담당), 사면 모드 = 사면+소단.
                 var strips = new List<(System.Collections.Generic.List<IReadOnlyList<Point3>> Rings, double Area, string Kind, int Level, double Elev)>();
                 foreach (var finalRing in ringList)
                     if (finalRing != null && finalRing.Count >= 3)
                         strips.AddRange(GradingPolygons.Strips(vs.Rings, finalRing, bundle.Boundary));
-                if (wallMode) strips = strips.Where(s => s.Kind == "소단").ToList();
-                var stripFeats = strips.Select(s =>
-                    ((IReadOnlyList<IReadOnlyList<Point3>>)s.Rings,
-                     new object?[] { s.Kind, s.Level, s.Elev, s.Area })).ToList();
-                ShapefileWriter.WritePolygons(System.IO.Path.Combine(folder, $"면폴리곤_{label}"), stripFeats, stripFields, wkt);
-                log.AppendLine($"면폴리곤_{label}.shp: {stripFeats.Count}개({(wallMode ? "옹벽모드=소단만" : $"사면 {strips.Count(s => s.Kind == "사면")}/소단 {strips.Count(s => s.Kind == "소단")}")}, 영역 {ringList.Count})");
+                static void DeleteShpSet(string folder, string baseName)
+                {
+                    foreach (string ext in new[] { ".shp", ".shx", ".dbf", ".cpg", ".prj" })
+                        try { System.IO.File.Delete(System.IO.Path.Combine(folder, baseName + ext)); } catch { }
+                }
+                foreach (string kind in new[] { "소단", "사면" })
+                {
+                    // 옹벽 모드의 사면(벽면=옹벽선.shp 담당)·빈 결과는 파일 미작성 — 이전 실행 잔존 세트도 정리(레이어 혼동 방지).
+                    var part = (kind == "사면" && wallMode)
+                        ? new() : strips.Where(s => s.Kind == kind).ToList();
+                    if (part.Count == 0)
+                    {
+                        DeleteShpSet(folder, $"{kind}_{label}");
+                        log.AppendLine($"{kind}_{label}.shp: 0개 — 생략(이전 파일 정리)");
+                        continue;
+                    }
+                    var feats = part.Select(s =>
+                        ((IReadOnlyList<IReadOnlyList<Point3>>)s.Rings,
+                         new object?[] { s.Kind, s.Level, s.Elev, s.Area })).ToList();
+                    ShapefileWriter.WritePolygons(System.IO.Path.Combine(folder, $"{kind}_{label}"), feats, stripFields, wkt);
+                    log.AppendLine($"{kind}_{label}.shp: {feats.Count}개(영역 {ringList.Count})");
+                }
+                // 구 통합 면폴리곤_* 세트는 폐지 — 혼동 방지 위해 제거(우리가 쓰던 파일명만).
+                DeleteShpSet(folder, $"면폴리곤_{label}");
 
                 // ④ 옹벽선_절토/성토.shp — 옹벽 모드(구배 n ≤ 0.05)일 때만 벽 상단 3D 폴리선.
                 //    [v2 — JACK §19 재설계] finalRing 비의존: 벽 정렬선(링)을 따라 상단 Z=clamp(원지반, 토우, 크레스트).
