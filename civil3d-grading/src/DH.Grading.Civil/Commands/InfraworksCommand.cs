@@ -185,10 +185,14 @@ public sealed class InfraworksCommand
                         // [옹벽 3D] 그리드 필터링 블록 배치(WallBlocks — 옹벽선과 동일 링·지반·구배) + 캡블록.
                         var blocks = WallBlocks.Generate(vs.Rings, groundSampler, up, slopeN,
                             GradingSettings.WallBlockW, GradingSettings.WallBlockH, GradingSettings.WallBlockD);
-                        blocks = WallBlocks.FilterByRegions(blocks, regs, 0.3);
+                        int rawCount = blocks.Count;
+                        const double blkBuf = 0.3;
+                        blocks = WallBlocks.FilterByRegions(blocks, regs, blkBuf, out int blkDropped);
                         var capsB = WallBlocks.GenerateCaps(blocks, GradingSettings.WallBlockH, GradingSettings.WallBlockW);
                         if (blocks.Count > 0) wallSets.Add((up, blocks, capsB));
                         log.AppendLine($"옹벽블록_{label}: 몸통 {blocks.Count}(반 {blocks.Count(b => b.Half)})·캡 {capsB.Count}(반 {capsB.Count(c => c.Half)}) ({WallBlocks.LastDiag})");
+                        log.AppendLine($"    [영역필터-블록] 생성 {rawCount} · 제외 {blkDropped} · 여유 {blkBuf:F2}m");
+                        try { DumpBlocks(folder, label, blocks, capsB); } catch { } // §27 진단 CSV
                     }
                 }
                 else log.AppendLine($"옹벽선_{label}: 사면 모드(n{slopeN:F2}>0.05) — 옹벽선 생략, 사면부+소단 출력");
@@ -286,6 +290,26 @@ public sealed class InfraworksCommand
             foreach (var p in walls[i].Line)
                 sb.AppendLine(string.Create(ci, $"{i},{walls[i].Level:R},{p.X:R},{p.Y:R},{p.Z:R}"));
         System.IO.File.WriteAllText(System.IO.Path.Combine(folder, $"_옹벽선v2_{label}.csv"), sb.ToString());
+    }
+
+    /// <summary>[§27 진단] 옹벽 블록 실측 덤프 — JACK이 지적한 '모서리 빈 반블록'처럼 오프라인 하네스로
+    /// 재현되지 않는 현장 전용 결함을 좌표로 짚기 위한 CSV. 링·벽면·층·스테이션까지 남겨야 어느 단계
+    /// (배치/지반필터/영역필터)에서 빠졌는지 구분된다. 진단이 끝나면 제거 검토.</summary>
+    private static void DumpBlocks(string folder, string label,
+        System.Collections.Generic.List<WallBlocks.Block> blocks,
+        System.Collections.Generic.List<WallBlocks.Block> caps)
+    {
+        var sb = new System.Text.StringBuilder();
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        sb.AppendLine("종류,링,벽면,층,열,스테이션,X,Y,Z,반블록,단레벨");
+        foreach (var b in blocks)
+            sb.AppendLine(string.Create(ci,
+                $"몸통,{b.Ring},{b.Face},{b.Course},{b.Column},{b.S:F3},{b.X:F3},{b.Y:F3},{b.Z:F3},{(b.Half ? 1 : 0)},{b.Level:F2}"));
+        foreach (var c in caps)
+            sb.AppendLine(string.Create(ci,
+                $"캡,{c.Ring},{c.Face},{c.Course},{c.Column},{c.S:F3},{c.X:F3},{c.Y:F3},{c.Z:F3},{(c.Half ? 1 : 0)},{c.Level:F2}"));
+        System.IO.File.WriteAllText(System.IO.Path.Combine(folder, $"_옹벽블록_{label}.csv"),
+            sb.ToString(), new System.Text.UTF8Encoding(true));
     }
 
     private static void DumpDaylightDiag(string folder, string label,
