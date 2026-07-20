@@ -157,6 +157,19 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
     var yTop = blocks.Where(b => b.Course == courses - 1 && b.Y > -0.5 && b.Y < 0.5 && b.X > 5 && b.X < 35).Select(b => b.Y).FirstOrDefault(-1);
     Check("S5 성토 0층 y=n×H−FS", Math.Abs(y0 - (0.05 * H - FS)) < 1e-6, $"y0 {y0:F3}");
     Check("S5 성토 최상층 y=n×step−FS", Math.Abs(yTop - (0.05 * STEP - FS)) < 1e-6, $"yTop {yTop:F3}");
+    // ★ S5b(§27, JACK 실측 모서리 반블록 빈틈 — 성토 코너 플러시는 그동안 무검증이었음):
+    //   벽면 f·층 c의 배치 구간은 링 스테이션 [40f+off, 40(f+1)−off] (성토 off<0 = 링 밖으로 연장).
+    //   ※좌표(Y) 대신 Face/S로 판정 — 성토는 코너에서 이웃 벽면이 서로 넘어와 좌표 필터가 섞임.
+    bool fillFlush = true; double worstF = 0;
+    foreach (var grp in blocks.GroupBy(b => (b.Face, b.Course)))
+    {
+        double off = 0.05 * (grp.Key.Course + 1) * H - FS;
+        double s0 = 40.0 * grp.Key.Face + off, s1 = 40.0 * (grp.Key.Face + 1) - off;
+        double lo = grp.Min(b => b.S - WidthOf(b) / 2), hi = grp.Max(b => b.S + WidthOf(b) / 2);
+        worstF = Math.Max(worstF, Math.Max(Math.Abs(lo - s0), Math.Abs(hi - s1)));
+        if (Math.Abs(lo - s0) > 1e-6 || Math.Abs(hi - s1) > 1e-6) fillFlush = false;
+    }
+    Check("S5b ★성토 모서리 플러시(전 벽면·전층)", fillFlush, fillFlush ? "" : $"최대 어긋남 {worstF * 1000:F0}mm");
     var buried = WallBlocks.Generate(fillRings, new FlatGround(106), cut: false, slopeN: 0, blockW: W, blockH: H);
     Check("S5 매몰 → 블록 0", buried.Count == 0, $"{buried.Count}개");
 }
@@ -167,9 +180,19 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
     var blocks = WallBlocks.Generate(rings, g, cut: true, slopeN: 0, blockW: W, blockH: H);
     var region = new List<IReadOnlyList<Point3>>
     { new List<Point3> { new(-1, -1, 0), new(10, -1, 0), new(10, 10, 0), new(-1, 10, 0) } };
-    var kept = WallBlocks.FilterByRegions(blocks, region, 0.3);
+    var kept = WallBlocks.FilterByRegions(blocks, region, 0.3, out int dropped);
     Check("S6 영역필터 축소", kept.Count > 0 && kept.Count < blocks.Count, $"{kept.Count}/{blocks.Count}");
     Check("S6 유지블록 영역 내", kept.All(b => b.X <= 10.4 && b.Y <= 10.4));
+    Check("S6 제외수 = 생성−유지", dropped == blocks.Count - kept.Count, $"제외 {dropped}");
+
+    // S6b(§27): 성토 링을 자기 자신(region)으로 필터 — 전면돌출+뒷물림 이탈로 탈락하는 블록이 없어야 함.
+    {
+        var fillRings = new List<IReadOnlyList<Point3>> { Square(105), Square(100) };
+        var fb = WallBlocks.Generate(fillRings, new FlatGround(99), cut: false, slopeN: 0.05, blockW: W, blockH: H);
+        var self = new List<IReadOnlyList<Point3>> { Square(0) };   // 링과 동일한 평면 영역
+        WallBlocks.FilterByRegions(fb, self, 0.3, out int dropTight);
+        Check("S6b 성토 자기영역 필터 탈락 0", dropTight == 0, $"탈락 {dropTight}");
+    }
 }
 
 // ── S7: 회전각 — 바닥변(y=0, 진행 +x, 절토: 깊이=바깥(−y)) → 로컬 +Y=(0,−1) → rot=180° ──
@@ -217,6 +240,50 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
         double dB = Math.Max(Math.Max(-x, x - 20), Math.Max(-y, y - 40));
         return Math.Min(dA, dB);
     }
+}
+
+// ── S9(§27): 실제 링처럼 '촘촘히 샘플된(densify)' 경계 — JACK 실측 모서리 빈틈 재현 시도 ──
+//    실사이트 링은 0.485m 간격 점열 + 코너각 88.6°(직각 아님). 이상적 4점 사각형만 검증돼 있었음.
+{
+    static List<Point3> Densify(IReadOnlyList<(double X, double Y)> poly, double z, double step)
+    {
+        var outp = new List<Point3>();
+        for (int i = 0; i < poly.Count; i++)
+        {
+            var a = poly[i]; var b = poly[(i + 1) % poly.Count];
+            double dx = b.X - a.X, dy = b.Y - a.Y, len = Math.Sqrt(dx * dx + dy * dy);
+            int n = Math.Max(1, (int)Math.Floor(len / step));
+            for (int k = 0; k < n; k++)
+            {
+                double t = k / (double)n;
+                outp.Add(new Point3(a.X + dx * t, a.Y + dy * t, z));
+            }
+        }
+        return outp;
+    }
+    // 실사이트와 같은 88.6° 기울기(한 변이 1.4° 기움) 사각형
+    var poly = new (double X, double Y)[] { (0, 0), (40, 0), (40.98, 40), (0.98, 40) };
+    var dRings = new List<IReadOnlyList<Point3>>
+    { Densify(poly, 105, 0.485), Densify(poly, 100, 0.485) };   // 성토: rings[0]=pad(위), [1]=토우
+    var bl = WallBlocks.Generate(dRings, new FlatGround(99), cut: false, slopeN: 0.05, blockW: W, blockH: H);
+    Check("S9 densify 링 블록 생성", bl.Count > 0, $"{bl.Count}개");
+    int faceCount = bl.Select(b => b.Face).Distinct().Count();
+    Check("S9 벽면 4개 검출", faceCount == 4, $"검출 {faceCount}");
+    // 벽면별·층별로 이웃 벽면과 모서리에서 끊김(빈틈) 없이 이어지는지 — 각 벽면 구간이 링 전체를 덮어야.
+    //   성토는 코너에서 서로 넘어오므로 '벽면 끝 ≥ 다음 벽면 시작'(겹침 허용, 틈 금지)으로 판정.
+    bool noCornerGap = true; double worstGap = 0;
+    foreach (var cg in bl.GroupBy(b => b.Course))
+    {
+        var byFace = cg.GroupBy(b => b.Face)
+            .Select(g2 => (Face: g2.Key, Lo: g2.Min(b => b.S - WidthOf(b) / 2), Hi: g2.Max(b => b.S + WidthOf(b) / 2)))
+            .OrderBy(t => t.Lo).ToList();
+        for (int i = 1; i < byFace.Count; i++)
+        {
+            double gapLen = byFace[i].Lo - byFace[i - 1].Hi;   // >0 이면 모서리 빈틈
+            if (gapLen > 1e-6) { noCornerGap = false; worstGap = Math.Max(worstGap, gapLen); }
+        }
+    }
+    Check("S9 ★모서리 빈틈 없음(densify)", noCornerGap, noCornerGap ? "" : $"최대 빈틈 {worstGap * 1000:F0}mm");
 }
 
 Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");

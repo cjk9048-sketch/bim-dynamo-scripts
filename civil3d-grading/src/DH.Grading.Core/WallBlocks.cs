@@ -238,14 +238,19 @@ public static class WallBlocks
     }
 
     /// <summary>[WallLines.FilterByRegions와 동일 취지] 계획무관 고립 포켓의 블록 제외 —
-    /// 블록 삽입점이 '계획관련 순수교선 링(regions)' 중 하나의 내부(±buffer)면 유지.</summary>
+    /// 블록 삽입점이 '계획관련 순수교선 링(regions)' 중 하나의 내부(±buffer)면 유지.
+    ///
+    /// ※삽입점은 링 위가 아니라 전면 돌출(D/2)·뒷물림만큼 떨어져 있으나, 그 이탈은 벽면 법선 방향 한 축뿐이라
+    /// (모서리에서도 삽입점은 벽면 위) 기본 0.3m로 충분함 — 하네스 S6b로 확인(탈락 0).</summary>
+    /// <param name="dropped">영역 밖으로 판정해 제외한 블록 수(진단용).</param>
     public static List<Block> FilterByRegions(
-        List<Block> blocks, IReadOnlyList<IReadOnlyList<Point3>>? regions, double buffer = 0.3)
+        List<Block> blocks, IReadOnlyList<IReadOnlyList<Point3>>? regions, double buffer, out int dropped)
     {
+        dropped = 0;
         if (regions == null || regions.Count == 0 || blocks.Count == 0) return blocks;
         var kept = new List<Block>(blocks.Count);
         foreach (var b in blocks)
-            if (InsideAny(b.X, b.Y, regions, buffer)) kept.Add(b);
+            if (InsideAny(b.X, b.Y, regions, buffer)) kept.Add(b); else dropped++;
         return kept;
     }
 
