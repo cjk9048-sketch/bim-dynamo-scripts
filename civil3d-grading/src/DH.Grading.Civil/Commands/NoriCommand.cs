@@ -43,14 +43,20 @@ public sealed class NoriCommand
             System.Collections.Generic.List<(System.Collections.Generic.List<Point3> Crest, System.Collections.Generic.List<Point3> Toe)>? transFaces = null;
             string detail = "";
 
-            foreach (var (up, label, hasSlope, finalRing) in new[]
+            // [번들 v2 — 다중 절/성토 영역] 링 '리스트' 전체를 순회 — 2개+ 영역에서 작은 영역 누락되던 버그 수정(JACK).
+            static System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? RingsOf(
+                System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? many,
+                System.Collections.Generic.List<Point3>? one)
+                => many ?? (one != null ? new() { one } : null);
+
+            foreach (var (up, label, hasSlope, ringList) in new[]
             {
-                (true, "절토", bundle.CutHasSlope, bundle.CutFinalRing),
-                (false, "성토", bundle.FillHasSlope, bundle.FillFinalRing),
+                (true, "절토", bundle.CutHasSlope, RingsOf(bundle.CutFinalRings, bundle.CutFinalRing)),
+                (false, "성토", bundle.FillHasSlope, RingsOf(bundle.FillFinalRings, bundle.FillFinalRing)),
             })
             {
                 if (!hasSlope) { detail += $"\n{label}: 사면 없음"; continue; }
-                if (finalRing == null || finalRing.Count < 3)
+                if (ringList == null || ringList.Count == 0)
                 {
                     detail += $"\n{label}: 최종 경계 없음 — 생략(DHGRADE에서 경계 주입이 실패했는지 확인)";
                     continue;
@@ -59,13 +65,19 @@ public sealed class NoriCommand
                 transFaces ??= vs.TransitionFaces; // 전환사면은 경계에서만 유도 — 절/성 동일, 한 번만
                 if (!vs.HasSlope) { detail += $"\n{label}: 링 복원 결과 사면 없음"; continue; }
 
-                var (t, _) = SlopeHatchGenerator.Generate(vs.Rings, ng, up,
-                    GradingSettings.HatchShort, GradingSettings.HatchLong, finalRing, bundle.Boundary);
-                var (sl, bl) = SlopeHatchGenerator.GenerateEdgeLines(vs.Rings, ng, up, finalRing, bundle.Boundary);
-                ticks.AddRange(t);
-                if (up) { cutSlope.AddRange(sl); cutBerm.AddRange(bl); }
-                else { fillSlope.AddRange(sl); fillBerm.AddRange(bl); }
-                detail += $"\n{label}: 사면선 {sl.Count} · 소단선 {bl.Count} · 노리선 {t.Count}";
+                int slN = 0, blN = 0, tN = 0;
+                foreach (var finalRing in ringList)
+                {
+                    if (finalRing == null || finalRing.Count < 3) continue;
+                    var (t, _) = SlopeHatchGenerator.Generate(vs.Rings, ng, up,
+                        GradingSettings.HatchShort, GradingSettings.HatchLong, finalRing, bundle.Boundary);
+                    var (sl, bl) = SlopeHatchGenerator.GenerateEdgeLines(vs.Rings, ng, up, finalRing, bundle.Boundary);
+                    ticks.AddRange(t);
+                    if (up) { cutSlope.AddRange(sl); cutBerm.AddRange(bl); }
+                    else { fillSlope.AddRange(sl); fillBerm.AddRange(bl); }
+                    slN += sl.Count; blN += bl.Count; tN += t.Count;
+                }
+                detail += $"\n{label}: 영역 {ringList.Count} · 사면선 {slN} · 소단선 {blN} · 노리선 {tN}";
             }
 
             // 내부 단차 전환사면(Phase F) — 클립 = 계획폴리곤 자체(부지 안 띠)

@@ -16,6 +16,9 @@ public sealed class GradingBundle
     public GradingParams Params = new();
     public bool CutHasSlope, FillHasSlope;
     public List<Point3>? CutFinalRing, FillFinalRing;
+    /// <summary>[v2 — 리뷰 D 해결] 계획 관련 순수교선 '모든' 링(다조각 보존 — 옹벽선 영역필터·작은 정상영역용).
+    /// CutFinalRing/FillFinalRing(단수)은 하위호환용 최대 링.</summary>
+    public List<List<Point3>>? CutFinalRings, FillFinalRings;
 
     /// <summary>boundary에서 fingerprint 산출(2D).</summary>
     public static (int N, double Cx, double Cy, double MinX, double MinY, double MaxX, double MaxY,
@@ -66,7 +69,7 @@ public static class GradingBundleStore
 {
     private const string DictName = "DH_GRADING";
     private const string RecName = "BUNDLE";
-    public const int Version = 1;
+    public const int Version = 2; // v2: 끝에 절/성토 링 '리스트' 추가(다조각 보존 — 리뷰 D)
 
     public static void Save(Database db, Transaction tr, GradingBundle b)
     {
@@ -85,6 +88,9 @@ public static class GradingBundleStore
         vals.Add(new((int)DxfCode.Int32, b.FillHasSlope ? 1 : 0));
         WritePoints(vals, b.CutFinalRing);
         WritePoints(vals, b.FillFinalRing);
+        // v2: 링 리스트(개수 + 각 링 점렬)
+        WriteRingList(vals, b.CutFinalRings);
+        WriteRingList(vals, b.FillFinalRings);
 
         var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForWrite);
         DBDictionary dict;
@@ -131,6 +137,8 @@ public static class GradingBundleStore
             b.FillHasSlope = I32(arr, ref i) != 0;
             b.CutFinalRing = ReadPoints(arr, ref i);
             b.FillFinalRing = ReadPoints(arr, ref i);
+            b.CutFinalRings = ReadRingList(arr, ref i);
+            b.FillFinalRings = ReadRingList(arr, ref i);
             return b;
         }
         catch (System.Exception ex)
@@ -141,6 +149,22 @@ public static class GradingBundleStore
     }
 
     // ── 직렬화 유틸(고정 순서) ──
+    private static void WriteRingList(List<TypedValue> vals, List<List<Point3>>? rings)
+    {
+        vals.Add(new((int)DxfCode.Int32, rings?.Count ?? 0));
+        if (rings == null) return;
+        foreach (var r in rings) WritePoints(vals, r);
+    }
+
+    private static List<List<Point3>>? ReadRingList(TypedValue[] arr, ref int i)
+    {
+        int n = I32(arr, ref i);
+        if (n <= 0) return null;
+        var outp = new List<List<Point3>>(n);
+        for (int k = 0; k < n; k++) { var r = ReadPoints(arr, ref i); if (r != null) outp.Add(r); }
+        return outp;
+    }
+
     private static void WritePoints(List<TypedValue> vals, IReadOnlyList<Point3>? pts)
     {
         vals.Add(new((int)DxfCode.Int32, pts?.Count ?? 0));
