@@ -228,7 +228,7 @@ public sealed class InfraworksCommand
                     var (nb, nc) = WallBlockDwg.Export(dwgPath, wallSets,
                         GradingSettings.WallBlockW, GradingSettings.WallBlockD, GradingSettings.WallBlockH,
                         GradingSettings.WallCapD, GradingSettings.WallCapT);
-                    log.AppendLine($"옹벽3D.dwg: 원스톤 {nb}개 + 캡 {nc}개 (블록 {GradingSettings.WallBlockW * 1000:F0}×{GradingSettings.WallBlockD * 1000:F0}×{GradingSettings.WallBlockH * 1000:F0}, 캡 두께 {GradingSettings.WallCapT * 1000:F0})");
+                    log.AppendLine($"옹벽3D.dwg: 원스톤 {nb}개 + 캡 {nc}개 (블록 {GradingSettings.WallBlockW * 1000:F0}×{GradingSettings.WallBlockD * 1000:F0}×{GradingSettings.WallBlockH * 1000:F0}, 캡 두께 {GradingSettings.WallCapT * 1000:F0}, 전체 10mm 하강)");
                 }
                 catch (System.Exception dex)
                 {
