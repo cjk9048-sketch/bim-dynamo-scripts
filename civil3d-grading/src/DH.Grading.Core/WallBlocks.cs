@@ -18,10 +18,11 @@ public static class WallBlocks
 {
     /// <summary>블록 1개 배치. X/Y/Z=전면 하단 중앙(삽입점), RotRad=Z축 회전(블록 로컬 +X=벽 진행방향,
     /// +Y=깊이(배면 흙 방향)), Course=단 내 층 번호(0=최하), Column=벽면·층 내 열 번호, Level=단 크레스트 평균Z,
-    /// Ring=링 번호, Face=벽면 번호, S=링 호길이 스테이션(블록 중심), Half=반블록(폭 W/2) 여부.</summary>
+    /// Ring=링 번호, Face=벽면 번호, S=링 호길이 스테이션(블록 중심), Half=반블록(폭 W/2) 여부,
+    /// RX/RY=**링 위 위치**(전면 돌출·뒷물림 적용 전) — 영역 판정은 반드시 이 값으로(아래 FilterByRegions 참조).</summary>
     public readonly record struct Block(
         double X, double Y, double Z, double RotRad, int Course, int Column, double Level, int Ring,
-        int Face, double S, bool Half);
+        int Face, double S, bool Half, double RX, double RY);
 
     /// <summary>직전 실행 진단(단별 블록 수) — 로그 표기용.</summary>
     public static string LastDiag { get; private set; } = "";
@@ -135,7 +136,10 @@ public static class WallBlocks
                         double rot = System.Math.Atan2(-dxDepth, dyDepth); // Xaxis=(dyDepth,−dxDepth) → atan2(Xy, Xx)
                         bool isHalf = w < blockW * 0.75;
                         if (isHalf) half0++;
-                        result.Add(new Block(bx, by, zBottom, rot, c, col++, level, k, f, station, isHalf));
+                        // 영역 판정용 링 위치 — 스테이션을 벽면 구간으로 클램프해 **항상 링 위의 점**이 되게 한다.
+                        // (코너 보정으로 구간을 넘어간 블록은 그 코너점으로 대표 — 블록 규격과 무관해야 하므로.)
+                        var rp = walk.At(face.Flush ? System.Math.Clamp(station, face.Start, face.End) : station);
+                        result.Add(new Block(bx, by, zBottom, rot, c, col++, level, k, f, station, isHalf, rp.x, rp.y));
                     }
                 }
             }
@@ -238,10 +242,13 @@ public static class WallBlocks
     }
 
     /// <summary>[WallLines.FilterByRegions와 동일 취지] 계획무관 고립 포켓의 블록 제외 —
-    /// 블록 삽입점이 '계획관련 순수교선 링(regions)' 중 하나의 내부(±buffer)면 유지.
+    /// **링 위 위치(RX/RY)**가 '계획관련 순수교선 링(regions)' 중 하나의 내부(±buffer)면 유지.
     ///
-    /// ※삽입점은 링 위가 아니라 전면 돌출(D/2)·뒷물림만큼 떨어져 있으나, 그 이탈은 벽면 법선 방향 한 축뿐이라
-    /// (모서리에서도 삽입점은 벽면 위) 기본 0.3m로 충분함 — 하네스 S6b로 확인(탈락 0).</summary>
+    /// [★삽입점(X/Y)으로 판정하면 안 되는 이유 — JACK 0720 '중간중간 빠진 블록'의 실제 원인]
+    /// 삽입점은 전면 돌출(D/2)·뒷물림만큼 링에서 떨어져 있다. 성토는 전면이 **바깥**이라 삽입점이 순수교선
+    /// (=성토 daylight, 곧 부지 최외곽) 밖으로 나가 buffer를 넘고, 최외곽 단에서 무더기 탈락했다
+    /// (현장 로그 실측: 성토 18285개 중 **4010개 제외**, 절토는 0개 — 안쪽으로 물러나므로).
+    /// 영역 판정의 질문은 "이 벽이 계획 구역의 벽인가"이므로 **블록 제작 오프셋과 무관한 링 위치**로 물어야 한다.</summary>
     /// <param name="dropped">영역 밖으로 판정해 제외한 블록 수(진단용).</param>
     public static List<Block> FilterByRegions(
         List<Block> blocks, IReadOnlyList<IReadOnlyList<Point3>>? regions, double buffer, out int dropped)
@@ -250,7 +257,7 @@ public static class WallBlocks
         if (regions == null || regions.Count == 0 || blocks.Count == 0) return blocks;
         var kept = new List<Block>(blocks.Count);
         foreach (var b in blocks)
-            if (InsideAny(b.X, b.Y, regions, buffer)) kept.Add(b); else dropped++;
+            if (InsideAny(b.RX, b.RY, regions, buffer)) kept.Add(b); else dropped++;
         return kept;
     }
 
