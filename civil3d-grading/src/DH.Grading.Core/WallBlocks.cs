@@ -32,11 +32,13 @@ public static class WallBlocks
     /// <param name="slopeN">벽 구배 n — 뒷물림. 코스 전면을 안쪽으로 n×|코스상면Z−링Z| 이동.</param>
     /// <param name="blockW">블록 전면 폭(m). 원스톤 0.46.</param>
     /// <param name="blockH">블록 높이(m). 원스톤 0.2.</param>
+    /// <param name="blockD">블록 깊이(m). 원스톤 0.5 — 벽 중심이 링(지표면 끝선)에 오도록 전면을 D/2 앞으로
+    /// 내밈(JACK 0720: 정지면 TIN 벽면과 블록 전면이 같은 평면이면 InfraWorks Z-파이팅 → 앞 절반 돌출로 해소).</param>
     /// <param name="eps">벽 존재 판정 여유(m) — WallLines와 동일(0.02).</param>
     /// <param name="zTol">블록 채택 여유(m) — 코스 상면이 커팅라인을 이만큼 넘어도 허용(수치 노이즈 흡수).</param>
     public static List<Block> Generate(
         IReadOnlyList<IReadOnlyList<Point3>> rings, IGroundSurface ground, bool cut,
-        double slopeN = 0.0, double blockW = 0.46, double blockH = 0.2,
+        double slopeN = 0.0, double blockW = 0.46, double blockH = 0.2, double blockD = 0.5,
         double eps = 0.02, double zTol = 0.02)
     {
         var result = new List<Block>();
@@ -48,6 +50,9 @@ public static class WallBlocks
         { double s = 0; foreach (var p in r) s += p.Z; return s / System.Math.Max(r.Count, 1); }
 
         double halfW = blockW * 0.5;
+        // 전면 돌출: 벽 중심(D/2)이 링에 오도록 전면선을 '전면 방향'으로 D/2 이동.
+        // 절토 전면=안쪽(+안쪽법선) → +D/2, 성토 전면=바깥(−안쪽법선) → −D/2. 뒷물림 off와 같은 축이라 합산.
+        double frontShift = blockD * 0.5 * (cut ? 1.0 : -1.0);
 
         for (int k = 1; k < rings.Count; k++)
         {
@@ -72,9 +77,10 @@ public static class WallBlocks
                 for (int c = 0; c < courses; c++)
                 {
                     // 뒷물림량(층별, 위치 무관): 절토 |상면−크레스트| = step−(c+1)H, 성토 = (c+1)H.
-                    double off = slopeN > 1e-9
+                    // + 전면 돌출(frontShift, 부호 포함) — 층별 전면선의 안쪽법선 방향 총 이동량.
+                    double off = (slopeN > 1e-9
                         ? slopeN * (cut ? (step - (c + 1) * blockH) : (c + 1) * blockH)
-                        : 0.0;
+                        : 0.0) + frontShift;
 
                     // 이 층의 배치 구간: 모서리 전면선 교점 보정(플러시). 코너 없는 닫힌 링은 보정 0.
                     double s0 = face.Start + face.StartDeltaUnit * off;
@@ -119,8 +125,8 @@ public static class WallBlocks
                         double topLine = cut ? System.Math.Min(crest, System.Math.Max(toe, g)) : crest;
                         if (zTopC > topLine + zTol) { col++; continue; }
 
-                        // 뒷물림: 전면을 안쪽으로(위 off와 동일식 — 링Z 국소값으로 재계산해 기존 동작 보존).
-                        double offB = slopeN > 1e-9 ? slopeN * System.Math.Abs(zTopC - ringZ) : 0.0;
+                        // 뒷물림(링Z 국소값으로 재계산해 기존 동작 보존) + 전면 돌출 — 안쪽법선 방향 합산 이동.
+                        double offB = (slopeN > 1e-9 ? slopeN * System.Math.Abs(zTopC - ringZ) : 0.0) + frontShift;
                         double bx = x + nx * offB, by = y + ny * offB;
                         // 깊이(배면 흙) 방향: 절토=바깥(−안쪽법선), 성토=안쪽(+안쪽법선). 로컬 +Y=깊이가 되는 회전각.
                         double dxDepth = cut ? -nx : nx, dyDepth = cut ? -ny : ny;
