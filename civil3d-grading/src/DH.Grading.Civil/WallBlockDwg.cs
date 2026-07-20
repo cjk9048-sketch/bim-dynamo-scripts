@@ -164,6 +164,40 @@ public static class WallBlockDwg
         var ltr = new LayerTableRecord { Name = name, Color = color };
         ObjectId id = lt.Add(ltr);
         tr.AddNewlyCreatedDBObject(ltr, true);
+        // 재질(거친 콘크리트) 부여 — 실패해도 색상만으로 정상 출력되도록 격리.
+        try { ltr.MaterialId = EnsureRoughConcrete(db, tr, "DH_거친콘크리트_" + name, color); } catch { }
+        return id;
+    }
+
+    /// <summary>거친(무광) 콘크리트 재질을 만들어 ACAD_MATERIAL 사전에 넣고 ObjectId 반환 — JACK 0720.
+    /// 거친 표면은 빛을 흩뿌려 **하이라이트가 거의 없다**: 광택(Gloss)을 아주 낮게, 반사도 0, 스페큘러를
+    /// 어둡게 잡아 매트한 콘크리트로 보이게 한다.
+    /// ※알갱이(요철) 무늬까지 넣으려면 Bump에 이미지 텍스처(`ImageFileTexture`)가 필요한데, 그 이미지 파일이
+    /// DWG와 함께 따라다녀야 해서(경로 깨지면 재질 손실) 넣지 않았다. 색·광택만으로 표현.</summary>
+    private static ObjectId EnsureRoughConcrete(Database db, Transaction tr, string name, Color color)
+    {
+        var dict = (DBDictionary)tr.GetObject(db.MaterialDictionaryId, OpenMode.ForWrite);
+        if (dict.Contains(name)) return dict.GetAt(name);
+
+        var mat = new Material { Name = name, Description = "거친 콘크리트 (무광)" };
+        var baseColor = new Autodesk.AutoCAD.Colors.EntityColor(color.Red, color.Green, color.Blue);
+        var noMap = new Autodesk.AutoCAD.GraphicsInterface.MaterialMap();
+
+        mat.Diffuse = new Autodesk.AutoCAD.GraphicsInterface.MaterialDiffuseComponent(
+            new Autodesk.AutoCAD.GraphicsInterface.MaterialColor(
+                Autodesk.AutoCAD.GraphicsInterface.Method.Override, 1.0, baseColor), noMap);
+
+        // 광택 6/100 · 스페큘러 거의 검정 → 반짝임 없는 거친 표면
+        mat.Specular = new Autodesk.AutoCAD.GraphicsInterface.MaterialSpecularComponent(
+            new Autodesk.AutoCAD.GraphicsInterface.MaterialColor(
+                Autodesk.AutoCAD.GraphicsInterface.Method.Override, 1.0,
+                new Autodesk.AutoCAD.Colors.EntityColor(25, 25, 25)), noMap, 6.0);
+
+        mat.Reflectivity = 0.0;
+        mat.SelfIllumination = 0.0;
+
+        ObjectId id = dict.SetAt(name, mat);
+        tr.AddNewlyCreatedDBObject(mat, true);
         return id;
     }
 }
