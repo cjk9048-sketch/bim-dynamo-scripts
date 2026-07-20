@@ -97,6 +97,8 @@ public sealed class InfraworksCommand
 
             // ── 방향별 산출(절토/성토) ──
             System.Collections.Generic.List<(System.Collections.Generic.List<Point3> Crest, System.Collections.Generic.List<Point3> Toe)>? transFaces = null;
+            // [옹벽 3D — 옹벽3D_기획.md] 옹벽 모드 방향별 블록·캡 배치 수집 → 루프 뒤 별도 DWG+물량 CSV.
+            var wallSets = new List<(bool Cut, List<WallBlocks.Block> Blocks, List<WallBlocks.Block> Caps)>();
             // [번들 v2 — 다중 절/성토 영역] 링 리스트 전체 순회 — 2개+ 영역 누락 버그 수정(JACK).
             static System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? RingsOf(
                 System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? many,
@@ -179,6 +181,14 @@ public sealed class InfraworksCommand
                         log.AppendLine($"옹벽선_{label}.shp: {walls.Count}개 (v2 링클램프, 옹벽모드 n{slopeN:F2}≤0.05)");
                         log.AppendLine($"    [v2 진단] {WallLines.LastDiag}");
                         try { DumpWallV2(folder, label, bundle.Boundary, walls); } catch { } // 실측 검증용 CSV
+
+                        // [옹벽 3D] 그리드 필터링 블록 배치(WallBlocks — 옹벽선과 동일 링·지반·구배) + 캡블록.
+                        var blocks = WallBlocks.Generate(vs.Rings, groundSampler, up, slopeN,
+                            GradingSettings.WallBlockW, GradingSettings.WallBlockH);
+                        blocks = WallBlocks.FilterByRegions(blocks, regs, 0.3);
+                        var capsB = WallBlocks.GenerateCaps(blocks, GradingSettings.WallBlockH);
+                        if (blocks.Count > 0) wallSets.Add((up, blocks, capsB));
+                        log.AppendLine($"옹벽블록_{label}: 몸통 {blocks.Count}·캡 {capsB.Count} ({WallBlocks.LastDiag})");
                     }
                 }
                 else log.AppendLine($"옹벽선_{label}: 사면 모드(n{slopeN:F2}>0.05) — 옹벽선 생략, 사면부+소단 출력");
@@ -197,6 +207,47 @@ public sealed class InfraworksCommand
                     ShapefileWriter.WritePolylinesZ(System.IO.Path.Combine(folder, "옹벽선_전환"), feats, lineFields, wkt);
                     log.AppendLine($"옹벽선_전환.shp: {feats.Count}개(PolylineZ)");
                 }
+            }
+
+            // ── ⑥ 옹벽3D.dwg + 옹벽물량.csv — 옹벽 모드 블록 배치가 있을 때만(별도 파일, 현재 도면 무영향) ──
+            if (wallSets.Count == 0)
+            {   // 모드 전환 시 이전 실행 잔존 파일 정리(레이어 혼동 방지 — §21과 동일 원칙)
+                foreach (string f in new[] { "옹벽3D.dwg", "옹벽물량.csv" })
+                    try { System.IO.File.Delete(System.IO.Path.Combine(folder, f)); } catch { }
+            }
+            else
+            {
+                // DWG 저장은 파일 잠김(이미 열어둔 경우 등) 실패가 흔해 격리 — 실패해도 나머지 산출은 계속.
+                string dwgPath = System.IO.Path.Combine(folder, "옹벽3D.dwg");
+                try
+                {
+                    var (nb, nc) = WallBlockDwg.Export(dwgPath, wallSets,
+                        GradingSettings.WallBlockW, GradingSettings.WallBlockD, GradingSettings.WallBlockH,
+                        GradingSettings.WallCapD, GradingSettings.WallCapT);
+                    log.AppendLine($"옹벽3D.dwg: 원스톤 {nb}개 + 캡 {nc}개 (블록 {GradingSettings.WallBlockW * 1000:F0}×{GradingSettings.WallBlockD * 1000:F0}×{GradingSettings.WallBlockH * 1000:F0}, 캡 두께 {GradingSettings.WallCapT * 1000:F0})");
+                }
+                catch (System.Exception dex)
+                {
+                    log.AppendLine($"옹벽3D.dwg: 저장 실패 — {dex.Message} (파일이 열려 있으면 닫고 재실행)");
+                }
+
+                // 물량 CSV — 구분/단레벨별 정수 개수(엑셀용 UTF-8 BOM, 숫자는 고정 문화권).
+                var ciCsv = System.Globalization.CultureInfo.InvariantCulture;
+                var csv = new System.Text.StringBuilder();
+                csv.AppendLine("구분,단레벨,원스톤블록(개),캡블록(개)");
+                foreach (var (cutFlag, blocks, capsB) in wallSets)
+                {
+                    string lbl = cutFlag ? "절토" : "성토";
+                    foreach (var grp in blocks.GroupBy(b => b.Level).OrderBy(g2 => g2.Key))
+                    {
+                        int capN = capsB.Count(c => System.Math.Abs(c.Level - grp.Key) < 1e-6);
+                        csv.AppendLine(string.Create(ciCsv, $"{lbl},{grp.Key:F2},{grp.Count()},{capN}"));
+                    }
+                }
+                csv.AppendLine($"합계,,{wallSets.Sum(s => s.Blocks.Count)},{wallSets.Sum(s => s.Caps.Count)}");
+                System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "옹벽물량.csv"),
+                    csv.ToString(), new System.Text.UTF8Encoding(true));
+                log.AppendLine("옹벽물량.csv: 단레벨별 정수 개수");
             }
 
             string msg = "INFRAWORKS SHP 내보내기 완료" + note + "\n" + log.ToString().TrimEnd();
