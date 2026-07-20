@@ -9,7 +9,7 @@ namespace DH.Grading.Civil;
 public static class GradingSettings
 {
     /// <summary>플러그인 버전 — 팝업 첫 줄에 표시(새 빌드 설치 확인용). 커밋마다 갱신.</summary>
-    public const string Version = "v2.1 (2026-07-20 계단 단차 반캡)";
+    public const string Version = "v2.2 (2026-07-20 버건디 띠 15+2)";
 
     // ── 옹벽 3D 보강토 블록(옹벽3D_기획.md) — 원스톤 블록·캡블록 규격(m). 스샷 0720 실측. ──
     public static double WallBlockW = 0.46;  // 블록 전면 폭
