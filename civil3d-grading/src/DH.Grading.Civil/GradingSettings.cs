@@ -9,14 +9,17 @@ namespace DH.Grading.Civil;
 public static class GradingSettings
 {
     /// <summary>플러그인 버전 — 팝업 첫 줄에 표시(새 빌드 설치 확인용). 커밋마다 갱신.</summary>
-    public const string Version = "v2.2 (2026-07-20 버건디 띠 15+2)";
+    public const string Version = "v2.3 (2026-07-20 옹벽치수 고정)";
 
     // ── 옹벽 3D 보강토 블록(옹벽3D_기획.md) — 원스톤 블록·캡블록 규격(m). 스샷 0720 실측. ──
-    public static double WallBlockW = 0.46;  // 블록 전면 폭
-    public static double WallBlockD = 0.50;  // 블록 깊이(배면 방향)
-    public static double WallBlockH = 0.20;  // 블록 높이(층높이)
-    public static double WallCapD = 0.30;    // 캡블록 깊이
-    public static double WallCapT = 0.10;    // 캡블록 두께(JACK: 실측 100mm)
+    // [고정값 — JACK 0720] 사용자가 바꾸지 않는다. 보강토 옹벽이면 무조건 이 치수를 쓴다(설정 UI 제거).
+    // 앞으로 패널식·콘크리트 옹벽이 추가되면 '옹벽 스타일'별로 이런 상수 묶음을 하나씩 두고, 팝업에서는
+    // 절토부/성토부에 어떤 스타일을 쓸지 드롭박스로만 고르게 한다 — 치수 입력칸은 두지 않는다.
+    public const double WallBlockW = 0.46;  // 블록 전면 폭
+    public const double WallBlockD = 0.50;  // 블록 깊이(배면 방향)
+    public const double WallBlockH = 0.20;  // 블록 높이(층높이)
+    public const double WallCapD = 0.30;    // 캡블록 깊이
+    public const double WallCapT = 0.10;    // 캡블록 두께(JACK: 실측 100mm)
 
     public static double BenchHeight = 5.0; // 단높이 (m)
     public static double BenchWidth = 1.0;  // 소단폭 (m)
