@@ -731,7 +731,35 @@ public static class RawTriangleIntersectionFinder
                     else { cand.AddRange(chain); chain = cand; }
                     ext = true;
                 }
-                if (DD(chain[0], chain[chain.Count - 1]) > 1e-6) chain.Add(new Point3(chain[0].X, chain[0].Y, chain[0].Z));
+                if (DD(chain[0], chain[chain.Count - 1]) > 1e-6)
+                {
+                    // [hull 폐합 — JACK 0715 칼선 수정] 가상면이 측량(원지반) 범위를 벗어나면 교선이 hull에서 끊긴다.
+                    //   직선 강제폐합은 '칼로 썬' 경계를 만들므로(실측 ID Z=85 직선), 양끝이 hull 근처(≤1.5m)면
+                    //   hull 경로(짧은 쪽)를 따라 폐합 — 데이터 한계선을 정직하게 따라가는 경계.
+                    bool viaHull = false;
+                    var ce2 = chain[chain.Count - 1]; var cs2 = chain[0];
+                    // 후보 폐합 루프의 면적 — '작은 쪽'을 골라 반대방향(측량 전체 감싸기 → 원지반 소멸 실측 0715) 차단.
+                    double LoopArea(List<Point3> body, List<Point3> tail)
+                    {
+                        double a = 0; int cnt = body.Count + tail.Count;
+                        Point3 At(int idx) => idx < body.Count ? body[idx] : tail[idx - body.Count];
+                        for (int ii = 0; ii < cnt; ii++)
+                        { var p1 = At(ii); var p2 = At((ii + 1) % cnt); a += p1.X * p2.Y - p2.X * p1.Y; }
+                        return System.Math.Abs(a * 0.5);
+                    }
+                    foreach (var hl in hullLoops)
+                    {
+                        if (!TryProject(hl, ce2, 1.5, out int segL2, out var projL2)) continue;
+                        if (!TryProject(hl, cs2, 1.5, out int segF2, out var projF2)) continue;
+                        var fw2 = HullPath(hl, segL2, projL2, segF2, projF2, forward: true);
+                        var bw2 = HullPath(hl, segL2, projL2, segF2, projF2, forward: false);
+                        var pick2 = LoopArea(chain, fw2) <= LoopArea(chain, bw2) ? fw2 : bw2;
+                        chain.AddRange(pick2);
+                        viaHull = true; break;
+                    }
+                    if (viaHull) dbg.AppendLine($"[이어닫기] hull 경로 폐합(끝간격 {DD(cs2, ce2):F1}m, 최소면적 방향)");
+                    chain.Add(new Point3(chain[0].X, chain[0].Y, chain[0].Z));
+                }
                 if (chain.Count >= 4) closedLoops.Add(chain);
             }
             // [★계획폴리곤 합집합 제거 — JACK 확정: 이 합집합이 모든 sticking의 근원] 순수 교선 닫기 결과를

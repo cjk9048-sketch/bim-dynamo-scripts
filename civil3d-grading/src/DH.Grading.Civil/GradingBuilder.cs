@@ -19,11 +19,11 @@ public static class GradingBuilder
     /// <summary>오버사이즈 가상 사면 TIN — 계단 링을 Standard 브레이크라인으로(동심 비교차 → 톱니 0).
     /// cornerLines(코너 능선)를 주면 열린 브레이크라인으로 추가 — 코너 모따기(사선) 방지(직각 모드).</summary>
     public static ObjectId BuildVirtualSlope(Database db, Transaction tr, IReadOnlyList<List<Point3>> rings, string name,
-        IReadOnlyList<List<Point3>>? cornerLines = null)
+        IReadOnlyList<List<Point3>>? cornerLines = null, ObjectId protect = default)
     {
         // [재실행 정리] 같은 이름(및 _2, _3… 번호 변형)의 옛 DH 가상면을 먼저 삭제 — 실행마다 쌓여
-        // 옛 표면을 보고 "안 생겼다"고 오인하는 혼란 방지(JACK). 항상 최신 하나만 남는다.
-        EraseSurfacesByBaseName(tr, name);
+        // 옛 표면을 보고 "안 생겼다"고 오인하는 혼란 방지(JACK). 항상 최신 하나만 남는다. 원지반(protect)은 제외.
+        EraseSurfacesByBaseName(tr, name, protect);
         ObjectId id = TinSurface.Create(db, UniqueName(db, tr, name));
         var tin = (TinSurface)tr.GetObject(id, OpenMode.ForWrite);
         foreach (var ring in rings) AddRingBreakline(tin, ring);
@@ -189,10 +189,11 @@ public static class GradingBuilder
     /// <summary>최종 합성 — 빈 TIN에 pasteOrder 순서로 PasteSurface(각 단계 스냅샷 굳히기).
     /// paste별 성공/실패와 Civil 예외 메시지를 log로 반환(병합 느낌표 원인 특정용, JACK 검증 지시).</summary>
     public static ObjectId Composite(Database db, Transaction tr, string name,
-        IReadOnlyList<(ObjectId id, string label)> pasteOrder, out string log, bool freezeEach = true)
+        IReadOnlyList<(ObjectId id, string label)> pasteOrder, out string log, bool freezeEach = true,
+        ObjectId protect = default)
     {
         var sb = new System.Text.StringBuilder();
-        EraseSurfacesByBaseName(tr, name); // 재실행 스택 방지
+        EraseSurfacesByBaseName(tr, name, protect); // 재실행 스택 방지 — 원지반(protect)은 이름이 겹쳐도 보호(JACK 0715)
         ObjectId id = TinSurface.Create(db, UniqueName(db, tr, name));
         var final = (TinSurface)tr.GetObject(id, OpenMode.ForWrite);
         foreach (var (sid, label) in pasteOrder)
@@ -384,12 +385,13 @@ public static class GradingBuilder
     }
 
     /// <summary>이름이 baseName 또는 baseName_N 인 지표면을 모두 삭제(잠긴/참조 중이면 그 항목만 건너뜀).</summary>
-    private static void EraseSurfacesByBaseName(Transaction tr, string baseName)
+    private static void EraseSurfacesByBaseName(Transaction tr, string baseName, ObjectId protect = default)
     {
         var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
         var victims = new List<ObjectId>();
         foreach (ObjectId sid in civilDoc.GetSurfaceIds())
         {
+            if (sid == protect) continue; // [JACK 0715] 선택된 원지반 보호 — LandXML 지반 이름이 '정지면_DH'여도 삭제 금지
             if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
             string nm = s.Name;
             if (nm == baseName || (nm.StartsWith(baseName + "_") && int.TryParse(nm.Substring(baseName.Length + 1), out _)))

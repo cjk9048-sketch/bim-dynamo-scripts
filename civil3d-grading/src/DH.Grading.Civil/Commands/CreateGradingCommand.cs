@@ -85,8 +85,8 @@ public sealed class CreateGradingCommand
                 catch { }
 
                 string verifyCut = "", verifyFill = "";
-                if (cut.HasSlope) { cutId = GradingBuilder.BuildVirtualSlope(db, tr, cut.Rings, "가상절토_DH", cut.CornerLines); verifyCut = GradingBuilder.LastVerify; }
-                if (fill.HasSlope) { fillId = GradingBuilder.BuildVirtualSlope(db, tr, fill.Rings, "가상성토_DH", fill.CornerLines); verifyFill = GradingBuilder.LastVerify; }
+                if (cut.HasSlope) { cutId = GradingBuilder.BuildVirtualSlope(db, tr, cut.Rings, "가상절토_DH", cut.CornerLines, groundId); verifyCut = GradingBuilder.LastVerify; }
+                if (fill.HasSlope) { fillId = GradingBuilder.BuildVirtualSlope(db, tr, fill.Rings, "가상성토_DH", fill.CornerLines, groundId); verifyFill = GradingBuilder.LastVerify; }
                 // 검증 로그에 TIN 실측 대조 결과 덧붙임(비대칭/누락 방향 추적)
                 try
                 {
@@ -105,6 +105,8 @@ public sealed class CreateGradingCommand
             var injectedRings = new System.Collections.Generic.Dictionary<string, (ObjectId id, System.Collections.Generic.List<Point3> ring)>();
             // 표면별 '최종' 경계 링(정규화 재주입 시 갱신) — 4단계 노리선 클립 기준(§0-HH 다음 단계)
             var finalRings = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<Point3>>();
+            // [v2 번들 — 리뷰 D] 계획관련 '전체' 순수교선 링(다조각 보존) — 옹벽선 영역필터·작은 정상영역용
+            var allRings = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<System.Collections.Generic.List<Point3>>>();
             string bndMsg = "", diagX = "";
             bool anyMissed = false;
             using (Transaction tr2 = db.TransactionManager.StartTransaction())
@@ -168,7 +170,7 @@ public sealed class CreateGradingCommand
                         : new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
                     // ⓐ finalRing = 순수 교선 최대 루프(전이선 정확) — 초록선은 필터된 순수 루프 전부 그림.
                     var pureBest = Largest(own, out double pureArea);
-                    if (pureBest != null) { finalRings[label] = pureBest; allLoops.AddRange(own); }
+                    if (pureBest != null) { finalRings[label] = pureBest; allRings[label] = own; allLoops.AddRange(own); }
                     // ⓑ 클립용 = 교선 ∪ 계획 전체(+스냅·정제) → 표면 Outer 경계 주입.
                     var clipRings = RawTriangleIntersectionFinder.UnionLoopsWithPlan(
                         own, opp, boundary, groundSampler2, out string udiag, subtractOpposite: false);
@@ -242,7 +244,7 @@ public sealed class CreateGradingCommand
                 bool ok = false;
                 for (int attempt = 1; attempt <= 3; attempt++)
                 {
-                    GradingBuilder.Composite(db, tr3, "정지면_DH", order, out string lg, true);
+                    GradingBuilder.Composite(db, tr3, "정지면_DH", order, out string lg, true, groundId);
                     pasteLog += $"\n  시도{attempt}: {lg}";
                     if (!lg.Contains("실패")) { ok = true; break; }
                     string? failLabel = lg.Contains("성토:실패") ? "성토" : lg.Contains("절토:실패") ? "절토" : null;
@@ -286,6 +288,8 @@ public sealed class CreateGradingCommand
                     FillHasSlope = fill.HasSlope,
                     CutFinalRing = finalRings.TryGetValue("절토", out var cr) ? cr : null,
                     FillFinalRing = finalRings.TryGetValue("성토", out var fr) ? fr : null,
+                    CutFinalRings = allRings.TryGetValue("절토", out var crs) ? crs : null,
+                    FillFinalRings = allRings.TryGetValue("성토", out var frs) ? frs : null,
                 };
                 using Transaction tr4 = db.TransactionManager.StartTransaction();
                 GradingBundleStore.Save(db, tr4, bundle);
