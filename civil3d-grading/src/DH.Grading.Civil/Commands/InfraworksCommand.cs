@@ -184,7 +184,7 @@ public sealed class InfraworksCommand
 
                         // [옹벽 3D] 그리드 필터링 블록 배치(WallBlocks — 옹벽선과 동일 링·지반·구배) + 캡블록.
                         var blocks = WallBlocks.Generate(vs.Rings, groundSampler, up, slopeN,
-                            GradingSettings.WallBlockW, GradingSettings.WallBlockH);
+                            GradingSettings.WallBlockW, GradingSettings.WallBlockH, GradingSettings.WallBlockD);
                         blocks = WallBlocks.FilterByRegions(blocks, regs, 0.3);
                         var capsB = WallBlocks.GenerateCaps(blocks, GradingSettings.WallBlockH, GradingSettings.WallBlockW);
                         if (blocks.Count > 0) wallSets.Add((up, blocks, capsB));
