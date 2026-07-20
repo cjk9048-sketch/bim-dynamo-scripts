@@ -103,15 +103,46 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
     bool mono = true;
     for (int i = 1; i < bottom.Count; i++) if (bottom[i].TopC < bottom[i - 1].TopC) { mono = false; break; }
     Check("S2 계단 단조증가(y=0변)", mono, $"열 {bottom.Count}개");
-    // 캡: 같은 벽면 위층 블록과 스테이션 겹침 없음
+    // 캡: 같은 벽면 위층 블록과 스테이션 구간이 겹치지 않아야(노출 구간에만 놓이므로)
     var caps = WallBlocks.GenerateCaps(blocks, H, W);
     var occ = blocks.ToLookup(b => (b.Ring, b.Face, b.Course));
-    bool collide = false;
+    bool collide = false; double worstOv = 0;
     foreach (var c in caps)
         foreach (var b in occ[(c.Ring, c.Face, c.Course)]) // 캡 Course = 위층 번호
-            if (Math.Abs(b.S - c.S) < (WidthOf(b) + WidthOf(c)) / 2 - 0.021) { collide = true; break; }
-    Check("S2 캡-블록 무충돌", !collide, $"캡 {caps.Count}개");
+        {
+            double ov = (WidthOf(b) + WidthOf(c)) / 2 - Math.Abs(b.S - c.S);
+            if (ov > 1e-6) { collide = true; worstOv = Math.Max(worstOv, ov); }
+        }
+    Check("S2 캡-블록 무충돌", !collide, collide ? $"겹침 {worstOv * 1000:F0}mm" : $"캡 {caps.Count}개");
     Check("S2 캡 존재", caps.Count > 0);
+
+    // ★ S2b(§29, JACK '절토부 캡 누락'): 계단 단차마다 위층이 반만 덮어 노출된 반 칸에도 캡이 있어야 한다.
+    //   판정 = 모든 블록의 상면 노출 구간이 (캡 ∪ 위층 블록)으로 빠짐없이 덮이는가.
+    {
+        double tol = 0.01; bool allCovered = true; double worstBare = 0;
+        var capsBy = caps.ToLookup(c => (c.Ring, c.Face, c.Course));
+        foreach (var b in blocks)
+        {
+            double wb = WidthOf(b);
+            var free = new List<(double A, double B)> { (b.S - wb / 2, b.S + wb / 2) };
+            foreach (var o in occ[(b.Ring, b.Face, b.Course + 1)].Concat(capsBy[(b.Ring, b.Face, b.Course + 1)]))
+            {
+                double wo = WidthOf(o), oLo = o.S - wo / 2, oHi = o.S + wo / 2;
+                var next = new List<(double A, double B)>();
+                foreach (var (s, e) in free)
+                {
+                    if (oHi <= s + 1e-9 || oLo >= e - 1e-9) { next.Add((s, e)); continue; }
+                    if (oLo > s + 1e-9) next.Add((s, oLo));
+                    if (oHi < e - 1e-9) next.Add((oHi, e));
+                }
+                free = next;
+            }
+            foreach (var (s, e) in free)
+                if (e - s > W * 0.4 + tol) { allCovered = false; worstBare = Math.Max(worstBare, e - s); }
+        }
+        Check("S2b ★계단 단차 캡 누락 없음", allCovered,
+            allCovered ? "" : $"맨살 최대 {worstBare * 1000:F0}mm");
+    }
 }
 
 // ── S3: 지반이 토우 아래(99) — 벽 없음 → 블록 0 ──
