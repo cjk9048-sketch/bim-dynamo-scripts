@@ -5,12 +5,13 @@ using DH.Grading.Core;
 
 namespace DH.Grading.Civil;
 
-/// <summary>옹벽 3D DWG 생성(옹벽3D_기획.md) — 별도 사이드 Database에 블록정의 2개(원스톤·캡)를 만들고
+/// <summary>옹벽 3D DWG 생성(옹벽3D_기획.md) — 별도 사이드 Database에 블록정의 4개(원스톤·반블록·캡·반캡)를 만들고
 /// WallBlocks 배치 좌표마다 BlockReference를 삽입해 저장. 현재 도면은 건드리지 않음.
+/// 반블록(폭 W/2)은 우각부 엇갈림용(JACK 0720 확정 — 실제 코너 시공과 동일), 반캡은 반블록 상면 마감.
 /// 블록정의 로컬좌표: 원점=전면 하단 중앙, +X=폭, +Y=깊이(배면 흙), +Z=높이 — WallBlocks.Block.RotRad와 합의됨.</summary>
 public static class WallBlockDwg
 {
-    /// <summary>(cut여부, 몸통블록들, 캡블록들) 세트를 path에 DWG로 저장. 반환=(몸통 수, 캡 수).</summary>
+    /// <summary>(cut여부, 몸통블록들, 캡블록들) 세트를 path에 DWG로 저장. 반환=(몸통 수, 캡 수) — 반블록·반캡 포함.</summary>
     public static (int Blocks, int Caps) Export(
         string path,
         List<(bool Cut, List<WallBlocks.Block> Blocks, List<WallBlocks.Block> Caps)> sets,
@@ -28,7 +29,9 @@ public static class WallBlockDwg
             {
                 var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForWrite);
                 ObjectId defBlock = MakeBoxDef(db, tr, bt, "DH_원스톤블록", blockW, blockD, blockH);
+                ObjectId defHalf = MakeBoxDef(db, tr, bt, "DH_원스톤반블록", blockW * 0.5, blockD, blockH);
                 ObjectId defCap = MakeBoxDef(db, tr, bt, "DH_캡블록", blockW, capD, capT);
+                ObjectId defHalfCap = MakeBoxDef(db, tr, bt, "DH_캡반블록", blockW * 0.5, capD, capT);
                 var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
 
                 foreach (var (cutFlag, blocks, caps) in sets)
@@ -36,8 +39,8 @@ public static class WallBlockDwg
                     string label = cutFlag ? "절토" : "성토";
                     ObjectId layBlock = EnsureLayer(db, tr, $"DH-옹벽블록-{label}", cutFlag ? (short)8 : (short)30);
                     ObjectId layCap = EnsureLayer(db, tr, $"DH-캡블록-{label}", cutFlag ? (short)250 : (short)40);
-                    foreach (var b in blocks) { Insert(tr, ms, defBlock, layBlock, b); nb++; }
-                    foreach (var c in caps) { Insert(tr, ms, defCap, layCap, c); nc++; }
+                    foreach (var b in blocks) { Insert(tr, ms, b.Half ? defHalf : defBlock, layBlock, b); nb++; }
+                    foreach (var c in caps) { Insert(tr, ms, c.Half ? defHalfCap : defCap, layCap, c); nc++; }
                 }
                 tr.Commit();
             }

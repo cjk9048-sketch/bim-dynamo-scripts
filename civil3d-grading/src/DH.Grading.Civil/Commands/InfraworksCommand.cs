@@ -186,9 +186,9 @@ public sealed class InfraworksCommand
                         var blocks = WallBlocks.Generate(vs.Rings, groundSampler, up, slopeN,
                             GradingSettings.WallBlockW, GradingSettings.WallBlockH);
                         blocks = WallBlocks.FilterByRegions(blocks, regs, 0.3);
-                        var capsB = WallBlocks.GenerateCaps(blocks, GradingSettings.WallBlockH);
+                        var capsB = WallBlocks.GenerateCaps(blocks, GradingSettings.WallBlockH, GradingSettings.WallBlockW);
                         if (blocks.Count > 0) wallSets.Add((up, blocks, capsB));
-                        log.AppendLine($"옹벽블록_{label}: 몸통 {blocks.Count}·캡 {capsB.Count} ({WallBlocks.LastDiag})");
+                        log.AppendLine($"옹벽블록_{label}: 몸통 {blocks.Count}(반 {blocks.Count(b => b.Half)})·캡 {capsB.Count}(반 {capsB.Count(c => c.Half)}) ({WallBlocks.LastDiag})");
                     }
                 }
                 else log.AppendLine($"옹벽선_{label}: 사면 모드(n{slopeN:F2}>0.05) — 옹벽선 생략, 사면부+소단 출력");
@@ -234,17 +234,21 @@ public sealed class InfraworksCommand
                 // 물량 CSV — 구분/단레벨별 정수 개수(엑셀용 UTF-8 BOM, 숫자는 고정 문화권).
                 var ciCsv = System.Globalization.CultureInfo.InvariantCulture;
                 var csv = new System.Text.StringBuilder();
-                csv.AppendLine("구분,단레벨,원스톤블록(개),캡블록(개)");
+                csv.AppendLine("구분,단레벨,원스톤블록(개),반블록(개),캡블록(개),반캡블록(개)");
                 foreach (var (cutFlag, blocks, capsB) in wallSets)
                 {
                     string lbl = cutFlag ? "절토" : "성토";
                     foreach (var grp in blocks.GroupBy(b => b.Level).OrderBy(g2 => g2.Key))
                     {
-                        int capN = capsB.Count(c => System.Math.Abs(c.Level - grp.Key) < 1e-6);
-                        csv.AppendLine(string.Create(ciCsv, $"{lbl},{grp.Key:F2},{grp.Count()},{capN}"));
+                        int fullN = grp.Count(b => !b.Half), halfN = grp.Count(b => b.Half);
+                        int capN = capsB.Count(c => !c.Half && System.Math.Abs(c.Level - grp.Key) < 1e-6);
+                        int hcapN = capsB.Count(c => c.Half && System.Math.Abs(c.Level - grp.Key) < 1e-6);
+                        csv.AppendLine(string.Create(ciCsv, $"{lbl},{grp.Key:F2},{fullN},{halfN},{capN},{hcapN}"));
                     }
                 }
-                csv.AppendLine($"합계,,{wallSets.Sum(s => s.Blocks.Count)},{wallSets.Sum(s => s.Caps.Count)}");
+                csv.AppendLine(
+                    $"합계,,{wallSets.Sum(s => s.Blocks.Count(b => !b.Half))},{wallSets.Sum(s => s.Blocks.Count(b => b.Half))}," +
+                    $"{wallSets.Sum(s => s.Caps.Count(c => !c.Half))},{wallSets.Sum(s => s.Caps.Count(c => c.Half))}");
                 System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "옹벽물량.csv"),
                     csv.ToString(), new System.Text.UTF8Encoding(true));
                 log.AppendLine("옹벽물량.csv: 단레벨별 정수 개수");
