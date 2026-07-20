@@ -56,9 +56,14 @@ public static class WallBlockDwg
         return (nb, nc);
     }
 
+    /// <summary>DWG 전체를 이만큼 아래로 내려 쓴다(m) — JACK 0720.
+    /// 캡 윗면 Z가 계획면·소단면과 **정확히 같아** InfraWorks가 두 면을 번갈아 그리며 깨져 보였다(Z-파이팅).
+    /// 1cm만 낮추면 겹침이 풀리고, 육안·물량에는 영향이 없다. (물량 CSV는 원래 좌표 기준 그대로.)</summary>
+    private const double ZSink = 0.01;
+
     private static void Insert(Transaction tr, BlockTableRecord ms, ObjectId def, ObjectId layer, WallBlocks.Block b)
     {
-        var br = new BlockReference(new Point3d(b.X, b.Y, b.Z), def)
+        var br = new BlockReference(new Point3d(b.X, b.Y, b.Z - ZSink), def)
         { Rotation = b.RotRad, LayerId = layer };
         ms.AppendEntity(br);
         tr.AddNewlyCreatedDBObject(br, true);
