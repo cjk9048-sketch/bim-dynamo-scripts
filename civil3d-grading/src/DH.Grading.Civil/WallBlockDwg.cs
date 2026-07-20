@@ -37,7 +37,7 @@ public static class WallBlockDwg
                 // 재질은 절토/성토가 아니라 '색 띠'로 구분(JACK 0720 실물 사진) — 레이어 3개뿐.
                 ObjectId layConc = EnsureLayer(db, tr, "DH-옹벽블록-콘크리트", ConcreteRgb);
                 ObjectId layBand = EnsureLayer(db, tr, "DH-옹벽블록-버건디", BurgundyRgb);
-                ObjectId layCap = EnsureLayer(db, tr, "DH-캡블록", ConcreteRgb);
+                ObjectId layCap = EnsureLayer(db, tr, "DH-캡블록", CapConcreteRgb);
 
                 foreach (var (_, blocks, caps) in sets)
                 {
@@ -73,7 +73,9 @@ public static class WallBlockDwg
     // 기본 콘크리트, 그리고 **15층 콘크리트 + 2층 버건디**를 반복해 사진과 같은 두 줄짜리 띠를 만든다.
     // (JACK 0720: 8+2 → 15+2로 변경 — 띠 간격을 넓힘.)
     // 절토/성토는 색을 구분하지 않는다(둘 다 같은 제품).
-    private static readonly Color ConcreteRgb = Color.FromRgb(198, 194, 186);
+    // 몸통은 캡과 구분되게 아주 살짝 어둡게(JACK 0720) — 캡 198,194,186 / 몸통 178,174,167(약 10% 어두움).
+    private static readonly Color ConcreteRgb = Color.FromRgb(178, 174, 167);   // 옹벽 몸통 블록
+    private static readonly Color CapConcreteRgb = Color.FromRgb(198, 194, 186); // 캡블록(밝은 콘크리트)
     private static readonly Color BurgundyRgb = Color.FromRgb(0x85, 0x58, 0x52);
     private const int BandConcrete = 15;                       // 주기 앞부분(콘크리트) 층수
     private const int BandBurgundy = 2;                        // 띠(버건디) 층수
