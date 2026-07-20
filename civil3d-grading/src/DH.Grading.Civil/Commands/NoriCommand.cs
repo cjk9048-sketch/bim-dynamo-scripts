@@ -100,11 +100,11 @@ public sealed class NoriCommand
                 System.Array.Empty<System.Collections.Generic.IReadOnlyList<Point3>>());
             tr.Commit();
 
-            string msg = "노리선 생성 완료" + note + detail +
-                $"\n\n레이어: DH-사면선-절토/성토 · DH-소단선-절토/성토 · DH-노리선(노랑)" +
-                $"\n긴선 {GradingSettings.HatchLong}m마다 · 짧은선 {GradingSettings.HatchShort}m마다(절반)";
-            ed.WriteMessage("\n" + msg.Replace("\n\n", "\n"));
-            AcadApp.ShowAlertDialog(msg);
+            // 팝업은 성패만 — 개수·레이어 등 상세는 명령창과 로그로(공용 배포용, JACK 0720).
+            AcadApp.ShowAlertDialog("노리선 생성 완료");
+            ed.WriteMessage("\n" + ("노리선 생성 완료" + note + detail +
+                $"\n레이어: DH-사면선-절토/성토 · DH-소단선-절토/성토 · DH-노리선(노랑)" +
+                $"\n긴선 {GradingSettings.HatchLong}m마다 · 짧은선 {GradingSettings.HatchShort}m마다(절반)").Replace("\n\n", "\n"));
             try
             {
                 System.IO.File.AppendAllText(@"C:\Users\user\Desktop\AI\civil3d-grading\DHGRADE_진단.log",

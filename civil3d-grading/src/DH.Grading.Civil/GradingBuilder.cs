@@ -385,7 +385,7 @@ public static class GradingBuilder
     }
 
     /// <summary>이름이 baseName 또는 baseName_N 인 지표면을 모두 삭제(잠긴/참조 중이면 그 항목만 건너뜀).</summary>
-    private static void EraseSurfacesByBaseName(Transaction tr, string baseName, ObjectId protect = default)
+    internal static void EraseSurfacesByBaseName(Transaction tr, string baseName, ObjectId protect = default)
     {
         var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
         var victims = new List<ObjectId>();
@@ -403,7 +403,7 @@ public static class GradingBuilder
         }
     }
 
-    private static string UniqueName(Database db, Transaction tr, string baseName)
+    internal static string UniqueName(Database db, Transaction tr, string baseName)
     {
         var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
