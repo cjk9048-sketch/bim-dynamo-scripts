@@ -9,7 +9,14 @@ namespace DH.Grading.Civil;
 public static class GradingSettings
 {
     /// <summary>플러그인 버전 — 팝업 첫 줄에 표시(새 빌드 설치 확인용). 커밋마다 갱신.</summary>
-    public const string Version = "v1.3 (2026-07-20 사면·소단 SHP 분리)";
+    public const string Version = "v1.4 (2026-07-20 옹벽3D 블록 DWG)";
+
+    // ── 옹벽 3D 보강토 블록(옹벽3D_기획.md) — 원스톤 블록·캡블록 규격(m). 스샷 0720 실측. ──
+    public static double WallBlockW = 0.46;  // 블록 전면 폭
+    public static double WallBlockD = 0.50;  // 블록 깊이(배면 방향)
+    public static double WallBlockH = 0.20;  // 블록 높이(층높이)
+    public static double WallCapD = 0.30;    // 캡블록 깊이
+    public static double WallCapT = 0.10;    // 캡블록 두께(JACK: 실측 100mm)
 
     public static double BenchHeight = 5.0; // 단높이 (m)
     public static double BenchWidth = 1.0;  // 소단폭 (m)
