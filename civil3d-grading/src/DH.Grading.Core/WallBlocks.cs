@@ -217,26 +217,57 @@ public static class WallBlocks
         return (a, b);
     }
 
-    /// <summary>캡블록 배치(옹벽3D_기획 §4 수정 — JACK 0720: 캡블록 개별, 460×300×100) — 상면이 노출된
-    /// 블록(바로 위층에 수평으로 겹치는 블록이 없는 블록) 위에 캡블록 1개씩 수평으로 얹음.
-    /// [반블록 도입 후] 겹침 판정은 패리티가 아니라 스테이션 구간 겹침(기하)으로 — 반블록 위엔 반캡(Half 유지).
-    /// 반환 Block: X/Y=아래 블록과 동일(전면 하단 중앙), Z=아래 블록 상면, Course=아래 블록 층+1.</summary>
+    /// <summary>캡블록 배치(옹벽3D_기획 §4 수정 — JACK 0720: 캡블록 개별, 460×300×100) — 블록 상면 중
+    /// **노출된 구간마다** 캡을 얹는다. 온전히 노출되면 통캡, 반 칸만 노출되면 그 자리에 반캡.
+    ///
+    /// [부분 노출 처리 — JACK 0720 '절토부 캡 누락'] 예전엔 위층 블록과 조금이라도 겹치면 캡을 통째로
+    /// 생략했다. 조적조는 반 칸 엇갈리므로 **계단(지표 절단) 단차마다 위층이 정확히 반만 덮어** 노출된
+    /// 반 칸이 맨살로 남았다(계단 코마다 캡 1장씩 빠짐). 이제 위층 블록 구간을 빼고 남은 구간을 계산해
+    /// 반 칸이면 반캡으로 메운다 — 캡-블록 충돌은 여전히 0(노출 구간에만 놓으므로).
+    /// 반환 Block: X/Y=노출 구간 중심(벽 진행방향으로 이동), Z=아래 블록 상면, Course=아래 블록 층+1.</summary>
     public static List<Block> GenerateCaps(List<Block> blocks, double blockH = 0.2, double blockW = 0.46)
     {
         var caps = new List<Block>();
         if (blocks.Count == 0) return caps;
+        double halfW = blockW * 0.5;
         var above = blocks.ToLookup(b => (b.Ring, b.Face, b.Course));
         foreach (var b in blocks)
         {
-            double wb = b.Half ? blockW * 0.5 : blockW;
-            bool covered = false;
+            double wb = b.Half ? halfW : blockW;
+            // 이 블록 상면 구간에서 위층 블록이 덮는 부분을 빼 '노출 구간'만 남긴다.
+            var free = new List<(double A, double B)> { (b.S - wb * 0.5, b.S + wb * 0.5) };
             foreach (var a in above[(b.Ring, b.Face, b.Course + 1)])
             {
-                double wa = a.Half ? blockW * 0.5 : blockW;
-                if (System.Math.Abs(a.S - b.S) < (wa + wb) * 0.5 - 0.02) { covered = true; break; }
+                double wa = a.Half ? halfW : blockW;
+                double aLo = a.S - wa * 0.5, aHi = a.S + wa * 0.5;
+                var next = new List<(double A, double B)>(free.Count + 1);
+                foreach (var (s, e) in free)
+                {
+                    if (aHi <= s + 1e-9 || aLo >= e - 1e-9) { next.Add((s, e)); continue; } // 안 겹침
+                    if (aLo > s + 1e-9) next.Add((s, aLo));
+                    if (aHi < e - 1e-9) next.Add((aHi, e));
+                }
+                free = next;
             }
-            if (covered) continue;
-            caps.Add(b with { Z = b.Z + blockH, Course = b.Course + 1 });
+            double ux = System.Math.Cos(b.RotRad), uy = System.Math.Sin(b.RotRad); // 벽 진행방향(로컬 +X)
+            foreach (var (s, e) in free)
+            {
+                double len = e - s;
+                if (len < halfW * 0.8) continue;              // 캡 한 장도 못 놓는 자투리
+                bool half = len < blockW * 0.8;               // 반 칸 노출 → 반캡
+                double mid = (s + e) * 0.5, d = mid - b.S;
+                caps.Add(b with
+                {
+                    X = b.X + ux * d,
+                    Y = b.Y + uy * d,
+                    Z = b.Z + blockH,
+                    Course = b.Course + 1,
+                    S = mid,
+                    Half = half,
+                    RX = b.RX + ux * d,
+                    RY = b.RY + uy * d,
+                });
+            }
         }
         return caps;
     }
