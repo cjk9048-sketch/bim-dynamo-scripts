@@ -1,4 +1,5 @@
-// WallBlocks 오프라인 하네스 — 옹벽 3D 보강토 블록 그리드 필터링 검증 (walltest와 같은 PASS/FAIL 방식)
+// WallBlocks 오프라인 하네스 — 옹벽 3D 보강토 블록 그리드 필터링 + 우각부 반블록 플러시 검증
+// (walltest와 같은 PASS/FAIL 방식)
 using DH.Grading.Core;
 
 int fails = 0;
@@ -8,7 +9,7 @@ void Check(string name, bool ok, string detail = "")
     if (!ok) fails++;
 }
 
-const double W = 0.46, H = 0.2, STEP = 5.0;
+const double W = 0.46, H = 0.2, STEP = 5.0, HW = W / 2;
 
 // 40×40 정사각 크레스트 링(z=105), 아래 단(pad) 링 z=100 — 절토 1개 단.
 static List<Point3> Square(double z) => new()
@@ -17,26 +18,57 @@ static List<Point3> Square(double z) => new()
 };
 var rings = new List<IReadOnlyList<Point3>> { Square(100), Square(105) };
 
+// 벽면(face)별·층별 기대 유닛 수: 40m ÷ 0.46 = 86full + 잔여 0.44 → 짝수층 86F+1H(87),
+// 홀수층 1H+86F(87, 잔여 0.21 < HW라 꼬리 반블록 없음). 층당 4면 × 87 = 348.
+int unitsPerFace = 87, unitsPerCourse = 4 * unitsPerFace;
+int courses = (int)Math.Floor(STEP / H + 1e-6); // 25
+
+// 블록 전면 양끝 X (y=0 벽면: 진행 +x, 폭 방향 = ±x)
+static (double A, double B) EndsX(WallBlocks.Block b, double w) => (b.X - w / 2, b.X + w / 2);
+double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
+
 // ── S1: 평탄 고지반(전절토, 지반 110 ≥ 크레스트) — 전 층·전 열 블록, 캡=최상층 전체 ──
 {
     var g = new FlatGround(110);
     var blocks = WallBlocks.Generate(rings, g, cut: true, slopeN: 0, blockW: W, blockH: H);
-    int cols = (int)Math.Floor(160.0 / W + 1e-9); // 347
-    int courses = (int)Math.Floor(STEP / H + 1e-6); // 25
-    Check("S1 블록수 = 층×열", blocks.Count == cols * courses, $"{blocks.Count} (기대 {cols * courses})");
+    Check("S1 블록수 = 층×유닛", blocks.Count == courses * unitsPerCourse,
+        $"{blocks.Count} (기대 {courses * unitsPerCourse})");
     Check("S1 층수 25", blocks.Max(b => b.Course) == courses - 1, $"max층 {blocks.Max(b => b.Course)}");
-    // 모든 블록 수평(z가 0.2 배수 격자) + 커팅라인 아래
     bool zGrid = blocks.All(b => Math.Abs((b.Z - 100.0) / H - Math.Round((b.Z - 100.0) / H)) < 1e-9);
     Check("S1 블록 z=수평 격자", zGrid);
     Check("S1 상면 ≤ 크레스트", blocks.All(b => b.Z + H <= 105 + 1e-9));
-    // 엇갈림: 0층·1층 같은 열의 station 차 = W/2 → 바닥변(y=0) 블록 X 좌표로 확인
-    var c0 = blocks.Where(b => b.Course == 0 && Math.Abs(b.Y) < 0.3 && b.X > 1 && b.X < 39).OrderBy(b => b.X).First();
-    var c1 = blocks.Where(b => b.Course == 1 && Math.Abs(b.Y) < 0.3 && b.X > c0.X - 0.01).OrderBy(b => b.X).First();
-    Check("S1 엇갈림 반블록", Math.Abs(c1.X - c0.X - W / 2) < 1e-6 || Math.Abs(c1.X - c0.X + W / 2) < 1e-6,
-        $"ΔX {c1.X - c0.X:F3}");
-    var caps = WallBlocks.GenerateCaps(blocks, H);
-    Check("S1 캡 = 최상층 전체", caps.Count == cols, $"{caps.Count} (기대 {cols})");
+    // 반블록 수: 짝수층 4면×1(꼬리) + 홀수층 4면×1(선두) = 층당 4 → 100
+    Check("S1 반블록 층당 4", blocks.Count(b => b.Half) == courses * 4,
+        $"{blocks.Count(b => b.Half)} (기대 {courses * 4})");
+    // 엇갈림: y=0 벽면 중앙부 통블록 줄눈이 위아래 층에서 ≈W/2 어긋남(줄눈 분산가스켓 ±0.02 허용)
+    var c0 = blocks.Where(b => b.Course == 0 && !b.Half && Math.Abs(b.Y) < 0.3 && b.X > 1 && b.X < 39).OrderBy(b => b.X).First();
+    var c1 = blocks.Where(b => b.Course == 1 && !b.Half && Math.Abs(b.Y) < 0.3 && b.X > c0.X - 0.01).OrderBy(b => b.X).First();
+    Check("S1 엇갈림 ≈반블록", Math.Abs(Math.Abs(c1.X - c0.X) - HW) < 0.02, $"ΔX {c1.X - c0.X:F3}");
+    var caps = WallBlocks.GenerateCaps(blocks, H, W);
+    Check("S1 캡 = 최상층 전체", caps.Count == unitsPerCourse, $"{caps.Count} (기대 {unitsPerCourse})");
     Check("S1 캡 z = 크레스트", caps.All(c => Math.Abs(c.Z - 105) < 1e-9));
+    Check("S1 반캡 = 최상층 반블록 4", caps.Count(c => c.Half) == 4, $"{caps.Count(c => c.Half)}");
+
+    // ★ 우각부 플러시(JACK 0720): 모든 층에서 y=0 벽면 블록 전면 양끝이 [0, 40] 안 + 매층 0과 40에 딱 닿음
+    bool noProtrude = true, flushEvery = true;
+    for (int c = 0; c < courses; c++)
+    {
+        var face = blocks.Where(b => b.Course == c && Math.Abs(b.Y) < 0.01).ToList();
+        double lo = face.Min(b => EndsX(b, WidthOf(b)).A), hi = face.Max(b => EndsX(b, WidthOf(b)).B);
+        if (lo < -1e-6 || hi > 40 + 1e-6) noProtrude = false;
+        if (Math.Abs(lo) > 1e-6 || Math.Abs(hi - 40) > 1e-6) flushEvery = false;
+    }
+    Check("S1 ★모서리 무돌출(전층)", noProtrude);
+    Check("S1 ★모서리 플러시(전층 0·40 정확)", flushEvery);
+    // 홀수층 선두 = 반블록(엇갈림이 코너 반블록에서 시작)
+    var oddFirst = blocks.Where(b => b.Course == 1 && Math.Abs(b.Y) < 0.01).OrderBy(b => b.X).First();
+    Check("S1 홀수층 선두 반블록", oddFirst.Half, $"X {oddFirst.X:F3}");
+    // 줄눈 분산 gap ≤ 3mm(87유닛, 잔여 0.21/86)
+    var evenFace = blocks.Where(b => b.Course == 0 && Math.Abs(b.Y) < 0.01).OrderBy(b => b.X).ToList();
+    double maxGap = 0;
+    for (int i = 1; i < evenFace.Count; i++)
+        maxGap = Math.Max(maxGap, EndsX(evenFace[i], WidthOf(evenFace[i])).A - EndsX(evenFace[i - 1], WidthOf(evenFace[i - 1])).B);
+    Check("S1 줄눈 분산 ≤ 3mm", maxGap <= 0.003 + 1e-9, $"max {maxGap * 1000:F1}mm");
 }
 
 // ── S2: 사선 지반(x 방향 상승 102→112) — 계단식, 커팅라인 준수, 캡-블록 무충돌 ──
@@ -44,7 +76,6 @@ var rings = new List<IReadOnlyList<Point3>> { Square(100), Square(105) };
     var g = new SlopeGround(102, 0.25); // g = 102 + 0.25x → x=0: 102(중간), x=40: 112(전고)
     var blocks = WallBlocks.Generate(rings, g, cut: true, slopeN: 0, blockW: W, blockH: H);
     Check("S2 블록 존재", blocks.Count > 0, $"{blocks.Count}개");
-    // 커팅라인: 상면 ≤ clamp(지반, 토우, 크레스트) + zTol
     bool under = true;
     foreach (var b in blocks)
     {
@@ -54,18 +85,18 @@ var rings = new List<IReadOnlyList<Point3>> { Square(100), Square(105) };
     }
     Check("S2 상면 ≤ 커팅라인", under);
     // 계단식: 바닥변(y=0)에서 열별 최고층이 x 증가에 따라 단조증가(지반 상승 방향)
-    var bottom = blocks.Where(b => Math.Abs(b.Y) < 0.3).GroupBy(b => b.Column)
-        .Select(gr => (Col: gr.Key, TopC: gr.Max(b => b.Course), X: gr.First().X)).OrderBy(t => t.X).ToList();
+    var bottom = blocks.Where(b => Math.Abs(b.Y) < 0.3).GroupBy(b => (b.Face, b.Column))
+        .Select(gr => (TopC: gr.Max(b => b.Course), X: gr.First().X)).OrderBy(t => t.X).ToList();
     bool mono = true;
-    for (int i = 1; i < bottom.Count; i++) if (bottom[i].TopC < bottom[i - 1].TopC - 0) { mono = false; break; }
+    for (int i = 1; i < bottom.Count; i++) if (bottom[i].TopC < bottom[i - 1].TopC) { mono = false; break; }
     Check("S2 계단 단조증가(y=0변)", mono, $"열 {bottom.Count}개");
-    // 캡: 위층 블록과 수평 겹침 없음(같은 링·위층에서 station 겹치는 블록 존재 금지)
-    var caps = WallBlocks.GenerateCaps(blocks, H);
-    var occ = blocks.ToLookup(b => (b.Ring, b.Course));
+    // 캡: 같은 벽면 위층 블록과 스테이션 겹침 없음
+    var caps = WallBlocks.GenerateCaps(blocks, H, W);
+    var occ = blocks.ToLookup(b => (b.Ring, b.Face, b.Course));
     bool collide = false;
     foreach (var c in caps)
-        foreach (var b in occ[(c.Ring, c.Course)]) // 캡 Course = 위층 번호
-            if (Math.Abs(b.X - c.X) < W * 0.99 && Math.Abs(b.Y - c.Y) < W * 0.99) { collide = true; break; }
+        foreach (var b in occ[(c.Ring, c.Face, c.Course)]) // 캡 Course = 위층 번호
+            if (Math.Abs(b.S - c.S) < (WidthOf(b) + WidthOf(c)) / 2 - 0.021) { collide = true; break; }
     Check("S2 캡-블록 무충돌", !collide, $"캡 {caps.Count}개");
     Check("S2 캡 존재", caps.Count > 0);
 }
@@ -76,7 +107,7 @@ var rings = new List<IReadOnlyList<Point3>> { Square(100), Square(105) };
     Check("S3 벽 없음 → 블록 0", blocks.Count == 0, $"{blocks.Count}개");
 }
 
-// ── S4: 뒷물림(slopeN=0.05) — 아래층일수록 안쪽, 층당 n×H=10mm ──
+// ── S4: 뒷물림(slopeN=0.05) — 아래층일수록 안쪽 + 모서리도 층별 플러시 ──
 {
     var g = new FlatGround(110);
     var blocks = WallBlocks.Generate(rings, g, cut: true, slopeN: 0.05, blockW: W, blockH: H);
@@ -85,22 +116,42 @@ var rings = new List<IReadOnlyList<Point3>> { Square(100), Square(105) };
     var yTop = blocks.Where(b => b.Course == 24 && b.Y > -0.1 && b.Y < 0.5 && b.X > 5 && b.X < 35).Select(b => b.Y).FirstOrDefault(-1);
     Check("S4 0층 안쪽 0.24", Math.Abs(y0 - 0.05 * (STEP - H)) < 1e-6, $"y0 {y0:F3}");
     Check("S4 최상층 링 위(0)", Math.Abs(yTop) < 1e-6, $"yTop {yTop:F3}");
+    // ★ 뒷물림 모서리 정합: 층 c 전면선은 y=off(c), 전면 양끝은 [off, 40−off] — 층별 오프셋 사각형에 플러시
+    bool flushOff = true;
+    for (int c = 0; c < courses; c++)
+    {
+        double off = 0.05 * (STEP - (c + 1) * H);
+        var face = blocks.Where(b => b.Course == c && Math.Abs(b.Y - off) < 0.01).ToList();
+        if (face.Count == 0) { flushOff = false; break; }
+        double lo = face.Min(b => EndsX(b, WidthOf(b)).A), hi = face.Max(b => EndsX(b, WidthOf(b)).B);
+        if (Math.Abs(lo - off) > 1e-6 || Math.Abs(hi - (40 - off)) > 1e-6) { flushOff = false; break; }
+    }
+    Check("S4 ★뒷물림 모서리 플러시(전층)", flushOff);
 }
 
 // ── S5: 성토(정렬선=토우 링 z=100, 크레스트 105, 지반 99 — 전면 노출) ──
 {
     var fillRings = new List<IReadOnlyList<Point3>> { Square(105), Square(100) }; // rings[0]=pad(위), rings[1]=토우 링
     var blocks = WallBlocks.Generate(fillRings, new FlatGround(99), cut: false, slopeN: 0.05, blockW: W, blockH: H);
-    int cols = (int)Math.Floor(160.0 / W + 1e-9);
-    int courses = (int)Math.Floor(STEP / H + 1e-6);
-    Check("S5 성토 블록수 = 층×열", blocks.Count == cols * courses, $"{blocks.Count} (기대 {cols * courses})");
+    // 뒷물림으로 위층일수록 벽면이 안쪽 → 층별 배치 길이 40−2×off(off=n×(c+1)H), 유닛 수도 층별 계산.
+    static int UnitsForLen(double len, bool odd)
+    {
+        double rem = len - (odd ? HW : 0);
+        if (rem < -1e-9) return 0;
+        int nFull = (int)Math.Floor(rem / W + 1e-9);
+        rem -= nFull * W;
+        return (odd ? 1 : 0) + nFull + (rem >= HW - 1e-9 ? 1 : 0);
+    }
+    int expected = 0;
+    for (int c = 0; c < courses; c++)
+        expected += 4 * UnitsForLen(40 - 2 * 0.05 * (c + 1) * H, c % 2 == 1);
+    Check("S5 성토 블록수 = 층별 유닛합", blocks.Count == expected, $"{blocks.Count} (기대 {expected})");
     Check("S5 바닥 z = 토우(100)", Math.Abs(blocks.Min(b => b.Z) - 100) < 1e-9);
     // 뒷물림: 위층일수록 안쪽 — 바닥변에서 0층 y = n×H = 0.01, 최상층 y = n×step = 0.25
     var y0 = blocks.Where(b => b.Course == 0 && b.Y > -0.1 && b.Y < 0.5 && b.X > 5 && b.X < 35).Select(b => b.Y).FirstOrDefault(-1);
     var yTop = blocks.Where(b => b.Course == courses - 1 && b.Y > -0.1 && b.Y < 0.5 && b.X > 5 && b.X < 35).Select(b => b.Y).FirstOrDefault(-1);
     Check("S5 성토 0층 y=n×H", Math.Abs(y0 - 0.05 * H) < 1e-6, $"y0 {y0:F3}");
     Check("S5 성토 최상층 y=n×step", Math.Abs(yTop - 0.05 * STEP) < 1e-6, $"yTop {yTop:F3}");
-    // 성토 지반이 크레스트 위(매몰) → 0
     var buried = WallBlocks.Generate(fillRings, new FlatGround(106), cut: false, slopeN: 0, blockW: W, blockH: H);
     Check("S5 매몰 → 블록 0", buried.Count == 0, $"{buried.Count}개");
 }
@@ -121,8 +172,46 @@ var rings = new List<IReadOnlyList<Point3>> { Square(100), Square(105) };
     var g = new FlatGround(110);
     var blocks = WallBlocks.Generate(rings, g, cut: true, slopeN: 0, blockW: W, blockH: H);
     var b0 = blocks.First(b => Math.Abs(b.Y) < 0.01 && b.X > 5 && b.X < 35);
-    // 깊이방향 (0,−1): rot = atan2(−dx, dy) = atan2(0, −1) = π
     Check("S7 절토 y=0변 rot=π", Math.Abs(Math.Abs(b0.RotRad) - Math.PI) < 1e-6, $"rot {b0.RotRad:F3}");
+}
+
+// ── S8: L자(오목 코너 포함) — 전면 무돌출: 어떤 블록 전면 끝도 링 전면선 밖으로 안 나감 ──
+{
+    static List<Point3> LShape(double z) => new()
+    {
+        new Point3(0, 0, z), new Point3(40, 0, z), new Point3(40, 20, z),
+        new Point3(20, 20, z), new Point3(20, 40, z), new Point3(0, 40, z),
+    };
+    var lRings = new List<IReadOnlyList<Point3>> { LShape(100), LShape(105) };
+    var blocks = WallBlocks.Generate(lRings, new FlatGround(110), cut: true, slopeN: 0, blockW: W, blockH: H);
+    Check("S8 L자 블록 존재", blocks.Count > 0, $"{blocks.Count}개");
+    // 전면 끝점이 L 폴리곤 경계 밖(바깥쪽)으로 tol 이상 벗어나지 않는지 — 우각부 삐져나옴 검출.
+    // 전면 끝점 = 삽입점 ± (폭/2)·진행방향. 진행방향 = rot로부터 (깊이 = 로컬+Y = 바깥이므로 X축 = 깊이에 수직).
+    bool ok = true; double worst = 0;
+    foreach (var b in blocks)
+    {
+        double w = WidthOf(b);
+        // 로컬 X축(진행방향) = (cos rot, sin rot)
+        double ux = Math.Cos(b.RotRad), uy = Math.Sin(b.RotRad);
+        foreach (double s in new[] { -w / 2, w / 2 })
+        {
+            double px = b.X + ux * s, py = b.Y + uy * s;
+            // L 폴리곤 내부(전면선 위 포함)여야 함 — 절토 전면은 링 안쪽. 바깥 돌출 = 오염.
+            double d = SignedOut(px, py);
+            if (d > 1e-6) { ok = false; worst = Math.Max(worst, d); }
+        }
+    }
+    Check("S8 ★L자 전면 무돌출(오목 포함)", ok, ok ? "" : $"최대 돌출 {worst * 1000:F1}mm");
+
+    static double SignedOut(double x, double y)
+    {   // L 영역: [0,40]×[0,20] ∪ [0,20]×[0,40] — 밖이면 경계까지 거리(근사), 안이면 0
+        bool inA = x >= -1e-9 && x <= 40 + 1e-9 && y >= -1e-9 && y <= 20 + 1e-9;
+        bool inB = x >= -1e-9 && x <= 20 + 1e-9 && y >= -1e-9 && y <= 40 + 1e-9;
+        if (inA || inB) return 0;
+        double dA = Math.Max(Math.Max(-x, x - 40), Math.Max(-y, y - 20));
+        double dB = Math.Max(Math.Max(-x, x - 20), Math.Max(-y, y - 40));
+        return Math.Min(dA, dB);
+    }
 }
 
 Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
