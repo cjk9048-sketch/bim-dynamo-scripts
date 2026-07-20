@@ -19,6 +19,11 @@ public sealed class GradingDialog : Window
     private readonly CheckBox _mountainTerrace;
     private readonly TextBox _terraceInterval;
     private readonly TextBox _terraceWidth;
+    private readonly TextBox _blockW;
+    private readonly TextBox _blockD;
+    private readonly TextBox _blockH;
+    private readonly TextBox _capD;
+    private readonly TextBox _capT;
 
     public GradingDialog(string okText = "확인")
     {
@@ -64,6 +69,19 @@ public sealed class GradingDialog : Window
 
         _terraceInterval = AddRow(root, "대소단 간격 (m)", GradingSettings.TerraceInterval, "수직 누적 이 높이마다 대소단 (법정 15m)");
         _terraceWidth = AddRow(root, "대소단 폭 (m)", GradingSettings.TerraceWidth, "큰 평탄 구간의 너비 (법정 15m)");
+
+        root.Children.Add(new TextBlock
+        {
+            Text = "옹벽 3D 블록규격 (mm)",
+            FontWeight = FontWeights.Bold,
+            Margin = new Thickness(0, 10, 0, 6),
+            ToolTip = "옹벽 모드(구배 0.05)에서 INFRAWORKS 내보내기 때 만드는 옹벽3D.dwg의 보강토 블록 크기.",
+        });
+        _blockW = AddRow(root, "블록 폭 (mm)", GradingSettings.WallBlockW * 1000, "원스톤 블록 전면 폭 (기본 460)");
+        _blockD = AddRow(root, "블록 깊이 (mm)", GradingSettings.WallBlockD * 1000, "배면 방향 깊이 (기본 500)");
+        _blockH = AddRow(root, "블록 높이 (mm)", GradingSettings.WallBlockH * 1000, "한 층(코스) 높이 (기본 200)");
+        _capD = AddRow(root, "캡블록 깊이 (mm)", GradingSettings.WallCapD * 1000, "폭은 블록 폭과 동일 (기본 300)");
+        _capT = AddRow(root, "캡블록 두께 (mm)", GradingSettings.WallCapT * 1000, "기본 100");
 
         root.Children.Add(new TextBlock
         {
@@ -132,7 +150,12 @@ public sealed class GradingDialog : Window
             !TryParse(_cutSlope, "절토구배", out double cs, positive: false) ||
             !TryParse(_fillSlope, "성토구배", out double fs, positive: false) ||
             !TryParse(_terraceInterval, "대소단 간격", out double ti, positive: true) ||
-            !TryParse(_terraceWidth, "대소단 폭", out double tw, positive: false))
+            !TryParse(_terraceWidth, "대소단 폭", out double tw, positive: false) ||
+            !TryParse(_blockW, "블록 폭", out double blw, positive: true) ||
+            !TryParse(_blockD, "블록 깊이", out double bld, positive: true) ||
+            !TryParse(_blockH, "블록 높이", out double blh, positive: true) ||
+            !TryParse(_capD, "캡블록 깊이", out double cpd, positive: true) ||
+            !TryParse(_capT, "캡블록 두께", out double cpt, positive: true))
             return;
 
         // [구배 하한 0.05 — JACK] 사용자가 0.05 이하(거의 수직 옹벽)를 넣어도 무조건 0.05로 처리.
@@ -149,6 +172,12 @@ public sealed class GradingDialog : Window
         GradingSettings.MountainTerrace = _mountainTerrace.IsChecked == true;
         GradingSettings.TerraceInterval = ti;
         GradingSettings.TerraceWidth = tw;
+        // 블록규격은 mm 입력 → m 저장 (DHINFRA 옹벽3D.dwg가 m 단위로 읽음)
+        GradingSettings.WallBlockW = blw / 1000.0;
+        GradingSettings.WallBlockD = bld / 1000.0;
+        GradingSettings.WallBlockH = blh / 1000.0;
+        GradingSettings.WallCapD = cpd / 1000.0;
+        GradingSettings.WallCapT = cpt / 1000.0;
 
         DialogResult = true;
         Close();
