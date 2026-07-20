@@ -9,7 +9,7 @@ namespace DH.Grading.Civil;
 public static class GradingSettings
 {
     /// <summary>플러그인 버전 — 팝업 첫 줄에 표시(새 빌드 설치 확인용). 커밋마다 갱신.</summary>
-    public const string Version = "v1.2 (2026-07-20 §20 모드별 내보내기)";
+    public const string Version = "v1.3 (2026-07-20 사면·소단 SHP 분리)";
 
     public static double BenchHeight = 5.0; // 단높이 (m)
     public static double BenchWidth = 1.0;  // 소단폭 (m)
