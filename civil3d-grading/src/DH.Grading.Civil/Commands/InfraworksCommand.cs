@@ -238,20 +238,29 @@ public sealed class InfraworksCommand
                 // 물량 CSV — 구분/단레벨별 정수 개수(엑셀용 UTF-8 BOM, 숫자는 고정 문화권).
                 var ciCsv = System.Globalization.CultureInfo.InvariantCulture;
                 var csv = new System.Text.StringBuilder();
-                csv.AppendLine("구분,단레벨,원스톤블록(개),반블록(개),캡블록(개),반캡블록(개)");
+                // 색상별로 나눠 적는다 — 콘크리트/버건디는 서로 다른 제품이라 발주 수량이 따로 필요(JACK 0720).
+                csv.AppendLine("구분,단레벨,콘크리트(개),콘크리트반블록(개),버건디(개),버건디반블록(개),캡블록(개),반캡블록(개)");
                 foreach (var (cutFlag, blocks, capsB) in wallSets)
                 {
                     string lbl = cutFlag ? "절토" : "성토";
                     foreach (var grp in blocks.GroupBy(b => b.Level).OrderBy(g2 => g2.Key))
                     {
-                        int fullN = grp.Count(b => !b.Half), halfN = grp.Count(b => b.Half);
+                        int concN = grp.Count(b => !b.Half && !WallBlockDwg.IsBandCourse(b.Course));
+                        int concH = grp.Count(b => b.Half && !WallBlockDwg.IsBandCourse(b.Course));
+                        int bandN = grp.Count(b => !b.Half && WallBlockDwg.IsBandCourse(b.Course));
+                        int bandH = grp.Count(b => b.Half && WallBlockDwg.IsBandCourse(b.Course));
                         int capN = capsB.Count(c => !c.Half && System.Math.Abs(c.Level - grp.Key) < 1e-6);
                         int hcapN = capsB.Count(c => c.Half && System.Math.Abs(c.Level - grp.Key) < 1e-6);
-                        csv.AppendLine(string.Create(ciCsv, $"{lbl},{grp.Key:F2},{fullN},{halfN},{capN},{hcapN}"));
+                        csv.AppendLine(string.Create(ciCsv,
+                            $"{lbl},{grp.Key:F2},{concN},{concH},{bandN},{bandH},{capN},{hcapN}"));
                     }
                 }
+                var allB = wallSets.SelectMany(s => s.Blocks).ToList();
                 csv.AppendLine(
-                    $"합계,,{wallSets.Sum(s => s.Blocks.Count(b => !b.Half))},{wallSets.Sum(s => s.Blocks.Count(b => b.Half))}," +
+                    $"합계,,{allB.Count(b => !b.Half && !WallBlockDwg.IsBandCourse(b.Course))}," +
+                    $"{allB.Count(b => b.Half && !WallBlockDwg.IsBandCourse(b.Course))}," +
+                    $"{allB.Count(b => !b.Half && WallBlockDwg.IsBandCourse(b.Course))}," +
+                    $"{allB.Count(b => b.Half && WallBlockDwg.IsBandCourse(b.Course))}," +
                     $"{wallSets.Sum(s => s.Caps.Count(c => !c.Half))},{wallSets.Sum(s => s.Caps.Count(c => c.Half))}");
                 System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "옹벽물량.csv"),
                     csv.ToString(), new System.Text.UTF8Encoding(true));

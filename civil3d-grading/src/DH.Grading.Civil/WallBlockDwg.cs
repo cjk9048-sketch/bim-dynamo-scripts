@@ -34,12 +34,18 @@ public static class WallBlockDwg
                 ObjectId defHalfCap = MakeBoxDef(db, tr, bt, "DH_캡반블록", blockW * 0.5, capD, capT);
                 var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
 
-                foreach (var (cutFlag, blocks, caps) in sets)
+                // 재질은 절토/성토가 아니라 '색 띠'로 구분(JACK 0720 실물 사진) — 레이어 3개뿐.
+                ObjectId layConc = EnsureLayer(db, tr, "DH-옹벽블록-콘크리트", ConcreteRgb);
+                ObjectId layBand = EnsureLayer(db, tr, "DH-옹벽블록-버건디", BurgundyRgb);
+                ObjectId layCap = EnsureLayer(db, tr, "DH-캡블록", ConcreteRgb);
+
+                foreach (var (_, blocks, caps) in sets)
                 {
-                    string label = cutFlag ? "절토" : "성토";
-                    ObjectId layBlock = EnsureLayer(db, tr, $"DH-옹벽블록-{label}", cutFlag ? (short)8 : (short)30);
-                    ObjectId layCap = EnsureLayer(db, tr, $"DH-캡블록-{label}", cutFlag ? (short)250 : (short)40);
-                    foreach (var b in blocks) { Insert(tr, ms, b.Half ? defHalf : defBlock, layBlock, b); nb++; }
+                    foreach (var b in blocks)
+                    {
+                        Insert(tr, ms, b.Half ? defHalf : defBlock, IsBandCourse(b.Course) ? layBand : layConc, b);
+                        nb++;
+                    }
                     foreach (var c in caps) { Insert(tr, ms, c.Half ? defHalfCap : defCap, layCap, c); nc++; }
                 }
                 tr.Commit();
@@ -57,6 +63,19 @@ public static class WallBlockDwg
         ms.AppendEntity(br);
         tr.AddNewlyCreatedDBObject(br, true);
     }
+
+    // ── 재질 색(JACK 0720 확정, 실물 사진 Capture_0720_164259) ──
+    // 기본 콘크리트, 그리고 **8층 콘크리트 + 2층 버건디**를 반복해 사진과 같은 두 줄짜리 띠를 만든다.
+    // 절토/성토는 색을 구분하지 않는다(둘 다 같은 제품).
+    private static readonly Color ConcreteRgb = Color.FromRgb(198, 194, 186);
+    private static readonly Color BurgundyRgb = Color.FromRgb(0x85, 0x58, 0x52);
+    private const int BandPeriod = 10;   // 한 주기 = 콘크리트 8 + 버건디 2
+    private const int BandConcrete = 8;  // 주기 앞부분(콘크리트) 층수
+
+    /// <summary>이 층이 버건디 띠인가 — 단(bench)마다 최하층부터 8층 콘크리트 → 2층 버건디 반복.
+    /// ※기준점은 각 단의 토우(최하층). 단마다 다시 세므로 띠는 단별로 같은 높이에 온다.
+    /// 물량 CSV도 같은 규칙으로 색상을 세야 하므로 public.</summary>
+    public static bool IsBandCourse(int course) => course % BandPeriod >= BandConcrete;
 
     // 육각형 평면 상수(JACK 0720 실물 사진 — 블록 사이 V홈 입체감): 전면 모따기(한쪽), 어깨 깊이, 후면 폭 비율.
     private const double FrontChamfer = 0.03;   // 전면이 좌우 30mm씩 좁음 → 이웃과 60mm V홈
@@ -129,12 +148,11 @@ public static class WallBlockDwg
         return id;
     }
 
-    private static ObjectId EnsureLayer(Database db, Transaction tr, string name, short colorIndex)
+    private static ObjectId EnsureLayer(Database db, Transaction tr, string name, Color color)
     {
         var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForWrite);
         if (lt.Has(name)) return lt[name];
-        var ltr = new LayerTableRecord
-        { Name = name, Color = Color.FromColorIndex(ColorMethod.ByAci, colorIndex) };
+        var ltr = new LayerTableRecord { Name = name, Color = color };
         ObjectId id = lt.Add(ltr);
         tr.AddNewlyCreatedDBObject(ltr, true);
         return id;

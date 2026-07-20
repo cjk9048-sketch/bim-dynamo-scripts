@@ -185,13 +185,24 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
     Check("S6 유지블록 영역 내", kept.All(b => b.X <= 10.4 && b.Y <= 10.4));
     Check("S6 제외수 = 생성−유지", dropped == blocks.Count - kept.Count, $"제외 {dropped}");
 
-    // S6b(§27): 성토 링을 자기 자신(region)으로 필터 — 전면돌출+뒷물림 이탈로 탈락하는 블록이 없어야 함.
+    // ★ S6b(§28, JACK '중간중간 빠진 블록'의 실제 원인): 영역 판정은 **링 위치** 기준이어야 하며,
+    //   블록 제작 오프셋(전면 돌출 D/2·뒷물림)에 좌우되면 안 된다. 현장에서 성토 4010개가 이렇게 탈락했다.
+    //   region을 링과 정확히 같게 두고(=성토 daylight가 최외곽인 실제 상황) 깊이를 키워도 탈락 0이어야 함.
     {
         var fillRings = new List<IReadOnlyList<Point3>> { Square(105), Square(100) };
-        var fb = WallBlocks.Generate(fillRings, new FlatGround(99), cut: false, slopeN: 0.05, blockW: W, blockH: H);
         var self = new List<IReadOnlyList<Point3>> { Square(0) };   // 링과 동일한 평면 영역
-        WallBlocks.FilterByRegions(fb, self, 0.3, out int dropTight);
-        Check("S6b 성토 자기영역 필터 탈락 0", dropTight == 0, $"탈락 {dropTight}");
+        foreach (double dd in new[] { 0.5, 1.0, 2.0 })              // 깊이가 커져도 판정 불변이어야
+        {
+            var fb = WallBlocks.Generate(fillRings, new FlatGround(99), cut: false, slopeN: 0.05,
+                blockW: W, blockH: H, blockD: dd);
+            WallBlocks.FilterByRegions(fb, self, 0.3, out int drop);
+            Check($"S6b ★성토 영역필터 탈락 0 (깊이 {dd:F1}m)", drop == 0, $"탈락 {drop}");
+        }
+        // 링 위치는 반드시 링 위(사각형 경계)의 점이어야 — 코너 넘어감이 남으면 영역 밖으로 새어나간다.
+        var a2 = WallBlocks.Generate(fillRings, new FlatGround(99), cut: false, slopeN: 0.05,
+            blockW: W, blockH: H, blockD: 2.0);
+        bool onRing = a2.All(b => b.RX >= -1e-9 && b.RX <= 40 + 1e-9 && b.RY >= -1e-9 && b.RY <= 40 + 1e-9);
+        Check("S6b 링 위치는 항상 링 위(깊이 2m에서도)", onRing);
     }
 }
 
