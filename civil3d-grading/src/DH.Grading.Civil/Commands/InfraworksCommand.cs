@@ -99,6 +99,8 @@ public sealed class InfraworksCommand
             System.Collections.Generic.List<(System.Collections.Generic.List<Point3> Crest, System.Collections.Generic.List<Point3> Toe)>? transFaces = null;
             // [옹벽 3D — 옹벽3D_기획.md] 옹벽 모드 방향별 블록·캡 배치 수집 → 루프 뒤 별도 DWG+물량 CSV.
             var wallSets = new List<(bool Cut, List<WallBlocks.Block> Blocks, List<WallBlocks.Block> Caps)>();
+            // [PSM 패널식 — JACK 0721] 방향별 패널 수집 → 루프 뒤 PSM.dwg.
+            var panelSets = new List<(bool Cut, List<WallPanels.Panel> Panels)>();
             // [번들 v2 — 다중 절/성토 영역] 링 리스트 전체 순회 — 2개+ 영역 누락 버그 수정(JACK).
             static System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? RingsOf(
                 System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? many,
@@ -121,7 +123,9 @@ public sealed class InfraworksCommand
                 //   옹벽 모드(n ≤ 0.05): 옹벽선 + 소단 + 계획폴리곤만 / 사면 모드: 사면부 + 소단 + 계획폴리곤.
                 //   순절토/순성토.shp는 양쪽 모두 제거(불필요).
                 double slopeN = up ? bundle.Params.CutSlope : bundle.Params.FillSlope;
-                bool wallMode = slopeN <= 0.05 + 1e-9;
+                // [옹벽 형태 — JACK 0721] 방향별 드롭박스 선택. 보강토=블록(근수직), PSM=패널(사면), 없음=사면만.
+                WallStyle style = up ? GradingSettings.CutWallStyle : GradingSettings.FillWallStyle;
+                bool wallMode = style != WallStyle.없음_사면;   // 옹벽 스타일이면 사면 SHP 억제(소단만)
 
                 // 링 복원(결정적) — 띠 폴리곤·사면선용
                 var vs = GradingGeometry.Build(bundle.Boundary, ng, bundle.Params, up);
@@ -160,9 +164,22 @@ public sealed class InfraworksCommand
                 // 구 통합 면폴리곤_* 세트는 폐지 — 혼동 방지 위해 제거(우리가 쓰던 파일명만).
                 DeleteShpSet(folder, $"면폴리곤_{label}");
 
-                // ④ 옹벽선_절토/성토.shp — 옹벽 모드(구배 n ≤ 0.05)일 때만 벽 상단 3D 폴리선.
+                // ④-A [PSM 패널식] 절취사면(1:slopeN)에 패널 격자 + 앵커 — DHINFRA 뒤 PSM.dwg.
+                if (style == WallStyle.PSM_패널식)
+                {
+                    if (groundSampler == null)
+                        log.AppendLine($"PSM_{label}: 원지반 표면을 찾지 못해 생략 — 도면에 원지반 TIN 필요");
+                    else
+                    {
+                        var panels = WallPanels.Generate(bundle.Boundary, groundSampler,
+                            slopeN, 1.48, 0.02, 20);
+                        if (panels.Count > 0) panelSets.Add((up, panels));
+                        log.AppendLine($"PSM패널_{label}: {WallPanels.LastDiag}");
+                    }
+                }
+                // ④-B 옹벽선_절토/성토.shp + 보강토 블록 — 보강토 스타일일 때.
                 //    [v2 — JACK §19 재설계] finalRing 비의존: 벽 정렬선(링)을 따라 상단 Z=clamp(원지반, 토우, 크레스트).
-                if (wallMode)
+                else if (style == WallStyle.보강토)
                 {
                     if (groundSampler == null)
                         log.AppendLine($"옹벽선_{label}: 원지반 표면을 찾지 못해 생략 — 도면에 원지반 TIN 필요");
@@ -195,7 +212,7 @@ public sealed class InfraworksCommand
                         try { DumpBlocks(folder, label, blocks, capsB); } catch { } // §27 진단 CSV
                     }
                 }
-                else log.AppendLine($"옹벽선_{label}: 사면 모드(n{slopeN:F2}>0.05) — 옹벽선 생략, 사면부+소단 출력");
+                else log.AppendLine($"{label}: 옹벽 없음(사면) — 사면부+소단 출력");
             }
 
             // ⑤ 옹벽선_전환.shp — 내부 단차 전환사면 상단선(옹벽 프로젝트일 때만, PolylineZ)
@@ -211,6 +228,24 @@ public sealed class InfraworksCommand
                     ShapefileWriter.WritePolylinesZ(System.IO.Path.Combine(folder, "옹벽선_전환"), feats, lineFields, wkt);
                     log.AppendLine($"옹벽선_전환.shp: {feats.Count}개(PolylineZ)");
                 }
+            }
+
+            // ── ⑥-PSM PSM.dwg — PSM 패널식 스타일 패널이 있을 때만(별도 파일). 없으면 잔존 정리. ──
+            if (panelSets.Count == 0)
+            {
+                try { System.IO.File.Delete(System.IO.Path.Combine(folder, "PSM.dwg")); } catch { }
+            }
+            else
+            {
+                string psmPath = System.IO.Path.Combine(folder, "PSM.dwg");
+                try
+                {
+                    var allPanels = panelSets.SelectMany(s => s.Panels).ToList();
+                    var (np, na) = WallPanelDwg.Export(psmPath, allPanels);
+                    log.AppendLine($"PSM.dwg: 패널 {np}개 + 앵커 {na}개 (1480×1480×200, 홈 200×200, 앵커 ⌀70·20°)");
+                }
+                catch (System.Exception pex)
+                { log.AppendLine($"PSM.dwg: 저장 실패 — {pex.Message} (파일 열려 있으면 닫고 재실행)"); }
             }
 
             // ── ⑥ 옹벽3D.dwg + 옹벽물량.csv — 옹벽 모드 블록 배치가 있을 때만(별도 파일, 현재 도면 무영향) ──

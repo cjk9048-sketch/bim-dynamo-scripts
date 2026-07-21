@@ -2,6 +2,15 @@ using DH.Grading.Core;
 
 namespace DH.Grading.Civil;
 
+/// <summary>옹벽 형태(스타일) — 절토부/성토부에 어떤 옹벽을 3D로 만들지(JACK 0721 로드맵).
+/// 치수는 스타일별 코드 고정. 앞으로 콘크리트 옹벽 등 추가.</summary>
+public enum WallStyle
+{
+    없음_사면,      // 옹벽 없음 — 사면(노리)만
+    보강토,         // 보강토(블록) 옹벽 — 근수직(n≤0.05), 블록 격자 (기존)
+    PSM_패널식,     // PSM 프리캐스트 패널 + 어스앵커 — 절취사면(1:0.3)
+}
+
 /// <summary>
 /// 정지 파라미터의 세션 보관소 — [설정] 명령으로 바꾸고 [정지면 생성]이 읽어간다.
 /// 단순 정적 보관(도면 세션 동안 유지). 구배 표기는 1:n = 수직1:수평n.
@@ -9,7 +18,7 @@ namespace DH.Grading.Civil;
 public static class GradingSettings
 {
     /// <summary>플러그인 버전 — 팝업 첫 줄에 표시(새 빌드 설치 확인용). 커밋마다 갱신.</summary>
-    public const string Version = "v3.1 (2026-07-21 PSM 패널식 1차 시안)";
+    public const string Version = "v3.2 (2026-07-21 옹벽 형태 드롭박스)";
 
     // ── 옹벽 3D 보강토 블록(옹벽3D_기획.md) — 원스톤 블록·캡블록 규격(m). 스샷 0720 실측. ──
     // [고정값 — JACK 0720] 사용자가 바꾸지 않는다. 보강토 옹벽이면 무조건 이 치수를 쓴다(설정 UI 제거).
@@ -40,6 +49,10 @@ public static class GradingSettings
     public static bool KeepIntermediateSurfaces = true; // true=중간 지표면(가상절토/가상성토/Pad) 유지(오류 확인용). false=최종면만 남기고 정리
     public static string ExportFolder = "";    // INFRAWORKS SHP 내보내기 폴더(마지막 선택 기억)
     public static int ExportEpsg = 5186;       // SHP .prj 좌표계 — 기본 중부원점(JACK 확인). 5185/5187/5188 가능
+
+    // [옹벽 형태 — JACK 0721] 절토부/성토부에 어떤 옹벽 3D를 만들지 드롭박스로 선택. 치수는 스타일별 고정.
+    public static WallStyle CutWallStyle = WallStyle.보강토;    // 절토 옹벽 형태
+    public static WallStyle FillWallStyle = WallStyle.보강토;   // 성토 옹벽 형태
 
     public static GradingParams ToParams() => new()
     {

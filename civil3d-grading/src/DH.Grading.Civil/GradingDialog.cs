@@ -19,6 +19,8 @@ public sealed class GradingDialog : Window
     private readonly CheckBox _mountainTerrace;
     private readonly TextBox _terraceInterval;
     private readonly TextBox _terraceWidth;
+    private readonly ComboBox _cutWallStyle;
+    private readonly ComboBox _fillWallStyle;
 
     public GradingDialog(string okText = "확인")
     {
@@ -65,9 +67,16 @@ public sealed class GradingDialog : Window
         _terraceInterval = AddRow(root, "대소단 간격 (m)", GradingSettings.TerraceInterval, "수직 누적 이 높이마다 대소단 (법정 15m)");
         _terraceWidth = AddRow(root, "대소단 폭 (m)", GradingSettings.TerraceWidth, "큰 평탄 구간의 너비 (법정 15m)");
 
-        // [옹벽 치수 입력칸 제거 — JACK 0720] 옹벽 종류별로 치수를 고정한다(보강토=460×500×200, 캡 460×300×100).
-        // 앞으로 패널식·콘크리트 옹벽이 추가되면 치수 입력이 아니라 '절토부/성토부에 어떤 옹벽 스타일을 쓸지'
-        // 드롭박스만 두고, 각 스타일의 치수는 코드에 고정한다. → GradingSettings의 Wall* 상수 참조.
+        // [옹벽 형태 드롭박스 — JACK 0721] 절토부/성토부에 어떤 옹벽 3D를 만들지 선택. 치수는 스타일별 고정.
+        root.Children.Add(new TextBlock
+        {
+            Text = "옹벽 형태 (INFRAWORKS 3D)",
+            FontWeight = FontWeights.Bold,
+            Margin = new Thickness(0, 10, 0, 6),
+            ToolTip = "INFRAWORKS 내보내기 때 만드는 옹벽 3D 종류. 없음=사면(노리)만. 보강토=근수직 블록. PSM=패널+어스앵커(사면 1:0.3).",
+        });
+        _cutWallStyle = AddStyleRow(root, "절토 옹벽", GradingSettings.CutWallStyle);
+        _fillWallStyle = AddStyleRow(root, "성토 옹벽", GradingSettings.FillWallStyle);
 
         root.Children.Add(new TextBlock
         {
@@ -90,6 +99,23 @@ public sealed class GradingDialog : Window
         root.Children.Add(btns);
 
         Content = root;
+    }
+
+    private static ComboBox AddStyleRow(Panel parent, string label, WallStyle current)
+    {
+        var row = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = false };
+        var lbl = new TextBlock { Text = label, Width = 110, VerticalAlignment = VerticalAlignment.Center };
+        DockPanel.SetDock(lbl, Dock.Left);
+        row.Children.Add(lbl);
+        var cb = new ComboBox { Width = 180, Height = 24, VerticalContentAlignment = VerticalAlignment.Center };
+        cb.Items.Add("없음 (사면만)");
+        cb.Items.Add("보강토 (블록)");
+        cb.Items.Add("PSM 패널식 (앵커)");
+        cb.SelectedIndex = (int)current;                 // enum 순서 = 콤보 순서
+        DockPanel.SetDock(cb, Dock.Left);
+        row.Children.Add(cb);
+        parent.Children.Add(row);
+        return cb;
     }
 
     private static TextBox AddRow(Panel parent, string label, double value, string hint)
@@ -153,6 +179,8 @@ public sealed class GradingDialog : Window
         GradingSettings.MountainTerrace = _mountainTerrace.IsChecked == true;
         GradingSettings.TerraceInterval = ti;
         GradingSettings.TerraceWidth = tw;
+        GradingSettings.CutWallStyle = (WallStyle)System.Math.Max(0, _cutWallStyle.SelectedIndex);
+        GradingSettings.FillWallStyle = (WallStyle)System.Math.Max(0, _fillWallStyle.SelectedIndex);
 
         DialogResult = true;
         Close();
