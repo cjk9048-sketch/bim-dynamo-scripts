@@ -328,7 +328,115 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
     Check("S9 ★모서리 빈틈 없음(densify)", noCornerGap, noCornerGap ? "" : $"최대 빈틈 {worstGap * 1000:F0}mm");
 }
 
+// ── S10(§36): 코너 앞모서리 연속성 — 인접 두 벽면 블록의 앞면 끝이 코너에서 맞물리는가(JACK 실측 갭). ──
+//    실사이트처럼 densify(0.485m)한 정사각형. 절토(전면 돌출) + 뒷물림. 층마다 벽면0↔벽면1 코너 앞면 갭 측정.
+{
+    static List<Point3> DensifySq(double s, double z, double step)
+    {
+        var pts = new (double X, double Y)[] { (0, 0), (s, 0), (s, s), (0, s) };
+        var o = new List<Point3>();
+        for (int i = 0; i < 4; i++)
+        {
+            var a = pts[i]; var b = pts[(i + 1) % 4];
+            double dx = b.X - a.X, dy = b.Y - a.Y, len = Math.Sqrt(dx * dx + dy * dy);
+            int n = Math.Max(1, (int)Math.Floor(len / step));
+            for (int k = 0; k < n; k++) { double t = k / (double)n; o.Add(new Point3(a.X + dx * t, a.Y + dy * t, z)); }
+        }
+        return o;
+    }
+    var sqRings = new List<IReadOnlyList<Point3>> { DensifySq(40, 100, 0.485), DensifySq(40, 105, 0.485) };
+    var bl = WallBlocks.Generate(sqRings, new FlatGround(110), cut: true, slopeN: 0.05, blockW: W, blockH: H, blockD: D);
+    // 각 층에서 인접 벽면 쌍의 코너 앞모서리 갭 최댓값
+    double worst = 0; int badCourses = 0;
+    foreach (var cg in bl.GroupBy(b => b.Course))
+    {
+        var faces = cg.GroupBy(b => b.Face).Where(g => g.Count() >= 2).ToDictionary(g => g.Key, g => g.OrderBy(b => b.S).ToList());
+        foreach (var fk in faces.Keys)
+        {
+            int nf = (fk + 1) % 4;                              // 정사각형 벽면 0→1→2→3
+            if (!faces.ContainsKey(nf)) continue;
+            var f1 = faces[fk]; var f2 = faces[nf];
+            var (aex, aey) = EndCorner(f1[^1], f1[^2]);         // 벽면 fk 마지막 블록의 진행쪽(코너) 앞모서리
+            var (bsx, bsy) = StartCorner(f2[0], f2[1]);         // 다음 벽면 첫 블록의 시작쪽(코너) 앞모서리
+            double gap = Math.Sqrt((aex - bsx) * (aex - bsx) + (aey - bsy) * (aey - bsy));
+            if (gap > 0.05) { badCourses++; worst = Math.Max(worst, gap); }
+        }
+    }
+    Check("S10 ★코너 앞모서리 연속(갭 없음)", badCourses == 0, badCourses == 0 ? "" : $"{badCourses}층 갭, 최대 {worst * 1000:F0}mm");
+
+    static double Half(WallBlocks.Block b) => (b.Half ? W * 0.5 : W) * 0.5;
+    // 마지막 블록 b·직전 p: 진행방향 = b−p, 코너 앞모서리 = b + 진행·half
+    static (double, double) EndCorner(WallBlocks.Block b, WallBlocks.Block p)
+    {
+        double dx = b.X - p.X, dy = b.Y - p.Y, l = Math.Sqrt(dx * dx + dy * dy);
+        if (l < 1e-9) return (b.X, b.Y);
+        return (b.X + dx / l * Half(b), b.Y + dy / l * Half(b));
+    }
+    // 첫 블록 b·다음 n: 진행방향 = n−b, 시작 앞모서리 = b − 진행·half
+    static (double, double) StartCorner(WallBlocks.Block b, WallBlocks.Block n)
+    {
+        double dx = n.X - b.X, dy = n.Y - b.Y, l = Math.Sqrt(dx * dx + dy * dy);
+        if (l < 1e-9) return (b.X, b.Y);
+        return (b.X - dx / l * Half(b), b.Y - dy / l * Half(b));
+    }
+}
+
+// ── S11(§36): 실제 벽 링(GradingGeometry.Build) 코너 갭 재현 — JACK 실측 boundary 사용 ──
+{
+    // 실측 성토 boundary(8점, 90° 직각들). Z는 평탄(코너 XY 기하만 관심).
+    var bnd = new List<Point3> {
+        new(240344.743,450456.946,100), new(240346.319,450392.337,100),
+        new(240304.897,450392.323,100), new(240304.897,450458.594,100),
+        new(240281.147,450458.432,100), new(240280.951,450487.073,100),
+        new(240326.249,450487.073,100), new(240326.249,450456.946,100),
+    };
+    var pr = new GradingParams {
+        BenchHeight = 5, BenchWidth = 1, CutSlope = 0.05, FillSlope = 0.05,
+        CellSize = 0.5, MaxBenches = 50, VertexSpacing = 1.0, MinSlope = 0.05,
+        MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+    var vs = WallBlocks_TryBuild(bnd, pr, true, out string err);   // 절토(up)
+    if (vs == null) { Check("S11 링 생성", false, err); }
+    else
+    {
+        Check("S11 벽 링 생성", vs.Count >= 2, $"링 {vs.Count}");
+        var bl = WallBlocks.Generate(vs, new FlatGround(200), cut: true, slopeN: 0.05,
+            blockW: W, blockH: H, blockD: D);
+        // 실제 코너별 앞모서리 갭 — 벽면 경계(Face 바뀌는 지점)에서 이웃 끝블록끼리
+        double worst = 0; int bad = 0;
+        foreach (var cg in bl.Where(b => b.Ring == 1).GroupBy(b => b.Course))
+        {
+            var byFace = cg.GroupBy(b => b.Face).Where(g => g.Count() >= 2)
+                .OrderBy(g => g.Key).Select(g => g.OrderBy(b => b.S).ToList()).ToList();
+            for (int i = 0; i < byFace.Count; i++)
+            {
+                var cur = byFace[i]; var nxt = byFace[(i + 1) % byFace.Count];
+                double dx = cur[^1].X - cur[^2].X, dy = cur[^1].Y - cur[^2].Y, l = Math.Sqrt(dx * dx + dy * dy);
+                double hc = (cur[^1].Half ? W / 2 : W) / 2;
+                double aex = cur[^1].X + (l > 1e-9 ? dx / l : 0) * hc, aey = cur[^1].Y + (l > 1e-9 ? dy / l : 0) * hc;
+                double ex = nxt[1].X - nxt[0].X, ey = nxt[1].Y - nxt[0].Y, m2 = Math.Sqrt(ex * ex + ey * ey);
+                double hn = (nxt[0].Half ? W / 2 : W) / 2;
+                double bsx = nxt[0].X - (m2 > 1e-9 ? ex / m2 : 0) * hn, bsy = nxt[0].Y - (m2 > 1e-9 ? ey / m2 : 0) * hn;
+                double gap = Math.Sqrt((aex - bsx) * (aex - bsx) + (aey - bsy) * (aey - bsy));
+                if (gap > 0.05) { bad++; worst = Math.Max(worst, gap); }
+            }
+        }
+        Check("S11 ★실제 링 코너 갭 없음", bad == 0, bad == 0 ? "" : $"{bad}건 갭, 최대 {worst * 1000:F0}mm");
+    }
+}
+
 Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+
+static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd, GradingParams pr, bool up, out string err)
+{
+    err = "";
+    try
+    {
+        var vs = GradingGeometry.Build(bnd, new FlatGround(200), pr, up);
+        return vs.Rings.Select(r => (IReadOnlyList<Point3>)r).ToList();
+    }
+    catch (Exception ex) { err = ex.Message; return null; }
+}
 return fails == 0 ? 0 : 1;
 
 sealed class FlatGround(double z) : IGroundSurface
