@@ -101,9 +101,8 @@ public static class WallPanelDwg
         var sol = ExtrudeLocalPoly(p.Local, -Thick);
         if (p.IsFull)
         {
-            // 온전 패널은 사각형 — 중앙(panel/2, panel/2) 200×200×깊이 홈 빼기.
-            double cu = 0, cv = 0; foreach (var (u, v) in p.Local) { cu += u; cv += v; }
-            cu /= p.Local.Count; cv /= p.Local.Count;
+            // 정착구 = 셀 중심(WallPanels에서 계산한 PocketU/V) 200×200×깊이 홈 빼기(클립돼도 정착구는 온전).
+            double cu = p.PocketU, cv = p.PocketV;
             var pocket = new Solid3d();
             pocket.CreateBox(RecessSize, RecessSize, RecessDepth);
             // 박스는 원점 중심 → 앞면(Z=0)에서 −깊이로: 중심 z=−깊이/2, xy=중앙.

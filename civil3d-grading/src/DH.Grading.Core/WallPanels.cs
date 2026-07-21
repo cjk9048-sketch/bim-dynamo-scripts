@@ -18,7 +18,8 @@ public static class WallPanels
         Point3 AnchorPos, (double x, double y, double z) AnchorDir,
         Point3 Origin,
         (double x, double y, double z) UAxis, (double x, double y, double z) VAxis, (double x, double y, double z) WAxis,
-        IReadOnlyList<(double u, double v)> Local);
+        IReadOnlyList<(double u, double v)> Local,
+        double PocketU = 0, double PocketV = 0);
 
     public static string LastDiag { get; private set; } = "";
 
@@ -55,7 +56,8 @@ public static class WallPanels
             var walk = new Walk(ring);
             if (walk.Length < side) continue;
             double slopeLen = step / vUp;                              // 이 단 사면 길이
-            double sliverMin = side * side * 0.25;                     // 이보다 작은 조각(짜투리 삼각)은 버림
+            // 짜투리 문턱 — daylight 위쪽 삼각 패널은 살리고(누락 방지, JACK 0721), 거의 0인 조각만 버림.
+            double sliverMin = 0.02;                                   // ㎡(약 14×14cm 미만만 제거)
 
             // 면점 — s(0=토우, slopeLen=크레스트)로 갈수록 위로. 수평 방향은 절토/성토가 반대:
             //  · 절토(cut): 크레스트(윗단)가 **바깥(산 쪽)** → 위로 갈수록 바깥(−n). 토우=크레스트에서 안쪽(+n)·아래.
@@ -143,8 +145,12 @@ public static class WallPanels
                         if (s1 <= s0 + 1e-6) break;
                         double topL = System.Math.Min(s1, dl), topR = System.Math.Min(s1, dr);
                         if (topL <= s0 + 1e-6 && topR <= s0 + 1e-6) continue;
-                        // 온전 = 전높이 + 전폭(자투리 부분폭 코너 패널은 앵커·홈 없음).
-                        bool isFull = topL >= s1 - 1e-6 && topR >= s1 - 1e-6 && wCol >= side - 1e-6 && s1 >= s0 + side - 1e-6;
+                        // [정착구 기준 앵커 — JACK 0721] 가운데 200×200 정착구가 daylight/단상한에 안 잘리면 앵커·홈.
+                        //   정착구 = 셀 중심(uMid, s0+side/2) ±100mm. 상단(s0+side/2+0.1)이 전폭·양끝 daylight·단상한
+                        //   모두 아래면 온전. (전높이 클립돼도 정착구만 온전하면 앵커 — 맨 위 패널 누락 해결.)
+                        double pocketTop = s0 + side / 2 + 0.1;
+                        bool isFull = wCol >= side - 1e-6 && s1 >= pocketTop - 1e-6
+                                      && dl >= pocketTop - 1e-6 && dr >= pocketTop - 1e-6;
 
                         var poly = new List<Point3>(); var local = new List<(double u, double v)>();
                         poly.Add(FacePt(u0, s0)); local.Add((0, 0));
@@ -174,9 +180,16 @@ public static class WallPanels
 
                         Point3 center = default, aPos = default;
                         (double x, double y, double z) aDir = default;
+                        double pocketU = 0, pocketV = 0;
                         if (isFull)
                         {
-                            center = FacePt(uMid, (s0 + s1) / 2); aPos = center;
+                            // 정착구·앵커 = 셀 중심(uMid, s0+side/2). 로컬 = 하단 중점 u, v=side/2(뒤집기 반영).
+                            var org = FacePt(u0, s0);
+                            pocketU = (local[0].u + local[1].u) / 2; pocketV = side / 2;
+                            aPos = new Point3(org.X + pocketU * ux + pocketV * vx,
+                                              org.Y + pocketU * uy + pocketV * vy,
+                                              org.Z + pocketU * uz + pocketV * vz);
+                            center = aPos;
                             var (_, _, _, mnx, mny) = walk.At(uMid);
                             double ox = cut ? -mnx : mnx, oy = cut ? -mny : mny;
                             aDir = (ox * System.Math.Cos(aRad), oy * System.Math.Cos(aRad), -System.Math.Sin(aRad));
@@ -184,7 +197,7 @@ public static class WallPanels
                         }
                         else part++;
                         result.Add(new Panel(poly, isFull, center, (wx, wy, wz), aPos, aDir,
-                            FacePt(u0, s0), (ux, uy, uz), (vx, vy, vz), (wx, wy, wz), local));
+                            FacePt(u0, s0), (ux, uy, uz), (vx, vy, vz), (wx, wy, wz), local, pocketU, pocketV));
                     }
                 }
             }
