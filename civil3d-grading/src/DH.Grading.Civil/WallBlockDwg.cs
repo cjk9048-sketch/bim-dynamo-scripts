@@ -28,6 +28,13 @@ public static class WallBlockDwg
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
                 var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForWrite);
+                ObjectId defBlock = MakeHexDef(db, tr, bt, "DH_원스톤블록", blockW, blockD, blockH);
+                ObjectId defHalf = MakeHexDef(db, tr, bt, "DH_원스톤반블록", blockW * 0.5, blockD, blockH);
+                ObjectId defCap = MakeBoxDef(db, tr, bt, "DH_캡블록", blockW, capD, capT);
+                ObjectId defHalfCap = MakeBoxDef(db, tr, bt, "DH_캡반블록", blockW * 0.5, capD, capT);
+                // 코너 채움 블록 — 두 벽면이 앞꼭짓점에서만 만나 비는 뒤 사분면을 메우는 정사각 포스트(D×D×H).
+                // 원점=XY 중심·바닥(WallBlocks 코너 좌표=중심). 위에서 본 슬릿 제거(JACK 0721).
+                ObjectId defCorner = MakeCenteredBoxDef(db, tr, bt, "DH_코너블록", blockD, blockD, blockH);
                 var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
 
                 // 재질은 절토/성토가 아니라 '색 띠'로 구분(JACK 0720 실물 사진) — 레이어 3개뿐.
@@ -35,51 +42,16 @@ public static class WallBlockDwg
                 ObjectId layBand = EnsureLayer(db, tr, "DH-옹벽블록-버건디", BurgundyRgb);
                 ObjectId layCap = EnsureLayer(db, tr, "DH-캡블록", CapConcreteRgb);
 
-                if (GradingSettings.CombineWallBlocks)
+                foreach (var (_, blocks, caps) in sets)
                 {
-                    // [결합 — JACK 0721] 색깔별로 메시 하나로 합쳐 객체 수를 확 줄인다(InfraWorks 성능).
-                    // 물량 CSV·개수는 데이터에서 계산하므로 불변. 화면·색·형상 동일.
-                    var mConc = new MeshAccum(); var mBand = new MeshAccum(); var mCap = new MeshAccum();
-                    foreach (var (_, blocks, caps) in sets)
+                    foreach (var b in blocks)
                     {
-                        foreach (var b in blocks)
-                        {
-                            var acc = IsBandCourse(b.Course) ? mBand : mConc;
-                            var prof = b.Corner ? CornerProfile(blockD)
-                                     : b.Half ? HexProfile(blockW * 0.5, blockD) : HexProfile(blockW, blockD);
-                            acc.AddPrism(prof, blockH, b.X, b.Y, b.Z - ZSink, b.RotRad);
-                            nb++;
-                        }
-                        foreach (var c in caps)
-                        {
-                            mCap.AddPrism(BoxProfile(c.Half ? blockW * 0.5 : blockW, capD), capT,
-                                c.X, c.Y, c.Z - ZSink, c.RotRad);
-                            nc++;
-                        }
+                        ObjectId lay = IsBandCourse(b.Course) ? layBand : layConc;
+                        if (b.Corner) { Insert(tr, ms, defCorner, lay, b); }
+                        else { Insert(tr, ms, b.Half ? defHalf : defBlock, lay, b); }
+                        nb++;
                     }
-                    AddMesh(tr, ms, mConc, layConc);
-                    AddMesh(tr, ms, mBand, layBand);
-                    AddMesh(tr, ms, mCap, layCap);
-                }
-                else
-                {
-                    // 개별 블록(상세/편집용) — 블록정의 5개를 만들고 BlockReference로 삽입.
-                    ObjectId defBlock = MakeHexDef(db, tr, bt, "DH_원스톤블록", blockW, blockD, blockH);
-                    ObjectId defHalf = MakeHexDef(db, tr, bt, "DH_원스톤반블록", blockW * 0.5, blockD, blockH);
-                    ObjectId defCap = MakeBoxDef(db, tr, bt, "DH_캡블록", blockW, capD, capT);
-                    ObjectId defHalfCap = MakeBoxDef(db, tr, bt, "DH_캡반블록", blockW * 0.5, capD, capT);
-                    ObjectId defCorner = MakeCenteredBoxDef(db, tr, bt, "DH_코너블록", blockD, blockD, blockH);
-                    foreach (var (_, blocks, caps) in sets)
-                    {
-                        foreach (var b in blocks)
-                        {
-                            ObjectId lay = IsBandCourse(b.Course) ? layBand : layConc;
-                            if (b.Corner) { Insert(tr, ms, defCorner, lay, b); }
-                            else { Insert(tr, ms, b.Half ? defHalf : defBlock, lay, b); }
-                            nb++;
-                        }
-                        foreach (var c in caps) { Insert(tr, ms, c.Half ? defHalfCap : defCap, layCap, c); nc++; }
-                    }
+                    foreach (var c in caps) { Insert(tr, ms, c.Half ? defHalfCap : defCap, layCap, c); nc++; }
                 }
                 tr.Commit();
             }
@@ -101,53 +73,6 @@ public static class WallBlockDwg
         ms.AppendEntity(br);
         tr.AddNewlyCreatedDBObject(br, true);
     }
-
-    // ── 색깔별 메시 결합(성능, JACK 0721) — 블록마다 각기둥 정점·면을 한 메시에 누적 후 SubDMesh 1개로 ──
-    private sealed class MeshAccum
-    {
-        public readonly Point3dCollection V = new();
-        public readonly System.Collections.Generic.List<int> F = new();  // SubDMesh 면형식: [n, i0..i(n-1), ...]
-
-        /// <summary>2D 프로파일(로컬 XY, CCW)을 h만큼 +Z로 밀어올린 각기둥을 (X,Y,Zb)·회전 rot로 놓아 누적.</summary>
-        public void AddPrism((double x, double y)[] prof, double h, double X, double Y, double Zb, double rot)
-        {
-            int n = prof.Length, b = V.Count;
-            double cos = System.Math.Cos(rot), sin = System.Math.Sin(rot);
-            foreach (var p in prof)                              // 하단 링
-                V.Add(new Point3d(X + p.x * cos - p.y * sin, Y + p.x * sin + p.y * cos, Zb));
-            foreach (var p in prof)                              // 상단 링
-                V.Add(new Point3d(X + p.x * cos - p.y * sin, Y + p.x * sin + p.y * cos, Zb + h));
-            for (int i = 0; i < n; i++)                          // 옆면 4각(CCW 프로파일 → 바깥 법선)
-            {
-                int j = (i + 1) % n;
-                F.Add(4); F.Add(b + i); F.Add(b + j); F.Add(b + n + j); F.Add(b + n + i);
-            }
-            F.Add(n); for (int i = n - 1; i >= 0; i--) F.Add(b + i);      // 하단 캡(아래 법선=역순)
-            F.Add(n); for (int i = 0; i < n; i++) F.Add(b + n + i);      // 상단 캡
-        }
-    }
-
-    private static void AddMesh(Transaction tr, BlockTableRecord ms, MeshAccum acc, ObjectId layer)
-    {
-        if (acc.V.Count == 0) return;
-        var subd = new SubDMesh();
-        subd.SetSubDMesh(acc.V, new Int32Collection(acc.F.ToArray()), 0); // smoothLevel 0 = 각진 면
-        subd.LayerId = layer;
-        ms.AppendEntity(subd);
-        tr.AddNewlyCreatedDBObject(subd, true);
-    }
-
-    // 프로파일(로컬 XY, CCW) — Make*Def의 단면과 동일 좌표계.
-    private static (double x, double y)[] HexProfile(double w, double d)
-    {
-        double ch = System.Math.Min(FrontChamfer, w * 0.2), ys = System.Math.Min(ShoulderDepth, d * 0.4);
-        double wf = w - 2 * ch, wb = w * RearRatio;
-        return new[] { (-wf / 2, 0.0), (wf / 2, 0.0), (w / 2, ys), (wb / 2, d), (-wb / 2, d), (-w / 2, ys) };
-    }
-    private static (double x, double y)[] BoxProfile(double w, double d)   // 캡: 전면 하단 중앙 원점, Y∈[0,d]
-        => new[] { (-w / 2, 0.0), (w / 2, 0.0), (w / 2, d), (-w / 2, d) };
-    private static (double x, double y)[] CornerProfile(double s)          // 코너: XY 중심 정사각
-        => new[] { (-s / 2, -s / 2), (s / 2, -s / 2), (s / 2, s / 2), (-s / 2, s / 2) };
 
     // ── 재질 색(JACK 0720 확정, 실물 사진 Capture_0720_164259) ──
     // 기본 콘크리트, 그리고 **15층 콘크리트 + 2층 버건디**를 반복해 사진과 같은 두 줄짜리 띠를 만든다.

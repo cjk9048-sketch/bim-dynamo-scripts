@@ -9,7 +9,7 @@ namespace DH.Grading.Civil;
 public static class GradingSettings
 {
     /// <summary>플러그인 버전 — 팝업 첫 줄에 표시(새 빌드 설치 확인용). 커밋마다 갱신.</summary>
-    public const string Version = "v3.0 (2026-07-21 색깔별 메시 결합)";
+    public const string Version = "v2.9 (2026-07-21 성토 코너 방향 수정)";
 
     // ── 옹벽 3D 보강토 블록(옹벽3D_기획.md) — 원스톤 블록·캡블록 규격(m). 스샷 0720 실측. ──
     // [고정값 — JACK 0720] 사용자가 바꾸지 않는다. 보강토 옹벽이면 무조건 이 치수를 쓴다(설정 UI 제거).
@@ -20,11 +20,6 @@ public static class GradingSettings
     public const double WallBlockH = 0.20;  // 블록 높이(층높이)
     public const double WallCapD = 0.30;    // 캡블록 깊이
     public const double WallCapT = 0.10;    // 캡블록 두께(JACK: 실측 100mm)
-
-    // [옹벽3D 결합 — JACK 0721] 블록 2만+개를 개별 객체로 두면 InfraWorks 불러오기·프레임이 느림.
-    // true = 색깔별(콘크리트/버건디/캡) 메시 1개로 결합(객체 수 2만→수개, 화면 동일·색 유지·물량 불변).
-    // false = 개별 블록(BlockReference) — 상세/편집용. 기본 = 결합(성능).
-    public static bool CombineWallBlocks = true;
 
     public static double BenchHeight = 5.0; // 단높이 (m)
     public static double BenchWidth = 1.0;  // 소단폭 (m)
