@@ -45,13 +45,17 @@ public static class WallPanels
         {
             var ring = rings[k];
             if (ring == null || ring.Count < 3) continue;
-            double step = System.Math.Abs(MeanZ(ring) - MeanZ(rings[k - 1])); // 이 단 높이
+            double step = System.Math.Abs(MeanZ(ring) - MeanZ(rings[k - 1])); // 이 단 수직높이
             if (step < 0.1) continue;
+            // [패널 크기 규칙 — JACK 0721] 단 수직높이 기준 정사각 한 변: ≤1m→높이, ≤3m→높이/2, ≤5m→높이/3.
+            //   딱 안 나눠지면 소수점 둘째자리 반올림. 두께는 항상 200. (단높이는 팝업에서 5m 상한.)
+            int nRow = step <= 1.0 + 1e-9 ? 1 : step <= 3.0 + 1e-9 ? 2 : 3;
+            double side = System.Math.Round(step / nRow, 2);
+            if (side < 0.05) continue;
             var walk = new Walk(ring);
-            if (walk.Length < panel) continue;
+            if (walk.Length < side) continue;
             double slopeLen = step / vUp;                              // 이 단 사면 길이
-            int cols = (int)System.Math.Floor(walk.Length / stepU + 1e-9);
-            int rows = (int)System.Math.Floor(slopeLen / stepU + 1e-9) + 1;
+            double sliverMin = side * side * 0.25;                     // 이보다 작은 조각(짜투리 삼각)은 버림
 
             // 면점 — 절토·성토 모두 s(0=토우, slopeLen=크레스트)로 갈수록 **위+안쪽**(vUp·s, n·hIn·s).
             // 토우 위치만 다름: 절토=크레스트 링에서 바깥·아래(−step), 성토=토우 링(정렬선) 그대로.
@@ -94,53 +98,69 @@ public static class WallPanels
                 return slopeLen;
             }
 
-            int f0 = full, p0 = part;
-            for (int j = 0; j < cols; j++)
+            // 정면 클립 폴리곤 면적(짜투리 판정) — 로컬 (u,v) 2D 면적.
+            static double Area2D(List<(double u, double v)> p)
             {
-                double u0 = j * stepU, u1 = u0 + panel, uMid = (u0 + u1) / 2;
-                double dl = DayS(u0), dr = DayS(u1);
-                if (dl <= 1e-6 && dr <= 1e-6) continue;                // 이 열 전체가 벽 없음(지반이 토우 아래/위)
-                for (int i = 0; i < rows; i++)
+                double a = 0; for (int i = 0; i < p.Count; i++) { var u = p[i]; var v = p[(i + 1) % p.Count]; a += u.u * v.v - v.u * u.v; }
+                return System.Math.Abs(a) / 2;
+            }
+
+            // [코너에서 벽면 분할 — JACK 0721] 패널이 코너를 가로질러 휘지 않게 모서리에서 끊어 벽면별로 타일링.
+            var corners = walk.FindCorners(25.0);
+            var faces = new List<(double s, double e)>();
+            if (corners.Count < 2) faces.Add((0, walk.Length));
+            else { corners.Sort(); for (int i = 0; i < corners.Count; i++) { double s = corners[i]; double e = corners[(i + 1) % corners.Count]; if (e <= s) e += walk.Length; faces.Add((s, e)); } }
+
+            foreach (var (fs, fe) in faces)
+            {
+                double faceLen = fe - fs;
+                int fcols = (int)System.Math.Floor(faceLen / side + 1e-9);
+                if (fcols < 1) continue;
+                for (int j = 0; j < fcols; j++)
                 {
-                    double s0 = i * stepU, s1 = System.Math.Min(s0 + panel, slopeLen);
-                    if (s1 <= s0 + 1e-6) break;
-                    // 상단 클립(절토=daylight 삼각형, 성토=슬로프끝 꽉). 하단은 s0 평평.
-                    double topL = System.Math.Min(s1, dl), topR = System.Math.Min(s1, dr);
-                    if (topL <= s0 + 1e-6 && topR <= s0 + 1e-6) continue; // 벽 없음
-                    bool isFull = topL >= s1 - 1e-6 && topR >= s1 - 1e-6;
-
-                    var poly = new List<Point3>(); var local = new List<(double u, double v)>();
-                    poly.Add(FacePt(u0, s0)); local.Add((0, 0));
-                    poly.Add(FacePt(u1, s0)); local.Add((panel, 0));
-                    if (topR > s0 + 1e-6) { poly.Add(FacePt(u1, topR)); local.Add((panel, topR - s0)); }
-                    if (topL > s0 + 1e-6) { poly.Add(FacePt(u0, topL)); local.Add((0, topL - s0)); }
-                    if (poly.Count < 3) continue;
-
-                    // 로컬 축: U=하단 좌→우, V=사면 상방(위+안쪽), W=U×V(바깥법선). 원점=하단 좌(u0,s0).
-                    var a00 = FacePt(u0, s0); var a10 = FacePt(u1, s0);
-                    double ux = a10.X - a00.X, uy = a10.Y - a00.Y, uz = a10.Z - a00.Z;
-                    double ull = System.Math.Sqrt(ux * ux + uy * uy + uz * uz); if (ull < 1e-9) continue;
-                    ux /= ull; uy /= ull; uz /= ull;
-                    var (cx, cy, cz, nx, ny) = walk.At(u0);
-                    double vx = nx * hIn, vy = ny * hIn, vz = vUp;
-                    double wx = uy * vz - uz * vy, wy = uz * vx - ux * vz, wz = ux * vy - uy * vx;
-                    double wl = System.Math.Sqrt(wx * wx + wy * wy + wz * wz); if (wl < 1e-9) continue;
-                    wx /= wl; wy /= wl; wz /= wl;
-
-                    Point3 center = default, aPos = default;
-                    (double x, double y, double z) aDir = default;
-                    if (isFull)
+                    double u0 = fs + j * side, u1 = u0 + side, uMid = (u0 + u1) / 2;
+                    double dl = DayS(u0), dr = DayS(u1);
+                    if (dl <= 1e-6 && dr <= 1e-6) continue;
+                    for (int i = 0; ; i++)
                     {
-                        center = FacePt(uMid, (s0 + s1) / 2); aPos = center;
-                        var (_, _, _, mnx, mny) = walk.At(uMid);
-                        // ★앵커는 벽 뒤(지반 속)로 — 절토=바깥(−안쪽법선), 성토=안쪽(+안쪽법선). 20° 하향.
-                        double ox = cut ? -mnx : mnx, oy = cut ? -mny : mny;
-                        aDir = (ox * System.Math.Cos(aRad), oy * System.Math.Cos(aRad), -System.Math.Sin(aRad));
-                        full++;
+                        double s0 = i * side, s1 = System.Math.Min(s0 + side, slopeLen);
+                        if (s1 <= s0 + 1e-6) break;
+                        double topL = System.Math.Min(s1, dl), topR = System.Math.Min(s1, dr);
+                        if (topL <= s0 + 1e-6 && topR <= s0 + 1e-6) continue;
+                        bool isFull = topL >= s1 - 1e-6 && topR >= s1 - 1e-6;
+
+                        var poly = new List<Point3>(); var local = new List<(double u, double v)>();
+                        poly.Add(FacePt(u0, s0)); local.Add((0, 0));
+                        poly.Add(FacePt(u1, s0)); local.Add((side, 0));
+                        if (topR > s0 + 1e-6) { poly.Add(FacePt(u1, topR)); local.Add((side, topR - s0)); }
+                        if (topL > s0 + 1e-6) { poly.Add(FacePt(u0, topL)); local.Add((0, topL - s0)); }
+                        if (poly.Count < 3) continue;
+                        if (!isFull && Area2D(local) < sliverMin) continue;   // ★작은 삼각 짜투리 버림
+
+                        var a00 = FacePt(u0, s0); var a10 = FacePt(u1, s0);
+                        double ux = a10.X - a00.X, uy = a10.Y - a00.Y, uz = a10.Z - a00.Z;
+                        double ull = System.Math.Sqrt(ux * ux + uy * uy + uz * uz); if (ull < 1e-9) continue;
+                        ux /= ull; uy /= ull; uz /= ull;
+                        var (cx, cy, cz, nx, ny) = walk.At(u0);
+                        double vx = nx * hIn, vy = ny * hIn, vz = vUp;
+                        double wx = uy * vz - uz * vy, wy = uz * vx - ux * vz, wz = ux * vy - uy * vx;
+                        double wl = System.Math.Sqrt(wx * wx + wy * wy + wz * wz); if (wl < 1e-9) continue;
+                        wx /= wl; wy /= wl; wz /= wl;
+
+                        Point3 center = default, aPos = default;
+                        (double x, double y, double z) aDir = default;
+                        if (isFull)
+                        {
+                            center = FacePt(uMid, (s0 + s1) / 2); aPos = center;
+                            var (_, _, _, mnx, mny) = walk.At(uMid);
+                            double ox = cut ? -mnx : mnx, oy = cut ? -mny : mny;
+                            aDir = (ox * System.Math.Cos(aRad), oy * System.Math.Cos(aRad), -System.Math.Sin(aRad));
+                            full++;
+                        }
+                        else part++;
+                        result.Add(new Panel(poly, isFull, center, (wx, wy, wz), aPos, aDir,
+                            FacePt(u0, s0), (ux, uy, uz), (vx, vy, vz), (wx, wy, wz), local));
                     }
-                    else part++;
-                    result.Add(new Panel(poly, isFull, center, (wx, wy, wz), aPos, aDir,
-                        FacePt(u0, s0), (ux, uy, uz), (vx, vy, vz), (wx, wy, wz), local));
                 }
             }
         }
@@ -188,6 +208,26 @@ public static class WallPanels
             double dx = b.x - a.x, dy = b.y - a.y, len = System.Math.Sqrt(dx * dx + dy * dy);
             double t = len > 1e-12 ? (u - _cum[lo]) / len : 0; if (t > 1) t = 1;
             return (a.x + dx * t, a.y + dy * t, a.z + (b.z - a.z) * t, _n[lo].nx, _n[lo].ny);
+        }
+
+        /// <summary>모서리(꺾임 ≥ angleDeg) 스테이션 — 패널이 코너를 가로질러 휘지 않게 여기서 벽면을 끊는다.</summary>
+        public List<double> FindCorners(double angleDeg = 25.0)
+        {
+            var res = new List<double>();
+            double cosT = System.Math.Cos(angleDeg * System.Math.PI / 180.0);
+            int m = _cum.Length;
+            for (int i = 0; i < m; i++)
+            {
+                // 정점 i 앞뒤 변 방향의 꺾임.
+                var pa = _a[(i - 1 + m) % m]; var pb = _b[(i - 1 + m) % m];   // 앞 변
+                var qa = _a[i]; var qb = _b[i];                                // 뒤 변
+                double d1x = pb.x - pa.x, d1y = pb.y - pa.y, l1 = System.Math.Sqrt(d1x * d1x + d1y * d1y);
+                double d2x = qb.x - qa.x, d2y = qb.y - qa.y, l2 = System.Math.Sqrt(d2x * d2x + d2y * d2y);
+                if (l1 < 1e-9 || l2 < 1e-9) continue;
+                double dot = (d1x * d2x + d1y * d2y) / (l1 * l2);
+                if (dot < cosT) res.Add(_cum[i]);                              // 이 정점이 모서리
+            }
+            return res;
         }
     }
 }
