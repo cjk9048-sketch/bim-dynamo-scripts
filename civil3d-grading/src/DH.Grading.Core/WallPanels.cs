@@ -115,11 +115,24 @@ public static class WallPanels
             {
                 double faceLen = fe - fs;
                 int fcols = (int)System.Math.Floor(faceLen / side + 1e-9);
-                if (fcols < 1) continue;
-                for (int j = 0; j < fcols; j++)
+                if (fcols < 1 && faceLen < side * 0.3) continue;
+                // 열 스팬 목록: 온전폭 열들 + [코너 채움 — JACK 0721] 벽면 끝 자투리(≥0.1m)를 부분폭 패널로.
+                var spans = new List<(double a, double b)>();
+                for (int j = 0; j < fcols; j++) spans.Add((fs + j * side, fs + (j + 1) * side));
+                double rem = faceLen - fcols * side;
+                // 코너까지 닿는 자투리 패널 — 끝을 코너 1mm 앞으로(정확히 코너면 walk.At이 다음 변 법선을 잡아 휨).
+                if (rem > 0.1) spans.Add((fs + fcols * side, fe - 1e-3));
+                foreach (var (u0, u1) in spans)
                 {
-                    double u0 = fs + j * side, u1 = u0 + side, uMid = (u0 + u1) / 2;
-                    double dl = DayS(u0), dr = DayS(u1);
+                    double wCol = u1 - u0, uMid = (u0 + u1) / 2;
+                    double dl, dr;
+                    if (cut) { dl = DayS(u0); dr = DayS(u1); }
+                    else
+                    {
+                        // ★성토 = 삼각 클립 없음(톱니 방지): 열 중심이 벽 구역이면 온전, 아니면 생략.
+                        double dm = DayS(uMid);
+                        dl = dr = dm > 0 ? slopeLen : 0;
+                    }
                     if (dl <= 1e-6 && dr <= 1e-6) continue;
                     for (int i = 0; ; i++)
                     {
@@ -127,12 +140,13 @@ public static class WallPanels
                         if (s1 <= s0 + 1e-6) break;
                         double topL = System.Math.Min(s1, dl), topR = System.Math.Min(s1, dr);
                         if (topL <= s0 + 1e-6 && topR <= s0 + 1e-6) continue;
-                        bool isFull = topL >= s1 - 1e-6 && topR >= s1 - 1e-6;
+                        // 온전 = 전높이 + 전폭(자투리 부분폭 코너 패널은 앵커·홈 없음).
+                        bool isFull = topL >= s1 - 1e-6 && topR >= s1 - 1e-6 && wCol >= side - 1e-6 && s1 >= s0 + side - 1e-6;
 
                         var poly = new List<Point3>(); var local = new List<(double u, double v)>();
                         poly.Add(FacePt(u0, s0)); local.Add((0, 0));
-                        poly.Add(FacePt(u1, s0)); local.Add((side, 0));
-                        if (topR > s0 + 1e-6) { poly.Add(FacePt(u1, topR)); local.Add((side, topR - s0)); }
+                        poly.Add(FacePt(u1, s0)); local.Add((wCol, 0));
+                        if (topR > s0 + 1e-6) { poly.Add(FacePt(u1, topR)); local.Add((wCol, topR - s0)); }
                         if (topL > s0 + 1e-6) { poly.Add(FacePt(u0, topL)); local.Add((0, topL - s0)); }
                         if (poly.Count < 3) continue;
                         if (!isFull && Area2D(local) < sliverMin) continue;   // ★작은 삼각 짜투리 버림
