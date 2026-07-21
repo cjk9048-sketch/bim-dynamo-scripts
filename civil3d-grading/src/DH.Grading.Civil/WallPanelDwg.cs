@@ -15,6 +15,7 @@ public static class WallPanelDwg
     private const double RecessDepth = 0.06; // 홈 깊이
     private const double AnchorR = 0.035;    // 앵커 원통 반지름(=70mm 지름)
     private const double AnchorLen = 3.0;    // 앵커 길이(지반 속)
+    private const double AnchorProud = 0.15; // 부지쪽 패널 앞으로 노출되는 앵커 머리 길이(JACK: 150mm)
     private const double ZSink = 0.01;
 
     private static readonly Color PanelRgb = Color.FromRgb(200, 198, 194);
@@ -135,9 +136,11 @@ public static class WallPanelDwg
             Point3d.Origin, Vector3d.XAxis, Vector3d.YAxis, Vector3d.ZAxis,
             Point3d.Origin, nx, ny, dir);
         cyl.TransformBy(m);
-        // 중심을 AnchorPos에서 dir로 (L/2 − 0.1) 이동 → 헤드 10cm 노출, 나머지 지반 속.
+        // AnchorDir는 벽 뒤(지반 속) 방향. 머리는 반대(부지쪽)로 AnchorProud 노출, 나머지는 지반 속.
+        // 원통은 z∈[−L/2,L/2] 중심 원점 → 머리끝(부지쪽) = AnchorPos − dir·Proud, 꼬리 = AnchorPos + dir·(L−Proud).
+        // 중심 = AnchorPos + dir·(L/2 − Proud).
         var head = new Point3d(p.AnchorPos.X, p.AnchorPos.Y, p.AnchorPos.Z - ZSink);
-        var center = head + dir * (AnchorLen / 2 - 0.1);
+        var center = head + dir * (AnchorLen / 2 - AnchorProud);
         cyl.TransformBy(Matrix3d.Displacement(center - Point3d.Origin));
         return cyl;
     }

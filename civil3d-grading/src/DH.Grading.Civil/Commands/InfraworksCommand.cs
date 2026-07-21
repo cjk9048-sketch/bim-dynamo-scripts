@@ -171,7 +171,7 @@ public sealed class InfraworksCommand
                         log.AppendLine($"PSM_{label}: 원지반 표면을 찾지 못해 생략 — 도면에 원지반 TIN 필요");
                     else
                     {
-                        var panels = WallPanels.Generate(bundle.Boundary, groundSampler,
+                        var panels = WallPanels.Generate(vs.Rings, groundSampler, up,
                             slopeN, 1.48, 0.02, 20);
                         if (panels.Count > 0) panelSets.Add((up, panels));
                         log.AppendLine($"PSM패널_{label}: {WallPanels.LastDiag}");
