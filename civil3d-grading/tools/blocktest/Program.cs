@@ -495,6 +495,21 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
     // 링에서 과이탈 없음(중심이 오목 코너 ±(D+여유))
     bool nearRing = fc.All(b => Math.Sqrt((b.X - 20) * (b.X - 20) + (b.Y - 20) * (b.Y - 20)) < D + 0.6);
     Check("S12 성토 코너블록 링 근처(무과이탈)", nearRing);
+
+    // ★ 성토 오목 코너 앞면 무돌출 — 코너블록이 인접 면 블록보다 '바깥(계획경계 밖)'으로 안 나가야 함.
+    //   L자 오목 코너(20,20)에서 fill 벽은 pad 바깥(계획폴리곤 밖)으로 나감. 코너블록이 그보다 더 나가면 W 계단.
+    //   면 블록의 최대 바깥 이탈(중심이 링에서 떨어진 거리)과 코너블록의 이탈을 비교.
+    {
+        var faceB = fb.Where(b => !b.Corner && b.Course == 10).ToList();
+        var cornB = fb.Where(b => b.Corner && b.Course == 10).ToList();
+        // 오목 코너(20,20) 부근 면 블록의 바깥 이탈 = |중심 − 링위치(RX,RY)|
+        double faceMax = faceB.Count > 0 ? faceB.Max(b => Math.Sqrt((b.X - b.RX) * (b.X - b.RX) + (b.Y - b.RY) * (b.Y - b.RY))) : 0;
+        double cornMax = cornB.Count > 0 ? cornB.Max(b => Math.Sqrt((b.X - b.RX) * (b.X - b.RX) + (b.Y - b.RY) * (b.Y - b.RY))) : 0;
+        if (Environment.GetEnvironmentVariable("DUMP") == "1")
+            foreach (var b in cornB) Console.WriteLine($"  코너블록 c10: X={b.X:F2} Y={b.Y:F2} RX={b.RX:F2} RY={b.RY:F2} 이탈={Math.Sqrt((b.X - b.RX) * (b.X - b.RX) + (b.Y - b.RY) * (b.Y - b.RY)):F2}");
+        Check("S12 ★성토 코너블록 앞면 무돌출(면블록 이내)", cornMax <= faceMax + D * 0.75 + 1e-6,
+            $"코너이탈 {cornMax:F2} vs 면이탈 {faceMax:F2}");
+    }
 }
 
 Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
