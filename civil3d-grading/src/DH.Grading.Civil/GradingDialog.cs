@@ -41,7 +41,7 @@ public sealed class GradingDialog : Window
             Margin = new Thickness(0, 0, 0, 12),
         });
 
-        _benchHeight = AddRow(root, "단높이 (m)", GradingSettings.BenchHeight, "한 계단의 수직 높이");
+        _benchHeight = AddRow(root, "단높이 (m)", GradingSettings.BenchHeight, "한 계단의 수직 높이 (최대 5m)");
         _benchWidth = AddRow(root, "소단폭 (m)", GradingSettings.BenchWidth, "계단참(평평한 띠) 너비");
         _cutSlope = AddRow(root, "절토구배  1 :", GradingSettings.CutSlope, "수직1 : 수평n (땅을 깎는 비탈)");
         _fillSlope = AddRow(root, "성토구배  1 :", GradingSettings.FillSlope, "수직1 : 수평n (흙을 쌓는 비탈)");
@@ -164,6 +164,15 @@ public sealed class GradingDialog : Window
             !TryParse(_terraceInterval, "대소단 간격", out double ti, positive: true) ||
             !TryParse(_terraceWidth, "대소단 폭", out double tw, positive: false))
             return;
+
+        // [단높이 상한 — JACK 0721] 옹벽 단높이는 최대 5m. 초과 입력은 거부.
+        if (bh > 5.0 + 1e-9)
+        {
+            MessageBox.Show(this, "단높이는 최대 5m까지만 가능합니다.", "입력 오류",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            _benchHeight.Focus(); _benchHeight.SelectAll();
+            return;
+        }
 
         // [구배 하한 0.05 — JACK] 사용자가 0.05 이하(거의 수직 옹벽)를 넣어도 무조건 0.05로 처리.
         // 그 아래는 Civil3D TIN이 예기치 못한 오류를 내는 사례가 있어 미연 방지. (0 입력=옹벽 의도 → 0.05)
