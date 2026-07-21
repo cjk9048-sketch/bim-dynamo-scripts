@@ -86,6 +86,18 @@ public static class WallPanelDwg
                         catch { }
                     }
                 }
+
+                // 코너 포스트 — 볼록 X자·오목 V 빈공간을 덮는 기둥(패널 레이어).
+                foreach (var (b, t, side, pad) in WallPanels.LastCornerPosts)
+                {
+                    try
+                    {
+                        var post = BuildCornerPost(b, t, side, pad);
+                        post.LayerId = layPanel;
+                        ms.AppendEntity(post); tr.AddNewlyCreatedDBObject(post, true);
+                    }
+                    catch { }
+                }
                 tr.Commit();
             }
             db.SaveAs(path, DwgVersion.Current);
@@ -154,6 +166,30 @@ public static class WallPanelDwg
         var center = head + dir * (AnchorLen / 2);
         cyl.TransformBy(Matrix3d.Displacement(center - Point3d.Origin));
         return cyl;
+    }
+
+    /// <summary>코너 포스트 — Base(토우)→Top(상단) 축의 사각 기둥(side×side). 부지쪽 Pad으로 FrontOut 돌출해
+    /// 두 벽면 접합부(X자·V갭)를 덮는다. 축=Base→Top, 한 면이 Pad(부지) 향하도록 정렬.</summary>
+    private static Solid3d BuildCornerPost(Point3 b, Point3 t, double side, (double x, double y, double z) pad)
+    {
+        var baseP = new Point3d(b.X, b.Y, b.Z - ZSink);
+        var topP = new Point3d(t.X, t.Y, t.Z - ZSink);
+        var axis = topP - baseP;                                  // 기둥 길이 방향(토우→상단)
+        double len = axis.Length;
+        if (len < 0.05) return new Solid3d();                     // 너무 짧음
+        var zAx = axis.GetNormal();
+        var padV = new Vector3d(pad.x, pad.y, pad.z);
+        // 로컬 X = Pad(부지)에서 축 성분 제거해 직교화, Y = Z×X.
+        var xAx = (padV - zAx * padV.DotProduct(zAx));
+        xAx = xAx.Length > 1e-6 ? xAx.GetNormal() : zAx.GetPerpendicularVector();
+        var yAx = zAx.CrossProduct(xAx).GetNormal();
+        var post = new Solid3d();
+        post.CreateBox(side, side, len);                          // 원점 중심, 로컬 Z=길이
+        // 중심 = 기둥 중점 + Pad·FrontOut(부지쪽 돌출).
+        var center = baseP + axis * 0.5 + xAx * FrontOut;
+        post.TransformBy(Matrix3d.AlignCoordinateSystem(
+            Point3d.Origin, Vector3d.XAxis, Vector3d.YAxis, Vector3d.ZAxis, center, xAx, yAx, zAx));
+        return post;
     }
 
     /// <summary>정착판 — 홈 바닥에 패널 면과 나란히 놓인 얇은 정사각판(JACK 상세사진). 중심=홈 바닥, 법선 W.</summary>

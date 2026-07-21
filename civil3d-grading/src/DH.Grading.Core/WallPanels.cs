@@ -23,6 +23,10 @@ public static class WallPanels
 
     public static string LastDiag { get; private set; } = "";
 
+    /// <summary>코너 포스트(기둥) — 두 벽면이 만나는 모서리의 접합부(볼록 X자·오목 V 빈공간)를 덮는 수직 기둥.
+    /// Base=토우 모서리, Top=상단(daylight) 모서리(사면 위 점), Side=한 변, Pad=부지쪽 수평 단위(돌출·정렬용).</summary>
+    public static List<(Point3 Base, Point3 Top, double Side, (double x, double y, double z) Pad)> LastCornerPosts { get; } = new();
+
     /// <param name="rings">GradingGeometry 단 링(rings[0]=pad, 이후 단). WallBlocks와 동일 입력.</param>
     /// <param name="ground">원지반.</param>
     /// <param name="cut">true=절토, false=성토.</param>
@@ -33,6 +37,7 @@ public static class WallPanels
         double eps = 0.02)
     {
         var result = new List<Panel>();
+        LastCornerPosts.Clear();
         if (rings == null || rings.Count < 2 || ground == null) { LastDiag = "링/지반 없음"; return result; }
 
         static double MeanZ(IReadOnlyList<Point3> r) { double s = 0; foreach (var p in r) s += p.Z; return s / System.Math.Max(r.Count, 1); }
@@ -56,8 +61,8 @@ public static class WallPanels
             var walk = new Walk(ring);
             if (walk.Length < side) continue;
             double slopeLen = step / vUp;                              // 이 단 사면 길이
-            // 짜투리 문턱 — daylight 위쪽 삼각 패널은 살리고(누락 방지, JACK 0721), 거의 0인 조각만 버림.
-            double sliverMin = 0.02;                                   // ㎡(약 14×14cm 미만만 제거)
+            // 짜투리 문턱 — 경계 삼각형(daylight 살짝 걸침) 얇은 조각은 버려 삐침 방지(JACK 0721), 큰 삼각은 유지.
+            double sliverMin = side * side * 0.15;                     // ㎡(온전의 15% 미만 제거)
 
             // 면점 — s(0=토우, slopeLen=크레스트)로 갈수록 위로. 수평 방향은 절토/성토가 반대:
             //  · 절토(cut): 크레스트(윗단)가 **바깥(산 쪽)** → 위로 갈수록 바깥(−n). 토우=크레스트에서 안쪽(+n)·아래.
@@ -116,6 +121,21 @@ public static class WallPanels
             if (corners.Count < 2) faces.Add((0, walk.Length));
             else { corners.Sort(); for (int i = 0; i < corners.Count; i++) { double s = corners[i]; double e = corners[(i + 1) % corners.Count]; if (e <= s) e += walk.Length; faces.Add((s, e)); } }
 
+            // [코너 포스트 — JACK 0721] 각 모서리에 토우~상단(daylight) 기둥을 세워 볼록 X자·오목 V 빈공간을 덮는다.
+            foreach (double cs in corners)
+            {
+                var (bx0, by0, _, n1x, n1y) = walk.At(cs - 0.02);
+                var (_, _, _, n2x, n2y) = walk.At(cs + 0.02);
+                double bix = n1x + n2x, biy = n1y + n2y, bl = System.Math.Sqrt(bix * bix + biy * biy);
+                if (bl < 1e-6) continue;
+                bix /= bl; biy /= bl;                                  // 안쪽 이등분(수평)
+                double padX = cut ? bix : -bix, padY = cut ? biy : -biy; // 부지쪽 수평
+                double topS = cut ? DayS(cs) : slopeLen;
+                if (topS <= 0.1) continue;                             // 벽 없음
+                var baseP = FacePt(cs, 0); var topP = FacePt(cs, topS);
+                LastCornerPosts.Add((baseP, topP, 0.35, (padX, padY, 0)));
+            }
+
             foreach (var (fs, fe) in faces)
             {
                 double faceLen = fe - fs;
@@ -160,7 +180,7 @@ public static class WallPanels
                         if (poly.Count < 3) continue;
                         if (!isFull && Area2D(local) < sliverMin) continue;   // ★작은 삼각 짜투리 버림
                         // ★얇은 날(daylight 가장자리 가로 띠) 버림 — 위아래 다 짧으면 돌출 시 날처럼 삐침(JACK 0721).
-                        if (!isFull && System.Math.Max(topL, topR) - s0 < 0.15) continue;
+                        if (!isFull && System.Math.Max(topL, topR) - s0 < 0.25) continue;
 
                         var a00 = FacePt(u0, s0); var a10 = FacePt(u1, s0);
                         double ux = a10.X - a00.X, uy = a10.Y - a00.Y, uz = a10.Z - a00.Z;
