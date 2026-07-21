@@ -18,7 +18,7 @@ public enum WallStyle
 public static class GradingSettings
 {
     /// <summary>플러그인 버전 — 팝업 첫 줄에 표시(새 빌드 설치 확인용). 커밋마다 갱신.</summary>
-    public const string Version = "v3.5 (2026-07-21 PSM 성토톱니·코너채움)";
+    public const string Version = "v3.6 (2026-07-21 PSM 홈·앵커머리·정착판·돌출)";
 
     // ── 옹벽 3D 보강토 블록(옹벽3D_기획.md) — 원스톤 블록·캡블록 규격(m). 스샷 0720 실측. ──
     // [고정값 — JACK 0720] 사용자가 바꾸지 않는다. 보강토 옹벽이면 무조건 이 치수를 쓴다(설정 UI 제거).
