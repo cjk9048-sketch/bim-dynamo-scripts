@@ -157,9 +157,7 @@ public static class WallBlocks
                 if (cut ? !convex : convex) continue;                 // 뒤 쐐기 코너만(절토=볼록·성토=오목)
                 var cp = walk.At(cs);
                 double bx0 = n1x + n2x, by0 = n1y + n2y;              // 안쪽 이등분(정규화 전)
-                double bl = System.Math.Sqrt(bx0 * bx0 + by0 * by0);
-                if (bl < 1e-6) continue;                              // 180° 반전 코너 — 건너뜀
-                double biX = bx0 / bl, biY = by0 / bl;               // 안쪽 이등분 단위(전면 방향)
+                if (System.Math.Sqrt(bx0 * bx0 + by0 * by0) < 1e-6) continue; // 180° 반전 코너 — 건너뜀
 
                 for (int c = 0; c < courses; c++)
                 {
@@ -181,11 +179,14 @@ public static class WallBlocks
                     double topLine = cut ? System.Math.Min(crest, System.Math.Max(toe, g)) : crest;
                     if (zTopC > topLine + zTol) continue;
 
-                    // 뒤 사분면 중심 = P에서 안쪽 이등분 반대로 D/√2(=흙 쪽 대각). 정사각 D×D가 두 전면선이
-                    // 이루는 직각 사분면을 정확히 덮는다. 회전=면 방향(u1)에 정렬 → 두 변이 전면선과 평행(플러시,
-                    // 무돌출). 90° 코너면 완전 채움, 다른 각도는 근사(면1 플러시 유지).
+                    // 뒤 사분면 중심 = P에서 '링 코너(cp) 쪽'으로 D/√2(=흙 쪽 대각). 방향을 링 코너로 잡아야
+                    // 절토(전면 안쪽=cp가 바깥)·성토(전면 바깥=cp가 안쪽) 모두 흙 쪽으로 간다(고정 −이등분이면
+                    // 성토에서 반대로 바깥 돌출=W 계단, JACK 0721). 정사각 D×D가 두 전면선 직각 사분면을 덮고,
+                    // 회전=면 방향(u1)에 정렬 → 두 변이 전면선과 평행(플러시·무돌출). 90° 완전 채움.
+                    double wdx = cp.x - px, wdy = cp.y - py, wl = System.Math.Sqrt(wdx * wdx + wdy * wdy);
+                    if (wl < 1e-9) continue;                          // P≈cp(오프셋 0) — 쐐기 없음
                     double back = blockD / System.Math.Sqrt(2.0);
-                    double ccx = px - biX * back, ccy = py - biY * back;
+                    double ccx = px + wdx / wl * back, ccy = py + wdy / wl * back;
                     double rot = System.Math.Atan2(u1y, u1x);        // 로컬 +X = 면1 진행방향
                     result.Add(new Block(ccx, ccy, toe + c * blockH, rot, c, -1, level, k, -1,
                         cs, false, cp.x, cp.y, Corner: true));
