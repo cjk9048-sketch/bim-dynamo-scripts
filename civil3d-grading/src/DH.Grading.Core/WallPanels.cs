@@ -57,15 +57,18 @@ public static class WallPanels
             double slopeLen = step / vUp;                              // 이 단 사면 길이
             double sliverMin = side * side * 0.25;                     // 이보다 작은 조각(짜투리 삼각)은 버림
 
-            // 면점 — 절토·성토 모두 s(0=토우, slopeLen=크레스트)로 갈수록 **위+안쪽**(vUp·s, n·hIn·s).
-            // 토우 위치만 다름: 절토=크레스트 링에서 바깥·아래(−step), 성토=토우 링(정렬선) 그대로.
+            // 면점 — s(0=토우, slopeLen=크레스트)로 갈수록 위로. 수평 방향은 절토/성토가 반대:
+            //  · 절토(cut): 크레스트(윗단)가 **바깥(산 쪽)** → 위로 갈수록 바깥(−n). 토우=크레스트에서 안쪽(+n)·아래.
+            //  · 성토(fill): 크레스트(윗단)가 **안쪽(pad)** → 위로 갈수록 안쪽(+n). 토우=링 그대로.
+            //  (기존: 절토를 안쪽으로 기울여 지형을 파고들어 파묻힘 — JACK 0721 지적. 방향 반전 수정.)
+            double hs = cut ? -1.0 : 1.0;                              // 위로 갈 때 수평 방향(절토=바깥/성토=안쪽)
             Point3 FacePt(double u, double s)
             {
                 var (cx, cy, cz, nx, ny) = walk.At(u);
                 double toeX, toeY, toeZ;
-                if (cut) { toeX = cx - nx * (slopeN * step); toeY = cy - ny * (slopeN * step); toeZ = cz - step; }
+                if (cut) { toeX = cx + nx * (slopeN * step); toeY = cy + ny * (slopeN * step); toeZ = cz - step; }
                 else { toeX = cx; toeY = cy; toeZ = cz; }
-                return new Point3(toeX + nx * hIn * s, toeY + ny * hIn * s, toeZ + vUp * s);
+                return new Point3(toeX + nx * hIn * s * hs, toeY + ny * hIn * s * hs, toeZ + vUp * s);
             }
             // 상한 s(이 station에서 패널이 존재하는 최대 슬로프길이):
             //  · 절토 = daylight(면 Z가 원지반 만나는 s) — 그 위는 흙 밖이라 삼각형 클립.
@@ -156,10 +159,18 @@ public static class WallPanels
                         double ull = System.Math.Sqrt(ux * ux + uy * uy + uz * uz); if (ull < 1e-9) continue;
                         ux /= ull; uy /= ull; uz /= ull;
                         var (cx, cy, cz, nx, ny) = walk.At(u0);
-                        double vx = nx * hIn, vy = ny * hIn, vz = vUp;
+                        double vx = nx * hIn * hs, vy = ny * hIn * hs, vz = vUp;   // 사면 상방(절토=바깥/성토=안쪽)
                         double wx = uy * vz - uz * vy, wy = uz * vx - ux * vz, wz = ux * vy - uy * vx;
                         double wl = System.Math.Sqrt(wx * wx + wy * wy + wz * wz); if (wl < 1e-9) continue;
                         wx /= wl; wy /= wl; wz /= wl;
+                        // ★W(바깥법선)가 '보이는 면=부지 쪽'을 향하게 정렬(절토=안쪽법선/성토=바깥법선 방향).
+                        //   홈·앵커머리·중심돌출이 보이는 면에 오도록. 뒤집을 때 U·local.u도 함께 뒤집어(RH 유지) 월드점 불변.
+                        double padx = cut ? nx : -nx, pady = cut ? ny : -ny;
+                        if (wx * padx + wy * pady < 0)
+                        {
+                            for (int t = 0; t < local.Count; t++) local[t] = (-local[t].u, local[t].v);
+                            ux = -ux; uy = -uy; uz = -uz; wx = -wx; wy = -wy; wz = -wz;
+                        }
 
                         Point3 center = default, aPos = default;
                         (double x, double y, double z) aDir = default;

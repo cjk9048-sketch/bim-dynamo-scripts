@@ -12,14 +12,20 @@ public static class WallPanelDwg
 {
     private const double Thick = 0.20;       // 패널 두께
     private const double RecessSize = 0.20;  // 가운데 홈 한 변
-    private const double RecessDepth = 0.06; // 홈 깊이
+    private const double RecessDepth = 0.08; // 홈 깊이(움푹, JACK 상세사진 — 더 선명하게)
     private const double AnchorR = 0.035;    // 앵커 원통 반지름(=70mm 지름)
     private const double AnchorLen = 3.0;    // 앵커 길이(지반 속)
-    private const double AnchorProud = 0.15; // 부지쪽 패널 앞으로 노출되는 앵커 머리 길이(JACK: 150mm)
+    private const double AnchorEmbed = 0.02; // 앵커 머리를 부지 표면보다 이만큼 안쪽에(홈 속에 조금 보이게)
+    private const double PlateSize = 0.15;   // 정착판 한 변
+    private const double PlateThick = 0.02;  // 정착판 두께
     private const double ZSink = 0.01;
+    // [중심 표면 정렬 — JACK 0721] 패널 전면이 정지면과 같은 평면이면 파묻힘 → 중심을 정지면에 놓고
+    // 전면을 부지쪽으로 두께/2 돌출(블록 §25와 동일). W가 부지 쪽(WallPanels에서 정렬됨).
+    private const double FrontOut = Thick / 2;
 
     private static readonly Color PanelRgb = Color.FromRgb(200, 198, 194);
     private static readonly Color AnchorRgb = Color.FromRgb(60, 60, 62);
+    private static readonly Color PlateRgb = Color.FromRgb(120, 122, 126);
 
     /// <summary>패널들을 path에 DWG로 저장. 반환=(패널 수, 앵커 수).</summary>
     public static (int Panels, int Anchors) Export(string path, IReadOnlyList<WallPanels.Panel> panels)
@@ -37,16 +43,18 @@ public static class WallPanelDwg
                 var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
                 ObjectId layPanel = EnsureLayer(db, tr, "DH-PSM패널", PanelRgb);
                 ObjectId layAnchor = EnsureLayer(db, tr, "DH-PSM앵커", AnchorRgb);
+                ObjectId layPlate = EnsureLayer(db, tr, "DH-PSM정착판", PlateRgb);
 
                 foreach (var p in panels)
                 {
-                    // 로컬→월드 변환: 로컬(x=U, y=V, z=W) → Origin + x·U + y·V + z·W.
+                    var W = new Vector3d(p.WAxis.x, p.WAxis.y, p.WAxis.z);
+                    // 중심 표면 정렬: 원점을 부지쪽(+W)으로 두께/2 이동(전면 돌출, 파묻힘 방지) + ZSink.
+                    var toOrigin = new Point3d(p.Origin.X, p.Origin.Y, p.Origin.Z - ZSink) + W * FrontOut;
                     var m = Matrix3d.AlignCoordinateSystem(
                         Point3d.Origin, Vector3d.XAxis, Vector3d.YAxis, Vector3d.ZAxis,
-                        new Point3d(p.Origin.X, p.Origin.Y, p.Origin.Z - ZSink),
+                        toOrigin,
                         new Vector3d(p.UAxis.x, p.UAxis.y, p.UAxis.z),
-                        new Vector3d(p.VAxis.x, p.VAxis.y, p.VAxis.z),
-                        new Vector3d(p.WAxis.x, p.WAxis.y, p.WAxis.z));
+                        new Vector3d(p.VAxis.x, p.VAxis.y, p.VAxis.z), W);
                     try
                     {
                         Solid3d slab = BuildPanel(p);
@@ -59,12 +67,21 @@ public static class WallPanelDwg
 
                     if (p.IsFull)
                     {
+                        // 부지 표면(전면) 월드 위치 = AnchorPos + W·FrontOut − ZSink.
+                        var padFace = new Point3d(p.AnchorPos.X, p.AnchorPos.Y, p.AnchorPos.Z - ZSink) + W * FrontOut;
                         try
                         {
-                            var anc = BuildAnchor(p);
+                            var anc = BuildAnchor(p, padFace, W);
                             anc.LayerId = layAnchor;
                             ms.AppendEntity(anc); tr.AddNewlyCreatedDBObject(anc, true);
                             na++;
+                        }
+                        catch { }
+                        try
+                        {
+                            var plate = BuildPlate(p, padFace, W);
+                            plate.LayerId = layPlate;
+                            ms.AppendEntity(plate); tr.AddNewlyCreatedDBObject(plate, true);
                         }
                         catch { }
                     }
@@ -121,28 +138,37 @@ public static class WallPanelDwg
         return sol;
     }
 
-    /// <summary>앵커 원통(월드 좌표) — AnchorPos에서 AnchorDir(20° 하향, 지반 속)로 길이 AnchorLen.</summary>
-    private static Solid3d BuildAnchor(WallPanels.Panel p)
+    /// <summary>앵커 원통 — 머리를 홈 속(부지 표면보다 AnchorEmbed 안쪽)에 두고 AnchorDir(20° 하향)로 지반 속.
+    /// padFace=돌출 반영된 부지 표면 월드점, W=부지쪽 법선. 머리는 홈 안에 '조금 보이고' 나머지는 벽·지반 속.</summary>
+    private static Solid3d BuildAnchor(WallPanels.Panel p, Point3d padFace, Vector3d W)
     {
         var cyl = new Solid3d();
         cyl.CreateFrustum(AnchorLen, AnchorR, AnchorR, AnchorR);  // Z축, 중심 원점, z∈[−L/2,L/2]
-        // Z축을 AnchorDir로 정렬 + 위치: 헤드가 면에서 살짝 나오고 나머지는 지반 속.
         var dir = new Vector3d(p.AnchorDir.x, p.AnchorDir.y, p.AnchorDir.z).GetNormal();
-        // 임의 수직축 2개
-        Vector3d nx = Math.Abs(dir.Z) < 0.9 ? dir.CrossProduct(Vector3d.ZAxis).GetNormal()
+        Vector3d ax = Math.Abs(dir.Z) < 0.9 ? dir.CrossProduct(Vector3d.ZAxis).GetNormal()
                                             : dir.CrossProduct(Vector3d.XAxis).GetNormal();
-        Vector3d ny = dir.CrossProduct(nx).GetNormal();
-        var m = Matrix3d.AlignCoordinateSystem(
-            Point3d.Origin, Vector3d.XAxis, Vector3d.YAxis, Vector3d.ZAxis,
-            Point3d.Origin, nx, ny, dir);
-        cyl.TransformBy(m);
-        // AnchorDir는 벽 뒤(지반 속) 방향. 머리는 반대(부지쪽)로 AnchorProud 노출, 나머지는 지반 속.
-        // 원통은 z∈[−L/2,L/2] 중심 원점 → 머리끝(부지쪽) = AnchorPos − dir·Proud, 꼬리 = AnchorPos + dir·(L−Proud).
-        // 중심 = AnchorPos + dir·(L/2 − Proud).
-        var head = new Point3d(p.AnchorPos.X, p.AnchorPos.Y, p.AnchorPos.Z - ZSink);
-        var center = head + dir * (AnchorLen / 2 - AnchorProud);
+        Vector3d ay = dir.CrossProduct(ax).GetNormal();
+        cyl.TransformBy(Matrix3d.AlignCoordinateSystem(
+            Point3d.Origin, Vector3d.XAxis, Vector3d.YAxis, Vector3d.ZAxis, Point3d.Origin, ax, ay, dir));
+        // 머리끝(부지쪽) = padFace − W·AnchorEmbed(홈 속으로 살짝). 꼬리 = 머리 + dir·L.
+        var head = padFace - W * AnchorEmbed;
+        var center = head + dir * (AnchorLen / 2);
         cyl.TransformBy(Matrix3d.Displacement(center - Point3d.Origin));
         return cyl;
+    }
+
+    /// <summary>정착판 — 홈 바닥에 패널 면과 나란히 놓인 얇은 정사각판(JACK 상세사진). 중심=홈 바닥, 법선 W.</summary>
+    private static Solid3d BuildPlate(WallPanels.Panel p, Point3d padFace, Vector3d W)
+    {
+        var plate = new Solid3d();
+        plate.CreateBox(PlateSize, PlateSize, PlateThick);       // 로컬 Z=W 방향 얇음
+        var U = new Vector3d(p.UAxis.x, p.UAxis.y, p.UAxis.z);
+        var V = new Vector3d(p.VAxis.x, p.VAxis.y, p.VAxis.z);
+        // 홈 바닥 = padFace − W·(RecessDepth − PlateThick/2) (판 두께 절반만큼 띄워 바닥에 얹음).
+        var pos = padFace - W * (RecessDepth - PlateThick / 2);
+        plate.TransformBy(Matrix3d.AlignCoordinateSystem(
+            Point3d.Origin, Vector3d.XAxis, Vector3d.YAxis, Vector3d.ZAxis, pos, U, V, W));
+        return plate;
     }
 
     private static ObjectId EnsureLayer(Database db, Transaction tr, string name, Color color)
