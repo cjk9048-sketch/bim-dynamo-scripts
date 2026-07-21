@@ -19,9 +19,9 @@ public static class WallPanelDwg
     private const double PlateSize = 0.15;   // 정착판 한 변
     private const double PlateThick = 0.02;  // 정착판 두께
     private const double ZSink = 0.01;
-    // [중심 표면 정렬 — JACK 0721] 패널 전면이 정지면과 같은 평면이면 파묻힘 → 중심을 정지면에 놓고
-    // 전면을 부지쪽으로 두께/2 돌출(블록 §25와 동일). W가 부지 쪽(WallPanels에서 정렬됨).
-    private const double FrontOut = Thick / 2;
+    // [표면 돌출 — JACK 0721] 전면이 정지면과 같은 평면이면 Z-파이팅으로 파묻힘. 살짝(2cm)만 부지쪽 돌출해
+    // 겹침만 푼다. (두께/2=10cm 돌출은 기운 벽 코너에서 윗변이 겹쳐 X자·daylight 날 삐침 — JACK 0721 → 축소.)
+    private const double FrontOut = 0.02;
 
     private static readonly Color PanelRgb = Color.FromRgb(200, 198, 194);
     private static readonly Color AnchorRgb = Color.FromRgb(60, 60, 62);

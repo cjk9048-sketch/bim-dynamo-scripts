@@ -159,6 +159,8 @@ public static class WallPanels
                         if (topL > s0 + 1e-6) { poly.Add(FacePt(u0, topL)); local.Add((0, topL - s0)); }
                         if (poly.Count < 3) continue;
                         if (!isFull && Area2D(local) < sliverMin) continue;   // ★작은 삼각 짜투리 버림
+                        // ★얇은 날(daylight 가장자리 가로 띠) 버림 — 위아래 다 짧으면 돌출 시 날처럼 삐침(JACK 0721).
+                        if (!isFull && System.Math.Max(topL, topR) - s0 < 0.15) continue;
 
                         var a00 = FacePt(u0, s0); var a10 = FacePt(u1, s0);
                         double ux = a10.X - a00.X, uy = a10.Y - a00.Y, uz = a10.Z - a00.Z;
