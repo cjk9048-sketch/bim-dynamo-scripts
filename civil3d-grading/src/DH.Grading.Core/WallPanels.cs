@@ -1,20 +1,17 @@
 namespace DH.Grading.Core;
 
-/// <summary>PSM(프리스트레스 패널식) 절토 옹벽 — 프리캐스트 패널 격자 + 어스앵커 (JACK 0721).
-/// 보강토(WallBlocks)와 달리 큰 정사각 패널(1480×1480×200)을 절취사면(1:0.3)에 격자로 붙이고,
-/// daylight(사면이 원지반 만나는 선)에서 삼각형/사다리꼴로 잘린다. **온전한(안 잘린) 패널에만** 앵커 1개.
+/// <summary>PSM(프리스트레스 패널식) 옹벽 — 프리캐스트 패널(1480×1480×200) 격자 + 어스앵커 (JACK 0721).
+/// [단 링 기반 — §42] WallBlocks와 동일하게 GradingGeometry 단 링(vs.Rings)을 입력받아 **단별로** 사면 패널을
+/// 붙인다(여러 단이 하나로 합쳐지지 않고 계단대로). 각 단 면을 슬로프길이로 격자화, daylight(원지반 컷)에서
+/// 삼각형/사다리꼴로 클립, **온전 패널만** 중심 200×200 홈 + 앵커(원통 70mm, 20° 하향, **지반 속=벽 뒤**로).
 ///
-/// 좌표 모델: 벽 정렬선(base ring, 기초 레벨)을 호길이 u로, 사면을 따라 위로 슬로프길이 s로 매개.
-///  · 사면 1:n(수직1:수평n) → 슬로프길이 s당 수직 s/√(1+n²), 안쪽수평 s·n/√(1+n²).
-///  · daylight S(u) = 사면고가 원지반고에 처음 닿는 s(원지반 마칭).
-/// 반환 Panel = 클립된 3D 폴리곤 + IsFull + (온전 시) 앵커 위치·방향.</summary>
+/// 좌표: 단 크레스트 링을 호길이 u로, 사면 위로 슬로프길이 s로. 사면 1:n → s당 수직 s·vUp, 안쪽수평 s·hIn.
+///  · 절토(cut): 토우=크레스트−(수직 step, 안쪽 −n·step), 위로 갈수록 안쪽·높이↑, 앵커=바깥(−안쪽법선)+하향.
+///  · 성토(fill): 토우=크레스트(정렬선=토우 링), 아래로… 여기선 대칭 처리(면이 바깥·아래로), 앵커=안쪽+하향.</summary>
 public static class WallPanels
 {
-    /// <summary>패널 1장. Poly=사면 위 클립된 3D 폴리곤(온전=사각형, 잘림=삼각/사다리꼴).
-    /// IsFull=안 잘림(앵커·홈 대상). Center/Normal=면 중심·바깥면 법선.
-    /// AnchorPos=앵커 헤드 위치(면 중심), AnchorDir=앵커 진행 단위벡터(지반 속, 20° 하향).
-    /// [DWG용 로컬 프레임] Origin=패널 로컬 원점(하단 좌측 At(u0,s0)), UAxis=벽 접선(폭), VAxis=사면 상방(높이),
-    /// WAxis=바깥 법선(두께 반대). Local=로컬 2D 폴리곤((u,v) m, 원점 기준) — DWG가 로컬에서 만들고 변환.</summary>
+    /// <summary>패널 1장. Poly=사면 위 클립 3D 폴리곤. IsFull=안 잘림(앵커·홈). AnchorPos/AnchorDir=앵커 헤드·방향.
+    /// [DWG] Origin/UAxis/VAxis/WAxis=로컬 프레임, Local=로컬 2D 폴리곤(u,v).</summary>
     public readonly record struct Panel(
         IReadOnlyList<Point3> Poly, bool IsFull,
         Point3 Center, (double x, double y, double z) Normal,
@@ -25,111 +22,133 @@ public static class WallPanels
 
     public static string LastDiag { get; private set; } = "";
 
-    /// <param name="baseRing">벽 정렬선(기초 레벨의 계획경계) — 닫힌 링.</param>
+    /// <param name="rings">GradingGeometry 단 링(rings[0]=pad, 이후 단). WallBlocks와 동일 입력.</param>
     /// <param name="ground">원지반.</param>
-    /// <param name="slopeN">절취사면 구배 n(1:n). PSM 기본 0.3.</param>
-    /// <param name="panel">패널 한 변(m). 1.48.</param>
-    /// <param name="joint">패널 사이 줄눈(m). 0.02.</param>
-    /// <param name="anchorDeg">앵커 하향각(도). 20.</param>
-    /// <param name="maxSlope">사면 최대 슬로프길이(안전, m).</param>
+    /// <param name="cut">true=절토, false=성토.</param>
+    /// <param name="slopeN">사면 구배 n(1:n). PSM 절토 0.3.</param>
     public static List<Panel> Generate(
-        IReadOnlyList<Point3> baseRing, IGroundSurface ground,
-        double slopeN = 0.3, double panel = 1.48, double joint = 0.02,
-        double anchorDeg = 20.0, double maxSlope = 60.0)
+        IReadOnlyList<IReadOnlyList<Point3>> rings, IGroundSurface ground, bool cut,
+        double slopeN = 0.3, double panel = 1.48, double joint = 0.02, double anchorDeg = 20.0,
+        double eps = 0.02)
     {
         var result = new List<Panel>();
-        if (baseRing == null || baseRing.Count < 2 || ground == null) { LastDiag = "링/지반 없음"; return result; }
+        if (rings == null || rings.Count < 2 || ground == null) { LastDiag = "링/지반 없음"; return result; }
 
-        var walk = new Walk(baseRing);
-        double step = panel + joint;
+        static double MeanZ(IReadOnlyList<Point3> r) { double s = 0; foreach (var p in r) s += p.Z; return s / System.Math.Max(r.Count, 1); }
+        double stepU = panel + joint;
         double denom = System.Math.Sqrt(1 + slopeN * slopeN);
         double vUp = 1.0 / denom, hIn = slopeN / denom;               // 슬로프길이 1당 (수직, 안쪽수평)
         double aRad = anchorDeg * System.Math.PI / 180.0;
-
-        // (u,s) → 3D: base(u) + s·(안쪽수평 hIn·n, 수직 vUp)
-        Point3 At(double u, double s)
-        {
-            var (bx, by, bz, nx, ny) = walk.At(u);
-            return new Point3(bx + nx * hIn * s, by + ny * hIn * s, bz + vUp * s);
-        }
-        // daylight 슬로프길이: 사면고 = 원지반고 처음 닿는 s (0.1m 마칭 후 이분).
-        double Daylight(double u)
-        {
-            var (bx, by, bz, nx, ny) = walk.At(u);
-            double prev = 0; bool prevBelow = true;
-            for (double s = 0; s <= maxSlope; s += 0.25)
-            {
-                double px = bx + nx * hIn * s, py = by + ny * hIn * s, pz = bz + vUp * s;
-                if (!ground.TryGetElevation(px, py, out double g)) { if (s > 0) return s; else return maxSlope; }
-                bool below = pz < g;                                  // 사면점이 원지반 아래(=아직 흙 속)
-                if (!below) { // 위로 뚫음 — [prev,s] 이분
-                    double lo = prev, hi = s;
-                    for (int it = 0; it < 20; it++)
-                    {
-                        double m = (lo + hi) / 2, mx = bx + nx * hIn * m, my = by + ny * hIn * m, mz = bz + vUp * m;
-                        ground.TryGetElevation(mx, my, out double gm);
-                        if (mz < gm) lo = m; else hi = m;
-                    }
-                    return (lo + hi) / 2;
-                }
-                prev = s; prevBelow = below;
-            }
-            return maxSlope;
-        }
-
-        int cols = (int)System.Math.Floor(walk.Length / step + 1e-9);
         int full = 0, part = 0;
-        for (int j = 0; j < cols; j++)
+
+        for (int k = 1; k < rings.Count; k++)
         {
-            double u0 = j * step, u1 = u0 + panel, uMid = (u0 + u1) / 2;
-            double Sl = Daylight(u0), Sr = Daylight(u1), Sm = Daylight(uMid);
-            double topMax = System.Math.Max(Sl, Sr);
-            int rows = (int)System.Math.Floor(topMax / step + 1e-9) + 1;
-            for (int i = 0; i < rows; i++)
+            var ring = rings[k];
+            if (ring == null || ring.Count < 3) continue;
+            double step = System.Math.Abs(MeanZ(ring) - MeanZ(rings[k - 1])); // 이 단 높이
+            if (step < 0.1) continue;
+            var walk = new Walk(ring);
+            if (walk.Length < panel) continue;
+            double slopeLen = step / vUp;                              // 이 단 사면 길이
+            int cols = (int)System.Math.Floor(walk.Length / stepU + 1e-9);
+            int rows = (int)System.Math.Floor(slopeLen / stepU + 1e-9) + 1;
+
+            // 면점 — 절토·성토 모두 s(0=토우, slopeLen=크레스트)로 갈수록 **위+안쪽**(vUp·s, n·hIn·s).
+            // 토우 위치만 다름: 절토=크레스트 링에서 바깥·아래(−step), 성토=토우 링(정렬선) 그대로.
+            Point3 FacePt(double u, double s)
             {
-                double s0 = i * step, s1 = s0 + panel;
-                // 이 패널의 상단 클립: 좌/우 station의 daylight로 사면 상한. 하단(s0)이 이미 daylight 위면 제외.
-                double topL = System.Math.Min(s1, Sl), topR = System.Math.Min(s1, Sr);
-                if (topL <= s0 + 1e-6 && topR <= s0 + 1e-6) continue;  // 완전히 daylight 밖
-                bool isFull = topL >= s1 - 1e-6 && topR >= s1 - 1e-6;
-                // 폴리곤(반시계): 하단 좌·우, 상단 우·좌(클립된 높이). 로컬(u,v)는 원점 At(u0,s0) 기준.
-                var poly = new List<Point3>();
-                var local = new List<(double u, double v)>();
-                poly.Add(At(u0, s0)); local.Add((0, 0));
-                poly.Add(At(u1, s0)); local.Add((panel, 0));
-                if (topR > s0 + 1e-6) { poly.Add(At(u1, topR)); local.Add((panel, topR - s0)); }
-                if (topL > s0 + 1e-6) { poly.Add(At(u0, topL)); local.Add((0, topL - s0)); }
-                if (poly.Count < 3) continue;
-
-                var (bx, by, bz, nx, ny) = walk.At(uMid);
-                var (bx0, by0, bz0, nx0, ny0) = walk.At(u0);
-                // 로컬 축: U=벽 접선(하단 좌→우), V=사면 상방=(n·hIn, vUp), W=바깥법선=U×V.
-                double ux = (At(u1, s0).X - At(u0, s0).X), uy = (At(u1, s0).Y - At(u0, s0).Y), uz = (At(u1, s0).Z - At(u0, s0).Z);
-                double ull = System.Math.Sqrt(ux * ux + uy * uy + uz * uz); if (ull < 1e-9) continue;
-                ux /= ull; uy /= ull; uz /= ull;
-                double vx = nx0 * hIn, vy = ny0 * hIn, vz = vUp;      // 이미 단위(hIn²+vUp²=1)
-                double wx = uy * vz - uz * vy, wy = uz * vx - ux * vz, wz = ux * vy - uy * vx; // U×V=바깥법선
-                double wl = System.Math.Sqrt(wx * wx + wy * wy + wz * wz); wx /= wl; wy /= wl; wz /= wl;
-
-                Point3 center = default; Point3 aPos = default;
-                (double x, double y, double z) aDir = default;
-                if (isFull)
+                var (cx, cy, cz, nx, ny) = walk.At(u);
+                double toeX, toeY, toeZ;
+                if (cut) { toeX = cx - nx * (slopeN * step); toeY = cy - ny * (slopeN * step); toeZ = cz - step; }
+                else { toeX = cx; toeY = cy; toeZ = cz; }
+                return new Point3(toeX + nx * hIn * s, toeY + ny * hIn * s, toeZ + vUp * s);
+            }
+            // 상한 s(이 station에서 패널이 존재하는 최대 슬로프길이):
+            //  · 절토 = daylight(면 Z가 원지반 만나는 s) — 그 위는 흙 밖이라 삼각형 클립.
+            //  · 성토 = 보강토와 동일하게 **daylight 클립 안 함**(JACK): 크레스트가 지반 위면 slopeLen(꽉),
+            //    아니면 0(벽 없음). 성토 벽 하단(토우)의 묻힘/허공은 정지면·영역이 담당.
+            double DayS(double u)
+            {
+                if (!cut)
                 {
-                    center = At(uMid, (s0 + s1) / 2);
-                    aPos = center;
-                    aDir = (nx * System.Math.Cos(aRad), ny * System.Math.Cos(aRad), -System.Math.Sin(aRad));
-                    full++;
+                    var c = FacePt(u, slopeLen);                       // 크레스트
+                    if (!ground.TryGetElevation(c.X, c.Y, out double gc)) return slopeLen;
+                    return c.Z > gc + eps ? slopeLen : 0;              // 크레스트가 지반 위면 꽉, 아니면 없음
                 }
-                else part++;
-                result.Add(new Panel(poly, isFull, center, (wx, wy, wz), aPos, aDir,
-                    At(u0, s0), (ux, uy, uz), (vx, vy, vz), (wx, wy, wz), local));
+                for (double s = 0; s <= slopeLen + 1e-9; s += 0.25)     // 절토 daylight
+                {
+                    var p = FacePt(u, s);
+                    if (!ground.TryGetElevation(p.X, p.Y, out double g)) return s;
+                    if (p.Z >= g - eps)                                 // 위로 뚫음 = 벽 끝
+                    {
+                        double lo = System.Math.Max(0, s - 0.25), hi = s;
+                        for (int it = 0; it < 18; it++)
+                        {
+                            double m = (lo + hi) / 2; var pm = FacePt(u, m);
+                            ground.TryGetElevation(pm.X, pm.Y, out double gm);
+                            if (pm.Z < gm - eps) lo = m; else hi = m;
+                        }
+                        return (lo + hi) / 2;
+                    }
+                }
+                return slopeLen;
+            }
+
+            int f0 = full, p0 = part;
+            for (int j = 0; j < cols; j++)
+            {
+                double u0 = j * stepU, u1 = u0 + panel, uMid = (u0 + u1) / 2;
+                double dl = DayS(u0), dr = DayS(u1);
+                if (dl <= 1e-6 && dr <= 1e-6) continue;                // 이 열 전체가 벽 없음(지반이 토우 아래/위)
+                for (int i = 0; i < rows; i++)
+                {
+                    double s0 = i * stepU, s1 = System.Math.Min(s0 + panel, slopeLen);
+                    if (s1 <= s0 + 1e-6) break;
+                    // 상단 클립(절토=daylight 삼각형, 성토=슬로프끝 꽉). 하단은 s0 평평.
+                    double topL = System.Math.Min(s1, dl), topR = System.Math.Min(s1, dr);
+                    if (topL <= s0 + 1e-6 && topR <= s0 + 1e-6) continue; // 벽 없음
+                    bool isFull = topL >= s1 - 1e-6 && topR >= s1 - 1e-6;
+
+                    var poly = new List<Point3>(); var local = new List<(double u, double v)>();
+                    poly.Add(FacePt(u0, s0)); local.Add((0, 0));
+                    poly.Add(FacePt(u1, s0)); local.Add((panel, 0));
+                    if (topR > s0 + 1e-6) { poly.Add(FacePt(u1, topR)); local.Add((panel, topR - s0)); }
+                    if (topL > s0 + 1e-6) { poly.Add(FacePt(u0, topL)); local.Add((0, topL - s0)); }
+                    if (poly.Count < 3) continue;
+
+                    // 로컬 축: U=하단 좌→우, V=사면 상방(위+안쪽), W=U×V(바깥법선). 원점=하단 좌(u0,s0).
+                    var a00 = FacePt(u0, s0); var a10 = FacePt(u1, s0);
+                    double ux = a10.X - a00.X, uy = a10.Y - a00.Y, uz = a10.Z - a00.Z;
+                    double ull = System.Math.Sqrt(ux * ux + uy * uy + uz * uz); if (ull < 1e-9) continue;
+                    ux /= ull; uy /= ull; uz /= ull;
+                    var (cx, cy, cz, nx, ny) = walk.At(u0);
+                    double vx = nx * hIn, vy = ny * hIn, vz = vUp;
+                    double wx = uy * vz - uz * vy, wy = uz * vx - ux * vz, wz = ux * vy - uy * vx;
+                    double wl = System.Math.Sqrt(wx * wx + wy * wy + wz * wz); if (wl < 1e-9) continue;
+                    wx /= wl; wy /= wl; wz /= wl;
+
+                    Point3 center = default, aPos = default;
+                    (double x, double y, double z) aDir = default;
+                    if (isFull)
+                    {
+                        center = FacePt(uMid, (s0 + s1) / 2); aPos = center;
+                        var (_, _, _, mnx, mny) = walk.At(uMid);
+                        // ★앵커는 벽 뒤(지반 속)로 — 절토=바깥(−안쪽법선), 성토=안쪽(+안쪽법선). 20° 하향.
+                        double ox = cut ? -mnx : mnx, oy = cut ? -mny : mny;
+                        aDir = (ox * System.Math.Cos(aRad), oy * System.Math.Cos(aRad), -System.Math.Sin(aRad));
+                        full++;
+                    }
+                    else part++;
+                    result.Add(new Panel(poly, isFull, center, (wx, wy, wz), aPos, aDir,
+                        FacePt(u0, s0), (ux, uy, uz), (vx, vy, vz), (wx, wy, wz), local));
+                }
             }
         }
-        LastDiag = $"패널 {result.Count}(온전 {full}·잘림 {part}) · 앵커 {full} · 사면 1:{slopeN}";
+        LastDiag = $"패널 {result.Count}(온전 {full}·잘림 {part}) · 앵커 {full} · {(cut ? "절토" : "성토")} 1:{slopeN}";
         return result;
     }
 
-    /// <summary>닫힌 링 호길이 파라미터화(안쪽 단위법선 포함) — WallBlocks.RingWalk 축소판.</summary>
+    /// <summary>닫힌 링 호길이 파라미터화(안쪽 단위법선) — 축소판.</summary>
     private sealed class Walk
     {
         private readonly double[] _cum;
