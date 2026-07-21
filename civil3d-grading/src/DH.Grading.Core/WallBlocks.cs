@@ -22,7 +22,7 @@ public static class WallBlocks
     /// RX/RY=**링 위 위치**(전면 돌출·뒷물림 적용 전) — 영역 판정은 반드시 이 값으로(아래 FilterByRegions 참조).</summary>
     public readonly record struct Block(
         double X, double Y, double Z, double RotRad, int Course, int Column, double Level, int Ring,
-        int Face, double S, bool Half, double RX, double RY);
+        int Face, double S, bool Half, double RX, double RY, bool Corner = false);
 
     /// <summary>직전 실행 진단(단별 블록 수) — 로그 표기용.</summary>
     public static string LastDiag { get; private set; } = "";
@@ -143,7 +143,57 @@ public static class WallBlocks
                     }
                 }
             }
-            diag.Append($"링{k}(≈{level:F1}, {courses}층·벽면{faces.Count}): {result.Count - count0}개(반 {half0}) · ");
+
+            // ── 코너 채움 블록(§37, JACK 0721 위에서 본 슬릿) — 두 벽면이 앞 꼭짓점 P에서만 만나 뒤 사분면이
+            //    비는 '뒤 쐐기' 코너(절토=볼록/성토=오목)에, P 뒤쪽 흙 사분면에만 D×D 코너블록을 세운다.
+            //    앞면(=두 벽면 전면선)과 정확히 플러시라 앞으로 안 튀어나온다(오목/L자엔 생성 안 함). ──
+            int cornerN = 0;
+            foreach (double cs in cornerSta)
+            {
+                var (u1x, u1y, n1x, n1y) = walk.ChordDir(cs - 0.3, cs - 0.01);
+                var (u2x, u2y, n2x, n2y) = walk.ChordDir(cs + 0.01, cs + 0.3);
+                double cross = u1x * u2y - u1y * u2x;                 // 진행방향 외적 → 볼록/오목
+                bool convex = (walk.Ccw ? cross : -cross) > 0;
+                if (cut ? !convex : convex) continue;                 // 뒤 쐐기 코너만(절토=볼록·성토=오목)
+                var cp = walk.At(cs);
+                double bx0 = n1x + n2x, by0 = n1y + n2y;              // 안쪽 이등분(정규화 전)
+                double bl = System.Math.Sqrt(bx0 * bx0 + by0 * by0);
+                if (bl < 1e-6) continue;                              // 180° 반전 코너 — 건너뜀
+                double biX = bx0 / bl, biY = by0 / bl;               // 안쪽 이등분 단위(전면 방향)
+
+                for (int c = 0; c < courses; c++)
+                {
+                    double off = (slopeN > 1e-9 ? slopeN * (cut ? (step - (c + 1) * blockH) : (c + 1) * blockH) : 0.0) + frontShift;
+                    // 두 전면선(cp+n·off, 방향 u)의 교점 P.
+                    double a1x = cp.x + n1x * off, a1y = cp.y + n1y * off;
+                    double a2x = cp.x + n2x * off, a2y = cp.y + n2y * off;
+                    double det = u1x * (-u2y) - u1y * (-u2x);
+                    if (System.Math.Abs(det) < 1e-9) continue;
+                    double tt = ((a2x - a1x) * (-u2y) - (a2y - a1y) * (-u2x)) / det;
+                    double px = a1x + u1x * tt, py = a1y + u1y * tt; // 앞 꼭짓점 P
+
+                    // 벽 존재·높이(면 블록과 동일 판정, 코너점 기준).
+                    if (!ground.TryGetElevation(cp.x, cp.y, out double g)) continue;
+                    double toe, crest;
+                    if (cut) { crest = cp.z; toe = cp.z - step; } else { toe = cp.z; crest = cp.z + step; }
+                    if (cut ? (g - toe <= eps) : (crest - g <= eps)) continue;
+                    double zTopC = toe + (c + 1) * blockH;
+                    double topLine = cut ? System.Math.Min(crest, System.Math.Max(toe, g)) : crest;
+                    if (zTopC > topLine + zTol) continue;
+
+                    // 뒤 사분면 중심 = P에서 안쪽 이등분 반대로 D/√2(=흙 쪽 대각). 정사각 D×D가 두 전면선이
+                    // 이루는 직각 사분면을 정확히 덮는다. 회전=면 방향(u1)에 정렬 → 두 변이 전면선과 평행(플러시,
+                    // 무돌출). 90° 코너면 완전 채움, 다른 각도는 근사(면1 플러시 유지).
+                    double back = blockD / System.Math.Sqrt(2.0);
+                    double ccx = px - biX * back, ccy = py - biY * back;
+                    double rot = System.Math.Atan2(u1y, u1x);        // 로컬 +X = 면1 진행방향
+                    result.Add(new Block(ccx, ccy, toe + c * blockH, rot, c, -1, level, k, -1,
+                        cs, false, cp.x, cp.y, Corner: true));
+                    cornerN++;
+                }
+            }
+
+            diag.Append($"링{k}(≈{level:F1}, {courses}층·벽면{faces.Count}): {result.Count - count0}개(반 {half0}·코너 {cornerN}) · ");
         }
         LastDiag = diag.Length > 0 ? diag.ToString() : "블록 없음";
         return result;
@@ -233,6 +283,7 @@ public static class WallBlocks
         var above = blocks.ToLookup(b => (b.Ring, b.Face, b.Course));
         foreach (var b in blocks)
         {
+            if (b.Corner) continue;                                   // 코너 채움 블록은 캡 대상 아님(정사각 포스트)
             double wb = b.Half ? halfW : blockW;
             // 이 블록 상면 구간에서 위층 블록이 덮는 부분을 빼 '노출 구간'만 남긴다.
             var free = new List<(double A, double B)> { (b.S - wb * 0.5, b.S + wb * 0.5) };
@@ -322,6 +373,7 @@ public static class WallBlocks
         private readonly (double x, double y, double z)[] _a, _b;
         private readonly (double nx, double ny)[] _n;
         private readonly bool _ccw;
+        public bool Ccw => _ccw;
         public double Length { get; }
 
         public RingWalk(IReadOnlyList<Point3> ring)

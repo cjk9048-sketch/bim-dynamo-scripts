@@ -32,6 +32,9 @@ public static class WallBlockDwg
                 ObjectId defHalf = MakeHexDef(db, tr, bt, "DH_원스톤반블록", blockW * 0.5, blockD, blockH);
                 ObjectId defCap = MakeBoxDef(db, tr, bt, "DH_캡블록", blockW, capD, capT);
                 ObjectId defHalfCap = MakeBoxDef(db, tr, bt, "DH_캡반블록", blockW * 0.5, capD, capT);
+                // 코너 채움 블록 — 두 벽면이 앞꼭짓점에서만 만나 비는 뒤 사분면을 메우는 정사각 포스트(D×D×H).
+                // 원점=XY 중심·바닥(WallBlocks 코너 좌표=중심). 위에서 본 슬릿 제거(JACK 0721).
+                ObjectId defCorner = MakeCenteredBoxDef(db, tr, bt, "DH_코너블록", blockD, blockD, blockH);
                 var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
 
                 // 재질은 절토/성토가 아니라 '색 띠'로 구분(JACK 0720 실물 사진) — 레이어 3개뿐.
@@ -43,7 +46,9 @@ public static class WallBlockDwg
                 {
                     foreach (var b in blocks)
                     {
-                        Insert(tr, ms, b.Half ? defHalf : defBlock, IsBandCourse(b.Course) ? layBand : layConc, b);
+                        ObjectId lay = IsBandCourse(b.Course) ? layBand : layConc;
+                        if (b.Corner) { Insert(tr, ms, defCorner, lay, b); }
+                        else { Insert(tr, ms, b.Half ? defHalf : defBlock, lay, b); }
                         nb++;
                     }
                     foreach (var c in caps) { Insert(tr, ms, c.Half ? defHalfCap : defCap, layCap, c); nc++; }
@@ -152,6 +157,22 @@ public static class WallBlockDwg
         var sol = new Solid3d();
         sol.CreateBox(w, d, h);                                  // 원점 중심 박스
         sol.TransformBy(Matrix3d.Displacement(new Vector3d(0, d / 2, h / 2))); // 전면 하단 중앙으로
+        btr.AppendEntity(sol);
+        tr.AddNewlyCreatedDBObject(sol, true);
+        return id;
+    }
+
+    /// <summary>XY 중심·바닥이 원점인 직육면체(코너 채움 블록용) — X∈[−w/2,w/2], Y∈[−d/2,d/2], Z∈[0,h].
+    /// WallBlocks의 코너 블록 좌표가 '중심'이라 전면 하단 중앙(MakeBoxDef)과 달리 XY도 중심에 둔다.</summary>
+    private static ObjectId MakeCenteredBoxDef(Database db, Transaction tr, BlockTable bt, string name,
+        double w, double d, double h)
+    {
+        var btr = new BlockTableRecord { Name = name, Origin = Point3d.Origin };
+        ObjectId id = bt.Add(btr);
+        tr.AddNewlyCreatedDBObject(btr, true);
+        var sol = new Solid3d();
+        sol.CreateBox(w, d, h);                                  // 원점 중심 박스
+        sol.TransformBy(Matrix3d.Displacement(new Vector3d(0, 0, h / 2))); // 바닥만 원점으로(XY 중심 유지)
         btr.AppendEntity(sol);
         tr.AddNewlyCreatedDBObject(sol, true);
         return id;

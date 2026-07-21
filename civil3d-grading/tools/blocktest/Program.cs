@@ -12,6 +12,9 @@ void Check(string name, bool ok, string detail = "")
 const double W = 0.46, H = 0.2, STEP = 5.0, HW = W / 2;
 const double D = 0.5, FS = D / 2; // 깊이·전면 돌출(벽 중심=링, JACK 0720 Z-파이팅 해소): 절토 +FS(안쪽), 성토 −FS
 
+// §37 코너 채움 블록은 별도 범주 — 면 블록 불변식(개수·플러시·무돌출) 검사에서는 제외한다.
+static List<WallBlocks.Block> Faces(List<WallBlocks.Block> bl) => bl.Where(b => !b.Corner).ToList();
+
 // 40×40 정사각 크레스트 링(z=105), 아래 단(pad) 링 z=100 — 절토 1개 단.
 static List<Point3> Square(double z) => new()
 {
@@ -40,7 +43,7 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
 // ── S1: 평탄 고지반(전절토, 지반 110 ≥ 크레스트) — 전 층·전 열 블록, 캡=최상층 전체 ──
 {
     var g = new FlatGround(110);
-    var blocks = WallBlocks.Generate(rings, g, cut: true, slopeN: 0, blockW: W, blockH: H);
+    var blocks = Faces(WallBlocks.Generate(rings, g, cut: true, slopeN: 0, blockW: W, blockH: H));
     Check("S1 블록수 = 층×유닛", blocks.Count == courses * unitsPerCourse,
         $"{blocks.Count} (기대 {courses * unitsPerCourse})");
     Check("S1 층수 25", blocks.Max(b => b.Course) == courses - 1, $"max층 {blocks.Max(b => b.Course)}");
@@ -86,7 +89,7 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
 // ── S2: 사선 지반(x 방향 상승 102→112) — 계단식, 커팅라인 준수, 캡-블록 무충돌 ──
 {
     var g = new SlopeGround(102, 0.25); // g = 102 + 0.25x → x=0: 102(중간), x=40: 112(전고)
-    var blocks = WallBlocks.Generate(rings, g, cut: true, slopeN: 0, blockW: W, blockH: H);
+    var blocks = Faces(WallBlocks.Generate(rings, g, cut: true, slopeN: 0, blockW: W, blockH: H));
     Check("S2 블록 존재", blocks.Count > 0, $"{blocks.Count}개");
     bool under = true;
     foreach (var b in blocks)
@@ -253,7 +256,7 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
         new Point3(20, 20, z), new Point3(20, 40, z), new Point3(0, 40, z),
     };
     var lRings = new List<IReadOnlyList<Point3>> { LShape(100), LShape(105) };
-    var blocks = WallBlocks.Generate(lRings, new FlatGround(110), cut: true, slopeN: 0, blockW: W, blockH: H);
+    var blocks = Faces(WallBlocks.Generate(lRings, new FlatGround(110), cut: true, slopeN: 0, blockW: W, blockH: H));
     Check("S8 L자 블록 존재", blocks.Count > 0, $"{blocks.Count}개");
     // 전면 끝점이 L 폴리곤 경계 밖(바깥쪽)으로 tol 이상 벗어나지 않는지 — 우각부 삐져나옴 검출.
     // 전면 끝점 = 삽입점 ± (폭/2)·진행방향. 진행방향 = rot로부터 (깊이 = 로컬+Y = 바깥이므로 X축 = 깊이에 수직).
@@ -345,7 +348,7 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
         return o;
     }
     var sqRings = new List<IReadOnlyList<Point3>> { DensifySq(40, 100, 0.485), DensifySq(40, 105, 0.485) };
-    var bl = WallBlocks.Generate(sqRings, new FlatGround(110), cut: true, slopeN: 0.05, blockW: W, blockH: H, blockD: D);
+    var bl = Faces(WallBlocks.Generate(sqRings, new FlatGround(110), cut: true, slopeN: 0.05, blockW: W, blockH: H, blockD: D));
     // 각 층에서 인접 벽면 쌍의 코너 앞모서리 갭 최댓값
     double worst = 0; int badCourses = 0;
     foreach (var cg in bl.GroupBy(b => b.Course))
@@ -400,8 +403,8 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
     else
     {
         Check("S11 벽 링 생성", vs.Count >= 2, $"링 {vs.Count}");
-        var bl = WallBlocks.Generate(vs, new FlatGround(200), cut: true, slopeN: 0.05,
-            blockW: W, blockH: H, blockD: D);
+        var bl = Faces(WallBlocks.Generate(vs, new FlatGround(200), cut: true, slopeN: 0.05,
+            blockW: W, blockH: H, blockD: D));
         // 실제 코너별 앞모서리 갭 — 벽면 경계(Face 바뀌는 지점)에서 이웃 끝블록끼리
         double worst = 0; int bad = 0;
         foreach (var cg in bl.Where(b => b.Ring == 1).GroupBy(b => b.Course))
@@ -423,6 +426,75 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
         }
         Check("S11 ★실제 링 코너 갭 없음", bad == 0, bad == 0 ? "" : $"{bad}건 갭, 최대 {worst * 1000:F0}mm");
     }
+}
+
+// ── S12(§37): 코너 채움 블록 — 뒤 사분면 슬릿을 메우되 앞면 돌출 없음 (정사각 90° 코너) ──
+{
+    static List<Point3> Sq(double s, double z) => new()
+    { new(0, 0, z), new(s, 0, z), new(s, s, z), new(0, s, z) };
+    var s12r = new List<IReadOnlyList<Point3>> { Sq(40, 100), Sq(40, 105) };
+    var bl = WallBlocks.Generate(s12r, new FlatGround(110), cut: true, slopeN: 0.05, blockW: W, blockH: H, blockD: D);
+    var corners = bl.Where(b => b.Corner).ToList();
+    Check("S12 코너블록 생성(볼록 4×25층)", corners.Count == 4 * 25, $"{corners.Count} (기대 100)");
+    // 코너블록은 뒤 사분면(흙 쪽)에 있어야 — 절토 코너(예: (40,0))에서 중심이 부지 안(x<40,y>0)이 아니라
+    // 링 바깥쪽(뒤)에 위치. 코너 (40,0): 뒤=+x,−y. 중심 x>40 또는 y<0 근처.
+    var c400 = corners.Where(b => b.Course == 12 && b.X > 39 && b.Y < 1).OrderBy(b => b.Y).FirstOrDefault();
+    Check("S12 코너 (40,0) 블록 존재", c400.Corner, $"X={c400.X:F2} Y={c400.Y:F2}");
+    // ★ 발자국(footprint) 검사: 코너 (40,0) 층12. 전면선 face1: y=P_y(≈0.25−setback보정), face2: x=P_x.
+    //   코너블록 D×D의 4모서리가 전부 두 전면선의 '뒤(흙)' 쪽이어야 함(무돌출) + 사분면을 덮어야 함(무갭).
+    {
+        // 이 코너 face1=바닥변(y=0, 진행 −x, 안쪽법선 +y), face2=우변(x=40, 진행 +y, 안쪽법선 −x).
+        // 층12 off = 0.05*(5−13*0.2)+FS = 0.05*2.4+0.25 = 0.37. P=(40−0.37, 0+0.37)=(39.63, 0.37).
+        double off = 0.05 * (STEP - 13 * H) + FS;
+        double px = 40 - off, py = 0 + off;
+        double ux = Math.Cos(c400.RotRad), uy = Math.Sin(c400.RotRad);  // 로컬 +X
+        double vx = -uy, vy = ux;                                        // 로컬 +Y
+        // 이 코너의 쐐기 방향 = 앞꼭짓점 P에서 링 코너(40,0) 쪽. 무돌출: 어떤 모서리도 두 전면선 앞(pad)으로
+        //   안 나감. 무갭: 한 모서리가 P에 닿아 슬릿을 막고, 대각 모서리가 쐐기 D√2 깊이까지 도달.
+        bool noProt = true; double worstP = 0, nearP = 9, farP = 0;
+        for (int sx = -1; sx <= 1; sx += 2)
+            for (int sy = -1; sy <= 1; sy += 2)
+            {
+                double cx = c400.X + ux * (sx * D / 2) + vx * (sy * D / 2);
+                double cy = c400.Y + uy * (sx * D / 2) + vy * (sy * D / 2);
+                double d1 = cy - py;    // face1 앞(pad, y>py)이면 돌출
+                double d2 = px - cx;    // face2 앞(pad, x<px)이면 돌출
+                if (d1 > 1e-6) { noProt = false; worstP = Math.Max(worstP, d1); }
+                if (d2 > 1e-6) { noProt = false; worstP = Math.Max(worstP, d2); }
+                double dP = Math.Sqrt((cx - px) * (cx - px) + (cy - py) * (cy - py));
+                nearP = Math.Min(nearP, dP); farP = Math.Max(farP, dP);
+            }
+        Check("S12 ★코너블록 무돌출(4모서리 뒤)", noProt, noProt ? "" : $"돌출 {worstP * 1000:F0}mm");
+        Check("S12 ★코너블록 P에 닿음(슬릿막음)", nearP < 0.05, $"최근접 {nearP * 1000:F0}mm");
+        Check("S12 ★코너블록 쐐기깊이 D√2 도달", farP > D * 1.4142 - 0.05, $"최원 {farP:F2}m");
+    }
+
+    // 실제 boundary(90° 직각) — 코너블록이 생기고, 그 중심들이 전부 링 근처(부지 급이탈 없음)
+    var bnd = new List<Point3> {
+        new(240344.743,450456.946,100), new(240346.319,450392.337,100),
+        new(240304.897,450392.323,100), new(240304.897,450458.594,100),
+        new(240281.147,450458.432,100), new(240280.951,450487.073,100),
+        new(240326.249,450487.073,100), new(240326.249,450456.946,100) };
+    var pr = new GradingParams { BenchHeight = 5, BenchWidth = 1, CutSlope = 0.05, FillSlope = 0.05,
+        CellSize = 0.5, MaxBenches = 50, VertexSpacing = 1.0, MinSlope = 0.05, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0 };
+    var vs = GradingGeometry.Build(bnd, new FlatGround(200), pr, true);
+    var rl = vs.Rings.Select(r => (IReadOnlyList<Point3>)r).ToList();
+    var rb = WallBlocks.Generate(rl, new FlatGround(200), cut: true, slopeN: 0.05, blockW: W, blockH: H, blockD: D);
+    Check("S12 실제링 코너블록 생성됨", rb.Any(b => b.Corner), $"코너 {rb.Count(b => b.Corner)}개");
+
+    // ★ 성토(오목 코너) — L자 성토에서 오목 코너에만 코너블록이 생기고, 링에서 크게 안 벗어남(대략 D 이내).
+    static List<Point3> LShape(double z) => new()
+    { new(0,0,z), new(40,0,z), new(40,20,z), new(20,20,z), new(20,40,z), new(0,40,z) };
+    var lFill = new List<IReadOnlyList<Point3>> { LShape(105), LShape(100) }; // 성토: pad(위)·토우
+    var fb = WallBlocks.Generate(lFill, new FlatGround(99), cut: false, slopeN: 0.05, blockW: W, blockH: H, blockD: D);
+    var fc = fb.Where(b => b.Corner).ToList();
+    Check("S12 성토 L자 코너블록 생성", fc.Count > 0, $"코너 {fc.Count}개");
+    // 오목 코너(20,20) 부근에만 — 볼록(예: (40,0))엔 없어야(성토는 오목이 뒤 쐐기)
+    bool atConcave = fc.All(b => Math.Abs(b.RX - 20) < 2 && Math.Abs(b.RY - 20) < 2);
+    Check("S12 성토 코너블록=오목(20,20)만", atConcave, atConcave ? "" : "볼록에도 생성됨");
+    // 링에서 과이탈 없음(중심이 오목 코너 ±(D+여유))
+    bool nearRing = fc.All(b => Math.Sqrt((b.X - 20) * (b.X - 20) + (b.Y - 20) * (b.Y - 20)) < D + 0.6);
+    Check("S12 성토 코너블록 링 근처(무과이탈)", nearRing);
 }
 
 Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
