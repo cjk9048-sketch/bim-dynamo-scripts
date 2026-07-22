@@ -19,7 +19,7 @@ public enum WallStyle
 public static class GradingSettings
 {
     /// <summary>플러그인 버전 — 팝업 첫 줄에 표시(새 빌드 설치 확인용). 커밋마다 갱신.</summary>
-    public const string Version = "v6.2 (2026-07-22 소단·사면 SHP도 항상 출력 — 초세트 커버리지)";
+    public const string Version = "v6.3 (2026-07-22 실행별 날짜폴더 격리 + 모델 경로 재작성)";
 
     // ── 옹벽 3D 보강토 블록(옹벽3D_기획.md) — 원스톤 블록·캡블록 규격(m). 스샷 0720 실측. ──
     // [고정값 — JACK 0720] 사용자가 바꾸지 않는다. 보강토 옹벽이면 무조건 이 치수를 쓴다(설정 UI 제거).
@@ -49,11 +49,19 @@ public static class GradingSettings
     public static double HatchLong = 5.0;      // 노리선 긴선 간격 (m, 길이=사면폭 전체)
     public static bool KeepIntermediateSurfaces = true; // true=중간 지표면(가상절토/가상성토/Pad) 유지(오류 확인용). false=최종면만 남기고 정리
     public static string ExportFolder = "";    // INFRAWORKS SHP 내보내기 폴더(마지막 선택 기억)
-    // [InfraWorks 원스톱 — JACK 0722] 지형(LandXML)·옹벽(DWG)은 **모든 PC 공통 고정 폴더**로 → 배포된 템플릿 모델이
-    //   항상 같은 경로를 가리켜 portable(PC마다 경로수정 불필요). SHP는 위 사용자 폴더 그대로.
+    // [InfraWorks 원스톱 — JACK 0722] 모든 산출은 **공통 루트 C:\DHInfra** 아래 **실행별 날짜 폴더**로(프로젝트 중복 방지).
+    //   템플릿 소스는 C:/DHInfra/ 직결 경로를 담고 있고, 실행 시 복사한 모델의 경로를 실행 폴더로 재작성(DHInfraAuto retarget).
     public const string InfraFolder = @"C:\DHInfra";
     public const string InfraTerrainXml = "지형.xml";   // InfraWorks 지형 LandXML 고정 파일명
     public const string InfraWallDwg = "옹벽3D.dwg";     // InfraWorks 옹벽 DWG 고정 파일명
+
+    /// <summary>이번 실행의 산출 폴더(C:\DHInfra\yyyyMMdd_HHmmss) 생성·반환 — 실행마다 새로(격리, JACK 0722).</summary>
+    public static string NewRunFolder()
+    {
+        string run = System.IO.Path.Combine(InfraFolder, System.DateTime.Now.ToString("yyyyMMdd_HHmmss"));
+        System.IO.Directory.CreateDirectory(run);
+        return run;
+    }
     public static int ExportEpsg = 5186;       // SHP .prj 좌표계 — 기본 중부원점(JACK 확인). 5185/5187/5188 가능
 
     // [옹벽 형태 — JACK 0721] 절토부/성토부에 어떤 옹벽 3D를 만들지 드롭박스로 선택. 치수는 스타일별 고정.

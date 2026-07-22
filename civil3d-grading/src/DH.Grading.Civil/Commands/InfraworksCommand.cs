@@ -39,11 +39,11 @@ public sealed class InfraworksCommand
             }
             if (bundle == null) return;
 
-            // [InfraWorks 원스톱 — JACK 0722] 폴더 선택창 없이 **모든 산출(SHP·지형·옹벽)을 고정폴더 C:\DHInfra**로.
-            //   SHP도 결국 InfraWorks에서 계획지표면·소단 커버리지로 쓰므로 같은 폴더가 맞다. (무인 자동화 목표)
-            string folder = GradingSettings.InfraFolder;
-            try { System.IO.Directory.CreateDirectory(folder); }
-            catch (System.Exception dex) { ed.WriteMessage($"\n[INFRAWORKS] 폴더 생성 실패: {folder} — {dex.Message}"); return; }
+            // [InfraWorks 원스톱 — JACK 0722] 폴더 선택창 없이 **실행별 날짜 폴더(C:\DHInfra\yyyyMMdd_HHmmss)**로 전 산출.
+            //   프로젝트/실행 간 파일이 안 겹치고 이력이 보존된다. 복사한 모델의 소스 경로도 이 폴더로 재작성(런처).
+            string folder;
+            try { folder = GradingSettings.NewRunFolder(); }
+            catch (System.Exception dex) { ed.WriteMessage($"\n[INFRAWORKS] 실행 폴더 생성 실패 — {dex.Message}"); return; }
             GradingSettings.ExportFolder = folder;
 
             string? wkt = ShapefileWriter.WktForEpsg(GradingSettings.ExportEpsg);
@@ -241,9 +241,8 @@ public sealed class InfraworksCommand
             try { System.IO.File.Delete(System.IO.Path.Combine(folder, "PSM.dwg")); } catch { }  // 구 분리파일 정리
             // [초세트 템플릿 — JACK 0722] 옹벽3D.dwg는 **항상 출력**(옹벽 없어도 빈 DWG) → 템플릿의 옹벽3D 소스가 절대 안 끊김(사면형 대응).
             {
-                // [InfraWorks 원스톱] 옹벽 DWG는 **고정 폴더 C:\DHInfra**에 고정 파일명으로(배포 템플릿이 이 경로 참조).
-                try { System.IO.Directory.CreateDirectory(GradingSettings.InfraFolder); } catch { }
-                string dwgPath = System.IO.Path.Combine(GradingSettings.InfraFolder, GradingSettings.InfraWallDwg);
+                // [InfraWorks 원스톱] 옹벽 DWG는 실행 폴더에 고정 파일명으로(모델 소스 경로는 런처가 재작성).
+                string dwgPath = System.IO.Path.Combine(folder, GradingSettings.InfraWallDwg);
                 try
                 {
                     var (nb, nc, np, na, ncp) = WallDwg.Export(dwgPath, wallSets, allPanels, allConcrete,
@@ -301,8 +300,7 @@ public sealed class InfraworksCommand
             //    새 지형 반영하려면 xml 덮어쓰기 + 캐시 삭제 후 InfraWorks에서 Refresh(실측 확정). LandXmlExport가 처리.
             try
             {
-                try { System.IO.Directory.CreateDirectory(GradingSettings.InfraFolder); } catch { }
-                string xmlPath = System.IO.Path.Combine(GradingSettings.InfraFolder, GradingSettings.InfraTerrainXml);
+                string xmlPath = System.IO.Path.Combine(folder, GradingSettings.InfraTerrainXml);
                 using Transaction trS = db.TransactionManager.StartTransaction();
                 var civilDocS = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
                 Autodesk.Civil.DatabaseServices.TinSurface? gsurf = null;
@@ -322,7 +320,7 @@ public sealed class InfraworksCommand
 
             // ── ⑧ InfraWorks 원스톱 — 번들 템플릿을 새 모델로 복사하고 InfraWorks 실행(JACK 0722). ──
             string iwMsg;
-            try { iwMsg = InfraWorksLauncher.CopyTemplateAndOpen(); }
+            try { iwMsg = InfraWorksLauncher.CopyTemplateAndOpen(folder); }
             catch (System.Exception iex) { iwMsg = "InfraWorks 실행 실패: " + iex.Message; }
             log.AppendLine("InfraWorks: " + iwMsg);
 
