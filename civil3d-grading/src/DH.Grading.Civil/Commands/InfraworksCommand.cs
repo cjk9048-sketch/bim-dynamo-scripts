@@ -39,13 +39,11 @@ public sealed class InfraworksCommand
             }
             if (bundle == null) return;
 
-            // 폴더 선택(.NET 8 WPF OpenFolderDialog) — 마지막 선택 기억
-            var dlg = new Microsoft.Win32.OpenFolderDialog { Title = "SHP 내보내기 폴더 선택" };
-            if (!string.IsNullOrEmpty(GradingSettings.ExportFolder) &&
-                System.IO.Directory.Exists(GradingSettings.ExportFolder))
-                dlg.InitialDirectory = GradingSettings.ExportFolder;
-            if (dlg.ShowDialog() != true) { ed.WriteMessage("\n[INFRAWORKS] 폴더 선택 취소"); return; }
-            string folder = dlg.FolderName;
+            // [InfraWorks 원스톱 — JACK 0722] 폴더 선택창 없이 **모든 산출(SHP·지형·옹벽)을 고정폴더 C:\DHInfra**로.
+            //   SHP도 결국 InfraWorks에서 계획지표면·소단 커버리지로 쓰므로 같은 폴더가 맞다. (무인 자동화 목표)
+            string folder = GradingSettings.InfraFolder;
+            try { System.IO.Directory.CreateDirectory(folder); }
+            catch (System.Exception dex) { ed.WriteMessage($"\n[INFRAWORKS] 폴더 생성 실패: {folder} — {dex.Message}"); return; }
             GradingSettings.ExportFolder = folder;
 
             string? wkt = ShapefileWriter.WktForEpsg(GradingSettings.ExportEpsg);
@@ -250,8 +248,9 @@ public sealed class InfraworksCommand
             }
             else
             {
-                // DWG 저장은 파일 잠김(이미 열어둔 경우 등) 실패가 흔해 격리 — 실패해도 나머지 산출은 계속.
-                string dwgPath = System.IO.Path.Combine(folder, "옹벽3D.dwg");
+                // [InfraWorks 원스톱] 옹벽 DWG는 **고정 폴더 C:\DHInfra**에 고정 파일명으로(배포 템플릿이 이 경로 참조).
+                try { System.IO.Directory.CreateDirectory(GradingSettings.InfraFolder); } catch { }
+                string dwgPath = System.IO.Path.Combine(GradingSettings.InfraFolder, GradingSettings.InfraWallDwg);
                 try
                 {
                     var (nb, nc, np, na, ncp) = WallDwg.Export(dwgPath, wallSets, allPanels, allConcrete,
@@ -309,7 +308,8 @@ public sealed class InfraworksCommand
             //    새 지형 반영하려면 xml 덮어쓰기 + 캐시 삭제 후 InfraWorks에서 Refresh(실측 확정). LandXmlExport가 처리.
             try
             {
-                string xmlPath = System.IO.Path.Combine(folder, "지형.xml");
+                try { System.IO.Directory.CreateDirectory(GradingSettings.InfraFolder); } catch { }
+                string xmlPath = System.IO.Path.Combine(GradingSettings.InfraFolder, GradingSettings.InfraTerrainXml);
                 using Transaction trS = db.TransactionManager.StartTransaction();
                 var civilDocS = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
                 Autodesk.Civil.DatabaseServices.TinSurface? gsurf = null;
@@ -327,8 +327,15 @@ public sealed class InfraworksCommand
             }
             catch (System.Exception xex) { log.AppendLine($"지형.xml: 저장 실패 — {xex.Message} (파일 열려 있으면 닫고 재실행)"); }
 
+            // ── ⑧ InfraWorks 원스톱 — 번들 템플릿을 새 모델로 복사하고 InfraWorks 실행(JACK 0722). ──
+            string iwMsg;
+            try { iwMsg = InfraWorksLauncher.CopyTemplateAndOpen(); }
+            catch (System.Exception iex) { iwMsg = "InfraWorks 실행 실패: " + iex.Message; }
+            log.AppendLine("InfraWorks: " + iwMsg);
+
             // 팝업은 성패 + 저장 위치만 — 파일별 개수·진단은 명령창과 로그로(공용 배포용, JACK 0720).
-            AcadApp.ShowAlertDialog("INFRAWORKS 내보내기 완료\n\n저장 위치: " + folder);
+            AcadApp.ShowAlertDialog("INFRAWORKS 내보내기 완료\n\n저장 위치: " + folder +
+                "\n(SHP · 지형.xml · 옹벽3D.dwg)\n\n" + iwMsg);
             ed.WriteMessage("\n" + "INFRAWORKS SHP 내보내기 완료" + note + "\n" + log.ToString().TrimEnd());
             try
             {
