@@ -11,53 +11,61 @@ namespace DH.Grading.Civil;
 /// 블록정의 로컬좌표: 원점=전면 하단 중앙, +X=폭, +Y=깊이(배면 흙), +Z=높이 — WallBlocks.Block.RotRad와 합의됨.</summary>
 public static class WallBlockDwg
 {
-    /// <summary>(cut여부, 몸통블록들, 캡블록들) 세트를 path에 DWG로 저장. 반환=(몸통 수, 캡 수) — 반블록·반캡 포함.</summary>
+    /// <summary>(cut여부, 몸통블록들, 캡블록들) 세트를 path에 DWG로 저장. 반환=(몸통 수, 캡 수) — 반블록·반캡 포함.
+    /// ※단독 저장용 래퍼. PSM과 한 파일로 합칠 때는 <see cref="Populate"/>를 공유 DB에 직접 호출(WallDwg).</summary>
     public static (int Blocks, int Caps) Export(
         string path,
         List<(bool Cut, List<WallBlocks.Block> Blocks, List<WallBlocks.Block> Caps)> sets,
         double blockW, double blockD, double blockH, double capD, double capT)
     {
-        int nb = 0, nc = 0;
         using var db = new Database(true, true);
-        // Solid3d 생성은 WorkingDatabase 문맥을 요구 — 잠시 교체 후 복원.
         Database prev = HostApplicationServices.WorkingDatabase;
         HostApplicationServices.WorkingDatabase = db;
         try
         {
             db.Insunits = UnitsValue.Meters;
+            (int Blocks, int Caps) r;
             using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForWrite);
-                ObjectId defBlock = MakeHexDef(db, tr, bt, "DH_원스톤블록", blockW, blockD, blockH);
-                ObjectId defHalf = MakeHexDef(db, tr, bt, "DH_원스톤반블록", blockW * 0.5, blockD, blockH);
-                ObjectId defCap = MakeBoxDef(db, tr, bt, "DH_캡블록", blockW, capD, capT);
-                ObjectId defHalfCap = MakeBoxDef(db, tr, bt, "DH_캡반블록", blockW * 0.5, capD, capT);
-                // 코너 채움 블록 — 두 벽면이 앞꼭짓점에서만 만나 비는 뒤 사분면을 메우는 정사각 포스트(D×D×H).
-                // 원점=XY 중심·바닥(WallBlocks 코너 좌표=중심). 위에서 본 슬릿 제거(JACK 0721).
-                ObjectId defCorner = MakeCenteredBoxDef(db, tr, bt, "DH_코너블록", blockD, blockD, blockH);
-                var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
-
-                // 재질은 절토/성토가 아니라 '색 띠'로 구분(JACK 0720 실물 사진) — 레이어 3개뿐.
-                ObjectId layConc = EnsureLayer(db, tr, "DH-옹벽블록-콘크리트", ConcreteRgb);
-                ObjectId layBand = EnsureLayer(db, tr, "DH-옹벽블록-버건디", BurgundyRgb);
-                ObjectId layCap = EnsureLayer(db, tr, "DH-캡블록", CapConcreteRgb);
-
-                foreach (var (_, blocks, caps) in sets)
-                {
-                    foreach (var b in blocks)
-                    {
-                        ObjectId lay = IsBandCourse(b.Course) ? layBand : layConc;
-                        if (b.Corner) { Insert(tr, ms, defCorner, lay, b); }
-                        else { Insert(tr, ms, b.Half ? defHalf : defBlock, lay, b); }
-                        nb++;
-                    }
-                    foreach (var c in caps) { Insert(tr, ms, c.Half ? defHalfCap : defCap, layCap, c); nc++; }
-                }
-                tr.Commit();
-            }
+            { r = Populate(db, tr, sets, blockW, blockD, blockH, capD, capT); tr.Commit(); }
             db.SaveAs(path, DwgVersion.Current);
+            return r;
         }
         finally { HostApplicationServices.WorkingDatabase = prev; }
+    }
+
+    /// <summary>이미 열린 db·tr의 모델공간에 옹벽 블록·캡을 채운다(블록정의·레이어 생성 포함). 반환=(몸통 수, 캡 수).
+    /// WorkingDatabase가 db로 설정된 상태에서 호출할 것(Solid3d 생성 요건). PSM과 한 DWG로 합칠 때 재사용.</summary>
+    public static (int Blocks, int Caps) Populate(
+        Database db, Transaction tr,
+        List<(bool Cut, List<WallBlocks.Block> Blocks, List<WallBlocks.Block> Caps)> sets,
+        double blockW, double blockD, double blockH, double capD, double capT)
+    {
+        int nb = 0, nc = 0;
+        var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForWrite);
+        ObjectId defBlock = MakeHexDef(db, tr, bt, "DH_원스톤블록", blockW, blockD, blockH);
+        ObjectId defHalf = MakeHexDef(db, tr, bt, "DH_원스톤반블록", blockW * 0.5, blockD, blockH);
+        ObjectId defCap = MakeBoxDef(db, tr, bt, "DH_캡블록", blockW, capD, capT);
+        ObjectId defHalfCap = MakeBoxDef(db, tr, bt, "DH_캡반블록", blockW * 0.5, capD, capT);
+        // 코너 채움 블록 — 두 벽면이 앞꼭짓점에서만 만나 비는 뒤 사분면을 메우는 정사각 포스트(D×D×H).
+        ObjectId defCorner = MakeCenteredBoxDef(db, tr, bt, "DH_코너블록", blockD, blockD, blockH);
+        var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+
+        // 재질은 절토/성토가 아니라 '색 띠'로 구분(JACK 0720 실물 사진) — 레이어 3개뿐.
+        ObjectId layConc = EnsureLayer(db, tr, "DH-옹벽블록-콘크리트", ConcreteRgb);
+        ObjectId layBand = EnsureLayer(db, tr, "DH-옹벽블록-버건디", BurgundyRgb);
+        ObjectId layCap = EnsureLayer(db, tr, "DH-캡블록", CapConcreteRgb);
+
+        foreach (var (_, blocks, caps) in sets)
+        {
+            foreach (var b in blocks)
+            {
+                ObjectId lay = IsBandCourse(b.Course) ? layBand : layConc;
+                if (b.Corner) { Insert(tr, ms, defCorner, lay, b); }
+                else { Insert(tr, ms, b.Half ? defHalf : defBlock, lay, b); }
+                nb++;
+            }
+            foreach (var c in caps) { Insert(tr, ms, c.Half ? defHalfCap : defCap, layCap, c); nc++; }
+        }
         return (nb, nc);
     }
 
