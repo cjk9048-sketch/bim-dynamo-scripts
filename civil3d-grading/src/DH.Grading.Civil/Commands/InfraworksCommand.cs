@@ -304,6 +304,29 @@ public sealed class InfraworksCommand
                     try { System.IO.File.Delete(System.IO.Path.Combine(folder, "옹벽물량.csv")); } catch { }
             }
 
+            // ── ⑦ 지형.xml — InfraWorks LandXML 지형(정지면_DH TinSurface 삼각망 직접 생성) + .aecc 캐시 삭제. ──
+            //    [JACK 0722] InfraWorks는 임포트 시 <xml>.aecc.pnt/.tri 캐시를 굽고 Refresh는 캐시를 읽음 →
+            //    새 지형 반영하려면 xml 덮어쓰기 + 캐시 삭제 후 InfraWorks에서 Refresh(실측 확정). LandXmlExport가 처리.
+            try
+            {
+                string xmlPath = System.IO.Path.Combine(folder, "지형.xml");
+                using Transaction trS = db.TransactionManager.StartTransaction();
+                var civilDocS = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+                Autodesk.Civil.DatabaseServices.TinSurface? gsurf = null;
+                foreach (ObjectId sid in civilDocS.GetSurfaceIds())
+                    if (trS.GetObject(sid, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.TinSurface ts && ts.Name == "정지면_DH")
+                    { gsurf = ts; break; }
+                if (gsurf == null)
+                    log.AppendLine("지형.xml: '정지면_DH' 지표면을 찾지 못해 생략 — 먼저 정지면 생성 필요");
+                else
+                {
+                    int ntri = LandXmlExport.ExportSurface(gsurf, xmlPath, "정지면_DH");
+                    log.AppendLine($"지형.xml: 정지면_DH → LandXML 삼각형 {ntri}개 (+ .aecc 캐시 삭제) — InfraWorks 지형 Refresh용");
+                }
+                trS.Commit();
+            }
+            catch (System.Exception xex) { log.AppendLine($"지형.xml: 저장 실패 — {xex.Message} (파일 열려 있으면 닫고 재실행)"); }
+
             // 팝업은 성패 + 저장 위치만 — 파일별 개수·진단은 명령창과 로그로(공용 배포용, JACK 0720).
             AcadApp.ShowAlertDialog("INFRAWORKS 내보내기 완료\n\n저장 위치: " + folder);
             ed.WriteMessage("\n" + "INFRAWORKS SHP 내보내기 완료" + note + "\n" + log.ToString().TrimEnd());
