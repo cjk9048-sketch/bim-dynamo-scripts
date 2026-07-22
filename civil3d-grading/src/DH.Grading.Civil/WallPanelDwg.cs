@@ -93,8 +93,8 @@ public static class WallPanelDwg
                     }
                     catch { }
 
-                    // 콘크리트 온전 패널 — 자연석 무늬(돌출 돌 패널당 솔리드 1개). 실패해도 바탕 민판은 유지.
-                    if (concrete && p.IsFull)
+                    // 콘크리트 무늬 — 모든 콘크리트 패널(잘린 것 포함), 돌을 패널 실제 모양(Local)에 클립. 실패해도 바탕 민판 유지.
+                    if (concrete)
                         try
                         {
                             var pads = BuildConcretePads(p);
@@ -208,6 +208,8 @@ public static class WallPanelDwg
                 pts[i, j] = new Point2d(minU + i * du + ju, minV + j * dv + jv);
             }
         double scale = System.Math.Max(0.5, 1 - GrooveW / System.Math.Min(du, dv));  // 중심 기준 축소=돌 사이 홈
+        // 패널 실제 폴리곤(Local)을 클립 창으로 — 돌을 지표면·코너 잘린 모양에 맞춰 자른다(삐져나옴·누락 방지).
+        var clip = p.Local; bool ccw = SignedArea(clip) > 0;
         var curves = new DBObjectCollection();
         for (int i = 0; i < nx; i++)
             for (int j = 0; j < ny; j++)
@@ -215,9 +217,11 @@ public static class WallPanelDwg
                 var a = pts[i, j]; var b = pts[i + 1, j]; var c = pts[i + 1, j + 1]; var d = pts[i, j + 1];
                 double cx = (a.X + b.X + c.X + d.X) / 4, cy = (a.Y + b.Y + c.Y + d.Y) / 4;
                 Point2d Sc(Point2d q) => new Point2d(cx + (q.X - cx) * scale, cy + (q.Y - cy) * scale);
-                var pl = new Polyline(4);
-                pl.AddVertexAt(0, Sc(a), 0, 0, 0); pl.AddVertexAt(1, Sc(b), 0, 0, 0);
-                pl.AddVertexAt(2, Sc(c), 0, 0, 0); pl.AddVertexAt(3, Sc(d), 0, 0, 0);
+                var stone = new List<Point2d> { Sc(a), Sc(b), Sc(c), Sc(d) };
+                var cl = ClipPolyToLocal(stone, clip, ccw);   // 돌을 패널 모양에 클립
+                if (cl.Count < 3) continue;
+                var pl = new Polyline(cl.Count);
+                for (int k = 0; k < cl.Count; k++) pl.AddVertexAt(k, cl[k], 0, 0, 0);
                 pl.Closed = true;
                 curves.Add(pl);
             }
@@ -240,6 +244,42 @@ public static class WallPanelDwg
         }
         finally { foreach (DBObject o in curves) o.Dispose(); }   // 우리가 만든 폴리라인(리전은 복사본이라 소유 안 함)
         return pads;
+    }
+
+    private static double SignedArea(IReadOnlyList<(double u, double v)> p)
+    {
+        double a = 0; for (int i = 0; i < p.Count; i++) { var u = p[i]; var w = p[(i + 1) % p.Count]; a += u.u * w.v - w.u * u.v; }
+        return a / 2;
+    }
+
+    /// <summary>돌 폴리곤을 패널 실제 폴리곤(Local, 볼록 가정)에 클립 — Sutherland–Hodgman. 데이라잇·코너 잘림 반영.</summary>
+    private static List<Point2d> ClipPolyToLocal(List<Point2d> subj, IReadOnlyList<(double u, double v)> local, bool ccw)
+    {
+        var poly = subj;
+        int m = local.Count;
+        for (int e = 0; e < m && poly.Count >= 3; e++)
+        {
+            var A = local[e]; var B = local[(e + 1) % m];
+            double ex = B.u - A.u, ey = B.v - A.v;
+            var outp = new List<Point2d>();
+            int n = poly.Count;
+            for (int i = 0; i < n; i++)
+            {
+                var P = poly[i]; var Q = poly[(i + 1) % n];
+                double sp = ex * (P.Y - A.v) - ey * (P.X - A.u);      // >0 = A→B 왼쪽
+                double sq = ex * (Q.Y - A.v) - ey * (Q.X - A.u);
+                bool inP = ccw ? sp >= -1e-9 : sp <= 1e-9;
+                bool inQ = ccw ? sq >= -1e-9 : sq <= 1e-9;
+                if (inP) outp.Add(P);
+                if (inP != inQ && System.Math.Abs(sp - sq) > 1e-12)
+                {
+                    double t = sp / (sp - sq);
+                    outp.Add(new Point2d(P.X + (Q.X - P.X) * t, P.Y + (Q.Y - P.Y) * t));
+                }
+            }
+            poly = outp;
+        }
+        return poly;
     }
 
     /// <summary>로컬 2D 폴리곤(XY)을 Z로 height만큼 밀어 솔리드 — Region+Extrude.</summary>
