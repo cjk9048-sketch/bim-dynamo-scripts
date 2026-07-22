@@ -73,7 +73,7 @@ public sealed class GradingDialog : Window
             Text = "옹벽 형태 (INFRAWORKS 3D)",
             FontWeight = FontWeights.Bold,
             Margin = new Thickness(0, 10, 0, 6),
-            ToolTip = "INFRAWORKS 내보내기 때 만드는 옹벽 3D 종류. 없음=사면(노리)만. 보강토=근수직 블록. PSM=패널+어스앵커(사면 1:0.3).",
+            ToolTip = "INFRAWORKS 내보내기 때 만드는 옹벽 3D 종류. 없음=사면(노리)만. 보강토=근수직 블록. 앵커판넬=패널+어스앵커. 콘크리트=패널+자연석 무늬(앵커 없음).",
         });
         _cutWallStyle = AddStyleRow(root, "절토 옹벽", GradingSettings.CutWallStyle);
         _fillWallStyle = AddStyleRow(root, "성토 옹벽", GradingSettings.FillWallStyle);
@@ -110,7 +110,8 @@ public sealed class GradingDialog : Window
         var cb = new ComboBox { Width = 180, Height = 24, VerticalContentAlignment = VerticalAlignment.Center };
         cb.Items.Add("없음 (사면만)");
         cb.Items.Add("보강토 (블록)");
-        cb.Items.Add("PSM 패널식 (앵커)");
+        cb.Items.Add("앵커판넬 (앵커)");
+        cb.Items.Add("콘크리트 (무늬)");
         cb.SelectedIndex = (int)current;                 // enum 순서 = 콤보 순서
         DockPanel.SetDock(cb, Dock.Left);
         row.Children.Add(cb);

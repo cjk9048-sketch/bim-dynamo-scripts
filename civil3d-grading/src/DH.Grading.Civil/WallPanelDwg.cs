@@ -27,6 +27,14 @@ public static class WallPanelDwg
     private static readonly Color PanelRgb = Color.FromRgb(200, 198, 194);
     private static readonly Color AnchorRgb = Color.FromRgb(60, 60, 62);
     private static readonly Color PlateRgb = Color.FromRgb(120, 122, 126);
+    private static readonly Color ConcreteRgb = Color.FromRgb(188, 184, 178);   // 콘크리트 옹벽(약간 어두운 회색 콘크리트)
+
+    // ── 콘크리트 옹벽 표면 자연석 무늬(JACK 0722 사진 — 크레이지 페이빙) ──
+    private const double StoneSize = 0.40;   // 자연석 한 개 대략 크기(m) — 패널당 약 4×4(JACK 0722, 내보내기 시간·용량↓)
+    private const double GrooveW = 0.05;     // 줄눈(홈) 폭 — 넓게(InfraWorks 가시성)
+    private const double Relief = 0.035;     // 자연석 돌출(=홈 깊이) — 깊게(InfraWorks 가시성)
+    // 결정적 의사난수 지터([-1,1]) — Math.Random 없이 재현 가능(패널마다 동일 무늬 = 실물 form-liner처럼 반복).
+    private static double Hash(int i, int j) { double s = System.Math.Sin(i * 12.9898 + j * 78.233) * 43758.5453; return (s - System.Math.Floor(s)) * 2 - 1; }
 
     /// <summary>패널들을 path에 DWG로 저장. 반환=(패널 수, 앵커 수).
     /// ※단독 저장용 래퍼. 보강토와 한 파일로 합칠 때는 <see cref="Populate"/>를 공유 DB에 직접 호출(WallDwg).</summary>
@@ -47,19 +55,22 @@ public static class WallPanelDwg
         finally { HostApplicationServices.WorkingDatabase = prev; }
     }
 
-    /// <summary>이미 열린 db·tr의 모델공간에 PSM 패널·앵커·정착판(+코너 필러)을 채운다(레이어 생성 포함). 반환=(패널 수, 앵커 수).
+    /// <summary>이미 열린 db·tr의 모델공간에 패널을 채운다(레이어 생성 포함). 반환=(패널 수, 앵커 수).
+    ///   concrete=false: 앵커판넬(가운데 홈 + 어스앵커 + 정착판). concrete=true: 콘크리트옹벽(홈·앵커 없이 면만, 무늬는 Phase B).
     /// WorkingDatabase가 db로 설정된 상태에서 호출할 것. 보강토와 한 DWG로 합칠 때 재사용.</summary>
     public static (int Panels, int Anchors) Populate(Database db, Transaction tr,
-        IReadOnlyList<WallPanels.Panel> panels, IReadOnlyList<WallPanels.Quoin> quoins = null)
+        IReadOnlyList<WallPanels.Panel> panels, bool concrete = false, IReadOnlyList<WallPanels.Quoin> quoins = null)
     {
         int np = 0, na = 0;
         {
             {
                 var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForWrite);
                 var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
-                ObjectId layPanel = EnsureLayer(db, tr, "DH-PSM패널", PanelRgb);
-                ObjectId layAnchor = EnsureLayer(db, tr, "DH-PSM앵커", AnchorRgb);
-                ObjectId layPlate = EnsureLayer(db, tr, "DH-PSM정착판", PlateRgb);
+                ObjectId layPanel = EnsureLayer(db, tr, "DH-앵커판넬", PanelRgb);
+                ObjectId layAnchor = EnsureLayer(db, tr, "DH-앵커판넬-앵커", AnchorRgb);
+                ObjectId layPlate = EnsureLayer(db, tr, "DH-앵커판넬-정착판", PlateRgb);
+                ObjectId layConcrete = EnsureLayer(db, tr, "DH-콘크리트옹벽", ConcreteRgb);
+                ObjectId layBody = concrete ? layConcrete : layPanel;
 
                 foreach (var p in panels)
                 {
@@ -73,15 +84,25 @@ public static class WallPanelDwg
                         new Vector3d(p.VAxis.x, p.VAxis.y, p.VAxis.z), W);
                     try
                     {
-                        Solid3d slab = BuildPanel(p);
+                        // 콘크리트=바탕 민판(+온전 패널엔 자연석 돌출 무늬), 앵커판넬=가운데 홈 판.
+                        Solid3d slab = concrete ? ExtrudeLocalPoly(p.Local, -Thick) : BuildPanel(p);
                         slab.TransformBy(m);
-                        slab.LayerId = layPanel;
+                        slab.LayerId = layBody;
                         ms.AppendEntity(slab); tr.AddNewlyCreatedDBObject(slab, true);
                         np++;
                     }
                     catch { }
 
-                    if (p.IsFull)
+                    // 콘크리트 온전 패널 — 자연석 무늬(돌출 돌 패널당 솔리드 1개). 실패해도 바탕 민판은 유지.
+                    if (concrete && p.IsFull)
+                        try
+                        {
+                            var pads = BuildConcretePads(p);
+                            if (pads != null) { pads.TransformBy(m); pads.LayerId = layBody; ms.AppendEntity(pads); tr.AddNewlyCreatedDBObject(pads, true); }
+                        }
+                        catch { }
+
+                    if (!concrete && p.IsFull)
                     {
                         // 부지 표면(전면) 월드 위치 = AnchorPos + W·FrontOut − ZSink.
                         var padFace = new Point3d(p.AnchorPos.X, p.AnchorPos.Y, p.AnchorPos.Z - ZSink) + W * FrontOut;
@@ -110,7 +131,7 @@ public static class WallPanelDwg
                         try
                         {
                             var post = BuildQuoin(q);
-                            post.LayerId = layPanel;
+                            post.LayerId = layBody;
                             ms.AppendEntity(post); tr.AddNewlyCreatedDBObject(post, true);
                         }
                         catch { }
@@ -166,6 +187,61 @@ public static class WallPanelDwg
         return sol;
     }
 
+    /// <summary>콘크리트 옹벽 자연석 무늬 — 패널 면(로컬)을 지터드 격자 자연석으로 채우고 +Relief 돌출(사이 틈=홈).
+    /// 모든 돌을 한 리전으로 union → 패널당 솔리드 1개(성능). 실패 시 null(바탕 민판만 남음).</summary>
+    private static Solid3d BuildConcretePads(WallPanels.Panel p)
+    {
+        double minU = double.MaxValue, maxU = double.MinValue, minV = double.MaxValue, maxV = double.MinValue;
+        foreach (var (u, v) in p.Local) { minU = System.Math.Min(minU, u); maxU = System.Math.Max(maxU, u); minV = System.Math.Min(minV, v); maxV = System.Math.Max(maxV, v); }
+        double bw = maxU - minU, bh = maxV - minV;
+        if (bw < 0.1 || bh < 0.1) return null;
+        int nx = System.Math.Max(1, (int)System.Math.Round(bw / StoneSize));
+        int ny = System.Math.Max(1, (int)System.Math.Round(bh / StoneSize));
+        double du = bw / nx, dv = bh / ny;
+        // 지터드 격자점(경계점은 고정 → 패널 가장자리 깔끔).
+        var pts = new Point2d[nx + 1, ny + 1];
+        for (int i = 0; i <= nx; i++)
+            for (int j = 0; j <= ny; j++)
+            {
+                double ju = (i == 0 || i == nx) ? 0 : Hash(i, j) * 0.33 * du;
+                double jv = (j == 0 || j == ny) ? 0 : Hash(i + 7, j + 3) * 0.33 * dv;
+                pts[i, j] = new Point2d(minU + i * du + ju, minV + j * dv + jv);
+            }
+        double scale = System.Math.Max(0.5, 1 - GrooveW / System.Math.Min(du, dv));  // 중심 기준 축소=돌 사이 홈
+        var curves = new DBObjectCollection();
+        for (int i = 0; i < nx; i++)
+            for (int j = 0; j < ny; j++)
+            {
+                var a = pts[i, j]; var b = pts[i + 1, j]; var c = pts[i + 1, j + 1]; var d = pts[i, j + 1];
+                double cx = (a.X + b.X + c.X + d.X) / 4, cy = (a.Y + b.Y + c.Y + d.Y) / 4;
+                Point2d Sc(Point2d q) => new Point2d(cx + (q.X - cx) * scale, cy + (q.Y - cy) * scale);
+                var pl = new Polyline(4);
+                pl.AddVertexAt(0, Sc(a), 0, 0, 0); pl.AddVertexAt(1, Sc(b), 0, 0, 0);
+                pl.AddVertexAt(2, Sc(c), 0, 0, 0); pl.AddVertexAt(3, Sc(d), 0, 0, 0);
+                pl.Closed = true;
+                curves.Add(pl);
+            }
+        Solid3d pads = null;
+        try
+        {
+            DBObjectCollection regions = Region.CreateFromCurves(curves);
+            if (regions.Count > 0)
+            {
+                var acc = (Region)regions[0];
+                for (int i = 1; i < regions.Count; i++)
+                {
+                    var r = (Region)regions[i];
+                    try { acc.BooleanOperation(BooleanOperationType.BoolUnite, r); } catch { }
+                    r.Dispose();
+                }
+                try { pads = new Solid3d(); pads.Extrude(acc, Relief, 0); }   // 로컬 +Z(부지쪽)로 돌출
+                finally { acc.Dispose(); }
+            }
+        }
+        finally { foreach (DBObject o in curves) o.Dispose(); }   // 우리가 만든 폴리라인(리전은 복사본이라 소유 안 함)
+        return pads;
+    }
+
     /// <summary>로컬 2D 폴리곤(XY)을 Z로 height만큼 밀어 솔리드 — Region+Extrude.</summary>
     private static Solid3d ExtrudeLocalPoly(IReadOnlyList<(double u, double v)> poly, double height)
     {
@@ -178,7 +254,7 @@ public static class WallPanelDwg
             var curves = new DBObjectCollection { pl };
             DBObjectCollection regions = Region.CreateFromCurves(curves);
             if (regions.Count == 0) throw new Autodesk.AutoCAD.Runtime.Exception(
-                Autodesk.AutoCAD.Runtime.ErrorStatus.InvalidInput, "PSM 패널 Region 실패");
+                Autodesk.AutoCAD.Runtime.ErrorStatus.InvalidInput, "패널 Region 실패");
             var region = (Region)regions[0];
             for (int i = 1; i < regions.Count; i++) (regions[i] as DBObject)?.Dispose();
             try { sol = new Solid3d(); sol.Extrude(region, height, 0); }
