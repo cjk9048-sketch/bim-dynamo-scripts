@@ -164,22 +164,25 @@ public static class WallPanels
                     signS = System.Math.Sign((refP.X - Pprev.X) * wPrev.x + (refP.Y - Pprev.Y) * wPrev.y + (refP.Z - Pprev.Z) * wPrev.z);
                     signE = System.Math.Sign((refP.X - Pnext.X) * wNext.x + (refP.Y - Pnext.Y) * wNext.y + (refP.Z - Pnext.Z) * wNext.z);
                     clipS = signS != 0; clipE = signE != 0;
-                    ext = 2 * side;                                     // 코너 넘어 넉넉히 연장 → 교선까지 재료 확보(미터로 잘림)
+                    // 코너 채움에 필요한 만큼만 연장(코너 미터점 오프셋 slopeN·step + 반두께 여유). 과다 연장은 완만한 코너에서
+                    //   길고 얇은 조각이 멀리 떠버림(JACK 0722 떠있는 객체) → 상한을 둔다.
+                    ext = System.Math.Max(0.6, slopeN * step + 0.4);
                 }
                 int fcols = (int)System.Math.Floor(faceLen / side + 1e-9);
                 if (fcols < 1 && faceLen < side * 0.3) continue;
-                // 스팬 = (좌 오버슛) + 온전폭 열들 + 자투리 + (우 오버슛). 각 스팬은 놓일 세그먼트 평면(seg)을 갖는다.
-                var spans = new List<(double a, double b, int seg)>();
-                if (clipS) spans.Add((fs - ext, fs, firstSeg));       // 좌측 오버슛(오목부)
+                // 스팬 = (좌 코너필러) + 온전폭 열들 + (우 자투리+코너필러 병합). cf=코너필러(한 조각·줄눈없음·앵커없음).
+                //   [JACK 0722] 코너를 얇은 조각(자투리+오버슛+줄눈)으로 쪼개지 말고 면당 **한 조각**으로.
+                var spans = new List<(double a, double b, int seg, bool cf)>();
+                if (clipS) spans.Add((fs - ext, fs, firstSeg, true));  // 좌측 코너필러(한 조각)
                 for (int j = 0; j < fcols; j++)
                 {
                     double a = fs + j * side, b = fs + (j + 1) * side;
-                    spans.Add((a, b, walk.SegOf((a + b) / 2)));
+                    spans.Add((a, b, walk.SegOf((a + b) / 2), false));
                 }
-                double rem = faceLen - fcols * side;
-                if (rem > 0.05) spans.Add((fs + fcols * side, fe, lastSeg));
-                if (clipE) spans.Add((fe, fe + ext, lastSeg));        // 우측 오버슛(오목부)
-                foreach (var (u0, u1, seg) in spans)
+                // 우측: 자투리와 우 오버슛을 한 스팬으로 병합(코너면 fe+ext까지, 아니면 fe까지=일반 자투리).
+                double rStart = fs + fcols * side, rEnd = clipE ? fe + ext : fe;
+                if (rEnd - rStart > 0.05) spans.Add((rStart, rEnd, lastSeg, clipE));
+                foreach (var (u0, u1, seg, cf) in spans)
                 {
                     double wCol = u1 - u0, uMid = (u0 + u1) / 2;
                     // [데이라잇 다각형 클립 — JACK 0721] 열 폭에 걸쳐 상한 s를 촘촘히 샘플. 한 행 안에서
@@ -239,14 +242,18 @@ public static class WallPanels
                                     signE * (ux * wNext.x + uy * wNext.y + uz * wNext.z),
                                     signE * (vx * wNext.x + vy * wNext.y + vz * wNext.z));
                             if (lp.Count < 3) continue;
-                            // [줄눈 — JACK 0721] 패널 셀 네 변에서 jm씩 인셋 → 이웃 패널 사이 joint 폭 틈(InfraWorks 가시성).
-                            //   로컬 (u,v)는 [0..wCol]×[0..s1−s0]. 데이라잇 경사변(상단 s1 아래)은 이 클립에 안 걸려 실루엣 유지.
+                            // [줄눈 — JACK 0721/0722] 패널 변에서 jm씩 인셋 → 이웃과 joint 폭 틈(InfraWorks 가시성).
+                            //   ※코너필러(cf): **세로 줄눈(좌우)은 없애 가로 조각 방지**, **상하 줄눈은 유지**해 블록 높이가 벽과 일치.
+                            //     데이라잇 경사변(상단 s1 아래)은 이 클립에 안 걸려 실루엣 유지.
                             if (jm > 1e-4)
                             {
                                 double rowH = s1 - s0;
-                                lp = ClipHalf(lp, -jm, 1, 0);                 // u ≥ jm
-                                if (lp.Count >= 3) lp = ClipHalf(lp, wCol - jm, -1, 0);   // u ≤ wCol−jm
-                                if (lp.Count >= 3) lp = ClipHalf(lp, -jm, 0, 1);          // v ≥ jm
+                                if (!cf)
+                                {
+                                    lp = ClipHalf(lp, -jm, 1, 0);                             // u ≥ jm (좌우 줄눈)
+                                    if (lp.Count >= 3) lp = ClipHalf(lp, wCol - jm, -1, 0);   // u ≤ wCol−jm
+                                }
+                                if (lp.Count >= 3) lp = ClipHalf(lp, -jm, 0, 1);          // v ≥ jm (상하 줄눈 — cf도 적용)
                                 if (lp.Count >= 3) lp = ClipHalf(lp, rowH - jm, 0, -1);   // v ≤ rowH−jm
                                 if (lp.Count < 3) continue;
                             }
@@ -254,7 +261,7 @@ public static class WallPanels
                             double area = PolyArea(lp);
                             double minV = double.MaxValue, maxV = double.MinValue, minU = double.MaxValue, maxU = double.MinValue;
                             foreach (var q in lp) { minV = System.Math.Min(minV, q.v); maxV = System.Math.Max(maxV, q.v); minU = System.Math.Min(minU, q.u); maxU = System.Math.Max(maxU, q.u); }
-                            bool isFull = rowFull && PointInPoly(wCol / 2, side / 2, lp);
+                            bool isFull = !cf && rowFull && PointInPoly(wCol / 2, side / 2, lp);   // 코너필러엔 앵커/홈 없음
                             if (!isFull)
                             {
                                 // ★작은 삼각형도 유지(JACK 0721) — 익스트루드 실패할 만큼 얇은/작은 것만 제거.

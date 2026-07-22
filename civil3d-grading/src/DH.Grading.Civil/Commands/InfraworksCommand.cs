@@ -99,8 +99,9 @@ public sealed class InfraworksCommand
             System.Collections.Generic.List<(System.Collections.Generic.List<Point3> Crest, System.Collections.Generic.List<Point3> Toe)>? transFaces = null;
             // [옹벽 3D — 옹벽3D_기획.md] 옹벽 모드 방향별 블록·캡 배치 수집 → 루프 뒤 별도 DWG+물량 CSV.
             var wallSets = new List<(bool Cut, List<WallBlocks.Block> Blocks, List<WallBlocks.Block> Caps)>();
-            // [PSM 패널식 — JACK 0721] 방향별 패널 수집 → 루프 뒤 옹벽3D.dwg. 코너 필러(quoin)도 방향별 수집.
-            var panelSets = new List<(bool Cut, List<WallPanels.Panel> Panels)>();
+            // [앵커판넬/콘크리트 — JACK 0721] 방향별 패널 수집 → 루프 뒤 옹벽3D.dwg. 앵커판넬=앵커O, 콘크리트=앵커X·무늬.
+            var panelSets = new List<(bool Cut, List<WallPanels.Panel> Panels)>();      // 앵커판넬
+            var concreteSets = new List<(bool Cut, List<WallPanels.Panel> Panels)>();   // 콘크리트(앵커 없음)
             var quoinAll = new List<WallPanels.Quoin>();
             // [번들 v2 — 다중 절/성토 영역] 링 리스트 전체 순회 — 2개+ 영역 누락 버그 수정(JACK).
             static System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? RingsOf(
@@ -165,18 +166,22 @@ public sealed class InfraworksCommand
                 // 구 통합 면폴리곤_* 세트는 폐지 — 혼동 방지 위해 제거(우리가 쓰던 파일명만).
                 DeleteShpSet(folder, $"면폴리곤_{label}");
 
-                // ④-A [PSM 패널식] 절취사면(1:slopeN)에 패널 격자 + 앵커 — DHINFRA 뒤 PSM.dwg.
-                if (style == WallStyle.PSM_패널식)
+                // ④-A [앵커판넬/콘크리트] 사면(1:slopeN)에 패널 격자. 앵커판넬=앵커+홈, 콘크리트=무늬(앵커 없음). 같은 패널 생성.
+                if (style == WallStyle.앵커판넬 || style == WallStyle.콘크리트)
                 {
                     if (groundSampler == null)
-                        log.AppendLine($"PSM_{label}: 원지반 표면을 찾지 못해 생략 — 도면에 원지반 TIN 필요");
+                        log.AppendLine($"{style}_{label}: 원지반 표면을 찾지 못해 생략 — 도면에 원지반 TIN 필요");
                     else
                     {
                         var panels = WallPanels.Generate(vs.Rings, groundSampler, up,
                             slopeN, 1.48, 0.05, 20);   // joint 0.05 = 줄눈 50mm 틈(InfraWorks 가시성 — JACK 0721)
-                        if (panels.Count > 0) panelSets.Add((up, panels));
-                        quoinAll.AddRange(WallPanels.LastQuoins);   // 코너 필러(방향마다 갱신되므로 즉시 수집)
-                        log.AppendLine($"PSM패널_{label}: {WallPanels.LastDiag}");
+                        if (panels.Count > 0)
+                        {
+                            if (style == WallStyle.앵커판넬) panelSets.Add((up, panels));
+                            else concreteSets.Add((up, panels));
+                        }
+                        quoinAll.AddRange(WallPanels.LastQuoins);
+                        log.AppendLine($"{style}_{label}: {WallPanels.LastDiag}");
                     }
                 }
                 // ④-B 옹벽선_절토/성토.shp + 보강토 블록 — 보강토 스타일일 때.
@@ -235,8 +240,9 @@ public sealed class InfraworksCommand
             // ── ⑥ 옹벽3D.dwg — [JACK 0721] 뭘 선택하든 **한 파일 '옹벽3D.dwg'**. 보강토 블록 + PSM 패널을 한 DB에 합쳐 저장.
             //    (예전엔 PSM=PSM.dwg / 보강토=옹벽3D.dwg로 갈려 하나만 임포트하면 반쪽만 보였음.) 옹벽물량.csv는 보강토 블록만.
             var allPanels = panelSets.SelectMany(s => s.Panels).ToList();
+            var allConcrete = concreteSets.SelectMany(s => s.Panels).ToList();
             try { System.IO.File.Delete(System.IO.Path.Combine(folder, "PSM.dwg")); } catch { }  // 구 분리파일 정리
-            if (wallSets.Count == 0 && allPanels.Count == 0)
+            if (wallSets.Count == 0 && allPanels.Count == 0 && allConcrete.Count == 0)
             {   // 옹벽 스타일 전무 — 이전 실행 잔존 파일 정리(레이어 혼동 방지 — §21과 동일 원칙)
                 foreach (string f in new[] { "옹벽3D.dwg", "옹벽물량.csv" })
                     try { System.IO.File.Delete(System.IO.Path.Combine(folder, f)); } catch { }
@@ -248,10 +254,10 @@ public sealed class InfraworksCommand
                 string dwgPath = System.IO.Path.Combine(folder, "옹벽3D.dwg");
                 try
                 {
-                    var (nb, nc, np, na) = WallDwg.Export(dwgPath, wallSets, allPanels,
+                    var (nb, nc, np, na, ncp) = WallDwg.Export(dwgPath, wallSets, allPanels, allConcrete,
                         GradingSettings.WallBlockW, GradingSettings.WallBlockD, GradingSettings.WallBlockH,
                         GradingSettings.WallCapD, GradingSettings.WallCapT, quoinAll);
-                    log.AppendLine($"옹벽3D.dwg: 보강토 {nb}블록+{nc}캡 · PSM {np}패널+{na}앵커+필러{quoinAll.Count} (한 파일)");
+                    log.AppendLine($"옹벽3D.dwg: 보강토 {nb}블록+{nc}캡 · 앵커판넬 {np}패널+{na}앵커 · 콘크리트 {ncp}패널 (한 파일)");
                 }
                 catch (System.Exception dex)
                 {
