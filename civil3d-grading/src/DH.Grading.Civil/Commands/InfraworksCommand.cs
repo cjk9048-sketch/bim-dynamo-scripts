@@ -123,9 +123,13 @@ public sealed class InfraworksCommand
                 //   옹벽 모드(n ≤ 0.05): 옹벽선 + 소단 + 계획폴리곤만 / 사면 모드: 사면부 + 소단 + 계획폴리곤.
                 //   순절토/순성토.shp는 양쪽 모두 제거(불필요).
                 double slopeN = up ? bundle.Params.CutSlope : bundle.Params.FillSlope;
-                // [옹벽 형태 — JACK 0721] 방향별 드롭박스 선택. 보강토=블록(근수직), PSM=패널(사면), 없음=사면만.
+                // [옹벽 형태 — JACK 0721] 방향별 드롭박스 선택. 보강토=블록, 앵커판넬/콘크리트=패널, 없음=사면만.
                 WallStyle style = up ? GradingSettings.CutWallStyle : GradingSettings.FillWallStyle;
-                bool wallMode = style != WallStyle.없음_사면;   // 옹벽 스타일이면 사면 SHP 억제(소단만)
+                // [옹벽 게이트 — JACK 0722] 경사 n>0.05면 옹벽 아님(사면). 스타일을 골라도 옹벽 객체 생성 금지 → 사면 취급.
+                bool wallOk = slopeN <= 0.05 + 1e-9;
+                if (style != WallStyle.없음_사면 && !wallOk)
+                    log.AppendLine($"{label}: 경사 1:{slopeN} > 1:0.05 → 옹벽({style}) 생성 안 함(사면 처리)");
+                bool wallMode = style != WallStyle.없음_사면 && wallOk;   // 옹벽 스타일 + 게이트 통과일 때만 사면 SHP 억제
 
                 // 링 복원(결정적) — 띠 폴리곤·사면선용
                 var vs = GradingGeometry.Build(bundle.Boundary, ng, bundle.Params, up);
@@ -146,15 +150,10 @@ public sealed class InfraworksCommand
                 }
                 foreach (string kind in new[] { "소단", "사면" })
                 {
-                    // 옹벽 모드의 사면(벽면=옹벽선.shp 담당)·빈 결과는 파일 미작성 — 이전 실행 잔존 세트도 정리(레이어 혼동 방지).
+                    // [초세트 템플릿 — JACK 0722] 소단·사면 SHP를 **항상 출력**(옹벽 모드의 사면 등 해당 없으면 빈 파일).
+                    //   → 템플릿의 커버리지 소스가 절대 안 끊김(파일 항상 존재, 0개면 InfraWorks에 안 보일 뿐).
                     var part = (kind == "사면" && wallMode)
                         ? new() : strips.Where(s => s.Kind == kind).ToList();
-                    if (part.Count == 0)
-                    {
-                        DeleteShpSet(folder, $"{kind}_{label}");
-                        log.AppendLine($"{kind}_{label}.shp: 0개 — 생략(이전 파일 정리)");
-                        continue;
-                    }
                     var feats = part.Select(s =>
                         ((IReadOnlyList<IReadOnlyList<Point3>>)s.Rings,
                          new object?[] { s.Kind, s.Level, s.Elev, s.Area })).ToList();
@@ -165,7 +164,7 @@ public sealed class InfraworksCommand
                 DeleteShpSet(folder, $"면폴리곤_{label}");
 
                 // ④-A [앵커판넬/콘크리트] 사면(1:slopeN)에 패널 격자. 앵커판넬=앵커+홈, 콘크리트=무늬(앵커 없음). 같은 패널 생성.
-                if (style == WallStyle.앵커판넬 || style == WallStyle.콘크리트)
+                if ((style == WallStyle.앵커판넬 || style == WallStyle.콘크리트) && wallOk)
                 {
                     if (groundSampler == null)
                         log.AppendLine($"{style}_{label}: 원지반 표면을 찾지 못해 생략 — 도면에 원지반 TIN 필요");
@@ -184,7 +183,7 @@ public sealed class InfraworksCommand
                 }
                 // ④-B 옹벽선_절토/성토.shp + 보강토 블록 — 보강토 스타일일 때.
                 //    [v2 — JACK §19 재설계] finalRing 비의존: 벽 정렬선(링)을 따라 상단 Z=clamp(원지반, 토우, 크레스트).
-                else if (style == WallStyle.보강토)
+                else if (style == WallStyle.보강토 && wallOk)
                 {
                     if (groundSampler == null)
                         log.AppendLine($"옹벽선_{label}: 원지반 표면을 찾지 못해 생략 — 도면에 원지반 TIN 필요");
@@ -240,13 +239,7 @@ public sealed class InfraworksCommand
             var allPanels = panelSets.SelectMany(s => s.Panels).ToList();
             var allConcrete = concreteSets.SelectMany(s => s.Panels).ToList();
             try { System.IO.File.Delete(System.IO.Path.Combine(folder, "PSM.dwg")); } catch { }  // 구 분리파일 정리
-            if (wallSets.Count == 0 && allPanels.Count == 0 && allConcrete.Count == 0)
-            {   // 옹벽 스타일 전무 — 이전 실행 잔존 파일 정리(레이어 혼동 방지 — §21과 동일 원칙)
-                foreach (string f in new[] { "옹벽3D.dwg", "옹벽물량.csv" })
-                    try { System.IO.File.Delete(System.IO.Path.Combine(folder, f)); } catch { }
-                log.AppendLine("옹벽3D.dwg: 옹벽 스타일 없음 — 생략(이전 파일 정리)");
-            }
-            else
+            // [초세트 템플릿 — JACK 0722] 옹벽3D.dwg는 **항상 출력**(옹벽 없어도 빈 DWG) → 템플릿의 옹벽3D 소스가 절대 안 끊김(사면형 대응).
             {
                 // [InfraWorks 원스톱] 옹벽 DWG는 **고정 폴더 C:\DHInfra**에 고정 파일명으로(배포 템플릿이 이 경로 참조).
                 try { System.IO.Directory.CreateDirectory(GradingSettings.InfraFolder); } catch { }
