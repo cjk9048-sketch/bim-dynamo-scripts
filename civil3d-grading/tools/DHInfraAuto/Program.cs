@@ -50,19 +50,24 @@ else if (mode == "run")
     if (tree == null) { Console.WriteLine("데이터소스 트리를 못 찾음 — Data Sources 패널이 열려있는지 확인."); return; }
     Console.WriteLine($"트리 발견: rect=({tree.BoundingRectangle})");
 
+    // 7개 소스 전부: 각 소스마다 Reimport 가능하면 Reimport, 아니면 Refresh(터레인은 Reimport 비활성 → Refresh).
+    string[] prefer = { "Reimport", "Refresh" };
     if (args.Length >= 3)
-        DoSource(tree, args[1], args[2]);   // 단일 소스: run <이름조각> <액션>
+        DoSource(tree, args[1], new[] { args[2] });   // 단일: run <이름조각> <액션>
     else
     {
-        DoSource(tree, "옹벽", "Reimport");
-        System.Threading.Thread.Sleep(4000);   // 임포트 처리 대기(옹벽→지형 사이)
-        DoSource(tree, "Surfaces", "Refresh");
+        string[] sources = { "지형", "계획면", "소단_절토", "소단_성토", "사면_절토", "사면_성토", "옹벽" };
+        foreach (var s in sources)
+        {
+            DoSource(tree, s, prefer);
+            System.Threading.Thread.Sleep(2500);   // 소스 간 처리 대기
+        }
     }
     Console.WriteLine("=== run 완료 ===");
 
-    bool DoSource(AutomationElement treeEl, string itemNameSub, string action)
+    bool DoSource(AutomationElement treeEl, string itemNameSub, string[] actionsPreferred)
     {
-        Console.WriteLine($"\n--- [{itemNameSub}] → {action} ---");
+        Console.WriteLine($"\n--- [{itemNameSub}] → {string.Join("/", actionsPreferred)} ---");
         var desktop = automation.GetDesktop();
         // ★재시도(최대 4회): 연속 실행 시 InfraWorks가 바쁘면 컨텍스트 메뉴가 안 뜰 수 있음.
         for (int attempt = 1; attempt <= 4; attempt++)
@@ -77,17 +82,24 @@ else if (mode == "run")
             System.Threading.Thread.Sleep(500 + attempt * 400);
 
             var menuItems = desktop.FindAllDescendants(cf => cf.ByControlType(FlaUI.Core.Definitions.ControlType.MenuItem));
-            AutomationElement? target = menuItems.FirstOrDefault(mi => (mi.Name ?? "").Contains(action));
+            // 선호 순서대로 '활성화된' 첫 액션 선택(터레인은 Reimport 비활성 → Refresh로).
+            AutomationElement? target = null; string chosen = "";
+            foreach (var act in actionsPreferred)
+            {
+                var cand = menuItems.FirstOrDefault(mi => (mi.Name ?? "").Contains(act));
+                if (cand == null) continue;
+                bool en = true; try { en = cand.IsEnabled; } catch { }
+                if (en) { target = cand; chosen = act; break; }
+            }
             if (target == null)
             {
-                Console.WriteLine($"  [{attempt}] 컨텍스트 메뉴 안 뜸(바쁨?) — ESC 후 재시도");
+                Console.WriteLine($"  [{attempt}] 활성 액션 없음/메뉴 안 뜸 — ESC 후 재시도");
                 FlaUI.Core.Input.Keyboard.Press(FlaUI.Core.WindowsAPI.VirtualKeyShort.ESCAPE);
                 System.Threading.Thread.Sleep(1200);
                 continue;
             }
-            bool enabled = true; try { enabled = target.IsEnabled; } catch { }
             var mr = target.BoundingRectangle;
-            Console.WriteLine($"  [{attempt}] '{action}' 발견(enabled={enabled}) → 클릭");
+            Console.WriteLine($"  [{attempt}] '{chosen}' 클릭");
             var mc = new System.Drawing.Point(mr.X + mr.Width / 2, mr.Y + mr.Height / 2);
             FlaUI.Core.Input.Mouse.MoveTo(mc);
             System.Threading.Thread.Sleep(150);
@@ -95,7 +107,7 @@ else if (mode == "run")
             Console.WriteLine("  클릭 완료.");
             return true;
         }
-        Console.WriteLine($"  실패: '{itemNameSub}' {action} — 재시도 소진");
+        Console.WriteLine($"  실패: '{itemNameSub}' — 재시도 소진");
         return false;
     }
 }
