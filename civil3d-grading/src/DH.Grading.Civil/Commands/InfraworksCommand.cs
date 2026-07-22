@@ -99,8 +99,9 @@ public sealed class InfraworksCommand
             System.Collections.Generic.List<(System.Collections.Generic.List<Point3> Crest, System.Collections.Generic.List<Point3> Toe)>? transFaces = null;
             // [옹벽 3D — 옹벽3D_기획.md] 옹벽 모드 방향별 블록·캡 배치 수집 → 루프 뒤 별도 DWG+물량 CSV.
             var wallSets = new List<(bool Cut, List<WallBlocks.Block> Blocks, List<WallBlocks.Block> Caps)>();
-            // [PSM 패널식 — JACK 0721] 방향별 패널 수집 → 루프 뒤 PSM.dwg.
+            // [PSM 패널식 — JACK 0721] 방향별 패널 수집 → 루프 뒤 옹벽3D.dwg. 코너 필러(quoin)도 방향별 수집.
             var panelSets = new List<(bool Cut, List<WallPanels.Panel> Panels)>();
+            var quoinAll = new List<WallPanels.Quoin>();
             // [번들 v2 — 다중 절/성토 영역] 링 리스트 전체 순회 — 2개+ 영역 누락 버그 수정(JACK).
             static System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? RingsOf(
                 System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? many,
@@ -172,8 +173,9 @@ public sealed class InfraworksCommand
                     else
                     {
                         var panels = WallPanels.Generate(vs.Rings, groundSampler, up,
-                            slopeN, 1.48, 0.02, 20);
+                            slopeN, 1.48, 0.05, 20);   // joint 0.05 = 줄눈 50mm 틈(InfraWorks 가시성 — JACK 0721)
                         if (panels.Count > 0) panelSets.Add((up, panels));
+                        quoinAll.AddRange(WallPanels.LastQuoins);   // 코너 필러(방향마다 갱신되므로 즉시 수집)
                         log.AppendLine($"PSM패널_{label}: {WallPanels.LastDiag}");
                     }
                 }
@@ -230,29 +232,15 @@ public sealed class InfraworksCommand
                 }
             }
 
-            // ── ⑥-PSM PSM.dwg — PSM 패널식 스타일 패널이 있을 때만(별도 파일). 없으면 잔존 정리. ──
-            if (panelSets.Count == 0)
-            {
-                try { System.IO.File.Delete(System.IO.Path.Combine(folder, "PSM.dwg")); } catch { }
-            }
-            else
-            {
-                string psmPath = System.IO.Path.Combine(folder, "PSM.dwg");
-                try
-                {
-                    var allPanels = panelSets.SelectMany(s => s.Panels).ToList();
-                    var (np, na) = WallPanelDwg.Export(psmPath, allPanels);
-                    log.AppendLine($"PSM.dwg: 패널 {np}개 + 앵커 {na}개 (1480×1480×200, 홈 200×200, 앵커 ⌀70·20°)");
-                }
-                catch (System.Exception pex)
-                { log.AppendLine($"PSM.dwg: 저장 실패 — {pex.Message} (파일 열려 있으면 닫고 재실행)"); }
-            }
-
-            // ── ⑥ 옹벽3D.dwg + 옹벽물량.csv — 옹벽 모드 블록 배치가 있을 때만(별도 파일, 현재 도면 무영향) ──
-            if (wallSets.Count == 0)
-            {   // 모드 전환 시 이전 실행 잔존 파일 정리(레이어 혼동 방지 — §21과 동일 원칙)
+            // ── ⑥ 옹벽3D.dwg — [JACK 0721] 뭘 선택하든 **한 파일 '옹벽3D.dwg'**. 보강토 블록 + PSM 패널을 한 DB에 합쳐 저장.
+            //    (예전엔 PSM=PSM.dwg / 보강토=옹벽3D.dwg로 갈려 하나만 임포트하면 반쪽만 보였음.) 옹벽물량.csv는 보강토 블록만.
+            var allPanels = panelSets.SelectMany(s => s.Panels).ToList();
+            try { System.IO.File.Delete(System.IO.Path.Combine(folder, "PSM.dwg")); } catch { }  // 구 분리파일 정리
+            if (wallSets.Count == 0 && allPanels.Count == 0)
+            {   // 옹벽 스타일 전무 — 이전 실행 잔존 파일 정리(레이어 혼동 방지 — §21과 동일 원칙)
                 foreach (string f in new[] { "옹벽3D.dwg", "옹벽물량.csv" })
                     try { System.IO.File.Delete(System.IO.Path.Combine(folder, f)); } catch { }
+                log.AppendLine("옹벽3D.dwg: 옹벽 스타일 없음 — 생략(이전 파일 정리)");
             }
             else
             {
@@ -260,17 +248,19 @@ public sealed class InfraworksCommand
                 string dwgPath = System.IO.Path.Combine(folder, "옹벽3D.dwg");
                 try
                 {
-                    var (nb, nc) = WallBlockDwg.Export(dwgPath, wallSets,
+                    var (nb, nc, np, na) = WallDwg.Export(dwgPath, wallSets, allPanels,
                         GradingSettings.WallBlockW, GradingSettings.WallBlockD, GradingSettings.WallBlockH,
-                        GradingSettings.WallCapD, GradingSettings.WallCapT);
-                    log.AppendLine($"옹벽3D.dwg: 원스톤 {nb}개 + 캡 {nc}개 (블록 {GradingSettings.WallBlockW * 1000:F0}×{GradingSettings.WallBlockD * 1000:F0}×{GradingSettings.WallBlockH * 1000:F0}, 캡 두께 {GradingSettings.WallCapT * 1000:F0}, 전체 10mm 하강)");
+                        GradingSettings.WallCapD, GradingSettings.WallCapT, quoinAll);
+                    log.AppendLine($"옹벽3D.dwg: 보강토 {nb}블록+{nc}캡 · PSM {np}패널+{na}앵커+필러{quoinAll.Count} (한 파일)");
                 }
                 catch (System.Exception dex)
                 {
                     log.AppendLine($"옹벽3D.dwg: 저장 실패 — {dex.Message} (파일이 열려 있으면 닫고 재실행)");
                 }
 
-                // 물량 CSV — 구분/단레벨별 정수 개수(엑셀용 UTF-8 BOM, 숫자는 고정 문화권).
+                if (wallSets.Count > 0)
+                {
+                // 물량 CSV — 구분/단레벨별 정수 개수(엑셀용 UTF-8 BOM, 숫자는 고정 문화권). 보강토 블록만 해당.
                 var ciCsv = System.Globalization.CultureInfo.InvariantCulture;
                 var csv = new System.Text.StringBuilder();
                 // 색상별로 나눠 적는다 — 콘크리트/버건디는 서로 다른 제품이라 발주 수량이 따로 필요(JACK 0720).
@@ -303,6 +293,9 @@ public sealed class InfraworksCommand
                 System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "옹벽물량.csv"),
                     csv.ToString(), new System.Text.UTF8Encoding(true));
                 log.AppendLine("옹벽물량.csv: 단레벨별 정수 개수");
+                }   // if (wallSets.Count > 0) — 물량 CSV(보강토만)
+                else   // 순수 PSM(보강토 블록 없음) — 이전 실행의 물량 CSV 잔존 정리
+                    try { System.IO.File.Delete(System.IO.Path.Combine(folder, "옹벽물량.csv")); } catch { }
             }
 
             // 팝업은 성패 + 저장 위치만 — 파일별 개수·진단은 명령창과 로그로(공용 배포용, JACK 0720).

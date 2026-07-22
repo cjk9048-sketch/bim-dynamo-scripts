@@ -19,25 +19,41 @@ public static class WallPanelDwg
     private const double PlateSize = 0.15;   // 정착판 한 변
     private const double PlateThick = 0.02;  // 정착판 두께
     private const double ZSink = 0.01;
-    // [표면 돌출 — JACK 0721] 전면이 정지면과 같은 평면이면 Z-파이팅으로 파묻힘. 살짝(2cm)만 부지쪽 돌출해
-    // 겹침만 푼다. (두께/2=10cm 돌출은 기운 벽 코너에서 윗변이 겹쳐 X자·daylight 날 삐침 — JACK 0721 → 축소.)
-    private const double FrontOut = 0.02;
+    // [표면 돌출 — JACK 0721] 전면이 정지면(지표면)과 붙어 두께가 안 보이던 것 → 부지쪽으로 더 내밀어 옹벽 두께 노출.
+    //   0.02는 너무 붙어 InfraWorks에서 두께 안 보임(JACK 175554). 0.10으로 절반 두께만큼 앞으로.
+    //   ※볼록 코너는 이 돌출로 틈이 조금 더 벌어짐 → 다음 단계 '코너 필러'로 마감 예정.
+    private const double FrontOut = 0.10;
 
     private static readonly Color PanelRgb = Color.FromRgb(200, 198, 194);
     private static readonly Color AnchorRgb = Color.FromRgb(60, 60, 62);
     private static readonly Color PlateRgb = Color.FromRgb(120, 122, 126);
 
-    /// <summary>패널들을 path에 DWG로 저장. 반환=(패널 수, 앵커 수).</summary>
+    /// <summary>패널들을 path에 DWG로 저장. 반환=(패널 수, 앵커 수).
+    /// ※단독 저장용 래퍼. 보강토와 한 파일로 합칠 때는 <see cref="Populate"/>를 공유 DB에 직접 호출(WallDwg).</summary>
     public static (int Panels, int Anchors) Export(string path, IReadOnlyList<WallPanels.Panel> panels)
     {
-        int np = 0, na = 0;
         using var db = new Database(true, true);
         Database prev = HostApplicationServices.WorkingDatabase;
         HostApplicationServices.WorkingDatabase = db;
         try
         {
             db.Insunits = UnitsValue.Meters;
+            (int Panels, int Anchors) r;
             using (Transaction tr = db.TransactionManager.StartTransaction())
+            { r = Populate(db, tr, panels); tr.Commit(); }
+            db.SaveAs(path, DwgVersion.Current);
+            return r;
+        }
+        finally { HostApplicationServices.WorkingDatabase = prev; }
+    }
+
+    /// <summary>이미 열린 db·tr의 모델공간에 PSM 패널·앵커·정착판(+코너 필러)을 채운다(레이어 생성 포함). 반환=(패널 수, 앵커 수).
+    /// WorkingDatabase가 db로 설정된 상태에서 호출할 것. 보강토와 한 DWG로 합칠 때 재사용.</summary>
+    public static (int Panels, int Anchors) Populate(Database db, Transaction tr,
+        IReadOnlyList<WallPanels.Panel> panels, IReadOnlyList<WallPanels.Quoin> quoins = null)
+    {
+        int np = 0, na = 0;
+        {
             {
                 var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForWrite);
                 var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
@@ -87,23 +103,46 @@ public static class WallPanelDwg
                     }
                 }
 
-                // 코너 포스트 — 볼록 X자·오목 V 빈공간을 덮는 기둥(패널 레이어).
-                foreach (var (b, t, side, pad) in WallPanels.LastCornerPosts)
-                {
-                    try
+                // 코너 필러 — 미터로 못 닫는 코너 틈(절토 볼록·성토 오목)에 얇은 수직 채움 기둥(패널 레이어).
+                if (quoins != null)
+                    foreach (var q in quoins)
                     {
-                        var post = BuildCornerPost(b, t, side, pad);
-                        post.LayerId = layPanel;
-                        ms.AppendEntity(post); tr.AddNewlyCreatedDBObject(post, true);
+                        try
+                        {
+                            var post = BuildQuoin(q);
+                            post.LayerId = layPanel;
+                            ms.AppendEntity(post); tr.AddNewlyCreatedDBObject(post, true);
+                        }
+                        catch { }
                     }
-                    catch { }
-                }
-                tr.Commit();
             }
-            db.SaveAs(path, DwgVersion.Current);
         }
-        finally { HostApplicationServices.WorkingDatabase = prev; }
         return (np, na);
+    }
+
+    /// <summary>코너 필러 솔리드 — Toe→Top 축의 얇은 기둥(폭 Width × 두께 Thick). 전면은 패널과 같은 FrontOut 돌출.
+    /// 축=Toe→Top(사면 상방), 폭축=틈 가로, 두께축=부지쪽 W. 코너 틈을 정확히 메운다(허공 아님).</summary>
+    private static Solid3d BuildQuoin(WallPanels.Quoin q)
+    {
+        var toe = new Point3d(q.Toe.X, q.Toe.Y, q.Toe.Z - ZSink);
+        var top = new Point3d(q.Top.X, q.Top.Y, q.Top.Z - ZSink);
+        var axis = top - toe; double len = axis.Length;
+        if (len < 0.05) return new Solid3d();
+        var zAx = axis.GetNormal();                                    // 기둥 길이 = 사면 상방
+        var W = new Vector3d(q.W.x, q.W.y, q.W.z).GetNormal();         // 부지쪽(두께 방향)
+        var xAx = new Vector3d(q.WidthAxis.x, q.WidthAxis.y, q.WidthAxis.z);
+        // xAx를 zAx에 직교화(안전).
+        xAx = xAx - zAx * xAx.DotProduct(zAx);
+        xAx = xAx.Length > 1e-6 ? xAx.GetNormal() : zAx.GetPerpendicularVector();
+        var yAx = W - zAx * W.DotProduct(zAx);                         // 두께축도 직교화
+        yAx = yAx.Length > 1e-6 ? yAx.GetNormal() : zAx.CrossProduct(xAx).GetNormal();
+        var post = new Solid3d();
+        post.CreateBox(q.Width, Thick, len);                           // X=폭, Y=두께, Z=길이(원점 중심)
+        // 중심 = 기둥 중점 + 부지쪽으로 (FrontOut − Thick/2) (전면이 패널 전면과 같은 평면에 오도록).
+        var center = toe + axis * 0.5 + yAx * (FrontOut - Thick / 2);
+        post.TransformBy(Matrix3d.AlignCoordinateSystem(
+            Point3d.Origin, Vector3d.XAxis, Vector3d.YAxis, Vector3d.ZAxis, center, xAx, yAx, zAx));
+        return post;
     }
 
     /// <summary>패널 솔리드(로컬 프레임, 아직 변환 전) — 온전=사각 슬래브−가운데 홈, 잘림=클립폴리곤 슬래브.</summary>
@@ -166,30 +205,6 @@ public static class WallPanelDwg
         var center = head + dir * (AnchorLen / 2);
         cyl.TransformBy(Matrix3d.Displacement(center - Point3d.Origin));
         return cyl;
-    }
-
-    /// <summary>코너 포스트 — Base(토우)→Top(상단) 축의 사각 기둥(side×side). 부지쪽 Pad으로 FrontOut 돌출해
-    /// 두 벽면 접합부(X자·V갭)를 덮는다. 축=Base→Top, 한 면이 Pad(부지) 향하도록 정렬.</summary>
-    private static Solid3d BuildCornerPost(Point3 b, Point3 t, double side, (double x, double y, double z) pad)
-    {
-        var baseP = new Point3d(b.X, b.Y, b.Z - ZSink);
-        var topP = new Point3d(t.X, t.Y, t.Z - ZSink);
-        var axis = topP - baseP;                                  // 기둥 길이 방향(토우→상단)
-        double len = axis.Length;
-        if (len < 0.05) return new Solid3d();                     // 너무 짧음
-        var zAx = axis.GetNormal();
-        var padV = new Vector3d(pad.x, pad.y, pad.z);
-        // 로컬 X = Pad(부지)에서 축 성분 제거해 직교화, Y = Z×X.
-        var xAx = (padV - zAx * padV.DotProduct(zAx));
-        xAx = xAx.Length > 1e-6 ? xAx.GetNormal() : zAx.GetPerpendicularVector();
-        var yAx = zAx.CrossProduct(xAx).GetNormal();
-        var post = new Solid3d();
-        post.CreateBox(side, side, len);                          // 원점 중심, 로컬 Z=길이
-        // 중심 = 기둥 중점 + Pad·FrontOut(부지쪽 돌출).
-        var center = baseP + axis * 0.5 + xAx * FrontOut;
-        post.TransformBy(Matrix3d.AlignCoordinateSystem(
-            Point3d.Origin, Vector3d.XAxis, Vector3d.YAxis, Vector3d.ZAxis, center, xAx, yAx, zAx));
-        return post;
     }
 
     /// <summary>정착판 — 홈 바닥에 패널 면과 나란히 놓인 얇은 정사각판(JACK 상세사진). 중심=홈 바닥, 법선 W.</summary>
