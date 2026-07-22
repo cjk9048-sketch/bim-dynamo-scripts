@@ -8,6 +8,27 @@ using FlaUI.UIA3;
 
 string mode = args.Length > 0 ? args[0] : "dump";
 
+// retarget <모델.sqlite> <실행폴더> — InfraWorks 불필요(파일 편집만). 복사한 모델의 소스 경로를 실행 폴더로 재작성.
+//   템플릿 소스는 C:/DHInfra/파일 을 가리킴 → C:/DHInfra/yyyyMMdd_HHmmss/파일 로 치환(슬래시 양쪽 형태 처리).
+if (mode == "retarget")
+{
+    if (args.Length < 3) { Console.WriteLine("사용법: DHInfraAuto retarget <모델.sqlite> <실행폴더>"); return; }
+    string dbPath = args[1];
+    string runFolder = args[2].Replace('\\', '/').TrimEnd('/');
+    if (!File.Exists(dbPath)) { Console.WriteLine("모델 파일 없음: " + dbPath); return; }
+    using var con = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=" + dbPath);
+    con.Open();
+    using var cmd = con.CreateCommand();
+    cmd.CommandText =
+        "UPDATE DATA_SOURCES SET CONNECTION_STRING = replace(replace(CONNECTION_STRING," +
+        " 'C:/DHInfra/', @f), 'C:\\DHInfra\\', @b)";
+    cmd.Parameters.AddWithValue("@f", runFolder + "/");
+    cmd.Parameters.AddWithValue("@b", runFolder.Replace('/', '\\') + "\\");
+    int n = cmd.ExecuteNonQuery();
+    Console.WriteLine($"retarget 완료: {n}개 소스 경로 → {runFolder}");
+    return;
+}
+
 var procs = System.Diagnostics.Process.GetProcessesByName("InfraWorks");
 if (procs.Length == 0)
 {
