@@ -312,6 +312,9 @@ public sealed class InfraworksCommand
                     try { System.IO.File.Delete(System.IO.Path.Combine(folder, "옹벽물량.csv")); } catch { }
             }
 
+            // 위성 커버리지용 부지 경계상자(5186) — 지형 단계에서 채운다.
+            double sMinE = 0, sMinN = 0, sMaxE = 0, sMaxN = 0; bool haveExtent = false;
+
             // ── ⑦ 지형.xml — InfraWorks LandXML 지형(정지면_DH TinSurface 삼각망 직접 생성) + .aecc 캐시 삭제. ──
             //    [JACK 0722] InfraWorks는 임포트 시 <xml>.aecc.pnt/.tri 캐시를 굽고 Refresh는 캐시를 읽음 →
             //    새 지형 반영하려면 xml 덮어쓰기 + 캐시 삭제 후 InfraWorks에서 Refresh(실측 확정). LandXmlExport가 처리.
@@ -330,10 +333,31 @@ public sealed class InfraworksCommand
                 {
                     int ntri = LandXmlExport.ExportSurface(gsurf, xmlPath, "정지면_DH");
                     log.AppendLine($"지형.xml: 정지면_DH → LandXML 삼각형 {ntri}개 (+ .aecc 캐시 삭제) — InfraWorks 지형 Refresh용");
+                    // 위성 커버리지용 경계상자(5186) 확보 — 다음 단계(위성.jpg)에서 사용.
+                    try
+                    {
+                        var ext = gsurf.GeometricExtents;
+                        sMinE = ext.MinPoint.X; sMinN = ext.MinPoint.Y;
+                        sMaxE = ext.MaxPoint.X; sMaxN = ext.MaxPoint.Y; haveExtent = true;
+                    }
+                    catch { }
                 }
                 trS.Commit();
             }
             catch (System.Exception xex) { log.AppendLine($"지형.xml: 저장 실패 — {xex.Message} (파일 열려 있으면 닫고 재실행)"); }
+
+            // ── ⑦-b 위성.jpg — 브이월드 위성영상을 부지 경계상자에 맞춰 받아 이어붙이고 월드파일(.jgw)+.prj 저장. ──
+            //    InfraWorks가 래스터 지형피복(위성사진)으로 지형 위에 드리운다(EPSG:3857 → 모델 5186 재투영). 인터넷 필요.
+            if (haveExtent)
+            {
+                try
+                {
+                    string vmsg = VWorldImagery.Export(sMinE, sMinN, sMaxE, sMaxN, folder, "위성", marginM: 30.0);
+                    log.AppendLine("위성.jpg: " + vmsg);
+                }
+                catch (System.Exception vex) { log.AppendLine("위성.jpg: 실패 — " + vex.Message + " (인터넷/차단 확인, 나머지는 계속)"); }
+            }
+            else log.AppendLine("위성.jpg: 지표면 경계상자를 못 구해 생략");
 
             // ── ⑧ InfraWorks 원스톱 — 번들 템플릿 복사·경로재작성·실행(자동 모드만). 수동(DHSHP)은 파일만 내보냄. ──
             string iwMsg = "";
@@ -347,10 +371,10 @@ public sealed class InfraworksCommand
             // 팝업은 성패 + 저장 위치만 — 파일별 개수·진단은 명령창과 로그로(공용 배포용, JACK 0720).
             if (manual)
                 AcadApp.ShowAlertDialog("SHP 내보내기 완료(수동)\n\n저장 위치: " + folder +
-                    "\n(SHP · 지형.xml · 옹벽3D.dwg — 이 파일들로 직접 모델 구성)");
+                    "\n(SHP · 지형.xml · 옹벽3D.dwg · 위성.jpg — 이 파일들로 직접 모델 구성)");
             else
                 AcadApp.ShowAlertDialog("INFRAWORKS 원스톱 완료\n\n저장 위치: " + folder +
-                    "\n(SHP · 지형.xml · 옹벽3D.dwg)\n\n" + iwMsg);
+                    "\n(SHP · 지형.xml · 옹벽3D.dwg · 위성.jpg)\n\n" + iwMsg);
             ed.WriteMessage("\n" + "INFRAWORKS SHP 내보내기 완료" + note + "\n" + log.ToString().TrimEnd());
             try
             {
