@@ -63,11 +63,32 @@ public sealed class InfraworksCommand
             }
             GradingSettings.ExportFolder = folder;
 
+            // ── 좌표계 자동(JACK 0723) — 도면 좌표계(MAPCSASSIGN) 우선. 있으면 그 원점을 ExportEpsg에 반영,
+            //    없으면 설정(드롭박스) 원점으로 도면에 자동 지정. 이후 SHP·지형·위성이 모두 이 좌표계로 맞춰짐. ──
+            string csNote;
+            {
+                string csCode = KoreaCs.Read(db);
+                int? det = KoreaCs.ResolveEpsgFromCode(csCode);
+                if (det.HasValue)
+                {
+                    GradingSettings.ExportEpsg = det.Value;
+                    csNote = $"좌표계: 도면 '{csCode}' 감지 → EPSG:{det.Value} 자동 적용";
+                }
+                else if (string.IsNullOrEmpty(csCode))
+                {
+                    var (ok, assignNote) = KoreaCs.AssignIfMissing(db, GradingSettings.ExportEpsg);
+                    csNote = "좌표계: 도면 미지정 → " + assignNote + (ok ? "" : " · 내보내기는 설정값으로 계속");
+                }
+                else
+                    csNote = $"좌표계: 도면 '{csCode}'는 자동인식 밖 — 설정값(EPSG:{GradingSettings.ExportEpsg}) 사용";
+            }
+
             string? wkt = ShapefileWriter.WktForEpsg(GradingSettings.ExportEpsg);
             // 좌표계 원점 파라미터(중앙자오선·원점가산 N) — 위성 역투영·LandXML desc에 사용(미지원 EPSG면 중부 5186 기본).
             var belt = ShapefileWriter.Belt(GradingSettings.ExportEpsg);
             int beltCm = belt?.cm ?? 127; double beltFn = belt?.fn ?? 600000;
             var log = new System.Text.StringBuilder();
+            log.AppendLine(csNote);
             log.AppendLine($"폴더: {folder} · 좌표계 EPSG:{GradingSettings.ExportEpsg}({belt?.name ?? "미지원→중부기본"}){(wkt == null ? " · WKT 없음(.prj 생략)" : "")}");
             var ng = new NullGround();
 
