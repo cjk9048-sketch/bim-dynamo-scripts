@@ -62,7 +62,9 @@ public sealed class RibbonApp : IExtensionApplication
             src.Items.Add(MakeButton(
                 "노리선", "DHNORI ", "정지 결과(번들)로 사면선·소단선·노리선을 한 번에 작도 — DHGRADE 실행 후 사용", "노리선"));
             src.Items.Add(MakeButton(
-                "INFRA\nWORKS", "DHINFRA ", "InfraWorks용 SHP 일괄 내보내기(옹벽선·면폴리곤·계획면·순절/성토) — DHGRADE 실행 후 사용", "infra"));
+                "INFRA\nWORKS", "DHINFRA ", "InfraWorks 원스톱 — 지형·옹벽·커버리지 내보내고 모델 복사·InfraWorks 자동 실행(0클릭). DHGRADE 후 사용", "infra"));
+            src.Items.Add(MakeButton(
+                "SHP\n내보내기", "DHSHP ", "수동 SHP 내보내기(예전 방식) — 폴더 직접 선택, InfraWorks 실행 안 함. 모델을 손으로 만들 때용", "infra"));
         }
         catch
         {
