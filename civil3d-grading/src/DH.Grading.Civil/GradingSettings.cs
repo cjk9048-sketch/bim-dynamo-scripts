@@ -19,7 +19,7 @@ public enum WallStyle
 public static class GradingSettings
 {
     /// <summary>플러그인 버전 — 팝업 첫 줄에 표시(새 빌드 설치 확인용). 커밋마다 갱신.</summary>
-    public const string Version = "v7.0 (2026-07-23 좌표계 설정 드롭박스 — 원점(서부/중부/동부/동해·신구)별 위성·지형·SHP)";
+    public const string Version = "v7.1 (2026-07-23 좌표계 자동 — 도면 좌표계 읽어 반영, 없으면 자동 지정(KOREA_GRS80_###TM))";
 
     // ── 옹벽 3D 보강토 블록(옹벽3D_기획.md) — 원스톤 블록·캡블록 규격(m). 스샷 0720 실측. ──
     // [고정값 — JACK 0720] 사용자가 바꾸지 않는다. 보강토 옹벽이면 무조건 이 치수를 쓴다(설정 UI 제거).
