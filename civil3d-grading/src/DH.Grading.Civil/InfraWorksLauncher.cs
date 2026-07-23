@@ -9,7 +9,6 @@ namespace DH.Grading.Civil;
 /// 열린 뒤 사용자가 지형 Refresh + 옹벽 Reimport(InfraWorks가 밖에서의 자동 임포트를 지원 안 함 — 실측 확정).</summary>
 public static class InfraWorksLauncher
 {
-    private const string InfraWorksExe = @"C:\Program Files\Autodesk\InfraWorks\InfraWorks.exe";
     private const string TemplateName = "DHInfra_Template";
 
     /// <summary>번들 템플릿(Contents\template)을 InfraWorks 모델 폴더에 새 이름으로 복사, **소스 경로를 실행 폴더로
@@ -54,11 +53,8 @@ public static class InfraWorksLauncher
         }
         else retargetNote = " (헬퍼 없음 — 경로 재작성 생략)";
 
-        if (!System.IO.File.Exists(InfraWorksExe))
-            return $"InfraWorks 모델 '{name}' 생성됨{retargetNote} — InfraWorks.exe를 못 찾아 자동 실행 생략. 직접 여세요.";
-        try { Process.Start(new ProcessStartInfo(InfraWorksExe, "\"" + destSqlite + "\"") { UseShellExecute = true }); }
-        catch (System.Exception ex) { return $"InfraWorks 모델 '{name}' 생성됨{retargetNote} — 실행 실패({ex.Message}). 목록에서 직접 여세요."; }
-        return $"InfraWorks 모델 '{name}' 생성 + 실행{retargetNote} — 열리면 [소스 Refresh/Reimport].";
+        // [JACK 0723] InfraWorks 자동 실행 안 함 — 모델만 만들어 두고, InfraWorks는 직접 열고 소스 Refresh/Reimport.
+        return $"InfraWorks 모델 '{name}' 생성{retargetNote} — InfraWorks에서 직접 열고 [소스 Refresh/Reimport] (자동 실행 안 함).";
     }
 
     private static void CopyDir(string src, string dst)

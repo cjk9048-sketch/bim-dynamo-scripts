@@ -373,7 +373,7 @@ public sealed class InfraworksCommand
                 AcadApp.ShowAlertDialog("SHP 내보내기 완료(수동)\n\n저장 위치: " + folder +
                     "\n(SHP · 지형.xml · 옹벽3D.dwg · 위성.jpg — 이 파일들로 직접 모델 구성)");
             else
-                AcadApp.ShowAlertDialog("INFRAWORKS 원스톱 완료\n\n저장 위치: " + folder +
+                AcadApp.ShowAlertDialog("INFRAWORKS 내보내기 완료\n\n저장 위치: " + folder +
                     "\n(SHP · 지형.xml · 옹벽3D.dwg · 위성.jpg)\n\n" + iwMsg);
             ed.WriteMessage("\n" + "INFRAWORKS SHP 내보내기 완료" + note + "\n" + log.ToString().TrimEnd());
             try
