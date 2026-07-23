@@ -79,21 +79,25 @@ public static class ShapefileWriter
     /// <summary>한국 평면직각좌표계 WKT(.prj) — 신(2010, 원점가산 N=600,000): 5185(서부)/5186(중부)/
     /// 5187(동부)/5188(동해) · 구(원점가산 N=500,000): 5180(서부)/5181(중부)/5183(동부)/5184(동해)/
     /// 5182(제주, N=550,000). 그 외 null(.prj 생략).</summary>
+    /// <summary>한국 평면직각좌표계(GRS80) 원점 파라미터 — (표시명, 중앙자오선 경도°, 원점가산 N). 미지원 EPSG면 null.
+    /// 모두 lat0=38°·k0=1·FE=200000·GRS80 공통, 중앙자오선(cm)과 원점가산 N(fn)만 다르다. 위성 역투영·LandXML도 이 값을 쓴다.</summary>
+    public static (string name, int cm, int fn)? Belt(int epsg) => epsg switch
+    {
+        5185 => ("Korea 2000 / West Belt 2010", 125, 600000),
+        5186 => ("Korea 2000 / Central Belt 2010", 127, 600000),
+        5187 => ("Korea 2000 / East Belt 2010", 129, 600000),
+        5188 => ("Korea 2000 / East Sea Belt 2010", 131, 600000),
+        5180 => ("Korea 2000 / West Belt", 125, 500000),
+        5181 => ("Korea 2000 / Central Belt", 127, 500000),
+        5182 => ("Korea 2000 / Central Belt Jeju", 127, 550000),
+        5183 => ("Korea 2000 / East Belt", 129, 500000),
+        5184 => ("Korea 2000 / East Sea Belt", 131, 500000),
+        _ => null,
+    };
+
     public static string? WktForEpsg(int epsg)
     {
-        (string name, int cm, int fn)? belt = epsg switch
-        {
-            5185 => ("Korea 2000 / West Belt 2010", 125, 600000),
-            5186 => ("Korea 2000 / Central Belt 2010", 127, 600000),
-            5187 => ("Korea 2000 / East Belt 2010", 129, 600000),
-            5188 => ("Korea 2000 / East Sea Belt 2010", 131, 600000),
-            5180 => ("Korea 2000 / West Belt", 125, 500000),
-            5181 => ("Korea 2000 / Central Belt", 127, 500000),
-            5182 => ("Korea 2000 / Central Belt Jeju", 127, 550000),
-            5183 => ("Korea 2000 / East Belt", 129, 500000),
-            5184 => ("Korea 2000 / East Sea Belt", 131, 500000),
-            _ => null,
-        };
+        var belt = Belt(epsg);
         if (belt == null) return null;
         return
             $"PROJCS[\"{belt.Value.name}\"," +

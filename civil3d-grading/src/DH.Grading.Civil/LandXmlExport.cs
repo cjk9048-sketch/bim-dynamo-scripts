@@ -11,8 +11,9 @@ namespace DH.Grading.Civil;
 /// 좌표는 실좌표(5186) 그대로. 점 순서는 LandXML 규약대로 북(Y) 동(X) 표고(Z).</summary>
 public static class LandXmlExport
 {
-    /// <summary>TinSurface를 path(.xml)에 LandXML로 저장하고 InfraWorks 캐시(.aecc.pnt/.tri)를 삭제. 반환=삼각형 수.</summary>
-    public static int ExportSurface(TinSurface tin, string path, string surfaceName)
+    /// <summary>TinSurface를 path(.xml)에 LandXML로 저장하고 InfraWorks 캐시(.aecc.pnt/.tri)를 삭제. 반환=삼각형 수.
+    /// centralMeridian=좌표계 중앙자오선 경도(서부125·중부127·동부129·동해131) — CoordinateSystem desc에 반영.</summary>
+    public static int ExportSurface(TinSurface tin, string path, string surfaceName, int centralMeridian = 127)
     {
         var pts = new List<(double x, double y, double z)>();
         var faces = new List<(int a, int b, int c)>();
@@ -31,7 +32,7 @@ public static class LandXmlExport
             finally { t.Dispose(); }
         }
 
-        string xml = BuildXml(pts, faces, surfaceName);
+        string xml = BuildXml(pts, faces, surfaceName, centralMeridian);
         System.IO.File.WriteAllText(path, xml, new UTF8Encoding(false));
         // ★InfraWorks 지형 캐시 삭제 → Refresh 시 새 xml로 지형을 다시 구움(안 지우면 옛 캐시라 안 바뀜/사라짐).
         foreach (var ext in new[] { ".aecc.pnt", ".aecc.tri" })
@@ -43,14 +44,14 @@ public static class LandXmlExport
 
     /// <summary>점·면 목록 → LandXML 1.2 문자열(순수 함수, 오프라인 검증 가능). 점=북(Y) 동(X) 표고(Z), 면=1-기반 점 인덱스.</summary>
     public static string BuildXml(IReadOnlyList<(double x, double y, double z)> pts,
-        IReadOnlyList<(int a, int b, int c)> faces, string surfaceName)
+        IReadOnlyList<(int a, int b, int c)> faces, string surfaceName, int centralMeridian = 127)
     {
         var ci = CultureInfo.InvariantCulture;
         var sb = new StringBuilder(pts.Count * 48 + faces.Count * 32 + 512);
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         sb.Append("<LandXML xmlns=\"http://www.landxml.org/schema/LandXML-1.2\" version=\"1.2\" date=\"2026-01-01\" time=\"00:00:00\">\n");
         sb.Append("  <Units><Metric linearUnit=\"meter\" areaUnit=\"squareMeter\" volumeUnit=\"cubicMeter\" temperatureUnit=\"celsius\" pressureUnit=\"milliBars\" angularUnit=\"decimal degrees\" directionUnit=\"decimal degrees\"/></Units>\n");
-        sb.Append("  <CoordinateSystem desc=\"KOREA_GRS80_127TM\"/>\n");   // 중부원점(5186). 좌표는 실좌표 그대로.
+        sb.Append("  <CoordinateSystem desc=\"KOREA_GRS80_").Append(centralMeridian.ToString(ci)).Append("TM\"/>\n");   // 원점별 중앙자오선. 좌표는 실좌표 그대로.
         sb.Append("  <Surfaces>\n");
         sb.Append("    <Surface name=\"").Append(Esc(surfaceName)).Append("\">\n");
         sb.Append("      <Definition surfType=\"TIN\">\n");

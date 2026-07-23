@@ -5,13 +5,13 @@ using System.Windows.Media.Imaging;
 
 namespace DH.Grading.Civil;
 
-/// <summary>브이월드(V-World) 위성영상 익스포터 — 부지 경계상자(EPSG:5186 중부원점)에 걸치는 위성 타일을
+/// <summary>브이월드(V-World) 위성영상 익스포터 — 부지 경계상자(한국 평면직각 TM, 원점은 파라미터)에 걸치는 위성 타일을
 /// 받아 한 장으로 이어붙이고, 월드파일(.jgw)+투영정보(.prj)를 함께 저장한다(InfraWorks 래스터 지형피복용).
 ///
-/// 타일 서비스: <c>http://api.vworld.kr/req/wmts/1.0.0/{키}/Satellite/{ز}/{y}/{x}.jpeg</c>
+/// 타일 서비스: <c>http://api.vworld.kr/req/wmts/1.0.0/{키}/Satellite/{z}/{y}/{x}.jpeg</c>
 ///   — 표준 웹메르카토르(EPSG:3857) XYZ 타일, 위성 최대 줌 z19(≈0.24m/px @ 위도37°).
-/// 좌표 흐름: 5186(E,N) → 경위도(WGS84≈GRS80) → 웹메르카토르 타일. 모자이크는 3857 좌표로 월드파일 기록,
-///   InfraWorks가 모델 좌표계(5186)로 재투영해 지형 위에 드리운다. (AutoCAD 의존성 없음 — 단독 테스트 가능)</summary>
+/// 좌표 흐름: 부지 TM(E,N) → 경위도(GRS80) → 웹메르카토르 타일. 모자이크는 3857 좌표로 월드파일 기록,
+///   InfraWorks가 모델 좌표계로 재투영해 지형 위에 드리운다. (AutoCAD 의존성 없음 — 단독 테스트 가능)</summary>
 public static class VWorldImagery
 {
     private const string ApiKey = "8EA87CD2-C75D-3407-A41C-D1FBE9B33CAA";
@@ -23,9 +23,11 @@ public static class VWorldImagery
 
     private static readonly HttpClient Http = new() { Timeout = System.TimeSpan.FromSeconds(20) };
 
-    /// <summary>5186 경계상자 → outFolder에 baseName.jpg/.jgw/.prj 저장. 반환=안내 문자열(개수·줌).</summary>
+    /// <summary>부지 경계상자(한국 평면직각 TM) → outFolder에 baseName.jpg/.jgw/.prj 저장. 반환=안내 문자열(개수·줌).
+    /// lon0Deg=중앙자오선 경도(서부125·중부127·동부129·동해131), falseNorthing=원점가산 N(신600000·구500000·제주550000).</summary>
     public static string Export(double minE, double minN, double maxE, double maxN,
-                                string outFolder, string baseName = "위성", double marginM = 20.0)
+                                string outFolder, string baseName = "위성", double marginM = 20.0,
+                                double lon0Deg = 127.0, double falseNorthing = 600000.0)
     {
         if (maxE <= minE || maxN <= minN) return "위성: 경계상자가 유효하지 않아 생략";
         minE -= marginM; minN -= marginM; maxE += marginM; maxN += marginM;
@@ -33,8 +35,8 @@ public static class VWorldImagery
         // 네 모서리 → 경위도(TM은 직각이 아니라 살짝 기우니 4모서리로 안전하게 min/max).
         var c = new[]
         {
-            Tm5186ToLonLat(minE, minN), Tm5186ToLonLat(maxE, minN),
-            Tm5186ToLonLat(minE, maxN), Tm5186ToLonLat(maxE, maxN),
+            TmToLonLat(minE, minN, lon0Deg, falseNorthing), TmToLonLat(maxE, minN, lon0Deg, falseNorthing),
+            TmToLonLat(minE, maxN, lon0Deg, falseNorthing), TmToLonLat(maxE, maxN, lon0Deg, falseNorthing),
         };
         double west = double.MaxValue, east = double.MinValue, south = double.MaxValue, north = double.MinValue;
         foreach (var (lon, lat) in c)
@@ -131,15 +133,15 @@ public static class VWorldImagery
         return ((int)System.Math.Clamp(xi, 0, max), (int)System.Math.Clamp(yi, 0, max));
     }
 
-    // EPSG:5186 (Korea 2000 / Central Belt 2010, TM) 역투영 → 경도·위도(도). GRS80.
-    //   lat0=38°, lon0=127°, k0=1, FE=200000, FN=600000.
-    private static (double lon, double lat) Tm5186ToLonLat(double E, double N)
+    // 한국 평면직각 TM(GRS80) 역투영 → 경도·위도(도). lat0=38°, k0=1, FE=200000 공통.
+    //   lon0Deg=중앙자오선 경도, FN=원점가산 N — 원점(서부/중부/동부/동해)·신구에 따라 달라짐.
+    private static (double lon, double lat) TmToLonLat(double E, double N, double lon0Deg, double FN)
     {
         const double a = 6378137.0;             // GRS80 장반경
         const double f = 1.0 / 298.257222101;   // GRS80 편평률
-        const double k0 = 1.0, FE = 200000.0, FN = 600000.0;
+        const double k0 = 1.0, FE = 200000.0;
         const double lat0 = 38.0 * System.Math.PI / 180.0;
-        const double lon0 = 127.0 * System.Math.PI / 180.0;
+        double lon0 = lon0Deg * System.Math.PI / 180.0;
 
         double e2 = 2 * f - f * f;              // 제1이심률²
         double ep2 = e2 / (1 - e2);             // 제2이심률²
