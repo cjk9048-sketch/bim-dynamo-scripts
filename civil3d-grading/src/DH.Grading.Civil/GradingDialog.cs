@@ -21,6 +21,16 @@ public sealed class GradingDialog : Window
     private readonly TextBox _terraceWidth;
     private readonly ComboBox _cutWallStyle;
     private readonly ComboBox _fillWallStyle;
+    private readonly ComboBox _coordSys;
+
+    // 좌표계 드롭박스 — 표시 라벨과 대응 EPSG(신 2010 N+600000 먼저, 그다음 구 N+500000, 제주). 순서 일치 필수.
+    private static readonly int[] EpsgCodes = { 5186, 5185, 5187, 5188, 5181, 5180, 5183, 5184, 5182 };
+    private static readonly string[] CoordLabels =
+    {
+        "중부원점 127° (신, 5186)", "서부원점 125° (신, 5185)", "동부원점 129° (신, 5187)", "동해원점 131° (신, 5188)",
+        "중부원점 127° (구, 5181)", "서부원점 125° (구, 5180)", "동부원점 129° (구, 5183)", "동해원점 131° (구, 5184)",
+        "제주원점 127° (구, 5182)",
+    };
 
     public GradingDialog(string okText = "확인")
     {
@@ -77,6 +87,20 @@ public sealed class GradingDialog : Window
         });
         _cutWallStyle = AddStyleRow(root, "절토 옹벽", GradingSettings.CutWallStyle);
         _fillWallStyle = AddStyleRow(root, "성토 옹벽", GradingSettings.FillWallStyle);
+
+        // [좌표계 — JACK 0723] 도면(프로젝트) 좌표계 원점. SHP .prj·지형 LandXML·위성사진 역투영에 모두 쓰인다.
+        root.Children.Add(new TextBlock
+        {
+            Text = "좌표계 (내보내기 원점)",
+            FontWeight = FontWeights.Bold,
+            Margin = new Thickness(0, 10, 0, 6),
+            ToolTip = "도면이 어느 평면직각좌표계(원점)로 작성됐는지 선택. 위성사진·지형·SHP가 이 원점으로 맞춰짐. 대부분 신(2010, 원점가산 N=600000). 원점(서부125·중부127·동부129·동해131)을 측량성과에 맞게 고르세요.",
+        });
+        _coordSys = new ComboBox { Width = 220, Height = 24, Margin = new Thickness(0, 0, 0, 8), VerticalContentAlignment = VerticalAlignment.Center };
+        foreach (var s in CoordLabels) _coordSys.Items.Add(s);
+        int csIdx = System.Array.IndexOf(EpsgCodes, GradingSettings.ExportEpsg);
+        _coordSys.SelectedIndex = csIdx >= 0 ? csIdx : 0;   // 기본 중부(5186)
+        root.Children.Add(_coordSys);
 
         root.Children.Add(new TextBlock
         {
@@ -191,6 +215,7 @@ public sealed class GradingDialog : Window
         GradingSettings.TerraceWidth = tw;
         GradingSettings.CutWallStyle = (WallStyle)System.Math.Max(0, _cutWallStyle.SelectedIndex);
         GradingSettings.FillWallStyle = (WallStyle)System.Math.Max(0, _fillWallStyle.SelectedIndex);
+        GradingSettings.ExportEpsg = EpsgCodes[System.Math.Clamp(_coordSys.SelectedIndex, 0, EpsgCodes.Length - 1)];
 
         DialogResult = true;
         Close();

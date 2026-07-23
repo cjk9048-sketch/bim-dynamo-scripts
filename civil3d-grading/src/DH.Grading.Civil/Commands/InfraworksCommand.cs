@@ -64,8 +64,11 @@ public sealed class InfraworksCommand
             GradingSettings.ExportFolder = folder;
 
             string? wkt = ShapefileWriter.WktForEpsg(GradingSettings.ExportEpsg);
+            // 좌표계 원점 파라미터(중앙자오선·원점가산 N) — 위성 역투영·LandXML desc에 사용(미지원 EPSG면 중부 5186 기본).
+            var belt = ShapefileWriter.Belt(GradingSettings.ExportEpsg);
+            int beltCm = belt?.cm ?? 127; double beltFn = belt?.fn ?? 600000;
             var log = new System.Text.StringBuilder();
-            log.AppendLine($"폴더: {folder} · 좌표계 EPSG:{GradingSettings.ExportEpsg}{(wkt == null ? " (WKT 없음 — .prj 생략)" : "")}");
+            log.AppendLine($"폴더: {folder} · 좌표계 EPSG:{GradingSettings.ExportEpsg}({belt?.name ?? "미지원→중부기본"}){(wkt == null ? " · WKT 없음(.prj 생략)" : "")}");
             var ng = new NullGround();
 
             // [v2 옹벽선용 원지반 샘플러] 도면 TIN 중 우리 산출물(가상절토/성토_DH·정지면_DH)을 뺀 후보에서
@@ -312,7 +315,7 @@ public sealed class InfraworksCommand
                     try { System.IO.File.Delete(System.IO.Path.Combine(folder, "옹벽물량.csv")); } catch { }
             }
 
-            // 위성 커버리지용 부지 경계상자(5186) — 지형 단계에서 채운다.
+            // 위성 커버리지용 부지 경계상자(도면 좌표계) — 지형 단계에서 채운다.
             double sMinE = 0, sMinN = 0, sMaxE = 0, sMaxN = 0; bool haveExtent = false;
 
             // ── ⑦ 지형.xml — InfraWorks LandXML 지형(정지면_DH TinSurface 삼각망 직접 생성) + .aecc 캐시 삭제. ──
@@ -331,9 +334,9 @@ public sealed class InfraworksCommand
                     log.AppendLine("지형.xml: '정지면_DH' 지표면을 찾지 못해 생략 — 먼저 정지면 생성 필요");
                 else
                 {
-                    int ntri = LandXmlExport.ExportSurface(gsurf, xmlPath, "정지면_DH");
+                    int ntri = LandXmlExport.ExportSurface(gsurf, xmlPath, "정지면_DH", beltCm);
                     log.AppendLine($"지형.xml: 정지면_DH → LandXML 삼각형 {ntri}개 (+ .aecc 캐시 삭제) — InfraWorks 지형 Refresh용");
-                    // 위성 커버리지용 경계상자(5186) 확보 — 다음 단계(위성.jpg)에서 사용.
+                    // 위성 커버리지용 경계상자(도면 좌표계) 확보 — 다음 단계(위성.jpg)에서 사용.
                     try
                     {
                         var ext = gsurf.GeometricExtents;
@@ -347,12 +350,12 @@ public sealed class InfraworksCommand
             catch (System.Exception xex) { log.AppendLine($"지형.xml: 저장 실패 — {xex.Message} (파일 열려 있으면 닫고 재실행)"); }
 
             // ── ⑦-b 위성.jpg — 브이월드 위성영상을 부지 경계상자에 맞춰 받아 이어붙이고 월드파일(.jgw)+.prj 저장. ──
-            //    InfraWorks가 래스터 지형피복(위성사진)으로 지형 위에 드리운다(EPSG:3857 → 모델 5186 재투영). 인터넷 필요.
+            //    InfraWorks가 래스터 지형피복(위성사진)으로 지형 위에 드리운다(EPSG:3857 → 모델 좌표계 재투영). 인터넷 필요.
             if (haveExtent)
             {
                 try
                 {
-                    string vmsg = VWorldImagery.Export(sMinE, sMinN, sMaxE, sMaxN, folder, "위성", marginM: 30.0);
+                    string vmsg = VWorldImagery.Export(sMinE, sMinN, sMaxE, sMaxN, folder, "위성", marginM: 30.0, lon0Deg: beltCm, falseNorthing: beltFn);
                     log.AppendLine("위성.jpg: " + vmsg);
                 }
                 catch (System.Exception vex) { log.AppendLine("위성.jpg: 실패 — " + vex.Message + " (인터넷/차단 확인, 나머지는 계속)"); }
