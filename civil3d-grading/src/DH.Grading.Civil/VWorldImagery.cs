@@ -17,9 +17,8 @@ public static class VWorldImagery
     private const string ApiKey = "8EA87CD2-C75D-3407-A41C-D1FBE9B33CAA";
     private const string Layer = "Satellite";
     private const int TileSize = 256;
-    private const int MaxZoom = 19;
-    private const int MinZoom = 14;
-    private const int MaxTilesPerAxis = 60;   // 한 축 최대 타일 수(초과 시 줌 한 단계 낮춰 재계산) — 과다 다운로드 방지
+    private const int MaxZoom = 19;           // 위성 최대 줌(≈0.24m/px @위도37°) — JACK: 항상 최고해상도만
+    private const int MaxTiles = 3000;        // 안전 상한(총 타일 수) — 초과 시 생략(≈800MB 비트맵 방지). 일반 현장은 수십 장.
     private const double OriginShift = System.Math.PI * 6378137.0;  // 웹메르카토르 반폭 = 20037508.342789
 
     private static readonly HttpClient Http = new() { Timeout = System.TimeSpan.FromSeconds(20) };
@@ -41,17 +40,14 @@ public static class VWorldImagery
         foreach (var (lon, lat) in c)
         { west = System.Math.Min(west, lon); east = System.Math.Max(east, lon); south = System.Math.Min(south, lat); north = System.Math.Max(north, lat); }
 
-        // 줌 선택 — 최대 줌부터, 타일이 너무 많으면 한 단계씩 낮춘다.
-        int z = MaxZoom, xmin = 0, xmax = 0, ymin = 0, ymax = 0;
-        while (true)
-        {
-            (xmin, ymin) = LonLatToTile(west, north, z);   // 북서(NW) = 최소 열·최소 행
-            (xmax, ymax) = LonLatToTile(east, south, z);   // 남동(SE) = 최대 열·최대 행
-            if ((xmax - xmin + 1 <= MaxTilesPerAxis && ymax - ymin + 1 <= MaxTilesPerAxis) || z <= MinZoom) break;
-            z--;
-        }
+        // [JACK 0723] 항상 최고해상도(z19)만 — 줌 자동 하향 없음. 안전 상한만 검사.
+        int z = MaxZoom;
+        var (xmin, ymin) = LonLatToTile(west, north, z);   // 북서(NW) = 최소 열·최소 행
+        var (xmax, ymax) = LonLatToTile(east, south, z);   // 남동(SE) = 최대 열·최대 행
         int cols = xmax - xmin + 1, rows = ymax - ymin + 1;
         if (cols <= 0 || rows <= 0) return "위성: 타일 범위 계산 실패로 생략";
+        if ((long)cols * rows > MaxTiles)
+            return $"위성: 부지가 너무 넓어 최고해상도(z{z}) 타일 {cols}×{rows}={cols * rows}장 > 상한 {MaxTiles} — 생략(부지 축소 필요).";
 
         // 타일 다운로드 + WPF로 한 장에 합성.
         int okTiles = 0;
