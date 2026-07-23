@@ -20,8 +20,15 @@ namespace DH.Grading.Civil.Commands;
 /// </summary>
 public sealed class InfraworksCommand
 {
+    /// <summary>DHINFRA — InfraWorks 원스톱(자동): 실행 날짜폴더로 산출 + 템플릿 복사·경로재작성 + InfraWorks 실행.</summary>
     [CommandMethod("DHINFRA")]
-    public void Run()
+    public void Run() => RunExport(manual: false);
+
+    /// <summary>DHSHP — 수동 SHP 내보내기(예전 방식): 폴더 직접 선택, InfraWorks 실행 안 함. 손으로 모델 만들 때용(JACK 0722).</summary>
+    [CommandMethod("DHSHP")]
+    public void RunManual() => RunExport(manual: true);
+
+    private void RunExport(bool manual)
     {
         Document doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
@@ -39,11 +46,21 @@ public sealed class InfraworksCommand
             }
             if (bundle == null) return;
 
-            // [InfraWorks 원스톱 — JACK 0722] 폴더 선택창 없이 **실행별 날짜 폴더(C:\DHInfra\yyyyMMdd_HHmmss)**로 전 산출.
-            //   프로젝트/실행 간 파일이 안 겹치고 이력이 보존된다. 복사한 모델의 소스 경로도 이 폴더로 재작성(런처).
+            // 자동(DHINFRA): 실행별 날짜 폴더로 격리. 수동(DHSHP): 예전처럼 폴더 직접 선택(InfraWorks 실행 안 함).
             string folder;
-            try { folder = GradingSettings.NewRunFolder(); }
-            catch (System.Exception dex) { ed.WriteMessage($"\n[INFRAWORKS] 실행 폴더 생성 실패 — {dex.Message}"); return; }
+            if (manual)
+            {
+                var dlg = new Microsoft.Win32.OpenFolderDialog { Title = "SHP 내보내기 폴더 선택(수동)" };
+                if (!string.IsNullOrEmpty(GradingSettings.ExportFolder) && System.IO.Directory.Exists(GradingSettings.ExportFolder))
+                    dlg.InitialDirectory = GradingSettings.ExportFolder;
+                if (dlg.ShowDialog() != true) { ed.WriteMessage("\n[SHP] 폴더 선택 취소"); return; }
+                folder = dlg.FolderName;
+            }
+            else
+            {
+                try { folder = GradingSettings.NewRunFolder(); }
+                catch (System.Exception dex) { ed.WriteMessage($"\n[INFRAWORKS] 실행 폴더 생성 실패 — {dex.Message}"); return; }
+            }
             GradingSettings.ExportFolder = folder;
 
             string? wkt = ShapefileWriter.WktForEpsg(GradingSettings.ExportEpsg);
@@ -318,15 +335,22 @@ public sealed class InfraworksCommand
             }
             catch (System.Exception xex) { log.AppendLine($"지형.xml: 저장 실패 — {xex.Message} (파일 열려 있으면 닫고 재실행)"); }
 
-            // ── ⑧ InfraWorks 원스톱 — 번들 템플릿을 새 모델로 복사하고 InfraWorks 실행(JACK 0722). ──
-            string iwMsg;
-            try { iwMsg = InfraWorksLauncher.CopyTemplateAndOpen(folder); }
-            catch (System.Exception iex) { iwMsg = "InfraWorks 실행 실패: " + iex.Message; }
-            log.AppendLine("InfraWorks: " + iwMsg);
+            // ── ⑧ InfraWorks 원스톱 — 번들 템플릿 복사·경로재작성·실행(자동 모드만). 수동(DHSHP)은 파일만 내보냄. ──
+            string iwMsg = "";
+            if (!manual)
+            {
+                try { iwMsg = InfraWorksLauncher.CopyTemplateAndOpen(folder); }
+                catch (System.Exception iex) { iwMsg = "InfraWorks 실행 실패: " + iex.Message; }
+                log.AppendLine("InfraWorks: " + iwMsg);
+            }
 
             // 팝업은 성패 + 저장 위치만 — 파일별 개수·진단은 명령창과 로그로(공용 배포용, JACK 0720).
-            AcadApp.ShowAlertDialog("INFRAWORKS 내보내기 완료\n\n저장 위치: " + folder +
-                "\n(SHP · 지형.xml · 옹벽3D.dwg)\n\n" + iwMsg);
+            if (manual)
+                AcadApp.ShowAlertDialog("SHP 내보내기 완료(수동)\n\n저장 위치: " + folder +
+                    "\n(SHP · 지형.xml · 옹벽3D.dwg — 이 파일들로 직접 모델 구성)");
+            else
+                AcadApp.ShowAlertDialog("INFRAWORKS 원스톱 완료\n\n저장 위치: " + folder +
+                    "\n(SHP · 지형.xml · 옹벽3D.dwg)\n\n" + iwMsg);
             ed.WriteMessage("\n" + "INFRAWORKS SHP 내보내기 완료" + note + "\n" + log.ToString().TrimEnd());
             try
             {
