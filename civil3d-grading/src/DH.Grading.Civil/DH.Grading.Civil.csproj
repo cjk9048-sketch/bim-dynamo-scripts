@@ -54,6 +54,11 @@
       <HintPath>$(CivilDir)AeccDbMgd.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- AutoCAD Map 좌표계 API(도면 좌표계 읽기/지정 — MAPCSASSIGN 상당). Map 하위 폴더. -->
+    <Reference Include="AcMapCoordsysCoreMgd">
+      <HintPath>$(AcadDir)Map\AcMapCoordsysCoreMgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>
