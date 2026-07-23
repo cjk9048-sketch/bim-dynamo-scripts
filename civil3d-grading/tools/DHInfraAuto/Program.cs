@@ -71,20 +71,52 @@ else if (mode == "run")
     if (tree == null) { Console.WriteLine("데이터소스 트리를 못 찾음 — Data Sources 패널이 열려있는지 확인."); return; }
     Console.WriteLine($"트리 발견: rect=({tree.BoundingRectangle})");
 
-    // 7개 소스 전부: 각 소스마다 Reimport 가능하면 Reimport, 아니면 Refresh(터레인은 Reimport 비활성 → Refresh).
-    string[] prefer = { "Reimport", "Refresh" };
     if (args.Length >= 3)
         DoSource(tree, args[1], new[] { args[2] });   // 단일: run <이름조각> <액션>
     else
     {
-        string[] sources = { "지형", "계획면", "소단_절토", "소단_성토", "사면_절토", "사면_성토", "옹벽" };
-        foreach (var s in sources)
+        // 터레인·커버리지 = Refresh(Reimport 비활성). 옹벽(3D DWG) = **Reimport 후 Refresh**(둘 다 필요 — JACK 0722 실측).
+        string[] refreshOnly = { "지형", "계획면", "소단_절토", "소단_성토", "사면_절토", "사면_성토" };
+        foreach (var s in refreshOnly)
         {
-            DoSource(tree, s, prefer);
-            System.Threading.Thread.Sleep(2500);   // 소스 간 처리 대기
+            DoSource(tree, s, new[] { "Refresh" });
+            System.Threading.Thread.Sleep(2000);   // 소스 간 처리 대기
         }
+        DoSource(tree, "옹벽", new[] { "Reimport" });
+        // 재임포트는 오래 걸릴 수 있음(대형 DWG) — 고정 대기 대신 상태가 'In Progress'를 벗어날 때까지 폴링(최대 10분).
+        WaitImported(tree, "옹벽", maxSec: 600);
+        DoSource(tree, "옹벽", new[] { "Refresh" });
     }
     Console.WriteLine("=== run 완료 ===");
+
+    // 소스 행의 상태(같은 Y줄의 형제 TreeItem)가 'In Progress'를 벗어날 때까지 폴링 — 재임포트 완료 대기.
+    void WaitImported(AutomationElement treeEl, string itemNameSub, int maxSec)
+    {
+        Console.WriteLine($"  상태 대기: '{itemNameSub}' 임포트 완료까지(최대 {maxSec}초)…");
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.Elapsed.TotalSeconds < maxSec)
+        {
+            System.Threading.Thread.Sleep(3000);
+            try
+            {
+                var item = FindTreeItem(treeEl, itemNameSub);
+                if (item == null) continue;
+                int y = item.BoundingRectangle.Y;
+                var rowTexts = treeEl.FindAllDescendants(cf => cf.ByControlType(FlaUI.Core.Definitions.ControlType.TreeItem))
+                    .Where(t => Math.Abs(t.BoundingRectangle.Y - y) <= 4)
+                    .Select(t => (t.Name ?? "").Trim()).ToList();
+                bool busy = rowTexts.Any(t => t.Contains("In Pr") || t.Contains("Progress") || t.Contains("Pending"));
+                if (!busy)
+                {
+                    Console.WriteLine($"  임포트 완료 감지({(int)sw.Elapsed.TotalSeconds}초): {string.Join("|", rowTexts)}");
+                    System.Threading.Thread.Sleep(1500);   // 마무리 여유
+                    return;
+                }
+            }
+            catch { }
+        }
+        Console.WriteLine("  상태 대기 시간 초과 — 계속 진행");
+    }
 
     bool DoSource(AutomationElement treeEl, string itemNameSub, string[] actionsPreferred)
     {
