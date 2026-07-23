@@ -58,22 +58,7 @@ public static class InfraWorksLauncher
             return $"InfraWorks 모델 '{name}' 생성됨{retargetNote} — InfraWorks.exe를 못 찾아 자동 실행 생략. 직접 여세요.";
         try { Process.Start(new ProcessStartInfo(InfraWorksExe, "\"" + destSqlite + "\"") { UseShellExecute = true }); }
         catch (System.Exception ex) { return $"InfraWorks 모델 '{name}' 생성됨{retargetNote} — 실행 실패({ex.Message}). 목록에서 직접 여세요."; }
-
-        // 0클릭 — InfraWorks 실행 직후 auto 헬퍼를 백그라운드로 띄운다(홈에서 모델 열기→패널 열기→7소스 자동).
-        //   헬퍼는 스스로 InfraWorks 로드를 최대 180초 폴링하므로, 콜드 스타트여도 기다렸다 진행. 진단로그=%TEMP%\dhinfra_auto.log
-        string autoNote = "";
-        if (System.IO.File.Exists(helper))
-        {
-            try
-            {
-                var apsi = new ProcessStartInfo(helper, $"auto \"{destSqlite}\" \"{name}\"")
-                { UseShellExecute = false, CreateNoWindow = true };
-                Process.Start(apsi);   // 대기하지 않음(InfraWorks 로드 후 스스로 진행)
-                autoNote = " + 자동화 시작";
-            }
-            catch (System.Exception ex) { autoNote = " (자동화 시작 실패: " + ex.Message + ")"; }
-        }
-        return $"InfraWorks 모델 '{name}' 생성 + 실행{retargetNote}{autoNote} — 자동으로 모델 열기·소스 갱신을 진행합니다.";
+        return $"InfraWorks 모델 '{name}' 생성 + 실행{retargetNote} — 열리면 [소스 Refresh/Reimport].";
     }
 
     private static void CopyDir(string src, string dst)

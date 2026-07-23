@@ -8,10 +8,6 @@ using FlaUI.UIA3;
 
 string mode = args.Length > 0 ? args[0] : "dump";
 
-// 파일 로그(auto는 CreateNoWindow로 실행돼 콘솔이 안 보임 → %TEMP%\dhinfra_auto.log 로 남긴다).
-string logPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dhinfra_auto.log");
-void Log(string s) { Console.WriteLine(s); try { System.IO.File.AppendAllText(logPath, s + Environment.NewLine); } catch { } }
-
 // retarget <모델.sqlite> <실행폴더> — InfraWorks 불필요(파일 편집만). 복사한 모델의 소스 경로를 실행 폴더로 재작성.
 //   템플릿 소스는 C:/DHInfra/파일 을 가리킴 → C:/DHInfra/yyyyMMdd_HHmmss/파일 로 치환(슬래시 양쪽 형태 처리).
 if (mode == "retarget")
@@ -33,30 +29,20 @@ if (mode == "retarget")
     return;
 }
 
-if (mode == "auto") { try { System.IO.File.WriteAllText(logPath, "=== DHInfraAuto auto 시작 ===" + Environment.NewLine); } catch { } }
-
-// InfraWorks 프로세스 + 메인창 대기. auto는 방금 켜졌을 수 있어 최대 180초 폴링, 그 외엔 즉시.
-using var automation = new UIA3Automation();
-int waitSec = mode == "auto" ? 180 : 10;
-Application? app = null;
-Window? main = null;
-var swAttach = System.Diagnostics.Stopwatch.StartNew();
-while (true)
+var procs = System.Diagnostics.Process.GetProcessesByName("InfraWorks");
+if (procs.Length == 0)
 {
-    var procs = System.Diagnostics.Process.GetProcessesByName("InfraWorks");
-    if (procs.Length > 0)
-    {
-        try { app = Application.Attach(procs[0].Id); } catch { app = null; }
-        if (app != null)
-        {
-            try { main = app.GetMainWindow(automation, TimeSpan.FromSeconds(5)); } catch { main = null; }
-            if (main != null && main.BoundingRectangle.Width > 200) { Log($"InfraWorks PID={procs[0].Id} 메인창 '{main.Name}'"); break; }
-        }
-    }
-    if (swAttach.Elapsed.TotalSeconds >= waitSec) break;
-    System.Threading.Thread.Sleep(2000);
+    Console.WriteLine("InfraWorks 프로세스를 찾지 못했습니다. InfraWorks를 실행하고 모델을 연 뒤 다시 실행하세요.");
+    return;
 }
-if (main == null || app == null) { Log("InfraWorks 메인 창을 찾지 못했습니다. (프로세스/로드 대기 실패)"); return; }
+Console.WriteLine($"InfraWorks PID={procs[0].Id}");
+
+using var automation = new UIA3Automation();
+Application app = Application.Attach(procs[0].Id);
+Window? main = null;
+try { main = app.GetMainWindow(automation, TimeSpan.FromSeconds(10)); } catch { }
+if (main == null) { Console.WriteLine("메인 창을 찾지 못했습니다."); return; }
+Console.WriteLine($"메인 창: '{main.Name}'  rect=({main.BoundingRectangle})");
 
 if (mode == "dump")
 {
@@ -78,22 +64,11 @@ else if (mode == "panel")
     Dump(main, 0, max);
     Console.WriteLine("=== 끝 ===");
 }
-else if (mode == "run" || mode == "auto")
+else if (mode == "run")
 {
-    // auto(0클릭): 방금 켜진 InfraWorks 홈 화면에서 새 모델을 열고 → 로드 대기 → Data Sources 패널을 연다.
-    //   run(수동): 사용자가 이미 모델·패널을 열어둔 상태 — 이 단계는 건너뜀.
-    if (mode == "auto")
-    {
-        string sqlitePath = args.Length > 1 ? args[1] : "";
-        string modelName = args.Length > 2 ? args[2]
-                          : System.IO.Path.GetFileNameWithoutExtension(sqlitePath);
-        if (!OpenModelAndPanel(main, sqlitePath, modelName)) { Log("모델/패널 열기 실패 — 중단"); return; }
-        try { main = app.GetMainWindow(automation, TimeSpan.FromSeconds(10)) ?? main; } catch { }
-    }
-
     // Data Sources 트리에서 옹벽=Reimport, 지형=Refresh 를 우클릭 메뉴로 자동 실행.
     var tree = FindByAutomationIdContains(main, "treeDataSources");
-    if (tree == null) { Log("데이터소스 트리를 못 찾음 — Data Sources 패널이 열려있는지 확인."); return; }
+    if (tree == null) { Console.WriteLine("데이터소스 트리를 못 찾음 — Data Sources 패널이 열려있는지 확인."); return; }
     Console.WriteLine($"트리 발견: rect=({tree.BoundingRectangle})");
 
     if (args.Length >= 3)
@@ -191,7 +166,7 @@ else if (mode == "run" || mode == "auto")
 }
 else
 {
-    Console.WriteLine($"알 수 없는 모드: {mode}  (사용법: DHInfraAuto dump|panel|run|auto|retarget …)");
+    Console.WriteLine($"알 수 없는 모드: {mode}  (사용법: DHInfraAuto dump|panel|run [depth])");
 }
 
 AutomationElement? FindByAutomationIdContains(AutomationElement root, string idSub)
@@ -253,66 +228,6 @@ AutomationElement? FindByNameContains(AutomationElement root, string sub, string
     return found;
 }
 
-// 요소 중심을 마우스로 좌클릭/더블클릭(TreeItem처럼 클릭포인트 예외 나는 요소 대비).
-void ClickCenter(AutomationElement el, bool dbl = false)
-{
-    var r = el.BoundingRectangle;
-    var c = new System.Drawing.Point((int)(r.X + r.Width / 2), (int)(r.Y + r.Height / 2));
-    FlaUI.Core.Input.Mouse.MoveTo(c);
-    System.Threading.Thread.Sleep(150);
-    if (dbl) FlaUI.Core.Input.Mouse.DoubleClick(FlaUI.Core.Input.MouseButton.Left);
-    else FlaUI.Core.Input.Mouse.Click(FlaUI.Core.Input.MouseButton.Left);
-}
-
-// auto: InfraWorks 홈에서 modelName 모델을 열고 → 로드 대기 → Data Sources 패널을 연다. 성공 시 true.
-bool OpenModelAndPanel(AutomationElement home, string sqlitePath, string modelName)
-{
-    Log($"── 모델 열기: '{modelName}' (경로={sqlitePath}) ──");
-    System.Threading.Thread.Sleep(3000);           // 홈 화면 안정화 여유
-
-    // 첫 진단: 홈 화면 전체 트리를 로그로 남긴다(요소 구조 확정용 — 이후 정밀 튜닝 근거).
-    Log("=== 홈 화면 트리 덤프 (depth ≤ 8) ===");
-    Dump(home, 0, 8);
-    Log("=== 홈 화면 덤프 끝 ===");
-
-    // 1) 홈의 모델 타일/목록에서 이름이 일치하는 요소를 찾아 더블클릭(가장 흔한 경로).
-    var tile = FindByNameContains(home, modelName);
-    if (tile != null)
-    {
-        Log($"모델 타일 발견: '{tile.Name}' ct={tile.ControlType} rect=({tile.BoundingRectangle}) — 더블클릭");
-        ClickCenter(tile, dbl: true);
-        System.Threading.Thread.Sleep(2000);
-        // 타일 클릭 후 'Open/열기' 버튼이 뜨는 UI라면 눌러준다(없으면 더블클릭으로 이미 열림).
-        var openBtn = FindByNameContains(home, "Open", ct: "Button", maxW: 200)
-                   ?? FindByNameContains(home, "열기", ct: "Button", maxW: 200);
-        if (openBtn != null) { Log($"Open 버튼 클릭: rect=({openBtn.BoundingRectangle})"); ClickCenter(openBtn); }
-    }
-    else
-    {
-        Log($"모델 타일 '{modelName}' 못 찾음 — 홈 덤프를 확인해 열기 방식을 조정해야 함(1차 폴백 미구현).");
-        return false;
-    }
-
-    // 2) 모델 로드 대기 — 'Data Sources' 버튼이 나타날 때까지(최대 180초).
-    Log("모델 로드 대기(최대 180초)…");
-    AutomationElement? dsBtn = null;
-    var sw = System.Diagnostics.Stopwatch.StartNew();
-    while (sw.Elapsed.TotalSeconds < 180)
-    {
-        System.Threading.Thread.Sleep(3000);
-        try { home = app!.GetMainWindow(automation, TimeSpan.FromSeconds(5)) ?? home; } catch { }
-        dsBtn = FindByNameContains(home, "Data Sources", ct: "Button", maxW: 80);
-        if (dsBtn != null) break;
-    }
-    if (dsBtn == null) { Log("Data Sources 버튼이 나타나지 않음 — 모델 로드 실패로 판단."); return false; }
-
-    // 3) Data Sources 패널 열기.
-    Log($"Data Sources 패널 열기: rect=({dsBtn.BoundingRectangle})");
-    ClickCenter(dsBtn);
-    System.Threading.Thread.Sleep(2500);
-    return true;
-}
-
 void Dump(AutomationElement el, int depth, int max)
 {
     if (depth > max) return;
@@ -327,7 +242,7 @@ void Dump(AutomationElement el, int depth, int max)
         if (show)
         {
             string indent = new string(' ', depth * 2);
-            Log($"{indent}[{ct}] name='{Trunc(name)}' id='{aid}' rect=({(int)r.X},{(int)r.Y} {(int)r.Width}x{(int)r.Height})");
+            Console.WriteLine($"{indent}[{ct}] name='{Trunc(name)}' id='{aid}' rect=({(int)r.X},{(int)r.Y} {(int)r.Width}x{(int)r.Height})");
         }
         AutomationElement[] kids;
         try { kids = el.FindAllChildren(); } catch { return; }
