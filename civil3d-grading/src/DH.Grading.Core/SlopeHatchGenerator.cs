@@ -158,7 +158,13 @@ public static class SlopeHatchGenerator
                 }
                 if (Dist2D(a, eff) < 0.02) continue;              // 미세 노리선 제거
                 double fracC = (count % ratio == 0) ? 1.0 : 0.5;  // 긴선/짧은선
-                var endC = new Point3(a.X + (eff.X - a.X) * fracC, a.Y + (eff.Y - a.Y) * fracC, a.Z);
+                // [직각 틱 — JACK 0724] toe 방향 대신 crest 접선의 '수직'으로 낸다 → 직선부는 직각 유지(곡선·경계부는 불가피).
+                var (txC, tyC) = TangentAtDist(crest, cum, d);
+                double nxC = -tyC, nyC = txC;
+                double projC = (eff.X - a.X) * nxC + (eff.Y - a.Y) * nyC;   // toe 쪽 수직 성분
+                if (projC < 0) { nxC = -nxC; nyC = -nyC; projC = -projC; }
+                if (projC < 0.02) continue;
+                var endC = new Point3(a.X + nxC * projC * fracC, a.Y + nyC * projC * fracC, a.Z);
                 ticks.Add((new Point3(a.X, a.Y, a.Z), endC));
                 continue;
             }
@@ -174,7 +180,13 @@ public static class SlopeHatchGenerator
                 effL = GroundCross(cp, op, ground, sgn);
             if (Dist2D(cp, effL) < 0.02) continue;                // 미세 노리선 제거
             double frac = (count % ratio == 0) ? 1.0 : 0.5;       // 긴선/짧은선
-            var end = new Point3(cp.X + (effL.X - cp.X) * frac, cp.Y + (effL.Y - cp.Y) * frac, cp.Z);
+            // [직각 틱 — JACK 0724] crest 접선의 수직으로.
+            var (txL, tyL) = TangentAtDist(crest, cum, d);
+            double nxL = -tyL, nyL = txL;
+            double projL = (effL.X - cp.X) * nxL + (effL.Y - cp.Y) * nyL;
+            if (projL < 0) { nxL = -nxL; nyL = -nyL; projL = -projL; }
+            if (projL < 0.02) continue;
+            var end = new Point3(cp.X + nxL * projL * frac, cp.Y + nyL * projL * frac, cp.Z);
             ticks.Add((new Point3(cp.X, cp.Y, cp.Z), end));
         }
     }
@@ -282,6 +294,16 @@ public static class SlopeHatchGenerator
         double segLen = cum[seg + 1] - cum[seg];
         double t = segLen < 1e-9 ? 0 : (d - cum[seg]) / segLen;
         return Lerp(ring[seg], ring[seg + 1], t);
+    }
+
+    /// <summary>거리 d가 놓인 crest 세그먼트의 단위 접선(2D). 노리선 틱을 이 접선의 수직으로 내어 직선부 직각 유지(JACK 0724).</summary>
+    private static (double X, double Y) TangentAtDist(IReadOnlyList<Point3> ring, double[] cum, double d)
+    {
+        int seg = 0;
+        while (seg < ring.Count - 2 && cum[seg + 1] < d) seg++;
+        double dx = ring[seg + 1].X - ring[seg].X, dy = ring[seg + 1].Y - ring[seg].Y;
+        double len = Math.Sqrt(dx * dx + dy * dy);
+        return len < 1e-9 ? (1, 0) : (dx / len, dy / len);
     }
 
     private static double AvgZ(IReadOnlyList<Point3> ring)
