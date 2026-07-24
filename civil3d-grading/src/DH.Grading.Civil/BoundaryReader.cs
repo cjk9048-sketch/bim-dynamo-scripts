@@ -21,14 +21,36 @@ public static class BoundaryReader
         };
     }
 
+    /// <summary>호(bulge) 세그먼트를 이 간격(m)마다 중간점으로 조개서 곡선을 살린다(JACK 0724 — 라운드가 직선 현으로 뭉개지던 문제).
+    /// 너무 촘촘하면 TIN 오류/과밀 → 경계 샘플 간격(≈2m)에 맞춰 성기게. 오류 안 날 정도로만 곡선 근사(JACK).</summary>
+    private const double ArcStep = 2.0;
+
     private static List<Point3> ReadLwPolyline(Polyline lw)
     {
         var pts = new List<Point3>();
         double z = lw.Elevation; // 2D 폴리라인은 단일 표고
-        for (int i = 0; i < lw.NumberOfVertices; i++)
+        int nv = lw.NumberOfVertices;
+        int segCount = lw.Closed ? nv : nv - 1;   // 닫힘이면 마지막→처음 세그먼트도 포함
+        for (int i = 0; i < nv; i++)
         {
             var p = lw.GetPoint3dAt(i); // Z=Elevation
             pts.Add(new Point3(p.X, p.Y, z));
+
+            // 이 정점에서 시작하는 세그먼트가 호(bulge≠0)면 파라미터로 따라가며 중간점 삽입(Autodesk가 호 기하 처리).
+            if (i < segCount && System.Math.Abs(lw.GetBulgeAt(i)) > 1e-9)
+            {
+                try
+                {
+                    double segLen = System.Math.Abs(lw.GetDistanceAtParameter(i + 1) - lw.GetDistanceAtParameter(i));
+                    int n = System.Math.Max(2, (int)System.Math.Ceiling(segLen / ArcStep));
+                    for (int k = 1; k < n; k++)
+                    {
+                        var ap = lw.GetPointAtParameter(i + (double)k / n);   // 호를 따라가는 실제 점
+                        pts.Add(new Point3(ap.X, ap.Y, z));
+                    }
+                }
+                catch { /* 호 샘플 실패 시 현(직선)으로 폴백 */ }
+            }
         }
         return Dedup(pts);
     }
