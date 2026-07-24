@@ -37,12 +37,18 @@ public static class BoundaryReader
             pts.Add(new Point3(p.X, p.Y, z));
 
             // 이 정점에서 시작하는 세그먼트가 호(bulge≠0)면 파라미터로 따라가며 중간점 삽입(Autodesk가 호 기하 처리).
-            if (i < segCount && System.Math.Abs(lw.GetBulgeAt(i)) > 1e-9)
+            double bulge = i < segCount ? lw.GetBulgeAt(i) : 0.0;
+            if (System.Math.Abs(bulge) > 1e-9)
             {
                 try
                 {
                     double segLen = System.Math.Abs(lw.GetDistanceAtParameter(i + 1) - lw.GetDistanceAtParameter(i));
-                    int n = System.Math.Max(2, (int)System.Math.Ceiling(segLen / ArcStep));
+                    // 길이 기준(성기게 2m) + 각도 기준(정점당 ≤8° — 정지 로직의 코너 임계 ~10° 아래로 유지해 호를 '라운드'로 취급,
+                    //   그래야 각 단이 각지지 않고 곡선이 보존됨). 완만한 호는 길이가, 급한 호는 각도가 지배(필요한 만큼만 촘촘).
+                    double sweepDeg = System.Math.Abs(4.0 * System.Math.Atan(bulge)) * 180.0 / System.Math.PI;
+                    int nLen = (int)System.Math.Ceiling(segLen / ArcStep);
+                    int nAng = (int)System.Math.Ceiling(sweepDeg / 8.0);
+                    int n = System.Math.Max(2, System.Math.Max(nLen, nAng));
                     for (int k = 1; k < n; k++)
                     {
                         var ap = lw.GetPointAtParameter(i + (double)k / n);   // 호를 따라가는 실제 점
