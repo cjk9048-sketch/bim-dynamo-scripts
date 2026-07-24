@@ -19,7 +19,7 @@ public enum WallStyle
 public static class GradingSettings
 {
     /// <summary>플러그인 버전 — 팝업 첫 줄에 표시(새 빌드 설치 확인용). 커밋마다 갱신.</summary>
-    public const string Version = "v7.4 (2026-07-24 노리선 직각틱 · 옹벽드롭박스 ≤0.05일때만 활성 · 기본구배1.5 · 리본3분류)";
+    public const string Version = "v7.5 (2026-07-24 노리선 오목부 겹침생략 · 대화상자 UI손질(구배안내 사면/옹벽·비활성회색·세로여유) · 리본버튼 간격)";
 
     // ── 옹벽 3D 보강토 블록(옹벽3D_기획.md) — 원스톤 블록·캡블록 규격(m). 스샷 0720 실측. ──
     // [고정값 — JACK 0720] 사용자가 바꾸지 않는다. 보강토 옹벽이면 무조건 이 치수를 쓴다(설정 UI 제거).

@@ -53,29 +53,39 @@ public sealed class RibbonApp : IExtensionApplication
             var tab = new RibbonTab { Title = TabTitle, Id = TabId };
             ribbon.Tabs.Add(tab);
 
-            // [리본 3분류 — JACK 0724] 정지(절성토) / 도면화 / 내보내기.
+            // [리본 3분류 — JACK 0724] 정지(절성토) / 도면화 / 내보내기. 버튼 사이 여백(Spacer)으로 간격 확보.
             var pGrade = new RibbonPanelSource { Title = "정지(절성토)" };
             tab.Panels.Add(new RibbonPanel { Source = pGrade });
+            pGrade.Items.Add(Spacer());
             pGrade.Items.Add(MakeButton(
                 "정지\n설정", "DHGRADESET ", "단높이·소단폭·구배·격자 해상도를 설정", "설정"));
+            pGrade.Items.Add(Spacer());
             pGrade.Items.Add(MakeButton(
                 "정지면\n생성", "DHGRADE ", "계획 폴리곤+원지반 → 계단식 절성토 TIN Surface 생성", "정지면"));
+            pGrade.Items.Add(Spacer());
 
             var pDraw = new RibbonPanelSource { Title = "도면화" };
             tab.Panels.Add(new RibbonPanel { Source = pDraw });
+            pDraw.Items.Add(Spacer());
             pDraw.Items.Add(MakeButton(
                 "노리선", "DHNORI ", "정지 결과(번들)로 사면선·소단선·노리선을 한 번에 작도 — DHGRADE 실행 후 사용", "노리선"));
+            pDraw.Items.Add(Spacer());
 
             var pExport = new RibbonPanelSource { Title = "내보내기" };
             tab.Panels.Add(new RibbonPanel { Source = pExport });
+            pExport.Items.Add(Spacer());
             pExport.Items.Add(MakeButton(
                 "INFRA\nWORKS", "DHINFRA ", "InfraWorks 기초자료 내보내기 — 폴더 선택 후 지형·옹벽3D·SHP·위성GeoTIFF·토공량을 내보냄(있는 것만). DHGRADE 후 사용", "infra"));
+            pExport.Items.Add(Spacer());
         }
         catch
         {
             // 리본 구성 실패해도 명령(DHGRADE/DHGRADESET)은 직접 입력으로 동작
         }
     }
+
+    /// <summary>버튼 사이 빈 여백(선 없는 Spacer) — 리본 버튼이 다닥다닥 붙는 것 방지(JACK 0724).</summary>
+    private static RibbonSeparator Spacer() => new() { SeparatorStyle = RibbonSeparatorStyle.Spacer };
 
     private static RibbonButton MakeButton(string text, string command, string tooltip, string glyph)
     {
