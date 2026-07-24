@@ -65,6 +65,15 @@ public sealed class NoriCommand
                 transFaces ??= vs.TransitionFaces; // 전환사면은 경계에서만 유도 — 절/성 동일, 한 번만
                 if (!vs.HasSlope) { detail += $"\n{label}: 링 복원 결과 사면 없음"; continue; }
 
+                // [JACK 0724] 이 방향이 옹벽으로 작성되면(스타일≠사면 + 경사 n≤0.05) 노리선/사면선/소단선 생략 — 옹벽엔 노리선 없음.
+                double slopeN = up ? bundle.Params.CutSlope : bundle.Params.FillSlope;
+                WallStyle style = up ? GradingSettings.CutWallStyle : GradingSettings.FillWallStyle;
+                if (style != WallStyle.없음_사면 && slopeN <= 0.05 + 1e-9)
+                {
+                    detail += $"\n{label}: 옹벽({style}) — 노리선 생략";
+                    continue;
+                }
+
                 int slN = 0, blN = 0, tN = 0;
                 foreach (var finalRing in ringList)
                 {

@@ -19,7 +19,7 @@ public enum WallStyle
 public static class GradingSettings
 {
     /// <summary>플러그인 버전 — 팝업 첫 줄에 표시(새 빌드 설치 확인용). 커밋마다 갱신.</summary>
-    public const string Version = "v7.2 (2026-07-24 infraworks 기초자료 — 폴더선택·있는것만·위성 GeoTIFF·토공량CSV, 자동생성/옹벽선SHP/잡CSV 폐지)";
+    public const string Version = "v7.3 (2026-07-24 노리선 — 옹벽 방향은 노리선 생략)";
 
     // ── 옹벽 3D 보강토 블록(옹벽3D_기획.md) — 원스톤 블록·캡블록 규격(m). 스샷 0720 실측. ──
     // [고정값 — JACK 0720] 사용자가 바꾸지 않는다. 보강토 옹벽이면 무조건 이 치수를 쓴다(설정 UI 제거).
