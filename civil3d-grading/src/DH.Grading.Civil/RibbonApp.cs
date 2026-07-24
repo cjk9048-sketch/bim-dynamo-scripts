@@ -54,7 +54,7 @@ public sealed class RibbonApp : IExtensionApplication
             ribbon.Tabs.Add(tab);
 
             // [리본 3분류 — JACK 0724] 정지(절성토) / 도면화 / 내보내기. 버튼 사이 여백(Spacer)으로 간격 확보.
-            var pGrade = new RibbonPanelSource { Title = "정지(절성토)" };
+            var pGrade = new RibbonPanelSource { Title = "부지정지" };
             tab.Panels.Add(new RibbonPanel { Source = pGrade });
             pGrade.Items.Add(Spacer());
             pGrade.Items.Add(MakeButton(
