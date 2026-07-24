@@ -88,6 +88,13 @@ public sealed class GradingDialog : Window
         _cutWallStyle = AddStyleRow(root, "절토 옹벽", GradingSettings.CutWallStyle);
         _fillWallStyle = AddStyleRow(root, "성토 옹벽", GradingSettings.FillWallStyle);
 
+        // [옹벽 드롭박스 활성 조건 — JACK 0724] 구배 ≤0.05(수직=옹벽)일 때만 옹벽형태 선택 가능. >0.05(사면)이면 비활성.
+        //   입력하는 즉시 반영(TextChanged). 옹벽은 ≤0.05에서만 생성되므로 그때만 종류 선택이 의미 있음.
+        _cutSlope.TextChanged += (_, _) => UpdateWallEnabled(_cutSlope, _cutWallStyle);
+        _fillSlope.TextChanged += (_, _) => UpdateWallEnabled(_fillSlope, _fillWallStyle);
+        UpdateWallEnabled(_cutSlope, _cutWallStyle);
+        UpdateWallEnabled(_fillSlope, _fillWallStyle);
+
         // [좌표계 — JACK 0723] 도면(프로젝트) 좌표계 원점. SHP .prj·지형 LandXML·위성사진 역투영에 모두 쓰인다.
         root.Children.Add(new TextBlock
         {
@@ -123,6 +130,14 @@ public sealed class GradingDialog : Window
         root.Children.Add(btns);
 
         Content = root;
+    }
+
+    /// <summary>구배 칸 값이 ≤0.05(옹벽 구간)면 옹벽형태 콤보 활성, 아니면 비활성. 파싱 실패 시 비활성.</summary>
+    private static void UpdateWallEnabled(TextBox slopeBox, ComboBox styleCombo)
+    {
+        bool wallZone = double.TryParse((slopeBox.Text ?? "").Trim().Replace(',', '.'),
+            NumberStyles.Float, CultureInfo.InvariantCulture, out double n) && n <= 0.05 + 1e-9;
+        styleCombo.IsEnabled = wallZone;
     }
 
     private static ComboBox AddStyleRow(Panel parent, string label, WallStyle current)

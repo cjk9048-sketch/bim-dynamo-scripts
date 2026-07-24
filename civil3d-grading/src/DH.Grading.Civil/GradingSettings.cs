@@ -19,7 +19,7 @@ public enum WallStyle
 public static class GradingSettings
 {
     /// <summary>플러그인 버전 — 팝업 첫 줄에 표시(새 빌드 설치 확인용). 커밋마다 갱신.</summary>
-    public const string Version = "v7.3 (2026-07-24 노리선 — 옹벽 방향은 노리선 생략)";
+    public const string Version = "v7.4 (2026-07-24 노리선 직각틱 · 옹벽드롭박스 ≤0.05일때만 활성 · 기본구배1.5 · 리본3분류)";
 
     // ── 옹벽 3D 보강토 블록(옹벽3D_기획.md) — 원스톤 블록·캡블록 규격(m). 스샷 0720 실측. ──
     // [고정값 — JACK 0720] 사용자가 바꾸지 않는다. 보강토 옹벽이면 무조건 이 치수를 쓴다(설정 UI 제거).
@@ -33,8 +33,8 @@ public static class GradingSettings
 
     public static double BenchHeight = 5.0; // 단높이 (m)
     public static double BenchWidth = 1.0;  // 소단폭 (m)
-    public static double CutSlope = 1.0;    // 절토구배 n
-    public static double FillSlope = 1.5;   // 성토구배 n
+    public static double CutSlope = 1.5;    // 절토구배 n (기본 1.5 — JACK 0724)
+    public static double FillSlope = 1.5;   // 성토구배 n (기본 1.5)
     public static double CellSize = 0.5;       // 격자 해상도 (m) — 작을수록 매끈·느림. 소규모 부지는 0.25~0.1도 가능
     public static int MaxBenches = 50;         // 안전 최대 단수
     public static double VertexSpacing = 2.0;  // 경계 둘레 샘플 간격 (m)
