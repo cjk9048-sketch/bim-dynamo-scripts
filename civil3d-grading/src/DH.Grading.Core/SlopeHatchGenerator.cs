@@ -164,11 +164,12 @@ public static class SlopeHatchGenerator
                 double projC = (eff.X - a.X) * nxC + (eff.Y - a.Y) * nyC;   // toe 쪽 수직 성분
                 if (projC < 0) { nxC = -nxC; nyC = -nyC; projC = -projC; }
                 if (projC < 0.02) continue;
-                // [오목부 겹침 방지 — JACK 0724] crest가 toe 쪽으로 급히 휘면(오목) 인접 수직틱이 겹침 → 볼록부처럼 생략(양쪽 대칭).
-                double winC = Math.Min(Math.Max(projC, 1.0), 6.0);
-                var tBc = TangentAtDist(crest, cum, Math.Max(0, d - winC));
-                var tAc = TangentAtDist(crest, cum, Math.Min(total, d + winC));
-                if ((tAc.X - tBc.X) * nxC + (tAc.Y - tBc.Y) * nyC > 0.5) continue;
+                // [겹칠 때만 생략 — JACK 0724] step 간격 수직틱은 오목 회전이 크면 틱 길이 안에서 인접틱과 교차.
+                //   접선변화의 toe성분(오목=+)이 대략 2·step/틱길이 를 넘을 때만 생략 → 안 겹치면 최대한 생성.
+                double leffC = System.Math.Max(projC * fracC, 0.3);
+                var tBc = TangentAtDist(crest, cum, System.Math.Max(0, d - step));
+                var tAc = TangentAtDist(crest, cum, System.Math.Min(total, d + step));
+                if ((tAc.X - tBc.X) * nxC + (tAc.Y - tBc.Y) * nyC > 2.0 * step / leffC) continue;
                 var endC = new Point3(a.X + nxC * projC * fracC, a.Y + nyC * projC * fracC, a.Z);
                 ticks.Add((new Point3(a.X, a.Y, a.Z), endC));
                 continue;
@@ -191,11 +192,11 @@ public static class SlopeHatchGenerator
             double projL = (effL.X - cp.X) * nxL + (effL.Y - cp.Y) * nyL;
             if (projL < 0) { nxL = -nxL; nyL = -nyL; projL = -projL; }
             if (projL < 0.02) continue;
-            // [오목부 겹침 방지 — JACK 0724] crest가 toe 쪽으로 급히 휘면 생략.
-            double winL = Math.Min(Math.Max(projL, 1.0), 6.0);
-            var tBl = TangentAtDist(crest, cum, Math.Max(0, d - winL));
-            var tAl = TangentAtDist(crest, cum, Math.Min(total, d + winL));
-            if ((tAl.X - tBl.X) * nxL + (tAl.Y - tBl.Y) * nyL > 0.5) continue;
+            // [겹칠 때만 생략 — JACK 0724] 안 겹치면 최대한 생성.
+            double leffL = Math.Max(projL * frac, 0.3);
+            var tBl = TangentAtDist(crest, cum, Math.Max(0, d - step));
+            var tAl = TangentAtDist(crest, cum, Math.Min(total, d + step));
+            if ((tAl.X - tBl.X) * nxL + (tAl.Y - tBl.Y) * nyL > 2.0 * step / leffL) continue;
             var end = new Point3(cp.X + nxL * projL * frac, cp.Y + nyL * projL * frac, cp.Z);
             ticks.Add((new Point3(cp.X, cp.Y, cp.Z), end));
         }
