@@ -279,8 +279,10 @@ public static class GradingGeometry
                 double v1x = b.X - a.X, v1y = b.Y - a.Y, l1 = Math.Sqrt(v1x * v1x + v1y * v1y);
                 double v2x = c.X - b.X, v2y = c.Y - b.Y, l2 = Math.Sqrt(v2x * v2x + v2y * v2y);
                 if (l1 < 1e-9 || l2 < 1e-9) continue;
-                if ((v1x * v2x + v1y * v2y) / (l1 * l2) > 0.985) continue; // 거의 직선(<10°) — 능선 불필요
                 bool reflexCorner = (v1x * v2y - v1y * v2x) * ccwS < 0;    // 오목(reflex) 코너 여부
+                // [오목 라운드 보존 — JACK 0724] 볼록은 <10°면 원호(버퍼가 처리)라 능선 불필요. 오목은 작은 각(호 정점)이라도
+                //   밸리선이 없으면 TIN이 골짜기를 평탄화(각짐) → 호도 부채꼴 밸리선으로 추적(정점당 ≤8° 호 대응, ~2°만 스킵).
+                if ((v1x * v2x + v1y * v2y) / (l1 * l2) > (reflexCorner ? 0.9994 : 0.985)) continue;
                 if (!p.MiterConvex && !reflexCorner) continue;             // 라운드 모드: 볼록 코너는 원호 유지
 
                 var line = new List<Point3> { new Point3(b.X, b.Y, b.Z) }; // 시작 = 경계 정점의 실제 계획고
@@ -300,7 +302,8 @@ public static class GradingGeometry
                         double e1x = pc.X - pp.X, e1y = pc.Y - pp.Y, e1l = Math.Sqrt(e1x * e1x + e1y * e1y);
                         double e2x = pn.X - pc.X, e2y = pn.Y - pc.Y, e2l = Math.Sqrt(e2x * e2x + e2y * e2y);
                         if (e1l < 1e-9 || e2l < 1e-9) continue;
-                        if ((e1x * e2x + e1y * e2y) / (e1l * e2l) > 0.94) continue; // 꺾임 20° 미만 = 직선/원호 통과점
+                        // 오목 라운드는 가는 호 정점(≤8°)도 밸리선으로 추적해야 하므로 임계를 낮춘다(볼록/직각은 기존 20°).
+                        if ((e1x * e2x + e1y * e2y) / (e1l * e2l) > (reflexCorner ? 0.9994 : 0.94)) continue;
                         bool vReflex = (e1x * e2y - e1y * e2x) * ringCcw < 0;
                         if (vReflex != reflexCorner) continue; // 볼록/오목 방향 일치하는 정점만
                         double ddx = pc.X - px, ddy = pc.Y - py;
