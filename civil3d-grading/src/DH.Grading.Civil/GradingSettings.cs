@@ -19,7 +19,7 @@ public enum WallStyle
 public static class GradingSettings
 {
     /// <summary>플러그인 버전 — 팝업 첫 줄에 표시(새 빌드 설치 확인용). 커밋마다 갱신.</summary>
-    public const string Version = "v7.1 (2026-07-23 좌표계 자동 — 도면 좌표계 읽어 반영, 없으면 자동 지정(KOREA_GRS80_###TM))";
+    public const string Version = "v7.2 (2026-07-24 infraworks 기초자료 — 폴더선택·있는것만·위성 GeoTIFF·토공량CSV, 자동생성/옹벽선SHP/잡CSV 폐지)";
 
     // ── 옹벽 3D 보강토 블록(옹벽3D_기획.md) — 원스톤 블록·캡블록 규격(m). 스샷 0720 실측. ──
     // [고정값 — JACK 0720] 사용자가 바꾸지 않는다. 보강토 옹벽이면 무조건 이 치수를 쓴다(설정 UI 제거).
@@ -48,20 +48,10 @@ public static class GradingSettings
     public static double HatchShort = 1.0;     // 노리선 짧은선 간격 (m, 길이=사면폭 절반)
     public static double HatchLong = 5.0;      // 노리선 긴선 간격 (m, 길이=사면폭 전체)
     public static bool KeepIntermediateSurfaces = true; // true=중간 지표면(가상절토/가상성토/Pad) 유지(오류 확인용). false=최종면만 남기고 정리
-    public static string ExportFolder = "";    // INFRAWORKS SHP 내보내기 폴더(마지막 선택 기억)
-    // [InfraWorks 원스톱 — JACK 0722] 모든 산출은 **공통 루트 C:\DHInfra** 아래 **실행별 날짜 폴더**로(프로젝트 중복 방지).
-    //   템플릿 소스는 C:/DHInfra/ 직결 경로를 담고 있고, 실행 시 복사한 모델의 경로를 실행 폴더로 재작성(DHInfraAuto retarget).
-    public const string InfraFolder = @"C:\DHInfra";
-    public const string InfraTerrainXml = "지형.xml";   // InfraWorks 지형 LandXML 고정 파일명
-    public const string InfraWallDwg = "옹벽3D.dwg";     // InfraWorks 옹벽 DWG 고정 파일명
+    public static string ExportFolder = "";    // infraworks 기초자료 내보내기 폴더(마지막 선택 기억)
+    public const string InfraTerrainXml = "지형.xml";   // 지형 LandXML 고정 파일명
+    public const string InfraWallDwg = "옹벽3D.dwg";     // 옹벽 3D DWG 고정 파일명
 
-    /// <summary>이번 실행의 산출 폴더(C:\DHInfra\yyyyMMdd_HHmmss) 생성·반환 — 실행마다 새로(격리, JACK 0722).</summary>
-    public static string NewRunFolder()
-    {
-        string run = System.IO.Path.Combine(InfraFolder, System.DateTime.Now.ToString("yyyyMMdd_HHmmss"));
-        System.IO.Directory.CreateDirectory(run);
-        return run;
-    }
     public static int ExportEpsg = 5186;       // 도면 좌표계(원점) — 설정 대화상자 드롭박스로 선택. SHP .prj·지형 LandXML·위성 역투영에 공통 사용. 신 5185~5188·구 5180~5184.
 
     // [옹벽 형태 — JACK 0721] 절토부/성토부에 어떤 옹벽 3D를 만들지 드롭박스로 선택. 치수는 스타일별 고정.
