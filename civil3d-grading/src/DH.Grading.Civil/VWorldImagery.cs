@@ -70,31 +70,72 @@ public static class VWorldImagery
         mosaic.Render(dv);
 
         System.IO.Directory.CreateDirectory(outFolder);
-        string jpg = System.IO.Path.Combine(outFolder, baseName + ".jpg");
-        string jgw = System.IO.Path.Combine(outFolder, baseName + ".jgw");
-        string prj = System.IO.Path.Combine(outFolder, baseName + ".prj");
+        string tif = System.IO.Path.Combine(outFolder, baseName + ".tif");
 
-        var enc = new JpegBitmapEncoder { QualityLevel = 90 };
-        enc.Frames.Add(BitmapFrame.Create(mosaic));
-        using (var fs = System.IO.File.Create(jpg)) enc.Save(fs);
+        // 모자이크 → RGB 바이트(Pbgra32, 불투명 → 프리멀티 무영향).
+        int W = cols * TileSize, H = rows * TileSize;
+        int stride = W * 4;
+        var bgra = new byte[H * (long)stride > int.MaxValue ? 0 : H * stride];
+        if (bgra.Length == 0) return "위성: 이미지가 너무 커서 생략(부지 축소 필요)";
+        mosaic.CopyPixels(bgra, stride, 0);
+        var rgb = new byte[W * H * 3];
+        for (int i = 0, j = 0; i < bgra.Length; i += 4) { rgb[j++] = bgra[i + 2]; rgb[j++] = bgra[i + 1]; rgb[j++] = bgra[i]; }
 
-        // 월드파일(.jgw) — 3857 미터. 모자이크 좌상단 = 타일(xmin,ymin) 좌상단.
+        // 3857 지오레퍼런싱 — 모자이크 좌상단 = 타일(xmin,ymin) 좌상단.
         double mpp = 2.0 * OriginShift / (TileSize * System.Math.Pow(2, z));   // 픽셀당 미터(3857)
         double x0 = -OriginShift + xmin * TileSize * mpp;   // 좌상단 X(3857)
         double y0 = OriginShift - ymin * TileSize * mpp;    // 좌상단 Y(3857)
-        var inv = System.Globalization.CultureInfo.InvariantCulture;
-        System.IO.File.WriteAllText(jgw, string.Join("\r\n", new[]
-        {
-            mpp.ToString("R", inv),            // A: x 픽셀크기
-            "0.0", "0.0",                       // D, B: 회전(없음)
-            (-mpp).ToString("R", inv),         // E: y 픽셀크기(음수 — 아래로)
-            (x0 + mpp / 2).ToString("R", inv), // C: (0,0)픽셀 중심 X
-            (y0 - mpp / 2).ToString("R", inv), // F: (0,0)픽셀 중심 Y
-        }) + "\r\n");
 
-        System.IO.File.WriteAllText(prj, Epsg3857Wkt);
+        WriteGeoTiff(tif, rgb, W, H, mpp, x0, y0, 3857);   // EPSG:3857 내장 GeoTIFF(무손실)
+        return $"위성.tif(GeoTIFF) 저장 — {cols}×{rows}타일(z{z}, 성공 {okTiles}/{cols * rows}), {mpp:0.00}m/px, EPSG:3857 내장";
+    }
 
-        return $"위성.jpg 저장 — {cols}×{rows}타일(z{z}, 성공 {okTiles}/{cols * rows}), {mpp:0.00}m/px, 3857 월드파일";
+    /// <summary>최소 GeoTIFF 라이터(무손실 RGB, 무압축, 단일 스트립) — 외부 라이브러리 없이 GeoTIFF 태그를 직접 기록.
+    /// 좌표계는 ProjectedCSTypeGeoKey=epsg(3857), 픽셀 스케일·타이포인트로 지오레퍼런싱. InfraWorks 래스터 임포트용.</summary>
+    private static void WriteGeoTiff(string path, byte[] rgb, int W, int H, double mpp, double x0, double y0, int epsg)
+    {
+        using var ms = new System.IO.MemoryStream();
+        using var w = new System.IO.BinaryWriter(ms);
+        w.Write((byte)'I'); w.Write((byte)'I'); w.Write((ushort)42); w.Write((uint)0);   // 헤더(IFD 오프셋은 뒤에 패치)
+
+        long imgOff = ms.Position;               // 8 — 이미지 데이터(단일 스트립)
+        w.Write(rgb);
+        if (ms.Position % 2 == 1) w.Write((byte)0);   // 워드 정렬
+
+        long bpsOff = ms.Position; w.Write((ushort)8); w.Write((ushort)8); w.Write((ushort)8);      // BitsPerSample 8,8,8
+        long xresOff = ms.Position; w.Write((uint)72); w.Write((uint)1);                             // XResolution 72/1
+        long yresOff = ms.Position; w.Write((uint)72); w.Write((uint)1);
+        long scaleOff = ms.Position; w.Write(mpp); w.Write(mpp); w.Write(0.0);                        // ModelPixelScale
+        long tieOff = ms.Position; w.Write(0.0); w.Write(0.0); w.Write(0.0); w.Write(x0); w.Write(y0); w.Write(0.0); // ModelTiepoint
+        long geoOff = ms.Position;
+        foreach (var s in new ushort[] { 1, 1, 0, 3,  1024, 0, 1, 1,  1025, 0, 1, 1,  3072, 0, 1, (ushort)epsg }) w.Write(s); // GeoKeyDirectory
+
+        if (ms.Position % 2 == 1) w.Write((byte)0);
+        long ifdOff = ms.Position;
+        void E(ushort tag, ushort type, uint count, uint val) { w.Write(tag); w.Write(type); w.Write(count); w.Write(val); }
+        w.Write((ushort)16);                     // 태그 수 (오름차순)
+        E(256, 4, 1, (uint)W);                   // ImageWidth
+        E(257, 4, 1, (uint)H);                   // ImageLength
+        E(258, 3, 3, (uint)bpsOff);              // BitsPerSample
+        E(259, 3, 1, 1);                         // Compression=없음
+        E(262, 3, 1, 2);                         // Photometric=RGB
+        E(273, 4, 1, (uint)imgOff);              // StripOffsets
+        E(277, 3, 1, 3);                         // SamplesPerPixel
+        E(278, 4, 1, (uint)H);                   // RowsPerStrip
+        E(279, 4, 1, (uint)rgb.Length);          // StripByteCounts
+        E(282, 5, 1, (uint)xresOff);             // XResolution
+        E(283, 5, 1, (uint)yresOff);             // YResolution
+        E(284, 3, 1, 1);                         // PlanarConfig=chunky
+        E(296, 3, 1, 2);                         // ResolutionUnit=inch
+        E(33550, 12, 3, (uint)scaleOff);         // ModelPixelScaleTag
+        E(33922, 12, 6, (uint)tieOff);           // ModelTiepointTag
+        E(34735, 3, 16, (uint)geoOff);           // GeoKeyDirectoryTag
+        w.Write((uint)0);                        // 다음 IFD 없음
+        w.Flush();
+
+        var bytes = ms.ToArray();
+        System.BitConverter.GetBytes((uint)ifdOff).CopyTo(bytes, 4);   // 헤더의 IFD 오프셋 패치
+        System.IO.File.WriteAllBytes(path, bytes);
     }
 
     /// <summary>웹메르카토르 위성 타일 1장 다운로드 → BitmapSource(실패 시 null, 최대 2회 재시도).</summary>
@@ -182,15 +223,4 @@ public static class VWorldImagery
             + (15 * e2 * e2 / 256 + 45 * e2 * e2 * e2 / 1024) * System.Math.Sin(4 * phi)
             - (35 * e2 * e2 * e2 / 3072) * System.Math.Sin(6 * phi));
     }
-
-    // EPSG:3857 WKT(웹메르카토르) — InfraWorks가 래스터 좌표계를 알도록.
-    private const string Epsg3857Wkt =
-        "PROJCS[\"WGS 84 / Pseudo-Mercator\",GEOGCS[\"WGS 84\",DATUM[\"WGS_1984\"," +
-        "SPHEROID[\"WGS 84\",6378137,298.257223563,AUTHORITY[\"EPSG\",\"7030\"]]," +
-        "AUTHORITY[\"EPSG\",\"6326\"]],PRIMEM[\"Greenwich\",0,AUTHORITY[\"EPSG\",\"8901\"]]," +
-        "UNIT[\"degree\",0.0174532925199433,AUTHORITY[\"EPSG\",\"9122\"]],AUTHORITY[\"EPSG\",\"4326\"]]," +
-        "PROJECTION[\"Mercator_1SP\"],PARAMETER[\"central_meridian\",0],PARAMETER[\"scale_factor\",1]," +
-        "PARAMETER[\"false_easting\",0],PARAMETER[\"false_northing\",0]," +
-        "UNIT[\"metre\",1,AUTHORITY[\"EPSG\",\"9001\"]],AXIS[\"X\",EAST],AXIS[\"Y\",NORTH]," +
-        "AUTHORITY[\"EPSG\",\"3857\"]]";
 }
