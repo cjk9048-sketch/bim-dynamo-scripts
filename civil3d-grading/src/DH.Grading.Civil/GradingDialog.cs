@@ -149,7 +149,10 @@ public sealed class GradingDialog : Window
         styleCombo.IsEnabled = wallZone;
         styleCombo.Foreground = wallZone ? BlackBrush : GreyBrush;   // 비활성 시 글씨 회색
         styleLabel.Foreground = wallZone ? BlackBrush : GreyBrush;
-        slopeHint.Text = wallZone ? "  옹벽작성" : "  사면작성";       // 안내 글씨색은 그대로(회색 톤 유지)
+        // 안내: 옹벽작성은 검정·굵게(강조), 사면작성은 회색·보통(JACK 0724).
+        slopeHint.Text = wallZone ? "  옹벽작성" : "  사면작성";
+        slopeHint.FontWeight = wallZone ? FontWeights.Bold : FontWeights.Normal;
+        slopeHint.Foreground = wallZone ? BlackBrush : GreyBrush;
     }
 
     private static ComboBox AddStyleRow(Panel parent, string label, WallStyle current, out TextBlock labelBlock)
