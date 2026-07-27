@@ -56,14 +56,18 @@ public sealed class SlopeLineCommand
             var fill = GradingGeometry.Build(boundary, ground, p, up: false);
 
             var ticks = new System.Collections.Generic.List<(Point3 A, Point3 B)>();
+            var cornerTicks = new System.Collections.Generic.List<(Point3 A, Point3 B)>();
             var benches = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
             foreach (var (vs, up) in new[] { (cut, true), (fill, false) })
             {
                 if (!vs.HasSlope) continue;
-                var (t, b) = SlopeHatchGenerator.Generate(vs.Rings, ground, up,
+                var (t, ct, b) = SlopeHatchGenerator.Generate(vs.Rings, ground, up,
                     GradingSettings.HatchShort, GradingSettings.HatchLong);
-                ticks.AddRange(t); benches.AddRange(b);
+                ticks.AddRange(t); cornerTicks.AddRange(ct); benches.AddRange(b);
             }
+
+            // [겹침 제거 — JACK 0727] DHNORI와 동일: 코너·급커브 교차 틱 정리 + 볼록 코너 대각선 우선 보존.
+            ticks = SlopeHatchGenerator.RemoveOverlaps(cornerTicks, ticks);
 
             GradingBuilder.DrawSlopeHatch(db, tr, ticks, benches);
             tr.Commit();

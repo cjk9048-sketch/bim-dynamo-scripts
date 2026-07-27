@@ -36,6 +36,7 @@ public sealed class NoriCommand
             // ── 링 복원(결정적 재계산 — ground 불필요, NullGround 주입) + 작도 ──
             var ng = new NullGround();
             var ticks = new System.Collections.Generic.List<(Point3 A, Point3 B)>();
+            var cornerTicks = new System.Collections.Generic.List<(Point3 A, Point3 B)>(); // 볼록 코너 대각선(우선 보존)
             var cutSlope = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
             var cutBerm = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
             var fillSlope = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
@@ -78,10 +79,11 @@ public sealed class NoriCommand
                 foreach (var finalRing in ringList)
                 {
                     if (finalRing == null || finalRing.Count < 3) continue;
-                    var (t, _) = SlopeHatchGenerator.Generate(vs.Rings, ng, up,
+                    var (t, ct, _) = SlopeHatchGenerator.Generate(vs.Rings, ng, up,
                         GradingSettings.HatchShort, GradingSettings.HatchLong, finalRing, bundle.Boundary);
                     var (sl, bl) = SlopeHatchGenerator.GenerateEdgeLines(vs.Rings, ng, up, finalRing, bundle.Boundary);
                     ticks.AddRange(t);
+                    cornerTicks.AddRange(ct);
                     if (up) { cutSlope.AddRange(sl); cutBerm.AddRange(bl); }
                     else { fillSlope.AddRange(sl); fillBerm.AddRange(bl); }
                     slN += sl.Count; blN += bl.Count; tN += t.Count;
@@ -94,13 +96,20 @@ public sealed class NoriCommand
             var transToe = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
             if (transFaces != null && transFaces.Count > 0)
             {
-                var (tt, tc, tto) = SlopeHatchGenerator.GenerateTransitionHatch(
+                var (tt, tct, tc, tto) = SlopeHatchGenerator.GenerateTransitionHatch(
                     transFaces, GradingSettings.HatchShort, GradingSettings.HatchLong, bundle.Boundary);
                 ticks.AddRange(tt);
+                cornerTicks.AddRange(tct);
                 transCrest.AddRange(tc);
                 transToe.AddRange(tto);
                 detail += $"\n전환사면(내부 단차): 면 {transFaces.Count} · 노리선 {tt.Count}";
             }
+
+            // [겹침 제거 — JACK 0727] 코너·급커브 격자 겹침을 실제 2D 교차 판정으로 정리(생성은 최대, 겹치는 것만 제거).
+            //   볼록 코너 대각선(cornerTicks)은 우선 보존 — 겹치면 주변 수직틱이 대신 빠진다.
+            int rawTicks = ticks.Count + cornerTicks.Count;
+            ticks = SlopeHatchGenerator.RemoveOverlaps(cornerTicks, ticks);
+            detail += $"\n겹침 제거: 노리선 {rawTicks} → {ticks.Count} (볼록코너 {cornerTicks.Count})";
 
             GradingBuilder.DrawSlopeEdges(db, tr, cutSlope, cutBerm, fillSlope, fillBerm);
             GradingBuilder.DrawTransitionEdges(db, tr, transCrest, transToe);
