@@ -1,6 +1,7 @@
 using NetTopologySuite.Algorithm;
 using NetTopologySuite.Algorithm.Locate;
 using NetTopologySuite.Geometries;
+using NetTopologySuite.Index.Quadtree;
 using NetTopologySuite.Index.Strtree;
 
 namespace DH.Grading.Core;
@@ -26,14 +27,15 @@ public static class SlopeHatchGenerator
     /// up=true(절토)면 구성측=지반 아래, up=false(성토)면 지반 위.
     /// clipOuter가 주어지면 (clipOuter − clipHole) 영역 안쪽만 생성(경계에서 정확히 절단).
     /// </summary>
-    public static (List<(Point3 A, Point3 B)> Ticks, List<List<Point3>> BenchLines) Generate(
+    public static (List<(Point3 A, Point3 B)> Ticks, List<(Point3 A, Point3 B)> CornerTicks, List<List<Point3>> BenchLines) Generate(
         IReadOnlyList<IReadOnlyList<Point3>> rings, IGroundSurface ground, bool up,
         double shortSpacing = 1.0, double longSpacing = 5.0,
         IReadOnlyList<Point3>? clipOuter = null, IReadOnlyList<Point3>? clipHole = null)
     {
         var ticks = new List<(Point3, Point3)>();
+        var cornerTicks = new List<(Point3, Point3)>();
         var benchLines = new List<List<Point3>>();
-        if (rings == null || rings.Count < 2) return (ticks, benchLines);
+        if (rings == null || rings.Count < 2) return (ticks, cornerTicks, benchLines);
         if (shortSpacing <= 0) shortSpacing = 1.0;
         if (longSpacing <= 0) longSpacing = 5.0;
         int ratio = Math.Max(1, (int)Math.Round(longSpacing / shortSpacing)); // 몇 번째마다 긴선
@@ -48,7 +50,7 @@ public static class SlopeHatchGenerator
             bool aHigher = AvgZ(rA) >= AvgZ(rB);
             var crest = aHigher ? rA : rB;
             var other = aHigher ? rB : rA;
-            EmitFaceTicks(crest, other, ground, sgn, shortSpacing, ratio, ticks, clip);
+            EmitFaceTicks(crest, other, ground, sgn, shortSpacing, ratio, ticks, clip, cornerTicks);
         }
 
         // 소단(berm) 모서리 = (rings[2k+1], rings[2k+2]) 두 링의 구성측(또는 클립 안쪽) run.
@@ -57,7 +59,7 @@ public static class SlopeHatchGenerator
             AddRealRuns(rings[2 * k + 1], ground, sgn, benchLines, clip);
             AddRealRuns(rings[2 * k + 2], ground, sgn, benchLines, clip);
         }
-        return (ticks, benchLines);
+        return (ticks, cornerTicks, benchLines);
     }
 
     /// <summary>
@@ -94,33 +96,114 @@ public static class SlopeHatchGenerator
     /// faces = VirtualSlope.TransitionFaces(Crest=높은 플래토 직선, Toe=낮은 플래토 직선, densify됨).
     /// 클립 = 계획폴리곤 자체(전환 띠는 부지 안 — 도넛 아님). 클립이 없으면 아무것도 만들지 않는다(유령선 방지).
     /// </summary>
-    public static (List<(Point3 A, Point3 B)> Ticks, List<List<Point3>> CrestLines, List<List<Point3>> ToeLines)
+    public static (List<(Point3 A, Point3 B)> Ticks, List<(Point3 A, Point3 B)> CornerTicks, List<List<Point3>> CrestLines, List<List<Point3>> ToeLines)
         GenerateTransitionHatch(IReadOnlyList<(List<Point3> Crest, List<Point3> Toe)> faces,
         double shortSpacing, double longSpacing, IReadOnlyList<Point3>? clipOuter)
     {
         var ticks = new List<(Point3, Point3)>();
+        var cornerTicks = new List<(Point3, Point3)>();
         var crests = new List<List<Point3>>();
         var toes = new List<List<Point3>>();
-        if (faces == null || faces.Count == 0) return (ticks, crests, toes);
+        if (faces == null || faces.Count == 0) return (ticks, cornerTicks, crests, toes);
         if (shortSpacing <= 0) shortSpacing = 1.0;
         if (longSpacing <= 0) longSpacing = 5.0;
         int ratio = Math.Max(1, (int)Math.Round(longSpacing / shortSpacing));
         var clip = ClipRegion.Build(clipOuter, null);
-        if (clip == null) return (ticks, crests, toes); // 클립 없이는 부호 판정 근거가 없음 — 생성 안 함
+        if (clip == null) return (ticks, cornerTicks, crests, toes); // 클립 없이는 부호 판정 근거가 없음 — 생성 안 함
         var ng = new NullGround();
         foreach (var (crest, toe) in faces)
         {
             if (crest == null || toe == null || crest.Count < 2 || toe.Count < 2) continue;
-            EmitFaceTicks(crest, toe, ng, 0, shortSpacing, ratio, ticks, clip); // clip≠null → ground/sgn 미사용
+            EmitFaceTicks(crest, toe, ng, 0, shortSpacing, ratio, ticks, clip, cornerTicks); // clip≠null → ground/sgn 미사용
             crests.Add(new List<Point3>(crest));
             toes.Add(new List<Point3>(toe));
         }
-        return (ticks, crests, toes);
+        return (ticks, cornerTicks, crests, toes);
+    }
+
+    /// <summary>단일 목록 겹침 제거(우선 틱 없음). 하위호환·테스트용.</summary>
+    public static List<(Point3 A, Point3 B)> RemoveOverlaps(IReadOnlyList<(Point3 A, Point3 B)> ticks)
+        => RemoveOverlaps(System.Array.Empty<(Point3 A, Point3 B)>(), ticks);
+
+    /// <summary>
+    /// 노리선 틱 겹침 제거(JACK 0727) — 코너·급커브에서 서로 교차하는 틱을 지운다.
+    /// 접선 국소검사(구 v8.0)로 못 잡던 '90° 코너 격자 겹침'과 '여러 소단 틱이 코너로 몰림'을
+    /// 실제 2D 교차 판정으로 직접 해결. 실제 내부 교차할 때만 제거(평행·끝점만 닿음은 보존).
+    /// priority(볼록 코너 꼭지점↔꼭지점 대각선)를 먼저 배치해 '항상 보존' — 겹치면 주변 수직틱이 대신 빠진다.
+    /// 나머지는 긴선 우선(시각 리듬). 결정적: 길이 내림차순 → 같으면 원래 순서. Quadtree로 후보만 비교.
+    /// </summary>
+    public static List<(Point3 A, Point3 B)> RemoveOverlaps(
+        IReadOnlyList<(Point3 A, Point3 B)> priority, IReadOnlyList<(Point3 A, Point3 B)> ticks)
+    {
+        var kept = new List<(Point3 A, Point3 B)>();
+        var tree = new Quadtree<int>(); // 값 = kept 리스트 인덱스
+
+        static double Len2((Point3 A, Point3 B) t)
+        {
+            double dx = t.B.X - t.A.X, dy = t.B.Y - t.A.Y;
+            return dx * dx + dy * dy;
+        }
+
+        // 길이 내림차순(같으면 원래 순서)으로 훑으며, 이미 남긴 것과 실제 교차하지 않을 때만 보존.
+        void Consume(IReadOnlyList<(Point3 A, Point3 B)> src)
+        {
+            if (src == null || src.Count == 0) return;
+            var order = new int[src.Count];
+            for (int i = 0; i < order.Length; i++) order[i] = i;
+            Array.Sort(order, (x, y) => { int c = Len2(src[y]).CompareTo(Len2(src[x])); return c != 0 ? c : x.CompareTo(y); });
+            foreach (int idx in order)
+            {
+                var t = src[idx];
+                double minX = Math.Min(t.A.X, t.B.X), maxX = Math.Max(t.A.X, t.B.X);
+                double minY = Math.Min(t.A.Y, t.B.Y), maxY = Math.Max(t.A.Y, t.B.Y);
+                var env = new Envelope(minX, maxX, minY, maxY);
+                bool crosses = false;
+                foreach (int kIdx in tree.Query(env))
+                {
+                    var k = kept[kIdx];
+                    if (SegmentsCross(t.A, t.B, k.A, k.B)) { crosses = true; break; }
+                }
+                if (crosses) continue;
+                tree.Insert(env, kept.Count);
+                kept.Add(t);
+            }
+        }
+
+        Consume(priority); // 볼록 코너 대각선 먼저 — 이후 이것과 교차하는 수직틱이 제거됨
+        Consume(ticks);
+        return kept;
+    }
+
+    /// <summary>두 선분이 내부에서 실제로 교차하면 true(평행·끝점만 닿음은 false).</summary>
+    private static bool SegmentsCross(Point3 p1, Point3 p2, Point3 p3, Point3 p4)
+    {
+        double d1 = Orient(p3, p4, p1);
+        double d2 = Orient(p3, p4, p2);
+        double d3 = Orient(p1, p2, p3);
+        double d4 = Orient(p1, p2, p4);
+        return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0))
+            && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+    }
+
+    private static double Orient(Point3 a, Point3 b, Point3 c)
+        => (b.X - a.X) * (c.Y - a.Y) - (b.Y - a.Y) * (c.X - a.X);
+
+    /// <summary>crest 점 cp와 대응 toe 점 opC를 클립 영역으로 잘라 실제 그릴 상단 a·하단 eff 산출.
+    /// 사면이 통째로 밖이거나 교차점을 못 찾으면 false. (코너 틱·본 루프 공용 로직.)</summary>
+    private static bool TryClipPair(Point3 cp, Point3 opC, ClipRegion clip, out Point3 a, out Point3 eff)
+    {
+        a = cp; eff = opC;
+        bool cpIn = clip.Inside(cp.X, cp.Y);
+        bool opIn = clip.Inside(opC.X, opC.Y);
+        if (!cpIn && !opIn) return false;
+        if (cpIn && !opIn) { var c = clip.ClipToward(cp, opC); if (c == null) return false; eff = c.Value; }
+        else if (!cpIn && opIn) { var c = clip.ClipToward(opC, cp); if (c == null) return false; a = c.Value; }
+        return true;
     }
 
     private static void EmitFaceTicks(IReadOnlyList<Point3> crest, IReadOnlyList<Point3> other,
         IGroundSurface ground, int sgn, double step, int ratio, List<(Point3, Point3)> ticks,
-        ClipRegion? clip)
+        ClipRegion? clip, List<(Point3, Point3)>? cornerTicks = null)
     {
         var cum = new double[crest.Count];
         for (int i = 1; i < crest.Count; i++) cum[i] = cum[i - 1] + Dist2D(crest[i - 1], crest[i]);
@@ -164,12 +247,8 @@ public static class SlopeHatchGenerator
                 double projC = (eff.X - a.X) * nxC + (eff.Y - a.Y) * nyC;   // toe 쪽 수직 성분
                 if (projC < 0) { nxC = -nxC; nyC = -nyC; projC = -projC; }
                 if (projC < 0.02) continue;
-                // [겹칠 때만 생략 — JACK 0724] step 간격 수직틱은 오목 회전이 크면 틱 길이 안에서 인접틱과 교차.
-                //   접선변화의 toe성분(오목=+)이 대략 2·step/틱길이 를 넘을 때만 생략 → 안 겹치면 최대한 생성.
-                double leffC = System.Math.Max(projC * fracC, 0.3);
-                var tBc = TangentAtDist(crest, cum, System.Math.Max(0, d - step));
-                var tAc = TangentAtDist(crest, cum, System.Math.Min(total, d + step));
-                if ((tAc.X - tBc.X) * nxC + (tAc.Y - tBc.Y) * nyC > 2.0 * step / leffC) continue;
+                // [겹침은 후처리로 — JACK 0727] 접선 국소검사(구 v8.0)는 90° 코너 격자 겹침을 못 잡고
+                //   곡선부 틱만 누락시켰다 → 여기선 최대한 생성하고, 실제 교차 틱은 RemoveOverlaps가 제거.
                 var endC = new Point3(a.X + nxC * projC * fracC, a.Y + nyC * projC * fracC, a.Z);
                 ticks.Add((new Point3(a.X, a.Y, a.Z), endC));
                 continue;
@@ -192,14 +271,97 @@ public static class SlopeHatchGenerator
             double projL = (effL.X - cp.X) * nxL + (effL.Y - cp.Y) * nyL;
             if (projL < 0) { nxL = -nxL; nyL = -nyL; projL = -projL; }
             if (projL < 0.02) continue;
-            // [겹칠 때만 생략 — JACK 0724] 안 겹치면 최대한 생성.
-            double leffL = Math.Max(projL * frac, 0.3);
-            var tBl = TangentAtDist(crest, cum, Math.Max(0, d - step));
-            var tAl = TangentAtDist(crest, cum, Math.Min(total, d + step));
-            if ((tAl.X - tBl.X) * nxL + (tAl.Y - tBl.Y) * nyL > 2.0 * step / leffL) continue;
+            // [겹침은 후처리로 — JACK 0727] 최대한 생성, 교차 틱은 RemoveOverlaps가 제거.
             var end = new Point3(cp.X + nxL * projL * frac, cp.Y + nyL * projL * frac, cp.Z);
             ticks.Add((new Point3(cp.X, cp.Y, cp.Z), end));
         }
+
+        // [코너 대각선 — JACK 0727] 두 사면이 만나는 코너는 대각선으로 처리(JACK '만나는 부분은 대각선').
+        //   각 크레스트 코너 꼭지점에서 '코너 이등분선(bisector)' 방향으로 광선을 쏴 toe 링과 만나는 점까지 잇는다.
+        //   → 최근접 꼭지점 방식(구 v8.2~8.5)은 성토의 불규칙한 데이라잇 toe에서 옆 점을 잡아 성토 코너만 누락됐다(JACK).
+        //     이등분선 광선은 toe 링 모양과 무관하게 항상 올바른 방향·길이의 미터를 주므로 절토·성토 대칭 + 스트리크 없음.
+        //   볼록(부채꼴 gap)·오목(만남) 모두. 라운드(호)는 정점당 ≤8°라 15° 문턱에 안 걸림(호는 본 루프 틱으로 채움).
+        //   cornerTicks(우선 보존)에 담는다 — 겹치면 주변 수직틱이 대신 제거돼 오목 만남부가 깔끔한 대각선이 됨.
+        var cornerOut = cornerTicks ?? ticks;
+        void AddCorner(Point3 pPrev, Point3 cp, Point3 pNext)
+        {
+            double ux = cp.X - pPrev.X, uy = cp.Y - pPrev.Y;
+            double vx = pNext.X - cp.X, vy = pNext.Y - cp.Y;
+            double lu = Math.Sqrt(ux * ux + uy * uy), lv = Math.Sqrt(vx * vx + vy * vy);
+            if (lu < 1e-9 || lv < 1e-9) return;
+            if ((ux * vx + uy * vy) / (lu * lv) > 0.966) return; // <15° 꺾임 = 코너 아님(라운드 제외)
+            // 각 모서리의 toe 방향을 '그 모서리 중점' 기준 최근접 toe로 따로 판단(코너 단일 최근접은 불규칙 toe에서
+            //   한쪽으로 치우쳐 이등분선 방향을 틀어버림 — JACK '노리선 방향 이상'). 중점 기준이면 모서리별로 수직 방향이 정확.
+            var midIn = new Point3((pPrev.X + cp.X) * 0.5, (pPrev.Y + cp.Y) * 0.5, 0);
+            var midOut = new Point3((cp.X + pNext.X) * 0.5, (cp.Y + pNext.Y) * 0.5, 0);
+            var toeIn = NearestOnRing(other, midIn);
+            var toeOut = NearestOnRing(other, midOut);
+            double nInx = -uy / lu, nIny = ux / lu; if ((toeIn.X - midIn.X) * nInx + (toeIn.Y - midIn.Y) * nIny < 0) { nInx = -nInx; nIny = -nIny; }
+            double nOutx = -vy / lv, nOuty = vx / lv; if ((toeOut.X - midOut.X) * nOutx + (toeOut.Y - midOut.Y) * nOuty < 0) { nOutx = -nOutx; nOuty = -nOuty; }
+            double bx = nInx + nOutx, by = nIny + nOuty;
+            double bl = Math.Sqrt(bx * bx + by * by);
+            if (bl < 1e-9) return;                             // 180° 반전(비정상)
+            bx /= bl; by /= bl;
+            var hit = RayRingHit(cp, bx, by, other);           // 이등분선이 toe 링과 처음 만나는 점(Z 보간)
+            Point3 op;
+            if (hit != null) op = hit.Value;
+            else
+            {
+                // 폴백: 광선이 toe 링을 못 만나도(경계 근처 등) 이등분선 방향으로 최근접 toe 거리만큼 대각선 생성 — 누락 방지.
+                var nn = NearestOnRing(other, cp);
+                double L = Dist2D(cp, nn);
+                if (L < 1e-9) return;
+                op = new Point3(cp.X + bx * L, cp.Y + by * L, nn.Z);
+            }
+            double dz = Math.Abs(cp.Z - op.Z);
+            if (dz < 1e-6) return;                             // 평탄(소단)
+            if (Dist2D(cp, op) / dz < WallRatio) return;       // 수직 옹벽 제외
+            Point3 a, eff;
+            if (clip != null)
+            {
+                if (!TryClipPair(cp, op, clip, out a, out eff)) return;
+            }
+            else
+            {
+                if (Math.Sign(SafeDiff(ground, cp)) != sgn) return; // crest가 구성측일 때만
+                a = cp; eff = op;
+                if (Math.Sign(SafeDiff(ground, op)) == -sgn) eff = GroundCross(cp, op, ground, sgn);
+            }
+            if (Dist2D(a, eff) < 0.02) return;
+            cornerOut.Add((new Point3(a.X, a.Y, a.Z), new Point3(eff.X, eff.Y, eff.Z)));
+        }
+
+        int nc = crest.Count;
+        for (int i = 1; i + 1 < nc; i++) AddCorner(crest[i - 1], crest[i], crest[i + 1]);
+        // [이음새 꼭지점 — JACK 0727] 닫힌 링은 시작=끝점이 실제 코너일 수 있는데 위 루프(i=1..nc-2)가 건너뛴다.
+        //   그 코너가 seam에 걸리면 동심 링 모든 단에서 같은 자리 누락(JACK ID 3점=한 코너의 3단 대각선 통째 누락).
+        if (nc >= 4 && Dist2D(crest[0], crest[nc - 1]) < 1e-6)
+            AddCorner(crest[nc - 2], crest[0], crest[1]);
+    }
+
+    /// <summary>origin에서 (bx,by) 방향 광선이 ring 폴리라인과 처음(가장 가까운 t&gt;0) 만나는 점. Z는 만난 세그먼트에서 보간.
+    /// 코너 이등분선을 toe 링에 쏴 대응 미터점을 찾는 데 씀(최근접 꼭지점보다 toe 모양에 강건).</summary>
+    private static Point3? RayRingHit(Point3 origin, double bx, double by, IReadOnlyList<Point3> ring)
+    {
+        double bestT = double.MaxValue; Point3 best = default; bool found = false;
+        for (int j = 0; j + 1 < ring.Count; j++)
+        {
+            var p = ring[j]; var q = ring[j + 1];
+            double ex = q.X - p.X, ey = q.Y - p.Y;
+            double det = ex * by - bx * ey;                    // [b, -e] 행렬식
+            if (Math.Abs(det) < 1e-12) continue;               // 평행
+            double rx = p.X - origin.X, ry = p.Y - origin.Y;
+            double t = (ex * ry - ey * rx) / det;              // 광선 파라미터(>0)
+            double s = (bx * ry - by * rx) / det;              // 세그먼트 파라미터[0,1]
+            if (t > 1e-9 && s >= -1e-9 && s <= 1 + 1e-9 && t < bestT)
+            {
+                bestT = t;
+                double sc = s < 0 ? 0 : (s > 1 ? 1 : s);
+                best = new Point3(origin.X + bx * t, origin.Y + by * t, p.Z + (q.Z - p.Z) * sc);
+                found = true;
+            }
+        }
+        return found ? best : null;
     }
 
     /// <summary>링을 구성측(클립 지정 시 = 영역 안쪽) 연속 구간으로 쪼개 폴리라인으로 추가.

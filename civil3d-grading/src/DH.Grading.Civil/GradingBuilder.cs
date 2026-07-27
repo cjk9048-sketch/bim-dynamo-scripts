@@ -308,16 +308,17 @@ public static class GradingBuilder
     }
 
     /// <summary>사면선·소단선 3D폴리선(ralplan Phase A) — 절/성토별 레이어 4개, 재실행 시 자기 레이어 청소.
-    /// 사면선: 절토=색250(진회)/성토=색8(회) · 소단선: 절토=색1(빨강)/성토=색30(주황).</summary>
+    /// 사면선: 절토=색150(밝은 하늘색)/성토=색210(밝은 자주) · 소단선: 절토=색1(빨강)/성토=색30(주황).
+    /// (JACK 0727: 구 250·8 진회색이 검은 배경에서 안 보여 밝은 색으로 교체.)</summary>
     public static void DrawSlopeEdges(Database db, Transaction tr,
         IEnumerable<IReadOnlyList<Point3>> cutSlopeLines, IEnumerable<IReadOnlyList<Point3>> cutBermLines,
         IEnumerable<IReadOnlyList<Point3>> fillSlopeLines, IEnumerable<IReadOnlyList<Point3>> fillBermLines)
     {
         var sets = new (string Layer, short Aci, IEnumerable<IReadOnlyList<Point3>> Lines)[]
         {
-            ("DH-사면선-절토", 250, cutSlopeLines),
+            ("DH-사면선-절토", 150, cutSlopeLines),
             ("DH-소단선-절토", 1,   cutBermLines),
-            ("DH-사면선-성토", 8,   fillSlopeLines),
+            ("DH-사면선-성토", 210, fillSlopeLines),
             ("DH-소단선-성토", 30,  fillBermLines),
         };
         foreach (var (layer, aci, lines) in sets) Draw3dPolys(db, tr, layer, aci, lines);
