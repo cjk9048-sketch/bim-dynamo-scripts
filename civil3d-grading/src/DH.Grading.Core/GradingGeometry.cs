@@ -41,7 +41,7 @@ public static class GradingGeometry
     /// 계획고 Z는 평면 근사가 아니라 '그 위치에서 가장 가까운 경계 위 점의 Z'(선형보간)를 따른다 —
     /// 3D 폴리선(단차·경사 계획선)도 평균으로 기울지 않고 단차 그대로 정지된다(JACK).</summary>
     public static VirtualSlope Build(IReadOnlyList<Point3> boundary, IGroundSurface ground,
-        GradingParams p, bool up)
+        GradingParams p, bool up, IReadOnlyList<(double T0, double T1, int FromBench)>? wallZones = null)
     {
         if (boundary == null || boundary.Count < 3)
             throw new ArgumentException("계획 부지 외곽선은 최소 3개 정점이 필요합니다.", nameof(boundary));
@@ -195,22 +195,98 @@ public static class GradingGeometry
             QuadrantSegments = 12,
         };
         double slope = Math.Max(up ? p.CutSlope : p.FillSlope, p.MinSlope);
-        var profile = StepProfile.Build(p, slope);
+        var profile = StepProfile.Build(p, slope); // 사면 기본 프로파일(옹벽은 구간별 별도 프로파일로 꿰맴)
         double zdir = up ? 1.0 : -1.0;
 
         var ringSeq = new List<(double dist, double rise, List<Point3> ring)>(); // 코너 능선 추적용(=TIN에 들어가는 실제 점)
-        foreach (var (dist, rise) in profile.Edges) // 각 사면끝 / 소단끝(또는 대소단끝) 모서리
+
+        // [§75 구간 옹벽 — 0728 최종 설계: 최근접 param 분류 + 조각 조립]
+        //   점 분류 = '그 점의 최근접 경계 호길이 param이 구간 [T0,T1] 안인가'(정확한 구간 판정 —
+        //   쐐기 다각형은 이웃 코너 부채꼴을 침범해 오판, 점 이동 매핑은 오목부 접힘 → 둘 다 폐기).
+        //   링 조립 = 사면 링의 '구간 밖' 조각들 + 수직 링의 '구간 안' 조각들을 param 순서로 이어붙임 —
+        //   조각 자체는 NTS 오프셋 원본 그대로(근사·이동 없음 → 접힘 불가). 조각 사이 연결 점프선은
+        //   AddRingBreakline(>2.5m 제외)이 브레이크라인에서 빼고 TIN 삼각화가 측벽을 채운다.
+        List<(double t0, double t1, int fromBench, StepProfile wp)>? zprep = null;
+        double[]? cumB = null;
+        if (wallZones != null && wallZones.Count > 0)
         {
-            if (dist <= 1e-9) continue;
+            cumB = CumLen2D(shape);
+            zprep = new();
+            foreach (var z in wallZones)
+            {
+                zprep.Add((z.T0, z.T1, Math.Max(z.FromBench, 0), StepProfile.Build(p, slope, Math.Max(z.FromBench, 0))));
+                dbg.AppendLine($"  옹벽구간 호길이[{z.T0:F1}..{z.T1:F1}]m — {Math.Max(z.FromBench, 0) + 1}단부터 수직");
+            }
+        }
+
+        List<Point3>? MakeRingXY(double dist)
+        {
+            if (dist <= 1e-9) return null;
             Geometry g;
-            try { g = basePoly.Buffer(dist, bp); } catch { continue; }
-            var pg = LargestPolygon(g);
-            if (pg == null) continue;
+            try { g = basePoly.Buffer(dist, bp); } catch { return null; }
+            var pg0 = LargestPolygon(g);
+            if (pg0 == null) return null;
             var pts = new List<Point3>();
-            double zOff = zdir * rise;
-            foreach (var c in pg.ExteriorRing.Coordinates)
+            foreach (var c in pg0.ExteriorRing.Coordinates)
                 pts.Add(new Point3(c.X, c.Y, 0)); // Z는 densify '후' 재계산(아래) — 아래 주석 참조
-            var w = Densify(Weed(pts), dens);
+            var d = Densify(Weed(pts), dens);
+            return d.Count >= 3 ? d : null;
+        }
+
+        // 링을 '분류함수(keep)를 만족하는 점들의 원형 연속 run'들로 쪼갬 — 각 run은 원본 순서 유지, 키=첫 점 param.
+        void CollectRuns(List<Point3> ring, Func<double, bool> keep, List<(double key, List<Point3> pts)> outRuns)
+        {
+            int n = ring.Count;
+            if (n >= 2 && Math.Abs(ring[0].X - ring[n - 1].X) < 1e-9 && Math.Abs(ring[0].Y - ring[n - 1].Y) < 1e-9) n--;
+            if (n < 2) return;
+            var tv = new double[n]; var kv = new bool[n];
+            for (int i = 0; i < n; i++) { tv[i] = ParamAt(shape, cumB!, ring[i].X, ring[i].Y); kv[i] = keep(tv[i]); }
+            int start = System.Array.IndexOf(kv, false);
+            if (start < 0) { outRuns.Add((tv[0], ring.GetRange(0, n))); return; } // 전부 유지
+            List<Point3>? cur = null; double curKey = 0;
+            for (int s = 1; s <= n; s++)
+            {
+                int i = (start + s) % n;
+                if (kv[i]) { if (cur == null) { cur = new List<Point3>(); curKey = tv[i]; } cur.Add(ring[i]); }
+                else if (cur != null) { if (cur.Count >= 2) outRuns.Add((curKey, cur)); cur = null; }
+            }
+            if (cur != null && cur.Count >= 2) outRuns.Add((curKey, cur));
+        }
+
+        for (int e = 0; e < profile.Edges.Count; e++)
+        {
+            var (dist, rise) = profile.Edges[e];
+            var w = MakeRingXY(dist);
+            if (w == null) continue;
+            if (zprep != null && cumB != null)
+            {
+                int benchOfEdge = e / 2; // 단마다 모서리 2개(사면끝/소단끝)
+                double total = cumB[^1];
+                bool InZ(double t0, double t1, double t) => t0 <= t1 ? (t >= t0 && t <= t1) : (t >= t0 || t <= t1);
+                var act = new List<(double t0, double t1, double wDist)>();
+                foreach (var z in zprep)
+                    if (benchOfEdge >= z.fromBench && e < z.wp.Edges.Count && z.wp.Edges[e].dist < dist - 1e-9)
+                        act.Add((z.t0, z.t1, z.wp.Edges[e].dist));
+                if (act.Count > 0)
+                {
+                    var runs = new List<(double key, List<Point3> pts)>();
+                    bool InAny(double t) { foreach (var z in act) if (InZ(z.t0, z.t1, t)) return true; return false; }
+                    CollectRuns(w, t => !InAny(t), runs);                 // 사면 링 — 구간 밖만
+                    foreach (var z in act)
+                    {
+                        var wr = MakeRingXY(z.wDist);
+                        if (wr != null) CollectRuns(wr, t => InZ(z.t0, z.t1, t), runs); // 수직 링 — 그 구간 안만
+                    }
+                    if (runs.Count > 0)
+                    {
+                        runs.Sort((a, bb) => a.key.CompareTo(bb.key));    // 경계 param 순서로 조립(원형)
+                        var asm = new List<Point3>();
+                        foreach (var r in runs) asm.AddRange(r.pts);
+                        if (asm.Count >= 3) w = asm;
+                    }
+                }
+            }
+            double zOff = zdir * rise;
 
             // [단차 경계 교점 삽입] 각 레이와 이 링의 교점을 정확한 XY로 링에 삽입 — 접힘 위치 보장.
             var ringHits = new List<(int ray, double px, double py)>();
@@ -336,6 +412,142 @@ public static class GradingGeometry
     private static GeometryFactory NtsFactory()
         // PrecisionModel(1000) = 1mm 스냅 → 소수점 미세 단차 위상오류 차단(설계도 방어로직 1).
         => new(new PrecisionModel(1000.0));
+
+    /// <summary>[§75] 링(2D) 누적 호길이 — cum[i]=정점 i까지, cum[^1]=닫힘 변 포함 전체 둘레.</summary>
+    public static double[] CumLen2D(IReadOnlyList<Point3> ring)
+    {
+        int n = ring.Count;
+        bool closed = n >= 2 && Math.Abs(ring[0].X - ring[n - 1].X) < 1e-9 && Math.Abs(ring[0].Y - ring[n - 1].Y) < 1e-9;
+        int m = closed ? n - 1 : n; // 유효 정점 수(닫힘 중복 제외)
+        var cum = new double[m + 1];
+        for (int i = 0; i < m; i++)
+        {
+            var a = ring[i]; var b = ring[(i + 1) % m];
+            cum[i + 1] = cum[i] + Math.Sqrt((b.X - a.X) * (b.X - a.X) + (b.Y - a.Y) * (b.Y - a.Y));
+        }
+        return cum;
+    }
+
+    /// <summary>[§75] (x,y)를 닫힌 경계에 수선 투영한 지점의 호길이 파라미터(0..둘레). cum=CumLen2D(ring).</summary>
+    public static double ParamAt(IReadOnlyList<Point3> ring, double[] cum, double x, double y)
+    {
+        int m = cum.Length - 1;
+        double best = double.MaxValue, bestT = 0;
+        for (int i = 0; i < m; i++)
+        {
+            var a = ring[i]; var b = ring[(i + 1) % m];
+            double ex = b.X - a.X, ey = b.Y - a.Y;
+            double l2 = ex * ex + ey * ey;
+            double u = l2 < 1e-18 ? 0 : ((x - a.X) * ex + (y - a.Y) * ey) / l2;
+            u = u < 0 ? 0 : (u > 1 ? 1 : u);
+            double px = a.X + ex * u, py = a.Y + ey * u;
+            double d2 = (x - px) * (x - px) + (y - py) * (y - py);
+            if (d2 < best) { best = d2; bestT = cum[i] + Math.Sqrt(l2) * u; }
+        }
+        return bestT;
+    }
+
+    /// <summary>[§75 불리언] 경계 위 호길이 파라미터 t의 좌표(랩 대응).</summary>
+    private static Coordinate CoordAtParam(IReadOnlyList<Point3> ring, double[] cum, double t)
+    {
+        int m = cum.Length - 1;
+        double total = cum[m];
+        t %= total; if (t < 0) t += total;
+        int i = 0;
+        while (i < m - 1 && cum[i + 1] < t) i++;
+        double segLen = cum[i + 1] - cum[i];
+        double u = segLen < 1e-12 ? 0 : (t - cum[i]) / segLen;
+        var a = ring[i]; var b = ring[(i + 1) % m];
+        return new Coordinate(a.X + (b.X - a.X) * u, a.Y + (b.Y - a.Y) * u);
+    }
+
+    /// <summary>[§75 불리언] 구간 [t0,t1]을 덮는 '쐐기' 다각형 — 경계 부분선(1m 샘플)을 바깥 한쪽으로
+    /// reach만큼 단면 버퍼. 바깥 방향은 프로브 점으로 판정(단면 버퍼 부호가 방향 의존이라 실패 시 반대 부호 재시도).</summary>
+    private static Geometry? MakeWedge(IReadOnlyList<Point3> shape, double[] cum, double t0, double t1,
+        double reach, GeometryFactory gf, Geometry basePoly)
+    {
+        try
+        {
+            double total = cum[^1];
+            double width = t0 <= t1 ? t1 - t0 : total - t0 + t1;
+            if (width < 1.0) return null;
+            // [0728 슬릿 수정] 부분선은 '정확한 경계 정점'으로 — 재샘플링(1m)은 경계선과 mm 어긋나
+            //   불리언 union이 절단면을 못 붙여 mm폭·수십m 가시(spike) 슬릿을 남긴다(교차 폭증 원인).
+            int mV = cum.Length - 1;
+            var inside = new List<(double off, int vi)>(); // 구간 안 실제 정점(전방 거리, 정점 index)
+            for (int i = 0; i < mV; i++)
+            {
+                double off = cum[i] - t0; if (off <= 1e-9) off += total;
+                if (off < width - 1e-9) inside.Add((off, i));
+            }
+            inside.Sort((a, bcmp) => a.off.CompareTo(bcmp.off));
+            var coords = new List<Coordinate> { CoordAtParam(shape, cum, t0) };
+            foreach (var (_, vi) in inside) coords.Add(new Coordinate(shape[vi].X, shape[vi].Y));
+            coords.Add(CoordAtParam(shape, cum, t0 + width));
+            for (int i = coords.Count - 1; i > 0; i--)
+                if (coords[i].Distance(coords[i - 1]) < 1e-6) coords.RemoveAt(i);
+            if (coords.Count < 2) return null;
+            var ls = gf.CreateLineString(coords.ToArray());
+            var bpar = new BufferParameters
+            {
+                IsSingleSided = true,
+                EndCapStyle = EndCapStyle.Flat,
+                JoinStyle = JoinStyle.Mitre,
+                MitreLimit = 4,
+            };
+            // 바깥 방향 프로브(구간 중앙에서 부지 밖으로 살짝)
+            var midA = CoordAtParam(shape, cum, t0 + width / 2);
+            var midB = CoordAtParam(shape, cum, t0 + width / 2 + 0.5);
+            double tx = midB.X - midA.X, ty = midB.Y - midA.Y;
+            double tl = Math.Sqrt(tx * tx + ty * ty); if (tl < 1e-12) return null;
+            double nx = ty / tl, ny = -tx / tl;
+            if (basePoly.Contains(gf.CreatePoint(new Coordinate(midA.X + nx * 0.5, midA.Y + ny * 0.5)))) { nx = -nx; ny = -ny; }
+            var probe = gf.CreatePoint(new Coordinate(midA.X + nx * Math.Min(reach * 0.5, 5.0), midA.Y + ny * Math.Min(reach * 0.5, 5.0)));
+
+            Geometry wedge = ls.Buffer(reach, bpar);
+            if (wedge.IsEmpty || !wedge.Covers(probe))
+            {
+                wedge = ls.Buffer(-reach, bpar);
+                if (wedge.IsEmpty || !wedge.Covers(probe)) return null;
+            }
+            if (!wedge.IsValid) wedge = wedge.Buffer(0);
+            return wedge.IsEmpty ? null : wedge;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>[§75 불리언] Densify와 동일하되, '반경 절단선'(쐐기 측면 — 길이 2m 이상인데 경계 호길이
+    /// 진행이 거의 없는 세그먼트)은 쪼개지 않고 통짜로 둔다 — AddRingBreakline(>2.5m 제외)이
+    /// 브레이크라인에서 빼도록(쪼개면 1m 조각들이 이웃 링과 겹쳐 TIN 교차 오류).</summary>
+    private static List<Point3> DensifySmart(List<Point3> ring, double dens,
+        IReadOnlyList<Point3> shape, double[] cumB)
+    {
+        double total = cumB[^1];
+        var res = new List<Point3>(ring.Count * 2);
+        int n = ring.Count;
+        for (int i = 0; i < n; i++)
+        {
+            var a = ring[i];
+            res.Add(a);
+            var b = ring[(i + 1) % n];
+            if (i == n - 1 && Math.Abs(a.X - b.X) < 1e-12 && Math.Abs(a.Y - b.Y) < 1e-12) break;
+            double dx = b.X - a.X, dy = b.Y - a.Y;
+            double len = Math.Sqrt(dx * dx + dy * dy);
+            if (len <= dens) continue;
+            // 반경 절단선 판정: 길이 대비 경계 호길이 진행이 미미(<30%)하면 방사형 절단선 — 통짜 유지
+            if (len > 2.0)
+            {
+                double ta = ParamAt(shape, cumB, a.X, a.Y);
+                double tb = ParamAt(shape, cumB, b.X, b.Y);
+                double dp = Math.Abs(ta - tb); dp = Math.Min(dp, total - dp);
+                if (dp < len * 0.3) continue;
+            }
+            int k = (int)Math.Ceiling(len / dens);
+            for (int s = 1; s < k; s++)
+                res.Add(new Point3(a.X + dx * s / k, a.Y + dy * s / k, 0));
+        }
+        return res;
+    }
 
     /// <summary>[링 Z 완화] 최근접 경계 Z는 상·하단 경계 영향권이 만나는 중간 지대에서 계단식으로 점프한다
     /// (벤치가 안 보이는 매끈한 전단 밴드의 원인). 링을 따라 |dZ/ds|를 경계 전환부 최대 경사로 제한(양방향)
@@ -513,7 +725,7 @@ internal sealed class StepProfile
     /// <summary>마지막 모서리까지의 수평 도달거리(대소단 폭 포함).</summary>
     public double MaxDist { get; private set; }
 
-    public static StepProfile Build(GradingParams p, double slope)
+    public static StepProfile Build(GradingParams p, double slope, int wallFromBench = -1)
     {
         var sp = new StepProfile();
         double maxRise = p.MaxBenches * p.BenchHeight;                     // 전체 수직 상한(안전)
@@ -521,6 +733,7 @@ internal sealed class StepProfile
         double terraceW = p.MountainTerrace ? Math.Max(p.TerraceWidth, 0.0) : 0.0;
         double d = 0, totalRise = 0, accH = 0;                            // accH = 대소단 리셋용 누적 수직
         int guardMax = p.MaxBenches * 4 + 8;                              // 자투리·대소단 추가단 여유
+        int benchIdx = 0;                                                 // [§75] 실제 단 index(옹벽 시작단 판정용)
 
         for (int guard = 0; guard < guardMax && totalRise < maxRise - 1e-9; guard++)
         {
@@ -529,7 +742,9 @@ internal sealed class StepProfile
             double rise = terraceHere ? remaining : p.BenchHeight;        // 자투리(간격−누적) 또는 정규 단높이
             if (rise <= 1e-9) { accH = 0; continue; }                     // 누적이 간격에 딱 떨어진 직후 보호
             if (totalRise + rise > maxRise) rise = maxRise - totalRise;   // 수직 상한 클램프
-            double run = Math.Max(rise * slope, p.MinFaceRun);            // 이 사면의 수평폭(자투리도 구배 비례)
+            // [§75 옹벽] 이 단이 옹벽 시작단 이상이면 수평폭을 사면 대신 '거의 수직'(MinSlope)으로 → 수직 벽 + 소단 계단.
+            double effSlope = (wallFromBench >= 0 && benchIdx >= wallFromBench) ? p.MinSlope : slope;
+            double run = Math.Max(rise * effSlope, p.MinFaceRun);        // 이 사면(또는 옹벽)의 수평폭
 
             d += run; totalRise += rise;
             sp.Edges.Add((d, totalRise));                                 // 사면 끝(상단 모서리)
@@ -546,6 +761,7 @@ internal sealed class StepProfile
                 sp.Edges.Add((d, totalRise));                             // 소단 바깥 끝
                 accH += p.BenchHeight;
             }
+            benchIdx++;                                                   // [§75] 다음 단
         }
         sp.MaxDist = d;
         return sp;

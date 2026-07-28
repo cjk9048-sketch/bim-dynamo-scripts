@@ -20,6 +20,10 @@ public sealed class GradingBundle
     /// CutFinalRing/FillFinalRing(단수)은 하위호환용 최대 링.</summary>
     public List<List<Point3>>? CutFinalRings, FillFinalRings;
 
+    /// <summary>[v3 — §75 구간 옹벽] 이 정지면에 적용된 옹벽 구간(계획경계 호길이 T0..T1, FromBench단부터 수직).
+    /// DHNORI(노리선 제외+옹벽선 표현)·DHINFRA가 소비 — 옹벽 선택(WallPicks)은 1회성이라 적용 결과는 여기 보존.</summary>
+    public List<(double T0, double T1, int FromBench)>? CutWallZones, FillWallZones;
+
     /// <summary>boundary에서 fingerprint 산출(2D).</summary>
     public static (int N, double Cx, double Cy, double MinX, double MinY, double MaxX, double MaxY,
         double Perim, double Diag) Fingerprint(IReadOnlyList<Point3> b)
@@ -69,7 +73,7 @@ public static class GradingBundleStore
 {
     private const string DictName = "DH_GRADING";
     private const string RecName = "BUNDLE";
-    public const int Version = 2; // v2: 끝에 절/성토 링 '리스트' 추가(다조각 보존 — 리뷰 D)
+    public const int Version = 3; // v3: 끝에 옹벽 구간(zones) 추가(§75 — DHNORI/DHINFRA 소비)
 
     public static void Save(Database db, Transaction tr, GradingBundle b)
     {
@@ -91,6 +95,9 @@ public static class GradingBundleStore
         // v2: 링 리스트(개수 + 각 링 점렬)
         WriteRingList(vals, b.CutFinalRings);
         WriteRingList(vals, b.FillFinalRings);
+        // v3: 옹벽 구간(개수 + [T0,T1(40) FromBench(90)])
+        WriteZones(vals, b.CutWallZones);
+        WriteZones(vals, b.FillWallZones);
 
         var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForWrite);
         DBDictionary dict;
@@ -139,6 +146,8 @@ public static class GradingBundleStore
             b.FillFinalRing = ReadPoints(arr, ref i);
             b.CutFinalRings = ReadRingList(arr, ref i);
             b.FillFinalRings = ReadRingList(arr, ref i);
+            b.CutWallZones = ReadZones(arr, ref i);
+            b.FillWallZones = ReadZones(arr, ref i);
             return b;
         }
         catch (System.Exception ex)
@@ -149,6 +158,32 @@ public static class GradingBundleStore
     }
 
     // ── 직렬화 유틸(고정 순서) ──
+    private static void WriteZones(List<TypedValue> vals, List<(double T0, double T1, int FromBench)>? zs)
+    {
+        vals.Add(new((int)DxfCode.Int32, zs?.Count ?? 0));
+        if (zs == null) return;
+        foreach (var z in zs)
+        {
+            vals.Add(new((int)DxfCode.Real, z.T0));
+            vals.Add(new((int)DxfCode.Real, z.T1));
+            vals.Add(new((int)DxfCode.Int32, z.FromBench));
+        }
+    }
+
+    private static List<(double T0, double T1, int FromBench)>? ReadZones(TypedValue[] arr, ref int i)
+    {
+        int n = I32(arr, ref i);
+        if (n <= 0) return null;
+        var l = new List<(double, double, int)>(n);
+        for (int k = 0; k < n; k++)
+        {
+            double t0 = Dbl(arr, ref i), t1 = Dbl(arr, ref i);
+            int fb = I32(arr, ref i);
+            l.Add((t0, t1, fb));
+        }
+        return l;
+    }
+
     private static void WriteRingList(List<TypedValue> vals, List<List<Point3>>? rings)
     {
         vals.Add(new((int)DxfCode.Int32, rings?.Count ?? 0));

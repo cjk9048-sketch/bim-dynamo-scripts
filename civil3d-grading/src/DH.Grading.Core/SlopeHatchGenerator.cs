@@ -30,7 +30,9 @@ public static class SlopeHatchGenerator
     public static (List<(Point3 A, Point3 B)> Ticks, List<(Point3 A, Point3 B)> CornerTicks, List<List<Point3>> BenchLines) Generate(
         IReadOnlyList<IReadOnlyList<Point3>> rings, IGroundSurface ground, bool up,
         double shortSpacing = 1.0, double longSpacing = 5.0,
-        IReadOnlyList<Point3>? clipOuter = null, IReadOnlyList<Point3>? clipHole = null)
+        IReadOnlyList<Point3>? clipOuter = null, IReadOnlyList<Point3>? clipHole = null,
+        IReadOnlyList<(double T0, double T1, int FromBench)>? wallZones = null,
+        IReadOnlyList<Point3>? zoneBoundary = null)
     {
         var ticks = new List<(Point3, Point3)>();
         var cornerTicks = new List<(Point3, Point3)>();
@@ -41,6 +43,9 @@ public static class SlopeHatchGenerator
         int ratio = Math.Max(1, (int)Math.Round(longSpacing / shortSpacing)); // 몇 번째마다 긴선
         int sgn = up ? -1 : +1; // 구성측 부호(절토=지반아래, 성토=지반위)
         var clip = ClipRegion.Build(clipOuter, clipHole);
+        // [§75] 옹벽 구간(경계 호길이)에는 노리선을 만들지 않음(JACK 0728) — 단(bench)별 판정.
+        double[]? cumZ = (wallZones != null && wallZones.Count > 0 && zoneBoundary != null && zoneBoundary.Count >= 3)
+            ? GradingGeometry.CumLen2D(zoneBoundary) : null;
 
         // 사면 페이스 = (rings[2k], rings[2k+1]). crest=높은 Z.
         for (int k = 0; 2 * k + 1 < rings.Count; k++)
@@ -50,7 +55,13 @@ public static class SlopeHatchGenerator
             bool aHigher = AvgZ(rA) >= AvgZ(rB);
             var crest = aHigher ? rA : rB;
             var other = aHigher ? rB : rA;
-            EmitFaceTicks(crest, other, ground, sgn, shortSpacing, ratio, ticks, clip, cornerTicks);
+            Func<double, double, bool>? zoneSkip = null;
+            if (cumZ != null)
+            {
+                int kk = k;
+                zoneSkip = (x, y) => InAnyZone(wallZones!, zoneBoundary!, cumZ, kk, x, y);
+            }
+            EmitFaceTicks(crest, other, ground, sgn, shortSpacing, ratio, ticks, clip, cornerTicks, zoneSkip);
         }
 
         // 소단(berm) 모서리 = (rings[2k+1], rings[2k+2]) 두 링의 구성측(또는 클립 안쪽) run.
@@ -89,6 +100,102 @@ public static class SlopeHatchGenerator
             AddRealRuns(toe, ground, sgn, bermLines, clip);
         }
         return (slopeLines, bermLines);
+    }
+
+    /// <summary>
+    /// [§75 Phase 1-A] 사면선·소단선을 '식별 정보(단 index·구간 index)와 함께' 생성한다(옹벽 전환 클릭용).
+    /// GenerateEdgeLines와 동일한 클립·crest/toe 규칙이되, 각 선이 '몇 번째 단(bench)의 몇 번째 구간(seg)'인지,
+    /// 사면선(IsSlope=true)인지 소단선(false)인지 태그를 붙여 반환. 구간 index = 그 단·그 종류에서 클립으로
+    /// 쪼개진 run 순서. 순수 함수(AutoCAD 비의존).
+    /// </summary>
+    public static List<(bool IsSlope, int Bench, int Seg, List<Point3> Pts)> GenerateEdgeLinesTagged(
+        IReadOnlyList<IReadOnlyList<Point3>> rings, IGroundSurface ground, bool up,
+        IReadOnlyList<Point3>? clipOuter = null, IReadOnlyList<Point3>? clipHole = null,
+        IReadOnlyList<(double T0, double T1, int FromBench)>? wallZones = null,
+        IReadOnlyList<Point3>? zoneBoundary = null,
+        List<List<Point3>>? wallLinesOut = null)
+    {
+        var outList = new List<(bool, int, int, List<Point3>)>();
+        if (rings == null || rings.Count < 2) return outList;
+        int sgn = up ? -1 : +1;
+        var clip = ClipRegion.Build(clipOuter, clipHole);
+        // [§75] 옹벽 구간: 사면선/소단선 제외 — 구간 안 크레스트(계단 상단)는 '옹벽선'으로 분리 반환(두꺼운 빨강 표현용).
+        double[]? cumZ = (wallZones != null && wallZones.Count > 0 && zoneBoundary != null && zoneBoundary.Count >= 3)
+            ? GradingGeometry.CumLen2D(zoneBoundary) : null;
+
+        for (int k = 0; 2 * k + 1 < rings.Count; k++)
+        {
+            var rA = rings[2 * k]; var rB = rings[2 * k + 1];
+            if (rA.Count < 2 || rB.Count < 2) continue;
+            bool aHigher = AvgZ(rA) >= AvgZ(rB);
+            var crest = aHigher ? rA : rB; // 사면 상단 모서리 → 사면선
+            var toe = aHigher ? rB : rA;   // 사면 하단 모서리 → 소단선
+
+            Func<Point3, bool>? inZone = null;
+            if (cumZ != null)
+            {
+                int kk = k;
+                inZone = pt => InAnyZone(wallZones!, zoneBoundary!, cumZ, kk, pt.X, pt.Y);
+            }
+
+            var slopeRuns = new List<List<Point3>>();
+            AddRealRuns(crest, ground, sgn, slopeRuns, clip);
+            int segS = 0;
+            foreach (var run in slopeRuns)
+            {
+                if (inZone == null) { outList.Add((true, k, segS++, run)); continue; }
+                foreach (var (sub, inz) in SplitByZone(run, inZone))
+                {
+                    if (inz) wallLinesOut?.Add(sub);           // 구간 안 크레스트 = 옹벽선
+                    else outList.Add((true, k, segS++, sub));  // 구간 밖 = 사면선
+                }
+            }
+
+            var bermRuns = new List<List<Point3>>();
+            AddRealRuns(toe, ground, sgn, bermRuns, clip);
+            int segB = 0;
+            foreach (var run in bermRuns)
+            {
+                if (inZone == null) { outList.Add((false, k, segB++, run)); continue; }
+                foreach (var (sub, inz) in SplitByZone(run, inZone))
+                {
+                    if (!inz) outList.Add((false, k, segB++, sub)); // 구간 안 소단선은 그리지 않음(JACK 0728)
+                }
+            }
+        }
+        return outList;
+    }
+
+    /// <summary>[§75] (x,y)가 활성 옹벽 구간(bench ≥ FromBench) 안인가 — 경계 최근접 호길이 param 판정.</summary>
+    private static bool InAnyZone(IReadOnlyList<(double T0, double T1, int FromBench)> zones,
+        IReadOnlyList<Point3> boundary, double[] cum, int bench, double x, double y)
+    {
+        double t = GradingGeometry.ParamAt(boundary, cum, x, y);
+        foreach (var z in zones)
+        {
+            if (bench < z.FromBench) continue;
+            bool inz = z.T0 <= z.T1 ? (t >= z.T0 && t <= z.T1) : (t >= z.T0 || t <= z.T1);
+            if (inz) return true;
+        }
+        return false;
+    }
+
+    /// <summary>폴리선을 분류함수 값이 바뀌는 지점에서 (조각, 구간안 여부)들로 쪼갬 — 원 순서 유지, 2점 미만 조각 버림.</summary>
+    private static IEnumerable<(List<Point3> Sub, bool InZone)> SplitByZone(List<Point3> run, Func<Point3, bool> inZone)
+    {
+        var cur = new List<Point3>();
+        bool curIn = false;
+        foreach (var p in run)
+        {
+            bool inz = inZone(p);
+            if (cur.Count == 0) { cur.Add(p); curIn = inz; continue; }
+            if (inz == curIn) { cur.Add(p); continue; }
+            cur.Add(p); // 경계점을 양쪽에 공유(선이 이어져 보이게)
+            if (cur.Count >= 2) yield return (cur, curIn);
+            cur = new List<Point3> { p };
+            curIn = inz;
+        }
+        if (cur.Count >= 2) yield return (cur, curIn);
     }
 
     /// <summary>
@@ -203,7 +310,8 @@ public static class SlopeHatchGenerator
 
     private static void EmitFaceTicks(IReadOnlyList<Point3> crest, IReadOnlyList<Point3> other,
         IGroundSurface ground, int sgn, double step, int ratio, List<(Point3, Point3)> ticks,
-        ClipRegion? clip, List<(Point3, Point3)>? cornerTicks = null)
+        ClipRegion? clip, List<(Point3, Point3)>? cornerTicks = null,
+        Func<double, double, bool>? zoneSkip = null)
     {
         var cum = new double[crest.Count];
         for (int i = 1; i < crest.Count; i++) cum[i] = cum[i - 1] + Dist2D(crest[i - 1], crest[i]);
@@ -247,9 +355,12 @@ public static class SlopeHatchGenerator
                 double projC = (eff.X - a.X) * nxC + (eff.Y - a.Y) * nyC;   // toe 쪽 수직 성분
                 if (projC < 0) { nxC = -nxC; nyC = -nyC; projC = -projC; }
                 if (projC < 0.02) continue;
+                if (zoneSkip != null && zoneSkip(a.X, a.Y)) continue; // [§75] 옹벽 구간 — 노리선 없음
                 // [겹침은 후처리로 — JACK 0727] 접선 국소검사(구 v8.0)는 90° 코너 격자 겹침을 못 잡고
                 //   곡선부 틱만 누락시켰다 → 여기선 최대한 생성하고, 실제 교차 틱은 RemoveOverlaps가 제거.
-                var endC = new Point3(a.X + nxC * projC * fracC, a.Y + nyC * projC * fracC, a.Z);
+                // [3D 틱 — JACK 0728] 종점 Z를 사면 경사 비례(frac)로 내림 — 평면이 아니라 사면에 붙는 노리선.
+                var endC = new Point3(a.X + nxC * projC * fracC, a.Y + nyC * projC * fracC,
+                                      a.Z + (eff.Z - a.Z) * fracC);
                 ticks.Add((new Point3(a.X, a.Y, a.Z), endC));
                 continue;
             }
@@ -271,8 +382,11 @@ public static class SlopeHatchGenerator
             double projL = (effL.X - cp.X) * nxL + (effL.Y - cp.Y) * nyL;
             if (projL < 0) { nxL = -nxL; nyL = -nyL; projL = -projL; }
             if (projL < 0.02) continue;
+            if (zoneSkip != null && zoneSkip(cp.X, cp.Y)) continue; // [§75] 옹벽 구간 — 노리선 없음
             // [겹침은 후처리로 — JACK 0727] 최대한 생성, 교차 틱은 RemoveOverlaps가 제거.
-            var end = new Point3(cp.X + nxL * projL * frac, cp.Y + nyL * projL * frac, cp.Z);
+            // [3D 틱 — JACK 0728] 종점 Z를 사면 경사 비례로 내림.
+            var end = new Point3(cp.X + nxL * projL * frac, cp.Y + nyL * projL * frac,
+                                 cp.Z + (effL.Z - cp.Z) * frac);
             ticks.Add((new Point3(cp.X, cp.Y, cp.Z), end));
         }
 
@@ -290,6 +404,7 @@ public static class SlopeHatchGenerator
             double lu = Math.Sqrt(ux * ux + uy * uy), lv = Math.Sqrt(vx * vx + vy * vy);
             if (lu < 1e-9 || lv < 1e-9) return;
             if ((ux * vx + uy * vy) / (lu * lv) > 0.966) return; // <15° 꺾임 = 코너 아님(라운드 제외)
+            if (zoneSkip != null && zoneSkip(cp.X, cp.Y)) return; // [§75] 옹벽 구간 — 코너 대각선도 없음
             // 각 모서리의 toe 방향을 '그 모서리 중점' 기준 최근접 toe로 따로 판단(코너 단일 최근접은 불규칙 toe에서
             //   한쪽으로 치우쳐 이등분선 방향을 틀어버림 — JACK '노리선 방향 이상'). 중점 기준이면 모서리별로 수직 방향이 정확.
             var midIn = new Point3((pPrev.X + cp.X) * 0.5, (pPrev.Y + cp.Y) * 0.5, 0);

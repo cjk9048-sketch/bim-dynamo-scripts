@@ -352,6 +352,124 @@ public static class GradingBuilder
         }
     }
 
+    /// <summary>[§75 1-A] XData 앱(RegApp) 등록 보장 — 없으면 추가.</summary>
+    private static void EnsureRegApp(Database db, Transaction tr, string appName)
+    {
+        var rat = (RegAppTable)tr.GetObject(db.RegAppTableId, OpenMode.ForRead);
+        if (rat.Has(appName)) return;
+        rat.UpgradeOpen();
+        var r = new RegAppTableRecord { Name = appName };
+        rat.Add(r); tr.AddNewlyCreatedDBObject(r, true);
+    }
+
+    /// <summary>[§75] 사면선·소단선 4개 레이어 이름(절/성토 × 사면/소단) — DHWALL 색 전환·복원에 공용.</summary>
+    public static readonly string[] EdgeLayerNames =
+        { "DH-사면선-절토", "DH-소단선-절토", "DH-사면선-성토", "DH-소단선-성토" };
+    /// <summary>기본 회색(ACI 9 = 밝은 회색). DHWALL 밖에서는 이 색.</summary>
+    public const short EdgeGrayAci = 9;
+    /// <summary>DHWALL 실행 중 '고를 수 있음' 강조색(ACI 4 = 시안).</summary>
+    public const short EdgePickAci = 4;
+
+    /// <summary>[§75] 지정 레이어들의 색을 aci로 설정(있는 것만). DHWALL 진입=강조/종료=회색 복원에 사용.</summary>
+    public static void SetLayersColor(Database db, Transaction tr, IEnumerable<string> names, short aci)
+    {
+        var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+        foreach (var n in names)
+        {
+            if (!lt.Has(n)) continue;
+            var ltr = (LayerTableRecord)tr.GetObject(lt[n], OpenMode.ForWrite);
+            ltr.Color = Color.FromColorIndex(ColorMethod.ByAci, aci);
+        }
+    }
+
+    /// <summary>[§75 1-A] 사면선·소단선을 식별정보(XData: 방향 up·사면/소단·단 index·구간 index)와 함께 작도.
+    /// 옹벽 전환(DHWALL)이 클릭할 대상. 4개 레이어(사면선/소단선 × 절/성토, 색은 DrawSlopeEdges와 동일) 청소 후
+    /// 태그된 3D 폴리선으로 그린다. up=true 절토/false 성토. XData=[appName, up, isSlope, bench, seg].</summary>
+    public static void DrawSlopeEdgesTagged(Database db, Transaction tr,
+        IEnumerable<(bool IsSlope, int Bench, int Seg, System.Collections.Generic.List<Point3> Pts)> cutEdges,
+        IEnumerable<(bool IsSlope, int Bench, int Seg, System.Collections.Generic.List<Point3> Pts)> fillEdges)
+    {
+        EnsureRegApp(db, tr, GradingSettings.WallPickAppName);
+        // [§75 1-A UX] 사면선/소단선은 기본 '회색'(JACK). 옹벽생성(DHWALL) 실행 중에만 색이 바뀌고 종료 시 복원.
+        var layerId = new Dictionary<string, ObjectId>();
+        foreach (var name in EdgeLayerNames) { layerId[name] = EnsureLayer(db, tr, name, EdgeGrayAci); EraseOnLayer(db, tr, name); }
+        SetLayersColor(db, tr, EdgeLayerNames, EdgeGrayAci); // 기존 레이어면 EnsureLayer가 색을 안 바꾸므로 강제 회색
+
+        var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+
+        void DrawSet(IEnumerable<(bool IsSlope, int Bench, int Seg, System.Collections.Generic.List<Point3> Pts)> edges, bool up)
+        {
+            // [0728 버그수정 — JACK] Seg를 '방향 전체 유일 번호'로 재부여. 원래 seg는 영역(finalRing)마다
+            //   0부터 다시 시작해, 성토 2곳이면 서로 다른 선이 같은 (단·구간) 신분을 가짐 →
+            //   DHWALL 두 번째 클릭이 첫 선택을 토글 해제(둘 중 하나만 적용되던 원인).
+            int uid = 0;
+            foreach (var (isSlope, bench, _, pts) in edges)
+            {
+                if (pts == null || pts.Count < 2) continue;
+                string layer = (isSlope ? "DH-사면선-" : "DH-소단선-") + (up ? "절토" : "성토");
+                var pl = new Polyline3d { LayerId = layerId[layer] };
+                ms.AppendEntity(pl); tr.AddNewlyCreatedDBObject(pl, true);
+                foreach (var q in pts)
+                {
+                    var v = new PolylineVertex3d(new Point3d(q.X, q.Y, q.Z));
+                    pl.AppendVertex(v); tr.AddNewlyCreatedDBObject(v, true);
+                }
+                pl.XData = new ResultBuffer(
+                    new TypedValue((int)DxfCode.ExtendedDataRegAppName, GradingSettings.WallPickAppName),
+                    new TypedValue((int)DxfCode.ExtendedDataInteger16, (short)(up ? 1 : 0)),
+                    new TypedValue((int)DxfCode.ExtendedDataInteger16, (short)(isSlope ? 1 : 0)),
+                    new TypedValue((int)DxfCode.ExtendedDataInteger16, (short)bench),
+                    new TypedValue((int)DxfCode.ExtendedDataInteger16, (short)(uid++)));
+            }
+        }
+        DrawSet(cutEdges, true);
+        DrawSet(fillEdges, false);
+    }
+
+    /// <summary>[§75] 옹벽 구간의 옹벽선(계단 상단 모서리) — 두꺼운 빨간 선(JACK 0728: 옹벽 구간은 노리선 대신 이것만).
+    /// 레이어 'DH-옹벽선' ACI 1(빨강)·선가중치 0.50mm. 재실행 시 자기 레이어 청소.</summary>
+    public static void DrawWallLines(Database db, Transaction tr,
+        IEnumerable<IReadOnlyList<Point3>> lines)
+    {
+        ObjectId layerId = EnsureLayer(db, tr, "DH-옹벽선", 1);
+        var ltr = (LayerTableRecord)tr.GetObject(layerId, OpenMode.ForWrite);
+        ltr.Color = Color.FromColorIndex(ColorMethod.ByAci, 1);
+        ltr.LineWeight = LineWeight.LineWeight050;
+        EraseOnLayer(db, tr, "DH-옹벽선");
+        var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+        foreach (var loop in lines)
+        {
+            if (loop == null || loop.Count < 2) continue;
+            var pl = new Polyline3d { LayerId = layerId };
+            ms.AppendEntity(pl); tr.AddNewlyCreatedDBObject(pl, true);
+            foreach (var q in loop)
+            {
+                var v = new PolylineVertex3d(new Point3d(q.X, q.Y, q.Z));
+                pl.AppendVertex(v); tr.AddNewlyCreatedDBObject(v, true);
+            }
+        }
+    }
+
+    /// <summary>[§75 — JACK 0728] 지표면 표시 정리: keepBaseName(정지면_DH)만 보이고 나머지(원지반·가상면 등)는
+    /// 전부 숨김. keepBaseName=null이면 모든 지표면 표시 복원(DHGRADE 시작 시 — 원지반을 클릭 선택해야 하므로).</summary>
+    public static void IsolateSurfaces(Transaction tr, string? keepBaseName)
+    {
+        var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+        foreach (ObjectId sid in civilDoc.GetSurfaceIds())
+        {
+            if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
+            bool keep = keepBaseName == null
+                || s.Name == keepBaseName
+                || (s.Name.StartsWith(keepBaseName + "_") && int.TryParse(s.Name.Substring(keepBaseName.Length + 1), out _));
+            try
+            {
+                var e = (AcadEntity)tr.GetObject(sid, OpenMode.ForWrite);
+                e.Visible = keep;
+            }
+            catch { }
+        }
+    }
+
     /// <summary>이름(또는 이름_숫자)의 지표면 존재 여부 — DHNORI/DHINFRA 실행 게이트 ③용.</summary>
     public static bool SurfaceExistsByBaseName(Transaction tr, string baseName)
     {
@@ -371,18 +489,52 @@ public static class GradingBuilder
     {
         if (loop.Count < 3) return;
         var seen = new HashSet<(long, long)>(); // 링마다 독립 — 링 간 정점 충돌로 정점이 스킵되어 브레이크라인에 구멍 나는 것 방지
-        var pc = new Point3dCollection();
+        var pts = new List<Point3d>();
         foreach (var pt in loop)
         {
             var key = ((long)Math.Round(pt.X * 1000), (long)Math.Round(pt.Y * 1000));
             if (!seen.Add(key)) continue;
-            pc.Add(new Point3d(pt.X, pt.Y, pt.Z));
+            pts.Add(new Point3d(pt.X, pt.Y, pt.Z));
         }
-        if (pc.Count < 3) return;
-        // 링 닫기 — 첫 점을 끝에 다시 추가해 마지막→첫 점을 연결. 열린 이음매(Seam)를 가로지르는 거대 삼각형 방지.
-        var f = pc[0];
-        pc.Add(new Point3d(f.X, f.Y, f.Z));
-        try { tin.BreaklinesDefinition.AddStandardBreaklines(pc, 1.0, 0.0, 0.0, 0.0); } catch { }
+        if (pts.Count < 3) return;
+
+        // [§75 — 0728] 옹벽 구간 좌우 끝의 '급하강(다이브)' 긴 선분(>2.5m)은 브레이크라인에서 제외.
+        //   깊은 단일수록 다이브가 수십 m라 이웃 링(1m 간격)의 다이브끼리 평면 교차 → 이벤트 뷰어 오류 홍수.
+        //   정상 링은 densify로 전 선분 ≤1m라 무영향. 측벽 면은 TIN 삼각화가 채우므로 형상은 유지된다.
+        const double MaxSeg = 2.5;
+        const double MaxSeg2 = MaxSeg * MaxSeg;
+        var runs = new List<List<Point3d>>();
+        var cur = new List<Point3d> { pts[0] };
+        for (int i = 1; i < pts.Count; i++)
+        {
+            double dx = pts[i].X - pts[i - 1].X, dy = pts[i].Y - pts[i - 1].Y;
+            if (dx * dx + dy * dy > MaxSeg2) { if (cur.Count >= 2) runs.Add(cur); cur = new List<Point3d>(); }
+            cur.Add(pts[i]);
+        }
+        double cdx = pts[0].X - pts[^1].X, cdy = pts[0].Y - pts[^1].Y;
+        bool closeOk = cdx * cdx + cdy * cdy <= MaxSeg2;
+        if (runs.Count == 0 && closeOk)
+        {
+            // 다이브 없음 = 정상 링 — 기존과 동일하게 닫아서 등록(이음매 거대 삼각형 방지).
+            var pc = new Point3dCollection();
+            foreach (var q in cur) pc.Add(q);
+            pc.Add(cur[0]);
+            try { tin.BreaklinesDefinition.AddStandardBreaklines(pc, 1.0, 0.0, 0.0, 0.0); } catch { }
+            return;
+        }
+        if (closeOk && runs.Count > 0 && cur.Count > 0)
+        {
+            cur.AddRange(runs[0]); // 꼬리 run이 이음새(마지막→첫)로 머리 run과 이어짐 → 병합
+            runs[0] = cur;
+        }
+        else if (cur.Count >= 2) runs.Add(cur);
+        foreach (var run in runs)
+        {
+            if (run.Count < 2) continue;
+            var pc = new Point3dCollection();
+            foreach (var q in run) pc.Add(q);
+            try { tin.BreaklinesDefinition.AddStandardBreaklines(pc, 1.0, 0.0, 0.0, 0.0); } catch { }
+        }
     }
 
     /// <summary>이름이 baseName 또는 baseName_N 인 지표면을 모두 삭제(잠긴/참조 중이면 그 항목만 건너뜀).</summary>

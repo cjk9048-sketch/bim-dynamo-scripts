@@ -37,10 +37,11 @@ public sealed class NoriCommand
             var ng = new NullGround();
             var ticks = new System.Collections.Generic.List<(Point3 A, Point3 B)>();
             var cornerTicks = new System.Collections.Generic.List<(Point3 A, Point3 B)>(); // 볼록 코너 대각선(우선 보존)
-            var cutSlope = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
-            var cutBerm = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
-            var fillSlope = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
-            var fillBerm = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
+            // [§75 1-A] 사면선/소단선을 식별 태그와 함께 — DHGRADE와 동일한 태그 작도로 통일(태그 보존).
+            var cutEdges = new System.Collections.Generic.List<(bool, int, int, System.Collections.Generic.List<Point3>)>();
+            var fillEdges = new System.Collections.Generic.List<(bool, int, int, System.Collections.Generic.List<Point3>)>();
+            // [§75 0728] 옹벽 구간의 계단 상단선 = 옹벽선(두꺼운 빨강) — 노리선/사면선/소단선은 구간에서 제외.
+            var wallLines = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
             System.Collections.Generic.List<(System.Collections.Generic.List<Point3> Crest, System.Collections.Generic.List<Point3> Toe)>? transFaces = null;
             string detail = "";
 
@@ -62,7 +63,9 @@ public sealed class NoriCommand
                     detail += $"\n{label}: 최종 경계 없음 — 생략(DHGRADE에서 경계 주입이 실패했는지 확인)";
                     continue;
                 }
-                var vs = GradingGeometry.Build(bundle.Boundary, ng, bundle.Params, up);
+                // [§75 0728] 적용된 옹벽 구간은 번들(v3)에서 — 선택(WallPicks)은 1회성이라 여기 의존하면 안 됨.
+                var zones = up ? bundle.CutWallZones : bundle.FillWallZones;
+                var vs = GradingGeometry.Build(bundle.Boundary, ng, bundle.Params, up, zones);
                 transFaces ??= vs.TransitionFaces; // 전환사면은 경계에서만 유도 — 절/성 동일, 한 번만
                 if (!vs.HasSlope) { detail += $"\n{label}: 링 복원 결과 사면 없음"; continue; }
 
@@ -80,13 +83,15 @@ public sealed class NoriCommand
                 {
                     if (finalRing == null || finalRing.Count < 3) continue;
                     var (t, ct, _) = SlopeHatchGenerator.Generate(vs.Rings, ng, up,
-                        GradingSettings.HatchShort, GradingSettings.HatchLong, finalRing, bundle.Boundary);
-                    var (sl, bl) = SlopeHatchGenerator.GenerateEdgeLines(vs.Rings, ng, up, finalRing, bundle.Boundary);
+                        GradingSettings.HatchShort, GradingSettings.HatchLong, finalRing, bundle.Boundary,
+                        zones, bundle.Boundary);
+                    var edges = SlopeHatchGenerator.GenerateEdgeLinesTagged(vs.Rings, ng, up, finalRing, bundle.Boundary,
+                        zones, bundle.Boundary, wallLines);
                     ticks.AddRange(t);
                     cornerTicks.AddRange(ct);
-                    if (up) { cutSlope.AddRange(sl); cutBerm.AddRange(bl); }
-                    else { fillSlope.AddRange(sl); fillBerm.AddRange(bl); }
-                    slN += sl.Count; blN += bl.Count; tN += t.Count;
+                    if (up) cutEdges.AddRange(edges); else fillEdges.AddRange(edges);
+                    foreach (var e in edges) { if (e.IsSlope) slN++; else blN++; }
+                    tN += t.Count;
                 }
                 detail += $"\n{label}: 영역 {ringList.Count} · 사면선 {slN} · 소단선 {blN} · 노리선 {tN}";
             }
@@ -111,7 +116,9 @@ public sealed class NoriCommand
             ticks = SlopeHatchGenerator.RemoveOverlaps(cornerTicks, ticks);
             detail += $"\n겹침 제거: 노리선 {rawTicks} → {ticks.Count} (볼록코너 {cornerTicks.Count})";
 
-            GradingBuilder.DrawSlopeEdges(db, tr, cutSlope, cutBerm, fillSlope, fillBerm);
+            GradingBuilder.DrawSlopeEdgesTagged(db, tr, cutEdges, fillEdges);
+            GradingBuilder.DrawWallLines(db, tr, wallLines); // [§75] 옹벽 구간 = 두꺼운 빨간 옹벽선만
+            if (wallLines.Count > 0) detail += $"\n옹벽선(두꺼운 빨강): {wallLines.Count}";
             GradingBuilder.DrawTransitionEdges(db, tr, transCrest, transToe);
             // 틱은 기존 노랑 레이어 재사용. 구 흰색 'DH-소단' 잔재는 빈 목록으로 청소(사면선/소단선 레이어로 대체).
             GradingBuilder.DrawSlopeHatch(db, tr, ticks,
