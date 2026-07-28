@@ -234,9 +234,9 @@ public static class GradingBuilder
         string layerName = "DH-정지경계", short colorIndex = 3, bool layerOff = false)
     {
         ObjectId layerId = EnsureLayer(db, tr, layerName, colorIndex);
-        // [JACK] 기본 숨김 옵션 — 데이터(선)는 남기되 레이어를 꺼서 화면은 깨끗하게. 필요 시 레이어 켜서 확인.
-        if (layerOff)
-            try { var ltr = (LayerTableRecord)tr.GetObject(layerId, OpenMode.ForWrite); ltr.IsOff = true; } catch { }
+        // [JACK] 숨김 옵션 — 데이터(선)는 남기되 레이어 on/off로 화면 제어. 기존 도면에서 꺼져 있던 레이어도
+        // layerOff=false면 다시 켠다(0728: 정지경계 초록 표시 요청 — 이전 실행이 꺼둔 상태 복구).
+        try { var ltr = (LayerTableRecord)tr.GetObject(layerId, OpenMode.ForWrite); ltr.IsOff = layerOff; } catch { }
         EraseOnLayer(db, tr, layerName);
         var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
         foreach (var loop in loops)
@@ -365,8 +365,8 @@ public static class GradingBuilder
     /// <summary>[§75] 사면선·소단선 4개 레이어 이름(절/성토 × 사면/소단) — DHWALL 색 전환·복원에 공용.</summary>
     public static readonly string[] EdgeLayerNames =
         { "DH-사면선-절토", "DH-소단선-절토", "DH-사면선-성토", "DH-소단선-성토" };
-    /// <summary>기본 회색(ACI 9 = 밝은 회색). DHWALL 밖에서는 이 색.</summary>
-    public const short EdgeGrayAci = 9;
+    /// <summary>사면선/소단선 기본색 — 등고선처럼 희미한 회색(ACI 8, JACK 0728). DHWALL 밖에서는 이 색.</summary>
+    public const short EdgeGrayAci = 8;
     /// <summary>DHWALL 실행 중 '고를 수 있음' 강조색(ACI 4 = 시안).</summary>
     public const short EdgePickAci = 4;
 
@@ -465,6 +465,74 @@ public static class GradingBuilder
             {
                 var e = (AcadEntity)tr.GetObject(sid, OpenMode.ForWrite);
                 e.Visible = keep;
+            }
+            catch { }
+        }
+    }
+
+    /// <summary>[0728 — JACK] baseName 지표면의 표시 스타일을 이름 후보들 중 존재하는 것으로 설정.
+    /// 정확 일치 우선, 없으면 '2'와 '10'이 들어간 등고선 스타일 폴백. 적용된 스타일명 반환("" = 미적용).</summary>
+    public static string SetSurfaceStyle(Transaction tr, string baseName, params string[] candidates)
+    {
+        var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+        ObjectId styleId = ObjectId.Null; string styleName = "";
+        var all = new List<(ObjectId id, string name)>();
+        foreach (ObjectId sid in civilDoc.Styles.SurfaceStyles)
+        {
+            if (tr.GetObject(sid, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.Styles.SurfaceStyle st)
+                all.Add((sid, st.Name));
+        }
+        foreach (var cand in candidates)
+        {
+            foreach (var (id2, nm) in all)
+                if (string.Equals(nm, cand, StringComparison.OrdinalIgnoreCase)) { styleId = id2; styleName = nm; break; }
+            if (!styleId.IsNull) break;
+        }
+        if (styleId.IsNull)
+            foreach (var (id2, nm) in all)
+                if (nm.Contains("2") && nm.Contains("10")) { styleId = id2; styleName = nm; break; }
+        if (styleId.IsNull) return "";
+        // [JACK 0728] 스타일에서 취하는 건 등고선 간격뿐 — '경계' 표시는 켜서 예전처럼 지표면 둘레가 보이고
+        //   클릭 시 지표면이 선택되게(별도 초록 객체 불필요).
+        try
+        {
+            var stw = (Autodesk.Civil.DatabaseServices.Styles.SurfaceStyle)tr.GetObject(styleId, OpenMode.ForWrite);
+            stw.GetDisplayStylePlan(Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType.Boundary).Visible = true;
+            stw.GetDisplayStyleModel(Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType.Boundary).Visible = true;
+        }
+        catch { }
+        foreach (ObjectId sid in civilDoc.GetSurfaceIds())
+        {
+            if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
+            string nm = s.Name;
+            if (nm != baseName && !(nm.StartsWith(baseName + "_") && int.TryParse(nm.Substring(baseName.Length + 1), out _)))
+                continue;
+            try
+            {
+                var w = (Autodesk.Civil.DatabaseServices.Surface)tr.GetObject(sid, OpenMode.ForWrite);
+                w.StyleId = styleId;
+            }
+            catch { }
+        }
+        return styleName;
+    }
+
+    /// <summary>[0728] 이름이 baseName(또는 _N)인 지표면 재작성 — 소스 숨김(Visible) 등으로 붙는
+    /// '정의 구식(⚠)' 표시 해소용. 실패해도 무시.</summary>
+    public static void RebuildSurfacesByBaseName(Transaction tr, string baseName)
+    {
+        var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+        foreach (ObjectId sid in civilDoc.GetSurfaceIds())
+        {
+            if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
+            string nm = s.Name;
+            if (nm != baseName && !(nm.StartsWith(baseName + "_") && int.TryParse(nm.Substring(baseName.Length + 1), out _)))
+                continue;
+            try
+            {
+                var w = (Autodesk.Civil.DatabaseServices.Surface)tr.GetObject(sid, OpenMode.ForWrite);
+                try { w.RebuildSnapshot(); } catch { }
+                try { w.Rebuild(); } catch { }
             }
             catch { }
         }

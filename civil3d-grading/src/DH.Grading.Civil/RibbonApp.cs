@@ -59,7 +59,7 @@ public sealed class RibbonApp : IExtensionApplication
             tab.Panels.Add(new RibbonPanel { Source = pGrade });
             pGrade.Items.Add(Spacer());
             pGrade.Items.Add(MakeButton(
-                "정지\n설정", "DHGRADESET ", "단높이·소단폭·구배·격자 해상도를 설정", "설정"));
+                "정지\n옵션", "DHGRADESET ", "단높이·소단폭·구배·사면형상·대소단·옹벽형태·좌표계·표시 옵션", "설정"));
             pGrade.Items.Add(Spacer());
             pGrade.Items.Add(MakeButton(
                 "정지면\n생성", "DHGRADE ", "계획 폴리곤+원지반 → 계단식 절성토 TIN Surface 생성", "정지면"));
