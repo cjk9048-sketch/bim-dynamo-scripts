@@ -183,6 +183,49 @@ public sealed class CreateGradingCommand
                 ComputePure(fillId, "성토");
                 ComputePure(cutId, "절토");
 
+                // [0728 — JACK] 사면(데이라잇)이 원지반(측량) 경계에 닿을 정도면 경고 후 수행 중단.
+                //   경계 밖 지반 정보가 없어 결과(정지면·토량)를 신뢰할 수 없음 — 계획고/구배/측량범위 조정 필요.
+                var borderLoops = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
+                try
+                {
+                    var bids = groundTin2.ExtractBorder(Autodesk.Civil.SurfaceExtractionSettingsType.Model);
+                    foreach (ObjectId bid in bids)
+                    {
+                        if (tr2.GetObject(bid, OpenMode.ForWrite) is Polyline3d bp3)
+                        {
+                            var lp = new System.Collections.Generic.List<Point3>();
+                            foreach (ObjectId vId in bp3)
+                                if (tr2.GetObject(vId, OpenMode.ForRead) is PolylineVertex3d pv)
+                                    lp.Add(new Point3(pv.Position.X, pv.Position.Y, pv.Position.Z));
+                            if (lp.Count >= 3) borderLoops.Add(lp);
+                            bp3.Erase(); // 검사용 임시 추출물 제거
+                        }
+                    }
+                }
+                catch { /* 경계 추출 실패 시 검사 생략(수행은 막지 않음) */ }
+
+                const double BorderMargin = 2.0; // 경계 '닿음' 판정 여유(m)
+                string? borderHit = null;
+                bool NearBorder(System.Collections.Generic.List<Point3> loop)
+                {
+                    foreach (var q in loop)
+                        foreach (var bl in borderLoops)
+                        {
+                            int nb = bl.Count;
+                            for (int bi = 0; bi < nb; bi++)
+                            {
+                                var a = bl[bi]; var b2 = bl[(bi + 1) % nb];
+                                double ex = b2.X - a.X, ey = b2.Y - a.Y, l2 = ex * ex + ey * ey;
+                                double u = l2 < 1e-12 ? 0 : ((q.X - a.X) * ex + (q.Y - a.Y) * ey) / l2;
+                                u = u < 0 ? 0 : (u > 1 ? 1 : u);
+                                double px = a.X + ex * u, py = a.Y + ey * u;
+                                double ddx = q.X - px, ddy = q.Y - py;
+                                if (ddx * ddx + ddy * ddy <= BorderMargin * BorderMargin) return true;
+                            }
+                        }
+                    return false;
+                }
+
                 // ── 2) [링 2개 분리 — JACK 확정 구조] 같은 링에 두 역할을 시키던 것이 근본 버그였음.
                 //   ⓐ finalRing(초록선·번들·옹벽선용) = '순수 닫힌 교선'(전이선 지형대로 정확 — 스텝 검증).
                 //   ⓑ 클립용 링(표면 자르기·합성용) = 교선 ∪ 계획 '전체'(기존 검증 방식 — 클립은 2D라 sticking 무해,
@@ -206,6 +249,11 @@ public sealed class CreateGradingCommand
                     // [JACK 목적② + 짜투리 제거] 계획과 무관한 루프·미세 조각(<5㎡)을 순수 루프에서 필터.
                     var own = RawTriangleIntersectionFinder.FilterPlanRelated(pureLoops[label], boundary, 5.0, out string fdiag);
                     diagX += $"\n■ 루프필터({label}) {fdiag}\n";
+                    // [0728 — JACK] 사면이 원지반 경계에 닿으면 중단 표식(아래에서 정리 후 반환).
+                    if (borderHit == null && borderLoops.Count > 0)
+                        foreach (var lp in own)
+                            if (NearBorder(lp)) { borderHit = label; break; }
+                    if (borderHit != null) break;
                     var opp = pureLoops.TryGetValue(oppL, out var ol) ? ol
                         : new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
                     // ⓐ finalRing = 순수 교선 최대 루프(전이선 정확) — 초록선은 필터된 순수 루프 전부 그림.
@@ -218,18 +266,48 @@ public sealed class CreateGradingCommand
                     var clipBest = Largest(clipRings, out double clipArea);
                     if (clipBest != null && pureBest != null)
                     {
-                        try
+                        // [0728 — 계단식 산지 IllegalBoundary] 자기접촉(핀치) 링은 주입이 거부됨 →
+                        //   원본 실패 시 CleanRing(5mm 정규화)으로 1회 재시도(합성 단계의 적응형 복구와 동일 원리).
+                        bool injected = false;
+                        var vs2 = (TinSurface)tr2.GetObject(vsIdOf[label], OpenMode.ForWrite);
+                        foreach (var (ring, tag) in new[] { (clipBest, "원본"), (RawTriangleIntersectionFinder.CleanRing(clipBest), "정규화") })
                         {
-                            var vs2 = (TinSurface)tr2.GetObject(vsIdOf[label], OpenMode.ForWrite);
-                            GradingBuilder.AddOuterBoundary(vs2, clipBest);
-                            injectedRings[label] = (vsIdOf[label], clipBest);
-                            clipLoopsDraw.Add(clipBest); // 하늘색 참고선으로 표시(JACK: 클립링 눈으로 확인)
-                            bndMsg += $"\n{label}: 클립경계 주입(∪계획 {clipArea:F0}㎡) · finalRing=순수교선 {pureArea:F0}㎡";
-                            diagX += GradingBuilder.VerifyBoundaryClip(vs2, clipBest);
+                            if (ring == null) continue;
+                            try
+                            {
+                                GradingBuilder.AddOuterBoundary(vs2, ring);
+                                injectedRings[label] = (vsIdOf[label], ring);
+                                clipLoopsDraw.Add(ring); // 하늘색 참고선으로 표시(JACK: 클립링 눈으로 확인)
+                                bndMsg += $"\n{label}: 클립경계 주입[{tag}](∪계획 {clipArea:F0}㎡) · finalRing=순수교선 {pureArea:F0}㎡";
+                                diagX += GradingBuilder.VerifyBoundaryClip(vs2, ring);
+                                injected = true;
+                                break;
+                            }
+                            catch (System.Exception ex) { bndMsg += $"\n{label}: 클립경계 주입[{tag}] 실패 — {ex.Message}"; }
                         }
-                        catch (System.Exception ex) { anyMissed = true; bndMsg += $"\n{label}: 클립경계 주입 실패 — {ex.Message}"; }
+                        if (!injected) anyMissed = true;
                     }
                     else { anyMissed = true; bndMsg += $"\n{label}: 링 생성 실패(순수 {own.Count}·클립 {clipRings.Count}) — {udiag}"; }
+                }
+
+                // [0728 — JACK] 경계 이탈 감지 → 가상면 정리 후 경고 팝업, 수행 중단.
+                if (borderHit != null)
+                {
+                    EraseSurface(tr2, cutId);
+                    EraseSurface(tr2, fillId);
+                    tr2.Commit();
+                    string wmsg = $"사면({borderHit})이 원지반(측량) 경계를 벗어납니다.\n" +
+                                  "경계 밖 지반 정보가 없어 정지면을 만들 수 없습니다.\n" +
+                                  "계획고·구배·측량 범위를 확인하세요.";
+                    ed.WriteMessage("\n[DHGRADE 중단] " + wmsg.Replace("\n", " "));
+                    try
+                    {
+                        System.IO.File.AppendAllText(@"C:\Users\user\Desktop\AI\civil3d-grading\DHGRADE_진단.log",
+                            $"\n■ 수행 중단 — 사면({borderHit}) 원지반 경계 이탈(여유 2m 이내 접근)\n");
+                    }
+                    catch { }
+                    AcadApp.ShowAlertDialog(wmsg);
+                    return;
                 }
 
                 // [겹침 제거 — 도넛] 성토·절토가 pad(계획 내부)를 둘 다 가지면 최종 합성의 마지막 paste가
@@ -249,7 +327,9 @@ public sealed class CreateGradingCommand
                 }
 
                 // [JACK] 경계선은 기본 숨김(레이어 Off) — 데이터는 유지(옹벽선·노리선용), 화면은 깨끗하게.
-                GradingBuilder.DrawDaylight(db, tr2, allLoops, "DH-정지경계", 3, layerOff: true);   // 초록=순수교선 finalRing
+                // [JACK 0728 원복] 초록 별도객체는 다시 기본 숨김 — 경계 표시는 정지면_DH 자체의 '경계'(스타일)가 담당
+                //   (클릭하면 지표면 선택, 부지 가로지르는 선 없음). 데이터(교선)는 노리선·번들용으로 계속 저장.
+                GradingBuilder.DrawDaylight(db, tr2, allLoops, "DH-정지경계", 3, layerOff: true);
                 GradingBuilder.DrawDaylight(db, tr2, clipLoopsDraw, "DH-클립경계", 4, layerOff: true); // 하늘색=클립링(∪계획)
                 // 과거 진단선(빨강/하늘) 잔재 청소 — 오류로 오인 방지(JACK)
                 GradingBuilder.DrawDebugSpans(db, tr2, System.Array.Empty<(Point3, Point3)>());
@@ -343,8 +423,16 @@ public sealed class CreateGradingCommand
                 GradingBuilder.DrawSlopeEdgesTagged(db, trE, cutEdges, fillEdges);
                 // [JACK 0728] 이전 노리선 실행이 남긴 옹벽선(빨강)은 낡은 정보 → 청소만(재표시는 DHNORI가).
                 GradingBuilder.DrawWallLines(db, trE, wallLines);
-                // [JACK 0728] 정지면_DH만 보이게 — 원지반·가상면 등 전부 숨김.
-                GradingBuilder.IsolateSurfaces(trE, "정지면_DH");
+                // [JACK 0728] '결과지표면만 표시' 옵션 시 정지면_DH만 보이게 — 원지반·가상면 등 전부 숨김.
+                if (GradingSettings.ShowOnlyResultSurface)
+                {
+                    GradingBuilder.IsolateSurfaces(trE, "정지면_DH");
+                    // [0728] 소스 숨김(Visible 변경)이 의존 표면에 '정의 구식(⚠)'을 붙임 → 숨김 후 재작성으로 해소.
+                    GradingBuilder.RebuildSurfacesByBaseName(trE, "정지면_DH");
+                }
+                // [JACK 0728] 정지면_DH 표시 스타일 = Contours 2m and 10m (Background) (한글 템플릿 이름 폴백 포함).
+                GradingBuilder.SetSurfaceStyle(trE, "정지면_DH",
+                    "Contours 2m and 10m (Background)", "등고선 2m 및 10m (배경)");
                 trE.Commit();
                 edgeMsg = $"사면선/소단선(옹벽 전환용 태그) 작도: 절토 {cutEdges.Count} · 성토 {fillEdges.Count} (옹벽선은 노리선 때 표시)";
             }
@@ -442,6 +530,62 @@ public sealed class CreateGradingCommand
             }
             catch { }
         }
+    }
+
+    /// <summary>[0728 — JACK] 교선 루프에서 계획폴리곤 '안' 또는 경계 tol 이내 점 구간을 제거하고
+    /// 바깥 둘레 구간(열린 폴리선)만 남긴다 — 부지를 가로지르는 전이선 초록 표시 제거(표시 전용, 번들 무관).</summary>
+    private static System.Collections.Generic.List<System.Collections.Generic.List<Point3>> FilterOutsidePlan(
+        System.Collections.Generic.List<System.Collections.Generic.List<Point3>> loops,
+        System.Collections.Generic.List<Point3> plan, double tol)
+    {
+        bool InsideOrNear(double x, double y)
+        {
+            int n = plan.Count;
+            bool inside = false;
+            for (int i = 0, j = n - 1; i < n; j = i++)
+            {
+                var a = plan[i]; var b = plan[j];
+                if ((a.Y > y) != (b.Y > y) && x < (b.X - a.X) * (y - a.Y) / (b.Y - a.Y + 1e-300) + a.X)
+                    inside = !inside;
+            }
+            if (inside) return true;
+            for (int i = 0; i < n; i++)
+            {
+                var a = plan[i]; var b = plan[(i + 1) % n];
+                double ex = b.X - a.X, ey = b.Y - a.Y, l2 = ex * ex + ey * ey;
+                double u = l2 < 1e-12 ? 0 : ((x - a.X) * ex + (y - a.Y) * ey) / l2;
+                u = u < 0 ? 0 : (u > 1 ? 1 : u);
+                double px = a.X + ex * u, py = a.Y + ey * u;
+                if ((x - px) * (x - px) + (y - py) * (y - py) <= tol * tol) return true;
+            }
+            return false;
+        }
+        // [0728 — JACK] 조각 최소 길이: 필터 후 2m 미만 부스러기(경계 근처 스침 잔여물)는 그리지 않음.
+        const double MinRunLen = 2.0;
+        bool LongEnough(System.Collections.Generic.List<Point3> run)
+        {
+            double len = 0;
+            for (int i = 0; i + 1 < run.Count; i++)
+            {
+                double dx = run[i + 1].X - run[i].X, dy = run[i + 1].Y - run[i].Y;
+                len += System.Math.Sqrt(dx * dx + dy * dy);
+                if (len >= MinRunLen) return true;
+            }
+            return false;
+        }
+        var outp = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
+        foreach (var loop in loops)
+        {
+            if (loop == null || loop.Count < 2) continue;
+            System.Collections.Generic.List<Point3>? run = null;
+            foreach (var q in loop)
+            {
+                if (!InsideOrNear(q.X, q.Y)) { (run ??= new()).Add(q); }
+                else if (run != null) { if (run.Count >= 2 && LongEnough(run)) outp.Add(run); run = null; }
+            }
+            if (run != null && run.Count >= 2 && LongEnough(run)) outp.Add(run);
+        }
+        return outp;
     }
 
     /// <summary>가상표면(ObjectId)을 지운다 — daylight 없는 억지 생성 표면 정리용.</summary>

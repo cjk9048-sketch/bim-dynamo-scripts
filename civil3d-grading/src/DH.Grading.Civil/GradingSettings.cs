@@ -19,7 +19,7 @@ public enum WallStyle
 public static class GradingSettings
 {
     /// <summary>플러그인 버전 — 팝업 첫 줄에 표시(새 빌드 설치 확인용). 커밋마다 갱신.</summary>
-    public const string Version = "v10.5 (2026-07-28 §75 UI — ①옹벽생성 버튼을 부지정지 패널(정지면 오른쪽)로, 옹벽 중분류 삭제 ②정지면_DH 생성 시 다른 지표면 전부 숨김(DHGRADE 시작 시 복원) ③옹벽선(빨강)은 노리선 때만 표시)";
+    public const string Version = "v11.9 (2026-07-28 — 정지경계 표시 원복: 초록 별도객체 기본 숨김, 스타일은 등고선 간격만 취하고 경계(Boundary) 표시 켬 — 지표면 자체 둘레 표시/클릭 선택. 경계이탈 경고 유지)";
 
     // ── 옹벽 3D 보강토 블록(옹벽3D_기획.md) — 원스톤 블록·캡블록 규격(m). 스샷 0720 실측. ──
     // [고정값 — JACK 0720] 사용자가 바꾸지 않는다. 보강토 옹벽이면 무조건 이 치수를 쓴다(설정 UI 제거).
@@ -53,6 +53,10 @@ public static class GradingSettings
     public const string InfraWallDwg = "옹벽3D.dwg";     // 옹벽 3D DWG 고정 파일명
 
     public static int ExportEpsg = 5186;       // 도면 좌표계(원점) — 설정 대화상자 드롭박스로 선택. SHP .prj·지형 LandXML·위성 역투영에 공통 사용. 신 5185~5188·구 5180~5184.
+
+    // [JACK 0728] 결과지표면만 표시 — 체크(기본): 정지면_DH 생성 시 다른 지표면 숨김.
+    // 해제 후 저장: 숨겼던 지표면 전부 표시(정지 옵션 대화상자 하단 체크박스, 저장 즉시 반영).
+    public static bool ShowOnlyResultSurface = true;
 
     // [옹벽 형태 — JACK 0721] 절토부/성토부에 어떤 옹벽 3D를 만들지 드롭박스로 선택. 치수는 스타일별 고정.
     public static WallStyle CutWallStyle = WallStyle.보강토;    // 절토 옹벽 형태
