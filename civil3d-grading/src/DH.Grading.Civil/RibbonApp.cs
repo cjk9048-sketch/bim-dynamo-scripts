@@ -13,6 +13,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SurfaceIntersectionCommand))] // DHXSEC(지표면 교선 TEST)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SlopeLineCommand))]           // DHSLOPELINE(노리선 수동, 레거시)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.NoriCommand))]                // DHNORI(노리선 버튼 — 번들 기반)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.WallPickCommand))]            // DHWALL(옹벽 생성 — 사면선/소단선 선택, §75)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.InfraworksCommand))]          // DHINFRA(INFRAWORKS SHP 내보내기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.CoordSysProbeCommand))]       // DHCS(좌표계 API 진단 — 임시)
 
@@ -62,6 +63,10 @@ public sealed class RibbonApp : IExtensionApplication
             pGrade.Items.Add(Spacer());
             pGrade.Items.Add(MakeButton(
                 "정지면\n생성", "DHGRADE ", "계획 폴리곤+원지반 → 계단식 절성토 TIN Surface 생성", "정지면"));
+            pGrade.Items.Add(Spacer());
+            // [§75 — JACK 0728] 옹벽생성은 부지정지 패널, 정지면 생성 오른쪽(별도 '옹벽' 중분류 없음).
+            pGrade.Items.Add(MakeButton(
+                "옹벽\n생성", "DHWALL ", "사면선/소단선을 선택하면 그 지점부터 바깥 단이 옹벽으로 전환 — DHGRADE 후 사용", "옹벽"));
             pGrade.Items.Add(Spacer());
 
             var pDraw = new RibbonPanelSource { Title = "도면화" };
@@ -143,6 +148,14 @@ public sealed class RibbonApp : IExtensionApplication
                             var bp = new Point(6 + 21 * t, 27 - 21 * t);
                             dc.DrawLine(or, bp, new Point(bp.X + 4.5, bp.Y + 4.5)); // 빗금(사면 아래로)
                         }
+                        break;
+                    case "옹벽": // 옹벽(벽돌 2단, 흙색)
+                        var wl = P(0xc0, 0xa0, 0x72);
+                        dc.DrawRectangle(null, wl, new Rect(6, 15, 20, 6));
+                        dc.DrawRectangle(null, wl, new Rect(6, 22, 20, 6));
+                        dc.DrawLine(wl, new Point(16, 15), new Point(16, 21));
+                        dc.DrawLine(wl, new Point(11, 22), new Point(11, 28));
+                        dc.DrawLine(wl, new Point(21, 22), new Point(21, 28));
                         break;
                     default: // infra: 상자 + 내보내기 화살표(파랑)
                         var bl = P(0x4a, 0x90, 0xe2);

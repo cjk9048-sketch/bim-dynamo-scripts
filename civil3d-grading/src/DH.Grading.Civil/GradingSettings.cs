@@ -19,7 +19,7 @@ public enum WallStyle
 public static class GradingSettings
 {
     /// <summary>플러그인 버전 — 팝업 첫 줄에 표시(새 빌드 설치 확인용). 커밋마다 갱신.</summary>
-    public const string Version = "v8.8 (2026-07-27 노리선 — 코너 대각선: 닫힌 링 이음새(seam) 꼭지점도 처리(누락코너 수정) + 광선 폴백. 이등분선 방향·볼록오목·우선보존 + 교차제거 + 사면선 색)";
+    public const string Version = "v10.5 (2026-07-28 §75 UI — ①옹벽생성 버튼을 부지정지 패널(정지면 오른쪽)로, 옹벽 중분류 삭제 ②정지면_DH 생성 시 다른 지표면 전부 숨김(DHGRADE 시작 시 복원) ③옹벽선(빨강)은 노리선 때만 표시)";
 
     // ── 옹벽 3D 보강토 블록(옹벽3D_기획.md) — 원스톤 블록·캡블록 규격(m). 스샷 0720 실측. ──
     // [고정값 — JACK 0720] 사용자가 바꾸지 않는다. 보강토 옹벽이면 무조건 이 치수를 쓴다(설정 UI 제거).
@@ -57,6 +57,106 @@ public static class GradingSettings
     // [옹벽 형태 — JACK 0721] 절토부/성토부에 어떤 옹벽 3D를 만들지 드롭박스로 선택. 치수는 스타일별 고정.
     public static WallStyle CutWallStyle = WallStyle.보강토;    // 절토 옹벽 형태
     public static WallStyle FillWallStyle = WallStyle.보강토;   // 성토 옹벽 형태
+
+    // ── [§75 사면→옹벽 부분 전환 — Phase 1-A] ──
+    // DHGRADE가 그린 사면선/소단선에 붙이는 XData 앱 이름 — 클릭 시 어느 면인지(방향·단·구간) 식별.
+    public const string WallPickAppName = "DHGRADE_WALLPICK";
+    /// <summary>옹벽 전환 선택 1건 — Up(true=절토/false=성토)·IsSlope(사면선/소단선)·Bench(단 index)·Seg(구간 index)·
+    /// Pts(선택한 선의 실제 좌표 — 계획경계 둘레 '구간' 산출용). 의미: 그 선의 둘레 구간에서, 사면선=그 단(Bench)부터 /
+    /// 소단선=다음 단(Bench+1)부터 바깥(데이라잇) 방향이 옹벽. 같은 방향의 다른 영역엔 영향 없음(JACK).</summary>
+    public readonly record struct WallPick(bool Up, bool IsSlope, int Bench, int Seg,
+        System.Collections.Generic.List<Point3> Pts);
+    /// <summary>옹벽 전환 선택 목록 — 세션 메모리(번들 미저장, Civil3D 재시작 시 초기화). DHWALL로 토글.</summary>
+    public static readonly System.Collections.Generic.List<WallPick> WallPicks = new();
+
+    /// <summary>마지막 DHGRADE의 계획선/원지반 핸들(세션 메모리) — DHWALL이 Enter 시 재선택 없이
+    /// 정지면을 즉시 재생성하는 데 사용(JACK: 선 선택 후 엔터면 바로 적용).</summary>
+    public static string LastPlanHandle = "";
+    public static string LastGroundHandle = "";
+
+    /// <summary>[§75] 선택한 선(Pts)이 계획경계에서 덮는 호길이 구간 [T0,T1](랩 대응) — DHWALL의
+    /// '같은 구간 중복 선택' 즉시 감지·교체에 사용. 실패 시 null.</summary>
+    public static (double T0, double T1)? PickInterval(
+        System.Collections.Generic.IReadOnlyList<Point3> pts,
+        System.Collections.Generic.IReadOnlyList<Point3> boundary, double[] cum)
+    {
+        if (pts == null || pts.Count == 0 || boundary == null || boundary.Count < 3) return null;
+        double total = cum[cum.Length - 1];
+        var ts = new System.Collections.Generic.List<double>(pts.Count);
+        foreach (var q in pts) ts.Add(GradingGeometry.ParamAt(boundary, cum, q.X, q.Y));
+        ts.Sort();
+        if (ts.Count == 1) return (ts[0], ts[0]);
+        double bestGap = -1; int gi = 0;
+        for (int i = 0; i < ts.Count; i++)
+        {
+            double a = ts[i];
+            double b = i + 1 == ts.Count ? ts[0] + total : ts[i + 1];
+            if (b - a > bestGap) { bestGap = b - a; gi = i; }
+        }
+        return (ts[(gi + 1) % ts.Count], ts[gi]);
+    }
+
+    /// <summary>[§75] 두 호길이 구간(랩 가능)이 겹치는가.</summary>
+    public static bool IntervalsOverlap(double a0, double a1, double b0, double b1)
+    {
+        bool In(double x0, double x1, double t) => x0 <= x1 ? (t >= x0 && t <= x1) : (t >= x0 || t <= x1);
+        return In(a0, a1, b0) || In(a0, a1, b1) || In(b0, b1, a0) || In(b0, b1, a1);
+    }
+
+    /// <summary>[§75 구간 옹벽] 이 방향(up)의 옹벽 선택들을 계획경계 '호길이 구간' 목록으로 변환.
+    /// 각 선택의 선 좌표(Pts)를 경계에 투영 → 파라미터들의 최대 원형 간극의 여집합 = 그 선이 덮는 구간.
+    /// GradingGeometry.Build(wallZones)가 이 구간 안만 수직으로 만든다.</summary>
+    public static System.Collections.Generic.List<(double T0, double T1, int FromBench)> ComputeWallZones(
+        bool up, System.Collections.Generic.IReadOnlyList<Point3> boundary)
+    {
+        var zones = new System.Collections.Generic.List<(double, double, int)>();
+        if (WallPicks.Count == 0 || boundary == null || boundary.Count < 3) return zones;
+        var cum = GradingGeometry.CumLen2D(boundary);
+        double total = cum[cum.Length - 1];
+        foreach (var w in WallPicks)
+        {
+            if (w.Up != up || w.Pts == null || w.Pts.Count == 0) continue;
+            // [0727 off-by-one 수정] 옹벽은 '클릭한 선의 바깥쪽 면'부터. 절토는 사면선(crest)이 면의 바깥 모서리,
+            // 성토는 안쪽 모서리로 안팎이 뒤집힌다 → 절토: 사면선=Bench+1·소단선=Bench / 성토: 사면선=Bench·소단선=Bench+1.
+            int from = (w.Up == w.IsSlope) ? w.Bench + 1 : w.Bench;
+            var ts = new System.Collections.Generic.List<double>(w.Pts.Count);
+            foreach (var q in w.Pts) ts.Add(GradingGeometry.ParamAt(boundary, cum, q.X, q.Y));
+            ts.Sort();
+            if (ts.Count == 1) { zones.Add((ts[0], ts[0], from)); continue; }
+            // 최대 원형 간극을 찾고, 그 여집합(= 선이 실제로 덮는 구간)을 구간으로 사용(랩 대응).
+            double bestGap = -1; int gi = 0;
+            for (int i = 0; i < ts.Count; i++)
+            {
+                double a = ts[i];
+                double b = i + 1 == ts.Count ? ts[0] + total : ts[i + 1];
+                if (b - a > bestGap) { bestGap = b - a; gi = i; }
+            }
+            double t0 = ts[(gi + 1) % ts.Count], t1 = ts[gi];
+            zones.Add((t0, t1, from));
+        }
+
+        // [0728 — JACK] 같은 구간에서 두 개를 누르면(구간 겹침) 하나로 병합 — 시작단은 더 안쪽(min).
+        //   위쪽 선택이 아래를 이미 포함하므로 중복 선택은 병합이 자연스럽고, 겹침 구간의 이중 적용도 방지.
+        bool In(double a0, double a1, double t) => a0 <= a1 ? (t >= a0 && t <= a1) : (t >= a0 || t <= a1);
+        for (bool merged = true; merged;)
+        {
+            merged = false;
+            for (int i = 0; i < zones.Count && !merged; i++)
+                for (int j = i + 1; j < zones.Count && !merged; j++)
+                {
+                    var (a0, a1, af) = zones[i];
+                    var (b0, b1, bf) = zones[j];
+                    bool overlap = In(a0, a1, b0) || In(a0, a1, b1) || In(b0, b1, a0) || In(b0, b1, a1);
+                    if (!overlap) continue;
+                    double n0 = In(a0, a1, b0) ? a0 : b0;   // 상대 구간 안에서 시작하면 상대의 시작이 union 시작
+                    double n1 = In(a0, a1, b1) ? a1 : b1;
+                    zones[i] = (n0, n1, System.Math.Min(af, bf));
+                    zones.RemoveAt(j);
+                    merged = true;
+                }
+        }
+        return zones;
+    }
 
     public static GradingParams ToParams() => new()
     {
