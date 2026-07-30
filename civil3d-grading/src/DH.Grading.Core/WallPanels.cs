@@ -19,7 +19,7 @@ public static class WallPanels
         Point3 Origin,
         (double x, double y, double z) UAxis, (double x, double y, double z) VAxis, (double x, double y, double z) WAxis,
         IReadOnlyList<(double u, double v)> Local,
-        double PocketU = 0, double PocketV = 0);
+        double PocketU = 0, double PocketV = 0);   // [0730 롤백] 발 단면(FootTop)은 JACK 지시로 철회 — 균일 20cm
 
     public static string LastDiag { get; private set; } = "";
 
@@ -37,10 +37,13 @@ public static class WallPanels
     /// <param name="ground">원지반.</param>
     /// <param name="cut">true=절토, false=성토.</param>
     /// <param name="slopeN">사면 구배 n(1:n). PSM 절토 0.3.</param>
+    /// <param name="keep">[§75] 위치 필터 (x, y, 링번호 k) → true면 배치. 부분 옹벽(구간) 모드에서
+    /// 옹벽 구간 밖(일반 사면부) 패널 스팬을 건너뛰는 용도. null=전체 배치(전체 옹벽 모드).</param>
     public static List<Panel> Generate(
         IReadOnlyList<IReadOnlyList<Point3>> rings, IGroundSurface ground, bool cut,
         double slopeN = 0.3, double panel = 1.48, double joint = 0.02, double anchorDeg = 20.0,
-        double eps = 0.02)
+        double eps = 0.02,
+        System.Func<double, double, int, bool>? keep = null)
     {
         var result = new List<Panel>();
         LastQuoins.Clear();
@@ -185,6 +188,8 @@ public static class WallPanels
                 foreach (var (u0, u1, seg, cf) in spans)
                 {
                     double wCol = u1 - u0, uMid = (u0 + u1) / 2;
+                    if (keep != null)                                       // [§75] 옹벽 구간 밖 스팬 → 건너뜀
+                    { var kp = FacePt(seg, uMid, 0); if (!keep(kp.X, kp.Y, k)) continue; }
                     // [데이라잇 다각형 클립 — JACK 0721] 열 폭에 걸쳐 상한 s를 촘촘히 샘플. 한 행 안에서
                     //   실제 데이라잇 선을 따라 삼/사/오/육각형 무엇이든으로 자른다(직선 하나로 가로질러 찢는 문제 해결).
                     int NS = System.Math.Max(2, (int)System.Math.Ceiling(wCol / 0.12));

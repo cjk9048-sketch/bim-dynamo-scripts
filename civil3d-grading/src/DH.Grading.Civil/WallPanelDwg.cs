@@ -10,7 +10,13 @@ namespace DH.Grading.Civil;
 /// 각 패널을 로컬 프레임(U=폭, V=사면상방, W=바깥법선)에서 만들고 Matrix3d로 사면 위치에 변환.</summary>
 public static class WallPanelDwg
 {
-    private const double Thick = 0.20;       // 패널 두께
+    private const double Thick = 0.20;       // 패널 두께 (0730 롤백 — 발 단면(34cm 하부)은 JACK 지시로 철회, 균일 20cm)
+    // [JACK 0730 — 패널옹벽예시.png] 정착구 주변 사각 '도넛' 돌출부 — 옆에서 보면 계단식 단면:
+    //   1단(넓고 낮게) +5cm → 2단(좁고 높게) +10cm → 가운데 200×200 홈. 앵커·정착판은 2단 전면에.
+    private const double Collar1Size = 0.56; // 도넛 1단 한 변
+    private const double Collar1Out = 0.05;  // 도넛 1단 돌출
+    private const double Collar2Size = 0.36; // 도넛 2단 한 변
+    private const double Collar2Out = 0.10;  // 도넛 2단 돌출(=표면에서 10cm)
     private const double RecessSize = 0.20;  // 가운데 홈 한 변
     private const double RecessDepth = 0.08; // 홈 깊이(움푹, JACK 상세사진 — 더 선명하게)
     private const double AnchorR = 0.035;    // 앵커 원통 반지름(=70mm 지름)
@@ -93,19 +99,43 @@ public static class WallPanelDwg
                     }
                     catch { }
 
-                    // 콘크리트 무늬 — 모든 콘크리트 패널(잘린 것 포함), 돌을 패널 실제 모양(Local)에 클립. 실패해도 바탕 민판 유지.
-                    if (concrete)
+                    // 자연석 무늬 — [JACK 0730] 앵커판넬에도 적용(콘크리트 무늬 이식). 정착구 주변은 민판 유지.
+                    try
+                    {
+                        var pads = BuildConcretePads(p, excludePocket: !concrete && p.IsFull);
+                        if (pads != null) { pads.TransformBy(m); pads.LayerId = layBody; ms.AppendEntity(pads); tr.AddNewlyCreatedDBObject(pads, true); }
+                    }
+                    catch { }
+
+                    // [JACK 0730] 정착구 도넛 돌출부(온전 패널만) — 1단+2단 계단식, 2단 전면에 홈 각인.
+                    if (!concrete && p.IsFull)
                         try
                         {
-                            var pads = BuildConcretePads(p);
-                            if (pads != null) { pads.TransformBy(m); pads.LayerId = layBody; ms.AppendEntity(pads); tr.AddNewlyCreatedDBObject(pads, true); }
+                            var collar = new Solid3d();
+                            collar.CreateBox(Collar1Size, Collar1Size, Collar1Out);
+                            collar.TransformBy(Matrix3d.Displacement(new Vector3d(p.PocketU, p.PocketV, Collar1Out / 2)));
+                            var t2 = new Solid3d();
+                            t2.CreateBox(Collar2Size, Collar2Size, Collar2Out);
+                            t2.TransformBy(Matrix3d.Displacement(new Vector3d(p.PocketU, p.PocketV, Collar2Out / 2)));
+                            try { collar.BooleanOperation(BooleanOperationType.BoolUnite, t2); }
+                            catch { }
+                            finally { t2.Dispose(); }
+                            var pk = new Solid3d();
+                            pk.CreateBox(RecessSize, RecessSize, RecessDepth);
+                            pk.TransformBy(Matrix3d.Displacement(new Vector3d(p.PocketU, p.PocketV, Collar2Out - RecessDepth / 2)));
+                            try { collar.BooleanOperation(BooleanOperationType.BoolSubtract, pk); }
+                            catch { }
+                            finally { pk.Dispose(); }
+                            collar.TransformBy(m);
+                            collar.LayerId = layBody;
+                            ms.AppendEntity(collar); tr.AddNewlyCreatedDBObject(collar, true);
                         }
                         catch { }
 
                     if (!concrete && p.IsFull)
                     {
-                        // 부지 표면(전면) 월드 위치 = AnchorPos + W·FrontOut − ZSink.
-                        var padFace = new Point3d(p.AnchorPos.X, p.AnchorPos.Y, p.AnchorPos.Z - ZSink) + W * FrontOut;
+                        // 부지 표면(전면) 월드 위치 = AnchorPos + W·FrontOut − ZSink. 도넛 2단 전면에 정착.
+                        var padFace = new Point3d(p.AnchorPos.X, p.AnchorPos.Y, p.AnchorPos.Z - ZSink) + W * (FrontOut + Collar2Out);
                         try
                         {
                             var anc = BuildAnchor(p, padFace, W);
@@ -187,12 +217,14 @@ public static class WallPanelDwg
         return sol;
     }
 
-    /// <summary>콘크리트 옹벽 자연석 무늬 — 패널 면(로컬)을 지터드 격자 자연석으로 채우고 +Relief 돌출(사이 틈=홈).
-    /// 모든 돌을 한 리전으로 union → 패널당 솔리드 1개(성능). 실패 시 null(바탕 민판만 남음).</summary>
-    private static Solid3d BuildConcretePads(WallPanels.Panel p)
+    /// <summary>자연석 무늬 — 패널 면(로컬)을 지터드 격자 자연석으로 채우고 +Relief 돌출(사이 틈=홈).
+    /// 모든 돌을 한 리전으로 union → 패널당 솔리드 1개(성능). 실패 시 null(바탕 민판만 남음).
+    /// [JACK 0730] excludePocket=true면 가운데 정착구(200×200) 주변 돌은 건너뜀 — 정착구 모양 유지.</summary>
+    private static Solid3d BuildConcretePads(WallPanels.Panel p, bool excludePocket = false)
     {
+        var faceLocal = p.Local;
         double minU = double.MaxValue, maxU = double.MinValue, minV = double.MaxValue, maxV = double.MinValue;
-        foreach (var (u, v) in p.Local) { minU = System.Math.Min(minU, u); maxU = System.Math.Max(maxU, u); minV = System.Math.Min(minV, v); maxV = System.Math.Max(maxV, v); }
+        foreach (var (u, v) in faceLocal) { minU = System.Math.Min(minU, u); maxU = System.Math.Max(maxU, u); minV = System.Math.Min(minV, v); maxV = System.Math.Max(maxV, v); }
         double bw = maxU - minU, bh = maxV - minV;
         if (bw < 0.1 || bh < 0.1) return null;
         int nx = System.Math.Max(1, (int)System.Math.Round(bw / StoneSize));
@@ -208,14 +240,25 @@ public static class WallPanelDwg
                 pts[i, j] = new Point2d(minU + i * du + ju, minV + j * dv + jv);
             }
         double scale = System.Math.Max(0.5, 1 - GrooveW / System.Math.Min(du, dv));  // 중심 기준 축소=돌 사이 홈
-        // 패널 실제 폴리곤(Local)을 클립 창으로 — 돌을 지표면·코너 잘린 모양에 맞춰 자른다(삐져나옴·누락 방지).
-        var clip = p.Local; bool ccw = SignedArea(clip) > 0;
+        // 무늬 대상 면(faceLocal)을 클립 창으로 — 돌을 면 모양에 맞춰 자른다(삐져나옴·누락 방지).
+        var clip = faceLocal; bool ccw = SignedArea(clip) > 0;
         var curves = new DBObjectCollection();
         for (int i = 0; i < nx; i++)
             for (int j = 0; j < ny; j++)
             {
                 var a = pts[i, j]; var b = pts[i + 1, j]; var c = pts[i + 1, j + 1]; var d = pts[i, j + 1];
                 double cx = (a.X + b.X + c.X + d.X) / 4, cy = (a.Y + b.Y + c.Y + d.Y) / 4;
+                // [JACK 0730] 정착구 도넛 보호 — 도넛 1단(0.56)+여유에 걸치는 돌은 건너뜀(그 자리는 민판 유지).
+                if (excludePocket)
+                {
+                    double half = Collar1Size / 2 + 0.05;
+                    double sx0 = System.Math.Min(System.Math.Min(a.X, b.X), System.Math.Min(c.X, d.X));
+                    double sx1 = System.Math.Max(System.Math.Max(a.X, b.X), System.Math.Max(c.X, d.X));
+                    double sy0 = System.Math.Min(System.Math.Min(a.Y, b.Y), System.Math.Min(c.Y, d.Y));
+                    double sy1 = System.Math.Max(System.Math.Max(a.Y, b.Y), System.Math.Max(c.Y, d.Y));
+                    if (sx1 > p.PocketU - half && sx0 < p.PocketU + half &&
+                        sy1 > p.PocketV - half && sy0 < p.PocketV + half) continue;
+                }
                 Point2d Sc(Point2d q) => new Point2d(cx + (q.X - cx) * scale, cy + (q.Y - cy) * scale);
                 var stone = new List<Point2d> { Sc(a), Sc(b), Sc(c), Sc(d) };
                 var cl = ClipPolyToLocal(stone, clip, ccw);   // 돌을 패널 모양에 클립

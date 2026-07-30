@@ -24,10 +24,13 @@ public static class VWorldImagery
     private static readonly HttpClient Http = new() { Timeout = System.TimeSpan.FromSeconds(20) };
 
     /// <summary>부지 경계상자(한국 평면직각 TM) → outFolder에 baseName.jpg/.jgw/.prj 저장. 반환=안내 문자열(개수·줌).
-    /// lon0Deg=중앙자오선 경도(서부125·중부127·동부129·동해131), falseNorthing=원점가산 N(신600000·구500000·제주550000).</summary>
+    /// lon0Deg=중앙자오선 경도(서부125·중부127·동부129·동해131), falseNorthing=원점가산 N(신600000·구500000·제주550000).
+    /// [JACK 0728] epsgOut(한국 TM 벨트 EPSG, 예 5186)을 주면 웹메르카토르 모자이크를 그 좌표계 격자로
+    /// **재투영해서** GeoTIFF에 내장 — InfraWorks에서 위성이 WGS84가 아니라 도면 좌표계로 인식되게 한다.</summary>
     public static string Export(double minE, double minN, double maxE, double maxN,
                                 string outFolder, string baseName = "위성", double marginM = 20.0,
-                                double lon0Deg = 127.0, double falseNorthing = 600000.0)
+                                double lon0Deg = 127.0, double falseNorthing = 600000.0,
+                                int epsgOut = 3857)
     {
         if (maxE <= minE || maxN <= minN) return "위성: 경계상자가 유효하지 않아 생략";
         minE -= marginM; minN -= marginM; maxE += marginM; maxN += marginM;
@@ -78,16 +81,77 @@ public static class VWorldImagery
         var bgra = new byte[H * (long)stride > int.MaxValue ? 0 : H * stride];
         if (bgra.Length == 0) return "위성: 이미지가 너무 커서 생략(부지 축소 필요)";
         mosaic.CopyPixels(bgra, stride, 0);
-        var rgb = new byte[W * H * 3];
-        for (int i = 0, j = 0; i < bgra.Length; i += 4) { rgb[j++] = bgra[i + 2]; rgb[j++] = bgra[i + 1]; rgb[j++] = bgra[i]; }
 
         // 3857 지오레퍼런싱 — 모자이크 좌상단 = 타일(xmin,ymin) 좌상단.
         double mpp = 2.0 * OriginShift / (TileSize * System.Math.Pow(2, z));   // 픽셀당 미터(3857)
         double x0 = -OriginShift + xmin * TileSize * mpp;   // 좌상단 X(3857)
         double y0 = OriginShift - ymin * TileSize * mpp;    // 좌상단 Y(3857)
 
+        // ── [JACK 0728] 한국 TM 벨트로 재투영 — InfraWorks가 위성을 도면 좌표계로 인식하게 한다. ──
+        if (epsgOut > 0 && epsgOut != 3857)
+        {
+            double latMid = (south + north) / 2 * System.Math.PI / 180.0;
+            double res = System.Math.Max(0.05, mpp * System.Math.Cos(latMid));  // 지상 해상도(m/px)
+            int outW = (int)System.Math.Ceiling((maxE - minE) / res);
+            int outH = (int)System.Math.Ceiling((maxN - minN) / res);
+            if (outW >= 2 && outH >= 2 && (long)outW * outH * 3 <= 400_000_000)
+            {
+                var rgbTm = ReprojectToTm(bgra, W, H, stride, x0, y0, mpp,
+                                          minE, maxN, res, outW, outH, lon0Deg, falseNorthing);
+                WriteGeoTiff(tif, rgbTm, outW, outH, res, minE, maxN, epsgOut);
+                return $"위성.tif(GeoTIFF) 저장 — {cols}×{rows}타일(z{z}, 성공 {okTiles}/{cols * rows}), " +
+                       $"{res:0.00}m/px, EPSG:{epsgOut} 재투영 내장(도면 좌표계 일치)";
+            }
+            // 너무 크면 재투영 생략하고 3857로 폴백(아래).
+        }
+
+        var rgb = new byte[W * H * 3];
+        for (int i = 0, j = 0; i < bgra.Length; i += 4) { rgb[j++] = bgra[i + 2]; rgb[j++] = bgra[i + 1]; rgb[j++] = bgra[i]; }
         WriteGeoTiff(tif, rgb, W, H, mpp, x0, y0, 3857);   // EPSG:3857 내장 GeoTIFF(무손실)
         return $"위성.tif(GeoTIFF) 저장 — {cols}×{rows}타일(z{z}, 성공 {okTiles}/{cols * rows}), {mpp:0.00}m/px, EPSG:3857 내장";
+    }
+
+    /// <summary>웹메르카토르 모자이크(bgra)를 한국 TM 격자(res m/px, 좌상단 minE/maxN)로 리샘플(최근접).
+    /// 투영은 매우 매끄러우므로 32px 격자에서만 정확 계산하고 그 사이는 쌍선형 보간 — 픽셀당 역투영 없이 빠르다.</summary>
+    private static byte[] ReprojectToTm(byte[] bgra, int W, int H, int stride,
+        double x0, double y0, double mpp, double e0, double n0, double res, int outW, int outH,
+        double lon0Deg, double falseNorthing)
+    {
+        const int G = 32;
+        int gx = outW / G + 2, gy = outH / G + 2;
+        var fx = new double[gy, gx];
+        var fy = new double[gy, gx];
+        for (int j = 0; j < gy; j++)
+            for (int i = 0; i < gx; i++)
+            {
+                double E = e0 + (i * (double)G + 0.5) * res;
+                double N = n0 - (j * (double)G + 0.5) * res;
+                var (lon, lat) = TmToLonLat(E, N, lon0Deg, falseNorthing);
+                double mx = lon / 180.0 * OriginShift;
+                double my = System.Math.Log(System.Math.Tan((90.0 + lat) * System.Math.PI / 360.0)) / System.Math.PI * OriginShift;
+                fx[j, i] = (mx - x0) / mpp;
+                fy[j, i] = (y0 - my) / mpp;
+            }
+
+        var rgb = new byte[outW * outH * 3];
+        for (int py = 0; py < outH; py++)
+        {
+            int j0 = py / G; double tv = (py % G) / (double)G;
+            for (int px = 0; px < outW; px++)
+            {
+                int i0 = px / G; double tu = (px % G) / (double)G;
+                double sx = (fx[j0, i0] * (1 - tu) + fx[j0, i0 + 1] * tu) * (1 - tv)
+                          + (fx[j0 + 1, i0] * (1 - tu) + fx[j0 + 1, i0 + 1] * tu) * tv;
+                double sy = (fy[j0, i0] * (1 - tu) + fy[j0, i0 + 1] * tu) * (1 - tv)
+                          + (fy[j0 + 1, i0] * (1 - tu) + fy[j0 + 1, i0 + 1] * tu) * tv;
+                int ix = (int)(sx + 0.5), iy = (int)(sy + 0.5);   // 최근접(반올림 — 절삭 시 ~0.2m 좌하 편이)
+                if (ix < 0 || iy < 0 || ix >= W || iy >= H) continue;   // 모자이크 밖 → 검정
+                int src = iy * stride + ix * 4;
+                int dst = (py * outW + px) * 3;
+                rgb[dst] = bgra[src + 2]; rgb[dst + 1] = bgra[src + 1]; rgb[dst + 2] = bgra[src];
+            }
+        }
+        return rgb;
     }
 
     /// <summary>최소 GeoTIFF 라이터(무손실 RGB, 무압축, 단일 스트립) — 외부 라이브러리 없이 GeoTIFF 태그를 직접 기록.

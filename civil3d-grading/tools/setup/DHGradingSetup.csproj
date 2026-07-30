@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- DH.Grading 단일 exe 설치 프로그램(JACK 0728) — 번들 zip을 리소스로 내장,
+       더블클릭 한 번으로 애드인 복사 + 한국 좌표계 설치까지 수행.
+       self-contained 단일 파일로 발행해 .NET 미설치 PC에서도 동작:
+         dotnet publish -c Release -r win-x64 - -self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>DH정지플러그인_설치</AssemblyName>
+    <RootNamespace>DHGradingSetup</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 빌드 전에 조립 스크립트가 이 파일을 갱신한다(배포 번들 내용물의 zip). -->
+    <EmbeddedResource Include="bundle.zip" />
+  </ItemGroup>
+
+</Project>

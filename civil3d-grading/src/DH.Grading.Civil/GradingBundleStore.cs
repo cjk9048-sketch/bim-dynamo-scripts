@@ -9,6 +9,9 @@ namespace DH.Grading.Civil;
 public sealed class GradingBundle
 {
     public string PlanHandle = "";
+    /// <summary>[v4 — 다중 구역 누적] 이 구역 생성에 기준 지반으로 쓴 표면 핸들 — 1구역=원지반,
+    /// N구역=직전 누적면(정지면_DH이전). DHWALL 재생성(마지막 구역 재실행)이 세션 재시작 후에도 기준을 찾는 용도.</summary>
+    public string GroundHandle = "";
     // 계획선 fingerprint(ralplan C3+R1) — 정점수·centroid·bbox·둘레·bbox대각선
     public int VertexCount;
     public double CentroidX, CentroidY, BboxMinX, BboxMinY, BboxMaxX, BboxMaxY, Perimeter, Diagonal;
@@ -22,7 +25,7 @@ public sealed class GradingBundle
 
     /// <summary>[v3 — §75 구간 옹벽] 이 정지면에 적용된 옹벽 구간(계획경계 호길이 T0..T1, FromBench단부터 수직).
     /// DHNORI(노리선 제외+옹벽선 표현)·DHINFRA가 소비 — 옹벽 선택(WallPicks)은 1회성이라 적용 결과는 여기 보존.</summary>
-    public List<(double T0, double T1, int FromBench)>? CutWallZones, FillWallZones;
+    public List<(double T0, double T1, int FromBench, int ToBench)>? CutWallZones, FillWallZones;
 
     /// <summary>boundary에서 fingerprint 산출(2D).</summary>
     public static (int N, double Cx, double Cy, double MinX, double MinY, double MaxX, double MaxY,
@@ -73,31 +76,18 @@ public static class GradingBundleStore
 {
     private const string DictName = "DH_GRADING";
     private const string RecName = "BUNDLE";
-    public const int Version = 3; // v3: 끝에 옹벽 구간(zones) 추가(§75 — DHNORI/DHINFRA 소비)
+    public const int Version = 5; // v5: 옹벽 구간에 ToBench(끝단 — 사면생성 DHSLOPE) 추가. v4: 다중 구역+GroundHandle
 
-    public static void Save(Database db, Transaction tr, GradingBundle b)
+    /// <summary>[v4] 구역 전체 저장 — 헤더(서명·버전·구역수) 뒤에 구역 본문을 차례로.</summary>
+    public static void SaveAll(Database db, Transaction tr, IReadOnlyList<GradingBundle> regions)
     {
         var vals = new List<TypedValue>
         {
             new((int)DxfCode.Text, DictName),
             new((int)DxfCode.Int32, Version),
-            new((int)DxfCode.Text, b.PlanHandle),
-            new((int)DxfCode.Int32, b.VertexCount),
+            new((int)DxfCode.Int32, regions.Count),
         };
-        foreach (var d in new[] { b.CentroidX, b.CentroidY, b.BboxMinX, b.BboxMinY, b.BboxMaxX, b.BboxMaxY, b.Perimeter, b.Diagonal })
-            vals.Add(new((int)DxfCode.Real, d));
-        WritePoints(vals, b.Boundary);
-        WriteParams(vals, b.Params);
-        vals.Add(new((int)DxfCode.Int32, b.CutHasSlope ? 1 : 0));
-        vals.Add(new((int)DxfCode.Int32, b.FillHasSlope ? 1 : 0));
-        WritePoints(vals, b.CutFinalRing);
-        WritePoints(vals, b.FillFinalRing);
-        // v2: 링 리스트(개수 + 각 링 점렬)
-        WriteRingList(vals, b.CutFinalRings);
-        WriteRingList(vals, b.FillFinalRings);
-        // v3: 옹벽 구간(개수 + [T0,T1(40) FromBench(90)])
-        WriteZones(vals, b.CutWallZones);
-        WriteZones(vals, b.FillWallZones);
+        foreach (var b in regions) WriteRegion(vals, b);
 
         var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForWrite);
         DBDictionary dict;
@@ -116,8 +106,52 @@ public static class GradingBundleStore
         tr.AddNewlyCreatedDBObject(xr, true);
     }
 
-    /// <summary>번들 로드. 실패 시 null + reason(비개발자 안내용 짧은 사유).</summary>
-    public static GradingBundle? TryLoad(Database db, Transaction tr, out string reason)
+    // 구역 본문(v3 본문과 동일 순서) + v4 추가 필드(GroundHandle)를 끝에.
+    private static void WriteRegion(List<TypedValue> vals, GradingBundle b)
+    {
+        vals.Add(new((int)DxfCode.Text, b.PlanHandle));
+        vals.Add(new((int)DxfCode.Int32, b.VertexCount));
+        foreach (var d in new[] { b.CentroidX, b.CentroidY, b.BboxMinX, b.BboxMinY, b.BboxMaxX, b.BboxMaxY, b.Perimeter, b.Diagonal })
+            vals.Add(new((int)DxfCode.Real, d));
+        WritePoints(vals, b.Boundary);
+        WriteParams(vals, b.Params);
+        vals.Add(new((int)DxfCode.Int32, b.CutHasSlope ? 1 : 0));
+        vals.Add(new((int)DxfCode.Int32, b.FillHasSlope ? 1 : 0));
+        WritePoints(vals, b.CutFinalRing);
+        WritePoints(vals, b.FillFinalRing);
+        // v2: 링 리스트(개수 + 각 링 점렬)
+        WriteRingList(vals, b.CutFinalRings);
+        WriteRingList(vals, b.FillFinalRings);
+        // v3: 옹벽 구간(개수 + [T0,T1(40) FromBench(90)])
+        WriteZones(vals, b.CutWallZones);
+        WriteZones(vals, b.FillWallZones);
+        // v4: 기준 지반 핸들
+        vals.Add(new((int)DxfCode.Text, b.GroundHandle));
+    }
+
+    private static GradingBundle ReadRegion(TypedValue[] arr, ref int i, bool withGroundHandle, bool withZoneTo)
+    {
+        var b = new GradingBundle { PlanHandle = Str(arr, ref i), VertexCount = I32(arr, ref i) };
+        b.CentroidX = Dbl(arr, ref i); b.CentroidY = Dbl(arr, ref i);
+        b.BboxMinX = Dbl(arr, ref i); b.BboxMinY = Dbl(arr, ref i);
+        b.BboxMaxX = Dbl(arr, ref i); b.BboxMaxY = Dbl(arr, ref i);
+        b.Perimeter = Dbl(arr, ref i); b.Diagonal = Dbl(arr, ref i);
+        b.Boundary = ReadPoints(arr, ref i) ?? new List<Point3>();
+        b.Params = ReadParams(arr, ref i);
+        b.CutHasSlope = I32(arr, ref i) != 0;
+        b.FillHasSlope = I32(arr, ref i) != 0;
+        b.CutFinalRing = ReadPoints(arr, ref i);
+        b.FillFinalRing = ReadPoints(arr, ref i);
+        b.CutFinalRings = ReadRingList(arr, ref i);
+        b.FillFinalRings = ReadRingList(arr, ref i);
+        b.CutWallZones = ReadZones(arr, ref i, withZoneTo);
+        b.FillWallZones = ReadZones(arr, ref i, withZoneTo);
+        if (withGroundHandle) b.GroundHandle = Str(arr, ref i);
+        return b;
+    }
+
+    /// <summary>구역 전체 로드 — v4=구역 목록, v3=단일 구역(하위호환, 목록 1개로). 실패 시 null + reason.</summary>
+    public static List<GradingBundle>? TryLoadAll(Database db, Transaction tr, out string reason)
     {
         reason = "";
         var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
@@ -132,23 +166,19 @@ public static class GradingBundleStore
         try
         {
             if (Str(arr, ref i) != DictName) { reason = "번들 서명 불일치"; return null; }
-            if (I32(arr, ref i) != Version) { reason = $"번들 버전 불일치(v{Version} 아님) — DHGRADE 재실행 필요"; return null; }
-            var b = new GradingBundle { PlanHandle = Str(arr, ref i), VertexCount = I32(arr, ref i) };
-            b.CentroidX = Dbl(arr, ref i); b.CentroidY = Dbl(arr, ref i);
-            b.BboxMinX = Dbl(arr, ref i); b.BboxMinY = Dbl(arr, ref i);
-            b.BboxMaxX = Dbl(arr, ref i); b.BboxMaxY = Dbl(arr, ref i);
-            b.Perimeter = Dbl(arr, ref i); b.Diagonal = Dbl(arr, ref i);
-            b.Boundary = ReadPoints(arr, ref i) ?? new List<Point3>();
-            b.Params = ReadParams(arr, ref i);
-            b.CutHasSlope = I32(arr, ref i) != 0;
-            b.FillHasSlope = I32(arr, ref i) != 0;
-            b.CutFinalRing = ReadPoints(arr, ref i);
-            b.FillFinalRing = ReadPoints(arr, ref i);
-            b.CutFinalRings = ReadRingList(arr, ref i);
-            b.FillFinalRings = ReadRingList(arr, ref i);
-            b.CutWallZones = ReadZones(arr, ref i);
-            b.FillWallZones = ReadZones(arr, ref i);
-            return b;
+            int ver = I32(arr, ref i);
+            if (ver == 5 || ver == 4)
+            {
+                int n = I32(arr, ref i);
+                if (n <= 0) { reason = "번들에 구역 없음"; return null; }
+                var l = new List<GradingBundle>(n);
+                for (int k = 0; k < n; k++) l.Add(ReadRegion(arr, ref i, withGroundHandle: true, withZoneTo: ver >= 5));
+                return l;
+            }
+            if (ver == 3)   // 하위호환 — 기존 도면(v3 단일 구역)도 그대로 사용
+                return new List<GradingBundle> { ReadRegion(arr, ref i, withGroundHandle: false, withZoneTo: false) };
+            reason = $"번들 버전 불일치(v{ver}) — DHGRADE 재실행 필요";
+            return null;
         }
         catch (System.Exception ex)
         {
@@ -158,7 +188,7 @@ public static class GradingBundleStore
     }
 
     // ── 직렬화 유틸(고정 순서) ──
-    private static void WriteZones(List<TypedValue> vals, List<(double T0, double T1, int FromBench)>? zs)
+    private static void WriteZones(List<TypedValue> vals, List<(double T0, double T1, int FromBench, int ToBench)>? zs)
     {
         vals.Add(new((int)DxfCode.Int32, zs?.Count ?? 0));
         if (zs == null) return;
@@ -167,19 +197,23 @@ public static class GradingBundleStore
             vals.Add(new((int)DxfCode.Real, z.T0));
             vals.Add(new((int)DxfCode.Real, z.T1));
             vals.Add(new((int)DxfCode.Int32, z.FromBench));
+            vals.Add(new((int)DxfCode.Int32, z.ToBench));   // v5
         }
     }
 
-    private static List<(double T0, double T1, int FromBench)>? ReadZones(TypedValue[] arr, ref int i)
+    /// <summary>withToBench=false(v3/v4)는 끝단 없음 → int.MaxValue(끝까지)로 읽는다.</summary>
+    private static List<(double T0, double T1, int FromBench, int ToBench)>? ReadZones(
+        TypedValue[] arr, ref int i, bool withToBench)
     {
         int n = I32(arr, ref i);
         if (n <= 0) return null;
-        var l = new List<(double, double, int)>(n);
+        var l = new List<(double, double, int, int)>(n);
         for (int k = 0; k < n; k++)
         {
             double t0 = Dbl(arr, ref i), t1 = Dbl(arr, ref i);
             int fb = I32(arr, ref i);
-            l.Add((t0, t1, fb));
+            int tb = withToBench ? I32(arr, ref i) : int.MaxValue;
+            l.Add((t0, t1, fb, tb));
         }
         return l;
     }

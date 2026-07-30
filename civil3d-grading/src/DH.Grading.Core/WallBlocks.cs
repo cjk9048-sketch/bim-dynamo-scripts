@@ -37,10 +37,13 @@ public static class WallBlocks
     /// 내밈(JACK 0720: 정지면 TIN 벽면과 블록 전면이 같은 평면이면 InfraWorks Z-파이팅 → 앞 절반 돌출로 해소).</param>
     /// <param name="eps">벽 존재 판정 여유(m) — WallLines와 동일(0.02).</param>
     /// <param name="zTol">블록 채택 여유(m) — 코스 상면이 커팅라인을 이만큼 넘어도 허용(수치 노이즈 흡수).</param>
+    /// <param name="keep">[§75] 위치 필터 (x, y, 링번호 k) → true면 배치. 부분 옹벽(구간) 모드에서
+    /// 옹벽 구간 밖(일반 사면부) 블록을 건너뛰는 용도. null=전체 배치(전체 옹벽 모드).</param>
     public static List<Block> Generate(
         IReadOnlyList<IReadOnlyList<Point3>> rings, IGroundSurface ground, bool cut,
         double slopeN = 0.0, double blockW = 0.46, double blockH = 0.2, double blockD = 0.5,
-        double eps = 0.02, double zTol = 0.02)
+        double eps = 0.02, double zTol = 0.02,
+        System.Func<double, double, int, bool>? keep = null)
     {
         var result = new List<Block>();
         var diag = new System.Text.StringBuilder();
@@ -114,6 +117,7 @@ public static class WallBlocks
                         // 벽면 범위 밖(오목 코너 보정으로 교점이 넘어갈 때)은 링을 따라 꺾지 말고 벽면 직선
                         // 연장선으로 — At()은 링을 랩해 다음 벽면으로 돌아가므로 이웃 벽 블록과 겹침(치명).
                         var (x, y, ringZ, nx, ny) = SampleFace(walk, face, station);
+                        if (keep != null && !keep(x, y, k)) { col++; continue; }   // [§75] 옹벽 구간 밖 → 건너뜀
                         if (!ground.TryGetElevation(x, y, out double g)) { col++; continue; }
 
                         double toe, crest;
@@ -156,6 +160,7 @@ public static class WallBlocks
                 bool convex = (walk.Ccw ? cross : -cross) > 0;
                 if (cut ? !convex : convex) continue;                 // 뒤 쐐기 코너만(절토=볼록·성토=오목)
                 var cp = walk.At(cs);
+                if (keep != null && !keep(cp.x, cp.y, k)) continue;   // [§75] 옹벽 구간 밖 코너 → 건너뜀
                 double bx0 = n1x + n2x, by0 = n1y + n2y;              // 안쪽 이등분(정규화 전)
                 if (System.Math.Sqrt(bx0 * bx0 + by0 * by0) < 1e-6) continue; // 180° 반전 코너 — 건너뜀
 

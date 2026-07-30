@@ -24,6 +24,11 @@ public static class GradingBuilder
         // [재실행 정리] 같은 이름(및 _2, _3… 번호 변형)의 옛 DH 가상면을 먼저 삭제 — 실행마다 쌓여
         // 옛 표면을 보고 "안 생겼다"고 오인하는 혼란 방지(JACK). 항상 최신 하나만 남는다. 원지반(protect)은 제외.
         EraseSurfacesByBaseName(tr, name, protect);
+        // [0729 — JACK] 보조선(코너 능선·플래토 직선·단차 레이)이 링과 평면 교차하면 Civil3D가 교차마다
+        //   이벤트 뷰어 경고를 남김(단차 부지에서 수십 개) → 교차점을 양쪽에 공유 정점으로 삽입해 접점화.
+        int sharedPts = 0;
+        if (cornerLines != null && cornerLines.Count > 0)
+            sharedPts = BreaklinePrep.SplitLineRingCrossings(rings, cornerLines);
         ObjectId id = TinSurface.Create(db, UniqueName(db, tr, name));
         var tin = (TinSurface)tr.GetObject(id, OpenMode.ForWrite);
         foreach (var ring in rings) AddRingBreakline(tin, ring);
@@ -41,7 +46,8 @@ public static class GradingBuilder
         {
             int defCount = -1;
             try { defCount = tin.BreaklinesDefinition.Count; } catch { }
-            vb.AppendLine($"  브레이크라인 의도 {intended} / 정의됨 {defCount}");
+            vb.AppendLine($"  브레이크라인 의도 {intended} / 정의됨 {defCount}" +
+                          (sharedPts > 0 ? $" · 보조선-링 공유정점 {sharedPts}개 삽입(교차 경고 제거, maxΔZ {BreaklinePrep.LastMaxZGap:F3}m)" : ""));
             // 부지 중심(첫 링 평균)
             double cx = 0, cy = 0; int cn = 0;
             foreach (var pt in rings[0]) { cx += pt.X; cy += pt.Y; cn++; }
@@ -387,12 +393,19 @@ public static class GradingBuilder
     /// 태그된 3D 폴리선으로 그린다. up=true 절토/false 성토. XData=[appName, up, isSlope, bench, seg].</summary>
     public static void DrawSlopeEdgesTagged(Database db, Transaction tr,
         IEnumerable<(bool IsSlope, int Bench, int Seg, System.Collections.Generic.List<Point3> Pts)> cutEdges,
-        IEnumerable<(bool IsSlope, int Bench, int Seg, System.Collections.Generic.List<Point3> Pts)> fillEdges)
+        IEnumerable<(bool IsSlope, int Bench, int Seg, System.Collections.Generic.List<Point3> Pts)> fillEdges,
+        string planHandle = "", bool clearFirst = true)
     {
         EnsureRegApp(db, tr, GradingSettings.WallPickAppName);
         // [§75 1-A UX] 사면선/소단선은 기본 '회색'(JACK). 옹벽생성(DHWALL) 실행 중에만 색이 바뀌고 종료 시 복원.
+        // [다중 구역 0729] clearFirst=false면 기존 선을 지우지 않고 덧그림(구역 루프의 2번째 이후 호출용).
+        //   planHandle은 XData 끝에 문자열로 붙어 어느 구역(계획선)의 선인지 식별 — DHWALL이 마지막 구역만 허용.
         var layerId = new Dictionary<string, ObjectId>();
-        foreach (var name in EdgeLayerNames) { layerId[name] = EnsureLayer(db, tr, name, EdgeGrayAci); EraseOnLayer(db, tr, name); }
+        foreach (var name in EdgeLayerNames)
+        {
+            layerId[name] = EnsureLayer(db, tr, name, EdgeGrayAci);
+            if (clearFirst) EraseOnLayer(db, tr, name);
+        }
         SetLayersColor(db, tr, EdgeLayerNames, EdgeGrayAci); // 기존 레이어면 EnsureLayer가 색을 안 바꾸므로 강제 회색
 
         var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
@@ -419,11 +432,117 @@ public static class GradingBuilder
                     new TypedValue((int)DxfCode.ExtendedDataInteger16, (short)(up ? 1 : 0)),
                     new TypedValue((int)DxfCode.ExtendedDataInteger16, (short)(isSlope ? 1 : 0)),
                     new TypedValue((int)DxfCode.ExtendedDataInteger16, (short)bench),
-                    new TypedValue((int)DxfCode.ExtendedDataInteger16, (short)(uid++)));
+                    new TypedValue((int)DxfCode.ExtendedDataInteger16, (short)(uid++)),
+                    new TypedValue((int)DxfCode.ExtendedDataAsciiString, planHandle ?? ""));
             }
         }
         DrawSet(cutEdges, true);
         DrawSet(fillEdges, false);
+    }
+
+    /// <summary>[FGL 표기 — JACK 0729 샘플 스샷] 계획 부지 중앙에 수준점형 심볼(4분할 원, 북서·남동 빨강 채움)
+    /// + 위에 "FGL(+)191.00" 텍스트(색 7 — 배경 따라 흰/검). 레이어 'DH-FGL', 재실행 시 자기 레이어 청소.
+    /// 노리선(DHNORI)에서 구역마다 1개씩 호출.</summary>
+    public static void DrawFglMarkers(Database db, Transaction tr,
+        IEnumerable<(double X, double Y, double Z)> marks,
+        double radius = 2.0, double textH = 3.0)
+    {
+        ObjectId layerId = EnsureLayer(db, tr, "DH-FGL", 7);
+        EraseOnLayer(db, tr, "DH-FGL");
+        var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+        var red = Color.FromColorIndex(ColorMethod.ByAci, 1);
+        const double bulge90 = 0.41421356237;   // tan(22.5°) — 90° 호
+
+        foreach (var m in marks)
+        {
+            var c = new Point3d(m.X, m.Y, m.Z);
+            var circ = new Circle(c, Vector3d.ZAxis, radius) { LayerId = layerId, Color = red };
+            ms.AppendEntity(circ); tr.AddNewlyCreatedDBObject(circ, true);
+            var lh = new Line(new Point3d(m.X - radius, m.Y, m.Z), new Point3d(m.X + radius, m.Y, m.Z)) { LayerId = layerId, Color = red };
+            ms.AppendEntity(lh); tr.AddNewlyCreatedDBObject(lh, true);
+            var lv = new Line(new Point3d(m.X, m.Y - radius, m.Z), new Point3d(m.X, m.Y + radius, m.Z)) { LayerId = layerId, Color = red };
+            ms.AppendEntity(lv); tr.AddNewlyCreatedDBObject(lv, true);
+
+            // 채움 사분면 2개(체크무늬) — 북서(북→서 호)·남동(남→동 호), 둘 다 반시계(양수 bulge)로 볼록한
+            //   진짜 부채꼴이 되게 한다(0730 스샷: 서→북 순서는 호가 반대로 휘어 오목 조각이 됐음).
+            foreach (var (ax, ay, bx, by) in new[]
+            {
+                (m.X, m.Y + radius, m.X - radius, m.Y),   // NW: 북 → 서 (반시계, 11시 사분면)
+                (m.X, m.Y - radius, m.X + radius, m.Y),   // SE: 남 → 동 (반시계, 5시 사분면)
+            })
+            {
+                var pie = new Polyline(3) { Elevation = m.Z, LayerId = layerId, Closed = true };
+                pie.AddVertexAt(0, new Point2d(m.X, m.Y), 0, 0, 0);
+                pie.AddVertexAt(1, new Point2d(ax, ay), bulge90, 0, 0);
+                pie.AddVertexAt(2, new Point2d(bx, by), 0, 0, 0);
+                ms.AppendEntity(pie); tr.AddNewlyCreatedDBObject(pie, true);
+                try
+                {
+                    // [0730 스샷] 해치 평면 고도(Elevation)를 심볼 고도와 일치 — 안 주면 Z=0에 그려져 테두리와 분리.
+                    var h = new Hatch { LayerId = layerId, Color = red, Associative = false, Elevation = m.Z };
+                    ms.AppendEntity(h); tr.AddNewlyCreatedDBObject(h, true);
+                    h.SetHatchPattern(HatchPatternType.PreDefined, "SOLID");
+                    h.AppendLoop(HatchLoopTypes.Default, new ObjectIdCollection { pie.ObjectId });
+                    h.EvaluateHatch(true);
+                    pie.Erase();   // 윤곽 폴리선은 해치 생성 후 제거(원·십자선이 윤곽 담당)
+                }
+                catch { }          // 해치 실패 시 부채꼴 윤곽선이라도 남김
+            }
+
+            var txt = new DBText
+            {
+                TextString = $"FGL(+){m.Z:F2}",
+                Height = textH,
+                LayerId = layerId,
+                Color = Color.FromColorIndex(ColorMethod.ByAci, 7),
+                HorizontalMode = TextHorizontalMode.TextCenter,
+                VerticalMode = TextVerticalMode.TextBottom,
+                AlignmentPoint = new Point3d(m.X, m.Y + radius * 1.4, m.Z),
+            };
+            ms.AppendEntity(txt); tr.AddNewlyCreatedDBObject(txt, true);
+            try { txt.AdjustAlignment(db); } catch { }
+        }
+    }
+
+    /// <summary>[사면생성 DHSLOPE — JACK 0729] 클릭 대상용 '태그된' 옹벽선 작도 — 레이어 DH-옹벽선에
+    /// XData [app, up, isSlope=1, bench, seg(방향 전체 유일), planHandle] 부착. 기존 선은 지우지 않고 덧그림
+    /// (명령 종료 시 호출부가 반환된 ObjectId들만 지워 원상 복구). 반환=생성한 엔티티들.</summary>
+    public static List<ObjectId> DrawWallLinesTagged(Database db, Transaction tr,
+        IEnumerable<(bool IsSlope, int Bench, int Seg, System.Collections.Generic.List<Point3> Pts)> cutEdges,
+        IEnumerable<(bool IsSlope, int Bench, int Seg, System.Collections.Generic.List<Point3> Pts)> fillEdges,
+        string planHandle)
+    {
+        EnsureRegApp(db, tr, GradingSettings.WallPickAppName);
+        ObjectId layerId = EnsureLayer(db, tr, "DH-옹벽선", 1);
+        var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+        var made = new List<ObjectId>();
+
+        void DrawSet(IEnumerable<(bool IsSlope, int Bench, int Seg, System.Collections.Generic.List<Point3> Pts)> edges, bool up)
+        {
+            int uid = 0;   // [DHWALL과 동일 원칙] 방향 전체 유일 번호 — 영역/단마다 0부터 재시작하는 seg 충돌 방지
+            foreach (var (_, bench, _, pts) in edges)
+            {
+                if (pts == null || pts.Count < 2) continue;
+                var pl = new Polyline3d { LayerId = layerId };
+                ms.AppendEntity(pl); tr.AddNewlyCreatedDBObject(pl, true);
+                foreach (var q in pts)
+                {
+                    var v = new PolylineVertex3d(new Point3d(q.X, q.Y, q.Z));
+                    pl.AppendVertex(v); tr.AddNewlyCreatedDBObject(v, true);
+                }
+                pl.XData = new ResultBuffer(
+                    new TypedValue((int)DxfCode.ExtendedDataRegAppName, GradingSettings.WallPickAppName),
+                    new TypedValue((int)DxfCode.ExtendedDataInteger16, (short)(up ? 1 : 0)),
+                    new TypedValue((int)DxfCode.ExtendedDataInteger16, (short)1),
+                    new TypedValue((int)DxfCode.ExtendedDataInteger16, (short)bench),
+                    new TypedValue((int)DxfCode.ExtendedDataInteger16, (short)(uid++)),
+                    new TypedValue((int)DxfCode.ExtendedDataAsciiString, planHandle ?? ""));
+                made.Add(pl.ObjectId);
+            }
+        }
+        DrawSet(cutEdges, true);
+        DrawSet(fillEdges, false);
+        return made;
     }
 
     /// <summary>[§75] 옹벽 구간의 옹벽선(계단 상단 모서리) — 두꺼운 빨간 선(JACK 0728: 옹벽 구간은 노리선 대신 이것만).
@@ -540,6 +659,10 @@ public static class GradingBuilder
 
     /// <summary>이름(또는 이름_숫자)의 지표면 존재 여부 — DHNORI/DHINFRA 실행 게이트 ③용.</summary>
     public static bool SurfaceExistsByBaseName(Transaction tr, string baseName)
+        => !FindSurfaceByBaseName(tr, baseName).IsNull;
+
+    /// <summary>[다중 구역 0729] baseName(또는 _N 번호 변형) 지표면의 ObjectId — 없으면 Null.</summary>
+    public static ObjectId FindSurfaceByBaseName(Transaction tr, string baseName)
     {
         var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
         foreach (ObjectId sid in civilDoc.GetSurfaceIds())
@@ -547,9 +670,9 @@ public static class GradingBuilder
             if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
             string nm = s.Name;
             if (nm == baseName || (nm.StartsWith(baseName + "_") && int.TryParse(nm.Substring(baseName.Length + 1), out _)))
-                return true;
+                return sid;
         }
-        return false;
+        return ObjectId.Null;
     }
 
     // ── helpers ──

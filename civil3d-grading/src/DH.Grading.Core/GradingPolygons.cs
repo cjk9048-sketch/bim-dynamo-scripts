@@ -21,10 +21,13 @@ public static class GradingPolygons
     }
 
     /// <summary>사면/소단 띠 폴리곤(계획문 4번) — 연속 링쌍 strip을 도넛으로 클립.
-    /// (r[i], r[i+1]) 사이 strip: i 짝수=사면, 홀수=소단. LEVEL=단 번호(1부터), ELEV=쌍 평균 Z.</summary>
+    /// (r[i], r[i+1]) 사이 strip: i 짝수=사면, 홀수=소단. LEVEL=단 번호(1부터), ELEV=쌍 평균 Z.
+    /// [§75] wallCuts(옹벽 구간 쐐기 폴리곤 + 시작단): 해당 단(bench=i/2 ≥ FromBench)의 '사면' 띠에서
+    /// 구간 내부를 빼고 내보낸다 — 옹벽면은 사면 SHP가 아니라 옹벽3D.dwg가 담당. 소단 띠는 그대로.</summary>
     public static List<(List<IReadOnlyList<Point3>> Rings, double Area, string Kind, int Level, double Elev)>
         Strips(IReadOnlyList<IReadOnlyList<Point3>> rings,
-        IReadOnlyList<Point3> finalRing, IReadOnlyList<Point3> boundary)
+        IReadOnlyList<Point3> finalRing, IReadOnlyList<Point3> boundary,
+        IReadOnlyList<(Geometry Poly, int FromBench, int ToBench)>? wallCuts = null)
     {
         var outp = new List<(List<IReadOnlyList<Point3>>, double, string, int, double)>();
         var donut = Donut(finalRing, boundary);
@@ -45,11 +48,118 @@ public static class GradingPolygons
 
             string kind = i % 2 == 0 ? "사면" : "소단";
             int level = i / 2 + 1;
+            if (kind == "사면" && wallCuts != null)
+            {
+                int bench = i / 2;
+                foreach (var wc in wallCuts)
+                {
+                    if (bench < wc.FromBench || bench > wc.ToBench) continue;
+                    try { clipped = clipped.Difference(wc.Poly); } catch { }
+                    if (clipped.IsEmpty) break;
+                }
+                if (clipped.IsEmpty) continue;
+            }
             double elev = (AvgZ(rings[i]) + AvgZ(rings[i + 1])) * 0.5;
             foreach (var f in ToPolygonFeatures(clipped))
                 outp.Add((f.Rings, f.Area, kind, level, elev));
         }
         return outp;
+    }
+
+    /// <summary>[§75] 옹벽 구간 필터용 쐐기 폴리곤 — 각 구간(경계 호길이 [T0..T1])에 대해
+    /// '경계 서브아크 + 최외곽 링의 구간 내 런'을 이어 닫은 다각형(+1m 버퍼)을 만든다.
+    /// 사면 띠 SHP에서 옹벽면을 빼는 필터 전용(mm 정밀도 불요·바깥 여유는 무해 — 띠는 도넛 안에만 존재).
+    /// 링 런을 못 찾으면 서브아크 3m 버퍼로 폴백. 퇴화 구간은 건너뜀.</summary>
+    public static List<(Geometry Poly, int FromBench, int ToBench)> WallZoneWedges(
+        IReadOnlyList<Point3> boundary, IReadOnlyList<IReadOnlyList<Point3>> rings,
+        IReadOnlyList<(double T0, double T1, int FromBench, int ToBench)> zones)
+    {
+        var outp = new List<(Geometry, int, int)>();
+        if (boundary == null || boundary.Count < 3 || rings == null || rings.Count == 0 || zones == null) return outp;
+        var gf = NtsSupport.Factory();
+        double[] cum = GradingGeometry.CumLen2D(boundary);
+        double total = cum[cum.Length - 1];
+        if (total < 1e-6) return outp;
+
+        // 경계 호길이 t(0..total, 랩) 위치의 XY.
+        Point3 PointAtParam(double t)
+        {
+            t = ((t % total) + total) % total;
+            int lo = 0, hi = cum.Length - 1;
+            while (lo + 1 < hi) { int m = (lo + hi) / 2; if (cum[m] <= t) lo = m; else hi = m; }
+            var a = boundary[lo]; var b = boundary[(lo + 1) % boundary.Count];
+            double seg = cum[lo + 1] - cum[lo];
+            double u = seg < 1e-12 ? 0 : (t - cum[lo]) / seg;
+            return new Point3(a.X + (b.X - a.X) * u, a.Y + (b.Y - a.Y) * u, 0);
+        }
+
+        var outerRing = rings[rings.Count - 1];
+        foreach (var z in zones)
+        {
+            double t0 = z.T0, t1 = z.T1 >= z.T0 ? z.T1 : z.T1 + total;
+            double arc = t1 - t0;
+            if (arc < 0.5) continue;
+
+            // ① 경계 서브아크(1m 간격 샘플).
+            var pts = new List<Point3>();
+            int nA = System.Math.Max(2, (int)System.Math.Ceiling(arc));
+            for (int s = 0; s <= nA; s++) pts.Add(PointAtParam(t0 + arc * s / nA));
+
+            // ② 최외곽 링에서 구간 내 정점들의 최장 연속 런(원형) — 뒤집어 이어붙여 닫는다.
+            var run = LongestZoneRun(outerRing, boundary, cum, z.T0, z.T1);
+            Geometry? poly = null;
+            if (run.Count >= 2)
+            {
+                for (int s = run.Count - 1; s >= 0; s--) pts.Add(new Point3(run[s].X, run[s].Y, 0));
+                var pg = NtsSupport.ToCleanPolygon(pts, gf);
+                if (pg != null) { try { poly = pg.Buffer(1.0); } catch { poly = pg; } }
+            }
+            if (poly == null)
+            {
+                // 폴백: 서브아크 선 3m 버퍼(구간이 아주 짧거나 링 런 탐지 실패).
+                try
+                {
+                    int nn = System.Math.Min(pts.Count, nA + 1);
+                    var cs = new Coordinate[nn];
+                    for (int s = 0; s < nn; s++) cs[s] = new Coordinate(pts[s].X, pts[s].Y);
+                    poly = gf.CreateLineString(cs).Buffer(3.0);
+                }
+                catch { continue; }
+            }
+            if (poly != null && !poly.IsEmpty) outp.Add((poly, z.FromBench, z.ToBench));
+        }
+        return outp;
+    }
+
+    /// <summary>링 정점 중 경계 최근접 호길이가 [T0..T1](랩 허용)에 드는 최장 연속(원형) 런.</summary>
+    private static List<Point3> LongestZoneRun(IReadOnlyList<Point3> ring,
+        IReadOnlyList<Point3> boundary, double[] cum, double T0, double T1)
+    {
+        var best = new List<Point3>();
+        if (ring == null || ring.Count < 2) return best;
+        int n = ring.Count;
+        var inz = new bool[n];
+        for (int i = 0; i < n; i++)
+        {
+            double t = GradingGeometry.ParamAt(boundary, cum, ring[i].X, ring[i].Y);
+            inz[i] = T0 <= T1 ? (t >= T0 && t <= T1) : (t >= T0 || t <= T1);
+        }
+        int start = -1;                      // 원형 런: in-zone이 아닌 첫 정점 다음부터 훑는다.
+        for (int i = 0; i < n; i++) if (!inz[i]) { start = i; break; }
+        if (start < 0) return new List<Point3>(ring);   // 전 정점이 구간 안
+        var cur = new List<Point3>();
+        for (int k = 1; k <= n; k++)
+        {
+            int i = (start + k) % n;
+            if (inz[i]) cur.Add(ring[i]);
+            else
+            {
+                if (cur.Count > best.Count) best = new List<Point3>(cur);
+                cur.Clear();
+            }
+        }
+        if (cur.Count > best.Count) best = cur;
+        return best;
     }
 
     /// <summary>계획폴리곤(계획문 5번) — Z=0 링 목록(구멍 없음).</summary>

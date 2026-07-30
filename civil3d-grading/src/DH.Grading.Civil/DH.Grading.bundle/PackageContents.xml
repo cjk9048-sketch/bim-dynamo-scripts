@@ -6,7 +6,7 @@
   Contents 폴더에 빌드 산출물(DH.Grading.Civil.dll, DH.Grading.Core.dll)을 넣을 것.
 -->
 <ApplicationPackage SchemaVersion="1.0"
-                    AppVersion="1.0.0"
+                    AppVersion="12.1.0"
                     ProductType="Application"
                     Name="DH 정지(절성토)"
                     Description="계단식 정지 비탈면 자동 생성 (distance-field)">
@@ -19,6 +19,9 @@
                     PerDocument="False">
       <Commands GroupName="DH_GRADING">
         <Command Global="DHGRADE" Local="DHGRADE" />
+        <Command Global="DHWALL" Local="DHWALL" />
+        <Command Global="DHNORI" Local="DHNORI" />
+        <Command Global="DHINFRA" Local="DHINFRA" />
         <Command Global="DHGRADESET" Local="DHGRADESET" />
       </Commands>
     </ComponentEntry>

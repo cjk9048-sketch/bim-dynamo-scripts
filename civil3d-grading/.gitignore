@@ -1,3 +1,10 @@
 DHXSEC_삼각망*.csv
 DHXSEC_체인_*.csv
 HARNESS_*.csv
+DHGRADE_교선덤프_*.csv
+배포/DH.Grading_설치/
+배포/*.zip
+배포/*.exe
+tools/setup/bundle.zip
+tools/setup/bin/
+tools/setup/obj/

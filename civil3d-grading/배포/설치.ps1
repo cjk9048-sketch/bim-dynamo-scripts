@@ -1,6 +1,8 @@
-# DH.Grading 애드인 설치 스크립트 (JACK 0723)
+# DH.Grading 애드인 설치 스크립트 (JACK 0723, 0728 갱신)
 #   ① .bundle 폴더를 Civil3D 자동로드 위치로 복사
-#   ② 한국 좌표계 정의(KOREA_GRS80/BESSEL ###TM)가 없으면 사용자 좌표계 사전에 설치(딱 한 번)
+#   ② 한국 좌표계 정의(KOREA_GRS80/BESSEL ###TM + UTM-K, 9종)가 없으면 사용자 좌표계 사전에 설치(딱 한 번)
+#      ※ v12.1부터 애드인 자체도 시작 시 좌표계를 검사·설치하므로(계정별 자동), 이 스크립트를 못 쓴
+#        경우에도 번들 폴더만 복사돼 있으면 좌표계는 첫 실행 때 자동으로 채워진다.
 # 사용법: 설치.bat 더블클릭(권장) 또는  powershell -ExecutionPolicy Bypass -File 설치.ps1
 
 $ErrorActionPreference = 'Stop'
@@ -64,7 +66,9 @@ else {
         # 다른 사용자 정의가 있어 자동 병합 불가 → 덮어쓰지 않고 백업만(데이터 보호)
         Copy-Item $dstCoord "$dstCoord.dhbak" -Force
         Say "주의: 기존 사용자 좌표계 사전이 있어 자동 병합을 하지 않았습니다." 'Yellow'
-        Say "      백업: $dstCoord.dhbak — 한국 좌표계가 필요하면 수동 확인이 필요합니다." 'Yellow'
+        Say "      백업: $dstCoord.dhbak" 'Yellow'
+        Say "      한국 좌표계가 필요하면 Civil3D에서 MAPCSLIBRARY 명령 → 가져오기로 아래 파일을 선택하세요:" 'Yellow'
+        Say "      $coordSrc\CSLibrary.xml" 'Yellow'
     }
 }
 
