@@ -11,11 +11,11 @@ namespace DH.Grading.Civil.Commands;
 /// "infraworks 기초자료"(DHINFRA) — 정지 결과를 InfraWorks 기초자료로 **폴더 선택** 후 내보낸다(JACK 0724).
 /// **있는 객체만** 내보낸다(빈 파일 안 만듦 — 헷갈림 방지):
 ///   · 지형.xml           — 정지면_DH TinSurface LandXML
-///   · 옹벽3D.dwg         — 옹벽 3D(보강토/앵커판넬/콘크리트) — 옹벽이 있을 때만
+///   · 옹벽3D.dwg         — 옹벽 3D(보강토/앵커판넬/역T) — 옹벽이 있을 때만
 ///   · 계획면.shp         — 계획폴리곤
 ///   · 소단_절토/성토.shp — 소단 띠(있을 때만)
 ///   · 사면_절토/성토.shp — 사면 띠(사면 모드·있을 때만)
-///   · 위성.tif           — 브이월드 위성영상 GeoTIFF(EPSG:3857 내장, 무손실)
+///   · 위성.tif           — 브이월드 위성영상 GeoTIFF(도면 TM 벨트 EPSG로 재투영 내장, 무손실)
 ///   · 토공량.csv         — 절토/성토/순토량 상세(하나만)
 /// 좌표계는 도면 좌표계 자동 인식(없으면 설정값으로 도면 지정).
 /// ※ 옹벽선 SHP·블록물량/진단 CSV·InfraWorks 자동생성·DHInfra 날짜폴더는 전부 폐지(JACK 0724).
@@ -32,14 +32,14 @@ public sealed class InfraworksCommand
 
         try
         {
-            GradingBundle? bundle;
+            System.Collections.Generic.List<GradingBundle>? regions;
             string note;
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
-                bundle = NoriCommand.PassGates(db, tr, ed, "infraworks 기초자료", out note);
+                regions = NoriCommand.PassGates(db, tr, ed, "infraworks 기초자료", out note);
                 tr.Commit();
             }
-            if (bundle == null) return;
+            if (regions == null || regions.Count == 0) return;
 
             // 폴더 선택 — 원하는 위치에 내보낸다(JACK 0724).
             var dlg = new Microsoft.Win32.OpenFolderDialog { Title = "infraworks 기초자료 내보낼 폴더 선택" };
@@ -74,12 +74,15 @@ public sealed class InfraworksCommand
             {
                 using Transaction trG = db.TransactionManager.StartTransaction();
                 var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+                // [다중 구역 0729] '정지면_DH이전'(누적 기준면) 등 산출물 파생 이름 전부 제외 — 접두 일치.
                 var skip = new[] { "가상절토_DH", "가상성토_DH", "정지면_DH" };
                 Autodesk.Civil.DatabaseServices.TinSurface? bestSurf = null; int bestTri = -1;
                 foreach (ObjectId sid in civilDoc.GetSurfaceIds())
                 {
                     if (trG.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.TinSurface ts) continue;
-                    if (System.Array.IndexOf(skip, ts.Name) >= 0) continue;
+                    bool ours = false;
+                    foreach (var sk in skip) if (ts.Name.StartsWith(sk)) { ours = true; break; }
+                    if (ours) continue;
                     int tri = 0; try { tri = ts.GetTriangles(false).Count; } catch { }
                     if (tri > bestTri) { bestTri = tri; bestSurf = ts; }
                 }
@@ -96,26 +99,61 @@ public sealed class InfraworksCommand
                 new ShpField("ELEV", 'N', 12, 3), new ShpField("AREA", 'N', 18, 2),
             };
 
-            // ── ① 계획면.shp ──
-            var planRings = GradingPolygons.PlanRings(bundle.Boundary);
-            if (planRings != null)
+            // ── ① 계획면.shp — [다중 구역] 구역별 계획폴리곤 전부 ──
             {
-                var feats = new System.Collections.Generic.List<(System.Collections.Generic.IReadOnlyList<System.Collections.Generic.IReadOnlyList<Point3>>, object?[])>
-                    { (planRings, new object?[] { "계획면", Area2D(bundle.Boundary) }) };
-                ShapefileWriter.WritePolygons(System.IO.Path.Combine(folder, "계획면"), feats, polyFieldsPlain, wkt);
-                log.AppendLine("계획면.shp: 1개"); made.Add("계획면.shp");
+                var feats = new System.Collections.Generic.List<(System.Collections.Generic.IReadOnlyList<System.Collections.Generic.IReadOnlyList<Point3>>, object?[])>();
+                foreach (var rg in regions)
+                {
+                    var planRings = GradingPolygons.PlanRings(rg.Boundary);
+                    if (planRings != null) feats.Add((planRings, new object?[] { "계획면", Area2D(rg.Boundary) }));
+                }
+                if (feats.Count > 0)
+                {
+                    ShapefileWriter.WritePolygons(System.IO.Path.Combine(folder, "계획면"), feats, polyFieldsPlain, wkt);
+                    log.AppendLine($"계획면.shp: {feats.Count}개"); made.Add("계획면.shp");
+                }
+                else log.AppendLine("계획면.shp: 생략(계획폴리곤 퇴화)");
             }
-            else log.AppendLine("계획면.shp: 생략(계획폴리곤 퇴화)");
 
             // ── 방향별(절토/성토): 소단·사면 SHP(있을 때만) + 옹벽 3D 객체 수집 ──
             var wallSets = new System.Collections.Generic.List<(bool Cut, System.Collections.Generic.List<WallBlocks.Block> Blocks, System.Collections.Generic.List<WallBlocks.Block> Caps)>();
             var panelSets = new System.Collections.Generic.List<(bool Cut, System.Collections.Generic.List<WallPanels.Panel> Panels)>();
             var concreteSets = new System.Collections.Generic.List<(bool Cut, System.Collections.Generic.List<WallPanels.Panel> Panels)>();
             var quoinAll = new System.Collections.Generic.List<WallPanels.Quoin>();
+            var teeAll = new System.Collections.Generic.List<WallTee.Run>();   // [0730] 역T형(1단 구간)
             static System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? RingsOf(
                 System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? many,
                 System.Collections.Generic.List<Point3>? one)
                 => many ?? (one != null ? new() { one } : null);
+
+            // [다중 구역 0729] 사면/소단 띠는 구역 전체에서 모은 뒤 한 번에 SHP로(구역별로 쓰면 파일 덮어씀).
+            var stripFeats = new System.Collections.Generic.Dictionary<string,
+                System.Collections.Generic.List<(System.Collections.Generic.IReadOnlyList<System.Collections.Generic.IReadOnlyList<Point3>>, object?[])>>();
+
+            for (int ri = 0; ri < regions.Count; ri++)
+            {
+                var bundle = regions[ri];
+                string rPre = regions.Count > 1 ? $"[구역{ri + 1}] " : "";
+
+                // [리뷰 0729 사소3] 옹벽 3D 토우 표고는 '그 구역의 기준 지반'으로 — 누적 구역(2번+)은 원지반이
+                //   아니라 직전 누적면 위에 앉으므로, 번들의 GroundHandle 표면이 살아 있으면 그걸 샘플러로 쓴다.
+                //   (못 찾으면 공용 원지반 샘플러 폴백 — 사면/소단 띠는 계획 Z 기하라 무관.)
+                CachedGroundSurface? regionSampler = groundSampler;
+                if (!string.IsNullOrEmpty(bundle.GroundHandle))
+                {
+                    try
+                    {
+                        var gid = NoriCommand.FindByHandle(db, bundle.GroundHandle);
+                        if (!gid.IsNull)
+                        {
+                            using Transaction trR = db.TransactionManager.StartTransaction();
+                            if (trR.GetObject(gid, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.TinSurface rts)
+                                regionSampler = new CachedGroundSurface(rts);
+                            trR.Commit();
+                        }
+                    }
+                    catch { }
+                }
 
             foreach (var (up, label, hasSlope, ringList) in new[]
             {
@@ -123,77 +161,166 @@ public sealed class InfraworksCommand
                 (false, "성토", bundle.FillHasSlope, RingsOf(bundle.FillFinalRings, bundle.FillFinalRing)),
             })
             {
-                if (!hasSlope || ringList == null || ringList.Count == 0) { log.AppendLine($"{label}: 사면/경계 없음 — 생략"); continue; }
+                if (!hasSlope || ringList == null || ringList.Count == 0) { log.AppendLine($"{rPre}{label}: 사면/경계 없음 — 생략"); continue; }
 
                 double slopeN = up ? bundle.Params.CutSlope : bundle.Params.FillSlope;
                 WallStyle style = up ? GradingSettings.CutWallStyle : GradingSettings.FillWallStyle;
                 bool wallOk = slopeN <= 0.05 + 1e-9;   // 옹벽 게이트(경사 n>0.05면 사면 취급)
-                if (style != WallStyle.없음_사면 && !wallOk) log.AppendLine($"{label}: 경사 1:{slopeN} > 1:0.05 → 옹벽({style}) 생성 안 함(사면 처리)");
                 bool wallMode = style != WallStyle.없음_사면 && wallOk;
 
-                var vs = GradingGeometry.Build(bundle.Boundary, ng, bundle.Params, up);
-                if (!vs.HasSlope) { log.AppendLine($"{label}: 링 복원 실패 — 띠 생략"); continue; }
+                // [§75 0728] 사면→옹벽 부분 전환 구간(번들 v3+) — 링 재계산·사면/소단 띠·옹벽 3D에 반영.
+                var zones = up ? bundle.CutWallZones : bundle.FillWallZones;
+                bool zoneMode = !wallMode && zones != null && zones.Count > 0;
+                if (style != WallStyle.없음_사면 && !wallOk && !zoneMode)
+                    log.AppendLine($"{rPre}{label}: 경사 1:{slopeN} > 1:0.05 → 옹벽({style}) 생성 안 함(사면 처리)");
+
+                var vs = GradingGeometry.Build(bundle.Boundary, ng, bundle.Params, up, zoneMode ? zones : null);
+                if (!vs.HasSlope) { log.AppendLine($"{rPre}{label}: 링 복원 실패 — 띠 생략"); continue; }
+
+                // [§75] 구간 쐐기 폴리곤 — 사면 띠 SHP에서 옹벽면 제외용(소단 띠는 그대로).
+                System.Collections.Generic.List<(NetTopologySuite.Geometries.Geometry Poly, int FromBench, int ToBench)>? wallCuts = null;
+                System.Func<double, double, int, bool>? zoneKeep = null;
+                bool styleZoneAny = false;
+                if (zoneMode)
+                {
+                    wallCuts = GradingPolygons.WallZoneWedges(bundle.Boundary, vs.Rings, zones!);
+
+                    // [역T — JACK 0730 확정] 정지옵션에서 역T형을 고른 방향만: 계획경계에 바로 붙고(FromBench=0)
+                    //   1단 안에서 원지반과 만나는 구간은 역T 생성, **2단 이상 구간은 자동 대체**(절토=앵커판넬/성토=보강토).
+                    var teeIdx = new System.Collections.Generic.HashSet<int>();
+                    if (style == WallStyle.역T형 && regionSampler != null)
+                    {
+                        var (tRuns, tIdx, tDiag) = WallTee.GenerateAuto(
+                            bundle.Boundary, zones!, regionSampler, up, bundle.Params.BenchHeight);
+                        teeAll.AddRange(tRuns);
+                        foreach (var ix in tIdx) teeIdx.Add(ix);
+                        if (!string.IsNullOrEmpty(tDiag))
+                            log.AppendLine($"{rPre}역T_{label}: {tDiag} (역T 안 된 구간은 {(up ? "앵커판넬" : "보강토")} 자동 대체)");
+                    }
+                    var styleZones = new System.Collections.Generic.List<(double T0, double T1, int FromBench, int ToBench)>();
+                    for (int sz = 0; sz < zones!.Count; sz++)
+                        if (!teeIdx.Contains(sz)) styleZones.Add(zones[sz]);
+                    styleZoneAny = styleZones.Count > 0;
+
+                    var cumB = GradingGeometry.CumLen2D(bundle.Boundary);
+                    var bnd = bundle.Boundary;
+                    if (styleZoneAny)
+                        // 링번호 k(1=1단 벽면, 3=2단…) → 단번호 (k-1)/2. 경계 최근접 호길이로 구간 판정(노리선과 동일식).
+                        zoneKeep = (x, y, ringK) =>
+                        {
+                            int bench = (ringK - 1) / 2;
+                            double t = GradingGeometry.ParamAt(bnd, cumB, x, y);
+                            foreach (var zz in styleZones)
+                            {
+                                if (bench < zz.FromBench || bench > zz.ToBench) continue;
+                                bool inz = zz.T0 <= zz.T1 ? (t >= zz.T0 && t <= zz.T1) : (t >= zz.T0 || t <= zz.T1);
+                                if (inz) return true;
+                            }
+                            return false;
+                        };
+                    log.AppendLine($"{rPre}{label}: 옹벽 구간 {zones!.Count}개 반영(쐐기 {wallCuts.Count} · 역T {teeIdx.Count} · 스타일 {styleZones.Count})");
+                }
 
                 var strips = new System.Collections.Generic.List<(System.Collections.Generic.List<System.Collections.Generic.IReadOnlyList<Point3>> Rings, double Area, string Kind, int Level, double Elev)>();
                 foreach (var finalRing in ringList)
                     if (finalRing != null && finalRing.Count >= 3)
-                        strips.AddRange(GradingPolygons.Strips(vs.Rings, finalRing, bundle.Boundary));
+                        strips.AddRange(GradingPolygons.Strips(vs.Rings, finalRing, bundle.Boundary, wallCuts));
 
                 foreach (string kind in new[] { "소단", "사면" })
                 {
-                    // 옹벽 모드면 사면 띠 없음(벽이 대신). 있는 것만 출력 — 0개면 파일 안 만듦(JACK 0724).
+                    // 옹벽 모드면 사면 띠 없음(벽이 대신). 띠는 구역 전체 누적 후 한 번에 쓴다.
                     if (kind == "사면" && wallMode) continue;
                     var part = strips.Where(s => s.Kind == kind).ToList();
-                    if (part.Count == 0) { log.AppendLine($"{kind}_{label}.shp: 생략(0개)"); continue; }
-                    var feats = part.Select(s =>
+                    if (part.Count == 0) continue;
+                    string key = $"{kind}_{label}";
+                    if (!stripFeats.TryGetValue(key, out var bag))
+                        stripFeats[key] = bag = new();
+                    bag.AddRange(part.Select(s =>
                         ((System.Collections.Generic.IReadOnlyList<System.Collections.Generic.IReadOnlyList<Point3>>)s.Rings,
-                         new object?[] { s.Kind, s.Level, s.Elev, s.Area })).ToList();
-                    ShapefileWriter.WritePolygons(System.IO.Path.Combine(folder, $"{kind}_{label}"), feats, stripFields, wkt);
-                    log.AppendLine($"{kind}_{label}.shp: {feats.Count}개"); made.Add($"{kind}_{label}.shp");
+                         new object?[] { s.Kind, s.Level, s.Elev, s.Area })));
                 }
 
-                // 옹벽 3D 객체 수집(SHP 아님, 옹벽3D.dwg로) — 앵커판넬/콘크리트=패널, 보강토=블록. 옹벽선 SHP는 폐지.
-                if ((style == WallStyle.앵커판넬 || style == WallStyle.콘크리트) && wallOk)
+                // 옹벽 3D 객체 수집(SHP 아님, 옹벽3D.dwg로) — 앵커판넬=패널(+무늬), 보강토=블록, 역T=단면 압출.
+                // [§75] 구간 모드(zoneMode)에선 벽 구배=지오메트리와 같은 MinSlope(기본 1:0.05)이고
+                //   keep 필터로 구간 안(단번호 ≥ FromBench)에만 배치한다.
+                double effN = wallOk ? slopeN : bundle.Params.MinSlope;
+                string zTag = zoneMode ? "(§75 구간)" : "";
+
+                // [역T — 전체 옹벽 모드] 경사≤0.05 전면 옹벽 + 역T형 선택: 부지 전체가 1단 순수 옹벽이면 역T,
+                //   아니면 자동 대체(절토=앵커판넬/성토=보강토)로 아래 스타일 생성이 이어받는다.
+                bool fullTee = false;
+                if (style == WallStyle.역T형 && wallOk && regionSampler != null)
                 {
-                    if (groundSampler == null) log.AppendLine($"{style}_{label}: 원지반 없어 생략");
+                    var cumF = GradingGeometry.CumLen2D(bundle.Boundary);
+                    var synth = new System.Collections.Generic.List<(double, double, int, int)>
+                        { (0.0, cumF[cumF.Length - 1], 0, int.MaxValue) };
+                    var (tR, tI, tD) = WallTee.GenerateAuto(bundle.Boundary, synth, regionSampler, up, bundle.Params.BenchHeight);
+                    if (tI.Count > 0) { teeAll.AddRange(tR); fullTee = true; }
+                    log.AppendLine($"{rPre}역T_{label}(전체 옹벽): " +
+                        (fullTee ? "1단 순수 — 역T 생성" : $"1단 아님 — {(up ? "앵커판넬" : "보강토")} 자동 대체") +
+                        (string.IsNullOrEmpty(tD) ? "" : $" · {tD}"));
+                }
+                // 실제 생성 스타일 — 역T형이 못 맡는 부분(다단 구간·전체 모드 비순수)은 자동 대체.
+                WallStyle genStyle = style == WallStyle.역T형 ? (up ? WallStyle.앵커판넬 : WallStyle.보강토) : style;
+                bool styleGo = !fullTee && (wallOk || styleZoneAny);
+
+                if (genStyle == WallStyle.앵커판넬 && styleGo)
+                {
+                    if (regionSampler == null) log.AppendLine($"{rPre}앵커판넬_{label}: 원지반 없어 생략");
                     else
                     {
-                        var panels = WallPanels.Generate(vs.Rings, groundSampler, up, slopeN, 1.48, 0.05, 20);
-                        if (panels.Count > 0) { if (style == WallStyle.앵커판넬) panelSets.Add((up, panels)); else concreteSets.Add((up, panels)); }
+                        var panels = WallPanels.Generate(vs.Rings, regionSampler, up, effN, 1.48, 0.05, 20, keep: zoneKeep);
+                        if (panels.Count > 0) panelSets.Add((up, panels));
                         quoinAll.AddRange(WallPanels.LastQuoins);
-                        log.AppendLine($"{style}_{label}: {WallPanels.LastDiag}");
+                        log.AppendLine($"{rPre}앵커판넬_{label}{zTag}: {WallPanels.LastDiag}");
                     }
                 }
-                else if (style == WallStyle.보강토 && wallOk)
+                else if (genStyle == WallStyle.보강토 && styleGo)
                 {
-                    if (groundSampler == null) log.AppendLine($"보강토_{label}: 원지반 없어 생략");
+                    if (regionSampler == null) log.AppendLine($"{rPre}보강토_{label}: 원지반 없어 생략");
                     else
                     {
                         var regionRings = up ? bundle.CutFinalRings : bundle.FillFinalRings;
                         var regs = regionRings?.Select(r => (System.Collections.Generic.IReadOnlyList<Point3>)r).ToList();
-                        var blocks = WallBlocks.Generate(vs.Rings, groundSampler, up, slopeN,
-                            GradingSettings.WallBlockW, GradingSettings.WallBlockH, GradingSettings.WallBlockD);
+                        var blocks = WallBlocks.Generate(vs.Rings, regionSampler, up, effN,
+                            GradingSettings.WallBlockW, GradingSettings.WallBlockH, GradingSettings.WallBlockD,
+                            keep: zoneKeep);
                         blocks = WallBlocks.FilterByRegions(blocks, regs, 0.3, out int blkDropped);
                         var capsB = WallBlocks.GenerateCaps(blocks, GradingSettings.WallBlockH, GradingSettings.WallBlockW);
                         if (blocks.Count > 0) wallSets.Add((up, blocks, capsB));
-                        log.AppendLine($"보강토_{label}: 블록 {blocks.Count}·캡 {capsB.Count} (제외 {blkDropped})");
+                        log.AppendLine($"{rPre}보강토_{label}{zTag}: 블록 {blocks.Count}·캡 {capsB.Count} (제외 {blkDropped})");
                     }
                 }
-                else log.AppendLine($"{label}: 옹벽 없음(사면)");
+                else if (zoneMode && style == WallStyle.없음_사면)
+                    log.AppendLine($"{rPre}{label}: 옹벽 구간은 있으나 옹벽 형태가 '없음' — 옹벽3D 생략(정지 옵션에서 형태 선택)");
+                else if (!zoneMode && !wallOk)
+                    log.AppendLine($"{rPre}{label}: 옹벽 없음(사면)");
+            }
+            }
+
+            // [다중 구역] 누적된 사면/소단 띠 SHP 일괄 저장 — 있는 것만(0개면 파일 안 만듦, JACK 0724).
+            foreach (string key in new[] { "소단_절토", "사면_절토", "소단_성토", "사면_성토" })
+            {
+                if (stripFeats.TryGetValue(key, out var feats) && feats.Count > 0)
+                {
+                    ShapefileWriter.WritePolygons(System.IO.Path.Combine(folder, key), feats, stripFields, wkt);
+                    log.AppendLine($"{key}.shp: {feats.Count}개"); made.Add($"{key}.shp");
+                }
+                else log.AppendLine($"{key}.shp: 생략(0개)");
             }
 
             // ── ② 옹벽3D.dwg — 옹벽 객체가 있을 때만(없으면 파일 안 만듦, JACK 0724) ──
             var allPanels = panelSets.SelectMany(s => s.Panels).ToList();
             var allConcrete = concreteSets.SelectMany(s => s.Panels).ToList();
-            if (wallSets.Count > 0 || allPanels.Count > 0 || allConcrete.Count > 0)
+            if (wallSets.Count > 0 || allPanels.Count > 0 || allConcrete.Count > 0 || teeAll.Count > 0)
             {
                 string dwgPath = System.IO.Path.Combine(folder, GradingSettings.InfraWallDwg);
                 try
                 {
-                    var (nb, nc, np, na, ncp) = WallDwg.Export(dwgPath, wallSets, allPanels, allConcrete,
+                    var (nb, nc, np, na, ncp, nt) = WallDwg.Export(dwgPath, wallSets, allPanels, allConcrete,
                         GradingSettings.WallBlockW, GradingSettings.WallBlockD, GradingSettings.WallBlockH,
-                        GradingSettings.WallCapD, GradingSettings.WallCapT, quoinAll);
-                    log.AppendLine($"옹벽3D.dwg: 보강토 {nb}블록+{nc}캡 · 앵커판넬 {np}패널+{na}앵커 · 콘크리트 {ncp}패널");
+                        GradingSettings.WallCapD, GradingSettings.WallCapT, quoinAll, teeAll);
+                    log.AppendLine($"옹벽3D.dwg: 보강토 {nb}블록+{nc}캡 · 앵커판넬 {np}패널+{na}앵커 · 역T {nt}세그");
                     made.Add("옹벽3D.dwg");
                 }
                 catch (System.Exception dex) { log.AppendLine($"옹벽3D.dwg: 저장 실패 — {dex.Message} (파일 열려 있으면 닫고 재실행)"); }
@@ -226,7 +353,9 @@ public sealed class InfraworksCommand
             {
                 try
                 {
-                    string vmsg = VWorldImagery.Export(sMinE, sMinN, sMaxE, sMaxN, folder, "위성", 30.0, beltCm, beltFn);
+                    // [JACK 0728] EPSG 전달 → 위성을 도면 좌표계(TM 벨트)로 재투영 내장(InfraWorks WGS84 인식 문제 해결).
+                    string vmsg = VWorldImagery.Export(sMinE, sMinN, sMaxE, sMaxN, folder, "위성", 30.0, beltCm, beltFn,
+                                                       GradingSettings.ExportEpsg);
                     log.AppendLine("위성.tif: " + vmsg);
                     if (System.IO.File.Exists(System.IO.Path.Combine(folder, "위성.tif"))) made.Add("위성.tif");
                 }
@@ -237,7 +366,7 @@ public sealed class InfraworksCommand
             // ── ⑤ 토공량.csv — 절토/성토/순토량 상세(하나만) ──
             try
             {
-                string vmsg = WriteVolumeCsv(db, groundName, bundle.Boundary, bundle.Params, folder);
+                string vmsg = WriteVolumeCsv(db, groundName, regions, folder);
                 log.AppendLine(vmsg);
                 if (System.IO.File.Exists(System.IO.Path.Combine(folder, "토공량.csv"))) made.Add("토공량.csv");
             }
@@ -249,7 +378,7 @@ public sealed class InfraworksCommand
             ed.WriteMessage("\ninfraworks 기초자료 내보내기 완료" + note + "\n" + log.ToString().TrimEnd());
             try
             {
-                System.IO.File.AppendAllText(@"C:\Users\user\Desktop\AI\civil3d-grading\DHGRADE_진단.log",
+                DiagLog.Append(
                     "\n■ DHINFRA(infraworks 기초자료)\n  " + log.ToString().TrimEnd().Replace("\n", "\n  ") + "\n");
             }
             catch { }
@@ -262,8 +391,10 @@ public sealed class InfraworksCommand
     }
 
     /// <summary>토공량 상세 CSV — 원지반=기준, 정지면_DH=비교로 임시 체적표면을 만들어 절토/성토량을 읽고 지운다.
-    /// 부호 규약: 정지면이 원지반보다 낮으면 절토, 높으면 성토. 순토량=성토−절토(양수=부족/반입, 음수=여유/반출).</summary>
-    private static string WriteVolumeCsv(Database db, string groundName, System.Collections.Generic.IReadOnlyList<Point3> boundary, GradingParams prm, string folder)
+    /// 부호 규약: 정지면이 원지반보다 낮으면 절토, 높으면 성토. 순토량=성토−절토(양수=부족/반입, 음수=여유/반출).
+    /// [다중 구역 0729] 정지면_DH가 구역 누적 결과라 절/성토량은 자동으로 '전체 누적'. 면적·파라미터는 구역별 표기.</summary>
+    private static string WriteVolumeCsv(Database db, string groundName,
+        System.Collections.Generic.IReadOnlyList<GradingBundle> regions, string folder)
     {
         ObjectId groundId = ObjectId.Null, designId = ObjectId.Null;
         using (Transaction tr = db.TransactionManager.StartTransaction())
@@ -302,21 +433,28 @@ public sealed class InfraworksCommand
 
         double net = fill - cut;
         string netWord = net >= 0 ? "부족(반입)" : "여유(반출)";
-        double planArea = Area2D(boundary);
+        double planArea = 0;
+        foreach (var rg in regions) planArea += Area2D(rg.Boundary);
         var ci = System.Globalization.CultureInfo.InvariantCulture;
         var sb = new System.Text.StringBuilder();
-        sb.AppendLine("DH 정지 토공량 산출");
+        sb.AppendLine("DH 정지 토공량 산출" + (regions.Count > 1 ? $" (구역 {regions.Count}개 누적)" : ""));
         sb.AppendLine("구분,값,단위,비고");
         sb.AppendLine(string.Create(ci, $"절토량,{cut:F1},㎥,원지반보다 낮은 부분(파냄)"));
         sb.AppendLine(string.Create(ci, $"성토량,{fill:F1},㎥,원지반보다 높은 부분(쌓음)"));
         sb.AppendLine(string.Create(ci, $"순토량,{System.Math.Abs(net):F1},㎥,성토-절토 → {netWord}"));
-        sb.AppendLine(string.Create(ci, $"계획면적,{planArea:F1},㎡,계획 경계 평면적"));
-        sb.AppendLine(string.Create(ci, $"단높이,{prm.BenchHeight:F2},m,한 계단 수직 높이"));
-        sb.AppendLine(string.Create(ci, $"소단폭,{prm.BenchWidth:F2},m,계단참 너비"));
-        sb.AppendLine(string.Create(ci, $"절토구배,1:{prm.CutSlope:F2},,수직1:수평n"));
-        sb.AppendLine(string.Create(ci, $"성토구배,1:{prm.FillSlope:F2},,수직1:수평n"));
+        sb.AppendLine(string.Create(ci, $"계획면적,{planArea:F1},㎡,계획 경계 평면적{(regions.Count > 1 ? "(전 구역 합)" : "")}"));
+        for (int ri = 0; ri < regions.Count; ri++)
+        {
+            var prm = regions[ri].Params;
+            string rp = regions.Count > 1 ? $"구역{ri + 1} " : "";
+            sb.AppendLine(string.Create(ci, $"{rp}단높이,{prm.BenchHeight:F2},m,한 계단 수직 높이"));
+            sb.AppendLine(string.Create(ci, $"{rp}소단폭,{prm.BenchWidth:F2},m,계단참 너비"));
+            sb.AppendLine(string.Create(ci, $"{rp}절토구배,1:{prm.CutSlope:F2},,수직1:수평n"));
+            sb.AppendLine(string.Create(ci, $"{rp}성토구배,1:{prm.FillSlope:F2},,수직1:수평n"));
+        }
         System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "토공량.csv"), sb.ToString(), new System.Text.UTF8Encoding(true));
-        return string.Create(ci, $"토공량.csv: 절토 {cut:F0}㎥ · 성토 {fill:F0}㎥ · 순 {System.Math.Abs(net):F0}㎥({netWord})");
+        string tail = regions.Count > 1 ? $" — 구역 {regions.Count}개 누적" : "";
+        return string.Create(ci, $"토공량.csv: 절토 {cut:F0}㎥ · 성토 {fill:F0}㎥ · 순 {System.Math.Abs(net):F0}㎥({netWord}){tail}");
     }
 
     private static double Area2D(System.Collections.Generic.IReadOnlyList<Point3> ring)

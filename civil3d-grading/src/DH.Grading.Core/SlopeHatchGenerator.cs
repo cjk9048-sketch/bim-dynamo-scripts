@@ -31,7 +31,7 @@ public static class SlopeHatchGenerator
         IReadOnlyList<IReadOnlyList<Point3>> rings, IGroundSurface ground, bool up,
         double shortSpacing = 1.0, double longSpacing = 5.0,
         IReadOnlyList<Point3>? clipOuter = null, IReadOnlyList<Point3>? clipHole = null,
-        IReadOnlyList<(double T0, double T1, int FromBench)>? wallZones = null,
+        IReadOnlyList<(double T0, double T1, int FromBench, int ToBench)>? wallZones = null,
         IReadOnlyList<Point3>? zoneBoundary = null)
     {
         var ticks = new List<(Point3, Point3)>();
@@ -111,9 +111,10 @@ public static class SlopeHatchGenerator
     public static List<(bool IsSlope, int Bench, int Seg, List<Point3> Pts)> GenerateEdgeLinesTagged(
         IReadOnlyList<IReadOnlyList<Point3>> rings, IGroundSurface ground, bool up,
         IReadOnlyList<Point3>? clipOuter = null, IReadOnlyList<Point3>? clipHole = null,
-        IReadOnlyList<(double T0, double T1, int FromBench)>? wallZones = null,
+        IReadOnlyList<(double T0, double T1, int FromBench, int ToBench)>? wallZones = null,
         IReadOnlyList<Point3>? zoneBoundary = null,
-        List<List<Point3>>? wallLinesOut = null)
+        List<List<Point3>>? wallLinesOut = null,
+        List<(bool IsSlope, int Bench, int Seg, List<Point3> Pts)>? wallEdgesOut = null)
     {
         var outList = new List<(bool, int, int, List<Point3>)>();
         if (rings == null || rings.Count < 2) return outList;
@@ -140,40 +141,49 @@ public static class SlopeHatchGenerator
 
             var slopeRuns = new List<List<Point3>>();
             AddRealRuns(crest, ground, sgn, slopeRuns, clip);
-            int segS = 0;
+            int segS = 0, segW = 0;
             foreach (var run in slopeRuns)
             {
                 if (inZone == null) { outList.Add((true, k, segS++, run)); continue; }
                 foreach (var (sub, inz) in SplitByZone(run, inZone))
                 {
-                    if (inz) wallLinesOut?.Add(sub);           // 구간 안 크레스트 = 옹벽선
-                    else outList.Add((true, k, segS++, sub));  // 구간 밖 = 사면선
+                    if (inz)
+                    {
+                        wallLinesOut?.Add(sub);                        // 구간 안 크레스트 = 옹벽선(표시)
+                        // [사면변환 클릭 대상 — JACK 0729] "클릭한 옹벽부터 바깥이 사면" 통일 규칙:
+                        //   성토는 크레스트(윗선)가 그 옹벽의 선 — 여기서 태그. 절토는 아랫선(토우)에서 태그(아래 루프).
+                        if (!up) wallEdgesOut?.Add((true, k, segW++, sub));
+                    }
+                    else outList.Add((true, k, segS++, sub));          // 구간 밖 = 사면선
                 }
             }
 
             var bermRuns = new List<List<Point3>>();
             AddRealRuns(toe, ground, sgn, bermRuns, clip);
-            int segB = 0;
+            int segB = 0, segT = 0;
             foreach (var run in bermRuns)
             {
                 if (inZone == null) { outList.Add((false, k, segB++, run)); continue; }
                 foreach (var (sub, inz) in SplitByZone(run, inZone))
                 {
                     if (!inz) outList.Add((false, k, segB++, sub)); // 구간 안 소단선은 그리지 않음(JACK 0728)
+                    // [사면변환 클릭 대상 — JACK 0729] 절토는 각 옹벽의 '아랫선'(토우)이 그 옹벽의 선 —
+                    //   스샷 피드백: "시안선 뒤 다음 옹벽 아랫선을 선택하는 게 맞다". k=0 토우(경계선)는 도넛에 잘려 제외.
+                    else if (up) wallEdgesOut?.Add((false, k, segT++, sub));
                 }
             }
         }
         return outList;
     }
 
-    /// <summary>[§75] (x,y)가 활성 옹벽 구간(bench ≥ FromBench) 안인가 — 경계 최근접 호길이 param 판정.</summary>
-    private static bool InAnyZone(IReadOnlyList<(double T0, double T1, int FromBench)> zones,
+    /// <summary>[§75] (x,y)가 활성 옹벽 구간(FromBench ≤ bench ≤ ToBench) 안인가 — 경계 최근접 호길이 param 판정.</summary>
+    private static bool InAnyZone(IReadOnlyList<(double T0, double T1, int FromBench, int ToBench)> zones,
         IReadOnlyList<Point3> boundary, double[] cum, int bench, double x, double y)
     {
         double t = GradingGeometry.ParamAt(boundary, cum, x, y);
         foreach (var z in zones)
         {
-            if (bench < z.FromBench) continue;
+            if (bench < z.FromBench || bench > z.ToBench) continue;
             bool inz = z.T0 <= z.T1 ? (t >= z.T0 && t <= z.T1) : (t >= z.T0 || t <= z.T1);
             if (inz) return true;
         }

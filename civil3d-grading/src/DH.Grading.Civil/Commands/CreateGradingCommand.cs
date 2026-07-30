@@ -15,6 +15,10 @@ namespace DH.Grading.Civil.Commands;
 /// ③ 절토: 같은 방식
 /// ④ 교선 초록선은 '마지막에 한 번만' 그림 — 그리기 단계의 레이어 청소가 성토 결과를 지우지 않게(JACK).
 /// </summary>
+/// <summary>[다중 구역 0729 — 방식A] 정지 실행 모드 — Fresh=새로시작, Append=이어서(누적, 새 구역 추가),
+/// RerunLast=마지막 구역만 재실행(DHWALL 옹벽 적용·설정 변경 재실행).</summary>
+internal enum GradeMode { Fresh, Append, RerunLast }
+
 public sealed class CreateGradingCommand
 {
     [CommandMethod("DHGRADE")]
@@ -48,30 +52,153 @@ public sealed class CreateGradingCommand
         var rPoly = ed.GetEntity(peoPoly);
         if (rPoly.Status != PromptStatus.OK) return;
 
-        // 2) 원지반 TinSurface 선택
-        var peoSurf = new PromptEntityOptions("\n원지반 표면(TIN Surface)을 선택: ");
-        peoSurf.SetRejectMessage("\nTIN Surface여야 합니다.");
-        peoSurf.AddAllowedClass(typeof(TinSurface), true);
-        var rSurf = ed.GetEntity(peoSurf);
-        if (rSurf.Status != PromptStatus.OK) return;
+        // [다중 구역 0729 — 방식A] 기존 정지면·번들이 있으면 '이어서(누적)/새로시작' 선택.
+        //   이어서 = 기존 정지면_DH를 새 원지반 삼아 이 계획선 구역을 추가(1번 구역 유지).
+        //   같은 계획선을 다시 고르면 = 마지막 구역 재실행(설정 바꿔 다시). 중간 구역 수정은 미지원.
+        var mode = GradeMode.Fresh;
+        System.Collections.Generic.List<GradingBundle>? regions0 = null;
+        ObjectId groundSel = ObjectId.Null;
+        try
+        {
+            using var trQ = doc.Database.TransactionManager.StartTransaction();
+            regions0 = GradingBundleStore.TryLoadAll(doc.Database, trQ, out _);
+            bool hasPrev = regions0 != null && regions0.Count > 0
+                        && GradingBuilder.SurfaceExistsByBaseName(trQ, "정지면_DH");
+            if (hasPrev)
+            {
+                var pko = new PromptKeywordOptions(
+                    $"\n기존 정지면_DH(구역 {regions0!.Count}개)가 있습니다 — 이어서 추가할까요, 새로 시작할까요?");
+                pko.Keywords.Add("이어서");
+                pko.Keywords.Add("새로시작");
+                pko.Keywords.Default = "이어서";
+                pko.AllowNone = true;
+                var kr = ed.GetKeywords(pko);
+                if (kr.Status == PromptStatus.Cancel) return;
+                string kw = kr.Status == PromptStatus.Keyword ? kr.StringResult
+                          : kr.Status == PromptStatus.OK ? kr.StringResult : "이어서";
+                if (kw == "이어서")
+                {
+                    // 선택한 계획선이 기존 구역과 같은가 — 핸들 또는 fingerprint로 판정.
+                    string ph = rPoly.ObjectId.Handle.ToString();
+                    System.Collections.Generic.List<Point3>? curB = null;
+                    try { curB = BoundaryReader.Read(trQ, rPoly.ObjectId); } catch { }
+                    int matchIdx = -1;
+                    for (int k = 0; k < regions0.Count; k++)
+                        if (regions0[k].PlanHandle == ph ||
+                            (curB != null && curB.Count >= 3 && regions0[k].FingerprintMatches(curB)))
+                        { matchIdx = k; break; }
 
-        DoGrade(doc, rPoly.ObjectId, rSurf.ObjectId);
+                    if (matchIdx < 0)
+                    {
+                        mode = GradeMode.Append;
+                        groundSel = GradingBuilder.FindSurfaceByBaseName(trQ, "정지면_DH"); // 기준=현재 누적면(자동)
+                    }
+                    else if (matchIdx == regions0.Count - 1)
+                    {
+                        mode = GradeMode.RerunLast;   // 마지막 구역 다시(설정 변경 재실행)
+                        groundSel = NoriCommand.FindByHandle(doc.Database, regions0[^1].GroundHandle);
+                        if (groundSel.IsNull)
+                            ed.WriteMessage("\n(마지막 구역의 기준 지반을 못 찾아 직접 선택합니다)");
+                    }
+                    else
+                    {
+                        trQ.Commit();
+                        AcadApp.ShowAlertDialog(
+                            $"이 계획선은 이미 구역{matchIdx + 1}로 정지되어 있습니다.\n" +
+                            "중간 구역 수정은 아직 지원하지 않습니다 — [새로시작]으로 처음부터 다시 만들어 주세요.");
+                        return;
+                    }
+                }
+                else mode = GradeMode.Fresh;
+            }
+            trQ.Commit();
+        }
+        catch (System.Exception qx)
+        {
+            // [안전] 구역 판정 중 예외 — 조용히 '새로시작'으로 흘러 기존 구역을 날리면 안 됨 → 중단.
+            ed.WriteMessage("\n[DHGRADE] 기존 구역 확인 실패 — " + qx.Message);
+            AcadApp.ShowAlertDialog("기존 정지 구역 확인 중 오류가 나 중단합니다(기존 결과 보호):\n" + qx.Message);
+            return;
+        }
+
+        // 2) 원지반 TinSurface 선택 — 이어서(누적)는 기준이 자동(현재 정지면)이라 생략.
+        if (groundSel.IsNull)
+        {
+            string gp = mode == GradeMode.RerunLast ? "\n기준 지반 표면(TIN Surface)을 선택: "
+                                                    : "\n원지반 표면(TIN Surface)을 선택: ";
+            var peoSurf = new PromptEntityOptions(gp);
+            peoSurf.SetRejectMessage("\nTIN Surface여야 합니다.");
+            peoSurf.AddAllowedClass(typeof(TinSurface), true);
+            var rSurf = ed.GetEntity(peoSurf);
+            if (rSurf.Status != PromptStatus.OK) return;
+            groundSel = rSurf.ObjectId;
+        }
+        else if (mode == GradeMode.Append)
+            ed.WriteMessage("\n[이어서] 기준 지반 = 현재 정지면_DH (기존 구역 유지, 새 구역 추가)");
+
+        DoGrade(doc, rPoly.ObjectId, groundSel, mode);
     }
 
     /// <summary>[§75] 정지면 생성 파이프라인 본체 — DHGRADE(프롬프트 후)와 DHWALL(Enter 시 재선택 없이 즉시 재생성)이 공용.
-    /// 옹벽 전환 선택(WallPicks)이 있으면 그 단부터 수직 옹벽으로 만든다(1차: 방향 전체).</summary>
-    internal static void DoGrade(Document doc, ObjectId planPolyId, ObjectId groundId)
+    /// 옹벽 전환 선택(WallPicks)이 있으면 그 단부터 수직 옹벽으로 만든다(1차: 방향 전체).
+    /// [다중 구역 0729 — 방식A] mode: Fresh=처음부터(구역 1개), Append=현재 정지면을 기준 지반 삼아 구역 추가
+    /// (기존 정지면은 '정지면_DH이전'으로 이름 변경·숨김 보존), RerunLast=마지막 구역만 다시(DHWALL·설정 변경).</summary>
+    internal static void DoGrade(Document doc, ObjectId planPolyId, ObjectId groundId, GradeMode mode = GradeMode.Fresh)
     {
         Editor ed = doc.Editor;
         Database db = doc.Database;
 
-        // [§75] 다음 DHWALL 즉시 재생성용으로 계획선·원지반 기억(세션 메모리).
+        // [사면생성 0729 — 리뷰] ZoneOverride는 진입 즉시 스냅샷+클리어(1회성 보장) — 조기 return 시
+        //   남아서 다음 실행에 잘못 적용되는 누출 방지. 전체해제 플래그도 동일하게 1회성 소비.
+        var zoneOverride = GradingSettings.ZoneOverride;
+        GradingSettings.ZoneOverride = null;
+        bool zoneReplaceAll = GradingSettings.WallZoneReplaceAll;
+        GradingSettings.WallZoneReplaceAll = false;
+
+        // [다중 구역] 기존 구역 목록 + Append의 기준면 개명(실패 시 원복용 핸들).
+        System.Collections.Generic.List<GradingBundle>? regionsPrev = null;
+        string? baseRestoreHandle = null;
+        try
+        {
+            using var trM = db.TransactionManager.StartTransaction();
+            if (mode != GradeMode.Fresh)
+                regionsPrev = GradingBundleStore.TryLoadAll(db, trM, out _);
+            if (mode == GradeMode.Append)
+            {
+                // 옛 기준면 정리 — 현재 정지면은 스냅샷으로 굳어 있어(합성 시 Freeze) 소스가 지워져도 형상 유지.
+                GradingBuilder.EraseSurfacesByBaseName(trM, "정지면_DH이전");
+                var baseSurf = (Autodesk.Civil.DatabaseServices.Surface)trM.GetObject(groundId, OpenMode.ForWrite);
+                baseSurf.Name = GradingBuilder.UniqueName(db, trM, "정지면_DH이전");
+                baseRestoreHandle = groundId.Handle.ToString();
+            }
+            else if (mode == GradeMode.Fresh)
+                GradingBuilder.EraseSurfacesByBaseName(trM, "정지면_DH이전");   // 새로시작 — 잔재 청소
+            trM.Commit();
+        }
+        catch (System.Exception mx)
+        {
+            ed.WriteMessage("\n[DHGRADE] 구역 준비 실패 — " + mx.Message);
+            AcadApp.ShowAlertDialog("구역 준비 중 오류:\n" + mx.Message);
+            return;
+        }
+        // [리뷰 0729] Append인데 기존 구역을 못 읽었으면 진행 금지 — 번들이 단일 구역으로 접혀
+        //   이전 구역 기록이 사라지는 것 방지(도면 표면은 남지만 노리선/내보내기에서 빠짐).
+        if (mode == GradeMode.Append && (regionsPrev == null || regionsPrev.Count == 0))
+        {
+            TryRestoreBase(db, baseRestoreHandle);
+            ed.WriteMessage("\n[DHGRADE] 기존 구역 번들을 읽지 못해 '이어서'를 중단합니다.");
+            AcadApp.ShowAlertDialog("기존 구역 정보를 읽지 못해 '이어서'를 중단합니다.\n[새로시작]으로 실행하거나 도면을 확인하세요.");
+            return;
+        }
+
+        // [§75] 다음 DHWALL 즉시 재생성용으로 계획선·기준 지반 기억(세션 메모리 — Append면 기준=이전 누적면).
         GradingSettings.LastPlanHandle = planPolyId.Handle.ToString();
         GradingSettings.LastGroundHandle = groundId.Handle.ToString();
         try
         {
-            System.IO.File.AppendAllText(@"C:\Users\user\Desktop\AI\civil3d-grading\DHGRADE_진단.log",
-                $"\n■ DoGrade 시작 {System.DateTime.Now:HH:mm:ss} — 옹벽선택 {GradingSettings.WallPicks.Count}건\n");
+            DiagLog.Append(
+                $"\n■ DoGrade 시작 {System.DateTime.Now:HH:mm:ss} — 모드 {mode} · 기존구역 {regionsPrev?.Count ?? 0} · " +
+                $"옹벽선택 {GradingSettings.WallPicks.Count}건\n");
         }
         catch { }
 
@@ -82,8 +209,11 @@ public sealed class CreateGradingCommand
             VirtualSlope cut, fill;
             ObjectId cutId = ObjectId.Null, fillId = ObjectId.Null;
             // [§75] 옹벽 구간 — 3.5단계(태그 작도)·4단계(번들 저장)에서도 사용하므로 밖에 선언.
-            var cutZones = new System.Collections.Generic.List<(double T0, double T1, int FromBench)>();
-            var fillZones = new System.Collections.Generic.List<(double T0, double T1, int FromBench)>();
+            var cutZones = new System.Collections.Generic.List<(double T0, double T1, int FromBench, int ToBench)>();
+            var fillZones = new System.Collections.Generic.List<(double T0, double T1, int FromBench, int ToBench)>();
+            // [0729] 경계 표본 기반 필요 방향·계획-지반 최대 표고차(계획고 실수 감지용).
+            bool needCut = false, needFill = false;
+            double maxPlanGap = 0;
 
             // ── 1단계: 가상 절토/성토 대지표면 생성(기존 로직 그대로) ──
             using (Transaction tr = db.TransactionManager.StartTransaction())
@@ -99,14 +229,56 @@ public sealed class CreateGradingCommand
                 var ground = new CachedGroundSurface(groundTin); // 원지반 표고 캐싱(단수 계산용)
                 p = BuildParams(boundary, ground);
 
+                // [0729 — JACK 계획고 실수 감지] 경계를 따라 지반고를 표본해 '절토/성토가 필요한가'와
+                //   '경계에서 지반자료가 없는가'를 기록 — 뒤에서 데이라잇이 안 나왔을 때 조용히 넘어가지 않고
+                //   원인(계획고가 지형과 안 맞음/측량 밖)을 경고하기 위함.
+                int nOffGround = 0, nSample = 0;
+                for (int bi = 0; bi < boundary.Count; bi++)
+                {
+                    var a0 = boundary[bi]; var b0 = boundary[(bi + 1) % boundary.Count];
+                    int div = System.Math.Max(1, (int)(System.Math.Sqrt((b0.X - a0.X) * (b0.X - a0.X) + (b0.Y - a0.Y) * (b0.Y - a0.Y)) / 5.0));
+                    for (int si = 0; si < div; si++)
+                    {
+                        double t = (double)si / div;
+                        double sx = a0.X + (b0.X - a0.X) * t, sy = a0.Y + (b0.Y - a0.Y) * t, sz = a0.Z + (b0.Z - a0.Z) * t;
+                        nSample++;
+                        if (!ground.TryGetElevation(sx, sy, out double gz)) { nOffGround++; continue; }
+                        if (gz > sz + 0.1) needCut = true;
+                        if (gz < sz - 0.1) needFill = true;
+                        double gap = System.Math.Abs(gz - sz);
+                        if (gap > maxPlanGap) maxPlanGap = gap;
+                    }
+                }
+
                 // 정지 설정에 따라 오버사이즈 가상 절토/성토면(계단 링)을 계산 → TIN 브레이크라인으로 생성.
                 // 계획고는 평면 근사가 아니라 '경계 3D 폴리선의 Z'를 그대로 추종 — 단차 계획선도 단차대로 정지(JACK).
                 // [§75 구간 옹벽] 선택(WallPicks)을 계획경계 호길이 '구간'으로 변환 — 그 구간·그 단부터만 수직.
                 //   같은 방향의 다른 영역(다른 성토 등)은 구간이 달라 영향 없음(JACK).
-                cutZones = GradingSettings.ComputeWallZones(true, boundary);
-                fillZones = GradingSettings.ComputeWallZones(false, boundary);
-                if (cutZones.Count > 0 || fillZones.Count > 0)
-                    ed.WriteMessage($"\n[옹벽 적용] 절토 구간 {cutZones.Count} · 성토 구간 {fillZones.Count} (선택 {GradingSettings.WallPicks.Count}건)");
+                // [사면생성 0729] DHSLOPE가 넣어둔 명시 구간(번들 구간 수정본)이 있으면 그것을 사용(진입 시 스냅샷).
+                if (zoneOverride != null)
+                {
+                    cutZones = zoneOverride.Value.Cut;
+                    fillZones = zoneOverride.Value.Fill;
+                    ed.WriteMessage($"\n[사면생성 적용] 절토 구간 {cutZones.Count} · 성토 구간 {fillZones.Count}");
+                }
+                else
+                {
+                    cutZones = GradingSettings.ComputeWallZones(true, boundary);
+                    fillZones = GradingSettings.ComputeWallZones(false, boundary);
+                    // [옹벽 유지 0729 — JACK] 옹벽생성 재사용·같은 구역 재실행 시 번들의 기존 옹벽 구간과 병합 —
+                    //   새 선택과 겹치는 기존 구간은 교체(기존 관례), 안 겹치면 둘 다 유지. '전체해제'는 병합 생략.
+                    if (mode == GradeMode.RerunLast && !zoneReplaceAll && regionsPrev != null && regionsPrev.Count > 0)
+                    {
+                        var lastR = regionsPrev[^1];
+                        int addC = cutZones.Count, addF = fillZones.Count;
+                        cutZones = MergeZones(lastR.CutWallZones, cutZones);
+                        fillZones = MergeZones(lastR.FillWallZones, fillZones);
+                        if (cutZones.Count > addC || fillZones.Count > addF)
+                            ed.WriteMessage($"\n[옹벽 유지] 기존 옹벽 구간 절토 {cutZones.Count - addC}·성토 {fillZones.Count - addF}개 유지(새 선택과 병합)");
+                    }
+                    if (cutZones.Count > 0 || fillZones.Count > 0)
+                        ed.WriteMessage($"\n[옹벽 적용] 절토 구간 {cutZones.Count} · 성토 구간 {fillZones.Count} (선택 {GradingSettings.WallPicks.Count}건)");
+                }
 
                 cut = GradingGeometry.Build(boundary, ground, p, up: true, cutZones);
                 string diagCut = GradingGeometry.LastDiag;
@@ -118,7 +290,7 @@ public sealed class CreateGradingCommand
                     // [§75] 옹벽 적용 상태를 로그 첫머리에 — 스샷 없이 "옹벽이 적용됐는지" 바로 판별(JACK 0727).
                     string wallInfo = $"옹벽 적용: 절토 구간 {cutZones.Count} · 성토 구간 {fillZones.Count} · " +
                                       $"선택 {GradingSettings.WallPicks.Count}건";
-                    System.IO.File.WriteAllText(@"C:\Users\user\Desktop\AI\civil3d-grading\DHGRADE_진단.log",
+                    DiagLog.Reset(
                         "[DHGRADE 진단] " + System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") +
                         "\n■ " + wallInfo + "\n\n■ 절토\n" + diagCut + "\n■ 성토\n" + diagFill);
                 }
@@ -130,7 +302,7 @@ public sealed class CreateGradingCommand
                 // 검증 로그에 TIN 실측 대조 결과 덧붙임(비대칭/누락 방향 추적)
                 try
                 {
-                    System.IO.File.AppendAllText(@"C:\Users\user\Desktop\AI\civil3d-grading\DHGRADE_진단.log",
+                    DiagLog.Append(
                         "\n■ TIN 실측검증(절토)\n" + verifyCut + "\n■ TIN 실측검증(성토)\n" + verifyFill);
                 }
                 catch { }
@@ -249,6 +421,10 @@ public sealed class CreateGradingCommand
                     // [JACK 목적② + 짜투리 제거] 계획과 무관한 루프·미세 조각(<5㎡)을 순수 루프에서 필터.
                     var own = RawTriangleIntersectionFinder.FilterPlanRelated(pureLoops[label], boundary, 5.0, out string fdiag);
                     diagX += $"\n■ 루프필터({label}) {fdiag}\n";
+                    // [진단 0729 — 다중 구역] 순수 루프가 전부 걸러졌으면(생성 실패 직행) 원인 분석용으로
+                    //   병합 교선 전체를 CSV로 덤프 — 오프라인 하니스 재현에 사용(형상 미변경, 진단 전용).
+                    if (own.Count == 0 && pureLoops[label].Count > 0)
+                        DumpLoopsCsv(label, pureLoops[label], boundary);
                     // [0728 — JACK] 사면이 원지반 경계에 닿으면 중단 표식(아래에서 정리 후 반환).
                     if (borderHit == null && borderLoops.Count > 0)
                         foreach (var lp in own)
@@ -296,13 +472,14 @@ public sealed class CreateGradingCommand
                     EraseSurface(tr2, cutId);
                     EraseSurface(tr2, fillId);
                     tr2.Commit();
+                    TryRestoreBase(db, baseRestoreHandle);   // [다중 구역] Append 중단 — 기준면 이름 원복
                     string wmsg = $"사면({borderHit})이 원지반(측량) 경계를 벗어납니다.\n" +
                                   "경계 밖 지반 정보가 없어 정지면을 만들 수 없습니다.\n" +
                                   "계획고·구배·측량 범위를 확인하세요.";
                     ed.WriteMessage("\n[DHGRADE 중단] " + wmsg.Replace("\n", " "));
                     try
                     {
-                        System.IO.File.AppendAllText(@"C:\Users\user\Desktop\AI\civil3d-grading\DHGRADE_진단.log",
+                        DiagLog.Append(
                             $"\n■ 수행 중단 — 사면({borderHit}) 원지반 경계 이탈(여유 2m 이내 접근)\n");
                     }
                     catch { }
@@ -326,10 +503,10 @@ public sealed class CreateGradingCommand
                     catch (System.Exception ex) { bndMsg += $"\n절토 도넛 실패 — {ex.Message}"; }
                 }
 
-                // [JACK] 경계선은 기본 숨김(레이어 Off) — 데이터는 유지(옹벽선·노리선용), 화면은 깨끗하게.
-                // [JACK 0728 원복] 초록 별도객체는 다시 기본 숨김 — 경계 표시는 정지면_DH 자체의 '경계'(스타일)가 담당
-                //   (클릭하면 지표면 선택, 부지 가로지르는 선 없음). 데이터(교선)는 노리선·번들용으로 계속 저장.
-                GradingBuilder.DrawDaylight(db, tr2, allLoops, "DH-정지경계", 3, layerOff: true);
+                // [JACK 0728 재원복] 정지면_DH는 원지반+절/성토 '합성면'이라 지표면 자체 경계(스타일 Boundary)는
+                //   측량 전체 외곽선이지 정지경계가 아님(스샷: 부지 근처에 경계 안 보임) → 초록 정지경계선을 다시
+                //   보이게 한다. 부지를 가로지르는 전이선·2m 미만 부스러기는 FilterOutsidePlan으로 걸러 표시.
+                GradingBuilder.DrawDaylight(db, tr2, FilterOutsidePlan(allLoops, boundary, 0.5), "DH-정지경계", 3, layerOff: false);
                 GradingBuilder.DrawDaylight(db, tr2, clipLoopsDraw, "DH-클립경계", 4, layerOff: true); // 하늘색=클립링(∪계획)
                 // 과거 진단선(빨강/하늘) 잔재 청소 — 오류로 오인 방지(JACK)
                 GradingBuilder.DrawDebugSpans(db, tr2, System.Array.Empty<(Point3, Point3)>());
@@ -338,7 +515,7 @@ public sealed class CreateGradingCommand
             }
             try
             {
-                System.IO.File.AppendAllText(@"C:\Users\user\Desktop\AI\civil3d-grading\DHGRADE_진단.log",
+                DiagLog.Append(
                     diagX + "\n■ 경계 주입" + bndMsg + "\n");
             }
             catch { }
@@ -353,6 +530,27 @@ public sealed class CreateGradingCommand
                 // [절토/성토 한쪽만 있는 경우 — JACK] 순수 절토(또는 성토) 부지는 반대쪽 표면이 지반과 안 만나
                 // daylight(경계)가 안 생김 → 오버사이즈 표면이 클립 없이 억지로 합성돼 줄무늬 오류(스샷3·4).
                 // 유효 경계(finalRing)가 주입된 표면만 합성하고, 없는 쪽 가상표면은 지운다.
+                // [0729 — 조용한 실패 방지] 그 방향이 '필요'한 부지(경계 표본에서 지반이 계획고보다 낮/높음)인데
+                //   데이라잇이 안 나왔으면 순수 부지로 오판하지 말고 중단+경고 — 대표 원인: 계획 폴리곤 고도(Z)
+                //   미입력/지형 불일치, 사면이 측량 밖(JACK 실측 0729: Z=101 vs 지반 65~90 → 조용히 빈 결과).
+                string? missNeeded = null;
+                if (!fillId.IsNull && !finalRings.ContainsKey("성토") && needFill) missNeeded = "성토";
+                else if (!cutId.IsNull && !finalRings.ContainsKey("절토") && needCut) missNeeded = "절토";
+                if (missNeeded != null)
+                {
+                    EraseSurface(tr3, cutId);
+                    EraseSurface(tr3, fillId);
+                    tr3.Commit();
+                    TryRestoreBase(db, baseRestoreHandle);
+                    string wmsg2 = $"{missNeeded} 사면이 필요한 부지인데(경계에서 계획고-지반고 차 최대 {maxPlanGap:F1}m) " +
+                                   $"{missNeeded} 데이라잇(사면과 지반이 만나는 선)을 찾지 못해 중단합니다.\n\n" +
+                                   "① 계획 폴리곤의 고도(Z)가 지형과 맞는지\n" +
+                                   "② 사면이 측량(원지반) 범위를 벗어나지 않는지 확인하세요.";
+                    ed.WriteMessage("\n[DHGRADE 중단] " + wmsg2.Replace("\n", " "));
+                    DiagLog.Append($"\n■ 수행 중단 — {missNeeded} 필요(경계 계획-지반 표고차 최대 {maxPlanGap:F1}m)인데 데이라잇 없음(계획고/측량범위 확인)\n");
+                    AcadApp.ShowAlertDialog(wmsg2);
+                    return;
+                }
                 if (!fillId.IsNull && !finalRings.ContainsKey("성토")) { EraseSurface(tr3, fillId); fillId = ObjectId.Null; bndMsg += "\n성토: daylight 없음 — 순수 절토 부지로 판단, 성토 가상면 제거"; }
                 if (!cutId.IsNull && !finalRings.ContainsKey("절토")) { EraseSurface(tr3, cutId); cutId = ObjectId.Null; bndMsg += "\n절토: daylight 없음 — 순수 성토 부지로 판단, 절토 가상면 제거"; }
 
@@ -384,7 +582,7 @@ public sealed class CreateGradingCommand
             catch (System.Exception ex) { pasteLog += $"  합성 자체 실패: {ex.Message}"; }
             try
             {
-                System.IO.File.AppendAllText(@"C:\Users\user\Desktop\AI\civil3d-grading\DHGRADE_진단.log",
+                DiagLog.Append(
                     "\n■ 합성(Paste) 검증\n  " + pasteLog + "\n");
             }
             catch { }
@@ -399,6 +597,8 @@ public sealed class CreateGradingCommand
                 var cutEdges = new System.Collections.Generic.List<(bool, int, int, System.Collections.Generic.List<Point3>)>();
                 var fillEdges = new System.Collections.Generic.List<(bool, int, int, System.Collections.Generic.List<Point3>)>();
                 var wallLines = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
+                // [진단 0728] 옹벽선으로 분류돼 버려지는 런 수를 로그로 보기 위한 수거통(그리지는 않음 — 노리선 담당).
+                var wallDump = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
                 foreach (var (vs, up, label, target, zn) in new[]
                 {
                     (cut, true, "절토", cutEdges, cutZones),
@@ -414,13 +614,14 @@ public sealed class CreateGradingCommand
                     foreach (var fr in ringList)
                     {
                         if (fr == null || fr.Count < 3) continue;
-                        // [JACK 0728] 옹벽선은 이 단계에서 그리지 않음(노리선 때만 표시) — wallLinesOut=null로 버림.
+                        // [JACK 0728] 옹벽선은 이 단계에서 그리지 않음(노리선 때만 표시) — wallDump는 개수 진단용.
                         target.AddRange(SlopeHatchGenerator.GenerateEdgeLinesTagged(vs.Rings, ng, up, fr, boundary,
-                            zn, boundary, null));
+                            zn, boundary, wallDump));
                     }
                 }
                 using Transaction trE = db.TransactionManager.StartTransaction();
-                GradingBuilder.DrawSlopeEdgesTagged(db, trE, cutEdges, fillEdges);
+                // [다중 구역] 이 구역(계획선 핸들) 태그 포함 — DHWALL이 마지막 구역 선만 받도록.
+                GradingBuilder.DrawSlopeEdgesTagged(db, trE, cutEdges, fillEdges, planPolyId.Handle.ToString());
                 // [JACK 0728] 이전 노리선 실행이 남긴 옹벽선(빨강)은 낡은 정보 → 청소만(재표시는 DHNORI가).
                 GradingBuilder.DrawWallLines(db, trE, wallLines);
                 // [JACK 0728] '결과지표면만 표시' 옵션 시 정지면_DH만 보이게 — 원지반·가상면 등 전부 숨김.
@@ -431,15 +632,17 @@ public sealed class CreateGradingCommand
                     GradingBuilder.RebuildSurfacesByBaseName(trE, "정지면_DH");
                 }
                 // [JACK 0728] 정지면_DH 표시 스타일 = Contours 2m and 10m (Background) (한글 템플릿 이름 폴백 포함).
-                GradingBuilder.SetSurfaceStyle(trE, "정지면_DH",
+                string styleApplied = GradingBuilder.SetSurfaceStyle(trE, "정지면_DH",
                     "Contours 2m and 10m (Background)", "등고선 2m 및 10m (배경)");
                 trE.Commit();
-                edgeMsg = $"사면선/소단선(옹벽 전환용 태그) 작도: 절토 {cutEdges.Count} · 성토 {fillEdges.Count} (옹벽선은 노리선 때 표시)";
+                edgeMsg = $"사면선/소단선(옹벽 전환용 태그) 작도: 절토 {cutEdges.Count} · 성토 {fillEdges.Count}" +
+                          $" (옹벽선으로 분류·생략 {wallDump.Count} · 구간 절 {cutZones.Count}/성 {fillZones.Count})" +
+                          $" · 표시스타일 {(styleApplied == "" ? "미적용(후보 없음)" : styleApplied)}";
             }
             catch (System.Exception ex) { edgeMsg = "사면선/소단선 태그 작도 실패 — " + ex.Message; }
             try
             {
-                System.IO.File.AppendAllText(@"C:\Users\user\Desktop\AI\civil3d-grading\DHGRADE_진단.log",
+                DiagLog.Append(
                     "\n■ 사면선/소단선 태그 작도(3.5단계)\n  " + edgeMsg + "\n");
             }
             catch { }
@@ -454,6 +657,7 @@ public sealed class CreateGradingCommand
                 var bundle = new GradingBundle
                 {
                     PlanHandle = planPolyId.Handle.ToString(),
+                    GroundHandle = groundId.Handle.ToString(),   // [v4] 이 구역의 기준 지반(재실행·DHWALL용)
                     VertexCount = fp.N,
                     CentroidX = fp.Cx, CentroidY = fp.Cy,
                     BboxMinX = fp.MinX, BboxMinY = fp.MinY, BboxMaxX = fp.MaxX, BboxMaxY = fp.MaxY,
@@ -470,17 +674,25 @@ public sealed class CreateGradingCommand
                     CutWallZones = cutZones.Count > 0 ? cutZones : null,
                     FillWallZones = fillZones.Count > 0 ? fillZones : null,
                 };
+                // [다중 구역 0729] 모드별 구역 목록: Fresh=이 구역 하나 / Append=기존 뒤에 추가 / RerunLast=마지막 교체.
+                var save = mode == GradeMode.Append && regionsPrev != null
+                    ? new System.Collections.Generic.List<GradingBundle>(regionsPrev) { bundle }
+                    : mode == GradeMode.RerunLast && regionsPrev != null && regionsPrev.Count > 0
+                        ? new System.Collections.Generic.List<GradingBundle>(regionsPrev)
+                        : new System.Collections.Generic.List<GradingBundle> { bundle };
+                if (mode == GradeMode.RerunLast && regionsPrev != null && regionsPrev.Count > 0)
+                    save[save.Count - 1] = bundle;
                 using Transaction tr4 = db.TransactionManager.StartTransaction();
-                GradingBundleStore.Save(db, tr4, bundle);
+                GradingBundleStore.SaveAll(db, tr4, save);
                 tr4.Commit();
-                bundleMsg = $"번들 저장 v{GradingBundleStore.Version} — 경계 {boundary.Count}점 · " +
+                bundleMsg = $"번들 저장 v{GradingBundleStore.Version} — 구역 {save.Count}개 · 이번 구역 경계 {boundary.Count}점 · " +
                             $"절토링 {(bundle.CutFinalRing?.Count ?? 0)}점 · 성토링 {(bundle.FillFinalRing?.Count ?? 0)}점" +
                             "\n→ [노리선]·[INFRAWORKS] 버튼이 이 번들을 사용합니다";
             }
             catch (System.Exception ex) { bundleMsg = "번들 저장 실패 — " + ex.Message; }
             try
             {
-                System.IO.File.AppendAllText(@"C:\Users\user\Desktop\AI\civil3d-grading\DHGRADE_진단.log",
+                DiagLog.Append(
                     "\n■ 번들 저장(4단계)\n  " + bundleMsg.Replace("\n", "\n  ") + "\n");
             }
             catch { }
@@ -501,13 +713,16 @@ public sealed class CreateGradingCommand
             string volMsg = gradeOk
                 ? ComputeVolumes(db, groundId, finalSurfId)
                 : "토량: 정지면이 완성되지 않아 산출하지 않았습니다";
+            // [다중 구역] 이어서(누적)면 기준이 '직전 누적면'이라 이번 구역분 토량 — 전체 누적은 INFRAWORKS가 원지반 기준으로 계산.
+            if (gradeOk && mode == GradeMode.Append)
+                volMsg += "\n(이번 구역 기준 — 전체 누적 토공량은 [INFRAWORKS] 토공량.csv)";
             string headline = gradeOk ? "정지면 생성 완료" : "⚠ 정지면 생성 — 확인 필요";
             var box = new System.Text.StringBuilder();
             box.AppendLine(headline);
             box.AppendLine();
             box.AppendLine(volMsg);
             if (!gradeOk)
-                box.AppendLine("\n자세한 내용은 DHGRADE_진단.log를 확인하세요.");
+                box.AppendLine("\n자세한 내용은 진단 로그를 확인하세요:\n" + DiagLog.FilePath);
             string msg = box.ToString().TrimEnd();
 
             // 명령창(ed)에는 기존 상세 정보를 그대로 남긴다 — 필요할 때 바로 볼 수 있게.
@@ -521,15 +736,74 @@ public sealed class CreateGradingCommand
         }
         catch (System.Exception ex)
         {
+            // [다중 구역] Append 도중 예외로 정지면_DH가 안 만들어졌으면 기준면 이름 원복(도면 상태 보호).
+            TryRestoreBase(db, baseRestoreHandle);
             ed.WriteMessage("\n[DHGRADE 오류] " + ex.Message);
             AcadApp.ShowAlertDialog("가상 지표면 생성 중 오류:\n" + ex.Message);
             try
             {
-                System.IO.File.AppendAllText(@"C:\Users\user\Desktop\AI\civil3d-grading\DHGRADE_진단.log",
+                DiagLog.Append(
                     "\n■ DoGrade 예외 — " + ex.GetType().Name + ": " + ex.Message + "\n" + ex.StackTrace + "\n");
             }
             catch { }
         }
+    }
+
+    /// <summary>[옹벽 유지 0729] 기존 구간과 새 선택 구간 병합 — 새 구간과 '겹치는' 기존 구간은 버림(교체 관례),
+    /// 안 겹치는 기존 구간은 유지. 결과 = 새 구간 + 유지된 기존 구간.</summary>
+    private static System.Collections.Generic.List<(double T0, double T1, int FromBench, int ToBench)> MergeZones(
+        System.Collections.Generic.List<(double T0, double T1, int FromBench, int ToBench)>? existing,
+        System.Collections.Generic.List<(double T0, double T1, int FromBench, int ToBench)> newZones)
+    {
+        var res = new System.Collections.Generic.List<(double, double, int, int)>(newZones);
+        if (existing == null) return res;
+        foreach (var ez in existing)
+        {
+            bool overlapped = false;
+            foreach (var nz in newZones)
+                if (GradingSettings.IntervalsOverlap(ez.T0, ez.T1, nz.T0, nz.T1)) { overlapped = true; break; }
+            if (!overlapped) res.Add(ez);
+        }
+        return res;
+    }
+
+    /// <summary>[진단 0729] 병합 교선 루프 전체를 CSV로 — 진단 로그와 같은 폴더에 DHGRADE_교선덤프_{label}.csv.
+    /// 형식: loop,idx,x,y,z (loop=-1은 계획경계). 루프 전멸(생성 실패) 시에만 호출 — 오프라인 재현용.</summary>
+    private static void DumpLoopsCsv(string label,
+        System.Collections.Generic.List<System.Collections.Generic.List<Point3>> loops,
+        System.Collections.Generic.List<Point3> boundary)
+    {
+        try
+        {
+            string dir = System.IO.Path.GetDirectoryName(DiagLog.FilePath) ?? ".";
+            var sb = new System.Text.StringBuilder("loop,idx,x,y,z\n");
+            for (int i = 0; i < boundary.Count; i++)
+                sb.AppendLine(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                    $"-1,{i},{boundary[i].X:F3},{boundary[i].Y:F3},{boundary[i].Z:F3}"));
+            for (int l = 0; l < loops.Count; l++)
+                for (int i = 0; i < loops[l].Count; i++)
+                    sb.AppendLine(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                        $"{l},{i},{loops[l][i].X:F3},{loops[l][i].Y:F3},{loops[l][i].Z:F3}"));
+            System.IO.File.WriteAllText(System.IO.Path.Combine(dir, $"DHGRADE_교선덤프_{label}.csv"), sb.ToString());
+        }
+        catch { }
+    }
+
+    /// <summary>[다중 구역] Append가 개명해 둔 기준면(정지면_DH이전)을 '정지면_DH'로 되돌린다 —
+    /// 중단/예외로 새 정지면이 안 만들어진 경우에만(이미 있으면 두 개가 되므로 건드리지 않음).</summary>
+    private static void TryRestoreBase(Database db, string? handleHex)
+    {
+        if (string.IsNullOrEmpty(handleHex)) return;
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            if (GradingBuilder.SurfaceExistsByBaseName(tr, "정지면_DH")) { tr.Commit(); return; }
+            var id = NoriCommand.FindByHandle(db, handleHex);
+            if (!id.IsNull && tr.GetObject(id, OpenMode.ForWrite) is Autodesk.Civil.DatabaseServices.Surface s)
+                s.Name = GradingBuilder.UniqueName(db, tr, "정지면_DH");
+            tr.Commit();
+        }
+        catch { }
     }
 
     /// <summary>[0728 — JACK] 교선 루프에서 계획폴리곤 '안' 또는 경계 tol 이내 점 구간을 제거하고

@@ -130,7 +130,8 @@ public sealed class GradingDialog : Window
 
         // 3. 옹벽 형태 (왼쪽)
         AddSection(colL, "3. 옹벽 형태 (INFRAWORKS 3D)",
-            "INFRAWORKS 내보내기 때 만드는 옹벽 3D 종류. 없음=사면(노리)만. 보강토=근수직 블록. 앵커판넬=패널+어스앵커. 콘크리트=패널+자연석 무늬(앵커 없음).");
+            "INFRAWORKS 내보내기 때 만드는 옹벽 3D 종류. 없음=사면(노리)만. 보강토=근수직 블록. " +
+            "앵커판넬=패널+어스앵커+자연석 무늬. 역T형=RC 벽체+저판(1단 옹벽 전용 — 2단 이상 구간은 절토=앵커판넬/성토=보강토 자동 대체).");
         _cutWallStyle = AddStyleRow(colL, "절토 옹벽", GradingSettings.CutWallStyle, out _);
         _fillWallStyle = AddStyleRow(colL, "성토 옹벽", GradingSettings.FillWallStyle, out _);
 
@@ -391,15 +392,26 @@ public sealed class GradingDialog : Window
                 double ytop = System.Math.Min(ya, yb), ybot = System.Math.Max(ya, yb);
                 if (ybot - ytop < 8) continue;
                 double rectX = airDir < 0 ? faceX - wt : faceX;   // 전면이 보이도록 면 앞에 배치
-                if (style == WallStyle.콘크리트)
+                if (style == WallStyle.역T형)
                 {
-                    var r = new System.Windows.Shapes.Rectangle
+                    // 역T 단면: 벽체 + 저판(흙쪽으로 넓게) — 1단 전용 개념 표현.
+                    double soilD = -airDir;
+                    var stem = new System.Windows.Shapes.Rectangle
                     {
                         Width = wt, Height = ybot - ytop,
-                        Fill = new SolidColorBrush(Color.FromRgb(0xB5, 0xB5, 0xB5)),
-                        Stroke = wallLine, StrokeThickness = 1,
+                        Fill = new SolidColorBrush(Color.FromArgb(0x50, 0xD8, 0xD8, 0xD8)),
+                        Stroke = wallLine, StrokeThickness = 1.2,
                     };
-                    Canvas.SetLeft(r, rectX); Canvas.SetTop(r, ytop); c.Children.Add(r);
+                    Canvas.SetLeft(stem, rectX); Canvas.SetTop(stem, ytop); c.Children.Add(stem);
+                    double slabW = wt * 3.4, slabH = 6;
+                    double slabX = soilD > 0 ? rectX - wt * 0.5 : rectX + wt * 1.5 - slabW;
+                    var slab = new System.Windows.Shapes.Rectangle
+                    {
+                        Width = slabW, Height = slabH,
+                        Fill = new SolidColorBrush(Color.FromArgb(0x50, 0xD8, 0xD8, 0xD8)),
+                        Stroke = wallLine, StrokeThickness = 1.2,
+                    };
+                    Canvas.SetLeft(slab, slabX); Canvas.SetTop(slab, ybot); c.Children.Add(slab);
                 }
                 else
                 {
@@ -429,7 +441,7 @@ public sealed class GradingDialog : Window
                 }
             }
             string wallName = style == WallStyle.보강토 ? "보강토 옹벽"
-                : style == WallStyle.앵커판넬 ? "앵커판넬 옹벽" : "콘크리트 옹벽";
+                : style == WallStyle.역T형 ? "역T형 옹벽(1단)" : "앵커판넬 옹벽";
             T(System.Math.Min(x0 + rp + 18, cw - 150), cut ? Y(1) + 10 : Y(1) - 24, wallName, 11);
         }
 
@@ -460,8 +472,17 @@ public sealed class GradingDialog : Window
         var cb = new ComboBox { Width = 180, Height = 24, VerticalContentAlignment = VerticalAlignment.Center };
         cb.Items.Add("없음 (사면만)");
         cb.Items.Add("보강토 (블록)");
-        cb.Items.Add("앵커판넬 (앵커)");
-        cb.Items.Add("콘크리트 (무늬)");
+        cb.Items.Add("앵커판넬식");
+        cb.Items.Add("역T형 (1단 옹벽 전용)");
+        // [JACK 0730] 역T형 선택 시 1회 안내 — 초기 세팅 시점(IsLoaded=false)엔 안 뜸.
+        cb.SelectionChanged += (s, e) =>
+        {
+            if (cb.IsLoaded && cb.SelectedIndex == (int)WallStyle.역T형)
+                MessageBox.Show(
+                    "역T형은 1단 옹벽일때만 적용됩니다.\n" +
+                    "<2단 이상일 경우 절토는 앵커판넬, 성토는 보강토옹벽으로 적용됨>",
+                    "역T형 안내", MessageBoxButton.OK, MessageBoxImage.Information);
+        };
         cb.SelectedIndex = (int)current;                 // enum 순서 = 콤보 순서
         DockPanel.SetDock(cb, Dock.Left);
         row.Children.Add(cb);

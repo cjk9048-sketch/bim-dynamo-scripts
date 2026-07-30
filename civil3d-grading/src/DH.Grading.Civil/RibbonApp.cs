@@ -13,7 +13,8 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SurfaceIntersectionCommand))] // DHXSEC(지표면 교선 TEST)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SlopeLineCommand))]           // DHSLOPELINE(노리선 수동, 레거시)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.NoriCommand))]                // DHNORI(노리선 버튼 — 번들 기반)
-[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.WallPickCommand))]            // DHWALL(옹벽 생성 — 사면선/소단선 선택, §75)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.WallPickCommand))]            // DHWALL(옹벽 변환 — 사면선/소단선 선택, §75)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SlopeReleaseCommand))]        // DHSLOPE(사면 변환 — 옹벽선 선택해 그 단부터 사면 복귀)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.InfraworksCommand))]          // DHINFRA(INFRAWORKS SHP 내보내기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.CoordSysProbeCommand))]       // DHCS(좌표계 API 진단 — 임시)
 
@@ -32,6 +33,14 @@ public sealed class RibbonApp : IExtensionApplication
     {
         if (ComponentManager.Ribbon != null) BuildRibbon();
         else AcadApp.Idle += OnIdleBuild;
+        // [배포 0728] 한국 좌표계 9종 자동 검사·설치 — 시작 부하를 피해 Idle 1회로 미룬다.
+        AcadApp.Idle += OnIdleCoordSys;
+    }
+
+    private void OnIdleCoordSys(object? sender, EventArgs e)
+    {
+        AcadApp.Idle -= OnIdleCoordSys;
+        CoordSysInstaller.EnsureInstalled();
     }
 
     public void Terminate() { }
@@ -64,9 +73,25 @@ public sealed class RibbonApp : IExtensionApplication
             pGrade.Items.Add(MakeButton(
                 "정지면\n생성", "DHGRADE ", "계획 폴리곤+원지반 → 계단식 절성토 TIN Surface 생성", "정지면"));
             pGrade.Items.Add(Spacer());
-            // [§75 — JACK 0728] 옹벽생성은 부지정지 패널, 정지면 생성 오른쪽(별도 '옹벽' 중분류 없음).
-            pGrade.Items.Add(MakeButton(
-                "옹벽\n생성", "DHWALL ", "사면선/소단선을 선택하면 그 지점부터 바깥 단이 옹벽으로 전환 — DHGRADE 후 사용", "옹벽"));
+            // [§75 — JACK 0728/0729 개명] 옹벽변환은 부지정지 패널, 정지면 생성 오른쪽(별도 '옹벽' 중분류 없음).
+            //   [JACK 0729] 툴팁에 개념도 이미지(확장 툴팁) — 마우스를 올려두면 그림까지 표시.
+            var btnWall = MakeButton(
+                "옹벽\n변환", "DHWALL ", "옹벽이 시작될 선을 클릭하면 그 선부터 바깥 단이 옹벽으로 전환", "옹벽");
+            btnWall.ToolTip = MakeTip("옹벽 변환 (DHWALL)",
+                "시안색 선(옹벽이 시작될 선 — 절토=소단선·성토=사면선)을 클릭하면\n" +
+                "그 선부터 바깥(데이라잇 방향) 단이 전부 옹벽으로 바뀝니다.\n" +
+                "Enter=적용 · 재사용해도 기존 옹벽 유지(같은 구간은 교체) · '전체해제'로 전부 초기화.",
+                MakeTipImage(toWall: true));
+            pGrade.Items.Add(btnWall);
+            pGrade.Items.Add(Spacer());
+            // [사면변환 — JACK 0729] 옹벽의 역방향: 옹벽선을 선택하면 그 단부터 바깥이 다시 사면.
+            var btnSlope = MakeButton(
+                "사면\n변환", "DHSLOPE ", "옹벽선을 클릭하면 그 단부터 바깥이 다시 사면으로 복귀", "사면");
+            btnSlope.ToolTip = MakeTip("사면 변환 (DHSLOPE)",
+                "옹벽선을 클릭하면 그 단부터 바깥(데이라잇 방향)이 다시 사면으로 돌아갑니다.\n" +
+                "절토 옹벽의 마지막 단 사면 마무리, 성토 사면-옹벽-사면 구성에 사용. Enter=적용.",
+                MakeTipImage(toWall: false));
+            pGrade.Items.Add(btnSlope);
             pGrade.Items.Add(Spacer());
 
             var pDraw = new RibbonPanelSource { Title = "도면화" };
@@ -149,6 +174,14 @@ public sealed class RibbonApp : IExtensionApplication
                             dc.DrawLine(or, bp, new Point(bp.X + 4.5, bp.Y + 4.5)); // 빗금(사면 아래로)
                         }
                         break;
+                    case "사면": // 사면 복귀(초록 사선 + 위 화살)
+                        var sl = P(0x6a, 0xc8, 0x7a);
+                        dc.DrawLine(sl, new Point(5, 27), new Point(22, 10));
+                        dc.DrawLine(sl, new Point(22, 10), new Point(28, 10));
+                        dc.DrawLine(sl, new Point(13, 19), new Point(13, 12));   // 위로 화살(사면 복귀)
+                        dc.DrawLine(sl, new Point(10.5, 14.5), new Point(13, 12));
+                        dc.DrawLine(sl, new Point(15.5, 14.5), new Point(13, 12));
+                        break;
                     case "옹벽": // 옹벽(벽돌 2단, 흙색)
                         var wl = P(0xc0, 0xa0, 0x72);
                         dc.DrawRectangle(null, wl, new Rect(6, 15, 20, 6));
@@ -167,6 +200,88 @@ public sealed class RibbonApp : IExtensionApplication
                 }
             }
             var rtb = new RenderTargetBitmap(S, S, 96, 96, PixelFormats.Pbgra32);
+            rtb.Render(dv);
+            rtb.Freeze();
+            return rtb;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>[JACK 0729] 확장 툴팁(제목+설명+개념도 이미지) — 마우스를 올려두면 그림까지 표시.</summary>
+    private static RibbonToolTip MakeTip(string title, string content, ImageSource? image)
+    {
+        var tip = new RibbonToolTip
+        {
+            Title = title,
+            Content = content,
+            IsHelpEnabled = false,
+        };
+        if (image != null)
+        {
+            tip.ExpandedContent = "개념도: 사선=사면 · 수직 계단=옹벽 · ●=클릭한 선";
+            tip.ExpandedImage = image;
+        }
+        return tip;
+    }
+
+    /// <summary>[JACK 0729] 옹벽변환/사면변환 툴팁 개념도 — 코드 벡터로 그린 전/후 단면.
+    /// 왼쪽=클릭 전 상태(●=클릭 지점), 가운데 화살표, 오른쪽=적용 후. toWall=true면 사면→옹벽.</summary>
+    private static ImageSource? MakeTipImage(bool toWall)
+    {
+        try
+        {
+            const int W = 360, H = 150;
+            var slope = new Pen(new SolidColorBrush(Color.FromRgb(0x2e, 0xa8, 0x4c)), 3)
+            { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
+            var wall = new Pen(new SolidColorBrush(Color.FromRgb(0xd8, 0x2c, 0x2c)), 3)
+            { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
+            var baseP = new Pen(new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)), 2);
+            var arrowP = new Pen(new SolidColorBrush(Color.FromRgb(0x44, 0x44, 0x44)), 3)
+            { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+
+            var dv = new DrawingVisual();
+            using (var dc = dv.RenderOpen())
+            {
+                dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, W, H));
+
+                // 4단 단면 — 단마다 (경사부 or 수직부) + 소단. [wallFrom..wallTo] 단이 옹벽. 반환=클릭 표식 좌표.
+                Point Steps(double x0, double y0, int wallFrom, int wallTo, int markBench)
+                {
+                    double x = x0, y = y0;
+                    var mark = new Point(x0, y0);
+                    const double run = 20, rise = 24, bench = 9;
+                    dc.DrawLine(baseP, new Point(x - 12, y), new Point(x, y));   // 바닥
+                    for (int i = 0; i < 4; i++)
+                    {
+                        bool w = i >= wallFrom && i <= wallTo;
+                        double nx = w ? x : x + run;
+                        dc.DrawLine(w ? wall : slope, new Point(x, y), new Point(nx, y - rise));
+                        x = nx; y -= rise;
+                        if (i == markBench) mark = new Point(x, y);
+                        dc.DrawLine(w ? wall : slope, new Point(x, y), new Point(x + bench, y));
+                        x += bench;
+                    }
+                    dc.DrawLine(baseP, new Point(x, y), new Point(x + 12, y));   // 상단 지반
+                    return mark;
+                }
+
+                // 왼쪽 = 클릭 전(●=클릭한 선) / 오른쪽 = 적용 후.
+                //   옹벽변환: 사면 4단 → 클릭 단부터 옹벽.  사면변환: 전부 옹벽 → 클릭 단부터 사면 복귀.
+                var mk = toWall
+                    ? Steps(28, 128, wallFrom: 99, wallTo: 99, markBench: 1)   // 전: 전부 사면
+                    : Steps(28, 128, wallFrom: 0, wallTo: 99, markBench: 1);   // 전: 전부 옹벽
+                if (toWall) Steps(232, 128, wallFrom: 2, wallTo: 99, markBench: -1);   // 후: 2단 위부터 옹벽
+                else Steps(232, 128, wallFrom: 0, wallTo: 1, markBench: -1);           // 후: 2단까지 옹벽, 위는 사면
+
+                // 클릭 표식(노란 점 + 검정 테두리) — 왼쪽 그림의 클릭한 선 위치.
+                dc.DrawEllipse(Brushes.Gold, new Pen(Brushes.Black, 1.4), mk, 6, 6);
+
+                // 가운데 화살표.
+                dc.DrawLine(arrowP, new Point(178, 75), new Point(210, 75));
+                dc.DrawLine(arrowP, new Point(202, 68), new Point(210, 75));
+                dc.DrawLine(arrowP, new Point(202, 82), new Point(210, 75));
+            }
+            var rtb = new RenderTargetBitmap(W, H, 96, 96, PixelFormats.Pbgra32);
             rtb.Render(dv);
             rtb.Freeze();
             return rtb;

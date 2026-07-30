@@ -1079,9 +1079,22 @@ public static class RawTriangleIntersectionFinder
                     Geometry g = gfSnap.CreatePolygon(gfSnap.CreateLinearRing(cs.ToArray()));
                     if (!g.IsValid) g = g.Buffer(0);
                     touches = g.Intersects(planG);
+                    // [0729] 병합 노이즈로 계획선을 수 m 비껴가는 인접 루프는 살린다(3m 허용) —
+                    //   멀리 떨어진 진짜 무관 루프(수십 m+)만 걸러내는 게 이 필터의 목적.
+                    if (!touches && g.Distance(planG) <= 3.0) touches = true;
                 }
                 catch { touches = true; } // 판정 실패 시 보존(안전)
-                if (!touches) { sb.Append($"계획무관제외 {a:F0}㎡ · "); continue; }
+                if (!touches)
+                {
+                    // [진단 0729] 어떤 루프가 왜 무관 판정인지 위치를 남긴다(다중 구역 상호작용 추적).
+                    double mnx = double.MaxValue, mny = double.MaxValue, mxx = double.MinValue, mxy = double.MinValue;
+                    foreach (var p in lp)
+                    { if (p.X < mnx) mnx = p.X; if (p.X > mxx) mxx = p.X; if (p.Y < mny) mny = p.Y; if (p.Y > mxy) mxy = p.Y; }
+                    bool closed = lp.Count >= 2 && System.Math.Abs(lp[0].X - lp[lp.Count - 1].X) < 1e-6
+                                               && System.Math.Abs(lp[0].Y - lp[lp.Count - 1].Y) < 1e-6;
+                    sb.Append($"계획무관제외 {a:F0}㎡[{lp.Count}점·{(closed ? "폐합" : "열림")}·X {mnx:F0}~{mxx:F0}·Y {mny:F0}~{mxy:F0}] · ");
+                    continue;
+                }
                 kept.Add(lp);
             }
             sb.Append($"유지 {kept.Count}/{loops.Count}");

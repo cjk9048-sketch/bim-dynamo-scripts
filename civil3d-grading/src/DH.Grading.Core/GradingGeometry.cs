@@ -41,7 +41,7 @@ public static class GradingGeometry
     /// 계획고 Z는 평면 근사가 아니라 '그 위치에서 가장 가까운 경계 위 점의 Z'(선형보간)를 따른다 —
     /// 3D 폴리선(단차·경사 계획선)도 평균으로 기울지 않고 단차 그대로 정지된다(JACK).</summary>
     public static VirtualSlope Build(IReadOnlyList<Point3> boundary, IGroundSurface ground,
-        GradingParams p, bool up, IReadOnlyList<(double T0, double T1, int FromBench)>? wallZones = null)
+        GradingParams p, bool up, IReadOnlyList<(double T0, double T1, int FromBench, int ToBench)>? wallZones = null)
     {
         if (boundary == null || boundary.Count < 3)
             throw new ArgumentException("계획 부지 외곽선은 최소 3개 정점이 필요합니다.", nameof(boundary));
@@ -214,8 +214,11 @@ public static class GradingGeometry
             zprep = new();
             foreach (var z in wallZones)
             {
-                zprep.Add((z.T0, z.T1, Math.Max(z.FromBench, 0), StepProfile.Build(p, slope, Math.Max(z.FromBench, 0))));
-                dbg.AppendLine($"  옹벽구간 호길이[{z.T0:F1}..{z.T1:F1}]m — {Math.Max(z.FromBench, 0) + 1}단부터 수직");
+                // [사면생성 0729] ToBench = 옹벽 끝단(포함) — 그 위 단은 다시 사면(안쪽으로 당겨진 채 평행 재개).
+                zprep.Add((z.T0, z.T1, Math.Max(z.FromBench, 0),
+                    StepProfile.Build(p, slope, Math.Max(z.FromBench, 0), z.ToBench)));
+                string toTxt = z.ToBench >= int.MaxValue - 1 ? "끝까지" : $"{z.ToBench + 1}단까지";
+                dbg.AppendLine($"  옹벽구간 호길이[{z.T0:F1}..{z.T1:F1}]m — {Math.Max(z.FromBench, 0) + 1}단부터 {toTxt} 수직");
             }
         }
 
@@ -725,7 +728,7 @@ internal sealed class StepProfile
     /// <summary>마지막 모서리까지의 수평 도달거리(대소단 폭 포함).</summary>
     public double MaxDist { get; private set; }
 
-    public static StepProfile Build(GradingParams p, double slope, int wallFromBench = -1)
+    public static StepProfile Build(GradingParams p, double slope, int wallFromBench = -1, int wallToBench = int.MaxValue)
     {
         var sp = new StepProfile();
         double maxRise = p.MaxBenches * p.BenchHeight;                     // 전체 수직 상한(안전)
@@ -743,7 +746,7 @@ internal sealed class StepProfile
             if (rise <= 1e-9) { accH = 0; continue; }                     // 누적이 간격에 딱 떨어진 직후 보호
             if (totalRise + rise > maxRise) rise = maxRise - totalRise;   // 수직 상한 클램프
             // [§75 옹벽] 이 단이 옹벽 시작단 이상이면 수평폭을 사면 대신 '거의 수직'(MinSlope)으로 → 수직 벽 + 소단 계단.
-            double effSlope = (wallFromBench >= 0 && benchIdx >= wallFromBench) ? p.MinSlope : slope;
+            double effSlope = (wallFromBench >= 0 && benchIdx >= wallFromBench && benchIdx <= wallToBench) ? p.MinSlope : slope;
             double run = Math.Max(rise * effSlope, p.MinFaceRun);        // 이 사면(또는 옹벽)의 수평폭
 
             d += run; totalRise += rise;

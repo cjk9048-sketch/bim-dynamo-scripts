@@ -9,17 +9,18 @@ namespace DH.Grading.Civil;
 /// (<see cref="WallPanelDwg.Populate"/>)을 같은 모델공간에 채우고 한 번만 SaveAs 한다.</summary>
 public static class WallDwg
 {
-    /// <summary>보강토 블록 + 앵커판넬 + 콘크리트 패널을 한 DWG로 저장. 반환=(블록,캡,앵커판넬,앵커,콘크리트패널) 수.
-    /// 셋 중 무엇이 비어도 됨(있는 것만 채움). 다 비면 호출부에서 파일 정리. 콘크리트=앵커·홈 없이 무늬 면.</summary>
-    public static (int Blocks, int Caps, int Panels, int Anchors, int Concrete) Export(
+    /// <summary>보강토 블록 + 앵커판넬 + 콘크리트 패널 + 역T형을 한 DWG로 저장.
+    /// 반환=(블록,캡,앵커판넬,앵커,콘크리트패널,역T세그) 수. 무엇이 비어도 됨(있는 것만 채움).</summary>
+    public static (int Blocks, int Caps, int Panels, int Anchors, int Concrete, int Tees) Export(
         string path,
         List<(bool Cut, List<WallBlocks.Block> Blocks, List<WallBlocks.Block> Caps)> blockSets,
         IReadOnlyList<WallPanels.Panel> panels,
         IReadOnlyList<WallPanels.Panel> concrete,
         double blockW, double blockD, double blockH, double capD, double capT,
-        IReadOnlyList<WallPanels.Quoin> quoins = null)
+        IReadOnlyList<WallPanels.Quoin> quoins = null,
+        IReadOnlyList<WallTee.Run>? tees = null)
     {
-        int nb = 0, nc = 0, np = 0, na = 0, ncp = 0;
+        int nb = 0, nc = 0, np = 0, na = 0, ncp = 0, nt = 0;
         using var db = new Database(true, true);
         // Solid3d 생성은 WorkingDatabase 문맥을 요구 — 잠시 교체 후 복원.
         Database prev = HostApplicationServices.WorkingDatabase;
@@ -35,11 +36,13 @@ public static class WallDwg
                     (np, na) = WallPanelDwg.Populate(db, tr, panels, concrete: false, quoins: quoins);
                 if (concrete != null && concrete.Count > 0)
                     (ncp, _) = WallPanelDwg.Populate(db, tr, concrete, concrete: true, quoins: quoins);
+                if (tees != null && tees.Count > 0)
+                    nt = WallTeeDwg.Populate(db, tr, tees);   // [0730] 역T형(1단 옹벽 구간)
                 tr.Commit();
             }
             db.SaveAs(path, DwgVersion.Current);
         }
         finally { HostApplicationServices.WorkingDatabase = prev; }
-        return (nb, nc, np, na, ncp);
+        return (nb, nc, np, na, ncp, nt);
     }
 }
