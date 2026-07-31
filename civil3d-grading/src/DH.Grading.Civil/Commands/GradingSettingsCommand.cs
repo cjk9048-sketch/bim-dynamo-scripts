@@ -36,6 +36,38 @@ public sealed class GradingSettingsCommand
         //   [리뷰 0731 R-1] 조기 return 금지 — 아래 '결과지표면만 표시' 즉시 반영이 통째로 건너뛰어진다.
         if (prevEpsg != GradingSettings.ExportEpsg)
         {
+            // [JACK 0731] 가져온 등고선·지적도가 있으면 예/아니오로 확인. 이 자료들은 이전 좌표계 기준이라
+            //   좌표계가 바뀌면 더 이상 맞지 않는다(뒤에 원지반→정지면이 줄줄이 물려 있음).
+            //   예 = 가져온 것 + 정지 결과 전부 초기화(사용자가 직접 그린 계획폴리곤은 보존)
+            //   아니오 = 좌표계 변경 자체를 취소(자료와 좌표계가 항상 맞는 상태 유지)
+            if (ResetCommand.HasImportedGis(doc.Database))
+            {
+                // [JACK 0731] 문구는 짧게 — 줄이 길면 자동 줄바꿈과 겹쳐 지저분해진다.
+                var ans = System.Windows.MessageBox.Show(
+                    "좌표계를 바꾸면\n" +
+                    "가져온 등고선·지적도가 맞지 않게 됩니다.\n\n" +
+                    "[예] 가져온 자료와 정지 결과를 지우고 변경\n" +
+                    "[아니오] 변경 취소\n\n" +
+                    "※ 직접 그린 계획폴리곤은 그대로 둡니다.",
+                    "DH 정지 — 좌표계 변경",
+                    System.Windows.MessageBoxButton.YesNo,
+                    System.Windows.MessageBoxImage.Warning);
+                if (ans != System.Windows.MessageBoxResult.Yes)
+                {
+                    GradingSettings.ExportEpsg = prevEpsg;   // 좌표계 변경 취소(나머지 설정은 저장됨)
+                    doc.Editor.WriteMessage("\n[정지 옵션] 좌표계 변경을 취소했습니다(다른 설정은 저장됨).");
+                    goto AfterCs;
+                }
+                try
+                {
+                    var (s, e2, _) = ResetCommand.ResetCore(doc, includeImported: true);
+                    doc.Editor.WriteMessage($"\n[정지 옵션] 좌표계 변경 — 가져온 자료·정지 결과 초기화(지표면 {s}·객체 {e2})");
+                    try { DiagLog.Append($"\n■ 좌표계 변경 초기화 — 지표면 {s} · 객체 {e2}\n"); } catch { }
+                }
+                catch (System.Exception rex)
+                { doc.Editor.WriteMessage("\n[정지 옵션] 초기화 중 오류: " + rex.Message); }
+            }
+
             try
             {
                 var (ok, note) = KoreaCs.Assign(doc.Database, GradingSettings.ExportEpsg);
@@ -59,6 +91,7 @@ public sealed class GradingSettingsCommand
                 try { DiagLog.Append($"\n■ DHGRADESET 좌표계 반영 오류 — {ex.Message}\n"); } catch { }
             }
         }
+    AfterCs:
 
         // [JACK 0728] '결과지표면만 표시' 저장 즉시 반영 — 해제=숨겼던 지표면 전부 표시 / 체크=정지면_DH만(있을 때).
         try

@@ -18,6 +18,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.InfraworksCommand))]          // DHINFRA(INFRAWORKS SHP 내보내기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ResetCommand))]               // DHRESET(초기화 — 정지면 생성 전으로)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.BasemapCommand))]             // DHMAP/DHMAPOFF(위성 배경지도 켜기·끄기)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ImportGisCommand))]           // DHCONTOUR/DHPARCEL(등고선·지적도 가져오기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.CoordSysProbeCommand))]       // DHCS(좌표계 API 진단 — 임시)
 
 namespace DH.Grading.Civil;
@@ -99,7 +100,7 @@ public sealed class RibbonApp : IExtensionApplication
             var tab = new RibbonTab { Title = TabTitle, Id = TabId };
             ribbon.Tabs.Add(tab);
 
-            // [리본 3분류 — JACK 0724] 정지(절성토) / 도면화 / 내보내기. 버튼 사이 여백(Spacer)으로 간격 확보.
+            // [리본 분류 — JACK 0724/0731] 부지정지 / 도면화 / 가져오기 / 내보내기 / 기타.
             var pGrade = new RibbonPanelSource { Title = "부지정지" };
             tab.Panels.Add(new RibbonPanel { Source = pGrade });
             pGrade.Items.Add(Spacer());
@@ -136,6 +137,43 @@ public sealed class RibbonApp : IExtensionApplication
             pDraw.Items.Add(MakeButton(
                 "노리선", "DHNORI ", "정지 결과(번들)로 사면선·소단선·노리선을 한 번에 작도 — DHGRADE 실행 후 사용", "노리선"));
             pDraw.Items.Add(Spacer());
+            // [JACK 0731] 배경지도·지도끄기는 도면화 중분류로 이동(별도 패널 폐지).
+            var btnMap = MakeButton(
+                "배경지도", "DHMAP ", "두 점으로 범위를 찍으면 그 범위의 위성사진을 도면 좌표계에 맞춰 깔아줍니다(화질=정지옵션)", "지도");
+            btnMap.ToolTip = MakeTip("배경지도 (DHMAP)",
+                "범위 두 모서리를 클릭하면 브이월드 위성사진을 받아\n" +
+                "도면 좌표계(정지옵션의 좌표계)에 정확히 맞춰 깔아줍니다.\n" +
+                "여러 번 눌러 여러 곳에 깔 수 있고, 화질은 정지옵션에서 선택합니다.", null);
+            pDraw.Items.Add(btnMap);
+            pDraw.Items.Add(Spacer());
+            var btnMapOff = MakeButton(
+                "지도끄기", "DHMAPOFF ", "이 기능으로 깐 위성사진을 한 번에 전부 제거", "지도끄기");
+            btnMapOff.ToolTip = MakeTip("지도끄기 (DHMAPOFF)",
+                "배경지도로 깔아둔 위성사진을 한 번에 모두 제거합니다.\n" +
+                "직접 붙이신 다른 이미지는 그대로 둡니다.", null);
+            pDraw.Items.Add(btnMapOff);
+            pDraw.Items.Add(Spacer());
+
+            // [가져오기 — JACK 0731] 사내 지형·지적 DB에서 도면 좌표계로 바로 받아온다. 내보내기 바로 앞에 배치.
+            var pImport = new RibbonPanelSource { Title = "가져오기" };
+            tab.Panels.Add(new RibbonPanel { Source = pImport });
+            pImport.Items.Add(Spacer());
+            var btnParcel = MakeButton(
+                "지적도", "DHPARCEL ", "두 점으로 범위를 찍으면 그 범위 필지 경계와 지번을 도면 좌표계로 가져옵니다", "지적");
+            btnParcel.ToolTip = MakeTip("지적도 가져오기 (DHPARCEL)",
+                "범위 두 모서리를 클릭하면 그 사각 범위대로 잘라서\n" +
+                "필지 경계를 가져옵니다. 지번은 별도 레이어(DH-지번)에 들어갑니다.\n" +
+                "※ GIS_Design_Loader server 제공", null);
+            pImport.Items.Add(btnParcel);
+            pImport.Items.Add(Spacer());
+            var btnContour = MakeButton(
+                "서버\n지표면", "DHCONTOUR ", "범위를 찍으면 서버에서 수치지형도 등고선을 3D로 가져오고 '원지반' 지표면까지 자동 생성", "등고선");
+            btnContour.ToolTip = MakeTip("서버지표면 (DHCONTOUR)",
+                "범위 두 모서리를 클릭하면 사내 서버에서 수치지형도 등고선(5m/계곡선 25m)을\n" +
+                "표고가 들어간 3D 선으로 가져오고, 곧바로 '원지반' 지표면을 만듭니다.\n" +
+                "만들어진 원지반으로 바로 [정지면 생성]을 실행하면 됩니다.", null);
+            pImport.Items.Add(btnContour);
+            pImport.Items.Add(Spacer());
 
             var pExport = new RibbonPanelSource { Title = "내보내기" };
             tab.Panels.Add(new RibbonPanel { Source = pExport });
@@ -143,26 +181,6 @@ public sealed class RibbonApp : IExtensionApplication
             pExport.Items.Add(MakeButton(
                 "INFRA\nWORKS", "DHINFRA ", "InfraWorks 기초자료 내보내기 — 폴더 선택 후 지형·옹벽3D·SHP·위성GeoTIFF·토공량을 내보냄(있는 것만). DHGRADE 후 사용", "infra"));
             pExport.Items.Add(Spacer());
-
-            // [배경지도 — JACK 0731] 위성사진을 도면 좌표계에 맞춰 깔기 / 한 번에 전부 끄기.
-            var pMap = new RibbonPanelSource { Title = "배경지도" };
-            tab.Panels.Add(new RibbonPanel { Source = pMap });
-            pMap.Items.Add(Spacer());
-            var btnMap = MakeButton(
-                "배경지도", "DHMAP ", "두 점으로 범위를 찍으면 그 범위의 위성사진을 도면 좌표계에 맞춰 깔아줍니다(화질=정지옵션)", "지도");
-            btnMap.ToolTip = MakeTip("배경지도 (DHMAP)",
-                "범위 두 모서리를 클릭하면 브이월드 위성사진을 받아\n" +
-                "도면 좌표계(정지옵션의 좌표계)에 정확히 맞춰 깔아줍니다.\n" +
-                "여러 번 눌러 여러 곳에 깔 수 있고, 화질은 정지옵션에서 선택합니다.", null);
-            pMap.Items.Add(btnMap);
-            pMap.Items.Add(Spacer());
-            var btnMapOff = MakeButton(
-                "지도끄기", "DHMAPOFF ", "이 기능으로 깐 위성사진을 한 번에 전부 제거", "지도끄기");
-            btnMapOff.ToolTip = MakeTip("지도끄기 (DHMAPOFF)",
-                "배경지도로 깔아둔 위성사진을 한 번에 모두 제거합니다.\n" +
-                "직접 붙이신 다른 이미지는 그대로 둡니다.", null);
-            pMap.Items.Add(btnMapOff);
-            pMap.Items.Add(Spacer());
 
             // [기타 — JACK 0731] 초기화 등 보조 기능. 내보내기와 분리.
             var pMisc = new RibbonPanelSource { Title = "기타" };
@@ -252,6 +270,25 @@ public sealed class RibbonApp : IExtensionApplication
                         dc.DrawLine(sl, new Point(13, 19), new Point(13, 12));   // 위로 화살(사면 복귀)
                         dc.DrawLine(sl, new Point(10.5, 14.5), new Point(13, 12));
                         dc.DrawLine(sl, new Point(15.5, 14.5), new Point(13, 12));
+                        break;
+                    case "지적": // 필지 격자(초록) — 지적도
+                        var jp = P(0x3f, 0xa8, 0x5c);
+                        dc.DrawRectangle(null, jp, new Rect(4, 6, 24, 20));
+                        dc.DrawLine(jp, new Point(14, 6), new Point(14, 16));    // 필지 경계
+                        dc.DrawLine(jp, new Point(4, 16), new Point(28, 16));
+                        dc.DrawLine(jp, new Point(21, 16), new Point(21, 26));
+                        break;
+                    case "등고선": // 겹친 등고선(갈색) — 지형
+                        var ct = P(0xc8, 0x8a, 0x40);
+                        for (int k = 0; k < 3; k++)
+                        {
+                            double s = 3.2 * k;
+                            var fg = new PathFigure { StartPoint = new Point(4 + s, 26 - s * 0.9), IsClosed = false };
+                            fg.Segments.Add(new BezierSegment(
+                                new Point(10 + s, 14 - s), new Point(20 - s * 0.4, 26 - s), new Point(28 - s, 12 - s * 0.8), true));
+                            var pgc = new PathGeometry(); pgc.Figures.Add(fg);
+                            dc.DrawGeometry(null, ct, pgc);
+                        }
                         break;
                     case "지도": // 지구본형 배경지도(파랑) — 사각 프레임 + 경위선
                         var mp = P(0x3f, 0x8f, 0xd0);

@@ -65,6 +65,12 @@
     <ProjectReference Include="..\DH.Grading.Core\DH.Grading.Core.csproj" />
   </ItemGroup>
 
+  <!-- [JACK 0731] 사내 PostGIS(등고선·지적도) 직결용. AutoCAD와의 어셈블리 충돌을 피하려고
+       로깅/기타 부수 패키지는 끌어오지 않는 최소 구성으로 쓴다(Npgsql 단독). -->
+  <ItemGroup>
+    <PackageReference Include="Npgsql" Version="8.0.3" />
+  </ItemGroup>
+
   <!-- 리본 버튼 아이콘(PNG)을 DLL에 포함 -->
   <ItemGroup>
     <EmbeddedResource Include="Resources\*.png" />
