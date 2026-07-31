@@ -17,6 +17,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SlopeReleaseCommand))]        // DHSLOPE(사면 변환 — 옹벽선 선택해 그 단부터 사면 복귀)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.InfraworksCommand))]          // DHINFRA(INFRAWORKS SHP 내보내기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ResetCommand))]               // DHRESET(초기화 — 정지면 생성 전으로)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.BasemapCommand))]             // DHMAP/DHMAPOFF(위성 배경지도 켜기·끄기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.CoordSysProbeCommand))]       // DHCS(좌표계 API 진단 — 임시)
 
 namespace DH.Grading.Civil;
@@ -57,6 +58,23 @@ public sealed class RibbonApp : IExtensionApplication
     {
         AcadApp.Idle -= OnIdleCoordSys;
         CoordSysInstaller.EnsureInstalled();
+        EnsureRasterDetachMode();
+    }
+
+    /// <summary>[JACK 0731] Raster Design '이미지 분리 방식'을 "항상 분리(1)"로 — 배경지도 삭제/갱신 때마다
+    /// "이미지를 분리할까요?" 창이 뜨는 것을 근본 차단(설정 0=물어보기가 원인, 코드 우회 불가).
+    /// 레지스트리 값이라 다음 세션부터 확실히 적용. RD 미설치 PC에선 무해한 키만 생김.</summary>
+    private static void EnsureRasterDetachMode()
+    {
+        try
+        {
+            string root = Autodesk.AutoCAD.DatabaseServices.HostApplicationServices.Current.UserRegistryProductRootKey;
+            using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(root + @"\Applications\AeciIbApi\Options");
+            if (key == null) return;
+            key.SetValue("ImageDetachMode", 1, Microsoft.Win32.RegistryValueKind.DWord);
+            key.SetValue("TmpImageDetachMode", 1, Microsoft.Win32.RegistryValueKind.DWord);
+        }
+        catch { }
     }
 
     public void Terminate() { }
@@ -125,6 +143,26 @@ public sealed class RibbonApp : IExtensionApplication
             pExport.Items.Add(MakeButton(
                 "INFRA\nWORKS", "DHINFRA ", "InfraWorks 기초자료 내보내기 — 폴더 선택 후 지형·옹벽3D·SHP·위성GeoTIFF·토공량을 내보냄(있는 것만). DHGRADE 후 사용", "infra"));
             pExport.Items.Add(Spacer());
+
+            // [배경지도 — JACK 0731] 위성사진을 도면 좌표계에 맞춰 깔기 / 한 번에 전부 끄기.
+            var pMap = new RibbonPanelSource { Title = "배경지도" };
+            tab.Panels.Add(new RibbonPanel { Source = pMap });
+            pMap.Items.Add(Spacer());
+            var btnMap = MakeButton(
+                "배경지도", "DHMAP ", "두 점으로 범위를 찍으면 그 범위의 위성사진을 도면 좌표계에 맞춰 깔아줍니다(화질=정지옵션)", "지도");
+            btnMap.ToolTip = MakeTip("배경지도 (DHMAP)",
+                "범위 두 모서리를 클릭하면 브이월드 위성사진을 받아\n" +
+                "도면 좌표계(정지옵션의 좌표계)에 정확히 맞춰 깔아줍니다.\n" +
+                "여러 번 눌러 여러 곳에 깔 수 있고, 화질은 정지옵션에서 선택합니다.", null);
+            pMap.Items.Add(btnMap);
+            pMap.Items.Add(Spacer());
+            var btnMapOff = MakeButton(
+                "지도끄기", "DHMAPOFF ", "이 기능으로 깐 위성사진을 한 번에 전부 제거", "지도끄기");
+            btnMapOff.ToolTip = MakeTip("지도끄기 (DHMAPOFF)",
+                "배경지도로 깔아둔 위성사진을 한 번에 모두 제거합니다.\n" +
+                "직접 붙이신 다른 이미지는 그대로 둡니다.", null);
+            pMap.Items.Add(btnMapOff);
+            pMap.Items.Add(Spacer());
 
             // [기타 — JACK 0731] 초기화 등 보조 기능. 내보내기와 분리.
             var pMisc = new RibbonPanelSource { Title = "기타" };
@@ -214,6 +252,20 @@ public sealed class RibbonApp : IExtensionApplication
                         dc.DrawLine(sl, new Point(13, 19), new Point(13, 12));   // 위로 화살(사면 복귀)
                         dc.DrawLine(sl, new Point(10.5, 14.5), new Point(13, 12));
                         dc.DrawLine(sl, new Point(15.5, 14.5), new Point(13, 12));
+                        break;
+                    case "지도": // 지구본형 배경지도(파랑) — 사각 프레임 + 경위선
+                        var mp = P(0x3f, 0x8f, 0xd0);
+                        dc.DrawRectangle(null, mp, new Rect(5, 7, 22, 18));
+                        dc.DrawLine(mp, new Point(16, 7), new Point(16, 25));      // 세로 중앙선
+                        dc.DrawLine(mp, new Point(5, 16), new Point(27, 16));      // 가로 중앙선
+                        dc.DrawEllipse(null, mp, new Point(16, 16), 6.5, 9);       // 지구본 느낌 타원
+                        break;
+                    case "지도끄기": // 지도 프레임 + 사선(끄기, 빨강)
+                        var mo = P(0x9a, 0xa3, 0xad);
+                        dc.DrawRectangle(null, mo, new Rect(5, 7, 22, 18));
+                        dc.DrawLine(mo, new Point(5, 16), new Point(27, 16));
+                        var xr = P(0xe0, 0x5a, 0x3a);
+                        dc.DrawLine(xr, new Point(7, 27), new Point(25, 5));       // 금지 사선
                         break;
                     case "초기화": // 원형 되돌림 화살표(초록) — 리셋(JACK 0731 스샷 참고: 위 트인 원 + 좌상단 화살촉)
                         var rs = P(0x2e, 0xa8, 0x4c);

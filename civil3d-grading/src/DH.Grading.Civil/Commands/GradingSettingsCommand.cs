@@ -16,9 +16,49 @@ public sealed class GradingSettingsCommand
         Document doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
 
+        // [리뷰 0731 D-1] 대화상자를 열기 전에 **도면 좌표계로 옵션 값을 맞춘다**.
+        //   그러지 않으면 콤보가 하드코딩 기본값(중부 5186)을 보여주고, 사용자가 좌표계를 건드리지 않고
+        //   [저장]만 눌러도 도면 좌표계가 중부로 덮어써져 배경지도가 통째로 딴 곳(최대 180km)으로 간다.
+        //   [리뷰 0731 R-2] 단, 현재 선택이 **도면 코드로 표현 불가한 원점**(구 좌표계·UTM-K)이면 덮어쓰지 않는다.
+        //   ResolveEpsgFromCode는 신/구를 구분 못 해 항상 신(5185~5188)을 돌려주므로, 덮어쓰면 사용자가 고른
+        //   구좌표가 정지옵션을 열 때마다 신좌표로 리셋돼 배경지도가 북쪽으로 100km 어긋난다(ResolveCs와 대칭).
+        var detected = KoreaCs.ResolveEpsgFromCode(KoreaCs.Read(doc.Database));
+        if (detected.HasValue && KoreaCs.CodeForEpsg(GradingSettings.ExportEpsg) != null)
+            GradingSettings.ExportEpsg = detected.Value;
+        int prevEpsg = GradingSettings.ExportEpsg;   // 사용자가 콤보를 실제로 바꿨는지 판정용
+
         var dlg = new GradingDialog("저장");
         AcadApp.ShowModalWindow(dlg); // [저장] 시 GradingSettings에 반영됨
         if (dlg.DialogResult != true) return;
+
+        // [JACK 0731 — 좌표계 연동] 사용자가 좌표계를 **실제로 바꿨을 때만** 도면 좌표계에 반영(MAPCSASSIGN 상당)
+        //   + 이미 깔린 배경지도를 새 좌표계로 자동 재생성. 안 바꿨으면 아무것도 건드리지 않는다(리뷰 D-1).
+        //   [리뷰 0731 R-1] 조기 return 금지 — 아래 '결과지표면만 표시' 즉시 반영이 통째로 건너뛰어진다.
+        if (prevEpsg != GradingSettings.ExportEpsg)
+        {
+            try
+            {
+                var (ok, note) = KoreaCs.Assign(doc.Database, GradingSettings.ExportEpsg);
+                doc.Editor.WriteMessage("\n[정지 옵션] " + note);
+                if (!ok)
+                    AcadApp.ShowAlertDialog(
+                        "도면 좌표계를 자동으로 바꾸지 못했습니다.\n" + note +
+                        "\n\n배경지도는 정지옵션에서 고른 좌표계로 만들어집니다.\n" +
+                        "도면 좌표계까지 맞추려면 MAPCSASSIGN 명령으로 직접 지정하세요.");
+                try { DiagLog.Append($"\n■ DHGRADESET 좌표계 변경 — EPSG {prevEpsg} → {GradingSettings.ExportEpsg} · {note}\n"); } catch { }
+
+                // 좌표계가 바뀌면 같은 도면 좌표라도 실제 지구상 위치가 달라져 기존 위성사진은 더는 맞지 않는다.
+                int refreshed = BasemapCommand.RefreshAll(doc);
+                if (refreshed > 0)
+                    doc.Editor.WriteMessage($"\n[정지 옵션] 배경지도 {refreshed}개를 새 좌표계로 다시 배치했습니다.");
+            }
+            catch (System.Exception ex)
+            {
+                // [리뷰 M-A] 조용히 삼키지 않는다 — 배경지도가 사라진 채 무음이 되는 것을 방지.
+                doc.Editor.WriteMessage("\n[정지 옵션] 좌표계 반영 중 오류: " + ex.Message);
+                try { DiagLog.Append($"\n■ DHGRADESET 좌표계 반영 오류 — {ex.Message}\n"); } catch { }
+            }
+        }
 
         // [JACK 0728] '결과지표면만 표시' 저장 즉시 반영 — 해제=숨겼던 지표면 전부 표시 / 체크=정지면_DH만(있을 때).
         try

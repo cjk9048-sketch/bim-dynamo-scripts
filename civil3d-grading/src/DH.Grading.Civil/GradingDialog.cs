@@ -24,6 +24,7 @@ public sealed class GradingDialog : Window
     private readonly ComboBox _cutWallStyle;
     private readonly ComboBox _fillWallStyle;
     private readonly ComboBox _coordSys;
+    private readonly ComboBox _basemapRes;   // [배경지도 0731] 위성 화질(목표 해상도)
 
     private static readonly SolidColorBrush GreyBrush = new(Color.FromRgb(0x99, 0x99, 0x99));
     private static readonly SolidColorBrush BlackBrush = new(Colors.Black);
@@ -154,6 +155,24 @@ public sealed class GradingDialog : Window
             ToolTip = "체크: 정지면 생성 후 정지면_DH만 보이고 원지반·가상면은 숨김. 해제 후 저장: 숨겼던 지표면을 모두 다시 표시.",
         };
         colL.Children.Add(_showOnlyResult);
+
+        // [배경지도 0731 — JACK] 위성 배경지도 화질(목표 해상도). 범위가 넓으면 자동으로 한 단계씩 낮춰 생성.
+        colL.Children.Add(new TextBlock
+        {
+            Text = "배경지도 화질",
+            Margin = new Thickness(0, 4, 0, 2),
+            ToolTip = "[배경지도] 버튼으로 까는 위성사진의 해상도. 지정한 범위가 넓으면 파일이 너무 커지지 않게 자동으로 낮춰 생성합니다.",
+        });
+        _basemapRes = new ComboBox
+        {
+            Width = 200, Height = 24, Margin = new Thickness(0, 0, 0, 8),
+            VerticalContentAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        foreach (var s in GradingSettings.BasemapResLabels) _basemapRes.Items.Add(s);
+        int bmIdx = System.Array.IndexOf(GradingSettings.BasemapResValues, GradingSettings.BasemapRes);
+        _basemapRes.SelectedIndex = bmIdx >= 0 ? bmIdx : 1;   // 기본 보통(0.5m)
+        colL.Children.Add(_basemapRes);
 
         // [실시간 연동] 모든 컨트롤 생성 후 훅 — 값·옵션 변경 즉시 예시 그림/안내 갱신.
         _benchHeight.TextChanged += (_, _) => RedrawDiagram();
@@ -567,6 +586,8 @@ public sealed class GradingDialog : Window
         GradingSettings.CutWallStyle = (WallStyle)System.Math.Max(0, _cutWallStyle.SelectedIndex);
         GradingSettings.FillWallStyle = (WallStyle)System.Math.Max(0, _fillWallStyle.SelectedIndex);
         GradingSettings.ExportEpsg = EpsgCodes[System.Math.Clamp(_coordSys.SelectedIndex, 0, EpsgCodes.Length - 1)];
+        GradingSettings.BasemapRes = GradingSettings.BasemapResValues[
+            System.Math.Clamp(_basemapRes.SelectedIndex, 0, GradingSettings.BasemapResValues.Length - 1)];
 
         DialogResult = true;
         Close();

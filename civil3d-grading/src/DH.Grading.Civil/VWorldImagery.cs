@@ -23,6 +23,98 @@ public static class VWorldImagery
 
     private static readonly HttpClient Http = new() { Timeout = System.TimeSpan.FromSeconds(20) };
 
+    // ── [배경지도 0731 — JACK] 도면 부착용 위성 이미지 상한(내보내기용 Export와 별개) ──
+    private const int BasemapMaxTiles = 600;             // 중간 모자이크 메모리 상한(≈600×256²×4B ≈ 157MB)
+    private const long BasemapMaxOutPixels = 9_000_000;  // 출력 픽셀 상한(≈3000×3000 → TIFF 27MB)
+
+    /// <summary>[배경지도 0731 — JACK] 도면에 깔 위성 이미지 — 두 점으로 지정한 TM 범위를 목표 해상도(m/px)로
+    /// 받아 outTifPath(GeoTIFF, 도면 좌표계 격자)로 저장한다. 줌은 목표 해상도에 맞춰 자동 선택하고,
+    /// 타일·픽셀 상한을 넘으면 해상도를 한 단계씩 낮춰 재시도 → **어떤 범위를 찍어도 실패 없이 생성**된다.
+    /// 반환=(성공, 안내문, 실제해상도 m/px, 가로픽셀, 세로픽셀) — 도면 배치 폭=W·Res, 높이=H·Res(좌하단=minE,minN).</summary>
+    /// <param name="progress">[리뷰 0731 M-4] 타일 진행 알림(받은수, 전체수) — 호출부가 진행막대를 띄워
+    /// 다운로드 동안 AutoCAD가 멈춘 것처럼 보이지 않게 한다. null이면 알림 없음.</param>
+    public static (bool Ok, string Msg, double Res, int W, int H) ExportBasemap(
+        double minE, double minN, double maxE, double maxN,
+        string outTifPath, double targetRes,
+        double lon0Deg, double falseNorthing, int epsgOut,
+        System.Action<int, int>? progress = null)
+    {
+        if (maxE <= minE || maxN <= minN) return (false, "지정한 범위가 유효하지 않습니다.", 0, 0, 0);
+
+        // 네 모서리 → 경위도 bbox(TM은 직각이 아니라 살짝 기울어 4모서리로 안전하게).
+        var c = new[]
+        {
+            TmToLonLat(minE, minN, lon0Deg, falseNorthing), TmToLonLat(maxE, minN, lon0Deg, falseNorthing),
+            TmToLonLat(minE, maxN, lon0Deg, falseNorthing), TmToLonLat(maxE, maxN, lon0Deg, falseNorthing),
+        };
+        double west = double.MaxValue, east = double.MinValue, south = double.MaxValue, north = double.MinValue;
+        foreach (var (lon, lat) in c)
+        { west = System.Math.Min(west, lon); east = System.Math.Max(east, lon); south = System.Math.Min(south, lat); north = System.Math.Max(north, lat); }
+        double latMid = (south + north) / 2 * System.Math.PI / 180.0;
+        double cosLat = System.Math.Max(0.1, System.Math.Cos(latMid));
+
+        // 목표 해상도 → 줌 자동 선택. 상한 초과면 해상도를 2배씩 낮춰 재시도.
+        double res = System.Math.Max(0.1, targetRes);
+        int z = MaxZoom, xmin = 0, ymin = 0, xmax = 0, ymax = 0, cols = 0, rows = 0, outW = 0, outH = 0;
+        bool fit = false;
+        for (int attempt = 0; attempt < 10; attempt++)
+        {
+            // 지상해상도(=mpp·cosLat)가 res가 되는 줌: 2^z = 2·OriginShift·cosLat / (TileSize·res)
+            z = (int)System.Math.Round(System.Math.Log(2.0 * OriginShift * cosLat / (TileSize * res), 2));
+            z = System.Math.Clamp(z, 8, MaxZoom);
+            (xmin, ymin) = LonLatToTile(west, north, z);
+            (xmax, ymax) = LonLatToTile(east, south, z);
+            cols = xmax - xmin + 1; rows = ymax - ymin + 1;
+            outW = (int)System.Math.Ceiling((maxE - minE) / res);
+            outH = (int)System.Math.Ceiling((maxN - minN) / res);
+            if (cols > 0 && rows > 0 && outW >= 2 && outH >= 2 &&
+                (long)cols * rows <= BasemapMaxTiles && (long)outW * outH <= BasemapMaxOutPixels)
+            { fit = true; break; }
+            res *= 2.0;   // 한 단계 낮춰 재시도
+        }
+        if (!fit) return (false, "지정한 범위를 이 화질로 담을 수 없습니다 — 범위를 좁히거나 정지옵션에서 화질을 낮추세요.", 0, 0, 0);
+
+        // 타일 다운로드 + 모자이크.
+        int okTiles = 0, doneTiles = 0, totalTiles = cols * rows;
+        var mosaic = new RenderTargetBitmap(cols * TileSize, rows * TileSize, 96, 96, PixelFormats.Pbgra32);
+        var dv = new DrawingVisual();
+        using (var dc = dv.RenderOpen())
+        {
+            for (int ty = ymin; ty <= ymax; ty++)
+                for (int tx = xmin; tx <= xmax; tx++)
+                {
+                    var bmp = DownloadTile(z, ty, tx);
+                    doneTiles++;
+                    progress?.Invoke(doneTiles, totalTiles);
+                    if (bmp == null) continue;
+                    dc.DrawImage(bmp, new Rect((tx - xmin) * TileSize, (ty - ymin) * TileSize, TileSize, TileSize));
+                    okTiles++;
+                }
+        }
+        mosaic.Render(dv);
+        // [JACK 0731] 전량 실패의 흔한 원인은 인터넷이 아니라 '좌표계가 틀려 위성사진이 없는 위치를 요청'한 경우.
+        if (okTiles == 0) return (false, "해당하는 위치에 위성사진이 존재하지 않습니다.\n좌표계(원점)가 맞는지 확인하세요. (인터넷 차단일 수도 있음)", 0, 0, 0);
+
+        int W = cols * TileSize, H = rows * TileSize;
+        int stride = W * 4;
+        long need = (long)H * stride;
+        if (need > int.MaxValue) return (false, "이미지가 너무 커서 생성할 수 없습니다 — 범위를 좁히세요.", 0, 0, 0);
+        var bgra = new byte[need];
+        mosaic.CopyPixels(bgra, stride, 0);
+
+        double mpp = 2.0 * OriginShift / (TileSize * System.Math.Pow(2, z));
+        double x0 = -OriginShift + xmin * TileSize * mpp;
+        double y0 = OriginShift - ymin * TileSize * mpp;
+
+        // 도면 좌표계(TM) 격자로 재투영 → 도면에 그대로 앉힌다(좌표계 연동, JACK 0731).
+        var rgbTm = ReprojectToTm(bgra, W, H, stride, x0, y0, mpp, minE, maxN, res, outW, outH, lon0Deg, falseNorthing);
+        try { System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(outTifPath)!); } catch { }
+        WriteGeoTiff(outTifPath, rgbTm, outW, outH, res, minE, maxN, epsgOut);
+
+        string note = res > targetRes + 1e-9 ? $" (범위가 넓어 화질 자동 조정: {targetRes:0.##}→{res:0.##}m/px)" : "";
+        return (true, $"위성 {cols}×{rows}타일(z{z}, 성공 {okTiles}/{cols * rows}) · {res:0.##}m/px · {outW}×{outH}px{note}", res, outW, outH);
+    }
+
     /// <summary>부지 경계상자(한국 평면직각 TM) → outFolder에 baseName.jpg/.jgw/.prj 저장. 반환=안내 문자열(개수·줌).
     /// lon0Deg=중앙자오선 경도(서부125·중부127·동부129·동해131), falseNorthing=원점가산 N(신600000·구500000·제주550000).
     /// [JACK 0728] epsgOut(한국 TM 벨트 EPSG, 예 5186)을 주면 웹메르카토르 모자이크를 그 좌표계 격자로

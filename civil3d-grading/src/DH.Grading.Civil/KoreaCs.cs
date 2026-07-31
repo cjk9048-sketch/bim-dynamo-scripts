@@ -38,6 +38,41 @@ public static class KoreaCs
         };
     }
 
+    /// <summary>[JACK 0731] EPSG → 도면 좌표계 코드(사용자 사전 기준). 신(2010, 원점가산 N=600000)만 코드가
+    /// 있고, 구(N=500000)·UTM-K는 대응 코드가 없어 null(도면 좌표계 자동 변경 불가 → 안내만).</summary>
+    public static string? CodeForEpsg(int epsg) => epsg switch
+    {
+        5185 => "KOREA_GRS80_125TM",   // 서부
+        5186 => "KOREA_GRS80_127TM",   // 중부
+        5187 => "KOREA_GRS80_129TM",   // 동부
+        5188 => "KOREA_GRS80_131TM",   // 동해
+        _ => null,
+    };
+
+    /// <summary>[JACK 0731 — 정지옵션 연동] 도면 좌표계를 epsg에 맞게 **지정/변경**한다(MAPCSASSIGN 상당).
+    /// 정지옵션에서 좌표계를 바꾸면 도면 좌표계도 따라가게 해서, 배경지도·내보내기가 항상 같은 좌표계를 쓰게 한다.
+    /// 반환=(적용여부, 안내). 대응 코드가 없거나(구 좌표계·UTM-K) 사용자 사전에 없으면 false + 사유.</summary>
+    public static (bool assigned, string note) Assign(Database db, int epsg)
+    {
+        string? code = CodeForEpsg(epsg);
+        if (code == null)
+            return (false, $"EPSG:{epsg}는 도면 좌표계 코드가 없어 자동 변경 생략 — 필요하면 MAPCSASSIGN으로 직접 지정하세요");
+        string cur = Read(db);
+        if (string.Equals(cur, code, System.StringComparison.OrdinalIgnoreCase))
+            return (true, $"도면 좌표계 그대로({code})");
+        try
+        {
+            AcMapCoordsysCore.SetCoordinateSystem(code, db);
+            return (true, string.IsNullOrEmpty(cur)
+                ? $"도면 좌표계 지정: {code}"
+                : $"도면 좌표계 변경: {cur} → {code}");
+        }
+        catch (System.Exception ex)
+        {
+            return (false, $"도면 좌표계 변경 실패({code}) — 이 PC 사용자사전에 없을 수 있음: {ex.Message}");
+        }
+    }
+
     /// <summary>도면에 좌표계가 없으면 epsg 원점에 해당하는 KOREA_GRS80_{cm}TM 을 지정. 반환=(적용여부, 안내).
     /// 대상 PC 사용자사전에 그 코드가 없으면 실패(예외)하지만 내보내기는 계속(드롭박스가 좌표를 정함).</summary>
     public static (bool assigned, string note) AssignIfMissing(Database db, int epsg)
