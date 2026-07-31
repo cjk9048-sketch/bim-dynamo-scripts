@@ -137,15 +137,16 @@ public sealed class SlopeReleaseCommand
             ed.WriteMessage("\n[사면 변환] 옹벽선을 클릭하면 그 단부터 바깥이 다시 사면이 됩니다. " +
                             "다시 클릭하면 해제. Enter=적용 · Esc=취소.");
 
-            // [JACK 0731] 화면 좌우 2분할(왼쪽=평면·오른쪽=3D) — 옹벽선을 평면·3D 함께 보며 직관적으로 선택.
-            PickViewport.Enter(doc);
+            // [JACK 0731] 뷰포트 2분할 기능은 제거 — -VPORTS 실행 중 Civil3D 크래시 사례로 JACK 지시.
+            // [JACK 0731] 3D 폴리선만 집히게 — 선택 순환 팝업 끄기 + 옹벽선을 그리기 순서 맨 위로.
+            PickGuard.Enter(doc, "DH-옹벽선");
+            Log("■ DHSLOPE 선택 루프 진입");
 
             // ── 대화형 토글 루프 ──
             while (true)
             {
+                // [JACK 0731 근본] 클래스 제한을 걸지 않는다 — 다른 객체가 클릭을 먹어도 아래 스냅이 우리 선을 찾음.
                 var peo = new PromptEntityOptions("\n사면으로 되돌릴 옹벽선 클릭 (Enter=적용·끝내기)");
-                peo.SetRejectMessage("\n[사면 변환]이 표시한 옹벽선(3D 폴리선)이어야 합니다.");
-                peo.AddAllowedClass(typeof(Polyline3d), true);
                 peo.AllowNone = true;
                 var per = ed.GetEntity(peo);
                 if (per.Status == PromptStatus.None) { finishedByEnter = true; break; }
@@ -155,9 +156,14 @@ public sealed class SlopeReleaseCommand
                 using var tr = db.TransactionManager.StartTransaction();
                 if (!info.TryGetValue(per.ObjectId, out var pk))
                 {
-                    ed.WriteMessage("\n → [사면 변환]이 방금 표시한 옹벽선을 선택하세요.");
-                    tr.Commit();
-                    continue;
+                    // [JACK 0731 근본] 클릭이 다른 객체(계획폴리곤·등고선 등)에 먹힘 — 주변 최근접 옹벽선으로 스냅.
+                    var alt = PickGuard.SnapToLayerLine(ed, tr, per.PickedPoint, "DH-옹벽선");
+                    if (alt.IsNull || !info.TryGetValue(alt, out pk))
+                    {
+                        ed.WriteMessage("\n → 근처에 옹벽선이 없습니다 — [사면 변환]이 표시한 옹벽선 근처를 클릭하세요.");
+                        tr.Commit();
+                        continue;
+                    }
                 }
                 // [0729 조각 묶음] 같은 (구간, 단)의 모든 조각을 한 건으로 토글 — 색도 같이.
                 // [0729 — JACK] 같은 구간에선 어차피 가장 아래 클릭만 의미 → 구간당 1개(재클릭=교체, 옹벽변환과 동일).
@@ -266,8 +272,8 @@ public sealed class SlopeReleaseCommand
         }
         finally
         {
-            // [JACK 0731] 2분할 뷰포트 → 원래 단일 평면 뷰로 복원(재생성 결과는 평면에서 확인).
-            PickViewport.Restore(doc);
+            // [JACK 0731] 선택 순환 원복(뷰포트 분할은 제거됨).
+            PickGuard.Exit();
         }
     }
 

@@ -97,15 +97,18 @@ public sealed class WallPickCommand
             ed.WriteMessage("\n[옹벽 변환] 시안색 선(옹벽이 시작될 선)을 클릭하면 그 구간의 그 단부터 바깥이 옹벽이 됩니다. " +
                             "다시 클릭하면 해제. Enter/Esc로 종료(선택은 유지, 선은 회색 복원).");
 
-            // [JACK 0731] 화면 좌우 2분할(왼쪽=평면·오른쪽=3D) — 옹벽선을 평면·3D 함께 보며 직관적으로 선택.
-            PickViewport.Enter(doc);
+            // [JACK 0731] 뷰포트 2분할 기능은 제거 — -VPORTS 실행 중 Civil3D 크래시 사례(초기화→재정지 후)로 JACK 지시.
+            // [JACK 0731] 3D 폴리선만 집히게 — 선택 순환 팝업 끄기 + 클릭 대상(시안) 선만 그리기 순서 맨 위로.
+            //   [리뷰 0731 중간3] 회색 선(절토 사면선/성토 소단선)은 클릭해도 거부되는 중복 표현이라 위로 안 올림.
+            PickGuard.Enter(doc, "DH-소단선-절토", "DH-사면선-성토");
+            Log("■ DHWALL 선택 루프 진입");
 
             // ── 대화형 토글 루프 ──
             while (true)
             {
+                // [JACK 0731 근본] 클래스 제한을 걸지 않는다 — 계획폴리곤·등고선 등 다른 객체가 클릭을 먹어도
+                //   아래에서 클릭 지점 주변을 우리 레이어 필터로 재검색(SnapToLayerLine)해 우리 선으로 스냅.
                 var peo = new PromptEntityOptions("\n옹벽으로 바꿀 사면선/소단선 클릭 (Enter=적용·끝내기)");
-                peo.SetRejectMessage("\nDHGRADE로 만든 사면선/소단선(3D 폴리선)이어야 합니다.");
-                peo.AddAllowedClass(typeof(Polyline3d), true);
                 peo.AllowNone = true;              // Enter 허용
                 peo.Keywords.Add("전체해제");        // [JACK 0728] UNDO는 도면만 되돌리고 선택(메모리)은 남음 → 전체해제 제공
                 var per = ed.GetEntity(peo);
@@ -130,14 +133,22 @@ public sealed class WallPickCommand
                 if (per.Status != PromptStatus.OK) continue;
 
                 using var tr = db.TransactionManager.StartTransaction();
-                if (!TryReadPick(tr, per.ObjectId, app, out var pk))
+                ObjectId pickId = per.ObjectId;
+                if (!TryReadPick(tr, pickId, app, out var pk))
                 {
-                    string lay = "?";
-                    try { lay = ((Entity)tr.GetObject(per.ObjectId, OpenMode.ForRead)).Layer; } catch { }
-                    ed.WriteMessage("\n → 이 선에는 옹벽 전환 정보가 없습니다(DHGRADE 사면선/소단선을 선택).");
-                    Log($"■ DHWALL 클릭 실패 — XData 없음 (레이어 {lay})");
-                    tr.Commit();
-                    continue;
+                    // [JACK 0731 근본] 클릭이 다른 객체(계획폴리곤·등고선·지표면 등)에 먹힘 —
+                    //   클릭 지점 주변을 '클릭 대상(시안) 레이어'의 3D 폴리선만으로 재검색해 최근접 선으로 스냅.
+                    //   [리뷰 중간3] 회색 선(절토 사면선/성토 소단선)은 스냅 대상에서 제외 — 거부 멘트 역효과 방지.
+                    var alt = PickGuard.SnapToLayerLine(ed, tr, per.PickedPoint,
+                        "DH-소단선-절토", "DH-사면선-성토");
+                    if (alt.IsNull || !TryReadPick(tr, alt, app, out pk))
+                    {
+                        ed.WriteMessage("\n → 근처에 옹벽 전환 대상 선이 없습니다 — 시안색 선 근처를 클릭하세요.");
+                        Log("■ DHWALL 클릭 스냅 실패");
+                        tr.Commit();
+                        continue;
+                    }
+                    pickId = alt;
                 }
                 // [다중 구역 0729] 이전 구역의 선은 거부 — 옹벽 전환은 마지막 구역만.
                 if (!string.IsNullOrEmpty(pk.plan) && !string.IsNullOrEmpty(activePlan) && pk.plan != activePlan)
@@ -160,14 +171,14 @@ public sealed class WallPickCommand
                 if (idx >= 0)
                 {
                     GradingSettings.WallPicks.RemoveAt(idx);
-                    SetColorByLayer(tr, per.ObjectId); reddened.Remove(per.ObjectId);
+                    SetColorByLayer(tr, pickId); reddened.Remove(pickId);
                     action = "해제";
                 }
                 else
                 {
                     // 선의 실제 좌표를 저장 — 계획경계 둘레 '구간' 산출용(그 구간만 옹벽, JACK).
                     var lpts = new System.Collections.Generic.List<DH.Grading.Core.Point3>();
-                    if (tr.GetObject(per.ObjectId, OpenMode.ForRead) is Polyline3d pl3)
+                    if (tr.GetObject(pickId, OpenMode.ForRead) is Polyline3d pl3)
                         foreach (ObjectId vId in pl3)
                             if (tr.GetObject(vId, OpenMode.ForRead) is PolylineVertex3d pv)
                                 lpts.Add(new DH.Grading.Core.Point3(pv.Position.X, pv.Position.Y, pv.Position.Z));
@@ -196,8 +207,8 @@ public sealed class WallPickCommand
                     }
 
                     GradingSettings.WallPicks.Add(new GradingSettings.WallPick(pk.up, pk.isSlope, pk.bench, pk.seg, lpts));
-                    SetColor(tr, per.ObjectId, SelAci); reddened.Add(per.ObjectId);
-                    pickEnt[(pk.up, pk.isSlope, pk.bench, pk.seg)] = per.ObjectId;
+                    SetColor(tr, pickId, SelAci); reddened.Add(pickId);
+                    pickEnt[(pk.up, pk.isSlope, pk.bench, pk.seg)] = pickId;
                     action = "추가";
                 }
                 changed = true;
@@ -225,8 +236,8 @@ public sealed class WallPickCommand
                 tr.Commit();
             }
             catch { }
-            // [JACK 0731] 2분할 뷰포트 → 원래 단일 평면 뷰로 복원(재생성 결과는 평면에서 확인).
-            PickViewport.Restore(doc);
+            // [JACK 0731] 선택 순환 원복(뷰포트 분할은 제거됨).
+            PickGuard.Exit();
         }
 
         Log($"■ DHWALL 종료({(finishedByEnter ? "Enter" : "Esc")}) — 선택 {GradingSettings.WallPicks.Count}건 " +

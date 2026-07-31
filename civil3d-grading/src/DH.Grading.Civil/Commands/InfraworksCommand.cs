@@ -320,7 +320,10 @@ public sealed class InfraworksCommand
                     var (nb, nc, np, na, ncp, nt) = WallDwg.Export(dwgPath, wallSets, allPanels, allConcrete,
                         GradingSettings.WallBlockW, GradingSettings.WallBlockD, GradingSettings.WallBlockH,
                         GradingSettings.WallCapD, GradingSettings.WallCapT, quoinAll, teeAll);
-                    log.AppendLine($"옹벽3D.dwg: 보강토 {nb}블록+{nc}캡 · 앵커판넬 {np}패널+{na}앵커 · 역T {nt}세그");
+                    log.AppendLine($"옹벽3D.dwg: 보강토 {nb}블록+{nc}캡 · 앵커판넬 {np}패널+{na}앵커 · 역T {nt}세그" +
+                        (WallDwg.LastDropped > 0 ? $" · 깨진솔리드 제외 {WallDwg.LastDropped}" : ""));
+                    if (teeAll.Count > 0 && WallTeeDwg.LastDiag.Length > 0)
+                        log.AppendLine("  역T 상세: " + WallTeeDwg.LastDiag);
                     made.Add("옹벽3D.dwg");
                 }
                 catch (System.Exception dex) { log.AppendLine($"옹벽3D.dwg: 저장 실패 — {dex.Message} (파일 열려 있으면 닫고 재실행)"); }
