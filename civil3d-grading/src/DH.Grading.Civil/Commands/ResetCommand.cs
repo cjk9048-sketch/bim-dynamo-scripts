@@ -49,36 +49,10 @@ public sealed class ResetCommand
             return;
         }
 
-        int ents = 0, surfs = 0; bool bundleCleared = false;
         try
         {
-            using (Transaction tr = db.TransactionManager.StartTransaction())
-            {
-                // ① DH- 레이어의 모든 객체 삭제(모델공간). 레이어 자체는 남겨 다음 생성에 재사용.
-                ents = EraseEntitiesOnDhLayers(db, tr);
-
-                // ② 정지 산출 지표면 삭제(이름/이름_N).
-                foreach (var baseName in SurfaceBaseNames)
-                {
-                    var before = CountSurfaces(tr, baseName);
-                    GradingBuilder.EraseSurfacesByBaseName(tr, baseName);
-                    surfs += before;
-                }
-
-                // ③ 저장된 번들 삭제 + 숨겼던 지표면(원지반 등) 다시 표시.
-                bundleCleared = GradingBundleStore.Clear(db, tr);
-                GradingBuilder.IsolateSurfaces(tr, null);   // keep=null → 전 지표면 표시 복원
-
-                tr.Commit();
-            }
-
-            // ④ 세션 메모리 초기화(도면 저장과 무관한 정적 상태) — 옹벽 선택·구간 오버라이드·마지막 핸들.
-            GradingSettings.WallPicks.Clear();
-            GradingSettings.WallZoneReplaceAll = false;
-            GradingSettings.ZoneOverride = null;
-            GradingSettings.LastPlanHandle = "";
-            GradingSettings.LastGroundHandle = "";
-
+            // 가져온 데이터(등고선·지적도·지번)와 '원지반'은 보존 — 원지반으로 다시 정지하면 되므로.
+            var (surfs, ents, bundleCleared) = ResetCore(doc, includeImported: false);
             ed.Regen();
             string msg = $"초기화 완료 — 지표면 {surfs}개 · 객체 {ents}개 삭제" +
                          (bundleCleared ? " · 정지 기록 제거" : "");
@@ -94,17 +68,96 @@ public sealed class ResetCommand
         }
     }
 
-    /// <summary>모델공간에서 레이어명이 "DH-"로 시작하는 모든 객체 삭제. 반환=삭제 개수.</summary>
-    private static int EraseEntitiesOnDhLayers(Database db, Transaction tr)
+    /// <summary>[JACK 0731] 초기화 본체 — 두 곳에서 공용.
+    ///  · includeImported=false (초기화 버튼): 정지 산출물만 지우고 **가져온 등고선·지적도·'원지반'은 보존**.
+    ///  · includeImported=true (좌표계 변경 시): 가져온 데이터와 '원지반'까지 **전부** 지운다
+    ///    — 좌표계가 바뀌면 이전 좌표계로 받은 자료라 더는 맞지 않기 때문(사용자가 직접 그린 계획폴리곤은 보존).
+    /// 반환=(지운 지표면 수, 지운 객체 수, 번들 제거 여부).</summary>
+    internal static (int surfs, int ents, bool bundleCleared) ResetCore(Document doc, bool includeImported)
     {
+        Database db = doc.Database;
+        int ents = 0, surfs = 0; bool bundleCleared = false;
+        using (Transaction tr = db.TransactionManager.StartTransaction())
+        {
+            // ① DH- 레이어 객체 삭제(모델공간). 레이어 자체는 남겨 다음 생성에 재사용.
+            ents = EraseEntitiesOnDhLayers(db, tr, includeImported);
+
+            // ② 지표면 삭제(이름/이름_N). 좌표계 변경 시에는 가져온 '원지반'까지 포함.
+            foreach (var baseName in SurfaceBaseNames)
+            {
+                var before = CountSurfaces(tr, baseName);
+                GradingBuilder.EraseSurfacesByBaseName(tr, baseName);
+                surfs += before;
+            }
+            if (includeImported)
+            {
+                var before = CountSurfaces(tr, ImportGisCommand.GroundSurfaceName);
+                GradingBuilder.EraseSurfacesByBaseName(tr, ImportGisCommand.GroundSurfaceName);
+                surfs += before;
+            }
+
+            // ③ 저장된 번들 삭제 + 숨겼던 지표면 다시 표시.
+            bundleCleared = GradingBundleStore.Clear(db, tr);
+            GradingBuilder.IsolateSurfaces(tr, null);
+
+            tr.Commit();
+        }
+
+        // ④ 세션 메모리 초기화 — 옹벽 선택·구간 오버라이드·마지막 핸들.
+        GradingSettings.WallPicks.Clear();
+        GradingSettings.WallZoneReplaceAll = false;
+        GradingSettings.ZoneOverride = null;
+        GradingSettings.LastPlanHandle = "";
+        GradingSettings.LastGroundHandle = "";
+        return (surfs, ents, bundleCleared);
+    }
+
+    /// <summary>도면에 우리 기능으로 가져온 등고선·지적도가 있는가(좌표계 변경 경고 판단용).</summary>
+    internal static bool HasImportedGis(Database db)
+    {
+        try
+        {
+            var want = new System.Collections.Generic.HashSet<string>(
+                ImportGisCommand.ImportLayers, System.StringComparer.OrdinalIgnoreCase);
+            using var tr = db.TransactionManager.StartTransaction();
+            var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+            var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
+            foreach (ObjectId id in ms)
+            {
+                try
+                {
+                    if (tr.GetObject(id, OpenMode.ForRead) is AcadEntity e && want.Contains(e.Layer))
+                    { tr.Commit(); return true; }
+                }
+                catch { }
+            }
+            // 선은 지웠어도 '원지반' 지표면이 남아 있으면 가져온 자료로 본다.
+            bool hasGround = GradingBuilder.SurfaceExistsByBaseName(tr, ImportGisCommand.GroundSurfaceName);
+            tr.Commit();
+            return hasGround;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>모델공간에서 "DH-"로 시작하는 객체 삭제. includeImported=false면 가져온 데이터 레이어는 남긴다.</summary>
+    private static int EraseEntitiesOnDhLayers(Database db, Transaction tr, bool includeImported)
+    {
+        var keep = includeImported
+            ? new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase)
+            : new System.Collections.Generic.HashSet<string>(ImportGisCommand.ImportLayers, System.StringComparer.OrdinalIgnoreCase);
         var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
         var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
         var victims = new System.Collections.Generic.List<ObjectId>();
         foreach (ObjectId id in ms)
         {
-            if (tr.GetObject(id, OpenMode.ForRead) is AcadEntity e &&
-                e.Layer != null && e.Layer.StartsWith("DH-", System.StringComparison.Ordinal))
+            try
+            {
+                if (tr.GetObject(id, OpenMode.ForRead) is not AcadEntity e) continue;
+                if (e.Layer == null || !e.Layer.StartsWith("DH-", System.StringComparison.Ordinal)) continue;
+                if (keep.Contains(e.Layer)) continue;   // 가져온 데이터 보존
                 victims.Add(id);
+            }
+            catch { }
         }
         int n = 0;
         foreach (var id in victims)
