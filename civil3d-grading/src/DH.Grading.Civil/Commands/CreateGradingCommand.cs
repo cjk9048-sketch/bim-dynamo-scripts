@@ -145,6 +145,14 @@ public sealed class CreateGradingCommand
     /// (기존 정지면은 '정지면_DH이전'으로 이름 변경·숨김 보존), RerunLast=마지막 구역만 다시(DHWALL·설정 변경).</summary>
     internal static void DoGrade(Document doc, ObjectId planPolyId, ObjectId groundId, GradeMode mode = GradeMode.Fresh)
     {
+        // [JACK 0731] 정지면 생성 중 이벤트 뷰어 알림(팝업)만 끄기 — 기록은 남음. 어떤 경로로 끝나든 원복.
+        var evPrev = EventViewerMute.Begin();
+        try { DoGradeInner(doc, planPolyId, groundId, mode); }
+        finally { EventViewerMute.End(evPrev); }
+    }
+
+    private static void DoGradeInner(Document doc, ObjectId planPolyId, ObjectId groundId, GradeMode mode)
+    {
         Editor ed = doc.Editor;
         Database db = doc.Database;
 

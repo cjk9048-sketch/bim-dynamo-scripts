@@ -290,12 +290,18 @@ public static class WallPanelDwg
             }
         }
         finally { foreach (DBObject o in curves) o.Dispose(); }   // 우리가 만든 폴리라인(리전은 복사본이라 소유 안 함)
-        // [JACK 0731] 압출 결과 검증 — 깨진(빈 몸체·부피 0) 솔리드면 버린다(SaveAs 오염 예방).
+        // [JACK 0731] 압출 결과 검증 — [완화] '확실한 증거'가 있을 때만 버림: 경계상자 실패=깨짐 확정,
+        //   부피는 계산이 되면서 0/NaN일 때만. MassProperties 예외만으로는 안 버림(다중 덩어리 유니온이
+        //   오폐기돼 무늬가 통째로 사라지는 것 방지 — 리뷰 0731 중간3).
         if (pads != null)
         {
             bool bad = false;
-            try { double v = pads.MassProperties.Volume; if (!(v > 1e-9) || double.IsNaN(v) || double.IsInfinity(v)) bad = true; }
-            catch { bad = true; }
+            try { var _ = pads.GeometricExtents; } catch { bad = true; }
+            if (!bad)
+            {
+                try { double v = pads.MassProperties.Volume; if (!(v > 1e-9) || double.IsNaN(v) || double.IsInfinity(v)) bad = true; }
+                catch { }
+            }
             if (bad) { try { pads.Dispose(); } catch { } pads = null; }
         }
         return pads;
