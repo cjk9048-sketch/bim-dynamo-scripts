@@ -40,9 +40,44 @@ public static class WallDwg
                     nt = WallTeeDwg.Populate(db, tr, tees);   // [0730] 역T형(1단 옹벽 구간)
                 tr.Commit();
             }
+            // [JACK 0731 — 모델링 오류 115094·저장 중 RECOVER 대응] 압출/불리언이 드물게 '깨진 ACIS 솔리드'를
+            //   남기면(명령행 '모델링 작업 오류' 인쇄) SaveAs에서 도면 무결성 오류 모달이 뜬다 → 저장 직전
+            //   모든 Solid3d의 유효성(부피>0·경계상자)을 검사해 깨진 것만 지운다. 파일은 정상 저장, 나머지 객체 보존.
+            int dropped = DropInvalidSolids(db);
             db.SaveAs(path, DwgVersion.Current);
+            if (dropped > 0) System.Diagnostics.Debug.WriteLine($"[WallDwg] 깨진 솔리드 {dropped}개 제외 후 저장");
         }
         finally { HostApplicationServices.WorkingDatabase = prev; }
         return (nb, nc, np, na, ncp, nt);
+    }
+
+    /// <summary>모델공간의 모든 Solid3d를 검사해 '깨진'(빈 몸체·부피 0·경계상자 없음) 솔리드를 지운다.
+    /// 반환=지운 개수. 깨진 솔리드가 SaveAs 직렬화를 오염시켜 'RECOVER 권장' 모달을 띄우는 것을 예방(JACK 0731).</summary>
+    private static int DropInvalidSolids(Database db)
+    {
+        int dropped = 0;
+        using var tr = db.TransactionManager.StartTransaction();
+        var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+        var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
+        var victims = new List<ObjectId>();
+        foreach (ObjectId id in ms)
+        {
+            if (tr.GetObject(id, OpenMode.ForRead) is not Solid3d sol) continue;
+            bool bad = false;
+            try
+            {
+                double vol = sol.MassProperties.Volume;               // 빈/깨진 몸체면 예외
+                if (!(vol > 1e-9) || double.IsNaN(vol) || double.IsInfinity(vol)) bad = true;
+                if (!bad) { var _ = sol.GeometricExtents; }            // 경계상자 없으면 예외
+            }
+            catch { bad = true; }
+            if (bad) victims.Add(id);
+        }
+        foreach (var id in victims)
+        {
+            try { (tr.GetObject(id, OpenMode.ForWrite) as Entity)?.Erase(); dropped++; } catch { }
+        }
+        tr.Commit();
+        return dropped;
     }
 }

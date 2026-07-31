@@ -97,6 +97,9 @@ public sealed class WallPickCommand
             ed.WriteMessage("\n[옹벽 변환] 시안색 선(옹벽이 시작될 선)을 클릭하면 그 구간의 그 단부터 바깥이 옹벽이 됩니다. " +
                             "다시 클릭하면 해제. Enter/Esc로 종료(선택은 유지, 선은 회색 복원).");
 
+            // [JACK 0731] 화면 좌우 2분할(왼쪽=평면·오른쪽=3D) — 옹벽선을 평면·3D 함께 보며 직관적으로 선택.
+            PickViewport.Enter(doc);
+
             // ── 대화형 토글 루프 ──
             while (true)
             {
@@ -222,6 +225,8 @@ public sealed class WallPickCommand
                 tr.Commit();
             }
             catch { }
+            // [JACK 0731] 2분할 뷰포트 → 원래 단일 평면 뷰로 복원(재생성 결과는 평면에서 확인).
+            PickViewport.Restore(doc);
         }
 
         Log($"■ DHWALL 종료({(finishedByEnter ? "Enter" : "Esc")}) — 선택 {GradingSettings.WallPicks.Count}건 " +

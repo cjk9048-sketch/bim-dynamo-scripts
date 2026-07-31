@@ -213,13 +213,15 @@ public static class WallPanels
                         if (s1 <= s0 + 1e-6) break;
                         var localPolys = ClipCurtain(us, cap, u0, s0, s1);
                         if (localPolys.Count == 0) continue;
-                        // [정착구 기준 앵커 — JACK 0721] 가운데 200×200 정착구가 데이라잇/단상한에 안 잘리면 앵커·홈.
-                        //   정착구 = 셀 중심(uMid, s0+side/2) ±100mm. 상단(s0+side/2+0.1)이 전폭·양끝 모두 데이라잇 아래면 온전.
-                        double pocketTop = s0 + side / 2 + 0.1;
+                        // [정착구 기준 앵커 — JACK 0721/0730] 가운데 돌출부(도넛)까지 데이라잇/단상한에 안 잘려야 앵커·홈.
+                        //   도넛 1단이 0.56m라 홈(0.2)만 검사하면 도넛 윗부분이 데이라잇 밖으로 삐져나옴(JACK 0730 스샷)
+                        //   → 판정 반경을 도넛 반폭+여유(0.30)로 넓힘. 걸치는 판넬은 앵커 없는 일반 판으로.
+                        const double collarHalf = 0.30;               // 도넛 1단 0.56/2=0.28 + 여유 0.02
+                        double pocketTop = s0 + side / 2 + collarHalf;
                         bool rowFull = wCol >= side - 1e-6 && s1 >= pocketTop - 1e-6
                                        && CapAt(us, cap, uMid) >= pocketTop - 1e-6
-                                       && CapAt(us, cap, uMid - 0.1) >= pocketTop - 1e-6
-                                       && CapAt(us, cap, uMid + 0.1) >= pocketTop - 1e-6;
+                                       && CapAt(us, cap, uMid - collarHalf) >= pocketTop - 1e-6
+                                       && CapAt(us, cap, uMid + collarHalf) >= pocketTop - 1e-6;
 
                         foreach (var lp0 in localPolys)
                         {
@@ -266,7 +268,14 @@ public static class WallPanels
                             double area = PolyArea(lp);
                             double minV = double.MaxValue, maxV = double.MinValue, minU = double.MaxValue, maxU = double.MinValue;
                             foreach (var q in lp) { minV = System.Math.Min(minV, q.v); maxV = System.Math.Max(maxV, q.v); minU = System.Math.Min(minU, q.u); maxU = System.Math.Max(maxU, q.u); }
-                            bool isFull = !cf && rowFull && PointInPoly(wCol / 2, side / 2, lp);   // 코너필러엔 앵커/홈 없음
+                            // 코너필러엔 앵커/홈 없음. 중심+도넛 네 모서리가 모두 클립 폴리곤 안일 때만 온전
+                            //   (데이라잇 경사·코너 미터 대각 절단에 도넛이 걸치면 앵커 생략 — JACK 0730).
+                            bool isFull = !cf && rowFull
+                                && PointInPoly(wCol / 2, side / 2, lp)
+                                && PointInPoly(wCol / 2 - collarHalf, side / 2 - collarHalf, lp)
+                                && PointInPoly(wCol / 2 + collarHalf, side / 2 - collarHalf, lp)
+                                && PointInPoly(wCol / 2 - collarHalf, side / 2 + collarHalf, lp)
+                                && PointInPoly(wCol / 2 + collarHalf, side / 2 + collarHalf, lp);
                             if (!isFull)
                             {
                                 // ★작은 삼각형도 유지(JACK 0721) — 익스트루드 실패할 만큼 얇은/작은 것만 제거.

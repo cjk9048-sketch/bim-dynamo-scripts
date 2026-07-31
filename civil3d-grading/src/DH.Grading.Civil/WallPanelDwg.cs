@@ -262,7 +262,11 @@ public static class WallPanelDwg
                 Point2d Sc(Point2d q) => new Point2d(cx + (q.X - cx) * scale, cy + (q.Y - cy) * scale);
                 var stone = new List<Point2d> { Sc(a), Sc(b), Sc(c), Sc(d) };
                 var cl = ClipPolyToLocal(stone, clip, ccw);   // 돌을 패널 모양에 클립
-                if (cl.Count < 3) continue;
+                // [JACK 0731] 퇴화 다각형 방지 — 클립이 만든 근접중복 정점을 정리하고 미세면적은 버린다.
+                //   자기교차/영면적 폴리라인이 Region·Extrude를 거치면 '모델링 오류 115094'로 깨진 솔리드가 되어
+                //   옹벽3D.dwg SaveAs가 'RECOVER 권장' 모달을 띄운다 → 애초에 이런 돌은 무늬에서 제외.
+                cl = DedupeRing(cl);
+                if (cl.Count < 3 || Poly2dArea(cl) < 1e-4) continue;
                 var pl = new Polyline(cl.Count);
                 for (int k = 0; k < cl.Count; k++) pl.AddVertexAt(k, cl[k], 0, 0, 0);
                 pl.Closed = true;
@@ -286,7 +290,36 @@ public static class WallPanelDwg
             }
         }
         finally { foreach (DBObject o in curves) o.Dispose(); }   // 우리가 만든 폴리라인(리전은 복사본이라 소유 안 함)
+        // [JACK 0731] 압출 결과 검증 — 깨진(빈 몸체·부피 0) 솔리드면 버린다(SaveAs 오염 예방).
+        if (pads != null)
+        {
+            bool bad = false;
+            try { double v = pads.MassProperties.Volume; if (!(v > 1e-9) || double.IsNaN(v) || double.IsInfinity(v)) bad = true; }
+            catch { bad = true; }
+            if (bad) { try { pads.Dispose(); } catch { } pads = null; }
+        }
         return pads;
+    }
+
+    /// <summary>2D 링의 근접중복 정점 제거(연속·시종 접합) — 영길이 변으로 인한 Region/Extrude 퇴화 방지.</summary>
+    private static List<Point2d> DedupeRing(List<Point2d> p)
+    {
+        var r = new List<Point2d>(p.Count);
+        foreach (var q in p)
+        {
+            if (r.Count > 0 && r[r.Count - 1].GetDistanceTo(q) < 1e-6) continue;
+            r.Add(q);
+        }
+        while (r.Count >= 2 && r[0].GetDistanceTo(r[r.Count - 1]) < 1e-6) r.RemoveAt(r.Count - 1);
+        return r;
+    }
+
+    /// <summary>2D 다각형 면적(㎡).</summary>
+    private static double Poly2dArea(List<Point2d> p)
+    {
+        double a = 0; int n = p.Count;
+        for (int i = 0; i < n; i++) { var u = p[i]; var v = p[(i + 1) % n]; a += u.X * v.Y - v.X * u.Y; }
+        return System.Math.Abs(a) * 0.5;
     }
 
     private static double SignedArea(IReadOnlyList<(double u, double v)> p)
