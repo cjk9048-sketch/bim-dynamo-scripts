@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Civil3D 자동 로드 매니페스트.
+  Civil3D 자동 로드 매니페스트(소스 템플릿 — 배포본과 동일하게 유지할 것).
   이 .bundle 폴더 전체를 아래 위치에 복사하면 Civil3D 시작 시 자동 로드된다:
     %APPDATA%\Autodesk\ApplicationPlugins\DH.Grading.bundle
-  Contents 폴더에 빌드 산출물(DH.Grading.Civil.dll, DH.Grading.Core.dll)을 넣을 것.
+  Contents 폴더에 빌드 산출물(DH.Grading.Civil.dll, DH.Grading.Core.dll)과 뷰 LISP를 넣을 것.
 -->
 <ApplicationPackage SchemaVersion="1.0"
-                    AppVersion="12.1.0"
+                    AppVersion="14.1.0"
                     ProductType="Application"
                     Name="DH 정지(절성토)"
                     Description="계단식 정지 비탈면 자동 생성 (distance-field)">
@@ -20,10 +20,21 @@
       <Commands GroupName="DH_GRADING">
         <Command Global="DHGRADE" Local="DHGRADE" />
         <Command Global="DHWALL" Local="DHWALL" />
+        <Command Global="DHSLOPE" Local="DHSLOPE" />
         <Command Global="DHNORI" Local="DHNORI" />
         <Command Global="DHINFRA" Local="DHINFRA" />
+        <Command Global="DHRESET" Local="DHRESET" />
         <Command Global="DHGRADESET" Local="DHGRADESET" />
+        <Command Global="DHXSEC" Local="DHXSEC" />
+        <Command Global="DHSLOPELINE" Local="DHSLOPELINE" />
+        <Command Global="DHCS" Local="DHCS" />
       </Commands>
     </ComponentEntry>
+    <!-- [JACK 0731] 3D 뷰 전환 단축 LISP(v1~v4·vv1~vv3) — 애드인과 함께 항상 자동 로드(설치 안 돼 있으면 이걸로 대체).
+         LISP는 문서별로 c: 명령을 정의하므로 PerDocument=True. 경로 공백 함정 회피 위해 파일명은 공백 없이. -->
+    <ComponentEntry AppName="DH.ViewShortcuts"
+                    ModuleName="./Contents/3D_VIEW_LOCATION.LSP"
+                    LoadOnAutoCADStartup="True"
+                    PerDocument="True" />
   </Components>
 </ApplicationPackage>

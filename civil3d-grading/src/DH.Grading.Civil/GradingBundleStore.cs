@@ -106,6 +106,18 @@ public static class GradingBundleStore
         tr.AddNewlyCreatedDBObject(xr, true);
     }
 
+    /// <summary>[JACK 0731 — 초기화] 저장된 번들(NOD DH_GRADING/BUNDLE)을 지운다 — DHRESET용.
+    /// 번들이 없으면 아무것도 안 함. 반환=지웠으면 true.</summary>
+    public static bool Clear(Database db, Transaction tr)
+    {
+        var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
+        if (!nod.Contains(DictName)) return false;
+        var dict = (DBDictionary)tr.GetObject(nod.GetAt(DictName), OpenMode.ForWrite);
+        if (!dict.Contains(RecName)) return false;
+        dict.Remove(RecName);   // XRecord 제거(소유 객체는 Erase 없이 Remove가 정석)
+        return true;
+    }
+
     // 구역 본문(v3 본문과 동일 순서) + v4 추가 필드(GroundHandle)를 끝에.
     private static void WriteRegion(List<TypedValue> vals, GradingBundle b)
     {

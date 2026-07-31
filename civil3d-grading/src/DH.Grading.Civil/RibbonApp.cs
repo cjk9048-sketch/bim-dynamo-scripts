@@ -16,6 +16,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.WallPickCommand))]            // DHWALL(옹벽 변환 — 사면선/소단선 선택, §75)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SlopeReleaseCommand))]        // DHSLOPE(사면 변환 — 옹벽선 선택해 그 단부터 사면 복귀)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.InfraworksCommand))]          // DHINFRA(INFRAWORKS SHP 내보내기)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ResetCommand))]               // DHRESET(초기화 — 정지면 생성 전으로)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.CoordSysProbeCommand))]       // DHCS(좌표계 API 진단 — 임시)
 
 namespace DH.Grading.Civil;
@@ -35,6 +36,21 @@ public sealed class RibbonApp : IExtensionApplication
         else AcadApp.Idle += OnIdleBuild;
         // [배포 0728] 한국 좌표계 9종 자동 검사·설치 — 시작 부하를 피해 Idle 1회로 미룬다.
         AcadApp.Idle += OnIdleCoordSys;
+        // [JACK 0730] 작업공간(제도 및 주석 ↔ Civil 3D 등) 전환 시 리본이 CUI 기준으로 재구성되며
+        //   코드로 만든 탭이 사라짐 → WSCURRENT 변경을 감지해 다음 Idle에 탭 재생성(FindTab이 중복 방지).
+        AcadApp.SystemVariableChanged += OnSysVarChanged;
+    }
+
+    /// <summary>WSCURRENT 후 Idle 재확인 잔여 횟수 — 리본 재구성이 첫 Idle보다 늦게 끝나
+    /// FindTab이 '곧 지워질 옛 탭'을 보고 no-op하는 레이스 대비(리뷰 0730 ①안).</summary>
+    private int _recheck;
+
+    private void OnSysVarChanged(object? sender, Autodesk.AutoCAD.ApplicationServices.SystemVariableChangedEventArgs e)
+    {
+        if (!string.Equals(e.Name, "WSCURRENT", StringComparison.OrdinalIgnoreCase)) return;
+        _recheck = 3;
+        AcadApp.Idle -= OnIdleBuild;   // 재구독 전 해제 — 빠르게 연속 전환해도 중복 구독 없음
+        AcadApp.Idle += OnIdleBuild;
     }
 
     private void OnIdleCoordSys(object? sender, EventArgs e)
@@ -47,9 +63,11 @@ public sealed class RibbonApp : IExtensionApplication
 
     private void OnIdleBuild(object? sender, EventArgs e)
     {
-        if (ComponentManager.Ribbon == null) return;
+        if (ComponentManager.Ribbon == null) return;   // 리본 준비 전 — 구독 유지한 채 다음 Idle 대기
+        BuildRibbon();                                  // 탭이 살아있으면 FindTab이 no-op
+        if (_recheck-- > 0) return;                     // 작업공간 전환 직후엔 몇 번 더 지켜봄(늦은 재구성 대비)
+        _recheck = 0;
         AcadApp.Idle -= OnIdleBuild;
-        BuildRibbon();
     }
 
     private void BuildRibbon()
@@ -107,6 +125,21 @@ public sealed class RibbonApp : IExtensionApplication
             pExport.Items.Add(MakeButton(
                 "INFRA\nWORKS", "DHINFRA ", "InfraWorks 기초자료 내보내기 — 폴더 선택 후 지형·옹벽3D·SHP·위성GeoTIFF·토공량을 내보냄(있는 것만). DHGRADE 후 사용", "infra"));
             pExport.Items.Add(Spacer());
+
+            // [기타 — JACK 0731] 초기화 등 보조 기능. 내보내기와 분리.
+            var pMisc = new RibbonPanelSource { Title = "기타" };
+            tab.Panels.Add(new RibbonPanel { Source = pMisc });
+            pMisc.Items.Add(Spacer());
+            // [초기화 — JACK 0731] 정지면 생성 전(원지반+계획폴리곤)으로 되돌림. 부지를 바꿔가며 반복 검토할 때
+            //   Ctrl+Z 누적으로 지표면 정의가 꼬이는 것을 방지 — 우리 산출물만 깨끗이 걷어낸다.
+            var btnReset = MakeButton(
+                "초기화", "DHRESET ", "정지면 생성 전(원지반+계획폴리곤) 상태로 초기화 — DH가 만든 지표면·선을 모두 삭제", "초기화");
+            btnReset.ToolTip = MakeTip("초기화 (DHRESET)",
+                "정지 지표면(정지면_DH 등)과 사면선·소단선·노리선·옹벽선 등\n" +
+                "DH가 만든 객체를 모두 지워 '정지면 생성 전' 상태로 되돌립니다.\n" +
+                "원지반과 계획폴리곤은 그대로 유지 — 부지를 바꿔 다시 검토할 때 사용.", null);
+            pMisc.Items.Add(btnReset);
+            pMisc.Items.Add(Spacer());
         }
         catch
         {
@@ -181,6 +214,18 @@ public sealed class RibbonApp : IExtensionApplication
                         dc.DrawLine(sl, new Point(13, 19), new Point(13, 12));   // 위로 화살(사면 복귀)
                         dc.DrawLine(sl, new Point(10.5, 14.5), new Point(13, 12));
                         dc.DrawLine(sl, new Point(15.5, 14.5), new Point(13, 12));
+                        break;
+                    case "초기화": // 원형 되돌림 화살표(초록) — 리셋(JACK 0731 스샷 참고: 위 트인 원 + 좌상단 화살촉)
+                        var rs = P(0x2e, 0xa8, 0x4c);
+                        // 중심(16,16)·반지름 9. 위(북)에 틈을 두고 큰 호(300°)를 시계방향으로: 우상(20.5,8.2)→좌상(11.5,8.2).
+                        var fig = new PathFigure { StartPoint = new Point(20.5, 8.21), IsClosed = false };
+                        fig.Segments.Add(new ArcSegment(new Point(11.5, 8.21), new Size(9, 9), 0,
+                            true, SweepDirection.Clockwise, true));
+                        var pg = new PathGeometry(); pg.Figures.Add(fig);
+                        dc.DrawGeometry(null, rs, pg);
+                        // 좌상단 끝의 화살촉 — 위-왼쪽을 향하게(스샷과 동일 방향).
+                        dc.DrawLine(rs, new Point(11.5, 8.21), new Point(16.49, 8.59));
+                        dc.DrawLine(rs, new Point(11.5, 8.21), new Point(13.66, 3.70));
                         break;
                     case "옹벽": // 옹벽(벽돌 2단, 흙색)
                         var wl = P(0xc0, 0xa0, 0x72);

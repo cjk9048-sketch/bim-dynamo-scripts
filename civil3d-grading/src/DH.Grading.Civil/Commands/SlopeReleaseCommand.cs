@@ -137,6 +137,9 @@ public sealed class SlopeReleaseCommand
             ed.WriteMessage("\n[사면 변환] 옹벽선을 클릭하면 그 단부터 바깥이 다시 사면이 됩니다. " +
                             "다시 클릭하면 해제. Enter=적용 · Esc=취소.");
 
+            // [JACK 0731] 화면 좌우 2분할(왼쪽=평면·오른쪽=3D) — 옹벽선을 평면·3D 함께 보며 직관적으로 선택.
+            PickViewport.Enter(doc);
+
             // ── 대화형 토글 루프 ──
             while (true)
             {
@@ -260,6 +263,11 @@ public sealed class SlopeReleaseCommand
             RestoreAndCleanup(db, madeIds);
             ed.WriteMessage("\n[DHSLOPE 오류] " + ex.Message);
             Log("■ DHSLOPE 예외 — " + ex.GetType().Name + ": " + ex.Message + "\n" + ex.StackTrace);
+        }
+        finally
+        {
+            // [JACK 0731] 2분할 뷰포트 → 원래 단일 평면 뷰로 복원(재생성 결과는 평면에서 확인).
+            PickViewport.Restore(doc);
         }
     }
 
