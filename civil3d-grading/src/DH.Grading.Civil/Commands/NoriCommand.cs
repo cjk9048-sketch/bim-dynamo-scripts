@@ -22,6 +22,7 @@ public sealed class NoriCommand
     {
         Document doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
+        GradingSettings.SyncToDocument(doc);   // [도면 전환 0803] 도면이 바뀌었으면 그 도면 기준으로 설정·기억 재정렬
         Editor ed = doc.Editor;
         Database db = doc.Database;
 
@@ -57,6 +58,9 @@ public sealed class NoriCommand
             {
                 var bundle = regions[ri];
                 string rTag = regions.Count > 1 ? $"[구역{ri + 1}] " : "";
+                // [다중 구역 0804] 뒤 구역이 덮어쓴 영역 — 이 구역의 노리선·사면선은 거기서 빼야 최종 지표면과 맞는다.
+                var later = GradingBundle.LaterFootprints(regions, ri);
+                if (later.Count > 0) detail += $"\n{rTag}뒤 구역이 덮은 영역 {later.Count}개 제외";
                 // [§75 1-A] 사면선/소단선 태그 작도 — 구역별로 호출(첫 구역만 레이어 청소, planHandle로 구역 식별).
                 var cutEdges = new System.Collections.Generic.List<(bool, int, int, System.Collections.Generic.List<Point3>)>();
                 var fillEdges = new System.Collections.Generic.List<(bool, int, int, System.Collections.Generic.List<Point3>)>();
@@ -93,11 +97,13 @@ public sealed class NoriCommand
                     foreach (var finalRing in ringList)
                     {
                         if (finalRing == null || finalRing.Count < 3) continue;
+                        // [구간 구배 0804] 구간 안이라도 그 단 구배가 수직이 아니면 사면 — 노리선·사면선을 정상 생성해야 한다.
+                        double bs = System.Math.Max(slopeN, bundle.Params.MinSlope), ms = bundle.Params.MinSlope;
                         var (t, ct, _) = SlopeHatchGenerator.Generate(vs.Rings, ng, up,
                             GradingSettings.HatchShort, GradingSettings.HatchLong, finalRing, bundle.Boundary,
-                            zones, bundle.Boundary);
+                            zones, bundle.Boundary, bs, ms, later);
                         var edges = SlopeHatchGenerator.GenerateEdgeLinesTagged(vs.Rings, ng, up, finalRing, bundle.Boundary,
-                            zones, bundle.Boundary, wallLines);
+                            zones, bundle.Boundary, wallLines, null, bs, ms, later);
                         ticks.AddRange(t);
                         cornerTicks.AddRange(ct);
                         if (up) cutEdges.AddRange(edges); else fillEdges.AddRange(edges);

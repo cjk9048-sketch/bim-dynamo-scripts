@@ -26,11 +26,13 @@ public sealed class CreateGradingCommand
     {
         Document doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
+        GradingSettings.SyncToDocument(doc);   // [도면 전환 0803] 도면이 바뀌었으면 그 도면 기준으로 설정·기억 재정렬
         Editor ed = doc.Editor;
 
         bool isWall = GradingSettings.CutSlope <= 1e-6 || GradingSettings.FillSlope <= 1e-6;
         ed.WriteMessage(
-            $"\n[정지면 생성] 단높이 {GradingSettings.BenchHeight}m · 소단 {GradingSettings.BenchWidth}m · " +
+            $"\n[정지면 생성] 절토 단높이 {GradingSettings.CutBenchHeight}m·소단 {GradingSettings.CutBenchWidth}m · " +
+            $"성토 단높이 {GradingSettings.FillBenchHeight}m·소단 {GradingSettings.FillBenchWidth}m · " +
             $"절토 1:{GradingSettings.CutSlope} · 성토 1:{GradingSettings.FillSlope}{(isWall ? " (수직 옹벽)" : "")}" +
             "  — 값 변경은 [정지 설정]");
 
@@ -216,9 +218,9 @@ public sealed class CreateGradingCommand
             GradingParams p;
             VirtualSlope cut, fill;
             ObjectId cutId = ObjectId.Null, fillId = ObjectId.Null;
-            // [§75] 옹벽 구간 — 3.5단계(태그 작도)·4단계(번들 저장)에서도 사용하므로 밖에 선언.
-            var cutZones = new System.Collections.Generic.List<(double T0, double T1, int FromBench, int ToBench)>();
-            var fillZones = new System.Collections.Generic.List<(double T0, double T1, int FromBench, int ToBench)>();
+            // [§75 → 구간 구배 0804] 구간별 구배 규칙 — 3.5단계(태그 작도)·4단계(번들 저장)에서도 쓰므로 밖에 선언.
+            var cutZones = new System.Collections.Generic.List<SlopeZone>();
+            var fillZones = new System.Collections.Generic.List<SlopeZone>();
             // [0729] 경계 표본 기반 필요 방향·계획-지반 최대 표고차(계획고 실수 감지용).
             bool needCut = false, needFill = false;
             double maxPlanGap = 0;
@@ -471,6 +473,11 @@ public sealed class CreateGradingCommand
                         }
                         if (!injected) anyMissed = true;
                     }
+                    // [팝업 오탐 0804 — JACK] 교선이 아예 없거나 전부 5㎡ 미만 짜투리 = 이 방향은 실질적으로
+                    //   사면이 없는 것(예: 전체가 절토인 부지 — 성토는 몇 ㎡ 웅덩이뿐). '실패'가 아니라 '없음'이다.
+                    //   종전엔 anyMissed를 켜서 매번 "⚠ 확인 필요 / 토량 산출 안 함" 팝업이 떴다(정지면은 정상 완성인데).
+                    else if (own.Count == 0)
+                        bndMsg += $"\n{label}: 유효 사면 없음(교선 {pureLoops[label].Count}개 전부 5㎡ 미만 짜투리) — {label} 없음으로 처리";
                     else { anyMissed = true; bndMsg += $"\n{label}: 링 생성 실패(순수 {own.Count}·클립 {clipRings.Count}) — {udiag}"; }
                 }
 
@@ -623,8 +630,10 @@ public sealed class CreateGradingCommand
                     {
                         if (fr == null || fr.Count < 3) continue;
                         // [JACK 0728] 옹벽선은 이 단계에서 그리지 않음(노리선 때만 표시) — wallDump는 개수 진단용.
+                        // [구간 구배 0804] 구간이 '수직(옹벽)'인지 판정하려면 그 방향 전역 구배와 최소구배가 필요.
                         target.AddRange(SlopeHatchGenerator.GenerateEdgeLinesTagged(vs.Rings, ng, up, fr, boundary,
-                            zn, boundary, wallDump));
+                            zn, boundary, wallDump,
+                            baseSlope: System.Math.Max(up ? p.CutSlope : p.FillSlope, p.MinSlope), minSlope: p.MinSlope));
                     }
                 }
                 using Transaction trE = db.TransactionManager.StartTransaction();
@@ -738,7 +747,8 @@ public sealed class CreateGradingCommand
             ed.WriteMessage("\n" + headline + $"  [DH.Grading {GradingSettings.Version}]" +
                 $"\n{volMsg}" +
                 $"\n절토 {(cut.HasSlope ? "가상절토_DH" : "없음")} / 성토 {(fill.HasSlope ? "가상성토_DH" : "없음")}" +
-                $"\n단높이 {p.BenchHeight}m · 소단 {p.BenchWidth}m · 절토 1:{p.CutSlope} · 성토 1:{p.FillSlope}{terrace}" +
+                $"\n절토 단높이 {p.CutBenchHeight}m·소단 {p.CutBenchWidth}m · 성토 단높이 {p.FillBenchHeight}m·소단 {p.FillBenchWidth}m" +
+                $"\n절토 1:{p.CutSlope} · 성토 1:{p.FillSlope}{terrace}" +
                 bndMsg + $"\n합성(정지면_DH): {pasteLog}\n{bundleMsg}");
             AcadApp.ShowAlertDialog(msg);
         }
@@ -759,11 +769,11 @@ public sealed class CreateGradingCommand
 
     /// <summary>[옹벽 유지 0729] 기존 구간과 새 선택 구간 병합 — 새 구간과 '겹치는' 기존 구간은 버림(교체 관례),
     /// 안 겹치는 기존 구간은 유지. 결과 = 새 구간 + 유지된 기존 구간.</summary>
-    private static System.Collections.Generic.List<(double T0, double T1, int FromBench, int ToBench)> MergeZones(
-        System.Collections.Generic.List<(double T0, double T1, int FromBench, int ToBench)>? existing,
-        System.Collections.Generic.List<(double T0, double T1, int FromBench, int ToBench)> newZones)
+    private static System.Collections.Generic.List<SlopeZone> MergeZones(
+        System.Collections.Generic.List<SlopeZone>? existing,
+        System.Collections.Generic.List<SlopeZone> newZones)
     {
-        var res = new System.Collections.Generic.List<(double, double, int, int)>(newZones);
+        var res = new System.Collections.Generic.List<SlopeZone>(newZones);
         if (existing == null) return res;
         foreach (var ez in existing)
         {
@@ -935,31 +945,45 @@ public sealed class CreateGradingCommand
         double designMin = double.MaxValue, designMax = double.MinValue;
         foreach (var v in boundary) { designMin = System.Math.Min(designMin, v.Z); designMax = System.Math.Max(designMax, v.Z); }
 
+        var s = GradingSettings.ToParams();
         int maxBenches = GradingSettings.MaxBenches;
+        double maxRise = 0;     // 0 = 표고차를 못 얻음 → GradingGeometry가 종전 식(MaxBenches×단높이)으로 폴백
         try
         {
             var (gMin, gMax) = ground.ElevationRange();
             double maxDiff = System.Math.Max(System.Math.Abs(gMax - designMin), System.Math.Abs(gMin - designMax));
-            int needed = (int)System.Math.Ceiling(maxDiff / System.Math.Max(GradingSettings.BenchHeight, 1e-6)) + 2; // +2단 여유
-            // 대소단(15m 평탄)은 사면을 바깥으로 더 밀어내므로 추가 단수가 필요 → budget을 늘려 오버사이즈 보장.
+
+            // [절성토 분리 0803] 여유 단수 — 기본 2단 + 대소단이 사면을 바깥으로 밀어내는 만큼 추가.
+            int spare = 2;
             if (GradingSettings.MountainTerrace && GradingSettings.TerraceInterval > 1e-6)
-            {
-                int terraces = (int)System.Math.Floor(maxDiff / GradingSettings.TerraceInterval);
-                needed += terraces + 2;
-            }
+                spare += (int)System.Math.Floor(maxDiff / GradingSettings.TerraceInterval) + 2;
+
+            // 수직 예산 = 표고차 + 여유(큰 쪽 단높이 기준). 단높이와 무관한 실제 지형 값이라
+            //   절토·성토 어느 쪽도 상대의 단높이 때문에 잘리지 않는다.
+            //   절토=성토면 링 개수가 종전(needed×단높이)과 정확히 같다 — ceil(maxDiff/H)+spare단. 회귀 없음.
+            maxRise = maxDiff + spare * System.Math.Max(s.LargerBenchHeight, 1e-6);
+
+            // 단수는 '작은 쪽' 단높이 기준(작은 쪽이 같은 표고차에 더 많은 단을 쓴다) — 무한루프 백스톱용.
+            int needed = (int)System.Math.Ceiling(maxDiff / System.Math.Max(s.SmallerBenchHeight, 1e-6)) + spare;
             maxBenches = System.Math.Min(maxBenches, System.Math.Max(needed, 1));
         }
-        catch { /* 표고 범위를 못 얻으면 설정값 그대로 */ }
+        catch (System.Exception ex)
+        {
+            // 표고 범위를 못 얻으면 설정값 그대로 — 다만 조용히 넘어가지 않는다(사면이 잘려도 단서가 없어짐).
+            DiagLog.Append($"\n[BuildParams] 원지반 표고범위 실패 — 수직 예산 미산출, MaxBenches {maxBenches}단 폴백. {ex.Message}\n");
+        }
 
-        var s = GradingSettings.ToParams();
         return new GradingParams
         {
-            BenchHeight = s.BenchHeight,
-            BenchWidth = s.BenchWidth,
+            CutBenchHeight = s.CutBenchHeight,
+            FillBenchHeight = s.FillBenchHeight,
+            CutBenchWidth = s.CutBenchWidth,
+            FillBenchWidth = s.FillBenchWidth,
             CutSlope = s.CutSlope,
             FillSlope = s.FillSlope,
             CellSize = s.CellSize,
             MaxBenches = maxBenches,
+            MaxRise = maxRise,
             VertexSpacing = s.VertexSpacing,
             MinSlope = s.MinSlope,
             MinFaceRun = s.MinFaceRun,

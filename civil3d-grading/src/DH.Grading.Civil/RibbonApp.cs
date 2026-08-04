@@ -18,6 +18,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.InfraworksCommand))]          // DHINFRA(INFRAWORKS SHP 내보내기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ResetCommand))]               // DHRESET(초기화 — 정지면 생성 전으로)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.BasemapCommand))]             // DHMAP/DHMAPOFF(위성 배경지도 켜기·끄기)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SectionCommand))]             // DHSECTION(종단·횡단 생성)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ImportGisCommand))]           // DHCONTOUR/DHPARCEL(등고선·지적도 가져오기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.CoordSysProbeCommand))]       // DHCS(좌표계 API 진단 — 임시)
 
@@ -152,6 +153,16 @@ public sealed class RibbonApp : IExtensionApplication
                 "배경지도로 깔아둔 위성사진을 한 번에 모두 제거합니다.\n" +
                 "직접 붙이신 다른 이미지는 그대로 둡니다.", null);
             pDraw.Items.Add(btnMapOff);
+            pDraw.Items.Add(Spacer());
+            // [종단·횡단 — JACK 0731] 선 하나 그으면 종단면도·횡단면도를 Civil3D 정식 객체로 생성.
+            var btnSec = MakeButton(
+                "종단\n횡단", "DHSECTION ", "노선으로 쓸 선을 클릭하면 원지반·정지면의 종단면도와 횡단면도를 만듭니다(간격·폭=정지옵션)", "종횡단");
+            btnSec.ToolTip = MakeTip("종단·횡단 (DHSECTION)",
+                "검토할 노선대로 선을 하나 긋고 이 버튼을 누르면\n" +
+                "그 선을 따라 원지반과 정지면의 종단면도·횡단면도를 만듭니다.\n" +
+                "Civil3D 정식 객체라 정지면을 고치면 자동으로 따라 갱신됩니다.\n" +
+                "횡단 간격·좌우 폭·가로 배치 수는 [정지옵션]에서 정합니다.", null);
+            pDraw.Items.Add(btnSec);
             pDraw.Items.Add(Spacer());
 
             // [가져오기 — JACK 0731] 사내 지형·지적 DB에서 도면 좌표계로 바로 받아온다. 내보내기 바로 앞에 배치.
@@ -303,6 +314,19 @@ public sealed class RibbonApp : IExtensionApplication
                         dc.DrawLine(mo, new Point(5, 16), new Point(27, 16));
                         var xr = P(0xe0, 0x5a, 0x3a);
                         dc.DrawLine(xr, new Point(7, 27), new Point(25, 5));       // 금지 사선
+                        break;
+                    case "종횡단": // 원지반 곡선(회색) + 정지면 수평선(주황) + 절단 위치 세로선(파랑) 2개
+                        var xgnd = P(0x8a, 0x8a, 0x8a);
+                        var xfgl = P(0xe0, 0x8a, 0x2a);
+                        var xcut = P(0x3f, 0x8f, 0xd0);
+                        var xfig = new PathFigure { StartPoint = new Point(4, 23), IsClosed = false };
+                        xfig.Segments.Add(new BezierSegment(
+                            new Point(11, 8), new Point(21, 27), new Point(28, 12), true));
+                        var xpg = new PathGeometry(); xpg.Figures.Add(xfig);
+                        dc.DrawGeometry(null, xgnd, xpg);                          // 원지반
+                        dc.DrawLine(xfgl, new Point(4, 18), new Point(28, 18));    // 정지면
+                        dc.DrawLine(xcut, new Point(11, 4), new Point(11, 28));    // 절단 위치
+                        dc.DrawLine(xcut, new Point(21, 4), new Point(21, 28));
                         break;
                     case "초기화": // 원형 되돌림 화살표(초록) — 리셋(JACK 0731 스샷 참고: 위 트인 원 + 좌상단 화살촉)
                         var rs = P(0x2e, 0xa8, 0x4c);

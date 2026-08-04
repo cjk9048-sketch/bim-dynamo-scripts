@@ -14,8 +14,8 @@ public static class WallTee
     /// 역T 런들 + 역T로 전환된 구간 인덱스(스타일 생성에서 제외용) + 진단.</summary>
     public static (List<Run> Runs, List<int> TeeZoneIdx, string Diag) GenerateAuto(
         IReadOnlyList<Point3> boundary,
-        IReadOnlyList<(double T0, double T1, int FromBench, int ToBench)> zones,
-        IGroundSurface ground, bool cut, double benchH)
+        IReadOnlyList<SlopeZone> zones,
+        IGroundSurface ground, bool cut, double benchH, double minSlope = 0.05)
     {
         var runs = new List<Run>();
         var teeIdx = new List<int>();
@@ -29,7 +29,12 @@ public static class WallTee
         for (int zi = 0; zi < zones.Count; zi++)
         {
             var z = zones[zi];
-            if (z.FromBench != 0) { sb.Append($"구간{zi + 1}: {z.FromBench + 1}단부터라 역T 아님(스타일 옹벽) · "); continue; }
+            // [구간 구배 0804] 역T는 계획경계에 바로 붙는(0단부터) **수직** 구간만. 구배를 바꾼 구간은 사면이라 대상 아님.
+            if (z == null || z.Rules.Count == 0) continue;
+            if (z.Rules[0].FromBench != 0)
+            { sb.Append($"구간{zi + 1}: {z.Rules[0].FromBench + 1}단부터라 역T 아님(스타일 옹벽) · "); continue; }
+            if (z.Rules[0].Slope > minSlope + 1e-9)
+            { sb.Append($"구간{zi + 1}: 1단 구배가 1:{z.Rules[0].Slope:0.###}(수직 아님) — 역T 아님 · "); continue; }
 
             double t0 = z.T0, t1 = z.T1 >= z.T0 ? z.T1 : z.T1 + total;
             double arc = t1 - t0;
@@ -62,7 +67,7 @@ public static class WallTee
                 if (cut) { path.Add(new Point3(x, y, planZ)); topZ.Add(planZ + h); }
                 else { path.Add(new Point3(x, y, planZ - h)); topZ.Add(planZ); }
             }
-            if (!pure) { sb.Append($"구간{zi + 1}: 벽높이가 1단({benchH:F0}m) 초과 — 스타일 옹벽 유지 · "); continue; }
+            if (!pure) { sb.Append($"구간{zi + 1}: 벽높이가 1단({benchH:F1}m) 초과 — 스타일 옹벽 유지 · "); continue; }
             if (path.Count < 2 || hMax < 0.3) { sb.Append($"구간{zi + 1}: 유효 벽 없음(높이 {hMax:F1}m·표본누락 {miss}) · "); continue; }
 
             int soilLeft = SoilLeftOf(path, boundary, cut);

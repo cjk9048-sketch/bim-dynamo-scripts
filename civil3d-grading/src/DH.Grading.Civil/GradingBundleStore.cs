@@ -23,9 +23,35 @@ public sealed class GradingBundle
     /// CutFinalRing/FillFinalRing(단수)은 하위호환용 최대 링.</summary>
     public List<List<Point3>>? CutFinalRings, FillFinalRings;
 
-    /// <summary>[v3 — §75 구간 옹벽] 이 정지면에 적용된 옹벽 구간(계획경계 호길이 T0..T1, FromBench단부터 수직).
-    /// DHNORI(노리선 제외+옹벽선 표현)·DHINFRA가 소비 — 옹벽 선택(WallPicks)은 1회성이라 적용 결과는 여기 보존.</summary>
-    public List<(double T0, double T1, int FromBench, int ToBench)>? CutWallZones, FillWallZones;
+    /// <summary>[v3 §75 → v7 구간 구배 0804] 이 정지면에 적용된 '구간별 구배 규칙'(계획경계 호길이 T0..T1 +
+    /// '이 단부터 이 구배' 목록). 옹벽=구배 1:0.05인 규칙의 특수 경우.
+    /// DHNORI(노리선 제외+옹벽선 표현)·DHINFRA가 소비 — 선택(WallPicks)은 1회성이라 적용 결과는 여기 보존.</summary>
+    public List<SlopeZone>? CutWallZones, FillWallZones;
+
+    /// <summary>
+    /// [다중 구역 0804 — JACK] 구역 ri 뒤에 만들어진 구역들이 '덮어쓴 영역' 목록.
+    /// '이어서 하기'로 구역을 쌓으면 뒤 구역이 앞 구역의 사면을 잘라먹는데, 앞 구역 번들에는 그때의
+    /// 경계·링이 그대로 남아 있다. 노리선·띠·옹벽3D를 구역마다 따로 만들면 그 잘린 부분까지 그려져
+    /// **최종 지표면 모양이 아니라 각 구역이 겹쳐 나온다**(JACK 관측). 그래서 뒤 구역의 발자국을 빼야 한다.
+    /// 발자국 = 그 구역의 최종(데이라잇) 링들 + 계획폴리곤 — 링이 계획폴리곤을 감싸지만 사면이 없는 방향도 있어 함께 넣는다.
+    /// </summary>
+    public static List<List<Point3>> LaterFootprints(IReadOnlyList<GradingBundle> regions, int ri)
+    {
+        var res = new List<List<Point3>>();
+        if (regions == null) return res;
+        for (int j = ri + 1; j < regions.Count; j++)
+        {
+            var b = regions[j];
+            if (b == null) continue;
+            void Add(List<Point3>? r) { if (r != null && r.Count >= 3) res.Add(r); }
+            if (b.CutFinalRings != null) foreach (var r in b.CutFinalRings) Add(r);
+            else Add(b.CutFinalRing);
+            if (b.FillFinalRings != null) foreach (var r in b.FillFinalRings) Add(r);
+            else Add(b.FillFinalRing);
+            Add(b.Boundary);
+        }
+        return res;
+    }
 
     /// <summary>boundary에서 fingerprint 산출(2D).</summary>
     public static (int N, double Cx, double Cy, double MinX, double MinY, double MaxX, double MaxY,
@@ -67,7 +93,7 @@ public sealed class GradingBundle
 /// 번들 영속 — 도면 NOD(Named Objects Dictionary) 하위 "DH_GRADING" 딕셔너리의 "BUNDLE" XRecord.
 /// 고정 필드 순서(ralplan M-3; version 불일치=번들 없음 취급):
 ///   [1]"DH_GRADING" [90]version [1]planHandle [90]정점수 [40×8]fingerprint
-///   [90]boundaryN [40×3N]점 [params 14필드: 40/90] [90×2]hasSlope
+///   [90]boundaryN [40×3N]점 [params: v6=16필드 / v5이하=14필드, 40/90] [90×2]hasSlope
 ///   [90]cutFinalN [40×3N] [90]fillFinalN [40×3N]
 /// 점은 40(raw double) 트리플(R2 — 1010 계열 UCS 해석 모호성 회피).
 /// ※ SAVEAS/재오픈만 보장 — WBLOCK·도면 간 복사에서는 소실됨(C8).
@@ -76,7 +102,12 @@ public static class GradingBundleStore
 {
     private const string DictName = "DH_GRADING";
     private const string RecName = "BUNDLE";
-    public const int Version = 5; // v5: 옹벽 구간에 ToBench(끝단 — 사면생성 DHSLOPE) 추가. v4: 다중 구역+GroundHandle
+    // v6: params가 14→16필드(단높이·소단폭 절성토 분리). v5: 옹벽 구간에 ToBench(끝단 — 사면생성 DHSLOPE) 추가.
+    // v4: 다중 구역+GroundHandle.
+    // ※ params는 이름표 없는 '숫자 고정 순서'라, 필드 수가 바뀌면 옛 번들을 새 리더로 읽는 순간 뒤 필드가 통째로
+    //   밀린다(예외도 안 나고 조용히 엉뚱한 값). 그래서 버전마다 필드 수를 반드시 갈라 읽는다 — ReadParams(split).
+    // v7: 구간이 '이 단부터 이 구배' 규칙 목록을 가짐(옹벽=구배 0.05인 규칙). 옛 구간은 SlopeZone.Wall로 무손실 변환.
+    public const int Version = 7;
 
     /// <summary>[v4] 구역 전체 저장 — 헤더(서명·버전·구역수) 뒤에 구역 본문을 차례로.</summary>
     public static void SaveAll(Database db, Transaction tr, IReadOnlyList<GradingBundle> regions)
@@ -141,7 +172,8 @@ public static class GradingBundleStore
         vals.Add(new((int)DxfCode.Text, b.GroundHandle));
     }
 
-    private static GradingBundle ReadRegion(TypedValue[] arr, ref int i, bool withGroundHandle, bool withZoneTo)
+    private static GradingBundle ReadRegion(TypedValue[] arr, ref int i, bool withGroundHandle, bool withZoneTo,
+                                            bool splitBench, bool withRules)
     {
         var b = new GradingBundle { PlanHandle = Str(arr, ref i), VertexCount = I32(arr, ref i) };
         b.CentroidX = Dbl(arr, ref i); b.CentroidY = Dbl(arr, ref i);
@@ -149,20 +181,23 @@ public static class GradingBundleStore
         b.BboxMaxX = Dbl(arr, ref i); b.BboxMaxY = Dbl(arr, ref i);
         b.Perimeter = Dbl(arr, ref i); b.Diagonal = Dbl(arr, ref i);
         b.Boundary = ReadPoints(arr, ref i) ?? new List<Point3>();
-        b.Params = ReadParams(arr, ref i);
+        b.Params = ReadParams(arr, ref i, splitBench);
         b.CutHasSlope = I32(arr, ref i) != 0;
         b.FillHasSlope = I32(arr, ref i) != 0;
         b.CutFinalRing = ReadPoints(arr, ref i);
         b.FillFinalRing = ReadPoints(arr, ref i);
         b.CutFinalRings = ReadRingList(arr, ref i);
         b.FillFinalRings = ReadRingList(arr, ref i);
-        b.CutWallZones = ReadZones(arr, ref i, withZoneTo);
-        b.FillWallZones = ReadZones(arr, ref i, withZoneTo);
+        // 옛 구간을 새 규칙으로 바꿀 때 '수직'은 그때의 MinSlope, '되돌림'은 그 방향의 전역 구배여야 한다.
+        double minS = b.Params.MinSlope;
+        b.CutWallZones = ReadZones(arr, ref i, withZoneTo, withRules, minS, System.Math.Max(b.Params.CutSlope, minS));
+        b.FillWallZones = ReadZones(arr, ref i, withZoneTo, withRules, minS, System.Math.Max(b.Params.FillSlope, minS));
         if (withGroundHandle) b.GroundHandle = Str(arr, ref i);
         return b;
     }
 
-    /// <summary>구역 전체 로드 — v4=구역 목록, v3=단일 구역(하위호환, 목록 1개로). 실패 시 null + reason.</summary>
+    /// <summary>구역 전체 로드 — v6/v5/v4=구역 목록, v3=단일 구역(하위호환, 목록 1개로). 실패 시 null + reason.
+    /// v5 이하 옛 도면도 계속 읽는다(JACK A안) — params만 14필드 리더로 갈라 읽고 단높이·소단폭은 절토=성토로 채움.</summary>
     public static List<GradingBundle>? TryLoadAll(Database db, Transaction tr, out string reason)
     {
         reason = "";
@@ -179,16 +214,20 @@ public static class GradingBundleStore
         {
             if (Str(arr, ref i) != DictName) { reason = "번들 서명 불일치"; return null; }
             int ver = I32(arr, ref i);
-            if (ver == 5 || ver == 4)
+            if (ver >= 4 && ver <= Version)
             {
                 int n = I32(arr, ref i);
                 if (n <= 0) { reason = "번들에 구역 없음"; return null; }
                 var l = new List<GradingBundle>(n);
-                for (int k = 0; k < n; k++) l.Add(ReadRegion(arr, ref i, withGroundHandle: true, withZoneTo: ver >= 5));
+                for (int k = 0; k < n; k++)
+                    l.Add(ReadRegion(arr, ref i, withGroundHandle: true, withZoneTo: ver >= 5,
+                                     splitBench: ver >= 6, withRules: ver >= 7));
                 return l;
             }
             if (ver == 3)   // 하위호환 — 기존 도면(v3 단일 구역)도 그대로 사용
-                return new List<GradingBundle> { ReadRegion(arr, ref i, withGroundHandle: false, withZoneTo: false) };
+                return new List<GradingBundle> {
+                    ReadRegion(arr, ref i, withGroundHandle: false, withZoneTo: false,
+                               splitBench: false, withRules: false) };
             reason = $"번들 버전 불일치(v{ver}) — DHGRADE 재실행 필요";
             return null;
         }
@@ -200,7 +239,9 @@ public static class GradingBundleStore
     }
 
     // ── 직렬화 유틸(고정 순서) ──
-    private static void WriteZones(List<TypedValue> vals, List<(double T0, double T1, int FromBench, int ToBench)>? zs)
+    /// <summary>[v7] 구간 = T0,T1(40) + 규칙수(90) + 규칙마다 [시작단(90), 구배(40), 소단폭(40)].
+    /// 소단폭이 음수면 '전역값 따름'(옛 번들에서 올라온 옹벽 구간). 단높이는 구간별로 두지 않는다(SlopeZone 주석).</summary>
+    private static void WriteZones(List<TypedValue> vals, List<SlopeZone>? zs)
     {
         vals.Add(new((int)DxfCode.Int32, zs?.Count ?? 0));
         if (zs == null) return;
@@ -208,24 +249,47 @@ public static class GradingBundleStore
         {
             vals.Add(new((int)DxfCode.Real, z.T0));
             vals.Add(new((int)DxfCode.Real, z.T1));
-            vals.Add(new((int)DxfCode.Int32, z.FromBench));
-            vals.Add(new((int)DxfCode.Int32, z.ToBench));   // v5
+            vals.Add(new((int)DxfCode.Int32, z.Rules.Count));
+            foreach (var r in z.Rules)
+            {
+                vals.Add(new((int)DxfCode.Int32, r.FromBench));
+                vals.Add(new((int)DxfCode.Real, r.Slope));
+                vals.Add(new((int)DxfCode.Real, r.BenchW));
+            }
         }
     }
 
-    /// <summary>withToBench=false(v3/v4)는 끝단 없음 → int.MaxValue(끝까지)로 읽는다.</summary>
-    private static List<(double T0, double T1, int FromBench, int ToBench)>? ReadZones(
-        TypedValue[] arr, ref int i, bool withToBench)
+    /// <summary>구간 읽기. v7=규칙 목록. v6 이하는 옛 표현(FromBench단부터 ToBench단까지 수직) →
+    /// SlopeZone.Wall로 정확히 같은 의미로 변환한다(withToBench=false인 v3/v4는 끝단 없음 = 끝까지).
+    /// 옛 구간의 '수직'은 그때의 MinSlope, '되돌림'은 그때의 전역 구배여야 하므로 params를 함께 받는다.</summary>
+    private static List<SlopeZone>? ReadZones(
+        TypedValue[] arr, ref int i, bool withToBench, bool withRules, double minSlope, double baseSlope)
     {
         int n = I32(arr, ref i);
         if (n <= 0) return null;
-        var l = new List<(double, double, int, int)>(n);
+        var l = new List<SlopeZone>(n);
         for (int k = 0; k < n; k++)
         {
             double t0 = Dbl(arr, ref i), t1 = Dbl(arr, ref i);
-            int fb = I32(arr, ref i);
-            int tb = withToBench ? I32(arr, ref i) : int.MaxValue;
-            l.Add((t0, t1, fb, tb));
+            if (withRules)
+            {
+                var z = new SlopeZone { T0 = t0, T1 = t1 };
+                int rc = I32(arr, ref i);
+                for (int r = 0; r < rc; r++)
+                {
+                    int fb = I32(arr, ref i);
+                    double sl = Dbl(arr, ref i), bw = Dbl(arr, ref i);
+                    z.Rules.Add((fb, sl, bw));
+                }
+                z.Normalize();
+                l.Add(z);
+            }
+            else
+            {
+                int fb = I32(arr, ref i);
+                int tb = withToBench ? I32(arr, ref i) : int.MaxValue;
+                l.Add(SlopeZone.Wall(t0, t1, fb, tb, minSlope, baseSlope));
+            }
         }
         return l;
     }
@@ -271,38 +335,58 @@ public static class GradingBundleStore
         return pts;
     }
 
-    // params 14필드 고정 순서: BenchHeight, BenchWidth, CutSlope, FillSlope, CellSize(40) /
-    // MaxBenches(90) / VertexSpacing, MinSlope, MinFaceRun(40) / MiterConvex(90) / MiterLimit(40) /
-    // MountainTerrace(90) / TerraceInterval, TerraceWidth(40)
+    // [v6] params 17필드 고정 순서: CutBenchHeight, FillBenchHeight, CutBenchWidth, FillBenchWidth,
+    //   CutSlope, FillSlope, CellSize(40) / MaxBenches(90) / VertexSpacing, MinSlope, MinFaceRun(40) /
+    //   MiterConvex(90) / MiterLimit(40) / MountainTerrace(90) / TerraceInterval, TerraceWidth, MaxRise(40)
+    // [v5 이하] params 14필드: BenchHeight, BenchWidth, CutSlope, FillSlope, CellSize(40) / ... (이하 동일,
+    //   MaxRise 없음 → 0으로 두면 GradingGeometry가 종전 식으로 폴백하므로 옛 도면 결과가 그대로 재현된다)
     private static void WriteParams(List<TypedValue> vals, GradingParams p)
     {
         void D(double v) => vals.Add(new((int)DxfCode.Real, v));
         void I(int v) => vals.Add(new((int)DxfCode.Int32, v));
-        D(p.BenchHeight); D(p.BenchWidth); D(p.CutSlope); D(p.FillSlope); D(p.CellSize);
+        D(p.CutBenchHeight); D(p.FillBenchHeight); D(p.CutBenchWidth); D(p.FillBenchWidth);
+        D(p.CutSlope); D(p.FillSlope); D(p.CellSize);
         I(p.MaxBenches);
         D(p.VertexSpacing); D(p.MinSlope); D(p.MinFaceRun);
         I(p.MiterConvex ? 1 : 0);
         D(p.MiterLimit);
         I(p.MountainTerrace ? 1 : 0);
         D(p.TerraceInterval); D(p.TerraceWidth);
+        D(p.MaxRise);   // v6
     }
 
-    private static GradingParams ReadParams(TypedValue[] arr, ref int i)
+    /// <summary>splitBench=true(v6)는 단높이·소단폭이 절토/성토 4필드, false(v5 이하)는 공용 2필드 —
+    /// 옛 번들은 절토=성토=그 값으로 채운다(그때는 실제로 공용이었으므로 의미가 정확히 보존됨).</summary>
+    private static GradingParams ReadParams(TypedValue[] arr, ref int i, bool splitBench)
     {
-        double benchHeight = Dbl(arr, ref i), benchWidth = Dbl(arr, ref i),
-               cutSlope = Dbl(arr, ref i), fillSlope = Dbl(arr, ref i), cellSize = Dbl(arr, ref i);
+        double cutBenchH, fillBenchH, cutBenchW, fillBenchW;
+        if (splitBench)
+        {
+            cutBenchH = Dbl(arr, ref i); fillBenchH = Dbl(arr, ref i);
+            cutBenchW = Dbl(arr, ref i); fillBenchW = Dbl(arr, ref i);
+        }
+        else
+        {
+            cutBenchH = fillBenchH = Dbl(arr, ref i);
+            cutBenchW = fillBenchW = Dbl(arr, ref i);
+        }
+        double cutSlope = Dbl(arr, ref i), fillSlope = Dbl(arr, ref i), cellSize = Dbl(arr, ref i);
         int maxBenches = I32(arr, ref i);
         double vertexSpacing = Dbl(arr, ref i), minSlope = Dbl(arr, ref i), minFaceRun = Dbl(arr, ref i);
         bool miterConvex = I32(arr, ref i) != 0;
         double miterLimit = Dbl(arr, ref i);
         bool mountainTerrace = I32(arr, ref i) != 0;
         double terraceInterval = Dbl(arr, ref i), terraceWidth = Dbl(arr, ref i);
+        double maxRise = splitBench ? Dbl(arr, ref i) : 0;   // v6부터. 0=미지정 → 종전 식 폴백(옛 도면 결과 재현)
         return new GradingParams
         {
-            BenchHeight = benchHeight, BenchWidth = benchWidth, CutSlope = cutSlope, FillSlope = fillSlope,
+            CutBenchHeight = cutBenchH, FillBenchHeight = fillBenchH,
+            CutBenchWidth = cutBenchW, FillBenchWidth = fillBenchW,
+            CutSlope = cutSlope, FillSlope = fillSlope,
             CellSize = cellSize, MaxBenches = maxBenches, VertexSpacing = vertexSpacing, MinSlope = minSlope,
             MinFaceRun = minFaceRun, MiterConvex = miterConvex, MiterLimit = miterLimit,
             MountainTerrace = mountainTerrace, TerraceInterval = terraceInterval, TerraceWidth = terraceWidth,
+            MaxRise = maxRise,
         };
     }
 

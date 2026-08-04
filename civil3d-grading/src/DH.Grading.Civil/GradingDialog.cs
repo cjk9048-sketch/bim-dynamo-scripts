@@ -11,9 +11,12 @@ namespace DH.Grading.Civil;
 /// </summary>
 public sealed class GradingDialog : Window
 {
-    private readonly TextBox _benchHeight;
-    private readonly TextBox _benchWidth;
+    // [절성토 분리 0803 — JACK] 단높이·소단폭도 구배처럼 절토/성토 따로. 대소단은 공용 유지.
+    private readonly TextBox _cutBenchHeight;
+    private readonly TextBox _cutBenchWidth;
     private readonly TextBox _cutSlope;
+    private readonly TextBox _fillBenchHeight;
+    private readonly TextBox _fillBenchWidth;
     private readonly TextBox _fillSlope;
     private readonly RadioButton _shapeMiter;   // 사면형상: 직각(JACK 0728 — 체크박스→옵션단추)
     private readonly RadioButton _shapeRound;   // 사면형상: 라운드
@@ -25,6 +28,10 @@ public sealed class GradingDialog : Window
     private readonly ComboBox _fillWallStyle;
     private readonly ComboBox _coordSys;
     private readonly ComboBox _basemapRes;   // [배경지도 0731] 위성 화질(목표 해상도)
+    private readonly TextBox _xsecInterval;  // [종단·횡단 0731] 측점선 간격(m)
+    private readonly TextBox _xsecLeft;      // 중심선 좌측 폭(m)
+    private readonly TextBox _xsecRight;     // 중심선 우측 폭(m)
+    private readonly TextBox _xsecCols;      // 횡단도 가로 배치 개수
 
     private static readonly SolidColorBrush GreyBrush = new(Color.FromRgb(0x99, 0x99, 0x99));
     private static readonly SolidColorBrush BlackBrush = new(Colors.Black);
@@ -81,9 +88,12 @@ public sealed class GradingDialog : Window
 
         // 1. 정지 설정 (왼쪽)
         AddSection(colL, "1. 정지 설정", first: true);
-        _benchHeight = AddRow(colL, "단높이 (m)", GradingSettings.BenchHeight, "");
-        _benchWidth = AddRow(colL, "소단폭 (m)", GradingSettings.BenchWidth, "");
+        // [절성토 분리 0803 — JACK] 절토 3줄 / 성토 3줄로 묶어 배치(위 예시 그림과 좌우 순서 일치).
+        _cutBenchHeight = AddRow(colL, "절토 단높이 (m)", GradingSettings.CutBenchHeight, "");
+        _cutBenchWidth = AddRow(colL, "절토 소단폭 (m)", GradingSettings.CutBenchWidth, "");
         _cutSlope = AddRow(colL, "절토구배  1 :", GradingSettings.CutSlope, "");
+        _fillBenchHeight = AddRow(colL, "성토 단높이 (m)", GradingSettings.FillBenchHeight, "");
+        _fillBenchWidth = AddRow(colL, "성토 소단폭 (m)", GradingSettings.FillBenchWidth, "");
         _fillSlope = AddRow(colL, "성토구배  1 :", GradingSettings.FillSlope, "");
 
         // [JACK 0728] 사면형상 — 체크박스 대신 옵션단추(라디오): 직각 / 라운드.
@@ -128,6 +138,14 @@ public sealed class GradingDialog : Window
 
         _terraceInterval = AddRow(colR, "대소단 간격 (m)", GradingSettings.TerraceInterval, "");
         _terraceWidth = AddRow(colR, "대소단 폭 (m)", GradingSettings.TerraceWidth, "");
+
+        // 2-1. 종단·횡단 (오른쪽) — [종단/횡단] 버튼이 쓰는 값
+        AddSection(colR, "2-1. 종단·횡단",
+            "[종단/횡단] 버튼으로 만드는 횡단면도의 간격과 폭. 노선 길이 ÷ 간격이 횡단 개수가 됩니다(최대 200개).");
+        _xsecInterval = AddRow(colR, "횡단 간격 (m)", GradingSettings.XsecInterval, "");
+        _xsecLeft = AddRow(colR, "횡단 폭 — 좌 (m)", GradingSettings.XsecLeft, "");
+        _xsecRight = AddRow(colR, "횡단 폭 — 우 (m)", GradingSettings.XsecRight, "");
+        _xsecCols = AddRow(colR, "횡단도 가로 배치 수", GradingSettings.XsecCols, "");
 
         // 3. 옹벽 형태 (왼쪽)
         AddSection(colL, "3. 옹벽 형태 (INFRAWORKS 3D)",
@@ -175,9 +193,11 @@ public sealed class GradingDialog : Window
         colL.Children.Add(_basemapRes);
 
         // [실시간 연동] 모든 컨트롤 생성 후 훅 — 값·옵션 변경 즉시 예시 그림/안내 갱신.
-        _benchHeight.TextChanged += (_, _) => RedrawDiagram();
-        _benchWidth.TextChanged += (_, _) => RedrawDiagram();
+        _cutBenchHeight.TextChanged += (_, _) => RedrawDiagram();
+        _cutBenchWidth.TextChanged += (_, _) => RedrawDiagram();
         _cutSlope.TextChanged += (_, _) => RedrawDiagram();
+        _fillBenchHeight.TextChanged += (_, _) => RedrawDiagram();
+        _fillBenchWidth.TextChanged += (_, _) => RedrawDiagram();
         _fillSlope.TextChanged += (_, _) => RedrawDiagram();
         _terraceInterval.TextChanged += (_, _) => RedrawDiagram();
         _terraceWidth.TextChanged += (_, _) => RedrawDiagram();
@@ -276,8 +296,9 @@ public sealed class GradingDialog : Window
             return System.Math.Clamp(v, min, max);
         }
 
-        double H = P(_benchHeight, 5, 0.2, 60);
-        double W = P(_benchWidth, 1, 0, 60, allowZero: true);
+        // [절성토 분리 0803] 예시 그림도 그 쪽(절토/성토) 단높이·소단폭으로 그린다.
+        double H = P(cut ? _cutBenchHeight : _fillBenchHeight, 5, 0.2, 60);
+        double W = P(cut ? _cutBenchWidth : _fillBenchWidth, 1, 0, 60, allowZero: true);
         double nRaw = P(slopeBox, 1.5, 0, 30, allowZero: true);
         double n = System.Math.Max(nRaw, 0.05); // 그림은 0.05 하한으로
         bool terrace = _mountainTerrace?.IsChecked == true;
@@ -551,20 +572,55 @@ public sealed class GradingDialog : Window
 
     private void OnOk(object sender, RoutedEventArgs e)
     {
-        if (!TryParse(_benchHeight, "단높이", out double bh, positive: true) ||
-            !TryParse(_benchWidth, "소단폭", out double bw, positive: false) ||
+        if (!TryParse(_cutBenchHeight, "절토 단높이", out double cbh, positive: true) ||
+            !TryParse(_cutBenchWidth, "절토 소단폭", out double cbw, positive: false) ||
+            !TryParse(_fillBenchHeight, "성토 단높이", out double fbh, positive: true) ||
+            !TryParse(_fillBenchWidth, "성토 소단폭", out double fbw, positive: false) ||
             !TryParse(_cutSlope, "절토구배", out double cs, positive: false) ||
             !TryParse(_fillSlope, "성토구배", out double fs, positive: false) ||
             !TryParse(_terraceInterval, "대소단 간격", out double ti, positive: true) ||
-            !TryParse(_terraceWidth, "대소단 폭", out double tw, positive: false))
+            !TryParse(_terraceWidth, "대소단 폭", out double tw, positive: false) ||
+            !TryParse(_xsecInterval, "횡단 간격", out double xi, positive: true) ||
+            !TryParse(_xsecLeft, "횡단 폭 — 좌", out double xl, positive: false) ||
+            !TryParse(_xsecRight, "횡단 폭 — 우", out double xr, positive: false) ||
+            !TryParse(_xsecCols, "횡단도 가로 배치 수", out double xc, positive: true))
             return;
 
-        // [단높이 상한 — JACK 0721] 옹벽 단높이는 최대 5m. 초과 입력은 거부.
-        if (bh > 5.0 + 1e-9)
+        // [종단·횡단] 좌우 폭이 둘 다 0이면 횡단을 그릴 수 없다.
+        if (xl + xr < 0.5)
         {
-            MessageBox.Show(this, "단높이는 최대 5m까지만 가능합니다.", "입력 오류",
+            MessageBox.Show(this, "횡단 폭(좌+우)은 합쳐서 0.5m 이상이어야 합니다.", "입력 오류",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
-            _benchHeight.Focus(); _benchHeight.SelectAll();
+            _xsecLeft.Focus(); _xsecLeft.SelectAll();
+            return;
+        }
+
+        // [단높이 하한 0803] 예시 그림의 클램프(0.2m)와 같은 값을 검증에도 건다 — 안 걸면 0.01 같은 값이
+        //   경고 없이 저장되고(그림은 0.2m로 그려져 화면과 실제가 어긋남), 필요한 단수가 폭증해 사면이 잘린다.
+        const double benchMin = 0.2;
+        if (cbh < benchMin - 1e-9 || fbh < benchMin - 1e-9)
+        {
+            bool cutBad = cbh < benchMin - 1e-9;
+            MessageBox.Show(this, $"{(cutBad ? "절토" : "성토")} 단높이는 {benchMin}m 이상이어야 합니다.", "입력 오류",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            var bad = cutBad ? _cutBenchHeight : _fillBenchHeight;
+            bad.Focus(); bad.SelectAll();
+            return;
+        }
+
+        // [단높이 상한 — JACK 0721] 옹벽 단높이는 최대 5m. 초과 입력은 거부. (0803: 절토·성토 각각 검사)
+        if (cbh > 5.0 + 1e-9)
+        {
+            MessageBox.Show(this, "절토 단높이는 최대 5m까지만 가능합니다.", "입력 오류",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            _cutBenchHeight.Focus(); _cutBenchHeight.SelectAll();
+            return;
+        }
+        if (fbh > 5.0 + 1e-9)
+        {
+            MessageBox.Show(this, "성토 단높이는 최대 5m까지만 가능합니다.", "입력 오류",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            _fillBenchHeight.Focus(); _fillBenchHeight.SelectAll();
             return;
         }
 
@@ -574,8 +630,10 @@ public sealed class GradingDialog : Window
         if (cs > 0 && cs < slopeFloor) cs = slopeFloor; else if (cs == 0) cs = slopeFloor;
         if (fs > 0 && fs < slopeFloor) fs = slopeFloor; else if (fs == 0) fs = slopeFloor;
 
-        GradingSettings.BenchHeight = bh;
-        GradingSettings.BenchWidth = bw;
+        GradingSettings.CutBenchHeight = cbh;
+        GradingSettings.CutBenchWidth = cbw;
+        GradingSettings.FillBenchHeight = fbh;
+        GradingSettings.FillBenchWidth = fbw;
         GradingSettings.CutSlope = cs;
         GradingSettings.FillSlope = fs;
         GradingSettings.MiterConvex = _shapeMiter.IsChecked == true;
@@ -588,6 +646,10 @@ public sealed class GradingDialog : Window
         GradingSettings.ExportEpsg = EpsgCodes[System.Math.Clamp(_coordSys.SelectedIndex, 0, EpsgCodes.Length - 1)];
         GradingSettings.BasemapRes = GradingSettings.BasemapResValues[
             System.Math.Clamp(_basemapRes.SelectedIndex, 0, GradingSettings.BasemapResValues.Length - 1)];
+        GradingSettings.XsecInterval = xi;
+        GradingSettings.XsecLeft = xl;
+        GradingSettings.XsecRight = xr;
+        GradingSettings.XsecCols = (int)System.Math.Clamp(System.Math.Round(xc), 1, 20);
 
         DialogResult = true;
         Close();

@@ -15,6 +15,7 @@ public sealed class GradingSettingsCommand
     {
         Document doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
+        GradingSettings.SyncToDocument(doc);   // [도면 전환 0803] 도면이 바뀌었으면 그 도면이 저장한 값을 보여준다
 
         // [리뷰 0731 D-1] 대화상자를 열기 전에 **도면 좌표계로 옵션 값을 맞춘다**.
         //   그러지 않으면 콤보가 하드코딩 기본값(중부 5186)을 보여주고, 사용자가 좌표계를 건드리지 않고

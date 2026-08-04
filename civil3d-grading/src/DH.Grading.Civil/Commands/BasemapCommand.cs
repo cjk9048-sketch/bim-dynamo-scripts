@@ -35,6 +35,7 @@ public sealed class BasemapCommand
     {
         Document doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
+        GradingSettings.SyncToDocument(doc);   // [도면 전환 0803] 도면이 바뀌었으면 그 도면 기준으로 설정·기억 재정렬
         Editor ed = doc.Editor;
         Database db = doc.Database;
 
@@ -74,6 +75,7 @@ public sealed class BasemapCommand
             if (!Attach(db, img, out string aNote))
             { Refuse(ed, "배경지도를 도면에 붙이지 못했습니다.\n" + aNote); return; }
 
+            DrawOrderFix.Apply(db);   // 사진은 맨 아래, 지번 글자는 맨 위(JACK 0731)
             ed.Regen();
             ed.WriteMessage($"\n[배경지도] {note} · {aNote}\n  · 끄려면 [지도끄기] 버튼 · 여러 번 눌러 여러 곳에 깔 수 있습니다.");
             try { DiagLog.Append($"\n■ DHMAP(배경지도)\n  {note} · {aNote} · {csNote}\n"); } catch { }
@@ -91,6 +93,7 @@ public sealed class BasemapCommand
     {
         Document doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
+        GradingSettings.SyncToDocument(doc);   // [도면 전환 0803] 도면이 바뀌었으면 그 도면 기준으로 설정·기억 재정렬
         Editor ed = doc.Editor;
 
         try
@@ -171,6 +174,7 @@ public sealed class BasemapCommand
         }
         catch (System.Exception ex) { ed.WriteMessage("\n  · 갱신 오류: " + ex.Message); }
 
+        DrawOrderFix.Apply(db);   // 교체 후에도 사진은 맨 아래, 지번 글자는 맨 위 유지
         try { ed.Regen(); } catch { }
         if (ok < pairs.Count)
             AcadApp.ShowAlertDialog($"배경지도 {pairs.Count}개 중 {ok}개만 갱신했습니다.\n" +

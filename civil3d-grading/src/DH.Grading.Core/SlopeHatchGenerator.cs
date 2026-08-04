@@ -31,8 +31,10 @@ public static class SlopeHatchGenerator
         IReadOnlyList<IReadOnlyList<Point3>> rings, IGroundSurface ground, bool up,
         double shortSpacing = 1.0, double longSpacing = 5.0,
         IReadOnlyList<Point3>? clipOuter = null, IReadOnlyList<Point3>? clipHole = null,
-        IReadOnlyList<(double T0, double T1, int FromBench, int ToBench)>? wallZones = null,
-        IReadOnlyList<Point3>? zoneBoundary = null)
+        IReadOnlyList<SlopeZone>? wallZones = null,
+        IReadOnlyList<Point3>? zoneBoundary = null,
+        double baseSlope = 1.5, double minSlope = 0.05,
+        IReadOnlyList<IReadOnlyList<Point3>>? extraHoles = null)
     {
         var ticks = new List<(Point3, Point3)>();
         var cornerTicks = new List<(Point3, Point3)>();
@@ -42,7 +44,7 @@ public static class SlopeHatchGenerator
         if (longSpacing <= 0) longSpacing = 5.0;
         int ratio = Math.Max(1, (int)Math.Round(longSpacing / shortSpacing)); // 몇 번째마다 긴선
         int sgn = up ? -1 : +1; // 구성측 부호(절토=지반아래, 성토=지반위)
-        var clip = ClipRegion.Build(clipOuter, clipHole);
+        var clip = ClipRegion.Build(clipOuter, clipHole, extraHoles);
         // [§75] 옹벽 구간(경계 호길이)에는 노리선을 만들지 않음(JACK 0728) — 단(bench)별 판정.
         double[]? cumZ = (wallZones != null && wallZones.Count > 0 && zoneBoundary != null && zoneBoundary.Count >= 3)
             ? GradingGeometry.CumLen2D(zoneBoundary) : null;
@@ -59,7 +61,7 @@ public static class SlopeHatchGenerator
             if (cumZ != null)
             {
                 int kk = k;
-                zoneSkip = (x, y) => InAnyZone(wallZones!, zoneBoundary!, cumZ, kk, x, y);
+                zoneSkip = (x, y) => InAnyZone(wallZones!, zoneBoundary!, cumZ, kk, x, y, baseSlope, minSlope);
             }
             EmitFaceTicks(crest, other, ground, sgn, shortSpacing, ratio, ticks, clip, cornerTicks, zoneSkip);
         }
@@ -111,15 +113,17 @@ public static class SlopeHatchGenerator
     public static List<(bool IsSlope, int Bench, int Seg, List<Point3> Pts)> GenerateEdgeLinesTagged(
         IReadOnlyList<IReadOnlyList<Point3>> rings, IGroundSurface ground, bool up,
         IReadOnlyList<Point3>? clipOuter = null, IReadOnlyList<Point3>? clipHole = null,
-        IReadOnlyList<(double T0, double T1, int FromBench, int ToBench)>? wallZones = null,
+        IReadOnlyList<SlopeZone>? wallZones = null,
         IReadOnlyList<Point3>? zoneBoundary = null,
         List<List<Point3>>? wallLinesOut = null,
-        List<(bool IsSlope, int Bench, int Seg, List<Point3> Pts)>? wallEdgesOut = null)
+        List<(bool IsSlope, int Bench, int Seg, List<Point3> Pts)>? wallEdgesOut = null,
+        double baseSlope = 1.5, double minSlope = 0.05,
+        IReadOnlyList<IReadOnlyList<Point3>>? extraHoles = null)
     {
         var outList = new List<(bool, int, int, List<Point3>)>();
         if (rings == null || rings.Count < 2) return outList;
         int sgn = up ? -1 : +1;
-        var clip = ClipRegion.Build(clipOuter, clipHole);
+        var clip = ClipRegion.Build(clipOuter, clipHole, extraHoles);
         // [§75] 옹벽 구간: 사면선/소단선 제외 — 구간 안 크레스트(계단 상단)는 '옹벽선'으로 분리 반환(두꺼운 빨강 표현용).
         double[]? cumZ = (wallZones != null && wallZones.Count > 0 && zoneBoundary != null && zoneBoundary.Count >= 3)
             ? GradingGeometry.CumLen2D(zoneBoundary) : null;
@@ -136,7 +140,7 @@ public static class SlopeHatchGenerator
             if (cumZ != null)
             {
                 int kk = k;
-                inZone = pt => InAnyZone(wallZones!, zoneBoundary!, cumZ, kk, pt.X, pt.Y);
+                inZone = pt => InAnyZone(wallZones!, zoneBoundary!, cumZ, kk, pt.X, pt.Y, baseSlope, minSlope);
             }
 
             var slopeRuns = new List<List<Point3>>();
@@ -176,17 +180,16 @@ public static class SlopeHatchGenerator
         return outList;
     }
 
-    /// <summary>[§75] (x,y)가 활성 옹벽 구간(FromBench ≤ bench ≤ ToBench) 안인가 — 경계 최근접 호길이 param 판정.</summary>
-    private static bool InAnyZone(IReadOnlyList<(double T0, double T1, int FromBench, int ToBench)> zones,
-        IReadOnlyList<Point3> boundary, double[] cum, int bench, double x, double y)
+    /// <summary>[구간 구배 0804] (x,y)의 이 단이 '수직(옹벽)'인가 — 경계 최근접 호길이 param으로 구간을 찾고,
+    /// 그 구간에서 이 단에 적용되는 구배가 최소구배 이하면 옹벽. 구간 구배가 일반 사면이면 false(사면선으로 그린다).
+    /// 구간들은 서로 겹치지 않으므로 처음 걸린 구간이 답이다.</summary>
+    private static bool InAnyZone(IReadOnlyList<SlopeZone> zones,
+        IReadOnlyList<Point3> boundary, double[] cum, int bench, double x, double y,
+        double baseSlope, double minSlope)
     {
         double t = GradingGeometry.ParamAt(boundary, cum, x, y);
         foreach (var z in zones)
-        {
-            if (bench < z.FromBench || bench > z.ToBench) continue;
-            bool inz = z.T0 <= z.T1 ? (t >= z.T0 && t <= z.T1) : (t >= z.T0 || t <= z.T1);
-            if (inz) return true;
-        }
+            if (z != null && z.Contains(t)) return z.IsWallAt(bench, baseSlope, minSlope);
         return false;
     }
 
@@ -626,22 +629,29 @@ public static class SlopeHatchGenerator
         private readonly IndexedPointInAreaLocator _locator;
         private readonly STRtree<LineSegment> _edges = new();
 
-        public static ClipRegion? Build(IReadOnlyList<Point3>? outer, IReadOnlyList<Point3>? hole)
+        public static ClipRegion? Build(IReadOnlyList<Point3>? outer, IReadOnlyList<Point3>? hole,
+            IReadOnlyList<IReadOnlyList<Point3>>? extraHoles = null)
         {
             if (outer == null || outer.Count < 3) return null;
             var gf = new GeometryFactory();
             Geometry g = ToPoly(gf, outer);
             if (g.IsEmpty || g is not IPolygonal) return null; // [리뷰 M] 비-폴리곤이면 클립 불가
-            if (hole != null && hole.Count >= 3)
+            void Sub(IReadOnlyList<Point3>? ring)
             {
-                Geometry h = ToPoly(gf, hole);
-                if (!h.IsEmpty)
+                if (ring == null || ring.Count < 3) return;
+                Geometry h = ToPoly(gf, ring);
+                if (h.IsEmpty) return;
+                try
                 {
                     var diff = g.Difference(h);
-                    // 차집합이 비거나 비-폴리곤(이상 케이스)이면 바깥 링만으로 진행
+                    // 차집합이 비거나 비-폴리곤(이상 케이스)이면 직전 상태로 진행
                     if (!diff.IsEmpty && diff is IPolygonal) g = diff;
                 }
+                catch { }
             }
+            Sub(hole);
+            // [다중 구역 0804] 뒤 구역이 덮어쓴 영역 제외 — 안 빼면 앞 구역의 노리선이 최종 지표면과 무관하게 남는다.
+            if (extraHoles != null) foreach (var eh in extraHoles) Sub(eh);
             return new ClipRegion(g);
         }
 

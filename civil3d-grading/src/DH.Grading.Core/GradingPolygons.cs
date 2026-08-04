@@ -1,3 +1,4 @@
+using NetTopologySuite.Algorithm.Locate;
 using NetTopologySuite.Geometries;
 
 namespace DH.Grading.Core;
@@ -20,6 +21,41 @@ public static class GradingPolygons
         return outp;
     }
 
+    /// <summary>
+    /// [다중 구역 0804] 여러 폴리곤을 한 덩어리로 보고 '이 점이 그 안인가'를 빠르게 답하는 마스크.
+    /// 뒤 구역이 덮어쓴 영역을 옹벽 3D·블록 배치에서 제외하는 데 쓴다(점마다 폴리곤을 새로 만들면 느리다).
+    /// </summary>
+    public sealed class RegionMask
+    {
+        private readonly List<IndexedPointInAreaLocator> _loc = new();
+
+        /// <summary>점렬 목록으로 마스크 생성 — 유효한 폴리곤이 하나도 없으면 null.</summary>
+        public static RegionMask? Build(IReadOnlyList<IReadOnlyList<Point3>>? rings)
+        {
+            if (rings == null || rings.Count == 0) return null;
+            var gf = NtsSupport.Factory();
+            var m = new RegionMask();
+            foreach (var r in rings)
+            {
+                var p = NtsSupport.ToCleanPolygon(r, gf);
+                if (p == null || p.IsEmpty) continue;
+                try { m._loc.Add(new IndexedPointInAreaLocator(p)); } catch { }
+            }
+            return m._loc.Count > 0 ? m : null;
+        }
+
+        /// <summary>(x,y)가 어느 하나라도 안(또는 경계)인가.</summary>
+        public bool Contains(double x, double y)
+        {
+            var c = new Coordinate(x, y);
+            foreach (var l in _loc)
+            {
+                try { if (l.Locate(c) != Location.Exterior) return true; } catch { }
+            }
+            return false;
+        }
+    }
+
     /// <summary>사면/소단 띠 폴리곤(계획문 4번) — 연속 링쌍 strip을 도넛으로 클립.
     /// (r[i], r[i+1]) 사이 strip: i 짝수=사면, 홀수=소단. LEVEL=단 번호(1부터), ELEV=쌍 평균 Z.
     /// [§75] wallCuts(옹벽 구간 쐐기 폴리곤 + 시작단): 해당 단(bench=i/2 ≥ FromBench)의 '사면' 띠에서
@@ -27,12 +63,22 @@ public static class GradingPolygons
     public static List<(List<IReadOnlyList<Point3>> Rings, double Area, string Kind, int Level, double Elev)>
         Strips(IReadOnlyList<IReadOnlyList<Point3>> rings,
         IReadOnlyList<Point3> finalRing, IReadOnlyList<Point3> boundary,
-        IReadOnlyList<(Geometry Poly, int FromBench, int ToBench)>? wallCuts = null)
+        IReadOnlyList<(Geometry Poly, int FromBench, int ToBench)>? wallCuts = null,
+        IReadOnlyList<IReadOnlyList<Point3>>? extraHoles = null)
     {
         var outp = new List<(List<IReadOnlyList<Point3>>, double, string, int, double)>();
         var donut = Donut(finalRing, boundary);
         if (donut == null || rings == null || rings.Count < 2) return outp;
         var gf = NtsSupport.Factory();
+        // [다중 구역 0804] 뒤 구역이 덮어쓴 영역은 이 구역의 띠에서 뺀다 —
+        //   빼지 않으면 앞 구역이 만들어질 당시의 사면이 최종 지표면과 무관하게 그대로 남아 겹쳐 보인다.
+        if (extraHoles != null)
+            foreach (var h in extraHoles)
+            {
+                var hp = NtsSupport.ToCleanPolygon(h, gf);
+                if (hp == null || hp.IsEmpty) continue;
+                try { var d2 = donut.Difference(hp); if (!d2.IsEmpty) donut = d2; } catch { }
+            }
 
         for (int i = 0; i + 1 < rings.Count; i++)
         {
@@ -72,7 +118,7 @@ public static class GradingPolygons
     /// 링 런을 못 찾으면 서브아크 3m 버퍼로 폴백. 퇴화 구간은 건너뜀.</summary>
     public static List<(Geometry Poly, int FromBench, int ToBench)> WallZoneWedges(
         IReadOnlyList<Point3> boundary, IReadOnlyList<IReadOnlyList<Point3>> rings,
-        IReadOnlyList<(double T0, double T1, int FromBench, int ToBench)> zones)
+        IReadOnlyList<SlopeZone> zones, double baseSlope = 1.5, double minSlope = 0.05)
     {
         var outp = new List<(Geometry, int, int)>();
         if (boundary == null || boundary.Count < 3 || rings == null || rings.Count == 0 || zones == null) return outp;
@@ -126,7 +172,23 @@ public static class GradingPolygons
                 }
                 catch { continue; }
             }
-            if (poly != null && !poly.IsEmpty) outp.Add((poly, z.FromBench, z.ToBench));
+            // [구간 구배 0804] 구간 안에서 '수직(옹벽)'인 단 구간만 쐐기로 낸다 —
+            //   일반 구배로 바꾼 단은 사면이므로 사면 띠를 그대로 남겨야 한다(옛날엔 구간=전부 옹벽이었다).
+            if (poly == null || poly.IsEmpty) continue;
+            int maxBench = System.Math.Max(1, rings.Count / 2);
+            bool lastIsWall = z.Rules.Count > 0 && z.Rules[z.Rules.Count - 1].Slope <= minSlope + 1e-9;
+            int runStart = -1;
+            for (int b = 0; b <= maxBench; b++)
+            {
+                bool wall = b < maxBench && z.IsWallAt(b, baseSlope, minSlope);
+                if (wall) { if (runStart < 0) runStart = b; }
+                else if (runStart >= 0)
+                {
+                    bool toEnd = b >= maxBench && lastIsWall;
+                    outp.Add((poly, runStart, toEnd ? int.MaxValue : b - 1));
+                    runStart = -1;
+                }
+            }
         }
         return outp;
     }
@@ -167,6 +229,38 @@ public static class GradingPolygons
     {
         var pg = NtsSupport.ToCleanPolygon(boundary);
         return pg == null ? null : ToRings(pg);
+    }
+
+    /// <summary>[다중 구역 0804 — JACK] 계획폴리곤 − 뒤 구역 발자국들 = '최종 지표면에 실제로 남은 계획면'.
+    /// 뒤 구역의 사면이 앞 구역 계획면을 침범하면 그 부분은 더 이상 계획고 평면이 아니다 — 그대로 내보내면
+    /// 계획면.shp가 최종 지표면과 안 맞는다(JACK 스샷). 침범으로 여러 조각이 되면 조각마다 피처.
+    /// 반환: (링 목록, 면적) 피처들 + excluded(빠진 면적 ㎡). 전부 덮였으면 빈 목록.</summary>
+    public static List<(List<IReadOnlyList<Point3>> Rings, double Area)> PlanMinusFootprints(
+        IReadOnlyList<Point3> boundary, IReadOnlyList<IReadOnlyList<Point3>>? holes, out double excluded)
+    {
+        excluded = 0;
+        var outp = new List<(List<IReadOnlyList<Point3>>, double)>();
+        var gf = NtsSupport.Factory();
+        Geometry? g = NtsSupport.ToCleanPolygon(boundary, gf);
+        if (g == null || g.IsEmpty) return outp;
+        double full = g.Area;
+        if (holes != null)
+            foreach (var h in holes)
+            {
+                var hp = NtsSupport.ToCleanPolygon(h, gf);
+                if (hp == null || hp.IsEmpty) continue;
+                try
+                {
+                    var d = g.Difference(hp);
+                    if (d.IsEmpty) { excluded = full; return outp; }   // 전부 덮임
+                    g = d;
+                }
+                catch { }
+            }
+        foreach (var f in ToPolygonFeatures(g)) outp.Add(f);
+        double remain = 0; foreach (var f in outp) remain += f.Item2;
+        excluded = System.Math.Max(0, full - remain);
+        return outp;
     }
 
     /// <summary>finalRing − 계획폴리곤 도넛(NTS Geometry). 실패/비었으면 null —
