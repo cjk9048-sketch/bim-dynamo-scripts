@@ -15,6 +15,7 @@ public sealed class CoordSysProbeCommand
     {
         var doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
+        GradingSettings.SyncToDocument(doc);   // [도면 전환 0803] 도면이 바뀌었으면 그 도면 기준으로 설정·기억 재정렬
         var ed = doc.Editor;
         var db = doc.Database;
         var sb = new System.Text.StringBuilder();

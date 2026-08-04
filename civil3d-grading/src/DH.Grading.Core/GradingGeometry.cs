@@ -41,7 +41,7 @@ public static class GradingGeometry
     /// 계획고 Z는 평면 근사가 아니라 '그 위치에서 가장 가까운 경계 위 점의 Z'(선형보간)를 따른다 —
     /// 3D 폴리선(단차·경사 계획선)도 평균으로 기울지 않고 단차 그대로 정지된다(JACK).</summary>
     public static VirtualSlope Build(IReadOnlyList<Point3> boundary, IGroundSurface ground,
-        GradingParams p, bool up, IReadOnlyList<(double T0, double T1, int FromBench, int ToBench)>? wallZones = null)
+        GradingParams p, bool up, IReadOnlyList<SlopeZone>? wallZones = null)
     {
         if (boundary == null || boundary.Count < 3)
             throw new ArgumentException("계획 부지 외곽선은 최소 3개 정점이 필요합니다.", nameof(boundary));
@@ -184,6 +184,7 @@ public static class GradingGeometry
         }
         var transLines = new List<List<Point3>>();
         foreach (var br in breakRays) transLines.Add(new List<Point3> { new Point3(br.v.X, br.v.Y, br.v.Z) });
+        var lastRayT = new double[breakRays.Count];   // [스파이크 0804] 레이별 직전 교점 거리 — 단조 증가 강제
 
         // 계단 링(오버사이즈) — 원지반 무시, MaxBenches 단까지 끝까지.
         // StepProfile이 각 모서리의 (수평거리 dist, 누적 수직높이 rise)를 정의 — 일반 모드는 사면끝/소단끝 반복,
@@ -195,10 +196,13 @@ public static class GradingGeometry
             QuadrantSegments = 12,
         };
         double slope = Math.Max(up ? p.CutSlope : p.FillSlope, p.MinSlope);
-        var profile = StepProfile.Build(p, slope); // 사면 기본 프로파일(옹벽은 구간별 별도 프로파일로 꿰맴)
+        // [절성토 분리 0803] 단높이·소단폭도 구배와 똑같이 이 방향(up)의 값을 골라 프로파일에 넘긴다.
+        double benchH = p.BenchHeightOf(up);
+        double benchW = p.BenchWidthOf(up);
+        var profile = StepProfile.Build(p, slope, benchH, benchW); // 사면 기본 프로파일(옹벽은 구간별 별도 프로파일로 꿰맴)
         double zdir = up ? 1.0 : -1.0;
 
-        var ringSeq = new List<(double dist, double rise, List<Point3> ring)>(); // 코너 능선 추적용(=TIN에 들어가는 실제 점)
+        var ringSeq = new List<(int e, double dist, double rise, List<Point3> ring)>(); // 코너 능선 추적용(=TIN에 들어가는 실제 점)
 
         // [§75 구간 옹벽 — 0728 최종 설계: 최근접 param 분류 + 조각 조립]
         //   점 분류 = '그 점의 최근접 경계 호길이 param이 구간 [T0,T1] 안인가'(정확한 구간 판정 —
@@ -214,11 +218,13 @@ public static class GradingGeometry
             zprep = new();
             foreach (var z in wallZones)
             {
-                // [사면생성 0729] ToBench = 옹벽 끝단(포함) — 그 위 단은 다시 사면(안쪽으로 당겨진 채 평행 재개).
-                zprep.Add((z.T0, z.T1, Math.Max(z.FromBench, 0),
-                    StepProfile.Build(p, slope, Math.Max(z.FromBench, 0), z.ToBench)));
-                string toTxt = z.ToBench >= int.MaxValue - 1 ? "끝까지" : $"{z.ToBench + 1}단까지";
-                dbg.AppendLine($"  옹벽구간 호길이[{z.T0:F1}..{z.T1:F1}]m — {Math.Max(z.FromBench, 0) + 1}단부터 {toTxt} 수직");
+                if (z == null || z.Rules.Count == 0) continue;
+                zprep.Add((z.T0, z.T1, Math.Max(z.FirstBench, 0), StepProfile.Build(p, slope, benchH, benchW, z)));
+                var txt = new System.Text.StringBuilder();
+                foreach (var r in z.Rules)
+                    txt.Append($"{r.FromBench + 1}단부터 1:{r.Slope:0.###}{(r.Slope <= p.MinSlope + 1e-9 ? "(수직)" : "")}" +
+                               $"·소단{(r.BenchW >= 0 ? $"{r.BenchW:0.##}m" : "전역")}  ");
+                dbg.AppendLine($"  구간 호길이[{z.T0:F1}..{z.T1:F1}]m — {txt}");
             }
         }
 
@@ -267,8 +273,10 @@ public static class GradingGeometry
                 double total = cumB[^1];
                 bool InZ(double t0, double t1, double t) => t0 <= t1 ? (t >= t0 && t <= t1) : (t >= t0 || t <= t1);
                 var act = new List<(double t0, double t1, double wDist)>();
+                // [구간 구배 0804] 종전엔 `< dist`(안쪽으로 당겨질 때만) 였다 — 구간이 수직뿐이라 항상 폭이 좁았기 때문.
+                //   이제 구간 구배가 전역보다 완만할 수 있어 **바깥으로 퍼지는** 경우가 생기므로, 거리가 '다르면' 활성화한다.
                 foreach (var z in zprep)
-                    if (benchOfEdge >= z.fromBench && e < z.wp.Edges.Count && z.wp.Edges[e].dist < dist - 1e-9)
+                    if (benchOfEdge >= z.fromBench && e < z.wp.Edges.Count && Math.Abs(z.wp.Edges[e].dist - dist) > 1e-9)
                         act.Add((z.t0, z.t1, z.wp.Edges[e].dist));
                 if (act.Count > 0)
                 {
@@ -292,11 +300,17 @@ public static class GradingGeometry
             double zOff = zdir * rise;
 
             // [단차 경계 교점 삽입] 각 레이와 이 링의 교점을 정확한 XY로 링에 삽입 — 접힘 위치 보장.
+            // [스파이크 0804 — JACK] 교점 선택 = **가장 가까운 교점(min t)**. 종전엔 '전역 사면 거리와 비슷한 t'
+            //   (|t−dist|)를 골랐는데, 옹벽 구간에선 실제 링이 경계 1~13m 안에 붙어 있어 70m 밖 엉뚱한 사면
+            //   조각에 교점이 꽂혔다 → 그 선이 옹벽 링들을 가로지르고, 교차점 공유정점 삽입이 Z를 링 값으로
+            //   강제해 41m 수직 절벽(스파이크)이 생겼다(진단 maxΔZ 41.032m). 링은 서로 감싸는 구조라
+            //   레이의 '첫 교점'이 곧 그 방향의 실제 표면이다 — 구간이 있든 없든 옳다.
+            //   lastRayT: 링이 바깥으로 갈수록 교점도 바깥으로 — 안쪽 되돌이(연결 점프선 교차)는 버린다.
             var ringHits = new List<(int ray, double px, double py)>();
             for (int rb = 0; rb < breakRays.Count; rb++)
             {
                 var (v, nx, ny) = breakRays[rb];
-                int bestI = -1; double bestScore = double.MaxValue, bpx = 0, bpy = 0;
+                int bestI = -1; double bestT = double.MaxValue, bpx = 0, bpy = 0;
                 for (int si = 0; si < w.Count - 1; si++)
                 {
                     var a = w[si]; var b3 = w[si + 1];
@@ -306,14 +320,14 @@ public static class GradingGeometry
                     double t = (sx * (a.Y - v.Y) - sy * (a.X - v.X)) / den; // 레이 파라미터(바깥 거리)
                     double u = (nx * (a.Y - v.Y) - ny * (a.X - v.X)) / den; // 세그먼트 파라미터
                     if (u < -1e-9 || u > 1 + 1e-9 || t < 0.05) continue;
-                    double score = Math.Abs(t - dist); // 이 링의 오프셋 거리와 가장 맞는 교점
-                    if (score < bestScore)
-                    { bestScore = score; bestI = si; bpx = v.X + nx * t; bpy = v.Y + ny * t; }
+                    if (t <= lastRayT[rb] + 0.01) continue;               // 직전 링 교점보다 안쪽 — 되돌이 배제
+                    if (t < bestT) { bestT = t; bestI = si; bpx = v.X + nx * t; bpy = v.Y + ny * t; }
                 }
-                if (bestI >= 0 && bestScore < dist) // 링 반대편(엉뚱한 교점) 배제
+                if (bestI >= 0)
                 {
                     w.Insert(bestI + 1, new Point3(bpx, bpy, 0));
                     ringHits.Add((rb, bpx, bpy));
+                    lastRayT[rb] = bestT;
                 }
             }
 
@@ -337,7 +351,7 @@ public static class GradingGeometry
             double zMin = double.MaxValue, zMax = double.MinValue;
             foreach (var wp in w) { if (wp.Z < zMin) zMin = wp.Z; if (wp.Z > zMax) zMax = wp.Z; }
             dbg.AppendLine($"  링 d={dist:F1} rise={rise:F1}: 점{w.Count} Z[{zMin:F2}..{zMax:F2}] 완화 {relaxed}점");
-            if (w.Count >= 3) { result.Rings.Add(w); result.HasSlope = true; ringSeq.Add((dist, rise, w)); }
+            if (w.Count >= 3) { result.Rings.Add(w); result.HasSlope = true; ringSeq.Add((e, dist, rise, w)); }
         }
 
         // [코너 능선(힙/계곡) 브레이크라인] 링 자체는 코너가 한 점으로 정확하지만(NTS 검증됨), 링 사이 TIN
@@ -366,14 +380,30 @@ public static class GradingGeometry
 
                 var line = new List<Point3> { new Point3(b.X, b.Y, b.Z) }; // 시작 = 경계 정점의 실제 계획고
                 double px = b.X, py = b.Y, prevDist = 0;
-                foreach (var (dist, rise, ring) in ringSeq)
+                // [스파이크 0804] 이동 상한은 '이 코너 위치의' 링 간격 기준이어야 한다. 전역 사면 거리로 잡으면
+                //   옹벽 구간(링 간격 ~1.25m)에서 21m 점프를 허용해, 구간 이음매의 연결 점프선 꺾임에 추적이
+                //   낚여 엉뚱한 능선이 그려진다 — 코너의 경계 param이 속한 구간 프로파일의 거리로 계산한다.
+                StepProfile? cornerProf = null;
+                if (zprep != null && cumB != null)
+                {
+                    double tb = ParamAt(shape, cumB, b.X, b.Y);
+                    foreach (var z in zprep)
+                    {
+                        bool inz = z.t0 <= z.t1 ? (tb >= z.t0 && tb <= z.t1) : (tb >= z.t0 || tb <= z.t1);
+                        if (inz) { cornerProf = z.wp; break; }
+                    }
+                }
+                foreach (var (eIdx, dist, rise, ring) in ringSeq)
                 {
                     int m = ring.Count;
                     // 닫힘 중복(첫=끝) 제외한 유효 정점 수
                     if (m >= 2 && Math.Abs(ring[0].X - ring[m - 1].X) < 1e-9 && Math.Abs(ring[0].Y - ring[m - 1].Y) < 1e-9) m--;
                     if (m < 3) break;
                     double ringCcw = Math.Sign(SignedArea(ring)); if (ringCcw == 0) ringCcw = 1;
-                    double maxJump = (dist - prevDist) * 3.5 + 0.5; // 코너 정점의 링당 이동 상한(마이터 배율 여유)
+                    double localDist = cornerProf != null && eIdx < cornerProf.Edges.Count
+                        ? cornerProf.Edges[eIdx].dist : dist;
+                    double maxJump = (localDist - prevDist) * 3.5 + 0.5; // 코너 정점의 링당 이동 상한(마이터 배율 여유)
+                    if (maxJump < 0.5) maxJump = 0.5;
                     double bestD2 = maxJump * maxJump; int bestJ = -1;
                     for (int j = 0; j < m; j++)
                     {
@@ -392,7 +422,7 @@ public static class GradingGeometry
                     if (bestJ < 0) break; // 이 단에서 코너 소멸(오목 닫힘/원호화/MitreLimit 폴백) → 중단
                     px = ring[bestJ].X; py = ring[bestJ].Y;
                     line.Add(new Point3(px, py, ring[bestJ].Z)); // Z까지 링 점 그대로 공유
-                    prevDist = dist;
+                    prevDist = localDist;
                 }
                 if (line.Count >= 2) result.CornerLines.Add(line);
                 dbg.AppendLine($"  코너[{i}] ({b.X:F1},{b.Y:F1}) {(reflexCorner ? "오목" : "볼록")} 능선 {line.Count}점");
@@ -718,35 +748,45 @@ public static class GradingGeometry
 /// 계단 프로파일 — 부지 경계에서 바깥으로의 수평거리에 따른 누적 수직높이(절댓값) 모서리 목록.
 /// 일반 모드: (사면끝, 소단끝) 반복. 계단식 산지 모드: 누적 수직이 TerraceInterval에 닿는 단마다 소단 대신
 /// 대소단(폭 TerraceWidth)을 넣고 누적 리셋. 간격이 단높이로 안 떨어지면 마지막 사면을 자투리(간격−누적)로
-/// 줄여 정확히 간격에 맞춘 뒤 대소단. 계단 링 생성과 daylight ray-march가 이 동일 프로파일을 공유한다.
+/// 줄여 정확히 간격에 맞춘 뒤 대소단.
+/// ※ 데이라잇은 별도 계산이 아니라, 이 프로파일로 만든 '오버사이즈 계단 링'을 원지반과 교차시켜 잡는다.
+///   따라서 수직 예산(Build의 maxRise)이 모자라면 링 자체가 원지반에 못 미쳐 교선이 안 잡힌다.
 /// </summary>
 internal sealed class StepProfile
 {
     /// <summary>각 모서리 (수평거리 dist, 누적 수직높이 rise). dist 단조 증가. 사면 구간은 rise 증가, 평탄(소단/대소단)은 rise 동일.</summary>
     public readonly List<(double dist, double rise)> Edges = new();
 
-    /// <summary>마지막 모서리까지의 수평 도달거리(대소단 폭 포함).</summary>
-    public double MaxDist { get; private set; }
-
-    public static StepProfile Build(GradingParams p, double slope, int wallFromBench = -1, int wallToBench = int.MaxValue)
+    /// <param name="benchH">이 방향(절토/성토)의 단높이 — GradingParams.BenchHeightOf(up).</param>
+    /// <param name="benchW">이 방향(절토/성토)의 소단폭 — GradingParams.BenchWidthOf(up).</param>
+    /// <param name="zone">구간 규칙(이 단부터 이 구배). null이면 전 구간 전역 구배.</param>
+    public static StepProfile Build(GradingParams p, double slope, double benchH, double benchW,
+                                    SlopeZone? zone = null)
     {
         var sp = new StepProfile();
-        double maxRise = p.MaxBenches * p.BenchHeight;                     // 전체 수직 상한(안전)
+        // [절성토 분리 0803] 수직 예산은 단높이와 무관한 '실제 표고차'에서 와야 한다(p.MaxRise).
+        //   단 개수 상한(MaxBenches)에 단높이를 곱해 예산을 만들면, 단높이가 작은 쪽이 개수 상한에 걸리는 순간
+        //   예산이 함께 주저앉아 사면이 원지반에 닿기 전에 끊긴다. MaxRise=0(옛 번들)은 종전 식으로 폴백.
+        double maxRise = p.MaxRise > 1e-9 ? p.MaxRise : p.MaxBenches * benchH;   // 전체 수직 상한(안전)
         double interval = p.MountainTerrace ? Math.Max(p.TerraceInterval, 1e-6) : double.PositiveInfinity;
         double terraceW = p.MountainTerrace ? Math.Max(p.TerraceWidth, 0.0) : 0.0;
         double d = 0, totalRise = 0, accH = 0;                            // accH = 대소단 리셋용 누적 수직
-        int guardMax = p.MaxBenches * 4 + 8;                              // 자투리·대소단 추가단 여유
+        // 무한루프 백스톱 — 예산을 이 방향 단높이로 나눈 실제 필요 단수의 4배(+여유). 절토=성토면 종전(MaxBenches×4+8)과 동일.
+        int benchBudget = (int)Math.Ceiling(maxRise / Math.Max(benchH, 1e-6));
+        int guardMax = (int)Math.Min(4000L, benchBudget * 4L + 8);        // 자투리·대소단 추가단 여유
         int benchIdx = 0;                                                 // [§75] 실제 단 index(옹벽 시작단 판정용)
 
         for (int guard = 0; guard < guardMax && totalRise < maxRise - 1e-9; guard++)
         {
+            // [구간 제원 0804] 이 단에 적용할 (구배·소단폭) — 구간 규칙이 있으면 그 값, 없으면 전역값.
+            //   옹벽은 '구배 = 최소구배(1:0.05)'인 규칙의 특수한 경우일 뿐이다.
+            //   단높이는 구간별로 둘 수 없다(링 하나에 표고 하나) — 전역값만 쓴다. SlopeZone.Rules 주석 참조.
+            var (effSlope, effW) = zone != null ? zone.At(benchIdx, slope, benchW) : (slope, benchW);
             double remaining = interval - accH;
-            bool terraceHere = p.MountainTerrace && remaining <= p.BenchHeight + 1e-9; // 이 단에서 간격 도달/초과
-            double rise = terraceHere ? remaining : p.BenchHeight;        // 자투리(간격−누적) 또는 정규 단높이
+            bool terraceHere = p.MountainTerrace && remaining <= benchH + 1e-9; // 이 단에서 간격 도달/초과
+            double rise = terraceHere ? remaining : benchH;               // 자투리(간격−누적) 또는 정규 단높이
             if (rise <= 1e-9) { accH = 0; continue; }                     // 누적이 간격에 딱 떨어진 직후 보호
             if (totalRise + rise > maxRise) rise = maxRise - totalRise;   // 수직 상한 클램프
-            // [§75 옹벽] 이 단이 옹벽 시작단 이상이면 수평폭을 사면 대신 '거의 수직'(MinSlope)으로 → 수직 벽 + 소단 계단.
-            double effSlope = (wallFromBench >= 0 && benchIdx >= wallFromBench && benchIdx <= wallToBench) ? p.MinSlope : slope;
             double run = Math.Max(rise * effSlope, p.MinFaceRun);        // 이 사면(또는 옹벽)의 수평폭
 
             d += run; totalRise += rise;
@@ -760,32 +800,13 @@ internal sealed class StepProfile
             }
             else
             {
-                d += p.BenchWidth;
+                d += effW;                                                // 이 단의 소단폭(구간 규칙 반영)
                 sp.Edges.Add((d, totalRise));                             // 소단 바깥 끝
-                accH += p.BenchHeight;
+                accH += rise;                                             // 클램프됐으면 클램프된 값으로 누적
             }
             benchIdx++;                                                   // [§75] 다음 단
         }
-        sp.MaxDist = d;
         return sp;
-    }
-
-    /// <summary>수평거리 dist에서의 누적 수직높이(절댓값). 사면=선형 보간, 소단/대소단=평탄.</summary>
-    public double RiseAt(double dist)
-    {
-        if (dist <= 0) return 0;
-        double prevD = 0, prevR = 0;
-        foreach (var (d, r) in Edges)
-        {
-            if (dist <= d)
-            {
-                if (r > prevR + 1e-12)                                    // 사면(상승) 구간 → 선형
-                    return prevR + (r - prevR) * ((d - prevD) < 1e-12 ? 1.0 : (dist - prevD) / (d - prevD));
-                return prevR;                                            // 평탄(소단/대소단) 구간
-            }
-            prevD = d; prevR = r;
-        }
-        return prevR;                                                    // 프로파일 끝 너머 → 최종 높이
     }
 }
 

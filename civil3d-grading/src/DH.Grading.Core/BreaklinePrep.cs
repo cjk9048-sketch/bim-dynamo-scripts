@@ -58,6 +58,10 @@ public static class BreaklinePrep
                 double zLine = c.Z + (d.Z - c.Z) * v;           // 보조선 보간 — 완화가 맞으면 z와 거의 동일
                 double gap = System.Math.Abs(z - zLine);
                 if (gap > LastMaxZGap) LastMaxZGap = gap;
+                // [스파이크 0804 — 안전판] Z가 크게 어긋난 교차점은 보조선이 그 자리에서 표면과 무관하다는 뜻 —
+                //   스냅하면 보조선에 링 Z 정점이 박혀 수직 절벽(스파이크)을 '제조'한다(스샷 41m 침봉의 직접 기제).
+                //   삽입을 건너뛰고 Civil3D의 교차 경고(무해)를 감수한다. 정상 상황(완화 일치)에선 gap≈0이라 무영향.
+                if (gap > 2.0) continue;
                 var p = new Point3(x, y, z);
                 double tu = tol / abLen, tv = tol / cdLen;      // 끝점 근접(거리 tol) → 그쪽 삽입 생략
                 if (u > tu && u < 1 - tu) insRing.Add((i, u, p));

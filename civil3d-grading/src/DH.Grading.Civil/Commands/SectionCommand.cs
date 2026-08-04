@@ -1,0 +1,568 @@
+using Autodesk.AutoCAD.ApplicationServices;
+using Autodesk.AutoCAD.Colors;
+using Autodesk.AutoCAD.DatabaseServices;
+using Autodesk.AutoCAD.EditorInput;
+using Autodesk.AutoCAD.Geometry;
+using Autodesk.AutoCAD.Runtime;
+using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
+using AcadEntity = Autodesk.AutoCAD.DatabaseServices.Entity;
+using CivilApp = Autodesk.Civil.ApplicationServices;
+using CivilDb = Autodesk.Civil.DatabaseServices;
+using CivilStyles = Autodesk.Civil.DatabaseServices.Styles;
+
+namespace DH.Grading.Civil.Commands;
+
+/// <summary>
+/// [종단·횡단 — JACK 0731] 정지면 위에 선을 하나 그으면 그 선을 따라 <b>종단면도 + 횡단면도</b>를 만든다(DHSECTION).
+///
+/// 직접 그림을 그리는 게 아니라 <b>Civil3D 정식 객체</b>(선형·종단·측점선·단면뷰)로 만들기 때문에
+///  · 정지면을 고치면 종단·횡단이 자동으로 따라 갱신되고
+///  · Civil3D 기본 라벨·토공량·도면출력 기능을 그대로 쓸 수 있으며
+///  · 원지반과 정지면이 한 그림에 겹쳐 나와 절토/성토가 한눈에 보인다.
+///
+/// 흐름: 선 클릭 → (선형 생성) → 종단 2개 → 종단도 놓을 위치 클릭 → 측점선 → 횡단도 놓을 위치 클릭 → 격자 배치.
+/// 간격·좌우 폭·열 수는 <b>정지옵션</b> 값을 쓴다.
+/// </summary>
+public sealed class SectionCommand
+{
+    internal const string LayerAlign = "DH-종단선";
+    internal const string AlignBase = "DH선형";      // 선형 이름 앞머리(초기화 판정 공용)
+    internal const string GroupBase = "DH횡단";      // 측점선그룹·횡단도 이름 앞머리
+    internal const string ProfGroundName = "DH_원지반";
+    internal const string ProfPadName = "DH_정지면";
+    private const string PadSurfaceBase = "정지면_DH";
+
+    /// <summary>측점선(=횡단도) 개수 상한 — 넘으면 안내하고 중단(도면이 감당 못 할 양 방지).</summary>
+    private const int MaxSections = 200;
+
+    [CommandMethod("DHSECTION")]
+    public void Run()
+    {
+        Document doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        GradingSettings.SyncToDocument(doc);   // [도면 전환 0803] 도면이 바뀌었으면 그 도면 기준으로 설정·기억 재정렬
+        Editor ed = doc.Editor;
+        try { RunCore(doc, ed, doc.Database); }
+        catch (System.Exception ex)
+        {
+            ed.WriteMessage("\n[종단/횡단 오류] " + ex.Message);
+            AcadApp.ShowAlertDialog("종단·횡단 생성 중 오류:\n" + ex.Message);
+            try { DiagLog.Append($"\n■ DHSECTION 오류 — {ex}\n"); } catch { }
+        }
+    }
+
+    private static void RunCore(Document doc, Editor ed, Database db)
+    {
+        var cdoc = CivilApp.CivilApplication.ActiveDocument;
+
+        // ── ① 대상 지표면(원지반·정지면) ─────────────────────────────────────
+        var surfs = FindSurfaces(db, cdoc);
+        if (surfs.Count == 0)
+        {
+            Refuse(ed, "종단·횡단을 만들 지표면이 없습니다.\n\n" +
+                       "먼저 [서버지표면]으로 원지반을 만들거나 [부지정지]를 실행하세요.");
+            return;
+        }
+        ed.WriteMessage("\n[종단/횡단] 대상 지표면: " +
+            string.Join(" · ", surfs.ConvertAll(s => s.Label + "=" + s.SurfName)));
+
+        // ── ② 노선으로 쓸 선 클릭 ────────────────────────────────────────────
+        var peo = new PromptEntityOptions("\n[종단/횡단] 노선으로 쓸 선을 클릭 (Esc=취소): ");
+        peo.SetRejectMessage("\n선(폴리선·2D/3D 폴리선·선분)만 선택할 수 있습니다.");
+        peo.AddAllowedClass(typeof(Polyline), false);
+        peo.AddAllowedClass(typeof(Polyline2d), false);
+        peo.AddAllowedClass(typeof(Polyline3d), false);
+        peo.AddAllowedClass(typeof(Line), false);
+        var per = ed.GetEntity(peo);
+        if (per.Status != PromptStatus.OK) return;
+
+        // ── ③ 선형 생성 ─────────────────────────────────────────────────────
+        //   사용자가 그린 선은 **그대로 두고**, 평면에 눕힌 사본을 하나 만들어 그것으로 선형을 만든다.
+        //   (선형 생성 API가 원본을 지워버리는 옵션밖에 없어서 — 사본을 지우게 해 원본을 지킨다.
+        //    또한 3D 폴리선·선분도 이 경로로 한 번에 처리된다.)
+        ObjectId layerId;
+        using (var tr = db.TransactionManager.StartTransaction())
+        { layerId = EnsureLayer(db, tr, LayerAlign, 4); tr.Commit(); }
+
+        ObjectId flatId = MakeFlatCopy(db, per.ObjectId, layerId, out int nv, out double lineLen);
+        if (flatId.IsNull)
+        {
+            Refuse(ed, "선의 점이 2개 미만이라 노선을 만들 수 없습니다.");
+            return;
+        }
+        if (lineLen < 1.0)
+        {
+            EraseQuiet(db, flatId);
+            Refuse(ed, $"선이 너무 짧습니다({lineLen:F2}m). 1m 이상인 선을 그려 주세요.");
+            return;
+        }
+
+        string alignName = UniqueName(db, cdoc, AlignBase);
+        ObjectId alignId;
+        try
+        {
+            var plo = new CivilDb.PolylineOptions
+            {
+                PlineId = flatId,
+                EraseExistingEntities = true,    // 지워지는 건 **사본** — 사용자 선은 남는다
+                AddCurvesBetweenTangents = false,
+            };
+            alignId = CivilDb.Alignment.Create(
+                cdoc, plo, alignName, ObjectId.Null, layerId,
+                PickStyle(db, cdoc.Styles.AlignmentStyles, "기본", "Standard", "Basic"),
+                PickStyle(db, cdoc.Styles.LabelSetStyles.AlignmentLabelSetStyles, "_없음", "None", "표준", "Standard"));
+        }
+        catch (System.Exception ex)
+        {
+            EraseQuiet(db, flatId);
+            Refuse(ed, "노선(선형)을 만들지 못했습니다.\n" + ex.Message);
+            return;
+        }
+        ed.WriteMessage($"\n[종단/횡단] 선형 '{alignName}' 생성 (길이 {lineLen:F1}m · 점 {nv}개)");
+
+        // ── ④ 종단 2개(원지반·정지면) ────────────────────────────────────────
+        ObjectId profStyle = PickStyle(db, cdoc.Styles.ProfileStyles, "기본", "Standard", "Basic");
+        ObjectId profLabels = PickStyle(db, cdoc.Styles.LabelSetStyles.ProfileLabelSetStyles, "_없음", "None", "표준", "Standard");
+        int nProf = 0;
+        foreach (var s in surfs)
+        {
+            try
+            {
+                CivilDb.Profile.CreateFromSurface(s.ProfileName, alignId, s.SurfId, layerId, profStyle, profLabels);
+                nProf++;
+            }
+            catch (System.Exception ex)
+            { ed.WriteMessage($"\n  · 종단 '{s.ProfileName}' 생성 실패 — {ex.Message}"); }
+        }
+        if (nProf == 0)
+        {
+            Refuse(ed, "종단을 하나도 만들지 못했습니다.\n선이 지표면 범위 밖일 수 있습니다.");
+            return;
+        }
+
+        // ── ⑤ 종단도 배치 ───────────────────────────────────────────────────
+        var pvPt = ed.GetPoint("\n[종단/횡단] 종단면도를 놓을 위치 클릭 (Esc=종단만 만들고 끝): ");
+        if (pvPt.Status != PromptStatus.OK)
+        {
+            Done(ed, $"선형 '{alignName}' · 종단 {nProf}개 생성(종단도 배치는 건너뜀)");
+            return;
+        }
+        try { CivilDb.ProfileView.Create(alignId, pvPt.Value.TransformBy(ed.CurrentUserCoordinateSystem)); }
+        catch (System.Exception ex)
+        {
+            ed.WriteMessage("\n  · 종단면도 생성 실패 — " + ex.Message);
+            AcadApp.ShowAlertDialog("종단면도를 만들지 못했습니다.\n" + ex.Message +
+                                    "\n\n선형과 종단은 만들어졌으니 Civil3D 기본 기능으로도 배치할 수 있습니다.");
+        }
+
+        // ── ⑥ 측점선(횡단 위치) ─────────────────────────────────────────────
+        double interval = System.Math.Max(0.5, GradingSettings.XsecInterval);
+        double wl = System.Math.Max(0.0, GradingSettings.XsecLeft);
+        double wr = System.Math.Max(0.0, GradingSettings.XsecRight);
+        if (wl + wr < 0.5) { wl = wr = 30.0; }
+
+        var cuts = PlanSampleLines(db, alignId, interval, wl, wr, out double stStart, out double stEnd);
+        if (cuts.Count == 0)
+        {
+            Done(ed, $"선형 '{alignName}' · 종단 {nProf}개 · 종단면도 완료 (횡단 위치를 잡지 못해 횡단은 생략)");
+            return;
+        }
+        if (cuts.Count > MaxSections)
+        {
+            AcadApp.ShowAlertDialog(
+                $"횡단이 {cuts.Count}개나 됩니다(간격 {interval:0.#}m · 노선 {lineLen:F0}m).\n" +
+                $"도면이 감당하기 어려워 횡단은 만들지 않았습니다.\n\n" +
+                $"정지옵션에서 '횡단 간격'을 늘린 뒤 다시 실행하세요(예 {System.Math.Ceiling(lineLen / 50)}m 이상).");
+            Done(ed, $"선형 '{alignName}' · 종단 {nProf}개 · 종단면도 완료 (횡단 {cuts.Count}개 → 상한 초과로 생략)");
+            return;
+        }
+
+        string groupName = UniqueName(db, cdoc, GroupBase);
+        ObjectId groupId;
+        try { groupId = CivilDb.SampleLineGroup.Create(groupName, alignId); }
+        catch (System.Exception ex)
+        {
+            ed.WriteMessage("\n  · 측점선 그룹 생성 실패 — " + ex.Message);
+            Done(ed, $"선형 '{alignName}' · 종단 {nProf}개 · 종단면도 완료 (횡단 실패: {ex.Message})");
+            return;
+        }
+
+        // 이 그룹이 표본으로 삼을 지표면 = 우리 두 지표면만 켠다.
+        int nSrc = 0;
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var g = (CivilDb.SampleLineGroup)tr.GetObject(groupId, OpenMode.ForWrite);
+            foreach (CivilDb.SectionSource src in g.GetSectionSources())
+            {
+                bool ours = surfs.Exists(s => s.SurfId == src.SourceId);
+                try { src.IsSampled = ours; if (ours) nSrc++; } catch { }
+            }
+            tr.Commit();
+        }
+        catch (System.Exception ex) { ed.WriteMessage("\n  · 표본 지표면 지정 경고 — " + ex.Message); }
+
+        int nSl = 0;
+        var slIds = new System.Collections.Generic.List<ObjectId>();
+        for (int i = 0; i < cuts.Count; i++)
+        {
+            try
+            {
+                var pts = new Point2dCollection { cuts[i].Left, cuts[i].Right };
+                ObjectId slId = CivilDb.SampleLine.Create($"{groupName}_{i + 1}", groupId, pts);
+                if (!slId.IsNull) { slIds.Add(slId); nSl++; }
+            }
+            catch (System.Exception ex)
+            { if (nSl == 0) ed.WriteMessage($"\n  · 측점선 생성 실패(첫 실패 St.{cuts[i].Station:F1}) — {ex.Message}"); }
+        }
+        ed.WriteMessage($"\n[종단/횡단] 측점선 {nSl}개 (간격 {interval:0.#}m · 좌 {wl:0.#}m / 우 {wr:0.#}m · 표본 지표면 {nSrc}개)");
+        if (nSl == 0)
+        {
+            Done(ed, $"선형 '{alignName}' · 종단 {nProf}개 · 종단면도 완료 (측점선 생성 실패)");
+            return;
+        }
+
+        // ── ⑦ 횡단도 격자 배치 ──────────────────────────────────────────────
+        var svPt = ed.GetPoint("\n[종단/횡단] 횡단면도를 놓을 위치(왼쪽 위) 클릭 (Esc=측점선까지만): ");
+        if (svPt.Status != PromptStatus.OK)
+        {
+            Done(ed, $"선형 '{alignName}' · 종단 {nProf}개 · 종단면도 · 측점선 {nSl}개 (횡단도 배치는 건너뜀)");
+            return;
+        }
+        int nSv = PlaceSectionViews(db, ed, slIds, groupName,
+                                    svPt.Value.TransformBy(ed.CurrentUserCoordinateSystem),
+                                    System.Math.Max(1, GradingSettings.XsecCols), wl + wr);
+
+        ed.Regen();
+        string msg = $"선형 '{alignName}' · 종단 {nProf}개 · 종단면도 1개 · 측점선 {nSl}개 · 횡단면도 {nSv}개";
+        Done(ed, msg);
+        AcadApp.ShowAlertDialog("종단·횡단 생성 완료\n\n" + msg +
+            $"\n\n· 횡단 간격 {interval:0.#}m · 좌 {wl:0.#}m / 우 {wr:0.#}m · 가로 {GradingSettings.XsecCols}개씩" +
+            "\n· 간격·폭·열 수는 [정지옵션]에서 바꿉니다." +
+            "\n· 정지면을 고치면 종단·횡단은 Civil3D가 자동으로 갱신합니다.");
+        try { DiagLog.Append($"\n■ DHSECTION — {msg} · 간격{interval} 좌{wl} 우{wr} St.{stStart:F1}~{stEnd:F1}\n"); } catch { }
+    }
+
+    // ── 지표면 찾기 ──────────────────────────────────────────────────────────
+
+    /// <summary>종단에 쓸 지표면(원지반·정지면) — 있는 것만 모은다.</summary>
+    private readonly record struct SurfPick(ObjectId SurfId, string SurfName, string ProfileName, string Label);
+
+    private static System.Collections.Generic.List<SurfPick> FindSurfaces(Database db, CivilApp.CivilDocument cdoc)
+    {
+        var list = new System.Collections.Generic.List<SurfPick>();
+        ObjectId ground = ObjectId.Null, pad = ObjectId.Null;
+        string groundNm = "", padNm = "";
+
+        using var tr = db.TransactionManager.StartTransaction();
+        foreach (ObjectId sid in cdoc.GetSurfaceIds())
+        {
+            string nm;
+            try
+            {
+                if (tr.GetObject(sid, OpenMode.ForRead) is not CivilDb.Surface s) continue;
+                nm = s.Name;
+            }
+            catch { continue; }
+
+            // 정지면_DH(또는 정지면_DH_N) — 가장 마지막 것을 쓴다.
+            if (IsBase(nm, PadSurfaceBase)) { pad = sid; padNm = nm; continue; }
+            // 원지반(서버지표면이 만든 것) 우선
+            if (IsBase(nm, ImportGisCommand.GroundSurfaceName)) { ground = sid; groundNm = nm; }
+        }
+
+        // 원지반이 없으면 — 우리 산출물이 아닌 지표면 중 삼각형이 가장 많은 것을 원지반으로 본다(DHINFRA와 같은 규칙).
+        if (ground.IsNull)
+        {
+            int best = -1;
+            foreach (ObjectId sid in cdoc.GetSurfaceIds())
+            {
+                try
+                {
+                    if (tr.GetObject(sid, OpenMode.ForRead) is not CivilDb.TinSurface ts) continue;
+                    string nm = ts.Name;
+                    if (nm.Contains("_DH") || IsBase(nm, PadSurfaceBase)) continue;   // DH 산출물 제외
+                    int n = 0; try { n = ts.Triangles.Count; } catch { }
+                    if (n > best) { best = n; ground = sid; groundNm = nm; }
+                }
+                catch { }
+            }
+        }
+        tr.Commit();
+
+        if (!ground.IsNull) list.Add(new SurfPick(ground, groundNm, ProfGroundName, "원지반"));
+        if (!pad.IsNull) list.Add(new SurfPick(pad, padNm, ProfPadName, "정지면"));
+        return list;
+    }
+
+    /// <summary>이름이 baseName 또는 baseName_숫자 인가.</summary>
+    private static bool IsBase(string nm, string baseName) =>
+        nm == baseName ||
+        (nm.StartsWith(baseName + "_") && int.TryParse(nm.Substring(baseName.Length + 1), out _));
+
+    // ── 선 → 평면 사본 ───────────────────────────────────────────────────────
+
+    /// <summary>선택한 선을 평면(Z=0)에 눕힌 폴리선 사본으로 만든다. 원본은 건드리지 않는다.
+    ///
+    /// 주의 두 가지:
+    ///  · 옛날식 폴리선(2D/3D)에 스플라인이 걸려 있으면 화면에 보이지 않는 <b>조종점</b>이 정점 목록에 섞여 있다.
+    ///    그대로 주워 담으면 노선이 그린 모양과 다르게 휘는데 오류도 안 나서 알아채기 어렵다 → 조종점은 뺀다.
+    ///  · 호(둥근 구간)는 <b>bulge</b> 값에 들어 있다. 안 옮기면 곡선 노선이 직선으로 펴져버린다 → 같이 옮긴다.</summary>
+    private static ObjectId MakeFlatCopy(Database db, ObjectId srcId, ObjectId layerId, out int nv, out double len)
+    {
+        nv = 0; len = 0;
+        var pts = new System.Collections.Generic.List<(Point2d P, double B)>();   // B=bulge(호 정도, 0=직선)
+        using var tr = db.TransactionManager.StartTransaction();
+        try
+        {
+            switch (tr.GetObject(srcId, OpenMode.ForRead))
+            {
+                case Polyline lw:   // 요즘 폴리선(LWPOLYLINE) — 호는 bulge로 들고 있다
+                    for (int i = 0; i < lw.NumberOfVertices; i++)
+                        pts.Add((lw.GetPoint2dAt(i), SafeBulge(lw, i)));
+                    if (lw.Closed && pts.Count > 1) pts.Add((pts[0].P, 0.0));
+                    break;
+                case Polyline3d p3:   // 3D 폴리선 — 구간은 항상 직선(bulge 없음)
+                    foreach (ObjectId vid in p3)
+                        if (tr.GetObject(vid, OpenMode.ForRead) is PolylineVertex3d v &&
+                            v.VertexType != Vertex3dType.ControlVertex)          // 조종점 제외
+                            pts.Add((new Point2d(v.Position.X, v.Position.Y), 0.0));
+                    if (p3.Closed && pts.Count > 1) pts.Add((pts[0].P, 0.0));
+                    break;
+                case Polyline2d p2:   // 옛날식 2D 폴리선
+                    foreach (ObjectId vid in p2)
+                        if (tr.GetObject(vid, OpenMode.ForRead) is Vertex2d v &&
+                            v.VertexType != Vertex2dType.SplineControlVertex)     // 조종점 제외
+                            pts.Add((new Point2d(v.Position.X, v.Position.Y), v.Bulge));
+                    if (p2.Closed && pts.Count > 1) pts.Add((pts[0].P, 0.0));
+                    break;
+                case Line ln:
+                    pts.Add((new Point2d(ln.StartPoint.X, ln.StartPoint.Y), 0.0));
+                    pts.Add((new Point2d(ln.EndPoint.X, ln.EndPoint.Y), 0.0));
+                    break;
+            }
+        }
+        catch { }
+
+        // 겹친 점 제거(선형 생성이 0길이 구간을 싫어한다). 겹친 점을 버릴 때 그 점의 호 정보도 같이 버린다.
+        var clean = new System.Collections.Generic.List<(Point2d P, double B)>();
+        foreach (var v in pts)
+            if (clean.Count == 0 || clean[clean.Count - 1].P.GetDistanceTo(v.P) > 1e-6) clean.Add(v);
+        nv = clean.Count;
+        if (clean.Count < 2) { tr.Commit(); return ObjectId.Null; }
+        for (int i = 1; i < clean.Count; i++) len += clean[i - 1].P.GetDistanceTo(clean[i].P);
+
+        var pl = new Polyline(clean.Count);
+        for (int i = 0; i < clean.Count; i++) pl.AddVertexAt(i, clean[i].P, clean[i].B, 0, 0);
+        pl.Elevation = 0;
+        pl.LayerId = layerId;
+        var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+        ms.AppendEntity(pl);
+        tr.AddNewlyCreatedDBObject(pl, true);
+        ObjectId id = pl.ObjectId;
+        tr.Commit();
+        return id;
+    }
+
+    /// <summary>LWPOLYLINE의 호(bulge) 읽기 — 마지막 정점 등에서 예외가 날 수 있어 감싼다.</summary>
+    private static double SafeBulge(Polyline lw, int i)
+    { try { return lw.GetBulgeAt(i); } catch { return 0.0; } }
+
+    // ── 측점선 위치 계산 ─────────────────────────────────────────────────────
+
+    private readonly record struct Cut(double Station, Point2d Left, Point2d Right);
+
+    /// <summary>선형을 따라 간격마다 좌/우 폭 지점 2개를 뽑는다(폭을 확실히 제어하려고 좌표 방식 사용).</summary>
+    private static System.Collections.Generic.List<Cut> PlanSampleLines(
+        Database db, ObjectId alignId, double interval, double wl, double wr,
+        out double stStart, out double stEnd)
+    {
+        var list = new System.Collections.Generic.List<Cut>();
+        stStart = stEnd = 0;
+        using var tr = db.TransactionManager.StartTransaction();
+        try
+        {
+            var al = (CivilDb.Alignment)tr.GetObject(alignId, OpenMode.ForRead);
+            stStart = al.StartingStation;
+            stEnd = al.EndingStation;
+            // 시작/끝은 선형 끄트머리에서 아주 살짝 안쪽으로(끝점 정확히에서 법선 계산이 실패하는 경우 방지)
+            const double eps = 0.001;
+            for (double s = stStart; s <= stEnd + 1e-9; s += interval)
+            {
+                double st = System.Math.Min(System.Math.Max(s, stStart + eps), stEnd - eps);
+                if (TryCut(al, st, wl, wr, out var c)) list.Add(c);
+            }
+            // 마지막 측점이 끝에서 멀면 끝단도 하나 추가
+            if (list.Count > 0 && stEnd - list[list.Count - 1].Station > interval * 0.25)
+                if (TryCut(al, stEnd - eps, wl, wr, out var cEnd)) list.Add(cEnd);
+        }
+        catch { }
+        tr.Commit();
+        return list;
+    }
+
+    private static bool TryCut(CivilDb.Alignment al, double st, double wl, double wr, out Cut cut)
+    {
+        cut = default;
+        try
+        {
+            // offset 부호: 양수 = 진행방향 오른쪽 (Civil3D 규약). 이 API는 out이 아니라 ref라 미리 초기화한다.
+            double le = 0, ln = 0, re = 0, rn = 0;
+            al.PointLocation(st, -wl, ref le, ref ln);
+            al.PointLocation(st, wr, ref re, ref rn);
+            var L = new Point2d(le, ln);
+            var R = new Point2d(re, rn);
+            if (L.GetDistanceTo(R) < 0.1) return false;
+            cut = new Cut(st, L, R);
+            return true;
+        }
+        catch { return false; }
+    }
+
+    // ── 횡단도 격자 배치 ─────────────────────────────────────────────────────
+
+    /// <summary>측점선마다 횡단도를 만들어 가로 cols개씩 격자로 놓는다. 칸 크기는 만들어진 뷰의 실제 크기로 잰다.</summary>
+    private static int PlaceSectionViews(Database db, Editor ed,
+        System.Collections.Generic.List<ObjectId> slIds, string groupName,
+        Point3d origin, int cols, double totalWidth)
+    {
+        double gap = System.Math.Max(5.0, totalWidth * 0.15);   // 칸 사이 여백
+        double cellW = totalWidth + gap;                        // 첫 뷰를 재기 전 임시값
+        double rowH = 0, maxRowH = 0;
+        int made = 0, col = 0;
+        double x = origin.X, y = origin.Y;
+
+        for (int i = 0; i < slIds.Count; i++)
+        {
+            ObjectId svId;
+            try { svId = CivilDb.SectionView.Create($"{groupName}_횡단_{i + 1}", slIds[i], new Point3d(x, y, 0)); }
+            catch (System.Exception ex)
+            {
+                if (made == 0) ed.WriteMessage($"\n  · 횡단면도 생성 실패(첫 실패 {i + 1}번) — {ex.Message}");
+                continue;
+            }
+            made++;
+
+            // 실제 크기 측정 → 다음 칸 위치에 반영(스타일·축척이 도면마다 달라 고정값을 쓰면 겹치거나 벌어진다)
+            double w = cellW, h = rowH;
+            try
+            {
+                using var tr = db.TransactionManager.StartTransaction();
+                var ext = ((AcadEntity)tr.GetObject(svId, OpenMode.ForRead)).GeometricExtents;
+                w = ext.MaxPoint.X - ext.MinPoint.X;
+                h = ext.MaxPoint.Y - ext.MinPoint.Y;
+                tr.Commit();
+            }
+            catch { }
+            if (w > 0.1) cellW = w + gap;
+            if (h > maxRowH) maxRowH = h;
+
+            col++;
+            if (col >= cols)
+            {
+                col = 0;
+                x = origin.X;
+                y -= (maxRowH > 0.1 ? maxRowH : 40.0) + gap;   // 다음 줄은 아래로
+                maxRowH = 0;
+            }
+            else x += cellW;
+        }
+        return made;
+    }
+
+    // ── 공통 ────────────────────────────────────────────────────────────────
+
+    /// <summary>스타일 고르기 — 이름에 후보 문자열이 든 것 우선, 없으면 첫 번째. 하나도 없으면 Null.</summary>
+    private static ObjectId PickStyle(Database db, System.Collections.IEnumerable styleIds, params string[] prefer)
+    {
+        ObjectId first = ObjectId.Null;
+        var all = new System.Collections.Generic.List<(ObjectId Id, string Name)>();
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            foreach (ObjectId id in styleIds)
+            {
+                if (first.IsNull) first = id;
+                try
+                {
+                    if (tr.GetObject(id, OpenMode.ForRead) is CivilStyles.StyleBase sb)
+                        all.Add((id, sb.Name ?? ""));
+                }
+                catch { }
+            }
+            tr.Commit();
+        }
+        catch { }
+        foreach (var want in prefer)
+            foreach (var (id, nm) in all)
+                if (nm.IndexOf(want, System.StringComparison.OrdinalIgnoreCase) >= 0) return id;
+        return first;
+    }
+
+    /// <summary>선형/그룹 이름 중복 회피 — DH선형_1, DH선형_2 …</summary>
+    private static string UniqueName(Database db, CivilApp.CivilDocument cdoc, string baseName)
+    {
+        var used = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            foreach (ObjectId aid in cdoc.GetAlignmentIds())
+            {
+                try
+                {
+                    if (tr.GetObject(aid, OpenMode.ForRead) is not CivilDb.Alignment al) continue;
+                    used.Add(al.Name);
+                    foreach (ObjectId gid in al.GetSampleLineGroupIds())
+                        try
+                        {
+                            if (tr.GetObject(gid, OpenMode.ForRead) is CivilDb.SampleLineGroup g) used.Add(g.Name);
+                        }
+                        catch { }
+                }
+                catch { }
+            }
+            tr.Commit();
+        }
+        catch { }
+        for (int i = 1; i < 10000; i++)
+        {
+            string nm = $"{baseName}_{i}";
+            if (!used.Contains(nm)) return nm;
+        }
+        return baseName + "_X";
+    }
+
+    private static ObjectId EnsureLayer(Database db, Transaction tr, string name, short aci)
+    {
+        var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+        if (lt.Has(name)) return lt[name];
+        lt.UpgradeOpen();
+        var ltr = new LayerTableRecord { Name = name, Color = Color.FromColorIndex(ColorMethod.ByAci, aci) };
+        ObjectId id = lt.Add(ltr);
+        tr.AddNewlyCreatedDBObject(ltr, true);
+        return id;
+    }
+
+    private static void EraseQuiet(Database db, ObjectId id)
+    {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            (tr.GetObject(id, OpenMode.ForWrite) as AcadEntity)?.Erase();
+            tr.Commit();
+        }
+        catch { }
+    }
+
+    private static void Refuse(Editor ed, string msg)
+    {
+        ed.WriteMessage("\n[종단/횡단] " + msg.Replace("\n", " "));
+        AcadApp.ShowAlertDialog(msg);
+    }
+
+    private static void Done(Editor ed, string msg)
+    {
+        ed.WriteMessage("\n[종단/횡단] " + msg);
+        try { DiagLog.Append($"\n■ DHSECTION — {msg}\n"); } catch { }
+    }
+}

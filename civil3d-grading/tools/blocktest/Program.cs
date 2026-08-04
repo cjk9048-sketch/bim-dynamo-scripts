@@ -394,7 +394,8 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
         new(240326.249,450487.073,100), new(240326.249,450456.946,100),
     };
     var pr = new GradingParams {
-        BenchHeight = 5, BenchWidth = 1, CutSlope = 0.05, FillSlope = 0.05,
+        CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 0.05, FillSlope = 0.05,
         CellSize = 0.5, MaxBenches = 50, VertexSpacing = 1.0, MinSlope = 0.05,
         MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
     };
@@ -475,7 +476,8 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
         new(240304.897,450392.323,100), new(240304.897,450458.594,100),
         new(240281.147,450458.432,100), new(240280.951,450487.073,100),
         new(240326.249,450487.073,100), new(240326.249,450456.946,100) };
-    var pr = new GradingParams { BenchHeight = 5, BenchWidth = 1, CutSlope = 0.05, FillSlope = 0.05,
+    var pr = new GradingParams { CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 0.05, FillSlope = 0.05,
         CellSize = 0.5, MaxBenches = 50, VertexSpacing = 1.0, MinSlope = 0.05, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0 };
     var vs = GradingGeometry.Build(bnd, new FlatGround(200), pr, true);
     var rl = vs.Rings.Select(r => (IReadOnlyList<Point3>)r).ToList();
@@ -510,6 +512,346 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
         Check("S12 ★성토 코너블록 앞면 무돌출(면블록 이내)", cornMax <= faceMax + D * 0.75 + 1e-6,
             $"코너이탈 {cornMax:F2} vs 면이탈 {faceMax:F2}");
     }
+}
+
+// ★ S13 [v16.6] 절성토 단높이 분리 — '작은 쪽' 단높이가 '큰 쪽' 사면의 수직 예산을 깎지 않아야 한다.
+//   단 개수 상한(MaxBenches)과 높이 예산(MaxRise)을 곱셈으로 묶으면, 성토 1m가 개수 상한 50에 걸리는 순간
+//   절토 예산까지 50×1=50m로 주저앉아 55m 표고차에 못 닿는다(사면 잘림·구멍). 그 회귀를 잡는 테스트.
+{
+    var sq = new List<Point3> { new(0, 0, 120), new(60, 0, 120), new(60, 60, 120), new(0, 60, 120) };
+    const double maxDiff = 55, spare = 2, bigBench = 5;
+    var pa = new GradingParams
+    {
+        CutBenchHeight = bigBench, FillBenchHeight = 1, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 1.5, FillSlope = 1.5, CellSize = 1.0,
+        MaxBenches = 50,                             // 필요 단수 57 > 50 → 개수 상한에 걸리는 조건
+        MaxRise = maxDiff + spare * bigBench,        // BuildParams와 동일한 예산식(표고차 + 여유)
+        VertexSpacing = 2.0, MinSlope = 0.05, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+    foreach (var (up, label) in new[] { (true, "절토(5m)"), (false, "성토(1m)") })
+    {
+        var v = GradingGeometry.Build(sq, new FlatGround(up ? 175 : 65), pa, up);
+        double reach = v.Rings.Count == 0 ? 0 : v.Rings.Max(r => r.Max(q => Math.Abs(q.Z - 120)));
+        Check($"S13 ★{label} 수직 예산 {maxDiff}m 도달", reach >= maxDiff - 1e-6, $"도달 {reach:F1}m");
+    }
+}
+
+// ★ S14 [v16.7] 사면 변환(DHSLOPE)의 '전체옹벽 → 전역사면 + 여집합 옹벽' 등가 변환 근거.
+//   A(전역 구배 0.05, 구간 없음) 와 B(전역 구배 1.5, 둘레 전체가 옹벽 구간) 은 같은 형상이어야 한다.
+//   이게 성립해야 "일부만 사면으로 되돌리기"를 기존 표현(사면+옹벽구간)으로 바꿔 표현할 수 있다.
+{
+    var sq = new List<Point3> { new(0, 0, 100), new(60, 0, 100), new(60, 60, 100), new(0, 60, 100) };
+    GradingParams P(double cutSlope) => new()
+    {
+        CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = cutSlope, FillSlope = 1.5, CellSize = 1.0,
+        MaxBenches = 20, MaxRise = 60,
+        VertexSpacing = 2.0, MinSlope = 0.05, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+    static double Area(IReadOnlyList<Point3> r)
+    {
+        double a = 0;
+        for (int i = 0, j = r.Count - 1; i < r.Count; j = i++) a += r[j].X * r[i].Y - r[i].X * r[j].Y;
+        return Math.Abs(a) * 0.5;
+    }
+    static double AvgZ(IReadOnlyList<Point3> r) { double s = 0; foreach (var q in r) s += q.Z; return s / r.Count; }
+
+    double L = GradingGeometry.CumLen2D(sq)[^1];
+    var ground = new FlatGround(140);   // 절토 40m
+
+    var vA = GradingGeometry.Build(sq, ground, P(0.05), true);                       // 전역 수직, 구간 없음
+    var zAll = new List<SlopeZone> { SlopeZone.Wall(0.0, L, 0, int.MaxValue, 0.05, 1.5) };
+    var vB = GradingGeometry.Build(sq, ground, P(1.5), true, zAll);                  // 전역 사면 + 둘레 전체 옹벽
+
+    Check("S14 등가변환 링 개수 일치", vA.Rings.Count == vB.Rings.Count, $"A {vA.Rings.Count} / B {vB.Rings.Count}");
+    if (vA.Rings.Count == vB.Rings.Count)
+    {
+        double dAreaMax = 0, dZMax = 0;
+        for (int i = 0; i < vA.Rings.Count; i++)
+        {
+            dAreaMax = Math.Max(dAreaMax, Math.Abs(Area(vA.Rings[i]) - Area(vB.Rings[i])));
+            dZMax = Math.Max(dZMax, Math.Abs(AvgZ(vA.Rings[i]) - AvgZ(vB.Rings[i])));
+        }
+        Check("S14 ★등가변환 면적 동일(전체옹벽 보존)", dAreaMax < 0.5, $"최대 면적차 {dAreaMax:F3}㎡");
+        Check("S14 ★등가변환 표고 동일", dZMax < 1e-6, $"최대 표고차 {dZMax:E1}m");
+    }
+
+    // C: 둘레 1/4만 3단(index 2)부터 사면으로 되돌림 — 그 구간이 바깥으로 퍼져 마지막 링 면적이 커져야 한다.
+    var zC = new List<SlopeZone>
+    {
+        SlopeZone.Wall(0.0, L * 0.25, 0, 1, 0.05, 1.5),              // 선택 구간: 2단까지만 옹벽 → 3단부터 사면
+        SlopeZone.Wall(L * 0.25, L, 0, int.MaxValue, 0.05, 1.5),     // 여집합: 끝까지 옹벽(종전 그대로)
+    };
+    var vC = GradingGeometry.Build(sq, ground, P(1.5), true, zC);
+    double aA = Area(vA.Rings[^1]), aC = Area(vC.Rings[^1]);
+    Check("S14 ★부분 사면 복귀가 실제로 퍼짐", aC > aA * 1.05, $"전체옹벽 {aA:F0}㎡ → 부분사면 {aC:F0}㎡");
+}
+
+// ★ S15 [구간 구배] 전역보다 '완만한' 구배를 준 구간은 **바깥으로 퍼진다**.
+//   종전 구간(옹벽)은 항상 안쪽으로만 당겨졌고 링 조립 코드도 그 방향만 검증돼 있었다 —
+//   이번 기능의 유일한 미지 위험이라 여기서 정면으로 확인한다.
+{
+    var sq = new List<Point3> { new(0, 0, 100), new(60, 0, 100), new(60, 60, 100), new(0, 60, 100) };
+    var pr = new GradingParams
+    {
+        CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 1.5, FillSlope = 1.5, CellSize = 1.0, MaxBenches = 20, MaxRise = 60,
+        VertexSpacing = 2.0, MinSlope = 0.05, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+    var cum = GradingGeometry.CumLen2D(sq);
+    double L = cum[^1];
+    var ground = new FlatGround(140);
+
+    static double DistToBnd(Point3 q, IReadOnlyList<Point3> b)
+    {
+        double best = double.MaxValue;
+        for (int i = 0, j = b.Count - 1; i < b.Count; j = i++)
+        {
+            double ax = b[j].X, ay = b[j].Y, bx = b[i].X, by = b[i].Y;
+            double dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+            double t = len2 < 1e-12 ? 0 : Math.Clamp(((q.X - ax) * dx + (q.Y - ay) * dy) / len2, 0, 1);
+            double px = ax + dx * t - q.X, py = ay + dy * t - q.Y;
+            best = Math.Min(best, Math.Sqrt(px * px + py * py));
+        }
+        return best;
+    }
+    static double Area2(IReadOnlyList<Point3> r)
+    {
+        double a = 0;
+        for (int i = 0, j = r.Count - 1; i < r.Count; j = i++) a += r[j].X * r[i].Y - r[i].X * r[j].Y;
+        return Math.Abs(a) * 0.5;
+    }
+
+    // ① 3단(index 2)부터 1:3.0 — 전역 1:1.5보다 완만하므로 그 구간이 바깥으로 퍼져야 한다.
+    var zg = new SlopeZone { T0 = 0.0, T1 = L * 0.25 };
+    zg.Rules.Add((2, 3.0, -1));
+    zg.Normalize();
+    var v = GradingGeometry.Build(sq, ground, pr, true, new List<SlopeZone> { zg });
+    Check("S15 완만 구간 링 생성", v.HasSlope && v.Rings.Count > 6, $"링 {v.Rings.Count}");
+
+    if (v.HasSlope && v.Rings.Count > 6)
+    {
+        var last = v.Rings[^1];
+        double inMax = 0, outMax = 0;
+        foreach (var q in last)
+        {
+            double t = GradingGeometry.ParamAt(sq, cum, q.X, q.Y);
+            double d = DistToBnd(q, sq);
+            if (t >= 0 && t <= L * 0.25) inMax = Math.Max(inMax, d); else outMax = Math.Max(outMax, d);
+        }
+        Check("S15 ★완만 구간이 바깥으로 퍼짐", inMax > outMax * 1.15,
+            $"구간안 {inMax:F0}m vs 구간밖 {outMax:F0}m");
+
+        bool mono = true;
+        for (int i = 1; i < v.Rings.Count; i++)
+            if (Area2(v.Rings[i]) < Area2(v.Rings[i - 1]) - 1e-6) mono = false;
+        Check("S15 ★링이 바깥으로 단조 증가(자기교차 없음)", mono);
+    }
+
+    // ② 층층이 — 1단부터 1:1.0(급함), 3단부터 1:3.0(완만). JACK이 고른 사용 방식.
+    var zl = new SlopeZone { T0 = 0.0, T1 = L * 0.25 };
+    zl.Rules.Add((0, 1.0, -1));
+    zl.Rules.Add((2, 3.0, -1));
+    zl.Normalize();
+    Check("S15 층층이 규칙 1단=1:1.0", Math.Abs(zl.SlopeAt(0, 1.5) - 1.0) < 1e-9, $"{zl.SlopeAt(0, 1.5)}");
+    Check("S15 층층이 규칙 2단=1:1.0", Math.Abs(zl.SlopeAt(1, 1.5) - 1.0) < 1e-9, $"{zl.SlopeAt(1, 1.5)}");
+    Check("S15 층층이 규칙 3단=1:3.0", Math.Abs(zl.SlopeAt(2, 1.5) - 3.0) < 1e-9, $"{zl.SlopeAt(2, 1.5)}");
+    Check("S15 층층이 규칙 5단=1:3.0", Math.Abs(zl.SlopeAt(4, 1.5) - 3.0) < 1e-9, $"{zl.SlopeAt(4, 1.5)}");
+    var vl = GradingGeometry.Build(sq, ground, pr, true, new List<SlopeZone> { zl });
+    Check("S15 ★층층이 링 생성", vl.HasSlope && vl.Rings.Count > 6, $"링 {vl.Rings.Count}");
+
+    // ③ 옛 표현(옹벽)이 새 타입으로도 동일한가 — 회귀 안전선.
+    var zw = SlopeZone.Wall(0.0, L * 0.25, 2, int.MaxValue, 0.05, 1.5);
+    Check("S15 옹벽변환 호환 2단=전역", Math.Abs(zw.SlopeAt(1, 1.5) - 1.5) < 1e-9, $"{zw.SlopeAt(1, 1.5)}");
+    Check("S15 옹벽변환 호환 3단=수직", Math.Abs(zw.SlopeAt(2, 1.5) - 0.05) < 1e-9, $"{zw.SlopeAt(2, 1.5)}");
+    var zr = SlopeZone.Wall(0.0, L * 0.25, 0, 1, 0.05, 1.5);   // 사면 복귀(ToBench=1) — 3단부터 전역 복귀
+    Check("S15 사면복귀 호환 1단=수직", Math.Abs(zr.SlopeAt(0, 1.5) - 0.05) < 1e-9, $"{zr.SlopeAt(0, 1.5)}");
+    Check("S15 사면복귀 호환 3단=전역", Math.Abs(zr.SlopeAt(2, 1.5) - 1.5) < 1e-9, $"{zr.SlopeAt(2, 1.5)}");
+}
+
+// ★ S16 [구간 제원] 구간 규칙이 구배뿐 아니라 **단높이·소단폭**까지 바꾼다(JACK 0804 — 변환 1회당 제원 한 벌).
+{
+    var sq = new List<Point3> { new(0, 0, 100), new(60, 0, 100), new(60, 60, 100), new(0, 60, 100) };
+    var pr = new GradingParams
+    {
+        CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 1.5, FillSlope = 1.5, CellSize = 1.0, MaxBenches = 30, MaxRise = 60,
+        VertexSpacing = 2.0, MinSlope = 0.05, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+    var cum = GradingGeometry.CumLen2D(sq);
+    double L = cum[^1];
+    var ground = new FlatGround(140);
+
+    // 규칙 조회 자체 검증 — 전역 소단 1m/구배 1:1.5, 3단부터 소단 2m/구배 1:2.0
+    var z = new SlopeZone { T0 = 0.0, T1 = L * 0.25 };
+    z.Rules.Add((2, 2.0, 2.0));
+    z.Normalize();
+    var a0 = z.At(0, 1.5, 1);
+    var a2 = z.At(2, 1.5, 1);
+    Check("S16 2단은 전역 제원(소단 1m·1:1.5)",
+        Math.Abs(a0.BenchW - 1) < 1e-9 && Math.Abs(a0.Slope - 1.5) < 1e-9, $"{a0.BenchW}/{a0.Slope}");
+    Check("S16 ★3단부터 구간 제원(소단 2m·1:2.0)",
+        Math.Abs(a2.BenchW - 2) < 1e-9 && Math.Abs(a2.Slope - 2.0) < 1e-9, $"{a2.BenchW}/{a2.Slope}");
+
+    // 옛 옹벽 구간(소단폭 미지정=-1)은 전역값을 따라야 한다 — 하위호환.
+    var zw = SlopeZone.Wall(0.0, L * 0.25, 1, int.MaxValue, 0.05, 1.5);
+    var aw = zw.At(2, 1.5, 1);
+    Check("S16 옛 옹벽 구간은 전역 소단폭 유지",
+        Math.Abs(aw.BenchW - 1) < 1e-9 && Math.Abs(aw.Slope - 0.05) < 1e-9, $"{aw.BenchW}/{aw.Slope}");
+
+    // 소단폭만 넓히면 그 구간이 바깥으로 밀린다(구배는 전역 그대로).
+    var zWide = new SlopeZone { T0 = 0.0, T1 = L * 0.25 };
+    zWide.Rules.Add((0, 1.5, 6.0));      // 소단 1m → 6m
+    zWide.Normalize();
+    var vWide = GradingGeometry.Build(sq, ground, pr, true, new List<SlopeZone> { zWide });
+    static double DistB(Point3 q, IReadOnlyList<Point3> b)
+    {
+        double best = double.MaxValue;
+        for (int i = 0, j = b.Count - 1; i < b.Count; j = i++)
+        {
+            double ax = b[j].X, ay = b[j].Y, dx = b[i].X - ax, dy = b[i].Y - ay, l2 = dx * dx + dy * dy;
+            double t = l2 < 1e-12 ? 0 : Math.Clamp(((q.X - ax) * dx + (q.Y - ay) * dy) / l2, 0, 1);
+            double px = ax + dx * t - q.X, py = ay + dy * t - q.Y;
+            best = Math.Min(best, Math.Sqrt(px * px + py * py));
+        }
+        return best;
+    }
+    if (vWide.HasSlope && vWide.Rings.Count > 4)
+    {
+        var lastW = vWide.Rings[^1];
+        double inW = 0, outW = 0;
+        foreach (var q in lastW)
+        {
+            double t = GradingGeometry.ParamAt(sq, cum, q.X, q.Y);
+            double d = DistB(q, sq);
+            if (t >= 0 && t <= L * 0.25) inW = Math.Max(inW, d); else outW = Math.Max(outW, d);
+        }
+        Check("S16 ★넓은 소단 구간이 바깥으로 밀림", inW > outW * 1.15, $"구간안 {inW:F0}m vs 구간밖 {outW:F0}m");
+    }
+}
+
+// ★ S17 [스샷 버그 0804] 구간 겹침을 '합집합'으로 뭉개지 않고 '조각'으로 가른다 — SlopeZone.Flatten.
+//   JACK 스샷: 옹벽 구간이 넓게 있고, 그 안 일부(노란선)만 사면으로 되돌렸는데 옹벽 구간 전체(화살표까지)가
+//   사면으로 바뀌었다. 원인 = 겹치는 두 구간을 합집합 하나로 만들며 규칙까지 합친 것.
+{
+    const double L = 100.0;
+    static SlopeZone? ZoneAt(List<SlopeZone> zs, double t) { foreach (var z in zs) if (z.Contains(t)) return z; return null; }
+    static double SlopeOf(List<SlopeZone> zs, double t, int bench, double baseS)
+        => ZoneAt(zs, t)?.SlopeAt(bench, baseS) ?? baseS;
+
+    // ① 스샷 재현: 옹벽 [0,L] 전체(0단부터 수직) + 사면 복귀 [20,35](노란선, 1단부터 1:1.5)
+    var s1 = new List<SlopeZone>();
+    var wallAll = new SlopeZone { T0 = 0.0, T1 = L }; wallAll.Rules.Add((0, 0.05, -1));
+    var pickY = new SlopeZone { T0 = 20.0, T1 = 35.0 }; pickY.Rules.Add((1, 1.5, 1.0));
+    s1.Add(wallAll); s1.Add(pickY);
+    SlopeZone.Flatten(s1, L);
+    Check("S17 ★노란선 안: 1단부터 사면", Math.Abs(SlopeOf(s1, 27.5, 1, 1.5) - 1.5) < 1e-9, $"{SlopeOf(s1, 27.5, 1, 1.5)}");
+    Check("S17 ★노란선 안: 0단(하단)은 옹벽 유지", Math.Abs(SlopeOf(s1, 27.5, 0, 1.5) - 0.05) < 1e-9, $"{SlopeOf(s1, 27.5, 0, 1.5)}");
+    Check("S17 ★화살표 쪽(구간 밖): 옹벽 그대로", Math.Abs(SlopeOf(s1, 70.0, 1, 1.5) - 0.05) < 1e-9,
+        $"{SlopeOf(s1, 70.0, 1, 1.5)} (버그면 1.5로 나옴)");
+    Check("S17 ★반대쪽(구간 밖)도 옹벽 그대로", Math.Abs(SlopeOf(s1, 5.0, 3, 1.5) - 0.05) < 1e-9, $"{SlopeOf(s1, 5.0, 3, 1.5)}");
+
+    // ② 부분 겹침: 옹벽 [10,50](2단부터) + 사면 [30,70](3단부터 1:2.0) → 세 조각으로 갈라져야 한다.
+    var s2 = new List<SlopeZone>();
+    var w2 = new SlopeZone { T0 = 10, T1 = 50 }; w2.Rules.Add((2, 0.05, -1));
+    var p2 = new SlopeZone { T0 = 30, T1 = 70 }; p2.Rules.Add((3, 2.0, 1.0));
+    s2.Add(w2); s2.Add(p2);
+    SlopeZone.Flatten(s2, L);
+    Check("S17 부분겹침 A만(20): 3단도 옹벽", Math.Abs(SlopeOf(s2, 20, 3, 1.5) - 0.05) < 1e-9, $"{SlopeOf(s2, 20, 3, 1.5)}");
+    Check("S17 부분겹침 교집합(40): 2단 옹벽·3단 1:2", Math.Abs(SlopeOf(s2, 40, 2, 1.5) - 0.05) < 1e-9
+        && Math.Abs(SlopeOf(s2, 40, 3, 1.5) - 2.0) < 1e-9, $"{SlopeOf(s2, 40, 2, 1.5)}/{SlopeOf(s2, 40, 3, 1.5)}");
+    Check("S17 부분겹침 B만(60): 2단 전역·3단 1:2", Math.Abs(SlopeOf(s2, 60, 2, 1.5) - 1.5) < 1e-9
+        && Math.Abs(SlopeOf(s2, 60, 3, 1.5) - 2.0) < 1e-9, $"{SlopeOf(s2, 60, 2, 1.5)}/{SlopeOf(s2, 60, 3, 1.5)}");
+    Check("S17 부분겹침 밖(85): 구간 없음", ZoneAt(s2, 85) == null);
+
+    // ③ '클릭한 단부터 바깥 끝까지' 대체 의미: 같은 자리에서 나중에 더 낮은 단을 찍으면 그 위 규칙은 지워진다.
+    var s3 = new List<SlopeZone>();
+    var hi = new SlopeZone { T0 = 10, T1 = 40 }; hi.Rules.Add((3, 2.0, 1.0));   // 먼저: 3단부터 1:2
+    var lo = new SlopeZone { T0 = 10, T1 = 40 }; lo.Rules.Add((1, 1.0, 1.0));   // 나중: 1단부터 1:1
+    s3.Add(hi); s3.Add(lo);
+    SlopeZone.Flatten(s3, L);
+    Check("S17 나중 낮은단이 위를 대체(3단→1:1)", Math.Abs(SlopeOf(s3, 25, 3, 1.5) - 1.0) < 1e-9, $"{SlopeOf(s3, 25, 3, 1.5)}");
+    // 층층이(낮은단 먼저 → 높은단 나중)는 쌓인다.
+    var s4 = new List<SlopeZone>();
+    var lo4 = new SlopeZone { T0 = 10, T1 = 40 }; lo4.Rules.Add((1, 1.0, 1.0));
+    var hi4 = new SlopeZone { T0 = 10, T1 = 40 }; hi4.Rules.Add((3, 2.0, 1.0));
+    s4.Add(lo4); s4.Add(hi4);
+    SlopeZone.Flatten(s4, L);
+    Check("S17 층층이 유지(1단=1:1·3단=1:2)", Math.Abs(SlopeOf(s4, 25, 1, 1.5) - 1.0) < 1e-9
+        && Math.Abs(SlopeOf(s4, 25, 3, 1.5) - 2.0) < 1e-9, $"{SlopeOf(s4, 25, 1, 1.5)}/{SlopeOf(s4, 25, 3, 1.5)}");
+
+    // ④ 랩(0을 지나는) 구간 + 겹침도 조각이 정확히 갈라진다.
+    var s5 = new List<SlopeZone>();
+    var wrapW = new SlopeZone { T0 = 80, T1 = 20 }; wrapW.Rules.Add((0, 0.05, -1));   // 랩 옹벽
+    var pick5 = new SlopeZone { T0 = 90, T1 = 10 }; pick5.Rules.Add((1, 1.5, 1.0));   // 그 안 일부(랩)
+    s5.Add(wrapW); s5.Add(pick5);
+    SlopeZone.Flatten(s5, L);
+    Check("S17 랩 교집합(95): 1단 사면", Math.Abs(SlopeOf(s5, 95, 1, 1.5) - 1.5) < 1e-9, $"{SlopeOf(s5, 95, 1, 1.5)}");
+    Check("S17 랩 A만(85): 1단 옹벽 유지", Math.Abs(SlopeOf(s5, 85, 1, 1.5) - 0.05) < 1e-9, $"{SlopeOf(s5, 85, 1, 1.5)}");
+    Check("S17 랩 A만(15): 1단 옹벽 유지", Math.Abs(SlopeOf(s5, 15, 1, 1.5) - 0.05) < 1e-9, $"{SlopeOf(s5, 15, 1, 1.5)}");
+    Check("S17 랩 밖(50): 구간 없음", ZoneAt(s5, 50) == null);
+}
+
+// ★ S18 [스파이크 0804] 단차 계획선(일부 정점 고도 다름) + 옹벽 구간 조합에서 보조 브레이크라인
+//   (단차경계선·코너 능선)이 링과 2D 교차할 때 Z가 어긋나면, 공유정점 삽입이 그 지점을 링 Z로 강제해
+//   수직 절벽(스파이크·침봉)이 생긴다(JACK 스샷, 진단 maxΔZ 41.032m). 원인 = 교점 선택이 '전역 사면
+//   거리'를 가정 — 옹벽 구간의 실제 링은 경계에 붙어 있어 70m 밖 엉뚱한 조각에 꽂혔음.
+//   수정 후엔 보조선이 실제 표면 위를 따라가므로 교차 Z 간극이 ≈0이어야 한다.
+{
+    // 단차 남변: (20,0)~(40,0) 사이가 1m 낮음 → 단차경계선 레이 2개(양끝에서 남쪽으로).
+    var bnd = new List<Point3>
+    {
+        new(0, 0, 110.5), new(20, 0, 110.5), new(30, 0, 109.5), new(40, 0, 110.5),
+        new(60, 0, 110.5), new(60, 40, 110.5), new(0, 40, 110.5),
+    };
+    var pr = new GradingParams
+    {
+        CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 1.2, FillSlope = 1.2, CellSize = 1.0, MaxBenches = 20, MaxRise = 50,
+        VertexSpacing = 2.0, MinSlope = 0.05, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+    // 옹벽 구간 [10..25] — 레이 시작 정점(param 20)이 구간 안. 나머지 둘레는 전역 사면(1:1.2, 70m 밖까지).
+    var zw = new SlopeZone { T0 = 10, T1 = 25 };
+    zw.Rules.Add((0, 0.05, -1));
+
+    static bool SegX(Point3 a, Point3 b, Point3 c, Point3 d, out double u, out double v)
+    {
+        u = v = 0;
+        double rx = b.X - a.X, ry = b.Y - a.Y, sx = d.X - c.X, sy = d.Y - c.Y;
+        double den = rx * sy - ry * sx;
+        if (Math.Abs(den) < 1e-12) return false;
+        double qx = c.X - a.X, qy = c.Y - a.Y;
+        u = (qx * sy - qy * sx) / den; v = (qx * ry - qy * rx) / den;
+        return u >= 0 && u <= 1 && v >= 0 && v <= 1;
+    }
+    // BreaklinePrep와 같은 계산 — 보조선×링 2D 교차점의 |보조선Z − 링Z| 최댓값.
+    static double MaxAuxGap(VirtualSlope vs)
+    {
+        double worst = 0;
+        foreach (var line in vs.CornerLines)
+            for (int j = 0; j + 1 < line.Count; j++)
+                foreach (var ring in vs.Rings)
+                    for (int i = 0; i + 1 < ring.Count; i++)
+                    {
+                        if (!SegX(ring[i], ring[i + 1], line[j], line[j + 1], out double u, out double v)) continue;
+                        double zr = ring[i].Z + (ring[i + 1].Z - ring[i].Z) * u;
+                        double zl = line[j].Z + (line[j + 1].Z - line[j].Z) * v;
+                        worst = Math.Max(worst, Math.Abs(zr - zl));
+                    }
+        return worst;
+    }
+
+    var ground = new FlatGround(170);
+    var vsZ = GradingGeometry.Build(bnd, ground, pr, true, new List<SlopeZone> { zw });
+    Check("S18 링 생성(단차+옹벽구간)", vsZ.HasSlope && vsZ.Rings.Count > 6, $"링 {vsZ.Rings.Count}");
+    Check("S18 보조선 존재(단차경계선 포함)", vsZ.CornerLines.Count > 0, $"{vsZ.CornerLines.Count}개");
+    double g1 = MaxAuxGap(vsZ);
+    Check("S18 ★보조선-링 교차 Z간극 ≈ 0 (옹벽구간)", g1 < 1.5, $"maxΔZ {g1:F2}m (버그면 ~40m)");
+
+    // 구간 없는 단차 부지(종전 정상 케이스)도 회귀 없음.
+    var vsP = GradingGeometry.Build(bnd, ground, pr, true);
+    double g0 = MaxAuxGap(vsP);
+    Check("S18 회귀: 구간 없어도 Z간극 ≈ 0", g0 < 1.5, $"maxΔZ {g0:F2}m");
 }
 
 Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");

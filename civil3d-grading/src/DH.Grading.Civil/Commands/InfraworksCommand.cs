@@ -22,11 +22,39 @@ namespace DH.Grading.Civil.Commands;
 /// </summary>
 public sealed class InfraworksCommand
 {
+    /// <summary>[다중 구역 0804] 역T 런에서 '뒤 구역이 덮은 자리'의 점을 걷어내고, 연속 구간별로 쪼개 반환.
+    /// 걷어내지 않으면 앞 구역 당시 지형으로 만든 역T가 최종 지표면과 무관한 자리에 남는다(JACK 스샷).</summary>
+    private static System.Collections.Generic.List<WallTee.Run> MaskRuns(
+        System.Collections.Generic.List<WallTee.Run> runs, GradingPolygons.RegionMask? mask)
+    {
+        if (mask == null || runs == null || runs.Count == 0) return runs ?? new();
+        var outp = new System.Collections.Generic.List<WallTee.Run>();
+        foreach (var r in runs)
+        {
+            var pb = new System.Collections.Generic.List<Point3>();
+            var tz = new System.Collections.Generic.List<double>();
+            void Flush()
+            {
+                if (pb.Count >= 2) outp.Add(new WallTee.Run(pb, tz, r.SoilLeft));
+                pb = new(); tz = new();
+            }
+            for (int i = 0; i < r.PathBottom.Count && i < r.TopZ.Count; i++)
+            {
+                var p = r.PathBottom[i];
+                if (mask.Contains(p.X, p.Y)) Flush();
+                else { pb.Add(p); tz.Add(r.TopZ[i]); }
+            }
+            Flush();
+        }
+        return outp;
+    }
+
     [CommandMethod("DHINFRA")]
     public void Run()
     {
         Document doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
+        GradingSettings.SyncToDocument(doc);   // [도면 전환 0803] 도면이 바뀌었으면 그 도면 기준으로 설정·기억 재정렬
         Editor ed = doc.Editor;
         Database db = doc.Database;
 
@@ -99,20 +127,30 @@ public sealed class InfraworksCommand
                 new ShpField("ELEV", 'N', 12, 3), new ShpField("AREA", 'N', 18, 2),
             };
 
-            // ── ① 계획면.shp — [다중 구역] 구역별 계획폴리곤 전부 ──
+            // ── ① 계획면.shp — [다중 구역] 구역별 계획폴리곤. [0804 — JACK] 뒤 구역 사면이 침범한 만큼 뺀다 —
+            //   침범 부분은 최종 지표면에서 더 이상 계획고 평면이 아니므로 그대로 내보내면 지표면과 안 맞는다.
             {
                 var feats = new System.Collections.Generic.List<(System.Collections.Generic.IReadOnlyList<System.Collections.Generic.IReadOnlyList<Point3>>, object?[])>();
-                foreach (var rg in regions)
+                double cutTotal = 0;
+                for (int ri = 0; ri < regions.Count; ri++)
                 {
-                    var planRings = GradingPolygons.PlanRings(rg.Boundary);
-                    if (planRings != null) feats.Add((planRings, new object?[] { "계획면", Area2D(rg.Boundary) }));
+                    var later0 = GradingBundle.LaterFootprints(regions, ri);
+                    var pieces = GradingPolygons.PlanMinusFootprints(regions[ri].Boundary, later0, out double excl);
+                    foreach (var pc in pieces) feats.Add((pc.Rings, new object?[] { "계획면", pc.Area }));
+                    if (excl > 0.5)
+                    {
+                        cutTotal += excl;
+                        log.AppendLine($"[구역{ri + 1}] 계획면: 뒤 구역 침범 {excl:F0}㎡ 제외" +
+                                       (pieces.Count == 0 ? " (전부 덮임 — 이 구역 계획면 없음)" : ""));
+                    }
                 }
                 if (feats.Count > 0)
                 {
                     ShapefileWriter.WritePolygons(System.IO.Path.Combine(folder, "계획면"), feats, polyFieldsPlain, wkt);
-                    log.AppendLine($"계획면.shp: {feats.Count}개"); made.Add("계획면.shp");
+                    log.AppendLine($"계획면.shp: {feats.Count}개" + (cutTotal > 0.5 ? $" (침범 제외 계 {cutTotal:F0}㎡)" : ""));
+                    made.Add("계획면.shp");
                 }
-                else log.AppendLine("계획면.shp: 생략(계획폴리곤 퇴화)");
+                else log.AppendLine("계획면.shp: 생략(계획폴리곤 퇴화/전부 덮임)");
             }
 
             // ── 방향별(절토/성토): 소단·사면 SHP(있을 때만) + 옹벽 3D 객체 수집 ──
@@ -134,6 +172,11 @@ public sealed class InfraworksCommand
             {
                 var bundle = regions[ri];
                 string rPre = regions.Count > 1 ? $"[구역{ri + 1}] " : "";
+                // [다중 구역 0804] 뒤 구역이 덮어쓴 영역 — 띠·옹벽3D를 여기서 빼야 최종 지표면 모양과 맞는다.
+                //   빼지 않으면 앞 구역이 만들어질 당시의 사면이 그대로 남아 구역들이 겹쳐 나온다(JACK 관측).
+                var later = GradingBundle.LaterFootprints(regions, ri);
+                var laterMask = GradingPolygons.RegionMask.Build(later);
+                if (later.Count > 0) log.AppendLine($"{rPre}뒤 구역이 덮은 영역 {later.Count}개 제외");
 
                 // [리뷰 0729 사소3] 옹벽 3D 토우 표고는 '그 구역의 기준 지반'으로 — 누적 구역(2번+)은 원지반이
                 //   아니라 직전 누적면 위에 앉으므로, 번들의 GroundHandle 표면이 살아 있으면 그걸 샘플러로 쓴다.
@@ -183,7 +226,8 @@ public sealed class InfraworksCommand
                 bool styleZoneAny = false;
                 if (zoneMode)
                 {
-                    wallCuts = GradingPolygons.WallZoneWedges(bundle.Boundary, vs.Rings, zones!);
+                    wallCuts = GradingPolygons.WallZoneWedges(bundle.Boundary, vs.Rings, zones!,
+                        System.Math.Max(slopeN, bundle.Params.MinSlope), bundle.Params.MinSlope);
 
                     // [역T — JACK 0730 확정] 정지옵션에서 역T형을 고른 방향만: 계획경계에 바로 붙고(FromBench=0)
                     //   1단 안에서 원지반과 만나는 구간은 역T 생성, **2단 이상 구간은 자동 대체**(절토=앵커판넬/성토=보강토).
@@ -191,40 +235,48 @@ public sealed class InfraworksCommand
                     if (style == WallStyle.역T형 && regionSampler != null)
                     {
                         var (tRuns, tIdx, tDiag) = WallTee.GenerateAuto(
-                            bundle.Boundary, zones!, regionSampler, up, bundle.Params.BenchHeight);
-                        teeAll.AddRange(tRuns);
+                            // [절성토 분리 0803] '1단 안에서 끝나는가' 판정 기준은 이 방향(up)의 단높이여야 한다.
+                            bundle.Boundary, zones!, regionSampler, up, bundle.Params.BenchHeightOf(up),
+                            bundle.Params.MinSlope);
+                        teeAll.AddRange(MaskRuns(tRuns, laterMask));   // [다중 구역 0804] 뒤 구역이 덮은 자리 제외
                         foreach (var ix in tIdx) teeIdx.Add(ix);
                         if (!string.IsNullOrEmpty(tDiag))
                             log.AppendLine($"{rPre}역T_{label}: {tDiag} (역T 안 된 구간은 {(up ? "앵커판넬" : "보강토")} 자동 대체)");
                     }
-                    var styleZones = new System.Collections.Generic.List<(double T0, double T1, int FromBench, int ToBench)>();
+                    var styleZones = new System.Collections.Generic.List<SlopeZone>();
                     for (int sz = 0; sz < zones!.Count; sz++)
                         if (!teeIdx.Contains(sz)) styleZones.Add(zones[sz]);
                     styleZoneAny = styleZones.Count > 0;
 
                     var cumB = GradingGeometry.CumLen2D(bundle.Boundary);
                     var bnd = bundle.Boundary;
+                    double zBase = System.Math.Max(slopeN, bundle.Params.MinSlope), zMin = bundle.Params.MinSlope;
                     if (styleZoneAny)
                         // 링번호 k(1=1단 벽면, 3=2단…) → 단번호 (k-1)/2. 경계 최근접 호길이로 구간 판정(노리선과 동일식).
+                        // [구간 구배 0804] 구간 안이어도 그 단 구배가 수직이 아니면 사면 — 옹벽 3D를 만들지 않는다.
                         zoneKeep = (x, y, ringK) =>
                         {
                             int bench = (ringK - 1) / 2;
                             double t = GradingGeometry.ParamAt(bnd, cumB, x, y);
                             foreach (var zz in styleZones)
-                            {
-                                if (bench < zz.FromBench || bench > zz.ToBench) continue;
-                                bool inz = zz.T0 <= zz.T1 ? (t >= zz.T0 && t <= zz.T1) : (t >= zz.T0 || t <= zz.T1);
-                                if (inz) return true;
-                            }
+                                if (zz != null && zz.Contains(t)) return zz.IsWallAt(bench, zBase, zMin);
                             return false;
                         };
                     log.AppendLine($"{rPre}{label}: 옹벽 구간 {zones!.Count}개 반영(쐐기 {wallCuts.Count} · 역T {teeIdx.Count} · 스타일 {styleZones.Count})");
                 }
 
+                // [다중 구역 0804] 뒤 구역이 덮어쓴 자리에는 이 구역의 옹벽 3D를 만들지 않는다 —
+                //   최종 지표면엔 없는 벽이 남아 구역들이 겹쳐 보이던 원인. 구간 모드가 아니어도(전체 옹벽) 적용.
+                if (laterMask != null)
+                {
+                    var inner = zoneKeep;
+                    zoneKeep = (x, y, ringK) => !laterMask.Contains(x, y) && (inner == null || inner(x, y, ringK));
+                }
+
                 var strips = new System.Collections.Generic.List<(System.Collections.Generic.List<System.Collections.Generic.IReadOnlyList<Point3>> Rings, double Area, string Kind, int Level, double Elev)>();
                 foreach (var finalRing in ringList)
                     if (finalRing != null && finalRing.Count >= 3)
-                        strips.AddRange(GradingPolygons.Strips(vs.Rings, finalRing, bundle.Boundary, wallCuts));
+                        strips.AddRange(GradingPolygons.Strips(vs.Rings, finalRing, bundle.Boundary, wallCuts, later));
 
                 foreach (string kind in new[] { "소단", "사면" })
                 {
@@ -252,10 +304,14 @@ public sealed class InfraworksCommand
                 if (style == WallStyle.역T형 && wallOk && regionSampler != null)
                 {
                     var cumF = GradingGeometry.CumLen2D(bundle.Boundary);
-                    var synth = new System.Collections.Generic.List<(double, double, int, int)>
-                        { (0.0, cumF[cumF.Length - 1], 0, int.MaxValue) };
-                    var (tR, tI, tD) = WallTee.GenerateAuto(bundle.Boundary, synth, regionSampler, up, bundle.Params.BenchHeight);
-                    if (tI.Count > 0) { teeAll.AddRange(tR); fullTee = true; }
+                    var synth = new System.Collections.Generic.List<SlopeZone>
+                    {
+                        SlopeZone.Wall(0.0, cumF[cumF.Length - 1], 0, int.MaxValue,
+                                       bundle.Params.MinSlope, System.Math.Max(slopeN, bundle.Params.MinSlope)),
+                    };
+                    var (tR, tI, tD) = WallTee.GenerateAuto(bundle.Boundary, synth, regionSampler, up,
+                        bundle.Params.BenchHeightOf(up), bundle.Params.MinSlope);
+                    if (tI.Count > 0) { teeAll.AddRange(MaskRuns(tR, laterMask)); fullTee = true; }   // [다중 구역 0804]
                     log.AppendLine($"{rPre}역T_{label}(전체 옹벽): " +
                         (fullTee ? "1단 순수 — 역T 생성" : $"1단 아님 — {(up ? "앵커판넬" : "보강토")} 자동 대체") +
                         (string.IsNullOrEmpty(tD) ? "" : $" · {tD}"));
@@ -271,7 +327,9 @@ public sealed class InfraworksCommand
                     {
                         var panels = WallPanels.Generate(vs.Rings, regionSampler, up, effN, 1.48, 0.05, 20, keep: zoneKeep);
                         if (panels.Count > 0) panelSets.Add((up, panels));
-                        quoinAll.AddRange(WallPanels.LastQuoins);
+                        // [다중 구역 0804] 코너 필러는 keep 필터를 안 타므로 여기서 뒤 구역 마스크 적용.
+                        quoinAll.AddRange(laterMask == null ? WallPanels.LastQuoins
+                            : WallPanels.LastQuoins.Where(q => !laterMask.Contains(q.Toe.X, q.Toe.Y)));
                         log.AppendLine($"{rPre}앵커판넬_{label}{zTag}: {WallPanels.LastDiag}");
                     }
                 }
@@ -450,8 +508,10 @@ public sealed class InfraworksCommand
         {
             var prm = regions[ri].Params;
             string rp = regions.Count > 1 ? $"구역{ri + 1} " : "";
-            sb.AppendLine(string.Create(ci, $"{rp}단높이,{prm.BenchHeight:F2},m,한 계단 수직 높이"));
-            sb.AppendLine(string.Create(ci, $"{rp}소단폭,{prm.BenchWidth:F2},m,계단참 너비"));
+            sb.AppendLine(string.Create(ci, $"{rp}절토 단높이,{prm.CutBenchHeight:F2},m,절토 한 계단 수직 높이"));
+            sb.AppendLine(string.Create(ci, $"{rp}성토 단높이,{prm.FillBenchHeight:F2},m,성토 한 계단 수직 높이"));
+            sb.AppendLine(string.Create(ci, $"{rp}절토 소단폭,{prm.CutBenchWidth:F2},m,절토 계단참 너비"));
+            sb.AppendLine(string.Create(ci, $"{rp}성토 소단폭,{prm.FillBenchWidth:F2},m,성토 계단참 너비"));
             sb.AppendLine(string.Create(ci, $"{rp}절토구배,1:{prm.CutSlope:F2},,수직1:수평n"));
             sb.AppendLine(string.Create(ci, $"{rp}성토구배,1:{prm.FillSlope:F2},,수직1:수평n"));
         }

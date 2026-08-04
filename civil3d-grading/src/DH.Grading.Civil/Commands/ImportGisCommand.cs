@@ -41,6 +41,7 @@ public sealed class ImportGisCommand
     {
         Document doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
+        GradingSettings.SyncToDocument(doc);   // [도면 전환 0803] 도면이 바뀌었으면 그 도면 기준으로 설정·기억 재정렬
         Editor ed = doc.Editor;
         Database db = doc.Database;
 
@@ -94,6 +95,7 @@ public sealed class ImportGisCommand
 
             // ── "원지반" 지표면 자동 생성 ──
             string surfNote = BuildGroundSurface(db, ed, ids);
+            DrawOrderFix.Apply(db);
             ed.Regen();
 
             string done = $"등고선 {ids.Count}가닥 · {surfNote}" + (cut ? $" · ⚠상한 {MaxContourRows} 도달(범위 축소 권장)" : "");
@@ -115,6 +117,7 @@ public sealed class ImportGisCommand
     {
         Document doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
+        GradingSettings.SyncToDocument(doc);   // [도면 전환 0803] 도면이 바뀌었으면 그 도면 기준으로 설정·기억 재정렬
         Editor ed = doc.Editor;
         Database db = doc.Database;
 
@@ -189,6 +192,7 @@ public sealed class ImportGisCommand
                 }
                 tr.Commit();
             }
+            DrawOrderFix.Apply(db);   // 배경지도 위로 지번이 보이게(JACK 0731)
             ed.Regen();
 
             string done = $"필지 {parcels.Count}개(선 {nLine}·지번 {nText})" +
@@ -237,6 +241,13 @@ public sealed class ImportGisCommand
                 try { surf.ContoursDefinition.AddContours(contourIds, 1.0, 15.0, 0.1, 1.0, flat); }
                 catch { surf.ContoursDefinition.AddContours(contourIds, 1.0, 100.0, 0.3, 1.0); }
             }
+            // [JACK 0731] 처음 만들어질 때 스타일은 삼각망이 아니라 **등고선**(주 25m·보조 5m)으로.
+            try
+            {
+                ObjectId stId = EnsureContourStyle(tr);
+                if (!stId.IsNull) surf.StyleId = stId;
+            }
+            catch (System.Exception sex) { ed.WriteMessage("\n[등고선] 지표면 스타일 적용 생략 — " + sex.Message); }
             tr.Commit();
 
             int pts = 0, tris = 0;
@@ -256,6 +267,51 @@ public sealed class ImportGisCommand
             ed.WriteMessage("\n[등고선] 지표면 생성 실패 — " + ex.Message);
             return "지표면 생성 실패: " + ex.Message;
         }
+    }
+
+    /// <summary>[JACK 0731] '원지반' 전용 지표면 스타일 확보 — 삼각망 대신 등고선 표시.
+    ///   · 보조등고선 <see cref="MinorInterval"/>m · 주등고선 <see cref="MajorInterval"/>m
+    ///   · 표시 항목은 등고선 + 경계만(경계를 켜둬야 클릭으로 지표면을 집을 수 있다)
+    /// 이름이 같은 스타일이 이미 있으면 그것을 갱신해 쓴다(중복 생성 방지). 실패하면 Null → 기본 스타일 유지.</summary>
+    private const double MinorInterval = 5.0;
+    private const double MajorInterval = 25.0;
+    internal const string GroundStyleName = "DH-원지반 등고선(5·25)";
+
+    private static ObjectId EnsureContourStyle(Transaction tr)
+    {
+        var cdoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+        var styles = cdoc.Styles.SurfaceStyles;
+
+        ObjectId id = ObjectId.Null;
+        foreach (ObjectId sid in styles)
+        {
+            try
+            {
+                if (tr.GetObject(sid, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.Styles.SurfaceStyle s0 &&
+                    string.Equals(s0.Name, GroundStyleName, System.StringComparison.OrdinalIgnoreCase))
+                { id = sid; break; }
+            }
+            catch { }
+        }
+        if (id.IsNull) id = styles.Add(GroundStyleName);
+        if (id.IsNull) return ObjectId.Null;
+
+        var st = (Autodesk.Civil.DatabaseServices.Styles.SurfaceStyle)tr.GetObject(id, OpenMode.ForWrite);
+        try { st.ContourStyle.MinorContourInterval = MinorInterval; } catch { }
+        try { st.ContourStyle.MajorContourInterval = MajorInterval; } catch { }
+
+        // 표시 항목 정리 — 등고선·경계만 켜고 나머지(삼각망·점·경사 등)는 전부 끈다.
+        //   열거값 이름을 일일이 적지 않고 전체를 돌며 처리(버전별 항목 차이에 안전).
+        foreach (Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType t in
+                 System.Enum.GetValues(typeof(Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType)))
+        {
+            bool on = t == Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType.MajorContour
+                   || t == Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType.MinorContour
+                   || t == Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType.Boundary;
+            try { st.GetDisplayStylePlan(t).Visible = on; } catch { }
+            try { st.GetDisplayStyleModel(t).Visible = on; } catch { }
+        }
+        return id;
     }
 
     /// <summary>범위 두 점 클릭(현재 UCS → WCS 변환). 너무 작으면 거부.</summary>

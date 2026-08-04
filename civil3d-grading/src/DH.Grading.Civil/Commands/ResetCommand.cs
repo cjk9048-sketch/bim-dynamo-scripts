@@ -30,6 +30,7 @@ public sealed class ResetCommand
     {
         Document doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
+        GradingSettings.SyncToDocument(doc);   // [도면 전환 0803] 도면이 바뀌었으면 그 도면 기준으로 설정·기억 재정렬
         Editor ed = doc.Editor;
         Database db = doc.Database;
 
@@ -79,8 +80,13 @@ public sealed class ResetCommand
         int ents = 0, surfs = 0; bool bundleCleared = false;
         using (Transaction tr = db.TransactionManager.StartTransaction())
         {
+            // ⓪ [종단·횡단 0731] 우리가 만든 Civil3D 객체(선형·종단·종단도·측점선·횡단도)를 **먼저** 정리.
+            //    선형이 DH- 레이어에 있어 아래 ① 훑기에 걸리는데, 딸린 종단·뷰를 남긴 채 선형만 지우면
+            //    남은 뷰가 깨진 참조가 된다 → 자식부터 순서대로 지운 뒤 선형을 지운다.
+            ents += EraseSectionObjects(db, tr);
+
             // ① DH- 레이어 객체 삭제(모델공간). 레이어 자체는 남겨 다음 생성에 재사용.
-            ents = EraseEntitiesOnDhLayers(db, tr, includeImported);
+            ents += EraseEntitiesOnDhLayers(db, tr, includeImported);
 
             // ② 지표면 삭제(이름/이름_N). 좌표계 변경 시에는 가져온 '원지반'까지 포함.
             foreach (var baseName in SurfaceBaseNames)
@@ -110,6 +116,87 @@ public sealed class ResetCommand
         GradingSettings.LastPlanHandle = "";
         GradingSettings.LastGroundHandle = "";
         return (surfs, ents, bundleCleared);
+    }
+
+    /// <summary>[종단·횡단 0731] DHSECTION이 만든 Civil3D 객체 정리 — 반환=지운 개수.
+    /// 삭제 순서가 중요하다: 횡단도 → 측점선그룹 → 종단도 → 종단 → 선형(부모를 먼저 지우면 남은 자식이 깨진다).
+    /// 이름이 DH선형_·DH횡단_ 으로 시작하는 우리 것만 건드린다(사용자가 만든 노선은 보존).</summary>
+    private static int EraseSectionObjects(Database db, Transaction tr)
+    {
+        int n = 0;
+        Autodesk.Civil.ApplicationServices.CivilDocument cdoc;
+        try { cdoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument; }
+        catch { return 0; }
+
+        // ① 횡단도(단면뷰) — 선형에서 바로 못 얻어서 모델공간을 훑어 이름으로 고른다.
+        try
+        {
+            var ms = (BlockTableRecord)tr.GetObject(
+                SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+            var victims = new System.Collections.Generic.List<ObjectId>();
+            foreach (ObjectId id in ms)
+            {
+                try
+                {
+                    if (tr.GetObject(id, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.SectionView sv &&
+                        sv.Name.StartsWith(SectionCommand.GroupBase, System.StringComparison.OrdinalIgnoreCase))
+                        victims.Add(id);
+                }
+                catch { }
+            }
+            foreach (var id in victims)
+            { try { (tr.GetObject(id, OpenMode.ForWrite) as AcadEntity)?.Erase(); n++; } catch { } }
+        }
+        catch { }
+
+        // ② 우리 선형에 딸린 것들 → 마지막에 선형
+        try
+        {
+            var aligns = new System.Collections.Generic.List<ObjectId>();
+            foreach (ObjectId aid in cdoc.GetAlignmentIds())
+            {
+                try
+                {
+                    if (tr.GetObject(aid, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.Alignment al &&
+                        al.Name.StartsWith(SectionCommand.AlignBase, System.StringComparison.OrdinalIgnoreCase))
+                        aligns.Add(aid);
+                }
+                catch { }
+            }
+            foreach (var aid in aligns)
+            {
+                Autodesk.Civil.DatabaseServices.Alignment al;
+                try { al = (Autodesk.Civil.DatabaseServices.Alignment)tr.GetObject(aid, OpenMode.ForRead); }
+                catch { continue; }
+
+                n += EraseEach(tr, Safe(() => al.GetSampleLineGroupIds()));   // 측점선그룹(딸린 측점선 포함)
+                n += EraseEach(tr, Safe(() => al.GetProfileViewIds()));       // 종단도
+                n += EraseEach(tr, Safe(() => al.GetProfileIds()));           // 종단
+                try { (tr.GetObject(aid, OpenMode.ForWrite) as DBObject)?.Erase(); n++; } catch { }
+            }
+        }
+        catch { }
+        return n;
+    }
+
+    private static ObjectIdCollection? Safe(System.Func<ObjectIdCollection> f)
+    { try { return f(); } catch { return null; } }
+
+    private static int EraseEach(Transaction tr, ObjectIdCollection? ids)
+    {
+        if (ids == null) return 0;
+        int n = 0;
+        foreach (ObjectId id in ids)
+        {
+            try
+            {
+                if (id.IsNull || id.IsErased) continue;
+                (tr.GetObject(id, OpenMode.ForWrite) as DBObject)?.Erase();
+                n++;
+            }
+            catch { }
+        }
+        return n;
     }
 
     /// <summary>도면에 우리 기능으로 가져온 등고선·지적도가 있는가(좌표계 변경 경고 판단용).</summary>

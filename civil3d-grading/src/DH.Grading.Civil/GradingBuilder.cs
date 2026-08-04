@@ -47,7 +47,8 @@ public static class GradingBuilder
             int defCount = -1;
             try { defCount = tin.BreaklinesDefinition.Count; } catch { }
             vb.AppendLine($"  브레이크라인 의도 {intended} / 정의됨 {defCount}" +
-                          (sharedPts > 0 ? $" · 보조선-링 공유정점 {sharedPts}개 삽입(교차 경고 제거, maxΔZ {BreaklinePrep.LastMaxZGap:F3}m)" : ""));
+                          (sharedPts > 0 ? $" · 보조선-링 공유정점 {sharedPts}개 삽입(교차 경고 제거, maxΔZ {BreaklinePrep.LastMaxZGap:F3}m)" : "") +
+                          (BreaklinePrep.LastMaxZGap > 2.0 ? " · ΔZ>2m 교차는 스냅 생략(안전판 — 형상 무해, Civil3D 경고만 남음)" : ""));
             // 부지 중심(첫 링 평균)
             double cx = 0, cy = 0; int cn = 0;
             foreach (var pt in rings[0]) { cx += pt.X; cy += pt.Y; cn++; }
