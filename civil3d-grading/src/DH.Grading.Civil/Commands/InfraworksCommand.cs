@@ -120,6 +120,23 @@ public sealed class InfraworksCommand
             catch { groundSampler = null; }
             log.AppendLine(groundSampler != null ? $"원지반: '{groundName}'" : "원지반: 미발견 — 옹벽 객체·토공량 일부 생략");
 
+            // [진단 0804 — 다중 구역 발자국 정본 판별] 번들이 v8이어야 '실제 주입 클립링'이 들어 있고,
+            //   그걸 뒤 구역 발자국(옹벽 제외·계획면 차감)의 정본으로 쓴다. v7 이하 옛 번들이면 순수교선 폴백이라
+            //   지표면 실제 범위와 미세하게 어긋난다 → 옹벽이 지워지거나 남는 증상의 유력 후보.
+            //   증상이 남았을 때 '번들이 옛것이라 그런지'를 이 한 줄로 즉시 가른다.
+            {
+                int bver = GradingBundleStore.LastLoadedVersion;
+                int withClip = 0;
+                foreach (var rb2 in regions)
+                    if (rb2 != null &&
+                        ((rb2.CutClipRing != null && rb2.CutClipRing.Count >= 3) ||
+                         (rb2.FillClipRing != null && rb2.FillClipRing.Count >= 3))) withClip++;
+                log.AppendLine($"번들: v{bver}(현재 저장형식 v{GradingBundleStore.Version}) · 클립링 보유 구역 {withClip}/{regions.Count}" +
+                    (bver >= 8 && withClip == regions.Count
+                        ? " — 발자국 정본 사용"
+                        : " — ⚠ 옛 번들(순수교선 폴백) 섞임: 다중 구역 발자국이 실제 면 범위와 어긋날 수 있음 → 해당 구역 정지 재실행 권장"));
+            }
+
             var polyFieldsPlain = new[] { new ShpField("KIND", 'C', 20, 0), new ShpField("AREA", 'N', 18, 2) };
             var stripFields = new[]
             {
@@ -158,6 +175,11 @@ public sealed class InfraworksCommand
             var panelSets = new System.Collections.Generic.List<(bool Cut, System.Collections.Generic.List<WallPanels.Panel> Panels)>();
             var concreteSets = new System.Collections.Generic.List<(bool Cut, System.Collections.Generic.List<WallPanels.Panel> Panels)>();
             var quoinAll = new System.Collections.Generic.List<WallPanels.Quoin>();
+            // [자가진단 0805] 로그만 보고 옹벽 이상을 판정하기 위한 누적값.
+            int panelGenTotal = 0;
+            var wallWarn = new System.Collections.Generic.List<string>();
+            // [0805-2] 기울어진 링 위 판넬을 생략한 구역·수 — 자가진단에 그대로 올린다(구멍이 남는다는 뜻이므로).
+            var wallSkipNotes = new System.Collections.Generic.List<string>();
             var teeAll = new System.Collections.Generic.List<WallTee.Run>();   // [0730] 역T형(1단 구간)
             static System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? RingsOf(
                 System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? many,
@@ -176,7 +198,10 @@ public sealed class InfraworksCommand
                 //   빼지 않으면 앞 구역이 만들어질 당시의 사면이 그대로 남아 구역들이 겹쳐 나온다(JACK 관측).
                 var later = GradingBundle.LaterFootprints(regions, ri);
                 var laterMask = GradingPolygons.RegionMask.Build(later);
-                if (later.Count > 0) log.AppendLine($"{rPre}뒤 구역이 덮은 영역 {later.Count}개 제외");
+                if (later.Count > 0)
+                    log.AppendLine($"{rPre}뒤 구역이 덮은 영역 {later.Count}개 제외" +
+                        (laterMask != null ? $"(마스크 조각 {laterMask.PieceCount})"
+                                           : " — ⚠ 마스크 생성 실패(전부 퇴화) — 제외 미적용"));
 
                 // [리뷰 0729 사소3] 옹벽 3D 토우 표고는 '그 구역의 기준 지반'으로 — 누적 구역(2번+)은 원지반이
                 //   아니라 직전 누적면 위에 앉으므로, 번들의 GroundHandle 표면이 살아 있으면 그걸 샘플러로 쓴다.
@@ -262,7 +287,20 @@ public sealed class InfraworksCommand
                                 if (zz != null && zz.Contains(t)) return zz.IsWallAt(bench, zBase, zMin);
                             return false;
                         };
-                    log.AppendLine($"{rPre}{label}: 옹벽 구간 {zones!.Count}개 반영(쐐기 {wallCuts.Count} · 역T {teeIdx.Count} · 스타일 {styleZones.Count})");
+                    // [진단 0804] '옹벽 구간'이라 뭉뚱그리면 구배변경(사면) 구간과 구별이 안 돼 패널 0의 원인을
+                    //   못 가린다 — 옹벽단 유무를 갈라 세고, 구간별 규칙을 그대로 덤프한다.
+                    int wallZn = 0;
+                    foreach (var zz in zones!)
+                        if (zz.Rules.Exists(r => r.Slope <= bundle.Params.MinSlope + 1e-9)) wallZn++;
+                    log.AppendLine($"{rPre}{label}: 변환 구간 {zones!.Count}개(옹벽 {wallZn}·구배변경 {zones!.Count - wallZn}) " +
+                                   $"— 쐐기 {wallCuts.Count} · 역T {teeIdx.Count} · 스타일 {styleZones.Count}");
+                    for (int zi = 0; zi < zones!.Count; zi++)
+                    {
+                        var zz = zones![zi];
+                        var rTxt = string.Join(" · ", zz.Rules.Select(r =>
+                            $"{r.FromBench + 1}단~ 1:{r.Slope:0.##}" + (r.BenchW >= 0 ? $"(소단 {r.BenchW:0.##}m)" : "")));
+                        log.AppendLine($"{rPre}  {label} 구간[{zi + 1}] 호길이 {zz.T0:F1}~{zz.T1:F1}m — {rTxt}");
+                    }
                 }
 
                 // [다중 구역 0804] 뒤 구역이 덮어쓴 자리에는 이 구역의 옹벽 3D를 만들지 않는다 —
@@ -325,12 +363,47 @@ public sealed class InfraworksCommand
                     if (regionSampler == null) log.AppendLine($"{rPre}앵커판넬_{label}: 원지반 없어 생략");
                     else
                     {
-                        var panels = WallPanels.Generate(vs.Rings, regionSampler, up, effN, 1.48, 0.05, 20, keep: zoneKeep);
+                        // ★[옹벽선 정본화 0805 — 옹벽선_재설계.md P3] 번들 v9면 **저장된 옹벽선만** 쓴다.
+                        //   그 선은 정지면을 만든 그 순간 확정됐고, 뒤 구역이 생길 때마다 잘려 갱신됐으므로
+                        //   **이미 최종 지표면과 일치**한다 → 링 재계산도, 뒤 구역 지우개(keep/laterMask)도 필요 없다.
+                        //   (종전엔 여기서 링을 다시 만들고 지우개로 지웠고, 그 어긋남이 결함의 뿌리였다.)
+                        var storedRuns = up ? bundle.CutWallRuns : bundle.FillWallRuns;
+                        System.Collections.Generic.List<WallPanels.Panel> panels;
+                        if (storedRuns != null && storedRuns.Count > 0)
+                        {
+                            var tiles = new System.Collections.Generic.List<WallBand.Tile>();
+                            var bandDiag = new System.Text.StringBuilder();
+                            foreach (var wr in storedRuns)
+                            {
+                                tiles.AddRange(WallBand.Slice(wr, regionSampler, joint: 0.05));
+                                if (bandDiag.Length == 0) bandDiag.Append(WallBand.LastDiag);
+                            }
+                            panels = tiles.ConvertAll(t => WallBand.ToPanel(t, 20.0));
+                            log.AppendLine($"{rPre}앵커판넬_{label}: 옹벽선 정본 사용(v9) — 선 {storedRuns.Count}줄 → 판넬 {panels.Count}장" +
+                                           (bandDiag.Length > 0 ? $" · 첫 줄: {bandDiag}" : ""));
+                        }
+                        else
+                        {
+                            // 옛 번들(v8 이하) 폴백 — 링을 다시 계산하는 종전 경로. 기존 도면 보존용.
+                            panels = WallPanels.Generate(vs.Rings, regionSampler, up, effN, 1.48, 0.05, 20, keep: zoneKeep);
+                            log.AppendLine($"{rPre}앵커판넬_{label}: ⚠옛 경로(번들 v{GradingBundleStore.LastLoadedVersion}) — " +
+                                           "정지면을 다시 만들면(DHGRADE) 옹벽선 정본이 저장돼 이 경로를 안 탑니다");
+                        }
                         if (panels.Count > 0) panelSets.Add((up, panels));
-                        // [다중 구역 0804] 코너 필러는 keep 필터를 안 타므로 여기서 뒤 구역 마스크 적용.
-                        quoinAll.AddRange(laterMask == null ? WallPanels.LastQuoins
-                            : WallPanels.LastQuoins.Where(q => !laterMask.Contains(q.Toe.X, q.Toe.Y)));
-                        log.AppendLine($"{rPre}앵커판넬_{label}{zTag}: {WallPanels.LastDiag}");
+                        if (storedRuns == null || storedRuns.Count == 0)
+                        {
+                            // ── 옛 경로에서만 유효한 진단들(정본 경로는 WallPanels를 아예 안 탄다) ──
+                            // [다중 구역 0804] 코너 필러는 keep 필터를 안 타므로 여기서 뒤 구역 마스크 적용.
+                            quoinAll.AddRange(laterMask == null ? WallPanels.LastQuoins
+                                : WallPanels.LastQuoins.Where(q => !laterMask.Contains(q.Toe.X, q.Toe.Y)));
+                            // [0805] 사면형상 — 직각/라운드는 벽면 분할이 완전히 달라(v17.6) 옹벽 수 차이의 1순위 용의자.
+                            log.AppendLine($"{rPre}앵커판넬_{label}{zTag}: 사면형상 {(bundle.Params.MiterConvex ? "직각" : "라운드")}" +
+                                           $" · {WallPanels.LastDiag}");
+                            foreach (var seg in WallPanels.LastDiag.Split('·'))
+                                if (seg.Contains('⚠')) wallSkipNotes.Add($"{rPre}앵커판넬_{label}:{seg.Trim()}");
+                        }
+                        // [자가진단 0805 — JACK '돌리고 내보내기만 해도 판정 가능하게']
+                        panelGenTotal += panels.Count;
                     }
                 }
                 else if (genStyle == WallStyle.보강토 && styleGo)
@@ -379,9 +452,29 @@ public sealed class InfraworksCommand
                         GradingSettings.WallBlockW, GradingSettings.WallBlockD, GradingSettings.WallBlockH,
                         GradingSettings.WallCapD, GradingSettings.WallCapT, quoinAll, teeAll);
                     log.AppendLine($"옹벽3D.dwg: 보강토 {nb}블록+{nc}캡 · 앵커판넬 {np}패널+{na}앵커 · 역T {nt}세그" +
-                        (WallDwg.LastDropped > 0 ? $" · 깨진솔리드 제외 {WallDwg.LastDropped}" : ""));
+                        (WallDwg.LastDropped > 0 ? $" · 깨진솔리드 제외 {WallDwg.LastDropped}" : "") +
+                        // [0805] 판 만들기 실패는 종전에 조용히 삼켜져 'Generate 수 ≠ DWG 수'가 안 보였다.
+                        (WallPanelDwg.nFail > 0
+                            ? $" · ⚠판 만들기 실패 {WallPanelDwg.nFail}장(앵커·정착판도 함께 생략) — 첫 사유: {WallPanelDwg.firstFail}"
+                            : ""));
                     if (teeAll.Count > 0 && WallTeeDwg.LastDiag.Length > 0)
                         log.AppendLine("  역T 상세: " + WallTeeDwg.LastDiag);
+                    // ── [옹벽 자가진단 0805] 로그 이 블록만 보면 정상/이상이 갈린다(JACK 요청) ──
+                    if (WallPanelDwg.nFail > 0)
+                        wallWarn.Add($"판 만들기 실패 {WallPanelDwg.nFail}장(앵커·정착판도 함께 생략) — 첫 사유: {WallPanelDwg.firstFail}");
+                    if (panelGenTotal != np)
+                        wallWarn.Add($"생성 {panelGenTotal}장 ≠ 저장 {np}장 (차이 {panelGenTotal - np}장 — 압출 실패 또는 깨진 솔리드)");
+                    if (na > np)
+                        wallWarn.Add($"앵커 {na}개 > 판넬 {np}장 — 판넬 없는 자리에 앵커봉만 남음");
+                    // [0805 JACK '이상한 객체가 떠있음'] 패널 무리에서 멀리 떨어진 객체를 종류·좌표로 지목.
+                    if (WallPanelDwg.strayN > 0)
+                        wallWarn.Add($"패널 경계상자 밖 객체 {WallPanelDwg.strayN}개 — 첫 사례: {WallPanelDwg.strayFirst}");
+                    // [0805-2] 기울어진 링 위 판넬 생략은 '정상 완료'가 아니다 — 옹벽에 구멍이 남는다.
+                    foreach (var s in wallSkipNotes) wallWarn.Add(s);
+                    log.AppendLine("■ 옹벽 자가진단");
+                    log.AppendLine($"  앵커판넬 생성 {panelGenTotal} → 저장 {np} · 앵커 {na} · 보강토 {nb}블록");
+                    if (wallWarn.Count == 0) log.AppendLine("  ✔ 이상 없음");
+                    else { log.AppendLine($"  ⚠ 이상 {wallWarn.Count}건:"); foreach (var w in wallWarn) log.AppendLine("    · " + w); }
                     made.Add("옹벽3D.dwg");
                 }
                 catch (System.Exception dex) { log.AppendLine($"옹벽3D.dwg: 저장 실패 — {dex.Message} (파일 열려 있으면 닫고 재실행)"); }

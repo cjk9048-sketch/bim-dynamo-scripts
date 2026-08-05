@@ -1,4 +1,4 @@
-// WallBlocks 오프라인 하네스 — 옹벽 3D 보강토 블록 그리드 필터링 + 우각부 반블록 플러시 검증
+﻿// WallBlocks 오프라인 하네스 — 옹벽 3D 보강토 블록 그리드 필터링 + 우각부 반블록 플러시 검증
 // (walltest와 같은 PASS/FAIL 방식)
 using DH.Grading.Core;
 
@@ -854,6 +854,708 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
     Check("S18 회귀: 구간 없어도 Z간극 ≈ 0", g0 < 1.5, $"maxΔZ {g0:F2}m");
 }
 
+// ── S19: 핀치(자기교차) 발자국 링 — 조각 전부 유지 [다중 구역 0804 — JACK 스샷: 성토면 속 절토 조각·뜬 패널] ──
+{
+    // 나비넥타이 링: 대각선이 (5,5)에서 교차 — Buffer(0)이 아래/위 두 로브로 쪼갠다.
+    // 종전 ToCleanPolygon(최대 조각만)은 한 로브를 버려 그 자리 마스크·차감이 통째로 빠졌다.
+    var bow = new List<Point3> { new(0, 0, 0), new(10, 0, 0), new(0, 10, 0), new(10, 10, 0) };
+
+    var g = NtsSupport.ToCleanGeometry(bow);
+    Check("S19 핀치 링 정리 성공", g != null && !g.IsEmpty);
+    Check("S19 ★조각 전부 유지(면적 50 = 양 로브)", g != null && Math.Abs(g.Area - 50.0) < 0.5,
+        g == null ? "" : $"면적 {g.Area:F1}㎡ (최대 조각만이면 25)");
+
+    var mask = GradingPolygons.RegionMask.Build(new List<IReadOnlyList<Point3>> { bow });
+    Check("S19 마스크 생성", mask != null);
+    if (mask != null)
+    {
+        Check("S19 ★아래 로브 포함", mask.Contains(5, 2), "(5,2)");
+        Check("S19 ★위 로브 포함(종전엔 최대 조각 아닌 쪽이 빠짐)", mask.Contains(5, 8), "(5,8)");
+        Check("S19 로브 밖 제외", !mask.Contains(1.0, 5.0), "(1,5)");
+        Check("S19 마스크 조각 2", mask.PieceCount == 2, $"{mask.PieceCount}개");
+    }
+
+    // 계획면 차감(계획면.shp 경로)도 양 로브가 모두 빠져야 — 12×12 계획에서 나비 빼면 144−50.
+    var plan = new List<Point3> { new(-1, -1, 0), new(11, -1, 0), new(11, 11, 0), new(-1, 11, 0) };
+    var feats = GradingPolygons.PlanMinusFootprints(plan, new List<IReadOnlyList<Point3>> { bow }, out double excl);
+    Check("S19 ★계획면 차감 = 양 로브(≈50㎡)", Math.Abs(excl - 50.0) < 0.5, $"제외 {excl:F1}㎡");
+    double remain = 0; foreach (var f in feats) remain += f.Area;
+    Check("S19 계획 잔여 = 144−50", Math.Abs(remain - 94.0) < 0.5, $"잔여 {remain:F1}㎡");
+}
+
+// ★ S20 [0805 JACK '절토 옹벽 누락'] 같은 부지·같은 설정에서 **사면형상(직각/라운드)만** 바꿔 돌린다.
+//   현장 로그 두 판이 링 87점/코너능선 7 → 패널 163, 링 117점/코너능선 2 → 패널 6 으로 갈렸다.
+//   그 차이가 MiterConvex 하나로 재현되는지 Civil3D 없이 판정한다.
+{
+    // 현장 로그(DHGRADE_진단.log 0804 18:04)의 실제 경계 7점 그대로 — 단차(110.27/110.53)까지 포함.
+    var bnd = new List<Point3> {
+        new(177772.84,323632.09,110.270), new(177769.04,323633.64,110.500),
+        new(177769.21,323637.39,110.500), new(177749.93,323638.27,110.500),
+        new(177749.06,323619.29,110.500), new(177765.68,323618.53,110.500),
+        new(177765.14,323620.72,110.530),
+    };
+    // 원지반: 로그 TIN표를 보면 동쪽으로 갈수록 급히 높아진다(부지 서쪽 ≈절토 얕음, 동쪽 ≈20m). 근사 재현.
+    var gnd = new TiltGround(177749.06, 323618.53, 112.0, 0.55, 0.15);
+
+    static GradingParams Pr(bool miter) => new() {
+        CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 0.05, FillSlope = 0.05,
+        CellSize = 0.5, MaxBenches = 50, VertexSpacing = 1.0, MinSlope = 0.05,
+        MinFaceRun = 0.005, MiterConvex = miter, MiterLimit = 2.0,
+    };
+
+    static int Num(string s, string key)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(s, key + @"\s+(\d+)");
+        return m.Success ? int.Parse(m.Groups[1].Value) : -1;
+    }
+    // 겹침 계수 — 미터 절단을 모서리 근처로 제한했으니 '패널이 서로 포개지지 않는가'가 핵심 위험.
+    //   같은 자리(중심 거리 < side*0.4)에 법선까지 거의 같은(10° 이내) 패널 두 장 = 포개짐.
+    //   ※ **온전(IsFull) 패널만** 본다. 코너 필러는 설계상 이웃 면과 반두께(cornerLap 0.10) 겹치게 만든 것이라
+    //     (JACK 0722 "딱 만나는 것보다 반두께 더 나가게") 전체를 세면 의도된 겹침이 섞여 지표가 무의미해진다.
+    static int OverlapPairs(List<WallPanels.Panel> all, double side)
+    {
+        var ps = all.Where(p => p.IsFull).ToList();
+        int n = 0; double r2 = (side * 0.4) * (side * 0.4);
+        for (int i = 0; i < ps.Count; i++)
+            for (int j = i + 1; j < ps.Count; j++)
+            {
+                double dx = ps[i].Center.X - ps[j].Center.X, dy = ps[i].Center.Y - ps[j].Center.Y,
+                       dz = ps[i].Center.Z - ps[j].Center.Z;
+                if (dx * dx + dy * dy + dz * dz > r2) continue;
+                var a = ps[i].Normal; var b = ps[j].Normal;
+                if (a.x * b.x + a.y * b.y + a.z * b.z > 0.985) n++;      // cos10° ≈ 0.985
+            }
+        return n;
+    }
+    (int rings, int pts, int panels, int rowsN, int dropCorner, int overlap, double stray, string diag) Run(bool miter)
+    {
+        var vs = GradingGeometry.Build(bnd, gnd, Pr(miter), true);       // 절토(up)
+        var rs = vs.Rings.Select(r => (IReadOnlyList<Point3>)r).ToList();
+        int pts = rs.Count > 1 ? rs[1].Count : 0;
+        var ps = WallPanels.Generate(rs, gnd, cut: true, slopeN: 0.05);
+        // 링 전체 박스 밖으로 패널이 얼마나 벗어나는가 — 감긴 벽면의 좌표 폭주 검출(0805).
+        double rxa = double.MaxValue, rxb = double.MinValue, rya = double.MaxValue, ryb = double.MinValue;
+        foreach (var r in rs) foreach (var q in r)
+        { rxa = Math.Min(rxa, q.X); rxb = Math.Max(rxb, q.X); rya = Math.Min(rya, q.Y); ryb = Math.Max(ryb, q.Y); }
+        double stray = 0;
+        foreach (var p in ps) foreach (var q in p.Poly)
+        {
+            stray = Math.Max(stray, Math.Max(rxa - q.X, q.X - rxb));
+            stray = Math.Max(stray, Math.Max(rya - q.Y, q.Y - ryb));
+        }
+        string d = WallPanels.LastDiag;
+        return (rs.Count, pts, ps.Count, Num(d, "행"), Num(d, "코너"), OverlapPairs(ps, 5.0 / 3), stray, d);
+    }
+
+    var mi = Run(true);    // 직각
+    var ro = Run(false);   // 라운드
+    Console.WriteLine($"      직각  : 링 {mi.rings}단 · 1단 {mi.pts}점 · 패널 {mi.panels}");
+    Console.WriteLine($"              {mi.diag}");
+    Console.WriteLine($"      라운드: 링 {ro.rings}단 · 1단 {ro.pts}점 · 패널 {ro.panels}");
+    Console.WriteLine($"              {ro.diag}");
+
+    Check("S20 직각 옹벽 생성됨", mi.panels > 0, $"패널 {mi.panels}");
+    // ★ 본 검사: 형상 옵션은 모서리 '모양'만 바꿔야지 옹벽이 사라지면 안 된다.
+    //   벽면 개수는 구조상 다를 수 있으니(라운드는 원호를 한 면으로 덮음) 절대수 대신 **스팬당 패널 수**로 본다.
+    Check("S20 ★라운드에서도 옹벽이 남아야 한다", ro.panels >= mi.panels * 0.5,
+        $"직각 {mi.panels} → 라운드 {ro.panels}");
+    Check("S20 ★코너 절단에 벽이 통째로 날아가지 않는다(라운드)", ro.dropCorner <= ro.rowsN * 0.15,
+        $"행 {ro.rowsN} 중 코너버림 {ro.dropCorner} (버그면 ~57%)");
+    // ★ 미터 절단을 모서리 근처로 제한한 대가로 패널이 포개지면 안 된다(포개짐=DWG 이중벽).
+    Check("S20 ★패널 포개짐 없음(직각)", mi.overlap == 0, $"겹친 쌍 {mi.overlap}");
+    Check("S20 ★패널 포개짐 없음(라운드)", ro.overlap == 0, $"겹친 쌍 {ro.overlap}");
+    // ★ 감긴 벽면(마지막 face는 링 시작점을 지나 감김)에서 AtSeg가 호길이를 되감지 않으면
+    //   패널이 접선 방향으로 둘레만큼 날아간다 — 현장 실측 부지 밖 137m(0805 JACK 스샷).
+    //   코너 미터의 의도된 연장은 몇 m 이내이므로 5m를 상한으로 본다.
+    Check("S20 ★패널이 링 밖으로 날아가지 않는다(직각)", mi.stray < 5.0, $"최대 이탈 {mi.stray:F1}m");
+    Check("S20 ★패널이 링 밖으로 날아가지 않는다(라운드)", ro.stray < 5.0, $"최대 이탈 {ro.stray:F1}m");
+    // 자체 검증 — 되감기를 끄면(=0805 버그) 반드시 나빠져야 한다. 항상 통과하는 검사는 검사가 아니다.
+    //   ※ 버그의 얼굴은 지형에 따라 둘로 갈린다: 날아간 패널이 데이라잇 밖이면 **그냥 사라지고**(이 부지),
+    //     살아남으면 **수백 m 밖에 나타난다**(JACK 현장 — 부지 밖 137m). 그래서 개수 손실로 판정한다.
+    WallPanels.DisableWrapFixForTest = true;
+    var bug = Run(false);
+    WallPanels.DisableWrapFixForTest = false;
+    Check("S20 ★검사 자체검증: 되감기를 끄면 옹벽이 줄어든다", bug.panels < ro.panels * 0.9,
+        $"되감기 OFF {bug.panels}장 → 수정본 {ro.panels}장 (감긴 벽면 몫 {ro.panels - bug.panels}장 회복)");
+}
+
+// ★ S21 [0805 JACK '성토 구간 안의 알 수 없는 초록선'] 정지 구역 안쪽에 갇힌 교선 고리는 표시 제외.
+//   단, 바깥 경계선(클립링과 사실상 겹침)은 절대 지워지면 안 된다 — 그게 진짜 정지경계다.
+{
+    var clip = new List<Point3> { new(0,0,0), new(100,0,0), new(100,100,0), new(0,100,0) };
+    var outer = new List<Point3> { new(0,0,0), new(100,0,0), new(100,100,0), new(0,100,0), new(0,0,0) };  // 경계와 일치
+    var inner = new List<Point3> { new(40,40,0), new(60,40,0), new(60,60,0), new(40,60,0), new(40,40,0) }; // 안쪽 둔덕
+    var edge  = new List<Point3> { new(0.2,10,0), new(0.2,90,0) };            // 경계에서 20cm — 경계선 취급
+    // 현장값 재현: 경계에서 0.8m 안쪽에 뜬 섬은 반드시 걸러야 한다(0805 10:55 로그의 191점 고리).
+    var isle  = new List<Point3> { new(0.8,20,0), new(0.8,80,0), new(3,80,0), new(3,20,0), new(0.8,20,0) };
+    var kept = GradingPolygons.DropLoopsInsideClip(
+        new List<IReadOnlyList<Point3>> { outer, inner, edge, isle }, clip, 0.3, out int dn);
+
+    Check("S21 ★안쪽 둔덕 고리 제외", !kept.Contains(inner), "부지 한가운데 섬");
+    Check("S21 ★경계 0.8m 안쪽 섬도 제외(현장값)", !kept.Contains(isle),
+        "종전 여유 1.0m가 0.8m짜리를 놓쳐 초록선이 남았다");
+    Check("S21 ★바깥 경계선은 보존", kept.Contains(outer), "경계선이 지워지면 정지경계가 사라진다");
+    Check("S21 ★경계 근처(20cm) 선도 보존", kept.Contains(edge), "여유(tol) 안쪽은 경계로 본다");
+    Check("S21 남은 고리 2개", kept.Count == 2, $"{kept.Count}개 · 제외 {dn}개");
+
+    // 클립링이 없으면(주입 실패) 아무것도 지우지 않아야 한다 — 표시가 통째로 사라지는 사고 방지.
+    var all = GradingPolygons.DropLoopsInsideClip(
+        new List<IReadOnlyList<Point3>> { outer, inner, edge, isle }, null, 0.3, out int dn2);
+    Check("S21 ★클립링 없으면 전부 보존", dn2 == 0 && all.Count == 4, $"제외 {dn2} · 남은 {all.Count}");
+}
+
+// ★ S22 [0805 JACK '코너에서 판넬 크로스 + 그 뒤 누락'] 현장 경계(0805 10:24 로그의 11점) 그대로.
+//   코너 미터의 keep 부호를 face 한가운데 한 점으로 판단하면, 한 벽면이 여러 세그먼트에 걸칠 때
+//   그 점이 실제 벽에서 벗어나 부호가 뒤집힌다 → 코너를 가로지르는 조각만 살고 정작 코너가 빈다.
+{
+    var bnd = new List<Point3> {
+        new(185735.52,324643.97,191), new(185736.17,324644.29,191), new(185736.79,324644.69,191),
+        new(185743.08,324649.27,191), new(185737.06,324663.34,191), new(185718.67,324655.47,191),
+        new(185710.32,324659.72,191), new(185664.08,324639.92,191), new(185676.05,324611.98,191),
+        new(185730.47,324635.28,191), new(185728.11,324640.80,191),
+    };
+    // 현장 로그의 단높이 2.5m·소단 1.0m·수직(1:0.05). 원지반은 동쪽이 높은 경사면으로 근사.
+    var gnd = new TiltGround(185664.08, 324611.98, 196.0, 0.30, 0.10);
+    var pr = new GradingParams {
+        CutBenchHeight = 2.5, FillBenchHeight = 2.5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 0.05, FillSlope = 0.05,
+        CellSize = 0.5, MaxBenches = 50, VertexSpacing = 1.0, MinSlope = 0.05,
+        // 현장 로그가 '벽면 137 · 모서리 102'(벽면이 여러 세그먼트에 걸침)라 라운드 쪽이다 — 직각은 벽면=모서리.
+        MinFaceRun = 0.005, MiterConvex = false, MiterLimit = 2.0,
+    };
+    var vs = GradingGeometry.Build(bnd, gnd, pr, true);
+    var rs = vs.Rings.Select(r => (IReadOnlyList<Point3>)r).ToList();
+
+    // 코너를 넘어 부지 안쪽으로 얼마나 깊이 들어왔는지 — '크로스' 판정의 척도.
+    //   1단 벽면은 자기 링에서 안쪽으로 최대 slopeN×단높이(=0.125m)까지만 들어간다.
+    var innerPoly = NtsSupport.ToCleanGeometry(rs[1]);
+    (int Crossed, double Deepest) Cross(List<WallPanels.Panel> pp)
+    {
+        if (innerPoly == null || innerPoly.IsEmpty) return (0, 0);
+        var edge = innerPoly.Boundary; var gf = NtsSupport.Factory();
+        int n = 0; double deep = 0;
+        foreach (var p in pp)
+        {
+            double dMax = 0;
+            foreach (var q in p.Poly)
+            {
+                var pt = gf.CreatePoint(new NetTopologySuite.Geometries.Coordinate(q.X, q.Y));
+                if (innerPoly.Covers(pt)) dMax = Math.Max(dMax, edge.Distance(pt));
+            }
+            deep = Math.Max(deep, dMax);
+            if (dMax > 1.0) n++;
+        }
+        return (n, deep);
+    }
+
+    var ps = WallPanels.Generate(rs, gnd, cut: true, slopeN: 0.05, joint: 0.05);
+    string d = WallPanels.LastDiag;
+    Console.WriteLine($"      현장경계: {d}");
+
+    static int N22(string s, string key)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(s, key + @"\s+(\d+)");
+        return m.Success ? int.Parse(m.Groups[1].Value) : -1;
+    }
+    int rowsN = N22(d, "행"), corner = N22(d, "코너");
+    Check("S22 현장 경계로 옹벽 생성", ps.Count > 100, $"패널 {ps.Count}");
+    // ★ 코너에서 죽는 행이 전체의 몇 %인가 — 부호가 뒤집히면 코너마다 벽이 통째로 빈다.
+    Check("S22 ★코너에서 벽이 통째로 죽지 않는다", corner <= rowsN * 0.05,
+        $"행 {rowsN} 중 코너버림 {corner} ({(rowsN > 0 ? corner * 100.0 / rowsN : 0):F1}%)");
+    // ★ 코너를 가로지르는 판넬(부지 안쪽으로 넘어간 조각)이 없어야 한다 — JACK '크로스' 증상.
+    //   1단 벽면은 자기 링에서 안쪽으로 최대 slopeN×단높이(=0.125m)까지만 들어간다. 그보다 훨씬
+    //   깊이(1m 초과) 들어온 패널은 이웃 벽면 쪽으로 넘어간 것 — 위에서 보면 벽을 가로지른다.
+    var (crossed, deepest) = Cross(ps);
+    Check("S22 ★코너를 가로지른 판넬 없음", crossed == 0,
+        $"넘어간 판넬 {crossed}장 · 최대 침투 {deepest:F2}m (정상 상한 0.13m)");
+
+    // 자체 검증 — keep 부호를 옛 방식(face 한가운데 한 점)으로 되돌리면 반드시 재발해야 한다.
+    WallPanels.DisableRefSplitForTest = true;
+    var bugPs = WallPanels.Generate(rs, gnd, cut: true, slopeN: 0.05, joint: 0.05);
+    string bugD = WallPanels.LastDiag;
+    WallPanels.DisableRefSplitForTest = false;
+    var (bugCross, bugDeep) = Cross(bugPs);
+    Check("S22 ★검사 자체검증: 옛 부호 방식이면 크로스/누락이 재발한다",
+        bugCross > 0 || N22(bugD, "코너") > corner * 3 + 10,
+        $"옛 방식 → 넘어간 판넬 {bugCross}장(침투 {bugDeep:F1}m) · 코너버림 {N22(bugD, "코너")} · 패널 {bugPs.Count}(수정본 {ps.Count})");
+}
+
+// ★ S23 [0805 JACK '옹벽 사선으로 잘려 누락'] 현장 로그: 앵커판넬 생성 72 → DWG 저장 46,
+//   ⚠판 만들기 실패 26장 · 첫 사유 **eCannotScaleNonUniformly**.
+//   그 예외는 WallPanelDwg가 패널을 놓을 때 쓰는 좌표계 행렬
+//   `Matrix3d.AlignCoordinateSystem(…, U, V, W)`가 **직교정규가 아닐 때**만 난다
+//   (AutoCAD Solid3d.TransformBy는 회전+이동만 허용 — 늘어남·비틀림이 섞이면 거부).
+//   그러니 판정은 Civil3D 없이 순수 기하로 가능하다: 패널마다 |U|·|V|·|W|와 U·V를 재면 된다.
+//   ※ 코드상 |U|=|W|=1은 보장(둘 다 정규화)이고 W⊥U·W⊥V도 외적이라 보장.
+//     남는 자유도는 **U·V** 하나 — U는 링 세그먼트의 3D 방향, V는 사면 상방이라
+//     U·V = (세그먼트 Z경사)×vUp. 즉 **링 세그먼트가 수평이 아니면 프레임이 비틀린다.**
+{
+    static (double MaxUV, double MinLen, double MaxLen, int Bad) Frame(List<WallPanels.Panel> pp)
+    {
+        double maxUV = 0, minL = double.MaxValue, maxL = 0; int bad = 0;
+        foreach (var p in pp)
+        {
+            double ul = Math.Sqrt(p.UAxis.x * p.UAxis.x + p.UAxis.y * p.UAxis.y + p.UAxis.z * p.UAxis.z);
+            double vl = Math.Sqrt(p.VAxis.x * p.VAxis.x + p.VAxis.y * p.VAxis.y + p.VAxis.z * p.VAxis.z);
+            double wl = Math.Sqrt(p.WAxis.x * p.WAxis.x + p.WAxis.y * p.WAxis.y + p.WAxis.z * p.WAxis.z);
+            double uv = Math.Abs(p.UAxis.x * p.VAxis.x + p.UAxis.y * p.VAxis.y + p.UAxis.z * p.VAxis.z);
+            minL = Math.Min(minL, Math.Min(ul, Math.Min(vl, wl)));
+            maxL = Math.Max(maxL, Math.Max(ul, Math.Max(vl, wl)));
+            maxUV = Math.Max(maxUV, uv);
+            if (uv > 1e-6 || Math.Abs(ul - 1) > 1e-6 || Math.Abs(vl - 1) > 1e-6 || Math.Abs(wl - 1) > 1e-6) bad++;
+        }
+        return (maxUV, minL == double.MaxValue ? 1 : minL, maxL, bad);
+    }
+
+    // (A) 평면 계획선 — 링이 전부 수평이라 U·V=0이어야 한다(현장에서도 이 부지는 성공했다).
+    var bndA = new List<Point3> {
+        new(185735.52,324643.97,191), new(185736.17,324644.29,191), new(185736.79,324644.69,191),
+        new(185743.08,324649.27,191), new(185737.06,324663.34,191), new(185718.67,324655.47,191),
+        new(185710.32,324659.72,191), new(185664.08,324639.92,191), new(185676.05,324611.98,191),
+        new(185730.47,324635.28,191), new(185728.11,324640.80,191),
+    };
+    var gndA = new TiltGround(185664.08, 324611.98, 196.0, 0.30, 0.10);
+    var prA = new GradingParams {
+        CutBenchHeight = 2.5, FillBenchHeight = 2.5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 0.05, FillSlope = 0.05, CellSize = 0.5, MaxBenches = 50, VertexSpacing = 1.0,
+        MinSlope = 0.05, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+    var vsA = GradingGeometry.Build(bndA, gndA, prA, true);
+    var rsA = vsA.Rings.Select(r => (IReadOnlyList<Point3>)r).ToList();
+    var psA = WallPanels.Generate(rsA, gndA, cut: true, slopeN: 0.05, joint: 0.05);
+    var fA = Frame(psA);
+    Console.WriteLine($"      (A)평면계획선: 패널 {psA.Count} · max|U·V| {fA.MaxUV:E2} · 축길이 [{fA.MinLen:F6}..{fA.MaxLen:F6}] · 비직교 {fA.Bad}장");
+    Check("S23 (A) 평면 계획선은 프레임이 직교정규", fA.Bad == 0,
+        $"max|U·V| {fA.MaxUV:E2} (허용 1e-6)");
+
+    // (B) ★단차 계획선(3D 폴리선 — 한쪽이 3m 높다). 현장 구역1이 이 모양이다:
+    //   계획선 정점 Z가 다르면 그 아래 사면 링도 **기울어진 세그먼트**를 갖는다 →
+    //   U(세그먼트 3D 방향)가 더는 수평이 아니어서 V(사면 상방)와 직각이 아니게 된다.
+    var bndB = new List<Point3> {
+        new(185676.05,324611.98,191), new(185730.47,324635.28,191),
+        new(185710.32,324659.72,194), new(185664.08,324639.92,194),
+    };
+    var gndB = new TiltGround(185664.08, 324611.98, 199.0, 0.30, 0.10);
+    var vsB = GradingGeometry.Build(bndB, gndB, prA, true);
+    var rsB = vsB.Rings.Select(r => (IReadOnlyList<Point3>)r).ToList();
+    double ringDz = 0;
+    foreach (var r in rsB)
+    {
+        double zmin = double.MaxValue, zmax = double.MinValue;
+        foreach (var q in r) { zmin = Math.Min(zmin, q.Z); zmax = Math.Max(zmax, q.Z); }
+        ringDz = Math.Max(ringDz, zmax - zmin);
+    }
+    var psB = WallPanels.Generate(rsB, gndB, cut: true, slopeN: 0.05, joint: 0.05);
+    var fB = Frame(psB);
+    Console.WriteLine($"      (B)단차계획선: 패널 {psB.Count} · 링 내 Z폭 최대 {ringDz:F2}m · max|U·V| {fB.MaxUV:E2}" +
+                      $" · 축길이 [{fB.MinLen:F6}..{fB.MaxLen:F6}] · 비직교 {fB.Bad}장");
+    Check("S23 ★단차 계획선에서 링이 기울어진다(재현 조건 성립)", ringDz > 0.01,
+        $"링 내 Z폭 {ringDz:F2}m — 0이면 이 시나리오로는 재현 불가(다른 원인)");
+    // ★ 내보내는 판넬은 **한 장도 비틀리지 않아야 한다** — 비틀린 프레임은 AutoCAD가 거부하고(옛 증상),
+    //   억지로 그리면 부챗살처럼 벌어진다(0805 12:15 스샷). 기울면 그리지 않고 로그로 올리는 것이 현재 계약.
+    Check("S23 ★내보낸 판넬은 전부 직교정규 프레임", fB.Bad == 0,
+        $"비직교 {fB.Bad}장 / {psB.Count}장 · max|U·V| {fB.MaxUV:E2}");
+    Check("S23 ★기울어진 링 위 판넬은 생략된다(부챗살 방지)",
+        WallPanels.LastDiag.Contains("기울어진 판넬"),
+        $"진단: {(WallPanels.LastDiag.Contains("기울어진 판넬") ? "생략 기록됨" : "★생략 기록 없음 — 벌어진 판넬이 나갔을 수 있음")}");
+
+    // 자체검증 — 남은(=기울기 0.02 이하) 판넬은 직교화 전후로 **월드 좌표가 한 점도 안 움직여야** 한다.
+    //   (u·U + v·V = (u+c·v)·U + (s·v)·V' 항등식). 어긋나면 벽 위치가 바뀐 것이다.
+    WallPanels.DisableFrameFixForTest = true;
+    List<WallPanels.Panel> psRaw;
+    try { psRaw = WallPanels.Generate(rsB, gndB, cut: true, slopeN: 0.05, joint: 0.05); }
+    finally { WallPanels.DisableFrameFixForTest = false; }
+    double moved = 0;
+    if (psB.Count == psRaw.Count)
+        for (int i = 0; i < psB.Count; i++)
+        {
+            var a = psB[i].Poly; var b = psRaw[i].Poly;
+            if (a.Count != b.Count) { moved = double.MaxValue; break; }
+            for (int j = 0; j < a.Count; j++)
+                moved = Math.Max(moved, Math.Max(Math.Abs(a[j].X - b[j].X),
+                        Math.Max(Math.Abs(a[j].Y - b[j].Y), Math.Abs(a[j].Z - b[j].Z))));
+        }
+    else moved = double.MaxValue;
+    Check("S23 ★기하 무변경(직교화는 표현만 바꾼다)", moved < 1e-9,
+        $"패널 {psB.Count} vs {psRaw.Count} · 최대 좌표차 {(moved == double.MaxValue ? "패널 수/정점 수 불일치" : $"{moved:E2}m")}");
+
+    // (C) 평면 계획선은 생략이 0장이어야 한다 — 안전장치가 정상 부지를 갉아먹지 않는지.
+    Check("S23 ★평면 계획선은 한 장도 생략되지 않는다", !WallPanels.LastDiag.Contains("기울어진 판넬") || psA.Count > 0, "");
+    var psA2 = WallPanels.Generate(rsA, gndA, cut: true, slopeN: 0.05, joint: 0.05);
+    Check("S23 ★안전장치가 정상 부지를 건드리지 않는다",
+        !WallPanels.LastDiag.Contains("기울어진 판넬") && psA2.Count == psA.Count,
+        $"평면 계획선 패널 {psA2.Count}장 · 생략 없음");
+}
+
+// ★ S24 [옹벽 재설계 0805 — 옹벽선_재설계.md] 띠 분할 방식(WallBand)의 불변식.
+//   종전 방식의 버그(v17.6 벽면 소실 · v17.7 감긴 호길이 · v17.8 keep 부호 · v18.2 프레임 비틀림)는
+//   전부 '판넬이 모서리를 가로지르는 것'을 이웃 평면 절단으로 수습하려다 나왔다.
+//   새 방식은 모서리에서 띠를 먼저 끊으므로 그 기계장치가 통째로 없다 — 그 사실을 여기서 못박는다.
+{
+    // 5m 높이 벽, ㄱ자 코너 하나. 토우/크레스트는 1:0.05 오프셋(수평 0.25m).
+    static (List<Point3> Toe, List<Point3> Crest) LShape(double h, double n)
+    {
+        double off = n * h;   // 벽면 수평 물림
+        var toe = new List<Point3> {
+            new(0, 0, 100), new(20, 0, 100), new(20, 15, 100),
+        };
+        var crest = new List<Point3> {
+            new(0, -off, 100 + h), new(20 + off, -off, 100 + h), new(20 + off, 15, 100 + h),
+        };
+        return (toe, crest);
+    }
+
+    var (toe1, crest1) = LShape(5.0, 0.05);
+    var run1 = new WallRun { Up = true, Bench = 0, Toe = toe1, Crest = crest1, Height = 5.0 };
+
+    // (A) 지반 없음(클립 없음) — 벽이 통째로 서야 한다.
+    var t1 = WallBand.Slice(run1, null, joint: 0.05);
+    Console.WriteLine($"      (A)ㄱ자벽: {WallBand.LastDiag}");
+    Check("S24 판넬 생성됨", t1.Count > 0, $"판넬 {t1.Count}장");
+    // ★ 앵커가 달릴 '온전' 판넬이 나와야 한다 — 균등 분배 때문에 열 폭이 상한보다 늘 조금 작은데,
+    //   판정을 '열 폭 == 상한'으로 하면 온전이 0장이 되어 **앵커가 통째로 사라진다**(첫 구현의 실제 결함).
+    int fullN = t1.FindAll(t => t.IsFull).Count;
+    Check("S24 ★온전 판넬(앵커 대상)이 나온다", fullN > t1.Count / 2, $"온전 {fullN}/{t1.Count}장");
+
+    // ★ 프레임이 전부 직교정규 — 이게 깨지면 AutoCAD가 거부하거나 부챗살이 된다(v18.2/18.3).
+    double maxUV = 0, maxLenErr = 0;
+    foreach (var t in t1)
+    {
+        double ul = Math.Sqrt(t.UAxis.x * t.UAxis.x + t.UAxis.y * t.UAxis.y + t.UAxis.z * t.UAxis.z);
+        double vl = Math.Sqrt(t.VAxis.x * t.VAxis.x + t.VAxis.y * t.VAxis.y + t.VAxis.z * t.VAxis.z);
+        double wl = Math.Sqrt(t.WAxis.x * t.WAxis.x + t.WAxis.y * t.WAxis.y + t.WAxis.z * t.WAxis.z);
+        maxUV = Math.Max(maxUV, Math.Abs(t.UAxis.x * t.VAxis.x + t.UAxis.y * t.VAxis.y + t.UAxis.z * t.VAxis.z));
+        maxLenErr = Math.Max(maxLenErr, Math.Max(Math.Abs(ul - 1), Math.Max(Math.Abs(vl - 1), Math.Abs(wl - 1))));
+    }
+    Check("S24 ★프레임이 전부 직교정규(비틀림 원천 소멸)", maxUV < 1e-9 && maxLenErr < 1e-9,
+        $"max|U·V| {maxUV:E2} · 축길이 오차 {maxLenErr:E2}");
+
+    // ★ 판넬 한 변이 설계 상한(1.67m)을 넘지 않는다 — v18.0 '거대 쐐기'가 다시 안 나오게.
+    double maxSide = 0;
+    foreach (var t in t1)
+    {
+        double mnU = double.MaxValue, mxU = double.MinValue, mnV = double.MaxValue, mxV = double.MinValue;
+        foreach (var (u, v) in t.Local) { mnU = Math.Min(mnU, u); mxU = Math.Max(mxU, u); mnV = Math.Min(mnV, v); mxV = Math.Max(mxV, v); }
+        maxSide = Math.Max(maxSide, Math.Max(mxU - mnU, mxV - mnV));
+    }
+    Check("S24 ★판넬 한 변 ≤ 설계 상한", maxSide <= WallBand.MaxSide + 1e-6, $"최대 한 변 {maxSide:F3}m (상한 {WallBand.MaxSide:F3}m)");
+
+    // ★ 모서리에서 벽면이 끊긴다 — 판넬이 코너를 가로지르지 않는다는 뜻.
+    var segs = WallBand.SplitAtCorners(crest1);
+    Check("S24 ★ㄱ자 코너에서 벽면이 끊긴다", segs.Count == 2, $"벽면 {segs.Count}조각 (기대 2)");
+
+    // ★ 판넬이 코너를 가로지르지 않는다 — 각 판넬의 모든 정점이 한 직선 벽면 위(평면성).
+    double maxPlaneErr = 0;
+    foreach (var t in t1)
+    {
+        var nrm = t.WAxis; var o = t.Origin;
+        foreach (var q in t.Poly)
+            maxPlaneErr = Math.Max(maxPlaneErr, Math.Abs((q.X - o.X) * nrm.x + (q.Y - o.Y) * nrm.y + (q.Z - o.Z) * nrm.z));
+    }
+    Check("S24 ★판넬이 전부 평면(코너 가로지름 없음)", maxPlaneErr < 1e-9, $"최대 평면이탈 {maxPlaneErr:E2}m");
+
+    // ★ 실오라기 없음 — 균등 분배라 수 mm짜리 자투리 열/행이 생기면 안 된다(v17.8 '줄눈 1690'의 정체).
+    double minSide = double.MaxValue;
+    foreach (var t in t1)
+    {
+        double mnU = double.MaxValue, mxU = double.MinValue;
+        foreach (var (u, v) in t.Local) { mnU = Math.Min(mnU, u); mxU = Math.Max(mxU, u); }
+        minSide = Math.Min(minSide, mxU - mnU);
+    }
+    Check("S24 ★자투리 실오라기 열 없음(균등 분배)", minSide > 0.3, $"최소 열 폭 {minSide:F3}m");
+
+    // (B) 경사 지반 — 데이라잇 위로는 벽이 없어야 한다.
+    var gnd24 = new SlopeGround(100.0, 0.15);   // z = 100 + 0.15x → x=20에서 103
+    var t2 = WallBand.Slice(run1, gnd24, joint: 0.05);
+    Console.WriteLine($"      (B)데이라잇: {WallBand.LastDiag}");
+    double maxAbove = 0;
+    foreach (var t in t2)
+        foreach (var q in t.Poly)
+        {
+            gnd24.TryGetElevation(q.X, q.Y, out double gz);
+            maxAbove = Math.Max(maxAbove, q.Z - gz);
+        }
+    Check("S24 ★데이라잇 위로 벽이 안 올라간다", maxAbove < 0.20, $"지반 위 최대 {maxAbove:F3}m");
+    Check("S24 ★데이라잇 클립으로 판넬이 줄어든다", t2.Count > 0 && t2.Count < t1.Count,
+        $"클립 없음 {t1.Count}장 → 클립 {t2.Count}장");
+
+    // ★ 판넬이 **벽선을 따라간다** — 판넬 윗변이 크레스트 선에서 벗어나면 벽이 코너를 질러간 것이다.
+    //   (평면성은 생성 방식상 항상 참이라 검사가 되지 않는다 — 실제로 깨지는 건 '선 추종'이다.)
+    static double DistToPolyline2D(double x, double y, IReadOnlyList<Point3> line)
+    {
+        double best = double.MaxValue;
+        for (int i = 0; i + 1 < line.Count; i++)
+        {
+            double ax = line[i].X, ay = line[i].Y, bx = line[i + 1].X, by = line[i + 1].Y;
+            double dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+            double t = L2 > 1e-12 ? ((x - ax) * dx + (y - ay) * dy) / L2 : 0;
+            t = Math.Clamp(t, 0, 1);
+            double px = ax + dx * t, py = ay + dy * t;
+            best = Math.Min(best, Math.Sqrt((x - px) * (x - px) + (y - py) * (y - py)));
+        }
+        return best;
+    }
+    // 맨 아랫행만 본다 — 벽이 1:0.05로 기울어 윗행은 원래 토우선에서 떨어져 있으므로(높이×0.05)
+    //   그 오프셋과 '코너 질러감'이 섞이면 지표가 무뎌진다. 아랫행은 토우선 위에 정확히 얹힌다.
+    static double ToeDrift(List<WallBand.Tile> tt, IReadOnlyList<Point3> toe)
+    {
+        double worst = 0;
+        foreach (var t in tt)
+        {
+            double mnV = double.MaxValue;
+            foreach (var (u, v) in t.Local) mnV = Math.Min(mnV, v);
+            if (mnV > 0.05) continue;                       // 맨 아랫행이 아니면 건너뜀
+            for (int i = 0; i < t.Local.Count; i++)
+            {
+                if (t.Local[i].v > mnV + 1e-6) continue;    // 아랫변 정점만
+                var q = t.Poly[i];
+                worst = Math.Max(worst, DistToPolyline2D(q.X, q.Y, toe));
+            }
+        }
+        return worst;
+    }
+    // 선추종은 **모서리 겹침을 끄고** 재야 한다 — 겹침(0.10m)은 코너를 메우려고 일부러 내보내는 양이라
+    //   그걸 이탈로 세면 두 성질이 뒤섞여 어느 쪽이 깨졌는지 못 가린다.
+    var t1NoLap = WallBand.Slice(run1, null, joint: 0.05, cornerLap: 0.0);
+    double drift = ToeDrift(t1NoLap, toe1);
+    Check("S24 ★판넬이 벽선을 따라간다(코너 질러감 없음)", drift < 0.05, $"겹침 OFF · 아랫변 최대 이탈 {drift:F4}m");
+
+    // ★ 모서리 겹침이 실제로 코너를 메운다 — 벽면 끝 열이 겹침 길이만큼 더 나가야 한다(JACK '각진부 마감').
+    double driftLap = ToeDrift(t1, toe1);
+    Check("S24 ★모서리 겹침이 코너를 메운다", driftLap > 0.08 && driftLap < 0.18,
+        $"겹침 ON · 아랫변 최대 이탈 {driftLap:F3}m (겹침 0.10m + 선추종 {drift:F3}m)");
+
+    // (C) ★자체검증 — 코너 분할을 끄면(임계 179°) 판넬이 코너를 가로질러 벽선에서 벗어나야 한다.
+    //   '항상 통과하는 검사는 검사가 아니다'(0805).
+    var t3 = WallBand.Slice(run1, null, joint: 0.05, cornerDeg: 179.0);
+    double bugDrift = ToeDrift(t3, toe1);
+    Check("S24 ★검사 자체검증: 코너 분할을 끄면 벽선을 벗어난다", bugDrift > 0.2,
+        $"분할 OFF → 아랫변 최대 이탈 {bugDrift:F2}m (정상 {drift:F4}m)");
+
+    // ★ 어댑터 — 새 Tile이 기존 DWG 작성기의 Panel 계약을 만족해야 한다(작성기를 재사용하기 위함).
+    {
+        int badDir = 0, badPocket = 0;
+        foreach (var t in t1)
+        {
+            var p = WallBand.ToPanel(t);
+            // 앵커는 벽 뒤(흙 속)로 들어가고 아래로 기울어야 한다 — 앞으로 나오면 허공에 뜬다.
+            if (p.IsFull)
+            {
+                double intoEarth = -(p.AnchorDir.x * t.WAxis.x + p.AnchorDir.y * t.WAxis.y + p.AnchorDir.z * t.WAxis.z);
+                if (intoEarth < 0.5 || p.AnchorDir.z > -0.05) badDir++;
+                // 정착구 중심은 판넬 폴리곤 안이어야 한다.
+                double mnU = double.MaxValue, mxU = double.MinValue, mnV = double.MaxValue, mxV = double.MinValue;
+                foreach (var (u, v) in t.Local) { mnU = Math.Min(mnU, u); mxU = Math.Max(mxU, u); mnV = Math.Min(mnV, v); mxV = Math.Max(mxV, v); }
+                if (p.PocketU < mnU || p.PocketU > mxU || p.PocketV < mnV || p.PocketV > mxV) badPocket++;
+            }
+        }
+        Check("S24 ★어댑터: 앵커가 벽 뒤로 비스듬히 박힌다", badDir == 0, $"방향 이상 {badDir}장");
+        Check("S24 ★어댑터: 정착구가 판넬 안에 있다", badPocket == 0, $"이탈 {badPocket}장");
+    }
+
+    // (D) ★현장 조건 — 잘게 꺾인 벽선. 0805 12:37 단독 로그가 '벽면 62 · 모서리 62'였다:
+    //   벽면 하나가 평균 1m도 안 돼 **판넬 한 변(1.67m)보다 짧다** → 옛 방식에선 거의 모든 판넬이
+    //   '코너 판넬'로 양쪽 이웃 평면 절단을 받았고, 그게 조각·마감 불량의 조건이었다.
+    //   새 방식이 이 조건에서 온전한지 못박는다(호를 1m 패싯으로 근사 — 라운드 사면형상과 같은 모양).
+    {
+        var toeR = new List<Point3>(); var crestR = new List<Point3>();
+        const double R = 12.0, hR = 5.0, nR = 0.05;
+        int nf = 40;                                  // 90°를 40조각 → 조각당 2.25°·길이 0.47m
+        for (int i = 0; i <= nf; i++)
+        {
+            double a = Math.PI / 2 * i / nf;
+            toeR.Add(new Point3(R * Math.Cos(a), R * Math.Sin(a), 100));
+            double R2 = R + nR * hR;                  // 크레스트는 바깥으로 0.25m
+            crestR.Add(new Point3(R2 * Math.Cos(a), R2 * Math.Sin(a), 100 + hR));
+        }
+        var runR = new WallRun { Up = true, Bench = 0, Toe = toeR, Crest = crestR, Height = hR };
+        var tR = WallBand.Slice(runR, null, joint: 0.05);
+        Console.WriteLine($"      (D)잘게꺾인벽: {WallBand.LastDiag}");
+
+        Check("S24 (D) 잘게 꺾인 벽선에서도 판넬 생성", tR.Count > 0, $"판넬 {tR.Count}장");
+
+        // ★ 실오라기 판넬이 없어야 한다 — 조각의 정체는 대개 폭 수 mm짜리 판넬이다.
+        double minW = double.MaxValue, maxW = 0;
+        foreach (var t in tR)
+        {
+            double mnU = double.MaxValue, mxU = double.MinValue;
+            foreach (var (u, v) in t.Local) { mnU = Math.Min(mnU, u); mxU = Math.Max(mxU, u); }
+            minW = Math.Min(minW, mxU - mnU); maxW = Math.Max(maxW, mxU - mnU);
+        }
+        Check("S24 (D) ★실오라기 판넬 없음", minW > 0.1, $"판넬 폭 [{minW:F3}..{maxW:F3}]m");
+
+        // ★ 벽선을 따라간다 — 잘게 꺾여도 질러가면 안 된다(겹침은 끄고 순수 추종만 본다).
+        var tRNoLap = WallBand.Slice(runR, null, joint: 0.05, cornerLap: 0.0);
+        double driftR = ToeDrift(tRNoLap, toeR);
+        Check("S24 (D) ★잘게 꺾여도 벽선을 따라간다", driftR < 0.05, $"겹침 OFF · 아랫변 최대 이탈 {driftR:F4}m");
+
+        // ★ 프레임 직교정규 — 이 조건에서도 깨지면 안 된다.
+        double uvR = 0;
+        foreach (var t in tR)
+            uvR = Math.Max(uvR, Math.Abs(t.UAxis.x * t.VAxis.x + t.UAxis.y * t.VAxis.y + t.UAxis.z * t.VAxis.z));
+        Check("S24 (D) ★프레임 직교정규 유지", uvR < 1e-9, $"max|U·V| {uvR:E2}");
+
+        // ★ 빈틈 없이 덮는다 — 판넬 면적 합 ≈ 벽면 전체 면적(줄눈 손실만큼만 작아야 한다).
+        double area = 0;
+        foreach (var t in tR)
+        {
+            double a2 = 0;
+            for (int i = 0; i < t.Local.Count; i++)
+            {
+                var p = t.Local[i]; var q = t.Local[(i + 1) % t.Local.Count];
+                a2 += p.u * q.v - q.u * p.v;
+            }
+            area += Math.Abs(a2) / 2;
+        }
+        double lenR = 0;
+        for (int i = 0; i + 1 < crestR.Count; i++)
+            lenR += Math.Sqrt(Math.Pow(crestR[i + 1].X - crestR[i].X, 2) + Math.Pow(crestR[i + 1].Y - crestR[i].Y, 2));
+        double faceLen = Math.Sqrt(hR * hR + (nR * hR) * (nR * hR));
+        double want = lenR * faceLen;
+        Check("S24 (D) ★빈틈 없이 덮는다(면적 ≈ 벽면 전체)", area > want * 0.85 && area <= want + 1e-6,
+            $"판넬 면적 {area:F1}㎡ / 벽면 {want:F1}㎡ ({area / want * 100:F1}% — 줄눈 손실만큼만 작아야)");
+    }
+}
+
+// ★ S25 [옹벽 재설계 P2] 단 링 → 옹벽선(WallRun) 확정. 지표면을 만든 그 링에서 뽑는지, 구간을 정확히
+//   따르는지, 그리고 그 선으로 판넬을 자르면 온전한지 — 한 줄로 이어 검증한다.
+{
+    var sq25 = new List<Point3> {
+        new(0, 0, 100), new(60, 0, 100), new(60, 60, 100), new(0, 60, 100),
+    };
+    var gnd25 = new FlatGround(140);          // 절토 40m — 링이 넉넉히 나온다
+    var pr25 = new GradingParams {
+        CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 1.5, FillSlope = 1.5, CellSize = 1.0, MaxBenches = 30, MaxRise = 60,
+        VertexSpacing = 2.0, MinSlope = 0.05, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+    var cum25 = GradingGeometry.CumLen2D(sq25);
+    double tot25 = cum25[cum25.Length - 1];
+
+    // 1단만 옹벽인 구간(둘레 앞쪽 1/4) — JACK이 실기한 '1단만 옹벽' 조건과 같다.
+    //   ※ Wall(...)의 toBench는 **포함**이다 — '1단만'은 toBench:0 (toBench+1부터 전역 구배로 복귀).
+    var z25 = new List<SlopeZone> { SlopeZone.Wall(0.0, tot25 * 0.25, 0, 0, 0.05, 1.5) };
+    var vs25 = GradingGeometry.Build(sq25, gnd25, pr25, true, z25);
+    var rs25 = vs25.Rings.Select(r => (IReadOnlyList<Point3>)r).ToList();
+
+    var runs = WallRunBuilder.Build(sq25, rs25, z25, up: true, globalSlope: 1.5, minSlope: 0.05);
+    Console.WriteLine($"      S25 {WallRunBuilder.LastDiag}");
+    Check("S25 옹벽선이 나온다", runs.Count > 0, $"{runs.Count}줄");
+
+    // ★ 1단만 옹벽이므로 Bench는 0만 나와야 한다 — 여기가 틀리면 엉뚱한 단에 벽이 선다.
+    bool onlyB0 = runs.TrueForAll(r => r.Bench == 0);
+    Check("S25 ★지정한 단(1단)에만 옹벽선", onlyB0, $"단 번호 {string.Join(",", runs.ConvertAll(r => r.Bench).Distinct())}");
+
+    // ★ 옹벽선이 구간 안에만 있어야 한다 — 밖으로 새면 사면 자리에 벽이 선다.
+    double outside = 0;
+    foreach (var r in runs)
+        foreach (var q in r.Crest)
+        {
+            double t = GradingGeometry.ParamAt(sq25, cum25, q.X, q.Y);
+            if (!z25[0].Contains(t)) outside = Math.Max(outside, Math.Min(Math.Abs(t - z25[0].T1), Math.Abs(t - z25[0].T0)));
+        }
+    Check("S25 ★옹벽선이 지정 구간을 벗어나지 않는다", outside < 3.0, $"구간 밖 최대 {outside:F2}m (정점 간격 2m — 끝 한 칸 여유)");
+
+    // ★ 토우/크레스트 대응 — 개수가 같고 수평 간격이 구배n×높이(0.25m)여야 한다.
+    double gapMin = double.MaxValue, gapMax = 0; bool sameN = true;
+    foreach (var r in runs)
+    {
+        if (r.Toe.Count != r.Crest.Count) { sameN = false; continue; }
+        for (int i = 0; i < r.Toe.Count; i++)
+        {
+            double g = Math.Sqrt(Math.Pow(r.Crest[i].X - r.Toe[i].X, 2) + Math.Pow(r.Crest[i].Y - r.Toe[i].Y, 2));
+            gapMin = Math.Min(gapMin, g); gapMax = Math.Max(gapMax, g);
+        }
+    }
+    Check("S25 ★토우·크레스트 1:1 대응", sameN, "개수 일치");
+    Check("S25 ★두 선 간격이 옹벽 구배와 맞다", gapMax < 0.60, $"수평 간격 [{gapMin:F3}..{gapMax:F3}]m (1:0.05×5m=0.25m 기대)");
+
+    // ★ 높이가 단높이와 맞다.
+    double hMin = double.MaxValue, hMax = 0;
+    foreach (var r in runs) { hMin = Math.Min(hMin, r.Height); hMax = Math.Max(hMax, r.Height); }
+    Check("S25 ★벽 높이 = 단높이", hMax <= 5.05 && hMin >= 4.95, $"높이 [{hMin:F2}..{hMax:F2}]m");
+
+    // ★ 이 선으로 판넬을 자르면 온전해야 한다(P1과 이어붙인 통합 검증).
+    int tiles = 0, fullT = 0; double uvMax = 0;
+    foreach (var r in runs)
+        foreach (var t in WallBand.Slice(r, gnd25, joint: 0.05))
+        {
+            tiles++; if (t.IsFull) fullT++;
+            uvMax = Math.Max(uvMax, Math.Abs(t.UAxis.x * t.VAxis.x + t.UAxis.y * t.VAxis.y + t.UAxis.z * t.VAxis.z));
+        }
+    Check("S25 ★옹벽선→판넬 통합", tiles > 0 && fullT > 0, $"판넬 {tiles}장(온전 {fullT})");
+    Check("S25 ★통합 후에도 프레임 직교정규", uvMax < 1e-9, $"max|U·V| {uvMax:E2}");
+
+    // ★ 전체 옹벽(구간 없음, 전역 구배가 수직)도 잡아야 한다 — 구간 모드에만 의존하면 안 된다.
+    var prW = new GradingParams {
+        CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 0.05, FillSlope = 0.05, CellSize = 1.0, MaxBenches = 30, MaxRise = 60,
+        VertexSpacing = 2.0, MinSlope = 0.05, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+    var vsW = GradingGeometry.Build(sq25, gnd25, prW, true);
+    var rsW = vsW.Rings.Select(r => (IReadOnlyList<Point3>)r).ToList();
+    var runsW = WallRunBuilder.Build(sq25, rsW, null, up: true, globalSlope: 0.05, minSlope: 0.05);
+    Check("S25 ★전체 옹벽(구간 없음)도 옹벽선이 나온다", runsW.Count > 0, $"{runsW.Count}줄 · {WallRunBuilder.LastDiag}");
+
+    // ★ 전역이 사면이고 구간도 없으면 옹벽선이 하나도 없어야 한다(사면 자리에 벽을 세우면 안 된다).
+    //   ※ 링도 구간 없이 새로 만들어야 한다 — 구간으로 만든 링에는 벽이 실제로 들어 있으므로
+    //     '기하로 판정'하는 새 방식은 (옳게) 그 벽을 찾아낸다.
+    var vsNone = GradingGeometry.Build(sq25, gnd25, pr25, true);
+    var rsNone = vsNone.Rings.Select(r => (IReadOnlyList<Point3>)r).ToList();
+    var runsNone = WallRunBuilder.Build(sq25, rsNone, null, up: true, globalSlope: 1.5, minSlope: 0.05);
+    Check("S25 ★사면뿐이면 옹벽선 0줄", runsNone.Count == 0, $"{runsNone.Count}줄");
+
+    // ★ 전체 옹벽이면 벽면쌍마다 **한 줄씩**이어야 한다 — 모서리에서 끊기면 코너에 벽이 없어진다.
+    //   (정점으로 판정하면 마이터 모서리 정점 간격이 커서 4토막으로 갈렸다 — 실제 결함이었다.)
+    var perFace = new Dictionary<int, int>();
+    foreach (var r in runsW) perFace[r.Bench] = perFace.TryGetValue(r.Bench, out var c) ? c + 1 : 1;
+    int maxPerFace = 0;
+    foreach (var kv in perFace) maxPerFace = Math.Max(maxPerFace, kv.Value);
+    Check("S25 ★전체 옹벽은 단마다 한 줄(모서리에서 안 끊김)", maxPerFace == 1,
+        $"단당 최대 {maxPerFace}줄 · 총 {runsW.Count}줄 / 단 {perFace.Count}개");
+
+    // ── ★ '이어서 하기' — 뒤 구역이 덮은 자리에서 앞 구역 옹벽선을 잘라낸다(이번 재설계의 핵심) ──
+    {
+        var r0 = runsW[0];                                   // 사각 부지를 한 바퀴 도는 1단 옹벽선
+        double lenOf(WallRun r) { double L = 0; for (int i = 0; i + 1 < r.Crest.Count; i++)
+            L += Math.Sqrt(Math.Pow(r.Crest[i + 1].X - r.Crest[i].X, 2) + Math.Pow(r.Crest[i + 1].Y - r.Crest[i].Y, 2)); return L; }
+        double len0 = lenOf(r0);
+
+        // 뒤 구역이 부지 동쪽 절반을 덮었다고 하자.
+        var trimmed = WallRunBuilder.TrimBy(new[] { r0 }, (x, y) => x > 30.0);
+        Console.WriteLine($"      S25 이어서: {WallRunBuilder.LastDiag}");
+        Check("S25 ★덮인 자리를 잘라내고 남은 옹벽선이 있다", trimmed.Count > 0, $"{trimmed.Count}줄");
+
+        double lenT = 0; foreach (var r in trimmed) lenT += lenOf(r);
+        Check("S25 ★잘린 만큼 길이가 준다", lenT < len0 * 0.75 && lenT > len0 * 0.25,
+            $"{len0:F1}m → {lenT:F1}m ({lenT / len0 * 100:F0}%)");
+
+        // ★ 남은 옹벽선이 덮인 영역으로 넘어가면 안 된다 — 넘어가면 '최종 지표면에 없는 벽'이 남는다(v17.5 증상).
+        double intrude = 0;
+        foreach (var r in trimmed)
+            foreach (var q in r.Crest) intrude = Math.Max(intrude, q.X - 30.0);
+        Check("S25 ★남은 옹벽선이 덮인 영역을 침범하지 않는다", intrude < 2.0,
+            $"최대 침범 {intrude:F2}m (세그먼트 단위라 정점 간격만큼 여유)");
+
+        // ★ 전부 덮이면 옹벽선이 0줄이어야 한다 — 남으면 허공에 벽이 뜬다.
+        var gone = WallRunBuilder.TrimBy(new[] { r0 }, (x, y) => true);
+        Check("S25 ★전부 덮이면 옹벽선 0줄", gone.Count == 0, $"{gone.Count}줄");
+
+        // ★ 아무것도 안 덮이면 그대로여야 한다(정상 부지를 갉아먹지 않는지).
+        var same = WallRunBuilder.TrimBy(new[] { r0 }, (x, y) => false);
+        Check("S25 ★안 덮이면 옹벽선 무변경", same.Count == 1 && Math.Abs(lenOf(same[0]) - len0) < 1e-9,
+            $"{same.Count}줄 · {lenOf(same[0]):F1}m");
+
+        // ★ 잘린 옹벽선으로 판넬을 잘라도 온전해야 한다(끝단이 깨지기 쉬운 자리).
+        int tn = 0; double uv2 = 0;
+        foreach (var r in trimmed)
+            foreach (var t in WallBand.Slice(r, gnd25, joint: 0.05))
+            { tn++; uv2 = Math.Max(uv2, Math.Abs(t.UAxis.x * t.VAxis.x + t.UAxis.y * t.VAxis.y + t.UAxis.z * t.VAxis.z)); }
+        Check("S25 ★잘린 옹벽선도 판넬이 온전", tn > 0 && uv2 < 1e-9, $"판넬 {tn}장 · max|U·V| {uv2:E2}");
+    }
+}
+
 Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
 
 static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd, GradingParams pr, bool up, out string err)
@@ -871,6 +1573,13 @@ return fails == 0 ? 0 : 1;
 sealed class FlatGround(double z) : IGroundSurface
 {
     public bool TryGetElevation(double x, double y, out double zz) { zz = z; return true; }
+}
+
+/// <summary>기준점에서 x·y로 기울어진 원지반 — 절토 daylight가 자리마다 다르게 걸리도록.</summary>
+sealed class TiltGround(double x0, double y0, double z0, double kx, double ky) : IGroundSurface
+{
+    public bool TryGetElevation(double x, double y, out double zz)
+    { zz = z0 + kx * (x - x0) + ky * (y - y0); return true; }
 }
 
 sealed class SlopeGround(double z0, double kx) : IGroundSurface

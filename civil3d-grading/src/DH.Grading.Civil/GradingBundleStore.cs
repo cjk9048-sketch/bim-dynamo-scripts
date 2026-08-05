@@ -23,6 +23,19 @@ public sealed class GradingBundle
     /// CutFinalRing/FillFinalRing(단수)은 하위호환용 최대 링.</summary>
     public List<List<Point3>>? CutFinalRings, FillFinalRings;
 
+    /// <summary>[v8 — 다중 구역 정합 0804] 표면에 **실제로 주입된** 클립경계(교선∪계획, 정규화까지 반영).
+    /// 발자국(뒤 구역이 덮은 범위)의 정본 — 순수교선과 달리 '표면이 실제 존재하는 범위'다
+    /// (잡루프 제외·스냅·IllegalBoundary 정규화가 순수교선과 미세하게 다를 수 있음).
+    /// 옛 번들(v7 이하)엔 없음 → LaterFootprints가 순수교선+계획으로 폴백.</summary>
+    public List<Point3>? CutClipRing, FillClipRing;
+
+    /// <summary>[v9 — 옹벽선 정본화 0805, 옹벽선_재설계.md] 이 구역의 **옹벽선**(벽 한 폭씩).
+    /// 정지면을 만드는 그 순간 같은 계산 결과로 확정해 저장하고, 내보내기는 **읽기만** 한다
+    /// (종전엔 내보내기가 링을 다시 계산해 지표면과 어긋났다 — 결함의 뿌리).
+    /// '이어서 하기'로 뒤 구역이 생기면 그때 앞 구역의 이 목록을 새 구역 발자국으로 잘라 다시 저장하므로,
+    /// 이 값은 **항상 현재 최종 지표면과 일치**한다. 옛 번들(v8 이하)엔 없음 → 내보내기가 옛 경로로 폴백.</summary>
+    public List<WallRun>? CutWallRuns, FillWallRuns;
+
     /// <summary>[v3 §75 → v7 구간 구배 0804] 이 정지면에 적용된 '구간별 구배 규칙'(계획경계 호길이 T0..T1 +
     /// '이 단부터 이 구배' 목록). 옹벽=구배 1:0.05인 규칙의 특수 경우.
     /// DHNORI(노리선 제외+옹벽선 표현)·DHINFRA가 소비 — 선택(WallPicks)은 1회성이라 적용 결과는 여기 보존.</summary>
@@ -44,9 +57,13 @@ public sealed class GradingBundle
             var b = regions[j];
             if (b == null) continue;
             void Add(List<Point3>? r) { if (r != null && r.Count >= 3) res.Add(r); }
-            if (b.CutFinalRings != null) foreach (var r in b.CutFinalRings) Add(r);
+            // [v8 0804] 방향별로 '실제 주입 클립링'이 있으면 그게 정본(표면이 실제 존재하는 범위) —
+            //   없으면(옛 번들) 순수교선 조각들로 폴백. 계획폴리곤은 항상 추가(사면 없는 방향 대비).
+            if (b.CutClipRing != null && b.CutClipRing.Count >= 3) Add(b.CutClipRing);
+            else if (b.CutFinalRings != null) foreach (var r in b.CutFinalRings) Add(r);
             else Add(b.CutFinalRing);
-            if (b.FillFinalRings != null) foreach (var r in b.FillFinalRings) Add(r);
+            if (b.FillClipRing != null && b.FillClipRing.Count >= 3) Add(b.FillClipRing);
+            else if (b.FillFinalRings != null) foreach (var r in b.FillFinalRings) Add(r);
             else Add(b.FillFinalRing);
             Add(b.Boundary);
         }
@@ -107,7 +124,9 @@ public static class GradingBundleStore
     // ※ params는 이름표 없는 '숫자 고정 순서'라, 필드 수가 바뀌면 옛 번들을 새 리더로 읽는 순간 뒤 필드가 통째로
     //   밀린다(예외도 안 나고 조용히 엉뚱한 값). 그래서 버전마다 필드 수를 반드시 갈라 읽는다 — ReadParams(split).
     // v7: 구간이 '이 단부터 이 구배' 규칙 목록을 가짐(옹벽=구배 0.05인 규칙). 옛 구간은 SlopeZone.Wall로 무손실 변환.
-    public const int Version = 7;
+    // v8: 실제 주입 클립링(Cut/FillClipRing) — 다중 구역 발자국 마스크 정본(GroundHandle 뒤에 추가).
+    // v9: 옹벽선 정본(Cut/FillWallRuns) — 정지면 생성 때 확정 저장, 내보내기는 읽기만(옹벽선_재설계.md).
+    public const int Version = 9;
 
     /// <summary>[v4] 구역 전체 저장 — 헤더(서명·버전·구역수) 뒤에 구역 본문을 차례로.</summary>
     public static void SaveAll(Database db, Transaction tr, IReadOnlyList<GradingBundle> regions)
@@ -170,10 +189,48 @@ public static class GradingBundleStore
         WriteZones(vals, b.FillWallZones);
         // v4: 기준 지반 핸들
         vals.Add(new((int)DxfCode.Text, b.GroundHandle));
+        // v8: 실제 주입 클립링(발자국 정본 — 없으면 점수 0으로 기록)
+        WritePoints(vals, b.CutClipRing);
+        WritePoints(vals, b.FillClipRing);
+        // v9: 옹벽선 정본
+        WriteWallRuns(vals, b.CutWallRuns);
+        WriteWallRuns(vals, b.FillWallRuns);
+    }
+
+    /// <summary>[v9] 옹벽선 = 개수(90) + run마다 [단번호(90) 높이(40) 토우점렬 크레스트점렬].
+    /// 방향(Up)은 Cut/Fill 목록으로 갈라 저장하므로 따로 쓰지 않는다(읽을 때 채운다).</summary>
+    private static void WriteWallRuns(List<TypedValue> vals, List<WallRun>? rs)
+    {
+        vals.Add(new((int)DxfCode.Int32, rs?.Count ?? 0));
+        if (rs == null) return;
+        foreach (var r in rs)
+        {
+            vals.Add(new((int)DxfCode.Int32, r.Bench));
+            vals.Add(new((int)DxfCode.Real, r.Height));
+            WritePoints(vals, r.Toe);
+            WritePoints(vals, r.Crest);
+        }
+    }
+
+    private static List<WallRun>? ReadWallRuns(TypedValue[] arr, ref int i, bool up)
+    {
+        int n = I32(arr, ref i);
+        if (n <= 0) return null;
+        var outp = new List<WallRun>(n);
+        for (int k = 0; k < n; k++)
+        {
+            int bench = I32(arr, ref i);
+            double h = Dbl(arr, ref i);
+            var toe = ReadPoints(arr, ref i);
+            var crest = ReadPoints(arr, ref i);
+            if (toe == null || crest == null || toe.Count < 2 || crest.Count < 2) continue;
+            outp.Add(new WallRun { Up = up, Bench = bench, Height = h, Toe = toe, Crest = crest });
+        }
+        return outp.Count > 0 ? outp : null;
     }
 
     private static GradingBundle ReadRegion(TypedValue[] arr, ref int i, bool withGroundHandle, bool withZoneTo,
-                                            bool splitBench, bool withRules)
+                                            bool splitBench, bool withRules, bool withClip, bool withRuns)
     {
         var b = new GradingBundle { PlanHandle = Str(arr, ref i), VertexCount = I32(arr, ref i) };
         b.CentroidX = Dbl(arr, ref i); b.CentroidY = Dbl(arr, ref i);
@@ -193,14 +250,30 @@ public static class GradingBundleStore
         b.CutWallZones = ReadZones(arr, ref i, withZoneTo, withRules, minS, System.Math.Max(b.Params.CutSlope, minS));
         b.FillWallZones = ReadZones(arr, ref i, withZoneTo, withRules, minS, System.Math.Max(b.Params.FillSlope, minS));
         if (withGroundHandle) b.GroundHandle = Str(arr, ref i);
+        if (withClip)
+        {
+            b.CutClipRing = ReadPoints(arr, ref i);
+            b.FillClipRing = ReadPoints(arr, ref i);
+        }
+        if (withRuns)
+        {
+            b.CutWallRuns = ReadWallRuns(arr, ref i, up: true);
+            b.FillWallRuns = ReadWallRuns(arr, ref i, up: false);
+        }
         return b;
     }
 
     /// <summary>구역 전체 로드 — v6/v5/v4=구역 목록, v3=단일 구역(하위호환, 목록 1개로). 실패 시 null + reason.
     /// v5 이하 옛 도면도 계속 읽는다(JACK A안) — params만 14필드 리더로 갈라 읽고 단높이·소단폭은 절토=성토로 채움.</summary>
+    /// <summary>[진단 0804] 마지막으로 읽은 번들 버전(0=아직 없음). v8부터 '실제 주입 클립링'이 들어 있어
+    /// 다중 구역 발자국 마스크가 정본을 쓴다 — 옛 번들(v7 이하)은 순수교선 폴백이라 미세하게 어긋난다.
+    /// 증상이 남았을 때 '번들이 옛것이라 그런지'를 로그만 보고 판별하려고 노출한다.</summary>
+    public static int LastLoadedVersion { get; private set; }
+
     public static List<GradingBundle>? TryLoadAll(Database db, Transaction tr, out string reason)
     {
         reason = "";
+        LastLoadedVersion = 0;
         var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
         if (!nod.Contains(DictName)) { reason = "번들 없음(이 도면에서 DHGRADE 실행 기록 없음)"; return null; }
         var dict = (DBDictionary)tr.GetObject(nod.GetAt(DictName), OpenMode.ForRead);
@@ -214,6 +287,7 @@ public static class GradingBundleStore
         {
             if (Str(arr, ref i) != DictName) { reason = "번들 서명 불일치"; return null; }
             int ver = I32(arr, ref i);
+            LastLoadedVersion = ver;
             if (ver >= 4 && ver <= Version)
             {
                 int n = I32(arr, ref i);
@@ -221,13 +295,14 @@ public static class GradingBundleStore
                 var l = new List<GradingBundle>(n);
                 for (int k = 0; k < n; k++)
                     l.Add(ReadRegion(arr, ref i, withGroundHandle: true, withZoneTo: ver >= 5,
-                                     splitBench: ver >= 6, withRules: ver >= 7));
+                                     splitBench: ver >= 6, withRules: ver >= 7, withClip: ver >= 8,
+                                     withRuns: ver >= 9));
                 return l;
             }
             if (ver == 3)   // 하위호환 — 기존 도면(v3 단일 구역)도 그대로 사용
                 return new List<GradingBundle> {
                     ReadRegion(arr, ref i, withGroundHandle: false, withZoneTo: false,
-                               splitBench: false, withRules: false) };
+                               splitBench: false, withRules: false, withClip: false, withRuns: false) };
             reason = $"번들 버전 불일치(v{ver}) — DHGRADE 재실행 필요";
             return null;
         }

@@ -634,12 +634,12 @@ public static class SlopeHatchGenerator
         {
             if (outer == null || outer.Count < 3) return null;
             var gf = new GeometryFactory();
-            Geometry g = ToPoly(gf, outer);
+            Geometry g = ToPoly(gf, outer, allPieces: false);
             if (g.IsEmpty || g is not IPolygonal) return null; // [리뷰 M] 비-폴리곤이면 클립 불가
             void Sub(IReadOnlyList<Point3>? ring)
             {
                 if (ring == null || ring.Count < 3) return;
-                Geometry h = ToPoly(gf, ring);
+                Geometry h = ToPoly(gf, ring, allPieces: true);
                 if (h.IsEmpty) return;
                 try
                 {
@@ -655,8 +655,17 @@ public static class SlopeHatchGenerator
             return new ClipRegion(g);
         }
 
-        private static Geometry ToPoly(GeometryFactory gf, IReadOnlyList<Point3> ring)
+        /// <summary>링 → 폴리곤. <paramref name="allPieces"/>로 **의미를 갈라 쓴다**(0804 회귀 수정).
+        ///
+        ///  · false(바깥 경계) = "면이 <b>실제로 있는</b> 범위". 접힌(핀치) 링에서 감김 반대 로브는
+        ///    실제로 면이 만들어지지 않은 자리이므로 Buffer(0)으로 <b>덜어낸다</b>(v17.4 이전과 동일).
+        ///    여기에 '조각 전부'를 쓰면 접힌 자리가 경계에 끼어들어 지표면에 구멍이 나고 그 구간 옹벽이 빠진다.
+        ///  · true(빼낼 구멍) = "<b>덮인</b> 모든 범위". 한 조각이라도 빠지면 그 자리에 옛 노리선·띠가 살아남으므로
+        ///    노딩+폴리곤화로 <b>전부</b> 유지한다(다중 구역 발자국 — S19).</summary>
+        private static Geometry ToPoly(GeometryFactory gf, IReadOnlyList<Point3> ring, bool allPieces)
         {
+            if (allPieces) return NtsSupport.ToCleanGeometry(ring, gf) ?? gf.CreatePolygon();
+
             var coords = new List<Coordinate>(ring.Count + 1);
             foreach (var p in ring)
             {

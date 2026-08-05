@@ -20,6 +20,10 @@ public sealed class GradingDialog : Window
     private readonly TextBox _fillSlope;
     private readonly RadioButton _shapeMiter;   // 사면형상: 직각(JACK 0728 — 체크박스→옵션단추)
     private readonly RadioButton _shapeRound;   // 사면형상: 라운드
+    /// <summary>[재시작 보존 0805] 대화상자를 연 시점의 사면형상 — 사용자가 라디오를 실제로 바꿨을 때만
+    /// 레지스트리에 기록하기 위한 기준값. 무조건 기록하면 '옛 도면(번들이 직각)을 열고 횡단 간격만 바꿔
+    /// [저장]'해도 라운드 취향이 직각으로 둔갑한다 — 번들 복원값은 사용자 선택이 아니다.</summary>
+    private readonly bool _miterAtOpen = GradingSettings.MiterConvex;
     private readonly CheckBox _showOnlyResult;  // 결과지표면만 표시(기본 체크)
     private readonly CheckBox _mountainTerrace;
     private readonly TextBox _terraceInterval;
@@ -650,6 +654,8 @@ public sealed class GradingDialog : Window
         GradingSettings.XsecLeft = xl;
         GradingSettings.XsecRight = xr;
         GradingSettings.XsecCols = (int)System.Math.Clamp(System.Math.Round(xc), 1, 20);
+        // [재시작 보존 0805] 사용자가 이 대화상자에서 사면형상을 실제로 바꿨을 때만 다음 세션 기본값으로 기록.
+        if (GradingSettings.MiterConvex != _miterAtOpen) GradingSettings.SaveUserPrefs();
 
         DialogResult = true;
         Close();

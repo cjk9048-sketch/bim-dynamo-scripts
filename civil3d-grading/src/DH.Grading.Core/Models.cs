@@ -241,10 +241,13 @@ public sealed class GradingParams
     public double MinFaceRun { get; init; } = 0.005;
 
     /// <summary>
-    /// 사면형상 — 볼록(튀어나온) 모서리 처리. false=라운드(원호, 기본), true=직각(마이터).
+    /// 사면형상 — 볼록(튀어나온) 모서리 처리. true=직각(마이터, 기본), false=라운드(원호).
     /// 직각 모드는 예각에서 <see cref="MiterLimit"/> 비율을 넘으면 자동으로 라운드로 폴백한다.
+    /// [0805] 기본값은 GradingSettings.MiterConvex(직각)와 반드시 일치해야 한다 — 어긋나 있으면
+    /// 명시 대입을 빠뜨린 코드가 '설정은 직각인데 결과는 라운드'를 조용히 만든다(직각/라운드는
+    /// 옹벽 벽면 분할이 완전히 달라져 결과 차이가 극단적 — v17.6 옹벽 6장↔163장).
     /// </summary>
-    public bool MiterConvex { get; init; } = false;
+    public bool MiterConvex { get; init; } = true;
 
     /// <summary>직각(마이터) 모서리 최대 연장 비율 — 모서리 길이 ÷ 단거리. 이보다 뾰족하면 라운드로 폴백.</summary>
     public double MiterLimit { get; init; } = 2.0;

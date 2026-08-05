@@ -30,6 +30,24 @@ public static class WallPanelDwg
     //   ※볼록 코너는 이 돌출로 틈이 조금 더 벌어짐 → 다음 단계 '코너 필러'로 마감 예정.
     private const double FrontOut = 0.10;
 
+    /// <summary>[진단 0805] 직전 Populate에서 판 만들기(압출)에 실패해 통째로 건너뛴 패널 수와 첫 사유.
+    /// 종전엔 catch{}로 조용히 삼켜, 'Generate 72장 → DWG 46장'이 로그 어디에도 안 남았다(JACK 스샷).</summary>
+    public static int nFail { get; private set; }
+    public static string? firstFail { get; private set; }
+
+    /// <summary>[진단 0805 — JACK '이상한 객체가 떠있음'] DWG에 들어간 객체 중 **전체 패널 경계상자**에서
+    /// 5m 넘게 벗어난 것의 수와 첫 사례(종류·거리·좌표).
+    /// ※한계 — 경계상자 **안쪽에** 떠 있는 조각(사면 위에 뜬 패널 등)은 이 검사로 안 잡힌다.
+    /// strayN=0을 '떠있는 객체 없음'으로 읽으면 안 된다(검토 0805 지적).</summary>
+    public static int strayN { get; private set; }
+    public static string? strayFirst { get; private set; }
+
+    /// <summary>[진단 0805] 내보내기 1회 단위로 카운터 초기화 — Populate가 여러 번 불려도(앵커판넬+콘크리트)
+    /// 앞선 호출의 실패·이탈이 지워지지 않도록 **호출자가** 명시적으로 리셋한다.
+    /// (Populate 진입부에서 리셋하면 두 번째 호출이 첫 호출의 실패 26장을 지워 '이상 없음'이 찍힌다 —
+    /// v18.2가 없애려던 '조용히 삼킴'을 진단 코드 자신이 재현하는 구조였다.)</summary>
+    public static void ResetDiag() { nFail = 0; firstFail = null; strayN = 0; strayFirst = null; }
+
     private static readonly Color PanelRgb = Color.FromRgb(200, 198, 194);
     private static readonly Color AnchorRgb = Color.FromRgb(60, 60, 62);
     private static readonly Color PlateRgb = Color.FromRgb(120, 122, 126);
@@ -65,9 +83,9 @@ public static class WallPanelDwg
     ///   concrete=false: 앵커판넬(가운데 홈 + 어스앵커 + 정착판). concrete=true: 콘크리트옹벽(홈·앵커 없이 면만, 무늬는 Phase B).
     /// WorkingDatabase가 db로 설정된 상태에서 호출할 것. 보강토와 한 DWG로 합칠 때 재사용.</summary>
     public static (int Panels, int Anchors) Populate(Database db, Transaction tr,
-        IReadOnlyList<WallPanels.Panel> panels, bool concrete = false, IReadOnlyList<WallPanels.Quoin> quoins = null)
+        IReadOnlyList<WallPanels.Panel> panels, bool concrete = false, IReadOnlyList<WallPanels.Quoin>? quoins = null)
     {
-        int np = 0, na = 0;
+        int np = 0, na = 0;   // 진단 카운터는 여기서 리셋하지 않는다 — ResetDiag() 참조
         {
             {
                 var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForWrite);
@@ -77,6 +95,39 @@ public static class WallPanelDwg
                 ObjectId layPlate = EnsureLayer(db, tr, "DH-앵커판넬-정착판", PlateRgb);
                 ObjectId layConcrete = EnsureLayer(db, tr, "DH-콘크리트옹벽", ConcreteRgb);
                 ObjectId layBody = concrete ? layConcrete : layPanel;
+
+                // [0805 JACK '이상한 객체가 떠있음'] DWG에 실제로 들어간 객체의 위치를 종류별로 재서,
+                //   패널 무리에서 크게 떨어진 것을 좌표와 함께 지목한다. 스샷 없이 로그만으로 갈리게 하는 장치 —
+                //   추측으로 후보를 고르다 다섯 번 헛짚은 뒤 얻은 규칙이다(작업과정.md 0805).
+                double pxMin = double.MaxValue, pxMax = double.MinValue, pyMin = double.MaxValue, pyMax = double.MinValue;
+                double pzMin = double.MaxValue, pzMax = double.MinValue;
+                foreach (var p0 in panels)
+                    foreach (var q0 in p0.Poly)
+                    {
+                        if (q0.X < pxMin) pxMin = q0.X; if (q0.X > pxMax) pxMax = q0.X;
+                        if (q0.Y < pyMin) pyMin = q0.Y; if (q0.Y > pyMax) pyMax = q0.Y;
+                        if (q0.Z < pzMin) pzMin = q0.Z; if (q0.Z > pzMax) pzMax = q0.Z;
+                    }
+                void CheckStray(string kind, Entity e)
+                {
+                    if (pxMin > pxMax) return;                       // 패널이 없으면 기준이 없다
+                    try
+                    {
+                        var ext = e.GeometricExtents;
+                        var c = new Point3d((ext.MinPoint.X + ext.MaxPoint.X) / 2,
+                                            (ext.MinPoint.Y + ext.MaxPoint.Y) / 2,
+                                            (ext.MinPoint.Z + ext.MaxPoint.Z) / 2);
+                        const double slack = 5.0;                    // 패널 구름에서 이만큼 벗어나면 이상
+                        double dx = System.Math.Max(pxMin - c.X, c.X - pxMax);
+                        double dy = System.Math.Max(pyMin - c.Y, c.Y - pyMax);
+                        double dz = System.Math.Max(pzMin - c.Z, c.Z - pzMax);
+                        double d = System.Math.Max(dx, System.Math.Max(dy, dz));
+                        if (d <= slack) return;
+                        strayN++;
+                        strayFirst ??= $"{kind} {d:F1}m 이탈 @ {c.X:F1},{c.Y:F1},{c.Z:F1}";
+                    }
+                    catch { }
+                }
 
                 foreach (var p in panels)
                 {
@@ -88,6 +139,10 @@ public static class WallPanelDwg
                         toOrigin,
                         new Vector3d(p.UAxis.x, p.UAxis.y, p.UAxis.z),
                         new Vector3d(p.VAxis.x, p.VAxis.y, p.VAxis.z), W);
+                    // [0805 JACK '판넬 누락된 자리에 앵커봉만 떠 있음'] 판 만들기가 실패해도 아래 앵커·정착판·
+                    //   도넛은 그대로 만들어져 **허공에 앵커봉만** 남았다(현장: 생성 72장 → DWG 46장인데 앵커는 45개).
+                    //   판이 실패하면 그 패널의 부속은 전부 건너뛴다 — 벽 없는 앵커는 도면 오류로만 보인다.
+                    bool slabOk = false;
                     try
                     {
                         // 콘크리트=바탕 민판(+온전 패널엔 자연석 돌출 무늬), 앵커판넬=가운데 홈 판.
@@ -95,15 +150,29 @@ public static class WallPanelDwg
                         slab.TransformBy(m);
                         slab.LayerId = layBody;
                         ms.AppendEntity(slab); tr.AddNewlyCreatedDBObject(slab, true);
-                        np++;
+                        CheckStray("판넬", slab);
+                        np++; slabOk = true;
                     }
-                    catch { }
+                    catch (System.Exception ex)
+                    {
+                        nFail++;
+                        // [0805] 실패 사유에 **프레임 상태**를 함께 남긴다 — eCannotScaleNonUniformly는
+                        //   좌표계 축이 직교정규가 아닐 때만 나므로, 이 숫자가 그 자리 원인을 바로 지목한다.
+                        if (firstFail == null)
+                        {
+                            var U = new Vector3d(p.UAxis.x, p.UAxis.y, p.UAxis.z);
+                            var V = new Vector3d(p.VAxis.x, p.VAxis.y, p.VAxis.z);
+                            firstFail = $"{ex.Message} [프레임 |U|{U.Length:F4} |V|{V.Length:F4} |W|{W.Length:F4}" +
+                                        $" U·V {U.DotProduct(V):E1} @ {p.Origin.X:F0},{p.Origin.Y:F0}]";
+                        }
+                    }
+                    if (!slabOk) continue;
 
                     // 자연석 무늬 — [JACK 0730] 앵커판넬에도 적용(콘크리트 무늬 이식). 정착구 주변은 민판 유지.
                     try
                     {
                         var pads = BuildConcretePads(p, excludePocket: !concrete && p.IsFull);
-                        if (pads != null) { pads.TransformBy(m); pads.LayerId = layBody; ms.AppendEntity(pads); tr.AddNewlyCreatedDBObject(pads, true); }
+                        if (pads != null) { pads.TransformBy(m); pads.LayerId = layBody; ms.AppendEntity(pads); tr.AddNewlyCreatedDBObject(pads, true); CheckStray("무늬", pads); }
                     }
                     catch { }
 
@@ -129,6 +198,7 @@ public static class WallPanelDwg
                             collar.TransformBy(m);
                             collar.LayerId = layBody;
                             ms.AppendEntity(collar); tr.AddNewlyCreatedDBObject(collar, true);
+                            CheckStray("도넛", collar);
                         }
                         catch { }
 
@@ -141,6 +211,7 @@ public static class WallPanelDwg
                             var anc = BuildAnchor(p, padFace, W);
                             anc.LayerId = layAnchor;
                             ms.AppendEntity(anc); tr.AddNewlyCreatedDBObject(anc, true);
+                            CheckStray("앵커", anc);
                             na++;
                         }
                         catch { }
@@ -149,6 +220,7 @@ public static class WallPanelDwg
                             var plate = BuildPlate(p, padFace, W);
                             plate.LayerId = layPlate;
                             ms.AppendEntity(plate); tr.AddNewlyCreatedDBObject(plate, true);
+                            CheckStray("정착판", plate);
                         }
                         catch { }
                     }
@@ -163,6 +235,7 @@ public static class WallPanelDwg
                             var post = BuildQuoin(q);
                             post.LayerId = layBody;
                             ms.AppendEntity(post); tr.AddNewlyCreatedDBObject(post, true);
+                            CheckStray("코너필러", post);
                         }
                         catch { }
                     }
