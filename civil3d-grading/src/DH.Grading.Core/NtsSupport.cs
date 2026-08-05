@@ -36,6 +36,52 @@ public static class NtsSupport
         return LargestPolygon(g);
     }
 
+    /// <summary>링을 유효 지오메트리로 — 무효면 Buffer(0), **조각 전부 유지**(멀티폴리곤 가능). 실패 시 null.
+    /// [다중 구역 0804 — JACK 스샷] 교선(daylight) 링은 자기접촉(핀치)이 흔한데(경계 주입 IllegalBoundary가 그 증거),
+    /// ToCleanPolygon처럼 최대 조각만 남기면 나머지 로브가 마스크/차집합에서 통째로 빠진다 —
+    /// 앞 구역의 패널·사면 띠가 뒤 구역 사면 위에 살아남던 원인. 발자국·구멍·도넛용은 반드시 이걸 쓴다.</summary>
+    public static Geometry? ToCleanGeometry(IReadOnlyList<Point3> ring, GeometryFactory? gf = null)
+    {
+        if (ring == null || ring.Count < 3) return null;
+        gf ??= Factory();
+        var coords = new List<Coordinate>(ring.Count + 1);
+        foreach (var p in ring)
+        {
+            var c = new Coordinate(p.X, p.Y);
+            if (coords.Count == 0 || coords[^1].Distance(c) > 1e-9) coords.Add(c);
+        }
+        if (coords.Count < 3) return null;
+        if (coords[0].Distance(coords[^1]) > 1e-9) coords.Add(coords[0].Copy());
+        else coords[^1] = coords[0].Copy();
+        if (coords.Count < 4) return null;
+        Geometry g;
+        try { g = gf.CreatePolygon(coords.ToArray()); }
+        catch { return null; }
+        if (!g.IsValid)
+        {
+            // ※ Buffer(0)은 안 된다 — 나비넥타이(핀치)에서 감김 방향이 반대인 로브를 **소거**한다
+            //   (S19 재현: 두 로브 50㎡ → 25㎡). 링 선을 노딩(자기교차점을 정점으로)한 뒤 폴리곤화해
+            //   둘러싸인 셀을 전부 복원하고 합집합으로 정리한다 — '링이 감싼 모든 영역'이 발자국의 의미.
+            try
+            {
+                var noded = gf.CreateLineString(coords.ToArray()).Union();   // 단항 합집합 = 자기교차 노딩
+                var pz = new NetTopologySuite.Operation.Polygonize.Polygonizer();
+                pz.Add(noded);
+                var cells = new List<Geometry>();
+                foreach (var c in pz.GetPolygons())
+                    if (c is Polygon p && !p.IsEmpty) cells.Add(p);
+                if (cells.Count == 0) return null;
+                g = cells.Count == 1 ? cells[0]
+                    : NetTopologySuite.Operation.Union.UnaryUnionOp.Union(cells);
+            }
+            catch
+            {
+                try { g = g.Buffer(0); } catch { return null; }   // 최후 폴백(종전 동작)
+            }
+        }
+        return g == null || g.IsEmpty || g is not IPolygonal ? null : g;
+    }
+
     /// <summary>(멀티)지오메트리에서 면적 최대 폴리곤 — 없으면 null.</summary>
     public static Polygon? LargestPolygon(Geometry g)
     {

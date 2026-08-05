@@ -29,7 +29,12 @@ public static class GradingPolygons
     {
         private readonly List<IndexedPointInAreaLocator> _loc = new();
 
-        /// <summary>점렬 목록으로 마스크 생성 — 유효한 폴리곤이 하나도 없으면 null.</summary>
+        /// <summary>마스크에 실제로 들어간 폴리곤 조각 수(핀치 링 분해 포함) — 진단 로그용.</summary>
+        public int PieceCount { get; private set; }
+
+        /// <summary>점렬 목록으로 마스크 생성 — 유효한 폴리곤이 하나도 없으면 null.
+        /// [0804] 핀치(자기교차) 링은 Buffer(0)이 여러 조각으로 쪼개는데 **전부 유지**한다 —
+        /// 최대 조각만 쓰면 나머지 로브가 마스크에서 빠져 앞 구역 옹벽 3D가 그 자리에 살아남는다.</summary>
         public static RegionMask? Build(IReadOnlyList<IReadOnlyList<Point3>>? rings)
         {
             if (rings == null || rings.Count == 0) return null;
@@ -37,9 +42,14 @@ public static class GradingPolygons
             var m = new RegionMask();
             foreach (var r in rings)
             {
-                var p = NtsSupport.ToCleanPolygon(r, gf);
+                var p = NtsSupport.ToCleanGeometry(r, gf);
                 if (p == null || p.IsEmpty) continue;
-                try { m._loc.Add(new IndexedPointInAreaLocator(p)); } catch { }
+                try
+                {
+                    m._loc.Add(new IndexedPointInAreaLocator(p));
+                    m.PieceCount += p.NumGeometries;
+                }
+                catch { }
             }
             return m._loc.Count > 0 ? m : null;
         }
@@ -75,15 +85,16 @@ public static class GradingPolygons
         if (extraHoles != null)
             foreach (var h in extraHoles)
             {
-                var hp = NtsSupport.ToCleanPolygon(h, gf);
+                // [0804] 구멍도 조각 전부 — 최대 조각만 빼면 나머지 로브 자리의 옛 띠가 남는다(성토면 속 절토 조각).
+                var hp = NtsSupport.ToCleanGeometry(h, gf);
                 if (hp == null || hp.IsEmpty) continue;
                 try { var d2 = donut.Difference(hp); if (!d2.IsEmpty) donut = d2; } catch { }
             }
 
         for (int i = 0; i + 1 < rings.Count; i++)
         {
-            var inner = NtsSupport.ToCleanPolygon(rings[i], gf);
-            var outer = NtsSupport.ToCleanPolygon(rings[i + 1], gf);
+            var inner = NtsSupport.ToCleanGeometry(rings[i], gf);
+            var outer = NtsSupport.ToCleanGeometry(rings[i + 1], gf);
             if (inner == null || outer == null) continue;
             Geometry strip;
             try { strip = outer.Difference(inner); } catch { continue; }
@@ -157,7 +168,7 @@ public static class GradingPolygons
             if (run.Count >= 2)
             {
                 for (int s = run.Count - 1; s >= 0; s--) pts.Add(new Point3(run[s].X, run[s].Y, 0));
-                var pg = NtsSupport.ToCleanPolygon(pts, gf);
+                var pg = NtsSupport.ToCleanGeometry(pts, gf);   // [0804] 핀치 쐐기도 조각 전부(옹벽면 잔재 방지)
                 if (pg != null) { try { poly = pg.Buffer(1.0); } catch { poly = pg; } }
             }
             if (poly == null)
@@ -247,7 +258,8 @@ public static class GradingPolygons
         if (holes != null)
             foreach (var h in holes)
             {
-                var hp = NtsSupport.ToCleanPolygon(h, gf);
+                // [0804] 발자국은 조각 전부 — 최대 조각만 빼면 계획면이 침범 자리를 그대로 갖고 있게 된다.
+                var hp = NtsSupport.ToCleanGeometry(h, gf);
                 if (hp == null || hp.IsEmpty) continue;
                 try
                 {
@@ -263,14 +275,104 @@ public static class GradingPolygons
         return outp;
     }
 
+    /// <summary>[0805 JACK '성토 구간 안의 알 수 없는 초록선'] 정지경계(초록선)로 그릴 교선 고리 중
+    /// **실제 정지 경계 안쪽에 완전히 갇힌 것**을 걸러낸다.
+    ///
+    /// 왜: 교선은 '원지반과 정지면이 만나는 자리'다. 그런데 정지 구역 **안쪽**의 둔덕은 어차피 깎여
+    /// 계획면이 되므로 최종 지형에 그 경계선은 **존재하지 않는다**(JACK 지적). 그런데도 표시 경로가
+    /// 걸러진 고리를 전부 그려서, 경계로 쓰이지도 않는 안쪽 고리가 경계처럼 보였다.
+    ///
+    /// 판정: 표면에 실제 주입된 클립 경계(clipRing)를 tol만큼 안쪽으로 깎은 영역에 고리가 통째로
+    /// 들어가면 '갇힌 것'. 바깥 고리는 클립 경계와 사실상 겹쳐 있어 이 검사에 걸리지 않는다
+    /// (겹치는 선을 실수로 지우지 않기 위한 여유가 tol).</summary>
+    /// <param name="loops">그리려던 교선 고리들.</param>
+    /// <param name="clipRing">그 방향 표면에 주입된 클립 경계(= 정지 구역의 실제 외곽).</param>
+    /// <param name="tol">경계와 이만큼 이상 떨어져 안쪽에 있어야 '갇힌 것'으로 본다(기본 1m).</param>
+    /// <param name="dropped">걸러낸 고리 수.</param>
+    public static List<IReadOnlyList<Point3>> DropLoopsInsideClip(
+        IReadOnlyList<IReadOnlyList<Point3>> loops, IReadOnlyList<Point3>? clipRing,
+        double tol, out int dropped)
+    {
+        dropped = 0;
+        var outp = new List<IReadOnlyList<Point3>>();
+        LastDropDiag = "";
+        if (loops == null) return outp;
+        var gf = NtsSupport.Factory();
+        Geometry? clip = null, inner = null;
+        // [안전 0805] 이 함수는 **지표면을 만드는 트랜잭션 안에서** 호출된다 — 여기서 예외가 새어나가면
+        //   정지면 작업 전체가 취소된다. 핀치(자기접촉) 링에서 NTS가 TopologyException을 던지는 일이
+        //   실제로 있었으므로(v17.5의 원인) 링 정리까지 전부 감싼다. 실패하면 **아무것도 안 거른다**
+        //   — 표시가 하나 더 남는 건 사소하지만, 경계선이 사라지거나 지표면을 잃는 건 치명적이다.
+        if (clipRing != null && clipRing.Count >= 3)
+            try
+            {
+                clip = NtsSupport.ToCleanGeometry(clipRing, gf);
+                if (clip != null && !clip.IsEmpty)
+                {
+                    var b = clip.Buffer(-System.Math.Abs(tol));
+                    if (b != null && !b.IsEmpty) inner = b;
+                }
+            }
+            catch { clip = null; inner = null; }
+        var sb = new System.Text.StringBuilder();
+        foreach (var lp in loops)
+        {
+            if (lp == null || lp.Count < 2) continue;
+            if (inner != null)
+            {
+                try
+                {
+                    var coords = new Coordinate[lp.Count];
+                    for (int i = 0; i < lp.Count; i++) coords[i] = new Coordinate(lp[i].X, lp[i].Y);
+                    // 선분으로 판정 — 고리가 안 닫혀 있어도(열린 조각) 그대로 쓸 수 있다.
+                    Geometry ls = coords.Length >= 2 ? gf.CreateLineString(coords) : gf.CreatePoint(coords[0]);
+                    bool covered = inner.Covers(ls);
+                    // [진단 0805] 왜 안 걸렀는지 알 수 있게 — 클립 경계까지 거리(음수=밖)를 남긴다.
+                    //   전부 안쪽인데 경계에 붙어 있으면 '갇힌 것'이 아니라 '경계선'이다.
+                    double dEdge = 0; bool allIn = true;
+                    try
+                    {
+                        var edge = clip!.Boundary;
+                        double dmin = double.MaxValue;
+                        foreach (var c in coords)
+                        {
+                            var pt = gf.CreatePoint(c);
+                            if (!clip.Covers(pt)) { allIn = false; break; }
+                            dmin = System.Math.Min(dmin, edge.Distance(pt));
+                        }
+                        dEdge = allIn && dmin < double.MaxValue ? dmin : -1;
+                    }
+                    catch { }
+                    // 길이·닫힘도 함께 — 갇힌 섬(닫힘)과 경계 조각(열림)을 눈으로 가릴 수 있게.
+                    double llen = 0;
+                    for (int i = 1; i < lp.Count; i++)
+                    { double ax = lp[i].X - lp[i - 1].X, ay = lp[i].Y - lp[i - 1].Y; llen += System.Math.Sqrt(ax * ax + ay * ay); }
+                    double gap = System.Math.Sqrt(
+                        (lp[0].X - lp[^1].X) * (lp[0].X - lp[^1].X) + (lp[0].Y - lp[^1].Y) * (lp[0].Y - lp[^1].Y));
+                    sb.Append($" [{lp.Count}점 {llen:F0}m {(gap < 0.1 ? "닫힘" : "열림")} " +
+                              $"{(covered ? "제외" : "표시")} 경계와 {(allIn ? $"{dEdge:F1}m 안쪽" : "걸침/밖")}]");
+                    if (covered) { dropped++; continue; }
+                }
+                catch { }
+            }
+            outp.Add(lp);
+        }
+        LastDropDiag = sb.ToString();
+        return outp;
+    }
+
+    /// <summary>직전 <see cref="DropLoopsInsideClip"/>의 고리별 판정 내역(진단 로그용).</summary>
+    public static string LastDropDiag = "";
+
     /// <summary>finalRing − 계획폴리곤 도넛(NTS Geometry). 실패/비었으면 null —
     /// 구멍 없는 outer를 돌려주면 계획면까지 절/성토 면적에 조용히 포함되므로(리뷰 M-2) 실패는 눈에 보이게 0건 처리.</summary>
     public static Geometry? Donut(IReadOnlyList<Point3> finalRing, IReadOnlyList<Point3> boundary)
     {
         var gf = NtsSupport.Factory();
-        var outer = NtsSupport.ToCleanPolygon(finalRing, gf);
+        // [0804] 교선 링이 핀치로 여러 조각이면 전부 도넛 밖거죽으로 — 최대 조각만 쓰면 로브의 띠가 통째로 빠진다.
+        var outer = NtsSupport.ToCleanGeometry(finalRing, gf);
         if (outer == null) return null;
-        var hole = NtsSupport.ToCleanPolygon(boundary, gf);
+        var hole = NtsSupport.ToCleanGeometry(boundary, gf);
         if (hole == null) return null;
         try
         {

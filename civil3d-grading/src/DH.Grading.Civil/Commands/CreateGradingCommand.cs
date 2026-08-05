@@ -521,7 +521,32 @@ public sealed class CreateGradingCommand
                 // [JACK 0728 재원복] 정지면_DH는 원지반+절/성토 '합성면'이라 지표면 자체 경계(스타일 Boundary)는
                 //   측량 전체 외곽선이지 정지경계가 아님(스샷: 부지 근처에 경계 안 보임) → 초록 정지경계선을 다시
                 //   보이게 한다. 부지를 가로지르는 전이선·2m 미만 부스러기는 FilterOutsidePlan으로 걸러 표시.
-                GradingBuilder.DrawDaylight(db, tr2, FilterOutsidePlan(allLoops, boundary, 0.5), "DH-정지경계", 3, layerOff: false);
+                // [0805 JACK '성토 구간 안의 알 수 없는 초록선'] 정지 구역 **안쪽에 완전히 갇힌** 교선 고리는
+                //   최종 지형의 경계가 아니다(그 둔덕은 어차피 깎여 계획면이 된다) → 그리지 않는다.
+                //   경계로 실제 쓰이는 건 클립링 1개인데 표시 경로가 걸러진 고리를 전부 그려 온 것이 원인.
+                System.Collections.Generic.IReadOnlyList<System.Collections.Generic.IReadOnlyList<Point3>>
+                    drawLoops = FilterOutsidePlan(allLoops, boundary, 0.5);
+                int loopDropped = 0;
+                string loopDiag = "";
+                // [안전 0805] 표시용 필터가 지표면 트랜잭션을 깨면 안 된다 — 실패하면 원래대로 전부 그린다.
+                try
+                {
+                    foreach (var kv in injectedRings)
+                    {
+                        // 여유 0.3m — 진짜 경계선은 클립링과 겹쳐 0.0m로 찍히고, 갇힌 섬은 0.8m처럼 뚜렷이
+                        //   떨어져 나온다(현장 로그 0805 10:55 실측). 종전 1.0m는 0.8m짜리를 놓쳤다.
+                        drawLoops = GradingPolygons.DropLoopsInsideClip(drawLoops, kv.Value.ring, 0.3, out int dn);
+                        loopDropped += dn;
+                        loopDiag += $"\n  vs {kv.Key} 클립링:{GradingPolygons.LastDropDiag}";
+                    }
+                    bndMsg += $"\n정지경계 표시: 고리 {drawLoops.Count + loopDropped}개 중 갇힌 것 {loopDropped}개 제외(표시 전용 — 기하·토량 무관)" + loopDiag;
+                }
+                catch (System.Exception ex)
+                {
+                    drawLoops = FilterOutsidePlan(allLoops, boundary, 0.5);   // 폴백: 종전대로 전부 표시
+                    bndMsg += $"\n정지경계 표시: 갇힌 고리 판정 실패 — 전부 표시(표시 전용, 지표면 무관) — {ex.Message}";
+                }
+                GradingBuilder.DrawDaylight(db, tr2, drawLoops, "DH-정지경계", 3, layerOff: false);
                 GradingBuilder.DrawDaylight(db, tr2, clipLoopsDraw, "DH-클립경계", 4, layerOff: true); // 하늘색=클립링(∪계획)
                 // 과거 진단선(빨강/하늘) 잔재 청소 — 오류로 오인 방지(JACK)
                 GradingBuilder.DrawDebugSpans(db, tr2, System.Array.Empty<(Point3, Point3)>());
@@ -667,7 +692,34 @@ public sealed class CreateGradingCommand
             // ── 4단계: 결과 번들 저장(ralplan Phase 0) — 노리선 작도는 DHNORI(노리선 버튼)로 이관 ──
             // 저장 시점 = 3단계의 모든 복구·정규화 종단점 이후(finalRings가 정규화 재주입까지 반영된 상태).
             // 내부 링은 boundary+params에서 결정적 재계산 가능하므로 재현 불가능한 finalRing만 저장.
-            string bundleMsg = "";
+            string bundleMsg = "", trimMsg = "";
+            // ── [옹벽선 정본화 0805 — 옹벽선_재설계.md P2] 옹벽선을 **여기서 확정**한다 ──
+            //   지표면을 만든 그 링에서, 지금 이 자리에서 뽑아 저장한다. 내보내기는 이걸 읽기만 하므로
+            //   '내보내기가 링을 다시 계산해 지표면과 어긋나는' 구조적 결함이 사라진다.
+            //   실패해도 번들 저장 자체는 계속한다(옛 경로로 폴백 — 정지면은 이미 완성돼 있다).
+            System.Collections.Generic.List<WallRun>? cutRuns = null, fillRuns = null;
+            string runMsg = "";
+            try
+            {
+                cutRuns = cut.HasSlope
+                    ? WallRunBuilder.Build(boundary, cut.Rings, cutZones.Count > 0 ? cutZones : null,
+                                           up: true, globalSlope: p.CutSlope, minSlope: p.MinSlope)
+                    : null;
+                string cd = WallRunBuilder.LastDiag;
+                fillRuns = fill.HasSlope
+                    ? WallRunBuilder.Build(boundary, fill.Rings, fillZones.Count > 0 ? fillZones : null,
+                                           up: false, globalSlope: p.FillSlope, minSlope: p.MinSlope)
+                    : null;
+                string fd = WallRunBuilder.LastDiag;
+                if (cutRuns != null && cutRuns.Count == 0) cutRuns = null;
+                if (fillRuns != null && fillRuns.Count == 0) fillRuns = null;
+                runMsg = $"옹벽선 확정 — 절토 {(cutRuns?.Count ?? 0)}줄 · 성토 {(fillRuns?.Count ?? 0)}줄" +
+                         (cut.HasSlope ? $"\n  절토: {cd}" : "") + (fill.HasSlope ? $"\n  성토: {fd}" : "");
+            }
+            catch (System.Exception rex) { runMsg = "옹벽선 확정 실패(내보내기는 옛 경로로 폴백) — " + rex.Message; }
+            try { DiagLog.Append("\n■ 옹벽선 확정(4단계 전)\n  " + runMsg.Replace("\n", "\n  ") + "\n"); }
+            catch { }
+
             try
             {
                 var fp = GradingBundle.Fingerprint(boundary);
@@ -687,9 +739,15 @@ public sealed class CreateGradingCommand
                     FillFinalRing = finalRings.TryGetValue("성토", out var fr) ? fr : null,
                     CutFinalRings = allRings.TryGetValue("절토", out var crs) ? crs : null,
                     FillFinalRings = allRings.TryGetValue("성토", out var frs) ? frs : null,
+                    // [v8 0804] 실제 주입 클립링 — 다중 구역 발자국 마스크 정본(순수교선과 달리 정규화까지 반영).
+                    CutClipRing = injectedRings.TryGetValue("절토", out var icr) ? icr.ring : null,
+                    FillClipRing = injectedRings.TryGetValue("성토", out var ifr) ? ifr.ring : null,
                     // [§75 v3] 적용된 옹벽 구간 보존 — DHNORI(노리선 제외+옹벽선)·DHINFRA 소비.
                     CutWallZones = cutZones.Count > 0 ? cutZones : null,
                     FillWallZones = fillZones.Count > 0 ? fillZones : null,
+                    // [v9 0805] 옹벽선 정본 — 내보내기는 이것만 읽는다(옹벽선_재설계.md).
+                    CutWallRuns = cutRuns,
+                    FillWallRuns = fillRuns,
                 };
                 // [다중 구역 0729] 모드별 구역 목록: Fresh=이 구역 하나 / Append=기존 뒤에 추가 / RerunLast=마지막 교체.
                 var save = mode == GradeMode.Append && regionsPrev != null
@@ -699,11 +757,46 @@ public sealed class CreateGradingCommand
                         : new System.Collections.Generic.List<GradingBundle> { bundle };
                 if (mode == GradeMode.RerunLast && regionsPrev != null && regionsPrev.Count > 0)
                     save[save.Count - 1] = bundle;
+
+                // ★[이어서 하기 0805] 이 구역이 덮은 자리에서 **앞 구역들의 옹벽선을 잘라 갱신**한다.
+                //   여기서 갱신해 두면 내보내기 시점엔 이미 최종 상태 — 지우개(마스크)가 필요 없어지고,
+                //   지우개 경계에 조각이 남던 종전 결함의 뿌리가 사라진다.
+                try
+                {
+                    var mine = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
+                    if (bundle.CutClipRing is { Count: >= 3 }) mine.Add(bundle.CutClipRing);
+                    if (bundle.FillClipRing is { Count: >= 3 }) mine.Add(bundle.FillClipRing);
+                    if (boundary is { Count: >= 3 }) mine.Add(boundary);
+                    var mask = GradingPolygons.RegionMask.Build(mine);
+                    if (mask != null && save.Count > 1)
+                    {
+                        int last = save.Count - 1, trimmed = 0;
+                        for (int r = 0; r < last; r++)
+                        {
+                            var pb = save[r];
+                            int before = (pb.CutWallRuns?.Count ?? 0) + (pb.FillWallRuns?.Count ?? 0);
+                            if (before == 0) continue;
+                            var nc = WallRunBuilder.TrimBy(pb.CutWallRuns, mask.Contains);
+                            var nf = WallRunBuilder.TrimBy(pb.FillWallRuns, mask.Contains);
+                            pb.CutWallRuns = nc.Count > 0 ? nc : null;
+                            pb.FillWallRuns = nf.Count > 0 ? nf : null;
+                            int after = nc.Count + nf.Count;
+                            if (after != before) trimmed++;
+                        }
+                        trimMsg = trimmed > 0
+                            ? $"\n앞 구역 옹벽선 갱신: {trimmed}개 구역이 이번 구역에 덮여 잘림 — {WallRunBuilder.LastDiag}"
+                            : "\n앞 구역 옹벽선 갱신: 덮인 옹벽 없음";
+                    }
+                }
+                catch (System.Exception tex) { trimMsg = "\n앞 구역 옹벽선 갱신 실패 — " + tex.Message; }
                 using Transaction tr4 = db.TransactionManager.StartTransaction();
                 GradingBundleStore.SaveAll(db, tr4, save);
                 tr4.Commit();
                 bundleMsg = $"번들 저장 v{GradingBundleStore.Version} — 구역 {save.Count}개 · 이번 구역 경계 {boundary.Count}점 · " +
-                            $"절토링 {(bundle.CutFinalRing?.Count ?? 0)}점 · 성토링 {(bundle.FillFinalRing?.Count ?? 0)}점" +
+                            $"절토링 {(bundle.CutFinalRing?.Count ?? 0)}점 · 성토링 {(bundle.FillFinalRing?.Count ?? 0)}점 · " +
+                            $"클립링 절 {(bundle.CutClipRing?.Count ?? 0)}점/성 {(bundle.FillClipRing?.Count ?? 0)}점 · " +
+                            $"옹벽선 절 {(bundle.CutWallRuns?.Count ?? 0)}줄/성 {(bundle.FillWallRuns?.Count ?? 0)}줄" +
+                            trimMsg +
                             "\n→ [노리선]·[INFRAWORKS] 버튼이 이 번들을 사용합니다";
             }
             catch (System.Exception ex) { bundleMsg = "번들 저장 실패 — " + ex.Message; }

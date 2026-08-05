@@ -35,6 +35,8 @@ public sealed class RibbonApp : IExtensionApplication
 
     public void Initialize()
     {
+        // [재시작 보존 0805] 사면형상(직각/라운드) 마지막 저장값 복원 — 첫 명령 전에 끝나야 하므로 여기서(레지스트리 1회 읽기라 부하 없음).
+        GradingSettings.LoadUserPrefs();
         if (ComponentManager.Ribbon != null) BuildRibbon();
         else AcadApp.Idle += OnIdleBuild;
         // [배포 0728] 한국 좌표계 9종 자동 검사·설치 — 시작 부하를 피해 Idle 1회로 미룬다.

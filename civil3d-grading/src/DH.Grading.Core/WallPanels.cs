@@ -23,6 +23,18 @@ public static class WallPanels
 
     public static string LastDiag { get; private set; } = "";
 
+    /// <summary>[하네스 전용] 감긴 호길이 되감기(AtSeg)를 꺼서 0805 버그를 재현한다 — S20이 실제로
+    /// 그 버그를 잡는 검사인지 확인하는 용도. 운영 코드에서는 절대 켜지 않는다.</summary>
+    public static bool DisableWrapFixForTest;
+
+    /// <summary>[하네스 전용] keep 부호를 옛 방식(face 한가운데 한 점)으로 되돌려 0805 '코너 크로스' 버그를
+    /// 재현한다 — S22가 실제로 그 버그를 잡는 검사인지 확인하는 용도. 운영 코드에서는 절대 켜지 않는다.</summary>
+    public static bool DisableRefSplitForTest;
+
+    /// <summary>[하네스 전용] 프레임 직교화(0805 eCannotScaleNonUniformly 수정)를 꺼서 버그를 재현한다 —
+    /// S23이 실제로 그 버그를 잡는 검사인지 확인하는 용도. 운영 코드에서는 절대 켜지 않는다.</summary>
+    public static bool DisableFrameFixForTest;
+
     /// <summary>코너 필러(quoin) — 미터로도 안 닫히는 코너 틈(절토 볼록·성토 오목)에만 세우는 얇은 수직 채움 기둥.
     /// Toe=코너 토우, Top=코너 데이라잇(사면 위), WidthAxis=틈을 가로지르는 수평축, W=부지쪽(두께 방향), Width=폭.
     /// (예전 허공 포스트와 달리 AtSeg로 토우·데이라잇을 정확히 계산 — 뜨지 않음.)</summary>
@@ -55,6 +67,56 @@ public static class WallPanels
         double vUp = 1.0 / denom, hIn = slopeN / denom;               // 슬로프길이 1당 (수직, 안쪽수평)
         double aRad = anchorDeg * System.Math.PI / 180.0;
         int full = 0, part = 0;
+        // [진단 0804 — JACK '옹벽 누락'] 벽이 조용히 빠지는 자리를 사유별로 센다.
+        //   지반없음 = 그 자리 원지반 표고를 못 읽음(원지반 범위 밖) / 토우가지반위 = 그 자리는 애초에 절토가 아님
+        //   구간밖 = §75 옹벽 구간·뒤 구역 마스크에 걸림 / 기타 = 그 외
+        int spanN = 0, skipNoGnd = 0, skipAbove = 0, skipKeep = 0, skipOther = 0;
+        // [진단 0804-2] 스팬은 통과했는데 패널이 안 나오는 자리 — 어느 단계에서 버려지는지 센다.
+        //   행없음=데이라잇 클립 결과 빈 폴리곤 / 코너=인접면 평면 절단에 다 잘림 / 줄눈=줄눈 인셋에 다 잘림
+        //   면적·얇음=익스트루드 하한(0.02㎡·0.03m) 미달
+        int rowN = 0, dNoPoly = 0, dCorner = 0, dJoint = 0, dArea = 0, dThin = 0, dHair = 0;
+        // [진단 0805] 벽면이 몇 조각으로 갈리는지 — 사면형상 직각/라운드가 여기서 크게 갈린다(라운드는 원호 꺾임이
+        //   25° 미만이라 한 벽면이 원호 전체를 덮는다). 옹벽 누락 신고가 오면 이 값부터 본다.
+        int faceN = 0, faceTiny = 0, cornN = 0;
+        // [진단 0805-2] 코너 버림 중 '짧은 면'(faceLen < nearC) 몫 — 짧은 면은 전 구간이 모서리 근처라
+        //   v17.6 제한이 걸리지 않아 옛 동작(양쪽 평면 절단)이 그대로 남는다. 남은 코너 누락의 후보.
+        int dCornerShort = 0;
+        double oxMin = double.MaxValue, oxMax = double.MinValue, oyMin = double.MaxValue, oyMax = double.MinValue;
+        // [진단 0805] 단높이 상한(5m)을 넘은 링 쌍 — 구간 옹벽/사면이 섞여 평균 Z가 튄 자리.
+        int bigStep = 0; double maxStep = 0, maxSide = 0;
+        // [진단 0805-3 — 로그만 보고 판정] 설계 상한을 넘는 '이상 판넬'과 그 위치, 그리고 링 좌표범위.
+        //   판넬범위가 링범위를 벗어나면 = 엉뚱한 곳에 생긴 것. 좌표를 남겨 도면에서 바로 찾을 수 있게.
+        int oversize = 0; double ovMaxW = 0, ovAtX = 0, ovAtY = 0;
+        double rxMin = double.MaxValue, rxMax = double.MinValue, ryMin = double.MaxValue, ryMax = double.MinValue;
+        // [진단 0805-4 — JACK '판넬이 부챗살처럼 벌어짐'] 프레임 비틀림(U·V)과 그 근원인 '링 세그먼트 Z경사'를 잰다.
+        //   판넬 가로축 U는 링 세그먼트의 3D 방향이라, 링이 **한 표고의 등고선이 아니면**(정점끼리 Z가 다르면)
+        //   U가 기울어 사면 상방 V와 직각이 아니게 되고 판넬이 통째로 비스듬히 선다.
+        //   0805 실기에서 이 판넬 26장이 AutoCAD 거부(eCannotScaleNonUniformly)로 안 보이다가 v18.2에서 드러났다.
+        //   → '왜 링이 기울었나'를 다음 로그 한 줄로 가르기 위한 계측. 링 번호·좌표까지 남긴다.
+        int skewN = 0; double maxSkew = 0, skAtX = 0, skAtY = 0; int skRing = -1;
+        double maxRingDz = 0; int dzRing = -1; double dzAtX = 0, dzAtY = 0, dzLen = 0;
+        for (int rk = 0; rk < rings.Count; rk++)
+        {
+            var rr = rings[rk];
+            if (rr == null || rr.Count < 2) continue;
+            for (int i = 0; i < rr.Count; i++)
+            {
+                var p1 = rr[i]; var p2 = rr[(i + 1) % rr.Count];
+                double sdz = System.Math.Abs(p2.Z - p1.Z);
+                if (sdz > maxRingDz)
+                {
+                    maxRingDz = sdz; dzRing = rk; dzAtX = p1.X; dzAtY = p1.Y;
+                    dzLen = System.Math.Sqrt((p2.X - p1.X) * (p2.X - p1.X) + (p2.Y - p1.Y) * (p2.Y - p1.Y));
+                }
+            }
+        }
+        foreach (var r0 in rings)
+            if (r0 != null)
+                foreach (var q0 in r0)
+                {
+                    if (q0.X < rxMin) rxMin = q0.X; if (q0.X > rxMax) rxMax = q0.X;
+                    if (q0.Y < ryMin) ryMin = q0.Y; if (q0.Y > ryMax) ryMax = q0.Y;
+                }
 
         for (int k = 1; k < rings.Count; k++)
         {
@@ -65,8 +127,23 @@ public static class WallPanels
             // [패널 크기 규칙 — JACK 0721] 단 수직높이 기준 정사각 한 변: ≤1m→높이, ≤3m→높이/2, ≤5m→높이/3.
             //   딱 안 나눠지면 소수점 둘째자리 반올림. 두께는 항상 200. (단높이는 팝업에서 5m 상한.)
             int nRow = step <= 1.0 + 1e-9 ? 1 : step <= 3.0 + 1e-9 ? 2 : 3;
+            // [0805 JACK '엉뚱한 곳에 거대한 쐐기 판넬'] 위 규칙은 **단높이 5m 상한**(정지옵션 검증값)을
+            //   전제로 한다. 그런데 step은 이웃 두 링의 **평균 Z 차이**라, 구간 옹벽·사면이 섞인 링에서는
+            //   (예: '2단부터 사면'으로 바깥이 확 퍼진 링) 평균 Z가 크게 튀어 step이 5m를 훌쩍 넘는다.
+            //   그러면 side가 그대로 커져 한 변 10~20m짜리 판넬이 만들어졌다 — 설계상 있을 수 없는 크기.
+            //   한 변을 설계 상한(5/3 ≈ 1.67m) 이하로 묶는다(개수만 늘 뿐 형상·위치는 그대로).
+            //   ※ 여유 0.5m — step은 두 링의 **평균** Z 차이라 완화 정점 때문에 5m 단이 5.0002m로 나온다.
+            //     여유 없이 걸면 정상 부지마다 ⚠가 뜨고 판넬 크기까지 바뀐다(실측: 409→412장). 자가진단
+            //     로그가 거짓 경보를 내면 진짜 이상을 못 알아본다.
+            const double stepLimit = 5.5;
+            if (step > stepLimit)
+            {
+                nRow = (int)System.Math.Ceiling(step / (5.0 / 3.0) - 1e-9);
+                bigStep++; maxStep = System.Math.Max(maxStep, step);
+            }
             double side = System.Math.Round(step / nRow, 2);
             if (side < 0.05) continue;
+            maxSide = System.Math.Max(maxSide, side);
             var walk = new Walk(ring);
             if (walk.Length < side) continue;
             double slopeLen = step / vUp;                              // 이 단 사면 길이
@@ -135,6 +212,7 @@ public static class WallPanels
             // [코너에서 벽면 분할 — JACK 0721] 패널이 코너를 가로질러 휘지 않게 모서리(≥25°)에서 끊어 벽면별로 타일링.
             //   각 face는 시작·끝 코너에서 '각도 이등분선(미터)'까지만 남긴다 → 볼록부 겹침 제거·오목부 빈틈 채움.
             var cidx = walk.FindCornerIdx(25.0);
+            cornN += cidx.Count;
             var faces = new List<(double fs, double fe, int firstSeg, int lastSeg, bool corner)>();
             if (cidx.Count < 2) faces.Add((0, walk.Length, 0, walk.SegN - 1, false));
             else
@@ -151,6 +229,7 @@ public static class WallPanels
             foreach (var (fs, fe, firstSeg, lastSeg, corner) in faces)
             {
                 double faceLen = fe - fs;
+                faceN++; if (faceLen < side) faceTiny++;
                 // [코너 미터 — 상대 면 평면 절단, JACK 0722] 각 face를 '인접 면의 평면'에서 자른다 → 두 면이 그
                 //   평면 교선에서 **딱 만난다**(액자 모서리). 이등분선 절단은 서로 다르게 기운 두 면의 실제 교선이
                 //   아니라 틈/덧방을 유발했음(v4.2~4.7). 상대 평면 절단은 볼록(틈)·오목(겹침) 모두 필러 없이 해결.
@@ -163,9 +242,19 @@ public static class WallPanels
                     int nextSeg = (lastSeg + 1) % walk.SegN;
                     wPrev = SegW(prevSeg); Pprev = FacePt(prevSeg, fs, 0);
                     wNext = SegW(nextSeg); Pnext = FacePt(nextSeg, fe, 0);
-                    var refP = FacePt(firstSeg, (fs + fe) / 2, 0);      // 이 face 안쪽 기준점 → keep 부호
-                    signS = System.Math.Sign((refP.X - Pprev.X) * wPrev.x + (refP.Y - Pprev.Y) * wPrev.y + (refP.Z - Pprev.Z) * wPrev.z);
-                    signE = System.Math.Sign((refP.X - Pnext.X) * wNext.x + (refP.Y - Pnext.Y) * wNext.y + (refP.Z - Pnext.Z) * wNext.z);
+                    // [0805 JACK '코너에서 판넬이 크로스되고 그 뒤가 누락'] keep 부호(어느 쪽을 남길지)는
+                    //   **각 끝단 근처의 실제 벽면 점**으로 판단해야 한다. 종전엔 firstSeg의 직선을 face 한가운데
+                    //   호길이까지 연장한 점 하나로 양쪽을 다 판단했다 — 한 벽면이 여러 세그먼트에 걸치면(링이
+                    //   25° 미만으로 완만히 휘면 항상) 그 점은 실제 벽에서 크게 벗어나 부호가 뒤집힌다.
+                    //   부호가 뒤집히면 자를 쪽과 남길 쪽이 바뀌어, 코너를 가로지르는 조각만 살고(크로스)
+                    //   정작 코너 패널이 잘려나갔다(누락 → 멀어지면 절단이 안 걸려 다시 생김).
+                    double refIn = System.Math.Min(faceLen * 0.25, side * 0.5);
+                    if (refIn < 1e-3) refIn = faceLen * 0.5;
+                    var refS = FacePt(firstSeg, fs + refIn, 0);          // 시작 코너에서 조금 안쪽(첫 세그먼트 위)
+                    var refE = FacePt(lastSeg, fe - refIn, 0);           // 끝 코너에서 조금 안쪽(마지막 세그먼트 위)
+                    if (DisableRefSplitForTest) { refS = FacePt(firstSeg, (fs + fe) / 2, 0); refE = refS; }
+                    signS = System.Math.Sign((refS.X - Pprev.X) * wPrev.x + (refS.Y - Pprev.Y) * wPrev.y + (refS.Z - Pprev.Z) * wPrev.z);
+                    signE = System.Math.Sign((refE.X - Pnext.X) * wNext.x + (refE.Y - Pnext.Y) * wNext.y + (refE.Z - Pnext.Z) * wNext.z);
                     clipS = signS != 0; clipE = signE != 0;
                     // 코너 채움에 필요한 만큼만 연장(코너 미터점 오프셋 slopeN·step + 반두께 여유). 과다 연장은 완만한 코너에서
                     //   길고 얇은 조각이 멀리 떠버림(JACK 0722 떠있는 객체) → 상한을 둔다.
@@ -188,8 +277,18 @@ public static class WallPanels
                 foreach (var (u0, u1, seg, cf) in spans)
                 {
                     double wCol = u1 - u0, uMid = (u0 + u1) / 2;
+                    spanN++;
                     if (keep != null)                                       // [§75] 옹벽 구간 밖 스팬 → 건너뜀
-                    { var kp = FacePt(seg, uMid, 0); if (!keep(kp.X, kp.Y, k)) continue; }
+                    {
+                        // [다중 구역 0804] 중점 1점만 보면 뒤 구역 발자국 경계에 걸친 패널이 통째로 살아남아
+                        //   사면 위에 떠 보인다 — 스팬 양끝+중점 3점 다수결(2점 이상 유효해야 배치).
+                        var kpA = FacePt(seg, u0 + 0.02, 0);
+                        var kpM = FacePt(seg, uMid, 0);
+                        var kpB = FacePt(seg, u1 - 0.02, 0);
+                        int okc = (keep(kpA.X, kpA.Y, k) ? 1 : 0) + (keep(kpM.X, kpM.Y, k) ? 1 : 0)
+                                + (keep(kpB.X, kpB.Y, k) ? 1 : 0);
+                        if (okc < 2) { skipKeep++; continue; }
+                    }
                     // [데이라잇 다각형 클립 — JACK 0721] 열 폭에 걸쳐 상한 s를 촘촘히 샘플. 한 행 안에서
                     //   실제 데이라잇 선을 따라 삼/사/오/육각형 무엇이든으로 자른다(직선 하나로 가로질러 찢는 문제 해결).
                     int NS = System.Math.Max(2, (int)System.Math.Ceiling(wCol / 0.12));
@@ -205,14 +304,29 @@ public static class WallPanels
                         cap[t] = cut ? System.Math.Min(slopeLen, DayS(seg, uu)) : fillCap;
                         if (cap[t] > 1e-6) anyCap = true;
                     }
-                    if (!anyCap) continue;
+                    if (!anyCap)
+                    {
+                        // [진단 0804] 왜 이 스팬에 벽이 없는지 토우 한 점으로 가른다 — 원지반 범위 밖인지,
+                        //   그 자리가 애초에 절토가 아닌지(토우가 이미 지반 위)를 로그로 구별해야 헛다리를 안 짚는다.
+                        var pt0 = FacePt(seg, uMid, 0);
+                        if (!ground.TryGetElevation(pt0.X, pt0.Y, out double gz0)) skipNoGnd++;
+                        else if (pt0.Z >= gz0 - eps) skipAbove++;
+                        else skipOther++;
+                        continue;
+                    }
 
                     for (int i = 0; ; i++)
                     {
                         double s0 = i * side, s1 = System.Math.Min(s0 + side, slopeLen);
                         if (s1 <= s0 + 1e-6) break;
+                        rowN++;
+                        // [0805] 각 단의 마지막 행은 사면길이가 단높이로 딱 안 나눠져 수 mm짜리 실오라기가 된다
+                        //   (slopeLen = step/vUp 이라 step보다 0.1% 남음). 줄눈 인셋은 v∈[jm, rowH−jm]만 남기므로
+                        //   rowH < 2·jm 인 행은 **반드시** 사라진다 — 계산만 하고 버려져 '줄눈' 손실을 부풀렸다
+                        //   (현장 로그 줄눈 366·재현 1690의 대부분). 애초에 만들지 않고 따로 센다.
+                        if (jm > 1e-4 && s1 - s0 < 2 * jm) { dHair++; continue; }
                         var localPolys = ClipCurtain(us, cap, u0, s0, s1);
-                        if (localPolys.Count == 0) continue;
+                        if (localPolys.Count == 0) { dNoPoly++; continue; }
                         // [정착구 기준 앵커 — JACK 0721/0730] 가운데 돌출부(도넛)까지 데이라잇/단상한에 안 잘려야 앵커·홈.
                         //   도넛 1단이 0.56m라 홈(0.2)만 검사하면 도넛 윗부분이 데이라잇 밖으로 삐져나옴(JACK 0730 스샷)
                         //   → 판정 반경을 도넛 반폭+여유(0.30)로 넓힘. 걸치는 판넬은 앵커 없는 일반 판으로.
@@ -238,17 +352,25 @@ public static class WallPanels
                             //   → 두 면이 코너에서 두께/2씩 겹쳐 **두께가 꽉 찬 모서리**(JACK 0722: 딱 만나는 것보다 반두께 더 나가게).
                             const double cornerLap = 0.10;             // 두께(0.20)의 절반
                             var lp = lp0;
-                            if (clipS)
+                            // [0805 라운드 모드 옹벽 소실] 미터 절단은 **모서리 근처에서만** 뜻이 있다. 사면형상=라운드면
+                            //   볼록 모서리가 원호가 되고 꺾임이 25° 미만이라 한 '벽면'이 원호 전체를 덮는다(측정: 모서리
+                            //   350→27·벽면 350→63). 그 휜 면 전 구간에 이웃 평면 절단을 걸면 원호 중간 패널이 통째로
+                            //   평면 바깥으로 밀려 잘려나갔다(코너에서 208행 소실 · 옹벽 408→90). 곧은 면에서는 중간
+                            //   스팬이 어차피 절단에 안 걸리므로 이 제한은 직각 모드 결과를 바꾸지 않는다.
+                            double nearC = ext + side * 1.5;
+                            bool cS = clipS && (u0 - fs) < nearC;
+                            bool cE = clipE && (fe - u1) < nearC;
+                            if (cS)
                                 lp = ClipHalf(lp,
                                     signS * ((org.X - Pprev.X) * wPrev.x + (org.Y - Pprev.Y) * wPrev.y + (org.Z - Pprev.Z) * wPrev.z) + cornerLap,
                                     signS * (ux * wPrev.x + uy * wPrev.y + uz * wPrev.z),
                                     signS * (vx * wPrev.x + vy * wPrev.y + vz * wPrev.z));
-                            if (clipE && lp.Count >= 3)
+                            if (cE && lp.Count >= 3)
                                 lp = ClipHalf(lp,
                                     signE * ((org.X - Pnext.X) * wNext.x + (org.Y - Pnext.Y) * wNext.y + (org.Z - Pnext.Z) * wNext.z) + cornerLap,
                                     signE * (ux * wNext.x + uy * wNext.y + uz * wNext.z),
                                     signE * (vx * wNext.x + vy * wNext.y + vz * wNext.z));
-                            if (lp.Count < 3) continue;
+                            if (lp.Count < 3) { dCorner++; if (faceLen < nearC) dCornerShort++; continue; }
                             // [줄눈 — JACK 0721/0722] 패널 변에서 jm씩 인셋 → 이웃과 joint 폭 틈(InfraWorks 가시성).
                             //   ※코너필러(cf): **세로 줄눈(좌우)은 없애 가로 조각 방지**, **상하 줄눈은 유지**해 블록 높이가 벽과 일치.
                             //     데이라잇 경사변(상단 s1 아래)은 이 클립에 안 걸려 실루엣 유지.
@@ -262,7 +384,7 @@ public static class WallPanels
                                 }
                                 if (lp.Count >= 3) lp = ClipHalf(lp, -jm, 0, 1);          // v ≥ jm (상하 줄눈 — cf도 적용)
                                 if (lp.Count >= 3) lp = ClipHalf(lp, rowH - jm, 0, -1);   // v ≤ rowH−jm
-                                if (lp.Count < 3) continue;
+                                if (lp.Count < 3) { dJoint++; continue; }
                             }
 
                             double area = PolyArea(lp);
@@ -279,10 +401,20 @@ public static class WallPanels
                             if (!isFull)
                             {
                                 // ★작은 삼각형도 유지(JACK 0721) — 익스트루드 실패할 만큼 얇은/작은 것만 제거.
-                                if (area < sliverMin) continue;
-                                if (maxV - minV < edgeMin || maxU - minU < edgeMin) continue;
+                                if (area < sliverMin) { dArea++; continue; }
+                                if (maxV - minV < edgeMin || maxU - minU < edgeMin) { dThin++; continue; }
                             }
 
+                            // [진단 0805-3] 설계 상한을 넘는 판넬 — 한 열은 side(+코너필러 ext)보다 넓을 수
+                            //   없고 한 행은 side보다 높을 수 없다. 넘으면 기하 오류다(JACK 스샷의 거대 쐐기).
+                            {
+                                double pw = maxU - minU, ph = maxV - minV;
+                                if (pw > side + ext + 0.5 || ph > side + 0.5)
+                                {
+                                    oversize++;
+                                    if (pw > ovMaxW) { ovMaxW = pw; ovAtX = org.X; ovAtY = org.Y; }
+                                }
+                            }
                             double wx = uy * vz - uz * vy, wy = uz * vx - ux * vz, wz = ux * vy - uy * vx;
                             double wl = System.Math.Sqrt(wx * wx + wy * wy + wz * wz); if (wl < 1e-9) continue;
                             wx /= wl; wy /= wl; wz /= wl;
@@ -295,6 +427,38 @@ public static class WallPanels
                                 for (int t = 0; t < local.Count; t++) local[t] = (-local[t].u, local[t].v);
                                 ux = -ux; uy = -uy; uz = -uz; wx = -wx; wy = -wy; wz = -wz;
                             }
+                            // ★[0805 JACK '옹벽이 사선으로 잘려 누락'] 프레임 직교화 — 기하는 그대로 두고 표현만 바꾼다.
+                            //   U는 링 세그먼트의 **3D 방향**이고 V는 사면 상방이라, 세그먼트가 기울면(단차 계획선처럼
+                            //   계획선 정점 높이가 다르면 그 아래 링도 기운다) U·V = 세그먼트Z경사×vUp ≠ 0 — 프레임이 비틀린다.
+                            //   AutoCAD `Solid3d.TransformBy`는 회전+이동만 받으므로 비틀린 프레임 행렬을
+                            //   **eCannotScaleNonUniformly로 거부**한다 → 판이 통째로 안 만들어지고, 조용히 삼켜져
+                            //   그 자리 옹벽이 사선으로 잘려 사라졌다(현장 로그: 생성 72 → 저장 46, 실패 26장).
+                            //   고치는 방법은 V를 U에 직교화하되 **로컬 좌표에 같은 양을 되돌려 넣는 것**:
+                            //     V = c·U + s·V'  ⇒  u·U + v·V = (u + c·v)·U + (s·v)·V'
+                            //   즉 월드 좌표가 **한 점도 안 움직인다**(항등식). |V'|=1이고 U×V' = (U×V)/s 라 W도 그대로.
+                            double cUV = ux * vx + uy * vy + uz * vz;
+                            double sUV = 1.0;
+                            // ★[0805-2 안전장치] 기울기가 크면 그 판넬은 **벽이 아니다**.
+                            //   v18.2에서 직교화만 하고 전부 그렸더니, 종전에 AutoCAD가 거부해 안 보이던 판넬들이
+                            //   부챗살처럼 벌어져 드러났다(JACK 12:15 스샷). 즉 그 판넬들의 기하는 원래부터 틀렸고
+                            //   AutoCAD 거부가 우연히 가려주고 있었다 — 드러낸다고 옳아지지 않는다.
+                            //   |U·V| = sin(기울기). 0.02 = 약 1.15°까지만 정상으로 본다(수치오차·완만한 단차 여유).
+                            //   그 이상은 **그리지 않고 사유별로 센다** — 조용히 삼키던 것을 로그로 끌어올린 상태.
+                            //   근본 원인(왜 링 세그먼트가 기우는가)은 아래 '링Z경사' 계측값으로 다음 판에서 가른다.
+                            double skew = System.Math.Abs(cUV);
+                            if (skew > maxSkew) { maxSkew = skew; skAtX = org.X; skAtY = org.Y; skRing = k; }
+                            if (skew > 0.02) { skewN++; continue; }
+                            if (System.Math.Abs(cUV) <= 1e-12 || DisableFrameFixForTest) cUV = 0;
+                            else
+                            {
+                                // V' = W × U — 나눗셈 없이 정확히 단위·직교(W는 U와 외적 관계라 W⊥U가 보장).
+                                //   (U×V)×U = V − (U·V)U 이고 |U×V| = s 이므로 W×U = (V − cU)/s = V' 와 정확히 같다.
+                                double npx = wy * uz - wz * uy, npy = wz * ux - wx * uz, npz = wx * uy - wy * ux;
+                                sUV = vx * npx + vy * npy + vz * npz;      // s = V·V' (= √(1−c²), 항상 양수)
+                                vx = npx; vy = npy; vz = npz;
+                                for (int t = 0; t < local.Count; t++)
+                                    local[t] = (local[t].u + cUV * local[t].v, sUV * local[t].v);
+                            }
                             var poly = new List<Point3>(local.Count);
                             foreach (var (lu, lv) in local)
                                 poly.Add(new Point3(org.X + lu * ux + lv * vx, org.Y + lu * uy + lv * vy, org.Z + lu * uz + lv * vz));
@@ -304,7 +468,9 @@ public static class WallPanels
                             double pocketU = 0, pocketV = 0;
                             if (isFull)
                             {
+                                // 정착구 중심도 같은 항등식으로 옮긴다 — 안 옮기면 앵커가 판 밖으로 빠진다.
                                 pocketU = (flip ? -1 : 1) * (wCol / 2); pocketV = side / 2;
+                                pocketU += cUV * pocketV; pocketV *= sUV;
                                 aPos = new Point3(org.X + pocketU * ux + pocketV * vx,
                                                   org.Y + pocketU * uy + pocketV * vy,
                                                   org.Z + pocketU * uz + pocketV * vz);
@@ -314,6 +480,10 @@ public static class WallPanels
                                 full++;
                             }
                             else part++;
+                            // [진단 0805 — JACK '엉뚱한 곳에 옹벽 조각'] 패널 원점의 좌표 범위를 남긴다.
+                            //   부지가 X≈185,000인데 범위 하한이 0 근처면 원점(0,0)에 떨어진 조각이 있다는 뜻.
+                            if (org.X < oxMin) oxMin = org.X; if (org.X > oxMax) oxMax = org.X;
+                            if (org.Y < oyMin) oyMin = org.Y; if (org.Y > oyMax) oyMax = org.Y;
                             result.Add(new Panel(poly, isFull, center, (wx, wy, wz), aPos, aDir,
                                 org, (ux, uy, uz), (vx, vy, vz), (wx, wy, wz), local, pocketU, pocketV));
                         }
@@ -322,8 +492,38 @@ public static class WallPanels
             }
 
         }
-        LastDiag = $"패널 {result.Count}(온전 {full}·잘림 {part}) · 앵커 {full} · {(cut ? "절토" : "성토")} 1:{slopeN}";
+        LastDiag = $"패널 {result.Count}(온전 {full}·잘림 {part}) · 앵커 {full} · {(cut ? "절토" : "성토")} 1:{slopeN}" +
+                   $" · 스팬 {spanN} 중 건너뜀 {skipNoGnd + skipAbove + skipKeep + skipOther}" +
+                   $"(지반없음 {skipNoGnd} · 토우가지반위 {skipAbove} · 구간밖 {skipKeep} · 기타 {skipOther})" +
+                   $" · 행 {rowN} 중 버림 {dNoPoly + dCorner + dJoint + dArea + dThin + dHair}" +
+                   $"(행없음 {dNoPoly} · 코너 {dCorner}[짧은면 {dCornerShort}] · 줄눈 {dJoint} · 면적 {dArea} · 얇음 {dThin}" +
+                   $" · 실오라기 {dHair}[단 나머지—정상])" +
+                   $" · 벽면 {faceN}(짧은면 {faceTiny}) · 모서리 {cornN} · 판넬한변 최대 {maxSide:F2}m" +
+                   // [0805-2] 링이 수평이 아니면 판넬이 그만큼 비스듬히 선다 — 그 근원과 결과를 나란히 남긴다.
+                   $" · 링Z경사 최대 {maxRingDz:F2}m/{dzLen:F2}m(링 {dzRing} @ {dzAtX:F0},{dzAtY:F0})" +
+                   (skewN > 0
+                     ? $" · ⚠기울어진 판넬 {skewN}장 생략(최대 {System.Math.Asin(System.Math.Min(1, maxSkew)) * 180 / System.Math.PI:F1}°" +
+                       $" 링 {skRing} @ {skAtX:F0},{skAtY:F0})"
+                     : $" · 판넬기울기 최대 {System.Math.Asin(System.Math.Min(1, maxSkew)) * 180 / System.Math.PI:F2}°") +
+                   (bigStep > 0 ? $" · ⚠단높이초과 링쌍 {bigStep}개(최대 {maxStep:F1}m — 한 변 상한으로 분할)" : "") +
+                   (oversize > 0 ? $" · ⚠이상판넬 {oversize}장(최대폭 {ovMaxW:F1}m @ {ovAtX:F0},{ovAtY:F0})" : "") +
+                   (result.Count == 0 ? "" :
+                    $" · 패널범위 X[{oxMin:F0}..{oxMax:F0}] Y[{oyMin:F0}..{oyMax:F0}]" +
+                    $" / 링범위 X[{rxMin:F0}..{rxMax:F0}] Y[{ryMin:F0}..{ryMax:F0}]" +
+                    OutMsg(oxMin, oxMax, oyMin, oyMax, rxMin, rxMax, ryMin, ryMax));
         return result;
+    }
+
+    /// <summary>[진단 0805-3] 패널범위가 링범위를 얼마나 벗어났는지 한 줄로 — 로그만 보고 판정하기 위한 것.
+    /// 판넬은 링에서 안쪽으로 slopeN×단높이(수십 cm)만 들어가고 바깥으로는 코너 연장(수 m)뿐이라,
+    /// 몇 m를 넘게 벗어나면 엉뚱한 곳에 생긴 것이다.</summary>
+    private static string OutMsg(double px0, double px1, double py0, double py1,
+                                double rx0, double rx1, double ry0, double ry1)
+    {
+        double outd = System.Math.Max(
+            System.Math.Max(rx0 - px0, px1 - rx1),
+            System.Math.Max(ry0 - py0, py1 - ry1));
+        return outd > 5.0 ? $" · ⚠링 밖 {outd:F0}m 이탈" : " — 범위 정상";
     }
 
     /// <summary>한 행(row) 사각형 [u0..u1]×[s0..s1]을 데이라잇 상한선(cap(u)) 아래로 클립.
@@ -528,6 +728,19 @@ public static class WallPanels
         public (double x, double y, double z, double nx, double ny) AtSeg(int seg, double uAbs)
         {
             seg = Norm(seg);
+            // [0805 JACK '코너 누락 + 엉뚱한 곳의 옹벽 조각'] uAbs는 링을 감아 둘레를 넘을 수 있다 —
+            //   벽면 목록의 **마지막 하나는 링 시작점을 지나 감기기** 때문(faces에서 fe0 += Length).
+            //   SegOf는 u를 되감아 올바른 세그먼트를 주는데 여기서 되감지 않으면 t가 둘레만큼 커져
+            //   패널이 접선 방향으로 수백 m 날아갔다(실측: 부지 밖 서쪽 137m·남쪽 61m).
+            //   이 세그먼트 기준 '가장 가까운 표현'으로 되돌린다 — 코너 미터의 의도된 연장(수십 cm~수 m)은
+            //   둘레의 절반에 한참 못 미치므로 그대로 보존된다.
+            if (Length > 0 && !DisableWrapFixForTest)
+            {
+                double rel = uAbs - _cum[seg];
+                double half = Length / 2;
+                if (rel > half || rel < -half) rel -= System.Math.Floor(rel / Length + 0.5) * Length;
+                uAbs = _cum[seg] + rel;
+            }
             var a = _a[seg]; var b = _b[seg];
             double dx = b.x - a.x, dy = b.y - a.y, len = System.Math.Sqrt(dx * dx + dy * dy);
             double t = len > 1e-12 ? (uAbs - _cum[seg]) / len : 0;

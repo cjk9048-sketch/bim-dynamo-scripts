@@ -20,7 +20,7 @@ public static class WallDwg
         IReadOnlyList<WallPanels.Panel> panels,
         IReadOnlyList<WallPanels.Panel> concrete,
         double blockW, double blockD, double blockH, double capD, double capT,
-        IReadOnlyList<WallPanels.Quoin> quoins = null,
+        IReadOnlyList<WallPanels.Quoin>? quoins = null,
         IReadOnlyList<WallTee.Run>? tees = null)
     {
         int nb = 0, nc = 0, np = 0, na = 0, ncp = 0, nt = 0;
@@ -35,10 +35,13 @@ public static class WallDwg
             {
                 if (blockSets != null && blockSets.Count > 0)
                     (nb, nc) = WallBlockDwg.Populate(db, tr, blockSets, blockW, blockD, blockH, capD, capT);
+                WallPanelDwg.ResetDiag();   // 내보내기 1회 단위 — Populate 진입부에서 리셋하면 2회차가 1회차 실패를 지운다
                 if (panels != null && panels.Count > 0)
                     (np, na) = WallPanelDwg.Populate(db, tr, panels, concrete: false, quoins: quoins);
+                // 코너 필러는 위 첫 호출에서 전량 생성된다 — 여기서 또 넘기면 같은 자리에 솔리드가 2개 생기고,
+                //   CheckStray 기준상자가 콘크리트 패널 구름이라 코너 필러가 통째로 '동떨어진 객체'로 오탐된다.
                 if (concrete != null && concrete.Count > 0)
-                    (ncp, _) = WallPanelDwg.Populate(db, tr, concrete, concrete: true, quoins: quoins);
+                    (ncp, _) = WallPanelDwg.Populate(db, tr, concrete, concrete: true, quoins: null);
                 if (tees != null && tees.Count > 0)
                     nt = WallTeeDwg.Populate(db, tr, tees);   // [0730] 역T형(1단 옹벽 구간)
                 tr.Commit();
