@@ -12,6 +12,37 @@ public static class WallDwg
     /// <summary>[진단 0731] 직전 Export에서 SaveAs 전에 제외한 깨진 솔리드 수 — DHINFRA 로그 표기용.</summary>
     public static int LastDropped { get; private set; }
 
+    /// <summary>[JACK 0806 확인용] 판넬을 만든 <b>옹벽선 그 자체</b>를 3D 폴리선으로 넣는다.
+    /// 아랫선(토우)·윗선(크레스트)을 색을 달리해 따로 레이어에 둔다 —
+    /// 판넬이 선에서 벗어났는지, 아니면 선 자체가 이상한지를 도면에서 바로 가를 수 있다.</summary>
+    private static void AppendWallLines(Database db, Transaction tr, IReadOnlyList<WallRun> runs)
+    {
+        var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForWrite);
+        var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+        ObjectId layToe = WallPanelDwg.EnsureLayer(db, tr, "DH-옹벽선-아랫선(토우)",
+            Autodesk.AutoCAD.Colors.Color.FromRgb(255, 60, 60));
+        ObjectId layCrest = WallPanelDwg.EnsureLayer(db, tr, "DH-옹벽선-윗선(크레스트)",
+            Autodesk.AutoCAD.Colors.Color.FromRgb(60, 200, 255));
+        foreach (var r in runs)
+        {
+            AddOne(r.Toe, layToe);
+            AddOne(r.Crest, layCrest);
+        }
+
+        void AddOne(System.Collections.Generic.IReadOnlyList<Point3>? pts, ObjectId lay)
+        {
+            if (pts == null || pts.Count < 2) return;
+            var pl = new Polyline3d();
+            pl.LayerId = lay;
+            ms.AppendEntity(pl); tr.AddNewlyCreatedDBObject(pl, true);
+            foreach (var p in pts)
+            {
+                var v = new PolylineVertex3d(new Autodesk.AutoCAD.Geometry.Point3d(p.X, p.Y, p.Z));
+                pl.AppendVertex(v); tr.AddNewlyCreatedDBObject(v, true);
+            }
+        }
+    }
+
     /// <summary>보강토 블록 + 앵커판넬 + 콘크리트 패널 + 역T형을 한 DWG로 저장.
     /// 반환=(블록,캡,앵커판넬,앵커,콘크리트패널,역T세그) 수. 무엇이 비어도 됨(있는 것만 채움).</summary>
     public static (int Blocks, int Caps, int Panels, int Anchors, int Concrete, int Tees) Export(
@@ -21,7 +52,8 @@ public static class WallDwg
         IReadOnlyList<WallPanels.Panel> concrete,
         double blockW, double blockD, double blockH, double capD, double capT,
         IReadOnlyList<WallPanels.Quoin>? quoins = null,
-        IReadOnlyList<WallTee.Run>? tees = null)
+        IReadOnlyList<WallTee.Run>? tees = null,
+        IReadOnlyList<WallRun>? wallLines = null)
     {
         int nb = 0, nc = 0, np = 0, na = 0, ncp = 0, nt = 0;
         using var db = new Database(true, true);
@@ -44,6 +76,11 @@ public static class WallDwg
                     (ncp, _) = WallPanelDwg.Populate(db, tr, concrete, concrete: true, quoins: null);
                 if (tees != null && tees.Count > 0)
                     nt = WallTeeDwg.Populate(db, tr, tees);   // [0730] 역T형(1단 옹벽 구간)
+                // ★[JACK 0806 '확인용으로 옹벽선을 옹벽객체에 레이어 만들어서 추가해줘']
+                //   판넬이 **어느 선을 따라야 했는지**를 도면에서 바로 대볼 수 있게, 판넬을 만든 그 옹벽선을
+                //   그대로 3D 폴리선으로 넣는다. 판넬이 선에서 벗어났는지·선 자체가 이상한지를
+                //   로그 숫자가 아니라 **눈으로** 가를 수 있다(오목부 진단에 특히 필요 — JACK 0806).
+                if (wallLines != null && wallLines.Count > 0) AppendWallLines(db, tr, wallLines);
                 tr.Commit();
             }
             // [JACK 0731 — 모델링 오류 115094·저장 중 RECOVER 대응] 압출/불리언이 드물게 '깨진 ACIS 솔리드'를

@@ -144,8 +144,13 @@ public sealed class InfraworksCommand
                 new ShpField("ELEV", 'N', 12, 3), new ShpField("AREA", 'N', 18, 2),
             };
 
+            // [JACK 0805] 내보내기는 부지 규모에 따라 수십 초~수 분이 걸린다 — 그동안 멈춘 것처럼 보이지 않게
+            //   상태막대에 지금 단계를 띄우고, 끝나면 단계별 소요시간을 로그·완료 팝업에 남긴다.
+            using var prog = new ExportProgress(6);
+
             // ── ① 계획면.shp — [다중 구역] 구역별 계획폴리곤. [0804 — JACK] 뒤 구역 사면이 침범한 만큼 뺀다 —
             //   침범 부분은 최종 지표면에서 더 이상 계획고 평면이 아니므로 그대로 내보내면 지표면과 안 맞는다.
+            prog.Stage("계획면");
             {
                 var feats = new System.Collections.Generic.List<(System.Collections.Generic.IReadOnlyList<System.Collections.Generic.IReadOnlyList<Point3>>, object?[])>();
                 double cutTotal = 0;
@@ -181,6 +186,8 @@ public sealed class InfraworksCommand
             // [0805-2] 기울어진 링 위 판넬을 생략한 구역·수 — 자가진단에 그대로 올린다(구멍이 남는다는 뜻이므로).
             var wallSkipNotes = new System.Collections.Generic.List<string>();
             var teeAll = new System.Collections.Generic.List<WallTee.Run>();   // [0730] 역T형(1단 구간)
+            // [JACK 0806 확인용] 판넬을 만든 옹벽선 — 옹벽3D.dwg에 별도 레이어로 같이 넣어 눈으로 대볼 수 있게.
+            var wallLineAll = new System.Collections.Generic.List<WallRun>();
             static System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? RingsOf(
                 System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? many,
                 System.Collections.Generic.List<Point3>? one)
@@ -190,8 +197,10 @@ public sealed class InfraworksCommand
             var stripFeats = new System.Collections.Generic.Dictionary<string,
                 System.Collections.Generic.List<(System.Collections.Generic.IReadOnlyList<System.Collections.Generic.IReadOnlyList<Point3>>, object?[])>>();
 
+            prog.Stage("사면·옹벽 계산");
             for (int ri = 0; ri < regions.Count; ri++)
             {
+                prog.Tick();   // 구역마다 진행 — 구역이 많아도 멈춘 것처럼 안 보인다
                 var bundle = regions[ri];
                 string rPre = regions.Count > 1 ? $"[구역{ri + 1}] " : "";
                 // [다중 구역 0804] 뒤 구역이 덮어쓴 영역 — 띠·옹벽3D를 여기서 빼야 최종 지표면 모양과 맞는다.
@@ -367,20 +376,113 @@ public sealed class InfraworksCommand
                         //   그 선은 정지면을 만든 그 순간 확정됐고, 뒤 구역이 생길 때마다 잘려 갱신됐으므로
                         //   **이미 최종 지표면과 일치**한다 → 링 재계산도, 뒤 구역 지우개(keep/laterMask)도 필요 없다.
                         //   (종전엔 여기서 링을 다시 만들고 지우개로 지웠고, 그 어긋남이 결함의 뿌리였다.)
-                        var storedRuns = up ? bundle.CutWallRuns : bundle.FillWallRuns;
+                        var storedRuns0 = up ? bundle.CutWallRuns : bundle.FillWallRuns;
+                        // [0805 '사선으로 존재하지 않는 옹벽'] 저장된 선에 비정상적으로 긴 변이 있으면 여기서 끊는다.
+                        //   옛 버전이 만들어 이미 저장된 선(정지면을 다시 안 만든 구역)도 이 관문을 지난다 —
+                        //   현장 실측 44.55m 변 하나가 부지를 가로지르는 가짜 옹벽을 만들었다.
+                        string runGuard = "";
+                        var storedRuns = storedRuns0;
+                        if (storedRuns0 != null && storedRuns0.Count > 0)
+                        {
+                            storedRuns = WallRunBuilder.SplitLongSegments(storedRuns0, out runGuard);
+                            // [0805 JACK '누락됨'] 끝이 맞닿는 조각은 다시 이어 붙인다 — 따로 깔면 사이가 한 칸 빈다.
+                            storedRuns = WallRunBuilder.MergeAdjacent(storedRuns, out int mergedN);
+                            if (mergedN > 0)
+                                runGuard += $" · 맞닿은 조각 {mergedN}개 이어붙임(중간 누락 방지) · {WallRunBuilder.LastBridge}";
+                        }
                         System.Collections.Generic.List<WallPanels.Panel> panels;
                         if (storedRuns != null && storedRuns.Count > 0)
                         {
                             var tiles = new System.Collections.Generic.List<WallBand.Tile>();
                             var bandDiag = new System.Text.StringBuilder();
+                            WallBand.ResetTotals();          // [0806 중간-4] 첫 줄만이 아니라 전 줄을 센다
+                            wallLineAll.AddRange(storedRuns);   // [JACK 0806] 확인용 레이어로 도면에 같이 낸다
                             foreach (var wr in storedRuns)
                             {
                                 tiles.AddRange(WallBand.Slice(wr, regionSampler, joint: 0.05));
                                 if (bandDiag.Length == 0) bandDiag.Append(WallBand.LastDiag);
                             }
                             panels = tiles.ConvertAll(t => WallBand.ToPanel(t, 20.0));
-                            log.AppendLine($"{rPre}앵커판넬_{label}: 옹벽선 정본 사용(v9) — 선 {storedRuns.Count}줄 → 판넬 {panels.Count}장" +
+                            // [진단 0805 — JACK '사선으로 존재하지 않는 옹벽'] 저장된 옹벽선의 실측값.
+                            //   판넬은 균등 분할이라 선에 없는 **긴 변**이 섞이면 그 위에 판넬이 일정한 사슬로 깔린다.
+                            //   가장 긴 변과 그 자리를 남겨, 다음 로그 한 줄로 '선이 이상한지'를 가른다.
+                            double wMaxSeg = 0, wAtX = 0, wAtY = 0; int wAtRun = -1; double wTotLen = 0;
+                            for (int wi = 0; wi < storedRuns.Count; wi++)
+                            {
+                                var wc = storedRuns[wi].Crest;
+                                for (int q = 0; q + 1 < wc.Count; q++)
+                                {
+                                    double dl = System.Math.Sqrt((wc[q + 1].X - wc[q].X) * (wc[q + 1].X - wc[q].X)
+                                                               + (wc[q + 1].Y - wc[q].Y) * (wc[q + 1].Y - wc[q].Y));
+                                    wTotLen += dl;
+                                    if (dl > wMaxSeg) { wMaxSeg = dl; wAtX = wc[q].X; wAtY = wc[q].Y; wAtRun = wi; }
+                                }
+                            }
+                            log.AppendLine($"{rPre}앵커판넬_{label}: 옹벽선 정본 사용(v9) — 선 {storedRuns.Count}줄 " +
+                                           $"(총길이 {wTotLen:F0}m · 최대변 {wMaxSeg:F2}m @ 선{wAtRun} {wAtX:F0},{wAtY:F0}) → 판넬 {panels.Count}장" +
                                            (bandDiag.Length > 0 ? $" · 첫 줄: {bandDiag}" : ""));
+                            if (WallBand.TotalDiag.Length > 0) log.AppendLine($"{rPre}  {WallBand.TotalDiag}");
+                            // ★[0806 JACK '길게 누락됨'] 구멍이 **줄 안**이 아니라 **줄과 줄 사이**일 수 있다.
+                            //   같은 단(Bench)의 옹벽선 두 줄이 끝에서 안 맞닿으면 그 사이가 통째로 빈다.
+                            //   MergeAdjacent(0.35m)로 이어붙이지만, 그보다 멀면 남는다 — 얼마나 벌어졌는지 잰다.
+                            {
+                                // [0806 v3] 종전 판(같은 Bench끼리만 비교)은 **한 단에 줄이 하나뿐이라 아무것도 비교하지 않았다**
+                                //   — '틈 없음'이 찍혔지만 검사 자체가 빈 검사였다. 단 구분을 빼고 **모든 줄끼리** 본다.
+                                //   같은 표고(±0.6m)의 다른 줄 끝점과 얼마나 떨어졌는지가 곧 그 자리의 빈 폭이다.
+                                double gMax = 0; double gX = 0, gY = 0; int gN = 0;
+                                for (int a = 0; a < storedRuns.Count; a++)
+                                    for (int e = 0; e < 2; e++)
+                                    {
+                                        var ca = storedRuns[a].Crest;
+                                        if (ca == null || ca.Count == 0) continue;
+                                        var pt = e == 0 ? ca[0] : ca[ca.Count - 1];
+                                        double best = double.MaxValue;
+                                        for (int c2 = 0; c2 < storedRuns.Count; c2++)
+                                        {
+                                            if (c2 == a) continue;
+                                            var cb = storedRuns[c2].Crest;
+                                            if (cb == null || cb.Count == 0) continue;
+                                            foreach (var q in new[] { cb[0], cb[cb.Count - 1] })
+                                            {
+                                                if (System.Math.Abs(q.Z - pt.Z) > 0.6) continue;   // 같은 표고끼리만
+                                                double d = System.Math.Sqrt((pt.X - q.X) * (pt.X - q.X) + (pt.Y - q.Y) * (pt.Y - q.Y));
+                                                if (d < best) best = d;
+                                            }
+                                        }
+                                        if (best == double.MaxValue || best < 0.05) continue;
+                                        gN++;
+                                        if (best > gMax) { gMax = best; gX = pt.X; gY = pt.Y; }
+                                    }
+                                log.AppendLine(gN > 0
+                                    ? $"{rPre}  옹벽선 줄사이 틈 — 끝점 {gN}개가 같은 표고 이웃과 떨어짐(최대 {gMax:F2}m @ {gX:F0},{gY:F0})"
+                                    : $"{rPre}  옹벽선 줄사이 틈 없음(줄 {storedRuns.Count}개 끝점 전수 검사)");
+
+                                // ★[0806 계측 4판 — 이음매 가설] 앞선 두 검사는 **다른 줄**과만 비교했다.
+                                //   옹벽선이 부지를 한 바퀴 도는 고리인데 **자기 시작점과 끝점이 안 맞물리면**,
+                                //   그 사이가 통째로 빈다 — 그리고 그건 '다른 줄과의 틈'도 '줄 안의 구멍'도 아니라
+                                //   지금까지 어느 검사에도 안 걸렸다. 줄 **자기 양끝**을 잰다.
+                                //   (v19.34 실측: 틈 10곳이 전부 3.28m 안팎으로 균일하고 코너와 무관 — 고리 이음매의 지문이다.)
+                                int seamN = 0; double seamMax = 0, seamX = 0, seamY = 0; double seamMin = double.MaxValue;
+                                foreach (var wr in storedRuns)
+                                {
+                                    var cc = wr.Crest;
+                                    if (cc == null || cc.Count < 2) continue;
+                                    double d = System.Math.Sqrt((cc[0].X - cc[cc.Count - 1].X) * (cc[0].X - cc[cc.Count - 1].X)
+                                                              + (cc[0].Y - cc[cc.Count - 1].Y) * (cc[0].Y - cc[cc.Count - 1].Y));
+                                    if (d < 1e-6) continue;                       // 완전히 닫힌 고리 — 정상
+                                    seamN++;
+                                    if (d < seamMin) seamMin = d;
+                                    if (d > seamMax) { seamMax = d; seamX = cc[0].X; seamY = cc[0].Y; }
+                                }
+                                log.AppendLine(seamN > 0
+                                    ? $"{rPre}  ⚠★옹벽선 자기 이음매 — 시작↔끝이 안 맞물린 줄 {seamN}/{storedRuns.Count}개" +
+                                      $"(틈 {seamMin:F2}~{seamMax:F2}m · 최대 @ {seamX:F0},{seamY:F0}) — 이 사이엔 판넬이 안 깔린다"
+                                    : $"{rPre}  옹벽선 자기 이음매 정상(모든 줄이 닫힌 고리)");
+                                // ★눈에 보이는 것과 같은 방식 — 만들어진 판넬 옆면끼리 맞닿았는지 직접 잰다.
+                                log.AppendLine($"{rPre}  {WallBand.GapReport(tiles)}");
+                            }
+                            if (runGuard.Length > 0) log.AppendLine($"{rPre}  {runGuard}");
+                            if (runGuard.Contains('⚠')) wallSkipNotes.Add($"{rPre}앵커판넬_{label}: {runGuard}");
                         }
                         else
                         {
@@ -430,6 +532,7 @@ public sealed class InfraworksCommand
             }
 
             // [다중 구역] 누적된 사면/소단 띠 SHP 일괄 저장 — 있는 것만(0개면 파일 안 만듦, JACK 0724).
+            prog.Stage("사면·소단 SHP");
             foreach (string key in new[] { "소단_절토", "사면_절토", "소단_성토", "사면_성토" })
             {
                 if (stripFeats.TryGetValue(key, out var feats) && feats.Count > 0)
@@ -441,6 +544,7 @@ public sealed class InfraworksCommand
             }
 
             // ── ② 옹벽3D.dwg — 옹벽 객체가 있을 때만(없으면 파일 안 만듦, JACK 0724) ──
+            prog.Stage("옹벽 3D");
             var allPanels = panelSets.SelectMany(s => s.Panels).ToList();
             var allConcrete = concreteSets.SelectMany(s => s.Panels).ToList();
             if (wallSets.Count > 0 || allPanels.Count > 0 || allConcrete.Count > 0 || teeAll.Count > 0)
@@ -450,7 +554,7 @@ public sealed class InfraworksCommand
                 {
                     var (nb, nc, np, na, ncp, nt) = WallDwg.Export(dwgPath, wallSets, allPanels, allConcrete,
                         GradingSettings.WallBlockW, GradingSettings.WallBlockD, GradingSettings.WallBlockH,
-                        GradingSettings.WallCapD, GradingSettings.WallCapT, quoinAll, teeAll);
+                        GradingSettings.WallCapD, GradingSettings.WallCapT, quoinAll, teeAll, wallLineAll);
                     log.AppendLine($"옹벽3D.dwg: 보강토 {nb}블록+{nc}캡 · 앵커판넬 {np}패널+{na}앵커 · 역T {nt}세그" +
                         (WallDwg.LastDropped > 0 ? $" · 깨진솔리드 제외 {WallDwg.LastDropped}" : "") +
                         // [0805] 판 만들기 실패는 종전에 조용히 삼켜져 'Generate 수 ≠ DWG 수'가 안 보였다.
@@ -469,6 +573,10 @@ public sealed class InfraworksCommand
                     // [0805 JACK '이상한 객체가 떠있음'] 패널 무리에서 멀리 떨어진 객체를 종류·좌표로 지목.
                     if (WallPanelDwg.strayN > 0)
                         wallWarn.Add($"패널 경계상자 밖 객체 {WallPanelDwg.strayN}개 — 첫 사례: {WallPanelDwg.strayFirst}");
+                    // [0805 '모델링 작업 오류 115094'] 부속(무늬·도넛·앵커·정착판)은 전부 catch에 삼켜져
+                    //   AutoCAD가 명령창에 오류를 쏟아도 로그엔 안 남았다 — 어느 단계인지 여기서 밝힌다.
+                    string subDiag = WallPanelDwg.SubDiag();
+                    if (subDiag.Length > 0) wallWarn.Add(subDiag);
                     // [0805-2] 기울어진 링 위 판넬 생략은 '정상 완료'가 아니다 — 옹벽에 구멍이 남는다.
                     foreach (var s in wallSkipNotes) wallWarn.Add(s);
                     log.AppendLine("■ 옹벽 자가진단");
@@ -482,6 +590,7 @@ public sealed class InfraworksCommand
             else log.AppendLine("옹벽3D.dwg: 생략(옹벽 객체 없음)");
 
             // ── ③ 지형.xml + 위성용 경계상자 ──
+            prog.Stage("지형 XML");
             double sMinE = 0, sMinN = 0, sMaxE = 0, sMaxN = 0; bool haveExtent = false;
             try
             {
@@ -503,6 +612,7 @@ public sealed class InfraworksCommand
             catch (System.Exception xex) { log.AppendLine($"지형.xml: 실패 — {xex.Message} (파일 열려 있으면 닫고 재실행)"); }
 
             // ── ④ 위성.tif (GeoTIFF) ──
+            prog.Stage("위성영상");
             if (haveExtent)
             {
                 try
@@ -526,9 +636,16 @@ public sealed class InfraworksCommand
             }
             catch (System.Exception cex) { log.AppendLine("토공량.csv: 실패 — " + cex.Message); }
 
-            // 팝업 — 저장 위치 + 실제로 내보낸 파일 목록(있는 것만).
+            // [JACK 0805] 단계별 소요시간 — 어디서 오래 걸리는지 로그만 보고 알 수 있게.
+            string timeMsg = prog.Report();
+            log.AppendLine(timeMsg);
+            prog.Dispose();   // 팝업 전에 진행막대를 내린다(막대가 뜬 채 대화상자가 나오면 어색하다)
+
+            // 팝업 — 저장 위치 + 실제로 내보낸 파일 목록(있는 것만) + 걸린 시간.
             string list = made.Count > 0 ? string.Join(" · ", made) : "(내보낸 파일 없음 — 정지면/객체 확인)";
-            AcadApp.ShowAlertDialog("infraworks 기초자료 내보내기 완료\n\n저장 위치: " + folder + "\n\n내보낸 파일:\n" + list);
+            AcadApp.ShowAlertDialog("infraworks 기초자료 내보내기 완료\n\n저장 위치: " + folder +
+                                    "\n\n내보낸 파일:\n" + list +
+                                    "\n\n걸린 시간: " + ExportProgress.Human(prog.TotalSeconds));
             ed.WriteMessage("\ninfraworks 기초자료 내보내기 완료" + note + "\n" + log.ToString().TrimEnd());
             try
             {

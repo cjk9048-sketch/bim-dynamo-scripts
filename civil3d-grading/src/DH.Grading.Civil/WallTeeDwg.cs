@@ -151,10 +151,14 @@ public static class WallTeeDwg
                 }
 
                 // [JACK 0731] 전면 노출면(벽체 앞면)에만 자연석 무늬 — 돌 개별 압출(검증된 경로), 상단 경사선으로 클립.
-                var (stOk, stFail, stErr) = AppendTeePads(ms, tr, layId, oShift, U2, len, hA, hB, soil, i);
-                stoneOk += stOk; stoneFail += stFail;
-                if (stOk > 0) padsMade++; else padsMiss++;
-                if (stErr.Length > 0 && firstPadErr.Length == 0) firstPadErr = stErr;
+                // ★[JACK 0806 '무늬도 다 없애'] 앵커판넬과 **같은 스위치**로 끈다 — 한쪽만 끄면 도면에서 질감이 어긋난다.
+                if (GradingSettings.StonePattern)
+                {
+                    var (stOk, stFail, stErr) = AppendTeePads(ms, tr, layId, oShift, U2, len, hA, hB, soil, i);
+                    stoneOk += stOk; stoneFail += stFail;
+                    if (stOk > 0) padsMade++; else padsMiss++;
+                    if (stErr.Length > 0 && firstPadErr.Length == 0) firstPadErr = stErr;
+                }
             }
         }
         LastDiag = $"세그 {made}·길이스킵 {segLenSkip}·생성실패 {segFail}·브리지 {bridged}" +
