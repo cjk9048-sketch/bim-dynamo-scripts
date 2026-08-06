@@ -52,8 +52,16 @@ public static class GradingGeometry
         var gf = NtsFactory();
         var dbg = new System.Text.StringBuilder();
         dbg.AppendLine($"방향={(up ? "절토(up)" : "성토(down)")} · 경계 {boundary.Count}점");
-        for (int i = 0; i < boundary.Count; i++)
-            dbg.AppendLine($"  경계[{i}] ({boundary[i].X:F2}, {boundary[i].Y:F2}, Z={boundary[i].Z:F3})");
+        // [0806] 경계점은 오프라인 재현에 쓰므로 **버리지 않고** 한 줄에 3점씩 접어 넣는다(줄 수 1/3).
+        for (int i = 0; i < boundary.Count; i += 3)
+        {
+            var sb3 = new System.Text.StringBuilder("  경계");
+            for (int k = i; k < i + 3 && k < boundary.Count; k++)
+                sb3.Append($"[{k}]({boundary[k].X:F2},{boundary[k].Y:F2},{boundary[k].Z:F3}) ");
+            dbg.AppendLine(sb3.ToString().TrimEnd());
+        }
+        int ringLo = int.MaxValue, ringHi = 0, ringRelax = 0, ringN = 0;
+        double ringZLo = double.MaxValue, ringZHi = double.MinValue;
 
         // [오목 코너] 필렛 없이 원본 코너 유지(직각·라운드 공통) — Civil 부지정지처럼 오목부가 각지게 딱 떨어진다
         // (바깥 오프셋에서 오목 코너는 두 변 오프셋의 '교차'로 자연히 선명 — join 스타일은 볼록 코너에만 적용됨).
@@ -350,7 +358,14 @@ public static class GradingGeometry
             }
             double zMin = double.MaxValue, zMax = double.MinValue;
             foreach (var wp in w) { if (wp.Z < zMin) zMin = wp.Z; if (wp.Z > zMax) zMax = wp.Z; }
-            dbg.AppendLine($"  링 d={dist:F1} rise={rise:F1}: 점{w.Count} Z[{zMin:F2}..{zMax:F2}] 완화 {relaxed}점");
+            // ★[0806 JACK '로그가 너무 길다'] 링마다 한 줄씩 찍으면 91단 부지에서 **182줄**(절·성토)이 된다.
+            //   이 줄들은 링 생성 자체를 쫓던 시절의 것이고 그 문제는 닫혔다 — 이제 **요약 한 줄**로 대신하고,
+            //   퇴화 위험이 있는 링(점 8개 미만)만 개별로 남긴다. 그게 실제로 문제가 되는 유일한 경우다.
+            ringLo = Math.Min(ringLo, w.Count); ringHi = Math.Max(ringHi, w.Count);
+            ringZLo = Math.Min(ringZLo, zMin); ringZHi = Math.Max(ringZHi, zMax);
+            ringRelax += relaxed; ringN++;
+            if (w.Count < 8)
+                dbg.AppendLine($"  ⚠얇은 링 d={dist:F1} rise={rise:F1}: 점{w.Count} Z[{zMin:F2}..{zMax:F2}] 완화 {relaxed}점");
             if (w.Count >= 3) { result.Rings.Add(w); result.HasSlope = true; ringSeq.Add((e, dist, rise, w)); }
         }
 
@@ -436,6 +451,8 @@ public static class GradingGeometry
             dbg.AppendLine($"  단차경계선[{tl}] {transLines[tl].Count}점 시작({transLines[tl][0].X:F1},{transLines[tl][0].Y:F1})");
         }
 
+        if (ringN > 0)
+            dbg.AppendLine($"  링 {ringN}개 요약 — 점 {ringLo}~{ringHi}개 · Z {ringZLo:F2}~{ringZHi:F2}m · 완화 평균 {(double)ringRelax / ringN:F1}점");
         dbg.AppendLine($"  결과: 링 {result.Rings.Count} · 코너/플래토선 {result.CornerLines.Count} · HasSlope={result.HasSlope}");
         LastDiag = dbg.ToString();
         return result;

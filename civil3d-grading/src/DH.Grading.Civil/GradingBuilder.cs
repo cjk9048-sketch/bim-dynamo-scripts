@@ -102,7 +102,29 @@ public static class GradingBuilder
                 }
             }
             Grid("부지 내부", rings[0], 6);
-            Grid("계단 전체", rings[rings.Count - 1], 16);
+            // ★[0806 JACK '로그가 너무 길다'] 계단 전체 16×16 숫자 지도는 **16줄**을 차지하는데,
+            //   '어느 쪽이 안 생겼나'를 찾던 시절(v13~v15 비대칭 추적)에 만든 것이고 그 문제는 닫혔다.
+            //   구멍(빈 셀)이 실제로 있을 때만 지도를 펼치고, 없으면 한 줄 요약으로 끝낸다.
+            GridOrSummary("계단 전체", rings[rings.Count - 1], 16);
+
+            void GridOrSummary(string title, IReadOnlyList<Point3> extent, int nDiv)
+            {
+                double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+                foreach (var pt in extent)
+                { if (pt.X < minX) minX = pt.X; if (pt.X > maxX) maxX = pt.X; if (pt.Y < minY) minY = pt.Y; if (pt.Y > maxY) maxY = pt.Y; }
+                int hole = 0, hit = 0; double lo = double.MaxValue, hi = double.MinValue;
+                for (int gy = 0; gy < nDiv; gy++)
+                    for (int gx = 0; gx < nDiv; gx++)
+                    {
+                        double x = minX + (maxX - minX) * (gx + 0.5) / nDiv;
+                        double y = minY + (maxY - minY) * (gy + 0.5) / nDiv;
+                        try { double z = tin.FindElevationAtXY(x, y); hit++; if (z < lo) lo = z; if (z > hi) hi = z; }
+                        catch { hole++; }
+                    }
+                // 바깥 모서리는 원래 표면 밖이라 비는 게 정상 — 전체의 45%까지는 정상으로 본다(원뿔형 계단면).
+                if (hole > nDiv * nDiv * 0.45) Grid(title, extent, nDiv);      // 이상하게 많이 비었다 → 지도를 펼친다
+                else vb.AppendLine($"  [{title}] X {minX:F1}~{maxX:F1} / Y {minY:F1}~{maxY:F1} · 표본 {hit}/{nDiv * nDiv}개 Z {lo:F1}~{hi:F1}m(빈칸 {hole} — 정상 범위)");
+            }
         }
         catch (System.Exception ex) { vb.AppendLine("  검증 실패: " + ex.Message); }
         LastVerify = vb.ToString();

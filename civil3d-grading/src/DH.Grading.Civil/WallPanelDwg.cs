@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.Colors;
+﻿using Autodesk.AutoCAD.Colors;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Geometry;
 using DH.Grading.Core;
@@ -46,7 +46,70 @@ public static class WallPanelDwg
     /// 앞선 호출의 실패·이탈이 지워지지 않도록 **호출자가** 명시적으로 리셋한다.
     /// (Populate 진입부에서 리셋하면 두 번째 호출이 첫 호출의 실패 26장을 지워 '이상 없음'이 찍힌다 —
     /// v18.2가 없애려던 '조용히 삼킴'을 진단 코드 자신이 재현하는 구조였다.)</summary>
-    public static void ResetDiag() { nFail = 0; firstFail = null; strayN = 0; strayFirst = null; }
+    public static void ResetDiag()
+    {
+        nFail = 0; firstFail = null; strayN = 0; strayFirst = null;
+        padsNull = 0; padsEx = 0; collarEx = 0; anchorEx = 0; plateEx = 0; quoinEx = 0;
+        padStoneFail = 0; padsConcaveSplit = 0; padsSplitFail = 0; padsTiny = 0; padsPieceMax = 0; subFirst = null;
+        padBatchFail = 0; padCurveFail = 0; padBatchFirst = null; padCurveFirst = null; padsWipeFirst = null;
+    }
+
+    /// <summary>[진단 0805 — '모델링 작업 오류 115094'] 판넬 부속(무늬·도넛·앵커·정착판·코너필러)이
+    /// 실패한 횟수. 종전엔 전부 <c>catch{}</c>로 삼켜져, AutoCAD가 명령창에 오류를 쏟아도
+    /// **로그 어디에도 어느 단계인지 안 남았다**. 무늬는 예외를 안 던지고 null만 돌려주기도 하므로 따로 센다.</summary>
+    public static int padsNull { get; private set; }
+    public static int padsEx { get; private set; }
+    public static int collarEx { get; private set; }
+    public static int anchorEx { get; private set; }
+    public static int plateEx { get; private set; }
+    public static int quoinEx { get; private set; }
+    /// <summary>[0805] 개별 압출에서 버려진 '돌' 수 — 개별 압출로 바꾼 뒤에는 나쁜 돌 하나만 버려진다.</summary>
+    public static int padStoneFail { get; private set; }
+    /// <summary>[0805→0806] 오목해서 <b>볼록 조각으로 쪼갠</b> 판넬 수 — 실패가 아니라 정상 경로다.
+    /// (v19.20~v19.22에서는 '쪼개지 않고 무늬를 생략'했고, 그게 JACK 0806 '무늬 누락'의 정체였다.)</summary>
+    public static int padsConcaveSplit { get; private set; }
+    /// <summary>[0806] 볼록 분해 자체가 실패한 판넬 수(자기교차 등) — 이때만 무늬가 없다.</summary>
+    public static int padsSplitFail { get; private set; }
+    /// <summary>[0806] 면이 너무 작아(가로·세로 0.1m 미만) 무늬를 넣지 않은 판넬 수 — 정상.</summary>
+    public static int padsTiny { get; private set; }
+    /// <summary>[0806] 한 판넬이 쪼개진 최대 조각 수 — 2~3이 정상. 크면 실루엣이 이상하다는 신호.</summary>
+    public static int padsPieceMax { get; private set; }
+    /// <summary>[0806] 리전을 한꺼번에 못 만들어 하나씩 다시 만든 판넬 수 — <b>무늬는 살아남는다</b>(실패 아님).</summary>
+    public static int padBatchFail { get; private set; }
+    /// <summary>[0806] 하나씩 다시 만들어도 거부된 돌 수 — 이 돌만 무늬에서 빠진다.</summary>
+    public static int padCurveFail { get; private set; }
+    public static string? padBatchFirst { get; private set; }
+    public static string? padCurveFirst { get; private set; }
+    /// <summary>[0806] 돌이 하나도 안 남은 첫 판넬의 치수·격자·최대 조각 — 얇아서 그런지 판정 하한이 센지 가른다.</summary>
+    public static string? padsWipeFirst { get; private set; }
+    public static string? subFirst { get; private set; }
+
+    /// <summary>부속 실패 요약 — 전부 0이면 빈 문자열.
+    /// <para>[0806 계측 수정] 종전엔 ①<c>padsNull</c>이 '작은 면·오목 생략·돌 전멸'을 <b>한 숫자로 뭉뚱그려</b>
+    /// 현장 로그 '무늬없음 25'에서 사유를 못 갈랐고, ②오목 생략 수는 <c>tot&gt;0</c> 가지에서 아예 안 찍혀
+    /// 보이지도 않았다. 사유별로 갈라 항상 찍는다 — 계측이 원인을 못 가리키면 계측이 아니다.</para></summary>
+    public static string SubDiag()
+    {
+        int tot = padsNull + padsEx + collarEx + anchorEx + plateEx + quoinEx;
+        var notes = new System.Text.StringBuilder();
+        if (!GradingSettings.StonePattern) notes.Append(" · 자연석 무늬 끔(JACK 0806 — 판넬·앵커·정착구는 그대로)");
+        if (padsConcaveSplit > 0) notes.Append($" · 오목 판넬 {padsConcaveSplit}장 볼록 분해(최대 {padsPieceMax}조각 — 무늬 정상)");
+        if (padsTiny > 0) notes.Append($" · 작은 면 {padsTiny}장 무늬 없음(정상)");
+        if (padStoneFail > 0) notes.Append($" · 무늬 돌 {padStoneFail}개 버림(개별 압출 — 나머지는 온전)");
+        if (padBatchFail > 0)
+            notes.Append($" · 리전 개별 재시도 {padBatchFail}장(무늬 살림 — 버린 돌 {padCurveFail}개)")
+                 .Append(padCurveFirst != null ? $" 거부된 돌: {padCurveFirst}" : $" 원인: {padBatchFirst}");
+        if (tot == 0) return notes.Length == 0 ? "" : notes.ToString().TrimStart(' ', '·').Trim();
+        if (padsWipeFirst != null) notes.Append($" · 돌 전멸 첫 사례: {padsWipeFirst}");
+        return $"⚠부속 실패 {tot}건(무늬없음 {padsNull}[분해실패 {padsSplitFail} · 작은면 {padsTiny} · 돌전멸 {padsNull - padsSplitFail - padsTiny}]" +
+               $" · 무늬예외 {padsEx} · 도넛 {collarEx} · 앵커 {anchorEx} · 정착판 {plateEx} · 코너필러 {quoinEx})" +
+               notes + (subFirst != null ? $" — 첫 사유: {subFirst}" : "");
+    }
+
+    private static void Note(string kind, System.Exception ex)
+    {
+        subFirst ??= $"{kind}: {ex.Message}";
+    }
 
     private static readonly Color PanelRgb = Color.FromRgb(200, 198, 194);
     private static readonly Color AnchorRgb = Color.FromRgb(60, 60, 62);
@@ -169,12 +232,24 @@ public static class WallPanelDwg
                     if (!slabOk) continue;
 
                     // 자연석 무늬 — [JACK 0730] 앵커판넬에도 적용(콘크리트 무늬 이식). 정착구 주변은 민판 유지.
+                    // ★[JACK 0806 '무늬도 자꾸 오류나니깐 그냥 무늬도 다 없애'] 기본 끔.
+                    //   무늬는 판넬당 돌 16개를 각각 리전→압출하는 유일한 ACIS 다량 연산이라
+                    //   모델링 오류(115094·eInvalidInput)가 전부 이 자리에서 났고, 내보내기 시간의 대부분도 여기다.
+                    //   지우지 않고 스위치로 남긴다 — 되살릴 때 v19.23~25의 수정(볼록 분해·개별 리전·빈 목록)이
+                    //   그대로 붙어 있어야 하기 때문이다. 껐다고 코드를 지우면 그 값비싼 수정이 같이 사라진다.
+                    if (GradingSettings.StonePattern)
                     try
                     {
                         var pads = BuildConcretePads(p, excludePocket: !concrete && p.IsFull);
-                        if (pads != null) { pads.TransformBy(m); pads.LayerId = layBody; ms.AppendEntity(pads); tr.AddNewlyCreatedDBObject(pads, true); CheckStray("무늬", pads); }
+                        if (pads.Count == 0) padsNull++;      // 돌이 하나도 안 만들어짐(면이 너무 작거나 전 돌 퇴화)
+                        foreach (var pad in pads)
+                        {
+                            pad.TransformBy(m); pad.LayerId = layBody;
+                            ms.AppendEntity(pad); tr.AddNewlyCreatedDBObject(pad, true);
+                        }
+                        if (pads.Count > 0) CheckStray("무늬", pads[0]);
                     }
-                    catch { }
+                    catch (System.Exception ex) { padsEx++; Note("무늬", ex); }
 
                     // [JACK 0730] 정착구 도넛 돌출부(온전 패널만) — 1단+2단 계단식, 2단 전면에 홈 각인.
                     if (!concrete && p.IsFull)
@@ -200,7 +275,7 @@ public static class WallPanelDwg
                             ms.AppendEntity(collar); tr.AddNewlyCreatedDBObject(collar, true);
                             CheckStray("도넛", collar);
                         }
-                        catch { }
+                        catch (System.Exception ex) { collarEx++; Note("도넛", ex); }
 
                     if (!concrete && p.IsFull)
                     {
@@ -214,7 +289,7 @@ public static class WallPanelDwg
                             CheckStray("앵커", anc);
                             na++;
                         }
-                        catch { }
+                        catch (System.Exception ex) { anchorEx++; Note("앵커", ex); }
                         try
                         {
                             var plate = BuildPlate(p, padFace, W);
@@ -222,7 +297,7 @@ public static class WallPanelDwg
                             ms.AppendEntity(plate); tr.AddNewlyCreatedDBObject(plate, true);
                             CheckStray("정착판", plate);
                         }
-                        catch { }
+                        catch (System.Exception ex) { plateEx++; Note("정착판", ex); }
                     }
                 }
 
@@ -237,7 +312,7 @@ public static class WallPanelDwg
                             ms.AppendEntity(post); tr.AddNewlyCreatedDBObject(post, true);
                             CheckStray("코너필러", post);
                         }
-                        catch { }
+                        catch (System.Exception ex) { quoinEx++; Note("코너필러", ex); }
                     }
             }
         }
@@ -293,13 +368,29 @@ public static class WallPanelDwg
     /// <summary>자연석 무늬 — 패널 면(로컬)을 지터드 격자 자연석으로 채우고 +Relief 돌출(사이 틈=홈).
     /// 모든 돌을 한 리전으로 union → 패널당 솔리드 1개(성능). 실패 시 null(바탕 민판만 남음).
     /// [JACK 0730] excludePocket=true면 가운데 정착구(200×200) 주변 돌은 건너뜀 — 정착구 모양 유지.</summary>
-    private static Solid3d BuildConcretePads(WallPanels.Panel p, bool excludePocket = false)
+    private static List<Solid3d> BuildConcretePads(WallPanels.Panel p, bool excludePocket = false)
     {
         var faceLocal = p.Local;
         double minU = double.MaxValue, maxU = double.MinValue, minV = double.MaxValue, maxV = double.MinValue;
         foreach (var (u, v) in faceLocal) { minU = System.Math.Min(minU, u); maxU = System.Math.Max(maxU, u); minV = System.Math.Min(minV, v); maxV = System.Math.Max(maxV, v); }
         double bw = maxU - minU, bh = maxV - minV;
-        if (bw < 0.1 || bh < 0.1) return null;
+        // 너무 작은 면은 무늬를 넣지 않는다. **빈 목록**을 돌려준다 —
+        //   반환 형식을 Solid3d에서 List<Solid3d>로 바꿀 때(돌 개별 압출, 0805) 여기만 `return null`로 남아
+        //   호출부의 `pads.Count`에서 NullReference가 났다(현장 로그: 무늬예외 4건).
+        if (bw < 0.1 || bh < 0.1) { padsTiny++; return new List<Solid3d>(); }
+
+        // ★[0805→0806] 자연석 무늬는 돌을 **판넬 모양에 맞춰 잘라내는데**, 그 클립(Sutherland–Hodgman)은
+        //   **볼록한 창에서만** 옳다. 오목한 판넬을 주면 자기교차 폴리라인이 나오고 Region·Extrude에서
+        //   `모델링 작업 오류 115094`가 쏟아진다. 이 제약을 두 번 잘못 피했다 —
+        //   ① v19.5: **판넬 모양 자체를 볼록하게(사다리꼴로) 강제** → 데이라잇이 판넬을 통째로 사선으로
+        //      잘라 버렸다(JACK '딱 이 부분만 사선으로 잘려').
+        //   ② v19.20: **오목하면 무늬를 통째로 생략** → 모양은 옳아졌지만 201장 중 25장이 민판으로 나왔다
+        //      (JACK 0806 '무늬패턴이 누락된 애들이 또 생겼어'). '드물어서 안 보인다'는 내 예상이 틀렸다.
+        //   셋째 방법이 정답이다 — **창을 볼록 조각으로 쪼갠다.** 조각의 합집합은 판넬과 정확히 같고
+        //   조각마다 클립하면 결과가 전부 볼록해 115094도 안 난다. 모양·무늬 둘 다 옳다.
+        var windows = DH.Grading.Core.WallBand.ConvexPieces(faceLocal);
+        if (windows.Count == 0) { padsSplitFail++; return new List<Solid3d>(); }   // 쪼개기 실패 — 종전대로 민판
+        if (windows.Count > 1) { padsConcaveSplit++; padsPieceMax = System.Math.Max(padsPieceMax, windows.Count); }
         int nx = System.Math.Max(1, (int)System.Math.Round(bw / StoneSize));
         int ny = System.Math.Max(1, (int)System.Math.Round(bh / StoneSize));
         double du = bw / nx, dv = bh / ny;
@@ -312,72 +403,261 @@ public static class WallPanelDwg
                 double jv = (j == 0 || j == ny) ? 0 : Hash(i + 7, j + 3) * 0.33 * dv;
                 pts[i, j] = new Point2d(minU + i * du + ju, minV + j * dv + jv);
             }
+        // ★[JACK 0805 '앵커 주변이 듬성듬성 비었다'] 정착구 보호구역 **경계에 격자선을 맞춘다**.
+        //   맞추지 않으면 보호구역 경계가 칸 한가운데를 지나 **얇은 자투리**가 생기고, 그걸 버리면
+        //   빈 자리가 칸 하나만큼(0.39m) 더 넓어진다 — 앵커 둘레가 필요 이상으로 휑해지는 원인.
+        //   경계에 가장 가까운 격자선을 그 경계로 옮기면 자투리가 아예 안 생기고,
+        //   빈 곳은 **보호구역(도넛 + 줄눈)만큼만** 남는다(JACK 제안 그대로).
+        if (excludePocket)
+        {
+            double hb = Collar1Size / 2 + GrooveW;
+            SnapGridLine(pts, nx, ny, true, p.PocketU - hb, minU, du);
+            SnapGridLine(pts, nx, ny, true, p.PocketU + hb, minU, du);
+            SnapGridLine(pts, nx, ny, false, p.PocketV - hb, minV, dv);
+            SnapGridLine(pts, nx, ny, false, p.PocketV + hb, minV, dv);
+        }
         double scale = System.Math.Max(0.5, 1 - GrooveW / System.Math.Min(du, dv));  // 중심 기준 축소=돌 사이 홈
-        // 무늬 대상 면(faceLocal)을 클립 창으로 — 돌을 면 모양에 맞춰 자른다(삐져나옴·누락 방지).
-        var clip = faceLocal; bool ccw = SignedArea(clip) > 0;
+        // 무늬 대상 면을 클립 창으로 — 돌을 면 모양에 맞춰 자른다(삐져나옴·누락 방지).
+        //   볼록하면 창 1개(=판넬 자신), 오목하면 위에서 쪼갠 볼록 조각들.
+        var winCcw = new bool[windows.Count];
+        for (int w = 0; w < windows.Count; w++) winCcw[w] = SignedArea(windows[w]) > 0;
         var curves = new DBObjectCollection();
+        int stoneTried = 0; double stoneMaxArea = 0;   // [0806] '돌 전멸' 판넬의 사유를 다음 로그에서 가르기 위한 계측
         for (int i = 0; i < nx; i++)
             for (int j = 0; j < ny; j++)
             {
                 var a = pts[i, j]; var b = pts[i + 1, j]; var c = pts[i + 1, j + 1]; var d = pts[i, j + 1];
                 double cx = (a.X + b.X + c.X + d.X) / 4, cy = (a.Y + b.Y + c.Y + d.Y) / 4;
-                // [JACK 0730] 정착구 도넛 보호 — 도넛 1단(0.56)+여유에 걸치는 돌은 건너뜀(그 자리는 민판 유지).
-                if (excludePocket)
-                {
-                    double half = Collar1Size / 2 + 0.05;
-                    double sx0 = System.Math.Min(System.Math.Min(a.X, b.X), System.Math.Min(c.X, d.X));
-                    double sx1 = System.Math.Max(System.Math.Max(a.X, b.X), System.Math.Max(c.X, d.X));
-                    double sy0 = System.Math.Min(System.Math.Min(a.Y, b.Y), System.Math.Min(c.Y, d.Y));
-                    double sy1 = System.Math.Max(System.Math.Max(a.Y, b.Y), System.Math.Max(c.Y, d.Y));
-                    if (sx1 > p.PocketU - half && sx0 < p.PocketU + half &&
-                        sy1 > p.PocketV - half && sy0 < p.PocketV + half) continue;
-                }
                 Point2d Sc(Point2d q) => new Point2d(cx + (q.X - cx) * scale, cy + (q.Y - cy) * scale);
                 var stone = new List<Point2d> { Sc(a), Sc(b), Sc(c), Sc(d) };
-                var cl = ClipPolyToLocal(stone, clip, ccw);   // 돌을 패널 모양에 클립
-                // [JACK 0731] 퇴화 다각형 방지 — 클립이 만든 근접중복 정점을 정리하고 미세면적은 버린다.
-                //   자기교차/영면적 폴리라인이 Region·Extrude를 거치면 '모델링 오류 115094'로 깨진 솔리드가 되어
-                //   옹벽3D.dwg SaveAs가 'RECOVER 권장' 모달을 띄운다 → 애초에 이런 돌은 무늬에서 제외.
-                cl = DedupeRing(cl);
-                if (cl.Count < 3 || Poly2dArea(cl) < 1e-4) continue;
-                var pl = new Polyline(cl.Count);
-                for (int k = 0; k < cl.Count; k++) pl.AddVertexAt(k, cl[k], 0, 0, 0);
-                pl.Closed = true;
-                curves.Add(pl);
+
+                // [JACK 0730 → 0805 개선] 정착구 도넛 보호.
+                //   종전엔 도넛 영역에 **조금이라도 걸치는 돌을 통째로 버렸다**. 격자가 0.39m인데 보호구역이
+                //   0.66m라 걸치는 셀이 많고, 지터까지 한쪽으로 밀려 무늬가 듬성듬성해졌다
+                //   (JACK 0805: '아까보단 많지만 여전히 듬성듬성 누락'). 버리지 말고 **도넛 밖으로 잘라 남긴다** —
+                //   도넛은 그대로 보호되면서 무늬는 그 경계까지 꽉 찬다.
+                //   반평면 클립만 쓰므로 조각은 전부 볼록하다(자기교차 없음 = 115094 안전).
+                var stonePieces = new List<List<Point2d>>();
+                if (excludePocket)
+                {
+                    double half = Collar1Size / 2 + GrooveW;   // 위 격자 스냅과 **같은 값**이어야 자투리가 안 생긴다
+                    double bx0 = p.PocketU - half, bx1 = p.PocketU + half;
+                    double by0 = p.PocketV - half, by1 = p.PocketV + half;
+                    AddIfReal(stonePieces, ClipHalf2d(stone, 1, 0, bx0));          // 도넛 왼쪽
+                    AddIfReal(stonePieces, ClipHalf2d(stone, -1, 0, -bx1));        // 도넛 오른쪽
+                    var band = ClipHalf2d(ClipHalf2d(stone, -1, 0, -bx0), 1, 0, bx1);   // 도넛과 같은 가로 띠
+                    if (band.Count >= 3)
+                    {
+                        AddIfReal(stonePieces, ClipHalf2d(band, 0, 1, by0));       // 도넛 아래
+                        AddIfReal(stonePieces, ClipHalf2d(band, 0, -1, -by1));     // 도넛 위
+                    }
+                }
+                else stonePieces.Add(stone);
+
+                foreach (var sp in stonePieces)
+                {
+                    // 창(볼록 조각)마다 클립 — 조각들의 합집합이 곧 '돌 ∩ 판넬'이다.
+                    var cut = new List<List<Point2d>>(windows.Count);
+                    for (int w = 0; w < windows.Count; w++)
+                    {
+                        // [JACK 0731] 퇴화 다각형 방지 — 클립이 만든 근접중복 정점을 정리한다.
+                        //   자기교차/영면적 폴리라인이 Region·Extrude를 거치면 '모델링 오류 115094'로 깨진 솔리드가 되어
+                        //   옹벽3D.dwg SaveAs가 'RECOVER 권장' 모달을 띄운다 → 애초에 이런 돌은 무늬에서 제외.
+                        var cl = DedupeRing(ClipPolyToLocal(sp, windows[w], winCcw[w]));
+                        if (cl.Count >= 3 && Poly2dArea(cl) >= MinPieceArea) cut.Add(cl);
+                    }
+                    // 판넬 모양에 맞춰 자를 때 가느다란 쐐기가 남을 수 있다 — 면적+두께로 거른다.
+                    //   판정은 **조각 하나가 아니라 돌 전체**로 한다(0806). 쪼갠 경계는 판넬 **안쪽** 대각선이라
+                    //   갈라진 조각을 각각 '실오라기'로 보면 원래 없던 틈이 무늬 한가운데 생긴다.
+                    stoneTried++;
+                    foreach (var cl in cut) stoneMaxArea = System.Math.Max(stoneMaxArea, Poly2dArea(cl));
+                    if (!IsUsableStone(cut)) continue;
+                    foreach (var cl in cut)
+                    {
+                        var pl = new Polyline(cl.Count);
+                        for (int k = 0; k < cl.Count; k++) pl.AddVertexAt(k, cl[k], 0, 0, 0);
+                        pl.Closed = true;
+                        curves.Add(pl);
+                    }
+                }
             }
-        Solid3d pads = null;
+        // ★[0805 '모델링 작업 오류 115094' — JACK 3회 신고, 계측으로 자리 확정: 무늬 21/116장 실패]
+        //   **돌을 하나로 union한 뒤 한 번에 압출**하던 것을 **돌마다 따로 압출**로 바꾼다.
+        //   이 저장소가 v14.7에서 역T 무늬로 이미 겪고 해결한 것과 **같은 처방**이다.
+        //   union은 돌 하나가 퇴화하면 누산기를 망가뜨려 뒤이은 압출까지 통째로 실패시키고,
+        //   실패한 boolean·extrude마다 AutoCAD가 명령창에 오류를 찍는다(돌 수 × 판넬 수 = '엄청').
+        //   개별 압출은 boolean이 **0회**라 나쁜 돌 하나는 그 돌만 버려지고 나머지 무늬는 온전히 남는다.
+        var pads = new List<Solid3d>();
+        // ★[0806 — 계측이 답을 줬다] 현장 v19.24 로그: `eInvalidInput @ 판넬 177751,323639 · **돌 0개**`.
+        //   나쁜 폴리라인이 아니라 **빈 목록**을 넘긴 것이었다 — `Region.CreateFromCurves`는 빈 컬렉션을 거부한다.
+        //   돌이 하나도 안 남은 판넬(전부 실오라기로 걸러짐)은 예외가 아니라 그냥 무늬 없는 판넬이다.
+        //   왜 다 걸러졌는지는 아래 계측이 다음 로그에서 알려준다.
+        if (curves.Count == 0)
+        {
+            padsWipeFirst ??= $"{bw:F2}×{bh:F2}m · 격자 {nx}×{ny} · 조각 {stoneTried}개 중 최대 {stoneMaxArea:F5}㎡" +
+                              $" (하한 면적 {MinStoneArea:F4}㎡ · 두께 {MinStoneThick:F2}m) @ {p.Origin.X:F0},{p.Origin.Y:F0}";
+            return pads;
+        }
+        // ★[0806] 리전 만들기도 **전부 아니면 전무**였다 — `Region.CreateFromCurves`에 판넬의 돌을 한꺼번에
+        //   넘기다 보니 나쁜 폴리라인 **하나**가 그 판넬 무늬를 통째로 날렸다(v19.23 현장: 무늬예외 1건
+        //   eInvalidInput → 그 판넬만 민판). 압출을 돌마다 따로 한 것과 같은 이유·같은 처방이다.
+        //   빠른 길(한꺼번에)을 먼저 쓰고, 실패했을 때만 하나씩 다시 만들어 **나쁜 돌만** 버린다.
+        //   버려진 돌의 생김새(정점·면적·최단변)를 남긴다 — 다음에 원인을 로그만으로 가르기 위해.
+        DBObjectCollection regions;
+        try { regions = Region.CreateFromCurves(curves); }
+        catch (System.Exception exBatch)
+        {
+            padBatchFail++;
+            padBatchFirst ??= $"{exBatch.Message} @ 판넬 {p.Origin.X:F0},{p.Origin.Y:F0} · 돌 {curves.Count}개";
+            regions = new DBObjectCollection();
+            foreach (DBObject co in curves)
+            {
+                if (co is not Curve cv) continue;
+                var single = new DBObjectCollection { cv };
+                try { foreach (DBObject ro in Region.CreateFromCurves(single)) regions.Add(ro); }
+                catch (System.Exception exOne)
+                {
+                    padCurveFail++;
+                    padCurveFirst ??= $"{exOne.Message} {DescribeCurve(cv)} @ 판넬 {p.Origin.X:F0},{p.Origin.Y:F0}";
+                }
+            }
+        }
         try
         {
-            DBObjectCollection regions = Region.CreateFromCurves(curves);
-            if (regions.Count > 0)
+            foreach (DBObject ro in regions)
             {
-                var acc = (Region)regions[0];
-                for (int i = 1; i < regions.Count; i++)
+                if (ro is not Region r) continue;
+                Solid3d one = null;
+                try { one = new Solid3d(); one.Extrude(r, Relief, 0); }   // 로컬 +Z(부지쪽)로 돌출
+                catch { try { one?.Dispose(); } catch { } one = null; padStoneFail++; }
+                finally { r.Dispose(); }
+                if (one == null) continue;
+                // [JACK 0731] 압출 결과 검증 — '확실한 증거'가 있을 때만 버린다(경계상자 실패, 부피 0/NaN).
+                bool bad = false;
+                try { var _ = one.GeometricExtents; } catch { bad = true; }
+                if (!bad)
                 {
-                    var r = (Region)regions[i];
-                    try { acc.BooleanOperation(BooleanOperationType.BoolUnite, r); } catch { }
-                    r.Dispose();
+                    try { double v = one.MassProperties.Volume; if (!(v > 1e-9) || double.IsNaN(v) || double.IsInfinity(v)) bad = true; }
+                    catch { }
                 }
-                try { pads = new Solid3d(); pads.Extrude(acc, Relief, 0); }   // 로컬 +Z(부지쪽)로 돌출
-                finally { acc.Dispose(); }
+                if (bad) { try { one.Dispose(); } catch { } padStoneFail++; continue; }
+                pads.Add(one);
             }
         }
         finally { foreach (DBObject o in curves) o.Dispose(); }   // 우리가 만든 폴리라인(리전은 복사본이라 소유 안 함)
-        // [JACK 0731] 압출 결과 검증 — [완화] '확실한 증거'가 있을 때만 버림: 경계상자 실패=깨짐 확정,
-        //   부피는 계산이 되면서 0/NaN일 때만. MassProperties 예외만으로는 안 버림(다중 덩어리 유니온이
-        //   오폐기돼 무늬가 통째로 사라지는 것 방지 — 리뷰 0731 중간3).
-        if (pads != null)
-        {
-            bool bad = false;
-            try { var _ = pads.GeometricExtents; } catch { bad = true; }
-            if (!bad)
-            {
-                try { double v = pads.MassProperties.Volume; if (!(v > 1e-9) || double.IsNaN(v) || double.IsInfinity(v)) bad = true; }
-                catch { }
-            }
-            if (bad) { try { pads.Dispose(); } catch { } pads = null; }
-        }
         return pads;
+    }
+
+    /// <summary>[0806] 리전 만들기가 거부한 폴리라인의 생김새 — 정점·면적·최단변.
+    /// ACIS 예외 메시지(<c>eInvalidInput</c> 등)만으로는 '무엇이' 잘못됐는지 알 수 없어,
+    /// 다음 현장 로그에서 원인을 바로 가르도록 도형 자체를 잰다.</summary>
+    private static string DescribeCurve(Curve cv)
+    {
+        if (cv is not Polyline pl) return $"[{cv.GetType().Name}]";
+        int n = pl.NumberOfVertices;
+        double area = 0, minEdge = double.MaxValue;
+        for (int i = 0; i < n; i++)
+        {
+            var a = pl.GetPoint2dAt(i); var b = pl.GetPoint2dAt((i + 1) % n);
+            area += a.X * b.Y - b.X * a.Y;
+            minEdge = System.Math.Min(minEdge, a.GetDistanceTo(b));
+        }
+        return $"[정점 {n} · 면적 {System.Math.Abs(area) * 0.5:F6}㎡ · 최단변 {(n > 0 ? minEdge : 0):F6}m]";
+    }
+
+    /// <summary>[0805] 정착구 보호구역 경계에 가장 가까운 격자선을 그 경계로 옮긴다(가로선 또는 세로선).
+    /// 자투리 조각이 생기지 않게 해 앵커 둘레가 휑해지는 것을 막는다. 판넬 가장자리 선(0·n)은 건드리지 않는다.</summary>
+    private static void SnapGridLine(Point2d[,] pts, int nx, int ny, bool vertical, double target,
+                                     double origin, double step)
+    {
+        int n = vertical ? nx : ny;
+        if (n < 2 || step <= 1e-9) return;
+        int best = -1; double bd = double.MaxValue;
+        for (int i = 1; i < n; i++)                    // 가장자리(0, n)는 판넬 경계라 제외
+        {
+            double d = System.Math.Abs(origin + i * step - target);
+            if (d < bd) { bd = d; best = i; }
+        }
+        if (best < 0 || bd > step) return;             // 한 칸보다 멀면 이 경계는 격자 밖 — 건드리지 않는다
+        if (vertical) { for (int j = 0; j <= ny; j++) pts[best, j] = new Point2d(target, pts[best, j].Y); }
+        else { for (int i = 0; i <= nx; i++) pts[i, best] = new Point2d(pts[i, best].X, target); }
+    }
+
+    /// <summary>[0805] 볼록 조각만 남기는 반평면 클립 — nx·x + ny·y ≤ d 쪽만 남긴다(Sutherland–Hodgman 1변).
+    /// 볼록 다각형을 반평면으로 자르면 결과도 반드시 볼록하다 — 자기교차가 원천적으로 안 생겨
+    /// Region·Extrude에서 '모델링 오류 115094'가 나지 않는다.</summary>
+    private static List<Point2d> ClipHalf2d(List<Point2d> poly, double nx, double ny, double d)
+    {
+        var outp = new List<Point2d>(poly.Count + 2);
+        int n = poly.Count;
+        if (n == 0) return outp;
+        for (int i = 0; i < n; i++)
+        {
+            var cur = poly[i]; var nxt = poly[(i + 1) % n];
+            double sc = nx * cur.X + ny * cur.Y - d, sn = nx * nxt.X + ny * nxt.Y - d;
+            bool inC = sc <= 1e-12, inN = sn <= 1e-12;
+            if (inC) outp.Add(cur);
+            if (inC != inN)
+            {
+                double t = sc / (sc - sn);
+                outp.Add(new Point2d(cur.X + (nxt.X - cur.X) * t, cur.Y + (nxt.Y - cur.Y) * t));
+            }
+        }
+        return outp;
+    }
+
+    /// <summary>[0805 JACK '조각이 쪼개짐'] 돌 조각으로 쓸 만한가 — <b>면적과 실효 두께</b>를 함께 본다.
+    /// <para>
+    /// 면적만 보면 가느다란 쐐기(예 0.03m × 0.40m = 120㎠)가 통과해 도넛 옆에 바늘 같은 조각으로 남는다.
+    /// 실효 두께 = 면적 ÷ 최대 폭 — 길쭉할수록 작아지므로 길이에 속지 않는다.
+    /// </para></summary>
+    private const double MinStoneArea = 4e-3;    // ㎡ (40㎠)
+    private const double MinStoneThick = 0.08;   // m — 이보다 얇으면 돌이 아니라 실오라기
+    /// <summary>[0806] 볼록 분해 조각 하나의 하한 — ACIS가 퇴화로 보지 않을 만큼만(2㎠, 1.4cm각).
+    /// 돌 전체 판정은 <see cref="IsUsableStone(List{List{Point2d}})"/>가 따로 하므로 여긴 안전 하한일 뿐이다.</summary>
+    private const double MinPieceArea = 2e-4;
+
+    /// <summary>[0806] 여러 조각으로 갈라진 돌을 <b>하나로 보고</b> 판정한다 — 면적은 합, 폭은 전체 경계상자.
+    /// 창 1개(볼록 판넬)면 종전 단일 판정과 완전히 같은 결과가 나온다.</summary>
+    private static bool IsUsableStone(List<List<Point2d>> pieces)
+    {
+        if (pieces == null || pieces.Count == 0) return false;
+        if (pieces.Count == 1) return IsUsableStone(pieces[0]);
+        double area = 0;
+        double mnx = double.MaxValue, mxx = double.MinValue, mny = double.MaxValue, mxy = double.MinValue;
+        foreach (var poly in pieces)
+        {
+            area += Poly2dArea(poly);
+            foreach (var q in poly)
+            {
+                mnx = System.Math.Min(mnx, q.X); mxx = System.Math.Max(mxx, q.X);
+                mny = System.Math.Min(mny, q.Y); mxy = System.Math.Max(mxy, q.Y);
+            }
+        }
+        if (area < MinStoneArea) return false;
+        double ext = System.Math.Max(mxx - mnx, mxy - mny);
+        return ext > 1e-9 && area / ext >= MinStoneThick;
+    }
+
+    private static bool IsUsableStone(List<Point2d> poly)
+    {
+        if (poly == null || poly.Count < 3) return false;
+        double area = Poly2dArea(poly);
+        if (area < MinStoneArea) return false;
+        double mnx = double.MaxValue, mxx = double.MinValue, mny = double.MaxValue, mxy = double.MinValue;
+        foreach (var q in poly)
+        {
+            mnx = System.Math.Min(mnx, q.X); mxx = System.Math.Max(mxx, q.X);
+            mny = System.Math.Min(mny, q.Y); mxy = System.Math.Max(mxy, q.Y);
+        }
+        double ext = System.Math.Max(mxx - mnx, mxy - mny);
+        return ext > 1e-9 && area / ext >= MinStoneThick;
+    }
+
+    /// <summary>쓸 만한 조각만 담는다(반평면 클립이 만든 실오라기·빈 결과 제외).</summary>
+    private static void AddIfReal(List<List<Point2d>> list, List<Point2d> poly)
+    {
+        if (IsUsableStone(poly)) list.Add(poly);
     }
 
     /// <summary>2D 링의 근접중복 정점 제거(연속·시종 접합) — 영길이 변으로 인한 Region/Extrude 퇴화 방지.</summary>
@@ -492,7 +772,7 @@ public static class WallPanelDwg
         return plate;
     }
 
-    private static ObjectId EnsureLayer(Database db, Transaction tr, string name, Color color)
+    internal static ObjectId EnsureLayer(Database db, Transaction tr, string name, Color color)
     {
         var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForWrite);
         if (lt.Has(name)) return lt[name];
