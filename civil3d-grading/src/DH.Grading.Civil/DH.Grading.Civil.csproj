@@ -74,6 +74,9 @@
   <!-- 리본 버튼 아이콘(PNG)을 DLL에 포함 -->
   <ItemGroup>
     <EmbeddedResource Include="Resources\*.png" />
+    <!-- ★[JACK 0807] 회사 표준 종단도 템플릿(DHT.dwt)을 DLL에 심는다 —
+         사용자가 dwt 파일을 따로 챙기거나 경로를 맞출 필요가 없게 하려는 것. -->
+    <EmbeddedResource Include="Resources\DHT.dwt" />
   </ItemGroup>
 
 </Project>

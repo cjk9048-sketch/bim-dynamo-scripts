@@ -246,9 +246,9 @@ public sealed class SectionCommand
     // ── 지표면 찾기 ──────────────────────────────────────────────────────────
 
     /// <summary>종단에 쓸 지표면(원지반·정지면) — 있는 것만 모은다.</summary>
-    private readonly record struct SurfPick(ObjectId SurfId, string SurfName, string ProfileName, string Label);
+    internal readonly record struct SurfPick(ObjectId SurfId, string SurfName, string ProfileName, string Label);
 
-    private static System.Collections.Generic.List<SurfPick> FindSurfaces(Database db, CivilApp.CivilDocument cdoc)
+    internal static System.Collections.Generic.List<SurfPick> FindSurfaces(Database db, CivilApp.CivilDocument cdoc)
     {
         var list = new System.Collections.Generic.List<SurfPick>();
         ObjectId ground = ObjectId.Null, pad = ObjectId.Null;
@@ -308,7 +308,7 @@ public sealed class SectionCommand
     ///  · 옛날식 폴리선(2D/3D)에 스플라인이 걸려 있으면 화면에 보이지 않는 <b>조종점</b>이 정점 목록에 섞여 있다.
     ///    그대로 주워 담으면 노선이 그린 모양과 다르게 휘는데 오류도 안 나서 알아채기 어렵다 → 조종점은 뺀다.
     ///  · 호(둥근 구간)는 <b>bulge</b> 값에 들어 있다. 안 옮기면 곡선 노선이 직선으로 펴져버린다 → 같이 옮긴다.</summary>
-    private static ObjectId MakeFlatCopy(Database db, ObjectId srcId, ObjectId layerId, out int nv, out double len)
+    internal static ObjectId MakeFlatCopy(Database db, ObjectId srcId, ObjectId layerId, out int nv, out double len)
     {
         nv = 0; len = 0;
         var pts = new System.Collections.Generic.List<(Point2d P, double B)>();   // B=bulge(호 정도, 0=직선)
@@ -473,7 +473,7 @@ public sealed class SectionCommand
     // ── 공통 ────────────────────────────────────────────────────────────────
 
     /// <summary>스타일 고르기 — 이름에 후보 문자열이 든 것 우선, 없으면 첫 번째. 하나도 없으면 Null.</summary>
-    private static ObjectId PickStyle(Database db, System.Collections.IEnumerable styleIds, params string[] prefer)
+    internal static ObjectId PickStyle(Database db, System.Collections.IEnumerable styleIds, params string[] prefer)
     {
         ObjectId first = ObjectId.Null;
         var all = new System.Collections.Generic.List<(ObjectId Id, string Name)>();
@@ -500,7 +500,7 @@ public sealed class SectionCommand
     }
 
     /// <summary>선형/그룹 이름 중복 회피 — DH선형_1, DH선형_2 …</summary>
-    private static string UniqueName(Database db, CivilApp.CivilDocument cdoc, string baseName)
+    internal static string UniqueName(Database db, CivilApp.CivilDocument cdoc, string baseName)
     {
         var used = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
         try
@@ -532,7 +532,7 @@ public sealed class SectionCommand
         return baseName + "_X";
     }
 
-    private static ObjectId EnsureLayer(Database db, Transaction tr, string name, short aci)
+    internal static ObjectId EnsureLayer(Database db, Transaction tr, string name, short aci)
     {
         var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
         if (lt.Has(name)) return lt[name];
@@ -543,7 +543,7 @@ public sealed class SectionCommand
         return id;
     }
 
-    private static void EraseQuiet(Database db, ObjectId id)
+    internal static void EraseQuiet(Database db, ObjectId id)
     {
         try
         {
@@ -554,7 +554,7 @@ public sealed class SectionCommand
         catch { }
     }
 
-    private static void Refuse(Editor ed, string msg)
+    internal static void Refuse(Editor ed, string msg)
     {
         ed.WriteMessage("\n[종단/횡단] " + msg.Replace("\n", " "));
         AcadApp.ShowAlertDialog(msg);
