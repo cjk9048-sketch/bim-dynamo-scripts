@@ -73,7 +73,7 @@ public static class WallPanelDwg
         nFail = 0; firstFail = null; strayN = 0; strayFirst = null;
         padsNull = 0; padsEx = 0; collarEx = 0; anchorEx = 0; plateEx = 0; quoinEx = 0;
         padStoneFail = 0; padsConcaveSplit = 0; padsSplitFail = 0; padsTiny = 0; padsPieceMax = 0; subFirst = null;
-        padsMerged = 0; padsSeamed = 0; nCornerUnit = 0; cornerUnitEx = 0;
+        padsMerged = 0; padsSeamed = 0; nCornerUnit = 0; cornerUnitEx = 0; SolidKind.Clear();
         padBatchFail = 0; padCurveFail = 0; padBatchFirst = null; padCurveFirst = null; padsWipeFirst = null;
     }
 
@@ -102,6 +102,11 @@ public static class WallPanelDwg
     public static int padsMerged { get; private set; }
     public static int padsSeamed { get; private set; }
     /// <summary>★[JACK 0807] 도면에 들어간 코너 전용 판넬 수 / 실패 수.</summary>
+    /// <summary>★[JACK 0807 저장오류] 도면에 넣은 솔리드마다 **종류**를 기록해 둔다.
+    /// 저장 직전 무결성 검사가 깨진 솔리드를 지울 때, 지금은 "몇 개"만 알고 **무엇이 깨지는지**를 모른다 —
+    /// 그러면 원인 자리를 못 좁힌다. 이탈검사(CheckStray)에 이미 종류가 넘어오므로 거기서 같이 담는다.</summary>
+    internal static readonly System.Collections.Generic.Dictionary<ObjectId, string> SolidKind = new();
+
     public static int nCornerUnit { get; private set; }
     public static int cornerUnitEx { get; private set; }
     /// <summary>[0806] 리전을 한꺼번에 못 만들어 하나씩 다시 만든 판넬 수 — <b>무늬는 살아남는다</b>(실패 아님).</summary>
@@ -215,6 +220,8 @@ public static class WallPanelDwg
                     }
                 void CheckStray(string kind, Entity e)
                 {
+                    // [0807] 종류 기록 — 이탈 판정보다 먼저. 판넬이 없어 일찍 빠져나가도 종류는 남아야 한다.
+                    try { if (!e.ObjectId.IsNull) SolidKind[e.ObjectId] = kind; } catch { }
                     if (pxMin > pxMax) return;                       // 패널이 없으면 기준이 없다
                     swStray.Start();
                     try

@@ -1,3 +1,4 @@
+using System.Linq;
 using Autodesk.AutoCAD.DatabaseServices;
 using DH.Grading.Core;
 
@@ -11,6 +12,9 @@ public static class WallDwg
 {
     /// <summary>[진단 0731] 직전 Export에서 SaveAs 전에 제외한 깨진 솔리드 수 — DHINFRA 로그 표기용.</summary>
     public static int LastDropped { get; private set; }
+
+    /// <summary>★[JACK 0807] 깨진 솔리드를 **종류/사유별**로 — 원인 자리를 좁히려면 개수만으로는 안 된다.</summary>
+    public static string LastDropDetail { get; private set; } = "";
 
     /// <summary>★[JACK 0807 '내보내기가 너무너무 오래 걸린다'] 옹벽3D.dwg 안에서의 구간별 소요시간.
     /// <para>내보내기 전체 시계(<see cref="ExportProgress"/>)는 '옹벽 3D 14.1s'까지만 알려 준다 —
@@ -125,27 +129,43 @@ public static class WallDwg
         var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
         var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
         var victims = new List<ObjectId>();
+        var why = new Dictionary<string, int>();
+        void Count(string k) { why[k] = why.TryGetValue(k, out int n) ? n + 1 : 1; }
         foreach (ObjectId id in ms)
         {
             if (tr.GetObject(id, OpenMode.ForRead) is not Solid3d sol) continue;
-            bool bad = false;
-            try { var _ = sol.GeometricExtents; } catch { bad = true; }   // 경계상자 없음 = 깨짐 확정
+            string kind = WallPanelDwg.SolidKind.TryGetValue(id, out var k0) ? k0 : "기타";
+            bool bad = false; string reason = "";
+            try { var _ = sol.GeometricExtents; } catch { bad = true; reason = "경계상자"; }   // 경계상자 없음 = 깨짐 확정
             if (!bad)
             {
                 try
                 {
                     double vol = sol.MassProperties.Volume;
-                    if (!(vol > 1e-9) || double.IsNaN(vol) || double.IsInfinity(vol)) bad = true;   // 계산됐는데 0/NaN
+                    if (!(vol > 1e-9) || double.IsNaN(vol) || double.IsInfinity(vol)) { bad = true; reason = "부피0"; }
                 }
-                catch { }   // 질량속성 예외만으로는 안 지움(다중 덩어리 대비) — extents 정상이면 유지
+                catch
+                {
+                    // ★★[JACK 0807 '저장오류 팝업'] **여기서 살려두던 것을 이제 지운다.**
+                    //   원래 이 예외 조항은 v19의 무늬가 '돌 여러 개를 union한 덩어리 하나'였을 때
+                    //   그걸 보호하려고 넣었다(다중 덩어리는 질량속성이 예외를 던지는 게 정상이라 지우면 무늬가 사라진다).
+                    //   그런데 **v19.24부터 무늬는 돌마다 개별 솔리드**라 union이 없다 — 지킬 대상이 사라진 지 오래다.
+                    //   조항만 남아 정작 **저장을 깨뜨리는 솔리드를 통과**시켰다: 로그는 '깨진솔리드 0개 제외'인데
+                    //   열어 둔 옹벽3D.dwg를 AutoCAD가 자동저장하려다 'RECOVER 권장' 모달을 띄웠다(JACK 스샷).
+                    //   검사가 느슨했던 것이다 — 줄일 게 아니라 조여야 했다.
+                    bad = true; reason = "질량속성예외";
+                }
             }
-            if (bad) victims.Add(id);
+            if (bad) { victims.Add(id); Count($"{kind}/{reason}"); }
         }
         foreach (var id in victims)
         {
             try { (tr.GetObject(id, OpenMode.ForWrite) as Entity)?.Erase(); dropped++; } catch { }
         }
         tr.Commit();
+        // [0807] **무엇이** 깨지는지 남긴다 — '몇 개'만으로는 원인 자리를 못 좁힌다.
+        LastDropDetail = why.Count == 0 ? "" :
+            string.Join(" · ", why.OrderByDescending(x => x.Value).Select(x => $"{x.Key} {x.Value}"));
         return dropped;
     }
 }
