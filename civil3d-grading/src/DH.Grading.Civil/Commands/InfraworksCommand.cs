@@ -592,7 +592,8 @@ public sealed class InfraworksCommand
                     //   그러려면 0일 때도 찍혀야 한다 — 종전엔 0이면 아예 안 찍혀서 '0이 몇 번 연속인지'를
                     //   셀 수가 없었다. 세려고 만든 계수기가 셀 수 없으면 그건 계수기가 아니다.
                     log.AppendLine($"옹벽3D.dwg: 보강토 {nb}블록+{nc}캡 · 앵커판넬 {np}패널+{na}앵커 · 역T {nt}세그" +
-                        $" · 깨진솔리드 {WallDwg.LastDropped}개 제외(전수검사 — 여러 번 0이면 검사를 줄인다)" +
+                        $" · 깨진솔리드 {WallDwg.LastDropped}개 제외" +
+                        (WallDwg.LastDropDetail.Length > 0 ? $"[{WallDwg.LastDropDetail}]" : "(전수검사)") +
                         // [0805] 판 만들기 실패는 종전에 조용히 삼켜져 'Generate 수 ≠ DWG 수'가 안 보였다.
                         (WallPanelDwg.nFail > 0
                             ? $" · ⚠판 만들기 실패 {WallPanelDwg.nFail}장(앵커·정착판도 함께 생략) — 첫 사유: {WallPanelDwg.firstFail}"
