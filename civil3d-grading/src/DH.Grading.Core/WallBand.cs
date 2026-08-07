@@ -58,6 +58,17 @@ public static class WallBand
     /// <summary>직전 <see cref="Slice"/>의 진단 문자열 — 조용히 버려지는 자리마다 사유별 계수기.</summary>
     public static string LastDiag { get; private set; } = "";
 
+    /// <summary>[JACK 0806] 직전 <see cref="Slice"/>가 만든 코너 필러 — 볼록 코너에서 두 벽면이 벌어져
+    /// 남은 쐐기 틈을 메우는 기둥. 렌더러는 <c>WallPanelDwg.BuildQuoin</c>(이미 있음).
+    /// <para>호출자가 여러 줄을 자르는 동안 쌓이므로, 한 내보내기 단위로 <see cref="ResetTotals"/>가 비운다.</para></summary>
+    public static List<WallPanels.Quoin> LastQuoins { get; } = new();
+
+    private static double Dist2(Point3 a, Point3 b)
+    {
+        double dx = b.X - a.X, dy = b.Y - a.Y;
+        return System.Math.Sqrt(dx * dx + dy * dy);
+    }
+
     /// <summary>판넬 한 변 상한(m) — 설계 규칙 '단높이 5m ÷ 3'.</summary>
     public const double MaxSide = 5.0 / 3.0;
 
@@ -74,10 +85,10 @@ public static class WallBand
     /// <summary>[하니스 전용] 짧은 벽면 합치기를 끈다 — 자체검증(끄면 6cm 판넬이 되살아난다)에 쓴다.</summary>
     public static bool DisableShortFaceMergeForTest;
 
-    /// <summary>[하니스 전용] 사다리꼴(아랫변=토우·윗변=크레스트)을 끄고 직사각형으로 되돌린다.
+    /// <summary>[하니스 전용] '열 폭을 토우 길이로' 잡는 것을 끄고 크레스트 길이로 되돌린다.
     /// 다른 방어(코너 분할·현 제한)의 자체검증은 이걸 같이 꺼야 성립한다 — 사다리꼴이 그 결함까지
     /// 덮어 주면 '방어를 껐는데도 멀쩡한' 결과가 나와 검사가 무력해진다.</summary>
-    public static bool DisableTrapezoidForTest;
+    public static bool DisableToeWidthForTest;
 
 
 
@@ -638,6 +649,7 @@ public static class WallBand
         int narrowN = 0, narrowN2 = 0, faceCnt = 0, chordSplit = 0; string sliverFirst = ""; double noSplitDev = 0;
         // [0806] 토우가 크레스트보다 길어 열 폭을 늘린 횟수와 최대 증가량 — 오목 코너에서만 나와야 정상.
         int toeLong = 0; double toeLongMax = 0;
+        int quoinN = 0; double quoinMax = 0;   // 이 줄에서 만든 코너 필러 수와 최대 폭
         // [0806] 열마다 '만들었나·왜 못 만들었나' — 벽 한가운데 구멍('길게 누락됨')을 끝단 데이라잇과 가르는 장치.
         var colLog = new List<(bool Made, string Why, double X, double Y, double W)>();
         // [0806] 이 줄의 코너 목록(볼록/오목)과 '코너 조각'(모서리 라운딩이 만든 규격 미만 벽면) 실측.
@@ -663,6 +675,9 @@ public static class WallBand
         //   오목 코너에 몰리는지 **세어서** 확인한다(스샷 심증 → 숫자로 확정).
         var cornerConcave = new bool[System.Math.Max(1, runs.Count)];
         var cornerDegAt = new double[System.Math.Max(1, runs.Count)];
+        // [0806] 벽면 양 끝의 실제 모서리(아래·위 월드점 + 노출면 방향) — 코너 필러를 만드는 데 쓴다.
+        var faceStart = new (bool Ok, Point3 Bot, Point3 Top, (double x, double y, double z) W)[System.Math.Max(1, runs.Count)];
+        var faceEnd = new (bool Ok, Point3 Bot, Point3 Top, (double x, double y, double z) W)[System.Math.Max(1, runs.Count)];
         for (int rIdx = 0; rIdx + 1 < runs.Count; rIdx++)
         {
             var lc = LocOfFrac(cumC, runs[rIdx].F1);
@@ -861,8 +876,15 @@ public static class WallBand
                 //   → 볼록 코너에만 내민다. 오목 코너에서는 내밀지 않는다(이미 물려 있다).
                 //   ※내가 앞서 세 번 시도한 건 오목 겹침을 **키우는** 쪽이었다 — 부호를 거꾸로 짚었던 것이고,
                 //     그때마다 '효과 0'이거나 JACK이 '직각부 겹침이 더 심해졌다'고 신고했다. 그게 신호였다.
-                bool cavA = rIdx > 0 ? cornerConcave[rIdx - 1] : (closedRun && cornerConcave[runs.Count - 1]);
-                bool cavB = rIdx < runs.Count - 1 ? cornerConcave[rIdx] : (closedRun && cornerConcave[runs.Count - 1]);
+                int ciA = rIdx > 0 ? rIdx - 1 : runs.Count - 1;
+                int ciB = rIdx < runs.Count - 1 ? rIdx : runs.Count - 1;
+                bool cavA = rIdx > 0 ? cornerConcave[ciA] : (closedRun && cornerConcave[ciA]);
+                bool cavB = rIdx < runs.Count - 1 ? cornerConcave[ciB] : (closedRun && cornerConcave[ciB]);
+                // ※[0806 폐기 — 네 번째] 볼록 코너의 쐐기 틈(2·d·tan(θ/2), 100°면 0.60m)을 겹침을 키워
+                //   메우려 했으나 **더 나빠졌다**(구멍 1→6곳). 볼록 코너에서 두 벽면은 **책처럼 벌어지므로**,
+                //   각자 자기 평면으로 길어져 봐야 사이의 쐐기는 그대로고 판넬만 허공으로 나간다.
+                //   그 자리를 메우는 건 판넬이 아니라 **코너 필러(Quoin)** 다 — 이 저장소에 이미 있지만
+                //   감사(0805)에서 '항상 0개'로 죽어 있다고 지적된 그것이다. 거기서 풀어야 한다.
                 double lapA = (j == 0 && lapStart && !cavA) ? cornerLap : 0;
                 double lapB = (j == ncol - 1 && lapEnd && !cavB) ? cornerLap : 0;
 
@@ -950,7 +972,7 @@ public static class WallBand
                 //   ※사다리꼴(아래=토우·위=크레스트)도 만들어 봤다. 기하는 맞지만 **판넬 옆면이 비스듬해져**
                 //     실물 앵커판넬(직사각형·수직 줄눈)과 달라 보인다(JACK 0806 '사선으로 쪼개졌어'). 폐기.
                 //   토우가 이 열 안에서 꺾이면(코너를 넘고 있으면) 길이가 무의미하므로 손대지 않는다.
-                if (toeStraight && toeSpanU > 1e-6 && !DisableTrapezoidForTest
+                if (toeStraight && toeSpanU > 1e-6 && !DisableToeWidthForTest
                     && System.Math.Abs(toeSpanU - colW) > 1e-6)
                 { toeLong++; toeLongMax = System.Math.Max(toeLongMax, System.Math.Abs(toeSpanU - colW)); colW = toeSpanU; }
 
@@ -969,16 +991,15 @@ public static class WallBand
                     var c0 = AtLoc(crest, lf.Lo, lf.T);
                     var t0 = pairByIndex ? AtLoc(toe, lf.Lo, lf.T) : AtFrac(toe, cumT, f);
 
-                    // ★[치명 0805] **성토는 데이라잇으로 자르지 않는다**(JACK 0721 확정 — 보강토와 동일 규칙):
-                    //   크레스트가 지반 위면 벽이 꽉 차고, 아니면 벽이 없다.
-                    //   아래 절토 규칙("설계면이 원지반보다 아래일 때 벽")과 **부호가 정반대**라, 방향을 안 가르면
-                    //   성토 벽은 토우가 지반 위라 전부 '벽 없음'이 되어 **판넬이 한 장도 안 나온다**.
-                    //   옛 구현(WallPanels.DayS)에는 있던 분기인데 재작성 때 빠졌다.
-                    if (!run.Up)
-                    {
-                        if (!ground.TryGetElevation(c0.X, c0.Y, out double gc)) return faceH;
-                        return c0.Z > gc + 0.02 ? faceH : 0;   // 여유 0.02는 옛 값(eps) — 1e-6은 표본 잡음에 흔들린다
-                    }
+                    // ★[JACK 0806 확정] **성토는 데이라잇으로 자르지 않는다 — 아예.**
+                    //   "성토는 윗선을 기준으로 아래로 옹벽을 치는 게 맞긴 한데, 절토처럼 원지반과 맞닿는
+                    //    데이라잇까지 끊을 필요는 없다. 어차피 인프라웍스에서 지표면 아래로 들어갈 거니깐 괜찮다."
+                    //   종전엔 '크레스트가 지반 위면 꽉, 아니면 0'이라는 **전부 아니면 전무** 규칙이었다(0721).
+                    //   그래서 원지반이 올라와 계획면과 만나는 전이 구간에서 벽이 **점점 낮아지지 않고 뚝 끊겨**
+                    //   한 구간이 통째로 비었다(JACK 0806 스샷 '옹벽누락부' — 13.48m). 조건 자체를 없앤다.
+                    //   묻히는 아랫부분은 InfraWorks에서 지표면에 가려지므로 그대로 두는 편이 옳다.
+                    //   ※절토는 다르다 — 데이라잇 위로는 팔 흙이 자체가 없으므로 반드시 잘라야 한다(아래 규칙 유지).
+                    if (!run.Up) return faceH;
 
                     if (!ground.TryGetElevation(t0.X, t0.Y, out double gz0)) return -1;   // 지반 밖
                     if (t0.Z >= gz0 - 1e-6) return 0;            // 토우가 이미 지반 위 — 벽 없음
@@ -1234,6 +1255,22 @@ public static class WallBand
 
                 if (tiles.Count > tilesBefore) colLog[logIdx] = (true, "", org.X, org.Y, colW);
 
+                // ★[JACK 0806 '코너필러까지 하고 나서 설치해줘'] 벽면 **양 끝**의 실제 모서리 위치를 기록해 둔다.
+                //   볼록 코너에서는 두 벽면이 책처럼 벌어져 그 사이에 쐐기 틈이 남는데(100°면 0.60m),
+                //   판넬을 늘려서는 못 메운다(4번 시도 4번 실패 — 각자 길어져 봐야 사이는 그대로다).
+                //   그 자리를 채우는 건 **코너 필러**다. 렌더러(WallPanelDwg.BuildQuoin)는 멀쩡한데
+                //   생성이 옛 경로(WallPanels.LastQuoins)에만 있어 새 경로에서는 **항상 0개**였다(0805 감사).
+                //   여기서 만든다 — 판넬이 실제로 나온 열의 끝만 기록해, 벽이 없는 자리엔 필러도 안 생긴다.
+                if (tiles.Count > tilesBefore)
+                {
+                    Point3 WorldAt(double uu, double vv) => new Point3(
+                        org.X + uu * ux + vv * vx, org.Y + uu * uy + vv * vy, org.Z + vv * vz);
+                    if (j == 0)
+                        faceStart[rIdx] = (true, WorldAt(uL, 0), WorldAt(uL, faceH), (wx, wy, wz));
+                    if (j == ncol - 1)
+                        faceEnd[rIdx] = (true, WorldAt(uR, 0), WorldAt(uR, faceH), (wx, wy, wz));
+                }
+
                 // ── 이 열의 결산: 판넬 잘림 증상을 **가설별로 갈라내는 숫자** 세 가지 ──
                 //   ① 데이라잇(capTop)까지 못 올라왔나 — 조각이 버려져 주저앉은 경우
                 double shortBy = capTop - colMaxV - jm;
@@ -1278,6 +1315,39 @@ public static class WallBand
                     }
                 }
             }
+        }
+
+        // ★[JACK 0806] 코너 필러 — 이웃 벽면의 끝과 시작 사이에 남은 쐐기 틈을 기둥 하나로 메운다.
+        //   볼록 코너에서만 틈이 생기고(오목은 이미 물려 있다) 그 폭은 2·d·tan(θ/2)라 각도가 클수록 커진다.
+        //   분류에 기대지 않고 **실제로 벌어진 거리를 재서** 필요할 때만 만든다 — 분류가 틀려도 안전하다.
+        //   ※짝은 **이웃한 벽면끼리만** 본다. 가장 가까운 시작점을 찾게 해 봤더니 멀리 떨어진 벽면끼리
+        //     묶여 **2.68m짜리 판**이 엉뚱한 자리에 섰다 — 코너 쐐기가 아니라 벽 한 장 크기다. 되돌린다.
+        //   폭 상한도 조인다: 코너 쐐기는 2·d·tan(θ/2)이고 d=0.25·단높이/5 정도라 140°에서도 1.4m 안쪽이다.
+        for (int rIdx = 0; rIdx + (closedRun ? 0 : 1) < runs.Count; rIdx++)
+        {
+            int nxt = (rIdx + 1) % runs.Count;
+            if (nxt == rIdx) break;
+            // ★[0806 검토] **볼록 코너에만** 세운다. 거리만 보고 세웠더니 32개 벽면 경계 중 26곳에 섰다 —
+            //   오목 코너는 두 판넬이 이미 겹쳐 있는데, 겹친 두 끝점 사이 거리도 0이 아니라서
+            //   '틈'으로 읽혀 필요 없는 기둥이 겹침 위에 얹혔다. 쐐기가 벌어지는 건 볼록 쪽뿐이다.
+            if (cornerConcave[rIdx]) continue;
+            var A = faceEnd[rIdx]; var B = faceStart[nxt];
+            if (!A.Ok || !B.Ok) continue;                       // 한쪽 벽이 없으면 메울 틈도 없다
+            double gBot = Dist2(A.Bot, B.Bot), gTop = Dist2(A.Top, B.Top);
+            double gw = System.Math.Max(gBot, gTop);
+            if (gw < 0.03 || gw > 1.5) continue;                // 이미 붙었거나(정상) 코너 쐐기가 아닌 먼 자리
+            var mid0 = new Point3((A.Bot.X + B.Bot.X) / 2, (A.Bot.Y + B.Bot.Y) / 2, (A.Bot.Z + B.Bot.Z) / 2);
+            var mid1 = new Point3((A.Top.X + B.Top.X) / 2, (A.Top.Y + B.Top.Y) / 2, (A.Top.Z + B.Top.Z) / 2);
+            double axX = B.Bot.X - A.Bot.X, axY = B.Bot.Y - A.Bot.Y;
+            double axL = System.Math.Sqrt(axX * axX + axY * axY);
+            if (axL < 1e-9) { axX = B.Top.X - A.Top.X; axY = B.Top.Y - A.Top.Y; axL = System.Math.Sqrt(axX * axX + axY * axY); }
+            if (axL < 1e-9) continue;
+            double nwx = A.W.x + B.W.x, nwy = A.W.y + B.W.y, nwz = A.W.z + B.W.z;
+            double nwl = System.Math.Sqrt(nwx * nwx + nwy * nwy + nwz * nwz);
+            if (nwl < 1e-9) continue;
+            LastQuoins.Add(new WallPanels.Quoin(mid0, mid1, (axX / axL, axY / axL, 0),
+                                                (nwx / nwl, nwy / nwl, nwz / nwl), gw + 0.02));
+            quoinN++; if (gw > quoinMax) quoinMax = gw;
         }
 
         // ★[0806] 벽 **한가운데** 구멍만 골라낸다 — 양옆에 판넬이 있는데 가운데만 빈 열의 연속 구간.
@@ -1333,12 +1403,13 @@ public static class WallBand
         tPerLine.Add((tiles.Count, dAbove, aboveN > 0 ? aboveMin : double.NaN));
         if (faceCnt > 0)
         {
-            if (minColW < tMinColW) { tMinColW = minColW; tNarrowX = narrowX; tNarrowY = narrowY; tNarrowLen = narrowLen; tNarrowDiv = narrowN2; }
+            if (minColW < tMinColW) { tMinColW = minColW; tNarrowX = narrowX; tNarrowY = narrowY; }
             if (maxColW > tMaxColW) tMaxColW = maxColW;
             tNarrowN += narrowN; tFaceCnt += faceCnt; tChordSplit += chordSplit;
             if (noSplitDev > tNoSplitDev) tNoSplitDev = noSplitDev;
         }
         if (sliverFirst.Length > 0 && tSliverFirst.Length == 0) tSliverFirst = sliverFirst;
+        tQuoinN += quoinN; if (quoinMax > tQuoinMax) tQuoinMax = quoinMax;
         tHoleN += midHoleN;
         if (midHoleW > tHoleW) { tHoleW = midHoleW; tHoleWhy = midHoleWhy; tHoleX = midHoleX; tHoleY = midHoleY; }
         if (aboveN > 0 && (tAboveN == 0 || aboveMax > tAboveMax)) { tAboveMax = aboveMax; tAboveX = aboveX; tAboveY = aboveY; }
@@ -1363,9 +1434,10 @@ public static class WallBand
     private static double tOff, tOffX, tOffY;
     private static readonly List<(int Kept, int Above, double Gap)> tPerLine = new();
     private static int tAboveN; private static double tAboveMin, tAboveMax, tAboveX, tAboveY;
-    private static double tMinColW = double.MaxValue, tMaxColW, tNarrowX, tNarrowY, tNarrowLen;
-    private static int tNarrowN, tNarrowDiv, tFaceCnt, tChordSplit; private static string tSliverFirst = "";
+    private static double tMinColW = double.MaxValue, tMaxColW, tNarrowX, tNarrowY;
+    private static int tNarrowN, tFaceCnt, tChordSplit; private static string tSliverFirst = "";
     private static int tHoleN; private static double tHoleW, tHoleX, tHoleY, tNoSplitDev; private static string tHoleWhy = "";
+    private static int tQuoinN; private static double tQuoinMax;
     /// <summary>[0806] 벽면 경계(코너)의 좌표와 볼록/오목 — 결함이 오목 코너에 몰리는지 세는 데 쓴다.</summary>
     private static readonly List<(double X, double Y, double Z, bool Convex, double Deg)> tCorners = new();
     /// <summary>[0806] 판넬 이탈을 코너 종류별로 모은 전 줄 합계 — 첫 줄만 보면 나머지 44줄을 놓친다(중간-4의 재판).</summary>
@@ -1378,9 +1450,10 @@ public static class WallBand
         tCall = tTile = tFull = tNonConvex = tGround = tAbove = tJoint = tThin = tSliver = tShort = tCap = tHole = 0;
         tOff = tOffX = tOffY = 0; tPerLine.Clear();
         tAboveN = 0; tAboveMin = tAboveMax = tAboveX = tAboveY = 0;
-        tMinColW = double.MaxValue; tMaxColW = tNarrowX = tNarrowY = tNarrowLen = 0;
-        tNarrowN = tNarrowDiv = tFaceCnt = tChordSplit = 0; tSliverFirst = "";
+        tMinColW = double.MaxValue; tMaxColW = tNarrowX = tNarrowY = 0;
+        tNarrowN = tFaceCnt = tChordSplit = 0; tSliverFirst = "";
         tHoleN = 0; tHoleW = tHoleX = tHoleY = tNoSplitDev = 0; tHoleWhy = ""; tCorners.Clear();
+        LastQuoins.Clear(); tQuoinN = 0; tQuoinMax = 0;
         tOffCav = tOffCnv = tOffFar = tOffCavX = tOffCavY = 0;
         tFacetCav = tFacetCnv = 0; tFacetMin = double.MaxValue; tFacetX = tFacetY = 0;
     }
@@ -1415,6 +1488,31 @@ public static class WallBand
         //   틈마다 양옆 판넬이 **온전(데이라잇에 안 잘린 완전한 사각)**인지 함께 본다 —
         //   양옆이 다 온전한데 벌어져 있으면 데이라잇 탓이 아니라 **빠진 것**이다.
         var found = new List<(double D, double X, double Y, double Z, bool FullBoth)>();
+
+        // ★[0806 성능] 끝점이 '열렸는지'를 **한 번만** 계산한다. 종전엔 열린 끝마다 상대편이 열렸는지를
+        //   그 자리에서 다시 전수 조사해 **O(판넬수³)** 이 됐다 — 현장 594장이면 2억 번이라
+        //   내보내기가 멈춘 것처럼 보였다(JACK 0806 '내보내기를 눌러도 반응이 없어, 엄청 오래 걸려').
+        //   진단이 결과보다 오래 걸리면 그건 진단이 아니라 장애다. 미리 한 번 계산해 O(판넬수²)로 낮춘다.
+        var openL = new bool[tiles.Count];
+        var openR = new bool[tiles.Count];
+        for (int i = 0; i < tiles.Count; i++)
+        {
+            double bl = double.MaxValue, br = double.MaxValue;
+            var Ti = tiles[i];
+            for (int j = 0; j < tiles.Count; j++)
+            {
+                if (j == i) continue;
+                var Tj = tiles[j];
+                if (Tj.Bench != Ti.Bench || Tj.Row != Ti.Row || Tj.Up != Ti.Up) continue;
+                double d1 = PtSegDist2D(L[i].X, L[i].Y, L[j].X, L[j].Y, R[j].X, R[j].Y);
+                if (d1 < bl) bl = d1;
+                double d2 = PtSegDist2D(R[i].X, R[i].Y, L[j].X, L[j].Y, R[j].X, R[j].Y);
+                if (d2 < br) br = d2;
+                if (bl < minGap && br < minGap) break;      // 양쪽 다 막혔으면 더 볼 것 없다
+            }
+            openL[i] = bl >= minGap; openR[i] = br >= minGap;
+        }
+
         for (int i = 0; i < L.Count; i++)
         {
             // ★[0806 v6] 자를 다섯 번째로 고친다. v5(방향 필터)가 왜 틀렸는지 —
@@ -1424,38 +1522,31 @@ public static class WallBand
             //   → 옳은 방식: 끝점이 **어느 방향으로든** 다른 판넬 몸통에 닿아 있으면 '막힌 끝'이고,
             //     아무 데도 안 닿으면 '열린 끝'이다. 그리고 **열린 끝 둘이 마주 볼 때만** 구멍이다 —
             //     벽이 데이라잇에서 끝나는 자리는 열린 끝이 하나뿐이라 자연히 빠진다.
+            if (!openL[i]) continue;                     // 어딘가에 닿아 있다 = 막힌 끝(정상)
             var Lt = tiles[L[i].I];
+            // 열린 끝 — 마주 보는 열린 끝(다른 판넬의 오른쪽 끝)을 찾는다(위에서 미리 계산해 둔 openR 사용).
             double best = double.MaxValue; int bestJ = -1;
             for (int j = 0; j < tiles.Count; j++)
             {
-                if (j == L[i].I) continue;
-                var Rt = tiles[j];
-                if (Rt.Bench != Lt.Bench || Rt.Row != Lt.Row || Rt.Up != Lt.Up) continue;   // 같은 단·같은 행끼리만
-                double d = PtSegDist2D(L[i].X, L[i].Y, L[j].X, L[j].Y, R[j].X, R[j].Y);
-                if (d < best) { best = d; bestJ = j; }
-            }
-            if (best < minGap) continue;                 // 어딘가에 닿아 있다 = 막힌 끝(정상)
-            // 열린 끝 — 마주 보는 열린 끝(다른 판넬의 오른쪽 끝)을 찾는다.
-            best = double.MaxValue; bestJ = -1;
-            for (int j = 0; j < tiles.Count; j++)
-            {
-                if (j == L[i].I) continue;
+                if (j == L[i].I || !openR[j]) continue;
                 var Rt = tiles[j];
                 if (Rt.Bench != Lt.Bench || Rt.Row != Lt.Row || Rt.Up != Lt.Up) continue;
-                double rOpen = double.MaxValue;
-                for (int k = 0; k < tiles.Count; k++)
-                {
-                    if (k == j) continue;
-                    var Kt = tiles[k];
-                    if (Kt.Bench != Rt.Bench || Kt.Row != Rt.Row || Kt.Up != Rt.Up) continue;
-                    double dd = PtSegDist2D(R[j].X, R[j].Y, L[k].X, L[k].Y, R[k].X, R[k].Y);
-                    if (dd < rOpen) rOpen = dd;
-                }
-                if (rOpen < minGap) continue;            // 저쪽 끝은 막혀 있다 = 마주 보는 열린 끝이 아니다
                 double d2 = System.Math.Sqrt((R[j].X - L[i].X) * (R[j].X - L[i].X) + (R[j].Y - L[i].Y) * (R[j].Y - L[i].Y));
                 if (d2 < best) { best = d2; bestJ = j; }
             }
             if (bestJ < 0 || best < minGap || best > maxGap) continue;   // 붙었거나(정상) 벽 끝(짝 없음)
+            // ★[JACK 0806] 그 자리에 **코너 필러**가 서 있으면 구멍이 아니다 — 판넬 사이가 벌어진 건 맞지만
+            //   볼록 코너의 쐐기는 원래 판넬이 아니라 필러가 메우는 자리다. 필러를 안 보면
+            //   메워 놓고도 '구멍 있음'으로 찍혀, 판넬을 늘리는 잘못된 처방으로 다시 끌려간다(4번 겪었다).
+            double gmx = (L[i].X + R[bestJ].X) / 2, gmy = (L[i].Y + R[bestJ].Y) / 2;
+            bool filled = false;
+            foreach (var q in LastQuoins)
+            {
+                if (System.Math.Abs(q.Toe.Z - L[i].Z) > 6.0 && System.Math.Abs(q.Top.Z - L[i].Z) > 6.0) continue;
+                double dq = System.Math.Sqrt((q.Toe.X - gmx) * (q.Toe.X - gmx) + (q.Toe.Y - gmy) * (q.Toe.Y - gmy));
+                if (dq <= best / 2 + 0.35) { filled = true; break; }
+            }
+            if (filled) continue;
             found.Add((best, L[i].X, L[i].Y, L[i].Z,
                        tiles[L[i].I].IsFull && tiles[R[bestJ].I].IsFull));
         }
@@ -1552,6 +1643,7 @@ public static class WallBand
               (tChordSplit > 0 ? $" · 급커브 분할 {tChordSplit}열(안 쪼갰다면 이탈 최대 {tNoSplitDev:F3}m · 한도 {ChordTol:F2}m)" : "") +
               $" · 최소 @ {tNarrowX:F0},{tNarrowY:F0})" : "") +
         (tSliverFirst.Length > 0 ? $" · ⚠실오라기 구멍 첫 사례 {tSliverFirst}" : "") +
+        (tQuoinN > 0 ? $" · 코너 필러 {tQuoinN}개(최대 폭 {tQuoinMax:F2}m — 볼록 코너 쐐기 메움)" : " · 코너 필러 0개(메울 쐐기 없음)") +
         (tHoleN > 0
             ? $" · ⚠★벽 한가운데 구멍 {tHoleN}곳(최대 {tHoleW:F2}m 폭 · 사유 {tHoleWhy} @ {tHoleX:F0},{tHoleY:F0})"
             : " · 벽 한가운데 구멍 없음") +

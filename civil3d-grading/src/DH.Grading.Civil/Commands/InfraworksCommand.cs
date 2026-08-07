@@ -396,7 +396,9 @@ public sealed class InfraworksCommand
                             var tiles = new System.Collections.Generic.List<WallBand.Tile>();
                             var bandDiag = new System.Text.StringBuilder();
                             WallBand.ResetTotals();          // [0806 중간-4] 첫 줄만이 아니라 전 줄을 센다
-                            wallLineAll.AddRange(storedRuns);   // [JACK 0806] 확인용 레이어로 도면에 같이 낸다
+                            // [JACK 0806→0807] 확인용 옹벽선 레이어 — 기본 끔(GradingSettings.WallLineLayer).
+                            //   문제를 찾는 데 결정적이었지만 다 고쳤으므로 도면에는 객체만 낸다.
+                            if (GradingSettings.WallLineLayer) wallLineAll.AddRange(storedRuns);
                             foreach (var wr in storedRuns)
                             {
                                 tiles.AddRange(WallBand.Slice(wr, regionSampler, joint: 0.05));
@@ -422,6 +424,10 @@ public sealed class InfraworksCommand
                                            $"(총길이 {wTotLen:F0}m · 최대변 {wMaxSeg:F2}m @ 선{wAtRun} {wAtX:F0},{wAtY:F0}) → 판넬 {panels.Count}장" +
                                            (bandDiag.Length > 0 ? $" · 첫 줄: {bandDiag}" : ""));
                             if (WallBand.TotalDiag.Length > 0) log.AppendLine($"{rPre}  {WallBand.TotalDiag}");
+                            // ★[JACK 0806] 코너 필러 — 볼록 코너에서 두 벽면이 벌어져 남은 쐐기 틈을 메운다.
+                            //   옛 경로(WallPanels.LastQuoins)에만 있어 새 경로에서는 항상 0개였다(0805 감사).
+                            quoinAll.AddRange(laterMask == null ? WallBand.LastQuoins
+                                : WallBand.LastQuoins.Where(q => !laterMask.Contains(q.Toe.X, q.Toe.Y)));
                             // ★[0806 JACK '길게 누락됨'] 구멍이 **줄 안**이 아니라 **줄과 줄 사이**일 수 있다.
                             //   같은 단(Bench)의 옹벽선 두 줄이 끝에서 안 맞닿으면 그 사이가 통째로 빈다.
                             //   MergeAdjacent(0.35m)로 이어붙이지만, 그보다 멀면 남는다 — 얼마나 벌어졌는지 잰다.

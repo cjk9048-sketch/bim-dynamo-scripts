@@ -21,7 +21,18 @@ public static class WallTeeDwg
     //   벽이 데이라잇 교차점까지 얇아지며 수렴(테이퍼)하는 게 요구 형상. 기하 퇴화만 막는 최소 높이 2cm.
     private const double HMin = 0.02;     // 기하 최소 벽고(퇴화 방지) — 트림·정점 클램프 공용
 
-    // 전면 자연석 무늬 — 앵커판넬(WallPanelDwg)과 동일 질감 상수.
+    // ★[JACK 0807] **역T는 '1단만 생기는 구간'에서만 쓰이는 옵션**이다 — 정지옵션에서 역T를 골라도
+    //   2단 이상 구간은 자동으로 앵커판넬(절토)/보강토(성토)로 대체된다(InfraworksCommand의 자동 대체).
+    //   그래서 여기 무늬는 **한 단 높이(보통 ≤5m)의 연속 벽체 전면**만 다루면 된다 —
+    //   판넬처럼 격자로 쪼개진 면이 아니라 세그먼트 하나가 통짜 면이고, 상단은 지형을 따라 경사진다.
+    //   방어를 옮길 때도 이 전제를 지킨다: 오목 판넬 볼록 분해(앵커판넬용)는 **여기선 필요 없다** —
+    //   클립이 상단 경사선 **반평면 하나**뿐이라 결과가 항상 볼록이고 자기교차가 원천적으로 안 생긴다.
+    // 전면 자연석 무늬 — **역T는 옛 자연석 질감을 그대로 쓴다**(JACK 0807 확정).
+    //   앵커판넬은 0806에 십자 4분할로 바꿨지만(실물 PSM 판넬의 줄눈) 역T는 판넬이 아니라 연속 벽체라
+    //   4분할이 맞지 않는다. 두 벽 종류가 서로 다른 질감을 쓰는 것은 **의도된 것**이니 통일하지 말 것.
+    //   ※다만 이 경로는 돌을 낱개로 리전→압출하므로 ACIS 오류(115094)에 취약하다 —
+    //     역T를 실제로 쓰기 시작하면 v19.23~25에서 앵커판넬에 넣은 방어(개별 리전·빈 목록·볼록 분해)를
+    //     여기에도 옮겨야 한다. 지금 현장은 역T가 0세그라 미룬 것뿐이다.
     private const double StoneSize = 0.40;
     private const double GrooveW = 0.05;
     private const double Relief = 0.035;
@@ -238,15 +249,36 @@ public static class WallTeeDwg
                     for (int k = 0; k < stoneUv.Count; k++)
                     { var u1 = stoneUv[k]; var u2 = stoneUv[(k + 1) % stoneUv.Count]; area += u1.X * u2.Y - u2.X * u1.Y; }
                     if (System.Math.Abs(area) * 0.5 < 1e-3) continue;
+                    // ★[JACK 0807 '역T도 쓸 거니깐 앵커판넬 넣었던 방어 넣어'] 앵커판넬에서 값비싸게 얻은
+                    //   두 가지를 옮긴다. 나머지(돌마다 개별 압출·근접중복 정점 정리)는 이미 여기 있다.
+                    //   ① **실오라기는 면적만으로 못 거른다.** 가느다란 쐐기(0.03m × 0.40m = 120㎠)는
+                    //      면적 하한을 통과해 바늘 같은 조각으로 남는다(JACK 0805 '조각이 쪼개졌어').
+                    //      실효 두께 = 면적 ÷ 최대 폭 — 길쭉할수록 작아지므로 길이에 안 속는다.
+                    double sArea = System.Math.Abs(area) * 0.5;
+                    double sx0 = double.MaxValue, sx1 = double.MinValue, sy0 = double.MaxValue, sy1 = double.MinValue;
+                    foreach (var q in stoneUv)
+                    { sx0 = System.Math.Min(sx0, q.X); sx1 = System.Math.Max(sx1, q.X); sy0 = System.Math.Min(sy0, q.Y); sy1 = System.Math.Max(sy1, q.Y); }
+                    double sExt = System.Math.Max(sx1 - sx0, sy1 - sy0);
+                    if (sExt < 1e-9 || sArea / sExt < 0.08) continue;    // 두께 8cm 미만 = 돌이 아니라 실오라기
                     var quad = new Point3dCollection();
                     foreach (var q in stoneUv) quad.Add(W(q));
                     using var pl = new Polyline3d(Poly3dType.SimplePoly, quad, true);
                     using var curves = new DBObjectCollection { pl };
                     using var regions = Region.CreateFromCurves(curves);
                     if (regions.Count == 0) { fail++; continue; }
+                    for (int rq = 1; rq < regions.Count; rq++)          // 여분 리전 누수 방지
+                        try { regions[rq].Dispose(); } catch { }
                     using var region = (Region)regions[0];
                     var stone = new Solid3d();
                     stone.CreateExtrudedSolid(region, air * Relief, new SweepOptions());
+                    //   ② **압출이 조용히 깨진 솔리드를 내놓는 경우가 있다.** 그대로 두면 SaveAs가
+                    //      'RECOVER 권장' 모달을 띄운다(JACK 0731). 경계상자와 부피로 확실한 증거가 있을 때만 버린다.
+                    bool bad = false;
+                    try { var _ = stone.GeometricExtents; } catch { bad = true; }
+                    if (!bad)
+                        try { double vol = stone.MassProperties.Volume; if (!(vol > 1e-9) || double.IsNaN(vol) || double.IsInfinity(vol)) bad = true; }
+                        catch { }
+                    if (bad) { try { stone.Dispose(); } catch { } fail++; continue; }
                     stone.TransformBy(oShift);
                     stone.LayerId = layId;
                     stone.Color = Color.FromColorIndex(ColorMethod.ByAci, 253);
