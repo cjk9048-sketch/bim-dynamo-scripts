@@ -111,6 +111,113 @@ public static class WallBand
     /// <summary>지반선 아래라 만들지 않은 열의 사유 문자열 — 진단에서 '진짜 구멍'과 갈라내는 열쇠라 상수로 둔다.</summary>
     internal const string WhyBuried = "지반선아래";
 
+    /// <summary>★[JACK 0807] 코너 전용 판넬의 <b>다리 길이</b>(m) — 코너에서 양옆 규격 판넬이 물러나는 거리.
+    /// 실제 프리캐스트 옹벽도 코너는 현장에서 비스듬히 자르지 않고 <b>코너 전용 유닛</b>을 쓴다.
+    /// 0.35m면 판넬 두께(0.20)와 전면 돌출(0.10)을 합친 것보다 넉넉해 어떤 각도에서도 단면이 성립한다.</summary>
+    public const double CornerLeg = 0.35;
+
+    /// <summary>★[JACK 0807] 코너 전용 판넬 하나 — 아래·위 두 단면(월드 3D). 압출이 아니라 <b>두 단면 사이 로프트</b>다.
+    /// <para>벽이 1:0.05로 기울어 두 벽면이 <b>서로 다른 방향으로</b> 물러나므로, 위 단면은 아래 단면의
+    /// 단순 평행이동이 아니다(90° 코너·단높이 5m면 0.18m 어긋난다). 두 단면을 각자 제 높이에서 구해
+    /// 그 사이를 이으면 위·아래가 정확하고 중간은 선형이라 기울기와 정확히 맞는다.</para></summary>
+    public readonly record struct CornerUnit(IReadOnlyList<Point3> Bot, IReadOnlyList<Point3> Top);
+
+    /// <summary>직전 <see cref="Slice"/>가 만든 코너 전용 판넬들 — <see cref="ResetTotals"/>가 비운다.</summary>
+    public static List<CornerUnit> LastCornerUnits { get; } = new();
+
+    /// <summary>그 자리를 <b>코너 전용 판넬이 이미 메우고 있는가</b> — 틈 판정·틈 메우기 둘 다 이걸 봐야 한다.
+    /// <para>안 보면 유닛이 채운 자리를 '구멍'으로 오독하고, 그 위에 필러까지 세워 또 뭉친다.
+    /// 0806에 코너 필러를 안 보고 같은 오독을 했다 — 같은 실수를 두 번 하지 않으려고 함수로 뺐다.</para></summary>
+    public static bool CornerUnitCovers(double x, double y, double z, double radius)
+    {
+        foreach (var cu in LastCornerUnits)
+        {
+            if (cu.Bot.Count == 0 || cu.Top.Count == 0) continue;
+            double lo = cu.Bot[0].Z, hi = cu.Top[0].Z;
+            if (z < lo - 1.0 || z > hi + 1.0) continue;                 // 높이가 겹치지 않으면 남
+            foreach (var p in cu.Bot)
+            {
+                double dx = p.X - x, dy = p.Y - y;
+                if (dx * dx + dy * dy <= radius * radius) return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>★★[JACK 0807 '각진부 마감을 깔끔하게 할 수 없나'] <b>코너 전용 판넬의 평면 단면(ㄱ자)</b>.
+    /// <para>
+    /// 지금은 양쪽 판넬이 각자 자기 평면으로 코너를 지나쳐 나가 서로 파고들고, 그 위에 필러까지 얹혀
+    /// 세 덩어리가 뭉친다("막았다"이지 "마감했다"가 아니다 — JACK 스샷).
+    /// 코너에서 양옆 판넬을 <see cref="CornerLeg"/>만큼 물러나게 하고, 그 자리를 감싸는 유닛 하나를 세운다.
+    /// 유닛의 두 노출면은 각각 이웃 판넬의 전면과 <b>같은 평면</b>이라 이어 붙으면 한 면처럼 보인다.
+    /// </para>
+    /// 불리언 연산이 <b>0회</b>다 — 단면을 만들어 압출만 한다. 이 저장소의 모델링 오류(115094)는 전부
+    /// 불리언에서 났으므로, 마이터 컷(코너당 불리언 2회 × 행)보다 이 길이 훨씬 안전하다.
+    /// <para>반환은 평면 다각형(바깥면 → 안쪽면 순). 코너가 거의 직선이면 빈 목록(유닛 불필요).</para>
+    /// </summary>
+    /// <param name="corner">벽선 위 코너 점.</param>
+    /// <param name="dirA">코너로 <b>들어오는</b> 벽면 A의 진행 방향(단위, 수평).</param>
+    /// <param name="dirB">코너에서 <b>나가는</b> 벽면 B의 진행 방향(단위, 수평).</param>
+    /// <param name="nA">A의 노출면 바깥 법선(단위, 수평).</param>
+    /// <param name="nB">B의 노출면 바깥 법선(단위, 수평).</param>
+    /// <param name="leg">양옆 판넬이 물러난 거리.</param>
+    /// <param name="thick">판넬 두께.</param>
+    /// <param name="front">판넬 전면 돌출(부지쪽).</param>
+    public static List<(double x, double y)> CornerUnitProfile(
+        (double x, double y) legEndA, (double x, double y) legEndB,
+        (double x, double y) dirA, (double x, double y) dirB,
+        (double x, double y) nA, (double x, double y) nB,
+        double thick, double front)
+    {
+        var outp = new List<(double x, double y)>();
+        double cross = dirA.x * dirB.y - dirA.y * dirB.x;
+        double dot = dirA.x * dirB.x + dirA.y * dirB.y;
+        if (System.Math.Abs(cross) < 0.05 && dot > 0) return outp;     // 3도 미만 꺾임 — 코너가 아니다
+
+        static bool Meet((double x, double y) p, (double x, double y) d,
+                         (double x, double y) q, (double x, double y) e, out (double x, double y) r)
+        {
+            double den = d.x * e.y - d.y * e.x;
+            r = default;
+            if (System.Math.Abs(den) < 1e-9) return false;
+            double t = ((q.x - p.x) * e.y - (q.y - p.y) * e.x) / den;
+            r = (p.x + d.x * t, p.y + d.y * t);
+            return true;
+        }
+
+        // 다리 끝 — 이웃 판넬 전면/뒷면과 **같은 평면** 위의 점.
+        var aOut = (x: legEndA.x + nA.x * front, y: legEndA.y + nA.y * front);
+        var aIn = (x: legEndA.x + nA.x * (front - thick), y: legEndA.y + nA.y * (front - thick));
+        var bOut = (x: legEndB.x + nB.x * front, y: legEndB.y + nB.y * front);
+        var bIn = (x: legEndB.x + nB.x * (front - thick), y: legEndB.y + nB.y * (front - thick));
+
+        if (!Meet(aOut, dirA, bOut, dirB, out var pOut)) return outp;
+        if (!Meet(aIn, dirA, bIn, dirB, out var pIn)) return outp;
+
+        // 교점이 다리 끝에서 지나치게 멀면(아주 예각) 단면이 뒤집힌다 — 그런 자리는 유닛을 안 만든다.
+        double la = System.Math.Sqrt((pOut.x - aOut.x) * (pOut.x - aOut.x) + (pOut.y - aOut.y) * (pOut.y - aOut.y));
+        double lb = System.Math.Sqrt((pOut.x - bOut.x) * (pOut.x - bOut.x) + (pOut.y - bOut.y) * (pOut.y - bOut.y));
+        if (la > 3.0 || lb > 3.0) return outp;
+
+        outp.Add(aOut); outp.Add(pOut); outp.Add(bOut);      // 노출면 쪽
+        outp.Add(bIn); outp.Add(pIn); outp.Add(aIn);         // 뒷면 쪽
+        var chk = new List<(double u, double v)>(outp.Count);
+        foreach (var q2 in outp) chk.Add((q2.x, q2.y));
+        if (PolyArea(chk) < 1e-4 || !IsSimple(chk)) outp.Clear();
+        return outp;
+    }
+
+    /// <summary>수평 벡터 정규화 — 코너 유닛 단면에 쓰는 작은 도우미.</summary>
+    private static (bool ok, double x, double y) Norm2(double x, double y)
+    {
+        double l = System.Math.Sqrt(x * x + y * y);
+        return l < 1e-9 ? (false, 0, 0) : (true, x / l, y / l);
+    }
+
+    /// <summary>판넬 두께·전면 돌출 — <c>WallPanelDwg</c>의 같은 값과 <b>반드시 일치해야</b> 코너 유닛이 이웃 판넬과 맞물린다.</summary>
+    public const double PanelThick = 0.20;
+    public const double PanelFrontOut = 0.10;
+
     /// <summary>★★[JACK 0807 '또 중간에 틈이 있어 — 자꾸 발생하는 걸 보니 근본 원인이 있다'] <b>그 근본 원인.</b>
     /// <para>
     /// 판넬 사이 틈을 재는 자의 최소 눈금이 <b>0.30m</b>였다. 그래서 <b>29cm까지의 틈은 자에 안 잡혔고</b>,
@@ -571,6 +678,9 @@ public static class WallBand
     /// S24가 실제로 그 버그를 잡는 검사인지 확인하는 용도. 운영 코드에서는 절대 켜지 않는다.</summary>
     public static bool DisableChordLimitForTest;
 
+    /// <summary>[하네스 전용] 코너 전용 유닛을 꺼서 종전 동작(코너 필러만)으로 되돌린다 — 자가검증용.</summary>
+    public static bool DisableCornerUnitForTest;
+
     /// <summary>[하네스 전용] 토우↔크레스트 대응을 옛 방식(호길이)으로 되돌려 '모서리에서 판넬이 눕는' 버그를
     /// 재현한다. 운영 코드에서는 절대 켜지 않는다.</summary>
     public static bool DisableIndexPairingForTest;
@@ -878,8 +988,73 @@ public static class WallBand
         var cornerConcave = new bool[System.Math.Max(1, runs.Count)];
         var cornerDegAt = new double[System.Math.Max(1, runs.Count)];
         // [0806] 벽면 양 끝의 실제 모서리(아래·위 월드점 + 노출면 방향) — 코너 필러를 만드는 데 쓴다.
-        var faceStart = new (bool Ok, Point3 Bot, Point3 Top, (double x, double y, double z) W)[System.Math.Max(1, runs.Count)];
-        var faceEnd = new (bool Ok, Point3 Bot, Point3 Top, (double x, double y, double z) W)[System.Math.Max(1, runs.Count)];
+        // ★★[JACK 0807 '길이를 재는 로직을 다시 생각해봐야 할 듯'] **벽면 상한·하한을 한 군데로 모은다.**
+        //   판넬은 자기 자리 원지반을 찍어 높이를 정하는데, 코너 필러·코너 유닛은 **옆에 있는 무언가**에서
+        //   높이를 빌려 왔다(설계 높이 → 이웃 끝 열 → 이웃 A 벽면). 세 번 다 같은 종류로 터졌다.
+        //   데이라잇이 코너 쪽으로 내려오면 코너는 **국소 최저점**이라 양옆 어느 쪽을 봐도 항상 더 높다 —
+        //   min(A,B)로도 부족하고, 그 자리 지반을 직접 찍는 수밖에 없다.
+        //   반환은 토우에서 잰 높이(m). hi < 0 = 지반 밖(판단 불가), lo ≥ hi = 벽면 없음.
+        (double lo, double hi) WallSpanAtPt(Point3 c0, Point3 t0, double fh)
+        {
+            if (ground == null) return (0, fh);
+            if (run.Up)
+            {
+                if (!ground.TryGetElevation(t0.X, t0.Y, out double g0)) return (0, -1);
+                if (t0.Z >= g0 - 1e-6) return (0, 0);
+                if (!ground.TryGetElevation(c0.X, c0.Y, out double g1)) return (0, -1);
+                if (c0.Z <= g1 + 1e-6) return (0, fh);
+                double d0 = g0 - t0.Z, d1 = g1 - c0.Z;
+                return (0, System.Math.Clamp(d0 / (d0 - d1), 0, 1) * fh);
+            }
+            if (!ground.TryGetElevation(t0.X, t0.Y, out double h0)) return (0, fh);
+            if (t0.Z >= h0 - 1e-6) return (0, fh);
+            if (!ground.TryGetElevation(c0.X, c0.Y, out double h1)) return (0, fh);
+            if (c0.Z <= h1 + 1e-6) return (fh, fh);
+            double e0 = t0.Z - h0, e1 = c0.Z - h1;
+            return (System.Math.Clamp(-e0 / (e1 - e0), 0, 1) * fh, fh);
+        }
+
+        // 크레스트 호길이 비율 f에서의 벽면 상한·하한 + 그 자리 크레스트·토우 점(코너 유닛이 쓴다).
+        (double lo, double hi, Point3 c0, Point3 t0, double fh) WallSpanAtFrac(double f)
+        {
+            var lf2 = LocOfFrac(cumC, f);
+            var cc = AtLoc(crest, lf2.Lo, lf2.T);
+            var tt2 = (toe.Count == crest.Count && !DisableIndexPairingForTest) ? AtLoc(toe, lf2.Lo, lf2.T) : AtFrac(toe, cumT, f);
+            double fh = System.Math.Sqrt((cc.X - tt2.X) * (cc.X - tt2.X) + (cc.Y - tt2.Y) * (cc.Y - tt2.Y)
+                                       + (cc.Z - tt2.Z) * (cc.Z - tt2.Z));
+            if (fh < 1e-9) return (0, -1, cc, tt2, 0);
+            var sp = WallSpanAtPt(cc, tt2, fh);
+            return (sp.lo, sp.hi, cc, tt2, fh);
+        }
+
+        var faceStart = new (bool Ok, Point3 Bot, Point3 Top, (double x, double y, double z) W, (double x, double y) U)[System.Math.Max(1, runs.Count)];
+        var faceEnd = new (bool Ok, Point3 Bot, Point3 Top, (double x, double y, double z) W, (double x, double y) U)[System.Math.Max(1, runs.Count)];
+
+        // ★★[JACK 0807 '각진부 마감을 깔끔하게'] **코너에서 양옆 벽면을 물러나게 한다.**
+        //   물러난 자리는 코너 전용 유닛(ㄱ자)이 감싼다 — 두 노출면이 이웃 판넬 전면과 같은 평면이라
+        //   이어 붙으면 한 면처럼 보인다. 지금은 양쪽 판넬이 코너를 지나쳐 서로 파고들고 그 위에
+        //   필러까지 얹혀 세 덩어리가 뭉친다("막았다"이지 "마감했다"가 아니다 — JACK 스샷).
+        //   ※물러나기는 **진짜 코너에서만**. 줄의 양 끝(열린 줄의 시작·끝)은 코너가 아니므로 건드리지 않는다.
+        //   ※물러난 뒤 벽면이 규격 판넬 한 장도 못 담을 만큼 짧아지면 물러나지 않는다 —
+        //     그 자리는 종전대로 코너 필러가 맡는다. 마감을 예쁘게 하려다 벽을 없애면 안 된다.
+        double totC0 = cumC[cumC.Length - 1];
+        bool closedRun0 = Dist2D(crest[0], crest[crest.Count - 1]) < 1e-6;
+        double legFrac = totC0 > 1e-9 ? CornerLeg / totC0 : 0;
+        var legAtStart = new double[System.Math.Max(1, runs.Count)];
+        var legAtEnd = new double[System.Math.Max(1, runs.Count)];
+        if (!DisableCornerUnitForTest && legFrac > 0)
+            for (int rIdx = 0; rIdx < runs.Count; rIdx++)
+            {
+                bool cornerAtStart = closedRun0 || rIdx > 0;
+                bool cornerAtEnd = closedRun0 || rIdx < runs.Count - 1;
+                double f0 = runs[rIdx].F0, f1 = runs[rIdx].F1;
+                double want = (cornerAtStart ? legFrac : 0) + (cornerAtEnd ? legFrac : 0);
+                //   남는 길이가 한 변 + 줄눈보다 짧아지면 그 벽면은 물러나지 않는다.
+                if ((f1 - f0 - want) * totC0 < side + JointW) continue;
+                if (cornerAtStart) { legAtStart[rIdx] = CornerLeg; f0 += legFrac; }
+                if (cornerAtEnd) { legAtEnd[rIdx] = CornerLeg; f1 -= legFrac; }
+                runs[rIdx] = (f0, f1);
+            }
         for (int rIdx = 0; rIdx + 1 < runs.Count; rIdx++)
         {
             var lc = LocOfFrac(cumC, runs[rIdx].F1);
@@ -1305,18 +1480,14 @@ public static class WallBand
 
                     // 지반 자료가 없는 자리(측량 범위 밖)는 **자르지 않는다** — 묻혔는지 알 근거가 없는데 자르면
                     //   측량이 좁은 현장에서 멀쩡한 벽이 사라진다. 판단할 수 있을 때만 판단한다.
-                    if (!ground.TryGetElevation(t0.X, t0.Y, out double gz0)) return 0;
-                    if (t0.Z >= gz0 - 1e-6) return 0;                // 토우가 이미 지반 위 — 벽면 전체가 노출
-                    if (!ground.TryGetElevation(c0.X, c0.Y, out double gz1)) return 0;
-                    if (c0.Z <= gz1 + 1e-6)                          // 크레스트마저 지반 아래 — 통째로 매몰
+                    // ★[JACK 0807] 규칙은 **공용 함수 하나**(WallSpanAtPt)에 있다 — 판넬·코너가 같은 자를 쓴다.
+                    double lo0 = WallSpanAtPt(c0, t0, faceH).lo;
+                    if (lo0 >= faceH - 1e-9 && ground.TryGetElevation(c0.X, c0.Y, out double gzc))
                     {
-                        double d = gz1 - c0.Z;
+                        double d = gzc - c0.Z;                       // 매몰 깊이 실측 — 규모를 로그로 본다
                         if (d > deepMax) { deepMax = d; deepX = c0.X; deepY = c0.Y; }
-                        return faceH;
                     }
-                    // 토우(지반 아래)~크레스트(지반 위) 사이에서 지반과 만나는 높이 — 상한과 같은 선형 보간.
-                    double f0 = t0.Z - gz0, f1 = c0.Z - gz1;         // f0<0, f1>0
-                    return System.Math.Clamp(-f0 / (f1 - f0), 0, 1) * faceH;
+                    return lo0;
                 }
 
                 // 이 열의 데이라잇 상한 — 원지반보다 위로는 벽이 없다.
@@ -1341,14 +1512,9 @@ public static class WallBand
                     //     성토의 지반 처리는 상한이 아니라 **하한**(FloorAt)이 맡는다 — 바로 아래에 있다.
                     if (!run.Up) return faceH;
 
-                    if (!ground.TryGetElevation(t0.X, t0.Y, out double gz0)) return -1;   // 지반 밖
-                    if (t0.Z >= gz0 - 1e-6) return 0;            // 토우가 이미 지반 위 — 벽 없음
-                    if (!ground.TryGetElevation(c0.X, c0.Y, out double gz1)) return -1;
-                    if (c0.Z <= gz1 + 1e-6) return faceH;        // 크레스트도 지반 아래 — 꽉 참
-                    // 토우~크레스트 사이에서 지반과 만나는 지점(선형 보간).
-                    double d0 = gz0 - t0.Z, d1 = gz1 - c0.Z;     // d0>0, d1<0
-                    double r = d0 / (d0 - d1);
-                    return System.Math.Clamp(r, 0, 1) * faceH;
+                    // ★[JACK 0807] 규칙은 **공용 함수 하나**에 있다 — 판넬과 코너 유닛이 같은 자를 쓰게 하려고
+                    //   여기로 모았다. 자가 갈리면 코너만 벽 위로 솟는다(0807에 세 번 겪었다).
+                    return WallSpanAtPt(c0, t0, faceH).hi;
                 }
 
                 // ★[0805 JACK '데이라잇에 끊긴 객체가 깔끔하지 않고 삐죽 나옴'] 상한을 **촘촘히 표본**해
@@ -1664,8 +1830,8 @@ public static class WallBand
                     double qLo = colMinV < double.MaxValue ? colMinV : 0;
                     double qHi = colMaxV > qLo ? colMaxV : faceH;
                     if (!faceStart[rIdx].Ok)
-                        faceStart[rIdx] = (true, WorldAt(uL, qLo), WorldAt(uL, qHi), (wx, wy, wz));
-                    faceEnd[rIdx] = (true, WorldAt(uR, qLo), WorldAt(uR, qHi), (wx, wy, wz));   // 마지막으로 나온 열로 갱신
+                        faceStart[rIdx] = (true, WorldAt(uL, qLo), WorldAt(uL, qHi), (wx, wy, wz), (ux, uy));
+                    faceEnd[rIdx] = (true, WorldAt(uR, qLo), WorldAt(uR, qHi), (wx, wy, wz), (ux, uy));   // 마지막으로 나온 열로 갱신
                 }
 
                 // ── 이 열의 결산: 판넬 잘림 증상을 **가설별로 갈라내는 숫자** 세 가지 ──
@@ -1731,6 +1897,74 @@ public static class WallBand
             //   그 틈을 메우는 것이 필러의 일이다. 아래 폭 조건(0.03~1.5m)이 '이미 붙은 자리'를 걸러 준다.
             var A = faceEnd[rIdx]; var B = faceStart[nxt];
             if (!A.Ok || !B.Ok) continue;                       // 한쪽 벽이 없으면 메울 틈도 없다
+
+            // ★★[JACK 0807] **코너 전용 유닛을 먼저 시도한다.** 양옆이 물러나 있으면(legAtEnd/legAtStart)
+            //   그 자리를 ㄱ자 유닛 하나가 감싼다 — 두 노출면이 이웃 판넬 전면과 같은 평면이라 마감이 이어진다.
+            //   유닛이 서면 **필러는 세우지 않는다**(둘 다 서면 또 뭉친다 — 지금 도면이 그 모양이다).
+            if (legAtEnd[rIdx] > 0 && legAtStart[nxt] > 0)
+            {
+                var uA = A.U; var uB = B.U;
+                var nAh = Norm2(A.W.x, A.W.y); var nBh = Norm2(B.W.x, B.W.y);
+                if (nAh.ok && nBh.ok)
+                {
+                    //   A.Bot/B.Bot이 곧 **물러난 다리 끝**이다(범위를 CornerLeg만큼 줄여 놨다).
+                    var bot = CornerUnitProfile((A.Bot.X, A.Bot.Y), (B.Bot.X, B.Bot.Y),
+                                                uA, uB, (nAh.x, nAh.y), (nBh.x, nBh.y), PanelThick, PanelFrontOut);
+                    var top = CornerUnitProfile((A.Top.X, A.Top.Y), (B.Top.X, B.Top.Y),
+                                                uA, uB, (nAh.x, nAh.y), (nBh.x, nBh.y), PanelThick, PanelFrontOut);
+                    if (bot.Count == 6 && top.Count == 6)
+                    {
+                        // ★[JACK 0807 '삐죽 나오는 객체' — 명백한 버그] 높이를 **A 벽면에서만** 가져오고 있었다.
+                        //   B가 데이라잇에 더 낮게 잘려 있으면 유닛이 B 위로 그대로 솟는다.
+                        //   두 벽면이 **겹치는 높이**만 써야 양쪽 어디에도 안 튀어나온다(필러엔 이미 같은 규칙이 있다).
+                        //   ★★[JACK 0807 '길이를 재는 로직'] 높이를 **코너 그 자리 지반**에서 구한다.
+                        //   양옆에서 빌려 오면(A만·min(A,B) 둘 다) 데이라잇이 코너로 내려올 때 코너는
+                        //   국소 최저점이라 **어느 쪽을 봐도 항상 더 높다** — 그래서 유닛만 벽 위로 솟았다.
+                        //   판넬이 쓰는 그 규칙(WallSpanAtPt)을 코너 위치에서 한 번 더 부른다.
+                        // ★★★[JACK 0807 '코너 필렛도 그냥 옹벽 단 설정 높이만큼 만들고 판넬 자를 때 같이
+                        //   데이라잇으로 자르면 될 것 같은데'] **그 말이 맞다. 높이를 구하지 않는다.**
+                        //   판넬은 처음부터 그렇게 한다 — 크레스트까지 꽉 채워 만들고 데이라잇으로 자른다.
+                        //   코너 유닛만 '높이를 구해서 그만큼 세우는' 방식이라, 그 높이를 어디서 가져오냐가
+                        //   매번 문제가 됐다(설계 높이 → 이웃 끝 열 → 이웃 A 벽면 → 코너 지반. 네 번 헤맸다).
+                        //   게다가 한 높이로 세우면 윗면이 **평평**한데 양옆 판넬 윗면은 지형을 따라 **비스듬**하다 —
+                        //   높이를 정확히 맞춰도 코너에 턱이 남는다.
+                        //   → 단면 정점마다 **그 자리 데이라잇**으로 자른다. 판넬과 같은 자(WallSpanAtPt)를 쓰므로
+                        //     윗변이 양옆 판넬과 이어지고, '높이를 어디서 가져오나'라는 질문 자체가 사라진다.
+                        double fC = System.Math.Clamp(runs[rIdx].F1 + legFrac, 0, 1);
+                        var stA = WallSpanAtFrac(System.Math.Clamp(runs[rIdx].F1, 0, 1));
+                        var stC = WallSpanAtFrac(fC);
+                        var stB = WallSpanAtFrac(System.Math.Clamp(runs[nxt].F0, 0, 1));
+                        //   단면 정점 차례: [aOut, pOut, bOut, bIn, pIn, aIn] → 각각 A·코너·B 자리에서 잰다.
+                        var st = new[] { stA, stC, stB, stB, stC, stA };
+
+                        (bool ok, double zLo, double zHi) ZAt(
+                            (double lo, double hi, Point3 c0, Point3 t0, double fh) s)
+                        {
+                            if (s.fh < 1e-9) return (false, 0, 0);
+                            double hi2 = s.hi < 0 ? s.fh : System.Math.Min(s.hi, s.fh);   // 지반 밖이면 꽉 채운다
+                            double lo2 = System.Math.Clamp(s.lo, 0, s.fh);
+                            if (hi2 - lo2 < 1e-6) return (false, 0, 0);
+                            double zt = s.t0.Z, dz = s.c0.Z - s.t0.Z;
+                            return (true, zt + dz * (lo2 / s.fh), zt + dz * (hi2 / s.fh));
+                        }
+
+                        var b3 = new List<Point3>(6); var t3 = new List<Point3>(6);
+                        bool okAll = true; double hMax = 0;
+                        for (int k = 0; k < 6 && okAll; k++)
+                        {
+                            var z = ZAt(st[k]);
+                            if (!z.ok) { okAll = false; break; }
+                            var pb = k < 3 ? bot[k] : bot[k];
+                            b3.Add(new Point3(pb.x, pb.y, z.zLo));
+                            t3.Add(new Point3(top[k].x, top[k].y, z.zHi));
+                            hMax = System.Math.Max(hMax, z.zHi - z.zLo);
+                        }
+                        if (!okAll || hMax < 0.15) continue;         // 잘리고 남은 게 없으면 유닛을 안 세운다
+                        LastCornerUnits.Add(new CornerUnit(b3, t3));
+                        continue;                               // 유닛이 섰으니 필러는 세우지 않는다
+                    }
+                }
+            }
             double gBot = Dist2(A.Bot, B.Bot), gTop = Dist2(A.Top, B.Top);
             double gw = System.Math.Max(gBot, gTop);
             if (gw < 0.03 || gw > 1.5) continue;                // 이미 붙었거나(정상) 코너 쐐기가 아닌 먼 자리
@@ -1878,7 +2112,7 @@ public static class WallBand
         tMinColW = double.MaxValue; tMaxColW = tNarrowX = tNarrowY = 0;
         tNarrowN = tFaceCnt = tChordSplit = 0; tSliverFirst = "";
         tHoleN = 0; tHoleW = tHoleX = tHoleY = tNoSplitDev = 0; tHoleWhy = ""; tCorners.Clear();
-        LastQuoins.Clear(); tQuoinN = 0; tQuoinMax = 0;
+        LastQuoins.Clear(); LastCornerUnits.Clear(); tQuoinN = 0; tQuoinMax = 0;
         tDeep = 0; tDeepMax = tDeepX = tDeepY = 0;
         tOffCav = tOffCnv = tOffFar = tOffCavX = tOffCavY = 0;
         tFacetCav = tFacetCnv = 0; tFacetMin = double.MaxValue; tFacetX = tFacetY = 0;
@@ -1923,6 +2157,51 @@ public static class WallBand
     {
         int trimmed = 0, dropped = 0;
         if (tiles == null) return (0, 0);
+
+        // ★★[JACK 0807 '저번처럼 삐죽 나오는 객체가 있어'] **코너 전용 판넬도 같은 안전망을 씌운다.**
+        //   유닛 높이는 '코너에서 0.35m 물러난 열'의 높이에서 오는데, 데이라잇이 코너 쪽으로 내려오면
+        //   그 열이 코너 자리보다 높다 — 유닛만 벽 위로 솟는다(JACK 인프라웍스 스샷).
+        //   필러에 넣은 정리를 유닛에 안 씌운 것이 원인이다. 같은 종류의 객체는 같은 안전망을 지나야 한다.
+        //   ※위·아래 단면은 정점 대응이 같으므로, 높이를 줄일 때 **두 단면을 보간**하면 기울기가 유지된다.
+        for (int i = LastCornerUnits.Count - 1; i >= 0; i--)
+        {
+            var cu = LastCornerUnits[i];
+            if (cu.Bot.Count == 0 || cu.Bot.Count != cu.Top.Count) { LastCornerUnits.RemoveAt(i); dropped++; continue; }
+            double zLo0 = cu.Bot[0].Z, zHi0 = cu.Top[0].Z;
+            if (zHi0 - zLo0 < 1e-6) { LastCornerUnits.RemoveAt(i); dropped++; continue; }
+
+            double topZ = double.MinValue, botZ = double.MaxValue;
+            foreach (var t in tiles)
+                foreach (var p in t.Poly)
+                {
+                    bool near2 = false;
+                    foreach (var b in cu.Bot)
+                    {
+                        double dx = p.X - b.X, dy = p.Y - b.Y;
+                        if (dx * dx + dy * dy <= near * near) { near2 = true; break; }
+                    }
+                    if (!near2) continue;
+                    if (p.Z > topZ) topZ = p.Z;
+                    if (p.Z < botZ) botZ = p.Z;
+                }
+            if (topZ == double.MinValue) { LastCornerUnits.RemoveAt(i); dropped++; continue; }   // 허공 유닛
+
+            double lo2 = System.Math.Max(zLo0, botZ), hi2 = System.Math.Min(zHi0, topZ);
+            if (hi2 - lo2 < 0.15) { LastCornerUnits.RemoveAt(i); dropped++; continue; }
+            if (System.Math.Abs(lo2 - zLo0) < 1e-6 && System.Math.Abs(hi2 - zHi0) < 1e-6) continue;
+
+            List<Point3> Lerp(double z)
+            {
+                double s = (z - zLo0) / (zHi0 - zLo0);
+                var r = new List<Point3>(cu.Bot.Count);
+                for (int k = 0; k < cu.Bot.Count; k++)
+                    r.Add(new Point3(cu.Bot[k].X + (cu.Top[k].X - cu.Bot[k].X) * s,
+                                     cu.Bot[k].Y + (cu.Top[k].Y - cu.Bot[k].Y) * s, z));
+                return r;
+            }
+            LastCornerUnits[i] = new CornerUnit(Lerp(lo2), Lerp(hi2));
+            trimmed++;
+        }
         for (int i = LastQuoins.Count - 1; i >= 0; i--)
         {
             var q = LastQuoins[i];
@@ -2000,6 +2279,8 @@ public static class WallBand
             double zLo = System.Math.Max(a0.Z, b0.Z), zHi = System.Math.Min(a1v.Z, b1v.Z);
             if (zHi - zLo < 0.15) continue;
             var mid0 = new Point3((a0.X + b0.X) / 2, (a0.Y + b0.Y) / 2, zLo);
+            // 코너 전용 판넬이 이미 그 자리를 감쌌으면 필러를 또 세우지 않는다(둘 다 서면 뭉친다).
+            if (CornerUnitCovers(mid0.X, mid0.Y, mid0.Z, best / 2 + 0.6)) continue;
             bool dup = false;
             foreach (var q in LastQuoins)
                 if (System.Math.Abs(q.Toe.Z - mid0.Z) < 0.5 && Dist2(q.Toe, mid0) < 0.10) { dup = true; break; }
@@ -2167,6 +2448,8 @@ public static class WallBand
                 double dq = System.Math.Sqrt((q.Toe.X - gmx) * (q.Toe.X - gmx) + (q.Toe.Y - gmy) * (q.Toe.Y - gmy));
                 if (dq <= best / 2 + 0.35) { filled = true; break; }
             }
+            // ★[JACK 0807] **코너 전용 판넬**이 그 자리를 메우고 있으면 구멍이 아니다 — 필러와 같은 이치다.
+            if (!filled) filled = CornerUnitCovers(gmx, gmy, L[i].Z, best / 2 + 0.6);
             if (filled) continue;
             found.Add((best, L[i].X, L[i].Y, L[i].Z,
                        tiles[L[i].I].IsFull && tiles[R[bestJ].I].IsFull));

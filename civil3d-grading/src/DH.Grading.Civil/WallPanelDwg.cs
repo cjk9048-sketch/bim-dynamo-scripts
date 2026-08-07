@@ -73,7 +73,7 @@ public static class WallPanelDwg
         nFail = 0; firstFail = null; strayN = 0; strayFirst = null;
         padsNull = 0; padsEx = 0; collarEx = 0; anchorEx = 0; plateEx = 0; quoinEx = 0;
         padStoneFail = 0; padsConcaveSplit = 0; padsSplitFail = 0; padsTiny = 0; padsPieceMax = 0; subFirst = null;
-        padsMerged = 0; padsSeamed = 0;
+        padsMerged = 0; padsSeamed = 0; nCornerUnit = 0; cornerUnitEx = 0;
         padBatchFail = 0; padCurveFail = 0; padBatchFirst = null; padCurveFirst = null; padsWipeFirst = null;
     }
 
@@ -101,6 +101,9 @@ public static class WallPanelDwg
     /// 물러난 쪽이 곧 도면에 이음매(부챗살)가 보이는 자리다 — 0에 가까워야 정상.</summary>
     public static int padsMerged { get; private set; }
     public static int padsSeamed { get; private set; }
+    /// <summary>★[JACK 0807] 도면에 들어간 코너 전용 판넬 수 / 실패 수.</summary>
+    public static int nCornerUnit { get; private set; }
+    public static int cornerUnitEx { get; private set; }
     /// <summary>[0806] 리전을 한꺼번에 못 만들어 하나씩 다시 만든 판넬 수 — <b>무늬는 살아남는다</b>(실패 아님).</summary>
     public static int padBatchFail { get; private set; }
     /// <summary>[0806] 하나씩 다시 만들어도 거부된 돌 수 — 이 돌만 무늬에서 빠진다.</summary>
@@ -117,7 +120,7 @@ public static class WallPanelDwg
     /// 보이지도 않았다. 사유별로 갈라 항상 찍는다 — 계측이 원인을 못 가리키면 계측이 아니다.</para></summary>
     public static string SubDiag()
     {
-        int tot = padsNull + padsEx + collarEx + anchorEx + plateEx + quoinEx;
+        int tot = padsNull + padsEx + collarEx + anchorEx + plateEx + quoinEx + cornerUnitEx;
         var notes = new System.Text.StringBuilder();
         if (!GradingSettings.StonePattern) notes.Append(" · 자연석 무늬 끔(JACK 0806 — 판넬·앵커·정착구는 그대로)");
         if (padsConcaveSplit > 0) notes.Append($" · 오목 판넬 {padsConcaveSplit}장 볼록 분해(최대 {padsPieceMax}조각 — 무늬 정상)");
@@ -132,7 +135,7 @@ public static class WallPanelDwg
         if (tot == 0) return notes.Length == 0 ? "" : notes.ToString().TrimStart(' ', '·').Trim();
         if (padsWipeFirst != null) notes.Append($" · 돌 전멸 첫 사례: {padsWipeFirst}");
         return $"⚠부속 실패 {tot}건(무늬없음 {padsNull}[분해실패 {padsSplitFail} · 작은면 {padsTiny} · 돌전멸 {padsNull - padsSplitFail - padsTiny}]" +
-               $" · 무늬예외 {padsEx} · 도넛 {collarEx} · 앵커 {anchorEx} · 정착판 {plateEx} · 코너필러 {quoinEx})" +
+               $" · 무늬예외 {padsEx} · 도넛 {collarEx} · 앵커 {anchorEx} · 정착판 {plateEx} · 코너필러 {quoinEx} · 코너유닛 {cornerUnitEx})" +
                notes + (subFirst != null ? $" — 첫 사유: {subFirst}" : "");
     }
 
@@ -184,7 +187,8 @@ public static class WallPanelDwg
     ///   concrete=false: 앵커판넬(가운데 홈 + 어스앵커 + 정착판). concrete=true: 콘크리트옹벽(홈·앵커 없이 면만, 무늬는 Phase B).
     /// WorkingDatabase가 db로 설정된 상태에서 호출할 것. 보강토와 한 DWG로 합칠 때 재사용.</summary>
     public static (int Panels, int Anchors) Populate(Database db, Transaction tr,
-        IReadOnlyList<WallPanels.Panel> panels, bool concrete = false, IReadOnlyList<WallPanels.Quoin>? quoins = null)
+        IReadOnlyList<WallPanels.Panel> panels, bool concrete = false, IReadOnlyList<WallPanels.Quoin>? quoins = null,
+        IReadOnlyList<DH.Grading.Core.WallBand.CornerUnit>? cornerUnits = null)
     {
         int np = 0, na = 0;   // 진단 카운터는 여기서 리셋하지 않는다 — ResetDiag() 참조
         {
@@ -358,6 +362,25 @@ public static class WallPanelDwg
                     }
                 }
 
+                // ★★[JACK 0807] **코너 전용 판넬** — 코너에서 양옆 판넬이 물러난 자리를 ㄱ자 유닛이 감싼다.
+                //   두 노출면이 이웃 판넬 전면과 같은 평면이라 이어 붙으면 한 면처럼 보인다.
+                //   필러(기둥)와 달리 **마감**이므로 판넬 레이어에 같은 재질로 넣는다.
+                if (cornerUnits != null)
+                    foreach (var cu in cornerUnits)
+                    {
+                        try
+                        {
+                            swQuoin.Start();
+                            var unit = BuildCornerUnit(cu);
+                            unit.LayerId = layBody;
+                            ms.AppendEntity(unit); tr.AddNewlyCreatedDBObject(unit, true);
+                            swQuoin.Stop();
+                            nCornerUnit++;
+                            CheckStray("코너유닛", unit);
+                        }
+                        catch (System.Exception ex) { swQuoin.Stop(); cornerUnitEx++; Note("코너유닛", ex); }
+                    }
+
                 // 코너 필러 — 미터로 못 닫는 코너 틈(절토 볼록·성토 오목)에 얇은 수직 채움 기둥(패널 레이어).
                 if (quoins != null)
                     foreach (var q in quoins)
@@ -376,6 +399,57 @@ public static class WallPanelDwg
             }
         }
         return (np, na);
+    }
+
+    /// <summary>★★[JACK 0807 '각진부 마감을 깔끔하게'] **코너 전용 판넬** — 아래·위 두 단면 사이를 잇는다.
+    /// <para>
+    /// 벽이 1:0.05로 기울어 두 벽면이 <b>서로 다른 방향으로</b> 물러나므로, 위 단면은 아래 단면의
+    /// 단순 평행이동이 아니다(90° 코너·단높이 5m면 0.18m 어긋난다). 그래서 압출이 아니라 <b>로프트</b>다 —
+    /// 위·아래가 정확하고 중간은 선형이라 기울기와 정확히 맞는다.
+    /// </para>
+    /// 로프트가 실패하면 <b>아래 단면 압출</b>로 물러난다. 이 저장소가 세 번 쓴 처방과 같다 —
+    /// 빠른 길 먼저, 실패하면 낮은 길로. 물러나도 코너가 메워지는 것 자체는 유지된다.
+    /// </summary>
+    private static Solid3d BuildCornerUnit(DH.Grading.Core.WallBand.CornerUnit cu)
+    {
+        Polyline3d? lo = null, hi = null;
+        try
+        {
+            var pcLo = new Point3dCollection();
+            foreach (var p in cu.Bot) pcLo.Add(new Point3d(p.X, p.Y, p.Z - ZSink));
+            var pcHi = new Point3dCollection();
+            foreach (var p in cu.Top) pcHi.Add(new Point3d(p.X, p.Y, p.Z - ZSink));
+            lo = new Polyline3d(Poly3dType.SimplePoly, pcLo, true);
+            hi = new Polyline3d(Poly3dType.SimplePoly, pcHi, true);
+            var sol = new Solid3d();
+            var xs = new[] { new LoftProfile(lo), new LoftProfile(hi) };
+            sol.CreateLoftedSolid(xs, System.Array.Empty<LoftProfile>(), null, new LoftOptions());
+            return sol;
+        }
+        catch
+        {
+            // 물러나기 — 아래 단면을 세로로 압출한다(기울기는 못 따라가지만 코너는 메워진다).
+            try
+            {
+                var curves = new DBObjectCollection();
+                var pl = new Polyline(cu.Bot.Count);
+                for (int i = 0; i < cu.Bot.Count; i++) pl.AddVertexAt(i, new Point2d(cu.Bot[i].X, cu.Bot[i].Y), 0, 0, 0);
+                pl.Closed = true;
+                curves.Add(pl);
+                var regs = Region.CreateFromCurves(curves);
+                if (regs.Count == 0) return new Solid3d();
+                var reg = (Region)regs[0];
+                for (int i = 1; i < regs.Count; i++) ((Region)regs[i]).Dispose();
+                var sol2 = new Solid3d();
+                double h = System.Math.Max(cu.Top[0].Z - cu.Bot[0].Z, 0.05);
+                sol2.Extrude(reg, h, 0);
+                reg.Dispose();
+                sol2.TransformBy(Matrix3d.Displacement(new Vector3d(0, 0, cu.Bot[0].Z - ZSink + h / 2)));
+                return sol2;
+            }
+            catch { return new Solid3d(); }
+        }
+        finally { lo?.Dispose(); hi?.Dispose(); }
     }
 
     /// <summary>코너 필러 솔리드 — Toe→Top 축의 얇은 기둥(폭 Width × 두께 Thick). 전면은 패널과 같은 FrontOut 돌출.

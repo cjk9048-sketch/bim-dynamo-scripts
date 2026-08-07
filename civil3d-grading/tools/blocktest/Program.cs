@@ -2193,6 +2193,10 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
         foreach (var t in tt) mx = Math.Max(mx, Math.Sqrt(t.VAxis.x * t.VAxis.x + t.VAxis.y * t.VAxis.y));
         return mx;
     }
+    // [JACK 0807] 이 검사는 **토우/크레스트 짝짓기**를 보는 것이라 코너 물러나기는 잡음이다 —
+    //   물러나면 어느 열이 남는지가 달라져 자가검증 조건(호길이 대응이면 눕는다)이 안 걸린다.
+    //   시나리오를 종전 그대로 두려고 여기서만 코너 유닛을 끈다.
+    WallBand.DisableCornerUnitForTest = true;
     var tZ = WallBand.Slice(runZ, null, joint: 0.05);
     double vh = MaxVHorz(tZ);
     // 구배 1:0.05면 V의 수평 성분은 0.05/√(1+0.05²) ≈ 0.0499. 0.08을 넘으면 벽이 눕기 시작한 것이다.
@@ -2202,7 +2206,7 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
     WallBand.DisableIndexPairingForTest = true;
     List<WallBand.Tile> tZb;
     try { tZb = WallBand.Slice(runZ, null, joint: 0.05); }
-    finally { WallBand.DisableIndexPairingForTest = false; }
+    finally { WallBand.DisableIndexPairingForTest = false; WallBand.DisableCornerUnitForTest = false; }
     double vhb = MaxVHorz(tZb);
     Check("S29 ★자체검증: 호길이 대응으로 되돌리면 판넬이 눕는다", vhb > vh + 0.01,
         $"호길이 대응 → V수평 {vhb:F4} (인덱스 대응 {vh:F4})");
@@ -3536,6 +3540,133 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     var rStep = Torture(stepZ);
     Check("S40 ⑪수직 단차(Z만 다른 정점) — 완주·NaN 없음", rStep.Ok && rStep.Bad == 0,
         $"완주 {rStep.Ok} · 판넬 {rStep.Panels} · NaN {rStep.Bad} {rStep.Err}");
+}
+
+// ★ S41 [JACK 0807 '각진부 마감을 깔끔하게 할 수 없나'] **코너 전용 판넬(ㄱ자 유닛) 단면.**
+//   지금은 양쪽 판넬이 코너를 지나쳐 서로 파고들고 그 위에 필러까지 얹혀 세 덩어리가 뭉친다.
+//   코너에서 양옆을 물러나게 하고 유닛 하나로 감싸면 두 노출면이 이웃 판넬과 같은 평면이라 한 면처럼 보인다.
+//   실물 프리캐스트도 코너는 현장 절단이 아니라 **전용 유닛**을 쓴다. 불리언이 0회라 안전하다.
+//   **각도를 스윕해서** 단면이 성립하는지 본다 — 한 각도만 보면 그 각도에서만 맞는 수정이 나온다(0806 교훈).
+{
+    const double thick = 0.20, front = 0.10, leg = WallBand.CornerLeg;
+    int made = 0, degen = 0, bad = 0; double worstFlush = 0; string worstAt = "";
+    var degAt = new List<int>();
+    for (int deg = 20; deg <= 170; deg += 5)
+    {
+        // 코너에서 만나는 두 벽면 — A는 +X로 들어오고, B는 deg만큼 꺾여 나간다.
+        double a = deg * Math.PI / 180.0;
+        var corner = (x: 0.0, y: 0.0);
+        var dirA = (x: 1.0, y: 0.0);
+        var dirB = (x: Math.Cos(Math.PI - a), y: Math.Sin(Math.PI - a));
+        double bl = Math.Sqrt(dirB.x * dirB.x + dirB.y * dirB.y);
+        dirB = (dirB.x / bl, dirB.y / bl);
+        // 노출면은 부지 바깥쪽(여기선 −Y 반평면 쪽) — 각 벽면 진행방향의 오른쪽 법선.
+        var nA = (x: dirA.y, y: -dirA.x);
+        var nB = (x: dirB.y, y: -dirB.x);
+
+        // 양옆 판넬이 leg만큼 물러난 자리 = 다리 끝.
+        var legA = (x: corner.x - dirA.x * leg, y: corner.y - dirA.y * leg);
+        var legB = (x: corner.x + dirB.x * leg, y: corner.y + dirB.y * leg);
+        var prof = WallBand.CornerUnitProfile(legA, legB, dirA, dirB, nA, nB, thick, front);
+        if (prof.Count == 0) { degen++; degAt.Add(deg); continue; }
+        made++;
+        if (prof.Count != 6) { bad++; continue; }
+
+        // ★핵심 검사 — 유닛의 다리 끝이 **이웃 판넬 전면과 같은 평면**에 있는가.
+        //   A 다리 끝(prof[0])은 A 전면(코너에서 nA·front 떨어진 직선) 위여야 한다.
+        double offA = Math.Abs((prof[0].x - corner.x) * nA.x + (prof[0].y - corner.y) * nA.y - front);
+        double offB = Math.Abs((prof[2].x - corner.x) * nB.x + (prof[2].y - corner.y) * nB.y - front);
+        double off = Math.Max(offA, offB);
+        if (off > worstFlush) { worstFlush = off; worstAt = $"{deg}°"; }
+
+        // 다리 길이가 실제로 leg인가(양옆 판넬이 물러날 거리와 같아야 딱 맞물린다).
+        double lenA = Math.Abs((corner.x - prof[0].x) * dirA.x + (corner.y - prof[0].y) * dirA.y);
+        double lenB = Math.Abs((prof[2].x - corner.x) * dirB.x + (prof[2].y - corner.y) * dirB.y);
+        if (Math.Abs(lenA - leg) > 1e-6 || Math.Abs(lenB - leg) > 1e-6) bad++;
+    }
+    Console.WriteLine($"      S41 코너 유닛 단면: 성립 {made}개 · 퇴화 {degen}개{(degAt.Count > 0 ? " @" + string.Join(",", degAt) + "°" : "")}" +
+                      $" · 이웃 전면과 최대 어긋남 {worstFlush:F4}m {worstAt}");
+    Check("S41 재현 조건: 20~170° 대부분에서 코너 유닛 단면이 성립한다", made >= 25, $"성립 {made}개 · 퇴화 {degen}개");
+    Check("S41 ★유닛 다리가 이웃 판넬 전면과 같은 평면(마감이 이어진다)", worstFlush < 1e-9 && bad == 0,
+        $"최대 어긋남 {worstFlush:F6}m {worstAt} · 모양 이상 {bad}개");
+
+    // ★★실제 부지에서 유닛이 서는가 + **필러를 대체했는가**(둘 다 서면 또 뭉친다).
+    //   자가검증: 유닛을 끄면 종전대로 필러만 서야 한다 — 안 그러면 이 검사가 아무것도 안 보는 것이다.
+    {
+        var bnd41 = new List<Point3>();
+        foreach (var (X, Y) in new (double X, double Y)[] { (0,0), (30,0), (30,20), (18,20), (18,10), (12,10), (12,20), (0,20) })
+            bnd41.Add(new Point3(X, Y, 100));
+        var pr41 = new GradingParams {
+            CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+            CutSlope = 0.05, FillSlope = 0.05, CellSize = 1.0, MaxBenches = 4, MaxRise = 20,
+            VertexSpacing = 1.0, MinSlope = 0.05, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+        };
+        var g41 = new TiltGround(0, 0, 108.0, 0.10, 0.06);
+        var vs41 = GradingGeometry.Build(bnd41, g41, pr41, true);
+        var rs41 = vs41.Rings.Select(r => (IReadOnlyList<Point3>)r).ToList();
+        var runs41 = WallRunBuilder.Build(bnd41, rs41, null, up: true, globalSlope: 0.05, minSlope: 0.05);
+
+        (int units, int quoins, int holes) Run41(bool off)
+        {
+            WallBand.DisableCornerUnitForTest = off;
+            try
+            {
+                WallBand.ResetTotals();
+                var tt = new List<WallBand.Tile>();
+                foreach (var r in runs41) tt.AddRange(WallBand.Slice(r, g41, joint: 0.05));
+                WallBand.AddGapFillers(tt, cornerOnly: true);
+                WallBand.ClampQuoinsToPanels(tt);
+                string gr = WallBand.GapReport(tt);
+                int h = 0;
+                var m = System.Text.RegularExpressions.Regex.Match(gr, @"진짜 구멍 (\d+)곳");
+                if (m.Success) h = int.Parse(m.Groups[1].Value);
+                return (WallBand.LastCornerUnits.Count, WallBand.LastQuoins.Count, h);
+            }
+            finally { WallBand.DisableCornerUnitForTest = false; }
+        }
+
+        var on = Run41(false);
+        var offR = Run41(true);
+        Console.WriteLine($"      S41 실제 부지 — 유닛 켬: 유닛 {on.units} · 필러 {on.quoins} · 진짜구멍 {on.holes}" +
+                          $" / 끔: 유닛 {offR.units} · 필러 {offR.quoins} · 진짜구멍 {offR.holes}");
+        // ★★[JACK 0807 '접하는 쪽 양쪽의 길이 차이가 많이 나면 특히 더 심하다'] **그 조건을 만든다.**
+        //   유닛 높이를 한쪽 벽면에서만 가져오면 반대쪽이 낮을 때 그 위로 솟는다 — 차이가 클수록 심하다.
+        //   지형을 한 방향으로 가파르게 기울여 코너 양쪽 높이가 크게 벌어지게 하고, 유닛이 **양쪽 어디에도**
+        //   안 튀어나오는지 잰다. 완만한 지형만 시험하면 이 잘못이 한 번도 안 밟힌다(0807에 실제로 그랬다).
+        {
+            var gSteep = new TiltGround(0, 0, 110.0, 0.85, 0.05);   // X로 가파르게 — 코너 양쪽 높이차가 커진다
+            WallBand.ResetTotals();
+            var tS = new List<WallBand.Tile>();
+            foreach (var r in runs41) tS.AddRange(WallBand.Slice(r, gSteep, joint: 0.05));
+            WallBand.AddGapFillers(tS, cornerOnly: true);
+            WallBand.ClampQuoinsToPanels(tS);
+
+            double overU = 0; string overAt = ""; double maxDiff = 0;
+            foreach (var cu in WallBand.LastCornerUnits)
+            {
+                if (cu.Bot.Count == 0) continue;
+                // 유닛 발치 둘레(0.8m)의 판넬 꼭대기 — 유닛이 그보다 위로 올라가면 삐죽이다.
+                double tz = double.MinValue;
+                foreach (var t in tS)
+                    foreach (var p in t.Poly)
+                        foreach (var b in cu.Bot)
+                            if ((p.X - b.X) * (p.X - b.X) + (p.Y - b.Y) * (p.Y - b.Y) < 0.64)
+                                tz = Math.Max(tz, p.Z);
+                if (tz == double.MinValue) { overU = Math.Max(overU, 99); overAt = "허공 유닛"; continue; }
+                double over = cu.Top[0].Z - tz;
+                if (over > overU) { overU = over; overAt = $"@ {cu.Bot[0].X:F1},{cu.Bot[0].Y:F1}"; }
+                maxDiff = Math.Max(maxDiff, cu.Top[0].Z - cu.Bot[0].Z);
+            }
+            Console.WriteLine($"      S41 가파른 지형 — 유닛 {WallBand.LastCornerUnits.Count}개 · 판넬 위로 솟음 최대 {overU:F2}m {overAt}");
+            Check("S41 ★★양쪽 높이차가 큰 코너에서도 유닛이 안 솟는다",
+                WallBand.LastCornerUnits.Count > 0 && overU < 0.30,
+                $"유닛 {WallBand.LastCornerUnits.Count}개 · 최대 솟음 {overU:F2}m {overAt} (한도 0.30m)");
+        }
+
+        Check("S41 ★★실제 부지에서 코너 유닛이 서고 필러를 대체한다(뭉치지 않는다)",
+            on.units > 0 && on.holes == 0 && on.quoins < offR.quoins && offR.units == 0,
+            $"켬 유닛 {on.units}·필러 {on.quoins}·구멍 {on.holes} / 끔 유닛 {offR.units}·필러 {offR.quoins}·구멍 {offR.holes}");
+    }
 }
 
 return fails == 0 ? 0 : 1;

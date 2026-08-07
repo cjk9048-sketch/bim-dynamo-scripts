@@ -60,7 +60,8 @@ public static class WallDwg
         double blockW, double blockD, double blockH, double capD, double capT,
         IReadOnlyList<WallPanels.Quoin>? quoins = null,
         IReadOnlyList<WallTee.Run>? tees = null,
-        IReadOnlyList<WallRun>? wallLines = null)
+        IReadOnlyList<WallRun>? wallLines = null,
+        IReadOnlyList<DH.Grading.Core.WallBand.CornerUnit>? cornerUnits = null)
     {
         int nb = 0, nc = 0, np = 0, na = 0, ncp = 0, nt = 0;
         var stw = new StageTimer();
@@ -79,7 +80,7 @@ public static class WallDwg
                 WallPanelDwg.ResetDiag();   // 내보내기 1회 단위 — Populate 진입부에서 리셋하면 2회차가 1회차 실패를 지운다
                 stw.Stage("앵커판넬");
                 if (panels != null && panels.Count > 0)
-                    (np, na) = WallPanelDwg.Populate(db, tr, panels, concrete: false, quoins: quoins);
+                    (np, na) = WallPanelDwg.Populate(db, tr, panels, concrete: false, quoins: quoins, cornerUnits: cornerUnits);
                 // 코너 필러는 위 첫 호출에서 전량 생성된다 — 여기서 또 넘기면 같은 자리에 솔리드가 2개 생기고,
                 //   CheckStray 기준상자가 콘크리트 패널 구름이라 코너 필러가 통째로 '동떨어진 객체'로 오탐된다.
                 if (concrete != null && concrete.Count > 0)
