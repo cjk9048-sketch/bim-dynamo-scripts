@@ -23,6 +23,10 @@ public static class WallRunBuilder
     /// <summary>[하니스 전용] 토우 정점 끼워넣기를 끈다 — 자체검증(끄면 코너가 현으로 잘려 지표면을 벗어난다)에 쓴다.</summary>
     public static bool DisableToeVertexInsertForTest;
 
+    /// <summary>[하니스 전용] 코너 정점 스냅을 끈다. 이 스냅과 정점 끼워넣기는 **둘 다 코너를 지켜 주므로**,
+    /// 하나만 꺼서는 재현이 안 된다 — 자체검증에서는 같이 꺼야 한다.</summary>
+    public static bool DisableCornerSnapForTest;
+
     /// <summary>
     /// 링 목록에서 이 방향(<paramref name="up"/>)의 옹벽선을 뽑는다.
     /// </summary>
@@ -174,14 +178,59 @@ public static class WallRunBuilder
             //   고치려고 '토우를 따라 앞으로만 가는 단조 대응'으로 바꿔 봤더니 **훨씬 나빠졌다**
             //   (진짜 구멍 6→21곳, 하니스 10건 실패) — 크레스트와 토우는 정점 수·시작점·방향이 제각각이라
             //   단순 전진 창(window)으로는 대응이 무너진다. 되돌린다. 올바른 처방은 따로 찾아야 한다.
+            int toeHint = -1;   // [0806 성능] 크레스트를 순서대로 훑으면 짝이 되는 토우 구간도 순서대로 움직인다
+            var toeSegOf = new int[m];
             for (int i = 0; i < m; i++)
             {
+                toeSegOf[i] = toeHint;
                 // 이 크레스트 정점이 향하는 방향(앞뒤 이웃으로 잡는다) — 짝이 될 토우 변은 이 방향과 나란해야 한다.
                 var pv = crest[((i - 1) % m + m) % m]; var nx2 = crest[(i + 1) % m];
                 double dxc = nx2.X - pv.X, dyc = nx2.Y - pv.Y;
                 double lc2 = System.Math.Sqrt(dxc * dxc + dyc * dyc);
                 if (lc2 < 1e-9) { toePt[i] = NearestOn(toe, crest[i]); continue; }
-                toePt[i] = NearestOnAligned(toe, crest[i], dxc / lc2, dyc / lc2, wallGap * 4 + 0.2);
+                toePt[i] = NearestOnAligned(toe, crest[i], dxc / lc2, dyc / lc2, wallGap * 4 + 0.2, ref toeHint);
+                toeSegOf[i] = toeHint;
+            }
+
+            // ★[JACK 0806 '절토·성토 구분해서 방향 맞춰라' — 성토 실측 0.251m] 크레스트가 꺾이는 자리는
+            //   토우도 꺾인다. 그 짝은 **토우의 코너 정점**이어야 하는데, 구간 위 최근접점으로 잡으면
+            //   마이터 코너에서 **옆 변의 한 점**에 붙는다 — 90° 마이터면 토우 코너까지는 0.354m인데
+            //   양옆 변까지는 0.25m라 그쪽이 더 가깝기 때문이다. 그러면 그 판넬이 이웃 벽면의 선 위에 놓여
+            //   **한 선(0.25m = 토우↔크레스트 간격)만큼 밀린다**(성토 바깥 마이터에서 0.251m 실측).
+            //   절토에서 안 보였던 건 그쪽 마이터가 안쪽으로 접혀 코너가 더 가까웠기 때문이고,
+            //   규칙 자체는 절·성토 공용이라 여기서 한 번에 고친다.
+            if (!DisableCornerSnapForTest)
+            {
+                double cosCorner = System.Math.Cos(12.0 * System.Math.PI / 180.0);
+                double snapLim = wallGap * 4 + 0.2;
+                for (int i = 0; i < m; i++)
+                {
+                    var pv = crest[((i - 1) % m + m) % m]; var nx2 = crest[(i + 1) % m];
+                    double axc = crest[i].X - pv.X, ayc = crest[i].Y - pv.Y;
+                    double bxc = nx2.X - crest[i].X, byc = nx2.Y - crest[i].Y;
+                    double lac = System.Math.Sqrt(axc * axc + ayc * ayc), lbc = System.Math.Sqrt(bxc * bxc + byc * byc);
+                    if (lac < 1e-9 || lbc < 1e-9) continue;
+                    if ((axc * bxc + ayc * byc) / (lac * lbc) >= cosCorner) continue;   // 꺾이는 자리가 아니다
+                    // 토우 **정점** 중 가장 가까운 것으로 — 구간 위의 점이 아니라.
+                    // [0806 성능] 제곱거리로 비교하고(√ 생략) 경계상자로 먼저 거른다 — 링이 수천 점이라
+                    //   전수 대조하면 옹벽변환이 눈에 띄게 느려진다(JACK 0806 지적).
+                    int bi = -1; double bd2 = double.MaxValue, lim2 = snapLim * snapLim;
+                    double qx0 = crest[i].X - snapLim, qx1 = crest[i].X + snapLim;
+                    double qy0 = crest[i].Y - snapLim, qy1 = crest[i].Y + snapLim;
+                    // [0806 성능] 짝이 되는 토우 구간은 위에서 이미 찾아 뒀다 — 그 둘레 몇 점만 보면 된다.
+                    //   전수 대조하면 성토 링(수천 점)에서 코너마다 수천 번을 돌아 옹벽변환이 멈춘 듯 느려진다.
+                    int qs = 0, qe = toe.Count - 1;
+                    if (toe.Count > 256 && toeSegOf[i] >= 0)
+                    { qs = System.Math.Max(0, toeSegOf[i] - 8); qe = System.Math.Min(toe.Count - 1, toeSegOf[i] + 9); }
+                    for (int q = qs; q <= qe; q++)
+                    {
+                        if (toe[q].X < qx0 || toe[q].X > qx1 || toe[q].Y < qy0 || toe[q].Y > qy1) continue;
+                        double ddx = toe[q].X - crest[i].X, ddy = toe[q].Y - crest[i].Y;
+                        double d2 = ddx * ddx + ddy * ddy;
+                        if (d2 < bd2) { bd2 = d2; bi = q; }
+                    }
+                    if (bi >= 0 && bd2 <= lim2) toePt[i] = toe[bi];
+                }
             }
 
             foreach (var seg in SegRunsToVertexRuns(segWall, closed, m))
@@ -552,12 +601,32 @@ public static class WallRunBuilder
         const double onPath = 0.5;      // 이 구간의 토우 경로 위라고 볼 거리(m)
         const double already = 0.02;    // 이미 표본인 정점으로 볼 거리(m)
         // 끼울 것들을 (구간 k, 그 안의 비율 t, 토우 정점) 으로 모은 뒤 뒤에서부터 삽입한다.
+        // ★[0806 성능] 링은 수천 점이고 `to`도 수백 점이라 전수 대조는 **정점수의 제곱**이 된다
+        //   (JACK 0806 '옹벽변환도 시간이 늘어난 것 같은데'). 값은 그대로 두고 **먼저 싸게 걸러낸다** —
+        //   ①이 구간의 경계상자 밖 정점은 즉시 버리고 ②구간별로도 경계상자로 먼저 거른다.
+        double bx0 = double.MaxValue, by0 = double.MaxValue, bx1 = double.MinValue, by1 = double.MinValue;
+        foreach (var q in to)
+        { bx0 = System.Math.Min(bx0, q.X); by0 = System.Math.Min(by0, q.Y); bx1 = System.Math.Max(bx1, q.X); by1 = System.Math.Max(by1, q.Y); }
+        bx0 -= onPath; by0 -= onPath; bx1 += onPath; by1 += onPath;
+
         var ins = new List<(int K, double T, Point3 V)>();
+        // [0806 성능] 링과 `to`는 같은 선을 같은 순서로 훑으므로, 직전에 맞은 구간 둘레만 봐도 거의 항상 맞는다.
+        //   창에서 못 찾으면 전수로 물러나므로 결과는 창 없이 돌린 것과 같다.
+        int hint = -1; const int win = 48;
         foreach (var v in toeRing)
         {
+            if (v.X < bx0 || v.X > bx1 || v.Y < by0 || v.Y > by1) continue;   // 이 구간 근처가 아니다
             int bk = -1; double bt = 0, bd = double.MaxValue;
-            for (int k = 0; k + 1 < to.Count; k++)
+            int lo = (hint >= 0 && to.Count > 256) ? System.Math.Max(0, hint - win) : 0;
+            int hi = (hint >= 0 && to.Count > 256) ? System.Math.Min(to.Count - 2, hint + win) : to.Count - 2;
+            for (int pass = 0; pass < 2; pass++)
             {
+            for (int k = lo; k <= hi; k++)
+            {
+                // 구간 경계상자로 싼 거절 — 이게 대부분을 걸러 안쪽 계산까지 안 간다.
+                double sx0 = System.Math.Min(to[k].X, to[k + 1].X) - onPath, sx1 = System.Math.Max(to[k].X, to[k + 1].X) + onPath;
+                double sy0 = System.Math.Min(to[k].Y, to[k + 1].Y) - onPath, sy1 = System.Math.Max(to[k].Y, to[k + 1].Y) + onPath;
+                if (v.X < sx0 || v.X > sx1 || v.Y < sy0 || v.Y > sy1) continue;
                 double dx = to[k + 1].X - to[k].X, dy = to[k + 1].Y - to[k].Y, L2 = dx * dx + dy * dy;
                 if (L2 < 1e-12) continue;
                 double t = System.Math.Clamp(((v.X - to[k].X) * dx + (v.Y - to[k].Y) * dy) / L2, 0, 1);
@@ -565,6 +634,11 @@ public static class WallRunBuilder
                 double d = System.Math.Sqrt((v.X - px) * (v.X - px) + (v.Y - py) * (v.Y - py));
                 if (d < bd) { bd = d; bk = k; bt = t; }
             }
+            if (bd <= onPath) break;                                    // 창 안에서 찾았다
+            if (lo == 0 && hi == to.Count - 2) break;                   // 이미 전수였다
+            lo = 0; hi = to.Count - 2;                                  // 못 찾았으면 전수로 물러난다
+            }
+            if (bk >= 0) hint = bk;
             if (bk < 0 || bd > onPath) continue;                        // 이 구간의 토우가 아니다
             if (Dist2D(v, to[bk]) < already || Dist2D(v, to[bk + 1]) < already) continue;   // 이미 표본
             ins.Add((bk, bt, v));
@@ -579,9 +653,51 @@ public static class WallRunBuilder
         }
     }
 
+    /// <summary>[0806 성능] 위와 같되 <b>직전에 맞은 구간 번호(hint)</b> 둘레부터 찾는다.
+    /// 크레스트를 순서대로 훑으면 짝이 되는 토우 구간도 순서대로 움직이므로, 창(window) 안에서 거의 항상 맞는다.
+    /// 창에서 못 찾으면 전수 탐색으로 물러나므로 **결과는 창 없이 돌린 것과 같다**(성토 링은 수천 점이라
+    /// 전수 탐색이 정점수의 제곱이 되어 내보내기가 멈춘 것처럼 느려진다 — JACK 0806).</summary>
+    internal static Point3 NearestOnAligned(IReadOnlyList<Point3> line, Point3 q, double dirX, double dirY,
+                                            double maxDist, ref int hint)
+    {
+        int cnt0 = line.Count;
+        bool dup0 = cnt0 >= 2 && Dist2D(line[0], line[cnt0 - 1]) < 1e-9;
+        int segs0 = dup0 ? cnt0 - 1 : cnt0;
+        if (hint >= 0 && segs0 > 256)
+        {
+            const int win = 48;
+            double best0 = double.MaxValue; Point3 bp0 = default; bool got0 = false; int bi0 = hint;
+            double cosLim0 = 0.643;
+            for (int k = hint - win; k <= hint + win; k++)
+            {
+                int i = ((k % segs0) + segs0) % segs0;
+                var a = line[i]; var b = line[(i + 1) % cnt0];
+                double dx = b.X - a.X, dy = b.Y - a.Y, L2 = dx * dx + dy * dy;
+                if (L2 < 1e-12) continue;
+                double L = System.Math.Sqrt(L2);
+                if (System.Math.Abs((dx * dirX + dy * dirY) / L) < cosLim0) continue;
+                double t = System.Math.Clamp(((q.X - a.X) * dx + (q.Y - a.Y) * dy) / L2, 0, 1);
+                double px = a.X + dx * t, py = a.Y + dy * t;
+                double d = (q.X - px) * (q.X - px) + (q.Y - py) * (q.Y - py);
+                if (d > maxDist * maxDist) continue;
+                if (d < best0) { best0 = d; bp0 = new Point3(px, py, a.Z + (b.Z - a.Z) * t); got0 = true; bi0 = i; }
+            }
+            // 창 안에서 **상한 안쪽**에 짝을 찾았으면 그게 최근접이다(창 밖은 더 멀다 — 선이 순서대로 가므로).
+            if (got0) { hint = bi0; return bp0; }
+        }
+        var r = NearestOnAlignedFull(line, q, dirX, dirY, maxDist, out int found);
+        if (found >= 0) hint = found;
+        return r;
+    }
+
     internal static Point3 NearestOnAligned(IReadOnlyList<Point3> line, Point3 q, double dirX, double dirY,
                                             double maxDist)
+    { int h = -1; return NearestOnAligned(line, q, dirX, dirY, maxDist, ref h); }
+
+    private static Point3 NearestOnAlignedFull(IReadOnlyList<Point3> line, Point3 q, double dirX, double dirY,
+                                               double maxDist, out int bestSeg)
     {
+        bestSeg = -1;
         const double cosLim = 0.643;                    // cos 50°
         // ★거리 상한이 없으면 **부지 반대편의 평행한 변**에 붙는다 — 실측 22.56m짜리 가짜 옹벽선이 나왔다(S25).
         //   벽면의 토우는 크레스트에서 수평으로 구배n×단높이(0.25m)쯤에 있으므로, 그 몇 배를 넘으면 짝이 아니다.
@@ -590,9 +706,13 @@ public static class WallRunBuilder
         int cnt = line.Count;
         bool dupEnd = cnt >= 2 && Dist2D(line[0], line[cnt - 1]) < 1e-9;
         int segs = dupEnd ? cnt - 1 : cnt;
+        // [0806 성능] 거리 상한이 곧 탐색 반경이다 — 경계상자로 먼저 거르면 링이 수천 점이어도 싸다.
+        double qx0 = q.X - maxDist, qx1 = q.X + maxDist, qy0 = q.Y - maxDist, qy1 = q.Y + maxDist;
         for (int i = 0; i < segs; i++)
         {
             var a = line[i]; var b = line[(i + 1) % cnt];
+            if ((a.X < qx0 && b.X < qx0) || (a.X > qx1 && b.X > qx1) ||
+                (a.Y < qy0 && b.Y < qy0) || (a.Y > qy1 && b.Y > qy1)) continue;
             double dx = b.X - a.X, dy = b.Y - a.Y, L2 = dx * dx + dy * dy;
             if (L2 < 1e-12) continue;
             double L = System.Math.Sqrt(L2);
@@ -601,7 +721,7 @@ public static class WallRunBuilder
             double px = a.X + dx * t, py = a.Y + dy * t;
             double d = (q.X - px) * (q.X - px) + (q.Y - py) * (q.Y - py);
             if (d > maxD2) continue;                                               // 너무 멀다 — 짝이 아니다
-            if (d < best) { best = d; bp = new Point3(px, py, a.Z + (b.Z - a.Z) * t); got = true; }
+            if (d < best) { best = d; bp = new Point3(px, py, a.Z + (b.Z - a.Z) * t); got = true; bestSeg = i; }
         }
         return got ? bp : NearestOn(line, q);
     }

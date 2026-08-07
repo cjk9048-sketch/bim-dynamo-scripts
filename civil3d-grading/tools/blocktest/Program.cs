@@ -1535,13 +1535,13 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
         $"분할 OFF → 아랫변 최대 이탈 {bugDrift:F3}m (제한 {WallBand.ChordTol}m + 겹침 0.10m)");
 
     // ★자체검증 — **둘 다** 끄면 반드시 재발해야 한다. 안 그러면 검사가 아니다.
-    //   [0806] 사다리꼴도 같이 꺼야 한다 — 그게 아랫변을 토우에 맞춰 주므로, 켜 둔 채로는
+    //   [0806] 토우 폭 맞추기도 같이 꺼야 한다 — 그게 아랫변을 토우에 맞춰 주므로, 켜 둔 채로는
     //   두 방어를 꺼도 아랫변이 멀쩡해 보여(0.02m) 검사가 무력해진다(방어가 삼중이 된 셈).
     WallBand.DisableChordLimitForTest = true;
-    WallBand.DisableTrapezoidForTest = true;
+    WallBand.DisableToeWidthForTest = true;
     List<WallBand.Tile> t3b;
     try { t3b = WallBand.Slice(run1, null, joint: 0.05, cornerDeg: 179.0); }
-    finally { WallBand.DisableChordLimitForTest = false; WallBand.DisableTrapezoidForTest = false; }
+    finally { WallBand.DisableChordLimitForTest = false; WallBand.DisableToeWidthForTest = false; }
     double bugDrift2 = ToeDrift(t3b, toe1);
     Check("S24 ★검사 자체검증: 두 방어를 다 끄면 벽선을 크게 벗어난다", bugDrift2 > 0.2,
         $"둘 다 OFF → 아랫변 최대 이탈 {bugDrift2:F2}m (정상 {drift:F4}m)");
@@ -1565,12 +1565,12 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
         Check("S24 (E) ★판넬보다 좁은 커브에서도 안쪽으로 안 파고든다", devC < 0.20,
             $"이탈 {devC:F3}m (현장 실측 0.285m가 증상 · 제한 {WallBand.ChordTol}m + 겹침 0.10m)");
 
-        // [0806] 사다리꼴도 같이 끈다 — 안 끄면 그게 아랫변을 토우에 맞춰 주어 '제한을 껐는데도 멀쩡'해진다.
+        // [0806] 토우 폭 맞추기도 같이 끈다 — 안 끄면 그게 아랫변을 토우에 맞춰 주어 '제한을 껐는데도 멀쩡'해진다.
         WallBand.DisableChordLimitForTest = true;
-        WallBand.DisableTrapezoidForTest = true;
+        WallBand.DisableToeWidthForTest = true;
         List<WallBand.Tile> tCb;
         try { tCb = WallBand.Slice(runC, null, joint: 0.05); }
-        finally { WallBand.DisableChordLimitForTest = false; WallBand.DisableTrapezoidForTest = false; }
+        finally { WallBand.DisableChordLimitForTest = false; WallBand.DisableToeWidthForTest = false; }
         double devCb = ToeDrift(tCb, toeC);
         Check("S24 (E) ★자체검증: 현 제한을 끄면 커브에서 파고든다", devCb > devC + 0.05,
             $"제한 OFF → 이탈 {devCb:F3}m (제한 ON {devC:F3}m)");
@@ -1978,10 +1978,11 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
     }
 }
 
-// ★ S26 [치명-1 회귀 방지] **성토 벽은 데이라잇으로 자르지 않는다**(JACK 0721 확정 — 보강토와 동일 규칙):
-//   크레스트가 지반 위면 꽉, 아니면 없음. 절토 규칙("설계면이 원지반보다 아래일 때 벽")과 **부호가 정반대**라
-//   방향을 안 가르면 성토 벽은 토우가 지반 위여서 전부 '벽 없음'이 되어 **판넬이 한 장도 안 나온다**.
-//   옛 구현(WallPanels.DayS)엔 있던 분기가 재작성 때 빠졌다 — 하니스가 성토를 안 봐서 못 잡았다.
+// ★ S26 **성토 벽은 데이라잇으로 자르지 않는다 — 아예**(JACK 0806 확정).
+//   "성토는 윗선을 기준으로 아래로 옹벽을 치는 게 맞긴 한데, 절토처럼 원지반과 맞닿는 데이라잇까지
+//    끊을 필요는 없다. 어차피 인프라웍스에서 지표면 아래로 들어갈 거니깐 괜찮다."
+//   종전(0721)은 '크레스트가 지반 위면 꽉, 아니면 0'이라는 **전부 아니면 전무**였고, 그래서 원지반이
+//   올라와 계획면과 만나는 전이 구간에서 벽이 뚝 끊겨 한 구간이 통째로 비었다(0806 스샷 '옹벽누락부' 13.48m).
 {
     var toeF = new List<Point3> { new(0, 0, 100), new(20, 0, 100) };
     var crestF = new List<Point3> { new(0, -0.25, 105), new(20, -0.25, 105) };
@@ -1991,8 +1992,16 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
     Console.WriteLine($"      S26 성토(지반 아래): {WallBand.LastDiag}");
     Check("S26 ★성토 벽은 지반 위에 얹혀도 꽉 찬다", tF.Count > 10, $"판넬 {tF.Count}장");
 
+    // ★지반이 벽보다 높아도(=아래쪽이 묻혀도) **끊지 않는다** — 묻히는 부분은 InfraWorks에서 가려진다.
+    //   종전엔 여기서 0장이 되어, 전이 구간의 벽이 통째로 사라지는 원인이 됐다.
     var tFb = WallBand.Slice(runF, new FlatGround(110.0), joint: 0.05);  // 지반 110 — 벽이 통째로 매몰
-    Check("S26 ★매몰된 성토 벽은 판넬 0장", tFb.Count == 0, $"판넬 {tFb.Count}장");
+    Check("S26 ★매몰돼도 성토 벽은 그대로 선다(자르지 않음)", tFb.Count == tF.Count,
+        $"매몰 {tFb.Count}장 vs 노출 {tF.Count}장 — 같아야 한다");
+
+    // ★전이 구간(지반이 벽 중간을 가로지름)에서도 뚝 끊기지 않아야 한다 — '옹벽누락부'의 재현 조건.
+    var tFm = WallBand.Slice(runF, new SlopeGround(96.0, 0.6), joint: 0.05);   // x=0에서 96 → x=20에서 108
+    Check("S26 ★전이 구간에서도 성토 벽이 안 끊긴다", tFm.Count == tF.Count,
+        $"전이 {tFm.Count}장 vs 노출 {tF.Count}장 — 같아야 한다(끊기면 여기서 갈린다)");
 
     // 같은 형상을 절토로 주면 절토 규칙이 그대로 적용돼야 한다(성토 분기가 절토를 오염시키지 않는지).
     var runC2 = new WallRun { Up = true, Bench = 0, Toe = toeF, Crest = crestF, Height = 5.0 };
@@ -2786,6 +2795,7 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
     var tF2 = new List<WallBand.Tile>();
     foreach (var r in runsF2) tF2.AddRange(WallBand.Slice(r, gndF2, joint: 0.05));
     string grF2 = WallBand.GapReport(tF2);
+    Console.WriteLine($"      S38 성토 전체: {WallBand.TotalDiag}");
     Console.WriteLine($"      S38 성토 틈: {grF2}");
     Check("S38 재현 조건: 성토도 판넬이 충분히 나온다", tF2.Count > 30, $"{tF2.Count}장");
 
@@ -2824,6 +2834,49 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
         }
     }
     Console.WriteLine($"      S38 성토 판넬 아랫변↔토우선 최대 이탈: {offF:F3}m @ {ofx:F1},{ofy:F1}");
+    // ★그 자리의 판넬과 토우선을 찍는다 — 0.251m ≈ 토우↔크레스트 간격(0.25m)이라 '한 선만큼 밀림'이 의심된다.
+    {
+        // ★남은 틈 자리(볼록 100° 코너 @ 8,22 Z94.2)의 판넬을 **표고까지 맞춰** 찍는다 — 쐐기 모양 확인용.
+        Console.WriteLine("        [틈 자리 8,22 Z94.2 주변 판넬]");
+        foreach (var t in tF2)
+        {
+            double c0 = double.MaxValue, c1 = double.MinValue, cv = double.MaxValue;
+            foreach (var (u, v) in t.Local) { c0 = Math.Min(c0, u); c1 = Math.Max(c1, u); cv = Math.Min(cv, v); }
+            double bz = t.Origin.Z + cv * t.VAxis.z;
+            double lx = t.Origin.X + c0*t.UAxis.x + cv*t.VAxis.x, ly = t.Origin.Y + c0*t.UAxis.y + cv*t.VAxis.y;
+            double rx = t.Origin.X + c1*t.UAxis.x + cv*t.VAxis.x, ry = t.Origin.Y + c1*t.UAxis.y + cv*t.VAxis.y;
+            if (Math.Abs(bz - 94.2) > 1.0) continue;
+            if (Math.Min(Math.Sqrt((lx-8)*(lx-8)+(ly-22)*(ly-22)), Math.Sqrt((rx-8)*(rx-8)+(ry-22)*(ry-22))) > 1.5) continue;
+            Console.WriteLine($"          단{t.Bench} 행{t.Row} U({t.UAxis.x:F2},{t.UAxis.y:F2})" +
+                              $" 아랫변 ({lx:F2},{ly:F2})~({rx:F2},{ry:F2}) Z{bz:F2}");
+        }
+        WallBand.Tile wt = tF2[0]; double wd = double.MaxValue;
+        foreach (var t in tF2)
+        {
+            double d = Math.Sqrt(Math.Pow(t.Origin.X - ofx, 2) + Math.Pow(t.Origin.Y - ofy, 2));
+            if (d < wd) { wd = d; wt = t; }
+        }
+        double q0 = double.MaxValue, q1 = double.MinValue, qv = double.MaxValue;
+        foreach (var (u, v) in wt.Local) { q0 = Math.Min(q0, u); q1 = Math.Max(q1, u); qv = Math.Min(qv, v); }
+        Console.WriteLine($"        그 판넬: 원점({wt.Origin.X:F2},{wt.Origin.Y:F2}) U({wt.UAxis.x:F2},{wt.UAxis.y:F2})" +
+                          $" u[{q0:F2}..{q1:F2}] 행{wt.Row} 단{wt.Bench}");
+        foreach (var r in runsF2)
+        {
+            int hit = -1; double hd = double.MaxValue;
+            for (int k = 0; k < r.Toe.Count; k++)
+            {
+                double d = Math.Sqrt(Math.Pow(r.Toe[k].X - wt.Origin.X, 2) + Math.Pow(r.Toe[k].Y - wt.Origin.Y, 2));
+                if (d < hd) { hd = d; hit = k; }
+            }
+            if (hd > 0.4) continue;
+            int lo = Math.Max(0, hit - 2);
+            Console.WriteLine($"        토우 {lo}~: " + string.Join(" ", Enumerable.Range(lo, Math.Min(6, r.Toe.Count - lo))
+                .Select(k => $"({r.Toe[k].X:F2},{r.Toe[k].Y:F2})")));
+            Console.WriteLine($"        크레스트 {lo}~: " + string.Join(" ", Enumerable.Range(lo, Math.Min(6, r.Crest.Count - lo))
+                .Select(k => $"({r.Crest[k].X:F2},{r.Crest[k].Y:F2})")));
+            break;
+        }
+    }
     // ★겹침 탓인지 가른다 — 겹침을 끄고 같은 값을 잰다. 겹침이 원인이면 확 줄고, 아니면 그대로다.
     {
         WallBand.ResetTotals();
@@ -2909,10 +2962,10 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
     var vs37 = GradingGeometry.Build(sq37, new FlatGround(130), pr37, true);
     var rs37 = vs37.Rings.Select(r => (IReadOnlyList<Point3>)r).ToList();
 
-    WallRunBuilder.DisableToeVertexInsertForTest = true;
+    WallRunBuilder.DisableToeVertexInsertForTest = true; WallRunBuilder.DisableCornerSnapForTest = true;
     List<WallRun> bad37;
     try { bad37 = WallRunBuilder.Build(sq37, rs37, null, up: true, globalSlope: 0.05, minSlope: 0.05); }
-    finally { WallRunBuilder.DisableToeVertexInsertForTest = false; }
+    finally { WallRunBuilder.DisableToeVertexInsertForTest = false; WallRunBuilder.DisableCornerSnapForTest = false; }
     double devBad = MaxRingDev(bad37, rs37);
 
     var good37 = WallRunBuilder.Build(sq37, rs37, null, up: true, globalSlope: 0.05, minSlope: 0.05);
@@ -2930,10 +2983,10 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
     {
         var vsF = GradingGeometry.Build(sq37, new FlatGround(70), pr37, false);
         var rsF = vsF.Rings.Select(r => (IReadOnlyList<Point3>)r).ToList();
-        WallRunBuilder.DisableToeVertexInsertForTest = true;
+        WallRunBuilder.DisableToeVertexInsertForTest = true; WallRunBuilder.DisableCornerSnapForTest = true;
         List<WallRun> badF;
         try { badF = WallRunBuilder.Build(sq37, rsF, null, up: false, globalSlope: 0.05, minSlope: 0.05); }
-        finally { WallRunBuilder.DisableToeVertexInsertForTest = false; }
+        finally { WallRunBuilder.DisableToeVertexInsertForTest = false; WallRunBuilder.DisableCornerSnapForTest = false; }
         var goodF = WallRunBuilder.Build(sq37, rsF, null, up: false, globalSlope: 0.05, minSlope: 0.05);
         double dB = MaxRingDev(badF, rsF), dG = MaxRingDev(goodF, rsF);
         Console.WriteLine($"      S37 성토: 링 정점↔옹벽선 최대 거리 끔 {dB:F3}m → 켬 {dG:F3}m ({goodF.Count}줄)");

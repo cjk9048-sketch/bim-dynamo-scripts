@@ -116,12 +116,20 @@ public static class WallPanelDwg
     private static readonly Color PlateRgb = Color.FromRgb(120, 122, 126);
     private static readonly Color ConcreteRgb = Color.FromRgb(188, 184, 178);   // 콘크리트 옹벽(약간 어두운 회색 콘크리트)
 
-    // ── 콘크리트 옹벽 표면 자연석 무늬(JACK 0722 사진 — 크레이지 페이빙) ──
-    private const double StoneSize = 0.40;   // 자연석 한 개 대략 크기(m) — 패널당 약 4×4(JACK 0722, 내보내기 시간·용량↓)
-    private const double GrooveW = 0.05;     // 줄눈(홈) 폭 — 넓게(InfraWorks 가시성)
-    private const double Relief = 0.035;     // 자연석 돌출(=홈 깊이) — 깊게(InfraWorks 가시성)
-    // 결정적 의사난수 지터([-1,1]) — Math.Random 없이 재현 가능(패널마다 동일 무늬 = 실물 form-liner처럼 반복).
-    private static double Hash(int i, int j) { double s = System.Math.Sin(i * 12.9898 + j * 78.233) * 43758.5453; return (s - System.Math.Floor(s)) * 2 - 1; }
+    // ── 판넬 표면 무늬 — **십자 4분할**(JACK 0806 스샷 사양) ──
+    //   종전 자연석(크레이지 페이빙, 0722)은 판넬당 돌 16~25개를 각각 리전→압출하는 유일한 ACIS 다량 연산이라
+    //   이 저장소의 모델링 오류(115094·eInvalidInput)가 전부 거기서 났고 시간도 대부분 거기서 썼다.
+    //   4분할은 판넬당 조각 8개(4분면 × L자를 사각 2개로)뿐이고 전부 축에 나란한 사각이라 퇴화할 여지가 없다.
+    /// <summary>[JACK 0806] 줄눈(이격) — **무늬끼리도, 무늬와 앵커보호공 사이도 같은 값**으로 통일한다.
+    /// JACK 요구 '5~10cm 정도'의 가운데 값. 판넬 가장자리에서도 절반씩 물려 같은 간격으로 보인다.</summary>
+    private const double PatternJoint = 0.07;
+    /// <summary>조각 한 변의 하한 — 이보다 얇으면 무늬가 아니라 실오라기라 아예 만들지 않는다.</summary>
+    private const double MinPatchSide = 0.08;
+    /// <summary>판넬 가장자리에서 무늬가 물러나는 거리 — <b>줄눈의 절반이 아니다</b>.
+    /// 이웃 판넬 사이엔 이미 판넬 줄눈(0.05m)이 있어서, 양쪽이 절반씩 물리면 판넬을 건너는 줄눈이
+    /// 0.12m가 되어 안쪽(0.07m)과 달라진다. (0.07−0.05)/2 = 0.01로 둬야 건너가는 줄눈도 0.07m가 된다.</summary>
+    private const double PatternEdge = 0.01;
+    private const double Relief = 0.035;     // 무늬 돌출(=홈 깊이) — 깊게(InfraWorks 가시성)
 
     /// <summary>패널들을 path에 DWG로 저장. 반환=(패널 수, 앵커 수).
     /// ※단독 저장용 래퍼. 보강토와 한 파일로 합칠 때는 <see cref="Populate"/>를 공유 DB에 직접 호출(WallDwg).</summary>
@@ -240,7 +248,11 @@ public static class WallPanelDwg
                     if (GradingSettings.StonePattern)
                     try
                     {
-                        var pads = BuildConcretePads(p, excludePocket: !concrete && p.IsFull);
+                        // ★[JACK 0806] '데이라잇으로 잘려서 앵커부가 없는 판넬은 가운데 앵커보호공 쪽이
+                        //   비어 있는 상태로 해도 된다. 대신 나머지는 살려져 있어야겠지.'
+                        //   → 온전 여부와 무관하게 앵커판넬이면 **가운데는 항상 비운다**. 잘린 판넬도
+                        //   나머지 3~4분면은 그대로 나오므로 무늬가 통째로 사라지지 않는다.
+                        var pads = BuildConcretePads(p, excludePocket: !concrete);
                         if (pads.Count == 0) padsNull++;      // 돌이 하나도 안 만들어짐(면이 너무 작거나 전 돌 퇴화)
                         foreach (var pad in pads)
                         {
@@ -391,98 +403,67 @@ public static class WallPanelDwg
         var windows = DH.Grading.Core.WallBand.ConvexPieces(faceLocal);
         if (windows.Count == 0) { padsSplitFail++; return new List<Solid3d>(); }   // 쪼개기 실패 — 종전대로 민판
         if (windows.Count > 1) { padsConcaveSplit++; padsPieceMax = System.Math.Max(padsPieceMax, windows.Count); }
-        int nx = System.Math.Max(1, (int)System.Math.Round(bw / StoneSize));
-        int ny = System.Math.Max(1, (int)System.Math.Round(bh / StoneSize));
-        double du = bw / nx, dv = bh / ny;
-        // 지터드 격자점(경계점은 고정 → 패널 가장자리 깔끔).
-        var pts = new Point2d[nx + 1, ny + 1];
-        for (int i = 0; i <= nx; i++)
-            for (int j = 0; j <= ny; j++)
-            {
-                double ju = (i == 0 || i == nx) ? 0 : Hash(i, j) * 0.33 * du;
-                double jv = (j == 0 || j == ny) ? 0 : Hash(i + 7, j + 3) * 0.33 * dv;
-                pts[i, j] = new Point2d(minU + i * du + ju, minV + j * dv + jv);
-            }
-        // ★[JACK 0805 '앵커 주변이 듬성듬성 비었다'] 정착구 보호구역 **경계에 격자선을 맞춘다**.
-        //   맞추지 않으면 보호구역 경계가 칸 한가운데를 지나 **얇은 자투리**가 생기고, 그걸 버리면
-        //   빈 자리가 칸 하나만큼(0.39m) 더 넓어진다 — 앵커 둘레가 필요 이상으로 휑해지는 원인.
-        //   경계에 가장 가까운 격자선을 그 경계로 옮기면 자투리가 아예 안 생기고,
-        //   빈 곳은 **보호구역(도넛 + 줄눈)만큼만** 남는다(JACK 제안 그대로).
-        if (excludePocket)
+        // ★[JACK 0806 무늬 재설계] 지터드 자연석 격자 → **십자 4분할 + 앵커보호공 회피(L자)**.
+        //   JACK 사양(스샷): "중앙 앵커보호공에서 오프셋하고 무늬는 그냥 십자로 4분할.
+        //   모든 무늬와 앵커보호공과의 줄눈(이격거리)은 다 통일, 5~10cm 정도."
+        //   종전 자연석 무늬는 판넬당 돌 16~25개를 각각 리전→압출하는 유일한 ACIS 다량 연산이라
+        //   이 저장소의 모델링 오류(115094·eInvalidInput)가 전부 거기서 났고 시간도 대부분 거기서 썼다.
+        //   4분할은 판넬당 **조각 8개**(4분면 × L자를 사각 2개로)뿐이고 전부 **축에 나란한 사각**이라
+        //   퇴화할 여지가 없다. 실물 PSM 판넬의 십자 줄눈과도 맞다.
+        double gj = PatternJoint;                       // 줄눈 — 무늬끼리·무늬와 보호공 **모두 같은 값**
+        double hb = excludePocket ? Collar1Size / 2 + gj : gj / 2;   // 보호공 반폭 + 줄눈(콘크리트면 보호공 없음)
+        double cu = p.PocketU, cvv = p.PocketV;         // 십자 중심 = 앵커보호공 중심
+        // ★가장자리 물림은 **줄눈의 절반이 아니라 `PatternEdge`** 다. 이웃 판넬 사이엔 이미 판넬 줄눈(0.05m)이
+        //   있으므로, 양쪽이 절반씩(0.035) 물리면 판넬을 건너는 줄눈이 0.035+0.05+0.035 = **0.12m**가 되어
+        //   안쪽(0.07m)과 달라진다. JACK '다 통일해'에 맞추려면 물림을 (0.07−0.05)/2 = **0.01m**로 둬야
+        //   건너가는 줄눈도 0.07m가 된다.
+        double uA = minU + PatternEdge, uB = maxU - PatternEdge;
+        double vA = minV + PatternEdge, vB = maxV - PatternEdge;
+
+        var tiles2 = new List<List<Point2d>>();
+        void Rect(double a, double b, double c, double d)
         {
-            double hb = Collar1Size / 2 + GrooveW;
-            SnapGridLine(pts, nx, ny, true, p.PocketU - hb, minU, du);
-            SnapGridLine(pts, nx, ny, true, p.PocketU + hb, minU, du);
-            SnapGridLine(pts, nx, ny, false, p.PocketV - hb, minV, dv);
-            SnapGridLine(pts, nx, ny, false, p.PocketV + hb, minV, dv);
+            if (b - a < MinPatchSide || d - c < MinPatchSide) return;
+            tiles2.Add(new List<Point2d> { new(a, c), new(b, c), new(b, d), new(a, d) });
         }
-        double scale = System.Math.Max(0.5, 1 - GrooveW / System.Math.Min(du, dv));  // 중심 기준 축소=돌 사이 홈
-        // 무늬 대상 면을 클립 창으로 — 돌을 면 모양에 맞춰 자른다(삐져나옴·누락 방지).
+        // 4분면마다 L자 = 축에 나란한 사각 2개(보호공 쪽 모서리를 도려낸 모양 — 스샷의 빨간 윤곽).
+        Rect(uA, cu - gj / 2, vA, cvv - hb);   Rect(uA, cu - hb, cvv - hb, cvv - gj / 2);   // 좌하
+        Rect(cu + gj / 2, uB, vA, cvv - hb);   Rect(cu + hb, uB, cvv - hb, cvv - gj / 2);   // 우하
+        Rect(uA, cu - gj / 2, cvv + hb, vB);   Rect(uA, cu - hb, cvv + gj / 2, cvv + hb);   // 좌상
+        Rect(cu + gj / 2, uB, cvv + hb, vB);   Rect(cu + hb, uB, cvv + gj / 2, cvv + hb);   // 우상
+
+        // 무늬 대상 면을 클립 창으로 — 조각을 면 모양에 맞춰 자른다(삐져나옴·누락 방지).
         //   볼록하면 창 1개(=판넬 자신), 오목하면 위에서 쪼갠 볼록 조각들.
         var winCcw = new bool[windows.Count];
         for (int w = 0; w < windows.Count; w++) winCcw[w] = SignedArea(windows[w]) > 0;
         var curves = new DBObjectCollection();
-        int stoneTried = 0; double stoneMaxArea = 0;   // [0806] '돌 전멸' 판넬의 사유를 다음 로그에서 가르기 위한 계측
-        for (int i = 0; i < nx; i++)
-            for (int j = 0; j < ny; j++)
+        int stoneTried = 0; double stoneMaxArea = 0;   // '조각 전멸' 판넬의 사유를 다음 로그에서 가르기 위한 계측
+        foreach (var sp in tiles2)
+        {
+            // 창(볼록 조각)마다 클립 — 조각들의 합집합이 곧 '무늬 ∩ 판넬'이다.
+            var cut = new List<List<Point2d>>(windows.Count);
+            for (int w = 0; w < windows.Count; w++)
             {
-                var a = pts[i, j]; var b = pts[i + 1, j]; var c = pts[i + 1, j + 1]; var d = pts[i, j + 1];
-                double cx = (a.X + b.X + c.X + d.X) / 4, cy = (a.Y + b.Y + c.Y + d.Y) / 4;
-                Point2d Sc(Point2d q) => new Point2d(cx + (q.X - cx) * scale, cy + (q.Y - cy) * scale);
-                var stone = new List<Point2d> { Sc(a), Sc(b), Sc(c), Sc(d) };
-
-                // [JACK 0730 → 0805 개선] 정착구 도넛 보호.
-                //   종전엔 도넛 영역에 **조금이라도 걸치는 돌을 통째로 버렸다**. 격자가 0.39m인데 보호구역이
-                //   0.66m라 걸치는 셀이 많고, 지터까지 한쪽으로 밀려 무늬가 듬성듬성해졌다
-                //   (JACK 0805: '아까보단 많지만 여전히 듬성듬성 누락'). 버리지 말고 **도넛 밖으로 잘라 남긴다** —
-                //   도넛은 그대로 보호되면서 무늬는 그 경계까지 꽉 찬다.
-                //   반평면 클립만 쓰므로 조각은 전부 볼록하다(자기교차 없음 = 115094 안전).
-                var stonePieces = new List<List<Point2d>>();
-                if (excludePocket)
-                {
-                    double half = Collar1Size / 2 + GrooveW;   // 위 격자 스냅과 **같은 값**이어야 자투리가 안 생긴다
-                    double bx0 = p.PocketU - half, bx1 = p.PocketU + half;
-                    double by0 = p.PocketV - half, by1 = p.PocketV + half;
-                    AddIfReal(stonePieces, ClipHalf2d(stone, 1, 0, bx0));          // 도넛 왼쪽
-                    AddIfReal(stonePieces, ClipHalf2d(stone, -1, 0, -bx1));        // 도넛 오른쪽
-                    var band = ClipHalf2d(ClipHalf2d(stone, -1, 0, -bx0), 1, 0, bx1);   // 도넛과 같은 가로 띠
-                    if (band.Count >= 3)
-                    {
-                        AddIfReal(stonePieces, ClipHalf2d(band, 0, 1, by0));       // 도넛 아래
-                        AddIfReal(stonePieces, ClipHalf2d(band, 0, -1, -by1));     // 도넛 위
-                    }
-                }
-                else stonePieces.Add(stone);
-
-                foreach (var sp in stonePieces)
-                {
-                    // 창(볼록 조각)마다 클립 — 조각들의 합집합이 곧 '돌 ∩ 판넬'이다.
-                    var cut = new List<List<Point2d>>(windows.Count);
-                    for (int w = 0; w < windows.Count; w++)
-                    {
-                        // [JACK 0731] 퇴화 다각형 방지 — 클립이 만든 근접중복 정점을 정리한다.
-                        //   자기교차/영면적 폴리라인이 Region·Extrude를 거치면 '모델링 오류 115094'로 깨진 솔리드가 되어
-                        //   옹벽3D.dwg SaveAs가 'RECOVER 권장' 모달을 띄운다 → 애초에 이런 돌은 무늬에서 제외.
-                        var cl = DedupeRing(ClipPolyToLocal(sp, windows[w], winCcw[w]));
-                        if (cl.Count >= 3 && Poly2dArea(cl) >= MinPieceArea) cut.Add(cl);
-                    }
-                    // 판넬 모양에 맞춰 자를 때 가느다란 쐐기가 남을 수 있다 — 면적+두께로 거른다.
-                    //   판정은 **조각 하나가 아니라 돌 전체**로 한다(0806). 쪼갠 경계는 판넬 **안쪽** 대각선이라
-                    //   갈라진 조각을 각각 '실오라기'로 보면 원래 없던 틈이 무늬 한가운데 생긴다.
-                    stoneTried++;
-                    foreach (var cl in cut) stoneMaxArea = System.Math.Max(stoneMaxArea, Poly2dArea(cl));
-                    if (!IsUsableStone(cut)) continue;
-                    foreach (var cl in cut)
-                    {
-                        var pl = new Polyline(cl.Count);
-                        for (int k = 0; k < cl.Count; k++) pl.AddVertexAt(k, cl[k], 0, 0, 0);
-                        pl.Closed = true;
-                        curves.Add(pl);
-                    }
-                }
+                // [JACK 0731] 퇴화 다각형 방지 — 클립이 만든 근접중복 정점을 정리한다.
+                var cl = DedupeRing(ClipPolyToLocal(sp, windows[w], winCcw[w]));
+                if (cl.Count >= 3 && Poly2dArea(cl) >= MinPieceArea) cut.Add(cl);
             }
+            // 판넬 모양에 맞춰 자를 때 가느다란 쐐기가 남을 수 있다 — 면적+두께로 거른다.
+            //   판정은 **조각 하나가 아니라 무늬 한 장 전체**로 한다(0806). 쪼갠 경계는 판넬 **안쪽** 대각선이라
+            //   갈라진 조각을 각각 '실오라기'로 보면 원래 없던 틈이 무늬 한가운데 생긴다.
+            stoneTried++;
+            foreach (var cl in cut) stoneMaxArea = System.Math.Max(stoneMaxArea, Poly2dArea(cl));
+            if (!IsUsableStone(cut)) continue;
+            foreach (var cl in cut)
+            {
+                var pl = new Polyline(cl.Count);
+                for (int k = 0; k < cl.Count; k++) pl.AddVertexAt(k, cl[k], 0, 0, 0);
+                pl.Closed = true;
+                curves.Add(pl);
+            }
+        }
         // ★[0805 '모델링 작업 오류 115094' — JACK 3회 신고, 계측으로 자리 확정: 무늬 21/116장 실패]
-        //   **돌을 하나로 union한 뒤 한 번에 압출**하던 것을 **돌마다 따로 압출**로 바꾼다.
+        //   **조각을 하나로 union한 뒤 한 번에 압출**하던 것을 **조각마다 따로 압출**로 바꾼다.
         //   이 저장소가 v14.7에서 역T 무늬로 이미 겪고 해결한 것과 **같은 처방**이다.
         //   union은 돌 하나가 퇴화하면 누산기를 망가뜨려 뒤이은 압출까지 통째로 실패시키고,
         //   실패한 boolean·extrude마다 AutoCAD가 명령창에 오류를 찍는다(돌 수 × 판넬 수 = '엄청').
@@ -494,7 +475,7 @@ public static class WallPanelDwg
         //   왜 다 걸러졌는지는 아래 계측이 다음 로그에서 알려준다.
         if (curves.Count == 0)
         {
-            padsWipeFirst ??= $"{bw:F2}×{bh:F2}m · 격자 {nx}×{ny} · 조각 {stoneTried}개 중 최대 {stoneMaxArea:F5}㎡" +
+            padsWipeFirst ??= $"{bw:F2}×{bh:F2}m · 조각 {stoneTried}개 중 최대 {stoneMaxArea:F5}㎡" +
                               $" (하한 면적 {MinStoneArea:F4}㎡ · 두께 {MinStoneThick:F2}m) @ {p.Origin.X:F0},{p.Origin.Y:F0}";
             return pads;
         }
@@ -563,24 +544,6 @@ public static class WallPanelDwg
             minEdge = System.Math.Min(minEdge, a.GetDistanceTo(b));
         }
         return $"[정점 {n} · 면적 {System.Math.Abs(area) * 0.5:F6}㎡ · 최단변 {(n > 0 ? minEdge : 0):F6}m]";
-    }
-
-    /// <summary>[0805] 정착구 보호구역 경계에 가장 가까운 격자선을 그 경계로 옮긴다(가로선 또는 세로선).
-    /// 자투리 조각이 생기지 않게 해 앵커 둘레가 휑해지는 것을 막는다. 판넬 가장자리 선(0·n)은 건드리지 않는다.</summary>
-    private static void SnapGridLine(Point2d[,] pts, int nx, int ny, bool vertical, double target,
-                                     double origin, double step)
-    {
-        int n = vertical ? nx : ny;
-        if (n < 2 || step <= 1e-9) return;
-        int best = -1; double bd = double.MaxValue;
-        for (int i = 1; i < n; i++)                    // 가장자리(0, n)는 판넬 경계라 제외
-        {
-            double d = System.Math.Abs(origin + i * step - target);
-            if (d < bd) { bd = d; best = i; }
-        }
-        if (best < 0 || bd > step) return;             // 한 칸보다 멀면 이 경계는 격자 밖 — 건드리지 않는다
-        if (vertical) { for (int j = 0; j <= ny; j++) pts[best, j] = new Point2d(target, pts[best, j].Y); }
-        else { for (int i = 0; i <= nx; i++) pts[i, best] = new Point2d(pts[i, best].X, target); }
     }
 
     /// <summary>[0805] 볼록 조각만 남기는 반평면 클립 — nx·x + ny·y ≤ d 쪽만 남긴다(Sutherland–Hodgman 1변).
