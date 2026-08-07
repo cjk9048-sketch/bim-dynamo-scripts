@@ -19,6 +19,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ResetCommand))]               // DHRESET(초기화 — 정지면 생성 전으로)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.BasemapCommand))]             // DHMAP/DHMAPOFF(위성 배경지도 켜기·끄기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SectionCommand))]             // DHSECTION(종단·횡단 생성)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ProfileCommand))]             // DHPROFILE(종단도 — 노선 직접 그리기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ImportGisCommand))]           // DHCONTOUR/DHPARCEL(등고선·지적도 가져오기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.CoordSysProbeCommand))]       // DHCS(좌표계 API 진단 — 임시)
 
@@ -156,6 +157,19 @@ public sealed class RibbonApp : IExtensionApplication
                 "직접 붙이신 다른 이미지는 그대로 둡니다.", null);
             pDraw.Items.Add(btnMapOff);
             pDraw.Items.Add(Spacer());
+            // ★[종단도 — JACK 0807] **버튼을 누르면 노선을 직접 그린다**(노란 꺾은 선) → 그 노선으로 종단면도.
+            //   종전엔 다른 명령으로 선을 먼저 그려 두고 골라야 해서 손이 두 번 갔다.
+            //   횡단은 아직 옆 버튼(DHSECTION)에 있다 — 종단도가 말끔해지면 같은 방식으로 옮긴다.
+            var btnProf = MakeButton(
+                "종단도", "DHPROFILE ", "버튼을 누르고 노선을 직접 그리면(노란 선) 그 노선을 따라 종단면도를 만듭니다", "종단");
+            btnProf.ToolTip = MakeTip("종단도 (DHPROFILE)",
+                "버튼을 누르고 **화면에 노선을 직접 그립니다**.\n" +
+                "점을 연달아 찍고 Enter로 끝냅니다(U=마지막 점 취소, Esc=전체 취소).\n" +
+                "그 노선을 따라 원지반·정지면의 종단면도를 만듭니다.\n" +
+                "그린 노란 선은 도면에 남아, 나중에 고쳐서 다시 돌릴 수 있습니다.", null);
+            pDraw.Items.Add(btnProf);
+            pDraw.Items.Add(Spacer());
+
             // [종단·횡단 — JACK 0731] 선 하나 그으면 종단면도·횡단면도를 Civil3D 정식 객체로 생성.
             var btnSec = MakeButton(
                 "종단\n횡단", "DHSECTION ", "노선으로 쓸 선을 클릭하면 원지반·정지면의 종단면도와 횡단면도를 만듭니다(간격·폭=정지옵션)", "종횡단");
