@@ -244,8 +244,13 @@ public static class GradingBuilder
 
     private static void Freeze(TinSurface s)
     {
-        try { s.CreateSnapshot(); }
-        catch { try { s.RebuildSnapshot(); } catch { } } // 이미 스냅샷 있으면 갱신
+        // ★[JACK 0807 'DH정지면에 스냅샷 재작성 느낌표가 뜬 상태로 작성됨'] 순서가 문제였다.
+        //   종전엔 `CreateSnapshot()`을 부르고 **예외가 났을 때만** `RebuildSnapshot()`으로 갔다.
+        //   그런데 스냅샷이 이미 있을 때 CreateSnapshot이 예외를 안 던지면(조용히 무시) 갱신이 영영 안 된다 —
+        //   그러면 스냅샷은 **첫 붙여넣기 시점**에 머물고, 뒤에 쌓인 붙여넣기가 스냅샷보다 새것이 되어
+        //   Prospector가 '스냅샷 재작성 필요(!)'를 띄운다. 예외에 기대지 말고 **둘 다 순서대로** 부른다.
+        try { s.CreateSnapshot(); } catch { }      // 없으면 만든다(있으면 무시/예외 — 어느 쪽이든 상관없다)
+        try { s.RebuildSnapshot(); } catch { }     // 있으면 **반드시** 최신 정의로 갱신한다
         try { s.Rebuild(); } catch { }
     }
 
@@ -661,23 +666,31 @@ public static class GradingBuilder
 
     /// <summary>[0728] 이름이 baseName(또는 _N)인 지표면 재작성 — 소스 숨김(Visible) 등으로 붙는
     /// '정의 구식(⚠)' 표시 해소용. 실패해도 무시.</summary>
-    public static void RebuildSurfacesByBaseName(Transaction tr, string baseName)
+    public static string RebuildSurfacesByBaseName(Transaction tr, string baseName)
     {
         var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+        int hit = 0, snapOk = 0, snapNo = 0, reOk = 0; string first = "";
         foreach (ObjectId sid in civilDoc.GetSurfaceIds())
         {
             if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
             string nm = s.Name;
             if (nm != baseName && !(nm.StartsWith(baseName + "_") && int.TryParse(nm.Substring(baseName.Length + 1), out _)))
                 continue;
+            hit++;
             try
             {
                 var w = (Autodesk.Civil.DatabaseServices.Surface)tr.GetObject(sid, OpenMode.ForWrite);
-                try { w.RebuildSnapshot(); } catch { }
-                try { w.Rebuild(); } catch { }
+                // [0807] 스냅샷 갱신이 **실제로 됐는지** 남긴다 — 종전엔 catch{}로 삼켜서
+                //   느낌표가 왜 안 없어지는지 로그로 알 길이 없었다.
+                try { w.RebuildSnapshot(); snapOk++; }
+                catch (System.Exception ex) { snapNo++; if (first.Length == 0) first = ex.Message; }
+                try { w.Rebuild(); reOk++; }
+                catch (System.Exception ex) { if (first.Length == 0) first = ex.Message; }
             }
-            catch { }
+            catch (System.Exception ex) { if (first.Length == 0) first = ex.Message; }
         }
+        return $"'{baseName}' 표면 {hit}개 — 스냅샷 갱신 {snapOk}/실패 {snapNo} · 재작성 {reOk}" +
+               (first.Length > 0 ? $" · 첫 사유: {first}" : "");
     }
 
     /// <summary>이름(또는 이름_숫자)의 지표면 존재 여부 — DHNORI/DHINFRA 실행 게이트 ③용.</summary>

@@ -212,6 +212,11 @@ public sealed class CreateGradingCommand
         }
         catch { }
 
+        // ★[JACK 0807 '옹벽변환이 여전히 오래 걸린다'] 어디서 시간을 쓰는지 **재고 나서** 고친다.
+        //   종전엔 DoGrade 전체에 시계가 하나도 없어, 느리다는 체감만 있고 근거가 없었다.
+        //   추측으로 후보를 고르면 헛짚는다(0805~0806에서 성능만 두 번 자책골) — 단계별 초를 남긴다.
+        var stw = new StageTimer();
+
         try
         {
             System.Collections.Generic.List<Point3> boundary;
@@ -226,6 +231,7 @@ public sealed class CreateGradingCommand
             double maxPlanGap = 0;
 
             // ── 1단계: 가상 절토/성토 대지표면 생성(기존 로직 그대로) ──
+            stw.Stage("1단계 가상면");
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
                 boundary = BoundaryReader.Read(tr, planPolyId);
@@ -302,7 +308,9 @@ public sealed class CreateGradingCommand
                                       $"선택 {GradingSettings.WallPicks.Count}건";
                     DiagLog.Reset(
                         "[DHGRADE 진단] " + System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") +
-                        "\n■ " + wallInfo + "\n\n■ 절토\n" + diagCut + "\n■ 성토\n" + diagFill);
+                        "\n■ " + wallInfo +
+                        (LastBudgetNote.Length > 0 ? "\n■ " + LastBudgetNote : "") +
+                        "\n\n■ 절토\n" + diagCut + "\n■ 성토\n" + diagFill);
                 }
                 catch { }
 
@@ -321,6 +329,7 @@ public sealed class CreateGradingCommand
             }
 
             // ── 2단계: 교선 생성 → 각 가상면에 Outer 경계 주입 (성토 → 절토 순서, JACK 설계) ──
+            stw.Stage("2단계 교선·경계주입");
             // DHXSEC 엔진(RawTriangleIntersectionFinder)을 그대로 호출. 초록선 그리기는 맨 마지막 한 번만 —
             // 그리기의 레이어 청소(EraseOnLayer)가 앞서 그린 성토 교선을 지우는 일이 없도록(JACK 지적).
             var allLoops = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
@@ -562,6 +571,7 @@ public sealed class CreateGradingCommand
 
             // [링 2개 구조 — 전체 파이프라인 복원] 클립링으로 표면 클립·합성, finalRing(순수교선)은 번들·초록선용.
             // ── 3단계: 최종 합성(원지반 → 성토 → 절토 순 Paste) — 병합 느낌표의 실제 원인을 로그로 특정(JACK) ──
+            stw.Stage("3단계 합성(Paste)");
             string pasteLog = "";
             ObjectId finalSurfId = ObjectId.Null;
             try
@@ -630,6 +640,7 @@ public sealed class CreateGradingCommand
             // ── 3.5단계 [§75 1-A]: 사면선·소단선을 식별 태그(XData: 방향·단·구간)와 함께 작도 ──
             //   옹벽 전환(DHWALL)이 클릭할 대상. JACK: 지표면 생성 때 함께 생성. 항상 사면 기준(옹벽 미적용).
             //   클립은 DHNORI와 동일(finalRing − 계획경계 도넛). ground는 클립 모드라 미사용(NullGround).
+            stw.Stage("3.5단계 사면선 태그");
             string edgeMsg = "";
             try
             {
@@ -699,6 +710,7 @@ public sealed class CreateGradingCommand
             //   실패해도 번들 저장 자체는 계속한다(옛 경로로 폴백 — 정지면은 이미 완성돼 있다).
             System.Collections.Generic.List<WallRun>? cutRuns = null, fillRuns = null;
             string runMsg = "";
+            stw.Stage("옹벽선 확정");
             try
             {
                 cutRuns = cut.HasSlope
@@ -720,6 +732,7 @@ public sealed class CreateGradingCommand
             try { DiagLog.Append("\n■ 옹벽선 확정(4단계 전)\n  " + runMsg.Replace("\n", "\n  ") + "\n"); }
             catch { }
 
+            stw.Stage("4단계 번들 저장");
             try
             {
                 var fp = GradingBundle.Fingerprint(boundary);
@@ -820,6 +833,7 @@ public sealed class CreateGradingCommand
 
             // ── 토량 산출(체적표면: 원지반=기준, 정지면=비교) ──
             // 합성이 실패했으면 정지면이 온전하지 않아 **틀린 물량이 조용히 나온다** → 아예 계산하지 않는다.
+            stw.Stage("토량 산출");
             string volMsg = gradeOk
                 ? ComputeVolumes(db, groundId, finalSurfId)
                 : "토량: 정지면이 완성되지 않아 산출하지 않았습니다";
@@ -835,14 +849,35 @@ public sealed class CreateGradingCommand
                 box.AppendLine("\n자세한 내용은 진단 로그를 확인하세요:\n" + DiagLog.FilePath);
             string msg = box.ToString().TrimEnd();
 
-            // 명령창(ed)에는 기존 상세 정보를 그대로 남긴다 — 필요할 때 바로 볼 수 있게.
+            // ★★[JACK 0807 'DH정지면에 스냅샷 재작성 느낌표가 뜬 상태로 작성됨'] **맨 마지막에 한 번 더** 재작성한다.
+            //   종전엔 3.5단계에서, 그것도 `결과지표면만 표시` 옵션이 켜져 있을 때만 돌았다 —
+            //   옵션이 꺼져 있으면 아예 안 돌고, 켜져 있어도 그 뒤에 토량 임시표면 생성·삭제가 이어져
+            //   정지면이 다시 '구식'이 된다. 사용자가 보는 시점은 **모든 작업이 끝난 뒤**이므로 그때 맞춰야 한다.
+            string snapMsg = "";
+            try
+            {
+                using Transaction trR = db.TransactionManager.StartTransaction();
+                snapMsg = GradingBuilder.RebuildSurfacesByBaseName(trR, "정지면_DH");
+                trR.Commit();
+            }
+            catch (System.Exception rex) { snapMsg = "재작성 실패 — " + rex.Message; }
+            try { DiagLog.Append("\n■ 정지면 마무리 재작성\n  " + snapMsg + "\n"); } catch { }
+
+            // ★[JACK 0807] 정지면 생성/옹벽변환이 어디서 오래 걸렸는지 — 로그 한 줄로 남긴다.
+            string gradeTime = stw.Report();
+            try { DiagLog.Append("\n■ DoGrade 단계별 시간\n  " + gradeTime + "\n"); } catch { }
+
+            // ★[JACK 0807 '글씨가 엄청나게 생긴다'] 명령창에는 **한눈에 읽히는 만큼만** 낸다.
+            //   상세(경계 주입·합성 검증·번들 내역)는 전부 진단 로그 파일에 이미 들어 있다.
+            //   ※`GradingSettings.Version`은 이제 짧은 버전 문자열이다 — 변경 이력은 Changelog로 옮겼고
+            //     **출력하지 않는다**(종전엔 이 자리에서 68,623자가 통째로 찍혔다).
             string terrace = p.MountainTerrace ? $" · 계단식 산지(대소단 {p.TerraceInterval}m/{p.TerraceWidth}m)" : "";
             ed.WriteMessage("\n" + headline + $"  [DH.Grading {GradingSettings.Version}]" +
-                $"\n{volMsg}" +
-                $"\n절토 {(cut.HasSlope ? "가상절토_DH" : "없음")} / 성토 {(fill.HasSlope ? "가상성토_DH" : "없음")}" +
-                $"\n절토 단높이 {p.CutBenchHeight}m·소단 {p.CutBenchWidth}m · 성토 단높이 {p.FillBenchHeight}m·소단 {p.FillBenchWidth}m" +
-                $"\n절토 1:{p.CutSlope} · 성토 1:{p.FillSlope}{terrace}" +
-                bndMsg + $"\n합성(정지면_DH): {pasteLog}\n{bundleMsg}");
+                $"\n  {volMsg.Replace("\n", " · ")}" +
+                $"\n  절토 1:{p.CutSlope} 단높이 {p.CutBenchHeight}m·소단 {p.CutBenchWidth}m" +
+                $" / 성토 1:{p.FillSlope} 단높이 {p.FillBenchHeight}m·소단 {p.FillBenchWidth}m{terrace}" +
+                $"\n  {gradeTime}" +
+                $"\n  자세한 내용: {DiagLog.FilePath}");
             AcadApp.ShowAlertDialog(msg);
         }
         catch (System.Exception ex)
@@ -1032,6 +1067,10 @@ public sealed class CreateGradingCommand
         }
     }
 
+    /// <summary>[0807] 직전 <see cref="BuildParams"/>의 수직 예산 실측 — DoGrade가 로그를 새로 시작한 뒤에 찍는다.
+    /// (BuildParams 안에서 바로 쓰면 그 뒤 <c>DiagLog.Reset</c>에 지워진다 — 0807 1차 시도의 실패.)</summary>
+    internal static string LastBudgetNote = "";
+
     /// <summary>설정값을 읽고, 원지반/계획고 표고차로 필요한 최대 단수를 좁혀 매개변수를 만든다(+여유단).</summary>
     public static GradingParams BuildParams(System.Collections.Generic.List<Point3> boundary, CachedGroundSurface ground)
     {
@@ -1059,6 +1098,27 @@ public sealed class CreateGradingCommand
             // 단수는 '작은 쪽' 단높이 기준(작은 쪽이 같은 표고차에 더 많은 단을 쓴다) — 무한루프 백스톱용.
             int needed = (int)System.Math.Ceiling(maxDiff / System.Math.Max(s.SmallerBenchHeight, 1e-6)) + spare;
             maxBenches = System.Math.Min(maxBenches, System.Math.Max(needed, 1));
+
+            // ★[JACK 0807 '옹벽변환이 여전히 오래 걸린다'] 이 예산 하나가 **절토·성토 양쪽에 같이** 적용된다.
+            //   그런데 실제로 필요한 높이는 방향마다 다르다:
+            //     · 절토는 계획고에서 **위로** 원지반 꼭대기까지  → gMax − designMin
+            //     · 성토는 계획고에서 **아래로** 원지반 바닥까지  → designMax − gMin
+            //   산을 낀 부지처럼 한쪽이 압도적으로 크면, 작은 쪽이 큰 쪽 예산을 그대로 받아 **필요 없는 단**을
+            //   수십 개 만든다(0807 현장 로그: 절토 계단 +224m, 성토 계단 −224m로 완전 대칭).
+            //   단이 늘면 링·삼각형·옹벽선·판넬이 전부 그만큼 늘어난다 — 정지면 생성 시간의 유력 후보다.
+            //   ※다만 MaxRise는 **번들에 저장되는 값**이라 방향별로 쪼개면 저장형식이 바뀐다(v9→v10).
+            //     추측으로 형식을 건드리지 않는다 — 먼저 **숫자를 남겨** 실제로 남아도는지 확인하고 고친다.
+            //   ※로그에 **바로 쓰지 않는다** — BuildParams는 DiagLog.Reset(진단 로그 새로 시작)보다 먼저 불리므로
+            //     여기서 쓰면 그대로 지워진다(0807 1차 시도가 이 이유로 한 줄도 안 남았다). 담아 뒀다 나중에 쓴다.
+            double needCut = gMax - designMin, needFill = designMax - gMin;
+            LastBudgetNote =
+                $"[수직 예산] 원지반 {gMin:F1}~{gMax:F1}m · 계획 {designMin:F1}~{designMax:F1}m" +
+                $" → 필요 절토 {needCut:F1}m / 성토 {needFill:F1}m · 실제 배정(양방향 공용) {maxRise:F1}m · 최대 {maxBenches}단" +
+                (System.Math.Min(needCut, needFill) > 0 &&
+                 System.Math.Max(needCut, needFill) > System.Math.Min(needCut, needFill) * 1.5
+                    ? $"  ⚠{(needCut > needFill ? "성토" : "절토")}가 예산의 " +
+                      $"{System.Math.Min(needCut, needFill) / System.Math.Max(maxRise, 1e-6) * 100:F0}%만 쓴다 — 나머지는 헛단"
+                    : "");
         }
         catch (System.Exception ex)
         {

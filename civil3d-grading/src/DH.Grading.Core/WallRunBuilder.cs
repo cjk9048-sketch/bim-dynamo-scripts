@@ -132,6 +132,13 @@ public static class WallRunBuilder
             if (segN < 2) { skipShort++; continue; }
             var segWall = new bool[segN];
             bool any = false;
+            // ★[감사 0807 — 성능] 아래 판정은 최근접점 자체가 아니라 **'한도 안인가'라는 불리언**만 쓴다.
+            //   종전엔 세그마다 NearestOn(토우 전수 스캔)을 1~3회 불러 O(링정점²)이 됐다
+            //   (성토 링 정점 3만이면 수억~수십억 회 — 정지면 생성이 여기서 멈춘 듯 느려진다).
+            //   두 선은 나란히 진행하므로 짝도 순서대로 움직인다 → **직전 자리 둘레부터** 보고
+            //   한도 안에 드는 변을 찾는 즉시 끝낸다. 못 찾으면 전수로 물러나므로 결과는 전과 같다.
+            //   0806에 코너스냅·정점끼워넣기는 같은 방식으로 고쳤는데 이 판정 루프만 남아 있었다.
+            int hintSeg = 0;
             for (int s = 0; s < segN; s++)
             {
                 var a = crest[s]; var b = crest[(s + 1) % m];
@@ -149,9 +156,9 @@ public static class WallRunBuilder
                 //   간격이 0.25m로 측정돼 '벽'으로 통과해 버린다(3점 전부).
                 //   벽면 변은 촘촘히 채워진 링에서 오므로 길이가 고르다 → **중앙값의 몇 배를 넘으면 구조적 점프**다.
                 segWall[s] = Dist2D(a, b) <= segLim
-                          && Dist2D(mid, NearestOn(toe, mid)) <= gapLim
-                          && Dist2D(a, NearestOn(toe, a)) <= endLim
-                          && Dist2D(b, NearestOn(toe, b)) <= endLim;
+                          && WithinOf(toe, mid, gapLim, ref hintSeg)
+                          && WithinOf(toe, a, endLim, ref hintSeg)
+                          && WithinOf(toe, b, endLim, ref hintSeg);
                 any |= segWall[s];
                 // 의도(구간 규칙)와 실제(링 모양)가 어긋나는지 세어 둔다 — 판정에는 쓰지 않는다.
                 checkedPts++;
@@ -724,6 +731,51 @@ public static class WallRunBuilder
             if (d < best) { best = d; bp = new Point3(px, py, a.Z + (b.Z - a.Z) * t); got = true; bestSeg = i; }
         }
         return got ? bp : NearestOn(line, q);
+    }
+
+    /// <summary>★[감사 0807] <paramref name="q"/>에서 <paramref name="line"/>까지의 거리가
+    /// <paramref name="lim"/> 이내인가 — <b>불리언만</b> 준다(최근접점은 안 구한다).
+    /// <para>
+    /// 판정용으로 <see cref="NearestOn"/>(전수 스캔)을 부르면 링 정점 수만 개에서 O(n²)이 된다.
+    /// 여기서는 ①직전에 맞았던 자리(<paramref name="hint"/>) 둘레부터 보고 ②한도 안인 변을 찾는 즉시 끝내며
+    /// ③축 방향으로 명백히 먼 변은 나눗셈 없이 걷어낸다. 못 찾으면 전수로 물러나므로
+    /// <b>결과는 전수 스캔과 완전히 같다</b>(불리언이라 최근접점 선택의 모호함도 없다).
+    /// </para></summary>
+    internal static bool WithinOf(IReadOnlyList<Point3> line, Point3 q, double lim, ref int hint)
+    {
+        int cnt = line?.Count ?? 0;
+        if (cnt == 0) return false;
+        bool dupEnd0 = cnt >= 2 && Dist2D(line[0], line[cnt - 1]) < 1e-9;
+        int segs = dupEnd0 ? cnt - 1 : cnt;
+        if (segs <= 0) return false;
+        double lim2 = lim * lim;
+
+        bool Hit(int i)
+        {
+            var a = line[i]; var b = line[(i + 1) % cnt];
+            // 축 방향 싼 거절 — 두 끝점이 같은 쪽으로 lim보다 멀면 변 전체가 멀다.
+            if ((a.X - q.X > lim && b.X - q.X > lim) || (q.X - a.X > lim && q.X - b.X > lim)) return false;
+            if ((a.Y - q.Y > lim && b.Y - q.Y > lim) || (q.Y - a.Y > lim && q.Y - b.Y > lim)) return false;
+            double dx = b.X - a.X, dy = b.Y - a.Y, L2 = dx * dx + dy * dy;
+            double t = L2 > 1e-12 ? ((q.X - a.X) * dx + (q.Y - a.Y) * dy) / L2 : 0;
+            t = System.Math.Clamp(t, 0, 1);
+            double px = a.X + dx * t - q.X, py = a.Y + dy * t - q.Y;
+            return px * px + py * py <= lim2;
+        }
+
+        int h = ((hint % segs) + segs) % segs;
+        for (int d = 0; d <= 64 && d < segs; d++)
+        {
+            int i1 = (h + d) % segs;
+            if (Hit(i1)) { hint = i1; return true; }
+            if (d > 0)
+            {
+                int i2 = ((h - d) % segs + segs) % segs;
+                if (Hit(i2)) { hint = i2; return true; }
+            }
+        }
+        for (int i = 0; i < segs; i++) if (Hit(i)) { hint = i; return true; }
+        return false;
     }
 
     internal static Point3 NearestOn(IReadOnlyList<Point3> line, Point3 q)

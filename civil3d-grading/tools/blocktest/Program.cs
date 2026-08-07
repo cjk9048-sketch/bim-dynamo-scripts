@@ -1260,14 +1260,21 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
     Check("S24 ★판넬이 전부 평면(코너 가로지름 없음)", maxPlaneErr < 1e-9, $"최대 평면이탈 {maxPlaneErr:E2}m");
 
     // ★ 실오라기 없음 — 균등 분배라 수 mm짜리 자투리 열/행이 생기면 안 된다(v17.8 '줄눈 1690'의 정체).
-    double minSide = double.MaxValue;
+    // [JACK 0807 계약 변경] **규격 판넬만** 잰다. 자투리·급커브는 이제 좁아도 되는 **전용 얇은 객체**이고
+    //   (JACK: "부족하면 얇은 거 전용객체 하나 만들어서 넣고"), 규격 판넬은 **언제나 정확히 한 변**이어야 한다.
+    //   그래서 검사도 종전('아무도 0.3m보다 좁지 않다')보다 **더 엄격**해진다 — 규격 판넬은 폭이 하나뿐이다.
+    double specMin = double.MaxValue, specMax = 0; int nSpec = 0, nFill = 0;
     foreach (var t in t1)
     {
         double mnU = double.MaxValue, mxU = double.MinValue;
         foreach (var (u, v) in t.Local) { mnU = Math.Min(mnU, u); mxU = Math.Max(mxU, u); }
-        minSide = Math.Min(minSide, mxU - mnU);
+        if (t.Filler) { nFill++; continue; }
+        nSpec++;
+        specMin = Math.Min(specMin, mxU - mnU); specMax = Math.Max(specMax, mxU - mnU);
     }
-    Check("S24 ★자투리 실오라기 열 없음(균등 분배)", minSide > 0.3, $"최소 열 폭 {minSide:F3}m");
+    Check("S24 ★규격 판넬은 폭이 전부 같다(자투리는 전용객체로 뺀다)",
+        nSpec > 0 && specMax - specMin < 0.01,
+        $"규격 {nSpec}장 폭 {specMin:F3}~{specMax:F3}m · 전용객체 {nFill}장");
 
     // (B) 경사 지반 — 데이라잇 위로는 벽이 없어야 한다.
     var gnd24 = new SlopeGround(100.0, 0.15);   // z = 100 + 0.15x → x=20에서 103
@@ -1371,8 +1378,13 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
     {
         // ※'온전(IsFull)'로 세면 안 된다 — 귀퉁이만 잘린 5각형도 도넛이 안에 들어가면 온전이다.
         //   정점 수로만 센다.
+        // [0807] 지반을 **물결**로 준다. 평면 지반에서는 데이라잇선이 직선이라, 판넬 폭이 규격으로 통일된 뒤
+        //   상한이 열 경계와 나란히 떨어지면 5각이 한 장도 안 나올 수 있다 — 능력이 없어서가 아니라
+        //   **시나리오가 그 능력을 안 밟는** 것이다. 물결 지반이면 상한이 열 한가운데를 반드시 가로지른다.
+        //   ('항상 통과하는 검사'만 문제가 아니다 — '조건이 안 걸려 실패하는 검사'도 똑같이 거짓말이다.)
+        var t2w = WallBand.Slice(run1, new WavyGround(102.5, 1.2, 3.0), joint: 0.05);
         int quad = 0, penta = 0, more = 0;
-        foreach (var t in t2)
+        foreach (var t in t2w)
         {
             int n = t.Local.Count;
             if (n <= 4) quad++; else if (n == 5) penta++; else more++;
@@ -1499,6 +1511,10 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
         double worst = 0;
         foreach (var t in tt)
         {
+            // [JACK 0807] **규격 판넬만** 잰다. 전용 얇은 객체는 코너·급커브의 남는 자리를 메우려고
+            //   일부러 놓는 것이라, 벽선에서 벗어난 양을 '이탈'로 세면 두 성질이 뒤섞인다
+            //   (겹침을 끄고 재던 종전 이유와 같다 — 이제 겹침 자리를 전용객체가 물려받았을 뿐이다).
+            if (t.Filler) continue;
             double mnV = double.MaxValue;
             foreach (var (u, v) in t.Local) mnV = Math.Min(mnV, v);
             if (mnV > 0.05) continue;                       // 맨 아랫행이 아니면 건너뜀
@@ -1517,14 +1533,23 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
     double drift = ToeDrift(t1NoLap, toe1);
     Check("S24 ★판넬이 벽선을 따라간다(코너 질러감 없음)", drift < 0.05, $"겹침 OFF · 아랫변 최대 이탈 {drift:F4}m");
 
-    // ★ 모서리 겹침이 실제로 코너를 메운다 — 벽면 끝 열이 겹침 길이만큼 더 나가야 한다(JACK '각진부 마감').
-    double driftLap = ToeDrift(t1, toe1);
+    // ★★[JACK 0807 계약 변경] **모서리 겹침 폐지 — 코너는 전용 얇은 객체가 메운다.**
+    //   0806에 겹침을 네 번 고쳐 네 번 실패했고(오목 확대 3회·볼록 확대 1회), 결론은 매번 같았다:
+    //   *판넬을 늘려서는 코너를 못 메운다.* JACK 0807이 그 결론을 원칙으로 정리했다.
+    //   그러니 검사도 '겹침이 얼마나 나갔나'가 아니라 **'코너에 구멍이 남았나'**를 봐야 한다.
+    var t1Fill = new List<WallBand.Tile>(t1);
+    int q24 = 0;   // [JACK 0807] 틈 메우기 폐지 — 코너 쐐기는 코너 필러(Slice 내부)가 이미 세운다
+    string gr24 = WallBand.GapReport(t1Fill);
+    Check("S24 ★코너 틈을 전용 얇은 객체가 메운다(판넬을 늘리지 않는다)",
+        !gr24.Contains("★양옆 온전"), $"전용객체 {q24}개 · {gr24}");
+    double driftLap = ToeDrift(t1NoLap, toe1);
     // ★[0806] 하한을 0.08 → 0.06으로 내린다. 판넬이 사다리꼴이 되면서 **아랫변이 코너에서 정확히 끝나고**
     //   거기서 겹침 0.10m만 U 방향으로 더 나간다. 직각 코너면 그 0.10m의 **토우선까지 수직거리는
     //   0.10×sin45° ≈ 0.071m**다. 종전 0.08 하한은 아랫변이 코너를 지나쳐 나가던 시절의 값이라
     //   지금 기준으로는 '겹침이 없어야 통과'하는 셈이 된다 — 고쳐야 할 건 코드가 아니라 이 숫자다.
-    Check("S24 ★모서리 겹침이 코너를 메운다", driftLap > 0.06 && driftLap < 0.18,
-        $"겹침 ON · 아랫변 최대 이탈 {driftLap:F3}m (겹침 0.10m · 직각이면 수직거리 0.071m · 선추종 {drift:F3}m)");
+    //   [0807] 겹침이 없어졌으므로 판넬은 **언제나** 벽선을 따라간다 — 위 '선추종' 검사와 같은 값이어야 한다.
+    Check("S24 ★겹침이 없어 판넬이 벽선 밖으로 안 나간다", driftLap < 0.05,
+        $"아랫변 최대 이탈 {driftLap:F3}m (겹침 폐지 — 코너는 전용객체 담당)");
 
     // (C) ★자체검증 — 코너 분할을 끄면(임계 179°) 판넬이 코너를 가로질러 벽선에서 벗어나야 한다.
     //   '항상 통과하는 검사는 검사가 아니다'(0805).
@@ -1994,14 +2019,51 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
 
     // ★지반이 벽보다 높아도(=아래쪽이 묻혀도) **끊지 않는다** — 묻히는 부분은 InfraWorks에서 가려진다.
     //   종전엔 여기서 0장이 되어, 전이 구간의 벽이 통째로 사라지는 원인이 됐다.
-    var tFb = WallBand.Slice(runF, new FlatGround(110.0), joint: 0.05);  // 지반 110 — 벽이 통째로 매몰
-    Check("S26 ★매몰돼도 성토 벽은 그대로 선다(자르지 않음)", tFb.Count == tF.Count,
-        $"매몰 {tFb.Count}장 vs 노출 {tF.Count}장 — 같아야 한다");
+    // ★★[JACK 0807 스샷 '성토부는 2단인데 3단까지 생긴다'] 성토 벽면은 **지반선에서 아래가 잘린다.**
+    //   0806~0807에 '한 단을 통째로 살릴까 버릴까'로 두 번 실패했다 — 버리면 13m 구멍, 살리면 한 단이 매달린다.
+    //   아래 세 검사는 그 규칙이 **세 자리에서 동시에** 옳은지 본다. 하나라도 빠지면 옛 실패로 되돌아간다.
 
-    // ★전이 구간(지반이 벽 중간을 가로지름)에서도 뚝 끊기지 않아야 한다 — '옹벽누락부'의 재현 조건.
+    // ① 벽면이 지반보다 통째로 위면 자를 것이 없다(=위 tF와 같다) — 전형적 성토.
+    //    (지반 103 = 토우 100 위 3m · 크레스트 105 아래 → 아래 3m만 잘리는 경우는 ③에서 본다)
+
+    // ② 크레스트마저 잠기면 **그 단은 애초에 안 생긴다** — 3단이 매달리던 자리.
+    var tFd = WallBand.Slice(runF, new FlatGround(110.0), joint: 0.05);   // 지반 110 > 크레스트 105
+    Check("S26 ★★잠긴 단은 아예 안 생긴다(스샷 '3단까지 생김'의 자리)",
+        tFd.Count == 0, $"매몰 {tFd.Count}장 — 0이어야 한다 · {WallBand.LastDiag}");
+
+    // ③ 지반선이 벽면을 **가로지르면** 그만큼만 남는다 — 통째로 버리지도(13m 구멍), 통째로 살리지도 않는다.
+    //    지반 103 → 토우(100)에서 3m 위가 지반선. 노출은 위 2m뿐이므로 판넬이 **나오되 줄어야** 한다.
+    var tFc = WallBand.Slice(runF, new FlatGround(103.0), joint: 0.05);
+    double loV = double.MaxValue;
+    foreach (var t in tFc) foreach (var (_, lv) in t.Local) loV = Math.Min(loV, lv);
+    Check("S26 ★★지반선이 가로지르면 그 위만 남는다(뚝 끊기지도, 통째로 매달리지도 않는다)",
+        tFc.Count > 0 && tFc.Count < tF.Count && loV > 2.9,
+        $"판넬 {tFc.Count}장(전체 {tF.Count}장) · 최저 v {loV:F2}m — 지반선 3.0m 위여야 한다");
+
+    // ★전이 구간(지반이 벽 중간을 가로지름)에서도 뚝 끊기지 않아야 한다 — '옹벽누락부'(0806 13m)의 재현 조건.
+    //   [0807 계약 수정] 종전 검사는 '노출 때와 **판넬 수가 같아야** 한다'였다. 그건 '아예 안 자른다'는
+    //   옛 규칙의 자였고, 그 규칙이 이번엔 반대쪽 결함(3단 매달림)을 만들었다. 지금 지켜야 할 것은
+    //   '수가 같다'가 아니라 **'중간에 구멍이 없다'** 이므로, 그것을 직접 잰다 —
+    //   벽이 x=0에서 시작해 지반선이 크레스트를 넘는 자리(x=15)까지 **끊김 없이** 이어지는가.
     var tFm = WallBand.Slice(runF, new SlopeGround(96.0, 0.6), joint: 0.05);   // x=0에서 96 → x=20에서 108
-    Check("S26 ★전이 구간에서도 성토 벽이 안 끊긴다", tFm.Count == tF.Count,
-        $"전이 {tFm.Count}장 vs 노출 {tF.Count}장 — 같아야 한다(끊기면 여기서 갈린다)");
+    var spans = new List<(double A, double B)>();
+    foreach (var t in tFm)
+    {
+        double xa = double.MaxValue, xb = double.MinValue;
+        foreach (var p in t.Poly) { xa = Math.Min(xa, p.X); xb = Math.Max(xb, p.X); }
+        spans.Add((xa, xb));
+    }
+    spans.Sort((p, q) => p.A.CompareTo(q.A));
+    double covFrom = spans.Count > 0 ? spans[0].A : 0, covTo = covFrom, maxGap = 0, gapAt = 0;
+    foreach (var (a, b) in spans)
+    {
+        if (a > covTo + 1e-9 && a - covTo > maxGap) { maxGap = a - covTo; gapAt = covTo; }
+        covTo = Math.Max(covTo, b);
+    }
+    // 지반이 크레스트(105)를 넘는 자리 = 96+0.6x=105 → x=15. 그 앞에서 벽이 사라지면 그게 '누락부'다.
+    Check("S26 ★전이 구간에서 성토 벽이 안 끊긴다(수가 아니라 '구멍'을 잰다)",
+        maxGap < 0.15 && covFrom < 0.2 && covTo > 13.5,
+        $"덮은 구간 x {covFrom:F2}~{covTo:F2}m(지반선 교차 15.0m) · 최대 틈 {maxGap:F2}m @ x{gapAt:F1} · 판넬 {tFm.Count}장");
 
     // 같은 형상을 절토로 주면 절토 규칙이 그대로 적용돼야 한다(성토 분기가 절토를 오염시키지 않는지).
     var runC2 = new WallRun { Up = true, Bench = 0, Toe = toeF, Crest = crestF, Height = 5.0 };
@@ -2241,12 +2303,82 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
         var cavT = t30.Where(t => !WallBand.IsConvex(t.Local)).ToList();
         Console.WriteLine($"      S30 실제 Slice: 판넬 {t30.Count}장 중 오목 {cavT.Count}장 · {WallBand.LastDiag}");
         int bad = 0; double worst = 0;
+        // ★[JACK 0807 '사선으로 잘린 문양'] **조각 수 = 무늬에 생기는 이음매 수**다.
+        //   오목 판넬 하나를 볼록 조각 k개로 쪼개면 무늬 사각형도 그만큼 잘려 부챗살처럼 보인다.
+        //   그러니 감시할 값은 '오목 판넬이 몇 장이냐'가 아니라 **한 판넬이 몇 조각으로 쪼개지냐**다.
+        int pieceMax = 0, pieceSum = 0;
         foreach (var t in cavT)
         {
             var q = WallBand.ConvexPieces(t.Local);
             double d = Math.Abs(q.Sum(WallBand.PolyArea) - WallBand.PolyArea(t.Local));
             if (q.Count == 0 || !q.All(WallBand.IsConvex) || d > 1e-9) bad++;
             worst = Math.Max(worst, d);
+            pieceMax = Math.Max(pieceMax, q.Count); pieceSum += q.Count;
+        }
+        Console.WriteLine($"      S30 볼록 조각(=무늬 이음매): 최대 {pieceMax}조각 · 합계 {pieceSum}개 (오목 {cavT.Count}장)");
+
+        // ★★[JACK 0807 '잘린 걸 최종 단계에서 무늬에 한해서만 서로 붙은 객체는 합친다'] **이음매가 안 생기는가.**
+        //   무늬 사각형 하나를 판넬로 자를 때 조각이 **1개**로 나와야 도면에 사선 이음매가 없다.
+        //   종전엔 판넬을 볼록 조각으로 쪼개 창으로 삼아 조각 수만큼 잘렸다(JACK 스샷의 부챗살).
+        //   ※JACK 지적대로 이 방식이 정점 정리 허용오차를 올리는 것보다 **번지는 범위가 작다** —
+        //     허용오차는 판넬 모양 자체를 부지 전체에서 바꾸지만, 이건 무늬에만 닿고 실패해도 종전으로 물러난다.
+        {
+            int one = 0, many = 0, maxPc = 0;
+            foreach (var t in cavT)                                  // 오목한(=종전에 쪼개지던) 판넬만
+            {
+                double u0 = double.MaxValue, u1 = double.MinValue, v0 = double.MaxValue, v1 = double.MinValue;
+                foreach (var (u, v) in t.Local) { u0 = Math.Min(u0, u); u1 = Math.Max(u1, u); v0 = Math.Min(v0, v); v1 = Math.Max(v1, v); }
+                // 십자 4분할과 같은 자리 — 판넬을 네 조각으로 나누는 사각형들.
+                double mu = (u0 + u1) / 2, mv = (v0 + v1) / 2;
+                foreach (var r in new[] { (u0, mu, v0, mv), (mu, u1, v0, mv), (u0, mu, mv, v1), (mu, u1, mv, v1) })
+                {
+                    var rcPcs = WallBand.RectClip(t.Local, r.Item1, r.Item2, r.Item3, r.Item4, out bool okOne);
+                    if (rcPcs.Count == 0) continue;
+                    if (okOne && rcPcs.Count == 1) one++; else many++;
+                    maxPc = Math.Max(maxPc, rcPcs.Count);
+                    foreach (var pc in rcPcs)
+                        if (!WallBand.IsSimple(pc))
+                            { many += 1000; break; }                 // 자기교차가 나오면 압출이 115094로 터진다
+                }
+            }
+            Console.WriteLine($"      S30 무늬 클립: 한장 {one}회 · 이음매분할 {many}회 · 최대 {maxPc}조각 (오목 판넬 {cavT.Count}장)");
+            Check("S30 ★★무늬가 이음매 없이 한 장으로 잘린다(부챗살 없음)", one > 0 && many == 0,
+                $"한장 {one}회 · 분할 {many}회 · 최대 {maxPc}조각");
+        }
+
+        // ★★[JACK 0807 '사선으로 잘린 문양'] **현장 조건으로 판정한다.**
+        //   위 S30 지형은 진폭 1.2m 사인파 — 오목 판넬을 억지로 만들려고 일부러 심하게 휜 것이라
+        //   거기서는 조각이 5개까지 나오는 게 당연하다(진짜로 휘었으니 쪼개는 게 옳다).
+        //   현장 원지반은 **삼각망**이라 삼각형 하나가 수 m다 — 1.6m 판넬 위에서는 사실상 평면이고,
+        //   '오목'의 정체는 데이라잇을 0.15m 간격으로 훑을 때 생기는 **mm급 표본 잡음**이다.
+        //   그 조건을 여기 만든다: 기울어진 평면 + 진폭 2mm 고주파 잡음.
+        //   정점 정리 허용오차(8mm)가 잡음을 펴 주면 판넬이 **볼록 하나**로 남아 이음매가 아예 안 생긴다.
+        {
+            var gNoise = new NoisyPlaneGround(103.0, 0.06, 0.002);
+            var tN = WallBand.Slice(new WallRun { Up = true, Bench = 0, Toe = toe30, Crest = cr30, Height = 5.0 },
+                                    gNoise, joint: 0.05);
+            var cavN = tN.Where(t => !WallBand.IsConvex(t.Local)).ToList();
+            // [JACK 0807] 정점 정리 허용오차를 올리는 길은 **폐기**했다 — 판넬 모양 자체를 부지 전체에서
+            //   바꾸므로 번지는 범위가 크다는 JACK 지적이 옳았다. 오목 판넬은 그대로 두고(모양은 정확),
+            //   **무늬 클립만** 한 장으로 자른다. 그러니 여기서 볼 것은 '오목이 없는가'가 아니라
+            //   **'오목이어도 무늬가 한 장으로 나오는가'** 다.
+            int oneN = 0, manyN = 0;
+            foreach (var t in cavN)
+            {
+                double u0 = double.MaxValue, u1 = double.MinValue, v0 = double.MaxValue, v1 = double.MinValue;
+                foreach (var (u, v) in t.Local) { u0 = Math.Min(u0, u); u1 = Math.Max(u1, u); v0 = Math.Min(v0, v); v1 = Math.Max(v1, v); }
+                double mu = (u0 + u1) / 2, mv = (v0 + v1) / 2;
+                foreach (var r in new[] { (u0, mu, v0, mv), (mu, u1, v0, mv), (u0, mu, mv, v1), (mu, u1, mv, v1) })
+                {
+                    var q = WallBand.RectClip(t.Local, r.Item1, r.Item2, r.Item3, r.Item4, out bool ok1);
+                    if (q.Count == 0) continue;
+                    if (ok1 && q.Count == 1 && WallBand.IsSimple(q[0])) oneN++; else manyN++;
+                }
+            }
+            Console.WriteLine($"      S30 현장형(평면+2mm 잡음): 판넬 {tN.Count}장 중 오목 {cavN.Count}장 · 무늬 한장 {oneN}회/분할 {manyN}회");
+            Check("S30 ★★현장형 지형에서도 무늬가 한 장으로 잘린다(이음매 없음)",
+                tN.Count > 10 && oneN > 0 && manyN == 0,
+                $"판넬 {tN.Count}장 · 오목 {cavN.Count}장 · 한장 {oneN}회 · 분할 {manyN}회");
         }
         Check("S30 ★실제 데이라잇 오목 판넬도 전부 볼록 분해된다", cavT.Count > 0 && bad == 0,
             $"오목 {cavT.Count}장 · 실패 {bad}장 · 최대 면적차 {worst:E1}㎡");
@@ -2433,8 +2565,22 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
     try { tBad = WallBand.Slice(run34, null, joint: 0.05); }
     finally { WallBand.DisableShortFaceMergeForTest = false; }
     double mnBad = MinColW(tBad);
-    Check("S34 재현 조건: 합치기를 끄면 토막 벽면이 그대로 판넬이 된다", facesBad.Count >= 3 && mnBad < side34 * 0.5,
-        $"벽면 {facesBad.Count}개 · 최소 판넬폭 {mnBad:F3}m (설계 {side34:F2}m)");
+    // ★★[JACK 0807 계약 변경] **짧은 벽면 합치기 폐지.**
+    //   합치면 그 벽면 안에 코너가 들어가고, 규격 판넬이 코너를 가로질러 아랫변이 벽선에서 벗어난다
+    //   (하니스 실측 0.235m — 판넬 두께 0.20m보다 크다. 0806에 JACK이 지적한 '어긋남'이 이것이었다).
+    //   이제 6cm 토막은 합치지 않고 **전용 얇은 객체**가 된다 — 1.67m 판넬들 사이에 6cm '판넬'이 서던 문제는
+    //   폭을 맞춰서가 아니라 **그것을 판넬이라고 부르지 않음으로써** 사라진다(JACK 0807 원칙).
+    //   그러니 검사할 것은 '토막이 합쳐졌나'가 아니라 **'토막이 규격 판넬로 서지 않았나'**다.
+    int shortAsPanel = 0;
+    foreach (var t in tBad)
+    {
+        if (t.Filler) continue;
+        double lo = double.MaxValue, hi = double.MinValue;
+        foreach (var (u, v) in t.Local) { lo = Math.Min(lo, u); hi = Math.Max(hi, u); }
+        if (hi - lo < side34 * 0.5) shortAsPanel++;
+    }
+    Check("S34 ★6cm 토막 벽면이 '규격 판넬'로 서지 않는다(전용객체로 간다)", shortAsPanel == 0,
+        $"벽면 {facesBad.Count}개 · 규격 판넬인데 좁은 것 {shortAsPanel}장 · 최소폭(전용객체 포함) {mnBad:F3}m");
 
     var faces34 = WallBand.SplitAtCorners(cr34, 12.0, WallBand.MinFaceLenFor(side34));
     var t34 = WallBand.Slice(run34, null, joint: 0.05);
@@ -2496,10 +2642,26 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
         // 끝에서만 조절하므로 좁은 열은 최대 2열(자투리가 짧아 마지막 두 장을 반씩 나눈 경우).
         Check($"S35 ★길이 {L}m — 규격보다 좁은 판넬은 끝의 1~2열뿐", w.NonStd <= 2 * rows,
             $"규격 미만 {w.NonStd}장(한 열 = {rows}장) · 폭 {w.Min:F3}~{w.Max:F3}m");
-        Check($"S35 ★길이 {L}m — 규격 판넬은 정확히 {std:F2}m(상한 초과 없음)", w.Max <= std + 1e-6,
-            $"최대 폭 {w.Max:F3}m / 규격 {std:F3}m");
-        Check($"S35 ★길이 {L}m — 자투리도 한 변 절반 이상", w.Min >= side35 * 0.5 - 0.05 - 1e-6,
-            $"최소 폭 {w.Min:F3}m / 하한 {side35 * 0.5 - 0.05:F3}m");
+        // [JACK 0807] **규격 판넬만** 잰다. 짧은 자투리는 앞 조각과 합쳐 하나의 전용객체가 되므로
+        //   그 조각만 규격보다 넓을 수 있다(≤ 한 변 + 0.10m) — 그게 '구멍 대신 조금 넓은 조각'을 고른 결과다.
+        double specMax35 = 0; int specN35 = 0;
+        foreach (var t in t35)
+        {
+            if (t.Filler) continue;
+            double lo = double.MaxValue, hi = double.MinValue;
+            foreach (var (u, v) in t.Local) { lo = Math.Min(lo, u); hi = Math.Max(hi, u); }
+            specMax35 = Math.Max(specMax35, hi - lo); specN35++;
+        }
+        Check($"S35 ★길이 {L}m — 규격 판넬은 정확히 {std:F2}m(상한 초과 없음)", specMax35 <= std + 1e-6,
+            $"규격 판넬 {specN35}장 최대 폭 {specMax35:F3}m / 규격 {std:F3}m (전용객체 제외)");
+        // ★[JACK 0807 계약 변경] 자투리 하한 폐지. 종전엔 마지막 두 장을 반씩 나눠 둘 다 '한 변 절반 이상'으로
+        //   맞췄는데, 그러면 **판넬 두 장이 비규격**이 된다 — JACK이 금지한 '제각각 폭'이 바로 이것이다.
+        //   이제 자투리는 폭이 얼마든 상관없는 **전용 얇은 객체 한 개**이고, 규격 판넬은 전부 정확히 규격이다.
+        //   그래서 검사할 것은 '자투리가 얼마나 넓은가'가 아니라 **'전용객체가 딱 하나인가'**다.
+        int fill35 = 0; foreach (var t in t35) if (t.Filler) fill35++;
+        int rowsPer = Math.Max(1, rows);
+        Check($"S35 ★길이 {L}m — 전용 얇은 객체는 끝의 한 열뿐", fill35 <= rowsPer,
+            $"전용객체 {fill35}장(한 열 = {rowsPer}장) · 규격 판넬 {w.N - fill35}장");
     }
 }
 
@@ -2532,8 +2694,33 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
     WallBand.ResetTotals();
     var t36 = new List<WallBand.Tile>();
     foreach (var r in runs36) t36.AddRange(WallBand.Slice(r, gnd36, joint: 0.05));
-    Console.WriteLine($"      S36 전체: {WallBand.TotalDiag}");
+    // [JACK 0807] 전 줄을 다 자른 뒤 남은 틈을 전용 얇은 객체로 메운다 — 운영 경로(DHINFRA)와 같은 순서.
+    int gf36 = WallBand.AddGapFillers(t36, cornerOnly: true);   // [JACK 0807] 코너 쐐기만 — 벽 한가운데는 안 메운다
+    Console.WriteLine($"      S36 전체: {WallBand.TotalDiag} · 틈메움 {gf36}개");
     Console.WriteLine($"      S36 틈  : {WallBand.GapReport(t36)}");
+    // ★[0807] 가장 큰 진짜 구멍 자리(10,13 부근)의 **판넬 실물**을 찍는다 — 폭·분류·양 끝 좌표.
+    //   '코너에서 1.7m 떨어진 0.35m 틈'이 무엇과 무엇 사이인지는 좌표를 봐야만 갈린다.
+    {
+        double gx = 10.0, gy = 13.0;
+        var near = new List<(double D, string S)>();
+        foreach (var t in t36)
+        {
+            double u0 = double.MaxValue, u1 = double.MinValue, v0 = double.MaxValue, v1 = double.MinValue;
+            foreach (var (u, v) in t.Local) { u0 = Math.Min(u0, u); u1 = Math.Max(u1, u); v0 = Math.Min(v0, v); v1 = Math.Max(v1, v); }
+            if (v0 > 0.05) continue;                       // 맨 아랫행만
+            double lx = t.Origin.X + u0 * t.UAxis.x, ly = t.Origin.Y + u0 * t.UAxis.y;
+            double rx = t.Origin.X + u1 * t.UAxis.x, ry = t.Origin.Y + u1 * t.UAxis.y;
+            double d = Math.Min(Math.Sqrt((lx-gx)*(lx-gx)+(ly-gy)*(ly-gy)), Math.Sqrt((rx-gx)*(rx-gx)+(ry-gy)*(ry-gy)));
+            if (d > 2.5) continue;
+            near.Add((d, $"폭{u1-u0:F3} {(t.Filler ? "필러" : "규격")}{(t.Detail ? "+LOD" : "")} 좌({lx:F2},{ly:F2}) 우({rx:F2},{ry:F2}) U({t.UAxis.x:F2},{t.UAxis.y:F2})"));
+        }
+        near.Sort((a, b) => a.D.CompareTo(b.D));
+        Console.WriteLine($"      S36 구멍(10,13) 주변 아랫행 판넬 {near.Count}장:");
+        foreach (var n in near.Take(8)) Console.WriteLine($"        {n.D:F2}m  {n.S}");
+        Console.WriteLine($"      S36 그 자리 코너필러 {WallBand.LastQuoins.Count(q => Math.Sqrt((q.Toe.X-gx)*(q.Toe.X-gx)+(q.Toe.Y-gy)*(q.Toe.Y-gy)) < 3.0)}개 / 전체 {WallBand.LastQuoins.Count}개");
+        foreach (var q in WallBand.LastQuoins.Where(q => Math.Sqrt((q.Toe.X-gx)*(q.Toe.X-gx)+(q.Toe.Y-gy)*(q.Toe.Y-gy)) < 3.0).Take(4))
+            Console.WriteLine($"        필러 폭{q.Width:F3} 토우({q.Toe.X:F2},{q.Toe.Y:F2},{q.Toe.Z:F1})");
+    }
     Check("S36 재현 조건: 판넬이 충분히 나온다(코너가 여럿 포함될 만큼)", t36.Count > 30, $"{t36.Count}장");
 
     // ★핵심 판정 — 양옆이 온전한데 벌어진 자리(=진짜 구멍)가 있으면 재현된 것이다.
@@ -2628,6 +2815,9 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
         {
             // ★아랫변은 **v가 가장 낮은 정점들**로 잡아야 한다. u 범위 전체를 쓰면 윗변이 더 넓은
             //   사다리꼴에서 있지도 않은 아랫변을 재게 된다(내 첫 측정이 그래서 사다리꼴 수정을 못 읽었다).
+            // [JACK 0807] **규격 판넬만** 잰다 — 전용 얇은 객체(코너·급커브·자투리)는 남는 자리를 메우려고
+            //   일부러 놓는 것이라 벽선을 그대로 따라가지 않는다. 섞어 재면 두 성질이 한 숫자로 뭉개진다.
+            if (t.Filler) continue;
             double v0 = double.MaxValue;
             foreach (var (u, v) in t.Local) v0 = Math.Min(v0, v);
             // ★[0806] **맨 아랫행만** 본다. 벽이 1:0.05로 기울어 윗행은 원래 토우선에서 떨어져 있으므로
@@ -2794,9 +2984,19 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
     WallBand.ResetTotals();
     var tF2 = new List<WallBand.Tile>();
     foreach (var r in runsF2) tF2.AddRange(WallBand.Slice(r, gndF2, joint: 0.05));
+    int gfF2 = WallBand.AddGapFillers(tF2, cornerOnly: true);
     string grF2 = WallBand.GapReport(tF2);
     Console.WriteLine($"      S38 성토 전체: {WallBand.TotalDiag}");
     Console.WriteLine($"      S38 성토 틈: {grF2}");
+    // ★[0807] 남은 진짜 구멍(볼록 코너 0.3m 옆)에 **코너 필러가 실제로 서 있는지** 확인 —
+    //   '만들라고 지시했다'와 '섰다'는 다르다(0807에 56개 전부 실패한 전례가 있다).
+    foreach (var (gx, gy) in new[] { (10.0, 11.0), (7.0, 12.0) })
+    {
+        var qs = WallBand.LastQuoins.Where(q =>
+            Math.Sqrt((q.Toe.X - gx) * (q.Toe.X - gx) + (q.Toe.Y - gy) * (q.Toe.Y - gy)) < 2.0).ToList();
+        Console.WriteLine($"      S38 구멍({gx},{gy}) 반경 2m 코너필러 {qs.Count}개" +
+            string.Join("", qs.Take(3).Select(q => $" [폭{q.Width:F3} 토우({q.Toe.X:F2},{q.Toe.Y:F2},{q.Toe.Z:F1})]")));
+    }
     Check("S38 재현 조건: 성토도 판넬이 충분히 나온다", tF2.Count > 30, $"{tF2.Count}장");
 
     int holeF = 0;
@@ -2805,9 +3005,11 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
     Check("S38 ★성토 오목부에도 진짜 구멍이 없다", holeF == 0, $"진짜 구멍 {holeF}곳");
 
     // ★코너 판정이 성토에서 뒤집히지 않았는가 — 뒤집혔다면 겹침을 반대 자리에 넣어 밑동이 어긋난다.
-    double offF = 0; double ofx = 0, ofy = 0;
+    double offF = 0; double ofx = 0, ofy = 0; string offWho = "";
     foreach (var t in tF2)
     {
+        // [JACK 0807] 규격 판넬만 — 전용 얇은 객체는 코너·급커브의 남는 자리를 메우려고 일부러 놓는다.
+        if (t.Filler) continue;
         double v0 = double.MaxValue;
         foreach (var (u, v) in t.Local) v0 = Math.Min(v0, v);
         if (v0 > 0.05) continue;                                  // 맨 아랫행만(윗행은 기울기 때문에 원래 떨어져 있다)
@@ -2830,10 +3032,15 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
                     double d = Math.Sqrt((px-qx)*(px-qx)+(py-qy)*(py-qy));
                     if (d < best) best = d;
                 }
-            if (best > offF) { offF = best; ofx = px; ofy = py; }
+            if (best > offF)
+            {
+                offF = best; ofx = px; ofy = py;
+                // [0807] 어긋난 판넬의 정체 — 폭·원점·단. 숫자만 보고 원인을 추측하다 두 번 헛짚었다.
+                offWho = $"폭 {u1 - u0:F3}m 원점({t.Origin.X:F2},{t.Origin.Y:F2}) 단{t.Bench} 행{t.Row}";
+            }
         }
     }
-    Console.WriteLine($"      S38 성토 판넬 아랫변↔토우선 최대 이탈: {offF:F3}m @ {ofx:F1},{ofy:F1}");
+    Console.WriteLine($"      S38 성토 판넬 아랫변↔토우선 최대 이탈: {offF:F3}m @ {ofx:F1},{ofy:F1} · {offWho}");
     // ★그 자리의 판넬과 토우선을 찍는다 — 0.251m ≈ 토우↔크레스트 간격(0.25m)이라 '한 선만큼 밀림'이 의심된다.
     {
         // ★남은 틈 자리(볼록 100° 코너 @ 8,22 Z94.2)의 판넬을 **표고까지 맞춰** 찍는다 — 쐐기 모양 확인용.
@@ -3024,6 +3231,313 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     }
     catch (Exception ex) { err = ex.Message; return null; }
 }
+// ★ S39 [JACK 0807 '왜 어딘 폭이 좁고 어딘 넓냐 · 최대한 심플하게'] **라운드 코너 옹벽선.**
+//   여태 하니스 부지는 전부 각진 다각형이라, 폭이 들쭉날쭉해지는 두 규칙(12° 벽면 분할 · 5cm 현이탈 분할)이
+//   **한 번도 제대로 안 밟혔다.** 현장은 사면형상이 라운드라 옹벽선에 원호가 들어 있고, 거기서 두 규칙이
+//   미친 듯이 일한다(현장 실측: 벽면 570개 · 급커브 분할 396열). 그 조건을 여기 만든다 —
+//   이게 있어야 '상수를 풀어도 되는가'를 JACK 왕복 없이 판정할 수 있다(작업규칙 0806).
+{
+    // 직선 20m → 반지름 3m 90° 원호(8조각 = 11.25°씩, NTS Buffer 라운드 모서리와 같은 분해능) → 직선 20m
+    var crest = new List<Point3>();
+    for (double x = 0; x <= 20.0 + 1e-9; x += 1.0) crest.Add(new Point3(x, 0, 105));
+    for (int k = 1; k <= 8; k++)
+    {
+        double a = -Math.PI / 2 + k * (Math.PI / 2) / 8;
+        crest.Add(new Point3(20.0 + 3.0 * Math.Cos(a), 3.0 + 3.0 * Math.Sin(a), 105));
+    }
+    for (double y = 4.0; y <= 23.0 + 1e-9; y += 1.0) crest.Add(new Point3(23.0, y, 105));
+
+    // 토우 = 크레스트를 바깥 법선으로 0.25m 민 선(벽 1:0.05 × 단높이 5m) · Z −5.
+    var toe = new List<Point3>();
+    for (int i = 0; i < crest.Count; i++)
+    {
+        double nx = 0, ny = 0;
+        for (int e = 0; e < 2; e++)
+        {
+            int a2 = e == 0 ? i - 1 : i, b2 = e == 0 ? i : i + 1;
+            if (a2 < 0 || b2 >= crest.Count) continue;
+            double dx = crest[b2].X - crest[a2].X, dy = crest[b2].Y - crest[a2].Y;
+            double l = Math.Sqrt(dx * dx + dy * dy);
+            if (l < 1e-9) continue;
+            nx += dy / l; ny += -dx / l;                       // 오른쪽 법선
+        }
+        double nl = Math.Sqrt(nx * nx + ny * ny);
+        if (nl < 1e-9) { nx = 0; ny = -1; nl = 1; }
+        toe.Add(new Point3(crest[i].X + 0.25 * nx / nl, crest[i].Y + 0.25 * ny / nl, 100));
+    }
+
+    var runR = new WallRun { Up = true, Bench = 0, Toe = toe, Crest = crest, Height = 5.0 };
+    var tR = WallBand.Slice(runR, new FlatGround(200.0), joint: 0.05);   // 지반 높음 → 벽 전체가 살아 있음
+
+    Console.WriteLine($"      S39 라운드 코너: {WallBand.LastDiag}");
+    Console.WriteLine($"      S39 틈: {WallBand.GapReport(tR, runs: new List<WallRun> { runR })}");
+
+    Check("S39 재현 조건: 라운드 코너 옹벽선에서 판넬이 나온다", tR.Count > 20, $"판넬 {tR.Count}장");
+
+    // ★이 검사가 이 시나리오의 핵심 — 원호 위에서 **폭이 통일되는가**.
+    //   현장 불만('어딘 좁고 어딘 넓고')을 숫자 하나로 옮긴 것이다. 규격(1.67m) 미만 열이
+    //   벽면 끝 자투리 몇 개 수준이면 정상이고, 열의 절반을 넘으면 규칙이 과민한 것이다.
+    int narrow = 0, wide = 0;
+    var seen = new HashSet<string>();
+    foreach (var t in tR)
+    {
+        double u0 = double.MaxValue, u1 = double.MinValue;
+        foreach (var (u, _) in t.Local) { u0 = Math.Min(u0, u); u1 = Math.Max(u1, u); }
+        string key = $"{t.Origin.X:F3},{t.Origin.Y:F3}";
+        if (!seen.Add(key)) continue;                          // 열 단위로 한 번만
+        if (u1 - u0 < WallBand.MaxSide - 0.10) narrow++; else wide++;
+    }
+    Console.WriteLine($"      S39 열 폭 분포: 규격 {wide}열 · 규격 미만 {narrow}열");
+
+    // 진짜 구멍은 없어야 한다 — 폭이 통일되든 아니든, 벽에 뚫린 자리는 없어야 한다.
+    Check("S39 ★라운드 코너에서도 판넬 사이에 진짜 구멍이 없다",
+        !WallBand.GapReport(tR, runs: new List<WallRun> { runR }).Contains("★양옆 온전"),
+        WallBand.GapReport(tR, runs: new List<WallRun> { runR }));
+}
+
+// ★ S40 [JACK 0807 '계획폴리곤의 여러 경우의 수에도 오류 없도록'] **계획폴리곤 고문 시험.**
+//   현장에서 어떤 모양의 계획선이 들어올지 모른다 — CAD에서 그린 선은 중복 정점·공선·초단변이 흔하고,
+//   감김 방향(CW/CCW)도 그리는 순서에 달렸다. 각 입력을 **파이프라인 전체**(링 생성→옹벽선→판넬)에
+//   통과시켜 ①예외 없이 완주하고 ②좌표에 NaN/무한대가 없고 ③정상 입력이면 판넬이 실제로 나오는지 본다.
+//   ※자기교차(8자)만은 예외를 허용한다 — DoGrade가 1단계에서 잡아 경고 팝업으로 끝나는 게 옳은 동작이다.
+//     (그 밖의 입력에서 예외가 나면 실사용자가 흔한 도면으로도 오류 팝업을 본다는 뜻 — 실패로 센다.)
+{
+    var pr40 = new GradingParams {
+        CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 0.05, FillSlope = 0.05, CellSize = 1.0, MaxBenches = 4, MaxRise = 20,
+        VertexSpacing = 1.0, MinSlope = 0.05, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+    var gnd40 = new TiltGround(0, 0, 106.0, 0.10, 0.06);
+
+    // 한 입력을 절토 파이프라인 전체에 통과 — (완주 여부, 판넬 수, NaN 수, 오류 메시지)
+    (bool Ok, int Panels, int Bad, string Err) Torture(List<Point3> bnd)
+    {
+        try
+        {
+            var vs = GradingGeometry.Build(bnd, gnd40, pr40, true);
+            if (!vs.HasSlope) return (true, 0, 0, "사면 없음");
+            var rs = vs.Rings.Select(r => (IReadOnlyList<Point3>)r).ToList();
+            var runs = WallRunBuilder.Build(bnd, rs, null, up: true, globalSlope: 0.05, minSlope: 0.05);
+            var tiles = new List<WallBand.Tile>();
+            WallBand.ResetTotals();
+            foreach (var r in runs) tiles.AddRange(WallBand.Slice(r, gnd40, joint: 0.05));
+
+            int bad = 0;
+            foreach (var t in tiles)
+                foreach (var p in t.Poly)
+                    if (!double.IsFinite(p.X) || !double.IsFinite(p.Y) || !double.IsFinite(p.Z)) bad++;
+            return (true, tiles.Count, bad, "");
+        }
+        catch (Exception ex) { return (false, 0, 0, ex.GetType().Name + ": " + ex.Message); }
+    }
+
+    List<Point3> Ring40(params (double X, double Y)[] pts)
+    {
+        var r = new List<Point3>();
+        foreach (var (X, Y) in pts) r.Add(new Point3(X, Y, 100));
+        return r;
+    }
+
+    // ① 연속 중복 정점 — CAD에서 폴리라인을 이어 그리면 아주 흔하다.
+    var dup = Ring40((0,0), (15,0), (15,0), (15,0), (15,12), (0,12), (0,12));
+    var rDup = Torture(dup);
+    Check("S40 ①중복 정점 — 완주·판넬 나옴·NaN 없음", rDup.Ok && rDup.Panels > 0 && rDup.Bad == 0,
+        $"완주 {rDup.Ok} · 판넬 {rDup.Panels} · NaN {rDup.Bad} {rDup.Err}");
+
+    // ② 공선 정점 — 직선 위에 정점이 줄줄이(오프셋·분해 명령의 잔재).
+    var col = Ring40((0,0), (3,0), (6,0), (9,0), (12,0), (15,0), (15,12), (10,12), (5,12), (0,12));
+    var rCol = Torture(col);
+    Check("S40 ②공선 정점 — 완주·판넬 나옴·NaN 없음", rCol.Ok && rCol.Panels > 0 && rCol.Bad == 0,
+        $"완주 {rCol.Ok} · 판넬 {rCol.Panels} · NaN {rCol.Bad} {rCol.Err}");
+
+    // ③ 시계방향 감김 — 그리는 순서에 따라 절반은 이렇게 들어온다.
+    var cw = Ring40((0,0), (0,12), (15,12), (15,0));
+    var rCw = Torture(cw);
+    Check("S40 ③시계방향 감김 — 완주·판넬 나옴·NaN 없음", rCw.Ok && rCw.Panels > 0 && rCw.Bad == 0,
+        $"완주 {rCw.Ok} · 판넬 {rCw.Panels} · NaN {rCw.Bad} {rCw.Err}");
+
+    // ④ 바늘 스파이크 — 정점 하나가 밖으로 뾰족하게 튀어나온 실수.
+    var spike = Ring40((0,0), (15,0), (15,6), (25,6.01), (15,6.02), (15,12), (0,12));
+    var rSpk = Torture(spike);
+    Check("S40 ④바늘 스파이크 — 완주·NaN 없음", rSpk.Ok && rSpk.Bad == 0,
+        $"완주 {rSpk.Ok} · 판넬 {rSpk.Panels} · NaN {rSpk.Bad} {rSpk.Err}");
+
+    // ⑤ 1mm 초단변 — 스냅 실수로 생기는 티끌 변.
+    var tiny = Ring40((0,0), (15,0), (15.001,0.001), (15,12), (0,12));
+    var rTiny = Torture(tiny);
+    Check("S40 ⑤1mm 초단변 — 완주·판넬 나옴·NaN 없음", rTiny.Ok && rTiny.Panels > 0 && rTiny.Bad == 0,
+        $"완주 {rTiny.Ok} · 판넬 {rTiny.Panels} · NaN {rTiny.Bad} {rTiny.Err}");
+
+    // ⑥ 자기교차(8자) — 유일하게 예외 허용(경고 팝업으로 끝나는 게 옳다). 다만 NaN 좌표는 안 된다.
+    var eight = Ring40((0,0), (15,12), (15,0), (0,12));
+    var rEight = Torture(eight);
+    Check("S40 ⑥자기교차 8자 — 조용한 NaN 없이 끝남(예외는 허용)", rEight.Bad == 0,
+        $"완주 {rEight.Ok} · 판넬 {rEight.Panels} · NaN {rEight.Bad} {rEight.Err}");
+
+    // ⑦ 플래토(정점별 Z 다름) — 두 단 높이 계획면.
+    var plateau = new List<Point3> {
+        new(0,0,100), new(15,0,100), new(15,6,100), new(15,12,103), new(0,12,103), new(0,6,100) };
+    var rPlt = Torture(plateau);
+    Check("S40 ⑦플래토(Z 두 단) — 완주·NaN 없음", rPlt.Ok && rPlt.Bad == 0,
+        $"완주 {rPlt.Ok} · 판넬 {rPlt.Panels} · NaN {rPlt.Bad} {rPlt.Err}");
+
+    // ⑧ 가늘고 긴 근접 0 면적 — 폭 5cm 띠.
+    var sliver = Ring40((0,0), (20,0), (20,0.05), (0,0.05));
+    var rSlv = Torture(sliver);
+    Check("S40 ⑧폭 5cm 띠 — 완주·NaN 없음(판넬 유무는 불문)", rSlv.Ok && rSlv.Bad == 0,
+        $"완주 {rSlv.Ok} · 판넬 {rSlv.Panels} · NaN {rSlv.Bad} {rSlv.Err}");
+
+    // ⑨ 정점 400개 원 — 조밀한 곡선 경계(라운드 부지의 극단형). 완주 + 판넬 다수.
+    var circle = new List<Point3>();
+    for (int i = 0; i < 400; i++)
+        circle.Add(new Point3(20 + 12 * Math.Cos(2 * Math.PI * i / 400), 20 + 12 * Math.Sin(2 * Math.PI * i / 400), 100));
+    var rCir = Torture(circle);
+    Check("S40 ⑨정점 400개 원 — 완주·판넬 다수·NaN 없음", rCir.Ok && rCir.Panels > 10 && rCir.Bad == 0,
+        $"완주 {rCir.Ok} · 판넬 {rCir.Panels} · NaN {rCir.Bad} {rCir.Err}");
+
+    // ⑫ ★[JACK 0807 '코너부 보강에서 삐죽삐죽 나온 객체'] **코너 필러가 벽보다 높이 솟으면 안 된다.**
+    //    필러 높이를 벽면 **설계** 높이(faceH)로 잡던 탓에, 데이라잇에 잘려 1m만 남은 자리에도 5m 기둥이 서서
+    //    허공에 날이 솟았다. 필러 꼭대기는 **그 자리 판넬 꼭대기보다 위로 올라가면 안 된다.**
+    {
+        var bnd12 = Ring40((0,0), (30,0), (30,20), (18,20), (18,10), (12,10), (12,20), (0,20));
+        var pr12 = new GradingParams {
+            CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+            CutSlope = 0.05, FillSlope = 0.05, CellSize = 1.0, MaxBenches = 4, MaxRise = 20,
+            VertexSpacing = 1.0, MinSlope = 0.05, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+        };
+        // ★[JACK 0807 '여전히 각진부에 삐져나와'] 지형을 **가파르게** 준다 — 데이라잇이 코너 옆 열을
+        //   통째로 지우는 조건을 만들어야, '벽면 끝 열에서 높이를 받는' 잘못이 재현된다.
+        //   완만한 지형만 시험하면 그 잘못이 한 번도 안 밟혀 검사가 통과해 버린다(0807 실제로 그랬다).
+        var g12 = new TiltGround(0, 0, 104.0, 0.55, 0.38);
+        var vs12 = GradingGeometry.Build(bnd12, g12, pr12, true);
+        var rs12 = vs12.Rings.Select(r => (IReadOnlyList<Point3>)r).ToList();
+        var runs12 = WallRunBuilder.Build(bnd12, rs12, null, up: true, globalSlope: 0.05, minSlope: 0.05);
+        WallBand.ResetTotals();
+        var t12 = new List<WallBand.Tile>();
+        foreach (var r in runs12) t12.AddRange(WallBand.Slice(r, g12, joint: 0.05));
+        WallBand.AddGapFillers(t12, cornerOnly: true);
+        var (q12t, q12d) = WallBand.ClampQuoinsToPanels(t12);
+        Console.WriteLine($"      S40 ⑫코너필러 높이 정리: 잘라냄 {q12t}개 · 허공 지움 {q12d}개");
+
+        // ★[JACK 0807 두 번째 스샷 — 이 자도 고장나 있었다] **가까운 정점만** 재야 한다.
+        //   종전엔 반경 2m 안의 **판넬 전체 최고점**을 기준으로 삼았다. 오목 코너에서는 벽 윗선이
+        //   코너 쪽으로 내려오는데 옆 판넬의 **먼 쪽 위 모서리**는 훨씬 높아서, 필러가 0.3~0.5m 솟아도
+        //   '솟지 않았다'고 나왔다 — 현장에서 눈에 보이는 것을 이 자가 못 봤다.
+        //   (반경도 0.8m로 좁힌다. 운영 코드는 0.7m를 쓰므로 자와 코드가 같은 값이 아니다 —
+        //    같으면 '자기가 만든 기준으로 자기를 재는' 셈이라 아무것도 못 잡는다.)
+        double worstUp = 0; string upAt = "";
+        foreach (var q in WallBand.LastQuoins)
+        {
+            double topZ = double.MinValue;
+            foreach (var t in t12)
+                foreach (var p in t.Poly)
+                    if ((p.X - q.Toe.X) * (p.X - q.Toe.X) + (p.Y - q.Toe.Y) * (p.Y - q.Toe.Y) < 0.64)
+                        topZ = Math.Max(topZ, p.Z);
+            if (topZ == double.MinValue) continue;              // 둘레에 판넬이 없으면 아래 검사에서 따로 잡는다
+            double over = q.Top.Z - topZ;
+            if (over > worstUp) { worstUp = over; upAt = $"@ {q.Toe.X:F1},{q.Toe.Y:F1}"; }
+        }
+        int orphan = WallBand.LastQuoins.Count(q => !t12.Any(t => t.Poly.Any(p =>
+            (p.X - q.Toe.X) * (p.X - q.Toe.X) + (p.Y - q.Toe.Y) * (p.Y - q.Toe.Y) < 0.64)));
+        Console.WriteLine($"      S40 ⑫코너필러 {WallBand.LastQuoins.Count}개 · 판넬 위로 솟은 최대 {worstUp:F2}m {upAt} · 허공 필러 {orphan}개");
+        Check("S40 ⑫코너 필러가 벽보다 솟지 않는다(삐죽 없음)", worstUp < 0.30 && orphan == 0,
+            $"최대 {worstUp:F2}m 솟음 {upAt} · 허공 {orphan}개 (한도 0.30m)");
+
+        // ★★[JACK 0807 '각진부 근처에 간간히 가로로 긴 이상한 객체'] **코너 쐐기는 세로로 긴 기둥이다.**
+        //   폭이 높이보다 크면 벽 위에 널빤지가 얹힌 모양이 된다 — JACK이 도면에서 선택해 보여준 그 객체.
+        {
+            int qFlat = 0; double worstRatio = 0; string qFlatAt = "";
+            foreach (var q in WallBand.LastQuoins)
+            {
+                double dx = q.Top.X - q.Toe.X, dy = q.Top.Y - q.Toe.Y, dz = q.Top.Z - q.Toe.Z;
+                double h = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+                if (h < 1e-9) { qFlat++; continue; }
+                double ratio = q.Width / h;
+                if (ratio > worstRatio) { worstRatio = ratio; qFlatAt = $"@ {q.Toe.X:F1},{q.Toe.Y:F1} 폭{q.Width:F2}/높이{h:F2}"; }
+                if (ratio > 1.0) qFlat++;
+            }
+            Console.WriteLine($"      S40 ⑫코너필러 모양: 최대 폭/높이 {worstRatio:F2} {qFlatAt} · 누운 판 {qFlat}개");
+            Check("S40 ⑫★코너 필러는 폭보다 높이가 크다(누운 판 없음)", qFlat == 0 && worstRatio <= 1.0,
+                $"누운 판 {qFlat}개 · 최대 폭/높이 {worstRatio:F2} {qFlatAt}");
+        }
+
+        // ★★[JACK 0807 '여전히 각진부에 삐져나와 · 길이를 참조하는 로직이 잘못된 듯'] **안전망을 직접 시험한다.**
+        //   자연스러운 지형으로는 이 조건이 재현되지 않았다(현장은 옹벽선 46줄·다중 단이라 조합이 훨씬 많다).
+        //   재현이 안 된다고 '없는 문제'로 두면 안 된다 — 그러면 스샷을 또 받는다.
+        //   그래서 **일부러 벽보다 4m 높은 필러와 허공 필러를 심어** 정리 로직이 잡아내는지 본다.
+        {
+            var ref0 = WallBand.LastQuoins.Count > 0 ? WallBand.LastQuoins[0] : default;
+            if (WallBand.LastQuoins.Count > 0)
+            {
+                int before = WallBand.LastQuoins.Count;
+                // ①벽보다 4m 솟은 필러 — 종전 잘못(끝 열에서 높이를 받음)이 만드는 모양.
+                //   ※그 자리 **판넬 꼭대기**보다 높아야 '솟음'이다. 필러 자기 높이에 더하면
+                //     주변 판넬이 더 높은 자리에서는 솟지도 않아 시험이 헛돈다(0807 실제로 그랬다).
+                double nearTop = double.MinValue;
+                foreach (var t in t12)
+                    foreach (var pz in t.Poly)
+                        if ((pz.X - ref0.Toe.X) * (pz.X - ref0.Toe.X) + (pz.Y - ref0.Toe.Y) * (pz.Y - ref0.Toe.Y) < 2.25)
+                            nearTop = Math.Max(nearTop, pz.Z);
+                double spikeZ = (nearTop > double.MinValue ? nearTop : ref0.Top.Z) + 4.0;
+                WallBand.LastQuoins.Add(ref0 with {
+                    Top = new Point3(ref0.Top.X, ref0.Top.Y, spikeZ) });
+                // ②판넬이 하나도 없는 자리에 뜬 필러.
+                WallBand.LastQuoins.Add(ref0 with {
+                    Toe = new Point3(ref0.Toe.X + 500, ref0.Toe.Y + 500, ref0.Toe.Z),
+                    Top = new Point3(ref0.Top.X + 500, ref0.Top.Y + 500, ref0.Top.Z) });
+                // ③**가로로 긴 누운 판** — JACK이 도면에서 선택해 보여준 그 객체. 폭 1.3m에 높이 0.3m.
+                //   벽 높이에 맞춰 자르고 나서 납작해지는 경우까지 잡아야 하므로 여기서 직접 심는다.
+                WallBand.LastQuoins.Add(ref0 with {
+                    Top = new Point3(ref0.Toe.X + (ref0.Top.X - ref0.Toe.X) * 0.06,
+                                     ref0.Toe.Y + (ref0.Top.Y - ref0.Toe.Y) * 0.06,
+                                     ref0.Toe.Z + 0.30),
+                    Width = 1.30 });
+                var (tr2, dr2) = WallBand.ClampQuoinsToPanels(t12);
+                double over2 = 0;
+                foreach (var q in WallBand.LastQuoins)
+                {
+                    double tz = double.MinValue;
+                    foreach (var t in t12)
+                        foreach (var p in t.Poly)
+                            if ((p.X - q.Toe.X) * (p.X - q.Toe.X) + (p.Y - q.Toe.Y) * (p.Y - q.Toe.Y) < 4.0)
+                                tz = Math.Max(tz, p.Z);
+                    if (tz > double.MinValue) over2 = Math.Max(over2, q.Top.Z - tz);
+                }
+                // 남은 필러 중 누운 판(폭 > 높이)이 있는지도 본다 — ③이 살아남으면 그게 JACK의 그 객체다.
+                int flat2 = 0;
+                foreach (var q in WallBand.LastQuoins)
+                {
+                    double hx = q.Top.X - q.Toe.X, hy = q.Top.Y - q.Toe.Y, hz = q.Top.Z - q.Toe.Z;
+                    double hh = Math.Sqrt(hx * hx + hy * hy + hz * hz);
+                    if (hh > 1e-9 && q.Width / hh > 1.0) flat2++;
+                }
+                Console.WriteLine($"      S40 ⑫자가검증: 심은 필러 3개 → 잘라냄 {tr2} · 지움 {dr2} · 남은 솟음 {over2:F2}m · 남은 누운 판 {flat2}개");
+                Check("S40 ⑫★자가검증: 솟음·허공·누운 판을 정리 로직이 전부 잡는다",
+                    tr2 >= 1 && dr2 >= 2 && over2 < 0.30 && flat2 == 0
+                    && WallBand.LastQuoins.Count == before + 1,
+                    $"잘라냄 {tr2} · 지움 {dr2} · 솟음 {over2:F2}m · 누운 판 {flat2}개 · 개수 {before}→{WallBand.LastQuoins.Count}");
+            }
+        }
+    }
+
+    // ⑩ ★공선(거의 0 면적) 경계 — 이건 **거부해야** 한다. 감사 0807이 잡은 자리:
+    //    종전엔 정점 수(≥3)만 봐서 예외 없이 통과했고, 40m 선분 둘레로 폭 36m짜리
+    //    **존재하지 않는 부지의 대형 사면**이 도면에 그대로 만들어졌다. 조용히 큰 결과물이 나오는 게 최악이다.
+    var flat = Ring40((0,0), (40,0.0001), (20,0));
+    var rFlat = Torture(flat);
+    Check("S40 ⑩공선 경계 — 유령 사면을 만들지 않고 거부한다",
+        !rFlat.Ok && rFlat.Err.Contains("퇴화"),
+        $"완주 {rFlat.Ok} · 판넬 {rFlat.Panels} · {rFlat.Err}");
+
+    // ⑪ ★XY가 같고 Z만 다른 정점(수직 단차) — BoundaryReader.Dedup이 지우면 계획 단차가 소멸한다.
+    //    여기서는 Core만 시험하므로 '단차 Z가 링에 실제로 반영되는가'를 본다.
+    var stepZ = new List<Point3> {
+        new(0,0,100), new(15,0,100), new(15,0.001,105), new(15,12,105), new(0,12,105) };
+    var rStep = Torture(stepZ);
+    Check("S40 ⑪수직 단차(Z만 다른 정점) — 완주·NaN 없음", rStep.Ok && rStep.Bad == 0,
+        $"완주 {rStep.Ok} · 판넬 {rStep.Panels} · NaN {rStep.Bad} {rStep.Err}");
+}
+
 return fails == 0 ? 0 : 1;
 
 sealed class FlatGround(double z) : IGroundSurface
@@ -3045,6 +3559,16 @@ sealed class SlopeGround(double z0, double kx) : IGroundSurface
 
 /// <summary>물결치는 원지반 — 데이라잇 윗변이 오르내려 <b>오목한</b> 판넬 실루엣이 실제로 생긴다(S30).
 /// 평면 원지반은 윗변이 직선이라 사다리꼴(볼록)만 나오므로 오목 경로를 한 번도 안 밟는다.</summary>
+/// <summary>★[JACK 0807] <b>현장형</b> 원지반 — 기울어진 평면 + mm급 고주파 잡음.
+/// 현장 원지반은 삼각망이라 판넬 한 장(1.6m) 위에서는 사실상 평면이고, 데이라잇 윗변이 오목해 보이는 건
+/// 0.15m 간격 표본이 만드는 <b>잡음</b>이다. 진짜로 휜 <see cref="WavyGround"/>와 구분해서 시험해야
+/// '정점 정리 허용오차가 잡음을 펴 주는가'를 판정할 수 있다.</summary>
+sealed class NoisyPlaneGround(double z0, double kx, double amp) : IGroundSurface
+{
+    public bool TryGetElevation(double x, double y, out double zz)
+    { zz = z0 + kx * x + amp * System.Math.Sin(x * 37.0) + amp * System.Math.Cos(y * 41.0); return true; }
+}
+
 sealed class WavyGround(double z0, double amp, double wave) : IGroundSurface
 {
     public bool TryGetElevation(double x, double y, out double zz)

@@ -48,6 +48,27 @@ public static class GradingGeometry
         ArgumentNullException.ThrowIfNull(ground);
         p.Validate();
 
+        // ★[감사 0807] **면적이 사실상 0인 경계는 거부한다.** 종전엔 정점 수(≥3)만 봤다.
+        //   공선에 가까운 경계(예: (0,0)(40,0.0001)(20,0), 면적 0.002㎡)를 주면 예외 없이 통과해
+        //   40m 선분 둘레로 폭 36m짜리 **존재하지 않는 부지의 대형 사면**이 도면에 그대로 만들어진다.
+        //   (오프라인 재현 확인 — 감사 0807.) 실수로 잘못 찍은 선이 조용히 큰 결과물이 되는 건 막아야 한다.
+        {
+            double a2 = 0, per = 0;
+            for (int i = 0; i < boundary.Count; i++)
+            {
+                var q0 = boundary[i]; var q1 = boundary[(i + 1) % boundary.Count];
+                a2 += q0.X * q1.Y - q1.X * q0.Y;
+                per += System.Math.Sqrt((q1.X - q0.X) * (q1.X - q0.X) + (q1.Y - q0.Y) * (q1.Y - q0.Y));
+            }
+            double area = System.Math.Abs(a2) * 0.5;
+            //   면적만 보면 아주 작은 정상 부지(1㎡ 미만)까지 막힌다 — **가늘기**(둘레²/면적)도 같이 본다.
+            //   정상 부지는 이 값이 수십 이하이고, 칼날 같은 퇴화 폴리곤은 수천~수만이 된다.
+            if (area < 0.5 || (per > 1e-9 && per * per / System.Math.Max(area, 1e-12) > 5000))
+                throw new ArgumentException(
+                    $"계획 부지 외곽선이 퇴화했습니다(면적 {area:F3}㎡ · 둘레 {per:F1}m). " +
+                    "정점이 한 직선 위에 있거나 폴리곤이 닫히지 않았는지 확인하세요.", nameof(boundary));
+        }
+
         var result = new VirtualSlope();
         var gf = NtsFactory();
         var dbg = new System.Text.StringBuilder();
@@ -164,7 +185,11 @@ public static class GradingGeometry
             double dz = Math.Abs(b2.Z - a.Z);
             if (dz < 0.01) continue;
             double dl = Math.Sqrt((b2.X - a.X) * (b2.X - a.X) + (b2.Y - a.Y) * (b2.Y - a.Y));
-            if (dl > 1e-6) maxGrad = Math.Max(maxGrad, dz / dl);
+            // ★[감사 0807] 수평 길이에 **하한**을 둔다. 계획선 한 곳에 1mm짜리 수직 단차 변(dz 5m / dl 0.001m)이
+            //   섞이면 maxGrad가 5000이 되고, 그 값 하나가 전역이라 **다른 정상 전환부의 링 Z 완화가 통째로
+            //   무력화**된다(RelaxRingZ가 고치려던 절벽 밴드가 그대로 남는다). 0.5m는 '완화가 의미 있는
+            //   최소 전환 길이' — 그보다 짧은 변은 사실상 수직이라 완화 대상이 아니다.
+            if (dl > 1e-6) maxGrad = Math.Max(maxGrad, dz / Math.Max(dl, 0.5));
         }
         dbg.AppendLine($"  완화 최대경사(maxGrad)={maxGrad:F3} ({(maxGrad > 0 ? "전환부 있음" : "평면 계획선 — 완화 없음")})");
 

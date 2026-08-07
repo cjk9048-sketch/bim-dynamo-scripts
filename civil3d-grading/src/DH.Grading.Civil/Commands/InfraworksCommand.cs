@@ -49,6 +49,10 @@ public sealed class InfraworksCommand
         return outp;
     }
 
+    /// <summary>명령창 한 줄이 길어지지 않게 자른다 — 진단 한 줄이 수천 자까지 자라기 때문(JACK 0807).</summary>
+    private static string Short(string s, int max = 160)
+        => s == null ? "" : (s.Length <= max ? s : s.Substring(0, max) + " …(로그 참조)");
+
     [CommandMethod("DHINFRA")]
     public void Run()
     {
@@ -404,6 +408,22 @@ public sealed class InfraworksCommand
                                 tiles.AddRange(WallBand.Slice(wr, regionSampler, joint: 0.05));
                                 if (bandDiag.Length == 0) bandDiag.Append(WallBand.LastDiag);
                             }
+                            // ★★[JACK 0807 스샷 멘트 — 폐기] '남은 틈을 얇은 띠로 막기'는 하지 않는다.
+                            //   JACK: "중간에 빈공간을 얇은 띠형 객체로 막았는데 **이렇게 해결하면 안 됨**.
+                            //   애초에 다음 패널을 댕겨서 작성하고, 직선 양단 끝에서 LOD 낮은 객체의 폭을 조절해
+                            //   빈공간이 없게 작성해."
+                            //   → 벽 한가운데 틈은 **메우는 게 아니라 안 생기게** 한다(자투리가 남은 만큼 다 먹는다).
+                            //     코너 쐐기만 코너 필러가 맡는다(그건 JACK이 0807 오전에 지시한 그 자리다).
+                            //     아래 GapReport는 그대로 둔다 — 메우지 않으니 **틈이 남으면 반드시 보여야** 한다.
+                            //   ※단, **코너 쐐기**는 예외다 — 그건 JACK이 같은 날 오전에 "직각부·라운드부는
+                            //     전용 얇은 객체로 채우라"고 지시한 자리다. 코너에서 1.2m 안쪽만 채운다.
+                            //     코너 필러는 줄(옹벽선) 안에서도 서지만, 줄과 줄이 만나는 코너는 그 경로가
+                            //     못 보므로(줄마다 따로 잘린다) 여기서 한 번 더 훑는다.
+                            int gapFill = WallBand.AddGapFillers(tiles, cornerOnly: true);
+                            // ★[JACK 0807 '여전히 각진부에 삐져나와'] 필러 높이를 **그 자리 판넬**에 맞춰 잘라낸다.
+                            //   벽면 끝 열에서 높이를 받으면, 데이라잇이 코너 옆 열을 지운 자리에서
+                            //   한참 뒤의 높은 열 기준을 그대로 받아 몇 m씩 솟는다.
+                            var (qTrim, qDrop) = WallBand.ClampQuoinsToPanels(tiles);
                             panels = tiles.ConvertAll(t => WallBand.ToPanel(t, 20.0));
                             // [진단 0805 — JACK '사선으로 존재하지 않는 옹벽'] 저장된 옹벽선의 실측값.
                             //   판넬은 균등 분할이라 선에 없는 **긴 변**이 섞이면 그 위에 판넬이 일정한 사슬로 깔린다.
@@ -424,6 +444,9 @@ public sealed class InfraworksCommand
                                            $"(총길이 {wTotLen:F0}m · 최대변 {wMaxSeg:F2}m @ 선{wAtRun} {wAtX:F0},{wAtY:F0}) → 판넬 {panels.Count}장" +
                                            (bandDiag.Length > 0 ? $" · 첫 줄: {bandDiag}" : ""));
                             if (WallBand.TotalDiag.Length > 0) log.AppendLine($"{rPre}  {WallBand.TotalDiag}");
+                            if (gapFill > 0) log.AppendLine($"{rPre}  틈 메움 전용객체 {gapFill}개(판넬 사이에 남은 자리 — 앵커·무늬 없음)");
+                            if (qTrim + qDrop > 0)
+                                log.AppendLine($"{rPre}  코너 필러 높이 정리 — 잘라냄 {qTrim}개 · 허공이라 지움 {qDrop}개(그 자리 판넬 높이에 맞춤)");
                             // ★[JACK 0806] 코너 필러 — 볼록 코너에서 두 벽면이 벌어져 남은 쐐기 틈을 메운다.
                             //   옛 경로(WallPanels.LastQuoins)에만 있어 새 경로에서는 항상 0개였다(0805 감사).
                             quoinAll.AddRange(laterMask == null ? WallBand.LastQuoins
@@ -485,7 +508,7 @@ public sealed class InfraworksCommand
                                       $"(틈 {seamMin:F2}~{seamMax:F2}m · 최대 @ {seamX:F0},{seamY:F0}) — 이 사이엔 판넬이 안 깔린다"
                                     : $"{rPre}  옹벽선 자기 이음매 정상(모든 줄이 닫힌 고리)");
                                 // ★눈에 보이는 것과 같은 방식 — 만들어진 판넬 옆면끼리 맞닿았는지 직접 잰다.
-                                log.AppendLine($"{rPre}  {WallBand.GapReport(tiles)}");
+                                log.AppendLine($"{rPre}  {WallBand.GapReport(tiles, runs: storedRuns)}");
                             }
                             if (runGuard.Length > 0) log.AppendLine($"{rPre}  {runGuard}");
                             if (runGuard.Contains('⚠')) wallSkipNotes.Add($"{rPre}앵커판넬_{label}: {runGuard}");
@@ -561,14 +584,20 @@ public sealed class InfraworksCommand
                     var (nb, nc, np, na, ncp, nt) = WallDwg.Export(dwgPath, wallSets, allPanels, allConcrete,
                         GradingSettings.WallBlockW, GradingSettings.WallBlockD, GradingSettings.WallBlockH,
                         GradingSettings.WallCapD, GradingSettings.WallCapT, quoinAll, teeAll, wallLineAll);
+                    // ★[JACK 0807 결정] 깨진솔리드 전수검사(6초)를 줄일지는 **몇 번 더 세어 보고** 정한다.
+                    //   그러려면 0일 때도 찍혀야 한다 — 종전엔 0이면 아예 안 찍혀서 '0이 몇 번 연속인지'를
+                    //   셀 수가 없었다. 세려고 만든 계수기가 셀 수 없으면 그건 계수기가 아니다.
                     log.AppendLine($"옹벽3D.dwg: 보강토 {nb}블록+{nc}캡 · 앵커판넬 {np}패널+{na}앵커 · 역T {nt}세그" +
-                        (WallDwg.LastDropped > 0 ? $" · 깨진솔리드 제외 {WallDwg.LastDropped}" : "") +
+                        $" · 깨진솔리드 {WallDwg.LastDropped}개 제외(전수검사 — 여러 번 0이면 검사를 줄인다)" +
                         // [0805] 판 만들기 실패는 종전에 조용히 삼켜져 'Generate 수 ≠ DWG 수'가 안 보였다.
                         (WallPanelDwg.nFail > 0
                             ? $" · ⚠판 만들기 실패 {WallPanelDwg.nFail}장(앵커·정착판도 함께 생략) — 첫 사유: {WallPanelDwg.firstFail}"
                             : ""));
                     if (teeAll.Count > 0 && WallTeeDwg.LastDiag.Length > 0)
                         log.AppendLine("  역T 상세: " + WallTeeDwg.LastDiag);
+                    // ★[JACK 0807 '내보내기가 너무너무 오래 걸린다 · 무늬 때문인거야?'] 종전 시계는 '옹벽 3D 14.1s'까지만
+                    //   알려줘 그 안에서 무엇이 시간을 먹는지 못 갈랐다. 구간·부속별로 갈라 적는다.
+                    if (WallDwg.LastTiming.Length > 0) log.AppendLine("  옹벽3D 시간: " + WallDwg.LastTiming);
                     // ── [옹벽 자가진단 0805] 로그 이 블록만 보면 정상/이상이 갈린다(JACK 요청) ──
                     if (WallPanelDwg.nFail > 0)
                         wallWarn.Add($"판 만들기 실패 {WallPanelDwg.nFail}장(앵커·정착판도 함께 생략) — 첫 사유: {WallPanelDwg.firstFail}");
@@ -652,7 +681,20 @@ public sealed class InfraworksCommand
             AcadApp.ShowAlertDialog("infraworks 기초자료 내보내기 완료\n\n저장 위치: " + folder +
                                     "\n\n내보낸 파일:\n" + list +
                                     "\n\n걸린 시간: " + ExportProgress.Human(prog.TotalSeconds));
-            ed.WriteMessage("\ninfraworks 기초자료 내보내기 완료" + note + "\n" + log.ToString().TrimEnd());
+            // ★[JACK 0807 '내보내기하면 글씨가 엄청나게 생긴다'] 명령창에는 **요약만** 낸다.
+            //   종전엔 진단 로그 전문(수십 줄 × 한 줄 수천 자)을 그대로 쏟아 명령창이 도배됐다.
+            //   자세한 내용은 아래에서 파일에 그대로 남으므로 화면에서 잃는 정보는 없다 —
+            //   오히려 경고가 수백 줄 사이에 묻히지 않아 눈에 띈다.
+            {
+                var warn = new System.Collections.Generic.List<string>();
+                foreach (var ln in log.ToString().Split('\n'))
+                    if (ln.Contains('⚠')) warn.Add(ln.Trim());
+                ed.WriteMessage("\ninfraworks 기초자료 내보내기 완료" + note +
+                    $"\n  파일: {list}" +
+                    $"\n  {timeMsg}" +
+                    (warn.Count == 0 ? "\n  ⚠ 없음" : $"\n  ⚠ {warn.Count}건 — 첫 건: {Short(warn[0])}") +
+                    $"\n  자세한 내용: {DiagLog.FilePath}");
+            }
             try
             {
                 DiagLog.Append(

@@ -19,7 +19,13 @@ public static class WallPanels
         Point3 Origin,
         (double x, double y, double z) UAxis, (double x, double y, double z) VAxis, (double x, double y, double z) WAxis,
         IReadOnlyList<(double u, double v)> Local,
-        double PocketU = 0, double PocketV = 0);   // [0730 롤백] 발 단면(FootTop)은 JACK 지시로 철회 — 균일 20cm
+        double PocketU = 0, double PocketV = 0,    // [0730 롤백] 발 단면(FootTop)은 JACK 지시로 철회 — 균일 20cm
+        /// <summary>★[JACK 0807] 규격 판넬이 아니라 <b>자투리 전용 얇은 객체</b>.
+        /// "부족하면 얇은 거 전용객체 하나 만들어서 넣고(이때 LOD는 포기함, 재질만 통일)."
+        /// → 판만 만들고 앵커·도넛·무늬는 붙이지 않는다. 레이어(재질)는 규격 판넬과 같다.</summary>
+        bool Filler = false,
+        /// <summary>★[JACK 0807] 앵커·도넛·무늬를 붙이는가(LOD) — Filler(분류)와 분리. WallBand.Tile.Detail 참조.</summary>
+        bool Detail = true);
 
     public static string LastDiag { get; private set; } = "";
 
