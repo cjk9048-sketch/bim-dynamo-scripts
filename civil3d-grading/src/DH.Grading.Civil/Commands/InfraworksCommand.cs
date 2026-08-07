@@ -184,6 +184,8 @@ public sealed class InfraworksCommand
             var panelSets = new System.Collections.Generic.List<(bool Cut, System.Collections.Generic.List<WallPanels.Panel> Panels)>();
             var concreteSets = new System.Collections.Generic.List<(bool Cut, System.Collections.Generic.List<WallPanels.Panel> Panels)>();
             var quoinAll = new System.Collections.Generic.List<WallPanels.Quoin>();
+            // ★[JACK 0807] 코너 전용 판넬 — 방향(절/성토)마다 모아 한 번에 넘긴다.
+            var cornerUnitAll = new System.Collections.Generic.List<WallBand.CornerUnit>();
             // [자가진단 0805] 로그만 보고 옹벽 이상을 판정하기 위한 누적값.
             int panelGenTotal = 0;
             var wallWarn = new System.Collections.Generic.List<string>();
@@ -449,6 +451,8 @@ public sealed class InfraworksCommand
                                 log.AppendLine($"{rPre}  코너 필러 높이 정리 — 잘라냄 {qTrim}개 · 허공이라 지움 {qDrop}개(그 자리 판넬 높이에 맞춤)");
                             // ★[JACK 0806] 코너 필러 — 볼록 코너에서 두 벽면이 벌어져 남은 쐐기 틈을 메운다.
                             //   옛 경로(WallPanels.LastQuoins)에만 있어 새 경로에서는 항상 0개였다(0805 감사).
+                            cornerUnitAll.AddRange(laterMask == null ? WallBand.LastCornerUnits
+                                : WallBand.LastCornerUnits.Where(u => u.Bot.Count > 0 && !laterMask.Contains(u.Bot[0].X, u.Bot[0].Y)));
                             quoinAll.AddRange(laterMask == null ? WallBand.LastQuoins
                                 : WallBand.LastQuoins.Where(q => !laterMask.Contains(q.Toe.X, q.Toe.Y)));
                             // ★[0806 JACK '길게 누락됨'] 구멍이 **줄 안**이 아니라 **줄과 줄 사이**일 수 있다.
@@ -583,7 +587,7 @@ public sealed class InfraworksCommand
                 {
                     var (nb, nc, np, na, ncp, nt) = WallDwg.Export(dwgPath, wallSets, allPanels, allConcrete,
                         GradingSettings.WallBlockW, GradingSettings.WallBlockD, GradingSettings.WallBlockH,
-                        GradingSettings.WallCapD, GradingSettings.WallCapT, quoinAll, teeAll, wallLineAll);
+                        GradingSettings.WallCapD, GradingSettings.WallCapT, quoinAll, teeAll, wallLineAll, cornerUnitAll);
                     // ★[JACK 0807 결정] 깨진솔리드 전수검사(6초)를 줄일지는 **몇 번 더 세어 보고** 정한다.
                     //   그러려면 0일 때도 찍혀야 한다 — 종전엔 0이면 아예 안 찍혀서 '0이 몇 번 연속인지'를
                     //   셀 수가 없었다. 세려고 만든 계수기가 셀 수 없으면 그건 계수기가 아니다.
@@ -593,6 +597,8 @@ public sealed class InfraworksCommand
                         (WallPanelDwg.nFail > 0
                             ? $" · ⚠판 만들기 실패 {WallPanelDwg.nFail}장(앵커·정착판도 함께 생략) — 첫 사유: {WallPanelDwg.firstFail}"
                             : ""));
+                    if (WallPanelDwg.nCornerUnit > 0 || cornerUnitAll.Count > 0)
+                        log.AppendLine($"  코너 전용 판넬 {WallPanelDwg.nCornerUnit}/{cornerUnitAll.Count}개(각진부 마감 — 양옆 판넬이 물러난 자리를 감싼다)");
                     if (teeAll.Count > 0 && WallTeeDwg.LastDiag.Length > 0)
                         log.AppendLine("  역T 상세: " + WallTeeDwg.LastDiag);
                     // ★[JACK 0807 '내보내기가 너무너무 오래 걸린다 · 무늬 때문인거야?'] 종전 시계는 '옹벽 3D 14.1s'까지만
