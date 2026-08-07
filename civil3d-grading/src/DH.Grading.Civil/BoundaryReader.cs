@@ -90,7 +90,12 @@ public static class BoundaryReader
             if (outp.Count > 0)
             {
                 var q = outp[^1];
-                if (Math.Abs(q.X - p.X) < 1e-9 && Math.Abs(q.Y - p.Y) < 1e-9) continue;
+                // ★[감사 0807] XY만 보고 지우면 **수직 단차가 소멸한다.** 3D 계획선에 (10,0,100)→(10,0,105)로
+                //   수직 단차를 그리면 두 번째 점이 '중복'으로 삭제되고 Z=100만 남아, 플래토 검출·전환사면·
+                //   경계 Z 보간이 그 단차를 못 본다 → 상단 플래토 표고가 통째로 틀린 표면이 **경고 없이** 생긴다.
+                //   XY가 같아도 Z가 다르면 정점을 살린다(0.01m = 계획고 유효 자릿수).
+                if (Math.Abs(q.X - p.X) < 1e-9 && Math.Abs(q.Y - p.Y) < 1e-9
+                    && Math.Abs(q.Z - p.Z) < 0.01) continue;
             }
             outp.Add(p);
         }

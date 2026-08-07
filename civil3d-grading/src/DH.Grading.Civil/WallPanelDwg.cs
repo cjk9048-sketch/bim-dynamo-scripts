@@ -46,11 +46,34 @@ public static class WallPanelDwg
     /// 앞선 호출의 실패·이탈이 지워지지 않도록 **호출자가** 명시적으로 리셋한다.
     /// (Populate 진입부에서 리셋하면 두 번째 호출이 첫 호출의 실패 26장을 지워 '이상 없음'이 찍힌다 —
     /// v18.2가 없애려던 '조용히 삼킴'을 진단 코드 자신이 재현하는 구조였다.)</summary>
+    // ★[JACK 0807 '무늬 때문인거야?'] 부속별 소요시간 — 추측이 아니라 **초**로 답하기 위한 시계.
+    //   판넬 하나에 판 1 + 무늬 8 + 도넛 1 + 앵커 1 + 정착판 1 = 12개의 ACIS 솔리드가 붙는다.
+    //   어느 것이 시간을 먹는지 개수만으로는 절대 안 갈린다 — 0805~0806에 성능으로 두 번 자책골을 넣고 얻은 규칙.
+    //   Stopwatch 시작/정지 자체는 수십 ns라 ACIS 연산(ms 단위) 옆에서 무시할 수 있다.
+    private static readonly System.Diagnostics.Stopwatch swSlab = new(), swPad = new(),
+        swCollar = new(), swAnchor = new(), swQuoin = new(), swStray = new();
+    private static int nPadPiece;
+
+    /// <summary>부속별 소요시간 한 줄 — 무엇을 줄여야 빨라지는지 로그만 보고 알 수 있게.</summary>
+    public static string TimeDiag()
+    {
+        double tot = swSlab.Elapsed.TotalSeconds + swPad.Elapsed.TotalSeconds + swCollar.Elapsed.TotalSeconds
+                   + swAnchor.Elapsed.TotalSeconds + swQuoin.Elapsed.TotalSeconds + swStray.Elapsed.TotalSeconds;
+        if (tot < 0.05) return "";
+        return $"판넬 부속 시간 계 {tot:F1}s — 판 {swSlab.Elapsed.TotalSeconds:F1}s · " +
+               $"무늬 {swPad.Elapsed.TotalSeconds:F1}s(조각 {nPadPiece}개) · 도넛 {swCollar.Elapsed.TotalSeconds:F1}s · " +
+               $"앵커·정착판 {swAnchor.Elapsed.TotalSeconds:F1}s · 코너필러 {swQuoin.Elapsed.TotalSeconds:F1}s · " +
+               $"이탈검사 {swStray.Elapsed.TotalSeconds:F1}s";
+    }
+
     public static void ResetDiag()
     {
+        swSlab.Reset(); swPad.Reset(); swCollar.Reset(); swAnchor.Reset(); swQuoin.Reset(); swStray.Reset();
+        nPadPiece = 0;
         nFail = 0; firstFail = null; strayN = 0; strayFirst = null;
         padsNull = 0; padsEx = 0; collarEx = 0; anchorEx = 0; plateEx = 0; quoinEx = 0;
         padStoneFail = 0; padsConcaveSplit = 0; padsSplitFail = 0; padsTiny = 0; padsPieceMax = 0; subFirst = null;
+        padsMerged = 0; padsSeamed = 0;
         padBatchFail = 0; padCurveFail = 0; padBatchFirst = null; padCurveFirst = null; padsWipeFirst = null;
     }
 
@@ -74,6 +97,10 @@ public static class WallPanelDwg
     public static int padsTiny { get; private set; }
     /// <summary>[0806] 한 판넬이 쪼개진 최대 조각 수 — 2~3이 정상. 크면 실루엣이 이상하다는 신호.</summary>
     public static int padsPieceMax { get; private set; }
+    /// <summary>★[JACK 0807] 무늬 조각을 <b>한 장으로</b> 자른 횟수 / 종전 방식(볼록 조각별)으로 물러난 횟수.
+    /// 물러난 쪽이 곧 도면에 이음매(부챗살)가 보이는 자리다 — 0에 가까워야 정상.</summary>
+    public static int padsMerged { get; private set; }
+    public static int padsSeamed { get; private set; }
     /// <summary>[0806] 리전을 한꺼번에 못 만들어 하나씩 다시 만든 판넬 수 — <b>무늬는 살아남는다</b>(실패 아님).</summary>
     public static int padBatchFail { get; private set; }
     /// <summary>[0806] 하나씩 다시 만들어도 거부된 돌 수 — 이 돌만 무늬에서 빠진다.</summary>
@@ -95,6 +122,9 @@ public static class WallPanelDwg
         if (!GradingSettings.StonePattern) notes.Append(" · 자연석 무늬 끔(JACK 0806 — 판넬·앵커·정착구는 그대로)");
         if (padsConcaveSplit > 0) notes.Append($" · 오목 판넬 {padsConcaveSplit}장 볼록 분해(최대 {padsPieceMax}조각 — 무늬 정상)");
         if (padsTiny > 0) notes.Append($" · 작은 면 {padsTiny}장 무늬 없음(정상)");
+        if (padsMerged + padsSeamed > 0)
+            notes.Append($" · 무늬 조각 한장클립 {padsMerged}/이음매분할 {padsSeamed}"
+                       + (padsSeamed > 0 ? "(이 수만큼 도면에 사선 이음매가 보인다)" : ""));
         if (padStoneFail > 0) notes.Append($" · 무늬 돌 {padStoneFail}개 버림(개별 압출 — 나머지는 온전)");
         if (padBatchFail > 0)
             notes.Append($" · 리전 개별 재시도 {padBatchFail}장(무늬 살림 — 버린 돌 {padCurveFail}개)")
@@ -182,6 +212,7 @@ public static class WallPanelDwg
                 void CheckStray(string kind, Entity e)
                 {
                     if (pxMin > pxMax) return;                       // 패널이 없으면 기준이 없다
+                    swStray.Start();
                     try
                     {
                         var ext = e.GeometricExtents;
@@ -198,6 +229,7 @@ public static class WallPanelDwg
                         strayFirst ??= $"{kind} {d:F1}m 이탈 @ {c.X:F1},{c.Y:F1},{c.Z:F1}";
                     }
                     catch { }
+                    finally { swStray.Stop(); }   // 위 return들도 지나가야 하므로 finally(계측이 새면 계측이 아니다)
                 }
 
                 foreach (var p in panels)
@@ -214,6 +246,7 @@ public static class WallPanelDwg
                     //   도넛은 그대로 만들어져 **허공에 앵커봉만** 남았다(현장: 생성 72장 → DWG 46장인데 앵커는 45개).
                     //   판이 실패하면 그 패널의 부속은 전부 건너뛴다 — 벽 없는 앵커는 도면 오류로만 보인다.
                     bool slabOk = false;
+                    swSlab.Start();
                     try
                     {
                         // 콘크리트=바탕 민판(+온전 패널엔 자연석 돌출 무늬), 앵커판넬=가운데 홈 판.
@@ -237,6 +270,7 @@ public static class WallPanelDwg
                                         $" U·V {U.DotProduct(V):E1} @ {p.Origin.X:F0},{p.Origin.Y:F0}]";
                         }
                     }
+                    finally { swSlab.Stop(); }
                     if (!slabOk) continue;
 
                     // 자연석 무늬 — [JACK 0730] 앵커판넬에도 적용(콘크리트 무늬 이식). 정착구 주변은 민판 유지.
@@ -245,28 +279,34 @@ public static class WallPanelDwg
                     //   모델링 오류(115094·eInvalidInput)가 전부 이 자리에서 났고, 내보내기 시간의 대부분도 여기다.
                     //   지우지 않고 스위치로 남긴다 — 되살릴 때 v19.23~25의 수정(볼록 분해·개별 리전·빈 목록)이
                     //   그대로 붙어 있어야 하기 때문이다. 껐다고 코드를 지우면 그 값비싼 수정이 같이 사라진다.
-                    if (GradingSettings.StonePattern)
+                    // [JACK 0807] 자투리 전용 객체는 무늬를 넣지 않는다 — "LOD는 포기함, 재질만 통일".
+                    //   폭이 몇 cm~1m로 제각각이라 십자 4분할이 성립하지도 않는다(조각이 실오라기가 된다).
+                    if (GradingSettings.StonePattern && p.Detail)
                     try
                     {
+                        swPad.Start();
                         // ★[JACK 0806] '데이라잇으로 잘려서 앵커부가 없는 판넬은 가운데 앵커보호공 쪽이
                         //   비어 있는 상태로 해도 된다. 대신 나머지는 살려져 있어야겠지.'
                         //   → 온전 여부와 무관하게 앵커판넬이면 **가운데는 항상 비운다**. 잘린 판넬도
                         //   나머지 3~4분면은 그대로 나오므로 무늬가 통째로 사라지지 않는다.
                         var pads = BuildConcretePads(p, excludePocket: !concrete);
                         if (pads.Count == 0) padsNull++;      // 돌이 하나도 안 만들어짐(면이 너무 작거나 전 돌 퇴화)
+                        nPadPiece += pads.Count;
                         foreach (var pad in pads)
                         {
                             pad.TransformBy(m); pad.LayerId = layBody;
                             ms.AppendEntity(pad); tr.AddNewlyCreatedDBObject(pad, true);
                         }
+                        swPad.Stop();
                         if (pads.Count > 0) CheckStray("무늬", pads[0]);
                     }
-                    catch (System.Exception ex) { padsEx++; Note("무늬", ex); }
+                    catch (System.Exception ex) { swPad.Stop(); padsEx++; Note("무늬", ex); }
 
                     // [JACK 0730] 정착구 도넛 돌출부(온전 패널만) — 1단+2단 계단식, 2단 전면에 홈 각인.
                     if (!concrete && p.IsFull)
                         try
                         {
+                            swCollar.Start();
                             var collar = new Solid3d();
                             collar.CreateBox(Collar1Size, Collar1Size, Collar1Out);
                             collar.TransformBy(Matrix3d.Displacement(new Vector3d(p.PocketU, p.PocketV, Collar1Out / 2)));
@@ -285,9 +325,10 @@ public static class WallPanelDwg
                             collar.TransformBy(m);
                             collar.LayerId = layBody;
                             ms.AppendEntity(collar); tr.AddNewlyCreatedDBObject(collar, true);
+                            swCollar.Stop();
                             CheckStray("도넛", collar);
                         }
-                        catch (System.Exception ex) { collarEx++; Note("도넛", ex); }
+                        catch (System.Exception ex) { swCollar.Stop(); collarEx++; Note("도넛", ex); }
 
                     if (!concrete && p.IsFull)
                     {
@@ -295,21 +336,25 @@ public static class WallPanelDwg
                         var padFace = new Point3d(p.AnchorPos.X, p.AnchorPos.Y, p.AnchorPos.Z - ZSink) + W * (FrontOut + Collar2Out);
                         try
                         {
+                            swAnchor.Start();
                             var anc = BuildAnchor(p, padFace, W);
                             anc.LayerId = layAnchor;
                             ms.AppendEntity(anc); tr.AddNewlyCreatedDBObject(anc, true);
+                            swAnchor.Stop();
                             CheckStray("앵커", anc);
                             na++;
                         }
-                        catch (System.Exception ex) { anchorEx++; Note("앵커", ex); }
+                        catch (System.Exception ex) { swAnchor.Stop(); anchorEx++; Note("앵커", ex); }
                         try
                         {
+                            swAnchor.Start();
                             var plate = BuildPlate(p, padFace, W);
                             plate.LayerId = layPlate;
                             ms.AppendEntity(plate); tr.AddNewlyCreatedDBObject(plate, true);
+                            swAnchor.Stop();
                             CheckStray("정착판", plate);
                         }
-                        catch (System.Exception ex) { plateEx++; Note("정착판", ex); }
+                        catch (System.Exception ex) { swAnchor.Stop(); plateEx++; Note("정착판", ex); }
                     }
                 }
 
@@ -319,12 +364,14 @@ public static class WallPanelDwg
                     {
                         try
                         {
+                            swQuoin.Start();
                             var post = BuildQuoin(q);
                             post.LayerId = layBody;
                             ms.AppendEntity(post); tr.AddNewlyCreatedDBObject(post, true);
+                            swQuoin.Stop();
                             CheckStray("코너필러", post);
                         }
-                        catch (System.Exception ex) { quoinEx++; Note("코너필러", ex); }
+                        catch (System.Exception ex) { swQuoin.Stop(); quoinEx++; Note("코너필러", ex); }
                     }
             }
         }
@@ -345,8 +392,16 @@ public static class WallPanelDwg
         // xAx를 zAx에 직교화(안전).
         xAx = xAx - zAx * xAx.DotProduct(zAx);
         xAx = xAx.Length > 1e-6 ? xAx.GetNormal() : zAx.GetPerpendicularVector();
-        var yAx = W - zAx * W.DotProduct(zAx);                         // 두께축도 직교화
-        yAx = yAx.Length > 1e-6 ? yAx.GetNormal() : zAx.CrossProduct(xAx).GetNormal();
+        // ★★[JACK 0807 '패널 사이 간격이 벌어졌다'] **필러가 한 개도 안 만들어지고 있었다.**
+        //   현장 로그: `⚠부속 실패 65건(… 코너필러 56) — 첫 사유: 코너필러: eCannotScaleNonUniformly`.
+        //   원인은 이 프레임이다. 종전엔 xAx와 yAx를 **각각 zAx에만** 직교화하고 서로는 안 맞췄다 —
+        //   그러면 세 축이 직교정규가 아니라 AlignCoordinateSystem이 비균등 스케일로 읽고 통째로 거부한다.
+        //   판넬에서는 v18.2에 똑같은 것을 고쳤는데(U·V 직교 보장) **필러에는 안 옮겨졌다** —
+        //   0805에 적어 둔 그 교훈이 그대로 재현됐다: *새로 짜면 옛 코드에 쌓인 수정이 따라오지 않는다.*
+        //   → yAx를 외적으로 만들어 **직교를 구조적으로 보장**한다(부호만 W 쪽으로 맞춘다).
+        var yAx = zAx.CrossProduct(xAx);
+        yAx = yAx.Length > 1e-9 ? yAx.GetNormal() : zAx.GetPerpendicularVector();
+        if (yAx.DotProduct(W) < 0) { yAx = -yAx; xAx = -xAx; }         // 오른손 좌표계 유지하며 부지쪽으로
         var post = new Solid3d();
         post.CreateBox(q.Width, Thick, len);                           // X=폭, Y=두께, Z=길이(원점 중심)
         // 중심 = 기둥 중점 + 부지쪽으로 (FrontOut − Thick/2) (전면이 패널 전면과 같은 평면에 오도록).
@@ -420,11 +475,13 @@ public static class WallPanelDwg
         double uA = minU + PatternEdge, uB = maxU - PatternEdge;
         double vA = minV + PatternEdge, vB = maxV - PatternEdge;
 
-        var tiles2 = new List<List<Point2d>>();
+        // [JACK 0807] 사각형은 **네 모서리 값**으로 들고 있는다 — Core의 RectClip이 그 사각형을
+        //   '볼록 창'으로 삼아 판넬을 자르기 때문이다(역할을 바꿔야 조각이 하나로 나온다).
+        var tiles2 = new List<(double a, double b, double c, double d)>();
         void Rect(double a, double b, double c, double d)
         {
             if (b - a < MinPatchSide || d - c < MinPatchSide) return;
-            tiles2.Add(new List<Point2d> { new(a, c), new(b, c), new(b, d), new(a, d) });
+            tiles2.Add((a, b, c, d));
         }
         // 4분면마다 L자 = 축에 나란한 사각 2개(보호공 쪽 모서리를 도려낸 모양 — 스샷의 빨간 윤곽).
         Rect(uA, cu - gj / 2, vA, cvv - hb);   Rect(uA, cu - hb, cvv - hb, cvv - gj / 2);   // 좌하
@@ -440,12 +497,17 @@ public static class WallPanelDwg
         int stoneTried = 0; double stoneMaxArea = 0;   // '조각 전멸' 판넬의 사유를 다음 로그에서 가르기 위한 계측
         foreach (var sp in tiles2)
         {
-            // 창(볼록 조각)마다 클립 — 조각들의 합집합이 곧 '무늬 ∩ 판넬'이다.
-            var cut = new List<List<Point2d>>(windows.Count);
-            for (int w = 0; w < windows.Count; w++)
+            // ★★[JACK 0807 '최종 단계에서 무늬에 한해서만 서로 붙은 객체는 합친다'] **한 조각으로 자른다.**
+            //   종전엔 판넬을 볼록 조각으로 쪼개 창으로 삼아, 무늬 사각형 하나가 조각 수만큼 잘렸다(부챗살).
+            //   무늬 사각형은 언제나 축에 나란한 직사각형=볼록이므로 **그것을 창으로 삼고 판넬을 자르면**
+            //   교집합은 같은데 조각이 하나로 나온다. 끊어지는 드문 경우만 종전 방식으로 물러난다.
+            var pcs = DH.Grading.Core.WallBand.RectClip(p.Local, sp.a, sp.b, sp.c, sp.d, out bool oneShot);
+            if (oneShot) padsMerged++; else padsSeamed++;
+            var cut = new List<List<Point2d>>(pcs.Count);
+            foreach (var pc in pcs)
             {
                 // [JACK 0731] 퇴화 다각형 방지 — 클립이 만든 근접중복 정점을 정리한다.
-                var cl = DedupeRing(ClipPolyToLocal(sp, windows[w], winCcw[w]));
+                var cl = DedupeRing(pc.ConvertAll(t => new Point2d(t.u, t.v)));
                 if (cl.Count >= 3 && Poly2dArea(cl) >= MinPieceArea) cut.Add(cl);
             }
             // 판넬 모양에 맞춰 자를 때 가느다란 쐐기가 남을 수 있다 — 면적+두께로 거른다.
