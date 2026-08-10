@@ -56,8 +56,18 @@ public static class SheetCommand
 
     private static double InnerW => SheetW - 2 * MarginLR;   // 791
     private static double InnerH => SheetH - 2 * MarginTB;   // 554
-    /// <summary>뷰포트가 실제로 쓰는 높이 — 내부의 아래 2/3(위 1/3은 종평면도 자리).</summary>
-    private static double ViewH => InnerH * 2.0 / 3.0;   // 369.3
+    /// <summary>★[JACK 0810] 회사 참고 도면(C-005)의 실제 구도 — 1/3씩 균등이 아니다.
+    /// "제목부 0.5, 종단면도 3, 종단 3.5, 밴드 3 정도 되는 것 같아."
+    /// 합 10으로 나눠 내부 높이를 배분한다.</summary>
+    private const double UTitle = 0.5, UPlan = 3.0, UGraph = 3.5, UBand = 3.0;
+    private static double Unit => InnerH / (UTitle + UPlan + UGraph + UBand);   // 55.4mm
+    private static double TitleH => Unit * UTitle;    // 27.7  제목부
+    private static double PlanH => Unit * UPlan;      // 166.2 종평면도
+    private static double GraphH => Unit * UGraph;    // 193.9 종단 그래프
+    private static double BandH => Unit * UBand;      // 166.2 밴드 표
+
+    /// <summary>뷰포트가 실제로 쓰는 높이 — 종단 그래프 + 밴드 표(제목부·종평면도는 그 위).</summary>
+    private static double ViewH => GraphH + BandH;    // 360.1
 
     /// <summary>자리를 얼마나 채울지 — 100%로 채우면 그래프가 테두리에 붙어 답답하다.
     /// JACK 0810: "너무 딱 맞으면 그러니깐 약간의 버퍼는 줘서 도면이 좀 균형감 있게 해야지."</summary>
@@ -302,7 +312,7 @@ public static class SheetCommand
     /// Civil 3D가 종이 크기에 도면 축척을 곱해 그리기 때문이다.</para></summary>
     private static string NormalizeBands(Database db, ObjectId pvId, System.Text.StringBuilder log)
     {
-        int n = 0, hOk = 0, gOk = 0;
+        int n = 0, hOk = 0, gOk = 0, tOk = 0, vOk = 0;
         double eachM = 0;
         try
         {
@@ -311,17 +321,29 @@ public static class SheetCommand
             using (var probe = pv.Bands.GetBottomBandItems()) n = probe.Count;
             if (n == 0) { tr.Commit(); return "밴드 없음"; }
 
-            eachM = (InnerH / 3.0) / n / 1000.0;          // 종이 m — 1/3을 칸 수로 균등 분할
+            eachM = BandH / n / 1000.0;          // 종이 m — 1/3을 칸 수로 균등 분할
             using (var items = pv.Bands.GetBottomBandItems())
             {
                 for (int i = 0; i < items.Count; i++)
                 {
                     try { items[i].Gap = 0.0; gOk++; } catch { }
+                    vOk += EnableGeometryPoints(items[i]);
                     try
                     {
                         var st = tr.GetObject(items[i].BandStyleId, OpenMode.ForWrite);
-                        var p = st.GetType().GetProperty("BandHeight");
-                        if (p != null && p.CanWrite) { p.SetValue(st, eachM); hOk++; }
+                        if (Set(st, "BandHeight", eachM)) hOk++;
+
+                        // ★[JACK 0810] 글씨 크기를 **칸 높이에서 역산**한다 — "밴드 높이에서 위아래
+                        //   보조눈금 길이를 제외한 길이를 구하고, 000.00 표현식 기준으로 가장 꽉 찬 크기로."
+                        //   제목은 세로로 쓰고 4글자(누가거리·구간거리)가 가장 기니 그걸 기준으로 삼는다.
+                        //   ※ JACK 0810: "회사 스타일이란 건 없어. 그냥 네가 만들면 돼" — 값을 직접 정한다.
+                        double eachMm = BandH / n;
+                        double availMm = eachMm * (1.0 - TickShare);          // 위아래 눈금 자리를 뺀 길이
+                        double valMm = availMm / (6.0 * DigitW) * TextFill;   // "000.00" 6자
+                        double ttlMm = eachMm / 4.0 * TextFill;               // 한글 4자(폭≈높이)
+                        Set(st, "TextHeight", ttlMm / 1000.0);
+                        Set(st, "TextBoxWidth", ttlMm * 1.8 / 1000.0);        // 글씨가 상자 밖으로 안 나가게
+                        SetLabelHeight(tr, st, valMm / 1000.0, ref tOk);
                     }
                     catch { }
                 }
@@ -330,9 +352,86 @@ public static class SheetCommand
             tr.Commit();
         }
         catch (System.Exception ex) { return "밴드 정리 실패 — " + ex.Message; }
-        string s = $"밴드 {n}칸 균등 — 각 {eachM * 1000.0:F1}mm(합 {InnerH / 3.0:F1}mm) · 간격 0 (높이 {hOk}칸 · 간격 {gOk}칸)";
+        string s = $"밴드 {n}칸 균등 — 각 {eachM * 1000.0:F1}mm(합 {BandH:F1}mm) · 간격 0 (높이 {hOk} · 간격 {gOk} · 값글씨 {tOk} · 굴곡부 {vOk})";
         log.AppendLine(s);
         return s;
+    }
+
+    /// <summary>★[JACK 0810] <b>정지면 굴곡부에 측점이 자동으로 찍히게</b> 한다 —
+    /// "처음 종단도 그릴 때 정지 지표면에 한해서 굴곡부는 자동으로 측점이 추가되게 해 줘."
+    /// <para>수집기(<see cref="StationMarks"/>)가 굴곡부를 잡고는 있었지만 종단도에 <b>보이지</b> 않았다.
+    /// 밴드 항목의 수직 기하점 표시를 켜면 계획 종단이 꺾이는 자리마다 눈금과 측점이 자동으로 찍힌다 —
+    /// 단면검토선도, 사람 손도 필요 없다. 옵션 목록의 구조를 이름으로 박지 않고 반사로 훑어 전부 켠다.</para>
+    /// 반환=켠 항목 수(0이면 이 방식이 안 통한 것이니 로그에 드러난다).</summary>
+    private static int EnableGeometryPoints(object item)
+    {
+        int on = 0;
+        try
+        {
+            var t = item.GetType();
+            foreach (string g in new[] { "GetVerticalGeometryPointsOptions", "GetHorizontalGeometryPointsOptions" })
+            {
+                var mg = t.GetMethod(g, System.Type.EmptyTypes);
+                if (mg == null) continue;
+                var ms = t.GetMethod(g.Replace("Get", "Set"));
+                object? sel = null;
+                try { sel = mg.Invoke(item, null); } catch { }
+                if (sel == null) continue;
+                if (sel is System.Collections.IEnumerable en)
+                    foreach (var o in en)
+                    {
+                        if (o == null) continue;
+                        foreach (string pn in new[] { "Selected", "IsSelected", "Visible" })
+                        {
+                            try
+                            {
+                                var pi = o.GetType().GetProperty(pn);
+                                if (pi != null && pi.CanWrite && pi.PropertyType == typeof(bool))
+                                { pi.SetValue(o, true); on++; break; }
+                            }
+                            catch { }
+                        }
+                    }
+                try { ms?.Invoke(item, new object[] { sel }); } catch { }
+            }
+        }
+        catch { }
+        return on;
+    }
+
+    /// <summary>위아래 보조눈금이 칸 높이에서 차지하는 몫 · 숫자 한 글자의 폭(높이 대비) ·
+    /// 자리를 얼마나 채울지. JACK 0810 "가장 꽉 찬 크기로" — 다만 테두리에 닿지 않게 조금 남긴다.</summary>
+    private const double TickShare = 0.15, DigitW = 0.6, TextFill = 0.9;
+
+    /// <summary>반사로 속성 하나 쓰기 — 스타일 종류마다 있는 속성이 달라 이름을 박지 않는다.</summary>
+    private static bool Set(object o, string name, double v)
+    {
+        try
+        {
+            var p = o.GetType().GetProperty(name);
+            if (p == null || !p.CanWrite) return false;
+            p.SetValue(o, v); return true;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>밴드 스타일이 물고 있는 <b>라벨 스타일들의 글자 높이</b>를 값 크기에 맞춘다.
+    /// 칸 안에 들어가는 숫자는 밴드 자체가 아니라 라벨 스타일이 그리므로 여기까지 손대야 한다.</summary>
+    private static void SetLabelHeight(Transaction tr, object bandStyle, double hM, ref int okN)
+    {
+        foreach (var p in bandStyle.GetType().GetProperties())
+        {
+            if (!p.Name.EndsWith("LabelStyleId", StringComparison.Ordinal)) continue;
+            try
+            {
+                if (p.GetValue(bandStyle) is not ObjectId id || id.IsNull) continue;
+                var ls = tr.GetObject(id, OpenMode.ForWrite);
+                // 라벨 스타일의 글자 높이는 구성요소 안에 있어 이름이 여러 가지다 — 있는 것을 쓴다.
+                foreach (string nm in new[] { "TextHeight", "Height", "TextSize" })
+                    if (Set(ls, nm, hM)) { okN++; break; }
+            }
+            catch { }
+        }
     }
 
     /// <summary>밴드가 <b>종이에서</b> 차지하는 총높이(m). 축척과 무관하게 일정하다 —
