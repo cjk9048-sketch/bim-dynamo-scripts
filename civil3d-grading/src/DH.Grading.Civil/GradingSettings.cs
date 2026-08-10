@@ -27,7 +27,7 @@ public static class GradingSettings
     /// 이력은 설치본 확인에 쓰이므로 DLL에는 남기되, <b>출력은 절대 하지 않는다.</b>
     /// </para>
     /// 새 버전을 올릴 때 <b>둘 다</b> 갱신한다 — 이 줄(짧게)과 Changelog(자세히).</summary>
-    public const string Version = "v23.4 (2026-08-10)";
+    public const string Version = "v23.15 (2026-08-10)";
 
     /// <summary>변경 이력 — 설치본이 어느 빌드인지 DLL에서 확인하는 용도.
     /// <b>어디에도 출력하지 않는다</b>(명령창 도배 방지 — JACK 0807).</summary>
