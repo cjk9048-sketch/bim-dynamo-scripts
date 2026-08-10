@@ -127,7 +127,24 @@ public static class StationMarks
     /// <summary>구배변화점끼리 이보다 가까우면 큰 쪽 하나만 남긴다 — 한 자리에 라벨이 겹치지 않게.</summary>
     public const double GradeBreakMinGap = 2.0;
 
-    public static List<Mark> FromProfileGradeBreaks(Transaction tr, ObjectId profileId)
+    /// <summary>★[JACK 0810] <b>정지면과 원지반이 겹치는 구간은 공제한다.</b>
+    ///
+    /// <para>JACK: "계획지표면은 원지반과 합성되어 있으니깐 꼭 겹치는 구간 공제하는 로직이 있어야 해.
+    /// 아니면 원래 원지반 구간인데도 표면 굴곡 때문에 체인 끊어질 수도 있어."</para>
+    ///
+    /// <para><b>정지면은 순수한 계획면이 아니라 합성면이다.</b> 정지 범위 밖에서는 원지반을 그대로
+    /// 베껴 쓴다 — 그 구간의 꺾임은 <b>설계가 아니라 지형</b>이다. 실측에서 62m 노선에 78개가 잡힌
+    /// 이유가 이것이다. 두 선의 표고 차가 이 값 이하이면 '겹친다'로 보고 그 구간의 꺾임을 버린다.</para>
+    ///
+    /// <para>값은 <b>실제 거리(m)</b>다 — 축척과 무관해야 한다. 종단·횡단이 같은 측점을 써야 하는데
+    /// 축척에 따라 집합이 달라지면 두 도면이 어긋난다.</para></summary>
+    public const double PadGroundTol = 0.05;
+
+    /// <summary>계획 종단의 구배변화점. <paramref name="groundProfileId"/>를 주면
+    /// <b>원지반과 겹치는 구간을 공제</b>하고, 갈라지거나 합쳐지는 <b>경계</b>를 측점으로 잡는다
+    /// (사면 시·종점 = 데이라이트 자리라 도면에서 반드시 필요하다).</summary>
+    public static List<Mark> FromProfileGradeBreaks(Transaction tr, ObjectId profileId,
+                                                    ObjectId groundProfileId = default)
     {
         var list = new List<Mark>();
         if (profileId.IsNull) return list;
@@ -135,6 +152,19 @@ public static class StationMarks
         {
             if (tr.GetObject(profileId, OpenMode.ForRead) is not CivilDb.Profile pr) return list;
             double s0 = pr.StartingStation, s1 = pr.EndingStation;
+
+            // ── 원지반 종단을 손에 쥔다. 없으면 공제 없이 종전대로 간다(기능이 죽지는 않게).
+            CivilDb.Profile gr = null;
+            if (!groundProfileId.IsNull)
+                try { gr = tr.GetObject(groundProfileId, OpenMode.ForRead) as CivilDb.Profile; } catch { }
+
+            /// 이 측점에서 두 선이 떨어져 있는가(=정지 구간인가).
+            bool Graded(double s)
+            {
+                if (gr == null) return true;                 // 원지반을 모르면 전부 대상으로 둔다
+                try { return Math.Abs(pr.ElevationAt(s) - gr.ElevationAt(s)) > PadGroundTol; }
+                catch { return false; }                      // 범위 밖이면 대상 아님
+            }
 
             // ① PVI를 측점 순으로 모은다
             var pts = new List<(double S, double E)>();
@@ -156,14 +186,37 @@ public static class StationMarks
                 double gIn = (pts[i].E - pts[i - 1].E) / dL;
                 double gOut = (pts[i + 1].E - pts[i].E) / dR;
                 double d = Math.Abs(gOut - gIn);
-                if (d >= GradeBreakTol) cand.Add((s, d));
+                // ★[JACK 0810] 겹치는 구간의 꺾임은 지형이지 설계가 아니다 — 버린다.
+                if (d >= GradeBreakTol && Graded(s)) cand.Add((s, d));
+            }
+
+            // ②-b ★[JACK 0810] <b>갈라지고 합쳐지는 경계</b>를 잡는다 — 사면 시·종점(데이라이트).
+            //     정지 구간의 시작과 끝이라 도면에서 가장 중요한 체인 중 하나다.
+            //     PVI 사이에서 상태가 바뀌면 그 사이를 이분법으로 좁혀 자리를 찾는다.
+            if (gr != null)
+            {
+                bool prev = Graded(pts.Count > 0 ? pts[0].S : s0);
+                for (int i = 1; i < pts.Count; i++)
+                {
+                    bool cur = Graded(pts[i].S);
+                    if (cur == prev) continue;
+                    double a = pts[i - 1].S, b = pts[i].S;
+                    for (int it = 0; it < 30 && b - a > 1e-3; it++)      // 1mm까지 좁힌다
+                    {
+                        double m = (a + b) / 2.0;
+                        if (Graded(m) == prev) a = m; else b = m;
+                    }
+                    cand.Add(((a + b) / 2.0, double.MaxValue));         // 경계는 무조건 살린다
+                    prev = cur;
+                }
             }
 
             // ③ 붙어 있는 것끼리는 **가장 크게 꺾인 것 하나만** 남긴다
+            //    (경계는 D=MaxValue라 정렬에서 맨 앞에 서므로 절대 밀려나지 않는다.)
             foreach (var c in cand.OrderByDescending(x => x.D))
             {
                 if (list.Any(m => Math.Abs(m.Station - c.S) < GradeBreakMinGap)) continue;
-                list.Add(new Mark(c.S, "구배변화"));
+                list.Add(new Mark(c.S, c.D == double.MaxValue ? "정지경계" : "구배변화"));
             }
             list = list.OrderBy(m => m.Station).ToList();
         }

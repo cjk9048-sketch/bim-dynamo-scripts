@@ -134,15 +134,25 @@ public static class StationCommand
             catch { }
 
             // ② 계획 종단의 구배변화점 (JACK 0810: "계획면 구배변화점은 측점 있어야 해")
-            int nGb = 0;
+            //    ★[JACK 0810] 원지반 종단을 **같이** 넘긴다 — 정지면은 합성면이라
+            //    정지 범위 밖에서는 원지반을 그대로 베낀다. 그 구간의 꺾임은 지형이지 설계가 아니다.
+            ObjectId padId = ObjectId.Null, grdId = ObjectId.Null;
             foreach (ObjectId pid in al.GetProfileIds())
             {
                 if (tr.GetObject(pid, OpenMode.ForRead) is not CivilDb.Profile pr) continue;
-                if (!pr.Name.Contains("정지") && !pr.Name.Contains("계획")) continue;   // 원지반 종단은 대상 아님
-                var gb = StationMarks.FromProfileGradeBreaks(tr, pid);
-                list.AddRange(gb); nGb += gb.Count;
+                if (pr.Name.Contains("정지") || pr.Name.Contains("계획")) padId = pid;
+                else grdId = pid;
             }
-            note = $"꺾임 {nPi} · 구배변화 {nGb}";
+            int nGb = 0, nBnd = 0;
+            if (!padId.IsNull)
+            {
+                var gb = StationMarks.FromProfileGradeBreaks(tr, padId, grdId);
+                list.AddRange(gb);
+                nGb = gb.Count(m => m.Why == "구배변화");
+                nBnd = gb.Count(m => m.Why == "정지경계");
+            }
+            note = $"꺾임 {nPi} · 구배변화 {nGb} · 정지경계 {nBnd}"
+                 + (grdId.IsNull ? " (원지반 종단을 못 찾아 겹침 공제 안 함)" : "");
         }
         catch { }
         return list;

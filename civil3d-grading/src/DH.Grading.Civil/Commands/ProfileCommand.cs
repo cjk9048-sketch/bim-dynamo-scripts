@@ -354,12 +354,27 @@ public sealed class ProfileCommand
                             case Autodesk.Civil.BandType.ProfileData:
                                 try
                                 {
-                                    if (!pidGround.IsNull) fresh[k].Profile1Id = pidGround;
-                                    if (!pidPad.IsNull) fresh[k].Profile2Id = pidPad;
+                                    // ★★[JACK 0810] <b>계획고 밴드만 1번이 정지면이다.</b>
+                                    //   실측 결함: 계획고 행과 지반고 행의 값이 <b>한 자리도 안 틀리게 같았다</b>
+                                    //   (103.09/103.09 · 103.20/103.20 …). 원인은 배선이다 —
+                                    //   두 밴드의 회사 표현식이 <b>둘 다 <c>&lt;[종단1 표고]&gt;</c></b>인데
+                                    //   코드가 모든 밴드에 1=원지반을 꽂았다. 그래서 계획고 자리에 지반고가 찍혔다.
+                                    //   (절토 <c>종단1-종단2</c> · 성토 <c>종단2-종단1</c>는 1=원지반이라야 부호가 맞다.)
+                                    //
+                                    //   ※ 여기서만은 <b>이름으로 고른다.</b> §22.4는 '종류로 고르라'였지만
+                                    //     계획고와 지반고는 <b>종류도 표현식 구조도 같다</b> — 이름 말고 구분할 근거가 없다.
+                                    //     그래서 '계획'이 들어가면 뒤집는다.
+                                    bool isPlan = nm.Contains("계획");
+                                    var p1 = isPlan ? pidPad : pidGround;
+                                    var p2 = isPlan ? pidGround : pidPad;
+                                    if (!p1.IsNull) fresh[k].Profile1Id = p1;
+                                    if (!p2.IsNull) fresh[k].Profile2Id = p2;
                                     // ★ 간격이 0이면 라벨이 하나도 안 찍힌다 — JACK 스샷의 '주 간격' 칸이 비어 있었다.
                                     fresh[k].MajorInterval = band;
                                     fresh[k].MinorInterval = band;
-                                    act += $" · 1=원지반 2=정지면 · 간격 {band:0.#}m"; okN++;
+                                    act += isPlan ? $" · 1=정지면 2=원지반(계획고) · 간격 {band:0.#}m"
+                                                  : $" · 1=원지반 2=정지면 · 간격 {band:0.#}m";
+                                    okN++;
                                 }
                                 catch (System.Exception ex) { act += " · 배선실패:" + ex.Message; badN++; }
                                 break;
