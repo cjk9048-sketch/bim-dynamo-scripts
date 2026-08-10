@@ -229,6 +229,16 @@ public static class ProfileStyleTemplate
         return dh.Id.IsNull ? cands[0] : dh;
     }
 
+    /// <summary>★[JACK 0810] 정보표시 테이블(밴드 세트) 스타일을 <b>이름 조각으로</b> 고른다 —
+    /// '관로'·'토공'·'도로'. 전체 이름을 박아 두면 템플릿에서 이름을 조금만 고쳐도 못 찾는다.</summary>
+    public static StyleInfo? PickBandSet(Database db, CivilDocument doc, string keyword)
+    {
+        var cands = Collect(db, doc, si => si.Cls.Contains("ProfileBandStyleSet"));
+        if (cands.Count == 0) return null;
+        var hit = cands.FirstOrDefault(s => s.Name.Contains(keyword, StringComparison.Ordinal));
+        return hit.Id.IsNull ? null : hit;
+    }
+
     /// <summary>현재 도면의 스타일 모음을 반사(reflection)로 훑는다 — 모음 이름이 Civil 3D 버전마다
     /// 조금씩 달라, 이름을 박아 두면 한 곳만 바뀌어도 전체가 멈춘다.</summary>
     private static void Walk(object? node, string path, int depth, Dictionary<string, StyleCollectionBase> outMap)

@@ -370,7 +370,7 @@ public sealed class SectionCommand
 
     // ── 측점선 위치 계산 ─────────────────────────────────────────────────────
 
-    private readonly record struct Cut(double Station, Point2d Left, Point2d Right);
+    internal readonly record struct Cut(double Station, Point2d Left, Point2d Right);
 
     /// <summary>선형을 따라 간격마다 좌/우 폭 지점 2개를 뽑는다(폭을 확실히 제어하려고 좌표 방식 사용).</summary>
     private static System.Collections.Generic.List<Cut> PlanSampleLines(
@@ -401,7 +401,7 @@ public sealed class SectionCommand
         return list;
     }
 
-    private static bool TryCut(CivilDb.Alignment al, double st, double wl, double wr, out Cut cut)
+    internal static bool TryCut(CivilDb.Alignment al, double st, double wl, double wr, out Cut cut)
     {
         cut = default;
         try

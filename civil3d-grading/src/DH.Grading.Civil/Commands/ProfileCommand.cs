@@ -69,7 +69,7 @@ public sealed class ProfileCommand
         int prev = CountExisting(db, cdoc);
         if (prev > 0)
         {
-            var kw = new PromptKeywordOptions($"\n[종단도] 이미 만든 종단도가 {prev}개 있습니다. 지우고 새로 만들까요? ");
+            var kw = new PromptKeywordOptions($"\n이미 만든 종단도가 {prev}개 있습니다. 지우고 새로 만들까요? ");
             kw.Keywords.Add("지우고새로", "Y", "지우고새로(Y)");
             kw.Keywords.Add("남겨두고추가", "N", "남겨두고추가(N)");
             kw.Keywords.Default = "지우고새로";
@@ -190,9 +190,15 @@ public sealed class ProfileCommand
         {
             var pvId = CivilDb.ProfileView.Create(alignId, pvPt.Value.TransformBy(ed.CurrentUserCoordinateSystem));
             log.AppendLine("종단면도 배치 완료");
-            string sty = ApplyViewStyle(db, cdoc, pvId, pidGround, pidPad);
+            string sty = ApplyViewStyle(db, cdoc, pvId, pidGround, pidPad, ed, log);
             log.AppendLine(sty);
             ed.WriteMessage("\n  · " + sty);   // ★[JACK 0807] 명령창에서 바로 확인되게
+
+            // ★[JACK 0810] "도곽 버튼이 왜 필요하지? 그냥 종단도 누르면 모형탭하고 배치까지 자동으로 되야 되."
+            //   버튼을 늘리지 않고 여기서 끝까지 간다 — 모형 도곽 범위 + 배치 한 장까지.
+            string sheet = SheetCommand.Build(db, ed, pvId, log);
+            log.AppendLine("도곽: " + sheet);
+            ed.WriteMessage("\n  · 도곽: " + sheet);
         }
         catch (System.Exception ex)
         {
@@ -211,62 +217,170 @@ public sealed class ProfileCommand
     /// 사람이 종단뷰 특성창에서 손으로 고르게 되어 있다 — 매번 두 번 클릭해야 하고 빼먹기 쉽다.
     /// 여기서 만든 종단 ObjectId를 그대로 1번=원지반, 2번=정지면으로 꽂아 준다.</para></summary>
     private static string ApplyViewStyle(Database db, CivilApp.CivilDocument cdoc, ObjectId pvId,
-                                         ObjectId pidGround, ObjectId pidPad)
+                                         ObjectId pidGround, ObjectId pidPad,
+                                         Editor ed, System.Text.StringBuilder log)
     {
         var msg = new System.Text.StringBuilder("스타일 지정: ");
-        using var tr = db.TransactionManager.StartTransaction();
-        bool ok = false;
-        try
+
+        // ── ⓪ 어느 정보표시 테이블을 씌울지 — 물어보되 **지난 선택이 기본값**이라 Enter면 넘어간다.
+        //   JACK 0810 "둘 다 — 실행할 때 고른다". 자동 판정은 불가능하다: 상수도 현장은 한 도면에
+        //   원지반·정지면·관로가 같이 있는 게 정상이라, 방금 그린 노선이 무엇인지 알 길이 없다.
+        //   잘못 고르면 12칸짜리 표가 통째로 비므로 '틀린 자동'이 '한 번 묻기'보다 훨씬 비싸다.
+        // ★[JACK 0810] 안내 라벨에 대괄호를 쓰지 않는다 — AutoCAD는 프롬프트의 [...]를 **선택지 목록**으로
+        //   읽어서, '[종단도]'라는 라벨이 통째로 유령 선택지가 됐다("메뉴에 토공은 뭐고 종단도는 뭐야?").
+        var pko = new PromptKeywordOptions($"\n정보표시 테이블 <{GradingSettings.BandSet}>") { AllowNone = true };
+        pko.Keywords.Add("토공"); pko.Keywords.Add("관로"); pko.Keywords.Add("도로"); pko.Keywords.Add("없음");
+        pko.Keywords.Default = GradingSettings.BandSet;
+        var pr = ed.GetKeywords(pko);
+        string want = pr.Status == PromptStatus.OK ? pr.StringResult : GradingSettings.BandSet;
+        if (want != "없음") { GradingSettings.BandSet = want; GradingSettings.SaveBandSet(); }
+
+        // ── ① 필수 구간 — 뷰 스타일 + 밴드 세트. 여기가 깨지면 되돌린다.
+        bool core = false;
+        using (var tr = db.TransactionManager.StartTransaction())
         {
-            var pv = (CivilDb.ProfileView)tr.GetObject(pvId, OpenMode.ForWrite);
-
-            // ── ① 종단 뷰 스타일 — 이름이 아니라 **종류**로 고른다.
-            var vs = ProfileStyleTemplate.PickByClass(db, cdoc, ProfileStyleTemplate.ClsProfileView, ViewStyleName);
-            if (vs.HasValue) { pv.StyleId = vs.Value.Id; msg.Append($"뷰='{vs.Value.Name}'"); }
-            else msg.Append("뷰=(회사 표준 없음 — 기본값 유지)");
-
-            // ── ② 밴드 — ★[검토단 0807] 두 가지를 고쳤다.
-            //   (가) 종전엔 items.Add(bs)로 붙였는데 그건 **기반 클래스의 Add(ObjectId)** 에 걸려,
-            //        종단 데이터 밴드가 아닌 껍데기가 만들어졌다. 그래서 바로 뒤의 Profile1Id 대입이
-            //        **조용히 무시**됐다 — 스타일을 아무리 잘 들여와도 표고 칸은 계속 비었을 것이다.
-            //        진짜 API는 Add(BandType, 스타일이름)이다.
-            //   (나) 밴드를 **이름이 아니라 종류로** 고른다. 이름에 '횡단 데이터'가 든 밴드는
-            //        종류가 SectionalData라 Profile1/Profile2를 아예 쓰지 않는다 — 붙어도 값이 안 채워진다.
-            //        원지반·계획 표고를 채우는 건 **종단 데이터(ProfileData) 밴드**뿐이다.
-            var bs = ProfileStyleTemplate.PickByClass(db, cdoc, ProfileStyleTemplate.ClsProfileDataBand);
-            if (!bs.HasValue) msg.Append(" · 밴드=(종단 데이터 밴드 스타일이 도면에 없음)");
-            else
+            try
             {
-                using var items = pv.Bands.GetBottomBandItems();   // IDisposable — 안 풀면 샌다
-                int before = items.Count;
-                // 재실행 시 밴드가 겹겹이 쌓이지 않게, 이미 있으면 그것을 쓴다.
-                int idx = -1;
-                for (int i = 0; i < before; i++)
+                var pv = (CivilDb.ProfileView)tr.GetObject(pvId, OpenMode.ForWrite);
+                var vs = ProfileStyleTemplate.PickByClass(db, cdoc, ProfileStyleTemplate.ClsProfileView, ViewStyleName);
+                if (vs.HasValue) { pv.StyleId = vs.Value.Id; msg.Append($"뷰='{vs.Value.Name}'"); }
+                else msg.Append("뷰=(회사 표준 없음 — 기본값 유지)");
+
+                if (want == "없음") msg.Append(" · 밴드=건너뜀");
+                else
                 {
-                    try { if (items[i].BandStyleId == bs.Value.Id) { idx = i; break; } } catch { }
+                    // ★[JACK 0810] 밴드를 한 장씩 붙이던 것을 **세트 통째 적용**으로 바꿨다.
+                    //   종전엔 종단 데이터 밴드 한 장만 붙어 '한 줄짜리 표'가 나왔다 — 회사 표준은
+                    //   12칸짜리 정보표시 테이블이고, 템플릿이 세트를 3벌 갖고 있는 이유가 그것이다.
+                    //   ImportBandSetStyle은 기존 밴드를 **통째로 교체**하므로 재실행해도 쌓이지 않는다.
+                    var set = ProfileStyleTemplate.PickBandSet(db, cdoc, want);
+                    if (!set.HasValue) msg.Append($" · 밴드=('{want}' 세트가 도면에 없음)");
+                    else
+                    {
+                        int before = 0;
+                        try { using var b0 = pv.Bands.GetBottomBandItems(); before = b0.Count; } catch { }
+                        pv.Bands.ImportBandSetStyle(set.Value.Id);
+                        int after = 0;
+                        try { using var b1 = pv.Bands.GetBottomBandItems(); after = b1.Count; } catch { }
+                        msg.Append($" · 세트='{set.Value.Name}'(하단 {before}→{after}칸)");
+                    }
                 }
-                if (idx < 0)
-                {
-                    items.Add(Autodesk.Civil.BandType.ProfileData, bs.Value.Name);
-                    idx = items.Count - 1;
-                }
-                // ★ 방금 붙인(또는 찾은) **그 밴드에만** 꽂는다 — 종전엔 0번부터 전부 덮어써서
-                //   이미 있던 수평형상·파이프 밴드 설정까지 망가뜨렸다.
-                string what = "";
-                if (idx >= 0 && idx < items.Count)
-                {
-                    if (!pidGround.IsNull) { items[idx].Profile1Id = pidGround; what += "원지반"; }
-                    if (!pidPad.IsNull) { items[idx].Profile2Id = pidPad; what += (what.Length > 0 ? "·" : "") + "계획지반"; }
-                }
-                pv.Bands.SetBottomBandItems(items);
-                msg.Append($" · 밴드='{bs.Value.Name}'[{(idx < before ? "기존" : "신규")}] {(what.Length > 0 ? what + " 지정" : "지정할 종단 없음")}");
+                core = true;
             }
-            ok = true;
+            catch (System.Exception ex) { msg.Append(" ⚠세트 적용 실패:" + ex.Message); }
+            if (core) tr.Commit();
         }
-        catch (System.Exception ex) { msg.Append(" ⚠실패:" + ex.Message); }
-        // ★[검토단 0807] 예외가 나도 무조건 Commit 하던 것을 고쳤다 — 반쯤 고친 상태를 도면에 남기고
-        //   호출자에겐 성공처럼 보였다. 실패하면 되돌린다(Commit 안 하면 트랜잭션이 폐기된다).
-        if (ok) tr.Commit();
+        if (!core) return msg.ToString();
+
+        // ── ② 최선노력 구간 — 밴드를 '종단 데이터'로 갈아 끼우고 종단·간격을 꽂는다.
+        //
+        //   ★★[JACK 0810 실측] 토공 세트가 **6칸 전부 횡단 데이터(SectionalData) 밴드**였다.
+        //     그 종류는 **단면검토선에서만** 값을 읽으므로 단면검토선이 없으면 표가 통째로 빈다 —
+        //     JACK이 본 '밴드칸은 만들어졌는데 데이터와 측점이 없어'가 정확히 이것이다.
+        //     게다가 우리가 그 종류를 '대상아님'으로 건너뛰어 종단이 Civil 3D 기본값(원지반)으로
+        //     남았고, 그래서 '종단이 전부 원지반'으로 보였다. 세 증상이 한 원인이었다.
+        //
+        //   → **짝이 되는 '종단 데이터' 밴드로 바꿔 끼운다.** 템플릿에 6개가 이미 다 있고
+        //     이름이 1:1로 맞는다(…_횡단 데이터_지반고 ↔ …_종단 데이터_지반고).
+        //     종단 데이터 밴드는 단면검토선 없이 종단에서 바로 값을 읽는다.
+        //     **JACK이 정한 칸 순서는 그대로 지킨다** — 세트가 가진 설계는 살리고 종류만 바꾼다.
+        //     짝을 못 찾은 칸은 원래 것을 그대로 두고 로그에 남긴다(조용히 버리지 않는다).
+        int okN = 0, naN = 0, badN = 0, swapN = 0;
+        double band = System.Math.Max(1.0, GradingSettings.XsecInterval);
+        var detail = new System.Text.StringBuilder();
+        using (var tr = db.TransactionManager.StartTransaction())
+        {
+            try
+            {
+                var pv = (CivilDb.ProfileView)tr.GetObject(pvId, OpenMode.ForWrite);
+                var pdBands = ProfileStyleTemplate.Collect(db, cdoc,
+                                  x => x.Cls == ProfileStyleTemplate.ClsProfileDataBand);
+
+                foreach (bool bottom in new[] { true, false })
+                {
+                    // ⓐ 지금 붙어 있는 칸의 (종류, 스타일이름)을 순서대로 읽는다
+                    var cur = new System.Collections.Generic.List<(Autodesk.Civil.BandType T, string N)>();
+                    using (var items0 = bottom ? pv.Bands.GetBottomBandItems() : pv.Bands.GetTopBandItems())
+                    {
+                        for (int i = 0; i < items0.Count; i++)
+                        {
+                            string nm = ""; var bt = Autodesk.Civil.BandType.ProfileData;
+                            try
+                            {
+                                bt = items0[i].BandType;
+                                if (tr.GetObject(items0[i].BandStyleId, OpenMode.ForRead) is
+                                    Autodesk.Civil.DatabaseServices.Styles.StyleBase sb) nm = sb.Name;
+                            }
+                            catch { }
+                            cur.Add((bt, nm));
+                        }
+                    }
+                    if (cur.Count == 0) continue;
+
+                    // ⓑ 횡단 데이터 칸은 같은 뜻의 종단 데이터 칸으로 바꿔 끼운다
+                    var plan = new System.Collections.Generic.List<(Autodesk.Civil.BandType T, string N, string Note)>();
+                    foreach (var (bt, nm) in cur)
+                    {
+                        if (bt == Autodesk.Civil.BandType.SectionalData && nm.Length > 0)
+                        {
+                            string key = nm.Substring(nm.LastIndexOf('_') + 1);   // 지반고·계획고·측점 …
+                            var twin = pdBands.FirstOrDefault(b => b.Name.EndsWith("_" + key, System.StringComparison.Ordinal));
+                            if (twin.Id.IsNull)
+                                twin = pdBands.FirstOrDefault(b => b.Name.Contains(key, System.StringComparison.Ordinal));
+                            if (!twin.Id.IsNull)
+                            { plan.Add((Autodesk.Civil.BandType.ProfileData, twin.Name, $"횡단→종단 '{twin.Name}'")); swapN++; continue; }
+                            plan.Add((bt, nm, "짝 없음 — 그대로(단면검토선 필요)"));
+                            continue;
+                        }
+                        plan.Add((bt, nm, ""));
+                    }
+
+                    // ⓒ 새 목록으로 통째 교체(기존 항목의 종류는 만든 뒤에 바꿀 수 없다)
+                    using var fresh = new CivilDb.ProfileViewBandItemCollection(
+                        pvId, bottom ? Autodesk.Civil.BandLocationType.Bottom : Autodesk.Civil.BandLocationType.Top);
+                    for (int i = 0; i < plan.Count; i++)
+                    {
+                        var (bt, nm, note) = plan[i];
+                        if (nm.Length == 0) continue;
+                        try { fresh.Add(bt, nm); }
+                        catch (System.Exception ex) { detail.AppendLine($"    [{(bottom ? "하단" : "상단")} {i}] {bt} '{nm}' → 붙이기 실패:{ex.Message}"); badN++; continue; }
+
+                        int k = fresh.Count - 1;
+                        string act = note;
+                        switch (bt)
+                        {
+                            case Autodesk.Civil.BandType.ProfileData:
+                                try
+                                {
+                                    if (!pidGround.IsNull) fresh[k].Profile1Id = pidGround;
+                                    if (!pidPad.IsNull) fresh[k].Profile2Id = pidPad;
+                                    // ★ 간격이 0이면 라벨이 하나도 안 찍힌다 — JACK 스샷의 '주 간격' 칸이 비어 있었다.
+                                    fresh[k].MajorInterval = band;
+                                    fresh[k].MinorInterval = band;
+                                    act += $" · 1=원지반 2=정지면 · 간격 {band:0.#}m"; okN++;
+                                }
+                                catch (System.Exception ex) { act += " · 배선실패:" + ex.Message; badN++; }
+                                break;
+                            case Autodesk.Civil.BandType.VerticalGeometry:
+                                // 구배 밴드는 **계획 종단**의 종단선형 기하를 읽는다(원지반엔 그 기하가 없다).
+                                try { if (!pidPad.IsNull) fresh[k].Profile1Id = pidPad; act += " · 1=정지면"; okN++; }
+                                catch (System.Exception ex) { act += " · 배선실패:" + ex.Message; badN++; }
+                                break;
+                            default:
+                                act += " · 대상아님"; naN++;
+                                break;
+                        }
+                        detail.AppendLine($"    [{(bottom ? "하단" : "상단")} {i}] {bt} '{nm}' → {act.TrimStart(' ', '·')}");
+                    }
+                    if (bottom) pv.Bands.SetBottomBandItems(fresh); else pv.Bands.SetTopBandItems(fresh);
+                }
+            }
+            catch (System.Exception ex) { msg.Append(" ⚠배선 중단:" + ex.Message); }
+            tr.Commit();   // 최선노력 — 일부 실패해도 성공한 것은 남긴다
+        }
+        if (detail.Length > 0) log.AppendLine("  밴드 배선:\n" + detail.ToString().TrimEnd());
+        msg.Append($" · 종단→간격 꽂음 {okN}칸" + (swapN > 0 ? $" · 횡단→종단 교체 {swapN}칸" : "")
+                 + (naN > 0 ? $" · 대상아님 {naN}칸" : "") + (badN > 0 ? $" · 실패 {badN}칸" : ""));
         return msg.ToString();
     }
 

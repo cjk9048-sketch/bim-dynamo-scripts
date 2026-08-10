@@ -27,7 +27,7 @@ public static class GradingSettings
     /// 이력은 설치본 확인에 쓰이므로 DLL에는 남기되, <b>출력은 절대 하지 않는다.</b>
     /// </para>
     /// 새 버전을 올릴 때 <b>둘 다</b> 갱신한다 — 이 줄(짧게)과 Changelog(자세히).</summary>
-    public const string Version = "v21.9 (2026-08-07)";
+    public const string Version = "v23.1 (2026-08-10)";
 
     /// <summary>변경 이력 — 설치본이 어느 빌드인지 DLL에서 확인하는 용도.
     /// <b>어디에도 출력하지 않는다</b>(명령창 도배 방지 — JACK 0807).</summary>
@@ -323,6 +323,23 @@ public static class GradingSettings
         {
             using var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(PrefsRegKey);
             if (k?.GetValue("MiterConvex") is int v) MiterConvex = v != 0;
+            if (k?.GetValue("BandSet") is string bs && bs.Length > 0) BandSet = bs;
+        }
+        catch { }
+    }
+
+    /// <summary>★[JACK 0810] 종단도에 씌울 회사 표준 밴드 세트 — 관로/토공/도로.
+    /// JACK이 "둘 다 — 실행할 때 고른다"를 골랐으므로 <b>물어보되 지난 선택을 기본값</b>으로 두어
+    /// Enter만 치면 넘어가게 한다. 노선 성격이 그때그때 바뀌는 사람에게 맞는 방식이다.</summary>
+    public static string BandSet = "토공";
+
+    /// <summary>고른 밴드 세트를 다음 세션 기본값으로 기록.</summary>
+    public static void SaveBandSet()
+    {
+        try
+        {
+            using var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(PrefsRegKey);
+            k?.SetValue("BandSet", BandSet, Microsoft.Win32.RegistryValueKind.String);
         }
         catch { }
     }

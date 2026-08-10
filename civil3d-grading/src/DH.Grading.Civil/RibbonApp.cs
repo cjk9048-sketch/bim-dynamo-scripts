@@ -22,6 +22,10 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ProfileCommand))]             // DHPROFILE(종단도 — 노선 직접 그리기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ImportGisCommand))]           // DHCONTOUR/DHPARCEL(등고선·지적도 가져오기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.CoordSysProbeCommand))]       // DHCS(좌표계 API 진단 — 임시)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.BandInfoCommand))]            // DHBANDINFO(밴드 검토 — 읽기 전용 진단)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.StationCommand))]             // DHSTATION(측점 추가·삭제 — 밸브실 등)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SampleLineCommand))]          // DHSAMPLE(단면검토선 — 측점 목록대로 생성)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SheetCommand))]               // DHSHEET(도곽 — A1 배치·모형 도곽범위)
 
 namespace DH.Grading.Civil;
 
@@ -169,6 +173,30 @@ public sealed class RibbonApp : IExtensionApplication
                 "그린 노란 선은 도면에 남아, 나중에 고쳐서 다시 돌릴 수 있습니다.", null);
             pDraw.Items.Add(btnProf);
             pDraw.Items.Add(Spacer());
+
+            // ★[측점 — JACK 0810] 종단도와 횡단도가 **같은 측점**을 쓰게 하는 두 버튼.
+            //   측점 목록 한 곳에 모으고([측점]), 그 목록대로 횡단 위치를 놓는다([단면검토선]).
+            //   종전엔 종단은 종단대로 횡단은 횡단대로 만들어 두 도면의 측점이 어긋날 수 있었다.
+            var btnStn = MakeButton(
+                "측점", "DHSTATION ", "밸브실처럼 원하는 자리에 측점을 더하거나 지웁니다(목록도 여기서 봅니다)", "측점");
+            btnStn.ToolTip = MakeTip("측점 (DHSTATION)",
+                "노선 위 원하는 자리를 클릭해 **측점을 더합니다**(밸브실·밸브 등).\n" +
+                "노선 꺾임점과 계획면 구배변화점은 **자동으로 잡히므로** 더할 필요가 없습니다.\n" +
+                "측점은 도면에 그려지지 않고 노선에 숨겨 저장됩니다 — 목록은 이 명령에서 봅니다.\n" +
+                "여기서 정한 측점이 종단도 밴드와 단면검토선에 그대로 쓰입니다.", null);
+            pDraw.Items.Add(btnStn);
+            pDraw.Items.Add(Spacer());
+
+            var btnSl = MakeButton(
+                "단면\n검토선", "DHSAMPLE ", "정체인 + 꺾임점 + 구배변화점 + 수동 측점 자리에 단면검토선을 만듭니다", "횡단위치");
+            btnSl.ToolTip = MakeTip("단면검토선 (DHSAMPLE)",
+                "종단도에서 정한 측점을 **그대로 횡단 위치로 옮깁니다**.\n" +
+                "정체인(정지옵션의 횡단 간격) + 노선 꺾임점 + 계획면 구배변화점 + [측점]으로 더한 자리.\n" +
+                "이미 있는 그룹은 다시 쓰고 같은 자리는 건너뛰므로, 여러 번 눌러도 겹치지 않습니다.\n" +
+                "횡단면도는 이 뒤에 Civil 3D 기본 기능으로 뽑습니다.", null);
+            pDraw.Items.Add(btnSl);
+            pDraw.Items.Add(Spacer());
+
 
             // [종단·횡단 — JACK 0731] 선 하나 그으면 종단면도·횡단면도를 Civil3D 정식 객체로 생성.
             var btnSec = MakeButton(
