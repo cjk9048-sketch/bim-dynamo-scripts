@@ -80,6 +80,75 @@ public static class BandInfoCommand
                 catch (System.Exception ex) { log.AppendLine("   열기실패: " + ex.Message); }
             }
 
+            // ── ③ 종단 뷰 스타일 — 축척(V/H) 표시 자리와 좌측 축 눈금(스케일 체크바)이 여기 들어 있다.
+            //   ★[JACK 0810] "축척 표시값이 이상한 곳에 배치" · "왼쪽 스케일바가 직선인데 체크바로 바꿔줘"
+            //   둘 다 뷰 스타일 속성인데 이름을 모른다 — 짐작으로 건드리면 헛돈다(이번 판에서 세 번 겪었다).
+            //   전수로 찍어 두면 다음 판에서 정확한 이름으로 손댈 수 있다.
+            log.AppendLine("\n\n── 종단 뷰 스타일(축척 표시·축 눈금) ──");
+            foreach (var s in ProfileStyleTemplate.Collect(db, cdoc, x => x.Cls == ProfileStyleTemplate.ClsProfileView))
+            {
+                log.AppendLine($"\n■ '{s.Name}'  [{s.Cls}]  @{s.Path}");
+                try { Dump(tr.GetObject(s.Id, OpenMode.ForRead), tr, log, "   "); }
+                catch (System.Exception ex) { log.AppendLine("   열기실패: " + ex.Message); }
+            }
+
+            // ── ④ 종단선 스타일 — 원지반/정지면 선의 색·굵기·선종류가 여기 있다.
+            log.AppendLine("\n\n── 종단(선) 스타일 ──");
+            foreach (var s in ProfileStyleTemplate.Collect(db, cdoc, x => x.Cls.Contains("VAlignmentStyle")))
+            {
+                log.AppendLine($"\n■ '{s.Name}'  [{s.Cls}]  @{s.Path}");
+                try { Dump(tr.GetObject(s.Id, OpenMode.ForRead), tr, log, "   "); }
+                catch (System.Exception ex) { log.AppendLine("   열기실패: " + ex.Message); }
+            }
+
+            // ── ⑤ 라벨 스타일 — 밴드 안 숫자, 종단뷰 측점·표고 라벨의 글자 크기가 여기 있다.
+            //   ★[JACK 0810] 밴드 값 글씨 크기를 코드로 못 바꾸면 여기 이름을 보고 잡아야 한다.
+            log.AppendLine("\n\n── 라벨 스타일 ──");
+            foreach (var s in ProfileStyleTemplate.Collect(db, cdoc, x => x.Cls.Contains("LabelStyleCollector")))
+            {
+                log.AppendLine($"\n■ '{s.Name}'  @{s.Path}");
+                try { Dump(tr.GetObject(s.Id, OpenMode.ForRead), tr, log, "   "); }
+                catch (System.Exception ex) { log.AppendLine("   열기실패: " + ex.Message); }
+            }
+
+            // ── ⑥ 도면 설정 — 주석 축척이 어긋나면 밴드·글자가 통째로 어긋난다(v22.7에서 겪었다).
+            log.AppendLine("\n\n── 도면 설정 ──");
+            try
+            {
+                log.AppendLine($"   현재 주석축척 = {db.Cannoscale?.Name ?? "(없음)"}");
+                log.AppendLine($"   도면 단위 = {db.Insunits}");
+                var occ = db.ObjectContextManager?.GetContextCollection("ACDB_ANNOTATIONSCALES");
+                if (occ != null)
+                {
+                    var names = new System.Collections.Generic.List<string>();
+                    foreach (var c in occ) if (c is AnnotationScale a) names.Add(a.Name);
+                    log.AppendLine($"   등록된 축척 {names.Count}개: {string.Join(" · ", names)}");
+                }
+            }
+            catch (System.Exception ex) { log.AppendLine("   도면 설정 읽기 실패: " + ex.Message); }
+
+            // ── ⑦ 배치·뷰포트 — 도곽이 실제로 어떻게 잡혔는지.
+            log.AppendLine("\n\n── 배치(레이아웃) ──");
+            try
+            {
+                var lm = LayoutManager.Current;
+                var lays = (DBDictionary)tr.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
+                foreach (DBDictionaryEntry e in lays)
+                {
+                    if (tr.GetObject(e.Value, OpenMode.ForRead) is not Layout lay || lay.ModelType) continue;
+                    log.AppendLine($"\n■ 배치 '{lay.LayoutName}' · 용지 {lay.PlotPaperSize} · 단위 {lay.PlotPaperUnits}");
+                    var ps = (BlockTableRecord)tr.GetObject(lay.BlockTableRecordId, OpenMode.ForRead);
+                    foreach (ObjectId id in ps)
+                    {
+                        if (tr.GetObject(id, OpenMode.ForRead) is not Viewport vp || vp.Number == 1) continue;
+                        log.AppendLine($"   뷰포트 {vp.Width:F1}×{vp.Height:F1}mm · 중심 {vp.CenterPoint} · " +
+                                       $"축척 1:{(vp.CustomScale > 1e-9 ? 1000.0 / vp.CustomScale : 0):F0} · " +
+                                       $"뷰중심 {vp.ViewCenter} · 잠금 {vp.Locked} · 켜짐 {vp.On}");
+                    }
+                }
+            }
+            catch (System.Exception ex) { log.AppendLine("   배치 읽기 실패: " + ex.Message); }
+
             tr.Commit();   // 읽기만 했다 — 도면은 바뀌지 않는다
         }
         catch (System.Exception ex) { log.AppendLine("\n⚠중단: " + ex.Message); }

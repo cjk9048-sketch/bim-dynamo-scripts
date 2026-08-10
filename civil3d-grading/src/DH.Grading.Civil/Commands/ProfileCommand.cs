@@ -229,7 +229,9 @@ public sealed class ProfileCommand
         // ★[JACK 0810] 안내 라벨에 대괄호를 쓰지 않는다 — AutoCAD는 프롬프트의 [...]를 **선택지 목록**으로
         //   읽어서, '[종단도]'라는 라벨이 통째로 유령 선택지가 됐다("메뉴에 토공은 뭐고 종단도는 뭐야?").
         var pko = new PromptKeywordOptions($"\n정보표시 테이블 <{GradingSettings.BandSet}>") { AllowNone = true };
-        pko.Keywords.Add("토공"); pko.Keywords.Add("관로"); pko.Keywords.Add("도로"); pko.Keywords.Add("없음");
+        // ★[JACK 0810] "도로와 없음은 없애. 우린 토공과 관로만 필요해."
+        //   쓰지 않는 선택지는 고민만 늘린다.
+        pko.Keywords.Add("토공"); pko.Keywords.Add("관로");
         pko.Keywords.Default = GradingSettings.BandSet;
         var pr = ed.GetKeywords(pko);
         string want = pr.Status == PromptStatus.OK ? pr.StringResult : GradingSettings.BandSet;
