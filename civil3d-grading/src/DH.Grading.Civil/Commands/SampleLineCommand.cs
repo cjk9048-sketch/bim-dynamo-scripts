@@ -71,20 +71,20 @@ public static class SampleLineCommand
             return;
         }
 
-        // ── ② 이미 있는 그룹은 다시 쓴다 — 재실행할 때마다 그룹이 겹겹이 쌓이면 도면이 못 쓰게 된다.
+        // ── ② 그룹 만들기.
+        //
+        //   ★★[v29.0 점검 반영 · 높음] <b>종단도가 만든 그룹에 덧붙이지 않는다.</b>
+        //   종전엔 이름이 <c>DH횡단</c>으로 시작하는 기존 그룹을 <b>재사용</b>했다. 그런데 종단도(DHPROFILE)가
+        //   만든 그룹은 <b>다른 규칙</b>(20m+10m+굴곡부+수동)으로 놓인 것이라, 그 위에 이 명령의 선을 덧붙이면
+        //   <b>한 그룹 안에 규칙이 다른 선이 섞인다</b> — 값 다섯 행에는 값이 찍히는데 측점 행에는 없는,
+        //   JACK이 가장 싫어하는 "어딘 나오고 어딘 안 나오는" 도면이 된다.
+        //   → <b>이 명령은 늘 자기 그룹을 새로 만든다.</b> 겹겹이 쌓이는 것은 이름에 번호가 붙어 구분된다.
         ObjectId groupId = ObjectId.Null;
         string groupName;
         using (var tr = db.TransactionManager.StartTransaction())
         {
             var cdoc = CivilApp.CivilApplication.ActiveDocument;
-            var al = (CivilDb.Alignment)tr.GetObject(alignId, OpenMode.ForRead);
-            foreach (ObjectId gid in al.GetSampleLineGroupIds())
-            {
-                if (tr.GetObject(gid, OpenMode.ForRead) is CivilDb.SampleLineGroup g0
-                    && g0.Name.StartsWith(SectionCommand.GroupBase, System.StringComparison.Ordinal))
-                { groupId = gid; break; }
-            }
-            groupName = groupId.IsNull ? SectionCommand.UniqueName(db, cdoc, SectionCommand.GroupBase) : "";
+            groupName = SectionCommand.UniqueName(db, cdoc, SectionCommand.GroupBase);
             tr.Commit();
         }
 

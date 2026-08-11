@@ -33,9 +33,16 @@ public static class StationMarks
     /// <summary>선형 확장 사전 안에서 이 목록이 사는 자리.</summary>
     private const string DictKey = "DH_측점목록";
 
-    /// <summary>정체인과 특수측점이 이보다 가까우면 <b>특수측점을 살리고 정체인을 지운다</b>.
-    /// 0.3m 차이로 두 라벨이 겹치면 도면이 못 읽게 된다 — 그럴 바엔 'No.5' 하나가 낫다.</summary>
-    public const double MergeTol = 0.5;
+    /// <summary>★★[v29.0 점검 반영 · JACK 0811 확정] <b>같은 자리만 합친다 — 솎아내지 않는다.</b>
+    ///
+    /// <para>종전 값은 <b>0.5m</b>였다. 그러면 굴곡부가 20.4m에 있을 때 <c>No.1</c>(20.00m)
+    /// <b>정측점이 지워진다</b> — 도면에서 기준이 되는 번호가 사라지는 것이라 가장 나쁜 종류의 누락이다.
+    /// JACK 확정: <i>"최소간격 없어 둘 다 찍어."</i> 겹쳐 보이는 것보다 빠지는 것이 나쁘다.</para>
+    ///
+    /// <para>그래서 이 값은 <b>솎아내기 기준이 아니라 '같은 점' 판정</b>이다 — 1cm.
+    /// 종단도(DHPROFILE)는 이미 1cm를 쓰고 있었는데 <see cref="SampleLineCommand"/>는 기본값 0.5m를
+    /// 쓰고 있어서 <b>같은 노선인데 두 명령의 측점 목록이 달랐다</b>. 기본값을 맞춘다.</para></summary>
+    public const double MergeTol = 0.01;
 
     /// <summary>측점 하나. <paramref name="Why"/>는 사람이 읽을 사유(밸브실·이형관·구배변화 등).</summary>
     public readonly record struct Mark(double Station, string Why);
@@ -222,6 +229,220 @@ public static class StationMarks
         }
         catch { }
         return list;
+    }
+
+    // ── 굴곡부 = 선형 × 정지면 굴곡선의 2D 교차 ──────────────────────────────
+
+    /// <summary>★★[v25.0 · JACK 0811 확정] <b>굴곡부는 선을 만나는 자리다 — 표본점을 세는 게 아니라.</b>
+    ///
+    /// <para><b>왜 방식을 바꿨나.</b> 종전엔 계획 종단의 PVI를 훑어 '많이 꺾인 것'을 골랐다
+    /// (<see cref="FromProfileGradeBreaks"/>). 그런데 지표면에서 딴 종단은 <b>삼각망을 지날 때마다</b>
+    /// PVI가 생긴다 — 실측에서 평평한 구간(계획고 112.00)에 PVI가 20개 넘게 이어졌다.
+    /// 그건 꺾인 자리가 아니라 <b>표본점</b>이라, 허용오차를 아무리 다듬어도 설계와 잡음을 못 가른다.</para>
+    ///
+    /// <para>JACK: <i>"굴곡부는 선형과 계획지표면의 소단 또는 옹벽선과의 2D 교차점 측점을 찾고
+    /// 그걸 단면검토선에 추가하는 방식으로 가는 건 어때? 어차피 애드인의 결과물로 만들 종단이니깐."</i>
+    /// <i>"정지면을 만드는 데 있어서 생성되는 모든 선이 들어가야 해 — 지표면과 닿는 데이라잇,
+    /// 소단선, 사면선, 옹벽선 정도면 되지 않을까?"</i></para>
+    ///
+    /// <para><b>맞는 말이다.</b> 정지면은 우리가 만든 면이고, 그 면을 만든 <b>굴곡선(breakline)</b>이
+    /// 곧 데이라잇·소단·사면·옹벽이다. 종단이 꺾이는 자리는 <b>선형이 그 선을 넘는 자리</b>다.
+    /// 추정이 아니라 <b>계산</b>이고, 허용오차가 필요 없다.</para>
+    ///
+    /// <para><b>도면의 선이 아니라 지표면의 굴곡선에서 읽는다.</b> 도면에 그려지는
+    /// <c>DH-소단선-*</c>·<c>DH-사면선-*</c>은 <b>표현용</b>이라 레이어가 개편되면 빠질 수 있고
+    /// (실제로 구 <c>DH-소단</c>은 지금 비워진다), <c>DH-노리선</c>은 굴곡선이 아니라
+    /// <b>해칭 tick(짧은 선 수십 개)</b>이라 교차시키면 엉뚱한 자리가 쏟아진다.
+    /// 굴곡선은 <b>정지면의 실체</b>라 그런 흔들림이 없다.</para>
+    ///
+    /// <para><b>교차는 이분법으로 찾는다.</b> Civil의 선형은 AcDb 곡선이 아니라 <c>IntersectWith</c>가
+    /// 없다. 대신 <c>StationOffset</c>이 주는 <b>부호 있는 이격</b>을 쓴다 — 굴곡선 한 구간의
+    /// 양 끝에서 부호가 바뀌면 그 사이에서 선형을 넘은 것이다. 곡선 선형에도 그대로 통한다.</para>
+    ///
+    /// <para><b>솎지 않는다</b>(JACK: "최소간격 없어 둘 다 찍어"). 소단을 비스듬히 지나 30cm 간격으로
+    /// 둘이 나와도 둘 다 남긴다 — 겹쳐 보이는 것보다 빠지는 게 나쁘다.</para></summary>
+    /// <param name="surfIds">굴곡선을 읽을 지표면들. <b>원지반은 넣지 말 것</b> — 측량면의 굴곡선은
+    /// 설계가 아니라 지형이고, 수천 개가 쏟아진다.</param>
+    /// <summary>선 하나(정점 목록)가 선형을 넘는 자리를 모은다 — 굴곡선·도면선 공용.
+    /// <para>Civil의 선형은 AcDb 곡선이 아니라 <c>IntersectWith</c>가 없다. 대신
+    /// <c>StationOffset</c>이 주는 <b>부호 있는 이격</b>을 쓴다 — 한 구간의 양 끝에서 부호가 바뀌면
+    /// 그 사이에서 선형을 넘은 것이고, 이분법으로 0이 되는 자리를 좁힌다. 곡선 선형에도 그대로 통한다.</para></summary>
+    private static int Crossings(CivilDb.Alignment al, IList<Point3d> vs, string why,
+                                 double s0, double s1, Func<double, bool> keep,
+                                 List<Mark> outp, ref int nSeg, ref int nSkip, ref int nOutside)
+    {
+        bool Probe(Point3d p, out double st, out double off)
+        {
+            st = 0; off = 0;
+            try { al.StationOffset(p.X, p.Y, ref st, ref off); return true; }
+            catch { return false; }
+        }
+
+        int hit = 0;
+        for (int k = 1; k < vs.Count; k++)
+        {
+            nSeg++;
+            Point3d A = vs[k - 1], B = vs[k];
+            if (!Probe(A, out _, out double oA) || !Probe(B, out _, out double oB)) { nSkip++; continue; }
+            if (oA == 0.0 && oB == 0.0) continue;      // 선형 위에 겹쳐 누운 구간 — 넘은 게 아니다
+            if (oA * oB > 0) continue;                 // 같은 쪽 → 안 넘었다
+
+            double lo = 0.0, hi = 1.0, sHit = double.NaN;
+            for (int it = 0; it < 40; it++)
+            {
+                double t = (lo + hi) / 2.0;
+                var P = new Point3d(A.X + (B.X - A.X) * t, A.Y + (B.Y - A.Y) * t, 0);
+                if (!Probe(P, out double stM, out double oM)) break;
+                sHit = stM;
+                if (oM == 0.0) break;
+                if (oA * oM > 0) lo = t; else hi = t;
+            }
+            if (double.IsNaN(sHit)) continue;
+            if (sHit < s0 - 1e-6 || sHit > s1 + 1e-6) { nSkip++; continue; }   // 선형 밖으로 연장된 자리
+            if (keep != null && !keep(sHit)) { nOutside++; continue; }
+            outp.Add(new Mark(sHit, why)); hit++;
+        }
+        return hit;
+    }
+
+    /// <summary>같은 자리(1cm 이내)를 하나로 합친다. <b>솎아내기가 아니라 중복 제거</b>다 —
+    /// 절토·성토 두 면이 같은 링에서 만들어져 같은 교차가 두 번 잡히는 경우를 위한 것이다.</summary>
+    public static int Dedupe(List<Mark> list)
+    {
+        list.Sort((a, b) => a.Station.CompareTo(b.Station));
+        int dup = 0;
+        for (int i = list.Count - 1; i > 0; i--)
+            if (list[i].Station - list[i - 1].Station < 0.01) { list.RemoveAt(i); dup++; }
+        return dup;
+    }
+
+    public static List<Mark> FromGradingBreaklines(Transaction tr, CivilDb.Alignment al,
+                                                   IEnumerable<ObjectId> surfIds,
+                                                   Func<double, bool> keep,
+                                                   System.Text.StringBuilder log)
+    {
+        var list = new List<Mark>();
+        if (al == null || surfIds == null) return list;
+        double s0 = al.StartingStation, s1 = al.EndingStation;
+
+        int nSurf = 0, nBl = 0, nSeg = 0, nSkipFar = 0, nOutside = 0;
+        foreach (ObjectId sid in surfIds)
+        {
+            if (sid.IsNull) continue;
+            string nm = "?";
+            int hitHere = 0, blHere = 0, segBefore = nSeg, outBefore = nOutside;
+            try
+            {
+                if (tr.GetObject(sid, OpenMode.ForRead) is not CivilDb.TinSurface tin) continue;
+                nm = tin.Name; nSurf++;
+                var defs = tin.BreaklinesDefinition;
+                for (int i = 0; i < defs.Count; i++)
+                {
+                    CivilDb.SurfaceOperationAddBreakline op;
+                    try { op = defs[i]; } catch { continue; }
+                    foreach (CivilDb.SurfaceBreakline bl in op)
+                    {
+                        blHere++;
+                        Point3dCollection vs;
+                        try { vs = bl.Vertices; } catch { continue; }
+                        var pts = new List<Point3d>(vs.Count);
+                        foreach (Point3d p in vs) pts.Add(p);
+                        hitHere += Crossings(al, pts, "굴곡부·" + nm, s0, s1, keep, list,
+                                             ref nSeg, ref nSkipFar, ref nOutside);
+                    }
+                }
+            }
+            catch (System.Exception ex) { log?.AppendLine($"   굴곡선 '{nm}' 읽기 실패 — {ex.Message}"); }
+            nBl += blHere;
+            log?.AppendLine($"   굴곡선 '{nm}': 선 {blHere}개 · 구간 {nSeg - segBefore}개 → 교차 {hitHere}개" +
+                            (nOutside - outBefore > 0 ? $" · 정지구간 밖이라 버린 것 {nOutside - outBefore}개" : ""));
+        }
+
+        int dup = Dedupe(list);
+        log?.AppendLine($"  굴곡부 합계: 지표면 {nSurf}개 · 굴곡선 {nBl}개 · 구간 {nSeg}개 → " +
+                        $"교차 {list.Count + dup}개(중복 {dup}개 합침) → {list.Count}개" +
+                        (nOutside > 0 ? $" · 정지구간 밖 {nOutside}개" : "") +
+                        (nSkipFar > 0 ? $" · 선형 밖 {nSkipFar}개" : ""));
+        if (list.Count == 0)
+            log?.AppendLine("  ⚠굴곡부가 하나도 안 나왔다 — 정지면에 굴곡선이 없거나 노선이 정지 범위를 안 지난다");
+        return list;
+    }
+
+    /// <summary>★★[v25.3 · JACK 0811] <b>도면에 그려진 선과의 교차</b> — 데이라잇이 여기에 있다.
+    ///
+    /// <para>JACK: <i>"데이라잇선(계획지표면이 시작되는 지점)은 단면검토선이 안 끊어졌어."</i></para>
+    ///
+    /// <para><b>원인.</b> 가상 사면 지표면(<c>가상절토_DH</c>·<c>가상성토_DH</c>)은
+    /// <b>오버사이즈</b>로 만든다 — 소단을 잘려나갈 몫까지 넉넉히 두르고 나중에 데이라잇으로 자른다.
+    /// 그래서 그 굴곡선에는 <b>데이라잇이 없다</b>(실측: 두 면의 굴곡선 개수·구간 수가 9136으로
+    /// 한 자리도 안 틀리고 같았다 — 같은 경계에서 같은 간격으로 두른 링이라는 뜻이다).
+    /// 진짜 데이라잇은 <c>DrawDaylight</c>가 <b>레이어에 그려 둔다</b>.</para></summary>
+    public static List<Mark> FromLayerLines(Transaction tr, Database db, CivilDb.Alignment al,
+                                            IReadOnlyList<string> layers, string why,
+                                            Func<double, bool> keep,
+                                            System.Text.StringBuilder log)
+    {
+        var list = new List<Mark>();
+        if (al == null || layers == null || layers.Count == 0) return list;
+        double s0 = al.StartingStation, s1 = al.EndingStation;
+        int nEnt = 0, nSeg = 0, nSkip = 0, nOutside = 0;
+        try
+        {
+            var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+            foreach (ObjectId id in ms)
+            {
+                Entity e;
+                try { e = tr.GetObject(id, OpenMode.ForRead) as Entity; } catch { continue; }
+                if (e == null) continue;
+                bool want = false;
+                foreach (var L in layers) if (string.Equals(e.Layer, L, StringComparison.Ordinal)) { want = true; break; }
+                if (!want) continue;
+
+                var pts = Vertices(e);
+                if (pts.Count < 2) continue;
+                nEnt++;
+                Crossings(al, pts, why, s0, s1, keep, list, ref nSeg, ref nSkip, ref nOutside);
+            }
+        }
+        catch (System.Exception ex) { log?.AppendLine($"   도면선 읽기 실패 — {ex.Message}"); }
+
+        int dup = Dedupe(list);
+        log?.AppendLine($"   도면선 [{string.Join("·", layers)}]: 객체 {nEnt}개 · 구간 {nSeg}개 → " +
+                        $"교차 {list.Count + dup}개(중복 {dup}개 합침) → {list.Count}개" +
+                        (nOutside > 0 ? $" · 걸러진 것 {nOutside}개" : ""));
+        if (nEnt == 0) log?.AppendLine($"   ⚠레이어 [{string.Join("·", layers)}]에 선이 하나도 없다 — 부지정지를 먼저 돌려야 한다");
+        return list;
+    }
+
+    /// <summary>선·폴리선의 정점을 뽑는다(2D 판정용이라 Z는 안 쓴다). 모르는 종류는 빈 목록.</summary>
+    private static List<Point3d> Vertices(Entity e)
+    {
+        var pts = new List<Point3d>();
+        try
+        {
+            switch (e)
+            {
+                case Line ln: pts.Add(ln.StartPoint); pts.Add(ln.EndPoint); break;
+                case Polyline pl:
+                    for (int i = 0; i < pl.NumberOfVertices; i++) pts.Add(pl.GetPoint3dAt(i));
+                    if (pl.Closed && pts.Count > 1) pts.Add(pts[0]);      // 닫힌 고리는 마지막 구간도 봐야 한다
+                    break;
+                case Polyline3d p3:
+                    foreach (ObjectId vid in p3)
+                        if (p3.Database.TransactionManager.TopTransaction?.GetObject(vid, OpenMode.ForRead)
+                            is PolylineVertex3d v) pts.Add(v.Position);
+                    if (p3.Closed && pts.Count > 1) pts.Add(pts[0]);
+                    break;
+                case Polyline2d p2:
+                    foreach (ObjectId vid in p2)
+                        if (p2.Database.TransactionManager.TopTransaction?.GetObject(vid, OpenMode.ForRead)
+                            is Vertex2d v2) pts.Add(v2.Position);
+                    if (p2.Closed && pts.Count > 1) pts.Add(pts[0]);
+                    break;
+            }
+        }
+        catch { }
+        return pts;
     }
 
     // ── 합치는 쪽 ────────────────────────────────────────────────────────────
