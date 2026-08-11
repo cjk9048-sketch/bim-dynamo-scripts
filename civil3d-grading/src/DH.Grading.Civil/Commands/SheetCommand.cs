@@ -76,6 +76,53 @@ public static class SheetCommand
     /// 여백은 올림이 남기는 몫으로 얻고, 이 값은 <b>못 미쳤을 때 로그로 알리는 임계</b>로만 쓴다.</para></summary>
     private const double Fill = 0.92;
 
+    /// <summary>★★[v24.1 · JACK 0811] <b>굴곡부(수직기하점) 측점을 낼지 말지 — 스위치 하나.</b>
+    ///
+    /// <para>JACK: <i>"일단 지금 계속 측점이 문제니깐 굴곡부 측점부는 잠깐 미뤄두고
+    /// 정체인 20미터 간격으로 측점 나오게 먼저 만들어봐. civil3d 기본 기능을 최대한 활용."</i></para>
+    ///
+    /// <para><b>왜 통째로 껐나.</b> 굴곡부는 <b>계획 종단의 PVI마다</b> 찍힌다. 그런데 지표면에서 딴
+    /// 종단은 삼각망을 지나는 자리마다 PVI가 생겨서, <b>평평한 구간에도 PVI가 줄줄이</b> 있다
+    /// (실측: 계획고가 <c>112.00</c>으로 같은데 PVI가 20개 넘게 이어졌다).
+    /// 그건 '꺾인 자리'가 아니라 <b>표본점</b>이다. 꺾임을 제대로 가리려면
+    /// <b>실제로 방향이 바뀌는 PVI만</b> 골라내야 하고, 그건 이 판의 일이 아니다.</para>
+    ///
+    /// <para>지금 켜져 있는 측점의 원천은 <b>둘뿐</b>이다 — 밴드의 <b>주 증분</b>(20m)과
+    /// 선형의 <b>시작 측점</b>(No.0). 둘 다 Civil 순정이라 <b>선형을 고치면 저절로 따라온다.</b></para></summary>
+    /// <para>★★[v28.0 다시 켬] 측점 행만 종단 데이터 밴드로 두기로 하면서 굴곡부가 다시 필요해졌다 —
+    /// 그 행의 <c>+06.41</c>이 굴곡부 라벨이다. 값 다섯 행은 횡단 데이터라 이 스위치와 무관하다.</para>
+    private const bool VgpOn = true;
+
+    /// <summary>★★[v27.1 · JACK 0811] <b>종단도를 하나 찍어 밴드 상태를 통째로 남긴다(고치지 않는다).</b>
+    ///
+    /// <para>JACK: <i>"수동으로 횡단 정보표시 테이블 가져와서 똑같이 세팅하면 밴드가 잘 나와."</i>
+    /// 그러면 Civil의 버그가 아니라 <b>우리 코드가 다르게 하고 있는 것</b>이다. 그리고 그 차이는
+    /// 짐작으로 찾을 게 아니라 <b>잘 되는 판과 안 되는 판을 나란히 놓고</b> 찾아야 한다.</para>
+    ///
+    /// <para>쓰는 법: ① 손으로 제대로 세팅한 종단도에서 이 명령을 돌려 한 벌 남긴다.
+    /// ② <c>DHPROFILE</c>이 만든 종단도에서 한 벌 더 남긴다. ③ 두 벌을 줄 단위로 비교한다.
+    /// 다른 줄이 곧 원인이다.</para></summary>
+    [CommandMethod("DHBANDCHK", CommandFlags.Modal)]
+    public static void BandCheck()
+    {
+        var doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        Editor ed = doc.Editor;
+        Database db = doc.Database;
+        var opt = new PromptEntityOptions("\n[밴드 점검] 상태를 찍을 종단도를 클릭: ");
+        opt.SetRejectMessage("\n종단도(Profile View)를 골라야 합니다.");
+        opt.AddAllowedClass(typeof(CivilDb.ProfileView), true);
+        var res = ed.GetEntity(opt);
+        if (res.Status != PromptStatus.OK) return;
+
+        var log = new System.Text.StringBuilder();
+        log.AppendLine($"\n■ DHBANDCHK — 밴드 상태 한 벌 (도면 '{doc.Name}')");
+        DumpBands(db, res.ObjectId, log);
+        try { DiagLog.Append(log.ToString()); } catch { }
+        ed.WriteMessage("\n" + log.ToString());
+        ed.WriteMessage($"\n  · 같은 내용을 로그에도 남겼습니다: {DiagLog.FilePath}");
+    }
+
     [CommandMethod("DHSHEET", CommandFlags.Modal)]
     public static void Run()
     {
@@ -120,6 +167,11 @@ public static class SheetCommand
         SetBandWeeding(db, pvId, scale, log);   // 굴곡부 라벨 솎아내기 — 축척을 알아야 정할 수 있다
         PolishView(db, pvId, log);      // V·H 표시 자리 · 종단선 화살표
         DrawScaleBar(db, pvId, scale, log);   // 흑백 교차 표고바 — 직접 그린다(축 스타일엔 그 기능이 없다)
+        // ★★[v24.1] 굴곡부 세로줄은 <b>직접 그린 선</b>이라 선형이 바뀌어도 따라오지 않는다
+        //   (JACK: "선형이 변경될 때 변경되야 하거든"). 굴곡부를 다시 켤 때 <b>순정 격자로 낼 방법</b>부터
+        //   찾는다. 지금은 <see cref="VgpOn"/>이 꺼져 있어 <b>지우기만</b> 하고 그리지 않는다 —
+        //   그냥 건너뛰면 지난 판에 그어 둔 빨간 줄이 도면에 그대로 남는다.
+        DrawVgpGrid(db, pvId, scale, log);
 
         // ── ③ 정해진 스타일로 실제 크기를 다시 잰다(밴드까지 포함한 전체 상자)
         Extents3d ext;
@@ -131,7 +183,12 @@ public static class SheetCommand
             tr.Commit();
         }
         catch (System.Exception ex)
-        { return "종단도 크기를 재지 못했습니다 — " + ex.Message; }
+        {
+            // ★[v23.17 검토 반영] 진단이 <b>가장 필요한 순간</b>에만 없으면 안 된다 —
+            //   종전엔 여기서 그냥 나가 밴드 최종 상태가 안 찍혔다.
+            DumpBands(db, pvId, log);
+            return "종단도 크기를 재지 못했습니다 — " + Brief(ex);
+        }
 
         // ★[JACK 0810] 종단도 경계상자에는 **밴드가 들어 있지 않다**(실측: 높이 30.0m = 표고범위 그대로).
         //   그래서 도곽이 그래프만 덮고 밴드 6칸이 통째로 밖으로 나갔다. 밴드 높이만큼 아래로 넓힌다.
@@ -145,6 +202,8 @@ public static class SheetCommand
         //   이 구조라야 나중에 관로에서 '정해진 거리마다 장이 넘어가게'가 그대로 얹힌다 —
         //   모형에 도곽을 여러 장 늘어놓고 배치를 그 수만큼 만들면 된다.
         var frames = DrawModelFrames(db, ext, scale, log);
+
+        DumpBands(db, pvId, log);   // ★ 마지막 상태를 통째로 — 다음 판에서 로그만 보고 짚게
 
         // ── ⑤ 도곽 한 장마다 배치 하나
         string layName;
@@ -366,7 +425,13 @@ public static class SheetCommand
             using (var probe = pv.Bands.GetBottomBandItems()) n = probe.Count;
             if (n == 0) { tr.Commit(); return "밴드 없음"; }
 
-            eachM = BandH / n / 1000.0;          // 종이 m — 1/3을 칸 수로 균등 분할
+            // ★[JACK 0811] <b>"밴드높이를 15%씩 낮춰줘"</b>
+            //   줄어든 만큼은 그래프가 가져간다 — 축척은 <b>실제 밴드 높이를 재서</b> 정해지므로
+            //   (<see cref="BandPaperHeight"/>) 여기만 줄이면 나머지가 저절로 따라온다.
+            eachM = BandH * BandHeightScale / n / 1000.0;   // 종이 m — 칸 수로 균등 분할
+            // ★★[v26.0 · 실측으로 확정] <b>한 번에 읽고 · 다 고치고 · 한 번에 저장한다.</b>
+            //   <c>GetBottomBandItems</c>는 <b>스냅샷</b>이고 <c>SetBottomBandItems</c>는 그 스냅샷을
+            //   <b>통째로 덮어쓴다</b> — 칸마다 저장하면 앞 칸이 매번 지워진다(v25.9 실측: 마지막 칸만 남았다).
             using (var items = pv.Bands.GetBottomBandItems())
             {
                 for (int i = 0; i < items.Count; i++)
@@ -377,7 +442,13 @@ public static class SheetCommand
                     // ★[JACK 0810] <b>"밴드 맨위 성토하고 종단하고 사이에 10의 거리 주고"</b> —
                     //   첫 칸만 그래프에서 띄우고 칸끼리는 붙인다. 표는 붙어야 표로 읽히지만,
                     //   그래프와 표가 맞붙으면 어디까지가 그림이고 어디부터가 표인지 구분이 안 된다.
-                    double gap = i == 0 ? TopGapMm / 1000.0 : 0.0;
+                    // ★★[v26.0 계측] <b>첫 칸만 간격이 달랐다 — 그게 유일한 비대칭이었다.</b>
+                    //   여섯 칸의 설정이 전부 같은데 <b>첫 칸만</b> 값이 그려졌고, 코드에서 칸마다
+                    //   다르게 주는 값은 이 간격 하나뿐이었다(첫 칸 10mm · 나머지 0). 인과인지 우연인지
+                    //   알 수 없으므로 <b>비대칭을 없앤다</b> — 나머지 칸에도 0이 아닌 아주 작은 값을 준다.
+                    //   종이 0.2mm는 눈에 안 보이지만 '0인지 아닌지'는 갈린다.
+                    //   (그래프와 표 사이 10mm는 JACK 지시라 그대로 둔다.)
+                    double gap = (i == 0 ? TopGapMm : BandGapMm) / 1000.0;
                     try { items[i].Gap = gap; gOk++; }
                     catch (System.Exception ex) { log.AppendLine($"   [{i}칸] 간격 실패 — {Brief(ex)}"); }
 
@@ -387,40 +458,138 @@ public static class SheetCommand
                     //   참고 도면의 정보표시 테이블은 <b>한 줄로 나란히</b> 선다 — 표는 줄이 맞아야 표다.
                     //   → 엇갈림을 끄고, 겹침은 <b>솎아내기(Weeding)</b>로 푼다. 그쪽이 종이 기준이라
                     //     축척이 바뀌어도 규칙이 유지된다.
-                    try
-                    {
-                        items[i].StaggerLabel = CivilDb.Styles.StaggerLabelType.None;
-                        items[i].StaggerLineHeight = 0.0;
-                    }
-                    catch (System.Exception ex) { log.AppendLine($"   [{i}칸] 엇갈림 끄기 실패 — {Brief(ex)}"); }
+                    // ★[v23.19] <b>두 대입을 갈라 놓는다.</b> 한 try에 묶었더니 높이 대입이 던진 것을
+                    //   "엇갈림 끄기 실패"로 보고했다 — <b>범인을 잘못 지목하는 로그</b>였다.
+                    //   실제로 최종 상태는 `엇갈림=None(높이 5.0mm)`이다: 첫 줄은 먹었고 둘째 줄만 실패했다.
+                    //   그리고 엇갈림이 None이면 높이는 의미가 없으니 <b>건드리지 않는다</b>.
+                    try { items[i].StaggerLabel = CivilDb.Styles.StaggerLabelType.None; }
+                    catch (System.Exception ex) { log.AppendLine($"   [{i}칸] 엇갈림 종류 끄기 실패 — {Brief(ex)}"); }
 
-                    vTry++;
-                    vOk += EnableGeometryPoints(items[i], i, log);
+                    // ★★[v25.5 · JACK 0811] <b>'레이블 표시'가 꺼져 있으면 앞의 준비가 전부 헛것이다.</b>
+                    //
+                    //   실측: 종단 뷰 특성 대화상자에서 여섯 줄 모두 <b>'레이블 표시' 칸이 체크 해제</b>였다.
+                    //   배선(종단1=원지반 · 종단2=정지면 · 데이터 원본=단면검토선그룹)은 다 맞고
+                    //   표시 스위치도 다 켰는데 값만 안 나왔던 이유가 이것이다.
+                    //   템플릿의 '횡단 데이터' 밴드는 여태 쓰인 적이 없어 이 스위치가 꺼진 채였다.
+                    //
+                    //   ※ 이 저장소의 규율대로 <b>되읽어 확인</b>한다 — 넣었다고 세면 로그가 거짓말을 한다.
+                    bool shOk = false;
+                    try { items[i].ShowLabels = true; shOk = items[i].ShowLabels; }
+                    catch (System.Exception ex) { log.AppendLine($"   [{i}칸] 레이블 표시 켜기 실패 — {Brief(ex)}"); }
+                    if (!shOk) log.AppendLine($"   [{i}칸] ⚠레이블 표시: 켰는데 다시 읽으니 꺼져 있다(값이 안 나온다)");
+
+                    // ★★[v27.2 · JACK 0811 실측] <b>잘 되는 설정에 그대로 맞춘다 — 끝 라벨은 켠다.</b>
+                    //
+                    //   JACK이 손으로 세팅해 <b>여섯 칸이 전부 제대로 나오는</b> 종단도의 설정을 스샷으로 주셨다.
+                    //   우리 코드와 다른 곳은 <b>딱 두 군데</b>였다:
+                    //   <c>레이블 끝=켬</c>(우리는 끔) · <c>단순화=100</c>(우리는 0).
+                    //   나머지(레이블 표시·종단1=원지반·종단2=정지면·데이터 원본·스태거 없음)는 같았다.
+                    //
+                    //   v23.x에서 끝 라벨을 끈 것은 <b>종단 데이터 밴드</b> 시절, 표 끝 여백에 값이 따라와서였다.
+                    //   그 사정은 지금 구조와 다르다 — <b>되는 설정을 먼저 맞추고</b>, 여백은 그 다음에 본다.
+                    //   짐작으로 다르게 두면 '왜 안 되지'가 또 시작된다.
+                    //   ★★[v29.0 점검 반영] 다만 <b>종단 데이터 밴드(=측점 행)는 끈다.</b>
+                    //   v28.0에서 측점 행이 다시 종단 데이터가 되면서 이 설정의 전제가 깨졌다:
+                    //   표 끝을 종이 8mm 늘려 <b>값 없이 선으로 마감</b>하는 자리에 라벨이 따라붙는다.
+                    //   실측(0811 스샷)에서 노선 끝 뒤 약 1.2m 자리에 <c>No.3</c>이 한 번 더 찍혔다.
+                    bool sectEnd = false;
+                    try { sectEnd = items[i].BandType == Autodesk.Civil.BandType.SectionalData; } catch { }
+                    try { items[i].LabelAtEndStation = sectEnd; }
+                    catch (System.Exception ex) { log.AppendLine($"   [{i}칸] 끝측점 라벨 {(sectEnd ? "켜기" : "끄기")} 실패 — {Brief(ex)}"); }
+
+                    // ★★[v24.1 · JACK 0811] <b>기점 라벨은 켠다 — 그게 <c>No.0</c>을 그리는 주체다.</b>
+                    //   실측으로 확정: 노선 시작 측점에는 <b>주 증분이 따로 찍지 않는다.</b>
+                    //   v24.0에서 이걸 껐더니 기점에 아무것도 안 남고 <c>+0.00</c>(굴곡부 라벨)만 보였다.
+                    //   전에 <c>No.0</c>과 <c>+0.00</c>이 같이 보였던 것은 이 라벨 탓이 아니라
+                    //   <b>기점에 굴곡부(PVI)가 하나 있어서</b>였다 — 그쪽을 끄는 게 맞는 처방이다.
+                    //   ※ 이 라벨은 <b>주 형식</b>(<c>No.X</c>)으로 그려진다.
+                    bool sOk = false;
+                    try { items[i].LabelAtStartStation = true; sOk = items[i].LabelAtStartStation; }
+                    catch (System.Exception ex) { log.AppendLine($"   [{i}칸] 시작측점 라벨 켜기 실패 — {Brief(ex)}"); }
+                    if (!sOk) log.AppendLine($"   [{i}칸] ⚠시작측점 라벨: 켰는데 다시 읽으니 꺼져 있다(기점 No.0이 빠진다)");
+
+                    // ★★[v24.1 · JACK 0811] <b>"굴곡부 측점부는 잠깐 미뤄두고 정체인 20미터 간격으로
+                    //   측점 나오게 먼저 만들어봐."</b> — <see cref="VgpOn"/> 하나로 굴곡부를 통째로 끈다.
+                    //   끄는 자리를 여기저기 흩어 놓으면 그게 또 누더기가 된다. 스위치는 한 곳에 둔다.
+                    // ★★[v25.6] 굴곡부(수직기하점)는 <b>종단 데이터 밴드에만</b> 있는 개념이다.
+                    //   횡단 데이터 밴드에 걸면 매번 예외가 나고 로그만 더럽힌다 — 아예 묻지 않는다.
+                    bool sectItem = false;
+                    try { sectItem = items[i].BandType == Autodesk.Civil.BandType.SectionalData; } catch { }
+                    if (!sectItem) { vTry++; vOk += EnableGeometryPoints(items[i], i, log); }
                     try
                     {
                         var st = tr.GetObject(items[i].BandStyleId, OpenMode.ForWrite);
                         if (Set(st, "BandHeight", eachM)) hOk++;
                         else log.AppendLine($"   [{i}칸] 밴드높이 못 씀 — {st.GetType().Name}에 BandHeight가 없거나 읽기전용");
 
+                        // ★★[v27.3 · JACK 0811] <b>횡단 데이터 밴드는 높이만 손대고 나머지는 템플릿 그대로 둔다.</b>
+                        //
+                        //   JACK이 손으로 세팅한 판은 <b>값도 나오고 정렬도 반듯했다</b>. 우리 판은 값은 나오는데
+                        //   <b>제목이 아래 칸으로 흘러넘치고 값이 위쪽에 몰렸다</b>. 차이는 하나 —
+                        //   우리가 제목 글씨·제목 상자폭·값 글씨·눈금을 <b>덮어쓰고</b> 있었다는 것이다.
+                        //
+                        //   이 파일에서 오늘 배운 것과 같은 규칙을 적용한다:
+                        //   <b>되는 설정을 짐작으로 바꾸지 않는다.</b> 칸 높이는 축척 계산에 필요하니 맞추고,
+                        //   글자 크기·자리는 회사 템플릿이 이미 맞춰 둔 값을 쓴다.
+                        //   (CALS 글씨 높이가 필요해지면 그때 <b>한 항목씩</b> 넣고 결과를 본다.)
+                        //   ★[v28.2 되돌림] 다만 <b>표시 스위치와 값글씨는 계속 건다.</b>
+                        //   v28.1에서 통째로 건너뛰었더니 <b>증분 라벨(구간거리)이 되살아나</b>
+                        //   칸마다 거대한 빨간 숫자가 겹쳐 찍혔다(실측). 그건 템플릿 기본값이 켜져 있어서다.
+                        //   건드리지 말아야 할 것은 <b>제목 글씨 크기와 제목 상자폭</b>뿐이었다 —
+                        //   그 둘이 제목을 아래 칸으로 흘려보내던 범인이다.
+                        if (sectItem)
+                        {
+                            dOk += EnableVgpDisplay(st, i, log);    // 증분 라벨 끄기 + CALS 색
+                            //   제목은 <b>0을 넘겨 건너뛴다</b> — 상자 크기가 템플릿 기준이라 키우면 뚫고 나간다.
+                            tOk += SetLabelHeight(tr, st, CalsT25 / 1000.0, 0.0, i, log, ref tTry);
+                            log.AppendLine($"   [{i}칸] 횡단 데이터 — 높이 {eachM * 1000:F1}mm·값글씨·표시만 맞추고 제목은 템플릿 그대로");
+                            continue;
+                        }
+
                         // ★[JACK 0810] 글씨 크기를 **칸 높이에서 역산**한다 — "밴드 높이에서 위아래
                         //   보조눈금 길이를 제외한 길이를 구하고, 000.00 표현식 기준으로 가장 꽉 찬 크기로."
                         //   제목은 세로로 쓰고 4글자(누가거리·구간거리)가 가장 기니 그걸 기준으로 삼는다.
                         //   ※ JACK 0810: "회사 스타일이란 건 없어. 그냥 네가 만들면 돼" — 값을 직접 정한다.
                         double eachMm = BandH / n;
-                        double availMm = eachMm * (1.0 - TickShare);          // 위아래 눈금 자리를 뺀 길이
-                        double valMm = availMm / (6.0 * DigitW) * TextFill;   // "000.00" 6자
-                        // ★[JACK 0810] "제목 글씨 너무 큼" — 4글자가 칸의 90%를 먹던 것을 70%로.
-                        double ttlMm = eachMm * TitleFill / TitleChars;       // 세로 4글자(폭≈높이)
-                        // ★[JACK 0810] "전체적으로 15%만 작게" — 값·제목에 같은 비율로.
-                        valMm *= BandTextScale; ttlMm *= BandTextScale;
+                        // ★★[JACK 0811] <b>글씨 크기는 이제 CALS 표준이 정한다.</b>
+                        //   <c>R-TABL-TEX1 = T40</c>(제목 4.0mm) · <c>R-TABL-TEX2 = T25</c>(내용 2.5mm).
+                        //   종전엔 칸 높이에서 역산하고 15%·30%를 곱해 맞췄는데, 그건 <b>기준이 없어서</b>
+                        //   눈으로 맞추던 것이다. 표준값은 종이 기준이라 축척이 바뀌어도 그대로다.
+                        double valMm = CalsT25, ttlMm = CalsT40;
                         // 제목 글씨는 밴드 스타일 직속(맨 double). 실패하면 그것도 남긴다 —
                         // 밴드 종류가 늘면 조용히 깨질 자리다.
                         if (!Set(st, "TextHeight", ttlMm / 1000.0))
                             log.AppendLine($"   [{i}칸] 제목 글씨높이 못 씀({st.GetType().Name})");
                         if (!Set(st, "TextBoxWidth", ttlMm * 1.8 / 1000.0))   // 글씨가 상자 밖으로 안 나가게
                             log.AppendLine($"   [{i}칸] 제목 상자폭 못 씀({st.GetType().Name})");
-                        // 굴곡부 라벨에 **글자를 먼저 만들고** 나서 크기를 맞춘다(순서가 반대면 새 글자가 안 잡힌다).
-                        if (EnsureVgpLabel(tr, st, i, log)) eOk++;
+                        // ★★[v25.6 · JACK 0811] <b>횡단 데이터 밴드의 표현식은 건드리지 않는다.</b>
+                        //
+                        //   JACK: <i>"맨 처음에 횡단 데이터를 종단으로 바꿨다가 지금 다시 횡단 데이터로 하잖아.
+                        //   이 과정에서 뭔가 문제가 있는 거 아닐까."</i> — <b>맞았다.</b> 로그가 그대로 보여줬다:
+                        //   <code>
+                        //   성토고: 종단2-종단1 → 종단1-종단2   (부호 반대)
+                        //   절토고: 종단1-종단2 → 종단2-종단1   (부호 반대)
+                        //   계획고: 종단2 표고  → 종단1 표고    (원지반을 가리킨다)
+                        //   지반고: 종단1 표고  → 종단2 표고    (정지면을 가리킨다)
+                        //   </code>
+                        //
+                        //   <c>NormalizeProfileTokens</c>는 <b>종단 데이터 밴드</b>용이다. 그쪽은 종단1을
+                        //   정지면으로 통일했기 때문에 표현식을 뒤집어 줘야 했다. 그런데 <b>횡단 데이터 밴드는
+                        //   원래부터 종단1=원지반</b>이 맞다(템플릿 표현식 넷이 모두 그 방향이었다).
+                        //   그 장치가 그대로 걸려 넷을 전부 반대로 돌려놨다.
+                        //
+                        //   게다가 이건 <b>스타일</b>을 고치는 것이라 <b>돌릴 때마다 1↔2가 다시 뒤집힌다</b> —
+                        //   같은 도면에서 여러 번 돌리면 홀/짝에 따라 값이 달라진다. 그런 장치는 있으면 안 된다.
+                        //   → 횡단 데이터 밴드에는 <b>표현식 손질을 아예 걸지 않는다.</b> 템플릿이 이미 맞다.
+                        bool isSect = st is CivilDb.Styles.SectionalDataBandStyle;
+                        if (isSect) log.AppendLine($"   [{i}칸] 횡단 데이터 밴드 — 표현식은 템플릿 그대로 둔다(손대지 않음)");
+                        else
+                        {
+                            // 굴곡부 라벨에 **글자를 먼저 만들고** 나서 크기를 맞춘다(순서가 반대면 새 글자가 안 잡힌다).
+                            NormalizeProfileTokens(tr, st, i, log);
+                            NormalizeStationDigits(tr, st, i, log);   // +000.00 → +00.00
+                            if (VgpOn && EnsureVgpLabel(tr, st, i, log)) eOk++;
+                        }
                         dOk += EnableVgpDisplay(st, i, log);   // ★ 표시 스위치 — 이것이 마지막 관문이었다
                         tOk += SetLabelHeight(tr, st, valMm / 1000.0, ttlMm / 1000.0, i, log, ref tTry);
                         kOk += SetTicks(st, eachMm, i, log);   // ★[JACK 0810] "보조눈금 좀 키워줘"
@@ -429,13 +598,14 @@ public static class SheetCommand
                     { log.AppendLine($"   [{i}칸] 밴드 스타일 손보기 실패 — {Brief(ex)}"); }
                 }
                 pv.Bands.SetBottomBandItems(items);
+                log.AppendLine($"   ({n}칸 — 한 스냅샷에 모아 한 번 저장)");
             }
             tr.Commit();
         }
         catch (System.Exception ex) { return "밴드 정리 실패 — " + Brief(ex); }
         // ★[v23.5] 개수만 세면 원인 자리를 못 좁힌다 — **분모**를 같이 남긴다.
         //   `값글씨 42`가 42/42인지 42/126인지 알 수 없었다.
-        string s = $"밴드 {n}칸 균등 — 각 {eachM * 1000.0:F1}mm(합 {BandH:F1}mm) · 간격 0 " +
+        string s = $"밴드 {n}칸 균등 — 각 {eachM * 1000.0:F1}mm(합 {eachM * 1000.0 * n:F1}mm · 자리 {BandH:F1}mm) · 간격 0 " +
                    $"(높이 {hOk}/{n} · 간격 {gOk}/{n} · 값글씨 {tOk}/{tTry} · 굴곡부 {vOk}/{vTry * 2} · 눈금 {kOk} · 굴곡부글자 {eOk} · 굴곡부표시 {dOk})";
         log.AppendLine(s);
         return s;
@@ -462,17 +632,36 @@ public static class SheetCommand
     {
         // 굴곡부(GradeBreak)와 종단곡선 교점(PVI)만 — 지표면에서 딴 종단은 전부 GradeBreak이고,
         // 사람이 설계한 종단은 PVI로 꺾인다. 둘을 다 켜야 두 경우 모두 찍힌다.
+        // ★★[v24.1] <see cref="VgpOn"/>이 꺼져 있으면 <b>하나도 안 켠다</b> — 지금은 20m 정측점만 본다.
+        // ★★[v28.0 · JACK 0811 확정] <b>측점 행에는 굴곡부가 필요하다.</b>
+        //   측점 행만 종단 데이터 밴드로 두고, 그 종단1을 <b>측점 라벨용 체인</b>으로 꽂았다.
+        //   체인의 PVI마다 <c>+06.41</c>이 찍혀야 하므로 이 밴드에서는 굴곡부를 켠다.
+        //   (값 다섯 행은 횡단 데이터라 이 함수를 아예 타지 않는다 — 그쪽은 단면검토선이 자리를 정한다.)
         var want = new[] { Autodesk.Civil.ProfilePointType.GradeBreak, Autodesk.Civil.ProfilePointType.PVI };
         int on = 0;
         try
         {
             var sel = item.GetVerticalGeometryPointsOptions();
             if (sel == null) { log.AppendLine($"   [{idx}칸] 굴곡부: 수직 기하점 선택기가 없다"); return 0; }
-            foreach (var t in want)
+            // ★★[v24.0 · JACK 0811] <b>켤 것만 켜고 나머지는 끈다.</b> 종전엔 GradeBreak·PVI를
+            //   <b>켜기만</b> 하고 다른 종류는 템플릿에 켜져 있던 대로 뒀다. 그래서 규칙에 없는 자리
+            //   (최고·최저점, 곡선 시종점, 그리고 <b>기점/종점</b>)에 측점이 튀어나왔다.
+            //   특히 기점(<c>Start</c>)이 켜져 있으면 체인의 첫 PVI가 <c>No.0</c> 자리에 라벨을 하나 더
+            //   찍는다 — JACK이 본 "<c>No.0</c>은 뭐고 <c>+0.00</c>은 뭐야"가 그 모양이다.
+            var off = new System.Text.StringBuilder();
+            foreach (var v in System.Enum.GetValues(typeof(Autodesk.Civil.ProfilePointType)))
             {
-                try { sel[t].Selected = true; }
-                catch (System.Exception ex) { log.AppendLine($"   [{idx}칸] 굴곡부 {t} 대입 실패 — {Brief(ex)}"); }
+                var t = (Autodesk.Civil.ProfilePointType)v;
+                bool wantOn = System.Array.IndexOf(want, t) >= 0;
+                try
+                {
+                    if (!wantOn && sel[t].Selected) off.Append(' ').Append(t);
+                    sel[t].Selected = wantOn;
+                }
+                catch (System.Exception ex)
+                { if (wantOn) log.AppendLine($"   [{idx}칸] 굴곡부 {t} 대입 실패 — {Brief(ex)}"); }
             }
+            if (off.Length > 0) log.AppendLine($"   [{idx}칸] 굴곡부: 규칙 밖이라 끈 종류 —{off}");
             item.SetVerticalGeometryPointsOptions(sel);
 
             // ★[v23.5] <b>넣었다고 세지 않는다 — 다시 읽어 확인한다.</b> 값글씨에는 이 원칙을 넣고
@@ -507,6 +696,38 @@ public static class SheetCommand
     private static Autodesk.AutoCAD.Colors.Color White
         => Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 7);
 
+    /// <summary>★★[JACK 0811] <b>건설CALS/EC 전자도면 작성표준 V2.0 · 1.3 종단면도(Profiles) : □R</b>
+    ///
+    /// <para>JACK 지시로 표준 PDF(90·91쪽)를 읽어 우리 요소와 하나씩 맞췄다.
+    /// 종전의 '모든 선·글씨 7번' 규칙은 이 표준이 덮는다 — 납품 도면은 표준을 따라야 한다.</para>
+    /// <code>
+    /// R-GRND       PLN 3 CONT   지반선            R-DEGN       PLN 7 CONT   계획선
+    /// R-TABL-LIN1  LIN 4 CONT   테이블 굵은 선     R-TABL-LIN2  LIN 1 CONT   테이블 가는 선
+    /// R-TABL-TEX1  T40 6 CONT   테이블 제목문자    R-TABL-TEX2  T25 3 CONT   테이블 내용문자
+    /// R-GRID-VERT  LIN 1 CONT   수직그리드        R-GRID-HORI  LIN 2 점선    수평그리드
+    /// R-GSCL-LINE  LIN 2 CONT   축척선            R-GSCL-TEXT  T25 3 CONT   축척문자
+    /// </code>
+    /// <para><b>T40·T25는 문자높이 4.0mm·2.5mm</b>다 — 종이 기준이라 축척이 바뀌어도 그대로다.
+    /// 종전에 칸 높이에서 역산하던 글씨 크기는 이 값이 대신한다.</para></summary>
+    private const int CalsGround = 3, CalsDesign = 7,
+                      CalsTableThick = 4, CalsTableThin = 1,
+                      CalsTitleText = 6, CalsValueText = 3,
+                      CalsGridVert = 1, CalsGridHori = 2,
+                      // ★★[v28.1 · JACK 0811] <b>"X축·Y축 스케일바와 지표면에서 내린 세로줄을 빨간색으로."</b>
+                      //   축척바(표고바)는 표준 색(2=노랑)이었는데 JACK 지시로 <b>빨강</b>으로 바꾼다.
+                      //   ※ 이 저장소 규율: 표준은 납품 기준이지만, <b>JACK이 정한 것이 우선</b>이다.
+                      CalsScaleLine = 1, CalsScaleText = 1;
+    /// <summary>CALS 문자 높이(종이 mm) — T40=제목 4.0, T25=내용 2.5.</summary>
+    private const double CalsT40 = 4.0, CalsT25 = 2.5;
+
+    /// <summary>CALS 종단면도 레이어 이름 — 시설물코드 C + 종단면도 R.
+    /// 표준의 심볼 절이 <c>CR : (C)+(R)</c>로 못박아 두었다.</summary>
+    private const string CalsLayerGround = "CR-GRND", CalsLayerDesign = "CR-DEGN",
+                         CalsLayerGridV = "CR-GRID-VERT", CalsLayerScale = "CR-GSCL-LINE";
+
+    private static Autodesk.AutoCAD.Colors.Color Aci(int n)
+        => Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, (short)n);
+
     /// <summary>★[JACK 0810] <b>굴곡부가 세 판째 안 나온 마지막 관문.</b>
     ///
     /// <para>v23.5는 굴곡부를 <b>켰고</b>, v23.6은 찍을 <b>글자를 만들었고</b>,
@@ -522,6 +743,7 @@ public static class SheetCommand
     /// 반환=켠 표시 수.</summary>
     private static int EnableVgpDisplay(object bandStyle, int idx, System.Text.StringBuilder log)
     {
+        if (bandStyle is CivilDb.Styles.SectionalDataBandStyle sdb) return EnableSectionalDisplay(sdb, idx, log);
         if (bandStyle is not CivilDb.Styles.ProfileDataBandStyle pdb) return 0;
         int on = 0;
         var wasOff = new System.Text.StringBuilder();
@@ -533,20 +755,77 @@ public static class SheetCommand
             {
                 using var ds = pdb.GetDisplayStylePlan(t);
                 if (!ds.Visible) wasOff.Append(' ').Append(nm);
-                if (t == CivilDb.Styles.ProfileDataDisplayStyleType.TicksAtVGP ||
-                    t == CivilDb.Styles.ProfileDataDisplayStyleType.LabelsAtVGP)
-                {
-                    ds.Visible = true;
-                    if (ds.Visible) on++;                       // 넣었다고 세지 않는다 — 되읽어 확인
-                    else log.AppendLine($"   [{idx}칸] {nm}: 켰는데 다시 읽으니 꺼져 있다");
-                }
-                // ★[JACK 0810] "눈금 포함 모든 것" — 글자만 바꿨더니 눈금이 빨간색으로 남았다.
-                //   밴드 스타일도 통째로 7번(테두리·눈금·글자 전부).
-                ds.Color = White;
+                // ★★[v24.0 · JACK 0811] <b>켤 것을 정해 두고 나머지는 끈다(허용 목록).</b>
+                //   종전엔 VGP만 켜고 나머지는 그대로 뒀다 — 그래서 측점을 찍는 원천이 여럿 남아
+                //   같은 자리에 라벨이 둘 찍히거나(떡짐), 규칙에 없는 자리에 값이 튀어나왔다
+                //   (JACK: "+62.81도 있어 … 어떻게 더 나오는지 이해가 안 됨" — 평면기하점/증분거리 라벨).
+                //   측점의 원천은 <b>주 증분(No.X)</b>과 <b>체인의 굴곡부(+YY.YY)</b> 둘뿐이다.
+                bool wantOn = t is CivilDb.Styles.ProfileDataDisplayStyleType.Border
+                                or CivilDb.Styles.ProfileDataDisplayStyleType.TitleBox
+                                or CivilDb.Styles.ProfileDataDisplayStyleType.TitleBoxText
+                                or CivilDb.Styles.ProfileDataDisplayStyleType.MajorTicks
+                                or CivilDb.Styles.ProfileDataDisplayStyleType.MajorStationLabel
+                           || (VgpOn && t is CivilDb.Styles.ProfileDataDisplayStyleType.TicksAtVGP
+                                          or CivilDb.Styles.ProfileDataDisplayStyleType.LabelsAtVGP);
+                ds.Visible = wantOn;
+                if (ds.Visible == wantOn) { if (wantOn) on++; }  // 넣었다고 세지 않는다 — 되읽어 확인
+                else log.AppendLine($"   [{idx}칸] {nm}: {(wantOn ? "켰" : "껐")}는데 다시 읽으니 그대로다");
+                // ★★[JACK 0811] <b>CALS 표준 색상.</b> 종전의 '전부 7번'을 표준이 덮는다.
+                //   테두리·제목상자 = 테이블 굵은 선(4) · 눈금 = 가는 선(1)
+                //   제목문자 = 6 · 값문자 = 3
+                ds.Color = Aci(
+                    nm.Contains("TitleBoxText") ? CalsTitleText
+                    : nm.Contains("Label") ? CalsValueText
+                    : nm.Contains("Border") || nm.Contains("TitleBox") ? CalsTableThick
+                    : CalsTableThin);
             }
             catch (System.Exception ex) { log.AppendLine($"   [{idx}칸] 표시 {nm} 실패 — {Brief(ex)}"); }
         }
         if (wasOff.Length > 0) log.AppendLine($"   [{idx}칸] 밴드 표시 꺼져 있던 것:{wasOff}");
+        return on;
+    }
+
+    /// <summary>★★[v25.0 · JACK 0811] <b>횡단 데이터 밴드의 표시 스위치.</b>
+    ///
+    /// <para>이 종류는 <b>단면검토선이 있는 자리에만</b> 눈금과 값을 찍는다 — 그래서
+    /// 여섯 칸이 한 목록을 보게 되고 열이 어긋날 수가 없다. 다만 <b>표시가 꺼져 있으면
+    /// 단면검토선을 아무리 잘 놓아도 아무것도 안 나온다.</b> 0810에 세 판을 헤맨 자리가
+    /// 정확히 이것(종단 데이터 쪽의 <c>TicksAtVGP</c>)이었으므로, 여기서는 처음부터 켜고
+    /// <b>되읽어 확인</b>한다.</para>
+    ///
+    /// <para><b>증분 라벨(<c>IncrementalStationRegionLabels</c>)은 끈다.</b> 그건 단면검토선과
+    /// 무관하게 일정 간격마다 찍혀서, 켜 두면 측점 원천이 다시 둘이 된다 —
+    /// 그 결과가 지금까지의 떡짐이었다. 정측점(20m)도 <b>단면검토선으로 심어</b> 두었으므로
+    /// 증분 라벨은 필요가 없다.</para>
+    /// 반환=켠 표시 수.</summary>
+    private static int EnableSectionalDisplay(CivilDb.Styles.SectionalDataBandStyle sdb, int idx,
+                                              System.Text.StringBuilder log)
+    {
+        int on = 0;
+        var wasOff = new System.Text.StringBuilder();
+        foreach (var v in System.Enum.GetValues(typeof(CivilDb.Styles.SectionalDataDisplayStyleType)))
+        {
+            var t = (CivilDb.Styles.SectionalDataDisplayStyleType)v;
+            string nm = t.ToString();
+            try
+            {
+                using var ds = sdb.GetDisplayStylePlan(t);
+                if (!ds.Visible) wasOff.Append(' ').Append(nm);
+                bool wantOn = t != CivilDb.Styles.SectionalDataDisplayStyleType.IncrementalStationRegionLabels;
+                ds.Visible = wantOn;
+                if (ds.Visible == wantOn) { if (wantOn) on++; }
+                else log.AppendLine($"   [{idx}칸] {nm}: {(wantOn ? "켰" : "껐")}는데 다시 읽으니 그대로다");
+                // CALS 표준 색 — 종단 데이터 밴드와 같은 규칙으로 맞춘다.
+                ds.Color = Aci(
+                    nm.Contains("TitleBoxText") ? CalsTitleText
+                    : nm.Contains("Label") ? CalsValueText
+                    : nm.Contains("Border") || nm.Contains("TitleBox") ? CalsTableThick
+                    : CalsTableThin);
+            }
+            catch (System.Exception ex) { log.AppendLine($"   [{idx}칸] 횡단표시 {nm} 실패 — {Brief(ex)}"); }
+        }
+        log.AppendLine($"   [{idx}칸] 횡단 데이터 밴드 — 표시 {on}종 켬" +
+                       (wasOff.Length > 0 ? $" · 꺼져 있던 것:{wasOff}" : ""));
         return on;
     }
 
@@ -584,10 +863,26 @@ public static class SheetCommand
     /// 칸 수나 밴드 높이가 바뀌어도 '15% 작게'라는 뜻이 유지된다.</summary>
     private const double BandTextScale = 0.85;
 
+    /// <summary>★[JACK 0811] <b>"밴드높이를 15%씩 낮춰줘"</b> — 칸 높이에 곱한다.
+    /// 27.7mm → 23.5mm. 줄어든 자리는 종단 그래프가 가져간다.</summary>
+    private const double BandHeightScale = 0.85;
+
+    /// <summary>★[JACK 0811] <b>"밴드의 값 글씨만(제목 제외) 30% 줄여"</b> — 값에만 곱한다.
+    /// 굴곡부 측점이 붙으면서 값이 촘촘해졌다. 제목은 칸당 하나뿐이라 줄일 이유가 없다.</summary>
+    private const double ValueTextScale = 0.70;
+
     /// <summary>★[JACK 0810] <b>그래프와 첫 밴드(성토) 사이 틈</b>(종이 mm) — "10의 거리 주고".
     /// 칸끼리는 붙여 표로 읽히게 하되, 그래프와 표 사이만 띄워 경계가 보이게 한다.
     /// 이 틈은 밴드 총높이에 포함되어 축척 계산에 자동으로 반영된다(<see cref="BandPaperHeight"/>가 간격까지 더한다).</summary>
     private const double TopGapMm = 10.0;
+
+    /// <summary>★[v26.0] 칸과 칸 사이 틈(종이 mm) — <b>0이 아니되 눈에 안 보이는</b> 값.
+    /// <para>표는 붙어야 표로 읽히므로 원래 0이었다. 그런데 코드에서 칸마다 다르게 주는 값이
+    /// <b>이 간격 하나뿐</b>이었고, 하필 <b>간격이 0이 아닌 첫 칸만</b> 값이 그려졌다.
+    /// 인과인지 우연인지 모르니 <b>비대칭을 없앤다</b> — 0.2mm면 1:150에서 모형 30mm라 눈에 안 띈다.</para></summary>
+    /// <para>★[v27.2 되돌림] 0으로 되돌린다 — 손으로 세팅해 <b>잘 나오는</b> 종단도도
+    /// 첫 칸만 간격이 있고 나머지는 <c>0.00mm</c>였다. 간격은 원인이 아니었다.</para>
+    private const double BandGapMm = 0.0;
 
     /// <summary>★[JACK 0810] <b>"계획지반고의 변곡점 측점이 누락됨"</b> —
     /// v23.5에서 굴곡부 <b>눈금</b>은 켰는데(굴곡부 12/12) 도면엔 값이 안 나왔다.
@@ -615,9 +910,33 @@ public static class SheetCommand
             using (var have = vls.GetComponents(CivilDb.Styles.LabelStyleComponentType.Text))
                 if (have.Count > 0) return false;                  // 이미 글자가 있으면 건드리지 않는다
 
-            // ── 같은 밴드의 주눈금 라벨에서 '무엇을 찍는지'와 '어느 각도로 찍는지'를 읽어 온다.
-            string expr = null; double ang = System.Math.PI / 2.0; bool got = false;
-            var pM = bandStyle.GetType().GetProperty("MajorIncrementLabelStyleId");
+            // ── 같은 밴드의 주눈금 라벨에서 '무엇을 찍는지'를 <b>구성요소마다</b> 읽어 온다.
+            //   ★★[JACK 0811] <b>측점 번호가 'No.0'만 나오던 원인.</b>
+            //   종전엔 첫 구성요소 하나만 베끼고 <c>break</c> 했다. 그런데 측점(색인형식) 라벨은
+            //   <c>No.&lt;번호&gt;</c>와 <c>+&lt;나머지&gt;</c> <b>두 조각</b>으로 되어 있다 —
+            //   첫 조각만 옮겼으니 굴곡부 자리마다 'No.0'만 찍혔다.
+            //   조각 수는 밴드마다 다르므로 <b>있는 만큼 전부</b> 옮긴다.
+            var srcs = new List<(string Expr, double Ang, double Xo, double Yo, double MaxW,
+                                 Autodesk.Civil.LabelTextAttachmentType Attach, bool GotAttach,
+                                 Autodesk.Civil.AnchorLocationType AnchorPt, bool GotAnchor, string AnchorComp)>();
+            // ★★[JACK 0811] <b>"측점값이 0이야"</b> — 굴곡부 자리마다 <c>No.0</c>만 찍혔다.
+            //   원인: 측점 라벨이 <b>두 스타일에 나뉘어</b> 있다 —
+            //   주눈금이 <c>No.&lt;번호&gt;</c>, 보조눈금이 <c>+&lt;나머지&gt;</c>.
+            //   주눈금만 베꼈으니 번호(No.0)만 남고 '+03.87'이 통째로 빠졌다.
+            //   → <b>주눈금과 보조눈금을 모두</b> 훑되, 표현식이 <b>같으면</b> 보조는 건너뛴다
+            //     (성토·절토처럼 두 스타일이 같은 값을 찍는 밴드에서 값이 두 번 나오면 안 된다).
+            var seenExpr = new HashSet<string>();
+            // ★★[JACK 0811] <b>"측점값이 떡져서 나와. +부분은 No.1을 붙이지 마. No는 정측점만."</b>
+            //   주눈금(<c>No.&lt;번호&gt;</c>)과 보조눈금(<c>+&lt;나머지&gt;</c>)을 <b>둘 다</b> 굴곡부 라벨에 넣었더니
+            //   같은 자리에 겹쳐 찍혀 뭉갰다(스샷: <c>No.0</c> 위에 <c>+005.9</c>).
+            //   굴곡부는 정측점이 아니므로 <b>보조 쪽만</b> 있으면 된다 —
+            //   <c>No.</c>는 정측점 라벨이 알아서 붙인다.
+            //   → <b>보조를 먼저 보고, 거기서 얻었으면 주는 안 본다.</b>
+            //     성토·절토처럼 주/보조 표현식이 같은 밴드는 어느 쪽을 써도 값이 같다.
+            foreach (var pn in new[] { "MinorIncrementLabelStyleId", "MajorIncrementLabelStyleId" })
+            {
+            if (srcs.Count > 0) break;
+            var pM = bandStyle.GetType().GetProperty(pn);
             if (pM?.GetValue(bandStyle) is ObjectId mid && !mid.IsNull &&
                 tr.GetObject(mid, OpenMode.ForRead) is CivilDb.Styles.LabelStyle mls)
             {
@@ -625,37 +944,71 @@ public static class SheetCommand
                 foreach (ObjectId cid in mc)
                 {
                     if (tr.GetObject(cid, OpenMode.ForRead) is not CivilDb.Styles.LabelStyleTextComponent mtc) continue;
+                    string expr = null; double ang = System.Math.PI / 2.0, xo = 0, yo = 0, maxW = 0;
+                    var attach = Autodesk.Civil.LabelTextAttachmentType.MiddleCenter; bool gotAttach = false;
+                    var anchorPt = Autodesk.Civil.AnchorLocationType.BandBottom; bool gotAnchor = false;
+                    string anchorComp = null;
                     using var mt = mtc.Text;
                     using (var c = mt.Contents) expr = c.Value;
                     using (var a = mt.Angle) ang = a.Value;
-                    got = true; break;
+                    using (var x = mt.XOffset) xo = x.Value;
+                    using (var y = mt.YOffset) yo = y.Value;
+                    // ★★[v23.17] <b>글씨가 두 단으로 어긋난 진짜 원인.</b>
+                    //   낮은 단은 눈금 라벨, 높은 단은 굴곡부 라벨이었다 — <b>Stagger가 아니었다.</b>
+                    //   글자가 기준선의 어디에 붙는지(<c>Attachment</c>)를 안 옮겨서 둘이 다른 높이에 앉았다.
+                    //   폭 제한(<c>MaxWidth</c>)도 같이 옮긴다 — 안 옮기면 긴 값이 칸을 넘는다.
+                    try { using (var at = mt.Attachment) { attach = at.Value; gotAttach = true; } } catch { }
+                    try { using (var mw = mt.MaxWidth) maxW = mw.Value; } catch { }
+                    // ★[JACK 0810] <b>"문자 위치도 밴드 박스 내 있지 않고 선 위에 있고 이상한데?"</b>
+                    //   원인은 내가 <b>앵커를 안 옮긴 것</b>이다. 내용과 각도만 복사했더니 새 구성요소가
+                    //   기본값 <c>BandTop</c>(밴드 <b>윗선</b>)으로 태어나 글자가 칸이 아니라 선에 매달렸다.
+                    //   로그가 이미 <c>앵커점 BandTop</c>이라 찍고 있었다 — 계측이 답을 들고 있었다.
+                    //   주눈금 라벨이 칸 안에 앉는 그 앵커를 <b>그대로</b> 가져온다.
+                    using (var g = mtc.General)
+                    {
+                        try { using (var ap = g.AnchorPoint) { anchorPt = ap.Value; gotAnchor = true; } } catch { }
+                        try { using (var ac = g.AnchorComponent) anchorComp = ac.Value; } catch { }
+                    }
+                    if (!string.IsNullOrEmpty(expr) && seenExpr.Add(expr))
+                        srcs.Add((expr, ang, xo, yo, maxW, attach, gotAttach, anchorPt, gotAnchor, anchorComp));
                 }
             }
-            if (!got || string.IsNullOrEmpty(expr))
+            }
+            if (srcs.Count == 0)
             { log.AppendLine($"   [{idx}칸] 굴곡부 글자: 주눈금 라벨에서 표현식을 못 읽었다 — 그대로 둔다"); return false; }
 
-            var nid = vls.AddComponent("DH_굴곡부 값", CivilDb.Styles.LabelStyleComponentType.Text);
-            if (tr.GetObject(nid, OpenMode.ForWrite) is not CivilDb.Styles.LabelStyleTextComponent ntc)
-            { log.AppendLine($"   [{idx}칸] 굴곡부 글자: 구성요소를 만들었으나 열지 못했다"); return false; }
-            using (var nt = ntc.Text)
+            int made = 0;
+            for (int c0 = 0; c0 < srcs.Count; c0++)
             {
-                using (var c = nt.Contents) c.Value = expr;
-                using (var a = nt.Angle) a.Value = ang;
+                var s = srcs[c0];
+                var nid = vls.AddComponent($"DH_굴곡부 값{(srcs.Count > 1 ? (c0 + 1).ToString() : "")}",
+                                           CivilDb.Styles.LabelStyleComponentType.Text);
+                if (tr.GetObject(nid, OpenMode.ForWrite) is not CivilDb.Styles.LabelStyleTextComponent ntc)
+                { log.AppendLine($"   [{idx}칸] 굴곡부 글자 {c0 + 1}: 만들었으나 열지 못했다"); continue; }
+                using (var nt = ntc.Text)
+                {
+                    using (var c = nt.Contents) c.Value = s.Expr;
+                    using (var a = nt.Angle) a.Value = s.Ang;
+                    try { using (var x = nt.XOffset) x.Value = s.Xo; } catch { }
+                    try { using (var y = nt.YOffset) y.Value = s.Yo; } catch { }
+                    // ★ 붙는 자리와 폭 제한 — 이 둘이 빠져서 글씨가 눈금 라벨과 다른 단에 앉았다.
+                    if (s.GotAttach) try { using (var at = nt.Attachment) at.Value = s.Attach; } catch { }
+                    if (s.MaxW > 0) try { using (var mw = nt.MaxWidth) mw.Value = s.MaxW; } catch { }
+                }
+                using (var gen2 = ntc.General)
+                {
+                    try { using (var vis = gen2.Visible) vis.Value = true; } catch { }
+                    if (s.GotAnchor) try { using (var ap = gen2.AnchorPoint) ap.Value = s.AnchorPt; } catch { }
+                    if (!string.IsNullOrEmpty(s.AnchorComp))
+                        try { using (var ac = gen2.AnchorComponent) ac.Value = s.AnchorComp; } catch { }
+                }
+                log.AppendLine($"   [{idx}칸] 굴곡부 글자 {c0 + 1}/{srcs.Count}: 각도 {s.Ang * 180.0 / System.Math.PI:F0}°" +
+                               $" · 붙는자리 {(s.GotAttach ? s.Attach.ToString() : "기본")}" +
+                               $" · 앵커 {(s.GotAnchor ? s.AnchorPt.ToString() : "기본")}" +
+                               $" · 내용 \"{s.Expr}\"");
+                made++;
             }
-            // ★[v23.7] <b>글자는 만들어졌는데 화면엔 안 나왔다</b>(v23.6 실측). 새 구성요소가
-            //   안 보이게 태어났을 가능성이 첫 번째다 — 명시적으로 켜고, 켠 뒤의 상태를 남긴다.
-            //   그래도 안 나오면 이 로그가 '보임은 켜져 있는데 안 그려진다'로 자리를 좁혀 준다.
-            using (var gen = ntc.General)
-            {
-                try { using (var vis = gen.Visible) { vis.Value = true; } } catch { }
-                string an = "?", ap = "?";
-                try { using (var x = gen.AnchorComponent) an = x.Value; } catch { }
-                try { using (var x = gen.AnchorPoint) ap = x.Value.ToString(); } catch { }
-                log.AppendLine($"   [{idx}칸] 굴곡부 글자 상태: 보임 켬 · 앵커부품 '{an}' · 앵커점 {ap}");
-            }
-            // 무엇을 옮겼는지 남긴다 — 다음 판에서 이 문자열이 맞았는지 따질 근거가 된다.
-            log.AppendLine($"   [{idx}칸] 굴곡부 글자 생성: 주눈금에서 복사 · 각도 {ang * 180.0 / System.Math.PI:F0}° · 내용 \"{expr}\"");
-            return true;
+            return made > 0;
         }
         catch (System.Exception ex) { log.AppendLine($"   [{idx}칸] 굴곡부 글자 실패 — {Brief(ex)}"); return false; }
     }
@@ -680,6 +1033,11 @@ public static class SheetCommand
             if (tr.GetObject(pv.StyleId, OpenMode.ForWrite) is not CivilDb.Styles.ProfileViewStyle vs)
             { log.AppendLine("   축 눈금: 종단 뷰 스타일을 열지 못했다"); tr.Commit(); return; }
 
+            // ★[v23.20] <b>왼쪽 간격을 먼저 정하고 오른쪽을 거기에 맞춘다.</b>
+            //   종전엔 축마다 따로 판정해서 왼쪽 5m·오른쪽 2.5m로 <b>어긋났다</b>(실측).
+            //   같은 표고를 재는 두 자가 눈금이 다르면 도면이 못 읽힌다.
+            double leftMajor = 0;
+
             // 좌우 축 모두 — 오른쪽도 같이 서야 표가 사다리처럼 읽힌다.
             foreach (var (nm, ax) in new[] { ("왼쪽", vs.LeftAxis), ("오른쪽", vs.RightAxis) })
                 using (ax)
@@ -702,7 +1060,14 @@ public static class SheetCommand
                         //   1:1000이면 5mm라 숫자가 붙어 못 읽고, 1:50이면 100mm라 눈금이 몇 개 안 남는다.
                         //   <b>범위를 벗어날 때만</b> 관례값으로 바꾼다(멀쩡한 회사 값을 매번 덮지 않는다).
                         double onPaper = mj.Interval / scale * 1000.0;
-                        if (mj.Interval > 1e-9 && (onPaper < AxisLabelMinMm || onPaper > AxisLabelMaxMm))
+                        bool isLeft = nm == "왼쪽";
+                        // 오른쪽은 <b>왼쪽에 맞추는 것이 먼저</b>다 — 두 자의 눈금이 달라선 안 된다.
+                        if (!isLeft && leftMajor > 1e-9 && System.Math.Abs(mj.Interval - leftMajor) > 1e-9)
+                        {
+                            log.AppendLine($"   축 눈금(오른쪽) 간격: {mj.Interval:0.##}m → 왼쪽과 같은 {leftMajor:0.##}m로 맞춤");
+                            mj.Interval = leftMajor; mn.Interval = leftMajor / 5.0;
+                        }
+                        else if (mj.Interval > 1e-9 && (onPaper < AxisLabelMinMm || onPaper > AxisLabelMaxMm))
                         {
                             double target = AxisLabelWantMm / 1000.0 * scale;
                             double[] nice = { 0.25, 0.5, 1, 2, 2.5, 5, 10, 20, 25, 50, 100, 200 };
@@ -713,6 +1078,7 @@ public static class SheetCommand
                             mj.Interval = pick;
                             mn.Interval = pick / 5.0;
                         }
+                        if (isLeft) leftMajor = mj.Interval;   // 오른쪽이 따라올 기준
                         log.AppendLine($"   축 눈금({nm}) 후: 주 {mj.Size * 1000:F2}mm/간격 {mj.Interval:0.###}" +
                                        $" · 보조 {mn.Size * 1000:F2}mm/간격 {mn.Interval:0.###} (크기는 줄이지 않음)");
                     }
@@ -726,29 +1092,57 @@ public static class SheetCommand
             {
                 var et = typeof(CivilDb.Styles.ProfileViewDisplayStyleType);
                 var sb = new System.Text.StringBuilder();
+                var grid = new System.Text.StringBuilder();
                 foreach (var v in System.Enum.GetValues(et))
                 {
                     try
                     {
                         var t = (CivilDb.Styles.ProfileViewDisplayStyleType)v;
                         using var ds = vs.GetDisplayStylePlan(t);
-                        if (!ds.Visible) sb.Append($" {v}=꺼짐");
+                        bool was = ds.Visible;
+                        if (!was) sb.Append($" {v}=꺼짐");
                         // ★[JACK 0810] <b>"모든 선은 흰색(검정)으로. 눈금 포함 모든 것"</b>
                         //   글자만 고쳤더니 축선(파랑)·눈금(빨강)이 남았다. 뷰 스타일은 통째로 7번.
                         //   (종단선 하늘색은 <b>종단 스타일</b>이라 여기서 안 건드린다 — JACK 지침대로 유지.)
-                        ds.Color = White;
-                        // ★[JACK 0810] "세로줄은 종단에 생겨야 됨" — 그래프 세로 격자를 켠다.
-                        //   로그 실측: GridVerticalMajor·GridVerticalMinor가 <b>둘 다 꺼져</b> 있었다.
-                        //   밴드엔 세로줄이 넘치고 정작 그래프엔 없었으니 정반대였다.
-                        //   ★[JACK 0810 추가] "정체인밖에 없잖아 부체인도 다 들어가야지" —
-                        //   주(정체인)만 켰더니 부체인 자리가 비었다. 둘 다 켠다.
-                        if (t == CivilDb.Styles.ProfileViewDisplayStyleType.GridVerticalMajor ||
-                            t == CivilDb.Styles.ProfileViewDisplayStyleType.GridVerticalMinor)
-                            ds.Visible = true;
+                        // ★★[JACK 0811] CALS 표준 — 수직그리드 1 · 수평그리드 2 · 나머지(축·문자)는 문자공통 3.
+                        string vn = v.ToString() ?? "";
+                        // ★★[v28.1 · JACK 0811] <b>"지표면에서 내린 세로줄을 빨간색으로."</b>
+                        //   실측: 그 줄이 <b>초록</b>이었다. 색 규칙이 이름에 <c>GridVertical</c>이 든 것만
+                        //   수직 격자로 봤는데, 지금 쓰는 줄은 <c>GridAtSampleLineStations</c>라 그 그물을 빠져
+                        //   '나머지'로 떨어져 문자색(3=초록)을 받고 있었다. 이름을 넓힌다.
+                        ds.Color = Aci(vn.Contains("GridVertical") || vn.Contains("GridAtSampleLine") ? CalsGridVert
+                                     : vn.Contains("GridHorizontal") ? CalsGridHori
+                                     // ★[v28.1] X축·Y축(축선·눈금·눈금값)은 전부 빨강 — JACK 지시.
+                                     : vn.Contains("Axis") ? CalsScaleLine
+                                     : vn.Contains("Ticks") ? CalsTableThin
+                                     : CalsValueText);
+                        // ★★[v25.4 · JACK 0811] <b>세로줄은 단면검토선 자리에만 세운다.</b>
+                        //
+                        //   JACK: <i>"빨간색 세로선은 측점이 없어. 10m 보조측점 같은데 눈금이 안 만들어졌어."</i>
+                        //   맞다. <c>GridVertical Major/Minor</c>는 <b>증분</b>(20m/10m)마다 긋는 선이라
+                        //   우리 측점 목록과 아무 상관이 없다. 그래서 20m·10m마다 줄은 그어지는데
+                        //   10m 자리에는 측점이 없어 <b>값 없는 세로줄</b>이 남았다.
+                        //
+                        //   Civil에 <c>GridAtSampleLineStations</c>가 따로 있다 — <b>단면검토선 자리에만</b> 긋는다.
+                        //   그걸 켜고 증분 격자를 끄면 <b>세로줄 하나에 측점 하나</b>가 된다.
+                        //   측점의 원천을 하나로 모은 것과 같은 규칙을 격자에도 적용하는 것이다.
+                        bool wantGrid = t == CivilDb.Styles.ProfileViewDisplayStyleType.GridAtSampleLineStations;
+                        bool isGridV = wantGrid
+                                    || t == CivilDb.Styles.ProfileViewDisplayStyleType.GridVerticalMajor
+                                    || t == CivilDb.Styles.ProfileViewDisplayStyleType.GridVerticalMinor;
+                        if (isGridV)
+                        {
+                            // ★[v23.20] <b>켠 뒤 되읽는다.</b> 종전엔 켜기 전 상태만 찍어서
+                            //   진단에 `GridVerticalMajor=꺼짐`이 남았는데 그게 '켜기 전'인지
+                            //   '켜기 실패'인지 구분이 안 됐다. 이 파일의 다른 자리는 다 되읽는다.
+                            ds.Visible = wantGrid;
+                            grid.Append($" {t}={(ds.Visible == wantGrid ? (wantGrid ? "켬" : "끔") : "⚠안먹음")}");
+                        }
                     }
                     catch { }
                 }
-                log.AppendLine(sb.Length > 0 ? "   뷰 표시 꺼진 항목:" + sb : "   뷰 표시: 전부 켜져 있다");
+                log.AppendLine(sb.Length > 0 ? "   뷰 표시(켜기 전) 꺼져 있던 것:" + sb : "   뷰 표시: 전부 켜져 있었다");
+                if (grid.Length > 0) log.AppendLine("   세로 격자 켜기 결과(되읽음):" + grid);
             }
             catch (System.Exception ex) { log.AppendLine("   뷰 표시 훑기 실패 — " + Brief(ex)); }
             tr.Commit();
@@ -772,6 +1166,195 @@ public static class SheetCommand
     /// <para>기준점은 <b>오른쪽 아래 모서리</b>(JACK: "Y축 선과 맞닿는 모서리")라 사각형이 축 왼쪽에 걸린다.
     /// 크기는 <b>1×1 단위</b>로 두고 실제 크기는 축 스타일의 눈금 크기가 정한다 —
     /// 여기서 실치수를 박으면 축척이 바뀔 때마다 블록을 다시 만들어야 한다.</para></summary>
+
+    /// <summary>★[JACK 0810] <b>"이번엔 로그로 문제를 바로 파악할 수 있게 장치를 마련해."</b>
+    ///
+    /// <para>도곽 작업이 <b>전부 끝난 뒤</b> 밴드의 최종 상태를 한 덩어리로 찍는다.
+    /// 지금까지는 손댈 때마다 한 줄씩 남겼는데, 그러면 <b>마지막에 무엇이 남았는지</b>를 알 수 없었다 —
+    /// 뒤 단계가 앞 단계를 덮어써도 로그에는 둘 다 '성공'으로 찍힌다.</para>
+    ///
+    /// <para>한 칸에 대해 <b>다음 판에서 물어볼 것들을 미리 다 찍는다</b>:
+    /// 종단1/종단2가 각각 무엇인지(굴곡부가 어느 선을 따라가는지) · 굴곡부 선택이 살아 있는지 ·
+    /// 엇갈림이 정말 꺼졌는지(<b>되읽어</b>) · 솎아내기 값 · 표시 스위치 상태.</para></summary>
+    private static void DumpBands(Database db, ObjectId pvId, System.Text.StringBuilder log)
+    {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var pv = (CivilDb.ProfileView)tr.GetObject(pvId, OpenMode.ForRead);
+            log.AppendLine("── 밴드 최종 상태 (이 블록만 보면 원인이 짚인다) ──");
+
+            string NameOf(ObjectId id)
+            {
+                if (id.IsNull) return "(없음)";
+                try { return tr.GetObject(id, OpenMode.ForRead) is CivilDb.Profile p ? p.Name : "(종단아님)"; }
+                catch { return "(못읽음)"; }
+            }
+
+            // ★★[v25.7 계측 · JACK "깊게 다시 점검해봐"] <b>밴드 항목은 여섯이 똑같은데 한 칸만 그려진다.</b>
+            //   그러면 원인은 항목 <b>바깥</b>에 있다. 종단도에 실제로 붙어 있는 <b>라벨 객체</b>를
+            //   종류별로 세어 본다 — 밴드마다 라벨 그룹이 하나씩 있어야 하는데
+            //   하나만 있으면 "한 칸만 나오는" 증상과 정확히 맞아떨어진다.
+            try
+            {
+                var kinds = new System.Collections.Generic.SortedDictionary<string, int>();
+                foreach (var getter in new System.Func<ObjectIdCollection>[] { pv.GetLabelIds, pv.GetProfileViewLabelIds })
+                {
+                    ObjectIdCollection ids = null;
+                    try { ids = getter(); } catch { }
+                    if (ids == null) continue;
+                    foreach (ObjectId id in ids)
+                    {
+                        string k;
+                        try { k = tr.GetObject(id, OpenMode.ForRead).GetType().Name; } catch { k = "(못읽음)"; }
+                        kinds[k] = kinds.TryGetValue(k, out int c) ? c + 1 : 1;
+                    }
+                }
+                log.AppendLine("    종단도에 붙은 라벨 객체: " +
+                               (kinds.Count == 0 ? "없음(⚠밴드 라벨 그룹이 하나도 없다)"
+                                                 : string.Join(" · ", kinds.Select(kv => $"{kv.Key}×{kv.Value}"))));
+            }
+            catch (System.Exception ex) { log.AppendLine("    라벨 객체 세기 실패 — " + Brief(ex)); }
+
+            using var items = pv.Bands.GetBottomBandItems();
+            for (int i = 0; i < items.Count; i++)
+            {
+                var it = items[i];
+                string sty = "?", kind = "?";
+                try { kind = it.BandType.ToString(); } catch { }
+                try { sty = tr.GetObject(it.BandStyleId, OpenMode.ForRead) is CivilDb.Styles.BandStyle b ? b.Name : "?"; }
+                catch { }
+                string p1 = "?", p2 = "?";
+                try { p1 = NameOf(it is CivilDb.ProfileViewBandItem pi1 ? pi1.Profile1Id : ObjectId.Null); } catch { }
+                try { p2 = NameOf(it is CivilDb.ProfileViewBandItem pi2 ? pi2.Profile2Id : ObjectId.Null); } catch { }
+
+                // ★★[v25.7 계측] <b>이 칸이 라벨을 그리기로 되어 있는가</b> — 값이 빈 원인 1순위.
+                //   그리고 <b>그릴 글자가 있는가</b>(표현식 · 글씨높이). 여섯 칸이 배선은 같은데
+                //   한 칸만 나온다면 차이는 이 둘 중 하나에 있다.
+                string show = "?", labels = "", more = "";
+                try { show = it.ShowLabels ? "켬" : "⚠끔"; } catch (System.Exception ex) { show = "예외:" + ex.GetType().Name; }
+                // ★★[v27.1] <b>수동으로 만든 것과 나란히 비교하려면 항목의 값이 전부 필요하다.</b>
+                //   JACK: "수동으로 횡단 정보표시 테이블 가져와서 똑같이 세팅하면 밴드가 잘 나와."
+                //   그러면 Civil의 버그가 아니라 <b>우리가 다르게 하고 있는 것</b>이다.
+                //   잘 되는 판과 안 되는 판을 <b>한 줄씩 대조</b>하면 그 차이가 바로 드러난다.
+                try
+                {
+                    var pi = it as CivilDb.ProfileViewBandItem;
+                    string src = "?", mat = "?", mo = "?", a2 = "?";
+                    if (pi != null)
+                    {
+                        try { src = pi.DataSourceId.IsNull ? "없음" : (tr.GetObject(pi.DataSourceId, OpenMode.ForRead) as CivilDb.Entity)?.Name ?? "?"; } catch (System.Exception ex) { src = "예외:" + ex.GetType().Name; }
+                        try { mat = string.IsNullOrEmpty(pi.MaterialName) ? "(빈값)" : pi.MaterialName; } catch { }
+                        try { mo = pi.MaxOffsetDistance.HasValue ? pi.MaxOffsetDistance.Value.ToString("0.###") : "(없음)"; } catch (System.Exception ex) { mo = "예외:" + ex.GetType().Name; }
+                        try { a2 = pi.Alignment2Id.IsNull ? "없음" : "있음"; } catch { }
+                    }
+                    string bh = "?", gp = "?", sl = "?", el = "?";
+                    try { bh = (((CivilDb.Styles.BandStyle)tr.GetObject(it.BandStyleId, OpenMode.ForRead)).BandHeight * 1000).ToString("F1") + "mm"; } catch { }
+                    try { gp = (it.Gap * 1000).ToString("F2") + "mm"; } catch { }
+                    try { sl = it.LabelAtStartStation ? "켬" : "끔"; } catch { }
+                    try { el = it.LabelAtEndStation ? "켬" : "끔"; } catch { }
+                    more = $"\n          출처={src} · 재료={mat} · 최대오프셋={mo} · 선형2={a2}"
+                         + $"\n          밴드높이={bh} · 간격={gp} · 시작라벨={sl} · 끝라벨={el}";
+                }
+                catch { }
+                try
+                {
+                    var stObj = tr.GetObject(it.BandStyleId, OpenMode.ForRead);
+                    foreach (var p in stObj.GetType().GetProperties())
+                    {
+                        if (!p.Name.EndsWith("LabelStyleId", StringComparison.Ordinal)) continue;
+                        if (p.GetValue(stObj) is not ObjectId lid || lid.IsNull) { labels += $"\n          {p.Name}=(없음)"; continue; }
+                        if (tr.GetObject(lid, OpenMode.ForRead) is not CivilDb.Styles.LabelStyle ls) continue;
+                        using var comps = ls.GetComponents(CivilDb.Styles.LabelStyleComponentType.Text);
+                        int nc = 0; string first = ""; double h = -1;
+                        foreach (ObjectId cid in comps)
+                        {
+                            if (tr.GetObject(cid, OpenMode.ForRead) is not CivilDb.Styles.LabelStyleTextComponent tc) continue;
+                            using var txt = tc.Text;
+                            if (nc == 0)
+                            {
+                                using var con = txt.Contents; first = (con.Value ?? "").Replace("\r", " ").Replace("\n", " ");
+                                try { h = txt.Height.Value * 1000.0; } catch { }
+                            }
+                            nc++;
+                        }
+                        labels += $"\n          {p.Name}: 글자 {nc}개 · 높이 {(h < 0 ? "?" : h.ToString("F2") + "mm")} · {first}";
+                    }
+                }
+                catch (System.Exception ex) { labels += "\n          라벨 훑기 실패 — " + Brief(ex); }
+
+                string gb = "?", pvi = "?";
+                try
+                {
+                    var sel = it.GetVerticalGeometryPointsOptions();
+                    gb = sel[Autodesk.Civil.ProfilePointType.GradeBreak].Selected ? "켬" : "끔";
+                    pvi = sel[Autodesk.Civil.ProfilePointType.PVI].Selected ? "켬" : "끔";
+                }
+                catch { gb = pvi = "(해당없음)"; }
+
+                string stag = "?", stagH = "?", weed = "?", maj = "?", min = "?";
+                try { stag = it.StaggerLabel.ToString(); } catch { }
+                try { stagH = (it.StaggerLineHeight * 1000).ToString("F1") + "mm"; } catch { }
+                try { weed = it.Weeding.ToString("0.###") + "m"; } catch { }
+                try { maj = it.MajorInterval.ToString("0.##"); } catch { }
+                try { min = it.MinorInterval.ToString("0.##"); } catch { }
+
+                log.AppendLine($"  [{i}칸] '{sty}' {kind} · 레이블표시={show}{more}{labels}");
+                log.AppendLine($"        종단1={p1} · 종단2={p2}   ← 굴곡부는 이 중 어느 선을 따라가는가");
+                log.AppendLine($"        굴곡부: GradeBreak={gb} PVI={pvi} · 솎아내기={weed} · 간격 주{maj}/보조{min}");
+                log.AppendLine($"        엇갈림={stag}(높이 {stagH})   ← None이 아니면 글씨가 두 단으로 어긋난다");
+
+                // 표시 스위치 — 꺼진 것만 이름으로 (전부 켜져 있으면 그렇게 적는다)
+                try
+                {
+                    if (tr.GetObject(it.BandStyleId, OpenMode.ForRead) is CivilDb.Styles.ProfileDataBandStyle pdb)
+                    {
+                        // ★[v23.17 검토 반영] 전부 예외로 터져도 off가 비어 "전부 켜짐"이 찍혔다 —
+                        //   진단 장치가 정반대를 보고하는 셈이다. <b>읽은 개수</b>를 같이 남긴다.
+                        var off = new System.Text.StringBuilder();
+                        int rd = 0, tot = 0; string firstErr = null;
+                        foreach (var v in System.Enum.GetValues(typeof(CivilDb.Styles.ProfileDataDisplayStyleType)))
+                        {
+                            tot++;
+                            try
+                            {
+                                using var ds = pdb.GetDisplayStylePlan((CivilDb.Styles.ProfileDataDisplayStyleType)v);
+                                bool vis = ds.Visible; rd++;
+                                if (!vis) off.Append(' ').Append(v);
+                            }
+                            catch (System.Exception ex) { firstErr ??= $"{v}:{Brief(ex)}"; }
+                        }
+                        log.AppendLine($"        표시 {rd}/{tot} 읽음" +
+                                       (off.Length > 0 ? " · 꺼짐:" + off : rd == tot ? " · 전부 켜짐" : "") +
+                                       (firstErr != null ? $" · 첫 실패 {firstErr}" : ""));
+                    }
+                }
+                catch { }
+            }
+
+            // 종단마다 PVI가 몇 개인지 — '체인이 원지반을 따라간다'를 숫자로 확인하는 자리.
+            try
+            {
+                if (tr.GetObject(pv.AlignmentId, OpenMode.ForRead) is CivilDb.Alignment al)
+                    foreach (ObjectId pid in al.GetProfileIds())
+                        if (tr.GetObject(pid, OpenMode.ForRead) is CivilDb.Profile pr)
+                        {
+                            int n = 0; try { n = pr.PVIs.Count; } catch { }
+                            log.AppendLine($"  종단 '{pr.Name}' PVI {n}개 · 스타일 '{NameOfStyle(tr, pr.StyleId)}'");
+                        }
+            }
+            catch { }
+            tr.Commit();
+        }
+        catch (System.Exception ex) { log.AppendLine("밴드 최종 상태 실패 — " + Brief(ex)); }
+    }
+
+    private static string NameOfStyle(Transaction tr, ObjectId id)
+    {
+        if (id.IsNull) return "(없음)";
+        try { return tr.GetObject(id, OpenMode.ForRead) is CivilDb.Styles.StyleBase s ? s.Name : "?"; }
+        catch { return "(못읽음)"; }
+    }
 
     /// <summary>★[JACK 0810] <b>"종단 밴드의 마지막이 값으로 마감되지 않고, 조금 더 연장해서
     /// 값 없이 딱 선으로 마감되게"</b> — 참고 도면(스샷)과 대조한 결과.
@@ -801,20 +1384,184 @@ public static class SheetCommand
             double s0 = pv.StationStart, s1 = pv.StationEnd;
             if (pv.StationRangeMode == CivilDb.StationRangeType.UserSpecified)
             { tr.Commit(); return false; }        // 이미 붙여 둔 꼬리에 또 붙이지 않는다
+            // ★★[v24.1 되돌림] <b>시작 쪽 여백은 두지 않는다.</b>
+            //   v23.x는 "기점을 내부 측점으로 만들면 No.0이 찍힌다"고 보고 시작에도 여백을 넣었다.
+            //   그런데 <c>No.0</c>을 그리는 건 <b>시작 측점 라벨</b>이고, 그건 <b>노선의 시작 측점</b>에
+            //   붙는다 — 표를 왼쪽으로 늘리면 그 자리가 <b>표 안쪽</b>으로 밀려 들어가 도면이 어긋난다.
+            //   기점은 표의 <b>왼쪽 끝</b>에 있어야 읽힌다. 여백은 <b>끝에만</b> 둔다(표 마감용).
             pv.StationRangeMode = CivilDb.StationRangeType.UserSpecified;
             pv.StationStart = s0;
             pv.StationEnd = s1 + pad;
+            double gotS = pv.StationStart;
             double got = pv.StationEnd;
             tr.Commit();
 
             bool ok = System.Math.Abs(got - (s1 + pad)) <= 1e-6 * System.Math.Max(1.0, pad);
             if (ok)
-                log.AppendLine($"표 끝 여백: 측점 {s1:F2}m → {got:F2}m (+{pad:F2}m = 종이 {TailPaperMm:F0}mm × 1:{scale:F0}) — 값 없이 선으로 마감");
+                log.AppendLine($"표 끝 여백: 측점 {s0:F2}~{s1:F2}m → {gotS:F2}~{got:F2}m (+{pad:F2}m = 종이 {TailPaperMm:F0}mm × 1:{scale:F0})" +
+                               $" — 끝은 값 없이 선으로 마감 · 시작은 노선 기점 그대로(여기에 No.0이 붙는다)");
             else
                 log.AppendLine($"표 끝 여백: 넣은 {s1 + pad:F2}m ≠ 읽은 {got:F2}m — Civil이 노선 끝으로 되돌린 듯하다");
             return ok;
         }
         catch (System.Exception ex) { log.AppendLine("표 끝 여백 실패 — " + Brief(ex)); return false; }
+    }
+
+    /// <summary>★★[JACK 0811] <b>"성토~측점까지 모든 밴드의 측점 분할구간이 같아야 해."</b>
+    /// <b>"굴곡부에 한해서 측점이 찍히는 거고, 그 측점번호에 해당하는 누가거리·지반고·계획고·절토·성토를
+    /// 보기 위해 밴드를 만드는 건데, 다 제각각이면 이건 밴드라고 할 수 없어."</b>
+    ///
+    /// <para>맞는 말이다. 밴드는 <b>한 측점에서 가로로 읽는 표</b>다. 행마다 측점이 다르면 표가 아니다.</para>
+    ///
+    /// <para><b>원인</b>: 굴곡부는 <c>종단1</c>을 따라가는데(계측으로 확정), 종단1이 밴드마다 달랐다.
+    /// 회사 표현식의 부호가 그렇게 요구했기 때문이다 —
+    /// 성토 <c>종단2−종단1</c> · 절토 <c>종단1−종단2</c> · 지반고 <c>종단1</c>은 1이 원지반이라야 맞고,
+    /// 계획고 <c>종단1</c>은 1이 정지면이라야 맞다.</para>
+    ///
+    /// <para><b>해법</b>: 종단1을 <b>전부 정지면</b>으로 통일하고(그래야 굴곡부가 한 집합이 된다),
+    /// 표현식의 토큰을 역할에 맞게 <b>다시 쓴다</b>. 값은 그대로다:</para>
+    /// <code>
+    /// 성토   = 정지면 − 원지반  →  종단1 − 종단2
+    /// 절토   = 원지반 − 정지면  →  종단2 − 종단1
+    /// 계획고 = 정지면           →  종단1
+    /// 지반고 = 원지반           →  종단2
+    /// 누가거리·측점             →  종단 토큰이 없어 손대지 않는다
+    /// </code>
+    ///
+    /// <para><b>덮어쓰기가 아니라 '정규화'다.</b> 원래 값이 무엇이든 역할이 요구하는 형태로 <b>맞춘다</b> —
+    /// 그래서 여러 번 돌려도 결과가 같다(멱등). 바꾼 문자열은 전후로 전부 로그에 남긴다.</para>
+    ///
+    /// <para>※ 역할은 <b>이름으로</b> 고른다. §22.4는 '종류로 고르라'였지만 이 넷은 종류도 표현식 구조도
+    /// 같아 이름 말고 구분할 근거가 없다(계획고와 지반고는 표현식이 글자 하나 안 다르다).</para></summary>
+    private static void NormalizeProfileTokens(Transaction tr, object bandStyle, int idx,
+                                               System.Text.StringBuilder log)
+    {
+        string sname = "?";
+        try { sname = (bandStyle as CivilDb.Styles.BandStyle)?.Name ?? "?"; } catch { }
+
+        // 역할별로 '토큰이 나오는 순서대로' 어떤 종단이어야 하는지.
+        int[] want;
+        if (sname.Contains("성토")) want = new[] { 1, 2 };        // 정지면 − 원지반
+        else if (sname.Contains("절토")) want = new[] { 2, 1 };   // 원지반 − 정지면
+        else if (sname.Contains("계획")) want = new[] { 1 };      // 정지면
+        else if (sname.Contains("지반")) want = new[] { 2 };      // 원지반
+        else return;                                              // 측점·누가거리 등은 종단과 무관
+
+        int changed = 0, seen = 0;
+        foreach (var p in bandStyle.GetType().GetProperties())
+        {
+            if (!p.Name.EndsWith("LabelStyleId", StringComparison.Ordinal)) continue;
+            if (p.Name.StartsWith("TitleText", StringComparison.Ordinal)) continue;   // 제목엔 값이 없다
+            try
+            {
+                if (p.GetValue(bandStyle) is not ObjectId id || id.IsNull) continue;
+                if (tr.GetObject(id, OpenMode.ForWrite) is not CivilDb.Styles.LabelStyle ls) continue;
+                using var comps = ls.GetComponents(CivilDb.Styles.LabelStyleComponentType.Text);
+                foreach (ObjectId cid in comps)
+                {
+                    if (tr.GetObject(cid, OpenMode.ForWrite) is not CivilDb.Styles.LabelStyleTextComponent tc) continue;
+                    using var txt = tc.Text;
+                    using var con = txt.Contents;
+                    string before = con.Value ?? "";
+                    if (before.IndexOf("종단", StringComparison.Ordinal) < 0) continue;
+                    seen++;
+                    string after = RewriteProfileTokens(before, want);
+                    // ★[JACK 0811] <b>"- 부호가 뜨게 해"</b> — 성토·절토가 음수일 때 Civil이 라벨을
+                    //   <b>아예 안 그려서</b> 칸이 비었다(값이 0일 때만 0.00이 찍힌 게 증거).
+                    //   수식어가 계획고·지반고는 <c>Sn</c>, 성토·절토는 <c>SHd</c>로 갈리는데
+                    //   그 <c>SHd</c>가 부호를 감추는 쪽이다. <c>Sn</c>으로 바꿔 부호째 찍히게 한다.
+                    //   (0으로 채우는 길은 막혀 있다 — <c>SignType</c>에 '0' 값이 없고,
+                    //    수식(Expression)은 밴드 라벨이 속한 컬렉션에 API로 닿지 않는다.)
+                    after = ShowSign(after);
+                    if (after == before) continue;
+                    con.Value = after;
+                    string back = con.Value ?? "";
+                    changed++;
+                    log.AppendLine($"   [{idx}칸] '{sname}' {p.Name} 표현식 정규화" +
+                                   (back == after ? "" : "  ⚠되읽은 값이 다르다") +
+                                   $"\n        전: {before}\n        후: {back}");
+                }
+            }
+            catch (System.Exception ex) { log.AppendLine($"   [{idx}칸] '{sname}' {p.Name} 표현식 실패 — {Brief(ex)}"); }
+        }
+        if (seen > 0 && changed == 0)
+            log.AppendLine($"   [{idx}칸] '{sname}' 표현식 이미 정규형 ({seen}곳 확인)");
+    }
+
+    /// <summary>★[JACK 0811] <b>"+부분은 여전히 000.00 형태이고 +00.00 형태로 바꾸고"</b>
+    ///
+    /// <para><c>+</c> 뒤 자릿수는 <b>측점 구분자 위치</b>가 정한다 —
+    /// <see cref="Autodesk.Civil.StationDelimiterPositionType"/>는
+    /// <c>Delimiter10 · 100 · 1000 · 10000 · 100000</c>이고,
+    /// 라벨 수식어에서는 <c>B1·B2·B3…</c>로 나온다. 지금 <c>B3</c>(=1000, 세 자리)라 <c>+010.00</c>이다.
+    /// <c>B2</c>(=100, 두 자리)로 내리면 <c>+10.00</c>이 된다.</para>
+    ///
+    /// <para><b>아무 데나 바꾸지 않는다.</b> <c>ORB</c>(구분자 오른쪽 = '+' 뒤 부분)를 담은 표현식에서만
+    /// 손댄다 — 같은 <c>B3</c>가 다른 뜻으로 쓰이는 자리를 건드리지 않기 위해서다.</para></summary>
+    private static void NormalizeStationDigits(Transaction tr, object bandStyle, int idx,
+                                               System.Text.StringBuilder log)
+    {
+        foreach (var p in bandStyle.GetType().GetProperties())
+        {
+            if (!p.Name.EndsWith("LabelStyleId", StringComparison.Ordinal)) continue;
+            try
+            {
+                if (p.GetValue(bandStyle) is not ObjectId id || id.IsNull) continue;
+                if (tr.GetObject(id, OpenMode.ForWrite) is not CivilDb.Styles.LabelStyle ls) continue;
+                using var comps = ls.GetComponents(CivilDb.Styles.LabelStyleComponentType.Text);
+                foreach (ObjectId cid in comps)
+                {
+                    if (tr.GetObject(cid, OpenMode.ForWrite) is not CivilDb.Styles.LabelStyleTextComponent tc) continue;
+                    using var txt = tc.Text;
+                    using var con = txt.Contents;
+                    string before = con.Value ?? "";
+                    if (before.IndexOf("ORB", StringComparison.Ordinal) < 0) continue;   // '+' 뒤 조각만
+                    // ★★[JACK 0811] <b>'+'가 20을 넘던 진짜 원인.</b>
+                    //   주눈금은 <c>FSI</c>(측점색인 형식)라 "1+10.00"의 <b>왼쪽</b>을 떼어 No.1이 된다.
+                    //   그런데 보조는 <c>FS</c>(그냥 측점 형식)여서 <b>나눌 '+'가 없고</b>,
+                    //   <c>ORB</c>(오른쪽)를 떼어 봐야 절대 측점이 통째로 나온다 — 실측 <c>+30.00 · +62.81</c>.
+                    //   <c>FSI</c>로 바꾸면 색인(20m)의 <b>나머지</b>가 되어 최대 +19.99가 된다.
+                    //
+                    //   ※ v23.29의 <c>B3→B2</c>는 <b>틀린 가정</b>이었다 — B는 자릿수가 아니라
+                    //     <b>나누는 위치</b>(Delimiter10/100/1000)다. B2로 내렸더니 100m 기준으로 갈라져
+                    //     오히려 +62.81 같은 값이 나왔다. 되돌린다.
+                    string after = before.Replace("|B2|", "|B3|");
+                    after = after.Replace("|FS|", "|FSI|");
+                    // ★[JACK 0811] <b>"++ 붙은 것들이 나오고"</b> — <c>FSI</c>로 바꾸니
+                    //   <c>ORB</c>(오른쪽 조각)가 <b>구분자 '+'까지 포함해서</b> 돌려준다.
+                    //   그런데 표현식 앞에 리터럴 <c>+</c>가 이미 붙어 있어 <c>++10.00</c>이 됐다.
+                    //   앞의 리터럴 하나를 뗀다.
+                    if (after.Contains("|FSI|")) after = after.Replace("+<[", "<[");
+                    if (after == before) continue;
+                    con.Value = after;
+                    log.AppendLine($"   [{idx}칸] {p.Name} '+' 형식 교정(FS→FSI · B2→B3)\n        전: {before}\n        후: {con.Value}");
+                }
+            }
+            catch (System.Exception ex) { log.AppendLine($"   [{idx}칸] {p.Name} 자릿수 실패 — {Brief(ex)}"); }
+        }
+    }
+
+    /// <summary>★[JACK 0811] 라벨 수식어의 <c>SHd</c>(부호 감춤)를 <c>Sn</c>(부호 표시)으로 바꾼다.
+    /// <para>수식어는 <c>(Um|P2|RN|AP|SHd|OF)</c>처럼 <b>세로줄로 구분된 목록</b>이라,
+    /// 앞뒤 구분자를 함께 봐야 다른 토큰의 일부를 잘못 건드리지 않는다.
+    /// 이미 <c>Sn</c>이면 그대로 둔다 — 여러 번 돌려도 결과가 같다.</para></summary>
+    private static string ShowSign(string s)
+        => s.Replace("|SHd|", "|Sn|").Replace("(SHd|", "(Sn|").Replace("|SHd)", "|Sn)");
+
+    /// <summary>표현식에 나오는 <c>종단1</c>/<c>종단2</c> 토큰을 <paramref name="want"/> 순서대로 갈아 끼운다.
+    /// <para>토큰 수가 기대와 다르면 <b>손대지 않는다</b> — 모르는 모양을 건드리는 것보다 그대로 두는 게 낫다.
+    /// 중간 표식을 거쳐 바꾸므로 1↔2 맞교환에서도 서로 덮어쓰지 않는다.</para></summary>
+    private static string RewriteProfileTokens(string s, int[] want)
+    {
+        var hits = new List<int>();
+        for (int i = 0; i + 3 <= s.Length; i++)
+            if (s[i] == '종' && i + 3 < s.Length && s[i + 1] == '단' && (s[i + 2] == '1' || s[i + 2] == '2'))
+            { hits.Add(i); i += 2; }
+        if (hits.Count != want.Length) return s;      // 모양이 다르면 건드리지 않는다
+
+        var sb = new System.Text.StringBuilder(s);
+        for (int k = 0; k < hits.Count; k++) sb[hits[k] + 2] = (char)('0' + want[k]);
+        return sb.ToString();
     }
 
     /// <summary>★[JACK 0810] <b>"계획지표면의 굴곡부 측점이 여전히 누락 — 정 체인말고는 안나와."</b>
@@ -834,14 +1581,32 @@ public static class SheetCommand
     /// 그래서 종이 기준(2mm)으로 잡고 축척을 곱한다. 이 때문에 축척이 정해진 <b>뒤</b>에 부른다.</para></summary>
     /// <para>★[v23.13] <b>2mm는 너무 좁았다.</b> 굴곡부가 나오기 시작하자 값들이 서로 파고들었다
     /// (실측: "102.70 102.80 102.99 103.10 103.27"이 한 덩어리로 겹침).
-    /// 값 글씨는 세로로 쓰이므로 <b>글자 높이가 곧 가로 폭</b>이다 — 지금 5.0mm다.
-    /// 이웃 글자와 붙지 않으려면 그보다 넉넉해야 한다.</para>
-    private const double WeedPaperMm = 7.0;
+    /// 값 글씨는 세로로 쓰이므로 <b>글자 높이가 곧 가로 폭</b>이다 — 지금 5.0mm다.</para>
+    ///
+    /// <para>★★[v23.21] <b>7mm도 부족했다.</b> JACK: "구배변경점 외 엄청 많이 측점이 끊겼어."
+    /// 정지면은 지표면에서 딴 것이라 <b>평탄한 구간에도 PVI가 있다</b>(TIN 삼각형이 노선을 지나는 자리).
+    /// 실측 77개 중 1.4m 솎아내기로 24개가 남았는데, 계획고가 112.00으로 <b>같은 값이 줄줄이</b> 찍혔다 —
+    /// 구배가 안 바뀌는 자리에 체인이 선 것이다.</para>
+    ///
+    /// <para><b>이건 임시 처방이다.</b> 솎아내기는 <b>거리</b>로만 자르지 <b>의미</b>로 자르지 못한다 —
+    /// 구배가 확 바뀐 자리를 버리고 평탄한 자리를 남길 수도 있다. 진짜 답은 계획 종단의 PVI를
+    /// 정리하는 것인데(판정 규칙은 <see cref="StationMarks"/>에 이미 있다), 원본은 지표면 미러라
+    /// 제자리에서 지울 수 없어 정적 사본을 만들어야 한다. 그때까지 <b>글자 폭의 3배</b>로 벌려 둔다 —
+    /// 값 글씨 폭이 5mm이니 15mm면 이웃과 두 칸 이상 떨어져 읽을 수 있다.</para>
+    ///
+    /// <para>★★[JACK 0811] <b>솎아내기를 0으로 내린다 — 판정을 한 곳으로 모으기 위해서다.</b></para>
+    /// <para>JACK: <i>"자꾸 어딘 나오고 어딘 안 나오고 하면 안 돼. 안 나와서 오류면 다 안 나와야지.
+    /// 저렇게 오류가 나면 신뢰가 낮다."</i> 맞는 말이다. 지금은 <b>어느 측점이 찍히는가</b>를
+    /// 세 군데가 따로 정하고 있었다 — 정체인(Civil) · 보조체인(Civil) · 굴곡부(우리) —
+    /// 그 위에서 <b>솎아내기가 또 임의로</b> 몇 개를 지웠다. 그래서 결과를 예측할 수 없었다.</para>
+    /// <para>→ 솎아내기는 <b>끄고</b>(0), 어느 굴곡부를 남길지는 <b>계획종단 정리 한 곳에서만</b> 정한다.
+    /// 거기서 최소 간격을 이미 보장하므로 겹칠 일이 없고, <b>내가 남긴 것은 반드시 다 찍힌다.</b></para>
+    private const double WeedPaperMm = 0.0;
 
     private static void SetBandWeeding(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log)
     {
         double want = WeedPaperMm / 1000.0 * scale;      // 모형 m
-        int ok = 0, n = 0, sel = 0;
+        int ok = 0, n = 0, sel = 0, skip = 0;
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
@@ -851,12 +1616,43 @@ public static class SheetCommand
                 n = items.Count;
                 for (int i = 0; i < items.Count; i++)
                 {
+                    // ★★[v27.2 · JACK 0811 실측] <b>횡단 데이터 밴드는 건드리지 않는다.</b>
+                    //   손으로 세팅해 <b>여섯 칸이 다 나오는</b> 종단도는 <c>단순화=100</c>이었다(템플릿 기본값).
+                    //   우리는 그걸 0으로 덮고 있었다. 되는 설정을 임의로 바꾸지 않는다 —
+                    //   0의 뜻이 '안 솎음'인지 '안 그림'인지 모르는 채로 넣을 값이 아니다.
+                    bool isSect = false;
+                    try { isSect = items[i].BandType == Autodesk.Civil.BandType.SectionalData; } catch { }
+                    if (isSect)
+                    {
+                        double w0 = double.NaN; try { w0 = items[i].Weeding; } catch { }
+                        log.AppendLine($"   [{i}칸] 횡단 데이터 — 단순화 {w0:0.###}m 그대로 둔다(되는 설정과 같게)");
+                        // ★★[v29.0 점검 반영] <b>건너뛴 것을 성공으로 세지 않는다.</b>
+                        //   종전엔 5칸을 일부러 건너뛰면서 ok++를 해서 로그가 "6/6칸 → 0m"로 남았다 —
+                        //   실제로는 1칸만 걸렸는데 <b>로그가 거짓말</b>을 했다. 세는 그릇을 나눈다.
+                        skip++;
+                        continue;
+                    }
+
                     double before = double.NaN, after = double.NaN;
                     try { before = items[i].Weeding; } catch { }
                     try { items[i].Weeding = want; after = items[i].Weeding; }
                     catch (System.Exception ex) { log.AppendLine($"   [{i}칸] 솎아내기 실패 — {Brief(ex)}"); continue; }
                     if (System.Math.Abs(after - want) <= 1e-6 * System.Math.Max(1.0, want)) ok++;
                     else log.AppendLine($"   [{i}칸] 솎아내기: 넣은 {want:0.###}m ≠ 읽은 {after:0.###}m");
+
+                    // ★[v23.16] <b>엇갈림을 여기서 한 번 더 건다.</b> 앞 단계(NormalizeBands)에서 껐는데도
+                    //   글씨가 두 단으로 어긋났다 — 그 사이에 밴드 항목을 다시 쓰는 단계가 있어
+                    //   덮였을 가능성이 있다. <b>마지막으로 쓰는 자리</b>에서 걸고 <b>되읽어</b> 확인한다.
+                    //   여기서도 None이 안 되면 항목이 아니라 다른 곳(스타일/도면 설정)에 원인이 있다는 뜻이다.
+                    // ★[v23.19] 높이 대입은 뺐다(엇갈림이 None이면 무의미하고, 던져서 오보를 만들었다).
+                    try
+                    {
+                        items[i].StaggerLabel = CivilDb.Styles.StaggerLabelType.None;
+                        var back = items[i].StaggerLabel;
+                        if (back != CivilDb.Styles.StaggerLabelType.None)
+                            log.AppendLine($"   [{i}칸] ⚠엇갈림: None을 넣었는데 읽으니 {back} — 항목이 원인이 아니다");
+                    }
+                    catch (System.Exception ex) { log.AppendLine($"   [{i}칸] 엇갈림 종류 끄기 실패 — {Brief(ex)}"); }
 
                     // ★ 마지막으로 한 번 더 확인한다 — 굴곡부 선택이 여기까지 살아 있는가.
                     //   앞 단계에서 켠 것이 밴드 항목을 다시 쓰는 사이에 지워졌다면 여기서 드러난다.
@@ -867,13 +1663,97 @@ public static class SheetCommand
                     }
                     catch { }
                 }
+                // ★★[v26.0 되살림] 저장하지 않으면 <b>아무것도 안 남는다</b>(v25.8 실측: 솎아내기가
+                //   템플릿 기본값 100m로 되돌아가 라벨을 전부 걸러냈다). 스냅샷을 통째로 되돌려 넣는다.
                 pv.Bands.SetBottomBandItems(items);
             }
             tr.Commit();
         }
         catch (System.Exception ex) { log.AppendLine("   솎아내기 실패 — " + Brief(ex)); return; }
-        log.AppendLine($"   굴곡부 솎아내기: {ok}/{n}칸 → {want:0.###}m(종이 {WeedPaperMm:F0}mm) · " +
-                       $"굴곡부 선택 살아있음 {sel}/{n}칸 · 종전값 100m는 노선보다 길어 전부 걸러내고 있었다");
+        // ★★[v29.0 점검 반영] <b>적용과 건너뜀을 갈라서 센다.</b> 종전엔 일부러 건너뛴 칸까지
+        //   성공으로 세서 "6/6칸"으로 남았다 — 실제로는 1칸만 걸렸다. 그리고 굴곡부 선택은
+        //   <b>종단 데이터 밴드에만 있는 개념</b>이라 분모를 전체 칸수로 두면 정상인데도 실패처럼 보였다.
+        log.AppendLine($"   솎아내기: 적용 {ok}칸 → {want:0.###}m(종이 {WeedPaperMm:F0}mm)" +
+                       (skip > 0 ? $" · 횡단 데이터라 건너뜀 {skip}칸(템플릿 값 유지)" : "") +
+                       $" · 전체 {n}칸 · 굴곡부 선택 살아있는 칸 {sel}개(종단 데이터 밴드에만 해당)");
+    }
+
+    /// <summary>★[JACK 0810] <b>"보조측점 위치에 종단 그래프 세로줄 누락됨"</b> — 직접 그린다.
+    ///
+    /// <para><b>순정 기능이 없다는 것을 전수로 확정했다.</b> <c>ProfileViewDisplayStyleType</c> 36개 중
+    /// 세로줄은 <c>GridVerticalMajor/Minor</c>(측점 간격) · <c>GridAtHGP</c>(수평 기하) ·
+    /// <c>GridAtSampleLineStations</c>(단면검토선) 넷뿐이다 —
+    /// <b>수직 기하점(굴곡부)에 세로 격자를 그리는 설정은 .NET에도 COM에도 없다.</b>
+    /// 다른 이름으로 숨을 자리가 없다(enum 전수 + 네이티브 문자열 스캔).</para>
+    ///
+    /// <para>그래서 도곽·표고바와 같은 방식으로 그린다. 자리는 <b>계획 종단의 PVI</b>이고,
+    /// 밴드가 라벨을 솎아내는 것과 <b>같은 간격</b>으로 솎아 선과 값이 어긋나지 않게 한다.</para>
+    ///
+    /// <para>※ 나중에 <c>GridAtSampleLineStations</c>를 쓰는 길도 있다 — 체인마다 단면검토선을 만들면
+    /// 세로줄이 저절로 생기고 횡단도 같이 생긴다. JACK의 원칙("종단 체인은 다 횡단이 있어야 한다")과
+    /// 정확히 맞물리는 길이라 횡단 기능을 만들 때 다시 볼 자리다.</para></summary>
+    private const string LayVgpGrid = CalsLayerGridV;    // CALS 수직그리드(색 1)
+
+    private static void DrawVgpGrid(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log)
+    {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var pv = (CivilDb.ProfileView)tr.GetObject(pvId, OpenMode.ForRead);
+
+            // ── 계획 종단을 찾는다(AutoMarks·PlantPvi와 같은 규칙 — 마지막 일치).
+            CivilDb.Profile pad = null;
+            try
+            {
+                if (tr.GetObject(pv.AlignmentId, OpenMode.ForRead) is CivilDb.Alignment al)
+                    foreach (ObjectId pid in al.GetProfileIds())
+                        if (tr.GetObject(pid, OpenMode.ForRead) is CivilDb.Profile p &&
+                            (p.Name.Contains("정지") || p.Name.Contains("계획"))) pad = p;
+            }
+            catch (System.Exception ex) { log.AppendLine("   굴곡부격자: 종단 찾기 실패 — " + Brief(ex)); }
+            if (pad == null) { log.AppendLine("   굴곡부격자: 계획 종단을 못 찾아 건너뜀"); tr.Commit(); return; }
+
+            // ── PVI 측점을 모아 밴드와 같은 간격으로 솎는다.
+            var src = pad;
+            var sts = new List<double>();
+            int nPvi = 0;
+            try
+            {
+                foreach (CivilDb.ProfilePVI q in src.PVIs) { try { sts.Add(q.Station); nPvi++; } catch { } }
+            }
+            catch (System.Exception ex) { log.AppendLine("   굴곡부격자: PVI 읽기 실패 — " + Brief(ex)); }
+            sts.Sort();
+            double weed = WeedPaperMm / 1000.0 * scale;
+            var keep = new List<double>();
+            foreach (double s in sts)
+                if (keep.Count == 0 || s - keep[keep.Count - 1] >= weed) keep.Add(s);
+
+            var ext = pv.GeometricExtents;
+            var layer = SectionCommand.EnsureLayer(db, tr, LayVgpGrid, CalsGridVert);
+            var ms = (BlockTableRecord)tr.GetObject(
+                SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+
+            // 다시 돌릴 때 겹치지 않게 먼저 지운다 — 우리 레이어라 남의 것을 건드릴 일이 없다.
+            int wiped = 0;
+            foreach (ObjectId id in ms)
+            {
+                try
+                {
+                    if (tr.GetObject(id, OpenMode.ForRead) is not Entity e || e.LayerId != layer) continue;
+                    tr.GetObject(id, OpenMode.ForWrite).Erase(); wiped++;
+                }
+                catch { }
+            }
+            // ★★[v28.2 · JACK 0811] <b>손으로 긋는 세로줄은 이제 안 쓴다.</b>
+            //   세로줄은 Civil 순정 <c>GridAtSampleLineStations</c>가 <b>단면검토선 자리에</b> 그어 준다 —
+            //   선형이 바뀌면 따라오고, 측점과 일대일로 맞는다.
+            //   여기서 긋던 것은 <b>계획 종단의 PVI마다</b> 그어서(실측 75개) 도면을 덮어 버렸다.
+            //   지우는 일만 남긴다 — 지난 판에 그어 둔 것이 남아 있으면 그것도 덮개가 되니까.
+            tr.Commit();
+            log.AppendLine("   세로줄 청소: 순정 격자(단면검토선 자리)를 쓰므로 직접 긋지 않는다" +
+                           (wiped > 0 ? $" · 지난 판에 그어 둔 {wiped}개 지움" : ""));
+        }
+        catch (System.Exception ex) { log.AppendLine("   세로줄 청소 실패 — " + Brief(ex)); }
     }
 
     /// <summary>★[JACK 0810] <b>흑백 교차 표고바 — 직접 그린다.</b>
@@ -892,9 +1772,15 @@ public static class SheetCommand
     ///
     /// <para>자리는 <b>왼쪽 축 바깥</b>이고, 표고 숫자가 바에 겹치지 않게 축 라벨의
     /// X 간격띄우기를 바 폭만큼 밀어 준다(이건 API에 있다).</para></summary>
-    private const string LayScaleBar = "DH-표고바";
-    /// <summary>바 폭 · 축선과 바 사이 틈(종이 mm).</summary>
-    private const double BarWidthMm = 3.0, BarGapMm = 1.0;
+    private const string LayScaleBar = CalsLayerScale;   // CALS 축척선(색 2)
+    /// <summary>바 폭 · 축선과 바 사이 틈(종이 mm).
+    /// <para>★[JACK 0811] <b>"체크스케일바가 축에서부터 0.2 정도 왼쪽으로 나가서 빈 공간이 있어. 딱 맞춰줘."</b>
+    /// 그 0.2m가 이 틈(1mm × 축척 200)이다. <b>0으로 두어 축선에 붙인다.</b>
+    /// 자와 눈금 사이가 벌어지면 그 사이가 얼마인지 또 읽어야 한다 — 붙어야 자가 된다.</para></summary>
+    private const double BarWidthMm = 3.0, BarGapMm = 0.0;
+
+    /// <summary>바와 표고 숫자 사이 여백(종이 mm) — 숫자가 바에 닿지 않게.</summary>
+    private const double BarLabelGapMm = 1.5;
 
     /// <summary>★[JACK 0810] <b>주눈금 한 간격을 몇 줄로 나눌지</b> — "한 간격당 5줄".
     /// 축이 5m 간격이면 한 줄이 1m가 되어 표척처럼 읽힌다.</summary>
@@ -961,10 +1847,11 @@ public static class SheetCommand
                 if (tr.GetObject(pv.StyleId, OpenMode.ForRead) is CivilDb.Styles.ProfileViewStyle vsg)
                     using (var gs = vsg.GridStyle) axOffM = gs.AxisOffsetLeft * scale;
             }
-            catch { }
+            // ★[v23.17 검토 반영] 조용히 0으로 흐르면 로그의 `축오프셋 0.000m`이 정상값처럼 보인다.
+            catch (System.Exception ex) { log.AppendLine("   표고바: 축 오프셋 읽기 실패(0으로 진행) — " + Brief(ex)); }
 
             double wM = BarWidthMm / 1000.0 * scale, gapM = BarGapMm / 1000.0 * scale;
-            var layer = SectionCommand.EnsureLayer(db, tr, LayScaleBar, 7);   // 7 = 흰/검(배경 반전)
+            var layer = SectionCommand.EnsureLayer(db, tr, LayScaleBar, CalsScaleLine);   // 7 = 흰/검(배경 반전)
             var ms = (BlockTableRecord)tr.GetObject(
                 SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
 
@@ -1049,14 +1936,59 @@ public static class SheetCommand
                 if (tr.GetObject(pv.StyleId, OpenMode.ForWrite) is CivilDb.Styles.ProfileViewStyle vs)
                     using (var ax = vs.LeftAxis)
                     {
-                        // ★[v23.13] <b>축 오프셋을 빼먹었다.</b> JACK: "체크스케일 때문에 눈금값이 가려짐".
-                        //   라벨 오프셋은 데이터 시작점 기준인데 바는 그보다 축오프셋(5mm)만큼 더 왼쪽에 있다.
-                        //   종전엔 그 5mm를 안 더해 숫자가 바 위에 얹혔다. 바 왼쪽 끝을 넘도록 민다.
-                        double push = (axOffM / scale) * 1000.0 + BarGapMm + BarWidthMm + 2.0;  // 종이 mm
+                        // ★★[v23.17] <b>정렬은 건드리면 안 됐다.</b> JACK: "눈금과 눈금값 전부 반대로 됨".
+                        //   v23.16이 자리맞추기를 오른쪽으로 바꿨더니 글자만이 아니라 <b>눈금선까지</b>
+                        //   축 안쪽(그래프 쪽)으로 뒤집혔다 — 이 값은 라벨 정렬만이 아니라
+                        //   <b>눈금이 축의 어느 쪽으로 뻗는지</b>도 함께 정한다. 템플릿 값(왼쪽)이 옳았다.
+                        //
+                        //   글자가 바를 밟는 문제는 <b>미는 거리로</b> 푼다. 왼쪽 정렬이면 기준점이
+                        //   글자의 <b>왼쪽 끝</b>이고 글자는 오른쪽으로 자란다 — 그러니 바 왼쪽 끝보다
+                        //   <b>글자 폭만큼 더</b> 밀어야 글자 오른쪽 끝이 바에 닿지 않는다.
+                        //   글자 폭은 읽어서 잰다(글자높이 × 자릿수 × 폭비) — 박아 두면 글씨 크기를 바꿀 때 깨진다.
+                        double txtH = 0;
+                        try { using (var t0 = ax.MajorTickStyle) txtH = t0.TextHeight; }
+                        catch (System.Exception ex) { log.AppendLine("   표고바: 축 글자높이 읽기 실패 — " + Brief(ex)); }
+                        // 전 값을 남겨 둔다 — 뒤에서 되읽은 값과 대조해야 '먹었는지'를 안다.
+                        double beforeX = 0; string beforeJ = "?";
+                        try { using (var t0 = ax.MajorTickStyle) { beforeX = t0.OffsetX; beforeJ = t0.Justification.ToString(); } } catch { }
+                        double txtW = txtH * 1000.0 * AxisLabelChars * DigitW;      // 종이 mm
+
+                        // ★★[JACK 0811] <b>"눈금값까지 눈금 연장. 눈금값 밑에 선이 없어."</b>
+                        //   참고 도면은 <b>숫자 밑을 눈금선이 받친다</b> — 숫자와 자가 한 줄로 이어져야
+                        //   그 숫자가 어느 높이인지 눈이 따라갈 수 있다.
+                        //
+                        //   기준점은 <b>눈금의 바깥 끝</b>이고 <c>+X</c>는 축 쪽으로 되돌아온다(v23.21 실측).
+                        //   그러니 <b>눈금 길이를 숫자 자리까지 늘리고 오프셋을 0으로</b> 두면
+                        //   숫자가 눈금의 바깥 끝에서 시작해 <b>선 위에 얹힌다</b>:
+                        //
+                        //     눈금길이 = 축오프셋 + 바폭 + 여백 + 글자폭
+                        //     OffsetX  = 0        (숫자 왼쪽끝 = 눈금 바깥 끝)
+                        //
+                        //   눈금선이 바 밑을 지나가지만 바가 꽉 찬 솔리드라 그 구간은 가려진다 —
+                        //   결과는 '바 | 선 | 숫자'로 참고 도면과 같아진다.
+                        double barLeftMm = (axOffM / scale) * 1000.0 + BarGapMm + BarWidthMm;
+                        double tickMm = barLeftMm + BarLabelGapMm + txtW;
                         foreach (var t in new[] { ax.MajorTickStyle, ax.MinorTickStyle })
-                            using (t) t.OffsetX = System.Math.Max(t.OffsetX, push / 1000.0);
-                        log.AppendLine($"   표고바: 표고 숫자를 {push:F1}mm 바깥으로 밀었다" +
-                                       $" (축오프셋 {axOffM / scale * 1000.0:F1} + 틈 {BarGapMm:F0} + 바 {BarWidthMm:F0} + 여유 2)");
+                            using (t)
+                            {
+                                t.Justification = CivilDb.Styles.AxisTickJustificationType.TopOrLeft;
+                                t.OffsetX = 0.0;
+                            }
+                        // 주눈금만 숫자까지 늘린다 — 보조눈금까지 늘리면 사다리가 아니라 빗금이 된다.
+                        try { using (var t0 = ax.MajorTickStyle) t0.Size = tickMm / 1000.0; } catch { }
+                        double push = 0;
+                        // ★[v23.17 검토 반영] 넣었다고 단정하지 않는다 — <b>되읽어</b> 전/후를 같이 남긴다.
+                        //   v23.16이 이 규율만 빼먹어 방향이 반대인지 아닌지를 로그로 알 수 없었다.
+                        double afterX = 0; string afterJ = "?";
+                        try { using (var t0 = ax.MajorTickStyle) { afterX = t0.OffsetX; afterJ = t0.Justification.ToString(); } } catch { }
+                        double afterTick = 0;
+                        try { using (var t0 = ax.MajorTickStyle) afterTick = t0.Size * 1000.0; } catch { }
+                        log.AppendLine($"   표고바 축라벨: 정렬 {beforeJ}→{afterJ} · X오프셋 {beforeX * 1000:F1}→{afterX * 1000:F1}mm" +
+                                       $" · 주눈금 길이 →{afterTick:F1}mm (목표 {tickMm:F1} = 축오프셋 {(axOffM / scale) * 1000.0:F1}" +
+                                       $" + 바 {BarWidthMm:F0} + 여백 {BarLabelGapMm:F1} + 글자폭 {txtW:F1}[높이 {txtH * 1000:F1}mm×{AxisLabelChars}자])" +
+                                       $"  ※숫자가 눈금 바깥 끝에서 시작해 선 위에 얹힌다" +
+                                       (System.Math.Abs(afterTick - tickMm) > 0.05 ? "  ⚠눈금 길이가 안 먹었다" : "") +
+                                       (System.Math.Abs(afterX * 1000 - push) > 0.05 ? "  ⚠오프셋이 안 먹었다" : ""));
                     }
             }
             catch (System.Exception ex) { log.AppendLine("   표고바 라벨 밀기 실패 — " + Brief(ex)); }
@@ -1105,15 +2037,41 @@ public static class SheetCommand
             }
             catch (System.Exception ex) { log.AppendLine("   V·H 표시 실패 — " + Brief(ex)); }
 
-            // ── ② 종단선 화살표 끄기 — 이 뷰에 걸린 종단들의 스타일을 따라간다.
-            int off = 0;
+            // ── ② 종단선 화살표 끄기 + ★[JACK 0811] <b>CALS 레이어·색상</b>
+            //   지반선 <c>R-GRND</c>(3) · 계획선 <c>R-DEGN</c>(7). 두 종단이 같은 스타일을 쓰므로
+            //   <b>색은 레이어가 정하게</b> 하고 스타일 표시는 ByLayer로 둔다 — 그래야 둘을 달리 칠할 수 있고,
+            //   CALS가 요구하는 '레이어로 관리' 원칙에도 맞는다.
+            int off = 0, layed = 0;
             try
             {
                 if (tr.GetObject(pv.AlignmentId, OpenMode.ForRead) is CivilDb.Alignment al)
                     foreach (ObjectId pid in al.GetProfileIds())
                     {
                         if (tr.GetObject(pid, OpenMode.ForRead) is not CivilDb.Profile pr) continue;
+                        // ★[v29.0] 숨은 측점 체인은 그리지 않는 선이라 CALS 레이어를 입힐 대상이 아니다.
+                        if (pr.Name.StartsWith("DH_측점체인", StringComparison.Ordinal)) continue;
+                        try
+                        {
+                            bool plan = pr.Name.Contains("정지") || pr.Name.Contains("계획");
+                            string ln = plan ? CalsLayerDesign : CalsLayerGround;
+                            var lid = SectionCommand.EnsureLayer(db, tr, ln, (short)(plan ? CalsDesign : CalsGround));
+                            if (tr.GetObject(pid, OpenMode.ForWrite) is Entity pe) { pe.LayerId = lid; layed++; }
+                            log.AppendLine($"   CALS 레이어: '{pr.Name}' → {ln}(색 {(plan ? CalsDesign : CalsGround)})");
+                        }
+                        catch (System.Exception ex) { log.AppendLine($"   CALS 레이어 '{pr.Name}' 실패 — {Brief(ex)}"); }
+
                         if (tr.GetObject(pr.StyleId, OpenMode.ForWrite) is not CivilDb.Styles.ProfileStyle ps) continue;
+                        // 선 색을 ByLayer로 — 레이어가 색을 정하게 한다.
+                        try
+                        {
+                            foreach (var t in new[] { CivilDb.Styles.ProfileDisplayStyleProfileType.Line,
+                                                      CivilDb.Styles.ProfileDisplayStyleProfileType.Curve,
+                                                      CivilDb.Styles.ProfileDisplayStyleProfileType.LineExtension })
+                                using (var ds2 = ps.GetDisplayStyleProfile(t))
+                                    ds2.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
+                                        Autodesk.AutoCAD.Colors.ColorMethod.ByLayer, 256);
+                        }
+                        catch (System.Exception ex) { log.AppendLine($"   종단선 ByLayer 실패 — {Brief(ex)}"); }
                         string sn; try { sn = ps.Name; } catch { sn = "(이름 못 읽음)"; }
                         using (var ah = ps.ArrowHeadOption)
                         {
@@ -1135,6 +2093,10 @@ public static class SheetCommand
     /// <summary>종단 뷰 좌우 축의 <b>주눈금 길이</b>(종이 mm). 보조는 <see cref="MinorTickRatio"/>배.
     /// 종이 기준이라 축척이 바뀌어도 눈에 보이는 길이는 같다.</summary>
     private const double AxisMajorTickMm = 2.5;
+
+    /// <summary>표고 숫자의 자릿수 — "115.00"처럼 여섯 자를 기준으로 글자 폭을 잰다.
+    /// 표고가 1000m를 넘으면 한 자 늘지만, 여유 2mm가 그 정도는 덮는다.</summary>
+    private const int AxisLabelChars = 6;
 
     /// <summary>★[JACK 0810] <b>"보조눈금 좀 키워줘"</b> — 실측 0.2mm였다. 칸이 27.7mm이니 안 보이는 게 당연하다.
     ///
@@ -1166,7 +2128,11 @@ public static class SheetCommand
                     bool isMajor = p.Name.StartsWith("Major", StringComparison.Ordinal);
                     if (isMinor || isMajor)
                     {
-                        double sideM = isMinor ? minorM : majorM;
+                        // ★[JACK 0810] <b>"눈금 길이가 제각각이야"</b> — 밴드 안에서는 <b>전부 같은 길이</b>로 둔다.
+                        //   주/보조를 길이로 구분하는 것은 <b>축(자)</b>의 규칙이지 <b>표(밴드)</b>의 규칙이 아니다.
+                        //   표는 칸 경계에 짧은 눈금이 나란히 서야 표로 읽힌다 — 참고 도면이 그렇다.
+                        //   (축 눈금은 <see cref="SetAxisTicks"/>에서 여전히 주가 길고 보조가 짧다.)
+                        double sideM = majorM;
                         ts.SmallTicksAtTopSize = sideM;
                         ts.SmallTicksAtBottomSize = sideM;
                         double back = ts.SmallTicksAtBottomSize;   // 넣었다고 세지 않는다 — 되읽어 확인
@@ -1233,6 +2199,12 @@ public static class SheetCommand
         {
             if (!p.Name.EndsWith("LabelStyleId", StringComparison.Ordinal)) continue;
             bool isTitle = p.Name.StartsWith("TitleText", StringComparison.Ordinal);
+            // ★★[v28.3 · JACK 0811] <b>제목 글씨는 안 건드릴 수도 있어야 한다.</b>
+            //   실측: 제목이 칸 밖으로 흘러넘쳤다. 원인은 <b>내가 제목을 4.0mm로 키운 것</b>이다 —
+            //   제목 상자는 템플릿이 <b>그보다 작은 글씨</b>에 맞춰 잡아 둔 크기라 글자가 상자를 뚫는다.
+            //   손으로 세팅해 반듯하던 판은 제목이 템플릿 크기 그대로였다.
+            //   → <paramref name="ttlM"/>이 0 이하이면 제목은 <b>손대지 않는다</b>.
+            if (isTitle && ttlM <= 0) continue;
             double hM = isTitle ? ttlM : valM;
             string tag = $"[{idx}칸] {p.Name}";
             try
@@ -1280,7 +2252,8 @@ public static class SheetCommand
                                 using (var ang = txt.Angle) { ang.Value = System.Math.PI / 2.0; }
                             // ★[JACK 0810] "모든 글씨는 흰색(검정)으로" — 라벨 스타일이 표시 색을
                             //   덮어쓸 수 있으므로 여기서도 7번을 박는다(밴드 표시 쪽만 고치면 빨간 글씨가 남는다).
-                            try { using (var col = txt.Color) col.Value = White; } catch { }
+                            // ★[JACK 0811] CALS: 제목문자 6 · 내용문자 3.
+                            try { using (var col = txt.Color) col.Value = Aci(isTitle ? CalsTitleText : CalsValueText); } catch { }
                             // 넣은 값을 **다시 읽어** 확인한다 — 상위 스타일에서 잠겨 있으면 조용히 무시된다.
                             // 그때 '성공'으로 세면 로그가 거짓말을 한다(§22.6 '되는 것처럼 보이는 실패').
                             back = hp.Value;
@@ -1525,17 +2498,39 @@ public static class SheetCommand
             pl.LayerId = layer;
             ps.AppendEntity(pl); tr.AddNewlyCreatedDBObject(pl, true);
         }
-        Rect(0, 0, SheetW, SheetH);                                          // ① 도곽
-        Rect(MarginLR, MarginTB, SheetW - MarginLR, SheetH - MarginTB);      // ② 내부 여백선
-
-        // ③ 1/3 구분선 두 개 — 위 1/3=종평면도, 가운데=종단, 아래=밴드
-        double y1 = MarginTB + InnerH / 3.0;          // 밴드/종단 경계
-        double y2 = MarginTB + InnerH * 2.0 / 3.0;    // 종단/종평면도 경계
-        foreach (double y in new[] { y1, y2 })
+        // ★★[JACK 0811] <b>"흰색 배경부분에 도곽박스가 딱 맞지 않음"</b>
+        //   배치의 원점 (0,0)은 <b>종이 모서리가 아니라 '인쇄 가능 영역'의 좌하단</b>이다.
+        //   그래서 (0,0)에서 841×594를 그으면 여백만큼 밀린다 — 스샷의 그 어긋남이다.
+        //   종이 모서리는 (0,0)에서 여백만큼 <b>바깥</b>이므로 그만큼 빼서 그린다.
+        double ox = 0, oy = 0;
+        try
         {
-            var ln = new Line(new Point3d(MarginLR, y, 0), new Point3d(SheetW - MarginLR, y, 0)) { LayerId = layer };
+            var mg = lay.PlotPaperMargins;      // 인쇄영역 좌하단 여백(종이 단위)
+            ox = -mg.MinPoint.X; oy = -mg.MinPoint.Y;
+            log.AppendLine($"도곽 원점 보정: 인쇄영역 여백 좌하({mg.MinPoint.X:F1},{mg.MinPoint.Y:F1}) → 도곽을 ({ox:F1},{oy:F1})에서 시작");
+        }
+        catch (System.Exception ex) { log.AppendLine("도곽 원점 보정 실패(0,0에서 그림) — " + ex.Message); }
+
+        Rect(ox, oy, ox + SheetW, oy + SheetH);                                          // ① 도곽
+        Rect(ox + MarginLR, oy + MarginTB, ox + SheetW - MarginLR, oy + SheetH - MarginTB); // ② 내부 여백선
+
+        // ③ 구분선 두 개 — <b>실제 구도와 같은 자리에</b> 긋는다.
+        //   ★[v23.28] 종전엔 1/3·2/3에 그었는데, 실제 구도는 제목부 0.5 : 종평면도 3 : 종단 3.5 : 밴드 3이라
+        //   뷰포트 윗선(360.1mm)과 구분선(369.3mm)이 9mm 어긋나 있었다. 종이 위에서 눈에 띄는 어긋남이다.
+        double yView = oy + MarginTB + ViewH;         // 뷰포트 윗선 = 종평면도/종단 경계
+        double yTitle = yView + PlanH;                // 종평면도/제목부 경계
+        foreach (double y in new[] { yView, yTitle })
+        {
+            var ln = new Line(new Point3d(ox + MarginLR, y, 0), new Point3d(ox + SheetW - MarginLR, y, 0)) { LayerId = layer };
             ps.AppendEntity(ln); tr.AddNewlyCreatedDBObject(ln, true);
         }
+
+        // ※[JACK 0811 보류] <b>가로 막대 축척은 여기가 아니다.</b>
+        //   설계도서는 A1 원도를 A3로 축소 제본하므로 <c>S=1:200</c>이라는 숫자 축척이 거짓이 된다 —
+        //   막대는 같이 줄어드니 항상 맞아서 실무가 막대를 넣는다(세로 짝은 <see cref="DrawScaleBar"/>가 이미 그린다).
+        //   다만 <b>막대가 들어갈 자리는 도곽 아래 설명란</b>이고, 그 설명란은 앞으로 만들
+        //   <b>'도곽 불러오기'</b>가 회사 도곽 파일에서 통째로 가져올 물건이다(JACK 판단).
+        //   그때 같이 붙인다 — 지금 제목부에 임시로 그려 두면 나중에 두 번 그리게 된다.
 
         // ④ 아래 2/3에 뷰포트 — **모형의 도곽 범위를 그대로 가져온다**
         double vpH = ViewH;
@@ -1543,11 +2538,51 @@ public static class SheetCommand
         ps.AppendEntity(vp); tr.AddNewlyCreatedDBObject(vp, true);
         vp.Width = InnerW;
         vp.Height = vpH;
-        vp.CenterPoint = new Point3d(SheetW / 2.0, MarginTB + vpH / 2.0, 0);
+        vp.CenterPoint = new Point3d(ox + SheetW / 2.0, oy + MarginTB + vpH / 2.0, 0);
         vp.On = true;
         vp.CustomScale = 1000.0 / scale;      // 모형 1m = 종이 1000/축척 mm
         vp.ViewCenter = frame.ViewCenter;     // 모형 도곽의 뷰 영역 한가운데
         vp.Locked = true;                     // 실수로 확대해 축척이 틀어지는 것을 막는다
+
+        // ★★[JACK 0811] <b>"원지반까지 같이 나와서 이상하고"</b>
+        //   뷰포트는 그 창에 걸리는 <b>모형의 모든 것</b>을 보여준다 — 종단도를 부지 근처에 놓았으니
+        //   지형(등고선)과 평면 노선이 같이 딸려 들어왔다. 종단면도 시트에는 종단만 있어야 한다.
+        //   → <b>이 뷰포트에서만</b> 지형·평면 레이어를 끈다(도면 자체는 그대로 둔다).
+        try
+        {
+            // ★★[v29.0 점검 반영 · 높음] <b>레이어 '이름표'가 아니라 '열쇠(ObjectId)'를 건네야 한다.</b>
+            //   종전엔 이름 목록을 넘겼는데 <c>FreezeLayersInViewport</c>는 <c>ObjectId</c>를 기다린다 —
+            //   첫 개에서 바로 <c>NullReferenceException</c>이 나고 <b>한 개도 안 얼어붙었다</b>.
+            //   로그에 매번 "뷰포트 레이어 끄기 실패"만 남고 원인이 안 보였다.
+            //
+            //   ★ 그리고 <b>남길 목록에 종단도 본체를 반드시 넣는다.</b> 종단도는 Civil이 만든
+            //   <b>자기 레이어</b>(선형/종단/종단뷰 레이어)에 놓이는데 그게 <c>CR-*</c>가 아니다.
+            //   종전 목록대로 끄면 <b>종단도가 통째로 사라진다</b> — 지금까지 이 기능이 실패해 온 덕에
+            //   그 사고가 안 났을 뿐이다. 고치는 김에 같이 막는다.
+            var keep = new System.Collections.Generic.HashSet<string>(
+                new[] { LayFrame, "0", SectionCommand.LayerAlign, ProfileCommand.LayerRoute },
+                StringComparer.OrdinalIgnoreCase);
+            var hideIds = new ObjectIdCollection();
+            var hideNames = new List<string>();
+            var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+            foreach (ObjectId lid in lt)
+            {
+                if (tr.GetObject(lid, OpenMode.ForRead) is not LayerTableRecord ltr) continue;
+                string n = ltr.Name;
+                if (n.StartsWith("CR-", StringComparison.OrdinalIgnoreCase)) continue;   // CALS 종단 레이어
+                if (n.StartsWith("DH_", StringComparison.OrdinalIgnoreCase)) continue;   // Civil이 만든 종단·선형 레이어
+                if (keep.Contains(n)) continue;
+                hideIds.Add(lid); hideNames.Add(n);
+            }
+            if (hideIds.Count > 0)
+            {
+                vp.FreezeLayersInViewport(hideIds.GetEnumerator());
+                log.AppendLine($"  뷰포트 레이어 끔 {hideIds.Count}개: " +
+                               string.Join(" · ", hideNames.Take(12)) + (hideNames.Count > 12 ? " …" : ""));
+            }
+            else log.AppendLine("  뷰포트 레이어: 끌 것이 없다(전부 남길 목록)");
+        }
+        catch (System.Exception ex) { log.AppendLine("뷰포트 레이어 끄기 실패 — " + Brief(ex)); }
 
         // ⑤ 출력 용지를 A1로 — 실패해도 도곽은 그대로 쓸 수 있으므로 조용히 넘어간다.
         try
@@ -1567,10 +2602,47 @@ public static class SheetCommand
         }
         catch (System.Exception ex) { log.AppendLine("출력 용지 설정 건너뜀 — " + ex.Message); }
 
+        // ⑥ ★[JACK 0811] A3 축소 출력용 페이지 설정을 미리 넣어 둔다 — 제본은 A3다.
+        AddA3PageSetup(db, log);
+
         tr.Commit();
         log.AppendLine($"배치 '{name}' · 뷰포트 {InnerW:F0}×{vpH:F1}mm · 축척 1:{scale:F0}");
         ed.Regen();
         return name;
+    }
+
+    /// <summary>★[JACK 0811] <b>A3 축소 출력용 페이지 설정을 미리 저장해 둔다.</b>
+    /// <para>설계도서 제본은 A3다. 그런데 매번 플롯 대화상자에서 용지·축척·중심을 맞추는 것은
+    /// 손이 가고 <b>틀리기 쉽다</b>(축척을 잘못 두면 도면이 거짓이 된다).
+    /// 이름 붙은 페이지 설정으로 넣어 두면 <b>고르기만</b> 하면 된다.</para>
+    /// <para>A3는 A1의 정확히 절반이라 <c>1:2</c>가 맞다 — '용지에 맞춤'은 여백에 따라
+    /// 미세하게 달라져 축척이 어긋날 수 있으므로 쓰지 않는다.</para></summary>
+    private static void AddA3PageSetup(Database db, System.Text.StringBuilder log)
+    {
+        const string setupName = "DH-A3 축소(1:2)";
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var dict = (DBDictionary)tr.GetObject(db.PlotSettingsDictionaryId, OpenMode.ForRead);
+            if (dict.Contains(setupName)) { tr.Commit(); log.AppendLine($"A3 페이지 설정 '{setupName}': 이미 있음"); return; }
+            tr.Commit();
+
+            var pset = new PlotSettings(false) { PlotSettingsName = setupName };
+            pset.AddToPlotSettingsDictionary(db);
+            var psv = PlotSettingsValidator.Current;
+            psv.SetPlotConfigurationName(pset, "DWG To PDF.pc3", null);
+            psv.RefreshLists(pset);
+            string media = psv.GetCanonicalMediaNameList(pset).Cast<string>()
+                              .FirstOrDefault(m => m.Contains("A3", StringComparison.OrdinalIgnoreCase));
+            if (media != null) psv.SetCanonicalMediaName(pset, media);
+            psv.SetPlotPaperUnits(pset, PlotPaperUnit.Millimeters);
+            psv.SetPlotType(pset, Autodesk.AutoCAD.DatabaseServices.PlotType.Layout);
+            psv.SetUseStandardScale(pset, true);
+            psv.SetStdScaleType(pset, StdScaleType.StdScale1To2);
+            psv.SetPlotCentered(pset, true);
+            log.AppendLine($"A3 페이지 설정 '{setupName}' 등록 · 용지 {media ?? "(A3 못 찾음)"} · 축척 1:2 · 가운데 정렬");
+        }
+        catch (System.Exception ex) { log.AppendLine("A3 페이지 설정 실패 — " + Brief(ex)); }
     }
 
     private static ObjectId PickProfileView(Database db, Editor ed, out string name)
