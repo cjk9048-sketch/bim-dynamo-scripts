@@ -215,10 +215,35 @@ public static class GradingBuilder
         tin.Rebuild();
     }
 
-    /// <summary>최종 합성 — 빈 TIN에 pasteOrder 순서로 PasteSurface(각 단계 스냅샷 굳히기).
-    /// paste별 성공/실패와 Civil 예외 메시지를 log로 반환(병합 느낌표 원인 특정용, JACK 검증 지시).</summary>
+    /// <summary>최종 합성 — 빈 TIN에 pasteOrder 순서로 PasteSurface.
+    /// paste별 성공/실패와 Civil 예외 메시지를 log로 반환(병합 느낌표 원인 특정용, JACK 검증 지시).
+    ///
+    /// <para>★★[v32.9 · JACK 0812 스샷] <b><paramref name="freezeEach"/>는 이제 쓰지 않는다 — 스냅샷은 <u>맨 끝에 한 번</u>.</b>
+    ///
+    /// <para>JACK이 <c>정지면_DH</c> 특성 → 정의 탭을 열어 줬다. 작업 목록이 이랬다:</para>
+    /// <code>
+    /// ⚠ 붙여넣기   Surface1 지표면 추가
+    /// ⚠ 스냅샷 작성 사용자 작성        ← 두 번째! 맨 끝이 아니다
+    /// ⚠ 붙여넣기   가상성토_DH 지표면 추가
+    /// ⚠ 붙여넣기   가상절토_DH 지표면 추가
+    /// </code>
+    ///
+    /// <para><b>스냅샷이 중간에 눌러앉아 있었다.</b> 붙여넣기마다 <see cref="Freeze"/>를 부르니
+    /// <b>첫 붙여넣기 직후에 스냅샷이 만들어지고</b>, 그 뒤로는 <c>RebuildSnapshot</c>이 <b>그 자리에서</b> 갱신만 한다.
+    /// 스냅샷은 <b>자기 위치로 이동하지 않는다</b>.</para>
+    ///
+    /// <para><b>그래서 무엇이 어긋났나.</b> 공식 문서: <i>"지표면을 지을 때 이전 작업은 무시되고
+    /// <b>스냅샷 작업에서부터</b> 시작한다."</i> 즉 <b>원지반만</b> 스냅샷에 구워졌고,
+    /// <b>성토·절토 붙여넣기는 아직 살아 있어</b> 소스 표면에 계속 매달려 있었다.
+    /// 소스를 건드릴 때마다(숨김·재작성) 그 항목들이 구식이 되고, 그게 JACK이 본 느낌표다.</para>
+    ///
+    /// <para><b>덤으로 드러난 것</b>: <c>CreateGradingCommand</c>가 기대던
+    /// <i>"소스가 지워져도 형상 유지"</i>는 <b>원지반에만 참이었다</b>. 성토·절토는 소스가 사라지면 무너진다.
+    /// 스냅샷을 맨 끝으로 옮기면 <b>세 개 다</b> 구워져 그 기대가 비로소 사실이 된다.</para>
+    ///
+    /// <para>→ 붙여넣는 동안은 <c>Rebuild</c>만 하고, <b>다 붙인 뒤 한 번만</b> 굳힌다.</para></summary>
     public static ObjectId Composite(Database db, Transaction tr, string name,
-        IReadOnlyList<(ObjectId id, string label)> pasteOrder, out string log, bool freezeEach = true,
+        IReadOnlyList<(ObjectId id, string label)> pasteOrder, out string log, bool freezeEach = false,
         ObjectId protect = default)
     {
         var sb = new System.Text.StringBuilder();
@@ -228,16 +253,27 @@ public static class GradingBuilder
         foreach (var (sid, label) in pasteOrder)
         {
             if (sid.IsNull) { sb.Append($"{label}:없음  "); continue; }
+            // ★[v32.14 · 자문2 §9] <b>소스가 불안정하면 붙여넣기 작업의 상태에도 옮는다.</b>
+            //   붙이기 전에 소스 상태를 재 둔다 — 나중에 '소스 탓인가'를 로그만으로 가릴 수 있게.
+            try
+            {
+                if (tr.GetObject(sid, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.Surface ss)
+                    sb.Append($"[{label}소스 구식={ss.IsOutOfDate}/스냅샷={ss.HasSnapshot}] ");
+            }
+            catch { }
             try
             {
                 final.PasteSurface(sid);
-                if (freezeEach) Freeze(final); // paste 직후 스냅샷 굳히기(조합 실험 대상)
+                // ★[v32.9] 붙여넣는 동안은 <b>짓기만</b> 한다 — 여기서 굳히면 스냅샷이 중간에 박힌다(위 설명).
+                if (freezeEach) Freeze(final);
                 else { try { final.Rebuild(); } catch { } }
                 sb.Append($"{label}:OK  ");
             }
             catch (System.Exception ex) { sb.Append($"{label}:실패[{ex.GetType().Name}] {ex.Message}  "); }
         }
         try { Freeze(final); } catch { }
+        // ★[v32.14 · 자문2 §12] 굳히기가 실제로 무엇을 했는지 함께 남긴다 — 조용한 실패를 없앤다.
+        sb.Append(" · 굳히기: " + LastFreezeDiag);
         log = sb.ToString().Trim();
         return id;
     }
@@ -249,10 +285,68 @@ public static class GradingBuilder
         //   그런데 스냅샷이 이미 있을 때 CreateSnapshot이 예외를 안 던지면(조용히 무시) 갱신이 영영 안 된다 —
         //   그러면 스냅샷은 **첫 붙여넣기 시점**에 머물고, 뒤에 쌓인 붙여넣기가 스냅샷보다 새것이 되어
         //   Prospector가 '스냅샷 재작성 필요(!)'를 띄운다. 예외에 기대지 말고 **둘 다 순서대로** 부른다.
-        try { s.CreateSnapshot(); } catch { }      // 없으면 만든다(있으면 무시/예외 — 어느 쪽이든 상관없다)
-        try { s.RebuildSnapshot(); } catch { }     // 있으면 **반드시** 최신 정의로 갱신한다
-        try { s.Rebuild(); } catch { }
+        //
+        // ★★[v32.2 · JACK 0812 '정지생성에서 자꾸 스냅샷 재작성 느낌표가 뜬다'] <b>순서가 아직도 뒤집혀 있었다.</b>
+        //   스냅샷은 <b>지금 굳은 모양을 찍어 두는 것</b>이다. 그런데 종전엔 찍어 둔 <b>뒤에</b> `Rebuild()`를 불렀다.
+        //   재작성은 정의를 처음부터 다시 훑으므로 표면이 스냅샷보다 <b>새것</b>이 되고,
+        //   Prospector는 그 즉시 다시 (!)를 띄운다. 0807에 고친 것은 '갱신을 아예 안 하던' 문제였고,
+        //   <b>이건 갱신한 것을 도로 무르는</b> 문제다 — 그래서 그때 고쳤는데도 느낌표가 남아 있었다.
+        //   → <b>먼저 짓고, 마지막에 찍는다.</b>
+        //   ★[v32.4 · 검토 반영] 공식 문서 두 줄이 순서를 확정해 준다:
+        //   ① <i>"CreateSnapshot and RebuildSnapshot can also cause errors <b>if the surface is out-of-date</b>."</i>
+        //      → 붙여넣기 직후는 <b>반드시</b> 구식이다. 먼저 <c>Rebuild()</c>로 풀지 않으면 매번 오류 조건이다.
+        //   ② <i>"<b>Both</b> CreateSnapshot and RebuildSnapshot <b>will overwrite</b> an existing snapshot.
+        //      RebuildSnapshot will cause an error <b>if the snapshot does not exist</b>."</i>
+        //      → 둘을 잇달아 부를 이유가 없다(같은 일을 두 번). <b>있으면 갱신, 없으면 생성</b> 한쪽만 부른다.
+        //   ★★[v32.5 · JACK 0812 계측] <b>세 단계다. 둘 중 하나만으로는 안 된다.</b>
+        //   실측 로그가 갈랐다: <c>구식=True · 스냅샷구식=False</c> —
+        //   <b>스냅샷은 멀쩡한데 표면이 구식</b>이었다. 그게 Prospector의 느낌표다.
+        //   그리고 <c>Rebuild()</c>를 부른 <b>직후에도</b> 구식이었다 —
+        //   <b>스냅샷을 찍는 행위 자체가 정의를 바꿔 표면을 다시 구식으로 만들기 때문</b>이다.
+        //   두 제약이 동시에 참이다: 스냅샷 <b>전</b>에 지어야 오류가 안 나고(문서),
+        //   스냅샷 <b>뒤</b>에도 지어야 구식이 안 남는다(계측). → <b>짓고 · 찍고 · 다시 짓는다.</b>
+        //   ★★★[v32.14 · 자문2] <b>갱신하지 말고 <u>지우고 새로 만든다</u> — 아직 안 해 본 축이다.</b>
+        //
+        //   여태 우리는 스냅샷이 있으면 <c>RebuildSnapshot()</c>으로 <b>갱신</b>만 했다.
+        //   그런데 이번 문제의 정체가 <b>기존 스냅샷과 정의 작업의 내부 상태가 서로 어긋난 것</b>이라면,
+        //   있는 것을 다시 굽는 것보다 <b>없애고 처음부터 만드는 것</b>이 훨씬 강한 초기화다.
+        //   <c>RemoveSnapshot</c> → <c>Rebuild</c>(정의 전체를 처음부터 다시 밟는다) → <c>CreateSnapshot</c>.
+        //
+        //   ※ 자문1은 '붙여넣기 줄 삭제'를 권했고 자문2는 '재현성이 사라지니 권하지 않는다'고 했다.
+        //     <b>되돌릴 수 있는 쪽을 먼저</b> 시험한다 — 이쪽은 실패해도 스냅샷만 다시 만들면 그만이다.
+        //
+        //   ★★ 그리고 <b>예외를 삼키지 않는다</b>(자문2 §12). 종전 <c>catch { }</c>는
+        //     "예외 없음"과 "조용히 실패"를 구분할 수 없게 만들었다 — 이 문제에서 가장 값비쌌던 눈가림이다.
+        //
+        //   ── 옛 기록 ──
+        //   [v32.10] 트레일링 <c>Rebuild</c>를 뺐다 — 찍고 나서 또 지으면 스냅샷이 구식이 된다.
+        //   v32.5에서 ③을 넣은 근거는 <c>구식=True</c>였는데, 그건 <b>스냅샷이 정의 중간에 있을 때의 증상</b>이었다.
+        //   중간에 있으면 스냅샷을 찍어도 <b>그 뒤의 붙여넣기가 미처리로 남아</b> 표면이 구식이었던 것이다.
+        //   v32.9에서 스냅샷을 <b>맨 끝</b>으로 옮긴 뒤로는 그 조건이 사라졌다 —
+        //   이제 ③은 필요 없을 뿐 아니라 <b>해롭다</b>(JACK 실측: 붙여넣기 느낌표는 사라지고 스냅샷 느낌표만 남았다).
+        //   <b>같은 증상을 두 원인이 만들었고, 원인을 고치자 처방이 병이 됐다.</b>
+        // ★★★[v32.16 · JACK 0812] <b>0807판으로 되돌린다 — 마지막으로 '고쳐졌다'고 확인된 상태다.</b>
+        //
+        //   JACK: <i>"아주 초반에 우리 이 문제 스냅샷 느낌표 해결하지 않았어?"</i> — <b>맞다.</b>
+        //   오늘 나는 이 세 줄을 <b>세 번</b> 바꿨고(v32.5·v32.10·v32.14) 세 번 다 증상은 그대로였다.
+        //   <b>고쳐지지 않는데 계속 바꾸는 것은 고치는 게 아니라 흔드는 것</b>이다.
+        //   알려진 정상 상태로 되돌리고, 다른 축에서 원인을 찾는다.
+        //
+        //   ※ 이 순서의 원래 근거(0807): <c>CreateSnapshot</c>이 이미 있을 때 조용히 무시될 수 있으므로
+        //     <b>예외에 기대지 말고 둘 다 순서대로</b> 부른다. 그 판단은 지금도 유효하다.
+        var fd = new System.Text.StringBuilder();
+        try { s.CreateSnapshot(); fd.Append("스냅샷생성 "); }
+        catch (System.Exception ex) { fd.Append($"스냅샷생성건너뜀[{ex.GetType().Name}] "); }
+        try { s.RebuildSnapshot(); fd.Append("스냅샷갱신 "); }
+        catch (System.Exception ex) { fd.Append($"⚠스냅샷갱신실패[{ex.GetType().Name}:{ex.Message}] "); }
+        try { s.Rebuild(); fd.Append("재작성 "); }
+        catch (System.Exception ex) { fd.Append($"⚠재작성실패[{ex.GetType().Name}:{ex.Message}] "); }
+        LastFreezeDiag = fd.ToString().Trim();
     }
+
+    /// <summary>★[v32.14] 직전 <see cref="Freeze"/>가 실제로 무엇을 했는지 — <b>예외를 삼키지 않고</b> 남긴다.
+    /// "예외 없음"과 "조용히 실패"를 구분 못 한 것이 이 문제에서 가장 값비쌌던 눈가림이었다(자문2 §12).</summary>
+    public static string LastFreezeDiag { get; private set; } = "";
 
     /// <summary>열린 브레이크라인(코너 능선 등) — 링과 달리 닫지 않는다.</summary>
     private static void AddOpenBreakline(TinSurface tin, IReadOnlyList<Point3> pts)
@@ -328,25 +422,200 @@ public static class GradingBuilder
 
         static double D2(Point3 a, Point3 b) { double dx = a.X - b.X, dy = a.Y - b.Y; return dx * dx + dy * dy; }
         double t2 = tol * tol;
-        bool merged = true;
-        while (merged)
+        var joinLog = new System.Text.StringBuilder();
+        int nJoin = 0;
+
+        // ★★[v32.5 · JACK 0812 실측] <b>가장 가까운 쌍부터 잇는다 — '먼저 만난 쌍'이 아니라.</b>
+        //
+        //   종전엔 이중 반복문을 돌다 <b>처음 문턱 안에 든 쌍</b>을 그냥 이었다.
+        //   문턱이 0.30m처럼 아주 작을 때는 그 안에 후보가 사실상 하나뿐이라 문제가 안 됐다.
+        //   그런데 문턱을 실측값에 맞춰 키우면 <b>엉뚱한 짝이 먼저 걸릴</b> 수 있다 —
+        //   그게 §17에서 부지를 가로지르는 지름길을 만든 그 병이다.
+        //   <b>매번 전체에서 가장 가까운 쌍을 골라</b> 이으면 순서에 안 흔들린다.
+        //
+        //   그리고 <b>이을 때마다 간격을 로그에 적는다.</b> 잘못 이어지면 그 숫자가 먼저 티가 난다.
+        while (true)
         {
-            merged = false;
-            for (int i = 0; i < open.Count && !merged; i++)
-                for (int j = i + 1; j < open.Count && !merged; j++)
+            double best = double.MaxValue; int bi = -1, bj = -1, mode = -1;
+            for (int i = 0; i < open.Count; i++)
+                for (int j = i + 1; j < open.Count; j++)
                 {
                     var A = open[i]; var B = open[j];
                     Point3 af = A[0], ae = A[A.Count - 1], bf = B[0], be = B[B.Count - 1];
-                    if (D2(ae, bf) <= t2) { A.AddRange(B.GetRange(1, B.Count - 1)); }
-                    else if (D2(ae, be) <= t2) { B.Reverse(); A.AddRange(B.GetRange(1, B.Count - 1)); }
-                    else if (D2(af, be) <= t2) { B.AddRange(A.GetRange(1, A.Count - 1)); open[i] = B; }
-                    else if (D2(af, bf) <= t2) { A.Reverse(); A.AddRange(B.GetRange(1, B.Count - 1)); }
-                    else continue;
-                    open.RemoveAt(j); merged = true;
+                    double d;
+                    if ((d = D2(ae, bf)) < best) { best = d; bi = i; bj = j; mode = 0; }
+                    if ((d = D2(ae, be)) < best) { best = d; bi = i; bj = j; mode = 1; }
+                    if ((d = D2(af, be)) < best) { best = d; bi = i; bj = j; mode = 2; }
+                    if ((d = D2(af, bf)) < best) { best = d; bi = i; bj = j; mode = 3; }
                 }
+            if (bi < 0 || best > t2) break;
+            var P = open[bi]; var Q = open[bj];
+            switch (mode)
+            {
+                case 0: P.AddRange(Q.GetRange(1, Q.Count - 1)); break;                        // P끝 → Q앞
+                case 1: Q.Reverse(); P.AddRange(Q.GetRange(1, Q.Count - 1)); break;            // P끝 → Q뒤
+                case 2: Q.AddRange(P.GetRange(1, P.Count - 1)); open[bi] = Q; break;           // Q끝 → P앞
+                default: P.Reverse(); P.AddRange(Q.GetRange(1, Q.Count - 1)); break;           // P앞 → Q앞
+            }
+            open.RemoveAt(bj);
+            nJoin++;
+            joinLog.Append($"\n      이음{nJoin}: 간격 {System.Math.Sqrt(best):F2}m");
         }
+        // ★★[v32.5 · JACK 0812] <b>못 이은 끝이 '얼마나' 떨어졌는지 남긴다 — 문턱을 짐작으로 정하지 않으려고.</b>
+        //
+        //   JACK: <i>"절토쪽 성토쪽 경계선인 것 같은데 두 선이 닿는 부분은 연결이 안 되고 많이 떨어져 있어."</i>
+        //   문턱(0.30m)만 키우는 것은 <b>재시도 금지 목록</b>이다 — §17: 느슨한 조인(1.0/2.5m)이 코너에서
+        //   소단 너머로 억지 연결해 <b>16회 반복 실패의 정체</b>가 됐다.
+        //   그러니 <b>실제 간격을 재서 그 숫자로 판단한다</b>:
+        //   몇 cm면 문턱 문제이고, 수십 m면 <b>애초에 선이 안 만들어진 것</b>이라
+        //   문턱을 키워 봐야 <b>없던 선을 지어내는</b> 셈이 된다.
+        if (open.Count > 0)
+        {
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < open.Count; i++)
+            {
+                double best = double.MaxValue; int bj = -1;
+                var mine = new[] { open[i][0], open[i][open[i].Count - 1] };
+                for (int j = 0; j < open.Count; j++)
+                {
+                    if (j == i) continue;
+                    var his = new[] { open[j][0], open[j][open[j].Count - 1] };
+                    foreach (var q in his)
+                        foreach (var p in mine)
+                        { double d = D2(p, q); if (d < best) { best = d; bj = j; } }
+                }
+                double len = 0;
+                for (int k = 1; k < open[i].Count; k++) len += System.Math.Sqrt(D2(open[i][k - 1], open[i][k]));
+                sb.Append($"\n      열린조각[{i}] {open[i].Count}점 {len:F0}m → 가장 가까운 남의 끝 "
+                        + (bj < 0 ? "없음(혼자)" : $"{System.Math.Sqrt(best):F2}m (조각[{bj}])"));
+            }
+            LastStitchDiag = $"이음 {nJoin}건(문턱 {tol:F2}m){joinLog} · 못 이은 조각 {open.Count}개" + sb;
+        }
+        else LastStitchDiag = $"이음 {nJoin}건(문턱 {tol:F2}m){joinLog} · 열린 조각 없음 — 전부 폐합";
+
         foreach (var o in open) done.Add(o);
         return done;
+    }
+
+    /// <summary>★[v32.5] 직전 <see cref="StitchOpenEnds"/>가 <b>이은 간격과 못 이은 끝의 실제 간격</b> —
+    /// 문턱을 근거로 정하기 위한 계측. 이 숫자 없이 문턱을 만지면 §17을 반복한다.</summary>
+    public static string LastStitchDiag { get; private set; } = "";
+
+    /// <summary>★★[v32.5 · JACK 0812 실측] <b>열린 끝을 잇는 문턱(m) — 짐작이 아니라 <u>잰 값</u>이다.</b>
+    ///
+    /// <para>JACK이 끊긴 자리를 확대해 두 끝점 좌표를 찍어 줬다:
+    /// <c>(240303.243, 450388.196, <b>112.554</b>)</c> · <c>(240306.073, 450388.389, <b>111.574</b>)</c>
+    /// → 평면 거리 <b>2.84m</b>. 종전 문턱 <c>0.30m</c>의 <b>아홉 배</b>다.</para>
+    ///
+    /// <para><b>그 자리가 무엇인지도 좌표가 말해 준다.</b> 계획 폴리곤 남쪽 변은 <c>Y=450389.03</c>,
+    /// 계획고는 <c>Z=112.000</c>이다. 두 끝점은 경계 바깥 0.6~0.8m에 있고,
+    /// 표고가 <b>+0.554m(절토쪽)</b>과 <b>−0.426m(성토쪽)</b>으로 <b>계획고를 사이에 두고 갈린다</b>.
+    /// <b>절성 경계</b>다 — 절토 교선과 성토 교선은 <b>따로</b> 계산되므로,
+    /// 그 사이 2.84m는 <b>양쪽 다 자기 몫이 아니라 아무도 안 그린다</b>.
+    /// 각 표면 안의 틈은 이미 메우고 있지만(로그 <c>틈메움 12·4</c>), <b>두 표면 사이</b>는 아무도 안 메웠다.</para>
+    ///
+    /// <para>★★[v32.6 · JACK 0812 기각] <b>3.0m로 키웠다가 되돌렸다 — 잇는 것 자체가 틀렸다.</b>
+    /// 문턱을 2.84m 위로 올리니 실제로 이어지긴 했다(로그 `이음2: 간격 2.84m`).
+    /// 그런데 JACK: <i>"노란색 경로처럼 <b>원지반과 맞닿는 선</b>으로 이어져야 하는데 그냥 두 선을 붙여버림."</i>
+    /// <b>맞는 지적이다.</b> 이 함수가 만드는 것은 두 끝점을 잇는 <b>직선 현</b>이다 —
+    /// 그 2.84m 구간의 진짜 데이라잇은 지형을 따라 계획 경계 쪽으로 <b>부풀었다 돌아오는 곡선</b>이다
+    /// (JACK이 그려 준 노란 경로가 그 모양이다).
+    /// <b>없는 형상을 지어내느니 끊어 두는 편이 낫다</b> — 도면이 사실을 말해야 한다(§30의 원칙).
+    /// 그 구간은 <b>지어내는 것이 아니라 계산해야</b> 한다. 여기서는 <b>정말로 맞닿은 끝</b>만 잇는다.</para></summary>
+    public const double StitchTolM = 0.30;
+
+    /// <summary>★★[v32.6 · JACK 0812] <b>지표면의 외곽선을 뽑는다 — 삼각형 <u>하나</u>에만 속한 변이 곧 경계다.</b>
+    ///
+    /// <para>JACK: <i>"정지순수_DH 있는 건 외곽선도 있는 거 아니야? 왜 굳이 다시 그려내는 거지?"</i></para>
+    ///
+    /// <para><b>맞는 지적이고, 이게 정답이다.</b> 종전 데이라잇은 <b>절토면∩원지반</b>과 <b>성토면∩원지반</b>을
+    /// <b>따로</b> 계산해 조각을 이어 붙이는 방식이었다. 그래서 절성 경계마다 <b>아무도 안 그리는 틈</b>이 남고,
+    /// 그 틈을 직선으로 메우면 <b>없는 형상을 지어내게</b> 된다(JACK 0812 기각).</para>
+    ///
+    /// <para>반면 <c>정지순수_DH</c>는 절토·성토를 <b>이미 하나로 붙여 놓은</b> 지표면이다.
+    /// TIN의 외곽 경계는 <b>정의상 반드시 닫혀 있다</b> — 삼각형 한 개에만 속한 변을 모으면 그것이 외곽선이고,
+    /// 끊길 수가 없다. 그리고 그 선이 곧 <b>정지면이 실제로 끝나는 자리 = 원지반과 맞닿는 자리</b>다.</para>
+    ///
+    /// <para><b>누적(이어서)에도 그대로 맞는다.</b> 순수면은 앞 구역을 물려받아 쌓이므로(§27),
+    /// 그 외곽선은 <b>전 구역이 합쳐진 데이라잇</b>이다 — 번들에서 앞 구역 링을 꺼내 마스크로 자르던
+    /// 과정 자체가 필요 없어진다(옛 번들에서 마스크가 <c>null</c>이 되던 문제도 같이 사라진다).</para>
+    ///
+    /// <para>좌표는 <b>mm로 반올림해</b> 같은 점을 묶는다 — 붙여넣기 경계에서 미세하게 어긋난 정점이
+    /// 서로 다른 점으로 잡히면 없는 구멍이 생긴다.</para></summary>
+    public static List<List<Point3>> SurfaceOutline(TinSurface tin, out string diag)
+    {
+        diag = ""; var loops = new List<List<Point3>>();
+        try
+        {
+            static (long, long) K(Point3d p)
+                => ((long)System.Math.Round(p.X * 1000.0), (long)System.Math.Round(p.Y * 1000.0));
+            static ((long, long), (long, long)) Norm((long, long) a, (long, long) b)
+                => Comparer<(long, long)>.Default.Compare(a, b) <= 0 ? (a, b) : (b, a);
+
+            var pos = new Dictionary<(long, long), Point3>();
+            var edge = new Dictionary<((long, long), (long, long)), int>();
+            int nTri = 0;
+
+            foreach (TinSurfaceTriangle t in tin.GetTriangles(false))
+            {
+                nTri++;
+                Point3d a = t.Vertex1.Location, b = t.Vertex2.Location, c = t.Vertex3.Location;
+                foreach (var (p, q) in new[] { (a, b), (b, c), (c, a) })
+                {
+                    var kp = K(p); var kq = K(q);
+                    if (kp == kq) continue;
+                    pos[kp] = new Point3(p.X, p.Y, p.Z);
+                    pos[kq] = new Point3(q.X, q.Y, q.Z);
+                    var key = Norm(kp, kq);
+                    edge[key] = edge.TryGetValue(key, out int n) ? n + 1 : 1;
+                }
+            }
+
+            // 삼각형 하나에만 속한 변 = 외곽. 그것들로 이웃 관계를 만든다.
+            var adj = new Dictionary<(long, long), List<(long, long)>>();
+            int nB = 0;
+            foreach (var kv in edge)
+            {
+                if (kv.Value != 1) continue;
+                nB++;
+                var (u, v) = kv.Key;
+                if (!adj.TryGetValue(u, out var lu)) adj[u] = lu = new List<(long, long)>();
+                if (!adj.TryGetValue(v, out var lv)) adj[v] = lv = new List<(long, long)>();
+                lu.Add(v); lv.Add(u);
+            }
+
+            var used = new HashSet<((long, long), (long, long))>();
+            foreach (var start in new List<(long, long)>(adj.Keys))
+                foreach (var first in new List<(long, long)>(adj[start]))
+                {
+                    if (used.Contains(Norm(start, first))) continue;
+                    var loop = new List<Point3> { pos[start] };
+                    var cur = start; var nxt = first;
+                    int guard = 0;
+                    while (guard++ < 1_000_000)
+                    {
+                        used.Add(Norm(cur, nxt));
+                        loop.Add(pos[nxt]);
+                        if (nxt.Equals(start)) break;             // 한 바퀴 — 닫혔다
+                        (long, long)? step = null;
+                        foreach (var w in adj[nxt]) if (!used.Contains(Norm(nxt, w))) { step = w; break; }
+                        if (step == null) break;                  // 더 못 간다(열린 끝)
+                        cur = nxt; nxt = step.Value;
+                    }
+                    if (loop.Count >= 4) loops.Add(loop);
+                }
+
+            int closed = 0;
+            foreach (var l in loops)
+            {
+                var f = l[0]; var e = l[l.Count - 1];
+                double dx = f.X - e.X, dy = f.Y - e.Y;
+                if (dx * dx + dy * dy < 1e-6) closed++;
+            }
+            diag = $"삼각형 {nTri} · 외곽변 {nB} · 고리 {loops.Count}개(닫힘 {closed})";
+        }
+        catch (System.Exception ex) { diag = "외곽선 추출 실패 — " + ex.Message; }
+        return loops;
     }
 
     /// <summary>직전 <see cref="DrawDaylight"/>의 정리 결과 — 진단 로그용.</summary>
@@ -373,8 +642,8 @@ public static class GradingBuilder
             spurPts += l.Count - c.Count;
             if (c.Count >= 2) cleaned.Add(c);
         }
-        LastDaylightDiag = $"가시 제거 {spurPts}점";
-        loops = StitchOpenEnds(cleaned, 0.30);
+        loops = StitchOpenEnds(cleaned, StitchTolM);
+        LastDaylightDiag = $"가시 제거 {spurPts}점 · {LastStitchDiag}";
         foreach (var loop in loops)
         {
             if (loop == null || loop.Count < 2) continue;
@@ -712,6 +981,12 @@ public static class GradingBuilder
                 || (s.Name.StartsWith(keepBaseName + "_") && int.TryParse(s.Name.Substring(keepBaseName.Length + 1), out _));
             try
             {
+                // ★[v32.11 · 조사 반영] <b>이미 같은 값이면 쓰지 않는다.</b>
+                //   값이 같아도 <b>쓰는 행위 자체가 Civil에게는 '수정'</b>이라, 그 표면을 붙여넣은
+                //   합성면의 작업 항목에 '추가된 뒤 수정됨' 표시가 붙을 수 있다.
+                //   먼저 읽어 보고 다를 때만 쓴다 — 호출부 전부(정지생성·설정·초기화)가 같이 이득을 본다.
+                var eRead = (AcadEntity)tr.GetObject(sid, OpenMode.ForRead);
+                if (eRead.Visible == keep) continue;
                 var e = (AcadEntity)tr.GetObject(sid, OpenMode.ForWrite);
                 e.Visible = keep;
             }
@@ -766,12 +1041,289 @@ public static class GradingBuilder
         return styleName;
     }
 
+    /// <summary>★★[v32.7 · JACK 0812 '지표면들에 느낌표가 엄청 뜬다'] <b>가시성을 건드렸으면 전부 되살린다.</b>
+    ///
+    /// <para><b>여태 둘만 고치고 있었다.</b> 마무리 재작성은 <c>정지면_DH</c>와 <c>정지순수_DH</c>만 돌았다.
+    /// 그런데 느낌표를 붙이는 주체는 <see cref="IsolateSurfaces"/>이고, 그건 <b>나머지 전부</b>를 숨긴다 —
+    /// <c>가상절토_DH</c>·<c>가상성토_DH</c>·원지반·<c>정지면_DH이전</c>.
+    /// 숨기면 구식이 되고 <b>다시 켜도 구식으로 남는다</b>(Autodesk 확인 결함).
+    /// 실측 로그가 그것을 갈랐다: 우리가 챙긴 둘은 <c>구식=False</c>로 깨끗한데
+    /// JACK 화면에는 느낌표가 <b>여럿</b> 떠 있었다 — <b>챙기지 않은 것들이었다.</b></para>
+    ///
+    /// <para><b>스냅샷은 없는 데 만들지 않는다.</b> 스냅샷은 '소스가 사라져도 형상을 유지'하는 장치라
+    /// 원지반처럼 스냅샷이 없는 표면에 함부로 만들면 성격이 바뀐다. <b>있는 것만 갱신</b>한다.</para>
+    ///
+    /// <para>그러고도 구식으로 남는 표면이 있으면 <b>이름을 로그에 적는다</b> — 개수만으로는 못 좁힌다.</para></summary>
+    /// <para>★★[v32.7b · JACK 0812 <i>"지표면 재작성도 누르고 스냅샷 재작성까지 눌러야 없어지는데"</i>]
+    /// <b>순서가 문제였다 — 한 바퀴로는 안 된다.</b>
+    /// <c>정지면_DH</c>는 원지반·가상절토·가상성토를 <b>붙여서</b> 만든 면이다.
+    /// <b>소스가 구식이면 자식을 아무리 재작성해도 소스를 고치는 순간 자식이 다시 구식</b>이 된다.
+    /// <c>GetSurfaceIds()</c>의 순서는 정해져 있지 않으므로 자식을 먼저 고칠 때가 있고, 그러면 헛일이다.
+    /// JACK이 손으로 하나씩 누르면 없어진 이유가 그것이다 — 누르는 사이에 순서가 맞아떨어진다.
+    /// → <b>의존 순서를 알아내려 하지 않는다.</b> 아무것도 구식이 아닐 때까지 <b>되풀이</b>한다
+    /// (가시 제거·자기교차 정리에서 이미 쓰는 방식이다). 최대 4바퀴면 어떤 순서라도 가라앉는다.</para></summary>
+    /// <para>★★[v32.8 · JACK 0812 <i>"지표면 특성을 보면 <b>붙여넣기</b> 가상성토와 가상절토에 느낌표가 있어"</i>]
+    /// <b>느낌표는 표면이 아니라 '정의의 붙여넣기 항목'에 붙는다.</b>
+    ///
+    /// <para>그래서 <c>IsOutOfDate</c>가 계속 <c>False</c>로 나왔던 것이다 — 그 속성은 <b>표면 단위</b>이고,
+    /// Prospector가 띄우는 것은 <b>작업(operation) 단위</b> 표시다. 우리 로그는 내내 '깨끗함'이라고
+    /// 참말을 했는데, <b>다른 것을 재고 있었다</b>. JACK이 특성 대화상자를 열어 준 덕에 갈렸다.</para>
+    ///
+    /// <para><b>원인은 순서다.</b> 소스(<c>가상절토_DH</c>·<c>가상성토_DH</c>)를 재작성하면
+    /// 그것을 붙여넣은 <b>합성면의 붙여넣기 항목이 그 순간 구식</b>이 된다.
+    /// 종전 루프는 <c>IsOutOfDate</c>가 <c>False</c>라 <b>1바퀴 만에 끝나</b>(로그 `1바퀴 · 처음 구식 0`)
+    /// 합성면을 다시 짓지 않았다. 표면 플래그를 수렴 신호로 쓴 것 자체가 틀렸다.</para>
+    ///
+    /// <para>→ <b>조건을 보지 않고 순서로 푼다.</b> ①소스를 전부 짓고 ②그 다음에 합성면을 짓는다.
+    /// 합성면끼리도 <c>…이전</c>(다음 합성면의 소스)을 먼저 짓는다.
+    /// 조건 없이 한 번씩 지으므로 <b>어떤 플래그가 진짜인지 몰라도 결과가 맞는다</b>.</para></summary>
+    /// <summary>★★[v32.12 · JACK 0812 실험 A·C] <b>단계마다 트랜잭션을 끊는다 — 손으로 누르는 것과 같은 모양으로.</b>
+    ///
+    /// <para><b>실험이 두 갈래를 다 닫았다.</b>
+    /// <b>A</b>: '지표면 재작성'만으로는 ⚠가 <b>하나도</b> 안 사라진다 → 지우는 것은 <c>스냅샷 재작성</c>뿐이다.
+    /// (스냅샷이 있으면 빌드가 스냅샷에서 시작해 <b>앞의 붙여넣기를 다시 밟지 않기</b> 때문 — 공식 문서와 맞는다.)
+    /// <b>C</b>: 다른 이름으로 저장하고 다시 열어도 ⚠가 그대로다 → <b>화면 갱신이 아니라 도면에 저장된 진짜 상태</b>다.</para>
+    ///
+    /// <para>그런데 우리 코드도 <c>RebuildSnapshot()</c>을 부르고 로그도 성공이다.
+    /// <b>손으로 누른 것과 코드가 부른 것이 같은 일인데 결과가 다르다.</b> 남은 차이는 <b>트랜잭션 경계</b>다 —
+    /// JACK은 클릭마다 작업이 끝나고 커밋되는데, 우리는 소스 재작성·합성면 재작성·스냅샷 재작성을
+    /// <b>한 트랜잭션에 몰아넣었다</b>. 같은 호출을 같은 순서로 해도
+    /// <b>커밋되지 않은 중간 상태 위에서 다음 호출이 도는</b> 것은 다른 일일 수 있다.</para>
+    ///
+    /// <para>→ <b>표면 하나마다 열고·하고·커밋</b>한다. 순서를 바꾸는 것이 아니라 <b>언제 확정되는가</b>를 바꾸는 것이라
+    /// §30의 재시도 금지 12번(호출 순서 바꾸기)과 <b>다른 축</b>이다.</para></summary>
+    public static string RebuildSurfacesStaged(Database db)
+    {
+        static bool IsComposite(string nm)
+            => nm.StartsWith("정지면_DH", System.StringComparison.Ordinal)
+            || nm.StartsWith("정지순수_DH", System.StringComparison.Ordinal);
+
+        var src = new List<ObjectId>(); var compPrev = new List<ObjectId>(); var comp = new List<ObjectId>();
+        try
+        {
+            var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+            using var tr0 = db.TransactionManager.StartTransaction();
+            foreach (ObjectId sid in civilDoc.GetSurfaceIds())
+            {
+                if (tr0.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
+                if (!IsComposite(s.Name)) src.Add(sid);
+                else if (s.Name.Contains("이전")) compPrev.Add(sid);
+                else comp.Add(sid);
+            }
+            tr0.Commit();
+        }
+        catch { }
+
+        int a = StageOne(db, src, false);
+        int b = StageOne(db, compPrev, false) + StageOne(db, comp, false);
+        int c = StageOne(db, compPrev, true) + StageOne(db, comp, true);
+        return $"단계별 재작성(표면마다 트랜잭션 분리) — ①소스 {a}개 ②합성면 {b}개 ③스냅샷 {c}개";
+    }
+
+    /// <summary>표면 하나에 <b>자기 트랜잭션</b>을 열어 재작성(또는 스냅샷 재작성)하고 바로 커밋한다.</summary>
+    private static int StageOne(Database db, List<ObjectId> ids, bool snapshot)
+    {
+        int n = 0;
+        foreach (var sid in ids)
+        {
+            try
+            {
+                using var tr = db.TransactionManager.StartTransaction();
+                var w = (Autodesk.Civil.DatabaseServices.Surface)tr.GetObject(sid, OpenMode.ForWrite);
+                // ★[v32.16] 여기도 0807판과 같은 방식으로 되돌린다 — 한 곳만 다른 경로면 서로 덮는다.
+                if (snapshot) { if (w.HasSnapshot) { w.RebuildSnapshot(); n++; } }
+                else { w.Rebuild(); n++; }
+                tr.Commit();
+            }
+            catch { }
+        }
+        return n;
+    }
+
+    /// <summary>★★[v32.13 · JACK 0812] <b>붙여넣기 줄을 정의에서 지운다 — ⚠를 지우는 대신 ⚠가 붙을 줄을 없앤다.</b>
+    ///
+    /// <para><b>세 축이 모두 닫혔다.</b> 호출 순서(v32.5~v32.10) · 대상 범위(v32.7~v32.8) · 트랜잭션 경계(v32.12).
+    /// 실험도 둘 다 음성이었다 — 재작성만으로는 안 지워지고(A), 저장·재오픈해도 남는다(C).
+    /// JACK 확인: <i>"무조건 오른쪽 버튼으로 스냅샷 재작성을 눌러야만 없어져."</i></para>
+    ///
+    /// <para><b>발상을 바꾼다.</b> 스냅샷이 정의 <b>맨 끝</b>에 있으면(v32.9) 빌드는 스냅샷에서 시작하고
+    /// <b>그 앞의 붙여넣기는 어차피 무시된다</b>(공식 문서). 즉 형상은 스냅샷이 통째로 물고 있고
+    /// <b>붙여넣기 줄은 이미 잉여</b>다 — 남아서 하는 일이라고는 소스 표면에 매달려 ⚠를 다는 것뿐이다.
+    /// 그러니 지운다.</para>
+    ///
+    /// <para><b>안전판이 본체다.</b> 지우고 나서 삼각형 수를 다시 세어, <b>조금이라도 줄면 커밋하지 않는다</b> —
+    /// 트랜잭션이 통째로 물러나 도면은 손대기 전과 같아진다. 되돌리기 비용이 0이라야 이런 수를 쓸 수 있다.
+    /// 스냅샷이 <b>없으면 아예 손대지 않는다</b>(형상이 사라진다).</para>
+    ///
+    /// <para><b>지운 뒤 <c>RebuildSnapshot</c>을 절대 부르지 않는다</b> — 텅 빈 정의로 다시 구워질 수 있다.
+    /// 이 함수는 표면을 건드리는 <b>맨 마지막</b> 작업이어야 한다.</para></summary>
+    public static bool StripPasteOperations(Database db, ObjectId surfId, out string diag)
+    {
+        diag = ""; bool ok = false;
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            if (tr.GetObject(surfId, OpenMode.ForWrite) is not TinSurface w) { diag = "TIN이 아니다"; return false; }
+            string nm = w.Name;
+
+            int before = -1;
+            try { before = w.GetTriangles(false).Count; } catch { }
+            if (before <= 0) { diag = $"'{nm}' 삼각형을 못 읽어 건너뜀"; return false; }
+            if (!w.HasSnapshot) { diag = $"'{nm}' 스냅샷이 없어 건너뜀(지우면 형상이 사라진다)"; return false; }
+
+            int removed = 0;
+            var oc = w.Operations;
+            for (int i = oc.Count - 1; i >= 0; i--)          // 반드시 뒤에서부터
+            {
+                string tn = oc[i].GetType().Name;
+                if (tn.IndexOf("Paste", System.StringComparison.OrdinalIgnoreCase) < 0) continue;
+                try { oc.RemoveAt(i); removed++; } catch { }
+            }
+            if (removed == 0) { diag = $"'{nm}' 지울 붙여넣기가 없다"; return false; }
+
+            try { w.Rebuild(); } catch { }
+            int after = -1;
+            try { after = w.GetTriangles(false).Count; } catch { }
+
+            // ★ 안전판 — 형상이 깎이면 커밋하지 않는다(자동으로 무른다).
+            if (after < before)
+            {
+                diag = $"'{nm}' ⚠형상이 줄어 되돌림 — 삼각형 {before} → {after} (붙여넣기 {removed}줄은 그대로 둔다)";
+                return false;
+            }
+
+            tr.Commit(); ok = true;
+            diag = $"'{nm}' 붙여넣기 {removed}줄 제거 · 삼각형 {before} → {after} (스냅샷만 남김)";
+        }
+        catch (System.Exception ex) { diag = "붙여넣기 제거 실패 — " + ex.Message; }
+        return ok;
+    }
+
+    /// <summary>★[v32.12] 지표면 상태를 <b>읽기만</b> 해서 한 줄로 만든다 — 재작성은 하지 않는다.
+    /// 종전엔 진단이 <see cref="RebuildSurfacesByBaseName"/> 안에 섞여 있어
+    /// <b>진단하려면 표면을 건드려야</b> 했다 — 그 자체가 상태를 바꾼다.</summary>
+    public static string Describe(Transaction tr, string baseName)
+    {
+        var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+        foreach (ObjectId sid in civilDoc.GetSurfaceIds())
+        {
+            try
+            {
+                if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface w) continue;
+                string nm = w.Name;
+                if (nm != baseName && !(nm.StartsWith(baseName + "_") && int.TryParse(nm.Substring(baseName.Length + 1), out _)))
+                    continue;
+
+                string tri = "?";
+                try { if (w is TinSurface ts) tri = ts.GetTriangles(false).Count.ToString(); } catch { }
+                string ops = "?";
+                try
+                {
+                    var oc = w.Operations;
+                    int nPaste = 0, idxSnap = -1;
+                    for (int k = 0; k < oc.Count; k++)
+                    {
+                        string tn = oc[k].GetType().Name;
+                        if (tn.IndexOf("Paste", System.StringComparison.OrdinalIgnoreCase) >= 0) nPaste++;
+                        if (tn.IndexOf("Snapshot", System.StringComparison.OrdinalIgnoreCase) >= 0) idxSnap = k;
+                    }
+                    ops = $"{oc.Count}줄(붙여넣기 {nPaste} · 스냅샷 {(idxSnap < 0 ? "없음" : $"{idxSnap + 1}번째")})";
+                }
+                catch (System.Exception oe) { ops = "읽기실패:" + oe.GetType().Name; }
+
+                return $"'{nm}' 삼각형={tri} 보임={((AcadEntity)w).Visible} 정의={ops}"
+                     + $" 구식={w.IsOutOfDate} 스냅샷구식={w.IsSnapshotOutOfDate} 스냅샷있음={w.HasSnapshot}";
+            }
+            catch { }
+        }
+        return $"'{baseName}' 없음";
+    }
+
+    public static string RebuildAllSurfaces(Transaction tr)
+    {
+        var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+
+        // 우리가 '붙여넣기로 만든' 면 = 합성면. 나머지는 그 소스다.
+        static bool IsComposite(string nm)
+            => nm.StartsWith("정지면_DH", System.StringComparison.Ordinal)
+            || nm.StartsWith("정지순수_DH", System.StringComparison.Ordinal);
+
+        var src = new List<ObjectId>();
+        var compPrev = new List<ObjectId>();   // '…이전' — 다른 합성면의 소스라 먼저
+        var comp = new List<ObjectId>();
+        foreach (ObjectId sid in civilDoc.GetSurfaceIds())
+        {
+            try
+            {
+                if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
+                if (!IsComposite(s.Name)) src.Add(sid);
+                else if (s.Name.Contains("이전")) compPrev.Add(sid);
+                else comp.Add(sid);
+            }
+            catch { }
+        }
+
+        int nSrc = 0, nComp = 0, snap = 0;
+        foreach (var sid in src)
+            try { var w = (Autodesk.Civil.DatabaseServices.Surface)tr.GetObject(sid, OpenMode.ForWrite); w.Rebuild(); nSrc++; }
+            catch { }
+
+        foreach (var sid in compPrev.Concat(comp))
+        {
+            try
+            {
+                var w = (Autodesk.Civil.DatabaseServices.Surface)tr.GetObject(sid, OpenMode.ForWrite);
+                w.Rebuild();                                                   // 붙여넣기 항목을 되살리고
+                // ★[v32.10] <b>스냅샷으로 끝낸다</b> — 찍은 뒤에 또 지으면 스냅샷이 구식이 된다(위 <see cref="Freeze"/> 설명).
+                if (w.HasSnapshot) { try { w.RebuildSnapshot(); snap++; } catch { } }
+                nComp++;
+            }
+            catch { }
+        }
+
+        // 되읽어 확인한다 — 넣었다고 세면 로그가 거짓말을 한다(이 저장소의 규율).
+        var stuck = new List<string>();
+        foreach (ObjectId sid in civilDoc.GetSurfaceIds())
+        {
+            try
+            {
+                if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface w) continue;
+                if (w.IsOutOfDate || (w.HasSnapshot && w.IsSnapshotOutOfDate))
+                    stuck.Add($"{w.Name}(구식={w.IsOutOfDate}/스냅샷구식={w.IsSnapshotOutOfDate})");
+            }
+            catch { }
+        }
+        return $"지표면 재작성 — 소스 {nSrc}개 먼저 · 합성면 {nComp}개 나중(스냅샷 {snap}) · 표면단위 플래그 잔여 {stuck.Count}"
+             + (stuck.Count > 0 ? " ⚠[" + string.Join(" · ", stuck) + "]" : "")
+             + "  ※정의 탭 ⚠는 <작업 한 줄> 단위라 이 값으로 안 잡힌다(2026 API에 읽을 속성 없음 — 조사 확인)";
+    }
+
+    /// <summary>★[v32.2] 이름(또는 이름_N)인 지표면의 <b>표시 여부만</b> 바꾼다.
+    /// <see cref="IsolateSurfaces"/>는 '하나만 남기고 나머지를 끄는' 물건이라 여기엔 못 쓴다 —
+    /// 이건 <b>지목한 것만</b> 건드리고 나머지는 그대로 둔다.</summary>
+    public static int SetSurfaceVisible(Transaction tr, string baseName, bool visible)
+    {
+        var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+        int n = 0;
+        foreach (ObjectId sid in civilDoc.GetSurfaceIds())
+        {
+            if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
+            string nm = s.Name;
+            if (nm != baseName && !(nm.StartsWith(baseName + "_") && int.TryParse(nm.Substring(baseName.Length + 1), out _)))
+                continue;
+            try { ((AcadEntity)tr.GetObject(sid, OpenMode.ForWrite)).Visible = visible; n++; }
+            catch { }
+        }
+        return n;
+    }
+
     /// <summary>[0728] 이름이 baseName(또는 _N)인 지표면 재작성 — 소스 숨김(Visible) 등으로 붙는
     /// '정의 구식(⚠)' 표시 해소용. 실패해도 무시.</summary>
     public static string RebuildSurfacesByBaseName(Transaction tr, string baseName)
     {
         var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
         int hit = 0, snapOk = 0, snapNo = 0, reOk = 0; string first = "";
+        string snapState = "";   // 스냅샷 상태 속성이 있으면 첫 표면 것만 남긴다(계측)
         foreach (ObjectId sid in civilDoc.GetSurfaceIds())
         {
             if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
@@ -784,14 +1336,79 @@ public static class GradingBuilder
                 var w = (Autodesk.Civil.DatabaseServices.Surface)tr.GetObject(sid, OpenMode.ForWrite);
                 // [0807] 스냅샷 갱신이 **실제로 됐는지** 남긴다 — 종전엔 catch{}로 삼켜서
                 //   느낌표가 왜 안 없어지는지 로그로 알 길이 없었다.
-                try { w.RebuildSnapshot(); snapOk++; }
-                catch (System.Exception ex) { snapNo++; if (first.Length == 0) first = ex.Message; }
+                //
+                // ★★[v32.2 · JACK 0812] <b>여기도 순서가 뒤집혀 있었다 — 재작성이 스냅샷보다 뒤였다.</b>
+                //   이 함수는 정지 생성의 <b>맨 마지막</b>에 불린다(사용자가 보는 시점).
+                //   스냅샷을 찍고 나서 `Rebuild()`를 하면 표면이 다시 스냅샷보다 새것이 되어
+                //   <b>정확히 이 자리에서</b> 느낌표가 되살아난다. → 짓고 나서 찍는다.
                 try { w.Rebuild(); reOk++; }
                 catch (System.Exception ex) { if (first.Length == 0) first = ex.Message; }
+
+                // ★★[v32.4 · 검토 반영] <b>스냅샷이 없는데 <c>RebuildSnapshot</c>을 부르면 반드시 실패한다</b>
+                //   (공식 문서: <i>"RebuildSnapshot will cause an error if the snapshot does not exist."</i>).
+                //   종전엔 <see cref="Freeze"/>와 달리 여기엔 <c>CreateSnapshot</c>이 없어, 스냅샷 없는 표면에서는
+                //   <b>매번 확정 실패</b>였다 — 로그의 '스냅샷 실패' 숫자가 그래서 줄지 않았다.
+                //   그리고 아직 구식이면 스냅샷 호출 자체가 오류 조건이므로 한 번 더 짓고 간다.
+                try
+                {
+                    if (w.IsOutOfDate) w.Rebuild();
+                    if (w.HasSnapshot) w.RebuildSnapshot(); else w.CreateSnapshot();
+                    // ★★[v32.10] <b>여기서 또 짓지 않는다.</b> v32.5엔 트레일링 <c>Rebuild</c>가 있었는데,
+                    //   그 근거(<c>구식=True</c>)는 <b>스냅샷이 정의 중간에 있을 때의 증상</b>이었다.
+                    //   v32.9에서 스냅샷을 맨 끝으로 옮긴 뒤로는 <b>찍고 나서 또 지으면 스냅샷이 구식</b>이 된다
+                    //   (JACK 실측: 붙여넣기 느낌표는 사라지고 스냅샷 느낌표만 남았다). <b>지은 뒤 찍고, 끝.</b>
+                    snapOk++;
+                }
+                catch (System.Exception ex) { snapNo++; if (first.Length == 0) first = ex.Message; }
+
+                // ★[계측] 반사를 걷어내고 <b>직접</b> 읽는다 — 이름이 2024·2026에서 같은 것을 확인했다.
+                //   반사로는 이름·값을 뭉뚱그려 찍을 뿐이지만, 직접 읽으면
+                //   <b>표면이 구식인지</b>(IsOutOfDate)와 <b>스냅샷이 구식인지</b>(IsSnapshotOutOfDate)를 <b>갈라서</b> 본다.
+                //   느낌표가 또 뜨면 이 한 줄이 어느 쪽인지 바로 가려 준다.
+                if (snapState.Length == 0)
+                {
+                    try
+                    {
+                        // ★[v32.6 · JACK 0812] <b>삼각형 수를 같이 남긴다 — "지표면이 아예 없다"를 가리기 위해.</b>
+                        //   숨겨 둔 표면은 도면에서 선택이 안 되므로 <b>빈 것과 구분이 안 된다</b>.
+                        //   숫자가 0이면 진짜로 빈 것이고, 크면 그냥 안 보이는 것이다.
+                        string tri = "?";
+                        try { if (w is TinSurface ts) tri = ts.GetTriangles(false).Count.ToString(); } catch { }
+
+                        // ★★[v32.11 · 조사 반영] <b>정의 목록의 실제 모양을 처음으로 로그에 남긴다.</b>
+                        //   조사 결론: 정의 탭의 ⚠는 <b>작업(operation) 한 줄 단위</b>인데
+                        //   Civil 3D 2026 어셈블리의 <c>SurfaceOperation</c> 공개 멤버는
+                        //   <c>Guid·Enabled·Move*·Dispose</c>가 전부다 — <b>구식 여부를 읽는 속성이 없다</b>.
+                        //   그러니 ⚠ 자체는 못 읽지만, <b>줄이 몇 개이고 붙여넣기가 몇 개인지</b>는 읽을 수 있다.
+                        //   그것만으로도 '스냅샷이 몇 번째인가·붙여넣기가 남아 있는가'를 스샷 없이 확인할 수 있다.
+                        string ops = "?";
+                        //   ※ 작업의 <b>형식 이름을 코드에 박지 않는다</b> — 한 번 빗맞혀 빌드가 깨졌다.
+                        //     <c>GetType().Name</c>을 읽어 판별하면 Civil 버전이 달라도 안 깨진다.
+                        try
+                        {
+                            var oc = w.Operations;
+                            int nPaste = 0, idxSnap = -1;
+                            for (int k = 0; k < oc.Count; k++)
+                            {
+                                string tn = oc[k].GetType().Name;
+                                if (tn.IndexOf("Paste", System.StringComparison.OrdinalIgnoreCase) >= 0) nPaste++;
+                                if (tn.IndexOf("Snapshot", System.StringComparison.OrdinalIgnoreCase) >= 0) idxSnap = k;
+                            }
+                            ops = $"{oc.Count}줄(붙여넣기 {nPaste} · 스냅샷 {(idxSnap < 0 ? "없음" : $"{idxSnap + 1}번째")})";
+                        }
+                        catch (System.Exception oe) { ops = "읽기실패:" + oe.GetType().Name; }
+
+                        snapState = $" 삼각형={tri} 보임={((AcadEntity)w).Visible} 정의={ops}"
+                                  + $" 구식={w.IsOutOfDate} 스냅샷구식={w.IsSnapshotOutOfDate}"
+                                  + $" 스냅샷있음={w.HasSnapshot} 자동재작성={w.AutoRebuild}";
+                    }
+                    catch { }
+                }
             }
             catch (System.Exception ex) { if (first.Length == 0) first = ex.Message; }
         }
-        return $"'{baseName}' 표면 {hit}개 — 스냅샷 갱신 {snapOk}/실패 {snapNo} · 재작성 {reOk}" +
+        return $"'{baseName}' 표면 {hit}개 — 재작성 {reOk} · 스냅샷 갱신 {snapOk}/실패 {snapNo}" +
+               (snapState.Length > 0 ? " ·" + snapState : "") +
                (first.Length > 0 ? $" · 첫 사유: {first}" : "");
     }
 

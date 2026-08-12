@@ -107,7 +107,9 @@ public sealed class InfraworksCommand
                 using Transaction trG = db.TransactionManager.StartTransaction();
                 var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
                 // [다중 구역 0729] '정지면_DH이전'(누적 기준면) 등 산출물 파생 이름 전부 제외 — 접두 일치.
-                var skip = new[] { "가상절토_DH", "가상성토_DH", "정지면_DH" };
+                // ★[v32.2] '정지순수_DH'(종단·횡단용 순수 정지면)도 우리 산출물이다 —
+                //   빼지 않으면 삼각형이 많을 때 <b>원지반으로 오인</b>되어 토공량·옹벽이 통째로 틀어진다.
+                var skip = new[] { "가상절토_DH", "가상성토_DH", "정지면_DH", SectionCommand.PurePadSurfaceBase };
                 Autodesk.Civil.DatabaseServices.TinSurface? bestSurf = null; int bestTri = -1;
                 foreach (ObjectId sid in civilDoc.GetSurfaceIds())
                 {
