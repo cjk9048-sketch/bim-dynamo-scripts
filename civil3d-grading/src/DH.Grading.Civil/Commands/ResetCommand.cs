@@ -13,7 +13,7 @@ namespace DH.Grading.Civil.Commands;
 /// 이전 지표면 정의·번들이 꼬인다 → 이 명령이 우리가 만든 것만 깨끗이 걷어낸다.
 ///
 /// 지우는 것(우리 산출물만):
-///   · 지표면: 정지면_DH · 정지면_DH이전 · 가상절토_DH · 가상성토_DH · _DH토량임시 (이름/이름_N 전부)
+///   · 지표면: 정지면_DH · 정지면_DH이전 · 정지순수_DH · 정지순수_DH이전 · 가상절토_DH · 가상성토_DH · _DH토량임시 (이름/이름_N 전부)
 ///   · DH- 로 시작하는 모든 레이어의 객체(사면선·소단선·노리선·소단·FGL·옹벽선·정지경계·진단 등)
 ///   · 저장된 정지 번들(NOD) + 세션 메모리(옹벽 선택·구간 오버라이드·마지막 핸들)
 /// 보존하는 것: 원지반 TIN Surface, 계획폴리곤(사용자가 그린 것 — DH 접두 아님).
@@ -22,8 +22,11 @@ namespace DH.Grading.Civil.Commands;
 public sealed class ResetCommand
 {
     // 지울 지표면 기준 이름(이름 또는 이름_N).
+    // ★[v32.2] 순수 정지면(종단·횡단용)도 우리 산출물이라 같이 지운다 — 안 지우면 <b>낡은 순수면이 남아</b>
+    //   초기화 뒤에도 종단이 그걸 보고 옛 형상을 그린다(지표면 목록에서 눈에 안 띄어 더 고약하다).
     private static readonly string[] SurfaceBaseNames =
-        { "정지면_DH", "정지면_DH이전", "가상절토_DH", "가상성토_DH", "_DH토량임시" };
+        { "정지면_DH", "정지면_DH이전", SectionCommand.PurePadSurfaceBase, SectionCommand.PurePadSurfaceBase + "이전",
+          "가상절토_DH", "가상성토_DH", "_DH토량임시" };
 
     [CommandMethod("DHRESET")]
     public void Run()

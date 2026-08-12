@@ -32,6 +32,24 @@ public sealed class SectionCommand
     internal const string ProfPadName = "DH_정지면";
     private const string PadSurfaceBase = "정지면_DH";
 
+    /// <summary>★★[v32.2 · JACK 0812] <b>순수 정지면 — 원지반을 안 깔고 '정지된 면만' 담은 지표면.</b>
+    ///
+    /// <para>JACK: <i>"인프라웍스 내보내기 때문에 계획정지면하고 원지반하고 합성한 걸 최종결과물로 만드는데,
+    /// 오히려 종단에서는 더 불리한 것 같더라고. 일반적으로 종단은 원지반에 계획지반선만 보이는데
+    /// 우리는 원지반 부분이 겹치니까."</i></para>
+    ///
+    /// <para><b>맞는 지적이다.</b> <c>정지면_DH</c>는 원지반을 깔고 그 위에 절·성토를 얹은 합성면이라
+    /// <b>정지 바깥에서도 값이 나온다</b> — 그 값은 원지반과 <b>똑같다</b>.
+    /// 그래서 종단을 뜨면 정지 밖 구간에서 계획선이 원지반선 위에 <b>포개져</b> 두 줄이 겹쳐 보인다.
+    /// 설계도서의 종단면도는 원지반선 하나에 계획선을 <b>정지 구간에만</b> 얹는다.</para>
+    ///
+    /// <para><b>그렇다고 합성면을 없앨 수는 없다</b> — InfraWorks 지형·토공량·'이어서 하기'의 기준 지반이
+    /// 전부 그것이다(원지반이 안 깔리면 다음 구역 사면이 만날 지반이 없어 데이라잇이 안 나온다).
+    /// → 합성면은 그대로 두고 <b>종단·횡단만 이 순수면을 본다.</b> 기존 기능은 하나도 안 건드린다.</para>
+    ///
+    /// <para>옛 도면에는 이 표면이 없다 — 그때는 <b>합성면으로 물러난다</b>(종전 동작 그대로).</para></summary>
+    internal const string PurePadSurfaceBase = "정지순수_DH";
+
     /// <summary>측점선(=횡단도) 개수 상한 — 넘으면 안내하고 중단(도면이 감당 못 할 양 방지).</summary>
     private const int MaxSections = 200;
 
@@ -251,8 +269,8 @@ public sealed class SectionCommand
     internal static System.Collections.Generic.List<SurfPick> FindSurfaces(Database db, CivilApp.CivilDocument cdoc)
     {
         var list = new System.Collections.Generic.List<SurfPick>();
-        ObjectId ground = ObjectId.Null, pad = ObjectId.Null;
-        string groundNm = "", padNm = "";
+        ObjectId ground = ObjectId.Null, pad = ObjectId.Null, pure = ObjectId.Null;
+        string groundNm = "", padNm = "", pureNm = "";
 
         using var tr = db.TransactionManager.StartTransaction();
         foreach (ObjectId sid in cdoc.GetSurfaceIds())
@@ -265,6 +283,8 @@ public sealed class SectionCommand
             }
             catch { continue; }
 
+            // ★[v32.2] 순수 정지면이 있으면 그것이 종단·횡단의 정지면이다(위 설명).
+            if (IsBase(nm, PurePadSurfaceBase)) { pure = sid; pureNm = nm; continue; }
             // 정지면_DH(또는 정지면_DH_N) — 가장 마지막 것을 쓴다.
             if (IsBase(nm, PadSurfaceBase)) { pad = sid; padNm = nm; continue; }
             // 원지반(서버지표면이 만든 것) 우선
@@ -291,7 +311,9 @@ public sealed class SectionCommand
         tr.Commit();
 
         if (!ground.IsNull) list.Add(new SurfPick(ground, groundNm, ProfGroundName, "원지반"));
-        if (!pad.IsNull) list.Add(new SurfPick(pad, padNm, ProfPadName, "정지면"));
+        // ★[v32.2] 순수면이 있으면 그것을, 없으면 합성면으로 물러난다(옛 도면 호환).
+        if (!pure.IsNull) list.Add(new SurfPick(pure, pureNm, ProfPadName, "정지면"));
+        else if (!pad.IsNull) list.Add(new SurfPick(pad, padNm, ProfPadName, "정지면"));
         return list;
     }
 

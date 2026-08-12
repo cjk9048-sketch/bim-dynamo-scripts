@@ -58,16 +58,23 @@ public static class SheetCommand
     private static double InnerH => SheetH - 2 * MarginTB;   // 554
     /// <summary>★[JACK 0810] 회사 참고 도면(C-005)의 실제 구도 — 1/3씩 균등이 아니다.
     /// "제목부 0.5, 종단면도 3, 종단 3.5, 밴드 3 정도 되는 것 같아."
-    /// 합 10으로 나눠 내부 높이를 배분한다.</summary>
-    private const double UTitle = 0.5, UPlan = 3.0, UGraph = 3.5, UBand = 3.0;
+    /// 합 10으로 나눠 내부 높이를 배분한다.
+    ///
+    /// <para>★★[v32.1 · JACK 0812] <b>종단 그래프를 키운다 — 3.5 → 4.0, 종평면도에서 0.5를 받는다.</b>
+    /// 종평면도 칸은 <b>아직 구분선만 긋고 비워 둔 자리</b>다(<see cref="PlanH"/>는 그 선의 높이로만 쓰인다).
+    /// 반면 종단 그래프는 <see cref="ViewH"/>를 통해 <b>축척 고르기에 직접 물린다</b> —
+    /// 자리가 27.7mm 늘면 표준 축척이 한 단계 내려갈 여지가 생겨 그림이 그만큼 커진다.
+    /// <b>지금 비어 있는 칸에서 받는 것이 가장 싸다.</b>
+    /// <para>밴드 표(3.0)는 손대지 않는다 — 칸 높이 20mm 고정이라 이 값이 아니라 칸 수가 정한다(§25).</para></para></summary>
+    private const double UTitle = 0.5, UPlan = 2.5, UGraph = 4.0, UBand = 3.0;
     private static double Unit => InnerH / (UTitle + UPlan + UGraph + UBand);   // 55.4mm
     private static double TitleH => Unit * UTitle;    // 27.7  제목부
-    private static double PlanH => Unit * UPlan;      // 166.2 종평면도
-    private static double GraphH => Unit * UGraph;    // 193.9 종단 그래프
+    private static double PlanH => Unit * UPlan;      // 138.5 종평면도
+    private static double GraphH => Unit * UGraph;    // 221.6 종단 그래프
     private static double BandH => Unit * UBand;      // 166.2 밴드 표
 
     /// <summary>뷰포트가 실제로 쓰는 높이 — 종단 그래프 + 밴드 표(제목부·종평면도는 그 위).</summary>
-    private static double ViewH => GraphH + BandH;    // 360.1
+    private static double ViewH => GraphH + BandH;    // 387.8
 
     /// <summary><b>여백 목표</b> — 자리의 92%까지만 차면 보기 좋다는 기준.
     /// JACK 0810: "너무 딱 맞으면 그러니깐 약간의 버퍼는 줘서 도면이 좀 균형감 있게 해야지."
@@ -161,6 +168,12 @@ public static class SheetCommand
         //   꼬리는 폭의 1~2%라 대개 같은 축척이 다시 나오지만, 경계에 걸리면 2차에서 바로잡힌다.
         if (ExtendTail(db, pvId, scale, log))
             veNote = FitSheet(db, pvId, log, out scale, out overflow);
+
+        // ★★[v32.4] <b>도면 축척은 여기서 딱 한 번 건다 — 최종값이 정해진 뒤에.</b>
+        //   종전엔 <see cref="FitSheet"/> 안에서 걸었는데, 그 함수가 두 번 불리므로
+        //   <b>1차에서 건 축척이 2차 측정을 부풀렸다</b>(실측 68.6m → 664.6m, 정확히 120배 여분).
+        //   재는 도중에 자를 바꾸면 안 된다.
+        SetDrawingScale(db, scale, log);
 
         // ── ②-b 뷰 스타일이 정해진 **뒤에** 왼쪽 축 눈금을 세운다(JACK: "왼쪽 바를 스케일(체크)로").
         SetAxisTicks(db, pvId, scale, log);
@@ -259,7 +272,26 @@ public static class SheetCommand
                 var flat = cands.OrderBy(c => System.Math.Abs(c.V - 1.0)).FirstOrDefault();
                 if (!flat.S.Id.IsNull) SetStyle(db, pvId, flat.S.Id);
                 var e0 = Measure(db, pvId);
-                double wM0 = e0.MaxPoint.X - e0.MinPoint.X, hM0 = e0.MaxPoint.Y - e0.MinPoint.Y;
+                double hM0 = e0.MaxPoint.Y - e0.MinPoint.Y;
+
+                // ★★[v32.4 · JACK 0812 실측] <b>폭을 경계상자로 재면 안 된다 — 축척에 따라 부푼다.</b>
+                //
+                //   경계상자에는 <b>왼쪽 축의 표고 숫자</b>가 딸려 온다. 그 글자는
+                //   <b>종이 크기 × 도면 축척</b>으로 그려진다(<see cref="SetDrawingScale"/> 설명 그대로).
+                //   그래서 축척을 <b>걸어 놓고 다시 재면</b> 같은 그림이 훨씬 넓게 잡힌다.
+                //
+                //   실측 로그(0812): 1차 <c>68.6m</c>(측점범위 63.6 + 여분 5.0) → 축척 1:120을 걸고
+                //   2차 <c>664.6m</c>(측점범위 64.56 + 여분 <b>600.04</b>). <b>600.04 ÷ 5.0 = 120.008</b> —
+                //   방금 건 축척이 그대로 곱해진 것이다. 우연이 아니다.
+                //   그 부푼 폭으로 <c>1:1000</c>을 골라 그림이 여덟 배 작아졌다(JACK: "종단 스케일도 이상해지고").
+                //
+                //   → <b>폭은 측점 범위로 잰다.</b> 격자의 폭이 곧 측점 범위이고, 그 값은 축척과 무관하다.
+                //     못 읽으면 종전대로 경계상자로 물러난다.
+                double wRange = StationSpan(db, pvId);
+                double wBox = e0.MaxPoint.X - e0.MinPoint.X;
+                double wM0 = wRange > 1e-6 ? wRange : wBox;
+                log.AppendLine($"그래프 폭: 측점범위 {wRange:F2}m · 경계상자 {wBox:F2}m(축 글자 포함)"
+                             + $" → {wM0:F2}m 사용{(wRange > 1e-6 ? "" : " ⚠측점범위를 못 읽어 경계상자로 물러남")}");
 
                 // ★★[JACK 0810 계측] 밴드는 **종이 크기로 정의**되어 있다(BandHeight=0.003 = 3mm).
                 //   그 값에 도면 축척이 곱해져 모형 크기가 된다. 그래서 밴드가 종이에서 차지하는
@@ -312,8 +344,10 @@ public static class SheetCommand
                 log.AppendLine($"종이에서 {wM0 * 1000.0 / s0:F0}mm × (그래프 {hM0 * 1000.0 / s0:F0} + 밴드 {bandMm:F1})mm"
                              + $" = {wM0 * 1000.0 / s0:F0}×{hM0 * 1000.0 / s0 + bandMm:F0}mm (자리 {InnerW:F0}×{ViewH:F0}mm)"
                              + (overflow ? " ⚠넘침" : ""));
-                // ★ 도면 축척을 시트 축척에 맞춘다 — 이게 안 맞으면 밴드·글자가 통째로 어긋난다(10배 커 보였다).
-                SetDrawingScale(db, s0, log);
+                // ★★[v32.4] <b>도면 축척은 여기서 걸지 않는다 — 재는 도중에 자를 바꾸는 셈이다.</b>
+                //   이 함수는 <see cref="ExtendTail"/> 뒤에 <b>한 번 더</b> 불린다. 여기서 축척을 걸면
+                //   두 번째 측정이 <b>방금 바뀐 축척으로 부푼 그림</b>을 재게 된다(위 설명).
+                //   → 축척은 <b>최종값이 정해진 뒤</b> <see cref="Build"/>에서 한 번만 건다.
                 LastBandModelH = bandPaperM * s0;   // 도곽이 밴드까지 덮도록 넘겨준다
                 if (flat.S.Id.IsNull) return $"S=1:{s0:F0} (수직과장 스타일 없음 — 도면 기본값)";
                 if (System.Math.Abs(flat.V - 1.0) > 0.01)
@@ -1574,8 +1608,21 @@ public static class SheetCommand
                     //   ※ v23.29의 <c>B3→B2</c>는 <b>틀린 가정</b>이었다 — B는 자릿수가 아니라
                     //     <b>나누는 위치</b>(Delimiter10/100/1000)다. B2로 내렸더니 100m 기준으로 갈라져
                     //     오히려 +62.81 같은 값이 나왔다. 되돌린다.
-                    string after = before.Replace("|B2|", "|B3|");
-                    after = after.Replace("|FS|", "|FSI|");
+                    //
+                    // ★★[v32.1 · JACK 0812] <b>순서를 뒤집었다 — 먼저 <c>FSI</c>로 갈라 놓고, 그 다음에 자릿수를 정한다.</b>
+                    //   JACK 요구는 <c>+00.00</c>(<b>두 자리</b>)인데 지금은 <c>B3</c>라 <c>+010.00</c>(세 자리)이다.
+                    //
+                    //   <b>v23.29의 <c>B2</c>가 터진 것은 <c>B2</c>가 틀려서가 아니라 <c>FS</c>였기 때문이다.</b>
+                    //   <c>FS</c>(그냥 측점)에서는 <c>B</c>가 <b>나누는 위치</b>라 <c>B2</c>=100m 기준이 되어
+                    //   <c>+62.81</c> 같은 값이 나왔다. 지금은 <c>FSI</c>(측점 색인)라 <b>나누는 기준이 색인(20m)</b>이고
+                    //   <c>B</c>에 남는 일은 <b>오른쪽 조각을 몇 자리로 보일지</b>뿐이다.
+                    //   색인 20m면 나머지는 최대 19.99 — <b>두 자리로 충분하고, 세 자리는 앞의 0이 늘 남는다.</b>
+                    //
+                    //   ※ 되돌리려면 아래 두 줄의 <c>B3</c>↔<c>B2</c>만 서로 바꾸면 된다.
+                    //     터졌다면 증상이 분명하다 — <b>'+' 값이 20을 넘는다</b>(예 <c>+62.81</c>).
+                    string after = before.Replace("|FS|", "|FSI|");
+                    if (after.Contains("|FSI|")) after = after.Replace("|B3|", "|B2|");   // 색인 기준 → 두 자리
+                    else                         after = after.Replace("|B2|", "|B3|");   // 아직 FS면 종전대로
                     // ★[JACK 0811] <b>"++ 붙은 것들이 나오고"</b> — <c>FSI</c>로 바꾸니
                     //   <c>ORB</c>(오른쪽 조각)가 <b>구분자 '+'까지 포함해서</b> 돌려준다.
                     //   그런데 표현식 앞에 리터럴 <c>+</c>가 이미 붙어 있어 <c>++10.00</c>이 됐다.
@@ -1583,7 +1630,12 @@ public static class SheetCommand
                     if (after.Contains("|FSI|")) after = after.Replace("+<[", "<[");
                     if (after == before) continue;
                     con.Value = after;
-                    log.AppendLine($"   [{idx}칸] {p.Name} '+' 형식 교정(FS→FSI · B2→B3)\n        전: {before}\n        후: {con.Value}");
+                    // 로그는 <b>실제로 탄 갈래</b>를 적는다 — 안 한 일을 했다고 적으면 다음 사람이 헛다리를 짚는다.
+                    string didFsi = before.Contains("|FS|") ? "FS→FSI · " : "";
+                    string didB = after.Contains("|B2|") ? "B3→B2(두 자리 +00.00)" : "B2→B3(세 자리)";
+                    log.AppendLine($"   [{idx}칸] {p.Name} '+' 형식 교정({didFsi}{didB})"
+                                   + $"\n        전: {before}\n        후: {con.Value}"
+                                   + "\n        ※확인할 것: '+' 값이 20을 넘으면 B2가 다시 100m로 나눈 것 — B3로 되돌린다");
                 }
             }
             catch (System.Exception ex) { log.AppendLine($"   [{idx}칸] {p.Name} 자릿수 실패 — {Brief(ex)}"); }
@@ -2147,8 +2199,12 @@ public static class SheetCommand
     /// <summary>바 폭 · 축선과 바 사이 틈(종이 mm).
     /// <para>★[JACK 0811] <b>"체크스케일바가 축에서부터 0.2 정도 왼쪽으로 나가서 빈 공간이 있어. 딱 맞춰줘."</b>
     /// 그 0.2m가 이 틈(1mm × 축척 200)이다. <b>0으로 두어 축선에 붙인다.</b>
-    /// 자와 눈금 사이가 벌어지면 그 사이가 얼마인지 또 읽어야 한다 — 붙어야 자가 된다.</para></summary>
-    private const double BarWidthMm = 3.0, BarGapMm = 0.0;
+    /// 자와 눈금 사이가 벌어지면 그 사이가 얼마인지 또 읽어야 한다 — 붙어야 자가 된다.</para>
+    /// <para>★[v32.1 · JACK 0812] <b>"Y축 축척블록의 세로 두께를 지금의 30% 줄여줘 — 더 얇게."</b>
+    /// 3.0 → <b>2.1mm</b>. 폭은 <b>종이 기준</b>이라 축척이 바뀌어도 이 두께 그대로다.
+    /// 표고 숫자의 X 간격띄우기가 이 값을 더해서 잡히므로(아래 <c>barLeftMm</c>) <b>숫자도 같이 따라 들어온다</b> —
+    /// 바만 얇게 하고 숫자를 그대로 두면 그 사이가 벌어져 '자와 눈금이 떨어진' 모양이 된다.</para></summary>
+    private const double BarWidthMm = 2.1, BarGapMm = 0.0;
 
     /// <summary>바와 표고 숫자 사이 여백(종이 mm) — 숫자가 바에 닿지 않게.</summary>
     private const double BarLabelGapMm = 1.5;
@@ -2356,7 +2412,7 @@ public static class SheetCommand
                         try { using (var t0 = ax.MajorTickStyle) afterTick = t0.Size * 1000.0; } catch { }
                         log.AppendLine($"   표고바 축라벨: 정렬 {beforeJ}→{afterJ} · X오프셋 {beforeX * 1000:F1}→{afterX * 1000:F1}mm" +
                                        $" · 주눈금 길이 →{afterTick:F1}mm (목표 {tickMm:F1} = 축오프셋 {(axOffM / scale) * 1000.0:F1}" +
-                                       $" + 바 {BarWidthMm:F0} + 여백 {BarLabelGapMm:F1} + 글자폭 {txtW:F1}[높이 {txtH * 1000:F1}mm×{AxisLabelChars}자])" +
+                                       $" + 바 {BarWidthMm:0.##} + 여백 {BarLabelGapMm:F1} + 글자폭 {txtW:F1}[높이 {txtH * 1000:F1}mm×{AxisLabelChars}자])" +
                                        $"  ※숫자가 눈금 바깥 끝에서 시작해 선 위에 얹힌다" +
                                        (System.Math.Abs(afterTick - tickMm) > 0.05 ? "  ⚠눈금 길이가 안 먹었다" : "") +
                                        (System.Math.Abs(afterX * 1000 - push) > 0.05 ? "  ⚠오프셋이 안 먹었다" : ""));
@@ -2366,7 +2422,7 @@ public static class SheetCommand
 
             tr.Commit();
             log.AppendLine($"   표고바: 주눈금 {major:0.##}m ÷ {rowsPer}줄 = 한 줄 {step:0.###}m" +
-                           $"(종이 {step / scale * 1000:F1}mm) · 폭 {BarWidthMm:F0}mm · {rows}줄 · 검정 {filled}칸 · " +
+                           $"(종이 {step / scale * 1000:F1}mm) · 폭 {BarWidthMm:0.##}mm · {rows}줄 · 검정 {filled}칸 · " +
                            $"표고 {gLo:F2}~{gHi:F2}m · 레이어 {LayScaleBar}" +
                            (wiped > 0 ? $" (이전 {wiped}개 지움)" : ""));
         }
@@ -2744,21 +2800,66 @@ public static class SheetCommand
     /// <summary>★[JACK 0810] 도면 축척을 시트 축척에 맞춘다.
     /// Civil 3D는 밴드 높이·글자 크기를 <b>종이 크기 × 도면 축척</b>으로 그린다. 도면 축척이 1:1000인데
     /// 1:100으로 보면 모든 것이 10배로 보인다 — JACK이 본 '칸 높이가 이상해'가 정확히 이것이었다.</summary>
+    /// <summary>★[v32.4] 종단도의 <b>측점 범위</b>(모형 m) = 격자의 실제 폭.
+    /// 경계상자와 달리 <b>도면 축척에 안 흔들린다</b> — 축 글자가 안 딸려 오기 때문이다.
+    /// 못 읽으면 0을 돌려 호출부가 경계상자로 물러나게 한다.</summary>
+    private static double StationSpan(Database db, ObjectId pvId)
+    {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var pv = (CivilDb.ProfileView)tr.GetObject(pvId, OpenMode.ForRead);
+            double w = pv.StationEnd - pv.StationStart;
+            tr.Commit();
+            return w > 1e-6 ? w : 0.0;
+        }
+        catch { return 0.0; }
+    }
+
     private static void SetDrawingScale(Database db, double scale, System.Text.StringBuilder log)
     {
         try
         {
+            // ★★★[v32.19 · JACK 0812 스샷 'V = 120000 H = 120000'] <b>단위가 어긋나 정확히 1000배였다.</b>
+            //
+            //   <b>이 도면은 미터 단위다.</b> 그런데 종전엔 <c>PaperUnits=1 · DrawingUnits=120</c>으로 넣었다 —
+            //   AutoCAD는 그것을 <b>"종이 1mm : 모형 120<u>미터</u>"</b>로 읽는다. 실제 비율은 <c>1:120,000</c>이다.
+            //   Civil이 종단도에 스스로 찍는 V·H 라벨이 그래서 <b>120000</b>으로 나왔고(JACK 스샷),
+            //   종이 기준으로 정의된 <b>밴드 글자·칸이 전부 1000배</b>로 커져 도면이 깨졌다.
+            //
+            //   ※ 축척 계산(<see cref="FitSheet"/>)과 뷰포트(<c>CustomScale = 1000/축척</c>)는 <b>줄곧 옳았다</b> —
+            //     그쪽은 '모형 1m = 종이 1000/축척 mm'로 <b>단위를 맞춰</b> 계산한다. 어긋난 곳은 여기 한 군데다.
+            //
+            //   → <b>종이 쪽을 mm로 적는다</b>: <c>PaperUnits=1000 · DrawingUnits=축척</c>
+            //     = 종이 1000mm : 모형 120m = <b>1:120</b>. 주석 글자 2.5mm는 모형 0.3m가 된다(맞다).
+            //
+            //   ★ 그리고 <b>이미 있는 이름을 그냥 쓰지 않는다.</b> 옛 실행이 만든 '1:120'이 남아 있으면
+            //     그건 <b>틀린 단위</b>를 품고 있다 — 이름만 보고 재사용하면 고쳐지지 않는다(§25 교훈 10과 같은 함정).
             string nm = $"1:{scale:F0}";
             var occ = db.ObjectContextManager.GetContextCollection("ACDB_ANNOTATIONSCALES");
             if (occ == null) { log.AppendLine("도면 축척 설정 건너뜀(주석 축척 목록 없음)"); return; }
+
+            const double paperMmPerUnit = 1000.0;      // 모형 1단위(m) = 종이 1000mm 기준
             var ctx = occ.GetContext(nm);
+            if (ctx is AnnotationScale old &&
+                (System.Math.Abs(old.PaperUnits - paperMmPerUnit) > 1e-6 ||
+                 System.Math.Abs(old.DrawingUnits - scale) > 1e-6))
+            {
+                log.AppendLine($"도면 축척 '{nm}': 옛 정의가 {old.PaperUnits:0.##}:{old.DrawingUnits:0.##}라 지우고 다시 만든다");
+                try { occ.RemoveContext(nm); ctx = null; } catch (System.Exception rx) { log.AppendLine("  옛 축척 제거 실패 — " + rx.Message); }
+            }
             if (ctx == null)
             {
-                var s = new AnnotationScale { Name = nm, PaperUnits = 1.0, DrawingUnits = scale };
+                var s = new AnnotationScale { Name = nm, PaperUnits = paperMmPerUnit, DrawingUnits = scale };
                 occ.AddContext(s);
                 ctx = occ.GetContext(nm);
             }
-            if (ctx is AnnotationScale asc) { db.Cannoscale = asc; log.AppendLine($"도면 축척 → {nm}"); }
+            if (ctx is AnnotationScale asc)
+            {
+                db.Cannoscale = asc;
+                log.AppendLine($"도면 축척 → {nm} (종이 {asc.PaperUnits:0.##} : 모형 {asc.DrawingUnits:0.##}"
+                             + $" · 주석 2.5mm → 모형 {2.5 * asc.DrawingUnits / asc.PaperUnits:0.###}m)");
+            }
             else log.AppendLine($"도면 축척 '{nm}'을 만들지 못함 — 밴드 크기가 어긋날 수 있다");
         }
         catch (System.Exception ex) { log.AppendLine("도면 축척 설정 실패 — " + ex.Message); }
@@ -2861,7 +2962,13 @@ public static class SheetCommand
                                                System.Text.StringBuilder log)
     {
         double s = scale / 1000.0;                    // 종이 1mm = 모형 s m
-        double vw = InnerW * s, vh = (InnerH * 2.0 / 3.0) * s;
+        // ★★[v32.1 · 검토 지적] <b>v23.28이 배치만 고치고 여기를 빼먹었다.</b>
+        //   뷰포트가 실제로 쓰는 높이는 <see cref="ViewH"/>(그래프+밴드)인데 여기만 <c>내부높이×2/3</c>로
+        //   남아 있었다 — 종전 배분에서 369.3 vs 360.1로 <b>9.2mm</b> 어긋나 있었고,
+        //   종단을 키우면서(3.5→4.0) 그 차가 <b>18.5mm</b>로 벌어졌다.
+        //   모형의 도곽 사각형은 '한 장에 들어오는지 눈으로 대보는 자'다 — <b>자가 틀리면 대볼 수가 없다.</b>
+        //   <see cref="ViewH"/> 하나만 보게 묶어 두면 배분을 또 바꿔도 저절로 따라온다.
+        double vw = InnerW * s, vh = ViewH * s;
         double cx = (ext.MinPoint.X + ext.MaxPoint.X) / 2.0;
         double cy = (ext.MinPoint.Y + ext.MaxPoint.Y) / 2.0;
 
@@ -3034,7 +3141,8 @@ public static class SheetCommand
         catch (System.Exception ex) { log.AppendLine("출력 용지 설정 건너뜀 — " + ex.Message); }
 
         // ⑥ ★[JACK 0811] A3 축소 출력용 페이지 설정을 미리 넣어 둔다 — 제본은 A3다.
-        AddA3PageSetup(db, log);
+        //   ★[v32.1] 도곽이 어디에 놓였는지(ox,oy)를 넘긴다 — 그 네 변이 곧 출력 창이다.
+        AddA3PageSetup(db, ox, oy, log);
 
         tr.Commit();
         log.AppendLine($"배치 '{name}' · 뷰포트 {InnerW:F0}×{vpH:F1}mm · 축척 1:{scale:F0}");
@@ -3048,32 +3156,125 @@ public static class SheetCommand
     /// 이름 붙은 페이지 설정으로 넣어 두면 <b>고르기만</b> 하면 된다.</para>
     /// <para>A3는 A1의 정확히 절반이라 <c>1:2</c>가 맞다 — '용지에 맞춤'은 여백에 따라
     /// 미세하게 달라져 축척이 어긋날 수 있으므로 쓰지 않는다.</para></summary>
-    private static void AddA3PageSetup(Database db, System.Text.StringBuilder log)
+    /// <summary>★★[v32.1 · JACK 0812] <b>A3 페이지 설정이 <c>eInvalidInput</c>으로 실패하던 것 — 세 가지가 겹쳤다.</b>
+    ///
+    /// <para>① <b><c>출력 종류=배치</c>에 '가운데 정렬'을 걸 수 없다.</b> 배치 출력은 원점이
+    /// <b>용지에 고정</b>이라 가운데로 옮길 여지가 없다 — 그래서 <c>eInvalidInput</c>이 났다.</para>
+    ///
+    /// <para>② 성공했더라도 <b>결과가 틀렸다.</b> <c>배치</c>는 '지금 용지의 인쇄영역'을 찍는다.
+    /// 용지를 A3으로 바꿔 놨으니 <b>A3만큼만</b> 찍혀 A1 도곽의 <b>왼쪽 아래 귀퉁이</b>만 나온다.
+    /// → <b>도곽 네 변을 창(Window)으로</b> 준다. 그러면 용지가 무엇이든 <b>찍히는 것은 도곽 한 장</b>이다.</para>
+    ///
+    /// <para>③ <b>한 번 실패하면 영영 안 고쳐졌다.</b> '이미 있음'이면 그냥 돌아섰는데,
+    /// 실패한 판도 <b>이름은 이미 사전에 올라가 있다</b> — 반쪽짜리 설정이 그대로 남았다.
+    /// §25 교훈 10과 같은 함정이다(<i>"안 건드리면 원래대로 돌아간다"고 생각하기</i>).
+    /// → <b>있으면 지우고 다시 만든다.</b> 여러 번 돌려도 결과가 같다.</para>
+    ///
+    /// <para><b>어디서 실패했는지 남긴다.</b> 종전엔 한 덩어리를 감싸 잡아서
+    /// 로그가 "실패 — eInvalidInput" 한 줄뿐이었다. 그 한 줄로는 다섯 개 설정 중
+    /// 어느 것이 물렸는지 알 수 없다 — <b>개수만으로는 원인 자리를 못 좁힌다</b>(0807 교훈).
+    /// 단계 이름을 들고 다니며 실패한 자리를 그대로 적는다.</para>
+    ///
+    /// <para><b>용지는 full bleed를 먼저 찾는다.</b> A1 841×594를 1:2로 줄이면 420.5×297.0mm인데
+    /// A3은 420×297이다 — <b>가로로 0.5mm 넘친다</b>(가운데 정렬이므로 양옆 0.25mm씩).
+    /// 보통 A3은 여기에 인쇄 여백 4~5mm가 더 붙어 도곽선이 잘린다. 여백이 0인 full bleed면
+    /// 넘침이 0.25mm로 줄어 선 굵기 안에 묻힌다. 실제로 들어가는지 <b>재서 로그에 적는다.</b></para></summary>
+    private static void AddA3PageSetup(Database db, double ox, double oy, System.Text.StringBuilder log)
     {
         const string setupName = "DH-A3 축소(1:2)";
+        string step = "시작";
         try
         {
+            // ── ③ <b>지우고 다시 만들지 않는다 — 있으면 그 자리에서 값만 다시 맞춘다.</b>
+            //   지웠다가 같은 이름으로 다시 넣는 것이 되는지는 문서에 없다(심볼테이블에서는
+            //   같은 이름 재삽입이 거부된다는 보고가 있다). <b>확인 안 된 길로 갈 이유가 없다</b> —
+            //   기존 항목을 열어 값을 덮으면 재등록 자체가 없어 그 질문이 사라진다.
+            //   반쪽짜리가 남아 있어도 어차피 전부 다시 씌우므로 결과는 같다(여러 번 돌려도 같다).
+            //
+            //   ★ 그리고 <b>전부 한 트랜잭션 안에서</b> 한다. 중간에 걸리면 커밋이 안 되어
+            //   <b>통째로 물러난다</b> — 용지를 못 찾고 돌아설 때 '이름만 올라간 껍데기'가 남던 길이 막힌다.
             using var tr = db.TransactionManager.StartTransaction();
-            var dict = (DBDictionary)tr.GetObject(db.PlotSettingsDictionaryId, OpenMode.ForRead);
-            if (dict.Contains(setupName)) { tr.Commit(); log.AppendLine($"A3 페이지 설정 '{setupName}': 이미 있음"); return; }
-            tr.Commit();
 
-            var pset = new PlotSettings(false) { PlotSettingsName = setupName };
-            pset.AddToPlotSettingsDictionary(db);
+            var dict = (DBDictionary)tr.GetObject(db.PlotSettingsDictionaryId, OpenMode.ForWrite);
+            PlotSettings pset;
+            if (dict.Contains(setupName))
+            {
+                step = "옛 설정 열기";
+                pset = (PlotSettings)tr.GetObject(dict.GetAt(setupName), OpenMode.ForWrite);
+                log.AppendLine($"A3 페이지 설정 '{setupName}': 이미 있어 값만 다시 맞춘다");
+            }
+            else
+            {
+                // ★ <c>AddNewlyCreatedDBObject</c>를 반드시 부른다 — 이게 빠지면 객체가
+                //   <b>열린 채로 남아</b> 정작 도면을 저장·닫을 때 엉뚱한 오류로 튀어나온다.
+                step = "사전에 등록";
+                pset = new PlotSettings(false) { PlotSettingsName = setupName };
+                pset.AddToPlotSettingsDictionary(db);
+                tr.AddNewlyCreatedDBObject(pset, true);
+            }
+
             var psv = PlotSettingsValidator.Current;
-            psv.SetPlotConfigurationName(pset, "DWG To PDF.pc3", null);
-            psv.RefreshLists(pset);
-            string media = psv.GetCanonicalMediaNameList(pset).Cast<string>()
-                              .FirstOrDefault(m => m.Contains("A3", StringComparison.OrdinalIgnoreCase));
-            if (media != null) psv.SetCanonicalMediaName(pset, media);
-            psv.SetPlotPaperUnits(pset, PlotPaperUnit.Millimeters);
-            psv.SetPlotType(pset, Autodesk.AutoCAD.DatabaseServices.PlotType.Layout);
+            step = "출력장치(DWG To PDF.pc3)"; psv.SetPlotConfigurationName(pset, "DWG To PDF.pc3", null);
+            step = "용지 목록 새로고침"; psv.RefreshLists(pset);
+
+            // ── 용지: 여백 0인 full bleed A3을 먼저, 없으면 아무 A3.
+            step = "A3 용지 고르기";
+            var medias = psv.GetCanonicalMediaNameList(pset).Cast<string>().ToList();
+            bool IsA3(string m) => m.IndexOf("A3", StringComparison.OrdinalIgnoreCase) >= 0;
+            string media = medias.FirstOrDefault(m => IsA3(m) &&
+                               m.IndexOf("full_bleed", StringComparison.OrdinalIgnoreCase) >= 0)
+                        ?? medias.FirstOrDefault(IsA3);
+            if (media == null)
+            {
+                log.AppendLine("A3 페이지 설정: 이 출력장치에 A3 용지가 없다 — 도면의 용지 목록 "
+                               + string.Join(" · ", medias.Take(8)) + (medias.Count > 8 ? " …" : ""));
+                return;                     // 커밋 안 함 → 방금 올린 항목도 같이 물러난다
+            }
+            step = "용지 지정"; psv.SetCanonicalMediaName(pset, media);
+            step = "단위(mm)"; psv.SetPlotPaperUnits(pset, PlotPaperUnit.Millimeters);
+
+            // ── 세로 A3이 잡혔으면 <b>먼저</b> 90° 돌려 가로로 쓴다(도곽이 가로 841×594라서).
+            //   ★[검토 지적] <b>돌리기를 가운데 정렬보다 앞에 둔다.</b> 정렬은 '용지 안에서 어디에 놓을지'라
+            //   용지 방향이 정해진 뒤에 계산되어야 한다. 뒤에 돌리면 앞서 잡은 원점이 헌 값이 될 수 있다 —
+            //   문서에 계산 시점이 안 적혀 있으니 <b>순서로 막는다</b>(바꿔도 잃을 것이 없다).
+            step = "용지 방향";
+            var sz = pset.PlotPaperSize;                 // 회전 전 크기 — 아래 인쇄영역 계산의 기준
+            bool rot = sz.Y > sz.X;
+            if (rot) psv.SetPlotRotation(pset, PlotRotation.Degrees090);
+
+            // ── ② 도곽 네 변을 그대로 창으로. 창을 먼저 주고 종류를 창으로 바꾼다(순서가 있다).
+            step = "출력 창(도곽 네 변)";
+            psv.SetPlotWindowArea(pset, new Extents2d(ox, oy, ox + SheetW, oy + SheetH));
+            step = "출력 종류=창"; psv.SetPlotType(pset, Autodesk.AutoCAD.DatabaseServices.PlotType.Window);
+
+            step = "축척 1:2";
             psv.SetUseStandardScale(pset, true);
             psv.SetStdScaleType(pset, StdScaleType.StdScale1To2);
-            psv.SetPlotCentered(pset, true);
-            log.AppendLine($"A3 페이지 설정 '{setupName}' 등록 · 용지 {media ?? "(A3 못 찾음)"} · 축척 1:2 · 가운데 정렬");
+            step = "가운데 정렬"; psv.SetPlotCentered(pset, true);   // ← ①이 막던 자리
+
+            // ── 실제로 들어가는지 재서 남긴다(추측하지 않는다).
+            //   여백은 <b>회전을 반영해 주지 않는다</b> — 돌렸으면 가로·세로를 우리가 맞바꿔 본다.
+            step = "여백 재기";
+            var mg = pset.PlotPaperMargins;
+            double printW = System.Math.Abs(sz.X) - mg.MinPoint.X - mg.MaxPoint.X;
+            double printH = System.Math.Abs(sz.Y) - mg.MinPoint.Y - mg.MaxPoint.Y;
+            if (rot) (printW, printH) = (printH, printW);
+            double needW = SheetW / 2.0, needH = SheetH / 2.0;         // 420.5 × 297.0
+            double overW = needW - printW, overH = needH - printH;
+            bool fits = overW <= 1e-6 && overH <= 1e-6;
+
+            log.AppendLine($"A3 페이지 설정 '{setupName}' 등록 · 용지 {media} · 창=도곽 {SheetW:F0}×{SheetH:F0}mm"
+                           + $" · 축척 1:2 · 가운데 정렬{(rot ? " · 90° 회전" : "")}");
+            log.AppendLine($"   A3 인쇄영역 {printW:F1}×{printH:F1}mm · 1:2면 {needW:F1}×{needH:F1}mm 필요 → "
+                           + (fits ? "들어감"
+                                   : $"⚠넘침 가로 {System.Math.Max(0, overW):F1}mm · 세로 {System.Math.Max(0, overH):F1}mm"
+                                     + " — 도곽선이 그만큼 잘린다"
+                                     + "(여백 0인 full bleed A3을 쓰거나 '용지에 맞춤'으로 바꿔야 한다)"));
+            // ★[계측] 정렬이 실제로 먹었는지 원점으로 확인한다 — 값이 (0,0)에 머물면 정렬이 안 걸린 것이다.
+            log.AppendLine($"   출력원점 = ({pset.PlotOrigin.X:F2}, {pset.PlotOrigin.Y:F2})");
+            tr.Commit();
         }
-        catch (System.Exception ex) { log.AppendLine("A3 페이지 설정 실패 — " + Brief(ex)); }
+        catch (System.Exception ex) { log.AppendLine($"A3 페이지 설정 실패({step}) — " + Brief(ex)); }
     }
 
     private static ObjectId PickProfileView(Database db, Editor ed, out string name)

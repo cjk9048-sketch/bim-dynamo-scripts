@@ -19,6 +19,29 @@ namespace DH.Grading.Civil.Commands;
 /// RerunLast=마지막 구역만 재실행(DHWALL 옹벽 적용·설정 변경 재실행).</summary>
 internal enum GradeMode { Fresh, Append, RerunLast }
 
+/// <summary>★★[v32.15] <b>붙여넣기 줄 제거 스위치 — 켠다.</b>
+///
+/// <para><b>다른 축이 전부 닫혔다.</b> 호출 순서·횟수(v32.5~v32.10) · 대상 범위(v32.7~v32.8) ·
+/// 트랜잭션 경계(v32.12) · 스냅샷 생애주기 재생성(v32.14, <c>RemoveSnapshot→Rebuild→CreateSnapshot</c>).
+/// 게다가 JACK이 <c>-REBUILDSURFACE</c> 명령을 직접 실행해도 ⚠가 안 사라졌다 —
+/// <b>'지표면 재작성' 경로로는 애초에 못 지운다</b>는 실험 A의 결론이 명령 수준에서도 확인된 셈이다.</para>
+///
+/// <para>그래서 <b>지우는 것을 포기하고, 붙어 있을 줄을 없앤다.</b> 스냅샷이 정의 맨 끝에 있으면
+/// 형상은 스냅샷이 통째로 물고 있고 앞의 붙여넣기는 <b>빌드에서 무시된다</b>(공식 문서).
+/// 즉 그 줄들이 하는 일은 <b>소스에 매달려 ⚠를 다는 것뿐</b>이다.</para>
+///
+/// <para><b>되돌리는 법</b>: 이 값을 <c>false</c>로 바꾸면 끝. 안전판(삼각형 수 검사 → 미달 시 커밋 안 함)도
+/// 그대로 살아 있어, 형상이 조금이라도 줄면 <b>도면은 손대기 전과 같아진다</b>.</para>
+///
+/// <para><b>대가</b>(자문2 §8 지적): 정의에 붙여넣기 이력이 남지 않아 <b>재현성이 준다</b>.
+/// 다만 이 저장소는 정지면을 매번 <b>처음부터 다시 만든다</b>(<c>Composite</c>가 같은 이름 표면을 지우고 새로 생성)
+/// — 정의 이력에 기대는 경로가 없다. 확인할 것은 <b>'이어서 하기'에서 소스로 쓸 때</b>뿐이다.</para></summary>
+/// <para>★★[v32.18 · 실측으로 기각] <b>켜 봤고, 되돌렸다.</b>
+/// 붙여넣기 3줄을 지우니 형상은 온전했지만(삼각형 64978 → 64978) <b>⚠는 그대로였고</b>,
+/// 게다가 <c>스냅샷구식=True</c>가 <b>처음으로</b> 떴다 — 정의에 스냅샷을 다시 구울 재료가 없어졌기 때문이다.
+/// <b>증상은 그대로인데 상태만 나빠졌다.</b> 되돌린다.</para>
+internal static class GradeFlags { public const bool StripPasteOps = false; }
+
 public sealed class CreateGradingCommand
 {
     [CommandMethod("DHGRADE")]
@@ -168,6 +191,12 @@ public sealed class CreateGradingCommand
         // [다중 구역] 기존 구역 목록 + Append의 기준면 개명(실패 시 원복용 핸들).
         System.Collections.Generic.List<GradingBundle>? regionsPrev = null;
         string? baseRestoreHandle = null;
+        // ★★[v32.2] 순수 정지면(<see cref="SectionCommand.PurePadSurfaceBase"/>)의 <b>앞 구역 몫</b>.
+        //   합성면이 '이전 정지면'을 깔고 누적하듯, 순수면도 '이전 순수면'을 깔고 누적한다 —
+        //   안 그러면 이어서 할 때마다 <b>앞 구역이 종단에서 사라진다</b>.
+        ObjectId prevPureId = ObjectId.Null;
+        const string PureBase = SectionCommand.PurePadSurfaceBase;
+        const string PurePrev = PureBase + "이전";
         try
         {
             using var trM = db.TransactionManager.StartTransaction();
@@ -180,9 +209,31 @@ public sealed class CreateGradingCommand
                 var baseSurf = (Autodesk.Civil.DatabaseServices.Surface)trM.GetObject(groundId, OpenMode.ForWrite);
                 baseSurf.Name = GradingBuilder.UniqueName(db, trM, "정지면_DH이전");
                 baseRestoreHandle = groundId.Handle.ToString();
+
+                // 순수면도 같은 방식으로 물려준다 — <b>이름을 비켜 줘야</b> 새로 합성할 때 안 지워진다
+                // (합성은 시작할 때 같은 이름 표면을 지운다).
+                try
+                {
+                    GradingBuilder.EraseSurfacesByBaseName(trM, PurePrev);
+                    var cur = GradingBuilder.FindSurfaceByBaseName(trM, PureBase);
+                    if (!cur.IsNull)
+                    {
+                        var ps = (Autodesk.Civil.DatabaseServices.Surface)trM.GetObject(cur, OpenMode.ForWrite);
+                        ps.Name = GradingBuilder.UniqueName(db, trM, PurePrev);
+                        prevPureId = cur;
+                    }
+                }
+                catch { prevPureId = ObjectId.Null; }   // 못 물려받아도 이번 구역은 나온다(앞 구역만 빠진다)
             }
             else if (mode == GradeMode.Fresh)
+            {
                 GradingBuilder.EraseSurfacesByBaseName(trM, "정지면_DH이전");   // 새로시작 — 잔재 청소
+                GradingBuilder.EraseSurfacesByBaseName(trM, PurePrev);
+            }
+            else   // RerunLast — 기준면(…이전)은 그대로 두고 마지막 구역만 다시 얹는다.
+            {
+                try { prevPureId = GradingBuilder.FindSurfaceByBaseName(trM, PurePrev); } catch { }
+            }
             trM.Commit();
         }
         catch (System.Exception mx)
@@ -578,7 +629,8 @@ public sealed class CreateGradingCommand
                         if (boundary is { Count: >= 3 }) mineNow.Add(boundary);
 
                         var kept = new System.Collections.Generic.List<System.Collections.Generic.IReadOnlyList<Point3>>();
-                        int nPrevRing = 0, nPiece = 0;
+                        int nPrevRing = 0, nPiece = 0, nNoMask = 0;
+                        var maskDiag = new System.Text.StringBuilder();
                         for (int ri = 0; ri < regionsPrev.Count; ri++)
                         {
                             // 이 구역보다 <b>뒤</b>에 온 것 = 앞 구역들 중 나중 것 + 이번 구역
@@ -586,6 +638,15 @@ public sealed class CreateGradingCommand
                             later.AddRange(mineNow);
                             var mask = GradingPolygons.RegionMask.Build(later);
 
+                            // ★★[v32.4 · JACK 0812] <b>마스크가 없으면 앞 구역 선이 통째로 살아난다 — 그게 '파고드는 선'이다.</b>
+                            //   실측 로그: `링 3개 → 3조각` — <b>하나도 안 잘렸다</b>. 옛 번들(v8 미만)에는
+                            //   클립링이 없어 <c>LaterFootprints</c>가 비고, 마스크가 <c>null</c>이 되어
+                            //   <b>지금 정지면 안쪽에 묻힌 옛 경계선까지 그대로</b> 그려진다.
+                            //   이제 <b>몇 조각이 어떻게 잘렸는지</b>를 구역별로 남긴다 — 숫자가 같으면 안 잘린 것이다.
+                            if (mask == null) nNoMask++;
+                            maskDiag.Append($"\n  구역{ri + 1}: 덮개 {later.Count}개 → 마스크 "
+                                          + (mask == null ? "없음(⚠앞 구역 선이 안 잘린다 — 옛 번들에 클립링이 없다)"
+                                                          : $"조각 {mask.PieceCount}개"));
                             foreach (var r in DaylightRingsOf(regionsPrev[ri]))
                             {
                                 nPrevRing++;
@@ -593,6 +654,7 @@ public sealed class CreateGradingCommand
                                 foreach (var piece in TrimOutsideMask(r, mask)) { kept.Add(piece); nPiece++; }
                             }
                         }
+                        bndMsg += maskDiag.ToString();
                         if (kept.Count > 0)
                         {
                             kept.AddRange(drawLoops);
@@ -606,7 +668,11 @@ public sealed class CreateGradingCommand
                     { bndMsg += "\n앞 구역 데이라잇 복원 실패 — " + ex.Message; }
                 }
                 GradingBuilder.DrawDaylight(db, tr2, drawLoops, "DH-정지경계", 3, layerOff: false);
+                // ★[v32.4] <b>계수기를 달아 놓고 출력을 안 했다.</b> `가시 제거 N점`이 여태 로그에 한 번도
+                //   안 찍혀서, 가시가 남았을 때 <b>못 잡은 건지 안 돈 건지</b>를 가릴 수가 없었다.
+                bndMsg += "\n정지경계 작도: " + GradingBuilder.LastDaylightDiag;
                 GradingBuilder.DrawDaylight(db, tr2, clipLoopsDraw, "DH-클립경계", 4, layerOff: true); // 하늘색=클립링(∪계획)
+                bndMsg += "\n클립경계 작도: " + GradingBuilder.LastDaylightDiag;
                 // 과거 진단선(빨강/하늘) 잔재 청소 — 오류로 오인 방지(JACK)
                 GradingBuilder.DrawDebugSpans(db, tr2, System.Array.Empty<(Point3, Point3)>());
                 GradingBuilder.DrawDebugSpans(db, tr2, System.Array.Empty<(Point3, Point3)>(), "DH-틈메움", 4);
@@ -663,6 +729,8 @@ public sealed class CreateGradingCommand
                 bool ok = false;
                 for (int attempt = 1; attempt <= 3; attempt++)
                 {
+                    // ★[v32.9] 붙여넣기마다 굳히지 않는다(false) — 그러면 스냅샷이 <b>첫 붙여넣기 뒤에 박혀</b>
+                    //   성토·절토 붙여넣기가 소스에 매달린 채 남는다(JACK 0812 정의 탭 스샷). 맨 끝에 한 번만 굳힌다.
                     finalSurfId = GradingBuilder.Composite(db, tr3, "정지면_DH", order, out string lg, true, groundId);
                     pasteLog += $"\n  시도{attempt}: {lg}";
                     if (!lg.Contains("실패")) { ok = true; break; }
@@ -677,6 +745,32 @@ public sealed class CreateGradingCommand
                     injectedRings.Remove(failLabel); // 같은 표면 재정규화 무한루프 방지
                 }
                 pasteLog += ok ? "\n  ★합성 성공 — 정지면_DH 완성" : "\n  ✖합성 실패 — 자문 대기";
+
+                // ── ★★[v32.2 · JACK 0812] <b>순수 정지면 — 원지반을 빼고 정지된 면만.</b>
+                //   위 합성면은 <b>원지반을 깔고</b> 시작하므로 정지 바깥에서도 값이 나오고, 그 값은 원지반과 같다.
+                //   그래서 종단을 뜨면 정지 밖에서 계획선이 원지반선과 <b>포개진다</b>(JACK 지적).
+                //   여기서는 <b>같은 재료를 원지반 없이</b> 한 번 더 붙여, 정지 밖에는 값이 없는 면을 만든다.
+                //   종단·횡단만 이걸 본다(<see cref="SectionCommand.FindSurfaces"/>) — 나머지 기능은 합성면 그대로다.
+                //
+                //   ※ 실패해도 <b>진행을 막지 않는다.</b> 순수면이 없으면 종단은 합성면으로 물러나
+                //     종전과 똑같이 동작한다 — 이것 때문에 정지면 생성이 통째로 실패하면 안 된다.
+                try
+                {
+                    var orderPure = new System.Collections.Generic.List<(ObjectId, string)>();
+                    if (!prevPureId.IsNull) orderPure.Add((prevPureId, "앞 구역"));
+                    if (!fillId.IsNull) orderPure.Add((fillId, "성토"));
+                    if (!cutId.IsNull) orderPure.Add((cutId, "절토"));
+                    if (orderPure.Count == 0)
+                        pasteLog += $"\n  순수 정지면: 붙일 것이 없어 생략";
+                    else
+                    {
+                        GradingBuilder.Composite(db, tr3, PureBase, orderPure, out string lgPure, true);
+                        pasteLog += $"\n  순수 정지면({PureBase}): {lgPure}"
+                                  + (prevPureId.IsNull ? "" : " · 앞 구역 물려받음");
+                    }
+                }
+                catch (System.Exception px) { pasteLog += "\n  순수 정지면 실패(종단은 합성면으로 물러난다) — " + px.Message; }
+
                 tr3.Commit();
             }
             catch (System.Exception ex) { pasteLog += $"  합성 자체 실패: {ex.Message}"; }
@@ -686,6 +780,46 @@ public sealed class CreateGradingCommand
                     "\n■ 합성(Paste) 검증\n  " + pasteLog + "\n");
             }
             catch { }
+
+            // ── ★★[v32.6 · JACK 0812] <b>데이라잇을 '순수 정지면의 외곽선'으로 다시 그린다.</b>
+            //
+            //   JACK: <i>"정지순수_DH 있는 건 외곽선도 있는 거 아니야? 왜 굳이 다시 그려내는 거지?"</i>
+            //
+            //   위에서 그린 데이라잇은 <b>절토 교선</b>과 <b>성토 교선</b>을 따로 계산해 이어 붙인 것이라
+            //   절성 경계마다 <b>아무도 안 그리는 틈</b>이 남는다(실측 2.84m). 그 틈을 직선으로 메우면
+            //   <b>없는 형상을 지어내는</b> 것이라 JACK이 기각했다.
+            //   순수 정지면은 절토·성토를 <b>이미 하나로 붙여 놓은</b> 면이고, TIN의 외곽은
+            //   <b>정의상 닫혀 있다</b> — 그 선이 곧 정지면이 실제로 끝나는 자리, 원지반과 맞닿는 자리다.
+            //
+            //   <b>왜 '다시' 그리나.</b> 순수면은 이 시점(합성 뒤)에야 존재한다. 위 작도를 없애지 않고
+            //   덮어쓰는 이유는, 순수면을 못 만든 도면에서 <b>종전 결과라도 남아야</b> 하기 때문이다
+            //   (<see cref="GradingBuilder.DrawDaylight"/>는 그리기 전에 레이어를 비운다).
+            try
+            {
+                using var trO = db.TransactionManager.StartTransaction();
+                var pureId = GradingBuilder.FindSurfaceByBaseName(trO, PureBase);
+                string oMsg;
+                if (!pureId.IsNull &&
+                    trO.GetObject(pureId, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.TinSurface pureTin)
+                {
+                    var outline = GradingBuilder.SurfaceOutline(pureTin, out string oDiag);
+                    if (outline.Count > 0)
+                    {
+                        GradingBuilder.DrawDaylight(db, trO, outline, "DH-정지경계", 3, layerOff: false);
+                        oMsg = $"정지경계 재작도(순수면 외곽선): {oDiag} · {GradingBuilder.LastDaylightDiag}";
+                    }
+                    else oMsg = $"정지경계 재작도 건너뜀 — 외곽선을 못 뽑았다({oDiag}) · 종전 교선 작도를 그대로 둔다";
+                }
+                else oMsg = "정지경계 재작도 건너뜀 — 순수 정지면이 없다 · 종전 교선 작도를 그대로 둔다";
+                trO.Commit();
+                bndMsg += "\n" + oMsg;
+                try { DiagLog.Append("\n■ 데이라잇 재작도\n  " + oMsg + "\n"); } catch { }
+            }
+            catch (System.Exception ox)
+            {
+                bndMsg += "\n정지경계 재작도 실패(종전 작도 유지) — " + ox.Message;
+                try { DiagLog.Append("\n■ 데이라잇 재작도 실패 — " + ox.Message + "\n"); } catch { }
+            }
 
             // ── 3.5단계 [§75 1-A]: 사면선·소단선을 식별 태그(XData: 방향·단·구간)와 함께 작도 ──
             //   옹벽 전환(DHWALL)이 클릭할 대상. JACK: 지표면 생성 때 함께 생성. 항상 사면 기준(옹벽 미적용).
@@ -734,6 +868,10 @@ public sealed class CreateGradingCommand
                     // [0728] 소스 숨김(Visible 변경)이 의존 표면에 '정의 구식(⚠)'을 붙임 → 숨김 후 재작성으로 해소.
                     GradingBuilder.RebuildSurfacesByBaseName(trE, "정지면_DH");
                 }
+                // ★[v32.2] 순수 정지면은 <b>옵션과 무관하게 늘 숨긴다.</b>
+                //   종단·횡단은 표면의 <b>정의</b>를 읽으므로 보일 필요가 없고, 보이면 평면도에
+                //   합성면과 <b>등고선이 두 겹</b>으로 겹쳐 그려진다(정지 구간에서 정확히 포개진다).
+                GradingBuilder.SetSurfaceVisible(trE, PureBase, false);
                 // [JACK 0728] 정지면_DH 표시 스타일 = Contours 2m and 10m (Background) (한글 템플릿 이름 폴백 포함).
                 string styleApplied = GradingBuilder.SetSurfaceStyle(trE, "정지면_DH",
                     "Contours 2m and 10m (Background)", "등고선 2m 및 10m (배경)");
@@ -906,11 +1044,71 @@ public sealed class CreateGradingCommand
             string snapMsg = "";
             try
             {
-                using Transaction trR = db.TransactionManager.StartTransaction();
-                snapMsg = GradingBuilder.RebuildSurfacesByBaseName(trR, "정지면_DH");
-                trR.Commit();
+                // ★★[v32.12 · JACK 0812 실험 A·C] <b>표면마다 트랜잭션을 끊는다 — 손으로 누르는 것과 같은 모양으로.</b>
+                //   JACK 확인: <i>"무조건 마우스 오른쪽 버튼으로 스냅샷 재작성을 눌러야만 없어져."</i>
+                //   같은 호출을 우리도 하고 있는데 결과가 다르다. 남은 차이는 <b>커밋 시점</b> 하나다 —
+                //   JACK은 클릭마다 끝나고 커밋되는데, 우리는 소스·합성면·스냅샷을 <b>한 트랜잭션에</b> 몰아넣었다.
+                //   ①소스 → ②합성면 → ③스냅샷을 <b>표면 하나마다 열고·하고·커밋</b>한다.
+                //   ※ 순서를 바꾸는 것이 아니라 <b>언제 확정되는가</b>를 바꾸는 것이다(§30 금지 12번과 다른 축).
+                snapMsg = GradingBuilder.RebuildSurfacesStaged(db);
+
+                // ── ★★[v32.13] <b>맨 마지막에</b> 붙여넣기 줄을 정의에서 지운다.
+                //   스냅샷이 형상을 통째로 물고 있으므로 붙여넣기 줄은 잉여이고, 남아서 하는 일은 ⚠를 다는 것뿐이다.
+                //   <b>반드시 스냅샷 재작성보다 뒤여야 한다</b> — 지운 뒤에 스냅샷을 다시 구우면 텅 빈 정의가 구워진다.
+                //   삼각형 수가 줄면 커밋하지 않으므로 실패해도 도면은 손대기 전 그대로다.
+                //   ★★[v32.14 · 자문2 §8] <b>지금은 끈다 — 한 번에 하나만 시험한다.</b>
+                //     자문1은 '붙여넣기 삭제를 강력 권장', 자문2는 '재현성이 사라지니 권하지 않는다'로 갈렸다.
+                //     <b>되돌릴 수 있는 쪽</b>(스냅샷 지우고 새로 만들기)을 먼저 시험한다.
+                //     그것으로 안 되면 이 스위치를 켜면 된다 — 코드는 안전판까지 그대로 살아 있다.
+                if (GradeFlags.StripPasteOps)
+                    foreach (var baseNm in new[] { "정지면_DH", PureBase })
+                    {
+                        ObjectId sid;
+                        using (var trF = db.TransactionManager.StartTransaction())
+                        { sid = GradingBuilder.FindSurfaceByBaseName(trF, baseNm); trF.Commit(); }
+                        if (sid.IsNull) { snapMsg += $"\n  붙여넣기 정리: '{baseNm}' 없음"; continue; }
+                        GradingBuilder.StripPasteOperations(db, sid, out string sd);
+                        snapMsg += "\n  붙여넣기 정리: " + sd;
+                    }
+
+                // 진단은 <b>읽기만</b> 한다 — 종전엔 진단이 재작성 함수 안에 섞여 있어
+                // '진단하려면 표면을 건드려야' 했고, 그 자체가 상태를 바꿨다.
+                using Transaction trD = db.TransactionManager.StartTransaction();
+                snapMsg += "\n  " + GradingBuilder.Describe(trD, "정지면_DH");
+                snapMsg += "\n  " + GradingBuilder.Describe(trD, PureBase);
+                trD.Commit();
             }
             catch (System.Exception rex) { snapMsg = "재작성 실패 — " + rex.Message; }
+
+            // ★★[v32.7b · JACK 0812 계측] <b>커밋한 뒤에 다시 읽는다.</b>
+            //   트랜잭션 <b>안</b>에서 깨끗해 보여도 커밋하면서 다시 더러워질 수 있다 —
+            //   그러면 <b>우리 로그는 깨끗한데 화면엔 느낌표가 뜬다</b>(실제로 그랬다).
+            //   <b>사용자가 보는 것과 같은 시점에서 재는 것</b>만이 믿을 만한 계측이다.
+            //   여기서 0이 아니면 원인은 '재작성을 안 해서'가 아니라 <b>커밋 뒤에 누가 더럽히는 것</b>이다.
+            try
+            {
+                using Transaction trV = db.TransactionManager.StartTransaction();
+                var bad = new System.Collections.Generic.List<string>();
+                int nAll = 0;
+                foreach (ObjectId sid in Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument.GetSurfaceIds())
+                {
+                    if (trV.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
+                    nAll++;
+                    if (s.IsOutOfDate || (s.HasSnapshot && s.IsSnapshotOutOfDate))
+                        bad.Add($"{s.Name}(구식={s.IsOutOfDate}/스냅샷구식={s.IsSnapshotOutOfDate})");
+                }
+                trV.Commit();
+                // ★★[v32.11 · 조사 반영] <b>'깨끗함'이라고 쓰지 않는다 — 그 문구가 조사를 다섯 번 오도했다.</b>
+                //   여기서 읽는 <c>IsOutOfDate</c>·<c>IsSnapshotOutOfDate</c>는 <b>지표면 한 장 단위</b> 값이고,
+                //   화면의 ⚠는 <b>정의 목록의 한 줄(작업) 단위</b> 표시다. <b>자가 다르다.</b>
+                //   Civil 3D 2026 어셈블리에는 작업 단위 구식 여부를 읽는 공개 속성이 <b>없다</b>(조사로 확인).
+                //   그러니 이 줄이 0이어도 <b>⚠가 없다는 뜻이 아니다</b> — 판정은 특성 대화상자로만 한다.
+                snapMsg += $"\n  [커밋 뒤 확인] 지표면 {nAll}개 중 표면단위 플래그 {bad.Count}개"
+                         + (bad.Count > 0 ? " ⚠[" + string.Join(" · ", bad) + "]" : "")
+                         + "  ※정의 탭 ⚠와는 다른 값 — 이 숫자로 성공을 판정하지 말 것";
+            }
+            catch (System.Exception vex) { snapMsg += "\n  [커밋 뒤 확인] 실패 — " + vex.Message; }
+
             try { DiagLog.Append("\n■ 정지면 마무리 재작성\n  " + snapMsg + "\n"); } catch { }
 
             // ★[JACK 0807] 정지면 생성/옹벽변환이 어디서 오래 걸렸는지 — 로그 한 줄로 남긴다.

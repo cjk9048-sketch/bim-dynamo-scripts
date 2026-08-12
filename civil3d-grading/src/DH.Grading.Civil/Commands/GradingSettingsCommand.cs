@@ -101,10 +101,23 @@ public sealed class GradingSettingsCommand
             if (!GradingSettings.ShowOnlyResultSurface)
                 GradingBuilder.IsolateSurfaces(tr, null);
             else if (GradingBuilder.SurfaceExistsByBaseName(tr, "정지면_DH"))
-            {
                 GradingBuilder.IsolateSurfaces(tr, "정지면_DH");
-                GradingBuilder.RebuildSurfacesByBaseName(tr, "정지면_DH");
-            }
+
+            // ★★[v32.4 · JACK 0812 '자꾸 스냅샷 재작성 느낌표가 뜬다'] <b>느낌표의 진범이 여기 있었다.</b>
+            //
+            //   <b>표시를 끄면 지표면이 '구식'이 된다</b> — 그리고 <b>다시 켜도 구식으로 남는다</b>.
+            //   (Autodesk 포럼에 결함으로 등록된 동작이다. 표면과 무관한 선을 숨겨도 붙는다.)
+            //   <c>IsolateSurfaces</c>는 바로 그 <c>Visible</c>을 건드린다.
+            //
+            //   그런데 종전 코드는 <b>옵션을 켤 때만</b> 재작성을 따라 붙였다. <b>끄는 쪽엔 없었다.</b>
+            //   JACK이 '결과지표면만 표시'를 해제하는 순간 도면의 <b>모든</b> 지표면이 구식이 되고
+            //   아무도 되돌리지 않는다 — 정지 생성 쪽 순서를 아무리 고쳐도 이 길로 느낌표가 되살아난다.
+            //   → <b>양쪽 다</b> 재작성한다. 끄든 켜든 가시성을 건드렸으면 반드시 뒤따라야 한다.
+            GradingBuilder.SetSurfaceVisible(tr, SectionCommand.PurePadSurfaceBase, false);          // 순수면은 늘 숨김
+            GradingBuilder.SetSurfaceVisible(tr, SectionCommand.PurePadSurfaceBase + "이전", false);
+            // ★★[v32.7] <b>둘만이 아니라 전부.</b> 숨김은 도면의 <b>모든</b> 지표면에 붙으므로
+            //   되살리는 것도 전부여야 한다(둘만 챙겼더니 나머지에 느낌표가 남았다).
+            GradingBuilder.RebuildAllSurfaces(tr);
             tr.Commit();
             doc.Editor.Regen();
         }

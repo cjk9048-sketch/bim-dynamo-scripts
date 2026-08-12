@@ -150,7 +150,8 @@ public static class StationMarks
     /// 그 사이에서 선형을 넘은 것이고, 이분법으로 0이 되는 자리를 좁힌다. 곡선 선형에도 그대로 통한다.</para></summary>
     private static int Crossings(CivilDb.Alignment al, IList<Point3d> vs, string why,
                                  double s0, double s1, Func<double, bool> keep,
-                                 List<Mark> outp, ref int nSeg, ref int nSkip, ref int nOutside)
+                                 List<Mark> outp, ref int nSeg, ref int nSkip, ref int nOutside,
+                                 ref int nTrim)
     {
         bool Probe(Point3d p, out double st, out double off)
         {
@@ -159,12 +160,56 @@ public static class StationMarks
             catch { return false; }
         }
 
+        static Point3d Along(Point3d a, Point3d b, double t)
+            => new(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t, 0.0);
+
+        // ★★[v32.1 · JACK 0812] <b>한쪽 끝이 안 재진다고 선분을 통째로 버리지 않는다 — 기점·종점이 그래서 빠졌다.</b>
+        //
+        //   <c>StationOffset</c>은 점의 수직 투영이 <b>선형의 측점 범위를 벗어나면 예외</b>를 던진다.
+        //   그런데 <b>기점·종점의 교차는 바로 그 언저리</b>에서 일어난다 — 경계선이 노선 시작점을
+        //   비스듬히 넘어가면 바깥쪽 끝은 '시작보다 뒤'라 못 재고, <b>그 선분이 통째로 버려졌다</b>.
+        //   교차 자체는 노선 안(예: 0.5m)에 있는데도 <b>기점 측점이 영영 안 잡힌</b> 것이다.
+        //   (§25 열린 결함: "한쪽 끝이 노선 범위 밖이면 구간을 통째로 버린다 — 기점·종점 누락 가능")
+        //
+        //   → 버리지 말고 <b>잴 수 있는 데까지 줄인다.</b> 되는 끝에서 안 되는 끝 쪽으로 이분해
+        //     <b>마지막으로 재지는 자리</b>를 찾아 그 점을 끝으로 삼는다.
+        //     판정은 <b>실제로 잰 값으로만</b> 하므로 없는 교차를 만들어 내지 않는다 —
+        //     줄인 구간 안에서 부호가 바뀌면 그건 선형을 진짜로 넘은 것이다.
+        bool Shrink(Point3d good, Point3d bad, out Point3d edge, out double offEdge)
+        {
+            edge = good; offEdge = 0.0;
+            if (!Probe(good, out _, out offEdge)) return false;
+            double lo = 0.0, hi = 1.0;                 // lo = 재지는 쪽 · hi = 안 재지는 쪽
+            for (int it = 0; it < 30; it++)
+            {
+                double t = (lo + hi) / 2.0;
+                var P = Along(good, bad, t);
+                if (Probe(P, out _, out double o)) { lo = t; edge = P; offEdge = o; }
+                else hi = t;
+            }
+            return true;
+        }
+
         int hit = 0;
         for (int k = 1; k < vs.Count; k++)
         {
             nSeg++;
             Point3d A = vs[k - 1], B = vs[k];
-            if (!Probe(A, out _, out double oA) || !Probe(B, out _, out double oB)) { nSkip++; continue; }
+            bool okA = Probe(A, out _, out double oA);
+            bool okB = Probe(B, out _, out double oB);
+
+            if (!okA && !okB) { nSkip++; continue; }   // 양 끝 다 못 잼 — 판정할 근거가 없다
+            if (!okB)
+            {
+                if (!Shrink(A, B, out Point3d eB, out double oEdge)) { nSkip++; continue; }
+                B = eB; oB = oEdge; nTrim++;
+            }
+            else if (!okA)
+            {
+                if (!Shrink(B, A, out Point3d eA, out double oEdge)) { nSkip++; continue; }
+                A = eA; oA = oEdge; nTrim++;
+            }
+
             if (oA == 0.0 && oB == 0.0) continue;      // 선형 위에 겹쳐 누운 구간 — 넘은 게 아니다
             if (oA * oB > 0) continue;                 // 같은 쪽 → 안 넘었다
 
@@ -206,7 +251,7 @@ public static class StationMarks
         if (al == null || surfIds == null) return list;
         double s0 = al.StartingStation, s1 = al.EndingStation;
 
-        int nSurf = 0, nBl = 0, nSeg = 0, nSkipFar = 0, nOutside = 0;
+        int nSurf = 0, nBl = 0, nSeg = 0, nSkipFar = 0, nOutside = 0, nTrim = 0;
         foreach (ObjectId sid in surfIds)
         {
             if (sid.IsNull) continue;
@@ -229,7 +274,7 @@ public static class StationMarks
                         var pts = new List<Point3d>(vs.Count);
                         foreach (Point3d p in vs) pts.Add(p);
                         hitHere += Crossings(al, pts, "굴곡부·" + nm, s0, s1, keep, list,
-                                             ref nSeg, ref nSkipFar, ref nOutside);
+                                             ref nSeg, ref nSkipFar, ref nOutside, ref nTrim);
                     }
                 }
             }
@@ -243,7 +288,8 @@ public static class StationMarks
         log?.AppendLine($"  굴곡부 합계: 지표면 {nSurf}개 · 굴곡선 {nBl}개 · 구간 {nSeg}개 → " +
                         $"교차 {list.Count + dup}개(중복 {dup}개 합침) → {list.Count}개" +
                         (nOutside > 0 ? $" · 정지구간 밖 {nOutside}개" : "") +
-                        (nSkipFar > 0 ? $" · 선형 밖 {nSkipFar}개" : ""));
+                        (nSkipFar > 0 ? $" · 선형 밖 {nSkipFar}개" : "") +
+                        (nTrim > 0 ? $" · 끝을 줄여 살린 선분 {nTrim}개" : ""));
         if (list.Count == 0)
             log?.AppendLine("  ⚠굴곡부가 하나도 안 나왔다 — 정지면에 굴곡선이 없거나 노선이 정지 범위를 안 지난다");
         return list;
@@ -266,7 +312,7 @@ public static class StationMarks
         var list = new List<Mark>();
         if (al == null || layers == null || layers.Count == 0) return list;
         double s0 = al.StartingStation, s1 = al.EndingStation;
-        int nEnt = 0, nSeg = 0, nSkip = 0, nOutside = 0;
+        int nEnt = 0, nSeg = 0, nSkip = 0, nOutside = 0, nTrim = 0;
         try
         {
             var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
@@ -282,7 +328,7 @@ public static class StationMarks
                 var pts = Vertices(e);
                 if (pts.Count < 2) continue;
                 nEnt++;
-                Crossings(al, pts, why, s0, s1, keep, list, ref nSeg, ref nSkip, ref nOutside);
+                Crossings(al, pts, why, s0, s1, keep, list, ref nSeg, ref nSkip, ref nOutside, ref nTrim);
             }
         }
         catch (System.Exception ex) { log?.AppendLine($"   도면선 읽기 실패 — {ex.Message}"); }
@@ -290,7 +336,8 @@ public static class StationMarks
         int dup = Dedupe(list);
         log?.AppendLine($"   도면선 [{string.Join("·", layers)}]: 객체 {nEnt}개 · 구간 {nSeg}개 → " +
                         $"교차 {list.Count + dup}개(중복 {dup}개 합침) → {list.Count}개" +
-                        (nOutside > 0 ? $" · 걸러진 것 {nOutside}개" : ""));
+                        (nOutside > 0 ? $" · 걸러진 것 {nOutside}개" : "") +
+                        (nTrim > 0 ? $" · 끝을 줄여 살린 선분 {nTrim}개(기점·종점 언저리)" : ""));
         if (nEnt == 0) log?.AppendLine($"   ⚠레이어 [{string.Join("·", layers)}]에 선이 하나도 없다 — 부지정지를 먼저 돌려야 한다");
         return list;
     }
@@ -307,16 +354,17 @@ public static class StationMarks
         var list = new List<Mark>();
         if (al == null || lines == null || lines.Count == 0) return list;
         double s0 = al.StartingStation, s1 = al.EndingStation;
-        int nSeg = 0, nSkip = 0, nOutside = 0;
+        int nSeg = 0, nSkip = 0, nOutside = 0, nTrim = 0;
         foreach (var pts in lines)
         {
             if (pts == null || pts.Count < 2) continue;
-            Crossings(al, pts, why, s0, s1, keep, list, ref nSeg, ref nSkip, ref nOutside);
+            Crossings(al, pts, why, s0, s1, keep, list, ref nSeg, ref nSkip, ref nOutside, ref nTrim);
         }
         int dup = Dedupe(list);
         log?.AppendLine($"   복원선 [{why}]: 선 {lines.Count}개 · 구간 {nSeg}개 → " +
                         $"교차 {list.Count + dup}개(중복 {dup}개 합침) → {list.Count}개" +
-                        (nOutside > 0 ? $" · 걸러진 것 {nOutside}개" : ""));
+                        (nOutside > 0 ? $" · 걸러진 것 {nOutside}개" : "") +
+                        (nTrim > 0 ? $" · 끝을 줄여 살린 선분 {nTrim}개(기점·종점 언저리)" : ""));
         return list;
     }
 
@@ -343,19 +391,40 @@ public static class StationMarks
         if (pad == null || ground == null || s1 <= s0) return list;
         step = Math.Max(0.1, step);
 
-        int Sign(double s)
+        // ★★[v32.3 · JACK 0812] <b>'값이 없다'를 예외에 기대지 않는다 — 범위를 직접 본다.</b>
+        //
+        //   순수 정지면(§27)부터 계획 종단은 <b>정지 구간에만</b> 존재한다. 그 밖을 물었을 때
+        //   <c>ElevationAt</c>이 어떻게 구는지는 문서에 없다 — <b>예외를 던지면</b> 종전처럼 0으로 삼켜져
+        //   건너뛰니 문제없지만, <b>0.0 같은 값을 돌려주면</b> 차이가 −110처럼 나와
+        //   <b>정지 바깥 전체가 '성토'로 판정</b>되고 데이라잇 자리마다 가짜 절성경계가 하나씩 찍힌다.
+        //
+        //   → 묻기 <b>전에</b> 그 측점이 종단 범위 안인지 본다. 그러면 <c>ElevationAt</c>이 어떻게 굴든 상관없다.
+        //   ※ 종단 중간이 비는 경우(구역이 떨어져 있을 때)는 범위로 못 거르므로 예외 갈래를 함께 남겨 둔다.
+        static bool ElevAt(CivilDb.Profile p, double s, out double z)
         {
+            z = 0;
             try
             {
-                double d = pad.ElevationAt(s) - ground.ElevationAt(s);
-                return d > PadGroundTol ? 1 : d < -PadGroundTol ? -1 : 0;
+                if (s < p.StartingStation - 1e-6 || s > p.EndingStation + 1e-6) return false;
+                z = p.ElevationAt(s);
+                return true;
             }
-            catch { return 0; }
+            catch { return false; }
         }
-        double Diff(double s)
+
+        int nNoData = 0;
+        bool DiffAt(double s, out double d)
         {
-            try { return pad.ElevationAt(s) - ground.ElevationAt(s); } catch { return 0; }
+            d = 0;
+            if (!ElevAt(pad, s, out double zp) || !ElevAt(ground, s, out double zg)) { nNoData++; return false; }
+            d = zp - zg;
+            return true;
         }
+
+        int Sign(double s)
+            => DiffAt(s, out double d) ? (d > PadGroundTol ? 1 : d < -PadGroundTol ? -1 : 0) : 0;
+
+        double Diff(double s) => DiffAt(s, out double d) ? d : 0;
 
         int prevSign = 0; double prevSignAt = s0;   // 마지막으로 ±였던 자리
         int nLong = 0;
@@ -386,7 +455,10 @@ public static class StationMarks
         int dup = Dedupe(list);
         log?.AppendLine($"   절성경계: {list.Count}개(절토↔성토가 바뀌는 자리)" +
                         (dup > 0 ? $" · 중복 {dup}개 합침" : "") +
-                        (nLong > 0 ? $" · 겹침이 {CutFillZeroRunMax:0.#}m보다 길어 데이라잇에 맡긴 것 {nLong}곳" : ""));
+                        (nLong > 0 ? $" · 겹침이 {CutFillZeroRunMax:0.#}m보다 길어 데이라잇에 맡긴 것 {nLong}곳" : "") +
+                        // ★[v32.3 계측] 계획 종단이 없는 표본 수 — 순수 정지면이면 정지 <b>바깥</b> 몫이라 있는 게 정상이다.
+                        //   0이면 계획 종단이 노선 전체를 덮고 있다는 뜻(합성면을 보고 있을 수 있다).
+                        $" · 계획 종단 없는 표본 {nNoData}개");
         return list;
     }
 
@@ -455,12 +527,16 @@ public static class StationMarks
         return outp.OrderBy(m => m.Station).ToList();
     }
 
-    /// <summary>측점을 'No.5+12.34' 꼴로 — 한국 종단도 관례.</summary>
+    /// <summary>측점을 'No.5+12.34' 꼴로 — 한국 종단도 관례.
+    /// <para>★[v32.1 · JACK 0812] <b>'+' 뒤는 <c>00.00</c> — 두 자리로 채운다.</b>
+    /// JACK: <i>"+00.00 형태로 바꾸고."</i> <c>0.00</c>이면 <c>+6.41</c>처럼 한 자리로 나와
+    /// <c>+16.41</c>과 자릿수가 안 맞는다 — 측점 목록을 세로로 훑을 때 <b>자리가 흔들려 못 읽는다</b>.
+    /// 색인이 20m라 나머지는 최대 19.99이므로 <b>두 자리면 넘치지 않는다</b>.</para></summary>
     public static string Fmt(double station, double index = 20.0)
     {
         if (index <= 1e-6) return station.ToString("0.00");
         int no = (int)Math.Floor(station / index + 1e-9);
         double plus = station - no * index;
-        return plus < 1e-4 ? $"No.{no}" : $"No.{no}+{plus:0.00}";
+        return plus < 1e-4 ? $"No.{no}" : $"No.{no}+{plus:00.00}";
     }
 }
