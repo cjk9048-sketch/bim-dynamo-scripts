@@ -8,3 +8,5 @@ DHGRADE_교선덤프_*.csv
 tools/setup/bundle.zip
 tools/setup/bin/
 tools/setup/obj/
+src/DH.Grading.Civil/Resources/*.bak
+src/DH.Grading.Civil/Resources/DHT_백업_*.dwt

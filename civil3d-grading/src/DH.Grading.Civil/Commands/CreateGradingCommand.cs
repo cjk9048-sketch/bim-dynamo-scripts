@@ -555,6 +555,56 @@ public sealed class CreateGradingCommand
                     drawLoops = FilterOutsidePlan(allLoops, boundary, 0.5);   // 폴백: 종전대로 전부 표시
                     bndMsg += $"\n정지경계 표시: 갇힌 고리 판정 실패 — 전부 표시(표시 전용, 지표면 무관) — {ex.Message}";
                 }
+                // ★★[v30.0 · JACK 0812] <b>"이어서 작성하면 가장 최근 것의 데이라잇 경계만 나온다 —
+                //   최초 시점부터의 경계가 나와야 하고, 그 모든 과정에 대한 종단이 나와야 한다."</b>
+                //
+                //   <b>원인.</b> <see cref="GradingBuilder.DrawDaylight"/>는 그리기 전에
+                //   <c>EraseOnLayer</c>로 <b>레이어를 통째로 지운다</b>. 재실행할 때 겹겹이 쌓이는 것을
+                //   막으려던 것인데, '이어서(누적)' 모드에서는 <b>앞 구역의 경계까지 지워 버린다</b>.
+                //   정지면 자체는 누적 합성면이라 형상은 다 들어 있는데, <b>경계선만 최신 구역 것만</b> 남았다.
+                //
+                //   <b>처방.</b> 지우는 것은 그대로 두고, <b>앞 구역의 데이라잇을 함께 넘긴다.</b>
+                //   번들에 구역이 전부 누적돼 있으므로 근거는 이미 있다(<c>regionsPrev</c>).
+                //   다만 <b>뒤 구역이 덮은 자리는 빼야</b> 최종 지형과 맞는다 —
+                //   옹벽선이 이미 쓰는 방식(<see cref="GradingBundle.LaterFootprints"/> + 마스크)을 그대로 쓴다.
+                if (regionsPrev != null && regionsPrev.Count > 0)
+                {
+                    try
+                    {
+                        // 이번 구역이 덮은 자리(클립링 + 계획 폴리곤) — 앞 구역들은 여기서 잘려야 한다.
+                        var mineNow = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
+                        foreach (var kv in injectedRings)
+                            if (kv.Value.ring is { Count: >= 3 }) mineNow.Add(kv.Value.ring);
+                        if (boundary is { Count: >= 3 }) mineNow.Add(boundary);
+
+                        var kept = new System.Collections.Generic.List<System.Collections.Generic.IReadOnlyList<Point3>>();
+                        int nPrevRing = 0, nPiece = 0;
+                        for (int ri = 0; ri < regionsPrev.Count; ri++)
+                        {
+                            // 이 구역보다 <b>뒤</b>에 온 것 = 앞 구역들 중 나중 것 + 이번 구역
+                            var later = GradingBundle.LaterFootprints(regionsPrev, ri);
+                            later.AddRange(mineNow);
+                            var mask = GradingPolygons.RegionMask.Build(later);
+
+                            foreach (var r in DaylightRingsOf(regionsPrev[ri]))
+                            {
+                                nPrevRing++;
+                                if (mask == null) { kept.Add(r); nPiece++; continue; }
+                                foreach (var piece in TrimOutsideMask(r, mask)) { kept.Add(piece); nPiece++; }
+                            }
+                        }
+                        if (kept.Count > 0)
+                        {
+                            kept.AddRange(drawLoops);
+                            drawLoops = kept;
+                            bndMsg += $"\n앞 구역 데이라잇 복원: 구역 {regionsPrev.Count}개 · 링 {nPrevRing}개 → " +
+                                      $"덮인 부분 제외하고 {nPiece}조각 함께 그림(최초 구역부터 경계가 남는다)";
+                        }
+                        else bndMsg += $"\n앞 구역 데이라잇 복원: 남을 조각이 없다(앞 구역이 전부 덮였거나 링이 비었다)";
+                    }
+                    catch (System.Exception ex)
+                    { bndMsg += "\n앞 구역 데이라잇 복원 실패 — " + ex.Message; }
+                }
                 GradingBuilder.DrawDaylight(db, tr2, drawLoops, "DH-정지경계", 3, layerOff: false);
                 GradingBuilder.DrawDaylight(db, tr2, clipLoopsDraw, "DH-클립경계", 4, layerOff: true); // 하늘색=클립링(∪계획)
                 // 과거 진단선(빨강/하늘) 잔재 청소 — 오류로 오인 방지(JACK)
@@ -954,6 +1004,35 @@ public sealed class CreateGradingCommand
 
     /// <summary>[0728 — JACK] 교선 루프에서 계획폴리곤 '안' 또는 경계 tol 이내 점 구간을 제거하고
     /// 바깥 둘레 구간(열린 폴리선)만 남긴다 — 부지를 가로지르는 전이선 초록 표시 제거(표시 전용, 번들 무관).</summary>
+    /// <summary>★[v30.0] 한 구역의 <b>데이라잇 링</b>을 꺼낸다 — 여러 조각(<c>*FinalRings</c>)이 정본,
+    /// 옛 번들은 단수(<c>*FinalRing</c>)로 폴백. 절토·성토 둘 다 모은다.</summary>
+    private static System.Collections.Generic.IEnumerable<System.Collections.Generic.List<Point3>>
+        DaylightRingsOf(GradingBundle b)
+    {
+        if (b == null) yield break;
+        if (b.CutFinalRings != null) { foreach (var r in b.CutFinalRings) if (r is { Count: >= 2 }) yield return r; }
+        else if (b.CutFinalRing is { Count: >= 2 }) yield return b.CutFinalRing;
+        if (b.FillFinalRings != null) { foreach (var r in b.FillFinalRings) if (r is { Count: >= 2 }) yield return r; }
+        else if (b.FillFinalRing is { Count: >= 2 }) yield return b.FillFinalRing;
+    }
+
+    /// <summary>★[v30.0] 링에서 <b>마스크 안에 든 점을 빼고</b> 남은 연속 구간만 조각으로 돌려준다.
+    /// <para>뒤 구역이 덮은 자리의 경계선은 <b>최종 지형의 경계가 아니다</b> — 거기는 이미 다시 깎였다.
+    /// 옹벽선이 쓰는 <c>TrimBy</c>와 같은 성격의 처리를 점렬에 적용한 것이다.</para></summary>
+    private static System.Collections.Generic.List<System.Collections.Generic.List<Point3>>
+        TrimOutsideMask(System.Collections.Generic.IReadOnlyList<Point3> ring, GradingPolygons.RegionMask mask)
+    {
+        var res = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
+        var cur = new System.Collections.Generic.List<Point3>();
+        foreach (var p in ring)
+        {
+            if (mask.Contains(p.X, p.Y)) { if (cur.Count >= 2) res.Add(cur); cur = new System.Collections.Generic.List<Point3>(); }
+            else cur.Add(p);
+        }
+        if (cur.Count >= 2) res.Add(cur);
+        return res;
+    }
+
     private static System.Collections.Generic.List<System.Collections.Generic.List<Point3>> FilterOutsidePlan(
         System.Collections.Generic.List<System.Collections.Generic.List<Point3>> loops,
         System.Collections.Generic.List<Point3> plan, double tol)

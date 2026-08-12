@@ -201,6 +201,74 @@ public sealed class NoriCommand
     /// <summary>실행 게이트 3중(ralplan) — ①번들 존재 ②계획선 fingerprint 일치(구역별) ③정지 표면 존재.
     /// 하나라도 실패하면 안내 팝업 후 null(작도/내보내기 금지 — 유령선 차단). DHNORI/DHINFRA 공용.
     /// [다중 구역 0729] 구역 목록을 반환(v3 번들은 1개짜리 목록).</summary>
+    /// <summary>★★[v30.2 · JACK 0812] <b>번들만 있으면 사면선·소단선·데이라잇을 도면과 무관하게 복원한다.</b>
+    ///
+    /// <para>JACK: <i>"우리 애드인의 핵심은 편의성이야. 어느 순간엔 뭐 해야 하고 하는 식이면
+    /// 제약이 생기고 범용성이 떨어져."</i> — 맞는 말이다.
+    /// 그래서 <b>"종단도 전에 노리선을 먼저 돌리세요"는 없앤다.</b></para>
+    ///
+    /// <para>노리선이 하는 일의 본질은 <b>번들에서 결정적으로 다시 계산</b>하는 것이다
+    /// (지반이 필요 없어 <see cref="NullGround"/>를 넣는다). 그리기와 계산을 갈라 놓으면
+    /// <b>종단도가 자기가 필요한 선을 직접 복원</b>할 수 있고, 실행 순서에 매이지 않는다.</para>
+    ///
+    /// <para>누적 구역도 그대로 처리한다 — 구역마다 <b>뒤 구역이 덮은 자리</b>를 빼므로
+    /// 결과는 지금 정지면과 맞는다.</para>
+    /// 반환=선 목록(사면선·소단선·전환사면 모서리). <paramref name="diag"/>=사람이 읽을 요약.</summary>
+    internal static System.Collections.Generic.List<System.Collections.Generic.List<Point3>> RebuildEdgeLines(
+        System.Collections.Generic.IReadOnlyList<GradingBundle> regions, out string diag)
+    {
+        var res = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
+        var sb = new System.Text.StringBuilder();
+        if (regions == null || regions.Count == 0) { diag = "번들 없음"; return res; }
+        var ng = new NullGround();
+
+        for (int ri = 0; ri < regions.Count; ri++)
+        {
+            var b = regions[ri];
+            if (b == null) continue;
+            string rTag = regions.Count > 1 ? $"구역{ri + 1}" : "구역";
+            var later = GradingBundle.LaterFootprints(regions, ri);
+            int slN = 0, blN = 0;
+
+            foreach (var (up, label, hasSlope, many, one) in new[]
+            {
+                (true,  "절토", b.CutHasSlope,  b.CutFinalRings,  b.CutFinalRing),
+                (false, "성토", b.FillHasSlope, b.FillFinalRings, b.FillFinalRing),
+            })
+            {
+                if (!hasSlope) continue;
+                var ringList = many ?? (one != null
+                    ? new System.Collections.Generic.List<System.Collections.Generic.List<Point3>> { one } : null);
+                if (ringList == null || ringList.Count == 0) { sb.Append($" {rTag}/{label}:링없음"); continue; }
+                var zones = up ? b.CutWallZones : b.FillWallZones;
+                try
+                {
+                    var vs = GradingGeometry.Build(b.Boundary, ng, b.Params, up, zones);
+                    if (!vs.HasSlope) { sb.Append($" {rTag}/{label}:복원실패"); continue; }
+                    double slopeN = up ? b.Params.CutSlope : b.Params.FillSlope;
+                    double bs = System.Math.Max(slopeN, b.Params.MinSlope), ms = b.Params.MinSlope;
+                    foreach (var finalRing in ringList)
+                    {
+                        if (finalRing == null || finalRing.Count < 3) continue;
+                        var edges = SlopeHatchGenerator.GenerateEdgeLinesTagged(
+                            vs.Rings, ng, up, finalRing, b.Boundary, zones, b.Boundary,
+                            null, null, bs, ms, later);
+                        foreach (var e in edges)
+                        {
+                            if (e.Pts == null || e.Pts.Count < 2) continue;
+                            res.Add(e.Pts);
+                            if (e.IsSlope) slN++; else blN++;
+                        }
+                    }
+                }
+                catch (System.Exception ex) { sb.Append($" {rTag}/{label}:예외({ex.GetType().Name})"); }
+            }
+            sb.Append($" {rTag}:사면{slN}/소단{blN}");
+        }
+        diag = $"번들에서 복원 — 구역 {regions.Count}개 · 선 {res.Count}개 ·{sb}";
+        return res;
+    }
+
     internal static System.Collections.Generic.List<GradingBundle>? PassGates(
         Database db, Transaction tr, Editor ed, string cmdLabel, out string note)
     {
@@ -212,7 +280,18 @@ public sealed class NoriCommand
             Refuse(ed, cmdLabel, $"{cmdLabel}을(를) 실행할 수 없습니다.\n{reason}\n\n[정지면 생성](DHGRADE)을 먼저 실행하세요.");
             return null;
         }
-        // 게이트 ② 구역별 계획선 fingerprint(정지 후 계획선 변경 감지)
+        // ★★[v30.1 · JACK 0812] <b>게이트 ②는 거부가 아니라 알림이다.</b>
+        //
+        //   JACK: <i>"노리선 기능은 언제든 누르면 현재 기준 원지반하고 다르다면 해당 구역은 다 나와야 해."</i>
+        //
+        //   종전엔 구역 <b>하나라도</b> 계획선이 바뀌어 있으면 <b>명령 전체를 거부</b>했다.
+        //   멀쩡한 구역까지 하나도 안 그려졌다 — 누적 구역이 많을수록 걸릴 확률이 커진다.
+        //
+        //   그리고 거부할 이유가 없다. <b>계획선을 나중에 고쳐도 정지면은 안 바뀐다</b>(DHGRADE를
+        //   다시 돌려야 바뀐다). 그러니 <b>번들 기준으로 그린 선이 곧 지금 지표면과 맞는 선</b>이다.
+        //   계획선은 그때 쓰인 입력일 뿐, 지금 도면의 정본이 아니다.
+        //   → <b>바뀐 사실은 분명히 알리되 그린다.</b> 유령선은 게이트 ③(표면 존재)이 막는다.
+        int changed = 0;
         for (int ri = 0; ri < regions.Count; ri++)
         {
             var bundle = regions[ri];
@@ -225,15 +304,17 @@ public sealed class NoriCommand
                     var cur = BoundaryReader.Read(tr, planId);
                     if (cur.Count >= 3 && !bundle.FingerprintMatches(cur))
                     {
-                        Refuse(ed, cmdLabel, $"정지 이후 {rTag}계획선이 변경되었습니다.\n" +
-                                   $"[정지면 생성](DHGRADE)을 다시 실행한 뒤 {cmdLabel}을(를) 실행하세요.");
-                        return null;
+                        changed++;
+                        note += $"\n(⚠{rTag}계획선이 정지 이후 바뀌었다 — 정지면은 그대로이므로 <b>번들 기준</b>으로 그린다. " +
+                                "고친 계획선을 반영하려면 [정지면 생성]을 다시 실행할 것)";
                     }
                 }
                 catch { note += $"\n({rTag}계획선 비교 불가 — 번들 기준으로 진행)"; }
             }
             else note += $"\n({rTag}원본 계획선을 도면에서 찾지 못함 — 번들 기준으로 진행)";
         }
+        if (changed > 0)
+            ed.WriteMessage($"\n  · ⚠계획선이 바뀐 구역 {changed}개 — 번들 기준으로 그립니다(정지면과 일치)");
         // 게이트 ③ 정지 표면 존재(표면이 지워졌으면 유령선 방지 위해 중단)
         bool surfOk = GradingBuilder.SurfaceExistsByBaseName(tr, "정지면_DH")
                    || GradingBuilder.SurfaceExistsByBaseName(tr, "가상절토_DH")
