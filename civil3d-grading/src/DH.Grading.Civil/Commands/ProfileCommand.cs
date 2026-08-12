@@ -3,6 +3,7 @@ using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Geometry;
 using Autodesk.AutoCAD.Runtime;
+using DH.Grading.Core;
 using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 using CivilApp = Autodesk.Civil.ApplicationServices;
 using CivilDb = Autodesk.Civil.DatabaseServices;
@@ -31,6 +32,8 @@ public sealed class ProfileCommand
     /// <c>GradingBuilder.DrawDaylight</c>가 이 이름으로 그린다. 굴곡부 판정의 출처다.</summary>
     private const string LayerDaylight = "DH-정지경계";
     private const string LayerClip = "DH-클립경계";
+    /// <summary>사면·소단의 <b>최종 형상</b> 선 — <c>DHNORI</c>가 구역 전체를 다시 그려 넣는다.
+    /// 가상 지표면의 굴곡선과 달리 오버사이즈가 아니고, 누적 구역이 전부 들어 있다.</summary>
     /// <summary>측점 라벨 자리 전용 <b>체인 종단</b> — 값은 쓰지 않는다(<see cref="BuildLabelChain"/>).</summary>
     /// <summary>이번 실행에서 만든 측점 라벨용 체인 — 밴드 배선이 이걸 종단1로 쓴다.
     /// <para>★★[v29.0 점검 반영 · 치명] <b>실행 시작 때 반드시 비운다.</b> 종전엔 안 비워서,
@@ -200,6 +203,9 @@ public sealed class ProfileCommand
         string sect = ProfileStyleTemplate.EnsureProfileSectionalBandStyles(db, cdoc);
         log.AppendLine(sect);
         ed.WriteMessage("\n  · " + sect);
+        // ★★[v31.3] 축척 배너 같은 <b>블록</b>은 스타일 들여오기로 안 온다 — 따로 복제해 온다.
+        string blk = ProfileStyleTemplate.ImportBlocks(db, n => n.Contains("배너") || n.Contains("축척"));
+        log.AppendLine(blk);
         // ★[JACK 0807] 로그파일에만 남기면 확인이 안 된다("명령창에 네가 이야기한 것들은 뜨지 않았어") — 명령창에도 찍는다.
         ed.WriteMessage("\n  · " + ProfileStyleTemplate.LastReport);
         if (ProfileStyleTemplate.LastProbe.Length > 0)
@@ -378,6 +384,17 @@ public sealed class ProfileCommand
         catch (System.Exception ex) { log.AppendLine("체인 스타일 실패 — " + ex.Message); return ObjectId.Null; }
     }
 
+    /// <summary>★[v30.2] 한 구역의 데이라잇 링(절토·성토) — 여러 조각이 정본, 옛 번들은 단수로 폴백.</summary>
+    private static System.Collections.Generic.IEnumerable<System.Collections.Generic.List<Point3>>
+        DaylightRingsOfBundle(GradingBundle b)
+    {
+        if (b == null) yield break;
+        if (b.CutFinalRings != null) { foreach (var r in b.CutFinalRings) if (r is { Count: >= 2 }) yield return r; }
+        else if (b.CutFinalRing is { Count: >= 2 }) yield return b.CutFinalRing;
+        if (b.FillFinalRings != null) { foreach (var r in b.FillFinalRings) if (r is { Count: >= 2 }) yield return r; }
+        else if (b.FillFinalRing is { Count: >= 2 }) yield return b.FillFinalRing;
+    }
+
     /// <summary>★★[v25.2] <b>횡단 데이터 밴드에 '무엇을 읽을지'를 꽂는다 — 그리고 되읽어 확인한다.</b>
     /// <para><c>DataSourceId</c>가 어떤 객체를 받는지 문서에 없다. 그래서 <b>단면검토선 그룹 → 지표면</b>
     /// 순으로 넣어 보고, 붙은 것을 로그에 <b>객체 종류와 이름까지</b> 남긴다. 한 판이면 확정된다.</para>
@@ -498,55 +515,107 @@ public sealed class ProfileCommand
                 var al = (CivilDb.Alignment)tr.GetObject(alignId, OpenMode.ForRead);
                 s0 = al.StartingStation; s1 = al.EndingStation;
 
-                // ⓑ 굴곡부 — 우리가 만든 지표면 <b>전부</b>에서 굴곡선을 읽는다.
+                // ★★[v30.3 · JACK 0812] <b>가상 사면 지표면의 굴곡선은 더 이상 쓰지 않는다.</b>
                 //
-                //   ★★[v25.1 실측] 종전엔 정지면 하나만 봤는데 <b>굴곡선이 0개</b>였다.
-                //     <c>정지면_DH</c>는 <b>붙여넣기(Paste) 합성면</b>이라 자기 굴곡선이 없다 —
-                //     데이라잇·소단·사면 굴곡선은 붙여넣기 <b>원본</b>인 <c>가상절토_DH</c>·<c>가상성토_DH</c>에 있다.
-                //     그래서 도면의 <b>DH 산출물 지표면 전부</b>를 훑는다.
-                //   원지반은 <b>뺀다</b> — 측량면의 굴곡선은 설계가 아니라 지형이고 수천 개가 나온다.
-                var srcIds = new System.Collections.Generic.List<ObjectId>();
-                var srcNm = new System.Collections.Generic.List<string>();
-                ObjectId groundId = ObjectId.Null;
-                foreach (var s in surfs) if (s.Label == "원지반") groundId = s.SurfId;
-                foreach (ObjectId sid in CivilApp.CivilApplication.ActiveDocument.GetSurfaceIds())
-                {
-                    if (sid == groundId) continue;
-                    try
-                    {
-                        if (tr.GetObject(sid, OpenMode.ForRead) is not CivilDb.TinSurface ts) continue;
-                        // DH 산출물만 — 남의 지표면을 굴곡선 출처로 삼지 않는다(저장소 공통 규칙).
-                        if (!ts.Name.Contains("_DH")) continue;
-                        srcIds.Add(sid); srcNm.Add(ts.Name);
-                    }
-                    catch { }
-                }
-                // ★★[v25.3] <b>정지구간 밖의 링은 버린다.</b> 가상 사면은 <b>오버사이즈</b>라
-                //   잘려나갈 소단까지 두르고 있다. 그 링과의 교차는 <b>도면에 없는 자리</b>다.
-                //   판정은 두 종단의 표고차 — 계획면이 원지반과 붙어 있으면 정지한 데가 아니다.
+                //   JACK: <i>"사면 안에 여러 개 측점이 생기는 이유는 뭐지? 사면 기울기 안에서
+                //   측점이 생길 이유가 있나?"</i> — 없다. 사면 한 단은 <b>구배가 일정</b>하므로
+                //   그 안에는 꺾임이 없다. 측점이 생기면 그건 잘못 잡은 것이다.
+                //
+                //   <b>원인.</b> 로그의 사유가 그대로 말해 줬다:
+                //   <code>
+                //    7.70m 데이라잇(복원)      ← 사면 바깥 끝
+                //    8.90m 굴곡부·가상절토_DH  ← 사면 한가운데(엉뚱)
+                //    9.89m 굴곡부·가상절토_DH  ← 사면 한가운데(엉뚱)
+                //   10.98m 사면·소단(복원)     ← 진짜 소단
+                //   11.98m 사면·소단(복원)     ← 진짜 소단
+                //   </code>
+                //   <c>가상절토_DH</c>는 <b>오버사이즈</b>로 두른 면이라 링이 실제보다 바깥에 있다.
+                //   그래서 진짜 소단과 <b>별개의 자리</b>에 한 벌이 더 생겼다 — 그게 사면 한가운데다.
+                //   "정지구간 밖은 버린다"는 걸러내기는 <b>데이라잇 안쪽</b>의 헛링은 못 거른다.
+                //
+                //   → 이제 사면·소단은 <b>번들에서 복원</b>해 쓴다(아래). 그게 최종 형상이고 누적 구역도
+                //     전부 들어온다. 오버사이즈 링을 볼 이유가 사라졌으므로 이 출처를 통째로 걷어낸다.
+
+                // ★★[v30.4 · JACK 0812] <b>절성 경계 — 절토와 성토가 바뀌는 자리.</b>
+                //   평면의 어떤 선과도 겹치지 않아 교차로는 안 잡힌다. 두 종단에서 직접 잰다.
                 CivilDb.Profile prPad = null, prGrd = null;
                 try { prPad = tr.GetObject(pidPad, OpenMode.ForRead) as CivilDb.Profile; } catch { }
                 try { prGrd = tr.GetObject(pidGround, OpenMode.ForRead) as CivilDb.Profile; } catch { }
-                System.Func<double, bool> graded = null;
                 if (prPad != null && prGrd != null)
-                    graded = s =>
-                    {
-                        try { return System.Math.Abs(prPad.ElevationAt(s) - prGrd.ElevationAt(s)) > StationMarks.PadGroundTol; }
-                        catch { return false; }
-                    };
-                else log.AppendLine("  ⚠종단 둘을 못 열어 '정지구간 밖 버리기'를 못 한다 — 오버사이즈 링이 섞일 수 있다");
+                    marks.AddRange(StationMarks.FromCutFillLine(prPad, prGrd, s0, s1, 0.5, log));
+                else log.AppendLine("  ⚠종단 둘을 못 열어 절성 경계를 못 잡는다");
 
-                log.AppendLine("굴곡부 수집(선형 × 정지면 굴곡선) — 대상 지표면 " +
-                               (srcNm.Count > 0 ? string.Join("·", srcNm) : "없음(정지면을 먼저 만들어야 한다)"));
-                marks.AddRange(StationMarks.FromGradingBreaklines(tr, al, srcIds, graded, log));
-
-                // ★★[v25.3 · JACK 0811] <b>데이라잇은 도면선에서 읽는다.</b>
-                //   "데이라잇선(계획지표면이 시작되는 지점)은 단면검토선이 안 끊어졌어" —
-                //   가상 사면이 오버사이즈라 그 굴곡선에는 데이라잇이 없다. 진짜 데이라잇은
-                //   <c>DrawDaylight</c>가 <c>DH-정지경계</c>에 그려 둔다. 여기는 <b>정지구간 판정을 걸지 않는다</b> —
-                //   데이라잇은 정의상 정지구간의 <b>가장자리</b>라 표고차가 0에 가깝고, 걸면 자기가 걸러진다.
+                // ★[v30.3] 도면의 <c>DH-정지경계</c>는 <b>번들이 없을 때만</b> 쓰는 보조 근거다.
+                //   정본은 아래의 번들 복원이다 — 도면 선은 그릴 때 레이어를 지우므로
+                //   누적 구역에서 마지막 것만 남아 있을 수 있다. 같은 자리는 합쳐지므로 겹쳐도 해가 없다.
                 marks.AddRange(StationMarks.FromLayerLines(tr, db, al,
-                                   new[] { LayerDaylight, LayerClip }, "데이라잇", null, log));
+                                   new[] { LayerDaylight, LayerClip }, "데이라잇(도면)", null, log));
+
+                // ★★[v30.0 · JACK 0812] <b>사면선·소단선도 도면에서 읽는다 — 그게 최종 형상이다.</b>
+                //
+                //   JACK: <i>"정지면을 이어서 작성한 경우 … 그 모든 과정에 대한 종단이 나와야 해."</i>
+                //   가상 사면 지표면(<c>가상절토_DH</c>·<c>가상성토_DH</c>)은 두 가지 한계가 있다:
+                //   ① <b>오버사이즈</b>라 잘려나갈 소단까지 들어 있고,
+                //   ② 실행할 때마다 다시 만들어져 <b>마지막 구역 것만</b> 남는다.
+                //   반면 <c>DH-사면선-*</c>·<c>DH-소단선-*</c> 레이어는 <b>최종 형상</b>이고,
+                //   <c>DHNORI</c>가 <b>구역 전체를 순회하며</b> 다시 그린다(뒤 구역에 덮인 부분은 빼면서).
+                //   그러니 이쪽이 더 정확하고 더 완전하다.
+                //   ※ 여기도 정지구간 판정을 걸지 않는다 — 사면선 자체가 정지의 가장자리라 자기가 걸러진다.
+                // ★★[v30.3] 사면·소단은 <b>복원 하나만</b> 쓴다(아래). 도면에 그려진 선을 함께 읽으면
+                //   같은 링을 두 번 잡는데, 두 값이 몇 cm만 어긋나도 중복 제거(1cm)를 빠져나가
+                //   <b>사면 한가운데에 짝지어진 측점</b>이 생긴다 — 지금 고치는 증상과 같은 모양이다.
+                //   출처는 하나여야 한다.
+
+                // ★★[v30.2 · JACK 0812] <b>번들에서 직접 복원한다 — 노리선을 먼저 돌릴 필요가 없다.</b>
+                //
+                //   JACK: <i>"우리 애드인의 핵심은 편의성이야. 어느 순간엔 뭐 해야 하고 하는 식이면
+                //   제약이 생기고 범용성이 떨어져."</i>
+                //   도면에 그려진 사면선은 <b>마지막 구역 것만</b> 남아 있을 수 있다(그릴 때 레이어를 지우므로).
+                //   그렇다고 "[노리선]을 먼저 돌리세요"라고 하면 그게 곧 제약이다.
+                //   → 노리선이 하는 <b>복원 계산을 여기서 직접</b> 한다. 누적 구역이 전부 들어오고,
+                //     뒤 구역이 덮은 자리는 빠지므로 지금 정지면과 맞는다. <b>순서에 매이지 않는다.</b>
+                try
+                {
+                    var regions = GradingBundleStore.TryLoadAll(db, tr, out _);
+                    if (regions != null && regions.Count > 0)
+                    {
+                        var rebuilt = NoriCommand.RebuildEdgeLines(regions, out string rdiag);
+                        log.AppendLine("  " + rdiag);
+                        var asPts = new System.Collections.Generic.List<System.Collections.Generic.List<Point3d>>(rebuilt.Count);
+                        foreach (var line in rebuilt)
+                        {
+                            var q = new System.Collections.Generic.List<Point3d>(line.Count);
+                            foreach (var p in line) q.Add(new Point3d(p.X, p.Y, p.Z));
+                            asPts.Add(q);
+                        }
+                        marks.AddRange(StationMarks.FromLines(al, asPts, "사면·소단(복원)", null, log));
+
+                        // ★★[v30.2] <b>데이라잇도 번들에서 복원한다.</b> 도면의 <c>DH-정지경계</c>는
+                        //   그릴 때 레이어를 지우므로 <b>마지막 구역 것만</b> 남아 있을 수 있다.
+                        //   번들엔 구역이 전부 있으니 여기서 바로 꺼내 쓴다 — 도면 상태에 매이지 않는다.
+                        //   (뒤 구역이 덮은 자리는 빼야 지금 지표면과 맞는다.)
+                        var dl = new System.Collections.Generic.List<System.Collections.Generic.List<Point3d>>();
+                        for (int ri = 0; ri < regions.Count; ri++)
+                        {
+                            var later = GradingBundle.LaterFootprints(regions, ri);
+                            var mask = GradingPolygons.RegionMask.Build(later);
+                            foreach (var r in DaylightRingsOfBundle(regions[ri]))
+                            {
+                                var q = new System.Collections.Generic.List<Point3d>(r.Count);
+                                foreach (var p in r)
+                                {
+                                    if (mask != null && mask.Contains(p.X, p.Y))
+                                    { if (q.Count >= 2) dl.Add(q); q = new System.Collections.Generic.List<Point3d>(); continue; }
+                                    q.Add(new Point3d(p.X, p.Y, p.Z));
+                                }
+                                if (q.Count >= 2) dl.Add(q);
+                            }
+                        }
+                        marks.AddRange(StationMarks.FromLines(al, dl, "데이라잇(복원)", null, log));
+                    }
+                    else log.AppendLine("  번들이 없어 사면·소단 복원 생략(도면에 그려진 선만 쓴다)");
+                }
+                catch (System.Exception ex) { log.AppendLine("  사면·소단 복원 실패 — " + ex.Message); }
 
                 // ⓒ 수동 — 선형에 적어 둔 것(DHSTATION).
                 var man = StationMarks.Load(tr, alignId);

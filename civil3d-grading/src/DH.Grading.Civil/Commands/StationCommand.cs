@@ -4,6 +4,7 @@ using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Geometry;
 using Autodesk.AutoCAD.Runtime;
+using DH.Grading.Core;
 using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 using CivilApp = Autodesk.Civil.ApplicationServices;
 using CivilDb = Autodesk.Civil.DatabaseServices;
@@ -134,31 +135,60 @@ public static class StationCommand
             }
             catch { }
 
-            // ② 계획 종단의 구배변화점 (JACK 0810: "계획면 구배변화점은 측점 있어야 해")
-            //    ★[JACK 0810] 원지반 종단을 **같이** 넘긴다 — 정지면은 합성면이라
-            //    정지 범위 밖에서는 원지반을 그대로 베낀다. 그 구간의 꺾임은 지형이지 설계가 아니다.
-            ObjectId padId = ObjectId.Null, grdId = ObjectId.Null;
-            foreach (ObjectId pid in al.GetProfileIds())
+            // ── ② ★★[v30.3 · JACK 0812] <b>'굴곡부'는 버린 개념이다 — 여기도 같은 자를 쓴다.</b>
+            //
+            //   JACK: <i>"우리 굴곡부라는 개념은 아예 버리기로 하지 않았어?"</i> — 맞다.
+            //   종단의 PVI를 훑어 '많이 꺾인 것'을 고르던 방식(<c>FromProfileGradeBreaks</c>)은
+            //   <b>지표면 표본점과 설계 변화를 구분하지 못해</b> 폐기했다(62m 노선에 78개가 잡혔다).
+            //   그런데 이 명령만 옛 방식을 계속 쓰고 있었다 —
+            //   같은 노선인데 <b>[측점 목록]과 실제 도면의 단면검토선이 달랐다.</b>
+            //
+            //   → 종단도와 <b>똑같이</b> 번들에서 복원한 선(데이라잇·소단·사면)과의 교차로 잡는다.
+            //     자가 하나가 되어야 두 화면이 같은 말을 한다.
+            int nEdge = 0, nDl = 0;
+            try
             {
-                if (tr.GetObject(pid, OpenMode.ForRead) is not CivilDb.Profile pr) continue;
-                // ★★[v29.0 점검 반영 · 높음] <b>숨은 측점 체인을 원지반으로 착각하면 안 된다.</b>
-                //   v28.0부터 선형에 종단이 셋(원지반·정지면·측점체인)이 된다. 그런데 이 판정은
-                //   "'정지/계획'이 아니면 전부 원지반"이라, <b>마지막에 걸리는 체인이 원지반 자리</b>에 들어갔다.
-                //   그러면 겹침 공제가 뒤집혀 <b>구배변화점·정지경계가 통째로 걸러진다</b>.
-                if (pr.Name.StartsWith("DH_측점체인", System.StringComparison.Ordinal)) continue;
-                if (pr.Name.Contains("정지") || pr.Name.Contains("계획")) padId = pid;
-                else grdId = pid;
+                var regions = GradingBundleStore.TryLoadAll(alignId.Database, tr, out _);
+                if (regions != null && regions.Count > 0)
+                {
+                    var edges = NoriCommand.RebuildEdgeLines(regions, out _);
+                    var pts = new System.Collections.Generic.List<System.Collections.Generic.List<Point3d>>(edges.Count);
+                    foreach (var e in edges)
+                    {
+                        var q = new System.Collections.Generic.List<Point3d>(e.Count);
+                        foreach (var p in e) q.Add(new Point3d(p.X, p.Y, p.Z));
+                        pts.Add(q);
+                    }
+                    var em = StationMarks.FromLines(al, pts, "사면·소단", null, null);
+                    list.AddRange(em); nEdge = em.Count;
+
+                    var dl = new System.Collections.Generic.List<System.Collections.Generic.List<Point3d>>();
+                    for (int ri = 0; ri < regions.Count; ri++)
+                    {
+                        var later = GradingBundle.LaterFootprints(regions, ri);
+                        var mask = GradingPolygons.RegionMask.Build(later);
+                        var b = regions[ri];
+                        foreach (var r in new[] { b.CutFinalRings, b.FillFinalRings }
+                                          .Where(x => x != null).SelectMany(x => x)
+                                          .Concat(new[] { b.CutFinalRing, b.FillFinalRing }.Where(x => x != null)))
+                        {
+                            var q = new System.Collections.Generic.List<Point3d>();
+                            foreach (var p in r)
+                            {
+                                if (mask != null && mask.Contains(p.X, p.Y))
+                                { if (q.Count >= 2) dl.Add(q); q = new System.Collections.Generic.List<Point3d>(); continue; }
+                                q.Add(new Point3d(p.X, p.Y, p.Z));
+                            }
+                            if (q.Count >= 2) dl.Add(q);
+                        }
+                    }
+                    var dm = StationMarks.FromLines(al, dl, "데이라잇", null, null);
+                    list.AddRange(dm); nDl = dm.Count;
+                }
             }
-            int nGb = 0, nBnd = 0;
-            if (!padId.IsNull)
-            {
-                var gb = StationMarks.FromProfileGradeBreaks(tr, padId, grdId);
-                list.AddRange(gb);
-                nGb = gb.Count(m => m.Why == "구배변화");
-                nBnd = gb.Count(m => m.Why == "정지경계");
-            }
-            note = $"꺾임 {nPi} · 구배변화 {nGb} · 정지경계 {nBnd}"
-                 + (grdId.IsNull ? " (원지반 종단을 못 찾아 겹침 공제 안 함)" : "");
+            catch { }
+            note = $"꺾임 {nPi} · 사면·소단 {nEdge} · 데이라잇 {nDl}"
+                 + (nEdge + nDl == 0 ? " (번들이 없어 정지 경계는 못 잡음 — [부지정지]를 먼저)" : "");
         }
         catch { }
         return list;

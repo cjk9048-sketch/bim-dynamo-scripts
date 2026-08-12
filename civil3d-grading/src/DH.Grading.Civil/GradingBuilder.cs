@@ -263,6 +263,95 @@ public static class GradingBuilder
         try { tin.BreaklinesDefinition.AddStandardBreaklines(pc, 1.0, 0.0, 0.0, 0.0); } catch { }
     }
 
+    /// <summary>★★[v30.4 · JACK 0812] <b>끝점이 맞닿는 조각끼리 이어 붙인다 — 데이라잇을 폐합시킨다.</b>
+    ///
+    /// <para>JACK: <i>"데이라잇은 폐합이 안 됐어. 절토부 성토부가 각각 선으로만 있는 것 같아."</i> — 맞다.
+    /// 데이라잇은 <b>절토 쪽 교선</b>과 <b>성토 쪽 교선</b>이 <b>따로</b> 만들어진다. 둘이 이어져야
+    /// 부지를 감싸는 한 바퀴가 되는데, 각각 열린 선으로 남아 <b>고리로 안 보인다</b>.</para>
+    ///
+    /// <para>억지로 첫점과 끝점을 잇는 건 안 된다 — 그러면 부지를 가로지르는 <b>허공 지름길</b>이 생긴다
+    /// (그래서 종전 코드는 열린 선을 열린 채로 뒀다). 대신 <b>다른 조각의 끝과 맞닿는지</b> 보고
+    /// 맞닿을 때만 잇는다. 실제로 절토·성토 교선은 <b>절성 경계점에서 만난다</b>.</para>
+    ///
+    /// <para>그러고도 안 닫히면 그 자리는 <b>진짜로 끊긴 것</b>이라 열어 둔다 — 도면이 사실을 말해야 한다.</para></summary>
+    /// <summary>★★[v31.8 · JACK 0812] <b>되돌아오는 '가시'를 걷어낸다 — 부지를 가로지르는 선의 정체.</b>
+    ///
+    /// <para>JACK: <i>"중간에 겹쳐져서 가로지르는 선은 없어야 해."</i> 스샷의 그 선은
+    /// <b>경계선이 안쪽으로 쭉 들어갔다가 같은 길로 되돌아온 것</b>이다. 두 겹이 겹쳐 보이니
+    /// 한 줄로 보이지만 실은 왕복이다. 폐합(잇기)을 넣기 <b>전 스샷에도 같은 자리에 있었으므로</b>
+    /// 잇기 때문에 생긴 게 아니라 <b>교선 계산이 남긴 가시</b>다(핀치 링에서 나온다).</para>
+    ///
+    /// <para>지형 경계선에 <b>180°로 되돌아오는 점</b>은 뜻이 없다 — 면적도 0이고 경계도 아니다.
+    /// 그래서 꺾임각이 거의 완전히 뒤집히는 정점을 지운다. 지우면 가시가 한 칸 짧아지고,
+    /// 그 자리가 다시 뒤집힌 점이 되므로 <b>안정될 때까지 되풀이</b>하면 가시가 통째로 사라진다.</para>
+    ///
+    /// <para>진짜 모서리는 안 건드린다 — 170°보다 더 뒤집힌 것만 본다.
+    /// 그보다 완만한 각은 실제 지형 경계에 얼마든지 있다.</para></summary>
+    private static List<Point3> DropSpurs(IReadOnlyList<Point3> src, double dupTol, double cosLimit)
+    {
+        static double D2(Point3 a, Point3 b) { double dx = a.X - b.X, dy = a.Y - b.Y; return dx * dx + dy * dy; }
+        var p = new List<Point3>(src);
+        double d2 = dupTol * dupTol;
+        for (int i = p.Count - 1; i > 0; i--) if (D2(p[i], p[i - 1]) < d2) p.RemoveAt(i);
+
+        bool changed = true;
+        int guard = 0;
+        while (changed && p.Count >= 3 && guard++ < 1000)
+        {
+            changed = false;
+            for (int i = p.Count - 2; i >= 1; i--)
+            {
+                double ax = p[i].X - p[i - 1].X, ay = p[i].Y - p[i - 1].Y;
+                double bx = p[i + 1].X - p[i].X, by = p[i + 1].Y - p[i].Y;
+                double la = System.Math.Sqrt(ax * ax + ay * ay), lb = System.Math.Sqrt(bx * bx + by * by);
+                if (la < 1e-9 || lb < 1e-9) { p.RemoveAt(i); changed = true; continue; }
+                if ((ax * bx + ay * by) / (la * lb) < cosLimit) { p.RemoveAt(i); changed = true; }
+            }
+            for (int i = p.Count - 1; i > 0; i--) if (D2(p[i], p[i - 1]) < d2) { p.RemoveAt(i); changed = true; }
+        }
+        return p;
+    }
+
+    private static List<IReadOnlyList<Point3>> StitchOpenEnds(
+        IEnumerable<IReadOnlyList<Point3>> loops, double tol)
+    {
+        var open = new List<List<Point3>>();
+        var done = new List<IReadOnlyList<Point3>>();
+        foreach (var l in loops)
+        {
+            if (l == null || l.Count < 2) continue;
+            var f = l[0]; var e = l[l.Count - 1];
+            double gx = f.X - e.X, gy = f.Y - e.Y;
+            if (gx * gx + gy * gy < 0.10 * 0.10) done.Add(l);      // 이미 닫힌 고리 — 그대로
+            else open.Add(new List<Point3>(l));
+        }
+
+        static double D2(Point3 a, Point3 b) { double dx = a.X - b.X, dy = a.Y - b.Y; return dx * dx + dy * dy; }
+        double t2 = tol * tol;
+        bool merged = true;
+        while (merged)
+        {
+            merged = false;
+            for (int i = 0; i < open.Count && !merged; i++)
+                for (int j = i + 1; j < open.Count && !merged; j++)
+                {
+                    var A = open[i]; var B = open[j];
+                    Point3 af = A[0], ae = A[A.Count - 1], bf = B[0], be = B[B.Count - 1];
+                    if (D2(ae, bf) <= t2) { A.AddRange(B.GetRange(1, B.Count - 1)); }
+                    else if (D2(ae, be) <= t2) { B.Reverse(); A.AddRange(B.GetRange(1, B.Count - 1)); }
+                    else if (D2(af, be) <= t2) { B.AddRange(A.GetRange(1, A.Count - 1)); open[i] = B; }
+                    else if (D2(af, bf) <= t2) { A.Reverse(); A.AddRange(B.GetRange(1, B.Count - 1)); }
+                    else continue;
+                    open.RemoveAt(j); merged = true;
+                }
+        }
+        foreach (var o in open) done.Add(o);
+        return done;
+    }
+
+    /// <summary>직전 <see cref="DrawDaylight"/>의 정리 결과 — 진단 로그용.</summary>
+    public static string LastDaylightDiag { get; private set; } = "";
+
     /// <summary>daylight/교선 외곽선을 초록 폴리라인으로(시각 확인용). 레이어 'DH-정지경계'.</summary>
     public static void DrawDaylight(Database db, Transaction tr, IEnumerable<IReadOnlyList<Point3>> loops,
         string layerName = "DH-정지경계", short colorIndex = 3, bool layerOff = false)
@@ -273,6 +362,19 @@ public static class GradingBuilder
         try { var ltr = (LayerTableRecord)tr.GetObject(layerId, OpenMode.ForWrite); ltr.IsOff = layerOff; } catch { }
         EraseOnLayer(db, tr, layerName);
         var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+        // ★★[v31.8] 가시(왕복선)를 먼저 걷어내고 → 끝점이 맞닿는 조각을 잇는다.
+        //   순서가 중요하다: 가시가 남아 있으면 그 끝이 남의 끝과 가깝다고 잘못 이어질 수 있다.
+        var cleaned = new List<IReadOnlyList<Point3>>();
+        int spurPts = 0;
+        foreach (var l in loops)
+        {
+            if (l == null || l.Count < 2) continue;
+            var c = DropSpurs(l, 0.01, -0.985);      // 1cm 이내는 같은 점 · 170°보다 뒤집히면 가시
+            spurPts += l.Count - c.Count;
+            if (c.Count >= 2) cleaned.Add(c);
+        }
+        LastDaylightDiag = $"가시 제거 {spurPts}점";
+        loops = StitchOpenEnds(cleaned, 0.30);
         foreach (var loop in loops)
         {
             if (loop == null || loop.Count < 2) continue;

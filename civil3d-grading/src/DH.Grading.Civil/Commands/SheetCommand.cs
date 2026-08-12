@@ -167,6 +167,8 @@ public static class SheetCommand
         SetBandWeeding(db, pvId, scale, log);   // 굴곡부 라벨 솎아내기 — 축척을 알아야 정할 수 있다
         PolishView(db, pvId, log);      // V·H 표시 자리 · 종단선 화살표
         DrawScaleBar(db, pvId, scale, log);   // 흑백 교차 표고바 — 직접 그린다(축 스타일엔 그 기능이 없다)
+        DecorateBandTitles(db, pvId, scale, log);   // 제목칸 이중 테두리(JACK 0812)
+        PlaceScaleBanner(db, pvId, scale, log);     // 축척 배너 블록 + V·H 글자
         // ★★[v24.1] 굴곡부 세로줄은 <b>직접 그린 선</b>이라 선형이 바뀌어도 따라오지 않는다
         //   (JACK: "선형이 변경될 때 변경되야 하거든"). 굴곡부를 다시 켤 때 <b>순정 격자로 낼 방법</b>부터
         //   찾는다. 지금은 <see cref="VgpOn"/>이 꺼져 있어 <b>지우기만</b> 하고 그리지 않는다 —
@@ -428,7 +430,17 @@ public static class SheetCommand
             // ★[JACK 0811] <b>"밴드높이를 15%씩 낮춰줘"</b>
             //   줄어든 만큼은 그래프가 가져간다 — 축척은 <b>실제 밴드 높이를 재서</b> 정해지므로
             //   (<see cref="BandPaperHeight"/>) 여기만 줄이면 나머지가 저절로 따라온다.
-            eachM = BandH * BandHeightScale / n / 1000.0;   // 종이 m — 칸 수로 균등 분할
+            // ★★[v31.0 · JACK 0812] <b>밴드 높이는 20mm 고정 · 제목칸은 정사각형.</b>
+            //
+            //   JACK: <i>"밴드 제목줄은 높이와 넓이가 같은 정사각형으로 갈 것.
+            //   그리고 밴드 높이는 모두 20으로 통일."</i>
+            //
+            //   종전엔 <b>도곽 자리를 칸 수로 나눠</b> 높이를 정했다(6칸이면 23.5mm, 12칸이면 11.8mm).
+            //   그러면 세트를 바꿀 때마다 칸 높이가 달라져 <b>표 모양이 도면마다 다르다</b>.
+            //   납품 도서는 표 칸이 늘 같은 크기다 — 종이 기준 <b>20mm 고정</b>이 맞다.
+            //   칸이 늘면 표가 길어지고 그만큼 그래프가 줄지만, 그건 축척 계산이 알아서 흡수한다
+            //   (<see cref="BandPaperHeight"/>가 실제 높이를 재서 넘긴다).
+            eachM = BandCellMm / 1000.0;   // 종이 m — 칸마다 같은 높이
             // ★★[v26.0 · 실측으로 확정] <b>한 번에 읽고 · 다 고치고 · 한 번에 저장한다.</b>
             //   <c>GetBottomBandItems</c>는 <b>스냅샷</b>이고 <c>SetBottomBandItems</c>는 그 스냅샷을
             //   <b>통째로 덮어쓴다</b> — 칸마다 저장하면 앞 칸이 매번 지워진다(v25.9 실측: 마지막 칸만 남았다).
@@ -541,8 +553,19 @@ public static class SheetCommand
                         {
                             dOk += EnableVgpDisplay(st, i, log);    // 증분 라벨 끄기 + CALS 색
                             //   제목은 <b>0을 넘겨 건너뛴다</b> — 상자 크기가 템플릿 기준이라 키우면 뚫고 나간다.
-                            tOk += SetLabelHeight(tr, st, CalsT25 / 1000.0, 0.0, i, log, ref tTry);
-                            log.AppendLine($"   [{i}칸] 횡단 데이터 — 높이 {eachM * 1000:F1}mm·값글씨·표시만 맞추고 제목은 템플릿 그대로");
+                            tOk += SetLabelHeight(tr, st, CalsT25 / 1000.0, CalsT25 / 1000.0, i, log, ref tTry);
+                            // ★★[v31.0 · JACK 0812] <b>제목칸을 정사각형으로.</b> 한 변 = 칸 높이.
+                            if (!Set(st, "TextBoxWidth", BandCellMm / 1000.0))
+                                log.AppendLine($"   [{i}칸] 제목상자 폭 못 씀({st.GetType().Name})");
+                            // ★★[v31.9 · JACK 0812 실측] <b>제목 글씨 높이도 다시 건다.</b>
+                            //   v31.3에서 "제목은 손대지 말자"고 건너뛰었더니, 이 도면 스타일엔
+                            //   <b>예전 실행이 넣은 4.0mm가 그대로 남아</b> 글자가 칸을 꽉 채웠다(실측 스샷).
+                            //   스타일은 도면에 남는다 — <b>안 건드리는 것은 되돌리는 것이 아니다.</b>
+                            //   4.0mm가 문제였던 것은 칸 폭이 7.2mm이던 시절 얘기다. 지금은 20mm 정사각이라
+                            //   값과 같은 2.5mm면 넉넉하고 표 글씨가 한 크기로 통일된다.
+                            if (!Set(st, "TextHeight", CalsT25 / 1000.0))
+                                log.AppendLine($"   [{i}칸] 제목 글씨높이 못 씀({st.GetType().Name})");
+                            log.AppendLine($"   [{i}칸] 횡단 데이터 — 칸 {eachM * 1000:F1}mm 정사각 제목칸 · 값글씨·표시만 맞춤");
                             continue;
                         }
 
@@ -555,12 +578,16 @@ public static class SheetCommand
                         //   <c>R-TABL-TEX1 = T40</c>(제목 4.0mm) · <c>R-TABL-TEX2 = T25</c>(내용 2.5mm).
                         //   종전엔 칸 높이에서 역산하고 15%·30%를 곱해 맞췄는데, 그건 <b>기준이 없어서</b>
                         //   눈으로 맞추던 것이다. 표준값은 종이 기준이라 축척이 바뀌어도 그대로다.
-                        double valMm = CalsT25, ttlMm = CalsT40;
-                        // 제목 글씨는 밴드 스타일 직속(맨 double). 실패하면 그것도 남긴다 —
-                        // 밴드 종류가 늘면 조용히 깨질 자리다.
-                        if (!Set(st, "TextHeight", ttlMm / 1000.0))
-                            log.AppendLine($"   [{i}칸] 제목 글씨높이 못 씀({st.GetType().Name})");
-                        if (!Set(st, "TextBoxWidth", ttlMm * 1.8 / 1000.0))   // 글씨가 상자 밖으로 안 나가게
+                        // ★★[v31.5 · JACK 0812 스샷] 제목도 <b>값과 같은 2.5mm</b> — 손으로 맞춰 잘 나오던 것이 2.54mm였다.
+                        //   v28.3에서 "제목은 손대지 말자"고 건너뛰었는데, 그건 4.0mm로 <b>키워서</b> 칸을 뚫었기 때문이다.
+                        //   줄이는 쪽은 안전하고, 표 글씨가 한 크기로 통일돼 보기도 낫다.
+                        double valMm = CalsT25, ttlMm = CalsT25;
+                        // ★★[v31.3 · JACK 0812] <b>측점 칸만 제목 상자가 안 바뀌던 것.</b>
+                        //   JACK: <i>"측점 부분은 레이블 제목 부분 크기가 안 바뀐 것 같아."</i> — 맞다.
+                        //   v28.0에서 <b>측점 행만 종단 데이터 밴드</b>로 바꿨는데, 정사각 제목칸 설정을
+                        //   <b>횡단 데이터 갈래에만</b> 넣어 뒀다. 그래서 그 한 칸만 옛 크기로 남았다.
+                        //   제목칸 규격은 밴드 종류와 무관하다 — 같은 표의 같은 열이니까.
+                        if (!Set(st, "TextBoxWidth", BandCellMm / 1000.0))
                             log.AppendLine($"   [{i}칸] 제목 상자폭 못 씀({st.GetType().Name})");
                         // ★★[v25.6 · JACK 0811] <b>횡단 데이터 밴드의 표현식은 건드리지 않는다.</b>
                         //
@@ -884,6 +911,11 @@ public static class SheetCommand
     /// 첫 칸만 간격이 있고 나머지는 <c>0.00mm</c>였다. 간격은 원인이 아니었다.</para>
     private const double BandGapMm = 0.0;
 
+    /// <summary>★★[v31.0 · JACK 0812] <b>밴드 한 칸의 높이(종이 mm) — 칸 수와 무관하게 고정.</b>
+    /// <para>제목칸을 <b>정사각형</b>으로 두기로 했으므로(JACK), 이 값이 곧 <b>제목칸의 한 변</b>이다.
+    /// 표 칸 크기가 도면마다 달라지지 않게 하는 것이 목적이다.</para></summary>
+    private const double BandCellMm = 20.0;
+
     /// <summary>★[JACK 0810] <b>"계획지반고의 변곡점 측점이 누락됨"</b> —
     /// v23.5에서 굴곡부 <b>눈금</b>은 켰는데(굴곡부 12/12) 도면엔 값이 안 나왔다.
     /// 로그가 이유를 그대로 말해 준다: <c>VGPLabelStyleId … 글자 구성요소가 0개</c>.
@@ -1032,6 +1064,23 @@ public static class SheetCommand
             var pv = (CivilDb.ProfileView)tr.GetObject(pvId, OpenMode.ForRead);
             if (tr.GetObject(pv.StyleId, OpenMode.ForWrite) is not CivilDb.Styles.ProfileViewStyle vs)
             { log.AppendLine("   축 눈금: 종단 뷰 스타일을 열지 못했다"); tr.Commit(); return; }
+
+            // ★★[v31.7 · JACK 0812] <b>격자 위쪽 여백을 줄인다 — 빈 하늘을 걷어낸다.</b>
+            //
+            //   JACK: <i>"아래는 표시할 게 있어서 지금도 괜찮은데 위로는 범위를 좀 줄여도 돼.
+            //   그렇게 해서 위에 종평면도 공간을 좀 확보하고 싶어."</i>
+            //
+            //   격자 표고는 <b>데이터 범위 → 주눈금으로 바깥 반올림 → 스타일의 여백만큼 확장</b>으로 정해진다.
+            //   실측: 데이터 103~112m인데 격자가 <b>95~125m</b>였다 — 위로 두 칸(10m)이 빈 하늘이었다.
+            //   아래 여백은 그대로 둔다(표시할 것이 있다는 JACK 지시).
+            try
+            {
+                using var gs = vs.GridStyle;
+                double a0 = gs.GridPaddingAbove, b0 = gs.GridPaddingBottom;
+                gs.GridPaddingAbove = GridPadAbove;
+                log.AppendLine($"   격자 여백: 위 {a0:0.##}칸 → {gs.GridPaddingAbove:0.##}칸 · 아래 {b0:0.##}칸(그대로)");
+            }
+            catch (System.Exception ex) { log.AppendLine("   격자 여백 실패 — " + Brief(ex)); }
 
             // ★[v23.20] <b>왼쪽 간격을 먼저 정하고 오른쪽을 거기에 맞춘다.</b>
             //   종전엔 축마다 따로 판정해서 왼쪽 5m·오른쪽 2.5m로 <b>어긋났다</b>(실측).
@@ -1756,6 +1805,328 @@ public static class SheetCommand
         catch (System.Exception ex) { log.AppendLine("   세로줄 청소 실패 — " + Brief(ex)); }
     }
 
+    /// <summary>★★[v31.1 · JACK 0812] <b>밴드 제목칸 꾸미기 — 안쪽으로 0.5 간격 이중 테두리.</b>
+    ///
+    /// <para>JACK: <i>"제목 부분이 너무 허전해서 다른 2D 납품 도서를 보니 저렇게 꾸며져 있는데
+    /// 우리 것에 적용할 수 있을까?"</i> — 참고 도서의 제목칸은 <b>테두리가 겹으로</b> 들어가 있다.
+    /// <i>"해치는 없는 걸로 하자. 안쪽으로 네모 박스를 0.5 간격으로 두 번."</i></para>
+    ///
+    /// <para><b>블록으로 붙이지 않는 이유.</b> 참고 도서의 블록은 <b>8칸(관로용)에 축척이 박힌</b> 것이라
+    /// 우리 6칸 토공 표에 안 맞고, 축척이 도면마다 달라지면 어긋난다.
+    /// 표고바와 같은 방식으로 <b>직접 그리면</b> 칸 수·칸 높이·축척에 저절로 맞는다.</para>
+    ///
+    /// <para>자리는 <b>계산으로</b> 잡는다 — 제목칸은 데이터 시작 x의 왼쪽에 <see cref="BandCellMm"/>만큼,
+    /// 세로로는 그래프 아래에서 <see cref="TopGapMm"/> 띄우고 칸마다 같은 높이로 내려간다.
+    /// 다시 돌릴 때 겹치지 않게 <b>우리 레이어를 먼저 비운다</b>.</para></summary>
+    private const double TitleInsetMm = 0.5;   // 안쪽으로 들어가는 간격(종이 mm) — 두 번 반복
+    private const string LayTitleDeco = "CR-TABL-DECO";
+
+    /// <summary>★★[v31.1 · JACK 0812] <b>축척 배너 — JACK이 DHT.dwt에 넣어 준 블록을 붙인다.</b>
+    ///
+    /// <para>참고 도서의 그 화살표가 보기 좋다고 하셔서 <b>직접 그리지 않고 그대로 쓴다</b>.
+    /// 블록은 <c>ㄴ</c>자로 만나는 <b>모서리가 기준점</b>이고, 거기서 <b>위(V)</b>와 <b>오른쪽(H)</b>으로 뻗는다.
+    /// 그래서 <b>표의 왼쪽 아래 모서리</b>에 그대로 놓으면 V는 표를 따라 올라가고 H는 표를 따라 오른쪽으로 눕는다.</para>
+    ///
+    /// <para><b>이름은 굳이 맞추지 않는다</b> — 이름에 '배너' 또는 '축척'이 들어간 블록을 찾는다.
+    /// JACK이 나중에 이름을 바꿔도 그대로 동작해야 한다(제약을 만들지 않는다).
+    /// 못 찾으면 <b>도면에 있는 블록 이름을 로그에 남긴다</b> — 다음 판에서 이름으로 짚을 수 있게.</para>
+    ///
+    /// <para>글자는 <b>지금 축척</b>을 읽어 쓴다. 블록에 <c>V_SCALE</c>·<c>H_SCALE</c> 속성이 있으면
+    /// 그 값을 채우고, 없으면 화살표 옆에 직접 쓴다. 축척이 도면마다 달라지므로
+    /// 블록 안에 값을 박아 두면 <b>틀린 값이 인쇄된다</b>.</para></summary>
+    private const string LayBanner = "CR-GSCL-LINE";
+    /// <summary>축척 배너를 표에서 띄우는 거리(종이 mm) — 맞닿으면 표 선과 구분이 안 된다(JACK).</summary>
+    private const double BannerGapMm = 4.0;
+    /// <summary>배너 글자 크기 배수 — JACK 0812: <i>"문자 크기도 줄여야 됨, 약 30% 줄일 것."</i></summary>
+    private const double BannerTextScale = 0.7;
+
+    /// <summary>놓인 블록의 정점을 <b>도면 좌표로</b> 모은다 — 기둥 두께를 재는 데 쓴다.
+    /// <para>블록 정의 안의 좌표는 블록 자기 좌표계라, 놓인 자리·배율을 반영하려면
+    /// <c>BlockTransform</c>을 곱해야 한다. 모르는 종류는 건너뛴다(선·폴리선이면 충분하다).</para></summary>
+    private static List<Point3d> BlockVertices(Transaction tr, BlockReference br)
+    {
+        var pts = new List<Point3d>();
+        try
+        {
+            var m = br.BlockTransform;
+            if (tr.GetObject(br.BlockTableRecord, OpenMode.ForRead) is not BlockTableRecord def) return pts;
+            foreach (ObjectId id in def)
+            {
+                try
+                {
+                    var e = tr.GetObject(id, OpenMode.ForRead);
+                    switch (e)
+                    {
+                        case Line ln: pts.Add(ln.StartPoint.TransformBy(m)); pts.Add(ln.EndPoint.TransformBy(m)); break;
+                        case Polyline pl:
+                            for (int i = 0; i < pl.NumberOfVertices; i++) pts.Add(pl.GetPoint3dAt(i).TransformBy(m));
+                            break;
+                        case Polyline3d p3:
+                            foreach (ObjectId vid in p3)
+                                if (tr.GetObject(vid, OpenMode.ForRead) is PolylineVertex3d v) pts.Add(v.Position.TransformBy(m));
+                            break;
+                        case Polyline2d p2:
+                            foreach (ObjectId vid in p2)
+                                if (tr.GetObject(vid, OpenMode.ForRead) is Vertex2d v2) pts.Add(v2.Position.TransformBy(m));
+                            break;
+                    }
+                }
+                catch { }
+            }
+        }
+        catch { }
+        return pts;
+    }
+
+    private static void PlaceScaleBanner(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log)
+    {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+
+            // ── 블록 찾기(이름에 '배너' 또는 '축척')
+            ObjectId defId = ObjectId.Null; string defName = "";
+            var names = new List<string>();
+            foreach (ObjectId id in bt)
+            {
+                try
+                {
+                    if (tr.GetObject(id, OpenMode.ForRead) is not BlockTableRecord b) continue;
+                    if (b.IsLayout || b.IsAnonymous) continue;
+                    names.Add(b.Name);
+                    if (defId.IsNull && (b.Name.Contains("배너") || b.Name.Contains("축척")))
+                    { defId = id; defName = b.Name; }
+                }
+                catch { }
+            }
+            if (defId.IsNull)
+            {
+                log.AppendLine("   축척배너: 이름에 '배너'·'축척'이 든 블록이 없다 — 도면의 블록: "
+                               + string.Join(" · ", names.Take(30)) + (names.Count > 30 ? " …" : ""));
+                tr.Commit(); return;
+            }
+
+            var pv = (CivilDb.ProfileView)tr.GetObject(pvId, OpenMode.ForRead);
+            int n = 0; using (var items = pv.Bands.GetBottomBandItems()) n = items.Count;
+            var ext = pv.GeometricExtents;
+            double mm = scale / 1000.0;
+            double cell = BandCellMm * mm;
+            double xL = ext.MinPoint.X - cell;                                  // 제목칸 왼쪽 = 표의 왼쪽 끝
+            double yBot = ext.MinPoint.Y - TopGapMm * mm - n * cell;            // 표의 아래 끝
+
+            var layer = SectionCommand.EnsureLayer(db, tr, LayBanner, CalsScaleLine);
+            var ms = (BlockTableRecord)tr.GetObject(
+                SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+
+            // 지난 판에 놓은 같은 블록만 지운다(우리가 놓은 것만 — 남의 것은 건드리지 않는다).
+            int wiped = 0;
+            foreach (ObjectId id in ms)
+            {
+                try
+                {
+                    if (tr.GetObject(id, OpenMode.ForRead) is not BlockReference br) continue;
+                    if (br.BlockTableRecord != defId) continue;
+                    tr.GetObject(id, OpenMode.ForWrite).Erase(); wiped++;
+                }
+                catch { }
+            }
+
+            // 블록은 <b>종이 mm</b>로 그려져 있다고 본다 → 축척을 곱해 모형 크기로.
+            // ★★[v31.2 · JACK 0812] <b>표에 딱 붙이지 않는다.</b>
+            //   <i>"축척 화살표는 너무 밴드표에 딱 붙지 않게 적당하게 오프셋해서 넣고"</i> —
+            //   맞닿으면 표의 선인지 화살표인지 눈으로 구분이 안 된다. 종이 기준으로 띄운다.
+            var pt = new Point3d(xL - BannerGapMm * mm, yBot - BannerGapMm * mm, 0);
+            var bref = new BlockReference(pt, defId) { ScaleFactors = new Scale3d(mm) };
+            bref.SetDatabaseDefaults(db); bref.LayerId = layer;
+            ms.AppendEntity(bref); tr.AddNewlyCreatedDBObject(bref, true);
+
+            // ── 글자: 속성이 있으면 채우고, 없으면 그냥 둔다(다음 판에서 자리를 정한다).
+            string vTxt = $"V = 1:{scale:F0}", hTxt = $"H = 1:{scale:F0}";
+            int nAttr = 0;
+            try
+            {
+                var def = (BlockTableRecord)tr.GetObject(defId, OpenMode.ForRead);
+                foreach (ObjectId aid in def)
+                {
+                    if (tr.GetObject(aid, OpenMode.ForRead) is not AttributeDefinition ad || ad.Constant) continue;
+                    var ar = new AttributeReference();
+                    ar.SetAttributeFromBlock(ad, bref.BlockTransform);
+                    string tag = (ad.Tag ?? "").ToUpperInvariant();
+                    ar.TextString = tag.Contains("V") ? vTxt : tag.Contains("H") ? hTxt : ad.TextString;
+                    bref.AttributeCollection.AppendAttribute(ar);
+                    tr.AddNewlyCreatedDBObject(ar, true);
+                    nAttr++;
+                }
+            }
+            catch (System.Exception ex) { log.AppendLine("   축척배너 속성 채우기 실패 — " + Brief(ex)); }
+
+            // 블록 크기를 재서 남긴다 — 자리가 어긋나면 이 숫자로 바로 짚는다.
+            string size = "?";
+            double bw = 0, bh = 0;
+            try
+            {
+                var e2 = bref.GeometricExtents;
+                bw = e2.MaxPoint.X - e2.MinPoint.X; bh = e2.MaxPoint.Y - e2.MinPoint.Y;
+                size = $"{bw:F2}×{bh:F2}m";
+            }
+            catch { }
+
+            // ★★[v31.2 · JACK 0812] <b>속성이 없으면 글자를 직접 써 넣는다 — 화살표 안쪽 알맞은 자리에.</b>
+            //   <i>"안에 축척도 알맞은 위치에 넣어"</i>. 블록의 실제 크기를 재서 자리를 잡으므로
+            //   화살표를 다시 그려도 따라간다.
+            //   · V(세로 화살표) → 세로쓰기로 <b>왼쪽 기둥 가운데</b>
+            //   · H(가로 화살표) → 가로쓰기로 <b>아래 기둥 가운데</b>
+            if (nAttr == 0 && bw > 0 && bh > 0)
+            {
+                // ★★[v31.5 · JACK 0812] <b>글자가 블록 밖으로 나갔다.</b>
+                //   원인: 기준점이 <b>경계상자 좌하단이 아니라 ㄴ자가 만나는 모서리</b>다.
+                //   세로 화살표는 그 점의 <b>왼쪽·위</b>로, 가로 화살표는 <b>오른쪽·아래</b>로 뻗는다.
+                //   그러니 기준점에서 오른쪽·위로만 재면 엉뚱한 자리가 나온다 —
+                //   <b>놓인 블록의 실제 경계</b>를 재서 기둥 한가운데를 잡는다.
+                //   · 세로 기둥 폭 = (모서리X − 왼쪽끝X) · 가로 기둥 높이 = (모서리Y − 아래끝Y)
+                double th = CalsT25 * BannerTextScale * mm;     // JACK: "문자 크기도 약 30% 줄일 것"
+                var eb = bref.GeometricExtents;
+
+                // ★★[v31.6 · JACK 0812] <b>기둥 두께를 실제로 잰다 — 경계상자로는 못 맞춘다.</b>
+                //   실측: 글자가 화살표 <b>바깥 왼쪽</b>에 찍혔다. 경계상자의 왼쪽 끝은 <b>화살촉의 뾰족한 끝</b>이라
+                //   기둥보다 훨씬 왼쪽이다. 그 중간을 잡으니 기둥을 벗어난 것이다.
+                //   → 모서리에서 가까운 구간(팔 길이의 35% 안쪽)의 정점만 모아 <b>기둥의 실제 끝</b>을 찾는다.
+                //     거기는 화살촉이 없는 자리라 기둥 두께가 그대로 나온다.
+                double armW = eb.MaxPoint.X - pt.X, armH = eb.MaxPoint.Y - pt.Y;
+                double vLeft = pt.X, hBot = pt.Y;                  // 못 찾으면 모서리(=두께 0)로 폴백
+                var verts = new List<Point3d>();
+                try
+                {
+                    verts = BlockVertices(tr, bref);
+                    foreach (var q in verts)
+                    {
+                        // 세로 팔의 밑동 — 모서리 바로 위, 모서리보다 왼쪽
+                        if (q.Y >= pt.Y && q.Y <= pt.Y + armH * 0.35 && q.X < pt.X) vLeft = System.Math.Min(vLeft, q.X);
+                        // 가로 팔의 밑동 — 모서리 바로 오른쪽, 모서리보다 아래
+                        if (q.X >= pt.X && q.X <= pt.X + armW * 0.35 && q.Y < pt.Y) hBot = System.Math.Min(hBot, q.Y);
+                    }
+                }
+                catch (System.Exception ex) { log.AppendLine("   축척배너 기둥 재기 실패 — " + Brief(ex)); }
+
+                // ★★[v32.0 · JACK 0812 스샷] <b>화살촉을 피한다 — 글자는 곧은 기둥 안에만.</b>
+                //   JACK이 노란 네모로 자리를 짚어 주고 적었다:
+                //   <i>"노란색 네모부분 정도 까지로 V는 조금 더 아래로 H는 조금 더 왼쪽으로 갈 것."</i>
+                //   둘 다 <b>화살촉에서 멀어지는 쪽</b>이다. 원인은 길이를 <b>끝(뾰족한 촉)까지</b> 재서
+                //   그 한가운데에 놓은 것 — 촉은 좁아지므로 글자가 삐져나온다.
+                //   → <b>촉이 시작되는 자리</b>를 찾아 거기까지만 기둥으로 본다.
+                //     촉은 기둥보다 <b>바깥으로 튀어나온 정점</b>을 가지므로, 그 정점들의
+                //     '모서리에 가장 가까운 값'이 곧 촉의 밑동이다.
+                double vHeadY = eb.MaxPoint.Y, hHeadX = eb.MaxPoint.X;
+                double eps = 1e-6;
+                foreach (var q in verts)
+                {
+                    if (q.X < vLeft - eps && q.Y > pt.Y) vHeadY = System.Math.Min(vHeadY, q.Y);   // 세로 촉 밑동
+                    if (q.Y < hBot - eps && q.X > pt.X) hHeadX = System.Math.Min(hHeadX, q.X);    // 가로 촉 밑동
+                }
+
+                double vShaftMidX = (vLeft + pt.X) / 2.0;           // 세로 기둥 한가운데(폭)
+                double vMidY = (pt.Y + vHeadY) / 2.0;               // 곧은 기둥 구간의 한가운데(길이)
+                double hShaftMidY = (hBot + pt.Y) / 2.0;            // 가로 기둥 한가운데(높이)
+                double hMidX = (pt.X + hHeadX) / 2.0;
+                log.AppendLine($"   축척배너 기둥: 세로 폭 {(pt.X - vLeft) / mm:F1}mm · 길이 {(vHeadY - pt.Y) / mm:F1}mm" +
+                               $" · 가로 높이 {(pt.Y - hBot) / mm:F1}mm · 길이 {(hHeadX - pt.X) / mm:F1}mm" +
+                               $" · 글씨 {th / mm:F2}mm (촉은 제외하고 잰 길이)");
+                foreach (var (txt, ang, px, py) in new[]
+                {
+                    (vTxt, System.Math.PI / 2, vShaftMidX, vMidY),   // 세로 기둥 — 세로쓰기
+                    (hTxt, 0.0,                hMidX,      hShaftMidY),  // 가로 기둥 — 가로쓰기
+                })
+                {
+                    try
+                    {
+                        var t = new DBText
+                        {
+                            TextString = txt,
+                            Height = th,
+                            Rotation = ang,
+                            Justify = AttachmentPoint.MiddleCenter,
+                            AlignmentPoint = new Point3d(px, py, 0),
+                            Position = new Point3d(px, py, 0),
+                        };
+                        t.SetDatabaseDefaults(db); t.LayerId = layer;
+                        ms.AppendEntity(t); tr.AddNewlyCreatedDBObject(t, true);
+                    }
+                    catch (System.Exception ex) { log.AppendLine("   축척배너 글자 실패 — " + Brief(ex)); }
+                }
+            }
+
+            tr.Commit();
+            log.AppendLine($"   축척배너: 블록 '{defName}' → 표 왼쪽아래 ({xL:F2}, {yBot:F2})" +
+                           $" · 배율 {mm:F4}(종이mm×1:{scale:F0}) · 크기 {size}" +
+                           $" · 표에서 {BannerGapMm:0.#}mm 띄움" +
+                           (nAttr > 0 ? $" · 속성 {nAttr}개 채움({vTxt} / {hTxt})"
+                                      : $" · 속성이 없어 글자를 직접 씀({vTxt} / {hTxt})") +
+                           (wiped > 0 ? $" · 지난 판 {wiped}개 지움" : ""));
+        }
+        catch (System.Exception ex) { log.AppendLine("   축척배너 실패 — " + Brief(ex)); }
+    }
+
+    private static void DecorateBandTitles(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log)
+    {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var pv = (CivilDb.ProfileView)tr.GetObject(pvId, OpenMode.ForRead);
+
+            int n = 0;
+            using (var items = pv.Bands.GetBottomBandItems()) n = items.Count;
+            if (n == 0) { log.AppendLine("   제목칸 꾸미기: 밴드가 없어 건너뜀"); tr.Commit(); return; }
+
+            var ext = pv.GeometricExtents;                     // 그래프 상자(밴드는 안 들어 있다)
+            double mm = scale / 1000.0;                        // 종이 mm → 모형 m
+            double cell = BandCellMm * mm;                     // 칸 한 변
+            double xR = ext.MinPoint.X;                        // 데이터 시작 = 제목칸 오른쪽 끝
+            double xL = xR - cell;                             // 정사각형이므로 폭 = 칸 높이
+            double yTop = ext.MinPoint.Y - TopGapMm * mm;      // 첫 칸 위 끝(그래프와의 틈만큼 내려간다)
+
+            var layer = SectionCommand.EnsureLayer(db, tr, LayTitleDeco, CalsTableThin);
+            var ms = (BlockTableRecord)tr.GetObject(
+                SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+
+            int wiped = 0;
+            foreach (ObjectId id in ms)
+            {
+                try
+                {
+                    if (tr.GetObject(id, OpenMode.ForRead) is not Entity e || e.LayerId != layer) continue;
+                    tr.GetObject(id, OpenMode.ForWrite).Erase(); wiped++;
+                }
+                catch { }
+            }
+
+            int drawn = 0;
+            for (int i = 0; i < n; i++)
+            {
+                double hi = yTop - i * cell, lo = hi - cell;
+                for (int k = 1; k <= 2; k++)                   // 0.5 · 1.0 — 안쪽으로 두 번
+                {
+                    double d = TitleInsetMm * k * mm;
+                    if (cell - 2 * d <= 0) break;              // 칸보다 여백이 크면 그릴 것이 없다
+                    var pl = new Polyline();
+                    pl.AddVertexAt(0, new Point2d(xL + d, lo + d), 0, 0, 0);
+                    pl.AddVertexAt(1, new Point2d(xR - d, lo + d), 0, 0, 0);
+                    pl.AddVertexAt(2, new Point2d(xR - d, hi - d), 0, 0, 0);
+                    pl.AddVertexAt(3, new Point2d(xL + d, hi - d), 0, 0, 0);
+                    pl.Closed = true;
+                    pl.SetDatabaseDefaults(db); pl.LayerId = layer;
+                    ms.AppendEntity(pl); tr.AddNewlyCreatedDBObject(pl, true);
+                    drawn++;
+                }
+            }
+            tr.Commit();
+            log.AppendLine($"   제목칸 꾸미기: {n}칸 × 이중 테두리 {drawn}개 · 칸 {BandCellMm:0.#}mm 정사각" +
+                           $" · 안쪽 {TitleInsetMm:0.#}/{TitleInsetMm * 2:0.#}mm · x {xL:F2}~{xR:F2} · 레이어 {LayTitleDeco}" +
+                           (wiped > 0 ? $" · 지난 판 {wiped}개 지움" : ""));
+        }
+        catch (System.Exception ex) { log.AppendLine("   제목칸 꾸미기 실패 — " + Brief(ex)); }
+    }
+
     /// <summary>★[JACK 0810] <b>흑백 교차 표고바 — 직접 그린다.</b>
     ///
     /// <para><b>왜 직접 그리나.</b> JACK이 알려준 '눈금 블록' 처방은 종단면도 축에는 쓸 수 없다.
@@ -2092,6 +2463,10 @@ public static class SheetCommand
 
     /// <summary>종단 뷰 좌우 축의 <b>주눈금 길이</b>(종이 mm). 보조는 <see cref="MinorTickRatio"/>배.
     /// 종이 기준이라 축척이 바뀌어도 눈에 보이는 길이는 같다.</summary>
+    /// <summary>격자 <b>위쪽</b> 여백(주눈금 칸 수) — 0이면 데이터 위 첫 눈금선에서 끝난다.
+    /// 아래는 건드리지 않는다(JACK: "아래는 표시할 게 있어서 지금도 괜찮다").</summary>
+    private const double GridPadAbove = 0.0;
+
     private const double AxisMajorTickMm = 2.5;
 
     /// <summary>표고 숫자의 자릿수 — "115.00"처럼 여섯 자를 기준으로 글자 폭을 잰다.
@@ -2237,6 +2612,41 @@ public static class SheetCommand
                         //   (StyleText:CivilWrapper, PropertyDouble:TreeOidWrapper→DisposableWrapper — 메타데이터 확인).
                         //   `tc.Text.Height.Value`를 한 번 타면 버릴 객체가 2개 생긴다. 그 사슬을 세 번 타면
                         //   구성요소당 6개 — 6칸×7라벨이면 한 번 실행에 250개가 넘게 샌다.
+                        // ★★[v31.3] '일반'의 부착점 — 기준선이 칸의 어디에 앉는가.
+                        // ★★[v31.4 실측] <b>밴드 라벨의 '부착점'은 밴드 전용 값을 쓴다.</b>
+                        //   <c>MiddleCenter</c>를 넣었더니 Civil이 거절했다:
+                        //   <i>"'134263048' 열거형 값은 '부착점' 속성에 대해 유효한 열거형 값이 아닙니다"</i>.
+                        //   같은 <c>AnchorPointType</c> 안에 <b>밴드용</b>이 따로 있다 —
+                        //   <c>BandTop · BandMiddle · BandBottom</c>. 칸 가운데는 <c>BandMiddle</c>이다.
+                        //   ※ 라벨 종류마다 받는 값이 다를 수 있으므로 <b>후보를 순서대로 넣어 보고
+                        //     되읽어 확인</b>한다 — 어느 것이 먹었는지도 남긴다.
+                        //   ★★[v31.5 · JACK 0812 스샷] <b>제목과 값이 서로 다른 값을 쓴다.</b>
+                        //   손으로 맞춰 놓은 것을 보여주셨다:
+                        //   <code>
+                        //   밴드 제목 : 부착점 = 중간 중심(MiddleCenter) · 부착 = 중간 중심 · 높이 2.54mm
+                        //   밴드 값   : 부착점 = 밴드 중간(BandMiddle)   · 부착 = 중간 중심 · 높이 2.50mm
+                        //   </code>
+                        //   그래서 <b>역할에 따라 먼저 시도할 값을 바꾼다</b> — 하나로 밀면 한쪽이 거부된다.
+                        string apOk = "";
+                        var cands = isTitle
+                            ? new[] { Autodesk.Civil.AnchorPointType.MiddleCenter,
+                                      Autodesk.Civil.AnchorPointType.BandMiddle,
+                                      Autodesk.Civil.AnchorPointType.Middle }
+                            : new[] { Autodesk.Civil.AnchorPointType.BandMiddle,
+                                      Autodesk.Civil.AnchorPointType.MiddleCenter,
+                                      Autodesk.Civil.AnchorPointType.Middle };
+                        foreach (var cand in cands)
+                        {
+                            try
+                            {
+                                using var gen = tc.General; using var ap = gen.AnchorLocation;
+                                ap.Value = cand;
+                                if (ap.Value == cand) { apOk = cand.ToString(); break; }
+                            }
+                            catch { }
+                        }
+                        if (apOk.Length == 0) log.AppendLine($"   {tag}: 일반 부착점을 못 바꿨다(후보 3개 모두 거절)");
+
                         double back;
                         bool overridden = false, locked = false, ovable = false;
                         using (var txt = tc.Text)
@@ -2248,12 +2658,33 @@ public static class SheetCommand
                             //   정작 <b>회전을 안 시켰다.</b> 가로로 쓰이니 4글자가 옆 칸을 침범한다.
                             //   세로로 눕히면 4글자 × 6.2mm = 24.9mm로 칸(27.7mm) 안에 들어간다 —
                             //   즉 회전이 빠졌던 것이지 크기 공식이 틀린 게 아니었다.
+                            // ★★[v31.6 · JACK 0812] <b>제목은 다시 가로쓰기로.</b>
+                            //   0810에 세로로 눕힌 이유는 <b>칸이 좁아서</b>였다 — 그때는 칸 높이를
+                            //   도곽에서 역산해 27.7mm였고 폭은 제목 글씨의 1.8배(7.2mm)뿐이라
+                            //   '누가거리' 4글자가 옆 칸을 침범했다.
+                            //   지금은 칸이 <b>20×20mm 정사각</b>이라 4글자×2.5mm = 10mm로 넉넉히 들어간다.
+                            //   참고 납품 도서도 가로쓰기다. 눕힐 이유가 사라졌다.
                             if (isTitle)
-                                using (var ang = txt.Angle) { ang.Value = System.Math.PI / 2.0; }
+                                using (var ang = txt.Angle) { ang.Value = 0.0; }
                             // ★[JACK 0810] "모든 글씨는 흰색(검정)으로" — 라벨 스타일이 표시 색을
                             //   덮어쓸 수 있으므로 여기서도 7번을 박는다(밴드 표시 쪽만 고치면 빨간 글씨가 남는다).
                             // ★[JACK 0811] CALS: 제목문자 6 · 내용문자 3.
                             try { using (var col = txt.Color) col.Value = Aci(isTitle ? CalsTitleText : CalsValueText); } catch { }
+
+                            // ★★[v31.3 · JACK 0812] <b>제목·값 모두 부착점을 '중간 중심'으로.</b>
+                            //   JACK: <i>"레이블 스타일 작성기에서 밴드 제목과 값 모두
+                            //   <b>일반의 부착점</b>과 <b>문자의 부착</b> 둘 다 중간중심으로 설정해."</i>
+                            //   값이 칸 위쪽에 몰리고 제목이 칸 밖으로 흐르던 것이 이 둘 때문이다 —
+                            //   글자가 <b>칸의 어디에 매달리는가</b>를 정하는 자리다.
+                            //   (<c>Attachment</c>=글자가 기준선의 어디에 붙는가, <c>AnchorPoint</c>=기준선이 칸의 어디인가.
+                            //    둘 중 하나만 고치면 여전히 한쪽으로 쏠린다.)
+                            try { using (var at = txt.Attachment) at.Value = Autodesk.Civil.LabelTextAttachmentType.MiddleCenter; }
+                            catch (System.Exception ex) { log.AppendLine($"   {tag}: 문자 부착 실패 — {Brief(ex)}"); }
+
+                            // ★★[v31.5 · JACK 0812 스샷] <b>간격띄우기는 0</b> — 잘 나오는 설정이 X·Y 둘 다 0.00mm였다.
+                            //   0이 아니면 가운데로 맞춰 놓고 다시 밀어내는 셈이라 정렬이 어긋난다.
+                            try { using (var xo = txt.XOffset) xo.Value = 0.0; } catch { }
+                            try { using (var yo = txt.YOffset) yo.Value = 0.0; } catch { }
                             // 넣은 값을 **다시 읽어** 확인한다 — 상위 스타일에서 잠겨 있으면 조용히 무시된다.
                             // 그때 '성공'으로 세면 로그가 거짓말을 한다(§22.6 '되는 것처럼 보이는 실패').
                             back = hp.Value;

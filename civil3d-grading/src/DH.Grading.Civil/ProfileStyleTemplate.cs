@@ -390,6 +390,64 @@ public static class ProfileStyleTemplate
         }
     }
 
+    /// <summary>★★[v31.3 · JACK 0812] <b>템플릿의 블록도 가져온다 — 스타일만으로는 안 온다.</b>
+    ///
+    /// <para>실측: 축척 배너 블록이 도면에 없었다. <c>StyleBase.ExportTo</c>는 <b>Civil 스타일</b>만 옮긴다 —
+    /// 평범한 AutoCAD 블록은 그 대상이 아니라 <b>영영 따라오지 않는다</b>.
+    /// 로그가 그대로 말해 줬다: <i>"이름에 '배너'·'축척'이 든 블록이 없다 — 도면의 블록: _ClosedBlank · AeccTickLine …"</i>
+    /// (전부 Civil 기본 블록이었다.)</para>
+    ///
+    /// <para>그래서 <c>WblockCloneObjects</c>로 <b>블록 정의를 통째로</b> 복제해 온다.
+    /// 이름으로 고르되 <b>정확일치를 요구하지 않는다</b> — JACK이 이름을 바꿔도 동작해야 한다.</para>
+    /// 반환=사람이 읽을 결과 한 줄.</summary>
+    public static string ImportBlocks(Database dstDb, Func<string, bool> want)
+    {
+        try
+        {
+            string? dwt = ExtractTemplate(out string why);
+            if (dwt == null) return "블록: 템플릿을 못 꺼냄 — " + why;
+
+            using var srcDb = new Database(false, true);
+            srcDb.ReadDwgFile(dwt, FileShare.Read, allowCPConversion: true, password: null);
+            srcDb.CloseInput(true);
+
+            var pick = new ObjectIdCollection();
+            var picked = new List<string>();
+            var all = new List<string>();
+            using (var tr = srcDb.TransactionManager.StartTransaction())
+            {
+                var bt = (BlockTable)tr.GetObject(srcDb.BlockTableId, OpenMode.ForRead);
+                foreach (ObjectId id in bt)
+                {
+                    if (tr.GetObject(id, OpenMode.ForRead) is not BlockTableRecord b) continue;
+                    if (b.IsLayout || b.IsAnonymous) continue;
+                    all.Add(b.Name);
+                    if (want(b.Name)) { pick.Add(id); picked.Add(b.Name); }
+                }
+                tr.Commit();
+            }
+            if (pick.Count == 0)
+                return "블록: 템플릿에서 찾지 못함 — 템플릿의 블록: "
+                     + string.Join(" · ", all.Take(40)) + (all.Count > 40 ? " …" : "");
+
+            // 이미 있으면 덮어쓴다(<c>Replace</c>) — 템플릿을 고쳤을 때 그 모양이 바로 반영돼야 한다.
+            var map = new IdMapping();
+            srcDb.WblockCloneObjects(pick, dstDb.BlockTableId, map,
+                                     DuplicateRecordCloning.Replace, false);
+
+            // 넣었다고 세지 않는다 — 도착지에서 되읽어 확인한다.
+            int ok = 0;
+            using (var tr = dstDb.TransactionManager.StartTransaction())
+            {
+                var bt = (BlockTable)tr.GetObject(dstDb.BlockTableId, OpenMode.ForRead);
+                foreach (var nm in picked) if (bt.Has(nm)) ok++;
+                tr.Commit();
+            }
+            return $"블록: {ok}/{picked.Count}개 들여옴(되읽어 확인) — {string.Join(" · ", picked)}";
+        }
+        catch (Exception ex) { return "블록 들여오기 실패 — " + ex.Message; }
+    }
+
     /// <summary>템플릿의 'DH' 스타일을 현재 도면으로 가져온다. 반환=가져온 개수.</summary>
     public static int Import(Database dstDb, CivilDocument dstCivil)
     {
