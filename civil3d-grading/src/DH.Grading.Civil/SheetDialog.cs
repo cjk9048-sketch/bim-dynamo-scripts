@@ -26,6 +26,7 @@ public sealed class SheetDialog : Window
     private readonly TextBox _xsecRight;
     private readonly TextBox _xsecCols;
     private readonly Slider _groundTolZ;
+    private readonly ComboBox _profileScale;
     private readonly ComboBox _basemapRes;
 
     public SheetDialog(string okText = "저장")
@@ -62,8 +63,18 @@ public sealed class SheetDialog : Window
             "· 매우 단순(0.50m) — 직선 몇 개로 확 단순해집니다. 기복이 심한 산지에서 토공이 눈에 띄게 틀어질 수 있습니다\n\n" +
             "※ 데이라잇·절성경계 같은 중요한 자리는 이 값과 무관하게 항상 실제 땅 높이를 지납니다.";
 
-        // ── 3. 배경지도
-        GradingDialog.AddSection(root, "3. 배경지도",
+        // ── 3. 종단도 축척
+        GradingDialog.AddSection(root, "3. 종단도 축척",
+            "자동은 도곽에 가장 크게 들어가는 축척을 고릅니다. 도면을 여러 장 나란히 비교하거나 축척을 통일해야 하면 직접 고르세요.");
+        _profileScale = AddCombo(root, "종단뷰 축척", GradingSettings.ProfileScaleLabels,
+                                 GradingSettings.ProfileScaleIndex(), "");
+        _profileScale.ToolTip =
+            "자동 — 종단도가 도곽 안에 가장 크게 들어가는 표준 축척을 고릅니다(도면마다 달라질 수 있습니다).\n" +
+            "직접 고르면 그 축척으로 고정됩니다.\n\n" +
+            "※ 고른 축척이 자동보다 크게 그리는 값이면 종단도가 도곽을 넘칠 수 있습니다 — 그때는 로그에 ⚠로 알립니다.";
+
+        // ── 4. 배경지도
+        GradingDialog.AddSection(root, "4. 배경지도",
             "[배경지도] 버튼으로 까는 위성사진의 해상도. 범위가 넓으면 파일이 너무 커지지 않게 자동으로 낮춰 생성합니다.");
         int bmIdx = System.Array.IndexOf(GradingSettings.BasemapResValues, GradingSettings.BasemapRes);
         _basemapRes = AddCombo(root, "화질", GradingSettings.BasemapResLabels,
@@ -150,6 +161,10 @@ public sealed class SheetDialog : Window
         GradingSettings.GroundBreakTolZ = GradingSettings.GroundBreakValues[
             System.Math.Clamp((int)System.Math.Round(_groundTolZ.Value), 0,
                               GradingSettings.GroundBreakValues.Length - 1)];
+
+        // 축척은 목록에 있는 값만 고른다(0 = 자동) — 슬라이더와 같은 규칙이라 이상한 값이 들어올 길이 없다.
+        double[] psv = GradingSettings.ProfileScaleValues;
+        GradingSettings.ProfileScale = psv[System.Math.Clamp(_profileScale.SelectedIndex, 0, psv.Length - 1)];
 
         GradingSettings.BasemapRes = GradingSettings.BasemapResValues[
             System.Math.Clamp(_basemapRes.SelectedIndex, 0, GradingSettings.BasemapResValues.Length - 1)];

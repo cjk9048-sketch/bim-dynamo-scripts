@@ -34,7 +34,13 @@ public static class SheetCommand
 {
     // ── 도곽 규격(mm) — JACK 지정
     private const double SheetW = 841.0, SheetH = 594.0;   // A1 가로
-    private const double MarginLR = 25.0, MarginTB = 20.0;
+    /// <summary>★★[v32.30 · JACK 0813] <b>여백은 위아래가 다르다.</b>
+    /// <i>"좌우측은 25씩 상단은 20 하단은 범례랑 사인찍는 곳등 포함해서 50을 이격하고."</i>
+    /// 하단이 넓은 것은 <b>비워 두는 자리가 아니라 쓰임이 있는 자리</b>다 — 범례·서명란이 거기 들어간다.
+    /// 종전의 대칭 <c>MarginTB=20</c>은 그 자리를 몰랐다.</summary>
+    private const double MarginLR = 25.0;
+    private const double MarginTop = 20.0;
+    private const double MarginBottom = 50.0;
     private const string LayoutBase = "DH-종단도";
     private const string LayFrame = "DH-도곽";
     private const string LayFrameModel = "DH-도곽범위(모형)";
@@ -51,30 +57,49 @@ public static class SheetCommand
     /// 100→200으로 건너뛰면 그림이 절반으로 줄어 자리가 크게 남는다(참고 도면도 1:120이었다).
     /// 200 위로는 설계도서 관례값(250·300·500·600·1000·1200·2000·2500·3000·5000)만 쓴다 —
     /// 도면에 적힌 축척은 현장에서 자로 재는 값이라 관례를 벗어나면 안 된다.</para></summary>
-    private static readonly double[] Scales =
+    /// <para>★[v32.30] <b>도면설정의 축척 목록도 이 배열을 그대로 쓴다</b>(<c>GradingSettings.ProfileScaleValues</c>) —
+    /// 사다리가 두 벌이면 한쪽만 고쳐진다. 그래서 <c>internal</c>이다.</para>
+    internal static readonly double[] Scales =
         { 50, 80, 100, 120, 150, 200, 250, 300, 500, 600, 1000, 1200, 2000, 2500, 3000, 5000 };
 
-    private static double InnerW => SheetW - 2 * MarginLR;   // 791
-    private static double InnerH => SheetH - 2 * MarginTB;   // 554
-    /// <summary>★[JACK 0810] 회사 참고 도면(C-005)의 실제 구도 — 1/3씩 균등이 아니다.
-    /// "제목부 0.5, 종단면도 3, 종단 3.5, 밴드 3 정도 되는 것 같아."
-    /// 합 10으로 나눠 내부 높이를 배분한다.
+    private static double InnerW => SheetW - 2 * MarginLR;              // 791
+    private static double InnerH => SheetH - MarginTop - MarginBottom;  // 524
+    /// <summary>★★★[v32.30 · JACK 0813] <b>종평면도 칸을 없앤다 — 위 10% · 본문 80% · 아래 10%.</b>
     ///
-    /// <para>★★[v32.1 · JACK 0812] <b>종단 그래프를 키운다 — 3.5 → 4.0, 종평면도에서 0.5를 받는다.</b>
-    /// 종평면도 칸은 <b>아직 구분선만 긋고 비워 둔 자리</b>다(<see cref="PlanH"/>는 그 선의 높이로만 쓰인다).
-    /// 반면 종단 그래프는 <see cref="ViewH"/>를 통해 <b>축척 고르기에 직접 물린다</b> —
-    /// 자리가 27.7mm 늘면 표준 축척이 한 단계 내려갈 여지가 생겨 그림이 그만큼 커진다.
-    /// <b>지금 비어 있는 칸에서 받는 것이 가장 싸다.</b>
-    /// <para>밴드 표(3.0)는 손대지 않는다 — 칸 높이 20mm 고정이라 이 값이 아니라 칸 수가 정한다(§25).</para></para></summary>
-    private const double UTitle = 0.5, UPlan = 2.5, UGraph = 4.0, UBand = 3.0;
-    private static double Unit => InnerH / (UTitle + UPlan + UGraph + UBand);   // 55.4mm
-    private static double TitleH => Unit * UTitle;    // 27.7  제목부
-    private static double PlanH => Unit * UPlan;      // 138.5 종평면도
-    private static double GraphH => Unit * UGraph;    // 221.6 종단 그래프
-    private static double BandH => Unit * UBand;      // 166.2 밴드 표
+    /// <para>JACK: <i>"정지면 같이 단일 구간에 대한 토공 종단은 종평면도가 안 들어가는 게 일반적이더라고.
+    /// 관로나 도로같이 노선형일 경우는 종평면도가 같이 나오는 것 같고. 그래서 지금 만드는 애드인엔
+    /// 종평면도로 배분했던 위치가 필요없을 것 같아. 다만 도면의 공간감을 위해서 위에 제목을 표시하기 위해
+    /// 10% 이격하고 아래로 10% 정도 공간 두고 나머지 80%를 다 써도 될 것 같아."</i></para>
+    ///
+    /// <para><b>왜 이 애드인엔 종평면도가 없나.</b> 종평면도는 <b>노선이 어디로 지나는지</b>를 보여주는 그림이다.
+    /// 관로·도로는 선이 굽이치므로 종단만으로는 위치를 못 읽는다. 그런데 <b>부지정지는 구간이 하나</b>이고
+    /// 그 위치는 평면도에 이미 있다 — 종단도에 또 그리면 같은 것을 두 번 그리는 셈이다.
+    /// 참고 도면(C-005)이 노선형이라 그 구도를 그대로 가져왔던 것이 <b>원래 어긋난 지점</b>이었다.</para>
+    ///
+    /// <para><b>비운 25%는 그래프가 받는다.</b> 종전 배분(제목 0.5 : 종평면 2.5 : 그래프 4 : 밴드 3)에서
+    /// 종평면 칸은 <b>구분선만 긋고 비어 있었다.</b> 그래프 자리는 <see cref="ViewH"/>를 통해
+    /// <b>축척 고르기에 직접 물리므로</b>(자리가 넓어지면 표준 축척이 한 단계 내려가 그림이 커진다),
+    /// 비워 둔 칸을 그래프에 주는 것이 도면을 가장 크게 만든다 — 그래프 자리가 <b>221.6 → 277.0mm</b>.</para>
+    ///
+    /// <para><b>밴드(3.0)는 그대로 둔다</b> — 칸 높이 20mm 고정이라 이 값이 아니라 <b>칸 수</b>가 정한다(§25).
+    /// 여기서 늘리면 빈 자리만 늘고 그래프가 그만큼 손해다.</para>
+    ///
+    /// <para><b>아래 여백은 여기서 세지 않는다.</b> 범례·서명란 몫 50mm는 이미 <see cref="MarginBottom"/>에
+    /// 들어가 있다 — <see cref="InnerH"/>는 그것을 뺀 <b>남은 공간</b>이고, JACK이 말한 20%/80%는
+    /// <b>그 남은 공간을 나눈 비율</b>이다. 두 군데서 빼면 아래가 두 번 비워진다.</para>
+    ///
+    /// <para>합이 10이라 <b>비율이 그대로 읽힌다</b>: 제목 2 = 20%, 본문 8(그래프 5 + 밴드 3) = 80%.
+    /// 그래프:밴드 5:3은 종전 배분을 그대로 옮긴 것이다(§25 — 밴드 칸은 20mm 고정이라
+    /// <see cref="BandH"/>는 <b>자리</b>일 뿐 축척 계산에는 실측 종이높이가 쓰인다).</para></summary>
+    private const double UTitle = 2.0, UGraph = 5.0, UBand = 3.0;
+    private static double Unit => InnerH / (UTitle + UGraph + UBand);   // 52.4mm
+    private static double TitleH => Unit * UTitle;     // 104.8 위 여백(제목 자리) = 20%
+    private static double GraphH => Unit * UGraph;     // 262.0 종단 그래프
+    private static double BandH => Unit * UBand;       // 157.2 밴드 표
 
-    /// <summary>뷰포트가 실제로 쓰는 높이 — 종단 그래프 + 밴드 표(제목부·종평면도는 그 위).</summary>
-    private static double ViewH => GraphH + BandH;    // 387.8
+    /// <summary>뷰포트가 실제로 쓰는 높이 — 종단 그래프 + 밴드 표. 남은 공간의 <b>80%</b>다.
+    /// <para>세로 검산: 하 50 + 본문 419.2 + 제목 104.8 + 상 20 = <b>594.0</b> = <see cref="SheetH"/>.</para></summary>
+    private static double ViewH => GraphH + BandH;    // 419.2
 
     /// <summary><b>여백 목표</b> — 자리의 92%까지만 차면 보기 좋다는 기준.
     /// JACK 0810: "너무 딱 맞으면 그러니깐 약간의 버퍼는 줘서 도면이 좀 균형감 있게 해야지."
@@ -220,13 +245,30 @@ public static class SheetCommand
 
         DumpBands(db, pvId, log);   // ★ 마지막 상태를 통째로 — 다음 판에서 로그만 보고 짚게
 
-        // ── ⑤ 도곽 한 장마다 배치 하나
-        string layName;
-        try { layName = MakeLayout(db, ed, frames[0], scale, log); }
-        catch (System.Exception ex) { return "도곽을 만들지 못했습니다 — " + ex.Message; }
+        // ── ⑤ 배치탭 도면화는 **여기서 끊는다**.
+        //   ★★[JACK 0813] <i>"일단 배치탭에 도면화하는건 삭제해봐. 먼저 모형탭에서 잘만들어지면
+        //     그때 배치탭에 도면화하는거 구현하자."</i>
+        //
+        //   <b>왜 끊는 것이 맞나.</b> 배치를 만드는 길에는 <b>모형탭 결과와 무관한 방해</b>가 셋 붙어 있다:
+        //     ① <c>lm.CurrentLayout = name</c> — 화면이 배치탭으로 <b>끌려간다</b>(JACK: "배치탭으로 자꾸 이동되고").
+        //     ② 출력장치·용지 조작(<c>SetPlotConfigurationName</c>·<c>RefreshLists</c>) — <b>팝업</b>이 뜬다.
+        //     ③ 그 둘이 뜨는 동안 모형탭이 제대로 됐는지 <b>볼 수가 없다</b>.
+        //   모형탭이 확정되기 전에 배치를 붙이면 <b>어느 쪽이 틀렸는지 가릴 수 없다</b> — 먼저 하나만 본다.
+        //
+        //   <see cref="MakeLayout_Unused"/>·<see cref="AddA3PageSetup"/>는 <b>지우지 않고 남겨 둔다</b>
+        //   (이 저장소 관례 — <see cref="FitSheetAuto_Unused"/>와 같다). 모형탭이 닫히면 호출만 되살리면 된다.
+        //   <b><see cref="EraseAll"/>의 배치 삭제는 그대로 둔다</b> — 지난 판이 만들어 둔 배치가 도면에 남아 있고,
+        //   이제 아무도 다시 만들지 않으므로 <b>청소해 주는 쪽이 이 함수뿐</b>이다.
 
-        return $"배치 '{layName}' · A1 {SheetW:F0}×{SheetH:F0} · 축척 1:{scale:F0} · {veNote} · {bandNote}"
-             + (overflow ? " · ⚠한 장을 넘침(장 넘김은 관로 기능에서)" : "");
+        return $"모형 도곽 {frames.Count}장 · A1 {SheetW:F0}×{SheetH:F0} · 축척 1:{scale:F0} · {veNote} · {bandNote}"
+             + " · 배치탭 도면화는 꺼 둠(모형탭 확정 뒤 되살림)"
+             // ★[검토 반영] 넘친 <b>이유</b>가 둘이라 안내도 갈라야 한다 — 축척을 고정해 넘친 것을
+             //   '노선이 길어서'로 안내하면 사용자가 엉뚱한 곳(장 넘김)을 찾는다.
+             + (overflow
+                ? (GradingSettings.ProfileScale > 0
+                   ? $" · ⚠고정 축척 1:{GradingSettings.ProfileScale:F0}으로는 한 장에 안 들어갑니다(도면설정에서 '자동'으로 두면 맞춰집니다)"
+                   : " · ⚠한 장을 넘침(장 넘김은 관로 기능에서)")
+                : "");
     }
 
     /// <summary>★[JACK 0810] <b>축척과 수직과장을 함께 푼다.</b> 따로 정하면 서로를 무너뜨린다 —
@@ -317,6 +359,47 @@ public static class SheetCommand
                 log.AppendLine($"토공 기준 — 수직과장 없음 · 단일 축척. 그래프 모형 {wM0:F1}m × {hM0:F1}m");
                 log.AppendLine($"밴드는 종이 {bandMm:F1}mm 고정 → 그래프 자리 {availMm:F1}mm");
 
+                // ★★★[v32.30 계측 · JACK 0813] <b>축척이 실행마다 1:120↔1:100으로 널뛴 자리.</b>
+                //
+                //   <b>증상</b>(0813 로그 4회분): 같은 도면·같은 스타일('수직과장 없음')·같은 측점범위인데
+                //   그래프 높이가 <b>1회차 30.0m · 2~4회차 12.0m</b>로 갈렸다. 높이가 축척을 정하므로
+                //   기준이 '높이'에서 '폭'으로 넘어가며 축척이 바뀌었고, 도곽이 한 치수 작아졌다.
+                //
+                //   <b>가장 그럴듯한 범인은 밴드다.</b> 밴드는 종이 130mm 고정이고 1:120이면 모형 <b>15.6m</b>다 —
+                //   1회차의 여분 18m가 그 크기다. 그런데 <see cref="Build"/>는 §도곽 실측(0810)을 근거로
+                //   <b>"경계상자에 밴드는 안 들어 있다"</b>고 전제하고 <see cref="LastBandModelH"/>를 따로 더한다.
+                //   전제가 회차마다 뒤집히면 <b>한 번은 이중 계산</b>이 된다.
+                //
+                //   <b>추측으로 고치지 않는다</b>(이 저장소 규칙). 판정에 필요한 세 값을 <b>같은 시점에</b> 찍는다 —
+                //   종전엔 경계상자는 여기서, 격자표고는 <see cref="DrawScaleBar"/>에서 찍혀 <b>시점이 달라</b>
+                //   둘을 맞대 볼 수가 없었다(그 사이에 축척이 걸린다). 실행 한 번이면 닫힌다.
+                //   <b>재는 법 — 경계상자를 표고로 바꿔서 본다.</b> 경계상자 높이(m)를 데이터 표고 범위와
+                //   직접 맞대면 <b>못 가린다</b>: 격자는 데이터보다 넓고(v23.10 실측 데이터 102.71~112.00 vs
+                //   격자 95~125 — 차 20.7m) 그 차가 밴드(15.6m)보다 커서 어떤 임계를 잡아도 밴드 쪽으로 기운다.
+                //   → <see cref="DrawScaleBar"/>가 쓰는 환산을 그대로 써서 <b>경계상자의 위아래를 표고로</b> 바꾼다.
+                //     그러면 <b>데이터 아래로 얼마나 내려갔나</b>가 나오고, 그 값이 밴드 한 뭉치만큼이면 밴드다.
+                //     덤으로 <see cref="DrawScaleBar"/>가 나중에 찍는 '격자표고'와 <b>같은 단위로 맞대볼 수 있다</b> —
+                //     두 시점 사이에 격자 자체가 바뀌었는지도 이 두 줄로 갈린다(지금은 시점이 달라 못 맞댔다).
+                var gm = MeasureGridElev(db, pvId);
+                double preScale = CurrentDrawingScale(db);
+                double bandAtPre = preScale > 0 ? bandPaperM * preScale : 0.0;
+                if (!gm.Ok)
+                    log.AppendLine($"[높이 계측] 경계상자 {hM0:F2}m · 표고 환산 실패 — 판정 불가");
+                else
+                {
+                    double under = gm.DataLo - gm.GridLo;      // 데이터 최저표고 아래로 내려간 양(m)
+                    string verdict =
+                        bandAtPre <= 1e-6
+                          ? "판정 불가(직전 도면축척이 없어 밴드 모형높이를 모른다)"
+                          : under >= bandAtPre * 0.6
+                            ? $"→ ⚠밴드가 **들어간 듯**(아래 여유 {under:F1}m ≥ 밴드 {bandAtPre:F1}m의 60%) — LastBandModelH를 또 더하면 이중 계산이다"
+                            : $"→ 밴드 **미포함**(전제대로 — 아래 여유 {under:F1}m는 격자 여유 수준) — LastBandModelH를 더하는 것이 맞다";
+                    log.AppendLine($"[높이 계측] 경계상자 {hM0:F2}m = 격자표고 {gm.GridLo:F2}~{gm.GridHi:F2}m"
+                                 + $" · 데이터 표고 {gm.DataLo:F2}~{gm.DataHi:F2}m"
+                                 + $" · 직전 도면축척 1:{(preScale > 0 ? preScale.ToString("F0") : "없음(DH 규약 아님)")}"
+                                 + $" · 그 축척에서 밴드 {bandAtPre:F2}m  {verdict}");
+                }
+
                 // ★[v23.5] 밴드가 뷰 자리를 통째로 먹은 경우를 **따로 잡는다.** 종전엔 센티넬 1e9가
                 //   그대로 흘러 로그에 `높이 1:1000000000`이 찍히고 정작 진짜 원인이 안 적혔다.
                 bool noRoom = availMm <= 1.0;
@@ -325,6 +408,24 @@ public static class SheetCommand
                 double want = System.Math.Max(needW, needH0);
                 double s0 = Scales.FirstOrDefault(s => s >= want);
                 if (s0 <= 0) { s0 = Scales[Scales.Length - 1]; overflow = true; }
+
+                // ★★★[v32.30 · JACK 0813] <b>도면설정에서 축척을 고정했으면 그것을 쓴다.</b>
+                //   <i>"기본값은 자동으로 두고, 자동일 경우 지금처럼 해당 공간에 딱 알맞게 들어가는 축척으로 하고
+                //     고를 경우는 그 축척으로 들어가게."</i>
+                //
+                //   <b>고정값은 검사만 하고 바꾸지 않는다.</b> 사용자가 1:100을 골랐는데 안 들어간다고 1:120으로
+                //   올리면 <b>도면에 적힌 축척과 실제가 어긋난다</b> — 현장에서 자로 재는 값이라 그것이 더 나쁘다.
+                //   넘치면 <b>넘친 채로 그리고 로그로 알린다</b>(<see cref="ExtendTail"/> 뒤 2차 호출에서도 같다).
+                double pinned = GradingSettings.ProfileScale;
+                if (pinned > 0)
+                {
+                    overflow = pinned < want;      // 필요한 것보다 크게 그리면(=숫자가 작으면) 자리를 넘는다
+                    log.AppendLine($"축척 고정 1:{pinned:F0} (도면설정) — 자동이었다면 1:{s0:F0}"
+                                 + (overflow
+                                    ? $" ⚠자리에 안 들어간다(필요 1:{want:F0}) — 도곽을 넘칠 수 있다"
+                                    : $" · 자리의 {want / pinned * 100:F0}% 사용"));
+                    s0 = pinned;
+                }
                 scale = s0;
                 if (noRoom)
                     log.AppendLine($"⚠밴드가 뷰 자리를 통째로 먹었다 — 밴드 {bandMm:F1}mm ≥ 자리 {ViewH:F1}mm."
@@ -333,11 +434,18 @@ public static class SheetCommand
                 {
                     double used = want / s0;                   // 자리를 얼마나 채우는가(1.0 = 꽉 참)
                     string bind = needW >= needH0 ? "폭" : "높이";
+                    // ★[검토 반영] <b>1을 넘으면 '여백'이 아니라 '초과'다.</b> 고정 축척이 자리보다 크게 그리면
+                    //   종전 식은 "자리의 138% 사용(여백 -38%)"처럼 <b>음수 여백</b>을 찍었다 — 읽는 사람이 멈칫한다.
+                    string useTxt = used <= 1.0
+                        ? $" · {bind} 기준 자리의 {used * 100:F0}% 사용(여백 {(1 - used) * 100:F0}%)"
+                        : $" · {bind} 기준 자리를 {(used - 1) * 100:F0}% 초과";
                     log.AppendLine($"필요 폭 1:{needW:F0} · 높이 1:{needH0:F0} → **{bind}**이 긴 쪽 → S=1:{s0:F0}"
-                                 + $" · {bind} 기준 자리의 {used * 100:F0}% 사용(여백 {(1 - used) * 100:F0}%)"
+                                 + (pinned > 0 ? "(고정)" : "") + useTxt
                                  + (overflow
-                                    ? " ⚠가장 작은 축척으로도 안 들어간다"
-                                    : used > Fill
+                                    // 고정일 때 '가장 작은 축척으로도'는 거짓이다 — 사다리를 다 훑은 것이 아니라 고른 값을 쓴 것이다.
+                                    ? (pinned > 0 ? " ⚠고른 축척으로는 자리에 안 들어간다" : " ⚠가장 작은 축척으로도 안 들어간다")
+                                    // 여백 조언도 <b>자동일 때만</b> 뜻이 있다 — 고정은 사용자가 정한 값이라 올릴 대상이 아니다.
+                                    : pinned <= 0 && used > Fill
                                       ? $" ⚠여백 목표 {(1 - Fill) * 100:F0}%에 못 미친다 — 축척을 한 단계 올리면 그림이 20~60% 작아지므로 그대로 둔다"
                                       : ""));
                 }
@@ -2895,6 +3003,60 @@ public static class SheetCommand
         catch { return 0.0; }
     }
 
+    /// <summary>종단 뷰의 <b>경계상자를 표고로 환산</b>하고 <b>데이터 표고 범위</b>도 함께 돌려준다 —
+    /// '경계상자가 무엇을 삼켰나'를 가리는 자다.
+    ///
+    /// <para><b>왜 표고로 바꾸나.</b> 경계상자 높이(모형 m)를 데이터 표고 범위와 그냥 맞대면
+    /// <b>격자 여유와 밴드가 뒤섞여</b> 못 가린다. 표고로 바꾸면 <c>DataLo - GridLo</c>가
+    /// <b>데이터 아래로 얼마나 내려갔는가</b>가 되고, 격자 여유(주눈금 몇 m)와 밴드(축척×종이높이,
+    /// 1:120이면 15.6m)는 크기가 확연히 달라 갈린다.</para>
+    ///
+    /// <para>환산은 <see cref="DrawScaleBar"/>가 쓰는 것과 <b>같은 방법</b>이다(같은 자를 쓴다):
+    /// 데이터 최저·최고 표고의 모형 Y를 <c>FindXYAtStationAndElevation</c>으로 얻어 기울기를 구하고,
+    /// 그 기울기로 경계상자 Y를 표고로 되돌린다.</para></summary>
+    private static (bool Ok, double GridLo, double GridHi, double DataLo, double DataHi)
+        MeasureGridElev(Database db, ObjectId pvId)
+    {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var pv = (CivilDb.ProfileView)tr.GetObject(pvId, OpenMode.ForRead);
+            double lo = pv.ElevationMin, hi = pv.ElevationMax, st = pv.StationStart;
+            double x0 = 0, yLo = 0, x1 = 0, yHi = 0;
+            if (hi - lo <= 1e-6 ||
+                !pv.FindXYAtStationAndElevation(st, lo, ref x0, ref yLo) ||
+                !pv.FindXYAtStationAndElevation(st, hi, ref x1, ref yHi) ||
+                System.Math.Abs(yHi - yLo) < 1e-9)
+            { tr.Commit(); return (false, 0, 0, 0, 0); }
+
+            double mPerY = (hi - lo) / (yHi - yLo);            // 모형 Y 1당 표고 몇 m
+            var ext = ((Entity)pv).GeometricExtents;
+            double gLo = lo + (ext.MinPoint.Y - yLo) * mPerY;
+            double gHi = lo + (ext.MaxPoint.Y - yLo) * mPerY;
+            if (gHi < gLo) (gLo, gHi) = (gHi, gLo);
+            tr.Commit();
+            return (true, gLo, gHi, lo, hi);
+        }
+        catch { return (false, 0, 0, 0, 0); }
+    }
+
+    /// <summary>지금 도면에 걸려 있는 주석 축척(1:N의 N). 없거나 <b>DH 규약이 아니면 0</b>.
+    ///
+    /// <para>★[검토 반영] <b>아무 주석 축척이나 환산하면 안 된다.</b> AutoCAD 기본값 <c>1:1</c>은
+    /// <c>PaperUnits=1 · DrawingUnits=1</c>이라 이 식에 넣으면 <b>1:1000</b>이 나온다 —
+    /// DH가 건 축척인지 남이 걸어 둔 기본값인지 구분 못 하면 그 값으로 계산한 밴드 높이까지 거짓이 된다.
+    /// <see cref="SetDrawingScale"/>은 언제나 <c>PaperUnits=1000</c>으로 적으므로 그것을 <b>서명처럼</b> 쓴다.</para></summary>
+    private static double CurrentDrawingScale(Database db)
+    {
+        try
+        {
+            if (db.Cannoscale is not AnnotationScale asc) return 0.0;
+            if (System.Math.Abs(asc.PaperUnits - 1000.0) > 1e-6) return 0.0;   // DH가 건 것이 아니다
+            return asc.DrawingUnits;                                            // 종이 1000mm : 모형 N m = 1:N
+        }
+        catch { return 0.0; }
+    }
+
     private static void SetDrawingScale(Database db, double scale, System.Text.StringBuilder log)
     {
         try
@@ -3055,7 +3217,10 @@ public static class SheetCommand
         // 여러 장이 필요해지면 여기서 cx를 폭만큼 밀며 반복하면 된다 — 나머지 구조는 그대로다.
         var list = new List<Frame>();
         double vx0 = cx - vw / 2.0, vy0 = cy - vh / 2.0;
-        var sheetMin = new Point2d(vx0 - MarginLR * s, vy0 - MarginTB * s);
+        // ★★[v32.30] 종이 좌하단은 본문 아래로 <see cref="MarginBottom"/>(50mm — 범례·서명란)만큼 내려간다.
+        //   검산: 아래 50 + 본문 419.2 + 제목 104.8 + 위 20 = 594.0 = <see cref="SheetH"/> — 딱 맞는다.
+        //   종전엔 대칭 여백 20만 뺐다(하단이 넓다는 것을 몰랐다).
+        var sheetMin = new Point2d(vx0 - MarginLR * s, vy0 - MarginBottom * s);
         list.Add(new Frame(new Point2d(cx, cy), vw, vh, sheetMin, SheetW * s, SheetH * s));
 
         using var tr = db.TransactionManager.StartTransaction();
@@ -3188,9 +3353,13 @@ public static class SheetCommand
     }
 
     /// <summary>배치를 만들고 도곽·내부선·1/3 구분선을 그린 뒤, 아래 2/3에 뷰포트를 놓는다.
-    /// 뷰포트는 <b>모형의 도곽 범위를 그대로</b> 가져온다 — 사용자는 배치에서 가져오기만 하면 된다.</summary>
-    private static string MakeLayout(Database db, Editor ed, Frame frame, double scale,
-                                     System.Text.StringBuilder log)
+    /// 뷰포트는 <b>모형의 도곽 범위를 그대로</b> 가져온다 — 사용자는 배치에서 가져오기만 하면 된다.
+    ///
+    /// <para>★★[JACK 0813] <b>지금은 부르지 않는다</b> — <see cref="Build"/> ⑤단계 설명 참조.
+    /// 모형탭이 확정되면 그 호출 한 줄만 되살리면 된다. 안의 논리(여백·용지·뷰포트 배율)는
+    /// 여러 판에 걸쳐 실측으로 맞춰 둔 것이라 <b>지우면 그 값을 다시 찾아야 한다.</b></para></summary>
+    private static string MakeLayout_Unused(Database db, Editor ed, Frame frame, double scale,
+                                            System.Text.StringBuilder log)
     {
         var lm = LayoutManager.Current;
         string name = LayoutBase;
@@ -3332,14 +3501,15 @@ public static class SheetCommand
         }
 
         Rect(ox, oy, ox + SheetW, oy + SheetH);                                          // ① 도곽
-        Rect(ox + MarginLR, oy + MarginTB, ox + SheetW - MarginLR, oy + SheetH - MarginTB); // ② 내부 여백선
+        Rect(ox + MarginLR, oy + MarginBottom, ox + SheetW - MarginLR, oy + SheetH - MarginTop); // ② 내부 여백선(하단이 넓다)
 
         // ③ 구분선 두 개 — <b>실제 구도와 같은 자리에</b> 긋는다.
-        //   ★[v23.28] 종전엔 1/3·2/3에 그었는데, 실제 구도는 제목부 0.5 : 종평면도 3 : 종단 3.5 : 밴드 3이라
-        //   뷰포트 윗선(360.1mm)과 구분선(369.3mm)이 9mm 어긋나 있었다. 종이 위에서 눈에 띄는 어긋남이다.
-        double yView = oy + MarginTB + ViewH;         // 뷰포트 윗선 = 종평면도/종단 경계
-        double yTitle = yView + PlanH;                // 종평면도/제목부 경계
-        foreach (double y in new[] { yView, yTitle })
+        //   ★[v23.28] 종전엔 1/3·2/3에 그었는데, 실제 구도와 어긋나 뷰포트 윗선과 9mm 벌어져 있었다.
+        //   ★★[v32.30] 종평면도 칸이 없어졌다 — 본문(80%)의 <b>아래·위 경계</b> 두 줄만 남는다.
+        //   아랫줄은 내부 여백선과 겹친다(본문이 여백선에서 바로 시작하므로) — 겹쳐도 무해하다.
+        double yBot = oy + MarginBottom;              // 본문 아랫선 = 내부 여백선
+        double yTop = yBot + ViewH;                   // 본문 / 제목부 경계
+        foreach (double y in new[] { yBot, yTop })
         {
             var ln = new Line(new Point3d(ox + MarginLR, y, 0), new Point3d(ox + SheetW - MarginLR, y, 0)) { LayerId = layer };
             ps.AppendEntity(ln); tr.AddNewlyCreatedDBObject(ln, true);
@@ -3352,13 +3522,14 @@ public static class SheetCommand
         //   <b>'도곽 불러오기'</b>가 회사 도곽 파일에서 통째로 가져올 물건이다(JACK 판단).
         //   그때 같이 붙인다 — 지금 제목부에 임시로 그려 두면 나중에 두 번 그리게 된다.
 
-        // ④ 아래 2/3에 뷰포트 — **모형의 도곽 범위를 그대로 가져온다**
+        // ④ 본문 자리(80%)에 뷰포트 — **모형의 도곽 범위를 그대로 가져온다**
+        //   ★★[v32.30] 바닥은 <see cref="MarginBottom"/>(50mm — 범례·서명란) 위다.
         double vpH = ViewH;
         var vp = new Viewport();
         ps.AppendEntity(vp); tr.AddNewlyCreatedDBObject(vp, true);
         vp.Width = InnerW;
         vp.Height = vpH;
-        vp.CenterPoint = new Point3d(ox + SheetW / 2.0, oy + MarginTB + vpH / 2.0, 0);
+        vp.CenterPoint = new Point3d(ox + SheetW / 2.0, oy + MarginBottom + vpH / 2.0, 0);
         vp.On = true;
         vp.CustomScale = 1000.0 / scale;      // 모형 1m = 종이 1000/축척 mm
         vp.ViewCenter = frame.ViewCenter;     // 모형 도곽의 뷰 영역 한가운데

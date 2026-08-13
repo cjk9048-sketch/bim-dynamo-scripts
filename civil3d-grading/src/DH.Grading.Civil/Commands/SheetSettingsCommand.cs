@@ -31,7 +31,10 @@ public sealed class SheetSettingsCommand
             "\n[도면 설정] 저장했습니다 — 횡단 간격 " + GradingSettings.XsecInterval.ToString("0.#") + "m"
             + " · 폭 좌" + GradingSettings.XsecLeft.ToString("0.#") + "/우" + GradingSettings.XsecRight.ToString("0.#") + "m"
             + " · 원지반 굴곡 " + GradingSettings.GroundBreakLabels[GradingSettings.GroundBreakStep()]
-            + "(" + GradingSettings.GroundBreakTolZ.ToString("0.###") + "m)");
+            + "(" + GradingSettings.GroundBreakTolZ.ToString("0.###") + "m)"
+            + " · 종단뷰 축척 " + (GradingSettings.ProfileScale > 0
+                                   ? "1:" + GradingSettings.ProfileScale.ToString("F0") + "(고정)"
+                                   : "자동"));
 
         // ★★[v32.29 · JACK 0813] <b>저장하면 이미 만든 종단도가 그 자리에서 갱신된다.</b>
         //   JACK: <i>"도면설정에서 원지반 표현을 바꾸고 저장해도 업데이트가 되지 않아."</i>
