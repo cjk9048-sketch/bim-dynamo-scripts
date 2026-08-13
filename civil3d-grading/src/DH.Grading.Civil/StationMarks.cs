@@ -462,6 +462,159 @@ public static class StationMarks
         return list;
     }
 
+    /// <summary>원지반 꺾은선의 한 점 — 측점과 표고. <see cref="SimplifyGround"/>가 돌려준다.</summary>
+    public readonly record struct GroundPt(double Station, double Elev);
+
+    /// <summary>★★[v32.23 · JACK 0812] <b>꺾은선의 꺾임점이 곧 측점이다.</b>
+    /// <para>JACK: <i>"꺾은선으로 바꿨으면 조금이라도 종단상에서 각진 부분은 측점으로 추가해야 해."</i>
+    /// <see cref="SimplifyGround"/>가 돌려준 <b>그 목록 하나</b>로 꺾은선도 그리고 측점도 잡는다 —
+    /// <b>두 번 계산하면 반드시 어긋난다</b>(이 저장소가 §20·§26에서 되풀이해 배운 것).</para>
+    /// <para>양 끝만 뺀다 — 그건 꺾임이 아니라 노선의 끄트머리이고 <see cref="Merge"/>가 기점·종점으로 넣는다.</para></summary>
+    public static List<Mark> MarksFromGround(IReadOnlyList<GroundPt> pts)
+    {
+        var list = new List<Mark>();
+        if (pts == null || pts.Count < 3) return list;
+        for (int i = 1; i < pts.Count - 1; i++) list.Add(new Mark(pts[i].Station, "원지반굴곡"));
+        return list;
+    }
+
+    /// <summary>★★[v32.21 · JACK 0812] <b>원지반의 수직 굴곡부 — 토공량 때문에 넣는다.</b>
+    ///
+    /// <para>JACK: <i>"원지반의 수직굴곡부도 전부 추가해야해. 그래야 나중에 횡단에서 토공을 구할수있어(2d도면납품용).
+    /// 그런데 지금 계획지표면부분만 가져오다 보니…"</i> — 맞다. 지금 측점의 출처는 <b>전부 계획면 쪽</b>이다
+    /// (절성경계·데이라잇·사면·소단). 원지반이 혼자 꺾이는 자리는 한 곳도 안 들어간다.</para>
+    ///
+    /// <para><b>왜 문제인가.</b> 2D 납품 토공은 <b>평균단면법</b>이다 — 이웃한 두 횡단의 면적을 평균해
+    /// 그 사이 거리를 곱한다. 이는 <b>두 단면 사이에서 지반이 직선으로 변한다</b>고 가정하는 것이라,
+    /// 그 사이에서 원지반이 꺾이면 <b>꺾인 만큼이 그대로 체적 오차</b>가 된다.</para>
+    ///
+    /// <para><b>그렇다고 전부 쓸 수는 없다.</b> 지표면에서 딴 종단은 TIN 삼각형 모서리를 넘을 때마다
+    /// 점이 생겨 수백~수천 개다.</para>
+    ///
+    /// <para><b>그래서 '얼마나 틀려도 되는가'로 고른다</b>(<paramref name="tolZ"/>).
+    /// 남긴 점들을 직선으로 이었을 때 <b>실제 원지반과의 수직 차이가 어디서도 <paramref name="tolZ"/>를
+    /// 넘지 않도록</b> 고른다(Douglas-Peucker, 수직 편차 기준).</para>
+    ///
+    /// <para><b>§24에서 폐기한 '굴곡부 찾기'와 무엇이 다른가.</b> 그때는 계획면의 <b>설계 의도</b>를
+    /// 추측하려 했고, 지표면 표본점과 설계 변화점이 <b>원리상 갈리지 않아</b> 폐기했다(62m에 78개).
+    /// 원지반에는 의도가 없다 — 추측할 것이 없고, <b>허용 오차를 정하면 답이 유일하게 정해진다.</b>
+    /// 같은 '문턱값'이지만 <b>재는 대상이 다르다</b>: 그때는 '설계인가?'(알 수 없다),
+    /// 지금은 '토공이 얼마나 틀리는가?'(정확히 계산된다).</para>
+    ///
+    /// <para><b>수직 편차이지 점-선분 최단거리가 아니다.</b> 측점(m)과 표고(m)는 단위는 같아도
+    /// 종단도는 수직을 과장해 그리고, 무엇보다 <b>토공 오차를 지배하는 것은 수직 차이</b>다.
+    /// 최단거리로 재면 급경사에서 실제 높이오차가 <paramref name="tolZ"/>를 넘어간다.</para>
+    ///
+    /// <para><b>양 끝을 포함해</b> 돌려준다 — 이 목록은 선을 그리는 데도 쓰이고, 선에는 끝이 있어야 한다.
+    /// 측점으로 쓸 때는 <see cref="MarksFromGround"/>가 양 끝을 뺀다(끄트머리는 꺾임이 아니고,
+    /// <see cref="Merge"/>가 기점·종점으로 이미 넣는다 — <see cref="FromRouteVertices"/>와 같은 규칙).</para>
+    ///
+    /// <para><b>여기 자가검증이 재는 것은 이 단계의 결과뿐이다.</b> 도면에 실제로 그려지는 선은
+    /// 여기에 <b>다른 측점들까지 더해</b> 다시 이은 것이라 편차가 달라진다(점을 더 넣는다고 줄지 않는다).
+    /// 그 최종 검증은 선을 만드는 자리에서 따로 한다 — <c>ProfileCommand.RebuildGroundAsPolyline</c> ⑤.</para></summary>
+    public static List<GroundPt> SimplifyGround(CivilDb.Profile ground, double s0, double s1,
+                                                double tolZ, System.Text.StringBuilder log)
+    {
+        var list = new List<GroundPt>();
+        if (ground == null || s1 <= s0) return list;
+        tolZ = Math.Max(0.01, tolZ);
+
+        // ── ① 표본점을 (측점, 표고)로 모은다.
+        var raw = new List<(double S, double Z)>();
+        int nOut = 0, nBad = 0;
+        try
+        {
+            foreach (CivilDb.ProfilePVI q in ground.PVIs)
+            {
+                double s, z;
+                // ★ <c>Station</c>이 아니라 <c>RawStation</c>이다 — 앞은 폐기 예정이고, 측점식(방정식)이
+                //   걸린 선형에서 값이 달라진다. 여기 측점은 <b>단면검토선을 놓을 자리</b>라 생 측점이 맞다.
+                try { s = q.RawStation; z = q.Elevation; }
+                catch { nBad++; continue; }
+                if (double.IsNaN(s) || double.IsNaN(z) ||
+                    double.IsInfinity(s) || double.IsInfinity(z)) { nBad++; continue; }
+                if (s < s0 - 1e-6 || s > s1 + 1e-6) { nOut++; continue; }
+                raw.Add((s, z));
+            }
+        }
+        catch (System.Exception ex)
+        { log?.AppendLine("  원지반 굴곡부: PVI를 못 읽어 건너뜀 — " + ex.Message); return list; }
+
+        raw.Sort((a, b) => a.S.CompareTo(b.S));
+
+        // 같은 측점이 겹치면(수직 절벽) 하나만 남긴다 — 아래 보간에서 0으로 나누는 것을 막는다.
+        var p = new List<(double S, double Z)>(raw.Count);
+        foreach (var t in raw)
+            if (p.Count == 0 || t.S - p[p.Count - 1].S > 1e-6) p.Add(t);
+
+        int n = p.Count;
+        if (n < 3)
+        {
+            log?.AppendLine($"  원지반 굴곡부: 표본점 {n}개 — 고를 것이 없다(꺾임을 재려면 3개는 있어야 한다)");
+            return list;
+        }
+
+        // ── ② Douglas-Peucker(수직 편차) — 재귀 대신 스택. 표본점이 수천 개라 재귀는 깊이가 위험하다.
+        var keep = new bool[n];
+        keep[0] = true; keep[n - 1] = true;
+        var stack = new Stack<(int A, int B)>();
+        stack.Push((0, n - 1));
+        while (stack.Count > 0)
+        {
+            var (a, b) = stack.Pop();
+            if (b - a < 2) continue;                       // 사이에 점이 없다
+            double sa = p[a].S, za = p[a].Z;
+            double ds = p[b].S - sa, dz = p[b].Z - za;
+            int worst = -1; double worstDev = tolZ;        // tolZ를 넘는 것만 후보
+            for (int i = a + 1; i < b; i++)
+            {
+                double zLine = ds > 1e-9 ? za + dz * (p[i].S - sa) / ds : za;
+                double dev = Math.Abs(p[i].Z - zLine);
+                if (dev > worstDev) { worstDev = dev; worst = i; }
+            }
+            if (worst < 0) continue;                       // 이 구간은 직선으로 충분하다
+            keep[worst] = true;
+            stack.Push((a, worst));
+            stack.Push((worst, b));
+        }
+
+        // ── ③ [자가검증] 남긴 점으로 이었을 때 <b>실제</b> 최대 수직 편차를 다시 잰다.
+        //   이 저장소가 값비싸게 배운 규칙이다: <b>자를 먼저 의심하라.</b> DP를 믿지 말고 결과를 잰다.
+        //   이 값이 tolZ를 넘으면 고르기가 잘못된 것이고, 로그가 그 자리에서 말해 준다.
+        double maxDev = 0; double maxDevAt = 0;
+        int prev = 0;
+        for (int i = 1; i < n; i++)
+        {
+            if (!keep[i]) continue;
+            double sa = p[prev].S, za = p[prev].Z;
+            double ds = p[i].S - sa, dz = p[i].Z - za;
+            for (int j = prev + 1; j < i; j++)
+            {
+                double zl = ds > 1e-9 ? za + dz * (p[j].S - sa) / ds : za;
+                double d = Math.Abs(p[j].Z - zl);
+                if (d > maxDev) { maxDev = d; maxDevAt = p[j].S; }
+            }
+            prev = i;
+        }
+
+        // ── ④ 남긴 점이 <b>꺾은선의 정점</b>이다 — 양 끝을 포함해 돌려준다(선을 그리려면 끝이 있어야 한다).
+        //   측점은 여기서 양 끝만 뺀 것이고, 그 변환은 <see cref="MarksFromGround"/>가 한다.
+        for (int i = 0; i < n; i++)
+            if (keep[i]) list.Add(new GroundPt(p[i].S, p[i].Z));
+        int nKeep = System.Math.Max(0, list.Count - 2);
+
+        log?.AppendLine(
+            $"  원지반 꺾은선 정점 {list.Count}개(측점이 되는 꺾임 {nKeep}개) — 표본점 {n}개에서 골랐다(허용 높이오차 {tolZ:0.###}m)"
+            + (nOut > 0 ? $" · 노선 밖 {nOut}개 제외" : "")
+            + (nBad > 0 ? $" · 못 읽음 {nBad}개" : "")
+            + $"\n    이 단계 검증(고른 점만으로 이었을 때): 최대 높이오차 {maxDev:0.###}m"
+            + $" @ {(maxDev > 1e-9 ? maxDevAt.ToString("0.00") + "m" : "-")}"
+            + (maxDev <= tolZ + 1e-6 ? " → 허용치 안" : "  ⚠허용치를 넘었다 — 고르기가 잘못됐다")
+            + "  ※도면에 그려질 선의 검증은 '원지반 꺾은선' 줄에 따로 찍힌다");
+
+        return list;
+    }
+
     /// <summary>선·폴리선의 정점을 뽑는다(2D 판정용이라 Z는 안 쓴다). 모르는 종류는 빈 목록.</summary>
     private static List<Point3d> Vertices(Entity e)
     {

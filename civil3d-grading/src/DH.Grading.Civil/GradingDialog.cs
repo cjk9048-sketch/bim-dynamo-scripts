@@ -31,13 +31,8 @@ public sealed class GradingDialog : Window
     private readonly ComboBox _cutWallStyle;
     private readonly ComboBox _fillWallStyle;
     private readonly ComboBox _coordSys;
-    private readonly ComboBox _basemapRes;   // [배경지도 0731] 위성 화질(목표 해상도)
-    private readonly TextBox _xsecInterval;  // [종단·횡단 0731] 측점선 간격(m)
-    private readonly TextBox _xsecLeft;      // 중심선 좌측 폭(m)
-    private readonly TextBox _xsecRight;     // 중심선 우측 폭(m)
-    private readonly TextBox _xsecCols;      // 횡단도 가로 배치 개수
 
-    private static readonly SolidColorBrush GreyBrush = new(Color.FromRgb(0x99, 0x99, 0x99));
+    internal static readonly SolidColorBrush GreyBrush = new(Color.FromRgb(0x99, 0x99, 0x99));
     private static readonly SolidColorBrush BlackBrush = new(Colors.Black);
 
     // 좌표계 드롭박스 — 표시 라벨과 대응 EPSG(신 2010 N+600000 먼저, 그다음 구 N+500000, 제주). 순서 일치 필수.
@@ -143,14 +138,6 @@ public sealed class GradingDialog : Window
         _terraceInterval = AddRow(colR, "대소단 간격 (m)", GradingSettings.TerraceInterval, "");
         _terraceWidth = AddRow(colR, "대소단 폭 (m)", GradingSettings.TerraceWidth, "");
 
-        // 2-1. 종단·횡단 (오른쪽) — [종단/횡단] 버튼이 쓰는 값
-        AddSection(colR, "2-1. 종단·횡단",
-            "[종단/횡단] 버튼으로 만드는 횡단면도의 간격과 폭. 노선 길이 ÷ 간격이 횡단 개수가 됩니다(최대 200개).");
-        _xsecInterval = AddRow(colR, "횡단 간격 (m)", GradingSettings.XsecInterval, "");
-        _xsecLeft = AddRow(colR, "횡단 폭 — 좌 (m)", GradingSettings.XsecLeft, "");
-        _xsecRight = AddRow(colR, "횡단 폭 — 우 (m)", GradingSettings.XsecRight, "");
-        _xsecCols = AddRow(colR, "횡단도 가로 배치 수", GradingSettings.XsecCols, "");
-
         // 3. 옹벽 형태 (왼쪽)
         AddSection(colL, "3. 옹벽 형태 (INFRAWORKS 3D)",
             "INFRAWORKS 내보내기 때 만드는 옹벽 3D 종류. 없음=사면(노리)만. 보강토=근수직 블록. " +
@@ -177,24 +164,6 @@ public sealed class GradingDialog : Window
             ToolTip = "체크: 정지면 생성 후 정지면_DH만 보이고 원지반·가상면은 숨김. 해제 후 저장: 숨겼던 지표면을 모두 다시 표시.",
         };
         colL.Children.Add(_showOnlyResult);
-
-        // [배경지도 0731 — JACK] 위성 배경지도 화질(목표 해상도). 범위가 넓으면 자동으로 한 단계씩 낮춰 생성.
-        colL.Children.Add(new TextBlock
-        {
-            Text = "배경지도 화질",
-            Margin = new Thickness(0, 4, 0, 2),
-            ToolTip = "[배경지도] 버튼으로 까는 위성사진의 해상도. 지정한 범위가 넓으면 파일이 너무 커지지 않게 자동으로 낮춰 생성합니다.",
-        });
-        _basemapRes = new ComboBox
-        {
-            Width = 200, Height = 24, Margin = new Thickness(0, 0, 0, 8),
-            VerticalContentAlignment = VerticalAlignment.Center,
-            HorizontalAlignment = HorizontalAlignment.Left,
-        };
-        foreach (var s in GradingSettings.BasemapResLabels) _basemapRes.Items.Add(s);
-        int bmIdx = System.Array.IndexOf(GradingSettings.BasemapResValues, GradingSettings.BasemapRes);
-        _basemapRes.SelectedIndex = bmIdx >= 0 ? bmIdx : 1;   // 기본 보통(0.5m)
-        colL.Children.Add(_basemapRes);
 
         // [실시간 연동] 모든 컨트롤 생성 후 훅 — 값·옵션 변경 즉시 예시 그림/안내 갱신.
         _cutBenchHeight.TextChanged += (_, _) => RedrawDiagram();
@@ -494,7 +463,7 @@ public sealed class GradingDialog : Window
     }
 
     /// <summary>[JACK 0728 정렬] 번호 중단락 제목 — 굵은 13pt, 윗 블록과 넉넉한 간격(첫 단락만 0).</summary>
-    private static void AddSection(Panel parent, string title, string? tip = null, bool first = false)
+    internal static void AddSection(Panel parent, string title, string? tip = null, bool first = false)
     {
         parent.Children.Add(new TextBlock
         {
@@ -534,10 +503,67 @@ public sealed class GradingDialog : Window
         return cb;
     }
 
-    private static TextBox AddRow(Panel parent, string label, double value, string hint)
+    /// <summary>★[v32.26 · JACK 0813] <b>숫자 대신 단계로 고르는 줄</b> — 왼쪽이 정밀, 오른쪽이 단순.
+    /// <para>미터 숫자는 도면에서 어떤 모양이 될지 감이 안 온다. 칸을 옮기면 옆에
+    /// <b>이름과 실제 값</b>이 같이 바뀌어, 고르는 사람이 무엇을 고르는지 보이게 한다.</para></summary>
+    internal static Slider AddStepRow(Panel parent, string label, string[] names, double[] values,
+                                     int current, string unit, string hint)
+    {
+        var row = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = false };
+
+        var lbl = new TextBlock { Text = label, Width = 110, VerticalAlignment = VerticalAlignment.Center };
+        DockPanel.SetDock(lbl, Dock.Left);
+        row.Children.Add(lbl);
+
+        var sld = new Slider
+        {
+            Minimum = 0,
+            Maximum = names.Length - 1,
+            TickFrequency = 1,
+            IsSnapToTickEnabled = true,          // 칸 사이에 서지 않는다 — 값은 늘 표의 한 칸이다
+            TickPlacement = System.Windows.Controls.Primitives.TickPlacement.BottomRight,
+            Width = 120,
+            VerticalAlignment = VerticalAlignment.Center,
+            Value = System.Math.Clamp(current, 0, names.Length - 1),
+        };
+        DockPanel.SetDock(sld, Dock.Left);
+        row.Children.Add(sld);
+
+        var val = new TextBlock
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0),
+            FontWeight = FontWeights.Bold,
+        };
+        DockPanel.SetDock(val, Dock.Left);
+        row.Children.Add(val);
+
+        var hnt = new TextBlock
+        {
+            Text = "  " + hint,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = GreyBrush,
+            FontSize = 11,
+        };
+        DockPanel.SetDock(hnt, Dock.Left);
+        row.Children.Add(hnt);
+
+        void Show()
+        {
+            int i = System.Math.Clamp((int)System.Math.Round(sld.Value), 0, names.Length - 1);
+            val.Text = $"{names[i]} ({values[i].ToString("0.###", CultureInfo.InvariantCulture)}{unit})";
+        }
+        sld.ValueChanged += (s, e) => Show();
+        Show();
+
+        parent.Children.Add(row);
+        return sld;
+    }
+
+    internal static TextBox AddRow(Panel parent, string label, double value, string hint)
         => AddRow(parent, label, value, hint, out _);
 
-    private static TextBox AddRow(Panel parent, string label, double value, string hint, out TextBlock hintBlock)
+    internal static TextBox AddRow(Panel parent, string label, double value, string hint, out TextBlock hintBlock)
     {
         var row = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = false };
 
@@ -583,21 +609,8 @@ public sealed class GradingDialog : Window
             !TryParse(_cutSlope, "절토구배", out double cs, positive: false) ||
             !TryParse(_fillSlope, "성토구배", out double fs, positive: false) ||
             !TryParse(_terraceInterval, "대소단 간격", out double ti, positive: true) ||
-            !TryParse(_terraceWidth, "대소단 폭", out double tw, positive: false) ||
-            !TryParse(_xsecInterval, "횡단 간격", out double xi, positive: true) ||
-            !TryParse(_xsecLeft, "횡단 폭 — 좌", out double xl, positive: false) ||
-            !TryParse(_xsecRight, "횡단 폭 — 우", out double xr, positive: false) ||
-            !TryParse(_xsecCols, "횡단도 가로 배치 수", out double xc, positive: true))
+            !TryParse(_terraceWidth, "대소단 폭", out double tw, positive: false))
             return;
-
-        // [종단·횡단] 좌우 폭이 둘 다 0이면 횡단을 그릴 수 없다.
-        if (xl + xr < 0.5)
-        {
-            MessageBox.Show(this, "횡단 폭(좌+우)은 합쳐서 0.5m 이상이어야 합니다.", "입력 오류",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-            _xsecLeft.Focus(); _xsecLeft.SelectAll();
-            return;
-        }
 
         // [단높이 하한 0803] 예시 그림의 클램프(0.2m)와 같은 값을 검증에도 건다 — 안 걸면 0.01 같은 값이
         //   경고 없이 저장되고(그림은 0.2m로 그려져 화면과 실제가 어긋남), 필요한 단수가 폭증해 사면이 잘린다.
@@ -648,12 +661,6 @@ public sealed class GradingDialog : Window
         GradingSettings.CutWallStyle = (WallStyle)System.Math.Max(0, _cutWallStyle.SelectedIndex);
         GradingSettings.FillWallStyle = (WallStyle)System.Math.Max(0, _fillWallStyle.SelectedIndex);
         GradingSettings.ExportEpsg = EpsgCodes[System.Math.Clamp(_coordSys.SelectedIndex, 0, EpsgCodes.Length - 1)];
-        GradingSettings.BasemapRes = GradingSettings.BasemapResValues[
-            System.Math.Clamp(_basemapRes.SelectedIndex, 0, GradingSettings.BasemapResValues.Length - 1)];
-        GradingSettings.XsecInterval = xi;
-        GradingSettings.XsecLeft = xl;
-        GradingSettings.XsecRight = xr;
-        GradingSettings.XsecCols = (int)System.Math.Clamp(System.Math.Round(xc), 1, 20);
         // [재시작 보존 0805] 사용자가 이 대화상자에서 사면형상을 실제로 바꿨을 때만 다음 세션 기본값으로 기록.
         if (GradingSettings.MiterConvex != _miterAtOpen) GradingSettings.SaveUserPrefs();
 
@@ -662,13 +669,18 @@ public sealed class GradingDialog : Window
     }
 
     private bool TryParse(TextBox box, string name, out double value, bool positive)
+        => TryParseCore(this, box, name, out value, positive);
+
+    /// <summary>★[v32.28] 검증을 <b>정지옵션 밖에서도</b> 쓸 수 있게 뺐다(도면설정 창이 같은 규칙을 쓴다).
+    /// 두 창이 각자 검증하면 한쪽만 고쳐진다 — 이 저장소가 되풀이해 배운 실패다.</summary>
+    internal static bool TryParseCore(Window owner, TextBox box, string name, out double value, bool positive)
     {
         // '.'과 ',' 둘 다 허용 (한국 사용자 입력 편의)
         string text = box.Text.Trim().Replace(',', '.');
         if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value) ||
             value < 0 || (positive && value <= 0))
         {
-            MessageBox.Show(this, $"'{name}' 값을 확인하세요. {(positive ? "0보다 큰" : "0 이상의")} 숫자여야 합니다.",
+            MessageBox.Show(owner, $"'{name}' 값을 확인하세요. {(positive ? "0보다 큰" : "0 이상의")} 숫자여야 합니다.",
                 "입력 오류", MessageBoxButton.OK, MessageBoxImage.Warning);
             box.Focus();
             box.SelectAll();

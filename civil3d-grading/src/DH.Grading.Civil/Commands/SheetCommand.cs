@@ -1116,6 +1116,85 @@ public static class SheetCommand
             }
             catch (System.Exception ex) { log.AppendLine("   격자 여백 실패 — " + Brief(ex)); }
 
+            // ★★[v32.21 · JACK 0812] <b>세로줄을 원지반선에서 자른다 — 그 위로는 안 올라간다.</b>
+            //
+            //   JACK: <i>"종단뷰에서 세로줄(빨간색)은 원지반에만 있으면 되."</i>
+            //   지금 세로줄은 <c>GridAtSampleLineStations</c>가 <b>그래프 꼭대기까지</b> 긋는다.
+            //   한국 종단면도 관례는 밴드 표에서 올라와 <b>지반선에서 멈추는</b> 것이고,
+            //   빈 하늘에 세로줄이 서 있으면 계획선·지반선이 묻힌다.
+            //
+            //   <b>순정 기능이 있다</b>(메타데이터로 확정 — 추측이 아니다):
+            //     · <c>GridStyle.VerticalGridOptions.UseClipGrid</c>(bool) — 자르기를 켠다
+            //     · <c>ProfileView.GraphOverrides.ClipGridAt</c>(string) — <b>어느 종단에서</b> 자를지
+            //   두 번째가 있어서 '가장 높은 종단'이 아니라 <b>원지반을 콕 집을 수 있다</b>
+            //   (성토 구간에선 계획선이 원지반보다 위라, 최고 종단 기준으로는 JACK 요구와 달라진다).
+            //
+            //   <c>ClipGridAt</c>이 무슨 문자열을 받는지는 문서에 없다 — <b>넣고 되읽어</b> 확인한다.
+            try
+            {
+                // 원지반 종단의 <b>실제 이름</b>을 읽는다 — 이름 상수를 박으면 '-2' 같은 중복 회피 이름에서 빗나간다.
+                string groundName = null;
+                try
+                {
+                    if (tr.GetObject(pv.AlignmentId, OpenMode.ForRead) is CivilDb.Alignment alg)
+                        foreach (ObjectId pid in alg.GetProfileIds())
+                            if (tr.GetObject(pid, OpenMode.ForRead) is CivilDb.Profile p && p.Name.Contains("원지반"))
+                                groundName = p.Name;
+                }
+                catch (System.Exception ex) { log.AppendLine("   세로줄 자르기: 원지반 종단 찾기 실패 — " + Brief(ex)); }
+
+                using var gs2 = vs.GridStyle;
+                // ★[검토 지적] <c>GridOptions</c>도 <c>CivilWrapper</c>라 IDisposable이다 — 이 파일 관례대로 감싼다.
+                //   (<c>apidump</c>의 type 모드는 <b>선언된</b> 멤버만 찍는다. Dispose가 안 보여도
+                //    기반 타입에 있을 수 있으니 '안 보인다 = 안 버려도 된다'로 읽으면 안 된다.)
+                using var vgo = gs2.VerticalGridOptions;
+                bool use0 = vgo.UseClipGrid, high0 = vgo.ClipToHighestProfile;
+                vgo.UseClipGrid = true;
+                // ★★[v32.22 · 0812 스샷이 잡아냈다] <b>'최고 종단 기준'을 꺼야 지정한 종단이 쓰인다.</b>
+                //
+                //   v32.21은 <c>ClipGridAt='DH_원지반'</c>까지 넣고도 화면이 안 잘렸다. 로그가 이유를 그대로 보여 줬다:
+                //   <c>최고종단기준 True</c>. 자르기는 <b>돌고 있었지만 계획선 기준</b>이었다 —
+                //   스샷에서 계획선이 낮은 0~18m 구간은 세로줄이 낮게 잘려 있고,
+                //   계획선이 평탄부(112.00)에 오르는 18m 뒤로는 그래프 꼭대기까지 올라간다.
+                //   <b>성토 구간에서는 계획선이 원지반보다 위</b>라 JACK 요구("원지반 위로는 안 올라오게")와 어긋난다.
+                //
+                //   → <b>최고 종단 기준을 끈다.</b> 그래야 <c>ClipGridAt</c>이 지목한 원지반이 기준이 된다.
+                //   ※ 내가 v32.21에서 이 값을 <b>"그대로 둔다"</b>고 남긴 것이 바로 실패의 원인이었다.
+                //     로그에 찍어 둔 덕에 스샷 한 장으로 자리가 좁혀졌다 — 안 건드리는 것은 되돌리는 것이 아니다.
+                vgo.ClipToHighestProfile = false;
+                bool use1 = vgo.UseClipGrid, high1 = vgo.ClipToHighestProfile;
+
+                string at0 = null, at1 = null; string atErr = null;
+                if (groundName != null)
+                {
+                    try
+                    {
+                        var pvw = (CivilDb.ProfileView)tr.GetObject(pvId, OpenMode.ForWrite);
+                        using var ovs = pvw.GraphOverrides;
+                        try { at0 = ovs.ClipGridAt; } catch { }
+                        ovs.ClipGridAt = groundName;
+                        try { at1 = ovs.ClipGridAt; } catch { }
+                    }
+                    catch (System.Exception ex) { atErr = Brief(ex); }
+                }
+
+                log.AppendLine($"   세로줄 자르기: 사용 {use0}→{use1}"
+                    + $" · 자를 종단 '{at0 ?? "?"}'→'{at1 ?? "?"}'(원하는 것='{groundName ?? "원지반 종단을 못 찾음"}')"
+                    + $" · 최고종단기준 {high0}→{high1}(꺼야 지정 종단이 쓰인다)"
+                    + (atErr != null ? $"\n      ⚠종단 지정 실패 — {atErr}" : ""));
+                if (high1)
+                    log.AppendLine("      ⚠최고종단기준이 안 꺼졌다 — 세로줄이 계획선까지 올라간다(성토 구간에서 원지반 위로 뻗는다)");
+
+                // [자가검증] 넣은 값이 안 들어갔으면 <b>그 자리에서 말한다</b> — 조용히 넘어가면
+                //   "설정은 성공인데 화면에 없다"를 또 겪는다(v23.9 교훈).
+                if (!use1)
+                    log.AppendLine("      ⚠자르기가 안 켜졌다 — 세로줄이 그래프 꼭대기까지 그대로 올라간다");
+                else if (groundName != null && at1 != groundName)
+                    log.AppendLine($"      ⚠자를 종단이 '{at1}'로 남았다 — 이 속성이 종단 이름을 안 받는다는 뜻이다."
+                                   + " 값 형식을 확인해야 한다(빈 문자열·'없음'·인덱스 등)");
+            }
+            catch (System.Exception ex) { log.AppendLine("   세로줄 자르기 실패 — " + Brief(ex)); }
+
             // ★[v23.20] <b>왼쪽 간격을 먼저 정하고 오른쪽을 거기에 맞춘다.</b>
             //   종전엔 축마다 따로 판정해서 왼쪽 5m·오른쪽 2.5m로 <b>어긋났다</b>(실측).
             //   같은 표고를 재는 두 자가 눈금이 다르면 도면이 못 읽힌다.
@@ -3008,6 +3087,106 @@ public static class SheetCommand
         owner.AppendEntity(pl); tr.AddNewlyCreatedDBObject(pl, true);
     }
 
+    /// <summary>★★[v32.27 · JACK 0813] <b>종단도가 도면에 그린 것을 전부 지운다</b> — '지우고 새로'가 부른다.
+    ///
+    /// <para>JACK: <i>"종단을 그리고 다시 종단도를 눌러서 지우고새로를 선택하면 기존 노선(노란색선)과
+    /// 종단뷰범위(주황색 박스들)과 종단뷰에 블록으로 추가했던 객체들(스케일바, 제목박스, 축척화살표등)
+    /// 모두가 삭제되게해줘."</i></para>
+    ///
+    /// <para><b>왜 남아 있었나.</b> 종전의 정리는 <b>선형만</b> 지웠다 — 선형을 지우면 딸린 종단·종단뷰가
+    /// 따라 사라지므로 그것으로 충분해 보였다. 그런데 도곽·표고바·제목부·배너는 <b>Civil 객체가 아니라
+    /// 우리가 직접 그린 평범한 도면 객체</b>라 선형에 매달려 있지 않다. 아무도 안 지우니 겹겹이 쌓였다.</para>
+    ///
+    /// <para><b>레이어로 찾는다.</b> 이 명령이 쓰는 레이어는 여기 다 적혀 있으니 그 목록이 곧 소유권 증서다.
+    /// 정지면 쪽 레이어(<c>DH-사면선</c>·<c>DH-정지경계</c> 등)는 <b>손대지 않는다</b> —
+    /// 종단도가 만든 것이 아니고, 지우면 정지면 작업이 날아간다.</para>
+    ///
+    /// <para>지운 개수를 <b>레이어별로</b> 남긴다 — <c>CR-*</c>는 회사 표준 레이어라 사용자가 거기에
+    /// 무언가 그려 두었을 수 있다. 예상 밖의 숫자가 찍히면 그때 알 수 있어야 한다.</para>
+    /// 반환=지운 객체 수(배치는 따로 로그에 적는다).</summary>
+    internal static int EraseAll(Database db, System.Text.StringBuilder log)
+    {
+        int total = 0;
+        // 모형에 그리는 것 전부 — 도곽범위(주황) · 노선(노랑) · 측점체인 · 표고바/배너 · 제목부 · 세로줄
+        string[] ours =
+        {
+            LayFrameModel, LayFrame, LayScaleBar, LayTitleDeco, LayVgpGrid,
+            ProfileCommand.LayerRoute, ProfileCommand.LayerChain,
+        };
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+            var want = new Dictionary<ObjectId, string>();
+            foreach (string nm in ours)
+            {
+                if (!lt.Has(nm)) continue;
+                ObjectId lid = lt[nm];
+                if (!want.ContainsKey(lid)) want[lid] = nm;      // 두 상수가 같은 레이어를 가리킬 수 있다
+            }
+            if (want.Count > 0)
+            {
+                var hit = new Dictionary<string, int>();
+                // 모형 + 모든 배치를 함께 훑는다 — 도곽은 배치에, 도곽범위는 모형에 있다.
+                var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                foreach (ObjectId btrId in bt)
+                {
+                    if (tr.GetObject(btrId, OpenMode.ForRead) is not BlockTableRecord btr) continue;
+                    if (btr.IsFromExternalReference || btr.IsFromOverlayReference) continue;
+                    foreach (ObjectId id in btr)
+                    {
+                        try
+                        {
+                            if (tr.GetObject(id, OpenMode.ForRead) is not Entity e) continue;
+                            if (!want.TryGetValue(e.LayerId, out string lname)) continue;
+                            tr.GetObject(id, OpenMode.ForWrite).Erase();
+                            total++;
+                            hit[lname] = hit.TryGetValue(lname, out int c) ? c + 1 : 1;
+                        }
+                        catch { }
+                    }
+                }
+                if (hit.Count > 0)
+                    log.AppendLine("  종단도 객체 정리: " +
+                        string.Join(" · ", hit.Select(kv => $"{kv.Key} {kv.Value}개")));
+                else log.AppendLine("  종단도 객체 정리: 지울 것이 없었다");
+            }
+            tr.Commit();
+        }
+        catch (System.Exception ex) { log.AppendLine("  종단도 객체 정리 실패 — " + Brief(ex)); }
+
+        // ── 배치도 지운다. 안 지우면 <c>DH-종단도_2</c>, <c>_3</c>… 으로 쌓인다.
+        //   지우려는 배치가 지금 열려 있으면 <b>모형으로 옮기고</b> 지운다(열린 배치는 못 지운다).
+        try
+        {
+            var names = new List<string>();
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                var dict = (DBDictionary)tr.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
+                foreach (DBDictionaryEntry de in dict)
+                    if (de.Key.StartsWith(LayoutBase, StringComparison.OrdinalIgnoreCase)) names.Add(de.Key);
+                tr.Commit();
+            }
+            int gone = 0;
+            var lm = LayoutManager.Current;
+            foreach (string nm in names)
+            {
+                try
+                {
+                    if (string.Equals(lm.CurrentLayout, nm, StringComparison.OrdinalIgnoreCase))
+                        lm.CurrentLayout = "Model";
+                    lm.DeleteLayout(nm);
+                    gone++;
+                }
+                catch (System.Exception ex) { log.AppendLine($"  배치 '{nm}' 삭제 실패 — " + Brief(ex)); }
+            }
+            if (gone > 0) log.AppendLine($"  종단도 배치 {gone}개 삭제");
+        }
+        catch (System.Exception ex) { log.AppendLine("  배치 정리 실패 — " + Brief(ex)); }
+
+        return total;
+    }
+
     /// <summary>배치를 만들고 도곽·내부선·1/3 구분선을 그린 뒤, 아래 2/3에 뷰포트를 놓는다.
     /// 뷰포트는 <b>모형의 도곽 범위를 그대로</b> 가져온다 — 사용자는 배치에서 가져오기만 하면 된다.</summary>
     private static string MakeLayout(Database db, Editor ed, Frame frame, double scale,
@@ -3040,14 +3219,117 @@ public static class SheetCommand
         //   배치의 원점 (0,0)은 <b>종이 모서리가 아니라 '인쇄 가능 영역'의 좌하단</b>이다.
         //   그래서 (0,0)에서 841×594를 그으면 여백만큼 밀린다 — 스샷의 그 어긋남이다.
         //   종이 모서리는 (0,0)에서 여백만큼 <b>바깥</b>이므로 그만큼 빼서 그린다.
+        //
+        // ★★★[v32.20 · §26에 '미확인'으로 남겨 둔 것] <b>재기 전에 용지를 먼저 정한다.</b>
+        //   종전엔 이 여백을 <b>맨 위에서</b> 읽고, 용지(A1)·단위(mm) 지정은 <b>90줄 뒤 ⑤단계</b>에서 했다.
+        //   그래서 읽은 값이 두 가지로 틀릴 수 있었다:
+        //     ① <b>용지가 다르다</b> — 여백은 출력장치·용지마다 다른데 아직 A1로 바꾸기 전이라
+        //        새 배치의 <b>기본 용지</b>(보통 A4·레터, 기본 프린터) 여백을 A1 도곽에 쓰고 있었다.
+        //     ② <b>단위가 다르다</b> — <c>PlotPaperMargins</c>는 <c>PlotPaperUnits</c>를 따라간다(§26에서 확인).
+        //        기본이 인치면 0.25가 나오는데 우리는 그걸 0.25<b>mm</b>로 알고 밀었다 — 실제로는 6.35mm다.
+        //   → <b>용지·단위를 먼저 걸고, 그 설정에서 여백을 읽는다.</b> 부작용 없는 순서 교환이다.
+        //   A3 출력은 종전에도 안전했다(창이 도곽과 같은 <c>ox,oy</c>를 써서 자기일관적) — 영향은 A1 배치뿐.
         double ox = 0, oy = 0;
+
+        // ── [계측] 종전 코드가 쓰던 바로 그 값을 먼저 남긴다. 아래 새 값과 다르면
+        //    그 차이가 곧 '여태 어긋나 있던 양'이다 — §26의 '미확인'이 실행 한 번으로 닫힌다.
         try
         {
-            var mg = lay.PlotPaperMargins;      // 인쇄영역 좌하단 여백(종이 단위)
-            ox = -mg.MinPoint.X; oy = -mg.MinPoint.Y;
-            log.AppendLine($"도곽 원점 보정: 인쇄영역 여백 좌하({mg.MinPoint.X:F1},{mg.MinPoint.Y:F1}) → 도곽을 ({ox:F1},{oy:F1})에서 시작");
+            var mg0 = lay.PlotPaperMargins;
+            log.AppendLine($"[용지 설정 전] 단위 {lay.PlotPaperUnits} · 용지 {lay.PlotPaperSize.X:F1}×{lay.PlotPaperSize.Y:F1}"
+                           + $" · 여백 좌하({mg0.MinPoint.X:F2},{mg0.MinPoint.Y:F2})  ← 종전 코드가 mm로 알고 쓰던 값");
         }
-        catch (System.Exception ex) { log.AppendLine("도곽 원점 보정 실패(0,0에서 그림) — " + ex.Message); }
+        catch (System.Exception ex) { log.AppendLine("[용지 설정 전] 못 읽음 — " + Brief(ex)); }
+
+        // ── ⑤ 출력 용지를 A1 · 단위를 mm로. 실패해도 도곽은 그대로 쓸 수 있으므로 조용히 넘어간다.
+        //   ★[검토 지적] <b>단계 이름을 들고 다닌다</b> — "실패 — eInvalidInput" 한 줄로는 여덟 호출 중
+        //   어디서 물렸는지 못 좁힌다(0807 교훈이자 바로 아래 <see cref="AddA3PageSetup"/>이 이미 배운 것).
+        bool paperOk = false;
+        string pstep = "시작";
+        try
+        {
+            var psv = PlotSettingsValidator.Current;
+            using var pset = new PlotSettings(lay.ModelType);
+            pstep = "옛 설정 복사"; pset.CopyFrom(lay);
+            pstep = "출력장치(DWG To PDF.pc3)"; psv.SetPlotConfigurationName(pset, "DWG To PDF.pc3", null);
+            pstep = "용지 목록 새로고침"; psv.RefreshLists(pset);
+            pstep = "A1 용지 고르기";
+            string? media = psv.GetCanonicalMediaNameList(pset).Cast<string>()
+                               .FirstOrDefault(m => m.Contains("A1", StringComparison.OrdinalIgnoreCase));
+            // ★[검토 지적] 용지를 <b>못 찾았으면 여기서 물러난다.</b> 종전엔 그대로 진행해
+            //   <b>장치 기본 용지</b>(대개 A4·레터)의 여백으로 도곽 원점을 잡고 <c>lay</c>까지 그 용지로 바꿨다 —
+            //   로그에는 남지만 동작은 조용히 틀린다. 옛 설정을 건드리지 않는 편이 낫다.
+            if (media == null)
+            {
+                log.AppendLine("출력 용지: 이 출력장치에 A1 용지가 없다 — 용지 설정을 건너뛴다(도곽은 그대로 그린다)");
+            }
+            else
+            {
+                pstep = "용지 지정"; psv.SetCanonicalMediaName(pset, media);
+                // 용지를 고른 <b>다음에</b> 단위를 건다. 여백이 항상 mm인지 단위를 따르는지는 아직 논쟁 중이지만
+                // (아래 참조), <b>어느 쪽이든 이 순서가 손해가 없다</b> — 단위를 따른다면 이 순서라야 맞다.
+                pstep = "단위(mm)"; psv.SetPlotPaperUnits(pset, PlotPaperUnit.Millimeters);
+                pstep = "출력 종류=배치"; psv.SetPlotType(pset, Autodesk.AutoCAD.DatabaseServices.PlotType.Layout);
+                pstep = "배치에 반영"; lay.CopyFrom(pset);
+
+                pstep = "여백 재기";
+                var sz = pset.PlotPaperSize;
+                var mg = pset.PlotPaperMargins;
+                ox = -mg.MinPoint.X; oy = -mg.MinPoint.Y;
+                paperOk = true;
+                log.AppendLine($"출력 용지: {media}"
+                               + $" · 용지 {sz.X:F1}×{sz.Y:F1} · 여백 좌하({mg.MinPoint.X:F2},{mg.MinPoint.Y:F2})"
+                               + $" → 도곽을 ({ox:F2},{oy:F2})에서 시작");
+
+                // ★[검토 지적 · 계측이 스스로 검산되게] 용지가 도곽과 맞는지 <b>직접 대조</b>한다.
+                //   이 한 줄이 세로용지·크기틀림·단위실패를 <b>한꺼번에</b> 잡는다 —
+                //   종전의 <c>sz.Y &gt; sz.X</c>는 단위가 인치로 남아 33.1×23.4가 돼도 거짓이라 조용했다.
+                if (System.Math.Abs(sz.X - SheetW) > 1.0 || System.Math.Abs(sz.Y - SheetH) > 1.0)
+                    log.AppendLine($"   ⚠ 용지 {sz.X:F1}×{sz.Y:F1} ≠ 도곽 {SheetW:F0}×{SheetH:F0}mm"
+                                   + " — 방향·크기·단위 중 하나가 틀렸다(도곽이 종이와 안 맞는다)");
+
+                // ★[검토 지적] 배치의 흰 종이 배경을 실제로 정하는 것은 <b><c>CopyFrom</c> 뒤의 <c>lay</c></b>다.
+                //   DB에 올라간 Layout에서 AutoCAD가 여백을 다시 계산하는지는 문서에 없다 — 그러니 <b>재서 적는다</b>.
+                try
+                {
+                    var mgL = lay.PlotPaperMargins;
+                    log.AppendLine($"   [배치 반영 후] 단위 {lay.PlotPaperUnits} · 용지 {lay.PlotPaperSize.X:F1}×{lay.PlotPaperSize.Y:F1}"
+                                   + $" · 여백 좌하({mgL.MinPoint.X:F2},{mgL.MinPoint.Y:F2})"
+                                   + (System.Math.Abs(mgL.MinPoint.X - mg.MinPoint.X) > 0.01 ||
+                                      System.Math.Abs(mgL.MinPoint.Y - mg.MinPoint.Y) > 0.01
+                                        ? "  ⚠설정값과 다르다 — 도곽 원점은 이 값으로 잡아야 한다" : ""));
+                }
+                catch (System.Exception ex) { log.AppendLine("   [배치 반영 후] 못 읽음 — " + Brief(ex)); }
+            }
+        }
+        catch (System.Exception ex) { log.AppendLine($"출력 용지 설정 건너뜀({pstep}) — " + Brief(ex)); }
+
+        // ── 설정이 실패했으면 배치가 지금 들고 있는 값으로라도 맞춘다.
+        //
+        //   ★★[검토 지적 · 높음] <b>단위 환산(×25.4)을 넣지 않는다.</b>
+        //   Autodesk 공식 레퍼런스는 <c>PlotPaperMargins</c>에 대해
+        //   <i>"The values returned are in millimeters, <b>regardless of the units selected by the user</b>"</i>
+        //   라고 못박는다. 반면 이 저장소의 §26은 "단위를 따라간다"고 적어 두었다 — <b>둘 중 하나는 틀렸고
+        //   아직 실측이 없다.</b>
+        //
+        //   <b>손익이 비대칭이다.</b> 환산을 안 하면 최악이 여백만큼(≈6mm) 어긋나는 것이고,
+        //   환산을 했다가 문서가 맞으면 6.35에 25.4가 곱해져 <b>도곽이 종이 밖 161mm로 날아간다</b>.
+        //   확인 안 된 가정에 큰 쪽을 걸 이유가 없다 — <b>실측이 §26을 확인해 주면 그때 되살린다.</b>
+        //   위 <c>[용지 설정 전]</c> 로그가 바로 그 실측이다: 단위가 인치인데 여백이 6.35로 찍히면 문서가 맞고,
+        //   0.25로 찍히면 §26이 맞다.
+        if (!paperOk)
+        {
+            try
+            {
+                var mg = lay.PlotPaperMargins;
+                ox = -mg.MinPoint.X; oy = -mg.MinPoint.Y;
+                log.AppendLine($"도곽 원점 보정(물러남): 단위 {lay.PlotPaperUnits}"
+                               + $" · 용지 {lay.PlotPaperSize.X:F1}×{lay.PlotPaperSize.Y:F1}"
+                               + $" · 여백 좌하({mg.MinPoint.X:F2},{mg.MinPoint.Y:F2}) → ({ox:F2},{oy:F2})"
+                               + "  ※A1로 못 바꾼 상태라 도곽이 종이와 안 맞을 수 있다");
+            }
+            catch (System.Exception ex) { log.AppendLine("도곽 원점 보정 실패(0,0에서 그림) — " + Brief(ex)); }
+        }
 
         Rect(ox, oy, ox + SheetW, oy + SheetH);                                          // ① 도곽
         Rect(ox + MarginLR, oy + MarginTB, ox + SheetW - MarginLR, oy + SheetH - MarginTB); // ② 내부 여백선
@@ -3122,23 +3404,8 @@ public static class SheetCommand
         }
         catch (System.Exception ex) { log.AppendLine("뷰포트 레이어 끄기 실패 — " + Brief(ex)); }
 
-        // ⑤ 출력 용지를 A1로 — 실패해도 도곽은 그대로 쓸 수 있으므로 조용히 넘어간다.
-        try
-        {
-            var psv = PlotSettingsValidator.Current;
-            using var pset = new PlotSettings(lay.ModelType);
-            pset.CopyFrom(lay);
-            psv.SetPlotConfigurationName(pset, "DWG To PDF.pc3", null);
-            psv.RefreshLists(pset);
-            string? media = psv.GetCanonicalMediaNameList(pset).Cast<string>()
-                               .FirstOrDefault(m => m.Contains("A1", StringComparison.OrdinalIgnoreCase));
-            if (media != null) psv.SetCanonicalMediaName(pset, media);
-            psv.SetPlotPaperUnits(pset, PlotPaperUnit.Millimeters);
-            psv.SetPlotType(pset, Autodesk.AutoCAD.DatabaseServices.PlotType.Layout);
-            lay.CopyFrom(pset);
-            log.AppendLine("출력 용지: " + (media ?? "(A1 용지를 못 찾음 — 도곽만 적용)"));
-        }
-        catch (System.Exception ex) { log.AppendLine("출력 용지 설정 건너뜀 — " + ex.Message); }
+        // ※ 출력 용지(A1)·단위(mm) 설정은 <b>도곽을 그리기 전</b>으로 옮겼다(v32.20 — 위 ⑤ 참고).
+        //   여백을 정하는 것이 용지인데 여백을 먼저 읽고 있었다.
 
         // ⑥ ★[JACK 0811] A3 축소 출력용 페이지 설정을 미리 넣어 둔다 — 제본은 A3다.
         //   ★[v32.1] 도곽이 어디에 놓였는지(ox,oy)를 넘긴다 — 그 네 변이 곧 출력 창이다.

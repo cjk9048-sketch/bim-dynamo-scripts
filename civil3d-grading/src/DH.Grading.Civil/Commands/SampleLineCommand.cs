@@ -67,7 +67,7 @@ public static class SampleLineCommand
             AcadApp.ShowAlertDialog(
                 $"단면검토선이 {plan.Count}개나 됩니다(간격 {interval:0.#}m · 노선 {st1 - st0:F0}m).\n" +
                 "도면이 감당하기 어려워 만들지 않았습니다.\n\n" +
-                $"정지옵션에서 '횡단 간격'을 늘린 뒤 다시 실행하세요(예 {System.Math.Ceiling((st1 - st0) / 50):0}m 이상).");
+                $"도면설정에서 '횡단 간격'을 늘린 뒤 다시 실행하세요(예 {System.Math.Ceiling((st1 - st0) / 50):0}m 이상).");
             return;
         }
 

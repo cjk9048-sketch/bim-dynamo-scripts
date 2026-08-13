@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- API 메타데이터 덤프 — 이 저장소 규칙: "API는 쓰기 전에 메타데이터로 확인한다".
+       System.Reflection.Metadata는 .NET SDK에 내장이라 NuGet 복원이 필요 없다(오프라인 가능).
+       어셈블리를 '로드'하지 않고 파일만 읽으므로 AutoCAD 의존성도 필요 없다. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>apidump</AssemblyName>
+    <RootNamespace>apidump</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+</Project>

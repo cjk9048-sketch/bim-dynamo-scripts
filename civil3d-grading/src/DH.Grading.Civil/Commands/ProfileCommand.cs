@@ -61,7 +61,7 @@ public sealed class ProfileCommand
     }
     private const string ChainProfileName = "DH_측점체인";
     private const string ChainStyleName = "DH_측점체인(숨김)";
-    private const string LayerChain = "DH-측점체인(숨김)";
+    internal const string LayerChain = "DH-측점체인(숨김)";   // [v32.27] '지우고 새로'가 정리 대상으로 본다
     private const short YellowIndex = 2;          // AutoCAD 색인 2 = 노랑
     /// <summary>★[JACK 0807] DHT.dwt(회사 표준)에서 심어 오는 종단도 스타일 이름 — 템플릿의 실제 이름 그대로.</summary>
     private const string ViewStyleName = "DH_종단 뷰";
@@ -84,10 +84,144 @@ public sealed class ProfileCommand
         }
     }
 
-    private static void Body(Database db, Editor ed)
+    /// <summary>★★[v32.29 · JACK 0813] <b>이미 만든 종단도를 그 자리에 다시 그린다</b> — 도면설정이 부른다.
+    ///
+    /// <para>JACK: <i>"도면설정에서 원지반 표현을 바꾸고 저장해도 업데이트가 되지 않아."</i>
+    /// 맞다. 정밀도를 바꾸면 <b>측점이 바뀌고</b>, 측점이 바뀌면 단면검토선·밴드·종단뷰·도곽이
+    /// 전부 딸려 가므로 부분 갱신이 아니라 <b>다시 그리는 것</b>이 정답이다.</para>
+    ///
+    /// <para>그런데 그냥 다시 그리면 <b>노선을 또 찍어야</b> 한다 — 설정 하나 바꿀 때마다 그건 무리다.
+    /// 그래서 <b>노선 좌표와 종단도 놓은 자리를 그대로 재사용</b>한다.
+    /// 노선 좌표는 도면의 노란 선에서 읽고, 놓은 자리는 그 선에 <b>붙여 둔 XData</b>에서 읽는다
+    /// (Civil의 <c>ProfileView</c>에는 '어디에 놓였는지'를 돌려주는 속성이 없다 — 메타데이터로 확인).</para>
+    ///
+    /// <para>둘 중 하나라도 없으면 <b>아무것도 하지 않는다</b>. 자리를 모르는 채 다시 그리면
+    /// 종단도가 엉뚱한 데로 옮겨 가는데, 그건 '업데이트'가 아니다.</para></summary>
+    internal static bool Rebuild(Document doc)
+    {
+        Database db = doc.Database;
+        Editor ed = doc.Editor;
+        try
+        {
+            if (!ReadExistingRoute(db, out var pts, out var viewPt))
+            {
+                ed.WriteMessage("\n[도면 설정] 다시 그릴 종단도가 없습니다 — [종단도] 버튼으로 먼저 만드세요."
+                                + "\n  ※v32.29 이전에 만든 종단도라면 '어디에 놓았는지'가 기록돼 있지 않습니다."
+                                + " 한 번만 [종단도]로 새로 만들면 그 뒤로는 저장할 때마다 자동으로 갱신됩니다.");
+                return false;
+            }
+            ed.WriteMessage($"\n[도면 설정] 종단도를 그 자리에 다시 그립니다(노선 {pts.Count}점 재사용)...");
+            Body(db, ed, pts, viewPt);
+            return true;
+        }
+        catch (System.Exception ex)
+        {
+            ed.WriteMessage("\n[도면 설정] 종단도 다시 그리기 실패 — " + ex.Message);
+            try { DiagLog.Append($"\n■ 종단도 재생성 예외 — {ex}\n"); } catch { }
+            return false;
+        }
+    }
+
+    /// <summary>도면에 남아 있는 노선(노란 선)과 <b>종단도를 놓았던 자리</b>를 읽는다.
+    /// 둘 다 있어야 참이다 — 노선이 여럿이면 <b>마지막 것</b>(가장 나중에 그린 것)을 쓴다.</summary>
+    private static bool ReadExistingRoute(Database db, out System.Collections.Generic.List<Point3d> pts,
+                                          out Point3d viewPt)
+    {
+        pts = new System.Collections.Generic.List<Point3d>();
+        viewPt = Point3d.Origin;
+        bool ok = false;
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+            if (!lt.Has(LayerRoute)) { tr.Commit(); return false; }
+            ObjectId lid = lt[LayerRoute];
+            var ms = (BlockTableRecord)tr.GetObject(
+                SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+            foreach (ObjectId id in ms)
+            {
+                if (tr.GetObject(id, OpenMode.ForRead) is not Polyline pl || pl.LayerId != lid) continue;
+                var got = new System.Collections.Generic.List<Point3d>(pl.NumberOfVertices);
+                for (int i = 0; i < pl.NumberOfVertices; i++)
+                {
+                    var p = pl.GetPoint2dAt(i);
+                    got.Add(new Point3d(p.X, p.Y, 0));
+                }
+                if (got.Count < 2) continue;
+                // 놓았던 자리 — 없으면 이 노선은 쓸 수 없다(자리를 모르면 다시 그릴 수 없다).
+                using var xd = pl.GetXDataForApplication(ViewPtAppName);
+                if (xd == null) continue;
+                foreach (TypedValue tv in xd)
+                    if (tv.TypeCode == (short)DxfCode.ExtendedDataXCoordinate && tv.Value is Point3d vp)
+                    { viewPt = vp; pts = got; ok = true; }     // 마지막 것이 이긴다
+            }
+            tr.Commit();
+        }
+        catch { return false; }
+        return ok && pts.Count >= 2;
+    }
+
+    /// <summary>종단도를 놓은 자리를 노선에 적어 둔다 — 다음에 '그 자리에 다시 그리기'가 읽는다.</summary>
+    private static void SaveViewPoint(Database db, ObjectId routeId, Point3d p,
+                                      System.Text.StringBuilder log)
+    {
+        if (routeId.IsNull) return;
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var rat = (RegAppTable)tr.GetObject(db.RegAppTableId, OpenMode.ForWrite);
+            if (!rat.Has(ViewPtAppName))
+            {
+                var rec = new RegAppTableRecord { Name = ViewPtAppName };
+                rat.Add(rec); tr.AddNewlyCreatedDBObject(rec, true);
+            }
+            var e = (Entity)tr.GetObject(routeId, OpenMode.ForWrite);
+            e.XData = new ResultBuffer(
+                new TypedValue((int)DxfCode.ExtendedDataRegAppName, ViewPtAppName),
+                new TypedValue((int)DxfCode.ExtendedDataXCoordinate, p));
+            tr.Commit();
+        }
+        catch (System.Exception ex) { log.AppendLine("  종단도 자리 기록 실패(다시그리기가 안 될 수 있다) — " + ex.Message); }
+    }
+
+    /// <summary>노선에 붙이는 XData 앱 이름 — '종단도를 어디에 놓았는지'를 담는다.</summary>
+    private const string ViewPtAppName = "DHGRADE_PROFVIEWPT";
+
+    /// <summary>저장해 둔 좌표로 노선(노란 선)을 다시 그린다 — <see cref="DrawRoute"/>가 남기는 것과 같은 물건.
+    /// <para>좌표는 이미 도면 좌표계(WCS)다 — 읽을 때 폴리선 정점에서 왔으므로 변환하지 않는다.
+    /// 여기서 UCS 변환을 한 번 더 걸면 UCS를 돌려 쓰는 도면에서 노선이 매번 조금씩 돌아간다.</para></summary>
+    private static ObjectId MakeRoutePolyline(Database db,
+        System.Collections.Generic.IReadOnlyList<Point3d> pts, out int nPts, out double len)
+    {
+        nPts = pts?.Count ?? 0; len = 0;
+        if (pts == null || pts.Count < 2) return ObjectId.Null;
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            ObjectId layerId = SectionCommand.EnsureLayer(db, tr, LayerRoute, YellowIndex);
+            var ms = (BlockTableRecord)tr.GetObject(
+                SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+            var pl = new Polyline(pts.Count) { LayerId = layerId };
+            for (int i = 0; i < pts.Count; i++)
+                pl.AddVertexAt(i, new Point2d(pts[i].X, pts[i].Y), 0, 0, 0);
+            pl.Closed = false;
+            ms.AppendEntity(pl); tr.AddNewlyCreatedDBObject(pl, true);
+            ObjectId id = pl.ObjectId;
+            len = pl.Length;
+            tr.Commit();
+            return id;
+        }
+        catch { return ObjectId.Null; }
+    }
+
+    private static void Body(Database db, Editor ed,
+                             System.Collections.Generic.List<Point3d> presetRoute = null,
+                             Point3d presetViewPt = default)
     {
         var cdoc = CivilApp.CivilApplication.ActiveDocument;
         var log = new System.Text.StringBuilder();
+        bool rebuild = presetRoute is { Count: >= 2 };
+        if (rebuild) log.AppendLine($"※다시 그리기 — 노선 {presetRoute.Count}점과 놓은 자리를 재사용한다");
         // ★★[v29.0 점검 반영 · 치명] 지난 판의 체인 ID가 넘어오지 않게 <b>맨 먼저 비운다</b>.
         LastLabelChainId = ObjectId.Null;
 
@@ -104,7 +238,15 @@ public sealed class ProfileCommand
         // ── ② 이전 종단도 정리 여부 ──────────────────────────────────────────
         //   [JACK 0807] 무조건 지우지 않는다 — 여러 노선을 놓고 비교하고 싶을 수 있다. 물어본다.
         int prev = CountExisting(db, cdoc);
-        if (prev > 0)
+        // ★[v32.29] 다시 그리기는 <b>묻지 않는다</b> — 같은 자리에 새로 그리는 것이 목적이므로
+        //   옛것을 남기면 두 벌이 겹친다. 사용자가 '다시 그린다'는 것을 이미 고른 상태다.
+        if (rebuild)
+        {
+            log.AppendLine("이전 종단도 정리(다시 그리기 — 묻지 않음):");
+            int wiped = EraseExisting(db, cdoc, log);
+            ed.WriteMessage($"\n  · 이전 종단도를 지웠습니다(객체 {wiped}개).");
+        }
+        else if (prev > 0)
         {
             var kw = new PromptKeywordOptions($"\n이미 만든 종단도가 {prev}개 있습니다. 지우고 새로 만들까요? ");
             kw.Keywords.Add("지우고새로", "Y", "지우고새로(Y)");
@@ -115,16 +257,26 @@ public sealed class ProfileCommand
             if (kr.Status != PromptStatus.OK && kr.Status != PromptStatus.None) return;
             if (kr.Status == PromptStatus.None || kr.StringResult == "지우고새로")
             {
-                int erased = EraseExisting(db, cdoc);
-                log.AppendLine($"이전 종단도 정리: {erased}개 지움");
-                ed.WriteMessage($"\n  · 이전 종단도 {erased}개를 지웠습니다.");
+                log.AppendLine("이전 종단도 정리:");
+                int erased = EraseExisting(db, cdoc, log);
+                ed.WriteMessage($"\n  · 이전 종단도를 지웠습니다(객체 {erased}개 — 노선·도곽범위·표고바·제목부·배치 포함).");
             }
             else log.AppendLine($"이전 종단도 {prev}개 유지(추가 생성)");
         }
 
-        // ── ③ 노선 직접 그리기 ───────────────────────────────────────────────
-        ObjectId routeId = DrawRoute(db, ed, out int nPts, out double routeLen);
-        if (routeId.IsNull) return;                    // 취소
+        // ── ③ 노선 — 새로 그리거나(기본), 저장해 둔 좌표로 되살리거나(다시 그리기)
+        ObjectId routeId; int nPts; double routeLen;
+        if (rebuild)
+        {
+            routeId = MakeRoutePolyline(db, presetRoute, out nPts, out routeLen);
+            if (routeId.IsNull)
+            { ed.WriteMessage("\n[종단도] 노선을 되살리지 못했습니다."); return; }
+        }
+        else
+        {
+            routeId = DrawRoute(db, ed, out nPts, out routeLen);
+            if (routeId.IsNull) return;                // 취소
+        }
         if (routeLen < 1.0)
         {
             SectionCommand.EraseQuiet(db, routeId);
@@ -244,6 +396,7 @@ public sealed class ProfileCommand
         }
         log.AppendLine($"종단 {nProf}개 생성");
 
+
         // ── ⑤-b ★★[v25.0 · JACK 0811 확정] <b>측점을 정하고 단면검토선으로 심는다.</b>
         //
         //   <b>왜 단면검토선인가.</b> 그동안 측점이 계속 어긋난 근본 이유는, 밴드마다 측점을 찍는
@@ -260,19 +413,38 @@ public sealed class ProfileCommand
         //   옮기면 되고, 종단도와 횡단면도가 <b>같은 그룹</b>이라 저절로 함께 따라온다
         //   (JACK 0810: "종단에 있는 체인은 다 횡단면도가 그려져야 해").
         double bandIv = System.Math.Max(1.0, GradingSettings.XsecInterval);
-        ObjectId slGroupId = BuildSampleLines(db, ed, alignId, pidGround, pidPad, surfs, bandIv, log);
+        ObjectId slGroupId = BuildSampleLines(db, ed, alignId, pidGround, pidPad, surfs, bandIv,
+                                              out var allMarks, log);
+
+        // ── ⑤-c ★★[v32.24 · JACK 0812 스샷] <b>측점을 정한 뒤에 원지반선을 긋는다 — 순서가 중요하다.</b>
+        //   JACK: <i>"원지형과 계획지표면이 만나는 부분이야 … 저부분은 딱맞아야해."</i>
+        //   v32.23은 꺾은선을 <b>먼저</b> 만들고 측점을 나중에 잡아서, 데이라잇 자리에 정점이 없었다 —
+        //   그 자리를 직선이 가로질러 계획선이 원지반선을 뚫고 내려갔다(스샷).
+        //   이제 <b>확정된 측점 전부</b>를 정점으로 삼는다: 데이라잇·절성경계 자리에 실측 표고가 박히므로
+        //   두 선이 정확히 만난다.
+        pidGround = RebuildGroundAsPolyline(db, alignId, pidGround, alignLayer, profStyle, profLabels,
+                                            allMarks, log);
 
         // ── ⑥ 종단도 배치 ───────────────────────────────────────────────────
-        var pvPt = ed.GetPoint("\n[종단도] 종단면도를 놓을 위치 클릭 (Esc=종단만 만들고 끝): ");
-        if (pvPt.Status != PromptStatus.OK)
+        //   ★[v32.29] 다시 그리기면 <b>놓았던 자리</b>를 그대로 쓴다(묻지 않는다).
+        Point3d placeAt;
+        if (rebuild) placeAt = presetViewPt;
+        else
         {
-            log.AppendLine("종단도 배치 건너뜀(사용자 취소)");
-            Finish(ed, log, $"선형 '{alignName}' · 종단 {nProf}개 생성(종단도 배치는 건너뜀)");
-            return;
+            var pvPt = ed.GetPoint("\n[종단도] 종단면도를 놓을 위치 클릭 (Esc=종단만 만들고 끝): ");
+            if (pvPt.Status != PromptStatus.OK)
+            {
+                log.AppendLine("종단도 배치 건너뜀(사용자 취소)");
+                Finish(ed, log, $"선형 '{alignName}' · 종단 {nProf}개 생성(종단도 배치는 건너뜀)");
+                return;
+            }
+            placeAt = pvPt.Value.TransformBy(ed.CurrentUserCoordinateSystem);
         }
+        // 다음 '다시 그리기'가 이 자리를 찾을 수 있게 노선에 적어 둔다.
+        SaveViewPoint(db, routeId, placeAt, log);
         try
         {
-            var pvId = CivilDb.ProfileView.Create(alignId, pvPt.Value.TransformBy(ed.CurrentUserCoordinateSystem));
+            var pvId = CivilDb.ProfileView.Create(alignId, placeAt);
             log.AppendLine("종단면도 배치 완료");
             string sty = ApplyViewStyle(db, cdoc, pvId, pidGround, pidPad, slGroupId, surfs, ed, log);
             log.AppendLine(sty);
@@ -311,7 +483,7 @@ public sealed class ProfileCommand
     /// 20m 자리는 주 증분이 맡으므로 넣으면 두 번 찍힌다.
     /// 값 다섯 행은 그대로 <b>단면검토선</b>에서 읽으므로 측점은 여전히 한 줄로 선다.</para>
     /// 반환=만든 체인 종단(실패하면 Null).</summary>
-    private static ObjectId BuildLabelChain(Database db, ObjectId alignId, ObjectId padId,
+    private static ObjectId BuildLabelChain(Database db, ObjectId alignId, ObjectId padId, ObjectId groundId,
                                             System.Collections.Generic.List<StationMarks.Mark> all,
                                             double major, System.Text.StringBuilder log)
     {
@@ -346,23 +518,298 @@ public sealed class ProfileCommand
             }
             if (chainId.IsNull) { log.AppendLine("측점 라벨용 체인 생성 실패 — " + err); return ObjectId.Null; }
 
-            int made = 0, bad = 0;
+            // ★★[v32.21 · JACK 0812] <b>"부체인은 원지반쪽은 안 나오는 문제"의 원인이 여기였다.</b>
+            //
+            //   종전엔 표고를 <c>pad.ElevationAt(s)</c> <b>하나</b>로만 구했다. 그런데 §27(v32.2)부터
+            //   그 <c>pad</c>는 <b>순수 정지면</b>이라 <b>정지 구간에만</b> 존재한다 —
+            //   정지 밖(=원지반만 있는 구간)을 물으면 실패하고, 그 <c>catch</c>가 조용히 삼켜
+            //   <b>PVI가 아예 안 생겼다.</b> PVI가 없으면 측점 행에 <b>번호가 안 찍힌다.</b>
+            //
+            //   <b>값은 쓰지도 않는데 값 때문에 자리가 사라진 것이다</b>(이 종단은 라벨 자리 전용이다).
+            //   → 계획면에서 못 구하면 <b>원지반 표고</b>로 놓는다. 0을 넣으면 안 된다 —
+            //     안 보이는 종단이라도 종단 뷰의 <b>표고 범위 계산에는 들어갈 수 있어</b>
+            //     Y축이 0까지 늘어나면 도면이 통째로 납작해진다. 원지반이면 늘 그 그림 안이다.
+            static bool ElevAt(CivilDb.Profile pr, double s, out double z)
+            {
+                z = 0;
+                if (pr == null) return false;
+                try
+                {
+                    // 묻기 <b>전에</b> 범위를 본다 — 밖에서 <c>ElevationAt</c>이 어떻게 구는지는 문서에 없다(§27과 같은 처방).
+                    if (s < pr.StartingStation - 1e-6 || s > pr.EndingStation + 1e-6) return false;
+                    z = pr.ElevationAt(s);
+                    if (double.IsNaN(z) || double.IsInfinity(z)) return false;
+                    // ★[검토 지적 · 높음] 측점 범위 검사는 <b>종단 중간이 빈 구간</b>을 못 막는다
+                    //   (누적 구역이 떨어져 있으면 정상적으로 생긴다 — §27이 바로 그 상황이다).
+                    //   거기서 <c>0.0</c>이 나오면 그대로 PVI가 되어 종단 뷰 Y축이 0까지 늘어나
+                    //   <b>도면이 통째로 납작해진다</b>. 있을 수 있는 표고의 테두리로 되재면
+                    //   무엇을 돌려주든 걸린다 — 막아서 잃는 것이 없고, 안 막으면 도면이 깨진다.
+                    try { if (z < pr.ElevationMin - 1e-6 || z > pr.ElevationMax + 1e-6) return false; } catch { }
+                    return true;
+                }
+                catch { return false; }
+            }
+
+            int made = 0, bad = 0, fell = 0;
             using (var tr = db.TransactionManager.StartTransaction())
             {
                 var chain = (CivilDb.Profile)tr.GetObject(chainId, OpenMode.ForWrite);
                 var pad = (CivilDb.Profile)tr.GetObject(padId, OpenMode.ForRead);
+                CivilDb.Profile grd = null;
+                if (!groundId.IsNull)
+                    try { grd = tr.GetObject(groundId, OpenMode.ForRead) as CivilDb.Profile; } catch { }
+
                 foreach (double s in pts)
                 {
-                    try { chain.PVIs.AddPVI(s, pad.ElevationAt(s)); made++; }
+                    if (!ElevAt(pad, s, out double z))
+                    {
+                        if (grd == null || !ElevAt(grd, s, out z)) { bad++; continue; }
+                        fell++;                                  // 정지 밖 — 원지반 표고로 놓았다
+                    }
+                    try { chain.PVIs.AddPVI(s, z); made++; }
                     catch { bad++; }
                 }
                 tr.Commit();
             }
-            log.AppendLine($"측점 라벨용 체인 '{nm}' — PVI {made}개(20m 배수 제외){(bad > 0 ? $" · 실패 {bad}개" : "")}"
-                         + "  ※값은 안 쓰고 <b>라벨 자리</b>로만 쓴다");
+            log.AppendLine($"측점 라벨용 체인 '{nm}' — PVI {made}개(20m 배수 제외)"
+                         + (fell > 0 ? $" · 그중 {fell}개는 정지 밖이라 원지반 표고로 놓았다" : "")
+                         + (bad > 0 ? $" · 실패 {bad}개" : "")
+                         + "  ※값은 안 쓰고 라벨 자리로만 쓴다");
             return chainId;
         }
         catch (System.Exception ex) { log.AppendLine("측점 라벨용 체인 실패 — " + ex.Message); return ObjectId.Null; }
+    }
+
+    /// <summary>실측 원지반 종단을 감출 때 쓰는 이름 — <b>'원지반'이 들어가면 안 된다.</b>
+    /// 이름으로 종단을 고르는 코드가 여럿이라(밴드 배선·세로줄 자르기), 같은 말이 둘이면
+    /// <b>마지막에 잡힌 것</b>이 쓰여 결과가 실행 순서에 매인다.</summary>
+    private const string GroundRawName = "DH_지반실측(숨김)";
+
+    /// <summary>꺾은선을 만드는 동안 쓰는 임시 이름 — 성공이 확정된 뒤에야 <c>DH_원지반</c>이 된다.
+    /// 여기에도 <b>'원지반'을 넣지 않는다</b>(중간 상태가 이름으로 잡히면 안 된다).</summary>
+    private const string GroundTempName = "DH_지반작업중";
+
+    /// <summary>★★[v32.23 · JACK 0812] <b>원지반을 2D 설계처럼 꺾은선으로 다시 그린다.</b>
+    ///
+    /// <para>JACK: <i>"2d설계에서 원지반은 사실 직선을 이용해서 쭉쭉 긋다보니깐(일종의 버퍼) 굴곡부가 보이고
+    /// 조금이라도 각도가있으면 그부분에 측점을 두는데, civil3d는 굴곡부가 실제와 유사하게 부드러운 선으로
+    /// 나오다보니 측점 추가하는게 힘든것같은데 이걸 어떻게 2d설계하듯히 할수없을까?"</i></para>
+    ///
+    /// <para><b>정확한 진단이었다.</b> v32.21은 속으로는 이미 2D 설계처럼 하고 있었다 —
+    /// 부드러운 선을 직선 몇 개로 근사해 그 꺾임을 측점으로 뽑았다. 그런데 <b>그 직선을 도면에 안 그렸다.</b>
+    /// 계산에만 쓰고 버리니 도면에는 부드러운 선 위에 측점만 찍혀,
+    /// <b>왜 거기가 굴곡부인지 눈에 보이지 않았다.</b></para>
+    ///
+    /// <para>→ 그 근사선을 <b>원지반선으로 그린다.</b> 그러면 도면이 2D 설계도와 같아지고,
+    /// 덤으로 <b>토공 계산과 도면이 일치</b>한다 — 평균단면법은 단면 사이를 직선으로 보는데
+    /// 도면의 원지반선도 바로 그 직선이 된다(종전엔 도면=곡선, 계산=직선으로 미세하게 달랐다).</para>
+    ///
+    /// <para><b>정점은 확정된 측점 전부다</b>(v32.24). 꺾임점만 쓰면 데이라잇 자리에 정점이 없어
+    /// 직선이 그 자리를 가로지르고 <b>계획선이 원지반선을 뚫는다</b>(JACK 0812 스샷).
+    /// 측점마다 <b>실측 표고</b>를 박으므로 그 자리 지반고는 전부 실제값이고,
+    /// 두 선이 만나야 할 자리에서 정확히 만난다. 정점 사이만 직선 근사이고,
+    /// 그 구간의 오차는 <b>실행마다 재서 로그에 적는다</b>(⑤ 자가검증) —
+    /// <see cref="GradingSettings.GroundBreakTolZ"/>는 꺾임점을 <b>고르는</b> 기준이지
+    /// 이 선의 오차를 보장하는 값이 아니다(측점이 곡선 구간을 기울일 수 있다).</para>
+    ///
+    /// <para><b>치르는 값.</b> 지표면을 고쳐도 <b>자동으로 안 따라온다</b>(종단도를 다시 돌리면 된다).
+    /// 실측 종단은 지우지 않고 <see cref="GroundRawName"/>으로 이름을 바꿔 감춰 둔다 —
+    /// 나중에 견주어 볼 때 스타일만 되돌리면 보인다.</para>
+    /// 반환=앞으로 쓸 원지반 종단(꺾은선). 실패하면 <b>넘겨받은 것을 그대로</b> 돌려준다.</summary>
+    private static ObjectId RebuildGroundAsPolyline(Database db, ObjectId alignId, ObjectId srcId,
+        ObjectId layer, ObjectId styleId, ObjectId labelSet,
+        System.Collections.Generic.IReadOnlyList<StationMarks.Mark> marks,
+        System.Text.StringBuilder log)
+    {
+        if (srcId.IsNull) { log.AppendLine("  원지반 꺾은선: 원지반 종단이 없어 건너뜀"); return srcId; }
+        if (marks == null || marks.Count < 2)
+        { log.AppendLine("  원지반 꺾은선: 측점이 2개 미만이라 지표면 종단을 그대로 쓴다"); return srcId; }
+        try
+        {
+            // ── ① <b>측점 자리마다</b> 실측 원지반 표고를 읽어 정점을 만든다.
+            //
+            //   ★★[v32.24 · JACK 0812 스샷] <b>여기가 v32.23의 실패 지점이다.</b>
+            //   종전엔 꺾임점(Douglas-Peucker 결과)<b>만</b> 정점으로 삼았다. 그러면 데이라잇 자리에
+            //   정점이 없어 직선이 그 자리를 가로지르고, 원지반선이 실제보다 위로 지나
+            //   <b>계획선이 원지반선을 뚫고 내려간다</b>(JACK: "저부분은 딱맞아야해").
+            //
+            //   → <b>확정된 측점 전부</b>를 정점으로 쓴다. 데이라잇·절성경계·사면·소단 자리에
+            //   <b>실측 표고</b>가 박히므로 두 선이 정확히 만난다. 그 사이는 여전히 직선이라
+            //   2D 설계 도면 모양은 그대로다. 꺾임점도 이미 측점에 들어 있다(같은 목록이다).
+            var outPts = new System.Collections.Generic.List<StationMarks.GroundPt>();
+            var raw = new System.Collections.Generic.List<StationMarks.GroundPt>();   // 원본 표본(자가검증 기준)
+            int nNoElev = 0;
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                if (tr.GetObject(srcId, OpenMode.ForRead) is not CivilDb.Profile src)
+                { log.AppendLine("  원지반 꺾은선: 종단을 못 열어 건너뜀"); tr.Commit(); return srcId; }
+
+                // ★[검토 지적 · 높음] <b>표고의 테두리를 먼저 읽는다.</b>
+                //   <c>ElevationAt</c>이 종단 <b>중간이 빈 구간</b>(누적 구역이 떨어져 있을 때)에서
+                //   어떻게 구는지는 문서에 없다 — 예외를 던지면 아래 <c>catch</c>가 받지만,
+                //   <b>0.0 같은 값을 돌려주면 그대로 정점이 되어</b> 원지반선이 0까지 곤두박질친다.
+                //   있을 수 있는 값의 테두리로 되재면 <b>무엇을 돌려주든 걸린다</b>.
+                double zLo = double.NaN, zHi = double.NaN;
+                try { zLo = src.ElevationMin; zHi = src.ElevationMax; } catch { }
+                bool ZOk(double z) => !double.IsNaN(z) && !double.IsInfinity(z)
+                                      && (double.IsNaN(zLo) || double.IsNaN(zHi)
+                                          || (z >= zLo - 1e-6 && z <= zHi + 1e-6));
+
+                // 자가검증의 기준이 될 <b>원본 표본</b>을 같이 모은다(아래 ⑤).
+                try
+                {
+                    foreach (CivilDb.ProfilePVI q in src.PVIs)
+                    { try { raw.Add(new StationMarks.GroundPt(q.RawStation, q.Elevation)); } catch { } }
+                }
+                catch { }
+                raw.Sort((a, b) => a.Station.CompareTo(b.Station));
+
+                // 양 끝을 반드시 넣는다 — 측점이 종단 끝에 정확히 안 닿아도 선이 끊기지 않게.
+                var sts = new System.Collections.Generic.List<double> { src.StartingStation };
+                foreach (var m in marks) sts.Add(m.Station);
+                sts.Add(src.EndingStation);
+                sts.Sort();
+
+                foreach (double s0v in sts)
+                {
+                    // 같은 자리(1cm)는 하나만 — 정점이 겹치면 길이 0 구간이 생긴다.
+                    if (outPts.Count > 0 && s0v - outPts[outPts.Count - 1].Station <= 0.01) continue;
+                    double sc = System.Math.Min(System.Math.Max(s0v, src.StartingStation), src.EndingStation);
+                    double z;
+                    try { z = src.ElevationAt(sc); }
+                    catch { nNoElev++; continue; }
+                    if (!ZOk(z)) { nNoElev++; continue; }
+                    outPts.Add(new StationMarks.GroundPt(sc, z));
+                }
+                tr.Commit();
+            }
+            if (outPts.Count < 2)
+            { log.AppendLine($"  원지반 꺾은선: 정점이 {outPts.Count}개뿐이라 지표면 종단을 그대로 쓴다"); return srcId; }
+
+            // ── ② 꺾은선을 <b>임시 이름으로 먼저</b> 만든다.
+            //
+            //   ★★[검토 지적 · 치명] 종전엔 <b>실측 종단을 먼저 감추고</b> 새 종단을 만들었다.
+            //   그 사이에 생성이 예외를 던지면 <b>되돌릴 길이 없어 원지반선이 도면에서 통째로 사라진다</b> —
+            //   게다가 감춘 이름에는 '원지반'이 없으니(일부러 뺐다) 다른 코드도 그것을 못 찾아
+            //   <b>"값은 맞는데 선이 없다"</b>는 가장 찾기 어려운 증상이 된다.
+            //   → <b>성공이 확정되기 전에는 실측 종단에 손대지 않는다.</b> 관문을 한 칸 앞으로 옮긴다.
+            ObjectId newId = ObjectId.Null; string cerr = null;
+            for (int i = 0; i < 20 && newId.IsNull; i++)
+            {
+                string tmp = i == 0 ? GroundTempName : $"{GroundTempName}-{i}";
+                try { newId = CivilDb.Profile.CreateByLayout(tmp, alignId, layer, styleId, labelSet); }
+                catch (System.Exception ex) { cerr = ex.Message; }
+            }
+            if (newId.IsNull)
+            {
+                log.AppendLine("  원지반 꺾은선: 종단을 못 만들어 지표면 종단을 그대로 쓴다 — " + cerr);
+                return srcId;      // 실측은 손도 안 댔다 — 도면은 종전 그대로다
+            }
+
+            int made = 0, bad = 0;
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                var pr = (CivilDb.Profile)tr.GetObject(newId, OpenMode.ForWrite);
+                // ★[검토 지적] <c>PVIs</c>는 접근할 때마다 새 래퍼를 만든다 — 루프 밖에서 한 번만 잡는다.
+                using var pvis = pr.PVIs;
+                foreach (var g in outPts)
+                {
+                    try { pvis.AddPVI(g.Station, g.Elev); made++; }
+                    catch { bad++; }
+                }
+                tr.Commit();
+            }
+
+            // ── ③ 못 만들었으면 <b>새것만 지우면 끝이다</b>(실측은 안 건드렸다).
+            if (made < 2)
+            {
+                log.AppendLine($"  ⚠원지반 꺾은선: PVI를 {made}개밖에 못 심어 되돌린다(실패 {bad}개)"
+                               + " — 실측 종단은 그대로라 도면은 종전과 같다");
+                try
+                {
+                    using var tr = db.TransactionManager.StartTransaction();
+                    if (tr.GetObject(newId, OpenMode.ForWrite) is CivilDb.Profile badPr) badPr.Erase();
+                    tr.Commit();
+                }
+                catch (System.Exception ex) { log.AppendLine("     빈 종단 지우기 실패 — " + ex.Message); }
+                return srcId;
+            }
+
+            // ── ④ 이제야 실측을 감추고 꺾은선에 정식 이름을 준다. <b>한 트랜잭션</b>이라
+            //   하나라도 실패하면 통째로 물러난다 — '원지반'이 둘이거나 없는 중간 상태가 안 생긴다.
+            ObjectId hideStyle = EnsureHiddenProfileStyle(db, log);
+            bool swapped = false;
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                try
+                {
+                    if (tr.GetObject(srcId, OpenMode.ForWrite) is CivilDb.Profile src2)
+                    {
+                        src2.Name = GroundRawName;
+                        if (!hideStyle.IsNull) try { src2.StyleId = hideStyle; } catch { }
+                    }
+                    if (tr.GetObject(newId, OpenMode.ForWrite) is CivilDb.Profile np)
+                        np.Name = SectionCommand.ProfGroundName;
+                    tr.Commit();
+                    swapped = true;
+                }
+                catch (System.Exception ex) { log.AppendLine("  이름 정리 실패 — " + ex.Message); }
+            }
+            if (!swapped)
+            {
+                log.AppendLine("  원지반 꺾은선: 이름 정리가 물러나 되돌린다(실측 종단은 그대로다)");
+                try
+                {
+                    using var tr = db.TransactionManager.StartTransaction();
+                    if (tr.GetObject(newId, OpenMode.ForWrite) is CivilDb.Profile bp) bp.Erase();
+                    tr.Commit();
+                }
+                catch { }
+                return srcId;
+            }
+
+            // ── ⑤ [자가검증] <b>실제로 그려질 이 선</b>이 원본 표본에서 얼마나 벗어나는지 잰다.
+            //
+            //   ★★[검토 지적 · 높음] 종전 자가검증은 <c>SimplifyGround</c> 안에서
+            //   <b>DP가 남긴 점</b>으로 이은 선을 쟀다. 그런데 도면에 그려지는 것은
+            //   <b>측점 전부</b>로 다시 이은 이 선이고, <b>점을 더 넣는다고 편차가 반드시 줄지 않는다.</b>
+            //   (반례: 곡선 위 한 점을 더 집으면 그 구간이 기울어 반대편 편차가 커진다.)
+            //   자를 만들어 놓고 다른 물건을 재고 있었다 — 재는 대상을 실제 선으로 바꾼다.
+            double maxDev = 0, maxAt = 0;
+            if (raw.Count > 0)
+            {
+                int k = 0;
+                foreach (var r in raw)
+                {
+                    while (k + 2 < outPts.Count && outPts[k + 1].Station < r.Station) k++;
+                    var a = outPts[k]; var b = outPts[k + 1];
+                    double ds = b.Station - a.Station;
+                    double zl = ds > 1e-9 ? a.Elev + (b.Elev - a.Elev) * (r.Station - a.Station) / ds : a.Elev;
+                    double d = System.Math.Abs(r.Elev - zl);
+                    if (d > maxDev) { maxDev = d; maxAt = r.Station; }
+                }
+            }
+            double tol = System.Math.Max(0.01, GradingSettings.GroundBreakTolZ);
+
+            log.AppendLine($"  원지반 꺾은선 '{SectionCommand.ProfGroundName}' — 정점 {made}개로 다시 그렸다"
+                           + $"(측점 {marks.Count}개 + 양 끝 → 겹침 정리 후 {outPts.Count}개)"
+                           + (bad > 0 ? $" · 심기 실패 {bad}개" : "")
+                           + (nNoElev > 0 ? $" · 표고가 이상해 뺀 자리 {nNoElev}개" : "")
+                           + $" · 실측 종단은 '{GroundRawName}'으로 감췄다"
+                           + $"\n     자가검증(실제 그린 선 ↔ 원본 표본 {raw.Count}개): 최대 높이오차 {maxDev:0.###}m"
+                           + $" @ {(maxDev > 1e-9 ? maxAt.ToString("0.00") + "m" : "-")}"
+                           + (maxDev <= tol + 1e-6 ? $" → 허용치({tol:0.###}m) 안"
+                                                   : $"  ⚠허용치({tol:0.###}m)를 넘는다 — 측점이 곡선 구간을 기울여 놓은 자리다")
+                           + "\n     ※측점마다 실측 표고를 박았다 — 데이라잇에서 계획선과 정확히 만난다."
+                           + "\n     ※종단도와 측점이 이 선을 본다(횡단면도는 지표면에서 직접 뜬다)."
+                           + " 지표면을 고치면 종단도를 다시 돌려야 한다.");
+            return newId;
+        }
+        catch (System.Exception ex)
+        {
+            log.AppendLine("  원지반 꺾은선 실패 — " + ex.Message + "(지표면 종단을 그대로 쓴다)");
+            return srcId;
+        }
     }
 
     /// <summary>안 보이는 종단 스타일 — 선·곡선 표시를 전부 끈다(체인은 라벨 자리 용도다).</summary>
@@ -499,8 +946,11 @@ public sealed class ProfileCommand
     private static ObjectId BuildSampleLines(Database db, Editor ed, ObjectId alignId,
                                              ObjectId pidGround, ObjectId pidPad,
                                              System.Collections.Generic.List<SectionCommand.SurfPick> surfs,
-                                             double interval, System.Text.StringBuilder log)
+                                             double interval,
+                                             out System.Collections.Generic.List<StationMarks.Mark> allMarks,
+                                             System.Text.StringBuilder log)
     {
+        allMarks = new System.Collections.Generic.List<StationMarks.Mark>();
         try
         {
             double wl = System.Math.Max(1.0, GradingSettings.XsecLeft);
@@ -544,6 +994,16 @@ public sealed class ProfileCommand
                 if (prPad != null && prGrd != null)
                     marks.AddRange(StationMarks.FromCutFillLine(prPad, prGrd, s0, s1, 0.5, log));
                 else log.AppendLine("  ⚠종단 둘을 못 열어 절성 경계를 못 잡는다");
+
+                // ★★[v32.23~24 · JACK 0812] <b>원지반이 꺾이는 자리도 측점이다.</b>
+                //   JACK: <i>"꺾은선으로 바꿨으면 조금이라도 종단상에서 각진 부분은 측점으로 추가해야 해."</i>
+                //   여기서 고른 꺾임점이 그대로 측점이 되고, <b>이 목록 전체가 곧 원지반선의 정점</b>이 된다
+                //   (<see cref="RebuildGroundAsPolyline"/>이 이 결과를 받아 선을 긋는다).
+                //   ※ 실측 종단에서 고른다 — 아직 꺾은선을 만들기 전이라 여기가 유일한 실제 지형 자료다.
+                if (prGrd != null)
+                    marks.AddRange(StationMarks.MarksFromGround(
+                        StationMarks.SimplifyGround(prGrd, s0, s1, GradingSettings.GroundBreakTolZ, log)));
+                else log.AppendLine("  ⚠원지반 종단을 못 열어 원지반 굴곡부를 못 잡는다");
 
                 // ★[v30.3] 도면의 <c>DH-정지경계</c>는 <b>번들이 없을 때만</b> 쓰는 보조 근거다.
                 //   정본은 아래의 번들 복원이다 — 도면 선은 그릴 때 레이어를 지우므로
@@ -633,6 +1093,7 @@ public sealed class ProfileCommand
             //   <b>tol=1cm</b> — 같은 자리만 합치고 그 외엔 전부 남긴다(JACK 확정 "최소간격 없어 둘 다 찍어").
             double sub = interval / 2.0;
             var all = StationMarks.Merge(s0, s1, sub, marks, tol: 0.01);
+            allMarks = all;      // ★[v32.24] 원지반 꺾은선이 이 목록을 그대로 정점으로 쓴다
             //   사유를 갈라 적는다 — 로그를 도면과 대조할 때 '왜 여기 측점이 있나'가 바로 보여야 한다.
             for (int i = 0; i < all.Count; i++)
                 if (all[i].Why == "정체인")
@@ -657,6 +1118,21 @@ public sealed class ProfileCommand
                 tr.Commit();
             }
             if (cuts.Count == 0) { log.AppendLine("단면검토선: 놓을 자리가 없어 건너뜀"); return ObjectId.Null; }
+
+            // ★★[v32.25 · 검토 지적 · 높음] <b>개수 상한을 여기에도 건다.</b>
+            //   <see cref="SectionCommand.MaxSections"/> 관문은 종전에 <c>DHSECTION</c>에만 있었다.
+            //   원지반 굴곡부(v32.21)가 측점의 <b>새 공급원</b>을 열었고 — 기복이 심한 지형에
+            //   기준을 촘촘히 주면 수백 개가 나온다 — 그 하나하나가 나중에 <b>횡단면도 한 장</b>이 된다.
+            //   <b>막지는 않는다</b>(종단도는 나와야 한다). 대신 <b>손잡이를 알려 준다</b> —
+            //   그 손잡이가 도면설정의 '원지반 굴곡'이다.
+            if (cuts.Count > SectionCommand.MaxSections)
+            {
+                string warn = $"측점이 {cuts.Count}개다(권장 상한 {SectionCommand.MaxSections}개)"
+                            + " — 도면이 무거워지고 횡단면도도 그만큼 생긴다."
+                            + $" 도면설정의 '원지반 굴곡'을 더 단순한 쪽으로 옮기면 줄어든다(지금 {GradingSettings.GroundBreakTolZ:0.###}m).";
+                log.AppendLine("  ⚠" + warn);
+                ed.WriteMessage("\n  ⚠" + warn);
+            }
 
             // ── ③ 그룹과 선을 만든다.
             var cdoc = CivilApp.CivilApplication.ActiveDocument;
@@ -697,7 +1173,7 @@ public sealed class ProfileCommand
             ed.WriteMessage($"\n  · 단면검토선 {nSl}개 (정측점 {interval:0.#}m + 굴곡부 + 수동)");
 
             // ── ④ 측점 행이 쓸 <b>라벨 자리 전용 체인</b>(값은 안 쓴다).
-            LastLabelChainId = BuildLabelChain(db, alignId, pidPad, all, interval, log);
+            LastLabelChainId = BuildLabelChain(db, alignId, pidPad, pidGround, all, interval, log);
             return groupId;
         }
         catch (System.Exception ex) { log.AppendLine("단면검토선 실패 — " + ex.Message); return ObjectId.Null; }
@@ -710,20 +1186,11 @@ public sealed class ProfileCommand
     {
         var msg = new System.Text.StringBuilder("스타일 지정: ");
 
-        // ── ⓪ 어느 정보표시 테이블을 씌울지 — 물어보되 **지난 선택이 기본값**이라 Enter면 넘어간다.
-        //   JACK 0810 "둘 다 — 실행할 때 고른다". 자동 판정은 불가능하다: 상수도 현장은 한 도면에
-        //   원지반·정지면·관로가 같이 있는 게 정상이라, 방금 그린 노선이 무엇인지 알 길이 없다.
-        //   잘못 고르면 12칸짜리 표가 통째로 비므로 '틀린 자동'이 '한 번 묻기'보다 훨씬 비싸다.
-        // ★[JACK 0810] 안내 라벨에 대괄호를 쓰지 않는다 — AutoCAD는 프롬프트의 [...]를 **선택지 목록**으로
-        //   읽어서, '[종단도]'라는 라벨이 통째로 유령 선택지가 됐다("메뉴에 토공은 뭐고 종단도는 뭐야?").
-        var pko = new PromptKeywordOptions($"\n정보표시 테이블 <{GradingSettings.BandSet}>") { AllowNone = true };
-        // ★[JACK 0810] "도로와 없음은 없애. 우린 토공과 관로만 필요해."
-        //   쓰지 않는 선택지는 고민만 늘린다.
-        pko.Keywords.Add("토공"); pko.Keywords.Add("관로");
-        pko.Keywords.Default = GradingSettings.BandSet;
-        var pr = ed.GetKeywords(pko);
-        string want = pr.Status == PromptStatus.OK ? pr.StringResult : GradingSettings.BandSet;
-        if (want != "없음") { GradingSettings.BandSet = want; GradingSettings.SaveBandSet(); }
+        // ★★[v32.29 · JACK 0813] <b>더 이상 묻지 않는다 — 이 애드인은 토공 전용이다.</b>
+        //   JACK: <i>"종단도 정보표시표는 없애. 관로는 이 애드인에서 안 할 거야, 새로운 애드인을 별도로 만들 거야.
+        //   선택에서도 안 떠도 돼. 무조건 토공이야 이 애드인은."</i>
+        //   0810에 '실행할 때 고른다'로 정했던 것을 거둔다 — 고를 것이 하나뿐이면 묻는 것 자체가 손해다.
+        string want = GradingSettings.BandSet;   // 항상 "토공"(상수)
 
         // ── ① 필수 구간 — 뷰 스타일 + 밴드 세트. 여기가 깨지면 되돌린다.
         bool core = false;
@@ -1091,11 +1558,19 @@ public sealed class ProfileCommand
         return n;
     }
 
-    /// <summary>이 명령이 만든 종단도·선형을 지운다 — 선형을 지우면 딸린 종단·종단도가 같이 사라진다.
-    /// <para>노란 노선은 <b>지우지 않는다</b>(JACK 확정 — 어느 선으로 만들었는지 남겨 둔다).</para></summary>
-    private static int EraseExisting(Database db, CivilApp.CivilDocument cdoc)
+    /// <summary>이 명령이 만든 것을 <b>전부</b> 지운다 — 선형·종단·종단뷰 + 우리가 그린 도면 객체 + 배치.
+    ///
+    /// <para>★★[v32.27 · JACK 0813] <b>종전엔 선형만 지웠다.</b> 선형을 지우면 딸린 종단·종단뷰가
+    /// 따라 사라지므로 그것으로 충분해 보였는데, <b>도곽범위(주황)·노선(노랑)·표고바·제목부·배너는
+    /// Civil 객체가 아니라 우리가 직접 그린 평범한 객체</b>라 선형에 매달려 있지 않다.
+    /// 아무도 안 지우니 '지우고 새로'를 골라도 겹겹이 쌓였다(JACK 스샷).</para>
+    ///
+    /// <para><b>노란 노선도 이제 지운다.</b> 종전 방침은 "어느 선으로 만들었는지 남겨 둔다"였는데,
+    /// JACK이 0813에 <b>같이 지우라고 확정</b>했다 — 새로 만들면 어차피 새 노선이 그려진다.</para></summary>
+    private static int EraseExisting(Database db, CivilApp.CivilDocument cdoc, System.Text.StringBuilder log)
     {
         int n = 0;
+        // ① 선형 — 지우면 딸린 종단·종단뷰가 같이 사라진다.
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
@@ -1108,8 +1583,12 @@ public sealed class ProfileCommand
                 try { (tr.GetObject(id, OpenMode.ForWrite) as Entity)?.Erase(); n++; } catch { }
             }
             tr.Commit();
+            log.AppendLine($"  선형 {n}개 삭제(딸린 종단·종단뷰 포함)");
         }
-        catch { }
+        catch (System.Exception ex) { log.AppendLine("  선형 삭제 실패 — " + ex.Message); }
+
+        // ② 우리가 직접 그린 도면 객체와 배치 — 소유 레이어를 아는 쪽이 지운다.
+        n += SheetCommand.EraseAll(db, log);
         return n;
     }
 
