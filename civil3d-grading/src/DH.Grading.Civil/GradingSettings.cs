@@ -27,7 +27,7 @@ public static class GradingSettings
     /// 이력은 설치본 확인에 쓰이므로 DLL에는 남기되, <b>출력은 절대 하지 않는다.</b>
     /// </para>
     /// ★[v32.20] 새 버전을 올릴 때 갱신할 곳은 <b>이 줄 하나</b>다 — 이력은 <c>작업과정.md</c>에 쓴다.</summary>
-    public const string Version = "v32.29 (2026-08-13)";
+    public const string Version = "v32.30 (2026-08-13)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -144,6 +144,64 @@ public static class GradingSettings
     /// <summary>배경지도 화질 콤보 표시값 ↔ 해상도(m/px). 순서 일치 필수.</summary>
     public static readonly string[] BasemapResLabels = { "높음 (0.25m/픽셀)", "보통 (0.5m/픽셀)", "낮음 (1m/픽셀)" };
     public static readonly double[] BasemapResValues = { 0.25, 0.5, 1.0 };
+
+    /// <summary>★★[v32.30 · JACK 0813] <b>종단뷰 축척 — 0이면 자동.</b>
+    /// <i>"도면설정에 종단뷰 축척이라고 만들고 목록상자에서 고를 수 있게 하되 기본값은 자동으로 두고,
+    /// 자동일 경우 지금처럼 해당 공간에 딱 알맞게 들어가는 축척으로 하고 고를 경우는 그 축척으로 들어가게."</i>
+    ///
+    /// <para><b>왜 고정할 수 있어야 하나.</b> 자동은 <b>그림이 가장 커지는</b> 축척을 고르므로 도면마다 값이 달라진다.
+    /// 그런데 같은 현장의 도면 여러 장을 <b>나란히 놓고 비교</b>하려면 축척이 같아야 하고,
+    /// 설계도서에 <b>1:100으로 통일</b>하라는 요구가 붙기도 한다. 그때 자동은 쓸 수 없다.</para>
+    ///
+    /// <para><b>0을 '자동'으로 쓴다.</b> 축척에 0은 의미가 없으므로 별도 플래그가 필요 없고,
+    /// 값 하나만 보면 어느 쪽인지 정해진다 — 플래그와 값이 <b>따로 놀 여지</b>를 두지 않는다.</para></summary>
+    public static double ProfileScale = 0.0;
+
+    /// <summary>축척 콤보의 값/표시 — <b>맨 앞이 자동(0)</b>이고 나머지는 표준 축척 사다리 그대로다.
+    ///
+    /// <para>★ <b>정적 필드가 아니라 속성이다 — 장래 방어다.</b> [검토 0813 확인]
+    /// <b>지금은 필드로 둬도 순환이 아니다</b>: <see cref="Commands.SheetCommand.Scales"/>의 초기화자는
+    /// 리터럴 배열뿐이고, 그쪽이 이 클래스를 읽는 자리는 전부 <b>메서드 본문</b>이라 초기화 단계에 끼지 않는다.
+    /// 순환은 <b>양쪽 초기화자가 서로를 읽을 때만</b> 생긴다.
+    /// <para>그래도 속성으로 두는 이유: <c>SheetCommand</c>에 <c>GradingSettings</c>를 읽는 정적 필드가
+    /// <b>나중에 하나라도 생기면</b> 그 순간 진짜 순환이 되는데, 속성이면 그 고리에 애초에 끼지 않는다.
+    /// 그리고 이 저장소는 정적 생성자가 하나도 없어 전부 <c>beforefieldinit</c>이다 —
+    /// <b>순환이 나도 예외가 안 뜨고 조용히 0·빈 배열이 나온다.</b> 터져 주지 않는 사고는 미리 막는 편이 싸다.</para>
+    /// 대화상자를 열 때만 부르니 비용도 문제되지 않는다.</para></summary>
+    public static double[] ProfileScaleValues
+    {
+        get
+        {
+            double[] src = Commands.SheetCommand.Scales;
+            var v = new double[src.Length + 1];
+            v[0] = 0.0;                                  // 자동
+            System.Array.Copy(src, 0, v, 1, src.Length);
+            return v;
+        }
+    }
+
+    public static string[] ProfileScaleLabels
+    {
+        get
+        {
+            double[] v = ProfileScaleValues;
+            var s = new string[v.Length];
+            for (int i = 0; i < v.Length; i++)
+                s[i] = v[i] <= 0 ? "자동 (공간에 맞춤)" : "1:" + v[i].ToString("F0");
+            return s;
+        }
+    }
+
+    /// <summary>지금 값이 목록의 몇 번째인가 — 목록에 없는 값(옛 도면)이면 <b>자동(0번)</b>으로 돌아간다.
+    /// <see cref="GroundBreakStep"/>과 달리 '가장 가까운 것'을 고르지 않는다 —
+    /// 고정 축척은 <b>사용자가 콕 집은 값</b>이라, 없는 값을 비슷한 것으로 바꾸면 말없이 다른 도면이 된다.</summary>
+    public static int ProfileScaleIndex()
+    {
+        double[] v = ProfileScaleValues;
+        for (int i = 0; i < v.Length; i++)
+            if (System.Math.Abs(v[i] - ProfileScale) < 1e-9) return i;
+        return 0;
+    }
 
     // [옹벽 형태 — JACK 0721] 절토부/성토부에 어떤 옹벽 3D를 만들지 드롭박스로 선택. 치수는 스타일별 고정.
     public static WallStyle CutWallStyle = WallStyle.앵커판넬;  // 절토 옹벽 형태 — 기본 앵커판넬(JACK 0728)
