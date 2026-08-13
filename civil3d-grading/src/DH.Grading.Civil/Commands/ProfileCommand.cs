@@ -97,10 +97,19 @@ public sealed class ProfileCommand
     ///
     /// <para>둘 중 하나라도 없으면 <b>아무것도 하지 않는다</b>. 자리를 모르는 채 다시 그리면
     /// 종단도가 엉뚱한 데로 옮겨 가는데, 그건 '업데이트'가 아니다.</para></summary>
+    /// <summary>★★[v32.35 · 검토 반영] <b>지금 조용한 재작성 중인가</b> — 팝업을 띄우는 쪽이 이것을 본다.
+    /// <para>재작성은 <b>사용자가 시작한 일이 아니라 곁따라 일어나는 일</b>이라, 그 도중의 알림은
+    /// 명령창으로 충분하다. 측점을 찍을 때마다 확인 버튼을 누르게 하면 '자동'이 아니다.</para>
+    /// <para>⚠ <b>반드시 <c>finally</c>로 되돌린다</b> — 예외로 켜진 채 남으면 그 뒤의 진짜 오류까지
+    /// 조용히 삼킨다(이 저장소가 §25에서 배운 '스타일은 도면에 남는다'의 다른 얼굴).</para></summary>
+    internal static bool QuietRebuild { get; private set; }
+
     internal static bool Rebuild(Document doc)
     {
         Database db = doc.Database;
         Editor ed = doc.Editor;
+        bool wasQuiet = QuietRebuild;
+        QuietRebuild = true;
         try
         {
             if (!ReadExistingRoute(db, out var pts, out var viewPt))
@@ -111,8 +120,9 @@ public sealed class ProfileCommand
                 return false;
             }
             ed.WriteMessage($"\n[도면 설정] 종단도를 그 자리에 다시 그립니다(노선 {pts.Count}점 재사용)...");
-            Body(db, ed, pts, viewPt);
-            return true;
+            // ★[검토 반영] <see cref="Body"/>가 <b>중간에 포기했는지</b>를 그대로 넘긴다 —
+            //   종전엔 무조건 참이라 부른 쪽이 성공과 실패를 구분할 수 없었다.
+            return Body(db, ed, pts, viewPt);
         }
         catch (System.Exception ex)
         {
@@ -120,6 +130,7 @@ public sealed class ProfileCommand
             try { DiagLog.Append($"\n■ 종단도 재생성 예외 — {ex}\n"); } catch { }
             return false;
         }
+        finally { QuietRebuild = wasQuiet; }
     }
 
     /// <summary>도면에 남아 있는 노선(노란 선)과 <b>종단도를 놓았던 자리</b>를 읽는다.
@@ -214,7 +225,9 @@ public sealed class ProfileCommand
         catch { return ObjectId.Null; }
     }
 
-    private static void Body(Database db, Editor ed,
+    /// <returns>★[v32.35 · 검토 반영] <b>끝까지 갔으면 참</b>. 중간에 포기하면 거짓 —
+    /// 부르는 쪽(<see cref="Rebuild"/>)이 성공과 실패를 구분해야 측점 찍기가 헛돌지 않는다.</returns>
+    private static bool Body(Database db, Editor ed,
                              System.Collections.Generic.List<Point3d> presetRoute = null,
                              Point3d presetViewPt = default)
     {
@@ -231,18 +244,47 @@ public sealed class ProfileCommand
         {
             SectionCommand.Refuse(ed, "종단도를 만들 지표면이 없습니다.\n\n" +
                                       "먼저 [서버지표면]으로 원지반을 만들거나 [부지정지]를 실행하세요.");
-            return;
+            return false;
         }
         log.AppendLine("대상 지표면: " + string.Join(" · ", surfs.ConvertAll(s => s.Label + "=" + s.SurfName)));
 
         // ── ② 이전 종단도 정리 여부 ──────────────────────────────────────────
         //   [JACK 0807] 무조건 지우지 않는다 — 여러 노선을 놓고 비교하고 싶을 수 있다. 물어본다.
         int prev = CountExisting(db, cdoc);
+
+        // ★★★[v32.35 · 측점 기능이 드러낸 오래된 구멍] <b>수동 측점은 선형과 함께 죽는다.</b>
+        //
+        //   측점 목록은 <b>선형의 확장사전</b>에 저장된다(<see cref="StationMarks.Save"/>).
+        //   그런데 <see cref="EraseExisting"/>은 <b>선형을 지운다</b> — 확장사전도 같이 사라진다.
+        //   즉 '지우고 새로'를 고르거나 다시 그릴 때마다 <b>밸브실 측점이 조용히 날아갔다.</b>
+        //   종전에는 다시 그릴 일이 드물어 눈에 안 띄었는데, 측점을 찍을 때마다 다시 그리게 되면
+        //   <b>방금 찍은 측점이 그 자리에서 사라진다</b> — 기능 자체가 성립하지 않는다.
+        //
+        //   → <b>지우기 전에 건져 두고, 새 선형에 다시 심는다.</b>
+        //   ※ '남겨두고추가'일 때는 건지지 않는다 — 옛 선형이 그대로 살아 있으므로
+        //     새 선형에 같은 측점을 또 넣으면 <b>두 벌</b>이 된다.
+        var carry = new System.Collections.Generic.List<StationMarks.Mark>();
+
+        // ★★[검토 반영 · 치명] <b>건진 뒤 중간에 포기하면 그 사본이 유일본이라 통째로 사라진다.</b>
+        //   원본(선형의 확장사전)은 이미 지워졌고 새 선형은 아직 없다 —
+        //   이삿짐을 싸고 옛집을 헌 뒤 새집 계약이 깨진 꼴이다.
+        //   되살릴 곳이 없으므로 <b>최소한 말은 한다</b>. 조용히 사라지는 것이 가장 나쁘다.
+        //   (근본 해결은 지우기를 노선 확보 뒤로 미루는 것인데, 그러면 방금 그린 노선까지
+        //    같은 레이어라 함께 지워진다 — 그 정리는 별도 판으로 미룬다.)
+        void LoseCarry()
+        {
+            if (carry.Count == 0) return;
+            log.AppendLine($"  ⚠수동 측점 {carry.Count}개가 갈 곳을 잃었다 — 선형을 만들지 못하고 중단했다");
+            ed.WriteMessage($"\n  · ⚠수동 측점 {carry.Count}개가 사라졌습니다(선형을 만들지 못했습니다) — 다시 찍어 주세요.");
+            try { DiagLog.Append($"\n■ 종단도 중단 — 수동 측점 {carry.Count}개 유실\n"); } catch { }
+        }
+
         // ★[v32.29] 다시 그리기는 <b>묻지 않는다</b> — 같은 자리에 새로 그리는 것이 목적이므로
         //   옛것을 남기면 두 벌이 겹친다. 사용자가 '다시 그린다'는 것을 이미 고른 상태다.
         if (rebuild)
         {
             log.AppendLine("이전 종단도 정리(다시 그리기 — 묻지 않음):");
+            carry = HarvestMarks(db, cdoc, log);
             int wiped = EraseExisting(db, cdoc, log);
             ed.WriteMessage($"\n  · 이전 종단도를 지웠습니다(객체 {wiped}개).");
         }
@@ -254,10 +296,11 @@ public sealed class ProfileCommand
             kw.Keywords.Default = "지우고새로";
             kw.AllowNone = true;
             var kr = ed.GetKeywords(kw);
-            if (kr.Status != PromptStatus.OK && kr.Status != PromptStatus.None) return;
+            if (kr.Status != PromptStatus.OK && kr.Status != PromptStatus.None) return false;
             if (kr.Status == PromptStatus.None || kr.StringResult == "지우고새로")
             {
                 log.AppendLine("이전 종단도 정리:");
+                carry = HarvestMarks(db, cdoc, log);      // ★[v32.35] 선형과 함께 죽기 전에 건진다
                 int erased = EraseExisting(db, cdoc, log);
                 ed.WriteMessage($"\n  · 이전 종단도를 지웠습니다(객체 {erased}개 — 노선·도곽범위·표고바·제목부·배치 포함).");
             }
@@ -270,18 +313,19 @@ public sealed class ProfileCommand
         {
             routeId = MakeRoutePolyline(db, presetRoute, out nPts, out routeLen);
             if (routeId.IsNull)
-            { ed.WriteMessage("\n[종단도] 노선을 되살리지 못했습니다."); return; }
+            { ed.WriteMessage("\n[종단도] 노선을 되살리지 못했습니다."); LoseCarry(); return false; }
         }
         else
         {
             routeId = DrawRoute(db, ed, out nPts, out routeLen);
-            if (routeId.IsNull) return;                // 취소
+            if (routeId.IsNull) { LoseCarry(); return false; }        // 취소
         }
         if (routeLen < 1.0)
         {
             SectionCommand.EraseQuiet(db, routeId);
             SectionCommand.Refuse(ed, $"노선이 너무 짧습니다({routeLen:F2}m). 1m 이상으로 그려 주세요.");
-            return;
+            LoseCarry();
+            return false;
         }
         log.AppendLine($"노선 직접 그리기: 점 {nPts}개 · 길이 {routeLen:F1}m (레이어 {LayerRoute}, 노랑)");
         ed.WriteMessage($"\n[종단도] 노선 {routeLen:F1}m · 점 {nPts}개");
@@ -297,7 +341,8 @@ public sealed class ProfileCommand
         if (flatId.IsNull)
         {
             SectionCommand.Refuse(ed, "노선 사본을 만들지 못했습니다.");
-            return;
+            LoseCarry();
+            return false;
         }
 
         string alignName = SectionCommand.UniqueName(db, cdoc, SectionCommand.AlignBase);
@@ -320,9 +365,28 @@ public sealed class ProfileCommand
         {
             SectionCommand.EraseQuiet(db, flatId);
             SectionCommand.Refuse(ed, "노선(선형)을 만들지 못했습니다.\n" + ex.Message);
-            return;
+            LoseCarry();
+            return false;
         }
         log.AppendLine($"선형 '{alignName}' 생성");
+
+        // ★★[v32.35] 건져 둔 수동 측점을 새 선형에 다시 심는다 — 위 ②의 설명 참조.
+        //   <b>선형이 만들어진 직후</b>여야 한다: 아래 <see cref="BuildSampleLines"/>가 이 목록을 읽어
+        //   단면검토선을 놓으므로, 그보다 늦으면 <b>이번 판에는 반영되지 않는다.</b>
+        if (carry.Count > 0)
+        {
+            bool ok = false;
+            try
+            {
+                using var trM = db.TransactionManager.StartTransaction();
+                ok = StationMarks.Save(trM, alignId, carry);
+                if (ok) trM.Commit(); else trM.Abort();
+            }
+            catch (System.Exception ex) { log.AppendLine("  수동 측점 이월 실패 — " + ex.Message); }
+            log.AppendLine(ok
+                ? $"  수동 측점 {carry.Count}개를 새 선형으로 이월했다"
+                : $"  ⚠수동 측점 {carry.Count}개를 이월하지 못했다 — 이번 판에서 사라진다");
+        }
 
         // ── ④-b ★[JACK 0811] <b>"측점은 20m 간격으로 하고, 주측점은 No.1 같이, 보조는 +00.00 형태로."</b>
         //   <c>No.</c>가 몇 m마다 하나씩 올라가는지는 <b>선형의 측점 색인 증분</b>이 정한다.
@@ -392,7 +456,7 @@ public sealed class ProfileCommand
             //   없어 원인을 도면 밖에서 찾을 수 없었다. 실패한 판이야말로 기록이 필요하다.
             Finish(ed, log, "종단 생성 실패 — 위 사유 참조", quiet: true);
             SectionCommand.Refuse(ed, "종단을 하나도 만들지 못했습니다.\n노선이 지표면 범위 밖일 수 있습니다.");
-            return;
+            return false;   // carry는 이미 새 선형에 심었다 — 잃은 것이 없다
         }
         log.AppendLine($"종단 {nProf}개 생성");
 
@@ -435,8 +499,8 @@ public sealed class ProfileCommand
             if (pvPt.Status != PromptStatus.OK)
             {
                 log.AppendLine("종단도 배치 건너뜀(사용자 취소)");
-                Finish(ed, log, $"선형 '{alignName}' · 종단 {nProf}개 생성(종단도 배치는 건너뜀)");
-                return;
+                Finish(ed, log, $"선형 '{alignName}' · 종단 {nProf}개 생성(종단도 배치는 건너뜀)", quiet: rebuild);
+                return true;    // 종단·측점은 만들어졌다 — 도곽만 건너뛴 것이라 성공이다
             }
             placeAt = pvPt.Value.TransformBy(ed.CurrentUserCoordinateSystem);
         }
@@ -463,7 +527,13 @@ public sealed class ProfileCommand
                                     "\n\n선형과 종단은 만들어졌으니 Civil3D 기본 기능으로도 배치할 수 있습니다.");
         }
 
-        Finish(ed, log, $"노선 {routeLen:F0}m · 선형 '{alignName}' · 종단 {nProf}개 · 종단도 배치 완료");
+        // ★★[v32.35 · JACK 0813] <b>다시 그리기일 때는 완료 팝업을 띄우지 않는다.</b>
+        //   JACK: <i>"재작성될 때 팝업 좀 없애. 팝업이 있으니깐 자동으로 업데이트되는 것처럼 느껴지지가 않아."</i>
+        //   맞는 지적이다 — <b>사용자가 시작한 일이 아니라 곁따라 일어나는 일</b>이라 알림이 필요 없다.
+        //   측점을 찍을 때마다 확인 버튼을 눌러야 하면 '자동'이 아니다.
+        //   처음 만들 때([종단도] 버튼)는 그대로 알린다 — 그건 사용자가 <b>기다리고 있는</b> 결과다.
+        Finish(ed, log, $"노선 {routeLen:F0}m · 선형 '{alignName}' · 종단 {nProf}개 · 종단도 배치 완료", quiet: rebuild);
+        return true;
     }
 
 
@@ -1558,6 +1628,31 @@ public sealed class ProfileCommand
         return n;
     }
 
+    /// <summary>★★[v32.35] <b>지워질 선형들에서 수동 측점을 건진다</b> — 선형이 죽으면 확장사전도 죽는다.
+    /// <para>선형이 여럿이면 <b>전부 모아</b> 합친다(같은 측점은 <see cref="StationMarks.MergeTol"/> 안에서 하나로).
+    /// 어느 하나만 고르면 나머지에 적어 둔 밸브실이 조용히 사라진다.</para></summary>
+    private static System.Collections.Generic.List<StationMarks.Mark> HarvestMarks(
+        Database db, CivilApp.CivilDocument cdoc, System.Text.StringBuilder log)
+    {
+        var all = new System.Collections.Generic.List<StationMarks.Mark>();
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            foreach (ObjectId aid in cdoc.GetAlignmentIds())
+            {
+                if (tr.GetObject(aid, OpenMode.ForRead) is not CivilDb.Alignment al ||
+                    !al.Name.StartsWith(SectionCommand.AlignBase)) continue;
+                foreach (var m in StationMarks.Load(tr, aid))
+                    if (!all.Exists(x => System.Math.Abs(x.Station - m.Station) <= StationMarks.MergeTol))
+                        all.Add(m);
+            }
+            tr.Commit();
+        }
+        catch (System.Exception ex) { log.AppendLine("  수동 측점 건지기 실패 — " + ex.Message); }
+        if (all.Count > 0) log.AppendLine($"  수동 측점 {all.Count}개를 건졌다(선형과 함께 지워지기 전에)");
+        return all;
+    }
+
     /// <summary>이 명령이 만든 것을 <b>전부</b> 지운다 — 선형·종단·종단뷰 + 우리가 그린 도면 객체 + 배치.
     ///
     /// <para>★★[v32.27 · JACK 0813] <b>종전엔 선형만 지웠다.</b> 선형을 지우면 딸린 종단·종단뷰가
@@ -1566,7 +1661,9 @@ public sealed class ProfileCommand
     /// 아무도 안 지우니 '지우고 새로'를 골라도 겹겹이 쌓였다(JACK 스샷).</para>
     ///
     /// <para><b>노란 노선도 이제 지운다.</b> 종전 방침은 "어느 선으로 만들었는지 남겨 둔다"였는데,
-    /// JACK이 0813에 <b>같이 지우라고 확정</b>했다 — 새로 만들면 어차피 새 노선이 그려진다.</para></summary>
+    /// JACK이 0813에 <b>같이 지우라고 확정</b>했다 — 새로 만들면 어차피 새 노선이 그려진다.</para>
+    ///
+    /// <para>⚠ <b>선형과 함께 수동 측점도 죽는다</b> — 부르기 전에 <see cref="HarvestMarks"/>로 건져야 한다.</para></summary>
     private static int EraseExisting(Database db, CivilApp.CivilDocument cdoc, System.Text.StringBuilder log)
     {
         int n = 0;
