@@ -21,7 +21,7 @@ namespace DH.Grading.Civil.Commands;
 ///  · 원지반과 정지면이 한 그림에 겹쳐 나와 절토/성토가 한눈에 보인다.
 ///
 /// 흐름: 선 클릭 → (선형 생성) → 종단 2개 → 종단도 놓을 위치 클릭 → 측점선 → 횡단도 놓을 위치 클릭 → 격자 배치.
-/// 간격·좌우 폭·열 수는 <b>정지옵션</b> 값을 쓴다.
+/// 간격·좌우 폭·열 수는 <b>도면설정</b> 값을 쓴다.
 /// </summary>
 public sealed class SectionCommand
 {
@@ -50,8 +50,11 @@ public sealed class SectionCommand
     /// <para>옛 도면에는 이 표면이 없다 — 그때는 <b>합성면으로 물러난다</b>(종전 동작 그대로).</para></summary>
     internal const string PurePadSurfaceBase = "정지순수_DH";
 
-    /// <summary>측점선(=횡단도) 개수 상한 — 넘으면 안내하고 중단(도면이 감당 못 할 양 방지).</summary>
-    private const int MaxSections = 200;
+    /// <summary>측점선(=횡단도) 개수 상한 — 넘으면 안내하고 중단(도면이 감당 못 할 양 방지).
+    /// <para>★[v32.25 · 검토 지적] <c>DHPROFILE</c>도 같은 상한을 본다 — 종전엔 이 관문이
+    /// <b>이 문에만</b> 달려 있었는데, 원지반 굴곡부(v32.21)가 측점의 새 공급원을 열면서
+    /// 다른 문으로 수백 개가 들어올 수 있게 됐다.</para></summary>
+    internal const int MaxSections = 200;
 
     [CommandMethod("DHSECTION")]
     public void Run()
@@ -190,7 +193,7 @@ public sealed class SectionCommand
             AcadApp.ShowAlertDialog(
                 $"횡단이 {cuts.Count}개나 됩니다(간격 {interval:0.#}m · 노선 {lineLen:F0}m).\n" +
                 $"도면이 감당하기 어려워 횡단은 만들지 않았습니다.\n\n" +
-                $"정지옵션에서 '횡단 간격'을 늘린 뒤 다시 실행하세요(예 {System.Math.Ceiling(lineLen / 50)}m 이상).");
+                $"도면설정에서 '횡단 간격'을 늘린 뒤 다시 실행하세요(예 {System.Math.Ceiling(lineLen / 50)}m 이상).");
             Done(ed, $"선형 '{alignName}' · 종단 {nProf}개 · 종단면도 완료 (횡단 {cuts.Count}개 → 상한 초과로 생략)");
             return;
         }
@@ -256,7 +259,7 @@ public sealed class SectionCommand
         Done(ed, msg);
         AcadApp.ShowAlertDialog("종단·횡단 생성 완료\n\n" + msg +
             $"\n\n· 횡단 간격 {interval:0.#}m · 좌 {wl:0.#}m / 우 {wr:0.#}m · 가로 {GradingSettings.XsecCols}개씩" +
-            "\n· 간격·폭·열 수는 [정지옵션]에서 바꿉니다." +
+            "\n· 간격·폭·열 수는 [도면설정]에서 바꿉니다." +
             "\n· 정지면을 고치면 종단·횡단은 Civil3D가 자동으로 갱신합니다.");
         try { DiagLog.Append($"\n■ DHSECTION — {msg} · 간격{interval} 좌{wl} 우{wr} St.{stStart:F1}~{stEnd:F1}\n"); } catch { }
     }

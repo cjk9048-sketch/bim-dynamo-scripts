@@ -26,6 +26,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.StationCommand))]             // DHSTATION(측점 추가·삭제 — 밸브실 등)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SampleLineCommand))]          // DHSAMPLE(단면검토선 — 측점 목록대로 생성)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SheetCommand))]               // DHSHEET(도곽 — A1 배치·모형 도곽범위)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SheetSettingsCommand))]       // DHSHEETSET(도면 설정 — 횡단·원지반굴곡·표·배경지도)
 
 namespace DH.Grading.Civil;
 
@@ -142,16 +143,32 @@ public sealed class RibbonApp : IExtensionApplication
             var pDraw = new RibbonPanelSource { Title = "도면화" };
             tab.Panels.Add(new RibbonPanel { Source = pDraw });
             pDraw.Items.Add(Spacer());
+            // ★★[v32.28 · JACK 0813] <b>도면 설정을 정지옵션에서 떼어 여기로.</b>
+            //   JACK: <i>"어차피 이름은 정지옵션인데 횡단이나 종단같이 도면화관련내용이 많은데,
+            //   아예 도면화챕터에 도면설정을 별도로 단추를 만들고 새로 팝업을 띄워서 관리하는건 어때?"</i>
+            //   가른 기준: <b>흙의 모양을 바꾸는가(정지옵션), 도면의 모양을 바꾸는가(여기).</b>
+            var btnSheetSet = MakeButton(
+                "도면\n설정", "DHSHEETSET ", "횡단 간격·폭, 원지반 굴곡, 종단도 표 종류, 배경지도 화질을 정합니다", "도면설정");
+            btnSheetSet.ToolTip = MakeTip("도면 설정 (DHSHEETSET)",
+                "**도면을 어떻게 그릴지**를 정합니다 — 흙의 모양(정지옵션)과는 별개입니다.\n\n" +
+                "· 횡단 간격 · 폭 좌/우 · 횡단도 가로 배치 수\n" +
+                "· 원지반 굴곡 — 종단도 원지반선을 얼마나 단순한 직선으로 그릴지\n" +
+                "· 종단도 정보표시 표 — 토공 / 관로\n" +
+                "· 배경지도 화질\n\n" +
+                "여기 값은 정지면 형상에 영향을 주지 않으므로 **정지면을 다시 만들 필요가 없습니다**.\n" +
+                "이미 만든 종단도에 반영하려면 [종단도]를 다시 눌러 '지우고새로'를 고르세요.", null);
+            pDraw.Items.Add(btnSheetSet);
+            pDraw.Items.Add(Spacer());
             pDraw.Items.Add(MakeButton(
                 "노리선", "DHNORI ", "정지 결과(번들)로 사면선·소단선·노리선을 한 번에 작도 — DHGRADE 실행 후 사용", "노리선"));
             pDraw.Items.Add(Spacer());
             // [JACK 0731] 배경지도·지도끄기는 도면화 중분류로 이동(별도 패널 폐지).
             var btnMap = MakeButton(
-                "배경지도", "DHMAP ", "두 점으로 범위를 찍으면 그 범위의 위성사진을 도면 좌표계에 맞춰 깔아줍니다(화질=정지옵션)", "지도");
+                "배경지도", "DHMAP ", "두 점으로 범위를 찍으면 그 범위의 위성사진을 도면 좌표계에 맞춰 깔아줍니다(화질=도면설정)", "지도");
             btnMap.ToolTip = MakeTip("배경지도 (DHMAP)",
                 "범위 두 모서리를 클릭하면 브이월드 위성사진을 받아\n" +
                 "도면 좌표계(정지옵션의 좌표계)에 정확히 맞춰 깔아줍니다.\n" +
-                "여러 번 눌러 여러 곳에 깔 수 있고, 화질은 정지옵션에서 선택합니다.", null);
+                "여러 번 눌러 여러 곳에 깔 수 있고, 화질은 [도면설정]에서 선택합니다.", null);
             pDraw.Items.Add(btnMap);
             pDraw.Items.Add(Spacer());
             var btnMapOff = MakeButton(
@@ -191,7 +208,7 @@ public sealed class RibbonApp : IExtensionApplication
                 "단면\n검토선", "DHSAMPLE ", "정체인 + 꺾임점 + 구배변화점 + 수동 측점 자리에 단면검토선을 만듭니다", "횡단위치");
             btnSl.ToolTip = MakeTip("단면검토선 (DHSAMPLE)",
                 "종단도에서 정한 측점을 **그대로 횡단 위치로 옮깁니다**.\n" +
-                "정체인(정지옵션의 횡단 간격) + 노선 꺾임점 + 계획면 구배변화점 + [측점]으로 더한 자리.\n" +
+                "정체인(도면설정의 횡단 간격) + 노선 꺾임점 + 계획면 구배변화점 + [측점]으로 더한 자리.\n" +
                 "이미 있는 그룹은 다시 쓰고 같은 자리는 건너뛰므로, 여러 번 눌러도 겹치지 않습니다.\n" +
                 "횡단면도는 이 뒤에 Civil 3D 기본 기능으로 뽑습니다.", null);
             pDraw.Items.Add(btnSl);
@@ -200,12 +217,12 @@ public sealed class RibbonApp : IExtensionApplication
 
             // [종단·횡단 — JACK 0731] 선 하나 그으면 종단면도·횡단면도를 Civil3D 정식 객체로 생성.
             var btnSec = MakeButton(
-                "종단\n횡단", "DHSECTION ", "노선으로 쓸 선을 클릭하면 원지반·정지면의 종단면도와 횡단면도를 만듭니다(간격·폭=정지옵션)", "종횡단");
+                "종단\n횡단", "DHSECTION ", "노선으로 쓸 선을 클릭하면 원지반·정지면의 종단면도와 횡단면도를 만듭니다(간격·폭=도면설정)", "종횡단");
             btnSec.ToolTip = MakeTip("종단·횡단 (DHSECTION)",
                 "검토할 노선대로 선을 하나 긋고 이 버튼을 누르면\n" +
                 "그 선을 따라 원지반과 정지면의 종단면도·횡단면도를 만듭니다.\n" +
                 "Civil3D 정식 객체라 정지면을 고치면 자동으로 따라 갱신됩니다.\n" +
-                "횡단 간격·좌우 폭·가로 배치 수는 [정지옵션]에서 정합니다.", null);
+                "횡단 간격·좌우 폭·가로 배치 수는 [도면설정]에서 정합니다.", null);
             pDraw.Items.Add(btnSec);
             pDraw.Items.Add(Spacer());
 
