@@ -37,26 +37,111 @@ public static class StationCommand
         ObjectId alignId = PickAlignment(db, ed);
         if (alignId.IsNull) return;
 
+        // ★★★[v32.35 · JACK 0813] <b>버튼을 누르면 곧바로 찍을 수 있어야 한다.</b>
+        //
+        //   JACK: <i>"측점 버튼을 누르고 종단의 그래프 내에서 클릭하면 해당 위치의 단면검토선이 추가되고
+        //   자동으로 종단뷰가 재작성되어야 해. 그래서 측점이 추가되게 해야 해."</i>
+        //
+        //   <b>종전엔 메뉴가 한 겹 앞에 있었다</b> — 버튼 → 목록 → "추가" 고르기 → 그제야 클릭.
+        //   가장 자주 하는 일(찍기)에 매번 한 번을 더 물었다.
+        //   → <b>점 찍기를 기본으로 두고, 나머지는 키워드로 받는다.</b>
+        //     <see cref="PromptPointOptions"/>는 점과 키워드를 <b>동시에</b> 받으므로 메뉴를 없앨 수 있다.
+        //
+        //   ※ 목록은 처음 한 번만 보여 준다 — 찍을 때마다 쏟아지면 명령창이 목록으로 덮여
+        //     정작 방금 무엇이 추가됐는지가 안 보인다.
+        ShowList(db, ed, alignId);
+        ed.WriteMessage("\n  ※ 측점을 찍으면 단면검토선이 생기고 종단도가 그 자리에서 다시 그려집니다.");
+
         while (true)
         {
-            ShowList(db, ed, alignId);
-            var pko = new PromptKeywordOptions("\n측점 — 무엇을 할까요")
+            var ppo = new PromptPointOptions(
+                "\n[측점] 종단도(또는 노선)에서 추가할 자리를 클릭 [목록(L)/삭제(D)/전체삭제(A)/끝(X)]: ")
             { AllowNone = true };
-            pko.Keywords.Add("추가");
-            pko.Keywords.Add("삭제");
-            pko.Keywords.Add("전체삭제");
-            pko.Keywords.Add("끝");
-            pko.Keywords.Default = "추가";
-            var pr = ed.GetKeywords(pko);
-            if (pr.Status != PromptStatus.OK || pr.StringResult == "끝") return;
+            ppo.Keywords.Add("목록", "L", "목록(L)", true, true);
+            ppo.Keywords.Add("삭제", "D", "삭제(D)", true, true);
+            ppo.Keywords.Add("전체삭제", "A", "전체삭제(A)", true, true);
+            ppo.Keywords.Add("끝", "X", "끝(X)", true, true);
 
-            switch (pr.StringResult)
+            var pp = ed.GetPoint(ppo);
+
+            // Esc·Enter는 끝낸다 — 찍기가 기본이므로 '그만 찍겠다'는 뜻이다.
+            if (pp.Status == PromptStatus.Cancel || pp.Status == PromptStatus.None) return;
+
+            bool changed = false;
+            if (pp.Status == PromptStatus.Keyword)
             {
-                case "추가": AddOne(db, ed, alignId); break;
-                case "삭제": DeleteOne(db, ed, alignId); break;
-                case "전체삭제": DeleteAll(db, ed, alignId); break;
+                switch (pp.StringResult)
+                {
+                    case "끝": return;
+                    case "목록": ShowList(db, ed, alignId); continue;
+                    case "삭제": changed = DeleteOne(db, ed, alignId); break;
+                    case "전체삭제": changed = DeleteAll(db, ed, alignId); break;
+                    default: continue;
+                }
+            }
+            else if (pp.Status == PromptStatus.OK)
+            {
+                changed = AddAt(db, ed, alignId, pp.Value.TransformBy(ed.CurrentUserCoordinateSystem));
+            }
+            // ★[검토 반영] <b>남은 상태(Error 등)는 끝낸다 — <c>continue</c>면 무한 루프다.</b>
+            //   <c>GetPoint</c>가 <c>Error</c>를 돌려주는 상황(도면이 닫히는 중·스크립트 입력 고갈)에서는
+            //   <b>사람 입력을 기다리지 않고</b> 즉시 돌아오므로 CPU를 물고 돌아 AutoCAD가 얼어붙는다.
+            //   종전 코드는 non-OK면 무조건 빠져나갔다 — 이번 판이 만든 회귀다.
+            else return;
+
+            // ── 바뀌었으면 <b>그 자리에서</b> 종단도를 다시 그린다.
+            //   단면검토선은 종단도가 측점 목록대로 만들므로(<c>ProfileCommand.BuildSampleLines</c>),
+            //   <b>따로 부를 것이 없다</b> — 다시 그리는 것이 곧 단면검토선 갱신이다.
+            if (!changed) continue;
+
+            RedrawProfile(doc, ed);
+
+            // ★★★[v32.35] <b>다시 그리면 선형이 새것으로 바뀐다 — 들고 있던 ID는 죽는다.</b>
+            //   <see cref="ProfileCommand"/>는 옛 선형을 지우고 같은 좌표로 <b>새로 만든다</b>
+            //   (선형 생성 API가 폴리선을 소모하는 구조라 '고쳐 쓰기'가 안 된다).
+            //   그래서 다음 클릭에서 <b>지워진 선형</b>에 측점을 저장하려 들면 조용히 실패한다 —
+            //   찍었는데 아무 일도 안 일어나는, 가장 알아채기 어려운 증상이다.
+            alignId = Reacquire(db, alignId);
+            if (alignId.IsNull)
+            {
+                ed.WriteMessage("\n  · 노선을 다시 잡지 못했습니다 — [측점]을 다시 실행해 주세요.");
+                return;
             }
         }
+    }
+
+    /// <summary>다시 그린 뒤의 노선을 잡는다 — 옛 ID가 아직 살아 있으면 그대로 쓴다.
+    /// <para>여럿이면 <b>마지막 것</b>을 쓴다(<see cref="ProfileCommand"/>가 방금 만든 것이 마지막이다).</para></summary>
+    private static ObjectId Reacquire(Database db, ObjectId old)
+    {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            if (!old.IsNull && !old.IsErased &&
+                tr.GetObject(old, OpenMode.ForRead, false, true) is CivilDb.Alignment { IsErased: false })
+            { tr.Commit(); return old; }
+
+            ObjectId last = ObjectId.Null;
+            var cdoc = CivilApp.CivilApplication.ActiveDocument;
+            foreach (ObjectId id in cdoc.GetAlignmentIds())
+                if (tr.GetObject(id, OpenMode.ForRead) is CivilDb.Alignment al && !al.IsErased &&
+                    al.Name.StartsWith(SectionCommand.AlignBase)) last = id;
+            tr.Commit();
+            return last;
+        }
+        catch { return ObjectId.Null; }
+    }
+
+    /// <summary>측점이 바뀐 뒤 종단도를 그 자리에서 다시 그린다 — <b>팝업 없이</b>.
+    /// <para>종단도가 아직 없으면 조용히 넘어간다(측점만 쌓아 두고 나중에 [종단도]를 눌러도 된다).</para></summary>
+    private static void RedrawProfile(Autodesk.AutoCAD.ApplicationServices.Document doc, Editor ed)
+    {
+        try
+        {
+            if (!ProfileCommand.Rebuild(doc))
+                ed.WriteMessage("\n  · (종단도가 아직 없어 목록에만 담았습니다 — [종단도]를 누르면 반영됩니다)");
+        }
+        catch (System.Exception ex) { ed.WriteMessage("\n  · ⚠종단도 갱신 실패 — " + ex.Message); }
     }
 
     /// <summary>노선(선형)을 정한다 — 하나뿐이면 묻지 않는다.</summary>
@@ -70,7 +155,14 @@ public static class StationCommand
                 var cdoc = CivilApp.CivilApplication.ActiveDocument;
                 foreach (ObjectId id in cdoc.GetAlignmentIds())
                 {
-                    if (tr.GetObject(id, OpenMode.ForRead) is CivilDb.Alignment al) found.Add((id, al.Name));
+                    // ★★[v32.35 · 검토 반영] <b>이 애드인이 만든 노선만 고르게 한다.</b>
+                    //   종전엔 도면의 모든 선형을 후보에 넣었는데, 뒤따르는 일들
+                    //   (<c>HarvestMarks</c>·<c>EraseExisting</c>·<see cref="Reacquire"/>)은 전부
+                    //   <c>DH</c> 접두사만 본다. 남의 노선을 고르면 측점은 그쪽에 저장되고
+                    //   종단도는 DH 노선으로 다시 그려져 — <b>찍어도 아무 일도 안 일어난다.</b>
+                    //   고를 수 없게 막는 것이 "왜 안 되지"를 없애는 가장 싼 방법이다.
+                    if (tr.GetObject(id, OpenMode.ForRead) is CivilDb.Alignment al &&
+                        al.Name.StartsWith(SectionCommand.AlignBase)) found.Add((id, al.Name));
                 }
             }
             catch { }
@@ -360,33 +452,38 @@ public static class StationCommand
         return false;
     }
 
-    private static void AddOne(Database db, Editor ed, ObjectId alignId)
+    /// <summary>찍은 자리에 측점을 더한다. <b>참=목록이 바뀌었다</b>(부른 쪽이 종단도를 다시 그린다).
+    /// <para>★[v32.35] 점을 <b>인자로 받는다</b> — 부르는 쪽이 이미 물어봤기 때문이다.
+    /// 종전처럼 여기서 또 물으면 클릭을 두 번 하게 된다.</para></summary>
+    private static bool AddAt(Database db, Editor ed, ObjectId alignId, Point3d wcs)
     {
-        var ppo = new PromptPointOptions("\n[측점] 추가할 위치를 종단도 또는 노선 위에 클릭 (Esc=취소): ");
-        var pp = ed.GetPoint(ppo);
-        if (pp.Status != PromptStatus.OK) return;
-        var wcs = pp.Value.TransformBy(ed.CurrentUserCoordinateSystem);
-
         // ── ① 측점 읽기 (읽기 전용). ★[v23.17] 사람에게 이름을 묻기 <b>전에</b> 닫는다 —
         //   묻는 동안 트랜잭션을 열어 두면 그 사이 도면 전체가 잡혀 있다.
         double st; string via;
         using (var tr0 = db.TransactionManager.StartTransaction())
         {
-            if (tr0.GetObject(alignId, OpenMode.ForRead) is not CivilDb.Alignment al0) { tr0.Commit(); return; }
+            if (tr0.GetObject(alignId, OpenMode.ForRead) is not CivilDb.Alignment al0) { tr0.Commit(); return false; }
             var got = StationFromPick(tr0, ed, wcs, al0, out via);
             tr0.Commit();
             if (!got.HasValue)
-            { ed.WriteMessage("\n  · 측점을 잡지 못했습니다 — 위 사유를 보세요."); return; }
+            { ed.WriteMessage("\n  · 측점을 잡지 못했습니다 — 위 사유를 보세요."); return false; }
             st = got.Value;
         }
         ed.WriteMessage($"\n  · 측점을 {via}에서 읽었습니다.");
         double idx = System.Math.Max(1.0, GradingSettings.XsecInterval);
 
-        var pso = new PromptStringOptions($"\n[측점] {StationMarks.Fmt(st, idx)} — 이름 <밸브실>: ")
-        { AllowSpaces = true };
-        var ps = ed.GetString(pso);
-        string why = (ps.Status == PromptStatus.OK && ps.StringResult.Trim().Length > 0)
-                     ? ps.StringResult.Trim() : "밸브실";
+        // ★★★[v32.36 · JACK 0813] <b>이름을 묻지 않는다 — 찍는 순간 들어간다.</b>
+        //   JACK: <i>"측점을 누르고 위치를 찍으면 무슨 밸브실이라고 뜨는데,
+        //   이런 거 없이 측점 누르는 순간 바로 추가되게 해줘."</i>
+        //
+        //   <b>왜 묻고 있었나.</b> v23 때 이 명령은 <b>밸브실 자리를 적어 두는 것</b>이 목적이라
+        //   이름이 곧 그 측점의 뜻이었다. 그런데 지금은 <b>단면검토선을 놓는 손</b>으로 쓰인다 —
+        //   토공 종단도에서 측점을 더 촘촘히 두려는 것이지, 그 자리에 무엇이 있다는 뜻이 아니다.
+        //   <b>쓰임이 바뀌었으면 묻는 것도 바뀌어야 한다.</b>
+        //
+        //   ※ 이름이 다시 필요해지면 <b>목록에서 고쳐 넣는 길</b>을 여는 편이 낫다 —
+        //     찍는 손을 멈춰 세우지 않으면서도 이름을 남길 수 있다.
+        const string why = "직접 찍음";
 
         // ── ② 측점 목록 저장 — 이건 <b>반드시 남아야 하는 것</b>이라 따로 커밋한다.
         bool saved;
@@ -401,58 +498,77 @@ public static class StationCommand
             if (saved) { tr1.Commit(); ed.WriteMessage($"\n  · 추가: {StationMarks.Fmt(st, idx)} '{why}'"); }
             else { tr1.Abort(); ed.WriteMessage("\n  · ⚠저장하지 못했습니다 — PVI도 심지 않습니다(도면과 목록이 어긋나면 안 됩니다)."); }
         }
-        if (!saved) return;
+        if (!saved) return false;
 
         // ── ③ PVI 심기 — <b>실패 가능성이 높은 쓰기</b>라 따로 연다.
         //   ★[v23.17] 종전엔 ②와 한 트랜잭션이라, 이게 반쯤 실패해도 되돌릴 수가 없었다
         //   (Abort하면 애써 저장한 측점 목록까지 날아간다).
         using (var tr2 = db.TransactionManager.StartTransaction())
         {
-            if (tr2.GetObject(alignId, OpenMode.ForRead) is not CivilDb.Alignment al2) { tr2.Abort(); return; }
+            if (tr2.GetObject(alignId, OpenMode.ForRead) is not CivilDb.Alignment al2) { tr2.Abort(); return true; }
             if (PlantPvi(tr2, al2, st, ed)) tr2.Commit();
             else tr2.Abort();          // 반쯤 바뀐 상태를 도면에 남기지 않는다
         }
+        // 목록은 이미 저장됐다 — PVI가 실패해도 <b>참</b>이다. 다시 그리면 목록대로 다시 심는다.
+        return true;
     }
 
-    private static void DeleteOne(Database db, Editor ed, ObjectId alignId)
+    /// <summary>참=목록이 바뀌었다(부른 쪽이 종단도를 다시 그린다).</summary>
+    private static bool DeleteOne(Database db, Editor ed, ObjectId alignId)
     {
-        var pp = ed.GetPoint("\n[측점] 지울 측점 근처를 노선 위에 클릭 (Esc=취소): ");
-        if (pp.Status != PromptStatus.OK) return;
+        // ★[v32.35] 지울 때도 <b>종단도에서 찍을 수 있다</b> — 추가를 종단도에서 하니
+        //   지우기만 평면 노선으로 가라고 하면 화면을 오갈 일이 생긴다.
+        var pp = ed.GetPoint("\n[측점] 지울 측점 근처를 종단도(또는 노선)에서 클릭 (Esc=취소): ");
+        if (pp.Status != PromptStatus.OK) return false;
+        var wcs = pp.Value.TransformBy(ed.CurrentUserCoordinateSystem);
 
         using var tr = db.TransactionManager.StartTransaction();
-        if (tr.GetObject(alignId, OpenMode.ForRead) is not CivilDb.Alignment al) { tr.Commit(); return; }
-        var st = StationMarks.StationOf(al, pp.Value.TransformBy(ed.CurrentUserCoordinateSystem));
-        if (!st.HasValue) { ed.WriteMessage("\n  · 노선 범위 밖입니다."); tr.Commit(); return; }
+        if (tr.GetObject(alignId, OpenMode.ForRead) is not CivilDb.Alignment al) { tr.Commit(); return false; }
+        var st = StationFromPick(tr, ed, wcs, al, out _);
+        if (!st.HasValue) { ed.WriteMessage("\n  · 측점을 잡지 못했습니다."); tr.Commit(); return false; }
 
         var marks = StationMarks.Load(tr, alignId);
-        if (marks.Count == 0) { ed.WriteMessage("\n  · 수동 측점이 없습니다(자동 측점은 지울 수 없습니다)."); tr.Commit(); return; }
+        if (marks.Count == 0) { ed.WriteMessage("\n  · 수동 측점이 없습니다(자동 측점은 지울 수 없습니다)."); tr.Commit(); return false; }
         double idx = System.Math.Max(1.0, GradingSettings.XsecInterval);
         int best = 0;
         for (int i = 1; i < marks.Count; i++)
             if (System.Math.Abs(marks[i].Station - st.Value) < System.Math.Abs(marks[best].Station - st.Value)) best = i;
         var gone = marks[best];
         marks.RemoveAt(best);
-        if (StationMarks.Save(tr, alignId, marks))
-            ed.WriteMessage($"\n  · 지움: {StationMarks.Fmt(gone.Station, idx)} '{gone.Why}'");
+        bool ok = StationMarks.Save(tr, alignId, marks);
+        if (ok) ed.WriteMessage($"\n  · 지움: {StationMarks.Fmt(gone.Station, idx)} '{gone.Why}'");
         else ed.WriteMessage("\n  · ⚠저장하지 못했습니다.");
         tr.Commit();
+        return ok;
     }
 
-    private static void DeleteAll(Database db, Editor ed, ObjectId alignId)
+    /// <summary>참=목록이 바뀌었다.</summary>
+    private static bool DeleteAll(Database db, Editor ed, ObjectId alignId)
     {
-        using var tr = db.TransactionManager.StartTransaction();
-        int n = StationMarks.Load(tr, alignId).Count;
-        if (n == 0) { ed.WriteMessage("\n  · 지울 수동 측점이 없습니다."); tr.Commit(); return; }
+        // ★[v32.35 · 검토 반영] <b>묻기 전에 트랜잭션을 닫는다.</b> 같은 파일이 <see cref="AddAt"/>에서
+        //   이미 배운 규칙인데(v23.17) 여기만 어기고 있었다 — 사람이 답할 때까지 도면 전체가 잡혀 있다.
+        int n;
+        using (var tr0 = db.TransactionManager.StartTransaction())
+        { n = StationMarks.Load(tr0, alignId).Count; tr0.Commit(); }
+        if (n == 0) { ed.WriteMessage("\n  · 지울 수동 측점이 없습니다."); return false; }
+
         var pko = new PromptKeywordOptions($"\n수동 측점 {n}개를 모두 지웁니다. 진행할까요")
         { AllowNone = true };
         pko.Keywords.Add("예"); pko.Keywords.Add("아니오");
         pko.Keywords.Default = "아니오";
         var pr = ed.GetKeywords(pko);
-        if (pr.Status == PromptStatus.OK && pr.StringResult == "예")
+        if (pr.Status != PromptStatus.OK || pr.StringResult != "예") return false;
+
+        // ★[검토 반영] <b>저장 결과를 그대로 돌려준다.</b> 종전엔 성공으로 단정해,
+        //   저장이 실패해도 "지웠습니다"라고 말하고 전면 재작성까지 돌았다.
+        bool ok;
+        using (var tr = db.TransactionManager.StartTransaction())
         {
-            StationMarks.Save(tr, alignId, new List<StationMarks.Mark>());
-            ed.WriteMessage($"\n  · 수동 측점 {n}개를 지웠습니다.");
+            ok = StationMarks.Save(tr, alignId, new List<StationMarks.Mark>());
+            if (ok) tr.Commit(); else tr.Abort();
         }
-        tr.Commit();
+        ed.WriteMessage(ok ? $"\n  · 수동 측점 {n}개를 지웠습니다."
+                           : "\n  · ⚠지우지 못했습니다(저장 실패) — 목록은 그대로입니다.");
+        return ok;
     }
 }

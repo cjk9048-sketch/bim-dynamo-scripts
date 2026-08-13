@@ -108,6 +108,27 @@ public static class SheetCommand
     /// 여백은 올림이 남기는 몫으로 얻고, 이 값은 <b>못 미쳤을 때 로그로 알리는 임계</b>로만 쓴다.</para></summary>
     private const double Fill = 0.92;
 
+    /// <summary>★★[v32.31 · JACK 0813] 좌측 아래 정렬에서 <b>도곽 선과 도면 사이를 띄우는 양</b>(종이 mm).
+    /// <i>"너무 딱 붙여서 축척 화살표가 너무 좌측벽과 아래에 너무 붙지 않게 해줘."</i>
+    /// <para><b>종이 기준</b>이라 축척이 바뀌어도 눈에 같은 간격으로 보인다(1:150이면 모형 1.8m·1.5m).
+    /// 왼쪽을 조금 더 주는 것은 그쪽에 <b>표고바·축 숫자·축척 배너</b>가 겹쳐 서기 때문이다.</para></summary>
+    private const double PadLeftMm = 12.0, PadBottomMm = 10.0;
+
+    /// <summary>★★[v32.32 · JACK 0813] 표고 범위를 맞출 때 쓰는 <b>눈금 단위</b>(m).
+    /// <i>"간격은 5m 단위로 하되 … 고도값의 범위 버퍼를 더 두라는 이야기였어.
+    /// 격자 단위를 1m씩 바꾸라는 게 아니고."</i>
+    /// <para>범위를 이 배수로만 잡으므로 <b>격자 눈금은 종전 그대로</b>이고, 늘어나는 것은 위아래 여유뿐이다.</para></summary>
+    private const double ElevStepM = 5.0;
+
+    /// <summary>세로로 <b>최소 이만큼은 차야 한다</b>(JACK: "최소 80%는 찰 수 있게").
+    /// 못 미치면 고치지 않고 <b>로그로 알린다</b> — 눈금 5m를 깨는 것이 더 나쁘다.</summary>
+    private const double ElevFillMin = 0.80;
+
+    /// <summary>남는 표고 여유 중 <b>아래로 가는 몫</b>(나머지는 위로).
+    /// <para>JACK 0813: <i>"기왕이면 아랫쪽에 좀 더 주는 게 좋아 — 보통 그래프 아래에 토사구간이나
+    /// 가시설구간이나 포장구간 같은 표시를 넣거든."</i> 위쪽 여유는 하늘이고 <b>아래쪽은 쓸 자리</b>다.</para></summary>
+    private const double BelowShare = 2.0 / 3.0;
+
     /// <summary>★★[v24.1 · JACK 0811] <b>굴곡부(수직기하점) 측점을 낼지 말지 — 스위치 하나.</b>
     ///
     /// <para>JACK: <i>"일단 지금 계속 측점이 문제니깐 굴곡부 측점부는 잠깐 미뤄두고
@@ -180,6 +201,10 @@ public static class SheetCommand
     /// 회사 도곽 파일을 골라 배치탭에 붙여넣는 기능(JACK 예고, 지금은 구현하지 않는다).</para></summary>
     public static string Build(Database db, Editor ed, ObjectId pvId, System.Text.StringBuilder log)
     {
+        // ★[v32.31] 지난 판이 적어 둔 '장식 자리'를 먼저 지운다 — 축척이 바뀌면 그 좌표는
+        //   전혀 다른 곳을 가리키고, 도곽만 엉뚱하게 넓어진다.
+        ResetDeco();
+
         // ── ① 밴드를 표로 만든다(칸 균등·간격 0). 크기를 재기 **전에** 해야 뒤 계산이 맞는다.
         string bandNote = NormalizeBands(db, pvId, log);
 
@@ -199,11 +224,15 @@ public static class SheetCommand
         //   <b>1차에서 건 축척이 2차 측정을 부풀렸다</b>(실측 68.6m → 664.6m, 정확히 120배 여분).
         //   재는 도중에 자를 바꾸면 안 된다.
         SetDrawingScale(db, scale, log);
+        LogGrid(db, pvId, log, "① 축척 건 뒤");        // ★[v32.32] 격자가 어느 단계에서 좁아지는지 — 설명은 LogGrid
 
         // ── ②-b 뷰 스타일이 정해진 **뒤에** 왼쪽 축 눈금을 세운다(JACK: "왼쪽 바를 스케일(체크)로").
         SetAxisTicks(db, pvId, scale, log);
+        LogGrid(db, pvId, log, "② 축 눈금 뒤");
         SetBandWeeding(db, pvId, scale, log);   // 굴곡부 라벨 솎아내기 — 축척을 알아야 정할 수 있다
+        LogGrid(db, pvId, log, "③ 밴드 솎기 뒤");
         PolishView(db, pvId, log);      // V·H 표시 자리 · 종단선 화살표
+        LogGrid(db, pvId, log, "④ 뷰 다듬기 뒤");
         DrawScaleBar(db, pvId, scale, log);   // 흑백 교차 표고바 — 직접 그린다(축 스타일엔 그 기능이 없다)
         DecorateBandTitles(db, pvId, scale, log);   // 제목칸 이중 테두리(JACK 0812)
         PlaceScaleBanner(db, pvId, scale, log);     // 축척 배너 블록 + V·H 글자
@@ -313,6 +342,14 @@ public static class SheetCommand
                 //   꽉 차는 스케일로 가는 게 어때"). 축척이 하나뿐이니 긴 쪽을 채우면 나머지는 저절로 정해진다.
                 var flat = cands.OrderBy(c => System.Math.Abs(c.V - 1.0)).FirstOrDefault();
                 if (!flat.S.Id.IsNull) SetStyle(db, pvId, flat.S.Id);
+
+                // ★★★[v32.32] <b>재기 전에 격자를 먼저 좁힌다.</b> 종전엔 이 일이 <see cref="SetAxisTicks"/> 안에서
+                //   <b>축척을 정한 뒤</b> 일어나, 여기서 잰 30m로 축척을 정하고 실제로는 12m가 그려졌다.
+                //   <b>스타일을 건 뒤</b>라야 한다 — 격자 설정은 스타일에 들어 있어 그 전에 하면 엉뚱한 스타일을 고친다.
+                LogGrid(db, pvId, log, "⓪ 좁히기 전");
+                ShrinkGrid(db, pvId, log);
+                LogGrid(db, pvId, log, "⓪ 좁히기 뒤 ← 이 격자로 축척을 정한다");
+
                 var e0 = Measure(db, pvId);
                 double hM0 = e0.MaxPoint.Y - e0.MinPoint.Y;
 
@@ -457,6 +494,16 @@ public static class SheetCommand
                 //   두 번째 측정이 <b>방금 바뀐 축척으로 부푼 그림</b>을 재게 된다(위 설명).
                 //   → 축척은 <b>최종값이 정해진 뒤</b> <see cref="Build"/>에서 한 번만 건다.
                 LastBandModelH = bandPaperM * s0;   // 도곽이 밴드까지 덮도록 넘겨준다
+
+                // ★★★[v32.32 · JACK 0813] <b>축척이 정해진 뒤에 표고 범위를 자리에 맞춘다.</b>
+                //   순서가 중요하다 — 자리에 담기는 표고 범위는 <b>축척이 있어야</b> 나온다(mm ÷ 1000 × 축척).
+                //   반대로 이 함수가 넓힌 범위는 축척을 뒤흔들지 않는다: 자리를 넘지 않게 <b>내림</b>으로만 잡으므로
+                //   2차 <see cref="FitSheet"/>에서 높이 기준 필요 축척이 지금 축척보다 커질 수 없다.
+                FitElevationRange(db, pvId, s0, availMm, log);
+                // ★ 지정한 범위가 그대로 격자가 됐는지 확인한다 — <c>GridPadding</c>이 그 위에 <b>덧붙는지</b>가
+                //   문서에 없다(UserSpecified면 무시되는 것이 보통이지만 확인 전에는 모른다).
+                //   덧붙었다면 아래 줄의 격자 폭이 방금 지정한 값보다 크게 나온다.
+                LogGrid(db, pvId, log, "⑤ 표고 범위 지정 뒤");
                 if (flat.S.Id.IsNull) return $"S=1:{s0:F0} (수직과장 스타일 없음 — 도면 기본값)";
                 if (System.Math.Abs(flat.V - 1.0) > 0.01)
                     log.AppendLine($"⚠회사 표준에 '수직과장 없음'이 없어 가장 가까운 {flat.V:0.#}배를 썼다.");
@@ -468,6 +515,9 @@ public static class SheetCommand
             {
                 var pick = cands.OrderBy(c => System.Math.Abs(c.V - wantVe)).First();
                 SetStyle(db, pvId, pick.S.Id);
+                // ★[v32.32] 토공 갈래와 같은 이유로 <b>재기 전에</b> 좁힌다 — 여기 빠뜨리면 관로를 되살릴 때
+                //   격자가 아예 안 좁혀진다(종전엔 <see cref="SetAxisTicks"/>가 두 갈래 뒤에서 해 줬다).
+                ShrinkGrid(db, pvId, log);
                 var e = Measure(db, pvId);
                 double w = (e.MaxPoint.X - e.MinPoint.X) * 1000.0 / HScale;
                 double h = (e.MaxPoint.Y - e.MinPoint.Y) * 1000.0 / HScale;
@@ -1198,14 +1248,32 @@ public static class SheetCommand
     /// <para><b>Interval은 건드리지 않는다.</b> 그것을 바꾸면 표고 라벨 밀도가 통째로 달라지는데
     /// JACK이 요구한 것은 '눈금이 보이게'다. 대신 <b>현재 값을 로그에 남겨</b> 다음 판에서
     /// 간격까지 손댈지 판단할 수 있게 한다 — 짐작으로 바꾸고 나중에 되돌리는 것보다 싸다.</para></summary>
-    private static void SetAxisTicks(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log)
+    /// <summary>★★★[v32.32 · JACK 0813] <b>격자를 좁히는 일은 축척을 정하기 <u>전에</u> 끝나야 한다.</b>
+    ///
+    /// <para><b>무엇이 잘못됐었나.</b> 격자 여백 줄이기(v31.7)와 세로줄 자르기(v32.21)는 둘 다
+    /// <b>격자 표고 범위를 좁힌다.</b> 그런데 이 둘이 <see cref="SetAxisTicks"/> 안에 있어
+    /// <see cref="FitSheet"/>가 <b>좁아지기 전</b> 격자로 축척을 정했다.
+    /// 실측(0813): FitSheet가 본 격자 <c>95~125m</c>(30m) → 좁힌 뒤 <c>100~112m</c>(12m).
+    /// 축척은 30m로 정해지고 실제 그래프는 12m라, <b>그래프가 자리(289.2mm)의 35%만 썼다</b>
+    /// (JACK: <i>"그래프 부분이 좀 좁은데"</i>). 자리를 넓혀도 소용없다 — <b>있는 자리를 못 쓰는 것</b>이었다.
+    ///
+    /// <para>이것이 §34가 밴드로 의심했던 <b>축척 널뛰기(30m↔12m)의 진짜 원인</b>이다.
+    /// 계측이 밴드의 무죄를 밝히고([높이 계측] — 아래 여유 2.9m ≪ 밴드 15.6m),
+    /// 단계별 격자 추적이 범인을 짚었다. <b>추측 두 번보다 계측 한 번이 빨랐다.</b></para>
+    ///
+    /// <para><b>왜 떼어낼 수 있나.</b> 이 두 가지는 <b>축척을 인자로 쓰지 않는다</b>(상수와 종단 이름뿐).
+    /// 축척이 필요한 것은 눈금 길이뿐이라 그것만 <see cref="SetAxisTicks"/>에 남는다.</para>
+    ///
+    /// <para>⚠ <b>부르는 자리가 중요하다</b> — 이것은 <b>뷰 스타일</b>을 고치므로,
+    /// <see cref="FitSheet"/>가 스타일을 건 <b>뒤에</b> 불러야 한다. 그 전에 부르면 <b>엉뚱한 스타일</b>을 고친다.</para></summary>
+    private static void ShrinkGrid(Database db, ObjectId pvId, System.Text.StringBuilder log)
     {
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
             var pv = (CivilDb.ProfileView)tr.GetObject(pvId, OpenMode.ForRead);
             if (tr.GetObject(pv.StyleId, OpenMode.ForWrite) is not CivilDb.Styles.ProfileViewStyle vs)
-            { log.AppendLine("   축 눈금: 종단 뷰 스타일을 열지 못했다"); tr.Commit(); return; }
+            { log.AppendLine("   격자 좁히기: 종단 뷰 스타일을 열지 못했다"); tr.Commit(); return; }
 
             // ★★[v31.7 · JACK 0812] <b>격자 위쪽 여백을 줄인다 — 빈 하늘을 걷어낸다.</b>
             //
@@ -1303,6 +1371,21 @@ public static class SheetCommand
             }
             catch (System.Exception ex) { log.AppendLine("   세로줄 자르기 실패 — " + Brief(ex)); }
 
+            tr.Commit();
+        }
+        catch (System.Exception ex) { log.AppendLine("   격자 좁히기 실패 — " + Brief(ex)); }
+    }
+
+    private static void SetAxisTicks(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log)
+    {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var pv = (CivilDb.ProfileView)tr.GetObject(pvId, OpenMode.ForRead);
+            if (tr.GetObject(pv.StyleId, OpenMode.ForWrite) is not CivilDb.Styles.ProfileViewStyle vs)
+            { log.AppendLine("   축 눈금: 종단 뷰 스타일을 열지 못했다"); tr.Commit(); return; }
+
+
             // ★[v23.20] <b>왼쪽 간격을 먼저 정하고 오른쪽을 거기에 맞춘다.</b>
             //   종전엔 축마다 따로 판정해서 왼쪽 5m·오른쪽 2.5m로 <b>어긋났다</b>(실측).
             //   같은 표고를 재는 두 자가 눈금이 다르면 도면이 못 읽힌다.
@@ -1331,20 +1414,42 @@ public static class SheetCommand
                         //   <b>범위를 벗어날 때만</b> 관례값으로 바꾼다(멀쩡한 회사 값을 매번 덮지 않는다).
                         double onPaper = mj.Interval / scale * 1000.0;
                         bool isLeft = nm == "왼쪽";
+                        // ★★★[v32.34 · JACK 0813] <b>표고 눈금은 5m의 배수만 쓴다.</b>
+                        //   JACK: <i>"표고 단위가 2로 나오는데 5로 바꿔줘."</i>
+                        //
+                        //   <b>왜 2m가 남아 있었나.</b> 종전 조건은 <b>종이 크기만</b> 봤다 —
+                        //   2m는 1:120에서 종이 16.7mm라 허용 범위(8~40mm) <b>안</b>이라 손대지 않았다.
+                        //   위 주석은 "회사 템플릿은 5m"라고 적혀 있지만 <b>실제로 들어 있던 값은 2m</b>였다.
+                        //   크기가 멀쩡해도 <b>단위가 관례를 벗어나면</b> 도면이 안 읽힌다 —
+                        //   현장에서 표고는 5m·10m로 읽지 2m·2.5m로 읽지 않는다.
+                        //   → 판정에 <b>'5의 배수인가'</b>를 더한다. 고르는 후보도 5의 배수뿐이다.
+                        //
+                        //   ※ <see cref="ElevStepM"/>과 같은 자를 쓴다 — 표고 <b>범위</b>도 5m 배수로 잡으므로
+                        //     (<see cref="FitElevationRange"/>) 눈금이 범위 양 끝에 <b>딱 떨어진다.</b>
+                        bool offStep = mj.Interval < 1e-9 ||
+                            System.Math.Abs(mj.Interval / ElevStepM - System.Math.Round(mj.Interval / ElevStepM)) > 1e-6;
+                        bool offPaper = mj.Interval > 1e-9 && (onPaper < AxisLabelMinMm || onPaper > AxisLabelMaxMm);
                         // 오른쪽은 <b>왼쪽에 맞추는 것이 먼저</b>다 — 두 자의 눈금이 달라선 안 된다.
+                        //   왼쪽은 이미 5m 배수로 정해졌으므로, 따라오면 오른쪽도 저절로 배수가 된다.
                         if (!isLeft && leftMajor > 1e-9 && System.Math.Abs(mj.Interval - leftMajor) > 1e-9)
                         {
                             log.AppendLine($"   축 눈금(오른쪽) 간격: {mj.Interval:0.##}m → 왼쪽과 같은 {leftMajor:0.##}m로 맞춤");
                             mj.Interval = leftMajor; mn.Interval = leftMajor / 5.0;
                         }
-                        else if (mj.Interval > 1e-9 && (onPaper < AxisLabelMinMm || onPaper > AxisLabelMaxMm))
+                        else if (offStep || offPaper)
                         {
                             double target = AxisLabelWantMm / 1000.0 * scale;
-                            double[] nice = { 0.25, 0.5, 1, 2, 2.5, 5, 10, 20, 25, 50, 100, 200 };
+                            // 5의 배수만 — 2·2.5 같은 값이 다시 들어오지 못하게 후보에서 뺀다.
+                            double[] nice =
+                            {
+                                ElevStepM, ElevStepM * 2, ElevStepM * 4, ElevStepM * 5,
+                                ElevStepM * 10, ElevStepM * 20, ElevStepM * 40,
+                            };
                             double pick = nice.OrderBy(v => System.Math.Abs(v - target)).First();
-                            log.AppendLine($"   축 눈금({nm}) 간격: {mj.Interval:0.##}m는 종이 {onPaper:F1}mm라" +
-                                           $" 범위({AxisLabelMinMm:F0}~{AxisLabelMaxMm:F0}mm) 밖 → {pick:0.##}m" +
-                                           $"(종이 {pick / scale * 1000.0:F1}mm)로 바꿈");
+                            log.AppendLine($"   축 눈금({nm}) 간격: {mj.Interval:0.##}m → {pick:0.##}m"
+                                         + $"(종이 {pick / scale * 1000.0:F1}mm)"
+                                         + (offStep ? $" · {ElevStepM:F0}m 배수가 아니었다" : "")
+                                         + (offPaper ? $" · 종이 {onPaper:F1}mm는 범위({AxisLabelMinMm:F0}~{AxisLabelMaxMm:F0}mm) 밖" : ""));
                             mj.Interval = pick;
                             mn.Interval = pick / 5.0;
                         }
@@ -2176,6 +2281,9 @@ public static class SheetCommand
             //   <i>"축척 화살표는 너무 밴드표에 딱 붙지 않게 적당하게 오프셋해서 넣고"</i> —
             //   맞닿으면 표의 선인지 화살표인지 눈으로 구분이 안 된다. 종이 기준으로 띄운다.
             var pt = new Point3d(xL - BannerGapMm * mm, yBot - BannerGapMm * mm, 0);
+            // ★[v32.31] 배너는 표 왼쪽아래 <b>바깥</b>에 놓인다 — 대개 이것이 도면 전체의 왼쪽·아래 끝이다.
+            //   블록 실제 크기는 아래에서 재지만(속성 채운 뒤라야 정확하다) 기준점만으로도 자리는 정해진다.
+            NoteDeco(pt.X, pt.Y);
             var bref = new BlockReference(pt, defId) { ScaleFactors = new Scale3d(mm) };
             bref.SetDatabaseDefaults(db); bref.LayerId = layer;
             ms.AppendEntity(bref); tr.AddNewlyCreatedDBObject(bref, true);
@@ -2504,6 +2612,8 @@ public static class SheetCommand
             double xR = xAxis - gapM, xL = xR - wM;
             log.AppendLine($"   표고바 자리: 데이터시작 x={x0:F3} · 축오프셋 {axOffM:F3}m → 축선 x={xAxis:F3}" +
                            $" · 바 x={xL:F3}~{xR:F3} (축선 왼쪽) · 격자표고 {gLo:F2}~{gHi:F2}m");
+            // ★[v32.31] 도곽이 이 바를 품게 자리를 알린다 — 종단뷰 경계상자 밖이라 아무도 모른다.
+            NoteDeco(xL, YofE(gLo));
 
             // ── ★[JACK 0810] <b>한 줄에 검정·흰색 두 칸, 줄마다 뒤집는다</b> — 체스판이다.
             //   "한줄엔 검정, 힌색 두개 이게 반복되게".
@@ -2984,6 +3094,145 @@ public static class SheetCommand
     /// <summary>직전에 계산한 밴드의 <b>모형</b> 높이(m) — 도곽이 밴드까지 덮게 하려고 넘긴다.</summary>
     private static double LastBandModelH;
 
+    /// <summary>★★[v32.31 · JACK 0813] <b>종단뷰 밖에 직접 그린 것들의 왼쪽·아래 끝</b>(모형 좌표).
+    ///
+    /// <para><b>왜 따로 기억하나.</b> 표고바와 축척 배너는 <b>종단뷰 객체가 아니라 우리가 그린 도면 객체</b>라
+    /// <c>pv.GeometricExtents</c>에 <b>안 들어간다.</b> 종전엔 도곽을 종단뷰 <b>한가운데</b> 맞췄으니
+    /// 사방에 여백이 남아 이것들이 저절로 안에 들어왔다 — 그래서 문제가 안 보였다.
+    /// 그런데 <b>좌측 아래로 붙이면</b> 여백이 사라져 배너가 도곽 밖으로 밀려난다.</para>
+    ///
+    /// <para>그리는 쪽이 자기 자리를 적어 두면 도곽은 <b>그 값만 보면 된다</b> —
+    /// 배너 크기·자리 규칙이 바뀌어도 도곽 코드는 손댈 일이 없다(<see cref="LastBandModelH"/>와 같은 방식).
+    /// <c>NaN</c>이면 '아직 아무도 안 그렸다'는 뜻이라 도곽은 종단뷰 상자만 쓴다.</para></summary>
+    private static double LastDecoMinX = double.NaN, LastDecoMinY = double.NaN;
+
+    /// <summary>★★★[v32.32 계측 · JACK 0813] <b>격자가 Build 도중에 좁아진다 — 어느 단계인가.</b>
+    ///
+    /// <para><b>실측(0813 11:26 로그)</b>: <see cref="FitSheet"/> 시점 격자 <c>95~125m</c>(30m) →
+    /// <see cref="DrawScaleBar"/> 시점 <c>100~112m</c>(12m). <b>같은 실행 안에서 18m가 사라졌다.</b>
+    /// 축척은 30m로 정해지는데 실제로 그려지는 것은 12m라, 그래프가 자리(289.2mm)의 <b>35%만 쓴다</b>
+    /// (JACK: <i>"그래프 부분이 좀 좁은데"</i>). 자리를 넓혀 봐야 소용없다 — <b>있는 자리를 못 쓰는 것</b>이다.</para>
+    ///
+    /// <para>이것이 §34가 쫓던 <b>축척 널뛰기(30m↔12m)의 진짜 원인</b>이기도 하다.
+    /// 밴드는 무죄였다(계측이 그렇게 말했다) — 범인은 <b>격자 자체</b>다.</para>
+    ///
+    /// <para><b>추측하지 않는다.</b> 축척 걸기·축 눈금·밴드 솎기·뷰 다듬기 넷 중 누가 좁히는지
+    /// 단계마다 찍어 <b>한 번 실행으로</b> 가린다.</para></summary>
+    private static void LogGrid(Database db, ObjectId pvId, System.Text.StringBuilder log, string step)
+    {
+        var g = MeasureGridElev(db, pvId);
+        log.AppendLine(g.Ok
+            ? $"   [격자 추적] {step}: 격자 {g.GridLo:F2}~{g.GridHi:F2}m(폭 {g.GridHi - g.GridLo:F2}m)"
+              + $" · 데이터 {g.DataLo:F2}~{g.DataHi:F2}m"
+            : $"   [격자 추적] {step}: 못 잼");
+    }
+
+    /// <summary>★★★[v32.32 · JACK 0813] <b>그래프가 세로 자리를 채우도록 표고 범위를 넓힌다.</b>
+    ///
+    /// <para>JACK: <i>"종단뷰 범위 80% 공간 범위 중 세로 방향으로 최소 80%는 찰 수 있게 고도값의 범위 버퍼를 더 둬라.
+    /// 예를 들면 90~120 범위로 가져가거나 하면 그래프가 커지니깐 도면이 꽉 차 보이잖아."</i></para>
+    ///
+    /// <para><b>왜 저절로 안 되나.</b> 축척은 <b>폭이 정한다</b>(노선 길이가 종이 폭을 채워야 하므로).
+    /// 그 축척에서 표고 범위가 좁으면 — 데이터가 <c>103~112m</c>면 9m뿐이다 — 그래프는
+    /// <c>9m ÷ 120 = 75mm</c>밖에 안 되고 자리(289mm)의 4분의 1만 쓴다. <b>남은 자리는 영영 빈다.</b>
+    /// 데이터가 좁은 것은 잘못이 아니다 — 부지정지는 표고차가 원래 작다.</para>
+    ///
+    /// <para><b>버퍼를 데이터가 아니라 자리에서 역산한다.</b> 자리에 담기는 최대 범위를 구하고,
+    /// 눈금(<see cref="ElevStepM"/>)의 배수로 <b>내림</b>한다. JACK 예시 그대로 나온다 —
+    /// 자리 289.2mm · 1:120이면 최대 34.7m → 30m → 데이터 가운데(107.5)에 맞춰 <b>90~120</b>.</para>
+    ///
+    /// <para><b>내림이지 올림이 아니다.</b> 올리면 자리를 넘어 그래프가 밴드를 침범한다.
+    /// 내림이 남기는 몫이 곧 여백이고, 그것이 80%에 못 미치면 <b>고치지 않고 알린다</b> —
+    /// 채우자고 눈금을 1m로 잘게 쪼개면 JACK이 하지 말라고 한 바로 그것이 된다.</para>
+    ///
+    /// <para>⚠ <b>데이터 범위는 종단들에서 직접 읽는다.</b> <c>pv.ElevationMin/Max</c>는 한 번
+    /// <c>UserSpecified</c>로 지정하면 <b>지정값을 돌려주므로</b>, 그것으로 다시 계산하면
+    /// 두 번째 실행부터 자기가 넣은 값을 데이터로 착각한다(<see cref="FitSheet"/>는 두 번 불린다).</para></summary>
+    private static void FitElevationRange(Database db, ObjectId pvId, double scale, double availMm,
+                                          System.Text.StringBuilder log)
+    {
+        try
+        {
+            if (availMm <= 1.0 || scale <= 0) return;
+
+            // ① 데이터 실제 범위 — 이 뷰에 걸린 종단들의 최저·최고
+            double lo = double.MaxValue, hi = double.MinValue;
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                var pv0 = (CivilDb.ProfileView)tr.GetObject(pvId, OpenMode.ForRead);
+                if (tr.GetObject(pv0.AlignmentId, OpenMode.ForRead) is CivilDb.Alignment al)
+                    foreach (ObjectId pid in al.GetProfileIds())
+                    {
+                        if (tr.GetObject(pid, OpenMode.ForRead) is not CivilDb.Profile pr) continue;
+                        try { lo = System.Math.Min(lo, pr.ElevationMin); hi = System.Math.Max(hi, pr.ElevationMax); }
+                        catch { }
+                    }
+                tr.Commit();
+            }
+            if (lo > hi) { log.AppendLine("   표고 범위: 종단 표고를 못 읽어 자동 그대로 둔다"); return; }
+
+            // ② 자리에 담기는 최대 범위 → 눈금 배수로 내림
+            double maxSpan = availMm / 1000.0 * scale;
+            double span = System.Math.Floor(maxSpan / ElevStepM) * ElevStepM;
+
+            // 데이터가 자리보다 크면 늘릴 수 없다 — 담기는 최소로 올린다(넘치더라도 <b>잘리는 것보다 낫다</b>).
+            double dataSpan = hi - lo;
+            double needSpan = System.Math.Ceiling(dataSpan / ElevStepM) * ElevStepM;
+            if (needSpan < ElevStepM) needSpan = ElevStepM;
+            bool tooTall = span < needSpan;
+            if (tooTall) span = needSpan;
+
+            // ③ 남는 여유를 <b>아래에 더</b> 주고 눈금에 맞춘다 — 그런 뒤 데이터가 빠지지 않았는지 확인한다.
+            //
+            //   ★★[JACK 0813] <i>"공간을 줄 때 기왕이면 아랫쪽에 좀 더 주는 게 좋아.
+            //   왜냐면 보통 그래프 아래에 토사구간이나 가시설구간이나 포장구간 같은 표시를 넣거든.
+            //   그 공간이 있어야 해."</i>
+            //   → 가운데 정렬이 아니다. 위쪽 여유는 <b>그냥 하늘</b>이지만 아래쪽은 <b>쓸 자리</b>다.
+            //   JACK이 든 예(데이터 103~112 → 격자 90~120)도 아래 13m · 위 8m로 아래가 넓다.
+            //
+            //   ※ <b>반올림이지 내림이 아니다.</b> 내리면 눈금 한 칸이 통째로 아래로 밀려
+            //     (89.0 → 85) 위쪽이 데이터에 바짝 붙는다. 반올림하면 JACK 예시 그대로 90이 나온다.
+            double slack = System.Math.Max(0.0, span - dataSpan);
+            double newLo = System.Math.Round((lo - slack * BelowShare) / ElevStepM) * ElevStepM;
+            double newHi = newLo + span;
+            if (newLo > lo) { newLo = System.Math.Floor(lo / ElevStepM) * ElevStepM; newHi = newLo + span; }
+            if (newHi < hi) { newHi = System.Math.Ceiling(hi / ElevStepM) * ElevStepM; newLo = newHi - span; }
+
+            // ④ 지정
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                var pv = (CivilDb.ProfileView)tr.GetObject(pvId, OpenMode.ForWrite);
+                pv.ElevationRangeMode = CivilDb.ElevationRangeType.UserSpecified;
+                pv.ElevationMin = newLo;
+                pv.ElevationMax = newHi;
+                tr.Commit();
+            }
+
+            double usedMm = span * 1000.0 / scale;
+            double fill = usedMm / availMm;
+            log.AppendLine($"   표고 범위: 데이터 {lo:F2}~{hi:F2}m({dataSpan:F1}m)"
+                         + $" → 격자 {newLo:F0}~{newHi:F0}m({span:F0}m · 눈금 {ElevStepM:F0}m 배수)"
+                         + $" · 여유 아래 {lo - newLo:F1}m / 위 {newHi - hi:F1}m(아래에 더 준다 — 구간 표시 자리)"
+                         + $" · 세로 {usedMm:F0}/{availMm:F0}mm = {fill * 100:F0}% 사용"
+                         + (tooTall ? "  ⚠데이터가 자리보다 크다 — 넘치더라도 다 보이게 둔다"
+                            : fill < ElevFillMin ? $"  ⚠목표 {ElevFillMin * 100:F0}%에 못 미친다"
+                                                   + $"(눈금 {ElevStepM:F0}m를 지키느라 내림한 몫 — 잘게 쪼개지 않는다)"
+                                                 : ""));
+        }
+        catch (System.Exception ex) { log.AppendLine("   표고 범위 지정 실패 — " + Brief(ex)); }
+    }
+
+    /// <summary>장식 하나가 자기 왼쪽·아래 끝을 알린다 — 여러 번 불리면 <b>가장 바깥</b>이 남는다.</summary>
+    private static void NoteDeco(double x, double y)
+    {
+        if (double.IsNaN(LastDecoMinX) || x < LastDecoMinX) LastDecoMinX = x;
+        if (double.IsNaN(LastDecoMinY) || y < LastDecoMinY) LastDecoMinY = y;
+    }
+
+    /// <summary>한 판이 시작될 때 지운다 — 지난 판의 자리가 남아 있으면 도곽이 <b>엉뚱하게 넓어진다</b>
+    /// (특히 축척이 바뀌면 옛 좌표는 전혀 다른 곳을 가리킨다).</summary>
+    private static void ResetDeco() { LastDecoMinX = double.NaN; LastDecoMinY = double.NaN; }
+
     /// <summary>★[JACK 0810] 도면 축척을 시트 축척에 맞춘다.
     /// Civil 3D는 밴드 높이·글자 크기를 <b>종이 크기 × 도면 축척</b>으로 그린다. 도면 축척이 1:1000인데
     /// 1:100으로 보면 모든 것이 10배로 보인다 — JACK이 본 '칸 높이가 이상해'가 정확히 이것이었다.</summary>
@@ -3210,8 +3459,30 @@ public static class SheetCommand
         //   모형의 도곽 사각형은 '한 장에 들어오는지 눈으로 대보는 자'다 — <b>자가 틀리면 대볼 수가 없다.</b>
         //   <see cref="ViewH"/> 하나만 보게 묶어 두면 배분을 또 바꿔도 저절로 따라온다.
         double vw = InnerW * s, vh = ViewH * s;
-        double cx = (ext.MinPoint.X + ext.MaxPoint.X) / 2.0;
-        double cy = (ext.MinPoint.Y + ext.MaxPoint.Y) / 2.0;
+
+        // ★★★[v32.31 · JACK 0813] <b>가운데가 아니라 좌측 아래에 붙인다.</b>
+        //   JACK: <i>"해당 종단뷰 범위 내에서 중심 배치 말고 좌측 아래로 배치되게 해줘. 그게 일반적이야.
+        //   이때 너무 딱 붙여서 축척 화살표가 너무 좌측벽과 아래에 너무 붙지 않게 해줘."</i>
+        //
+        //   <b>왜 좌측 아래인가.</b> 도면은 왼쪽 위에서 오른쪽으로 읽고, 종단도는 <b>측점이 왼쪽에서 시작</b>한다.
+        //   가운데 띄우면 시작점이 어디인지 매번 눈으로 찾아야 하고, 장이 여러 개가 되면 <b>장마다 시작 위치가 달라진다.</b>
+        //   왼쪽 아래에 붙이면 남는 자리가 항상 <b>오른쪽 위</b> 한 곳에 모인다.
+        //
+        //   <b>붙이되 닿지는 않게.</b> 여백을 0으로 하면 축척 배너가 도곽 선에 딱 붙어 답답하고,
+        //   배너 크기를 조금만 키워도 바로 밖으로 나간다. <b>종이 기준</b>으로 띄우므로 축척이 바뀌어도 눈에 같아 보인다.
+        double padL = PadLeftMm * s, padB = PadBottomMm * s;
+
+        // 왼쪽·아래 끝은 <b>종단뷰 상자와 그 밖에 그린 것</b> 중 더 바깥이다(표고바·축척 배너).
+        //   종전엔 가운데 정렬이라 남는 여백이 이것들을 덮어 줘서 챙길 필요가 없었다.
+        double leftX = ext.MinPoint.X, botY = ext.MinPoint.Y;
+        if (!double.IsNaN(LastDecoMinX)) leftX = System.Math.Min(leftX, LastDecoMinX);
+        if (!double.IsNaN(LastDecoMinY)) botY = System.Math.Min(botY, LastDecoMinY);
+
+        double cx = leftX - padL + vw / 2.0;      // 뷰 영역 한가운데(= 왼쪽 끝 + 여백에서 잰다)
+        double cy = botY - padB + vh / 2.0;
+        log.AppendLine($"도곽 자리: 좌측아래 정렬 · 종단뷰 왼쪽 {ext.MinPoint.X:F2}"
+                     + (double.IsNaN(LastDecoMinX) ? " (밖에 그린 것 없음)" : $" · 장식 왼쪽 {LastDecoMinX:F2} → {leftX:F2} 사용")
+                     + $" · 여백 종이 {PadLeftMm:F0}/{PadBottomMm:F0}mm = 모형 {padL:F2}/{padB:F2}m");
 
         // 지금은 토공 = 한 장(JACK: "토공 종단의 기준이야. 관로 종단은 별도 기준을 만들 거야").
         // 여러 장이 필요해지면 여기서 cx를 폭만큼 밀며 반복하면 된다 — 나머지 구조는 그대로다.

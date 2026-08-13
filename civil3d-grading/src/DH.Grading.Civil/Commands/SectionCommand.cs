@@ -579,10 +579,18 @@ public sealed class SectionCommand
         catch { }
     }
 
+    /// <summary>거절 사유를 알린다 — 명령창에 늘 쓰고, 팝업은 <b>조용한 재작성 중이 아닐 때만</b>.
+    ///
+    /// <para>★★[v32.35 · 검토 반영] JACK: <i>"재작성될 때 팝업 좀 없애."</i>
+    /// <see cref="ProfileCommand.Finish"/>만 막아서는 부족했다 — 실패 경로는 <b>여기</b>로 오는데
+    /// 여기가 팝업을 띄우면 측점을 찍을 때마다 확인 버튼을 눌러야 한다(요구와 정반대).</para>
+    ///
+    /// <para><b>그래도 침묵하지는 않는다.</b> 명령창 줄은 언제나 남는다 —
+    /// 조용히 실패하면 "버튼이 고장 났다"가 되고, 그건 팝업보다 나쁘다.</para></summary>
     internal static void Refuse(Editor ed, string msg)
     {
         ed.WriteMessage("\n[종단/횡단] " + msg.Replace("\n", " "));
-        AcadApp.ShowAlertDialog(msg);
+        if (!ProfileCommand.QuietRebuild) AcadApp.ShowAlertDialog(msg);
     }
 
     private static void Done(Editor ed, string msg)
