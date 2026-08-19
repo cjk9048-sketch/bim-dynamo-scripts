@@ -27,6 +27,7 @@ public sealed class SheetDialog : Window
     private readonly TextBox _xsecCols;
     private readonly Slider _groundTolZ;
     private readonly ComboBox _profileScale;
+    private readonly ComboBox _sectionScale;
     private readonly ComboBox _basemapRes;
 
     public SheetDialog(string okText = "저장")
@@ -68,6 +69,12 @@ public sealed class SheetDialog : Window
             "자동은 도곽에 가장 크게 들어가는 축척을 고릅니다. 도면을 여러 장 나란히 비교하거나 축척을 통일해야 하면 직접 고르세요.");
         _profileScale = AddCombo(root, "종단뷰 축척", GradingSettings.ProfileScaleLabels,
                                  GradingSettings.ProfileScaleIndex(), "");
+        _sectionScale = AddCombo(root, "단면검토선 축척", GradingSettings.ProfileScaleLabels,
+                                 GradingSettings.SectionLineScaleIndex(), "");
+        _sectionScale.ToolTip =
+            "평면도의 단면검토선에 붙는 측점 글씨 크기를 정합니다(종이 2.5mm — 종단 밴드와 같은 크기)."
+            + " 자동이면 도면에 걸린 축척을 따릅니다."
+            + " 검토선은 평면도에 놓이므로 종단도 축척과 별개입니다 — [저장]을 누르면 그 축척으로 다시 그립니다.";
         _profileScale.ToolTip =
             "자동 — 종단도가 도곽 안에 가장 크게 들어가는 표준 축척을 고릅니다(도면마다 달라질 수 있습니다).\n" +
             "직접 고르면 그 축척으로 고정됩니다.\n\n" +
@@ -165,6 +172,7 @@ public sealed class SheetDialog : Window
         // 축척은 목록에 있는 값만 고른다(0 = 자동) — 슬라이더와 같은 규칙이라 이상한 값이 들어올 길이 없다.
         double[] psv = GradingSettings.ProfileScaleValues;
         GradingSettings.ProfileScale = psv[System.Math.Clamp(_profileScale.SelectedIndex, 0, psv.Length - 1)];
+        GradingSettings.SectionLineScale = psv[System.Math.Clamp(_sectionScale.SelectedIndex, 0, psv.Length - 1)];
 
         GradingSettings.BasemapRes = GradingSettings.BasemapResValues[
             System.Math.Clamp(_basemapRes.SelectedIndex, 0, GradingSettings.BasemapResValues.Length - 1)];

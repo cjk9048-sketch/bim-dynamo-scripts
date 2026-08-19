@@ -27,7 +27,7 @@ public static class GradingSettings
     /// 이력은 설치본 확인에 쓰이므로 DLL에는 남기되, <b>출력은 절대 하지 않는다.</b>
     /// </para>
     /// ★[v32.20] 새 버전을 올릴 때 갱신할 곳은 <b>이 줄 하나</b>다 — 이력은 <c>작업과정.md</c>에 쓴다.</summary>
-    public const string Version = "v32.36 (2026-08-13)";
+    public const string Version = "v32.53 (2026-08-19)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -200,6 +200,28 @@ public static class GradingSettings
         double[] v = ProfileScaleValues;
         for (int i = 0; i < v.Length; i++)
             if (System.Math.Abs(v[i] - ProfileScale) < 1e-9) return i;
+        return 0;
+    }
+
+    /// <summary>★★[v32.49 · JACK 0819] <b>단면검토선 측점 글씨의 축척 — 0이면 도면 축척을 따른다.</b>
+    ///
+    /// <para>JACK: <i>"주석 축척 연동하지 말고 도면설정에 단면검토선 주석 축척 선택박스를 넣고
+    /// 저장을 누를 때 업데이트되게 바꾸자."</i></para>
+    ///
+    /// <para><b>왜 연동하지 않나.</b> AutoCAD 주석 축척에 물리면 사용자가 축척을 만질 때마다 도면이 변한다 —
+    /// 편하지만 <b>언제 무엇이 바뀔지 예측할 수 없다.</b> 여기서 고르고 [저장]을 누를 때만 바뀌면
+    /// <b>바뀌는 순간이 분명하다.</b> 도면설정 저장은 이미 종단도를 다시 그리므로(v32.29) 얹을 자리도 있다.</para>
+    ///
+    /// <para>검토선은 <b>평면도</b>에 놓이는데 평면 축척은 종단도 축척과 별개다 —
+    /// 그래서 <see cref="ProfileScale"/>과 <b>따로</b> 둔다. 목록은 같은 사다리를 쓴다.</para></summary>
+    public static double SectionLineScale = 0.0;
+
+    /// <summary>지금 값이 축척 목록의 몇 번째인가 — 목록에 없으면 <b>자동(0번)</b>.</summary>
+    public static int SectionLineScaleIndex()
+    {
+        double[] v = ProfileScaleValues;
+        for (int i = 0; i < v.Length; i++)
+            if (System.Math.Abs(v[i] - SectionLineScale) < 1e-9) return i;
         return 0;
     }
 
