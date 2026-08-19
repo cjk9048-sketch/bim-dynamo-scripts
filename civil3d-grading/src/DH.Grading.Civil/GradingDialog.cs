@@ -625,27 +625,28 @@ public sealed class GradingDialog : Window
             return;
         }
 
-        // [단높이 상한 — JACK 0721] 옹벽 단높이는 최대 5m. 초과 입력은 거부. (0803: 절토·성토 각각 검사)
-        if (cbh > 5.0 + 1e-9)
-        {
-            MessageBox.Show(this, "절토 단높이는 최대 5m까지만 가능합니다.", "입력 오류",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-            _cutBenchHeight.Focus(); _cutBenchHeight.SelectAll();
-            return;
-        }
-        if (fbh > 5.0 + 1e-9)
-        {
-            MessageBox.Show(this, "성토 단높이는 최대 5m까지만 가능합니다.", "입력 오류",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-            _fillBenchHeight.Focus(); _fillBenchHeight.SelectAll();
-            return;
-        }
 
         // [구배 하한 0.05 — JACK] 사용자가 0.05 이하(거의 수직 옹벽)를 넣어도 무조건 0.05로 처리.
         // 그 아래는 Civil3D TIN이 예기치 못한 오류를 내는 사례가 있어 미연 방지. (0 입력=옹벽 의도 → 0.05)
         const double slopeFloor = 0.05;
         if (cs > 0 && cs < slopeFloor) cs = slopeFloor; else if (cs == 0) cs = slopeFloor;
         if (fs > 0 && fs < slopeFloor) fs = slopeFloor; else if (fs == 0) fs = slopeFloor;
+
+        // ★★[JACK 0819] <b>단높이 상한 15m</b> — 그 위로는 사면이라 부르기 어렵고, 대소단(법정 15m)과도 어긋난다.
+        //   JACK: <i>"맥시멈은 15미터로 하고, 대소단은 자투리 생겨도 돼 — 10M로 설정하면 10M, 5M(자투리)가 생기는 게 맞어."</i>
+        //   <b>자투리는 막지 않는다.</b> 단높이 10m + 대소단 15m면 10m 사면 뒤 5m 자투리가 남는데,
+        //   그것이 실제 시공 모습이므로 <b>있는 그대로 보여준다</b>(GradingGeometry가 이미 그렇게 처리한다).
+        const double benchMax = 15.0;
+        if (cbh > benchMax + 1e-9 || fbh > benchMax + 1e-9)
+        {
+            MessageBox.Show(this,
+                $"단높이는 {benchMax:0.#}m 이하여야 합니다(절토 {cbh:0.##}m · 성토 {fbh:0.##}m).\n\n" +
+                "그보다 높은 사면은 한 단으로 세우지 않습니다 — 산지전용허가법의 대소단 간격도 15m입니다.",
+                "입력 오류", MessageBoxButton.OK, MessageBoxImage.Warning);
+            (cbh > benchMax ? _cutBenchHeight : _fillBenchHeight).Focus();
+            (cbh > benchMax ? _cutBenchHeight : _fillBenchHeight).SelectAll();
+            return;
+        }
 
         GradingSettings.CutBenchHeight = cbh;
         GradingSettings.CutBenchWidth = cbw;
