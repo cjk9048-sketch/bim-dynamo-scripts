@@ -547,7 +547,23 @@ public static class WallPanelDwg
         //   4분할은 판넬당 **조각 8개**(4분면 × L자를 사각 2개로)뿐이고 전부 **축에 나란한 사각**이라
         //   퇴화할 여지가 없다. 실물 PSM 판넬의 십자 줄눈과도 맞다.
         double gj = PatternJoint;                       // 줄눈 — 무늬끼리·무늬와 보호공 **모두 같은 값**
-        double hb = excludePocket ? Collar1Size / 2 + gj : gj / 2;   // 보호공 반폭 + 줄눈(콘크리트면 보호공 없음)
+        // ★★[JACK 0819] <b>보호공 여백을 판넬 크기에 맞춰 줄인다.</b>
+        //   판넬 상한이 1.5m로 내려가면서(단높이 ÷ 행 수) 작은 판넬이 생길 수 있는데,
+        //   보호공 반폭이 <b>고정</b>이면 위아래 무늬 자리가 <c>MinPatchSide</c>보다 얇아져 <b>조각이 통째로 사라진다</b>
+        //   (JACK 0805 '돌무늬가 생기다 말았다'와 같은 증상 — 그때는 옛 격자 무늬였다).
+        //   실측: 판넬 0.8m면 세로 조각이 0.04m로 하한 0.08m에 못 미친다.
+        //
+        //   → <b>줄눈을 줄여서라도 무늬 자리를 남긴다.</b> 단, <b>도넛 반폭은 절대 침범하지 않는다</b> —
+        //     그걸 넘으면 무늬가 정착구 돌출부를 파고들어 형상이 깨진다. 줄어드는 것은 <b>여유(줄눈)뿐</b>이다.
+        //   ※ 큰 판넬에서는 <c>hbCap</c>이 커서 종전 값이 그대로 쓰인다(1.25m 판넬 → 0.35m 그대로).
+        double hbWant = Collar1Size / 2 + gj;
+        double halfV = (maxV - minV) / 2 - PatternEdge;
+        //   ★[검토 0819] 바닥에 <b>최소 클리어런스 1cm</b>를 더한다 — 도넛 반폭에 딱 붙이면
+        //   판넬 V폭 0.80~0.81m 구간에서 <b>무늬와 도넛 줄눈이 0</b>이 되어 두 솔리드 면이 맞닿는다
+        //   (뷰어에서 z-fighting이 나고 JACK "줄눈 다 통일" 규격도 그 판넬에서만 깨진다).
+        const double hbFloorGap = 0.01;
+        double hbCap = System.Math.Max(Collar1Size / 2 + hbFloorGap, halfV - MinPatchSide - gj / 2);
+        double hb = excludePocket ? System.Math.Min(hbWant, hbCap) : gj / 2;   // 보호공 반폭 + 줄눈(콘크리트면 보호공 없음)
         double cu = p.PocketU, cvv = p.PocketV;         // 십자 중심 = 앵커보호공 중심
         // ★가장자리 물림은 **줄눈의 절반이 아니라 `PatternEdge`** 다. 이웃 판넬 사이엔 이미 판넬 줄눈(0.05m)이
         //   있으므로, 양쪽이 절반씩(0.035) 물리면 판넬을 건너는 줄눈이 0.035+0.05+0.035 = **0.12m**가 되어

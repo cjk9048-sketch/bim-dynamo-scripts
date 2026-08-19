@@ -1338,7 +1338,12 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
             //     판넬이 사다리꼴이 되면서(아랫변=토우·윗변=크레스트) **한 열 안에서도 행마다 폭이 다르다** —
             //     설계상 그런 것이지 잘린 게 아니다. 반면 데이라잇은 **위를 자르므로 높이가 줄어든다**.
             //     '잘렸는가'를 보려면 높이를 봐야 한다 — 원래 이 검사가 잡으려던 것도 그것이다.
-            double hMax = 0; foreach (var s in spans) hMax = Math.Max(hMax, s.Hi - s.Lo);
+            // ★[v32.58] 기준 높이는 <b>맨 위를 뺀 나머지</b>에서 잡는다. 맨 위 행은 데이라잇에 잘리기도 하고,
+            //   자투리가 실오라기가 되지 않게 <b>아래 행과 병합</b>되기도 해서 <b>더 클 수도</b> 있다.
+            //   전체 최대로 잡으면 그 병합된 맨 위가 기준이 되어 <b>멀쩡한 아래 행이 전부 "잘렸다"로 잡힌다</b>
+            //   (행 수가 늘어난 v32.54부터 병합이 실제로 일어난다).
+            double hMax = 0;
+            for (int k = 0; k + 1 < spans.Count; k++) hMax = Math.Max(hMax, spans[k].Hi - spans[k].Lo);
             for (int i = 0; i + 1 < spans.Count; i++)
                 if (spans[i].Hi - spans[i].Lo < hMax - 1e-6)
                 {
@@ -1478,9 +1483,13 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
             hMinT = Math.Min(hMinT, mxV3 - mnV3); hMaxT = Math.Max(hMaxT, mxV3 - mnV3);
             wMaxT = Math.Max(wMaxT, mxU3 - mnU3);
         }
-        // 줄눈(0.05) 인셋을 빼면 5m 단은 1.667−0.05 = 1.617 이어야 한다.
-        Check("S24 ★판넬 행 높이가 설계값(단높이÷3)", hMinT > 1.5 && hMaxT < 1.7,
-            $"행 높이 [{hMinT:F3}..{hMaxT:F3}]m (5m 단 → 1.62m 기대 · 1.25m면 4행으로 갈린 것)");
+        // ★[v32.58] 기대값을 <b>설계 규칙에서 직접</b> 얻는다 — 숫자를 박으면 규격이 바뀔 때마다 여기도 고쳐야 한다.
+        //   줄눈(0.05) 인셋을 뺀 값이 행 높이다. 5m 단 → SideFor 1.25 → 1.20m.
+        //   위쪽 여유(+0.15)는 맨 위 행이 자투리 병합으로 커질 수 있어서다.
+        double wantRow = WallBand.SideFor(5.0) - 0.05;
+        Check($"S24 ★판넬 행 높이가 설계값(단높이 ÷ {WallBand.RowsForBench(5.0)}행)",
+            hMinT > wantRow - 0.10 && hMaxT < wantRow + 0.15,
+            $"행 높이 [{hMinT:F3}..{hMaxT:F3}]m (5m 단 → {wantRow:F2}m 기대 · 상한 {WallBand.MaxSide:F2}m)");
         // ★ 정착구 보호구역(0.66m)이 판넬 높이의 절반을 넘으면 안 된다 — 넘으면 무늬 가운데가 통째로 빈다.
         Check("S24 ★정착구 보호구역이 판넬 높이를 잡아먹지 않는다", hMinT > 0.66 * 1.4,
             $"판넬 높이 {hMinT:F3}m vs 보호구역 0.66m (여유 {hMinT / 0.66:F2}배)");
@@ -2120,7 +2129,12 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
         var runH = new WallRun { Up = true, Bench = 0, Toe = toeH, Crest = crestH, Height = h };
         var tH = WallBand.Slice(runH, null, joint: 0.05);
         int rows = RowsOf(tH);
-        Check($"S28 ★단높이 {h}m → 3행(설계값)", rows == 3, $"행 {rows}개 · 판넬 {tH.Count}장");
+        // ★[v32.58] JACK 0819 규격 변경: 판넬 상한 1.5m(제작 규격) → 5m 단은 3행 1.67m가 아니라 **4행 1.25m**.
+        //   옛 기대값(3행)은 상한이 5/3이던 시절의 것이다.
+        //   ※ 4행이 되어도 무늬는 살아 있다 — 0806 십자 4분할로 바뀌면서 판넬당 조각이 8개(사각)뿐이고,
+        //     1.25m 판넬의 상하 조각이 0.265m로 하한 0.08m를 크게 넘는다(옛 격자 무늬 시절의 공포는 끝났다).
+        int wantH = WallBand.RowsForBench(h);
+        Check($"S28 ★단높이 {h}m → {wantH}행(설계값)", rows == wantH, $"행 {rows}개 · 판넬 {tH.Count}장 · 한 변 {WallBand.SideFor(h):F3}m");
     }
 }
 
@@ -2412,7 +2426,9 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
         Check($"S31 단높이 {h}m — 판넬이 나온다", t31.Count > 0, $"{t31.Count}장 · {WallBand.LastDiag}");
 
         int rows = RowsOfT(t31);
-        int want = Math.Max(WallBand.RowsFor(h), (int)Math.Ceiling((h - 0.5) / WallBand.MaxSide - 1e-9));
+        // ★[v32.58] 행 수 규칙이 RowsForBench 하나로 모였다(v32.54) — 하니스도 같은 자를 쓴다.
+        //   여기서 식을 다시 적으면 규칙이 두 벌이 되어, 고칠 때 한쪽만 고쳐진다.
+        int want = WallBand.RowsForBench(h);
         Check($"S31 단높이 {h}m — 행 {want}행(설계 규칙)", rows == want, $"실제 {rows}행 · 한 변 {WallBand.SideFor(h):F3}m");
 
         Check($"S31 단높이 {h}m — 한 변이 상한을 안 넘는다", WallBand.SideFor(h) <= WallBand.MaxSide + 1e-9,
@@ -2641,7 +2657,9 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
         // 판넬 폭 = 열 폭 − 줄눈(0.05). 코너가 없는 곧은 벽이라 모서리 겹침은 안 붙는다.
         double std = side35 - 0.05;
         var w = Widths(t35, std);
-        int rows = t35.Count > 0 ? 3 : 0;
+        // ★[v32.58] 행 수를 <b>설계 규칙에서</b> 얻는다 — 3을 박아 두면 규격이 바뀔 때 이 검사만 거짓말을 한다
+        //   (v32.54에서 판넬 상한이 1.5m가 되며 5m 단이 3행 → 4행이 됐다).
+        int rows = t35.Count > 0 ? WallBand.RowsForBench(5.0) : 0;
         Console.WriteLine($"      S35 길이 {L}m: 폭 {w.Min:F3}~{w.Max:F3}m(규격 {std:F3}m) · 규격미만 {w.NonStd}/{w.N}장");
         // 끝에서만 조절하므로 좁은 열은 최대 2열(자투리가 짧아 마지막 두 장을 반씩 나눈 경우).
         Check($"S35 ★길이 {L}m — 규격보다 좁은 판넬은 끝의 1~2열뿐", w.NonStd <= 2 * rows,
