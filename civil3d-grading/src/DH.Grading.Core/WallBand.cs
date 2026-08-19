@@ -886,6 +886,25 @@ public static class WallBand
                     drop = (okS && okE) ? (cs >= ce ? i : i + 1) : (okS ? i : i + 1);
                 }
                 if (k < 0) break;
+                // ★★★[JACK 0819 '코너부면 무조건 ㄱ자 쐐기'] <b>지우는 경계의 꺾임을 남는 이웃에 넘긴다.</b>
+                //
+                //   종전엔 경계를 지우면 그 <b>꺾임이 그냥 사라졌다</b>. 코너가 한 정점에서 딱 꺾이지 않고
+                //   <b>완만하게 여러 정점으로</b> 돌아가면(실측: 급커브 분할 36열) 조각마다 12°를 넘어 끊기지만,
+                //   각 조각이 짧고 꺾임이 45° 이내라 <b>전부 다시 합쳐진다</b> —
+                //   20°씩 네 번이면 결과는 <b>80° 코너인데 벽면 1개</b>다.
+                //   벽면이 하나면 <c>cornerAtStart/End</c>가 둘 다 거짓이라 <b>ㄱ자 쐐기가 설 자리가 없다</b>
+                //   (JACK 스샷: 코너부만 위로 갈수록 벌어진다).
+                //
+                //   → 누적하면 <b>20°씩 세 번째에서 60°</b>가 되어 45°를 넘고, 거기서 합치기가 멈춘다.
+                //     한 번에 45°든 나눠서 45°든 <b>판넬이 가로지르면 평면이 깨지는 것은 같다</b> —
+                //     그것이 이 한계값의 본래 뜻이다.
+                int keep = (drop == k) ? k + 1 : k;
+                if (keep >= 0 && keep < c.Count && !double.IsNaN(c[drop]) && !double.IsNaN(c[keep]))
+                {
+                    double dDrop = System.Math.Acos(System.Math.Clamp(c[drop], -1.0, 1.0));
+                    double dKeep = System.Math.Acos(System.Math.Clamp(c[keep], -1.0, 1.0));
+                    c[keep] = System.Math.Cos(System.Math.Min(System.Math.PI, dKeep + dDrop));
+                }
                 b.RemoveAt(drop); c.RemoveAt(drop);
             }
         }
