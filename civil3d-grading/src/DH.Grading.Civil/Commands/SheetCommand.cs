@@ -50,17 +50,19 @@ public static class SheetCommand
     /// 자동으로 고르면 도면마다 축척이 달라져 비교가 안 되고, 회사 스타일도 특정 축척을 전제한다.</summary>
     private const double VScale = 200.0, HScale = 1000.0;
 
-    /// <summary>흔히 쓰는 표준 축척 — 이 중에서만 고른다(현장에서 읽을 수 있는 값이어야 한다).</summary>
-    /// <summary>★[JACK 0810 확정] "축척은 1:50, 1:80, 1:100, 1:120, 1:150, 1:200 이렇게 세분화하고
-    /// 1:200 이상은 설계도서에서 주로 쓰는 축척으로 가져가."
-    /// <para>200 이하를 촘촘히 둔 이유: 부지정지 종단도는 짧은 구간을 크게 그리는 일이 많아
-    /// 100→200으로 건너뛰면 그림이 절반으로 줄어 자리가 크게 남는다(참고 도면도 1:120이었다).
-    /// 200 위로는 설계도서 관례값(250·300·500·600·1000·1200·2000·2500·3000·5000)만 쓴다 —
-    /// 도면에 적힌 축척은 현장에서 자로 재는 값이라 관례를 벗어나면 안 된다.</para></summary>
+    /// <summary>★★[JACK 0819 확정] <b>기준 축척 사다리 — 이 중에서만 고른다.</b>
+    /// <c>1:20 · 25 · 50 · 75 · 80 · 100 · 120 · 150 · 200 · 250 · 300 · 500 · 600 · 750</c>
+    /// <c> · 1000 · 1200 · 1250 · 2000 · 2500 · 3000 · 5000</c>
+    ///
+    /// <para>도면에 적힌 축척은 <b>현장에서 자로 재는 값</b>이라 관례를 벗어나면 안 된다.
+    /// 작은 쪽(20·25)은 상세도, 200 이하는 부지정지 종단도가 짧은 구간을 크게 그릴 때 쓴다 —
+    /// 촘촘해야 <c>100→200</c> 같은 건너뜀으로 그림이 절반이 되는 일을 막는다.</para>
+    ///
     /// <para>★[v32.30] <b>도면설정의 축척 목록도 이 배열을 그대로 쓴다</b>(<c>GradingSettings.ProfileScaleValues</c>) —
-    /// 사다리가 두 벌이면 한쪽만 고쳐진다. 그래서 <c>internal</c>이다.</para>
+    /// 사다리가 두 벌이면 한쪽만 고쳐진다. 그래서 <c>internal</c>이다.</para></summary>
     internal static readonly double[] Scales =
-        { 50, 80, 100, 120, 150, 200, 250, 300, 500, 600, 1000, 1200, 2000, 2500, 3000, 5000 };
+        { 20, 25, 50, 75, 80, 100, 120, 150, 200, 250, 300, 500, 600, 750,
+          1000, 1200, 1250, 2000, 2500, 3000, 5000 };   // ★[JACK 0819 확정] — 오름차순 유지 필수(첫 초과값을 고른다)
 
     private static double InnerW => SheetW - 2 * MarginLR;              // 791
     private static double InnerH => SheetH - MarginTop - MarginBottom;  // 524
@@ -107,6 +109,17 @@ public static class SheetCommand
     /// 그림이 한 단계(20~60%) 작아진다 — 8% 여백을 사려고 그만큼을 내주는 셈이다.
     /// 여백은 올림이 남기는 몫으로 얻고, 이 값은 <b>못 미쳤을 때 로그로 알리는 임계</b>로만 쓴다.</para></summary>
     private const double Fill = 0.92;
+
+    /// <summary>★★★[v32.51 · JACK 0819 "자꾸 범위에서 종단도가 넘어가"] <b>왼쪽 축이 먹는 종이 폭</b>(mm).
+    ///
+    /// <para><b>경계상자를 믿을 수 없다.</b> 같은 도면인데 실행마다 축 자리가 <c>5.00m</c>였다가 <c>0.50m</c>로 나온다 —
+    /// 재는 시점에 축 글자가 이미 그려졌는지 아닌지에 따라 갈린다. 그 값으로 폭을 잡으면
+    /// <b>어떤 때는 맞고 어떤 때는 넘친다.</b></para>
+    ///
+    /// <para>→ <b>종이 기준 상수로 예약한다.</b> 축 글자·표고바는 <b>종이 크기가 고정</b>이므로
+    /// (글자 2.5mm·눈금 17.6mm·표고바 2.1mm…) 축척이 바뀌어도 종이에서 차지하는 폭은 같다.
+    /// 실측(1:100에서 50mm)에 맞춰 잡는다 — <b>모형이 아니라 종이에서 재는 것</b>이 요점이다.</para></summary>
+    private const double AxisRoomMm = 50.0;
 
     /// <summary>★★[v32.31 · JACK 0813] 좌측 아래 정렬에서 <b>도곽 선과 도면 사이를 띄우는 양</b>(종이 mm).
     /// <i>"너무 딱 붙여서 축척 화살표가 너무 좌측벽과 아래에 너무 붙지 않게 해줘."</i>
@@ -273,6 +286,9 @@ public static class SheetCommand
         var frames = DrawModelFrames(db, ext, scale, log);
 
         DumpBands(db, pvId, log);   // ★ 마지막 상태를 통째로 — 다음 판에서 로그만 보고 짚게
+        FixDraggedState(db, pvId, log);     // ★[v32.38] 밀기 전에 — 끌어 옮겨도 눕지 않게(설명은 그 함수에)
+        SpreadBandLabels(db, scale, log);   // ★[v32.38] 떡진 밴드 값을 오른쪽으로 밀어 떨어뜨린다
+        DumpBandLabels(db, log);            // ★[v32.37] 민 뒤의 상태를 남긴다(간격이 벌어졌는지)
 
         // ── ⑤ 배치탭 도면화는 **여기서 끊는다**.
         //   ★★[JACK 0813] <i>"일단 배치탭에 도면화하는건 삭제해봐. 먼저 모형탭에서 잘만들어지면
@@ -368,9 +384,27 @@ public static class SheetCommand
                 //     못 읽으면 종전대로 경계상자로 물러난다.
                 double wRange = StationSpan(db, pvId);
                 double wBox = e0.MaxPoint.X - e0.MinPoint.X;
-                double wM0 = wRange > 1e-6 ? wRange : wBox;
+                // ★★★[v32.47 · JACK 0819 "폭이 넘어갔어"] <b>측점범위만 재면 왼쪽 축 자리를 빠뜨린다.</b>
+                //
+                //   실측(0819): 측점범위 <c>78.85m</c>(종이 789mm)로 재서 자리(791mm)에 <b>딱 맞췄는데</b>
+                //   실제 그림은 경계상자 <c>83.85m</c>(838mm)라 <b>47mm가 넘쳤다.</b>
+                //   그 차 <c>5.0m</c>는 <b>왼쪽 축 글자·축 오프셋</b>이 먹는 자리다 — 눈에 보이는 그림의 일부인데
+                //   측점범위에는 들어 있지 않다.
+                //
+                //   <b>v32.4가 경계상자를 버린 이유는 여전히 옳다</b> — 그때는 <see cref="SetDrawingScale"/>이
+                //   이 함수 <b>안</b>에 있어 축척을 걸고 다시 재면 경계상자가 <c>68.6m → 664.6m</c>로 부풀었다.
+                //   지금은 축척을 <see cref="Build"/>에서 <b>한 번만</b> 걸므로 그 폭주가 없다
+                //   (이번 로그: 여분이 1차·2차 모두 <c>5.0m</c>로 일정하다).
+                //
+                //   → <b>측점범위에 여분을 더해 쓴다.</b> 단, 여분이 <b>측점범위의 35%를 넘으면</b> 그것은
+                //   부푼 값이므로 믿지 않고 버린다 — 옛 폭주가 되살아나도 그림이 여덟 배 작아지지는 않는다.
+                double extra = wRange > 1e-6 ? System.Math.Max(0.0, wBox - wRange) : 0.0;
+                bool extraSane = wRange > 1e-6 && extra <= wRange * 0.35;
+                double wM0 = wRange > 1e-6 ? wRange + (extraSane ? extra : 0.0) : wBox;
                 log.AppendLine($"그래프 폭: 측점범위 {wRange:F2}m · 경계상자 {wBox:F2}m(축 글자 포함)"
-                             + $" → {wM0:F2}m 사용{(wRange > 1e-6 ? "" : " ⚠측점범위를 못 읽어 경계상자로 물러남")}");
+                             + $" → {wM0:F2}m 사용(측점범위 + 축 자리 {(extraSane ? extra : 0):F2}m)"
+                             + (wRange <= 1e-6 ? " ⚠측점범위를 못 읽어 경계상자로 물러남"
+                                : extraSane ? "" : $" ⚠여분 {extra:F2}m는 측점범위의 35%를 넘어 부푼 값으로 보고 버렸다"));
 
                 // ★★[JACK 0810 계측] 밴드는 **종이 크기로 정의**되어 있다(BandHeight=0.003 = 3mm).
                 //   그 값에 도면 축척이 곱해져 모형 크기가 된다. 그래서 밴드가 종이에서 차지하는
@@ -440,7 +474,10 @@ public static class SheetCommand
                 // ★[v23.5] 밴드가 뷰 자리를 통째로 먹은 경우를 **따로 잡는다.** 종전엔 센티넬 1e9가
                 //   그대로 흘러 로그에 `높이 1:1000000000`이 찍히고 정작 진짜 원인이 안 적혔다.
                 bool noRoom = availMm <= 1.0;
-                double needW = wM0 * 1000.0 / InnerW;
+                // ★[v32.51] 축 자리를 <b>먼저 떼어 두고</b> 남은 폭에 측점범위를 맞춘다.
+                //   종전은 경계상자에서 얻은 여분을 더했는데 그 값이 실행마다 달라 넘치곤 했다.
+                double usableW = System.Math.Max(50.0, InnerW - AxisRoomMm);
+                double needW = wRange * 1000.0 / usableW;
                 double needH0 = noRoom ? double.PositiveInfinity : hM0 * 1000.0 / availMm;
                 double want = System.Math.Max(needW, needH0);
                 double s0 = Scales.FirstOrDefault(s => s >= want);
@@ -487,7 +524,7 @@ public static class SheetCommand
                                       : ""));
                 }
                 log.AppendLine($"종이에서 {wM0 * 1000.0 / s0:F0}mm × (그래프 {hM0 * 1000.0 / s0:F0} + 밴드 {bandMm:F1})mm"
-                             + $" = {wM0 * 1000.0 / s0:F0}×{hM0 * 1000.0 / s0 + bandMm:F0}mm (자리 {InnerW:F0}×{ViewH:F0}mm)"
+                             + $" = {wRange * 1000.0 / s0:F0}×{hM0 * 1000.0 / s0 + bandMm:F0}mm (자리 {usableW:F0}×{ViewH:F0}mm · 축 자리 {AxisRoomMm:F0}mm 뺀 폭)"
                              + (overflow ? " ⚠넘침" : ""));
                 // ★★[v32.4] <b>도면 축척은 여기서 걸지 않는다 — 재는 도중에 자를 바꾸는 셈이다.</b>
                 //   이 함수는 <see cref="ExtendTail"/> 뒤에 <b>한 번 더</b> 불린다. 여기서 축척을 걸면
@@ -2758,6 +2795,31 @@ public static class SheetCommand
                         ts.OffsetX = 0; ts.OffsetY = 0;
                         log.AppendLine($"   V·H 표시 후: 자리 {ts.Location} · 정렬 {ts.Justification} (그래프 위 가운데)");
                     }
+
+            // ★★★[v32.40 · JACK 0819] <b>그래프 제목(V·H)을 끈다 — 축척은 화살표 배너가 이미 말한다.</b>
+            //
+            //   JACK: <i>"아래 우리가 화살표 안에 축척 넣었는데 그래프 부분에 축척이 또 있거든.
+            //   이건 숨기거나 삭제해줘."</i>
+            //
+            //   <b>같은 것을 두 번 적으면 둘이 어긋날 때 어느 쪽이 참인지 알 수 없다.</b>
+            //   축척 배너(<see cref="PlaceScaleBanner"/>)는 우리가 그리는 것이라 늘 최종 축척을 말하는데,
+            //   그래프 제목은 Civil이 <b>뷰 스타일의 수직과장</b>으로 찍는다 — 출처가 다르다.
+            //   회사 참고 도면(C-005)도 'S = 1 : 100' 한 줄뿐이다.
+            //
+            //   <b>글자를 비우지 않고 표시를 끈다.</b> 내용만 지우면 자리는 남아 위쪽 여백을 계속 먹는다
+            //   (경계상자에도 들어간다). 표시를 끄면 자리째 사라진다.
+            //   ※ 되살릴 일이 생기면 이 블록만 지우면 된다 — 자리·정렬은 바로 위에서 그대로 잡아 두었다.
+            try
+            {
+                if (tr.GetObject(pv.StyleId, OpenMode.ForWrite) is CivilDb.Styles.ProfileViewStyle vsT)
+                {
+                    using var dsT = vsT.GetDisplayStylePlan(CivilDb.Styles.ProfileViewDisplayStyleType.GraphTitle);
+                    bool wasT = dsT.Visible;
+                    dsT.Visible = false;
+                    log.AppendLine($"   그래프 제목(V·H): 표시 {wasT}→false (축척은 화살표 배너가 말한다)");
+                }
+            }
+            catch (System.Exception ex) { log.AppendLine("   그래프 제목 끄기 실패 — " + Brief(ex)); }
             }
             catch (System.Exception ex) { log.AppendLine("   V·H 표시 실패 — " + Brief(ex)); }
 
@@ -3548,6 +3610,8 @@ public static class SheetCommand
         {
             LayFrameModel, LayFrame, LayScaleBar, LayTitleDeco, LayVgpGrid,
             ProfileCommand.LayerRoute, ProfileCommand.LayerChain,
+            // ★[v32.50] 단면검토선에 그린 지시선·측점 글씨 — 없으면 다시 그릴 때 겹쳐 쌓인다(JACK 0819)
+            ProfileCommand.LayerSlMajor, ProfileCommand.LayerSlMinor, ProfileCommand.LayerSlTextOld,
         };
         try
         {
@@ -4024,5 +4088,259 @@ public static class SheetCommand
             tr.Commit();
         }
         return per.ObjectId;
+    }
+
+    /// <summary>★★★[v32.37 계측 · JACK 0813] <b>밴드 값 글씨를 손으로 옮길 수 있는가 — 판정 한 줄.</b>
+    ///
+    /// <para>JACK: <i>"측점이 너무 가까워서 밴드의 값이 떡졌을 때… 실무에서는 값 글씨가 해당 측점 눈금에서
+    /// 벗어나더라도 문자를 좌측에서 우측으로 딱 붙게 정렬해서 표현하거든? 이게 가능할까?"</i></para>
+    ///
+    /// <para><b>메타데이터는 된다고 말한다</b>(<c>apidump</c> 조사):
+    /// <c>ProfileDataBandLabelGroup</c>·<c>SectionalDataBandLabelGroup</c>이 모두 <c>LabelGroup</c> 파생이고,
+    /// <c>LabelGroup.SubEntities → LabelGroupSubEntity</c>에 <b><c>LabelLocation</c>·<c>DraggedOffset</c>이
+    /// get/set</b>으로 있다. 되돌리는 길(<c>ResetAllSubCommonLabelLocations</c>)까지 있다.</para>
+    ///
+    /// <para><b>그런데 손에 넣는 길이 아직 없다.</b> <see cref="DumpBands"/>가 이미
+    /// <c>GetLabelIds</c>·<c>GetProfileViewLabelIds</c>를 <b>둘 다</b> 써 봤는데 <b>비어 있었다.</b>
+    /// 그러면 이 그룹들은 <b>종단도에 매달려 있지 않다</b>는 뜻이다 — 도면에 독립 객체로 놓여 있을 것이다
+    /// (JACK 스샷: 값을 클릭하면 <b>값마다 그립</b>이 생긴다. 그립이 생기면 집을 수 있다).</para>
+    ///
+    /// <para>→ <b>모형공간을 통째로 훑어</b> <c>LabelGroup</c> 파생을 전부 센다. 실행 한 번이면 닫힌다:
+    /// 잡히면 <c>LabelLocation</c>을 읽어 겹치는 것만 밀어내면 되고, 안 잡히면 순정으로는 길이 없다는 확증이다.</para>
+    ///
+    /// <para>⚠ <b>고치지 않는다 — 읽기만 한다.</b> 무엇을 어떻게 옮길지는 이 로그를 보고 정한다.</para></summary>
+    private static void DumpBandLabels(Database db, System.Text.StringBuilder log)
+    {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+            var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
+
+            int groups = 0;
+            var lines = new List<string>();
+            foreach (ObjectId id in ms)
+            {
+                object o;
+                try { o = tr.GetObject(id, OpenMode.ForRead); } catch { continue; }
+                if (o is not CivilDb.LabelGroup lg) continue;
+                groups++;
+
+                string kind = o.GetType().Name;
+                uint n = 0;
+                try { n = lg.SubEntityCount; } catch { }
+
+                // 앞 몇 개의 자리를 찍는다 — <b>겹침을 눈으로 확인</b>할 수 있어야 한다.
+                //   가로(X)로 늘어서므로 X만 보면 얼마나 붙었는지 나온다.
+                var xs = new List<double>();
+                for (uint i = 0; i < n && i < 6; i++)
+                {
+                    try
+                    {
+                        var se = lg.GetAt(i);
+                        if (se == null) continue;
+                        xs.Add(se.LabelLocation.X);
+                    }
+                    catch { }
+                }
+                string gap = "";
+                if (xs.Count >= 2)
+                {
+                    double min = double.MaxValue;
+                    for (int i = 1; i < xs.Count; i++) min = System.Math.Min(min, System.Math.Abs(xs[i] - xs[i - 1]));
+                    gap = $" · 앞 {xs.Count}개 최소간격 {min:F3}m";
+                }
+                lines.Add($"      {kind} — 하위 라벨 {n}개{gap}");
+            }
+            tr.Commit();
+
+            log.AppendLine(groups == 0
+                ? "    [밴드 라벨 조사] 모형공간에 LabelGroup이 하나도 없다 — 순정 라벨을 집을 길이 없다(직접 그리는 수밖에)"
+                : $"    [밴드 라벨 조사] LabelGroup {groups}개를 찾았다 — LabelLocation을 읽을 수 있으면 밀어내기가 된다");
+            foreach (string s in lines) log.AppendLine(s);
+        }
+        catch (System.Exception ex) { log.AppendLine("    [밴드 라벨 조사] 실패 — " + Brief(ex)); }
+    }
+
+    /// <summary>★★[v32.38 · JACK 0813] 밴드 값 글씨가 서로 <b>이만큼은 떨어져야 한다</b>(종이 mm).
+    /// <para>글씨는 <b>세로로</b> 쓰므로 가로 폭이 곧 <b>글자 높이</b>(<see cref="CalsT25"/> = 2.5mm)다.
+    /// 거기에 숨 쉴 틈 0.6mm를 더한다 — 딱 붙이면 읽을 때 두 숫자가 한 덩어리로 보인다.</para></summary>
+    private const double MinLabelGapMm = 3.1;
+
+    /// <summary>★★★[v32.38 · JACK 0813] <b>떡진 밴드 값을 오른쪽으로 밀어 떨어뜨린다.</b>
+    ///
+    /// <para>JACK: <i>"측점이 너무 가까워서 밴드의 값이 떡졌을 때… 실무에서는 값 글씨가 해당 측점 눈금에서
+    /// 벗어나더라도 문자를 좌측에서 우측으로 딱 붙게 정렬해서 표현하거든?"</i></para>
+    ///
+    /// <para><b>왜 솎아내지 않는가.</b> 겹친다고 값을 지우면 <b>그 자리의 숫자가 도면에서 사라진다</b> —
+    /// 도면은 읽는 사람이 숫자를 세어 보는 물건이라, 자리가 어긋나는 것보다 없는 것이 훨씬 나쁘다.
+    /// 실무가 눈금에서 벗어나면서까지 다 적는 이유가 그것이다.</para>
+    ///
+    /// <para><b>어떻게 미는가.</b> 왼쪽부터 훑으며 <b>앞 글씨와의 간격</b>을 본다.
+    /// 모자라면 그만큼 오른쪽으로 밀고, 밀린 자리를 기준으로 다음 글씨를 다시 본다 —
+    /// 그래서 여럿이 몰려 있으면 <b>줄줄이 밀려 나란히</b> 선다(JACK이 말한 "좌측에서 우측으로 딱 붙게").</para>
+    ///
+    /// <para><b>왜 순정 라벨을 그대로 쓰는가.</b> 값(지반고·계획고·절성고·누가거리)은 Civil이 단면검토선마다
+    /// 계산해 넣는다. 직접 그리면 그 계산을 전부 떠안아야 하는데, <b>자리만 옮기면</b> 값은 그대로 살아 있다.
+    /// 되돌리는 길도 순정에 있다(<c>ResetAllSubCommonLabelLocations</c>).</para>
+    ///
+    /// <para>⚠ <b>매번 다시 민다.</b> 종단도를 다시 그리면 라벨이 새로 만들어져 오프셋이 사라진다 —
+    /// 그래서 <see cref="Build"/> 끝에서 늘 부른다. 사용자가 손으로 옮겨 둔 것도 함께 덮이는데,
+    /// 어차피 다시 그리는 순간 그 손질은 사라지므로 새로 잃는 것은 없다.</para></summary>
+    private static void SpreadBandLabels(Database db, double scale, System.Text.StringBuilder log)
+    {
+        try
+        {
+            double minGap = MinLabelGapMm / 1000.0 * scale;      // 종이 mm → 모형 m
+            int groups = 0, moved = 0;
+            double worstBefore = double.MaxValue, worstAfter = double.MaxValue;
+
+            using var tr = db.TransactionManager.StartTransaction();
+            var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+            var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
+
+            foreach (ObjectId id in ms)
+            {
+                object o;
+                try { o = tr.GetObject(id, OpenMode.ForWrite); } catch { continue; }
+                // 밴드 값 글씨만 — 선형 라벨(측점·기하점)은 종단도 밖의 것이라 건드리지 않는다.
+                if (o is not CivilDb.LabelGroup lg) continue;
+                string kind = o.GetType().Name;
+                if (!kind.Contains("BandLabelGroup")) continue;
+
+                uint n;
+                try { n = lg.SubEntityCount; } catch { continue; }
+                if (n < 2) continue;
+                groups++;
+
+                // ① 자리를 읽어 <b>왼쪽부터</b> 줄 세운다. 목록 순서가 측점 순서라는 보장이 없다.
+                var items = new List<(uint I, double X)>();
+                for (uint i = 0; i < n; i++)
+                {
+                    try
+                    {
+                        var se = lg.GetAt(i);
+                        if (se != null) items.Add((i, se.LabelLocation.X));
+                    }
+                    catch { }
+                }
+                if (items.Count < 2) continue;
+                items.Sort((a, b) => a.X.CompareTo(b.X));
+
+                for (int k = 1; k < items.Count; k++)
+                    worstBefore = System.Math.Min(worstBefore, items[k].X - items[k - 1].X);
+
+                // ② 앞 글씨가 놓인 자리를 기준으로, 모자라면 그만큼 민다.
+                //    <b>민 자리를 기준으로</b> 다음을 보므로 몰려 있으면 줄줄이 밀려 나란히 선다.
+                double prev = double.NegativeInfinity;
+                foreach (var it in items)
+                {
+                    double want = System.Math.Max(it.X, prev + minGap);
+                    double dx = want - it.X;
+                    if (dx > 1e-9)
+                    {
+                        try
+                        {
+                            var se = lg.GetAt(it.I);
+                            if (se != null)
+                            {
+                                se.DraggedOffset = new Vector3d(dx, 0, 0);
+                                // 옮긴 글씨에 지시선이 붙으면 밴드 칸이 지저분해진다 — 끈다.
+                                try { se.LeaderVisibility = Autodesk.Civil.LeaderVisibilityType.AlwaysHide; } catch { }
+                                moved++;
+                            }
+                        }
+                        catch { }
+                    }
+                    prev = want;
+                    if (worstAfter > minGap * 0.999) worstAfter = minGap;
+                }
+            }
+            tr.Commit();
+
+            if (groups == 0) { log.AppendLine("  밴드 값 벌리기: 밴드 라벨 그룹을 못 찾았다"); return; }
+            log.AppendLine($"  밴드 값 벌리기: 그룹 {groups}개 · 옮긴 글씨 {moved}개"
+                         + $" · 최소간격 {(worstBefore == double.MaxValue ? 0 : worstBefore):F3}m"
+                         + $" → {minGap:F3}m 이상(종이 {MinLabelGapMm:F1}mm)"
+                         + (moved == 0 ? "  ※겹친 곳이 없어 그대로 뒀다" : ""));
+        }
+        catch (System.Exception ex) { log.AppendLine("  밴드 값 벌리기 실패 — " + Brief(ex)); }
+    }
+
+    /// <summary>★★★[v32.38 · JACK 0813] <b>밀어낸 글씨가 눕고 색이 바뀌는 것을 막는다.</b>
+    ///
+    /// <para>JACK: <i>"옮겨는 졌어. 문제는 가로로 누워버렸어. 내가 수동으로 해봐도 기즈모를 이동시키는 순간
+    /// 저렇게 되더라고. 글씨 색상과 방향이 통일이 되어야 해. 레이블 스타일 작성기에서 끌어온 상태를 좀 조정해봐."</i></para>
+    ///
+    /// <para><b>JACK이 자리를 정확히 짚었다.</b> Civil은 라벨을 끌어 옮기면 <b>다른 그림으로 바꿔 그린다</b> —
+    /// 라벨 스타일의 <b>'끌어온 상태(Dragged State)'</b>가 그 모습을 따로 정하기 때문이다.
+    /// 기본값이 <c>StackedText</c>(가로로 쌓은 글자)라, 세로로 세워 둔 값이 <b>눕고 색까지</b> 그 설정을 따라간다.
+    /// 손으로 끌어도 똑같이 되는 것이 그 증거다 — <b>우리 코드 탓이 아니라 스타일 탓</b>이다.</para>
+    ///
+    /// <para>→ <c>DisplayType = Composed</c>로 바꾼다. <b>'구성한 그대로'</b>라는 뜻이라,
+    /// 자리만 옮기고 <b>모양·방향·색은 원래 구성요소를 그대로</b> 쓴다. 색을 따로 맞출 필요가 없다 —
+    /// 애초에 덮어쓰지 않게 되는 것이라, 값 행마다 색을 지정하는 것보다 <b>고칠 곳이 하나</b>다.</para>
+    ///
+    /// <para>⚠ <b>스타일을 고치면 도면에 남는다</b>(§25 교훈 7). 그래서 <b>밴드가 쓰는 라벨 스타일만</b> 만진다 —
+    /// 도면의 모든 라벨 스타일을 훑으면 종단 라벨·선형 라벨까지 바꿔 버린다.</para></summary>
+    private static void FixDraggedState(Database db, ObjectId pvId, System.Text.StringBuilder log)
+    {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var pv = (CivilDb.ProfileView)tr.GetObject(pvId, OpenMode.ForRead);
+
+            // ── 밴드가 쓰는 라벨 스타일 ID를 모은다(밴드 종류마다 들고 있는 이름이 다르다).
+            var ids = new List<ObjectId>();
+            void Add(ObjectId id) { if (!id.IsNull && !ids.Contains(id)) ids.Add(id); }
+
+            using (var items = pv.Bands.GetBottomBandItems())
+                for (int i = 0; i < items.Count; i++)
+                {
+                    ObjectId sid;
+                    try { sid = items[i].BandStyleId; } catch { continue; }
+                    if (sid.IsNull) continue;
+                    object bs;
+                    try { bs = tr.GetObject(sid, OpenMode.ForRead); } catch { continue; }
+
+                    if (bs is CivilDb.Styles.SectionalDataBandStyle sdb)
+                    {
+                        try { Add(sdb.IncrementalSectionDataLabelStyleId); } catch { }
+                        try { Add(sdb.SampleLineStationLabelStyleId); } catch { }
+                    }
+                    else if (bs is CivilDb.Styles.ProfileDataBandStyle pdb)
+                    {
+                        try { Add(pdb.MajorIncrementLabelStyleId); } catch { }
+                        try { Add(pdb.MinorIncrementLabelStyleId); } catch { }
+                        try { Add(pdb.VGPLabelStyleId); } catch { }
+                        try { Add(pdb.HGPLabelStyleId); } catch { }
+                        try { Add(pdb.IncrementalDistanceLabelStyleId); } catch { }
+                        try { Add(pdb.StationEquationLabelStyleId); } catch { }
+                    }
+                }
+
+            // ── 각 스타일의 '끌어온 상태'를 <b>구성한 그대로</b>로.
+            int ok = 0, fail = 0;
+            foreach (ObjectId sid in ids)
+            {
+                try
+                {
+                    if (tr.GetObject(sid, OpenMode.ForWrite) is not CivilDb.Styles.LabelStyle ls) continue;
+                    var props = ls.Properties;
+                    if (props == null) continue;
+                    using var dsc = props.DraggedStateComponents;
+                    using var dt = dsc.DisplayType;
+                    dt.Value = Autodesk.Civil.LabelContentDisplayType.Composed;
+                    ok++;
+                }
+                catch { fail++; }
+            }
+            tr.Commit();
+
+            log.AppendLine($"  끌어온 상태: 라벨 스타일 {ids.Count}개 중 {ok}개를 '구성한 그대로'로"
+                         + (fail > 0 ? $" (실패 {fail}개)" : "")
+                         + "  ※끌어 옮겨도 눕지 않고 색도 그대로다");
+        }
+        catch (System.Exception ex) { log.AppendLine("  끌어온 상태 설정 실패 — " + Brief(ex)); }
     }
 }

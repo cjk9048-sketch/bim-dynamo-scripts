@@ -28,6 +28,16 @@ public sealed class ProfileCommand
 {
     /// <summary>사용자가 그린 노선이 놓이는 레이어 — <b>노란색</b>(JACK 지정).</summary>
     internal const string LayerRoute = "DH-종단노선";
+
+    /// <summary>★[v32.50] 단면검토선에 우리가 그리는 것들의 레이어 — <b>그리는 쪽과 지우는 쪽이 같은 이름을 본다.</b>
+    /// <para>JACK 0819: 축척을 바꿔 다시 그렸더니 <b>옛 글씨가 안 지워져 겹쳤다</b> —
+    /// <see cref="SheetCommand.EraseAll"/>이 지우는 레이어 목록에 이것들이 없었기 때문이다.
+    /// 이름을 상수로 올려 두면 한쪽만 고쳐질 여지가 사라진다(이 저장소의 단골 실패).</para>
+    /// <para><c>DH-검토선측점</c>은 <b>v32.44까지 글씨를 담던 레이어</b>다. 지금은 안 쓰지만
+    /// <b>옛 도면에 남아 있으므로</b> 청소 목록에는 남긴다.</para></summary>
+    internal const string LayerSlMajor = "DH-검토선(정측점)";
+    internal const string LayerSlMinor = "DH-검토선(보조)";
+    internal const string LayerSlTextOld = "DH-검토선측점";
     /// <summary>부지정지가 그려 두는 <b>데이라잇</b>(계획면이 원지반과 만나는 선) 레이어 —
     /// <c>GradingBuilder.DrawDaylight</c>가 이 이름으로 그린다. 굴곡부 판정의 출처다.</summary>
     private const string LayerDaylight = "DH-정지경계";
@@ -517,6 +527,9 @@ public sealed class ProfileCommand
             // ★[JACK 0810] "도곽 버튼이 왜 필요하지? 그냥 종단도 누르면 모형탭하고 배치까지 자동으로 되야 되."
             //   버튼을 늘리지 않고 여기서 끝까지 간다 — 모형 도곽 범위 + 배치 한 장까지.
             string sheet = SheetCommand.Build(db, ed, pvId, log);
+            // ★[v32.45] 축척이 정해진 <b>뒤에</b> 검토선을 꾸민다 — 글씨가 종단 밴드와 같은 크기가 되려면
+            //   도면 축척을 알아야 한다(설명은 DecorateSampleLines).
+            DecorateSampleLines(db, cdoc, alignId, bandIv, GradingSettings.XsecLeft, GradingSettings.XsecRight, log);
             log.AppendLine("도곽: " + sheet);
             ed.WriteMessage("\n  · 도곽: " + sheet);
         }
@@ -1228,19 +1241,27 @@ public sealed class ProfileCommand
             catch (System.Exception ex) { log.AppendLine("  표본 지표면 지정 경고 — " + ex.Message); }
 
             int nSl = 0; string firstErr = null;
+            // ★[v32.41] 만든 선을 기억한다 — 좌우 끝점이 여기 있으므로 나중에 다시 잴 필요가 없다
+            //   (SampleLine에는 끝점을 돌려주는 속성이 없다).
+            var made = new List<(ObjectId Id, double St, Point2d L, Point2d R)>();
             for (int i = 0; i < cuts.Count; i++)
             {
                 try
                 {
                     var pts = new Point2dCollection { cuts[i].Left, cuts[i].Right };
                     var id = CivilDb.SampleLine.Create($"{groupName}_{StationMarks.Fmt(cuts[i].Station, interval)}", groupId, pts);
-                    if (!id.IsNull) nSl++;
+                    if (!id.IsNull) { nSl++; made.Add((id, cuts[i].Station, cuts[i].Left, cuts[i].Right)); }
                 }
                 catch (System.Exception ex) { firstErr ??= $"{cuts[i].Station:F2}m {ex.Message}"; }
             }
             log.AppendLine($"단면검토선 '{groupName}' — {nSl}/{cuts.Count}개 생성 · 좌{wl:0.#}m/우{wr:0.#}m · 표본 지표면 {nSrc}개[{srcNames.ToString().Trim()}]" +
                            (firstErr != null ? $"\n  ⚠첫 실패: {firstErr}" : ""));
             ed.WriteMessage($"\n  · 단면검토선 {nSl}개 (정측점 {interval:0.#}m + 굴곡부 + 수동)");
+
+            // ★[v32.45] 꾸미기는 여기서 하지 않는다 — 글씨 크기가 <b>도면 축척</b>을 따라야 하는데
+            //   축척은 <see cref="SheetCommand.Build"/>가 <b>나중에</b> 정한다(JACK: "측점 문자가 축척이 안 먹음").
+            //   만든 것만 넘겨 두고, 축척이 확정된 뒤 <see cref="DecorateSampleLines"/>가 꾸민다.
+            LastSampleLines = made;
 
             // ── ④ 측점 행이 쓸 <b>라벨 자리 전용 체인</b>(값은 안 쓴다).
             LastLabelChainId = BuildLabelChain(db, alignId, pidPad, pidGround, all, interval, log);
@@ -1698,5 +1719,265 @@ public sealed class ProfileCommand
         // [JACK 0807 명령창 정리] 화면엔 요약만 — 자세한 내용은 로그 파일.
         ed.WriteMessage($"\n[종단도] {headline}\n  자세한 내용: {DiagLog.FilePath}");
         if (!quiet) AcadApp.ShowAlertDialog("종단도 생성 완료\n\n" + headline);
+    }
+    /// <summary>★[v32.45] 방금 만든 단면검토선 — <b>꾸미기는 축척이 정해진 뒤</b>라야 하므로 여기 담아 둔다.
+    /// <para>글씨 크기를 도면 축척으로 정하는데, 검토선은 <see cref="SheetCommand.Build"/>(축척을 정하는 곳)보다
+    /// <b>먼저</b> 만들어진다. 그래서 만들 때 꾸미면 <b>언제나 축척을 모른 채</b> 그리게 된다
+    /// (JACK: "측점 문자가 축척이 안 먹음").</para></summary>
+    private static List<(ObjectId Id, double St, Point2d L, Point2d R)> LastSampleLines = new();
+
+    /// <summary>★★★[v32.41~45 · JACK 0819] <b>단면검토선을 도면답게 — 색·선종류·측점·지시선.</b>
+    ///
+    /// <para>JACK 요구를 차례로: <i>"선 우측 끝선에 측점"</i> · <i>"정측점의 선은 초록색 그 외는 빨간색"</i> ·
+    /// <i>"떡진 부분은 측점을 안 겹치게 띄우고 꺾인 지시선"</i> · <i>"지시선 때문에 측점들이 들쑥날쑥하게 나오는데
+    /// 그렇게 나오지 않게"</i> · <i>"지시선이 필요없는 객체도 직선 지시선을"</i> ·
+    /// <i>"모든 지시선은 원래 단면검토선하고 살짝 띄워줘"</i> · <i>"글씨 크기는 종단밴드와 항상 동일하게,
+    /// 도면축척이 먹게"</i> · <i>"색상은 측선 색이랑 동일하게"</i> · <i>"측점선을 직선으로 나오는데 점선으로"</i></para>
+    ///
+    /// <para><b>지시선을 모두에게 그린다.</b> 겹친 것만 달면 <b>글씨 시작 자리가 제각각</b>이 된다("들쑥날쑥").
+    /// 지시선의 <b>선 방향 길이를 모두 같게</b> 두고 옆으로 밀 일이 있으면 그 안에서 사선으로 처리한다 —
+    /// 그러면 안 밀린 것은 저절로 <b>직선</b>이 되고 <b>글씨는 전부 한 줄</b>로 선다. 규칙 하나가 두 요구를 함께 푼다.</para>
+    ///
+    /// <para><b>레이어로는 검토선 색이 안 바뀐다</b>(v32.41 실측) — Civil 객체는 <b>스타일이 표시를 지배</b>한다.
+    /// 검토선은 스타일 둘로 색·선종류를 박고, <b>우리가 그린 지시선·글씨는 레이어</b>로 같은 색을 준다.</para>
+    ///
+    /// <para>⚠ <b>부르는 자리가 중요하다</b> — <see cref="SheetCommand.Build"/>가 축척을 건 <b>뒤</b>라야
+    /// 글씨가 종단 밴드와 같은 크기(종이 2.5mm)로 나온다.</para></summary>
+    private static void DecorateSampleLines(Database db, CivilApp.CivilDocument cdoc, ObjectId alignId,
+                                            double interval, double wl, double wr,
+                                            System.Text.StringBuilder log)
+    {
+        var made = LastSampleLines;
+        if (made == null || made.Count == 0) { log.AppendLine("  검토선 꾸미기: 대상이 없다"); return; }
+        try
+        {
+            int nHid = 0;
+
+            // ── ① 선 스타일 둘 — 색과 <b>점선</b>을 스타일에 박는다(이미 있으면 다시 쓴다).
+            //   JACK: <i>"측점선을 직선으로 나오는데 점선으로 바꿔줘."</i>
+            //   선종류는 <b>도면에 실려 있어야</b> 쓸 수 있다 — 없으면 표준 파일에서 불러온다.
+            string ltName = null;   // DisplayStyle.Linetype은 이름(문자열)을 받는다
+            try
+            {
+                using var trT = db.TransactionManager.StartTransaction();
+                var lt = (LinetypeTable)trT.GetObject(db.LinetypeTableId, OpenMode.ForRead);
+                foreach (string nm in new[] { "DASHED", "HIDDEN", "CENTER" })
+                {
+                    if (lt.Has(nm)) { ltName = nm; break; }
+                    try { db.LoadLineTypeFile(nm, "acadiso.lin"); } catch { }
+                    try { db.LoadLineTypeFile(nm, "acad.lin"); } catch { }
+                    if (lt.Has(nm)) { ltName = nm; break; }
+                }
+                trT.Commit();
+            }
+            catch (System.Exception ex) { log.AppendLine("  점선 선종류 준비 실패 — " + ex.Message); }
+
+            ObjectId stMajor = ObjectId.Null, stMinor = ObjectId.Null;
+            try
+            {
+                var col = cdoc.Styles.SampleLineStyles;
+                ObjectId Ensure(string nm, short aci)
+                {
+                    ObjectId sid = ObjectId.Null;
+                    try { sid = col[nm]; } catch { }
+                    if (sid.IsNull) { try { sid = col.Add(nm); } catch { return ObjectId.Null; } }
+                    try
+                    {
+                        using var trX = db.TransactionManager.StartTransaction();
+                        if (trX.GetObject(sid, OpenMode.ForWrite) is CivilDb.Styles.SampleLineStyle ss)
+                        {
+                            using var ds = ss.GetDisplayStylePlan(CivilDb.Styles.SampleLineDisplayStyleType.Lines);
+                            ds.Visible = true;
+                            ds.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
+                                Autodesk.AutoCAD.Colors.ColorMethod.ByAci, aci);
+                            if (ltName != null) { try { ds.Linetype = ltName; } catch { } }
+                        }
+                        trX.Commit();
+                    }
+                    catch { }
+                    return sid;
+                }
+                stMajor = Ensure("DH_검토선_정측점(초록)", 3);
+                stMinor = Ensure("DH_검토선_보조(빨강)", 1);
+            }
+            catch (System.Exception ex) { log.AppendLine("  검토선 스타일 준비 실패 — " + ex.Message); }
+
+            // ── ①-b <b>선형에 딸린 측점 라벨을 숨긴다</b>(JACK: "기존에 있던 살구색 측점문자는 숨겨줘").
+            //   스샷의 <c>BP: 0+000.00</c>이 그것이다 — <b>단면검토선 라벨이 아니라 선형 라벨</b>이었다.
+            //   선형을 만들 때 라벨셋 '_없음'을 골랐는데 그 이름이 없어 '표준'이 걸린 결과다.
+            //   <c>GetLabelGroupIds</c>로 <b>이 선형 것만</b> 집으므로 남의 선형은 건드리지 않는다.
+            try
+            {
+                using var trA = db.TransactionManager.StartTransaction();
+                if (trA.GetObject(alignId, OpenMode.ForRead) is CivilDb.Alignment al)
+                    foreach (ObjectId gid in al.GetLabelGroupIds())
+                    {
+                        try
+                        {
+                            if (trA.GetObject(gid, OpenMode.ForWrite) is not CivilDb.LabelGroup lg) continue;
+                            uint n = lg.SubEntityCount;
+                            for (uint k = 0; k < n; k++)
+                            {
+                                try
+                                {
+                                    var se = lg.GetAt(k);
+                                    if (se != null && se.Visibility) { se.Visibility = false; nHid++; }
+                                }
+                                catch { }
+                            }
+                        }
+                        catch { }
+                    }
+                trA.Commit();
+            }
+            catch (System.Exception ex) { log.AppendLine("  선형 측점 라벨 숨기기 실패 — " + ex.Message); }
+
+            // ── ② 글씨 크기 = <b>종단 밴드와 같은 2.5mm</b> × 도면 축척(JACK 요구).
+            //   ※ <c>SetDrawingScale</c>이 <c>PaperUnits=1000</c> 규약으로 걸어 둔 것만 믿는다 —
+            //     아니면 남이 걸어 둔 값이므로 검토선 폭에 비례해 물러난다.
+            const double slTextMm = 2.5;
+            double dwgScale = 0;
+            try
+            {
+                if (db.Cannoscale is Autodesk.AutoCAD.DatabaseServices.AnnotationScale asc &&
+                    System.Math.Abs(asc.PaperUnits - 1000.0) < 1e-6) dwgScale = asc.DrawingUnits;
+            }
+            catch { }
+            // ★★[v32.49 · JACK 0819] <b>도면설정에서 고른 검토선 축척이 먼저다.</b>
+            //   JACK: <i>"주석 축척 연동하지 말고 도면설정에 단면검토선 주석 축척 선택박스를 넣고
+            //   저장을 누를 때 업데이트되게."</i> · <i>"측점 기능으로 추가할 때 생기는 것도 그 시점의 도면설정을 따라가야 함."</i>
+            //   → 이 함수는 <b>다시 그릴 때마다</b> 설정을 새로 읽으므로, 측점을 찍어 재작성돼도 그때 값이 쓰인다.
+            //   0(자동)이면 도면에 걸린 축척을, 그것도 없으면 검토선 폭에 비례해 물러난다.
+            double useScale = GradingSettings.SectionLineScale > 0 ? GradingSettings.SectionLineScale : dwgScale;
+            double slH = useScale > 0 ? slTextMm / 1000.0 * useScale
+                                      : System.Math.Max(0.20, (wl + wr) * 0.015);
+            double slGap0 = slH * 0.6;                 // 검토선 끝에서 지시선 시작까지(살짝 띄움)
+            double La = slH * 0.8, Lb = slH * 1.4, Lc = slH * 0.6;   // 지시선 세 도막(합=선 방향 길이·모두 같다)
+            double slGapT = slH * 0.5;                 // 지시선 끝에서 글씨까지
+
+            ObjectId layMajor, layMinor;
+            using (var trL = db.TransactionManager.StartTransaction())
+            {
+                layMajor = SectionCommand.EnsureLayer(db, trL, LayerSlMajor, 3);
+                layMinor = SectionCommand.EnsureLayer(db, trL, LayerSlMinor, 1);
+                trL.Commit();
+            }
+
+            // ── ③ <b>떡진 곳을 미리 푼다.</b> 글씨는 선을 따라 세로로 서므로 밀어내는 방향은
+            //   <b>선에 수직</b>(=노선을 따라가는 방향)이고, 측점 값이 곧 그 방향의 거리다.
+            double minGap = slH * 1.25;
+            var off = new double[made.Count];
+            double prevS = double.NegativeInfinity;
+            for (int i = 0; i < made.Count; i++)
+            {
+                double want = System.Math.Max(made[i].St, prevS + minGap);
+                off[i] = want - made[i].St;
+                prevS = want;
+            }
+
+            int nMajor = 0, nText = 0, nStyled = 0, nBent = 0;
+            using (var trS = db.TransactionManager.StartTransaction())
+            {
+                var btS = (BlockTable)trS.GetObject(db.BlockTableId, OpenMode.ForRead);
+                var msS = (BlockTableRecord)trS.GetObject(btS[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+
+                for (int i = 0; i < made.Count; i++)
+                {
+                    var m = made[i];
+                    double st = m.St;
+                    // ★★★[v32.48 · JACK 0819 "여전히 +00.00으로 나와"] <b>정측점 판정이 너무 빡빡했다.</b>
+                    //
+                    //   종전은 <c>plus < 1e-4</c>(0.1mm)였다. 측점 값에 <b>0.001m 정도의 오차</b>만 있어도
+                    //   정측점으로 안 잡히고, 그러면서 표시는 반올림돼 <c>+00.00</c>이 된다 —
+                    //   <b>"No.0이어야 할 자리가 +00.00 빨간색"</b>이 정확히 그 모습이었다.
+                    //   숫자가 0으로 보이는데 0이 아니라고 판정하니 눈으로는 원인을 찾을 수가 없다.
+                    //
+                    //   → <b>가장 가까운 정측점과의 거리</b>로 재고 허용오차를 <b>5mm</b>로 둔다.
+                    //     반올림을 쓰므로 <b>위에서 접근하는 경우</b>(19.998 → 20.0)도 함께 잡힌다 —
+                    //     내림만 쓰면 그 자리는 <c>+19.998</c>로 적히고 정측점을 놓친다.
+                    const double majorTol = 0.005;
+                    int no = (int)System.Math.Round(st / interval);
+                    double plus = st - no * interval;
+                    bool major = System.Math.Abs(plus) < majorTol;
+                    if (!major)
+                    {
+                        no = (int)System.Math.Floor(st / interval + 1e-9);
+                        plus = st - no * interval;
+                    }
+                    if (major) nMajor++;
+                    ObjectId lay = major ? layMajor : layMinor;
+
+                    try
+                    {
+                        if (trS.GetObject(m.Id, OpenMode.ForWrite) is CivilDb.SampleLine sl)
+                        {
+                            ObjectId want = major ? stMajor : stMinor;
+                            if (!want.IsNull) { sl.StyleId = want; nStyled++; }
+                        }
+                    }
+                    catch { }
+
+                    var a = new Point3d(m.L.X, m.L.Y, 0);
+                    var b = new Point3d(m.R.X, m.R.Y, 0);
+                    var dir = b - a;
+                    if (dir.Length < 1e-9) continue;
+                    dir = dir.GetNormal();
+
+                    // 밀어내는 방향 = 선에 수직. <b>측점이 커지는 쪽</b>으로 부호를 맞춘다.
+                    var perp = new Vector3d(-dir.Y, dir.X, 0);
+                    int probe = i + 1 < made.Count ? i + 1 : i - 1;
+                    if (probe >= 0 && probe < made.Count)
+                    {
+                        var nb = new Point3d(made[probe].R.X, made[probe].R.Y, 0);
+                        double sign = (nb - b).DotProduct(perp);
+                        if (probe < i) sign = -sign;
+                        if (sign < 0) perp = -perp;
+                    }
+
+                    // 글씨가 <b>왼쪽 반평면</b>을 향하면 거꾸로 읽힌다 → 180도 접고 <b>오른쪽 정렬</b>로.
+                    double ang = System.Math.Atan2(dir.Y, dir.X);
+                    bool flip = ang > System.Math.PI / 2 - 1e-9 || ang <= -System.Math.PI / 2 - 1e-9;
+                    if (flip) ang -= System.Math.PI;
+
+                    // ── 지시선 — <b>모두에게</b>. 선 방향 길이가 늘 같으므로 글씨가 한 줄로 선다.
+                    var p0 = b + dir * slGap0;
+                    var p1 = p0 + dir * La;
+                    var p2 = p1 + dir * Lb + perp * off[i];
+                    var p3 = p2 + dir * Lc;
+                    var pl = new Polyline();
+                    pl.AddVertexAt(0, new Point2d(p0.X, p0.Y), 0, 0, 0);
+                    pl.AddVertexAt(1, new Point2d(p1.X, p1.Y), 0, 0, 0);
+                    pl.AddVertexAt(2, new Point2d(p2.X, p2.Y), 0, 0, 0);
+                    pl.AddVertexAt(3, new Point2d(p3.X, p3.Y), 0, 0, 0);
+                    pl.LayerId = lay;
+                    msS.AppendEntity(pl); trS.AddNewlyCreatedDBObject(pl, true);
+                    if (off[i] > 1e-6) nBent++;
+
+                    var pos = p3 + dir * slGapT;
+                    var t = new DBText
+                    {
+                        TextString = major ? $"No.{no}" : $"+{plus:00.00}",
+                        Height = slH,
+                        Rotation = ang,
+                        LayerId = lay,                                // 글씨도 선과 같은 색(JACK 요구)
+                        HorizontalMode = flip ? TextHorizontalMode.TextRight : TextHorizontalMode.TextLeft,
+                        VerticalMode = TextVerticalMode.TextVerticalMid,
+                    };
+                    // ★[JACK 0819 정렬] <b>Position은 건드리지 않는다.</b> 정렬(Mid·Right)을 쓰면 기준점은
+                    //   AlignmentPoint 하나이고, Position을 함께 대입하면 그것이 기준을 되돌려 세로가 어긋난다.
+                    t.AlignmentPoint = pos;
+                    msS.AppendEntity(t); trS.AddNewlyCreatedDBObject(t, true);
+                    nText++;
+                }
+                trS.Commit();
+            }
+            log.AppendLine($"  검토선 꾸미기: 정측점 {nMajor}개(초록) · 보조 {made.Count - nMajor}개(빨강)"
+                         + $" · 스타일 {nStyled}개{(ltName == null ? "(점선 없음)" : $"(점선 {ltName})")}"
+                         + $" · 선형 측점 라벨 숨김 {nHid}개"
+                         + $" · 측점 글씨 {nText}개(높이 {slH:F2}m = 종이 {slTextMm:F1}mm"
+                         + (useScale > 0 ? $" × 1:{useScale:F0}{(GradingSettings.SectionLineScale > 0 ? " 고정" : " 도면축척")})" : " 상당 — 축척이 없어 폭 비례로 물러남)")
+                         + $" · 그중 {nBent}개는 꺾어서 띄움");
+        }
+        catch (System.Exception ex) { log.AppendLine("  검토선 꾸미기 실패 — " + ex.Message); }
     }
 }
