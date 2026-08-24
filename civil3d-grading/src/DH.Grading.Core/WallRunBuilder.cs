@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 
 namespace DH.Grading.Core;
 
@@ -52,12 +52,14 @@ public static class WallRunBuilder
         // 이 단(bench)이 이 호길이(t)에서 수직(옹벽)인가.
         //   구간이 덮으면 그 구간의 규칙을, 안 덮으면 전역 구배를 따른다
         //   (InfraworksCommand의 zoneKeep과 같은 판정이어야 노리선·SHP와 어긋나지 않는다).
-        bool IsWall(double t, int bench)
+        // ★[JACK 0824] 점을 그대로 받는다 — 구간마다 자(기준 폴리곤)가 다를 수 있다.
+        bool IsWall(double x, double y, int bench)
         {
-            if (zones != null)
-                foreach (var z in zones)
-                    if (z != null && z.Contains(t)) return z.IsWallAt(bench, zBase, minSlope);
-            return globalIsWall;
+            if (zones == null || zones.Count == 0) return globalIsWall;
+            bool any = false;
+            foreach (var z in zones) if (z != null && z.Rules.Count > 0) { any = true; break; }
+            if (!any) return globalIsWall;
+            return SlopeZone.IsWallAtPoint(zones, x, y, bench, zBase, minSlope, boundary, cum);
         }
 
         int faceN = 0, skipFlat = 0, skipNoWall = 0, skipShort = 0, bogusCut = 0, skipDegen = 0;
@@ -162,7 +164,7 @@ public static class WallRunBuilder
                 any |= segWall[s];
                 // 의도(구간 규칙)와 실제(링 모양)가 어긋나는지 세어 둔다 — 판정에는 쓰지 않는다.
                 checkedPts++;
-                bool zoneSays = IsWall(GradingGeometry.ParamAt(boundary, cum, mid.X, mid.Y), bench);
+                bool zoneSays = IsWall(mid.X, mid.Y, bench);
                 if (segWall[s] != zoneSays)
                 {
                     disagree++;

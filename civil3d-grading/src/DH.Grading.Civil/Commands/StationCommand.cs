@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
@@ -243,7 +243,11 @@ public static class StationCommand
                 var regions = GradingBundleStore.TryLoadAll(alignId.Database, tr, out _);
                 if (regions != null && regions.Count > 0)
                 {
-                    var edges = NoriCommand.RebuildEdgeLines(regions, out _);
+                    var edges = NoriCommand.RebuildEdgeLines(regions, out string rdiag);
+                    // ★[JACK 0824] 측점이 왜 그만큼인지 로그로 남긴다 — 종전엔 log에 null을 넘겨
+                    //   '측점이 안 잡힌다'는 보고가 와도 재료가 없는 건지 교차가 없는 건지 못 갈랐다.
+                    var slog = new System.Text.StringBuilder();
+                    slog.AppendLine($"■ 측점 재료 — {rdiag}");
                     var pts = new System.Collections.Generic.List<System.Collections.Generic.List<Point3d>>(edges.Count);
                     foreach (var e in edges)
                     {
@@ -251,7 +255,7 @@ public static class StationCommand
                         foreach (var p in e) q.Add(new Point3d(p.X, p.Y, p.Z));
                         pts.Add(q);
                     }
-                    var em = StationMarks.FromLines(al, pts, "사면·소단", null, null);
+                    var em = StationMarks.FromLines(al, pts, "사면·소단·옹벽", null, slog);
                     list.AddRange(em); nEdge = em.Count;
 
                     var dl = new System.Collections.Generic.List<System.Collections.Generic.List<Point3d>>();
@@ -274,12 +278,17 @@ public static class StationCommand
                             if (q.Count >= 2) dl.Add(q);
                         }
                     }
-                    var dm = StationMarks.FromLines(al, dl, "데이라잇", null, null);
+                    var dm = StationMarks.FromLines(al, dl, "데이라잇", null, slog);
+                    try { DiagLog.Append("\n" + slog.ToString()); } catch { }
                     list.AddRange(dm); nDl = dm.Count;
                 }
             }
-            catch { }
-            note = $"꺾임 {nPi} · 사면·소단 {nEdge} · 데이라잇 {nDl}"
+            catch (System.Exception ex)
+            {
+                // ★[JACK 0824] 종전엔 **조용히 삼켰다** — 여기서 터지면 측점이 0개인데 이유를 알 길이 없었다.
+                try { DiagLog.Append($"\n■ 측점 재료 예외 — {ex.GetType().Name}: {ex.Message}"); } catch { }
+            }
+            note = $"꺾임 {nPi} · 사면·소단·옹벽 {nEdge} · 데이라잇 {nDl}"
                  + (nEdge + nDl == 0 ? " (번들이 없어 정지 경계는 못 잡음 — [부지정지]를 먼저)" : "");
         }
         catch { }

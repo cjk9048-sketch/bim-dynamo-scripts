@@ -1,4 +1,4 @@
-using NetTopologySuite.Algorithm;
+﻿using NetTopologySuite.Algorithm;
 using NetTopologySuite.Algorithm.Locate;
 using NetTopologySuite.Geometries;
 using NetTopologySuite.Index.Quadtree;
@@ -118,7 +118,8 @@ public static class SlopeHatchGenerator
         List<List<Point3>>? wallLinesOut = null,
         List<(bool IsSlope, int Bench, int Seg, List<Point3> Pts)>? wallEdgesOut = null,
         double baseSlope = 1.5, double minSlope = 0.05,
-        IReadOnlyList<IReadOnlyList<Point3>>? extraHoles = null)
+        IReadOnlyList<IReadOnlyList<Point3>>? extraHoles = null,
+        List<List<Point3>>? wallAllOut = null)
     {
         var outList = new List<(bool, int, int, List<Point3>)>();
         if (rings == null || rings.Count < 2) return outList;
@@ -154,6 +155,7 @@ public static class SlopeHatchGenerator
                     if (inz)
                     {
                         wallLinesOut?.Add(sub);                        // 구간 안 크레스트 = 옹벽선(표시)
+                        wallAllOut?.Add(sub);                          // ★[JACK 0824] 측점용 — 아래 주석 참조
                         // [사면변환 클릭 대상 — JACK 0729] "클릭한 옹벽부터 바깥이 사면" 통일 규칙:
                         //   성토는 크레스트(윗선)가 그 옹벽의 선 — 여기서 태그. 절토는 아랫선(토우)에서 태그(아래 루프).
                         if (!up) wallEdgesOut?.Add((true, k, segW++, sub));
@@ -171,9 +173,17 @@ public static class SlopeHatchGenerator
                 foreach (var (sub, inz) in SplitByZone(run, inZone))
                 {
                     if (!inz) outList.Add((false, k, segB++, sub)); // 구간 안 소단선은 그리지 않음(JACK 0728)
-                    // [사면변환 클릭 대상 — JACK 0729] 절토는 각 옹벽의 '아랫선'(토우)이 그 옹벽의 선 —
-                    //   스샷 피드백: "시안선 뒤 다음 옹벽 아랫선을 선택하는 게 맞다". k=0 토우(경계선)는 도넛에 잘려 제외.
-                    else if (up) wallEdgesOut?.Add((false, k, segT++, sub));
+                    else
+                    {
+                        // ★★[JACK 0824 '계획지표면 꺾이는 부분 측점이 자동 추가가 안 돼'] 구간 안 선도 **측점 재료로는** 내보낸다.
+                        //   그리지 않는 것과 '없는 것'은 다르다 — 옹벽의 윗선·아랫선은 계획 지표면이 실제로 꺾이는
+                        //   자리라 측점이 서야 한다. 종전엔 성토 구간의 토우가 **어디에도 안 담겨** 사라졌고,
+                        //   그래서 옹벽 구간 전체의 측점이 비었다(성토쪽 68%가 옹벽인 도면에서 실측).
+                        wallAllOut?.Add(sub);
+                        // [사면변환 클릭 대상 — JACK 0729] 절토는 각 옹벽의 '아랫선'(토우)이 그 옹벽의 선 —
+                        //   스샷 피드백: "시안선 뒤 다음 옹벽 아랫선을 선택하는 게 맞다". k=0 토우(경계선)는 도넛에 잘려 제외.
+                        if (up) wallEdgesOut?.Add((false, k, segT++, sub));
+                    }
                 }
             }
         }
@@ -187,10 +197,9 @@ public static class SlopeHatchGenerator
         IReadOnlyList<Point3> boundary, double[] cum, int bench, double x, double y,
         double baseSlope, double minSlope)
     {
-        double t = GradingGeometry.ParamAt(boundary, cum, x, y);
-        foreach (var z in zones)
-            if (z != null && z.Contains(t)) return z.IsWallAt(bench, baseSlope, minSlope);
-        return false;
+        // ★[JACK 0824] 구간마다 자기 자(기준 폴리곤)가 다를 수 있으므로 **점을 그대로 넘긴다** —
+        //   여기서 계획 폴리곤 param 하나로 미리 바꾸면 바깥 단 구간이 코너에서 무너진다.
+        return SlopeZone.IsWallAtPoint(zones, x, y, bench, baseSlope, minSlope, boundary, cum);
     }
 
     /// <summary>폴리선을 분류함수 값이 바뀌는 지점에서 (조각, 구간안 여부)들로 쪼갬 — 원 순서 유지, 2점 미만 조각 버림.</summary>

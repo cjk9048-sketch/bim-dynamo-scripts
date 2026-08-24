@@ -253,7 +253,9 @@ public static class GradingGeometry
         //   링 조립 = 사면 링의 '구간 밖' 조각들 + 수직 링의 '구간 안' 조각들을 param 순서로 이어붙임 —
         //   조각 자체는 NTS 오프셋 원본 그대로(근사·이동 없음 → 접힘 불가). 조각 사이 연결 점프선은
         //   AddRingBreakline(>2.5m 제외)이 브레이크라인에서 빼고 TIN 삼각화가 측벽을 채운다.
-        List<(double t0, double t1, int fromBench, StepProfile wp)>? zprep = null;
+        // ★[JACK 0824] 구간 객체를 그대로 들고 있는다 — 자(기준 폴리곤)가 구간마다 다를 수 있어
+        //   t0/t1 숫자만 떼어 오면 어느 자로 잰 값인지 알 수 없다.
+        List<(SlopeZone z, int fromBench, StepProfile wp)>? zprep = null;
         double[]? cumB = null;
         if (wallZones != null && wallZones.Count > 0)
         {
@@ -262,7 +264,15 @@ public static class GradingGeometry
             foreach (var z in wallZones)
             {
                 if (z == null || z.Rules.Count == 0) continue;
-                zprep.Add((z.T0, z.T1, Math.Max(z.FirstBench, 0), StepProfile.Build(p, slope, benchH, benchW, up, z)));
+                // ★★★[JACK 0824] 이 구간이 이기는 자리의 **합성된** 규칙으로 프로파일을 만든다.
+                //   구간 하나만 떼어 만들면 그 아래 단(다른 구간이 정한 옹벽 등)이 전역 구배로 깔려
+                //   그 단부터 링이 통째로 어긋난다.
+                int zi0 = 0;
+                for (int q0 = 0; q0 < wallZones.Count; q0++) if (ReferenceEquals(wallZones[q0], z)) { zi0 = q0; break; }
+                var comp = SlopeZone.ComposeUpTo(wallZones, zi0, shape, cumB);
+                var zc = new SlopeZone { T0 = z.T0, T1 = z.T1, Ref = z.Ref };
+                zc.Rules.AddRange(comp.Count > 0 ? comp : z.Rules);
+                zprep.Add((z, Math.Max(z.FirstBench, 0), StepProfile.Build(p, slope, benchH, benchW, up, zc)));
                 var txt = new System.Text.StringBuilder();
                 foreach (var r in z.Rules)
                     txt.Append($"{r.FromBench + 1}단부터 1:{r.Slope:0.###}{(r.Slope <= p.MinSlope + 1e-9 ? "(수직)" : "")}" +
@@ -286,13 +296,14 @@ public static class GradingGeometry
         }
 
         // 링을 '분류함수(keep)를 만족하는 점들의 원형 연속 run'들로 쪼갬 — 각 run은 원본 순서 유지, 키=첫 점 param.
-        void CollectRuns(List<Point3> ring, Func<double, bool> keep, List<(double key, List<Point3> pts)> outRuns)
+        void CollectRuns(List<Point3> ring, Func<Point3, bool> keep, List<(double key, List<Point3> pts)> outRuns)
         {
             int n = ring.Count;
             if (n >= 2 && Math.Abs(ring[0].X - ring[n - 1].X) < 1e-9 && Math.Abs(ring[0].Y - ring[n - 1].Y) < 1e-9) n--;
             if (n < 2) return;
             var tv = new double[n]; var kv = new bool[n];
-            for (int i = 0; i < n; i++) { tv[i] = ParamAt(shape, cumB!, ring[i].X, ring[i].Y); kv[i] = keep(tv[i]); }
+            // ★[JACK 0824] 유지 판정은 **점**으로 한다(구간마다 자가 다르다). tv는 조립 순서용 정렬키일 뿐이다.
+            for (int i = 0; i < n; i++) { tv[i] = ParamAt(shape, cumB!, ring[i].X, ring[i].Y); kv[i] = keep(ring[i]); }
             int start = System.Array.IndexOf(kv, false);
             if (start < 0) { outRuns.Add((tv[0], ring.GetRange(0, n))); return; } // 전부 유지
             List<Point3>? cur = null; double curKey = 0;
@@ -313,23 +324,44 @@ public static class GradingGeometry
             if (zprep != null && cumB != null)
             {
                 int benchOfEdge = e / 2; // 단마다 모서리 2개(사면끝/소단끝)
-                double total = cumB[^1];
-                bool InZ(double t0, double t1, double t) => t0 <= t1 ? (t >= t0 && t <= t1) : (t >= t0 || t <= t1);
-                var act = new List<(double t0, double t1, double wDist)>();
-                // [구간 구배 0804] 종전엔 `< dist`(안쪽으로 당겨질 때만) 였다 — 구간이 수직뿐이라 항상 폭이 좁았기 때문.
-                //   이제 구간 구배가 전역보다 완만할 수 있어 **바깥으로 퍼지는** 경우가 생기므로, 거리가 '다르면' 활성화한다.
-                foreach (var z in zprep)
-                    if (benchOfEdge >= z.fromBench && e < z.wp.Edges.Count && Math.Abs(z.wp.Edges[e].dist - dist) > 1e-9)
-                        act.Add((z.t0, z.t1, z.wp.Edges[e].dist));
-                if (act.Count > 0)
+                var act = new List<(SlopeZone z, double wDist)>();
+                // ★★★[JACK 0824 '사면변환을 해봤지만 바뀌지 않아'] **'전역과 다른가'로 거르면 안 된다.**
+                //   종전 조건은 `이 구간의 프로파일이 전역과 거리가 다른가`였다. 그러면 <b>옹벽을 사면으로
+                //   되돌리는 구간</b>이 전역 구배와 같아져(둘 다 1:1.5) **한 번도 활성화되지 않는다** —
+                //   앞 구간(옹벽)이 계속 이겨서 화면이 그대로다. 로그 실측:
+                //   `⚠구간 밖인데 벽 2700점 — 15단` = 규칙은 사면인데 기하는 벽.
+                //   이 구간이 그 단에 적용되면 무조건 후보에 넣고, 누가 이기는지는 아래 Winner가 가른다.
+                foreach (var q in zprep)
+                    if (benchOfEdge >= q.fromBench && e < q.wp.Edges.Count)
+                        act.Add((q.z, q.wp.Edges[e].dist));
+                bool anyDiff = false;
+                foreach (var a0 in act) if (Math.Abs(a0.wDist - dist) > 1e-9) { anyDiff = true; break; }
+                if (act.Count > 0 && anyDiff)
                 {
-                    var runs = new List<(double key, List<Point3> pts)>();
-                    bool InAny(double t) { foreach (var z in act) if (InZ(z.t0, z.t1, t)) return true; return false; }
-                    CollectRuns(w, t => !InAny(t), runs);                 // 사면 링 — 구간 밖만
-                    foreach (var z in act)
+                    // ★★[JACK 0824] 겹치면 **나중 구간이 이긴다** — 종전엔 Flatten이 미리 겹침을 갈라 놨지만,
+                    //   자가 구간마다 다르면 한 축에 못 올려 미리 못 가른다. 여기서 점마다 '누가 이기나'로 푼다.
+                    //   ('어느 구간에든 들면' 방식이면 겹친 자리에 두 링이 다 들어와 조각이 겹친다.)
+                    int Winner(Point3 pt)
                     {
-                        var wr = MakeRingXY(z.wDist);
-                        if (wr != null) CollectRuns(wr, t => InZ(z.t0, z.t1, t), runs); // 수직 링 — 그 구간 안만
+                        int win = -1;
+                        for (int a = 0; a < act.Count; a++)
+                            if (act[a].z.ContainsAt(pt.X, pt.Y, shape, cumB!)) win = a;
+                        return win;
+                    }
+                    var runs = new List<(double key, List<Point3> pts)>();
+                    // 전역 링 = 어느 구간도 안 이기는 자리 + **이겼지만 거리가 전역과 같은** 자리
+                    //   (되돌리기 구간이 여기 든다 — 링을 새로 만들 것 없이 전역 링이 곧 정답이다).
+                    CollectRuns(w, pt =>
+                    {
+                        int a1 = Winner(pt);
+                        return a1 < 0 || Math.Abs(act[a1].wDist - dist) <= 1e-9;
+                    }, runs);
+                    for (int a = 0; a < act.Count; a++)
+                    {
+                        if (Math.Abs(act[a].wDist - dist) <= 1e-9) continue;   // 전역 링과 같은 자리 — 위에서 담았다
+                        int aa = a;
+                        var wr = MakeRingXY(act[a].wDist);
+                        if (wr != null) CollectRuns(wr, pt => Winner(pt) == aa, runs); // 그 구간이 이기는 데만
                     }
                     if (runs.Count > 0)
                     {
@@ -437,11 +469,8 @@ public static class GradingGeometry
                 if (zprep != null && cumB != null)
                 {
                     double tb = ParamAt(shape, cumB, b.X, b.Y);
-                    foreach (var z in zprep)
-                    {
-                        bool inz = z.t0 <= z.t1 ? (tb >= z.t0 && tb <= z.t1) : (tb >= z.t0 || tb <= z.t1);
-                        if (inz) { cornerProf = z.wp; break; }
-                    }
+                    foreach (var q in zprep)
+                        if (q.z.ContainsAt(b.X, b.Y, shape, cumB)) { cornerProf = q.wp; break; }
                 }
                 foreach (var (eIdx, dist, rise, ring) in ringSeq)
                 {
@@ -507,6 +536,20 @@ public static class GradingGeometry
     /// <c>SlopeZone.Flatten</c>이 '길이 0 구간'을 버려 <b>변환이 통째로 사라진다</b>
     /// (JACK 0820 '사면 맨 아랫단은 안 바뀌네'). 그래서 여기서 <b>최소 폭을 보장</b>한다.</para></summary>
     /// <param name="minSpan">이보다 좁게 나오면 중심을 유지한 채 이 폭으로 넓힌다(0이면 넓히지 않음).</param>
+    /// <summary>호길이 t(0..둘레, 랩) 위치의 XY — 어느 폴리곤 위에서든.</summary>
+    public static Point3 PointAtParam(IReadOnlyList<Point3> poly, double[] cum, double t)
+    {
+        double tot = cum[cum.Length - 1];
+        if (tot < 1e-12 || poly.Count < 2) return poly.Count > 0 ? poly[0] : new Point3(0, 0, 0);
+        t = ((t % tot) + tot) % tot;
+        int lo = 0, hi = cum.Length - 1;
+        while (lo + 1 < hi) { int m = (lo + hi) / 2; if (cum[m] <= t) lo = m; else hi = m; }
+        var a = poly[lo]; var b = poly[(lo + 1) % poly.Count];
+        double seg = cum[lo + 1] - cum[lo];
+        double u = seg < 1e-12 ? 0 : (t - cum[lo]) / seg;
+        return new Point3(a.X + (b.X - a.X) * u, a.Y + (b.Y - a.Y) * u, a.Z + (b.Z - a.Z) * u);
+    }
+
     public static (double T0, double T1)? PickInterval(
         IReadOnlyList<Point3> pts, IReadOnlyList<Point3> boundary, double[] cum, double minSpan = 0.0)
     {

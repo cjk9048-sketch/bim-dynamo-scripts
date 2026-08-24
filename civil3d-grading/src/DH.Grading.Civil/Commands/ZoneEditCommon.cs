@@ -59,6 +59,15 @@ internal static class ZoneEditCommon
         //   '경계 투영이 무너졌다'는 뜻이라, 이 둘을 나란히 봐야 원인이 갈린다.
         var lineLen = new System.Collections.Generic.Dictionary<(bool up, int gid, int bench), (double Len, int N)>();
         var wholeLoop = new System.Collections.Generic.HashSet<(bool up, int gid, int bench)>();
+        // ★★★[JACK 0824 "단마다 해당 단의 가상 계획폴리곤을 기억하고 그걸로 시작한다"]
+        //   그 단의 링(닫힌 폴리곤) = 이 단 구간을 재는 **자**. 계획 폴리곤은 너무 작아
+        //   바깥 단 조각이 코너 한 점으로 뭉개진다(0820 실측: 선 3m → 구간 0.000000m).
+        var benchRing = new System.Collections.Generic.Dictionary<(bool up, int bench),
+            System.Collections.Generic.List<Point3>>();
+        var lineRef = new System.Collections.Generic.Dictionary<(bool up, int gid, int bench),
+            System.Collections.Generic.List<Point3>>();
+        // ★[JACK 0824] 클릭한 선의 한가운데 — '이 자리 지금 값이 뭐냐'를 되묻는 데 쓴다.
+        var lineMid = new System.Collections.Generic.Dictionary<(bool up, int gid, int bench), Point3>();
         (bool up, int gid, int bench)? pick = null;   // [1회 1개] 선택은 항상 최대 하나
         bool finishedByEnter = false;
         bool clearAll = false;
@@ -109,6 +118,22 @@ internal static class ZoneEditCommon
                     double bs = BaseSlopeOf(region.Params, up), ms = region.Params.MinSlope;
                     var vs = GradingGeometry.Build(region.Boundary, ng, region.Params, up, zones);
                     if (!vs.HasSlope) continue;
+                    // ★[JACK 0824] 단마다 **클릭 대상 선이 놓인 링**을 자로 삼는다.
+                    //   GenerateEdgeLinesTagged와 같은 짝짓기(2k, 2k+1)·같은 고르기(절토=아랫선/성토=윗선)여야
+                    //   클릭한 선과 자가 어긋나지 않는다.
+                    static double AvgZOf(System.Collections.Generic.List<Point3> r)
+                    {
+                        double t = 0; foreach (var q in r) t += q.Z; return r.Count > 0 ? t / r.Count : 0;
+                    }
+                    for (int k = 0; 2 * k + 1 < vs.Rings.Count; k++)
+                    {
+                        var rA = vs.Rings[2 * k]; var rB = vs.Rings[2 * k + 1];
+                        if (rA.Count < 3 || rB.Count < 3) continue;
+                        bool aHigher = AvgZOf(rA) >= AvgZOf(rB);
+                        var crest = aHigher ? rA : rB;
+                        var toe = aHigher ? rB : rA;
+                        benchRing[(up, k)] = up ? toe : crest;
+                    }
                     foreach (var fr in ringList)
                     {
                         if (fr == null || fr.Count < 3) continue;
@@ -148,14 +173,24 @@ internal static class ZoneEditCommon
                         len2d += System.Math.Sqrt(dx * dx + dy * dy);
                     }
                     lineLen[key] = (len2d, pts.Count);
+                    if (pts.Count > 0) lineMid[key] = pts[pts.Count / 2];
 
                     bool closed = pts.Count >= 3
                         && System.Math.Abs(pts[0].X - pts[pts.Count - 1].X) < 0.05
                         && System.Math.Abs(pts[0].Y - pts[pts.Count - 1].Y) < 0.05;
-                    if (closed) { lineArc[key] = (0.0, total); wholeLoop.Add(key); }
+
+                    // ★★★[JACK 0824] 이 선이 놓인 **그 단의 링**을 자로 쓴다. 링이 없으면 옛 방식(계획 폴리곤).
+                    //   자를 바꾸면 34m 조각은 그 링 위에서 34m다 — 0으로 무너질 수가 없다.
+                    var ruler = benchRing.TryGetValue((pki.up, pki.bench), out var br) && br.Count >= 3 ? br : null;
+                    var rulerCum = ruler != null ? GradingGeometry.CumLen2D(ruler) : cumB;
+                    var rulerPoly = ruler ?? boundary;
+                    if (ruler != null) lineRef[key] = ruler;
+                    double rulerTot = rulerCum[rulerCum.Length - 1];
+
+                    if (closed) { lineArc[key] = (0.0, rulerTot); wholeLoop.Add(key); }
                     else
                     {
-                        var iv = GradingSettings.PickInterval(pts, boundary, cumB);
+                        var iv = GradingGeometry.PickInterval(pts, rulerPoly, rulerCum);
                         if (iv != null) lineArc[key] = (iv.Value.T0, iv.Value.T1);
                     }
                 }
@@ -309,6 +344,11 @@ internal static class ZoneEditCommon
                 return;
             }
 
+            // ★[JACK 0824] 단높이는 아래 루프가 정지옵션을 고치므로 **고치기 전에** 지금 값을 떠 둔다 —
+            //   고친 뒤에 읽으면 언제나 '같다'가 나와 '안 바뀐다' 경고가 늘 뜬다.
+            double beforeH = pick == null ? 0
+                : GradingSettings.ToParams().BenchHeightAt(pick.Value.up, pick.Value.bench);
+
             // ── 적용: 기존 구간 + 이번 규칙 하나 ──
             var newCut = new System.Collections.Generic.List<SlopeZone>();
             var newFill = new System.Collections.Generic.List<SlopeZone>();
@@ -322,10 +362,16 @@ internal static class ZoneEditCommon
                 {
                     if (src != null)
                         foreach (var z in src)
-                            target.Add(new SlopeZone { T0 = z.T0, T1 = z.T1, Rules = new(z.Rules) });
+                            target.Add(new SlopeZone { T0 = z.T0, T1 = z.T1, Rules = new(z.Rules), Ref = z.Ref });
                     if (pick!.Value.up != up) continue;
                     var a = lineArc[pick.Value];
-                    var nz = new SlopeZone { T0 = a.T0, T1 = a.T1 };
+                    // ★[JACK 0824] 이 구간이 어느 자로 잰 값인지 함께 들려 보낸다 — 안 붙이면 재생성이
+                    //   계획 폴리곤으로 되읽어 엉뚱한 자리가 된다.
+                    var nz = new SlopeZone
+                    {
+                        T0 = a.T0, T1 = a.T1,
+                        Ref = lineRef.TryGetValue(pick.Value, out var pr) ? pr : null,
+                    };
                     nz.Rules.Add((pick.Value.bench, askN!.Value, askW!.Value));
                     target.Add(nz);
                     // ★★★[JACK 0820] **단높이는 구간이 아니라 방향 전체에 쌓는다.**
@@ -342,6 +388,9 @@ internal static class ZoneEditCommon
                     GradingSettings.FillBenchSteps = new System.Collections.Generic.List<(int, double)>(norm.FillBenchSteps);
                     // [스샷 버그 0804] 겹침은 합치지 않고 조각으로 가른다 — 새 규칙은 클릭한 선의 범위 '안'에만 남는다.
                     SlopeZone.Flatten(target, cumB![cumB.Length - 1]);
+                    // ★[JACK 0824] 뒤 규칙에 덮여 아무 일도 안 하는 구간은 뺀다 —
+                    //   안 빼면 변환할 때마다 쌓여 번들이 커지고 로그를 읽을 수 없다(실측: 4개 중 3개가 죽어 있었다).
+                    SlopeZone.Compact(target);
                 }
             }
 
@@ -363,6 +412,31 @@ internal static class ZoneEditCommon
             //   여기서 또 덮으면 <b>사용자가 방금 정지옵션에서 바꾼 값이 매번 지워진다</b>(JACK 실측: 5로 되돌아감).
             //   → 정지옵션과 변환은 <b>연동</b>이다: 변환은 정지옵션 값을 기본값으로 쓰고, 바꾼 값을 거기에 쌓는다.
             GradingSettings.ZoneOverride = (newCut, newFill);
+            // ★★[JACK 0824 '마지막 단을 선택하고 사면변환을 했지만 변하지 않았어'] **안 바뀌면 안 바뀐다고 말한다.**
+            //   변환 기본값은 '그 단에 지금 적용 중인 값'이라, Enter만 치면 넣은 값이 지금 값과 같아
+            //   아무 일도 안 일어난다 — 그런데 화면엔 '적용' 이라고만 떠서 고장으로 보인다(0824 실측:
+            //   6단에 1:1.5를 넣었는데 이미 1단부터 1:1.5였다). 셋 다 같으면 그 자리에서 알린다.
+            if (!clearAll && pick != null && lineMid.TryGetValue(pick.Value, out var pmid) && boundary != null)
+            {
+                bool pu = pick.Value.up;
+                var oldZones = pu ? region!.CutWallZones : region!.FillWallZones;
+                var pOld = region.Params;
+                var (curS, curW) = SlopeZone.ResolveAt(oldZones, pmid.X, pmid.Y, pick.Value.bench,
+                    BaseSlopeOf(pOld, pu), pOld.BenchWidthOf(pu), boundary, cumB!);
+                double curH = beforeH;
+                bool sameS = System.Math.Abs(curS - askN!.Value) < 1e-9;
+                bool sameW = System.Math.Abs(curW - askW!.Value) < 1e-9;
+                bool sameH = System.Math.Abs(curH - askH!.Value) < 1e-9;
+                if (sameS && sameW && sameH)
+                {
+                    string msg = $"이 자리는 이미 {(wallMode ? "수직" : $"1:{curS:0.###}")} · 소단 {curW:0.##}m · 단높이 {curH:0.##}m 입니다 " +
+                                 "— 넣은 값이 지금 값과 같아 **모양이 안 바뀝니다.**";
+                    ed.WriteMessage($"\n[{cmdLabel}] ⚠ {msg}");
+                    ed.WriteMessage($"\n   바꾸려면 {(wallMode ? "단높이(H)·소단길이(T)" : "단높이(H)·사면구배(R)·소단길이(T)")}로 값을 먼저 바꾸세요.");
+                    Log($"■ {cmdLabel} ⚠ 값이 지금과 같다 — {(pu ? "절토" : "성토")} {pick.Value.bench + 1}단 " +
+                        $"현재 1:{curS:0.###}·소단{curW:0.##}m·단높이{curH:0.##}m / 넣은 값 1:{askN:0.###}·소단{askW:0.##}m·단높이{askH:0.##}m");
+                }
+            }
             string what = clearAll ? "전체 해제"
                 : $"{(pick!.Value.up ? "절토" : "성토")} {pick.Value.bench + 1}단부터 " +
                   (wallMode ? $"수직 옹벽 · 소단 {askW:0.##}m"
@@ -385,16 +459,21 @@ internal static class ZoneEditCommon
             //   서고 눈에는 '안 바뀐다'로 보인다. 추측 대신 숫자로 가른다.
             if (!clearAll && pick != null && cumB != null)
             {
-                double tot = cumB[cumB.Length - 1];
+                // ★[0824] 둘레는 **그 구간의 자** 기준이다 — 계획 폴리곤 둘레로 적으면 %가 엉뚱해진다.
+                var pRef = lineRef.TryGetValue(pick.Value, out var pr2) ? pr2 : null;
+                double tot = pRef != null
+                    ? GradingGeometry.CumLen2D(pRef)[^1]
+                    : cumB[cumB.Length - 1];
                 var pa = lineArc[pick.Value];
                 double segLen = pa.T1 >= pa.T0 ? pa.T1 - pa.T0 : pa.T1 + tot - pa.T0;
                 Log($"   클릭한 선 — {(pick.Value.up ? "절토" : "성토")} {pick.Value.bench + 1}단 · " +
                     $"호길이 [{pa.T0:F1}..{pa.T1:F1}] = {segLen:F1}m / 둘레 {tot:F1}m " +
                     $"({segLen / System.Math.Max(tot, 1e-9) * 100:F0}%)" +
+                    (pRef != null ? $" · 자=그 단의 링({pRef.Count}점)" : " · 자=계획 폴리곤(옛 방식)") +
                     (wholeLoop.Contains(pick.Value) ? " · 닫힌 고리(둘레 전체)" : "") +
                     (lineLen.TryGetValue(pick.Value, out var ll)
                         ? $" · 선 길이 {ll.Len:F1}m({ll.N}점)" +
-                          (segLen < 0.5 && ll.Len > 2.0 ? "  ⚠경계 투영이 무너졌다(구간 사라질 뾻했음)" : "")
+                          (segLen < 0.5 && ll.Len > 2.0 ? "  ⚠자가 무너졌다 — 이런 줄이 보이면 알려 주세요" : "")
                         : ""));
                 var zs = pick.Value.up ? newCut : newFill;
                 for (int zi = 0; zi < zs.Count; zi++)
@@ -403,8 +482,11 @@ internal static class ZoneEditCommon
                     string rt = z.Rules.Count == 0 ? "없음" : string.Join(" ", z.Rules.Select(r =>
                         $"{r.FromBench + 1}단~1:{r.Slope:0.###}" +
                         (r.Slope <= GradingSettings.MinSlope + 1e-9 ? "(수직)" : "")));
-                    double zl = z.T1 >= z.T0 ? z.T1 - z.T0 : z.T1 + tot - z.T0;
-                    Log($"   구간#{zi + 1} [{z.T0:F1}..{z.T1:F1}] {zl:F1}m — {rt}");
+                    // ★[0824] 길이는 **그 구간의 자**로 잰다 — 클릭한 선의 자로 재면 자가 다른 구간이 엉뚱하게 찍힌다.
+                    double zTot = z.RefCum != null ? z.RefCum[^1] : cumB[cumB.Length - 1];
+                    double zl = z.T1 >= z.T0 ? z.T1 - z.T0 : z.T1 + zTot - z.T0;
+                    Log($"   구간#{zi + 1} [{z.T0:F1}..{z.T1:F1}] {zl:F1}m/{zTot:F0}m — {rt}" +
+                        (z.Ref != null ? $" · 자=링({z.Ref.Count}점)" : " · 자=계획"));
                 }
             }
             CreateGradingCommand.DoGrade(doc, planId, groundId, GradeMode.RerunLast);

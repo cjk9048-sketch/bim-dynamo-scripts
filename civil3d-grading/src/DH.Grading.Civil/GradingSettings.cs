@@ -27,7 +27,7 @@ public static class GradingSettings
     /// 이력은 설치본 확인에 쓰이므로 DLL에는 남기되, <b>출력은 절대 하지 않는다.</b>
     /// </para>
     /// ★[v32.20] 새 버전을 올릴 때 갱신할 곳은 <b>이 줄 하나</b>다 — 이력은 <c>작업과정.md</c>에 쓴다.</summary>
-    public const string Version = "v33.0 (2026-08-20)";
+    public const string Version = "v33.3 (2026-08-24)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -279,10 +279,10 @@ public static class GradingSettings
     public static (double T0, double T1)? PickInterval(
         System.Collections.Generic.IReadOnlyList<Point3> pts,
         System.Collections.Generic.IReadOnlyList<Point3> boundary, double[] cum)
-        // ★[JACK 0820] 본체는 Core로 옮겼다(시험 가능하게). 최소 폭은 둘레의 2% —
-        //   바깥 단 조각이 코너 하나로 투영돼 길이 0이 되면 Flatten이 구간을 버려 변환이 사라진다.
-        => GradingGeometry.PickInterval(pts, boundary, cum,
-               cum != null && cum.Length > 0 ? cum[cum.Length - 1] * 0.02 : 0.0);
+        // ★[JACK 0824 "웬만하면 몇 % 이런 버퍼식 로직은 쓰고 싶지 않아"] **최소 폭 하한을 걷어냈다.**
+        //   0820엔 코너 투영이 무너지는 걸 둘레 2%로 떠받쳤는데, 그건 자가 모자란 걸 값으로 때우는 것이라
+        //   다른 지형에서 또 터진다. 이제 구간이 **자기 자(그 단의 링)** 를 들고 다니므로 무너질 일이 없다.
+        => GradingGeometry.PickInterval(pts, boundary, cum);
 
     /// <summary>[§75] 두 호길이 구간(랩 가능)이 겹치는가.</summary>
     public static bool IntervalsOverlap(double a0, double a1, double b0, double b1)
