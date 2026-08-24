@@ -1,4 +1,4 @@
-using NetTopologySuite.Algorithm.Locate;
+﻿using NetTopologySuite.Algorithm.Locate;
 using NetTopologySuite.Geometries;
 
 namespace DH.Grading.Core;
@@ -138,32 +138,38 @@ public static class GradingPolygons
         double total = cum[cum.Length - 1];
         if (total < 1e-6) return outp;
 
-        // 경계 호길이 t(0..total, 랩) 위치의 XY.
-        Point3 PointAtParam(double t)
+        // 호길이 t(0..둘레, 랩) 위치의 XY — ★[JACK 0824] **그 구간의 자** 위에서 잰다.
+        //   구간이 자기 기준 폴리곤(그 단의 링)을 들고 있으면 그 위의 t다. 계획 폴리곤이 아니다.
+        static Point3 PointOn(IReadOnlyList<Point3> poly, double[] pc, double t)
         {
-            t = ((t % total) + total) % total;
-            int lo = 0, hi = cum.Length - 1;
-            while (lo + 1 < hi) { int m = (lo + hi) / 2; if (cum[m] <= t) lo = m; else hi = m; }
-            var a = boundary[lo]; var b = boundary[(lo + 1) % boundary.Count];
-            double seg = cum[lo + 1] - cum[lo];
-            double u = seg < 1e-12 ? 0 : (t - cum[lo]) / seg;
+            double tot = pc[pc.Length - 1];
+            t = ((t % tot) + tot) % tot;
+            int lo = 0, hi = pc.Length - 1;
+            while (lo + 1 < hi) { int m = (lo + hi) / 2; if (pc[m] <= t) lo = m; else hi = m; }
+            var a = poly[lo]; var b = poly[(lo + 1) % poly.Count];
+            double seg = pc[lo + 1] - pc[lo];
+            double u = seg < 1e-12 ? 0 : (t - pc[lo]) / seg;
             return new Point3(a.X + (b.X - a.X) * u, a.Y + (b.Y - a.Y) * u, 0);
         }
 
         var outerRing = rings[rings.Count - 1];
         foreach (var z in zones)
         {
-            double t0 = z.T0, t1 = z.T1 >= z.T0 ? z.T1 : z.T1 + total;
+            // ★[JACK 0824] 이 구간의 자 — 자기 기준 폴리곤이 있으면 그것, 없으면 계획 폴리곤(옛 방식).
+            var zPoly = z.Ref ?? boundary;
+            var zCum = z.RefCum ?? cum;
+            double zTot = zCum[zCum.Length - 1];
+            double t0 = z.T0, t1 = z.T1 >= z.T0 ? z.T1 : z.T1 + zTot;
             double arc = t1 - t0;
             if (arc < 0.5) continue;
 
-            // ① 경계 서브아크(1m 간격 샘플).
+            // ① 그 자 위의 서브아크(1m 간격 샘플).
             var pts = new List<Point3>();
             int nA = System.Math.Max(2, (int)System.Math.Ceiling(arc));
-            for (int s = 0; s <= nA; s++) pts.Add(PointAtParam(t0 + arc * s / nA));
+            for (int s = 0; s <= nA; s++) pts.Add(PointOn(zPoly, zCum, t0 + arc * s / nA));
 
             // ② 최외곽 링에서 구간 내 정점들의 최장 연속 런(원형) — 뒤집어 이어붙여 닫는다.
-            var run = LongestZoneRun(outerRing, boundary, cum, z.T0, z.T1);
+            var run = LongestZoneRun(outerRing, z, boundary, cum);
             Geometry? poly = null;
             if (run.Count >= 2)
             {
@@ -205,8 +211,8 @@ public static class GradingPolygons
     }
 
     /// <summary>링 정점 중 경계 최근접 호길이가 [T0..T1](랩 허용)에 드는 최장 연속(원형) 런.</summary>
-    private static List<Point3> LongestZoneRun(IReadOnlyList<Point3> ring,
-        IReadOnlyList<Point3> boundary, double[] cum, double T0, double T1)
+    private static List<Point3> LongestZoneRun(IReadOnlyList<Point3> ring, SlopeZone z,
+        IReadOnlyList<Point3> boundary, double[] cum)
     {
         var best = new List<Point3>();
         if (ring == null || ring.Count < 2) return best;
@@ -214,8 +220,7 @@ public static class GradingPolygons
         var inz = new bool[n];
         for (int i = 0; i < n; i++)
         {
-            double t = GradingGeometry.ParamAt(boundary, cum, ring[i].X, ring[i].Y);
-            inz[i] = T0 <= T1 ? (t >= T0 && t <= T1) : (t >= T0 || t <= T1);
+            inz[i] = z.ContainsAt(ring[i].X, ring[i].Y, boundary, cum);   // ★[0824] 그 구간의 자로 잰다
         }
         int start = -1;                      // 원형 런: in-zone이 아닌 첫 정점 다음부터 훑는다.
         for (int i = 0; i < n; i++) if (!inz[i]) { start = i; break; }

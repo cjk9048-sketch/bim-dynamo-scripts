@@ -126,8 +126,9 @@ public static class GradingBundleStore
     // v7: 구간이 '이 단부터 이 구배' 규칙 목록을 가짐(옹벽=구배 0.05인 규칙). 옛 구간은 SlopeZone.Wall로 무손실 변환.
     // v8: 실제 주입 클립링(Cut/FillClipRing) — 다중 구역 발자국 마스크 정본(GroundHandle 뒤에 추가).
     // v9: 옹벽선 정본(Cut/FillWallRuns) — 정지면 생성 때 확정 저장, 내보내기는 읽기만(옹벽선_재설계.md).
-    /// <summary>v10 = 단높이 변경 규칙(CutBenchSteps/FillBenchSteps) 추가 — JACK 0820.</summary>
-    public const int Version = 10;
+    /// <summary>v11 = 구간마다 <b>자(기준 폴리곤)</b> 추가 — JACK 0824.
+    /// 그 단의 링을 함께 저장해야 도면을 다시 열어도 구간이 같은 자리를 가리킨다.</summary>
+    public const int Version = 11;
 
     /// <summary>[v4] 구역 전체 저장 — 헤더(서명·버전·구역수) 뒤에 구역 본문을 차례로.</summary>
     public static void SaveAll(Database db, Transaction tr, IReadOnlyList<GradingBundle> regions)
@@ -232,7 +233,7 @@ public static class GradingBundleStore
 
     private static GradingBundle ReadRegion(TypedValue[] arr, ref int i, bool withGroundHandle, bool withZoneTo,
                                             bool splitBench, bool withRules, bool withClip, bool withRuns,
-                                            bool withSteps = false)
+                                            bool withSteps = false, bool withZoneRef = false)
     {
         var b = new GradingBundle { PlanHandle = Str(arr, ref i), VertexCount = I32(arr, ref i) };
         b.CentroidX = Dbl(arr, ref i); b.CentroidY = Dbl(arr, ref i);
@@ -249,8 +250,8 @@ public static class GradingBundleStore
         b.FillFinalRings = ReadRingList(arr, ref i);
         // 옛 구간을 새 규칙으로 바꿀 때 '수직'은 그때의 MinSlope, '되돌림'은 그 방향의 전역 구배여야 한다.
         double minS = b.Params.MinSlope;
-        b.CutWallZones = ReadZones(arr, ref i, withZoneTo, withRules, minS, System.Math.Max(b.Params.CutSlope, minS));
-        b.FillWallZones = ReadZones(arr, ref i, withZoneTo, withRules, minS, System.Math.Max(b.Params.FillSlope, minS));
+        b.CutWallZones = ReadZones(arr, ref i, withZoneTo, withRules, minS, System.Math.Max(b.Params.CutSlope, minS), withZoneRef);
+        b.FillWallZones = ReadZones(arr, ref i, withZoneTo, withRules, minS, System.Math.Max(b.Params.FillSlope, minS), withZoneRef);
         if (withGroundHandle) b.GroundHandle = Str(arr, ref i);
         if (withClip)
         {
@@ -298,7 +299,7 @@ public static class GradingBundleStore
                 for (int k = 0; k < n; k++)
                     l.Add(ReadRegion(arr, ref i, withGroundHandle: true, withZoneTo: ver >= 5,
                                      splitBench: ver >= 6, withRules: ver >= 7, withClip: ver >= 8, withSteps: ver >= 10,
-                                     withRuns: ver >= 9));
+                                     withZoneRef: ver >= 11, withRuns: ver >= 9));
                 return l;
             }
             if (ver == 3)   // 하위호환 — 기존 도면(v3 단일 구역)도 그대로 사용
@@ -333,6 +334,8 @@ public static class GradingBundleStore
                 vals.Add(new((int)DxfCode.Real, r.Slope));
                 vals.Add(new((int)DxfCode.Real, r.BenchW));
             }
+            // ★[v11 0824] 이 구간을 잰 자 — 없으면 0점(옛 방식 = 계획 폴리곤).
+            WritePoints(vals, z.Ref);
         }
     }
 
@@ -340,7 +343,8 @@ public static class GradingBundleStore
     /// SlopeZone.Wall로 정확히 같은 의미로 변환한다(withToBench=false인 v3/v4는 끝단 없음 = 끝까지).
     /// 옛 구간의 '수직'은 그때의 MinSlope, '되돌림'은 그때의 전역 구배여야 하므로 params를 함께 받는다.</summary>
     private static List<SlopeZone>? ReadZones(
-        TypedValue[] arr, ref int i, bool withToBench, bool withRules, double minSlope, double baseSlope)
+        TypedValue[] arr, ref int i, bool withToBench, bool withRules, double minSlope, double baseSlope,
+        bool withRef = false)
     {
         int n = I32(arr, ref i);
         if (n <= 0) return null;
@@ -358,6 +362,8 @@ public static class GradingBundleStore
                     double sl = Dbl(arr, ref i), bw = Dbl(arr, ref i);
                     z.Rules.Add((fb, sl, bw));
                 }
+                // ★[v11 0824] 자(기준 폴리곤) — 옛 번들엔 없다(null = 계획 폴리곤, 옛 결과 그대로 재현).
+                if (withRef) { var rp = ReadPoints(arr, ref i); if (rp != null && rp.Count >= 3) z.Ref = rp; }
                 z.Normalize();
                 l.Add(z);
             }

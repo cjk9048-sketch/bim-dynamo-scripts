@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.ApplicationServices;
+﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Runtime;
@@ -228,7 +228,7 @@ public sealed class NoriCommand
             if (b == null) continue;
             string rTag = regions.Count > 1 ? $"구역{ri + 1}" : "구역";
             var later = GradingBundle.LaterFootprints(regions, ri);
-            int slN = 0, blN = 0;
+            int slN = 0, blN = 0, wlN = 0;
 
             foreach (var (up, label, hasSlope, many, one) in new[]
             {
@@ -250,20 +250,30 @@ public sealed class NoriCommand
                     foreach (var finalRing in ringList)
                     {
                         if (finalRing == null || finalRing.Count < 3) continue;
+                        // ★★[JACK 0824 '계획지표면 꺾이는 부분 측점이 자동 추가가 안 돼'] 옹벽 구간의 선도 받는다.
+                        //   이 함수의 결과는 **측점 재료로만** 쓰인다(측점·종단 두 곳뿐 — 도면에 그리지 않는다).
+                        //   옹벽의 윗선·아랫선은 계획 지표면이 실제로 꺾이는 자리라 측점이 서야 하는데,
+                        //   종전엔 '구간 안이면 그리지 않는다'는 표시 규칙에 걸려 **측점에서도 사라졌다**.
+                        var wallPts = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
                         var edges = SlopeHatchGenerator.GenerateEdgeLinesTagged(
                             vs.Rings, ng, up, finalRing, b.Boundary, zones, b.Boundary,
-                            null, null, bs, ms, later);
+                            null, null, bs, ms, later, wallPts);
                         foreach (var e in edges)
                         {
                             if (e.Pts == null || e.Pts.Count < 2) continue;
                             res.Add(e.Pts);
                             if (e.IsSlope) slN++; else blN++;
                         }
+                        foreach (var w in wallPts)
+                        {
+                            if (w == null || w.Count < 2) continue;
+                            res.Add(w); wlN++;
+                        }
                     }
                 }
                 catch (System.Exception ex) { sb.Append($" {rTag}/{label}:예외({ex.GetType().Name})"); }
             }
-            sb.Append($" {rTag}:사면{slN}/소단{blN}");
+            sb.Append($" {rTag}:사면{slN}/소단{blN}/옹벽{wlN}");
         }
         diag = $"번들에서 복원 — 구역 {regions.Count}개 · 선 {res.Count}개 ·{sb}";
         return res;

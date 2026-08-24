@@ -54,6 +54,108 @@ public sealed class SlopeZone
     /// <summary>가장 낮은 규칙 시작단 — 이 단 미만은 전역 구배 그대로라 구간이 영향을 주지 않는다. 규칙이 없으면 무한대.</summary>
     public int FirstBench => Rules.Count > 0 ? Rules[0].FromBench : int.MaxValue;
 
+    private List<Point3>? _ref;
+    private double[]? _refCum;
+
+    /// <summary>★★★[JACK 0824 "단마다 해당 단의 가상 계획폴리곤을 기억하고 그걸로 시작한다"]
+    /// 이 구간의 <see cref="T0"/>/<see cref="T1"/>을 **잰 자(기준 폴리곤)**. null이면 계획 폴리곤(옛 방식).
+    /// <para><b>왜 필요한가.</b> 바깥 단의 링은 계획 폴리곤에서 아주 멀다 — 22×33m 부지에 성토 47m면
+    /// 링이 70m 밖이다(우표 한 장에 훌라후프). 그 링의 코너 바깥 조각을 계획 폴리곤에 투영하면
+    /// <b>모든 점이 코너 한 점</b>으로 모인다(수학적으로 맞다 — 코너는 원래 점 하나가 부채꼴로 펴진 자리다).
+    /// 그런데 우리는 그 답을 '둘레 몇 m'라는 <b>1차원 자</b>로 적었다. 부채꼴은 그 자에 폭이 없다 →
+    /// 구간 폭 0 → <see cref="Flatten"/>이 버린다 → <b>변환이 통째로 사라진다</b>(0820 실측).</para>
+    /// <para>%로 하한을 두는 건 자가 모자란 걸 값으로 때우는 것이라 다른 지형에서 또 터진다
+    /// (이 저장소가 그렇게 고친 자만 일곱 개다). <b>자를 바꾼다</b> — 그 단의 링 자신으로 재면
+    /// 34m 조각은 그 링 위에서 34m다. 무너질 수가 없다.</para></summary>
+    public List<Point3>? Ref
+    {
+        get => _ref;
+        set { _ref = value; _refCum = null; }
+    }
+
+    /// <summary>기준 폴리곤의 누적 길이 — 처음 쓸 때 한 번 만든다. 자가 없으면 null.</summary>
+    public double[]? RefCum
+        => _ref == null || _ref.Count < 3 ? null : (_refCum ??= GradingGeometry.CumLen2D(_ref));
+
+    /// <summary>이 점이 이 구간 안인가 — <b>자기 자</b>가 있으면 그 위에서, 없으면 계획 폴리곤 위에서 잰다.</summary>
+    public bool ContainsAt(double x, double y, IReadOnlyList<Point3> planB, double[] planCum)
+    {
+        var rc = RefCum;
+        return rc != null ? Contains(GradingGeometry.ParamAt(_ref!, rc, x, y))
+                          : Contains(GradingGeometry.ParamAt(planB, planCum, x, y));
+    }
+
+    /// <summary>★★[JACK 0824] 이 점·이 단에 적용될 (구배, 소단폭) — 구간을 <b>만들어진 순서대로</b> 겹쳐 본다.
+    /// <para><see cref="Flatten"/>이 조각마다 <i>미리</i> 하던 합성을 <b>점마다</b> 한다. 구간이 저마다
+    /// 다른 자를 쓰게 됐으므로 한 축에 올려 미리 합칠 수가 없다 — 대신 나중 구간이 자기 시작단부터
+    /// 앞 규칙을 대체하는 규칙(Flatten과 동일)을 그대로 쓴다.</para></summary>
+    public static (double Slope, double BenchW) ResolveAt(
+        IReadOnlyList<SlopeZone>? zones, double x, double y, int bench,
+        double baseSlope, double baseW, IReadOnlyList<Point3> planB, double[] planCum)
+    {
+        if (zones == null || zones.Count == 0) return (baseSlope, baseW);
+        List<(int F, double S, double W)>? acc = null;
+        foreach (var z in zones)
+        {
+            if (z == null || z.Rules.Count == 0) continue;
+            if (!z.ContainsAt(x, y, planB, planCum)) continue;
+            acc ??= new List<(int, double, double)>();
+            int zf = z.FirstBench;
+            acc.RemoveAll(r => r.F >= zf);
+            foreach (var r in z.Rules) acc.Add((r.FromBench, r.Slope, r.BenchW));
+        }
+        if (acc == null) return (baseSlope, baseW);
+        acc.Sort((a, b) => a.F.CompareTo(b.F));
+        double s = baseSlope, w = baseW;
+        foreach (var r in acc)
+        {
+            if (bench < r.F) break;
+            s = r.S;
+            if (r.W >= 0) w = r.W;      // 소단 0(소단 없음)은 유효한 값
+        }
+        return (s, w);
+    }
+
+    /// <summary>★[JACK 0824] 이 구간을 대표하는 점 — 자 위에서 T0~T1의 한가운데.
+    /// 이 구간이 이기는 자리가 어떤 규칙 아래 놓이는지 물어보는 데 쓴다.</summary>
+    public Point3 RepPoint(IReadOnlyList<Point3> planB, double[] planCum)
+    {
+        var poly = Ref ?? planB;
+        var pc = RefCum ?? planCum;
+        double tot = pc[pc.Length - 1];
+        double a = T0, b = T1 >= T0 ? T1 : T1 + tot;
+        return GradingGeometry.PointAtParam(poly, pc, (a + b) * 0.5);
+    }
+
+    /// <summary>★★★[JACK 0824] <b>이 구간이 이기는 자리의 합성된 규칙</b> — 앞 구간들이 정해 둔
+    /// 아래 단(예: 1단부터 옹벽)까지 포함한다.
+    /// <para>구간 하나만 떼어 프로파일을 만들면 그 아래 단이 <b>전역 구배</b>로 잡혀 링이 어긋난다 —
+    /// 1~14단이 옹벽인 자리에서 '15단부터 사면' 구간의 프로파일이 1~14단을 1:1.5로 깔아 버리면
+    /// 15단이 엉뚱하게 멀리 나간다.</para></summary>
+    public static List<(int FromBench, double Slope, double BenchW)> ComposeUpTo(
+        IReadOnlyList<SlopeZone> zones, int upto, IReadOnlyList<Point3> planB, double[] planCum)
+    {
+        var acc = new List<(int FromBench, double Slope, double BenchW)>();
+        if (zones == null || upto < 0 || upto >= zones.Count) return acc;
+        var rep = zones[upto].RepPoint(planB, planCum);
+        for (int i = 0; i <= upto; i++)
+        {
+            var z = zones[i];
+            if (z == null || z.Rules.Count == 0) continue;
+            if (i != upto && !z.ContainsAt(rep.X, rep.Y, planB, planCum)) continue;
+            int zf = z.FirstBench;
+            acc.RemoveAll(r => r.FromBench >= zf);
+            acc.AddRange(z.Rules);
+        }
+        acc.Sort((a, b) => a.FromBench.CompareTo(b.FromBench));
+        return acc;
+    }
+
+    /// <summary>이 점·이 단이 '수직(옹벽)'인가 — <see cref="ResolveAt"/>의 구배가 최소구배 이하면 벽.</summary>
+    public static bool IsWallAtPoint(IReadOnlyList<SlopeZone>? zones, double x, double y, int bench,
+        double baseSlope, double minSlope, IReadOnlyList<Point3> planB, double[] planCum)
+        => ResolveAt(zones, x, y, bench, baseSlope, 1.0, planB, planCum).Slope <= minSlope + 1e-9;
+
     /// <summary>이 단이 '수직(옹벽)'인가 — 적용 구배가 최소구배 이하면 벽으로 본다.</summary>
     public bool IsWallAt(int bench, double baseSlope, double minSlope)
         => SlopeAt(bench, baseSlope) <= minSlope + 1e-9;
@@ -87,10 +189,21 @@ public sealed class SlopeZone
         double Mod(double t) { t %= total; if (t < 0) t += total; return t; }
         double LenOf(SlopeZone z) { double l = z.T1 - z.T0; if (z.T0 > z.T1) l += total; return l; }
 
+        // ★★[JACK 0824] **자가 따로인 구간은 합치지 않는다.** T0/T1을 서로 다른 폴리곤에서 쟀으므로
+        //   한 축에 올릴 수가 없다 — 억지로 올리면 엉뚱한 자리가 된다.
+        //   순서를 지킨 채 그대로 두고, 겹침은 ResolveAt이 점마다 푼다.
+        var withRef = new List<SlopeZone>();
         var src = new List<SlopeZone>();
         foreach (var z in zones)
-            if (z != null && z.Rules.Count > 0 && LenOf(z) > eps) src.Add(z);
-        if (src.Count <= 1) { zones.Clear(); zones.AddRange(src); return; }
+        {
+            if (z == null || z.Rules.Count == 0) continue;
+            if (z.Ref != null) { withRef.Add(z); continue; }
+            if (LenOf(z) > eps) src.Add(z);
+        }
+        if (src.Count <= 1)
+        {
+            zones.Clear(); zones.AddRange(src); zones.AddRange(withRef); return;
+        }
 
         // ① 경계점 수집(0..total 정규화 → 정렬 → eps 병합, 0≈total 랩 중복 제거).
         //    전체 둘레 구간(길이 total)은 경계점 0 하나로 수렴 — 조각 [0,total) 하나가 된다.
@@ -157,6 +270,45 @@ public sealed class SlopeZone
             z.Rules.AddRange(r);
             zones.Add(z);
         }
+        // ★[JACK 0824] 자가 따로인 구간은 뒤에 그대로 붙인다 — '나중 것이 이긴다'는 순서를 지킨다.
+        zones.AddRange(withRef);
+    }
+
+    /// <summary>★★[JACK 0824] <b>죽은 구간을 걷어낸다.</b>
+    /// <para>구간은 변환할 때마다 하나씩 쌓이는데, 뒤에 같은 자리·같은(또는 더 낮은) 시작단으로 규칙이
+    /// 하나 더 얹히면 앞 구간은 <see cref="ResolveAt"/>에서 통째로 지워져 <b>아무 일도 안 한다</b>
+    /// (실측 0824: 구간 4개 중 2개가 완전 중복, 1개는 뒤 규칙에 덮여 죽어 있었다).
+    /// 남겨 두면 번들만 커지고 로그를 읽을 수 없다 — 결과는 그대로 두고 <b>죽은 것만</b> 뺀다.</para>
+    /// <para>종전엔 <see cref="Flatten"/>이 겹침을 갈라내며 이 일을 겸했는데, 자가 구간마다 달라진 뒤로는
+    /// 그쪽을 못 타므로 여기서 따로 한다.</para></summary>
+    public static void Compact(List<SlopeZone> zones)
+    {
+        if (zones == null || zones.Count < 2) return;
+        const double eps = 1e-6;
+        static bool SameRuler(SlopeZone a, SlopeZone b)
+        {
+            if (ReferenceEquals(a.Ref, b.Ref)) return true;
+            if (a.Ref == null || b.Ref == null) return false;
+            if (a.Ref.Count != b.Ref.Count) return false;
+            var ca = a.RefCum; var cb = b.RefCum;
+            if (ca == null || cb == null) return false;
+            return Math.Abs(ca[ca.Length - 1] - cb[cb.Length - 1]) < 1e-6
+                && Math.Abs(a.Ref[0].X - b.Ref[0].X) < 1e-6 && Math.Abs(a.Ref[0].Y - b.Ref[0].Y) < 1e-6;
+        }
+        var dead = new bool[zones.Count];
+        for (int i = 0; i < zones.Count; i++)
+        {
+            if (zones[i] == null || zones[i].Rules.Count == 0) { dead[i] = true; continue; }
+            for (int j = i + 1; j < zones.Count; j++)
+            {
+                if (zones[j] == null || zones[j].Rules.Count == 0) continue;
+                if (!SameRuler(zones[i], zones[j])) continue;
+                if (Math.Abs(zones[i].T0 - zones[j].T0) > eps || Math.Abs(zones[i].T1 - zones[j].T1) > eps) continue;
+                // 같은 자·같은 범위인데 뒤 구간이 더 낮은(또는 같은) 단부터 시작하면 앞 구간은 통째로 지워진다.
+                if (zones[j].FirstBench <= zones[i].FirstBench) { dead[i] = true; break; }
+            }
+        }
+        for (int i = zones.Count - 1; i >= 0; i--) if (dead[i]) zones.RemoveAt(i);
     }
 
     /// <summary>옛 표현(시작단부터 끝단까지 수직)에서 만들기 — 번들 v6 이하 하위호환·옹벽 변환용.
@@ -234,11 +386,21 @@ public sealed class GradingParams
     /// <summary>단높이 규칙 정렬(시작단 오름차순) + 같은 시작단 중복 제거(나중 것이 이김) — SlopeZone.Normalize와 같은 규칙.</summary>
     public void NormalizeBenchSteps()
     {
-        foreach (var list in new[] { CutBenchSteps, FillBenchSteps })
+        foreach (var (list, global0) in new[]
+                 { (CutBenchSteps, CutBenchHeight), (FillBenchSteps, FillBenchHeight) })
         {
             list.Sort((a, b) => a.FromBench.CompareTo(b.FromBench));
             for (int i = list.Count - 1; i > 0; i--)
                 if (list[i].FromBench == list[i - 1].FromBench) list.RemoveAt(i - 1);
+            // ★[JACK 0824] **앞과 같은 값인 규칙은 뺀다** — 변환할 때마다 하나씩 쌓이는데
+            //   값이 같으면 아무 일도 안 한다(실측 로그: `1단~1m 15단~1m 16단~1m` — 뒤 둘은 무의미).
+            //   결과는 그대로 두고 죽은 것만 뺀다 — 안 빼면 번들이 커지고 로그를 읽을 수 없다.
+            double cur = global0;
+            for (int i = 0; i < list.Count; )
+            {
+                if (Math.Abs(list[i].H - cur) < 1e-9) { list.RemoveAt(i); continue; }
+                cur = list[i].H; i++;
+            }
         }
     }
 

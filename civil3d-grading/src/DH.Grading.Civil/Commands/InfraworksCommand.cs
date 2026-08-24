@@ -300,14 +300,10 @@ public sealed class InfraworksCommand
                     if (styleZoneAny)
                         // 링번호 k(1=1단 벽면, 3=2단…) → 단번호 (k-1)/2. 경계 최근접 호길이로 구간 판정(노리선과 동일식).
                         // [구간 구배 0804] 구간 안이어도 그 단 구배가 수직이 아니면 사면 — 옹벽 3D를 만들지 않는다.
+                        // ★[JACK 0824] 점을 그대로 넘긴다 — 구간마다 자(기준 폴리곤)가 다를 수 있어
+                        //   여기서 계획 폴리곤 param 하나로 미리 바꾸면 바깥 단 구간이 코너에서 무너진다.
                         zoneKeep = (x, y, ringK) =>
-                        {
-                            int bench = (ringK - 1) / 2;
-                            double t = GradingGeometry.ParamAt(bnd, cumB, x, y);
-                            foreach (var zz in styleZones)
-                                if (zz != null && zz.Contains(t)) return zz.IsWallAt(bench, zBase, zMin);
-                            return false;
-                        };
+                            SlopeZone.IsWallAtPoint(styleZones, x, y, (ringK - 1) / 2, zBase, zMin, bnd, cumB);
                     // [진단 0804] '옹벽 구간'이라 뭉뚱그리면 구배변경(사면) 구간과 구별이 안 돼 패널 0의 원인을
                     //   못 가린다 — 옹벽단 유무를 갈라 세고, 구간별 규칙을 그대로 덤프한다.
                     int wallZn = 0;
