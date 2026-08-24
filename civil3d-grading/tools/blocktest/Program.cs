@@ -5515,6 +5515,73 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
         $"{nearest:F2}m (자 링은 {rulerFar:F1}m 밖)");
 }
 
+// ★ S59 [JACK 0824 터파기] **목표면 = 두 면 중 낮은 쪽.**
+//   JACK이 든 예: 긴 직사각형 부지 — 우측은 절토, 좌측은 성토.
+//   *"터파기선은 우측은 계획면까지 법선이 있어야 하고 좌측은 원지반까지 법선이 있어야 하는 거야."*
+//   그 말이 `LowerOfSurfaces` 한 줄로 떨어지는지, 그리고 실제로 굴착 법면이
+//   좌우에서 서로 다른 표고에 닿는지를 숫자로 못 박는다.
+{
+    // 원지반: 서쪽이 낮고 동쪽이 높다(x=0 → 100m, x=200 → 120m).
+    var ground = new SlopeGround(100.0, 0.10);
+    // 계획면: 전 구역 평탄 110m → x<100은 성토(원지반이 낮다), x>100은 절토(계획이 낮다).
+    var plan = new FlatGround(110.0);
+    var target = new LowerOfSurfaces(plan, ground);
+
+    // ① 규칙 자체 — 좌우에서 목표가 갈리는가.
+    target.TryGetElevation(20, 50, out double zW);      // 서쪽(성토부) 원지반 102
+    target.TryGetElevation(180, 50, out double zE);     // 동쪽(절토부) 원지반 118
+    Console.WriteLine($"      S59 목표면 — 서쪽 x=20 {zW:F1}m(원지반 102 · 계획 110) · " +
+                      $"동쪽 x=180 {zE:F1}m(원지반 118 · 계획 110)");
+    Check("S59 ★★성토부는 원지반이 목표", Math.Abs(zW - 102.0) < 1e-9, $"{zW:F2}m (102여야 한다)");
+    Check("S59 ★★절토부는 계획면이 목표", Math.Abs(zE - 110.0) < 1e-9, $"{zE:F2}m (110이어야 한다)");
+    Check("S59 ★성토부는 '원지반 쪽'으로 표시된다", !target.TargetIsFirst(20, 50), "정지면 쪽으로 나왔다");
+    Check("S59 ★절토부는 '정지면 쪽'으로 표시된다", target.TargetIsFirst(180, 50), "원지반 쪽으로 나왔다");
+
+    // ② 절성경계(x=100, 원지반=110=계획)에서 이어지는가 — 좌우로 살짝 옮겨 점프가 없는지.
+    target.TryGetElevation(99.5, 50, out double zL);
+    target.TryGetElevation(100.5, 50, out double zR);
+    Console.WriteLine($"      S59 절성경계 x=100 앞뒤 — {zL:F3}m / {zR:F3}m (차 {Math.Abs(zR - zL) * 1000:F1}mm)");
+    Check("S59 ★★★절성경계에서 목표면이 끊기지 않는다(이음매 처리 불필요)",
+        Math.Abs(zR - zL) < 0.11, $"차 {Math.Abs(zR - zL):F3}m");
+
+    // ③ 실제 굴착 — 구조물 바닥 폴리곤에서 법면을 올려 목표면에 닿게 한다.
+    //    절성경계를 가로지르도록 부지 가운데에 길게 놓는다.
+    var box = new List<Point3>
+    {
+        new(60, 30, 95), new(140, 30, 95), new(140, 70, 95), new(60, 70, 95),
+    };
+    var pr = new GradingParams
+    {
+        CutBenchHeight = 3, FillBenchHeight = 3, CutBenchWidth = 0, FillBenchWidth = 0,
+        CutSlope = 0.5, FillSlope = 0.5, CellSize = 1.0, MaxBenches = 30, MaxRise = 40,
+        VertexSpacing = 2.0, MinSlope = 0.05, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+    // 구조물 바닥(95)은 목표면보다 낮으므로 **절토 방향**(위로 올라가는 법면)이다.
+    var v = GradingGeometry.Build(box, target, pr, up: true, null);
+    Check("S59 굴착 법면이 생성된다", v.HasSlope && v.Rings.Count > 2, $"링 {v.Rings.Count}");
+
+    // ④ 굴착 상단선(데이라잇)이 좌우에서 서로 다른 표고에 닿는가 — JACK 질문의 핵심.
+    //    법면 링 중 목표면에 처음 닿는 자리를 좌·우로 나눠 본다.
+    //   ※ 링은 **데이라잇 전 오버사이즈**라 끝까지(MaxRise) 올라간다 — 목표면에 **처음 닿는** 표고를 잰다.
+    double topW = double.MaxValue, topE = double.MaxValue;
+    foreach (var ring in v.Rings)
+        foreach (var q in ring)
+        {
+            if (!target.TryGetElevation(q.X, q.Y, out double tz)) continue;
+            if (q.Z < tz - 0.05) continue;                       // 아직 목표면 아래 = 굴착 안
+            if (q.X < 60) topW = Math.Min(topW, q.Z);            // 부지 서쪽(성토부) 바깥
+            if (q.X > 140) topE = Math.Min(topE, q.Z);           // 부지 동쪽(절토부) 바깥
+        }
+    Console.WriteLine($"      S59 굴착 상단이 닿은 표고 — 서쪽 {topW:F1}m(원지반) · 동쪽 {topE:F1}m(계획면 110)");
+    Check("S59 ★★★서쪽 굴착은 원지반(110보다 낮은 자리)에 닿는다",
+        topW < double.MaxValue && topW < 110.0 - 0.5, $"{topW:F2}m");
+    Check("S59 ★★★동쪽 굴착은 계획면(110)에 닿는다",
+        topE < double.MaxValue && Math.Abs(topE - 110.0) < 3.5, $"{topE:F2}m");
+    Check("S59 ★★좌우 상단 표고가 서로 다르다(한 면으로 뭉뚱그려지지 않았다)",
+        topW < double.MaxValue && topE < double.MaxValue && Math.Abs(topE - topW) > 1.0,
+        $"서쪽 {topW:F1} · 동쪽 {topE:F1}");
+}
+
 return fails == 0 ? 0 : 1;
 
 static double BaseOf(GradingParams p, bool up) => up ? p.CutSlope : p.FillSlope;
