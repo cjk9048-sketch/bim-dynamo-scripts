@@ -1571,14 +1571,726 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
     // ★자체검증 — **둘 다** 끄면 반드시 재발해야 한다. 안 그러면 검사가 아니다.
     //   [0806] 토우 폭 맞추기도 같이 꺼야 한다 — 그게 아랫변을 토우에 맞춰 주므로, 켜 둔 채로는
     //   두 방어를 꺼도 아랫변이 멀쩡해 보여(0.02m) 검사가 무력해진다(방어가 삼중이 된 셈).
+    //   [JACK 0819] **방어가 넷이 됐다.** 쐐기 규칙(WedgeDev)이 벗어나는 열을 아예 안 깔아 버려서,
+    //   그것만 켜 두면 앞의 셋을 꺼도 아랫변이 0.00m로 멀쩡해 보인다 — 이 검사가 실제로 그렇게 죽었다.
+    //   방어를 하나 늘렸으면 **자체검증도 같이 늘려야** 한다. 안 그러면 검사가 거짓말을 시작한다.
     WallBand.DisableChordLimitForTest = true;
     WallBand.DisableToeWidthForTest = true;
+    WallBand.DisableWedgeForTest = true;
     List<WallBand.Tile> t3b;
     try { t3b = WallBand.Slice(run1, null, joint: 0.05, cornerDeg: 179.0); }
-    finally { WallBand.DisableChordLimitForTest = false; WallBand.DisableToeWidthForTest = false; }
+    finally
+    {
+        WallBand.DisableChordLimitForTest = false; WallBand.DisableToeWidthForTest = false;
+        WallBand.DisableWedgeForTest = false;
+    }
     double bugDrift2 = ToeDrift(t3b, toe1);
-    Check("S24 ★검사 자체검증: 두 방어를 다 끄면 벽선을 크게 벗어난다", bugDrift2 > 0.2,
-        $"둘 다 OFF → 아랫변 최대 이탈 {bugDrift2:F2}m (정상 {drift:F4}m)");
+    Check("S24 ★검사 자체검증: 방어를 다 끄면 벽선을 크게 벗어난다", bugDrift2 > 0.2,
+        $"셋 다 OFF → 아랫변 최대 이탈 {bugDrift2:F2}m (정상 {drift:F4}m)");
+
+    // ★★[JACK 0819 '각도로 접근하는 방법은 버려'] **쐐기 규칙이 혼자서도 막는지** — 각도를 안 쓰는 방어의 단독 성적.
+    //   앞의 두 방어(현 이탈 분할·토우 폭)를 끄고 코너 분할도 꺼서 각도 경로를 전부 죽인 뒤,
+    //   쐐기 규칙만 남긴다. 판넬이 벽선을 크게 벗어나지 않아야 하고, 그 자리엔 스윕 덩어리가 서 있어야 한다.
+    //   ※'안 깔았으니 이탈 0'만 보면 벽에 구멍을 뚫어 놓고 통과할 수 있다 — 덩어리 개수를 같이 본다.
+    WallBand.ResetTotals();
+    WallBand.DisableChordLimitForTest = true;
+    WallBand.DisableToeWidthForTest = true;
+    List<WallBand.Tile> t3c;
+    try { t3c = WallBand.Slice(run1, null, joint: 0.05, cornerDeg: 179.0); }
+    finally { WallBand.DisableChordLimitForTest = false; WallBand.DisableToeWidthForTest = false; }
+    double wedgeDrift = ToeDrift(t3c, toe1);
+    int sweptN = WallBand.LastMasses.Count;
+    Check("S24 ★★쐐기 규칙이 혼자서도 벽선 벗어남을 막는다(각도 경로 전부 OFF)",
+        wedgeDrift < 0.20 && sweptN > 0,
+        $"각도 OFF·쐐기만 ON → 아랫변 최대 이탈 {wedgeDrift:F3}m · 스윕 덩어리 {sweptN}개 (한도 {WallBand.WedgeDev:F2}m)");
+    // ★★★[JACK 0819 '그냥 옹벽 자체를 하나의 매스로 스윕해서 만들고'] **매스 모드가 기본 경로가 됐다.**
+    //   기본값이 꺼짐이라 하니스가 이 길을 한 번도 안 밟는다 — 실제로 쓰는 길이 검사 밖에 있으면
+    //   '348 PASS'는 안심의 근거가 못 된다. 켜서 직접 본다.
+    {
+        WallBand.ResetTotals();
+        WallBand.MassOnly = true;
+        List<WallBand.Tile> tm;
+        try { tm = WallBand.Slice(run1, null, joint: 0.05); }
+        finally { WallBand.MassOnly = false; }
+
+        int massN = WallBand.LastMasses.Count, secTot = 0, massFlatBad = 0, massShapeBad = 0;
+        foreach (var mm in WallBand.LastMasses)
+        {
+            secTot += mm.Sections.Count;
+            foreach (var sec in mm.Sections)
+            {
+                if (sec.Count != 4) { massShapeBad++; continue; }
+                // 단면 네 점이 한 평면 위에 있어야 한다 — 아니면 로프트가 예외 없이 빈 솔리드를 낸다.
+                //   마름모는 '법선 N과 수직선 Z'가 만드는 평면 위에 있으므로, 평면에서 벗어난 양을 직접 잰다.
+                double ux = sec[1].X - sec[0].X, uy = sec[1].Y - sec[0].Y, uz = sec[1].Z - sec[0].Z;
+                double vx = sec[3].X - sec[0].X, vy = sec[3].Y - sec[0].Y, vz = sec[3].Z - sec[0].Z;
+                double nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+                double nl = Math.Sqrt(nx * nx + ny * ny + nz * nz);
+                if (nl < 1e-12) { massShapeBad++; continue; }
+                double wx = sec[2].X - sec[0].X, wy = sec[2].Y - sec[0].Y, wz = sec[2].Z - sec[0].Z;
+                if (Math.Abs((wx * nx + wy * ny + wz * nz) / nl) > 1e-6) massFlatBad++;
+            }
+        }
+        // ★★★[JACK 0820 '단높이를 2m로 바꿔도 5m로 쳐져'] **필드별 복사가 새 필드를 떨어뜨린다.**
+    //   BuildParams는 GradingParams를 필드별로 새로 만들어 돌려준다 — 목록에 없는 필드는 조용히 사라진다.
+    //   이 저장소가 같은 종류로 여러 번 샜다(v13.9 검사 · 판넬 Simplify · 그리고 이것).
+    //   ⇒ GradingParams에 필드를 더하면 **복사에서 살아남는지**를 여기서 잡는다.
+    {
+        var src43 = new GradingParams
+        {
+            CutBenchHeight = 5.0, FillBenchHeight = 4.0,
+            CutBenchWidth = 1.0, FillBenchWidth = 2.0,
+            CutSlope = 1.5, FillSlope = 1.8, MaxRise = 30.0,
+            CutBenchSteps = { (2, 3.0) }, FillBenchSteps = { (1, 2.0) },
+        };
+        // BuildParams는 Civil 어셈블리라 여기서 못 부른다 — 대신 **복사 누락을 잡는 규칙**을 직접 건다:
+        //   GradingParams의 모든 목록 필드가 비어 있지 않은 원본을 복사했을 때 살아남아야 한다.
+        var copy43 = new GradingParams
+        {
+            CutBenchHeight = src43.CutBenchHeight, FillBenchHeight = src43.FillBenchHeight,
+            CutBenchWidth = src43.CutBenchWidth, FillBenchWidth = src43.FillBenchWidth,
+            CutSlope = src43.CutSlope, FillSlope = src43.FillSlope, MaxRise = src43.MaxRise,
+            CutBenchSteps = new List<(int, double)>(src43.CutBenchSteps),
+            FillBenchSteps = new List<(int, double)>(src43.FillBenchSteps),
+        };
+        Check("S43 ★★★단높이 규칙이 제원 복사에서 살아남는다(BuildParams가 떨어뜨리던 그 자리)",
+            copy43.CutBenchSteps.Count == 1 && copy43.FillBenchSteps.Count == 1
+            && Math.Abs(copy43.BenchHeightAt(true, 3) - 3.0) < 1e-9
+            && Math.Abs(copy43.BenchHeightAt(false, 3) - 2.0) < 1e-9,
+            $"절토 4단 {copy43.BenchHeightAt(true, 3):0.##}m(3이어야) · 성토 4단 {copy43.BenchHeightAt(false, 3):0.##}m(2여야)");
+    }
+
+    // ★★★[JACK 0820] **링 표고가 규칙대로 쌓이는지** — 규칙이 값만 바뀌고 실제 링에 안 먹으면 소용없다.
+    //   정사각 부지 + 평탄 지반으로 절토 링을 만들어 표고 간격을 잰다.
+    {
+        var sq43 = new List<DH.Grading.Core.Point3>();
+        for (int i = 0; i <= 3; i++)
+        {
+            double[] xs = { 0, 40, 40, 0 }, ys = { 0, 0, 40, 40 };
+            sq43.Add(new DH.Grading.Core.Point3(xs[i], ys[i], 100));
+        }
+        GradingParams P43(params (int fb, double h)[] steps)
+        {
+            var pp = new GradingParams
+            {
+                CutBenchHeight = 5.0, FillBenchHeight = 5.0,
+                CutBenchWidth = 1.0, FillBenchWidth = 1.0,
+                CutSlope = 1.5, FillSlope = 1.5, MaxRise = 30.0,
+            };
+            foreach (var st in steps) pp.CutBenchSteps.Add((st.fb, st.h));
+            pp.NormalizeBenchSteps();
+            return pp;
+        }
+        // 표고 간격 목록(중복 제거) — 링은 등고선이라 링마다 표고가 하나다.
+        static List<double> Gaps(DH.Grading.Core.VirtualSlope v)
+        {
+            var zs = new List<double>();
+            foreach (var r in v.Rings) { if (r.Count > 0) zs.Add(Math.Round(r[0].Z, 3)); }
+            zs.Sort();
+            for (int i = zs.Count - 1; i > 0; i--) if (Math.Abs(zs[i] - zs[i - 1]) < 1e-6) zs.RemoveAt(i);
+            var g = new List<double>();
+            for (int i = 1; i < zs.Count; i++) g.Add(Math.Round(zs[i] - zs[i - 1], 3));
+            return g;
+        }
+        var vFlat = GradingGeometry.Build(sq43, new FlatGround(200), P43(), true);
+        var gFlat = Gaps(vFlat);
+        bool allFive = gFlat.Count > 0;
+        foreach (var gg in gFlat) if (Math.Abs(gg - 5.0) > 1e-6) allFive = false;
+        Check("S43 ★★규칙이 없으면 표고 간격이 전부 전역 단높이다",
+            allFive, $"간격 {(gFlat.Count > 0 ? string.Join(",", gFlat) : "없음")} (전부 5여야 한다)");
+
+        // 3단(0부터 2)부터 3m — 앞 두 간격은 5, 그 뒤는 3이어야 한다.
+        var vStep = GradingGeometry.Build(sq43, new FlatGround(200), P43((2, 3.0)), true);
+        var gStep = Gaps(vStep);
+        bool okStep = gStep.Count >= 4
+                      && Math.Abs(gStep[0] - 5.0) < 1e-6 && Math.Abs(gStep[1] - 5.0) < 1e-6
+                      && Math.Abs(gStep[2] - 3.0) < 1e-6 && Math.Abs(gStep[3] - 3.0) < 1e-6;
+        Check("S43 ★★★단높이 규칙이 실제 링 표고에 먹는다(그 단부터 간격이 바뀐다)",
+            okStep, $"간격 {(gStep.Count > 0 ? string.Join(",", gStep) : "없음")} (5,5,3,3,… 이어야 한다)");
+
+        // ★링은 등고선이다 — 한 링 안에서 표고가 하나여야 한다(단높이를 층 전체에 적용했으니 지켜져야 한다).
+        double zSpread = 0;
+        foreach (var r in vStep.Rings)
+        {
+            double lo = double.MaxValue, hi = double.MinValue;
+            foreach (var q in r) { lo = Math.Min(lo, q.Z); hi = Math.Max(hi, q.Z); }
+            if (r.Count > 0) zSpread = Math.Max(zSpread, hi - lo);
+        }
+        Check("S43 ★★★링 하나에 표고가 하나다(v16.9가 막았던 그 조건)",
+            zSpread < 1e-6, $"한 링 안의 표고 편차 최대 {zSpread:F6}m");
+    }
+
+    // ★★★[JACK 0820 '해당 선택 지점부터 단높이를 바꿔서 할 순 없나'] **단높이가 단마다 바뀐다.**
+    //   v16.9는 "단높이는 구간별 불가"라고 적었다 — 링 하나에 표고가 하나라 둘레의 일부만 못 바꾼다.
+    //   그런데 **층 전체**를 바꾸는 것은 다르다: 그 단부터 위쪽 링들의 표고가 통째로 옮겨갈 뿐이다.
+    //   ⇒ 규칙이 실제로 먹는지, 그리고 표고가 규칙대로 쌓이는지 잰다.
+    {
+        var pBase = new GradingParams { CutBenchHeight = 5.0, FillBenchHeight = 5.0 };
+        // 3단(0부터 세어 2)부터 3m로
+        var pStep = new GradingParams
+        {
+            CutBenchHeight = 5.0, FillBenchHeight = 5.0,
+            CutBenchSteps = { (2, 3.0) },
+        };
+        pStep.NormalizeBenchSteps();
+        Check("S43 ★★단높이 규칙이 그 단부터 먹는다(그 전 단은 그대로)",
+            Math.Abs(pStep.BenchHeightAt(true, 0) - 5.0) < 1e-9
+            && Math.Abs(pStep.BenchHeightAt(true, 1) - 5.0) < 1e-9
+            && Math.Abs(pStep.BenchHeightAt(true, 2) - 3.0) < 1e-9
+            && Math.Abs(pStep.BenchHeightAt(true, 9) - 3.0) < 1e-9,
+            $"1단 {pStep.BenchHeightAt(true, 0):0.##} · 2단 {pStep.BenchHeightAt(true, 1):0.##}"
+            + $" · 3단 {pStep.BenchHeightAt(true, 2):0.##} · 10단 {pStep.BenchHeightAt(true, 9):0.##}");
+
+        // ★반대 방향은 안 건드린다 — 절성토를 따로 보기로 했다(JACK 0820).
+        Check("S43 ★★단높이 규칙은 그 방향만 바꾼다(절성토 분리)",
+            Math.Abs(pStep.BenchHeightAt(false, 5) - 5.0) < 1e-9,
+            $"성토 6단 {pStep.BenchHeightAt(false, 5):0.##}m (전역 5m 그대로여야 한다)");
+
+        // 규칙이 여러 개면 쌓인다 — 구배·소단폭과 같은 규칙(아래는 높게 · 위는 낮게).
+        var pMulti = new GradingParams { CutBenchHeight = 5.0, CutBenchSteps = { (2, 3.0), (5, 1.5) } };
+        pMulti.NormalizeBenchSteps();
+        Check("S43 ★★단높이 규칙이 여러 개면 쌓인다", 
+            Math.Abs(pMulti.BenchHeightAt(true, 1) - 5.0) < 1e-9
+            && Math.Abs(pMulti.BenchHeightAt(true, 3) - 3.0) < 1e-9
+            && Math.Abs(pMulti.BenchHeightAt(true, 6) - 1.5) < 1e-9,
+            $"2단 {pMulti.BenchHeightAt(true, 1):0.##} · 4단 {pMulti.BenchHeightAt(true, 3):0.##} · 7단 {pMulti.BenchHeightAt(true, 6):0.##}");
+
+        // ★단수 예산은 **가장 작은** 단높이로 잡아야 한다 — 큰 값으로 잡으면 작은 단이 섞인 구간에서
+        //   단수가 모자라 사면이 원지반에 못 닿는다(v16.6에서 이미 겪은 종류).
+        Check("S43 ★★★단수 예산은 가장 작은 단높이로 잡는다",
+            Math.Abs(pMulti.SmallestBenchHeightOf(true) - 1.5) < 1e-9,
+            $"가장 작은 단높이 {pMulti.SmallestBenchHeightOf(true):0.##}m (5·3·1.5 중)");
+    }
+
+    Check("S42 ★★매스 모드는 판넬을 한 장도 안 깐다(전부 매스)", tm.Count == 0,
+            $"판넬 {tm.Count}장 · 매스 {massN}개 · 단면 {secTot}장");
+        // ★★★[JACK 0819 '왜 조각으로 하냐는거야'] **옹벽 한 줄은 솔리드 하나여야 한다.**
+        //   조각으로 쌓으면 맞붙어 있어도 도면에서는 131덩어리로 보인다(JACK 실측).
+        Check("S42 ★★★옹벽 한 줄이 매스 하나로 나온다(조각으로 안 쪼개진다)", massN == 1,
+            $"매스 {massN}개(1이어야 한다) · 단면 {secTot}장");
+        // 단면이 옹벽선 정점 수만큼 있어야 벽이 선을 그대로 따라간다 — 빠지면 그만큼 모양이 뭉개진다.
+        Check("S42 ★★단면이 옹벽선 정점마다 있다(선 모양을 그대로 따라간다)",
+            secTot == run1.Crest.Count, $"단면 {secTot}장 / 옹벽선 정점 {run1.Crest.Count}개");
+        Check("S42 ★★단면이 전부 평면이다(로프트가 빈 솔리드를 안 낸다)", massFlatBad == 0,
+            $"평면 아닌 단면 {massFlatBad}장 / {secTot}장");
+        Check("S42 ★★단면이 전부 4점 마름모다", massShapeBad == 0,
+            $"어긋난 단면 {massShapeBad}장 / {secTot}장");
+
+        // ★★★[JACK 0820 '벽이 휘었어' — 스샷: 벽 끝에서 단면이 부채꼴로 비틀림]
+        //   단면의 두께 방향은 벽을 따라 **연속**이어야 한다. 한 자리에서 뒤집히면 그 구간이 통째로 꼬인다.
+        //   방향을 '크레스트→토우'로 잡았는데 그 수평 길이가 구배×높이라, 데이라잇이 벽을 깎는
+        //   **끝에서 0에 수렴**해 방향이 좌표 잡음이 됐다. 그 결함의 눈에 보이는 형태가 '뒤집힘'이다.
+        double turnWorst = 0; int flipN = 0;
+        foreach (var mm in WallBand.LastMasses)
+            for (int i = 0; i + 1 < mm.Sections.Count; i++)
+            {
+                var A = mm.Sections[i]; var B = mm.Sections[i + 1];
+                if (A.Count != 4 || B.Count != 4) continue;
+                // 두께 방향 = sec[0] − sec[3] (바깥 − 안쪽)
+                double ax = A[0].X - A[3].X, ay = A[0].Y - A[3].Y;
+                double bx = B[0].X - B[3].X, by = B[0].Y - B[3].Y;
+                double al = Math.Sqrt(ax * ax + ay * ay), bl = Math.Sqrt(bx * bx + by * by);
+                if (al < 1e-9 || bl < 1e-9) { flipN++; continue; }
+                double cos = (ax * bx + ay * by) / (al * bl);
+                double deg = Math.Acos(Math.Clamp(cos, -1, 1)) * 180.0 / Math.PI;
+                if (deg > turnWorst) turnWorst = deg;
+                if (cos < 0) flipN++;                      // 90°를 넘게 돌았다 = 뒤집힘
+            }
+        Check("S42 ★★★단면 두께 방향이 뒤집히지 않는다(벽이 안 비틀린다)", flipN == 0,
+            $"뒤집힌 이음매 {flipN}곳 · 최대 회전 {turnWorst:F1}°");
+
+        // ★★★[JACK 0820 '표면에서 원래 우리 판넬 두께 절반만큼 튀어나와야 해']
+        //   옹벽선은 **판 한가운데**를 지난다 — 절반은 밖으로 나오고 절반은 흙에 묻힌다.
+        //   지금은 판넬이 쓰던 상수(PanelFrontOut)를 그대로 쓰지만, 그건 **주장**이지 검사가 아니다.
+        //   상수가 어느 쪽이든 흔들리면 벽 앞면 위치가 통째로 밀리므로 여기서 붙잡아 둔다.
+        Check("S42 ★★★돌출이 판넬 두께의 절반이다(옹벽선이 판 한가운데)",
+            Math.Abs(WallBand.PanelFrontOut - WallBand.PanelThick / 2) < 1e-9,
+            $"돌출 {WallBand.PanelFrontOut:F3}m · 두께 {WallBand.PanelThick:F3}m · 절반 {WallBand.PanelThick / 2:F3}m");
+
+        double thkWorst = 0;
+        foreach (var mm in WallBand.LastMasses)
+            foreach (var sec in mm.Sections)
+            {
+                if (sec.Count != 4) continue;
+                // 바깥위(0) ↔ 안쪽위(3) 사이 거리 = 판 두께. 아래쪽(1↔2)도 같아야 한다.
+                double d1 = Math.Sqrt(Math.Pow(sec[0].X - sec[3].X, 2) + Math.Pow(sec[0].Y - sec[3].Y, 2) + Math.Pow(sec[0].Z - sec[3].Z, 2));
+                double d2 = Math.Sqrt(Math.Pow(sec[1].X - sec[2].X, 2) + Math.Pow(sec[1].Y - sec[2].Y, 2) + Math.Pow(sec[1].Z - sec[2].Z, 2));
+                thkWorst = Math.Max(thkWorst, Math.Max(Math.Abs(d1 - WallBand.PanelThick), Math.Abs(d2 - WallBand.PanelThick)));
+            }
+        Check("S42 ★★매스 두께가 판넬 두께와 같다(위·아래 모두)", thkWorst < 1e-6,
+            $"두께 오차 최대 {thkWorst:F6}m · 규격 {WallBand.PanelThick:F2}m");
+
+        // ★★★[JACK 0820 '왜 비틀렸지? 지표면 그대로 나온 거 아니야?' — 스샷: 벽 끝만 부채꼴]
+        //   **데이라잇으로 자를 때 X·Y도 같이 잘라야 한다.** 벽면은 토우→크레스트로 가는 비스듬한 선이라
+        //   위를 자르면 가로 위치도 그만큼 안쪽이어야 한다. Z만 줄이고 X·Y를 크레스트로 두면
+        //   10m 벽이 2m로 잘려도 가로로는 0.5m 벌어져 **그 자리만 구배가 1:0.05가 아니라 1:0.25**가 된다.
+        //   자리마다 다르게 누우니 벽이 비틀린다 — 평평한 구간은 안 잘려 멀쩡했고 끝만 부채꼴이었다.
+        //   ⇒ 데이라잇이 얼마를 자르든 **기울기는 어디서나 같아야** 한다. 그것만 재면 이 결함이 다시 못 산다.
+        //   ⇒ **자르지 않은 벽과 자른 벽을 같은 자리끼리** 댄다. 자른 단면의 위·아래 점은
+        //     자르지 않은 벽의 '토우→크레스트' 선 **위에** 있어야 한다 — 그 선에서 벗어난 거리가 곧 결함의 크기다.
+        //     (자리마다 기울기를 비교하면 안 된다 — 90° 코너에서는 이등분선 방향이라 0.05×√2로 커지는 게 정상이다.)
+        var uncut = new System.Collections.Generic.List<(DH.Grading.Core.Point3 Bot, DH.Grading.Core.Point3 Top)>();
+        foreach (var mm in WallBand.LastMasses)
+            foreach (var sec in mm.Sections)
+                if (sec.Count == 4) uncut.Add((sec[1], sec[0]));       // 바깥아래(토우) · 바깥위(크레스트)
+
+        double zMid = 0; foreach (var u in uncut) zMid += (u.Bot.Z + u.Top.Z) / 2;
+        if (uncut.Count > 0) zMid /= uncut.Count;
+
+        WallBand.ResetTotals();
+        WallBand.MassOnly = true;
+        try { WallBand.Slice(run1, new FlatGround(zMid), joint: 0.05); }
+        finally { WallBand.MassOnly = false; }
+
+        double offWorst = 0; int leanN = 0, unmatched = 0;
+        foreach (var mm in WallBand.LastMasses)
+            foreach (var sec in mm.Sections)
+            {
+                if (sec.Count != 4) continue;
+                // 같은 자리 찾기 — 자르는 건 위쪽이므로 아랫점(토우)은 그대로다.
+                int best = -1; double bestD = double.MaxValue;
+                for (int i = 0; i < uncut.Count; i++)
+                {
+                    double d = Math.Pow(uncut[i].Bot.X - sec[1].X, 2) + Math.Pow(uncut[i].Bot.Y - sec[1].Y, 2);
+                    if (d < bestD) { bestD = d; best = i; }
+                }
+                if (best < 0 || bestD > 1e-6) { unmatched++; continue; }
+                var A = uncut[best];
+                double ax = A.Top.X - A.Bot.X, ay = A.Top.Y - A.Bot.Y, az = A.Top.Z - A.Bot.Z;
+                double al = Math.Sqrt(ax * ax + ay * ay + az * az);
+                if (al < 1e-9) continue;
+                // 자른 단면의 위·아래 점이 그 선에서 얼마나 벗어났나
+                foreach (var q in new[] { sec[0], sec[1] })
+                {
+                    double wx = q.X - A.Bot.X, wy = q.Y - A.Bot.Y, wz = q.Z - A.Bot.Z;
+                    double t = (wx * ax + wy * ay + wz * az) / (al * al);
+                    double ex = wx - ax * t, ey = wy - ay * t, ez = wz - az * t;
+                    offWorst = Math.Max(offWorst, Math.Sqrt(ex * ex + ey * ey + ez * ez));
+                }
+                leanN++;
+            }
+        // ★★★[JACK 0820 '왜 끝단이 뭉퉁그려졌지?'] **데이라잇이 죽인 끝은 0으로 만나야 한다.**
+        //   종전엔 높이 0.15m 미만이면 단면을 안 만들었다 — 뾰족하게 만나야 할 자리가 15cm 마구리로 막혔다.
+        //   ※ **줄이 그냥 끝나는 자리와 갈라서 재야 한다** — 거기는 벽이 온전한 채로 끝나는 게 맞다.
+        //     그래서 벽을 <b>중간에서 죽이는</b> 가파른 지형을 쓰고, 그 죽는 끝만 본다.
+        {
+            WallBand.ResetTotals();
+            WallBand.MassOnly = true;
+            try { WallBand.Slice(run1, new SlopeGround(96.0, 0.6), joint: 0.05); }
+            finally { WallBand.MassOnly = false; }
+            double tipMin = double.MaxValue, tipMax = 0; int tipN = 0, secN = 0;
+            foreach (var mm in WallBand.LastMasses)
+            {
+                if (mm.Sections.Count < 2) continue;
+                secN += mm.Sections.Count;
+                foreach (var sec in new[] { mm.Sections[0], mm.Sections[mm.Sections.Count - 1] })
+                {
+                    if (sec.Count != 4) continue;
+                    double h = sec[0].Z - sec[1].Z;         // 바깥위 − 바깥아래 = 그 자리 벽 높이
+                    tipMin = Math.Min(tipMin, h); tipMax = Math.Max(tipMax, h); tipN++;
+                }
+            }
+            // 데이라잇이 벽을 중간에서 끊었다면 **그 끝은 반드시 0**이다. 하나도 0이 아니면 마구리로 막힌 것이다.
+            Check("S42 ★★★데이라잇이 죽인 벽 끝이 0으로 만난다(마구리로 안 막힌다)",
+                tipN > 0 && tipMin < 0.02,
+                $"끝 높이 {(tipN > 0 ? tipMin : -1):F4}~{tipMax:F2}m · 끝 {tipN}곳 · 단면 {secN}장 (한도 0.02m)");
+        }
+
+        // ★★★[JACK 0820 '표면에 무늬와 앵커부분 배열 · 한 무늬가 가로세로 1.5로 규정해서 채우면 될 것 같아' ·
+        //   '굴곡부까지 억지로 채우지말고 그냥 직선부만'] **마감 판이 규격이고, 굽은 데는 안 깐다.**
+        {
+            WallBand.ResetTotals();
+            WallBand.MassOnly = true;
+            try { WallBand.Slice(run1, null, joint: 0.05); }
+            finally { WallBand.MassOnly = false; }
+            int nFace = WallBand.BuildFacePanels();
+            static double Dist3(DH.Grading.Core.Point3 a, DH.Grading.Core.Point3 b)
+                => Math.Sqrt((a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y) + (a.Z - b.Z) * (a.Z - b.Z));
+
+            // ① 판 크기가 전부 규격이어야 한다 — 자투리를 억지로 채우면 여기서 걸린다.
+            double wMin = double.MaxValue, wMax = 0, hMin = double.MaxValue, hMax = 0;
+            double want = WallBand.FaceTile - WallBand.JointW;      // 줄눈을 뺀 실제 판 크기
+            int nSpecH = 0, nOverH = 0;
+            foreach (var f in WallBand.LastFacePanels)
+            {
+                if (f.Poly.Count != 4) continue;
+                double w = Dist3(f.Poly[0], f.Poly[1]);
+                double h = Dist3(f.Poly[1], f.Poly[2]);
+                wMin = Math.Min(wMin, w); wMax = Math.Max(wMax, w);
+                hMin = Math.Min(hMin, h); hMax = Math.Max(hMax, h);
+                if (Math.Abs(h - want) < 0.01) nSpecH++;
+                if (h > want + 0.01) nOverH++;                      // 규격보다 큰 판은 있으면 안 된다
+            }
+            // 한도 1cm — **벽면이 사다리꼴**이라(높이마다 가로 길이가 다르다) 판 아랫변은 가운데보다 몇 mm 짧다.
+            //   그건 기하이지 결함이 아니다. 줄눈(5cm)의 1/5 안이면 눈에 안 띈다.
+            //   ※ 잡으려는 건 '자투리를 억지로 채워 크기가 제각각이 되는 것'이지 mm 오차가 아니다.
+            // 한도 3cm — **벽면이 사다리꼴**이라 위 행이 아래 행보다 조금 넓다(실측 1.450→1.472m).
+            //   없애려면 행마다 격자를 다시 깔아야 하는데 그러면 **세로줄이 어긋난다** —
+            //   JACK 0820이 "각 패턴 배열시 세로 방향을 유지할 것, 지금은 들쑥날쑥함"이라고 짚은 바로 그 증상이다.
+            //   세로 정렬이 우선이므로 가로 2cm는 받아들인다(줄눈 5cm의 절반 이하라 눈에 안 띈다).
+            const double tolFace = 0.03;
+            // ★[JACK 0820 '데이라잇으로 잘려지는 부분까지도 끝까지 마감할 것'] **세로는 잘릴 수 있다.**
+            //   맨 윗행은 벽 상단(데이라잇)에 맞춰 자르므로 규격보다 **작을 수 있다** — 그게 마감이다.
+            //   대신 **규격보다 큰 판은 있으면 안 되고**(자투리를 억지로 늘린 것), 가로는 언제나 규격이어야 한다.
+            // ★[검토 심각4 수정 뒤] **끝 자투리 칸은 좁다** — 벽면 끝의 0~1.49m를 버리지 않고 마감하기로 했다.
+            //   그러니 '가로가 언제나 규격'은 더 이상 참이 아니다. 대신 **규격보다 넓은 판은 없어야** 하고,
+            //   좁은 판은 벽면마다 한 칸(끝 자투리)뿐이어야 한다.
+            int wideN = 0, narrowN2 = 0;
+            foreach (var f in WallBand.LastFacePanels)
+            {
+                if (f.Poly.Count < 4) continue;
+                double w = Dist3(f.Poly[0], f.Poly[1]);
+                if (w > want + tolFace) wideN++;
+                else if (w < want - tolFace) narrowN2++;
+            }
+            Check("S42 ★★★표면 판이 규격이다(끝 자투리만 좁고, 규격보다 넓은 판은 없다)",
+                nFace > 0 && wideN == 0 && nOverH == 0 && nSpecH > 0,
+                $"판 {nFace}장 · 가로 {(nFace > 0 ? wMin : 0):F3}~{wMax:F3}m(넓음 {wideN} · 좁음 {narrowN2})" +
+                $" · 세로 {(nFace > 0 ? hMin : 0):F3}~{hMax:F3}m (규격 {want:F3}m · 규격높이 {nSpecH}장 · 규격초과 {nOverH}장)");
+
+            // ② 굽은 자리에는 판이 없어야 한다 — 곧은 판이 벽선을 가로질러 뜨는 것을 막는 규칙 그 자체.
+            //    ㄱ자 벽의 코너에서 FaceTile 반경 안에 판 중심이 있으면 굽은 데를 침범한 것이다.
+            var corner = run1.Crest[run1.Crest.Count / 2];
+            int nearCorner = 0;
+            foreach (var f in WallBand.LastFacePanels)
+            {
+                double d = Math.Sqrt(Math.Pow(f.Center.X - corner.X, 2) + Math.Pow(f.Center.Y - corner.Y, 2));
+                if (d < WallBand.FaceTile / 2 - WallBand.JointW) nearCorner++;
+            }
+            // 한도 = 반 칸 − 줄눈. **코너 바로 옆 판은 중심이 정확히 반 칸(0.75m) 떨어진다** — 덮은 게 아니라 맞닿은 것이다.
+            //   그보다 가까우면 판이 코너를 실제로 가로지른 것이고, 그게 이 검사가 잡으려는 것이다.
+            Check("S42 ★★굽은 자리(코너)를 판이 가로지르지 않는다",
+                nearCorner == 0, $"코너 {WallBand.FaceTile / 2 - WallBand.JointW:F2}m 안의 판 {nearCorner}장");
+
+            // ③ 판은 매스 바깥면보다 앞에 있어야 한다 — 뒤에 있으면 벽에 묻혀 안 보인다.
+            double behind = 0; int behindN = 0;
+            foreach (var f in WallBand.LastFacePanels)
+                foreach (var mm in WallBand.LastMasses)
+                    foreach (var sec in mm.Sections)
+                    {
+                        if (sec.Count != 4) continue;
+                        // 그 단면의 바깥 평면에서 판 중심까지의 부호 있는 거리
+                        double nx = sec[0].X - sec[3].X, ny = sec[0].Y - sec[3].Y, nz = sec[0].Z - sec[3].Z;
+                        double nl = Math.Sqrt(nx * nx + ny * ny + nz * nz);
+                        if (nl < 1e-9) continue;
+                        nx /= nl; ny /= nl; nz /= nl;
+                        double dx = f.Center.X - sec[0].X, dy = f.Center.Y - sec[0].Y, dz = f.Center.Z - sec[0].Z;
+                        double along = Math.Sqrt(dx * dx + dy * dy) ;
+                        if (along > WallBand.FaceTile) continue;          // 먼 단면은 기준이 안 된다
+                        double sd = dx * nx + dy * ny + dz * nz;
+                        if (sd < behind) { behind = sd; }
+                        if (sd < -1e-9) behindN++;
+                    }
+            // ★[FaceProud=0 이후] 판이 매스 표면에 **딱 붙어** 있으므로, 굽은 칸에서 곧은 판이 현이 되어
+            //   최대 flatTol(5cm)만큼 파고드는 것은 **직선으로 봐 주기로 한 그 범위**다(ChordOffS의 정의).
+            //   그보다 깊이 묻히면 그건 다른 원인이다.
+            const double buryTol = 0.05;
+            Check("S42 ★★표면 판이 벽 안으로 깊이 묻히지 않는다", (-behind) < buryTol,
+                $"가장 깊이 묻힌 {(-behind):F3}m · {behindN}장 (한도 {buryTol:F2}m — 평탄 판정 한도와 같음)");
+
+            // ★★★[JACK 0820 '무늬가 전혀 없는데?' — 로그: eCannotScaleNonUniformly · U·V 1.9E-002 · 168장 전멸]
+            //   **프레임(U·V·W)이 직교가 아니면 판넬 렌더러가 판을 통째로 못 만든다** — 무늬·도넛·앵커도 같이 죽는다.
+            //   벽면이 사다리꼴이라 '위'가 '가로'와 직각이 아닌 게 원인이었다. 여기서 붙잡아 둔다.
+            double dotWorst = 0, lenWorst = 0;
+            foreach (var f in WallBand.LastFacePanels)
+            {
+                double uv = f.UAxis.x * f.VAxis.x + f.UAxis.y * f.VAxis.y + f.UAxis.z * f.VAxis.z;
+                double uw = f.UAxis.x * f.WAxis.x + f.UAxis.y * f.WAxis.y + f.UAxis.z * f.WAxis.z;
+                double vw = f.VAxis.x * f.WAxis.x + f.VAxis.y * f.WAxis.y + f.VAxis.z * f.WAxis.z;
+                dotWorst = Math.Max(dotWorst, Math.Max(Math.Abs(uv), Math.Max(Math.Abs(uw), Math.Abs(vw))));
+                foreach (var ax in new[] { f.UAxis, f.VAxis, f.WAxis })
+                    lenWorst = Math.Max(lenWorst, Math.Abs(Math.Sqrt(ax.x * ax.x + ax.y * ax.y + ax.z * ax.z) - 1));
+            }
+            Check("S42 ★★★표면 판 프레임이 직교 단위축이다(무늬·앵커가 붙는 조건)",
+                nFace > 0 && dotWorst < 1e-9 && lenWorst < 1e-9,
+                $"축 내적 최대 {dotWorst:E1} · 길이 오차 최대 {lenWorst:E1} · 판 {nFace}장");
+        }
+
+        // ★★★[JACK 0820 '데이라잇이 이상하게 잘림' — 스샷: 벽 윗선에 계단]
+        //   <b>지반 밖에서 높이를 꽉 채우면</b> 그 자리만 솟아 계단이 된다.
+        //   WallSpanAtPt는 지반 밖이면 hi<0(판단 불가)을 주는데, 종전엔 그때 원래 높이로 꽉 채웠다.
+        //   ⇒ 지반이 벽 절반만 덮는 상황을 만들어, 이웃 사이 높이가 갑자기 튀지 않는지 잰다.
+        {
+            WallBand.ResetTotals();
+            WallBand.MassOnly = true;
+            try { WallBand.Slice(run1, new HoleGround(101.5, 12.0), joint: 0.05); }
+            finally { WallBand.MassOnly = false; }
+            double jump = 0; int pairs = 0;
+            foreach (var mm in WallBand.LastMasses)
+                for (int i = 0; i + 1 < mm.Sections.Count; i++)
+                {
+                    var A = mm.Sections[i]; var B = mm.Sections[i + 1];
+                    if (A.Count != 4 || B.Count != 4) continue;
+                    double hA = A[0].Z - A[1].Z, hB = B[0].Z - B[1].Z;
+                    jump = Math.Max(jump, Math.Abs(hA - hB)); pairs++;
+                }
+            // 이웃 단면은 ~1m 떨어져 있고 지반은 완만하다 — 1m 넘게 튀면 '꽉 채운' 자리가 남아 있는 것이다.
+            Check("S42 ★★★지반 밖에서 높이를 꽉 채우지 않는다(데이라잇 선에 계단이 안 생긴다)",
+                pairs > 0 && jump < 1.0,
+                $"이웃 단면 높이차 최대 {jump:F3}m · 이음매 {pairs}곳 (한도 1.0m)");
+        }
+
+        // ★★[JACK 0820 '끝부분 잘림 마감이 미흡함 · 주로 앵커정착부에서 발생']
+        //   **잘린 판에는 앵커·도넛을 붙이지 않는다** — 0.5m짜리 판에 정착부가 그대로 들어가면 삐져나온다.
+        {
+            WallBand.ResetTotals();
+            WallBand.MassOnly = true;
+            // 벽을 **가로질러 비스듬히 자르는** 지형이어야 잘린 판이 생긴다 —
+            //   완만한 지형을 쓰면 잘리는 판이 0장이라 아래 검사들이 통과하는 척만 한다(실제로 그랬다).
+            try { WallBand.Slice(run1, new SlopeGround(96.0, 0.6), joint: 0.05); }
+            finally { WallBand.MassOnly = false; }
+            WallBand.BuildFacePanels();
+            double want2 = WallBand.FaceTile - WallBand.JointW;
+            int shortWithAnchor = 0, shortN = 0, wholeN = 0;
+            foreach (var f in WallBand.LastFacePanels)
+            {
+                if (f.Poly.Count != 4) continue;
+                double h = Math.Sqrt(Math.Pow(f.Poly[1].X - f.Poly[2].X, 2)
+                                   + Math.Pow(f.Poly[1].Y - f.Poly[2].Y, 2)
+                                   + Math.Pow(f.Poly[1].Z - f.Poly[2].Z, 2));
+                if (h < want2 - 0.01) { shortN++; if (f.IsFull) shortWithAnchor++; }
+                else wholeN++;
+            }
+            // ★[JACK 0820] 앵커는 **자리가 날 때만** 붙는다 — 보호공 반폭(PocketHalf)이 판 안에 들어와야 한다.
+            //   그리고 앵커가 붙은 판은 그 자리가 **격자 위치**여야 한다(판 한가운데가 아니라).
+            int offGrid = 0;
+            foreach (var f in WallBand.LastFacePanels)
+            {
+                if (!f.IsFull || f.Poly.Count != 4) continue;
+                // 앵커 자리가 판 안에 있고, 보호공 반폭만큼 위아래 여유가 있어야 한다.
+                double vA = (f.AnchorPos.X - f.Origin.X) * f.VAxis.x
+                          + (f.AnchorPos.Y - f.Origin.Y) * f.VAxis.y
+                          + (f.AnchorPos.Z - f.Origin.Z) * f.VAxis.z;
+                double vMax = 0;
+                foreach (var lv in f.Local) vMax = Math.Max(vMax, lv.v);
+                if (vA - WallBand.PocketHalf < -1e-6 || vA + WallBand.PocketHalf > vMax + 1e-6) offGrid++;
+            }
+            // ★★★[JACK 0820 '무늬 부분의 잘림이 데이라잇과 맞지 않는다']
+            //   판 윗변이 1.5m짜리 **직선**이면 그 안에서 꺾이는 데이라잇을 못 따라간다.
+            //   ⇒ 칸 안에 옹벽선 정점이 있으면 판이 **사각형보다 많은 점**을 가져야 한다.
+            //     (사각형뿐이면 윗변이 직선이라는 뜻이고, 그게 어긋남의 원인이다.)
+            //   ※ 정점 개수로는 못 잰다 — 이 시험 벽은 정점이 3개뿐이라 칸 안에 정점이 안 들어간다
+            //     (실제 도면은 1m로 조밀화돼 있어 칸마다 정점이 있다).
+            //   ※ '데이라잇 선까지의 거리'로도 못 잰다 — 벽이 사라지는 자리에서는 판이 토우까지 내려와
+            //     뾰족해지는데, 그 점은 매스 윗선이 아예 없는 자리라 거리가 크게 나온다(그게 정상이다).
+            //   ⇒ 진짜 결함은 **판이 벽 위로 솟는 것**이다. 그것만 잰다.
+            //   기준은 **매스가 아니라 벽면(LastFaces)**이다 — 매스는 데이라잇에 끊겨 여러 덩어리로 나뉘어서,
+            //   끊긴 자리 근처에서는 '가장 가까운 단면'이 엉뚱한 다리(ㄱ자 반대편)로 잡힌다(실측 오탐 2.97m).
+            //   벽면은 끊기지 않고 벽 전체를 담고 있으므로 어느 자리에서나 옳은 상한을 준다.
+            //   ※ **가장 가까운 정점에 스냅하면 안 된다** — 이 시험 벽은 정점이 3개뿐이라(실제 도면은 1m 간격)
+            //     20m 떨어진 정점의 높이와 비교하게 된다(실측 오탐 2.26m · 가까운거리 9m).
+            //     판은 정점 <b>사이</b>를 보간해 놓이므로, 잴 때도 <b>구간 위로 투영</b>해서 보간해야 한다.
+            double aboveMax = 0; int checkedV = 0;
+            foreach (var f in WallBand.LastFacePanels)
+                foreach (var q in f.Poly)
+                {
+                    double best = double.MaxValue, topZ = 0;
+                    foreach (var wf in WallBand.LastFaces)
+                        for (int k = 0; k + 1 < wf.Full.Count; k++)
+                        {
+                            var A = wf.Full[k]; var B = wf.Full[k + 1];
+                            if (A.Count != 4 || B.Count != 4) continue;
+                            double dx = B[1].X - A[1].X, dy = B[1].Y - A[1].Y;
+                            double L2 = dx * dx + dy * dy;
+                            if (L2 < 1e-12) continue;
+                            double t = Math.Clamp(((q.X - A[1].X) * dx + (q.Y - A[1].Y) * dy) / L2, 0, 1);
+                            double px = A[1].X + dx * t, py = A[1].Y + dy * t;
+                            double d = (q.X - px) * (q.X - px) + (q.Y - py) * (q.Y - py);
+                            if (d >= best) continue;
+                            best = d;
+                            // 그 자리의 토우·크레스트·자르는 비율을 전부 보간해 데이라잇 높이를 얻는다.
+                            double bz = A[1].Z + (B[1].Z - A[1].Z) * t;
+                            double tz = A[0].Z + (B[0].Z - A[0].Z) * t;
+                            double hh = wf.Hi[k] + (wf.Hi[k + 1] - wf.Hi[k]) * t;
+                            topZ = bz + (tz - bz) * hh;
+                        }
+                    if (best == double.MaxValue) continue;
+                    aboveMax = Math.Max(aboveMax, q.Z - topZ); checkedV++;
+                }
+
+            // ★★★[JACK 0820 '반대로 됨' · '여전히 빈 공간이 많음' · '객체별로 돌아가게 생성됨']
+            //   세 증상 다 스샷으로만 보이던 것이다. JACK: "문제점을 로그로도 확인할 수 있게 해."
+            //   ⇒ 여기서 숫자로 잡는다. 도면을 열기 전에 걸려야 스샷 왕복이 줄어든다.
+            {
+                static double D3(DH.Grading.Core.Point3 a, DH.Grading.Core.Point3 b)
+                    => Math.Sqrt((a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y) + (a.Z - b.Z) * (a.Z - b.Z));
+
+                // ① 판 앞면이 벽 바깥을 보는가 — 안쪽을 보면 무늬가 흙 속으로 들어간다('반대로 됨').
+                int flip = 0; double pArea = 0, wArea = 0;
+                foreach (var f in WallBand.LastFacePanels)
+                {
+                    double a2 = 0;
+                    for (int i = 0, j2 = f.Local.Count - 1; i < f.Local.Count; j2 = i++)
+                        a2 += f.Local[j2].u * f.Local[i].v - f.Local[i].u * f.Local[j2].v;
+                    pArea += Math.Abs(a2) / 2;
+                    double best = double.MaxValue, bx = 0, by = 0, bz = 0;
+                    foreach (var wf in WallBand.LastFaces)
+                        foreach (var sc in wf.Full)
+                        {
+                            if (sc.Count != 4) continue;
+                            double d = D3(sc[0], f.Poly[0]);
+                            if (d < best) { best = d; bx = sc[0].X - sc[3].X; by = sc[0].Y - sc[3].Y; bz = sc[0].Z - sc[3].Z; }
+                        }
+                    if (best < double.MaxValue && f.WAxis.x * bx + f.WAxis.y * by + f.WAxis.z * bz < 0) flip++;
+                }
+                Check("S42 ★★★판 앞면이 벽 바깥을 본다(반대로 안 붙는다)", flip == 0,
+                    $"뒤집힌 판 {flip}장 / {WallBand.LastFacePanels.Count}장");
+
+                // ② 덮개율 — '빈 공간이 많다'를 숫자로. 줄눈(5cm)과 굽은 칸 때문에 100%는 구조상 안 된다.
+                foreach (var mm in WallBand.LastMasses)
+                    for (int k = 0; k + 1 < mm.Sections.Count; k++)
+                    {
+                        var A = mm.Sections[k]; var B = mm.Sections[k + 1];
+                        if (A.Count != 4 || B.Count != 4) continue;
+                        wArea += (D3(A[1], A[0]) + D3(B[1], B[0])) / 2 * D3(A[1], B[1]);
+                    }
+                double cov = wArea > 1e-9 ? pArea / wArea * 100 : 0;
+                Check("S42 ★★★표면 판이 벽을 충분히 덮는다(잘린 자리에 빈 공간이 안 남는다)",
+                    cov >= 70, $"덮개율 {cov:F0}% · 벽 {wArea:F0}㎡ · 판 {pArea:F0}㎡");
+
+                // ③ 이웃한 판끼리 세로축이 같은가 — '객체별로 돌아가게 생성됨'.
+                //   프레임을 판의 왼쪽 변에서 뽑으면 비스듬히 잘린 판에서 그 변이 퇴화해 방향이 잡음이 된다.
+                //   벽에서 가져오면 같은 벽면 위의 판들은 세로축이 거의 같다.
+                double axTurn = 0; int axPairs = 0;
+                var fl = WallBand.LastFacePanels;
+                for (int i = 0; i < fl.Count; i++)
+                    for (int k = i + 1; k < fl.Count; k++)
+                    {
+                        double d = Math.Sqrt(Math.Pow(fl[i].Origin.X - fl[k].Origin.X, 2)
+                                           + Math.Pow(fl[i].Origin.Y - fl[k].Origin.Y, 2));
+                        if (d > WallBand.FaceTile * 1.2) continue;      // 이웃한 판만 본다
+                        double dot = fl[i].VAxis.x * fl[k].VAxis.x + fl[i].VAxis.y * fl[k].VAxis.y
+                                   + fl[i].VAxis.z * fl[k].VAxis.z;
+                        axTurn = Math.Max(axTurn, Math.Acos(Math.Clamp(dot, -1, 1)) * 180.0 / Math.PI);
+                        axPairs++;
+                    }
+                // 한도 15° — 벽이 굽으면 이웃끼리 조금은 다르다. 돌아간 판은 수십 도로 어긋난다.
+                Check("S42 ★★★이웃한 판끼리 세로축이 같다(판이 제멋대로 안 돈다)",
+                    axPairs > 0 && axTurn < 15.0,
+                    $"이웃 판 세로축 최대 어긋남 {axTurn:F1}° · 잰 쌍 {axPairs}개 (한도 15°)");
+
+                // ★★★[JACK 0820 '이미 우리가 통으로 만든 게 패널이야 · 무늬만 넣어서 나눠진 것처럼']
+                //   **표면 마감은 몸통을 안 만든다.** 매스가 이미 판넬이라 바탕 판을 얹으면 벽이 두 겹이 되고,
+                //   그 판이 잘린 무늬를 덮어 '무늬가 데이라잇으로 안 잘린다'처럼 보인다.
+                int notOverlay = 0;
+                foreach (var f in WallBand.LastFacePanels) if (!f.Overlay) notOverlay++;
+                Check("S42 ★★★표면 마감은 몸통 없이 무늬만 얹는다(벽이 두 겹이 안 된다)",
+                    WallBand.LastFacePanels.Count > 0 && notOverlay == 0,
+                    $"몸통까지 만드는 판 {notOverlay}장 / {WallBand.LastFacePanels.Count}장");
+
+                // 무늬가 매스 표면에 딱 붙어야 한다 — 띄우면 무늬만 허공에 뜬다(몸통이 없으므로).
+                // ★★★[JACK 0820 '코너부 무늬 누락' — 로그: 무늬없음 2(분해실패 2)]
+                //   **모든 판이 볼록 조각으로 쪼개져야 무늬가 붙는다.** 데이라잇이 판을 쐐기로 만들면
+                //   아랫점과 윗점이 같은 자리가 되어(두께 0) 귀 자르기가 실패하고, 호출부는 무늬를 통째로 건너뛴다.
+                //   AutoCAD 없이도 여기서 그대로 잴 수 있다 — ConvexPieces는 Core에 있다.
+                int splitFail = 0, splitMax = 0;
+                foreach (var f in WallBand.LastFacePanels)
+                {
+                    var w = WallBand.ConvexPieces(f.Local);
+                    if (w.Count == 0) splitFail++; else splitMax = Math.Max(splitMax, w.Count);
+                }
+                Check("S42 ★★★모든 판이 볼록 조각으로 쪼개진다(무늬가 안 빠진다)",
+                    WallBand.LastFacePanels.Count > 0 && splitFail == 0,
+                    $"분해 실패 {splitFail}장 / {WallBand.LastFacePanels.Count}장 · 최대 {splitMax}조각");
+
+                // 판의 3D 점과 로컬 좌표는 **개수가 같아야** 한다 — 어긋나면 진단이 거짓말을 시작한다.
+                int syncBad = 0;
+                foreach (var f in WallBand.LastFacePanels) if (f.Poly.Count != f.Local.Count) syncBad++;
+                // ★★★[JACK 0820 '무늬가 불특정하게 누락된 부분이 매우 많음']
+                //   무늬는 **온전한 칸**에 깔고 나중에 자른다 — 판 경계상자에 맞춰 깔면 잘린 판마다
+                //   무늬가 다시 짜여 조각이 최소 크기에 못 미쳐 죽는다("불특정"의 정체).
+                //   ⇒ ① 칸 크기가 규격이어야 하고 ② 칸 중심(=앵커 자리)이 **격자 위**에 있어야 한다.
+                double cellBad = 0; int gridOff = 0;
+                double cellWant = WallBand.FaceTile - WallBand.JointW;
+                var seenCtr = new System.Collections.Generic.List<(double u, double v)>();
+                foreach (var f in WallBand.LastFacePanels)
+                {
+                    cellBad = Math.Max(cellBad, Math.Abs(f.CellU - cellWant));
+                    cellBad = Math.Max(cellBad, Math.Abs(f.CellV - cellWant));
+                    // 칸 중심은 판 안에 있을 수도 밖에 있을 수도 있다(잘린 판) — 다만 **판의 v 범위**를 기준으로
+                    //   격자 간격(FaceTile)의 배수 자리에 있어야 한다. 조각 가운데로 밀리면 여기서 걸린다.
+                    double vMaxL = 0; foreach (var lv in f.Local) vMaxL = Math.Max(vMaxL, lv.v);
+                    if (f.PocketV < -WallBand.FaceTile || f.PocketV > vMaxL + WallBand.FaceTile) gridOff++;
+                }
+                Check("S42 ★★★무늬 칸이 규격이고 격자 위에 있다(잘린 판에서도 무늬가 이어진다)",
+                    WallBand.LastFacePanels.Count > 0 && cellBad < 1e-9 && gridOff == 0,
+                    $"칸 크기 오차 {cellBad:F6}m(규격 {cellWant:F3}m) · 격자 벗어난 판 {gridOff}장");
+
+                Check("S42 ★★판의 3D 점과 로컬 좌표 개수가 같다", syncBad == 0,
+                    $"어긋난 판 {syncBad}장 / {WallBand.LastFacePanels.Count}장");
+
+                // ★★★[검토 심각1] 노출면 방향을 **매스를 안 보고** 잰다 — 매스와 비교하면 같이 뒤집혀도 못 잡는다.
+                // ★★★[JACK 0820 '성토라고 다 뒤집어진 건 아니고 어느 면은 맞고 어느 면은 안 맞고 그래']
+                //   노출면 방향은 **이름(크레스트/토우)이 아니라 높이**로 정해야 한다 —
+                //   옹벽 면은 뒤로 누우므로 <b>아래가 언제나 바깥</b>이다. 줄에 따라 이름이 뒤바뀌어 나와도
+                //   이 규칙은 안 깨진다. 매스 단면에서 직접 재서 그것이 지켜지는지 본다.
+                int upsideDown = 0, wallSec = 0;
+                foreach (var mm in WallBand.LastMasses)
+                    foreach (var sc in mm.Sections)
+                    {
+                        if (sc.Count != 4) continue;
+                        // 0=바깥위 · 1=바깥아래 · 2=안쪽아래 · 3=안쪽위. 바깥 방향 = [0]−[3].
+                        double ox = sc[0].X - sc[3].X, oy = sc[0].Y - sc[3].Y;
+                        // 위쪽 점(0·3의 평균)에서 아래쪽 점(1·2의 평균)으로 가는 수평 방향이 '바깥'이어야 한다.
+                        double dx = (sc[1].X + sc[2].X) / 2 - (sc[0].X + sc[3].X) / 2;
+                        double dy = (sc[1].Y + sc[2].Y) / 2 - (sc[0].Y + sc[3].Y) / 2;
+                        if (Math.Sqrt(dx * dx + dy * dy) < 1e-6) continue;   // 수직벽 — 판단 불가
+                        wallSec++;
+                        if (ox * dx + oy * dy < 0) upsideDown++;
+                    }
+                Check("S42 ★★★노출면이 아래쪽(바깥)을 향한다(줄마다 뒤집히지 않는다)",
+                    wallSec == 0 || upsideDown == 0,
+                    $"뒤집힌 단면 {upsideDown}/{wallSec}개");
+
+                var sf = WallBand.LastSideFlip;
+                Check("S42 ★★★노출면 방향이 줄 전체에서 일관된다(벽이 안 뒤집힌다)",
+                    sf.Total > 0 && sf.Odd == 0,
+                    $"다수와 다른 자리 {sf.Odd}/{sf.Total}점");
+
+                Check("S42 ★★마감이 매스 표면에 붙어 있다(띄우지 않는다)",
+                    Math.Abs(WallBand.FaceProud) < 1e-9,
+                    $"띄움 {WallBand.FaceProud:F3}m (0이어야 한다 — 몸통이 없다)");
+            }
+
+            Check("S42 ★★★표면 판이 벽 위로 솟지 않는다(잘림이 벽과 맞는다)",
+                checkedV > 0 && aboveMax < 0.10,
+                $"벽 위로 솟은 최대 {aboveMax:F3}m · 잰 점 {checkedV}개 (한도 0.10m)");
+
+            Check("S42 ★★잘린 판에는 앵커를 안 붙인다(정착부가 판 밖으로 안 나간다)",
+                shortWithAnchor == 0 && offGrid == 0,
+                $"잘린 판 {shortN}장 중 앵커 달린 것 {shortWithAnchor}장 · 보호공이 판 밖 {offGrid}장 · 온전한 판 {wholeN}장");
+        }
+
+        Check("S42 ★★★데이라잇에 잘려도 벽면 선 위에 있다(벽이 안 비틀린다)",
+            leanN > 0 && offWorst < 1e-6,
+            $"벽면 선에서 벗어남 최대 {offWorst:F6}m · 잰 단면 {leanN}장 · 짝 못 찾음 {unmatched}장");
+    }
+
+    // ★★[JACK 0819 '뭔가 이상하게 나왔어' — 실측 26조각 중 23개가 도면에서 사라졌다]
+    //   AutoCAD 로프트는 단면이 **평면이 아니면 예외 없이 빈 솔리드**를 돌려준다. 그 빈 솔리드는
+    //   뒤쪽 깨진솔리드 검사가 조용히 지워, 로그는 '26/26개 만듦'인데 도면엔 3개만 남았다.
+    //   AutoCAD 없이는 로프트를 못 돌리지만 **단면이 평면인지는 여기서 잴 수 있다** —
+    //   그게 이 결함의 필요조건이므로 그것만 지켜도 같은 사고가 다시 안 난다.
+    {
+        int badFlat = 0, badShape = 0, secN = 0;
+        foreach (var mm in WallBand.LastMasses)
+            foreach (var sec in mm.Sections)
+            {
+                secN++;
+                if (sec.Count != 4) { badShape++; continue; }
+                double ux = sec[1].X - sec[0].X, uy = sec[1].Y - sec[0].Y, uz = sec[1].Z - sec[0].Z;
+                double vx = sec[3].X - sec[0].X, vy = sec[3].Y - sec[0].Y, vz = sec[3].Z - sec[0].Z;
+                double nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+                double nl = Math.Sqrt(nx * nx + ny * ny + nz * nz);
+                if (nl < 1e-12) { badShape++; continue; }
+                double wx = sec[2].X - sec[0].X, wy = sec[2].Y - sec[0].Y, wz = sec[2].Z - sec[0].Z;
+                if (Math.Abs((wx * nx + wy * ny + wz * nz) / nl) > 1e-6) badFlat++;
+            }
+        Check("S24 ★★매스 단면이 전부 평면이다(로프트가 빈 솔리드를 안 낸다)", badFlat == 0,
+            $"평면 아닌 단면 {badFlat}장 / {secN}장");
+        Check("S24 ★★매스 단면이 전부 4점 마름모다(로프트가 통과할 수 있다)", badShape == 0,
+            $"어긋난 단면 {badShape}장 / {secN}장");
+    }
 
     // ★★ [JACK 0805 실측 0.285m] 판넬보다 좁은 커브에서 판넬이 현이 되어 안쪽으로 파고들면 안 된다.
     //   현장 역산 곡률 반경 ≈ 1m — 판넬 폭(1.66m)보다 좁다. 그 조건을 그대로 만든다.
@@ -3687,7 +4399,307 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     }
 }
 
+// ★ S43 [JACK 0820 '중간에서 하면 잘 변환되는데 사면 맨 아랫단은 안 바뀌네'] **맨 아랫단 옹벽 변환.**
+//   변환 규칙은 '이 단부터 바깥으로'인데, 맨 아랫단(데이라잇이 일어나는 단)만 안 먹는다는 실측 보고.
+//   중간 단과 **완전히 같은 조건**으로 나란히 세워 어디서 갈리는지 숫자로 가른다.
+{
+    var sq = new List<Point3> { new(0, 0, 100), new(60, 0, 100), new(60, 60, 100), new(0, 60, 100) };
+    var pr = new GradingParams
+    {
+        CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 1.5, FillSlope = 1.5, CellSize = 1.0, MaxBenches = 30, MaxRise = 30,
+        VertexSpacing = 2.0, MinSlope = 0.05, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+    var cum = GradingGeometry.CumLen2D(sq);
+    double L = cum[^1];
+    var ground = new FlatGround(130);          // 절토 30m → 5m 단 6개
+
+    var vBase = GradingGeometry.Build(sq, ground, pr, true, null);
+    int nBench = 0;
+    for (int k = 1; k < vBase.Rings.Count; k++)
+    {
+        double za = 0, zb = 0; int ca = 0, cb = 0;
+        foreach (var q in vBase.Rings[k]) { za += q.Z; ca++; }
+        foreach (var q in vBase.Rings[k - 1]) { zb += q.Z; cb++; }
+        if (ca == 0 || cb == 0) continue;
+        if (Math.Abs(za / ca - zb / cb) >= 0.1) nBench++;
+    }
+    Check("S43 기준 단 수(절토 30m / 단높이 5m)", nBench >= 5, $"단 {nBench} · 링 {vBase.Rings.Count}");
+
+    int last = nBench - 1, mid = nBench / 2;
+
+    static double OuterExtent(IReadOnlyList<IReadOnlyList<Point3>> rings, IReadOnlyList<Point3> b, double[] cm, double t0, double t1)
+    {
+        double best = 0;
+        foreach (var ring in rings)
+        {
+            if (ring == null) continue;
+            foreach (var q in ring)
+            {
+                double t = GradingGeometry.ParamAt(b, cm, q.X, q.Y);
+                if (t < t0 || t > t1) continue;
+                double d = double.MaxValue;
+                for (int i = 0, j = b.Count - 1; i < b.Count; j = i++)
+                {
+                    double ax = b[j].X, ay = b[j].Y, dx = b[i].X - ax, dy = b[i].Y - ay;
+                    double l2 = dx * dx + dy * dy; if (l2 < 1e-12) continue;
+                    double u = ((q.X - ax) * dx + (q.Y - ay) * dy) / l2; u = Math.Max(0, Math.Min(1, u));
+                    double px = ax + dx * u - q.X, py = ay + dy * u - q.Y;
+                    d = Math.Min(d, Math.Sqrt(px * px + py * py));
+                }
+                if (d < double.MaxValue && d > best) best = d;
+            }
+        }
+        return best;
+    }
+
+    double t0 = L * 0.02, t1 = L * 0.23;      // 첫 변 안쪽(모서리 영향 제외)
+    double extBase = OuterExtent(vBase.Rings, sq, cum, t0, t1);
+
+    var zMid = new List<SlopeZone> { SlopeZone.Wall(0.0, L * 0.25, mid, int.MaxValue, 0.05, 1.5) };
+    var vMid = GradingGeometry.Build(sq, ground, pr, true, zMid);
+    double extMid = OuterExtent(vMid.Rings, sq, cum, t0, t1);
+    var runMid = WallRunBuilder.Build(sq, vMid.Rings, zMid, up: true, globalSlope: 1.5, minSlope: 0.05);
+
+    var zLast = new List<SlopeZone> { SlopeZone.Wall(0.0, L * 0.25, last, int.MaxValue, 0.05, 1.5) };
+    var vLast = GradingGeometry.Build(sq, ground, pr, true, zLast);
+    double extLast = OuterExtent(vLast.Rings, sq, cum, t0, t1);
+    var runLast = WallRunBuilder.Build(sq, vLast.Rings, zLast, up: true, globalSlope: 1.5, minSlope: 0.05);
+
+    Console.WriteLine($"      S43 단 {nBench}개 · 중간={mid + 1}단 맨아래={last + 1}단 · " +
+                      $"구간 최대폭 기준 {extBase:F2}m → 중간 {extMid:F2}m → 맨아래 {extLast:F2}m");
+    Console.WriteLine($"      S43 옹벽선 — 중간 {runMid.Count}줄(단 {string.Join(",", runMid.Select(r => r.Bench + 1).Distinct().OrderBy(x => x))})" +
+                      $" · 맨아래 {runLast.Count}줄(단 {string.Join(",", runLast.Select(r => r.Bench + 1).Distinct().OrderBy(x => x))})");
+
+    Check("S43 중간 단 옹벽 — 링이 좁아진다", extMid < extBase - 1.0, $"{extBase:F2} → {extMid:F2}");
+    Check("S43 중간 단 옹벽 — 옹벽선이 선다", runMid.Count > 0, $"{runMid.Count}줄");
+
+    Check("S43 ★맨 아랫단 옹벽 — 링이 좁아진다", extLast < extBase - 1.0, $"{extBase:F2} → {extLast:F2}");
+    Check("S43 ★맨 아랫단 옹벽 — 옹벽선이 선다", runLast.Count > 0, $"{runLast.Count}줄");
+    Check("S43 ★맨 아랫단 옹벽 — 그 단에 옹벽선이 있다",
+        runLast.Any(r => r.Bench == last), $"단 {string.Join(",", runLast.Select(r => r.Bench + 1).Distinct())} (기대 {last + 1})");
+}
+
+// ★ S44 [JACK 0820 '사면 맨 아랫단은 안 바뀌네'] **클릭할 선이 있는 단.**
+//   변환 명령은 GenerateEdgeLinesTagged가 낸 선만 클릭 대상으로 세운다.
+//   1단의 선은 곧 계획 폴리곤인데, 클립이 그 폴리곤을 '구멍'으로 두어 잘라낸다 —
+//   그러면 1단은 **클릭할 선 자체가 없어** 아무리 눌러도 안 바뀐다. 그 가설을 숫자로 가른다.
+{
+    var sq = new List<Point3> { new(0, 0, 100), new(60, 0, 100), new(60, 60, 100), new(0, 60, 100) };
+    var pr = new GradingParams
+    {
+        CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 1.5, FillSlope = 1.5, CellSize = 1.0, MaxBenches = 30, MaxRise = 30,
+        VertexSpacing = 2.0, MinSlope = 0.05, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+
+    foreach (var (up, gz, dir) in new[] { (true, 130.0, "절토"), (false, 70.0, "성토") })
+    {
+        var ground = new FlatGround(gz);
+        var vs = GradingGeometry.Build(sq, ground, pr, up, null);
+        if (!vs.HasSlope) { Check($"S44 {dir} 사면 생성", false, "HasSlope=false"); continue; }
+
+        // 변환 명령과 같은 호출 — 바깥 클립은 최외곽 링, 구멍은 계획 폴리곤.
+        var fr = vs.Rings[vs.Rings.Count - 1];
+        var tagged = SlopeHatchGenerator.GenerateEdgeLinesTagged(vs.Rings, ground, up, fr, sq,
+            null, sq, null, null, BaseOf(pr, up), pr.MinSlope);
+
+        // ZoneEditCommon의 걸러내기와 동일: 절토는 아랫선(IsSlope=false), 성토는 윗선(IsSlope=true).
+        var clickable = tagged.Where(e => up != e.IsSlope).Select(e => e.Bench).Distinct().OrderBy(x => x).ToList();
+        var allTags = tagged.Select(e => e.Bench).Distinct().OrderBy(x => x).ToList();
+
+        Console.WriteLine($"      S44 {dir} — 링 {vs.Rings.Count} · 태그된 단 {string.Join(",", allTags.Select(b => b + 1))}" +
+                          $" · **클릭 가능한 단** {string.Join(",", clickable.Select(b => b + 1))}");
+
+        Check($"S44 {dir} 클릭할 선이 여러 단에 있다", clickable.Count >= 3, $"{clickable.Count}단");
+        Check($"S44 ★{dir} **1단에도 클릭할 선이 있다**(없으면 맨 아랫단을 못 고른다)",
+            clickable.Contains(0), $"클릭 가능 {string.Join(",", clickable.Select(b => b + 1))}단");
+    }
+}
+
+// ★ S45 [JACK 0820 '사면 맨 아랫단은 안 바뀌네'] **방향별 '맨 아랫단'.**
+//   절토는 부지에서 위로 올라가므로 맨 아랫단 = 1단(경계 옆),
+//   성토는 아래로 내려가므로 맨 아랫단 = 마지막 단(데이라잇 단)이다.
+//   S43은 절토의 '마지막 단'(=제일 위)만 봤다 — 정작 JACK이 누르는 자리를 안 본 것이다.
+{
+    var sq = new List<Point3> { new(0, 0, 100), new(60, 0, 100), new(60, 60, 100), new(0, 60, 100) };
+    var pr = new GradingParams
+    {
+        CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 1.5, FillSlope = 1.5, CellSize = 1.0, MaxBenches = 30, MaxRise = 28,
+        VertexSpacing = 2.0, MinSlope = 0.05, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+    var cum = GradingGeometry.CumLen2D(sq);
+    double L = cum[^1];
+
+    static double Ext(IReadOnlyList<IReadOnlyList<Point3>> rings, IReadOnlyList<Point3> b, double[] cm, double t0, double t1)
+    {
+        double best = 0;
+        foreach (var ring in rings)
+        {
+            if (ring == null) continue;
+            foreach (var q in ring)
+            {
+                double t = GradingGeometry.ParamAt(b, cm, q.X, q.Y);
+                if (t < t0 || t > t1) continue;
+                double d = double.MaxValue;
+                for (int i = 0, j = b.Count - 1; i < b.Count; j = i++)
+                {
+                    double ax = b[j].X, ay = b[j].Y, dx = b[i].X - ax, dy = b[i].Y - ay;
+                    double l2 = dx * dx + dy * dy; if (l2 < 1e-12) continue;
+                    double u = ((q.X - ax) * dx + (q.Y - ay) * dy) / l2; u = Math.Max(0, Math.Min(1, u));
+                    double px = ax + dx * u - q.X, py = ay + dy * u - q.Y;
+                    d = Math.Min(d, Math.Sqrt(px * px + py * py));
+                }
+                if (d < double.MaxValue && d > best) best = d;
+            }
+        }
+        return best;
+    }
+
+    double t0 = L * 0.02, t1 = L * 0.23;
+
+    // 기울어진 원지반 — 데이라잇이 둘레마다 다른 단에서 일어난다(현장과 같은 조건).
+    foreach (var (up, ground, dir) in new (bool, IGroundSurface, string)[]
+    {
+        (true,  new FlatGround(128),               "절토·평지반"),
+        (true,  new TiltGround(0, 0, 118, 0.35, 0), "절토·경사지반"),
+        (false, new FlatGround(72),                "성토·평지반"),
+        (false, new TiltGround(0, 0, 82, -0.35, 0), "성토·경사지반"),
+    })
+    {
+        var vBase = GradingGeometry.Build(sq, ground, pr, up, null);
+        if (!vBase.HasSlope) { Check($"S45 {dir} 사면 생성", false, "HasSlope=false"); continue; }
+        int nB = 0;
+        for (int k = 1; k < vBase.Rings.Count; k++)
+        {
+            double za = 0, zb = 0; int ca = 0, cb = 0;
+            foreach (var q in vBase.Rings[k]) { za += q.Z; ca++; }
+            foreach (var q in vBase.Rings[k - 1]) { zb += q.Z; cb++; }
+            if (ca == 0 || cb == 0) continue;
+            if (Math.Abs(za / ca - zb / cb) >= 0.1) nB++;
+        }
+        // 맨 아랫단 = 절토는 1단(index 0), 성토는 마지막 단.
+        int bottom = up ? 0 : nB - 1;
+        double eb = Ext(vBase.Rings, sq, cum, t0, t1);
+
+        var zB = new List<SlopeZone> { SlopeZone.Wall(0.0, L * 0.25, bottom, int.MaxValue, 0.05, 1.5) };
+        var vB = GradingGeometry.Build(sq, ground, pr, up, zB);
+        double ex = Ext(vB.Rings, sq, cum, t0, t1);
+        var runs = WallRunBuilder.Build(sq, vB.Rings, zB, up: up, globalSlope: 1.5, minSlope: 0.05);
+        var benches = runs.Select(r => r.Bench + 1).Distinct().OrderBy(x => x).ToList();
+
+        Console.WriteLine($"      S45 {dir} — 단 {nB}개 · 맨아래={bottom + 1}단 · 폭 {eb:F2}m → {ex:F2}m" +
+                          $" · 옹벽선 {runs.Count}줄(단 {string.Join(",", benches)})");
+        Check($"S45 ★{dir} 맨 아랫단 옹벽 — 링이 좁아진다", ex < eb - 1.0, $"{eb:F2} → {ex:F2}");
+        Check($"S45 ★{dir} 맨 아랫단 옹벽 — 그 단에 옹벽선이 선다",
+            runs.Any(r => r.Bench == bottom), $"단 {string.Join(",", benches)} (기대 {bottom + 1})");
+    }
+}
+
+// ★ S46 [JACK 0820 '단높이보다 지표면과 닿는 거리가 짧을 경우엔 아예 안 바뀌는 듯'] **짧은 조각의 구간 폭.**
+//   변환은 클릭한 선을 '경계 호길이 구간'으로 바꿔 저장한다. 그런데 바깥 단의 링은 경계에서 아주 멀고
+//   (JACK 현장: 22×33m 부지에 성토 47m → 링이 70m 밖), 데이라잇으로 잘린 **짧은 조각**은
+//   모든 점이 코너 하나로 투영돼 **구간 길이가 0**이 된다.
+//   SlopeZone.Flatten은 길이 0 구간을 버리므로 → 변환이 통째로 사라진다(로그 실측: 성토 구간 1개뿐).
+{
+    // JACK 현장 치수 그대로 — 22.41 × 32.80m, 성토 47m.
+    var sq = new List<Point3> { new(0, 0, 112), new(22.41, 0, 112), new(22.41, 32.80, 112), new(0, 32.80, 112) };
+    var pr = new GradingParams
+    {
+        CutBenchHeight = 5, FillBenchHeight = 2, CutBenchWidth = 1, FillBenchWidth = 2,
+        CutSlope = 1.5, FillSlope = 1.5, CellSize = 1.0, MaxBenches = 30, MaxRise = 57,
+        VertexSpacing = 2.0, MinSlope = 0.05, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+    var cum = GradingGeometry.CumLen2D(sq);
+    double total = cum[^1];
+    var ground = new TiltGround(0, 0, 65, 0.9, 0.0);   // 한쪽만 얕게 닿는 지반 — 마지막 단이 조각난다
+    var vs = GradingGeometry.Build(sq, ground, pr, false, null);
+    Check("S46 성토 사면 생성", vs.HasSlope, $"링 {vs.Rings.Count}");
+
+    var fr = vs.Rings[vs.Rings.Count - 1];
+    var tagged = SlopeHatchGenerator.GenerateEdgeLinesTagged(vs.Rings, ground, false, fr, sq,
+        null, sq, null, null, pr.FillSlope, pr.MinSlope);
+    var click = tagged.Where(e => e.IsSlope).ToList();     // 성토는 윗선이 클릭 대상
+    Check("S46 클릭 대상 선이 있다", click.Count > 0, $"{click.Count}줄");
+
+    int worstB = -1, worstN = 0; double worstSpan = double.MaxValue, worstLen = 0;
+    int zeroSpan = 0;
+    foreach (var e in click)
+    {
+        var iv = GradingGeometry.PickInterval(e.Pts, sq, cum);     // 최소폭 보정 없음 = 옛 동작
+        if (iv == null) continue;
+        double span = iv.Value.T1 >= iv.Value.T0 ? iv.Value.T1 - iv.Value.T0 : iv.Value.T1 + total - iv.Value.T0;
+        double len2d = 0;
+        for (int i = 1; i < e.Pts.Count; i++)
+        {
+            double dx = e.Pts[i].X - e.Pts[i - 1].X, dy = e.Pts[i].Y - e.Pts[i - 1].Y;
+            len2d += Math.Sqrt(dx * dx + dy * dy);
+        }
+        if (span <= 1e-6) zeroSpan++;
+        if (span < worstSpan) { worstSpan = span; worstB = e.Bench; worstN = e.Pts.Count; worstLen = len2d; }
+    }
+    Console.WriteLine($"      S46 클릭 대상 {click.Count}줄 · 둘레 {total:F1}m · " +
+                      $"**구간 길이 0인 줄 {zeroSpan}개** · 가장 좁은 줄 = {worstB + 1}단 " +
+                      $"(점 {worstN}개 · 선 길이 {worstLen:F1}m → 구간 {worstSpan:F3}m)");
+
+    // 이 조건(둘레를 한 바퀴 도는 긴 줄)에서는 0이 안 나온다 — 그 사실 자체를 못 박아 둔다.
+    Check("S46 둘레를 도는 긴 줄은 구간이 넉넉하다", zeroSpan == 0 && worstSpan > total * 0.5,
+        $"0인 줄 {zeroSpan}개 · 가장 좁은 구간 {worstSpan:F1}m / 둘레 {total:F1}m");
+
+    // ★ 진짜 위험한 모양 — **코너 바깥 멀리 있는 짧은 조각**. 모든 점이 코너 하나로 투영된다.
+    //   데이라잇이 바깥 단을 이렇게 잘라 내면 구간 길이가 0이 되고, 아래 Flatten이 그 구간을 버린다.
+    var frag = new List<Point3>();
+    for (int i = 0; i < 8; i++) frag.Add(new Point3(70.0 + i * 0.4, 80.0 + i * 0.4, 60));   // 코너 바깥 70m
+    var ivF = GradingGeometry.PickInterval(frag, sq, cum);
+    double spanF = ivF == null ? -1
+        : (ivF.Value.T1 >= ivF.Value.T0 ? ivF.Value.T1 - ivF.Value.T0 : ivF.Value.T1 + total - ivF.Value.T0);
+    var ivG = GradingGeometry.PickInterval(frag, sq, cum, total * 0.02);
+    double spanG = ivG == null ? -1
+        : (ivG.Value.T1 >= ivG.Value.T0 ? ivG.Value.T1 - ivG.Value.T0 : ivG.Value.T1 + total - ivG.Value.T0);
+    Console.WriteLine($"      S46 코너 바깥 짧은 조각 — 보정 없음 {spanF:F4}m · 보정 후 {spanG:F2}m (둘레 {total:F1}m)");
+    Check("S46 ★★코너 바깥 짧은 조각은 구간이 0으로 무너진다(보정 없을 때)", spanF >= 0 && spanF <= 1e-6,
+        $"{spanF:F6}m");
+    Check("S46 ★★★최소폭 보정이 그 조각을 살린다", spanG > total * 0.015, $"{spanG:F2}m");
+
+    // 최소폭 보정을 주면 살아나야 한다.
+    int zeroFixed = 0;
+    foreach (var e in click)
+    {
+        var iv = GradingGeometry.PickInterval(e.Pts, sq, cum, total * 0.02);
+        if (iv == null) continue;
+        double span = iv.Value.T1 >= iv.Value.T0 ? iv.Value.T1 - iv.Value.T0 : iv.Value.T1 + total - iv.Value.T0;
+        if (span <= 1e-6) zeroFixed++;
+    }
+    Check("S46 ★★최소폭 보정을 주면 길이 0인 줄이 없다", zeroFixed == 0, $"남은 0인 줄 {zeroFixed}개");
+
+    // Flatten이 길이 0 구간을 실제로 버리는지 — 원인 사슬의 마지막 고리.
+    var zs = new List<SlopeZone>
+    {
+        new SlopeZone { T0 = 0.0, T1 = total, Rules = { (0, 1.5, 2.0) } },
+        new SlopeZone { T0 = 10.0, T1 = 10.0, Rules = { (17, 0.05, 1.0) } },   // 길이 0 = 조각난 바깥 단
+    };
+    SlopeZone.Flatten(zs, total);
+    bool wallGone = !zs.Any(z => z.Rules.Any(r => r.Slope <= 0.05 + 1e-9));
+    Check("S46 ★★★Flatten이 길이 0 구간을 버린다(옹벽 규칙이 사라진다)", wallGone,
+        $"남은 구간 {zs.Count}개 · 수직 규칙 {(wallGone ? "없음(버려짐)" : "있음")}");
+}
+
 return fails == 0 ? 0 : 1;
+
+static double BaseOf(GradingParams p, bool up) => up ? p.CutSlope : p.FillSlope;
+
+
+/// <summary>★[JACK 0820] x가 xMax를 넘으면 <b>지반이 없다</b>(TryGetElevation=false)고 답하는 지반.
+/// 실제 TIN 밖에서 WallSpanAtPt가 'hi &lt; 0 = 판단 불가'를 주는 상황을 그대로 만든다.</summary>
+sealed class HoleGround(double z, double xMax) : IGroundSurface
+{
+    public bool TryGetElevation(double x, double y, out double z0)
+    {
+        z0 = z;
+        return x <= xMax;
+    }
+}
 
 sealed class FlatGround(double z) : IGroundSurface
 {

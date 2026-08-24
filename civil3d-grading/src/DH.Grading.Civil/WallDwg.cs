@@ -1,4 +1,4 @@
-using System.Linq;
+﻿using System.Linq;
 using Autodesk.AutoCAD.DatabaseServices;
 using DH.Grading.Core;
 
@@ -65,7 +65,8 @@ public static class WallDwg
         IReadOnlyList<WallPanels.Quoin>? quoins = null,
         IReadOnlyList<WallTee.Run>? tees = null,
         IReadOnlyList<WallRun>? wallLines = null,
-        IReadOnlyList<DH.Grading.Core.WallBand.CornerUnit>? cornerUnits = null)
+        IReadOnlyList<DH.Grading.Core.WallBand.CornerUnit>? cornerUnits = null,
+        IReadOnlyList<DH.Grading.Core.WallBand.WallMass>? masses = null)
     {
         int nb = 0, nc = 0, np = 0, na = 0, ncp = 0, nt = 0;
         var stw = new StageTimer();
@@ -83,8 +84,19 @@ public static class WallDwg
                     (nb, nc) = WallBlockDwg.Populate(db, tr, blockSets, blockW, blockD, blockH, capD, capT);
                 WallPanelDwg.ResetDiag();   // 내보내기 1회 단위 — Populate 진입부에서 리셋하면 2회차가 1회차 실패를 지운다
                 stw.Stage("앵커판넬");
-                if (panels != null && panels.Count > 0)
-                    (np, na) = WallPanelDwg.Populate(db, tr, panels, concrete: false, quoins: quoins, cornerUnits: cornerUnits);
+                // ★★★[JACK 0819 '아예 아무것도 안 나왔어' — 이게 그 원인] **판넬 개수에 매달리지 않는다.**
+                //   판넬을 안 만들기로 해 놓고, 정작 그리는 함수를 부르는 조건이 '판넬이 1장이라도 있으면'이었다.
+                //   그래서 스윕 덩어리 131개를 넘겨 놓고 **한 번도 그리지 않았다** — 로그는 '0/131개'였고
+                //   깨진솔리드도 0이었다(만든 적이 없으니 깨질 것도 없다).
+                //   그릴 것이 하나라도 있으면 부른다.
+                bool anyBody = (panels != null && panels.Count > 0)
+                            || (cornerUnits != null && cornerUnits.Count > 0)
+                            || (quoins != null && quoins.Count > 0)
+                            || (masses != null && masses.Count > 0);
+                if (anyBody)
+                    (np, na) = WallPanelDwg.Populate(db, tr,
+                        panels ?? (IReadOnlyList<WallPanels.Panel>)System.Array.Empty<WallPanels.Panel>(),
+                        concrete: false, quoins: quoins, cornerUnits: cornerUnits, masses: masses);
                 // 코너 필러는 위 첫 호출에서 전량 생성된다 — 여기서 또 넘기면 같은 자리에 솔리드가 2개 생기고,
                 //   CheckStray 기준상자가 콘크리트 패널 구름이라 코너 필러가 통째로 '동떨어진 객체'로 오탐된다.
                 if (concrete != null && concrete.Count > 0)

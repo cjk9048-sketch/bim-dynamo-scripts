@@ -1,4 +1,4 @@
-namespace DH.Grading.Core;
+﻿namespace DH.Grading.Core;
 
 /// <summary>3D 점 (도면 좌표계, 단위 m). XY는 평면, Z는 표고.</summary>
 public readonly record struct Point3(double X, double Y, double Z);
@@ -191,6 +191,56 @@ public sealed class GradingParams
 
     /// <summary>방향별 단높이 — up=true 절토 / false 성토.</summary>
     public double BenchHeightOf(bool up) => up ? CutBenchHeight : FillBenchHeight;
+
+    /// <summary>★★★[JACK 0820 '해당 선택 지점부터 단높이를 바꿔서 할 순 없나'] <b>단높이 변경 규칙</b> —
+    /// (그 단부터, 새 단높이). 방향별(절토/성토)로 따로 두고, <b>전 둘레에 똑같이</b> 적용된다.
+    /// <para><b>왜 구간(SlopeZone)이 아니라 여기에 두는가</b> — v16.9가 "단높이는 구간별 불가"라고 적은 이유가
+    /// 그대로 살아 있기 때문이다: 링은 같은 표고의 등고선이라 <b>링 하나에 표고가 하나</b>인데,
+    /// 둘레의 일부만 단높이가 다르면 같은 링에서 구간 안/밖의 표고가 달라져야 해서 표현이 안 된다.
+    /// </para>
+    /// 그런데 <b>층(단) 전체</b>를 바꾸는 것은 다르다 — 그 단부터 위쪽 링들의 표고가 통째로 옮겨갈 뿐,
+    /// 링 하나의 표고는 여전히 하나다. 그래서 <b>구간에 못 두는 것</b>이고 <b>여기에 두면 되는 것</b>이다.
+    /// <para>이 목록을 구간별로 두면 v16.9의 그 문제로 정확히 되돌아간다 — 자료구조로 막아 둔다.</para></summary>
+    public List<(int FromBench, double H)> CutBenchSteps { get; init; } = new();
+
+    /// <summary>성토 단높이 변경 규칙 — <see cref="CutBenchSteps"/> 참조.</summary>
+    public List<(int FromBench, double H)> FillBenchSteps { get; init; } = new();
+
+    /// <summary>방향별 단높이 변경 규칙.</summary>
+    public IReadOnlyList<(int FromBench, double H)> BenchStepsOf(bool up) => up ? CutBenchSteps : FillBenchSteps;
+
+    /// <summary>그 단(0부터)의 단높이 — 규칙이 없으면 전역값. 규칙은 시작단 오름차순 전제(<see cref="NormalizeBenchSteps"/>).
+    /// <para>여러 번 실행하면 규칙이 쌓여 '아래는 높은 단 · 위는 낮은 단'이 된다 — 구배·소단폭과 같은 규칙이다.</para></summary>
+    public double BenchHeightAt(bool up, int bench)
+    {
+        double h = BenchHeightOf(up);
+        foreach (var r in BenchStepsOf(up))
+        {
+            if (bench < r.FromBench) break;
+            if (r.H > 1e-6) h = r.H;
+        }
+        return h;
+    }
+
+    /// <summary>이 방향에서 나올 수 있는 <b>가장 작은</b> 단높이 — 단수 예산(무한루프 백스톱)에 쓴다.
+    /// 작은 단이 섞이면 같은 표고차를 오르는 데 단이 더 많이 필요하므로, 예산은 작은 쪽으로 잡아야 안 끊긴다.</summary>
+    public double SmallestBenchHeightOf(bool up)
+    {
+        double h = BenchHeightOf(up);
+        foreach (var r in BenchStepsOf(up)) if (r.H > 1e-6 && r.H < h) h = r.H;
+        return h;
+    }
+
+    /// <summary>단높이 규칙 정렬(시작단 오름차순) + 같은 시작단 중복 제거(나중 것이 이김) — SlopeZone.Normalize와 같은 규칙.</summary>
+    public void NormalizeBenchSteps()
+    {
+        foreach (var list in new[] { CutBenchSteps, FillBenchSteps })
+        {
+            list.Sort((a, b) => a.FromBench.CompareTo(b.FromBench));
+            for (int i = list.Count - 1; i > 0; i--)
+                if (list[i].FromBench == list[i - 1].FromBench) list.RemoveAt(i - 1);
+        }
+    }
 
     /// <summary>방향별 소단폭 — up=true 절토 / false 성토.</summary>
     public double BenchWidthOf(bool up) => up ? CutBenchWidth : FillBenchWidth;

@@ -128,10 +128,525 @@ public static class WallBand
     /// <para>벽이 1:0.05로 기울어 두 벽면이 <b>서로 다른 방향으로</b> 물러나므로, 위 단면은 아래 단면의
     /// 단순 평행이동이 아니다(90° 코너·단높이 5m면 0.18m 어긋난다). 두 단면을 각자 제 높이에서 구해
     /// 그 사이를 이으면 위·아래가 정확하고 중간은 선형이라 기울기와 정확히 맞는다.</para></summary>
-    public readonly record struct CornerUnit(IReadOnlyList<Point3> Bot, IReadOnlyList<Point3> Top);
+    /// <param name="Swept">★[JACK 0819] 옹벽선을 그대로 훑어 만든 덩어리(각도를 안 재는 경로).
+    /// 정점마다 그 자리 데이라잇으로 <b>이미</b> 잘려 있으므로 <see cref="ClampQuoinsToPanels"/>의
+    /// 높이 보정(정점 0의 Z를 단면 전체의 대표로 쓴다)을 태우면 오히려 윗변이 평평하게 뭉개진다 —
+    /// 허공 검사는 태우고 높이 보정만 건너뛴다.</param>
+    public readonly record struct CornerUnit(IReadOnlyList<Point3> Bot, IReadOnlyList<Point3> Top, bool Swept = false);
 
     /// <summary>직전 <see cref="Slice"/>가 만든 코너 전용 판넬들 — <see cref="ResetTotals"/>가 비운다.</summary>
     public static List<CornerUnit> LastCornerUnits { get; } = new();
+
+    /// <summary>★★★[JACK 0819 '지금 여전히 하나하나 블록으로 나오는데'] <b>옹벽 한 줄 = 솔리드 하나.</b>
+    /// <para>
+    /// 종전엔 정점 구간마다 조각을 만들어 <b>쌓았다</b>(실측 131개). 맞붙어 있어도 도면에서는 131덩어리라
+    /// JACK이 본 대로 "하나하나 블록"이다. 로프트를 두 단면 사이에만 걸었기 때문이다.
+    /// </para>
+    /// 로프트는 <b>단면을 여러 장</b> 받을 수 있다 — 정점마다 마름모 단면을 만들어 <b>한 번에</b> 통과시키면
+    /// 솔리드 하나가 나오고, 그러면서도 단면마다 데이라잇 높이가 달라 벽 윗선이 지형을 따라간다.
+    /// <para>단면은 4점 평행사변형(아래=토우 · 위=크레스트 · 두께 = 판넬 두께)이고 <b>반드시 평면</b>이다 —
+    /// 비평면 단면은 로프트가 예외 없이 빈 솔리드를 돌려준다(0819 실측 26개 중 23개).</para>
+    /// 데이라잇에 벽이 끊기면 거기서 덩어리를 나눈다(한 덩어리로 이으면 허공을 가로지른다).</summary>
+    public readonly record struct WallMass(IReadOnlyList<IReadOnlyList<Point3>> Sections);
+
+    /// <summary>직전 <see cref="Slice"/>들이 만든 옹벽 매스 — 줄마다 하나(데이라잇에 끊기면 여럿).</summary>
+    public static List<WallMass> LastMasses { get; } = new();
+
+    /// <summary>★★★[JACK 0820 '백판 덩어리를 데이라잇으로 지우기 전에 무늬 작업을 하고,
+    /// 무늬까지 포함해서 데이라잇으로 지워야 해'] <b>자르기 전의 온전한 벽면</b>과 <b>자르는 위치</b>.
+    /// <para>무늬 격자를 <b>잘린 벽</b>에 깔면 데이라잇이 끊은 자리마다 격자가 다시 시작해 세로줄이 어긋나고
+    /// (JACK 0820 '세로 방향을 유지할 것 · 지금은 들쑥날쑥함'), 구간 경계가 통째로 빈다
+    /// ('직선구간 중간에 비는 공간이 없게 할 것').</para>
+    /// 그래서 격자는 <b>온전한 벽</b>(<paramref name="Full"/>)에 깔고, 판마다 <paramref name="Lo"/>·<paramref name="Hi"/>로
+    /// <b>나중에 자른다</b> — 벽과 무늬가 같은 선에서 잘린다.
+    /// <para><paramref name="Lo"/>·<paramref name="Hi"/>는 토우(0)에서 크레스트(1)로 가는 비율이다.
+    /// <c>Hi ≤ Lo</c>면 그 자리엔 벽이 없다.</para></summary>
+    public readonly record struct WallFace(IReadOnlyList<IReadOnlyList<Point3>> Full,
+                                           IReadOnlyList<double> Lo, IReadOnlyList<double> Hi);
+
+    /// <summary>직전 <see cref="Slice"/>들이 만든 자르기 전 벽면 — 무늬 격자가 이것 위에 깔린다.</summary>
+    public static List<WallFace> LastFaces { get; } = new();
+
+    /// <summary>★[JACK 0820 '무늬랑 앵커부랑 앵커는 전에 만들었던 것 활용해'] 직전 <see cref="BuildFacePanels"/>가
+    /// 만든 표면 마감 판 — <b>기존 판넬과 같은 자료형</b>이라 무늬·도넛·앵커·정착판이 그대로 붙는다.
+    /// <para>새 렌더러를 만들지 않는다. 이 저장소에서 이미 다듬어 온 <c>WallPanelDwg</c> 경로를 그대로 타는 것이
+    /// 요점이다 — 같은 그림을 두 번 그리기 시작하면 둘이 어긋나는 것은 시간 문제다.</para></summary>
+    public static List<WallPanels.Panel> LastFacePanels { get; } = new();
+
+    /// <summary>표면 판 한 변(m) — JACK 0820 "한 무늬가 가로세로 1.5로 규정해서 채우면 될 것 같아".</summary>
+    public const double FaceTile = 1.5;
+
+    /// <summary>★[JACK 0820] 마감이 매스 바깥면에서 띄우는 양(m) — <b>0</b>이다.
+    /// 몸통(바탕 판)을 안 만들고 무늬만 얹으므로, 무늬는 매스 표면에 <b>딱 붙어</b> 있어야 한다.
+    /// 띄우면 무늬만 허공에 뜬다(종전 0.03은 판을 겹쳐 얹던 시절 값이다).</summary>
+    public const double FaceProud = 0.0;
+
+    /// <summary>[진단] 직전 <see cref="BuildFacePanels"/>의 성적.</summary>
+    public static string LastFaceDiag { get; private set; } = "";
+
+    /// <summary>★★[JACK 0820] <see cref="LastMasses"/>의 바깥면에 1.5m 격자 판을 얹는다.
+    /// <para>★★★[JACK 0820 스샷 3장] 격자를 <b>벽 전체에 한 번만</b> 깐다. 종전엔 직선 구간마다 따로 깔았는데,
+    /// 그 하나가 세 증상을 동시에 만들었다 —
+    /// ① <b>세로가 들쑥날쑥</b>(행마다 시작점이 달라 열이 어긋남) ② <b>직선구간 중간에 빈 공간</b>
+    /// (구간 경계가 통째로 빔) ③ <b>잘린 부분이 안 채워짐</b>(위 자투리 행을 아예 안 만듦).</para>
+    /// 이제 토우를 따라 잰 <b>누적 거리</b> 하나로 칸을 나눈다. 칸마다
+    /// <b>굽었으면 건너뛰고</b>(JACK: 굴곡부까지 억지로 채우지 말고),
+    /// 곧으면 아래에서 위로 채우되 <b>맨 윗행은 데이라잇 선에 맞춰 잘라</b> 끝까지 마감한다
+    /// (JACK: 데이라잇으로 잘려지는 부분까지도 끝까지 마감할 것).</summary>
+    /// <param name="flatTol">직선 판정 한도(m) — 그 칸을 곧은 판으로 덮었을 때 벽선에서 벗어나는 양.
+    /// 각도가 아니라 거리다(§39: 각도 문턱은 이 저장소가 여덟 번 고쳐 온 자다).</param>
+    public static int BuildFacePanels(double flatTol = 0.05)
+    {
+        LastFacePanels.Clear();
+        int tiles = 0, curvedCol = 0, clipped = 0, dropped = 0; double wallLen = 0;
+
+        // ★★★[JACK 0820 '백판 덩어리를 데이라잇으로 지우기 전에 무늬 작업을 하고, 무늬까지 포함해서 지워야 해']
+        //   격자를 **자르기 전의 온전한 벽**에 깔고, 판마다 나중에 자른다.
+        //   잘린 벽에 깔면 데이라잇이 끊은 자리마다 격자가 다시 시작해 세로줄이 어긋나고 구간 경계가 빈다.
+        foreach (var wf in LastFaces)
+        {
+            var sec = wf.Full;
+            if (sec == null || sec.Count < 2) continue;
+
+            // 토우(바깥아래)를 따라 잰 누적 거리 — 이 하나가 벽 전체의 가로 좌표다.
+            var cum = new double[sec.Count];
+            for (int k = 1; k < sec.Count; k++) cum[k] = cum[k - 1] + Dist3(sec[k - 1][1], sec[k][1]);
+            double total = cum[sec.Count - 1];
+            wallLen += total;
+            if (total < FaceTile) continue;
+
+            // ★★★[검토 심각4] **끝 자투리를 버리지 않는다.** Floor로 세면 마지막 칸 뒤의 0~1.49m가
+            //   어떤 칸에도 안 들어가 줄마다 맨살이 남는다("구간 경계가 통째로 빔"이 자리만 옮긴 것).
+            //   Ceiling으로 세고 마지막 칸을 벽 끝에서 자른다 — TileColumn은 임의 폭을 이미 받는다.
+            int nCol = (int)System.Math.Ceiling(total / FaceTile - 1e-9);
+            for (int c = 0; c < nCol; c++)
+            {
+                double s0 = c * FaceTile, s1 = System.Math.Min((c + 1) * FaceTile, total);
+                if (s1 - s0 < MinPieceLen) continue;                   // 실오라기 칸은 줄눈에 죽는다
+                double curv = ChordOffS(sec, cum, s0, s1);
+                if (curv > flatTol)
+                {
+                    curvedCol++;
+                    // ★[JACK 0820] **어디가 굽었는지 좌표로 남긴다** — 개수만으로는 어디를 볼지 모른다.
+                    if (curv > tCurvMax)
+                    {
+                        var cs = SecAt(sec, cum, (s0 + s1) / 2);
+                        tCurvMax = curv; tCurvX = cs[1].X; tCurvY = cs[1].Y;
+                    }
+                    continue;
+                }
+                var L = SecAt(sec, cum, s0);
+                var R = SecAt(sec, cum, s1);
+                // 이 칸에서 잘리는 위치(토우 0 ~ 크레스트 1) — 양 끝에서 각각.
+                double loL = LerpAt(cum, wf.Lo, s0), hiL = LerpAt(cum, wf.Hi, s0);
+                double loR = LerpAt(cum, wf.Lo, s1), hiR = LerpAt(cum, wf.Hi, s1);
+                if (hiL - loL <= 0 && hiR - loR <= 0) { dropped++; tPfNoWall++; continue; }   // 이 칸엔 벽이 없다
+                tiles += TileColumn(sec, cum, wf.Lo, wf.Hi, s0, s1, ref clipped, ref dropped);
+            }
+        }
+        // ★★[JACK 0820 '문제점을 로그로도 확인할 수 있게 해 · 계속 스샷으로 하기 힘들어']
+        //   **스샷 없이도 갈리게 잰다.** 눈으로만 보이던 것을 숫자로 바꾼다 —
+        //   ① 덮개율: 벽 겉면 중 판이 덮은 비율. 낮으면 '빈 공간이 많다'는 그 증상이다.
+        //   ② 뒤집힌 판: 판 앞면이 벽 바깥을 등진 개수. 0이 아니면 '반대로 됨'이다.
+        //   ③ 가장 큰 빈 자리의 좌표 — 어디를 봐야 하는지까지 알려 준다.
+        // ★★[JACK 0820 '문제점을 로그로도 확인할 수 있게 해'] 스샷 없이 갈리게 잰다.
+        // ★[검토 중간10] 종전엔 판마다 모든 매스 단면을 훑어 <b>O(판 × 단면)</b>이었다
+        //   (판 1만 × 단면 2만 = 2억 회) — "내보내기가 너무 오래 걸린다"에 정면으로 역행한다.
+        //   게다가 [검토 심각1]대로 그 비교는 **원하는 결함을 못 잡는다**(둘이 같이 뒤집히면 내적이 양수).
+        //   → 뒤집힘은 위 <c>LastSideFlip</c>(매스를 안 보고 재는 값)이 맡고, 여기서는 **면적만** 센다.
+        double wallArea = 0, panelArea = 0;
+        foreach (var mm in LastMasses)
+            for (int k = 0; k + 1 < mm.Sections.Count; k++)
+            {
+                var A = mm.Sections[k]; var B = mm.Sections[k + 1];
+                if (A.Count != 4 || B.Count != 4) continue;
+                wallArea += (Dist3(A[1], A[0]) + Dist3(B[1], B[0])) / 2 * Dist3(A[1], B[1]);
+            }
+        foreach (var f in LastFacePanels)
+        {
+            double a2 = 0;
+            for (int i = 0, j = f.Local.Count - 1; i < f.Local.Count; j = i++)
+                a2 += f.Local[j].u * f.Local[i].v - f.Local[i].u * f.Local[j].v;
+            panelArea += System.Math.Abs(a2) / 2;
+        }
+        double cover = wallArea > 1e-9 ? panelArea / wallArea * 100 : 0;
+        double gapMax = System.Math.Max(0, wallArea - panelArea);
+        // 줄눈 때문에 100%는 구조적으로 불가능하다 — 기준선을 같이 찍어야 숫자가 판단이 된다(검토 낮음15).
+        double coverMax = FaceTile > 1e-9 ? (FaceTile - JointW) * (FaceTile - JointW) / (FaceTile * FaceTile) * 100 : 0;
+        LastFaceDiag = $"표면 판 {tiles}장(한 변 {FaceTile:F1}m · 잘린 판 {clipped}장 · 못 놓은 자리 {dropped}곳)" +
+                       $" · 굽어서 건너뛴 칸 {curvedCol}개" +
+                       (tCurvMax > 0 ? $"(최대 이탈 {tCurvMax:F2}m @ {tCurvX:F0},{tCurvY:F0} · 한도 {flatTol:F2}m)" : "") +
+                       (tPfNoWall + tPfThin + tPfFrame > 0
+                           ? $" · 못 놓은 사유(벽 없음 {tPfNoWall} · 행이 얇음 {tPfThin} · 프레임 실패 {tPfFrame})" : "") +
+                       $" · 벽 길이 {wallLen:F0}m" +
+                       $" · ★덮개율 {cover:F0}%(줄눈 빼고 최대 {coverMax:F0}% · 벽 {wallArea:F0}㎡ · 판 {panelArea:F0}㎡ · 안 덮인 {gapMax:F0}㎡)";
+        return tiles;
+    }
+
+    /// <summary>누적 거리 s 자리의 값 — 이웃 두 station 사이를 선형 보간한다(자르는 비율에 쓴다).</summary>
+    private static double LerpAt(double[] cum, IReadOnlyList<double> val, double s)
+    {
+        int lo = 0, hi = cum.Length - 1;
+        while (lo + 1 < hi)
+        {
+            int mid = (lo + hi) / 2;
+            if (cum[mid] <= s) lo = mid; else hi = mid;
+        }
+        double seg = cum[hi] - cum[lo];
+        double t = seg > 1e-12 ? System.Math.Clamp((s - cum[lo]) / seg, 0, 1) : 0;
+        return val[lo] + (val[hi] - val[lo]) * t;
+    }
+
+    /// <summary>[s0..s1] 칸을 곧은 판으로 덮었을 때 그 사이 단면들이 벗어나는 최대 거리(m) — 위·아래 둘 다 본다.</summary>
+    private static double ChordOffS(IReadOnlyList<IReadOnlyList<Point3>> sec, double[] cum, double s0, double s1)
+    {
+        double worst = 0;
+        for (int idx = 0; idx <= 1; idx++)                              // 0=바깥위(크레스트) · 1=바깥아래(토우)
+        {
+            var A = SecAt(sec, cum, s0)[idx];
+            var B = SecAt(sec, cum, s1)[idx];
+            double dx = B.X - A.X, dy = B.Y - A.Y, L2 = dx * dx + dy * dy;
+            if (L2 < 1e-12) continue;
+            for (int k = 0; k < sec.Count; k++)
+            {
+                if (cum[k] <= s0 + 1e-9 || cum[k] >= s1 - 1e-9) continue;
+                var q = sec[k][idx];
+                double t = System.Math.Clamp(((q.X - A.X) * dx + (q.Y - A.Y) * dy) / L2, 0, 1);
+                double ex = q.X - (A.X + dx * t), ey = q.Y - (A.Y + dy * t);
+                double d = System.Math.Sqrt(ex * ex + ey * ey);
+                if (d > worst) worst = d;
+            }
+        }
+        return worst;
+    }
+
+    /// <summary>누적 거리 s 자리의 단면(네 점) — 이웃 두 단면 사이를 선형 보간한다.</summary>
+    private static IReadOnlyList<Point3> SecAt(IReadOnlyList<IReadOnlyList<Point3>> sec, double[] cum, double s)
+    {
+        int lo = 0, hi = sec.Count - 1;
+        while (lo + 1 < hi)
+        {
+            int mid = (lo + hi) / 2;
+            if (cum[mid] <= s) lo = mid; else hi = mid;
+        }
+        double seg = cum[hi] - cum[lo];
+        double t = seg > 1e-12 ? System.Math.Clamp((s - cum[lo]) / seg, 0, 1) : 0;
+        var r = new List<Point3>(4);
+        for (int i = 0; i < 4; i++) r.Add(Lerp3(sec[lo][i], sec[hi][i], t));
+        return r;
+    }
+
+    /// <summary>칸 하나를 아래에서 위로 채운다 — 격자는 <b>온전한 벽</b> 기준이고, 판은 <b>나중에</b> 잘린다.
+    /// <para>★★★[JACK 0820 '무늬 부분의 잘림이 데이라잇과 맞지 않는다'] <b>윗변을 데이라잇 정점마다 꺾는다.</b>
+    /// 종전엔 판을 사각형으로 고집해 윗변이 1.5m짜리 <b>직선</b>이었다 — 데이라잇은 그 안에서 꺾이므로
+    /// 무늬 잘린 선과 벽 윗선이 어긋난다. 판을 사각형으로 둘 이유가 없다(이 저장소는 이미 5·6각 판을 만든다).
+    /// 칸 안의 옹벽선 정점마다 잘리는 높이를 찍어 <b>여러 점으로 된 윗변</b>을 만들면 벽과 정확히 같은 선에서 잘린다.</para></summary>
+    private static int TileColumn(IReadOnlyList<IReadOnlyList<Point3>> sec, double[] cum,
+                                  IReadOnlyList<double> loArr, IReadOnlyList<double> hiArr,
+                                  double s0, double s1, ref int clipped, ref int dropped)
+    {
+        double half = JointW / 2;
+        const double MinRow = 0.15;                                    // 이보다 얇은 행은 줄눈에 죽는다
+
+        // 좌우 줄눈 — 칸 폭에서 양쪽을 half씩 들인다. 윗변을 꺾을 s 지점들도 그 안에서만 잡는다.
+        double sa = s0 + half, sb = s1 - half;
+        if (sb - sa < MinRow) return 0;
+
+        // 이 칸 안의 옹벽선 정점 — 윗변이 꺾일 자리다.
+        var ss = new List<double> { sa };
+        for (int k = 0; k < cum.Length; k++)
+            if (cum[k] > sa + 1e-6 && cum[k] < sb - 1e-6) ss.Add(cum[k]);
+        ss.Add(sb);
+
+        // 각 s에서 온전한 벽면(토우·크레스트)과 자르는 비율
+        int n = ss.Count;
+        var bot = new Point3[n]; var top = new Point3[n];
+        var hgt = new double[n]; var lo = new double[n]; var hi = new double[n];
+        // ★★★[JACK 0820 '반대로 됨'] **바깥 방향은 자리마다 구한다.**
+        //   직전 판에서 <c>sec[0]</c>(벽 <b>전체의 첫 단면</b>)의 방향을 가져다 썼다 — 벽이 돌면 뒤쪽 판이
+        //   반대편에 붙는다. 오늘만 다섯 번째로 같은 실수다: <b>먼 데서 값을 빌려오는 것</b>
+        //   (벽 끝 방향 · 로프트 실패 시 절반 버리기 · 지반 밖 높이 · 코너 단면 법선 · 그리고 이것).
+        //   단면 자체가 그 자리 방향을 이미 담고 있다(바깥위 − 안쪽위) — 빌릴 이유가 없다.
+        var nx = new double[n]; var ny = new double[n]; var nz = new double[n];
+        for (int k = 0; k < n; k++)
+        {
+            var S = SecAt(sec, cum, ss[k]);
+            bot[k] = S[1]; top[k] = S[0];
+            hgt[k] = Dist3(bot[k], top[k]);
+            lo[k] = LerpAt(cum, loArr, ss[k]);
+            hi[k] = LerpAt(cum, hiArr, ss[k]);
+            var nk = Norm3(S[0].X - S[3].X, S[0].Y - S[3].Y, S[0].Z - S[3].Z);
+            if (!nk.ok) return 0;
+            nx[k] = nk.x; ny[k] = nk.y; nz[k] = nk.z;
+        }
+        var nrm = (ok: true, x: nx[n / 2], y: ny[n / 2], z: nz[n / 2]);   // 프레임 부호용 대표값(칸 안)
+
+        Point3 P(int k, double v)
+        {
+            double t = hgt[k] > 1e-9 ? System.Math.Clamp(v / hgt[k], 0, 1) : 0;
+            return new Point3(bot[k].X + (top[k].X - bot[k].X) * t + nx[k] * FaceProud,
+                              bot[k].Y + (top[k].Y - bot[k].Y) * t + ny[k] * FaceProud,
+                              bot[k].Z + (top[k].Z - bot[k].Z) * t + nz[k] * FaceProud);
+        }
+
+        // 임의의 s 자리 값 — 데이라잇이 행을 가로지르는 지점을 찾는 데 쓴다.
+        (Point3 bot, Point3 top, double hgt, double lo, double hi) At(double sv)
+        {
+            var S = SecAt(sec, cum, sv);
+            return (S[1], S[0], Dist3(S[1], S[0]), LerpAt(cum, loArr, sv), LerpAt(cum, hiArr, sv));
+        }
+        int made = 0;
+        for (int j = 0; j < 400; j++)
+        {
+            double v0 = j * FaceTile + half, v1 = (j + 1) * FaceTile - half;
+            bool anyLive = false;
+            for (int k = 0; k < n; k++) if (v0 < hgt[k]) { anyLive = true; break; }
+            if (!anyLive) break;                                       // 온전한 벽 위로는 더 없다
+
+            // ★★★[JACK 0820 '안 잘렸으면 안 잘렸어야지 왜 아예 없는거지'] **데이라잇이 비스듬히 지나면 가로로도 자른다.**
+            //   종전엔 세로로만 잘랐다 — 한쪽 끝의 데이라잇이 그 행보다 아래면 두께를 0으로 만들 뿐
+            //   <b>자리는 그대로 둬서 그 뾰족한 끝이 벽 위 허공에 떴다</b>(실측 2.26m).
+            //   → 데이라잇이 행의 아랫변을 <b>가로지르는 s를 찾아</b> 거기서 판을 끊는다.
+            //     한 행이 두 조각으로 갈릴 수도 있다(가운데가 잘리는 경우) — 그때는 조각마다 판을 놓는다.
+            var vb = new double[n]; var vt = new double[n];
+            bool cut = false;
+            for (int k = 0; k < n; k++)
+            {
+                vb[k] = System.Math.Max(v0, lo[k] * hgt[k]);
+                vt[k] = System.Math.Min(v1, hi[k] * hgt[k]);
+                if (vb[k] > v0 + 1e-9 || vt[k] < v1 - 1e-9) cut = true;
+            }
+            const double Tiny = 0.01;
+            // 데이라잇이 행의 아랫변을 가로지르는 자리를 좁혀 찾는다 — 거기서 판이 끝나야 허공에 안 뜬다.
+            double CrossS(double sDead, double sLive)
+            {
+                for (int it = 0; it < 14; it++)
+                {
+                    double sm = (sDead + sLive) / 2;
+                    var r = At(sm);
+                    double bV = System.Math.Max(v0, r.lo * r.hgt);
+                    double tV = System.Math.Min(v1, r.hi * r.hgt);
+                    if (tV - bV >= Tiny) sLive = sm; else sDead = sm;
+                }
+                return sLive;
+            }
+            int p0 = 0;
+            while (p0 < n)
+            {
+                while (p0 < n && vt[p0] - vb[p0] < Tiny) p0++;
+                if (p0 >= n) break;
+                int p1 = p0;
+                while (p1 + 1 < n && vt[p1 + 1] - vb[p1 + 1] >= Tiny) p1++;
+
+                // 조각의 표본 s 목록 — 양 끝에는 데이라잇이 아랫변을 가로지르는 자리를 끼워 넣는다.
+                var sv = new List<double>();
+                if (p0 > 0) sv.Add(CrossS(ss[p0 - 1], ss[p0]));
+                for (int k = p0; k <= p1; k++) sv.Add(ss[k]);
+                if (p1 + 1 < n) sv.Add(CrossS(ss[p1 + 1], ss[p1]));
+
+                int m = sv.Count;
+                var qb = new Point3[m]; var qt = new Point3[m];
+                double thickest = 0;
+                for (int i = 0; i < m; i++)
+                {
+                    var r = At(sv[i]);
+                    var nk = Norm3(0, 0, 0);
+                    // 그 자리 바깥 방향 — 단면에서 직접 얻는다(먼 데서 빌려오지 않는다).
+                    var SS = SecAt(sec, cum, sv[i]);
+                    nk = Norm3(SS[0].X - SS[3].X, SS[0].Y - SS[3].Y, SS[0].Z - SS[3].Z);
+                    if (!nk.ok) { thickest = 0; break; }
+                    double bV = System.Math.Max(v0, r.lo * r.hgt);
+                    double tV = System.Math.Max(bV, System.Math.Min(v1, r.hi * r.hgt));
+                    thickest = System.Math.Max(thickest, tV - bV);
+                    Point3 On(double v)
+                    {
+                        double t = r.hgt > 1e-9 ? System.Math.Clamp(v / r.hgt, 0, 1) : 0;
+                        return new Point3(r.bot.X + (r.top.X - r.bot.X) * t + nk.x * FaceProud,
+                                          r.bot.Y + (r.top.Y - r.bot.Y) * t + nk.y * FaceProud,
+                                          r.bot.Z + (r.top.Z - r.bot.Z) * t + nk.z * FaceProud);
+                    }
+                    qb[i] = On(bV); qt[i] = On(tV);
+                }
+                if (thickest < MinRow) { dropped++; tPfThin++; p0 = p1 + 1; continue; }
+                if (cut) clipped++;
+
+                var poly = new List<Point3>(2 * m);
+                for (int i = 0; i < m; i++) poly.Add(qb[i]);
+                for (int i = m - 1; i >= 0; i--) poly.Add(qt[i]);
+
+                // 앵커는 격자 자리를 지킨다 — 칸 한가운데, 행 한가운데. 조각이 그 자리를 품을 때만 놓는다.
+                double vAnchor = j * FaceTile + FaceTile / 2;
+                double sMid = (sa + sb) / 2;
+                bool room = sMid >= sv[0] - 1e-9 && sMid <= sv[m - 1] + 1e-9;
+                // ★★★[검토 심각5] **프레임은 그 조각 안에서 뽑는다.** 한 행이 두 조각으로 갈리면
+                //   sMid는 <b>죽은 가운데</b>라, 거기서 W·V를 받으면 조각이 없는 자리의 방향을 쓰는 셈이다
+                //   (오늘 반복된 그 패턴). 앵커 자리만 격자를 지키면 되고, 방향은 조각 자신에게 물어야 한다.
+                double sFrame = room ? sMid : (sv[0] + sv[m - 1]) / 2;
+                var rm = At(sMid);
+                if (room)
+                    room = vAnchor - PocketHalf >= System.Math.Max(v0, rm.lo * rm.hgt) - 1e-9
+                        && vAnchor + PocketHalf <= System.Math.Min(v1, rm.hi * rm.hgt) + 1e-9;
+                var SM2 = SecAt(sec, cum, sFrame);
+                var nM = Norm3(SM2[0].X - SM2[3].X, SM2[0].Y - SM2[3].Y, SM2[0].Z - SM2[3].Z);
+                // ★★★[JACK 0820 '무늬가 불특정하게 누락'] 기준점은 **언제나 격자 자리(sMid)** 다.
+                //   앵커가 안 붙는 판에서도 이 점이 무늬 칸의 중심이 된다 — 조각 가운데로 옮기면
+                //   잘린 판마다 무늬 격자가 제자리를 벗어나 이어지지 않는다.
+                //   (프레임 방향만 조각 안에서 뽑는다 — 그건 죽은 자리의 방향을 쓰면 안 되기 때문이다.)
+                double tA = rm.hgt > 1e-9 ? System.Math.Clamp(vAnchor / rm.hgt, 0, 1) : 0;
+                var aCtr = new Point3(rm.bot.X + (rm.top.X - rm.bot.X) * tA + (nM.ok ? nM.x : 0) * FaceProud,
+                                      rm.bot.Y + (rm.top.Y - rm.bot.Y) * tA + (nM.ok ? nM.y : 0) * FaceProud,
+                                      rm.bot.Z + (rm.top.Z - rm.bot.Z) * tA + (nM.ok ? nM.z : 0) * FaceProud);
+
+                // 사면 방향(토우→크레스트)은 판이 어떻게 잘리든 성립한다 — 프레임의 세로축을 여기서 얻는다.
+                var rf = At(sFrame);
+                var slope = Norm3(rf.top.X - rf.bot.X, rf.top.Y - rf.bot.Y, rf.top.Z - rf.bot.Z);
+                if (AddFace(poly, nM, room, aCtr, slope)) made++;
+                else { dropped++; tPfFrame++; }                        // 조용히 버리지 않는다(검토 심각5)
+                p0 = p1 + 1;
+            }
+        }
+        return made;
+    }
+
+
+
+    /// <summary>네 점을 기존 판넬 자료형으로 만들어 담는다 — 무늬·도넛·앵커·정착판이 그대로 붙는다.</summary>
+    /// <summary>정착구 보호공 반폭(m) — 이만큼 위아래로 자리가 나야 앵커를 놓는다(JACK 0820).</summary>
+    public const double PocketHalf = 0.40;
+
+    /// <summary>도넛 1단 반폭(m) — <c>WallPanelDwg.Collar1Size</c>(0.56)의 절반. 앵커가 판 안에 드는지 검사하는 자.
+    /// <para>두 곳에 같은 숫자가 살면 언젠가 갈라진다 — 여기서 한 번만 정하고 검사는 이 값을 쓴다.</para></summary>
+    public const double Collar1Half = 0.28;
+
+    private static bool AddFace(IReadOnlyList<Point3> poly,
+                                (bool ok, double x, double y, double z) nrm,
+                                bool withAnchor, Point3 anchorAt,
+                                (bool ok, double x, double y, double z) slope)
+    {
+        if (poly.Count < 4) return false;
+        Point3 r00 = poly[0], r10 = poly[1];
+        // ★★[0820 실측 'eCannotScaleNonUniformly'] 프레임은 **직교 단위축**이어야 렌더러가 판을 만든다.
+        // ★★★[JACK 0820 '객체별로 돌아가게 생성됨'] **프레임을 판이 아니라 벽에서 가져온다.**
+        //   종전엔 세로축을 <b>판의 왼쪽 변</b>(r00→마지막 점)에서 뽑았다. 데이라잇이 판을 비스듬히 가로지르면
+        //   그 변이 거의 0이 되거나 가로축과 나란해져 <b>방향이 좌표 잡음</b>이 된다 — 그 판만 제멋대로 돈다.
+        //   오늘 반복된 그 실수다: <b>퇴화한 것에서 방향을 묻는 것</b>
+        //   (벽 끝 두께방향 · 코너 단면 법선 · 벽 전체 첫 단면 · 그리고 이것).
+        //   → 벽면의 <b>바깥 법선(W)</b>과 <b>사면 방향(토우→크레스트)</b>은 판이 어떻게 잘리든 언제나 성립한다.
+        //     거기서 프레임을 만들고, 판의 모양은 <b>로컬 좌표</b>가 받는다(그게 로컬 좌표의 일이다).
+        if (!nrm.ok || !slope.ok) return false;
+        var ww = nrm;
+        double sw = slope.x * ww.x + slope.y * ww.y + slope.z * ww.z;
+        var vv = Norm3(slope.x - sw * ww.x, slope.y - sw * ww.y, slope.z - sw * ww.z);
+        if (!vv.ok) return false;
+        // U = V × W — 면 안에 있고 V와 직각. 판의 진행 방향(r00→r10)과 맞도록 부호를 고른다.
+        var uu = Norm3(vv.y * ww.z - vv.z * ww.y, vv.z * ww.x - vv.x * ww.z, vv.x * ww.y - vv.y * ww.x);
+        if (!uu.ok) return false;
+        if ((r10.X - r00.X) * uu.x + (r10.Y - r00.Y) * uu.y + (r10.Z - r00.Z) * uu.z < 0)
+        {
+            uu = (true, -uu.x, -uu.y, -uu.z);
+            vv = (true, -vv.x, -vv.y, -vv.z);       // 오른손 좌표계 유지(W는 바깥 그대로)
+        }
+        var uvs = new List<(double u, double v)>(poly.Count);
+        foreach (var q in poly)
+        {
+            double dx = q.X - r00.X, dy = q.Y - r00.Y, dz = q.Z - r00.Z;
+            uvs.Add((dx * uu.x + dy * uu.y + dz * uu.z, dx * vv.x + dy * vv.y + dz * vv.z));
+        }
+        double uMin = double.MaxValue, vMin = double.MaxValue;
+        foreach (var t in uvs) { uMin = System.Math.Min(uMin, t.u); vMin = System.Math.Min(vMin, t.v); }
+        var local = new List<(double u, double v)>(uvs.Count);
+        foreach (var t in uvs) local.Add((t.u - uMin, t.v - vMin));
+
+        // ★★★[JACK 0820 '코너부 무늬 누락' — 로그: 무늬없음 2[분해실패 2]]
+        //   **중복·공선 정점을 없앤다.** 데이라잇이 벽을 죽이는 자리에서 판이 쐐기 모양이 되면
+        //   아랫점과 윗점이 <b>같은 자리</b>가 된다(두께 0). 그런 다각형은 귀 자르기(ConvexPieces)가
+        //   못 쪼개고 빈 목록을 돌려주며, 호출부는 종전대로 <b>무늬를 통째로 건너뛴다</b> — 그게 코너부 민판이다.
+        //   옛 판넬 경로는 이미 <c>Simplify</c>를 부르고 있었는데(이 파일의 판넬 조립부) 새 경로에 안 따라왔다.
+        //   ※ 정리는 <b>로컬 좌표에서</b> 하고 3D 점을 거기서 다시 만든다 — 렌더러가 실제로 쓰는 것이
+        //     <c>Local</c>이므로, 둘을 따로 두면 개수가 어긋나 진단이 거짓말을 시작한다.
+        var kept = Simplify(local);
+        if (kept.Count < 3) return false;
+        // ★ 남은 점의 **원래 3D 좌표를 그대로** 가져온다. 평면으로 다시 만들면 안 된다 —
+        //   판의 네 점은 (조금 휜) 벽면 위에 있어 프레임의 W 성분을 갖는데, 그걸 버리고 재구성하면
+        //   판이 벽에서 통째로 밀려난다(실측 0.7m). Simplify는 점을 **지우기만** 하므로 값으로 되찾을 수 있다.
+        var quad = new List<Point3>(kept.Count);
+        int scan = 0;
+        foreach (var t in kept)
+        {
+            while (scan < local.Count &&
+                   (System.Math.Abs(local[scan].u - t.u) > 1e-12 || System.Math.Abs(local[scan].v - t.v) > 1e-12)) scan++;
+            if (scan >= local.Count) return false;                 // 못 되찾음 — 조용히 어긋난 판을 내보내지 않는다
+            quad.Add(poly[scan]);
+            scan++;
+        }
+        local = kept;
+        // ★★★[검토 심각3] **Origin은 판 앞면이 아니라 두께 한가운데다.**
+        //   렌더러(WallPanelDwg)는 Origin에서 <c>+W·FrontOut</c>(0.10)만큼 나간 자리를 <b>앞면</b>으로 잡는다
+        //   (기존 판넬은 org가 옹벽선 위의 토우점이라 슬래브가 옹벽선 기준 [−0.10,+0.10]으로 딱 맞았다).
+        //   내 판 네 점은 <b>매스 바깥면</b>(옹벽선 +0.10)에 있으므로, 그걸 그대로 Origin으로 주면
+        //   렌더러가 +0.10을 또 얹어 무늬가 <b>매스에서 10cm 떠 버린다</b>(몸통을 없앤 지금은 허공에 뜬다).
+        //   → 옹벽선 자리까지 물려서 준다. 그러면 앞면이 정확히 매스 바깥면과 같아진다.
+        var org = new Point3(r00.X + uu.x * uMin + vv.x * vMin - ww.x * PanelFrontOut,
+                             r00.Y + uu.y * uMin + vv.y * vMin - ww.y * PanelFrontOut,
+                             r00.Z + uu.z * uMin + vv.z * vMin - ww.z * PanelFrontOut);
+        // 앵커 자리 — **격자가 정한 점**을 이 판의 로컬 좌표로 옮긴다(판 한가운데가 아니다).
+        double cu, cv;
+        {
+            double dx = anchorAt.X - r00.X, dy = anchorAt.Y - r00.Y, dz = anchorAt.Z - r00.Z;
+            cu = dx * uu.x + dy * uu.y + dz * uu.z - uMin;
+            cv = dx * vv.x + dy * vv.y + dz * vv.z - vMin;
+        }
+        // ★★★[검토 심각2] **도넛·앵커가 판 안에 들어가는지 확인한다** — v13.9에서 이미 고쳤던 검사인데
+        //   새 경로에 안 따라왔다(이 파일 §"새로 짜면 옛 코드의 수정이 자동으로 따라오지 않는다").
+        //   데이라잇이 행을 두 조각으로 가르고 그 경계가 앵커 자리 바로 옆이면, 폭이 몇 mm인 조각도
+        //   'sMid를 품는다'는 이유로 통과해 도넛 0.28m와 앵커봉이 <b>허공에 뜬다</b>.
+        if (withAnchor)
+        {
+            const double collarHalf = Collar1Half;
+            withAnchor = PointInPoly(cu, cv, local)
+                      && PointInPoly(cu - collarHalf, cv - collarHalf, local)
+                      && PointInPoly(cu + collarHalf, cv - collarHalf, local)
+                      && PointInPoly(cu + collarHalf, cv + collarHalf, local)
+                      && PointInPoly(cu - collarHalf, cv + collarHalf, local);
+        }
+        // 무늬는 잘린 판도 받는다(Detail). 앵커·도넛만 자리가 날 때 붙는다(IsFull).
+        // ★[JACK 0820] Overlay — **몸통은 안 만든다.** 매스가 이미 판넬이고 여기서는 마감만 얹는다.
+        LastFacePanels.Add(ToPanel(new Tile(quad, withAnchor, org,
+            (uu.x, uu.y, uu.z), (vv.x, vv.y, vv.z), (ww.x, ww.y, ww.z), local, cu, cv, 0, true,
+            Row: 0, Filler: false, Detail: true))
+            with { Overlay = true, CellU = FaceTile - JointW, CellV = FaceTile - JointW });
+        return true;
+    }
+
+    /// <summary>토우(lo)에서 크레스트(hi)로 가는 벽면 위에서 높이 v인 점 — 바깥으로 <see cref="FaceProud"/>만큼 내민다.</summary>
+    private static Point3 OnFace(Point3 lo, Point3 hi, double h, double v,
+                                 (bool ok, double x, double y, double z) n)
+    {
+        double t = h > 1e-9 ? v / h : 0;
+        return new Point3(lo.X + (hi.X - lo.X) * t + n.x * FaceProud,
+                          lo.Y + (hi.Y - lo.Y) * t + n.y * FaceProud,
+                          lo.Z + (hi.Z - lo.Z) * t + n.z * FaceProud);
+    }
+
+    private static Point3 Toward(Point3 p, Point3 to, double d)
+    {
+        double L = Dist3(p, to);
+        if (L < 1e-9) return p;
+        double t = d / L;
+        return new Point3(p.X + (to.X - p.X) * t, p.Y + (to.Y - p.Y) * t, p.Z + (to.Z - p.Z) * t);
+    }
+
+    private static Point3 Lerp3(Point3 a, Point3 b, double t)
+        => new Point3(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t, a.Z + (b.Z - a.Z) * t);
+
+    private static double Dist3(Point3 a, Point3 b)
+        => System.Math.Sqrt((a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y) + (a.Z - b.Z) * (a.Z - b.Z));
+
+    private static (bool ok, double x, double y, double z) Norm3(double x, double y, double z)
+    {
+        double l = System.Math.Sqrt(x * x + y * y + z * z);
+        return l < 1e-9 ? (false, 0, 0, 0) : (true, x / l, y / l, z / l);
+    }
 
     /// <summary>그 자리를 <b>코너 전용 판넬이 이미 메우고 있는가</b> — 틈 판정·틈 메우기 둘 다 이걸 봐야 한다.
     /// <para>안 보면 유닛이 채운 자리를 '구멍'으로 오독하고, 그 위에 필러까지 세워 또 뭉친다.
@@ -225,6 +740,24 @@ public static class WallBand
     /// <summary>판넬 두께·전면 돌출 — <c>WallPanelDwg</c>의 같은 값과 <b>반드시 일치해야</b> 코너 유닛이 이웃 판넬과 맞물린다.</summary>
     public const double PanelThick = 0.20;
     public const double PanelFrontOut = 0.10;
+
+    /// <summary>★★★[JACK 0819 '각도로 접근하는 방법은 버려 · 각도를 기준으로 하면 언젠간 경우에 따라 오류가 날 것 같은데']
+    /// <b>판넬이 옹벽선에서 자기 두께만큼 벗어나면 그 자리엔 판넬을 깔지 않는다.</b>
+    /// <para>
+    /// 종전엔 코너를 <b>각도로</b> 찾았다(<c>SplitAtCorners</c> 12°). 그래서 직각은 되고 라운드는 안 됐다 —
+    /// 원호는 사분면당 8조각이라 <b>조각당 11.25°</b>로 문턱에 안 걸리고, 벽면이 하나면 쐐기가 설 자리가 없다.
+    /// 문턱을 낮추면 완만한 곡선까지 잘리고, 올리면 진짜 코너를 놓친다 — 이 저장소가 고쳐 온 '자'가
+    /// 12°·45°·8°·3°·0.30m이고 <b>각도를 하나 더 얹으면 여덟 번째</b>다.
+    /// </para>
+    /// 그래서 각도를 안 쓴다. 기준은 <b>판넬 자신에게서 나온 길이</b>다 —
+    /// 판넬이 자기 두께만큼 벽선에서 벗어났다면 그 판넬은 이미 벽 밖이고, 각도가 몇 도인지는 알 필요가 없다.
+    /// 직각 90°든 라운드 11.25°씩이든 <b>같은 자에 걸리므로 모드 분기가 코드에서 사라진다.</b></summary>
+    public const double WedgeDev = PanelThick;
+
+    /// <summary>★[JACK 0819 '직선부분만 인식해서 그 부분만 패널 배열하고 나머지는 한 덩어리 스윕'] 이탈 분포 눈금(m).
+    /// <b>문턱을 어디에 둘지는 숫자를 보고 정한다</b> — 0.05/0.10/0.20 세 칸만 있을 땐 '무엇이 진짜 직선인지'가 안 보였다.
+    /// 첫 칸(1mm)은 설계값이 아니라 <b>수치 잡음 한계</b>다: 여기 안 걸리는 열이 곧 '완전한 직선'이다.</summary>
+    public static readonly double[] DevBuckets = { 0.001, 0.01, 0.02, 0.05, 0.10, 0.20 };
 
     /// <summary>★★[JACK 0807 '또 중간에 틈이 있어 — 자꾸 발생하는 걸 보니 근본 원인이 있다'] <b>그 근본 원인.</b>
     /// <para>
@@ -695,6 +1228,23 @@ public static class WallBand
 
     /// <summary>[하네스 전용] 코너 전용 유닛을 꺼서 종전 동작(코너 필러만)으로 되돌린다 — 자가검증용.</summary>
     public static bool DisableCornerUnitForTest;
+    /// <summary>★[JACK 0819] 쐐기 규칙(<see cref="WedgeDev"/>)을 끈다 — <b>하니스 자체검증 전용</b>.
+    /// 이것이 세 번째 방어라, 켜 둔 채로는 앞의 두 방어를 꺼도 판넬이 멀쩡해 보여
+    /// '고장을 일부러 내는' 시험이 무력해진다(S24가 실제로 그렇게 죽었다).</summary>
+    public static bool DisableWedgeForTest;
+
+    /// <summary>★★★[JACK 0819 '그냥 옹벽 자체를 하나의 매스로 스윕해서 만들고' · '먼저 아무 무늬 없는
+    /// 덩어리 스윕만 되게'] <b>판넬을 깔지 않고 벽 전체를 옹벽선 스윕 덩어리로 만든다.</b>
+    /// <para>
+    /// 목적이 <i>"인프라웍스에서 패널식 옹벽이라는 게 느껴지면 된다"</i>(기본설계 · 수량 불필요)라면,
+    /// 판넬 배치가 붙들고 있던 문제 — 코너에서 어디서 멈출까 · 쐐기를 어떻게 채울까 · 폭/자투리/줄눈/이탈 —
+    /// 가 <b>전부 사라진다</b>. 스윕 경로가 옹벽선 자체라 원호든 직각이든 그냥 따라가고,
+    /// 데이라잇 절단도 '조각에 높이가 있냐 없냐' 한 가지로 줄어든다.
+    /// </para>
+    /// 단면은 JACK이 올린 스샷 그대로 <b>기울어진 사각형</b>(평행사변형)이다 — 아래는 토우, 위는 크레스트,
+    /// 두 선의 수평 차이가 곧 구배(1:0.05)×단높이다. 그래서 <b>높이를 따로 계산하지 않는다</b>.
+    /// <para>기본값 <c>false</c> — 하니스는 판넬 경로를 계속 검사해야 하므로, 켜는 것은 내보내기 쪽이다.</para></summary>
+    public static bool MassOnly;
 
     /// <summary>[하네스 전용] 토우↔크레스트 대응을 옛 방식(호길이)으로 되돌려 '모서리에서 판넬이 눕는' 버그를
     /// 재현한다. 운영 코드에서는 절대 켜지 않는다.</summary>
@@ -1012,6 +1562,13 @@ public static class WallBand
         var runs = SplitAtCorners(crest, cornerDeg, MinPieceLen,
                                   toe.Count == crest.Count ? toe : null);   // 토우 코너에서도 끊는다(0806)
 
+        // ★★★[JACK 0819 '왜 조각으로 하냐는거야'] **매스 모드에서는 벽면을 나누지 않는다 — 한 줄이 통째로 하나다.**
+        //   벽면을 나누는 것은 판넬을 깔기 위한 준비였다(코너를 가로지르는 판넬을 막으려고).
+        //   매스는 옹벽선을 그대로 따라가므로 코너를 가로지를 일이 없고, 나누면 오히려
+        //   코너에서 양옆이 <see cref="CornerLeg"/>만큼 물러나(아래 물러나기) **그 자리가 비고 매스가 둘로 갈린다**.
+        //   판넬을 위해 만든 구조를 매스에 그대로 씌우면 매번 이런 식으로 샌다 — 그래서 통째로 건너뛴다.
+        if (MassOnly) { runs.Clear(); runs.Add((0.0, 1.0)); }
+
         // ★[0806 JACK '판넬부는 오목부에서 자꾸 오류가 나는 것 같다 — 누더기 수리 말고 정확히 확인해봐']
         //   벽면 경계(코너)마다 **볼록/오목**을 판정해 좌표와 함께 모아 둔다.
         //   판정: 진행 방향이 도는 쪽과 노출면이 있는 쪽이 **같으면 볼록**(벽이 밖으로 돌출),
@@ -1076,7 +1633,7 @@ public static class WallBand
         double legFrac = totC0 > 1e-9 ? CornerLeg / totC0 : 0;
         var legAtStart = new double[System.Math.Max(1, runs.Count)];
         var legAtEnd = new double[System.Math.Max(1, runs.Count)];
-        if (!DisableCornerUnitForTest && legFrac > 0)
+        if (!DisableCornerUnitForTest && !MassOnly && legFrac > 0)
             for (int rIdx = 0; rIdx < runs.Count; rIdx++)
             {
                 bool cornerAtStart = closedRun0 || rIdx > 0;
@@ -1129,6 +1686,353 @@ public static class WallBand
         // 인덱스 대응이 성립하려면 두 선의 정점 수가 같아야 한다(WallRunBuilder가 그렇게 만든다).
         //   옛 번들 등으로 어긋나 있으면 호길이 대응으로 물러난다 — 그 사실을 진단에 남긴다.
         bool pairByIndex = toe.Count == crest.Count && !DisableIndexPairingForTest;
+
+        // ★★★[JACK 0819 '옹벽선을 이용해서 그 라운드 모양으로 버퍼줘서' ·
+        //   '꺾인점 기준으로 양쪽 패널 시점의 위치를 이용해서 그냥 덩어리로 하나짜리를 만드는 거지']
+        //   **쐐기를 옹벽선 스윕으로 만든다 — 모양을 판정하지 않는다.**
+        //
+        //   판넬이 비켜 준 구간의 옹벽선(크레스트·토우)을 **그대로 훑어** 판넬 두께만큼의 단면으로 스윕한다.
+        //   옹벽선이 원호면 원호가, 직각이면 직각이 나온다. 코드는 그게 무슨 모양인지 알 필요가 없다 —
+        //   재는 게 아니라 **따라가는** 것이라서, 직각/라운드 분기 자체가 없다(<see cref="WedgeDev"/> 참조).
+        //
+        //   높이도 구하지 않는다. JACK 0807: *"코너 필렛도 그냥 옹벽 단 설정 높이만큼 만들고 판넬 자를 때
+        //   같이 데이라잇으로 자르면 될 것 같은데."* → 정점마다 판넬과 **같은 자**(WallSpanAtFrac)로 자른다.
+        //   '높이를 어디서 가져오나'로 네 번 헤맨 질문이 여기서는 아예 생기지 않는다.
+        var wedgeSpans = new List<(double F0, double F1)>();
+        int wedgeMade = 0, wedgeDrop = 0, wedgePiece = 0; double wedgeLenMax = 0;
+        // [계측] 문턱이 안 걸려도 **실제 이탈이 얼마인지**는 보여야 한다 — 안 그러면 '0개'가 성공인지 실패인지 모른다.
+        double devMax = 0, devMaxX = 0, devMaxY = 0; int devTot = 0;
+        var devHist = new int[DevBuckets.Length];
+        void BuildSweptWedge(double fa, double fb)
+        {
+            if (fb - fa < 1e-9) { wedgeDrop++; return; }
+            // 스윕 경로 = 구간 안의 **옹벽선 정점 그대로** + 양 끝. 정점을 건너뛰는 순간 모양이 뭉개진다.
+            var fs = new List<double> { fa };
+            for (int i = 1; i + 1 < crest.Count; i++)
+            {
+                double f = cumC[i] / totalC;
+                if (f > fa + 1e-9 && f < fb - 1e-9) fs.Add(f);
+            }
+            fs.Add(fb);
+
+            // 단면: 옹벽선 기준 바깥 +PanelFrontOut, 안쪽 −(PanelThick−PanelFrontOut).
+            //   판넬과 **같은 값**이라 옆에 붙으면 한 면으로 이어진다(코너 유닛이 쓰는 그 규칙).
+            //   바깥 방향은 **크레스트→토우의 수평 성분** — 절토·성토 둘 다 그쪽이 노출면이다(분기 불필요).
+            // ★★[JACK 0819 '스윕이 위아래 길이가 다른데도 잘되나?'] **좋은 지적이라 조각으로 쌓는다.**
+            //   위(크레스트)와 아래(토우)는 **길이가 다르다** — 벽이 1:n으로 기울어 코너를 도는 동안
+            //   크레스트가 토우보다 (기울기×높이)×회전각 만큼 길다(10m·1:0.05·90°면 0.79m).
+            //   짝은 호길이가 아니라 **정점 번호**로 지으니 대응 자체는 확실하지만(판넬과 같은 규칙),
+            //   AutoCAD 로프트는 내가 준 정점 순서를 쓰는 게 아니라 두 단면을 **자기 매개변수로 다시 맞춘다** —
+            //   위아래 간격이 많이 다르면 엇갈려 이어져 **비틀린다**. ㄱ자 유닛이 멀쩡한 건 6정점·0.7m로 짧아서다.
+            //
+            //   → 옹벽선 **정점 구간마다**(≈1m) 네 점짜리 조각을 만들어 쌓는다. 한 조각 안에서는 위아래
+            //     길이 차가 몇 cm라 비틀 여지가 없고, 조각끼리는 **정점을 공유해 딱 맞붙어** 한 덩어리로 보인다.
+            // ★★★[JACK 0819] 정점마다 **마름모 단면**을 만들어 모은다 — 쌓는 게 아니라 한 번에 통과시킨다.
+            //   단면 = 아래 토우, 위 크레스트, 두께는 판넬 두께. 두 선의 수평 차이가 곧 구배 × 단높이라
+            //   **높이를 따로 계산하지 않는다**(JACK 0807·0819 같은 원칙).
+            //   네 점은 모두 '노출면 법선 N과 수직선 Z가 만드는 평면' 위에 있어 **평면이 보장된다**.
+            var secs = new List<IReadOnlyList<Point3>>();
+            bool anyPiece = false;
+            void FlushMass()
+            {
+                // 단면이 2장 미만이면 통과시킬 것이 없다 — 데이라잇에 끊긴 자리다.
+                if (secs.Count >= 2) { LastMasses.Add(new WallMass(new List<IReadOnlyList<Point3>>(secs))); wedgePiece++; anyPiece = true; }
+                secs.Clear();
+            }
+
+            // ★★★[JACK 0820 '벽이 휘었어' — 스샷: 벽 끝에서 단면이 부채꼴로 비틀림] **방향을 잡음에서 가져오지 않는다.**
+            //   단면의 두께 방향(노출면 법선)을 <b>크레스트→토우</b> 벡터로 정했는데, 그 수평 길이는
+            //   <b>구배 × 높이</b>다 — 데이라잇이 벽을 깎아 높이가 0으로 가는 <b>벽 끝에서 0에 수렴</b>한다.
+            //   0에 가까운 벡터의 방향은 좌표 잡음이라, 그 자리 단면들이 제멋대로 돌아가 부채꼴로 비틀렸다.
+            //   → ① 너무 짧으면 <b>이웃의 방향을 물려받고</b> ② 이웃과 반대로 뒤집힌 방향은 되돌린다.
+            //     방향은 벽을 따라 <b>연속</b>이어야 한다 — 한 자리에서 뒤집히면 그 구간이 통째로 꼬인다.
+            const double NormMin = 0.02;                       // 수평 2cm — 이보다 짧으면 방향을 못 믿는다
+            const double MinLive = 0.02;                       // 이보다 낮으면 벽이 없다(종전 0.15 — 끝이 뭉툭했다)
+
+            // ★★★[JACK 0820 '왜 끝단이 뭉퉁그려졌지?'] **벽이 0으로 줄어드는 자리까지 따라간다.**
+            //   종전엔 높이가 0.15m 미만이면 단면을 안 만들었다. 그러면 데이라잇과 만나 뾰족하게 끝나야 할
+            //   자리가 <b>15cm짜리 마구리로 막힌다</b> — 그게 JACK이 본 뭉툭한 끝이다.
+            //   문턱을 낮추는 것만으론 부족하다(2cm 마구리가 될 뿐이다). 마지막 살아 있는 정점과 그 다음
+            //   정점 사이에서 <b>높이가 0이 되는 자리를 이분법으로 찾아</b> 단면을 하나 더 놓는다 — 칼끝처럼 만난다.
+            // ★★[검토 중간7] **지반 밖에서 꽉 채우면 칼끝을 못 찾는다.**
+            //   여기(SpanAt)는 <c>AddTip</c>/<c>ZeroBetween</c>이 "높이가 0이 되는 자리"를 좁히는 데 쓴다.
+            //   지반 밖에서 원래 높이로 꽉 채우면 모든 표본이 살아 있다고 나와 이분법이 죽은 쪽까지 밀리고,
+            //   칼끝 대신 <b>온전한 높이의 마구리</b>가 서서 절벽이 생긴다("끝단이 뭉퉁그려졌다"의 재발).
+            //   → 지반 밖이면 **벽이 없다**고 답한다. 끝을 찾는 일에서는 그것이 옳은 답이다.
+            (bool ok, Point3 bot, Point3 top, double h) SpanAt(double f)
+            {
+                var sp3 = WallSpanAtFrac(f);
+                if (sp3.fh < 1e-9) return (false, default, default, 0);
+                if (sp3.hi < 0) return (false, default, default, 0);   // 판단 불가 = 여기선 벽이 없다고 본다
+                double hh = System.Math.Min(sp3.hi, sp3.fh);
+                double ll = System.Math.Clamp(sp3.lo, 0, sp3.fh);
+                Point3 On(double t) => new Point3(sp3.t0.X + (sp3.c0.X - sp3.t0.X) * t,
+                                                  sp3.t0.Y + (sp3.c0.Y - sp3.t0.Y) * t,
+                                                  sp3.t0.Z + (sp3.c0.Z - sp3.t0.Z) * t);
+                return (hh - ll >= 0, On(ll / sp3.fh), On(hh / sp3.fh), hh - ll);
+            }
+            // 살아 있는 fLive와 죽은 fDead 사이에서 벽이 사라지는 자리를 좁혀 간다.
+            double ZeroBetween(double fLive, double fDead)
+            {
+                for (int it = 0; it < 14; it++)
+                {
+                    double fm = (fLive + fDead) / 2;
+                    var r = SpanAt(fm);
+                    if (r.ok && r.h > 1e-4) fLive = fm; else fDead = fm;
+                }
+                return fLive;
+            }
+            int nSt = fs.Count;
+            // ★★★[JACK 0820 '왜 비틀렸지? 지표면 그대로 나온 거 아니야?'] **자를 땐 X·Y도 같이 잘라야 한다.**
+            //   벽면은 토우에서 크레스트로 가는 <b>비스듬한 선</b>이다. 데이라잇이 위를 자르면 그 선의
+            //   중간에서 끊기므로 <b>가로 위치도 그만큼 안쪽</b>이어야 하는데, 종전엔 Z만 줄이고
+            //   X·Y는 크레스트를 그대로 썼다 — 10m 벽이 2m로 잘려도 가로로는 여전히 0.5m 벌어져
+            //   그 자리만 구배가 1:0.05가 아니라 1:0.25가 됐다. 자리마다 다르게 누우니 벽이 비틀린다.
+            //   평평한 구간은 안 잘려서 멀쩡했고 <b>잘린 끝에서만</b> 부채꼴이 된 이유가 이것이다.
+            var stTop = new Point3[nSt]; var stBot = new Point3[nSt];
+            var stNx = new double[nSt]; var stNy = new double[nSt];
+            var stOk = new bool[nSt]; var stNOk = new bool[nSt];
+            // ★[JACK 0820] 자르기 **전**의 토우·크레스트와, 자르는 비율(0=토우, 1=크레스트).
+            var stFullB = new Point3[nSt]; var stFullT = new Point3[nSt];
+            var stLo = new double[nSt]; var stHi = new double[nSt];
+            var stHas = new bool[nSt];
+            // ★★★[JACK 0820 '데이라잇이 이상하게 잘림'] **지반 밖에서 높이를 꽉 채우지 않는다.**
+            //   WallSpanAtPt는 그 자리가 지반 밖이면 hi < 0(판단 불가)을 준다. 종전엔 그때 <b>원래 높이로 꽉</b>
+            //   채웠는데, 그러면 이웃은 데이라잇에 잘려 낮은데 그 자리만 갑자기 솟아 <b>계단</b>이 생긴다.
+            //   오늘 세 번 나온 것과 같은 종류다 — <b>판단 불가인 자리에서 극단값을 집는 것.</b>
+            //   → 아는 이웃 사이를 보간해 물려받는다. 양쪽 다 모르면 그때만 꽉 채운다(벽 전체가 지반 밖).
+            var stHiKnown = new bool[nSt];
+            // ★★[검토 중간6] **성토에는 '판단 불가' 개념이 아예 없었다.**
+            //   절토는 지반 밖이면 <c>hi &lt; 0</c>으로 말해 주는데, 성토는 데이라잇이 <c>lo</c>(묻힌 비율)로
+            //   표현되고 지반 조회에 실패하면 <c>lo = 0</c>(전부 노출)이라는 <b>극단값</b>을 집는다.
+            //   <c>hi = fh ≥ 0</c>이라 위쪽 보간 장치에도 안 걸린다 — 원지반 TIN 구멍에서 그 자리만
+            //   토우까지 내려가 <b>성토 데이라잇에 계단</b>이 생긴다. 오늘 반복된 그 패턴의 마지막 사례다.
+            //   → 지반이 그 자리를 덮는지 직접 물어 <c>stLoKnown</c>으로 표시하고, 위쪽과 같은 방식으로 보간한다.
+            var stLoKnown = new bool[nSt];
+            for (int k = 0; k < nSt; k++)
+            {
+                var sp2 = WallSpanAtFrac(fs[k]);
+                if (sp2.fh < 1e-9) continue;
+                stHiKnown[k] = sp2.hi >= 0;
+                stLoKnown[k] = ground == null || run.Up
+                            || (ground.TryGetElevation(sp2.t0.X, sp2.t0.Y, out _)
+                             && ground.TryGetElevation(sp2.c0.X, sp2.c0.Y, out _));
+                double hi2 = sp2.hi < 0 ? sp2.fh : System.Math.Min(sp2.hi, sp2.fh);
+                double lo2 = System.Math.Clamp(sp2.lo, 0, sp2.fh);
+                // 토우→크레스트 선 위의 두 점. **X·Y·Z를 같은 비율로** 잡아야 구배가 유지된다.
+                double sLo = lo2 / sp2.fh, sHi = System.Math.Max(lo2, hi2) / sp2.fh;
+                Point3 On(double t) => new Point3(sp2.t0.X + (sp2.c0.X - sp2.t0.X) * t,
+                                                  sp2.t0.Y + (sp2.c0.Y - sp2.t0.Y) * t,
+                                                  sp2.t0.Z + (sp2.c0.Z - sp2.t0.Z) * t);
+                // ★★★[JACK 0820 '아예 누락된 게 있다는 건 아직도 잘린 부위에 맞춰서 배치하고 있는 거 아니야?']
+                //   **맞다.** 종전엔 데이라잇이 죽인 자리에서 여기를 그냥 빠져나가, 온전한 벽면 목록에
+                //   그 자리가 <b>통째로 빠졌다</b>. 그러면 누적 거리가 건너뛰어 격자가 <b>잘린 모양에 맞춰진다</b> —
+                //   "온전한 벽에 깔고 나중에 자른다"고 해 놓고 실제로는 잘린 벽에 깔고 있었다(덮개율 59%).
+                //   → 기하는 <b>언제나</b> 남기고, 살았는지는 lo/hi로만 말한다(hi ≤ lo면 그 자리엔 벽이 없다).
+                stFullB[k] = sp2.t0; stFullT[k] = sp2.c0;
+                stLo[k] = sLo; stHi[k] = sHi; stHas[k] = true;
+                if (hi2 - lo2 < MinLive) continue;             // 데이라잇에 다 잘렸다 — 매스는 여기서 끊긴다
+                stBot[k] = On(sLo); stTop[k] = On(sHi);
+                stOk[k] = true;
+                // ★★★[JACK 0820 '성토부쪽 모양이 뒤집힘' → '성토라고 다 뒤집어진 건 아니고 어느 면은 맞고
+                //   어느 면은 안 맞고 그래'] **절토/성토로 가를 문제가 아니다. 기하로 정한다.**
+                //   종전엔 노출면을 언제나 <c>크레스트→토우</c>로 잡았다. 그런데 옹벽선을 만드는 쪽에서
+                //   줄에 따라 <b>크레스트와 토우가 뒤바뀌어</b> 나오면(성토 일부) 그 줄만 통째로 뒤집힌다 —
+                //   "어느 면은 맞고 어느 면은 안 맞고"가 정확히 그 모습이다.
+                //   ⇒ 이름을 믿지 말고 <b>높이</b>를 본다. 옹벽 면은 뒤로 누우므로 <b>아래가 언제나 바깥</b>이다.
+                //     즉 노출면 = <b>위쪽 선에서 아래쪽 선으로</b>. 이름이 뒤바뀐 줄이 섞여도 안 깨진다.
+                //   ※오늘 반복된 그 패턴의 또 다른 얼굴이다 — <b>이름(규약)을 믿고 기하를 안 본 것.</b>
+                bool crestUp = sp2.c0.Z >= sp2.t0.Z;
+                double hx = crestUp ? sp2.t0.X - sp2.c0.X : sp2.c0.X - sp2.t0.X;
+                double hy = crestUp ? sp2.t0.Y - sp2.c0.Y : sp2.c0.Y - sp2.t0.Y;
+                if (System.Math.Sqrt(hx * hx + hy * hy) >= NormMin)
+                {
+                    var nn = Norm2(hx, hy);
+                    if (nn.ok) { stNx[k] = nn.x; stNy[k] = nn.y; stNOk[k] = true; }
+                }
+                else tLowWall++;      // ★[0820] 벽이 낮아 방향을 못 잰다 — 물려받기가 여기서 시작된다
+            }
+            // ★[JACK 0820] 지반 밖이라 높이를 모르는 자리는 **아는 이웃 사이를 보간**해 물려받는다.
+            //   그래야 데이라잇 선이 이어진다 — 꽉 채우면 그 자리만 솟아 계단이 된다.
+            for (int k = 0; k < nSt; k++)
+            {
+                if (stHiKnown[k] || !stHas[k]) continue;
+                int lo = -1, hi = -1;
+                for (int q = k - 1; q >= 0; q--) if (stHiKnown[q] && stHas[q]) { lo = q; break; }
+                for (int q = k + 1; q < nSt; q++) if (stHiKnown[q] && stHas[q]) { hi = q; break; }
+                double v;
+                if (lo >= 0 && hi >= 0)
+                {
+                    // ★[검토 중간11] 정점 번호가 아니라 **호길이**로 가중한다 — fs[]는 등간격이 아니다
+                    //   (옹벽선 정점 + 구간 양 끝이라 코너 부근이 촘촘하다). 번호로 나누면 보간된
+                    //   데이라잇 선이 실제와 어긋난다.
+                    double span = fs[hi] - fs[lo];
+                    double t = span > 1e-12 ? (fs[k] - fs[lo]) / span : 0;
+                    v = stHi[lo] + (stHi[hi] - stHi[lo]) * t;
+                }
+                else if (lo >= 0) v = stHi[lo];
+                else if (hi >= 0) v = stHi[hi];
+                else continue;                                  // 벽 전체가 지반 밖 — 그때만 꽉 채운 값을 그대로 둔다
+                stHi[k] = System.Math.Clamp(v, stLo[k], 1.0);
+                // 잘라 둔 위 점도 같이 옮긴다 — 매스와 무늬가 같은 선에서 잘려야 한다.
+                stTop[k] = new Point3(stFullB[k].X + (stFullT[k].X - stFullB[k].X) * stHi[k],
+                                      stFullB[k].Y + (stFullT[k].Y - stFullB[k].Y) * stHi[k],
+                                      stFullB[k].Z + (stFullT[k].Z - stFullB[k].Z) * stHi[k]);
+                if (stHi[k] - stLo[k] < 0.001) stOk[k] = false;  // 물려받고 보니 벽이 없다
+            }
+            // ★[검토 중간6] 성토 쪽 '판단 불가'도 같은 방식으로 이웃에서 물려받는다(위 주석 참조).
+            for (int k = 0; k < nSt; k++)
+            {
+                if (stLoKnown[k] || !stHas[k]) continue;
+                int lo = -1, hi = -1;
+                for (int q = k - 1; q >= 0; q--) if (stLoKnown[q] && stHas[q]) { lo = q; break; }
+                for (int q = k + 1; q < nSt; q++) if (stLoKnown[q] && stHas[q]) { hi = q; break; }
+                double v;
+                if (lo >= 0 && hi >= 0)
+                {
+                    // ★[검토 중간11] 정점 번호가 아니라 **호길이**로 가중한다 — fs[]는 등간격이 아니다.
+                    double span = fs[hi] - fs[lo];
+                    double t = span > 1e-12 ? (fs[k] - fs[lo]) / span : 0;
+                    v = stLo[lo] + (stLo[hi] - stLo[lo]) * t;
+                }
+                else if (lo >= 0) v = stLo[lo];
+                else if (hi >= 0) v = stLo[hi];
+                else continue;
+                stLo[k] = System.Math.Clamp(v, 0.0, stHi[k]);
+                stBot[k] = new Point3(stFullB[k].X + (stFullT[k].X - stFullB[k].X) * stLo[k],
+                                      stFullB[k].Y + (stFullT[k].Y - stFullB[k].Y) * stLo[k],
+                                      stFullB[k].Z + (stFullT[k].Z - stFullB[k].Z) * stLo[k]);
+                if (stHi[k] - stLo[k] < 0.001) stOk[k] = false;
+            }
+
+            // ① 못 믿을 자리는 이웃에서 물려받는다(앞으로 한 번, 뒤로 한 번 — 줄 끝도 채워진다).
+            // ★[JACK 0820] **몇 자리를 물려받았는지 센다.** 물려받기는 굽은 자리를 건너면 방향을 반대편에
+            //   붙일 수 있어 '한쪽이 반대'의 유력 용의자다 — 세어 두지 않으면 그게 원인인지 못 가른다.
+            // ★[JACK 0820 실측 '물려받은 자리 609/651인데 벽 낮아 못 잼 0점'] **살아 있는 자리에서만 센다.**
+            //   데이라잇에 죽은 자리는 방향을 잴 일이 없어 전부 '물려받음'으로 잡혔다 — 90%가 나오니
+            //   그 숫자로는 아무 판단도 못 한다(정상인데 위험해 보인다).
+            //   진짜 위험한 것은 <b>벽이 살아 있는데 방향을 못 잰</b> 자리다. 그것만 센다.
+            for (int k = 0; k < nSt; k++) if (stOk[k]) { tNormTot++; if (!stNOk[k]) tNormInherit++; }
+            for (int k = 1; k < nSt; k++)
+                if (!stNOk[k] && stNOk[k - 1]) { stNx[k] = stNx[k - 1]; stNy[k] = stNy[k - 1]; stNOk[k] = true; }
+            for (int k = nSt - 2; k >= 0; k--)
+                if (!stNOk[k] && stNOk[k + 1]) { stNx[k] = stNx[k + 1]; stNy[k] = stNy[k + 1]; stNOk[k] = true; }
+            // ② 이웃과 반대로 뒤집힌 방향을 되돌린다 — 방향은 벽을 따라 연속이어야 한다.
+            // ★★★[검토 심각1] **90°를 넘게 꺾였다고 되돌리면 진짜 코너를 뒤집는다.**
+            //   이 방향은 벽 접선이 아니라 크레스트→토우(노출면 법선)라, 벽선이 θ만큼 꺾이면 같이 θ만큼 돈다.
+            //   <c>dot &lt; 0</c>으로 되돌리면 120° 코너 하나에서 뒤집히고, 제자리 순차 루프라
+            //   <b>그 뒤로 줄 끝까지 전염된다</b> — 벽이 통째로 0.20m 옆으로 밀리고 판이 흙 쪽에 붙는다.
+            //   → 되돌리는 것은 <b>거의 정반대</b>일 때만(155° 초과). 그건 코너가 아니라 수치 잡음이다.
+            for (int k = 1; k < nSt; k++)
+                if (stNOk[k] && stNOk[k - 1] && stNx[k] * stNx[k - 1] + stNy[k] * stNy[k - 1] < -0.9)
+                { stNx[k] = -stNx[k]; stNy[k] = -stNy[k]; }
+
+            // ★★★[검토 심각1] **뒤집힘은 매스와 비교해서는 못 잡는다** — 둘이 같이 오염되면 내적이 양수라
+            //   진단이 언제나 "뒤집힌 판 없음"이라고 답한다(실제로 그랬다).
+            //   → 매스를 보지 말고 <b>불변량</b>을 본다: 노출면은 진행 방향의 <b>한쪽</b>에만 있어야 한다.
+            //     줄을 따라가며 <c>cross(접선, 법선)</c>의 부호를 세고, 다수와 다른 자리를 센다.
+            //     이 값이 0이 아니면 그 줄 어딘가에서 방향이 실제로 뒤집힌 것이다.
+            {
+                int plus = 0, minus = 0;
+                var sgn = new int[nSt];
+                for (int k = 0; k + 1 < nSt; k++)
+                {
+                    if (!stNOk[k] || !stHas[k] || !stHas[k + 1]) continue;
+                    double tx = stFullB[k + 1].X - stFullB[k].X, ty = stFullB[k + 1].Y - stFullB[k].Y;
+                    double tl = System.Math.Sqrt(tx * tx + ty * ty);
+                    if (tl < 0.01) continue;                       // 1cm 미만 — 조밀화 잡음이라 방향을 못 믿는다
+                    // 정규화한 뒤 본다. 진행 방향과 노출면이 **거의 나란하면**(sin < 0.2 ≈ 12°) 부호가
+                    //   좌표 잡음으로 뒤집히므로 세지 않는다 — 그건 뒤집힘이 아니라 못 재는 자리다.
+                    double sin = (tx * stNy[k] - ty * stNx[k]) / tl;
+                    if (System.Math.Abs(sin) < 0.2) continue;
+                    sgn[k] = sin > 0 ? 1 : -1;
+                    if (sgn[k] > 0) plus++; else minus++;
+                }
+                // ★[JACK 0820 실측 113/228점] **'다수와 다른 자리'로 세면 안 된다.**
+                //   벽선이 좁은 성토를 <b>감싸고 돌아오면</b> 노출면은 바깥을 향한 채로 진행 방향 기준
+                //   왼쪽↔오른쪽이 바뀐다 — 정상인데 절반이 '다르다'고 나온다(실측 113/228 ≈ 딱 절반).
+                //   진짜 결함은 <b>이웃끼리 급격히 뒤집히는 것</b>이다. 벽선이 크게 안 꺾였는데 부호가
+                //   바뀌면 그건 기하가 아니라 방향 계산이 튄 것이다.
+                int odd = 0;
+                for (int k = 0; k + 1 < nSt; k++)
+                {
+                    if (sgn[k] == 0 || sgn[k + 1] == 0 || sgn[k] == sgn[k + 1]) continue;
+                    // 이웃 두 구간의 진행 방향이 크게 안 꺾였는데 부호가 바뀌었나?
+                    double t0x = stFullB[k + 1].X - stFullB[k].X, t0y = stFullB[k + 1].Y - stFullB[k].Y;
+                    double t1x = stFullB[k + 2].X - stFullB[k + 1].X, t1y = stFullB[k + 2].Y - stFullB[k + 1].Y;
+                    double l0 = System.Math.Sqrt(t0x * t0x + t0y * t0y), l1 = System.Math.Sqrt(t1x * t1x + t1y * t1y);
+                    if (l0 < 1e-9 || l1 < 1e-9) continue;
+                    if ((t0x * t1x + t0y * t1y) / (l0 * l1) < 0.0) continue;   // 90° 넘게 꺾였다 — 감아 도는 자리다
+                    odd++;
+                    if (tSideFirst.Length == 0)
+                        tSideFirst = $"{stFullB[k].X:F0},{stFullB[k].Y:F0}";
+                }
+                tSideOdd += odd; tSideTot += plus + minus;
+            }
+
+            void Add(Point3 top, Point3 bot, double nx, double ny)
+            {
+                double oX = nx * PanelFrontOut, oY = ny * PanelFrontOut;
+                double iX = nx * (PanelFrontOut - PanelThick), iY = ny * (PanelFrontOut - PanelThick);
+                // 바깥위 → 바깥아래 → 안쪽아래 → 안쪽위 (닫힌 마름모)
+                secs.Add(new List<Point3> {
+                    new Point3(top.X + oX, top.Y + oY, top.Z),
+                    new Point3(bot.X + oX, bot.Y + oY, bot.Z),
+                    new Point3(bot.X + iX, bot.Y + iY, bot.Z),
+                    new Point3(top.X + iX, top.Y + iY, top.Z) });
+            }
+            // 벽이 시작·끝나는 자리에 높이 0인 단면을 하나 더 놓아 칼끝처럼 만나게 한다.
+            void AddTip(double fFrom, double fTo, double nx, double ny)
+            {
+                var r = SpanAt(ZeroBetween(fFrom, fTo));
+                if (r.ok) Add(r.top, r.bot, nx, ny);
+            }
+            // ★★★[JACK 0820] 온전한 벽면은 **끊지 않고 통째로** 담는다 — 무늬 격자가 벽 전체에 한 번만 깔리도록.
+            {
+                var full = new List<IReadOnlyList<Point3>>();
+                var los = new List<double>(); var his = new List<double>();
+                for (int k = 0; k < nSt; k++)
+                {
+                    if (!stHas[k] || !stNOk[k]) continue;
+                    double oX2 = stNx[k] * PanelFrontOut, oY2 = stNy[k] * PanelFrontOut;
+                    double iX2 = stNx[k] * (PanelFrontOut - PanelThick), iY2 = stNy[k] * (PanelFrontOut - PanelThick);
+                    full.Add(new List<Point3> {
+                        new Point3(stFullT[k].X + oX2, stFullT[k].Y + oY2, stFullT[k].Z),
+                        new Point3(stFullB[k].X + oX2, stFullB[k].Y + oY2, stFullB[k].Z),
+                        new Point3(stFullB[k].X + iX2, stFullB[k].Y + iY2, stFullB[k].Z),
+                        new Point3(stFullT[k].X + iX2, stFullT[k].Y + iY2, stFullT[k].Z) });
+                    los.Add(stLo[k]); his.Add(stHi[k]);
+                }
+                if (full.Count >= 2) LastFaces.Add(new WallFace(full, los, his));
+            }
+
+            for (int k = 0; k < nSt; k++)
+            {
+                bool live = stOk[k] && stNOk[k];
+                bool prevLive = k > 0 && stOk[k - 1] && stNOk[k - 1];
+                if (live && !prevLive && k > 0) AddTip(fs[k], fs[k - 1], stNx[k], stNy[k]);   // 벽이 시작하는 끝
+                if (!live)
+                {
+                    if (prevLive) AddTip(fs[k - 1], fs[k], stNx[k - 1], stNy[k - 1]);         // 벽이 끝나는 끝
+                    FlushMass(); continue;
+                }
+                Add(stTop[k], stBot[k], stNx[k], stNy[k]);
+            }
+            FlushMass();
+            if (!anyPiece)
+            {
+                // ★[JACK 0820] **사유를 갈라 센다.** '못 세운 구간 N개'만으로는 원래 벽이 없는 자리인지
+                //   만들다 실패한 자리인지 못 가른다 — 그러면 그 숫자로 아무 판단도 못 한다.
+                int live2 = 0, dir2 = 0;
+                for (int k = 0; k < nSt; k++) { if (stOk[k]) live2++; if (stNOk[k]) dir2++; }
+                if (live2 == 0) tWdCut++;            // 데이라잇에 통째로 잘렸다(정상일 수 있다)
+                else if (dir2 == 0) tWdNoDir++;      // 방향을 어디서도 못 구했다(벽이 아주 낮다)
+                else tWdShort++;                     // 살아 있는데 단면이 2장을 못 채웠다
+                wedgeDrop++; return;
+            }
+            wedgeMade++;
+            double wl2 = (fb - fa) * totalC; if (wl2 > wedgeLenMax) wedgeLenMax = wl2;
+        }
 
         // [진단 0805 — JACK '어긋나게 생성됨'] 판넬이 **옹벽선 위에** 놓였는지 직접 잰다.
         //   선이 멀쩡해도 배치가 어긋나면 벽이 딴 데로 간다 — 선 문제와 배치 문제를 갈라야 한다.
@@ -1221,6 +2125,28 @@ public static class WallBand
             var isCurve = new List<bool>(isFill);
             for (int k = 0; k < isCurve.Count; k++) isCurve[k] = false;
 
+            // ★★★[JACK 0819] **판넬이 자기 두께만큼 벽선에서 벗어나는 열은 안 깐다.**
+            //   판정은 **쪼개기 전**, 규격 폭 그대로의 이탈로 한다 — 쪼갠 뒤에 재면 이미 작아져 있어
+            //   '판넬이 이 자리를 감당할 수 있나'라는 질문에 답이 안 된다.
+            //   이탈은 크레스트·토우 **둘 다** 재고 나쁜 쪽을 쓴다(오목에서는 아래가 더 벗어난다).
+            var isWedge = new List<bool>(System.Math.Max(0, edge.Count - 1));
+            for (int k = 0; k + 1 < edge.Count; k++)
+            {
+                double fw0 = f0 + (f1 - f0) * edge[k] / segLen;
+                double fw1 = f0 + (f1 - f0) * edge[k + 1] / segLen;
+                double devW = System.Math.Max(MaxChordDev(crest, cumC, fw0, fw1, 1),
+                                              pairByIndex ? MaxToeChordDev(toe, cumC, fw0, fw1) : 0);
+                devTot++;
+                for (int bi = 0; bi < DevBuckets.Length; bi++) if (devW > DevBuckets[bi]) devHist[bi]++;
+                if (devW > devMax)
+                {
+                    devMax = devW;
+                    var lw = LocOfFrac(cumC, fw0); var pw = AtLoc(crest, lw.Lo, lw.T);
+                    devMaxX = pw.X; devMaxY = pw.Y;
+                }
+                isWedge.Add(!DisableWedgeForTest && (MassOnly || devW > WedgeDev));
+            }
+
             // ★★[JACK 0807] **급커브도 '전용 얇은 객체'로 간다.**
             //   판넬은 평면이고 벽선은 곡선이라, 규격 폭 그대로 두면 현(弦)이 되어 안쪽으로 파고든다
             //   (하니스 실측 0.405m — 판넬 두께 0.20m의 두 배라 지표면에 통째로 묻힌다).
@@ -1235,6 +2161,7 @@ public static class WallBand
                     for (int i = 0; i + 1 < edge.Count; i++)
                     {
                         if (edge[i + 1] - edge[i] < 2 * MinTailLen) continue;   // 더 쪼개면 실오라기
+                        if (i < isWedge.Count && isWedge[i]) continue;          // [0819] 쐐기 구간 — 판넬을 안 까니 쪼갤 것도 없다
                         double fa2 = f0 + (f1 - f0) * edge[i] / segLen;
                         double fb2 = f0 + (f1 - f0) * edge[i + 1] / segLen;
                         // 현 이탈은 **크레스트와 토우 둘 다** 재고 나쁜 쪽으로 판단한다 —
@@ -1245,6 +2172,7 @@ public static class WallBand
                         edge.Insert(i + 1, (edge[i] + edge[i + 1]) / 2);
                         isFill[i] = true; isFill.Insert(i + 1, true);   // 쪼갠 두 조각은 **둘 다 전용 객체**
                         isCurve[i] = true; isCurve.Insert(i + 1, true);
+                        if (i < isWedge.Count) isWedge.Insert(i + 1, false);    // [0819] 표시를 열과 같이 늘린다
                         chordSplit++; anySplit = true; i++;
                     }
                     if (!anySplit) break;
@@ -1279,6 +2207,20 @@ public static class WallBand
 
             for (int j = 0; j < ncol; j++)
             {
+                // ★★★[JACK 0819] 이 열은 판넬이 감당 못 한다 — 판넬을 안 깔고 옹벽선 스윕 덩어리가 맡는다.
+                //   이웃한 쐐기 열끼리는 **하나로 이어 붙인다**(JACK: "그냥 덩어리로 하나짜리를 만드는 거지").
+                //   벽면이 갈려도 호길이가 이어지면 계속 이어 붙으므로, 코너를 낀 두 벽면도 한 덩어리가 된다.
+                if (j < isWedge.Count && isWedge[j])
+                {
+                    double wa = f0 + (f1 - f0) * edge[j] / segLen;
+                    double wb = f0 + (f1 - f0) * edge[j + 1] / segLen;
+                    if (wa > wb) { double sw3 = wa; wa = wb; wb = sw3; }
+                    int lastW = wedgeSpans.Count - 1;
+                    if (lastW >= 0 && System.Math.Abs(wedgeSpans[lastW].F1 - wa) < 1e-9)
+                        wedgeSpans[lastW] = (wedgeSpans[lastW].F0, wb);
+                    else wedgeSpans.Add((wa, wb));
+                    continue;
+                }
                 colN++;
                 double colW = edge[j + 1] - edge[j];
                 bool isFiller = j < isFill.Count && isFill[j];   // [JACK 0807] 전용 얇은 객체(앵커·무늬 없음)
@@ -1907,6 +2849,9 @@ public static class WallBand
             }
         }
 
+        // ★★★[JACK 0819] 판넬이 비켜 준 구간을 옹벽선 스윕 덩어리로 채운다(위 BuildSweptWedge 참조).
+        foreach (var ws in wedgeSpans) BuildSweptWedge(ws.F0, ws.F1);
+
         // ★[JACK 0806] 코너 필러 — 이웃 벽면의 끝과 시작 사이에 남은 쐐기 틈을 기둥 하나로 메운다.
         //   볼록 코너에서만 틈이 생기고(오목은 이미 물려 있다) 그 폭은 2·d·tan(θ/2)라 각도가 클수록 커진다.
         //   분류에 기대지 않고 **실제로 벌어진 거리를 재서** 필요할 때만 만든다 — 분류가 틀려도 안전하다.
@@ -2059,11 +3004,18 @@ public static class WallBand
                        ? $" · ⚠온전 판넬 0장 — 앵커·정착구가 하나도 안 달린다(판넬 {side:F2}m < 0.80m, 단높이 {height:F2}m)" : "") +
                    $" · 판넬↔옹벽선 최대 이탈 {offLine:F3}m @ {offX:F0},{offY:F0}" +
                    (offN > 0 ? $"(0.35m 초과 {offN}장)" : "") +
-                   (faceCnt > 0
+                   (faceCnt > 0 && minColW <= maxColW
                        ? $" · 열폭 {minColW:F2}~{maxColW:F2}m(규격 {side:F2}m · 벽면 {faceCnt}개" +
                          (narrowN > 0 ? $" · 규격 미만 {narrowN}개(끝 자투리+급커브)" : " · 전부 규격") +
                          (chordSplit > 0 ? $" · 급커브 분할 {chordSplit}열(안 쪼갰다면 이탈 {noSplitDev:F3}m · 한도 {ChordTol:F2}m)" : "") +
                          $" · 최소 @ {narrowX:F0},{narrowY:F0})" : "") +
+                   // ★[JACK 0819 계측] 문턱이 안 걸려도 실제 이탈을 보여 준다 — '쐐기 0개'가 성공인지 실패인지 갈리는 자리다.
+                   $" · ★옹벽 매스 {wedgePiece}개" + (wedgeMade > 0 ? $"(구간 {wedgeMade} · 최장 {wedgeLenMax:F2}m)" : "") +
+                   (wedgeDrop > 0 ? $" · 못 세운 구간 {wedgeDrop}개(데이라잇에 다 잘림)" : "") +
+                   (MassOnly ? "" :
+                     $" · 규격폭 이탈 최대 {devMax:F3}m @ {devMaxX:F0},{devMaxY:F0}" +
+                     $"(전체 {devTot}열 · 직선 {devTot - (devHist.Length > 0 ? devHist[0] : 0)}열" +
+                     DevHist(devHist) + $" · 쐐기 한도 {WedgeDev:F2}m)") +
                    (sliverFirst.Length > 0 ? $" · 실오라기 구멍 첫 사례 {sliverFirst}" : "") +
                    (toeLong > 0 ? $" · 토우가 더 긴 열 {toeLong}개(최대 +{toeLongMax:F2}m — 그만큼 판넬을 늘려 덮음)" : "") +
                    (midHoleN > 0 ? $" · ⚠벽 한가운데 구멍 {midHoleN}곳(최대 {midHoleW:F2}m 폭 · 사유 {midHoleWhy} @ {midHoleX:F0},{midHoleY:F0})" : "") +
@@ -2085,6 +3037,10 @@ public static class WallBand
             if (maxColW > tMaxColW) tMaxColW = maxColW;
             tNarrowN += narrowN; tFaceCnt += faceCnt; tChordSplit += chordSplit;
             if (noSplitDev > tNoSplitDev) tNoSplitDev = noSplitDev;
+            tWedgeN += wedgeMade; tWedgeDrop += wedgeDrop; tWedgePiece += wedgePiece;
+            if (wedgeLenMax > tWedgeLenMax) tWedgeLenMax = wedgeLenMax;
+            tDevTot += devTot; for (int bi = 0; bi < devHist.Length; bi++) tDevHist[bi] += devHist[bi];
+            if (devMax > tDevMax) { tDevMax = devMax; tDevMaxX = devMaxX; tDevMaxY = devMaxY; }
         }
         if (sliverFirst.Length > 0 && tSliverFirst.Length == 0) tSliverFirst = sliverFirst;
         tQuoinN += quoinN; if (quoinMax > tQuoinMax) tQuoinMax = quoinMax;
@@ -2121,6 +3077,36 @@ public static class WallBand
     private static int tNarrowN, tFaceCnt, tChordSplit; private static string tSliverFirst = "";
     private static int tHoleN; private static double tHoleW, tHoleX, tHoleY, tNoSplitDev; private static string tHoleWhy = "";
     private static int tQuoinN; private static double tQuoinMax;
+    /// <summary>★[JACK 0819] 옹벽선 스윕 쐐기 — 전 줄 합계. <c>tDev*</c>는 <b>규격 폭 그대로일 때</b>의 이탈 분포로,
+    /// 쐐기가 0개일 때 그것이 '벗어난 데가 없어서'인지 '문턱이 높아서'인지를 가른다(숫자 없이 판정하지 말 것).</summary>
+    private static int tWedgeN, tWedgeDrop, tWedgePiece, tDevTot;
+    /// <summary>★[검토 심각1] 노출면이 진행 방향의 반대쪽에 있는 자리 수 / 전체 — <b>매스를 안 보고</b> 재는 값.
+    /// 매스와 비교하면 둘이 같이 뒤집혔을 때 못 잡는다(그래서 진단이 언제나 '없음'이라고 답했다).</summary>
+    private static int tSideOdd, tSideTot;
+    private static string tSideFirst = "";
+    private static int tNormInherit, tNormTot;
+    /// <summary>★[JACK 0820 '추가로 확인할 것들이 있으면 이참에 로그를 더 붙여'] 매스를 못 세운 **사유별** 수.
+    /// <para>종전엔 '못 세운 구간 12개'라고만 했다 — 12개가 <b>원래 벽이 없는 자리</b>인지
+    /// <b>만들다 실패한 자리</b>인지 갈리지 않으면 그 숫자로는 아무 판단도 못 한다.</para></summary>
+    private static int tWdShort, tWdNoDir, tWdCut;
+    /// <summary>★[0820] 벽이 낮아 방향을 못 재는 자리(수평차 &lt; NormMin) — 물려받기의 원천이다.</summary>
+    private static int tLowWall;
+    /// <summary>★[0820] 굽어서 건너뛴 칸의 최대 이탈과 그 자리 — 어디가 굽었는지 좌표로 남긴다.</summary>
+    private static double tCurvMax, tCurvX, tCurvY;
+    /// <summary>★[0820] 표면 판을 못 놓은 **사유별** 수 — 행이 얇아서인지 프레임을 못 만들어서인지.</summary>
+    private static int tPfThin, tPfFrame, tPfNoWall;
+    /// <summary>[검토 심각1] 직전 <see cref="Slice"/> 묶음의 방향 뒤집힘 — 0이 아니면 벽이 어딘가에서 뒤집혔다.</summary>
+    public static (int Odd, int Total) LastSideFlip => (tSideOdd, tSideTot);
+    private static readonly int[] tDevHist = new int[DevBuckets.Length];
+    /// <summary>이탈 분포를 사람이 읽는 한 줄로 — 눈금이 바뀌어도 표기가 따라오도록 한 군데서 만든다.</summary>
+    private static string DevHist(int[] h)
+    {
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < h.Length && i < DevBuckets.Length; i++)
+            sb.Append($" · {DevBuckets[i] * 100:F1}cm↑ {h[i]}");
+        return sb.ToString();
+    }
+    private static double tWedgeLenMax, tDevMax, tDevMaxX, tDevMaxY;
     /// <summary>★[0807] 성토에서 지반 아래로 <see cref="BuryDepth"/>보다 깊이 잠겨 만들지 않은 열 — 전 줄 합계.
     /// 이 숫자가 곧 '종전에 보이지도 않는 채로 만들던 판넬'의 규모다(내보내기 지연의 몸통).</summary>
     private static int tDeep; private static double tDeepMax, tDeepX, tDeepY;
@@ -2139,7 +3125,14 @@ public static class WallBand
         tMinColW = double.MaxValue; tMaxColW = tNarrowX = tNarrowY = 0;
         tNarrowN = tFaceCnt = tChordSplit = 0; tSliverFirst = "";
         tHoleN = 0; tHoleW = tHoleX = tHoleY = tNoSplitDev = 0; tHoleWhy = ""; tCorners.Clear();
-        LastQuoins.Clear(); LastCornerUnits.Clear(); tQuoinN = 0; tQuoinMax = 0;
+        LastQuoins.Clear(); LastCornerUnits.Clear(); LastMasses.Clear(); LastFaces.Clear(); LastFacePanels.Clear();
+        tQuoinN = 0; tQuoinMax = 0;
+        tWedgeN = tWedgeDrop = tWedgePiece = tDevTot = 0;
+        tSideOdd = tSideTot = 0; tSideFirst = ""; tNormInherit = tNormTot = 0;
+        tWdShort = tWdNoDir = tWdCut = 0; tLowWall = 0;
+        tCurvMax = tCurvX = tCurvY = 0; tPfThin = tPfFrame = tPfNoWall = 0;
+        System.Array.Clear(tDevHist, 0, tDevHist.Length);
+        tWedgeLenMax = tDevMax = tDevMaxX = tDevMaxY = 0;
         tDeep = 0; tDeepMax = tDeepX = tDeepY = 0;
         tOffCav = tOffCnv = tOffFar = tOffCavX = tOffCavY = 0;
         tFacetCav = tFacetCnv = 0; tFacetMin = double.MaxValue; tFacetX = tFacetY = 0;
@@ -2194,6 +3187,12 @@ public static class WallBand
         {
             var cu = LastCornerUnits[i];
             if (cu.Bot.Count == 0 || cu.Bot.Count != cu.Top.Count) { LastCornerUnits.RemoveAt(i); dropped++; continue; }
+            // ★[JACK 0819] 스윕 덩어리는 이 보정을 **통째로** 건너뛴다.
+            //   ① 정점마다 그 자리 데이라잇으로 이미 잘려 있다 — 아래 보정은 정점 0의 Z를 단면 전체의
+            //      대표로 쓰므로(Lerp) 오히려 윗변을 뭉갠다.
+            //   ② 매스 모드에서는 **이웃 판넬이 아예 없다** — '가까운 판넬이 없으면 허공'이라는 판정이
+            //      벽 전체를 지워 버린다. 기준으로 삼을 것이 없으면 그 검사는 검사가 아니다.
+            if (cu.Swept) continue;
             double zLo0 = cu.Bot[0].Z, zHi0 = cu.Top[0].Z;
             if (zHi0 - zLo0 < 1e-6) { LastCornerUnits.RemoveAt(i); dropped++; continue; }
 
@@ -2596,13 +3595,23 @@ public static class WallBand
         (tFacetCav + tFacetCnv > 0
             ? $" · 코너 조각 오목 {tFacetCav}/볼록 {tFacetCnv} · 최단 {tFacetMin:F2}m @ {tFacetX:F0},{tFacetY:F0}"
             : " · 코너 조각 없음") +
-        (tFaceCnt > 0
+        (tFaceCnt > 0 && tMinColW <= tMaxColW
             ? $" · 열폭 {tMinColW:F2}~{tMaxColW:F2}m(벽면 {tFaceCnt}개" +
               (tNarrowN > 0 ? $" · 규격 미만 {tNarrowN}열(끝 자투리+급커브)" : " · 전부 규격") +
               (tChordSplit > 0 ? $" · 급커브 분할 {tChordSplit}열(안 쪼갰다면 이탈 최대 {tNoSplitDev:F3}m · 한도 {ChordTol:F2}m)" : "") +
               $" · 최소 @ {tNarrowX:F0},{tNarrowY:F0})" : "") +
         (tSliverFirst.Length > 0 ? $" · ⚠실오라기 구멍 첫 사례 {tSliverFirst}" : "") +
         (tQuoinN > 0 ? $" · 코너 필러 {tQuoinN}개(최대 폭 {tQuoinMax:F2}m — 볼록 코너 쐐기 메움)" : " · 코너 필러 0개(메울 쐐기 없음)") +
+        // ★[JACK 0819] 각도를 안 쓰는 경로의 성적표. 쐐기 0개면 오른쪽 이탈 분포가 그 이유를 말해 준다.
+        $" · ★★옹벽 매스 {tWedgePiece}개" + (tWedgeN > 0 ? $"(구간 {tWedgeN} · 최장 {tWedgeLenMax:F2}m)" : "") +
+        (tNormTot > 0 ? $" · 방향 물려받은 자리 {tNormInherit}/{tNormTot}점(벽 낮아 못 잼 {tLowWall}점)" : "") +
+        (tWdCut + tWdNoDir + tWdShort > 0
+            ? $" · 못 세운 사유(데이라잇에 다 잘림 {tWdCut} · 방향 못 구함 {tWdNoDir} · 단면 부족 {tWdShort})" : "") +
+        (tSideOdd > 0 ? $" · ⚠★★노출면 방향 뒤집힌 자리 {tSideOdd}/{tSideTot}점(벽이 뒤집혔다 · 첫 자리 @ {tSideFirst})"
+                      : (tSideTot > 0 ? $" · 노출면 방향 일관({tSideTot}점)" : "")) +
+        (tWedgeDrop > 0 ? $" · 못 세운 구간 {tWedgeDrop}개" : "") +
+        $" · ★규격폭 이탈 최대 {tDevMax:F3}m @ {tDevMaxX:F0},{tDevMaxY:F0}" +
+        $"(전체 {tDevTot}열 · ★직선 {tDevTot - tDevHist[0]}열" + DevHist(tDevHist) + $" · 쐐기 한도 {WedgeDev:F2}m)" +
         (tHoleN > 0
             ? $" · ⚠★벽 한가운데 구멍 {tHoleN}곳(최대 {tHoleW:F2}m 폭 · 사유 {tHoleWhy} @ {tHoleX:F0},{tHoleY:F0})"
             : " · 벽 한가운데 구멍 없음") +
@@ -2620,8 +3629,11 @@ public static class WallBand
         //   ※NaN = '지반위'로 버린 열이 하나도 없는데 0장 — 다른 사유로 통째로 사라진 것이라 역시 이상하다.
         //   [0807] 깊이묻힘 줄(성토 아래 단)은 여기서 제외한다 — 설계대로 뺀 것이지 사라진 게 아니다.
         //   빼지 않으면 성토 옹벽을 돌릴 때마다 40줄 넘게 가짜 경고가 떠서 진짜 경고를 덮는다.
-        (tPerLine.FindAll(x => x.Kept == 0 && x.Deep == 0 && (double.IsNaN(x.Gap) || x.Gap < -0.05)).Count is int susp && susp > 0
+        // ★[JACK 0820] **매스 모드에서는 판넬 0장이 정상이다** — 벽은 매스가 만들고 판넬은 안 깐다.
+        //   빼지 않으면 옹벽을 돌릴 때마다 '벽이 사라졌을 수 있음'이 매번 떠서 진짜 경고를 덮는다
+        //   (오늘 '생성 ≠ 저장'·'앵커 > 판넬'과 같은 종류의 가짜 경고다).
+        (!MassOnly && tPerLine.FindAll(x => x.Kept == 0 && x.Deep == 0 && (double.IsNaN(x.Gap) || x.Gap < -0.05)).Count is int susp && susp > 0
             ? $" · ⚠토우가 지반 아래인데 판넬 0장인 줄 {susp}개 — 벽이 사라졌을 수 있음"
-            : (tPerLine.FindAll(x => x.Kept == 0 && x.Deep == 0).Count is int zn && zn > 0
+            : (!MassOnly && tPerLine.FindAll(x => x.Kept == 0 && x.Deep == 0).Count is int zn && zn > 0
                 ? $" · 판넬 0장인 줄 {zn}개는 전부 데이라잇 위(정상 — 붙잡을 흙 없음)" : ""));
 }

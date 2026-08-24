@@ -1,4 +1,4 @@
-using NetTopologySuite.Geometries;
+﻿using NetTopologySuite.Geometries;
 using NetTopologySuite.Operation.Buffer;
 using NetTopologySuite.Operation.Polygonize;
 using NetTopologySuite.Operation.Union;
@@ -232,7 +232,17 @@ public static class GradingGeometry
         // [절성토 분리 0803] 단높이·소단폭도 구배와 똑같이 이 방향(up)의 값을 골라 프로파일에 넘긴다.
         double benchH = p.BenchHeightOf(up);
         double benchW = p.BenchWidthOf(up);
-        var profile = StepProfile.Build(p, slope, benchH, benchW); // 사면 기본 프로파일(옹벽은 구간별 별도 프로파일로 꿰맴)
+        var profile = StepProfile.Build(p, slope, benchH, benchW, up); // 사면 기본 프로파일(옹벽은 구간별 별도 프로파일로 꿰맴)
+        // ★[JACK 0820 '단높이가 바꿔도 안 바껴'] **실제로 쓴 단높이**를 찍는다 — 규칙이 여기까지 왔는지가 갈린다.
+        {
+            var st = p.BenchStepsOf(up);
+            var txt = new System.Text.StringBuilder();
+            foreach (var r in st) txt.Append($"{r.FromBench + 1}단~{r.H:0.##}m ");
+            var seen = new System.Text.StringBuilder();
+            for (int b = 0; b < 6; b++) seen.Append($"{p.BenchHeightAt(up, b):0.##} ");
+            dbg.AppendLine($"  단높이 — 전역 {benchH:0.##}m · 규칙 {(st.Count == 0 ? "없음" : txt.ToString().Trim())}" +
+                           $" · 실제 1~6단 {seen.ToString().Trim()}");
+        }
         double zdir = up ? 1.0 : -1.0;
 
         var ringSeq = new List<(int e, double dist, double rise, List<Point3> ring)>(); // 코너 능선 추적용(=TIN에 들어가는 실제 점)
@@ -252,7 +262,7 @@ public static class GradingGeometry
             foreach (var z in wallZones)
             {
                 if (z == null || z.Rules.Count == 0) continue;
-                zprep.Add((z.T0, z.T1, Math.Max(z.FirstBench, 0), StepProfile.Build(p, slope, benchH, benchW, z)));
+                zprep.Add((z.T0, z.T1, Math.Max(z.FirstBench, 0), StepProfile.Build(p, slope, benchH, benchW, up, z)));
                 var txt = new System.Text.StringBuilder();
                 foreach (var r in z.Rules)
                     txt.Append($"{r.FromBench + 1}단부터 1:{r.Slope:0.###}{(r.Slope <= p.MinSlope + 1e-9 ? "(수직)" : "")}" +
@@ -489,6 +499,54 @@ public static class GradingGeometry
         => new(new PrecisionModel(1000.0));
 
     /// <summary>[§75] 링(2D) 누적 호길이 — cum[i]=정점 i까지, cum[^1]=닫힘 변 포함 전체 둘레.</summary>
+    /// <summary>★[JACK 0820] 클릭한 선이 덮는 <b>경계 호길이 구간</b> — 선의 점들을 경계에 투영해
+    /// <b>가장 큰 빈틈</b>을 찾고 그 여집합을 준다(선이 없는 쪽이 빈틈이므로).
+    /// <para>Civil 층(GradingSettings)에 있던 것을 여기로 옮겼다 — 순수 기하라 시험할 수 있어야 한다.
+    /// 바깥 단의 링은 경계에서 아주 멀어(성토 47m·1:1.5면 70m 이상) 코너 바깥 조각은
+    /// <b>모든 점이 코너 하나로 투영</b>된다. 그러면 구간 길이가 0이 되고,
+    /// <c>SlopeZone.Flatten</c>이 '길이 0 구간'을 버려 <b>변환이 통째로 사라진다</b>
+    /// (JACK 0820 '사면 맨 아랫단은 안 바뀌네'). 그래서 여기서 <b>최소 폭을 보장</b>한다.</para></summary>
+    /// <param name="minSpan">이보다 좁게 나오면 중심을 유지한 채 이 폭으로 넓힌다(0이면 넓히지 않음).</param>
+    public static (double T0, double T1)? PickInterval(
+        IReadOnlyList<Point3> pts, IReadOnlyList<Point3> boundary, double[] cum, double minSpan = 0.0)
+    {
+        if (pts == null || pts.Count == 0 || boundary == null || boundary.Count < 3) return null;
+        double total = cum[cum.Length - 1];
+        var ts = new List<double>(pts.Count);
+        foreach (var q in pts) ts.Add(ParamAt(boundary, cum, q.X, q.Y));
+        ts.Sort();
+        double t0, t1;
+        if (ts.Count == 1) { t0 = ts[0]; t1 = ts[0]; }
+        else
+        {
+            double bestGap = -1; int gi = 0;
+            for (int i = 0; i < ts.Count; i++)
+            {
+                double a = ts[i];
+                double b = i + 1 == ts.Count ? ts[0] + total : ts[i + 1];
+                if (b - a > bestGap) { bestGap = b - a; gi = i; }
+            }
+            t0 = ts[(gi + 1) % ts.Count]; t1 = ts[gi];
+        }
+        if (minSpan > 1e-9)
+        {
+            double span = t1 >= t0 ? t1 - t0 : t1 + total - t0;
+            if (span < minSpan)
+            {
+                // 중심을 유지한 채 최소 폭까지 넓힌다 — 둘레 전체를 넘지 않게 자른다.
+                double want = Math.Min(minSpan, total);
+                double grow = (want - span) * 0.5;
+                t0 -= grow; t1 += grow;
+                while (t0 < 0) t0 += total;
+                while (t0 >= total) t0 -= total;
+                while (t1 < 0) t1 += total;
+                while (t1 >= total) t1 -= total;
+                if (want >= total - 1e-9) { t0 = 0.0; t1 = total; }
+            }
+        }
+        return (t0, t1);
+    }
+
     public static double[] CumLen2D(IReadOnlyList<Point3> ring)
     {
         int n = ring.Count;
@@ -802,8 +860,9 @@ internal sealed class StepProfile
     /// <param name="benchH">이 방향(절토/성토)의 단높이 — GradingParams.BenchHeightOf(up).</param>
     /// <param name="benchW">이 방향(절토/성토)의 소단폭 — GradingParams.BenchWidthOf(up).</param>
     /// <param name="zone">구간 규칙(이 단부터 이 구배). null이면 전 구간 전역 구배.</param>
+    /// <param name="up">절토(true)/성토(false) — 단높이 변경 규칙을 방향별로 고르는 데 쓴다.</param>
     public static StepProfile Build(GradingParams p, double slope, double benchH, double benchW,
-                                    SlopeZone? zone = null)
+                                    bool up, SlopeZone? zone = null)
     {
         var sp = new StepProfile();
         // [절성토 분리 0803] 수직 예산은 단높이와 무관한 '실제 표고차'에서 와야 한다(p.MaxRise).
@@ -814,7 +873,10 @@ internal sealed class StepProfile
         double terraceW = p.MountainTerrace ? Math.Max(p.TerraceWidth, 0.0) : 0.0;
         double d = 0, totalRise = 0, accH = 0;                            // accH = 대소단 리셋용 누적 수직
         // 무한루프 백스톱 — 예산을 이 방향 단높이로 나눈 실제 필요 단수의 4배(+여유). 절토=성토면 종전(MaxBenches×4+8)과 동일.
-        int benchBudget = (int)Math.Ceiling(maxRise / Math.Max(benchH, 1e-6));
+        // ★[JACK 0820] 단높이가 단마다 바뀔 수 있으므로 예산은 **가장 작은** 단높이로 잡는다 —
+        //   큰 값으로 잡으면 작은 단이 섞인 구간에서 단수가 모자라 사면이 원지반에 못 닿는다
+        //   (v16.6에서 이미 한 번 겪은 그 종류: '작은 단높이가 예산을 주저앉힌다').
+        int benchBudget = (int)Math.Ceiling(maxRise / Math.Max(p.SmallestBenchHeightOf(up), 1e-6));
         int guardMax = (int)Math.Min(4000L, benchBudget * 4L + 8);        // 자투리·대소단 추가단 여유
         int benchIdx = 0;                                                 // [§75] 실제 단 index(옹벽 시작단 판정용)
 
@@ -824,9 +886,14 @@ internal sealed class StepProfile
             //   옹벽은 '구배 = 최소구배(1:0.05)'인 규칙의 특수한 경우일 뿐이다.
             //   단높이는 구간별로 둘 수 없다(링 하나에 표고 하나) — 전역값만 쓴다. SlopeZone.Rules 주석 참조.
             var (effSlope, effW) = zone != null ? zone.At(benchIdx, slope, benchW) : (slope, benchW);
+            // ★★★[JACK 0820 '해당 선택 지점부터 단높이를 바꿔서'] 이 단의 단높이 — 규칙이 있으면 그 값.
+            //   구배·소단폭과 달리 이 값은 **구간이 아니라 방향 전체**에서 온다(GradingParams.CutBenchSteps).
+            //   그래서 구간 프로파일과 전역 프로파일이 <b>같은 단에서 같은 표고</b>를 갖는다 —
+            //   그게 링을 이어 붙일 수 있는 조건이고, v16.9가 '구간별 불가'라고 한 이유이기도 하다.
+            double benchNow = p.BenchHeightAt(up, benchIdx);
             double remaining = interval - accH;
-            bool terraceHere = p.MountainTerrace && remaining <= benchH + 1e-9; // 이 단에서 간격 도달/초과
-            double rise = terraceHere ? remaining : benchH;               // 자투리(간격−누적) 또는 정규 단높이
+            bool terraceHere = p.MountainTerrace && remaining <= benchNow + 1e-9; // 이 단에서 간격 도달/초과
+            double rise = terraceHere ? remaining : benchNow;             // 자투리(간격−누적) 또는 정규 단높이
             if (rise <= 1e-9) { accH = 0; continue; }                     // 누적이 간격에 딱 떨어진 직후 보호
             if (totalRise + rise > maxRise) rise = maxRise - totalRise;   // 수직 상한 클램프
             double run = Math.Max(rise * effSlope, p.MinFaceRun);        // 이 사면(또는 옹벽)의 수평폭
