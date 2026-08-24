@@ -338,8 +338,9 @@ public sealed class CreateGradingCommand
                     {
                         var lastR = regionsPrev[^1];
                         int addC = cutZones.Count, addF = fillZones.Count;
-                        cutZones = MergeZones(lastR.CutWallZones, cutZones);
-                        fillZones = MergeZones(lastR.FillWallZones, fillZones);
+                        var cumMz = GradingGeometry.CumLen2D(boundary);
+                        cutZones = MergeZones(lastR.CutWallZones, cutZones, boundary, cumMz);
+                        fillZones = MergeZones(lastR.FillWallZones, fillZones, boundary, cumMz);
                         if (cutZones.Count > addC || fillZones.Count > addF)
                             ed.WriteMessage($"\n[옹벽 유지] 기존 옹벽 구간 절토 {cutZones.Count - addC}·성토 {fillZones.Count - addF}개 유지(새 선택과 병합)");
                     }
@@ -891,6 +892,7 @@ public sealed class CreateGradingCommand
             // ── 4단계: 결과 번들 저장(ralplan Phase 0) — 노리선 작도는 DHNORI(노리선 버튼)로 이관 ──
             // 저장 시점 = 3단계의 모든 복구·정규화 종단점 이후(finalRings가 정규화 재주입까지 반영된 상태).
             // 내부 링은 boundary+params에서 결정적 재계산 가능하므로 재현 불가능한 finalRing만 저장.
+            bool bundleFailed = false;
             string bundleMsg = "", trimMsg = "";
             // ── [옹벽선 정본화 0805 — 옹벽선_재설계.md P2] 옹벽선을 **여기서 확정**한다 ──
             //   지표면을 만든 그 링에서, 지금 이 자리에서 뽑아 저장한다. 내보내기는 이걸 읽기만 하므로
@@ -1000,7 +1002,7 @@ public sealed class CreateGradingCommand
                             trimMsg +
                             "\n→ [노리선]·[INFRAWORKS] 버튼이 이 번들을 사용합니다";
             }
-            catch (System.Exception ex) { bundleMsg = "번들 저장 실패 — " + ex.Message; }
+            catch (System.Exception ex) { bundleMsg = "번들 저장 실패 — " + ex.Message; bundleFailed = true; }
             try
             {
                 DiagLog.Append(
@@ -1017,7 +1019,11 @@ public sealed class CreateGradingCommand
             }
 
             // 상세 진단은 전부 로그로(위 AppendAllText들). 팝업은 **성패 + 토량**만 — 공용 배포용(JACK 0720).
-            bool gradeOk = pasteLog.Contains("합성 성공") && !anyMissed;
+            // ★★[검토 0824 S-1] **번들 저장 실패를 성패 판정에 넣는다.**
+            //   종전엔 저장이 던져도 로그에만 적고 화면엔 "완료"가 떴다. 저장이 트랜잭션째 롤백되면
+            //   **옛 번들이 그대로 남는다** — 지표면은 새 모양인데 기록은 옛 구간이라, 다음 변환이
+            //   옛 구간을 읽어 방금 한 변환이 사라지거나 두 번 먹힌다. 원인을 알 길이 없다.
+            bool gradeOk = pasteLog.Contains("합성 성공") && !anyMissed && !bundleFailed;
 
             // ── 토량 산출(체적표면: 원지반=기준, 정지면=비교) ──
             // 합성이 실패했으면 정지면이 온전하지 않아 **틀린 물량이 조용히 나온다** → 아예 계산하지 않는다.
@@ -1126,7 +1132,14 @@ public sealed class CreateGradingCommand
                 $" / 성토 1:{p.FillSlope} 단높이 {p.FillBenchHeight}m·소단 {p.FillBenchWidth}m{terrace}" +
                 $"\n  {gradeTime}" +
                 $"\n  자세한 내용: {DiagLog.FilePath}");
-            AcadApp.ShowAlertDialog(msg);
+            // ★[검토 0824 S-1] 저장이 실패했으면 **팝업에도** 적는다 — 로그만 보고 알 수는 없다.
+            if (bundleFailed)
+                AcadApp.ShowAlertDialog(msg +
+                    "\n\n⚠ 이 도면에 정지면 기록(번들)을 남기지 못했습니다.\n" +
+                    "지표면은 새로 만들어졌지만 기록은 옷 상태로 남아 있어,\n" +
+                    "옥벽·사면 변환이 옷 구간을 읽습니다. 도면을 저장하지 말고 다시 실행하세요.\n\n" +
+                    bundleMsg);
+            else AcadApp.ShowAlertDialog(msg);
         }
         catch (System.Exception ex)
         {
@@ -1147,17 +1160,25 @@ public sealed class CreateGradingCommand
     /// 안 겹치는 기존 구간은 유지. 결과 = 새 구간 + 유지된 기존 구간.</summary>
     private static System.Collections.Generic.List<SlopeZone> MergeZones(
         System.Collections.Generic.List<SlopeZone>? existing,
-        System.Collections.Generic.List<SlopeZone> newZones)
+        System.Collections.Generic.List<SlopeZone> newZones,
+        System.Collections.Generic.IReadOnlyList<Point3> boundary, double[] cum)
     {
-        var res = new System.Collections.Generic.List<SlopeZone>(newZones);
-        if (existing == null) return res;
-        foreach (var ez in existing)
-        {
-            bool overlapped = false;
-            foreach (var nz in newZones)
-                if (GradingSettings.IntervalsOverlap(ez.T0, ez.T1, nz.T0, nz.T1)) { overlapped = true; break; }
-            if (!overlapped) res.Add(ez);
-        }
+        // ★★[검토 0824 치명-1] **기존이 먼저, 새 것이 나중.**
+        //   규칙 합성은 목록 뒤쪽이 이긴다(ResolveAt·ProfOf 둘 다). 그런데 종전엔 새 구간을 앞에 두고
+        //   기존을 뒤에 붙여 **옛 구간이 새 선택을 덮었다** — "옹벽을 찍었는데 화면에 안 나온다"가 된다.
+        var res = new System.Collections.Generic.List<SlopeZone>();
+        if (existing != null)
+            foreach (var ez in existing)
+            {
+                // ★ 겹침은 T 숫자로 보면 안 된다 — 자가 다르면 **서로 다른 축의 눈금**이다
+                //   (실측: 한쪽은 둘레 910m 링 축의 798.9, 다른 쪽은 둘레 110m 계획 축).
+                //   Compact과 같은 방식으로 **좌표 표본**을 떠서 묻는다.
+                bool overlapped = false;
+                foreach (var nz in newZones)
+                    if (SlopeZone.RegionsOverlap(ez, nz, boundary, cum)) { overlapped = true; break; }
+                if (!overlapped) res.Add(ez);
+            }
+        res.AddRange(newZones);
         return res;
     }
 

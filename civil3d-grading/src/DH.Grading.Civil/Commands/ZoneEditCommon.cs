@@ -96,6 +96,29 @@ internal static class ZoneEditCommon
                 }
                 boundary = region.Boundary;
                 cumB = GradingGeometry.CumLen2D(boundary);
+                // ★[검토 0824 M-4] 화면의 클릭 대상선은 **번들 제원**(지금 그려진 모양)으로 만들고,
+                //   재생성은 **정지옵션 제원**으로 돈다. 둘이 다르면 자로 박아 넣은 링이 재생성 결과에
+                //   없는 링이 된다 — 자리가 어긋나므로 그 자리에서 알린다(막지는 않는다: 사용자가
+                //   일부러 바꿨을 수 있고, 0820 결론은 '정지옵션과 변환은 연동'이다).
+                {
+                    var sNow = GradingSettings.ToParams();
+                    var sBun = region.Params;
+                    bool same = System.Math.Abs(BaseSlopeOf(sNow, true) - BaseSlopeOf(sBun, true)) < 1e-9
+                             && System.Math.Abs(BaseSlopeOf(sNow, false) - BaseSlopeOf(sBun, false)) < 1e-9
+                             && System.Math.Abs(sNow.CutBenchHeight - sBun.CutBenchHeight) < 1e-9
+                             && System.Math.Abs(sNow.FillBenchHeight - sBun.FillBenchHeight) < 1e-9
+                             && System.Math.Abs(sNow.CutBenchWidth - sBun.CutBenchWidth) < 1e-9
+                             && System.Math.Abs(sNow.FillBenchWidth - sBun.FillBenchWidth) < 1e-9;
+                    if (!same)
+                    {
+                        ed.WriteMessage($"\n[{cmdLabel}] ⚠ 정지옵션이 화면의 정지면과 다릅니다 — " +
+                                        "재생성하면 모양이 크게 바뀔 수 있습니다. 먼저 [정지면 생성]을 한 번 돌리는 편이 안전합니다.");
+                        Log($"■ {cmdLabel} ⚠ 제원 불일치 — 정지옵션 절토{sNow.CutBenchHeight:0.##}m/1:{BaseSlopeOf(sNow, true):0.##} " +
+                            $"성토{sNow.FillBenchHeight:0.##}m/1:{BaseSlopeOf(sNow, false):0.##} vs " +
+                            $"번들 절토{sBun.CutBenchHeight:0.##}m/1:{BaseSlopeOf(sBun, true):0.##} " +
+                            $"성토{sBun.FillBenchHeight:0.##}m/1:{BaseSlopeOf(sBun, false):0.##}");
+                    }
+                }
 
                 // 클릭 대상 = 각 단의 '시작선'(절토=소단선·성토=사면선). 옹벽 구간이든 사면 구간이든 전부 대상.
                 //   (옹벽도 사면도 같은 규칙 하나로 표현되므로 두 명령이 같은 선을 쓴다.)
@@ -373,6 +396,7 @@ internal static class ZoneEditCommon
                         Ref = lineRef.TryGetValue(pick.Value, out var pr) ? pr : null,
                     };
                     nz.Rules.Add((pick.Value.bench, askN!.Value, askW!.Value));
+                    nz.Normalize();   // ★[검토 0824 사소-14] FirstBench 전제를 지킨다(규칙이 늘어도 안전)
                     target.Add(nz);
                     // ★★★[JACK 0820] **단높이는 구간이 아니라 방향 전체에 쌓는다.**
                     //   구배·소단폭은 클릭한 선의 호길이 범위 안에만 적용되지만(위 Flatten),
@@ -390,7 +414,7 @@ internal static class ZoneEditCommon
                     SlopeZone.Flatten(target, cumB![cumB.Length - 1]);
                     // ★[JACK 0824] 뒤 규칙에 덮여 아무 일도 안 하는 구간은 뺀다 —
                     //   안 빼면 변환할 때마다 쌓여 번들이 커지고 로그를 읽을 수 없다(실측: 4개 중 3개가 죽어 있었다).
-                    SlopeZone.Compact(target);
+                    SlopeZone.Compact(target, boundary, cumB);
                 }
             }
 
@@ -411,6 +435,16 @@ internal static class ZoneEditCommon
             //   그건 이미 <c>SyncToDocument</c>가 <b>도면이 바뀔 때</b> 번들 값으로 복원해 막고 있다.
             //   여기서 또 덮으면 <b>사용자가 방금 정지옵션에서 바꾼 값이 매번 지워진다</b>(JACK 실측: 5로 되돌아감).
             //   → 정지옵션과 변환은 <b>연동</b>이다: 변환은 정지옵션 값을 기본값으로 쓰고, 바꾼 값을 거기에 쌓는다.
+            // ★[검토 0824 M-2] **전체 해제는 단높이 규칙도 지운다.**
+            //   종전엔 구간만 비우고 단높이 규칙은 남겨, "순수 사면으로 재생성합니다"라고 해 놓고
+            //   15단부터 1m 같은 규칙이 그대로 살아 돌아왔다. 번들에도 저장돼 재시작해도 안 없어졌다
+            //   (지우는 길이 DHRESET뿐이었다).
+            if (clearAll)
+            {
+                GradingSettings.CutBenchSteps.Clear();
+                GradingSettings.FillBenchSteps.Clear();
+                Log("■ 전체 해제 — 구간과 단높이 규칙을 모두 비웠다(전역 단높이로 되돌아간다)");
+            }
             GradingSettings.ZoneOverride = (newCut, newFill);
             // ★★[JACK 0824 '마지막 단을 선택하고 사면변환을 했지만 변하지 않았어'] **안 바뀌면 안 바뀐다고 말한다.**
             //   변환 기본값은 '그 단에 지금 적용 중인 값'이라, Enter만 치면 넣은 값이 지금 값과 같아

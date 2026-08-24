@@ -70,20 +70,111 @@ public sealed class SlopeZone
     public List<Point3>? Ref
     {
         get => _ref;
-        set { _ref = value; _refCum = null; }
+        // ★[검토 0824 사소-11] 3점 미만은 자로 쓸 수 없다 — null로 정규화한다.
+        //   안 그러면 RefCum만 null이 되어 poly는 링·cum은 계획인 짝이 어긋난 조합이 생긴다.
+        set { _ref = value != null && value.Count >= 3 ? value : null; _refCum = null; _grid = null; }
     }
 
     /// <summary>기준 폴리곤의 누적 길이 — 처음 쓸 때 한 번 만든다. 자가 없으면 null.</summary>
     public double[]? RefCum
         => _ref == null || _ref.Count < 3 ? null : (_refCum ??= GradingGeometry.CumLen2D(_ref));
 
+    // ★★[검토 0824 치명 C-1] **자에 격자 색인을 붙인다.**
+    //   자가 계획 폴리곤(4~30점)일 땐 최근접 선분을 전수로 훑어도 공짜였다. 그런데 0824부터 자가
+    //   그 단의 링(수백~1400점)이라, 링 점마다 자를 통째로 훑으면 구간 수 × 링 점 × 자 점이 된다
+    //   (실측: 구간 16개에 Build 1회 1.4초, 변환 한 번에 4회 돈다).
+    //   격자에 선분을 담아 두고 **가까운 칸부터** 넓혀 가며 찾는다 — 바깥 칸이 지금 최선보다 멀어지면 멈춘다.
+    //   근사가 아니라 **정확히 같은 답**이다(멈추는 조건이 거리 하한이다).
+    private System.Collections.Generic.List<int>[]? _grid;
+    private double _gx0, _gy0, _gc;
+    private int _gnx, _gny;
+
+    private void BuildGrid()
+    {
+        var r = _ref!;
+        int n = r.Count;
+        double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+        foreach (var q in r)
+        {
+            if (q.X < minX) minX = q.X; if (q.X > maxX) maxX = q.X;
+            if (q.Y < minY) minY = q.Y; if (q.Y > maxY) maxY = q.Y;
+        }
+        double w = Math.Max(maxX - minX, 1e-6), h = Math.Max(maxY - minY, 1e-6);
+        // 칸 하나에 선분 몇 개가 들어가도록 — 칸 수는 정점 수에 비례.
+        double target = Math.Max(4.0, Math.Sqrt(n));
+        _gc = Math.Max(Math.Max(w, h) / target, 1e-6);
+        _gnx = Math.Min(512, (int)(w / _gc) + 1);
+        _gny = Math.Min(512, (int)(h / _gc) + 1);
+        _gx0 = minX; _gy0 = minY;
+        _grid = new System.Collections.Generic.List<int>[_gnx * _gny];
+        for (int i = 0; i < n; i++)
+        {
+            var a = r[i]; var b = r[(i + 1) % n];
+            int x0 = Cx(Math.Min(a.X, b.X)), x1 = Cx(Math.Max(a.X, b.X));
+            int y0 = Cy(Math.Min(a.Y, b.Y)), y1 = Cy(Math.Max(a.Y, b.Y));
+            for (int yy = y0; yy <= y1; yy++)
+                for (int xx = x0; xx <= x1; xx++)
+                {
+                    int k = yy * _gnx + xx;
+                    (_grid[k] ??= new System.Collections.Generic.List<int>()).Add(i);
+                }
+        }
+    }
+
+    private int Cx(double x) { int i = (int)((x - _gx0) / _gc); return i < 0 ? 0 : (i >= _gnx ? _gnx - 1 : i); }
+    private int Cy(double y) { int i = (int)((y - _gy0) / _gc); return i < 0 ? 0 : (i >= _gny ? _gny - 1 : i); }
+
+    /// <summary>자 위에서 (x,y)의 최근접 호길이 — 격자로 찾는다. <see cref="GradingGeometry.ParamAt"/>과 같은 답.</summary>
+    private double ParamOnRef(double x, double y)
+    {
+        var r = _ref!; var cum = RefCum!;
+        if (_grid == null) BuildGrid();
+        int n = r.Count;
+        int ci = Cx(x), cj = Cy(y);
+        double best = double.MaxValue, bestT = 0;
+        for (int rad = 0; rad < Math.Max(_gnx, _gny) + 1; rad++)
+        {
+            // 이 반경까지 덮은 사각형 밖의 최소 거리 — 지금 최선보다 멀면 더 볼 것이 없다.
+            if (best < double.MaxValue)
+            {
+                double lo = _gx0 + (ci - rad) * _gc, hi = _gx0 + (ci + rad + 1) * _gc;
+                double lo2 = _gy0 + (cj - rad) * _gc, hi2 = _gy0 + (cj + rad + 1) * _gc;
+                double margin = Math.Min(Math.Min(x - lo, hi - x), Math.Min(y - lo2, hi2 - y));
+                if (margin > 0 && best <= margin * margin) break;
+            }
+            bool any = false;
+            for (int jj = cj - rad; jj <= cj + rad; jj++)
+            {
+                if (jj < 0 || jj >= _gny) continue;
+                for (int ii = ci - rad; ii <= ci + rad; ii++)
+                {
+                    if (ii < 0 || ii >= _gnx) continue;
+                    if (rad > 0 && Math.Abs(ii - ci) != rad && Math.Abs(jj - cj) != rad) continue;  // 테두리만
+                    any = true;
+                    var cell = _grid![jj * _gnx + ii];
+                    if (cell == null) continue;
+                    foreach (int i in cell)
+                    {
+                        var a = r[i]; var b = r[(i + 1) % n];
+                        double ex = b.X - a.X, ey = b.Y - a.Y;
+                        double l2 = ex * ex + ey * ey;
+                        double u = l2 < 1e-18 ? 0 : ((x - a.X) * ex + (y - a.Y) * ey) / l2;
+                        u = u < 0 ? 0 : (u > 1 ? 1 : u);
+                        double px = a.X + ex * u, py = a.Y + ey * u;
+                        double d2 = (x - px) * (x - px) + (y - py) * (y - py);
+                        if (d2 < best) { best = d2; bestT = cum[i] + Math.Sqrt(l2) * u; }
+                    }
+                }
+            }
+            if (!any && best < double.MaxValue) break;
+        }
+        return best < double.MaxValue ? bestT : GradingGeometry.ParamAt(r, cum, x, y);
+    }
+
     /// <summary>이 점이 이 구간 안인가 — <b>자기 자</b>가 있으면 그 위에서, 없으면 계획 폴리곤 위에서 잰다.</summary>
     public bool ContainsAt(double x, double y, IReadOnlyList<Point3> planB, double[] planCum)
-    {
-        var rc = RefCum;
-        return rc != null ? Contains(GradingGeometry.ParamAt(_ref!, rc, x, y))
+        => RefCum != null ? Contains(ParamOnRef(x, y))
                           : Contains(GradingGeometry.ParamAt(planB, planCum, x, y));
-    }
 
     /// <summary>★★[JACK 0824] 이 점·이 단에 적용될 (구배, 소단폭) — 구간을 <b>만들어진 순서대로</b> 겹쳐 본다.
     /// <para><see cref="Flatten"/>이 조각마다 <i>미리</i> 하던 합성을 <b>점마다</b> 한다. 구간이 저마다
@@ -127,29 +218,6 @@ public sealed class SlopeZone
         return GradingGeometry.PointAtParam(poly, pc, (a + b) * 0.5);
     }
 
-    /// <summary>★★★[JACK 0824] <b>이 구간이 이기는 자리의 합성된 규칙</b> — 앞 구간들이 정해 둔
-    /// 아래 단(예: 1단부터 옹벽)까지 포함한다.
-    /// <para>구간 하나만 떼어 프로파일을 만들면 그 아래 단이 <b>전역 구배</b>로 잡혀 링이 어긋난다 —
-    /// 1~14단이 옹벽인 자리에서 '15단부터 사면' 구간의 프로파일이 1~14단을 1:1.5로 깔아 버리면
-    /// 15단이 엉뚱하게 멀리 나간다.</para></summary>
-    public static List<(int FromBench, double Slope, double BenchW)> ComposeUpTo(
-        IReadOnlyList<SlopeZone> zones, int upto, IReadOnlyList<Point3> planB, double[] planCum)
-    {
-        var acc = new List<(int FromBench, double Slope, double BenchW)>();
-        if (zones == null || upto < 0 || upto >= zones.Count) return acc;
-        var rep = zones[upto].RepPoint(planB, planCum);
-        for (int i = 0; i <= upto; i++)
-        {
-            var z = zones[i];
-            if (z == null || z.Rules.Count == 0) continue;
-            if (i != upto && !z.ContainsAt(rep.X, rep.Y, planB, planCum)) continue;
-            int zf = z.FirstBench;
-            acc.RemoveAll(r => r.FromBench >= zf);
-            acc.AddRange(z.Rules);
-        }
-        acc.Sort((a, b) => a.FromBench.CompareTo(b.FromBench));
-        return acc;
-    }
 
     /// <summary>이 점·이 단이 '수직(옹벽)'인가 — <see cref="ResolveAt"/>의 구배가 최소구배 이하면 벽.</summary>
     public static bool IsWallAtPoint(IReadOnlyList<SlopeZone>? zones, double x, double y, int bench,
@@ -192,6 +260,17 @@ public sealed class SlopeZone
         // ★★[JACK 0824] **자가 따로인 구간은 합치지 않는다.** T0/T1을 서로 다른 폴리곤에서 쟀으므로
         //   한 축에 올릴 수가 없다 — 억지로 올리면 엉뚱한 자리가 된다.
         //   순서를 지킨 채 그대로 두고, 겹침은 ResolveAt이 점마다 푼다.
+        // ★★[검토 0824 심각-4] **자 없는 구간이 자 있는 구간보다 뒤에 오면 합치지 않는다.**
+        //   합친 결과를 앞에, 자 있는 것을 뒤에 붙이면 순서가 뒤집혀 '나중 것이 이긴다'가 깨진다 —
+        //   나중에 찍은 옹벽이 지고 옛 사면이 이겨 "변환을 했는데 아무 일도 안 일어남"이 된다.
+        //   자 있는 구간이 하나라도 앞서 있으면 순서를 건드리지 않는 쪽이 안전하다.
+        int firstRef = -1;
+        for (int i = 0; i < zones.Count; i++)
+            if (zones[i] != null && zones[i].Rules.Count > 0 && zones[i].Ref != null) { firstRef = i; break; }
+        if (firstRef >= 0)
+            for (int i = firstRef + 1; i < zones.Count; i++)
+                if (zones[i] != null && zones[i].Rules.Count > 0 && zones[i].Ref == null) return;   // 섞였다 — 손대지 않는다
+
         var withRef = new List<SlopeZone>();
         var src = new List<SlopeZone>();
         foreach (var z in zones)
@@ -281,19 +360,48 @@ public sealed class SlopeZone
     /// 남겨 두면 번들만 커지고 로그를 읽을 수 없다 — 결과는 그대로 두고 <b>죽은 것만</b> 뺀다.</para>
     /// <para>종전엔 <see cref="Flatten"/>이 겹침을 갈라내며 이 일을 겸했는데, 자가 구간마다 달라진 뒤로는
     /// 그쪽을 못 타므로 여기서 따로 한다.</para></summary>
-    public static void Compact(List<SlopeZone> zones)
+    /// <summary>★[검토 0824] 두 구간이 <b>실제로 같은 자리</b>를 덮는가 — 자가 달라도 물을 수 있다.
+    /// T 숫자를 그대로 비교하면 자가 다를 때 서로 다른 축의 눈금을 견주는 셈이라 뜻이 없다.</summary>
+    public static bool RegionsOverlap(SlopeZone a, SlopeZone b,
+                                      IReadOnlyList<Point3> planB, double[] planCum)
+    {
+        if (a == null || b == null) return false;
+        var poly = a.Ref ?? planB; var pc = a.RefCum ?? planCum;
+        if (pc == null || pc.Length < 2) return false;
+        double tot = pc[pc.Length - 1];
+        double t0 = a.T0, t1 = a.T1 >= a.T0 ? a.T1 : a.T1 + tot;
+        for (int k = 0; k <= 24; k++)
+        {
+            var q = GradingGeometry.PointAtParam(poly, pc, t0 + (t1 - t0) * k / 24.0);
+            if (b.ContainsAt(q.X, q.Y, planB, planCum)) return true;
+        }
+        return false;
+    }
+
+    /// <param name="planRef">계획 폴리곤 — 자가 없는 구간을 재는 기준(없으면 좌표 비교로 물러난다).</param>
+    public static void Compact(List<SlopeZone> zones,
+                               IReadOnlyList<Point3>? planRef = null, double[]? planCumRef = null)
     {
         if (zones == null || zones.Count < 2) return;
         const double eps = 1e-6;
-        static bool SameRuler(SlopeZone a, SlopeZone b)
+        // ★★[검토 0824 중간-7] 판정을 **기하로** 한다.
+        //   종전엔 '같은 자 + 같은 T0/T1'을 요구했는데, 자는 변환할 때마다 실제로 달라진다
+        //   (옹벽변환 한 번이면 그 단 링 둘레가 178m→120m). 그래서 거의 발동하지 않았다.
+        //   자가 달라도 **같은 자리를 덮으면** 같은 구간이다 — 표본을 떠서 서로를 덮는지 본다.
+        //   (판정이 틀려도 '남는' 쪽으로만 틀리게 표본 전부를 요구한다.)
+        const int NS = 24;
+        static bool CoversAll(SlopeZone a, SlopeZone b, IReadOnlyList<Point3> planB, double[] planCum)
         {
-            if (ReferenceEquals(a.Ref, b.Ref)) return true;
-            if (a.Ref == null || b.Ref == null) return false;
-            if (a.Ref.Count != b.Ref.Count) return false;
-            var ca = a.RefCum; var cb = b.RefCum;
-            if (ca == null || cb == null) return false;
-            return Math.Abs(ca[ca.Length - 1] - cb[cb.Length - 1]) < 1e-6
-                && Math.Abs(a.Ref[0].X - b.Ref[0].X) < 1e-6 && Math.Abs(a.Ref[0].Y - b.Ref[0].Y) < 1e-6;
+            var poly = a.Ref ?? planB; var pc = a.RefCum ?? planCum;
+            if (pc == null || pc.Length < 2) return false;
+            double tot = pc[pc.Length - 1];
+            double t0 = a.T0, t1 = a.T1 >= a.T0 ? a.T1 : a.T1 + tot;
+            for (int k = 0; k <= NS; k++)
+            {
+                var q = GradingGeometry.PointAtParam(poly, pc, t0 + (t1 - t0) * k / NS);
+                if (!b.ContainsAt(q.X, q.Y, planB, planCum)) return false;
+            }
+            return true;
         }
         var dead = new bool[zones.Count];
         for (int i = 0; i < zones.Count; i++)
@@ -302,10 +410,16 @@ public sealed class SlopeZone
             for (int j = i + 1; j < zones.Count; j++)
             {
                 if (zones[j] == null || zones[j].Rules.Count == 0) continue;
-                if (!SameRuler(zones[i], zones[j])) continue;
-                if (Math.Abs(zones[i].T0 - zones[j].T0) > eps || Math.Abs(zones[i].T1 - zones[j].T1) > eps) continue;
-                // 같은 자·같은 범위인데 뒤 구간이 더 낮은(또는 같은) 단부터 시작하면 앞 구간은 통째로 지워진다.
-                if (zones[j].FirstBench <= zones[i].FirstBench) { dead[i] = true; break; }
+                // 뒤 구간이 더 낮은(또는 같은) 단부터 시작하고, 앞 구간을 **전부 덮으면**
+                //   앞 구간의 규칙은 ResolveAt에서 통째로 지워져 아무 일도 안 한다.
+                if (zones[j].FirstBench > zones[i].FirstBench) continue;
+                if (planRef == null || planCumRef == null)
+                {
+                    if (Math.Abs(zones[i].T0 - zones[j].T0) > eps || Math.Abs(zones[i].T1 - zones[j].T1) > eps) continue;
+                    if (!ReferenceEquals(zones[i].Ref, zones[j].Ref)) continue;
+                }
+                else if (!CoversAll(zones[i], zones[j], planRef, planCumRef)) continue;
+                dead[i] = true; break;
             }
         }
         for (int i = zones.Count - 1; i >= 0; i--) if (dead[i]) zones.RemoveAt(i);

@@ -27,7 +27,7 @@ public static class GradingSettings
     /// 이력은 설치본 확인에 쓰이므로 DLL에는 남기되, <b>출력은 절대 하지 않는다.</b>
     /// </para>
     /// ★[v32.20] 새 버전을 올릴 때 갱신할 곳은 <b>이 줄 하나</b>다 — 이력은 <c>작업과정.md</c>에 쓴다.</summary>
-    public const string Version = "v33.3 (2026-08-24)";
+    public const string Version = "v33.6 (2026-08-24)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -303,6 +303,12 @@ public static class GradingSettings
     /// <summary>[§75 구간 옹벽] 이 방향(up)의 옹벽 선택들을 계획경계 '호길이 구간' 목록으로 변환.
     /// 각 선택의 선 좌표(Pts)를 경계에 투영 → 파라미터들의 최대 원형 간극의 여집합 = 그 선이 덮는 구간.
     /// GradingGeometry.Build(wallZones)가 이 구간 안만 수직으로 만든다.</summary>
+    /// <summary>⚠[검토 0824 사소-12] <b>지금은 도달하지 않는 경로다.</b>
+    /// <see cref="WallPicks"/>에 <c>Add</c>하는 코드가 저장소 어디에도 없다(<c>Count</c>·<c>Clear</c> 읽기만) —
+    /// 따라서 이 함수는 언제나 빈 목록을 돌려주고, <c>CreateGradingCommand.MergeZones</c>의
+    /// '옹벽 유지/병합' 경로도 함께 죽어 있다. 로그의 "선택 N건"은 항상 0이다.
+    /// 되살리려면 <c>MergeZones</c>의 순서(새 것을 앞에 둔다 = 나중 것이 지는 순서)와
+    /// 겹침 판정(자가 다른 T0/T1을 같은 축으로 비교한다)을 함께 고쳐야 한다.</summary>
     public static System.Collections.Generic.List<SlopeZone> ComputeWallZones(
         bool up, System.Collections.Generic.IReadOnlyList<Point3> boundary)
     {

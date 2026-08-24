@@ -306,7 +306,12 @@ public static class GradingBundleStore
                 return new List<GradingBundle> {
                     ReadRegion(arr, ref i, withGroundHandle: false, withZoneTo: false,
                                splitBench: false, withRules: false, withClip: false, withRuns: false) };
-            reason = $"번들 버전 불일치(v{ver}) — DHGRADE 재실행 필요";
+            // ★[검토 0824 M-5] **더 최신 번들**이면 재실행을 권하면 안 된다 — 덮어쓰면 그 도면의
+            //   구간·자·단높이가 통째로 날아간다(조용한 데이터 손실). 사실대로 말한다.
+            reason = ver > Version
+                ? $"이 도면은 더 최신 애드인(번들 v{ver})으로 만들어졌습니다 — 지금 설치본은 v{Version}입니다.\n" +
+                  "최신 애드인으로 여세요. 이대로 [정지면 생성]을 돌리면 옹벽·사면 구간이 지워집니다."
+                : $"번들 버전 불일치(v{ver}) — DHGRADE 재실행 필요";
             return null;
         }
         catch (System.Exception ex)
