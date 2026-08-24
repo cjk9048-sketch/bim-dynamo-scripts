@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.ApplicationServices;
+﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Runtime;
@@ -26,7 +26,9 @@ public sealed class ResetCommand
     //   초기화 뒤에도 종단이 그걸 보고 옛 형상을 그린다(지표면 목록에서 눈에 안 띄어 더 고약하다).
     private static readonly string[] SurfaceBaseNames =
         { "정지면_DH", "정지면_DH이전", SectionCommand.PurePadSurfaceBase, SectionCommand.PurePadSurfaceBase + "이전",
-          "가상절토_DH", "가상성토_DH", "_DH토량임시" };
+          "가상절토_DH", "가상성토_DH", "_DH토량임시",
+          // ★[JACK 0824] 터파기 산출물도 함께 — 안 지우면 "초기화했는데 터파기가 남아 있다"가 된다.
+          ExcavCommand.SurfName, ExcavCommand.BaseName, ViewSurfaceCommand.AllName };
 
     [CommandMethod("DHRESET")]
     public void Run()
@@ -40,7 +42,7 @@ public sealed class ResetCommand
         // 되돌릴 수 없는(정지 산출물 삭제) 작업이라 확인부터 — Ctrl+Z 대체가 목적이므로 명확히 알린다.
         var answer = System.Windows.MessageBox.Show(
             "정지면 생성 전(원지반 + 계획폴리곤) 상태로 초기화합니다.\n\n" +
-            "· 정지 지표면(정지면_DH 등)과 사면선·소단선·노리선·옹벽선 등\n" +
+            "· 정지 지표면(정지면_DH 등)과 터파기 지표면, 사면선·소단선·노리선·옹벽선 등\n" +
             "  DH가 만든 객체를 모두 지웁니다.\n" +
             "· 원지반과 계획폴리곤은 그대로 둡니다.\n\n" +
             "계속할까요?",
@@ -107,6 +109,15 @@ public sealed class ResetCommand
 
             // ③ 저장된 번들 삭제 + 숨겼던 지표면 다시 표시.
             bundleCleared = GradingBundleStore.Clear(db, tr);
+            // ★[JACK 0824] 터파기 기록도 지운다 — 지표면만 지우고 기록을 남기면
+            //   다음 실행이 옛 구조물을 되살려 "지웠는데 다시 생긴다"가 된다.
+            if (ExcavBundleStore.Clear(db, tr)) bundleCleared = true;   // 보고에 같이 싣는다
+            // 터파기 조각·목표면 복원 산출물(이름이 번호로 갈리는 것들)도 함께.
+            for (int k = 1; k <= 16; k++)
+                GradingBuilder.EraseSurfacesByBaseName(tr, $"{ExcavCommand.VirtName}{k}");
+            for (int i = 1; i <= 8; i++)
+                for (int r = 1; r <= 8; r++)
+                    GradingBuilder.EraseSurfacesByBaseName(tr, $"터파기_절토복원{i}_{r}_DH");
             GradingBuilder.IsolateSurfaces(tr, null);
 
             tr.Commit();

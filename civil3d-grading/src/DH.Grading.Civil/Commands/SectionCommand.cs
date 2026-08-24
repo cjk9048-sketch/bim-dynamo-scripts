@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.ApplicationServices;
+﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.Colors;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
@@ -143,13 +143,16 @@ public sealed class SectionCommand
 
         // ── ④ 종단 2개(원지반·정지면) ────────────────────────────────────────
         ObjectId profStyle = PickStyle(db, cdoc.Styles.ProfileStyles, "기본", "Standard", "Basic");
+        ObjectId excStyle = EnsureExcavProfileStyle(db, cdoc);   // ★[0824] 터파기 = 마젠타
         ObjectId profLabels = PickStyle(db, cdoc.Styles.LabelSetStyles.ProfileLabelSetStyles, "_없음", "None", "표준", "Standard");
         int nProf = 0;
         foreach (var s in surfs)
         {
             try
             {
-                CivilDb.Profile.CreateFromSurface(s.ProfileName, alignId, s.SurfId, layerId, profStyle, profLabels);
+                // ★[JACK 0824] 터파기 종단선만 **마젠타** 스타일로.
+                var styleFor = s.Label == "터파기" && !excStyle.IsNull ? excStyle : profStyle;
+                CivilDb.Profile.CreateFromSurface(s.ProfileName, alignId, s.SurfId, layerId, styleFor, profLabels);
                 nProf++;
             }
             catch (System.Exception ex)
@@ -269,11 +272,74 @@ public sealed class SectionCommand
     /// <summary>종단에 쓸 지표면(원지반·정지면) — 있는 것만 모은다.</summary>
     internal readonly record struct SurfPick(ObjectId SurfId, string SurfName, string ProfileName, string Label);
 
+    /// <summary>★[JACK 0824] 터파기 종단 이름 — 원지반·정지면과 나란히 놓인다.</summary>
+    internal const string ProfExcavName = "DH_터파기";
+
+    /// <summary>터파기 종단선 스타일 이름 — 마젠타(JACK 0824).</summary>
+    internal const string ExcavStyleName = "DH_터파기(마젠타)";
+
+    /// <summary>★[JACK 0824] <b>터파기 종단선은 마젠타.</b> 그 색의 종단 스타일을 만들어 두고 그 ObjectId를 준다.
+    /// <para>이미 있으면 그대로 쓴다(매번 만들면 도면에 스타일이 쌓인다). 만들지 못하면
+    /// <c>ObjectId.Null</c>을 돌려주고, 호출부는 기본 스타일로 물러난다 — 색 하나 때문에 종단이 안 생기면 안 된다.</para></summary>
+    internal static ObjectId EnsureExcavProfileStyle(Database db, CivilApp.CivilDocument cdoc)
+    {
+        const short Magenta = 6;   // ACI 6 = 마젠타
+        try
+        {
+            var coll = cdoc.Styles.ProfileStyles;
+            ObjectId id = ObjectId.Null;
+            foreach (ObjectId sid in coll)
+            {
+                using var tr0 = db.TransactionManager.StartTransaction();
+                try
+                {
+                    if (tr0.GetObject(sid, OpenMode.ForRead) is CivilStyles.ProfileStyle st0 && st0.Name == ExcavStyleName)
+                        id = sid;
+                }
+                catch { }
+                tr0.Commit();
+                if (!id.IsNull) break;
+            }
+            if (id.IsNull) id = coll.Add(ExcavStyleName);
+
+            using var tr = db.TransactionManager.StartTransaction();
+            if (tr.GetObject(id, OpenMode.ForWrite) is CivilStyles.ProfileStyle st)
+            {
+                // 선·곡선·연장선까지 같은 색으로 — 하나만 바꾸면 곡선 구간이 다른 색으로 남는다.
+                foreach (var t in new[]
+                {
+                    CivilStyles.ProfileDisplayStyleProfileType.Line,
+                    CivilStyles.ProfileDisplayStyleProfileType.Curve,
+                    CivilStyles.ProfileDisplayStyleProfileType.LineExtension,
+                    CivilStyles.ProfileDisplayStyleProfileType.SymmetricalParabola,
+                    CivilStyles.ProfileDisplayStyleProfileType.AsymmetricalParabola,
+                    CivilStyles.ProfileDisplayStyleProfileType.ParabolicCurveExtension,
+                })
+                {
+                    try
+                    {
+                        var ds = st.GetDisplayStyleProfile(t);
+                        if (ds == null) continue;
+                        // ★ 이미 같으면 쓰지 않는다 — 값이 같아도 쓰는 행위 자체가 Civil에게는 '수정'이다.
+                        if (ds.Color.ColorIndex != Magenta)
+                            ds.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
+                                Autodesk.AutoCAD.Colors.ColorMethod.ByAci, Magenta);
+                        ds.Visible = true;
+                    }
+                    catch { }
+                }
+            }
+            tr.Commit();
+            return id;
+        }
+        catch { return ObjectId.Null; }
+    }
+
     internal static System.Collections.Generic.List<SurfPick> FindSurfaces(Database db, CivilApp.CivilDocument cdoc)
     {
         var list = new System.Collections.Generic.List<SurfPick>();
-        ObjectId ground = ObjectId.Null, pad = ObjectId.Null, pure = ObjectId.Null;
-        string groundNm = "", padNm = "", pureNm = "";
+        ObjectId ground = ObjectId.Null, pad = ObjectId.Null, pure = ObjectId.Null, exc = ObjectId.Null;
+        string groundNm = "", padNm = "", pureNm = "", excNm = "";
 
         using var tr = db.TransactionManager.StartTransaction();
         foreach (ObjectId sid in cdoc.GetSurfaceIds())
@@ -286,6 +352,11 @@ public sealed class SectionCommand
             }
             catch { continue; }
 
+            // ★[JACK 0824] 터파기 지표면 — 있으면 종단에 선 하나가 더 그려진다.
+            //   굴착 형상만이라(바닥+법면) 구조물 위에만 나온다 — JACK: "순수하게 터파기선만 나오면 돼".
+            if (IsBase(nm, Commands.ExcavCommand.SurfName)) { exc = sid; excNm = nm; continue; }
+            // 터파기 작업용 중간 산물은 종단 대상이 아니다(목표면·복원 절토부).
+            if (IsBase(nm, Commands.ExcavCommand.BaseName) || nm.StartsWith("터파기_절토복원")) continue;
             // ★[v32.2] 순수 정지면이 있으면 그것이 종단·횡단의 정지면이다(위 설명).
             if (IsBase(nm, PurePadSurfaceBase)) { pure = sid; pureNm = nm; continue; }
             // 정지면_DH(또는 정지면_DH_N) — 가장 마지막 것을 쓴다.
@@ -317,6 +388,9 @@ public sealed class SectionCommand
         // ★[v32.2] 순수면이 있으면 그것을, 없으면 합성면으로 물러난다(옛 도면 호환).
         if (!pure.IsNull) list.Add(new SurfPick(pure, pureNm, ProfPadName, "정지면"));
         else if (!pad.IsNull) list.Add(new SurfPick(pad, padNm, ProfPadName, "정지면"));
+        // ★[JACK 0824] 터파기는 맨 뒤에 — 밴드가 종단1(원지반)·종단2(정지면)를 이름 순서가 아니라
+        //   이 목록 순서로 잡으므로, 앞에 끼워 넣으면 밴드 값이 통째로 밀린다.
+        if (!exc.IsNull) list.Add(new SurfPick(exc, excNm, ProfExcavName, "터파기"));
         return list;
     }
 

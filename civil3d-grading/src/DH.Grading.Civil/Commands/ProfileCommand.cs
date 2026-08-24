@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.ApplicationServices;
+﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Geometry;
@@ -441,6 +441,7 @@ public sealed class ProfileCommand
         }
 
         ObjectId profStyle = SectionCommand.PickStyle(db, cdoc.Styles.ProfileStyles, "기본", "Standard", "Basic");
+        ObjectId excStyle = SectionCommand.EnsureExcavProfileStyle(db, cdoc);   // ★[0824] 터파기 = 마젠타
         ObjectId profLabels = SectionCommand.PickStyle(db, cdoc.Styles.LabelSetStyles.ProfileLabelSetStyles,
                                                       "_없음", "None", "표준", "Standard");
         int nProf = 0;
@@ -450,8 +451,13 @@ public sealed class ProfileCommand
         {
             try
             {
-                var pid = CivilDb.Profile.CreateFromSurface(s.ProfileName, alignId, s.SurfId, alignLayer, profStyle, profLabels);
-                if (s.Label == "원지반") pidGround = pid; else pidPad = pid;
+                // ★[JACK 0824] 터파기 종단선만 **마젠타** 스타일로.
+                var styleFor = s.Label == "터파기" && !excStyle.IsNull ? excStyle : profStyle;
+                var pid = CivilDb.Profile.CreateFromSurface(s.ProfileName, alignId, s.SurfId, alignLayer, styleFor, profLabels);
+                // ★[JACK 0824] 라벨로 **정확히** 가른다 — 종전엔 `else pidPad`라
+                //   터파기 종단이 생기는 순간 계획면 자리를 덮어써 밴드 값이 통째로 밀렸다.
+                if (s.Label == "원지반") pidGround = pid;
+                else if (s.Label == "정지면") pidPad = pid;
                 nProf++;
             }
             catch (System.Exception ex)

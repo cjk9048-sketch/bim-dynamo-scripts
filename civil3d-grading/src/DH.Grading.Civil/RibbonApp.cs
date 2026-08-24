@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -16,6 +16,8 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.WallPickCommand))]            // DHWALL(옹벽 변환 — 사면선/소단선 선택, §75)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SlopeReleaseCommand))]        // DHSLOPE(사면 변환 — 옹벽선 선택해 그 단부터 사면 복귀)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.InfraworksCommand))]          // DHINFRA(INFRAWORKS SHP 내보내기)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ViewSurfaceCommand))]         // DHVIEW(지표면 보기 전환)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ExcavCommand))]              // DHEXCAV(터파기 지표면 — 지하구조물)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ResetCommand))]               // DHRESET(초기화 — 정지면 생성 전으로)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.BasemapCommand))]             // DHMAP/DHMAPOFF(위성 배경지도 켜기·끄기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SectionCommand))]             // DHSECTION(종단·횡단 생성)
@@ -116,8 +118,77 @@ public sealed class RibbonApp : IExtensionApplication
             pGrade.Items.Add(MakeButton(
                 "정지\n옵션", "DHGRADESET ", "단높이·소단폭·구배·사면형상·대소단·옹벽형태·좌표계·표시 옵션", "설정"));
             pGrade.Items.Add(Spacer());
-            pGrade.Items.Add(MakeButton(
-                "정지면\n생성", "DHGRADE ", "계획 폴리곤+원지반 → 계단식 절성토 TIN Surface 생성", "정지면"));
+            // ★★[JACK 0824] <b>지표면 생성 = 스플릿 버튼.</b> 계획지표면과 터파기 지표면을 한 자리에 둔다.
+            //   기본(윗부분 클릭)은 계획지표면 — 지금까지 하던 그것. 드롭다운에서 터파기를 고른다.
+            var btnPlan = MakeButton(
+                "지표면\n생성", "DHGRADE ", "계획 폴리곤+원지반 → 계단식 절성토 TIN Surface 생성", "정지면");
+            btnPlan.ToolTip = MakeTip("계획지표면 생성 (DHGRADE)",
+                "계획 경계 폴리선과 원지반을 고르면 계단식 절·성토 지표면을 만듭니다.\n" +
+                "제원은 [정지 설정]에서 정합니다.", null);
+            var btnExc = MakeButton(
+                "터파기\n지표면", "DHEXCAV ", "구조물 바닥 폴리선 → 굴착 법면·바닥만 지표면으로 생성", "터파기");
+            btnExc.ToolTip = MakeTip("터파기 지표면 생성 (DHEXCAV)",
+                "배수지·정수장 같은 **지하구조물**의 터파기를 만듭니다.\n" +
+                "구조물 바닥계획고가 들어간 닫힌 폴리선을 고르고, 제원(단높이·구배·소단)을 그 자리에서 정합니다.\n" +
+                "법면이 올라가 닿는 목표면은 **계획면과 원지반 중 낮은 쪽**입니다 —\n" +
+                "절토부는 이미 깎아 둔 계획면에서, 성토부는 원지반에서 팝니다(시공 순서).\n" +
+                "결과는 **굴착 형상만**(바닥+법면)이라 종단에도 구조물 위에만 나옵니다.", null);
+            var splitSurf = new RibbonSplitButton
+            {
+                Text = "지표면\n생성",
+                ShowText = true,
+                ShowImage = true,
+                // ★[JACK 0824] 스플릿 버튼은 **자기 이미지를 따로 줘야** 한다 —
+                //   목록 항목의 이미지를 자동으로 물려받지 않아 아이콘 자리가 비어 보인다.
+                LargeImage = MakeGlyph("정지면"),
+                Image = MakeGlyph("정지면"),
+                Size = RibbonItemSize.Large,
+                Orientation = System.Windows.Controls.Orientation.Vertical,
+                IsSplit = true,
+                IsSynchronizedWithCurrentItem = false,
+                ListStyle = RibbonSplitButtonListStyle.List,
+                ToolTip = MakeTip("지표면 생성",
+                    "**계획지표면** — 부지 정지(지금까지 하던 그것).\n" +
+                    "**터파기 지표면** — 배수지·정수장 같은 지하구조물의 굴착.\n" +
+                    "아래 화살표를 눌러 고릅니다.", null),
+            };
+            splitSurf.Items.Add(btnPlan);
+            splitSurf.Items.Add(btnExc);
+            splitSurf.Current = btnPlan;
+            pGrade.Items.Add(splitSurf);
+            pGrade.Items.Add(Spacer());
+
+            // ★[JACK 0824] 보기 전환은 **별도 버튼**으로 뺀다 — 생성 명령이 화면을 껐다 켜는 부작용을
+            //   품으면, 명령이 중간에 실패하거나 Esc를 누를 때 지표면이 꺼진 채로 남는다("사라졌다"로 보인다).
+            //   상태가 눈에 보이고 언제든 되돌릴 수 있는 쪽이 안전하다.
+            // ★[JACK 0824] 보기도 스플릿 버튼 — 누를 때마다 묻지 않고 **바로** 바뀐다.
+            var vAll = MakeButton("전부\n보기", "DHVIEWALL ", "원지반·계획지표면·터파기를 모두 표시", "보기");
+            var vGnd = MakeButton("원지반\n만", "DHVIEWG ", "원지반만 표시(계획·터파기 숨김)", "보기");
+            var vPln = MakeButton("계획\n지표면", "DHVIEWP ", "계획지표면만 표시", "정지면");
+            var vExc = MakeButton("터파기\n만", "DHVIEWE ", "터파기 지표면만 표시", "터파기");
+            var splitView = new RibbonSplitButton
+            {
+                Text = "보기",
+                ShowText = true,
+                ShowImage = true,
+                LargeImage = MakeGlyph("보기"),
+                Image = MakeGlyph("보기"),
+                Size = RibbonItemSize.Large,
+                Orientation = System.Windows.Controls.Orientation.Vertical,
+                IsSplit = true,
+                IsSynchronizedWithCurrentItem = false,
+                ListStyle = RibbonSplitButtonListStyle.List,
+                ToolTip = MakeTip("지표면 보기",
+                    "화면에 **무엇을 보일지**만 바꿉니다 — 지표면 형상은 건드리지 않습니다.\n" +
+                    "터파기를 만들 때 계획지표면이 겹쳐 보여 헷갈리면 여기서 끄면 됩니다.\n" +
+                    "작업용 중간 산물(목표면·가상면)은 언제나 숨겨 둡니다.", null),
+            };
+            splitView.Items.Add(vAll);
+            splitView.Items.Add(vGnd);
+            splitView.Items.Add(vPln);
+            splitView.Items.Add(vExc);
+            splitView.Current = vAll;
+            pGrade.Items.Add(splitView);
             pGrade.Items.Add(Spacer());
             // [§75 — JACK 0728/0729 개명] 옹벽변환은 부지정지 패널, 정지면 생성 오른쪽(별도 '옹벽' 중분류 없음).
             //   [JACK 0729] 툴팁에 개념도 이미지(확장 툴팁) — 마우스를 올려두면 그림까지 표시.
@@ -324,6 +395,25 @@ public sealed class RibbonApp : IExtensionApplication
                         var st = new[] { new Point(4, 27), new Point(4, 21), new Point(12, 21),
                             new Point(12, 15), new Point(20, 15), new Point(20, 9), new Point(28, 9) };
                         for (int i = 0; i + 1 < st.Length; i++) dc.DrawLine(gr, st[i], st[i + 1]);
+                        break;
+                    case "터파기": // 파인 구덩이(갈색) — 바닥 + 양쪽 법면
+                        var ex = P(0xb0, 0x7a, 0x46);
+                        var pit = new[] { new Point(3, 9), new Point(11, 24), new Point(21, 24), new Point(29, 9) };
+                        for (int i = 0; i + 1 < pit.Length; i++) dc.DrawLine(ex, pit[i], pit[i + 1]);
+                        dc.DrawLine(P(0x8a, 0x8a, 0x8a), new Point(2, 9), new Point(30, 9));   // 목표면(지표)
+                        break;
+                    case "보기": // 눈(파랑) — 무엇을 보일지
+                        var vw = P(0x4a, 0x90, 0xd9);
+                        var eye = new StreamGeometry();
+                        using (var g = eye.Open())
+                        {
+                            g.BeginFigure(new Point(4, 16), false, false);
+                            g.QuadraticBezierTo(new Point(16, 5), new Point(28, 16), true, false);
+                            g.QuadraticBezierTo(new Point(16, 27), new Point(4, 16), true, false);
+                        }
+                        eye.Freeze();
+                        dc.DrawGeometry(null, vw, eye);
+                        dc.DrawEllipse(Brushes.Transparent, vw, new Point(16, 16), 4.0, 4.0);
                         break;
                     case "노리선": // 사면(대각선, 주황) + 빗금 틱
                         var or = P(0xf0, 0xa8, 0x3a);

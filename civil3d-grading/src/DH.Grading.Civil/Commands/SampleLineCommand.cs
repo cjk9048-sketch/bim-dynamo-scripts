@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
@@ -107,7 +107,9 @@ public static class SampleLineCommand
             groupName = g.Name;
             foreach (CivilDb.SectionSource src in g.GetSectionSources())
             {
-                bool ours = surfs.Exists(s => s.SurfId == src.SourceId);
+                // ★[JACK 0824] 터파기는 **종단에만** 넣는다 — JACK이 고른 것은 "종단선 하나 추가"다.
+                //   횡단에도 굴착 단면이 나오면 유용하지만, 시킨 것보다 넓히지 않는다(원하면 한 줄이다).
+                bool ours = surfs.Exists(s => s.SurfId == src.SourceId && s.Label != "터파기");
                 try { src.IsSampled = ours; if (ours) nSrc++; } catch { }
             }
             tr.Commit();
