@@ -1,4 +1,4 @@
-namespace DH.Grading.Core;
+﻿namespace DH.Grading.Core;
 
 /// <summary>PSM(프리스트레스 패널식) 옹벽 — 프리캐스트 패널(1480×1480×200) 격자 + 어스앵커 (JACK 0721).
 /// [단 링 기반 — §42] WallBlocks와 동일하게 GradingGeometry 단 링(vs.Rings)을 입력받아 **단별로** 사면 패널을
@@ -25,7 +25,19 @@ public static class WallPanels
         /// → 판만 만들고 앵커·도넛·무늬는 붙이지 않는다. 레이어(재질)는 규격 판넬과 같다.</summary>
         bool Filler = false,
         /// <summary>★[JACK 0807] 앵커·도넛·무늬를 붙이는가(LOD) — Filler(분류)와 분리. WallBand.Tile.Detail 참조.</summary>
-        bool Detail = true);
+        bool Detail = true,
+        /// <summary>★★★[JACK 0820 '왜 무늬만 넣어달라니깐 기존에 패널도 같이 넣었어? 이미 우리가 통으로 만든 게 패널이야']
+        /// <b>몸통 없이 마감만</b> 얹는다 — 무늬·도넛·앵커·정착판만 만들고 <b>바탕 판은 안 만든다</b>.
+        /// <para>옹벽 매스가 이미 판넬 그 자체다. 그 위에 또 판을 얹으면 벽이 두 겹이 된다.
+        /// 무늬만 얹어 <b>나뉜 판넬처럼 보이게</b> 하는 것이 목적이다(기본설계 · 수량 불필요).</para></summary>
+        bool Overlay = false,
+        /// <summary>★★★[JACK 0820 '무늬가 불특정하게 누락된 부분이 매우 많음'] <b>온전한 칸의 크기</b>(로컬 u·v, m).
+        /// <para>무늬는 종전에 <b>판 자신의 경계상자</b>에 맞춰 깔렸다. 판이 데이라잇에 잘리면 상자가 작아져
+        /// 무늬가 그 판에 맞춰 <b>다시 짜이고</b>, 얇아진 조각은 최소 크기(<c>MinPatchSide</c>)에 못 미쳐 죽는다 —
+        /// 잘린 판마다 다르게 죽으니 "불특정하게 누락"으로 보인다.</para>
+        /// 0보다 크면 무늬를 <b>이 칸</b>(<c>PocketU/PocketV</c>가 중심)에 깔고 판 모양으로 <b>나중에 자른다</b> —
+        /// 앵커와 같은 원칙이다. 0이면 종전대로 판 경계상자를 쓴다(옛 판넬 경로).</summary>
+        double CellU = 0, double CellV = 0);
 
     public static string LastDiag { get; private set; } = "";
 

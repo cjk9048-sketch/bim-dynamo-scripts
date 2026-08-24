@@ -73,7 +73,8 @@ public static class WallPanelDwg
         nFail = 0; firstFail = null; strayN = 0; strayFirst = null;
         padsNull = 0; padsEx = 0; collarEx = 0; anchorEx = 0; plateEx = 0; quoinEx = 0;
         padStoneFail = 0; padsConcaveSplit = 0; padsSplitFail = 0; padsTiny = 0; padsPieceMax = 0; subFirst = null;
-        padsMerged = 0; padsSeamed = 0; nCornerUnit = 0; cornerUnitEx = 0; SolidKind.Clear();
+        padsMerged = 0; padsSeamed = 0; nCornerUnit = 0; cornerUnitEx = 0; nMass = 0; massFail = 0;
+        massFirstFail = null; massDetail = ""; massWound = 0; massSolid = 0; nOverlay = 0; SolidKind.Clear();
         padBatchFail = 0; padCurveFail = 0; padBatchFirst = null; padCurveFirst = null; padsWipeFirst = null;
     }
 
@@ -108,6 +109,23 @@ public static class WallPanelDwg
     internal static readonly System.Collections.Generic.Dictionary<ObjectId, string> SolidKind = new();
 
     public static int nCornerUnit { get; private set; }
+    /// <summary>★[JACK 0819] 옹벽 매스(줄 하나 = 솔리드 하나) — 만든 수 / 실패 수.</summary>
+    public static int nMass { get; private set; }
+    public static int massFail { get; private set; }
+    /// <summary>★[검토 중간8] 면 감기를 되돌린 매스 수 — 옹벽선 도는 방향이 반대인 줄의 개수다.</summary>
+    public static int massWound { get; private set; }
+    /// <summary>★[JACK 0820] 솔리드로 바뀐 매스 수 — 나머지는 메시로 나간다(표시엔 지장 없음).</summary>
+    public static int massSolid { get; private set; }
+    /// <summary>★[JACK 0820] 몸통 없이 마감만 얹은 판 수 — 자가진단이 '생성 ≠ 저장'으로 오해하지 않게 한다.
+    /// <para>매스가 곧 판넬이므로 이 판들은 <b>몸통을 안 만드는 것이 정상</b>이다.
+    /// 세어 두지 않으면 정상 동작이 매번 '⚠이상'으로 찍혀, 진짜 이상이 묻힌다.</para></summary>
+    public static int nOverlay { get; private set; }
+    /// <summary>★[JACK 0819] 매스 실패의 **첫 사유** — 종전엔 Note()가 '부속 실패'에만 얹혀 있어
+    /// 매스가 통째로 실패해도 로그에 한 글자도 안 남았다(실측 '0/1개'만 보이고 왜인지는 없었다).</summary>
+    public static string? massFirstFail { get; private set; }
+    /// <summary>매스를 만들 때 실제로 쓴 단면 수 / 원래 단면 수 — 솎아내기가 일어났는지 보인다.</summary>
+    public static string massDetail { get; private set; } = "";
+
     public static int cornerUnitEx { get; private set; }
     /// <summary>[0806] 리전을 한꺼번에 못 만들어 하나씩 다시 만든 판넬 수 — <b>무늬는 살아남는다</b>(실패 아님).</summary>
     public static int padBatchFail { get; private set; }
@@ -168,6 +186,13 @@ public static class WallPanelDwg
     /// 0.12m가 되어 안쪽(0.07m)과 달라진다. (0.07−0.05)/2 = 0.01로 둬야 건너가는 줄눈도 0.07m가 된다.</summary>
     private const double PatternEdge = 0.01;
     private const double Relief = 0.035;     // 무늬 돌출(=홈 깊이) — 깊게(InfraWorks 가시성)
+    /// <summary>★★[JACK 0820 '기울기로 인해 무늬부와 벽체에 공간 발생 · 무늬 두께를 지금의 4배 정도 주어서 해결']
+    /// 무늬 조각의 <b>전체 두께</b>(m) = <c>Relief</c>의 4배.
+    /// <para>무늬는 <b>평면</b>인데 벽면은 칸 안에서 조금 휜다(직선 판정 한도 5cm까지 허용한다).
+    /// 그래서 조각 뒷면과 벽체 사이에 틈이 생긴다 — 얇을수록 그 틈이 그대로 구멍으로 보인다.
+    /// 두껍게 만들어 <b>뒤쪽을 벽 속으로 밀어 넣으면</b> 앞으로 나온 양은 그대로면서 틈이 사라진다.</para>
+    /// 앞으로 나오는 양은 <c>Relief</c> 그대로이고, 늘어난 <c>3×Relief</c>는 전부 <b>벽 속</b>으로 간다.</summary>
+    private const double PadThick = Relief * 4;
 
     /// <summary>패널들을 path에 DWG로 저장. 반환=(패널 수, 앵커 수).
     /// ※단독 저장용 래퍼. 보강토와 한 파일로 합칠 때는 <see cref="Populate"/>를 공유 DB에 직접 호출(WallDwg).</summary>
@@ -193,7 +218,8 @@ public static class WallPanelDwg
     /// WorkingDatabase가 db로 설정된 상태에서 호출할 것. 보강토와 한 DWG로 합칠 때 재사용.</summary>
     public static (int Panels, int Anchors) Populate(Database db, Transaction tr,
         IReadOnlyList<WallPanels.Panel> panels, bool concrete = false, IReadOnlyList<WallPanels.Quoin>? quoins = null,
-        IReadOnlyList<DH.Grading.Core.WallBand.CornerUnit>? cornerUnits = null)
+        IReadOnlyList<DH.Grading.Core.WallBand.CornerUnit>? cornerUnits = null,
+        IReadOnlyList<DH.Grading.Core.WallBand.WallMass>? masses = null)
     {
         int np = 0, na = 0;   // 진단 카운터는 여기서 리셋하지 않는다 — ResetDiag() 참조
         {
@@ -256,7 +282,13 @@ public static class WallPanelDwg
                     // [0805 JACK '판넬 누락된 자리에 앵커봉만 떠 있음'] 판 만들기가 실패해도 아래 앵커·정착판·
                     //   도넛은 그대로 만들어져 **허공에 앵커봉만** 남았다(현장: 생성 72장 → DWG 46장인데 앵커는 45개).
                     //   판이 실패하면 그 패널의 부속은 전부 건너뛴다 — 벽 없는 앵커는 도면 오류로만 보인다.
-                    bool slabOk = false;
+                    // ★★★[JACK 0820 '이미 우리가 통으로 만든 게 패널이야 · 거기다 무늬만 넣어서
+                    //   마치 각각 나눠진 패널처럼 보이게 하려는 거였어'] **마감만인 판은 몸통을 안 만든다.**
+                    //   옹벽 매스가 이미 판넬이다. 그 위에 또 바탕 판을 얹으면 벽이 두 겹이 된다.
+                    bool slabOk = p.Overlay;
+                    if (p.Overlay) nOverlay++;      // 몸통을 안 만든 판 — 자가진단이 '생성≠저장'으로 오해하지 않게 센다
+                    if (!p.Overlay)
+                    {
                     swSlab.Start();
                     try
                     {
@@ -282,6 +314,7 @@ public static class WallPanelDwg
                         }
                     }
                     finally { swSlab.Stop(); }
+                    }
                     if (!slabOk) continue;
 
                     // 자연석 무늬 — [JACK 0730] 앵커판넬에도 적용(콘크리트 무늬 이식). 정착구 주변은 민판 유지.
@@ -300,7 +333,9 @@ public static class WallPanelDwg
                         //   비어 있는 상태로 해도 된다. 대신 나머지는 살려져 있어야겠지.'
                         //   → 온전 여부와 무관하게 앵커판넬이면 **가운데는 항상 비운다**. 잘린 판넬도
                         //   나머지 3~4분면은 그대로 나오므로 무늬가 통째로 사라지지 않는다.
-                        var pads = BuildConcretePads(p, excludePocket: !concrete);
+                        // ★[JACK 0820 '앵커부도 무늬로 바꿔'] 앵커가 없는 판은 **보호공 자리도 무늬로** 채운다.
+                        //   종전엔 앵커 유무와 무관하게 늘 비웠다 — 그래서 잘린 줄만 가운데가 허옇게 떴다.
+                        var pads = BuildConcretePads(p, excludePocket: !concrete && p.IsFull);
                         if (pads.Count == 0) padsNull++;      // 돌이 하나도 안 만들어짐(면이 너무 작거나 전 돌 퇴화)
                         nPadPiece += pads.Count;
                         foreach (var pad in pads)
@@ -372,6 +407,129 @@ public static class WallPanelDwg
                 // ★★[JACK 0807] **코너 전용 판넬** — 코너에서 양옆 판넬이 물러난 자리를 ㄱ자 유닛이 감싼다.
                 //   두 노출면이 이웃 판넬 전면과 같은 평면이라 이어 붙으면 한 면처럼 보인다.
                 //   필러(기둥)와 달리 **마감**이므로 판넬 레이어에 같은 재질로 넣는다.
+                // ★★★[JACK 0819 '왜 조각으로 하냐는거야 · 그냥 지표면 모양 그대로 솔리드로'] **한 줄 = 솔리드 하나.**
+                //   로프트에 단면을 **여러 장 한꺼번에** 넘긴다. 두 장씩 걸어 쌓으면 도면에서 131덩어리가 된다.
+                // ★★★[JACK 0820 '자꾸 로프트나 스윕이나 그렇게 억지로 만들지 말고'] **정점과 면을 직접 찍는다.**
+                //   로프트·스윕은 모델러에게 "알아서 만들어 줘"라고 부탁하는 것이라, 실패해도 이유를 안 알려준다
+                //   (0819~0820 실측: 예외 없이 빈 솔리드 · 132장 실패 · 벽 끝 부채꼴 비틀림 — 전부 그 부탁이
+                //   실패하는 방식이었다). 우리는 단면 네 점을 이미 정확히 알고 있으므로 **부탁할 이유가 없다.**
+                //   이웃한 두 단면 사이를 사각형 네 장(바깥·아래·안쪽·위)으로 잇고 양 끝을 막으면 닫힌 껍데기다.
+                //   보간도, 방향 추정도, 곡면 맞추기도 없다 — 그래서 실패할 자리가 없다.
+                if (masses != null)
+                    foreach (var mm in masses)
+                    {
+                        swQuoin.Start();
+                        try
+                        {
+                            var secs = new System.Collections.Generic.List<System.Collections.Generic.IReadOnlyList<DH.Grading.Core.Point3>>();
+                            foreach (var sec in mm.Sections) if (sec.Count == 4) secs.Add(sec);
+                            if (secs.Count < 2) { swQuoin.Stop(); massFail++; massFirstFail ??= $"단면 {secs.Count}장(2장 미만)"; continue; }
+
+                            var verts = new Point3dCollection();
+                            foreach (var sec in secs)
+                                foreach (var q in sec) verts.Add(new Point3d(q.X, q.Y, q.Z - ZSink));
+
+                            // 단면 점 차례: 0=바깥위 · 1=바깥아래 · 2=안쪽아래 · 3=안쪽위
+                            // ★★[JACK 0820 로그 '메시(솔리드 변환 예외)'] **퇴화한 면을 만들지 않는다.**
+                            //   벽이 데이라잇과 <b>칼끝으로 만나는 자리</b>는 단면 높이가 0이라 위·아래 점이 겹친다
+                            //   (그렇게 만들어야 뭉툭하지 않다 — JACK 0820). 그 자리의 사각형은 두 정점이 같은
+                            //   <b>퇴화 면</b>이 되고, 메시가 비다양체가 되어 <c>ConvertToSolid</c>가 예외를 던진다.
+                            //   면 감기 방향은 원인이 아니었다(되돌림 0개) — <b>겹친 정점</b>이었다.
+                            //   → 겹친 정점을 접어 삼각형으로 내보낸다. 모양은 같고 퇴화만 사라진다.
+                            var faces = new Int32Collection();
+                            bool Same(int a, int b)
+                            {
+                                var pa = verts[a]; var pb = verts[b];
+                                return pa.DistanceTo(pb) < 1e-6;
+                            }
+                            void Quad(int p0, int p1, int p2, int p3)
+                            {
+                                var ring = new System.Collections.Generic.List<int> { p0, p1, p2, p3 };
+                                for (int i = ring.Count - 1; i >= 0 && ring.Count > 3; i--)
+                                    if (Same(ring[i], ring[(i + 1) % ring.Count])) ring.RemoveAt(i);
+                                if (ring.Count < 3) return;                    // 선으로 접혔다 — 면이 아니다
+                                faces.Add(ring.Count);
+                                foreach (int v in ring) faces.Add(v);
+                            }
+                            for (int k = 0; k + 1 < secs.Count; k++)
+                            {
+                                int A = k * 4, B = (k + 1) * 4;
+                                Quad(A + 0, A + 1, B + 1, B + 0);      // 바깥면(노출면)
+                                Quad(A + 1, A + 2, B + 2, B + 1);      // 아랫면
+                                Quad(A + 2, A + 3, B + 3, B + 2);      // 안쪽면(흙 쪽)
+                                Quad(A + 3, A + 0, B + 0, B + 3);      // 윗면
+                            }
+                            int L = (secs.Count - 1) * 4;
+                            Quad(3, 2, 1, 0);                          // 시작 마구리
+                            Quad(L + 0, L + 1, L + 2, L + 3);          // 끝 마구리
+
+                            // ★★[검토 중간8] **면 감기가 옹벽선 도는 방향에 따라 안팎이 뒤집힌다.**
+                            //   바깥면 quad의 법선은 (아래방향)×(진행방향)이라, 노출면이 진행 방향의 왼쪽이냐
+                            //   오른쪽이냐로 전체가 뒤집힌다. 뒤집힌 닫힌 메시는 ConvertToSolid가 실패하거나
+                            //   음수 부피를 내서 폐기되고 메시로 폴백한다 —
+                            //   실측 로그가 '메시(솔리드 변환 예외)'로 그 사실을 말하고 있었다.
+                            //   → 첫 바깥면 quad의 법선을 그 자리 <b>실제 바깥 방향</b>과 대보고, 등지면 전부 뒤집는다.
+                            {
+                                var s0 = secs[0]; var s1 = secs[1];
+                                double ax = s0[1].X - s0[0].X, ay = s0[1].Y - s0[0].Y, az = s0[1].Z - s0[0].Z;
+                                double bx = s1[1].X - s0[1].X, by = s1[1].Y - s0[1].Y, bz = s1[1].Z - s0[1].Z;
+                                double fx = ay * bz - az * by, fy = az * bx - ax * bz, fz = ax * by - ay * bx;
+                                double ox = s0[0].X - s0[3].X, oy = s0[0].Y - s0[3].Y, oz = s0[0].Z - s0[3].Z;
+                                if (fx * ox + fy * oy + fz * oz < 0)
+                                {
+                                    // 면 길이가 3·4로 섞여 있으므로 개수 접두어를 읽어 가며 뒤집는다.
+                                    var flipped = new Int32Collection();
+                                    for (int i = 0; i < faces.Count; )
+                                    {
+                                        int cnt = faces[i];
+                                        flipped.Add(cnt);
+                                        for (int j = cnt; j >= 1; j--) flipped.Add(faces[i + j]);
+                                        i += cnt + 1;
+                                    }
+                                    faces = flipped;
+                                    massWound++;
+                                }
+                            }
+
+                            var mesh = new SubDMesh();
+                            mesh.SetSubDMesh(verts, faces, 0);
+
+                            // ★★★[JACK 0820 로그 'Operation is not valid due to the current state of the object']
+                            //   **메시를 도면에 올린 뒤에 솔리드로 바꾼다.**
+                            //   종전엔 데이터베이스에 넣기 <b>전</b>의 메시에 <c>ConvertToSolid</c>를 걸었다 —
+                            //   AutoCAD는 그 상태의 객체에서 이 연산을 허용하지 않아 매번 예외가 났고,
+                            //   그래서 옹벽 덩어리가 <b>줄곧 메시로만</b> 나가고 있었다.
+                            //   실제 사유를 로그에 남기기 전까지 세 번을 다른 원인으로 짚었다(면 감기·퇴화 면).
+                            //   ※'표시엔 지장 없음'이 맞기는 해서 급하지 않았지만, 솔리드가 InfraWorks에서 더 낫다.
+                            mesh.LayerId = layBody;
+                            ms.AppendEntity(mesh); tr.AddNewlyCreatedDBObject(mesh, true);
+                            Entity body = mesh;
+                            try
+                            {
+                                var sol = mesh.ConvertToSolid(false, false);
+                                bool live;
+                                try { var _ = sol.GeometricExtents; live = sol.MassProperties.Volume > 1e-9; }
+                                catch { live = false; }
+                                if (live)
+                                {
+                                    sol.LayerId = layBody;
+                                    ms.AppendEntity(sol); tr.AddNewlyCreatedDBObject(sol, true);
+                                    mesh.UpgradeOpen(); mesh.Erase();       // 메시는 지운다 — 두 겹이 되면 안 된다
+                                    body = sol;
+                                    massSolid++;
+                                }
+                                else { sol.Dispose(); massDetail = $"메시(솔리드 변환 실패: 빈 솔리드 · 단면 {secs.Count}장 — 표시엔 지장 없음)"; }
+                            }
+                            catch (System.Exception mex)
+                            { massDetail = $"메시(솔리드 변환 예외: {mex.Message} · 단면 {secs.Count}장 · 면 {faces.Count}값 — 표시엔 지장 없음)"; }
+
+                            swQuoin.Stop();
+                            nMass++;
+                            CheckStray("옹벽매스", body);
+                        }
+                        catch (System.Exception ex) { swQuoin.Stop(); massFail++; massFirstFail ??= ex.Message; }
+                    }
+
                 if (cornerUnits != null)
                     foreach (var cu in cornerUnits)
                     {
@@ -431,7 +589,16 @@ public static class WallPanelDwg
             var sol = new Solid3d();
             var xs = new[] { new LoftProfile(lo), new LoftProfile(hi) };
             sol.CreateLoftedSolid(xs, System.Array.Empty<LoftProfile>(), null, new LoftOptions());
-            return sol;
+            // ★★[JACK 0819 '뭔가 이상하게 나왔어' — 실측 26개 중 23개] 로프트는 단면이 평면이 아니면
+            //   **예외를 던지지 않고 빈 솔리드를 돌려준다.** 그대로 내보내면 뒤쪽 깨진솔리드 검사가
+            //   조용히 지워, 로그는 '26/26개 만듦'인데 도면엔 3개만 있다 —
+            //   **성공했다고 말하는 로그가 가장 위험한 로그다.** 여기서 실물인지 확인하고 폴백으로 넘긴다.
+            bool solid;
+            try { var _ = sol.GeometricExtents; solid = sol.MassProperties.Volume > 1e-9; }
+            catch { solid = false; }
+            if (solid) return sol;
+            sol.Dispose();
+            throw new System.InvalidOperationException("로프트가 빈 솔리드를 냈다(단면 비평면 의심)");
         }
         catch
         {
@@ -521,6 +688,16 @@ public static class WallPanelDwg
         var faceLocal = p.Local;
         double minU = double.MaxValue, maxU = double.MinValue, minV = double.MaxValue, maxV = double.MinValue;
         foreach (var (u, v) in faceLocal) { minU = System.Math.Min(minU, u); maxU = System.Math.Max(maxU, u); minV = System.Math.Min(minV, v); maxV = System.Math.Max(maxV, v); }
+        // ★★★[JACK 0820 '무늬가 불특정하게 누락된 부분이 매우 많음'] **무늬는 온전한 칸에 깔고 나중에 자른다.**
+        //   종전엔 판 자신의 경계상자에 맞춰 깔았다 — 데이라잇에 잘린 판은 상자가 작아져 무늬가 그 판에 맞춰
+        //   <b>다시 짜이고</b>, 얇아진 조각이 최소 크기에 못 미쳐 죽는다(잘린 판마다 다르게 죽으니 '불특정'하다).
+        //   오늘 격자·앵커에 이미 쓴 원칙 그대로다: <b>온전한 것 위에 깔고, 자르는 것은 마지막에.</b>
+        //   조각은 아래에서 <c>windows</c>(판의 실제 모양)로 잘리므로 잘린 판 밖으로 나가지 않는다.
+        if (p.CellU > 1e-9 && p.CellV > 1e-9)
+        {
+            minU = p.PocketU - p.CellU / 2; maxU = p.PocketU + p.CellU / 2;
+            minV = p.PocketV - p.CellV / 2; maxV = p.PocketV + p.CellV / 2;
+        }
         double bw = maxU - minU, bh = maxV - minV;
         // 너무 작은 면은 무늬를 넣지 않는다. **빈 목록**을 돌려준다 —
         //   반환 형식을 Solid3d에서 List<Solid3d>로 바꿀 때(돌 개별 압출, 0805) 여기만 `return null`로 남아
@@ -668,7 +845,12 @@ public static class WallPanelDwg
             {
                 if (ro is not Region r) continue;
                 Solid3d one = null;
-                try { one = new Solid3d(); one.Extrude(r, Relief, 0); }   // 로컬 +Z(부지쪽)로 돌출
+                // ★[JACK 0820] 두께는 4배, 앞으로 나오는 양은 그대로 — 늘어난 만큼은 벽 속으로 넣는다.
+                try
+                {
+                    one = new Solid3d(); one.Extrude(r, PadThick, 0);
+                    one.TransformBy(Matrix3d.Displacement(new Vector3d(0, 0, -(PadThick - Relief))));
+                }
                 catch { try { one?.Dispose(); } catch { } one = null; padStoneFail++; }
                 finally { r.Dispose(); }
                 if (one == null) continue;

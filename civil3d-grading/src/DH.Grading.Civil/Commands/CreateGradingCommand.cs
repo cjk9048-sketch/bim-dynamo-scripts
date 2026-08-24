@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.ApplicationServices;
+﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Runtime;
@@ -1422,6 +1422,13 @@ public sealed class CreateGradingCommand
             MountainTerrace = s.MountainTerrace,
             TerraceInterval = s.TerraceInterval,
             TerraceWidth = s.TerraceWidth,
+            // ★★★[JACK 0820 '단높이를 2m로 바꿔도 5m로 쳐져'] **여기서 규칙이 버려지고 있었다.**
+            //   BuildParams는 마지막에 GradingParams를 <b>필드별로 새로 만들어</b> 돌려준다.
+            //   단높이 규칙을 이 목록에 안 넣으면, 앞에서 아무리 잘 전달해도 <b>여기서 조용히 사라진다</b>
+            //   (로그: "규칙 없음"). 값이 안 들어간 게 아니라 <b>중간에서 떨어뜨린</b> 것이었다.
+            //   ※필드별 복사는 새 필드가 생길 때마다 이렇게 샌다 — 새 필드를 추가하면 이 목록도 같이 봐야 한다.
+            CutBenchSteps = new System.Collections.Generic.List<(int, double)>(s.CutBenchSteps),
+            FillBenchSteps = new System.Collections.Generic.List<(int, double)>(s.FillBenchSteps),
         };
     }
 }

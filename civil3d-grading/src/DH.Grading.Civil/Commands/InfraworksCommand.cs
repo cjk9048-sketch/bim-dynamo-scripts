@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.ApplicationServices;
+﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Runtime;
@@ -188,6 +188,8 @@ public sealed class InfraworksCommand
             var quoinAll = new System.Collections.Generic.List<WallPanels.Quoin>();
             // ★[JACK 0807] 코너 전용 판넬 — 방향(절/성토)마다 모아 한 번에 넘긴다.
             var cornerUnitAll = new System.Collections.Generic.List<WallBand.CornerUnit>();
+            var massAll = new System.Collections.Generic.List<WallBand.WallMass>();   // ★[0819] 옹벽 매스
+            var faceAll = new System.Collections.Generic.List<WallPanels.Panel>();   // ★[0820] 표면 마감 판(무늬·앵커 포함)
             // [자가진단 0805] 로그만 보고 옹벽 이상을 판정하기 위한 누적값.
             int panelGenTotal = 0;
             var wallWarn = new System.Collections.Generic.List<string>();
@@ -278,7 +280,9 @@ public sealed class InfraworksCommand
                     {
                         var (tRuns, tIdx, tDiag) = WallTee.GenerateAuto(
                             // [절성토 분리 0803] '1단 안에서 끝나는가' 판정 기준은 이 방향(up)의 단높이여야 한다.
-                            bundle.Boundary, zones!, regionSampler, up, bundle.Params.BenchHeightOf(up),
+                            // ★[JACK 0820] 역T는 '1단 안에서 끝나는가'를 보는 것이라 **1단의 단높이**를 써야 한다 —
+                            //   단높이 규칙이 있으면 전역값이 아니라 그 단의 값이다(BenchHeightOf → BenchHeightAt).
+                            bundle.Boundary, zones!, regionSampler, up, bundle.Params.BenchHeightAt(up, 0),
                             bundle.Params.MinSlope);
                         teeAll.AddRange(MaskRuns(tRuns, laterMask));   // [다중 구역 0804] 뒤 구역이 덮은 자리 제외
                         foreach (var ix in tIdx) teeIdx.Add(ix);
@@ -365,7 +369,7 @@ public sealed class InfraworksCommand
                                        bundle.Params.MinSlope, System.Math.Max(slopeN, bundle.Params.MinSlope)),
                     };
                     var (tR, tI, tD) = WallTee.GenerateAuto(bundle.Boundary, synth, regionSampler, up,
-                        bundle.Params.BenchHeightOf(up), bundle.Params.MinSlope);
+                        bundle.Params.BenchHeightAt(up, 0), bundle.Params.MinSlope);   // ★[0820] 1단의 단높이
                     if (tI.Count > 0) { teeAll.AddRange(MaskRuns(tR, laterMask)); fullTee = true; }   // [다중 구역 0804]
                     log.AppendLine($"{rPre}역T_{label}(전체 옹벽): " +
                         (fullTee ? "1단 순수 — 역T 생성" : $"1단 아님 — {(up ? "앵커판넬" : "보강토")} 자동 대체") +
@@ -404,6 +408,7 @@ public sealed class InfraworksCommand
                             var tiles = new System.Collections.Generic.List<WallBand.Tile>();
                             var bandDiag = new System.Text.StringBuilder();
                             WallBand.ResetTotals();          // [0806 중간-4] 첫 줄만이 아니라 전 줄을 센다
+                            WallBand.MassOnly = GradingSettings.WallMassOnly;   // ★[JACK 0819] 통짜 스윕 매스
                             // [JACK 0806→0807] 확인용 옹벽선 레이어 — 기본 끔(GradingSettings.WallLineLayer).
                             //   문제를 찾는 데 결정적이었지만 다 고쳤으므로 도면에는 객체만 낸다.
                             if (GradingSettings.WallLineLayer) wallLineAll.AddRange(storedRuns);
@@ -455,6 +460,27 @@ public sealed class InfraworksCommand
                             //   옛 경로(WallPanels.LastQuoins)에만 있어 새 경로에서는 항상 0개였다(0805 감사).
                             cornerUnitAll.AddRange(laterMask == null ? WallBand.LastCornerUnits
                                 : WallBand.LastCornerUnits.Where(u => u.Bot.Count > 0 && !laterMask.Contains(u.Bot[0].X, u.Bot[0].Y)));
+                            massAll.AddRange(laterMask == null ? WallBand.LastMasses
+                                : WallBand.LastMasses.Where(m => m.Sections.Count > 0 && m.Sections[0].Count > 0
+                                    && !laterMask.Contains(m.Sections[0][0].X, m.Sections[0][0].Y)));
+                            // ★[JACK 0820] 매스 겉에 1.5m 격자 판을 얹는다(직선부만).
+                            WallBand.BuildFacePanels();
+                            // ★★[검토 중간9] **도면에 나가는 목록에 마스크를 씌운다.**
+                            //   종전엔 faceAll에만 마스크를 씌우고(로그용) 실제로 그려지는 panels에는 안 씌웠다 —
+                            //   다중 구역에서 뒤 구역이 지운 자리에 <b>매스 없이 표면 판만</b> 남는다.
+                            //   그리고 기준점을 f.Center로 잡으면 안 된다: 앵커가 없는 판(잘린 판)은
+                            //   Center가 (0,0,0)이라 **전부 원점에서** 마스크를 물어보게 된다 —
+                            //   판의 첫 점(Poly[0])은 언제나 실제 자리에 있다.
+                            var faceKept = laterMask == null
+                                ? new System.Collections.Generic.List<WallPanels.Panel>(WallBand.LastFacePanels)
+                                : WallBand.LastFacePanels
+                                    .Where(f => f.Poly.Count > 0 && !laterMask.Contains(f.Poly[0].X, f.Poly[0].Y))
+                                    .ToList();
+                            faceAll.AddRange(faceKept);
+                            // ★[JACK 0820] 표면 마감은 **기존 판넬 경로**를 그대로 탄다 — 무늬·도넛·앵커·정착판이 붙는다.
+                            panels.AddRange(faceKept);
+                            if (WallBand.LastFaceDiag.Length > 0)
+                                log.AppendLine($"{rPre}표면 마감_{label}: {WallBand.LastFaceDiag}");
                             quoinAll.AddRange(laterMask == null ? WallBand.LastQuoins
                                 : WallBand.LastQuoins.Where(q => !laterMask.Contains(q.Toe.X, q.Toe.Y)));
                             // ★[0806 JACK '길게 누락됨'] 구멍이 **줄 안**이 아니라 **줄과 줄 사이**일 수 있다.
@@ -582,14 +608,17 @@ public sealed class InfraworksCommand
             prog.Stage("옹벽 3D");
             var allPanels = panelSets.SelectMany(s => s.Panels).ToList();
             var allConcrete = concreteSets.SelectMany(s => s.Panels).ToList();
-            if (wallSets.Count > 0 || allPanels.Count > 0 || allConcrete.Count > 0 || teeAll.Count > 0)
+            // ★[JACK 0819] 코너유닛/필러만 있고 판넬이 0장인 경우(통짜 스윕 매스)에도 내보내야 한다 —
+            //   종전 조건은 판넬을 안 만들면 **DWG 자체를 건너뛰어** 벽이 통째로 사라진다.
+            if (wallSets.Count > 0 || allPanels.Count > 0 || allConcrete.Count > 0 || teeAll.Count > 0
+                || cornerUnitAll.Count > 0 || quoinAll.Count > 0 || massAll.Count > 0)
             {
                 string dwgPath = System.IO.Path.Combine(folder, GradingSettings.InfraWallDwg);
                 try
                 {
                     var (nb, nc, np, na, ncp, nt) = WallDwg.Export(dwgPath, wallSets, allPanels, allConcrete,
                         GradingSettings.WallBlockW, GradingSettings.WallBlockD, GradingSettings.WallBlockH,
-                        GradingSettings.WallCapD, GradingSettings.WallCapT, quoinAll, teeAll, wallLineAll, cornerUnitAll);
+                        GradingSettings.WallCapD, GradingSettings.WallCapT, quoinAll, teeAll, wallLineAll, cornerUnitAll, massAll);
                     // ★[JACK 0807 결정] 깨진솔리드 전수검사(6초)를 줄일지는 **몇 번 더 세어 보고** 정한다.
                     //   그러려면 0일 때도 찍혀야 한다 — 종전엔 0이면 아예 안 찍혀서 '0이 몇 번 연속인지'를
                     //   셀 수가 없었다. 세려고 만든 계수기가 셀 수 없으면 그건 계수기가 아니다.
@@ -600,6 +629,15 @@ public sealed class InfraworksCommand
                         (WallPanelDwg.nFail > 0
                             ? $" · ⚠판 만들기 실패 {WallPanelDwg.nFail}장(앵커·정착판도 함께 생략) — 첫 사유: {WallPanelDwg.firstFail}"
                             : ""));
+                    if (WallPanelDwg.nMass > 0 || massAll.Count > 0)
+                        log.AppendLine($"  ★옹벽 매스 {WallPanelDwg.nMass}/{massAll.Count}개(줄 하나 = 솔리드 하나 · 단면 여러 장을 한 번에 통과)" +
+                                       $" · 솔리드 {WallPanelDwg.massSolid}/{WallPanelDwg.nMass}개" +
+                                       (WallPanelDwg.massWound > 0 ? $" · 면 감기 되돌림 {WallPanelDwg.massWound}개(옹벽선 도는 방향이 반대인 줄)" : "") +
+                                       (WallPanelDwg.massDetail.Length > 0 ? $" · {WallPanelDwg.massDetail}" : "") +
+                                       (WallPanelDwg.massFail > 0
+                                            ? $" · ⚠실패 {WallPanelDwg.massFail}개 — 사유: {WallPanelDwg.massFirstFail ?? "(안 남음)"}" : ""));
+                    if (faceAll.Count > 0)
+                        log.AppendLine($"  ★표면 마감 {faceAll.Count}판(몸통 없이 무늬·도넛·앵커·정착판만 — 매스가 곧 판넬)");
                     if (WallPanelDwg.nCornerUnit > 0 || cornerUnitAll.Count > 0)
                         log.AppendLine($"  코너 전용 판넬 {WallPanelDwg.nCornerUnit}/{cornerUnitAll.Count}개(각진부 마감 — 양옆 판넬이 물러난 자리를 감싼다)");
                     if (teeAll.Count > 0 && WallTeeDwg.LastDiag.Length > 0)
@@ -610,10 +648,14 @@ public sealed class InfraworksCommand
                     // ── [옹벽 자가진단 0805] 로그 이 블록만 보면 정상/이상이 갈린다(JACK 요청) ──
                     if (WallPanelDwg.nFail > 0)
                         wallWarn.Add($"판 만들기 실패 {WallPanelDwg.nFail}장(앵커·정착판도 함께 생략) — 첫 사유: {WallPanelDwg.firstFail}");
-                    if (panelGenTotal != np)
-                        wallWarn.Add($"생성 {panelGenTotal}장 ≠ 저장 {np}장 (차이 {panelGenTotal - np}장 — 압출 실패 또는 깨진 솔리드)");
-                    if (na > np)
-                        wallWarn.Add($"앵커 {na}개 > 판넬 {np}장 — 판넬 없는 자리에 앵커봉만 남음");
+                    // ★[JACK 0820] '마감만' 판(Overlay)은 **몸통을 안 만드는 것이 정상**이다 — 매스가 곧 판넬이다.
+                    //   빼지 않으면 정상 동작이 매번 '⚠이상 2건'으로 찍혀 **진짜 이상이 그 속에 묻힌다**.
+                    //   (실측: '생성 236 ≠ 저장 0' · '앵커 188 > 판넬 0' 둘 다 오탐이었다.)
+                    int bodyGen = panelGenTotal - WallPanelDwg.nOverlay;
+                    if (bodyGen != np)
+                        wallWarn.Add($"생성 {bodyGen}장 ≠ 저장 {np}장 (차이 {bodyGen - np}장 — 압출 실패 또는 깨진 솔리드)");
+                    if (na > np + WallPanelDwg.nOverlay)
+                        wallWarn.Add($"앵커 {na}개 > 판넬 {np + WallPanelDwg.nOverlay}장 — 판넬 없는 자리에 앵커봉만 남음");
                     // [0805 JACK '이상한 객체가 떠있음'] 패널 무리에서 멀리 떨어진 객체를 종류·좌표로 지목.
                     if (WallPanelDwg.strayN > 0)
                         wallWarn.Add($"패널 경계상자 밖 객체 {WallPanelDwg.strayN}개 — 첫 사례: {WallPanelDwg.strayFirst}");

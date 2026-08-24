@@ -1,4 +1,4 @@
-using DH.Grading.Core;
+﻿using DH.Grading.Core;
 
 namespace DH.Grading.Civil;
 
@@ -27,7 +27,7 @@ public static class GradingSettings
     /// 이력은 설치본 확인에 쓰이므로 DLL에는 남기되, <b>출력은 절대 하지 않는다.</b>
     /// </para>
     /// ★[v32.20] 새 버전을 올릴 때 갱신할 곳은 <b>이 줄 하나</b>다 — 이력은 <c>작업과정.md</c>에 쓴다.</summary>
-    public const string Version = "v32.59 (2026-08-19)";
+    public const string Version = "v33.0 (2026-08-20)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -59,8 +59,17 @@ public static class GradingSettings
     public static double VertexSpacing = 2.0;  // 경계 둘레 샘플 간격 (m)
     public static double MinSlope = 0.05;      // 비탈 최소 구배 n — 0.05 하한(JACK: 그 아래는 Civil3D TIN 오류 방지)
     public static double MinFaceRun = 0.005;   // 비탈 최소 수평폭 절대 바닥 (m) — 안전장치
+    /// <summary>★[JACK 0819] 옹벽을 판넬 배열 대신 <b>통짜 스윕 매스</b>로 만든다(무늬 없음).
+    /// 기본설계에서는 수량이 필요 없고 "패널식 옹벽으로 보이면 된다"가 목적이라, 판넬 배치가
+    /// 붙들고 있던 코너/쐐기/폭 문제를 통째로 건너뛴다. 자세한 근거는 <c>WallBand.MassOnly</c>.</summary>
+    public static bool WallMassOnly = true;
     public static bool MiterConvex = true;     // 사면형상 — true=직각(기본, 볼록 모서리 마이터), false=라운드. 재시작 보존은 Load/SaveUserPrefs
     public static double MiterLimit = 2.0;     // 직각 모서리 최대 연장 비율 — 넘으면 라운드 폴백
+
+    /// <summary>★[JACK 0820] 단높이 변경 규칙(그 단부터, 단높이) — 방향별. <see cref="GradingParams.CutBenchSteps"/> 참조.
+    /// <para>변환 명령이 여기에 쌓고, 재생성이 <c>ToParams()</c>로 넘긴다. 번들에도 저장된다(v10).</para></summary>
+    public static System.Collections.Generic.List<(int FromBench, double H)> CutBenchSteps = new();
+    public static System.Collections.Generic.List<(int FromBench, double H)> FillBenchSteps = new();
     public static bool MountainTerrace = false;     // 계단식 산지 적용(산지전용허가법) — 수직 누적 15m마다 대소단
     public static double TerraceInterval = 15.0;    // 대소단 수직 간격 (m) — 법정 15m
     public static double TerraceWidth = 15.0;       // 대소단 폭 (m) — 법정 15m
@@ -270,22 +279,10 @@ public static class GradingSettings
     public static (double T0, double T1)? PickInterval(
         System.Collections.Generic.IReadOnlyList<Point3> pts,
         System.Collections.Generic.IReadOnlyList<Point3> boundary, double[] cum)
-    {
-        if (pts == null || pts.Count == 0 || boundary == null || boundary.Count < 3) return null;
-        double total = cum[cum.Length - 1];
-        var ts = new System.Collections.Generic.List<double>(pts.Count);
-        foreach (var q in pts) ts.Add(GradingGeometry.ParamAt(boundary, cum, q.X, q.Y));
-        ts.Sort();
-        if (ts.Count == 1) return (ts[0], ts[0]);
-        double bestGap = -1; int gi = 0;
-        for (int i = 0; i < ts.Count; i++)
-        {
-            double a = ts[i];
-            double b = i + 1 == ts.Count ? ts[0] + total : ts[i + 1];
-            if (b - a > bestGap) { bestGap = b - a; gi = i; }
-        }
-        return (ts[(gi + 1) % ts.Count], ts[gi]);
-    }
+        // ★[JACK 0820] 본체는 Core로 옮겼다(시험 가능하게). 최소 폭은 둘레의 2% —
+        //   바깥 단 조각이 코너 하나로 투영돼 길이 0이 되면 Flatten이 구간을 버려 변환이 사라진다.
+        => GradingGeometry.PickInterval(pts, boundary, cum,
+               cum != null && cum.Length > 0 ? cum[cum.Length - 1] * 0.02 : 0.0);
 
     /// <summary>[§75] 두 호길이 구간(랩 가능)이 겹치는가.</summary>
     public static bool IntervalsOverlap(double a0, double a1, double b0, double b1)
@@ -438,6 +435,10 @@ public static class GradingSettings
         MinFaceRun = p.MinFaceRun;
         MiterConvex = p.MiterConvex;
         MiterLimit = p.MiterLimit;
+        // ★[JACK 0820] 단높이 변경 규칙도 복원한다 — 안 하면 '구간만 바꿔 다시 만들기'가
+        //   단높이를 전역값으로 되돌려 버린다(v16.9 리뷰가 잡은 그 종류의 결함).
+        CutBenchSteps = new System.Collections.Generic.List<(int, double)>(p.CutBenchSteps);
+        FillBenchSteps = new System.Collections.Generic.List<(int, double)>(p.FillBenchSteps);
         MountainTerrace = p.MountainTerrace;
         TerraceInterval = p.TerraceInterval;
         TerraceWidth = p.TerraceWidth;
@@ -503,5 +504,9 @@ public static class GradingSettings
         MountainTerrace = MountainTerrace,
         TerraceInterval = TerraceInterval,
         TerraceWidth = TerraceWidth,
+        // ★[JACK 0820] 단높이 변경 규칙 — 목록은 **복사해서** 넘긴다. 참조를 넘기면 재생성 때
+        //   Params와 Settings가 같은 목록을 가리켜, 한쪽을 지우면 다른 쪽도 조용히 비어 버린다.
+        CutBenchSteps = new System.Collections.Generic.List<(int, double)>(CutBenchSteps),
+        FillBenchSteps = new System.Collections.Generic.List<(int, double)>(FillBenchSteps),
     };
 }

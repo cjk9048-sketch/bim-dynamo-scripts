@@ -1,4 +1,4 @@
-using System.Linq;
+﻿using System.Linq;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.Colors;
 using Autodesk.AutoCAD.DatabaseServices;
@@ -12,11 +12,13 @@ namespace DH.Grading.Civil.Commands;
 /// [변환 공통 0804 — JACK] 옹벽 변환(DHWALL)·사면 변환(DHSLOPE)의 공통 흐름.
 /// 규칙(JACK 확정):
 ///  · **1회 실행 = 1개만 바뀐다.** 선을 연달아 눌러도 마지막에 누른 것만 선택된다.
-///  · Enter(또는 스페이스)를 치면 제원을 순서대로 묻는다 —
-///      옹벽: 소단 길이                 (구배는 수직 1:0.05 고정)
-///      사면: 사면 경사 → 소단 길이
-///    ※ 단높이는 묻지 않는다(JACK 0804 — B안). 구간별 단높이는 링 구조상 표현이 안 되고,
-///      묻기만 하고 안 먹으면 오해를 부른다 — 단높이는 정지옵션에서 방향별로 정한다.
+///  · 제원은 <b>프롬프트 키워드</b>로 바꾸고 Enter를 치면 그대로 적용된다(JACK 0820) —
+///      옹벽: 단높이(H) · 소단길이(T)              (구배는 수직 1:0.05 고정)
+///      사면: 단높이(H) · 사면구배(R) · 소단길이(T)
+///    기본값 = **최초 정지옵션에서 준 값**(클릭한 방향의 값을 따라간다 — JACK 0820)
+///    ※ 단높이는 <b>구간이 아니라 방향(절토/성토) 전체</b>에 적용된다 —
+///      링은 같은 표고의 등고선이라 둘레의 일부만 단높이를 바꿀 수 없다(v16.9).
+///      층 전체를 바꾸는 것은 링마다 표고가 여전히 하나라 안전하다(JACK 0820).
 ///  · 입력값은 **클릭한 단부터 바깥 끝까지** 적용된다. 여러 번 실행하면 규칙이 쌓여
 ///    '아래는 급하게 · 위는 완만하게'가 된다.
 /// 두 명령은 묻는 항목만 다르고 나머지(선 작도·선택·구간 병합·재생성)는 전부 같다.
@@ -24,6 +26,17 @@ namespace DH.Grading.Civil.Commands;
 internal static class ZoneEditCommon
 {
     private const short SelAci = 2;   // 선택 = 노랑(대상선 시안과 구분)
+
+    /// <summary>★[JACK 0820 '정지옵션과 변환은 연동되긴 해야 해'] 변환 기본값 = <b>지금 정지옵션에 있는 값</b>.
+    /// <para>고정 숫자도, 번들 저장값도 아니다 — 사용자가 정지옵션에서 방금 바꾼 값이 그대로 기본값이 된다.
+    /// 절토·성토는 단높이·소단폭·구배가 따로이므로(v16.6) <b>클릭한 방향</b>의 값을 따라간다.</para>
+    /// 단높이는 <b>그 단에 실제로 적용 중인 값</b>을 준다(규칙이 쌓여 있으면 그 값) —
+    /// "지금 몇 m인가"가 기본값이어야 바꿀지 말지를 판단할 수 있다.</summary>
+    private static (double H, double N, double W) DefaultsFor(bool up, int bench)
+    {
+        var p = GradingSettings.ToParams();
+        return (p.BenchHeightAt(up, bench), BaseSlopeOf(p, up), p.BenchWidthOf(up));
+    }
 
     /// <summary>취소 시 일반(무태그) 옹벽선 복원용 좌표 — 진입 때 레이어를 비우므로 종료 때 되돌린다.</summary>
     private static System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? _restoreLines;
@@ -42,6 +55,9 @@ internal static class ZoneEditCommon
         var groups = new System.Collections.Generic.Dictionary<(bool up, int gid, int bench),
             System.Collections.Generic.List<ObjectId>>();
         var lineArc = new System.Collections.Generic.Dictionary<(bool up, int gid, int bench), (double T0, double T1)>();
+        // ★[JACK 0820] 클릭한 선의 **실제 2D 길이**도 같이 들고 있는다 — 선은 긴데 구간이 0이면
+        //   '경계 투영이 무너졌다'는 뜻이라, 이 둘을 나란히 봐야 원인이 갈린다.
+        var lineLen = new System.Collections.Generic.Dictionary<(bool up, int gid, int bench), (double Len, int N)>();
         var wholeLoop = new System.Collections.Generic.HashSet<(bool up, int gid, int bench)>();
         (bool up, int gid, int bench)? pick = null;   // [1회 1개] 선택은 항상 최대 하나
         bool finishedByEnter = false;
@@ -125,6 +141,14 @@ internal static class ZoneEditCommon
 
                     // [리뷰 0803] 부지를 한 바퀴 도는 '닫힌 고리'는 최대간극 방식이 둘레 전체 비슷한 값을 준다 →
                     //   둘레 전체로 명시하고 안내한다(그 간극이 남아 엉뚱한 조각이 생기는 것도 막는다).
+                    double len2d = 0;
+                    for (int q = 1; q < pts.Count; q++)
+                    {
+                        double dx = pts[q].X - pts[q - 1].X, dy = pts[q].Y - pts[q - 1].Y;
+                        len2d += System.Math.Sqrt(dx * dx + dy * dy);
+                    }
+                    lineLen[key] = (len2d, pts.Count);
+
                     bool closed = pts.Count >= 3
                         && System.Math.Abs(pts[0].X - pts[pts.Count - 1].X) < 0.05
                         && System.Math.Abs(pts[0].Y - pts[pts.Count - 1].Y) < 0.05;
@@ -147,22 +171,73 @@ internal static class ZoneEditCommon
             }
             Log($"■ {cmdLabel} 시작 {System.DateTime.Now:HH:mm:ss} — 대상선 {madeIds.Count}개");
             // [JACK 0804] 멘트 간결화 — 안내는 한 줄로.
-            ed.WriteMessage($"\n[{cmdLabel}] 계단선을 클릭하고 Enter. (Esc=취소)");
+            ed.WriteMessage($"\n[{cmdLabel}] 계단선을 클릭하고 Enter. 제원은 " +
+                            (wallMode ? "단높이(H)·소단길이(T)" : "단높이(H)·사면구배(R)·소단길이(T)") +
+                            " 키를 눌러 바꿉니다. 전체해제(C). (Esc=취소)");
 
             PickGuard.Enter(doc, "DH-옹벽선");
 
+            // ★★[JACK 0820 'fillet처럼 옵션(O)를 하나 만들고'] 제원은 옵션에서 정하고, Enter는 적용만 한다.
+            //   종전엔 Enter 뒤에 제원을 <b>순서대로 물었다</b> — 무엇을 고르고 있는지 보이지 않는 상태에서
+            //   숫자를 세 번 받아야 했다. 옵션으로 빼면 <b>현재 값이 프롬프트에 늘 보이고</b>
+            //   바꿀 것만 바꾸면 된다(AutoCAD 명령들의 방식).
+            var d0 = DefaultsFor(true, 0);
+            double optH = d0.H, optW = d0.W, optN = d0.N;
+            bool setH = false, setN = false, setW = false;   // 사용자가 손댄 항목만 지킨다
+
             while (true)
             {
+                // ★★[JACK 0820 실측 '*유효하지 않은 선택*'] **프롬프트 문구에 대괄호를 쓰면 안 된다.**
+                //   AutoCAD는 문구 안의 <c>[...]</c>를 <b>자기 키워드 목록으로 읽는다</b> —
+                //   상태 표시에 대괄호를 쓰면 진짜 키워드 목록을 덮어써서 H를 쳐도 안 먹는다
+                //   (실측: "점을 예상하거나 또는 최종(L)/선택: 성토 1단]…"로 파싱이 깨졌다).
+                //   → 상태는 〈 〉로 감싼다. 대괄호는 AutoCAD가 키워드를 붙일 자리로 비워 둔다.
                 string cur = pick == null ? ""
-                    : $" [선택: {(pick.Value.up ? "절토" : "성토")} {pick.Value.bench + 1}단]";
-                var peo = new PromptEntityOptions($"\n계단선 클릭{cur} (Enter=적용)");
+                    : $" 〈선택 {(pick.Value.up ? "절토" : "성토")} {pick.Value.bench + 1}단〉";
+                string spec = wallMode
+                    ? $"〈단높이 {optH:0.##}m · 소단 {optW:0.##}m · 수직〉"
+                    : $"〈단높이 {optH:0.##}m · 구배 1:{optN:0.##} · 소단 {optW:0.##}m〉";
+                // ★★[JACK 0820] 제원은 **프롬프트에 바로 걸린 키워드**로 바꾼다(AutoCAD 명령들의 방식) —
+                //   옹벽: 단높이(H) · 소단길이(T)   /   사면: 단높이(H) · 사면구배(R) · 소단길이(T)
+                //   globalName을 'H'·'R'·'T'로 두어 그 글자만 쳐도 먹는다(StringResult가 globalName을 준다).
+                var peo = new PromptEntityOptions($"\n계단선 클릭{cur} {spec} (Enter=적용)");
                 peo.AllowNone = true;
-                peo.Keywords.Add("전체해제");
+                //   ※★[0820 실측] AutoCAD는 입력을 <b>localName의 앞글자</b>와 맞춘다.
+                //     "단높이(H)"처럼 H가 <b>맨 뒤</b>면 앞글자가 아니라 'H'를 쳐도 "유효하지 않은 선택"이 된다.
+                //     → <b>매칭용 이름(localName)은 글자 하나</b>로 두고, 한글은 <b>표시용(displayName)</b>에만 쓴다.
+                //     세 인자가 각각 다른 일을 한다: global=코드가 받는 값 · local=사용자가 치는 값 · display=화면.
+                peo.Keywords.Add("H", "H", "단높이(H)");
+                if (!wallMode) peo.Keywords.Add("R", "R", "사면구배(R)");
+                peo.Keywords.Add("T", "T", "소단길이(T)");
+                peo.Keywords.Add("C", "C", "전체해제(C)");
                 var per = ed.GetEntity(peo);
                 if (per.Status == PromptStatus.None) { finishedByEnter = true; break; }
                 if (per.Status == PromptStatus.Cancel) break;
                 if (per.Status == PromptStatus.Keyword)
                 {
+                    // 값 하나만 바꾸고 곧바로 선택 프롬프트로 돌아온다 — 취소해도 현재 값은 그대로 둔다.
+                    // ★[JACK 0820 '대문자로 표기되었지만 대문자나 소문자 다 먹어야 돼'] 대소문자를 안 가린다.
+                    //   AutoCAD 자체는 원래 안 가리지만, 비교를 대문자로 못 박아 두면 그 보장이 여기서 끊긴다.
+                    string kw = (per.StringResult ?? "").Trim().ToUpperInvariant();
+                    if (kw == "H")
+                    {
+                        var h2 = AskPositive(ed, "단높이 (m)", optH, 0.2, 15.0);
+                        if (h2 != null) { optH = h2.Value; setH = true; ed.WriteMessage($"\n → 단높이 {optH:0.##}m"); }
+                        continue;
+                    }
+                    if (kw == "R")
+                    {
+                        var n2 = AskPositive(ed, "사면 구배 1:n", optN, GradingSettings.MinSlope, 30.0);
+                        if (n2 != null) { optN = n2.Value; setN = true; ed.WriteMessage($"\n → 사면 구배 1:{optN:0.##}"); }
+                        continue;
+                    }
+                    if (kw == "T")
+                    {
+                        var w2 = AskPositive(ed, "소단 길이 (m)", optW, 0.0, 60.0);
+                        if (w2 != null) { optW = w2.Value; setW = true; ed.WriteMessage($"\n → 소단 길이 {optW:0.##}m"); }
+                        continue;
+                    }
+                    if (kw != "C") continue;                 // 모르는 키워드는 무시(프롬프트 유지)
                     clearAll = true; finishedByEnter = true;
                     ed.WriteMessage("\n → 전체 해제 — 순수 사면으로 재생성합니다.");
                     break;
@@ -202,6 +277,12 @@ internal static class ZoneEditCommon
                 else
                 {
                     pick = key; ColorGroup(key, true);
+                    // ★[JACK 0820] 안 손댄 항목은 **그 방향·그 단의 현재 값**으로 갱신한다 —
+                    //   절토·성토는 제원이 따로라(v16.6), 절토 값을 보여 주다 성토 선을 고르면 엉뚱한 값이 기본이 된다.
+                    var dk = DefaultsFor(pk.up, pk.bench);
+                    if (!setH) optH = dk.H;
+                    if (!setN) optN = dk.N;
+                    if (!setW) optW = dk.W;
                     ed.WriteMessage($"\n → {(pk.up ? "절토" : "성토")} {pk.bench + 1}단 선택");
                     if (wholeLoop.Contains(key))
                         ed.WriteMessage(" (한 바퀴 고리 — 둘레 전체 적용)");
@@ -209,26 +290,14 @@ internal static class ZoneEditCommon
                 tr.Commit();
             }
 
-            // ── 제원 입력(선을 지우기 전에 물어 어디를 골랐는지 보이게) ──
-            //   [B안 0804 — JACK] 단높이는 묻지 않는다. 구간별 단높이는 링 구조상 표현이 안 되고
-            //   (링 하나에 표고 하나 — SlopeZone.Rules 주석), 묻기만 하고 안 먹으면 오해를 부른다.
-            //   단높이는 정지옵션에서 방향별로 정한다.
-            //   [JACK 0804] 질문은 짧게 — 방향 접두어 없이 "사면 경사 1:n" · "소단 길이 (m)" 만.
-            double? askW = null, askN = null;
+            // ── 제원 = 옵션(O)에서 정해 둔 값. Enter는 적용만 한다(JACK 0820). ──
+            //   옹벽은 구배를 묻지 않는다 — 수직(최소구배) 고정이다.
+            double? askW = null, askN = null, askH = null;
             if (finishedByEnter && !clearAll && pick != null)
             {
-                bool up = pick.Value.up;
-                double defW = region!.Params.BenchWidthOf(up), defN = BaseSlopeOf(region.Params, up);
-
-                if (!wallMode)
-                {
-                    askN = AskPositive(ed, "사면 경사 1:n", defN, region.Params.MinSlope, 30.0);
-                    if (askN == null) { ed.WriteMessage($"\n[{cmdLabel}] 취소."); RestoreAndCleanup(db, madeIds); return; }
-                }
-                else askN = region.Params.MinSlope;   // 옹벽 = 수직 고정(구배는 묻지 않는다)
-
-                askW = AskPositive(ed, "소단 길이 (m)", defW, 0.0, 60.0);
-                if (askW == null) { ed.WriteMessage($"\n[{cmdLabel}] 취소."); RestoreAndCleanup(db, madeIds); return; }
+                askN = wallMode ? GradingSettings.MinSlope : optN;
+                askW = optW;
+                askH = optH;
             }
 
             RestoreAndCleanup(db, madeIds);
@@ -259,6 +328,18 @@ internal static class ZoneEditCommon
                     var nz = new SlopeZone { T0 = a.T0, T1 = a.T1 };
                     nz.Rules.Add((pick.Value.bench, askN!.Value, askW!.Value));
                     target.Add(nz);
+                    // ★★★[JACK 0820] **단높이는 구간이 아니라 방향 전체에 쌓는다.**
+                    //   구배·소단폭은 클릭한 선의 호길이 범위 안에만 적용되지만(위 Flatten),
+                    //   단높이는 그러면 안 된다 — 둘레의 일부만 단높이가 다르면 같은 링에 표고가 둘이 되어
+                    //   링을 이어 붙일 수 없다(v16.9가 '구간별 불가'라고 한 그 이유).
+                    //   층 전체를 바꾸면 링마다 표고는 여전히 하나라 안전하다.
+                    // ★★[JACK 0820 '정지옵션과 변환은 연동되긴 해야 해'] 규칙은 <b>정지옵션</b>에 쌓는다 —
+                    //   재생성이 정지옵션을 읽으므로 여기 넣어야 먹고, 다음 변환의 기본값도 이 값이 된다.
+                    var steps = up ? GradingSettings.CutBenchSteps : GradingSettings.FillBenchSteps;
+                    steps.Add((pick.Value.bench, askH!.Value));
+                    var norm = GradingSettings.ToParams(); norm.NormalizeBenchSteps();
+                    GradingSettings.CutBenchSteps = new System.Collections.Generic.List<(int, double)>(norm.CutBenchSteps);
+                    GradingSettings.FillBenchSteps = new System.Collections.Generic.List<(int, double)>(norm.FillBenchSteps);
                     // [스샷 버그 0804] 겹침은 합치지 않고 조각으로 가른다 — 새 규칙은 클릭한 선의 범위 '안'에만 남는다.
                     SlopeZone.Flatten(target, cumB![cumB.Length - 1]);
                 }
@@ -275,14 +356,57 @@ internal static class ZoneEditCommon
 
             // [리뷰 0803 — 치명] 재생성은 세션 설정을 읽는다. 재시작 후엔 기본값이라 '구간만 바꿔 다시 만들기'가
             //   전혀 다른 파라미터로 새로 만들기가 된다 → 이 구역의 저장값을 기준선으로 복원한 뒤 재생성.
-            GradingSettings.RestoreFrom(region!.Params);
+            // ★★★[JACK 0820 '정지옵션에서 바꾸고 변환에서 바꿔도 정지옵션이 무조건 처음 설정값 5로 됐다']
+            //   **세션 설정을 되돌리지 않는다.** 종전엔 여기서 <c>RestoreFrom(구역.Params)</c>로 덮었다 —
+            //   0803이 막으려던 것은 "Civil3D를 껐다 켠 뒤 기본값으로 새로 만들어지는 것"인데,
+            //   그건 이미 <c>SyncToDocument</c>가 <b>도면이 바뀔 때</b> 번들 값으로 복원해 막고 있다.
+            //   여기서 또 덮으면 <b>사용자가 방금 정지옵션에서 바꾼 값이 매번 지워진다</b>(JACK 실측: 5로 되돌아감).
+            //   → 정지옵션과 변환은 <b>연동</b>이다: 변환은 정지옵션 값을 기본값으로 쓰고, 바꾼 값을 거기에 쌓는다.
             GradingSettings.ZoneOverride = (newCut, newFill);
             string what = clearAll ? "전체 해제"
                 : $"{(pick!.Value.up ? "절토" : "성토")} {pick.Value.bench + 1}단부터 " +
                   (wallMode ? $"수직 옹벽 · 소단 {askW:0.##}m"
-                            : $"경사 1:{askN:0.###} · 소단 {askW:0.##}m");
+                            : $"경사 1:{askN:0.###} · 소단 {askW:0.##}m")
+                  // ★[JACK 0820 '단높이가 바꿔도 안 바껴'] **적용한 단높이를 눈에 보이게 적는다.**
+                  //   종전 메시지엔 단높이가 없어, 값이 안 들어간 건지 들어갔는데 안 먹는 건지 못 갈랐다.
+                  + $" · 단높이 {askH:0.##}m";
             ed.WriteMessage($"\n[{cmdLabel}] {what} 적용 — 정지면 재생성 중…");
+            // ★[JACK 0820] 단높이 규칙이 실제로 쌓혔는지 · 재생성이 그 값을 받는지 숫자로 남긴다.
+            static string StepsTxt(System.Collections.Generic.IReadOnlyList<(int FromBench, double H)> l)
+                => l.Count == 0 ? "없음" : string.Join(" ", l.Select(r => $"{r.FromBench + 1}단~{r.H:0.##}m"));
             Log($"■ {cmdLabel} 적용 — {what} · 절토구간 {newCut.Count} · 성토구간 {newFill.Count}");
+                        Log($"   단높이 규칙 — 정지옵션(재생성이 읽는 값): 절토[{StepsTxt(GradingSettings.CutBenchSteps)}] 성토[{StepsTxt(GradingSettings.FillBenchSteps)}]" +
+                $" · 전역 단높이 절토 {GradingSettings.CutBenchHeight:0.##}m 성토 {GradingSettings.FillBenchHeight:0.##}m");
+            // ★★[JACK 0820 '중간에서 하면 잘 변환되는데 사면 맨 아랫단은 안 바뀌네'] **클릭한 선이 어느 구간으로 잡혔는가.**
+            //   기하 엔진은 양방향 맨 아랫단이 모두 정상임을 하니스로 확인했다(S43·S45 — 링도 좁아지고
+            //   옹벽선도 그 단에 선다). 그러면 남는 자리는 '클릭한 선 → 호길이 구간' 변환뿐이다:
+            //   바깥 단일수록 링이 경계에서 멀어(성토 맨 아랫단 실측 43m) 그 점들을 경계에 투영하면
+            //   코너에 뭉쳐 **구간이 실제 선보다 훨씬 좁게 잡힐 수 있다**. 그러면 옹벽은 그 좁은 자리에만
+            //   서고 눈에는 '안 바뀐다'로 보인다. 추측 대신 숫자로 가른다.
+            if (!clearAll && pick != null && cumB != null)
+            {
+                double tot = cumB[cumB.Length - 1];
+                var pa = lineArc[pick.Value];
+                double segLen = pa.T1 >= pa.T0 ? pa.T1 - pa.T0 : pa.T1 + tot - pa.T0;
+                Log($"   클릭한 선 — {(pick.Value.up ? "절토" : "성토")} {pick.Value.bench + 1}단 · " +
+                    $"호길이 [{pa.T0:F1}..{pa.T1:F1}] = {segLen:F1}m / 둘레 {tot:F1}m " +
+                    $"({segLen / System.Math.Max(tot, 1e-9) * 100:F0}%)" +
+                    (wholeLoop.Contains(pick.Value) ? " · 닫힌 고리(둘레 전체)" : "") +
+                    (lineLen.TryGetValue(pick.Value, out var ll)
+                        ? $" · 선 길이 {ll.Len:F1}m({ll.N}점)" +
+                          (segLen < 0.5 && ll.Len > 2.0 ? "  ⚠경계 투영이 무너졌다(구간 사라질 뾻했음)" : "")
+                        : ""));
+                var zs = pick.Value.up ? newCut : newFill;
+                for (int zi = 0; zi < zs.Count; zi++)
+                {
+                    var z = zs[zi];
+                    string rt = z.Rules.Count == 0 ? "없음" : string.Join(" ", z.Rules.Select(r =>
+                        $"{r.FromBench + 1}단~1:{r.Slope:0.###}" +
+                        (r.Slope <= GradingSettings.MinSlope + 1e-9 ? "(수직)" : "")));
+                    double zl = z.T1 >= z.T0 ? z.T1 - z.T0 : z.T1 + tot - z.T0;
+                    Log($"   구간#{zi + 1} [{z.T0:F1}..{z.T1:F1}] {zl:F1}m — {rt}");
+                }
+            }
             CreateGradingCommand.DoGrade(doc, planId, groundId, GradeMode.RerunLast);
         }
         catch (System.Exception ex)
@@ -352,7 +476,9 @@ internal static class ZoneEditCommon
 
     private static void Log(string line)
     {
-        try { DiagLog.Append("\n" + line); } catch { }
+        // ★[JACK 0820] Carry로 남긴다 — 이 줄들을 쓴 직후 DoGrade가 로그를 새로 쓰기 때문에
+        //   그냥 Append하면 **재생성 머리말과 함께 지워진다**(0820 실측).
+        try { DiagLog.AppendCarry("\n" + line); } catch { }
     }
 
     private static bool TryReadPick(Transaction tr, ObjectId id, string app,

@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.DatabaseServices;
+﻿using Autodesk.AutoCAD.DatabaseServices;
 using DH.Grading.Core;
 
 namespace DH.Grading.Civil;
@@ -126,7 +126,8 @@ public static class GradingBundleStore
     // v7: 구간이 '이 단부터 이 구배' 규칙 목록을 가짐(옹벽=구배 0.05인 규칙). 옛 구간은 SlopeZone.Wall로 무손실 변환.
     // v8: 실제 주입 클립링(Cut/FillClipRing) — 다중 구역 발자국 마스크 정본(GroundHandle 뒤에 추가).
     // v9: 옹벽선 정본(Cut/FillWallRuns) — 정지면 생성 때 확정 저장, 내보내기는 읽기만(옹벽선_재설계.md).
-    public const int Version = 9;
+    /// <summary>v10 = 단높이 변경 규칙(CutBenchSteps/FillBenchSteps) 추가 — JACK 0820.</summary>
+    public const int Version = 10;
 
     /// <summary>[v4] 구역 전체 저장 — 헤더(서명·버전·구역수) 뒤에 구역 본문을 차례로.</summary>
     public static void SaveAll(Database db, Transaction tr, IReadOnlyList<GradingBundle> regions)
@@ -230,7 +231,8 @@ public static class GradingBundleStore
     }
 
     private static GradingBundle ReadRegion(TypedValue[] arr, ref int i, bool withGroundHandle, bool withZoneTo,
-                                            bool splitBench, bool withRules, bool withClip, bool withRuns)
+                                            bool splitBench, bool withRules, bool withClip, bool withRuns,
+                                            bool withSteps = false)
     {
         var b = new GradingBundle { PlanHandle = Str(arr, ref i), VertexCount = I32(arr, ref i) };
         b.CentroidX = Dbl(arr, ref i); b.CentroidY = Dbl(arr, ref i);
@@ -238,7 +240,7 @@ public static class GradingBundleStore
         b.BboxMaxX = Dbl(arr, ref i); b.BboxMaxY = Dbl(arr, ref i);
         b.Perimeter = Dbl(arr, ref i); b.Diagonal = Dbl(arr, ref i);
         b.Boundary = ReadPoints(arr, ref i) ?? new List<Point3>();
-        b.Params = ReadParams(arr, ref i, splitBench);
+        b.Params = ReadParams(arr, ref i, splitBench, withSteps);
         b.CutHasSlope = I32(arr, ref i) != 0;
         b.FillHasSlope = I32(arr, ref i) != 0;
         b.CutFinalRing = ReadPoints(arr, ref i);
@@ -295,7 +297,7 @@ public static class GradingBundleStore
                 var l = new List<GradingBundle>(n);
                 for (int k = 0; k < n; k++)
                     l.Add(ReadRegion(arr, ref i, withGroundHandle: true, withZoneTo: ver >= 5,
-                                     splitBench: ver >= 6, withRules: ver >= 7, withClip: ver >= 8,
+                                     splitBench: ver >= 6, withRules: ver >= 7, withClip: ver >= 8, withSteps: ver >= 10,
                                      withRuns: ver >= 9));
                 return l;
             }
@@ -428,11 +430,19 @@ public static class GradingBundleStore
         I(p.MountainTerrace ? 1 : 0);
         D(p.TerraceInterval); D(p.TerraceWidth);
         D(p.MaxRise);   // v6
+        // ★[JACK 0820 · v10] 단높이 변경 규칙 — 개수 뒤에 (시작단, 높이) 쌍.
+        //   안 저장하면 도면을 다시 열 때 단높이가 전역값으로 되돌아간다(조용히 모양이 바뀐다).
+        void Steps(System.Collections.Generic.List<(int FromBench, double H)> list)
+        {
+            I(list.Count);
+            foreach (var r in list) { I(r.FromBench); D(r.H); }
+        }
+        Steps(p.CutBenchSteps); Steps(p.FillBenchSteps);
     }
 
     /// <summary>splitBench=true(v6)는 단높이·소단폭이 절토/성토 4필드, false(v5 이하)는 공용 2필드 —
     /// 옛 번들은 절토=성토=그 값으로 채운다(그때는 실제로 공용이었으므로 의미가 정확히 보존됨).</summary>
-    private static GradingParams ReadParams(TypedValue[] arr, ref int i, bool splitBench)
+    private static GradingParams ReadParams(TypedValue[] arr, ref int i, bool splitBench, bool withSteps = false)
     {
         double cutBenchH, fillBenchH, cutBenchW, fillBenchW;
         if (splitBench)
@@ -453,6 +463,17 @@ public static class GradingBundleStore
         bool mountainTerrace = I32(arr, ref i) != 0;
         double terraceInterval = Dbl(arr, ref i), terraceWidth = Dbl(arr, ref i);
         double maxRise = splitBench ? Dbl(arr, ref i) : 0;   // v6부터. 0=미지정 → 종전 식 폴백(옛 도면 결과 재현)
+        // ★[v10 0820] 단높이 변경 규칙 — 옛 번들엔 없다(빈 목록 = 전역 단높이 그대로, 옛 도면 결과 재현).
+        var cutSteps = new System.Collections.Generic.List<(int, double)>();
+        var fillSteps = new System.Collections.Generic.List<(int, double)>();
+        if (withSteps)
+        {
+            // ref 매개변수는 지역 함수 안에서 못 쓴다 — 두 번 펼쳐 쓴다(짧다).
+            int nc = I32(arr, ref i);
+            for (int k = 0; k < nc; k++) { int fb = I32(arr, ref i); double h = Dbl(arr, ref i); cutSteps.Add((fb, h)); }
+            int nf = I32(arr, ref i);
+            for (int k = 0; k < nf; k++) { int fb = I32(arr, ref i); double h = Dbl(arr, ref i); fillSteps.Add((fb, h)); }
+        }
         return new GradingParams
         {
             CutBenchHeight = cutBenchH, FillBenchHeight = fillBenchH,
@@ -462,6 +483,7 @@ public static class GradingBundleStore
             MinFaceRun = minFaceRun, MiterConvex = miterConvex, MiterLimit = miterLimit,
             MountainTerrace = mountainTerrace, TerraceInterval = terraceInterval, TerraceWidth = terraceWidth,
             MaxRise = maxRise,
+            CutBenchSteps = cutSteps, FillBenchSteps = fillSteps,
         };
     }
 
