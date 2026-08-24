@@ -1,4 +1,4 @@
-namespace DH.Grading.Core;
+﻿namespace DH.Grading.Core;
 
 /// <summary>[역T형 옹벽 — JACK 0730 확정] 역T는 사용자가 고르지 않는다:
 /// **계획폴리곤에 바로 붙어 서고(FromBench=0), 한 단 높이 안에서 원지반과 만나 그 위/아래 절성토가 없는
@@ -36,7 +36,14 @@ public static class WallTee
             if (z.Rules[0].Slope > minSlope + 1e-9)
             { sb.Append($"구간{zi + 1}: 1단 구배가 1:{z.Rules[0].Slope:0.###}(수직 아님) — 역T 아님 · "); continue; }
 
-            double t0 = z.T0, t1 = z.T1 >= z.T0 ? z.T1 : z.T1 + total;
+            // ★★[검토 0824 치명-3] **이 구간의 자로 읽는다.** T0/T1은 계획 폴리곤이 아니라
+            //   그 구간이 들고 다니는 기준 폴리곤(그 단의 링) 위의 값일 수 있다(0824 개편).
+            //   계획 폴리곤 호길이로 읽으면 둘레가 달라(178m vs 110m) 구간이 엉뚱한 변으로 감기고,
+            //   teeIdx가 그 구간을 '역T 처리됨'으로 표시해 정상 옹벽 생성까지 통째로 빠진다.
+            var zPoly = z.Ref ?? boundary;
+            var zCum = z.RefCum ?? cum;
+            double zTot = zCum[zCum.Length - 1];
+            double t0 = z.T0, t1 = z.T1 >= z.T0 ? z.T1 : z.T1 + zTot;
             double arc = t1 - t0;
             if (arc < 0.5) continue;
 

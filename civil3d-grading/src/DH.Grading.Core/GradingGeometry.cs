@@ -253,32 +253,67 @@ public static class GradingGeometry
         //   링 조립 = 사면 링의 '구간 밖' 조각들 + 수직 링의 '구간 안' 조각들을 param 순서로 이어붙임 —
         //   조각 자체는 NTS 오프셋 원본 그대로(근사·이동 없음 → 접힘 불가). 조각 사이 연결 점프선은
         //   AddRingBreakline(>2.5m 제외)이 브레이크라인에서 빼고 TIN 삼각화가 측벽을 채운다.
-        // ★[JACK 0824] 구간 객체를 그대로 들고 있는다 — 자(기준 폴리곤)가 구간마다 다를 수 있어
-        //   t0/t1 숫자만 떼어 오면 어느 자로 잰 값인지 알 수 없다.
-        List<(SlopeZone z, int fromBench, StepProfile wp)>? zprep = null;
+        // ★★★[검토 0824 심각-2] **프로파일은 "구간별"이 아니라 "구간 조합별"이다.**
+        //   종전엔 구간마다 프로파일 하나를 만들고, 그 구간이 어느 앞 구간 위에 놓이는지를
+        //   <b>대표점 하나</b>로 정했다. 구간이 앞 구간의 경계를 가로지르면 절반은 틀린 프로파일을 쓴다
+        //   (검토가 든 시나리오: 남쪽만 옹벽인데 사면 구간이 남·서에 걸치면 한쪽 링이 100m 튄다).
+        //   → 점마다 <b>어느 구간들이 덮는가</b>를 비트마스크로 구하고, 그 조합의 합성 규칙으로
+        //     프로파일을 만들어 캐시한다. 실제로 생기는 조합은 두셋뿐이라 값이 싸다.
+        List<SlopeZone>? zlist = null;
+        Dictionary<long, StepProfile>? zcache = null;
         double[]? cumB = null;
         if (wallZones != null && wallZones.Count > 0)
         {
             cumB = CumLen2D(shape);
-            zprep = new();
+            zlist = new List<SlopeZone>();
+            zcache = new Dictionary<long, StepProfile>();
             foreach (var z in wallZones)
             {
                 if (z == null || z.Rules.Count == 0) continue;
-                // ★★★[JACK 0824] 이 구간이 이기는 자리의 **합성된** 규칙으로 프로파일을 만든다.
-                //   구간 하나만 떼어 만들면 그 아래 단(다른 구간이 정한 옹벽 등)이 전역 구배로 깔려
-                //   그 단부터 링이 통째로 어긋난다.
-                int zi0 = 0;
-                for (int q0 = 0; q0 < wallZones.Count; q0++) if (ReferenceEquals(wallZones[q0], z)) { zi0 = q0; break; }
-                var comp = SlopeZone.ComposeUpTo(wallZones, zi0, shape, cumB);
-                var zc = new SlopeZone { T0 = z.T0, T1 = z.T1, Ref = z.Ref };
-                zc.Rules.AddRange(comp.Count > 0 ? comp : z.Rules);
-                zprep.Add((z, Math.Max(z.FirstBench, 0), StepProfile.Build(p, slope, benchH, benchW, up, zc)));
+                if (zlist.Count < 62) zlist.Add(z);          // 마스크가 long이라 62개까지
+                else dbg.AppendLine("  ⚠구간이 62개를 넘어 이 구간은 링 기하에 반영되지 않는다(규칙 판정에는 들어간다)");
                 var txt = new System.Text.StringBuilder();
                 foreach (var r in z.Rules)
                     txt.Append($"{r.FromBench + 1}단부터 1:{r.Slope:0.###}{(r.Slope <= p.MinSlope + 1e-9 ? "(수직)" : "")}" +
                                $"·소단{(r.BenchW >= 0 ? $"{r.BenchW:0.##}m" : "전역")}  ");
-                dbg.AppendLine($"  구간 호길이[{z.T0:F1}..{z.T1:F1}]m — {txt}");
+                dbg.AppendLine($"  구간 호길이[{z.T0:F1}..{z.T1:F1}]m — {txt}" +
+                               (z.Ref != null ? $" · 자=링({z.Ref.Count}점)" : " · 자=계획"));
             }
+        }
+
+        // 이 점을 덮는 구간들의 비트마스크 — 0이면 어느 구간도 안 덮는다(= 전역 프로파일).
+        long MaskAt(double x, double y)
+        {
+            if (zlist == null || cumB == null) return 0;
+            long m = 0;
+            for (int i = 0; i < zlist.Count; i++)
+                if (zlist[i].ContainsAt(x, y, shape, cumB)) m |= 1L << i;
+            return m;
+        }
+        // 그 조합의 합성 규칙으로 만든 프로파일(캐시) — 합성은 "나중 구간이 자기 시작단부터 대체".
+        StepProfile ProfOf(long mask)
+        {
+            if (mask == 0 || zlist == null || zcache == null) return profile;
+            if (zcache.TryGetValue(mask, out var got)) return got;
+            var acc = new List<(int FromBench, double Slope, double BenchW)>();
+            for (int i = 0; i < zlist.Count; i++)
+            {
+                if ((mask & (1L << i)) == 0) continue;
+                int zf = zlist[i].FirstBench;
+                acc.RemoveAll(r => r.FromBench >= zf);
+                acc.AddRange(zlist[i].Rules);
+            }
+            acc.Sort((a, b) => a.FromBench.CompareTo(b.FromBench));
+            StepProfile made;
+            if (acc.Count == 0) made = profile;
+            else
+            {
+                var zc = new SlopeZone();
+                zc.Rules.AddRange(acc);
+                made = StepProfile.Build(p, slope, benchH, benchW, up, zc);
+            }
+            zcache[mask] = made;
+            return made;
         }
 
         List<Point3>? MakeRingXY(double dist)
@@ -296,14 +331,19 @@ public static class GradingGeometry
         }
 
         // 링을 '분류함수(keep)를 만족하는 점들의 원형 연속 run'들로 쪼갬 — 각 run은 원본 순서 유지, 키=첫 점 param.
-        void CollectRuns(List<Point3> ring, Func<Point3, bool> keep, List<(double key, List<Point3> pts)> outRuns)
+        // ★★[검토 0824 심각-5] 조립 정렬축을 <b>인자로 받는다.</b>
+        //   종전엔 계획 폴리곤 투영을 정렬키로 썼는데, 바깥 단 링(127m 밖)의 점은 코너 부채꼴이
+        //   전부 코너 한 파라미터로 몰려 <b>여러 조각이 같은 키</b>를 갖는다 → 불안정 정렬이 순서를 뒤섞어
+        //   자기교차하는 링이 나온다. 같은 세대의 큰 링(w)을 축으로 쓰면 키가 균등하게 퍼진다.
+        void CollectRuns(List<Point3> ring, IReadOnlyList<Point3> keyPoly, double[] keyCum,
+                         double[] masks, double want, List<(double key, List<Point3> pts)> outRuns)
         {
             int n = ring.Count;
             if (n >= 2 && Math.Abs(ring[0].X - ring[n - 1].X) < 1e-9 && Math.Abs(ring[0].Y - ring[n - 1].Y) < 1e-9) n--;
             if (n < 2) return;
             var tv = new double[n]; var kv = new bool[n];
             // ★[JACK 0824] 유지 판정은 **점**으로 한다(구간마다 자가 다르다). tv는 조립 순서용 정렬키일 뿐이다.
-            for (int i = 0; i < n; i++) { tv[i] = ParamAt(shape, cumB!, ring[i].X, ring[i].Y); kv[i] = keep(ring[i]); }
+            for (int i = 0; i < n; i++) { tv[i] = ParamAt(keyPoly, keyCum, ring[i].X, ring[i].Y); kv[i] = Math.Abs(masks[i] - want) <= 1e-9; }
             int start = System.Array.IndexOf(kv, false);
             if (start < 0) { outRuns.Add((tv[0], ring.GetRange(0, n))); return; } // 전부 유지
             List<Point3>? cur = null; double curKey = 0;
@@ -321,54 +361,63 @@ public static class GradingGeometry
             var (dist, rise) = profile.Edges[e];
             var w = MakeRingXY(dist);
             if (w == null) continue;
-            if (zprep != null && cumB != null)
+            if (zlist != null && zlist.Count > 0 && cumB != null)
             {
-                int benchOfEdge = e / 2; // 단마다 모서리 2개(사면끝/소단끝)
-                var act = new List<(SlopeZone z, double wDist)>();
-                // ★★★[JACK 0824 '사면변환을 해봤지만 바뀌지 않아'] **'전역과 다른가'로 거르면 안 된다.**
-                //   종전 조건은 `이 구간의 프로파일이 전역과 거리가 다른가`였다. 그러면 <b>옹벽을 사면으로
-                //   되돌리는 구간</b>이 전역 구배와 같아져(둘 다 1:1.5) **한 번도 활성화되지 않는다** —
-                //   앞 구간(옹벽)이 계속 이겨서 화면이 그대로다. 로그 실측:
-                //   `⚠구간 밖인데 벽 2700점 — 15단` = 규칙은 사면인데 기하는 벽.
-                //   이 구간이 그 단에 적용되면 무조건 후보에 넣고, 누가 이기는지는 아래 Winner가 가른다.
-                foreach (var q in zprep)
-                    if (benchOfEdge >= q.fromBench && e < q.wp.Edges.Count)
-                        act.Add((q.z, q.wp.Edges[e].dist));
-                bool anyDiff = false;
-                foreach (var a0 in act) if (Math.Abs(a0.wDist - dist) > 1e-9) { anyDiff = true; break; }
-                if (act.Count > 0 && anyDiff)
+                // ★★[검토 0824 중간-2] 조합(마스크)이 아니라 **그 조합이 주는 거리**로 묶는다.
+                //   종전엔 전역 링 w에서만 조합을 모아, 다른 거리 링에만 나타나는 조합의 점은
+                //   어느 run에도 안 담겨 그 각도 구간이 통째로 빠졌다(현으로 가로질러짐).
+                //   링 모양을 정하는 것은 결국 거리 하나뿐이므로 거리로 묶으면 구멍이 안 생긴다.
+                double DistOf(double x2, double y2)
                 {
-                    // ★★[JACK 0824] 겹치면 **나중 구간이 이긴다** — 종전엔 Flatten이 미리 겹침을 갈라 놨지만,
-                    //   자가 구간마다 다르면 한 축에 못 올려 미리 못 가른다. 여기서 점마다 '누가 이기나'로 푼다.
-                    //   ('어느 구간에든 들면' 방식이면 겹친 자리에 두 링이 다 들어와 조각이 겹친다.)
-                    int Winner(Point3 pt)
+                    var pf1 = ProfOf(MaskAt(x2, y2));
+                    return e < pf1.Edges.Count ? pf1.Edges[e].dist : dist;
+                }
+                var mw = new double[w.Count];
+                var mset = new List<double>();
+                for (int q1 = 0; q1 < w.Count; q1++)
+                {
+                    mw[q1] = DistOf(w[q1].X, w[q1].Y);
+                    bool seen = false;
+                    foreach (var d0 in mset) if (Math.Abs(d0 - mw[q1]) <= 1e-9) { seen = true; break; }
+                    if (!seen) mset.Add(mw[q1]);
+                }
+                bool anyDiff = false;
+                foreach (var dm0 in mset) if (Math.Abs(dm0 - dist) > 1e-9) { anyDiff = true; break; }
+                if (anyDiff)
+                {
+                    var runs2 = new List<(double key, List<Point3> pts)>();
+                    var cumW = CumLen2D(w);                       // 조립 정렬축 = 이 세대의 전역 링
+                    // ★[검토 C-1] 서로 다른 조합이라도 **거리가 같으면 링도 같다** — 거리로 캐시한다.
+                    //   종전엔 조합마다 NTS 버퍼를 새로 떴다(조합 수 × 모서리 수 = 수백 번).
+                    for (int mi = 0; mi < mset.Count; mi++)
                     {
-                        int win = -1;
-                        for (int a = 0; a < act.Count; a++)
-                            if (act[a].z.ContainsAt(pt.X, pt.Y, shape, cumB!)) win = a;
-                        return win;
+                        double dm = mset[mi];
+                        List<Point3>? rm; double[]? rmDist;
+                        if (Math.Abs(dm - dist) <= 1e-9) { rm = w; rmDist = mw; }
+                        else
+                        {
+                            rm = MakeRingXY(dm);
+                            if (rm == null) { dbg.AppendLine($"  ⚠구간 링 생성 실패 — 모서리 {e} 거리 {dm:F2}m"); continue; }
+                            rmDist = new double[rm.Count];
+                            for (int q2 = 0; q2 < rm.Count; q2++)
+                            {
+                                rmDist[q2] = DistOf(rm[q2].X, rm[q2].Y);
+                                // 이 링에만 나타나는 거리는 mset에 없다 — 뒤에서 처리하도록 담아 둔다.
+                                bool seen2 = false;
+                                foreach (var d1 in mset) if (Math.Abs(d1 - rmDist[q2]) <= 1e-9) { seen2 = true; break; }
+                                if (!seen2) { mset.Add(rmDist[q2]); }
+                            }
+                        }
+                        if (rm == null || rmDist == null) continue;
+                        CollectRuns(rm, w, cumW, rmDist, dm, runs2);
+                        if (mset.Count > 32) break;   // 백스톱 — 실제로는 두셋이다
                     }
-                    var runs = new List<(double key, List<Point3> pts)>();
-                    // 전역 링 = 어느 구간도 안 이기는 자리 + **이겼지만 거리가 전역과 같은** 자리
-                    //   (되돌리기 구간이 여기 든다 — 링을 새로 만들 것 없이 전역 링이 곧 정답이다).
-                    CollectRuns(w, pt =>
+                    if (runs2.Count > 0)
                     {
-                        int a1 = Winner(pt);
-                        return a1 < 0 || Math.Abs(act[a1].wDist - dist) <= 1e-9;
-                    }, runs);
-                    for (int a = 0; a < act.Count; a++)
-                    {
-                        if (Math.Abs(act[a].wDist - dist) <= 1e-9) continue;   // 전역 링과 같은 자리 — 위에서 담았다
-                        int aa = a;
-                        var wr = MakeRingXY(act[a].wDist);
-                        if (wr != null) CollectRuns(wr, pt => Winner(pt) == aa, runs); // 그 구간이 이기는 데만
-                    }
-                    if (runs.Count > 0)
-                    {
-                        runs.Sort((a, bb) => a.key.CompareTo(bb.key));    // 경계 param 순서로 조립(원형)
-                        var asm = new List<Point3>();
-                        foreach (var r in runs) asm.AddRange(r.pts);
-                        if (asm.Count >= 3) w = asm;
+                        runs2.Sort((a, bb) => a.key.CompareTo(bb.key));
+                        var asm2 = new List<Point3>();
+                        foreach (var r in runs2) asm2.AddRange(r.pts);
+                        if (asm2.Count >= 3) w = asm2;
                     }
                 }
             }
@@ -465,13 +514,14 @@ public static class GradingGeometry
                 // [스파이크 0804] 이동 상한은 '이 코너 위치의' 링 간격 기준이어야 한다. 전역 사면 거리로 잡으면
                 //   옹벽 구간(링 간격 ~1.25m)에서 21m 점프를 허용해, 구간 이음매의 연결 점프선 꺾임에 추적이
                 //   낚여 엉뚱한 능선이 그려진다 — 코너의 경계 param이 속한 구간 프로파일의 거리로 계산한다.
-                StepProfile? cornerProf = null;
-                if (zprep != null && cumB != null)
-                {
-                    double tb = ParamAt(shape, cumB, b.X, b.Y);
-                    foreach (var q in zprep)
-                        if (q.z.ContainsAt(b.X, b.Y, shape, cumB)) { cornerProf = q.wp; break; }
-                }
+                // ★★[검토 0824 심각-1] 코너 마스크를 **계획 폴리곤 정점**에서 재면 안 된다.
+                //   자가 100m 밖 링인 구간에 계획 코너를 투영하면 엉뚱한 param이 나와, 링 조립 쪽
+                //   (링 점마다 잰다)과 **마스크가 갈린다** — 실측: 부지 북쪽 계획 코너가 남쪽 구간 안으로
+                //   판정돼 maxJump가 1.375m로 좁아지고, 실제 이동은 10.6m라 추적이 끊겨
+                //   **15단 위 코너 능선이 통째로 사라졌다**(49점 → 31점).
+                //   → 코너는 링을 따라 추적하므로, **직전에 추적한 그 점**에서 매 단 다시 잰다.
+                //   첫 단만 계획 코너로 시작한다(그 자리엔 아직 링이 없다).
+                double trackX = b.X, trackY = b.Y;
                 foreach (var (eIdx, dist, rise, ring) in ringSeq)
                 {
                     int m = ring.Count;
@@ -479,8 +529,17 @@ public static class GradingGeometry
                     if (m >= 2 && Math.Abs(ring[0].X - ring[m - 1].X) < 1e-9 && Math.Abs(ring[0].Y - ring[m - 1].Y) < 1e-9) m--;
                     if (m < 3) break;
                     double ringCcw = Math.Sign(SignedArea(ring)); if (ringCcw == 0) ringCcw = 1;
-                    double localDist = cornerProf != null && eIdx < cornerProf.Edges.Count
-                        ? cornerProf.Edges[eIdx].dist : dist;
+                    // ★[검토 0824 심각-1] 이 단의 이동 상한은 **지금 추적 중인 자리**의 조합으로 잰다.
+                    double localDist = dist;
+                    if (zlist != null && zlist.Count > 0 && cumB != null)
+                    {
+                        long mt = MaskAt(trackX, trackY);
+                        if (mt != 0)
+                        {
+                            var pt2 = ProfOf(mt);
+                            if (eIdx < pt2.Edges.Count) localDist = pt2.Edges[eIdx].dist;
+                        }
+                    }
                     double maxJump = (localDist - prevDist) * 3.5 + 0.5; // 코너 정점의 링당 이동 상한(마이터 배율 여유)
                     if (maxJump < 0.5) maxJump = 0.5;
                     double bestD2 = maxJump * maxJump; int bestJ = -1;
@@ -500,6 +559,7 @@ public static class GradingGeometry
                     }
                     if (bestJ < 0) break; // 이 단에서 코너 소멸(오목 닫힘/원호화/MitreLimit 폴백) → 중단
                     px = ring[bestJ].X; py = ring[bestJ].Y;
+                    trackX = px; trackY = py;   // ★[검토 0824 심각-1] 다음 단의 조합은 **여기서** 잰다
                     line.Add(new Point3(px, py, ring[bestJ].Z)); // Z까지 링 점 그대로 공유
                     prevDist = localDist;
                 }

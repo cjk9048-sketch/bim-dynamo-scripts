@@ -163,10 +163,27 @@ public static class GradingPolygons
             double arc = t1 - t0;
             if (arc < 0.5) continue;
 
-            // ① 그 자 위의 서브아크(1m 간격 샘플).
+            // ★★[검토 0824 심각-3] 자는 **T를 좌표로 바꾸는 데만** 쓰고, 쐐기의 안쪽 변은
+            //   **언제나 계획 폴리곤**이어야 한다. 자(예: 130m 밖 15단 링)를 안쪽 변으로 삼으면
+            //   그보다 안쪽에 있는 0~14단 벽면 자리가 쐐기에 안 들어가, 사면 띠에서 옹벽면을
+            //   도려낼 때 겹치는 데가 없어 **옹벽 자리에 사면 SHP가 그대로 남는다**(0824 이전엔 없던 회귀).
+            //   → 자 위의 서브아크를 뜬 뒤 그 점들을 계획 폴리곤으로 **되끌어와** 안쪽 변을 만든다.
             var pts = new List<Point3>();
             int nA = System.Math.Max(2, (int)System.Math.Ceiling(arc));
-            for (int s = 0; s <= nA; s++) pts.Add(PointOn(zPoly, zCum, t0 + arc * s / nA));
+            for (int s = 0; s <= nA; s++)
+            {
+                var rp = PointOn(zPoly, zCum, t0 + arc * s / nA);
+                if (ReferenceEquals(zPoly, boundary)) { pts.Add(rp); continue; }
+                double tp = GradingGeometry.ParamAt(boundary, cum, rp.X, rp.Y);
+                pts.Add(PointOn(boundary, cum, tp));
+            }
+            // 되끌어온 점이 한 자리에 뭉치면(코너 바깥 조각) 쐐기가 퇴화한다 — 그 구간은 건너뛴다.
+            {
+                double sx = 0, sy = 0;
+                for (int s = 1; s < pts.Count; s++)
+                { sx += System.Math.Abs(pts[s].X - pts[s - 1].X); sy += System.Math.Abs(pts[s].Y - pts[s - 1].Y); }
+                if (sx + sy < 0.5) continue;
+            }
 
             // ② 최외곽 링에서 구간 내 정점들의 최장 연속 런(원형) — 뒤집어 이어붙여 닫는다.
             var run = LongestZoneRun(outerRing, z, boundary, cum);
@@ -193,11 +210,17 @@ public static class GradingPolygons
             //   일반 구배로 바꾼 단은 사면이므로 사면 띠를 그대로 남겨야 한다(옛날엔 구간=전부 옹벽이었다).
             if (poly == null || poly.IsEmpty) continue;
             int maxBench = System.Math.Max(1, rings.Count / 2);
-            bool lastIsWall = z.Rules.Count > 0 && z.Rules[z.Rules.Count - 1].Slope <= minSlope + 1e-9;
+            // ★★[검토 0824 심각-6] **구간 하나만 보고 벽이라고 하면 안 된다.**
+            //   같은 자리에 나중 규칙이 얹혀 이미 사면이 된 구간도 자기 규칙만 보면 여전히 '벽'이다 →
+            //   사면 띠에서 옹벽면을 도려내는 쐐기가 나와, **채울 옹벽은 없는데 구멍만 뚫린다.**
+            //   그 구간의 대표 자리에서 전체 목록을 합성해 묻는다.
+            var zRep = z.RepPoint(boundary, cum);
+            bool WallHere(int b2) => SlopeZone.IsWallAtPoint(zones, zRep.X, zRep.Y, b2, baseSlope, minSlope, boundary, cum);
+            bool lastIsWall = WallHere(maxBench - 1);
             int runStart = -1;
             for (int b = 0; b <= maxBench; b++)
             {
-                bool wall = b < maxBench && z.IsWallAt(b, baseSlope, minSlope);
+                bool wall = b < maxBench && WallHere(b);
                 if (wall) { if (runStart < 0) runStart = b; }
                 else if (runStart >= 0)
                 {
