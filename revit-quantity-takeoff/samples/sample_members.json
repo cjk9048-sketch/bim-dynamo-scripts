@@ -1,0 +1,16 @@
+{
+  "project_info": {
+    "공사명": "○○ 구조물 신축공사",
+    "작성일": "2026-06-01",
+    "비고": "Revit 모델 기준 자동 산출 (단위 m)"
+  },
+  "members": [
+    {"category": "Columns", "mark": "C1", "type_name": "RC 400x600", "level": "1F", "count": 8, "b": 0.4, "h": 0.6, "height": 3.6},
+    {"category": "Columns", "mark": "C2", "type_name": "RC 500x500", "level": "1F", "count": 4, "b": 0.5, "h": 0.5, "height": 3.6},
+    {"category": "StructuralFraming", "mark": "G1", "type_name": "RC 400x700", "level": "2F", "count": 12, "b": 0.4, "h": 0.7, "length": 6.0, "deduct_length": 0.9},
+    {"category": "StructuralFraming", "mark": "B1", "type_name": "RC 300x600", "level": "2F", "count": 20, "b": 0.3, "h": 0.6, "length": 4.5, "deduct_length": 0.8},
+    {"category": "Foundations", "mark": "F1", "type_name": "독립기초 2.0x2.0", "level": "기초", "count": 8, "b": 2.0, "l": 2.0, "h": 0.6},
+    {"category": "Floors", "mark": "S1", "type_name": "슬래브 t150", "level": "2F", "count": 1, "area": 320.0, "thickness": 0.15, "perimeter": 76.0},
+    {"category": "Walls", "mark": "W1", "type_name": "벽체 t200", "level": "1F", "count": 6, "length": 5.0, "height": 3.6, "thickness": 0.2}
+  ]
+}

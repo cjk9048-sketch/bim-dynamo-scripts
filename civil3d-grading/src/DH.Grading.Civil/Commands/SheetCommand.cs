@@ -33,17 +33,19 @@ namespace DH.Grading.Civil.Commands;
 public static class SheetCommand
 {
     // ── 도곽 규격(mm) — JACK 지정
-    private const double SheetW = 841.0, SheetH = 594.0;   // A1 가로
+    // ★[JACK 0826] 횡단도도 <b>같은 도곽</b>을 쓴다(JACK: "도곽은 종단에서 사용한 그 크기 그대로").
+    //   그래서 규격을 internal로 연다 — 같은 숫자를 두 곳에 적으면 언젠가 갈라진다.
+    internal const double SheetW = 841.0, SheetH = 594.0;   // A1 가로
     /// <summary>★★[v32.30 · JACK 0813] <b>여백은 위아래가 다르다.</b>
     /// <i>"좌우측은 25씩 상단은 20 하단은 범례랑 사인찍는 곳등 포함해서 50을 이격하고."</i>
     /// 하단이 넓은 것은 <b>비워 두는 자리가 아니라 쓰임이 있는 자리</b>다 — 범례·서명란이 거기 들어간다.
     /// 종전의 대칭 <c>MarginTB=20</c>은 그 자리를 몰랐다.</summary>
-    private const double MarginLR = 25.0;
-    private const double MarginTop = 20.0;
-    private const double MarginBottom = 50.0;
+    internal const double MarginLR = 25.0;
+    internal const double MarginTop = 20.0;
+    internal const double MarginBottom = 50.0;
     private const string LayoutBase = "DH-종단도";
     private const string LayFrame = "DH-도곽";
-    private const string LayFrameModel = "DH-도곽범위(모형)";
+    internal const string LayFrameModel = "DH-도곽범위(모형)";
 
     /// <summary>★[JACK 0810 확정] 기준 축척 — 세로 1:200, 가로 1:1000(수직과장 5배).
     /// "가로 세로 축척에 대해서 정의를 다시 하자. 일단은 V=1:200, H=1:1000을 기준으로 먼저 만들어 보자."
@@ -64,7 +66,9 @@ public static class SheetCommand
         { 20, 25, 50, 75, 80, 100, 120, 150, 200, 250, 300, 500, 600, 750,
           1000, 1200, 1250, 2000, 2500, 3000, 5000 };   // ★[JACK 0819 확정] — 오름차순 유지 필수(첫 초과값을 고른다)
 
-    private static double InnerW => SheetW - 2 * MarginLR;              // 791
+    // ★[JACK 0826] 횡단도가 <b>같은 안쪽 네모</b>를 쓴다 — JACK: "종단 거처럼 내부 네모
+    //   사이즈와 위치도 똑같이 해 줘. 그 내부 네모 안에서 분할해서 쓰면 돼."
+    internal static double InnerW => SheetW - 2 * MarginLR;              // 791
     private static double InnerH => SheetH - MarginTop - MarginBottom;  // 524
     /// <summary>★★★[v32.30 · JACK 0813] <b>종평면도 칸을 없앤다 — 위 10% · 본문 80% · 아래 10%.</b>
     ///
@@ -95,13 +99,13 @@ public static class SheetCommand
     /// <see cref="BandH"/>는 <b>자리</b>일 뿐 축척 계산에는 실측 종이높이가 쓰인다).</para></summary>
     private const double UTitle = 2.0, UGraph = 5.0, UBand = 3.0;
     private static double Unit => InnerH / (UTitle + UGraph + UBand);   // 52.4mm
-    private static double TitleH => Unit * UTitle;     // 104.8 위 여백(제목 자리) = 20%
+    internal static double TitleH => Unit * UTitle;     // 104.8 위 여백(제목 자리) = 20%
     private static double GraphH => Unit * UGraph;     // 262.0 종단 그래프
     private static double BandH => Unit * UBand;       // 157.2 밴드 표
 
     /// <summary>뷰포트가 실제로 쓰는 높이 — 종단 그래프 + 밴드 표. 남은 공간의 <b>80%</b>다.
     /// <para>세로 검산: 하 50 + 본문 419.2 + 제목 104.8 + 상 20 = <b>594.0</b> = <see cref="SheetH"/>.</para></summary>
-    private static double ViewH => GraphH + BandH;    // 419.2
+    internal static double ViewH => GraphH + BandH;    // 419.2
 
     /// <summary><b>여백 목표</b> — 자리의 92%까지만 차면 보기 좋다는 기준.
     /// JACK 0810: "너무 딱 맞으면 그러니깐 약간의 버퍼는 줘서 도면이 좀 균형감 있게 해야지."
@@ -2843,26 +2847,46 @@ public static class SheetCommand
                         if (pr.Name.StartsWith("DH_측점체인", StringComparison.Ordinal)) continue;
                         try
                         {
-                            bool plan = pr.Name.Contains("정지") || pr.Name.Contains("계획");
-                            string ln = plan ? CalsLayerDesign : CalsLayerGround;
-                            var lid = SectionCommand.EnsureLayer(db, tr, ln, (short)(plan ? CalsDesign : CalsGround));
+                            // ★★[JACK 0826 '터파기선이 여전히 원지반과 같은 레이어'] <b>여기가 범인이었다.</b>
+                            //   판정이 <c>"정지"|"계획"</c> 하나뿐이라 <c>DH_터파기</c>가 <b>plan=false</b>로 떨어져
+                            //   원지반 레이어(CR-GRND, 초록)에 실렸다. 종단을 만들 때 레이어를 갈라 줘도,
+                            //   객체 색을 박아도, 재정의를 덮어도 <b>이 줄이 나중에 전부 되돌렸다</b> —
+                            //   매 판 마젠타로 되살리고 여기서 다시 지우는 왕복이 돌고 있었다.
+                            //   → <b>세 갈래</b>로 가른다: 터파기 · 계획 · 원지반.
+                            bool exc = pr.Name.Contains("터파기");
+                            bool plan = !exc && (pr.Name.Contains("정지") || pr.Name.Contains("계획"));
+                            string ln = exc ? SectionCommand.ExcavProfileLayer
+                                            : plan ? CalsLayerDesign : CalsLayerGround;
+                            short ac = exc ? SectionCommand.ExcavAci : (short)(plan ? CalsDesign : CalsGround);
+                            var lid = SectionCommand.EnsureLayer(db, tr, ln, ac);
+                            // EnsureLayer는 <b>이미 있는</b> 레이어의 색을 안 고친다 — 터파기만 못 박는다.
+                            if (exc && !lid.IsNull && tr.GetObject(lid, OpenMode.ForWrite) is LayerTableRecord lrE)
+                                lrE.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
+                                    Autodesk.AutoCAD.Colors.ColorMethod.ByAci, SectionCommand.ExcavAci);
                             if (tr.GetObject(pid, OpenMode.ForWrite) is Entity pe) { pe.LayerId = lid; layed++; }
-                            log.AppendLine($"   CALS 레이어: '{pr.Name}' → {ln}(색 {(plan ? CalsDesign : CalsGround)})");
+                            log.AppendLine($"   CALS 레이어: '{pr.Name}' → {ln}(색 {ac}){(exc ? "  ★터파기=마젠타" : "")}");
                         }
                         catch (System.Exception ex) { log.AppendLine($"   CALS 레이어 '{pr.Name}' 실패 — {Brief(ex)}"); }
 
                         if (tr.GetObject(pr.StyleId, OpenMode.ForWrite) is not CivilDb.Styles.ProfileStyle ps) continue;
                         // 선 색을 ByLayer로 — 레이어가 색을 정하게 한다.
-                        try
+                        //   ★[JACK 0826] <b>터파기 스타일은 건드리지 않는다.</b> 여기서 ByLayer로 덮으면
+                        //   <c>EnsureExcavProfileStyle</c>이 심어 둔 마젠타가 매번 지워진다.
+                        //   (터파기는 위에서 마젠타 레이어에 실었으므로 ByLayer여도 결과는 같지만,
+                        //    스타일을 되읽는 진단이 "마젠타 맞다"고 답하면서 화면은 초록인 혼란을 없앤다.)
+                        if (!pr.Name.Contains("터파기"))
                         {
-                            foreach (var t in new[] { CivilDb.Styles.ProfileDisplayStyleProfileType.Line,
-                                                      CivilDb.Styles.ProfileDisplayStyleProfileType.Curve,
-                                                      CivilDb.Styles.ProfileDisplayStyleProfileType.LineExtension })
-                                using (var ds2 = ps.GetDisplayStyleProfile(t))
-                                    ds2.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
-                                        Autodesk.AutoCAD.Colors.ColorMethod.ByLayer, 256);
+                            try
+                            {
+                                foreach (var t in new[] { CivilDb.Styles.ProfileDisplayStyleProfileType.Line,
+                                                          CivilDb.Styles.ProfileDisplayStyleProfileType.Curve,
+                                                          CivilDb.Styles.ProfileDisplayStyleProfileType.LineExtension })
+                                    using (var ds2 = ps.GetDisplayStyleProfile(t))
+                                        ds2.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
+                                            Autodesk.AutoCAD.Colors.ColorMethod.ByLayer, 256);
+                            }
+                            catch (System.Exception ex) { log.AppendLine($"   종단선 ByLayer 실패 — {Brief(ex)}"); }
                         }
-                        catch (System.Exception ex) { log.AppendLine($"   종단선 ByLayer 실패 — {Brief(ex)}"); }
                         string sn; try { sn = ps.Name; } catch { sn = "(이름 못 읽음)"; }
                         using (var ah = ps.ArrowHeadOption)
                         {
@@ -3362,7 +3386,7 @@ public static class SheetCommand
     /// <c>PaperUnits=1 · DrawingUnits=1</c>이라 이 식에 넣으면 <b>1:1000</b>이 나온다 —
     /// DH가 건 축척인지 남이 걸어 둔 기본값인지 구분 못 하면 그 값으로 계산한 밴드 높이까지 거짓이 된다.
     /// <see cref="SetDrawingScale"/>은 언제나 <c>PaperUnits=1000</c>으로 적으므로 그것을 <b>서명처럼</b> 쓴다.</para></summary>
-    private static double CurrentDrawingScale(Database db)
+    internal static double CurrentDrawingScale(Database db)
     {
         try
         {
@@ -3577,7 +3601,7 @@ public static class SheetCommand
         return list;
     }
 
-    private static void AddRect(Transaction tr, BlockTableRecord owner, ObjectId layer,
+    internal static void AddRect(Transaction tr, BlockTableRecord owner, ObjectId layer,
                                 double x0, double y0, double x1, double y1)
     {
         var pl = new Polyline();

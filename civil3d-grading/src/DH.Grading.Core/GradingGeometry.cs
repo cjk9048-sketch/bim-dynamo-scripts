@@ -975,7 +975,10 @@ internal sealed class StepProfile
         // [절성토 분리 0803] 수직 예산은 단높이와 무관한 '실제 표고차'에서 와야 한다(p.MaxRise).
         //   단 개수 상한(MaxBenches)에 단높이를 곱해 예산을 만들면, 단높이가 작은 쪽이 개수 상한에 걸리는 순간
         //   예산이 함께 주저앉아 사면이 원지반에 닿기 전에 끊긴다. MaxRise=0(옛 번들)은 종전 식으로 폴백.
-        double maxRise = p.MaxRise > 1e-9 ? p.MaxRise : p.MaxBenches * benchH;   // 전체 수직 상한(안전)
+        // ★★[JACK 0826] <b>방향별 예산</b>을 쓴다 — 깎는 쪽과 쌓는 쪽에 필요한 높이가 다르다.
+        //   한 값을 같이 쓰면 작은 쪽이 큰 쪽 예산을 그대로 받아 <b>허공에 계단</b>을 쌓는다(설명은 MaxRiseCut).
+        double riseBudget = p.RiseFor(up);
+        double maxRise = riseBudget > 1e-9 ? riseBudget : p.MaxBenches * benchH;   // 전체 수직 상한(안전)
         double interval = p.MountainTerrace ? Math.Max(p.TerraceInterval, 1e-6) : double.PositiveInfinity;
         double terraceW = p.MountainTerrace ? Math.Max(p.TerraceWidth, 0.0) : 0.0;
         double d = 0, totalRise = 0, accH = 0;                            // accH = 대소단 리셋용 누적 수직

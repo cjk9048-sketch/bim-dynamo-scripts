@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 배포용 매니페스트: Addins\2026\ 루트에 위치, DLL은 하위 DH.Takeoff\ 폴더 참조 -->
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>DH 수량산출</Name>
+    <Assembly>DH.Takeoff\DH.Takeoff.Revit.dll</Assembly>
+    <AddInId>3f2a9c10-1b2c-4d5e-8a90-aa00bb11cc22</AddInId>
+    <FullClassName>DH.Takeoff.Revit.RibbonApp</FullClassName>
+    <VendorId>DHEC</VendorId>
+    <VendorDescription>도화엔지니어링 상하수도부</VendorDescription>
+  </AddIn>
+</RevitAddIns>

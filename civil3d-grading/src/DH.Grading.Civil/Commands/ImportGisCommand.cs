@@ -395,7 +395,7 @@ public sealed class ImportGisCommand
     /// <summary>[JACK 0731] 한글 글꼴 텍스트 스타일 확보 — 지번의 '산' 같은 한글이 '?'로 깨지는 것 방지.
     /// AutoCAD 기본 스타일은 txt.shx(한글 미지원)라 트루타입 '맑은 고딕'을 쓰는 스타일을 만든다.
     /// 실패하면 Null 반환(문자는 기본 스타일로 — 기능은 계속).</summary>
-    private static ObjectId EnsureKoreanTextStyle(Database db, Transaction tr)
+    internal static ObjectId EnsureKoreanTextStyle(Database db, Transaction tr)
     {
         const string styleName = "DH-한글";
         try

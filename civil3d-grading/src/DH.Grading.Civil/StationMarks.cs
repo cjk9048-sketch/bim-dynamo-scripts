@@ -725,7 +725,8 @@ public static class StationMarks
     /// 벽 측점과 <b>같은 자리</b>로 만들면 <see cref="Dedupe"/>가 하나로 합치고 사유는 남는다.
     /// 벽 두께 밖은 손대지 않으므로 정측점·원지반굴곡은 안전하다.</para></summary>
     public static int PullDaylightToWalls(List<Mark> list, List<VertBar> bars,
-                                          System.Text.StringBuilder log)
+                                          System.Text.StringBuilder log,
+                                          List<WallSpan> spansOut = null)
     {
         if (list == null || bars == null || bars.Count == 0) return 0;
         int moved = 0, centered = 0;
@@ -793,6 +794,13 @@ public static class StationMarks
                     if (!double.IsNaN(dz) && !double.IsNaN(b.ZTop) && Math.Abs(dz - b.ZTop) > 1e-6)
                         nb = nb with { ZTop = Math.Max(b.ZTop, dz), ZBottom = Math.Min(b.ZTop, dz) };
                     bars[bi] = nb;
+                    // ★★[JACK 0826 "옹벽이나 가시설의 첫 단만 나왔는데 수직부는 모두 생겨야 해"]
+                    //   <b>원인: 여기서 앞·뒤를 다 알고도 안 내보냈다.</b>
+                    //   짝지어진 벽은 <c>FromWallPairs</c>가 <c>WallSpan</c>을 만드는데,
+                    //   <b>데이라잇에 잘린 단</b>은 짝이 없어 그 길로 안 가고 이리로 온다.
+                    //   그래서 온전한 단만 (전)(후) 두 장을 받고 잘린 단은 한 장만 받았다.
+                    //   벽의 반대편이 곧 <c>opp</c>이니 <b>여기가 앞·뒤를 아는 유일한 자리</b>다.
+                    spansOut?.Add(new WallSpan(mid, Math.Min(opp, b.Station), Math.Max(opp, b.Station), b.Kind));
                     note?.Append($" [{b.Station:F3}↔{opp:F3}(데이라잇 {hits.Count}개)→가운데 {mid:F3}m · 두께 {farD:F3}m]");
                     moved += hits.Count; centered++;
                 }
@@ -1182,17 +1190,16 @@ public static class StationMarks
         }
         return outp.OrderBy(m => m.Station).ToList();
     }
-
-    /// <summary>측점을 'No.5+12.34' 꼴로 — 한국 종단도 관례.
-    /// <para>★[v32.1 · JACK 0812] <b>'+' 뒤는 <c>00.00</c> — 두 자리로 채운다.</b>
-    /// JACK: <i>"+00.00 형태로 바꾸고."</i> <c>0.00</c>이면 <c>+6.41</c>처럼 한 자리로 나와
-    /// <c>+16.41</c>과 자릿수가 안 맞는다 — 측점 목록을 세로로 훑을 때 <b>자리가 흔들려 못 읽는다</b>.
-    /// 색인이 20m라 나머지는 최대 19.99이므로 <b>두 자리면 넘치지 않는다</b>.</para></summary>
+    /// <summary>측점 이름 — 계산은 <see cref="DH.Grading.Core.StationNaming"/>이 한다.
+    /// ★자를 Core로 내렸다: 오프라인 하니스가 도면 없이 이 규칙을 직접 잴 수 있어야
+    /// v32.48 같은 사고가 세 번째로 돌아오지 않는다.</summary>
     public static string Fmt(double station, double index = 20.0)
-    {
-        if (index <= 1e-6) return station.ToString("0.00");
-        int no = (int)Math.Floor(station / index + 1e-9);
-        double plus = station - no * index;
-        return plus < 1e-4 ? $"No.{no}" : $"No.{no}+{plus:00.00}";
-    }
+        => DH.Grading.Core.StationNaming.Fmt(station, index);
+
+    /// <summary>정측점 허용오차 — <see cref="DH.Grading.Core.StationNaming.MajorTol"/>.</summary>
+    public const double MajorTol = DH.Grading.Core.StationNaming.MajorTol;
+
+    /// <summary>이 측점이 정측점(No.n)인가 — <see cref="DH.Grading.Core.StationNaming.IsMajor"/>.</summary>
+    public static bool IsMajor(double station, double index, out int no)
+        => DH.Grading.Core.StationNaming.IsMajor(station, index, out no);
 }

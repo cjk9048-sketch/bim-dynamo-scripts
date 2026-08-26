@@ -96,6 +96,18 @@ public static class StationCommand
 
             RedrawProfile(doc, ed);
 
+            // ★★[JACK 0826 "측점 넣기 기능을 쓰니까 횡단뷰만 사라져 버렸어 —
+            //   전체적으로 업데이트가 돼야 해"] <b>횡단도도 함께 다시 그린다.</b>
+            //   종단도를 다시 그리면 검토선 그룹이 새로 생기고, 거기 매달린 <b>횡단면도가 Civil에</b>
+            //   <b>의해 지워진다</b>. 그런데 우리가 그린 제목·표·도곽은 생 도면 객체라 <b>유령으로 남는다</b>.
+            //   횡단도를 한 번이라도 그렸으면(자리를 기억하고 있으면) 묻지 않고 같은 자리에 다시 그린다.
+            try
+            {
+                if (XsecViewCommand.Refresh(doc))
+                    ed.WriteMessage("\n  · 횡단도도 다시 그렸습니다(같은 자리).");
+            }
+            catch (System.Exception exX) { ed.WriteMessage("\n  · 횡단도 갱신 실패 — " + exX.Message); }
+
             // ★★★[v32.35] <b>다시 그리면 선형이 새것으로 바뀐다 — 들고 있던 ID는 죽는다.</b>
             //   <see cref="ProfileCommand"/>는 옛 선형을 지우고 같은 좌표로 <b>새로 만든다</b>
             //   (선형 생성 API가 폴리선을 소모하는 구조라 '고쳐 쓰기'가 안 된다).

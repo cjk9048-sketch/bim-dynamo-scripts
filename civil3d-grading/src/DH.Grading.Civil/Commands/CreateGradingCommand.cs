@@ -1378,6 +1378,7 @@ public sealed class CreateGradingCommand
         var s = GradingSettings.ToParams();
         int maxBenches = GradingSettings.MaxBenches;
         double maxRise = 0;     // 0 = 표고차를 못 얻음 → GradingGeometry가 종전 식(MaxBenches×단높이)으로 폴백
+        double maxRiseCut = 0, maxRiseFill = 0;   // 0 = MaxRise로 폴백(옛 번들과 같은 동작)
         try
         {
             var (gMin, gMax) = ground.ElevationRange();
@@ -1409,13 +1410,21 @@ public sealed class CreateGradingCommand
             //   ※로그에 **바로 쓰지 않는다** — BuildParams는 DiagLog.Reset(진단 로그 새로 시작)보다 먼저 불리므로
             //     여기서 쓰면 그대로 지워진다(0807 1차 시도가 이 이유로 한 줄도 안 남았다). 담아 뒀다 나중에 쓴다.
             double needCut = gMax - designMin, needFill = designMax - gMin;
+            // ★★★[JACK 0826] <b>방향별로 예산을 나눈다</b> — 0807에 미뤄 뒀던 그 수정이다.
+            //   깎는 쪽은 needCut, 쌓는 쪽은 needFill만 있으면 땅에 닿는다.
+            //   한 값을 같이 쓰면 작은 쪽이 큰 쪽 예산만큼 <b>허공에 계단</b>을 쌓고,
+            //   그 헛단을 횡단 수량이 계획면으로 읽어 <b>있지도 않은 성토</b>가 잡힌다(실측 2000㎡).
+            //   ※<b>번들 저장형식은 안 바뀐다</b> — 이 둘은 담지 않는 파생값이라,
+            //     옛 도면을 열면 0이 되어 <c>MaxRise</c>로 물러나 종전과 똑같이 돈다.
+            double spareM = spare * System.Math.Max(s.LargerBenchHeight, 1e-6);
+            maxRiseCut = System.Math.Max(needCut, 0) + spareM;
+            maxRiseFill = System.Math.Max(needFill, 0) + spareM;
             LastBudgetNote =
                 $"[수직 예산] 원지반 {gMin:F1}~{gMax:F1}m · 계획 {designMin:F1}~{designMax:F1}m" +
-                $" → 필요 절토 {needCut:F1}m / 성토 {needFill:F1}m · 실제 배정(양방향 공용) {maxRise:F1}m · 최대 {maxBenches}단" +
-                (System.Math.Min(needCut, needFill) > 0 &&
-                 System.Math.Max(needCut, needFill) > System.Math.Min(needCut, needFill) * 1.5
-                    ? $"  ⚠{(needCut > needFill ? "성토" : "절토")}가 예산의 " +
-                      $"{System.Math.Min(needCut, needFill) / System.Math.Max(maxRise, 1e-6) * 100:F0}%만 쓴다 — 나머지는 헛단"
+                $" → 필요 절토 {needCut:F1}m / 성토 {needFill:F1}m" +
+                $" · 배정 절토 {maxRiseCut:F1}m / 성토 {maxRiseFill:F1}m(★방향별) · 최대 {maxBenches}단" +
+                (System.Math.Abs(maxRiseCut - maxRiseFill) > 1e-6
+                    ? "  (예산을 방향별로 나눴다 — 헛단 없음)"
                     : "");
         }
         catch (System.Exception ex)
@@ -1435,6 +1444,8 @@ public sealed class CreateGradingCommand
             CellSize = s.CellSize,
             MaxBenches = maxBenches,
             MaxRise = maxRise,
+            MaxRiseCut = maxRiseCut,
+            MaxRiseFill = maxRiseFill,
             VertexSpacing = s.VertexSpacing,
             MinSlope = s.MinSlope,
             WallGateSlope = GradingSettings.WallGateSlope,   // ★[JACK 0825] 판정 문턱은 동결값(번들에 안 담는다)
