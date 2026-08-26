@@ -1270,6 +1270,7 @@ public sealed class ProfileCommand
             double sub = interval / 2.0;
             var all = StationMarks.Merge(s0, s1, sub, marks, tol: 0.01);
             allMarks = all;      // ★[v32.24] 원지반 꺾은선이 이 목록을 그대로 정점으로 쓴다
+            LastStationInterval = interval;   // ★[JACK 0826] 횡단도가 같은 이름을 만들 수 있게
             //   사유를 갈라 적는다 — 로그를 도면과 대조할 때 '왜 여기 측점이 있나'가 바로 보여야 한다.
             for (int i = 0; i < all.Count; i++)
                 if (all[i].Why == "정체인")
@@ -1396,8 +1397,12 @@ public sealed class ProfileCommand
             //   벽 두께가 2~5cm라 1:100에서 0.2~0.5mm 벌어진다.
             //   → 그룹을 갈라, 평면은 표시용만 보고 횡단면도는 이쪽에서 뽑는다.
             LastXsecGroupId = ObjectId.Null;
-            LastWallSpans = wspans;
-            if (cutsX.Count > 0)
+            LastWallSpans = wspans;   // ★ 자리 계산은 언제나 남긴다 — 횡단면도를 만들 때 여기서 뽑는다
+            LastVertBars = vbars;     // ★ 중심 보정을 받은 막대 목록 — DrawVertBars가 이것을 쓴다
+            if (!GradingSettings.BuildXsecSampleLines && nSplit > 0)
+                log.AppendLine($"  횡단용 검토선은 만들지 않았다(벽 {nSplit}곳의 (전)(후) 자리는 기억해 둔다) — " +
+                               "미리 만들면 그 선이 종단도에도 나타난다");
+            if (cutsX.Count > 0 && GradingSettings.BuildXsecSampleLines)
             {
                 try
                 {
@@ -1406,6 +1411,7 @@ public sealed class ProfileCommand
                     if (!xGroup.IsNull)
                     {
                         ObjectId hideLayer = ObjectId.Null;
+                        ObjectId hideStyleX = SectionCommand.EnsureHiddenSampleLineStyle(db, cdoc);
                         try
                         {
                             using var trL = db.TransactionManager.StartTransaction();
@@ -1431,18 +1437,20 @@ public sealed class ProfileCommand
                                 var idX = CivilDb.SampleLine.Create($"{xName}_{nmX}", xGroup, ptsX);
                                 if (idX.IsNull) continue;
                                 nX++;
-                                // ★★[JACK 0825] <b>레이어를 옮기는 것으로는 안 숨는다.</b>
-                                //   Civil 검토선의 표시는 <c>SampleLineStyle</c>이 쥐고 있고, 그 스타일이
-                                //   컴포넌트마다 <b>자기 레이어</b>에 그린다 — 객체 레이어를 바꿔도 그쪽이 이긴다
-                                //   (터파기 종단이 초록으로 나오던 것과 같은 구조다).
-                                //   → 객체 자체를 <b>안 보이게</b> 한다. 횡단면도를 뽑는 데는 지장이 없다.
+                                // ★★[JACK 0825] <b>스타일로 끈다 — 객체 속성으로는 안 숨는다.</b>
+                                //   레이어를 옮겨도, <c>Visible=false</c>로 해도 그대로 보였다.
+                                //   Civil 객체는 <b>스타일이 화면을 전담</b>하고 자기 표시 속성을 안 쓴다 —
+                                //   터파기 종단선이 초록으로 나오던 것과 같은 구조다.
+                                //   → 선·정점이 모두 꺼진 전용 스타일을 붙인다. 횡단면도 생성에는 지장이 없다
+                                //     (기하 데이터를 읽는 별개 경로다).
                                 try
                                 {
                                     using var trE = db.TransactionManager.StartTransaction();
-                                    if (trE.GetObject(idX, OpenMode.ForWrite) is Entity eX)
+                                    if (trE.GetObject(idX, OpenMode.ForWrite) is CivilDb.SampleLine slX)
                                     {
-                                        if (!hideLayer.IsNull) eX.LayerId = hideLayer;
-                                        eX.Visible = false;
+                                        if (!hideStyleX.IsNull) slX.StyleId = hideStyleX;
+                                        if (!hideLayer.IsNull) slX.LayerId = hideLayer;
+                                        slX.Visible = false;          // 보조 — 먹으면 좋고 아니어도 스타일이 잡는다
                                     }
                                     trE.Commit();
                                 }
@@ -1467,7 +1475,9 @@ public sealed class ProfileCommand
 
                         LastXsecGroupId = xGroup;
                         log.AppendLine($"횡단용 검토선 '{xName}' — {nX}/{cutsX.Count}개 " +
-                                       $"(벽 {nSplit}곳은 (전)(후) 두 장) · 레이어 '{XsecHiddenLayer}'로 숨김");
+                                       $"(벽 {nSplit}곳은 (전)(후) 두 장) · " +
+                                       (hideStyleX.IsNull ? "⚠숨김 스타일을 못 만들어 보일 수 있다"
+                                                          : $"스타일 '{SectionCommand.HiddenSampleLineStyleName}'로 숨김"));
                     }
                 }
                 catch (System.Exception ex) { log.AppendLine("  횡단용 검토선 실패 — " + ex.Message); }
@@ -1931,7 +1941,11 @@ public sealed class ProfileCommand
                 tr.GetObject(alignId, OpenMode.ForRead) is not CivilDb.Alignment al)
             { tr.Commit(); return "종단 막대: 종단뷰나 선형을 못 찾았다"; }
 
-            var bars = StationMarks.CollectVertBars(al, db, tr, log);
+            // ★★[JACK 0826] <b>이미 보정된 목록을 쓴다.</b> 새로 계산하면 중심 보정을 잃는다.
+            //   측점 수집이 안 돌았을 때만 물러서서 새로 계산한다.
+            bool haveBars = LastVertBars != null && LastVertBars.Count > 0;
+            var bars = haveBars ? LastVertBars : StationMarks.CollectVertBars(al, db, tr, log);
+            log?.AppendLine($"     막대 재료 — {(haveBars ? "측점 수집 때 만든 것(중심 보정됨)" : "여기서 새로 계산(보정 없음)")} {bars.Count}개");
             var lw = SectionCommand.EnsureLayer(db, tr, LayWall, AciCyan);
             var ls = SectionCommand.EnsureLayer(db, tr, LayShore, AciMagenta);
 
@@ -1989,6 +2003,15 @@ public sealed class ProfileCommand
                     //      그래서 막대가 바닥에 못 닿고 중간에서 끊겼다(실측 바닥 105.0인데 106.64에서 멈춤).
                     //
                     //   굴착 상단선과 구조물 바닥선의 <b>교차 표고</b>가 바로 그 두 끝이다 — 종단을 거칠 이유가 없다.
+                    zTop = b.ZTop; zBot = b.ZBottom; nFromLine++;
+                }
+                else if (!double.IsNaN(b.ZTop) && !double.IsNaN(b.ZBottom)
+                         && System.Math.Abs(b.ZTop - b.ZBottom) > 1e-6)
+                {
+                    // ★★[JACK 0826] <b>선 값이 곧 그 단의 높이다 — 종단보다 먼저 본다.</b>
+                    //   종단(계획면·원지반)에서 읽으면 언제나 <b>부지 전체 높이</b>가 나온다.
+                    //   다단 옹벽에서는 모든 단의 막대가 맨 아래 원지반까지 늘어난다(JACK 스샷).
+                    //   크레스트·토우 Z(또는 데이라잇에서 얻은 반대쪽 표고)가 <b>그 단만큼</b>이다.
                     zTop = b.ZTop; zBot = b.ZBottom; nFromLine++;
                 }
                 else if (TryWallFromProfile(b, wspans, ElevOf, pidPad, pidGround, out zTop, out zBot))
@@ -2143,10 +2166,26 @@ public sealed class ProfileCommand
     /// <summary>★[JACK 0825] 벽의 앞·뒤 자리 — 종단 막대가 지표면을 읽을 때 쓴다.</summary>
     internal static System.Collections.Generic.List<StationMarks.WallSpan> LastWallSpans = new();
 
+    /// <summary>★★[JACK 0826] 측점 수집 때 만든 <b>막대 목록</b> — 이미 중심 보정을 받은 것이다.
+    /// <para>JACK: <i>"아직도 절토 옹벽은 시점부에 측점이 만들어져."</i> 실측:
+    /// 측점은 <c>44.132</c>(중심)로 갔는데 <b>막대는 44.12</b>(시점)에 남았다.
+    /// <see cref="DrawVertBars"/>가 <c>CollectVertBars</c>로 <b>새로 계산</b>해서
+    /// <see cref="StationMarks.PullDaylightToWalls"/>의 보정을 못 받았기 때문이다 —
+    /// 오늘만 세 번째로 겪는 "두 경로가 다른 자를 쓴다"이다.</para></summary>
+    internal static System.Collections.Generic.List<StationMarks.VertBar> LastVertBars = new();
+
     /// <summary>횡단용 검토선을 담아 두는 레이어 — 평면에 안 보이게 꺼 둔다.</summary>
     internal const string XsecHiddenLayer = "DH-횡단검토선(숨김)";
 
     private static List<(ObjectId Id, double St, Point2d L, Point2d R)> LastSampleLines = new();
+
+    /// <summary>★[JACK 0826] [횡단도]가 이 목록을 그대로 쓴다 — 종단과 횡단이 <b>같은 측점</b>을 보게.</summary>
+    internal static List<(ObjectId Id, double St, Point2d L, Point2d R)> LastSampleLinesPublic => LastSampleLines;
+
+    /// <summary>★[JACK 0826] 측점명을 만들 때 쓴 <b>정측점 간격</b>.
+    /// <para>JACK: <i>"횡단은 종단의 측점명하고 맞지가 않아."</i> — 맞다. 횡단이 <c>XsecInterval</c>을
+    /// 쓰고 있었는데, 종단은 <b>밴드 간격</b>으로 <c>No.N+xx.xx</c>를 만든다. 같은 자를 써야 이름이 같다.</para></summary>
+    internal static double LastStationInterval = 20.0;
 
     /// <summary>★★★[v32.41~45 · JACK 0819] <b>단면검토선을 도면답게 — 색·선종류·측점·지시선.</b>
     ///

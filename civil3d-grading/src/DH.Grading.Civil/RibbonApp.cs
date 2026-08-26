@@ -28,6 +28,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.StationCommand))]             // DHSTATION(측점 추가·삭제 — 밸브실 등)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SampleLineCommand))]          // DHSAMPLE(단면검토선 — 측점 목록대로 생성)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SheetCommand))]               // DHSHEET(도곽 — A1 배치·모형 도곽범위)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.XsecViewCommand))]            // DHXVIEW(횡단도 — 옹벽·가시설은 (전)(후) 두 장)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SheetSettingsCommand))]       // DHSHEETSET(도면 설정 — 횡단·원지반굴곡·표·배경지도)
 
 namespace DH.Grading.Civil;
@@ -53,13 +54,23 @@ public sealed class RibbonApp : IExtensionApplication
         //   코드로 만든 탭이 사라짐 → WSCURRENT 변경을 감지해 다음 Idle에 탭 재생성(FindTab이 중복 방지).
         AcadApp.SystemVariableChanged += OnSysVarChanged;
 
-        // ★★[JACK 0825] 보기 버튼 켜고 끄기 — <b>도면이 바뀌거나 우리 명령이 끝날 때</b> 다시 본다.
-        //   지표면은 명령으로만 생기고 사라지므로 이 두 시점이면 충분하다(주기 검사는 필요 없다).
+        // ★★[JACK 0825] 보기 버튼 켜고 끄기 — 배선은 <b>Idle로 미룬다</b>.
+        //   ★[JACK 0826] 종전엔 여기서 바로 했다. <b>Initialize는 AutoCAD 시작 도중</b>이라
+        //   그 시점에 DocumentManager를 순회하거나 트랜잭션을 여는 것은 위험하다 —
+        //   리본 만들기·좌표계 검사도 같은 이유로 이미 Idle에 넘기고 있었는데 이것만 규칙을 벗어났다.
+        AcadApp.Idle += OnIdleHookDocs;
+    }
+
+    /// <summary>★[JACK 0826] 시작이 끝난 뒤(첫 Idle) 문서 이벤트를 단다 — 한 번만.</summary>
+    private void OnIdleHookDocs(object? sender, System.EventArgs e)
+    {
+        AcadApp.Idle -= OnIdleHookDocs;
         try
         {
             AcadApp.DocumentManager.DocumentActivated += (_, _) => RefreshEnabled();
             AcadApp.DocumentManager.DocumentCreated += (_, e2) => HookDoc(e2.Document);
             foreach (Document d0 in AcadApp.DocumentManager) HookDoc(d0);
+            RefreshEnabled();
         }
         catch { }
     }
@@ -196,8 +207,7 @@ public sealed class RibbonApp : IExtensionApplication
             // ★★[JACK 0825] <b>없는 것은 누를 수 없게 한다.</b>
             //   JACK: <i>"계획지표면이나 터파기 등을 수행하지 않았을 때는 버튼이 비활성화되게 해주고."</i>
             //   종전엔 눌러야 "아직 없습니다"를 알려 줬다 — 눌러 보기 전엔 알 수 없었다.
-            _btnViewPlan = vPln; _btnViewExcav = vExc;
-            RefreshEnabled();
+            _btnViewPlan = vPln; _btnViewExcav = vExc;   // 상태 갱신은 첫 Idle에서(OnIdleHookDocs)
             var splitView = new RibbonSplitButton
             {
                 Text = "보기",
@@ -307,26 +317,18 @@ public sealed class RibbonApp : IExtensionApplication
             pDraw.Items.Add(btnStn);
             pDraw.Items.Add(Spacer());
 
-            var btnSl = MakeButton(
-                "단면\n검토선", "DHSAMPLE ", "정체인 + 꺾임점 + 구배변화점 + 수동 측점 자리에 단면검토선을 만듭니다", "횡단위치");
-            btnSl.ToolTip = MakeTip("단면검토선 (DHSAMPLE)",
-                "종단도에서 정한 측점을 **그대로 횡단 위치로 옮깁니다**.\n" +
-                "정체인(도면설정의 횡단 간격) + 노선 꺾임점 + 계획면 구배변화점 + [측점]으로 더한 자리.\n" +
-                "이미 있는 그룹은 다시 쓰고 같은 자리는 건너뛰므로, 여러 번 눌러도 겹치지 않습니다.\n" +
-                "횡단면도는 이 뒤에 Civil 3D 기본 기능으로 뽑습니다.", null);
-            pDraw.Items.Add(btnSl);
-            pDraw.Items.Add(Spacer());
-
-
-            // [종단·횡단 — JACK 0731] 선 하나 그으면 종단면도·횡단면도를 Civil3D 정식 객체로 생성.
-            var btnSec = MakeButton(
-                "종단\n횡단", "DHSECTION ", "노선으로 쓸 선을 클릭하면 원지반·정지면의 종단면도와 횡단면도를 만듭니다(간격·폭=도면설정)", "종횡단");
-            btnSec.ToolTip = MakeTip("종단·횡단 (DHSECTION)",
-                "검토할 노선대로 선을 하나 긋고 이 버튼을 누르면\n" +
-                "그 선을 따라 원지반과 정지면의 종단면도·횡단면도를 만듭니다.\n" +
-                "Civil3D 정식 객체라 정지면을 고치면 자동으로 따라 갱신됩니다.\n" +
-                "횡단 간격·좌우 폭·가로 배치 수는 [도면설정]에서 정합니다.", null);
-            pDraw.Items.Add(btnSec);
+            // ★★[JACK 0826] <b>[단면검토선]·[종단·횡단] 버튼을 없앴다</b> — 쓸 일이 없어졌다.
+            //   검토선은 [종단도]가 측점과 함께 알아서 놓고, 종단·횡단을 한 번에 만들던 옛 명령은
+            //   [종단도]·[횡단도]로 갈렸다. 명령(DHSAMPLE·DHSECTION) 자체는 남겨 둔다 —
+            //   버튼만 뺀 것이라 옛 스크립트나 손버릇이 깨지지 않는다.
+            var btnXsec = MakeButton(
+                "횡단도", "DHXVIEW ", "종단도에서 정한 측점대로 횡단면도를 만듭니다(옹벽·가시설은 (전)(후) 두 장)", "횡단위치");
+            btnXsec.ToolTip = MakeTip("횡단도 (DHXVIEW)",
+                "**[종단도]를 먼저 돌린 뒤** 이 버튼을 누릅니다." + "\n" +
+                "놓을 자리를 클릭하면 그 자리에서 횡단면도를 늘어놓습니다." + "\n" +
+                "옹벽·가시설 자리는 **(전)(후) 두 장**이 나옵니다 — 한쪽엔 벽이 있고 한쪽엔 없습니다." + "\n" +
+                "배치·축척은 아직 손보는 중입니다(초안).", null);
+            pDraw.Items.Add(btnXsec);
             pDraw.Items.Add(Spacer());
 
             // [가져오기 — JACK 0731] 사내 지형·지적 DB에서 도면 좌표계로 바로 받아온다. 내보내기 바로 앞에 배치.
