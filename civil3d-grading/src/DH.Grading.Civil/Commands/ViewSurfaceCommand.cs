@@ -244,6 +244,9 @@ public sealed class ViewSurfaceCommand
                     var lr = (LayerTableRecord)tr.GetObject(lid, OpenMode.ForRead);
                     bool ours = lr.Name.StartsWith("DH-", System.StringComparison.Ordinal)
                              || System.Array.IndexOf(PlanLayers, lr.Name) >= 0;
+                    // ★[JACK 0826] <b>종단 레이어는 건드리지 않는다</b> — 이 명령은 평면 보기를 다룬다.
+                    //   종단도의 옹벽·가시설 막대와 터파기 종단선이 보기 전환 때 사라지면 안 된다.
+                    if (lr.Name.StartsWith("DH-종단-", System.StringComparison.Ordinal)) continue;
                     if (!ours) continue;
                     if (lr.IsOff) continue;               // 이미 꺼져 있다 = 우리가 끈 게 아니다
                     if (lid == db.Clayer) continue;       // 현재 레이어는 끄지 않는다

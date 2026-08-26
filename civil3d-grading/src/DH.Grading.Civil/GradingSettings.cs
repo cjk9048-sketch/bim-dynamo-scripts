@@ -27,7 +27,7 @@ public static class GradingSettings
     /// 이력은 설치본 확인에 쓰이므로 DLL에는 남기되, <b>출력은 절대 하지 않는다.</b>
     /// </para>
     /// ★[v32.20] 새 버전을 올릴 때 갱신할 곳은 <b>이 줄 하나</b>다 — 이력은 <c>작업과정.md</c>에 쓴다.</summary>
-    public const string Version = "v36.3 (2026-08-25)";
+    public const string Version = "v37.7 (2026-08-26)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -71,6 +71,14 @@ public static class GradingSettings
     /// <para><b>번들에 저장하지 않는다</b> — 저장하면 나중에 이 값을 바꿀 때 옛 도면이 따라 변한다.
     /// <see cref="GradingParams.WallGateSlope"/>의 기본값(0.05)이 옛 번들에도 그대로 채워진다.</para></summary>
     public const double WallGateSlope = 0.05;
+
+    /// <summary>★[JACK 0826] 횡단용 검토선 그룹((전)(후))을 <b>미리 만들어 둘 것인가</b>.
+    /// <para>JACK: <i>"옹벽의 시점·종점은 전·후 횡단면을 위해서 횡단용 단면검토선에만 나오고,
+    /// 종단용 단면검토선은 옹벽이나 가시설의 중심측점만 나와야 해."</i></para>
+    /// <para>그런데 미리 만들면 그 검토선이 <b>종단도에도 세로선으로 나타난다</b>(JACK 스샷: 선 3개).
+    /// 스타일을 숨겨도 안 사라졌다. 아직 횡단면도 명령이 없으므로 <b>지금은 만들지 않는다</b> —
+    /// (전)(후) 자리 계산은 그대로 두고(<c>WallSpan</c>), 횡단면도를 만들 때 그 자리에서 생성한다.</para></summary>
+    public static bool BuildXsecSampleLines = false;
     public static double MinFaceRun = 0.005;   // 비탈 최소 수평폭 절대 바닥 (m) — 안전장치
     /// <summary>★[JACK 0819] 옹벽을 판넬 배열 대신 <b>통짜 스윕 매스</b>로 만든다(무늬 없음).
     /// 기본설계에서는 수량이 필요 없고 "패널식 옹벽으로 보이면 된다"가 목적이라, 판넬 배치가

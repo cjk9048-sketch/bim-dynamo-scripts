@@ -489,7 +489,7 @@ public static class StationMarks
                 {
                     taken[best] = true;
                     double mid = (c.Station + toe[best].Station) / 2.0;
-                    pair?.Append($" [{mid:F2}m 벌어짐 {bd:F2}m]");
+                    pair?.Append($" [{mid:F3}m 벌어짐 {bd:F3}m]");
                     // 횡단이 쓸 앞·뒤 — 접기 전 두 자리를 그대로 남긴다(노선 진행 방향으로 앞이 작다).
                     spansOut?.Add(new WallSpan(mid,
                         Math.Min(c.Station, toe[best].Station),
@@ -555,8 +555,25 @@ public static class StationMarks
                         double dx = pt.X - m.X, dy = pt.Y - m.Y, d2 = dx * dx + dy * dy;
                         if (d2 < best) { best = d2; zo = pt.Z; ox = pt.X; oy = pt.Y; }
                     }
-                // 반대편 점과의 중점이 벽의 가운데다. 선형 범위를 벗어나면 그냥 제자리에 둔다.
-                if (!double.IsNaN(ox))
+                // ★[JACK 0826] 얼마나 떨어진 점을 잡았는지 남긴다 — <b>벽 두께쯤</b>이어야 맞다.
+                //   JACK: <i>"옹벽의 중심선이 실제 시점·끝점의 중심이 아니라 그냥 설정한 단의 중심으로 찍혔다."</i>
+                //   반대편 선이 <b>데이라잇으로 잘리기 전</b> 자리를 주면 그 거리가 두께보다 훨씬 커진다.
+                //   이 숫자가 두께(구배×높이)와 크게 다르면 잘린 조각이 아니라 원본을 본 것이다.
+                double gap = best < double.MaxValue ? Math.Sqrt(best) : double.NaN;
+                double want = Math.Abs(wSlope * (double.IsNaN(zo) ? 0 : m.Z - zo));
+                lone?.Append($"{{반대편 {gap:F3}m 떨어짐, 두께 추정 {want:F3}m}}");
+                // ★★[JACK 0826] <b>기하 최근접 점으로 중심을 잡지 않는다.</b>
+                //
+                //   JACK: <i>"중심 측점이 데이라잇으로 잘린 실제 높이에 곱한 구배의 절반인 중심이 아니라,
+                //   그냥 1단 설정 높이의 중심거리로 산정된 것 같은데?"</i> — 맞다. 실측으로 확인된다:
+                //   실제 벽 높이 2.94m → 두께 2.94cm → 중심은 윗선에서 <b>1.47cm</b>여야 하는데
+                //   <b>3cm</b> 옮겼다. 반대편 점이 <b>데이라잇보다 3cm 더 먼</b> 자리에서 왔다 —
+                //   <b>잘리기 전 원본 링</b>이다(1단 설정 높이 전체).
+                //
+                //   → 자리 계산은 여기서 하지 않는다. <b>데이라잇 측점이 곧 그 벽의 반대편</b>이므로
+                //     <see cref="PullDaylightToWalls"/>가 그 둘의 중점을 잡는다(절토에서 이미 그렇게 한다).
+                //     여기서는 <b>막대를 세울 자리만</b> 남기고 표고는 종단이 준다.
+                if (false && !double.IsNaN(ox))
                 {
                     try
                     {
@@ -591,10 +608,11 @@ public static class StationMarks
                 //
                 //   <b>그러니 여기서 자리를 옮기지 않는 것이 안전장치다.</b> 나중에 "못 옮기는 걸 고치자"고
                 //   손대면 그 자리가 벽면 한복판을 읽게 된다 — 고칠 거면 <c>WallSpan</c>도 함께 채워야 한다.
-                double hi2, lo2;
-                bool paired = !double.IsNaN(zo);
-                if (!paired) { hi2 = m.Z; lo2 = m.Z; }
-                else { hi2 = Math.Max(m.Z, zo); lo2 = Math.Min(m.Z, zo); }
+                // 표고도 여기서 정하지 않는다 — 잘리기 전 링의 Z이면 벽 높이가 부풀려진다.
+                //   높이를 0으로 두면 <see cref="PullDaylightToWalls"/>가 '짝 없는 벽'으로 알아보고
+                //   데이라잇과 중점을 잡으며, 막대 표고는 종단에서 읽는다.
+                double hi2 = m.Z, lo2 = m.Z;
+                bool paired = false;
                 barsOut.Add(new VertBar(double.IsNaN(midSt) ? m.Station : midSt, hi2, lo2, why, wSlope));
                 return paired;   // 반대편을 못 찾았으면 '세웠다'고 말하지 않는다 — 로그가 거짓이 된다
             }
@@ -706,16 +724,82 @@ public static class StationMarks
     /// <para><b>지우지 않고 옮긴다.</b> 데이라잇은 지형 정보라 없애면 안 된다 —
     /// 벽 측점과 <b>같은 자리</b>로 만들면 <see cref="Dedupe"/>가 하나로 합치고 사유는 남는다.
     /// 벽 두께 밖은 손대지 않으므로 정측점·원지반굴곡은 안전하다.</para></summary>
-    public static int PullDaylightToWalls(List<Mark> list, IReadOnlyList<VertBar> bars,
+    public static int PullDaylightToWalls(List<Mark> list, List<VertBar> bars,
                                           System.Text.StringBuilder log)
     {
         if (list == null || bars == null || bars.Count == 0) return 0;
-        int moved = 0;
+        int moved = 0, centered = 0;
         var note = log != null ? new System.Text.StringBuilder() : null;
-        foreach (var b in bars)
+        for (int bi = 0; bi < bars.Count; bi++)
         {
+            var b = bars[bi];
             double h = b.ZTop - b.ZBottom;
-            if (double.IsNaN(h) || h <= 0) continue;
+            if (double.IsNaN(h)) continue;
+
+            // ★★[JACK 0826] <b>반대편 선을 못 찾은 벽은 데이라잇이 그 반대편이다.</b>
+            //
+            //   절토 옹벽은 크레스트가 원지반 쪽이라 데이라잇에 잘려 사라진다 — 그러면 짝이 없어
+            //   <c>VertBar</c> 높이가 0이 되고, 측점이 <b>벽면(시점)</b>에 그대로 선다(JACK 스샷).
+            //   그런데 <b>크레스트가 원지반과 만나는 자리가 곧 데이라잇</b>이다. 실측:
+            //   <code>42.03m 옹벽 · 42.05m 데이라잇 — 2cm</code>
+            //   잃어버린 반대편을 데이라잇이 들고 있었다.
+            //
+            //   → 그 둘을 <b>가운데로 합친다.</b> 데이라잇을 벽 자리로 당기면 여전히 시점이지만,
+            //     중점으로 옮기면 <b>중심</b>이 된다. 막대도 그 자리로 따라간다.
+            bool lone = System.Math.Abs(h) < 1e-9;
+            if (lone)
+            {
+                // 높이를 모르니 두께도 모른다 — 게이트 두께(0.05×1m)만큼 넉넉히 본다.
+                double tolL = GradingSettings.WallGateSlope + MergeTol;
+                // ★★[JACK 0826 '성토 옹벽에 시점·중심·종점 측선이 다 생겼어'] <b>데이라잇이 여럿이다.</b>
+                //   실측: 벽 9.507 옆에 9.480·9.490·9.510 셋. 종전엔 <b>가장 가까운 하나만</b> 처리해
+                //   나머지 둘이 그대로 남았다 — 그게 JACK이 본 시점·종점이다.
+                //
+                //   그리고 <b>가장 먼 것이 진짜 반대편</b>이다. 9.507↔9.480 = 2.7cm이고,
+                //   실제 벽 높이 2.95m × 구배 0.01 = 2.95cm — 딱 맞는다.
+                //   가까운 것들은 그 사이에 낀 조각(복원·도면 이중)이다.
+                //   → <b>범위 안 전부를 모으고, 가장 먼 것으로 중심을 잡는다.</b>
+                var hits = new List<int>();
+                int far = -1; double farD = -1.0;
+                for (int i = 0; i < list.Count; i++)
+                {
+                    var m = list[i];
+                    if (m.Why == null) continue;
+                    if (m.Why.IndexOf("데이라잇", StringComparison.Ordinal) < 0) continue;
+                    if (m.Why.IndexOf("옹벽", StringComparison.Ordinal) >= 0 ||
+                        m.Why.IndexOf("가시설", StringComparison.Ordinal) >= 0) continue;
+                    double d0 = Math.Abs(m.Station - b.Station);
+                    if (d0 > tolL || d0 <= 1e-9) continue;
+                    hits.Add(i);
+                    if (d0 > farD) { farD = d0; far = i; }
+                }
+                if (far >= 0)
+                {
+                    double opp = list[far].Station;                  // 벽의 반대편 = 가장 먼 데이라잇
+                    double mid = (opp + b.Station) / 2.0;
+                    foreach (int i in hits)                          // 그 사이 조각들도 함께 중심으로
+                        list[i] = new Mark(mid, list[i].Why, list[i].Z, list[i].X, list[i].Y);
+                    for (int i = 0; i < list.Count; i++)             // 벽 측점 자신도
+                        if (Math.Abs(list[i].Station - b.Station) <= MergeTol && list[i].Why != null &&
+                            (list[i].Why.IndexOf("옹벽", StringComparison.Ordinal) >= 0 ||
+                             list[i].Why.IndexOf("가시설", StringComparison.Ordinal) >= 0))
+                            list[i] = new Mark(mid, list[i].Why, list[i].Z, list[i].X, list[i].Y);
+                    // ★★[JACK 0826 '옹벽이 단이 졌을 때 모든 막대가 원지반까지 만들어져'] <b>표고도 여기서 얻는다.</b>
+                    //   데이라잇 측점은 <b>그 단의 반대쪽 끝</b>이므로 그 표고가 곧 이 단의 위(또는 아래)다.
+                    //   이걸 안 채우면 막대가 종단(계획면·원지반)으로 물러서는데, 그건 <b>부지 전체 높이</b>라
+                    //   다단 옹벽에서 모든 막대가 맨 아래 원지반까지 늘어난다.
+                    double dz = list[far].Z;
+                    var nb = b with { Station = mid };
+                    if (!double.IsNaN(dz) && !double.IsNaN(b.ZTop) && Math.Abs(dz - b.ZTop) > 1e-6)
+                        nb = nb with { ZTop = Math.Max(b.ZTop, dz), ZBottom = Math.Min(b.ZTop, dz) };
+                    bars[bi] = nb;
+                    note?.Append($" [{b.Station:F3}↔{opp:F3}(데이라잇 {hits.Count}개)→가운데 {mid:F3}m · 두께 {farD:F3}m]");
+                    moved += hits.Count; centered++;
+                }
+                continue;
+            }
+
+            if (h <= 0) continue;
             // ★★[JACK 0825 '측점이 미세하게 겹쳐졌다'] 벽 두께 <b>+ 한 칸</b>.
             //   종전엔 <c>max(두께, MergeTol)</c>이었다. 낮은 벽은 두께가 1cm 밑이라 tol이 MergeTol에
             //   갇히는데, 데이라잇이 <b>1.2cm쯤</b> 떨어져 있으면 간발의 차로 밖이 된다
@@ -742,8 +826,9 @@ public static class StationMarks
         if (moved > 0)
         {
             int dup = Dedupe(list);
-            log?.AppendLine($"     벽 두께 안 데이라잇 {moved}개를 벽 자리로 당겼다" +
-                            (dup > 0 ? $"(합쳐서 {dup}개 줄었다)" : "") + note);
+            log?.AppendLine($"     벽 두께 안 데이라잇 {moved}개 정리" +
+                            (centered > 0 ? $"(그중 {centered}개는 벽과 <b>가운데로 합쳤다</b> — 짝을 잃은 벽)" : "") +
+                            (dup > 0 ? $" · 합쳐서 {dup}개 줄었다" : "") + note);
         }
         return moved;
     }

@@ -301,11 +301,112 @@ public sealed class SectionCommand
             {
                 pe.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
                     Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 6);   // ACI 6 = 마젠타
+                // ★★[JACK 0826 '터파기선은 원지반선하고 동일한 CR-GRND 레이어에 있는데 그래서 그런 것 같아']
+                //   맞다. 스타일 되읽기가 <c>Line=ACI6@0</c>이었는데 <b>@0은 "그려진 레이어를 따른다"</b>는 뜻이다 —
+                //   그 레이어가 원지반(CR-GRND, 초록)이라 초록으로 나왔다. 나는 이 @0을 보고도 "레이어는 무죄"로 읽었다.
+                //   → 터파기 종단만 <b>제 레이어</b>로 옮긴다. 색은 그 레이어가 준다.
+                try
+                {
+                    var lay = EnsureLayer(db, tr, ExcavProfileLayer, 6);
+                    if (!lay.IsNull) pe.LayerId = lay;
+                }
+                catch { }
                 try { DiagLog.Append("  터파기 종단 객체 색 = 마젠타(ACI6) 직접 지정 — ByLayer면 레이어 색이 이긴다"); } catch { }
             }
             tr.Commit();
         }
         catch (System.Exception ex) { try { DiagLog.Append("  터파기 종단 색 지정 실패 — " + ex.Message); } catch { } }
+            // ★★[JACK 0826 '터파기선 아직도 초록'] <b>객체에 실제로 붙은 스타일</b>을 되읽는다.
+            //   종전 되읽기는 <c>EnsureExcavProfileStyle</c>이 <b>만든 스타일</b>만 확인했다 —
+            //   그게 마젠타인 것과, <b>객체가 그 스타일을 쓰고 있는 것</b>은 다른 일이다.
+            //   여기서 갈린다: 객체 스타일이 마젠타면 다른 층(재정의·겹침)이고, 아니면 스타일 배정이 안 된 것이다.
+            try
+            {
+                using var trR = db.TransactionManager.StartTransaction();
+                if (trR.GetObject(profileId, OpenMode.ForRead) is CivilDb.Profile prR)
+                {
+                    string sn = "?"; short ci = -1;
+                    try { sn = prR.StyleName ?? "(빈값)"; } catch { }
+                    try
+                    {
+                        if (trR.GetObject(prR.StyleId, OpenMode.ForRead) is CivilStyles.ProfileStyle stR)
+                        {
+                            var dsR = stR.GetDisplayStyleProfile(CivilStyles.ProfileDisplayStyleProfileType.Line);
+                            if (dsR != null) ci = dsR.Color.ColorIndex;
+                        }
+                    }
+                    catch { }
+                    try { DiagLog.Append($"\n  터파기 종단 <b>객체가 쓰는</b> 스타일 = '{sn}' · 그 스타일의 선 색 = ACI{ci}" +
+                                         (ci == 6 ? "  (마젠타 맞다 — 초록이면 다른 층이다)" : "  ⚠마젠타가 아니다")); } catch { }
+                }
+                trR.Commit();
+            }
+            catch { }
+    }
+
+    /// <summary>★★[JACK 0825] <b>보이지 않는 단면검토선 스타일</b> — 횡단용 그룹에 쓴다.
+    ///
+    /// <para>JACK: <i>"여전히 옹벽과 가시설의 측점이 시종점이 같이 나와."</i></para>
+    ///
+    /// <para><c>Entity.Visible = false</c>로는 안 숨었다. Civil 객체는 <b>스타일이 화면을 전담</b>하고
+    /// 객체 자신의 표시 속성은 안 쓴다 — 터파기 종단선이 초록으로 나오던 것과 <b>같은 구조</b>다.
+    /// (그때도 스타일 색 → 객체 색 → 뷰별 재정의 세 층을 파고서야 알았다.)</para>
+    ///
+    /// <para>→ <b>스타일 차원에서 끈다.</b> 선·정점 모두 <c>Visible=false</c>인 스타일을 만들어
+    /// 횡단용 검토선에만 붙인다. 표시용 그룹은 원래 스타일 그대로다.</para></summary>
+    internal const string HiddenSampleLineStyleName = "DH_검토선(숨김)";
+
+    /// <summary>★[JACK 0826] 터파기 종단선 전용 레이어(마젠타) — 원지반 레이어(초록)와 갈라 놓는다.
+    /// <para><c>DH-종단-</c>으로 시작하므로 보기 명령의 레이어 끄기에서 <b>제외</b>된다(종단은 평면이 아니다).</para></summary>
+    internal const string ExcavProfileLayer = "DH-종단-터파기";
+
+    internal static ObjectId EnsureHiddenSampleLineStyle(Database db, CivilApp.CivilDocument cdoc)
+    {
+        try
+        {
+            var coll = cdoc.Styles.SampleLineStyles;
+            ObjectId id = ObjectId.Null;
+            foreach (ObjectId sid in coll)
+            {
+                using var tr0 = db.TransactionManager.StartTransaction();
+                try
+                {
+                    if (tr0.GetObject(sid, OpenMode.ForRead) is CivilStyles.SampleLineStyle st0
+                        && st0.Name == HiddenSampleLineStyleName) id = sid;
+                }
+                catch { }
+                tr0.Commit();
+                if (!id.IsNull) break;
+            }
+            if (id.IsNull) id = coll.Add(HiddenSampleLineStyleName);
+
+            using var tr = db.TransactionManager.StartTransaction();
+            if (tr.GetObject(id, OpenMode.ForWrite) is CivilStyles.SampleLineStyle st)
+            {
+                foreach (var t in new[]
+                {
+                    CivilStyles.SampleLineDisplayStyleType.Lines,
+                    CivilStyles.SampleLineDisplayStyleType.Vertices,
+                })
+                {
+                    try
+                    {
+                        var ds = st.GetDisplayStylePlan(t);
+                        if (ds != null && ds.Visible) ds.Visible = false;
+                    }
+                    catch { }
+                    try
+                    {
+                        var dm = st.GetDisplayStyleModel(t);
+                        if (dm != null && dm.Visible) dm.Visible = false;
+                    }
+                    catch { }
+                }
+            }
+            tr.Commit();
+            return id;
+        }
+        catch { return ObjectId.Null; }
     }
 
     /// <summary>★[JACK 0824] <b>터파기 종단선은 마젠타.</b> 그 색의 종단 스타일을 만들어 두고 그 ObjectId를 준다.
