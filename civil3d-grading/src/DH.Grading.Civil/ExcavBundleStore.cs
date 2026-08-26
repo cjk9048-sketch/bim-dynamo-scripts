@@ -14,6 +14,20 @@ public sealed class ExcavBundle
     public double Slope = 0.5;
     /// <summary>이 터파기를 만들 때 쓴 원지반 핸들.</summary>
     public string GroundHandle = "";
+
+    /// <summary>★★[JACK 0825] <b>이 터파기를 만들 때 쓴 구배 하한</b> — 형상을 다시 만들 때 그대로 쓴다.
+    ///
+    /// <para>v1에는 이 값이 없었다. <see cref="Slope"/>는 사용자가 넣은 <b>원본</b>(수직이면 0)이라,
+    /// 실제 형상은 <c>max(Slope, 그때의 하한)</c>으로 만들어진다. 그런데 그 하한을 <b>세션 전역값</b>에서
+    /// 읽고 있었다 — 전역 하한이 0.05에서 0.01로 바뀌면 <b>같은 기록이 다른 형상으로 되살아난다</b>.</para>
+    ///
+    /// <para>구조물을 <b>하나만 더해도 기록된 전부를 다시 만들기</b> 때문에, 새 구조물 하나 추가한 것뿐인데
+    /// 기존 터파기가 통째로 1/5로 좁아진다. 정지 번들이 있는 도면은 우연히 보호되지만
+    /// <b>터파기만 한 도면에는 그 보호가 없다.</b></para>
+    ///
+    /// <para>0이면 v1 기록(하한을 모르던 시절)이라는 뜻이고, 읽을 때 <b>0.05</b>로 채운다 —
+    /// 그때 만들어진 형상이 0.05였기 때문이다. JACK 확정: <i>"새 도면부터만."</i></para></summary>
+    public double MinSlope = 0.05;
     /// <summary>굴착 상단선(데이라잇) — 다시 만들 때 클립 경계로 쓴다.</summary>
     public System.Collections.Generic.List<Point3>? FinalRing;
 }
@@ -33,8 +47,10 @@ public static class ExcavBundleStore
 {
     private const string DictName = "DH_GRADING";
     private const string RecName = "EXCAV";
-    /// <summary>v1 = 구조물 바닥 + 구배 + 원지반 핸들 + 굴착 상단선.</summary>
-    private const int Version = 1;
+    /// <summary>v1 = 구조물 바닥 + 구배 + 원지반 핸들 + 굴착 상단선.
+    /// <para>★[JACK 0825] <b>v2 = v1 + 구배 하한(MinSlope).</b> 하한을 세션 전역에서 읽던 것이
+    /// 전역값이 바뀌는 순간 옛 터파기를 다른 형상으로 되살렸다 — 이제 기록이 자기 값을 들고 있다.</para></summary>
+    private const int Version = 2;
     private const string Sig = "DH_EXCAV";
 
     public static void SaveAll(Database db, Transaction tr,
@@ -51,6 +67,7 @@ public static class ExcavBundleStore
             vals.Add(new((int)DxfCode.Text, e.PolyHandle ?? ""));
             vals.Add(new((int)DxfCode.Text, e.GroundHandle ?? ""));
             vals.Add(new((int)DxfCode.Real, e.Slope));
+            vals.Add(new((int)DxfCode.Real, e.MinSlope));       // v2 — 그때의 하한을 함께 굳힌다
             WritePts(vals, e.Bottom);
             WritePts(vals, e.FinalRing);
         }
@@ -103,6 +120,8 @@ public static class ExcavBundleStore
                     GroundHandle = Str(arr, ref i),
                     Slope = Dbl(arr, ref i),
                 };
+                // v1에는 하한이 없다 — 그 시절 형상은 0.05로 만들어졌으므로 그 값을 채운다.
+                e.MinSlope = ver >= 2 ? Dbl(arr, ref i) : 0.05;
                 e.Bottom = ReadPts(arr, ref i) ?? new System.Collections.Generic.List<Point3>();
                 e.FinalRing = ReadPts(arr, ref i);
                 if (e.Bottom.Count >= 3) list.Add(e);

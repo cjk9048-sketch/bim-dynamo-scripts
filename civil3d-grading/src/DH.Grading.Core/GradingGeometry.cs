@@ -274,7 +274,7 @@ public static class GradingGeometry
                 else dbg.AppendLine("  ⚠구간이 62개를 넘어 이 구간은 링 기하에 반영되지 않는다(규칙 판정에는 들어간다)");
                 var txt = new System.Text.StringBuilder();
                 foreach (var r in z.Rules)
-                    txt.Append($"{r.FromBench + 1}단부터 1:{r.Slope:0.###}{(r.Slope <= p.MinSlope + 1e-9 ? "(수직)" : "")}" +
+                    txt.Append($"{r.FromBench + 1}단부터 1:{r.Slope:0.###}{(r.Slope <= p.WallGateSlope + 1e-9 ? "(수직)" : "")}" +
                                $"·소단{(r.BenchW >= 0 ? $"{r.BenchW:0.##}m" : "전역")}  ");
                 dbg.AppendLine($"  구간 호길이[{z.T0:F1}..{z.T1:F1}]m — {txt}" +
                                (z.Ref != null ? $" · 자=링({z.Ref.Count}점)" : " · 자=계획"));
@@ -443,7 +443,11 @@ public static class GradingGeometry
                     if (Math.Abs(den) < 1e-12) continue;
                     double t = (sx * (a.Y - v.Y) - sy * (a.X - v.X)) / den; // 레이 파라미터(바깥 거리)
                     double u = (nx * (a.Y - v.Y) - ny * (a.X - v.X)) / den; // 세그먼트 파라미터
-                    if (u < -1e-9 || u > 1 + 1e-9 || t < 0.05) continue;
+                    // ★[JACK 0825] 문턱 50mm → 1mm. 벽의 <b>1번 링이 정확히 구배×단높이</b>에 앉는데,
+            //   1:0.01·단높이 4m면 t=40mm라 <b>통째로 버려진다</b>(1:0.05일 땐 200mm라 안 걸렸다).
+            //   버려지면 단차 계획면에서 벽 링에 공유정점이 안 박혀 접힘 자리가 어긋난다.
+            //   본뜻은 "경계 정점과 겹치는 교점 버리기"이므로 격자 크기(1mm)면 충분하다.
+            if (u < -1e-9 || u > 1 + 1e-9 || t < 0.001) continue;
                     if (t <= lastRayT[rb] + 0.01) continue;               // 직전 링 교점보다 안쪽 — 되돌이 배제
                     if (t < bestT) { bestT = t; bestI = si; bpx = v.X + nx * t; bpy = v.Y + ny * t; }
                 }

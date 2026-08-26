@@ -103,12 +103,14 @@ public sealed class ExcavCommand
         //   **끝날 때 무조건 복원한다**(예외·Esc 포함). 그게 Focus가 IDisposable인 이유다.
         try
         {
-            using (ViewSurfaceCommand.Focus(db, null))   // 만드는 동안엔 전부 보이게(원지반 클릭 필요) — 아래에서 결과만 남긴다
+            using (ViewSurfaceCommand.Focus(db, null))   // 만드는 동안엔 전부 보이게(원지반 클릭 필요)
                 DoExcav(doc, rPoly.ObjectId, groundId);
-            using var trF = db.TransactionManager.StartTransaction();
-            GradingBuilder.IsolateSurfaces(trF, SurfName);   // 끝나면 터파기만
-            trF.Commit();
-            ed.WriteMessage("\n[보기] 터파기만 — 다시 보려면 [보기] 버튼(DHVIEW)");
+
+            // ★★[JACK 0825] <b>끝나면 전부 보기로 돌아온다.</b>
+            //   JACK: <i>"터파기 기능을 썼을 때 완료가 되면 전부 보기 상태로 복원되게 해줘."</i>
+            //   종전엔 '터파기만'으로 남겨 뒀다 — 만든 것을 보여주려는 뜻이었지만,
+            //   <b>만들자마자 나머지가 사라지면</b> 방금 한 일이 도면 어느 자리인지 알 수 없다.
+            ViewSurfaceCommand.ShowAll();
         }
         catch (System.Exception ex)
         {
@@ -169,6 +171,8 @@ public sealed class ExcavCommand
             var cur = new ExcavBundle
             {
                 PolyHandle = boxHandle, GroundHandle = groundHandle, Slope = Slope, Bottom = box0,
+                // ★[JACK 0825] 지금의 하한을 함께 굳힌다 — 나중에 전역값이 바뀌어도 이 터파기는 안 변한다.
+                MinSlope = GradingSettings.MinSlope,
             };
             if (newIdx >= 0) { recs[newIdx] = cur; log.AppendLine($"■ 같은 구조물 다시 — 기록 {newIdx + 1}번을 교체"); }
             else { recs.Add(cur); newIdx = recs.Count - 1; }
@@ -278,7 +282,9 @@ public sealed class ExcavCommand
                         ed.WriteMessage($"\n[터파기] ⚠ 구조물 바닥이 목표면보다 높은 자리가 {above}곳 있습니다 — " +
                                         "그 자리는 터파기가 아니라 성토입니다(굴착만 만듭니다).");
 
-                    var p = MakeParams(e.Bottom, target, e.Slope);
+                    // ★[JACK 0825] 하한은 <b>그 기록이 들고 있는 값</b>으로 — 세션 전역이 아니다.
+                    //   전역을 읽으면 구조물 하나 추가했을 뿐인데 기존 터파기가 통째로 다른 형상이 된다.
+                    var p = MakeParams(e.Bottom, target, e.Slope, e.MinSlope);
                     var vs = GradingGeometry.Build(e.Bottom, target, p, up: true, null);
                     if (!vs.HasSlope)
                     {
@@ -383,7 +389,7 @@ public sealed class ExcavCommand
 
         try { DiagLog.Append("\n" + diag); } catch { }
         ed.WriteMessage($"\n[터파기 지표면] 완료 — {SurfName} (구조물 {made}개)" +
-                        $"\n  굴착 구배 1:{Slope:0.##}{(Slope <= GradingSettings.MinSlope ? " (수직)" : "")}" +
+                        $"\n  굴착 구배 1:{Slope:0.##}{(Slope <= GradingSettings.WallGateSlope + 1e-9 ? " (수직)" : "")}" +
                         $"\n  자세한 내용: {DiagLog.FilePath}");
     }
 
@@ -391,7 +397,7 @@ public sealed class ExcavCommand
     /// <summary>터파기 제원으로 <see cref="GradingParams"/>를 만든다 — 절·성토 양쪽에 같은 값을 넣는다.
     /// <para>수직 예산은 <b>실제 표고차</b>에서 온다(정지면과 같은 이유) — 단높이로 곱해 잡으면
     /// 단수 상한에 걸리는 순간 예산이 함께 주저앉아 법면이 목표면에 닿기 전에 끊긴다.</para></summary>
-    private static GradingParams MakeParams(System.Collections.Generic.List<Point3> box, IGroundSurface target, double slope)
+    private static GradingParams MakeParams(System.Collections.Generic.List<Point3> box, IGroundSurface target, double slope, double minSlope)
     {
         double bMin = double.MaxValue, bMax = double.MinValue;
         foreach (var q in box) { bMin = System.Math.Min(bMin, q.Z); bMax = System.Math.Max(bMax, q.Z); }
@@ -407,7 +413,7 @@ public sealed class ExcavCommand
         //   → 바닥에서 목표면까지 **끊김 없는 한 장의 법면**이 된다.
         //   (엔진을 안 고치고 제원만으로 얻는다 — 정지면 쪽에 손대지 않는 게 안전하다.)
         double one = rise + 1.0;
-        double sl = System.Math.Max(slope, GradingSettings.MinSlope);   // 0=수직 → 최소구배로
+        double sl = System.Math.Max(slope, minSlope);   // 0=수직 → 그 기록의 최소구배로
         return new GradingParams
         {
             CutBenchHeight = one, FillBenchHeight = one,
@@ -417,7 +423,8 @@ public sealed class ExcavCommand
             MaxBenches = 4,
             MaxRise = rise,
             VertexSpacing = GradingSettings.VertexSpacing,
-            MinSlope = GradingSettings.MinSlope,
+            MinSlope = minSlope,
+            WallGateSlope = GradingSettings.WallGateSlope,
             MinFaceRun = GradingSettings.MinFaceRun,
             MiterConvex = GradingSettings.MiterConvex,
             MiterLimit = GradingSettings.MiterLimit,

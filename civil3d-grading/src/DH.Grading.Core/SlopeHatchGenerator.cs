@@ -119,11 +119,22 @@ public static class SlopeHatchGenerator
         List<(bool IsSlope, int Bench, int Seg, List<Point3> Pts)>? wallEdgesOut = null,
         double baseSlope = 1.5, double minSlope = 0.05,
         IReadOnlyList<IReadOnlyList<Point3>>? extraHoles = null,
-        List<List<Point3>>? wallAllOut = null)
+        List<(int Bench, bool IsCrest, List<Point3> Pts)>? wallAllOut = null)
     {
         var outList = new List<(bool, int, int, List<Point3>)>();
         if (rings == null || rings.Count < 2) return outList;
         int sgn = up ? -1 : +1;
+
+        // ★★[JACK 0825 '계획지표면의 옹벽선이 아예 생성이 안 됐다'] <b>구간이 없어도 전역이 수직이면 옹벽이다.</b>
+        //
+        //   종전엔 <b>옹벽 구간(SlopeZone)이 지정돼 있을 때만</b> 옹벽선을 따로 담았다.
+        //   그래서 <b>부지 전체를 수직으로 준 도면</b>(구간 0개 + 전역 구배가 게이트 이하)에서는
+        //   옹벽의 윗선·아랫선이 통째로 <b>사면선·소단선</b>으로 분류됐다 —
+        //   옹벽선이 한 줄도 안 그려지고, 측점도 짝짓기를 못 거쳐 위·아래가 따로 섰다(실측 3cm 간격).
+        //
+        //   <c>WallRunBuilder</c>는 같은 상황에서 <c>globalIsWall</c>로 벽이라 판정해 11줄을 만들었다 —
+        //   <b>두 경로가 다른 자를 쓰고 있었다.</b> 자를 맞춘다.
+        bool globalIsWall = baseSlope <= minSlope + 1e-9;
         var clip = ClipRegion.Build(clipOuter, clipHole, extraHoles);
         // [§75] 옹벽 구간: 사면선/소단선 제외 — 구간 안 크레스트(계단 상단)는 '옹벽선'으로 분리 반환(두꺼운 빨강 표현용).
         double[]? cumZ = (wallZones != null && wallZones.Count > 0 && zoneBoundary != null && zoneBoundary.Count >= 3)
@@ -149,13 +160,24 @@ public static class SlopeHatchGenerator
             int segS = 0, segW = 0;
             foreach (var run in slopeRuns)
             {
-                if (inZone == null) { outList.Add((true, k, segS++, run)); continue; }
+                if (inZone == null)
+                {
+                    if (globalIsWall)
+                    {
+                        wallLinesOut?.Add(run);
+                        wallAllOut?.Add((k, true, run));
+                        if (!up) wallEdgesOut?.Add((true, k, segW++, run));
+                    }
+                    else outList.Add((true, k, segS++, run));
+                    continue;
+                }
                 foreach (var (sub, inz) in SplitByZone(run, inZone))
                 {
                     if (inz)
                     {
                         wallLinesOut?.Add(sub);                        // 구간 안 크레스트 = 옹벽선(표시)
-                        wallAllOut?.Add(sub);                          // ★[JACK 0824] 측점용 — 아래 주석 참조
+                        // ★[JACK 0824] 측점용 · ★[JACK 0825] 단 번호와 윗선/아랫선을 함께 — 측점에서 짝을 찾아 가운데로 접는다.
+                        wallAllOut?.Add((k, true, sub));               // 윗선(크레스트)
                         // [사면변환 클릭 대상 — JACK 0729] "클릭한 옹벽부터 바깥이 사면" 통일 규칙:
                         //   성토는 크레스트(윗선)가 그 옹벽의 선 — 여기서 태그. 절토는 아랫선(토우)에서 태그(아래 루프).
                         if (!up) wallEdgesOut?.Add((true, k, segW++, sub));
@@ -169,7 +191,16 @@ public static class SlopeHatchGenerator
             int segB = 0, segT = 0;
             foreach (var run in bermRuns)
             {
-                if (inZone == null) { outList.Add((false, k, segB++, run)); continue; }
+                if (inZone == null)
+                {
+                    if (globalIsWall)
+                    {
+                        wallAllOut?.Add((k, false, run));           // 측점 재료(아랫선)
+                        if (up) wallEdgesOut?.Add((false, k, segT++, run));
+                    }
+                    else outList.Add((false, k, segB++, run));
+                    continue;
+                }
                 foreach (var (sub, inz) in SplitByZone(run, inZone))
                 {
                     if (!inz) outList.Add((false, k, segB++, sub)); // 구간 안 소단선은 그리지 않음(JACK 0728)
@@ -179,7 +210,7 @@ public static class SlopeHatchGenerator
                         //   그리지 않는 것과 '없는 것'은 다르다 — 옹벽의 윗선·아랫선은 계획 지표면이 실제로 꺾이는
                         //   자리라 측점이 서야 한다. 종전엔 성토 구간의 토우가 **어디에도 안 담겨** 사라졌고,
                         //   그래서 옹벽 구간 전체의 측점이 비었다(성토쪽 68%가 옹벽인 도면에서 실측).
-                        wallAllOut?.Add(sub);
+                        wallAllOut?.Add((k, false, sub));              // 아랫선(토우) — 같은 k의 윗선과 한 벽이다
                         // [사면변환 클릭 대상 — JACK 0729] 절토는 각 옹벽의 '아랫선'(토우)이 그 옹벽의 선 —
                         //   스샷 피드백: "시안선 뒤 다음 옹벽 아랫선을 선택하는 게 맞다". k=0 토우(경계선)는 도넛에 잘려 제외.
                         if (up) wallEdgesOut?.Add((false, k, segT++, sub));

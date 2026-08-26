@@ -5064,7 +5064,7 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     Check("S51 옹벽 구간 사면 생성", vs.HasSlope, $"링 {vs.Rings.Count}");
 
     var fr = vs.Rings[vs.Rings.Count - 1];
-    var wallPts = new List<List<Point3>>();
+    var wallPts = new List<(int Bench, bool IsCrest, List<Point3> Pts)>();
     var edges = SlopeHatchGenerator.GenerateEdgeLinesTagged(vs.Rings, ground, true, fr, sq,
         zones, sq, null, null, pr.CutSlope, pr.MinSlope, null, wallPts);
 
@@ -5074,7 +5074,7 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
         foreach (var q in e.Pts)
             if (zw.ContainsAt(q.X, q.Y, sq, cum)) { inZoneDrawn++; break; }
     foreach (var w in wallPts)
-        foreach (var q in w)
+        foreach (var q in w.Pts)
             if (zw.ContainsAt(q.X, q.Y, sq, cum)) { inZoneWall++; break; }
 
     Console.WriteLine($"      S51 그려지는 선 {edges.Count}개(옹벽 구간에 걸친 것 {inZoneDrawn}개) · " +
@@ -5085,14 +5085,14 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
 
     // 옹벽 구간이 없으면 측점 재료도 없어야 한다(엉뚱한 선이 새로 생기면 안 된다).
     var vNo = GradingGeometry.Build(sq, ground, pr, true, null);
-    var wallNo = new List<List<Point3>>();
+    var wallNo = new List<(int Bench, bool IsCrest, List<Point3> Pts)>();
     SlopeHatchGenerator.GenerateEdgeLinesTagged(vNo.Rings, ground, true, vNo.Rings[vNo.Rings.Count - 1], sq,
         null, sq, null, null, pr.CutSlope, pr.MinSlope, null, wallNo);
     Check("S51 ★구간이 없으면 측점 재료도 없다(없던 선이 새로 안 생긴다)", wallNo.Count == 0, $"{wallNo.Count}개");
 
     // 성토도 같아야 한다 — 종전엔 성토 토우가 어디에도 안 담겨 통째로 사라졌다.
     var vF = GradingGeometry.Build(sq, new FlatGround(92), pr, false, zones);
-    var wallF = new List<List<Point3>>();
+    var wallF = new List<(int Bench, bool IsCrest, List<Point3> Pts)>();
     SlopeHatchGenerator.GenerateEdgeLinesTagged(vF.Rings, new FlatGround(92), false,
         vF.Rings[vF.Rings.Count - 1], sq, zones, sq, null, null, pr.FillSlope, pr.MinSlope, null, wallF);
     Console.WriteLine($"      S51 성토 — 측점 재료로 나온 옹벽 선 {wallF.Count}개");
@@ -5582,9 +5582,460 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
         $"서쪽 {topW:F1} · 동쪽 {topE:F1}");
 }
 
+// ★ S60 [JACK 0825 "수직지표면치고 0.05는 너무 과해 — 단수가 많아지면 부지면적이 커지고
+//   토공량에도 차이가 난다"] **구배 하한을 낮추면 무엇이 달라지는가 — 재고 정한다.**
+//
+//   0.05는 실측으로 정한 값이 아니다("사례가 있어 미연 방지"라고만 적혀 있다).
+//   그래서 추측 대신 **같은 부지에 구배만 바꿔 넣고 재 본다** — 면적·링·간격 셋을.
+{
+    // 100x100 부지, 계획 100m, 원지반 115m(절토 15m). 단높이 5m·소단 0 → 옹벽 3단.
+    double S = 100.0;
+    var sq = new List<Point3> { new(0, 0, 100), new(S, 0, 100), new(S, S, 100), new(0, S, 100) };
+    var ground = new FlatGround(115);
+    double baseArea = Math.Abs(Shoelace(sq));
+
+    Console.WriteLine("      S60 구배 하한 계측 — 100x100 부지 · 절토 15m · 단높이 5m · 소단 0 (옹벽 3단)");
+    Console.WriteLine("        구배     링   최종면적㎡   부지증가㎡   증가율%   링간격mm(최소)");
+
+    double area05 = 0, area01 = 0;
+    foreach (double n in new[] { 0.05, 0.03, 0.02, 0.01, 0.005, 0.002 })
+    {
+        var pr = new GradingParams
+        {
+            CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 0, FillBenchWidth = 0,
+            CutSlope = n, FillSlope = n, CellSize = 1.0, MaxBenches = 30, MaxRise = 40,
+            VertexSpacing = 2.0, MinSlope = n, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+        };
+        VirtualSlope vs;
+        try { vs = GradingGeometry.Build(sq, ground, pr, up: true, null); }
+        catch (Exception ex)
+        { Console.WriteLine($"        1:{n,-6:0.###} 예외 — {ex.GetType().Name}: {ex.Message}"); continue; }
+
+        if (!vs.HasSlope || vs.Rings.Count < 2)
+        { Console.WriteLine($"        1:{n,-6:0.###} 사면 없음(링 {vs.Rings.Count})"); continue; }
+
+        var last = vs.Rings[vs.Rings.Count - 1];
+        double a = Math.Abs(Shoelace(last));
+        // ★ 벽 하나의 <b>크레스트↔토우</b> 간격을 잰다 — TIN에서 그 벽이 얼마나 납작한가.
+        //   SlopeHatchGenerator와 같은 짝짓기(2k, 2k+1)를 쓴다. 소단이 0이면 '토우↔다음 크레스트'는
+        //   같은 자리라 0이 나오는 게 정상이므로, 이웃 링을 그냥 훑으면 늘 0이 나온다.
+        double gap = double.MaxValue;
+        for (int k = 0; 2 * k + 1 < vs.Rings.Count; k++)
+            gap = Math.Min(gap, MinRingGap(vs.Rings[2 * k], vs.Rings[2 * k + 1]));
+
+        if (Math.Abs(n - 0.05) < 1e-9) area05 = a;
+        if (Math.Abs(n - 0.01) < 1e-9) area01 = a;
+        Console.WriteLine($"        1:{n,-6:0.###} {vs.Rings.Count,3}  {a,10:F1}  {a - baseArea,10:F1}  " +
+                          $"{(a - baseArea) / baseArea * 100,7:F2}  {(gap == double.MaxValue ? -1 : gap * 1000),12:F1}");
+    }
+
+    Check("S60 ★구배 0.01에서도 기하가 만들어진다", area01 > 0, $"{area01:F1}㎡");
+    if (area05 > 0 && area01 > 0)
+    {
+        double save = area05 - area01;
+        Console.WriteLine($"      S60 ★★0.05 → 0.01 로 낮추면 부지가 {save:F1}㎡ 줄어든다" +
+                          $" (절토 평균 7.5m 가정 시 토공 약 {save * 7.5:F0}㎥)");
+        Check("S60 ★★0.05보다 0.01이 부지를 적게 먹는다(JACK 지적대로다)", save > 0, $"{save:F1}㎡");
+    }
+}
+
+// ★ S61 [JACK 0825] **구배를 낮추면 옹벽 '선'이 살아남는가** — 면적이 맞아도 선이 뭉개지면 소용없다.
+//   S60은 링(기하)만 봤다. 실제로 도면에 나가는 것은 SlopeHatchGenerator가 뽑는 선이고,
+//   그 경로에는 '가까우면 합친다/버린다'는 문턱이 여럿 있다. 좁은 간격에서 그 문턱에 걸리는지 본다.
+{
+    double S = 100.0;
+    var sq = new List<Point3> { new(0, 0, 100), new(S, 0, 100), new(S, S, 100), new(0, S, 100) };
+    var ground = new FlatGround(115);
+    var cum61 = GradingGeometry.CumLen2D(sq);
+    double L61 = cum61[^1];
+
+    Console.WriteLine("      S61 구배별 옹벽선 생존 — 같은 부지·같은 단높이, 구배만 바꾼다");
+    Console.WriteLine("        구배     사면선  소단선  옹벽선  옹벽선점수  가장짧은옹벽선m");
+
+    int wall05 = 0, wall01 = 0;
+    foreach (double n in new[] { 0.05, 0.02, 0.01, 0.005, 0.002 })
+    {
+        var pr = new GradingParams
+        {
+            CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 0, FillBenchWidth = 0,
+            CutSlope = n, FillSlope = n, CellSize = 1.0, MaxBenches = 30, MaxRise = 40,
+            VertexSpacing = 2.0, MinSlope = n, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+        };
+        var zw = new SlopeZone { T0 = 0.0, T1 = L61 };          // 둘레 전체가 옹벽
+        zw.Rules.Add((0, n, 0.0)); zw.Normalize();
+        var zones = new List<SlopeZone> { zw };
+
+        VirtualSlope vs;
+        try { vs = GradingGeometry.Build(sq, ground, pr, up: true, zones); }
+        catch (Exception ex) { Console.WriteLine($"        1:{n,-6:0.###} 기하 예외 — {ex.GetType().Name}"); continue; }
+        if (!vs.HasSlope) { Console.WriteLine($"        1:{n,-6:0.###} 사면 없음"); continue; }
+
+        var fr = vs.Rings[vs.Rings.Count - 1];
+        var wallPts = new List<(int Bench, bool IsCrest, List<Point3> Pts)>();
+        List<(bool IsSlope, int Bench, int Seg, List<Point3> Pts)> edges;
+        try
+        {
+            edges = SlopeHatchGenerator.GenerateEdgeLinesTagged(vs.Rings, ground, true, fr, sq,
+                zones, sq, null, null, n, n, null, wallPts);
+        }
+        catch (Exception ex) { Console.WriteLine($"        1:{n,-6:0.###} 선 예외 — {ex.GetType().Name}"); continue; }
+
+        int slope = 0, berm = 0;
+        foreach (var e in edges) { if (e.IsSlope) slope++; else berm++; }
+        int pts = 0; double shortest = double.MaxValue;
+        foreach (var w in wallPts)
+        {
+            pts += w.Pts.Count;
+            double len = 0;
+            for (int i = 1; i < w.Pts.Count; i++)
+            {
+                double dx = w.Pts[i].X - w.Pts[i - 1].X, dy = w.Pts[i].Y - w.Pts[i - 1].Y;
+                len += Math.Sqrt(dx * dx + dy * dy);
+            }
+            if (len < shortest) shortest = len;
+        }
+        if (Math.Abs(n - 0.05) < 1e-9) wall05 = wallPts.Count;
+        if (Math.Abs(n - 0.01) < 1e-9) wall01 = wallPts.Count;
+        Console.WriteLine($"        1:{n,-6:0.###} {slope,6} {berm,7} {wallPts.Count,7} {pts,10}" +
+                          $" {(shortest == double.MaxValue ? -1 : shortest),15:F2}");
+    }
+
+    Check("S61 ★구배 0.01에서도 옹벽선이 나온다", wall01 > 0, $"{wall01}줄");
+    Check("S61 ★★구배를 낮춰도 옹벽선 개수가 유지된다(문턱에 안 먹혔다)",
+        wall05 > 0 && wall01 == wall05, $"0.05에서 {wall05}줄 · 0.01에서 {wall01}줄");
+}
+
+// ★ S62 [JACK 0825] **위험한 건 구배가 아니라 '간격'이다** — 단높이가 작으면 같은 구배도 위험해진다.
+//   Civil 3D TIN이 깨지는 건 두 정점이 <b>정확히 같은 자리</b>일 때다(같은 X,Y엔 점 하나만 산다).
+//   간격 = 구배 × 단높이 이므로, 구배만 보고 하한을 걸면 <b>낮은 단에서 0으로 수렴</b>한다.
+{
+    double S = 100.0;
+    var sq = new List<Point3> { new(0, 0, 100), new(S, 0, 100), new(S, S, 100), new(0, S, 100) };
+    var ground = new FlatGround(115);
+
+    Console.WriteLine("      S62 단높이별 링 간격 — 구배 1:0.01 고정, 단높이만 바꾼다");
+    Console.WriteLine("        단높이m   이론간격mm   실측간격mm   링   사면생성");
+
+    const double n62 = 0.01;
+    foreach (double h in new[] { 15.0, 5.0, 2.0, 1.0, 0.5, 0.3, 0.1 })
+    {
+        var pr = new GradingParams
+        {
+            CutBenchHeight = h, FillBenchHeight = h, CutBenchWidth = 0, FillBenchWidth = 0,
+            CutSlope = n62, FillSlope = n62, CellSize = 1.0, MaxBenches = 200, MaxRise = 40,
+            VertexSpacing = 2.0, MinSlope = n62, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+        };
+        VirtualSlope vs;
+        try { vs = GradingGeometry.Build(sq, ground, pr, up: true, null); }
+        catch (Exception ex)
+        { Console.WriteLine($"        {h,7:0.##} {n62 * h * 1000,12:F1}  예외 {ex.GetType().Name}"); continue; }
+
+        double gap = double.MaxValue;
+        for (int k = 0; 2 * k + 1 < vs.Rings.Count; k++)
+            gap = Math.Min(gap, MinRingGap(vs.Rings[2 * k], vs.Rings[2 * k + 1]));
+        Console.WriteLine($"        {h,7:0.##} {n62 * h * 1000,12:F1} {(gap == double.MaxValue ? -1 : gap * 1000),12:F2}" +
+                          $" {vs.Rings.Count,5} {(vs.HasSlope ? "O" : "X"),8}");
+    }
+    Console.WriteLine("        ※ Civil 3D 내장 Wall 브레이크라인이 쓰는 오프셋 = 0.001ft ≈ 0.3mm");
+    Console.WriteLine("           실무 권고 3~10mm — 그 아래로 내려가는 조합이 진짜 경계다.");
+}
+
+// ★ S63 [JACK 0825 구배 하한 검토] **링을 부풀린 값과 벽을 판정하는 값이 어긋나 있다.**
+//
+//   `GradingGeometry`는 사면 수평폭을 <c>Math.Max(rise*slope, MinFaceRun)</c>로 <b>5mm까지 부풀려</b> 링을 뜬다.
+//   그런데 `WallRunBuilder`는 벽인지 볼 때 <c>wallGap = minSlope * h</c>로 <b>부풀리기 전 값</b>을 기댄다.
+//   그래서 <c>구배 × 단높이</c>가 5mm 밑으로 내려가면 실제 간격이 한도를 넘어 <b>벽면이 전부 탈락</b>한다.
+//
+//   이 시험은 그 어긋남을 <b>숫자로 고정</b>한다 — 고친 뒤 이 값이 어떻게 변하는지가 판정 근거다.
+{
+    Console.WriteLine("      S63 링 부풀림 vs 벽 판정 한도 — 어긋나기 시작하는 지점");
+    Console.WriteLine("        구배   단높이m  이론간격mm  링이쓴폭mm  판정한도mm  판정");
+
+    const double mfr = 0.005;                       // GradingSettings.MinFaceRun
+    bool anyBroken = false, allSafeAtReal = true;
+    foreach (var (n, h) in new[]
+    {
+        (0.05, 5.0), (0.01, 5.0), (0.01, 3.0), (0.01, 1.0),
+        (0.01, 0.5), (0.01, 0.45), (0.01, 0.3), (0.02, 0.25), (0.02, 0.2),
+    })
+    {
+        double want = n * h;                        // 이론 간격
+        double used = Math.Max(want, mfr);          // 링이 실제로 쓴 폭(GradingGeometry.cs:1002)
+        double lim = want * 1.05 + 1e-3;            // 벽 판정 한도(WallRunBuilder.cs:113)
+        bool ok = used <= lim;
+        if (!ok) anyBroken = true;
+        if (h >= 3.0 && !ok) allSafeAtReal = false;   // 실무 단높이(3m 이상)에서는 절대 깨지면 안 된다
+        Console.WriteLine($"        1:{n,-5:0.###}{h,8:0.##}{want * 1000,12:F2}{used * 1000,12:F2}" +
+                          $"{lim * 1000,12:F2}   {(ok ? "벽" : "★탈락")}");
+    }
+
+    Check("S63 ★★실무 단높이(3m 이상)에서는 구배 0.01이어도 벽으로 잡힌다", allSafeAtReal,
+        "3m·5m 조합이 전부 '벽'이어야 한다");
+    Check("S63 ★낮은 단높이에서 어긋남이 실재한다(고치기 전 상태를 고정)", anyBroken,
+        "하나라도 '탈락'이 나와야 이 시험이 의미를 가진다");
+    Console.WriteLine("        ※ 고치는 법: WallRunBuilder의 wallGap을 Math.Max(minSlope*h, MinFaceRun)으로.");
+    Console.WriteLine("           그러면 '링이 쓴 폭'과 '판정 한도'가 구조적으로 어긋날 수 없다.");
+}
+
+// ★ S64 [JACK 0825 구배 하한 검토 · 검토에이전트 지적] **진짜 위험은 '불일치'다.**
+//
+//   지금까지의 시험은 전부 <b>구배도 0.01, 판정도 0.01</b>인 일관된 경우였다 — 당연히 통과한다.
+//   실제 사고는 <b>옛 도면</b>에서 난다: 구간 규칙에 적힌 구배는 <b>0.05</b>인데(그때 만든 것이라)
+//   params의 판정 기준만 <b>0.01</b>로 바뀌는 조합이다. 그러면 소프트웨어가
+//   <b>모양은 수직인데 사면이라고 믿는다</b>.
+//
+//   이 시험이 그 조합을 직접 만들어 옹벽선이 실제로 사라지는지 확인한다.
+{
+    double S = 100.0;
+    var sq = new List<Point3> { new(0, 0, 100), new(S, 0, 100), new(S, S, 100), new(0, S, 100) };
+    var ground = new FlatGround(115);
+    var cum64 = GradingGeometry.CumLen2D(sq);
+    double L64 = cum64[^1];
+
+    // 어느 경우에도 <b>구간 규칙 구배는 0.05</b>(옛 도면이 저장해 둔 값)로 고정한다.
+    const double ruleN = 0.05;
+
+    Console.WriteLine("      S64 규칙 0.05 · 판정 기준만 바꿔 본다 — 옛 도면이 겪을 일");
+    Console.WriteLine("        판정기준   옹벽선  사면선  소단선   판정");
+
+    int wallSame = -1, wallMismatch = -1;
+    foreach (double gate in new[] { 0.05, 0.01 })
+    {
+        var pr = new GradingParams
+        {
+            CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 0, FillBenchWidth = 0,
+            CutSlope = ruleN, FillSlope = ruleN, CellSize = 1.0, MaxBenches = 30, MaxRise = 40,
+            VertexSpacing = 2.0, MinSlope = gate, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+        };
+        var zw = new SlopeZone { T0 = 0.0, T1 = L64 };
+        zw.Rules.Add((0, ruleN, 0.0)); zw.Normalize();      // ← 규칙은 언제나 0.05
+        var zones = new List<SlopeZone> { zw };
+
+        var vs = GradingGeometry.Build(sq, ground, pr, up: true, zones);
+        var fr = vs.Rings[vs.Rings.Count - 1];
+        var wallPts = new List<(int Bench, bool IsCrest, List<Point3> Pts)>();
+        var edges = SlopeHatchGenerator.GenerateEdgeLinesTagged(vs.Rings, ground, true, fr, sq,
+            zones, sq, null, null, ruleN, gate, null, wallPts);
+
+        int slope = 0, berm = 0;
+        foreach (var e in edges) { if (e.IsSlope) slope++; else berm++; }
+        if (Math.Abs(gate - 0.05) < 1e-9) wallSame = wallPts.Count; else wallMismatch = wallPts.Count;
+
+        Console.WriteLine($"        1:{gate,-8:0.###} {wallPts.Count,6} {slope,7} {berm,7}   " +
+                          (wallPts.Count > 0 ? "옹벽으로 본다" : "★사면으로 본다 — 옹벽선 사라짐"));
+    }
+
+    Check("S64 규칙과 판정이 같으면(0.05·0.05) 옹벽으로 잡힌다", wallSame > 0, $"{wallSame}줄");
+    Check("S64 ★★★규칙 0.05인데 판정만 0.01로 낮추면 옹벽이 사면이 된다(검토 지적이 옳다)",
+        wallMismatch == 0, $"옹벽선 {wallMismatch}줄 · 사면선이 대신 생긴다");
+    Console.WriteLine("        ※ 그래서 판정 기준(게이트)은 0.05로 두고, 하한만 낮춰야 한다.");
+    Console.WriteLine("           게이트를 그대로 두면 한도가 넓어 0.01짜리 얇은 벽도 함께 통과한다.");
+}
+
+// ★ S65 [JACK 0825] **게이트를 떼어내면 옛 옹벽이 살아남는가** — S64가 재현한 사고의 해독제.
+//
+//   S64: 규칙 0.05 · 판정 0.01 → 옹벽선 16줄이 <b>0줄</b>이 됐다.
+//   이제 판정을 <c>WallGateSlope</c>(0.05 동결)가 맡고 하한만 0.01로 내려간다.
+//   같은 조합에서 옹벽선이 <b>그대로 살아 있어야</b> 한다 — 그리고 새로 만드는 얇은 벽(0.01)도 함께.
+{
+    double S = 100.0;
+    var sq = new List<Point3> { new(0, 0, 100), new(S, 0, 100), new(S, S, 100), new(0, S, 100) };
+    var ground = new FlatGround(115);
+    var cum65 = GradingGeometry.CumLen2D(sq);
+    double L65 = cum65[^1];
+
+    Console.WriteLine("      S65 게이트 분리 후 — 하한 0.01 · 게이트 0.05 고정");
+    Console.WriteLine("        규칙구배  옹벽선  사면선  소단선  링간격mm   판정");
+
+    int wallOld = -1, wallNew = -1;
+    foreach (double ruleN in new[] { 0.05, 0.03, 0.01 })
+    {
+        var pr = new GradingParams
+        {
+            CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 0, FillBenchWidth = 0,
+            CutSlope = ruleN, FillSlope = ruleN, CellSize = 1.0, MaxBenches = 30, MaxRise = 40,
+            VertexSpacing = 2.0,
+            MinSlope = 0.01,          // ← 하한은 내려갔고
+            WallGateSlope = 0.05,     // ← 판정 문턱은 그대로다
+            MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+        };
+        var zw = new SlopeZone { T0 = 0.0, T1 = L65 };
+        zw.Rules.Add((0, ruleN, 0.0)); zw.Normalize();
+        var zones = new List<SlopeZone> { zw };
+
+        var vs = GradingGeometry.Build(sq, ground, pr, up: true, zones);
+        var fr = vs.Rings[vs.Rings.Count - 1];
+        var wallPts = new List<(int Bench, bool IsCrest, List<Point3> Pts)>();
+        var edges = SlopeHatchGenerator.GenerateEdgeLinesTagged(vs.Rings, ground, true, fr, sq,
+            zones, sq, null, null, ruleN, pr.WallGateSlope, null, wallPts);
+
+        int slope = 0, berm = 0;
+        foreach (var e in edges) { if (e.IsSlope) slope++; else berm++; }
+        double gap = double.MaxValue;
+        for (int k = 0; 2 * k + 1 < vs.Rings.Count; k++)
+            gap = Math.Min(gap, MinRingGap(vs.Rings[2 * k], vs.Rings[2 * k + 1]));
+
+        if (Math.Abs(ruleN - 0.05) < 1e-9) wallOld = wallPts.Count;
+        if (Math.Abs(ruleN - 0.01) < 1e-9) wallNew = wallPts.Count;
+        Console.WriteLine($"        1:{ruleN,-7:0.###} {wallPts.Count,6} {slope,7} {berm,7} " +
+                          $"{(gap == double.MaxValue ? -1 : gap * 1000),9:F1}   " +
+                          (wallPts.Count > 0 ? "옹벽" : "★사면 — 사라짐"));
+    }
+
+    Check("S65 ★★★옛 옹벽(규칙 0.05)이 하한을 낮춰도 살아남는다", wallOld > 0, $"{wallOld}줄");
+    Check("S65 ★★새로 만드는 얇은 벽(규칙 0.01)도 옹벽으로 잡힌다", wallNew > 0, $"{wallNew}줄");
+    Check("S65 ★둘이 같은 수의 옹벽선을 낸다(분류가 흔들리지 않는다)", wallOld == wallNew,
+        $"옛 {wallOld}줄 · 새 {wallNew}줄");
+
+    // 옹벽선 정본(WallRunBuilder)도 같은 자를 쓰는지 — 여기가 빠지면 3D·InfraWorks가 통째로 옛 경로로 샌다.
+    foreach (double ruleN in new[] { 0.05, 0.01 })
+    {
+        var pr = new GradingParams
+        {
+            CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 0, FillBenchWidth = 0,
+            CutSlope = ruleN, FillSlope = ruleN, CellSize = 1.0, MaxBenches = 30, MaxRise = 40,
+            VertexSpacing = 2.0, MinSlope = 0.01, WallGateSlope = 0.05,
+            MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+        };
+        var zw = new SlopeZone { T0 = 0.0, T1 = L65 };
+        zw.Rules.Add((0, ruleN, 0.0)); zw.Normalize();
+        var zones = new List<SlopeZone> { zw };
+        var vs = GradingGeometry.Build(sq, ground, pr, up: true, zones);
+        var runs = WallRunBuilder.Build(sq, vs.Rings, zones, up: true,
+                                        globalSlope: ruleN, minSlope: pr.MinSlope, gateSlope: pr.WallGateSlope);
+        Console.WriteLine($"        옹벽선 정본 — 규칙 1:{ruleN:0.###} → {runs.Count}줄  ({WallRunBuilder.LastDiag})");
+        Check($"S65 ★★옹벽선 정본이 규칙 1:{ruleN:0.###}에서도 나온다(0줄이면 3D가 옛 경로로 샌다)",
+            runs.Count > 0, $"{runs.Count}줄");
+    }
+}
+
+// ★ S66 [JACK 0825 · 3D 검토 지적] **3D 매스의 방향 문턱은 구배에 매인 값이었다.**
+//   `WallBand`는 단면의 노출면 방향을 <b>크레스트→토우</b> 수평벡터로 정하는데, 그 길이가 곧
+//   <c>구배 × 단높이</c>다. 문턱이 절대 2cm였으므로 구배를 1/5로 낮추면 <b>방향을 못 재는 단높이가
+//   0.4m에서 2.0m로 다섯 배 올라간다</b> — 걸린 단은 매스도 마감판도 0개가 된다.
+//   문턱의 본뜻은 "좌표 잡음보다 큰가"이므로 격자 잡음(1mm)의 몇 배로 잡아야 옳다.
+{
+    const double NormMinOld = 0.02, NormMinNew = 0.005;
+    Console.WriteLine("      S66 3D 매스 방향 문턱 — 구배별로 어느 단높이부터 못 재나");
+    Console.WriteLine("        구배    단높이m   벡터길이mm   옛문턱(20mm)  새문턱(5mm)");
+
+    bool oldBreaks5m = false, newOk5m = true, newOk1m = true;
+    foreach (var (n, h) in new[]
+    {
+        (0.05, 5.0), (0.05, 0.5), (0.05, 0.3),
+        (0.01, 5.0), (0.01, 2.0), (0.01, 1.0), (0.01, 0.5),
+    })
+    {
+        double v = n * h;
+        bool okOld = v >= NormMinOld, okNew = v >= NormMinNew;
+        if (n < 0.02 && h >= 1.0 && !okOld) oldBreaks5m = true;      // 실무 단높이인데 옛 문턱에 걸린다
+        if (n < 0.02 && h >= 5.0 && !okNew) newOk5m = false;
+        if (n < 0.02 && h >= 1.0 && !okNew) newOk1m = false;
+        Console.WriteLine($"        1:{n,-6:0.###}{h,8:0.##}{v * 1000,13:F1}   {(okOld ? "잰다" : "★못 잼"),12}  {(okNew ? "잰다" : "★못 잼"),11}");
+    }
+
+    Check("S66 ★★옛 문턱(2cm)이면 1:0.01에서 실무 단높이도 방향을 못 잰다(그래서 고쳤다)",
+        oldBreaks5m, "단높이 1~2m가 걸린다");
+    Check("S66 ★★새 문턱(5mm)이면 1:0.01·단높이 5m는 넉넉히 잰다", newOk5m, "50mm ≥ 5mm");
+    Check("S66 ★새 문턱이면 단높이 1m까지 내려가도 잰다", newOk1m, "10mm ≥ 5mm");
+    Console.WriteLine("        ※ 1mm 격자 스냅 잡음은 최대 ~1.4mm — 5mm는 그 3.5배다.");
+    Console.WriteLine("           벽 끝(높이→0)에서는 새 문턱에도 걸려 '이웃 방향 물려받기'가 그대로 작동한다.");
+}
+
+// ★ S67 [JACK 0825 실도면 '계획지표면의 옹벽선이 아예 생성이 안 됐다'] **구간이 없어도 전역이 수직이면 옹벽이다.**
+//
+//   실측 로그: `옹벽선 확정 — 절토 11줄` (정지면 쪽은 정상) 인데 `종단 막대 — 옹벽 0개`.
+//   측점 목록엔 `5.29m 데이라잇 / 5.32m 사면·소단` — 3cm 차이는 옹벽 두께(0.01×3m)인데
+//   <b>사면·소단으로 분류</b>돼 짝짓기를 못 거치고 위·아래가 따로 섰다.
+//
+//   원인: `SlopeHatchGenerator`가 <b>옹벽 구간이 지정됐을 때만</b> 옹벽선을 분리했다.
+//   부지 전체를 수직으로 준 도면(구간 0개 + 전역 수직)이 통째로 사면 취급됐다.
+{
+    double S = 100.0;
+    var sq = new List<Point3> { new(0, 0, 100), new(S, 0, 100), new(S, S, 100), new(0, S, 100) };
+    var ground = new FlatGround(115);
+
+    Console.WriteLine("      S67 구간 없이 전역만 수직 — 옹벽선이 나오는가");
+    Console.WriteLine("        전역구배  구간  옹벽선  사면선  소단선   판정");
+
+    int wallGlobal = -1, slopeGlobal = -1;
+    foreach (double gN in new[] { 0.01, 0.05, 1.5 })
+    {
+        var pr = new GradingParams
+        {
+            CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 0, FillBenchWidth = 0,
+            CutSlope = gN, FillSlope = gN, CellSize = 1.0, MaxBenches = 30, MaxRise = 40,
+            VertexSpacing = 2.0, MinSlope = 0.01, WallGateSlope = 0.05,
+            MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+        };
+        // ★ 구간(zones)을 아예 주지 않는다 — 실도면이 그 상태였다.
+        var vs = GradingGeometry.Build(sq, ground, pr, up: true, null);
+        if (!vs.HasSlope) { Console.WriteLine($"        1:{gN,-7:0.###} 사면 없음"); continue; }
+        var fr = vs.Rings[vs.Rings.Count - 1];
+        var wallPts = new List<(int Bench, bool IsCrest, List<Point3> Pts)>();
+        var edges = SlopeHatchGenerator.GenerateEdgeLinesTagged(vs.Rings, ground, true, fr, sq,
+            null, sq, null, null, gN, pr.WallGateSlope, null, wallPts);
+
+        int slope = 0, berm = 0;
+        foreach (var e in edges) { if (e.IsSlope) slope++; else berm++; }
+        bool isWall = gN <= pr.WallGateSlope + 1e-9;
+        if (Math.Abs(gN - 0.01) < 1e-9) { wallGlobal = wallPts.Count; slopeGlobal = slope; }
+        if (Math.Abs(gN - 1.5) < 1e-9) { }
+        Console.WriteLine($"        1:{gN,-7:0.###} {"없음",5} {wallPts.Count,6} {slope,7} {berm,7}   " +
+                          (isWall ? (wallPts.Count > 0 ? "옹벽 ✔" : "★옹벽인데 사면으로 샜다")
+                                  : (wallPts.Count == 0 ? "사면 ✔" : "★사면인데 옹벽으로 샜다")));
+    }
+
+    Check("S67 ★★★구간이 없어도 전역이 수직이면 옹벽선이 나온다", wallGlobal > 0, $"{wallGlobal}줄");
+    Check("S67 ★그때 사면선은 안 나온다(같은 선이 양쪽에 담기지 않는다)", slopeGlobal == 0, $"사면선 {slopeGlobal}줄");
+
+    // 진짜 사면(1:1.5)은 그대로 사면이어야 한다 — 넓힌 것이 과하지 않은지.
+    {
+        var pr = new GradingParams
+        {
+            CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+            CutSlope = 1.5, FillSlope = 1.5, CellSize = 1.0, MaxBenches = 30, MaxRise = 40,
+            VertexSpacing = 2.0, MinSlope = 0.01, WallGateSlope = 0.05,
+            MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+        };
+        var vs = GradingGeometry.Build(sq, ground, pr, up: true, null);
+        var fr = vs.Rings[vs.Rings.Count - 1];
+        var wallPts = new List<(int Bench, bool IsCrest, List<Point3> Pts)>();
+        SlopeHatchGenerator.GenerateEdgeLinesTagged(vs.Rings, ground, true, fr, sq,
+            null, sq, null, null, 1.5, pr.WallGateSlope, null, wallPts);
+        Check("S67 ★★진짜 사면(1:1.5)은 옹벽으로 안 샌다", wallPts.Count == 0, $"옹벽선 {wallPts.Count}줄");
+    }
+}
+
 return fails == 0 ? 0 : 1;
 
 static double BaseOf(GradingParams p, bool up) => up ? p.CutSlope : p.FillSlope;
+
+/// <summary>★[JACK 0825 S60] 폴리곤 면적(신발끈). 부호는 방향이라 절댓값으로 쓴다.</summary>
+static double Shoelace(IReadOnlyList<Point3> r)
+{
+    double a = 0;
+    for (int i = 0, j = r.Count - 1; i < r.Count; j = i++)
+        a += (r[j].X + r[i].X) * (r[j].Y - r[i].Y);
+    return a / 2.0;
+}
+
+/// <summary>★[JACK 0825 S60] 두 링이 평면에서 가장 가까운 거리 — 벽이 TIN에서 얼마나 납작한가.
+/// <para>표본으로 훑는다(정점 수가 많아 전수는 느리다). 최솟값만 필요하므로 충분하다.</para></summary>
+static double MinRingGap(IReadOnlyList<Point3> a, IReadOnlyList<Point3> b)
+{
+    double best = double.MaxValue;
+    int sa = Math.Max(1, a.Count / 200), sb = Math.Max(1, b.Count / 200);
+    for (int i = 0; i < a.Count; i += sa)
+        for (int j = 0; j < b.Count; j += sb)
+        {
+            double dx = a[i].X - b[j].X, dy = a[i].Y - b[j].Y;
+            double d = dx * dx + dy * dy;
+            if (d < best) best = d;
+        }
+    return best == double.MaxValue ? best : Math.Sqrt(best);
+}
+
 
 
 /// <summary>★[JACK 0820] x가 xMax를 넘으면 <b>지반이 없다</b>(TryGetElevation=false)고 답하는 지반.

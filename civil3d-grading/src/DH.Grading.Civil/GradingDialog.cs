@@ -90,10 +90,10 @@ public sealed class GradingDialog : Window
         // [절성토 분리 0803 — JACK] 절토 3줄 / 성토 3줄로 묶어 배치(위 예시 그림과 좌우 순서 일치).
         _cutBenchHeight = AddRow(colL, "절토 단높이 (m)", GradingSettings.CutBenchHeight, "");
         _cutBenchWidth = AddRow(colL, "절토 소단폭 (m)", GradingSettings.CutBenchWidth, "");
-        _cutSlope = AddRow(colL, "절토구배  1 :", GradingSettings.CutSlope, "");
+        _cutSlope = AddRow(colL, "절토구배  1 :", SlopeShown(GradingSettings.CutSlope), "");
         _fillBenchHeight = AddRow(colL, "성토 단높이 (m)", GradingSettings.FillBenchHeight, "");
         _fillBenchWidth = AddRow(colL, "성토 소단폭 (m)", GradingSettings.FillBenchWidth, "");
-        _fillSlope = AddRow(colL, "성토구배  1 :", GradingSettings.FillSlope, "");
+        _fillSlope = AddRow(colL, "성토구배  1 :", SlopeShown(GradingSettings.FillSlope), "");
 
         // [JACK 0728] 사면형상 — 체크박스 대신 옵션단추(라디오): 직각 / 라운드.
         var shapeRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = false };
@@ -204,10 +204,12 @@ public sealed class GradingDialog : Window
     private readonly Canvas? _cutCanvas, _fillCanvas;   // [JACK 0728 UI예시] 절토/성토 예시 그림
     private readonly TextBlock? _cutNote, _fillNote;    // 구배<0.05일 때만 각 그림 밑에 표시
 
-    /// <summary>그림 밑 조건부 안내(빨강) — 구배 0(~0.05 미만) 입력 시에만 표시.</summary>
+    /// <summary>그림 밑 조건부 안내(빨강) — 구배가 <b>하한 미만</b>일 때만 표시.
+    /// <para>★[JACK 0825] 문구·조건 모두 <see cref="GradingSettings.MinSlope"/>를 따라간다 —
+    /// 하드코딩 0.05였을 때는 하한을 낮추는 순간 <b>거짓 안내</b>가 됐다.</para></summary>
     private static TextBlock MakeSlopeNote() => new()
     {
-        Text = "※ 구배 0(~0.05 미만) 입력은 0.05(수직 옹벽)로 처리됩니다.",
+        Text = $"※ 구배 0(~{GradingSettings.MinSlope:0.###} 미만) 입력은 {GradingSettings.MinSlope:0.###}(수직 옹벽)로 처리됩니다.",
         FontSize = 11,
         Foreground = new SolidColorBrush(Color.FromRgb(0xB0, 0x30, 0x28)),
         TextWrapping = TextWrapping.Wrap,
@@ -273,7 +275,7 @@ public sealed class GradingDialog : Window
         double H = P(cut ? _cutBenchHeight : _fillBenchHeight, 5, 0.2, 60);
         double W = P(cut ? _cutBenchWidth : _fillBenchWidth, 1, 0, 60, allowZero: true);
         double nRaw = P(slopeBox, 1.5, 0, 30, allowZero: true);
-        double n = System.Math.Max(nRaw, 0.05); // 그림은 0.05 하한으로
+        double n = System.Math.Max(nRaw, GradingSettings.MinSlope); // 그림도 실제와 같은 하한으로
         bool terrace = _mountainTerrace?.IsChecked == true;
         double TW = P(_terraceWidth, 15, 0, 120, allowZero: true);
         var style = (WallStyle)System.Math.Max(0, styleCombo?.SelectedIndex ?? 0);
@@ -284,7 +286,7 @@ public sealed class GradingDialog : Window
         {
             string tRaw = (slopeBox?.Text ?? "").Trim().Replace(',', '.');
             bool nz = double.TryParse(tRaw, NumberStyles.Float, CultureInfo.InvariantCulture, out double v)
-                && v >= 0 && v < 0.05 - 1e-9;
+                && v >= 0 && v < GradingSettings.MinSlope - 1e-9;
             note.Visibility = nz ? Visibility.Visible : Visibility.Collapsed;
         }
 
@@ -395,7 +397,7 @@ public sealed class GradingDialog : Window
 
         // [JACK 0728] 옹벽 단면(형태별) — 구배≤0.05(수직) + 옹벽 형태 선택 시.
         //   벽체는 면 '앞(공기 쪽)'에 그려 표면이 보이게(절토=면 왼쪽/성토=면 오른쪽), 앵커는 흙 쪽으로.
-        bool isWall = nRaw <= 0.05 + 1e-9 && style != WallStyle.없음_사면;
+        bool isWall = nRaw <= GradingSettings.WallGateSlope + 1e-9 && style != WallStyle.없음_사면;
         if (isWall)
         {
             double airDir = cut ? -1 : 1;   // 공기(전면) 방향
@@ -560,6 +562,19 @@ public sealed class GradingDialog : Window
         return sld;
     }
 
+    /// <summary>★★[JACK 0825] <b>수직 옹벽은 창에서 그냥 0으로 보인다.</b>
+    ///
+    /// <para>JACK: <i>"구배에 0을 입력하고 저장을 누르고 다시 정지옵션에 들어가면 0.01로 바뀌어 있는데,
+    /// 프로그램이 0.01로 인식하는 건 알겠는데 정지옵션 창에서는 그냥 0으로 표현되게 해줘."</i></para>
+    ///
+    /// <para>맞는 요구다. 사용자가 넣은 것은 <b>"수직"</b>이라는 뜻이고, 0.01은 그 뜻을 TIN이 받아들이게
+    /// 눕혀 둔 <b>구현 사정</b>이다. 넣은 것과 다른 값이 돌아오면 "내 입력이 씹혔나" 싶어진다.</para>
+    ///
+    /// <para>하한 이하는 전부 0으로 보인다 — 0.01을 직접 넣었든 0을 넣어 끌어올려졌든
+    /// <b>뜻이 같기 때문</b>이다(둘 다 수직 옹벽). 저장할 때는 <c>OnOk</c>가 다시 하한으로 끌어올린다.</para></summary>
+    private static double SlopeShown(double n)
+        => n <= GradingSettings.MinSlope + 1e-9 ? 0.0 : n;
+
     internal static TextBox AddRow(Panel parent, string label, double value, string hint)
         => AddRow(parent, label, value, hint, out _);
 
@@ -628,7 +643,9 @@ public sealed class GradingDialog : Window
 
         // [구배 하한 0.05 — JACK] 사용자가 0.05 이하(거의 수직 옹벽)를 넣어도 무조건 0.05로 처리.
         // 그 아래는 Civil3D TIN이 예기치 못한 오류를 내는 사례가 있어 미연 방지. (0 입력=옹벽 의도 → 0.05)
-        const double slopeFloor = 0.05;
+        // ★★[JACK 0825] 하드코딩 0.05였다. <b>여기가 진짜 하한</b>이라, 엔진 상수만 바꾸면
+        //   이 줄이 다시 0.05로 끌어올려 <b>낮춘 것이 아무 효과가 없었다</b>. 한 곳에서만 정하게 바꾼다.
+        double slopeFloor = GradingSettings.MinSlope;
         if (cs > 0 && cs < slopeFloor) cs = slopeFloor; else if (cs == 0) cs = slopeFloor;
         if (fs > 0 && fs < slopeFloor) fs = slopeFloor; else if (fs == 0) fs = slopeFloor;
 

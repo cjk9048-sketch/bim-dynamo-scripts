@@ -2548,7 +2548,12 @@ public static class SheetCommand
     /// <summary>★[JACK 0810] <b>표고바 한 줄이 종이에서 가져야 할 두께</b>(mm) — 목표·최소·최대.
     /// 축척이 바뀌면 같은 표고 간격도 종이에서 두께가 달라진다. 이 범위를 벗어나면 나눔 수를 바꿔
     /// <b>어떤 축척에서도 표척처럼 읽히게</b> 한다(JACK: "축척에 따라 모든 기능이 자연스럽게 연동").</summary>
-    private const double BarRowWantMm = 5.0, BarRowMinMm = 2.5, BarRowMaxMm = 10.0;
+    /// <summary>★[JACK 0825 '스케일바가 너무 촘촘히 바뀌었다'] 종이에서 한 줄이 몇 mm여야 하는가.
+    /// <para>종전 목표 5mm·상한 10mm였다. 그래서 <b>13.3mm를 "읽기 어렵다"고 보고 3.3mm까지 쪼갰다</b>
+    /// (5줄 → 20줄, 80칸). 측량 표척 무늬는 굵어야 읽히는데 3.3mm는 촘촘해서 오히려 안 읽힌다.
+    /// 13.3mm는 그대로 두는 것이 낫다 — 상한을 올려 <b>기본 5줄이 웬만해선 유지</b>되게 하고,
+    /// 정말 바꿔야 할 때도 덜 잘게 쪼개도록 목표를 키운다.</para></summary>
+    private const double BarRowWantMm = 8.0, BarRowMinMm = 3.0, BarRowMaxMm = 15.0;
 
     /// <summary>★[JACK 0810] 표고 <b>주눈금 라벨</b>이 종이에서 가져야 할 간격(mm) — 목표·최소·최대.
     /// 회사 템플릿은 5m 간격인데, 1:1000이면 종이 5mm라 숫자가 붙어 못 읽는다.

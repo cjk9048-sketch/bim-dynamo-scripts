@@ -39,7 +39,7 @@ public static class WallRunBuilder
         IReadOnlyList<Point3> boundary,
         IReadOnlyList<IReadOnlyList<Point3>> rings,
         IReadOnlyList<SlopeZone>? zones,
-        bool up, double globalSlope, double minSlope)
+        bool up, double globalSlope, double minSlope, double gateSlope = 0.05)
     {
         var outp = new List<WallRun>();
         if (boundary == null || boundary.Count < 3 || rings == null || rings.Count < 2)
@@ -47,7 +47,8 @@ public static class WallRunBuilder
 
         var cum = GradingGeometry.CumLen2D(boundary);
         double zBase = System.Math.Max(globalSlope, minSlope);
-        bool globalIsWall = globalSlope <= minSlope + 1e-9;
+        // ★[JACK 0825] 벽이냐 아니냐는 <b>게이트</b>로 가른다 — 하한(minSlope)은 구배 0을 끌어올릴 때만 쓴다.
+        bool globalIsWall = globalSlope <= gateSlope + 1e-9;
 
         // 이 단(bench)이 이 호길이(t)에서 수직(옹벽)인가.
         //   구간이 덮으면 그 구간의 규칙을, 안 덮으면 전역 구배를 따른다
@@ -59,7 +60,7 @@ public static class WallRunBuilder
             bool any = false;
             foreach (var z in zones) if (z != null && z.Rules.Count > 0) { any = true; break; }
             if (!any) return globalIsWall;
-            return SlopeZone.IsWallAtPoint(zones, x, y, bench, zBase, minSlope, boundary, cum);
+            return SlopeZone.IsWallAtPoint(zones, x, y, bench, zBase, gateSlope, boundary, cum);
         }
 
         int faceN = 0, skipFlat = 0, skipNoWall = 0, skipShort = 0, bogusCut = 0, skipDegen = 0;
@@ -109,8 +110,16 @@ public static class WallRunBuilder
             //     그 정점을 경계에 투영하면 구간 안으로 들어와 버린다(실측: 사면 정점이 옹벽 구간으로 오분류,
             //     간격 7.5m짜리가 옹벽선에 섞였다). 기하는 지표면이 실제로 어떻게 생겼는지를 그대로 반영한다 —
             //     JACK 요구('최종 지표면의 옹벽선')에도 이쪽이 맞다.
-            double wallGap = minSlope * h;
-            double gapLim = wallGap * 1.05 + 1e-3;
+            // ★★[JACK 0825] <b>기대 간격은 게이트 값으로 잰다.</b>
+            //   여기는 규칙을 비교하는 것이 아니라 <b>실제 링 간격을 재는</b> 판정이다.
+            //   하한(minSlope)으로 잡으면 그보다 두꺼운 벽 — 이를테면 이미 만들어 둔 1:0.05 벽 —
+            //   의 실측 간격이 한도를 넘어 <b>전부 '벽 아님'으로 떨어진다</b>(옹벽선 0줄).
+            //   게이트로 잡으면 한도가 구간 [0, 게이트]의 상한이 되어 <b>그보다 얇은 벽은 전부 통과</b>한다.
+            //   진짜 사면은 간격이 두 자릿수 커서(1:1.5·5m면 7.5m) 오분류될 여지가 없다.
+            double wallGap = gateSlope * h;
+            // ★[JACK 0825] 절대항 1mm → 5mm. 링 좌표는 1mm 격자(PrecisionModel 1000)를 지나므로
+            //   두 링에 각각 스냅 오차가 실려 최대 ~1.4mm가 생긴다. 간격이 좁아질수록 이 여유가 상대적으로 커진다.
+            double gapLim = wallGap * 1.05 + 5e-3;
             double endLim = wallGap * 2.2 + 0.01;   // 마이터 상한(2.0)까지 허용 — 모서리 정점용
             // 이 링의 변 길이 **중앙값**을 기준선으로 — 도면마다 정점 간격이 달라도 스스로 맞춰진다.
             double segLim = System.Math.Max(2.0, MedianSegOfRing(crest) * 4.0);

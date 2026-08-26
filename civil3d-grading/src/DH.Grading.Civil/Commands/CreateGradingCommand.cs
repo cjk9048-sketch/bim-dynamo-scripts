@@ -854,7 +854,7 @@ public sealed class CreateGradingCommand
                         // [구간 구배 0804] 구간이 '수직(옹벽)'인지 판정하려면 그 방향 전역 구배와 최소구배가 필요.
                         target.AddRange(SlopeHatchGenerator.GenerateEdgeLinesTagged(vs.Rings, ng, up, fr, boundary,
                             zn, boundary, wallDump,
-                            baseSlope: System.Math.Max(up ? p.CutSlope : p.FillSlope, p.MinSlope), minSlope: p.MinSlope));
+                            baseSlope: System.Math.Max(up ? p.CutSlope : p.FillSlope, p.MinSlope), minSlope: p.WallGateSlope));
                     }
                 }
                 using Transaction trE = db.TransactionManager.StartTransaction();
@@ -905,12 +905,12 @@ public sealed class CreateGradingCommand
             {
                 cutRuns = cut.HasSlope
                     ? WallRunBuilder.Build(boundary, cut.Rings, cutZones.Count > 0 ? cutZones : null,
-                                           up: true, globalSlope: p.CutSlope, minSlope: p.MinSlope)
+                                           up: true, globalSlope: p.CutSlope, minSlope: p.MinSlope, gateSlope: p.WallGateSlope)
                     : null;
                 string cd = WallRunBuilder.LastDiag;
                 fillRuns = fill.HasSlope
                     ? WallRunBuilder.Build(boundary, fill.Rings, fillZones.Count > 0 ? fillZones : null,
-                                           up: false, globalSlope: p.FillSlope, minSlope: p.MinSlope)
+                                           up: false, globalSlope: p.FillSlope, minSlope: p.MinSlope, gateSlope: p.WallGateSlope)
                     : null;
                 string fd = WallRunBuilder.LastDiag;
                 if (cutRuns != null && cutRuns.Count == 0) cutRuns = null;
@@ -1437,6 +1437,7 @@ public sealed class CreateGradingCommand
             MaxRise = maxRise,
             VertexSpacing = s.VertexSpacing,
             MinSlope = s.MinSlope,
+            WallGateSlope = GradingSettings.WallGateSlope,   // ★[JACK 0825] 판정 문턱은 동결값(번들에 안 담는다)
             MinFaceRun = s.MinFaceRun,
             MiterConvex = s.MiterConvex,
             MiterLimit = s.MiterLimit,

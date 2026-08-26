@@ -446,7 +446,7 @@ public sealed class ProfileCommand
                                                       "_없음", "None", "표준", "Standard");
         int nProf = 0;
         // ★[JACK 0807] 밴드에 **원지반/계획지반을 자동 지정**하려면 만든 종단의 ObjectId를 들고 있어야 한다.
-        ObjectId pidGround = ObjectId.Null, pidPad = ObjectId.Null;
+        ObjectId pidGround = ObjectId.Null, pidPad = ObjectId.Null, pidExcav = ObjectId.Null;
         foreach (var s in surfs)
         {
             try
@@ -458,6 +458,11 @@ public sealed class ProfileCommand
                 //   터파기 종단이 생기는 순간 계획면 자리를 덮어써 밴드 값이 통째로 밀렸다.
                 if (s.Label == "원지반") pidGround = pid;
                 else if (s.Label == "정지면") pidPad = pid;
+                else if (s.Label == "터파기")
+                {
+                    pidExcav = pid;                              // ★[JACK 0825] 가시설 막대의 아래끝
+                    SectionCommand.PaintExcavProfile(db, pid);   // ★[JACK 0825] 객체 색을 직접 마젠타로
+                }
                 nProf++;
             }
             catch (System.Exception ex)
@@ -538,6 +543,52 @@ public sealed class ProfileCommand
             DecorateSampleLines(db, cdoc, alignId, bandIv, GradingSettings.XsecLeft, GradingSettings.XsecRight, log);
             log.AppendLine("도곽: " + sheet);
             ed.WriteMessage("\n  · 도곽: " + sheet);
+
+            // ★[JACK 0825] 옹벽·가시설을 굵은 수직 막대로 — 도면 관행대로 직각 한 줄로 보이게.
+
+            // ★[JACK 0825] 스타일을 고쳐도 <b>화면이 옛 그림을 들고 있으면</b> 색이 안 바뀐 것처럼 보인다.
+            //   되읽기는 DB 값이라 항상 맞게 나오므로 "로그는 맞는데 화면은 틀림"과 모순되지 않는다.
+            // ★★[JACK 0825 '터파기 선이 여전히 초록'] <b>종단뷰마다 스타일 재정의가 따로 있다.</b>
+            //
+            //   Civil 문서: <i>"Override Style — 이 종단뷰에서만 쓰이는 재정의 스타일.
+            //   다른 종단뷰는 Style 열의 값을 쓴다."</i>
+            //   그래서 <b>객체의 스타일은 마젠타인데 화면은 초록</b>일 수 있다 —
+            //   특성창엔 진짜 스타일이 찍히지만 그리는 것은 재정의 쪽이기 때문이다.
+            //   (객체 색을 직접 박아도 소용없다. Civil 객체는 자기 Entity.Color를 무시하고
+            //    스타일의 DisplayStyle이 화면을 전담한다.)
+            //
+            //   → 재정의가 걸려 있든 없든 <b>우리 스타일로 덮는다.</b> 걸려 있지 않으면 목록이 비어 no-op다.
+            try
+            {
+                using var trOv = db.TransactionManager.StartTransaction();
+                if (trOv.GetObject(pvId, OpenMode.ForWrite) is CivilDb.ProfileView pvOv)
+                {
+                    var sbOv = new System.Text.StringBuilder();
+                    int nOv = 0, nFix = 0;
+                    foreach (CivilDb.ProfileOverride ov in pvOv.GraphOverrides)
+                    {
+                        nOv++;
+                        string pn = "?";
+                        try { pn = ov.ProfileName ?? "(빈값)"; } catch { }
+                        sbOv.Append(' ').Append(pn);
+                        // 터파기 종단이면 마젠타 스타일로 못 박는다.
+                        if (pn.IndexOf("터파기", System.StringComparison.Ordinal) >= 0 && !excStyle.IsNull)
+                        {
+                            try { ov.OverrideStyleId = excStyle; nFix++; sbOv.Append("→마젠타"); }
+                            catch (System.Exception exO) { sbOv.Append("→실패(").Append(exO.GetType().Name).Append(')'); }
+                        }
+                    }
+                    log.AppendLine($"  종단뷰 스타일 재정의 {nOv}건{(nOv > 0 ? " —" + sbOv : " (없음 — 재정의는 범인이 아니다)")}" +
+                                   (nFix > 0 ? $" · 터파기 {nFix}건을 마젠타로 덮었다" : ""));
+                }
+                trOv.Commit();
+            }
+            catch (System.Exception exOv) { log.AppendLine("  종단뷰 재정의 확인 실패 — " + exOv.Message); }
+
+            try { ed.Regen(); } catch { }
+            string bars = DrawVertBars(db, pvId, alignId, pidGround, pidPad, pidExcav, LastWallSpans, log);
+            log.AppendLine(bars);
+            ed.WriteMessage("\n  · " + bars);
         }
         catch (System.Exception ex)
         {
@@ -1045,7 +1096,20 @@ public sealed class ProfileCommand
             double wl = System.Math.Max(1.0, GradingSettings.XsecLeft);
             double wr = System.Math.Max(1.0, GradingSettings.XsecRight);
             var marks = new System.Collections.Generic.List<StationMarks.Mark>();
+            var vbars = new System.Collections.Generic.List<StationMarks.VertBar>();   // 벽의 자리·두께
+            var wspans = new System.Collections.Generic.List<StationMarks.WallSpan>(); // 벽의 앞·뒤(횡단 (전)(후))
             var cuts = new System.Collections.Generic.List<SectionCommand.Cut>();
+            var cutNames = new System.Collections.Generic.List<string>();   // 표시용 이름
+            // ★★[JACK 0825] <b>검토선을 두 벌 만든다.</b>
+            //   JACK: <i>"단면검토선이 눈으로 안 보인다고 해도 두껍게 보인다든지 측점명이 떡져서
+            //   보인다든지 하지 않을까? 아니면 별도의 횡단용 단면검토선을 별도로 복제한다든지."</i>
+            //   맞는 걱정이다 — 벽 두께가 2~5cm라 1:100 도면에서 선이 0.2~0.5mm 벌어져 두꺼워 보이고,
+            //   <b>측점명 라벨은 확실히 떡진다</b>. 그래서 역할을 나눈다:
+            //     표시용 = 측점마다 하나(평면이 보는 것) · 횡단용 = 벽 자리는 (전)(후) 둘(숨긴다)
+            var cutsX = new System.Collections.Generic.List<SectionCommand.Cut>();
+            var cutNamesX = new System.Collections.Generic.List<string>();
+            int nSplit = 0;
+            var splitNote = new System.Text.StringBuilder();
             double s0, s1;
 
             // ── ① 측점 목록을 만든다(읽기만 — 아직 도면에 아무것도 안 만든다).
@@ -1128,7 +1192,11 @@ public sealed class ProfileCommand
                     var regions = GradingBundleStore.TryLoadAll(db, tr, out _);
                     if (regions != null && regions.Count > 0)
                     {
-                        var rebuilt = NoriCommand.RebuildEdgeLines(regions, out string rdiag);
+                        // ★[JACK 0825] 옹벽선은 따로 받아 <b>윗선·아랫선을 가운데 한 자리로</b> 접는다.
+                        //   측점 명령과 <b>같은 자를 써야</b> 종단도와 [측점 목록]이 같은 말을 한다.
+                        var walls = new System.Collections.Generic.List<((int Region, bool Up, int Ring, int Bench) Key,
+                                        bool IsCrest, System.Collections.Generic.List<DH.Grading.Core.Point3> Pts, double Slope)>();
+                        var rebuilt = NoriCommand.RebuildEdgeLines(regions, out string rdiag, walls);
                         log.AppendLine("  " + rdiag);
                         var asPts = new System.Collections.Generic.List<System.Collections.Generic.List<Point3d>>(rebuilt.Count);
                         foreach (var line in rebuilt)
@@ -1138,6 +1206,16 @@ public sealed class ProfileCommand
                             asPts.Add(q);
                         }
                         marks.AddRange(StationMarks.FromLines(al, asPts, "사면·소단(복원)", null, log));
+
+                        var wpts = new System.Collections.Generic.List<((int Region, bool Up, int Ring, int Bench) Key,
+                                       bool IsCrest, System.Collections.Generic.List<Point3d> Pts, double Slope)>(walls.Count);
+                        foreach (var w in walls)
+                        {
+                            var q = new System.Collections.Generic.List<Point3d>(w.Pts.Count);
+                            foreach (var p in w.Pts) q.Add(new Point3d(p.X, p.Y, p.Z));
+                            wpts.Add((w.Key, w.IsCrest, q, w.Slope));
+                        }
+                        StationMarks.FromWallPairs(al, wpts, "옹벽(복원)", null, log, 3.0, vbars, wspans).ForEach(marks.Add);
 
                         // ★★[v30.2] <b>데이라잇도 번들에서 복원한다.</b> 도면의 <c>DH-정지경계</c>는
                         //   그릴 때 레이어를 지우므로 <b>마지막 구역 것만</b> 남아 있을 수 있다.
@@ -1165,6 +1243,15 @@ public sealed class ProfileCommand
                     else log.AppendLine("  번들이 없어 사면·소단 복원 생략(도면에 그려진 선만 쓴다)");
                 }
                 catch (System.Exception ex) { log.AppendLine("  사면·소단 복원 실패 — " + ex.Message); }
+
+                // ★[JACK 0825] 터파기 — 정지 번들과 <b>다른 칸</b>(EXCAV)이라 따로 연다.
+                //   가시설(수직 굴착)은 상단·바닥을 가운데 한 자리로 접는다 — 측점 명령과 같은 자.
+                try { marks.AddRange(StationMarks.FromExcavation(al, db, tr, null, log, vbars, wspans)); }
+                catch (System.Exception ex) { log.AppendLine("  터파기 측점 실패 — " + ex.Message); }
+
+                // ★[JACK 0825] 벽 두께 안 데이라잇을 벽 자리로 — 옹벽 옆 10cm에 측점이 또 서던 것.
+                try { StationMarks.PullDaylightToWalls(marks, vbars, log); }
+                catch (System.Exception ex) { log.AppendLine("  벽 측점 정리 실패 — " + ex.Message); }
 
                 // ⓒ 수동 — 선형에 적어 둔 것(DHSTATION).
                 var man = StationMarks.Load(tr, alignId);
@@ -1200,10 +1287,43 @@ public sealed class ProfileCommand
                 const double eps = 0.001;
                 foreach (var m in all)
                 {
+                    // ★★[JACK 0825] <b>벽 자리는 (전)(후) 두 장으로 뜬다.</b>
+                    //
+                    //   JACK: <i>"보통 옹벽과 가시설은 같은 측점의 (전)(후)로 횡단면도를 생성해.
+                    //   측점명은 같지만 (전)(후)라는 이름으로 두 개의 횡단면이 나와야 하고
+                    //   한쪽엔 옹벽이 있고 한쪽엔 없는 게 만들어져야 해."</i>
+                    //
+                    //   선형이 벽을 가로지르면 그 자리에서 지표면이 벽 높이만큼 뚝 떨어진다 —
+                    //   단면 하나로는 낮은 쪽·높은 쪽 중 하나만 담긴다.
+                    //   Civil은 <b>단면검토선 하나당 횡단면도 한 장</b>이라, 두 장을 얻으려면 검토선이 둘이어야 한다.
+                    //   실제 간격은 벽 두께(2~5cm)뿐이라 <b>평면에서는 한 줄로 보인다</b>(1:500에서 0.04mm).
+                    //   종단 측점은 접어 둔 <b>가운데 하나</b> 그대로다 — 세 곳이 각자 필요한 것을 본다.
+                    string mid = StationMarks.Fmt(m.Station, interval);
                     double st = System.Math.Min(System.Math.Max(m.Station, s0 + eps), s1 - eps);
-                    if (SectionCommand.TryCut(al, st, wl, wr, out var c)) cuts.Add(c);
+
+                    // ── 표시용: 언제나 가운데 하나. 평면 도면이 보는 것이다.
+                    if (SectionCommand.TryCut(al, st, wl, wr, out var c)) { cuts.Add(c); cutNames.Add(mid); }
                     else log.AppendLine($"  ⚠{m.Station:F2}m — 법선을 못 구해 단면검토선을 못 놓는다({m.Why})");
+
+                    // ── 횡단용: 벽 자리면 (전)(후) 둘, 아니면 같은 자리 하나.
+                    var span = wspans.Find(w => System.Math.Abs(w.Mid - m.Station) <= StationMarks.MergeTol);
+                    if (span.Back > span.Front)
+                    {
+                        foreach (var (stw, tag) in new[] { (span.Front, "(전)"), (span.Back, "(후)") })
+                        {
+                            double st2 = System.Math.Min(System.Math.Max(stw, s0 + eps), s1 - eps);
+                            if (SectionCommand.TryCut(al, st2, wl, wr, out var cw))
+                            { cutsX.Add(cw); cutNamesX.Add(mid + tag); }
+                            else log.AppendLine($"  ⚠{stw:F2}m — 법선을 못 구해 횡단용 검토선을 못 놓는다({m.Why}{tag})");
+                        }
+                        nSplit++;
+                        splitNote.Append($" [{mid} {span.Front:F2}/{span.Back:F2}]");
+                    }
+                    else if (cuts.Count > 0 && cutNames.Count == cuts.Count)
+                    { cutsX.Add(cuts[^1]); cutNamesX.Add(mid); }
                 }
+                if (nSplit > 0)
+                    log.AppendLine($"  벽 자리 {nSplit}곳을 (전)(후) 두 장으로 갈랐다{splitNote}");
                 tr.Commit();
             }
             if (cuts.Count == 0) { log.AppendLine("단면검토선: 놓을 자리가 없어 건너뜀"); return ObjectId.Null; }
@@ -1255,7 +1375,8 @@ public sealed class ProfileCommand
                 try
                 {
                     var pts = new Point2dCollection { cuts[i].Left, cuts[i].Right };
-                    var id = CivilDb.SampleLine.Create($"{groupName}_{StationMarks.Fmt(cuts[i].Station, interval)}", groupId, pts);
+                    string nm = i < cutNames.Count ? cutNames[i] : StationMarks.Fmt(cuts[i].Station, interval);
+                    var id = CivilDb.SampleLine.Create($"{groupName}_{nm}", groupId, pts);
                     if (!id.IsNull) { nSl++; made.Add((id, cuts[i].Station, cuts[i].Left, cuts[i].Right)); }
                 }
                 catch (System.Exception ex) { firstErr ??= $"{cuts[i].Station:F2}m {ex.Message}"; }
@@ -1268,6 +1389,89 @@ public sealed class ProfileCommand
             //   축척은 <see cref="SheetCommand.Build"/>가 <b>나중에</b> 정한다(JACK: "측점 문자가 축척이 안 먹음").
             //   만든 것만 넘겨 두고, 축척이 확정된 뒤 <see cref="DecorateSampleLines"/>가 꾸민다.
             LastSampleLines = made;
+
+            // ── ★★[JACK 0825] <b>횡단용 그룹</b> — 벽 자리는 (전)(후) 둘. 평면에서는 숨긴다.
+            //   Civil은 <b>단면검토선 하나당 횡단면도 한 장</b>이라, 두 장을 얻으려면 검토선이 둘이어야 한다.
+            //   그런데 그 둘을 평면에 두면 선이 두꺼워 보이고 측점명이 떡진다(JACK 지적) —
+            //   벽 두께가 2~5cm라 1:100에서 0.2~0.5mm 벌어진다.
+            //   → 그룹을 갈라, 평면은 표시용만 보고 횡단면도는 이쪽에서 뽑는다.
+            LastXsecGroupId = ObjectId.Null;
+            LastWallSpans = wspans;
+            if (cutsX.Count > 0)
+            {
+                try
+                {
+                    string xName = SectionCommand.UniqueName(db, cdoc, SectionCommand.GroupBase + "_단면");
+                    var xGroup = CivilDb.SampleLineGroup.Create(xName, alignId);
+                    if (!xGroup.IsNull)
+                    {
+                        ObjectId hideLayer = ObjectId.Null;
+                        try
+                        {
+                            using var trL = db.TransactionManager.StartTransaction();
+                            hideLayer = SectionCommand.EnsureLayer(db, trL, XsecHiddenLayer, 8);
+                            // 표본 지표면은 표시용과 같게 — 횡단면도가 값을 뽑을 수 있어야 한다.
+                            var gX = (CivilDb.SampleLineGroup)trL.GetObject(xGroup, OpenMode.ForWrite);
+                            foreach (CivilDb.SectionSource srcX in gX.GetSectionSources())
+                            {
+                                bool oursX = surfs.Exists(sx => sx.SurfId == srcX.SourceId);
+                                try { srcX.IsSampled = oursX; } catch { }
+                            }
+                            trL.Commit();
+                        }
+                        catch (System.Exception ex) { log.AppendLine("  횡단용 준비 경고 — " + ex.Message); }
+
+                        int nX = 0;
+                        for (int i = 0; i < cutsX.Count; i++)
+                        {
+                            try
+                            {
+                                var ptsX = new Point2dCollection { cutsX[i].Left, cutsX[i].Right };
+                                string nmX = i < cutNamesX.Count ? cutNamesX[i] : StationMarks.Fmt(cutsX[i].Station, interval);
+                                var idX = CivilDb.SampleLine.Create($"{xName}_{nmX}", xGroup, ptsX);
+                                if (idX.IsNull) continue;
+                                nX++;
+                                // ★★[JACK 0825] <b>레이어를 옮기는 것으로는 안 숨는다.</b>
+                                //   Civil 검토선의 표시는 <c>SampleLineStyle</c>이 쥐고 있고, 그 스타일이
+                                //   컴포넌트마다 <b>자기 레이어</b>에 그린다 — 객체 레이어를 바꿔도 그쪽이 이긴다
+                                //   (터파기 종단이 초록으로 나오던 것과 같은 구조다).
+                                //   → 객체 자체를 <b>안 보이게</b> 한다. 횡단면도를 뽑는 데는 지장이 없다.
+                                try
+                                {
+                                    using var trE = db.TransactionManager.StartTransaction();
+                                    if (trE.GetObject(idX, OpenMode.ForWrite) is Entity eX)
+                                    {
+                                        if (!hideLayer.IsNull) eX.LayerId = hideLayer;
+                                        eX.Visible = false;
+                                    }
+                                    trE.Commit();
+                                }
+                                catch { }
+                            }
+                            catch { }
+                        }
+
+                        // 그 레이어는 꺼 둔다 — 평면에 안 보여야 한다.
+                        try
+                        {
+                            using var trO = db.TransactionManager.StartTransaction();
+                            var lt = (LayerTable)trO.GetObject(db.LayerTableId, OpenMode.ForRead);
+                            if (lt.Has(XsecHiddenLayer))
+                            {
+                                var lr = (LayerTableRecord)trO.GetObject(lt[XsecHiddenLayer], OpenMode.ForWrite);
+                                if (!lr.IsOff) lr.IsOff = true;
+                            }
+                            trO.Commit();
+                        }
+                        catch { }
+
+                        LastXsecGroupId = xGroup;
+                        log.AppendLine($"횡단용 검토선 '{xName}' — {nX}/{cutsX.Count}개 " +
+                                       $"(벽 {nSplit}곳은 (전)(후) 두 장) · 레이어 '{XsecHiddenLayer}'로 숨김");
+                    }
+                }
+                catch (System.Exception ex) { log.AppendLine("  횡단용 검토선 실패 — " + ex.Message); }
+            }
 
             // ── ④ 측점 행이 쓸 <b>라벨 자리 전용 체인</b>(값은 안 쓴다).
             LastLabelChainId = BuildLabelChain(db, alignId, pidPad, pidGround, all, interval, log);
@@ -1655,6 +1859,209 @@ public sealed class ProfileCommand
         return n;
     }
 
+    /// <summary>★★[JACK 0825] <b>종단의 옹벽·가시설 — 굵은 수직 막대.</b>
+    ///
+    /// <para>JACK: <i>"옹벽 부분은 종단에서 선을 두껍게 처리해서 직각으로 보이게 하자."</i>
+    /// 2D 설계 종단도가 그렇게 그린다 — <b>옹벽은 시안 굵은 막대</b>, <b>가시설은 마젠타 굵은 막대</b>.
+    /// 실제 형상은 1:0.05라 살짝 기울어 있지만, 도면에서는 직각 한 줄이 관행이다.</para>
+    ///
+    /// <para>막대의 위·아래 표고는 <b>측점과 같은 자</b>에서 나온다
+    /// (<see cref="StationMarks.CollectVertBars"/>) — 그래야 막대 자리에 측점이 정확히 선다.</para>
+    ///
+    /// <para><b>폭은 15cm 고정이다.</b> JACK: <i>"어차피 옹벽 최대높이는 15m 이하일 건데
+    /// 이때 0.01이면 15cm잖아? 이걸로 하면 어때?"</i> — <b>가장 두꺼운 경우의 두께</b>를 모두에게 쓴다.</para>
+    ///
+    /// <para>처음엔 <c>구배 × 벽 높이</c>로 실제 두께를 그렸다(JACK: <i>"막대 굵기는 정하지 말고
+    /// 단높이를 가지고 폭을 계산하면 되잖아"</i>). 그때는 구배가 0.05라 5m 벽이 25cm였다.
+    /// 그런데 <b>하한이 0.01로 내려가면서 그 두께가 의미를 잃었다</b> — 애초에 실제 구조물 치수가 아니라
+    /// TIN이 안 무너지게 눕혀 둔 인공 기울기이고, 이제는 5cm까지 얇아져 도면에서 사라진다
+    /// (실측: 0.42m 잔여단 → 폭 2cm).</para>
+    ///
+    /// <para>도면 관행도 이쪽이 맞다 — 옹벽은 <b>굵은 직각 선 하나</b>로 그리지 높이에 따라
+    /// 굵기를 달리하지 않는다. 15cm면 1:100에서 1.5mm, 1:500에서 0.3mm다.</para></summary>
+    private const double BarWidth = 0.15;   // 단높이 상한 15m × 구배 하한 0.01
+
+    /// <summary>★[JACK 0825] 벽 앞·뒤 자리에서 종단을 읽어 막대의 위·아래를 정한다.
+    /// <para>가운데는 벽면 한복판이라 중간 표고가 나오고, 선 값은 자르기 전 오버사이즈라 한 단을 꽉 채운다.
+    /// 앞·뒤는 <b>둘 다 벽면 밖</b>이라 실제 지표면 값이다.</para></summary>
+    private static bool TryWallFromProfile(StationMarks.VertBar b,
+                                           System.Collections.Generic.List<StationMarks.WallSpan> spans,
+                                           System.Func<ObjectId, double, double> elevOf,
+                                           ObjectId pidPad, ObjectId pidGround,
+                                           out double zTop, out double zBot)
+    {
+        zTop = zBot = double.NaN;
+        if (spans == null) return false;
+        var sp = spans.Find(w => System.Math.Abs(w.Mid - b.Station) <= StationMarks.MergeTol);
+        if (!(sp.Back > sp.Front)) return false;
+
+        // 앞·뒤 각각에서 계획면·원지반을 읽어 넷 중 최대·최소를 쓴다.
+        double[] zs =
+        {
+            elevOf(pidPad, sp.Front), elevOf(pidGround, sp.Front),
+            elevOf(pidPad, sp.Back),  elevOf(pidGround, sp.Back),
+        };
+        double hi = double.MinValue, lo = double.MaxValue;
+        foreach (var z in zs)
+        {
+            if (double.IsNaN(z)) continue;
+            if (z > hi) hi = z;
+            if (z < lo) lo = z;
+        }
+        if (hi == double.MinValue || lo == double.MaxValue || hi - lo < 1e-6) return false;
+        zTop = hi; zBot = lo;
+        return true;
+    }
+
+    private static string DrawVertBars(Database db, ObjectId pvId, ObjectId alignId,
+                                       ObjectId pidGround, ObjectId pidPad, ObjectId pidExcav,
+                                       System.Collections.Generic.List<StationMarks.WallSpan> wspans,
+                                       System.Text.StringBuilder log)
+    {
+        const string LayWall = "DH-종단-옹벽";
+        const string LayShore = "DH-종단-가시설";
+        const short AciCyan = 4, AciMagenta = 6;
+
+        int nWall = 0, nShore = 0, nMiss = 0, wiped = 0;
+        int nProfile = 0, nLine = 0;
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            if (tr.GetObject(pvId, OpenMode.ForRead) is not CivilDb.ProfileView pv ||
+                tr.GetObject(alignId, OpenMode.ForRead) is not CivilDb.Alignment al)
+            { tr.Commit(); return "종단 막대: 종단뷰나 선형을 못 찾았다"; }
+
+            var bars = StationMarks.CollectVertBars(al, db, tr, log);
+            var lw = SectionCommand.EnsureLayer(db, tr, LayWall, AciCyan);
+            var ls = SectionCommand.EnsureLayer(db, tr, LayShore, AciMagenta);
+
+            var ms = (BlockTableRecord)tr.GetObject(
+                SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+
+            // 다시 그릴 때 겹치지 않게 먼저 지운다 — 우리가 만든 레이어라 남의 것을 건드릴 일이 없다.
+            foreach (ObjectId id in ms)
+            {
+                try
+                {
+                    if (tr.GetObject(id, OpenMode.ForRead) is not Entity e) continue;
+                    if (e.LayerId != lw && e.LayerId != ls) continue;
+                    tr.GetObject(id, OpenMode.ForWrite).Erase(); wiped++;
+                }
+                catch { }
+            }
+
+            // ★★[JACK 0825] <b>막대의 위·아래는 종단에서 읽는다.</b>
+            //
+            //   JACK: <i>"여전히 데이라잇에 잘리는 부분의 옹벽은 생성이 안 됐어."</i>
+            //
+            //   <b>원인.</b> 종전엔 <b>옹벽선 조각의 표고</b>로 막대를 세웠다. 그런데 데이라잇이
+            //   한쪽 선을 <b>통째로</b> 자르면 그 벽엔 조각이 하나도 안 남는다(실측 47.20m:
+            //   아랫선만 남고 윗선은 재료 자체가 없었다). 조각에서 캐는 한 이 자리는 영영 안 나온다.
+            //
+            //   → <b>선은 자리만 정하고, 높이는 종단이 준다.</b> 스샷이 그대로 말해 준다 —
+            //     옹벽 막대는 <b>계획면↔원지반</b>, 가시설 막대는 <b>계획면↔터파기 바닥</b>이다.
+            //     종단은 노선 전 구간에 있으므로 잘릴 일이 없다.
+            System.Func<ObjectId, double, double> ElevOf = (pid, st) =>
+            {
+                if (pid.IsNull) return double.NaN;
+                try
+                {
+                    return tr.GetObject(pid, OpenMode.ForRead) is CivilDb.Profile pr
+                         ? pr.ElevationAt(st) : double.NaN;
+                }
+                catch { return double.NaN; }        // 종단 범위 밖 — 예외를 던진다
+            };
+
+            int nFromProfile = 0, nFromLine = 0;
+            foreach (var b in bars)
+            {
+                bool shore = b.Kind != null && b.Kind.Contains("가시설");
+                double zTop, zBot;
+                if (shore)
+                {
+                    // ★★[JACK 0825 '가시설이 끝까지 안 생기고 중간에 생기다 말았다 ·
+                    //   성토 계획지표면까지 막대가 생겼다'] <b>가시설은 선 값이 정본이다.</b>
+                    //
+                    //   종전엔 위끝을 <b>계획면 종단</b>으로, 아래끝을 <b>터파기면 종단</b>으로 읽었다. 둘 다 틀렸다:
+                    //   ① 위끝 — 성토부에서는 목표면이 <b>원지반</b>이다(§45: 둘 중 낮은 쪽).
+                    //      계획면을 쓰면 실제로 파지 않는 성토 몫까지 막대가 올라간다(실측 106.6 지반에 110까지).
+                    //   ② 아래끝 — 그 측점 자리의 터파기면은 <b>굴착 법면 위</b>라 바닥이 아니다.
+                    //      그래서 막대가 바닥에 못 닿고 중간에서 끊겼다(실측 바닥 105.0인데 106.64에서 멈춤).
+                    //
+                    //   굴착 상단선과 구조물 바닥선의 <b>교차 표고</b>가 바로 그 두 끝이다 — 종단을 거칠 이유가 없다.
+                    zTop = b.ZTop; zBot = b.ZBottom; nFromLine++;
+                }
+                else if (TryWallFromProfile(b, wspans, ElevOf, pidPad, pidGround, out zTop, out zBot))
+                {
+                    // ★★[JACK 0825 '옹벽 막대가 원지반 아래까지 파먹는다'] <b>벽 앞·뒤에서 읽는다.</b>
+                    //
+                    //   선 값(크레스트·토우 Z)은 <b>데이라잇으로 자르기 전 오버사이즈</b>라 한 단을 꽉 채운다 —
+                    //   실측 높이 5.00m가 정확히 단높이였다. 벽이 실제로는 원지반에서 끝나는데도 그 아래까지 그렸다.
+                    //   그렇다고 가운데에서 종단을 읽으면 <b>벽면 한복판</b>이라 중간 표고가 나온다(앞서 겪은 것).
+                    //   → 벽의 <b>앞 자리에서 낮은 표고</b>, <b>뒤 자리에서 높은 표고</b>를 읽는다.
+                    //     둘 다 벽면 밖이라 실제 지표면 값이고, 그 사이가 곧 벽이다.
+                    nFromProfile++;
+                }
+                else if (!double.IsNaN(b.ZTop) && !double.IsNaN(b.ZBottom)
+                         && System.Math.Abs(b.ZTop - b.ZBottom) > 1e-6)
+                {
+                    // ★★[JACK 0825 '옹벽 막대가 생기다 말았다'] <b>옹벽도 선 값이 정본이다.</b>
+                    //
+                    //   측점을 <b>벽 가운데</b>로 옮긴 뒤로 종단을 읽으면 그 자리가 <b>벽면 한복판</b>이다.
+                    //   벽이 거의 수직이라 종단은 위아래를 잇는 중간 표고를 준다 —
+                    //   실측 106.44~<b>109.56</b>m(계획면은 110.00)로 막대가 0.44m 짧아졌다.
+                    //   크레스트 Z와 토우 Z가 곧 벽의 위아래이고, 짝이 없어도 반대편 최근접 점에서
+                    //   표고를 구하므로 <b>항상 값이 있다.</b>
+                    zTop = b.ZTop; zBot = b.ZBottom; nFromLine++;
+                }
+                else
+                {
+                    double zA = ElevOf(pidPad, b.Station);
+                    double zB = ElevOf(pidGround, b.Station);
+                    if (!double.IsNaN(zA) && !double.IsNaN(zB) && System.Math.Abs(zA - zB) > 1e-6)
+                    { zTop = System.Math.Max(zA, zB); zBot = System.Math.Min(zA, zB); nFromProfile++; }
+                    else { zTop = double.NaN; zBot = double.NaN; }
+                }
+
+                if (double.IsNaN(zTop) || double.IsNaN(zBot)) { nMiss++; continue; }
+                double xT = 0, yT = 0, xB = 0, yB = 0;
+                if (!pv.FindXYAtStationAndElevation(b.Station, zTop, ref xT, ref yT) ||
+                    !pv.FindXYAtStationAndElevation(b.Station, zBot, ref xB, ref yB))
+                { nMiss++; continue; }          // 종단뷰 표고 범위 밖 — 격자가 안 품는 자리다
+                if (System.Math.Abs(yT - yB) < 1e-9) { nMiss++; continue; }   // 높이 0이면 벽이 아니다
+
+                // ★★[JACK 0825] <b>적어도 판정 문턱만큼은 굵게.</b>
+                //   구배 하한이 0.01로 내려가면 5m 벽 막대가 <b>50mm</b>가 되어 1:200 도면에서 0.25mm —
+                //   보통선으로 내려앉고 1:500부터는 사실상 사라진다.
+                //   그런데 이 "두께"는 애초에 구조물의 실제 두께가 아니라 <b>TIN이 안 무너지게 눕혀 둔
+                //   인공 기울기</b>다(보강토 블록 실제 깊이는 0.50m). 도면 관행도 옹벽은 직각 한 줄이다.
+                //   → 실제 구배와 게이트 중 <b>큰 쪽</b>으로 그린다. 높이 비례는 그대로 유지되므로
+                //     15m 벽과 3m 벽이 같은 굵기가 되는 일은 없다.
+                double width = BarWidth;   // ★[JACK 0825] 고정 — 아래 주석 참조
+                log?.AppendLine($"     막대 {b.Kind} {b.Station:F2}m — {zBot:F2}~{zTop:F2}m" +
+                                $"(높이 {zTop - zBot:F2}m · 폭 {width:F2}m)" +
+                                (shore ? " ※굴착 상단↔구조물 바닥(선 값)" : ""));
+                var pl = new Polyline();
+                pl.AddVertexAt(0, new Point2d(xB, yB), 0, 0, 0);
+                pl.AddVertexAt(1, new Point2d(xT, yT), 0, 0, 0);
+                pl.ConstantWidth = System.Math.Max(0.0, width);   // 구배 × 벽 높이 — 그 벽의 실제 두께
+                pl.LayerId = shore ? ls : lw;
+                ms.AppendEntity(pl);
+                tr.AddNewlyCreatedDBObject(pl, true);
+                if (shore) nShore++; else nWall++;
+            }
+            nProfile = nFromProfile; nLine = nFromLine;
+            tr.Commit();
+        }
+        catch (System.Exception ex) { return "종단 막대 실패 — " + ex.Message; }
+
+        return $"종단 막대 — 옹벽 {nWall}개(시안) · 가시설 {nShore}개(마젠타)" +
+               (nWall + nShore > 0 ? $" · 폭 {BarWidth}m 고정(최대 벽 15m × 구배 0.01)" : "") +
+               (wiped > 0 ? $" · 옛것 {wiped}개 지움" : "") +
+               (nMiss > 0 ? $" · 못 세운 것 {nMiss}개(종단뷰 표고 범위 밖이거나 높이 0)" : "") +
+               $" · 높이 출처: 종단 {nProfile}개 · 선 {nLine}개";
+    }
+
     /// <summary>★★[v32.35] <b>지워질 선형들에서 수동 측점을 건진다</b> — 선형이 죽으면 확장사전도 죽는다.
     /// <para>선형이 여럿이면 <b>전부 모아</b> 합친다(같은 측점은 <see cref="StationMarks.MergeTol"/> 안에서 하나로).
     /// 어느 하나만 고르면 나머지에 적어 둔 밸브실이 조용히 사라진다.</para></summary>
@@ -1730,6 +2137,15 @@ public sealed class ProfileCommand
     /// <para>글씨 크기를 도면 축척으로 정하는데, 검토선은 <see cref="SheetCommand.Build"/>(축척을 정하는 곳)보다
     /// <b>먼저</b> 만들어진다. 그래서 만들 때 꾸미면 <b>언제나 축척을 모른 채</b> 그리게 된다
     /// (JACK: "측점 문자가 축척이 안 먹음").</para></summary>
+    /// <summary>★[JACK 0825] 횡단면도를 뽑을 때 쓸 <b>횡단용</b> 검토선 그룹((전)(후) 포함).</summary>
+    internal static ObjectId LastXsecGroupId = ObjectId.Null;
+
+    /// <summary>★[JACK 0825] 벽의 앞·뒤 자리 — 종단 막대가 지표면을 읽을 때 쓴다.</summary>
+    internal static System.Collections.Generic.List<StationMarks.WallSpan> LastWallSpans = new();
+
+    /// <summary>횡단용 검토선을 담아 두는 레이어 — 평면에 안 보이게 꺼 둔다.</summary>
+    internal const string XsecHiddenLayer = "DH-횡단검토선(숨김)";
+
     private static List<(ObjectId Id, double St, Point2d L, Point2d R)> LastSampleLines = new();
 
     /// <summary>★★★[v32.41~45 · JACK 0819] <b>단면검토선을 도면답게 — 색·선종류·측점·지시선.</b>

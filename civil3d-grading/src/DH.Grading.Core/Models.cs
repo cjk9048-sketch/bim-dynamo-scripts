@@ -221,8 +221,8 @@ public sealed class SlopeZone
 
     /// <summary>이 점·이 단이 '수직(옹벽)'인가 — <see cref="ResolveAt"/>의 구배가 최소구배 이하면 벽.</summary>
     public static bool IsWallAtPoint(IReadOnlyList<SlopeZone>? zones, double x, double y, int bench,
-        double baseSlope, double minSlope, IReadOnlyList<Point3> planB, double[] planCum)
-        => ResolveAt(zones, x, y, bench, baseSlope, 1.0, planB, planCum).Slope <= minSlope + 1e-9;
+        double baseSlope, double gateSlope, IReadOnlyList<Point3> planB, double[] planCum)
+        => ResolveAt(zones, x, y, bench, baseSlope, 1.0, planB, planCum).Slope <= gateSlope + 1e-9;
 
     /// <summary>이 단이 '수직(옹벽)'인가 — 적용 구배가 최소구배 이하면 벽으로 본다.</summary>
     public bool IsWallAt(int bench, double baseSlope, double minSlope)
@@ -558,10 +558,38 @@ public sealed class GradingParams
 
     /// <summary>
     /// 비탈 최소 구배 n (1:n). 구배 0(수직 옹벽) 입력 시 이 비율로 살짝 눕혀 TIN 붕괴를 막는다.
-    /// 기본 0.05(JACK) — 0.05 미만은 Civil3D TIN이 예기치 못한 오류를 내는 사례가 있어 이 값을 하한으로 고정.
-    /// (단높이 5m면 수평 0.25m 폭 — 사실상 수직 옹벽.)
+    ///
+    /// ★★[JACK 0825] <b>0.05 → 0.01.</b> JACK: <i>"수직 지표면치고 0.05는 너무 과해.
+    /// 단수가 많아지면 그만큼 부지 면적이 커지면서 나중엔 무시하지 못할 정도가 되고, 토공량에도 차이가 난다."</i>
+    /// 맞다 — 실측: 100×100 부지 3단 옹벽에서 부지가 <b>8.16% 부풀어 있었다</b>(0.01이면 1.61%).
+    /// <b>655㎡ · 토공 약 4,900㎥</b> 차이다. 단수가 많을수록 밀림이 누적되어 더 커진다.
+    ///
+    /// <para>종전 주석의 근거("0.05 미만은 Civil3D TIN 오류")는 <b>실측이 아니었다</b>("사례가 있어 미연 방지").
+    /// 조사 결과 TIN에서 위험한 것은 간격이 <b>정확히 0</b>이거나 브레이크라인이 <b>교차</b>할 때뿐이고,
+    /// Civil 3D 자체 Wall 브레이크라인은 <b>0.001ft(≈0.3mm)</b> 오프셋을 쓴다.
+    /// 1:0.01·단높이 5m면 간격 50mm로 그 <b>167배</b>다.</para>
+    ///
+    /// <para>진짜 바닥은 <see cref="MinFaceRun"/>(5mm)이 이미 지킨다 — 단높이가 아무리 낮아도
+    /// 링 간격이 5mm 밑으로 안 내려간다(하니스 S62 실측).</para>
+    ///
+    /// <para><b>판정 문턱은 <see cref="WallGateSlope"/>로 따로 있다.</b> 이 값을 낮춰도 그건 안 따라 내려간다.</para>
     /// </summary>
-    public double MinSlope { get; init; } = 0.05;
+    public double MinSlope { get; init; } = 0.01;
+
+    /// <summary>★★[JACK 0825] <b>옹벽이냐 사면이냐를 가르는 문턱</b> — 이 값 <b>이하</b>면 옹벽.
+    ///
+    /// <para><see cref="MinSlope"/>와 <b>떼어 놓은</b> 이유. 종전엔 한 값이 세 역할을 겸했다:
+    /// ①구배 0 입력을 끌어올리는 <b>하한</b> ②옹벽/사면 <b>판정 문턱</b> ③옹벽의 <b>실제 구배 값</b>.
+    /// 그래서 하한을 낮추면 판정 문턱까지 같이 내려가 <b>이미 만들어 둔 1:0.05 옹벽이 사면으로 재분류</b>됐다 —
+    /// 모양은 수직인데 소프트웨어만 사면이라 믿는 상태가 되어 옹벽선·3D 매스·종단 막대가 전부 사라진다
+    /// (하니스 S64에서 옹벽선 <b>16줄 → 0줄</b>로 실증).</para>
+    ///
+    /// <para>그래서 <b>문턱은 0.05에 동결</b>하고 하한만 내린다. 판정은 "간격이 한도 <b>이하</b>면 벽"이라
+    /// 문턱을 넓게 두면 <b>더 얇은 벽도 함께 통과</b>한다 — 진짜 사면(1:1.5)은 간격이 두 자릿수 크므로
+    /// 오분류될 여지가 없다.</para>
+    ///
+    /// <para><b>이 값은 낮추지 말 것.</b> 낮추는 순간 옛 도면의 옹벽이 사면이 된다.</para></summary>
+    public double WallGateSlope { get; init; } = 0.05;
 
     /// <summary>비탈 최소 수평폭 절대 바닥 (m) — 단높이가 매우 작을 때만 작동하는 안전장치.</summary>
     public double MinFaceRun { get; init; } = 0.005;
