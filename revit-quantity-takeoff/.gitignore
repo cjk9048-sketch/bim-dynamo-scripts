@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.omc/
+*.tmp
+*.error.log
+# 생성된 산출서 출력물 (예시 파일은 추적 유지하려면 별도 관리)
+*.xlsx
+~$*.xlsx

@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <UseWPF>true</UseWPF>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>DH.Takeoff.Revit</AssemblyName>
+    <RootNamespace>DH.Takeoff.Revit</RootNamespace>
+  </PropertyGroup>
+
+  <!-- Revit 2026 API: NuGet 빌드타임 참조(런타임 DLL 미복사). 실행은 Revit 2026 필요. -->
+  <ItemGroup>
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="2026.*" ExcludeAssets="runtime" />
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="2026.*" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DH.Takeoff.Core\DH.Takeoff.Core.csproj" />
+  </ItemGroup>
+
+  <!-- 리본 버튼 아이콘(PNG)을 DLL에 포함 -->
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\*.png" />
+  </ItemGroup>
+
+</Project>

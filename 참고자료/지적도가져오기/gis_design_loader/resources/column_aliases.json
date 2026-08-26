@@ -1,0 +1,387 @@
+{
+  "version": "1.0",
+  "generated_at": "2026-05-06",
+  "source": "통합_컬럼명세서.md",
+  "tables": {
+    "contour": {
+      "ufid": "UFID",
+      "divi": "구분",
+      "cont": "등고수치",
+      "scls": "통합코드",
+      "fmta": "제작정보"
+    },
+    "korea_dem_90m": {
+      "rid": "행ID",
+      "filename": "파일명"
+    },
+    "n3l_a0010000": {
+      "ufid": "UFID",
+      "scls": "통합코드",
+      "fmta": "제작정보"
+    },
+    "n3l_a0020000": {
+      "ufid": "UFID",
+      "rdnu": "도로번호",
+      "name": "명칭",
+      "rddv": "도로구분",
+      "stpt": "시점",
+      "edpt": "종점",
+      "pvqt": "포장재질",
+      "dvyn": "분리대 유·무",
+      "rdln": "차로수",
+      "rvwd": "도로폭",
+      "onsd": "일방통행",
+      "rest": "기타",
+      "rdnm": "도로명",
+      "scls": "통합코드",
+      "fmta": "제작정보"
+    },
+    "n3a_a0010000": {
+      "ufid": "UFID",
+      "scls": "통합코드",
+      "fmta": "제작정보"
+    },
+    "n3a_a0110020": {
+      "ufid": "UFID",
+      "name": "명칭",
+      "leng": "연장",
+      "widt": "폭",
+      "heig": "높이",
+      "scls": "통합코드",
+      "fmta": "제작정보"
+    },
+    "n3a_a0070000": {
+      "ufid": "UFID",
+      "name": "명칭",
+      "kind": "종류",
+      "leng": "연장",
+      "widt": "폭",
+      "eymd": "설치연도",
+      "qual": "재질",
+      "rvnm": "하천명",
+      "rest": "기타",
+      "scls": "통합코드",
+      "fmta": "제작정보"
+    },
+    "n3l_e0020000": {
+      "ufid": "UFID",
+      "rvnu": "하천번호",
+      "name": "명칭",
+      "divi": "구분",
+      "type": "형태",
+      "stat": "상태",
+      "scls": "통합코드",
+      "fmta": "제작정보"
+    },
+    "n3a_e0032111": {
+      "ufid": "UFID",
+      "scls": "통합코드",
+      "fmta": "제작정보"
+    },
+    "n3a_e0052114": {
+      "ufid": "UFID",
+      "name": "명칭",
+      "serv": "용도(설명)",
+      "mara": "면적",
+      "mngt": "관리기관(명칭)",
+      "scls": "통합코드",
+      "fmta": "제작정보"
+    },
+    "al_d196": {
+      "ufid": "UFID",
+      "a0": "도형ID",
+      "a1": "GIS건물통합식별번호",
+      "a2": "고유번호",
+      "a3": "법정동코드",
+      "a4": "법정동명",
+      "a5": "특수지구분코드",
+      "a6": "특수지구분명",
+      "a7": "지번",
+      "a8": "건물식별번호",
+      "a9": "집합건물구분코드",
+      "a10": "집합건물구분",
+      "a11": "대장종류코드",
+      "a12": "대장종류",
+      "a13": "건물명",
+      "a14": "건물동명",
+      "a15": "건물연면적",
+      "a16": "건축물구조코드",
+      "a17": "건축물구조명",
+      "a18": "주요용도코드",
+      "a19": "주요용도명",
+      "a20": "건물높이(m)",
+      "a21": "지상층수",
+      "a22": "지하층수",
+      "a23": "허가일자",
+      "a24": "사용승인일자",
+      "a25": "건물연령",
+      "a26": "연령대구분코드",
+      "a27": "연령대구분명",
+      "a28": "연령대5계급코드",
+      "a29": "연령대5계급명",
+      "a30": "데이터기준일자",
+      "sido_code": "시도코드",
+      "sgg_code": "시군구코드",
+      "sido_name": "시도명",
+      "sgg_name": "시군구명"
+    },
+    "f_fac_building": {
+      "ufid": "UFID",
+      "bld_nm": "건물명칭",
+      "dong_nm": "동명칭",
+      "grnd_flr": "지상층수",
+      "ugrnd_flr": "지하층수",
+      "pnu": "토지코드",
+      "archarea": "건축면적",
+      "totalarea": "연면적",
+      "platarea": "대지면적",
+      "height": "건물높이",
+      "strct_cd": "구조",
+      "usability": "용도",
+      "bc_rat": "건폐율",
+      "vl_rat": "용적율",
+      "bldrgst_pk": "건축물대장_PK",
+      "useapr_day": "승인일자",
+      "regist_day": "데이터생성_변경일자",
+      "gb_cd": "구분",
+      "viol_bd_yn": "위반건축물",
+      "geoidn": "참조체계연계키",
+      "bldg_pnu": "건물 필지고유번호",
+      "bldg_pnu_y": "건물 필지고유번호 유무",
+      "bld_unlice": "건물 무허가 여부",
+      "bd_mgt_sn": "도로명주소건물관리번호",
+      "sgg_oid": "원천도형ID",
+      "col_adm_se": "원천시군구코드"
+    },
+    "lsmd_cont_ldreg": {
+      "ufid": "UFID",
+      "sgg_oid": "원천도형ID",
+      "jibun": "지번",
+      "bchk": "부번체크",
+      "pnu": "고유번호(PNU)",
+      "col_adm_se": "원천시군구코드",
+      "sido_code": "시도코드",
+      "sgg_code": "시군구코드",
+      "sido_name": "시도명",
+      "sgg_name": "시군구명"
+    },
+    "al_d160": {
+      "a0": "고유번호",
+      "a1": "법정동코드",
+      "a2": "법정동명",
+      "a3": "대장구분코드",
+      "a4": "대장구분명",
+      "a5": "지번",
+      "a6": "지번지목부호",
+      "a7": "소유구분코드",
+      "a8": "소유구분명",
+      "a9": "공유인수",
+      "a10": "연령대구분코드",
+      "a11": "연령대구분",
+      "a12": "거주지구분코드",
+      "a13": "거주지구분",
+      "a14": "국가기관구분코드",
+      "a15": "국가기관구분",
+      "a16": "소유권변동원인코드",
+      "a17": "소유권변동원인",
+      "a18": "소유권변동일자",
+      "a19": "지목코드",
+      "a20": "지목",
+      "a21": "라벨",
+      "a22": "토지면적",
+      "a23": "데이터기준일자",
+      "a24": "시군구코드"
+    },
+    "dam_dan": {
+      "ufid": "UFID",
+      "dan_id": "단지ID",
+      "dan_name": "단지명",
+      "danji_type": "단지분류",
+      "cre_date": "생성일자",
+      "upd_date": "갱신일자",
+      "gosi": "고시",
+      "remark": "비고"
+    },
+    "dam_yod": {
+      "ufid": "UFID",
+      "dan_id": "단지ID",
+      "yod_id": "용도ID",
+      "cre_date": "생성일자",
+      "upd_date": "갱신일자",
+      "gosi": "고시"
+    },
+    "dam_yoj": {
+      "ufid": "UFID",
+      "dan_id": "단지ID",
+      "yoj_id": "용지ID",
+      "cre_date": "생성일자",
+      "upd_date": "갱신일자",
+      "gosi": "고시"
+    },
+    "dam_yuch": {
+      "ufid": "UFID",
+      "dan_id": "단지ID",
+      "upj_id": "업종ID",
+      "upj_code": "업종코드",
+      "upj2": "업종코드분류2",
+      "upj3": "업종코드분류3",
+      "upj4": "업종코드분류4",
+      "upj5": "업종코드분류5",
+      "upj6": "업종코드분류6",
+      "cre_date": "생성일자",
+      "upd_date": "갱신일자",
+      "gosi": "고시"
+    },
+    "sgis_hjd": {
+      "adm_cd": "행정코드",
+      "adm_nm": "행정동명",
+      "addr_en": "영문주소",
+      "x": "중심 X좌표",
+      "y": "중심 Y좌표"
+    },
+    "bnd_emd_bjd": {
+      "emd_cd": "법정읍면동코드",
+      "emd_nm": "법정읍면동명",
+      "col_adm_se": "시군구코드(원천)"
+    },
+    "bnd_li_bjd": {
+      "ri_cd": "법정리코드",
+      "ri_nm": "법정리명",
+      "col_adm_se": "시군구코드(원천)"
+    },
+    "sgis_gagu": {
+      "adm_cd": "행정코드",
+      "adm_nm": "행정동명",
+      "year": "연도",
+      "household_cnt": "가구수",
+      "avg_family_member_cnt": "평균 가구원수",
+      "family_member_cnt": "가구원수 합계"
+    },
+    "sgis_house": {
+      "adm_cd": "행정코드",
+      "adm_nm": "행정동명",
+      "year": "연도",
+      "house_cnt": "주택수"
+    },
+    "sgis_population": {
+      "adm_cd": "행정코드",
+      "adm_nm": "행정동명",
+      "year": "연도",
+      "population": "인구수"
+    },
+    "soil": {
+      "soil_code": "토양코드",
+      "hydro_type": "수문그룹",
+      "hydro_ty_1": "수문그룹코드",
+      "k": "K인자"
+    },
+    "land_cover_yangju": {
+      "gid": "행ID",
+      "l1_code": "대분류코드",
+      "l1_name": "대분류명",
+      "l2_code": "중분류코드",
+      "l2_name": "중분류명",
+      "l3_code": "소분류코드",
+      "l3_name": "소분류명",
+      "img_name": "영상명",
+      "img_date": "영상일자",
+      "lu_info": "토지이용정보",
+      "etc_info": "기타정보",
+      "env_info": "환경정보",
+      "for_info": "산림정보",
+      "ud_info": "도시개발정보",
+      "inx_num": "도엽번호",
+      "created_at": "생성일시"
+    },
+    "fact_water_supply": {
+      "id": "행ID",
+      "year": "연도",
+      "adm_cd": "행정코드",
+      "adm_nm": "행정동명",
+      "m6_total_supply": "총급수량",
+      "m10_revenue_water": "유수수량",
+      "m34_daily_supply": "1일평균급수량",
+      "m35_daily_usage": "1일평균사용량",
+      "created_at": "생성일시"
+    },
+    "import_log": {
+      "id": "행ID",
+      "table_name": "테이블명",
+      "imported_at": "적재일시",
+      "record_count": "적재행수",
+      "file_count": "파일수",
+      "source_date": "원본기준일자",
+      "source_type": "원본유형",
+      "duration_sec": "소요시간(초)",
+      "notes": "비고"
+    },
+    "paju_jijeok_temp": {
+      "sgg_oid": "원천도형ID",
+      "jibun": "지번",
+      "bchk": "부번체크",
+      "pnu": "고유번호(PNU)",
+      "col_adm_se": "원천시군구코드",
+      "sido_code": "시도코드",
+      "sgg_code": "시군구코드",
+      "sido_name": "시도명",
+      "sgg_name": "시군구명",
+      "ufid": "UFID"
+    },
+    "lsmd_cont_uj301": {
+      "mnum": "관리번호",
+      "alias": "별칭",
+      "remark": "비고",
+      "ntfdate": "고시일자",
+      "sgg_oid": "원천오브젝트ID",
+      "col_adm_se": "원천시군구코드"
+    },
+    "lsmd_cont_uj201": {
+      "mnum": "관리번호",
+      "alias": "별칭",
+      "remark": "비고",
+      "ntfdate": "고시일자",
+      "sgg_oid": "원천오브젝트ID",
+      "col_adm_se": "원천시군구코드"
+    },
+    "lsmd_cont_ud801": {
+      "mnum": "관리번호",
+      "alias": "별칭",
+      "remark": "비고",
+      "ntfdate": "고시일자",
+      "sgg_oid": "원천오브젝트ID",
+      "col_adm_se": "원천시군구코드"
+    },
+    "lsmd_cont_ud301": {
+      "mnum": "관리번호",
+      "alias": "별칭",
+      "remark": "비고",
+      "ntfdate": "고시일자",
+      "sgg_oid": "원천오브젝트ID",
+      "col_adm_se": "원천시군구코드"
+    },
+    "lsmd_cont_ub811": {
+      "mnum": "관리번호",
+      "alias": "별칭",
+      "remark": "비고",
+      "ntfdate": "고시일자",
+      "sgg_oid": "원천오브젝트ID",
+      "col_adm_se": "원천시군구코드"
+    },
+    "lsmd_cont_uq129": {
+      "mnum": "관리번호",
+      "alias": "별칭",
+      "remark": "비고",
+      "ntfdate": "고시일자",
+      "sgg_oid": "원천오브젝트ID",
+      "col_adm_se": "원천시군구코드"
+    },
+    "lsmd_cont_ud901": {
+      "mnum": "관리번호",
+      "alias": "별칭",
+      "remark": "비고",
+      "ntfdate": "고시일자",
+      "sgg_oid": "원천오브젝트ID",
+      "col_adm_se": "원천시군구코드"
+    }
+  }
+}

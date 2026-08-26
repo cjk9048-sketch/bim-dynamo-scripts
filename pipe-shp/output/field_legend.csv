@@ -1,0 +1,17 @@
+﻿엑셀열,SHP속성명,원본 헤더(의미)
+A,Label,Label
+B,StartNode,Start Node
+C,StopNode,Stop Node
+D,Diam_mm,Diameter (mm)
+E,Flow_Ls,Flow (L/s)
+F,Slope,Slope (m/m)
+G,Length_m,Length (Scaled) (m)
+H,ManningN,Manning's n
+I,Vel_ms,Velocity (m/s)
+J,Cap_Ls,Capacity (Full Flow) (L/s)
+K,InvStart_m,Invert (Start) (m)
+L,InvStop_m,Invert (Stop) (m)
+M,Material,Material
+N,DepthMid_m,Depth (Middle) (m)
+O,GrdStart_m,Gound (Start) (m)
+P,GrdStop_m,Ground (Stop) (m)

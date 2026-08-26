@@ -27,7 +27,7 @@ public static class GradingSettings
     /// 이력은 설치본 확인에 쓰이므로 DLL에는 남기되, <b>출력은 절대 하지 않는다.</b>
     /// </para>
     /// ★[v32.20] 새 버전을 올릴 때 갱신할 곳은 <b>이 줄 하나</b>다 — 이력은 <c>작업과정.md</c>에 쓴다.</summary>
-    public const string Version = "v37.7 (2026-08-26)";
+    public const string Version = "v41.8 (2026-08-26)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -119,7 +119,31 @@ public static class GradingSettings
     /// <summary>중심선 오른쪽으로 자를 폭 (m).</summary>
     public static double XsecRight = 30.0;
     /// <summary>횡단면도를 가로로 몇 개씩 늘어놓을지.</summary>
-    public static int XsecCols = 3;
+    // ★[검토] <c>XsecCols</c>를 없앴다 — <c>XsecLayoutC</c>와 <b>같은 뜻</b>인데 저장할 때만
+    //   베껴 넣고 있어, 저장 안 하고 배치를 바꾸면 두 값이 갈라졌다(§50 그 모양).
+
+    /// <summary>★★[JACK 0826] <b>횡단면도를 한 장에 몇 개씩 놓을지</b> — 열×행.
+    /// <para>JACK: <i>"한 장에 몇 개씩 놓을지는 횡단도를 눌렀을 때 뜨게 하지 말고 도면설정 팝업에 넣고,
+    /// 횡단도 단추는 누르고 찍으면 바로 생기게 해 줘."</i> — 명령을 누를 때마다 묻는 것은
+    /// <b>매번 같은 답을 하게 만드는 일</b>이라 도면 하나를 여러 번 다시 그릴 때 성가시다.</para>
+    /// <para>한국 토공 횡단도는 A1에 <b>2열×3행</b>이 관례이고, JACK이 준 도면은 1열×2행이었다.</para></summary>
+    public static readonly string[] XsecLayoutLabels =
+        { "1×1 (한 장에 1개)", "1×2 (2개·세로)", "2×1 (2개·가로)", "2×2 (4개)", "2×3 (6개)", "3×2 (6개)" };
+
+    /// <summary>위 목록과 짝이 되는 <b>열 수</b>.</summary>
+    public static readonly int[] XsecLayoutCols = { 1, 1, 2, 2, 2, 3 };
+
+    /// <summary>위 목록과 짝이 되는 <b>행 수</b>.</summary>
+    public static readonly int[] XsecLayoutRows = { 1, 2, 1, 2, 3, 2 };
+
+    /// <summary>지금 고른 배치(위 목록의 자리). 기본은 <b>1×2</b> — JACK이 준 도면이 그것이다.</summary>
+    public static int XsecLayout = 1;
+
+    /// <summary>고른 배치의 열 수.</summary>
+    public static int XsecLayoutC => XsecLayoutCols[System.Math.Clamp(XsecLayout, 0, XsecLayoutCols.Length - 1)];
+
+    /// <summary>고른 배치의 행 수.</summary>
+    public static int XsecLayoutR => XsecLayoutRows[System.Math.Clamp(XsecLayout, 0, XsecLayoutRows.Length - 1)];
 
     /// <summary>★★[v32.21 · JACK 0812] <b>원지반 굴곡부를 고르는 높이 오차(m) — 이 값이 곧 토공량 최대 높이오차다.</b>
     ///
@@ -233,6 +257,33 @@ public static class GradingSettings
         return 0;
     }
 
+
+    /// <summary>★★[JACK 0826] <b>횡단도 축척 — 0이면 자동(칸에 맞춤).</b>
+    ///
+    /// <para>JACK: <i>"지금 도면 설정에 종단도 축척이 '자동 공간에 맞춤'이 있고 지정할 수 있잖아?
+    /// 횡단도 똑같은 로직으로 구현해야 해."</i> — <see cref="ProfileScale"/>과 <b>같은 규약</b>을 쓴다:
+    /// 0은 자동, 그 밖은 고정. 목록도 같은 사다리다.</para>
+    ///
+    /// <para><b>고정을 골랐는데 안 들어가면?</b> <b>바꾸지 않는다.</b> 사용자가 1:200을 콕 집었는데
+    /// 우리가 1:250으로 올리면 <b>도면에 적힌 축척과 실제가 어긋난다</b> — 현장에서 자로 재는 값이라
+    /// 그게 넘치는 것보다 나쁘다. 넘친 채로 그리고 <b>로그로 알린다</b>(종단도와 같은 태도).</para></summary>
+    public static double XsecScale = 0.0;
+
+    /// <summary>횡단도 축척 콤보 — <see cref="ProfileScaleValues"/>와 같은 목록을 쓴다.
+    /// 같은 사다리를 두 벌 적어 두면 언젠가 갈라진다.</summary>
+    public static double[] XsecScaleValues => ProfileScaleValues;
+
+    /// <summary>횡단도 축척 콤보 표시.</summary>
+    public static string[] XsecScaleLabels => ProfileScaleLabels;
+
+    /// <summary>지금 값이 목록의 몇 번째인가 — 없는 값이면 <b>자동</b>으로 돌아간다.</summary>
+    public static int XsecScaleIndex()
+    {
+        double[] v = XsecScaleValues;
+        for (int i = 0; i < v.Length; i++)
+            if (System.Math.Abs(v[i] - XsecScale) < 1e-9) return i;
+        return 0;
+    }
     /// <summary>★★[v32.49 · JACK 0819] <b>단면검토선 측점 글씨의 축척 — 0이면 도면 축척을 따른다.</b>
     ///
     /// <para>JACK: <i>"주석 축척 연동하지 말고 도면설정에 단면검토선 주석 축척 선택박스를 넣고

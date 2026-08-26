@@ -1,0 +1,132 @@
+핵심 질문 5가지에 대한 진단 및 답변
+1. NTS Buffer 오프셋 + Intersection 클립 + Buffer(0) 방식이 최선인가?
+
+아닙니다. 이 방식이 바로 3번 스크린샷의 '수직 벽'을 만드는 주범입니다. * NTS의 Buffer는 2D 평면 연산입니다. 5m 단을 2D로 먼저 억지로 밀어내고(Buffer), 절/성토 경계에서 칼로 자르듯 클립(Intersection)해버리면, 단이 서서히 땅(원지반)과 만나며 소멸(Tapering)하는 것이 아니라 공중에서 뚝 끊깁니다. 끊긴 끝점에서 바닥으로 TIN이 강제로 연결되니 가파른 수직 벽이 생기는 것입니다.
+
+2. 절토/성토 통합 정지면을 만들 때 전환부 구멍/벽 현상 해결법은?
+
+클립(Clip) 방식을 전면 폐기해야 합니다. 대신 Civil 3D의 '코리더(Corridor) 단면 추출(Ray Casting) 방식'을 C# 로직으로 직접 모방해야 합니다. 경계선을 따라 촘촘하게 수직 직교선(Ray)을 쏘고, 각 Ray마다 절토인지 성토인지 판단하여 단면 프로파일(계단 모양)을 짠 뒤, 원지반과 만나는 순간 연산을 중단(Terminate)해야 합니다. 이렇게 해야 전환부에서 단이 0m로 자연스럽게 수렴(Pinch-out)합니다.
+
+3. Daylight를 Outer Boundary로만 쓰는 게 옳은가?
+
+절대 안 됩니다. Daylight는 반드시 Breakline이자 동시에 Outer Boundary여야 합니다.
+
+Boundary로만 쓰면 Civil 3D TIN 엔진은 경계선 안쪽의 마지막 점(예: 마지막 소단)에서 Boundary 선까지 Z값을 자기 마음대로 보간해버립니다. 원지반과 정확히 1mm의 오차도 없이 맞물리려면 Daylight 선 자체를 Breakline으로 강제 주입하여 고도를 고정해야 합니다.
+
+4. Civil 3D Breaklines/Boundaries 추가 시 터지는 또 다른 함정은?
+
+수직 단차(Vertical Faces): 평면상(X, Y) 좌표가 완전히 동일한데 Z값만 다른 두 점을 브레이크라인에 넣으면 TIN 엔진이 붕괴됩니다. 단(Bench)을 만들 때 절대로 90도 수직으로 떨어뜨리지 말고, 아주 미세한 경사(예: 수평으로 0.01m 이동)를 주어야 합니다.
+
+꼬인 경계(Self-intersecting Boundary): Boundary에 들어가는 폴리곤이 단 한 군데라도 나비넥타이(Bow-tie) 형태로 꼬여있으면 Boundary 적용이 무시됩니다.
+
+5. NTS + TIN 벡터 접근이 맞는 방향인가?
+
+네, 100% 맞는 방향입니다. Grading API는 막혔고 Corridor API는 무겁고 제어하기 힘듭니다. 국내 소규모 부지(배수지 등)의 복잡한 옹벽/사면 처리를 위해서는 NTS로 2D 토폴로지를 정리하고 C#으로 3D TIN을 엮는 방식이 유일한 정답이며, 실무 상용 플러그인들도 이 방식을 씁니다. 단, NTS의 사용 위치를 바꿔야 합니다.
+
+🚀 해결책: "Ray Casting + NTS Post-processing" 아키텍처
+기존의 "면(Polygon)을 통째로 밀어내고 자르는 방식"에서 "선을 따라 단면(Section)을 뽑아내어 뼈대를 세우는 방식"으로 코드를 전면 개편해야 합니다.
+
+[Step 1] 영점(Zero-Transition Point) 찾기 및 경계선 세분화
+계획고 경계선(Polygon)을 1m 간격으로 촘촘하게 쪼갭니다(Discretization).
+이때 가장 중요한 것은 절토에서 성토로 넘어가는 정확한 영점(계획고 Z = 원지반 Z)을 찾아 경계선 정점에 추가하는 것입니다.
+
+[Step 2] Ray Casting을 통한 3D 단면 뼈대 생성 (NTS Buffer 대체)
+각 정점에서 바깥쪽으로 법선 벡터(Normal Vector) 방향으로 가상의 광선(Ray)을 쏩니다.
+
+만약 절토 구간이라면: 위로 1:1 경사로 올라가다가 5m 높이에 도달하면 1m 수평 단(Bench)을 만듭니다. 이를 원지반 고도와 부딪힐 때까지 반복합니다.
+
+만약 성토 구간이라면: 아래로 1:1.5 경사로 내려가며 단을 만듭니다. 원지반과 부딪히면 중단합니다.
+
+영점(Zero Point)이라면: 뻗어나가지 않고 바로 그 자리가 Daylight가 됩니다. (단이 생성되지 않으므로 벽이 생기지 않음)
+
+[Step 3] 종단 선형 연결 및 NTS 꼬임 풀기 (Bow-tie Removal)
+Step 2에서 생성된 단면들의 같은 레벨(예: 첫 번째 단, 두 번째 단, Daylight)끼리 선으로 연결합니다.
+오목한 코너에서는 이 선들이 교차(Bow-tie)할 것입니다. 이때 NTS를 투입합니다.
+
+꼬인 3D 선의 X, Y만 추출하여 NTS LineString 또는 Polygon으로 만듭니다.
+
+Buffer(0)를 실행하여 외부 껍데기만 남기고 꼬인 내부 선들을 폭파시킵니다.
+
+살아남은 X, Y 좌표에 원래의 3D 뼈대 선형을 참고하여 Z값을 보간(Interpolation)하여 복원합니다.
+
+[Step 4] TIN Surface 주입
+완벽하게 세척된 3D 선들을 각각 Breakline으로 추가하고, 최외곽 Daylight 선을 Boundary로 추가합니다.
+
+💻 C# 핵심 로직 설계 (개념 코드)
+이 구조를 사용하면 3번 스크린샷과 같은 강제 채움(벽) 현상이 기하학적으로 발생할 수 없습니다.
+
+C#
+// [가장 핵심이 되는 Ray Casting 단면 생성 클래스]
+public class GradingSection
+{
+    public Point3d BasePoint { get; set; }
+    public Vector2d OutwardNormal { get; set; }
+    public List<Point3d> ProfilePoints { get; set; } // 이 단면의 3D 꺾임점들 (사면, 소단, Daylight)
+
+    public void CalculateProfile(TinSurface existingGround, double benchHeight, double benchWidth, double cutSlope, double fillSlope)
+    {
+        ProfilePoints = new List<Point3d> { BasePoint };
+        double currentX = BasePoint.X;
+        double currentY = BasePoint.Y;
+        double currentZ = BasePoint.Z;
+        
+        // 영점(Zero Point) 체크: 원지반과 높이가 같다면 바로 종료
+        double groundZ = existingGround.FindElevationAtXY(currentX, currentY);
+        if (Math.Abs(currentZ - groundZ) < 0.01) return; 
+
+        bool isCut = currentZ < groundZ; // 설계고가 낮으면 절토(위로 올라감)
+        double slope = isCut ? cutSlope : fillSlope;
+        int dirZ = isCut ? 1 : -1;
+
+        double maxDist = 300.0; // 무한 루프 방지
+        double currentDist = 0;
+
+        while (currentDist < maxDist)
+        {
+            // 1. 사면(Slope) 계산
+            double nextZ = currentZ + (benchHeight * dirZ);
+            double deltaXY = benchHeight * slope;
+            currentDist += deltaXY;
+            
+            double testX = BasePoint.X + OutwardNormal.X * currentDist;
+            double testY = BasePoint.Y + OutwardNormal.Y * currentDist;
+            double testGroundZ = existingGround.FindElevationAtXY(testX, testY);
+
+            // 원지반과 교차했는지 확인 (가장 중요: 단을 치기 전에 땅과 만나면 종료)
+            if ((isCut && nextZ >= testGroundZ) || (!isCut && nextZ <= testGroundZ))
+            {
+                // 보간을 통해 정확한 3D 교차점(Daylight) 도출 후 루프 종료
+                Point3d daylightPt = CalculateExactIntersection(...); 
+                ProfilePoints.Add(daylightPt);
+                break;
+            }
+
+            // 교차하지 않았다면 사면 끝점 추가
+            currentZ = nextZ;
+            currentX = testX;
+            currentY = testY;
+            ProfilePoints.Add(new Point3d(currentX, currentY, currentZ));
+
+            // 2. 소단(Bench) 계산
+            currentDist += benchWidth;
+            currentX = BasePoint.X + OutwardNormal.X * currentDist;
+            currentY = BasePoint.Y + OutwardNormal.Y * currentDist;
+            
+            // 수직단차(Vertical Face) 방지를 위해 소단에 미세한 물매(0.01m) 부여 추천
+            currentZ += (0.01 * dirZ); 
+            
+            // 소단 생성 중 원지반과 만나는지 체크 후 동일하게 처리
+            // ... 생략 ...
+
+            ProfilePoints.Add(new Point3d(currentX, currentY, currentZ));
+        }
+    }
+}
+💡 요약 및 다음 스텝
+NTS의 역할 축소: NTS Buffer로 단(Bench)의 오프셋을 만들지 마세요. 단의 생성은 C#의 기하학(Ray Casting)으로 제어하고, NTS는 마지막에 선이 꼬인 부분(Bow-tie)을 푸는 2D 해결사 역할로만 사용해야 합니다.
+
+Ray Casting 도입: 경계선 둘레를 돌면서 1m 간격으로 단면(Profile)을 뽑아내세요. 전환부(Transition)로 갈수록 단면의 길이가 짧아지다가 영점(Zero)에서 완전히 소멸하게 만들어야 3번 스크린샷의 벽이 사라집니다.
+
+위딩(Weeding) 강화: NTS에서 돌아온 좌표를 Breakline에 넣기 전에 Z값 복원은 물론, 0.05m 이내의 점들은 과감히 배열에서 날려버리세요(중복점 오류 원천 차단).
+
+이 '단면 뼈대 기반(Section-based)' 접근법으로 코드를 리팩토링하시면 혼합 절성토 지형에서도 Civil 3D 정지 도구가 만든 것과 동일한 수준의 무결점 TIN을 얻으실 수 있습니다. C# 코딩 중 3D 교차점 보간 로직이나 NTS Z값 복원 부분에서 막히시면 다시 질문해 주세요!

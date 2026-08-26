@@ -553,6 +553,34 @@ public sealed class GradingParams
     /// </summary>
     public double MaxRise { get; init; } = 0;
 
+    /// <summary>★★★[JACK 0826] <b>절토 쪽 수직 예산</b>(m). 0이면 <see cref="MaxRise"/>를 쓴다.
+    ///
+    /// <para><b>왜 나누나.</b> 종전엔 예산 하나를 양쪽에 같이 썼다. 그런데 필요한 높이는 방향마다 다르다:
+    /// 원지반 65~117m에 계획고 100m이면 <b>깎는 쪽은 17m</b>(117−100)면 땅에 닿고
+    /// <b>쌓는 쪽은 35m</b>(100−65)가 필요하다. 그런데 큰 쪽(35m)에 여유를 더한 45m를
+    /// 깎는 쪽에도 주니 계단이 <c>100+45 = 145m</c>까지 <b>허공으로</b> 올라갔다 —
+    /// 땅이 117m까지인데 28m가 헛단이다.</para>
+    ///
+    /// <para><b>그 헛단이 실제 사고를 냈다.</b> 횡단 수량이 그 허공 계단을 계획면으로 읽어
+    /// 성토 2000㎡가 잡혔다(JACK: <i>"원지반만 있는 측점인데 왜 정지순수가 나오는지 모르겠다"</i>).
+    /// 화면에는 안 보이는데 데이터에는 있었던 것이다.</para>
+    ///
+    /// <para>★<b>번들 저장 형식은 안 바뀐다.</b> 이 값은 <b>파생값</b>이라 담지 않는다 —
+    /// 옛 번들을 읽으면 0이고, 그러면 <see cref="MaxRise"/>로 물러나 <b>종전과 똑같이</b> 돈다.
+    /// (0807에 이 수정을 미룬 이유가 저장형식 v9→v10 부담이었는데, 그 부담이 없어졌다.)</para></summary>
+    public double MaxRiseCut { get; init; } = 0;
+
+    /// <summary>★[JACK 0826] <b>성토 쪽 수직 예산</b>(m). 0이면 <see cref="MaxRise"/>를 쓴다.
+    /// 설명은 <see cref="MaxRiseCut"/>에.</summary>
+    public double MaxRiseFill { get; init; } = 0;
+
+    /// <summary>이 방향에 실제로 쓸 예산 — 방향별 값이 있으면 그것, 없으면 공용값.</summary>
+    public double RiseFor(bool up)
+    {
+        double v = up ? MaxRiseCut : MaxRiseFill;
+        return v > 1e-9 ? v : MaxRise;
+    }
+
     /// <summary>경계 둘레 샘플 간격 (m) — 정점 밀도. 작을수록 곡선 추종 좋고 폴리라인 많음.</summary>
     public double VertexSpacing { get; init; } = 2.0;
 

@@ -6007,6 +6007,411 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     }
 }
 
+
+// ── S68 ★★★[JACK 0826 검토] 측점 이름 — 자가 하나인지 · v32.48 사고가 안 돌아오는지 ─────────
+//   19.996m은 데이라잇이 정측점 4mm 앞을 지나면 실제로 잡히는 값이다.
+//   옛 자(내림 + 0.1mm)로는 'No.0+20.00'이 나왔다 — 20.00이면 No.1이니 있을 수 없는 이름이고,
+//   같은 점이 평면도에는 'No.1'로 찍혀 두 도면이 어긋났다.
+{
+    Console.WriteLine("\n== S68 측점 이름 — 정측점 경계 ==");
+    var cases = new (double St, string Want, string Why)[]
+    {
+        (0.0,     "No.0",        "시점"),
+        (20.0,    "No.1",        "딱 정측점"),
+        (19.996,  "No.1",        "★4mm 모자람 — 옛 자는 No.0+20.00(있을 수 없는 이름)"),
+        (20.004,  "No.1",        "★4mm 넘침 — 옛 자는 No.1+00.00(v32.48이 잡은 그 모습)"),
+        (19.99,   "No.0+19.99",  "10mm 모자람 — 허용오차 밖이라 그대로 적는다"),
+        (20.01,   "No.1+00.01",  "10mm 넘침"),
+        (7.91,    "No.0+07.91",  "보통 자리 — 두 자리로 채운다"),
+        (33.82,   "No.1+13.82",  "두 번째 구간"),
+        (40.0,    "No.2",        "두 배수"),
+        (105.0,   "No.5+05.00",  "다섯 번째 구간"),
+    };
+    foreach (var (st, want, why) in cases)
+    {
+        string got = StationNaming.Fmt(st, 20.0);
+        Check($"S68 {st:F3}m → {want} ({why})", got == want, got);
+    }
+
+    // 간격이 20m가 아닐 때도 같은 자여야 한다 — [종단/횡단]은 25m를 쓸 수 있다.
+    Check("S68 ★간격 25m — 25.0m는 No.1", StationNaming.Fmt(25.0, 25.0) == "No.1", StationNaming.Fmt(25.0, 25.0));
+    Check("S68 ★간격 25m — 30.0m는 No.1+05.00", StationNaming.Fmt(30.0, 25.0) == "No.1+05.00", StationNaming.Fmt(30.0, 25.0));
+    Check("S68 ★간격 25m — 24.997m는 No.1(3mm 모자람)", StationNaming.Fmt(24.997, 25.0) == "No.1", StationNaming.Fmt(24.997, 25.0));
+
+    // 판정과 표기가 <b>따로</b>인지 — 반올림으로 표기하면 음수 나머지가 나온다.
+    Check("S68 ★★19.0m는 No.0+19.00(음수 나머지가 아니다)",
+          StationNaming.Fmt(19.0, 20.0) == "No.0+19.00", StationNaming.Fmt(19.0, 20.0));
+
+    // IsMajor가 가장 가까운 번호를 준다
+    StationNaming.IsMajor(19.996, 20.0, out int n1);
+    Check("S68 IsMajor(19.996) → No.1", n1 == 1, $"No.{n1}");
+    bool m2 = StationNaming.IsMajor(19.99, 20.0, out _);
+    Check("S68 IsMajor(19.99) → 정측점 아님", !m2, m2 ? "정측점" : "아님");
+}
+
+
+// ── S69 ★[JACK 0826] 수량표 — 병합이 앞뒤가 맞는지 ───────────────────────────────────
+//   표는 도면에서만 눈에 띄는데, 병합이 한 줄 어긋나면 표 전체가 밀린다.
+//   줄 수와 병합 합계는 도면 없이도 잴 수 있으니 여기서 막는다.
+{
+    Console.WriteLine("\n== S69 수량표 구조 ==");
+    Check("S69 내용 18줄", QuantityTable.BodyRows == 18, $"{QuantityTable.BodyRows}줄");
+    Check("S69 머리까지 19줄", QuantityTable.TotalRows == 19, $"{QuantityTable.TotalRows}줄");
+    Check("S69 ★1열 병합 합계 = 줄 수", QuantityTable.NameSpansValid(), "맞음");
+    Check("S69 ★2열 병합 합계 = 줄 수", QuantityTable.SubSpansValid(), "맞음");
+
+    // 병합으로 이어지는 줄(NameRows=0)은 반드시 <b>앞 줄</b>이 그만큼 먹고 있어야 한다.
+    int carry = 0; bool ok = true; string bad = "";
+    foreach (var r in QuantityTable.Rows)
+    {
+        if (r.NameRows > 0) { if (carry != 0) { ok = false; bad = r.Name; } carry = r.NameRows - 1; }
+        else { if (carry <= 0) { ok = false; bad = r.Material; } carry--; }
+    }
+    Check("S69 ★★병합이 앞 줄과 이어진다(떠 있는 줄 없음)", ok && carry == 0, ok ? "이어짐" : "끊긴 곳: " + bad);
+
+    // 재료 칸은 비어 있으면 안 된다 — 값 칸만 비운다.
+    int empty = 0;
+    foreach (var r in QuantityTable.Rows) if (string.IsNullOrWhiteSpace(r.Material)) empty++;
+    Check("S69 재료 칸이 빈 줄 없음", empty == 0, $"빈 줄 {empty}개");
+
+    // 터파기는 5.0m 이하·이상 두 덩이가 각각 3줄(육상 / 용수-토사 / 용수-풍화암)이어야 한다.
+    int deep = 0;
+    foreach (var r in QuantityTable.Rows) if (r.Name != null && r.Name.Contains("터 파 기")) deep += r.NameRows;
+    Check("S69 터파기 두 덩이 = 6줄", deep == 6, $"{deep}줄");
+}
+
+
+// ── S70 ★[JACK 0826 검토] (전)(후) 밀어내기 — 자가 하나인지 ─────────────────────────
+//   이 계산이 두 곳에 있었고 갈라져 있었다: 한쪽은 법면 밖까지, 다른 쪽은 벽면 생짜.
+//   후자가 "전후가 안 생겨"(두 장인데 같은 그림)의 정체였다.
+{
+    Console.WriteLine("\n== S70 (전)(후) 밀어내기 ==");
+
+    // 데이라잇에 잘린 얇은 벽 — 두께 2.3cm. 절반(1.15cm)의 3배도 20cm에 못 미쳐 하한이 이긴다.
+    var a = XsecSpan.PushOut(16.309, 16.332);
+    Check("S70 얇은 벽(2.3cm) → 하한 20cm가 이긴다", Math.Abs(a.Out - 0.20) < 1e-9, $"{a.Out:F3}m");
+    Check("S70 얇은 벽 (전)", Math.Abs(a.Front - 16.1205) < 1e-6, $"{a.Front:F4}");
+    Check("S70 얇은 벽 (후)", Math.Abs(a.Back - 16.5205) < 1e-6, $"{a.Back:F4}");
+    Check("S70 ★두 자리가 실제로 벌어진다(같은 그림이 아니다)", a.Back - a.Front > 0.30, $"{a.Back - a.Front:F3}m");
+
+    // 두꺼운 벽 — 두께 20cm. 절반의 3배(30cm)가 하한을 넘어 그쪽이 이긴다.
+    var b = XsecSpan.PushOut(10.0, 10.2);
+    Check("S70 두꺼운 벽(20cm) → 두께의 3배가 이긴다", Math.Abs(b.Out - 0.30) < 1e-9, $"{b.Out:F3}m");
+    Check("S70 두꺼운 벽 (전)/(후)", Math.Abs(b.Front - 9.8) < 1e-9 && Math.Abs(b.Back - 10.4) < 1e-9,
+          $"{b.Front:F2}/{b.Back:F2}");
+
+    // 가운데는 언제나 벽 한복판이어야 한다 — 밀어내도 대칭이다.
+    Check("S70 ★밀어내도 가운데는 그대로", Math.Abs((a.Front + a.Back) / 2.0 - 16.3205) < 1e-9,
+          $"{(a.Front + a.Back) / 2.0:F4}");
+
+    // 벽이 아닌 자리(빈 값)는 두 장을 안 받는다.
+    Check("S70 빈 값은 벽이 아니다", !XsecSpan.IsWall(0.0, 0.0), "아님");
+    Check("S70 앞<뒤여야 벽이다", XsecSpan.IsWall(16.309, 16.332), "맞음");
+}
+
+
+// ── S71 ★★★[JACK 0826] 횡단 면적 — <b>손으로 푼 답과 맞대 본다</b> ────────────────────
+//   수량은 돈이 걸린 숫자다. "돌려 보니 그럴듯하다"로는 부족하고, 정답을 아는 도형으로 재야 한다.
+{
+    Console.WriteLine("\n== S71 횡단 면적 ==");
+
+    // ① 직사각형 — 폭 10m, 깊이 2m → 20㎡
+    var x1 = new[] { 0.0, 10.0 };
+    Check("S71 직사각형 10×2", Math.Abs(CrossSectionArea.Above(x1, new[] { 2.0, 2.0 }, new[] { 0.0, 0.0 }) - 20.0) < 1e-9,
+          $"{CrossSectionArea.Above(x1, new[] { 2.0, 2.0 }, new[] { 0.0, 0.0 }):F4}");
+
+    // ② 삼각형 — 밑변 10m, 높이 2m → 10㎡
+    Check("S71 삼각형 10×2÷2", Math.Abs(CrossSectionArea.Above(x1, new[] { 2.0, 0.0 }, new[] { 0.0, 0.0 }) - 10.0) < 1e-9,
+          $"{CrossSectionArea.Above(x1, new[] { 2.0, 0.0 }, new[] { 0.0, 0.0 }):F4}");
+
+    // ③ 위아래가 뒤집힌 곳은 안 센다 — 아래로 판 것을 절토로 세면 안 된다
+    Check("S71 아래는 0", CrossSectionArea.Above(x1, new[] { 0.0, 0.0 }, new[] { 2.0, 2.0 }) == 0.0, "0");
+
+    // ④ ★교차 — 왼쪽 절토 삼각형과 오른쪽 성토 삼각형이 한 단면에 있다.
+    //    두 선이 5m에서 만난다. 각각 밑변 5m·높이 2m → 5㎡씩.
+    var xc = new[] { 0.0, 10.0 };
+    double cut = CrossSectionArea.Above(xc, new[] { 2.0, -2.0 }, new[] { 0.0, 0.0 });
+    double fil = CrossSectionArea.Above(xc, new[] { 0.0, 0.0 }, new[] { 2.0, -2.0 });
+    Check("S71 ★교차 — 절토 5㎡", Math.Abs(cut - 5.0) < 1e-9, $"{cut:F4}");
+    Check("S71 ★교차 — 성토 5㎡", Math.Abs(fil - 5.0) < 1e-9, $"{fil:F4}");
+    Check("S71 ★★교차 — 둘이 상쇄되지 않는다", Math.Abs(cut - fil) < 1e-9 && cut > 0, "각각 5㎡");
+
+    // ⑤ 깊이로 가르기 — 폭 10m, 깊이 8m. 한계 5m면 위 5m가 얕은 것(50㎡), 아래 3m가 깊은 것(30㎡)
+    var sp = CrossSectionArea.SplitByDepth(x1, new[] { 8.0, 8.0 }, new[] { 0.0, 0.0 }, 5.0);
+    Check("S71 깊이 가르기 — 얕은 50㎡", Math.Abs(sp.Shallow - 50.0) < 1e-9, $"{sp.Shallow:F4}");
+    Check("S71 깊이 가르기 — 깊은 30㎡", Math.Abs(sp.Deep - 30.0) < 1e-9, $"{sp.Deep:F4}");
+    Check("S71 ★★합이 전체와 같다", Math.Abs(sp.Shallow + sp.Deep - 80.0) < 1e-9, $"{sp.Shallow + sp.Deep:F4}");
+
+    // ⑥ 한계보다 얕으면 전부 얕은 쪽 — 3m 판 것을 5m 한계로 가르면 깊은 몫이 0
+    var sp2 = CrossSectionArea.SplitByDepth(x1, new[] { 3.0, 3.0 }, new[] { 0.0, 0.0 }, 5.0);
+    Check("S71 얕으면 깊은 몫 0", Math.Abs(sp2.Deep) < 1e-9 && Math.Abs(sp2.Shallow - 30.0) < 1e-9,
+          $"얕 {sp2.Shallow:F2} / 깊 {sp2.Deep:F2}");
+
+    // ⑦ ★깊이가 자리마다 다를 때 — 가운데만 8m, 양끝 2m인 V자
+    //    한계 5m 선이 걸리는 자리를 보간으로 끊어야 합이 전체와 같아진다.
+    var xv = new[] { 0.0, 5.0, 10.0 };
+    var top = new[] { 0.0, 0.0, 0.0 };
+    var bot = new[] { -2.0, -8.0, -2.0 };
+    var sp3 = CrossSectionArea.SplitByDepth(xv, top, bot, 5.0);
+    double whole = CrossSectionArea.Above(xv, top, bot);
+    // ★[검토] 이 검사는 <b>껍데기였다</b> — shallow = all − deep으로 만드니 합은 항상 전체와 같다.
+    //   어떤 값이 나와도 통과해서 5m 가르기 버그를 못 잡았다. 참값 검사는 S76으로 옮겼다.
+    Check("S71 ★★V자 — 합이 전체와 같다", Math.Abs(sp3.Shallow + sp3.Deep - whole) < 1e-9,
+          $"{sp3.Shallow:F3}+{sp3.Deep:F3}={sp3.Shallow + sp3.Deep:F3} vs {whole:F3}");
+    Check("S71 V자 — 깊은 몫이 참값 7.5㎡", Math.Abs(sp3.Deep - 7.5) < 1e-6, $"{sp3.Deep:F3}㎡");
+
+    // ⑧ 낮은 쪽 고르기 — 터파기 지표는 min(계획, 원지반)
+    var lo = CrossSectionArea.Lower(new[] { 5.0, 3.0 }, new[] { 4.0, 6.0 });
+    Check("S71 낮은 쪽 고르기", lo[0] == 4.0 && lo[1] == 3.0, $"{lo[0]}, {lo[1]}");
+}
+
+// ── S72 ★[JACK 0826] 한 측점 수량 — 세 지표면을 한꺼번에 ────────────────────────────
+{
+    Console.WriteLine("\n== S72 측점 수량 ==");
+
+    // 꺾임점이 서로 다른 세 선을 준다 — 합집합 격자가 제대로 도는지 본다.
+    var gx = new[] { 0.0, 4.0, 10.0 };  var gy = new[] { 10.0, 12.0, 10.0 };   // 원지반(가운데가 봉긋)
+    var px = new[] { 0.0, 10.0 };       var py = new[] { 10.0, 10.0 };          // 계획면(평평)
+    var ex = new[] { 3.0, 7.0 };        var ey = new[] { 4.0, 4.0 };            // 터파기 바닥(6m 깊이)
+
+    var q = XsecQuantity.Compute(gx, gy, px, py, ex, ey);
+    Check("S72 절토가 있다(봉긋한 만큼)", q.Cut > 0, $"{q.Cut:F3}㎡");
+    Check("S72 성토는 0(계획이 원지반보다 낮지 않다)", Math.Abs(q.Fill) < 1e-9, $"{q.Fill:F3}㎡");
+    Check("S72 터파기가 있다", q.ExcTotal > 0, $"{q.ExcTotal:F3}㎡");
+    Check("S72 ★5m 넘는 몫이 잡힌다(6m 팠다)", q.ExcDeep > 0, $"{q.ExcDeep:F3}㎡");
+    Check("S72 되메우기가 있다", q.Backfill > 0, $"{q.Backfill:F3}㎡");
+
+    // 터파기 폭 4m × 깊이 6m = 24㎡ (바닥이 평평하고 지표도 그 구간에선 계획면 10m)
+    Check("S72 ★터파기 4×6=24㎡", Math.Abs(q.ExcTotal - 24.0) < 1e-6, $"{q.ExcTotal:F4}");
+    Check("S72 ★그중 5m 이하 20㎡ · 초과 4㎡",
+          Math.Abs(q.ExcShallow - 20.0) < 1e-6 && Math.Abs(q.ExcDeep - 4.0) < 1e-6,
+          $"얕 {q.ExcShallow:F3} / 깊 {q.ExcDeep:F3}");
+
+    // 지표면이 없으면 NaN — 0이 아니다. 표에서 빈칸으로 가야 한다.
+    var q2 = XsecQuantity.Compute(gx, gy, null, null, null, null);
+    Check("S72 ★계획면이 없으면 NaN(0이 아니다)", double.IsNaN(q2.Cut) && double.IsNaN(q2.Fill), "NaN");
+}
+
+
+// ── S73 ★[JACK 0826] 표의 줄과 값이 제 짝인지 ──────────────────────────────────────
+{
+    Console.WriteLine("\n== S73 줄↔값 짝 ==");
+    Check("S73 ★★줄 수와 짝 수가 같다", QuantityTable.RowKindValid(),
+          $"줄 {QuantityTable.Rows.Length} · 짝 {QuantityTable.RowKind.Length}");
+
+    var q = new XsecQty(11.0, 22.0, 33.0, 44.0, 55.0);
+    // 이름으로 찾은 줄 번호에 그 값이 들어가야 한다 — 줄을 옮겨도 이 검사가 잡아 준다.
+    int Row(string name)
+    {
+        for (int i = 0; i < QuantityTable.Rows.Length; i++)
+            if ((QuantityTable.Rows[i].Name ?? "").Replace(" ", "").Contains(name)) return i;
+        return -1;
+    }
+    Check("S73 절토 → Cut", Math.Abs(QuantityTable.Pick(q, Row("절토")) - 11.0) < 1e-9, "11");
+    Check("S73 되메우기 → Backfill", Math.Abs(QuantityTable.Pick(q, Row("되메우기")) - 55.0) < 1e-9, "55");
+    Check("S73 성토 → Fill", Math.Abs(QuantityTable.Pick(q, Row("성토")) - 22.0) < 1e-9, "22");
+
+    // 터파기는 두 덩이 — 이하가 먼저, 이상이 나중이다.
+    int shallow = Row("(5.0m이하)"), deep = Row("(5.0m이상)");
+    Check("S73 터파기 5m이하 → ExcShallow", Math.Abs(QuantityTable.Pick(q, shallow) - 33.0) < 1e-9, "33");
+    Check("S73 터파기 5m이상 → ExcDeep", Math.Abs(QuantityTable.Pick(q, deep) - 44.0) < 1e-9, "44");
+    Check("S73 ★이하가 이상보다 위에 있다", shallow < deep, $"{shallow} < {deep}");
+
+    // 아직 안 재는 공종은 NaN — 0이면 "없다"로 읽혀 잘못이다.
+    int n = 0;
+    for (int i = 0; i < QuantityTable.Rows.Length; i++) if (double.IsNaN(QuantityTable.Pick(q, i))) n++;
+    Check("S73 아직 안 재는 줄은 NaN(빈칸)", n == 13, $"{n}줄");
+    Check("S73 값이 들어가는 줄은 5개", QuantityTable.Rows.Length - n == 5, $"{QuantityTable.Rows.Length - n}줄");
+}
+
+
+// ── S74 ★★★[JACK 0826] 터파기 기준면 — <b>실제로 굴착을 시작하는 면</b> ────────────────
+//   JACK: "계획지표면에서 터파기를 봤을 땐 4m인데 원지반에서 따지면 5m가 넘거든?"
+//   설계 기준: <b>원지반 이하만 터파기, 절토부는 계획고 기준</b>.
+//   → 절토부는 계획면, 성토부는 원지반 = 결국 <b>둘 중 낮은 쪽</b> 하나로 정리된다.
+{
+    Console.WriteLine("\n== S74 터파기 기준면 ==");
+    var x = new[] { 0.0, 10.0 };
+
+    // ── 절토부: 원지반 106 · 계획 100 · 바닥 95
+    //    원지반으로 재면 11m지만, 실제 구조물 터파기는 <b>계획고부터 5m</b>다.
+    var egC = new[] { 106.0, 106.0 };
+    var fgC = new[] { 100.0, 100.0 };
+    var exC = new[] { 95.0, 95.0 };
+    var qC = XsecQuantity.Compute(x, egC, x, fgC, x, exC);
+    Check("S74 ★절토부 — 터파기는 계획고 기준 5m×10 = 50㎡", Math.Abs(qC.ExcTotal - 50.0) < 1e-6, $"{qC.ExcTotal:F2}");
+    Check("S74 ★절토부 — 원지반 기준(11m=110㎡)이 아니다", qC.ExcTotal < 60.0, $"{qC.ExcTotal:F2}");
+    Check("S74 절토부 — 흙깎기는 원지반→계획 6m×10 = 60㎡", Math.Abs(qC.Cut - 60.0) < 1e-6, $"{qC.Cut:F2}");
+    Check("S74 ★절토부 — 5m 딱 맞으면 초과분 0", Math.Abs(qC.ExcDeep) < 1e-6, $"{qC.ExcDeep:F2}");
+
+    // ── 성토부: 원지반 95 · 계획 100 · 바닥 90
+    //    아직 흙을 안 쌓았으니 <b>원지반에서</b> 판다 → 5m.
+    var egF = new[] { 95.0, 95.0 };
+    var fgF = new[] { 100.0, 100.0 };
+    var exF = new[] { 90.0, 90.0 };
+    var qF = XsecQuantity.Compute(x, egF, x, fgF, x, exF);
+    Check("S74 ★성토부 — 터파기는 원지반 기준 5m×10 = 50㎡", Math.Abs(qF.ExcTotal - 50.0) < 1e-6, $"{qF.ExcTotal:F2}");
+    Check("S74 ★성토부 — 계획고 기준(10m=100㎡)이 아니다", qF.ExcTotal < 60.0, $"{qF.ExcTotal:F2}");
+    Check("S74 성토부 — 성토는 계획→원지반 5m×10 = 50㎡", Math.Abs(qF.Fill - 50.0) < 1e-6, $"{qF.Fill:F2}");
+
+    // ── ★되메우기는 <b>판 것을 넘을 수 없다</b> — 성토부에서 이중 계산되던 자리
+    Check("S74 ★★성토부 되메우기 = 터파기(더 클 수 없다)",
+          Math.Abs(qF.Backfill - qF.ExcTotal) < 1e-6, $"되메 {qF.Backfill:F2} vs 터파기 {qF.ExcTotal:F2}");
+    Check("S74 ★★절토부 되메우기 = 터파기", Math.Abs(qC.Backfill - qC.ExcTotal) < 1e-6,
+          $"되메 {qC.Backfill:F2} vs 터파기 {qC.ExcTotal:F2}");
+
+    // ── 깊은 터파기: 절토부에서 계획고 기준 8m면 5m 이하 + 3m 초과로 갈린다
+    var exD = new[] { 92.0, 92.0 };   // 계획 100에서 8m
+    var qD = XsecQuantity.Compute(x, egC, x, fgC, x, exD);
+    Check("S74 ★8m 터파기 — 이하 50㎡ · 초과 30㎡",
+          Math.Abs(qD.ExcShallow - 50.0) < 1e-6 && Math.Abs(qD.ExcDeep - 30.0) < 1e-6,
+          $"이하 {qD.ExcShallow:F2} / 초과 {qD.ExcDeep:F2}");
+    Check("S74 ★★8m 터파기 — 원지반(14m) 기준이었다면 초과가 90㎡였을 것",
+          qD.ExcDeep < 40.0, $"{qD.ExcDeep:F2}㎡");
+}
+
+
+// ── S75 ★★★[JACK 0826] 수직 예산을 방향별로 — <b>허공 계단</b>이 안 생기는지 ──────────────
+//   JACK: "원지반만 있는 측점인데 왜 정지순수가 나오는지 모르겠다"
+//   원인: 깎는 쪽(17m면 됨)에 쌓는 쪽 예산(45m)을 줘서 계단이 땅 위 28m까지 올라갔다.
+{
+    Console.WriteLine("\n== S75 방향별 수직 예산 ==");
+
+    // 옛 번들처럼 MaxRise만 있으면 <b>종전과 똑같이</b> 돌아야 한다(호환).
+    var pOld = new GradingParams { MaxRise = 45.0 };
+    Check("S75 ★옛 번들 — 절토도 45m(종전 동작)", Math.Abs(pOld.RiseFor(true) - 45.0) < 1e-9, $"{pOld.RiseFor(true):F1}");
+    Check("S75 ★옛 번들 — 성토도 45m", Math.Abs(pOld.RiseFor(false) - 45.0) < 1e-9, $"{pOld.RiseFor(false):F1}");
+
+    // 새 번들 — 방향별로 다른 값이 온다.
+    var pNew = new GradingParams { MaxRise = 45.0, MaxRiseCut = 27.0, MaxRiseFill = 45.0 };
+    Check("S75 ★새 번들 — 절토는 27m만 쓴다", Math.Abs(pNew.RiseFor(true) - 27.0) < 1e-9, $"{pNew.RiseFor(true):F1}");
+    Check("S75 새 번들 — 성토는 45m", Math.Abs(pNew.RiseFor(false) - 45.0) < 1e-9, $"{pNew.RiseFor(false):F1}");
+    Check("S75 ★★깎는 쪽이 쌓는 쪽 예산을 안 받는다", pNew.RiseFor(true) < pNew.RiseFor(false),
+          $"절토 {pNew.RiseFor(true):F1} < 성토 {pNew.RiseFor(false):F1}");
+
+    // 한쪽만 채워도 나머지는 공용값으로 물러난다 — 반쪽 저장에도 안 깨진다.
+    var pHalf = new GradingParams { MaxRise = 45.0, MaxRiseCut = 27.0 };
+    Check("S75 한쪽만 있으면 나머지는 공용값", Math.Abs(pHalf.RiseFor(false) - 45.0) < 1e-9, $"{pHalf.RiseFor(false):F1}");
+
+    // ★실제 사고 값으로 검산 — 원지반 65~117m · 계획고 100m · 단높이 5m · 여유 2단
+    //   깎기 17m + 여유 10m = 27m → 계단 꼭대기 127m (땅 117m를 10m 넘지만 여유 몫이라 정상)
+    //   종전엔 45m라 145m까지 갔다 — 땅보다 28m 위.
+    double needCut = 117.0 - 100.0, needFill = 100.0 - 65.0, spareM = 2 * 5.0;
+    double cutBudget = needCut + spareM, fillBudget = needFill + spareM;
+    Check("S75 ★실제 사고 — 절토 예산 27m", Math.Abs(cutBudget - 27.0) < 1e-9, $"{cutBudget:F1}m");
+    Check("S75 ★실제 사고 — 성토 예산 45m", Math.Abs(fillBudget - 45.0) < 1e-9, $"{fillBudget:F1}m");
+    Check("S75 ★★계단 꼭대기 127m — 종전 145m보다 18m 낮다",
+          Math.Abs(100.0 + cutBudget - 127.0) < 1e-9, $"{100.0 + cutBudget:F1}m");
+    Check("S75 ★★★땅(117m) 위로 남는 헛단이 10m뿐 — 종전엔 28m였다",
+          Math.Abs((100.0 + cutBudget) - 117.0 - 10.0) < 1e-9, $"{(100.0 + cutBudget) - 117.0:F1}m");
+}
+
+
+// ── S76 ★★★[검토] 5m 가르기 — <b>참값</b>과 맞대 본다 ────────────────────────────────
+//   종전 S71의 "합이 전체와 같다"는 <b>껍데기</b>였다: shallow = all − deep으로 만드니 항상 통과한다.
+//   어떤 값이 나와도 통과해서 이 버그가 안 보였다. 이제 <b>참값</b>과 <b>격자 무관성</b>으로 잡는다.
+{
+    Console.WriteLine("\n== S76 5m 가르기 참값 ==");
+
+    // A. 폭 10m · 깊이 0~10m로 기울어진 바닥 · 한계 5m
+    //    깊이 5m가 되는 자리는 x=5. 그 왼쪽은 전부 5m 이하, 오른쪽은 삼각형만 초과.
+    //    참값: 전체 50 · 초과 = 5×5÷2 = 12.5 · 이하 = 37.5
+    var xA = new[] { 0.0, 10.0 };
+    var tA = new[] { 0.0, 0.0 };
+    var bA = new[] { 0.0, -10.0 };
+    var spA = CrossSectionArea.SplitByDepth(xA, tA, bA, 5.0);
+    Check("S76 ★기울어진 바닥 — 초과 12.5㎡(종전 25)", Math.Abs(spA.Deep - 12.5) < 1e-6, $"{spA.Deep:F3}");
+    Check("S76 ★기울어진 바닥 — 이하 37.5㎡(종전 25)", Math.Abs(spA.Shallow - 37.5) < 1e-6, $"{spA.Shallow:F3}");
+
+    // B. V자 — S71 ⑦과 같은 도형. 참값: 이하 42.5 · 초과 7.5
+    var xB = new[] { 0.0, 5.0, 10.0 };
+    var tB = new[] { 0.0, 0.0, 0.0 };
+    var bB = new[] { -2.0, -8.0, -2.0 };
+    var spB = CrossSectionArea.SplitByDepth(xB, tB, bB, 5.0);
+    Check("S76 ★V자 — 초과 7.5㎡(종전 15)", Math.Abs(spB.Deep - 7.5) < 1e-6, $"{spB.Deep:F3}");
+    Check("S76 ★V자 — 이하 42.5㎡(종전 35)", Math.Abs(spB.Shallow - 42.5) < 1e-6, $"{spB.Shallow:F3}");
+
+    // C. ★★격자 무관성 — 같은 도형을 촘촘히 다시 재도 답이 같아야 한다.
+    //    답이 격자에 따라 변하면 계산이 틀렸다는 증거다. 이 검사 하나가 이런 종류를 앞으로 다 잡는다.
+    int m = 401;
+    var xC = new double[m]; var tC = new double[m]; var bC = new double[m];
+    for (int i = 0; i < m; i++)
+    {
+        double xx = 10.0 * i / (m - 1.0);
+        xC[i] = xx; tC[i] = 0.0;
+        bC[i] = xx <= 5.0 ? -(2.0 + 6.0 * xx / 5.0) : -(8.0 - 6.0 * (xx - 5.0) / 5.0);
+    }
+    var spC = CrossSectionArea.SplitByDepth(xC, tC, bC, 5.0);
+    Check("S76 ★★격자를 401점으로 늘려도 초과가 같다",
+          Math.Abs(spC.Deep - spB.Deep) < 1e-3, $"거친 {spB.Deep:F3} vs 촘촘 {spC.Deep:F3}");
+    Check("S76 ★★격자를 늘려도 이하가 같다",
+          Math.Abs(spC.Shallow - spB.Shallow) < 1e-3, $"거친 {spB.Shallow:F3} vs 촘촘 {spC.Shallow:F3}");
+
+    // D. 합이 <b>따로 잰 전체</b>와 같은지 — 껍데기가 아닌 진짜 검사
+    double whole = CrossSectionArea.Above(xB, tB, bB);
+    Check("S76 ★합 = 따로 잰 전체", Math.Abs(spB.Shallow + spB.Deep - whole) < 1e-6,
+          $"{spB.Shallow + spB.Deep:F3} vs {whole:F3}");
+    Check("S76 초과는 전체를 못 넘는다", spB.Deep <= whole + 1e-9, $"{spB.Deep:F3} ≤ {whole:F3}");
+}
+
+// ── S77 ★★[검토] 못 잰 것과 0을 가른다 ────────────────────────────────────────────
+{
+    Console.WriteLine("\n== S77 0과 빈칸 ==");
+    var x = new[] { 0.0, 1.0, 2.0 };
+    var nan = new[] { double.NaN, double.NaN, double.NaN };
+    var flat = new[] { 10.0, 10.0, 10.0 };
+
+    Check("S77 ★전부 못 재면 NaN(0이 아니다)", double.IsNaN(CrossSectionArea.Above(x, nan, flat)), "NaN");
+    Check("S77 재 봤는데 없으면 0", Math.Abs(CrossSectionArea.Above(x, flat, flat)) < 1e-9, "0");
+
+    // Resample — 노드와 같은 자리는 보간하지 않는다(유효점을 먹지 않는다)
+    var sx = new[] { 0.0, 0.25, 0.5, 0.75, 1.0 };
+    var sy = new[] { double.NaN, double.NaN, 10.0, 10.0, 10.0 };
+    var r = XsecQuantity.Resample(sx, sy, sx);
+    Check("S77 ★★Resample이 유효점을 안 먹는다", !double.IsNaN(r[2]) && Math.Abs(r[2] - 10.0) < 1e-9,
+          double.IsNaN(r[2]) ? "NaN(먹었다)" : $"{r[2]:F2}");
+
+    // 터파기면이 없으면 ExcTotal도 NaN — "터파기 0㎡"로 보고하면 안 된다
+    var q = XsecQuantity.Compute(x, flat, x, flat, null, null);
+    Check("S77 ★터파기면이 없으면 ExcTotal이 NaN", double.IsNaN(q.ExcTotal), "NaN");
+}
+
+
+// ── S78 ★★★[JACK 0826 확정] 5m 경계선은 <b>지표와 나란히</b> 간다 ──────────────────────
+//   두 방식이 있고 금액이 80% 갈린다:
+//     지표평행 — 경계선이 지표를 따라 기운다   ← JACK 확정, 이것을 쓴다
+//     수평면   — 대표 깊이를 정하고 수평으로 자른다
+//   계획면이 평탄한 절토부에서는 <b>같다</b>. 성토부(기준면이 경사진 원지반)에서만 갈린다.
+{
+    Console.WriteLine("\n== S78 5m 경계선 정의 ==");
+
+    // 성토부 모양 — 폭 20m, 지표가 8m에서 3m로 기울고 저면은 평탄.
+    //   깊이가 5m가 되는 자리: (8−5)/(8−3) × 20 = 12m
+    //   지표평행 초과분 = 삼각형 = (8−5) × 12 ÷ 2 = 18㎡
+    var x = new[] { 0.0, 20.0 };
+    var top = new[] { 8.0, 3.0 };
+    var bot = new[] { 0.0, 0.0 };
+    var sp = CrossSectionArea.SplitByDepth(x, top, bot, 5.0);
+
+    Check("S78 ★★지표평행 — 5m 초과 18㎡", Math.Abs(sp.Deep - 18.0) < 1e-6, $"{sp.Deep:F3}㎡");
+    Check("S78 ★★수평면 방식(10㎡)이 아니다", Math.Abs(sp.Deep - 10.0) > 1.0, $"{sp.Deep:F3}㎡");
+    Check("S78 전체 = 사다리꼴 110㎡", Math.Abs(sp.Shallow + sp.Deep - 110.0) < 1e-6,
+          $"{sp.Shallow + sp.Deep:F3}㎡");
+
+    // 절토부처럼 지표가 평탄하면 두 방식이 같아야 한다 — 정의 차이가 안 드러나는 경우.
+    var tf = new[] { 8.0, 8.0 };
+    var spF = CrossSectionArea.SplitByDepth(x, tf, bot, 5.0);
+    Check("S78 지표가 평탄하면 초과 = (8−5)×20 = 60㎡", Math.Abs(spF.Deep - 60.0) < 1e-6, $"{spF.Deep:F3}㎡");
+
+    // 격자를 촘촘히 해도 같아야 한다 — 정의가 격자에 흔들리면 안 된다.
+    int m = 201;
+    var xc = new double[m]; var tc = new double[m]; var bc = new double[m];
+    for (int i = 0; i < m; i++)
+    { double xx = 20.0 * i / (m - 1.0); xc[i] = xx; tc[i] = 8.0 - 5.0 * xx / 20.0; bc[i] = 0.0; }
+    var spC = CrossSectionArea.SplitByDepth(xc, tc, bc, 5.0);
+    Check("S78 ★격자를 늘려도 18㎡", Math.Abs(spC.Deep - 18.0) < 1e-3, $"{spC.Deep:F3}㎡");
+}
+
 return fails == 0 ? 0 : 1;
 
 static double BaseOf(GradingParams p, bool up) => up ? p.CutSlope : p.FillSlope;

@@ -256,13 +256,13 @@ public sealed class SectionCommand
         }
         int nSv = PlaceSectionViews(db, ed, slIds, groupName,
                                     svPt.Value.TransformBy(ed.CurrentUserCoordinateSystem),
-                                    System.Math.Max(1, GradingSettings.XsecCols), wl + wr);
+                                    System.Math.Max(1, GradingSettings.XsecLayoutC), wl + wr, interval, alignId);
 
         ed.Regen();
         string msg = $"선형 '{alignName}' · 종단 {nProf}개 · 종단면도 1개 · 측점선 {nSl}개 · 횡단면도 {nSv}개";
         Done(ed, msg);
         AcadApp.ShowAlertDialog("종단·횡단 생성 완료\n\n" + msg +
-            $"\n\n· 횡단 간격 {interval:0.#}m · 좌 {wl:0.#}m / 우 {wr:0.#}m · 가로 {GradingSettings.XsecCols}개씩" +
+            $"\n\n· 횡단 간격 {interval:0.#}m · 좌 {wl:0.#}m / 우 {wr:0.#}m · 가로 {GradingSettings.XsecLayoutC}개씩" +
             "\n· 간격·폭·열 수는 [도면설정]에서 바꿉니다." +
             "\n· 정지면을 고치면 종단·횡단은 Civil3D가 자동으로 갱신합니다.");
         try { DiagLog.Append($"\n■ DHSECTION — {msg} · 간격{interval} 좌{wl} 우{wr} St.{stStart:F1}~{stEnd:F1}\n"); } catch { }
@@ -299,16 +299,23 @@ public sealed class SectionCommand
             using var tr = db.TransactionManager.StartTransaction();
             if (tr.GetObject(profileId, OpenMode.ForWrite) is Entity pe)
             {
-                pe.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
-                    Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 6);   // ACI 6 = 마젠타
+                // ★[JACK 0826 검토] 여기 있던 <c>pe.Color</c> 두 줄은 <b>죽은 코드</b>라 뺐다 —
+                //   Civil 객체는 자기 <c>Entity.Color</c>를 무시하고 스타일이 화면을 전담한다(2차 헛짚기의 잔해).
+                //   ★그런데 <b>아래 레이어 이동은 지우면 안 된다</b>: [종단/횡단] 경로는 종단을 전부
+                //   한 레이어에 만들고 도곽(SheetCommand)도 안 거치므로, 거기선 이 줄이
+                //   터파기를 제 레이어로 옮기는 <b>유일한 코드</b>다.
                 // ★★[JACK 0826 '터파기선은 원지반선하고 동일한 CR-GRND 레이어에 있는데 그래서 그런 것 같아']
                 //   맞다. 스타일 되읽기가 <c>Line=ACI6@0</c>이었는데 <b>@0은 "그려진 레이어를 따른다"</b>는 뜻이다 —
                 //   그 레이어가 원지반(CR-GRND, 초록)이라 초록으로 나왔다. 나는 이 @0을 보고도 "레이어는 무죄"로 읽었다.
                 //   → 터파기 종단만 <b>제 레이어</b>로 옮긴다. 색은 그 레이어가 준다.
                 try
                 {
-                    var lay = EnsureLayer(db, tr, ExcavProfileLayer, 6);
+                    var lay = EnsureLayer(db, tr, ExcavProfileLayer, ExcavAci);
                     if (!lay.IsNull) pe.LayerId = lay;
+                    // ★[JACK 0826] 성공·실패를 반드시 남긴다. 종전엔 아무 말이 없어서
+                    //   "로그엔 색 지정 줄만 찍힌다"가 됐고, 그래서 나는 레이어를 무죄로 읽었다.
+                    try { DiagLog.Append("\n  터파기 종단 레이어 → '" + ExcavProfileLayer + "'" +
+                                         (lay.IsNull ? " ⚠못 만들었다" : " OK")); } catch { }
                 }
                 catch { }
                 try { DiagLog.Append("  터파기 종단 객체 색 = 마젠타(ACI6) 직접 지정 — ByLayer면 레이어 색이 이긴다"); } catch { }
@@ -337,7 +344,7 @@ public sealed class SectionCommand
                     }
                     catch { }
                     try { DiagLog.Append($"\n  터파기 종단 <b>객체가 쓰는</b> 스타일 = '{sn}' · 그 스타일의 선 색 = ACI{ci}" +
-                                         (ci == 6 ? "  (마젠타 맞다 — 초록이면 다른 층이다)" : "  ⚠마젠타가 아니다")); } catch { }
+                                         (ci == ExcavAci ? "  (마젠타 맞다 — 초록이면 다른 층이다)" : "  ⚠마젠타가 아니다")); } catch { }
                 }
                 trR.Commit();
             }
@@ -359,6 +366,22 @@ public sealed class SectionCommand
     /// <summary>★[JACK 0826] 터파기 종단선 전용 레이어(마젠타) — 원지반 레이어(초록)와 갈라 놓는다.
     /// <para><c>DH-종단-</c>으로 시작하므로 보기 명령의 레이어 끄기에서 <b>제외</b>된다(종단은 평면이 아니다).</para></summary>
     internal const string ExcavProfileLayer = "DH-종단-터파기";
+    /// <summary>터파기 종단선 색(ACI 6 = 마젠타). ★한 곳에서만 정한다 —
+    /// 스타일·레이어·도곽·계측 <b>네 곳</b>이 이 값을 쓰는데 흩어져 있으면 언젠가 갈라진다.</summary>
+    internal const short ExcavAci = 6;
+
+    /// <summary>★[JACK 0826] 트랜잭션을 스스로 여는 레이어 만들기 — 종단을 <b>만들기 전</b>에 필요하다.</summary>
+    internal static ObjectId EnsureLayerStandalone(Database db, string name, short aci)
+    {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var id = EnsureLayer(db, tr, name, aci);
+            tr.Commit();
+            return id;
+        }
+        catch { return ObjectId.Null; }
+    }
 
     internal static ObjectId EnsureHiddenSampleLineStyle(Database db, CivilApp.CivilDocument cdoc)
     {
@@ -414,7 +437,7 @@ public sealed class SectionCommand
     /// <c>ObjectId.Null</c>을 돌려주고, 호출부는 기본 스타일로 물러난다 — 색 하나 때문에 종단이 안 생기면 안 된다.</para></summary>
     internal static ObjectId EnsureExcavProfileStyle(Database db, CivilApp.CivilDocument cdoc)
     {
-        const short Magenta = 6;   // ACI 6 = 마젠타
+        const short Magenta = ExcavAci;   // ACI 6 = 마젠타
         try
         {
             var coll = cdoc.Styles.ProfileStyles;
@@ -702,9 +725,18 @@ public sealed class SectionCommand
     /// <summary>측점선마다 횡단도를 만들어 가로 cols개씩 격자로 놓는다. 칸 크기는 만들어진 뷰의 실제 크기로 잰다.</summary>
     private static int PlaceSectionViews(Database db, Editor ed,
         System.Collections.Generic.List<ObjectId> slIds, string groupName,
-        Point3d origin, int cols, double totalWidth)
+        Point3d origin, int cols, double totalWidth, double nameInterval, ObjectId alignId)
     {
         double gap = System.Math.Max(5.0, totalWidth * 0.15);   // 칸 사이 여백
+        // ★[JACK 0826] 뷰 자리를 모아 뒀다가 <b>이름을 직접 쓴다</b> — Civil 기본 제목은
+        //   [횡단도]가 스타일에서 꺼 버리는데, 그 스타일이 도면 공용이라 여기까지 같이 꺼진다.
+        //   그리는 쪽을 한 군데로 모아 뒀다(XsecViewCommand.DrawViewNames).
+        //   ★[JACK 0826 검토] 이름을 짓는 자는 <b>이 명령이 실제로 쓴 간격</b>이어야 한다 —
+        //   처음엔 종단이 남긴 static을 읽었는데, 이 명령은 그 값을 <b>채우지 않는다.</b>
+        //   간격을 20m가 아닌 값으로 쓰는 순간 정측점 이름이 통째로 어긋난다(검토에서 잡힘).
+        var nameAt = new System.Collections.Generic.List<(string Name, double X, double Y)>();
+        var viewAt = new System.Collections.Generic.List<(ObjectId Id, double St, string Name)>();
+        double nameH = 1.0;
         double cellW = totalWidth + gap;                        // 첫 뷰를 재기 전 임시값
         double rowH = 0, maxRowH = 0;
         int made = 0, col = 0;
@@ -720,6 +752,18 @@ public sealed class SectionCommand
                 continue;
             }
             made++;
+            try
+            {
+                using var trN = db.TransactionManager.StartTransaction();
+                if (trN.GetObject(slIds[i], OpenMode.ForRead) is CivilDb.SampleLine slN)
+                {
+                    string nm = StationMarks.Fmt(slN.Station, nameInterval);
+                    nameAt.Add((nm, x, y));
+                    viewAt.Add((svId, slN.Station, nm));
+                }
+                trN.Commit();
+            }
+            catch { }
 
             // 실제 크기 측정 → 다음 칸 위치에 반영(스타일·축척이 도면마다 달라 고정값을 쓰면 겹치거나 벌어진다)
             double w = cellW, h = rowH;
@@ -734,6 +778,9 @@ public sealed class SectionCommand
             catch { }
             if (w > 0.1) cellW = w + gap;
             if (h > maxRowH) maxRowH = h;
+            // ★[검토 N-11] 마지막 뷰 높이로 <b>전체 글자 크기</b>를 정한다 — 같은 도면의
+            //   횡단면도는 축척이 같아 높이가 비슷하므로 의도한 단순화다(줄마다 글자가 달라지면 더 산만하다).
+            if (h > 0.1) nameH = System.Math.Max(1.0, h * 0.02);
 
             col++;
             if (col >= cols)
@@ -745,6 +792,15 @@ public sealed class SectionCommand
             }
             else x += cellW;
         }
+        // ★★[검토] <b>[횡단도]가 스타일에서 바깥 축을 꺼 버린다</b> — 그 스타일이 도면 공용이라
+        //   여기 뷰도 같이 꺼진다. 가운데 축을 안 그리면 <b>눈금이 하나도 없는 그림</b>이 된다.
+        //   제목(GraphTitle) 때 겪은 일이 그대로 되풀이됐다 — 그때처럼 <b>두 명령을 같은 방향으로</b> 맞춘다.
+        // ★[검토] 로그를 null로 넘기면 이름 쓰기가 통째로 실패해도 <b>아무 데도 안 남는다</b>.
+        var slog = new System.Text.StringBuilder();
+        int nNm = XsecViewCommand.DrawViewNames(db, nameAt, nameH, slog);
+        XsecViewCommand.DrawCenterAxis(db, viewAt, alignId, slog);
+        if (slog.Length > 0) { try { DiagLog.Append("\n" + slog.ToString().TrimEnd()); } catch { } }
+        if (nNm > 0) ed.WriteMessage($"\n  · 횡단면도 이름 {nNm}개 씀");
         return made;
     }
 

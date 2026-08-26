@@ -1,0 +1,707 @@
+Exit code: 0
+Wall time: 0.3 seconds
+Output:
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<Dictionary version="1.0" xmlns="http://www.osgeo.org/mapguide/coordinatesystem">
+
+  <ProjectedCoordinateSystem id="KOREA_BESSEL_125TM">
+    <Name>KOREA_BESSEL_125TM</Name>
+    <Description>(5173)KOREA_BESSEL_125TM</Description>
+    <Authority>-</Authority>
+    <AdditionalInformation>
+      <ParameterItem type="CsMap">
+        <Key>CSQuadrantSimplified</Key>
+        <IntegerValue>1</IntegerValue>
+      </ParameterItem>
+    </AdditionalInformation>
+    <DomainOfValidity>
+      <Extent>
+        <GeographicElement>
+          <GeographicBoundingBox>
+            <WestBoundLongitude>123.252890277778</WestBoundLongitude>
+            <EastBoundLongitude>126.752890277778</EastBoundLongitude>
+            <SouthBoundLatitude>33.4954954954955</SouthBoundLatitude>
+            <NorthBoundLatitude>90</NorthBoundLatitude>
+          </GeographicBoundingBox>
+        </GeographicElement>
+      </Extent>
+    </DomainOfValidity>
+    <DatumId>TOKYO-M</DatumId>
+    <Axis uom="Meter">
+      <CoordinateSystemAxis>
+        <AxisOrder>1</AxisOrder>
+        <AxisName>Easting</AxisName>
+        <AxisAbbreviation>E</AxisAbbreviation>
+        <AxisDirection>east</AxisDirection>
+      </CoordinateSystemAxis>
+      <CoordinateSystemAxis>
+        <AxisOrder>2</AxisOrder>
+        <AxisName>Northing</AxisName>
+        <AxisAbbreviation>N</AxisAbbreviation>
+        <AxisDirection>north</AxisDirection>
+      </CoordinateSystemAxis>
+    </Axis>
+    <Conversion>
+      <Projection>
+        <OperationMethodId>Transverse Mercator</OperationMethodId>
+        <ParameterValue>
+          <OperationParameterId>Longitude of natural origin</OperationParameterId>
+          <Value uom="degree">125.002890277778</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>Latitude of false origin</OperationParameterId>
+          <Value uom="degree">38</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>Scaling factor for coord differences</OperationParameterId>
+          <Value uom="unity">1</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>False easting</OperationParameterId>
+          <Value uom="Meter">200000</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>False northing</OperationParameterId>
+          <Value uom="Meter">500000</Value>
+        </ParameterValue>
+      </Projection>
+    </Conversion>
+  </ProjectedCoordinateSystem>
+
+  <ProjectedCoordinateSystem id="KOREA_BESSEL_127TM">
+    <Name>KOREA_BESSEL_127TM</Name>
+    <Description>(5174)KOREA_BESSEL_127TM</Description>
+    <Authority>-</Authority>
+    <AdditionalInformation>
+      <ParameterItem type="CsMap">
+        <Key>CSQuadrantSimplified</Key>
+        <IntegerValue>1</IntegerValue>
+      </ParameterItem>
+    </AdditionalInformation>
+    <DomainOfValidity>
+      <Extent>
+        <GeographicElement>
+          <GeographicBoundingBox>
+            <WestBoundLongitude>125.252890277778</WestBoundLongitude>
+            <EastBoundLongitude>128.752890277778</EastBoundLongitude>
+            <SouthBoundLatitude>33.4954954954955</SouthBoundLatitude>
+            <NorthBoundLatitude>90</NorthBoundLatitude>
+          </GeographicBoundingBox>
+        </GeographicElement>
+      </Extent>
+    </DomainOfValidity>
+    <DatumId>TOKYO-M</DatumId>
+    <Axis uom="Meter">
+      <CoordinateSystemAxis>
+        <AxisOrder>1</AxisOrder>
+        <AxisName>Easting</AxisName>
+        <AxisAbbreviation>E</AxisAbbreviation>
+        <AxisDirection>east</AxisDirection>
+      </CoordinateSystemAxis>
+      <CoordinateSystemAxis>
+        <AxisOrder>2</AxisOrder>
+        <AxisName>Northing</AxisName>
+        <AxisAbbreviation>N</AxisAbbreviation>
+        <AxisDirection>north</AxisDirection>
+      </CoordinateSystemAxis>
+    </Axis>
+    <Conversion>
+      <Projection>
+        <OperationMethodId>Transverse Mercator</OperationMethodId>
+        <ParameterValue>
+          <OperationParameterId>Longitude of natural origin</OperationParameterId>
+          <Value uom="degree">127.002890277778</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>Latitude of false origin</OperationParameterId>
+          <Value uom="degree">38</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>Scaling factor for coord differences</OperationParameterId>
+          <Value uom="unity">1</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>False easting</OperationParameterId>
+          <Value uom="Meter">200000</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>False northing</OperationParameterId>
+          <Value uom="Meter">500000</Value>
+        </ParameterValue>
+      </Projection>
+    </Conversion>
+  </ProjectedCoordinateSystem>
+
+  <ProjectedCoordinateSystem id="KOREA_BESSEL_129TM">
+    <Name>KOREA_BESSEL_129TM</Name>
+    <Description>(5176)KOREA_BESSEL_129TM</Description>
+    <Authority>-</Authority>
+    <AdditionalInformation>
+      <ParameterItem type="CsMap">
+        <Key>CSQuadrantSimplified</Key>
+        <IntegerValue>1</IntegerValue>
+      </ParameterItem>
+    </AdditionalInformation>
+    <DomainOfValidity>
+      <Extent>
+        <GeographicElement>
+          <GeographicBoundingBox>
+            <WestBoundLongitude>127.252890277778</WestBoundLongitude>
+            <EastBoundLongitude>130.752890277778</EastBoundLongitude>
+            <SouthBoundLatitude>33.4954954954955</SouthBoundLatitude>
+            <NorthBoundLatitude>90</NorthBoundLatitude>
+          </GeographicBoundingBox>
+        </GeographicElement>
+      </Extent>
+    </DomainOfValidity>
+    <DatumId>TOKYO-M</DatumId>
+    <Axis uom="Meter">
+      <CoordinateSystemAxis>
+        <AxisOrder>1</AxisOrder>
+        <AxisName>Easting</AxisName>
+        <AxisAbbreviation>E</AxisAbbreviation>
+        <AxisDirection>east</AxisDirection>
+      </CoordinateSystemAxis>
+      <CoordinateSystemAxis>
+        <AxisOrder>2</AxisOrder>
+        <AxisName>Northing</AxisName>
+        <AxisAbbreviation>N</AxisAbbreviation>
+        <AxisDirection>north</AxisDirection>
+      </CoordinateSystemAxis>
+    </Axis>
+    <Conversion>
+      <Projection>
+        <OperationMethodId>Transverse Mercator</OperationMethodId>
+        <ParameterValue>
+          <OperationParameterId>Longitude of natural origin</OperationParameterId>
+          <Value uom="degree">129.002890277778</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>Latitude of false origin</OperationParameterId>
+          <Value uom="degree">38</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>Scaling factor for coord differences</OperationParameterId>
+          <Value uom="unity">1</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>False easting</OperationParameterId>
+          <Value uom="Meter">200000</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>False northing</OperationParameterId>
+          <Value uom="Meter">500000</Value>
+        </ParameterValue>
+      </Projection>
+    </Conversion>
+  </ProjectedCoordinateSystem>
+
+  <ProjectedCoordinateSystem id="KOREA_BESSEL_131TM">
+    <Name>KOREA_BESSEL_131TM</Name>
+    <Description>(5177)KOREA_BESSEL_131TM</Description>
+    <Authority>-</Authority>
+    <AdditionalInformation>
+      <ParameterItem type="CsMap">
+        <Key>CSQuadrantSimplified</Key>
+        <IntegerValue>1</IntegerValue>
+      </ParameterItem>
+    </AdditionalInformation>
+    <DomainOfValidity>
+      <Extent>
+        <GeographicElement>
+          <GeographicBoundingBox>
+            <WestBoundLongitude>129.252890277778</WestBoundLongitude>
+            <EastBoundLongitude>132.752890277778</EastBoundLongitude>
+            <SouthBoundLatitude>33.4954954954955</SouthBoundLatitude>
+            <NorthBoundLatitude>90</NorthBoundLatitude>
+          </GeographicBoundingBox>
+        </GeographicElement>
+      </Extent>
+    </DomainOfValidity>
+    <DatumId>TOKYO-M</DatumId>
+    <Axis uom="Meter">
+      <CoordinateSystemAxis>
+        <AxisOrder>1</AxisOrder>
+        <AxisName>Easting</AxisName>
+        <AxisAbbreviation>E</AxisAbbreviation>
+        <AxisDirection>east</AxisDirection>
+      </CoordinateSystemAxis>
+      <CoordinateSystemAxis>
+        <AxisOrder>2</AxisOrder>
+        <AxisName>Northing</AxisName>
+        <AxisAbbreviation>N</AxisAbbreviation>
+        <AxisDirection>north</AxisDirection>
+      </CoordinateSystemAxis>
+    </Axis>
+    <Conversion>
+      <Projection>
+        <OperationMethodId>Transverse Mercator</OperationMethodId>
+        <ParameterValue>
+          <OperationParameterId>Longitude of natural origin</OperationParameterId>
+          <Value uom="degree">131.002890277778</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>Latitude of false origin</OperationParameterId>
+          <Value uom="degree">38</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>Scaling factor for coord differences</OperationParameterId>
+          <Value uom="unity">1</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>False easting</OperationParameterId>
+          <Value uom="Meter">200000</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>False northing</OperationParameterId>
+          <Value uom="Meter">500000</Value>
+        </ParameterValue>
+      </Projection>
+    </Conversion>
+  </ProjectedCoordinateSystem>
+
+  <ProjectedCoordinateSystem id="KOREA_GRS80_125TM">
+    <Name>KOREA_GRS80_125TM</Name>
+    <Description>(5185)KOREA_GRS80_125TM</Description>
+    <Authority>-</Authority>
+    <AdditionalInformation>
+      <ParameterItem type="CsMap">
+        <Key>CSQuadrantSimplified</Key>
+        <IntegerValue>1</IntegerValue>
+      </ParameterItem>
+    </AdditionalInformation>
+    <DomainOfValidity>
+      <Extent>
+        <GeographicElement>
+          <GeographicBoundingBox>
+            <WestBoundLongitude>123.25</WestBoundLongitude>
+            <EastBoundLongitude>126.75</EastBoundLongitude>
+            <SouthBoundLatitude>32.5945945945946</SouthBoundLatitude>
+            <NorthBoundLatitude>90</NorthBoundLatitude>
+          </GeographicBoundingBox>
+        </GeographicElement>
+      </Extent>
+    </DomainOfValidity>
+    <DatumId>Korean2000</DatumId>
+    <Axis uom="Meter">
+      <CoordinateSystemAxis>
+        <AxisOrder>1</AxisOrder>
+        <AxisName>Easting</AxisName>
+        <AxisAbbreviation>E</AxisAbbreviation>
+        <AxisDirection>east</AxisDirection>
+      </CoordinateSystemAxis>
+      <CoordinateSystemAxis>
+        <AxisOrder>2</AxisOrder>
+        <AxisName>Northing</AxisName>
+        <AxisAbbreviation>N</AxisAbbreviation>
+        <AxisDirection>north</AxisDirection>
+      </CoordinateSystemAxis>
+    </Axis>
+    <Conversion>
+      <Projection>
+        <OperationMethodId>Transverse Mercator</OperationMethodId>
+        <ParameterValue>
+          <OperationParameterId>Longitude of natural origin</OperationParameterId>
+          <Value uom="degree">125</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>Latitude of false origin</OperationParameterId>
+          <Value uom="degree">38</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>Scaling factor for coord differences</OperationParameterId>
+          <Value uom="unity">1</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>False easting</OperationParameterId>
+          <Value uom="Meter">200000</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>False northing</OperationParameterId>
+          <Value uom="Meter">600000</Value>
+        </ParameterValue>
+      </Projection>
+    </Conversion>
+  </ProjectedCoordinateSystem>
+
+  <ProjectedCoordinateSystem id="KOREA_GRS80_127TM">
+    <Name>KOREA_GRS80_127TM</Name>
+    <Description>(5186)KOREA_GRS80_127TM</Description>
+    <Authority>-</Authority>
+    <AdditionalInformation>
+      <ParameterItem type="CsMap">
+        <Key>CSQuadrantSimplified</Key>
+        <IntegerValue>1</IntegerValue>
+      </ParameterItem>
+    </AdditionalInformation>
+    <DomainOfValidity>
+      <Extent>
+        <GeographicElement>
+          <GeographicBoundingBox>
+            <WestBoundLongitude>125.25</WestBoundLongitude>
+            <EastBoundLongitude>128.75</EastBoundLongitude>
+            <SouthBoundLatitude>32.5945945945946</SouthBoundLatitude>
+            <NorthBoundLatitude>90</NorthBoundLatitude>
+          </GeographicBoundingBox>
+        </GeographicElement>
+      </Extent>
+    </DomainOfValidity>
+    <DatumId>Korean2000</DatumId>
+    <Axis uom="Meter">
+      <CoordinateSystemAxis>
+        <AxisOrder>1</AxisOrder>
+        <AxisName>Easting</AxisName>
+        <AxisAbbreviation>E</AxisAbbreviation>
+        <AxisDirection>east</AxisDirection>
+      </CoordinateSystemAxis>
+      <CoordinateSystemAxis>
+        <AxisOrder>2</AxisOrder>
+        <AxisName>Northing</AxisName>
+        <AxisAbbreviation>N</AxisAbbreviation>
+        <AxisDirection>north</AxisDirection>
+      </CoordinateSystemAxis>
+    </Axis>
+    <Conversion>
+      <Projection>
+        <OperationMethodId>Transverse Mercator</OperationMethodId>
+        <ParameterValue>
+          <OperationParameterId>Longitude of natural origin</OperationParameterId>
+          <Value uom="degree">127</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>Latitude of false origin</OperationParameterId>
+          <Value uom="degree">38</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>Scaling factor for coord differences</OperationParameterId>
+          <Value uom="unity">1</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>False easting</OperationParameterId>
+          <Value uom="Meter">200000</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>False northing</OperationParameterId>
+          <Value uom="Meter">600000</Value>
+        </ParameterValue>
+      </Projection>
+    </Conversion>
+  </ProjectedCoordinateSystem>
+
+  <ProjectedCoordinateSystem id="KOREA_GRS80_129TM">
+    <Name>KOREA_GRS80_129TM</Name>
+    <Description>(5187)KOREA_GRS80_129TM</Description>
+    <Authority>-</Authority>
+    <AdditionalInformation>
+      <ParameterItem type="CsMap">
+        <Key>CSQuadrantSimplified</Key>
+        <IntegerValue>1</IntegerValue>
+      </ParameterItem>
+    </AdditionalInformation>
+    <DomainOfValidity>
+      <Extent>
+        <GeographicElement>
+          <GeographicBoundingBox>
+            <WestBoundLongitude>127.25</WestBoundLongitude>
+            <EastBoundLongitude>130.75</EastBoundLongitude>
+            <SouthBoundLatitude>32.5945945945946</SouthBoundLatitude>
+            <NorthBoundLatitude>90</NorthBoundLatitude>
+          </GeographicBoundingBox>
+        </GeographicElement>
+      </Extent>
+    </DomainOfValidity>
+    <DatumId>Korean2000</DatumId>
+    <Axis uom="Meter">
+      <CoordinateSystemAxis>
+        <AxisOrder>1</AxisOrder>
+        <AxisName>Easting</AxisName>
+        <AxisAbbreviation>E</AxisAbbreviation>
+        <AxisDirection>east</AxisDirection>
+      </CoordinateSystemAxis>
+      <CoordinateSystemAxis>
+        <AxisOrder>2</AxisOrder>
+        <AxisName>Northing</AxisName>
+        <AxisAbbreviation>N</AxisAbbreviation>
+        <AxisDirection>north</AxisDirection>
+      </CoordinateSystemAxis>
+    </Axis>
+    <Conversion>
+      <Projection>
+        <OperationMethodId>Transverse Mercator</OperationMethodId>
+        <ParameterValue>
+          <OperationParameterId>Longitude of natural origin</OperationParameterId>
+          <Value uom="degree">129</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>Latitude of false origin</OperationParameterId>
+          <Value uom="degree">38</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>Scaling factor for coord differences</OperationParameterId>
+          <Value uom="unity">1</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>False easting</OperationParameterId>
+          <Value uom="Meter">200000</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>False northing</OperationParameterId>
+          <Value uom="Meter">600000</Value>
+        </ParameterValue>
+      </Projection>
+    </Conversion>
+  </ProjectedCoordinateSystem>
+
+  <ProjectedCoordinateSystem id="KOREA_GRS80_131TM">
+    <Name>KOREA_GRS80_131TM</Name>
+    <Description>(5188)KOREA_GRS80_131TM</Description>
+    <Authority>-</Authority>
+    <AdditionalInformation>
+      <ParameterItem type="CsMap">
+        <Key>CSQuadrantSimplified</Key>
+        <IntegerValue>1</IntegerValue>
+      </ParameterItem>
+    </AdditionalInformation>
+    <DomainOfValidity>
+      <Extent>
+        <GeographicElement>
+          <GeographicBoundingBox>
+            <WestBoundLongitude>129.25</WestBoundLongitude>
+            <EastBoundLongitude>132.75</EastBoundLongitude>
+            <SouthBoundLatitude>32.5945945945946</SouthBoundLatitude>
+            <NorthBoundLatitude>90</NorthBoundLatitude>
+          </GeographicBoundingBox>
+        </GeographicElement>
+      </Extent>
+    </DomainOfValidity>
+    <DatumId>Korean2000</DatumId>
+    <Axis uom="Meter">
+      <CoordinateSystemAxis>
+        <AxisOrder>1</AxisOrder>
+        <AxisName>Easting</AxisName>
+        <AxisAbbreviation>E</AxisAbbreviation>
+        <AxisDirection>east</AxisDirection>
+      </CoordinateSystemAxis>
+      <CoordinateSystemAxis>
+        <AxisOrder>2</AxisOrder>
+        <AxisName>Northing</AxisName>
+        <AxisAbbreviation>N</AxisAbbreviation>
+        <AxisDirection>north</AxisDirection>
+      </CoordinateSystemAxis>
+    </Axis>
+    <Conversion>
+      <Projection>
+        <OperationMethodId>Transverse Mercator</OperationMethodId>
+        <ParameterValue>
+          <OperationParameterId>Longitude of natural origin</OperationParameterId>
+          <Value uom="degree">131</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>Latitude of false origin</OperationParameterId>
+          <Value uom="degree">38</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>Scaling factor for coord differences</OperationParameterId>
+          <Value uom="unity">1</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>False easting</OperationParameterId>
+          <Value uom="Meter">200000</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>False northing</OperationParameterId>
+          <Value uom="Meter">600000</Value>
+        </ParameterValue>
+      </Projection>
+    </Conversion>
+  </ProjectedCoordinateSystem>
+
+  <ProjectedCoordinateSystem id="korean_GRS80_UTM-K">
+    <Name>korean_GRS80_UTM-K</Name>
+    <Description>(5179)Korean_GRS80_UTM-K</Description>
+    <Authority>-</Authority>
+    <AdditionalInformation>
+      <ParameterItem type="CsMap">
+        <Key>CSQuadrantSimplified</Key>
+        <IntegerValue>1</IntegerValue>
+      </ParameterItem>
+    </AdditionalInformation>
+    <DomainOfValidity>
+      <Extent>
+        <GeographicElement>
+          <GeographicBoundingBox>
+            <WestBoundLongitude>125.75</WestBoundLongitude>
+            <EastBoundLongitude>129.25</EastBoundLongitude>
+            <SouthBoundLatitude>32.59</SouthBoundLatitude>
+            <NorthBoundLatitude>90</NorthBoundLatitude>
+          </GeographicBoundingBox>
+        </GeographicElement>
+      </Extent>
+    </DomainOfValidity>
+    <DatumId>Korean2000</DatumId>
+    <Axis uom="Meter">
+      <CoordinateSystemAxis>
+        <AxisOrder>1</AxisOrder>
+        <AxisName>Easting</AxisName>
+        <AxisAbbreviation>E</AxisAbbreviation>
+        <AxisDirection>east</AxisDirection>
+      </CoordinateSystemAxis>
+      <CoordinateSystemAxis>
+        <AxisOrder>2</AxisOrder>
+        <AxisName>Northing</AxisName>
+        <AxisAbbreviation>N</AxisAbbreviation>
+        <AxisDirection>north</AxisDirection>
+      </CoordinateSystemAxis>
+    </Axis>
+    <Conversion>
+      <Projection>
+        <OperationMethodId>Transverse Mercator</OperationMethodId>
+        <ParameterValue>
+          <OperationParameterId>Longitude of natural origin</OperationParameterId>
+          <Value uom="degree">127.5</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>Latitude of false origin</OperationParameterId>
+          <Value uom="degree">38</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>Scaling factor for coord differences</OperationParameterId>
+          <Value uom="unity">0.9996</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>False easting</OperationParameterId>
+          <Value uom="Meter">1000000</Value>
+        </ParameterValue>
+        <ParameterValue>
+          <OperationParameterId>False northing</OperationParameterId>
+          <Value uom="Meter">2000000</Value>
+        </ParameterValue>
+      </Projection>
+    </Conversion>
+  </ProjectedCoordinateSystem>
+
+  <GeodeticDatum id="TOKYO-M">
+    <Name>TOKYO-M</Name>
+    <Description>Tokyo datum, Korea</Description>
+    <Authority>US Defense Mapping Agency, TR-8350.2-B, December 1987</Authority>
+    <PrimeMeridianId>Greenwich</PrimeMeridianId>
+    <EllipsoidId>BESSEL</EllipsoidId>
+  </GeodeticDatum>
+
+  <GeodeticDatum id="Korean2000">
+    <Name>Korean2000</Name>
+    <Description>Geocentric datum of Korea</Description>
+    <Authority>EPSG, V6.11.2, 6737 [OGP]</Authority>
+    <PrimeMeridianId>Greenwich</PrimeMeridianId>
+    <EllipsoidId>GRS1980</EllipsoidId>
+  </GeodeticDatum>
+
+  <Alias id="6737" type="Datum">
+    <ObjectId>Korean2000</ObjectId>
+    <Namespace>EPSG Code</Namespace>
+  </Alias>
+
+  <Ellipsoid id="BESSEL">
+    <Name>BESSEL</Name>
+    <Description>Bessel, 1841</Description>
+    <Authority>US Defense Mapping Agency, TR-8350.2-B, December 1987</Authority>
+    <SemiMajorAxis uom="meter">6377397.155</SemiMajorAxis>
+    <SecondDefiningParameter>
+      <SemiMinorAxis uom="meter">6356078.96281819</SemiMinorAxis>
+    </SecondDefiningParameter>
+  </Ellipsoid>
+
+  <Alias id="7004" type="Ellipsoid">
+    <ObjectId>BESSEL</ObjectId>
+    <Namespace>EPSG Code</Namespace>
+  </Alias>
+
+  <Ellipsoid id="GRS1980">
+    <Name>GRS1980</Name>
+    <Description>Geodetic Reference System of 1980</Description>
+    <Authority>Stem, L.E., Jan 1989, State Plane Coordinate System of 1983</Authority>
+    <SemiMajorAxis uom="meter">6378137</SemiMajorAxis>
+    <SecondDefiningParameter>
+      <SemiMinorAxis uom="meter">6356752.31414035</SemiMinorAxis>
+    </SecondDefiningParameter>
+  </Ellipsoid>
+
+  <Alias id="7019" type="Ellipsoid">
+    <ObjectId>GRS1980</ObjectId>
+    <Namespace>EPSG Code</Namespace>
+  </Alias>
+
+  <Transformation id="TOKYO-M_to_WGS84">
+    <Name>TOKYO-M_to_WGS84</Name>
+    <Description>Tokyo datum, Korea</Description>
+    <Authority>US Defense Mapping Agency, TR-8350.2-B, December 1987</Authority>
+    <CoordinateOperationAccuracy>
+      <Accuracy uom="meter">8</Accuracy>
+    </CoordinateOperationAccuracy>
+    <SourceDatumId>TOKYO-M</SourceDatumId>
+    <TargetDatumId>WGS84</TargetDatumId>
+    <IsReversible>true</IsReversible>
+    <OperationMethod>
+      <OperationMethodId>Molodensky</OperationMethodId>
+      <ParameterValue>
+        <OperationParameterId>X-axis translation</OperationParameterId>
+        <Value uom="meter">-146</Value>
+      </ParameterValue>
+      <ParameterValue>
+        <OperationParameterId>Y-axis translation</OperationParameterId>
+        <Value uom="meter">507</Value>
+      </ParameterValue>
+      <ParameterValue>
+        <OperationParameterId>Z-axis translation</OperationParameterId>
+        <Value uom="meter">687</Value>
+      </ParameterValue>
+    </OperationMethod>
+  </Transformation>
+
+  <Transformation id="Korean2000_to_WGS84">
+    <Name>Korean2000_to_WGS84</Name>
+    <Description>Geocentric datum of Korea</Description>
+    <Authority>EPSG, V6.11.2, 6737 [OGP]</Authority>
+    <DomainOfValidity>
+      <Extent>
+        <GeographicElement>
+          <GeographicBoundingBox>
+            <WestBoundLongitude>121.3225</WestBoundLongitude>
+            <EastBoundLongitude>133.2975</EastBoundLongitude>
+            <SouthBoundLatitude>30.655</SouthBoundLatitude>
+            <NorthBoundLatitude>40.105</NorthBoundLatitude>
+          </GeographicBoundingBox>
+        </GeographicElement>
+      </Extent>
+    </DomainOfValidity>
+    <OperationVersion>1</OperationVersion>
+    <CoordinateOperationAccuracy>
+      <Accuracy uom="meter">1</Accuracy>
+    </CoordinateOperationAccuracy>
+    <SourceDatumId>Korean2000</SourceDatumId>
+    <TargetDatumId>WGS84</TargetDatumId>
+    <IsReversible>true</IsReversible>
+    <OperationMethod>
+      <OperationMethodId>Geocentric translations (geog2D domain)</OperationMethodId>
+      <ParameterValue>
+        <OperationParameterId>X-axis translation</OperationParameterId>
+        <Value uom="meter">0</Value>
+      </ParameterValue>
+      <ParameterValue>
+        <OperationParameterId>Y-axis translation</OperationParameterId>
+        <Value uom="meter">0</Value>
+      </ParameterValue>
+      <ParameterValue>
+        <OperationParameterId>Z-axis translation</OperationParameterId>
+        <Value uom="meter">0</Value>
+      </ParameterValue>
+    </OperationMethod>
+  </Transformation>
+
+  <Alias id="15831" type="Transformation">
+    <ObjectId>Korean2000_to_WGS84</ObjectId>
+    <Namespace>EPSG Code</Namespace>
+  </Alias>
+
+</Dictionary>
+

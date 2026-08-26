@@ -24,11 +24,12 @@ public sealed class SheetDialog : Window
     private readonly TextBox _xsecInterval;
     private readonly TextBox _xsecLeft;
     private readonly TextBox _xsecRight;
-    private readonly TextBox _xsecCols;
     private readonly Slider _groundTolZ;
     private readonly ComboBox _profileScale;
     private readonly ComboBox _sectionScale;
     private readonly ComboBox _basemapRes;
+    private readonly ComboBox _xsecScale;
+    private readonly ComboBox _xsecLayout;
 
     public SheetDialog(string okText = "저장")
     {
@@ -48,7 +49,11 @@ public sealed class SheetDialog : Window
         _xsecInterval = GradingDialog.AddRow(root, "횡단 간격 (m)", GradingSettings.XsecInterval, "");
         _xsecLeft = GradingDialog.AddRow(root, "횡단 폭 — 좌 (m)", GradingSettings.XsecLeft, "");
         _xsecRight = GradingDialog.AddRow(root, "횡단 폭 — 우 (m)", GradingSettings.XsecRight, "");
-        _xsecCols = GradingDialog.AddRow(root, "횡단도 가로 배치 수", GradingSettings.XsecCols, "");
+        // ★★[JACK 0826] 배치는 <b>여기서</b> 고른다 — 명령을 누를 때마다 묻지 않는다.
+        //   JACK: <i>"횡단도 단추는 누르고 찍으면 바로 생기게 해 줘."</i>
+        _xsecLayout = AddCombo(root, "횡단도 배치", GradingSettings.XsecLayoutLabels,
+            System.Math.Clamp(GradingSettings.XsecLayout, 0, GradingSettings.XsecLayoutLabels.Length - 1),
+            "한 장(A1)에 몇 개씩 놓을지 — 넘으면 다음 장으로 넘어갑니다");
 
         // ── 2. 원지반 표현
         GradingDialog.AddSection(root, "2. 원지반 표현",
@@ -71,6 +76,10 @@ public sealed class SheetDialog : Window
                                  GradingSettings.ProfileScaleIndex(), "");
         _sectionScale = AddCombo(root, "단면검토선 축척", GradingSettings.ProfileScaleLabels,
                                  GradingSettings.SectionLineScaleIndex(), "");
+        // ★★[JACK 0826] 횡단도도 <b>종단과 같은 규약</b> — 자동(칸에 맞춤) 또는 고정.
+        _xsecScale = AddCombo(root, "횡단도 축척", GradingSettings.XsecScaleLabels,
+            GradingSettings.XsecScaleIndex(),
+            "자동은 배치한 칸에 가장 크게 들어가는 축척을 고릅니다. 고정하면 그 값을 그대로 씁니다.");
         _sectionScale.ToolTip =
             "평면도의 단면검토선에 붙는 측점 글씨 크기를 정합니다(종이 2.5mm — 종단 밴드와 같은 크기)."
             + " 자동이면 도면에 걸린 축척을 따릅니다."
@@ -147,7 +156,7 @@ public sealed class SheetDialog : Window
         if (!GradingDialog.TryParseCore(this, _xsecInterval, "횡단 간격", out double xi, positive: true) ||
             !GradingDialog.TryParseCore(this, _xsecLeft, "횡단 폭 — 좌", out double xl, positive: false) ||
             !GradingDialog.TryParseCore(this, _xsecRight, "횡단 폭 — 우", out double xr, positive: false) ||
-            !GradingDialog.TryParseCore(this, _xsecCols, "횡단도 가로 배치 수", out double xc, positive: true))
+            false)
             return;
 
         // 좌우 폭이 둘 다 0이면 횡단을 그릴 수 없다(정지옵션에 있던 검증을 그대로 옮겼다).
@@ -162,7 +171,8 @@ public sealed class SheetDialog : Window
         GradingSettings.XsecInterval = xi;
         GradingSettings.XsecLeft = xl;
         GradingSettings.XsecRight = xr;
-        GradingSettings.XsecCols = (int)System.Math.Clamp(System.Math.Round(xc), 1, 20);
+        GradingSettings.XsecLayout = System.Math.Clamp(_xsecLayout.SelectedIndex, 0,
+                                        GradingSettings.XsecLayoutLabels.Length - 1);
 
         // 슬라이더는 표에 있는 값만 고른다 — 0이나 0.001 같은 값이 들어올 길이 없다.
         GradingSettings.GroundBreakTolZ = GradingSettings.GroundBreakValues[
@@ -173,6 +183,7 @@ public sealed class SheetDialog : Window
         double[] psv = GradingSettings.ProfileScaleValues;
         GradingSettings.ProfileScale = psv[System.Math.Clamp(_profileScale.SelectedIndex, 0, psv.Length - 1)];
         GradingSettings.SectionLineScale = psv[System.Math.Clamp(_sectionScale.SelectedIndex, 0, psv.Length - 1)];
+        GradingSettings.XsecScale = psv[System.Math.Clamp(_xsecScale.SelectedIndex, 0, psv.Length - 1)];
 
         GradingSettings.BasemapRes = GradingSettings.BasemapResValues[
             System.Math.Clamp(_basemapRes.SelectedIndex, 0, GradingSettings.BasemapResValues.Length - 1)];

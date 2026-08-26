@@ -453,7 +453,16 @@ public sealed class ProfileCommand
             {
                 // ★[JACK 0824] 터파기 종단선만 **마젠타** 스타일로.
                 var styleFor = s.Label == "터파기" && !excStyle.IsNull ? excStyle : profStyle;
-                var pid = CivilDb.Profile.CreateFromSurface(s.ProfileName, alignId, s.SurfId, alignLayer, styleFor, profLabels);
+                // ★★[JACK 0826 '여전히 원지반과 같은 레이어라서 같은 스타일이 먹여짐'] <b>만들 때 레이어를 가른다.</b>
+                //   만든 뒤 <c>Entity.LayerId</c>로 옮기는 것은 안 먹었다 — Civil 객체는 생성 시 받은 레이어를 쥔다.
+                //   종단은 선형 레이어(CR-GRND=원지반, 초록)에 만들어지므로 터파기도 초록이 됐다.
+                var layerFor = alignLayer;
+                if (s.Label == "터파기")
+                {
+                    var lx = SectionCommand.EnsureLayerStandalone(db, SectionCommand.ExcavProfileLayer, SectionCommand.ExcavAci);
+                    if (!lx.IsNull) layerFor = lx;
+                }
+                var pid = CivilDb.Profile.CreateFromSurface(s.ProfileName, alignId, s.SurfId, layerFor, styleFor, profLabels);
                 // ★[JACK 0824] 라벨로 **정확히** 가른다 — 종전엔 `else pidPad`라
                 //   터파기 종단이 생기는 순간 계획면 자리를 덮어써 밴드 값이 통째로 밀렸다.
                 if (s.Label == "원지반") pidGround = pid;
@@ -538,6 +547,7 @@ public sealed class ProfileCommand
             // ★[JACK 0810] "도곽 버튼이 왜 필요하지? 그냥 종단도 누르면 모형탭하고 배치까지 자동으로 되야 되."
             //   버튼을 늘리지 않고 여기서 끝까지 간다 — 모형 도곽 범위 + 배치 한 장까지.
             string sheet = SheetCommand.Build(db, ed, pvId, log);
+
             // ★[v32.45] 축척이 정해진 <b>뒤에</b> 검토선을 꾸민다 — 글씨가 종단 밴드와 같은 크기가 되려면
             //   도면 축척을 알아야 한다(설명은 DecorateSampleLines).
             DecorateSampleLines(db, cdoc, alignId, bandIv, GradingSettings.XsecLeft, GradingSettings.XsecRight, log);
@@ -584,6 +594,120 @@ public sealed class ProfileCommand
                 trOv.Commit();
             }
             catch (System.Exception exOv) { log.AppendLine("  종단뷰 재정의 확인 실패 — " + exOv.Message); }
+
+            // ★★[JACK 0826 "자꾸 똑같은 오류 보이지 말고 로그를 붙이든 해서 시행착오를 줄여줘"] 맞는 말이다.
+            //   ★자리가 중요하다★ — 여기는 <b>재정의까지 끝난 뒤</b>다. 처음엔 도곽(SheetCommand) 직후에
+            //   뒀는데, 검토에서 <b>20줄 이르다</b>고 잡혔다. 그 뒤에 GraphOverrides가 한 번 더 돌아
+            //   화면을 최종적으로 정하기 때문이다 — 재기 전에 값이 또 바뀌면 잰 값은 화면이 아니다.
+            //
+            //   ★[civil-object-display-layers] 색을 정하는 층이 <b>셋</b>이고, 셋 다 봐야 한다:
+            //     ① 스타일의 선 색 — 명시된 색이면 <b>레이어를 이긴다</b>
+            //     ② 그 스타일의 표시 레이어 — ①이 ByLayer일 때<b>만</b> 참조된다("0"=객체가 놓인 레이어)
+            //     ③ 뷰별 재정의 — 걸려 있으면 <b>이것이 그린다</b>(객체 스타일은 특성창에만 남는다)
+            //   ①만 보던 옛 계측은 "레이어만 맞으면 합격"이라 <b>스타일이 초록이어도 도장을 찍었다.</b>
+            {
+                string fLay = "(터파기 종단 없음)", fSty = "-", fDsLay = "-", fVerd, fNote = "";
+                bool fRead = false, fMag = false, fByL = false, fOk = false;
+                string fColTxt = "-", fOv = "";
+                if (!pidExcav.IsNull)
+                {
+                    try
+                    {
+                        using var trF = db.TransactionManager.StartTransaction();
+                        if (trF.GetObject(pidExcav, OpenMode.ForRead) is CivilDb.Profile pf)
+                        {
+                            fLay = "(레이어 못 읽음)"; fSty = "(스타일 못 읽음)";
+                            try { fLay = ((LayerTableRecord)trF.GetObject(pf.LayerId, OpenMode.ForRead)).Name; } catch { }
+                            try { fSty = pf.StyleName ?? "(빈값)"; } catch { }
+
+                            // ③ 재정의가 걸려 있으면 <b>그것이 화면을 그린다</b> — 판정 대상을 그쪽으로 옮긴다.
+                            //   ★[검토 N-3] 이름 <b>조각</b>이 아니라 <b>정확히 이 종단</b>이어야 한다.
+                            //   이름이 겹치면 Civil이 '-1','-2'를 붙이는데, 조각으로 찾으면 옛 실행이 남긴
+                            //   'DH_터파기'의 재정의를 골라 <b>엉뚱한 종단으로 판정</b>하게 된다.
+                            string pfName = null;
+                            try { pfName = pf.Name; } catch { }
+                            ObjectId judgeStyle = pf.StyleId;
+                            try
+                            {
+                                if (pfName != null && trF.GetObject(pvId, OpenMode.ForRead) is CivilDb.ProfileView pvJ)
+                                    foreach (CivilDb.ProfileOverride ovJ in pvJ.GraphOverrides)
+                                    {
+                                        string on = null;
+                                        try { on = ovJ.ProfileName; } catch { }
+                                        if (on == pfName && !ovJ.OverrideStyleId.IsNull)
+                                        { judgeStyle = ovJ.OverrideStyleId; fOv = " · 재정의가 그린다"; break; }
+                                    }
+                            }
+                            catch { fOv = " · 재정의 확인 실패"; }
+
+                            // ①② ★[검토 N-1] <b>판정은 Line 하나로.</b> 이 종단은 지표면을 따라 딴 꺾은선이라
+                            //   곡선·포물선은 화면에 <b>한 픽셀도 안 그린다</b>. 안 쓰는 칸이 어긋났다고 불합격을
+                            //   주면 화면은 멀쩡한데 로그만 초록이라 우는 <b>거짓 경보</b>가 된다(방향만 반대인 헛짚기).
+                            //   나머지 다섯은 <b>참고 문구</b>로만 붙인다 — 곡선 어긋남도 눈에는 보이게.
+                            try
+                            {
+                                if (trF.GetObject(judgeStyle, OpenMode.ForRead) is CivilDb.Styles.ProfileStyle fSt)
+                                {
+                                    int nOther = 0, nDiff = 0;
+                                    foreach (var ty in new[]
+                                    {
+                                        CivilDb.Styles.ProfileDisplayStyleProfileType.Line,
+                                        CivilDb.Styles.ProfileDisplayStyleProfileType.Curve,
+                                        CivilDb.Styles.ProfileDisplayStyleProfileType.LineExtension,
+                                        CivilDb.Styles.ProfileDisplayStyleProfileType.SymmetricalParabola,
+                                        CivilDb.Styles.ProfileDisplayStyleProfileType.AsymmetricalParabola,
+                                        CivilDb.Styles.ProfileDisplayStyleProfileType.ParabolicCurveExtension,
+                                    })
+                                    {
+                                        // ★[검토 N-2] <b>타입마다</b> 감싼다 — 포물선 하나가 던지면 루프가 끊겨
+                                        //   "색을 못 읽었다"가 되던 자리다. 스타일을 칠하는 쪽도 이미 타입마다 감싼다.
+                                        try
+                                        {
+                                            using var fDs = fSt.GetDisplayStyleProfile(ty);
+                                            if (fDs == null) continue;
+                                            bool isMag = fDs.Color.ColorMethod == Autodesk.AutoCAD.Colors.ColorMethod.ByAci
+                                                         && fDs.Color.ColorIndex == SectionCommand.ExcavAci;
+                                            bool isByL = fDs.Color.ColorMethod == Autodesk.AutoCAD.Colors.ColorMethod.ByLayer;
+                                            if (ty == CivilDb.Styles.ProfileDisplayStyleProfileType.Line)
+                                            {
+                                                fRead = true; fMag = isMag; fByL = isByL;
+                                                fColTxt = isByL ? "ByLayer" : isMag ? "ACI" + SectionCommand.ExcavAci
+                                                        : fDs.Color.ColorMethod.ToString() + fDs.Color.ColorIndex;
+                                                try { fDsLay = fDs.Layer ?? "(빈값)"; } catch { }
+                                            }
+                                            else { nOther++; if (!isMag && !isByL) nDiff++; }
+                                        }
+                                        catch { }
+                                    }
+                                    if (nDiff > 0) fNote = $" · 참고: 나머지 {nOther}종 중 {nDiff}종이 다른 색(화면엔 안 그려진다)";
+                                }
+                            }
+                            catch { }
+                        }
+                        else fLay = "(종단으로 못 열림)";
+                        trF.Commit();
+                    }
+                    catch (System.Exception exF) { fLay = "(확인 실패: " + exF.Message + ")"; }
+                }
+
+                // ★판정 — 바깥은 OR(둘 중 하나만 마젠타면 마젠타), 안쪽은 AND(레이어에 맡겼을 때의 단서).
+                //   왼쪽 가지에 "ByLayer일 때만"과 "표시 레이어가 0일 때만"을 붙이지 않으면
+                //   <b>스타일이 초록으로 명시돼 있어도 합격</b>이 나온다(옛 계측의 거짓 도장).
+                if (!fRead) fVerd = pidExcav.IsNull ? "터파기 종단이 없다(정지만 돌린 경우)" : "⚠색을 못 읽었다 — 합격도 불합격도 아니다";
+                else
+                {
+                    fOk = fMag || (fByL && fLay == SectionCommand.ExcavProfileLayer && fDsLay == "0");
+                    // ★[검토 N-5] 떨어진 <b>진짜 이유</b>를 짚는다 — 종전 문구는 표시 레이어가 딴 데를
+                    //   가리켜 떨어졌을 때도 "레이어가 터파기가 아니다"라고 말해, 같은 줄 앞머리와 모순됐다.
+                    fVerd = fOk
+                        ? (fMag ? "→ 마젠타로 나온다(스타일이 직접 마젠타)" : "→ 마젠타로 나온다(레이어를 따라간다)")
+                        : "⚠초록으로 나온다 — " + (!fByL ? "스타일 선 색이 마젠타도 ByLayer도 아니다"
+                            : fLay != SectionCommand.ExcavProfileLayer ? $"레이어가 '{SectionCommand.ExcavProfileLayer}'가 아니다"
+                            : $"스타일의 표시 레이어가 '0'이 아니라 '{fDsLay}'다(딴 레이어 색을 물어온다)");
+                }
+                log.AppendLine($"  ★터파기 종단 최종 — 레이어 '{fLay}' · 스타일 '{fSty}'"
+                             + $" · 선 색 {fColTxt}(표시레이어 '{fDsLay}'){fOv}{fNote}  {fVerd}");
+            }
 
             try { ed.Regen(); } catch { }
             string bars = DrawVertBars(db, pvId, alignId, pidGround, pidPad, pidExcav, LastWallSpans, log);
@@ -1250,7 +1374,7 @@ public sealed class ProfileCommand
                 catch (System.Exception ex) { log.AppendLine("  터파기 측점 실패 — " + ex.Message); }
 
                 // ★[JACK 0825] 벽 두께 안 데이라잇을 벽 자리로 — 옹벽 옆 10cm에 측점이 또 서던 것.
-                try { StationMarks.PullDaylightToWalls(marks, vbars, log); }
+                try { StationMarks.PullDaylightToWalls(marks, vbars, log, wspans); }
                 catch (System.Exception ex) { log.AppendLine("  벽 측점 정리 실패 — " + ex.Message); }
 
                 // ⓒ 수동 — 선형에 적어 둔 것(DHSTATION).
@@ -1271,6 +1395,7 @@ public sealed class ProfileCommand
             var all = StationMarks.Merge(s0, s1, sub, marks, tol: 0.01);
             allMarks = all;      // ★[v32.24] 원지반 꺾은선이 이 목록을 그대로 정점으로 쓴다
             LastStationInterval = interval;   // ★[JACK 0826] 횡단도가 같은 이름을 만들 수 있게
+            try { LastDbFinger = db.FingerprintGuid.ToString(); } catch { LastDbFinger = ""; }
             //   사유를 갈라 적는다 — 로그를 도면과 대조할 때 '왜 여기 측점이 있나'가 바로 보여야 한다.
             for (int i = 0; i < all.Count; i++)
                 if (all[i].Why == "정체인")
@@ -1310,7 +1435,11 @@ public sealed class ProfileCommand
                     var span = wspans.Find(w => System.Math.Abs(w.Mid - m.Station) <= StationMarks.MergeTol);
                     if (span.Back > span.Front)
                     {
-                        foreach (var (stw, tag) in new[] { (span.Front, "(전)"), (span.Back, "(후)") })
+                        // ★★[검토] 여기가 <b>안 고쳐진 자</b>였다 — 벽면 생짜(2cm 간격)를 써서
+                        //   두 장이 만들어지긴 해도 <b>같은 그림</b>이 나왔다(JACK: "전후가 안 생겨").
+                        //   지금은 스위치로 잠들어 있지만, 켜는 순간 옛 버그가 살아난다. 같은 자로 맞춘다.
+                        var (pxF, pxB, _) = DH.Grading.Core.XsecSpan.PushOut(span.Front, span.Back);
+                        foreach (var (stw, tag) in new[] { (pxF, "(전)"), (pxB, "(후)") })
                         {
                             double st2 = System.Math.Min(System.Math.Max(stw, s0 + eps), s1 - eps);
                             if (SectionCommand.TryCut(al, st2, wl, wr, out var cw))
@@ -2186,6 +2315,17 @@ public sealed class ProfileCommand
     /// <para>JACK: <i>"횡단은 종단의 측점명하고 맞지가 않아."</i> — 맞다. 횡단이 <c>XsecInterval</c>을
     /// 쓰고 있었는데, 종단은 <b>밴드 간격</b>으로 <c>No.N+xx.xx</c>를 만든다. 같은 자를 써야 이름이 같다.</para></summary>
     internal static double LastStationInterval = 20.0;
+    /// <summary>이 값들을 만든 <b>도면</b>. ★[JACK 0826 검토] static이라 AutoCAD를 켜 둔 채
+    /// 다른 도면을 열면 <b>옛 도면 측점이 조용히 쓰인다</b> — 측점은 그냥 숫자라 예외도 안 난다.
+    /// 도면 지문을 같이 들고 다니며 다르면 안 쓴다.</summary>
+    internal static string LastDbFinger = "";
+
+    /// <summary>지금 도면이 그 값들을 만든 도면인가.</summary>
+    internal static bool SameDrawing(Database db)
+    {
+        try { return LastDbFinger.Length > 0 && LastDbFinger == db.FingerprintGuid.ToString(); }
+        catch { return false; }
+    }
 
     /// <summary>★★★[v32.41~45 · JACK 0819] <b>단면검토선을 도면답게 — 색·선종류·측점·지시선.</b>
     ///
@@ -2356,10 +2496,10 @@ public sealed class ProfileCommand
                     //   → <b>가장 가까운 정측점과의 거리</b>로 재고 허용오차를 <b>5mm</b>로 둔다.
                     //     반올림을 쓰므로 <b>위에서 접근하는 경우</b>(19.998 → 20.0)도 함께 잡힌다 —
                     //     내림만 쓰면 그 자리는 <c>+19.998</c>로 적히고 정측점을 놓친다.
-                    const double majorTol = 0.005;
-                    int no = (int)System.Math.Round(st / interval);
+                    //   ★[JACK 0826 검토] 자를 <b>StationMarks로 옮겼다</b> — 같은 판단을 네 곳에서
+                    //   따로 하고 있었고, 그중 횡단 이름 쪽만 옛 0.1mm 자를 들고 있어 v32.48 사고가 되살아났다.
+                    bool major = StationMarks.IsMajor(st, interval, out int no);
                     double plus = st - no * interval;
-                    bool major = System.Math.Abs(plus) < majorTol;
                     if (!major)
                     {
                         no = (int)System.Math.Floor(st / interval + 1e-9);
