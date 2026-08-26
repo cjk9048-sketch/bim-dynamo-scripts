@@ -252,7 +252,7 @@ public sealed class InfraworksCommand
 
                 double slopeN = up ? bundle.Params.CutSlope : bundle.Params.FillSlope;
                 WallStyle style = up ? GradingSettings.CutWallStyle : GradingSettings.FillWallStyle;
-                bool wallOk = slopeN <= 0.05 + 1e-9;   // 옹벽 게이트(경사 n>0.05면 사면 취급)
+                bool wallOk = slopeN <= GradingSettings.WallGateSlope + 1e-9;   // 옹벽 게이트(그 위는 사면 취급)
                 bool wallMode = style != WallStyle.없음_사면 && wallOk;
 
                 // [§75 0728] 사면→옹벽 부분 전환 구간(번들 v3+) — 링 재계산·사면/소단 띠·옹벽 3D에 반영.
@@ -271,7 +271,7 @@ public sealed class InfraworksCommand
                 if (zoneMode)
                 {
                     wallCuts = GradingPolygons.WallZoneWedges(bundle.Boundary, vs.Rings, zones!,
-                        System.Math.Max(slopeN, bundle.Params.MinSlope), bundle.Params.MinSlope);
+                        System.Math.Max(slopeN, bundle.Params.MinSlope), bundle.Params.WallGateSlope);
 
                     // [역T — JACK 0730 확정] 정지옵션에서 역T형을 고른 방향만: 계획경계에 바로 붙고(FromBench=0)
                     //   1단 안에서 원지반과 만나는 구간은 역T 생성, **2단 이상 구간은 자동 대체**(절토=앵커판넬/성토=보강토).
@@ -283,7 +283,7 @@ public sealed class InfraworksCommand
                             // ★[JACK 0820] 역T는 '1단 안에서 끝나는가'를 보는 것이라 **1단의 단높이**를 써야 한다 —
                             //   단높이 규칙이 있으면 전역값이 아니라 그 단의 값이다(BenchHeightOf → BenchHeightAt).
                             bundle.Boundary, zones!, regionSampler, up, bundle.Params.BenchHeightAt(up, 0),
-                            bundle.Params.MinSlope);
+                            bundle.Params.WallGateSlope);
                         teeAll.AddRange(MaskRuns(tRuns, laterMask));   // [다중 구역 0804] 뒤 구역이 덮은 자리 제외
                         foreach (var ix in tIdx) teeIdx.Add(ix);
                         if (!string.IsNullOrEmpty(tDiag))
@@ -296,7 +296,7 @@ public sealed class InfraworksCommand
 
                     var cumB = GradingGeometry.CumLen2D(bundle.Boundary);
                     var bnd = bundle.Boundary;
-                    double zBase = System.Math.Max(slopeN, bundle.Params.MinSlope), zMin = bundle.Params.MinSlope;
+                    double zBase = System.Math.Max(slopeN, bundle.Params.MinSlope), zMin = bundle.Params.WallGateSlope;
                     if (styleZoneAny)
                         // 링번호 k(1=1단 벽면, 3=2단…) → 단번호 (k-1)/2. 경계 최근접 호길이로 구간 판정(노리선과 동일식).
                         // [구간 구배 0804] 구간 안이어도 그 단 구배가 수직이 아니면 사면 — 옹벽 3D를 만들지 않는다.
@@ -308,7 +308,7 @@ public sealed class InfraworksCommand
                     //   못 가린다 — 옹벽단 유무를 갈라 세고, 구간별 규칙을 그대로 덤프한다.
                     int wallZn = 0;
                     foreach (var zz in zones!)
-                        if (zz.Rules.Exists(r => r.Slope <= bundle.Params.MinSlope + 1e-9)) wallZn++;
+                        if (zz.Rules.Exists(r => r.Slope <= bundle.Params.WallGateSlope + 1e-9)) wallZn++;
                     log.AppendLine($"{rPre}{label}: 변환 구간 {zones!.Count}개(옹벽 {wallZn}·구배변경 {zones!.Count - wallZn}) " +
                                    $"— 쐐기 {wallCuts.Count} · 역T {teeIdx.Count} · 스타일 {styleZones.Count}");
                     for (int zi = 0; zi < zones!.Count; zi++)
@@ -362,10 +362,10 @@ public sealed class InfraworksCommand
                     var synth = new System.Collections.Generic.List<SlopeZone>
                     {
                         SlopeZone.Wall(0.0, cumF[cumF.Length - 1], 0, int.MaxValue,
-                                       bundle.Params.MinSlope, System.Math.Max(slopeN, bundle.Params.MinSlope)),
+                                       bundle.Params.MinSlope, System.Math.Max(slopeN, bundle.Params.MinSlope)),   // 규칙 구배는 하한 쪽
                     };
                     var (tR, tI, tD) = WallTee.GenerateAuto(bundle.Boundary, synth, regionSampler, up,
-                        bundle.Params.BenchHeightAt(up, 0), bundle.Params.MinSlope);   // ★[0820] 1단의 단높이
+                        bundle.Params.BenchHeightAt(up, 0), bundle.Params.WallGateSlope);   // ★[0820] 1단의 단높이
                     if (tI.Count > 0) { teeAll.AddRange(MaskRuns(tR, laterMask)); fullTee = true; }   // [다중 구역 0804]
                     log.AppendLine($"{rPre}역T_{label}(전체 옹벽): " +
                         (fullTee ? "1단 순수 — 역T 생성" : $"1단 아님 — {(up ? "앵커판넬" : "보강토")} 자동 대체") +

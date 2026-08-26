@@ -49,8 +49,41 @@ public static class StationMarks
     /// 축척에 따라 집합이 달라지면 두 도면이 어긋난다.</para></summary>
     public const double PadGroundTol = 0.05;
 
-    /// <summary>측점 하나. <paramref name="Why"/>는 사람이 읽을 사유(밸브실·이형관·구배변화 등).</summary>
-    public readonly record struct Mark(double Station, string Why);
+    /// <summary>측점 하나. <paramref name="Why"/>는 사람이 읽을 사유(밸브실·이형관·구배변화 등).
+    /// <para>★[JACK 0825] <paramref name="Z"/>=그 자리 선의 <b>표고</b>. 종단에 옹벽·가시설을
+    /// <b>굵은 수직 막대</b>로 그리려면 위·아래 표고가 있어야 한다. 기본값 <c>NaN</c>이라
+    /// 표고를 안 채우는 기존 수집기는 손댈 것이 없다 — <b>모르는 것과 0은 다르다.</b></para></summary>
+    /// <para>★[JACK 0825] <paramref name="X"/>·<paramref name="Y"/>=넘은 자리의 평면 좌표.
+    /// 데이라잇에 잘려 <b>짝을 잃은 벽</b>은 반대편 선이 그 자리에서 선형을 안 넘는다 —
+    /// 그때 반대편 선에서 <b>이 좌표에 가장 가까운 점</b>의 표고를 가져와 막대를 세운다.</para></summary>
+    public readonly record struct Mark(double Station, string Why, double Z = double.NaN,
+                                       double X = double.NaN, double Y = double.NaN);
+
+    /// <summary>★[JACK 0825] 종단에 세울 <b>수직 막대</b> 하나 — 옹벽·가시설.
+    /// <para>도면 관행: 옹벽은 직각 한 줄로 그린다. 스샷의 <b>시안 굵은 막대</b>(옹벽)와
+    /// <b>마젠타 굵은 막대</b>(가시설)가 그것이다.</para></summary>
+    /// <param name="Width">막대 폭(m) = <b>구배 × 벽 높이</b>.
+    /// ★[JACK 0825] <i>"막대 굵기는 정하지 말고, 0.05로 쳐지니까 단높이를 가지고 폭을 계산하면 되잖아."</i>
+    /// 맞다 — 그게 그 벽의 <b>진짜 두께</b>다. 임의의 값을 박으면 벽이 높든 낮든 같은 굵기로 그려진다.</param>
+    /// <param name="Slope">그 벽의 구배 n(옹벽·가시설 모두 보통 0.05). 폭 = <c>n × 벽 높이</c>.
+    /// 높이는 <b>종단에서 읽는 쪽이 정본</b>이므로 폭도 거기서 다시 계산한다 —
+    /// 여기 <paramref name="ZTop"/>·<paramref name="ZBottom"/>은 선 교차에서 온 <b>물러설 값</b>이다.</param>
+    public readonly record struct VertBar(double Station, double ZTop, double ZBottom,
+                                          string Kind, double Slope);
+
+    /// <summary>★★[JACK 0825] <b>벽 하나가 차지하는 앞·뒤 자리</b> — 횡단면도의 (전)(후)가 여기서 나온다.
+    ///
+    /// <para>JACK: <i>"보통 옹벽과 가시설은 같은 측점의 (전)(후)로 횡단면도를 생성해.
+    /// 측점명은 같지만 (전)(후)라는 이름으로 두 개의 횡단면이 나와야 하고
+    /// 한쪽엔 옹벽이 있고 한쪽엔 없는 게 만들어져야 해. 그게 일반적인 2D 횡단면도야."</i></para>
+    ///
+    /// <para>선형이 옹벽을 <b>가로지르면</b> 그 자리에서 지표면이 벽 높이만큼 뚝 떨어진다.
+    /// 단면 하나로는 낮은 쪽·높은 쪽 중 하나만 담긴다 — 그래서 <b>두 장</b>이 필요하다.</para>
+    ///
+    /// <para><paramref name="Mid"/>는 <b>종단</b>이 쓰는 가운데(옹벽은 직각 한 줄),
+    /// <paramref name="Front"/>·<paramref name="Back"/>은 <b>횡단</b>이 쓰는 벽 앞·뒤다.
+    /// 접기 전의 크레스트·토우 자리가 그대로 이 둘이다 — 새로 계산하지 않는다.</para></summary>
+    public readonly record struct WallSpan(double Mid, double Front, double Back, string Kind);
 
     // ── 저장·읽기 ────────────────────────────────────────────────────────────
 
@@ -160,8 +193,10 @@ public static class StationMarks
             catch { return false; }
         }
 
+        // ★[JACK 0825] Z도 함께 보간한다 — 종전엔 0으로 버렸다.
+        //   측점만 쓸 때는 무해했지만 표고를 쓰기 시작하면 <b>줄인 끝에서 0m가 튀어나온다</b>.
         static Point3d Along(Point3d a, Point3d b, double t)
-            => new(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t, 0.0);
+            => new(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t, a.Z + (b.Z - a.Z) * t);
 
         // ★★[v32.1 · JACK 0812] <b>한쪽 끝이 안 재진다고 선분을 통째로 버리지 않는다 — 기점·종점이 그래서 빠졌다.</b>
         //
@@ -213,20 +248,25 @@ public static class StationMarks
             if (oA == 0.0 && oB == 0.0) continue;      // 선형 위에 겹쳐 누운 구간 — 넘은 게 아니다
             if (oA * oB > 0) continue;                 // 같은 쪽 → 안 넘었다
 
-            double lo = 0.0, hi = 1.0, sHit = double.NaN;
+            double lo = 0.0, hi = 1.0, sHit = double.NaN, tHit = double.NaN;
             for (int it = 0; it < 40; it++)
             {
                 double t = (lo + hi) / 2.0;
-                var P = new Point3d(A.X + (B.X - A.X) * t, A.Y + (B.Y - A.Y) * t, 0);
+                var P = new Point3d(A.X + (B.X - A.X) * t, A.Y + (B.Y - A.Y) * t,
+                                    A.Z + (B.Z - A.Z) * t);
                 if (!Probe(P, out double stM, out double oM)) break;
-                sHit = stM;
+                sHit = stM; tHit = t;
                 if (oM == 0.0) break;
                 if (oA * oM > 0) lo = t; else hi = t;
             }
             if (double.IsNaN(sHit)) continue;
             if (sHit < s0 - 1e-6 || sHit > s1 + 1e-6) { nSkip++; continue; }   // 선형 밖으로 연장된 자리
             if (keep != null && !keep(sHit)) { nOutside++; continue; }
-            outp.Add(new Mark(sHit, why)); hit++;
+            // ★[JACK 0825] 넘은 자리의 표고 — 그 선분 위에서 선형 보간. 종단 막대의 위·아래가 여기서 나온다.
+            double zHit = double.IsNaN(tHit) ? double.NaN : A.Z + (B.Z - A.Z) * tHit;
+            double xHit = double.IsNaN(tHit) ? double.NaN : A.X + (B.X - A.X) * tHit;
+            double yHit = double.IsNaN(tHit) ? double.NaN : A.Y + (B.Y - A.Y) * tHit;
+            outp.Add(new Mark(sHit, why, zHit, xHit, yHit)); hit++;
         }
         return hit;
     }
@@ -366,6 +406,384 @@ public static class StationMarks
                         (nOutside > 0 ? $" · 걸러진 것 {nOutside}개" : "") +
                         (nTrim > 0 ? $" · 끝을 줄여 살린 선분 {nTrim}개(기점·종점 언저리)" : ""));
         return list;
+    }
+
+    /// <summary>★★[JACK 0825] <b>수직 벽은 두 줄로 서지만 측점은 하나다.</b>
+    ///
+    /// <para>JACK: <i>"실제 종단이나 횡단도면에서는 옹벽은 직각으로 표현하기 때문에 측점이 하나만 나와.
+    /// 그런데 우린 꺾인 선이 두 개다 보니까 다 잡히네."</i> — 맞다.
+    /// 옹벽(과 터파기 가시설)은 <b>윗선·아랫선 두 줄</b>로 만들어진다. 두 줄이면 선형을 넘는 자리도
+    /// 둘이라 측점이 둘 선다. 도면 관행은 <b>직각 한 줄</b>이다.</para>
+    ///
+    /// <para><b>구배를 낮추는 것으로는 못 푼다.</b> 두 줄이 벌어지는 거리는 <c>구배 × 벽 높이</c>인데,
+    /// 1:0.05에 5m 벽이면 25cm — <see cref="MergeTol"/>(1cm)의 스물다섯 배다. 1:0.01로 낮춰도
+    /// 5cm라 여전히 안 합쳐지고, 합쳐질 만큼(1:0.002) 낮추면 <b>Civil 3D TIN이 깨진다</b>
+    /// (구배 하한 0.05를 세운 바로 그 이유다). 게다가 두 줄은 3D 옹벽 매스·판넬·InfraWorks가
+    /// 먹고 사는 재료라 얇게 만들면 그쪽이 같이 무너진다.</para>
+    ///
+    /// <para>그래서 <b>측점 쪽에서 접는다</b> — 같은 벽의 윗선·아랫선이 낸 두 측점을 <b>가운데 하나</b>로.
+    /// <b>전역 <see cref="MergeTol"/>을 키우면 안 된다</b>: 0.5m 시절에 <c>No.1</c> 정측점을
+    /// 먹었던 그 사고가 돌아온다. 짝을 아는 선끼리만 접는다.</para>
+    ///
+    /// <para><b>소단은 안 건드린다.</b> 짝은 <paramref name="walls"/>의 키로만 짓는데 그 키에 단 번호가
+    /// 들어 있다 — 소단은 단이 달라 애초에 같은 조에 들어오지 않는다. 소단은 실제로 평면 폭이 있으니
+    /// 측점이 따로 서는 것이 맞다.</para>
+    ///
+    /// <para>짝을 못 찾은 선은 <b>그대로 남긴다</b>. JACK 원칙 — <i>겹쳐 보이는 것보다 빠지는 것이 나쁘다.</i></para></summary>
+    /// <param name="pairMax">짝으로 인정할 두 측점의 최대 거리(m). 벌어짐은 <c>구배×단높이</c>(≤0.05×15=0.75m)에
+    /// 선형이 벽을 비스듬히 지나는 몫이 곱해진다. 이보다 멀면 짝이 아니라고 보고 둘 다 남긴다.</param>
+    public static List<Mark> FromWallPairs<TKey>(
+        CivilDb.Alignment al,
+        IReadOnlyList<(TKey Key, bool IsCrest, List<Point3d> Pts, double Slope)> walls,
+        string why, Func<double, bool> keep,
+        System.Text.StringBuilder log, double pairMax = 3.0,
+        List<VertBar> barsOut = null, List<WallSpan> spansOut = null)
+    {
+        var list = new List<Mark>();
+        if (al == null || walls == null || walls.Count == 0) return list;
+        double s0 = al.StartingStation, s1 = al.EndingStation;
+        int nSeg = 0, nSkip = 0, nOutside = 0, nTrim = 0;
+        int nPair = 0, nLone = 0, nWall = 0, nLoneBar = 0, nLoneMid = 0;
+        // ★[JACK 0825] 자리를 찍는다 — '측점이 두 개 보인다'가 같은 벽인지 부지 반대편인지 갈린다.
+        var pair = log != null ? new System.Text.StringBuilder() : null;
+        var lone = log != null ? new System.Text.StringBuilder() : null;
+
+        foreach (var g in walls.GroupBy(w => w.Key))
+        {
+            var crest = new List<Mark>();
+            var toe = new List<Mark>();
+            var crestPts = new List<List<Point3d>>();
+            var toePts = new List<List<Point3d>>();
+            double slope = 0.0;
+            foreach (var w in g)
+            {
+                if (w.Pts == null || w.Pts.Count < 2) continue;
+                if (w.Slope > slope) slope = w.Slope;      // 한 벽이면 같은 값이다
+                (w.IsCrest ? crestPts : toePts).Add(w.Pts);
+                Crossings(al, w.Pts, why, s0, s1, keep, w.IsCrest ? crest : toe,
+                          ref nSeg, ref nSkip, ref nOutside, ref nTrim);
+            }
+            if (crest.Count == 0 && toe.Count == 0) continue;
+            nWall++;
+
+            // ★★[JACK 0825] <b>구배는 형상을 만들 때 쓴 값과 같아야 한다.</b>
+            //   굴착 구배로 <b>0(수직)</b>을 넣으면 번들엔 0이 그대로 남는데, 실제 형상은
+            //   <c>max(0, MinSlope)</c>=0.05로 만들어진다. 그 0을 폭 계산에 쓰면
+            //   <b>폭 0 = 보이지 않는 막대</b>가 된다(실측: 가시설 폭 0m).
+            double wSlope = Math.Max(slope, GradingSettings.MinSlope);
+
+            // 가까운 것끼리 짝짓는다 — 한 벽이 조각으로 쪼개졌을 수 있다(구간 경계·클립).
+            crest.Sort((a, b) => a.Station.CompareTo(b.Station));
+            toe.Sort((a, b) => a.Station.CompareTo(b.Station));
+            var taken = new bool[toe.Count];
+            foreach (var c in crest)
+            {
+                int best = -1; double bd = double.MaxValue;
+                for (int i = 0; i < toe.Count; i++)
+                {
+                    if (taken[i]) continue;
+                    double d = Math.Abs(toe[i].Station - c.Station);
+                    if (d < bd) { bd = d; best = i; }
+                }
+                if (best >= 0 && bd <= pairMax)
+                {
+                    taken[best] = true;
+                    double mid = (c.Station + toe[best].Station) / 2.0;
+                    pair?.Append($" [{mid:F2}m 벌어짐 {bd:F2}m]");
+                    // 횡단이 쓸 앞·뒤 — 접기 전 두 자리를 그대로 남긴다(노선 진행 방향으로 앞이 작다).
+                    spansOut?.Add(new WallSpan(mid,
+                        Math.Min(c.Station, toe[best].Station),
+                        Math.Max(c.Station, toe[best].Station), why));
+                    double za = c.Z, zb = toe[best].Z;
+                    list.Add(new Mark(mid, why, Math.Max(za, zb)));                   // ← 가운데 하나
+                    // 종단 막대 — 위·아래는 <b>큰 쪽/작은 쪽</b>으로 잡는다. 절토·성토에 따라
+                    // 크레스트가 아래로 오는 경우가 있어 이름만 믿으면 막대가 뒤집힌다.
+                    if (barsOut != null && !double.IsNaN(za) && !double.IsNaN(zb))
+                    {
+                        double zHi = Math.Max(za, zb), zLo = Math.Min(za, zb);
+                        barsOut.Add(new VertBar(mid, zHi, zLo, why, wSlope));
+                    }
+                    nPair++;
+                }
+                else
+                {
+                    nLone++;
+                    bool ok = Lone(c, toePts, out double mid2); if (ok) nLoneBar++;
+                    double put = double.IsNaN(mid2) ? c.Station : mid2;
+                    list.Add(new Mark(put, why, c.Z, c.X, c.Y));
+                    if (!double.IsNaN(mid2)) nLoneMid++;
+                    lone?.Append($" [윗선 {c.Station:F2}m{(ok ? " 반대편찾음" : " 반대편없음(제자리에서 종단으로)")}" +
+                                 $"{(double.IsNaN(mid2) ? "" : $" → 가운데 {mid2:F2}m")}]");
+                }
+            }
+            for (int i = 0; i < toe.Count; i++)
+                if (!taken[i])
+                {
+                    nLone++;
+                    bool ok = Lone(toe[i], crestPts, out double mid3); if (ok) nLoneBar++;
+                    double put = double.IsNaN(mid3) ? toe[i].Station : mid3;
+                    list.Add(new Mark(put, why, toe[i].Z, toe[i].X, toe[i].Y));
+                    if (!double.IsNaN(mid3)) nLoneMid++;
+                    lone?.Append($" [아랫선 {toe[i].Station:F2}m{(ok ? " 반대편찾음" : " 반대편없음(제자리에서 종단으로)")}" +
+                                 $"{(double.IsNaN(mid3) ? "" : $" → 가운데 {mid3:F2}m")}]");
+                }
+
+            // ★★[JACK 0825] <b>짝을 잃은 벽에도 막대를 세운다.</b>
+            //
+            //   JACK: <i>"막대가 온전한 한 단일 때만 생겨. 데이라잇에 잘린 옹벽은 안 생겼어."</i>
+            //
+            //   <b>원인.</b> 데이라잇이 벽의 <b>한쪽 선만</b> 자르면 그쪽은 선형을 안 넘는다.
+            //   짝이 없으니 <c>nLone</c>으로 빠지고, 막대는 <b>짝지은 것만</b> 만들고 있었다.
+            //   그런데 <b>벽은 거기 실제로 서 있다</b> — 선이 잘린 것이지 벽이 없는 게 아니다.
+            //
+            //   → 반대편 선에서 <b>그 자리에 가장 가까운 점</b>의 표고를 가져와 막대를 세운다.
+            //     측점은 <b>옮기지 않는다</b> — 반대편 교차가 없으니 가운데를 잡을 근거가 없다.
+            // ★★[JACK 0825 '계획지표면은 측점이 옹벽 윗선으로 되어 있어'] <b>자리까지 빌려 온다.</b>
+            //   짝이 없다는 건 반대편 선이 그 자리에서 선형을 <b>안 넘는다</b>는 뜻이지,
+            //   <b>그 자리에 벽이 없다</b>는 뜻이 아니다. 반대편 선에서 가장 가까운 점을 이미 찾고 있으므로
+            //   그 점과의 <b>중점</b>이 곧 벽의 가운데다 — 표고만 빌려 오던 것을 자리까지 빌려 온다.
+            //   <paramref name="midSt"/>가 NaN이 아니면 호출부가 그 측점으로 옮긴다.
+            bool Lone(Mark m, List<List<Point3d>> others, out double midSt)
+            {
+                midSt = double.NaN;
+                if (barsOut == null) return false;
+                if (double.IsNaN(m.Z) || double.IsNaN(m.X) || double.IsNaN(m.Y)) return false;
+                double best = double.MaxValue, zo = double.NaN, ox = double.NaN, oy = double.NaN;
+                foreach (var L in others)
+                    foreach (var pt in L)
+                    {
+                        double dx = pt.X - m.X, dy = pt.Y - m.Y, d2 = dx * dx + dy * dy;
+                        if (d2 < best) { best = d2; zo = pt.Z; ox = pt.X; oy = pt.Y; }
+                    }
+                // 반대편 점과의 중점이 벽의 가운데다. 선형 범위를 벗어나면 그냥 제자리에 둔다.
+                if (!double.IsNaN(ox))
+                {
+                    try
+                    {
+                        double st2 = 0, off2 = 0;
+                        al.StationOffset((m.X + ox) / 2.0, (m.Y + oy) / 2.0, ref st2, ref off2);
+                        if (st2 >= s0 - 1e-6 && st2 <= s1 + 1e-6 && (keep == null || keep(st2)))
+                        {
+                            midSt = st2;
+                            // 반대편 점 자체의 측점도 재 둔다 — 그 둘이 벽의 앞·뒤다.
+                            try
+                            {
+                                double stO = 0, offO = 0;
+                                al.StationOffset(ox, oy, ref stO, ref offO);
+                                if (stO >= s0 - 1e-6 && stO <= s1 + 1e-6)
+                                    spansOut?.Add(new WallSpan(st2,
+                                        Math.Min(m.Station, stO), Math.Max(m.Station, stO), why));
+                            }
+                            catch { }
+                        }
+                    }
+                    catch { }
+                }
+                // ★★[JACK 0825] 반대편 선을 못 찾아도 <b>자리는 내보낸다.</b>
+                //   데이라잇이 한쪽 선을 통째로 자르면 그 키에 조각이 하나도 안 남는다 —
+                //   <b>드문 일이 아니라 정상 상황</b>이다: 절토 옹벽은 크레스트가, 성토 옹벽은 토우가
+                //   원지반 쪽이라 잘려 나간다(실측: 벽 2개 모두 한쪽만 남아 짝짓기 0건).
+                //
+                //   그때는 <b>높이 0짜리 막대</b>가 되고, 측점도 못 옮긴다(<c>midSt</c>가 NaN).
+                //   그러면 <c>DrawVertBars</c>가 <b>원래 자리에서 종단을 읽는다</b> —
+                //   원래 자리는 크레스트든 토우든 <b>벽면 밖</b>이라 그게 정상 값이다.
+                //   (가운데로 옮겼다면 벽면 한복판이라 중간 표고가 나왔을 것이다.)
+                //
+                //   <b>그러니 여기서 자리를 옮기지 않는 것이 안전장치다.</b> 나중에 "못 옮기는 걸 고치자"고
+                //   손대면 그 자리가 벽면 한복판을 읽게 된다 — 고칠 거면 <c>WallSpan</c>도 함께 채워야 한다.
+                double hi2, lo2;
+                bool paired = !double.IsNaN(zo);
+                if (!paired) { hi2 = m.Z; lo2 = m.Z; }
+                else { hi2 = Math.Max(m.Z, zo); lo2 = Math.Min(m.Z, zo); }
+                barsOut.Add(new VertBar(double.IsNaN(midSt) ? m.Station : midSt, hi2, lo2, why, wSlope));
+                return paired;   // 반대편을 못 찾았으면 '세웠다'고 말하지 않는다 — 로그가 거짓이 된다
+            }
+        }
+
+        int dup = Dedupe(list);
+        log?.AppendLine($"   수직벽 [{why}]: 벽 {nWall}개 · 선 {walls.Count}개 · 구간 {nSeg}개 → " +
+                        $"짝지어 가운데로 {nPair}개 · 짝 없어 그대로 {nLone}개" +
+                        (nLone > 0 ? $"(반대편 선을 찾은 것 {nLoneBar}개 · 자리를 가운데로 옮긴 것 {nLoneMid}개" +
+                                     $" · 나머지는 제자리에서 종단을 읽는다)" : "") +
+                        (dup > 0 ? $" · 같은 자리 {dup}개 합침" : "") +
+                        $" → {list.Count}개" +
+                        (nOutside > 0 ? $" · 걸러진 것 {nOutside}개" : ""));
+        if (pair != null && pair.Length > 0) log.AppendLine($"     짝지은 자리:{pair}");
+        if (lone != null && lone.Length > 0) log.AppendLine($"     짝 없는 자리:{lone}");
+        return list;
+    }
+
+    /// <summary>★★[JACK 0825] <b>터파기 측점 — 굴착 상단선과 구조물 바닥선.</b>
+    ///
+    /// <para>JACK: <i>"터파기부의 수직부는 옹벽이 아니라 가시설이니까 그것도 똑같이
+    /// 측점은 가운데로 두고 두껍게 가는 걸로 하자."</i></para>
+    ///
+    /// <para>종전엔 <b>터파기 측점이 아예 안 잡혔다.</b> 측점 수집기가 정지 번들만 읽는데
+    /// 터파기는 <b>별도 칸</b>(<c>EXCAV</c>)에 산다 — 그 칸을 아무도 안 열고 있었다.</para>
+    ///
+    /// <para><b>수직이냐 경사냐로 갈린다.</b>
+    /// <list type="bullet">
+    /// <item>굴착 구배가 <b>수직</b>(≤<see cref="GradingSettings.MinSlope"/>) = <b>가시설</b> —
+    ///       상단·바닥이 사실상 같은 자리다. 도면 관행대로 <b>가운데 하나</b>로 접는다.</item>
+    /// <item>굴착 구배가 <b>경사</b>(1:0.5 등) = 열린 터파기 — 상단과 바닥이 실제로 몇 미터 떨어져 있다.
+    ///       <b>둘 다 세운다</b>(접으면 법면이 측점에서 사라진다).</item>
+    /// </list></para>
+    ///
+    /// <para>바닥·상단은 <b>닫힌 링</b>이라 첫 점을 끝에 붙여 닫는다 —
+    /// 안 닫으면 마지막 점과 첫 점 사이 한 변의 교차가 통째로 빠진다.</para></summary>
+    public static List<Mark> FromExcavation(CivilDb.Alignment al, Database db, Transaction tr,
+                                            Func<double, bool> keep, System.Text.StringBuilder log,
+                                            List<VertBar> barsOut = null, List<WallSpan> spansOut = null)
+    {
+        var list = new List<Mark>();
+        if (al == null || db == null || tr == null) return list;
+
+        List<ExcavBundle> exs;
+        try
+        {
+            var loaded = ExcavBundleStore.TryLoadAll(db, tr, out string why0);
+            if (loaded == null || loaded.Count == 0) { log?.AppendLine($"   터파기: 없음({why0})"); return list; }
+            exs = loaded;
+        }
+        catch (Exception ex) { log?.AppendLine("   터파기 기록 읽기 실패 — " + ex.Message); return list; }
+
+        static List<Point3d> Closed(IReadOnlyList<Core.Point3> r)
+        {
+            var q = new List<Point3d>(r.Count + 1);
+            foreach (var p in r) q.Add(new Point3d(p.X, p.Y, p.Z));
+            if (q.Count >= 3 &&
+                (Math.Abs(q[0].X - q[^1].X) > 1e-6 || Math.Abs(q[0].Y - q[^1].Y) > 1e-6)) q.Add(q[0]);
+            return q;
+        }
+
+        var flat = new List<List<Point3d>>();                                  // 경사 터파기 — 둘 다
+        var pairs = new List<((int Structure, int Bench) Key, bool IsCrest, List<Point3d> Pts,
+                             double Slope)>();                                 // 가시설 — 가운데로
+        int nVert = 0, nOpen = 0;
+        for (int i = 0; i < exs.Count; i++)
+        {
+            var e = exs[i];
+            if (e == null) continue;
+            bool vertical = e.Slope <= GradingSettings.WallGateSlope + 1e-9;
+            var bottom = (e.Bottom != null && e.Bottom.Count >= 3) ? Closed(e.Bottom) : null;
+            var top = (e.FinalRing != null && e.FinalRing.Count >= 3) ? Closed(e.FinalRing) : null;
+            if (vertical)
+            {
+                if (top != null) pairs.Add(((i, 0), true, top, System.Math.Max(e.Slope, e.MinSlope)));
+                if (bottom != null) pairs.Add(((i, 0), false, bottom, System.Math.Max(e.Slope, e.MinSlope)));
+                // ★[JACK 0825] 세션 전역이 아니라 <b>그 기록의 하한</b>을 쓴다 — 옛 터파기를 열어도 두께가 안 변한다.
+                nVert++;
+            }
+            else
+            {
+                if (top != null) flat.Add(top);
+                if (bottom != null) flat.Add(bottom);
+                nOpen++;
+            }
+        }
+
+        if (flat.Count > 0) list.AddRange(FromLines(al, flat, "터파기", keep, log));
+        if (pairs.Count > 0) list.AddRange(FromWallPairs(al, pairs, "가시설", keep, log, 3.0, barsOut, spansOut));
+        int dup = Dedupe(list);
+        log?.AppendLine($"   터파기 합계: 구조물 {exs.Count}개(가시설 {nVert} · 열린굴착 {nOpen})" +
+                        (dup > 0 ? $" · 같은 자리 {dup}개 합침" : "") + $" → 측점 {list.Count}개");
+        return list;
+    }
+
+    /// <summary>★★[JACK 0825] <b>벽 두께 안에 든 데이라잇 측점을 벽 자리로 끌어당긴다.</b>
+    ///
+    /// <para>JACK: <i>"측점도 중심점 외에 옹벽 시점·종점에 측점이 생겨."</i></para>
+    ///
+    /// <para><b>원인.</b> 옹벽의 한쪽 선이 <b>곧 데이라잇</b>이다 — 벽 상단이 원지반과 만나는
+    /// 그 자리가 데이라잇이다. 그래서 같은 벽에서 두 사유가 각각 측점을 세운다. 실측:
+    /// <code>
+    /// 14.28m 데이라잇   14.40m 옹벽    ← 12cm
+    /// 47.20m 옹벽       47.30m 데이라잇 ← 10cm
+    /// </code>
+    /// 이 간격이 바로 <b>구배 × 벽 높이</b>, 곧 <b>벽 두께</b>다. 도면에서 옹벽은 직각 한 줄이니
+    /// 그 두께 안은 <b>한 자리</b>로 봐야 한다.</para>
+    ///
+    /// <para><b>지우지 않고 옮긴다.</b> 데이라잇은 지형 정보라 없애면 안 된다 —
+    /// 벽 측점과 <b>같은 자리</b>로 만들면 <see cref="Dedupe"/>가 하나로 합치고 사유는 남는다.
+    /// 벽 두께 밖은 손대지 않으므로 정측점·원지반굴곡은 안전하다.</para></summary>
+    public static int PullDaylightToWalls(List<Mark> list, IReadOnlyList<VertBar> bars,
+                                          System.Text.StringBuilder log)
+    {
+        if (list == null || bars == null || bars.Count == 0) return 0;
+        int moved = 0;
+        var note = log != null ? new System.Text.StringBuilder() : null;
+        foreach (var b in bars)
+        {
+            double h = b.ZTop - b.ZBottom;
+            if (double.IsNaN(h) || h <= 0) continue;
+            // ★★[JACK 0825 '측점이 미세하게 겹쳐졌다'] 벽 두께 <b>+ 한 칸</b>.
+            //   종전엔 <c>max(두께, MergeTol)</c>이었다. 낮은 벽은 두께가 1cm 밑이라 tol이 MergeTol에
+            //   갇히는데, 데이라잇이 <b>1.2cm쯤</b> 떨어져 있으면 간발의 차로 밖이 된다
+            //   (실측: 42.08 벽은 못 당기고 42.09 데이라잇이 그대로 남았다).
+            //   두께에 한 칸을 <b>더해</b> 그 경계를 없앤다 — 데이라잇만 당기므로 정측점은 안전하다.
+            double tol = Math.Abs(b.Slope * h) + MergeTol;
+            for (int i = 0; i < list.Count; i++)
+            {
+                var m = list[i];
+                if (m.Why == null) continue;
+                if (m.Why.IndexOf("데이라잇", StringComparison.Ordinal) < 0) continue;
+                if (m.Why.IndexOf("옹벽", StringComparison.Ordinal) >= 0 ||
+                    m.Why.IndexOf("가시설", StringComparison.Ordinal) >= 0) continue;   // 이미 벽 것
+                double d = Math.Abs(m.Station - b.Station);
+                // ★[JACK 0825] 하한 가드를 MergeTol(10mm) → 1e-9로. 벽 두께가 20mm쯤이면
+                //   실제 거리(두께의 절반)가 10mm 이하로 떨어져 <b>당기지도 합치지도 않는</b> 창이 생겼다
+                //   (Dedupe는 &lt;10mm 엄격 비교라 딱 그 값은 안 합친다). 당겨서 겹친 것은 아래 Dedupe가 합친다.
+                if (d > tol || d <= 1e-9) continue;          // 두께 밖이거나 완전히 같은 점
+                note?.Append($" [{m.Station:F2}→{b.Station:F2}m]");
+                list[i] = new Mark(b.Station, m.Why, m.Z, m.X, m.Y);
+                moved++;
+            }
+        }
+        if (moved > 0)
+        {
+            int dup = Dedupe(list);
+            log?.AppendLine($"     벽 두께 안 데이라잇 {moved}개를 벽 자리로 당겼다" +
+                            (dup > 0 ? $"(합쳐서 {dup}개 줄었다)" : "") + note);
+        }
+        return moved;
+    }
+
+    /// <summary>★[JACK 0825] 종단에 세울 <b>수직 막대</b>를 전부 모은다 — 옹벽 + 터파기 가시설.
+    /// <para>측점과 <b>같은 자</b>를 쓴다(같은 복원·같은 짝짓기). 그래야 막대가 선 자리에
+    /// 측점이 정확히 서고, 도면에서 둘이 어긋나 보이지 않는다.</para></summary>
+    public static List<VertBar> CollectVertBars(CivilDb.Alignment al, Database db, Transaction tr,
+                                                System.Text.StringBuilder log)
+    {
+        var bars = new List<VertBar>();
+        if (al == null || db == null || tr == null) return bars;
+
+        // ① 옹벽 — 정지 번들에서 복원한다(도면에 그려져 있든 말든).
+        try
+        {
+            var regions = GradingBundleStore.TryLoadAll(db, tr, out _);
+            if (regions != null && regions.Count > 0)
+            {
+                var walls = new List<((int Region, bool Up, int Ring, int Bench) Key, bool IsCrest,
+                                      List<Core.Point3> Pts, double Slope)>();
+                Commands.NoriCommand.RebuildEdgeLines(regions, out _, walls);
+                var wpts = new List<((int Region, bool Up, int Ring, int Bench) Key, bool IsCrest,
+                                     List<Point3d> Pts, double Slope)>(walls.Count);
+                foreach (var w in walls)
+                {
+                    var q = new List<Point3d>(w.Pts.Count);
+                    foreach (var pt in w.Pts) q.Add(new Point3d(pt.X, pt.Y, pt.Z));
+                    wpts.Add((w.Key, w.IsCrest, q, w.Slope));
+                }
+                if (wpts.Count > 0) FromWallPairs(al, wpts, "옹벽", null, log, 3.0, bars);
+            }
+        }
+        catch (Exception ex) { log?.AppendLine("   종단 옹벽 막대 실패 — " + ex.Message); }
+
+        // ② 가시설 — 터파기 번들. 수직 굴착만 막대가 된다(경사 터파기는 법면이라 막대가 아니다).
+        try { FromExcavation(al, db, tr, null, log, bars); }
+        catch (Exception ex) { log?.AppendLine("   종단 가시설 막대 실패 — " + ex.Message); }
+
+        return bars;
     }
 
     /// <summary>★★[v30.4 · JACK 0812] <b>절성 경계 — 절토와 성토가 바뀌는 자리.</b>

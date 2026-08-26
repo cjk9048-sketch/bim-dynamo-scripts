@@ -52,6 +52,32 @@ public sealed class RibbonApp : IExtensionApplication
         // [JACK 0730] 작업공간(제도 및 주석 ↔ Civil 3D 등) 전환 시 리본이 CUI 기준으로 재구성되며
         //   코드로 만든 탭이 사라짐 → WSCURRENT 변경을 감지해 다음 Idle에 탭 재생성(FindTab이 중복 방지).
         AcadApp.SystemVariableChanged += OnSysVarChanged;
+
+        // ★★[JACK 0825] 보기 버튼 켜고 끄기 — <b>도면이 바뀌거나 우리 명령이 끝날 때</b> 다시 본다.
+        //   지표면은 명령으로만 생기고 사라지므로 이 두 시점이면 충분하다(주기 검사는 필요 없다).
+        try
+        {
+            AcadApp.DocumentManager.DocumentActivated += (_, _) => RefreshEnabled();
+            AcadApp.DocumentManager.DocumentCreated += (_, e2) => HookDoc(e2.Document);
+            foreach (Document d0 in AcadApp.DocumentManager) HookDoc(d0);
+        }
+        catch { }
+    }
+
+    /// <summary>그 도면의 명령이 끝날 때마다 보기 버튼 상태를 다시 본다 — <c>DH</c>로 시작하는 것만.</summary>
+    private static void HookDoc(Document? d)
+    {
+        if (d == null) return;
+        try
+        {
+            d.CommandEnded += (_, e3) =>
+            {
+                if (e3.GlobalCommandName != null &&
+                    e3.GlobalCommandName.StartsWith("DH", System.StringComparison.OrdinalIgnoreCase))
+                    RefreshEnabled();
+            };
+        }
+        catch { }
     }
 
     /// <summary>WSCURRENT 후 Idle 재확인 잔여 횟수 — 리본 재구성이 첫 Idle보다 늦게 끝나
@@ -166,6 +192,12 @@ public sealed class RibbonApp : IExtensionApplication
             var vGnd = MakeButton("원지반\n만", "DHVIEWG ", "원지반만 표시(계획·터파기 숨김)", "보기");
             var vPln = MakeButton("계획\n지표면", "DHVIEWP ", "계획지표면만 표시", "정지면");
             var vExc = MakeButton("터파기\n만", "DHVIEWE ", "터파기 지표면만 표시", "터파기");
+
+            // ★★[JACK 0825] <b>없는 것은 누를 수 없게 한다.</b>
+            //   JACK: <i>"계획지표면이나 터파기 등을 수행하지 않았을 때는 버튼이 비활성화되게 해주고."</i>
+            //   종전엔 눌러야 "아직 없습니다"를 알려 줬다 — 눌러 보기 전엔 알 수 없었다.
+            _btnViewPlan = vPln; _btnViewExcav = vExc;
+            RefreshEnabled();
             var splitView = new RibbonSplitButton
             {
                 Text = "보기",
@@ -596,6 +628,30 @@ public sealed class RibbonApp : IExtensionApplication
             return rtb;
         }
         catch { return null; }
+    }
+
+    /// <summary>★[JACK 0825] 상태에 따라 켜고 꺼야 하는 보기 버튼 — 만들 때 여기 담아 둔다.</summary>
+    private static RibbonButton? _btnViewPlan, _btnViewExcav;
+
+    /// <summary>★★[JACK 0825] <b>계획지표면·터파기가 없으면 그 보기 버튼을 끈다.</b>
+    ///
+    /// <para>도면을 바꾸거나 우리 명령이 끝날 때마다 부른다. 실패해도 조용히 넘어간다 —
+    /// 버튼 상태는 <b>편의</b>이지 안전장치가 아니다(명령 자체도 없으면 안내하고 물러난다).</para></summary>
+    internal static void RefreshEnabled()
+    {
+        try
+        {
+            var doc = AcadApp.DocumentManager.MdiActiveDocument;
+            bool hasPlan = false, hasExc = false;
+            if (doc != null)
+            {
+                var (pp, ee) = Commands.ViewSurfaceCommand.WhatExists(doc.Database);
+                hasPlan = pp; hasExc = ee;
+            }
+            if (_btnViewPlan != null) _btnViewPlan.IsEnabled = hasPlan;
+            if (_btnViewExcav != null) _btnViewExcav.IsEnabled = hasExc;
+        }
+        catch { }
     }
 
     /// <summary>리본 버튼 → 명령줄로 명령 문자열 전송.</summary>

@@ -87,7 +87,7 @@ public sealed class NoriCommand
                     // [JACK 0724] 이 방향이 옹벽으로 작성되면(스타일≠사면 + 경사 n≤0.05) 노리선/사면선/소단선 생략 — 옹벽엔 노리선 없음.
                     double slopeN = up ? bundle.Params.CutSlope : bundle.Params.FillSlope;
                     WallStyle style = up ? GradingSettings.CutWallStyle : GradingSettings.FillWallStyle;
-                    if (style != WallStyle.없음_사면 && slopeN <= 0.05 + 1e-9)
+                    if (style != WallStyle.없음_사면 && slopeN <= GradingSettings.WallGateSlope + 1e-9)
                     {
                         detail += $"\n{rTag}{label}: 옹벽({style}) — 노리선 생략";
                         continue;
@@ -98,7 +98,7 @@ public sealed class NoriCommand
                     {
                         if (finalRing == null || finalRing.Count < 3) continue;
                         // [구간 구배 0804] 구간 안이라도 그 단 구배가 수직이 아니면 사면 — 노리선·사면선을 정상 생성해야 한다.
-                        double bs = System.Math.Max(slopeN, bundle.Params.MinSlope), ms = bundle.Params.MinSlope;
+                        double bs = System.Math.Max(slopeN, bundle.Params.MinSlope), ms = bundle.Params.WallGateSlope;
                         var (t, ct, _) = SlopeHatchGenerator.Generate(vs.Rings, ng, up,
                             GradingSettings.HatchShort, GradingSettings.HatchLong, finalRing, bundle.Boundary,
                             zones, bundle.Boundary, bs, ms, later);
@@ -214,8 +214,13 @@ public sealed class NoriCommand
     /// <para>누적 구역도 그대로 처리한다 — 구역마다 <b>뒤 구역이 덮은 자리</b>를 빼므로
     /// 결과는 지금 정지면과 맞는다.</para>
     /// 반환=선 목록(사면선·소단선·전환사면 모서리). <paramref name="diag"/>=사람이 읽을 요약.</summary>
+    /// <param name="wallOut">★[JACK 0825] 주면 <b>옹벽선을 여기로만</b> 내보낸다(반환 목록에는 안 담는다).
+    /// 키는 <b>구역·절성·링·단</b>이라 같은 키의 윗선·아랫선이 <b>한 벽</b>이다 — 측점에서 그 둘을
+    /// 가운데 하나로 접는 데 쓴다. 소단은 단 번호가 달라 섞이지 않는다.</param>
     internal static System.Collections.Generic.List<System.Collections.Generic.List<Point3>> RebuildEdgeLines(
-        System.Collections.Generic.IReadOnlyList<GradingBundle> regions, out string diag)
+        System.Collections.Generic.IReadOnlyList<GradingBundle> regions, out string diag,
+        System.Collections.Generic.List<((int Region, bool Up, int Ring, int Bench) Key, bool IsCrest,
+                                         System.Collections.Generic.List<Point3> Pts, double Slope)> wallOut = null)
     {
         var res = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
         var sb = new System.Text.StringBuilder();
@@ -246,15 +251,22 @@ public sealed class NoriCommand
                     var vs = GradingGeometry.Build(b.Boundary, ng, b.Params, up, zones);
                     if (!vs.HasSlope) { sb.Append($" {rTag}/{label}:복원실패"); continue; }
                     double slopeN = up ? b.Params.CutSlope : b.Params.FillSlope;
-                    double bs = System.Math.Max(slopeN, b.Params.MinSlope), ms = b.Params.MinSlope;
-                    foreach (var finalRing in ringList)
+                    // ★[JACK 0825] 게이트(ms)와 <b>벽의 실제 구배</b>(realN)를 가른다.
+                    //   종전엔 한 변수를 선 분류와 VertBar 양쪽에 썼다 — 게이트로 이관하는 순간
+                    //   종단 막대의 tol이 실제 두께가 아니라 판정 문턱(0.05)을 재게 되어,
+                    //   벽과 무관한 측점까지 벽 자리로 끌어온다.
+                    double bs = System.Math.Max(slopeN, b.Params.MinSlope), ms = b.Params.WallGateSlope;
+                    double realN = System.Math.Max(System.Math.Min(slopeN, b.Params.WallGateSlope), b.Params.MinSlope);
+                    for (int ringIdx = 0; ringIdx < ringList.Count; ringIdx++)
                     {
+                        var finalRing = ringList[ringIdx];
                         if (finalRing == null || finalRing.Count < 3) continue;
                         // ★★[JACK 0824 '계획지표면 꺾이는 부분 측점이 자동 추가가 안 돼'] 옹벽 구간의 선도 받는다.
                         //   이 함수의 결과는 **측점 재료로만** 쓰인다(측점·종단 두 곳뿐 — 도면에 그리지 않는다).
                         //   옹벽의 윗선·아랫선은 계획 지표면이 실제로 꺾이는 자리라 측점이 서야 하는데,
                         //   종전엔 '구간 안이면 그리지 않는다'는 표시 규칙에 걸려 **측점에서도 사라졌다**.
-                        var wallPts = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
+                        var wallPts = new System.Collections.Generic.List<(int Bench, bool IsCrest,
+                                          System.Collections.Generic.List<Point3> Pts)>();
                         var edges = SlopeHatchGenerator.GenerateEdgeLinesTagged(
                             vs.Rings, ng, up, finalRing, b.Boundary, zones, b.Boundary,
                             null, null, bs, ms, later, wallPts);
@@ -266,8 +278,13 @@ public sealed class NoriCommand
                         }
                         foreach (var w in wallPts)
                         {
-                            if (w == null || w.Count < 2) continue;
-                            res.Add(w); wlN++;
+                            if (w.Pts == null || w.Pts.Count < 2) continue;
+                            // ★[JACK 0825] 옹벽선을 받겠다는 곳이 있으면 <b>그쪽으로만</b> 보낸다.
+                            //   양쪽에 다 넣으면 접힌 측점과 안 접힌 측점이 둘 다 서서 도로 두 개가 된다.
+                            // 구배(ms)를 함께 싣는다 — 종단 막대의 <b>폭</b>이 여기서 나온다(폭 = 구배 × 벽 높이).
+                            if (wallOut != null) wallOut.Add(((ri, up, ringIdx, w.Bench), w.IsCrest, w.Pts, realN));
+                            else res.Add(w.Pts);
+                            wlN++;
                         }
                     }
                 }

@@ -237,13 +237,16 @@ public static class StationCommand
             //
             //   → 종단도와 <b>똑같이</b> 번들에서 복원한 선(데이라잇·소단·사면)과의 교차로 잡는다.
             //     자가 하나가 되어야 두 화면이 같은 말을 한다.
-            int nEdge = 0, nDl = 0;
+            int nEdge = 0, nDl = 0, nWall = 0, nExc = 0;
             try
             {
                 var regions = GradingBundleStore.TryLoadAll(alignId.Database, tr, out _);
                 if (regions != null && regions.Count > 0)
                 {
-                    var edges = NoriCommand.RebuildEdgeLines(regions, out string rdiag);
+                    // ★[JACK 0825] 옹벽선은 <b>따로</b> 받는다 — 윗선·아랫선이 낸 두 측점을 가운데 하나로 접는다.
+                    var walls = new System.Collections.Generic.List<((int Region, bool Up, int Ring, int Bench) Key,
+                                    bool IsCrest, System.Collections.Generic.List<DH.Grading.Core.Point3> Pts, double Slope)>();
+                    var edges = NoriCommand.RebuildEdgeLines(regions, out string rdiag, walls);
                     // ★[JACK 0824] 측점이 왜 그만큼인지 로그로 남긴다 — 종전엔 log에 null을 넘겨
                     //   '측점이 안 잡힌다'는 보고가 와도 재료가 없는 건지 교차가 없는 건지 못 갈랐다.
                     var slog = new System.Text.StringBuilder();
@@ -255,8 +258,22 @@ public static class StationCommand
                         foreach (var p in e) q.Add(new Point3d(p.X, p.Y, p.Z));
                         pts.Add(q);
                     }
-                    var em = StationMarks.FromLines(al, pts, "사면·소단·옹벽", null, slog);
+                    var em = StationMarks.FromLines(al, pts, "사면·소단", null, slog);
                     list.AddRange(em); nEdge = em.Count;
+
+                    // 옹벽 — 같은 벽의 두 줄을 한 자리로. 도면에서 옹벽은 직각 한 줄로 그린다.
+                    var wpts = new System.Collections.Generic.List<((int Region, bool Up, int Ring, int Bench) Key,
+                                   bool IsCrest, System.Collections.Generic.List<Point3d> Pts, double Slope)>(walls.Count);
+                    foreach (var w in walls)
+                    {
+                        var q = new System.Collections.Generic.List<Point3d>(w.Pts.Count);
+                        foreach (var p in w.Pts) q.Add(new Point3d(p.X, p.Y, p.Z));
+                        wpts.Add((w.Key, w.IsCrest, q, w.Slope));
+                    }
+                    // ★[JACK 0825] 벽의 자리·두께를 받아 둔다 — 그 두께 안의 데이라잇을 나중에 끌어당긴다.
+                    var vbars = new System.Collections.Generic.List<StationMarks.VertBar>();
+                    var wm = StationMarks.FromWallPairs(al, wpts, "옹벽", null, slog, 3.0, vbars);
+                    list.AddRange(wm); nWall = wm.Count;
 
                     var dl = new System.Collections.Generic.List<System.Collections.Generic.List<Point3d>>();
                     for (int ri = 0; ri < regions.Count; ri++)
@@ -281,6 +298,14 @@ public static class StationCommand
                     var dm = StationMarks.FromLines(al, dl, "데이라잇", null, slog);
                     try { DiagLog.Append("\n" + slog.ToString()); } catch { }
                     list.AddRange(dm); nDl = dm.Count;
+
+                    // ★[JACK 0825] 터파기 — 종전엔 여기까지 오지 않았다.
+                    //   측점 수집기가 정지 번들만 읽는데 터파기는 별도 칸(EXCAV)에 살아서 아무도 안 열었다.
+                    var xm = StationMarks.FromExcavation(al, alignId.Database, tr, null, slog, vbars);
+                    list.AddRange(xm); nExc = xm.Count;
+
+                    // 벽 두께 안에 든 데이라잇은 벽 자리로 — 도면에서 옹벽은 직각 한 줄이다.
+                    StationMarks.PullDaylightToWalls(list, vbars, slog);
                 }
             }
             catch (System.Exception ex)
@@ -288,8 +313,9 @@ public static class StationCommand
                 // ★[JACK 0824] 종전엔 **조용히 삼켰다** — 여기서 터지면 측점이 0개인데 이유를 알 길이 없었다.
                 try { DiagLog.Append($"\n■ 측점 재료 예외 — {ex.GetType().Name}: {ex.Message}"); } catch { }
             }
-            note = $"꺾임 {nPi} · 사면·소단·옹벽 {nEdge} · 데이라잇 {nDl}"
-                 + (nEdge + nDl == 0 ? " (번들이 없어 정지 경계는 못 잡음 — [부지정지]를 먼저)" : "");
+            note = $"꺾임 {nPi} · 사면·소단 {nEdge} · 옹벽 {nWall} · 데이라잇 {nDl}"
+                 + (nExc > 0 ? $" · 터파기 {nExc}" : "")
+                 + (nEdge + nDl + nWall == 0 ? " (번들이 없어 정지 경계는 못 잡음 — [부지정지]를 먼저)" : "");
         }
         catch { }
         return list;

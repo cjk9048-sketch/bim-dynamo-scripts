@@ -15,7 +15,7 @@ public static class WallTee
     public static (List<Run> Runs, List<int> TeeZoneIdx, string Diag) GenerateAuto(
         IReadOnlyList<Point3> boundary,
         IReadOnlyList<SlopeZone> zones,
-        IGroundSurface ground, bool cut, double benchH, double minSlope = 0.05)
+        IGroundSurface ground, bool cut, double benchH, double gateSlope = 0.05)
     {
         var runs = new List<Run>();
         var teeIdx = new List<int>();
@@ -33,7 +33,7 @@ public static class WallTee
             if (z == null || z.Rules.Count == 0) continue;
             if (z.Rules[0].FromBench != 0)
             { sb.Append($"구간{zi + 1}: {z.Rules[0].FromBench + 1}단부터라 역T 아님(스타일 옹벽) · "); continue; }
-            if (z.Rules[0].Slope > minSlope + 1e-9)
+            if (z.Rules[0].Slope > gateSlope + 1e-9)
             { sb.Append($"구간{zi + 1}: 1단 구배가 1:{z.Rules[0].Slope:0.###}(수직 아님) — 역T 아님 · "); continue; }
 
             // ★★[검토 0824 치명-3] **이 구간의 자로 읽는다.** T0/T1은 계획 폴리곤이 아니라

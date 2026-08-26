@@ -27,7 +27,7 @@ public static class GradingSettings
     /// 이력은 설치본 확인에 쓰이므로 DLL에는 남기되, <b>출력은 절대 하지 않는다.</b>
     /// </para>
     /// ★[v32.20] 새 버전을 올릴 때 갱신할 곳은 <b>이 줄 하나</b>다 — 이력은 <c>작업과정.md</c>에 쓴다.</summary>
-    public const string Version = "v34.3 (2026-08-24)";
+    public const string Version = "v36.3 (2026-08-25)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -57,7 +57,20 @@ public static class GradingSettings
     public static double CellSize = 0.5;       // 격자 해상도 (m) — 작을수록 매끈·느림. 소규모 부지는 0.25~0.1도 가능
     public static int MaxBenches = 50;         // 안전 최대 단수
     public static double VertexSpacing = 2.0;  // 경계 둘레 샘플 간격 (m)
-    public static double MinSlope = 0.05;      // 비탈 최소 구배 n — 0.05 하한(JACK: 그 아래는 Civil3D TIN 오류 방지)
+    /// <summary>비탈 최소 구배 n — 구배 0 입력을 여기까지 끌어올린다.
+    /// <para>★★[JACK 0825] <b>0.05 → 0.01.</b> "수직 지표면치고 0.05는 너무 과해 — 단수가 많아지면
+    /// 부지 면적이 커지고 토공량에도 차이가 난다." 실측 100×100·3단에서 부지 <b>8.16% → 1.61%</b>
+    /// (655㎡ · 토공 4,900㎥). 옛 근거("TIN 오류")는 실측이 아니었고, Civil 자체 Wall 브레이크라인은
+    /// 0.3mm를 쓴다. 판정 문턱은 <see cref="WallGateSlope"/>로 따로 있다.</para></summary>
+    public static double MinSlope = 0.01;
+
+    /// <summary>★★[JACK 0825] <b>옹벽/사면 판정 문턱 — 0.05 동결.</b> 이 값 <b>이하</b>면 옹벽이다.
+    /// <para><see cref="MinSlope"/>를 낮출 때 <b>같이 내려가면 안 되는</b> 값이다. 같이 내리면
+    /// 이미 만들어 둔 1:0.05 옹벽이 사면으로 재분류되어 옹벽선·3D 매스·종단 막대가 전부 사라진다
+    /// (하니스 S64: 옹벽선 16줄 → 0줄). 문턱을 넓게 두면 더 얇은 벽도 함께 통과하므로 안전하다.</para>
+    /// <para><b>번들에 저장하지 않는다</b> — 저장하면 나중에 이 값을 바꿀 때 옛 도면이 따라 변한다.
+    /// <see cref="GradingParams.WallGateSlope"/>의 기본값(0.05)이 옛 번들에도 그대로 채워진다.</para></summary>
+    public const double WallGateSlope = 0.05;
     public static double MinFaceRun = 0.005;   // 비탈 최소 수평폭 절대 바닥 (m) — 안전장치
     /// <summary>★[JACK 0819] 옹벽을 판넬 배열 대신 <b>통짜 스윕 매스</b>로 만든다(무늬 없음).
     /// 기본설계에서는 수량이 필요 없고 "패널식 옹벽으로 보이면 된다"가 목적이라, 판넬 배치가
@@ -504,6 +517,7 @@ public static class GradingSettings
         MaxBenches = MaxBenches,
         VertexSpacing = VertexSpacing,
         MinSlope = MinSlope,
+        WallGateSlope = WallGateSlope,
         MinFaceRun = MinFaceRun,
         MiterConvex = MiterConvex,
         MiterLimit = MiterLimit,

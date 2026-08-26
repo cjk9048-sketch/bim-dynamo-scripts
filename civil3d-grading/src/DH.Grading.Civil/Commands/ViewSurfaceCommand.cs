@@ -86,7 +86,7 @@ public sealed class ViewSurfaceCommand
     }
 
     /// <summary>지금 도면에 계획지표면·터파기가 있는가.</summary>
-    private static (bool Plan, bool Excav) WhatExists(Database db)
+    internal static (bool Plan, bool Excav) WhatExists(Database db)
     {
         try
         {
@@ -100,6 +100,10 @@ public sealed class ViewSurfaceCommand
         catch { return (false, false); }
     }
 
+    /// <summary>★[JACK 0825] 다른 명령이 끝나고 <b>전부 보기로 돌려놓을</b> 때 쓴다.
+    /// <para>JACK: <i>"터파기 기능을 썼을 때 완료가 되면 전부 보기 상태로 복원되게 해줘."</i></para></summary>
+    internal static void ShowAll() => Apply("A");
+
     /// <summary>고른 보기를 적용한다 — 프롬프트 없이. 지표면 <b>하나</b>만 남기고 선 레이어도 맞춘다.</summary>
     private static void Apply(string kw)
     {
@@ -112,10 +116,24 @@ public sealed class ViewSurfaceCommand
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
-            string? keep;       // 우리 지표면 중 이것 하나만 보인다(null = 우리 것 전부 숨김)
+            // ★★[JACK 0825] <b>여러 장을 함께 보일 수 있어야 한다.</b>
+            //   '전부'가 합성면 한 장이던 것을 세 장(원지반·계획·터파기)으로 바꾸면서 집합이 됐다.
+            var keeps = new System.Collections.Generic.HashSet<string>(System.StringComparer.Ordinal);
+            string? keep;       // 한 장만 보이는 보기(G/P/E)에서 쓴다
             bool showGround;    // 원지반을 보일까
             bool lines;         // 정지 선 레이어를 보일까
             string msg;
+
+            // ★★[JACK 0825 최종 규칙] 무엇을 보일지는 JACK이 이렇게 정했다:
+            //   전부   = 계획+원지반 <b>합성</b>(정지면_DH) + 터파기면 <b>별도 한 장</b>
+            //   원지반 = 원지반만
+            //   계획   = 계획+원지반 <b>합성</b>(순수면이 아니다 — 부지 밖이 비어 이상해 보인다)
+            //   터파기 = 터파기면만
+            //
+            //   ※ 종전의 <c>전체면_DH</c>(셋을 한 장으로 Paste)는 <b>쓰지 않는다</b>.
+            //     TIN은 한 (X,Y)에 점을 하나만 둘 수 있어 수직 옹벽에서 위아래 점이 서로를 밀어내고,
+            //     그래서 벽면이 찢어진 채 "최종 형상"처럼 보였다(JACK 3D 스샷).
+            string PlanPick() => GradingBuilder.SurfaceExistsByBaseName(tr, Plan) ? Plan : PurePlan;
 
             switch (kw)
             {
@@ -126,38 +144,36 @@ public sealed class ViewSurfaceCommand
                     break;
 
                 case "P":
-                    // ★[JACK] **순수** 계획면. 원지반과 합성된 것이 아니다 → 원지반도 끈다.
                     if (!hasPlan) { ed.WriteMessage("\n[보기] 계획지표면이 아직 없습니다."); tr.Commit(); return; }
-                    keep = GradingBuilder.SurfaceExistsByBaseName(tr, PurePlan) ? PurePlan : Plan;
-                    showGround = false; lines = true;
-                    msg = keep == PurePlan ? "계획지표면만(순수)" : "계획지표면만(순수면이 없어 합성면으로 물러남)";
+                    keeps.Add(PlanPick());          // 합성면 — 원지반을 이미 품고 있다
+                    showGround = false; lines = false;
+                    keep = null;
+                    msg = $"계획지표면({PlanPick()} — 원지반 합성)";
                     break;
 
                 case "E":
-                    // ★[JACK] 굴착면 하나 — 계획면 데이라잇·사면선도 안 보인다.
                     if (!hasExc) { ed.WriteMessage("\n[보기] 터파기 지표면이 아직 없습니다."); tr.Commit(); return; }
-                    keep = Excav; showGround = false; lines = false;
+                    keeps.Add(Excav); showGround = false; lines = false;
+                    keep = null;
                     msg = "터파기만";
                     break;
 
                 default:
-                    // ★[JACK] 전부 = **합성된 한 장**. 터파기가 있으면 전체면, 없으면 정지면(원지반+계획).
-                    //   둘 다 없으면 우리 것을 다 끄고 원지반만 보인다.
-                    if (GradingBuilder.SurfaceExistsByBaseName(tr, AllName))
-                    { keep = AllName; showGround = false; msg = "전부(원지반+계획+터파기 합성 한 장)"; }
-                    else if (GradingBuilder.SurfaceExistsByBaseName(tr, Plan))
-                    { keep = Plan; showGround = false; msg = "전부(원지반+계획 합성 한 장 — 터파기 없음)"; }
-                    else
-                    { keep = null; showGround = true; msg = "전부(원지반뿐)"; }
-                    lines = true;
+                    if (hasPlan) keeps.Add(PlanPick());
+                    if (hasExc) keeps.Add(Excav);
+                    // 합성면이 원지반을 품으므로 따로 켜지 않는다. 계획면이 없을 때만 원지반을 켠다.
+                    showGround = !hasPlan;
+                    lines = true; keep = null;
+                    msg = keeps.Count > 0 ? $"전부({string.Join(" + ", keeps)})" : "전부(원지반뿐)";
                     break;
             }
 
             // 원지반(=우리 것이 아닌 지표면)은 IsolateSurfaces로 한 번에 처리한다.
             //   keepBaseName에 없는 이름을 주면 **전부 숨김**이 된다.
             GradingBuilder.IsolateSurfaces(tr, showGround ? null : " 없는이름 ");
+            if (keep != null) keeps.Add(keep);
             foreach (var nm in OurSurfaces())
-                GradingBuilder.SetSurfaceVisible(tr, nm, keep != null && nm == keep);
+                GradingBuilder.SetSurfaceVisible(tr, nm, keeps.Contains(nm));
 
             SetLayers(db, tr, lines);
             tr.Commit();
@@ -166,25 +182,115 @@ public sealed class ViewSurfaceCommand
         catch (System.Exception ex) { ed.WriteMessage("\n[보기 오류] " + ex.Message); }
     }
 
-    /// <summary>정지·터파기가 그린 선 레이어를 한꺼번에 켜고 끈다.
-    /// <para>지표면만 숨기면 사면선·데이라잇이 그대로 남아 "터파기만 보자"가 안 된다(JACK 스샷).</para></summary>
+    /// <summary>우리가 끈 레이어 이름을 적어 두는 자리 — 전부 보기에서 <b>이것만</b> 되켠다.</summary>
+    private const string OffDictName = "DH_GRADING";
+    private const string OffRecName = "VIEW_OFF";
+
+    /// <summary>★★[JACK 0825] <b>지표면만 남기고 나머지 레이어를 전부 끈다.</b>
+    ///
+    /// <para>JACK: <i>"전부 보기 외에 나머지 뷰에서는 기존의 계획선이나 터파기 선도 안 보이게
+    /// 모든 레이어를 꺼. 순수하게 지표면만 보이게 해줘."</i></para>
+    ///
+    /// <para>종전엔 <b>우리가 아는 레이어 목록</b>(<see cref="PlanLayers"/>)만 껐다. 그래서 그 목록에
+    /// 없는 선 — 남이 그린 것이든 우리가 나중에 늘린 것이든 — 은 그대로 남았다.
+    /// 목록을 늘리는 방식은 <b>새 레이어가 생길 때마다 또 새는</b> 구조라 근본이 못 된다.</para>
+    ///
+    /// <para>→ <b>지표면이 쓰는 레이어만 지키고 나머지는 전부 끈다.</b> 지표면의 표시 여부는
+    /// <c>SetSurfaceVisible</c>이 따로 쥐고 있으므로, 레이어를 켜 둬도 숨긴 지표면은 안 보인다.</para>
+    ///
+    /// <para><b>남의 도면을 망가뜨리지 않는다.</b> ①원래 꺼져 있던 레이어는 손대지 않고
+    /// ②우리가 끈 것만 이름으로 적어 두었다가 ③전부 보기에서 <b>그것만</b> 되켠다.
+    /// 적어 둔 목록은 <b>누적</b>한다 — 원지반만 → 터파기만 처럼 연달아 눌러도 첫 번째 기록이 안 지워진다.</para></summary>
     private static void SetLayers(Database db, Transaction tr, bool on)
     {
         try
         {
             var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-            foreach (var nm in PlanLayers)
+
+            if (on)
             {
-                if (!lt.Has(nm)) continue;
+                // ── 되돌리기: 우리가 끈 것만 켠다(원래 꺼져 있던 남의 레이어는 그대로 둔다).
+                foreach (var nm in LoadOff(db, tr))
+                {
+                    if (!lt.Has(nm)) continue;
+                    try
+                    {
+                        var lr = (LayerTableRecord)tr.GetObject(lt[nm], OpenMode.ForRead);
+                        if (!lr.IsOff) continue;
+                        ((LayerTableRecord)tr.GetObject(lt[nm], OpenMode.ForWrite)).IsOff = false;
+                    }
+                    catch { }
+                }
+                SaveOff(db, tr, new System.Collections.Generic.List<string>());
+                return;
+            }
+
+            // ── 끄기: <b>우리가 만든 레이어만</b>.
+            //
+            //   ★★[JACK 0825] 종전 이 자리는 "지표면 레이어만 빼고 <b>전부</b>"였다 — 그러면
+            //   <b>아무것도 안 보인다</b>(JACK 실측). Civil 지표면은 객체의 레이어와 별개로
+            //   <b>스타일이 삼각형·등고선을 그리는 레이어</b>를 따로 쓰기 때문이다.
+            //   객체 레이어를 지켜도 그 컴포넌트 레이어가 꺼지면 지표면 자체가 사라진다.
+            //   도곽·종단뷰·남의 도면 레이어까지 끄는 것도 과했다.
+            //
+            //   JACK 요구("계획선이나 터파기 선도 안 보이게")의 뜻은 <b>우리가 그린 선</b>을 다 끄라는 것이다.
+            //   그건 전부 <c>DH-</c>로 시작한다 — 목록을 손으로 관리하지 않아도 새 레이어가 저절로 들어온다.
+            var turned = LoadOff(db, tr);                 // 누적 — 연달아 눌러도 첫 기록을 안 잃는다
+            var already = new System.Collections.Generic.HashSet<string>(turned);
+            foreach (ObjectId lid in lt)
+            {
                 try
                 {
-                    var lr = (LayerTableRecord)tr.GetObject(lt[nm], OpenMode.ForRead);
-                    if (lr.IsOff == !on) continue;      // 이미 같으면 쓰지 않는다(쓰는 행위 자체가 '수정'이다)
-                    var lw = (LayerTableRecord)tr.GetObject(lt[nm], OpenMode.ForWrite);
-                    lw.IsOff = !on;                     // 현재 레이어는 끌 수 없으므로 실패는 조용히 넘긴다
+                    var lr = (LayerTableRecord)tr.GetObject(lid, OpenMode.ForRead);
+                    bool ours = lr.Name.StartsWith("DH-", System.StringComparison.Ordinal)
+                             || System.Array.IndexOf(PlanLayers, lr.Name) >= 0;
+                    if (!ours) continue;
+                    if (lr.IsOff) continue;               // 이미 꺼져 있다 = 우리가 끈 게 아니다
+                    if (lid == db.Clayer) continue;       // 현재 레이어는 끄지 않는다
+                    ((LayerTableRecord)tr.GetObject(lid, OpenMode.ForWrite)).IsOff = true;
+                    if (already.Add(lr.Name)) turned.Add(lr.Name);
                 }
                 catch { }
             }
+            SaveOff(db, tr, turned);
+        }
+        catch { }
+    }
+
+    private static System.Collections.Generic.List<string> LoadOff(Database db, Transaction tr)
+    {
+        var list = new System.Collections.Generic.List<string>();
+        try
+        {
+            var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
+            if (!nod.Contains(OffDictName)) return list;
+            var d = (DBDictionary)tr.GetObject(nod.GetAt(OffDictName), OpenMode.ForRead);
+            if (!d.Contains(OffRecName)) return list;
+            var xr = (Xrecord)tr.GetObject(d.GetAt(OffRecName), OpenMode.ForRead);
+            if (xr.Data == null) return list;
+            foreach (TypedValue tv in xr.Data)
+                if (tv.TypeCode == (int)DxfCode.Text && tv.Value is string nm && nm.Length > 0) list.Add(nm);
+        }
+        catch { }
+        return list;
+    }
+
+    private static void SaveOff(Database db, Transaction tr,
+                                System.Collections.Generic.IReadOnlyList<string> names)
+    {
+        try
+        {
+            var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForWrite);
+            DBDictionary d;
+            if (nod.Contains(OffDictName)) d = (DBDictionary)tr.GetObject(nod.GetAt(OffDictName), OpenMode.ForWrite);
+            else { d = new DBDictionary(); nod.SetAt(OffDictName, d); tr.AddNewlyCreatedDBObject(d, true); }
+
+            var vals = new System.Collections.Generic.List<TypedValue>();
+            foreach (var nm in names) vals.Add(new TypedValue((int)DxfCode.Text, nm));
+            var xr = new Xrecord { Data = new ResultBuffer(vals.ToArray()) };
+            if (d.Contains(OffRecName)) d.Remove(OffRecName);
+            d.SetAt(OffRecName, xr);
+            tr.AddNewlyCreatedDBObject(xr, true);
         }
         catch { }
     }

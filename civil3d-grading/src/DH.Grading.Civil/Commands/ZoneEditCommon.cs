@@ -13,7 +13,7 @@ namespace DH.Grading.Civil.Commands;
 /// 규칙(JACK 확정):
 ///  · **1회 실행 = 1개만 바뀐다.** 선을 연달아 눌러도 마지막에 누른 것만 선택된다.
 ///  · 제원은 <b>프롬프트 키워드</b>로 바꾸고 Enter를 치면 그대로 적용된다(JACK 0820) —
-///      옹벽: 단높이(H) · 소단길이(T)              (구배는 수직 1:0.05 고정)
+///      옹벽: 단높이(H) · 소단길이(T)              (구배는 수직 = 구배 하한 고정)
 ///      사면: 단높이(H) · 사면구배(R) · 소단길이(T)
 ///    기본값 = **최초 정지옵션에서 준 값**(클릭한 방향의 값을 따라간다 — JACK 0820)
 ///    ※ 단높이는 <b>구간이 아니라 방향(절토/성토) 전체</b>에 적용된다 —
@@ -138,7 +138,7 @@ internal static class ZoneEditCommon
                 })
                 {
                     if (!hasSlope || ringList == null) continue;
-                    double bs = BaseSlopeOf(region.Params, up), ms = region.Params.MinSlope;
+                    double bs = BaseSlopeOf(region.Params, up), ms = region.Params.WallGateSlope;
                     var vs = GradingGeometry.Build(region.Boundary, ng, region.Params, up, zones);
                     if (!vs.HasSlope) continue;
                     // ★[JACK 0824] 단마다 **클릭 대상 선이 놓인 링**을 자로 삼는다.
@@ -515,7 +515,7 @@ internal static class ZoneEditCommon
                     var z = zs[zi];
                     string rt = z.Rules.Count == 0 ? "없음" : string.Join(" ", z.Rules.Select(r =>
                         $"{r.FromBench + 1}단~1:{r.Slope:0.###}" +
-                        (r.Slope <= GradingSettings.MinSlope + 1e-9 ? "(수직)" : "")));
+                        (r.Slope <= GradingSettings.WallGateSlope + 1e-9 ? "(수직)" : "")));
                     // ★[0824] 길이는 **그 구간의 자**로 잰다 — 클릭한 선의 자로 재면 자가 다른 구간이 엉뚱하게 찍힌다.
                     double zTot = z.RefCum != null ? z.RefCum[^1] : cumB[cumB.Length - 1];
                     double zl = z.T1 >= z.T0 ? z.T1 - z.T0 : z.T1 + zTot - z.T0;

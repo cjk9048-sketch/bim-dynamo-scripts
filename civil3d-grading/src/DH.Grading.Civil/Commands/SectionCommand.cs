@@ -152,7 +152,8 @@ public sealed class SectionCommand
             {
                 // ★[JACK 0824] 터파기 종단선만 **마젠타** 스타일로.
                 var styleFor = s.Label == "터파기" && !excStyle.IsNull ? excStyle : profStyle;
-                CivilDb.Profile.CreateFromSurface(s.ProfileName, alignId, s.SurfId, layerId, styleFor, profLabels);
+                var pid0 = CivilDb.Profile.CreateFromSurface(s.ProfileName, alignId, s.SurfId, layerId, styleFor, profLabels);
+                if (s.Label == "터파기") PaintExcavProfile(db, pid0);   // ★[JACK 0825] 스타일만으론 안 된다(ByLayer가 이긴다)
                 nProf++;
             }
             catch (System.Exception ex)
@@ -278,6 +279,35 @@ public sealed class SectionCommand
     /// <summary>터파기 종단선 스타일 이름 — 마젠타(JACK 0824).</summary>
     internal const string ExcavStyleName = "DH_터파기(마젠타)";
 
+    /// <summary>★★[JACK 0825] <b>터파기 종단선을 마젠타로 — 객체 색을 직접 박는다.</b>
+    ///
+    /// <para>스타일(<c>DH_터파기(마젠타)</c>)만으로는 안 됐다. JACK 특성창 실측:</para>
+    /// <code>
+    /// 스타일    : DH_터파기(마젠타)   ← 스타일은 맞다
+    /// 트루 컬러 : ByLayer            ← 그런데 객체 색이 ByLayer이고
+    /// 도면층    : CR-GRND            ← 그 레이어가 원지반(초록)이다
+    /// </code>
+    /// <para>종단 객체가 <b>ByLayer</b>면 레이어 색이 스타일 색을 이긴다. 종단은 선형 레이어에
+    /// 만들어지는데 그게 원지반 레이어라, 스타일을 아무리 마젠타로 해도 초록으로 나왔다.</para>
+    ///
+    /// <para>→ <b>객체 색을 명시</b>한다. ByLayer가 아니게 되면 레이어와 무관하게 그 색으로 그려진다.</para></summary>
+    internal static void PaintExcavProfile(Database db, ObjectId profileId)
+    {
+        if (profileId.IsNull) return;
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            if (tr.GetObject(profileId, OpenMode.ForWrite) is Entity pe)
+            {
+                pe.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
+                    Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 6);   // ACI 6 = 마젠타
+                try { DiagLog.Append("  터파기 종단 객체 색 = 마젠타(ACI6) 직접 지정 — ByLayer면 레이어 색이 이긴다"); } catch { }
+            }
+            tr.Commit();
+        }
+        catch (System.Exception ex) { try { DiagLog.Append("  터파기 종단 색 지정 실패 — " + ex.Message); } catch { } }
+    }
+
     /// <summary>★[JACK 0824] <b>터파기 종단선은 마젠타.</b> 그 색의 종단 스타일을 만들어 두고 그 ObjectId를 준다.
     /// <para>이미 있으면 그대로 쓴다(매번 만들면 도면에 스타일이 쌓인다). 만들지 못하면
     /// <c>ObjectId.Null</c>을 돌려주고, 호출부는 기본 스타일로 물러난다 — 색 하나 때문에 종단이 안 생기면 안 된다.</para></summary>
@@ -325,11 +355,59 @@ public sealed class SectionCommand
                             ds.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
                                 Autodesk.AutoCAD.Colors.ColorMethod.ByAci, Magenta);
                         ds.Visible = true;
+                        // ★[JACK 0825] 표시 레이어를 <b>0</b>으로 못 박는다.
+                        //   Civil 문서: 컴포넌트의 Layer는 "값이 ByLayer일 때 참조된다"이고
+                        //   0은 "그려진 레이어와 같다"는 뜻이다. 색을 명시했으니 원칙상 무관하지만,
+                        //   새 스타일이 어느 프로토타입에서 복제됐는지 알 수 없어 우연히 특정 레이어를
+                        //   물고 있을 여지를 막는다.
+                        try { if (ds.Layer != "0") ds.Layer = "0"; } catch { }
                     }
                     catch { }
                 }
             }
             tr.Commit();
+
+            // ★★[JACK 0825 '터파기 종단이 여전히 마젠타로 안 나온다'] <b>썼으면 되읽어 확인한다.</b>
+            //   색을 쓰는 코드가 try/catch로 감싸여 있어 <b>실패해도 아무 말이 없었다</b> —
+            //   로그엔 "스타일 'DH_터파기(마젠타)'"라고 찍히는데 정작 색은 안 바뀐 채일 수 있다.
+            //   <b>스타일 이름이 붙은 것과 그 스타일이 마젠타인 것은 다른 일이다.</b>
+            try
+            {
+                using var trV = db.TransactionManager.StartTransaction();
+                if (trV.GetObject(id, OpenMode.ForRead) is CivilStyles.ProfileStyle stV)
+                {
+                    var sbV = new System.Text.StringBuilder();
+                    int okN = 0, badN = 0;
+                    foreach (var t in new[]
+                    {
+                        CivilStyles.ProfileDisplayStyleProfileType.Line,
+                        CivilStyles.ProfileDisplayStyleProfileType.Curve,
+                        CivilStyles.ProfileDisplayStyleProfileType.LineExtension,
+                    })
+                    {
+                        try
+                        {
+                            var dsV = stV.GetDisplayStyleProfile(t);
+                            if (dsV == null) { sbV.Append($" {t}=없음"); badN++; continue; }
+                            short ci = dsV.Color.ColorIndex;
+                            bool vis = dsV.Visible;
+                            if (ci == Magenta && vis) okN++; else badN++;
+                            // ★[JACK 0825] <b>레이어까지 본다.</b> 색이 ACI6인데도 초록으로 나온다면
+                            //   스타일 컴포넌트가 <b>자기 레이어</b>에 그리고 그 레이어 색이 이기는 것이다.
+                            string lay = "?";
+                            try { lay = dsV.Layer ?? "(빈값)"; } catch { }
+                            sbV.Append($" {t}=ACI{ci}@{lay}{(vis ? "" : "(숨김)")}");
+                        }
+                        catch (System.Exception exV) { sbV.Append($" {t}=읽기실패({exV.GetType().Name})"); badN++; }
+                    }
+                    trV.Commit();
+                    try { DiagLog.Append($"\n  터파기 종단 스타일 되읽기 — 마젠타 {okN}개 · 어긋남 {badN}개 ·{sbV}" +
+                                         (badN > 0 ? "  ⚠색이 안 먹었다" : "")); } catch { }
+                }
+                else trV.Commit();
+            }
+            catch { }
+
             return id;
         }
         catch { return ObjectId.Null; }
