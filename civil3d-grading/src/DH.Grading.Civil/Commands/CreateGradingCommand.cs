@@ -586,7 +586,7 @@ public sealed class CreateGradingCommand
                 //   최종 지형의 경계가 아니다(그 둔덕은 어차피 깎여 계획면이 된다) → 그리지 않는다.
                 //   경계로 실제 쓰이는 건 클립링 1개인데 표시 경로가 걸러진 고리를 전부 그려 온 것이 원인.
                 System.Collections.Generic.IReadOnlyList<System.Collections.Generic.IReadOnlyList<Point3>>
-                    drawLoops = FilterOutsidePlan(allLoops, boundary, 0.5);
+                    drawLoops = FilterOutsidePlan(allLoops, boundary, PlanNearM);
                 int loopDropped = 0;
                 string loopDiag = "";
                 // [안전 0805] 표시용 필터가 지표면 트랜잭션을 깨면 안 된다 — 실패하면 원래대로 전부 그린다.
@@ -604,7 +604,7 @@ public sealed class CreateGradingCommand
                 }
                 catch (System.Exception ex)
                 {
-                    drawLoops = FilterOutsidePlan(allLoops, boundary, 0.5);   // 폴백: 종전대로 전부 표시
+                    drawLoops = FilterOutsidePlan(allLoops, boundary, PlanNearM);   // 폴백: 종전대로 전부 표시
                     bndMsg += $"\n정지경계 표시: 갇힌 고리 판정 실패 — 전부 표시(표시 전용, 지표면 무관) — {ex.Message}";
                 }
                 // ★★[v30.0 · JACK 0812] <b>"이어서 작성하면 가장 최근 것의 데이라잇 경계만 나온다 —
@@ -803,7 +803,7 @@ public sealed class CreateGradingCommand
                 if (!pureId.IsNull &&
                     trO.GetObject(pureId, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.TinSurface pureTin)
                 {
-                    var outline = GradingBuilder.SurfaceOutline(pureTin, out string oDiag);
+                    var outline = GradingBuilder.SurfaceOutline(pureTin, trO, out string oDiag);
                     if (outline.Count > 0)
                     {
                         GradingBuilder.DrawDaylight(db, trO, outline, "DH-정지경계", 3, layerOff: false);
@@ -1251,6 +1251,13 @@ public sealed class CreateGradingCommand
         if (cur.Count >= 2) res.Add(cur);
         return res;
     }
+
+    /// <summary>★★[JACK 0827 · 추적 결과] <b>계획선에서 이만큼 안쪽이면 "부지를 가로지르는 선"으로 본다.</b>
+    /// <para>종전 0.5m는 <b>진짜 데이라잇을 잘라 먹었다</b>. 구배가 수직에 가까우면(이번 정지는 1:0.01)
+    /// 데이라잇이 계획선에서 <b>0.12m밖에</b> 안 떨어지는데, 0.5m 자로 재면 그것까지 지운다 —
+    /// 실측으로 링 412점 중 <b>41점·16.8m가 삭제</b>되어 고리가 두 조각으로 갈라졌다.</para>
+    /// <para>가로지르는 선은 계획면 <b>한참 안쪽</b>을 지나므로 5cm면 충분히 가려진다.</para></summary>
+    private const double PlanNearM = 0.05;
 
     private static System.Collections.Generic.List<System.Collections.Generic.List<Point3>> FilterOutsidePlan(
         System.Collections.Generic.List<System.Collections.Generic.List<Point3>> loops,

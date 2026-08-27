@@ -543,7 +543,75 @@ public static class GradingBuilder
     /// <para>좌표는 <b>mm로 반올림해</b> 같은 점을 묶는다 — 붙여넣기 경계에서 미세하게 어긋난 정점이
     /// 서로 다른 점으로 잡히면 없는 구멍이 생긴다.</para></summary>
     public static List<List<Point3>> SurfaceOutline(TinSurface tin, out string diag)
+        => SurfaceOutline(tin, null, out diag);
+
+    /// <summary>★★★[JACK 0827] 정지면 외곽선 — <b>Civil 순정 경계 추출을 먼저 쓴다.</b>
+    /// <para>우리가 삼각형을 걸어 만든 외곽선은 <b>변이 빠지면 그 자리가 막다른 끝</b>이 되어 고리가 갈라진다. 실측에서 차수1(막다른 끝) 정점이 4개 나왔고, 유향으로 바꿔도 외곽변 수가 424로 <b>똑같아</b> 나아지지 않았다.</para>
+    /// <para>Civil에는 <c>ExtractBorder</c>가 있다 — 같은 파일의 원지반 경계 검사가 <b>이미 그것을 쓰고 있었다</b>. TIN 경계는 정의상 닫혀 있으므로 순정이 뽑아 주면 이을 일도 없다. 순정이 <b>전부 닫힌 고리</b>를 주면 그것을 쓰고, 아니면 직접 걷기로 물러난다.</para></summary>
+    public static List<List<Point3>> SurfaceOutline(TinSurface tin, Transaction tr, out string diag)
     {
+        diag = "";
+        // ── ① 순정 경계 추출. 트랜잭션이 있어야 한다(도면에 임시 폴리선을 만든다).
+        if (tr != null)
+        {
+            var got = new List<List<Point3>>();
+            int nClosedN = 0;
+            string why = "";
+            try
+            {
+                var bids = tin.ExtractBorder(Autodesk.Civil.SurfaceExtractionSettingsType.Model);
+                foreach (ObjectId bid in bids)
+                {
+                    try
+                    {
+                        if (tr.GetObject(bid, OpenMode.ForWrite) is not Polyline3d bp) continue;
+                        var lp = new List<Point3>();
+                        foreach (ObjectId vid in bp)
+                            if (tr.GetObject(vid, OpenMode.ForRead) is PolylineVertex3d pv)
+                                lp.Add(new Point3(pv.Position.X, pv.Position.Y, pv.Position.Z));
+                        bool cl = bp.Closed;
+                        bp.Erase();                       // 읽었으면 지운다 — 화면에 남기지 않는다
+                        if (lp.Count < 4) continue;
+                        if (cl && (lp[0].X != lp[lp.Count - 1].X || lp[0].Y != lp[lp.Count - 1].Y))
+                            lp.Add(lp[0]);                // 닫힌 폴리선은 마지막 점이 생략돼 있다
+                        var f = lp[0]; var e = lp[lp.Count - 1];
+                        double dx = f.X - e.X, dy = f.Y - e.Y;
+                        if (dx * dx + dy * dy < 1e-6) nClosedN++;
+                        got.Add(lp);
+                    }
+                    catch { }
+                }
+            }
+            catch (System.Exception ex) { why = ex.Message; got.Clear(); }
+
+            if (got.Count > 0 && nClosedN == got.Count)
+            {
+                diag = $"순정 경계 {got.Count}개(전부 닫힘) 점 ";
+                foreach (var l in got) diag += $"{l.Count} ";
+                return got;
+            }
+            diag = got.Count > 0
+                ? $"순정 경계 {got.Count}개 중 닫힌 것 {nClosedN}개뿐 — 직접 걷기로"
+                : "순정 경계 추출 실패 — 직접 걷기로" + (why.Length > 0 ? "(" + why + ")" : "");
+        }
+
+        var walked = SurfaceOutlineByWalk(tin, out string wDiag);
+        diag = (diag != null && diag.Length > 0 ? diag + " → " : "") + wDiag;
+        return walked;
+    }
+
+    /// <summary>직접 걷기 — 순정이 안 될 때만. 유향·무향 두 방식을 다 돌려 나은 쪽을 택한다.</summary>
+    private static List<List<Point3>> SurfaceOutlineByWalk(TinSurface tin, out string diag)
+    {
+        // ★★★[JACK 0827 · 추적 결과] <b>외곽변을 유향으로 본다.</b>
+        //   종전엔 <b>무향 변의 개수가 1</b>인 것만 외곽으로 봤는데,
+        //   붙여넣기 이음매의 <b>중복 삼각형</b>이나 mm 반올림 충돌로 개수가 2가 되면
+        //   <b>진짜 외곽변을 통째로 버렸다</b> — 그 자리가 막다른 끝이 되어 고리가 갈라졌다.
+        //   (실측: 고리 4개·닫힘 0 → 0.41m 틈이 이음 문턴 0.30m를 넘겨 열린 채 그려졌다.)
+        //
+        //   유향은 <c>HashSet</c>이 중복을 흡수하고, 외곽 정점마다 <b>나가는 변이 정해져</b>
+        //   핀치점에서도 길을 안 잃는다. 다만 삼각형 회전 방향이 고르지 않을 수 있으므로
+        //   <b>둘 다 돌려 더 많이 닫는 쪽을 택한다</b> — 나빠지면 안 쓴다.
         diag = ""; var loops = new List<List<Point3>>();
         try
         {
@@ -553,8 +621,9 @@ public static class GradingBuilder
                 => Comparer<(long, long)>.Default.Compare(a, b) <= 0 ? (a, b) : (b, a);
 
             var pos = new Dictionary<(long, long), Point3>();
-            var edge = new Dictionary<((long, long), (long, long)), int>();
-            int nTri = 0;
+            var undir = new Dictionary<((long, long), (long, long)), int>();
+            var dir = new HashSet<((long, long), (long, long))>();
+            int nTri = 0, nDup = 0;
 
             foreach (TinSurfaceTriangle t in tin.GetTriangles(false))
             {
@@ -567,52 +636,112 @@ public static class GradingBuilder
                     pos[kp] = new Point3(p.X, p.Y, p.Z);
                     pos[kq] = new Point3(q.X, q.Y, q.Z);
                     var key = Norm(kp, kq);
-                    edge[key] = edge.TryGetValue(key, out int n) ? n + 1 : 1;
+                    undir[key] = undir.TryGetValue(key, out int n) ? n + 1 : 1;
+                    if (!dir.Add((kp, kq))) nDup++;
                 }
             }
 
-            // 삼각형 하나에만 속한 변 = 외곽. 그것들로 이웃 관계를 만든다.
-            var adj = new Dictionary<(long, long), List<(long, long)>>();
-            int nB = 0;
-            foreach (var kv in edge)
+            List<List<Point3>> Walk(Dictionary<(long, long), List<(long, long)>> adj)
+            {
+                var res = new List<List<Point3>>();
+                var used = new HashSet<((long, long), (long, long))>();
+                foreach (var start in new List<(long, long)>(adj.Keys))
+                    foreach (var first in new List<(long, long)>(adj[start]))
+                    {
+                        if (used.Contains(Norm(start, first))) continue;
+                        var loop = new List<Point3> { pos[start] };
+                        var cur = start; var nxt = first;
+                        int guard = 0;
+                        while (guard++ < 1_000_000)
+                        {
+                            used.Add(Norm(cur, nxt));
+                            loop.Add(pos[nxt]);
+                            if (nxt.Equals(start)) break;
+                            (long, long)? step = null;
+                            if (adj.TryGetValue(nxt, out var nb))
+                                foreach (var w in nb) if (!used.Contains(Norm(nxt, w))) { step = w; break; }
+                            if (step == null) break;
+                            cur = nxt; nxt = step.Value;
+                        }
+                        if (loop.Count >= 4) res.Add(loop);
+                    }
+                return res;
+            }
+
+            static int Closed(List<List<Point3>> ls)
+            {
+                int c = 0;
+                foreach (var l in ls)
+                {
+                    var f = l[0]; var e = l[l.Count - 1];
+                    double dx = f.X - e.X, dy = f.Y - e.Y;
+                    if (dx * dx + dy * dy < 1e-6) c++;
+                }
+                return c;
+            }
+
+            var adjNew = new Dictionary<(long, long), List<(long, long)>>();
+            int nBNew = 0;
+            foreach (var (u, v) in dir)
+                if (!dir.Contains((v, u)))
+                {
+                    nBNew++;
+                    if (!adjNew.TryGetValue(u, out var lu)) adjNew[u] = lu = new List<(long, long)>();
+                    lu.Add(v);
+                }
+
+            var adjOld = new Dictionary<(long, long), List<(long, long)>>();
+            int nBOld = 0;
+            foreach (var kv in undir)
             {
                 if (kv.Value != 1) continue;
-                nB++;
+                nBOld++;
                 var (u, v) = kv.Key;
-                if (!adj.TryGetValue(u, out var lu)) adj[u] = lu = new List<(long, long)>();
-                if (!adj.TryGetValue(v, out var lv)) adj[v] = lv = new List<(long, long)>();
+                if (!adjOld.TryGetValue(u, out var lu)) adjOld[u] = lu = new List<(long, long)>();
+                if (!adjOld.TryGetValue(v, out var lv)) adjOld[v] = lv = new List<(long, long)>();
                 lu.Add(v); lv.Add(u);
             }
 
-            var used = new HashSet<((long, long), (long, long))>();
-            foreach (var start in new List<(long, long)>(adj.Keys))
-                foreach (var first in new List<(long, long)>(adj[start]))
-                {
-                    if (used.Contains(Norm(start, first))) continue;
-                    var loop = new List<Point3> { pos[start] };
-                    var cur = start; var nxt = first;
-                    int guard = 0;
-                    while (guard++ < 1_000_000)
-                    {
-                        used.Add(Norm(cur, nxt));
-                        loop.Add(pos[nxt]);
-                        if (nxt.Equals(start)) break;             // 한 바퀴 — 닫혔다
-                        (long, long)? step = null;
-                        foreach (var w in adj[nxt]) if (!used.Contains(Norm(nxt, w))) { step = w; break; }
-                        if (step == null) break;                  // 더 못 간다(열린 끝)
-                        cur = nxt; nxt = step.Value;
-                    }
-                    if (loop.Count >= 4) loops.Add(loop);
-                }
+            var lsNew = Walk(adjNew);
+            var lsOld = Walk(adjOld);
+            int cNew = Closed(lsNew), cOld = Closed(lsOld);
+            // ★[실측 0827] 닫힘 수가 <b>같으면</b>(둘 다 0) 조각이 <b>적은 쪽</b>이 낫다 —
+            //   덜 갈라진 것이고, 이음 단계에서 붙을 확률도 높다. 종전엔 같을 때 새 방식을 택해
+            //   <b>이음이 2건에서 0건으로 줄었다</b>(로그 실측). 같으면 옛 방식이 이긴다.
+            bool useNew = cNew > cOld || (cNew == cOld && lsNew.Count < lsOld.Count);
+            loops = useNew ? lsNew : lsOld;
 
-            int closed = 0;
+            int d1 = 0, d2 = 0, d3 = 0, d4 = 0;
+            foreach (var kv in adjOld)
+            {
+                int d = kv.Value.Count;
+                if (d == 1) d1++; else if (d == 2) d2++; else if (d == 3) d3++; else d4++;
+            }
+
+            var sb = new System.Text.StringBuilder();
+            sb.Append($"삼각형 {nTri} · 외곽변 옛 {nBOld}/새 {nBNew}");
+            sb.Append($" · 고리 옛 {lsOld.Count}개(닫힘 {cOld})/새 {lsNew.Count}개(닫힘 {cNew}");
+            sb.Append($" · 택함: {(useNew ? "새 방식(유향)" : "옛 방식(무향) — 새 방식이 더 못 닫아 물러남")}");
+            if (nDup > 0) sb.Append($" · 중복 삼각형 변 {nDup}개 흡수");
+            sb.Append($"\n      차수: 1차={d1}개 · 2차={d2}개 · 3차={d3}개 · 4+차={d4}");
+            if (d1 > 0) sb.Append("  ⚠차수1(막다른 끝)이 있다 — 변이 빠졌다");
+            else if (d3 + d4 > 0) sb.Append("  ⚠차수3+ (핀치점)이 있다 — 워커가 길을 잃을 수 있다");
+            int li = 0;
             foreach (var l in loops)
             {
                 var f = l[0]; var e = l[l.Count - 1];
                 double dx = f.X - e.X, dy = f.Y - e.Y;
-                if (dx * dx + dy * dy < 1e-6) closed++;
+                double gap = System.Math.Sqrt(dx * dx + dy * dy);
+                double len = 0;
+                for (int i2 = 1; i2 < l.Count; i2++)
+                {
+                    double ax = l[i2].X - l[i2 - 1].X, ay = l[i2].Y - l[i2 - 1].Y;
+                    len += System.Math.Sqrt(ax * ax + ay * ay);
+                }
+                sb.Append($"\n      고리{li}: 점{l.Count} 길이{len:F1}m 첫끝 간격 {gap:F2}m 시({f.X:F1},{f.Y:F1}) 끝({e.X:F1},{e.Y:F1})");
+                li++;
             }
-            diag = $"삼각형 {nTri} · 외곽변 {nB} · 고리 {loops.Count}개(닫힘 {closed})";
+            diag = sb.ToString();
         }
         catch (System.Exception ex) { diag = "외곽선 추출 실패 — " + ex.Message; }
         return loops;

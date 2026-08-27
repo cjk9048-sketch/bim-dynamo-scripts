@@ -726,6 +726,10 @@ public sealed class ProfileCommand
         //   맞는 지적이다 — <b>사용자가 시작한 일이 아니라 곁따라 일어나는 일</b>이라 알림이 필요 없다.
         //   측점을 찍을 때마다 확인 버튼을 눌러야 하면 '자동'이 아니다.
         //   처음 만들 때([종단도] 버튼)는 그대로 알린다 — 그건 사용자가 <b>기다리고 있는</b> 결과다.
+        // ★★[JACK 0827] 종단도를 다시 그리면 <b>횡단은 지우기만 한다</b>(다시 그리지 않는다).
+        //   JACK: <i>"업데이트되는 게 아니라 그냥 전에 있던 횡단 내용은 다 사라지는 걸로."</i>
+        //   종단만 손보고 싶을 때가 있고, 그때마다 횡단이 다시 그려지면 느리고 성가시다.
+        //   지우는 일은 <c>SheetCommand.EraseAll</c>이 이미 한다(DH-횡단-* 레이어 포함).
         Finish(ed, log, $"노선 {routeLen:F0}m · 선형 '{alignName}' · 종단 {nProf}개 · 종단도 배치 완료", quiet: rebuild);
         return true;
     }
@@ -2057,8 +2061,6 @@ public sealed class ProfileCommand
                                        System.Collections.Generic.List<StationMarks.WallSpan> wspans,
                                        System.Text.StringBuilder log)
     {
-        const string LayWall = "DH-종단-옹벽";
-        const string LayShore = "DH-종단-가시설";
         const short AciCyan = 4, AciMagenta = 6;
 
         int nWall = 0, nShore = 0, nMiss = 0, wiped = 0;
@@ -2075,8 +2077,8 @@ public sealed class ProfileCommand
             bool haveBars = LastVertBars != null && LastVertBars.Count > 0;
             var bars = haveBars ? LastVertBars : StationMarks.CollectVertBars(al, db, tr, log);
             log?.AppendLine($"     막대 재료 — {(haveBars ? "측점 수집 때 만든 것(중심 보정됨)" : "여기서 새로 계산(보정 없음)")} {bars.Count}개");
-            var lw = SectionCommand.EnsureLayer(db, tr, LayWall, AciCyan);
-            var ls = SectionCommand.EnsureLayer(db, tr, LayShore, AciMagenta);
+            var lw = SectionCommand.EnsureLayer(db, tr, LayerVBarWall, AciCyan);
+            var ls = SectionCommand.EnsureLayer(db, tr, LayerVBarShore, AciMagenta);
 
             var ms = (BlockTableRecord)tr.GetObject(
                 SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
@@ -2290,6 +2292,14 @@ public sealed class ProfileCommand
     /// <b>먼저</b> 만들어진다. 그래서 만들 때 꾸미면 <b>언제나 축척을 모른 채</b> 그리게 된다
     /// (JACK: "측점 문자가 축척이 안 먹음").</para></summary>
     /// <summary>★[JACK 0825] 횡단면도를 뽑을 때 쓸 <b>횡단용</b> 검토선 그룹((전)(후) 포함).</summary>
+    /// <summary>★★[JACK 0827 "종단 새로 그리기할 때 기존 종단의 수직 막대가 안 없어져"]
+    /// 막대 레이어를 <b>클래스 상수로 올린다</b> — <see cref="SheetCommand.EraseAll"/>이 봐야 하기 때문이다.
+    /// <para><b>왜 남았나.</b> 막대는 <b>자기가 다시 그릴 때만</b> 옛것을 지웠다. 그런데 옹벽·가시설이
+    /// 사라지면 그리기 경로를 아예 안 타므로 <b>아무도 안 지운다</b>. 지우는 일은 그리는 쪽이 아니라
+    /// <b>레이어를 소유한 쪽</b>이 해야 한다 — 그것이 이 프로젝트가 반복해 배운 것이다.</para></summary>
+    internal const string LayerVBarWall = "DH-종단-옹벽";
+    internal const string LayerVBarShore = "DH-종단-가시설";
+
     internal static ObjectId LastXsecGroupId = ObjectId.Null;
 
     /// <summary>★[JACK 0825] 벽의 앞·뒤 자리 — 종단 막대가 지표면을 읽을 때 쓴다.</summary>
