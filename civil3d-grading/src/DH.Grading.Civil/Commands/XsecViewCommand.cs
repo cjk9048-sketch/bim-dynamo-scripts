@@ -41,7 +41,7 @@ public sealed class XsecViewCommand
     /// 한쪽은 안 보이는 그림이 된다. 벽이 아주 얇을 때를 대비해 <b>최소값</b>도 둔다.</para></summary>
 
     /// <summary>횡단면도 이름을 쓰는 레이어 — 우리가 직접 그리므로 지울 때도 여기만 보면 된다.</summary>
-    private const string XsecTitleLayer = "DH-횡단-이름";
+    internal const string XsecTitleLayer = "DH-횡단-이름";
 
     /// <summary>★★[JACK 0826 "측점 넣기 기능을 쓰니까 횡단뷰만 사라져 버렸어 —
     /// 전체적으로 업데이트가 돼야 해"] <b>마지막으로 그린 자리를 기억한다.</b>
@@ -175,6 +175,9 @@ public sealed class XsecViewCommand
             string gname = SectionCommand.UniqueName(db, cdoc, SectionCommand.GroupBase + "_횡단");
             groupId = CivilDb.SampleLineGroup.Create(gname, alignId);
             if (groupId.IsNull) { ed.WriteMessage("\n[횡단도] 검토선 그룹을 못 만들었습니다."); Flush(log); return; }
+            // ★[검토 지적] <b>만든 사람이 등록한다.</b> 종단 세로줄이 이 그룹을 빼려면 알아야 하는데,
+            //   종전엔 옛 경로(ProfileCommand)만 등록해서 <b>[횡단도]가 만든 그룹은 아무도 몰랐다</b>.
+            ProfileCommand.LastXsecGroupId = groupId;
 
             // 표본 지표면 — 우리 것만.
             int nSampled = 0; string sampErr = null;
@@ -593,8 +596,8 @@ public sealed class XsecViewCommand
         return n;
     }
 
-    private const string XsecAxisLayer = "DH-횡단-축";      // 표고축·눈금 — 빨강
-    private const string XsecTextLayer = "DH-횡단-글씨";    // 표고 숫자·측점·GH·FH — 흰색
+    internal const string XsecAxisLayer = "DH-횡단-축";      // 표고축·눈금 — 빨강
+    internal const string XsecTextLayer = "DH-횡단-글씨";    // 표고 숫자·측점·GH·FH — 흰색
 
     /// <summary>★★[JACK 0826 "횡단뷰는 중앙에 스케일을 넣고 스케일 아래 측점 GH, FH가 들어가야 해"]
     ///
@@ -912,10 +915,10 @@ public sealed class XsecViewCommand
 
     /// <summary>횡단 도곽 전용 레이어 — ★종단도의 <c>DH-도곽범위(모형)</c>와 <b>따로 둔다</b>:
     /// 같이 쓰면 횡단을 지울 때 종단 도곽까지 지워진다.</summary>
-    private const string XsecFrameLayer = "DH-횡단-도곽";
+    internal const string XsecFrameLayer = "DH-횡단-도곽";
 
     /// <summary>칸 경계선 레이어 — 한 칸에 하나씩 들어갔는지 대보는 자다. 인쇄에서는 끄면 된다.</summary>
-    private const string XsecCellLayer = "DH-횡단-칸";
+    internal const string XsecCellLayer = "DH-횡단-칸";
 
     /// <summary>★★[JACK 0826 "상단도 50만 남기는 걸로 하자"] <b>횡단도 전용 제목 자리(종이 mm).</b>
     ///
@@ -980,9 +983,9 @@ public sealed class XsecViewCommand
     {
         get { double s = 0; foreach (double r in QtColRatio) s += r; return s * QtTextMm; }
     }
-    private const string QtLayerEdge = "DH-횡단-표(테두리)";   // 초록
-    private const string QtLayerLine = "DH-횡단-표(줄)";       // 빨강
-    private const string QtLayerText = "DH-횡단-표(글씨)";     // 흰색
+    internal const string QtLayerEdge = "DH-횡단-표(테두리)";   // 초록
+    internal const string QtLayerLine = "DH-횡단-표(줄)";       // 빨강
+    internal const string QtLayerText = "DH-횡단-표(글씨)";     // 흰색
 
     /// <summary>★★[JACK 0826 "표 크기와 글씨도 너무 잘 안 맞어 … 참고자료 설계검토를 참고해봐"]
     ///
@@ -1176,7 +1179,25 @@ public sealed class XsecViewCommand
         ObjectId hideStyle = ObjectId.Null;
         try { hideStyle = SectionCommand.EnsureHiddenSampleLineStyle(db, cdoc); } catch { }
 
-        int nStyle = 0, nVis = 0, nLbl = 0;
+        // ★★★[JACK 0827 "횡단 객체를 격리했다 복귀하면 종단에 빨간 측점선이 엄청 생겨"]
+        //   <b>원인: AutoCAD의 객체 격리가 쓰는 스위치가 바로 <c>Entity.Visible</c>이다.</b>
+        //   그래서 "복귀"는 격리했던 것만이 아니라 <b>우리가 숨겨 둔 것까지 전부 켠다</b> —
+        //   우리가 잠가 둔 문을 남이 같은 열쇠로 열어젖히는 셈이다.
+        //
+        //   <b>레이어를 끄면 견딘다.</b> 레이어 상태는 격리·복귀가 건드리지 않는 별개의 층이다.
+        //   <see cref="ProfileCommand"/>는 <b>이미 그렇게 하고 있었다</b>(스타일+레이어끄기+Visible 세 겹).
+        //   그런데 여기는 <b>두 겹</b>뿐이라 갈라졌다 — 또 "같은 일을 두 곳에서 따로" 한 대가다.
+        //   → 같은 레이어(<c>ProfileCommand.XsecHiddenLayer</c>)를 쓴다. 자를 하나로 만든다.
+        ObjectId hideLayer = ObjectId.Null;
+        try
+        {
+            using var trL = db.TransactionManager.StartTransaction();
+            hideLayer = SectionCommand.EnsureLayer(db, trL, ProfileCommand.XsecHiddenLayer, 8);
+            trL.Commit();
+        }
+        catch { }
+
+        int nStyle = 0, nVis = 0, nLbl = 0, nLay = 0;
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
@@ -1189,7 +1210,11 @@ public sealed class XsecViewCommand
                     // ① 스타일 — 선·꼭짓점을 안 그리는 전용 스타일로 바꾼다.
                     if (!hideStyle.IsNull) { try { ln.StyleId = hideStyle; nStyle++; } catch { } }
 
-                    // ③ 객체 자신 — 마지막 겹. 스타일이 무엇을 하든 이건 화면에서 빠진다.
+                    // ② 레이어 — <b>격리 복귀가 못 건드리는 겹</b>. 이것이 진짜 자물쇠다.
+                    if (!hideLayer.IsNull && ln.LayerId != hideLayer)
+                    { try { ln.LayerId = hideLayer; nLay++; } catch { } }
+
+                    // ③ 객체 자신 — 보조. 격리 복귀에 되살아나므로 <b>여기에만 기대면 안 된다</b>.
                     if (ln.Visible) { ln.Visible = false; nVis++; }
                 }
                 catch { }
@@ -1203,8 +1228,11 @@ public sealed class XsecViewCommand
                     {
                         try
                         {
-                            if (tr.GetObject(lg, OpenMode.ForWrite) is Entity le && le.Visible)
-                            { le.Visible = false; nLbl++; }
+                            if (tr.GetObject(lg, OpenMode.ForWrite) is not Entity le) continue;
+                            // 라벨도 같은 레이어로 — 측점 글씨와 지시선이 여기 산다.
+                            if (!hideLayer.IsNull && le.LayerId != hideLayer)
+                            { try { le.LayerId = hideLayer; nLay++; } catch { } }
+                            if (le.Visible) { le.Visible = false; nLbl++; }
                         }
                         catch { }
                     }
@@ -1214,7 +1242,40 @@ public sealed class XsecViewCommand
         }
         catch (System.Exception ex) { log?.AppendLine("  검토선 숨기기 실패 — " + ex.Message); }
 
+        // ④ 그 레이어를 <b>끄고 동결한다</b>.
+        //
+        //   ★★★[JACK 0827 "격리 후 복귀하면 종단에 세로 측점선이 엄청 많이 생겨"]
+        //   <b>원인: 우리가 켜 둔 '단면검토선 자리 격자선'이 횡단용 검토선까지 본다.</b>
+        //   종단뷰는 <b>그 선형에 달린 검토선을 전부</b> 보고 자리마다 세로줄을 긋는데,
+        //   횡단용은 측점마다 본체·(전)·(후) 셋이라 <b>세 배</b>로 늘어난다.
+        //   평소엔 검토선이 숨어 있어 Civil이 줄을 안 긋다가, 격리 복귀로 보이게 되면 전부 긋는다.
+        //
+        //   <b>끄기(Off)로는 모자랐다.</b> 끈 레이어는 평면에서 안 보일 뿐 <b>여전히 살아 있어</b>
+        //   격자선이 그 자리를 찾아낸다. <b>동결(Freeze)</b>은 다르다 — 동결된 레이어의 객체는
+        //   화면 재생성 자체에서 빠지므로 격자선도 자리를 못 찾는다. 격리·복귀도 동결은 안 건드린다.
+        //   (검토선은 이미 다 쓴 뒤다 — 횡단면도는 만들어졌고, 기하 데이터를 읽는 경로는 별개다.)
+        bool layOff = false, layFrozen = false;
+        try
+        {
+            using var trO = db.TransactionManager.StartTransaction();
+            var lt = (LayerTable)trO.GetObject(db.LayerTableId, OpenMode.ForRead);
+            if (lt.Has(ProfileCommand.XsecHiddenLayer))
+            {
+                ObjectId lid = lt[ProfileCommand.XsecHiddenLayer];
+                var lr = (LayerTableRecord)trO.GetObject(lid, OpenMode.ForWrite);
+                if (!lr.IsOff) lr.IsOff = true;
+                layOff = true;
+                // ★현재 레이어는 동결할 수 없다 — 그 경우 조용히 넘어간다(우리 전용이라 그럴 일은 없다).
+                try { if (lid != db.Clayer && !lr.IsFrozen) lr.IsFrozen = true; layFrozen = lr.IsFrozen; }
+                catch { layFrozen = false; }
+            }
+            trO.Commit();
+        }
+        catch { }
+
         log?.AppendLine($"  횡단용 검토선 숨김 — 스타일 {nStyle}개 · 라벨 {nLbl}개 · 객체 {nVis}개"
+                      + $" · 레이어 옮김 {nLay}개 · 끄기 {(layOff ? "O" : "X")} · <b>동결 {(layFrozen ? "O" : "X")}</b>"
+                      + (layFrozen ? "" : "  ⚠동결이 안 됐다 — 격리 복귀 뒤 종단에 세로줄이 쏟아질 수 있다")
                       + (hideStyle.IsNull ? "  ⚠숨김 스타일을 못 만들었다(객체만 숨겼다)" : "")
                       + $"  (평면도를 계획평면도로 쓰므로 한 겹도 남으면 안 된다)");
         return nVis;
@@ -1349,6 +1410,20 @@ public sealed class XsecViewCommand
     }
 
     /// <summary>지금 뷰들이 쓰는 스타일 — 눈금을 손보려면 <b>실제로 붙은 스타일</b>을 알아야 한다.</summary>
+    /// <summary>★★★[JACK 0827 · 검토 지적] <b>"횡단용 검토선 그룹인가"를 재는 자는 하나뿐이다.</b>
+    ///
+    /// <para>종전엔 <b>두 곳이 서로 다른 자</b>를 들고 있었다 — 지우는 쪽(<c>WipeOldGroups</c>)은
+    /// <c>DH횡단_횡단</c>으로, 종단 세로줄에서 빼는 쪽은 <c>_단면</c>으로 쟀다.
+    /// 그런데 [횡단도]가 실제로 만드는 이름은 <c>DH횡단_횡단_1</c>이라
+    /// <b>빼는 쪽 자에는 아예 안 걸렸다</b> — 이 프로젝트가 반복해 데인 그 함정이다.</para>
+    ///
+    /// <para><c>_단면</c>도 함께 본다 — <see cref="ProfileCommand"/>가 옛 경로에서 그 이름으로 만든다.
+    /// 둘 다 "횡단면도용"이라는 점에서는 같으므로 <b>빼는 자</b>는 둘을 다 잡아야 한다.</para></summary>
+    internal static bool IsXsecGroupName(string name)
+        => name != null
+        && (name.StartsWith(SectionCommand.GroupBase + "_횡단", System.StringComparison.Ordinal)
+         || name.StartsWith(SectionCommand.GroupBase + "_단면", System.StringComparison.Ordinal));
+
     private static ObjectId XsecStyleId(Database db, List<(ObjectId Id, double St, string Name)> views)
     {
         if (views == null || views.Count == 0) return ObjectId.Null;
@@ -1408,29 +1483,50 @@ public sealed class XsecViewCommand
                 // ① 크기 — 다섯 축 모두
                 // ★[JACK 0826 "중심이 먹어야 하는데 왼쪽 오른쪽만 먹었어"]
                 //   축마다 <b>이름과 결과</b>를 남긴다 — 어느 축이 안 먹는지 로그로 갈린다.
-                var axes = new (string Nm, CivilDb.Styles.AxisStyle Ax)[]
+                // ★★★[JACK 0827 "x간격띄우기는 아직도 해결 안 됨"] <b>세 시점을 각각 잰다.</b>
+                //   ① 쓴 직후 <b>같은 객체</b>에서 되읽기 ② <b>스타일에서 새로 꺼내</b> 읽기
+                //   ③ 커밋 뒤 새 트랜잭션에서 읽기.
+                //   ①만 맞고 ②가 틀리면 <b>우리가 쥔 것이 스타일이 아니라 복사본</b>이라는 뜻이다 —
+                //   그러면 아무리 써도 화면에 안 간다. 어느 시점에 값이 새는지 여기서 갈린다.
+                //   <b>델리게이트로 꺼낸다</b> — 매번 새로 꺼내야 ②를 잴 수 있기 때문이다.
+                //   <b><c>using</c>을 붙인다</b> — 이 계열 스타일은 <c>GraphStyle</c>처럼
+                //   Dispose할 때 값이 실제로 반영되는 것들이 있다(같은 파일에서 이미 그렇게 쓰고 있다).
+                double wantOff = TickOffsetMm / 1000.0;
+                var axes = new (string Nm, System.Func<CivilDb.Styles.AxisStyle> Get)[]
                 {
-                    ("중심", st.CenterAxis), ("왼쪽", st.LeftAxis), ("오른쪽", st.RightAxis),
-                    ("위", st.TopAxis), ("아래", st.BottomAxis),
+                    ("중심", () => st.CenterAxis), ("왼쪽", () => st.LeftAxis), ("오른쪽", () => st.RightAxis),
+                    ("위", () => st.TopAxis), ("아래", () => st.BottomAxis),
                 };
-                foreach (var (axNm, ax) in axes)
+                foreach (var (axNm, get) in axes)
                 {
-                    if (ax == null) { axNote.Append($" {axNm}=없음"); continue; }
                     string r1 = "?", r2 = "?";
-                    try { ax.MajorTickStyle.Size = TickMajorMm / 1000.0; nSize++; r1 = "크기O"; }
-                    catch (System.Exception e1) { r1 = "크기X(" + e1.GetType().Name + ")"; }
-                    try { ax.MinorTickStyle.Size = TickMinorMm / 1000.0; } catch { }
-                    try { ax.MajorTickStyle.TextHeight = TickTextMm / 1000.0; } catch { }
-                    try { ax.MajorTickStyle.Justification = CivilDb.Styles.AxisTickJustificationType.BottomOrRight; } catch { }
+                    double b1 = double.NaN;
                     try
                     {
-                        ax.MajorTickStyle.OffsetX = TickOffsetMm / 1000.0;
-                        // 되읽어 확인한다 — 쓰기는 성공했는데 값이 안 남는 경우가 있다.
-                        double back = ax.MajorTickStyle.OffsetX;
-                        r2 = System.Math.Abs(back - TickOffsetMm / 1000.0) < 1e-9
-                            ? "띄우기O" : $"띄우기X(되읽으니 {back * 1000:F1}mm)";
+                        using (var ax = get())
+                        {
+                            if (ax == null) { axNote.Append($" {axNm}=없음"); continue; }
+                            try { ax.MajorTickStyle.Size = TickMajorMm / 1000.0; nSize++; r1 = "크기O"; }
+                            catch (System.Exception e1) { r1 = "크기X(" + e1.GetType().Name + ")"; }
+                            try { ax.MinorTickStyle.Size = TickMinorMm / 1000.0; } catch { }
+                            try { ax.MajorTickStyle.TextHeight = TickTextMm / 1000.0; } catch { }
+                            try { ax.MajorTickStyle.Justification = CivilDb.Styles.AxisTickJustificationType.BottomOrRight; } catch { }
+                            try { ax.MajorTickStyle.OffsetX = wantOff; b1 = ax.MajorTickStyle.OffsetX; }
+                            catch (System.Exception e2) { r2 = "띄우기X(" + e2.GetType().Name + ")"; }
+                        }   // ← 여기서 Dispose된다. 반영이 여기 걸려 있다면 이 뒤라야 보인다.
+
+                        if (r2 == "?")
+                        {
+                            double b2 = double.NaN;
+                            try { using (var ax2 = get()) b2 = ax2.MajorTickStyle.OffsetX; } catch { }
+                            bool ok1 = System.Math.Abs(b1 - wantOff) < 1e-9;
+                            bool ok2 = System.Math.Abs(b2 - wantOff) < 1e-9;
+                            r2 = ok1 && ok2 ? "띄우기O"
+                               : ok1 ? $"띄우기X(쓴 직후는 {b1 * 1000:F1}인데 <b>새로 꺼내니 {b2 * 1000:F1}mm</b> — 복사본을 쥐고 있었다)"
+                               : $"띄우기X(쓴 직후부터 {b1 * 1000:F1}mm)";
+                        }
                     }
-                    catch (System.Exception e2) { r2 = "띄우기X(" + e2.GetType().Name + ")"; }
+                    catch (System.Exception e3) { r2 = "띄우기X(" + e3.GetType().Name + ")"; }
                     axNote.Append($" {axNm}:{r1}·{r2}");
                 }
 
@@ -1482,6 +1578,25 @@ public sealed class XsecViewCommand
         // ★[JACK 0826 "이 면적이 축척하고도 관련이 있나?"] <b>수직 과장</b>을 남긴다 —
         //   과장이 1배가 아니면 도면에서 자로 잰 면적(BO 등)이 <b>그 배수만큼 부푼다</b>.
         //   우리 계산은 지표면의 실제 표고를 쓰므로 과장과 무관하다 — 어느 쪽이 맞는지 이 줄로 갈린다.
+        // ★★[JACK 0827 "X 간격 띄우기도 중심이 아직도 여전히 7mm야"]
+        //   <b>같은 트랜잭션 안에서 되읽으면 성공으로 보인다</b> — 쓴 값이 아직 메모리에 있어서다.
+        //   커밋한 <b>뒤에 새 트랜잭션</b>으로 다시 읽어야 진짜 남았는지 알 수 있다.
+        try
+        {
+            using var trV = db.TransactionManager.StartTransaction();
+            if (trV.GetObject(styleId, OpenMode.ForRead) is CivilDb.Styles.SectionViewStyle st2)
+            {
+                double got = double.NaN;
+                try { got = st2.CenterAxis.MajorTickStyle.OffsetX; } catch { }
+                double want = TickOffsetMm / 1000.0;
+                axNote.Append(double.IsNaN(got) ? "  [커밋 뒤 중심축을 못 읽었다]"
+                    : System.Math.Abs(got - want) < 1e-9
+                        ? $"  [커밋 뒤 확인: 중심 {got * 1000:F1}mm — 남았다]"
+                        : $"  ⚠[커밋 뒤 확인: 중심 {got * 1000:F1}mm — 쓴 값 {TickOffsetMm:F0}mm이 <b>안 남았다</b>]");
+            }
+            trV.Commit();
+        }
+        catch { }
         log?.AppendLine($"  눈금 — 스타일 '{axisName}' · 크기 주 {TickMajorMm:0.#}mm·보조 {TickMinorMm:0.#}mm({nSize}축)"
                       + $" · 색 {nColor}곳 ·{axNote}"
                       + (double.IsNaN(vexag) ? "" : $" · 수직과장 {vexag:0.##}배"
@@ -1689,14 +1804,24 @@ public sealed class XsecViewCommand
                 bool a = Ok(xs[k]), b = Ok(xs[k + 1]);
                 if (a == b) continue;                       // 경계가 아니다
                 double lo2 = xs[k], hi2 = xs[k + 1];
-                for (int it = 0; it < 8; it++)              // 0.25m → 1mm 아래
+                for (int it = 0; it < 14; it++)             // ★0.1m → 0.006mm 아래
                 {
                     double mid = (lo2 + hi2) / 2.0;
                     if (Ok(mid) == a) lo2 = mid; else hi2 = mid;
                 }
                 // 경계 <b>양쪽</b>에 점을 둔다 — 안쪽 점이 있어야 그 칸을 셀 수 있다.
+                // ★[JACK 0827] 경계 <b>양쪽</b>에 점을 둔다 — 안쪽 점이 있어야 그 칸을 셀 수 있다.
+                //   그리고 경계 <b>안쪽 0.2m를 1cm마다</b> 훑는다: 지표면이 끝나는 자리는 대개
+                //   비탈이 만나는 곳이라 <b>형상이 급하게 바뀐다</b>. 0.1m 간격으로는 그 곡률을 놓친다.
                 edges.Add(a ? lo2 : hi2);
                 edges.Add(a ? hi2 : lo2);
+                double inner = a ? lo2 : hi2;          // 지표면이 있는 쪽
+                double dir = a ? -1.0 : +1.0;          // 안쪽으로 가는 방향
+                for (int q = 1; q <= 20; q++)          // 안쪽 0.2m를 <b>1cm</b>마다 — 기본 간격의 10분의 1
+                {
+                    double xe = inner + dir * (q * 0.01);
+                    if (xe > -wl && xe < wr) edges.Add(xe);
+                }
             }
         }
         if (edges.Count > 0)
@@ -1731,6 +1856,22 @@ public sealed class XsecViewCommand
 
         var qq = DH.Grading.Core.XsecQuantity.Compute(xs, gy, xs, py2, xs, ey);
         if (dbg != null)
+        // ★[JACK 0827 "토적표 정확도 향상"] <b>어느 구간을 쟀는지</b> 남긴다 —
+        //   BO로 잡은 영역과 맞대 보려면 우리가 센 자리를 알아야 한다.
+        if (dbg != null && gy != null && py2 != null)
+        {
+            double x0 = double.NaN, x1 = double.NaN, hMax = 0; int nCell = 0;
+            for (int j = 0; j < n && j < gy.Length && j < py2.Length; j++)
+            {
+                double d = gy[j] - py2[j];
+                if (double.IsNaN(d) || d <= 0) continue;
+                if (double.IsNaN(x0)) x0 = xs[j];
+                x1 = xs[j]; nCell++;
+                if (d > hMax) hMax = d;
+            }
+            if (nCell > 0)
+                dbg.Append($" [절토구간 x{x0:F2}~{x1:F2}({x1 - x0:F2}m) 최대높이 {hMax:F3}m {nCell}점]");
+        }
             dbg.Append($" → 절토 {qq.Cut:F2} 성토 {qq.Fill:F2} 터파기 {qq.ExcShallow:F2}+{qq.ExcDeep:F2} 되메 {qq.Backfill:F2}"
                        + (qq.NoPlanCells > 0
                           ? $"  ⚠계획면이 없는 칸 {qq.NoPlanCells}개는 <b>원지반 기준</b>으로 셌다(터파기가 부풀 수 있다)"
@@ -1771,6 +1912,7 @@ public sealed class XsecViewCommand
         int nOk = 0, nNo = 0;
         double sumCut = 0, sumFill = 0, sumExc = 0;
         int nNoPlan = 0;
+        int nNoG = 0, nNoP = 0, nNoE = 0;
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
@@ -1806,12 +1948,17 @@ public sealed class XsecViewCommand
                 {
                     // ★[JACK 0826] 처음 세 개만 찍으면 하필 <b>부지 밖 측점</b>이 걸려
                     //   값이 나온 측점을 못 본다. <b>값이 나온 것</b>도 세 개까지 따로 남긴다.
-                    var dbg = (nOk < 3 || nNo < 2) ? new System.Text.StringBuilder() : null;
+                    // ★[JACK 0827] <b>모든 측점을 남긴다.</b> 셋만 찍으니 하필 부지 밖 측점이 걸려
+                    //   "왜 전부 빈칸인지"를 볼 수가 없었다. 측점이 30개 남짓이라 길지도 않다.
+                    var dbg = new System.Text.StringBuilder();
                     var q = QtyAt(tr, al0, s.St, wl, wr, csG, csP, csE, dbg);
                     if (dbg != null && dbg.Length > 0) log?.AppendLine($"    [{s.Name}]{dbg}");
                     map[s.Name] = q;
                     if (double.IsNaN(q.Cut) && double.IsNaN(q.ExcShallow)) nNo++;
                     if (q.NoPlanCells > 0) nNoPlan++;
+                    if (q.MissG) nNoG++;
+                    if (q.MissP) nNoP++;
+                    if (q.MissE) nNoE++;
                     else
                     {
                         nOk++;
@@ -1825,7 +1972,12 @@ public sealed class XsecViewCommand
             tr.Commit();
         }
         catch (System.Exception ex) { log?.AppendLine("  수량 계산 실패 — " + ex.Message); }
-        log?.AppendLine($"  수량 — {nOk}개 측점에서 뺐다"
+        // ★[JACK 0827 "토적표에 갑자기 값이 안 뜸 — 모든 측점이 -"]
+        //   <b>왜 못 뺐는지</b>가 안 찍혀 있었다. 지표면별로 몇 개가 범위 밖이었는지 센다.
+        log?.AppendLine($"  수량 — {nOk}개 측점에서 뺐다 · 못 뺀 것 {nNo}개"
+                      + (nNoG > 0 ? $" · ⚠원지반이 없던 측점 {nNoG}개" : "")
+                      + (nNoP > 0 ? $" · ⚠계획면이 없던 측점 {nNoP}개(부지 밖이면 정상)" : "")
+                      + (nNoE > 0 ? $" · 터파기가 없던 측점 {nNoE}개" : "")
                       + (nNoPlan > 0 ? $" · ⚠계획면이 터파기를 못 덮은 측점 {nNoPlan}개" : "")
                       + $" · 합계 절토 {sumCut:F1}㎡ · 성토 {sumFill:F1}㎡ · 터파기 {sumExc:F1}㎡"
                       + "  ※단면 면적이다(체적은 측점 간격을 곱해야 한다)");
@@ -1901,7 +2053,7 @@ public sealed class XsecViewCommand
                     {
                         if (tr.GetObject(gid, OpenMode.ForRead) is not CivilDb.SampleLineGroup g) continue;
                         string gn = g.Name ?? "";
-                        if (!gn.StartsWith(SectionCommand.GroupBase + "_횡단", System.StringComparison.Ordinal)) continue;
+                        if (!IsXsecGroupName(gn)) continue;
                         // 뷰부터 세어 둔다 — 그룹을 지우면 딸린 뷰도 같이 사라진다.
                         foreach (ObjectId sid in g.GetSampleLineIds())
                         {
@@ -1932,4 +2084,14 @@ public sealed class XsecViewCommand
                                   + " — 안 지우면 같은 이름을 Civil이 거부해 그림 없는 도면이 된다");
         return nG;
     }
+
+    /// <summary>지우기 목록에서 쓰는 별칭 — <see cref="SheetCommand.EraseAll"/>이 이 레이어들을 함께 지운다.</summary>
+    internal static string TitleLayer => XsecTitleLayer;
+    internal static string AxisLayer => XsecAxisLayer;
+    internal static string TextLayer => XsecTextLayer;
+    internal static string CellLayer => XsecCellLayer;
+    internal static string FrameLayer => XsecFrameLayer;
+    internal static string QtEdgeLayer => QtLayerEdge;
+    internal static string QtLineLayer => QtLayerLine;
+    internal static string QtTextLayer => QtLayerText;
 }

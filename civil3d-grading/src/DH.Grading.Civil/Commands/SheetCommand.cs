@@ -1542,10 +1542,29 @@ public static class SheetCommand
                         //   Civil에 <c>GridAtSampleLineStations</c>가 따로 있다 — <b>단면검토선 자리에만</b> 긋는다.
                         //   그걸 켜고 증분 격자를 끄면 <b>세로줄 하나에 측점 하나</b>가 된다.
                         //   측점의 원천을 하나로 모은 것과 같은 규칙을 격자에도 적용하는 것이다.
-                        bool wantGrid = t == CivilDb.Styles.ProfileViewDisplayStyleType.GridAtSampleLineStations;
-                        bool isGridV = wantGrid
+                        // ★★★[JACK 0827 "격리 후 복귀하면 종단에 세로 측점선이 엄청 많이 생겨"]
+                        //   <b>순정 격자를 끄고 우리가 긋는다.</b>
+                        //   <c>GridAtSampleLineStations</c>는 <b>선형에 달린 검토선을 전부</b> 본다 —
+                        //   횡단용까지 포함해서다. 횡단용은 측점마다 본체·(전)·(후) 셋이라 <b>세 배</b>가 된다.
+                        //   평소엔 그 검토선이 숨어 있어 조용하다가, 격리 복귀로 보이게 되면 전부 쏟아진다.
+                        //   Civil에 "이 그룹만 보라"는 설정은 <b>없다</b>(실측: SampleLineGroup·ProfileView 어디에도).
+                        //   레이어 끄기도 <b>동결</b>도 못 막았다(로그: 동결 O인데 그대로) — 격자선은
+                        //   레이어가 아니라 <b>검토선 데이터</b>를 보기 때문이다.
+                        //   → 순정을 끄고 <see cref="DrawVgpGrid"/>가 <b>종단용 검토선 자리에만</b> 긋는다.
+                        //   (v28.2에 직접 긋기를 버린 적이 있는데, 그때 문제는 근거가 <b>계획 종단의 PVI</b>라
+                        //    75개가 도면을 덮은 것이었다. 근거를 측점으로 바꾸면 되는 일이었다.)
+                        //   ★[자체확인 0827] <b>판정에서 빠뜨리면 끄지도 못한다.</b> 종전엔 <c>wantGrid</c>가
+                        //   "이것이 순정 격자인가"와 "켤 것인가" <b>두 뜻을 겸했다</b>. 켜기를 끄기로 바꾸자
+                        //   판정까지 같이 꺼져 <c>GridAtSampleLineStations</c>를 <b>아예 안 건드리게</b> 됐다
+                        //   (로그: 되읽기 목록에서 그 이름이 통째로 사라졌다). 두 뜻을 갈라 놓는다.
+                        //   ★[검토 지적] <b>세로줄을 그리는 표시는 넷이다</b> — 이 파일의 다른 주석이
+                        //   이미 그렇게 적어 두었는데(전수 확인 기록) 여기는 <c>GridAtHGP</c>를 빠뜨렸다.
+                        //   템플릿에서 그것이 켜져 있으면 곡선 시·종점마다 순정 줄이 남아 우리 줄과 섞인다.
+                        bool isGridV = t == CivilDb.Styles.ProfileViewDisplayStyleType.GridAtSampleLineStations
+                                    || t == CivilDb.Styles.ProfileViewDisplayStyleType.GridAtHGP
                                     || t == CivilDb.Styles.ProfileViewDisplayStyleType.GridVerticalMajor
                                     || t == CivilDb.Styles.ProfileViewDisplayStyleType.GridVerticalMinor;
+                        bool wantGrid = false;   // 셋 다 끈다 — 세로줄은 우리가 긋는다
                         if (isGridV)
                         {
                             // ★[v23.20] <b>켠 뒤 되읽는다.</b> 종전엔 켜기 전 상태만 찍어서
@@ -2134,60 +2153,120 @@ public static class SheetCommand
         {
             using var tr = db.TransactionManager.StartTransaction();
             var pv = (CivilDb.ProfileView)tr.GetObject(pvId, OpenMode.ForRead);
-
-            // ── 계획 종단을 찾는다(AutoMarks·PlantPvi와 같은 규칙 — 마지막 일치).
-            CivilDb.Profile pad = null;
-            try
-            {
-                if (tr.GetObject(pv.AlignmentId, OpenMode.ForRead) is CivilDb.Alignment al)
-                    foreach (ObjectId pid in al.GetProfileIds())
-                        if (tr.GetObject(pid, OpenMode.ForRead) is CivilDb.Profile p &&
-                            (p.Name.Contains("정지") || p.Name.Contains("계획"))) pad = p;
-            }
-            catch (System.Exception ex) { log.AppendLine("   굴곡부격자: 종단 찾기 실패 — " + Brief(ex)); }
-            if (pad == null) { log.AppendLine("   굴곡부격자: 계획 종단을 못 찾아 건너뜀"); tr.Commit(); return; }
-
-            // ── PVI 측점을 모아 밴드와 같은 간격으로 솎는다.
-            var src = pad;
-            var sts = new List<double>();
-            int nPvi = 0;
-            try
-            {
-                foreach (CivilDb.ProfilePVI q in src.PVIs) { try { sts.Add(q.Station); nPvi++; } catch { } }
-            }
-            catch (System.Exception ex) { log.AppendLine("   굴곡부격자: PVI 읽기 실패 — " + Brief(ex)); }
-            sts.Sort();
-            double weed = WeedPaperMm / 1000.0 * scale;
-            var keep = new List<double>();
-            foreach (double s in sts)
-                if (keep.Count == 0 || s - keep[keep.Count - 1] >= weed) keep.Add(s);
-
-            var ext = pv.GeometricExtents;
             var layer = SectionCommand.EnsureLayer(db, tr, LayVgpGrid, CalsGridVert);
             var ms = (BlockTableRecord)tr.GetObject(
                 SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
 
-            // 다시 돌릴 때 겹치지 않게 먼저 지운다 — 우리 레이어라 남의 것을 건드릴 일이 없다.
+            //
+            //   <c>ElevationMin/Max</c>  <b> </b> - v23.10
+            //   ( 102.71~112.00m  95~125m    1/3 ).
+            //      . <b>  .</b>
+            var ext = pv.GeometricExtents;
+            double lo = pv.ElevationMin, hi = pv.ElevationMax;
+            double stA = pv.StationStart;
+            double xa = 0, ya = 0, xb = 0, yb = 0;
+            if (!pv.FindXYAtStationAndElevation(stA, lo, ref xa, ref ya) ||
+                !pv.FindXYAtStationAndElevation(stA, hi, ref xb, ref yb) ||
+                System.Math.Abs(yb - ya) < 1e-9)
+            { log.AppendLine("   세로줄: 축 위치를 못 찾아 건너뜀"); tr.Commit(); return; }
+            double mPerY = (hi - lo) / (yb - ya);
+            double gLo = lo + (ext.MinPoint.Y - ya) * mPerY;
+            double gHi = lo + (ext.MaxPoint.Y - ya) * mPerY;
+            if (gHi < gLo) (gLo, gHi) = (gHi, gLo);
+
+            CivilDb.Profile ground = null;
+            try
+            {
+                if (tr.GetObject(pv.AlignmentId, OpenMode.ForRead) is CivilDb.Alignment alg)
+                    foreach (ObjectId pid in alg.GetProfileIds())
+                        if (tr.GetObject(pid, OpenMode.ForRead) is CivilDb.Profile p && p.Name.Contains("원지반"))
+                            ground = p;
+            }
+            catch { }
+
+            var stG = new List<double>();
+            int nSkipGrp = 0;
+            try
+            {
+                var xsecGid = ProfileCommand.LastXsecGroupId;
+                if (tr.GetObject(pv.AlignmentId, OpenMode.ForRead) is CivilDb.Alignment al2)
+                    foreach (ObjectId gid in al2.GetSampleLineGroupIds())
+                    {
+                        try
+                        {
+                            if (tr.GetObject(gid, OpenMode.ForRead) is not CivilDb.SampleLineGroup grp) continue;
+                            bool isXsec = (!xsecGid.IsNull && xsecGid.Database == db && gid == xsecGid)
+                                       || XsecViewCommand.IsXsecGroupName(grp.Name);
+                            if (isXsec) { nSkipGrp++; continue; }
+                            foreach (ObjectId slid in grp.GetSampleLineIds())
+                                try { if (tr.GetObject(slid, OpenMode.ForRead) is CivilDb.SampleLine sl2) stG.Add(sl2.Station); }
+                                catch { }
+                        }
+                        catch { }
+                    }
+            }
+            catch (System.Exception ex) { log.AppendLine("   세로줄: 검토선 읽기 실패 — " + Brief(ex)); }
+            stG.Sort();
+
+            double weed = System.Math.Max(WeedPaperMm / 1000.0 * scale, 1e-6);
+            var keepG = new List<double>();
+            foreach (double s0 in stG)
+                if (keepG.Count == 0 || s0 - keepG[keepG.Count - 1] >= weed) keepG.Add(s0);
+
             int wiped = 0;
+            double xMin = ext.MinPoint.X - 1e-6, xMax = ext.MaxPoint.X + 1e-6;
+            double yMin = ext.MinPoint.Y - 1e-6, yMax = ext.MaxPoint.Y + 1e-6;
             foreach (ObjectId id in ms)
             {
                 try
                 {
                     if (tr.GetObject(id, OpenMode.ForRead) is not Entity e || e.LayerId != layer) continue;
+                    if (e is not Line old) continue;
+                    var q = old.StartPoint;
+                    if (q.X < xMin || q.X > xMax || q.Y < yMin || q.Y > yMax) continue;
                     tr.GetObject(id, OpenMode.ForWrite).Erase(); wiped++;
                 }
                 catch { }
             }
-            // ★★[v28.2 · JACK 0811] <b>손으로 긋는 세로줄은 이제 안 쓴다.</b>
-            //   세로줄은 Civil 순정 <c>GridAtSampleLineStations</c>가 <b>단면검토선 자리에</b> 그어 준다 —
-            //   선형이 바뀌면 따라오고, 측점과 일대일로 맞는다.
-            //   여기서 긋던 것은 <b>계획 종단의 PVI마다</b> 그어서(실측 75개) 도면을 덮어 버렸다.
-            //   지우는 일만 남긴다 — 지난 판에 그어 둔 것이 남아 있으면 그것도 덮개가 되니까.
+
+            int nGrid = 0, nCut = 0, nFull = 0;
+            foreach (double s0 in keepG)
+            {
+                try
+                {
+                    double top = gHi;
+                    if (ground != null)
+                    {
+                        try
+                        {
+                            double z = ground.ElevationAt(s0);
+                            if (!double.IsNaN(z) && z > gLo) { top = System.Math.Min(z, gHi); nCut++; }
+                        }
+                        catch { nFull++; }
+                    }
+                    double x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+                    if (!pv.FindXYAtStationAndElevation(s0, gLo, ref x1, ref y1)) continue;
+                    if (!pv.FindXYAtStationAndElevation(s0, top, ref x2, ref y2)) continue;
+                    var seg = new Line(new Point3d(x1, y1, 0), new Point3d(x2, y2, 0));
+                    seg.SetDatabaseDefaults(db);
+                    seg.LayerId = layer;
+                    ms.AppendEntity(seg);
+                    tr.AddNewlyCreatedDBObject(seg, true);
+                    nGrid++;
+                }
+                catch { }
+            }
             tr.Commit();
-            log.AppendLine("   세로줄 청소: 순정 격자(단면검토선 자리)를 쓰므로 직접 긋지 않는다" +
-                           (wiped > 0 ? $" · 지난 판에 그어 둔 {wiped}개 지움" : ""));
+
+            log.AppendLine($"   세로줄 직접 긋기: {nGrid}개 / 검토선 측점 {stG.Count}개"
+                         + (nSkipGrp > 0 ? $" · 횡단용 그룹 {nSkipGrp}개 제외" : "")
+                         + $" · 격자 {gLo:F2}~{gHi:F2}m"
+                         + (ground != null ? $" · 원지반에서 자름 {nCut}개" + (nFull > 0 ? $"(범위 밖 {nFull}개는 전체)" : "")
+                                           : "  ⚠원지반 종단을 못 찾아 격자 전체로 그었다")
+                         + (wiped > 0 ? $" · 지난 판 {wiped}개 지움" : "")
+                         + (nGrid < keepG.Count ? $"  ⚠{keepG.Count - nGrid}개는 자리를 못 찾아 건너뜀" : ""));
         }
-        catch (System.Exception ex) { log.AppendLine("   세로줄 청소 실패 — " + Brief(ex)); }
+        catch (System.Exception ex) { log.AppendLine("   세로줄 직접 긋기 실패 — " + Brief(ex)); }
     }
 
     /// <summary>★★[v31.1 · JACK 0812] <b>밴드 제목칸 꾸미기 — 안쪽으로 0.5 간격 이중 테두리.</b>
@@ -3641,6 +3720,17 @@ public static class SheetCommand
             ProfileCommand.LayerRoute, ProfileCommand.LayerChain,
             // ★[v32.50] 단면검토선에 그린 지시선·측점 글씨 — 없으면 다시 그릴 때 겹쳐 쌓인다(JACK 0819)
             ProfileCommand.LayerSlMajor, ProfileCommand.LayerSlMinor, ProfileCommand.LayerSlTextOld,
+            // ★★[JACK 0827 "종단도 새로 만들기로 하니 횡단뷰만 지워진 상태가 된다"]
+            //   종단도를 다시 그리면 선형이 죽고 <b>거기 매달린 횡단면도도 Civil이 지운다</b>.
+            //   그런데 우리가 그린 제목·이름·도곽·표는 생 도면 객체라 <b>유령으로 남았다</b>.
+            //   같이 지운다 — 지운 뒤 <c>XsecViewCommand.Refresh</c>가 같은 자리에 다시 그린다.
+            XsecViewCommand.TitleLayer, XsecViewCommand.AxisLayer, XsecViewCommand.TextLayer,
+            XsecViewCommand.CellLayer, XsecViewCommand.FrameLayer,
+            XsecViewCommand.QtEdgeLayer, XsecViewCommand.QtLineLayer, XsecViewCommand.QtTextLayer,
+            // ★★[JACK 0827 "종단 새로 그리기할 때 기존 종단의 수직 막대가 안 없어져"]
+            //   옹벽·가시설 막대. 그리는 쪽이 그릴 때만 지웠으므로, 옹벽이 사라진 도면에서는
+            //   <b>영영 남았다</b>. 소유 레이어를 아는 이 목록이 지우는 것이 맞다.
+            ProfileCommand.LayerVBarWall, ProfileCommand.LayerVBarShore,
         };
         try
         {

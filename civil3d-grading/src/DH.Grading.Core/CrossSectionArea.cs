@@ -158,6 +158,11 @@ public readonly record struct XsecQty(
     double ExcDeep,        // 터파기 5.0m 초과
     double Backfill)       // 되메우기
 {
+    /// <summary>어느 지표면을 못 읽었나 — 표가 빈칸일 때 <b>왜</b>인지 갈린다.</summary>
+    public bool MissG { get; init; }
+    public bool MissP { get; init; }
+    public bool MissE { get; init; }
+
     /// <summary>터파기는 있는데 계획면이 없던 칸 수 — 0이 아니면 그만큼 <b>원지반 기준</b>으로 셌다는 뜻이다.
     /// 기준면이 조용히 바뀌면 터파기가 부풀어 오르므로 호출부가 로그로 알려야 한다.</summary>
     public int NoPlanCells { get; init; }
@@ -233,7 +238,8 @@ public static class XsecQuantity
             //    구조물이 차지하는 몫은 아직 못 뺀다(구조물 형상이 모델에 없다) — 그만큼 많게 나온다.
             back = shallow + deep;
         }
-        return new XsecQty(cut, fill, shallow, deep, back) { NoPlanCells = noPlan };
+        return new XsecQty(cut, fill, shallow, deep, back)
+        { NoPlanCells = noPlan, MissG = G == null, MissP = P == null, MissE = E == null };
     }
 
     /// <summary>세 가로축의 <b>합집합</b> — 겹치는 값은 하나로 친다(1mm 안이면 같은 자리).</summary>
