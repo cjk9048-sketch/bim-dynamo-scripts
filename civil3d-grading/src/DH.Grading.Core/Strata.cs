@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 
 namespace DH.Grading.Core;
@@ -41,22 +41,16 @@ public enum InterpMode
     Elevation,
 }
 
-/// <summary>이 층이 토적표의 <b>어느 칸</b>으로 가는가 — 층을 만들 때 사용자가 같이 고른다(JACK 확정).
-/// <para>순서나 이름으로 <b>추측하지 않는다</b>. 규칙이 눈에 보여야 하고 현장마다 다를 수 있어야 한다.</para></summary>
-public enum QtyBucket
-{
-    /// <summary>표에 안 쓴다 — 모델에만 남는다(경암처럼 표에 줄이 없는 층).</summary>
-    None,
-    Soil,        // 토  사
-    Weathered,   // 풍화암
-    Soft,        // 연  암
-}
+// ★★★[JACK 0828] <b>수량 분류는 <see cref="RockClass"/> 하나다.</b>
+//   처음엔 여기 <c>QtyBucket</c>(토사·풍화암·연암 셋)을 따로 두었다 — 그때 표가 셋이었기 때문이다.
+//   JACK이 <b>다섯</b>(토사·풍화암·연암·보통암·경암)으로 확정하셔서 둘이 같은 것을 가리키게 됐다.
+//   <b>같은 것을 두 이름으로 두면 언젠가 한쪽만 고쳐진다</b>(§50) — 하나로 모았다.
 
 /// <summary>층 하나의 정의. 이름은 <b>사용자가 정한다</b>(현장마다 쓰는 말이 다르다).</summary>
 /// <param name="Name">사용자가 붙인 이름 — 표토·풍화토·풍화암·연암·경암 등.</param>
 /// <param name="Bucket">토적표에서 갈 칸.</param>
 /// <param name="Mode">경계면을 무엇으로 만들지.</param>
-public readonly record struct StratumDef(string Name, QtyBucket Bucket, InterpMode Mode);
+public readonly record struct StratumDef(string Name, RockClass Bucket, InterpMode Mode);
 
 /// <summary>보링공 하나. <b>사용자가 치는 것은 두께와 수위 심도뿐</b>이다.</summary>
 /// <param name="Name">공 이름 — <c>GP1</c> 식.</param>

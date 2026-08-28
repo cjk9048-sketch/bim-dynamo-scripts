@@ -145,15 +145,27 @@ public sealed class SectionCommand
         ObjectId profStyle = PickStyle(db, cdoc.Styles.ProfileStyles, "기본", "Standard", "Basic");
         ObjectId excStyle = EnsureExcavProfileStyle(db, cdoc);   // ★[0824] 터파기 = 마젠타
         ObjectId profLabels = PickStyle(db, cdoc.Styles.LabelSetStyles.ProfileLabelSetStyles, "_없음", "None", "표준", "Standard");
+        // ★★★[JACK 0828] <b>이 경로에도 지층 스타일을 먹인다.</b>
+        //   지금까지 [종단/횡단]은 지층도 지하수위도 <b>기본 스타일</b>로 만들었다 —
+        //   같은 증상(다 초록)을 [종단도] 경로와 <b>다른 이유로</b> 내고 있었다.
+        string ltS = LoadLinetype(db, "HIDDEN2") ?? LoadLinetype(db, "HIDDEN") ?? LoadLinetype(db, "DASHED");
+        string ltW = LoadLinetype(db, "DASHDOT2") ?? LoadLinetype(db, "DIVIDE2") ?? LoadLinetype(db, "DASHDOT") ?? ltS;
+        ObjectId stS = EnsureProfileStyle(db, cdoc, StrataStyleName, StrataAci, ltS);
+        ObjectId stW = EnsureProfileStyle(db, cdoc, WaterStyleName, WaterAci, ltW);
         int nProf = 0;
         foreach (var s in surfs)
         {
             try
             {
                 // ★[JACK 0824] 터파기 종단선만 **마젠타** 스타일로.
-                var styleFor = s.Label == "터파기" && !excStyle.IsNull ? excStyle : profStyle;
+                var styleFor = s.Label == "터파기" && !excStyle.IsNull ? excStyle
+                             : s.Label == "지층" && !stS.IsNull ? stS
+                             : s.Label == "지하수위" && !stW.IsNull ? stW
+                             : profStyle;
                 var pid0 = CivilDb.Profile.CreateFromSurface(s.ProfileName, alignId, s.SurfId, layerId, styleFor, profLabels);
                 if (s.Label == "터파기") PaintExcavProfile(db, pid0);   // ★[JACK 0825] 스타일만으론 안 된다(ByLayer가 이긴다)
+                else if (s.Label == "지층") PaintStrataProfile(db, pid0, false);
+                else if (s.Label == "지하수위") PaintStrataProfile(db, pid0, true);
                 nProf++;
             }
             catch (System.Exception ex)
@@ -278,6 +290,45 @@ public sealed class SectionCommand
 
     /// <summary>터파기 종단선 스타일 이름 — 마젠타(JACK 0824).</summary>
     internal const string ExcavStyleName = "DH_터파기(마젠타)";
+
+    internal const string StrataProfLayer = "DH-종단-지층";
+    internal const string WaterProfLayer = "DH-종단-지하수위";
+    internal const short StrataAci = 8, WaterAci = 5;
+
+    /// <summary>★★★[JACK 0828 "종단에서 지층색이 반영이 안 됐어 다 초록색으로 나와"]
+    /// <b>원인: 터파기가 겉은 길을 지층은 안 걸었다.</b>
+    /// <para>이 파일 위쪽에 이미 적혀 있는 §0826의 결론 — <c>Line=ACI6@0</c>의
+    /// <b><c>@0</c>은 "그려진 레이어를 따른다"</b> — 이 그대로 지층에도 적용된다.
+    /// 종단은 <b>선형 레이어</b>(CR-GRND=원지반, 초록)에 만들어지므로,
+    /// 스타일을 회색·파랑으로 잡아도 화면은 초록이다.</para>
+    /// <para>또 <b>[종단/횡단] 경로는 지층 스타일을 아예 안 먹였다</b> — 전부 기본 스타일이었다.
+    /// 두 경로가 같은 증상을 서로 다른 이유로 내고 있었다.</para>
+    /// <para>→ 터파기와 <b>똑같이</b> 만든 뒤 제 레이어로 옮기고, 내려앉은 자리를 되읽어 남긴다.</para></summary>
+    internal static void PaintStrataProfile(Database db, ObjectId profileId, bool water)
+    {
+        if (profileId.IsNull) return;
+        string want = water ? WaterProfLayer : StrataProfLayer;
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            if (tr.GetObject(profileId, OpenMode.ForWrite) is Entity pe)
+            {
+                var lay = EnsureLayer(db, tr, want, water ? WaterAci : StrataAci);
+                if (!lay.IsNull) pe.LayerId = lay;
+                string got = "?"; try { got = pe.Layer; } catch { }
+                try
+                {
+                    DiagLog.Append("\n    " + (water ? "지하수위" : "지층") + " 종단 → 레이어 '" + got + "'"
+                                 + (lay.IsNull ? " ⚠<b>레이어를 못 만들었다</b>"
+                                    : got == want ? " OK" : " ⚠<b>안 옮겨졌다(바라는 곳 " + want + ")</b>"));
+                }
+                catch { }
+            }
+            tr.Commit();
+        }
+        catch (System.Exception ex)
+        { try { DiagLog.Append("\n    지층 종단 레이어 실패 — " + ex.Message); } catch { } }
+    }
 
     /// <summary>★★[JACK 0825] <b>터파기 종단선을 마젠타로 — 객체 색을 직접 박는다.</b>
     ///
@@ -435,6 +486,99 @@ public sealed class SectionCommand
     /// <summary>★[JACK 0824] <b>터파기 종단선은 마젠타.</b> 그 색의 종단 스타일을 만들어 두고 그 ObjectId를 준다.
     /// <para>이미 있으면 그대로 쓴다(매번 만들면 도면에 스타일이 쌓인다). 만들지 못하면
     /// <c>ObjectId.Null</c>을 돌려주고, 호출부는 기본 스타일로 물러난다 — 색 하나 때문에 종단이 안 생기면 안 된다.</para></summary>
+    /// <summary>지층 종단선 스타일 이름 — 혼탁(ACI 8), 짧은 점선.</summary>
+    internal const string StrataStyleName = "DH_지층(점선)";
+
+    /// <summary>지하수위 종단선 스타일 이름 — 파랑(ACI 5), 일점쇄선(JACK 0828).</summary>
+    internal const string WaterStyleName = "DH_지하수위(파랑)";
+
+    /// <summary>★★★[JACK 0828] <b>종단선 스타일을 색·선종류로 만든다.</b>
+    ///
+    /// <para>JACK: <i>"모든 지층은 점선으로 표시해. 지하수위는 파란색 점선으로 하고,
+    /// 점선이 터파기 지표면 점선하고 헷갈리지 않게 점선 형태를 좀 다른 걸로 해."</i></para>
+    ///
+    /// <para><b>터파기가 쓰던 길을 넓힌 것</b>이다(<see cref="EnsureExcavProfileStyle"/>).
+    /// 같은 일을 하는 함수를 새로 쓰면 한쪽만 고쳐진다 — 색과 선종류만 밖에서 받게 했다.</para>
+    ///
+    /// <para><b>선종류를 갈라 쓴다</b>: 터파기 <c>DASHED</c>(긴 파선) · 지층 <c>HIDDEN</c>(짧은 점선) ·
+    /// 지하수위 <c>DASHDOT</c>(일점쇄선). 일점쇄선은 도면에서 <b>수위·중심선</b>에 쓰는 관례라 뜻도 맞는다.</para></summary>
+    internal static ObjectId EnsureProfileStyle(Database db, CivilApp.CivilDocument cdoc,
+                                                string name, short aci, string linetype)
+    {
+        try
+        {
+            var coll = cdoc.Styles.ProfileStyles;
+            ObjectId id = ObjectId.Null;
+            foreach (ObjectId sid in coll)
+            {
+                using var tr0 = db.TransactionManager.StartTransaction();
+                try
+                {
+                    if (tr0.GetObject(sid, OpenMode.ForRead) is CivilStyles.ProfileStyle st0 && st0.Name == name)
+                        id = sid;
+                }
+                catch { }
+                tr0.Commit();
+                if (!id.IsNull) break;
+            }
+            if (id.IsNull) id = coll.Add(name);
+
+            using var tr = db.TransactionManager.StartTransaction();
+            if (tr.GetObject(id, OpenMode.ForWrite) is CivilStyles.ProfileStyle st)
+                foreach (var t in new[]
+                {
+                    CivilStyles.ProfileDisplayStyleProfileType.Line,
+                    CivilStyles.ProfileDisplayStyleProfileType.Curve,
+                    CivilStyles.ProfileDisplayStyleProfileType.LineExtension,
+                    CivilStyles.ProfileDisplayStyleProfileType.SymmetricalParabola,
+                    CivilStyles.ProfileDisplayStyleProfileType.AsymmetricalParabola,
+                    CivilStyles.ProfileDisplayStyleProfileType.ParabolicCurveExtension,
+                })
+                {
+                    try
+                    {
+                        var ds = st.GetDisplayStyleProfile(t);
+                        if (ds == null) continue;
+                        if (ds.Color.ColorIndex != aci)
+                            ds.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
+                                Autodesk.AutoCAD.Colors.ColorMethod.ByAci, aci);
+                        ds.Visible = true;
+                        if (linetype != null) { try { ds.Linetype = linetype; } catch { } }
+                        try { if (ds.Layer != "0") ds.Layer = "0"; } catch { }
+                    }
+                    catch { }
+                }
+            tr.Commit();
+            return id;
+        }
+        catch { return ObjectId.Null; }
+    }
+
+    /// <summary>선종류를 도면에 싣는다(없으면). 못 실으면 <c>null</c>.</summary>
+    internal static string LoadLinetype(Database db, string nm)
+    {
+        try
+        {
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                var lt = (LinetypeTable)tr.GetObject(db.LinetypeTableId, OpenMode.ForRead);
+                bool has = lt.Has(nm);
+                tr.Commit();
+                if (has) return nm;
+            }
+            try { db.LoadLineTypeFile(nm, "acadiso.lin"); } catch { }
+            try { db.LoadLineTypeFile(nm, "acad.lin"); } catch { }
+            using (var tr2 = db.TransactionManager.StartTransaction())
+            {
+                var lt2 = (LinetypeTable)tr2.GetObject(db.LinetypeTableId, OpenMode.ForRead);
+                bool has2 = lt2.Has(nm);
+                tr2.Commit();
+                return has2 ? nm : null;
+            }
+        }
+        catch { return null; }
+    }
+
     internal static ObjectId EnsureExcavProfileStyle(Database db, CivilApp.CivilDocument cdoc)
     {
         const short Magenta = ExcavAci;   // ACI 6 = 마젠타
@@ -593,7 +737,55 @@ public sealed class SectionCommand
         // ★[JACK 0824] 터파기는 맨 뒤에 — 밴드가 종단1(원지반)·종단2(정지면)를 이름 순서가 아니라
         //   이 목록 순서로 잡으므로, 앞에 끼워 넣으면 밴드 값이 통째로 밀린다.
         if (!exc.IsNull) list.Add(new SurfPick(exc, excNm, ProfExcavName, "터파기"));
+
+        // ★★★[JACK 0828] <b>지층·지하수위를 여기 더한다 — 종단·횡단이 함께 따라온다.</b>
+        //
+        //   JACK: <i>"지층이 만들어지면 종단도 눌러서 그릴 때랑 횡단도 눌러서 그릴 때
+        //   자동으로 반영되어야 해."</i>
+        //
+        //   <b>고칠 곳이 여기 하나뿐이다.</b> 종단도(<see cref="ProfileCommand"/>)와
+        //   횡단도(<see cref="XsecViewCommand"/>)가 <b>둘 다 이 목록</b>을 보고 표본 지표면을 정한다 —
+        //   두 곳을 따로 고치면 언젠가 한쪽만 고쳐진다(§50).
+        //
+        //   ★<b>반드시 맨 뒤에 붙인다.</b> 바로 위 주석이 경고하듯 밴드는 종단1·종단2를
+        //   <b>이름이 아니라 이 목록 순서</b>로 잡는다 — 앞에 끼워 넣으면 밴드 값이 통째로 밀린다.
+        AppendStrata(db, cdoc, list);
         return list;
+    }
+
+    /// <summary>지층 지표면(<c>DH_지층_1_…</c>)과 지하수위를 <b>번호 차례로</b> 목록 끝에 붙인다.
+    /// <para>없으면 아무 일도 안 한다 — 지층을 안 만든 도면은 지금까지와 똑같이 돈다.</para></summary>
+    private static void AppendStrata(Database db, CivilApp.CivilDocument cdoc,
+                                     System.Collections.Generic.List<SurfPick> list)
+    {
+        try
+        {
+            var found = new System.Collections.Generic.List<(int Ord, ObjectId Id, string Nm)>();
+            ObjectId water = ObjectId.Null; string waterNm = "";
+            using var tr = db.TransactionManager.StartTransaction();
+            foreach (ObjectId sid in cdoc.GetSurfaceIds())
+            {
+                try
+                {
+                    if (tr.GetObject(sid, OpenMode.ForRead) is not CivilDb.Surface s) continue;
+                    string nm = s.Name ?? "";
+                    if (nm == StrataDraw.WaterSurfName) { water = sid; waterNm = nm; continue; }
+                    if (!nm.StartsWith(StrataDraw.SurfPrefix, System.StringComparison.Ordinal)) continue;
+                    // 이름이 <c>DH_지층_3_풍화암</c>이므로 앞머리를 떼고 첫 숫자를 차례로 쓴다.
+                    string rest = nm.Substring(StrataDraw.SurfPrefix.Length);
+                    int us = rest.IndexOf('_');
+                    int ord = int.TryParse(us > 0 ? rest.Substring(0, us) : rest, out int o) ? o : 999;
+                    found.Add((ord, sid, nm));
+                }
+                catch { }
+            }
+            tr.Commit();
+
+            found.Sort((a, b) => a.Ord.CompareTo(b.Ord));
+            foreach (var f in found) list.Add(new SurfPick(f.Id, f.Nm, f.Nm, "지층"));
+            if (!water.IsNull) list.Add(new SurfPick(water, waterNm, waterNm, "지하수위"));
+        }
+        catch { }
     }
 
     /// <summary>이름이 baseName 또는 baseName_숫자 인가.</summary>

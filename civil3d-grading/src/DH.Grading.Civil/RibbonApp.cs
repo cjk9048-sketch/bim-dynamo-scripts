@@ -30,6 +30,8 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SheetCommand))]               // DHSHEET(도곽 — A1 배치·모형 도곽범위)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.XsecViewCommand))]            // DHXVIEW(횡단도 — 옹벽·가시설은 (전)(후) 두 장)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SheetSettingsCommand))]       // DHSHEETSET(도면 설정 — 횡단·원지반굴곡·표·배경지도)
+[assembly: CommandClass(typeof(DH.Grading.Civil.StrataPalette))]                       // DHSTRATA(지층 구성 — 우측 도킹바)
+[assembly: CommandClass(typeof(DH.Grading.Civil.StrataDraw))]                          // DHSTRATAPICK(평면에서 시추 위치 찍기)
 
 namespace DH.Grading.Civil;
 
@@ -357,6 +359,20 @@ public sealed class RibbonApp : IExtensionApplication
             //   검토선은 [종단도]가 측점과 함께 알아서 놓고, 종단·횡단을 한 번에 만들던 옛 명령은
             //   [종단도]·[횡단도]로 갈렸다. 명령(DHSAMPLE·DHSECTION) 자체는 남겨 둔다 —
             //   버튼만 뺀 것이라 옛 스크립트나 손버릇이 깨지지 않는다.
+            // ★★★[JACK 0828] <b>지층 구성 — 우측 도킹바.</b>
+            //   토적표의 풍화암·연암 칸을 채우려면 지층이 있어야 한다.
+            //   팝업이 아니라 도킹바인 이유: 평면도를 보면서 <b>여러 번 찍어야</b> 하기 때문이다.
+            var btnStrata = MakeButton(
+                "지층\n구성", "DHSTRATA ", "시추주상도를 보고 지층을 만듭니다(우측 도킹창)", "측점");
+            btnStrata.ToolTip = MakeTip("지층 구성 (DHSTRATA)",
+                "우측에 도킹창이 열립니다.\n" +
+                "**① 지층**을 정하고(이름은 조사보고서 그대로, 수량 분류는 다섯 중 하나)\n" +
+                "**② 평면에서 찍기**로 시추 위치를 클릭하면 `GP1`부터 차례로 표에 들어갑니다.\n" +
+                "지반고는 **원지반에서 자동으로 읽습니다** — 사람이 치는 것은 **각 층의 두께**뿐입니다.\n" +
+                "**[확인]**을 누르면 지층면이 만들어집니다(평면에서는 숨겨 둡니다 — 종단·횡단에서만 보입니다).", null);
+            pDraw.Items.Add(btnStrata);
+            pDraw.Items.Add(Spacer());
+
             var btnXsec = MakeButton(
                 "횡단도", "DHXVIEW ", "종단도에서 정한 측점대로 횡단면도를 만듭니다(옹벽·가시설은 (전)(후) 두 장)", "횡단위치");
             btnXsec.ToolTip = MakeTip("횡단도 (DHXVIEW)",

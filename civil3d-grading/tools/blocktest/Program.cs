@@ -6055,6 +6055,13 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
 //   새 형태는 <b>왼쪽 12줄과 오른쪽 12줄이 대응</b>하므로 그 대칭이 곧 검사다.
 {
     Console.WriteLine("\n== S69 수량표 구조(두 단) ==");
+    // ★★[검토 0828 · LOW-6] <b>Core의 검사를 하니스에서도 돌린다.</b>
+    //   <c>SpansValid()</c>·<c>WidthsPaired()</c>는 <b>AutoCAD 안에서만</b> 불리고 있었다 —
+    //   도면을 켜야 확인되는 검사는 <b>안 켜면 안 도는 검사</b>다.
+    //   (<c>SpansValid</c>는 한동안 <b>아무 데서도 안 불렸다</b> — 같은 실수를 반복하지 않는다.)
+    Check("S69 ★Core 세로 병합 검사가 통과한다", QuantityTable.SpansValid(), "맞음");
+    Check("S69 ★Core 좌우 짝 폭 검사가 통과한다", QuantityTable.WidthsPaired(out string w69), w69);
+
     Check("S69 내용 12줄", QuantityTable.BodyRows == 12, $"{QuantityTable.BodyRows}줄");
     Check("S69 머리까지 13줄", QuantityTable.TotalRows == 13, $"{QuantityTable.TotalRows}줄");
     Check("S69 줄 배열도 12개", QuantityTable.Rows.Length == 12, $"{QuantityTable.Rows.Length}개");
@@ -6499,11 +6506,11 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     // 층 다섯 — 위에서 아래로. 표토·풍화토는 지형을 따라가고(두께), 연암은 제 모양대로 눕는다(표고).
     var defs = new[]
     {
-        new StratumDef("표토",   QtyBucket.Soil,      InterpMode.Thickness),
-        new StratumDef("풍화토", QtyBucket.Soil,      InterpMode.Thickness),
-        new StratumDef("풍화암", QtyBucket.Weathered, InterpMode.Thickness),
-        new StratumDef("연암",   QtyBucket.Soft,      InterpMode.Elevation),
-        new StratumDef("경암",   QtyBucket.None,      InterpMode.Elevation),
+        new StratumDef("표토",   RockClass.Soil,      InterpMode.Thickness),
+        new StratumDef("풍화토", RockClass.Soil,      InterpMode.Thickness),
+        new StratumDef("풍화암", RockClass.Weathered, InterpMode.Thickness),
+        new StratumDef("연암",   RockClass.Soft,      InterpMode.Elevation),
+        new StratumDef("경암",   RockClass.Soil,      InterpMode.Elevation),
     };
 
     // JACK이 예로 든 세 공(경암은 얇게 덧붙였다). 수위는 GL에서 2m 아래.
@@ -6574,8 +6581,8 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     {
         var d2 = new[]
         {
-            new StratumDef("표토",   QtyBucket.Soil,      InterpMode.Thickness),
-            new StratumDef("연암",   QtyBucket.Soft,      InterpMode.Elevation),
+            new StratumDef("표토",   RockClass.Soil,      InterpMode.Thickness),
+            new StratumDef("연암",   RockClass.Soft,      InterpMode.Elevation),
         };
         // ★★[실측 0828] <b>지반고가 보링공과 같으면 역전이 안 생긴다.</b>
         //   두 방식이 같은 가중치를 쓰므로 차이가 언제나 <c>IDW(두께) ≥ 0</c>으로 떨어진다 —
@@ -6606,7 +6613,7 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
 
     // ── 지하수위는 <b>지층 제약을 안 받는다</b> — 풍화암 속에 있어도 그대로 둔다.
     {
-        var d3 = new[] { new StratumDef("표토", QtyBucket.Soil, InterpMode.Thickness) };
+        var d3 = new[] { new StratumDef("표토", RockClass.Soil, InterpMode.Thickness) };
         var l3 = new[] { new BoreLog("BH-W", 0, 0, 100.0, new[] { 1.0 }, 5.0) };   // 표토 1m, 수위 5m 아래
         var m3 = StrataModel.Build(d3, l3, out _);
         var c3 = m3.At(0, 0, 100.0);
@@ -6616,7 +6623,7 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
 
     // ── 지하수위가 <b>땅 위로는</b> 못 올라간다(그건 침수다).
     {
-        var d4 = new[] { new StratumDef("표토", QtyBucket.Soil, InterpMode.Thickness) };
+        var d4 = new[] { new StratumDef("표토", RockClass.Soil, InterpMode.Thickness) };
         var l4 = new[] { new BoreLog("BH-U", 0, 0, 100.0, new[] { 1.0 }, -3.0) };  // 심도 음수 = 지표 위
         var m4 = StrataModel.Build(d4, l4, out _);
         var c4 = m4.At(0, 0, 100.0);
@@ -6625,7 +6632,7 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
 
     // ── 공이 <b>하나뿐</b>이어도 모델이 선다 (TIN이면 못 만드는 자리)
     {
-        var d5 = new[] { new StratumDef("표토", QtyBucket.Soil, InterpMode.Thickness) };
+        var d5 = new[] { new StratumDef("표토", RockClass.Soil, InterpMode.Thickness) };
         var l5 = new[] { new BoreLog("BH-1", 0, 0, 100.0, new[] { 2.0 }, double.NaN) };
         var m5 = StrataModel.Build(d5, l5, out string w5);
         var far = m5.At(500, 500, 80.0);                 // 아주 먼 자리
@@ -6636,10 +6643,10 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
 
     // ── 못 만들 때는 <b>이유를 남기고</b> null을 돌려준다 — 조용히 빈 모델을 주지 않는다.
     {
-        var bad = StrataModel.Build(new[] { new StratumDef("표토", QtyBucket.Soil, InterpMode.Thickness) },
+        var bad = StrataModel.Build(new[] { new StratumDef("표토", RockClass.Soil, InterpMode.Thickness) },
                                     new BoreLog[0], out string wb);
         Check("S79 ★보링공이 없으면 이유를 남긴다", bad == null && wb.Length > 0, wb);
-        var bad2 = StrataModel.Build(new[] { new StratumDef("표토", QtyBucket.Soil, InterpMode.Thickness) },
+        var bad2 = StrataModel.Build(new[] { new StratumDef("표토", RockClass.Soil, InterpMode.Thickness) },
                                      new[] { new BoreLog("X", 0, 0, 100.0, new[] { 1.0, 2.0 }, double.NaN) },
                                      out string wb2);
         Check("S79 ★층 수가 안 맞으면 버리고 이유를 남긴다", bad2 == null && wb2.Length > 0, wb2);
