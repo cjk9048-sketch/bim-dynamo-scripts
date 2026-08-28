@@ -1,3 +1,4 @@
+﻿using QT = DH.Grading.Core.QuantityTable;
 using System.Collections.Generic;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
@@ -42,6 +43,16 @@ public sealed class XsecViewCommand
 
     /// <summary>횡단면도 이름을 쓰는 레이어 — 우리가 직접 그리므로 지울 때도 여기만 보면 된다.</summary>
     internal const string XsecTitleLayer = "DH-횡단-이름";
+
+    /// <summary>★★★[JACK 0828 "측점 글씨색이 노란색인데 검정으로 바꿔"]
+    /// <b>측점 밴드 글씨는 제목과 레이어를 나눈다.</b>
+    /// <para>종전엔 <see cref="XsecTitleLayer"/>(노랑)를 <b>제목과 같이 썼다</b> —
+    /// 그래서 밴드 안의 측점만 검정으로 바꿀 방법이 없었다. 한 레이어가 두 가지 뜻을 겸하면
+    /// 하나를 바꿀 때 다른 하나가 딸려 온다(§52가 변수에서 겪은 것과 같은 함정이다).</para>
+    /// <para>색은 <b>7(흰색/검정)</b> — JACK 선택. 화면에선 하얗고 <b>인쇄하면 검정</b>이라
+    /// 한국 도면의 표준 '검정'이다. 밴드의 GL·FGL 글씨와 같은 색이라 세 줄이 한 덩이로 보인다.
+    /// (배경이 검정이라 <b>진짜 검정(250)으로 하면 안 보인다</b> — 그래서 7이다.)</para></summary>
+    internal const string XsecStationLayer = "DH-횡단-측점";
 
     /// <summary>★★[JACK 0826 "측점 넣기 기능을 쓰니까 횡단뷰만 사라져 버렸어 —
     /// 전체적으로 업데이트가 돼야 해"] <b>마지막으로 그린 자리를 기억한다.</b>
@@ -132,7 +143,7 @@ public sealed class XsecViewCommand
         // ★★[JACK 0826 "지금 종단뷰도 도곽 사이즈에 맞춰서 최적 축척으로 들어가는 거잖아,
         //   그 원리랑 같은 거야"] — <b>맞다. 폭을 줄이는 게 아니라 축척을 고른다.</b>
         //
-        //   종이 규격(A1 841×594 · 안쪽 791×419.2mm)이 <b>고정</b>이고,
+        //   종이 규격(A1 841×594 · 안쪽 796×484mm[횡단])이 <b>고정</b>이고,
         //   그림이 그 안에 들어가도록 <b>축척을 사다리에서 골라</b> 도곽을 모형에 그린다.
         //   좌우 폭은 사용자가 정한 대로 <b>온전히</b> 쓴다 — 지형이 잘리면 안 된다.
         double wl = System.Math.Max(1.0, GradingSettings.XsecLeft);
@@ -390,7 +401,39 @@ public sealed class XsecViewCommand
         // ★★[검토] 표를 <b>오른쪽</b>에 둘 때와 <b>아래</b>에 둘 때를 <b>둘 다 계산</b>해
         //   축척이 작은 쪽(=그림이 큰 쪽)을 고른다. 3×2처럼 칸이 좁은 배치에서는
         //   표를 아래로 내리는 것만으로 <b>1:500 → 1:300</b>으로 두 단계가 살아난다.
-        double padW = 2 * CellPadMm, padH = 2 * CellPadMm + NameRoomMm;
+        // ★[JACK 0827] 주석 축척을 <b>여기서</b> 읽는다 — 밴드의 모형 높이를 계산해야 하기 때문이다.
+        double annoScale = SheetCommand.CurrentDrawingScale(db);
+
+        // ★★★[검토 0827 · CRITICAL] <b>경계상자에 밴드는 안 들어 있다 — 실측으로 확정.</b>
+        //   밴드가 2.0m일 때도 3.0m일 때도 잰 뷰 높이가 <b>둘 다 30.0m</b>였다(로그 15987·16346).
+        //   폭도 60.0m 딱 떨어진다 — 검토선 좌30+우30, 즉 <b>그래프 네모 하나</b>다.
+        //   그래서 <c>mv.H</c>에서 밴드를 빼던 종전 계산은 <b>없는 것을 뺀 것</b>이었다.
+        //   그림이 필요 이상 작아졌고, 무엇보다 <b>직전 실행이 남긴 스타일 값</b>을 읽으므로
+        //   같은 버튼인데 <b>전에 뭘 눌렀냐에 따라 축척이 달라졌다</b>(1:150 → 1:500 → 1:120…).
+        //   → <b>칸 수만 센다.</b> 종이 높이는 칸수 × 10mm이고 <b>축척과 무관</b>하다.
+        int bandRows = 0;
+        try
+        {
+            using var trB = db.TransactionManager.StartTransaction();
+            if (viewIds.Count > 0 &&
+                trB.GetObject(viewIds[0].Id, OpenMode.ForRead) is CivilDb.SectionView sv0)
+            {
+                using var bi0 = sv0.Bands.GetBottomBandItems();
+                bandRows = bi0.Count;
+            }
+            trB.Commit();
+        }
+        catch (System.Exception ex) { log.AppendLine("  밴드 칸 수를 못 셌다 — " + ex.Message); }
+        if (bandRows <= 0) { bandRows = BandRows; log.AppendLine($"  ⚠밴드 칸을 못 세어 {BandRows}칸으로 가정한다"); }
+
+        // 밴드가 먹는 <b>종이</b> 높이 — 이 하나를 예산·배치·표 자리가 <b>함께</b> 쓴다.
+        //   ★[검토 · HIGH-1] 종전엔 예산은 30mm를 빼고 배치는 밴드를 아예 몰랐다 —
+        //   그래서 칸 위아래로 32mm씩 비어 있는데도 표가 그래프에 붙어 겹쳤다(§50 그 함정).
+        //   ★[JACK 0827 "너무 여유를 둬서 횡단뷰가 작아지지 않게"] <b>실제 칸 수</b>로 잰다 —
+        //   3칸을 미리 예약하면 쓰지도 않는 10mm가 그림을 깎는다.
+        double bandPaperMm = bandRows * BandHeightMm;
+
+        double padW = 2 * CellPadMm, padH = 2 * CellPadMm + NameRoomMm + bandPaperMm;
         double gwRight = System.Math.Max(10.0, cellWmm - padW - TableGapMm - tableWmm);
         double ghRight = System.Math.Max(10.0, cellHmm - padH);
         double gwBelow = System.Math.Max(10.0, cellWmm - padW);
@@ -404,6 +447,19 @@ public sealed class XsecViewCommand
         //   <b>고정을 골랐으면 그 값을 그대로 쓴다.</b> 안 들어가도 <b>바꾸지 않는다</b> —
         //   사용자가 1:200을 콕 집었는데 우리가 1:250으로 올리면 <b>도면에 적힌 축척과 실제가 어긋난다.</b>
         //   현장에서 자로 재는 값이라 그게 넘치는 것보다 나쁘다. 넘친 채로 그리고 로그로 알린다.
+        // ★★[JACK 0827 "표 크기 변화에 따른 횡단도 배치별 축척 잘 고려해야 해"]
+        //   <b>새 표는 훨씬 넓고 낮다</b>(비율 합 25.5→70, 줄 19→13).
+        //   그래서 <b>오른쪽에 두면</b> 그림 폭을 크게 잡아먹고 <b>아래에 두면</b> 덜 먹는다 —
+        //   어느 쪽이 나은지는 <b>배치(1×1 ~ 3×2)마다 뒤집힌다</b>. 그 판단을 로그로 남긴다.
+        log.AppendLine($"  밴드 자리 — {bandRows}칸 × {BandHeightMm:0.#}mm = 종이 {bandPaperMm:F0}mm"
+                     + $" (경계상자에는 안 들어가므로 <b>잰 높이 {mv.H:F1}m는 그대로</b> 쓴다)");
+        log.AppendLine($"  축척 고르기 — 칸 {cellWmm:F0}×{cellHmm:F0}mm · 표 {tableWmm:F0}×{tableHmm:F0}mm"
+                     + $" · 오른쪽에 두면 자리 {gwRight:F0}×{ghRight:F0}→"
+                     + (sRight > 0 ? $"1:{sRight:F0}" : "안 들어감")
+                     + $" · 아래에 두면 자리 {gwBelow:F0}×{ghBelow:F0}→"
+                     + (sBelow > 0 ? $"1:{sBelow:F0}" : "안 들어감")
+                     + $" · <b>택함: {(tableRight ? "오른쪽" : "아래")}</b>");
+
         bool fixedScale = GradingSettings.XsecScale > 0;
         double scale = fixedScale ? GradingSettings.XsecScale : autoScale;
         double graphWmm = tableRight ? gwRight : gwBelow;
@@ -422,7 +478,6 @@ public sealed class XsecViewCommand
         double cellW = cellWmm * sc, cellH = cellHmm * sc;
         double tableRoom0 = tableRight ? (tableWmm + TableGapMm) * sc : 0.0;
         double tableBelow0 = tableRight ? 0.0 : (tableHmm + TableGapMm) * sc;
-        double annoScale = SheetCommand.CurrentDrawingScale(db);
         log.AppendLine($"  ★축척 1:{scale:F0}({(fixedScale ? "도면설정에서 고정" : "자동 — 칸에 맞춤")})"
                      + $" · 표는 {(tableRight ? "그림 오른쪽" : "그림 아래")}"
                      + $" (필요 가로 1:{mv.W * 1000.0 / graphWmm:F0} · 세로 1:{mv.H * 1000.0 / graphHmm:F0}"
@@ -430,6 +485,11 @@ public sealed class XsecViewCommand
         log.AppendLine($"  배치 {cols}×{rows}(한 장 {perSheet}개) · A1 {sheetW:F1}×{sheetH:F1}m"
                      + $" · 안쪽 {innerW:F1}×{innerH:F1}m(종이 {SheetCommand.InnerW:F0}×{XsecInnerH:F0}mm)"
                      + $" · 칸 {cellW:F1}×{cellH:F1}m(종이 {cellWmm:F0}×{cellHmm:F0}mm) · {nPages}장");
+        // ★★★[JACK 0827 "1:150만 되어도 상당히 작아서 잘 안 보여"]
+        //   <b>이제야 축척을 안다.</b> 눈금값·밴드 글자를 <b>종이에서 바라는 크기</b>로 되돌려 넣는다.
+        SetTextSizes(db, XsecStyleId(db, viewIds), scale, annoScale, log);
+        ProbeBandText(db, viewIds, scale, annoScale, log);
+
         if (annoScale > 0 && System.Math.Abs(annoScale - scale) > 1e-6)
             log.AppendLine($"  ※도면 주석 축척은 1:{annoScale:F0}(종단이 걸어 둔 것)이라 그대로 둔다 —"
                          + $" 횡단 글자·밴드가 <b>{scale / annoScale:F2}배</b>로 인쇄된다."
@@ -466,17 +526,27 @@ public sealed class XsecViewCommand
                         double bundleW = tableRight ? mv.W + gapM2 + tblW : mv.W;
                         // ★[검토] 표를 오른쪽에 둘 때도 <b>표 높이를 센다</b> — 표가 그림보다 길면
                         //   가운데 맞춤이라 위아래 <b>양쪽으로</b> 삐져나간다(전엔 아래로만 나갔다).
+                        // ★★★[검토 0827 · HIGH-1] <b>덩어리 높이에 밴드가 빠져 있었다.</b>
+                        //   예산(<c>padH</c>)은 밴드를 뺐는데 여기는 몰랐다 — 그래서 칸 위아래로
+                        //   32mm씩 비어 있는데도 표가 그래프에 붙어 겹쳤다. <b>같은 것을 두 곳에서 따로</b> 잰 것이다.
+                        //   밴드는 그래프 <b>아래</b>로 뻗으므로 세로 덩어리에만 더한다.
+                        double bandM2 = bandPaperMm * sc;
                         double bundleH = tableRight
-                            ? System.Math.Max(mv.H, QtTableHmm * sc)
-                            : mv.H + gapM2 + QtTableHmm * sc;
+                            ? System.Math.Max(mv.H + bandM2, QtTableHmm * sc)
+                            : mv.H + bandM2 + gapM2 + QtTableHmm * sc;
                         double leftX = cellAt[i].X + System.Math.Max(padM, (cellW - bundleW) / 2.0);
                         double botY = cellAt[i].Y + nameM
                                     + System.Math.Max(padM, (cellH - nameM - bundleH) / 2.0);
                         double wantCx = leftX + mv.W / 2.0;
-                        // 표가 아래면 그림은 그 위에 앉는다.
+                        // ★★★[JACK 0827 스샷 "넘어가는 배열이 있어"]
+                        //   <b>밴드가 앉을 자리를 비워 두고 그림을 올린다.</b>
+                        //   덩어리 높이(<c>bundleH</c>)에는 밴드를 더했는데 <b>그림 위치를 안 올려서</b>
+                        //   밴드가 <c>botY</c> 아래, 즉 <b>칸 밖으로</b> 뻗었다 —
+                        //   경계상자에 밴드가 없으니 화면으로만 보이고 계산에는 안 잡힌다.
+                        //   표가 아래면 그림은 그 위에 앉고, 밴드는 그림과 표 <b>사이</b>에 들어간다.
                         double wantCy = tableRight
-                            ? botY + mv.H / 2.0
-                            : botY + tableHmm * sc + gapM2 + mv.H / 2.0;
+                            ? botY + bandM2 + mv.H / 2.0
+                            : botY + tableHmm * sc + gapM2 + bandM2 + mv.H / 2.0;
                         double curCx = (ex.MinPoint.X + ex.MaxPoint.X) / 2.0;
                         double curCy = (ex.MinPoint.Y + ex.MaxPoint.Y) / 2.0;
                         var loc = sv.Location;
@@ -524,11 +594,18 @@ public sealed class XsecViewCommand
         int nTxt = DrawViewNames(db, nameAt, NameTextMm * sc, log);
         // 회사 스타일이 축을 안 그려 줄 때만 우리가 그린다 — 옮긴 뒤라야 자리가 맞다.
         if (nStyled == 0) DrawCenterAxis(db, viewIds, alignId, log);
+        // ★★★[JACK 0828 "가로 가자"] 회사 스타일이 축을 그려 줄 때는 <b>표고 숫자만</b> 가져온다.
+        //   Civil 래퍼 버그로 중심축 띄우기를 코드로 못 바꾸기 때문이다(<see cref="TickDiag"/>가 확정).
+        //   <b>축선·눈금 자국은 Civil이 그대로 그린다</b> — 안 되는 것 하나만 가져오는 것이 규칙이다.
+        //   자리는 뷰를 옮긴 <b>뒤</b>라야 맞으므로 <see cref="DrawCenterAxis"/>와 같은 자리에 둔다.
+        else DrawCenterTickLabels(db, viewIds, XsecStyleId(db, viewIds), scale, annoScale, log);
         DrawXsecFrames(db, at, nPages, sc, cols, rows, PageGap, scale, log);
         var qtyMap = CollectQty(db, slIds, alignId, wl, wr, surfs, log);
-        DrawQtyTables(db, viewIds, sc, tableRight, TableGapMm * sc, qtyMap, log);
+        DrawQtyTables(db, viewIds, bandPaperMm, sc, tableRight, TableGapMm * sc, qtyMap, log);
         // ★[JACK 0826] 선 색·눈금은 <b>숨기기 전</b>에 — 숨긴 뒤에도 되지만 로그 차례가 헷갈린다.
         ApplySectionStyles(db, cdoc, slIds, kindOf, log);
+        BindBandSections(db, viewIds, kindOf, scale, annoScale, log);
+        DrawStationBand(db, viewIds, scale, annoScale, log);   // ★[JACK 0827] 측점 칸에 우리 이름
         HideSampleLines(db, cdoc, slIds, groupId, log);   // ★뷰를 다 만든 뒤에 숨긴다
 
         log.AppendLine($"  횡단면도 이름 {nTxt}개 직접 씀(레이어 '{XsecTitleLayer}') — " +
@@ -598,6 +675,154 @@ public sealed class XsecViewCommand
 
     internal const string XsecAxisLayer = "DH-횡단-축";      // 표고축·눈금 — 빨강
     internal const string XsecTextLayer = "DH-횡단-글씨";    // 표고 숫자·측점·GH·FH — 흰색
+
+    /// <summary>★★★[JACK 0828 "가로 가자"] <b>중심축 표고 숫자를 우리가 쓴다.</b>
+    /// <para><b>왜 이 길인가</b>: Civil의 <c>CenterAxis.MajorTickStyle.OffsetX</c>는
+    /// <b>Autodesk 래퍼 버그</b>로 왼쪽축과 같은 칸을 쓴다(<see cref="TickDiag"/>가 JACK 도면에서 확정:
+    /// 왼쪽에 77mm를 쓰니 중심도 77mm가 됐고, 대조군인 크기는 안 따라왔다).
+    /// 그 칸은 <b>화면이 중심축을 그릴 때 안 보는 칸</b>이라(90mm를 넣어도 숫자가 안 움직였다)
+    /// <b>공개 API로 가는 길이 없다</b>.</para>
+    /// <para>→ <b>Civil의 눈금 <c>글자만</c> 끄고 우리가 쓴다.</b> 축선과 눈금 자국은 Civil이 그대로 그린다 —
+    /// 그건 잘 되고 있으므로 건드릴 이유가 없다. <b>안 되는 것 하나만</b> 가져온다.</para>
+    /// <para><b>자리는 재서 얻는다.</b> <c>FindXYAtOffsetAndElevation(0, 표고)</c>가
+    /// 오프셋 0(=노선 중심)의 도면 좌표를 알려 준다 — 가운데를 계산으로 짐작하지 않는다
+    /// (좌우 폭이 다르면 기하 중심과 노선 중심이 어긋난다).</para>
+    /// <para><b>표고 범위도 재서 얻는다.</b> <c>ElevationMin/Max</c>는 <b>자료 범위</b>라
+    /// Civil이 그린 격자(90~120)와 다르다 — 이 함정은 v23.10 표고바에서 한 번 데었다.
+    /// 경계상자의 위·아래 Y를 <c>FindOffsetAndElevationAtXY</c>로 <b>표고로 되돌려</b> 읽는다.</para></summary>
+    private static int DrawCenterTickLabels(Database db,
+                                            List<(ObjectId Id, double St, string Name)> views,
+                                            ObjectId styleId, double scale, double annoScale,
+                                            System.Text.StringBuilder log)
+    {
+        if (views == null || views.Count == 0) return 0;
+
+        // ── ① Civil의 중심축 눈금 <b>글자</b>를 끈다. 축선·눈금 자국(35·36)은 그대로 둔다.
+        //   ★[기억] 색을 바꾸며 <c>Visible</c>을 같이 켜서 회사가 꺼 둔 축이 전부 켜진 적이 있다.
+        //   그래서 <b>여기서는 끄기만</b> 하고, 끈 것과 이미 꺼져 있던 것을 갈라 적는다.
+        string offNote = "";
+        if (!styleId.IsNull)
+            try
+            {
+                using var trS = db.TransactionManager.StartTransaction();
+                if (trS.GetObject(styleId, OpenMode.ForWrite) is CivilDb.Styles.SectionViewStyle st)
+                    foreach (var (nm, t) in new (string, CivilDb.Styles.SectionViewDisplayStyleType)[]
+                             { ("주", CivilDb.Styles.SectionViewDisplayStyleType.CenterAxisAnnotationMajor),
+                               ("보조", CivilDb.Styles.SectionViewDisplayStyleType.CenterAxisAnnotationMinor) })
+                    {
+                        try
+                        {
+                            using var ds = st.GetDisplayStylePlan(t);
+                            if (ds == null) { offNote += $" {nm}=없음"; continue; }
+                            bool was = ds.Visible;
+                            if (was) ds.Visible = false;
+                            offNote += $" {nm}={(was ? "켜져 있던 것을 껐다" : "이미 꺼져 있었다")}";
+                        }
+                        catch (System.Exception e) { offNote += $" {nm}=X({e.GetType().Name})"; }
+                    }
+                trS.Commit();
+            }
+            catch (System.Exception ex) { offNote = " 끄기 실패 — " + ex.Message; }
+
+        // 커밋 뒤 되읽기 — 켜진 채로 남으면 <b>Civil 숫자와 우리 숫자가 겹쳐</b> 두 벌이 된다.
+        string backNote = "?";
+        if (!styleId.IsNull)
+            try
+            {
+                using var trB = db.TransactionManager.StartTransaction();
+                if (trB.GetObject(styleId, OpenMode.ForWrite) is CivilDb.Styles.SectionViewStyle st2)
+                {
+                    using var ds2 = st2.GetDisplayStylePlan(
+                        CivilDb.Styles.SectionViewDisplayStyleType.CenterAxisAnnotationMajor);
+                    backNote = ds2 == null ? "성분 없음"
+                             : ds2.Visible ? "⚠<b>아직 켜져 있다 — 숫자가 두 벌로 보인다</b>" : "꺼짐 확인";
+                }
+                trB.Commit();
+            }
+            catch { backNote = "되읽기 실패"; }
+
+        // ── ② 우리가 쓴다.
+        double txtH = TickTextMm / 1000.0 * scale;       // 종이 3mm → 모형
+        double offX = TickOffsetMm / 1000.0 * scale;     // 종이 12mm → 모형 (축척만 곱한다)
+        int n = 0, nView = 0, noRange = 0;
+        double major = double.NaN;
+        try
+        {
+            // 큰 눈금 간격은 <b>스타일에게 묻는다</b> — 이 속성은 번호가 제대로 갈라져 있다(버그 아님).
+            if (!styleId.IsNull)
+            {
+                using var trI = db.TransactionManager.StartTransaction();
+                if (trI.GetObject(styleId, OpenMode.ForWrite) is CivilDb.Styles.SectionViewStyle st3)
+                {
+                    using var cx = st3.CenterAxis;
+                    try { major = cx.MajorTickStyle.Interval; } catch { }
+                }
+                trI.Commit();
+            }
+        }
+        catch { }
+
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var ms = (BlockTableRecord)tr.GetObject(
+                SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+            var layTx = SectionCommand.EnsureLayer(db, tr, XsecTextLayer, 7);
+            var kst = ImportGisCommand.EnsureKoreanTextStyle(db, tr);
+            var white = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
+                Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 7);
+
+            foreach (var (vid, _, _) in views)
+            {
+                try
+                {
+                    if (tr.GetObject(vid, OpenMode.ForRead) is not CivilDb.SectionView sv) continue;
+                    nView++;
+
+                    // <b>격자가 실제로 덮는 표고</b>를 되읽는다 — 자료 범위가 아니다.
+                    var ext = ((Entity)sv).GeometricExtents;
+                    double cx0 = (ext.MinPoint.X + ext.MaxPoint.X) / 2.0;
+                    double o1 = 0, eLo = 0, o2 = 0, eHi = 0;
+                    if (!sv.FindOffsetAndElevationAtXY(cx0, ext.MinPoint.Y, ref o1, ref eLo)
+                     || !sv.FindOffsetAndElevationAtXY(cx0, ext.MaxPoint.Y, ref o2, ref eHi)
+                     || !(eHi > eLo)) { noRange++; continue; }
+
+                    double maj = (major > 1e-9) ? major : ((eHi - eLo) > 40.0 ? 10.0 : 5.0);
+                    for (double e = System.Math.Ceiling(eLo / maj - 1e-9) * maj; e <= eHi + 1e-9; e += maj)
+                    {
+                        double tx = 0, ty = 0;
+                        if (!sv.FindXYAtOffsetAndElevation(0.0, e, ref tx, ref ty)) continue;
+                        var t = new DBText
+                        {
+                            TextString = e.ToString("0.##"),
+                            Height = txtH,
+                            Justify = AttachmentPoint.MiddleLeft,
+                        };
+                        t.SetDatabaseDefaults(db);
+                        if (!layTx.IsNull) t.LayerId = layTx;
+                        t.Color = white;      // ByLayer면 옛 도면에서 넘어온 레이어 색이 이긴다
+                        if (!kst.IsNull) t.TextStyleId = kst;
+                        var p = new Point3d(tx + offX, ty, 0);
+                        t.Position = p; t.AlignmentPoint = p;
+                        ms.AppendEntity(t); tr.AddNewlyCreatedDBObject(t, true);
+                        n++;
+                    }
+                }
+                catch { }
+            }
+            tr.Commit();
+        }
+        catch (System.Exception ex) { log?.AppendLine("  중심축 표고 숫자 실패 — " + ex.Message); return 0; }
+
+        log?.AppendLine($"  중심축 표고 숫자 {n}개(뷰 {nView}개) — <b>우리가 직접 쓴다</b>"
+                      + $" · 큰눈금 {(major > 1e-9 ? $"{major:0.##}m(스타일에서 읽음)" : "스타일을 못 읽어 범위로 정함")}"
+                      + $" · 글자 종이 {TickTextMm:0.#}mm · <b>띄우기 종이 {TickOffsetMm:0.#}mm</b>(모형 {offX:F2}m)"
+                      + $" · 레이어 '{XsecTextLayer}'"
+                      + $"\n      Civil 눈금 글자 끄기:{offNote} → [커밋 뒤 확인: {backNote}]"
+                      + (noRange > 0 ? $" · ⚠표고 범위를 못 읽은 뷰 {noRange}개" : "")
+                      + "\n      ※Civil 래퍼 버그로 중심축 띄우기를 코드로 못 바꾼다 — 그래서 숫자만 가져왔다(축선·눈금은 Civil이 그린다)");
+        return n;
+    }
 
     /// <summary>★★[JACK 0826 "횡단뷰는 중앙에 스케일을 넣고 스케일 아래 측점 GH, FH가 들어가야 해"]
     ///
@@ -831,11 +1056,11 @@ public sealed class XsecViewCommand
     {
         if (nPages <= 0) return 0;
         double sheetW = SheetCommand.SheetW * sc, sheetH = SheetCommand.SheetH * sc;
-        double mL = SheetCommand.MarginLR * sc;
-        double mT = SheetCommand.MarginTop * sc, mB = SheetCommand.MarginBottom * sc;
+        double mL = SheetCommand.MarginLeft * sc;
+        double mB = SheetCommand.MarginBottom * sc;
         // ★★[검토에서 잡힌 버그] 여기가 <b>524mm</b>로 계산하고 있었다 — 뷰를 놓는 쪽은
-        //   <c>ViewH</c>(419.2mm)를 쓰는데 도곽만 여백 뺀 전부를 썼다. <b>같은 네모를 두 크기로</b>
-        //   재고 있었으니 칸선이 뷰와 맞을 리가 없다. 제목 자리 104.8mm를 도곽 쪽만 몰랐다.
+        //   <c>ViewH</c>(당시 419.2mm)를 쓰는데 도곽만 여백 뺀 전부를 썼다. <b>같은 네모를 두 크기로</b>
+        //   재고 있었으니 칸선이 뷰와 맞을 리가 없다. 제목 자리를 도곽 쪽만 몰랐다.
         double innerW = SheetCommand.InnerW * sc, innerH = XsecInnerH * sc;
         int n = 0;
         try
@@ -908,7 +1133,7 @@ public sealed class XsecViewCommand
         log?.AppendLine($"  도곽 {n}장 · 모형 {sheetW:F1}×{sheetH:F1}m ="
                       + $" <b>종이 A1 {SheetCommand.SheetW:F0}×{SheetCommand.SheetH:F0}mm</b>(축척 1:{scaleForTitle:F0})"
                       + $" — 인쇄하면 종단도와 <b>같은 크기</b>다. 모형에서만 축척만큼 다르게 보인다."
-                      + $" · 여백 좌우 {SheetCommand.MarginLR:F0}·상 {SheetCommand.MarginTop:F0}·하 {SheetCommand.MarginBottom:F0}mm"
+                      + $" · 여백 좌 {SheetCommand.MarginLeft:F0}·우 {SheetCommand.MarginRight:F0}·상 {SheetCommand.MarginTop:F0}·하 {SheetCommand.MarginBottom:F0}mm"
                       + $" · 레이어 '{XsecFrameLayer}' · 칸선 '{XsecCellLayer}'");
         return n;
     }
@@ -922,13 +1147,15 @@ public sealed class XsecViewCommand
 
     /// <summary>★★[JACK 0826 "상단도 50만 남기는 걸로 하자"] <b>횡단도 전용 제목 자리(종이 mm).</b>
     ///
-    /// <para>종단도는 이 자리가 <b>104.8mm</b>다 — 축척 막대·배너가 들어가서다.
+    /// <para>종단도는 이 자리가 <b>120mm</b>(제목 40 + 여유 80)다 — 축척 막대·배너가 들어가서다.
     /// 그런데 횡단도 제목은 <c>토공 횡단면도(1/15)</c>와 <c>S=1:200</c> <b>두 줄</b>뿐이라 그만큼이 필요 없다.
     /// 남는 54.8mm를 내부 네모에 돌리면 칸이 그만큼 커지고, <b>축척이 한 단계 살아난다</b>
     /// (1×2 기준 필요 축척 153 → 134.5 = 1:200에서 1:150).</para>
     ///
     /// <para>★종단도의 <c>ViewH</c>는 <b>건드리지 않는다</b> — 그쪽은 그 배분이 맞다.</para></summary>
-    private const double XsecTitleMm = 50.0;
+    // ★★[JACK 0827] 횡단은 <b>제목 40만</b> 쓴다 — 종단의 여유 80mm는 없다.
+    //   자를 하나로: 제목 칸 치수는 <c>SheetCommand.TitleMm</c>가 정한다.
+    private const double XsecTitleMm = SheetCommand.TitleMm;
 
     /// <summary>횡단도 내부 네모 높이(종이 mm) — 검산: 하 50 + 474 + 제목 50 + 상 20 = 594 = A1 세로.</summary>
     private static double XsecInnerH =>
@@ -965,20 +1192,31 @@ public sealed class XsecViewCommand
     //   ★[JACK 0826 스샷 "폭 넓일 것, 풍화암 한 줄로 표현할 것"] 2·3열을 더 넓힌다 —
     //   계산으로는 4.2배면 3글자가 들어가야 하는데 실제로는 접혔다. 글꼴 자간과 Table의
     //   자체 여백이 계산 밖에 있어서다 — <b>재 보고 넉넉히</b> 잡는 편이 낫다.
-    private static readonly double[] QtColRatio = { 8.5, 5.5, 5.5, 6.0 };
+    //   ★★★[JACK 0827 새 토적표] <b>열 비율은 이제 표가 들고 있다.</b>
+    //   <see cref="DH.Grading.Core.QuantityTable.ColRatio"/> 하나만 고치면 폭·축척이 함께 따라온다 —
+    //   여기 따로 적어 두면 표 모양을 바꿀 때 <b>한쪽만 고쳐 칸선과 글자가 어긋난다</b>.
+    private static double[] QtColRatio => DH.Grading.Core.QuantityTable.ColRatio;
 
     /// <summary>표 글자 높이(종이 mm). <b>A3로 줄여 찍어도 1.8mm</b>가 되도록 잡았다 —
     /// 제본 도서는 보통 A3이고(A1의 정확히 절반), 감리가 자로 재는 것도 종이다.</summary>
     private const double QtTextMm = 3.6;
 
     /// <summary>표 한 줄 높이(종이 mm) — 글자가 줄 안에서 숨 쉴 만큼.</summary>
-    private const double QtRowH = 5.81;
+    /// <summary>줄 높이(종이 mm). ★[JACK 0827 "표가 너무 넓어"]
+    /// <para>종전 5.81mm는 <b>글자 3.6mm에 여유가 거의 없는</b> 값이었다. 새 표는 칸이 일곱이라
+    /// 폭이 크게 늘었는데 줄 높이는 그대로여서 <b>가로:세로가 3.4:1</b>로 납작해졌다
+    /// (JACK 원본은 <b>1.4:1</b>). 글자의 두 배쯤을 주면 원본에 가까워진다.</para></summary>
+    private const double QtRowH = 7.4;
 
     /// <summary>표 전체 높이(종이 mm) — <b>머리줄이 1.4배</b>인 것까지 센다.
     /// ★한 곳에서만 정한다: 자리 잡는 쪽과 그리는 쪽이 다르게 세면 표가 어긋난 자리에 앉는다.</summary>
     private static double QtTableHmm => QtRowH * (DH.Grading.Core.QuantityTable.TotalRows + 0.4);
 
     /// <summary>표 전체 폭(종이 mm) — 열 너비의 합이다. 축척 계산이 이 값을 쓴다.</summary>
+    /// <summary>표 폭(종이 mm). ★[JACK 0827] 새 표는 <b>일곱 칸 두 단</b>이라 종전보다
+    /// <b>훨씬 넓고 낮다</b>(비율 합 25.5 → 70, 줄 19 → 13).
+    /// <para>그래서 <b>오른쪽에 두면</b> 그림 폭을 크게 잡아먹고, <b>아래에 두면</b> 덜 먹는다 —
+    /// 축척 고르기가 그 둘을 재서 나은 쪽을 택하므로(<c>tableRight</c>) 값만 맞으면 배치는 따라온다.</para></summary>
     private static double QtWidthMm
     {
         get { double s = 0; foreach (double r in QtColRatio) s += r; return s * QtTextMm; }
@@ -1000,19 +1238,25 @@ public sealed class XsecViewCommand
     /// <para><b>열 너비는 글자에서 계산한다.</b> 고정 mm로 두면 글자 크기를 바꿀 때마다 어긋난다 —
     /// 한글은 글자 높이만큼, 영문·숫자는 절반쯤 차지하므로 가장 긴 글자로 폭을 잡는다.</para></summary>
     private static int DrawQtyTables(Database db, List<(ObjectId Id, double St, string Name)> views,
+                                     double bandPaperMm,
                                      double sc, bool onRight, double gapM,
                                      System.Collections.Generic.Dictionary<string, DH.Grading.Core.XsecQty> qty,
                                      System.Text.StringBuilder log)
     {
+        int tbEdge = 0, tbIn = 0;
+        string firstTbErr = null;
         if (views == null || views.Count == 0) return 0;
-        var Q = DH.Grading.Core.QuantityTable.Rows;
-        int nRow = Q.Length + 1;                       // 머리 1줄 + 내용
+        int nRow = QT.TotalRows;                       // 머리 1줄 + 내용 12줄
         double txtH = QtTextMm * sc;                   // 글자 높이(모형)
         double rowH = QtRowH * sc;                     // 줄 높이
-        // 열 너비 — '터 파 기(5.0m이하)'·'풍화암'·'NO. 0+5.000'이 각 열의 가장 긴 글자다.
-        var colW = new double[QtColRatio.Length];
-        for (int c = 0; c < colW.Length; c++) colW[c] = QtColRatio[c] * txtH;
-        int n = 0;
+        // ★[JACK 0827] 열 비율은 <b>표가 들고 있다</b> — 표 모양이 바뀌면 폭도 같이 바뀐다.
+        //   여기 따로 적어 두면 표를 고칠 때 한쪽만 고쳐 <b>칸선과 글자가 어긋난다</b>.
+        var colW = new double[QT.ColRatio.Length];
+        for (int c = 0; c < colW.Length; c++) colW[c] = QT.ColRatio[c] * txtH;
+        // ★★[JACK 0828 · 검토] 종전 꼬리말은 <c>(값은 아직 '–')</c>를 <b>조건 없이</b> 찍었다 —
+        //   값이 실제로 들어가고 있는데도 로그만 "아직 비었다"고 말했다.
+        //   낡은 문구가 남아 <b>고친 뒤에도 안 고쳐진 것처럼</b> 보이게 만든다. → <b>세어서 말한다.</b>
+        int n = 0, nQty = 0, nCells = 0;
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
@@ -1033,16 +1277,20 @@ public sealed class XsecViewCommand
 
                     var tb = new Table();
                     try { if (!qtStyle.IsNull) tb.TableStyle = qtStyle; } catch { }
-                    tb.SetSize(nRow, 4);
+                    // ★[JACK 0827] 칸 수도 <b>표가 정한다</b> — 여기 숫자를 박아 두면
+                    //   표를 넓힐 때 이 한 줄 때문에 <b>표가 통째로 안 만들어진다</b>(실측: 0개).
+                    tb.SetSize(nRow, QT.Cols);
                     if (!layE.IsNull) tb.LayerId = layE;
-                    for (int c = 0; c < 4; c++) tb.Columns[c].Width = colW[c];
+                    for (int c = 0; c < QT.Cols; c++) tb.Columns[c].Width = colW[c];
                     // ★[JACK 0826 스샷 "제목 셀은 … 셀 높이 조금 높일 것"]
                     //   머리줄만 <b>1.4배</b>로 — 표의 얼굴이라 다른 줄과 같으면 묻힌다.
                     for (int r = 0; r < nRow; r++) tb.Rows[r].Height = r == 0 ? rowH * 1.4 : rowH;
 
                     // 글자 모양은 셀 단위로 — 표 전체에 한 번에 건다.
                     for (int r = 0; r < nRow; r++)
-                        for (int c = 0; c < 4; c++)
+                        // ★[JACK 0827 "글씨 색상도 좌우측이 달라"] <b>칸 수를 또 4로 박아 뒀다.</b>
+                        //   오른쪽 세 칸이 글자 높이·글꼴·색을 <b>하나도 못 받고</b> 있었다.
+                        for (int c = 0; c < QT.Cols; c++)
                         {
                             var cell = tb.Cells[r, c];
                             try { cell.TextHeight = txtH; } catch { }
@@ -1058,38 +1306,17 @@ public sealed class XsecViewCommand
                             catch { }
                         }
 
-                    // ★★[JACK 0826 "토적표의 외곽선은 살짝 두껍게(초록색), 내부선은 모두 빨간색(얇은 선)"]
-                    //   <c>Table</c>은 <b>바깥 테두리</b>(Top/Bottom/Left/Right)와
-                    //   <b>안쪽 격자</b>(Horizontal/Vertical)를 따로 다룬다.
-                    try
-                    {
-                        var green = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
-                            Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 3);
-                        var red = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
-                            Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 1);
-                        var all = tb.Cells;
-                        foreach (var b in new[] { all.Borders.Top, all.Borders.Bottom,
-                                                  all.Borders.Left, all.Borders.Right })
-                        {
-                            try { b.Color = green; b.LineWeight = LineWeight.LineWeight050; } catch { }
-                        }
-                        foreach (var b in new[] { all.Borders.Horizontal, all.Borders.Vertical })
-                        {
-                            try { b.Color = red; b.LineWeight = LineWeight.LineWeight013; } catch { }
-                        }
-                    }
-                    catch { }
-
+    
                     // ── 머리줄: '측 점'이 세 칸을 먹고, 오른쪽 칸에 측점 이름
                     // ★[JACK 0826] 머리줄을 <b>한 칸</b>으로 — <c>측 점(No.1+10.00)</c> 꼴.
                     //   측점명을 괄호 안에 넣으면 제목과 이름이 <b>한눈에 한 덩이</b>로 읽힌다.
-                    try { tb.MergeCells(CellRange.Create(tb, 0, 0, 0, 3)); } catch { }
+                    try { tb.MergeCells(CellRange.Create(tb, 0, 0, 0, QT.Cols - 1)); } catch { }
                     tb.Cells[0, 0].TextString =
-                        DH.Grading.Core.QuantityTable.HeaderLeft
+                        QT.HeaderLeft
                         + (string.IsNullOrEmpty(vname) ? "" : $"({vname})");
                     // ★[JACK 0826 스샷 "제목 셀은 음각으로 표현(셀 채우기)"]
                     //   바탕을 칠하고 글자를 검게 — 인쇄하면 흰 바탕에 검은 글씨가 뒤집혀 <b>음각</b>이 된다.
-                    for (int c = 0; c < 4; c++)
+                    for (int c = 0; c < QT.Cols; c++)
                     {
                         try
                         {
@@ -1101,62 +1328,140 @@ public sealed class XsecViewCommand
                         }
                         catch { }
                     }
+                    static string Fmt(double v) => double.IsNaN(v) || System.Math.Abs(v) < 5e-3
+                        ? QT.Blank : v.ToString("0.00");
                     DH.Grading.Core.XsecQty q0 = default;
                     bool hasQty = vname != null && qty != null && qty.TryGetValue(vname, out q0);
+                    // ★★★[검토 0828 · HIGH-C] <b><c>hasQty</c>는 세는 자가 못 된다.</b>
+                    //   <c>CollectQty</c>는 <b>값이 전부 NaN인 측점도</b> 사전에 무조건 담으므로
+                    //   <c>TryGetValue</c>는 사실상 <b>언제나 성공</b>한다 —
+                    //   표 28장이 전부 <c>–</c>여도 "수량이 들어간 표 28/28개"로 찍혔다.
+                    //   없앤 <c>(값은 아직 '–')</c>가 "늘 비었다"고 거짓말했다면
+                    //   이건 <b>"늘 찼다"</b>고 거짓말한다 — <b>거짓의 방향만 뒤집힌 셈</b>이다.
+                    //   → <b>실제로 숫자가 들어간 칸을 센다.</b> 한 칸이라도 차면 그 표를 하나로 친다.
+                    int filled = 0;
 
                     // ── 내용 — 병합은 "이 칸이 몇 줄을 먹느냐"로 적혀 있다.
-                    for (int r = 0; r < Q.Length; r++)
+                    for (int r = 0; r < QT.BodyRows; r++)
                     {
-                        var q = Q[r];
+                        var q = QT.Rows[r];
                         int row = r + 1;
-                        if (q.NameRows > 0)
-                        {
-                            int last = row + q.NameRows - 1;
-                            // Sub이 null이면 항목 칸이 2열까지 가로로 넓어진다.
-                            int colTo = q.Sub == null ? 1 : 0;
-                            if (q.NameRows > 1 || colTo > 0)
-                                try { tb.MergeCells(CellRange.Create(tb, row, 0, last, colTo)); } catch { }
-                            tb.Cells[row, 0].TextString = (q.Name ?? "").Replace("|", "\\P");
-                        }
-                        if (q.Sub != null && q.SubRows > 0)
-                        {
-                            if (q.SubRows > 1)
-                                try { tb.MergeCells(CellRange.Create(tb, row, 1, row + q.SubRows - 1, 1)); } catch { }
-                            tb.Cells[row, 1].TextString = q.Sub;
-                        }
-                        tb.Cells[row, 2].TextString = q.Material ?? "";
-                        // ★[JACK 0826] <b>값이 있으면 넣고 없으면 빈칸.</b>
-                        //   0으로 채우면 "재 봤더니 없다"로 읽혀 잘못이다 — 아직 안 재는 공종은 비워 둔다.
-                        double v = hasQty ? DH.Grading.Core.QuantityTable.Pick(q0, r) : double.NaN;
-                        // ★[JACK 0826 "0.00으로 나오는 건 – 나오게"] 도면에서는 0도 빈칸으로 본다.
-                        //   토공이 없는 자리에 0.00이 줄줄이 적히면 <b>읽는 사람이 훑기 어렵다</b>.
-                        tb.Cells[row, 3].TextString = double.IsNaN(v) || System.Math.Abs(v) < 5e-3
-                            ? DH.Grading.Core.QuantityTable.Blank
-                            : v.ToString("0.00");
-                    }
 
-                    // 자리 — 표는 <b>왼쪽 위</b>가 기준이다.
-                    // ★[JACK 0826 "표가 배치의 좀 상단에 위치해 있는데 중간쯤으로"]
-                    //   표 <b>가운데</b>를 그림 <b>가운데</b>에 맞춘다 — 종전엔 표 위쪽을 그림 위쪽에 맞춰
-                    //   표가 그림보다 짧으면 위로 몰려 보였다.
+                        // 한 칸을 앉힌다. <c>RowSpan</c>이 0이면 <b>위 칸이 이미 먹은 자리</b>라 건너뛴다.
+                        //   병합은 <b>표가 관리</b>하므로 우리는 범위만 알려 주면 된다.
+                        void Put(int col, QT.Cell c, string textOverride = null)
+                        {
+                            if (c.RowSpan <= 0) return;                 // 위 칸이 먹은 자리
+                            int r2 = row + c.RowSpan - 1;
+                            int c2 = col + c.ColSpan - 1;
+                            if (c.RowSpan > 1 || c.ColSpan > 1)
+                                try { tb.MergeCells(CellRange.Create(tb, row, col, r2, c2)); } catch { }
+                            string t = textOverride ?? c.Text;
+                            if (t != null) tb.Cells[row, col].TextString = t.Replace("|", "\\P");
+                        }
+
+                        Put(0, q.L1, QT.L1TextOf(r));   // 깊이 딱지(4.5m 이하)는 값이 바뀌면 따라 바뀐다 — 글자를 못 박지 않는다.
+                        Put(1, q.L2);
+                        Put(2, q.L3);
+                        Put(4, q.R1);
+                        Put(5, q.R2);
+
+                        // 값은 왼쪽·오른쪽 각각 따로. 없으면 <c>–</c>다 —
+                        //   빈칸은 "아직 안 넣었다"로 읽히고 <c>–</c>는 "해당 없음"으로 읽힌다(JACK).
+                        double vL = hasQty ? QT.PickLeft(q0, r) : double.NaN;
+                        double vR = hasQty ? QT.PickRight(q0, r) : double.NaN;
+                        string tL = Fmt(vL), tR = Fmt(vR);
+                        if (tL != QT.Blank) filled++;
+                        if (tR != QT.Blank) filled++;
+                        tb.Cells[row, 3].TextString = tL;
+                        tb.Cells[row, 6].TextString = tR;
+                    }
+                    // 한 칸이라도 숫자가 든 표를 <b>값이 든 표</b>로 친다. 칸 수도 함께 센다.
+                    if (filled > 0) nQty++;
+                    nCells += filled;
+
+                    // ★★★[JACK 0827 "색상을 보면 알겠지만 적용이 안 됐어"] <b>표에 직접 쓴다.</b>
+                    //   <c>tb.Cells[r,c].Borders…</c>로 세 번 시도했지만(값 쓰기 → <c>Overrides</c> 켜기 →
+                    //   병합 뒤로 옮기기) 하나도 안 먹었다. <c>Cell</c>을 거치는 길이 막힌 것이다.
+                    //   <c>Table</c>에 <b>직접 쓰는 메서드</b>가 따로 있다:
+                    //   <c>SetGridColor(줄, 칸, 격자종류, 색)</c> · <c>SetContentColor(줄, 칸, 순번, 색)</c>.
+                    //   <c>GridLineType</c>은 <c>OuterGridLines</c>·<c>InnerGridLines</c>처럼
+                    //   <b>바깥/안쪽을 이미 갈라 놓았다</b> — 우리가 네 변을 따로 셀 필요가 없다.
+                    //   <b>병합·내용을 다 채운 뒤</b>라야 남는다(병합이 테두리를 다시 계산한다).
+                    try
+                    {
+                        var green = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
+                            Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 3);
+                        var red = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
+                            Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 1);
+                        var white = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
+                            Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 7);
+
+                        for (int r = 0; r < nRow; r++)
+                            for (int c = 0; c < QT.Cols; c++)
+                            {
+                                // 안쪽 격자는 빨강 가늘게. 바깥도 일단 빨강으로 칠하고 아래에서 가장자리만 덮는다.
+                                try { tb.SetGridColor(r, c, GridLineType.InnerGridLines, red); tbIn++; } catch { }
+                                try { tb.SetGridColor(r, c, GridLineType.OuterGridLines, red); } catch { }
+                                try { tb.SetGridLineWeight(r, c, GridLineType.AllGridLines, LineWeight.LineWeight013); } catch { }
+                                // 글자는 흰색 — 머리줄(0)은 초록 바탕에 어두운 글자라 건드리지 않는다.
+                                if (r > 0)
+                                    try { tb.SetContentColor(r, c, 0, white); } catch { }
+                            }
+
+                        // 표의 가장자리만 초록 굵게. 안쪽 칸의 바깥선이 아니라 <b>표 둘레</b>다.
+                        for (int c = 0; c < QT.Cols; c++)
+                        {
+                            try { tb.SetGridColor(0, c, GridLineType.HorizontalTop, green); } catch { }
+                            try { tb.SetGridColor(nRow - 1, c, GridLineType.HorizontalBottom, green); } catch { }
+                            try { tb.SetGridLineWeight(0, c, GridLineType.HorizontalTop, LineWeight.LineWeight050); } catch { }
+                            try { tb.SetGridLineWeight(nRow - 1, c, GridLineType.HorizontalBottom, LineWeight.LineWeight050); } catch { }
+                        }
+                        for (int r = 0; r < nRow; r++)
+                        {
+                            try { tb.SetGridColor(r, 0, GridLineType.VerticalLeft, green); } catch { }
+                            try { tb.SetGridColor(r, QT.Cols - 1, GridLineType.VerticalRight, green); } catch { }
+                            try { tb.SetGridLineWeight(r, 0, GridLineType.VerticalLeft, LineWeight.LineWeight050); } catch { }
+                            try { tb.SetGridLineWeight(r, QT.Cols - 1, GridLineType.VerticalRight, LineWeight.LineWeight050); } catch { }
+                            tbEdge++;
+                        }
+                    }
+                    catch (System.Exception ex) { firstTbErr ??= "색: " + ex.Message; }
+
                     double px = onRight ? ext.MaxPoint.X + gapM : ext.MinPoint.X;
                     double midY = (ext.MinPoint.Y + ext.MaxPoint.Y) / 2.0;
-                    double py = onRight ? midY + rowH * (nRow + 0.4) / 2.0 : ext.MinPoint.Y - gapM;
+                    // ★★★[검토 0827 · CRITICAL] <b>표는 그래프가 아니라 <u>밴드</u> 밑에 붙는다.</b>
+                    //   <c>ext.MinPoint.Y</c>는 <b>그래프 바닥</b>이다 — 경계상자에 밴드가 없기 때문이다(실측).
+                    //   밴드는 거기서 종이 20mm 더 내려가는데 표를 그래프 바닥 −12mm에 붙이면
+                    //   <b>반드시 8mm 겹친다</b>(20 − 12). 축척과 무관한 고정 겹침이라 늘 같은 자리에서 난다.
+                    //   → 밴드 높이만큼 <b>더 내린다</b>. 예산(<c>padH</c>)도 같은 숫자를 쓰므로 갈라지지 않는다.
+                    double bandM = bandPaperMm * sc;   // 종이 mm → 모형 m
+                    double py = onRight ? midY + rowH * (nRow + 0.4) / 2.0
+                                        : ext.MinPoint.Y - bandM - gapM;
                     tb.Position = new Point3d(px, py, 0);
                     // ★[JACK 0826] <c>GenerateLayout()</c>을 <b>부르지 않는다</b> — 그것이 행 높이를
                     //   글자와 여백에서 <b>다시 계산</b>해, 우리가 지정한 높이를 덮어쓴다.
                     ms.AppendEntity(tb); tr.AddNewlyCreatedDBObject(tb, true);
                     n++;
                 }
-                catch { }
+                catch (System.Exception ex) { firstTbErr ??= ex.GetType().Name + ": " + ex.Message; }
             }
             tr.Commit();
         }
         catch (System.Exception ex) { log?.AppendLine("  수량표 그리기 실패 — " + ex.Message); }
         double tw = 0; foreach (double w in colW) tw += w;
+        if (n == 0 && firstTbErr != null) log?.AppendLine("  ⚠수량표를 하나도 못 만들었다 — " + firstTbErr);
         log?.AppendLine($"  수량표 {n}개 · {nRow}줄 · AutoCAD Table 객체(셀 병합·열 너비를 표가 관리한다)"
                       + $" · 글자 {QtTextMm:0.##}mm · 줄 {QtRowH:0.##}mm · 폭 {tw / sc:F0}mm"
-                      + $" (값은 아직 '{DH.Grading.Core.QuantityTable.Blank}')");
+                      + $" · <b>숫자가 든 표 {nQty}/{n}개</b> · 채워진 칸 {nCells}개"
+                      + (nQty < n ? $" (나머지 {n - nQty}장은 잰 것이 없어 전부 '{QT.Blank}')" : ""));
+        // ★★[JACK 0828] <b>표의 두 규칙을 매번 물어보고 남긴다.</b>
+        //   <c>SpansValid</c>는 만들어 두고 <b>아무도 안 불러</b> 죽어 있었다 —
+        //   검사는 <b>돌아야</b> 검사다. 로그 한 줄이면 다음 사람이 표를 고칠 때 바로 걸린다.
+        bool paired = QT.WidthsPaired(out string wnote);
+        bool spans = QT.SpansValid();
+        log?.AppendLine($"    표 규칙 — 좌우 짝 폭 {(paired ? "맞음" : "⚠<b>어긋남</b>")}({wnote})"
+                      + $" · 세로 병합 {(spans ? "맞음" : "⚠<b>어긋남 — 표가 찌그러진다</b>")}");
         return n;
     }
 
@@ -1424,6 +1729,71 @@ public sealed class XsecViewCommand
         && (name.StartsWith(SectionCommand.GroupBase + "_횡단", System.StringComparison.Ordinal)
          || name.StartsWith(SectionCommand.GroupBase + "_단면", System.StringComparison.Ordinal));
 
+
+    /// <summary>★★★[검토 0828 · HIGH-A] <b>시험은 화면이 쓰는 그 스타일에 해야 한다.</b>
+    /// <para><see cref="SectionCommand.PickStyle"/>은 이름을 못 찾으면 <b>컬렉션의 첫 스타일을 그냥 돌려준다</b>
+    /// (<c>return first;</c>). 컬렉션이 비었을 때만 <c>Null</c>이라,
+    /// <c>if (sid.IsNull) "못 찾았습니다"</c> 같은 방어는 <b>그 이유로는 영영 안 걸린다</b> —
+    /// 이름이 안 맞으면 <b>조용히 남의 스타일에 쓴다</b>.</para>
+    /// <para>진단 명령에서 이건 치명적이다. 엉뚱한 스타일에 100mm를 써 놓고 대화상자에서
+    /// "중심이 그대로네"를 보면 <b>"경우 C 확정"이라는 틀린 결론</b>으로 간다 —
+    /// 이 프로젝트가 오늘만 두 번 당한 <b>"화면이 쓰는 것과 다른 물건을 쟀다"</b> 그 함정이다.</para>
+    /// <para>→ <b>도면에 놓인 횡단면도에게 직접 묻는다.</b> 뷰가 달고 있는 스타일이 곧 화면을 정하는 것이다.
+    /// 뷰가 없으면 <b>이름이 정확히 맞는</b> 스타일만 받고, 그것도 없으면 <b>Null을 돌려준다</b> —
+    /// 아무거나 집어 주느니 <b>못 찾았다고 말하는 편</b>이 낫다.</para></summary>
+    private static ObjectId DiagStyleId(Database db, out string how)
+    {
+        how = "못 찾음";
+        // ① 도면에 놓인 횡단면도가 쓰는 스타일 — 이것이 화면을 정한다.
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var ms = (BlockTableRecord)tr.GetObject(
+                SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+            foreach (ObjectId id in ms)
+            {
+                try
+                {
+                    if (tr.GetObject(id, OpenMode.ForRead) is not CivilDb.SectionView sv) continue;
+                    ObjectId st = sv.StyleId;
+                    if (st.IsNull) continue;
+                    string nm = "?";
+                    try { if (tr.GetObject(st, OpenMode.ForRead) is CivilDb.Styles.StyleBase sb) nm = sb.Name ?? "?"; }
+                    catch { }
+                    tr.Commit();
+                    how = $"도면의 횡단면도가 쓰는 스타일 '{nm}'";
+                    return st;
+                }
+                catch { }
+            }
+            tr.Commit();
+        }
+        catch { }
+        // ② 뷰가 없으면 <b>이름이 정확히 맞는</b> 것만. 비슷한 것을 집어 주지 않는다.
+        try
+        {
+            var cdoc = CivilApp.CivilApplication.ActiveDocument;
+            using var tr = db.TransactionManager.StartTransaction();
+            foreach (ObjectId id in cdoc.Styles.SectionViewStyles)
+            {
+                try
+                {
+                    if (tr.GetObject(id, OpenMode.ForRead) is CivilDb.Styles.StyleBase sb
+                        && string.Equals(sb.Name, XsecViewStyleName, System.StringComparison.Ordinal))
+                    {
+                        tr.Commit();
+                        how = $"횡단면도가 없어 이름으로 찾은 스타일 '{XsecViewStyleName}'";
+                        return id;
+                    }
+                }
+                catch { }
+            }
+            tr.Commit();
+        }
+        catch { }
+        return ObjectId.Null;
+    }
+
     private static ObjectId XsecStyleId(Database db, List<(ObjectId Id, double St, string Name)> views)
     {
         if (views == null || views.Count == 0) return ObjectId.Null;
@@ -1446,12 +1816,72 @@ public sealed class XsecViewCommand
     private const double TickMajorMm = 3.0;
     private const double TickMinorMm = 1.5;
 
-    /// <summary>눈금값 글자 크기(종이 mm) — 도면 글자 관례 2.5mm.</summary>
-    private const double TickTextMm = 2.5;
+    /// <summary>눈금값 글자 크기 — <b>종이에서 보이길 바라는 크기</b>(mm).
+    /// <para>★★[JACK 0827 "1:150만 되어도 상당히 작아서 잘 안 보여. 1:100으로 볼 때가 적당했다"]
+    /// 종전 2.5mm는 <b>스타일에 넣는 값</b>이었지 종이에 나오는 크기가 아니었다.</para>
+    /// <para>Civil 스타일 글자는 <b>주석 축척으로 모형에 그려지고</b>, 우리는 횡단을 <b>다른 축척</b>으로
+    /// 배치하므로 종이에서는 <c>스타일값 × 주석축척 ÷ 횡단축척</c>이 된다 —
+    /// 주석 1:120에 횡단 1:150이면 <b>2.0mm</b>로 줄어든다. 1:100이면 3.0mm였고 그것이 적당했다.</para>
+    /// <para>→ <b>목표를 종이 크기로 적고</b> <see cref="PaperToStyle"/>이 되돌려 계산한다.
+    /// 그러면 축척이 무엇이든 종이에서 같아진다.</para></summary>
+    private const double TickTextMm = 3.0;
+
+    /// <summary>★★[JACK 0827] 밴드 <b>칸 높이</b>(종이 mm).
+    /// <para>★★★[JACK 0828 "측점·GL·FGL 밴드 간격이 너무 넓어. 글씨끼리 거의 딱 붙게 바꿔.
+    /// 너무 넓어서 그래프가 작아지는 현상이야"] <b>여유가 곧 손해다.</b>
+    /// 밴드 칸은 <b>칸 수 × 이 값</b>만큼 축척 예산에서 통째로 빠지므로,
+    /// 한 칸에서 1mm를 아끼면 세 칸짜리 그림에 3mm가 돌아온다.</para>
+    /// <para>글자가 <see cref="BandTextMm"/>(3mm) <b>한 줄</b>이니 위아래 0.5mm씩만 남기면 된다 —
+    /// <b>4mm</b>. 종전 10mm는 "두 줄이 들어갈 만큼"이라고 잡아 둔 것인데, 실제로 들어가는 것은
+    /// 한 줄뿐이라 <b>쓰지도 않는 18mm가 그림을 깎고 있었다</b>(3칸 × 6mm).</para>
+    /// <para>이것도 <b>종이 기준</b>이라 축척 보정을 받는다 — 글자만 키우고 칸을 그대로 두면 눌린다.</para></summary>
+    private const double BandHeightMm = 4.0;
+
+    /// <summary>★★★[JACK 0827 "먼저 밴드 3칸 길이만큼을 고려해서 전체 축척부터 맞추고 시작하는 게 좋겠어"]
+    /// <b>밴드 칸 수를 미리 잡는다 — 측점·GL·FGL 셋.</b>
+    /// <para>지금 도면에는 두 칸(GL·FGL)뿐이지만, 측점 칸을 나중에 더할 때
+    /// <b>축척이 다시 바뀌면 도면을 새로 뽑아야 한다</b>. 처음부터 셋 자리를 비워 두면
+    /// 칸을 더해도 그림이 그대로다.</para></summary>
+    private const int BandRows = 3;
+
+    // ★[검토 0828] <c>BandTotalMm</c>을 지웠다 — <b>아무도 안 쓰는 죽은 값</b>이었다.
+    //   실제 예산은 <b>도면에서 센 칸 수</b>로 그때그때 잡는다(<c>bandRows × BandHeightMm</c>) —
+    //   3칸을 미리 박아 둔 이 값을 쓰면 두 칸짜리 도면에서 <b>쓰지도 않는 자리를 깎는다</b>.
+    //   죽은 값을 남겨 두면 다음 사람이 <b>그게 진짜 예산인 줄 알고</b> 고친다.
+
+    /// <summary>★★★[JACK 0828 "측점 밴드 부분이 너무 수직축 마지막하고 붙어서 겹쳐 보여"]
+    /// <b>그래프 바닥과 첫 밴드 칸 사이의 틈</b>(종이 mm).
+    /// <para>수직축의 맨 아래 눈금값은 <b>축 끝보다 조금 더 내려와</b> 찍힌다 — 글자의 절반쯤이
+    /// 그래프 밖으로 나온다. 밴드가 바닥에 딱 붙으면 그 글자와 첫 칸의 글자가 <b>겹친다</b>.
+    /// 눈금 글자 <see cref="TickTextMm"/>(3mm)의 절반보다 조금 넉넉한 <b>2mm</b>면 떨어진다.</para>
+    /// <para>이 값은 밴드 <b>칸 높이가 아니라 칸 앞의 빈틈</b>이라 축척 예산에는 안 들어간다 —
+    /// 그림을 깎지 않으면서 겹침만 푼다.</para></summary>
+    private const double BandGapMm = 2.0;
+
+    /// <summary>GL·FGL 밴드 값 글자 — 눈금값과 <b>같은 크기</b>로 맞춘다.
+    /// <para>한 그림 안에서 축 눈금과 밴드 값이 다른 크기면 눈에 거슬린다.</para></summary>
+    private const double BandTextMm = 3.0;
+
+    /// <summary><b>종이에서 바라는 크기 → 스타일에 넣을 값.</b>
+    /// <para>Civil 스타일 값은 <b>종이 미터</b>이고 주석 축척으로 모형에 커진다.
+    /// 우리는 주석 축척을 <b>안 건드리므로</b>(종단 1:120과 횡단 1:200이 한 도면에 공존해야 한다)
+    /// 그 어긋남을 <b>글자 값에서 되돌린다</b>.</para>
+    /// <para>주석 축척을 못 읽으면 보정 없이 종이 크기 그대로 — 적어도 종전과 같아진다.</para></summary>
+    private static double PaperToStyle(double paperMm, double scale, double annoScale)
+        => annoScale > 1e-9 ? paperMm / 1000.0 * scale / annoScale : paperMm / 1000.0;
 
     /// <summary>눈금값을 축에서 띄우는 거리(종이 mm). ★<b>배치·축척과 무관한 고정값</b>이다 —
-    /// 종이 기준이라 어떤 축척에서도 종이에서 같은 거리로 보인다.</summary>
-    private const double TickOffsetMm = 12.0;
+    /// 종이 기준이라 어떤 축척에서도 종이에서 같은 거리로 보인다.
+    /// <para>★★★[JACK 0828 "떨어져 있어. 그런데 너무 떨어져 있어"] <b>12 → 3mm.</b>
+    /// 12mm는 JACK이 대화상자에 넣어 두셨던 값인데, 그때는 <b>중심축에 안 먹던 값</b>이라
+    /// 화면으로 확인된 적이 없었다 — <see cref="DrawCenterTickLabels"/>가 실제로 그리기 시작하니
+    /// <b>비로소 크기가 보였고, 너무 멀었다</b>. "설정돼 있던 값"이 곧 "확인된 값"은 아니다.</para>
+    /// <para>★[JACK 0828 "눈금 바로 옆에서 숫자가 시작되어야 해"] <b>숫자를 못 박지 않고
+    /// <see cref="TickMajorMm"/>에 묶는다.</b> 눈금 자국은 축에서 <b>오른쪽으로</b> 뻗고
+    /// 숫자도 오른쪽에 앉으므로, 띄우기가 <b>자국 길이와 같으면</b> 숫자가 자국이 끝나는 바로 그 자리에서 시작한다.
+    /// 눈금 크기를 나중에 키우면 띄우기가 <b>저절로 따라간다</b> —
+    /// 숫자를 따로 적어 두면 눈금만 키웠을 때 글자가 자국에 파묻힌다(0827에 이미 겪었다).</para></summary>
+    private const double TickOffsetMm = TickMajorMm;
 
     /// <summary>★★[JACK 0826] <b>표고축 눈금을 키우고 축과 같은 색으로 맞춘다.</b>
     ///
@@ -1463,6 +1893,616 @@ public sealed class XsecViewCommand
     ///
     /// <para><b>색은 축에서 읽어 눈금에 옮긴다.</b> 우리가 색을 정하지 않는다 —
     /// 회사가 축을 무슨 색으로 정했든 눈금이 그것을 따라가야 한 몸으로 보인다.</para></summary>
+    /// <summary>★★★[JACK 0827] <b>눈금값·밴드 글자를 종이 기준으로 맞춘다.</b>
+    /// <para>축척을 알아야 하므로 <see cref="TuneAxisTicks"/>와 <b>따로</b> 돈다 —
+    /// 스타일을 입혀야 뷰를 재고, 재야 축척이 정해지기 때문이다.</para></summary>
+    /// <summary>★★★[JACK 0827 "밴드 라벨 스타일이 잘 작동하는지 로그 심어"]
+    /// <b>GL·FGL 글자에 닿을 수 있는지 먼저 잰다.</b>
+    /// <para>경로가 세 겹이다 — <b>밴드 → 라벨 스타일 → 글자 칸(Text 컴포넌트)</b>.
+    /// 어느 라벨 스타일이 값을 찍는지도 아직 모른다(주 눈금? 보조 눈금? 다른 것?).</para>
+    /// <para>그래서 <b>여섯 종류를 다 훑어</b> 이름·현재 크기·쓰기 성공 여부를 남긴다.
+    /// 한 판 돌리면 <b>어디에 손대야 하는지</b>가 확정된다 — 추측으로 고르지 않는다.</para>
+    /// <para>쓰기도 <b>실제로 해 본다</b>. 되읽어 값이 남았는지가 곧 답이다 —
+    /// 이 프로젝트는 "썼다"와 "남았다"가 다른 경우를 여러 번 겪었다.</para></summary>
+    private static void ProbeBandText(Database db, List<(ObjectId Id, double St, string Name)> views,
+                                      double scale, double annoScale, System.Text.StringBuilder log)
+    {
+        if (views == null || views.Count == 0) return;
+        double want = PaperToStyle(BandTextMm, scale, annoScale);
+        var sb = new System.Text.StringBuilder();
+        int nBand = 0, nStyle = 0, nRead = 0, nWrote = 0, nStuck = 0, nHt = 0;
+        string firstErr = null;
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            if (tr.GetObject(views[0].Id, OpenMode.ForRead) is not CivilDb.SectionView sv)
+            { tr.Commit(); log?.AppendLine("  밴드 글자 조사: 뷰를 못 열었다"); return; }
+
+            // ★★★[JACK 0827 "GL 위에 측점도 넣어야 해 · 칸만 비워 두고 우리가 글씨를 그린다"]
+            //   칸을 더하려면 <b>어떤 밴드 스타일이 도면에 있는지</b> 알아야 한다.
+            //   <c>Add(Database, BandType, 스타일이름)</c>이라 이름을 정확히 대야 하기 때문이다.
+            //   ※지금은 <b>목록만 남긴다</b> — 고르는 것은 그 목록을 보고 정한다.
+            try
+            {
+                var cd0 = CivilApp.CivilApplication.ActiveDocument;
+                var col0 = cd0.Styles.BandStyles.SectionViewSectionDataBandStyles;
+                var nm0 = new System.Text.StringBuilder();
+                for (int q = 0; q < col0.Count; q++)
+                    try { if (tr.GetObject(col0[q], OpenMode.ForRead) is CivilDb.Styles.StyleBase b0) nm0.Append($" · {b0.Name}"); }
+                    catch { }
+                log?.AppendLine($"  도면의 횡단 밴드 스타일 {col0.Count}개:{nm0}");
+            }
+            catch (System.Exception ex) { log?.AppendLine("  횡단 밴드 스타일 목록 실패 — " + ex.Message); }
+
+            using var items = sv.Bands.GetBottomBandItems();
+            for (int i = 0; i < items.Count; i++)
+            {
+                nBand++;
+                string bn = "?";
+                ObjectId bsId = ObjectId.Null;
+                try { bsId = items[i].BandStyleId; } catch { }
+                try
+                {
+                    if (tr.GetObject(bsId, OpenMode.ForWrite) is CivilDb.Styles.StyleBase sb0) bn = sb0.Name ?? "?";
+                }
+                catch { }
+                sb.Append($"\n      [{i}] {bn}");
+                // ★★★[JACK 0827 "밴드 높이는 테스트 안 해봐?"]
+                //   <b>GL·FGL이 겹치는 직접 원인이 칸 높이다.</b> 글자는 축척 보정을 받아 커졌는데
+                //   칸은 그대로라 두 줄이 한 칸에 눌린다. <c>BandHeight</c>도 <b>종이 미터</b>이므로
+                //   같은 보정을 받아야 한다 — 글자만 고치고 자리를 안 고친 것이 화근이었다.
+                try
+                {
+                    if (tr.GetObject(bsId, OpenMode.ForWrite) is CivilDb.Styles.BandStyle bst)
+                    {
+                        double h0 = bst.BandHeight;
+                        double hWant = PaperToStyle(BandHeightMm, scale, annoScale);
+                        bst.BandHeight = hWant;
+                        double h1 = bst.BandHeight;
+                        sb.Append($" · 칸높이 {h0 * 1000:F1}→{h1 * 1000:F1}mm"
+                                + (System.Math.Abs(h1 - hWant) < 1e-9 ? "" : "⚠안 붙음"));
+                        if (System.Math.Abs(h1 - hWant) < 1e-9) nHt++;
+                    }
+                    else sb.Append(" · 칸높이=밴드스타일아님");
+                }
+                catch (System.Exception ex) { sb.Append(" · 칸높이 실패(" + ex.GetType().Name + ")"); }
+                if (bsId.IsNull) { sb.Append("  (밴드 스타일 없음)"); continue; }
+
+                // 어느 라벨 스타일이 값을 찍는지 모르므로 <b>여섯 종류를 다</b> 본다.
+                foreach (string prop in new[] { "MajorIncrementLabelStyleId", "MinorIncrementLabelStyleId",
+                                                "CenterlineLabelStyleId", "GradeBreaksLabelStyleId",
+                                                "SampleLineVerticesLabelStyleId", "IncrementalDistanceLabelStyleId" })
+                {
+                    ObjectId lsId = ObjectId.Null;
+                    try
+                    {
+                        var o = tr.GetObject(bsId, OpenMode.ForRead);
+                        var pi = o.GetType().GetProperty(prop);
+                        if (pi != null) lsId = (ObjectId)pi.GetValue(o);
+                    }
+                    catch { }
+                    if (lsId.IsNull) continue;
+                    nStyle++;
+
+                    try
+                    {
+                        if (tr.GetObject(lsId, OpenMode.ForWrite) is not CivilDb.Styles.LabelStyle ls) continue;
+                        var comps = ls.GetComponents(CivilDb.Styles.LabelStyleComponentType.Text);
+                        if (comps == null || comps.Count == 0) { sb.Append($" · {Short(prop)}=글자칸없음"); continue; }
+                        foreach (ObjectId cid in comps)
+                        {
+                            try
+                            {
+                                if (tr.GetObject(cid, OpenMode.ForWrite) is not CivilDb.Styles.LabelStyleTextComponent tc) continue;
+                                double now = tc.Text.Height.Value;
+                                nRead++;
+                                // ★쓰고 <b>되읽는다</b> — 썼다고 남는 것이 아니다(마젠타·눈금 띄우기에서 겪었다).
+                                tc.Text.Height.Value = want;
+                                double back = tc.Text.Height.Value;
+                                bool ok = System.Math.Abs(back - want) < 1e-9;
+                                if (ok) nWrote++; else nStuck++;
+                                sb.Append($" · {Short(prop)} {now * 1000:F2}→{back * 1000:F2}mm{(ok ? "" : "⚠안 붙음")}");
+                            }
+                            catch (System.Exception ex) { firstErr ??= ex.Message; }
+                        }
+                    }
+                    catch (System.Exception ex) { firstErr ??= ex.Message; }
+                }
+            }
+            tr.Commit();
+        }
+        catch (System.Exception ex) { log?.AppendLine("  밴드 글자 조사 실패 — " + ex.Message); return; }
+
+        log?.AppendLine($"  밴드 글자 — 종이 {BandTextMm:0.#}mm 목표 → 스타일 {want * 1000:F2}mm"
+                      + $" · 밴드 {nBand}칸 · 라벨스타일 {nStyle}개 · 읽은 글자칸 {nRead}개"
+                      + $" · 바뀐 것 {nWrote}개 · 칸높이 {nHt}칸" + (nStuck > 0 ? $" · ⚠안 붙은 것 {nStuck}개" : "")
+                      + (firstErr != null ? $"\n      첫 오류: {firstErr}" : "")
+                      + sb.ToString());
+    }
+
+    private static string Short(string prop)
+        => prop.Replace("LabelStyleId", "").Replace("Increment", "눈금").Replace("Major", "주").Replace("Minor", "보조");
+
+    /// <summary>★★★[JACK 0828 "수직축에는 왼쪽·중심·오른쪽이 있어. DHTICKCHK는 왼쪽만 읽는 것 같아 — 다시 짜"]
+    /// <b>대화상자에서 바꾼 값이 어느 자리로 들어가는지, 눈으로 안 세고 기계가 찾아 준다.</b>
+    /// <para>종전 판도 다섯 축을 다 읽고는 있었다. 그런데 <b>숫자 60개를 늘어놓기만</b> 했으니
+    /// 값이 다 같아 보여 "한 축만 읽나" 싶은 게 당연했다 — <b>비교를 사람에게 시킨 것이 잘못</b>이다.
+    /// → 이제 <b>지난 판과 달라진 것만</b> 맨 위에 따로 찍는다.</para>
+    /// <para>더한 것 넷:
+    /// ① 도면의 <b>모든</b> 횡단 뷰 스타일을 읽는다(다른 스타일을 고치셨을 수 있다) ·
+    /// ② <b>mm와 원시값을 나란히</b> 찍는다(단위가 미터인지 mm인지 여기서 갈린다) ·
+    /// ③ 세 번째 눈금 <c>HorizontalGeometryTickStyle</c>도 시도한다(못 쓰면 못 쓴다고 적는다) ·
+    /// ④ 다섯 축 값이 <b>전부 같으면</b> 그렇다고 적는다 — "한 축만 읽나"가 로그로 갈린다.</para>
+    /// <para><b>쓰는 법</b>: ① 이 명령 한 번 → ② 대화상자에서 값을 바꾸고 <b>확인</b> →
+    /// ③ 이 명령 다시. <b>[횡단도]는 중간에 돌리지 마세요</b> —
+    /// 그리기가 이 값을 <b>되덮어서</b> 바꾼 것이 지워집니다.</para></summary>
+    [CommandMethod("DHTICKCHK")]
+    public static void TickCheck()
+    {
+        var doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        var db = doc.Database; var ed = doc.Editor;
+        var sb = new System.Text.StringBuilder();
+        var now = new System.Collections.Generic.Dictionary<string, string>();
+        sb.AppendLine($"■ 횡단 눈금 속성 실측 {System.DateTime.Now:yyyy-MM-dd HH:mm:ss} (읽기만 한다)");
+        try
+        {
+            var cdoc = CivilApp.CivilApplication.ActiveDocument;
+            var ids = new System.Collections.Generic.List<ObjectId>();
+            try { foreach (ObjectId id in cdoc.Styles.SectionViewStyles) ids.Add(id); }
+            catch (System.Exception ex) { sb.AppendLine("  스타일 목록 실패 — " + ex.Message); }
+            if (ids.Count == 0) sb.AppendLine("  횡단 뷰 스타일이 하나도 없다");
+
+            using var tr = db.TransactionManager.StartTransaction();
+            foreach (ObjectId sid in ids)
+            {
+                // ★[실측 0827] <b>읽기 모드에서는 축이 안 열린다.</b> <c>ForRead</c>로 열면
+                //   Civil 래퍼가 "Operation is not valid"를 던진다. 값은 안 바꾸고 커밋만 한다.
+                if (tr.GetObject(sid, OpenMode.ForWrite) is not CivilDb.Styles.SectionViewStyle st) continue;
+                string sname = "?";
+                try { sname = st.Name; } catch { }
+                sb.AppendLine($"  스타일 '{sname}'");
+                var axes = new (string Nm, System.Func<CivilDb.Styles.AxisStyle> Get)[]
+                {
+                    ("중심", () => st.CenterAxis), ("왼쪽", () => st.LeftAxis),
+                    ("오른쪽", () => st.RightAxis), ("위", () => st.TopAxis), ("아래", () => st.BottomAxis),
+                };
+                var majorX = new System.Collections.Generic.List<string>();
+                foreach (var (nm, get) in axes)
+                {
+                    try
+                    {
+                        using var ax = get();
+                        if (ax == null) { sb.AppendLine($"  [{nm}] 없음"); continue; }
+                        sb.AppendLine($"  [{nm}]");
+                        // ★[JACK 0828] 세 번째 눈금도 <b>넣어서 시도한다</b> — 못 쓰면 그 사실 자체가 정보다.
+                        var ticks = new (string Tn, System.Func<CivilDb.Styles.AxisTickStyle> Get)[]
+                        {
+                            ("주", () => ax.MajorTickStyle),
+                            ("보조", () => ax.MinorTickStyle),
+                            ("수평기하", () => ax.HorizontalGeometryTickStyle),
+                        };
+                        foreach (var (tn, tget) in ticks)
+                        {
+                            CivilDb.Styles.AxisTickStyle tk = null;
+                            try { tk = tget(); }
+                            catch (System.Exception e) { sb.AppendLine($"      {tn,-6} 못 씀 — {e.GetType().Name}"); continue; }
+                            if (tk == null) { sb.AppendLine($"      {tn,-6} 없음"); continue; }
+
+                            // ★★★[JACK 0828 · 자문 글] <b>원시값을 함께 찍는다.</b>
+                            //   자문 글은 <c>OffsetX = 10.0</c>을 "10mm"라 쓰는데 우리는 <c>0.010</c>을 쓴다.
+                            //   둘 중 하나는 틀렸고, <b>원시값과 대화상자 숫자를 나란히 놓으면 바로 갈린다</b> —
+                            //   대화상자 눈금 크기가 4.50mm인데 원시값이 0.0045면 <b>미터가 맞다</b>.
+                            string key(string prop) => $"{sname}|{nm}|{tn}|{prop}";
+                            string One(string prop, System.Func<double> f)
+                            {
+                                double v;
+                                try { v = f(); } catch { return $" {prop}=X"; }
+                                now[key(prop)] = v.ToString("R");
+                                return $" {prop}={v * 1000:F2}mm(원시 {v:0.######})";
+                            }
+                            var line = new System.Text.StringBuilder();
+                            line.Append(One("X", () => tk.OffsetX));
+                            line.Append(One("Y", () => tk.OffsetY));
+                            line.Append(One("크기", () => tk.Size));
+                            line.Append(One("글자", () => tk.TextHeight));
+                            try { double iv = tk.Interval; now[key("간격")] = iv.ToString("R"); line.Append($" 간격={iv:0.###}"); } catch { }
+                            try { double rt = tk.Rotation; now[key("회전")] = rt.ToString("R"); line.Append($" 회전={rt:0.###}"); } catch { }
+                            try
+                            {
+                                var j = tk.Justification;
+                                bool named = System.Enum.IsDefined(typeof(CivilDb.Styles.AxisTickJustificationType), j);
+                                now[key("정렬")] = ((int)j).ToString();
+                                line.Append($" 정렬={(named ? j.ToString() : $"{(int)j}⚠이름없는값")}");
+                            }
+                            catch { line.Append(" 정렬=X"); }
+                            try { line.Append($" 글자체={tk.TextStyle}"); } catch { }
+                            try { line.Append($" 딱지='{tk.LabelText}'"); } catch { }
+                            sb.AppendLine($"      {tn,-6}{line}");
+                            if (tn == "주" && now.TryGetValue(key("X"), out string mx)) majorX.Add(mx);
+                        }
+                    }
+                    catch (System.Exception ex) { sb.AppendLine($"  [{nm}] 실패 — {ex.Message}"); }
+                }
+                // ★[JACK 0828 "왼쪽만 읽는 것 같아"] <b>정말 한 축만 읽는지 기계가 답한다.</b>
+                if (majorX.Count >= 2)
+                {
+                    bool allSame = majorX.TrueForAll(x => x == majorX[0]);
+                    // ★★★[검토 0828 · HIGH-B] <b>관찰만 적는다. 결론은 이 줄이 낼 수 없다.</b>
+                    //   종전엔 "값이 같은 것이지 한 축만 읽는 것이 아니다"라고 <b>단정</b>했는데,
+                    //   다섯 값이 같은 것은 두 가지와 모두 들어맞는다 —
+                    //   ⓐ 축은 다섯인데 값이 같다  ⓑ <b>다섯 번 다 같은 것을 읽는다</b>.
+                    //   그런데 ⓑ가 바로 JACK이 의심한 그것이다. <b>내가 증거 없이 그 가능성을 부인했다.</b>
+                    //   갈라내는 것은 <c>DHTICKSET</c>(축마다 다른 값을 쓰고 되읽기)이지 이 줄이 아니다.
+                    sb.AppendLine(allSame
+                        ? $"    ※축 {majorX.Count}개의 주 눈금 X가 <b>전부 같다</b>(원시 {majorX[0]})"
+                          + " — 값이 같아서인지 <b>같은 것을 다섯 번 읽어서인지는 이 줄로 못 가른다</b>."
+                          + " 가르려면 <b>DHTICKSET</b>(축마다 다른 값을 쓴다)을 치세요"
+                        : "    ※축마다 주 눈금 X가 <b>다르다</b> — 축은 각각 따로 읽히고 있다");
+                }
+            }
+            tr.Commit();
+        }
+        catch (System.Exception ex) { sb.AppendLine("  실패 — " + ex.Message); }
+
+        // ★★★[JACK 0828] <b>지난 판과 달라진 것을 기계가 찾는다.</b>
+        //   두 판을 대 보는 것이 이 테스트의 전부인데 그걸 사람에게 시켰다 —
+        //   숫자가 60개라 <b>안 움직인 것을 움직였다고, 움직인 것을 안 움직였다고</b> 보기 쉽다.
+        try
+        {
+            string snapPath = System.IO.Path.Combine(
+                System.IO.Path.GetDirectoryName(DiagLog.FilePath) ?? ".", "DHXSEC_눈금스냅샷.txt");
+            var prev = new System.Collections.Generic.Dictionary<string, string>();
+            if (System.IO.File.Exists(snapPath))
+                foreach (string ln in System.IO.File.ReadAllLines(snapPath))
+                {
+                    int t = ln.LastIndexOf('\t');
+                    if (t > 0) prev[ln.Substring(0, t)] = ln.Substring(t + 1);
+                }
+            var moved = new System.Text.StringBuilder();
+            int nMoved = 0, nNew = 0;
+            foreach (var kv in now)
+            {
+                if (!prev.TryGetValue(kv.Key, out string old)) { nNew++; continue; }
+                if (old != kv.Value) { moved.AppendLine($"      {kv.Key} : {old} → <b>{kv.Value}</b>"); nMoved++; }
+            }
+            string head = prev.Count == 0
+                ? "  [비교] 지난 판이 없다 — 지금 것을 기준으로 저장했다. 대화상자에서 값을 바꾸고 다시 치세요."
+                : nMoved == 0
+                    ? $"  [비교] 지난 판과 <b>하나도 안 달라졌다</b>(잰 자리 {now.Count}개)"
+                      + " ⚠값을 바꾸셨다면 <b>[횡단도]를 중간에 돌리지 않았는지</b> 보세요 — 그리기가 되덮습니다."
+                    : $"  [비교] <b>움직인 값 {nMoved}개 — 이것이 대화상자가 쓰는 자리다</b>:\n" + moved.ToString().TrimEnd();
+            if (nNew > 0) head += $"\n  (지난 판에 없던 자리 {nNew}개)";
+            int nl = sb.ToString().IndexOf('\n');
+            if (nl >= 0) sb.Insert(nl + 1, head + "\n"); else sb.AppendLine(head);
+            var outp = new System.Text.StringBuilder();
+            foreach (var kv in now) outp.AppendLine($"{kv.Key}\t{kv.Value}");
+            System.IO.File.WriteAllText(snapPath, outp.ToString());
+        }
+        catch (System.Exception ex) { sb.AppendLine("  비교 실패 — " + ex.Message); }
+
+        try { DiagLog.Append($"\n{sb}"); } catch { }
+        ed.WriteMessage($"\n[눈금확인] {now.Count}자리를 읽었습니다 — 자세한 내용: {DiagLog.FilePath}");
+        ed.WriteMessage("\n  순서: ①DHTICKCHK → ②대화상자에서 값 바꾸고 확인 → ③DHTICKCHK");
+        ed.WriteMessage("\n  ※중간에 [횡단도]를 돌리면 그리기가 값을 되덮어 테스트가 헛돕니다.");
+    }
+
+    /// <summary>★★★[JACK 0828 "왼쪽 버그를 역이용한다"] <b>공유된 칸이 화면에 닿는지 한 판에 본다.</b>
+    /// <para><see cref="TickDiag"/>가 확정한 것: 중심축과 왼쪽축이 <b>띄우기 칸을 공유</b>한다.
+    /// 그렇다면 그 칸에 쓰면 중심축 눈금값도 따라 움직여야 <b>역이용</b>이 성립한다.</para>
+    /// <para><b>그런데 아직 모르는 것이 하나 남았다.</b> 그 칸은 원래 <b>왼쪽축의 집</b>이다 —
+    /// 화면이 중심축을 그릴 때 <b>그 칸을 보는지</b>는 확인된 바 없다.
+    /// 안 본다면 아무리 써도 안 움직인다(우리가 18mm로 겪은 그것이다).</para>
+    /// <para>→ <b>눈에 안 띌 수 없는 값</b>을 한 번 쓰고 되그린다.
+    /// 지금 종이 12mm짜리를 <b>60mm</b>로 만드니 <b>다섯 배</b>다. 움직였다면 못 볼 수가 없다.
+    /// <b>사람의 눈이 판정한다</b> — 되읽기로는 이 물음에 답할 수 없다(공유 칸이라 늘 "남았다"가 나온다).</para>
+    /// <para><b>되돌리기</b>: <c>[횡단도]</c>를 한 번 돌리면 그리기가 제 값으로 되덮는다.</para></summary>
+    [CommandMethod("DHTICKSET")]
+    public static void TickSet()
+    {
+        var doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        var db = doc.Database; var ed = doc.Editor;
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"■ 공유 칸 <b>역이용 시험</b> {System.DateTime.Now:yyyy-MM-dd HH:mm:ss}"
+                    + " — 공유된 띄우기 칸에 크게 쓰고, 중심축 눈금값이 움직이는지 <b>눈으로</b> 본다");
+        // 종이에서 다섯 배가 되도록 <b>스타일값</b>을 잡는다.
+        //   지금 스타일값 18mm(=종이 12mm @1:150)의 다섯 배 = 90mm.
+        const double TryStyleMm = 90.0;
+        double before = double.NaN, after = double.NaN, center = double.NaN;
+        try
+        {
+            ObjectId sid = DiagStyleId(db, out string how);
+            if (sid.IsNull)
+            {
+                ed.WriteMessage("\n[역이용시험] 쓸 스타일을 못 찾았습니다 — [횡단도]를 먼저 한 번 찍어 주세요.");
+                return;
+            }
+            sb.AppendLine($"  대상 — {how}");
+
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                if (tr.GetObject(sid, OpenMode.ForWrite) is CivilDb.Styles.SectionViewStyle st)
+                {
+                    // ★<b>왼쪽축에 쓴다.</b> 중심축에 써도 같은 칸이지만,
+                    //   <b>어느 이름으로 썼는지</b>가 로그에 분명해야 나중에 헷갈리지 않는다.
+                    using var lx = st.LeftAxis;
+                    try { before = lx.MajorTickStyle.OffsetX; } catch { }
+                    try { lx.MajorTickStyle.OffsetX = TryStyleMm / 1000.0; } catch (System.Exception e) { sb.AppendLine("  쓰기 실패 — " + e.GetType().Name); }
+                    try { lx.MinorTickStyle.OffsetX = TryStyleMm / 1000.0; } catch { }
+                }
+                tr.Commit();
+            }
+            using (var tr2 = db.TransactionManager.StartTransaction())
+            {
+                if (tr2.GetObject(sid, OpenMode.ForWrite) is CivilDb.Styles.SectionViewStyle st2)
+                {
+                    using var lx = st2.LeftAxis; using var cx = st2.CenterAxis;
+                    try { after = lx.MajorTickStyle.OffsetX; } catch { }
+                    try { center = cx.MajorTickStyle.OffsetX; } catch { }
+                }
+                tr2.Commit();
+            }
+            sb.AppendLine($"  왼쪽축 띄우기 {before * 1000:F2} → {after * 1000:F2}mm · 중심축으로 읽으면 {center * 1000:F2}mm"
+                        + "  (공유 칸이라 둘이 같게 나오는 것은 <b>이미 아는 사실</b>이다 — 판정 근거가 아니다)");
+            sb.AppendLine("  ★<b>판정은 화면이 한다</b> — 중심축의 표고 숫자가 오른쪽으로 확 밀렸는가?");
+        }
+        catch (System.Exception ex) { sb.AppendLine("  실패 — " + ex.Message); }
+
+        try { ed.Regen(); } catch { }
+        try { DiagLog.Append($"\n{sb}"); } catch { }
+        ed.WriteMessage($"\n[역이용시험] 공유 칸에 {TryStyleMm:F0}mm를 썼습니다(종이로 지금의 다섯 배).");
+        ed.WriteMessage("\n  ★도면을 보세요 — <중심축의 표고 숫자>가 오른쪽으로 확 밀렸습니까?"
+                        .Replace("<", "").Replace(">", ""));
+        ed.WriteMessage("\n   밀렸으면 → 역이용이 됩니다. 안 밀렸으면 → 그 칸은 화면에 안 닿습니다.");
+        ed.WriteMessage("\n   되돌리려면 [횡단도]를 한 번 돌리시면 됩니다.");
+    }
+
+    /// <summary>★★★[JACK 0828] <b>중심축과 왼쪽축이 같은 칸을 쓰는지 — 공개 API만으로 확정한다.</b>
+    /// <para>디컴파일이 말하는 것: <c>GetOffsetAttributeId()</c>에서 <c>Center</c>가 <c>Left</c>와
+    /// <b>같은 번호</b>(151085334)를 쓴다. 같은 번호면 <b>같은 칸</b>이다.</para>
+    /// <para>그렇다면 <b>왼쪽축에만 쓰고 중심축을 읽었을 때 따라 움직여야 한다.</b>
+    /// 이건 다른 설명이 없다 — 두 이름이 한 칸을 가리킬 때만 일어나는 일이다.
+    /// <b>생포인터도, 비공식 호출도 필요 없다.</b></para>
+    /// <para><b>대조군을 같이 돌린다.</b> 눈금 <c>크기</c>는 번호가 제대로 갈라져 있으니
+    /// 왼쪽에 써도 중심이 안 움직여야 한다. 띄우기는 움직이고 크기는 안 움직이면
+    /// <b>버그가 띄우기 하나에 있다</b>는 것까지 함께 확정된다.
+    /// (대조군이 없으면 "원래 다 같이 움직이는 것"일 가능성을 못 지운다.)</para>
+    /// <para><b>쓴 값은 되돌린다.</b> 진단이 도면을 바꿔 놓으면 안 된다.</para></summary>
+    [CommandMethod("DHTICKDIAG")]
+    public static void TickDiag()
+    {
+        var doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        var db = doc.Database; var ed = doc.Editor;
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"■ 중심축·왼쪽축 <b>같은 칸 시험</b> {System.DateTime.Now:yyyy-MM-dd HH:mm:ss}"
+                    + " — 왼쪽에만 쓰고 중심을 읽는다(공개 API만 쓴다)");
+        string verdict = "판정 못 함";
+        try
+        {
+            // ★★★[검토 0828 · HIGH-A] 진단이 <b>남의 스타일</b>을 재면 결론이 통째로 뒤집힌다.
+            ObjectId sid = DiagStyleId(db, out string how);
+            if (sid.IsNull)
+            {
+                ed.WriteMessage("\n[같은칸시험] 쓸 스타일을 못 찾았습니다 — [횡단도]를 먼저 한 번 찍어 주세요.");
+                return;
+            }
+            sb.AppendLine($"  대상 — {how}");
+
+            // ── 0단계: 원래 값을 적어 둔다(끝나면 되돌린다)
+            double oL = double.NaN, oC = double.NaN, oR = double.NaN, sL = double.NaN, sC = double.NaN;
+            double Read(System.Func<double> f) { try { return f(); } catch { return double.NaN; } }
+            void Step(string title, System.Action<CivilDb.Styles.SectionViewStyle> act)
+            {
+                using var t = db.TransactionManager.StartTransaction();
+                if (t.GetObject(sid, OpenMode.ForWrite) is CivilDb.Styles.SectionViewStyle s) act(s);
+                t.Commit();
+                if (title != null) sb.AppendLine(title);
+            }
+
+            Step(null, s =>
+            {
+                using var l = s.LeftAxis; using var c = s.CenterAxis; using var r = s.RightAxis;
+                oL = Read(() => l.MajorTickStyle.OffsetX);
+                oC = Read(() => c.MajorTickStyle.OffsetX);
+                oR = Read(() => r.MajorTickStyle.OffsetX);
+                sL = Read(() => l.MajorTickStyle.Size);
+                sC = Read(() => c.MajorTickStyle.Size);
+            });
+            sb.AppendLine($"  ① 시작값 — 띄우기 왼쪽 {oL * 1000:F2} · 중심 {oC * 1000:F2} · 오른쪽 {oR * 1000:F2}mm"
+                        + $" · 크기 왼쪽 {sL * 1000:F2} · 중심 {sC * 1000:F2}mm");
+
+            // ── 1단계: <b>왼쪽축에만</b> 띄우기 77mm를 쓴다. 중심은 손도 안 댄다.
+            const double ProbeOff = 0.077, ProbeSize = 0.0077;
+            Step(null, s => { using var l = s.LeftAxis; try { l.MajorTickStyle.OffsetX = ProbeOff; } catch { } });
+            double aL = double.NaN, aC = double.NaN, aR = double.NaN;
+            Step(null, s =>
+            {
+                using var l = s.LeftAxis; using var c = s.CenterAxis; using var r = s.RightAxis;
+                aL = Read(() => l.MajorTickStyle.OffsetX);
+                aC = Read(() => c.MajorTickStyle.OffsetX);
+                aR = Read(() => r.MajorTickStyle.OffsetX);
+            });
+            bool shared = System.Math.Abs(aC - ProbeOff) < 1e-9;
+            sb.AppendLine($"  ② 왼쪽 띄우기에만 {ProbeOff * 1000:F0}mm를 썼다 → 왼쪽 {aL * 1000:F2} · "
+                        + $"<b>중심 {aC * 1000:F2}</b> · 오른쪽 {aR * 1000:F2}mm"
+                        + (shared ? "  ★<b>중심이 따라 움직였다 — 같은 칸이다</b>"
+                                  : "  중심은 안 움직였다 — 각자 칸을 쓴다"));
+
+            // ── 2단계 대조군: <b>크기</b>도 같은 시험을 한다. 이쪽은 번호가 갈라져 있어야 한다.
+            Step(null, s => { using var l = s.LeftAxis; try { l.MajorTickStyle.Size = ProbeSize; } catch { } });
+            double bL = double.NaN, bC = double.NaN;
+            Step(null, s =>
+            {
+                using var l = s.LeftAxis; using var c = s.CenterAxis;
+                bL = Read(() => l.MajorTickStyle.Size);
+                bC = Read(() => c.MajorTickStyle.Size);
+            });
+            bool sizeShared = System.Math.Abs(bC - ProbeSize) < 1e-9;
+            sb.AppendLine($"  ③ 대조군 — 왼쪽 <b>크기</b>에만 {ProbeSize * 1000:F1}mm를 썼다 → 왼쪽 {bL * 1000:F2} · "
+                        + $"중심 {bC * 1000:F2}mm"
+                        + (sizeShared ? "  ⚠중심도 따라 움직였다 — 크기까지 같은 칸이다"
+                                      : "  ★<b>중심은 그대로다 — 크기는 각자 칸을 쓴다(정상)</b>"));
+
+            // ── 3단계: 되돌린다. 진단이 도면을 바꿔 놓으면 안 된다.
+            Step(null, s =>
+            {
+                using var l = s.LeftAxis;
+                try { if (!double.IsNaN(oL)) l.MajorTickStyle.OffsetX = oL; } catch { }
+                try { if (!double.IsNaN(sL)) l.MajorTickStyle.Size = sL; } catch { }
+            });
+            double rL = double.NaN, rC = double.NaN;
+            Step(null, s =>
+            {
+                using var l = s.LeftAxis; using var c = s.CenterAxis;
+                rL = Read(() => l.MajorTickStyle.OffsetX);
+                rC = Read(() => c.MajorTickStyle.OffsetX);
+            });
+            sb.AppendLine($"  ④ 되돌림 — 왼쪽 {rL * 1000:F2} · 중심 {rC * 1000:F2}mm (시작값 {oL * 1000:F2} · {oC * 1000:F2})");
+
+            verdict = shared && !sizeShared
+                ? "★확정 — <b>중심축과 왼쪽축이 띄우기 칸을 공유한다. 크기는 안 그렇다.</b> Autodesk 래퍼 버그가 맞다"
+                : shared && sizeShared
+                    ? "중심축이 왼쪽축을 따라간다 — 다만 <b>크기까지</b> 그러니 띄우기만의 문제가 아니다. 다시 봐야 한다"
+                    : "<b>안 나뉘었다 — 두 축은 각자 칸을 쓴다.</b> 디컴파일 해석이 틀렸거나 다른 원인이다";
+            sb.AppendLine("  " + verdict);
+        }
+        catch (System.Exception ex) { sb.AppendLine("  실패 — " + ex.Message); verdict = "시험 도중 실패: " + ex.Message; }
+
+        try { DiagLog.Append($"\n{sb}"); } catch { }
+        ed.WriteMessage("\n[같은칸시험] " + verdict.Replace("<b>", "").Replace("</b>", "").Replace("★", ""));
+        ed.WriteMessage($"\n  자세한 내용: {DiagLog.FilePath}");
+    }
+
+    private static void SetTextSizes(Database db, ObjectId styleId, double scale, double annoScale,
+                                     System.Text.StringBuilder log)
+    {
+        if (styleId.IsNull) return;
+        double hTick = PaperToStyle(TickTextMm, scale, annoScale);
+        var axName = new[] { "중심", "왼쪽", "오른쪽", "위", "아래" };
+        var offNote = new System.Text.StringBuilder();
+        int nAx = 0;
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            if (tr.GetObject(styleId, OpenMode.ForWrite) is CivilDb.Styles.SectionViewStyle st)
+                foreach (var get in new System.Func<CivilDb.Styles.AxisStyle>[]
+                         { () => st.CenterAxis, () => st.LeftAxis, () => st.RightAxis,
+                           () => st.TopAxis, () => st.BottomAxis })
+                {
+                    try
+                    {
+                        // ★★★[검토 0828 · HIGH-D] <b>이름을 먼저 집고 순번을 바로 올린다.</b>
+                        //   종전엔 <c>nAx++</c>가 <c>try</c> 맨 끝에 있었다 — 축 하나가 없거나 예외를 던지면
+                        //   순번이 안 올라가 <b>다음 축이 앞 축의 이름으로 찍혔다</b>.
+                        //   하필 <b>중심축이 실패하면 왼쪽축이 "중심"으로 기록된다</b> —
+                        //   JACK의 미해결 과제가 중심축인데, 진단 경로 한복판에서 이름이 밀리는 것이다.
+                        //   (바로 아래 되읽기는 무조건 증가라 이름이 맞으므로,
+                        //    <b>같은 로그 줄 안에서 앞뒤 목록의 축 이름이 서로 어긋났다</b>.)
+                        string axNm = nAx < axName.Length ? axName[nAx] : $"축{nAx}";
+                        nAx++;
+                        using var ax = get();
+                        if (ax == null) { offNote.Append($"\n      {axNm} 없음"); continue; }
+                        // ★★★[JACK 0827 "눈금값이 눈금 안으로 들어가버려"]
+                        //   <b>글자만 키우면 자리가 안 따라온다.</b> 눈금 크기와 띄우기도
+                        //   같은 축척 보정을 받아야 종이에서 한 덩이로 보인다 —
+                        //   글자가 1:300에서 세 배 커지는데 띄우기가 그대로면 눈금을 파고든다.
+                        ax.MajorTickStyle.TextHeight = hTick;
+                        ax.MajorTickStyle.Size = PaperToStyle(TickMajorMm, scale, annoScale);
+                        ax.MinorTickStyle.Size = PaperToStyle(TickMinorMm, scale, annoScale);
+                        // ★띄우기는 <b>JACK이 템플릿에 넣은 12mm</b>가 기준이다.
+                        //   그 값도 주석 축척 기준이라 축척이 다르면 종이에서 어긋난다 —
+                        //   <b>사람이 정한 종이 크기를 축척으로 되돌려</b> 넣는다.
+                        // ★★★[자문 0827] <b>눈금 스타일이 셋이다 — 우리는 하나만 봤다.</b>
+                        //   <c>AxisStyle</c>에는 <c>MajorTickStyle</c>·<c>MinorTickStyle</c>·
+                        //   <c>HorizontalGeometryTickStyle</c>이 있는데, 중심축이 <b>다른 것을 쓸 수</b> 있다.
+                        //   (왼쪽축은 주 눈금이 맞았다 — 그래서 그쪽만 먹은 것으로 보인다.)
+                        //   → <b>셋에 다 넣고 전후를 남긴다.</b> 어느 것이 화면을 바꾸는지 한 판에 갈린다.
+                        //   ※진단 단계다. 갈리면 맞는 하나만 남기고 나머지는 뺀다.
+                        double wOff = PaperToStyle(TickOffsetMm, scale, annoScale);
+                        offNote.Append($"\n      {axNm}");
+                        foreach (var (tickNm, tk) in new (string, CivilDb.Styles.AxisTickStyle)[]
+                                 { ("주", ax.MajorTickStyle), ("보조", ax.MinorTickStyle) })
+                        {
+                            if (tk == null) { offNote.Append($" · {tickNm}=없음"); continue; }
+                            double b0 = double.NaN, a0 = double.NaN;
+                            try { b0 = tk.OffsetX; } catch { }
+                            try { tk.OffsetX = wOff; } catch { }
+                            try { a0 = tk.OffsetX; } catch { }
+                            offNote.Append($" · {tickNm} {b0 * 1000:F1}→{a0 * 1000:F1}");
+                        }
+                    }
+                    catch { }
+                }
+            tr.Commit();
+        }
+        catch (System.Exception ex) { log?.AppendLine("  글자 크기 맞추기 실패 — " + ex.Message); return; }
+
+        // ★★★[JACK 0828 "수직축 눈금값 해결이 아직 안 된 것 같아"] <b>JACK이 맞았다 — 로그가 거짓 합격을 냈다.</b>
+        //   <see cref="TuneAxisTicks"/>가 <c>[커밋 뒤 확인: 남았다]</c>를 찍고 있었는데,
+        //   그것은 <b>자기가 쓴 12mm</b>를 확인한 것이다. 그 뒤 <b>여기서</b> 축척 보정값(24mm)으로
+        //   덮어쓰는데 <b>그 마지막 쓰기에는 확인이 없었다</b>. 화면을 정하는 것은 마지막 값인데,
+        //   확인은 그 앞 값에 걸려 있었다 — <b>검사한 것과 화면에 나가는 것이 다른 물건이었다</b>.
+        //   → 마지막 쓰기 뒤에 <b>새 트랜잭션으로</b> 되읽는다. 비교 기준도 <b>실제로 쓴 값</b>이다.
+        //
+        //   ★<b>정렬 값도 함께 남긴다.</b> <c>AxisTickJustificationType</c>은 어셈블리 실측 결과
+        //   <b>0=TopOrLeft · 1=BottomOrRight · 2=Center</b> 셋뿐인데,
+        //   JACK 도면의 <b>중심축만 5</b>였다(왼쪽·오른쪽·위·아래는 전부 BottomOrRight).
+        //   범위 밖 값이 들어 있다는 것은 <b>우리가 쥔 중심축 눈금 객체가 UI가 쓰는 그것이 아닐</b> 수 있다는 뜻이다.
+        //   (<c>AxisStyle.MajorTickStyle</c>은 <b>읽기 전용</b>이라 통째로 갈아 끼우는 길도 없다.)
+        {
+            double wOffChk = PaperToStyle(TickOffsetMm, scale, annoScale);
+            var chk = new System.Text.StringBuilder();
+            int nStuck = 0, nLost = 0;
+            try
+            {
+                using var trC = db.TransactionManager.StartTransaction();
+                if (trC.GetObject(styleId, OpenMode.ForRead) is CivilDb.Styles.SectionViewStyle stC)
+                {
+                    int k = 0;
+                    foreach (var get in new System.Func<CivilDb.Styles.AxisStyle>[]
+                             { () => stC.CenterAxis, () => stC.LeftAxis, () => stC.RightAxis,
+                               () => stC.TopAxis, () => stC.BottomAxis })
+                    {
+                        string nm = axName[k++];
+                        try
+                        {
+                            using var ax = get();
+                            if (ax == null) { chk.Append($"\n      {nm} 없음"); continue; }
+                            double got = double.NaN; string just = "?";
+                            try { got = ax.MajorTickStyle.OffsetX; } catch { }
+                            try
+                            {
+                                var j = ax.MajorTickStyle.Justification;
+                                just = System.Enum.IsDefined(typeof(CivilDb.Styles.AxisTickJustificationType), j)
+                                    ? j.ToString()
+                                    : $"<b>{(int)j} — 이름 없는 값</b>";
+                            }
+                            catch { just = "못 읽음"; }
+                            bool ok = System.Math.Abs(got - wOffChk) < 1e-9;
+                            if (ok) nStuck++; else nLost++;
+                            chk.Append($"\n      {nm} 띄우기 {got * 1000:F1}mm"
+                                     + (ok ? " 남음" : $" ⚠<b>쓴 값 {wOffChk * 1000:F1}mm이 아니다</b>")
+                                     + $" · 정렬 {just}");
+                        }
+                        catch (System.Exception e) { chk.Append($"\n      {nm} 되읽기 실패 — {e.GetType().Name}"); }
+                    }
+                }
+                trC.Commit();
+            }
+            catch (System.Exception e) { chk.Append("\n      커밋 뒤 되읽기 실패 — " + e.Message); }
+            offNote.Append($"\n    [커밋 뒤 확인] 남은 축 {nStuck}개 · 어긋난 축 {nLost}개"
+                         + "  ※값이 남아도 화면이 안 바뀌면 <b>스타일 대화상자에서 바꿔 보고 DHTICKCHK</b>로 어느 속성이 움직이는지 본다"
+                         + chk.ToString());
+        }
+
+        log?.AppendLine($"  글자·눈금 크기 — 종이 목표 글자{TickTextMm:0.#}·눈금{TickMajorMm:0.#}/{TickMinorMm:0.#}·띄우기{TickOffsetMm:0.#}mm"
+                      + $" → 스타일 글자{hTick * 1000:F2}·띄우기{PaperToStyle(TickOffsetMm, scale, annoScale) * 1000:F1}mm"
+                      + $" (축척 1:{scale:F0} · 주석 1:{annoScale:F0} · {scale / annoScale:F2}배 보정)"
+                      + $" · 축 {nAx}개" + offNote.ToString());
+    }
+
     private static void TuneAxisTicks(Database db, ObjectId styleId, System.Text.StringBuilder log)
     {
         if (styleId.IsNull) return;
@@ -1509,7 +2549,8 @@ public sealed class XsecViewCommand
                             try { ax.MajorTickStyle.Size = TickMajorMm / 1000.0; nSize++; r1 = "크기O"; }
                             catch (System.Exception e1) { r1 = "크기X(" + e1.GetType().Name + ")"; }
                             try { ax.MinorTickStyle.Size = TickMinorMm / 1000.0; } catch { }
-                            try { ax.MajorTickStyle.TextHeight = TickTextMm / 1000.0; } catch { }
+                            // ★[JACK 0827] 글자 크기는 <b>축척이 정해진 뒤</b> 따로 건다
+                            //   (<see cref="SetTextSizes"/>) — 여기선 아직 축척을 모른다.
                             try { ax.MajorTickStyle.Justification = CivilDb.Styles.AxisTickJustificationType.BottomOrRight; } catch { }
                             try { ax.MajorTickStyle.OffsetX = wantOff; b1 = ax.MajorTickStyle.OffsetX; }
                             catch (System.Exception e2) { r2 = "띄우기X(" + e2.GetType().Name + ")"; }
@@ -1589,10 +2630,15 @@ public sealed class XsecViewCommand
                 double got = double.NaN;
                 try { got = st2.CenterAxis.MajorTickStyle.OffsetX; } catch { }
                 double want = TickOffsetMm / 1000.0;
-                axNote.Append(double.IsNaN(got) ? "  [커밋 뒤 중심축을 못 읽었다]"
+                // ★★★[JACK 0828] <b>여기서 "남았다"고 말하면 안 된다.</b> 이 값은 축척을 모르는 채로 쓴
+                //   <b>임시값</b>이고, 뒤에 <see cref="SetTextSizes"/>가 축척 보정값으로 <b>덮어쓴다</b>.
+                //   종전 문구는 그걸 <b>최종 합격</b>처럼 읽히게 만들었다 — JACK이 화면을 보고
+                //   "아직 안 됐다"고 하기 전까지 나는 로그만 믿고 됐다고 했다.
+                //   <b>최종 판정은 '글자·눈금 크기' 줄의 [커밋 뒤 확인]에 있다.</b>
+                axNote.Append(double.IsNaN(got) ? "  [임시값 · 커밋 뒤 중심축을 못 읽었다]"
                     : System.Math.Abs(got - want) < 1e-9
-                        ? $"  [커밋 뒤 확인: 중심 {got * 1000:F1}mm — 남았다]"
-                        : $"  ⚠[커밋 뒤 확인: 중심 {got * 1000:F1}mm — 쓴 값 {TickOffsetMm:F0}mm이 <b>안 남았다</b>]");
+                        ? $"  [임시값 {got * 1000:F1}mm 들어감 — <b>최종 판정은 '글자·눈금 크기' 줄</b>]"
+                        : $"  ⚠[임시값조차 안 남았다: 중심 {got * 1000:F1}mm ≠ 쓴 값 {TickOffsetMm:F0}mm]");
             }
             trV.Commit();
         }
@@ -1604,6 +2650,390 @@ public sealed class XsecViewCommand
                            ? "  ⚠도면에서 자로 잰 면적은 이 배수만큼 부푼다(우리 계산은 실제 표고라 무관)"
                            : "  (1배 — 도면에서 잰 면적과 계산이 같아야 한다)")));
     }
+
+    /// <summary>★★★[JACK 0827 "GL은 밴드의 지반고, FGL은 밴드의 계획고 값이 나와야 해"]
+    /// <b>밴드에 어느 단면을 읽을지 물려 준다.</b>
+    /// <para>회사 스타일을 입히면 밴드가 <b>붙기는</b> 하는데 <b>어느 단면을 볼지는 비어 있다</b> —
+    /// 그래서 값이 안 나온다. <c>Section1Id</c>·<c>Section2Id</c>에 단면을 꽂아야 한다.</para>
+    ///
+    /// <para>★★<b>한 번에 읽고 · 다 고치고 · 한 번에 저장한다.</b>
+    /// <c>GetBottomBandItems</c>는 <b>스냅샷</b>이라 거기 아무리 써도 <c>SetBottomBandItems</c>로
+    /// 돌려주지 않으면 <b>도면은 그대로다</b>(그런데 로그는 성공으로 찍힌다 — 가장 나쁜 모양).
+    /// 종단 쪽이 v25.8에 저장을 빼먹어 눈금까지 사라졌고, v25.9엔 칸마다 저장해 마지막 칸만 남았다.
+    /// <see cref="SheetCommand"/>가 쓰는 그 형태를 그대로 따른다.</para>
+    ///
+    /// <para>★★<b>배선은 단면1=원지반 · 단면2=정지면으로 통일한다.</b>
+    /// 종단 밴드에서 실측으로 확정된 규칙이다 — 지반고=종단1, 계획고=종단2,
+    /// 절토고=종단1−종단2, 성토고=종단2−종단1로 <b>네 식이 한 방향으로 일치</b>했다.
+    /// 그러니 밴드마다 다르게 꽂을 이유가 없다. 줄 순번으로 짐작하면 회사가 표를 한 줄만
+    /// 손봐도 조용히 무너진다(§23.7에서 계획고와 지반고가 같은 값으로 나온 적이 있다).</para>
+    ///
+    /// <para><b>이름으로 지표면을 고르지 않는다.</b> 원지반 지표면 이름이 <c>Surface1</c>인 도면이 있어
+    /// "원지반"이라는 글자가 없다. <c>FindSurfaces</c>가 갈라 놓은 것을 <b>ObjectId로</b> 맞춘다.</para>
+    /// <para>첫 뷰의 <b>밴드 종류와 스타일 이름</b>을 로그에 남긴다 — 어느 줄이 지반고·계획고인지
+    /// 한 판에 확정된다. 그리고 <b>커밋 뒤 새 트랜잭션에서 되읽어</b> 실제로 남았는지 확인한다
+    /// (같은 스냅샷을 다시 읽는 것은 확인이 아니다).</para></summary>
+    /// <summary>★★★[JACK 0827 "GL 위에 측점도 넣어야 해 · 칸만 비워 두고 우리가 글씨를 그린다"]
+    /// <b>측점 밴드 칸에 우리 형식으로 이름을 쓴다.</b>
+    /// <para>Civil 밴드는 측점을 <b>자기 형식</b>으로 찍는다 — 종단 제목에서 겪었듯
+    /// <c>No.</c> 표기가 없고 간격도 다르다. 그래서 그 칸은 <b>비워 두고</b>(단면을 안 물린다)
+    /// 토적표 제목과 <b>같은 이름</b>을 우리가 그린다.</para>
+    /// <para><b>칸이 없으면 조용히 건너뛴다.</b> 템플릿에 측점 밴드를 넣기 전에도 안전하다.</para></summary>
+    private static int DrawStationBand(Database db,
+                                       List<(ObjectId Id, double St, string Name)> views,
+                                       double scale, double annoScale, System.Text.StringBuilder log)
+    {
+        if (views == null || views.Count == 0) return 0;
+        int n = 0, noSlot = 0, nGapRead = 0;
+        double firstGapM = 0.0;
+        double h = PaperToStyle(BandTextMm, scale, annoScale) * (annoScale > 1e-9 ? annoScale : 1.0);
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var ms = (BlockTableRecord)tr.GetObject(
+                SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+            var lay = SectionCommand.EnsureLayer(db, tr, XsecStationLayer, 7);
+            var kst = ImportGisCommand.EnsureKoreanTextStyle(db, tr);
+            // ★★[JACK 0828] 색을 <b>객체에 직접</b> 못 박는다.
+            //   <c>EnsureLayer</c>는 <b>이미 있는 레이어의 색은 안 고친다</b>(있으면 그냥 돌려준다) —
+            //   그래서 옛 도면에서 넘어온 레이어가 노란색이면 <c>ByLayer</c>로는 계속 노랗다.
+            //   이 프로젝트가 터파기 종단에서 이미 겪은 함정이다: <b>ByLayer면 레이어 색이 이긴다</b>.
+            var black = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
+                Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 7);   // 7 = 흰색/검정(인쇄하면 검정)
+
+            foreach (var (vid, _, vname) in views)
+            {
+                try
+                {
+                    if (tr.GetObject(vid, OpenMode.ForRead) is not CivilDb.SectionView sv) continue;
+
+                    // 이름에 <b>측점</b>이 든 밴드가 몇 번째인가. 없으면 이 뷰는 건너뛴다.
+                    //   순번을 알아야 그 칸의 세로 자리를 계산할 수 있다.
+                    // ★[검토 교훈] <b>자를 하나로</b> — 배선 쪽과 같은 함수로 가린다.
+                    int idx = StationBandIndex(tr, sv);
+                    if (idx < 0) { noSlot++; continue; }
+
+                    // 밴드는 그래프 바닥에서 <b>아래로</b> 칸마다 쌓인다.
+                    //   <c>idx</c>번째 칸의 <b>가운데</b> 높이를 잡는다.
+                    var ext = ((Entity)sv).GeometricExtents;
+                    double cx = (ext.MinPoint.X + ext.MaxPoint.X) / 2.0;
+                    double bandM = BandHeightMm / 1000.0 * scale;
+                    // ★★★[JACK 0828 · 검토] <b>틈을 주면 칸이 통째로 내려간다 — 글씨도 따라가야 한다.</b>
+                    //   그래프 바닥과 첫 칸 사이에 <see cref="BandGapMm"/>만큼 틈을 넣었는데,
+                    //   이 자리 계산은 그 틈을 몰랐다. 그대로 뒀으면 글씨만 <b>칸 위로 반 칸</b> 떠서
+                    //   칸선에 걸쳤을 것이다 — <b>겹침 하나 고치다 다른 겹침을 만드는</b> 꼴이다.
+                    //
+                    //   ★<b>계산하지 않고 밴드에게 물어본다.</b> 우리가 쓴 값을 여기서 다시 계산하면
+                    //   §50의 함정("같은 것을 두 곳에서 따로 계산")에 그대로 빠진다.
+                    //   실제로 <b>들어간 값</b>을 읽어야 Civil이 안 받았을 때도 자리가 맞는다.
+                    //   밴드 값은 <b>종이 미터</b>라 주석 축척을 곱해야 모형 길이가 된다.
+                    double gapM = 0.0;
+                    try
+                    {
+                        using var bi = sv.Bands.GetBottomBandItems();
+                        double aScale = annoScale > 1e-9 ? annoScale : 1.0;
+                        for (int b = 0; b <= idx && b < bi.Count; b++)
+                            try { gapM += bi[b].Gap * aScale; } catch { }
+                    }
+                    catch { }
+                    // ★[검토] <b>첫 뷰 것을 그대로 적는다.</b> 종전엔 <c>gapM &gt; 0</c>일 때만 담았는데,
+                    //   그러면 <b>틈이 0인 것</b>과 <b>아직 못 읽은 것</b>이 로그에서 같아 보인다 —
+                    //   "틈이 0이다"라는 말이 진짜인지 아닌지를 구별할 수 없게 된다.
+                    if (nGapRead == 0) firstGapM = gapM;
+                    nGapRead++;
+                    double cy = ext.MinPoint.Y - gapM - bandM * (idx + 0.5);
+
+                    var t = new DBText
+                    {
+                        TextString = vname ?? "",
+                        Height = h,
+                        Justify = AttachmentPoint.MiddleCenter,
+                    };
+                    t.SetDatabaseDefaults(db);
+                    t.LayerId = lay;
+                    t.Color = black;
+                    if (!kst.IsNull) t.TextStyleId = kst;
+                    var pt = new Point3d(cx, cy, 0);
+                    t.Position = pt; t.AlignmentPoint = pt;
+                    ms.AppendEntity(t);
+                    tr.AddNewlyCreatedDBObject(t, true);
+                    n++;
+                }
+                catch { }
+            }
+            tr.Commit();
+        }
+        catch (System.Exception ex) { log?.AppendLine("  측점 밴드 글씨 실패 — " + ex.Message); return 0; }
+
+        // ★★★[검토 0828 · HIGH-E] <b>내가 넣은 단위 검사는 발화할 수 없는 검사였다.</b>
+        //   <c>firstGapM &gt; bandMLog</c>로 경고하려 했는데, 쓸 때 <c>PaperToStyle</c>이 <c>÷주석축척</c>하고
+        //   읽을 때 <c>×주석축척</c>해서 <b>둘이 상쇄된다</b> — <c>gapM</c>은 언제나 <c>bandMLog</c>의
+        //   <b>정확히 절반</b>(2mm÷4mm)으로 나온다. 단위를 잘못 봤어도 그대로 절반이다.
+        //   <b>자기가 쓴 값을 자기가 되읽는 왕복은 단위를 검증하지 못한다.</b>
+        //   오늘 아침에 당한 그것과 <b>같은 종류의 착각</b>이다 — 검사가 다른 물건을 재고 있었다.
+        //
+        //   → <b>원시값 둘을 나란히 놓는다.</b> 밴드 <b>스타일</b>의 칸 높이(종이값이 확실한 것)와
+        //   밴드 <b>항목</b>의 틈을 <b>보정 없이</b> 찍는다. 같은 단위면 비가 <b>0.5</b>여야 한다
+        //   (종이 2mm ÷ 4mm). 어긋나면 그 배수가 곧 단위 차이다 — <b>스크린샷 없이 갈린다.</b>
+        double bandMLog = BandHeightMm / 1000.0 * scale;
+        double gapRawLog = double.NaN, hRawLog = double.NaN;
+        try
+        {
+            using var trR = db.TransactionManager.StartTransaction();
+            foreach (var (vid, _, _) in views)
+            {
+                if (trR.GetObject(vid, OpenMode.ForRead) is not CivilDb.SectionView sv2) continue;
+                using var bi2 = sv2.Bands.GetBottomBandItems();
+                if (bi2 == null || bi2.Count == 0) break;
+                try { gapRawLog = bi2[0].Gap; } catch { }
+                try
+                {
+                    if (trR.GetObject(bi2[0].BandStyleId, OpenMode.ForRead)
+                        is CivilDb.Styles.SectionDataBandStyle bs2) hRawLog = bs2.BandHeight;
+                }
+                catch { }
+                break;
+            }
+            trR.Commit();
+        }
+        catch { }
+        double ratio = (hRawLog > 1e-12) ? gapRawLog / hRawLog : double.NaN;
+        log?.AppendLine($"  측점 밴드 글씨 {n}개"
+                      + (noSlot > 0 ? $" · 측점 칸이 없어 건너뛴 뷰 {noSlot}개(템플릿에 밴드를 넣으면 나온다)" : "")
+                      + $" · 글자 종이 {h * 1000 / (annoScale > 1e-9 ? annoScale : 1.0):F1}mm"
+                      + $" · 레이어 '{XsecStationLayer}' · 색 7(흰색/검정) 객체에 직접 지정"
+                      + (nGapRead > 0
+                         ? $" · 자리 = 그래프바닥 − 틈 {firstGapM:F3}m − 칸 {bandMLog:F3}m×(순번+0.5)"
+                         : " · ※틈을 한 번도 못 읽었다"));
+        log?.AppendLine($"    단위 확인(원시값 그대로) — 틈 {gapRawLog:0.######} ÷ 칸높이 {hRawLog:0.######} = "
+                      + (double.IsNaN(ratio) ? "<b>못 잼</b>" : $"{ratio:0.####}")
+                      + $"  (같은 단위면 {BandGapMm / BandHeightMm:0.####}이어야 한다"
+                      + (double.IsNaN(ratio) ? ")"
+                         : System.Math.Abs(ratio - BandGapMm / BandHeightMm) < 0.02
+                            ? " — <b>맞다</b>)"
+                            : $" — ⚠<b>어긋난다. 이 비만큼 단위가 다르다</b>)"));
+        return n;
+    }
+
+    /// <summary>★★★[JACK 0827] <b>측점 칸을 가리는 자 — 한 곳에서만 판단한다.</b>
+    /// <para>이름에 <c>측점</c>이 들었으면 그 칸이다. 그런데 도면에 <b>측점용 밴드 스타일이 없어</b>
+    /// JACK이 <c>계획고</c> 스타일로 칸을 만드셨다 — <b>어차피 비울 자리라 스타일은 상관없다</b>.</para>
+    /// <para>그래서 이름으로 못 찾으면 <b>맨 위 칸</b>을 측점 자리로 본다.
+    /// 단 <b>칸이 셋 이상일 때만</b> — 둘뿐이면 지반고·계획고라 맨 위를 비우면 안 된다.</para></summary>
+    private static int StationBandIndex(Transaction tr, CivilDb.SectionView sv)
+    {
+        try
+        {
+            using var bi = sv.Bands.GetBottomBandItems();
+            for (int i = 0; i < bi.Count; i++)
+                try
+                {
+                    if (tr.GetObject(bi[i].BandStyleId, OpenMode.ForRead) is CivilDb.Styles.StyleBase sb
+                        && (sb.Name ?? "").IndexOf("측점", System.StringComparison.Ordinal) >= 0) return i;
+                }
+                catch { }
+            return bi.Count >= 3 ? 0 : -1;   // 이름이 없으면 맨 위 — 칸이 셋 이상일 때만
+        }
+        catch { return -1; }
+    }
+
+    private static int BindBandSections(Database db,
+                                        List<(ObjectId Id, double St, string Name)> views,
+                                        System.Collections.Generic.Dictionary<ObjectId, string> kindOf,
+                                        double scale, double annoScale,
+                                        System.Text.StringBuilder log)
+    {
+        if (views == null || views.Count == 0) return 0;
+        int nView = 0, nSet = 0, nRow = 0, nPlan = 0, nStn = 0;
+        int noSl = 0, noG = 0, noP = 0, nHid = 0, nGap = 0;
+        // ★★★[JACK 0828 "측점 밴드 부분이 너무 수직축 마지막하고 붙어서 겹쳐 보여 — 조금 띄워야 해"]
+        //   맨 아래 눈금값(<c>90</c>)과 첫 밴드 칸이 <b>맞닿아</b> 글자가 포개졌다.
+        //   밴드 칸 높이를 10mm→4mm로 줄이면서 <b>둘 사이의 빈틈까지 같이 사라진 것</b>이다.
+        //   → <c>SectionViewBandItem.Gap</c>이 바로 그 틈이다(스타일 대화상자의 <b>간격</b> 칸,
+        //   JACK 도면에서 <c>0.00mm</c>였다). <b>첫 칸에만</b> 주면 아래 칸들이 통째로 따라 내려간다.
+        double gapWant = PaperToStyle(BandGapMm, scale, annoScale);
+        var gapNote = new System.Text.StringBuilder();
+        string firstErr = null;
+        var shape = new System.Text.StringBuilder();
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            foreach (var (vid, _, vname) in views)
+            {
+                try
+                {
+                    if (tr.GetObject(vid, OpenMode.ForWrite) is not CivilDb.SectionView sv) continue;
+                    nView++;
+
+                    // 이 뷰의 검토선에서 원지반·계획 단면을 찾는다 — 뷰마다 한 번만.
+                    ObjectId g = ObjectId.Null, pl = ObjectId.Null;
+                    try
+                    {
+                        if (tr.GetObject(sv.SampleLineId, OpenMode.ForRead) is CivilDb.SampleLine sl)
+                            foreach (ObjectId secId in sl.GetSectionIds())
+                            {
+                                try
+                                {
+                                    if (tr.GetObject(secId, OpenMode.ForRead) is not CivilDb.Section sec) continue;
+                                    string kind = kindOf.TryGetValue(sec.SourceId, out var kk) ? kk : "";
+                                    if (kind == "원지반" && g.IsNull) g = secId;
+                                    else if (kind == "정지면" && pl.IsNull) pl = secId;
+                                }
+                                catch { }
+                            }
+                        else noSl++;
+                    }
+                    catch (System.Exception ex) { noSl++; firstErr ??= ex.Message; }
+                    if (g.IsNull) noG++;
+                    if (pl.IsNull) noP++;
+                    if (g.IsNull && pl.IsNull) continue;
+
+                    // 아래 밴드와 위 밴드 <b>둘 다</b> 본다 — 회사 세트가 위에 얹는 구조일 수 있다.
+                    int stnIdx = StationBandIndex(tr, sv);
+                    foreach (bool bottom in new[] { true, false })
+                    {
+                        try
+                        {
+                            using var items = bottom ? sv.Bands.GetBottomBandItems() : sv.Bands.GetTopBandItems();
+                            if (items == null || items.Count == 0) continue;
+                            for (int i = 0; i < items.Count; i++)
+                            {
+                                try
+                                {
+                                    var it = items[i];
+                                    // ★[JACK 0828] <b>그래프와 첫 칸 사이만 띄운다.</b>
+                                    //   칸마다 주면 밴드가 통째로 성겨져 다시 넓어진다 —
+                                    //   JACK이 고치라 한 것은 <b>수직축 눈금값과 첫 칸</b>이 겹치는 것뿐이다.
+                                    if (bottom && i == 0)
+                                    {
+                                        double gb = double.NaN;
+                                        try { gb = it.Gap; } catch { }
+                                        try { it.Gap = gapWant; nGap++; } catch { }
+                                        if (nView == 1)
+                                            gapNote.Append($"\n      틈 {gb * 1000:F1}→{gapWant * 1000:F1}mm"
+                                                         + $"(종이 {BandGapMm:0.#}mm · 축척 {scale / (annoScale > 1e-9 ? annoScale : 1.0):F2}배 보정)");
+                                    }
+                                    // ★★★[JACK 0827 "GL FGL 둘 다 같은 값, 둘 다 지반고로만 나온다"]
+                                    //   <b>§23.7이 종단에서 겪은 그것이다.</b> 회사 표현식이 두 밴드 모두
+                                    //   <c>&lt;[단면1 표고]&gt;</c>라서, 모든 줄에 1=원지반을 꽂으면
+                                    //   <b>계획고 자리에 지반고가 찍힌다</b>(값이 한 자리도 안 틀리게 같다).
+                                    //
+                                    //   <b>여기서만은 이름으로 고른다.</b> 지반고와 계획고는 <b>종류도 표현식 구조도
+                                    //   같아서</b> 이름 말고 구분할 근거가 없다 — §23.7이 종단에서 내린 결론 그대로다.
+                                    //   (절토 <c>1-2</c>·성토 <c>2-1</c>가 생기면 1=원지반이라야 부호가 맞으므로
+                                    //    그런 줄은 기본 배선을 그대로 둔다.)
+                                    string bn = "?";
+                                    try
+                                    {
+                                        if (tr.GetObject(it.BandStyleId, OpenMode.ForRead) is CivilDb.Styles.StyleBase sb)
+                                            bn = sb.Name ?? "?";
+                                    }
+                                    catch { }
+                                    // ★★[JACK 0827] <b>측점 칸에는 단면을 안 물린다.</b>
+                            //   물리면 표고가 찍히는데, 그 자리에는 <b>우리가 측점 이름을 쓴다</b>.
+                            //   칸을 비워 두는 것이 곧 자리를 만드는 일이다.
+                            // ★★★[JACK 0828 "기존 계획고가 안 지워져서 측점하고 겹쳐져서 보여"]
+                            //   <b>건너뛰는 것은 비우는 것이 아니다.</b> 이 칸은 <c>계획고</c> 스타일로
+                            //   만들어져 <b>이미 단면이 물려 있다</b> — 우리가 손을 안 대면 그 표고가 그대로
+                            //   찍히고, 그 위에 우리가 측점 이름을 쓰니 <b>둘이 겹쳐 보였다</b>.
+                            //   되읽기가 <c>3/3줄에 남음</c>이라고 말해 준 것이 바로 이것이다 —
+                            //   비웠다면 <b>2/3</b>여야 했다. 로그가 답을 들고 있었는데 내가 안 읽었다.
+                            //   → <b>물린 것을 끊는다.</b> 칸을 비우는 것이 곧 자리를 만드는 일이다.
+                            if (i == stnIdx)
+                            {
+                                // ★★★[JACK 0828 · 2판 "여전히 측점하고 FGL하고 겹쳐져"]
+                                //   <b>단면을 끊는 것으로는 글자가 안 사라진다.</b> 1판에서
+                                //   <c>Section1Id = ObjectId.Null</c>을 넣어 봤지만 내 새 되읽기가
+                                //   <c>⚠측점칸이 아직 물려 있다</c>로 <b>바로 잡아냈다</b> — Civil이 안 받는다.
+                                //   (그 되읽기를 안 넣었으면 또 "됐다"고 했을 것이다.)
+                                //
+                                //   → <b>어셈블리를 뜯어 답을 찾았다: <c>ShowLabels</c>.</b>
+                                //   <c>SectionViewBandItem</c>에 <b>쓰기 가능</b>으로 있다.
+                                //   이 칸은 <c>계획고</c> 스타일을 <b>세 번째 칸과 함께 쓰므로</b>
+                                //   스타일에서 글자를 끄면 <b>진짜 계획고 칸까지 비어 버린다</b> —
+                                //   그래서 <b>스타일이 아니라 이 칸 하나</b>에만 끄는 이 길이라야 한다.
+                                try { it.ShowLabels = false; nHid++; } catch { }
+                                try { it.Section1Id = ObjectId.Null; } catch { }
+                                try { it.Section2Id = ObjectId.Null; } catch { }
+                                nStn++; continue;
+                            }
+                            bool isPlan = bn.IndexOf("계획", System.StringComparison.Ordinal) >= 0;
+                                    if (isPlan) { if (!pl.IsNull) it.Section1Id = pl; if (!g.IsNull) it.Section2Id = g; nPlan++; }
+                                    else        { if (!g.IsNull) it.Section1Id = g;  if (!pl.IsNull) it.Section2Id = pl; }
+                                    nRow++;
+                                    if (nView == 1)
+                                        shape.Append($"\n      [{(bottom ? "아래" : "위")}{i}] {it.BandType} '{bn}'"
+                                                   + (isPlan ? " → 단면1=<b>정지면</b>(뒤집음)" : " → 단면1=원지반"));
+                                }
+                                catch (System.Exception ex) { firstErr ??= ex.Message; }
+                            }
+                            // ★스냅샷을 <b>통째로</b> 돌려준다. 줄마다 저장하면 앞 줄이 지워진다(v25.9 실측).
+                            if (bottom) sv.Bands.SetBottomBandItems(items);
+                            else sv.Bands.SetTopBandItems(items);
+                            nSet++;
+                        }
+                        catch (System.Exception ex) { firstErr ??= ex.Message; }
+                    }
+                }
+                catch (System.Exception ex) { firstErr ??= ex.Message; }
+            }
+            tr.Commit();
+        }
+        catch (System.Exception ex) { log?.AppendLine("  밴드 단면 물리기 실패 — " + ex.Message); return 0; }
+
+        // 커밋 뒤 <b>새 트랜잭션</b>에서 되읽는다 — 스냅샷을 다시 읽는 건 확인이 아니다.
+        string back = "?";
+        try
+        {
+            using var tr2 = db.TransactionManager.StartTransaction();
+            foreach (var (vid, _, _) in views)
+            {
+                if (tr2.GetObject(vid, OpenMode.ForRead) is not CivilDb.SectionView sv2) continue;
+                using var it2 = sv2.Bands.GetBottomBandItems();
+                if (it2 == null || it2.Count == 0) { back = "밴드 없음"; break; }
+                int okS = 0;
+                for (int i = 0; i < it2.Count; i++)
+                    if (!it2[i].Section1Id.IsNull || !it2[i].Section2Id.IsNull) okS++;
+                // ★★[JACK 0828] <b>측점 칸이 정말 비었는지</b>를 따로 말한다.
+                //   종전엔 "3/3줄에 남음"이 <b>다 잘 됐다</b>로 읽혔는데, 실은 <b>비워야 할 칸까지</b>
+                //   남아 있다는 뜻이었다. 세는 것과 바라는 것이 다르면 로그가 거짓말을 한다.
+                int si = StationBandIndex(tr2, sv2);
+                // ★★[JACK 0828] <b>화면을 정하는 것을 재야 한다.</b> 1판에서는 <c>Section1Id</c>가
+                //   비었는지만 봤는데, 글자를 그리게 하는 것은 <c>ShowLabels</c>였다 —
+                //   <b>엉뚱한 것을 재면 고쳐도 고쳐진 줄 모르고, 안 고쳐도 모른다.</b>
+                string stnBack;
+                if (si < 0) stnBack = "측점칸 없음";
+                else
+                {
+                    bool shown = true;
+                    try { shown = it2[si].ShowLabels; } catch { }
+                    bool bound = !it2[si].Section1Id.IsNull || !it2[si].Section2Id.IsNull;
+                    stnBack = shown
+                        ? "⚠<b>측점칸 글자가 아직 켜져 있다</b>(계획고와 겹친다)"
+                        : "측점칸 글자 껐다" + (bound ? "(단면은 물린 채 — 글자를 껐으니 안 보인다)" : "");
+                }
+                double g2 = double.NaN;
+                try { g2 = it2[0].Gap; } catch { }
+                back = $"{okS}/{it2.Count}줄에 남음 · {stnBack} · 첫 칸 틈 {g2 * 1000:F1}mm";
+                break;
+            }
+            tr2.Commit();
+        }
+        catch { back = "되읽기 실패"; }
+
+        log?.AppendLine($"  밴드 단면 물리기 — 뷰 {nView}개 · 물린 줄 {nRow}개 · 저장 {nSet}번 · 계획고 뒤집기 {nPlan}줄"
+                      + (nStn > 0 ? $" · 측점칸 {nStn}개(글자 끈 것 {nHid}개)" : "")
+                      + (nGap > 0 ? $" · 틈 준 칸 {nGap}개" : "")
+                      + $" [커밋 뒤 확인: {back}]"
+                      + gapNote.ToString()
+                      + (noSl > 0 ? $" · ⚠검토선을 못 연 뷰 {noSl}개" : "")
+                      + (noG > 0 ? $" · ⚠원지반 단면이 없던 뷰 {noG}개" : "")
+                      + (noP > 0 ? $" · ⚠계획 단면이 없던 뷰 {noP}개" : "")
+                      + (firstErr != null ? $"\n      첫 오류: {firstErr}" : "")
+                      + shape.ToString());
+        return nRow;
+    }
+
 
     /// <summary>★★[JACK 0826] <b>횡단뷰의 선 색을 정한다.</b>
     ///
@@ -1959,7 +3389,13 @@ public sealed class XsecViewCommand
                     if (q.MissG) nNoG++;
                     if (q.MissP) nNoP++;
                     if (q.MissE) nNoE++;
-                    else
+                    // ★★★[검토 0828] <b><c>else</c>가 터파기 <c>if</c>에만 붙어 있었다.</b>
+                    //   그래서 합계가 <b>터파기가 잡힌 측점만</b> 더했다 —
+                    //   28개 측점 중 6개. 절토 <b>3677.7㎡가 1405.8㎡</b>로 찍혔다(2.6배 축소).
+                    //   도면의 수량표는 멀쩡했다(<c>map</c>은 이 위에서 담는다) —
+                    //   <b>JACK이 BO와 대조할 때 보는 그 요약 한 줄만</b> 틀렸다. 그래서 더 나빴다.
+                    //   → 합계에 넣을 조건은 <b>그 값이 있느냐</b>이지 터파기가 있느냐가 아니다.
+                    if (!double.IsNaN(q.Cut) || !double.IsNaN(q.Fill) || !double.IsNaN(q.ExcTotal))
                     {
                         nOk++;
                         if (!double.IsNaN(q.Cut)) sumCut += q.Cut;
@@ -1996,8 +3432,7 @@ public sealed class XsecViewCommand
     /// ★<c>DH-도곽범위(모형)</c>는 <b>종단도와 함께 쓰는 레이어</b>라 손대지 않는다.</para></summary>
     private static int WipeOld(Database db, System.Text.StringBuilder log)
     {
-        string[] mine = { XsecTitleLayer, XsecAxisLayer, XsecTextLayer, XsecCellLayer,
-                          QtLayerEdge, QtLayerLine, QtLayerText, XsecFrameLayer };
+        string[] mine = MyLayers;
         int n = 0;
         try
         {
@@ -2086,6 +3521,20 @@ public sealed class XsecViewCommand
     }
 
     /// <summary>지우기 목록에서 쓰는 별칭 — <see cref="SheetCommand.EraseAll"/>이 이 레이어들을 함께 지운다.</summary>
+    /// <summary>★★★[JACK 0828 "횡단도를 다시 눌러 리셋될 때 측점 밴드값이 안 없어지고 남아 있어"]
+    /// <b>우리가 횡단에 그리는 레이어 — 목록은 여기 하나뿐이다.</b>
+    /// <para><b>원인이 정확히 §50이었다.</b> 같은 개념(우리가 그린 횡단 산출물)을 <b>두 곳이 따로</b> 들고 있었다 —
+    /// <see cref="WipeOld"/>는 배열로, <see cref="SheetCommand"/>의 종단도 청소는 <b>이름을 하나씩 손으로 적어</b>.
+    /// 오늘 <c>DH-횡단-측점</c>을 새로 만들면서 <b>앞쪽에만</b> 넣었더니,
+    /// <b>종단도가 돌 때만</b> 측점 글씨가 유령으로 남았다(횡단도를 다시 누르면 지워지니 안 보였다).</para>
+    /// <para>→ <b>목록을 하나로 모은다.</b> 레이어를 더하는 사람은 이제 여기만 고치면 된다 —
+    /// 두 곳을 기억해야 하는 구조는 <b>언젠가 반드시</b> 한쪽을 빠뜨린다.</para></summary>
+    internal static readonly string[] MyLayers =
+    {
+        XsecTitleLayer, XsecStationLayer, XsecAxisLayer, XsecTextLayer, XsecCellLayer,
+        QtLayerEdge, QtLayerLine, QtLayerText, XsecFrameLayer,
+    };
+
     internal static string TitleLayer => XsecTitleLayer;
     internal static string AxisLayer => XsecAxisLayer;
     internal static string TextLayer => XsecTextLayer;
