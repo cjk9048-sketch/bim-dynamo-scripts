@@ -27,12 +27,33 @@ namespace DH.Grading.Civil.Commands;
 public static class StationCommand
 {
     [CommandMethod("DHSTATION", CommandFlags.Modal)]
-    public static void Run()
+    public static void Run() => Run(frontBack: false);
+
+    /// <summary>★★★[JACK 0828 "전/후 측점 버튼을 만들어 줘"]
+    /// <b>찍은 자리에 (전)(후) 두 장이 나오는 측점을 더한다.</b>
+    ///
+    /// <para>JACK: <i>"종단 전용 단면검토선엔 마우스로 찍은 그 위치에 하나의 측점,
+    /// 횡단 전용 단면검토선엔 미세하게 벌려진 두 개 측점이 찍히면 돼."</i></para>
+    ///
+    /// <para><b>[측점]과 같은 손놀림, 같은 저장 자리다.</b> 다른 것은 <b>사유 한 줄</b>뿐 —
+    /// <see cref="StationMarks.FrontBackWhy"/>. 종단은 사유를 안 보므로 <b>측점 하나</b>가 그대로 서고,
+    /// 횡단은 그 사유를 보고 <b>벽과 같은 길</b>로 두 장을 만든다.
+    /// 갈라지는 자리를 <b>새로 만들지 않는다</b> — 벽이 쓰던 <see cref="StationMarks.WallSpan"/>에 얹는다.</para>
+    ///
+    /// <para>벌어지는 거리는 <b>벽과 자가 다르다</b> — 측점 기준 좌우 <b>5cm</b> 고정
+    /// (<see cref="StationMarks.FrontBackHalf"/>).
+    /// 벽은 두께가 얇아 밀어내야 하지만 여기는 <b>밀어낼 두께가 없다</b> —
+    /// 사람이 정한 자리가 곧 답이라 <see cref="DH.Grading.Core.XsecSpan.Place"/>가 그대로 쓴다.</para></summary>
+    [CommandMethod("DHSTATIONFB", CommandFlags.Modal)]
+    public static void RunFrontBack() => Run(frontBack: true);
+
+    private static void Run(bool frontBack)
     {
         var doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
         var db = doc.Database;
         Editor ed = doc.Editor;
+        string kind = frontBack ? "전후측점" : "측점";
 
         ObjectId alignId = PickAlignment(db, ed);
         if (alignId.IsNull) return;
@@ -50,12 +71,14 @@ public static class StationCommand
         //   ※ 목록은 처음 한 번만 보여 준다 — 찍을 때마다 쏟아지면 명령창이 목록으로 덮여
         //     정작 방금 무엇이 추가됐는지가 안 보인다.
         ShowList(db, ed, alignId);
-        ed.WriteMessage("\n  ※ 측점을 찍으면 단면검토선이 생기고 종단도가 그 자리에서 다시 그려집니다.");
+        ed.WriteMessage(frontBack
+            ? "\n  ※ 찍은 자리에 종단은 측점 하나, 횡단면도만 (전)(후) 두 장으로 나옵니다(좌우 5cm)."
+            : "\n  ※ 측점을 찍으면 단면검토선이 생기고 종단도가 그 자리에서 다시 그려집니다.");
 
         while (true)
         {
             var ppo = new PromptPointOptions(
-                "\n[측점] 종단도(또는 노선)에서 추가할 자리를 클릭 [목록(L)/삭제(D)/전체삭제(A)/끝(X)]: ")
+                $"\n[{kind}] 종단도(또는 노선)에서 추가할 자리를 클릭 [목록(L)/삭제(D)/전체삭제(A)/끝(X)]: ")
             { AllowNone = true };
             ppo.Keywords.Add("목록", "L", "목록(L)", true, true);
             ppo.Keywords.Add("삭제", "D", "삭제(D)", true, true);
@@ -81,7 +104,7 @@ public static class StationCommand
             }
             else if (pp.Status == PromptStatus.OK)
             {
-                changed = AddAt(db, ed, alignId, pp.Value.TransformBy(ed.CurrentUserCoordinateSystem));
+                changed = AddAt(db, ed, alignId, pp.Value.TransformBy(ed.CurrentUserCoordinateSystem), frontBack);
             }
             // ★[검토 반영] <b>남은 상태(Error 등)는 끝낸다 — <c>continue</c>면 무한 루프다.</b>
             //   <c>GetPoint</c>가 <c>Error</c>를 돌려주는 상황(도면이 닫히는 중·스크립트 입력 고갈)에서는
@@ -116,7 +139,7 @@ public static class StationCommand
             alignId = Reacquire(db, alignId);
             if (alignId.IsNull)
             {
-                ed.WriteMessage("\n  · 노선을 다시 잡지 못했습니다 — [측점]을 다시 실행해 주세요.");
+                ed.WriteMessage($"\n  · 노선을 다시 잡지 못했습니다 — [{kind}]을 다시 실행해 주세요.");
                 return;
             }
         }
@@ -502,7 +525,7 @@ public static class StationCommand
     /// <summary>찍은 자리에 측점을 더한다. <b>참=목록이 바뀌었다</b>(부른 쪽이 종단도를 다시 그린다).
     /// <para>★[v32.35] 점을 <b>인자로 받는다</b> — 부르는 쪽이 이미 물어봤기 때문이다.
     /// 종전처럼 여기서 또 물으면 클릭을 두 번 하게 된다.</para></summary>
-    private static bool AddAt(Database db, Editor ed, ObjectId alignId, Point3d wcs)
+    private static bool AddAt(Database db, Editor ed, ObjectId alignId, Point3d wcs, bool frontBack = false)
     {
         // ── ① 측점 읽기 (읽기 전용). ★[v23.17] 사람에게 이름을 묻기 <b>전에</b> 닫는다 —
         //   묻는 동안 트랜잭션을 열어 두면 그 사이 도면 전체가 잡혀 있다.
@@ -530,7 +553,10 @@ public static class StationCommand
         //
         //   ※ 이름이 다시 필요해지면 <b>목록에서 고쳐 넣는 길</b>을 여는 편이 낫다 —
         //     찍는 손을 멈춰 세우지 않으면서도 이름을 남길 수 있다.
-        const string why = "직접 찍음";
+        // ★[JACK 0828] <b>사유 한 줄로 갈린다 — 저장 형식은 그대로다.</b>
+        //   <see cref="StationMarks.Mark"/>에 칸을 더하면 <b>옛 도면의 측점을 못 읽는다</b>.
+        //   사유는 이미 저장·복원되고 목록에도 찍히므로, 여기 얹으면 세 곳이 함께 따라온다.
+        string why = frontBack ? StationMarks.FrontBackWhy : "직접 찍음";
 
         // ── ② 측점 목록 저장 — 이건 <b>반드시 남아야 하는 것</b>이라 따로 커밋한다.
         bool saved;

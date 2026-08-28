@@ -227,12 +227,18 @@ public sealed class XsecViewCommand
                     (double St, string Tag, int Ord)[] jobs;
                     if (sp.Back > sp.Front)
                     {
-                        // ★[검토] 밀어내는 자는 <b>Core에 하나</b>다 — 여기서 다시 계산하지 않는다.
-                        var (fSt, bSt, outw) = DH.Grading.Core.XsecSpan.PushOut(sp.Front, sp.Back);
+                        // ★[검토] 자리를 정하는 자는 <b>Core에 하나</b>다 — 여기서 다시 계산하지 않는다.
+                        // ★★★[JACK 0828] <b>벽과 수동 (전)(후)는 자가 다르다.</b>
+                        //   벽은 두께가 얇아 밀어내야 하고, 사람이 찍은 것은 <b>그 자리가 곧 답</b>이다
+                        //   (좌우 5cm — 주로 구조물 투영한 자리에 찍는다).
+                        bool fixedSpan = StationMarks.IsFixedSpan(sp.Kind);
+                        var (fSt, bSt, outw) = DH.Grading.Core.XsecSpan.Place(sp.Front, sp.Back, fixedSpan);
                         jobs = new[] { (fSt, "(전)", 0), (bSt, "(후)", 2) };
                         nPair++;
-                        log.AppendLine($"    벽 {StationMarks.Fmt(sp.Mid, ProfileCommand.LastStationInterval)}" +
-                                       $" — 두께 {sp.Back - sp.Front:F3}m → (전){fSt:F2} / (후){bSt:F2} (밖으로 {outw:F2}m)");
+                        log.AppendLine($"    {(fixedSpan ? "수동" : "벽")} {StationMarks.Fmt(sp.Mid, ProfileCommand.LastStationInterval)}" +
+                                       (fixedSpan
+                                        ? $" — 사람이 정한 자리 그대로 → (전){fSt:F2} / (후){bSt:F2} (좌우 {outw:F2}m)"
+                                        : $" — 두께 {sp.Back - sp.Front:F3}m → (전){fSt:F2} / (후){bSt:F2} (밖으로 {outw:F2}m)"));
                     }
                     else jobs = new[] { (m.St, "", 1) };
 

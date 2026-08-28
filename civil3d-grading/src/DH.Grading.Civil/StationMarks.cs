@@ -49,6 +49,47 @@ public static class StationMarks
     /// 축척에 따라 집합이 달라지면 두 도면이 어긋난다.</para></summary>
     public const double PadGroundTol = 0.05;
 
+    // ── 전/후 측점 ──────────────────────────────────────────────────────────
+
+    /// <summary>★★★[JACK 0828 "전/후 측점 버튼을 만들어 줘"] <b>수동으로 찍은 (전)(후) 자리의 표식.</b>
+    ///
+    /// <para>옹벽·가시설은 형상에서 <b>저절로</b> (전)(후)가 나온다(<see cref="WallSpan"/>).
+    /// 그런데 형상이 없는 자리에도 두 장이 필요할 때가 있다 —
+    /// 구조물이 아직 모델에 없거나, 도면 관례상 그 자리를 앞뒤로 보여야 할 때다.
+    /// <b>그 판단은 사람이 한다.</b></para>
+    ///
+    /// <para><b>사유 문자열에 담는다.</b> 저장 형식을 바꾸지 않으려는 것이다 —
+    /// <see cref="Mark"/>에 칸을 더하면 <b>옛 도면에 적힌 측점을 못 읽는다</b>.
+    /// 사유는 이미 저장·복원되고 목록에도 찍히므로, 여기 얹으면 <b>세 곳이 공짜로 따라온다</b>.</para>
+    ///
+    /// <para>판정은 <see cref="IsFrontBack"/> <b>하나로만</b> 한다 —
+    /// 문자열을 여기저기서 직접 비교하면 언젠가 한 곳이 어긋난다(§50).</para></summary>
+    public const string FrontBackWhy = "전후(직접 찍음)";
+
+    /// <summary>이 측점이 <b>수동 (전)(후)</b>인가. 사유를 읽는 자는 여기 하나뿐이다.</summary>
+    public static bool IsFrontBack(string why)
+        => why != null && why.StartsWith("전후", System.StringComparison.Ordinal);
+
+    /// <summary>★★★[JACK 0828 "난 측점 기준 양쪽으로 5cm면 돼. 주로 구조물 투영한 거에 찍을 거야"]
+    /// 수동 (전)(후)가 측점 기준 <b>좌우로 벌어지는 거리</b>(m) — <b>이 값이 곧 자를 자리</b>다.
+    ///
+    /// <para>벽과 <b>자가 다르다</b>. 벽은 두께가 2~5cm뿐이라 그대로 자르면 두 단면이 같아 보여
+    /// <see cref="DH.Grading.Core.XsecSpan.PushOut"/>이 0.20m까지 밀어낸다.
+    /// 그런데 수동 (전)(후)에는 <b>밀어낼 두께가 없다</b> — 사람이 정한 자리가 곧 답이다.
+    /// 그 규칙을 태우면 5cm가 <b>말없이 0.20m로 부풀어</b> 구조물 밖을 자른다.</para>
+    ///
+    /// <para>그래서 <see cref="DH.Grading.Core.XsecSpan.Place"/>가 <b>사람이 정한 것</b>과
+    /// <b>벽</b>을 갈라 다룬다 — 부르는 쪽은 어느 쪽인지만 넘긴다.</para></summary>
+    public const double FrontBackHalf = 0.05;
+
+    /// <summary>수동 (전)(후) 자리의 <see cref="WallSpan.Kind"/> 표식 —
+    /// 이 이름을 보고 <b>밀어내지 않는다</b>고 판단한다. 문자열 비교는 <see cref="IsFixedSpan"/> 하나뿐이다.</summary>
+    public const string FrontBackKind = "수동(전후)";
+
+    /// <summary>이 자리가 <b>사람이 정한 (전)(후)</b>인가 — 그렇다면 앞·뒤를 <b>그대로</b> 쓴다.</summary>
+    public static bool IsFixedSpan(string kind)
+        => string.Equals(kind, FrontBackKind, System.StringComparison.Ordinal);
+
     /// <summary>측점 하나. <paramref name="Why"/>는 사람이 읽을 사유(밸브실·이형관·구배변화 등).
     /// <para>★[JACK 0825] <paramref name="Z"/>=그 자리 선의 <b>표고</b>. 종단에 옹벽·가시설을
     /// <b>굵은 수직 막대</b>로 그리려면 위·아래 표고가 있어야 한다. 기본값 <c>NaN</c>이라

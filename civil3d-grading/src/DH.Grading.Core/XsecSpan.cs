@@ -37,4 +37,22 @@ public static class XsecSpan
     /// <summary>이 벽 자리가 (전)(후) 두 장을 받을 자격이 있나 — 앞이 뒤보다 <b>작아야</b> 한다.
     /// 못 찾은 빈 값은 <c>0,0</c>이라 여기서 걸러진다.</summary>
     public static bool IsWall(double front, double back) => back > front;
+
+    /// <summary>★★★[JACK 0828 "전후 측점 기능은 벽 두께라는 개념이 없잖아.
+    /// 이건 그냥 상수값으로 거리를 줘야 될 텐데, 난 측점 기준 양쪽으로 5cm면 돼"]
+    /// <b>자를 두 자리를 정한다 — 벽인지 사람이 찍은 것인지에 따라 자가 다르다.</b>
+    ///
+    /// <para><b>왜 갈라야 하나.</b> <see cref="PushOut"/>은 <b>얇은 벽을 구제하는 규칙</b>이다 —
+    /// 벽면만큼만 띄우면 두 단면이 같아 보이므로 <see cref="OutMin"/>(0.20m)까지 억지로 민다.
+    /// 그런데 수동 (전)(후)에는 <b>벽이 없다</b>. 구제할 두께가 없는데 구제 규칙을 태우면
+    /// 사람이 정한 5cm가 <b>말없이 0.20m로 부풀어</b> 엉뚱한 자리를 자른다.</para>
+    ///
+    /// <para><b>사람이 찍은 것은 그 자리가 곧 답이다.</b> 주로 <b>구조물을 투영한 자리</b>에 찍으므로
+    /// (JACK) 좌우 5cm면 구조물의 앞뒤 지표면이 갈린다 — 더 밀면 구조물 밖으로 나간다.</para>
+    ///
+    /// <para>판단을 <b>여기 한 곳</b>에 둔다. 부르는 쪽이 <c>if</c>로 갈라 쓰면
+    /// 둘 중 하나를 고칠 때 다른 하나가 남는다(§50).</para></summary>
+    /// <param name="fixedSpan"><c>true</c>=사람이 정한 자리(그대로 쓴다) · <c>false</c>=벽(밀어낸다).</param>
+    public static (double Front, double Back, double Out) Place(double front, double back, bool fixedSpan)
+        => fixedSpan ? (front, back, System.Math.Abs(back - front) / 2.0) : PushOut(front, back);
 }

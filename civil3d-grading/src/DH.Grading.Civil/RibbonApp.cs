@@ -314,7 +314,43 @@ public sealed class RibbonApp : IExtensionApplication
                 "노선 꺾임점과 계획면 구배변화점은 **자동으로 잡히므로** 더할 필요가 없습니다.\n" +
                 "측점은 도면에 그려지지 않고 노선에 숨겨 저장됩니다 — 목록은 이 명령에서 봅니다.\n" +
                 "여기서 정한 측점이 종단도 밴드와 단면검토선에 그대로 쓰입니다.", null);
-            pDraw.Items.Add(btnStn);
+
+            // ★★★[JACK 0828 "측점 기능을 스플릿 버튼으로 바꾸고 그 안에
+            //   현재 측점 버튼하고 새로 전/후 측점 버튼을 만들어 줘"]
+            //   두 명령은 <b>손놀림이 같다</b>(찍고·지우고·목록 보고) — 다른 것은 결과뿐이라
+            //   나란히 놓기보다 <b>한 자리에 겹쳐 두는 것</b>이 맞다.
+            //   ※[JACK 0824 교훈] 스플릿 버튼은 <b>자기 이미지를 따로 줘야</b> 한다 —
+            //     목록 항목의 아이콘을 물려받지 않아 자리가 비어 보인다.
+            var btnStnFb = MakeButton(
+                "전/후\n측점", "DHSTATIONFB ", "찍은 자리를 횡단면도에서만 (전)(후) 두 장으로 만듭니다", "측점");
+            btnStnFb.ToolTip = MakeTip("전/후 측점 (DHSTATIONFB)",
+                "노선 위를 클릭하면 **종단도에는 측점 하나**가 서고,\n" +
+                "**횡단면도만 (전)(후) 두 장**으로 나옵니다 — 측점 기준 좌우 **5cm**.\n" +
+                "옹벽·가시설은 형상에서 저절로 (전)(후)가 나오므로 여기서 찍을 필요가 없습니다.\n" +
+                "**구조물이 아직 모델에 없는 자리**를 앞뒤로 보여야 할 때 씁니다.\n" +
+                "주로 **구조물을 투영한 자리**에 찍습니다.", null);
+
+            var splitStn = new RibbonSplitButton
+            {
+                Text = "측점",
+                ShowText = true,
+                ShowImage = true,
+                LargeImage = MakeGlyph("측점"),
+                Image = MakeGlyph("측점"),
+                Size = RibbonItemSize.Large,
+                Orientation = System.Windows.Controls.Orientation.Vertical,
+                IsSplit = true,
+                IsSynchronizedWithCurrentItem = false,
+                ListStyle = RibbonSplitButtonListStyle.List,
+                ToolTip = MakeTip("측점",
+                    "**측점** — 찍은 자리에 측점 하나(종단·횡단 모두 한 장).\n" +
+                    "**전/후 측점** — 종단은 한 장, **횡단만 (전)(후) 두 장**.\n" +
+                    "아래 화살표를 눌러 고릅니다.", null),
+            };
+            splitStn.Items.Add(btnStn);
+            splitStn.Items.Add(btnStnFb);
+            splitStn.Current = btnStn;
+            pDraw.Items.Add(splitStn);
             pDraw.Items.Add(Spacer());
 
             // ★★[JACK 0826] <b>[단면검토선]·[종단·횡단] 버튼을 없앴다</b> — 쓸 일이 없어졌다.

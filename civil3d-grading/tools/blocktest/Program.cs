@@ -6139,6 +6139,31 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     // 벽이 아닌 자리(빈 값)는 두 장을 안 받는다.
     Check("S70 빈 값은 벽이 아니다", !XsecSpan.IsWall(0.0, 0.0), "아님");
     Check("S70 앞<뒤여야 벽이다", XsecSpan.IsWall(16.309, 16.332), "맞음");
+
+    // ★★★[JACK 0828] <b>벽과 수동 (전)(후)는 자가 달라야 한다.</b>
+    //   JACK: <i>"전후단면의 거리 기준을 종단 만들 때 만들어지는 옹벽·가시설 기준하고
+    //   측점 기준일 때의 산정 방식은 달라야 한다는 거야."</i>
+    //   벽은 얇아서 밀어내야 하고(위 시험들), 사람이 찍은 것은 <b>그 자리가 곧 답</b>이다.
+    const double fbHalf = 0.05;                     // StationMarks.FrontBackHalf
+    var m = XsecSpan.Place(10.0 - fbHalf, 10.0 + fbHalf, fixedSpan: true);
+    Check("S70 ★수동 5cm는 밀어내지 않는다", Math.Abs(m.Out - fbHalf) < 1e-12, $"{m.Out:F3}m");
+    Check("S70 ★수동 (전)/(후)는 찍은 자리 ±5cm", Math.Abs(m.Front - 9.95) < 1e-12 && Math.Abs(m.Back - 10.05) < 1e-12,
+          $"{m.Front:F3}/{m.Back:F3}");
+    var w = XsecSpan.Place(10.0 - fbHalf, 10.0 + fbHalf, fixedSpan: false);
+    Check("S70 ★같은 입력이라도 벽이면 20cm로 부푼다", Math.Abs(w.Out - 0.20) < 1e-12, $"{w.Out:F3}m");
+    Check("S70 ★그래서 두 자를 갈라야 한다(5cm ≠ 20cm)", Math.Abs(m.Out - w.Out) > 0.1,
+          $"수동 {m.Out:F2} vs 벽 {w.Out:F2}");
+
+    // ★★[JACK 0828 질문] <i>"옹벽 높이를 1단에 15m로 하면 두께가 15cm일 텐데,
+    //   전후단면 찍을 때 옹벽 안에 측점이 찍힌다든지 그럴 일은 없지?"</i>
+    //   → <b>없다.</b> 밀어내는 거리가 <c>max(절반×3, 0.20)</c>이라 <b>언제나 절반보다 크다</b>.
+    //   벽이 얇으면 하한이, 두꺼우면 3배가 이기는데 <b>둘 다 절반을 넘는다</b>.
+    foreach (double th in new[] { 0.02, 0.15, 0.75, 2.0 })   // 두께: 잘린 단 · 15m×0.01 · 15m×0.05 · 아주 두꺼운 것
+    {
+        var p = XsecSpan.Place(100.0 - th / 2, 100.0 + th / 2, fixedSpan: false);
+        Check($"S70 ★두께 {th * 100:F0}cm 벽 — 자르는 자리가 벽면 밖이다",
+              p.Out > th / 2 + 1e-12, $"밀기 {p.Out:F3}m > 벽면 {th / 2:F3}m");
+    }
 }
 
 
@@ -6465,6 +6490,263 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     var spC = CrossSectionArea.SplitByDepth(xc, tc, bc, 5.0);
     Check("S78 ★격자를 늘려도 18㎡", Math.Abs(spC.Deep - 18.0) < 1e-3, $"{spC.Deep:F3}㎡");
 }
+
+// ── S79 ★★★[JACK 0828] 지층 모델 — 완료기준 1·2번을 도면 없이 잰다 ────────────────────
+//   ① 보링공 자리에서 친 두께가 그대로 나온다   ② 어느 자리에서도 역전이 없다
+{
+    Console.WriteLine("\n== S79 지층 모델 ==");
+
+    // 층 다섯 — 위에서 아래로. 표토·풍화토는 지형을 따라가고(두께), 연암은 제 모양대로 눕는다(표고).
+    var defs = new[]
+    {
+        new StratumDef("표토",   QtyBucket.Soil,      InterpMode.Thickness),
+        new StratumDef("풍화토", QtyBucket.Soil,      InterpMode.Thickness),
+        new StratumDef("풍화암", QtyBucket.Weathered, InterpMode.Thickness),
+        new StratumDef("연암",   QtyBucket.Soft,      InterpMode.Elevation),
+        new StratumDef("경암",   QtyBucket.None,      InterpMode.Elevation),
+    };
+
+    // JACK이 예로 든 세 공(경암은 얇게 덧붙였다). 수위는 GL에서 2m 아래.
+    var logs = new[]
+    {
+        new BoreLog("BH-01", 0,   0,   102.5, new[] { 0.70, 3.30, 4.30, 3.0, 2.0 }, 2.0),
+        new BoreLog("BH-02", 100, 0,   104.0, new[] { 0.80, 3.40, 3.80, 3.0, 2.0 }, 2.5),
+        new BoreLog("BH-03", 50,  100, 101.0, new[] { 0.70, 3.30, 3.50, 3.0, 2.0 }, 1.5),
+    };
+
+    var model = StrataModel.Build(defs, logs, out string why);
+    Check("S79 모델이 만들어진다", model != null, why.Length == 0 ? "OK" : why);
+
+    // ── ① 보링공 자리에서 <b>친 두께가 그대로</b> 나온다 (완료기준 1번)
+    //   보간이 자기 자료를 배신하면 안 된다 — 이게 깨지면 나머지는 다 의미가 없다.
+    foreach (var b in logs)
+    {
+        var c = model.At(b.X, b.Y, b.Gl);
+        double top = b.Gl; bool allOk = true; double worst = 0;
+        for (int i = 0; i < defs.Length; i++)
+        {
+            double got = top - c.Bottom[i];
+            double want = b.Thickness[i];
+            worst = Math.Max(worst, Math.Abs(got - want));
+            if (Math.Abs(got - want) > 1e-9) allOk = false;
+            top = c.Bottom[i];
+        }
+        Check($"S79 ★{b.Name} 자리에서 친 두께가 그대로", allOk, $"최대 어긋남 {worst:E1}m");
+    }
+
+    // 지하수위도 보링공 자리에서는 그대로여야 한다.
+    {
+        var c = model.At(logs[0].X, logs[0].Y, logs[0].Gl);
+        Check("S79 ★보링공 자리 지하수위도 그대로",
+              Math.Abs(c.Water - (logs[0].Gl - logs[0].WaterDepth)) < 1e-9, $"{c.Water:F3}m");
+    }
+
+    // ── ② 어느 자리에서도 역전이 없다 (완료기준 2번)
+    //   부지를 촘촘히 훑는다. 격자를 늘려도 답이 같아야 하므로 두 번 잰다.
+    static (int bad, int fixedCells, double worstUp) Sweep(StrataModel m, int n)
+    {
+        int bad = 0, fx = 0; double worstUp = 0;
+        for (int ix = 0; ix <= n; ix++)
+            for (int iy = 0; iy <= n; iy++)
+            {
+                double x = -20 + 140.0 * ix / n, y = -20 + 140.0 * iy / n;
+                double gz = 102.0 + 0.015 * x - 0.010 * y;      // 기울어진 원지반
+                var c = m.At(x, y, gz);
+                double prev = gz;
+                for (int i = 0; i < c.Bottom.Length; i++)
+                {
+                    if (double.IsNaN(c.Bottom[i])) continue;
+                    if (c.Bottom[i] > prev + 1e-9) { bad++; worstUp = Math.Max(worstUp, c.Bottom[i] - prev); }
+                    prev = c.Bottom[i];
+                }
+                if (c.Fixed.Count > 0) fx++;
+            }
+        return (bad, fx, worstUp);
+    }
+    var s41 = Sweep(model, 41);
+    var s81 = Sweep(model, 81);
+    Check("S79 ★역전이 한 자리도 없다(41격자)", s41.bad == 0, $"{s41.bad}곳 · 최대 {s41.worstUp:E1}m");
+    Check("S79 ★역전이 한 자리도 없다(81격자)", s81.bad == 0, $"{s81.bad}곳");
+    Check("S79 ★격자를 늘려도 결론이 같다", (s41.bad == 0) == (s81.bad == 0), "같다");
+
+    // ── 역전을 <b>일부러</b> 만들어 눌러 내리는지, 그리고 <b>남기는지</b> 본다.
+    //   연암을 표고로 만들되 그 표고가 풍화암보다 높게 오도록 자료를 꾸민다.
+    {
+        var d2 = new[]
+        {
+            new StratumDef("표토",   QtyBucket.Soil,      InterpMode.Thickness),
+            new StratumDef("연암",   QtyBucket.Soft,      InterpMode.Elevation),
+        };
+        // ★★[실측 0828] <b>지반고가 보링공과 같으면 역전이 안 생긴다.</b>
+        //   두 방식이 같은 가중치를 쓰므로 차이가 언제나 <c>IDW(두께) ≥ 0</c>으로 떨어진다 —
+        //   처음 꾸민 자료(표토 20m vs 0.1m)로는 한 자리도 안 뒤집혔다.
+        //   <b>역전은 물어보는 자리의 지반고가 보링공과 다를 때</b> 생긴다:
+        //   두께로 만든 층은 <b>그 자리 지반고</b>를 따라 내려가는데,
+        //   표고로 만든 층은 <b>보링공의 절대표고</b>에 매여 있어 따라 내려가지 않는다.
+        //   → 지형이 보링공이 안 본 <b>골짜기</b>로 내려가면 암반이 흙을 뚫고 올라온다. 그것이 실제 위험이다.
+        var l2 = new[]
+        {
+            new BoreLog("BH-A", 0,  0, 100.0, new[] { 2.0, 1.0 }, double.NaN),   // 표토하단 98 · 연암하단 97
+            new BoreLog("BH-B", 10, 0, 100.0, new[] { 2.0, 1.0 }, double.NaN),
+        };
+        var m2 = StrataModel.Build(d2, l2, out _);
+        int fixedSeen = 0; double maxDrop = 0; bool anyUp = false;
+        for (int i = 0; i <= 100; i++)
+        {
+            double x = 10.0 * i / 100.0;
+            double gz = 100.0 - 10.0 * i / 100.0;     // 보링공은 EL.100인데 지형은 90까지 파인 골짜기
+            var c = m2.At(x, 0, gz);
+            if (c.Fixed.Count > 0) { fixedSeen++; foreach (var f in c.Fixed) maxDrop = Math.Max(maxDrop, f.Drop); }
+            if (c.Bottom[1] > c.Bottom[0] + 1e-9) anyUp = true;
+        }
+        Check("S79 ★역전이 생길 자료에서 실제로 눌렀다", fixedSeen > 0, $"{fixedSeen}자리 · 최대 {maxDrop:F2}m");
+        Check("S79 ★누른 뒤에는 역전이 없다", !anyUp, "없다");
+        Check("S79 ★누른 폭을 남긴다(0이 아니다)", maxDrop > 0, $"{maxDrop:F2}m");
+    }
+
+    // ── 지하수위는 <b>지층 제약을 안 받는다</b> — 풍화암 속에 있어도 그대로 둔다.
+    {
+        var d3 = new[] { new StratumDef("표토", QtyBucket.Soil, InterpMode.Thickness) };
+        var l3 = new[] { new BoreLog("BH-W", 0, 0, 100.0, new[] { 1.0 }, 5.0) };   // 표토 1m, 수위 5m 아래
+        var m3 = StrataModel.Build(d3, l3, out _);
+        var c3 = m3.At(0, 0, 100.0);
+        Check("S79 ★지하수위는 층 밑이어도 안 끌어올린다", Math.Abs(c3.Water - 95.0) < 1e-9, $"{c3.Water:F2}m");
+        Check("S79   (그 자리 표토 하단은 99.0)", Math.Abs(c3.Bottom[0] - 99.0) < 1e-9, $"{c3.Bottom[0]:F2}m");
+    }
+
+    // ── 지하수위가 <b>땅 위로는</b> 못 올라간다(그건 침수다).
+    {
+        var d4 = new[] { new StratumDef("표토", QtyBucket.Soil, InterpMode.Thickness) };
+        var l4 = new[] { new BoreLog("BH-U", 0, 0, 100.0, new[] { 1.0 }, -3.0) };  // 심도 음수 = 지표 위
+        var m4 = StrataModel.Build(d4, l4, out _);
+        var c4 = m4.At(0, 0, 100.0);
+        Check("S79 ★지하수위는 지표를 못 넘는다", Math.Abs(c4.Water - 100.0) < 1e-9, $"{c4.Water:F2}m");
+    }
+
+    // ── 공이 <b>하나뿐</b>이어도 모델이 선다 (TIN이면 못 만드는 자리)
+    {
+        var d5 = new[] { new StratumDef("표토", QtyBucket.Soil, InterpMode.Thickness) };
+        var l5 = new[] { new BoreLog("BH-1", 0, 0, 100.0, new[] { 2.0 }, double.NaN) };
+        var m5 = StrataModel.Build(d5, l5, out string w5);
+        var far = m5.At(500, 500, 80.0);                 // 아주 먼 자리
+        Check("S79 ★공이 하나여도 모델이 선다", m5 != null, w5.Length == 0 ? "OK" : w5);
+        Check("S79 ★먼 자리에도 그 두께가 퍼진다", Math.Abs((80.0 - far.Bottom[0]) - 2.0) < 1e-9,
+              $"{80.0 - far.Bottom[0]:F3}m");
+    }
+
+    // ── 못 만들 때는 <b>이유를 남기고</b> null을 돌려준다 — 조용히 빈 모델을 주지 않는다.
+    {
+        var bad = StrataModel.Build(new[] { new StratumDef("표토", QtyBucket.Soil, InterpMode.Thickness) },
+                                    new BoreLog[0], out string wb);
+        Check("S79 ★보링공이 없으면 이유를 남긴다", bad == null && wb.Length > 0, wb);
+        var bad2 = StrataModel.Build(new[] { new StratumDef("표토", QtyBucket.Soil, InterpMode.Thickness) },
+                                     new[] { new BoreLog("X", 0, 0, 100.0, new[] { 1.0, 2.0 }, double.NaN) },
+                                     out string wb2);
+        Check("S79 ★층 수가 안 맞으면 버리고 이유를 남긴다", bad2 == null && wb2.Length > 0, wb2);
+    }
+}
+
+
+// ── S80 ★★★[JACK 0828] 토적표를 <b>현장에 맞춰 짓는다</b> — 못 박지 않는다 ──────────────
+{
+    Console.WriteLine("\n== S80 표 짓기 ==");
+
+    // ① 토사·풍화암·연암만 나온 현장, 얕고 물 없음 — 가장 단출한 표
+    var a = QtyTableSpec.Build(new[] { RockClass.Soil, RockClass.Weathered, RockClass.Soft },
+                               hasDeep: false, hasWater: false);
+    Check("S80 세 암종·얕음·육상 — 암종 3", a.Rocks.Count == 3, $"{a.Rocks.Count}");
+    Check("S80   깊이 구분 1(초과 줄 없음)", a.Depths.Count == 1, $"{a.Depths.Count}");
+    Check("S80   물 구분 1(용수 줄 없음)", a.Waters.Count == 1, $"{a.Waters.Count}");
+    //   ★[실측 0828] 왼쪽 <b>내용</b>은 9줄이다 — 성토1 + 절토3 + 터파기(1물×1깊이×3암=3) + 되메2.
+    //   그런데 <b>표는 12줄</b>이 된다: 오른쪽 공종이 12줄이라 짧은 쪽에 빈 줄이 채워지기 때문이다.
+    //   <b>표는 직사각형이라야 한다</b> — 두 단 길이가 다르면 병합 계산이 어긋난다.
+    //   그래서 여기서는 <b>내용 줄 수</b>와 <b>표 줄 수</b>를 갈라서 잰다.
+    int aContent = 0;
+    foreach (var r in a.Left) if (r.Item != null) aContent++;
+    Check("S80 ★왼쪽 내용이 9줄", aContent == 9, $"{aContent}줄");
+    Check("S80 ★표는 긴 쪽에 맞춰 12줄", a.Left.Count == 12, $"{a.Left.Count}줄");
+    Check("S80 ★두 단 길이가 같다(직사각형)", a.Left.Count == a.Right.Count, $"{a.Left.Count}/{a.Right.Count}");
+
+    // ② 다섯 암종 다 나오고 깊고 물까지 — 표가 커진다
+    var b = QtyTableSpec.Build(new[] { RockClass.Soil, RockClass.Weathered, RockClass.Soft,
+                                       RockClass.Medium, RockClass.Hard },
+                               hasDeep: true, hasWater: true);
+    //   성토1 + 절토5 + 터파기(2물×2깊이×5암=20) + 되메2 = 28
+    Check("S80 ★다섯 암종·깊음·용수 — 28줄", b.Left.Count == 28, $"{b.Left.Count}줄");
+    Check("S80 ★현장이 다르면 표가 다르다", b.BodyRows > a.BodyRows, $"{a.BodyRows} → {b.BodyRows}");
+
+    // ③ ★축척이 읽는 값이 실제로 따라 움직인다
+    //   축척은 TotalRows를 읽는다(QtTableHmm = 줄높이 × (TotalRows + 0.4)).
+    //   이 값이 안 움직이면 표만 커지고 그림은 그대로라 <b>표가 칸 밖으로 나간다</b>.
+    Check("S80 ★축척이 읽는 TotalRows도 따라 늘었다",
+          b.TotalRows - a.TotalRows == b.BodyRows - a.BodyRows && b.TotalRows > a.TotalRows,
+          $"{a.TotalRows} → {b.TotalRows}");
+
+    // ④ 암종 차례는 <b>고른 순서와 무관</b>하게 늘 같다 — 도면끼리 견줄 수 있어야 한다
+    var c = QtyTableSpec.Build(new[] { RockClass.Hard, RockClass.Soil, RockClass.Soft },
+                               hasDeep: false, hasWater: false);
+    Check("S80 ★거꾸로 골라도 차례가 같다",
+          c.Rocks[0] == RockClass.Soil && c.Rocks[1] == RockClass.Soft && c.Rocks[2] == RockClass.Hard,
+          string.Join("·", c.Rocks));
+    var d = QtyTableSpec.Build(new[] { RockClass.Soil, RockClass.Soil, RockClass.Soil },
+                              hasDeep: false, hasWater: false);
+    Check("S80 ★같은 것을 여러 번 골라도 한 줄", d.Rocks.Count == 1, $"{d.Rocks.Count}");
+
+    // ⑤ 아무것도 안 골랐어도 빈 표를 만들지 않는다
+    var e = QtyTableSpec.Build(new RockClass[0], hasDeep: false, hasWater: false);
+    Check("S80 ★암종이 없으면 토사 하나로 선다", e.Rocks.Count == 1 && e.Rocks[0] == RockClass.Soil, "토사");
+
+    // ⑥ 깊이 딱지는 <b>이상이 아니라 초과</b>다(JACK) — 그리고 기준이 바뀌면 글자가 따라간다
+    Check("S80 ★'초과'라고 적는다('이상'이 아니다)",
+          QtyTableSpec.DepthLabel(DepthClass.Gt, 5.0).Contains("초과") &&
+          !QtyTableSpec.DepthLabel(DepthClass.Gt, 5.0).Contains("이상"),
+          QtyTableSpec.DepthLabel(DepthClass.Gt, 5.0).Replace("|", " "));
+    Check("S80 ★기준을 바꾸면 글자가 따라간다",
+          QtyTableSpec.DepthLabel(DepthClass.Le, 4.5).StartsWith("4.5m"),
+          QtyTableSpec.DepthLabel(DepthClass.Le, 4.5).Replace("|", " "));
+
+    // ⑦ 바닥면고르기 대상은 <b>사용자가 정한다</b>. 기본은 토사를 뺀 전부.
+    Check("S80 기본 바닥면고르기는 토사를 뺀다",
+          a.FloorTrim.Count == 2 && !a.FloorTrim.Contains(RockClass.Soil),
+          string.Join("·", a.FloorTrim));
+    var f = QtyTableSpec.Build(new[] { RockClass.Soil, RockClass.Weathered, RockClass.Soft },
+                               hasDeep: false, hasWater: false,
+                               floorTrim: new[] { RockClass.Soft });
+    Check("S80 ★사용자가 고르면 그대로 쓴다", f.FloorTrim.Count == 1 && f.FloorTrim[0] == RockClass.Soft,
+          string.Join("·", f.FloorTrim));
+
+    // ⑧ 열쇠로 넣고 열쇠로 뺀다 — 줄 번호가 아니라 <b>뜻</b>으로 잇는다
+    {
+        var led = new QtyLedger();
+        led.Add(QtyKey.OfExc(RockClass.Soft, DepthClass.Gt, WaterClass.Water), 123.40);
+        led.Add(QtyKey.OfCut(RockClass.Soil), 44.48);
+        Check("S80 ★넣은 열쇠로 그대로 나온다",
+              Math.Abs(led.Get(QtyKey.OfExc(RockClass.Soft, DepthClass.Gt, WaterClass.Water)) - 123.40) < 1e-9,
+              "123.40");
+        Check("S80 ★한 조건만 달라도 다른 칸이다",
+              double.IsNaN(led.Get(QtyKey.OfExc(RockClass.Soft, DepthClass.Le, WaterClass.Water))),
+              "NaN");
+        Check("S80 ★안 담은 칸은 0이 아니라 '모른다'",
+              double.IsNaN(led.Get(QtyKey.OfCut(RockClass.Hard))), "NaN");
+        led.Add(QtyKey.OfCut(RockClass.Soil), 5.52);
+        Check("S80 같은 열쇠로 또 넣으면 쌓인다",
+              Math.Abs(led.Get(QtyKey.OfCut(RockClass.Soil)) - 50.0) < 1e-9, "50.00");
+    }
+
+    // ⑨ 표의 모든 왼쪽 줄이 <b>서로 다른 열쇠</b>를 본다 — 두 줄이 같은 값을 읽으면 표가 거짓말한다
+    {
+        var seen = new HashSet<QtyKey>();
+        int dup = 0, noKey = 0;
+        foreach (var r in b.Left)
+        {
+            if (r.Key == null) { noKey++; continue; }
+            if (!seen.Add(r.Key.Value)) dup++;
+        }
+        Check("S80 ★열쇠가 겹치는 줄이 없다", dup == 0, $"겹침 {dup}개 · 열쇠 없는 줄 {noKey}개");
+        Check("S80   (되메우기 구조물은 아직 열쇠가 없다)", noKey == 1, $"{noKey}개");
+    }
+}
+
 
 return fails == 0 ? 0 : 1;
 

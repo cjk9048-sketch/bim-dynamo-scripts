@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -411,7 +411,22 @@ public static class ProfileStyleTemplate
             srcDb.ReadDwgFile(dwt, FileShare.Read, allowCPConversion: true, password: null);
             srcDb.CloseInput(true);
 
-            var pick = new ObjectIdCollection();
+            // ★★★[JACK 0828 "측점 기능을 쓰다가 튕겨버렸어"] <b>놓아주는 순서가 거꾸로였다.</b>
+            //
+            //   윈도우 이벤트가 자리를 못 박았다 —
+            //   <c>ImportBlocks → DisposableWrapper.Dispose → RXObject.DeleteUnmanagedObject</c>
+            //   → <c>AccessViolationException</c>. 즉 <b>이 함수가 닫는 순간</b> 죽은 자리를 만졌다.
+            //
+            //   <c>ObjectIdCollection</c>과 <c>IdMapping</c>은 <b>원본 도면 속을 가리키는 네이티브 물건</b>이다.
+            //   그런데 <c>using</c>이 안 붙어 있어 <b>살아 있는 채로</b> 남고,
+            //   <c>using var srcDb</c>가 함수 끝에서 원본 도면을 닫는다 —
+            //   <b>가리키는 쪽이 살아 있는데 가리켜지는 쪽을 먼저 없앤 것</b>이다.
+            //
+            //   → <c>using</c>을 붙여 <b>srcDb보다 먼저</b> 놓아준다.
+            //   C#은 <c>using var</c>를 <b>선언의 역순</b>으로 놓아주므로,
+            //   <c>srcDb</c>를 먼저 선언한 지금 구조에서 이 둘은 <b>저절로 먼저</b> 놓인다.
+            //   (순서가 규칙이 되게 두는 것이지, 사람이 기억할 일로 남기지 않는다.)
+            using var pick = new ObjectIdCollection();
             var picked = new List<string>();
             var all = new List<string>();
             using (var tr = srcDb.TransactionManager.StartTransaction())
@@ -431,7 +446,7 @@ public static class ProfileStyleTemplate
                      + string.Join(" · ", all.Take(40)) + (all.Count > 40 ? " …" : "");
 
             // 이미 있으면 덮어쓴다(<c>Replace</c>) — 템플릿을 고쳤을 때 그 모양이 바로 반영돼야 한다.
-            var map = new IdMapping();
+            using var map = new IdMapping();
             srcDb.WblockCloneObjects(pick, dstDb.BlockTableId, map,
                                      DuplicateRecordCloning.Replace, false);
 
@@ -494,7 +509,9 @@ public static class ProfileStyleTemplate
                 if (list.Count == 0) return;
                 try
                 {
-                    var ids = new ObjectIdCollection();
+                    // ★[JACK 0828] 여기도 <b>같은 모양</b>이었다 — <c>ImportBlocks</c>가 터진 그 이유다.
+                    //   <c>srcDb</c>를 가리키는 목록을 살려 둔 채 함수가 끝나면 원본 도면이 먼저 닫힌다.
+                    using var ids = new ObjectIdCollection();
                     foreach (var s in list) ids.Add(s.Id);
                     StyleBase.ExportTo(ids, dstDb, Autodesk.Civil.StyleConflictResolverType.Ignore);
                 }
@@ -505,7 +522,8 @@ public static class ProfileStyleTemplate
                     {
                         try
                         {
-                            StyleBase.ExportTo(new ObjectIdCollection { s.Id }, dstDb,
+                            using var one = new ObjectIdCollection { s.Id };
+                            StyleBase.ExportTo(one, dstDb,
                                                Autodesk.Civil.StyleConflictResolverType.Ignore);
                         }
                         catch (Exception ex) { fail.Add($"{s.Name}:{ex.Message}"); }
@@ -580,7 +598,8 @@ public static class ProfileStyleTemplate
                 {
                     try
                     {
-                        StyleBase.ExportTo(new ObjectIdCollection { s.Id }, dstDb,
+                        using var one2 = new ObjectIdCollection { s.Id };
+                        StyleBase.ExportTo(one2, dstDb,
                                            Autodesk.Civil.StyleConflictResolverType.Ignore);
                         retried++;
                     }
