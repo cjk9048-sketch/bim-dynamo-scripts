@@ -6692,6 +6692,12 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
                               hasDeep: false, hasWater: false);
     Check("S80 ★같은 것을 여러 번 골라도 한 줄", d.Rocks.Count == 1, $"{d.Rocks.Count}");
 
+    // ★★★[JACK 0828] <b>늘고 주는 것은 절토·터파기·바닥면고르기뿐</b> —
+    //   나머지(성토·되메우기·벌개재근·표토제거·면고르기·식생공법·층따기·잡석부설)는 <b>상시 선다</b>.
+    //   현장이 아무리 달라도 이 약속은 안 깨져야 한다.
+    foreach (var (nm, sp) in new[] { ("단출한 현장", a), ("다섯 암종 현장", b), ("거꾸로 고른 현장", c) })
+        Check($"S80 ★{nm} — 고정 줄이 다 있다", QtyTableSpecRules.Holds(sp, out string w80), w80.Length == 0 ? "OK" : w80);
+
     // ⑤ 아무것도 안 골랐어도 빈 표를 만들지 않는다
     var e = QtyTableSpec.Build(new RockClass[0], hasDeep: false, hasWater: false);
     Check("S80 ★암종이 없으면 토사 하나로 선다", e.Rocks.Count == 1 && e.Rocks[0] == RockClass.Soil, "토사");
@@ -6744,6 +6750,136 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
         }
         Check("S80 ★열쇠가 겹치는 줄이 없다", dup == 0, $"겹침 {dup}개 · 열쇠 없는 줄 {noKey}개");
         Check("S80   (되메우기 구조물은 아직 열쇠가 없다)", noKey == 1, $"{noKey}개");
+    }
+}
+
+
+// ── S81 ★★★[JACK 0828] 지층 수량 가르기 — <b>손으로 푼 답과 맞대 본다</b> ────────────────
+//   재료(Material) 기능을 안 쓰고 <b>횡단면의 선을 직접 겹쳐</b> 잰다(JACK 확정).
+{
+    Console.WriteLine("\n== S81 지층 수량 ==");
+
+    // 아주 단순한 단면 — 손으로 풀 수 있게 <b>평평하게</b> 만든다.
+    //   폭 10m. 원지반 EL.100, 계획면 EL.100(절토 0), 터파기 바닥 EL.92 → 깊이 8m.
+    //   지층: 토사 하단 97(두께 3) · 풍화암 하단 94(두께 3) · 그 아래는 연암.
+    //   지하수위 EL.95.
+    double[] X = { 0, 10 };
+    double[] G = { 100, 100 };
+    double[] P = { 100, 100 };
+    double[] E = { 92, 92 };
+    double[] WT = { 95, 95 };
+    var strata = new List<StrataQuantity.Band>
+    {
+        new(RockClass.Soil,      X, new double[] { 97, 97 }),
+        new(RockClass.Weathered, X, new double[] { 94, 94 }),
+        new(RockClass.Soft,      X, new double[] { 90, 90 }),
+    };
+
+    var led = new QtyLedger();
+    string note = StrataQuantity.Accumulate(led, X, G, X, P, X, E, strata, X, WT, deepLimit: 5.0);
+    Console.WriteLine("      " + note);
+
+    //   ── 손으로 푼 답 ──
+    //   지표 EL.100. 5m선 = EL.95. 수위도 EL.95 — 마침 같다.
+    //   터파기는 EL.100 → EL.92.
+    //
+    //     100 ─┬─ 토사      3m   (100~97)  5m이하 · 육상   → 3 × 10 = 30
+    //      97 ─┼─ 풍화암    2m   ( 97~95)  5m이하 · 육상   → 2 × 10 = 20
+    //      95 ─┼─ 풍화암    1m   ( 95~94)  5m초과 · 용수   → 1 × 10 = 10
+    //      94 ─┼─ 연암      2m   ( 94~92)  5m초과 · 용수   → 2 × 10 = 20
+    //      92 ─┴─ 바닥
+    double Q(RockClass r, DepthClass d, WaterClass w) => led.Get(QtyKey.OfExc(r, d, w));
+
+    Check("S81 ★토사 5m이하·육상 = 30㎡", Math.Abs(Q(RockClass.Soil, DepthClass.Le, WaterClass.Land) - 30.0) < 1e-9,
+          $"{Q(RockClass.Soil, DepthClass.Le, WaterClass.Land):F2}");
+    Check("S81 ★풍화암 5m이하·육상 = 20㎡", Math.Abs(Q(RockClass.Weathered, DepthClass.Le, WaterClass.Land) - 20.0) < 1e-9,
+          $"{Q(RockClass.Weathered, DepthClass.Le, WaterClass.Land):F2}");
+    Check("S81 ★풍화암 5m초과·용수 = 10㎡", Math.Abs(Q(RockClass.Weathered, DepthClass.Gt, WaterClass.Water) - 10.0) < 1e-9,
+          $"{Q(RockClass.Weathered, DepthClass.Gt, WaterClass.Water):F2}");
+    Check("S81 ★연암 5m초과·용수 = 20㎡", Math.Abs(Q(RockClass.Soft, DepthClass.Gt, WaterClass.Water) - 20.0) < 1e-9,
+          $"{Q(RockClass.Soft, DepthClass.Gt, WaterClass.Water):F2}");
+    Check("S81 ★토사는 수위 아래가 없다", double.IsNaN(Q(RockClass.Soil, DepthClass.Gt, WaterClass.Water)) ||
+          Q(RockClass.Soil, DepthClass.Gt, WaterClass.Water) < 1e-9, "없음");
+
+    // ★★ 합이 전체와 같아야 한다 — <b>가르다가 새면 여기서 걸린다</b>.
+    //   전체 터파기 = 폭10 × 깊이8 = 80㎡.
+    {
+        double sum = 0;
+        foreach (RockClass r in Enum.GetValues(typeof(RockClass)))
+            foreach (DepthClass d in Enum.GetValues(typeof(DepthClass)))
+                foreach (WaterClass w in Enum.GetValues(typeof(WaterClass)))
+                {
+                    double v = Q(r, d, w);
+                    if (!double.IsNaN(v)) sum += v;
+                }
+        Check("S81 ★★가른 것을 다 더하면 전체 터파기 80㎡", Math.Abs(sum - 80.0) < 1e-9, $"{sum:F3}㎡");
+    }
+
+    // ── 절토도 암종으로 갈린다. 계획면을 EL.96으로 낮춰 4m를 깎아 본다.
+    //   100~97 토사 3m → 30㎡ · 97~96 풍화암 1m → 10㎡
+    {
+        var led2 = new QtyLedger();
+        StrataQuantity.Accumulate(led2, X, G, X, new double[] { 96, 96 }, null, null, strata, X, WT);
+        Check("S81 ★절토 토사 = 30㎡", Math.Abs(led2.Get(QtyKey.OfCut(RockClass.Soil)) - 30.0) < 1e-9,
+              $"{led2.Get(QtyKey.OfCut(RockClass.Soil)):F2}");
+        Check("S81 ★절토 풍화암 = 10㎡", Math.Abs(led2.Get(QtyKey.OfCut(RockClass.Weathered)) - 10.0) < 1e-9,
+              $"{led2.Get(QtyKey.OfCut(RockClass.Weathered)):F2}");
+        Check("S81 ★절토 연암은 없다", double.IsNaN(led2.Get(QtyKey.OfCut(RockClass.Soft))), "NaN");
+        double cutSum = led2.Get(QtyKey.OfCut(RockClass.Soil)) + led2.Get(QtyKey.OfCut(RockClass.Weathered));
+        Check("S81 ★★절토 합이 전체 절토 40㎡", Math.Abs(cutSum - 40.0) < 1e-9, $"{cutSum:F3}㎡");
+    }
+
+    // ── 지하수위가 없으면 <b>전부 육상</b>이다(용수 칸이 안 생긴다).
+    {
+        var led3 = new QtyLedger();
+        StrataQuantity.Accumulate(led3, X, G, X, P, X, E, strata, null, null);
+        double land = led3.Get(QtyKey.OfExc(RockClass.Soil, DepthClass.Le, WaterClass.Land));
+        Check("S81 ★수위가 없으면 토사가 통째로 육상", Math.Abs(land - 30.0) < 1e-9, $"{land:F2}");
+        Check("S81 ★용수 칸은 안 생긴다",
+              double.IsNaN(led3.Get(QtyKey.OfExc(RockClass.Soil, DepthClass.Le, WaterClass.Water))), "NaN");
+    }
+
+    // ── 지층 자료가 없으면 <b>전부 토사</b> — 지금까지의 동작과 같다(회귀 방지).
+    {
+        var led4 = new QtyLedger();
+        StrataQuantity.Accumulate(led4, X, G, X, P, X, E, null, null, null);
+        double a = led4.Get(QtyKey.OfExc(RockClass.Soil, DepthClass.Le, WaterClass.Land));
+        double b = led4.Get(QtyKey.OfExc(RockClass.Soil, DepthClass.Gt, WaterClass.Land));
+        Check("S81 ★지층이 없으면 전부 토사(5m이하 50㎡)", Math.Abs(a - 50.0) < 1e-9, $"{a:F2}");
+        Check("S81 ★지층이 없으면 전부 토사(5m초과 30㎡)", Math.Abs(b - 30.0) < 1e-9, $"{b:F2}");
+    }
+
+    // ── ★ 마지막 층 아래는 <b>그 층이 이어진다</b> — 시추가 안 닿은 깊이를 조용히 버리지 않는다.
+    //   층을 토사 하나(하단 97)만 주고 EL.92까지 파면, 97~92의 5m가 전부 토사여야 한다.
+    {
+        var led5 = new QtyLedger();
+        var one = new List<StrataQuantity.Band> { new(RockClass.Soil, X, new double[] { 97, 97 }) };
+        StrataQuantity.Accumulate(led5, X, G, X, P, X, E, one, null, null);
+        double sum = led5.Get(QtyKey.OfExc(RockClass.Soil, DepthClass.Le, WaterClass.Land))
+                   + led5.Get(QtyKey.OfExc(RockClass.Soil, DepthClass.Gt, WaterClass.Land));
+        Check("S81 ★시추 아래도 안 버린다(합 80㎡)", Math.Abs(sum - 80.0) < 1e-9, $"{sum:F3}㎡");
+    }
+
+    // ── 격자를 잘게 나눠도 답이 같아야 한다 — <b>격자 무관성</b>(§S71이 잡은 그 함정).
+    {
+        int n = 200;
+        var xs = new double[n + 1]; var gs = new double[n + 1]; var ps = new double[n + 1];
+        var es = new double[n + 1]; var ws = new double[n + 1];
+        var s1 = new double[n + 1]; var s2 = new double[n + 1]; var s3 = new double[n + 1];
+        for (int i = 0; i <= n; i++)
+        { xs[i] = 10.0 * i / n; gs[i] = 100; ps[i] = 100; es[i] = 92; ws[i] = 95; s1[i] = 97; s2[i] = 94; s3[i] = 90; }
+        var led6 = new QtyLedger();
+        var st6 = new List<StrataQuantity.Band>
+        {
+            new(RockClass.Soil, xs, s1), new(RockClass.Weathered, xs, s2), new(RockClass.Soft, xs, s3),
+        };
+        StrataQuantity.Accumulate(led6, xs, gs, xs, ps, xs, es, st6, xs, ws);
+        Check("S81 ★격자를 200으로 나눠도 토사 30㎡",
+              Math.Abs(led6.Get(QtyKey.OfExc(RockClass.Soil, DepthClass.Le, WaterClass.Land)) - 30.0) < 1e-6,
+              $"{led6.Get(QtyKey.OfExc(RockClass.Soil, DepthClass.Le, WaterClass.Land)):F4}");
+        Check("S81 ★격자를 200으로 나눠도 연암 20㎡",
+              Math.Abs(led6.Get(QtyKey.OfExc(RockClass.Soft, DepthClass.Gt, WaterClass.Water)) - 20.0) < 1e-6,
+              $"{led6.Get(QtyKey.OfExc(RockClass.Soft, DepthClass.Gt, WaterClass.Water)):F4}");
     }
 }
 
