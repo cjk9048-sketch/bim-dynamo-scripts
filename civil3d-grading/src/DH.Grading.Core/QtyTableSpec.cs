@@ -165,8 +165,16 @@ public sealed class QtyTableSpec
         R.Add(new RightRow("층 따 기", null));
         R.Add(new RightRow("잡 석 부 설", null));
 
+        // ── ★★★[JACK 0828] <b>늘고 주는 것은 셋뿐이다.</b>
+        //   JACK: <i>"토적표에서 추가되거나 생략되는 건 절토·터파기·바닥면고르기 부분이야.
+        //   이 부분들을 제외하고는 그냥 상시 표가 만들어져 있는 걸로 해."</i>
+        //   위 코드가 그 규칙 그대로다 — 성토·되메우기와 오른쪽 공종(벌개재근·표토제거·면고르기·
+        //   식생공법·층따기·잡석부설)은 <b>현장이 무엇이든 늘 선다</b>.
+        //   <see cref="QtyTableSpecRules"/>가 이 약속을 하니스에서 지킨다.
+        //
         // ── ★ 두 단의 길이를 맞춘다 — <b>표는 직사각형이라야 한다</b>.
-        //   짧은 쪽에 빈 줄을 채운다. 병합 계산이 어긋날 자리를 만들지 않는다.
+        //   짧은 쪽에 <b>빈 셀</b>을 채운다(JACK 승인: <i>"공백 부분 셀로 표의 우측 부분을 마무리해도 돼"</i>).
+        //   병합 계산이 어긋날 자리를 만들지 않는다.
         while (R.Count < L.Count) R.Add(new RightRow(null, null));
         while (L.Count < R.Count) L.Add(new LeftRow(null, null, null, null));
 
@@ -228,4 +236,49 @@ public sealed class QtyLedger
 
     /// <summary>담긴 자리 수 — 로그에 "몇 칸이 찼나"를 적을 때 쓴다.</summary>
     public int Count => _v.Count;
+}
+
+/// <summary>★★★[JACK 0828] <b>표가 지켜야 할 약속</b> — 하니스가 이 자를 쓴다.
+///
+/// <para>JACK: <i>"토적표에서 추가되거나 생략되는 건 절토·터파기·바닥면고르기 부분이야.
+/// 이 부분들을 제외하고는 그냥 상시 표가 만들어져 있는 걸로 해."</i></para>
+///
+/// <para>그 약속을 <b>말이 아니라 검사</b>로 남긴다. 표를 짓는 코드는 앞으로도 고쳐질 텐데,
+/// 고치는 사람이 이 규칙을 모르고 성토나 잡석부설을 조건부로 만들면 <b>여기서 걸린다</b>.
+/// 이 저장소가 여러 번 겪은 것 — <b>검사는 돌아야 검사다</b>.</para></summary>
+public static class QtyTableSpecRules
+{
+    /// <summary>현장이 무엇이든 <b>늘 서 있어야 하는</b> 왼쪽 대분류.</summary>
+    public static readonly string[] AlwaysLeft = { "성    토", "되메우기" };
+
+    /// <summary>현장이 무엇이든 <b>늘 서 있어야 하는</b> 오른쪽 공종.</summary>
+    public static readonly string[] AlwaysRight =
+        { "벌개재근", "표토제거", "면고르기", "식생공법", "층 따 기", "잡 석 부 설" };
+
+    /// <summary>약속을 지켰는가. 어긋나면 <paramref name="why"/>에 <b>무엇이 빠졌는지</b> 적는다 —
+    /// <b>참/거짓만 돌려주면 왜 깨졌는지 찾는 데 또 하루가 든다.</b></summary>
+    public static bool Holds(QtyTableSpec spec, out string why)
+    {
+        why = "";
+        if (spec == null) { why = "표가 없다"; return false; }
+        var miss = new List<string>();
+
+        foreach (string t in AlwaysLeft)
+        {
+            bool found = false;
+            foreach (var r in spec.Left) if (r.Group == t) { found = true; break; }
+            if (!found) miss.Add("왼쪽 '" + t + "'");
+        }
+        foreach (string t in AlwaysRight)
+        {
+            bool found = false;
+            foreach (var r in spec.Right) if (r.Item == t) { found = true; break; }
+            if (!found) miss.Add("오른쪽 '" + t + "'");
+        }
+        if (spec.Left.Count != spec.Right.Count)
+            miss.Add($"두 단 길이가 다르다({spec.Left.Count}/{spec.Right.Count})");
+
+        why = miss.Count == 0 ? "" : "빠졌다: " + string.Join(" · ", miss);
+        return miss.Count == 0;
+    }
 }
