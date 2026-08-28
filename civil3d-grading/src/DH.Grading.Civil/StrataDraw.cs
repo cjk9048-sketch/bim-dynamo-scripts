@@ -7,6 +7,7 @@ using Autodesk.AutoCAD.Runtime;
 using DH.Grading.Core;
 using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 using CivilApp = Autodesk.Civil.ApplicationServices;
+using CivilStyles = Autodesk.Civil.DatabaseServices.Styles;
 using CivilDb = Autodesk.Civil.DatabaseServices;
 
 namespace DH.Grading.Civil;
@@ -136,14 +137,30 @@ public static class StrataDraw
     }
 
     /// <summary>★ 표에서 좌표를 고치면 <b>표식이 그 자리로 옮겨간다</b>(JACK 요구).</summary>
+    /// <summary>★★★[JACK 0828 검토] <b>표식이 이 도면 것인지 먼저 본다.</b>
+    /// <para>도킹바는 <c>static</c>이라 도면을 오가도 표가 그대로 남는다.
+    /// A에서 찍고 B로 가서 XY를 고치면 <c>MarkId</c>가 <b>남의 Database</b> 것이라
+    /// <c>GetObject</c>가 <c>eWrongDatabase</c>로 던지고 <c>catch { }</c>가 삼킨다 —
+    /// 표식은 안 움직이는데 <b>아무 말이 없다</b>. 그 상태로 [확인]을 누르면
+    /// <b>B 도면에 A의 보링공으로</b> 지층을 만든다. 좌표가 겹치면 그럴듯한 값이 나와 더 못 알아챈다.</para>
+    /// <para><c>MarkId.IsNull</c>은 false라 관문이 못 된다 — <b>Database를 견줘야</b> 한다.</para></summary>
+    private static bool SameDb(ObjectId id, Database db) =>
+        !id.IsNull && db != null && id.Database == db;
+
     internal static void MoveMark(BoreRow b)
     {
         try
         {
-            if (b.MarkId.IsNull) { DrawMark(b); return; }
-            using var dl = Lock();
             var db = AcadApp.DocumentManager.MdiActiveDocument?.Database;
             if (db == null) return;
+            // 이 도면 것이 아니면 <b>여기에 새로 그린다</b> — 조용히 아무 일도 안 하는 것보다 낫다.
+            if (!b.MarkId.IsNull && !SameDb(b.MarkId, db))
+            {
+                try { DiagLog.Append($"\n  {b.Name} 표식이 <b>다른 도면</b> 것이다 — 이 도면에 새로 그린다"); } catch { }
+                b.MarkId = ObjectId.Null;
+            }
+            if (b.MarkId.IsNull) { DrawMark(b); return; }
+            using var dl = Lock();
             using var tr = db.TransactionManager.StartTransaction();
             if (tr.GetObject(b.MarkId, OpenMode.ForWrite, false, true) is BlockReference br && !br.IsErased)
             {
@@ -299,6 +316,35 @@ public static class StrataDraw
             //   실패를 <c>catch { return false; }</c>로 <b>통째로 삼켰다</b> —
             //   그래서 로그에 <c>만든 지표면 0장</c>만 남고 이유가 없었다.
             //   <b>이 저장소가 제일 싫어하는 자리다</b>: 조용히 실패하기.
+            // ★★★[JACK 0828 검토] <b>[확인]은 몇 번을 눌러도 같은 결과라야 한다.</b>
+            //   종전엔 <c>MakeSurface</c>가 <b>정확히 그 이름</b>만 지웠다. 그래서
+            //   · 층 이름을 <c>표토</c>→<c>매립토</c>로 고치면 <c>DH_지층_1_표토</c>가 <b>남고</b>,
+            //     <c>AppendStrata</c>가 <b>둘 다 ord=1</b>로 담는다(정렬이 안정적이지도 않아 순서도 안 정해진다).
+            //   · 5층→3층으로 줄이면 <c>DH_지층_4·5_*</c>가 <b>영영</b> 남아 종단·횡단에 계속 그려진다.
+            //   → 만들기 전에 <b>우리 앞머리를 단 지표면을 싹 지운다</b>. 이번 판에 쓸 것만 새로 선다.
+            int nOld = 0;
+            try
+            {
+                using var trW = db.TransactionManager.StartTransaction();
+                var cdocW = CivilApp.CivilApplication.ActiveDocument;
+                var kill = new List<ObjectId>();
+                foreach (ObjectId sid0 in cdocW.GetSurfaceIds())
+                    try
+                    {
+                        if (trW.GetObject(sid0, OpenMode.ForRead) is not CivilDb.Surface s0) continue;
+                        string n0 = s0.Name ?? "";
+                        if (n0.StartsWith(SurfPrefix, System.StringComparison.Ordinal) || n0 == WaterSurfName)
+                            kill.Add(sid0);
+                    }
+                    catch { }
+                foreach (var kid in kill)
+                    try { trW.GetObject(kid, OpenMode.ForWrite).Erase(); nOld++; } catch { }
+                trW.Commit();
+            }
+            catch (System.Exception ex)
+            { log.AppendLine("  ⚠옛 지층면을 다 못 지웠다 — " + ex.Message + " (겹쳐 남을 수 있다)"); }
+            if (nOld > 0) log.AppendLine($"  옛 지층면 {nOld}장을 먼저 지웠다 — 이름을 고치거나 층을 줄여도 남지 않는다");
+
             var why2 = new System.Text.StringBuilder();
             for (int i = 0; i < model.Defs.Count; i++)
             {
@@ -398,26 +444,99 @@ public static class StrataDraw
     }
 
     /// <summary>평면에서 숨긴다 — 이 프로젝트가 목표면·가상면을 숨기는 그 길을 그대로 쓴다.</summary>
+    internal const string HideStyleName = "DH_지층(평면숨김)";
+
+    /// <summary>★★★[JACK 0828 검토] <b>남의 스타일을 고르지 않고 우리가 만든다.</b>
+    ///
+    /// <para><b>원인이 된 함정</b>: <c>PickStyle</c>은 이름을 못 찾으면 <c>ObjectId.Null</c>이 아니라
+    /// <b>컬렉션의 첫 스타일</b>을 돌려준다. 그래서 <c>if (!noShow.IsNull)</c>이 관문 노릇을 못 했고,
+    /// 도면에 <c>no display</c>·<c>경계만</c>이 없으면 <b>아무 스타일이나 발라 놓고</b>
+    /// 로그는 <c>평면에서 숨김 7장</c>이라고 적었다 — JACK 요건이 정확히 뒤집히는데 아무 말이 없다.
+    /// (DHT.dwt에 그 이름들이 있다는 보장도 없다.)</para>
+    ///
+    /// <para>→ 등고선이 쓰는 길(<c>ImportGisCommand.EnsureContourStyle</c>)을 그대로 쓴다:
+    /// <b>스타일을 만들고 표시 항목을 하나하나 끈다.</b> 열거값을 통째로 돌므로 버전이 달라도 안 깨진다.
+    /// 그리고 <b>되읽어</b> 실제로 꺼졌는지 확인한다 — 안 되면 안 됐다고 적는다.</para></summary>
     private static int HideInPlan(Database db, List<string> names)
     {
         int n = 0;
+        string why = null;
         try
         {
-            using var tr = db.TransactionManager.StartTransaction();
             var cdoc = CivilApp.CivilApplication.ActiveDocument;
-            ObjectId noShow = Commands.SectionCommand.PickStyle(db, cdoc.Styles.SurfaceStyles, "no display", "경계만");
-            if (!noShow.IsNull)
+            using var tr = db.TransactionManager.StartTransaction();
+
+            // ── ① 숨김 스타일을 확보한다(없으면 만든다).
+            var styles = cdoc.Styles.SurfaceStyles;
+            ObjectId hid = ObjectId.Null;
+            foreach (ObjectId sid in styles)
+                try
+                {
+                    if (tr.GetObject(sid, OpenMode.ForRead) is CivilStyles.SurfaceStyle s0
+                        && string.Equals(s0.Name, HideStyleName, System.StringComparison.OrdinalIgnoreCase))
+                    { hid = sid; break; }
+                }
+                catch { }
+            if (hid.IsNull) { try { hid = styles.Add(HideStyleName); } catch (System.Exception ex) { why = "스타일을 못 만들었다 — " + ex.Message; } }
+            if (hid.IsNull)
+            {
+                tr.Commit();
+                try { DiagLog.Append("\n  ⚠평면 숨김 실패 — " + (why ?? "스타일 없음") + " · <b>지층이 평면에 보인다</b>"); } catch { }
+                return 0;
+            }
+
+            // ── ② 평면·모형 표시 항목을 <b>전부</b> 끈다.
+            int offN = 0, failN = 0;
+            if (tr.GetObject(hid, OpenMode.ForWrite) is CivilStyles.SurfaceStyle st)
+                foreach (CivilStyles.SurfaceDisplayStyleType t in
+                         System.Enum.GetValues(typeof(CivilStyles.SurfaceDisplayStyleType)))
+                {
+                    try { st.GetDisplayStylePlan(t).Visible = false; offN++; } catch { failN++; }
+                    try { st.GetDisplayStyleModel(t).Visible = false; } catch { }
+                }
+
+            // ── ③ 우리 지표면에만 입힌다.
+            foreach (ObjectId sid in cdoc.GetSurfaceIds())
+                try
+                {
+                    if (tr.GetObject(sid, OpenMode.ForWrite) is not CivilDb.TinSurface ts) continue;
+                    if (!names.Contains(ts.Name)) continue;
+                    ts.StyleId = hid; n++;
+                }
+                catch { }
+            tr.Commit();
+
+            // ── ④ ★<b>되읽는다.</b> 스타일 이름이 맞는지, 정말 다 꺼졌는지.
+            int stillOn = 0, wrongSty = 0;
+            try
+            {
+                using var trR = db.TransactionManager.StartTransaction();
+                if (trR.GetObject(hid, OpenMode.ForRead) is CivilStyles.SurfaceStyle stR)
+                    foreach (CivilStyles.SurfaceDisplayStyleType t in
+                             System.Enum.GetValues(typeof(CivilStyles.SurfaceDisplayStyleType)))
+                        try { if (stR.GetDisplayStylePlan(t).Visible) stillOn++; } catch { }
                 foreach (ObjectId sid in cdoc.GetSurfaceIds())
                     try
                     {
-                        if (tr.GetObject(sid, OpenMode.ForWrite) is not CivilDb.TinSurface ts) continue;
+                        if (trR.GetObject(sid, OpenMode.ForRead) is not CivilDb.TinSurface ts) continue;
                         if (!names.Contains(ts.Name)) continue;
-                        ts.StyleId = noShow; n++;
+                        if (ts.StyleId != hid) wrongSty++;
                     }
                     catch { }
-            tr.Commit();
+                trR.Commit();
+            }
+            catch { }
+            try
+            {
+                DiagLog.Append($"\n  평면 숨김 되읽기 — 스타일 '{HideStyleName}' · 끈 항목 {offN}개"
+                             + (failN > 0 ? $"(못 끈 것 {failN}개)" : "")
+                             + (stillOn > 0 ? $" · ⚠<b>아직 켜져 있는 항목 {stillOn}개</b>" : " · 평면 표시 전부 꺼짐")
+                             + (wrongSty > 0 ? $" · ⚠<b>이 스타일이 아닌 지표면 {wrongSty}장</b>" : ""));
+            }
+            catch { }
         }
-        catch { }
+        catch (System.Exception ex)
+        { try { DiagLog.Append("\n  ⚠평면 숨김 실패 — " + ex.Message); } catch { } }
         return n;
     }
 

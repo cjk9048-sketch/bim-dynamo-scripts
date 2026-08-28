@@ -775,6 +775,52 @@ public sealed class ProfileCommand
                              + $" · 선 색 {fColTxt}(표시레이어 '{fDsLay}'){fOv}{fNote}  {fVerd}");
             }
 
+            // ★★★[JACK 0828 검토] <b>화면을 정하는 값을 마지막에 잰다.</b>
+            //   오늘 세 번째 같은 함정이다: 종단을 만들 때 재고 "됐다"고 적었는데
+            //   <c>SheetCommand.PolishView</c>가 <b>나중에</b> 레이어와 스타일 색을 통째로 덮었다.
+            //   그래서 되읽기는 <b>도곽까지 다 끝난 여기</b>에서, 화면이 실제로 쓰는 두 값
+            //   (객체 레이어 · 스타일 선 색)을 재고 <b>합격/불합격을 말로</b> 남긴다.
+            if (strataProfs.Count > 0)
+            {
+                int okN = 0, badN = 0; string firstBad = null;
+                try
+                {
+                    using var trS = db.TransactionManager.StartTransaction();
+                    foreach (var it in strataProfs)
+                    {
+                        string lay = "?", col = "?"; bool good = false;
+                        try
+                        {
+                            if (trS.GetObject(it.Pid, OpenMode.ForRead) is CivilDb.Profile pS)
+                            {
+                                lay = ((Entity)pS).Layer;
+                                string want = it.Water ? SectionCommand.WaterProfLayer : SectionCommand.StrataProfLayer;
+                                short wantAci = it.Water ? SectionCommand.WaterAci : SectionCommand.StrataAci;
+                                if (trS.GetObject(pS.StyleId, OpenMode.ForRead) is CivilDb.Styles.ProfileStyle sS)
+                                {
+                                    using var dsS = sS.GetDisplayStyleProfile(CivilDb.Styles.ProfileDisplayStyleProfileType.Line);
+                                    bool byL = dsS.Color.ColorMethod == Autodesk.AutoCAD.Colors.ColorMethod.ByLayer;
+                                    bool mine = dsS.Color.ColorMethod == Autodesk.AutoCAD.Colors.ColorMethod.ByAci
+                                                && dsS.Color.ColorIndex == wantAci;
+                                    col = byL ? "ByLayer" : mine ? "ACI" + wantAci
+                                        : dsS.Color.ColorMethod.ToString() + dsS.Color.ColorIndex;
+                                    // 레이어가 제자리면 ByLayer여도 그 레이어 색이 나온다 — 둘 중 하나면 합격.
+                                    good = (lay == want && byL) || mine;
+                                }
+                            }
+                        }
+                        catch { }
+                        if (good) okN++;
+                        else { badN++; firstBad ??= $"{it.Nm}: 레이어 '{lay}' · 선 색 {col}"; }
+                    }
+                    trS.Commit();
+                }
+                catch { }
+                log.AppendLine($"  ★지층 종단 최종 — 제 색으로 나오는 것 {okN}개"
+                             + (badN > 0 ? $" · ⚠<b>초록으로 나올 것 {badN}개</b> (첫째 {firstBad})"
+                                         : " · 전부 합격(회색 점선·지하수위 파랑)"));
+            }
+
             try { ed.Regen(); } catch { }
             DrawProfStrataNames(db, pvId, strataProfs, log);   // ★[JACK 0828] 지층·지하수위 이름
             string bars = DrawVertBars(db, pvId, alignId, pidGround, pidPad, pidExcav, LastWallSpans, log);

@@ -721,7 +721,15 @@ public sealed class SectionCommand
                 {
                     if (tr.GetObject(sid, OpenMode.ForRead) is not CivilDb.TinSurface ts) continue;
                     string nm = ts.Name;
-                    if (nm.Contains("_DH") || IsBase(nm, PadSurfaceBase)) continue;   // DH 산출물 제외
+                    // ★★★[JACK 0828 검토] <b>제외 규칙이 지층면을 안 걸렀다.</b>
+                    //   <c>"_DH"</c>는 <c>터파기면_DH</c>처럼 <b>이름_DH</b> 꼴을 겨냥해 쓴 것인데,
+                    //   새 지층면은 <c>DH_지층_1_표토</c>·<c>DH_지하수위</c> — <b>순서가 반대</b>라 안 걸린다.
+                    //   판정 기준이 <b>삼각형 수</b>이고 지층면은 41×41 격자라 약 3,200개다.
+                    //   성긴 등고선 원지반이면 <b>지층면이 원지반으로 뽑힌다</b> — 그러면
+                    //   종단·횡단·수량이 전부 틀리고, 다음 [확인]이 그 "원지반"으로 또 지층을 만든다.
+                    //   <b>스스로를 먹는다.</b> 예외도 안 난다.
+                    if (nm.Contains("_DH") || nm.StartsWith("DH_", System.StringComparison.Ordinal)
+                        || IsBase(nm, PadSurfaceBase)) continue;   // DH 산출물 제외
                     int n = 0; try { n = ts.Triangles.Count; } catch { }
                     if (n > best) { best = n; ground = sid; groundNm = nm; }
                 }
