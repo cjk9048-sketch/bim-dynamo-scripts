@@ -35,7 +35,10 @@ public static class RawTriangleIntersectionFinder
     public static string LastDiag { get; private set; } = "";
 
     /// <summary>[검증로그] 실행마다 단계별 상태를 이 파일에 기록 — 스샷 대신 정밀 분석용(JACK 제안).</summary>
-    public const string LogPath = @"C:\Users\user\Desktop\AI\civil3d-grading\DHXSEC_진단.log";
+    /// <summary>★★[외부 자문 0827 · 배포 치명적] <b>개발 PC 경로를 박아 두면 남의 PC에선 로그가 조용히 안 써진다.</b>
+    /// <para><see cref="DiagLog"/>가 이미 개발/배포를 가려 자리를 잡아 두므로 <b>그 옆에</b> 나란히 쓴다.</para></summary>
+    public static string LogPath => System.IO.Path.Combine(
+        System.IO.Path.GetDirectoryName(DiagLog.FilePath) ?? ".", "DHXSEC_진단.log");
 
     /// <summary>직전 실행에서 '지름길'로 판정되어 잘라낸 선분들 — 'DH-진단' 빨간선으로 시각 확인용.</summary>
     public static List<(Point3 A, Point3 B)> LastCutSpans { get; } = new();

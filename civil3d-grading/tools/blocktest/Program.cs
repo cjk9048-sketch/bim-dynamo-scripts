@@ -6050,34 +6050,66 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
 }
 
 
-// ── S69 ★[JACK 0826] 수량표 — 병합이 앞뒤가 맞는지 ───────────────────────────────────
+// ── S69 ★★[JACK 0827] 수량표 — 두 단 12줄 구조가 앞뒤 맞는지 ────────────────────────
 //   표는 도면에서만 눈에 띄는데, 병합이 한 줄 어긋나면 표 전체가 밀린다.
-//   줄 수와 병합 합계는 도면 없이도 잴 수 있으니 여기서 막는다.
+//   새 형태는 <b>왼쪽 12줄과 오른쪽 12줄이 대응</b>하므로 그 대칭이 곧 검사다.
 {
-    Console.WriteLine("\n== S69 수량표 구조 ==");
-    Check("S69 내용 18줄", QuantityTable.BodyRows == 18, $"{QuantityTable.BodyRows}줄");
-    Check("S69 머리까지 19줄", QuantityTable.TotalRows == 19, $"{QuantityTable.TotalRows}줄");
-    Check("S69 ★1열 병합 합계 = 줄 수", QuantityTable.NameSpansValid(), "맞음");
-    Check("S69 ★2열 병합 합계 = 줄 수", QuantityTable.SubSpansValid(), "맞음");
+    Console.WriteLine("\n== S69 수량표 구조(두 단) ==");
+    Check("S69 내용 12줄", QuantityTable.BodyRows == 12, $"{QuantityTable.BodyRows}줄");
+    Check("S69 머리까지 13줄", QuantityTable.TotalRows == 13, $"{QuantityTable.TotalRows}줄");
+    Check("S69 줄 배열도 12개", QuantityTable.Rows.Length == 12, $"{QuantityTable.Rows.Length}개");
+    Check("S69 가로 7칸", QuantityTable.Cols == 7, $"{QuantityTable.Cols}칸");
+    Check("S69 열 비율도 7개", QuantityTable.ColRatio.Length == 7, $"{QuantityTable.ColRatio.Length}개");
 
-    // 병합으로 이어지는 줄(NameRows=0)은 반드시 <b>앞 줄</b>이 그만큼 먹고 있어야 한다.
-    int carry = 0; bool ok = true; string bad = "";
+    // ★재료 칸(2열)은 세로 병합이 없다 — 12줄이 그대로 12칸이어야 한다.
+    int l3 = 0;
+    foreach (var r in QuantityTable.Rows) l3 += r.L3.RowSpan;
+    Check("S69 ★재료 칸 = 12줄", l3 == 12, $"{l3}줄");
+
+    // ★★각 열이 <b>12줄을 빈틈없이 덮는가</b>. 세로 병합이 덮는 줄 + 옆 칸이
+    //   <b>가로로 먹은</b> 줄을 합치면 정확히 12여야 한다.
+    //   (성토·절토·되메우기는 대분류가 2열을 먹으므로 그 줄엔 중분류 칸이 없다.)
+    int Covered(Func<QuantityTable.Row, QuantityTable.Cell> self,
+                Func<QuantityTable.Row, QuantityTable.Cell> left)
+    {
+        int n = 0, wide = 0;
+        foreach (var r in QuantityTable.Rows)
+        {
+            if (left != null)
+            {
+                var lc = left(r);
+                if (lc.RowSpan > 0 && lc.ColSpan >= 2) wide = lc.RowSpan;
+                if (wide > 0) { wide--; n++; continue; }   // 옆 칸이 가로로 먹은 줄
+            }
+            n += self(r).RowSpan;
+        }
+        return n;
+    }
+    Check("S69 ★★왼쪽 대분류가 12줄을 덮는다", Covered(r => r.L1, null) == 12,
+          $"{Covered(r => r.L1, null)}줄");
+    Check("S69 ★★왼쪽 중분류가 12줄을 덮는다", Covered(r => r.L2, r => r.L1) == 12,
+          $"{Covered(r => r.L2, r => r.L1)}줄");
+    Check("S69 ★★오른쪽 항목이 12줄을 덮는다", Covered(r => r.R1, null) == 12,
+          $"{Covered(r => r.R1, null)}줄");
+    Check("S69 ★★오른쪽 세부가 12줄을 덮는다", Covered(r => r.R2, r => r.R1) == 12,
+          $"{Covered(r => r.R2, r => r.R1)}줄");
+
+    // ★깊이 딱지는 <b>글자를 못 박지 않는다</b> — 값이 바뀌면 따라 바뀌어야 한다.
+    string dl = QuantityTable.L1TextOf(QuantityTable.DepthRow);
+    Check("S69 ★깊이 딱지가 값을 따른다", dl != null && dl.Contains($"{QuantityTable.DeepLimitM:0.#}m"), dl ?? "없음");
+
+    // ★계산이 실제로 들어가는 자리 — 지금은 넷(절토·성토·터파기얕음·되메우기).
+    Check("S69 값이 들어가는 자리 4곳", QuantityTable.FilledSlots() == 4, $"{QuantityTable.FilledSlots()}곳");
+
+    // ★같은 종류를 두 자리에 넣지 않는다 — 넣으면 합계가 두 배가 된다.
+    var seen = new HashSet<QuantityTable.QtyKind>();
+    bool dup = false;
     foreach (var r in QuantityTable.Rows)
     {
-        if (r.NameRows > 0) { if (carry != 0) { ok = false; bad = r.Name; } carry = r.NameRows - 1; }
-        else { if (carry <= 0) { ok = false; bad = r.Material; } carry--; }
+        if (r.LKind != QuantityTable.QtyKind.None && !seen.Add(r.LKind)) dup = true;
+        if (r.RKind != QuantityTable.QtyKind.None && !seen.Add(r.RKind)) dup = true;
     }
-    Check("S69 ★★병합이 앞 줄과 이어진다(떠 있는 줄 없음)", ok && carry == 0, ok ? "이어짐" : "끊긴 곳: " + bad);
-
-    // 재료 칸은 비어 있으면 안 된다 — 값 칸만 비운다.
-    int empty = 0;
-    foreach (var r in QuantityTable.Rows) if (string.IsNullOrWhiteSpace(r.Material)) empty++;
-    Check("S69 재료 칸이 빈 줄 없음", empty == 0, $"빈 줄 {empty}개");
-
-    // 터파기는 5.0m 이하·이상 두 덩이가 각각 3줄(육상 / 용수-토사 / 용수-풍화암)이어야 한다.
-    int deep = 0;
-    foreach (var r in QuantityTable.Rows) if (r.Name != null && r.Name.Contains("터 파 기")) deep += r.NameRows;
-    Check("S69 터파기 두 덩이 = 6줄", deep == 6, $"{deep}줄");
+    Check("S69 ★★같은 수량이 두 자리에 안 들어간다", !dup, dup ? "중복 있음" : "겹침 없음");
 }
 
 
@@ -6193,35 +6225,57 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
 }
 
 
-// ── S73 ★[JACK 0826] 표의 줄과 값이 제 짝인지 ──────────────────────────────────────
+// ── S73 ★★[JACK 0827] 표의 줄과 값이 제 짝인지 (두 단) ──────────────────────────────
 {
     Console.WriteLine("\n== S73 줄↔값 짝 ==");
-    Check("S73 ★★줄 수와 짝 수가 같다", QuantityTable.RowKindValid(),
-          $"줄 {QuantityTable.Rows.Length} · 짝 {QuantityTable.RowKind.Length}");
 
-    var q = new XsecQty(11.0, 22.0, 33.0, 44.0, 55.0);
-    // 이름으로 찾은 줄 번호에 그 값이 들어가야 한다 — 줄을 옮겨도 이 검사가 잡아 준다.
-    int Row(string name)
+    var q = new XsecQty(11.0, 22.0, 33.0, 44.0, 55.0);   // 절토·성토·얕은터파기·깊은터파기·되메우기
+
+    // 재료 칸(2열) 글자로 줄을 찾는다 — 줄을 옮겨도 이 검사가 잡아 준다.
+    int RowOfLeft(string l1, string l3)
     {
         for (int i = 0; i < QuantityTable.Rows.Length; i++)
-            if ((QuantityTable.Rows[i].Name ?? "").Replace(" ", "").Contains(name)) return i;
+        {
+            string a = (QuantityTable.L1TextOf(i) ?? "").Replace(" ", "");
+            string b = (QuantityTable.Rows[i].L2.Text ?? "").Replace(" ", "");
+            string c = (QuantityTable.Rows[i].L3.Text ?? "").Replace(" ", "");
+            if ((a.Contains(l1) || b.Contains(l1)) && c.Contains(l3)) return i;
+        }
         return -1;
     }
-    Check("S73 절토 → Cut", Math.Abs(QuantityTable.Pick(q, Row("절토")) - 11.0) < 1e-9, "11");
-    Check("S73 되메우기 → Backfill", Math.Abs(QuantityTable.Pick(q, Row("되메우기")) - 55.0) < 1e-9, "55");
-    Check("S73 성토 → Fill", Math.Abs(QuantityTable.Pick(q, Row("성토")) - 22.0) < 1e-9, "22");
 
-    // 터파기는 두 덩이 — 이하가 먼저, 이상이 나중이다.
-    int shallow = Row("(5.0m이하)"), deep = Row("(5.0m이상)");
-    Check("S73 터파기 5m이하 → ExcShallow", Math.Abs(QuantityTable.Pick(q, shallow) - 33.0) < 1e-9, "33");
-    Check("S73 터파기 5m이상 → ExcDeep", Math.Abs(QuantityTable.Pick(q, deep) - 44.0) < 1e-9, "44");
-    Check("S73 ★이하가 이상보다 위에 있다", shallow < deep, $"{shallow} < {deep}");
+    int rFill = RowOfLeft("성토", "토사");
+    int rCut  = RowOfLeft("절토", "토사");
+    int rExc  = RowOfLeft("터파기", "토사");
+    Check("S73 성토 → Fill", Math.Abs(QuantityTable.PickLeft(q, rFill) - 22.0) < 1e-9, $"줄{rFill}");
+    Check("S73 절토 → Cut", Math.Abs(QuantityTable.PickLeft(q, rCut) - 11.0) < 1e-9, $"줄{rCut}");
+    Check("S73 터파기(육상)토사 → ExcShallow", Math.Abs(QuantityTable.PickLeft(q, rExc) - 33.0) < 1e-9, $"줄{rExc}");
 
-    // 아직 안 재는 공종은 NaN — 0이면 "없다"로 읽혀 잘못이다.
-    int n = 0;
-    for (int i = 0; i < QuantityTable.Rows.Length; i++) if (double.IsNaN(QuantityTable.Pick(q, i))) n++;
-    Check("S73 아직 안 재는 줄은 NaN(빈칸)", n == 13, $"{n}줄");
-    Check("S73 값이 들어가는 줄은 5개", QuantityTable.Rows.Length - n == 5, $"{QuantityTable.Rows.Length - n}줄");
+    // 되메우기는 <b>주위</b> 줄이 받는다(구조물 칸은 아직 못 구한다).
+    int rBack = -1;
+    for (int i = 0; i < QuantityTable.Rows.Length; i++)
+        if (QuantityTable.Rows[i].LKind == QuantityTable.QtyKind.Backfill) rBack = i;
+    Check("S73 되메우기 → Backfill", rBack >= 0 && Math.Abs(QuantityTable.PickLeft(q, rBack) - 55.0) < 1e-9, $"줄{rBack}");
+
+    // ★위아래 순서 — 성토가 절토보다 위, 절토가 터파기보다 위여야 표가 스크린샷과 같다.
+    Check("S73 ★성토 < 절토 < 터파기 순서", rFill < rCut && rCut < rExc, $"{rFill} < {rCut} < {rExc}");
+
+    // ★아직 안 재는 자리는 NaN — 0이면 "없다"로 읽혀 잘못이다.
+    int nan = 0, val = 0;
+    for (int i = 0; i < QuantityTable.Rows.Length; i++)
+    {
+        if (double.IsNaN(QuantityTable.PickLeft(q, i))) nan++; else val++;
+        if (double.IsNaN(QuantityTable.PickRight(q, i))) nan++; else val++;
+    }
+    Check("S73 값이 들어가는 자리 4곳", val == 4, $"{val}곳");
+    Check("S73 나머지는 NaN(빈칸)", nan == QuantityTable.BodyRows * 2 - 4, $"{nan}곳");
+
+    // ★깊은 터파기(ExcDeep)는 새 표에 자리가 없다 — 계산은 하지만 안 적는다.
+    //   자리가 생기면 이 검사가 알려 준다(그때 기대값을 바꾸면 된다).
+    bool hasDeep = false;
+    foreach (var r in QuantityTable.Rows)
+        if (r.LKind == QuantityTable.QtyKind.ExcDeep || r.RKind == QuantityTable.QtyKind.ExcDeep) hasDeep = true;
+    Check("S73 깊은 터파기는 아직 표에 자리가 없다", !hasDeep, hasDeep ? "자리 생김" : "없음(계산은 함)");
 }
 
 

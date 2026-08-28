@@ -412,7 +412,9 @@ public sealed class CreateGradingCommand
                         try // [리뷰 L-1] 상세 진단이 다음 호출에 덮이지 않게 표면별 사본 보존
                         {
                             System.IO.File.Copy(RawTriangleIntersectionFinder.LogPath,
-                                $@"C:\Users\user\Desktop\AI\civil3d-grading\DHXSEC_진단_{label}.log", true);
+                                System.IO.Path.Combine(
+                                    System.IO.Path.GetDirectoryName(DiagLog.FilePath) ?? ".",
+                                    $"DHXSEC_진단_{label}.log"), true);
                         }
                         catch { }
                         pureLoops[label] = loops; vsIdOf[label] = vsId;

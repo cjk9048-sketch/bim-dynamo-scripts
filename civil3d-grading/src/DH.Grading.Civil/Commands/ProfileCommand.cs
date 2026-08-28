@@ -507,6 +507,7 @@ public sealed class ProfileCommand
         //   옮기면 되고, 종단도와 횡단면도가 <b>같은 그룹</b>이라 저절로 함께 따라온다
         //   (JACK 0810: "종단에 있는 체인은 다 횡단면도가 그려져야 해").
         double bandIv = System.Math.Max(1.0, GradingSettings.XsecInterval);
+        LastPidGround = pidGround; LastPidPad = pidPad;   // ★[검토 0827] 뒤에서 이름으로 찾지 않게
         ObjectId slGroupId = BuildSampleLines(db, ed, alignId, pidGround, pidPad, surfs, bandIv,
                                               out var allMarks, log);
 
@@ -2299,6 +2300,12 @@ public sealed class ProfileCommand
     /// <b>레이어를 소유한 쪽</b>이 해야 한다 — 그것이 이 프로젝트가 반복해 배운 것이다.</para></summary>
     internal const string LayerVBarWall = "DH-종단-옹벽";
     internal const string LayerVBarShore = "DH-종단-가시설";
+
+    /// <summary>★★[검토 0827 · H3] <b>종단을 이름으로 다시 찾지 않는다.</b>
+    /// <para>이 파일 851줄이 이미 경고한다 — <i>"이름으로 종단을 고르는 코드가 여럿이라,
+    /// 같은 말이 둘이면 <b>마지막에 잡힌 것</b>이 쓰여 결과가 실행 순서에 매인다."</i>
+    /// 밴드는 ObjectId로 배선하는데 나중에 쓰는 쪽만 이름으로 찾으면 갈라진다.</para></summary>
+    internal static ObjectId LastPidGround = ObjectId.Null, LastPidPad = ObjectId.Null;
 
     internal static ObjectId LastXsecGroupId = ObjectId.Null;
 
