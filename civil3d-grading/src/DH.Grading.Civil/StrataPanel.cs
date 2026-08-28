@@ -103,7 +103,21 @@ public sealed class StrataPanel : UserControl
 
         var lbtn = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
         lbtn.Children.Add(MakeBtn("＋ 층 추가", (_, _) => Layers.Add(new LayerRow { Name = "새 층" })));
-        lbtn.Children.Add(MakeBtn("－ 선택 삭제", (_, _) => { if (_gLayer.SelectedItem is LayerRow r) Layers.Remove(r); }));
+        // ★★★[JACK 0828 검토] <b>지운 자리에서 빼야 한다.</b>
+        //   종전엔 층만 지우고 두께는 <c>SyncThicknessLength</c>가 <b>언제나 끝에서</b> 뺐다 —
+        //   5층 중 2번째를 지우면 열 머리는 한 칸 당겨지는데 값은 그대로라
+        //   <b>모든 공의 두께가 통째로 한 칸씩 밀린다</b>. 예외도 로그도 없고 표는 멀쩡해 보이는데
+        //   만들어지는 지층면만 조용히 틀린다 — 도면에서 알아채기 가장 어려운 종류다.
+        lbtn.Children.Add(MakeBtn("－ 선택 삭제", (_, _) =>
+        {
+            if (_gLayer.SelectedItem is not LayerRow r) return;
+            int ix = Layers.IndexOf(r);
+            if (ix < 0) return;
+            foreach (var b in Bores)
+                if (ix < b.Th.Count) b.Th.RemoveAt(ix);   // ★같은 자리에서
+            Layers.Remove(r);                              // 그다음에 층을 지운다
+            Say($"'{r.Name}' 층 삭제 — 모든 공의 {ix + 1}번째 두께도 같이 뺐다");
+        }));
         Grid.SetRow(lbtn, 2); c1.Children.Add(lbtn);
         root.Children.Add(MakeCard(c1, 0));
 
@@ -328,7 +342,27 @@ public sealed class StrataPanel : UserControl
             while (b.Th.Count < Layers.Count) b.Th.Add(double.NaN);
             while (b.Th.Count > Layers.Count) b.Th.RemoveAt(b.Th.Count - 1);
         }
-        _gBore.Items.Refresh();
+        SafeRefresh();
+    }
+
+    /// <summary>★★★[JACK 0828 검토] <b>표를 치던 중에 단추를 누르면 터졌다.</b>
+    /// <para>WPF는 <c>Items.Refresh()</c>를 <b>편집 중</b>에 막는다(<c>InvalidOperationException</c>).
+    /// DataGrid는 바깥 단추로 포커스가 가도 <b>행 편집을 저절로 안 끝낸다</b> —
+    /// 그래서 두께를 치다가 [＋ 층 추가]를 누르면 AutoCAD 오류 대화상자가 떴다.</para>
+    /// <para>이 파일 <c>AddBore</c> 주석이 <b>바로 이 예외</b> 때문에 <c>Moved</c>에서 Refresh를 뺐다고
+    /// 적어 놓고, 정작 다른 두 자리에는 그대로 남겨 뒀다 — <b>같은 것을 두 곳에서</b> 따로 다룬 것이다.
+    /// 이제 고치는 자리는 여기 하나다.</para></summary>
+    private void SafeRefresh()
+    {
+        // 먼저 편집을 끝낸다(칸 → 행 차례로). 편집 중이 아니면 아무 일도 안 한다.
+        try { _gBore.CommitEdit(System.Windows.Controls.DataGridEditingUnit.Cell, true); } catch { }
+        try { _gBore.CommitEdit(System.Windows.Controls.DataGridEditingUnit.Row, true); } catch { }
+        try { _gBore.Items.Refresh(); }
+        catch (System.Exception ex)
+        {
+            // 그래도 막히면 <b>표만 안 새로 그려질 뿐</b> 자료는 멀쩡하다 — 터뜨리지 않는다.
+            Say("표 새로 그리기를 미뤘습니다(편집 중) — " + ex.GetType().Name);
+        }
     }
 
     /// <summary>표를 다시 그린다(창을 다시 열 때).</summary>
@@ -365,7 +399,7 @@ public sealed class StrataPanel : UserControl
         Bores.Add(row);
         StrataDraw.ReadGl(row);
         StrataDraw.DrawMark(row);
-        _gBore.Items.Refresh();
+        SafeRefresh();
         Say($"{row.Name} 추가 — 지반고 {(double.IsNaN(row.Gl) ? "못 읽음(원지반 밖?)" : row.Gl.ToString("0.00"))}");
     }
 

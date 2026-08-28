@@ -2976,6 +2976,13 @@ public static class SheetCommand
                         if (tr.GetObject(pid, OpenMode.ForRead) is not CivilDb.Profile pr) continue;
                         // ★[v29.0] 숨은 측점 체인은 그리지 않는 선이라 CALS 레이어를 입힐 대상이 아니다.
                         if (pr.Name.StartsWith("DH_측점체인", StringComparison.Ordinal)) continue;
+                        // ★[JACK 0828] 갈래 판정은 <b>try 밖</b>에 둔다 — 아래 ByLayer 덮기가
+                        //   같은 판정을 다시 써야 하는데, try 안에 두면 그 자리에서 안 보인다.
+                        bool exc = pr.Name.Contains("터파기");
+                        bool water = pr.Name == StrataDraw.WaterSurfName;
+                        bool strata = !water && pr.Name.StartsWith(StrataDraw.SurfPrefix, StringComparison.Ordinal);
+                        bool plan = !exc && !water && !strata
+                                    && (pr.Name.Contains("정지") || pr.Name.Contains("계획"));
                         try
                         {
                             // ★★[JACK 0826 '터파기선이 여전히 원지반과 같은 레이어'] <b>여기가 범인이었다.</b>
@@ -2984,16 +2991,27 @@ public static class SheetCommand
                             //   객체 색을 박아도, 재정의를 덮어도 <b>이 줄이 나중에 전부 되돌렸다</b> —
                             //   매 판 마젠타로 되살리고 여기서 다시 지우는 왕복이 돌고 있었다.
                             //   → <b>세 갈래</b>로 가른다: 터파기 · 계획 · 원지반.
-                            bool exc = pr.Name.Contains("터파기");
-                            bool plan = !exc && (pr.Name.Contains("정지") || pr.Name.Contains("계획"));
+                            // ★★★[JACK 0828 "종단에서 지층색이 반영이 안 됐어 다 초록색으로 나와"]
+                            //   <b>바로 위 주석이 말한 그 함정에 지층이 또 빠졌다.</b>
+                            //   터파기가 0826에 여기서 되돌려졌는데, 지층·지하수위를 새로 만들면서
+                            //   <b>이 갈래를 안 넓혔다</b> — 종단을 만들 때 레이어를 갈라 주고
+                            //   <c>PaintStrataProfile</c>로 다시 옮겨도 <b>이 줄이 나중에 전부 되돌린다</b>.
+                            //   → <b>네 갈래</b>로 가른다: 터파기 · 지층 · 지하수위 · 계획 · 원지반.
                             string ln = exc ? SectionCommand.ExcavProfileLayer
+                                            : strata ? SectionCommand.StrataProfLayer
+                                            : water ? SectionCommand.WaterProfLayer
                                             : plan ? CalsLayerDesign : CalsLayerGround;
-                            short ac = exc ? SectionCommand.ExcavAci : (short)(plan ? CalsDesign : CalsGround);
+                            short ac = exc ? SectionCommand.ExcavAci
+                                           : strata ? SectionCommand.StrataAci
+                                           : water ? SectionCommand.WaterAci
+                                           : (short)(plan ? CalsDesign : CalsGround);
                             var lid = SectionCommand.EnsureLayer(db, tr, ln, ac);
-                            // EnsureLayer는 <b>이미 있는</b> 레이어의 색을 안 고친다 — 터파기만 못 박는다.
-                            if (exc && !lid.IsNull && tr.GetObject(lid, OpenMode.ForWrite) is LayerTableRecord lrE)
+                            // EnsureLayer는 <b>이미 있는</b> 레이어의 색을 안 고친다 —
+                            //   색이 곧 뜻인 것들(터파기·지층·지하수위)만 못 박는다.
+                            if ((exc || strata || water) && !lid.IsNull
+                                && tr.GetObject(lid, OpenMode.ForWrite) is LayerTableRecord lrE)
                                 lrE.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
-                                    Autodesk.AutoCAD.Colors.ColorMethod.ByAci, SectionCommand.ExcavAci);
+                                    Autodesk.AutoCAD.Colors.ColorMethod.ByAci, ac);
                             if (tr.GetObject(pid, OpenMode.ForWrite) is Entity pe) { pe.LayerId = lid; layed++; }
                             log.AppendLine($"   CALS 레이어: '{pr.Name}' → {ln}(색 {ac}){(exc ? "  ★터파기=마젠타" : "")}");
                         }
@@ -3005,7 +3023,10 @@ public static class SheetCommand
                         //   <c>EnsureExcavProfileStyle</c>이 심어 둔 마젠타가 매번 지워진다.
                         //   (터파기는 위에서 마젠타 레이어에 실었으므로 ByLayer여도 결과는 같지만,
                         //    스타일을 되읽는 진단이 "마젠타 맞다"고 답하면서 화면은 초록인 혼란을 없앤다.)
-                        if (!pr.Name.Contains("터파기"))
+                        // ★★[JACK 0828] 지층·지하수위도 <b>예외</b>다 — 여기서 ByLayer로 덮으면
+                        //   <c>EnsureProfileStyle</c>이 심어 둔 회색·파랑이 매번 지워진다(터파기와 같은 이유).
+                        //   스타일은 <b>공유물</b>이라 한 번 덮이면 다섯 층이 한꺼번에 물든다.
+                        if (!exc && !strata && !water)
                         {
                             try
                             {
@@ -3386,6 +3407,13 @@ public static class SheetCommand
                     foreach (ObjectId pid in al.GetProfileIds())
                     {
                         if (tr.GetObject(pid, OpenMode.ForRead) is not CivilDb.Profile pr) continue;
+                        // ★★★[JACK 0828 검토] <b>지층은 자리를 정하는 데 끼지 않는다.</b>
+                        //   경암 바닥은 지반 아래 20~40m다. 이것까지 담으려 하면 표고 범위가
+                        //   두세 배로 늘고 <c>FitSheet</c>가 축척 사다리를 한두 단 내린다 —
+                        //   증상은 <b>"지층을 만들었더니 종단도가 갑자기 작아졌다"</b>로 나온다.
+                        //   지층은 <b>곁들이</b>이고, 도면의 주인공은 원지반과 계획선이다.
+                        if (pr.Name == StrataDraw.WaterSurfName
+                            || pr.Name.StartsWith(StrataDraw.SurfPrefix, System.StringComparison.Ordinal)) continue;
                         try { lo = System.Math.Min(lo, pr.ElevationMin); hi = System.Math.Max(hi, pr.ElevationMax); }
                         catch { }
                     }
@@ -3791,6 +3819,9 @@ public static class SheetCommand
             ProfileCommand.LayerVBarWall, ProfileCommand.LayerVBarShore,
             // ★[JACK 0827] 수직부 계획고 두 줄 — 다시 그릴 때 겹쳐 쌓이면 안 된다.
             LayWallPair,
+            // ★★[JACK 0828 검토] 종단에 우리가 쓴 <b>지층 이름</b>. 여기 안 넣으면 선형이 죽어
+            //   지층 종단이 사라진 뒤에도 <b>글씨만 유령으로</b> 남는다(막대가 겪은 그 자리).
+            ProfileCommand.ProfStrataNameLayer, ProfileCommand.ProfWaterNameLayer,
         };
         // ★★★[JACK 0828] 횡단 레이어는 <b>목록 하나</b>에서 받는다 — 여기서 다시 적지 않는다.
         ourList.AddRange(XsecViewCommand.MyLayers);
