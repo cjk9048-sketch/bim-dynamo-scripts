@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using Autodesk.AutoCAD.DatabaseServices;
@@ -729,8 +729,30 @@ public static class SheetCommand
                     //   "엇갈림 끄기 실패"로 보고했다 — <b>범인을 잘못 지목하는 로그</b>였다.
                     //   실제로 최종 상태는 `엇갈림=None(높이 5.0mm)`이다: 첫 줄은 먹었고 둘째 줄만 실패했다.
                     //   그리고 엇갈림이 None이면 높이는 의미가 없으니 <b>건드리지 않는다</b>.
+                    // ★★★[JACK 0828 "전후 단면이 있는 측점이랑 겹치면 띄우는 거리를 더 주는 걸로 안 돼?"]
+                    //   <b>그것이 바로 엇갈림이다 — 다시 켠다.</b>
+                    //   Civil은 <b>겹칠 라벨만 골라</b> 아래 줄로 내린다. 안 겹치는 자리는 한 줄로 그대로다.
+                    //
+                    //   <b>0810에 끈 이유가 사라졌다.</b> 그때 JACK이 본 "글씨가 이상하게 정렬돼"는
+                    //   <b>벌리는 거리를 안 정해 준</b> 탓이 크다 — <c>StaggerLineHeight</c>를 안 건드리고
+                    //   종류만 켜 두었으니 스타일 기본값대로 어중간하게 벌어졌다.
+                    //   이번엔 <b>거리를 우리가 정한다</b>(종이 <see cref="StaggerMm"/>).
+                    //
+                    //   <b>겹침의 진짜 원인은 측점 간격이다.</b> 옹벽 9.86m와 보조측점 10.00m가
+                    //   <b>0.14m</b> 차이로 붙는다(0828 실측). 이것을 솎아내기로 풀면 <b>하나가 사라지고</b>,
+                    //   측점을 합치면 <b>옹벽 자리가 사라진다</b> — 둘 다 JACK이 0811에 거부한 길이다
+                    //   ("최소간격 없어 둘 다 찍어"). 엇갈림은 <b>하나도 안 잃는다</b>.
+                    //   <b>★[0828 실측] 그런데 Civil이 안 받는다 — 되돌린다.</b>
+                    //   횡단 데이터(<c>SectionalData</c>) 밴드 <b>다섯 칸 모두</b>
+                    //   <c>StaggerLabel</c> 대입에서 <c>InvalidOperationException</c>이 났고,
+                    //   유일하게 받은 측점 칸(<c>ProfileData</c>)조차 <b>커밋 뒤 되읽으면 <c>None</c></b>이었다.
+                    //   <b>그리고 겹치는 값이 바로 그 다섯 칸에 있다</b>(계획고 100.00 · 지반고 105.00) —
+                    //   되는 칸에는 필요가 없고 필요한 칸에서는 안 된다.
+                    //   라벨 부착점을 옮기는 길도 이미 막혀 있다(<c>일반 부착점을 못 바꿨다 — 후보 3개 모두 거절</c>).
+                    //   → <b>Civil은 이 밴드 라벨의 자리를 내주지 않는다.</b> 겹침은 <b>측점 쪽</b>에서 풀어야 한다.
+                    //   안 먹는 설정을 남겨 두면 실행마다 실패 다섯 줄이 로그를 덮으므로 <c>None</c>으로 되돌린다.
                     try { items[i].StaggerLabel = CivilDb.Styles.StaggerLabelType.None; }
-                    catch (System.Exception ex) { log.AppendLine($"   [{i}칸] 엇갈림 종류 끄기 실패 — {Brief(ex)}"); }
+                    catch (System.Exception ex) { log.AppendLine($"   [{i}칸] 엇갈림 끄기 실패 — {Brief(ex)}"); }
 
                     // ★★[v25.5 · JACK 0811] <b>'레이블 표시'가 꺼져 있으면 앞의 준비가 전부 헛것이다.</b>
                     //
@@ -1156,6 +1178,7 @@ public static class SheetCommand
     /// <summary>★[JACK 0810] <b>그래프와 첫 밴드(성토) 사이 틈</b>(종이 mm) — "10의 거리 주고".
     /// 칸끼리는 붙여 표로 읽히게 하되, 그래프와 표 사이만 띄워 경계가 보이게 한다.
     /// 이 틈은 밴드 총높이에 포함되어 축척 계산에 자동으로 반영된다(<see cref="BandPaperHeight"/>가 간격까지 더한다).</summary>
+
     private const double TopGapMm = 10.0;
 
     /// <summary>★[v26.0] 칸과 칸 사이 틈(종이 mm) — <b>0이 아니되 눈에 안 보이는</b> 값.
@@ -1632,7 +1655,10 @@ public static class SheetCommand
     ///
     /// <para>한 칸에 대해 <b>다음 판에서 물어볼 것들을 미리 다 찍는다</b>:
     /// 종단1/종단2가 각각 무엇인지(굴곡부가 어느 선을 따라가는지) · 굴곡부 선택이 살아 있는지 ·
-    /// 엇갈림이 정말 꺼졌는지(<b>되읽어</b>) · 솎아내기 값 · 표시 스위치 상태.</para></summary>
+    /// 엇갈림 종류와 <b>벌리는 거리</b>(<b>되읽어</b>) · 솎아내기 값 · 표시 스위치 상태.
+    /// <para>★[JACK 0828] 종전엔 <i>"엇갈림이 정말 <b>꺼졌는지</b>"</i>라고 적혀 있었다 —
+    /// 이제는 <b>켜는 것이 맞는 상태</b>다(겹치는 라벨을 잃지 않고 벌리기 위해).
+    /// 무엇이 옳은 상태인지 바뀌었으면 <b>확인 문구도 함께</b> 바뀌어야 한다.</para></summary>
     private static void DumpBands(Database db, ObjectId pvId, System.Text.StringBuilder log)
     {
         try
@@ -1759,7 +1785,8 @@ public static class SheetCommand
                 log.AppendLine($"  [{i}칸] '{sty}' {kind} · 레이블표시={show}{more}{labels}");
                 log.AppendLine($"        종단1={p1} · 종단2={p2}   ← 굴곡부는 이 중 어느 선을 따라가는가");
                 log.AppendLine($"        굴곡부: GradeBreak={gb} PVI={pvi} · 솎아내기={weed} · 간격 주{maj}/보조{min}");
-                log.AppendLine($"        엇갈림={stag}(높이 {stagH})   ← None이 아니면 글씨가 두 단으로 어긋난다");
+                log.AppendLine($"        엇갈림={stag}(벌리는 거리 {stagH})"
+                             + "   ← 겹칠 라벨만 아래로 내린다. None이면 겹친 채로 포개진다(JACK 0828)");
 
                 // 표시 스위치 — 꺼진 것만 이름으로 (전부 켜져 있으면 그렇게 적는다)
                 try
@@ -4365,7 +4392,7 @@ public static class SheetCommand
         var spans = ProfileCommand.LastWallSpans;
         if (spans == null || spans.Count == 0) { log.AppendLine("  수직부 두 값: 옹벽·가시설이 없어 건너뜀"); return; }
 
-        int nHide = 0, nDraw = 0, nGrp = 0, nMiss = 0, nSkipKind = 0, wipedAll = 0, nFar = 0, nBand = 0, nProbe = 0;
+        int nHide = 0, nDraw = 0, nGrp = 0, nMiss = 0, nSkipKind = 0, nSkipManual = 0, wipedAll = 0, nFar = 0, nBand = 0, nProbe = 0;
         string howFind = "?";
         int nBlank = 0;
         var probe = new System.Text.StringBuilder();
@@ -4603,6 +4630,20 @@ public static class SheetCommand
                         if (hit.Kind != null && hit.Kind.IndexOf("가시설", System.StringComparison.Ordinal) >= 0)
                         { nSkipKind++; continue; }
 
+                        // ★★★[JACK 0828 "전후 측점 기능은 구조물에 쓸 거라 계획고나 절성토고가
+                        //   바뀔 이유가 없어서 밴드를 두 개 숫자로 표현 안 해도 돼"]
+                        //   <b>수동 (전)(후)는 여기서 걸러낸다.</b>
+                        //
+                        //   이 기능은 <b>옹벽이 수직이라 한 자리에 표고가 둘</b>이어서 만든 것이다.
+                        //   그런데 수동 (전)(후)는 <b>구조물을 투영한 자리</b>에 찍는 것이라
+                        //   앞뒤 5cm 사이에서 계획고가 바뀔 일이 없다 —
+                        //   두 줄로 적으면 <b>같은 숫자가 위아래로 겹쳐</b> 보일 뿐이다(JACK 스크린샷).
+                        //
+                        //   <b>목록을 함께 쓰되 대접은 갈라야 했다.</b> 벽이 쓰던 <see cref="StationMarks.WallSpan"/>에
+                        //   얹은 것은 <b>횡단을 두 장으로 가르려는 것</b>뿐인데,
+                        //   그 목록을 보는 곳이 <b>여기 하나 더</b> 있는 줄 몰랐다.
+                        if (StationMarks.IsFixedSpan(hit.Kind)) { nSkipManual++; continue; }
+
                         double zF = Z(pad, hit.Front), zB = Z(pad, hit.Back);
                         // ★[검토 H2] 막대는 <b>선 값</b>을 먼저 보는 4단 사다리로 위·아래를 정한다.
                         //   여기는 계획 종단만 읽으므로 <b>다단 옹벽에서 갈릴 수 있다</b>.
@@ -4685,6 +4726,7 @@ public static class SheetCommand
                      + (wipedAll > 0 ? $" · 지난 판 글씨 {wipedAll}개 지움" : "")
                      + (nBlank > 0 ? $" · 빈칸 {nBlank}곳(그 자리에 없는 공종)" : "")
                      + (nSkipKind > 0 ? $" · 가시설 제외 {nSkipKind}곳" : "")
+                     + (nSkipManual > 0 ? $" · <b>수동 (전)(후) 제외 {nSkipManual}곳</b>(구조물 자리라 표고가 안 바뀜다 — 숫자 하나)" : "")
                      + (nMiss > 0 ? $" · ⚠표고를 못 읽은 것 {nMiss}곳" : "")
                      + (nHide == 0 && nFar > 0 ? $" · ⚠벽에 안 닿은 글씨 {nFar}개(자 {StationMarks.MergeTol * 100:F0}cm)" : "")
                      + $" · 찾은 길: {howFind}"

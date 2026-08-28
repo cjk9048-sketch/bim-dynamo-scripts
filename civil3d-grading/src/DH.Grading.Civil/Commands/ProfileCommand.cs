@@ -1386,6 +1386,30 @@ public sealed class ProfileCommand
                 var man = StationMarks.Load(tr, alignId);
                 marks.AddRange(man);
                 if (man.Count > 0) log.AppendLine($"  수동 측점 {man.Count}개");
+
+                // ★★★[JACK 0828 "전/후 측점"] <b>수동으로 찍은 (전)(후)도 벽과 같은 길로 태운다.</b>
+                //   JACK: <i>"종단 전용 검토선엔 찍은 그 위치에 측점 하나, 횡단 전용 검토선엔
+                //   미세하게 벌려진 두 개."</i>
+                //   → <b>측점 목록은 안 건드린다</b>(위 <c>marks.AddRange</c>가 하나만 넣는다).
+                //     갈림은 <see cref="StationMarks.WallSpan"/>에만 얹는다 —
+                //     그 목록을 보는 것은 <b>횡단뿐</b>이라 종단은 저절로 하나로 남는다.
+                //   <b>새 갈래를 만들지 않는 것이 요점이다.</b> 벽이 이미 지나는 길에 태우면
+                //   (전)(후) 규칙이 <b>한 곳</b>에만 있고, 벌어지는 거리도 벽과 같은 자를 쓴다.
+                int nFb = 0;
+                foreach (var m in man)
+                {
+                    if (!StationMarks.IsFrontBack(m.Why)) continue;
+                    // 이미 벽이 잡은 자리면 겹쳐 넣지 않는다 — 두 번 갈리면 검토선 이름이 부딪힌다.
+                    if (wspans.Exists(w => System.Math.Abs(w.Mid - m.Station) <= StationMarks.MergeTol)) continue;
+                    wspans.Add(new StationMarks.WallSpan(
+                        m.Station,
+                        m.Station - StationMarks.FrontBackHalf,
+                        m.Station + StationMarks.FrontBackHalf,
+                        StationMarks.FrontBackKind));
+                    nFb++;
+                }
+                if (nFb > 0)
+                    log.AppendLine($"  수동 (전)(후) 측점 {nFb}개 — 종단은 <b>측점 하나</b>, 횡단만 두 장으로 갈린다");
                 tr.Commit();
             }
 
@@ -1443,7 +1467,12 @@ public sealed class ProfileCommand
                         // ★★[검토] 여기가 <b>안 고쳐진 자</b>였다 — 벽면 생짜(2cm 간격)를 써서
                         //   두 장이 만들어지긴 해도 <b>같은 그림</b>이 나왔다(JACK: "전후가 안 생겨").
                         //   지금은 스위치로 잠들어 있지만, 켜는 순간 옛 버그가 살아난다. 같은 자로 맞춘다.
-                        var (pxF, pxB, _) = DH.Grading.Core.XsecSpan.PushOut(span.Front, span.Back);
+                        // ★★★[JACK 0828 · 검토] <b>여기가 또 안 고쳐진 자였다.</b>
+                        //   <see cref="XsecViewCommand"/>는 <c>Place</c>로 바꿨는데 이쪽만 <c>PushOut</c>이라,
+                        //   수동 (전)(후)의 5cm가 <b>여기서만 0.20m로 부푼다</b> —
+                        //   바로 위 주석이 <i>"안 고쳐진 자"</i>를 경고하고 있는데 <b>같은 실수를 반복했다</b>.
+                        var (pxF, pxB, _) = DH.Grading.Core.XsecSpan.Place(
+                            span.Front, span.Back, StationMarks.IsFixedSpan(span.Kind));
                         foreach (var (stw, tag) in new[] { (pxF, "(전)"), (pxB, "(후)") })
                         {
                             double st2 = System.Math.Min(System.Math.Max(stw, s0 + eps), s1 - eps);
@@ -1518,6 +1547,34 @@ public sealed class ProfileCommand
             }
             log.AppendLine($"단면검토선 '{groupName}' — {nSl}/{cuts.Count}개 생성 · 좌{wl:0.#}m/우{wr:0.#}m · 표본 지표면 {nSrc}개[{srcNames.ToString().Trim()}]" +
                            (firstErr != null ? $"\n  ⚠첫 실패: {firstErr}" : ""));
+
+            // ★★★[JACK 0828 "전후측점 기능을 쓰면 숫자가 두 개로 표현돼"]
+            //   <b>만든 수는 든 수가 아니다.</b> 위 줄은 <c>Create</c>를 몇 번 불렀는지 셀 뿐이라,
+            //   그룹에 <b>옛 검토선이 남아 있어도</b> 알 길이 없었다 — 밴드는 그룹을 보므로
+            //   남은 선이 곧 <b>같은 자리에 두 번 찍히는 숫자</b>가 된다.
+            //   → <b>그룹에게 직접 묻는다.</b> 몇 개가 들어 있고, 가까이 붙은 쌍이 있는지.
+            try
+            {
+                using var trC = db.TransactionManager.StartTransaction();
+                if (trC.GetObject(groupId, OpenMode.ForRead) is CivilDb.SampleLineGroup grp)
+                {
+                    var sts = new List<double>();
+                    foreach (ObjectId sid in grp.GetSampleLineIds())
+                        try { if (trC.GetObject(sid, OpenMode.ForRead) is CivilDb.SampleLine sl2) sts.Add(sl2.Station); }
+                        catch { }
+                    sts.Sort();
+                    var near = new System.Text.StringBuilder();
+                    int nNear = 0;
+                    for (int i = 1; i < sts.Count; i++)
+                        if (sts[i] - sts[i - 1] < 0.5)
+                        { nNear++; if (nNear <= 6) near.Append($" [{sts[i - 1]:F2}↔{sts[i]:F2} {sts[i] - sts[i - 1]:F3}m]"); }
+                    log.AppendLine($"  되읽기 — 그룹에 실제로 든 검토선 {sts.Count}개(측점 {cuts.Count}개)"
+                                 + (sts.Count != cuts.Count ? "  ⚠<b>수가 다르다 — 옛 선이 남았거나 못 만든 것이 있다</b>" : "")
+                                 + (nNear > 0 ? $"\n    ⚠<b>0.5m 안에 붙은 쌍 {nNear}개</b>{near} — 밴드 숫자가 겹쳐 보인다" : ""));
+                }
+                trC.Commit();
+            }
+            catch (System.Exception ex) { log.AppendLine("  검토선 되읽기 실패 — " + ex.Message); }
             ed.WriteMessage($"\n  · 단면검토선 {nSl}개 (정측점 {interval:0.#}m + 굴곡부 + 수동)");
 
             // ★[v32.45] 꾸미기는 여기서 하지 않는다 — 글씨 크기가 <b>도면 축척</b>을 따라야 하는데
