@@ -442,17 +442,48 @@ public sealed class ProfileCommand
 
         ObjectId profStyle = SectionCommand.PickStyle(db, cdoc.Styles.ProfileStyles, "기본", "Standard", "Basic");
         ObjectId excStyle = SectionCommand.EnsureExcavProfileStyle(db, cdoc);   // ★[0824] 터파기 = 마젠타
+        // ★★★[JACK 0828] 지층·지하수위 종단선 — <b>점선을 갈라 쓴다</b>.
+        //   JACK: <i>"모든 지층은 점선으로. 지하수위는 파란색 점선.
+        //   점선이 터파기 지표면 점선하고 헷갈리지 않게 형태를 다른 걸로."</i>
+        //   터파기 <c>DASHED</c>(긴 파선) · 지층 <c>HIDDEN</c>(짧은 점선) · 지하수위 <c>DASHDOT</c>(일점쇄선).
+        // ★★[JACK 0828 "점선 표시가 축척 때문인지 너무 끊어진 부분이 커서 이상해"]
+        //   AutoCAD 기본 선종류는 <b>무늬 길이가 도면 단위로 고정</b>이라,
+        //   부지가 수백 m이면 끊긴 간격이 눈에 밟힌다.
+        //   → <b>절반 간격 변형</b>(<c>…2</c>)을 먼저 쓴다 — 같은 모양에 무늬만 춌춌하다.
+        //   없는 도면이면 원래 것으로 물러난다.
+        string ltStrata = SectionCommand.LoadLinetype(db, "HIDDEN2")
+                       ?? SectionCommand.LoadLinetype(db, "HIDDEN")
+                       ?? SectionCommand.LoadLinetype(db, "DASHED");
+        string ltWater = SectionCommand.LoadLinetype(db, "DASHDOT2")
+                      ?? SectionCommand.LoadLinetype(db, "DIVIDE2")
+                      ?? SectionCommand.LoadLinetype(db, "DASHDOT")
+                      ?? ltStrata;
+        ObjectId stStrata = SectionCommand.EnsureProfileStyle(db, cdoc, SectionCommand.StrataStyleName, 8, ltStrata);
+        ObjectId stWater = SectionCommand.EnsureProfileStyle(db, cdoc, SectionCommand.WaterStyleName, 5, ltWater);
+        // ★★★[JACK 0828 "종단에서 지층색이 반영이 안 됐어 다 초록색으로 나와"]
+        //   <b>추측하지 않는다 — 무엇을 쓰는지 적어 둔다.</b>
+        //   색이 안 먹는 길은 둘이다: ① 스타일을 못 만들어 <b>기본 스타일로 물러났거나</b>
+        //   ② 레이어를 못 만들어 <b>선형 레이어(초록)에 그려졌거나</b>.
+        //   둘은 고치는 자리가 서로 다르므로 <b>로그가 먼저 갈라줘야</b> 한다.
+        log.AppendLine($"  지층 선 준비 — 지층 스타일 {(stStrata.IsNull ? "⚠<b>못 만들었다(기본으로 물러난다)</b>" : "OK")}"
+                     + $" · 지하수위 스타일 {(stWater.IsNull ? "⚠<b>못 만들었다</b>" : "OK")}"
+                     + $" · 선종류 지층={ltStrata ?? "⚠없음"} · 지하수위={ltWater ?? "⚠없음"}");
         ObjectId profLabels = SectionCommand.PickStyle(db, cdoc.Styles.LabelSetStyles.ProfileLabelSetStyles,
                                                       "_없음", "None", "표준", "Standard");
         int nProf = 0;
         // ★[JACK 0807] 밴드에 **원지반/계획지반을 자동 지정**하려면 만든 종단의 ObjectId를 들고 있어야 한다.
         ObjectId pidGround = ObjectId.Null, pidPad = ObjectId.Null, pidExcav = ObjectId.Null;
+        // ★[JACK 0828] 이름을 적으려면 만든 지층 종단을 들고 있어야 한다.
+        var strataProfs = new System.Collections.Generic.List<(ObjectId Pid, string Nm, bool Water)>();
         foreach (var s in surfs)
         {
             try
             {
                 // ★[JACK 0824] 터파기 종단선만 **마젠타** 스타일로.
-                var styleFor = s.Label == "터파기" && !excStyle.IsNull ? excStyle : profStyle;
+                var styleFor = s.Label == "터파기" && !excStyle.IsNull ? excStyle
+                             : s.Label == "지층" && !stStrata.IsNull ? stStrata
+                             : s.Label == "지하수위" && !stWater.IsNull ? stWater
+                             : profStyle;
                 // ★★[JACK 0826 '여전히 원지반과 같은 레이어라서 같은 스타일이 먹여짐'] <b>만들 때 레이어를 가른다.</b>
                 //   만든 뒤 <c>Entity.LayerId</c>로 옮기는 것은 안 먹었다 — Civil 객체는 생성 시 받은 레이어를 쥔다.
                 //   종단은 선형 레이어(CR-GRND=원지반, 초록)에 만들어지므로 터파기도 초록이 됐다.
@@ -462,7 +493,41 @@ public sealed class ProfileCommand
                     var lx = SectionCommand.EnsureLayerStandalone(db, SectionCommand.ExcavProfileLayer, SectionCommand.ExcavAci);
                     if (!lx.IsNull) layerFor = lx;
                 }
+                // ★[JACK 0826 교훈] 색을 스타일에만 두면 <b>ByLayer가 이긴다</b> — 레이어도 갈라 둔다.
+                else if (s.Label == "지층")
+                {
+                    var lx = SectionCommand.EnsureLayerStandalone(db, SectionCommand.StrataProfLayer, SectionCommand.StrataAci);
+                    if (!lx.IsNull) layerFor = lx;
+                }
+                else if (s.Label == "지하수위")
+                {
+                    var lx = SectionCommand.EnsureLayerStandalone(db, SectionCommand.WaterProfLayer, SectionCommand.WaterAci);
+                    if (!lx.IsNull) layerFor = lx;
+                }
                 var pid = CivilDb.Profile.CreateFromSurface(s.ProfileName, alignId, s.SurfId, layerFor, styleFor, profLabels);
+                // ★[JACK 0828] 지층·지하수위는 <b>어느 레이어에 놓였는지</b> 되읽어 남긴다 —
+                //   §0826의 교훈: <c>@0</c>은 "그려진 레이어를 따른다"라 <b>레이어가 색을 준다</b>.
+                if (s.Label == "지층" || s.Label == "지하수위")
+                {
+                    // ★★[JACK 0828] 만들 때 레이어를 줘도 안 먹는 경우가 있다 —
+                    //   터파기가 겉던 길(<c>PaintExcavProfile</c>)을 그대로 태워 다시 옮긴다.
+                    SectionCommand.PaintStrataProfile(db, pid, s.Label == "지하수위");
+                    strataProfs.Add((pid, StrataDraw.ShortName(s.SurfName), s.Label == "지하수위"));
+                    string lnm = "?", snm = "?";
+                    try
+                    {
+                        using var trL = db.TransactionManager.StartTransaction();
+                        if (trL.GetObject(pid, OpenMode.ForRead) is Autodesk.AutoCAD.DatabaseServices.Entity pe2)
+                        {
+                            lnm = pe2.Layer;
+                            try { if (trL.GetObject(((CivilDb.Profile)pe2).StyleId, OpenMode.ForRead) is CivilDb.Styles.StyleBase sb2) snm = sb2.Name; }
+                            catch { }
+                        }
+                        trL.Commit();
+                    }
+                    catch { }
+                    log.AppendLine($"    {s.ProfileName} → 레이어 '{lnm}' · 스타일 '{snm}'");
+                }
                 // ★[JACK 0824] 라벨로 **정확히** 가른다 — 종전엔 `else pidPad`라
                 //   터파기 종단이 생기는 순간 계획면 자리를 덮어써 밴드 값이 통째로 밀렸다.
                 if (s.Label == "원지반") pidGround = pid;
@@ -711,6 +776,7 @@ public sealed class ProfileCommand
             }
 
             try { ed.Regen(); } catch { }
+            DrawProfStrataNames(db, pvId, strataProfs, log);   // ★[JACK 0828] 지층·지하수위 이름
             string bars = DrawVertBars(db, pvId, alignId, pidGround, pidPad, pidExcav, LastWallSpans, log);
             log.AppendLine(bars);
             ed.WriteMessage("\n  · " + bars);
@@ -2114,6 +2180,95 @@ public sealed class ProfileCommand
         return true;
     }
 
+    /// <summary>★★★[JACK 0828 "종단이나 횡단에서 각 지층과 지하수위의 각층의 좌측 선 위에 해당 층이름을 적어줘"]
+    ///
+    /// <para><b>왼쪽 끝을 찾는 것이 일의 전부다.</b> 지층면은 시추공을 둘러싼 사각형으로 만들어지므로
+    /// 노선 시작 측점에서는 <b>지표면 밖</b>일 수 있다 — 그러면 <c>ElevationAt</c>이 값을 못 준다.
+    /// 그래서 시작부터 조금씩 나아가며 <b>처음으로 값이 나오는 자리</b>를 쓴다.
+    /// 첫 자리에서 실패했다고 포기하면 이름이 통째로 안 나온다.</para>
+    ///
+    /// <para>글자 높이는 <b>종단뷰가 실제로 차지한 높이</b>에서 뽑는다 — 종단은 세로를 부풀려
+    /// 그리는 일이 많아(수직 과장) 평면 축척을 그대로 쓰면 글씨가 화면을 덮는다.</para></summary>
+    private static int DrawProfStrataNames(Database db, ObjectId pvId,
+        System.Collections.Generic.List<(ObjectId Pid, string Nm, bool Water)> items,
+        System.Text.StringBuilder log)
+    {
+        if (pvId.IsNull || items == null || items.Count == 0) return 0;
+        int n = 0, miss = 0, nWiped = 0;
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            if (tr.GetObject(pvId, OpenMode.ForRead) is not CivilDb.ProfileView pv) { tr.Commit(); return 0; }
+            var ext = ((Entity)pv).GeometricExtents;
+            double drawH = ext.MaxPoint.Y - ext.MinPoint.Y;
+            double txtH = System.Math.Max(0.3, drawH * 0.025);
+            double gap = txtH * 0.4;
+            double st0 = pv.StationStart, st1 = pv.StationEnd;
+            double step = System.Math.Max(0.5, (st1 - st0) / 200.0);
+
+            var ms = (BlockTableRecord)tr.GetObject(
+                SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+            var layS = SectionCommand.EnsureLayer(db, tr, ProfStrataNameLayer, SectionCommand.StrataAci);
+            var layW = SectionCommand.EnsureLayer(db, tr, ProfWaterNameLayer, SectionCommand.WaterAci);
+            var kst = ImportGisCommand.EnsureKoreanTextStyle(db, tr);
+
+            // ★★[JACK 0828 검토] <b>먼저 지운다.</b> 종단도는 측점을 찍을 때마다 다시 그려지므로,
+            //   안 지우면 같은 자리에 같은 글자가 <b>겹쳐 쌓여</b> 굵어진 것처럼만 보인다.
+            //   우리가 만든 레이어라 남의 것을 건드릴 일이 없다(막대가 걸어 둔 것과 같은 방식).
+            
+            foreach (ObjectId id in ms)
+            {
+                try
+                {
+                    if (tr.GetObject(id, OpenMode.ForRead) is not Entity e) continue;
+                    if (e.LayerId != layS && e.LayerId != layW) continue;
+                    tr.GetObject(id, OpenMode.ForWrite).Erase(); nWiped++;
+                }
+                catch { }
+            }
+
+            foreach (var it in items)
+            {
+                try
+                {
+                    if (tr.GetObject(it.Pid, OpenMode.ForRead) is not CivilDb.Profile pr) { miss++; continue; }
+                    double tx = 0, ty = 0; bool got = false;
+                    for (double st = st0; st <= st1 + 1e-9 && !got; st += step)
+                    {
+                        double z;
+                        try { z = pr.ElevationAt(st); } catch { continue; }
+                        if (double.IsNaN(z) || double.IsInfinity(z)) continue;
+                        if (pv.FindXYAtStationAndElevation(st, z, ref tx, ref ty)) got = true;
+                    }
+                    if (!got) { miss++; continue; }
+
+                    var t = new DBText
+                    {
+                        TextString = it.Nm,
+                        Height = txtH,
+                        Justify = AttachmentPoint.BottomLeft,   // 선 <b>위에</b> 얹는다
+                    };
+                    t.SetDatabaseDefaults(db);
+                    var lay = it.Water ? layW : layS;
+                    if (!lay.IsNull) t.LayerId = lay;
+                    if (!kst.IsNull) t.TextStyleId = kst;
+                    var p = new Point3d(tx + gap, ty + gap, 0);
+                    t.Position = p; t.AlignmentPoint = p;
+                    ms.AppendEntity(t); tr.AddNewlyCreatedDBObject(t, true);
+                    n++;
+                }
+                catch { miss++; }
+            }
+            tr.Commit();
+        }
+        catch (System.Exception ex) { log?.AppendLine("  종단 지층이름 실패 — " + ex.Message); return 0; }
+
+        log?.AppendLine($"  종단 지층이름 {n}개 — 각 선 <b>왼쪽 끝 위</b>에 직접 씀"
+                      + (nWiped > 0 ? $" · 옛것 {nWiped}개 지움" : "")
+                      + (miss > 0 ? $" · ⚠자리를 못 잡은 것 {miss}개(종단뷰 범위 밖)" : ""));
+        return n;
+    }
+
     private static string DrawVertBars(Database db, ObjectId pvId, ObjectId alignId,
                                        ObjectId pidGround, ObjectId pidPad, ObjectId pidExcav,
                                        System.Collections.Generic.List<StationMarks.WallSpan> wspans,
@@ -2355,6 +2510,8 @@ public sealed class ProfileCommand
     /// <para><b>왜 남았나.</b> 막대는 <b>자기가 다시 그릴 때만</b> 옛것을 지웠다. 그런데 옹벽·가시설이
     /// 사라지면 그리기 경로를 아예 안 타므로 <b>아무도 안 지운다</b>. 지우는 일은 그리는 쪽이 아니라
     /// <b>레이어를 소유한 쪽</b>이 해야 한다 — 그것이 이 프로젝트가 반복해 배운 것이다.</para></summary>
+    internal const string ProfStrataNameLayer = "DH-종단-지층이름";
+    internal const string ProfWaterNameLayer = "DH-종단-지하수위이름";
     internal const string LayerVBarWall = "DH-종단-옹벽";
     internal const string LayerVBarShore = "DH-종단-가시설";
 

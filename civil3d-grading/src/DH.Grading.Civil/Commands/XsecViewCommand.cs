@@ -416,7 +416,7 @@ public sealed class XsecViewCommand
         //   그래서 <c>mv.H</c>에서 밴드를 빼던 종전 계산은 <b>없는 것을 뺀 것</b>이었다.
         //   그림이 필요 이상 작아졌고, 무엇보다 <b>직전 실행이 남긴 스타일 값</b>을 읽으므로
         //   같은 버튼인데 <b>전에 뭘 눌렀냐에 따라 축척이 달라졌다</b>(1:150 → 1:500 → 1:120…).
-        //   → <b>칸 수만 센다.</b> 종이 높이는 칸수 × 10mm이고 <b>축척과 무관</b>하다.
+        //   → <b>칸 수만 센다.</b> 종이 높이는 칸수 × <see cref="BandHeightMm"/>이고 <b>축척과 무관</b>하다.
         int bandRows = 0;
         try
         {
@@ -436,7 +436,7 @@ public sealed class XsecViewCommand
         //   ★[검토 · HIGH-1] 종전엔 예산은 30mm를 빼고 배치는 밴드를 아예 몰랐다 —
         //   그래서 칸 위아래로 32mm씩 비어 있는데도 표가 그래프에 붙어 겹쳤다(§50 그 함정).
         //   ★[JACK 0827 "너무 여유를 둬서 횡단뷰가 작아지지 않게"] <b>실제 칸 수</b>로 잰다 —
-        //   3칸을 미리 예약하면 쓰지도 않는 10mm가 그림을 깎는다.
+        //   3칸을 미리 예약하면 쓰지도 않는 자리가 그림을 깎는다(칸 높이만큼).
         double bandPaperMm = bandRows * BandHeightMm;
 
         double padW = 2 * CellPadMm, padH = 2 * CellPadMm + NameRoomMm + bandPaperMm;
@@ -610,6 +610,7 @@ public sealed class XsecViewCommand
         DrawQtyTables(db, viewIds, bandPaperMm, sc, tableRight, TableGapMm * sc, qtyMap, log);
         // ★[JACK 0826] 선 색·눈금은 <b>숨기기 전</b>에 — 숨긴 뒤에도 되지만 로그 차례가 헷갈린다.
         ApplySectionStyles(db, cdoc, slIds, kindOf, log);
+        DrawStrataNames(db, viewIds, kindOf, scale, log);   // ★[JACK 0828] 지층·지하수위 이름
         BindBandSections(db, viewIds, kindOf, scale, annoScale, log);
         DrawStationBand(db, viewIds, scale, annoScale, log);   // ★[JACK 0827] 측점 칸에 우리 이름
         HideSampleLines(db, cdoc, slIds, groupId, log);   // ★뷰를 다 만든 뒤에 숨긴다
@@ -622,6 +623,102 @@ public sealed class XsecViewCommand
         ed.WriteMessage($"\n[횡단도] 횡단면도 {nView}장 · 검토선 {slIds.Count}개" +
                         $"\n  자세한 내용: {DiagLog.FilePath}");
         Flush(log);
+    }
+
+    private const double StrataNameMm = 2.5;   // 종이 글자 높이 — 지형선보다 작게(여러 줄이라 빽빽하다)
+
+    /// <summary>★★★[JACK 0828 "종단이나 횡단에서 각 지층과 지하수위의 각층의 좌측 선 위에 해당 층이름을 적어줘"]
+    ///
+    /// <para><b>Civil 라벨을 쓰지 않는다.</b> 단면 라벨 세트는 스타일 관문이 넷이라(§0827)
+    /// 지층 수만큼 스타일을 만들어야 하고, 그러고도 <b>솎아내기</b>에 걸려 안 나올 수 있다.
+    /// 우리가 직접 쓰면 관문이 없다 — 눈금 숫자에서 이미 걸어 본 길이다.</para>
+    ///
+    /// <para><b>자리는 단면 점이 알려 준다.</b> <c>Section.SectionPoints</c>의 <c>Location</c>은
+    /// 표고가 아니라 <b>뷰 안의 도면 좌표</b>다(§0826에서 세 번 헛짚고 알아낸 것).
+    /// 수량 계산에는 못 쓰는 성질이지만, <b>글씨를 놓는 데는 바로 그것이 필요하다.</b></para>
+    ///
+    /// <para><b>뷰 밖은 버린다.</b> 지층면이 절단선보다 좁으면 좌표가 격자 밖으로 나갈 수 있어
+    /// 옆 칸 도면을 침범한다 → 뷰 외곽선 안에 드는 점만 쓰고, 버린 수를 로그에 남긴다.</para></summary>
+    private static int DrawStrataNames(Database db,
+        System.Collections.Generic.List<(ObjectId Id, double St, string Name)> views,
+        System.Collections.Generic.Dictionary<ObjectId, string> kindOf,
+        double scale, System.Text.StringBuilder log)
+    {
+        if (views == null || views.Count == 0 || kindOf == null) return 0;
+        double txtH = StrataNameMm / 1000.0 * scale;
+        double gap = txtH * 0.4;
+        int n = 0, outside = 0, noPt = 0;
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var ms = (BlockTableRecord)tr.GetObject(
+                SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+            var layS = SectionCommand.EnsureLayer(db, tr, XsecStrataNameLayer, 8);
+            var layW = SectionCommand.EnsureLayer(db, tr, XsecWaterNameLayer, 5);
+            var kst = ImportGisCommand.EnsureKoreanTextStyle(db, tr);
+            foreach (var (vid, _, _) in views)
+            {
+                try
+                {
+                    if (tr.GetObject(vid, OpenMode.ForRead) is not CivilDb.SectionView sv) continue;
+                    var ext = ((Entity)sv).GeometricExtents;
+                    if (tr.GetObject(sv.SampleLineId, OpenMode.ForRead) is not CivilDb.SampleLine ln) continue;
+                    foreach (ObjectId secId in ln.GetSectionIds())
+                    {
+                        try
+                        {
+                            if (tr.GetObject(secId, OpenMode.ForRead) is not CivilDb.Section sec) continue;
+                            if (!kindOf.TryGetValue(sec.SourceId, out string kind)) continue;
+                            bool water = kind == "지하수위";
+                            if (kind != "지층" && !water) continue;
+                            string nm = "";
+                            try
+                            {
+                                if (tr.GetObject(sec.SourceId, OpenMode.ForRead) is CivilDb.Surface su)
+                                    nm = StrataDraw.ShortName(su.Name);
+                            }
+                            catch { }
+                            if (string.IsNullOrEmpty(nm)) continue;
+
+                            // 왼쪽 끝 점을 고른다 — 도면 X가 가장 작은 것.
+                            bool has = false; double bx = 0, by = 0;
+                            foreach (var sp in sec.SectionPoints)
+                            {
+                                var L = sp.Location;
+                                if (!has || L.X < bx) { bx = L.X; by = L.Y; has = true; }
+                            }
+                            if (!has) { noPt++; continue; }
+                            if (bx < ext.MinPoint.X - gap || bx > ext.MaxPoint.X
+                             || by < ext.MinPoint.Y || by > ext.MaxPoint.Y) { outside++; continue; }
+
+                            var t = new DBText
+                            {
+                                TextString = nm,
+                                Height = txtH,
+                                Justify = AttachmentPoint.BottomLeft,   // 선 <b>위에</b> 얹는다
+                            };
+                            t.SetDatabaseDefaults(db);
+                            var lay = water ? layW : layS;
+                            if (!lay.IsNull) t.LayerId = lay;
+                            if (!kst.IsNull) t.TextStyleId = kst;
+                            var p = new Point3d(bx + gap, by + gap, 0);
+                            t.Position = p; t.AlignmentPoint = p;
+                            ms.AppendEntity(t); tr.AddNewlyCreatedDBObject(t, true);
+                            n++;
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+            }
+            tr.Commit();
+        }
+        catch (System.Exception ex) { log?.AppendLine("  횡단 지층이름 실패 — " + ex.Message); return 0; }
+
+        log?.AppendLine($"  횡단 지층이름 {n}개 — 각 선 <b>왼쪽 끝 위</b>에 직접 씀(종이 {StrataNameMm:0.#}mm)"
+                      + (outside > 0 ? $" · ⚠격자 밖이라 버린 것 {outside}개" : "")
+                      + (noPt > 0 ? $" · ⚠점이 없는 단면 {noPt}개" : ""));
+        return n;
     }
 
     private static void Flush(System.Text.StringBuilder log)
@@ -1249,7 +1346,9 @@ public sealed class XsecViewCommand
                                      System.Collections.Generic.Dictionary<string, DH.Grading.Core.XsecQty> qty,
                                      System.Text.StringBuilder log)
     {
-        int tbEdge = 0, tbIn = 0;
+        // ★[검토 0828 · LOW-1] <b>안 쓰는 계수기를 지웠다.</b> 대입만 하고 로그에 안 써서
+        //   C# 경고도 안 났다 — "경고 0개"가 못 잡는 종류다.
+        int tbIn = 0;
         string firstTbErr = null;
         if (views == null || views.Count == 0) return 0;
         int nRow = QT.TotalRows;                       // 머리 1줄 + 내용 12줄
@@ -1429,7 +1528,6 @@ public sealed class XsecViewCommand
                             try { tb.SetGridColor(r, QT.Cols - 1, GridLineType.VerticalRight, green); } catch { }
                             try { tb.SetGridLineWeight(r, 0, GridLineType.VerticalLeft, LineWeight.LineWeight050); } catch { }
                             try { tb.SetGridLineWeight(r, QT.Cols - 1, GridLineType.VerticalRight, LineWeight.LineWeight050); } catch { }
-                            tbEdge++;
                         }
                     }
                     catch (System.Exception ex) { firstTbErr ??= "색: " + ex.Message; }
@@ -1438,8 +1536,10 @@ public sealed class XsecViewCommand
                     double midY = (ext.MinPoint.Y + ext.MaxPoint.Y) / 2.0;
                     // ★★★[검토 0827 · CRITICAL] <b>표는 그래프가 아니라 <u>밴드</u> 밑에 붙는다.</b>
                     //   <c>ext.MinPoint.Y</c>는 <b>그래프 바닥</b>이다 — 경계상자에 밴드가 없기 때문이다(실측).
-                    //   밴드는 거기서 종이 20mm 더 내려가는데 표를 그래프 바닥 −12mm에 붙이면
-                    //   <b>반드시 8mm 겹친다</b>(20 − 12). 축척과 무관한 고정 겹침이라 늘 같은 자리에서 난다.
+                    //   ★[검토 0828 · LOW-2] 이 숫자들은 <b>밴드가 10mm이던 시절</b>의 것이다.
+                    //   지금은 칸이 4mm(3칸 12mm)라 TableGapMm(12mm)과 <b>더는 안 겹친다</b> —
+                    //   <b>코드는 맞고 근거만 낡았다</b>. 낡은 근거를 남겨 두면 다음 사람이
+                    //   "왜 이렇게 했지"에 잘못된 답을 얻는다.
                     //   → 밴드 높이만큼 <b>더 내린다</b>. 예산(<c>padH</c>)도 같은 숫자를 쓰므로 갈라지지 않는다.
                     double bandM = bandPaperMm * sc;   // 종이 mm → 모형 m
                     double py = onRight ? midY + rowH * (nRow + 0.4) / 2.0
@@ -1459,7 +1559,7 @@ public sealed class XsecViewCommand
         if (n == 0 && firstTbErr != null) log?.AppendLine("  ⚠수량표를 하나도 못 만들었다 — " + firstTbErr);
         log?.AppendLine($"  수량표 {n}개 · {nRow}줄 · AutoCAD Table 객체(셀 병합·열 너비를 표가 관리한다)"
                       + $" · 글자 {QtTextMm:0.##}mm · 줄 {QtRowH:0.##}mm · 폭 {tw / sc:F0}mm"
-                      + $" · <b>숫자가 든 표 {nQty}/{n}개</b> · 채워진 칸 {nCells}개"
+                      + $" · <b>숫자가 든 표 {nQty}/{n}개</b> · 채워진 칸 {nCells}개 · 안쪽 칸선 색 {tbIn}곳"
                       + (nQty < n ? $" (나머지 {n - nQty}장은 잰 것이 없어 전부 '{QT.Blank}')" : ""));
         // ★★[JACK 0828] <b>표의 두 규칙을 매번 물어보고 남긴다.</b>
         //   <c>SpansValid</c>는 만들어 두고 <b>아무도 안 불러</b> 죽어 있었다 —
@@ -2050,7 +2150,12 @@ public sealed class XsecViewCommand
         var db = doc.Database; var ed = doc.Editor;
         var sb = new System.Text.StringBuilder();
         var now = new System.Collections.Generic.Dictionary<string, string>();
-        sb.AppendLine($"■ 횡단 눈금 속성 실측 {System.DateTime.Now:yyyy-MM-dd HH:mm:ss} (읽기만 한다)");
+        // ★[검토 0828 · M2] <b>"읽기만 한다"는 사실이 아니었다.</b>
+        //   Civil 래퍼가 <c>ForRead</c>를 거부해(실측 0827) <b>부득이 <c>ForWrite</c></b>로 열고 커밋한다.
+        //   값을 안 바꿔도 <b>도면은 손대진 것으로 표시</b>되는데 문구는 아무 흔적도 안 남는다고 말했다.
+        //   <b>로그가 사실과 다르면 그것도 결함이다</b> — 오늘만 세 번 그것에 당했다.
+        sb.AppendLine($"■ 횡단 눈금 속성 실측 {System.DateTime.Now:yyyy-MM-dd HH:mm:ss}"
+                    + " (값은 안 바꾸되 스타일을 쓰기로 연다 — Civil이 읽기 모드를 거부한다)");
         try
         {
             var cdoc = CivilApp.CivilApplication.ActiveDocument;
@@ -2172,6 +2277,11 @@ public sealed class XsecViewCommand
                 if (!prev.TryGetValue(kv.Key, out string old)) { nNew++; continue; }
                 if (old != kv.Value) { moved.AppendLine($"      {kv.Key} : {old} → <b>{kv.Value}</b>"); nMoved++; }
             }
+            // ★[검토 0828 · M4] <b>사라진 자리도 센다.</b>
+            //   종전엔 <c>now</c>만 돌아 <c>prev</c>에만 있는 열쇠를 못 봤다 —
+            //   읽기가 절반 죽어도 <c>nMoved == 0</c>이라 <b>"하나도 안 달라졌다"</b>로 찍혔다.
+            int nGone = 0;
+            foreach (var kv in prev) if (!now.ContainsKey(kv.Key)) nGone++;
             string head = prev.Count == 0
                 ? "  [비교] 지난 판이 없다 — 지금 것을 기준으로 저장했다. 대화상자에서 값을 바꾸고 다시 치세요."
                 : nMoved == 0
@@ -2179,11 +2289,23 @@ public sealed class XsecViewCommand
                       + " ⚠값을 바꾸셨다면 <b>[횡단도]를 중간에 돌리지 않았는지</b> 보세요 — 그리기가 되덮습니다."
                     : $"  [비교] <b>움직인 값 {nMoved}개 — 이것이 대화상자가 쓰는 자리다</b>:\n" + moved.ToString().TrimEnd();
             if (nNew > 0) head += $"\n  (지난 판에 없던 자리 {nNew}개)";
+            if (nGone > 0) head += $"\n  ⚠<b>지난 판에는 있었는데 이번엔 못 잰 자리 {nGone}개</b>"
+                                 + " — 읽기가 새로 실패했다는 뜻이다";
             int nl = sb.ToString().IndexOf('\n');
             if (nl >= 0) sb.Insert(nl + 1, head + "\n"); else sb.AppendLine(head);
-            var outp = new System.Text.StringBuilder();
-            foreach (var kv in now) outp.AppendLine($"{kv.Key}\t{kv.Value}");
-            System.IO.File.WriteAllText(snapPath, outp.ToString());
+            // ★★[검토 0828 · M3] <b>반쪽짜리 결과로 지난 판을 지우지 않는다.</b>
+            //   읽기가 터져 <c>now</c>가 비거나 반쪽이어도 종전엔 그대로 덮어썼다 —
+            //   그러면 <b>이 명령의 값어치인 전후 대조가 통째로 날아간다</b>.
+            //   → <b>지난 판보다 많이 쟀을 때만</b> 갈아끼운다.
+            if (now.Count > 0 && now.Count >= prev.Count)
+            {
+                var outp = new System.Text.StringBuilder();
+                foreach (var kv in now) outp.AppendLine($"{kv.Key}\t{kv.Value}");
+                System.IO.File.WriteAllText(snapPath, outp.ToString());
+            }
+            else if (prev.Count > 0)
+                sb.AppendLine($"  ⚠이번에 잰 자리({now.Count}개)가 지난 판({prev.Count}개)보다 적어"
+                            + " <b>지난 판을 그대로 둔다</b> — 전후 대조를 잃지 않기 위해서다");
         }
         catch (System.Exception ex) { sb.AppendLine("  비교 실패 — " + ex.Message); }
 
@@ -2895,9 +3017,17 @@ public sealed class XsecViewCommand
                     if (g.IsNull && pl.IsNull) continue;
 
                     // 아래 밴드와 위 밴드 <b>둘 다</b> 본다 — 회사 세트가 위에 얹는 구조일 수 있다.
-                    int stnIdx = StationBandIndex(tr, sv);
+                    // ★★★[검토 0828 · M1] <b>측점 칸 순번은 아래 밴드의 것이다.</b>
+                    //   <see cref="StationBandIndex"/>는 <c>GetBottomBandItems</c>만 본다.
+                    //   그 순번을 <b>위 밴드에도</b> 그대로 쓰면 위 밴드의 엉뚱한 칸이 조용히 비워진다 —
+                    //   되읽기는 아래만 보므로 <b>로그에도 안 잡힌다</b>.
+                    //   (바로 아래 주석이 <i>"회사 세트가 위에 얹는 구조일 수 있다"</i>고 적어 둔 자리라
+                    //    위 밴드가 없다는 전제를 믿을 수 없다.)
+                    //   → <b>아래 밴드에만 적용</b>한다. 위 밴드는 측점 칸을 안 가진다.
+                    int stnIdxBottom = StationBandIndex(tr, sv);
                     foreach (bool bottom in new[] { true, false })
                     {
+                        int stnIdx = bottom ? stnIdxBottom : -1;
                         try
                         {
                             using var items = bottom ? sv.Bands.GetBottomBandItems() : sv.Bands.GetTopBandItems();
@@ -2958,7 +3088,11 @@ public sealed class XsecViewCommand
                                 //   이 칸은 <c>계획고</c> 스타일을 <b>세 번째 칸과 함께 쓰므로</b>
                                 //   스타일에서 글자를 끄면 <b>진짜 계획고 칸까지 비어 버린다</b> —
                                 //   그래서 <b>스타일이 아니라 이 칸 하나</b>에만 끄는 이 길이라야 한다.
-                                try { it.ShowLabels = false; nHid++; } catch { }
+                                // ★[검토 0828 · M7] <b>쓴 횟수는 증거가 아니다.</b>
+                                //   스냅샷 속성 쓰기는 거의 안 던지므로 <c>nHid == nStn</c>이 <b>항상 성립</b>한다 —
+                                //   로그의 <c>(글자 뀴 것 N개)</c>는 사실상 항등식이었다.
+                                //   → <b>바로 되읽어</b> 정말 꺼졌는지 센다(스냅샷 안이라도 쓰기 자체는 확인된다).
+                                try { it.ShowLabels = false; if (!it.ShowLabels) nHid++; } catch { }
                                 try { it.Section1Id = ObjectId.Null; } catch { }
                                 try { it.Section2Id = ObjectId.Null; } catch { }
                                 nStn++; continue;
@@ -3012,15 +3146,27 @@ public sealed class XsecViewCommand
                 else
                 {
                     bool shown = true;
-                    try { shown = it2[si].ShowLabels; } catch { }
-                    bool bound = !it2[si].Section1Id.IsNull || !it2[si].Section2Id.IsNull;
-                    stnBack = shown
-                        ? "⚠<b>측점칸 글자가 아직 켜져 있다</b>(계획고와 겹친다)"
-                        : "측점칸 글자 껐다" + (bound ? "(단면은 물린 채 — 글자를 껐으니 안 보인다)" : "");
+                    // ★[검토 0828 · LOW-3] <b>순번은 다른 스냅샷에서 얻은 것이다.</b>
+                    //   앞 줄만 <c>try</c>로 감싸 놓아, 범위를 벗어나면 뒷줄이 바깥으로 튀어
+                    //   <b>되읽기가 통째로 "실패"</b>가 됐다 — 정작 알고 싶은 것은 못 알아낸 채로.
+                    //   → 범위를 <b>먼저 본다</b>. 두 스냅샷의 칸 수가 다를 일은 없지만, 없다고 믿지 않는다.
+                    bool bound = false, ranged = si < it2.Count;
+                    if (ranged)
+                    {
+                        try { shown = it2[si].ShowLabels; } catch { }
+                        try { bound = !it2[si].Section1Id.IsNull || !it2[si].Section2Id.IsNull; } catch { }
+                    }
+                    stnBack = !ranged
+                        ? $"⚠<b>측점칸 순번({si})이 되읽은 칸 수({it2.Count})를 벗어난다</b>"
+                        : shown
+                            ? "⚠<b>측점칸 글자가 아직 켜져 있다</b>(계획고와 겹친다)"
+                            : "측점칸 글자 껐다" + (bound ? "(단면은 물린 채 — 글자를 껐으니 안 보인다)" : "");
                 }
                 double g2 = double.NaN;
                 try { g2 = it2[0].Gap; } catch { }
-                back = $"{okS}/{it2.Count}줄에 남음 · {stnBack} · 첫 칸 틈 {g2 * 1000:F1}mm";
+                // ★[검토 0828 · M8] <b>첫 뷰만 본다고 밝힌다.</b>
+                //   종전 문구는 <b>모든 뷰가 그렇다</b>로 읽혔다 — 실제로는 하나만 재고 <c>break</c>한다.
+                back = $"첫 뷰 기준 {okS}/{it2.Count}줄에 남음 · {stnBack} · 첫 칸 틈 {g2 * 1000:F1}mm";
                 break;
             }
             tr2.Commit();
@@ -3057,25 +3203,42 @@ public sealed class XsecViewCommand
     {
         if (sl == null || sl.Count == 0) return 0;
 
-        // ── 점선 확보
-        string dash = null;
-        try
+        // ── 점선 확보 ★★★[JACK 0828] <b>세 가지를 갈라 쓴다.</b>
+        //   JACK: <i>"점선이 터파기 지표면 점선하고 헷갈리지 않게 점선 형태를 좀 다른 걸로 해."</i>
+        //   같은 점선을 셋이 나눠 쓰면 도면에서 <b>무엇이 무엇인지 알 수 없다</b> —
+        //   터파기는 <c>DASHED</c>(긴 파선) 그대로 두고,
+        //   지층은 <c>HIDDEN</c>(짧은 점선), 지하수위는 <c>DASHDOT</c>(일점쇄선)으로 갈랐다.
+        //   ※일점쇄선은 도면에서 <b>수위·중심선</b>에 쓰는 관례라 뜻도 맞는다.
+        string Load(string nm)
         {
-            using var trT = db.TransactionManager.StartTransaction();
-            var lt = (LinetypeTable)trT.GetObject(db.LinetypeTableId, OpenMode.ForRead);
-            foreach (string nm in new[] { "DASHED", "HIDDEN", "CENTER" })
+            try
             {
-                if (lt.Has(nm)) { dash = nm; break; }
-                try { db.LoadLineTypeFile(nm, "acadiso.lin"); } catch { }
-                try { db.LoadLineTypeFile(nm, "acad.lin"); } catch { }
-                if (lt.Has(nm)) { dash = nm; break; }
+                using var trT = db.TransactionManager.StartTransaction();
+                var lt = (LinetypeTable)trT.GetObject(db.LinetypeTableId, OpenMode.ForRead);
+                if (lt.Has(nm)) { trT.Commit(); return nm; }
+                trT.Commit();
             }
-            trT.Commit();
+            catch { }
+            try { db.LoadLineTypeFile(nm, "acadiso.lin"); } catch { }
+            try { db.LoadLineTypeFile(nm, "acad.lin"); } catch { }
+            try
+            {
+                using var trT2 = db.TransactionManager.StartTransaction();
+                var lt2 = (LinetypeTable)trT2.GetObject(db.LinetypeTableId, OpenMode.ForRead);
+                bool has = lt2.Has(nm);
+                trT2.Commit();
+                return has ? nm : null;
+            }
+            catch { return null; }
         }
-        catch { }
+        string dash = Load("DASHED") ?? Load("HIDDEN") ?? Load("CENTER");   // 터파기
+        // ★★[JACK 0828] <b>절반 간격 변형을 먼저 쓴다</b> — 부지가 넓으면
+        //   기본 무늬은 끊긴 간격이 눈에 밟힌다(JACK 스샷).
+        string dashStrata = Load("HIDDEN2") ?? Load("HIDDEN") ?? dash;                       // 지층
+        string dashWater = Load("DASHDOT2") ?? Load("DIVIDE2") ?? Load("DASHDOT") ?? dash;   // 지하수위
 
         // ── 스타일 셋 — 이미 있으면 색만 다시 맞춘다(도면에 스타일이 쌓이지 않게).
-        ObjectId Ensure(string nm, short aci, bool dashed)
+        ObjectId Ensure(string nm, short aci, string lt)
         {
             try
             {
@@ -3105,7 +3268,7 @@ public sealed class XsecViewCommand
                             ds.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
                                 Autodesk.AutoCAD.Colors.ColorMethod.ByAci, aci);
                             ds.Visible = ty == CivilDb.Styles.SectionDisplayStyleSectionType.Segments;
-                            if (dashed && dash != null) { try { ds.Linetype = dash; } catch { } }
+                            if (lt != null) { try { ds.Linetype = lt; } catch { } }
                         }
                         catch { }
                     }
@@ -3115,11 +3278,15 @@ public sealed class XsecViewCommand
             catch { return ObjectId.Null; }
         }
 
-        var stGround = Ensure("DH_횡단면_원지반", 3, false);      // 3 = 초록
-        var stPlan   = Ensure("DH_횡단면_계획", 7, false);        // 7 = 흰색
-        var stExcav  = Ensure("DH_횡단면_터파기", SectionCommand.ExcavAci, true);   // 6 = 마젠타, 점선
+        var stGround = Ensure("DH_횡단면_원지반", 3, null);      // 3 = 초록, 실선
+        var stPlan   = Ensure("DH_횡단면_계획", 7, null);        // 7 = 흰색, 실선
+        var stExcav  = Ensure("DH_횡단면_터파기", SectionCommand.ExcavAci, dash);   // 6 = 마젠타, 긴 파선
+        // ★[JACK 0828] 지층은 <b>혼탁</b>(색 8) 짧은 점선 — 지형·계획선보다 뒤로 물러나 보여야 한다.
+        //   지층은 여러 줄이라 진한 색을 쓰면 <b>그것만 보이는 도면</b>이 된다.
+        var stStrata = Ensure("DH_횡단면_지층", 8, dashStrata);
+        var stWater  = Ensure("DH_횡단면_지하수위", 5, dashWater);   // 5 = 파랑(JACK 지시)
 
-        int nG = 0, nP = 0, nE = 0, nSkip = 0;
+        int nG = 0, nP = 0, nE = 0, nS = 0, nW = 0, nSkip = 0;
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
@@ -3144,6 +3311,8 @@ public sealed class XsecViewCommand
                             if (kind == "터파기") { if (!stExcav.IsNull) { sec.StyleId = stExcav; nE++; } }
                             else if (kind == "원지반") { if (!stGround.IsNull) { sec.StyleId = stGround; nG++; } }
                             else if (kind == "정지면") { if (!stPlan.IsNull) { sec.StyleId = stPlan; nP++; } }
+                            else if (kind == "지층") { if (!stStrata.IsNull) { sec.StyleId = stStrata; nS++; } }
+                            else if (kind == "지하수위") { if (!stWater.IsNull) { sec.StyleId = stWater; nW++; } }
                             else nSkip++;
                         }
                         catch { }
@@ -3156,9 +3325,11 @@ public sealed class XsecViewCommand
         catch (System.Exception ex) { log?.AppendLine("  단면 선 색 적용 실패 — " + ex.Message); }
 
         log?.AppendLine($"  단면 선 — 원지반 {nG}개(초록) · 계획 {nP}개(흰색) · 터파기 {nE}개(마젠타"
-                      + (dash != null ? $"·{dash} 점선" : "·점선 못 실음") + ")"
+                      + (dash != null ? $"·{dash}" : "·점선 못 실음") + ")"
+                      + (nS > 0 ? $" · <b>지층 {nS}개</b>(혼탁·{dashStrata ?? "점선 없음"})" : "")
+                      + (nW > 0 ? $" · <b>지하수위 {nW}개</b>(파랑·{dashWater ?? "점선 없음"})" : "")
                       + (nSkip > 0 ? $" · 이름으로 못 가른 것 {nSkip}개" : ""));
-        return nG + nP + nE;
+        return nG + nP + nE + nS + nW;
     }
 
     /// <summary>★★★[JACK 0826] <b>지표면에서 직접 읽는다.</b>
@@ -3345,7 +3516,7 @@ public sealed class XsecViewCommand
     {
         var map = new System.Collections.Generic.Dictionary<string, DH.Grading.Core.XsecQty>();
         if (sl == null || sl.Count == 0) return map;
-        int nOk = 0, nNo = 0;
+        int nOk = 0, nNo = 0, nThrow = 0; string firstThrow = null;
         double sumCut = 0, sumFill = 0, sumExc = 0;
         int nNoPlan = 0;
         int nNoG = 0, nNoP = 0, nNoE = 0;
@@ -3409,7 +3580,10 @@ public sealed class XsecViewCommand
                         if (!double.IsNaN(q.ExcTotal)) sumExc += q.ExcTotal;
                     }
                 }
-                catch { }
+                // ★[검토 0828 · M10] <b>조용히 사라지는 측점을 센다.</b>
+                //   종전엔 <c>catch { }</c>였다 — <c>QtyAt</c>이 던지면 <c>nOk</c>도 <c>nNo</c>도 안 늘고
+                //   지도에도 안 들어가 <b>표는 –인데 로그엔 자취가 없었다</b>.
+                catch (System.Exception exQ) { nThrow++; firstThrow ??= $"{s.Name} — {exQ.Message}"; }
             }
             tr.Commit();
         }
@@ -3421,6 +3595,7 @@ public sealed class XsecViewCommand
                       + (nNoP > 0 ? $" · ⚠계획면이 없던 측점 {nNoP}개(부지 밖이면 정상)" : "")
                       + (nNoE > 0 ? $" · 터파기가 없던 측점 {nNoE}개" : "")
                       + (nNoPlan > 0 ? $" · ⚠계획면이 터파기를 못 덮은 측점 {nNoPlan}개" : "")
+                      + (nThrow > 0 ? $" · ⚠<b>쟰다가 터진 측점 {nThrow}개</b>(첫 사례: {firstThrow})" : "")
                       + $" · 합계 절토 {sumCut:F1}㎡ · 성토 {sumFill:F1}㎡ · 터파기 {sumExc:F1}㎡"
                       + "  ※단면 면적이다(체적은 측점 간격을 곱해야 한다)");
         return map;
@@ -3535,10 +3710,17 @@ public sealed class XsecViewCommand
     /// <b>종단도가 돌 때만</b> 측점 글씨가 유령으로 남았다(횡단도를 다시 누르면 지워지니 안 보였다).</para>
     /// <para>→ <b>목록을 하나로 모은다.</b> 레이어를 더하는 사람은 이제 여기만 고치면 된다 —
     /// 두 곳을 기억해야 하는 구조는 <b>언젠가 반드시</b> 한쪽을 빠뜨린다.</para></summary>
+    internal const string XsecStrataNameLayer = "DH-지층이름";
+    internal const string XsecWaterNameLayer = "DH-지하수위이름";
+
+    // ★★[JACK 0828 검토] <b>새 글씨 레이어는 반드시 이 목록에.</b>
+    //   여기 안 넣으면 다시 그릴 때마다 이름이 <b>겹쳐 쌓인다</b> —
+    //   같은 자리에 같은 글자라 눈으로는 굵어진 것처럼만 보여 늦게 알아차리게 된다.
     internal static readonly string[] MyLayers =
     {
         XsecTitleLayer, XsecStationLayer, XsecAxisLayer, XsecTextLayer, XsecCellLayer,
         QtLayerEdge, QtLayerLine, QtLayerText, XsecFrameLayer,
+        XsecStrataNameLayer, XsecWaterNameLayer,
     };
 
     internal static string TitleLayer => XsecTitleLayer;

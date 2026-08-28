@@ -194,13 +194,22 @@ public static class XsecQuantity
         double[] px, double[] py,
         double[] ex, double[] ey)
     {
-        if (gx == null || gy == null || gx.Length < 2) 
-            return new XsecQty(double.NaN, double.NaN, double.NaN, double.NaN, double.NaN);
+        // ★★★[검토 0828 · M9] <b>조기 반환이 <c>MissG</c>를 못 켜고 나갔다.</b>
+        //   호출부(<c>CollectQty</c>)가 <c>⚠원지반이 없던 측점 N개</c>를 찍으려고 이 깃발을 보는데,
+        //   원지반을 못 읽는 <b>바로 그 길</b>에서 깃발이 <c>false</c>인 채로 나가 버렸다 —
+        //   <b>그 경고는 영영 안 찍힌다</b>. Core를 직접 돌려 확인했다:
+        //   <c>원지반 못읽음: MissG=False MissP=False MissE=False Cut=NaN</c>.
+        //   JACK이 겪은 <i>"모든 측점이 −"</i>에서 <b>이유가 한 줄도 안 남은 까닭</b>이 이것이다.
+        //   → <b>못 잰 이유를 켜서 내보낸다.</b> 값이 <c>NaN</c>인 것과 <b>왜 NaN인지</b>는 다른 정보다.
+        if (gx == null || gy == null || gx.Length < 2)
+            return new XsecQty(double.NaN, double.NaN, double.NaN, double.NaN, double.NaN)
+            { MissG = true, MissP = px == null || py == null, MissE = ex == null || ey == null };
 
         // ① 꺾임점을 모두 모아 하나의 가로축을 만든다.
         double[] x = Union(gx, px, ex);
         if (x.Length < 2)
-            return new XsecQty(double.NaN, double.NaN, double.NaN, double.NaN, double.NaN);
+            return new XsecQty(double.NaN, double.NaN, double.NaN, double.NaN, double.NaN)
+            { MissG = true, MissP = px == null || py == null, MissE = ex == null || ey == null };
 
         double[] G = Resample(gx, gy, x);
         double[] P = px != null && py != null ? Resample(px, py, x) : null;
