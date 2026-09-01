@@ -162,34 +162,9 @@ public sealed class CropGroundCommand
         }
     }
 
-    /// <summary>자를 지형을 고른다 — <b>우리 산출물이 아닌 것 중 제일 큰 것</b>.
-    /// <para>이름을 못 박지 않는 이유: 사용자가 직접 만든 지표면일 수도 있다.
-    /// 제외 규칙은 <see cref="SectionCommand"/>·<see cref="InfraworksCommand"/>와 같다(§50).</para></summary>
+    /// <summary>자를 지형을 고른다 — 규칙은 <see cref="ImportGisCommand.FindGroundSurface"/> 하나뿐이다(§50).</summary>
     private static ObjectId FindGround(Database db, out string name, out int tris)
-    {
-        name = ""; tris = 0;
-        ObjectId best = ObjectId.Null;
-        try
-        {
-            var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
-            using var tr = db.TransactionManager.StartTransaction();
-            foreach (ObjectId sid in civilDoc.GetSurfaceIds())
-            {
-                try
-                {
-                    if (tr.GetObject(sid, OpenMode.ForRead) is not CivilDb.TinSurface ts) continue;
-                    string nm = ts.Name ?? "";
-                    if (nm.Contains("_DH") || nm.StartsWith("DH_", StringComparison.Ordinal)) continue;
-                    int n = 0; try { n = ts.Triangles.Count; } catch { }
-                    if (n > tris) { tris = n; best = sid; name = nm; }
-                }
-                catch { }
-            }
-            tr.Commit();
-        }
-        catch { }
-        return best;
-    }
+        => ImportGisCommand.FindGroundSurface(db, out name, out tris);
 
     /// <summary>박스 <b>밖에 통째로</b> 있는 원본 등고선·표고점을 지운다.
     /// <para>걸쳐 있는 것은 <b>남긴다</b> — 자른 경계에서 지형이 어떻게 이어졌는지 남겨 두는 편이 낫다.</para></summary>

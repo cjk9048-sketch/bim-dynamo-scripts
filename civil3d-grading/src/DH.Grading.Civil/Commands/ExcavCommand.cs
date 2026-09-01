@@ -1,4 +1,4 @@
-﻿using Autodesk.AutoCAD.ApplicationServices;
+using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Runtime;
@@ -263,10 +263,16 @@ public sealed class ExcavCommand
                     foreach (var q in e.Bottom) bottomZ = System.Math.Min(bottomZ, q.Z);
 
                     int below = 0, above = 0;
+                    double worstAbove = 0;
                     foreach (var q in e.Bottom)
                     {
                         if (!target.TryGetElevation(q.X, q.Y, out double tz)) continue;
-                        if (q.Z < tz - 0.01) below++; else if (q.Z > tz + 0.01) above++;
+                        if (q.Z < tz - 0.01) below++;
+                        else if (q.Z > tz + 0.01)
+                        {
+                            above++;
+                            worstAbove = System.Math.Max(worstAbove, q.Z - tz);
+                        }
                     }
                     log.AppendLine($"■ {tag} 바닥 {bottomZ:F2}m · 구배 1:{e.Slope:0.##} — 목표면보다 낮은 정점 {below}개 · 높은 정점 {above}개");
                     if (below == 0)
@@ -278,9 +284,27 @@ public sealed class ExcavCommand
                                 "바닥 표고를 확인하시거나, 정지면을 먼저 만들어 주세요.");
                         continue;
                     }
-                    if (above > 0 && k == newIdx)
-                        ed.WriteMessage($"\n[터파기] ⚠ 구조물 바닥이 목표면보다 높은 자리가 {above}곳 있습니다 — " +
-                                        "그 자리는 터파기가 아니라 성토입니다(굴착만 만듭니다).");
+                    // ★★★[JACK 0901 "실수로 계획지반보다 높은 고도로 돌렸는데 경고 멘트는 떴는데
+                    //   <b>이상한 지표면이 생겼어</b>. 이렇게 실수했을 경우 이런 지표면이 생성이 안 되게"]
+                    //
+                    //   <b>경고만 하고 만들고 있었다.</b> 바닥의 일부가 목표면보다 높으면
+                    //   그 자리는 <b>팔 것이 없는데 위로 올라가는 법면</b>을 만들라는 셈이라
+                    //   삼각형이 뒤집히고 스스로 교차한다 — 실제 로그가 그 자리다
+                    //   (<i>낮은 정점 2개 · 높은 정점 2개</i>).
+                    //
+                    //   → <b>만들지 않는다.</b> 얼마나 높은지까지 알려 줘야 고칠 수 있다.
+                    if (above > 0)
+                    {
+                        log.AppendLine($"■ {tag} — 바닥이 목표면보다 높은 정점 {above}개(최대 {worstAbove:F2}m) → 만들지 않음");
+                        if (k == newIdx)
+                            throw new System.Exception(
+                                $"구조물 바닥이 목표면(계획면·원지반 중 낮은 쪽)보다 <b>높은 자리가 {above}곳</b> 있습니다"
+                                    .Replace("<b>", "").Replace("</b>", "") + $" — 최대 {worstAbove:F2}m."
+                              + "\n\n그 자리는 파는 것이 아니라 <b>쌓는 것</b>이라 굴착 형상을 만들 수 없습니다."
+                                    .Replace("<b>", "").Replace("</b>", "")
+                              + "\n\n구조물 바닥 표고를 낮추거나, 정지면(계획고)을 먼저 맞춰 주세요.");
+                        continue;   // 옛 기록이면 그것만 건너뛴다(나머지는 그대로 만든다)
+                    }
 
                     // ★[JACK 0825] 하한은 <b>그 기록이 들고 있는 값</b>으로 — 세션 전역이 아니다.
                     //   전역을 읽으면 구조물 하나 추가했을 뿐인데 기존 터파기가 통째로 다른 형상이 된다.
