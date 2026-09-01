@@ -34,6 +34,8 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.StrataDraw))]                          // DHSTRATAPICK(평면에서 시추 위치 찍기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.MapPickCommand))]            // DHMAPPICK(지도에서 범위 고르기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.MapPalette))]                // DHCONTOURBOX(지도 도킹바가 넘긴 범위로 지표면 가져오기)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.NgiiCommand))]               // DHNGII(수치지도 DXF → 원지반)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.CropGroundCommand))]         // DHCROP(원지형 자르기)
 
 namespace DH.Grading.Civil;
 
@@ -167,11 +169,8 @@ public sealed class RibbonApp : IExtensionApplication
 
             // [리본 분류 — JACK 0724/0731] 부지정지 / 도면화 / 가져오기 / 내보내기 / 기타.
             var pGrade = new RibbonPanelSource { Title = "부지정지" };
-            tab.Panels.Add(new RibbonPanel { Source = pGrade });
-            pGrade.Items.Add(Spacer());
-            pGrade.Items.Add(MakeButton(
-                "정지\n옵션", "DHGRADESET ", "단높이·소단폭·구배·사면형상·대소단·옹벽형태·좌표계·표시 옵션", "설정"));
-            pGrade.Items.Add(Spacer());
+            var btnSet = MakeButton(
+                "정지\n옵션", "DHGRADESET ", "단높이·소단폭·구배·사면형상·대소단·옹벽형태·좌표계·표시 옵션", "설정");
             // ★★[JACK 0824] <b>지표면 생성 = 스플릿 버튼.</b> 계획지표면과 터파기 지표면을 한 자리에 둔다.
             //   기본(윗부분 클릭)은 계획지표면 — 지금까지 하던 그것. 드롭다운에서 터파기를 고른다.
             var btnPlan = MakeButton(
@@ -189,13 +188,13 @@ public sealed class RibbonApp : IExtensionApplication
                 "결과는 **굴착 형상만**(바닥+법면)이라 종단에도 구조물 위에만 나옵니다.", null);
             var splitSurf = new RibbonSplitButton
             {
-                Text = "지표면\n생성",
+                Text = "계획부지\n생성",
                 ShowText = true,
                 ShowImage = true,
                 // ★[JACK 0824] 스플릿 버튼은 **자기 이미지를 따로 줘야** 한다 —
                 //   목록 항목의 이미지를 자동으로 물려받지 않아 아이콘 자리가 비어 보인다.
-                LargeImage = MakeGlyph("정지면"),
-                Image = MakeGlyph("정지면"),
+                LargeImage = MakeGlyph("계획부지"),
+                Image = MakeGlyph("계획부지"),
                 Size = RibbonItemSize.Large,
                 Orientation = System.Windows.Controls.Orientation.Vertical,
                 IsSplit = true,
@@ -209,17 +208,15 @@ public sealed class RibbonApp : IExtensionApplication
             splitSurf.Items.Add(btnPlan);
             splitSurf.Items.Add(btnExc);
             splitSurf.Current = btnPlan;
-            pGrade.Items.Add(splitSurf);
-            pGrade.Items.Add(Spacer());
 
             // ★[JACK 0824] 보기 전환은 **별도 버튼**으로 뺀다 — 생성 명령이 화면을 껐다 켜는 부작용을
             //   품으면, 명령이 중간에 실패하거나 Esc를 누를 때 지표면이 꺼진 채로 남는다("사라졌다"로 보인다).
             //   상태가 눈에 보이고 언제든 되돌릴 수 있는 쪽이 안전하다.
             // ★[JACK 0824] 보기도 스플릿 버튼 — 누를 때마다 묻지 않고 **바로** 바뀐다.
-            var vAll = MakeButton("전부\n보기", "DHVIEWALL ", "원지반·계획지표면·터파기를 모두 표시", "보기");
-            var vGnd = MakeButton("원지반\n만", "DHVIEWG ", "원지반만 표시(계획·터파기 숨김)", "보기");
-            var vPln = MakeButton("계획\n지표면", "DHVIEWP ", "계획지표면만 표시", "정지면");
-            var vExc = MakeButton("터파기\n만", "DHVIEWE ", "터파기 지표면만 표시", "터파기");
+            var vAll = MakeButton("전부\n보기", "DHVIEWALL ", "원지반·계획지표면·터파기를 모두 표시", "보기전부");
+            var vGnd = MakeButton("원지반\n만", "DHVIEWG ", "원지반만 표시(계획·터파기 숨김)", "보기원지반");
+            var vPln = MakeButton("계획\n지표면", "DHVIEWP ", "계획지표면만 표시", "보기계획");
+            var vExc = MakeButton("터파기\n만", "DHVIEWE ", "터파기 지표면만 표시", "보기터파기");
 
             // ★★[JACK 0825] <b>없는 것은 누를 수 없게 한다.</b>
             //   JACK: <i>"계획지표면이나 터파기 등을 수행하지 않았을 때는 버튼이 비활성화되게 해주고."</i>
@@ -247,8 +244,6 @@ public sealed class RibbonApp : IExtensionApplication
             splitView.Items.Add(vPln);
             splitView.Items.Add(vExc);
             splitView.Current = vAll;
-            pGrade.Items.Add(splitView);
-            pGrade.Items.Add(Spacer());
             // [§75 — JACK 0728/0729 개명] 옹벽변환은 부지정지 패널, 정지면 생성 오른쪽(별도 '옹벽' 중분류 없음).
             //   [JACK 0729] 툴팁에 개념도 이미지(확장 툴팁) — 마우스를 올려두면 그림까지 표시.
             var btnWall = MakeButton(
@@ -258,8 +253,6 @@ public sealed class RibbonApp : IExtensionApplication
                 "그 선부터 바깥(데이라잇 방향) 단이 전부 옹벽으로 바뀝니다.\n" +
                 "Enter=적용 · 재사용해도 기존 옹벽 유지(같은 구간은 교체) · '전체해제'로 전부 초기화.",
                 MakeTipImage(toWall: true));
-            pGrade.Items.Add(btnWall);
-            pGrade.Items.Add(Spacer());
             // [사면변환 — JACK 0729] 옹벽의 역방향: 옹벽선을 선택하면 그 단부터 바깥이 다시 사면.
             var btnSlope = MakeButton(
                 "사면\n변환", "DHSLOPE ", "옹벽선을 클릭하면 그 단부터 바깥이 다시 사면으로 복귀", "사면");
@@ -267,12 +260,8 @@ public sealed class RibbonApp : IExtensionApplication
                 "옹벽선을 클릭하면 그 단부터 바깥(데이라잇 방향)이 다시 사면으로 돌아갑니다.\n" +
                 "절토 옹벽의 마지막 단 사면 마무리, 성토 사면-옹벽-사면 구성에 사용. Enter=적용.",
                 MakeTipImage(toWall: false));
-            pGrade.Items.Add(btnSlope);
-            pGrade.Items.Add(Spacer());
 
             var pDraw = new RibbonPanelSource { Title = "도면화" };
-            tab.Panels.Add(new RibbonPanel { Source = pDraw });
-            pDraw.Items.Add(Spacer());
             // ★★[v32.28 · JACK 0813] <b>도면 설정을 정지옵션에서 떼어 여기로.</b>
             //   JACK: <i>"어차피 이름은 정지옵션인데 횡단이나 종단같이 도면화관련내용이 많은데,
             //   아예 도면화챕터에 도면설정을 별도로 단추를 만들고 새로 팝업을 띄워서 관리하는건 어때?"</i>
@@ -287,11 +276,8 @@ public sealed class RibbonApp : IExtensionApplication
                 "· 배경지도 화질\n\n" +
                 "여기 값은 정지면 형상에 영향을 주지 않으므로 **정지면을 다시 만들 필요가 없습니다**.\n" +
                 "이미 만든 종단도에 반영하려면 [종단도]를 다시 눌러 '지우고새로'를 고르세요.", null);
-            pDraw.Items.Add(btnSheetSet);
-            pDraw.Items.Add(Spacer());
-            pDraw.Items.Add(MakeButton(
-                "노리선", "DHNORI ", "정지 결과(번들)로 사면선·소단선·노리선을 한 번에 작도 — DHGRADE 실행 후 사용", "노리선"));
-            pDraw.Items.Add(Spacer());
+            var btnNori = MakeButton(
+                "노리선", "DHNORI ", "정지 결과(번들)로 사면선·소단선·노리선을 한 번에 작도 — DHGRADE 실행 후 사용", "노리선");
             // [JACK 0731] 배경지도·지도끄기는 도면화 중분류로 이동(별도 패널 폐지).
             var btnMap = MakeButton(
                 "배경지도", "DHMAP ", "두 점으로 범위를 찍으면 그 범위의 위성사진을 도면 좌표계에 맞춰 깔아줍니다(화질=도면설정)", "지도");
@@ -299,33 +285,27 @@ public sealed class RibbonApp : IExtensionApplication
                 "범위 두 모서리를 클릭하면 브이월드 위성사진을 받아\n" +
                 "도면 좌표계(정지옵션의 좌표계)에 정확히 맞춰 깔아줍니다.\n" +
                 "여러 번 눌러 여러 곳에 깔 수 있고, 화질은 [도면설정]에서 선택합니다.", null);
-            pDraw.Items.Add(btnMap);
-            pDraw.Items.Add(Spacer());
             var btnMapOff = MakeButton(
                 "지도끄기", "DHMAPOFF ", "이 기능으로 깐 위성사진을 한 번에 전부 제거", "지도끄기");
             btnMapOff.ToolTip = MakeTip("지도끄기 (DHMAPOFF)",
                 "배경지도로 깔아둔 위성사진을 한 번에 모두 제거합니다.\n" +
                 "직접 붙이신 다른 이미지는 그대로 둡니다.", null);
-            pDraw.Items.Add(btnMapOff);
-            pDraw.Items.Add(Spacer());
             // ★[종단도 — JACK 0807] **버튼을 누르면 노선을 직접 그린다**(노란 꺾은 선) → 그 노선으로 종단면도.
             //   종전엔 다른 명령으로 선을 먼저 그려 두고 골라야 해서 손이 두 번 갔다.
             //   횡단은 아직 옆 버튼(DHSECTION)에 있다 — 종단도가 말끔해지면 같은 방식으로 옮긴다.
             var btnProf = MakeButton(
-                "종단도", "DHPROFILE ", "버튼을 누르고 노선을 직접 그리면(노란 선) 그 노선을 따라 종단면도를 만듭니다", "종단");
+                "종단\n생성", "DHPROFILE ", "버튼을 누르고 노선을 직접 그리면(노란 선) 그 노선을 따라 종단면도를 만듭니다", "종단생성");
             btnProf.ToolTip = MakeTip("종단도 (DHPROFILE)",
                 "버튼을 누르고 **화면에 노선을 직접 그립니다**.\n" +
                 "점을 연달아 찍고 Enter로 끝냅니다(U=마지막 점 취소, Esc=전체 취소).\n" +
                 "그 노선을 따라 원지반·정지면의 종단면도를 만듭니다.\n" +
                 "그린 노란 선은 도면에 남아, 나중에 고쳐서 다시 돌릴 수 있습니다.", null);
-            pDraw.Items.Add(btnProf);
-            pDraw.Items.Add(Spacer());
 
             // ★[측점 — JACK 0810] 종단도와 횡단도가 **같은 측점**을 쓰게 하는 두 버튼.
             //   측점 목록 한 곳에 모으고([측점]), 그 목록대로 횡단 위치를 놓는다([단면검토선]).
             //   종전엔 종단은 종단대로 횡단은 횡단대로 만들어 두 도면의 측점이 어긋날 수 있었다.
             var btnStn = MakeButton(
-                "측점", "DHSTATION ", "밸브실처럼 원하는 자리에 측점을 더하거나 지웁니다(목록도 여기서 봅니다)", "측점");
+                "측점\n추가", "DHSTATION ", "밸브실처럼 원하는 자리에 측점을 더하거나 지웁니다(목록도 여기서 봅니다)", "측점추가");
             btnStn.ToolTip = MakeTip("측점 (DHSTATION)",
                 "노선 위 원하는 자리를 클릭해 **측점을 더합니다**(밸브실·밸브 등).\n" +
                 "노선 꺾임점과 계획면 구배변화점은 **자동으로 잡히므로** 더할 필요가 없습니다.\n" +
@@ -339,7 +319,7 @@ public sealed class RibbonApp : IExtensionApplication
             //   ※[JACK 0824 교훈] 스플릿 버튼은 <b>자기 이미지를 따로 줘야</b> 한다 —
             //     목록 항목의 아이콘을 물려받지 않아 자리가 비어 보인다.
             var btnStnFb = MakeButton(
-                "전/후\n측점", "DHSTATIONFB ", "찍은 자리를 횡단면도에서만 (전)(후) 두 장으로 만듭니다", "측점");
+                "전/후\n측점", "DHSTATIONFB ", "찍은 자리를 횡단면도에서만 (전)(후) 두 장으로 만듭니다", "측점전후");
             btnStnFb.ToolTip = MakeTip("전/후 측점 (DHSTATIONFB)",
                 "노선 위를 클릭하면 **종단도에는 측점 하나**가 서고,\n" +
                 "**횡단면도만 (전)(후) 두 장**으로 나옵니다 — 측점 기준 좌우 **5cm**.\n" +
@@ -347,28 +327,6 @@ public sealed class RibbonApp : IExtensionApplication
                 "**구조물이 아직 모델에 없는 자리**를 앞뒤로 보여야 할 때 씁니다.\n" +
                 "주로 **구조물을 투영한 자리**에 찍습니다.", null);
 
-            var splitStn = new RibbonSplitButton
-            {
-                Text = "측점",
-                ShowText = true,
-                ShowImage = true,
-                LargeImage = MakeGlyph("측점"),
-                Image = MakeGlyph("측점"),
-                Size = RibbonItemSize.Large,
-                Orientation = System.Windows.Controls.Orientation.Vertical,
-                IsSplit = true,
-                IsSynchronizedWithCurrentItem = false,
-                ListStyle = RibbonSplitButtonListStyle.List,
-                ToolTip = MakeTip("측점",
-                    "**측점** — 찍은 자리에 측점 하나(종단·횡단 모두 한 장).\n" +
-                    "**전/후 측점** — 종단은 한 장, **횡단만 (전)(후) 두 장**.\n" +
-                    "아래 화살표를 눌러 고릅니다.", null),
-            };
-            splitStn.Items.Add(btnStn);
-            splitStn.Items.Add(btnStnFb);
-            splitStn.Current = btnStn;
-            pDraw.Items.Add(splitStn);
-            pDraw.Items.Add(Spacer());
 
             // ★★[JACK 0826] <b>[단면검토선]·[종단·횡단] 버튼을 없앴다</b> — 쓸 일이 없어졌다.
             //   검토선은 [종단도]가 측점과 함께 알아서 놓고, 종단·횡단을 한 번에 만들던 옛 명령은
@@ -378,40 +336,34 @@ public sealed class RibbonApp : IExtensionApplication
             //   토적표의 풍화암·연암 칸을 채우려면 지층이 있어야 한다.
             //   팝업이 아니라 도킹바인 이유: 평면도를 보면서 <b>여러 번 찍어야</b> 하기 때문이다.
             var btnStrata = MakeButton(
-                "지층\n구성", "DHSTRATA ", "시추주상도를 보고 지층을 만듭니다(우측 도킹창)", "측점");
+                "지층\n구성", "DHSTRATA ", "시추주상도를 보고 지층을 만듭니다(우측 도킹창)", "지층");
             btnStrata.ToolTip = MakeTip("지층 구성 (DHSTRATA)",
                 "우측에 도킹창이 열립니다.\n" +
                 "**① 지층**을 정하고(이름은 조사보고서 그대로, 수량 분류는 다섯 중 하나)\n" +
                 "**② 평면에서 찍기**로 시추 위치를 클릭하면 `BH1`부터 차례로 표에 들어갑니다.\n" +
                 "지반고는 **원지반에서 자동으로 읽습니다** — 사람이 치는 것은 **각 층의 두께**뿐입니다.\n" +
                 "**[확인]**을 누르면 지층면이 만들어집니다(평면에서는 숨겨 둡니다 — 종단·횡단에서만 보입니다).", null);
-            pDraw.Items.Add(btnStrata);
-            pDraw.Items.Add(Spacer());
 
             var btnXsec = MakeButton(
-                "횡단도", "DHXVIEW ", "종단도에서 정한 측점대로 횡단면도를 만듭니다(옹벽·가시설은 (전)(후) 두 장)", "횡단위치");
+                "횡단", "DHXVIEW ", "종단도에서 정한 측점대로 횡단면도를 만듭니다(옹벽·가시설은 (전)(후) 두 장)", "횡단");
             btnXsec.ToolTip = MakeTip("횡단도 (DHXVIEW)",
                 "**[종단도]를 먼저 돌린 뒤** 이 버튼을 누릅니다." + "\n" +
                 "놓을 자리를 클릭하면 그 자리에서 횡단면도를 늘어놓습니다." + "\n" +
                 "옹벽·가시설 자리는 **(전)(후) 두 장**이 나옵니다 — 한쪽엔 벽이 있고 한쪽엔 없습니다." + "\n" +
                 "배치·축척은 아직 손보는 중입니다(초안).", null);
-            pDraw.Items.Add(btnXsec);
-            pDraw.Items.Add(Spacer());
 
             // [가져오기 — JACK 0731] 사내 지형·지적 DB에서 도면 좌표계로 바로 받아온다. 내보내기 바로 앞에 배치.
-            var pImport = new RibbonPanelSource { Title = "가져오기" };
-            tab.Panels.Add(new RibbonPanel { Source = pImport });
-            pImport.Items.Add(Spacer());
+            // ★[JACK 0901] 가져오기 → <b>기타</b>. 원지반 가져오기가 부지정지로 올라가면서
+            //   여기 남는 것은 보조 기능뿐이 됐다.
+            var pMisc = new RibbonPanelSource { Title = "기타" };
             var btnParcel = MakeButton(
                 "지적도", "DHPARCEL ", "두 점으로 범위를 찍으면 그 범위 필지 경계와 지번을 도면 좌표계로 가져옵니다", "지적");
             btnParcel.ToolTip = MakeTip("지적도 가져오기 (DHPARCEL)",
                 "범위 두 모서리를 클릭하면 그 사각 범위대로 잘라서\n" +
                 "필지 경계를 가져옵니다. 지번은 별도 레이어(DH-지번)에 들어갑니다.\n" +
                 "※ GIS_Design_Loader server 제공", null);
-            pImport.Items.Add(btnParcel);
-            pImport.Items.Add(Spacer());
             var btnContour = MakeButton(
-                "서버\n지표면", "DHCONTOUR ", "지도 도킹바가 열립니다 — 지도에서 박스로 범위를 고르면 그 자리의 수치지형도 등고선을 3D로 가져오고 '원지반' 지표면까지 자동 생성(지적도 동시 가능)", "등고선");
+                "서버\n지표면", "DHCONTOUR ", "지도 도킹바가 열립니다 — 지도에서 박스로 범위를 고르면 그 자리의 수치지형도 등고선을 3D로 가져오고 '원지반' 지표면까지 자동 생성(지적도 동시 가능)", "서버지표면");
             btnContour.ToolTip = MakeTip("서버지표면 (DHCONTOUR)",
                 "누르면 오른쪽에 <b>지도 도킹바</b>가 열립니다(항공사진·지적도).\n" +
                 "지도에서 모서리 두 곳을 클릭해 범위를 정하고 [이 범위 가져오기]를 누르면\n" +
@@ -419,32 +371,162 @@ public sealed class RibbonApp : IExtensionApplication
                 "빈 도면에서 시작할 때 쓰세요 — 검은 화면에서 찍을 곳을 찾지 않아도 됩니다.\n\n" +
                 "· [지적도도 같이]를 체크하면 같은 범위의 지적도까지 한 번에 들어옵니다.\n" +
                 "· 사내 서버의 수치지형도 등고선을 표고가 들어간 3D 선으로 가져오고,\n" +
-                "  곧바로 '원지반' 지표면을 만듭니다(등고선 표시 주 5m·보조 1m).\n" +
+                "  곧바로 '원지반' 지표면을 만듭니다(등고선 표시 주 10m·보조 2m).\n" +
                 "· 만들어진 원지반으로 바로 [정지면 생성]을 실행하면 됩니다.", null);
-            pImport.Items.Add(btnContour);
-            pImport.Items.Add(Spacer());
+
+            // ★★★[JACK 0901] 브이월드에서 내려받은 <b>수치지도 DXF</b>로 원지반을 만든다.
+            //   사내망이 없거나 서버에 없는 자리에서도 쓸 수 있는 두 번째 길이다.
+            var btnNgii = MakeButton(
+                "수치지도\nDXF", "DHNGII ", "국토지리정보원 수치지도 DXF를 골라 등고선·표고점만 읽어 '원지반' 지표면을 만듭니다(도엽 여러 장 동시 선택 가능)", "수치지도");
+            btnNgii.ToolTip = MakeTip("수치지도 DXF (DHNGII)",
+                "브이월드에서 받은 수치지도 DXF를 고르면 <b>도면을 열지 않고</b>\n" +
+                "등고선·표고점만 읽어 '원지반' 지표면을 만듭니다.\n\n" +
+                "· 도엽이 여러 장이면 <b>한 번에 골라</b> 이어진 지표면 하나로 만듭니다.\n" +
+                "· 읽는 레이어: 등고선(F001…) · 표고점(F002…). 표고를 적어 둔 글자는 뺍니다.\n" +
+                "· <b>표고가 0인 등고선·표고점은 버립니다</b> — 측량이 안 된 자리라\n" +
+                "  그대로 두면 지표면에 절벽이 생깁니다.\n\n" +
+                "좌표계는 정지옵션을 따릅니다(DXF에는 좌표계가 안 담겨 있습니다).", null);
+            // ★★★[JACK 0901 "원지반 가져오기 스플릿 버튼 만들고 그 안에 수치지도 DXF, 서버 지표면 넣어 줘"]
+            //   원지반을 얻는 길이 둘이 됐다 — 나란히 두면 <b>어느 것을 눌러야 하나</b>가 된다.
+            //   하나로 묶고 화살표로 고르게 한다.
+            var splitGround = new RibbonSplitButton
+            {
+                Text = "원지반\n가져오기",
+                ShowText = true,
+                ShowImage = true,
+                // ★스플릿 버튼은 <b>자기 이미지를 따로 줘야</b> 한다 — 항목 이미지를 안 물려받는다(§v32 그 자리).
+                LargeImage = MakeGlyph("원지반"),
+                Image = MakeGlyph("원지반"),
+                Size = RibbonItemSize.Large,
+                Orientation = System.Windows.Controls.Orientation.Vertical,
+                IsSplit = true,
+                IsSynchronizedWithCurrentItem = false,
+                ListStyle = RibbonSplitButtonListStyle.List,
+                ToolTip = MakeTip("원지반 가져오기",
+                    "**수치지도 DXF** — 브이월드에서 내려받은 파일로 만듭니다(사내망 없어도 됨).\n" +
+                    "**서버 지표면** — 지도에서 범위를 골라 사내 서버에서 받습니다(VPN 필요).\n\n" +
+                    "둘 다 결과는 같은 '원지반' 지표면입니다 — 이후 공정은 똑같습니다.\n" +
+                    "아래 화살표를 눌러 고릅니다.", null),
+            };
+            splitGround.Items.Add(btnNgii);
+            splitGround.Items.Add(btnContour);
+            splitGround.Current = btnNgii;
 
             var pExport = new RibbonPanelSource { Title = "내보내기" };
-            tab.Panels.Add(new RibbonPanel { Source = pExport });
-            pExport.Items.Add(Spacer());
-            pExport.Items.Add(MakeButton(
-                "INFRA\nWORKS", "DHINFRA ", "InfraWorks 기초자료 내보내기 — 폴더 선택 후 지형·옹벽3D·SHP·위성GeoTIFF·토공량을 내보냄(있는 것만). DHGRADE 후 사용", "infra"));
-            pExport.Items.Add(Spacer());
+            var btnInfra = MakeButton(
+                "INFRA\nWORKS", "DHINFRA ", "InfraWorks 기초자료 내보내기 — 폴더 선택 후 지형·옹벽3D·SHP·위성GeoTIFF·토공량을 내보냄(있는 것만). DHGRADE 후 사용", "infra");
 
-            // [기타 — JACK 0731] 초기화 등 보조 기능. 내보내기와 분리.
-            var pMisc = new RibbonPanelSource { Title = "기타" };
-            tab.Panels.Add(new RibbonPanel { Source = pMisc });
-            pMisc.Items.Add(Spacer());
-            // [초기화 — JACK 0731] 정지면 생성 전(원지반+계획폴리곤)으로 되돌림. 부지를 바꿔가며 반복 검토할 때
-            //   Ctrl+Z 누적으로 지표면 정의가 꼬이는 것을 방지 — 우리 산출물만 깨끗이 걷어낸다.
+            // ★★★[JACK 0901 "수치지도를 불러 버리면 계획지역보다 너무 클 수 있어서"]
+            //   도엽 한 장이 2×3km인데 현장은 200m다 — 삼각형 수만 개가 계산을 매번 따라다닌다.
+            var btnCrop = MakeButton(
+                "원지형\n자르기", "DHCROP ", "드래그로 박스를 그리면 그 안의 지형만 남기고 나머지는 지웁니다", "자르기");
+            btnCrop.ToolTip = MakeTip("원지형 자르기 (DHCROP)",
+                "드래그로 <b>남길 범위</b>를 그리면 그 안의 지형만 남습니다.\n\n" +
+                "수치지도 도엽은 한 장이 2×3km라 현장보다 훨씬 넓습니다 —\n" +
+                "잘라 두면 종단·횡단·수량이 눈에 띄게 빨라집니다.\n\n" +
+                "· <b>먼저 잘라 보고, 쓸 만한지 확인한 뒤에</b> 원본을 지웁니다 —\n" +
+                "  범위가 지형 밖이면 아무것도 지우지 않습니다.\n" +
+                "· 범위 밖에 통째로 있는 원본 등고선·표고점도 같이 정리합니다.", null);
+
             var btnReset = MakeButton(
                 "초기화", "DHRESET ", "정지면 생성 전(원지반+계획폴리곤) 상태로 초기화 — DH가 만든 지표면·선을 모두 삭제", "초기화");
             btnReset.ToolTip = MakeTip("초기화 (DHRESET)",
                 "정지 지표면(정지면_DH 등)과 사면선·소단선·노리선·옹벽선 등\n" +
                 "DH가 만든 객체를 모두 지워 '정지면 생성 전' 상태로 되돌립니다.\n" +
                 "원지반과 계획폴리곤은 그대로 유지 — 부지를 바꿔 다시 검토할 때 사용.", null);
+
+            // ★★★[JACK 0901 UI 재배치] <b>일하는 순서대로</b> 늘어놓는다 —
+            //   정지옵션 → 원지반 가져오기 → 계획부지 생성 → 사면 수정 → 보기.
+            //   단추를 만드는 자리와 <b>늘어놓는 자리를 갈랐다</b>: 순서를 바꿀 때
+            //   설명문 수십 줄을 통째로 옮기지 않아도 여기 한 곳만 고치면 된다.
+            var splitSlope = new RibbonSplitButton
+            {
+                Text = "사면\n수정",
+                ShowText = true,
+                ShowImage = true,
+                LargeImage = MakeGlyph("사면수정"),
+                Image = MakeGlyph("사면수정"),
+                Size = RibbonItemSize.Large,
+                Orientation = System.Windows.Controls.Orientation.Vertical,
+                IsSplit = true,
+                IsSynchronizedWithCurrentItem = false,
+                ListStyle = RibbonSplitButtonListStyle.List,
+                ToolTip = MakeTip("사면 수정",
+                    "**옹벽 변환** — 고른 선부터 바깥 단을 옹벽으로.\n" +
+                    "**사면 변환** — 옹벽선을 골라 그 단부터 다시 사면으로.\n" +
+                    "아래 화살표를 눌러 고릅니다.", null),
+            };
+            splitSlope.Items.Add(btnWall);
+            splitSlope.Items.Add(btnSlope);
+            splitSlope.Current = btnWall;
+
+            var splitProf = new RibbonSplitButton
+            {
+                Text = "종단",
+                ShowText = true,
+                ShowImage = true,
+                LargeImage = MakeGlyph("종단"),
+                Image = MakeGlyph("종단"),
+                Size = RibbonItemSize.Large,
+                Orientation = System.Windows.Controls.Orientation.Vertical,
+                IsSplit = true,
+                IsSynchronizedWithCurrentItem = false,
+                ListStyle = RibbonSplitButtonListStyle.List,
+                ToolTip = MakeTip("종단",
+                    "**지층 구성** — 시추주상도로 지층을 만듭니다(우측 도킹창).\n" +
+                    "**종단 생성** — 노선을 그리면 그 노선의 종단면도.\n" +
+                    "**측점 추가** — 밸브실처럼 원하는 자리에 측점을 더합니다.\n" +
+                    "**전/후 측점** — 횡단만 (전)(후) 두 장으로.\n" +
+                    "아래 화살표를 눌러 고릅니다.", null),
+            };
+            splitProf.Items.Add(btnStrata);
+            splitProf.Items.Add(btnProf);
+            splitProf.Items.Add(btnStn);
+            splitProf.Items.Add(btnStnFb);
+            splitProf.Current = btnProf;
+
+            // ── 패널 늘어놓기 ─────────────────────────────────────────────────
+            tab.Panels.Add(new RibbonPanel { Source = pGrade });
+            pGrade.Items.Add(Spacer());
+            pGrade.Items.Add(btnSet);
+            pGrade.Items.Add(Spacer());
+            pGrade.Items.Add(splitGround);
+            pGrade.Items.Add(Spacer());
+            pGrade.Items.Add(splitSurf);
+            pGrade.Items.Add(Spacer());
+            pGrade.Items.Add(splitSlope);
+            pGrade.Items.Add(Spacer());
+            pGrade.Items.Add(splitView);
+            pGrade.Items.Add(Spacer());
+
+            tab.Panels.Add(new RibbonPanel { Source = pDraw });
+            pDraw.Items.Add(Spacer());
+            pDraw.Items.Add(btnSheetSet);
+            pDraw.Items.Add(Spacer());
+            pDraw.Items.Add(btnNori);
+            pDraw.Items.Add(Spacer());
+            pDraw.Items.Add(splitProf);
+            pDraw.Items.Add(Spacer());
+            pDraw.Items.Add(btnXsec);
+            pDraw.Items.Add(Spacer());
+
+            tab.Panels.Add(new RibbonPanel { Source = pMisc });
+            pMisc.Items.Add(Spacer());
+            pMisc.Items.Add(btnCrop);
+            pMisc.Items.Add(Spacer());
+            pMisc.Items.Add(btnParcel);
+            pMisc.Items.Add(Spacer());
+            pMisc.Items.Add(btnMap);
+            pMisc.Items.Add(Spacer());
+            pMisc.Items.Add(btnMapOff);
+            pMisc.Items.Add(Spacer());
             pMisc.Items.Add(btnReset);
             pMisc.Items.Add(Spacer());
+
+            tab.Panels.Add(new RibbonPanel { Source = pExport });
+            pExport.Items.Add(Spacer());
+            pExport.Items.Add(btnInfra);
+            pExport.Items.Add(Spacer());
         }
         catch
         {
@@ -473,6 +555,21 @@ public sealed class RibbonApp : IExtensionApplication
 
     /// <summary>버튼 아이콘을 런타임에 그려 각 명령을 직관적으로 구분(PNG 리소스 대신, JACK 요청).
     /// 설정=슬라이더 / 정지면=계단 / 노리선=사면+빗금 / infra=상자+내보내기 화살표.</summary>
+    /// <summary>눈 모양 하나 — 보기 계열이 같이 쓴다(가로폭 w, 중심 cx,cy).</summary>
+    private static void DrawEye(DrawingContext dc, Pen pen, double cx, double cy, double w)
+    {
+        var eye = new StreamGeometry();
+        using (var g = eye.Open())
+        {
+            g.BeginFigure(new Point(cx - w, cy), false, false);
+            g.QuadraticBezierTo(new Point(cx, cy - w * 0.92), new Point(cx + w, cy), true, false);
+            g.QuadraticBezierTo(new Point(cx, cy + w * 0.92), new Point(cx - w, cy), true, false);
+        }
+        eye.Freeze();
+        dc.DrawGeometry(null, pen, eye);
+        dc.DrawEllipse(Brushes.Transparent, pen, new Point(cx, cy), w * 0.33, w * 0.33);
+    }
+
     private static ImageSource? MakeGlyph(string kind)
     {
         try
@@ -485,9 +582,19 @@ public sealed class RibbonApp : IExtensionApplication
             using (var dc = dv.RenderOpen())
             {
                 dc.DrawRectangle(Brushes.Transparent, null, new Rect(0, 0, S, S)); // 투명 배경
+                // ★★★[JACK 0901 "UI에 그림들이 좀 중복되는 애들이 많은데 직관적인 UI 그림으로
+                //   다시 다 만들어 줘. 중복되지 않게"]
+                //
+                //   <b>원인: 이름이 13개인데 단추가 23개였다.</b> 없는 이름은 전부 default로 떨어져
+                //   다섯 단추가 <b>똑같은 '내보내기 상자'</b>를 달고 있었다. 그림이 이름을 못 따라간 것이다.
+                //   이제 <b>단추마다 제 이름</b>을 갖고, 아래 switch가 그 전부를 그린다.
+                //
+                //   색으로도 갈래를 읽게 한다 —
+                //   <b>갈색=땅(원지반) · 초록=계획(정지) · 파랑=보기 · 주황=도면 · 회색=보조</b>
                 switch (kind)
                 {
-                    case "설정": // 슬라이더 3줄 + 노브(회색)
+                    // ── 부지정지 ─────────────────────────────────────────────
+                    case "설정": // 슬라이더 3줄 + 노브 — 값을 정하는 곳
                         var gy = P(0x9e, 0xb0, 0xc4);
                         for (int i = 0; i < 3; i++)
                         {
@@ -496,120 +603,292 @@ public sealed class RibbonApp : IExtensionApplication
                             dc.DrawEllipse(Brushes.White, gy, new Point(9 + i * 7, y), 2.6, 2.6);
                         }
                         break;
+
+                    case "원지반": // 등고선이 감긴 언덕 — 있는 그대로의 땅
+                        var gnd = P(0x8d, 0x6e, 0x48);
+                        var hill = new StreamGeometry();
+                        using (var g = hill.Open())
+                        {
+                            g.BeginFigure(new Point(3, 27), false, false);
+                            g.QuadraticBezierTo(new Point(11, 8), new Point(19, 20), true, false);
+                            g.QuadraticBezierTo(new Point(24, 27), new Point(29, 22), true, false);
+                        }
+                        hill.Freeze();
+                        dc.DrawGeometry(null, gnd, hill);
+                        dc.DrawLine(P(0xc0, 0xa0, 0x80), new Point(7, 22), new Point(15, 22));
+                        dc.DrawLine(P(0xc0, 0xa0, 0x80), new Point(9, 17), new Point(14, 17));
+                        break;
+
+                    case "수치지도": // 접힌 도면 한 장 + 그 안의 등고선 — 파일에서 읽는다
+                        var dxf = P(0x8d, 0x6e, 0x48);
+                        var sheet = new StreamGeometry();
+                        using (var g = sheet.Open())
+                        {
+                            g.BeginFigure(new Point(7, 4), false, true);
+                            g.LineTo(new Point(20, 4), true, false);
+                            g.LineTo(new Point(25, 9), true, false);
+                            g.LineTo(new Point(25, 28), true, false);
+                            g.LineTo(new Point(7, 28), true, false);
+                        }
+                        sheet.Freeze();
+                        dc.DrawGeometry(null, dxf, sheet);
+                        dc.DrawLine(dxf, new Point(20, 4), new Point(20, 9));   // 접힌 모서리
+                        dc.DrawLine(dxf, new Point(20, 9), new Point(25, 9));
+                        var thin = P(0xc0, 0xa0, 0x80);
+                        dc.DrawLine(thin, new Point(10, 22), new Point(22, 22));
+                        dc.DrawLine(thin, new Point(11, 18), new Point(21, 18));
+                        dc.DrawLine(thin, new Point(13, 14), new Point(19, 14));
+                        break;
+
+                    case "서버지표면": // 구름 + 내려받기 화살표 — 서버에서 받는다
+                        var srv = P(0x8d, 0x6e, 0x48);
+                        dc.DrawEllipse(null, srv, new Point(12, 12), 6.0, 5.0);
+                        dc.DrawEllipse(null, srv, new Point(21, 13), 5.0, 4.2);
+                        dc.DrawLine(srv, new Point(16, 18), new Point(16, 28));  // 화살 축
+                        dc.DrawLine(srv, new Point(11, 23), new Point(16, 28));  // 화살촉
+                        dc.DrawLine(srv, new Point(21, 23), new Point(16, 28));
+                        break;
+
+                    case "계획부지": // 다듬어진 평지 + 양쪽 사면 — 만들려는 부지
+                        var pad = P(0x3f, 0xa8, 0x5e);
+                        dc.DrawLine(pad, new Point(9, 16), new Point(23, 16));   // 평지
+                        dc.DrawLine(pad, new Point(3, 26), new Point(9, 16));    // 왼쪽 사면
+                        dc.DrawLine(pad, new Point(23, 16), new Point(29, 26));  // 오른쪽 사면
+                        dc.DrawLine(P(0xb8, 0xd8, 0xc0), new Point(2, 26), new Point(30, 26)); // 지반선
+                        break;
+
                     case "정지면": // 계단(초록) — 절성토 계단 정지면
                         var gr = P(0x6a, 0xc8, 0x7a);
                         var st = new[] { new Point(4, 27), new Point(4, 21), new Point(12, 21),
                             new Point(12, 15), new Point(20, 15), new Point(20, 9), new Point(28, 9) };
                         for (int i = 0; i + 1 < st.Length; i++) dc.DrawLine(gr, st[i], st[i + 1]);
                         break;
+
                     case "터파기": // 파인 구덩이(갈색) — 바닥 + 양쪽 법면
                         var ex = P(0xb0, 0x7a, 0x46);
                         var pit = new[] { new Point(3, 9), new Point(11, 24), new Point(21, 24), new Point(29, 9) };
                         for (int i = 0; i + 1 < pit.Length; i++) dc.DrawLine(ex, pit[i], pit[i + 1]);
                         dc.DrawLine(P(0x8a, 0x8a, 0x8a), new Point(2, 9), new Point(30, 9));   // 목표면(지표)
                         break;
-                    case "보기": // 눈(파랑) — 무엇을 보일지
-                        var vw = P(0x4a, 0x90, 0xd9);
-                        var eye = new StreamGeometry();
-                        using (var g = eye.Open())
-                        {
-                            g.BeginFigure(new Point(4, 16), false, false);
-                            g.QuadraticBezierTo(new Point(16, 5), new Point(28, 16), true, false);
-                            g.QuadraticBezierTo(new Point(16, 27), new Point(4, 16), true, false);
-                        }
-                        eye.Freeze();
-                        dc.DrawGeometry(null, vw, eye);
-                        dc.DrawEllipse(Brushes.Transparent, vw, new Point(16, 16), 4.0, 4.0);
+
+                    case "사면수정": // 사면 ↔ 옹벽 — 서로 바꾸는 두 방향 화살표
+                        var sw = P(0x9b, 0x6b, 0xd6);
+                        dc.DrawLine(sw, new Point(3, 26), new Point(12, 9));       // 사면 쪽
+                        dc.DrawLine(sw, new Point(22, 9), new Point(22, 26));      // 옹벽 쪽(수직)
+                        dc.DrawLine(sw, new Point(22, 26), new Point(29, 26));
+                        dc.DrawLine(sw, new Point(13, 15), new Point(19, 15));     // 화살표 →
+                        dc.DrawLine(sw, new Point(17, 12), new Point(19, 15));
+                        dc.DrawLine(sw, new Point(17, 18), new Point(19, 15));
                         break;
-                    case "노리선": // 사면(대각선, 주황) + 빗금 틱
-                        var or = P(0xf0, 0xa8, 0x3a);
-                        dc.DrawLine(or, new Point(6, 27), new Point(27, 6));
+
+                    case "옹벽": // 쌓은 블록 벽(회청색) — 수직 벽면
+                        var wl = P(0x6b, 0x86, 0xa8);
+                        dc.DrawLine(wl, new Point(10, 5), new Point(10, 27));
+                        dc.DrawLine(wl, new Point(22, 5), new Point(22, 27));
+                        for (int i = 0; i <= 3; i++) dc.DrawLine(wl, new Point(10, 5 + i * 7.3), new Point(22, 5 + i * 7.3));
+                        dc.DrawLine(P(0x8a, 0x8a, 0x8a), new Point(3, 27), new Point(29, 27)); // 지반
+                        break;
+
+                    case "사면": // 비탈 + 빗금 — 흙으로 돌아간다
+                        var sl = P(0xd2, 0x8c, 0x3c);
+                        dc.DrawLine(sl, new Point(4, 27), new Point(26, 7));
+                        for (int i = 1; i <= 3; i++)
+                        {
+                            double t = i / 4.0;
+                            var bp = new Point(4 + 22 * t, 27 - 20 * t);
+                            dc.DrawLine(sl, bp, new Point(bp.X + 4.0, bp.Y + 4.0));
+                        }
+                        dc.DrawLine(P(0x8a, 0x8a, 0x8a), new Point(3, 28), new Point(29, 28));
+                        break;
+
+                    // ── 보기(전부 파랑 계열, 무엇을 보이느냐만 다르다) ─────────
+                    case "보기": // 눈 — 무엇을 보일지
+                        DrawEye(dc, P(0x4a, 0x90, 0xd9), 16, 16, 12);
+                        break;
+
+                    case "보기전부": // 눈 + 세 겹 — 전부 보기
+                        DrawEye(dc, P(0x4a, 0x90, 0xd9), 16, 10, 11);
+                        var al = P(0x4a, 0x90, 0xd9);
+                        for (int i = 0; i < 3; i++) dc.DrawLine(al, new Point(7, 21 + i * 4), new Point(25, 21 + i * 4));
+                        break;
+
+                    case "보기원지반": // 언덕만
+                        var vg = P(0x4a, 0x90, 0xd9);
+                        var vh = new StreamGeometry();
+                        using (var g = vh.Open())
+                        {
+                            g.BeginFigure(new Point(3, 25), false, false);
+                            g.QuadraticBezierTo(new Point(13, 7), new Point(22, 19), true, false);
+                            g.QuadraticBezierTo(new Point(26, 24), new Point(29, 21), true, false);
+                        }
+                        vh.Freeze();
+                        dc.DrawGeometry(null, vg, vh);
+                        dc.DrawLine(P(0xb0, 0xcc, 0xe8), new Point(3, 29), new Point(29, 29));
+                        break;
+
+                    case "보기계획": // 평지만
+                        var vp = P(0x4a, 0x90, 0xd9);
+                        dc.DrawLine(vp, new Point(9, 14), new Point(23, 14));
+                        dc.DrawLine(vp, new Point(3, 24), new Point(9, 14));
+                        dc.DrawLine(vp, new Point(23, 14), new Point(29, 24));
+                        dc.DrawLine(P(0xb0, 0xcc, 0xe8), new Point(3, 29), new Point(29, 29));
+                        break;
+
+                    case "보기터파기": // 구덩이만
+                        var ve = P(0x4a, 0x90, 0xd9);
+                        var vpit = new[] { new Point(4, 11), new Point(12, 25), new Point(20, 25), new Point(28, 11) };
+                        for (int i = 0; i + 1 < vpit.Length; i++) dc.DrawLine(ve, vpit[i], vpit[i + 1]);
+                        dc.DrawLine(P(0xb0, 0xcc, 0xe8), new Point(3, 11), new Point(29, 11));
+                        break;
+
+                    // ── 도면화 ───────────────────────────────────────────────
+                    case "도면설정": // 도곽 + 톱니 — 도면을 어떻게 그릴지
+                        var ds = P(0xf0, 0xa8, 0x3a);
+                        dc.DrawRectangle(null, ds, new Rect(4, 6, 17, 20));
+                        dc.DrawLine(ds, new Point(7, 11), new Point(18, 11));
+                        dc.DrawLine(ds, new Point(7, 16), new Point(18, 16));
+                        dc.DrawEllipse(null, ds, new Point(24, 23), 4.5, 4.5);   // 톱니(설정)
+                        for (int i = 0; i < 4; i++)
+                        {
+                            double a = i * System.Math.PI / 2 + 0.4;
+                            dc.DrawLine(ds, new Point(24 + 4.5 * System.Math.Cos(a), 23 + 4.5 * System.Math.Sin(a)),
+                                            new Point(24 + 7.5 * System.Math.Cos(a), 23 + 7.5 * System.Math.Sin(a)));
+                        }
+                        break;
+
+                    case "노리선": // 사면(대각선) + 빗금 틱
+                        var or_ = P(0xf0, 0xa8, 0x3a);
+                        dc.DrawLine(or_, new Point(6, 27), new Point(27, 6));
                         for (int i = 1; i <= 3; i++)
                         {
                             double t = i / 4.0;
                             var bp = new Point(6 + 21 * t, 27 - 21 * t);
-                            dc.DrawLine(or, bp, new Point(bp.X + 4.5, bp.Y + 4.5)); // 빗금(사면 아래로)
+                            dc.DrawLine(or_, bp, new Point(bp.X + 4.5, bp.Y + 4.5));
                         }
                         break;
-                    case "사면": // 사면 복귀(초록 사선 + 위 화살)
-                        var sl = P(0x6a, 0xc8, 0x7a);
-                        dc.DrawLine(sl, new Point(5, 27), new Point(22, 10));
-                        dc.DrawLine(sl, new Point(22, 10), new Point(28, 10));
-                        dc.DrawLine(sl, new Point(13, 19), new Point(13, 12));   // 위로 화살(사면 복귀)
-                        dc.DrawLine(sl, new Point(10.5, 14.5), new Point(13, 12));
-                        dc.DrawLine(sl, new Point(15.5, 14.5), new Point(13, 12));
-                        break;
-                    case "지적": // 필지 격자(초록) — 지적도
-                        var jp = P(0x3f, 0xa8, 0x5c);
-                        dc.DrawRectangle(null, jp, new Rect(4, 6, 24, 20));
-                        dc.DrawLine(jp, new Point(14, 6), new Point(14, 16));    // 필지 경계
-                        dc.DrawLine(jp, new Point(4, 16), new Point(28, 16));
-                        dc.DrawLine(jp, new Point(21, 16), new Point(21, 26));
-                        break;
-                    case "등고선": // 겹친 등고선(갈색) — 지형
-                        var ct = P(0xc8, 0x8a, 0x40);
-                        for (int k = 0; k < 3; k++)
+
+                    case "종단": // 도곽 안의 종단선 — 세로로 자른 그림
+                        var pf = P(0xe0, 0x7b, 0x39);
+                        dc.DrawRectangle(null, P(0xd8, 0xc0, 0xa8), new Rect(3, 6, 26, 21));
+                        var pg = new StreamGeometry();
+                        using (var g = pg.Open())
                         {
-                            double s = 3.2 * k;
-                            var fg = new PathFigure { StartPoint = new Point(4 + s, 26 - s * 0.9), IsClosed = false };
-                            fg.Segments.Add(new BezierSegment(
-                                new Point(10 + s, 14 - s), new Point(20 - s * 0.4, 26 - s), new Point(28 - s, 12 - s * 0.8), true));
-                            var pgc = new PathGeometry(); pgc.Figures.Add(fg);
-                            dc.DrawGeometry(null, ct, pgc);
+                            g.BeginFigure(new Point(5, 22), false, false);
+                            g.QuadraticBezierTo(new Point(12, 9), new Point(18, 17), true, false);
+                            g.QuadraticBezierTo(new Point(23, 23), new Point(27, 12), true, false);
                         }
+                        pg.Freeze();
+                        dc.DrawGeometry(null, pf, pg);
                         break;
-                    case "지도": // 지구본형 배경지도(파랑) — 사각 프레임 + 경위선
-                        var mp = P(0x3f, 0x8f, 0xd0);
-                        dc.DrawRectangle(null, mp, new Rect(5, 7, 22, 18));
-                        dc.DrawLine(mp, new Point(16, 7), new Point(16, 25));      // 세로 중앙선
-                        dc.DrawLine(mp, new Point(5, 16), new Point(27, 16));      // 가로 중앙선
-                        dc.DrawEllipse(null, mp, new Point(16, 16), 6.5, 9);       // 지구본 느낌 타원
+
+                    case "지층": // 세 겹 띠 — 토사·풍화암·연암
+                        dc.DrawLine(P(0xc8, 0xa8, 0x70), new Point(4, 10), new Point(28, 10));
+                        dc.DrawLine(P(0xa8, 0x86, 0x58), new Point(4, 17), new Point(28, 17));
+                        dc.DrawLine(P(0x78, 0x66, 0x50), new Point(4, 24), new Point(28, 24));
+                        dc.DrawEllipse(Brushes.White, P(0x50, 0x50, 0x50), new Point(9, 7), 2.2, 2.2); // 시추공
                         break;
-                    case "지도끄기": // 지도 프레임 + 사선(끄기, 빨강)
-                        var mo = P(0x9a, 0xa3, 0xad);
-                        dc.DrawRectangle(null, mo, new Rect(5, 7, 22, 18));
-                        dc.DrawLine(mo, new Point(5, 16), new Point(27, 16));
-                        var xr = P(0xe0, 0x5a, 0x3a);
-                        dc.DrawLine(xr, new Point(7, 27), new Point(25, 5));       // 금지 사선
+
+                    case "종단생성": // 꺾은 노선 + 꼭짓점 — 선을 직접 그린다
+                        var rt = P(0xe0, 0x7b, 0x39);
+                        var route = new[] { new Point(4, 24), new Point(12, 12), new Point(20, 20), new Point(28, 7) };
+                        for (int i = 0; i + 1 < route.Length; i++) dc.DrawLine(rt, route[i], route[i + 1]);
+                        foreach (var q in route) dc.DrawEllipse(Brushes.White, rt, q, 2.2, 2.2);
                         break;
-                    case "종횡단": // 원지반 곡선(회색) + 정지면 수평선(주황) + 절단 위치 세로선(파랑) 2개
-                        var xgnd = P(0x8a, 0x8a, 0x8a);
-                        var xfgl = P(0xe0, 0x8a, 0x2a);
-                        var xcut = P(0x3f, 0x8f, 0xd0);
-                        var xfig = new PathFigure { StartPoint = new Point(4, 23), IsClosed = false };
-                        xfig.Segments.Add(new BezierSegment(
-                            new Point(11, 8), new Point(21, 27), new Point(28, 12), true));
-                        var xpg = new PathGeometry(); xpg.Figures.Add(xfig);
-                        dc.DrawGeometry(null, xgnd, xpg);                          // 원지반
-                        dc.DrawLine(xfgl, new Point(4, 18), new Point(28, 18));    // 정지면
-                        dc.DrawLine(xcut, new Point(11, 4), new Point(11, 28));    // 절단 위치
-                        dc.DrawLine(xcut, new Point(21, 4), new Point(21, 28));
+
+                    case "측점추가": // 노선 위 눈금 + 더하기
+                        var stn = P(0xe0, 0x7b, 0x39);
+                        dc.DrawLine(stn, new Point(3, 20), new Point(29, 20));
+                        for (int i = 0; i < 3; i++) dc.DrawLine(stn, new Point(6 + i * 8, 16), new Point(6 + i * 8, 24));
+                        dc.DrawLine(stn, new Point(26, 6), new Point(26, 14));   // +
+                        dc.DrawLine(stn, new Point(22, 10), new Point(30, 10));
                         break;
-                    case "초기화": // 원형 되돌림 화살표(초록) — 리셋(JACK 0731 스샷 참고: 위 트인 원 + 좌상단 화살촉)
-                        var rs = P(0x2e, 0xa8, 0x4c);
-                        // 중심(16,16)·반지름 9. 위(북)에 틈을 두고 큰 호(300°)를 시계방향으로: 우상(20.5,8.2)→좌상(11.5,8.2).
-                        var fig = new PathFigure { StartPoint = new Point(20.5, 8.21), IsClosed = false };
-                        fig.Segments.Add(new ArcSegment(new Point(11.5, 8.21), new Size(9, 9), 0,
-                            true, SweepDirection.Clockwise, true));
-                        var pg = new PathGeometry(); pg.Figures.Add(fig);
-                        dc.DrawGeometry(null, rs, pg);
-                        // 좌상단 끝의 화살촉 — 위-왼쪽을 향하게(스샷과 동일 방향).
-                        dc.DrawLine(rs, new Point(11.5, 8.21), new Point(16.49, 8.59));
-                        dc.DrawLine(rs, new Point(11.5, 8.21), new Point(13.66, 3.70));
+
+                    case "측점전후": // 눈금 하나 + 앞뒤 화살표
+                        var fb = P(0xe0, 0x7b, 0x39);
+                        dc.DrawLine(fb, new Point(3, 20), new Point(29, 20));
+                        dc.DrawLine(fb, new Point(16, 13), new Point(16, 27));   // 측점
+                        dc.DrawLine(fb, new Point(4, 9), new Point(12, 9));      // ← 전
+                        dc.DrawLine(fb, new Point(4, 9), new Point(7, 6));
+                        dc.DrawLine(fb, new Point(4, 9), new Point(7, 12));
+                        dc.DrawLine(fb, new Point(20, 9), new Point(28, 9));     // 후 →
+                        dc.DrawLine(fb, new Point(28, 9), new Point(25, 6));
+                        dc.DrawLine(fb, new Point(28, 9), new Point(25, 12));
                         break;
-                    case "옹벽": // 옹벽(벽돌 2단, 흙색)
-                        var wl = P(0xc0, 0xa0, 0x72);
-                        dc.DrawRectangle(null, wl, new Rect(6, 15, 20, 6));
-                        dc.DrawRectangle(null, wl, new Rect(6, 22, 20, 6));
-                        dc.DrawLine(wl, new Point(16, 15), new Point(16, 21));
-                        dc.DrawLine(wl, new Point(11, 22), new Point(11, 28));
-                        dc.DrawLine(wl, new Point(21, 22), new Point(21, 28));
+
+                    case "횡단": // 원지반선 + 그 위 계획단면 — 가로로 자른 그림
+                        var xs = P(0xe0, 0x7b, 0x39);
+                        var grd = new StreamGeometry();
+                        using (var g = grd.Open())
+                        {
+                            g.BeginFigure(new Point(2, 24), false, false);
+                            g.QuadraticBezierTo(new Point(10, 14), new Point(17, 20), true, false);
+                            g.QuadraticBezierTo(new Point(24, 26), new Point(30, 17), true, false);
+                        }
+                        grd.Freeze();
+                        dc.DrawGeometry(null, P(0xb8, 0xa0, 0x88), grd);
+                        dc.DrawLine(xs, new Point(10, 12), new Point(22, 12));   // 계획 평지
+                        dc.DrawLine(xs, new Point(5, 21), new Point(10, 12));
+                        dc.DrawLine(xs, new Point(22, 12), new Point(27, 21));
                         break;
+
+                    // ── 기타 ─────────────────────────────────────────────────
+                    case "자르기": // 언덕 위에 점선 네모 + 가위 — 남길 자리만 오려낸다
+                        var cg = P(0xb8, 0xa0, 0x88);
+                        var ch = new StreamGeometry();
+                        using (var g = ch.Open())
+                        {
+                            g.BeginFigure(new Point(2, 26), false, false);
+                            g.QuadraticBezierTo(new Point(11, 10), new Point(19, 20), true, false);
+                            g.QuadraticBezierTo(new Point(25, 27), new Point(30, 18), true, false);
+                        }
+                        ch.Freeze();
+                        dc.DrawGeometry(null, cg, ch);
+                        // 남길 범위 — 점선 네모(빨강)
+                        var cut = P(0xd8, 0x5a, 0x4a);
+                        cut.DashStyle = new DashStyle(new double[] { 2.2, 1.8 }, 0);
+                        dc.DrawRectangle(null, cut, new Rect(8, 8, 15, 15));
+                        break;
+
+                    case "지적": // 필지 경계(노랑) — 나뉜 땅
+                        var pc = P(0xe8, 0xc0, 0x4a);
+                        dc.DrawRectangle(null, pc, new Rect(4, 6, 24, 20));
+                        dc.DrawLine(pc, new Point(15, 6), new Point(15, 26));
+                        dc.DrawLine(pc, new Point(15, 16), new Point(28, 16));
+                        break;
+
+                    case "지도": // 지구본(파랑) — 배경 위성지도
+                        var mp = P(0x3f, 0x8f, 0xd8);
+                        dc.DrawEllipse(null, mp, new Point(16, 16), 12.0, 12.0);
+                        dc.DrawEllipse(null, mp, new Point(16, 16), 5.0, 12.0);
+                        dc.DrawLine(mp, new Point(4, 16), new Point(28, 16));
+                        break;
+
+                    case "지도끄기": // 지구본 + 빗금 — 끈다
+                        var mo = P(0xd0, 0x5a, 0x5a);
+                        dc.DrawEllipse(null, mo, new Point(16, 16), 11.0, 11.0);
+                        dc.DrawLine(mo, new Point(7, 25), new Point(25, 7));
+                        break;
+
+                    case "초기화": // 되돌리는 화살표(회색)
+                        var rs = P(0x8a, 0x9a, 0xaa);
+                        var arc = new StreamGeometry();
+                        using (var g = arc.Open())
+                        {
+                            g.BeginFigure(new Point(26, 16), false, false);
+                            g.ArcTo(new Point(9, 10), new Size(10, 10), 0, true, SweepDirection.Clockwise, true, false);
+                        }
+                        arc.Freeze();
+                        dc.DrawGeometry(null, rs, arc);
+                        dc.DrawLine(rs, new Point(9, 10), new Point(9, 17));
+                        dc.DrawLine(rs, new Point(9, 10), new Point(15, 10));
+                        break;
+
+                    // ── 내보내기 ─────────────────────────────────────────────
                     default: // infra: 상자 + 내보내기 화살표(파랑)
                         var bl = P(0x4a, 0x90, 0xe2);
-                        dc.DrawRectangle(null, bl, new Rect(5, 13, 13, 14)); // 파일 상자
-                        dc.DrawLine(bl, new Point(15, 8), new Point(28, 8));  // 화살 축
-                        dc.DrawLine(bl, new Point(24, 4), new Point(28, 8));  // 화살촉
+                        dc.DrawRectangle(null, bl, new Rect(5, 13, 13, 14));
+                        dc.DrawLine(bl, new Point(15, 8), new Point(28, 8));
+                        dc.DrawLine(bl, new Point(24, 4), new Point(28, 8));
                         dc.DrawLine(bl, new Point(24, 12), new Point(28, 8));
                         break;
                 }

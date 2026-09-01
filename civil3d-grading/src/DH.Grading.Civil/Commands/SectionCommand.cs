@@ -1,4 +1,4 @@
-﻿using Autodesk.AutoCAD.ApplicationServices;
+using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.Colors;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
@@ -30,7 +30,7 @@ public sealed class SectionCommand
     internal const string GroupBase = "DH횡단";      // 측점선그룹·횡단도 이름 앞머리
     internal const string ProfGroundName = "DH_원지반";
     internal const string ProfPadName = "DH_정지면";
-    private const string PadSurfaceBase = "정지면_DH";
+    internal const string PadSurfaceBase = "정지면_DH";
 
     /// <summary>★★[v32.2 · JACK 0812] <b>순수 정지면 — 원지반을 안 깔고 '정지된 면만' 담은 지표면.</b>
     ///
