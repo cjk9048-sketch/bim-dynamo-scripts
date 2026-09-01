@@ -458,8 +458,23 @@ public sealed class ProfileCommand
                       ?? SectionCommand.LoadLinetype(db, "DIVIDE2")
                       ?? SectionCommand.LoadLinetype(db, "DASHDOT")
                       ?? ltStrata;
-        ObjectId stStrata = SectionCommand.EnsureProfileStyle(db, cdoc, SectionCommand.StrataStyleName, 8, ltStrata);
-        ObjectId stWater = SectionCommand.EnsureProfileStyle(db, cdoc, SectionCommand.WaterStyleName, 5, ltWater);
+        // ★★★[JACK 0831 "각 지층별로 색상을 줘"] <b>횡단과 같은 색표를 쓴다.</b>
+        //   같은 지층이 종단과 횡단에서 다른 색이면 <b>더 헷갈린다</b> — 색표는 한 곳(<c>XsecViewCommand.StrataAciOf</c>)에 둔다.
+        // ★[JACK 0831 "점선이 너무 듬성듬성"] 무늬 크기도 <b>재서</b> 정한다 — 횡단과 같은 규칙이다.
+        double ltsS = SectionCommand.LtScaleFor(db, ltStrata);
+        double ltsW = SectionCommand.LtScaleFor(db, ltWater);
+        var stStrataBy = new System.Collections.Generic.Dictionary<int, ObjectId>();
+        ObjectId StrataStyleOf(int ord)
+        {
+            if (stStrataBy.TryGetValue(ord, out var got)) return got;
+            var id = SectionCommand.EnsureProfileStyle(
+                db, cdoc, $"{SectionCommand.StrataStyleName}{ord}",
+                XsecViewCommand.StrataAciOf(ord), ltStrata, ltsS);
+            stStrataBy[ord] = id;
+            return id;
+        }
+        ObjectId stStrata = StrataStyleOf(1);   // 로그용 대표
+        ObjectId stWater = SectionCommand.EnsureProfileStyle(db, cdoc, SectionCommand.WaterStyleName, 5, ltWater, ltsW);
         // ★★★[JACK 0828 "종단에서 지층색이 반영이 안 됐어 다 초록색으로 나와"]
         //   <b>추측하지 않는다 — 무엇을 쓰는지 적어 둔다.</b>
         //   색이 안 먹는 길은 둘이다: ① 스타일을 못 만들어 <b>기본 스타일로 물러났거나</b>
@@ -474,14 +489,16 @@ public sealed class ProfileCommand
         // ★[JACK 0807] 밴드에 **원지반/계획지반을 자동 지정**하려면 만든 종단의 ObjectId를 들고 있어야 한다.
         ObjectId pidGround = ObjectId.Null, pidPad = ObjectId.Null, pidExcav = ObjectId.Null;
         // ★[JACK 0828] 이름을 적으려면 만든 지층 종단을 들고 있어야 한다.
-        var strataProfs = new System.Collections.Generic.List<(ObjectId Pid, string Nm, bool Water)>();
+        var strataProfs = new System.Collections.Generic.List<(ObjectId Pid, string Nm, bool Water, int Ord)>();
         foreach (var s in surfs)
         {
             try
             {
                 // ★[JACK 0824] 터파기 종단선만 **마젠타** 스타일로.
+                // 지층은 <b>번호마다</b> 제 색 스타일을 쓴다(이름 <c>DH_지층_3_풍화암</c> → 3번 색).
+                ObjectId stThis = s.Label == "지층" ? StrataStyleOf(StrataOrdOf(s.SurfName)) : ObjectId.Null;
                 var styleFor = s.Label == "터파기" && !excStyle.IsNull ? excStyle
-                             : s.Label == "지층" && !stStrata.IsNull ? stStrata
+                             : s.Label == "지층" && !stThis.IsNull ? stThis
                              : s.Label == "지하수위" && !stWater.IsNull ? stWater
                              : profStyle;
                 // ★★[JACK 0826 '여전히 원지반과 같은 레이어라서 같은 스타일이 먹여짐'] <b>만들 때 레이어를 가른다.</b>
@@ -504,6 +521,11 @@ public sealed class ProfileCommand
                     var lx = SectionCommand.EnsureLayerStandalone(db, SectionCommand.WaterProfLayer, SectionCommand.WaterAci);
                     if (!lx.IsNull) layerFor = lx;
                 }
+                // ★★[JACK 0831 "보통 도면에서 암선만 넣지 토사 부분까지 표현하지는 않아"]
+                //   숨긴 층은 <b>종단선을 아예 안 만든다</b> — 스타일로 숨기면 도구공간에
+                //   빈 종단이 쌓이고 밴드가 그것을 물 수도 있다.
+                //   ★<b>지표면은 그대로 있으므로 수량은 안 줄어든다.</b>
+                if (!s.Show) continue;
                 var pid = CivilDb.Profile.CreateFromSurface(s.ProfileName, alignId, s.SurfId, layerFor, styleFor, profLabels);
                 // ★[JACK 0828] 지층·지하수위는 <b>어느 레이어에 놓였는지</b> 되읽어 남긴다 —
                 //   §0826의 교훈: <c>@0</c>은 "그려진 레이어를 따른다"라 <b>레이어가 색을 준다</b>.
@@ -512,7 +534,7 @@ public sealed class ProfileCommand
                     // ★★[JACK 0828] 만들 때 레이어를 줘도 안 먹는 경우가 있다 —
                     //   터파기가 겉던 길(<c>PaintExcavProfile</c>)을 그대로 태워 다시 옮긴다.
                     SectionCommand.PaintStrataProfile(db, pid, s.Label == "지하수위");
-                    strataProfs.Add((pid, StrataDraw.ShortName(s.SurfName), s.Label == "지하수위"));
+                    strataProfs.Add((pid, StrataDraw.ShortName(s.SurfName), s.Label == "지하수위", StrataOrdOf(s.SurfName)));
                     string lnm = "?", snm = "?";
                     try
                     {
@@ -795,7 +817,12 @@ public sealed class ProfileCommand
                             {
                                 lay = ((Entity)pS).Layer;
                                 string want = it.Water ? SectionCommand.WaterProfLayer : SectionCommand.StrataProfLayer;
-                                short wantAci = it.Water ? SectionCommand.WaterAci : SectionCommand.StrataAci;
+                                // ★★★[JACK 0831 검증] <b>기대색이 옛 단일색(8)에 못 박혀 있었다.</b>
+                                //   선은 층마다 <c>StrataAciOf(ord)</c> 색으로 만드는데 재는 쪽만 8을 기대해
+                                //   <b>어느 층에서도 합격이 안 났다</b> — 로그가 매번 없는 버그를 만들어 냈다.
+                                //   색표는 <b>그리는 쪽과 재는 쪽이 같은 한 곳</b>을 봐야 한다.
+                                short wantAci = it.Water ? SectionCommand.WaterAci
+                                                         : XsecViewCommand.StrataAciOf(it.Ord);
                                 if (trS.GetObject(pS.StyleId, OpenMode.ForRead) is CivilDb.Styles.ProfileStyle sS)
                                 {
                                     using var dsS = sS.GetDisplayStyleProfile(CivilDb.Styles.ProfileDisplayStyleProfileType.Line);
@@ -2192,6 +2219,25 @@ public sealed class ProfileCommand
     ///
     /// <para>도면 관행도 이쪽이 맞다 — 옹벽은 <b>굵은 직각 선 하나</b>로 그리지 높이에 따라
     /// 굵기를 달리하지 않는다. 15cm면 1:100에서 1.5mm, 1:500에서 0.3mm다.</para></summary>
+    /// <summary>지표면 이름 <c>DH_지층_3_풍화암</c>에서 층 번호를 뽑는다. 못 뽑으면 1.</summary>
+    internal static int StrataOrdOf(string surfName)
+    {
+        try
+        {
+            string nm = surfName ?? "";
+            if (!nm.StartsWith(StrataDraw.SurfPrefix, System.StringComparison.Ordinal)) return 1;
+            string rest = nm.Substring(StrataDraw.SurfPrefix.Length);
+            int us = rest.IndexOf('_');
+            return int.TryParse(us > 0 ? rest.Substring(0, us) : rest, out int o) ? o : 1;
+        }
+        catch { return 1; }
+    }
+
+    /// <summary>★[JACK 0831] 종단 지층 이름 글자 — <b>종이 mm</b>. 밴드 글자(2.5mm)보다 작게 둔다.
+    /// <para>JACK: <i>"크게 중요한 정보는 아니기 때문에 축척에 맞게 조절하되 좀 작게."</i>
+    /// 지층 이름은 <b>어느 선이 무엇인지</b>만 알려 주면 되는 곁들이다.</para></summary>
+    private const double ProfStrataNameMm = 1.8;
+
     private const double BarWidth = 0.15;   // 단높이 상한 15m × 구배 하한 0.01
 
     /// <summary>★[JACK 0825] 벽 앞·뒤 자리에서 종단을 읽어 막대의 위·아래를 정한다.
@@ -2236,19 +2282,39 @@ public sealed class ProfileCommand
     /// <para>글자 높이는 <b>종단뷰가 실제로 차지한 높이</b>에서 뽑는다 — 종단은 세로를 부풀려
     /// 그리는 일이 많아(수직 과장) 평면 축척을 그대로 쓰면 글씨가 화면을 덮는다.</para></summary>
     private static int DrawProfStrataNames(Database db, ObjectId pvId,
-        System.Collections.Generic.List<(ObjectId Pid, string Nm, bool Water)> items,
+        System.Collections.Generic.List<(ObjectId Pid, string Nm, bool Water, int Ord)> items,
         System.Text.StringBuilder log)
     {
         if (pvId.IsNull || items == null || items.Count == 0) return 0;
         int n = 0, miss = 0, nWiped = 0;
+        double logH = 0, logScale = 0;   // 로그용 — 실제로 쓴 글자 높이를 적는다
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
             if (tr.GetObject(pvId, OpenMode.ForRead) is not CivilDb.ProfileView pv) { tr.Commit(); return 0; }
             var ext = ((Entity)pv).GeometricExtents;
             double drawH = ext.MaxPoint.Y - ext.MinPoint.Y;
-            double txtH = System.Math.Max(0.3, drawH * 0.025);
+            // ★★★[JACK 0831 "지층에 나오는 문자가 너무 커. 크게 중요한 정보는 아니기 때문에
+            //   축척에 맞게 조절하되 좀 작게 해 줘"]
+            //
+            //   <b>원인: 축척이 아니라 뷰 높이에 비례시켰다.</b> 종단은 세로를 부풀려 그리는 일이 많아
+            //   "뷰 높이의 2.5%"로 잡았는데, 표고 범위가 넓은 도면에서는 그 2.5%가 <b>몇 미터</b>가 된다 —
+            //   밴드 글자(2mm)나 축 숫자보다 <b>몇 배 큰</b> 글씨가 나왔다(JACK 스샷).
+            //
+            //   → 이 저장소가 다른 글씨에 쓰는 그 방식으로 바꾼다: <b>종이 mm × 도면 축척</b>.
+            //     지층 이름은 <b>곁들이 정보</b>라 밴드 글자보다도 작게 둔다.
+            //   ※축척을 못 읽는 도면에서만 옛 방식으로 물러나되, 비율을 <b>절반</b>으로 낮춘다.
+            double dwgScale = 0;
+            try
+            {
+                if (db.Cannoscale is Autodesk.AutoCAD.DatabaseServices.AnnotationScale asc
+                    && System.Math.Abs(asc.PaperUnits - 1000.0) < 1e-6) dwgScale = asc.DrawingUnits;
+            }
+            catch { }
+            double txtH = dwgScale > 0 ? ProfStrataNameMm / 1000.0 * dwgScale
+                                       : System.Math.Max(0.2, drawH * 0.012);
             double gap = txtH * 0.4;
+            logH = txtH; logScale = dwgScale;
             double st0 = pv.StationStart, st1 = pv.StationEnd;
             double step = System.Math.Max(0.5, (st1 - st0) / 200.0);
 
@@ -2298,6 +2364,10 @@ public sealed class ProfileCommand
                     var lay = it.Water ? layW : layS;
                     if (!lay.IsNull) t.LayerId = lay;
                     if (!kst.IsNull) t.TextStyleId = kst;
+                    // ★[JACK 0831] 글자를 그 층 <b>선과 같은 색</b>으로 — 짝인 것이 한눈에 보여야 한다.
+                    t.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
+                        Autodesk.AutoCAD.Colors.ColorMethod.ByAci,
+                        it.Water ? SectionCommand.WaterAci : XsecViewCommand.StrataAciOf(it.Ord));
                     var p = new Point3d(tx + gap, ty + gap, 0);
                     t.Position = p; t.AlignmentPoint = p;
                     ms.AppendEntity(t); tr.AddNewlyCreatedDBObject(t, true);
@@ -2310,6 +2380,7 @@ public sealed class ProfileCommand
         catch (System.Exception ex) { log?.AppendLine("  종단 지층이름 실패 — " + ex.Message); return 0; }
 
         log?.AppendLine($"  종단 지층이름 {n}개 — 각 선 <b>왼쪽 끝 위</b>에 직접 씀"
+                      + $" · 글자 {(logScale > 0 ? $"종이 {ProfStrataNameMm:0.#}mm × 축척 {logScale:0.#} = 모형 {logH:F2}m" : $"모형 {logH:F2}m(축척을 못 읽어 뷰 높이로 정함)")}"
                       + (nWiped > 0 ? $" · 옛것 {nWiped}개 지움" : "")
                       + (miss > 0 ? $" · ⚠자리를 못 잡은 것 {miss}개(종단뷰 범위 밖)" : ""));
         return n;

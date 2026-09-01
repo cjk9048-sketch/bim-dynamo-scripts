@@ -36,8 +36,11 @@ public sealed class GradingDialog : Window
     private static readonly SolidColorBrush BlackBrush = new(Colors.Black);
 
     // 좌표계 드롭박스 — 표시 라벨과 대응 EPSG(신 2010 N+600000 먼저, 그다음 구 N+500000, 제주). 순서 일치 필수.
-    private static readonly int[] EpsgCodes = { 5186, 5185, 5187, 5188, 5181, 5180, 5183, 5184, 5182 };
-    private static readonly string[] CoordLabels =
+    /// <summary>★<b>이 목록이 정본</b>이다(§50). 지도 도킹바도 이것을 그대로 쓴다 —
+    /// [JACK 0901 "그냥 깔끔하게 정지옵션에서 쓰는 좌표계 이름으로 넣어"].
+    /// 이름을 두 곳에 적으면 한쪽만 고쳐 놓고 왜 다른지 모르게 된다.</summary>
+    internal static readonly int[] EpsgCodes = { 5186, 5185, 5187, 5188, 5181, 5180, 5183, 5184, 5182 };
+    internal static readonly string[] CoordLabels =
     {
         "중부원점 127° (신, 5186)", "서부원점 125° (신, 5185)", "동부원점 129° (신, 5187)", "동해원점 131° (신, 5188)",
         "중부원점 127° (구, 5181)", "서부원점 125° (구, 5180)", "동부원점 129° (구, 5183)", "동해원점 131° (구, 5184)",

@@ -68,6 +68,7 @@
   <!-- [JACK 0731] 사내 PostGIS(등고선·지적도) 직결용. AutoCAD와의 어셈블리 충돌을 피하려고
        로깅/기타 부수 패키지는 끌어오지 않는 최소 구성으로 쓴다(Npgsql 단독). -->
   <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2478.35" />
     <PackageReference Include="Npgsql" Version="8.0.3" />
   </ItemGroup>
 
@@ -78,5 +79,15 @@
          사용자가 dwt 파일을 따로 챙기거나 경로를 맞출 필요가 없게 하려는 것. -->
     <EmbeddedResource Include="Resources\DHT.dwt" />
   </ItemGroup>
+
+  <!--
+    ★WebView2 네이티브 로더를 <b>출력 폴더 바로 밑</b>에도 둔다.
+    NuGet은 runtimes/win-x64/native/ 아래에 넣는데, AutoCAD가 NETLOAD로 우리를 불러올 때는
+    deps.json 규칙이 안 도므로 그 경로를 못 찾는다 — 옆에 있어야 찾는다.
+  -->
+  <Target Name="CopyWebView2Loader" AfterTargets="Build">
+    <Copy SourceFiles="$(NuGetPackageRoot)microsoft.web.webview2\1.0.2478.35\runtimes\win-x64\native\WebView2Loader.dll"
+          DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" ContinueOnError="true" />
+  </Target>
 
 </Project>

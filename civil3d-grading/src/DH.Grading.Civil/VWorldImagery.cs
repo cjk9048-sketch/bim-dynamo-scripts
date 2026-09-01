@@ -14,7 +14,9 @@ namespace DH.Grading.Civil;
 ///   InfraWorks가 모델 좌표계로 재투영해 지형 위에 드리운다. (AutoCAD 의존성 없음 — 단독 테스트 가능)</summary>
 public static class VWorldImagery
 {
-    private const string ApiKey = "8EA87CD2-C75D-3407-A41C-D1FBE9B33CAA";
+    /// <summary>VWorld 키 — 타일과 <b>지도 팝업</b>이 같은 것을 쓴다.
+    /// <para>★[JACK 0901] 키를 두 곳에 적지 않는다(§50) — <c>MapPage</c>가 여기서 읽어 간다.</para></summary>
+    internal const string ApiKey = "8EA87CD2-C75D-3407-A41C-D1FBE9B33CAA";
     private const string Layer = "Satellite";
     private const int TileSize = 256;
     private const int MaxZoom = 19;           // 위성 최대 줌(≈0.24m/px @위도37°) — JACK: 항상 최고해상도만
@@ -330,53 +332,14 @@ public static class VWorldImagery
         return ((int)System.Math.Clamp(xi, 0, max), (int)System.Math.Clamp(yi, 0, max));
     }
 
-    // 한국 평면직각 TM(GRS80) 역투영 → 경도·위도(도). lat0=38°, k0=1, FE=200000 공통.
-    //   lon0Deg=중앙자오선 경도, FN=원점가산 N — 원점(서부/중부/동부/동해)·신구에 따라 달라짐.
+    /// <summary>한국 평면직각 TM(GRS80) 역투영 → 경도·위도(도).
+    /// <para>★★<b>식은 <see cref="DH.Grading.Core.KoreaTm"/> 한 곳에만 둔다</b>(§50).
+    /// 예전에는 여기 private으로 같은 식이 한 벌 더 있었다 — 상수를 한쪽만 고치면
+    /// 배경지도와 [지도범위]가 <b>서로 다른 자리</b>를 가리키는데 아무 오류도 안 난다.
+    /// 지우기 전에 하니스 S93이 옛 식과 맞대 <b>1092점 전부 같은 값</b>임을 확인했다.</para></summary>
     private static (double lon, double lat) TmToLonLat(double E, double N, double lon0Deg, double FN)
     {
-        const double a = 6378137.0;             // GRS80 장반경
-        const double f = 1.0 / 298.257222101;   // GRS80 편평률
-        const double k0 = 1.0, FE = 200000.0;
-        const double lat0 = 38.0 * System.Math.PI / 180.0;
-        double lon0 = lon0Deg * System.Math.PI / 180.0;
-
-        double e2 = 2 * f - f * f;              // 제1이심률²
-        double ep2 = e2 / (1 - e2);             // 제2이심률²
-
-        double M0 = MeridArc(lat0, a, e2);
-        double M = M0 + (N - FN) / k0;
-        double mu = M / (a * (1 - e2 / 4 - 3 * e2 * e2 / 64 - 5 * e2 * e2 * e2 / 256));
-        double e1 = (1 - System.Math.Sqrt(1 - e2)) / (1 + System.Math.Sqrt(1 - e2));
-
-        double phi1 = mu
-            + (3 * e1 / 2 - 27 * System.Math.Pow(e1, 3) / 32) * System.Math.Sin(2 * mu)
-            + (21 * e1 * e1 / 16 - 55 * System.Math.Pow(e1, 4) / 32) * System.Math.Sin(4 * mu)
-            + (151 * System.Math.Pow(e1, 3) / 96) * System.Math.Sin(6 * mu)
-            + (1097 * System.Math.Pow(e1, 4) / 512) * System.Math.Sin(8 * mu);
-
-        double sinp = System.Math.Sin(phi1), cosp = System.Math.Cos(phi1), tanp = System.Math.Tan(phi1);
-        double C1 = ep2 * cosp * cosp;
-        double T1 = tanp * tanp;
-        double N1 = a / System.Math.Sqrt(1 - e2 * sinp * sinp);
-        double R1 = a * (1 - e2) / System.Math.Pow(1 - e2 * sinp * sinp, 1.5);
-        double D = (E - FE) / (N1 * k0);
-
-        double lat = phi1 - (N1 * tanp / R1) * (D * D / 2
-            - (5 + 3 * T1 + 10 * C1 - 4 * C1 * C1 - 9 * ep2) * System.Math.Pow(D, 4) / 24
-            + (61 + 90 * T1 + 298 * C1 + 45 * T1 * T1 - 252 * ep2 - 3 * C1 * C1) * System.Math.Pow(D, 6) / 720);
-        double lon = lon0 + (D
-            - (1 + 2 * T1 + C1) * System.Math.Pow(D, 3) / 6
-            + (5 - 2 * C1 + 28 * T1 - 3 * C1 * C1 + 8 * ep2 + 24 * T1 * T1) * System.Math.Pow(D, 5) / 120) / cosp;
-
-        return (lon * 180.0 / System.Math.PI, lat * 180.0 / System.Math.PI);
-    }
-
-    // 적도~위도 phi 자오선호 길이.
-    private static double MeridArc(double phi, double a, double e2)
-    {
-        return a * ((1 - e2 / 4 - 3 * e2 * e2 / 64 - 5 * e2 * e2 * e2 / 256) * phi
-            - (3 * e2 / 8 + 3 * e2 * e2 / 32 + 45 * e2 * e2 * e2 / 1024) * System.Math.Sin(2 * phi)
-            + (15 * e2 * e2 / 256 + 45 * e2 * e2 * e2 / 1024) * System.Math.Sin(4 * phi)
-            - (35 * e2 * e2 * e2 / 3072) * System.Math.Sin(6 * phi));
+        var v = DH.Grading.Core.KoreaTm.ToLonLat(E, N, lon0Deg, FN);
+        return (v.Lon, v.Lat);
     }
 }

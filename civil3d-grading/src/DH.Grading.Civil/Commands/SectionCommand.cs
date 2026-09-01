@@ -162,6 +162,9 @@ public sealed class SectionCommand
                              : s.Label == "지층" && !stS.IsNull ? stS
                              : s.Label == "지하수위" && !stW.IsNull ? stW
                              : profStyle;
+                // ★[JACK 0831] 도면에 안 보일 층은 <b>종단선을 아예 안 만든다</b> —
+                //   스타일로 숨기면 도구공간에 빈 종단이 쌓이고, 밴드가 그것을 물 수도 있다.
+                if (!s.Show) continue;
                 var pid0 = CivilDb.Profile.CreateFromSurface(s.ProfileName, alignId, s.SurfId, layerId, styleFor, profLabels);
                 if (s.Label == "터파기") PaintExcavProfile(db, pid0);   // ★[JACK 0825] 스타일만으론 안 된다(ByLayer가 이긴다)
                 else if (s.Label == "지층") PaintStrataProfile(db, pid0, false);
@@ -283,7 +286,12 @@ public sealed class SectionCommand
     // ── 지표면 찾기 ──────────────────────────────────────────────────────────
 
     /// <summary>종단에 쓸 지표면(원지반·정지면) — 있는 것만 모은다.</summary>
-    internal readonly record struct SurfPick(ObjectId SurfId, string SurfName, string ProfileName, string Label);
+    /// <param name="Show">도면(종단·횡단)에 <b>선을 그릴까</b>.
+    /// <para>★★[JACK 0831 "보통 도면에서 암선만 넣지 토사 부분까지 표현하지는 않아"]
+    /// <b>안 그린다고 지표면을 안 만드는 것은 아니다</b> — 수량은 모든 층이 있어야 갈린다.
+    /// 그래서 지표면은 늘 만들고 <b>보일지만</b> 여기서 가른다.</para></param>
+    internal readonly record struct SurfPick(ObjectId SurfId, string SurfName, string ProfileName, string Label,
+                                             bool Show = true);
 
     /// <summary>★[JACK 0824] 터파기 종단 이름 — 원지반·정지면과 나란히 놓인다.</summary>
     internal const string ProfExcavName = "DH_터파기";
@@ -502,8 +510,11 @@ public sealed class SectionCommand
     ///
     /// <para><b>선종류를 갈라 쓴다</b>: 터파기 <c>DASHED</c>(긴 파선) · 지층 <c>HIDDEN</c>(짧은 점선) ·
     /// 지하수위 <c>DASHDOT</c>(일점쇄선). 일점쇄선은 도면에서 <b>수위·중심선</b>에 쓰는 관례라 뜻도 맞는다.</para></summary>
+    /// <summary>★[JACK 0831] <c>ltScale</c> — 점선 <b>무늬 크기</b>. 안 주면 도면 값을 따른다.
+    /// <para>부지가 수백 m면 기본 무늬는 듬성듬성해 보인다(JACK 스샷). 부르는 쪽이 재서 넘긴다.</para></summary>
     internal static ObjectId EnsureProfileStyle(Database db, CivilApp.CivilDocument cdoc,
-                                                string name, short aci, string linetype)
+                                                string name, short aci, string linetype,
+                                                double ltScale = 0)
     {
         try
         {
@@ -543,7 +554,11 @@ public sealed class SectionCommand
                             ds.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
                                 Autodesk.AutoCAD.Colors.ColorMethod.ByAci, aci);
                         ds.Visible = true;
-                        if (linetype != null) { try { ds.Linetype = linetype; } catch { } }
+                        if (linetype != null)
+                        {
+                            try { ds.Linetype = linetype; } catch { }
+                            if (ltScale > 1e-9) { try { ds.LinetypeScale = ltScale; } catch { } }
+                        }
                         try { if (ds.Layer != "0") ds.Layer = "0"; } catch { }
                     }
                     catch { }
@@ -552,6 +567,33 @@ public sealed class SectionCommand
             return id;
         }
         catch { return ObjectId.Null; }
+    }
+
+    /// <summary>★★[JACK 0831] 점선 한 무늬가 도면에서 차지할 길이(m) — <b>작을수록 촘촘하다</b>.
+    /// <para>횡단(<c>XsecViewCommand.DashPatternM</c>)과 <b>같은 값이라야</b> 종단·횡단이 같아 보인다.</para></summary>
+    internal const double DashPatternM = 0.5;
+
+    /// <summary>선종류의 <b>실제 무늬 길이</b>를 재서 <see cref="DashPatternM"/>이 되도록 배율을 낸다.
+    /// <para>도면의 <c>LTSCALE</c>이 얼마든 결과가 같아진다 — 기계마다 다르게 보이지 않는다.</para></summary>
+    internal static double LtScaleFor(Database db, string lt)
+    {
+        if (lt == null) return 0;
+        double pat = 0;
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var ltt = (LinetypeTable)tr.GetObject(db.LinetypeTableId, OpenMode.ForRead);
+            if (ltt.Has(lt) && tr.GetObject(ltt[lt], OpenMode.ForRead) is LinetypeTableRecord r)
+                pat = System.Math.Abs(r.PatternLength);
+            tr.Commit();
+        }
+        catch { }
+        if (pat < 1e-9) return 0;
+        double gl = 1.0;
+        try { gl = db.Ltscale; } catch { }
+        if (gl < 1e-9) gl = 1.0;
+        double v = DashPatternM / (pat * gl);
+        return v > 1e-6 && v < 1e6 ? v : 0;
     }
 
     /// <summary>선종류를 도면에 싣는다(없으면). 못 실으면 <c>null</c>.</summary>
@@ -623,6 +665,15 @@ public sealed class SectionCommand
                             ds.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
                                 Autodesk.AutoCAD.Colors.ColorMethod.ByAci, Magenta);
                         ds.Visible = true;
+                        // ★★★[JACK 0831 "횡단과 종단의 터파기 선은 실선으로 바꿔.
+                        //   점선이다 보니깐 연암하고 경암하고 헷갈려"]
+                        //   <b>맞는 지적이다.</b> 0828에 지층을 점선으로 깔면서 도면에 점선이 <b>일곱 줄</b>이 됐다 —
+                        //   터파기까지 점선이면 <b>무엇이 계획이고 무엇이 지층인지</b> 구분이 안 된다.
+                        //   터파기는 우리가 만드는 <b>계획선</b>이고 지층은 <b>현황</b>이라,
+                        //   실선/점선으로 가르는 편이 뜻에도 맞는다.
+                        //   ★<b>적극적으로 실선을 지정한다</b> — 스타일은 도면에 남아 있어서
+                        //     그냥 두면 옛 판이 심어 둔 <c>DASHED</c>가 계속 살아 있다.
+                        try { if (ds.Linetype != "Continuous") ds.Linetype = "Continuous"; } catch { }
                         // ★[JACK 0825] 표시 레이어를 <b>0</b>으로 못 박는다.
                         //   Civil 문서: 컴포넌트의 Layer는 "값이 ByLayer일 때 참조된다"이고
                         //   0은 "그려진 레이어와 같다"는 뜻이다. 색을 명시했으니 원칙상 무관하지만,
@@ -779,10 +830,11 @@ public sealed class SectionCommand
                     string nm = s.Name ?? "";
                     if (nm == StrataDraw.WaterSurfName) { water = sid; waterNm = nm; continue; }
                     if (!nm.StartsWith(StrataDraw.SurfPrefix, System.StringComparison.Ordinal)) continue;
-                    // 이름이 <c>DH_지층_3_풍화암</c>이므로 앞머리를 떼고 첫 숫자를 차례로 쓴다.
-                    string rest = nm.Substring(StrataDraw.SurfPrefix.Length);
-                    int us = rest.IndexOf('_');
-                    int ord = int.TryParse(us > 0 ? rest.Substring(0, us) : rest, out int o) ? o : 999;
+                    // ★★[JACK 0831 · 검토 LOW-10] <b>차례를 뽑는 규칙은 한 벌뿐이다.</b>
+                    //   종전엔 여기가 못 뽑으면 <c>999</c>, <c>ProfileCommand</c>는 <c>1</c>이었다 —
+                    //   같은 이름을 두 곳이 다르게 판정하면 <b>종단이 그리는 차례와 수량이 세는 차례가
+                    //   갈린다</b>. 지금은 안 터지지만 규칙이 두 벌인 것 자체가 §50이 경계한 자리다.
+                    int ord = ProfileCommand.StrataOrdOf(nm);
                     found.Add((ord, sid, nm));
                 }
                 catch { }
@@ -790,8 +842,10 @@ public sealed class SectionCommand
             tr.Commit();
 
             found.Sort((a, b) => a.Ord.CompareTo(b.Ord));
-            foreach (var f in found) list.Add(new SurfPick(f.Id, f.Nm, f.Nm, "지층"));
-            if (!water.IsNull) list.Add(new SurfPick(water, waterNm, waterNm, "지하수위"));
+            foreach (var f in found)
+                list.Add(new SurfPick(f.Id, f.Nm, f.Nm, "지층", StrataDraw.ShowOf(f.Id)));
+            if (!water.IsNull)
+                list.Add(new SurfPick(water, waterNm, waterNm, "지하수위", StrataDraw.ShowOf(water)));
         }
         catch { }
     }

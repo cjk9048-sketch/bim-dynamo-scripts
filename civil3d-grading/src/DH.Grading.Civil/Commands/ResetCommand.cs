@@ -1,4 +1,4 @@
-﻿using Autodesk.AutoCAD.ApplicationServices;
+using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Runtime;
@@ -41,10 +41,10 @@ public sealed class ResetCommand
 
         // 되돌릴 수 없는(정지 산출물 삭제) 작업이라 확인부터 — Ctrl+Z 대체가 목적이므로 명확히 알린다.
         var answer = System.Windows.MessageBox.Show(
-            "정지면 생성 전(원지반 + 계획폴리곤) 상태로 초기화합니다.\n\n" +
-            "· 정지 지표면(정지면_DH 등)과 터파기 지표면, 사면선·소단선·노리선·옹벽선 등\n" +
-            "  DH가 만든 객체를 모두 지웁니다.\n" +
-            "· 원지반과 계획폴리곤은 그대로 둡니다.\n\n" +
+            "DH가 만든 것을 모두 지웁니다.\n\n" +
+            "· 정지·터파기 지표면, 사면선·소단선·노리선·옹벽선 등\n" +
+            "· 서버에서 가져온 등고선·지적도·지번, 그리고 '원지반'\n\n" +
+            "계획폴리곤(직접 그린 것)은 남깁니다.\n\n" +
             "계속할까요?",
             "DH 정지 — 초기화",
             System.Windows.MessageBoxButton.YesNo,
@@ -57,14 +57,16 @@ public sealed class ResetCommand
 
         try
         {
-            // 가져온 데이터(등고선·지적도·지번)와 '원지반'은 보존 — 원지반으로 다시 정지하면 되므로.
-            var (surfs, ents, bundleCleared) = ResetCore(doc, includeImported: false);
+            // ★[JACK 0901 "초기화 누르면 서버지표면으로 가져온 자료도 다 초기화되게"]
+            //   예전에는 등고선·지적도·원지반을 남겼다 — 원지반으로 다시 정지하면 되니까.
+            //   지금은 <b>지도에서 다시 받는 것이 몇 초</b>라 남길 이유가 없어졌다.
+            var (surfs, ents, bundleCleared) = ResetCore(doc, includeImported: true);
             ed.Regen();
             string msg = $"초기화 완료 — 지표면 {surfs}개 · 객체 {ents}개 삭제" +
                          (bundleCleared ? " · 정지 기록 제거" : "");
-            ed.WriteMessage("\n[초기화] " + msg + "\n원지반과 계획폴리곤만 남았습니다. 정지면 생성부터 다시 시작하세요.");
-            AcadApp.ShowAlertDialog("DH 정지 — 초기화 완료\n\n" + msg +
-                "\n\n원지반과 계획폴리곤만 남았습니다.\n정지면 생성부터 다시 시작하세요.");
+            ed.WriteMessage("\n[초기화] " + msg + " · 계획폴리곤만 남음");
+            AcadApp.ShowAlertDialog("초기화 완료\n\n" + msg +
+                "\n\n계획폴리곤만 남았습니다.\n[서버 지표면]부터 다시 시작하세요.");
             try { DiagLog.Append($"\n■ DHRESET(초기화)\n  {msg}\n"); } catch { }
         }
         catch (System.Exception ex)

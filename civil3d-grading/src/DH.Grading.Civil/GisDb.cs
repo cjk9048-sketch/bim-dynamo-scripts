@@ -46,11 +46,17 @@ internal static class GisDb
     }
 
     /// <summary>접속 가능 여부 빠른 확인(사내망 판정). 실패 사유 반환.</summary>
+    /// <summary>서버가 살아 있나 — <b>짧게</b> 물어본다.
+    /// <para>★★이건 <b>명령 스레드에서</b> 도는 확인이라 오래 걸리면 AutoCAD가 하얘진다.
+    /// VPN이 꺼져 있으면 없는 주소로 거는 셈이라 기본값(15초)을 다 채운다 — 그 사이 "응답 없음"이 붙는다.
+    /// 살았는지 죽었는지만 알면 되므로 <b>3초</b>면 충분하다(검토 0901).</para></summary>
     public static bool CanConnect(out string reason)
     {
         try
         {
-            using var c = new NpgsqlConnection(ConnString);
+            var probe = System.Text.RegularExpressions.Regex.Replace(
+                ConnString, @"Timeout=[0-9]+", "Timeout=3");
+            using var c = new NpgsqlConnection(probe);
             c.Open();
             reason = "";
             return true;

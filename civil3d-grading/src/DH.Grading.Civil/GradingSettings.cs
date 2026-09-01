@@ -536,6 +536,10 @@ public static class GradingSettings
         {
             using var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(PrefsRegKey);
             if (k?.GetValue("MiterConvex") is int v) MiterConvex = v != 0;
+            // ★[JACK 0831] 보링공 표식 크기 — 부지마다 알맞은 값이 달라 한 번 맞추면 계속 쓴다.
+            //   레지스트리에 실수를 못 넣으므로 <b>100배 정수</b>로 담는다(×1.4 → 140).
+            if (k?.GetValue("StrataMarkScale") is int ms && ms >= 20 && ms <= 260)
+                StrataDraw.MarkScale = ms / 100.0;
         }
         catch { }
     }
@@ -560,6 +564,9 @@ public static class GradingSettings
         {
             using var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(PrefsRegKey);
             k?.SetValue("MiterConvex", MiterConvex ? 1 : 0, Microsoft.Win32.RegistryValueKind.DWord);
+            k?.SetValue("StrataMarkScale",
+                        (int)System.Math.Round(System.Math.Max(0.2, System.Math.Min(2.6, StrataDraw.MarkScale)) * 100),
+                        Microsoft.Win32.RegistryValueKind.DWord);
         }
         catch { }
     }

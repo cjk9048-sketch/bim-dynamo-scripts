@@ -1,4 +1,4 @@
-﻿using System.Windows;
+using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -32,6 +32,8 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SheetSettingsCommand))]       // DHSHEETSET(도면 설정 — 횡단·원지반굴곡·표·배경지도)
 [assembly: CommandClass(typeof(DH.Grading.Civil.StrataPalette))]                       // DHSTRATA(지층 구성 — 우측 도킹바)
 [assembly: CommandClass(typeof(DH.Grading.Civil.StrataDraw))]                          // DHSTRATAPICK(평면에서 시추 위치 찍기)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.MapPickCommand))]            // DHMAPPICK(지도에서 범위 고르기)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.MapPalette))]                // DHCONTOURBOX(지도 도킹바가 넘긴 범위로 지표면 가져오기)
 
 namespace DH.Grading.Civil;
 
@@ -61,6 +63,19 @@ public sealed class RibbonApp : IExtensionApplication
         //   그 시점에 DocumentManager를 순회하거나 트랜잭션을 여는 것은 위험하다 —
         //   리본 만들기·좌표계 검사도 같은 이유로 이미 Idle에 넘기고 있었는데 이것만 규칙을 벗어났다.
         AcadApp.Idle += OnIdleHookDocs;
+
+        // ★★[JACK 0831 "civil3d를 키면 바로 지층구성 도킹바가 떠 있는데 지층구성을 눌러야만 뜨게 해줘"]
+        //   GUID를 뗀 것으로 끝날 일이지만, <b>제멋대로 뜨지 않는다</b>는 것은 JACK이 직접 말한 요건이라
+        //   시작이 끝난 뒤 <b>한 번 더 확인한다</b>. 여기(Initialize)가 아니라 Idle인 이유는 위와 같다 —
+        //   시작 도중에는 창을 만지는 것도 위험하다.
+        AcadApp.Idle += OnIdleCloseStrata;
+    }
+
+    /// <summary>시작 직후 한 번 — 사용자가 안 눌렀는데 떠 있는 지층 구성 창을 닫는다.</summary>
+    private void OnIdleCloseStrata(object? sender, System.EventArgs e)
+    {
+        AcadApp.Idle -= OnIdleCloseStrata;
+        try { StrataPalette.CloseIfNotAsked(); } catch { }
     }
 
     /// <summary>★[JACK 0826] 시작이 끝난 뒤(첫 Idle) 문서 이벤트를 단다 — 한 번만.</summary>
@@ -367,7 +382,7 @@ public sealed class RibbonApp : IExtensionApplication
             btnStrata.ToolTip = MakeTip("지층 구성 (DHSTRATA)",
                 "우측에 도킹창이 열립니다.\n" +
                 "**① 지층**을 정하고(이름은 조사보고서 그대로, 수량 분류는 다섯 중 하나)\n" +
-                "**② 평면에서 찍기**로 시추 위치를 클릭하면 `GP1`부터 차례로 표에 들어갑니다.\n" +
+                "**② 평면에서 찍기**로 시추 위치를 클릭하면 `BH1`부터 차례로 표에 들어갑니다.\n" +
                 "지반고는 **원지반에서 자동으로 읽습니다** — 사람이 치는 것은 **각 층의 두께**뿐입니다.\n" +
                 "**[확인]**을 누르면 지층면이 만들어집니다(평면에서는 숨겨 둡니다 — 종단·횡단에서만 보입니다).", null);
             pDraw.Items.Add(btnStrata);
@@ -396,11 +411,16 @@ public sealed class RibbonApp : IExtensionApplication
             pImport.Items.Add(btnParcel);
             pImport.Items.Add(Spacer());
             var btnContour = MakeButton(
-                "서버\n지표면", "DHCONTOUR ", "범위를 찍으면 서버에서 수치지형도 등고선을 3D로 가져오고 '원지반' 지표면까지 자동 생성", "등고선");
+                "서버\n지표면", "DHCONTOUR ", "지도 도킹바가 열립니다 — 지도에서 박스로 범위를 고르면 그 자리의 수치지형도 등고선을 3D로 가져오고 '원지반' 지표면까지 자동 생성(지적도 동시 가능)", "등고선");
             btnContour.ToolTip = MakeTip("서버지표면 (DHCONTOUR)",
-                "범위 두 모서리를 클릭하면 사내 서버에서 수치지형도 등고선(5m/계곡선 25m)을\n" +
-                "표고가 들어간 3D 선으로 가져오고, 곧바로 '원지반' 지표면을 만듭니다.\n" +
-                "만들어진 원지반으로 바로 [정지면 생성]을 실행하면 됩니다.", null);
+                "누르면 오른쪽에 <b>지도 도킹바</b>가 열립니다(항공사진·지적도).\n" +
+                "지도에서 모서리 두 곳을 클릭해 범위를 정하고 [이 범위 가져오기]를 누르면\n" +
+                "그 자리의 등고선이 도면 좌표로 들어오고 도킹바는 스스로 닫힙니다.\n\n" +
+                "빈 도면에서 시작할 때 쓰세요 — 검은 화면에서 찍을 곳을 찾지 않아도 됩니다.\n\n" +
+                "· [지적도도 같이]를 체크하면 같은 범위의 지적도까지 한 번에 들어옵니다.\n" +
+                "· 사내 서버의 수치지형도 등고선을 표고가 들어간 3D 선으로 가져오고,\n" +
+                "  곧바로 '원지반' 지표면을 만듭니다(등고선 표시 주 5m·보조 1m).\n" +
+                "· 만들어진 원지반으로 바로 [정지면 생성]을 실행하면 됩니다.", null);
             pImport.Items.Add(btnContour);
             pImport.Items.Add(Spacer());
 

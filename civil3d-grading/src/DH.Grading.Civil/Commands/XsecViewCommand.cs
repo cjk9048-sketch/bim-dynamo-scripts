@@ -126,9 +126,13 @@ public sealed class XsecViewCommand
         // ── ③ 놓을 자리.
         // ★★[JACK 0826] 배치는 <b>도면 설정</b>에서 고른다 — 여기서 묻지 않는다.
         //   JACK: <i>"횡단도 단추는 누르고 찍으면 바로 생기게 해 줘."</i>
-        // ★[JACK 0826] <b>지난번 것을 먼저 지운다</b> — 안 지우면 유령이 겹친다.
-        WipeOld(db, log);
-        WipeOldGroups(db, cdoc, alignId, log);   // ★Civil이 만든 그룹·뷰도 함께
+        // ★★★[JACK 0831 검증] <b>지우기가 묻기보다 앞에 있었다 — "취소"가 취소가 아니었다.</b>
+        //   <c>WipeOld</c>·<c>WipeOldGroups</c>는 각자 트랜잭션을 <b>커밋까지</b> 끝낸다.
+        //   그 뒤에 자리를 묻고 Esc면 아무것도 안 그리고 돌아간다 —
+        //   즉 지난번 횡단면도·도곽·수량표·검토선그룹이 <b>이미 다 지워진 빈 도면</b>이 되고
+        //   화면에는 "취소"라고만 뜬다. 되돌릴 길이 없다.
+        //   이 함수의 다른 이탈 경로는 전부 지우기 <b>앞</b>에 있는데 이 하나만 뒤에 있었다.
+        //   → <b>자리를 먼저 받는다.</b> 지우기는 다시 그릴 것이 확정된 뒤에만.
         Point3d at;
         if (at0 != null) { at = at0.Value; log.AppendLine("  자리는 지난번 그대로(측점을 고쳐 다시 그린다)"); }
         else
@@ -138,6 +142,11 @@ public sealed class XsecViewCommand
             at = pr.Value.TransformBy(ed.CurrentUserCoordinateSystem);
         }
         LastAt = at;   // ★다음에 측점을 고치면 이 자리에 다시 그린다
+
+        // ★[JACK 0826] <b>지난번 것을 지운다</b> — 안 지우면 유령이 겹친다.
+        //   ★자리를 받은 <b>뒤</b>라야 한다(위 주석) — 다시 그릴 것이 확정된 다음에만 지운다.
+        WipeOld(db, log);
+        WipeOldGroups(db, cdoc, alignId, log);   // ★Civil이 만든 그룹·뷰도 함께
 
         // ── ④ 횡단용 검토선 그룹 — 벽 자리는 (전)(후) 둘.
         // ★★[JACK 0826 "지금 종단뷰도 도곽 사이즈에 맞춰서 최적 축척으로 들어가는 거잖아,
@@ -198,7 +207,10 @@ public sealed class XsecViewCommand
                 var g = (CivilDb.SampleLineGroup)trS.GetObject(groupId, OpenMode.ForWrite);
                 foreach (CivilDb.SectionSource src in g.GetSectionSources())
                 {
-                    bool ours = surfs.Exists(x => x.SurfId == src.SourceId);
+                    // ★★[JACK 0831] <b>도면에 안 보일 층은 단면을 안 뜬다.</b>
+                    //   수량은 지표면을 <b>직접 훑어</b> 재므로(CachedGroundSurface) 단면이 없어도 멀쩡하다 —
+                    //   즉 토사를 꺼도 토적표의 토사 물량은 그대로다.
+                    bool ours = surfs.Exists(x => x.SurfId == src.SourceId && x.Show);
                     // ★[검토] 여기가 조용히 실패하면 단면이 안 잡혀 <b>선 색도 수량도</b> 못 낸다.
                     try { src.IsSampled = ours; if (ours) nSampled++; }
                     catch (System.Exception exS) { sampErr ??= exS.Message; }
@@ -389,6 +401,12 @@ public sealed class XsecViewCommand
             catch (System.Exception ex) { log.AppendLine("  Civil 기본 제목 끄기 실패 — " + ex.Message); }
         }
 
+        // ★★★[JACK 0831 "표 높이가 달라지는 걸 파악해서 그래프 부분 축척도 조절되어야 해"]
+        //   <b>수량을 여기서 먼저 잰다.</b> 표 줄 수가 축척을 정하고, 축척이 자리를 정하기 때문이다 —
+        //   종전처럼 자리를 다 잡은 뒤에 재면 <b>줄 수를 알기 전에 축척이 정해져</b> 있다.
+        //   (계산은 검토선과 지표면만 있으면 되므로 이 자리에서 돌 수 있다.)
+        var qty = CollectQty(db, slIds, alignId, wl, wr, surfs, log);
+
         var mv = MeasureViews(db, viewIds, log);
 
         // ── ★★축척 고르기 — 종단도 <c>FitSheet</c>과 같은 셈이다.
@@ -399,10 +417,13 @@ public sealed class XsecViewCommand
         nPages = (System.Math.Max(viewIds.Count, 1) + perSheet - 1) / perSheet;
         double cellWmm = SheetCommand.InnerW / cols;      // 칸 폭(종이 mm) — 거터 없이 그냥 나눈다
         double cellHmm = XsecInnerH / rows;              // 칸 높이(종이 mm)
-        double tableWmm = QtWidthMm;
+        // ★★★[JACK 0831 "표를 어떻게 하면 빈 셀이 없게"] <b>접을지 여기서 정한다.</b>
+        //   폭과 높이가 둘 다 접기에 달려 있고, 그 둘이 축척을 정한다.
+        var fold = DH.Grading.Core.QtyTableFold.Make(qty.Spec);
+        double tableWmm = QtWidthMmOf(fold);
         // ★[검토 §50] 표 높이를 <b>두 곳에서 다르게</b> 세고 있었다 —
         //   자리 잡는 쪽은 19.0줄, 그리는 쪽은 머리줄 1.4배를 반영해 19.4줄. 2.3mm 어긋났다.
-        double tableHmm = QtTableHmm;
+        double tableHmm = QtTableHmmOf(fold.BodyRows + 1);
 
         // ★★[검토] 표를 <b>오른쪽</b>에 둘 때와 <b>아래</b>에 둘 때를 <b>둘 다 계산</b>해
         //   축척이 작은 쪽(=그림이 큰 쪽)을 고른다. 3×2처럼 칸이 좁은 배치에서는
@@ -441,9 +462,22 @@ public sealed class XsecViewCommand
 
         double padW = 2 * CellPadMm, padH = 2 * CellPadMm + NameRoomMm + bandPaperMm;
         double gwRight = System.Math.Max(10.0, cellWmm - padW - TableGapMm - tableWmm);
-        double ghRight = System.Math.Max(10.0, cellHmm - padH);
+        // ★★★[JACK 0831 · 검토 MED-4] <b>오른쪽 배치도 표 높이를 봐야 한다.</b>
+        //   종전엔 <c>ghRight</c>에 표가 안 들어 있었다 — 표가 그래프보다 길어도
+        //   "칸에 들어간다"고 판정하고 실제로는 칸을 넘었다.
+        //   표를 옆에 두면 <b>덩어리 높이 = max(그래프+밴드, 표)</b>이므로,
+        //   표가 더 길면 그만큼 그림이 쓸 수 있는 높이가 줄어든다.
+        //   ★<c>Math.Max(10.0, …)</c>가 음수 자리를 10mm로 바꿔 <b>말도 안 되는 축척</b>을
+        //   되돌려 주던 것도 여기서 갈린다(검토 MED-3) → 자리가 모자라면 <b>0</b>을 준다.
+        double roomH = cellHmm - padH;
+        // 표가 남는 자리보다 길면 그림 자리는 <b>없다</b> — 10mm로 눙치지 않는다.
+        double ghRight = tableHmm > roomH ? 0.0 : roomH;
         double gwBelow = System.Math.Max(10.0, cellWmm - padW);
-        double ghBelow = System.Math.Max(10.0, cellHmm - padH - TableGapMm - tableHmm);
+        // ★[검토 MED-3] 아래 배치도 마찬가지 — 자리가 모자라면 <b>0</b>을 줘서
+        //   <c>PickScale</c>이 "맞는 값이 없다"고 답하게 한다. 10mm로 눙치면
+        //   <c>1:3000</c> 같은 값이 <b>유효한 답처럼</b> 돌아온다.
+        double roomBelow = cellHmm - padH - TableGapMm - tableHmm;
+        double ghBelow = roomBelow > 0 ? roomBelow : 0.0;
         double sRight = PickScale(mv.W, mv.H, gwRight, ghRight);
         double sBelow = PickScale(mv.W, mv.H, gwBelow, ghBelow);
         bool tableRight = sRight > 0 && (sBelow <= 0 || sRight <= sBelow);   // 같으면 오른쪽(참고 도면)
@@ -482,8 +516,6 @@ public sealed class XsecViewCommand
         double sheetW = SheetCommand.SheetW * sc, sheetH = SheetCommand.SheetH * sc;
         double innerW = SheetCommand.InnerW * sc, innerH = XsecInnerH * sc;
         double cellW = cellWmm * sc, cellH = cellHmm * sc;
-        double tableRoom0 = tableRight ? (tableWmm + TableGapMm) * sc : 0.0;
-        double tableBelow0 = tableRight ? 0.0 : (tableHmm + TableGapMm) * sc;
         log.AppendLine($"  ★축척 1:{scale:F0}({(fixedScale ? "도면설정에서 고정" : "자동 — 칸에 맞춤")})"
                      + $" · 표는 {(tableRight ? "그림 오른쪽" : "그림 아래")}"
                      + $" (필요 가로 1:{mv.W * 1000.0 / graphWmm:F0} · 세로 1:{mv.H * 1000.0 / graphHmm:F0}"
@@ -538,8 +570,8 @@ public sealed class XsecViewCommand
                         //   밴드는 그래프 <b>아래</b>로 뻗으므로 세로 덩어리에만 더한다.
                         double bandM2 = bandPaperMm * sc;
                         double bundleH = tableRight
-                            ? System.Math.Max(mv.H + bandM2, QtTableHmm * sc)
-                            : mv.H + bandM2 + gapM2 + QtTableHmm * sc;
+                            ? System.Math.Max(mv.H + bandM2, tableHmm * sc)
+                            : mv.H + bandM2 + gapM2 + tableHmm * sc;
                         double leftX = cellAt[i].X + System.Math.Max(padM, (cellW - bundleW) / 2.0);
                         double botY = cellAt[i].Y + nameM
                                     + System.Math.Max(padM, (cellH - nameM - bundleH) / 2.0);
@@ -566,6 +598,16 @@ public sealed class XsecViewCommand
             catch (System.Exception exM) { log.AppendLine("  뷰 옮기기 실패 — " + exM.Message); }
         }
         double fitW = graphWmm * sc, fitH = graphHmm * sc;
+        // ★★[검토 MED-4] 넘쳤는지 볼 때 <b>표까지 포함한 덩어리</b>를 견준다 —
+        //   그래프만 보면 표가 칸을 넘어도 "들어간다"고 말한다.
+        double bundleHmm = tableRight
+            ? System.Math.Max(mv.H / sc + bandPaperMm, tableHmm)
+            : mv.H / sc + bandPaperMm + TableGapMm + tableHmm;
+        double roomHmm = cellHmm - padH + bandPaperMm;   // 밴드는 padH에서 이미 뺐으므로 되돌린다
+        if (bundleHmm > roomHmm + 1e-6)
+            log.AppendLine($"  ⚠<b>표까지 합치면 칸을 넘는다</b> — 덩어리 {bundleHmm:F1}mm > 자리 {roomHmm:F1}mm"
+                         + $" (표 {tableHmm:F1}mm · {(tableRight ? "오른쪽" : "아래")} 배치)"
+                         + " — 배치를 줄이거나(도면설정) 축척을 낮추세요");
         log.AppendLine($"  뷰 실측 — 가장 큰 것 {mv.W:F1}×{mv.H:F1}m ({mv.N}개 잼) · 칸 그림 자리 {fitW:F1}×{fitH:F1}m"
                      + $" · 가운데로 옮긴 것 {nMoved}개"
                      + (mv.W > fitW || mv.H > fitH
@@ -606,11 +648,10 @@ public sealed class XsecViewCommand
         //   자리는 뷰를 옮긴 <b>뒤</b>라야 맞으므로 <see cref="DrawCenterAxis"/>와 같은 자리에 둔다.
         else DrawCenterTickLabels(db, viewIds, XsecStyleId(db, viewIds), scale, annoScale, log);
         DrawXsecFrames(db, at, nPages, sc, cols, rows, PageGap, scale, log);
-        var qtyMap = CollectQty(db, slIds, alignId, wl, wr, surfs, log);
-        DrawQtyTables(db, viewIds, bandPaperMm, sc, tableRight, TableGapMm * sc, qtyMap, log);
+        DrawQtyTables(db, viewIds, bandPaperMm, sc, tableRight, TableGapMm * sc, qty, fold, log);
         // ★[JACK 0826] 선 색·눈금은 <b>숨기기 전</b>에 — 숨긴 뒤에도 되지만 로그 차례가 헷갈린다.
         ApplySectionStyles(db, cdoc, slIds, kindOf, log);
-        DrawStrataNames(db, viewIds, kindOf, scale, log);   // ★[JACK 0828] 지층·지하수위 이름
+        DrawStrataNames(db, viewIds, kindOf, alignId, wl, wr, scale, log);   // ★[JACK 0828] 지층·지하수위 이름
         BindBandSections(db, viewIds, kindOf, scale, annoScale, log);
         DrawStationBand(db, viewIds, scale, annoScale, log);   // ★[JACK 0827] 측점 칸에 우리 이름
         HideSampleLines(db, cdoc, slIds, groupId, log);   // ★뷰를 다 만든 뒤에 숨긴다
@@ -620,12 +661,41 @@ public sealed class XsecViewCommand
                                  : "⚠Civil 기본 제목이 살아 있다 — 이름이 두 개로 보인다"));
         log.AppendLine($"  횡단면도 {nView}/{slIds.Count}장 배치 · 배치 {cols}×{rows} · 칸 {cellW:F1}×{cellH:F1}m" +
                        (firstErr != null ? $"\n  ⚠첫 실패: {firstErr}" : ""));
-        ed.WriteMessage($"\n[횡단도] 횡단면도 {nView}장 · 검토선 {slIds.Count}개" +
+        // ★★★[JACK 0831 · 검토] 수량이 조용히 틀어진 것은 <b>명령창까지</b> 올린다 —
+        //   로그 파일은 사람이 열어 봐야 알고, 표는 숫자가 차 있어 멀쩡해 보인다.
+        ed.WriteMessage((string.IsNullOrEmpty(qty.Warn) ? "" : qty.Warn) +
+                        $"\n[횡단도] 횡단면도 {nView}장 · 검토선 {slIds.Count}개" +
                         $"\n  자세한 내용: {DiagLog.FilePath}");
         Flush(log);
     }
 
-    private const double StrataNameMm = 2.5;   // 종이 글자 높이 — 지형선보다 작게(여러 줄이라 빽빽하다)
+    /// <summary>★[JACK 0831] 점선 <b>한 무늬</b>가 도면에서 차지할 길이(m).
+    /// <para>이 값이 곧 "촘촘한 정도"다. 작을수록 촘촘하다.
+    /// 부지가 수백 m라 0.5m면 눈에는 거의 실선에 가까운 촘촘한 점선으로 보인다.</para></summary>
+    /// <summary>★★[JACK 0831 · 검토] 표에 <b>숫자로 보이는 가장 작은 값</b>(㎡).
+    /// <para>줄을 세울지 정하는 자리와 값을 찍는 자리가 <b>같은 값</b>을 봐야 한다 —
+    /// 다르면 "줄은 있는데 모든 측점에서 –"인 유령 줄이 생기고, 그 줄이 축척을 흔든다.</para>
+    /// <para><c>0.00</c> 두 자리로 찍으므로 <c>0.005</c> 미만은 반올림해도 <c>0.00</c>이다.</para></summary>
+    internal const double QtyShowMin = 5e-3;
+
+    private const double DashPatternM = 0.5;
+
+    /// <summary>지층 색 — 원지반(초록3)·계획(흰7)·터파기(마젠타6)·지하수위(파랑5)와 <b>겹치지 않는</b> 것만.
+    /// <para>층이 여덟을 넘으면 처음부터 돌려 쓴다(그만한 층은 실무에 거의 없다).</para></summary>
+    private static readonly short[] StrataAci = { 30, 42, 2, 224, 190, 22, 94, 214 };
+
+    /// <summary>★★[JACK 0831] 층 번호 → 색. <b>색표를 아는 곳은 여기 하나다</b> —
+    /// 종단(<c>ProfileCommand</c>)도 이것을 빌려 쓴다. 두 곳이 따로 색을 정하면
+    /// <b>같은 지층이 종단과 횡단에서 다른 색</b>이 되어 더 헷갈린다(§50 그 함정).</summary>
+    internal static short StrataAciOf(int ord) =>
+        StrataAci[(System.Math.Max(1, ord) - 1) % StrataAci.Length];
+
+    private static double SafeLts(Database db)
+    { try { return db.Ltscale; } catch { return 1.0; } }
+
+    /// <summary>★[JACK 0831 "지층에 나오는 문자가 너무 커 … 좀 작게"] 2.5 → <b>1.8mm</b>.
+    /// <para>종단(<c>ProfileCommand.ProfStrataNameMm</c>)과 <b>같은 값</b>이라야 두 도면이 같아 보인다.</para></summary>
+    private const double StrataNameMm = 1.8;   // 종이 글자 높이 — 지형선보다 작게(여러 줄이라 빽빽하다)
 
     /// <summary>★★★[JACK 0828 "종단이나 횡단에서 각 지층과 지하수위의 각층의 좌측 선 위에 해당 층이름을 적어줘"]
     ///
@@ -642,27 +712,37 @@ public sealed class XsecViewCommand
     private static int DrawStrataNames(Database db,
         System.Collections.Generic.List<(ObjectId Id, double St, string Name)> views,
         System.Collections.Generic.Dictionary<ObjectId, string> kindOf,
+        ObjectId alignId, double wl, double wr,
         double scale, System.Text.StringBuilder log)
     {
         if (views == null || views.Count == 0 || kindOf == null) return 0;
         double txtH = StrataNameMm / 1000.0 * scale;
         double gap = txtH * 0.4;
-        int n = 0, outside = 0, noPt = 0;
+        int n = 0, noZ = 0, noXY = 0;
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
+            if (tr.GetObject(alignId, OpenMode.ForRead) is not CivilDb.Alignment al)
+            { tr.Commit(); log?.AppendLine("  횡단 지층이름 — 선형을 못 열었다"); return 0; }
+
             var ms = (BlockTableRecord)tr.GetObject(
                 SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
             var layS = SectionCommand.EnsureLayer(db, tr, XsecStrataNameLayer, 8);
             var layW = SectionCommand.EnsureLayer(db, tr, XsecWaterNameLayer, 5);
             var kst = ImportGisCommand.EnsureKoreanTextStyle(db, tr);
+
+            const int Steps = 80;                       // 왼쪽 끝에서 안쪽으로 훑는 횟수(상한)
+            double span = System.Math.Max(1e-6, wl + wr);
+            double step = span / Steps;
+
             foreach (var (vid, _, _) in views)
             {
                 try
                 {
                     if (tr.GetObject(vid, OpenMode.ForRead) is not CivilDb.SectionView sv) continue;
-                    var ext = ((Entity)sv).GeometricExtents;
                     if (tr.GetObject(sv.SampleLineId, OpenMode.ForRead) is not CivilDb.SampleLine ln) continue;
+                    double st = ln.Station;
+
                     foreach (ObjectId secId in ln.GetSectionIds())
                     {
                         try
@@ -671,25 +751,34 @@ public sealed class XsecViewCommand
                             if (!kindOf.TryGetValue(sec.SourceId, out string kind)) continue;
                             bool water = kind == "지하수위";
                             if (kind != "지층" && !water) continue;
-                            string nm = "";
-                            try
-                            {
-                                if (tr.GetObject(sec.SourceId, OpenMode.ForRead) is CivilDb.Surface su)
-                                    nm = StrataDraw.ShortName(su.Name);
-                            }
-                            catch { }
+                            if (tr.GetObject(sec.SourceId, OpenMode.ForRead) is not CivilDb.TinSurface ts) continue;
+                            string nm = StrataDraw.ShortName(ts.Name);
                             if (string.IsNullOrEmpty(nm)) continue;
 
-                            // 왼쪽 끝 점을 고른다 — 도면 X가 가장 작은 것.
-                            bool has = false; double bx = 0, by = 0;
-                            foreach (var sp in sec.SectionPoints)
+                            // ★왼쪽 끝에서 안쪽으로 훑어 <b>지표면이 처음 답하는 자리</b>를 찾는다.
+                            //   지층면은 시추공을 둘러싼 사각형이라 절단선 왼쪽 끝이 그 밖일 수 있다.
+                            double useOff = double.NaN, useZ = double.NaN;
+                            for (int k = 0; k <= Steps; k++)
                             {
-                                var L = sp.Location;
-                                if (!has || L.X < bx) { bx = L.X; by = L.Y; has = true; }
+                                double off = -wl + step * k;
+                                double e = 0, nn = 0;
+                                try { al.PointLocation(st, off, ref e, ref nn); } catch { continue; }
+                                // ★[기억] 지표면 밖에서는 예외가 난다 — 그것이 곧 "밖"이라는 답이다.
+                                try { useZ = ts.FindElevationAtXY(e, nn); }
+                                catch { continue; }
+                                if (double.IsNaN(useZ)) continue;
+                                useOff = off; break;
                             }
-                            if (!has) { noPt++; continue; }
-                            if (bx < ext.MinPoint.X - gap || bx > ext.MaxPoint.X
-                             || by < ext.MinPoint.Y || by > ext.MaxPoint.Y) { outside++; continue; }
+                            if (double.IsNaN(useOff)) { noZ++; continue; }
+
+                            // ★★★[JACK 0831 검토] <b>자리는 뷰에게 묻는다.</b>
+                            //   앞 판은 <c>Section.SectionPoints[].Location</c>을 도면 좌표로 알고 썼는데,
+                            //   되읽기가 <b>격자 밖이라 버린 것 162개</b>라고 말해 주었다 — <b>전부</b>였다.
+                            //   즉 그 값은 내가 생각한 좌표계가 아니었다.
+                            //   <c>FindXYAtOffsetAndElevation</c>은 이 파일이 중심축 숫자에 이미 쓰고 있는
+                            //   <b>검증된 길</b>이다 — 뷰가 어디 놓였든 축척이 얼마든 맞는다.
+                            double tx = 0, ty = 0;
+                            if (!sv.FindXYAtOffsetAndElevation(useOff, useZ, ref tx, ref ty)) { noXY++; continue; }
 
                             var t = new DBText
                             {
@@ -701,7 +790,10 @@ public sealed class XsecViewCommand
                             var lay = water ? layW : layS;
                             if (!lay.IsNull) t.LayerId = lay;
                             if (!kst.IsNull) t.TextStyleId = kst;
-                            var p = new Point3d(bx + gap, by + gap, 0);
+                            // ★색은 그 층 선과 같게 — 글자와 선이 짝이라는 것이 한눈에 보여야 한다.
+                            t.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
+                                Autodesk.AutoCAD.Colors.ColorMethod.ByAci, water ? (short)5 : AciOfName(ts.Name));
+                            var p = new Point3d(tx + gap, ty + gap, 0);
                             t.Position = p; t.AlignmentPoint = p;
                             ms.AppendEntity(t); tr.AddNewlyCreatedDBObject(t, true);
                             n++;
@@ -715,10 +807,25 @@ public sealed class XsecViewCommand
         }
         catch (System.Exception ex) { log?.AppendLine("  횡단 지층이름 실패 — " + ex.Message); return 0; }
 
-        log?.AppendLine($"  횡단 지층이름 {n}개 — 각 선 <b>왼쪽 끝 위</b>에 직접 씀(종이 {StrataNameMm:0.#}mm)"
-                      + (outside > 0 ? $" · ⚠격자 밖이라 버린 것 {outside}개" : "")
-                      + (noPt > 0 ? $" · ⚠점이 없는 단면 {noPt}개" : ""));
+        log?.AppendLine($"  횡단 지층이름 {n}개 — 각 선 <b>왼쪽 끝 위</b>에 직접 씀(종이 {StrataNameMm:0.#}mm × 축척 {scale:0.#} = 모형 {txtH:F2}m · 선과 같은 색)"
+                      + (noZ > 0 ? $" · ⚠절단선 어디서도 지표면을 못 만난 것 {noZ}개" : "")
+                      + (noXY > 0 ? $" · ⚠뷰가 자리를 못 준 것 {noXY}개(표고 범위 밖)" : ""));
         return n;
+    }
+
+    /// <summary>지표면 이름으로 그 층의 색을 고른다 — 선과 글자가 <b>같은 색</b>이어야 짝으로 읽힌다.</summary>
+    private static short AciOfName(string surfName)
+    {
+        try
+        {
+            string nm = surfName ?? "";
+            if (!nm.StartsWith(StrataDraw.SurfPrefix, System.StringComparison.Ordinal)) return 8;
+            string rest = nm.Substring(StrataDraw.SurfPrefix.Length);
+            int us = rest.IndexOf('_');
+            if (!int.TryParse(us > 0 ? rest.Substring(0, us) : rest, out int o)) return 8;
+            return StrataAciOf(o);
+        }
+        catch { return 8; }
     }
 
     private static void Flush(System.Text.StringBuilder log)
@@ -1277,9 +1384,6 @@ public sealed class XsecViewCommand
     /// <summary>횡단면도 이름 글자 크기(종이 mm) — 도면 제목 관례는 3~5mm다.</summary>
     private const double NameTextMm = 3.5;
 
-    /// <summary>수량표와 그림 사이 틈(종이 mm).</summary>
-    private const double QtGapMm = 4.0;
-
     // ── 수량표 규격 ★★[JACK 0826] <b>열 너비를 글자에서 계산한다.</b>
     //   고정 mm로 두면 글자를 키울 때마다 어긋난다 — 실제로 글자가 칸을 뚫고 나왔다(JACK 스샷).
     //   한글은 글자 높이만큼, 영문·숫자는 절반쯤 차지하므로 <b>각 열에서 가장 긴 글자</b>로 배수를 잡는다.
@@ -1313,7 +1417,12 @@ public sealed class XsecViewCommand
 
     /// <summary>표 전체 높이(종이 mm) — <b>머리줄이 1.4배</b>인 것까지 센다.
     /// ★한 곳에서만 정한다: 자리 잡는 쪽과 그리는 쪽이 다르게 세면 표가 어긋난 자리에 앉는다.</summary>
-    private static double QtTableHmm => QtRowH * (DH.Grading.Core.QuantityTable.TotalRows + 0.4);
+    /// <summary>★★★[JACK 0831] 표 높이(종이 mm)는 <b>실제 줄 수</b>가 정한다.
+    /// <para>종전엔 못 박은 13줄이었다. 이제 현장이 무엇이냐에 따라 줄이 늘고 주므로
+    /// <b>축척이 그 값을 읽어야</b> 표가 커진 만큼 그림이 작아진다.</para>
+    /// <para><c>+0.4</c>는 머리줄이 본문보다 1.4배 높기 때문이다 — 자리 잡는 쪽과 그리는 쪽이
+    /// 이 값을 <b>같이</b> 써야 어긋나지 않는다(§50에서 2.3mm 어긋난 적이 있다).</para></summary>
+    private static double QtTableHmmOf(int totalRows) => QtRowH * (totalRows + 0.4);
 
     /// <summary>표 전체 폭(종이 mm) — 열 너비의 합이다. 축척 계산이 이 값을 쓴다.</summary>
     /// <summary>표 폭(종이 mm). ★[JACK 0827] 새 표는 <b>일곱 칸 두 단</b>이라 종전보다
@@ -1323,6 +1432,15 @@ public sealed class XsecViewCommand
     private static double QtWidthMm
     {
         get { double s = 0; foreach (double r in QtColRatio) s += r; return s * QtTextMm; }
+    }
+
+    /// <summary>★★[JACK 0831] 접은 표의 폭 — <b>칸마다 제 몫의 폭</b>을 더한다.
+    /// <para>단을 늘리면 폭이 늘어난다. 축척이 이 값을 읽으므로 <b>여기 하나만</b> 맞으면 된다.</para></summary>
+    private static double QtWidthMmOf(DH.Grading.Core.QtyTableFold fold)
+    {
+        double s = 0;
+        foreach (int ix in fold.ColRatioIndex) s += QtColRatio[ix];
+        return s * QtTextMm;
     }
     internal const string QtLayerEdge = "DH-횡단-표(테두리)";   // 초록
     internal const string QtLayerLine = "DH-횡단-표(줄)";       // 빨강
@@ -1343,7 +1461,7 @@ public sealed class XsecViewCommand
     private static int DrawQtyTables(Database db, List<(ObjectId Id, double St, string Name)> views,
                                      double bandPaperMm,
                                      double sc, bool onRight, double gapM,
-                                     System.Collections.Generic.Dictionary<string, DH.Grading.Core.XsecQty> qty,
+                                     QtyResult qty, DH.Grading.Core.QtyTableFold fold,
                                      System.Text.StringBuilder log)
     {
         // ★[검토 0828 · LOW-1] <b>안 쓰는 계수기를 지웠다.</b> 대입만 하고 로그에 안 써서
@@ -1351,13 +1469,18 @@ public sealed class XsecViewCommand
         int tbIn = 0;
         string firstTbErr = null;
         if (views == null || views.Count == 0) return 0;
-        int nRow = QT.TotalRows;                       // 머리 1줄 + 내용 12줄
+        // ★★★[JACK 0831] 줄 수는 <b>현장이 정한다</b> — 못 박지 않는다.
+        var spec = qty.Spec ?? DH.Grading.Core.QtyTableSpec.BuildFromKeys(
+            System.Array.Empty<DH.Grading.Core.QtyKey>(), null, DH.Grading.Core.QuantityTable.DeepLimitM);
+        // ★★★[JACK 0831] 줄 수·칸 수는 <b>접기</b>가 정한다.
+        int nRow = fold.BodyRows + 1;                  // 머리 1줄 + 내용 N줄
+        int nCol = fold.Cols;                          // 7(안 접음) · 10 · 11
         double txtH = QtTextMm * sc;                   // 글자 높이(모형)
         double rowH = QtRowH * sc;                     // 줄 높이
         // ★[JACK 0827] 열 비율은 <b>표가 들고 있다</b> — 표 모양이 바뀌면 폭도 같이 바뀐다.
         //   여기 따로 적어 두면 표를 고칠 때 한쪽만 고쳐 <b>칸선과 글자가 어긋난다</b>.
-        var colW = new double[QT.ColRatio.Length];
-        for (int c = 0; c < colW.Length; c++) colW[c] = QT.ColRatio[c] * txtH;
+        var colW = new double[nCol];
+        for (int c = 0; c < nCol; c++) colW[c] = QT.ColRatio[fold.ColRatioIndex[c]] * txtH;
         // ★★[JACK 0828 · 검토] 종전 꼬리말은 <c>(값은 아직 '–')</c>를 <b>조건 없이</b> 찍었다 —
         //   값이 실제로 들어가고 있는데도 로그만 "아직 비었다"고 말했다.
         //   낡은 문구가 남아 <b>고친 뒤에도 안 고쳐진 것처럼</b> 보이게 만든다. → <b>세어서 말한다.</b>
@@ -1384,9 +1507,9 @@ public sealed class XsecViewCommand
                     try { if (!qtStyle.IsNull) tb.TableStyle = qtStyle; } catch { }
                     // ★[JACK 0827] 칸 수도 <b>표가 정한다</b> — 여기 숫자를 박아 두면
                     //   표를 넓힐 때 이 한 줄 때문에 <b>표가 통째로 안 만들어진다</b>(실측: 0개).
-                    tb.SetSize(nRow, QT.Cols);
+                    tb.SetSize(nRow, nCol);
                     if (!layE.IsNull) tb.LayerId = layE;
-                    for (int c = 0; c < QT.Cols; c++) tb.Columns[c].Width = colW[c];
+                    for (int c = 0; c < nCol; c++) tb.Columns[c].Width = colW[c];
                     // ★[JACK 0826 스샷 "제목 셀은 … 셀 높이 조금 높일 것"]
                     //   머리줄만 <b>1.4배</b>로 — 표의 얼굴이라 다른 줄과 같으면 묻힌다.
                     for (int r = 0; r < nRow; r++) tb.Rows[r].Height = r == 0 ? rowH * 1.4 : rowH;
@@ -1395,7 +1518,7 @@ public sealed class XsecViewCommand
                     for (int r = 0; r < nRow; r++)
                         // ★[JACK 0827 "글씨 색상도 좌우측이 달라"] <b>칸 수를 또 4로 박아 뒀다.</b>
                         //   오른쪽 세 칸이 글자 높이·글꼴·색을 <b>하나도 못 받고</b> 있었다.
-                        for (int c = 0; c < QT.Cols; c++)
+                        for (int c = 0; c < nCol; c++)
                         {
                             var cell = tb.Cells[r, c];
                             try { cell.TextHeight = txtH; } catch { }
@@ -1415,13 +1538,13 @@ public sealed class XsecViewCommand
                     // ── 머리줄: '측 점'이 세 칸을 먹고, 오른쪽 칸에 측점 이름
                     // ★[JACK 0826] 머리줄을 <b>한 칸</b>으로 — <c>측 점(No.1+10.00)</c> 꼴.
                     //   측점명을 괄호 안에 넣으면 제목과 이름이 <b>한눈에 한 덩이</b>로 읽힌다.
-                    try { tb.MergeCells(CellRange.Create(tb, 0, 0, 0, QT.Cols - 1)); } catch { }
+                    try { tb.MergeCells(CellRange.Create(tb, 0, 0, 0, nCol - 1)); } catch { }
                     tb.Cells[0, 0].TextString =
                         QT.HeaderLeft
                         + (string.IsNullOrEmpty(vname) ? "" : $"({vname})");
                     // ★[JACK 0826 스샷 "제목 셀은 음각으로 표현(셀 채우기)"]
                     //   바탕을 칠하고 글자를 검게 — 인쇄하면 흰 바탕에 검은 글씨가 뒤집혀 <b>음각</b>이 된다.
-                    for (int c = 0; c < QT.Cols; c++)
+                    for (int c = 0; c < nCol; c++)
                     {
                         try
                         {
@@ -1433,53 +1556,68 @@ public sealed class XsecViewCommand
                         }
                         catch { }
                     }
-                    static string Fmt(double v) => double.IsNaN(v) || System.Math.Abs(v) < 5e-3
+                    static string Fmt(double v) => double.IsNaN(v) || System.Math.Abs(v) < QtyShowMin
                         ? QT.Blank : v.ToString("0.00");
-                    DH.Grading.Core.XsecQty q0 = default;
-                    bool hasQty = vname != null && qty != null && qty.TryGetValue(vname, out q0);
-                    // ★★★[검토 0828 · HIGH-C] <b><c>hasQty</c>는 세는 자가 못 된다.</b>
-                    //   <c>CollectQty</c>는 <b>값이 전부 NaN인 측점도</b> 사전에 무조건 담으므로
-                    //   <c>TryGetValue</c>는 사실상 <b>언제나 성공</b>한다 —
-                    //   표 28장이 전부 <c>–</c>여도 "수량이 들어간 표 28/28개"로 찍혔다.
-                    //   없앤 <c>(값은 아직 '–')</c>가 "늘 비었다"고 거짓말했다면
-                    //   이건 <b>"늘 찼다"</b>고 거짓말한다 — <b>거짓의 방향만 뒤집힌 셈</b>이다.
-                    //   → <b>실제로 숫자가 들어간 칸을 센다.</b> 한 칸이라도 차면 그 표를 하나로 친다.
+                    DH.Grading.Core.QtyLedger led = null;
+                    if (vname != null && qty.Ledgers != null) qty.Ledgers.TryGetValue(vname, out led);
+                    // ★★★[검토 0828 · HIGH-C] <b>실제로 숫자가 들어간 칸을 센다.</b>
+                    //   사전에 담겼느냐로 세면 표 28장이 전부 <c>–</c>여도 "값이 들어갔다"고 찍힌다.
                     int filled = 0;
 
-                    // ── 내용 — 병합은 "이 칸이 몇 줄을 먹느냐"로 적혀 있다.
-                    for (int r = 0; r < QT.BodyRows; r++)
+                    // ── ★★★[JACK 0831 "표를 어떻게 하면 빈 셀이 없게" · "셀 합치기가 이상하게 됐어"]
+                    //   <b>단(段)마다 제 구간만 그린다.</b> 접기(<c>QtyTableFold</c>)가
+                    //   "어느 목록의 어디부터 몇 줄을, 어느 칸에" 놓을지 이미 정해 두었다.
+                    //   몇 줄을 먹느냐도 얼개가 안다 — <b>단 끝을 넘지 않게</b> 한계를 같이 넘긴다.
+                    //   이 셈이 도면 쪽에만 있었을 땐 하니스가 못 잡아 표가 찌그러졌다(S85·S87).
+                    foreach (var seg in fold.Segs)
                     {
-                        var q = QT.Rows[r];
-                        int row = r + 1;
-
-                        // 한 칸을 앉힌다. <c>RowSpan</c>이 0이면 <b>위 칸이 이미 먹은 자리</b>라 건너뛴다.
-                        //   병합은 <b>표가 관리</b>하므로 우리는 범위만 알려 주면 된다.
-                        void Put(int col, QT.Cell c, string textOverride = null)
+                        int segEnd = seg.From + seg.Count;
+                        for (int i = 0; i < seg.Count; i++)
                         {
-                            if (c.RowSpan <= 0) return;                 // 위 칸이 먹은 자리
-                            int r2 = row + c.RowSpan - 1;
-                            int c2 = col + c.ColSpan - 1;
-                            if (c.RowSpan > 1 || c.ColSpan > 1)
-                                try { tb.MergeCells(CellRange.Create(tb, row, col, r2, c2)); } catch { }
-                            string t = textOverride ?? c.Text;
-                            if (t != null) tb.Cells[row, col].TextString = t.Replace("|", "\\P");
+                            int src = seg.From + i;
+                            int row = i + 1;
+                            int c0 = seg.Col;
+
+                            void Put(int col, string text, int rowSpan, int colSpan)
+                            {
+                                if (rowSpan <= 0) return;               // 위 칸이 먹은 자리
+                                if (rowSpan > 1 || colSpan > 1)
+                                    try
+                                    {
+                                        tb.MergeCells(CellRange.Create(tb, row, col,
+                                                                       row + rowSpan - 1, col + colSpan - 1));
+                                    }
+                                    catch { }
+                                // <c>|</c>는 얼개가 쓰는 <b>줄바꿈 표시</b>다.
+                                if (text != null) tb.Cells[row, col].TextString = text.Replace("|", "\\P");
+                            }
+
+                            if (seg.Left)
+                            {
+                                var Lr = spec.Left[src];
+                                Put(c0, Lr.Group, spec.SpanGroup(src, segEnd), spec.GroupTakesTwo(src) ? 2 : 1);
+                                Put(c0 + 1, Lr.Sub, spec.SpanSub(src, segEnd), 1);
+                                if (Lr.Item != null) tb.Cells[row, c0 + 2].TextString = Lr.Item;
+                                // ★[검토 MED-6] 채움 줄에는 아무것도 안 쓴다 —
+                                //   <c>–</c>는 "해당 없음"인데 그 줄엔 해당할 항목 자체가 없다.
+                                if (!spec.IsFillerLeft(src))
+                                {
+                                    double vL = (led != null && Lr.Key is DH.Grading.Core.QtyKey kk)
+                                                ? led.Get(kk) : double.NaN;
+                                    string tL = Fmt(vL);
+                                    if (tL != QT.Blank) filled++;
+                                    tb.Cells[row, c0 + 3].TextString = tL;
+                                }
+                            }
+                            else
+                            {
+                                var Rr = spec.Right[src];
+                                Put(c0, Rr.Item, spec.SpanRight(src, segEnd), spec.RightTakesTwo(src) ? 2 : 1);
+                                if (Rr.Sub != null) tb.Cells[row, c0 + 1].TextString = Rr.Sub;
+                                // ★[검토 MED-7] 오른쪽 값은 아직 통로가 없다(공종 수량은 STEP 4).
+                                if (!spec.IsFillerRight(src)) tb.Cells[row, c0 + 2].TextString = QT.Blank;
+                            }
                         }
-
-                        Put(0, q.L1, QT.L1TextOf(r));   // 깊이 딱지(4.5m 이하)는 값이 바뀌면 따라 바뀐다 — 글자를 못 박지 않는다.
-                        Put(1, q.L2);
-                        Put(2, q.L3);
-                        Put(4, q.R1);
-                        Put(5, q.R2);
-
-                        // 값은 왼쪽·오른쪽 각각 따로. 없으면 <c>–</c>다 —
-                        //   빈칸은 "아직 안 넣었다"로 읽히고 <c>–</c>는 "해당 없음"으로 읽힌다(JACK).
-                        double vL = hasQty ? QT.PickLeft(q0, r) : double.NaN;
-                        double vR = hasQty ? QT.PickRight(q0, r) : double.NaN;
-                        string tL = Fmt(vL), tR = Fmt(vR);
-                        if (tL != QT.Blank) filled++;
-                        if (tR != QT.Blank) filled++;
-                        tb.Cells[row, 3].TextString = tL;
-                        tb.Cells[row, 6].TextString = tR;
                     }
                     // 한 칸이라도 숫자가 든 표를 <b>값이 든 표</b>로 친다. 칸 수도 함께 센다.
                     if (filled > 0) nQty++;
@@ -1503,7 +1641,7 @@ public sealed class XsecViewCommand
                             Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 7);
 
                         for (int r = 0; r < nRow; r++)
-                            for (int c = 0; c < QT.Cols; c++)
+                            for (int c = 0; c < nCol; c++)
                             {
                                 // 안쪽 격자는 빨강 가늘게. 바깥도 일단 빨강으로 칠하고 아래에서 가장자리만 덮는다.
                                 try { tb.SetGridColor(r, c, GridLineType.InnerGridLines, red); tbIn++; } catch { }
@@ -1515,7 +1653,7 @@ public sealed class XsecViewCommand
                             }
 
                         // 표의 가장자리만 초록 굵게. 안쪽 칸의 바깥선이 아니라 <b>표 둘레</b>다.
-                        for (int c = 0; c < QT.Cols; c++)
+                        for (int c = 0; c < nCol; c++)
                         {
                             try { tb.SetGridColor(0, c, GridLineType.HorizontalTop, green); } catch { }
                             try { tb.SetGridColor(nRow - 1, c, GridLineType.HorizontalBottom, green); } catch { }
@@ -1525,9 +1663,9 @@ public sealed class XsecViewCommand
                         for (int r = 0; r < nRow; r++)
                         {
                             try { tb.SetGridColor(r, 0, GridLineType.VerticalLeft, green); } catch { }
-                            try { tb.SetGridColor(r, QT.Cols - 1, GridLineType.VerticalRight, green); } catch { }
+                            try { tb.SetGridColor(r, nCol - 1, GridLineType.VerticalRight, green); } catch { }
                             try { tb.SetGridLineWeight(r, 0, GridLineType.VerticalLeft, LineWeight.LineWeight050); } catch { }
-                            try { tb.SetGridLineWeight(r, QT.Cols - 1, GridLineType.VerticalRight, LineWeight.LineWeight050); } catch { }
+                            try { tb.SetGridLineWeight(r, nCol - 1, GridLineType.VerticalRight, LineWeight.LineWeight050); } catch { }
                         }
                     }
                     catch (System.Exception ex) { firstTbErr ??= "색: " + ex.Message; }
@@ -1542,8 +1680,18 @@ public sealed class XsecViewCommand
                     //   "왜 이렇게 했지"에 잘못된 답을 얻는다.
                     //   → 밴드 높이만큼 <b>더 내린다</b>. 예산(<c>padH</c>)도 같은 숫자를 쓰므로 갈라지지 않는다.
                     double bandM = bandPaperMm * sc;   // 종이 mm → 모형 m
-                    double py = onRight ? midY + rowH * (nRow + 0.4) / 2.0
-                                        : ext.MinPoint.Y - bandM - gapM;
+                    // ★★★[JACK 0831 · 검토 MED-5] <b>예산과 실제 자리가 서로 다른 기준을 썼다.</b>
+                    //   자리를 잡는 쪽은 표가 <b>덩어리 아랫변에서 위로</b> 자란다고 보고 칸을 예약하는데,
+                    //   그리는 쪽은 표를 <b>그래프 한가운데</b>에 맞췄다.
+                    //   표가 그래프+밴드보다 길어지면 그 차이만큼 <b>아랫칸을 침범한다</b> —
+                    //   종전엔 표가 13줄 고정이라 드물었지만, 이제 줄이 늘고 주므로 <b>상시</b>다.
+                    //   (검토 실측: 밴드 12mm·그래프 100mm·표 217.6mm → 46.8mm 침범)
+                    //   → <b>예산이 쓰는 기준</b>으로 맞춘다: 표 아랫변 = 덩어리 아랫변.
+                    double tableH = rowH * (nRow + 0.4);
+                    double botY2 = ext.MinPoint.Y - bandM;          // 밴드까지 포함한 덩어리 아랫변
+                    double py = onRight
+                        ? botY2 + tableH                            // 아랫변을 맞추고 위로 자란다
+                        : ext.MinPoint.Y - bandM - gapM;
                     tb.Position = new Point3d(px, py, 0);
                     // ★[JACK 0826] <c>GenerateLayout()</c>을 <b>부르지 않는다</b> — 그것이 행 높이를
                     //   글자와 여백에서 <b>다시 계산</b>해, 우리가 지정한 높이를 덮어쓴다.
@@ -1564,10 +1712,24 @@ public sealed class XsecViewCommand
         // ★★[JACK 0828] <b>표의 두 규칙을 매번 물어보고 남긴다.</b>
         //   <c>SpansValid</c>는 만들어 두고 <b>아무도 안 불러</b> 죽어 있었다 —
         //   검사는 <b>돌아야</b> 검사다. 로그 한 줄이면 다음 사람이 표를 고칠 때 바로 걸린다.
+        // ★★★[JACK 0831 · 검토 HIGH-1] <b>검사가 그리지 않는 표를 재고 있었다.</b>
+        //   <c>QT.SpansValid()</c>는 <b>죽은 상수 배열</b>(12줄 고정)을 본다 —
+        //   우리가 그리는 것은 이제 <c>spec</c>인데, 그것이 아무리 찌그러져도
+        //   "세로 병합 맞음"이 <b>늘</b> 찍혔다. §53에서 겪은 <b>"검사가 엉뚱한 것을 재고 있었다"</b>
+        //   그대로다 — 이번엔 하니스가 아니라 로그 쪽에서 되풀이됐다.
+        //   → <b>그린 얼개를 묻는다</b>(<c>QtyTableSpecRules.Holds</c>).
         bool paired = QT.WidthsPaired(out string wnote);
-        bool spans = QT.SpansValid();
+        bool rules = DH.Grading.Core.QtyTableSpecRules.Holds(spec, out string rnote);
+        bool rect = spec.Left.Count == spec.Right.Count;
+        // ★★★[JACK 0831] <b>병합이 겹치는지 매번 묻는다.</b> 겹치면 AutoCAD가 뒤 병합을
+        //   조용히 버려 표가 찌그러진다 — 화면을 봐야만 알던 것을 로그가 먼저 말하게 한다.
+        // ★접은 표를 묻는다 — 안 접은 판을 물으면 §53의 "엉뚱한 것을 재는 검사"가 된다.
+        bool merges = spec.MergesValid(fold, out string mnote);
         log?.AppendLine($"    표 규칙 — 좌우 짝 폭 {(paired ? "맞음" : "⚠<b>어긋남</b>")}({wnote})"
-                      + $" · 세로 병합 {(spans ? "맞음" : "⚠<b>어긋남 — 표가 찌그러진다</b>")}");
+                      + $" · 늘 서는 줄 {(rules ? "맞음" : $"⚠<b>어긋남 — {rnote}</b>")}"
+                      + $" · 두 단 길이 {(rect ? "같음" : $"⚠<b>{spec.Left.Count}/{spec.Right.Count}</b>")}"
+                      + $" · 셀 합치기 {(merges ? "안 겹침" : $"⚠<b>겹침 — {mnote}</b>")}"
+                      + $" · <b>이번 도면 {nRow}줄 × {nCol}칸</b> — {fold.Note}");
         return n;
     }
 
@@ -3237,8 +3399,39 @@ public sealed class XsecViewCommand
         string dashStrata = Load("HIDDEN2") ?? Load("HIDDEN") ?? dash;                       // 지층
         string dashWater = Load("DASHDOT2") ?? Load("DIVIDE2") ?? Load("DASHDOT") ?? dash;   // 지하수위
 
+        // ★★★[JACK 0831 "횡단에 지층들의 점선이 너무 듬성듬성있어 좀 촘촘히 바꿔"]
+        //
+        //   <b>원인: 선종류 이름만 골랐지 무늬 크기를 안 정했다.</b>
+        //   로그가 <c>HIDDEN2</c>·<c>DASHDOT2</c>가 <b>제대로 실렸다</b>고 말하고 있었으므로
+        //   이름은 무죄다 — 남는 것은 <b>배율</b>이고, 저장소 어디에도 <c>LTSCALE</c>을
+        //   정하는 코드가 없었다(검토 지적). 즉 <b>남이 걸어 둔 값</b>에 끌려다니고 있었다.
+        //
+        //   → 무늬의 <b>실제 길이를 재서</b>(<c>LinetypeTableRecord.PatternLength</c>)
+        //     도면 단위로 <see cref="DashPatternM"/>이 되도록 배율을 <b>계산</b>한다.
+        //     도면의 <c>LTSCALE</c>이 얼마든 결과가 같아진다 — 기계마다 다르게 보이지 않는다.
+        double LtScaleFor(string lt)
+        {
+            if (lt == null) return 1.0;
+            double pat = 0;
+            try
+            {
+                using var trP = db.TransactionManager.StartTransaction();
+                var ltt = (LinetypeTable)trP.GetObject(db.LinetypeTableId, OpenMode.ForRead);
+                if (ltt.Has(lt) && trP.GetObject(ltt[lt], OpenMode.ForRead) is LinetypeTableRecord r)
+                    pat = System.Math.Abs(r.PatternLength);
+                trP.Commit();
+            }
+            catch { }
+            if (pat < 1e-9) return 1.0;
+            double gl = 1.0;
+            try { gl = db.Ltscale; } catch { }
+            if (gl < 1e-9) gl = 1.0;
+            double v = DashPatternM / (pat * gl);
+            return v > 1e-6 && v < 1e6 ? v : 1.0;
+        }
+
         // ── 스타일 셋 — 이미 있으면 색만 다시 맞춘다(도면에 스타일이 쌓이지 않게).
-        ObjectId Ensure(string nm, short aci, string lt)
+        ObjectId Ensure(string nm, short aci, string lt, double ltScale = 1.0)
         {
             try
             {
@@ -3268,7 +3461,12 @@ public sealed class XsecViewCommand
                             ds.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
                                 Autodesk.AutoCAD.Colors.ColorMethod.ByAci, aci);
                             ds.Visible = ty == CivilDb.Styles.SectionDisplayStyleSectionType.Segments;
-                            if (lt != null) { try { ds.Linetype = lt; } catch { } }
+                            if (lt != null)
+                            {
+                                try { ds.Linetype = lt; } catch { }
+                                // ★무늬 크기 — 이것이 "듬성듬성"을 정한다.
+                                try { ds.LinetypeScale = ltScale; } catch { }
+                            }
                         }
                         catch { }
                     }
@@ -3278,13 +3476,51 @@ public sealed class XsecViewCommand
             catch { return ObjectId.Null; }
         }
 
+        double ltsE = LtScaleFor(dash), ltsS = LtScaleFor(dashStrata), ltsW = LtScaleFor(dashWater);
         var stGround = Ensure("DH_횡단면_원지반", 3, null);      // 3 = 초록, 실선
         var stPlan   = Ensure("DH_횡단면_계획", 7, null);        // 7 = 흰색, 실선
-        var stExcav  = Ensure("DH_횡단면_터파기", SectionCommand.ExcavAci, dash);   // 6 = 마젠타, 긴 파선
-        // ★[JACK 0828] 지층은 <b>혼탁</b>(색 8) 짧은 점선 — 지형·계획선보다 뒤로 물러나 보여야 한다.
-        //   지층은 여러 줄이라 진한 색을 쓰면 <b>그것만 보이는 도면</b>이 된다.
-        var stStrata = Ensure("DH_횡단면_지층", 8, dashStrata);
-        var stWater  = Ensure("DH_횡단면_지하수위", 5, dashWater);   // 5 = 파랑(JACK 지시)
+        // ★★★[JACK 0831 "터파기 선은 실선으로 — 점선이다 보니 연암하고 경암하고 헷갈려"]
+        //   도면에 점선이 일곱 줄이 되면서 계획선(터파기)과 현황선(지층)이 안 갈렸다.
+        //   ★<c>null</c>이 아니라 <b>"Continuous"</b>를 준다 — <c>null</c>은 "건드리지 않는다"라
+        //   옛 판이 심어 둔 <c>DASHED</c>가 그대로 남는다.
+        var stExcav  = Ensure("DH_횡단면_터파기", SectionCommand.ExcavAci, "Continuous");   // 6 = 마젠타, 실선
+        var stWater  = Ensure("DH_횡단면_지하수위", 5, dashWater, ltsW);   // 5 = 파랑(JACK 지시)
+
+        // ★★★[JACK 0831 "각 지층별로 색상을 줘"] <b>층마다 스타일을 따로 만든다.</b>
+        //   0828에는 지층을 전부 혼탁(8)으로 뒀다 — 여러 줄이 진한 색이면 그것만 보이는 도면이 될까 봐였다.
+        //   그런데 실제로 그려 보니 <b>어느 선이 어느 층인지 알 수가 없었다</b>(JACK 스샷).
+        //   층을 가르는 것이 이 기능의 전부이므로 <b>가려 보이는 것이 먼저</b>다.
+        //   색은 <see cref="StrataAci"/>에서 차례로 가져온다 — 초록(원지반)·흰색(계획)·
+        //   마젠타(터파기)·파랑(지하수위)과 <b>겹치지 않는</b> 것만 골라 두었다.
+        var stStrataBy = new System.Collections.Generic.Dictionary<int, ObjectId>();
+        ObjectId StrataStyleOf(int ord)
+        {
+            if (stStrataBy.TryGetValue(ord, out var got)) return got;
+            short aci = StrataAciOf(ord);
+            var id = Ensure($"DH_횡단면_지층{ord}", aci, dashStrata, ltsS);
+            stStrataBy[ord] = id;
+            return id;
+        }
+
+        // 지표면 이름에서 층 번호를 뽑는다 — 못 뽑으면 1번 색을 쓴다(색이 없는 것보다 낫다).
+        int StrataOrd(Transaction tr0, ObjectId surfId)
+        {
+            try
+            {
+                if (tr0.GetObject(surfId, OpenMode.ForRead) is CivilDb.Surface su)
+                {
+                    string nm2 = su.Name ?? "";
+                    if (nm2.StartsWith(StrataDraw.SurfPrefix, System.StringComparison.Ordinal))
+                    {
+                        string rest = nm2.Substring(StrataDraw.SurfPrefix.Length);
+                        int us = rest.IndexOf('_');
+                        if (int.TryParse(us > 0 ? rest.Substring(0, us) : rest, out int o)) return o;
+                    }
+                }
+            }
+            catch { }
+            return 1;
+        }
 
         int nG = 0, nP = 0, nE = 0, nS = 0, nW = 0, nSkip = 0;
         try
@@ -3311,7 +3547,13 @@ public sealed class XsecViewCommand
                             if (kind == "터파기") { if (!stExcav.IsNull) { sec.StyleId = stExcav; nE++; } }
                             else if (kind == "원지반") { if (!stGround.IsNull) { sec.StyleId = stGround; nG++; } }
                             else if (kind == "정지면") { if (!stPlan.IsNull) { sec.StyleId = stPlan; nP++; } }
-                            else if (kind == "지층") { if (!stStrata.IsNull) { sec.StyleId = stStrata; nS++; } }
+                            else if (kind == "지층")
+                            {
+                                // 이름 <c>DH_지층_3_풍화암</c>에서 번호를 뽑아 그 층의 색을 고른다.
+                                int ord = StrataOrd(tr, sec.SourceId);
+                                var sid2 = StrataStyleOf(ord);
+                                if (!sid2.IsNull) { sec.StyleId = sid2; nS++; }
+                            }
                             else if (kind == "지하수위") { if (!stWater.IsNull) { sec.StyleId = stWater; nW++; } }
                             else nSkip++;
                         }
@@ -3325,9 +3567,10 @@ public sealed class XsecViewCommand
         catch (System.Exception ex) { log?.AppendLine("  단면 선 색 적용 실패 — " + ex.Message); }
 
         log?.AppendLine($"  단면 선 — 원지반 {nG}개(초록) · 계획 {nP}개(흰색) · 터파기 {nE}개(마젠타"
-                      + (dash != null ? $"·{dash}" : "·점선 못 실음") + ")"
-                      + (nS > 0 ? $" · <b>지층 {nS}개</b>(혼탁·{dashStrata ?? "점선 없음"})" : "")
-                      + (nW > 0 ? $" · <b>지하수위 {nW}개</b>(파랑·{dashWater ?? "점선 없음"})" : "")
+                      + "·실선)"
+                      + (nS > 0 ? $" · <b>지층 {nS}개</b>({stStrataBy.Count}가지 색·{dashStrata ?? "점선 없음"}·무늬배율 {ltsS:0.###})" : "")
+                      + (nW > 0 ? $" · <b>지하수위 {nW}개</b>(파랑·{dashWater ?? "점선 없음"}·무늬배율 {ltsW:0.###})" : "")
+                      + $" · 무늬 목표 {DashPatternM:0.##}m(도면 LTSCALE {(SafeLts(db)):0.###})"
                       + (nSkip > 0 ? $" · 이름으로 못 가른 것 {nSkip}개" : ""));
         return nG + nP + nE + nS + nW;
     }
@@ -3345,10 +3588,28 @@ public sealed class XsecViewCommand
     /// <para><b>지표면 밖은 <c>NaN</c>이다.</b> <c>FindElevationAtXY</c>가 예외를 던지는데,
     /// 그것을 0으로 바꾸면 <b>있지도 않은 흙</b>을 세게 된다 — 계획면이 부지 안에만 있으므로
     /// 절단선 양 끝은 대개 지표면 밖이다.</para></summary>
+    /// <param name="strata">지층 경계 캐시 — <b>위에서 아래 차례</b>. <c>null</c>이면 지층 계산을 건너뛴다.</param>
+    /// <param name="csW">지하수위 캐시. <c>null</c>이면 물 구분 없이 전부 육상.</param>
+    /// <param name="led">여기에 지층별 수량을 담는다. <c>null</c>이면 안 담는다.</param>
+    ///
+    /// <remarks>★★★[JACK 0831] <b>지층 수량도 여기서 잰다 — 표본기를 따로 만들지 않는다.</b>
+    /// <para>절토·터파기 면적을 내는 <c>xs</c>·<c>gy</c>·<c>py</c>·<c>ey</c>가 이미 여기 있다.
+    /// 지층을 딴 함수에서 다시 표본하면 <b>경계 이분법·격자 간격</b>이 미세하게 달라져
+    /// <b>지층 합계가 전체 절토와 안 맞는</b> 일이 생긴다 — 그때는 어느 쪽이 맞는지도 알 수 없다.
+    /// <para>★[검토 MED-5] 다만 <b>같은 배열을 넘기는 것만으로는 모자랐다</b> —
+    /// <c>Accumulate</c>가 안에서 축을 <b>다시 지으면서</b> 1mm 안쪽 점을 뭉갰다.
+    /// 우리가 지표면 가장자리를 이분법으로 0.006mm까지 좁혀 놓은 점 쌍이 바로 그 크기다.
+    /// 그래서 <c>axis</c> 인자로 <b>이 배열을 그대로</b> 넘긴다 — 그것까지 해야 축이 같아진다.</para>
+    /// <para>★그리고 <b>축이 같아도 합이 저절로 맞지는 않는다</b> — 지층면이 부지를 못 덮으면
+    /// 그 칸이 조용히 빠진다. 그래서 <c>CollectQty</c>가 <b>측점마다 합을 견준다</b>.</para></remarks>
     private static DH.Grading.Core.XsecQty QtyAt(Transaction tr, CivilDb.Alignment al, double station,
         double wl, double wr,
         CachedGroundSurface csG, CachedGroundSurface csP, CachedGroundSurface csE,
-        System.Text.StringBuilder dbg)
+        System.Text.StringBuilder dbg,
+        System.Collections.Generic.IReadOnlyList<(DH.Grading.Core.RockClass Rock, CachedGroundSurface Cs)> strata = null,
+        CachedGroundSurface csW = null,
+        DH.Grading.Core.QtyLedger led = null,
+        double deepLimit = 5.0)
     {
         // 절단선의 좌우 끝을 구한다 — 종단도·횡단도가 쓰는 것과 <b>같은 함수</b>다.
         if (!SectionCommand.TryCut(al, station, wl, wr, out var cut))
@@ -3398,7 +3659,12 @@ public sealed class XsecViewCommand
         //   0.25m가 1mm 아래로 좁혀진다. 간격을 0.01m로 줄이는 것(6001점)보다 훨씬 싸다.
         var edges = new System.Collections.Generic.List<double>();
         int nEdge = 0;
-        foreach (var cs in new[] { csG, csP, csE })
+        // ★★[JACK 0831 · 검토 LOW-9] <b>지층·지하수위 가장자리도 훑는다.</b>
+        //   종전엔 원지반·계획·터파기 셋만 봤다 — 지층면이 끝나는 자리가 표본 사이에 있으면
+        //   그 칸(0.1m × 깊이)이 통째로 빠진다. 지층은 층마다 있으니 <b>층 수만큼</b> 빠진다.
+        var edgeSurfs = new System.Collections.Generic.List<CachedGroundSurface> { csG, csP, csE, csW };
+        if (strata != null) foreach (var (_, cs2) in strata) edgeSurfs.Add(cs2);
+        foreach (var cs in edgeSurfs)
         {
             if (cs == null) continue;
             bool Ok(double xx)
@@ -3445,6 +3711,41 @@ public sealed class XsecViewCommand
         }
 
         double[] gy = Read(csG), py2 = Read(csP), ey = Read(csE);
+
+        // ★★★[JACK 0831] 지층별 수량 — <b>바로 위에서 만든 그 배열</b>로 잰다.
+        if (led != null)
+        {
+            try
+            {
+                var bands = new System.Collections.Generic.List<DH.Grading.Core.StrataQuantity.Band>();
+                int nSkip2 = 0;
+                if (strata != null)
+                    foreach (var (rock, cs) in strata)
+                    {
+                        var z = Read(cs);
+                        // ★★★[스스로 잡음] <b>중간 층을 건너뛰면 아래층이 그 몫을 먹는다.</b>
+                        //   ★[JACK 0831] 선이 <b>상단</b>이 된 뒤로 방향이 <b>반대</b>다:
+                        //   <c>StrataQuantity</c>는 "아래 경계 = 다음 층의 상단"으로 띠를 만드므로,
+                        //   가운데 한 층이 빠지면 그 자리를 <b>위층이 흘러내려</b> 먹는다 —
+                        //   풍화암이어야 할 부피가 토사로 잡히는 식이다. 예외도 안 난다.
+                        //   ★지층면들은 <b>같은 격자</b>로 만들어지므로 보통은 전부 되거나 전부 안 된다.
+                        //     그래서 여기서 하나만 빠지면 <b>지표면이 하나 없어진 것</b>이고,
+                        //     그것은 조용히 넘길 일이 아니다 → 센다.
+                        if (z == null) { nSkip2++; continue; }
+                        bands.Add(new DH.Grading.Core.StrataQuantity.Band(rock, xs, z));
+                    }
+                if (nSkip2 > 0)
+                    dbg?.Append($" ⚠<b>지층 {nSkip2}장이 이 절단선을 못 만났다 — 위층이 그 몫을 먹는다</b>");
+                double[] wz = Read(csW);
+                string note = DH.Grading.Core.StrataQuantity.Accumulate(
+                    // ★[JACK 0831 검토] <b>축을 정말 넘긴다.</b> 주석은 넘긴다고 적혀 있었는데
+                    //   코드는 <c>deepLimit</c>에서 끝나 <c>axis</c>가 기본 <c>null</c>이었다 —
+                    //   오늘만 세 번째인 "주석이 코드보다 앞선" 자리다.
+                    led, xs, gy, xs, py2, xs, ey, bands, xs, wz, deepLimit, xs);
+                dbg?.Append(" | 지층 " + note);
+            }
+            catch (System.Exception exS) { dbg?.Append(" | ⚠지층 수량 실패 — " + exS.Message); }
+        }
 
         if (dbg != null)
         {
@@ -3507,15 +3808,69 @@ public sealed class XsecViewCommand
     /// <para>비용은 2.4배지만 <see cref="CachedGroundSurface"/>로 예외를 없앤 뒤라 감당된다.</para></summary>
     private const double SampleStepM = 0.1;
 
-    /// <summary>측점 이름 → 그 측점의 수량. 표를 그릴 때 이 표를 찾아 값을 채운다.</summary>
-    private static System.Collections.Generic.Dictionary<string, DH.Grading.Core.XsecQty>
+    /// <summary>한 도면치 수량 — 측점별 값, 측점별 <b>지층 원장</b>, 그리고 도면 전체의 <b>표 얼개</b>.</summary>
+    /// <param name="Warn">수량이 조용히 틀어졌을 때 <b>명령창에 올릴</b> 말. 없으면 빈 문자열.</param>
+    internal readonly record struct QtyResult(
+        System.Collections.Generic.Dictionary<string, DH.Grading.Core.XsecQty> Map,
+        System.Collections.Generic.Dictionary<string, DH.Grading.Core.QtyLedger> Ledgers,
+        DH.Grading.Core.QtyTableSpec Spec,
+        string Warn);
+
+    /// <summary>측점 이름 → 그 측점의 수량. 표를 그릴 때 이 표를 찾아 값을 채운다.
+    /// <para>★★★[JACK 0831] <b>표 얼개도 여기서 나온다</b> — 어느 한 측점에서라도 나온 조합을
+    /// 모아(합집합) 도면 전체에서 <b>하나뿐인</b> 표 모양을 짓는다. 측점마다 줄 수가 다르면
+    /// 횡단면도마다 축척이 제각각이 되어 도면을 못 쓴다.</para></summary>
+    private static QtyResult
         CollectQty(Database db, List<(ObjectId Id, string Name, double St, double Mother, int Ord)> sl,
                    ObjectId alignId, double wl, double wr,
                    System.Collections.Generic.List<SectionCommand.SurfPick> surfs,
                    System.Text.StringBuilder log)
     {
         var map = new System.Collections.Generic.Dictionary<string, DH.Grading.Core.XsecQty>();
-        if (sl == null || sl.Count == 0) return map;
+        var ledgers = new System.Collections.Generic.Dictionary<string, DH.Grading.Core.QtyLedger>();
+        // ★경고 계수기는 <c>Done()</c>보다 <b>먼저</b> 선언한다 — 지역 함수가 이것들을 읽는다.
+        int nMismatch = 0; string firstMismatch = null;
+        int nRockUnknown = 0;
+        int nOldVer = 0;          // ★옛 방식(층 하단)으로 만들어진 지층면 수
+        QtyResult Done()
+        {
+            // ★합집합 — <b>실제로 값이 나온</b> 열쇠만 모은다(JACK 인터뷰 확정).
+            //   0이나 NaN은 "나오지 않았다"로 본다 — 0인 줄을 세우면 표만 길어진다.
+            var present = new System.Collections.Generic.HashSet<DH.Grading.Core.QtyKey>();
+            foreach (var kv in ledgers)
+                foreach (var k in kv.Value.Keys)
+                {
+                    double v = kv.Value.Get(k);
+                    // ★★[JACK 0831 · 검토 MED-8] <b>줄을 세우는 문턱과 값을 찍는 문턱이 같아야 한다.</b>
+                    //   종전엔 여기가 <c>1e-9</c>, 찍는 쪽이 <c>5e-3</c>이라 <b>6자리</b> 벌어져 있었다 —
+                    //   0.005㎡짜리가 한 측점에서 한 번 나오면 <b>줄은 서고 모든 측점에서 –</b>가 된다.
+                    //   줄 수가 축척을 정하므로 안 보이는 값 하나가 <b>도면 전체를 흔든다</b>.
+                    if (!double.IsNaN(v) && System.Math.Abs(v) >= QtyShowMin) present.Add(k);
+                }
+            var spec = DH.Grading.Core.QtyTableSpec.BuildFromKeys(
+                present, null, DH.Grading.Core.QuantityTable.DeepLimitM);
+            log?.AppendLine($"  ★토적표 얼개 — 나온 조합 {present.Count}가지 → <b>{spec.TotalRows}줄</b>"
+                          + $"(머리 1 + 내용 {spec.BodyRows})"
+                          + " · <b>도면 전체에서 하나</b>다(측점마다 다르면 축척이 제각각이 된다)");
+            // ★★★[JACK 0831 · 검토 MED-6·7] <b>조용히 토사로 세는 것은 로그만으로 부족하다.</b>
+            //   폴백 토사와 진짜 토사는 <b>같은 줄</b>로 합쳐지므로 줄 수도 안 변하고 표도 멀쩡해 보인다.
+            //   암 수량이 통째로 사라졌는데 화면에 아무 자국이 없다 → <b>명령창까지 올린다</b>.
+            var warn = new System.Text.StringBuilder();
+            if (nRockUnknown > 0)
+                warn.Append($"\n  ⚠지층 {nRockUnknown}장의 암종을 못 알아내 [토사]로 셌습니다"
+                          + " — 도킹바에서 [확인]을 다시 누르면 암종이 도면에 저장됩니다.");
+            // ★★★[JACK 0831 검토] <b>옛 도면의 지층면은 하단 기준이다.</b>
+            //   합계는 그대로 맞아 <c>Recon</c> 대조로도 안 잡힌다 — 오직 이 표시만이 갈라 준다.
+            if (nOldVer > 0)
+                warn.Append($"\n  ⚠⚠지층면 {nOldVer}장이 [옛 방식 = 층 하단]으로 만들어져 있습니다"
+                          + " — 지금은 [층 상단] 기준이라 암종이 한 층씩 밀립니다."
+                          + " 도킹바에서 [확인]을 다시 눌러 주세요.");
+            if (nMismatch > 0)
+                warn.Append($"\n  ⚠측점 {nMismatch}개에서 지층별 합이 전체와 다릅니다"
+                          + " — 지층면이 부지를 다 못 덮었습니다.");
+            return new QtyResult(map, ledgers, spec, warn.ToString());
+        }
+        if (sl == null || sl.Count == 0) return Done();
         int nOk = 0, nNo = 0, nThrow = 0; string firstThrow = null;
         double sumCut = 0, sumFill = 0, sumExc = 0;
         int nNoPlan = 0;
@@ -3528,12 +3883,13 @@ public sealed class XsecViewCommand
                 tr.Commit();
                 // ★[검토] 조용히 빈 표를 돌려주면 "표가 왜 비었나"에 단서가 없다.
                 log?.AppendLine("  ⚠수량 — 노선을 못 열어 하나도 못 뺐다");
-                return map;
+                return Done();
             }
 
             // ★[검토] 지표면 캐시를 <b>한 번만</b> 만들어 모든 측점이 나눠 쓴다 —
             //   측점마다 다시 만들면 삼각형을 수십 번 읽는다.
-            CachedGroundSurface csG = null, csP = null, csE = null;
+            CachedGroundSurface csG = null, csP = null, csE = null, csW = null;
+            var strataCs = new List<(int Ord, DH.Grading.Core.RockClass Rock, CachedGroundSurface Cs, string Nm, string How)>();
             int nTri = 0;
             foreach (var sp in surfs)
             {
@@ -3545,10 +3901,44 @@ public sealed class XsecViewCommand
                     if (sp.Label == "원지반") csG = cs;
                     else if (sp.Label == "정지면") csP = cs;
                     else if (sp.Label == "터파기") csE = cs;
+                    // ★★★[JACK 0831] 지층·지하수위 캐시를 <b>버리지 않는다</b> —
+                    //   종전엔 여섯 장을 만들어 놓고 바로 버렸다(검토 지적).
+                    else if (sp.Label == "지층")
+                    {
+                        var rock = StrataDraw.RockOf(ts, out string how);
+                        // ★★★[JACK 0831 검증] <b>세는 코드가 없었다.</b> 선언만 해 두고 읽기만 해서
+                        //   <c>if (nRockUnknown > 0)</c>이 <b>늘 거짓</b>이었다 —
+                        //   "명령창까지 올린다"고 적은 주석이 코드보다 앞서 나가 있었다.
+                        //   암종을 못 알아내면 암 수량이 통째로 사라지는데 화면에 아무 자국이 없다.
+                        if (how == "모름") nRockUnknown++;
+                        // ★★★[JACK 0831 검토] <b>옛 도면의 지층면은 하단 기준이다.</b>
+                        //   0831 오후부터 면을 <b>상단</b>으로 만드는데 그 전 것은 <b>하단</b>이다.
+                        //   다시 [확인]을 안 누르고 횡단도를 돌리면 <b>암종이 한 층씩 밀린다</b>
+                        //   (토사가 풍화암 몫을 먹는다). 값은 안 줄어들어 <b>합계 대조로도 안 잡힌다</b> —
+                        //   S83이 바로 그것을 증명한다. 그래서 <b>만든 방식을 도면에서 읽어</b> 알린다.
+                        if (StrataDraw.VerOf(ts) < StrataDraw.SurfVer) nOldVer++;
+                        int ord = ProfileCommand.StrataOrdOf(sp.SurfName);
+                        strataCs.Add((ord, rock, cs, StrataDraw.ShortName(sp.SurfName), how));
+                    }
+                    else if (sp.Label == "지하수위") csW = cs;
                 }
                 catch (System.Exception exC) { log?.AppendLine($"  ⚠지표면 '{sp.Label}' 캐시 실패 — {exC.Message}"); }
             }
-            log?.AppendLine($"  지표면 캐시 {nTri}장 — 절단선 표고를 예외 없이 읽는다");
+            strataCs.Sort((a, b) => a.Ord.CompareTo(b.Ord));     // 위에서 아래 차례
+            var strata = new List<(DH.Grading.Core.RockClass Rock, CachedGroundSurface Cs)>();
+            foreach (var t in strataCs) strata.Add((t.Rock, t.Cs));
+            log?.AppendLine($"  지표면 캐시 {nTri}장 — 절단선 표고를 예외 없이 읽는다"
+                          + (strataCs.Count > 0 ? $" · 지층 {strataCs.Count}장" : " · 지층 없음")
+                          + (csW != null ? " · 지하수위 있음" : " · 지하수위 없음"));
+            // ★★[JACK 0831] <b>암종을 어디서 알았는지</b> 반드시 남긴다.
+            //   못 읽으면 조용히 <b>토사</b>로 세는데, 그러면 암 수량이 통째로 사라지고
+            //   도면에는 아무 자국도 안 남는다 — 수량에서 가장 위험한 종류다.
+            foreach (var t in strataCs)
+                log?.AppendLine($"    지층 {t.Ord}. {t.Nm} → {DH.Grading.Core.QtyTableSpec.NameOf(t.Rock)}"
+                              + (t.How == "설명란" ? " (도면에 적혀 있음)"
+                               : t.How == "도킹바" ? " (도킹바에서 읽음 — 도면에는 없다)"
+                               : t.How == "이름" ? " (층 이름이 표준 이름과 같아 그렇게 봤다)"
+                               : " ⚠<b>못 알아내 토사로 셌다 — 수량이 틀릴 수 있다</b>"));
             foreach (var s in sl)
             {
                 try
@@ -3558,7 +3948,47 @@ public sealed class XsecViewCommand
                     // ★[JACK 0827] <b>모든 측점을 남긴다.</b> 셋만 찍으니 하필 부지 밖 측점이 걸려
                     //   "왜 전부 빈칸인지"를 볼 수가 없었다. 측점이 30개 남짓이라 길지도 않다.
                     var dbg = new System.Text.StringBuilder();
-                    var q = QtyAt(tr, al0, s.St, wl, wr, csG, csP, csE, dbg);
+                    // ★측점마다 <b>새 원장</b>이다 — 돌려 쓰면 값이 겹쳐 쌓인다.
+                    var led = new DH.Grading.Core.QtyLedger();
+                    var q = QtyAt(tr, al0, s.St, wl, wr, csG, csP, csE, dbg,
+                                  strata, csW, led, DH.Grading.Core.QuantityTable.DeepLimitM);
+                    // ★★★[JACK 0831 · 검토 HIGH-1] <b>성토·되메우기를 원장에 넣는다.</b>
+                    //   표가 이제 원장만 읽는데 <c>StrataQuantity.Accumulate</c>는
+                    //   <b>절토·터파기만</b> 담는다 — 성토와 되메우기를 넣는 코드가 아예 없었다.
+                    //   옛 표는 <c>XsecQty</c>에서 바로 꺼내 썼으므로 값이 있었는데,
+                    //   얼개로 바꾸면서 <b>줄은 서고 값만 사라졌다</b> — 사용자는 "해당 없음"으로 읽는다.
+                    //   ★두 값은 암종을 안 가른다(쌓는 흙·되메우는 흙) → 열쇠도 하나씩뿐이다.
+                    led.Add(DH.Grading.Core.QtyKey.OfFill(), q.Fill);
+                    led.Add(DH.Grading.Core.QtyKey.OfBackfill(), q.Backfill);
+                    ledgers[s.Name] = led;
+
+                    // ★★★[JACK 0831 · 스스로 잡음] <b>지층별 합이 전체와 맞는지 매번 대조한다.</b>
+                    //
+                    //   <c>CrossSectionArea.Above</c>는 <c>NaN</c> 칸을 <b>조용히 건너뛰고</b> 나머지를 더한다.
+                    //   지층면이 부지보다 좁으면 그 밖 구간이 통째로 빠지는데 <b>예외도 경고도 없다</b> —
+                    //   토적표만 보면 숫자가 다 차 있어 <b>멀쩡해 보인다</b>. 수량에서 가장 무서운 종류다.
+                    //   → 전체 절토·터파기와 지층별 합을 <b>측점마다</b> 견주고, 어긋나면 그 자리에서 말한다.
+                    double sCut = 0, sExc = 0;
+                    bool anyCut = false, anyExc = false;
+                    foreach (var k in led.Keys)
+                    {
+                        double v = led.Get(k);
+                        if (double.IsNaN(v)) continue;
+                        if (k.Kind == DH.Grading.Core.QtyKeyKind.Cut) { sCut += v; anyCut = true; }
+                        else if (k.Kind == DH.Grading.Core.QtyKeyKind.Exc) { sExc += v; anyExc = true; }
+                    }
+                    void Recon(string nm2, double whole, double part, bool any)
+                    {
+                        if (double.IsNaN(whole) || !any) return;
+                        double tol = System.Math.Max(0.01, System.Math.Abs(whole) * 0.001);   // 0.1% 또는 0.01㎡
+                        if (System.Math.Abs(whole - part) <= tol) return;
+                        nMismatch++;
+                        firstMismatch ??= $"{s.Name} {nm2} 전체 {whole:F2}㎡ ≠ 지층합 {part:F2}㎡"
+                                        + $"(차이 {whole - part:F2}㎡)";
+                        dbg?.Append($" ⚠<b>{nm2} 합 불일치</b> 전체 {whole:F2} ≠ 지층합 {part:F2}");
+                    }
+                    Recon("절토", q.Cut, sCut, anyCut);
+                    Recon("터파기", q.ExcTotal, sExc, anyExc);
                     if (dbg != null && dbg.Length > 0) log?.AppendLine($"    [{s.Name}]{dbg}");
                     map[s.Name] = q;
                     if (double.IsNaN(q.Cut) && double.IsNaN(q.ExcShallow)) nNo++;
@@ -3596,9 +4026,13 @@ public sealed class XsecViewCommand
                       + (nNoE > 0 ? $" · 터파기가 없던 측점 {nNoE}개" : "")
                       + (nNoPlan > 0 ? $" · ⚠계획면이 터파기를 못 덮은 측점 {nNoPlan}개" : "")
                       + (nThrow > 0 ? $" · ⚠<b>쟰다가 터진 측점 {nThrow}개</b>(첫 사례: {firstThrow})" : "")
+                      + (nMismatch > 0
+                         ? $" · ⚠⚠<b>지층합이 전체와 안 맞는 측점 {nMismatch}개</b>({firstMismatch})"
+                           + " — <b>지층면이 부지를 다 못 덮었다는 뜻이다</b>"
+                         : " · 지층합 = 전체 (대조 통과)")
                       + $" · 합계 절토 {sumCut:F1}㎡ · 성토 {sumFill:F1}㎡ · 터파기 {sumExc:F1}㎡"
                       + "  ※단면 면적이다(체적은 측점 간격을 곱해야 한다)");
-        return map;
+        return Done();
     }
 
     /// <summary>★★[JACK 0826 "측점 기능으로 측점을 추가했을 때 횡단뷰가 그냥 날아가 버려.

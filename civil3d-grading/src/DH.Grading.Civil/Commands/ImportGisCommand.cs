@@ -47,11 +47,43 @@ public sealed class ImportGisCommand
 
         try
         {
-            if (!AskBox(ed, "등고선", out double x0, out double y0, out double x1, out double y1)) return;
-            int epsg = ResolveEpsg(db, out string csNote);
+            // ★★★[JACK 0901 "그냥 정지옵션 좌표계 띄워 주고 도킹바에서 바꾸면 정지옵션도 바뀌게"]
+            //   <b>정지옵션 하나를 진짜로 삼는다.</b> 예전에는 도면 좌표계를 먼저 보고 없을 때만
+            //   정지옵션을 봤는데(ResolveEpsg), 그러면 둘이 다를 수 있어 <b>"좌표계가 두 개"</b>가 된다.
+            //   여기서는 정지옵션을 쓰고, <b>도면 좌표계를 거기에 맞춘다</b> — 그래서 다를 수가 없다.
+            //   ★★<b>여기서 도면 좌표계를 건드리지 않는다.</b> 이미 좌표계를 잡아 놓고 쓰던
+            //   프로젝트에서 열 때마다 도면을 고치면 <b>남의 설정을 말없이 바꾸는 것</b>이고,
+            //   못 바꾸면 쓸데없는 오류 멘트가 뜬다(JACK 0901). 바꾸는 것은 사용자가
+            //   도킹바에서 <b>직접 골랐을 때</b>만 한다.
+            int epsg = GradingSettings.ExportEpsg;
+            string csNote = $"정지옵션 EPSG:{epsg}";
             ed.WriteMessage($"\n[등고선] 좌표계: {csNote}");
+            // ★★<b>접속부터 본다</b> — 10분 걸려 범위를 고른 뒤에 "VPN을 확인하세요"는
+            //   못 할 짓이다. 서버가 없으면 어차피 범위를 골라도 소용이 없다(검토 0901).
             if (!Reachable(ed)) return;
 
+            // ★★★[JACK 0901 "서버 지표면도 지도·두점 명령창 묻지 말고 그냥 바로 도킹바 띄워"]
+            //   빈 도면에서 찍을 근거가 없으니 <b>고를 것이 없다</b> — 물어봐야 답이 하나다.
+            //   도킹바가 범위를 받으면 스스로 DHCONTOURBOX를 태워 가져오고 <b>닫힌다</b>.
+            MapPalette.Show(doc, epsg, csNote);
+        }
+        catch (System.Exception ex)
+        {
+            ed.WriteMessage("\n[등고선 오류] " + ex.Message);
+            AcadApp.ShowAlertDialog("등고선 가져오기 중 오류:\n" + ex.Message);
+        }
+    }
+
+    /// <summary>★★★[JACK 0901] <b>범위를 이미 안다</b>는 전제로 등고선을 받아 원지반까지 만든다.
+    /// <para>지도 도킹바가 이것을 그대로 부른다 — 범위를 얻는 방법만 다르고
+    /// <b>받아서 그리는 일은 한 벌</b>이다(§50).</para></summary>
+    internal static bool ImportContourBox(Document doc, int epsg, string csNote,
+                                          double x0, double y0, double x1, double y1)
+    {
+        Editor ed = doc.Editor;
+        Database db = doc.Database;
+        try
+        {
             ed.WriteMessage("\n[등고선] 사내 DB에서 받는 중…");
             List<GisDb.ContourLine> lines;
             bool cut; string diag;
@@ -59,14 +91,14 @@ public sealed class ImportGisCommand
             {
                 lines = GisDb.LoadContours(x0, y0, x1, y1, epsg, SimplifyM, MaxContourRows, out cut, out diag);
             }
-            catch (System.Exception dex) { Refuse(ed, "등고선", "등고선을 받지 못했습니다.\n" + dex.Message); return; }
+            catch (System.Exception dex) { Refuse(ed, "등고선", "등고선을 받지 못했습니다.\n" + dex.Message); return false; }
 
             ed.WriteMessage("\n[등고선] " + diag);
             if (lines.Count == 0)
             {
                 Refuse(ed, "등고선", "이 범위에는 등고선 자료가 없습니다.\n" +
                                      "좌표계(원점)가 맞는지, 범위가 국내인지 확인하세요.");
-                return;
+                return false;
             }
 
             // ── 3D 등고선 작도(주곡선/계곡선 분리) ──
@@ -103,11 +135,13 @@ public sealed class ImportGisCommand
             AcadApp.ShowAlertDialog("등고선 가져오기 완료\n\n" + diag + "\n" + surfNote +
                 (cut ? "\n\n⚠ 자료가 많아 일부만 가져왔습니다 — 범위를 좁혀 다시 받으세요." : ""));
             try { DiagLog.Append($"\n■ DHCONTOUR — {diag} · {surfNote} · {csNote}\n"); } catch { }
+            return true;
         }
         catch (System.Exception ex)
         {
             ed.WriteMessage("\n[등고선 오류] " + ex.Message);
             AcadApp.ShowAlertDialog("등고선 가져오기 중 오류:\n" + ex.Message);
+            return false;
         }
     }
 
@@ -123,11 +157,35 @@ public sealed class ImportGisCommand
 
         try
         {
-            if (!AskBox(ed, "지적도", out double x0, out double y0, out double x1, out double y1)) return;
+            // ★좌표계를 <b>먼저</b> 정한다 — 지도에서 고른 박스도 이 원점으로 옮겨야 하기 때문이다.
             int epsg = ResolveEpsg(db, out string csNote);
             ed.WriteMessage($"\n[지적도] 좌표계: {csNote}");
+            // ★★<b>접속부터 본다</b> — 10분 걸려 범위를 고른 뒤에 "VPN을 확인하세요"는
+            //   못 할 짓이다. 서버가 없으면 어차피 범위를 골라도 소용이 없다(검토 0901).
             if (!Reachable(ed)) return;
+            // ★[JACK 0901 "지적도 버튼 눌러서 하는 건 그냥 캐드상 드래그로"]
+            //   지적도는 이미 현장이 있는 도면에서 쓰는 것이라 두 점이 더 빠르다.
+            if (!TwoPoints(ed, "지적도", out double x0, out double y0, out double x1, out double y1)) return;
+            ImportParcelBox(doc, epsg, csNote, x0, y0, x1, y1, alone: true);
+        }
+        catch (System.Exception ex)
+        {
+            ed.WriteMessage("\n[지적도 오류] " + ex.Message);
+            AcadApp.ShowAlertDialog("지적도 가져오기 중 오류:\n" + ex.Message);
+        }
+    }
 
+    /// <summary>★★★[JACK 0901] <b>범위를 이미 안다</b>는 전제로 지적도를 받아 그린다.
+    /// <para>지도 도킹바에서 [지적도]를 체크해 두면 지표면과 <b>같은 범위로 같이</b> 들어온다.</para>
+    /// <param name="alone">혼자 부른 것인가 — 그때만 완료 대화상자를 띄운다.
+    ///   지표면과 같이 올 때는 <b>대화상자가 둘</b>이면 성가시다.</param></summary>
+    internal static void ImportParcelBox(Document doc, int epsg, string csNote,
+                                         double x0, double y0, double x1, double y1, bool alone)
+    {
+        Editor ed = doc.Editor;
+        Database db = doc.Database;
+        try
+        {
             ed.WriteMessage("\n[지적도] 사내 DB에서 받는 중…");
             List<GisDb.Parcel> parcels;
             bool cut; string diag;
@@ -198,9 +256,11 @@ public sealed class ImportGisCommand
             string done = $"필지 {parcels.Count}개(선 {nLine}·지번 {nText})" +
                           (cut ? $" · ⚠상한 {MaxParcelRows} 도달(범위 축소 권장)" : "");
             ed.WriteMessage($"\n[지적도] {done}");
-            AcadApp.ShowAlertDialog("지적도 가져오기 완료\n\n" + done +
-                "\n\n※ GIS_Design_Loader server 제공" +
-                (cut ? "\n⚠ 자료가 많아 일부만 가져왔습니다 — 범위를 좁혀 다시 받으세요." : ""));
+            // ★지표면과 같이 올 때는 대화상자를 안 띄운다 — 둘이 연달아 뜨면 성가시다.
+            if (alone)
+                AcadApp.ShowAlertDialog("지적도 가져오기 완료\n\n" + done +
+                    "\n\n※ GIS_Design_Loader server 제공" +
+                    (cut ? "\n⚠ 자료가 많아 일부만 가져왔습니다 — 범위를 좁혀 다시 받으세요." : ""));
             try { DiagLog.Append($"\n■ DHPARCEL — {done} · {csNote}\n"); } catch { }
         }
         catch (System.Exception ex)
@@ -241,7 +301,7 @@ public sealed class ImportGisCommand
                 try { surf.ContoursDefinition.AddContours(contourIds, 1.0, 15.0, 0.1, 1.0, flat); }
                 catch { surf.ContoursDefinition.AddContours(contourIds, 1.0, 100.0, 0.3, 1.0); }
             }
-            // [JACK 0731] 처음 만들어질 때 스타일은 삼각망이 아니라 **등고선**(주 25m·보조 5m)으로.
+            // [JACK 0731] 처음 만들어질 때 스타일은 삼각망이 아니라 **등고선**(주 5m·보조 1m — JACK 0901)으로.
             try
             {
                 ObjectId stId = EnsureContourStyle(tr);
@@ -273,9 +333,29 @@ public sealed class ImportGisCommand
     ///   · 보조등고선 <see cref="MinorInterval"/>m · 주등고선 <see cref="MajorInterval"/>m
     ///   · 표시 항목은 등고선 + 경계만(경계를 켜둬야 클릭으로 지표면을 집을 수 있다)
     /// 이름이 같은 스타일이 이미 있으면 그것을 갱신해 쓴다(중복 생성 방지). 실패하면 Null → 기본 스타일 유지.</summary>
-    private const double MinorInterval = 5.0;
-    private const double MajorInterval = 25.0;
-    internal const string GroundStyleName = "DH-원지반 등고선(5·25)";
+    /// <summary>★[JACK 0901 "주등고선은 5m 보조는 1m로 불러지게 해"]
+    /// <para>예전 값(보조 5·주 25)은 넓은 지형을 훑어보는 축척이었다.
+    /// 정지 설계는 <b>1m 단위로 흙이 오간다</b> — 5m 간격으로는 계단이 안 보인다.</para></summary>
+    private const double MinorInterval = 1.0;
+    private const double MajorInterval = 5.0;
+    /// <summary>지표면 스타일 이름 — <b>간격을 이름에 넣지 않는다</b>(검토 0901).
+    /// <para>예전 이름은 "(5·25)"였는데 간격을 5·1로 바꾸자 이름만 거짓말이 됐다.</para></summary>
+    internal const string GroundStyleName = "DH-원지반 등고선";
+
+    /// <summary>옛 이름 — 이미 이 이름으로 만들어진 도면이 있어 <b>찾아서 이어 쓴다</b>.
+    /// <para>안 그러면 스타일 목록에 둘이 남고, 사람은 어느 것이 사는지 모른다.</para></summary>
+    private const string GroundStyleNameOld = "DH-원지반 등고선(5·25)";
+
+    /// <summary>등고선 한 종류의 색을 <b>번호로</b> 못 박는다(평면·모델 둘 다).</summary>
+    private static void SetContourColor(Autodesk.Civil.DatabaseServices.Styles.SurfaceStyle st,
+                                        Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType t,
+                                        short aci)
+    {
+        var c = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
+                    Autodesk.AutoCAD.Colors.ColorMethod.ByAci, aci);
+        try { st.GetDisplayStylePlan(t).Color = c; } catch { }
+        try { st.GetDisplayStyleModel(t).Color = c; } catch { }
+    }
 
     private static ObjectId EnsureContourStyle(Transaction tr)
     {
@@ -293,6 +373,25 @@ public sealed class ImportGisCommand
             }
             catch { }
         }
+        // 옛 이름으로 만들어 둔 것이 있으면 <b>이름만 갈아</b> 이어 쓴다 — 둘로 늘리지 않는다.
+        if (id.IsNull)
+        {
+            foreach (ObjectId sid in styles)
+            {
+                try
+                {
+                    if (tr.GetObject(sid, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.Styles.SurfaceStyle sOld &&
+                        string.Equals(sOld.Name, GroundStyleNameOld, System.StringComparison.OrdinalIgnoreCase))
+                    {
+                        sOld.UpgradeOpen();
+                        sOld.Name = GroundStyleName;
+                        id = sid;
+                        break;
+                    }
+                }
+                catch { }
+            }
+        }
         if (id.IsNull) id = styles.Add(GroundStyleName);
         if (id.IsNull) return ObjectId.Null;
 
@@ -302,8 +401,8 @@ public sealed class ImportGisCommand
 
         // 표시 항목 정리 — 등고선·경계만 켜고 나머지(삼각망·점·경사 등)는 전부 끈다.
         //   열거값 이름을 일일이 적지 않고 전체를 돌며 처리(버전별 항목 차이에 안전).
-        foreach (Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType t in
-                 System.Enum.GetValues(typeof(Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType)))
+        var dt = typeof(Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType);
+        foreach (Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType t in System.Enum.GetValues(dt))
         {
             bool on = t == Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType.MajorContour
                    || t == Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType.MinorContour
@@ -311,11 +410,20 @@ public sealed class ImportGisCommand
             try { st.GetDisplayStylePlan(t).Visible = on; } catch { }
             try { st.GetDisplayStyleModel(t).Visible = on; } catch { }
         }
+
+        // ★★★[JACK 0901 "주등고선은 색상 9, 보조등고선은 색상 8"]
+        //   <b>색은 반드시 번호로 못 박는다.</b> 이 저장소가 여러 번 데인 자리인데(§56),
+        //   Civil 객체는 <b>스타일 → 표시 레이어 → 뷰별 재정의</b> 세 층을 지나고,
+        //   가운데 어디든 <c>ByLayer</c>가 있으면 <b>레이어 색이 이긴다</b> —
+        //   그러면 여기서 아무 색을 줘도 화면은 안 바뀐다.
+        SetContourColor(st, Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType.MajorContour, 9);
+        SetContourColor(st, Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType.MinorContour, 8);
         return id;
     }
 
-    /// <summary>범위 두 점 클릭(현재 UCS → WCS 변환). 너무 작으면 거부.</summary>
-    private static bool AskBox(Editor ed, string label, out double x0, out double y0, out double x1, out double y1)
+    /// <summary>도면에서 두 모서리를 찍는다(현재 UCS → WCS).</summary>
+    private static bool TwoPoints(Editor ed, string label, out double x0, out double y0,
+                                  out double x1, out double y1)
     {
         x0 = y0 = x1 = y1 = 0;
         var p1 = ed.GetPoint($"\n[{label}] 가져올 범위 첫 번째 모서리 클릭 (Esc=취소): ");
@@ -327,16 +435,45 @@ public sealed class ImportGisCommand
         var w2 = p2.Value.TransformBy(ucs);
         x0 = System.Math.Min(w1.X, w2.X); x1 = System.Math.Max(w1.X, w2.X);
         y0 = System.Math.Min(w1.Y, w2.Y); y1 = System.Math.Max(w1.Y, w2.Y);
-        if (x1 - x0 < 1.0 || y1 - y0 < 1.0)
+        return Sane(ed, label, x0, y0, x1, y1);
+    }
+
+    /// <summary>★엔진이 없는 PC용 — <b>예전 브라우저 방식</b>으로 지도를 열어 가져온다.</summary>
+    [CommandMethod("DHCONTOURWEB")]
+    public void RunContourViaBrowser()
+    {
+        Document doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        GradingSettings.SyncToDocument(doc);
+        Editor ed = doc.Editor;
+        int epsg = ResolveEpsg(doc.Database, out string csNote);
+        ed.WriteMessage($"\n[등고선] 좌표계: {csNote}");
+        if (!Reachable(ed)) return;
+        var end = MapPickCommand.TryPick(ed, epsg, out double x0, out double y0,
+                                         out double x1, out double y1, out string why);
+        if (end != MapPickCommand.PickEnd.Got)
         {
-            Refuse(ed, label, "지정한 범위가 너무 작습니다(1m 미만).");
-            return false;
+            if (end != MapPickCommand.PickEnd.Cancelled)
+                ed.WriteMessage($"\n  ⚠지도를 못 썼습니다 — {why}");
+            return;
         }
-        return true;
+        if (!Sane(ed, "등고선", x0, y0, x1, y1)) return;
+        ImportContourBox(doc, epsg, csNote, x0, y0, x1, y1);
+    }
+
+    /// <summary>범위가 쓸 만한가 — <b>지도든 두 점이든 여기 하나</b>를 지난다(§50).
+    /// <para>★같은 자리를 두 번 클릭하면 0×0이 되는데, 그러면 자료가 0건이라
+    /// "좌표계가 맞는지 확인하세요"가 뜬다 — <b>멀쩡한 좌표계를 의심하게 만든다</b>(검토 0901).</para></summary>
+    internal static bool Sane(Editor ed, string label, double x0, double y0, double x1, double y1)
+    {
+        if (x1 - x0 >= 1.0 && y1 - y0 >= 1.0) return true;
+        Refuse(ed, label, $"지정한 범위가 너무 작습니다(가로 {x1 - x0:F1}m × 세로 {y1 - y0:F1}m).\n\n" +
+                          "모서리 두 곳을 서로 떨어뜨려 다시 골라 주세요.");
+        return false;
     }
 
     /// <summary>도면 좌표계 우선, 없으면 정지옵션 값(배경지도와 동일 규칙).</summary>
-    private static int ResolveEpsg(Database db, out string note)
+    internal static int ResolveEpsg(Database db, out string note)
     {
         int optEpsg = GradingSettings.ExportEpsg;
         string csCode = KoreaCs.Read(db);
