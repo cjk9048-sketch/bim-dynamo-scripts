@@ -213,6 +213,12 @@ public sealed class ViewSurfaceCommand
                 foreach (var nm in LoadOff(db, tr))
                 {
                     if (!lt.Has(nm)) continue;
+                    // ★★★[검토 0901] <b>가져온 원본은 되켜지 않는다.</b>
+                    //   등고선·표고점 원본은 이제 <b>일부러 꺼 둔다</b>(JACK 0901 "원본 선을 아예
+                    //   안 그리게") — 지표면이 제 등고선을 따로 그리므로 두 겹이 겹치기 때문이다.
+                    //   그런데 예전 판으로 만든 도면에는 이 이름들이 <b>도면 안에 적혀</b> 남아 있어,
+                    //   [전부 보기] 한 번에 원본이 되살아나 JACK 지시가 <b>되돌려진다</b>.
+                    if (System.Array.IndexOf(ImportGisCommand.ImportLayers, nm) >= 0) continue;
                     try
                     {
                         var lr = (LayerTableRecord)tr.GetObject(lt[nm], OpenMode.ForRead);

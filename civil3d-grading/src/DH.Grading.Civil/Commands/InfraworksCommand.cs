@@ -1,4 +1,4 @@
-﻿using Autodesk.AutoCAD.ApplicationServices;
+using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Runtime;
@@ -109,14 +109,18 @@ public sealed class InfraworksCommand
                 // [다중 구역 0729] '정지면_DH이전'(누적 기준면) 등 산출물 파생 이름 전부 제외 — 접두 일치.
                 // ★[v32.2] '정지순수_DH'(종단·횡단용 순수 정지면)도 우리 산출물이다 —
                 //   빼지 않으면 삼각형이 많을 때 <b>원지반으로 오인</b>되어 토공량·옹벽이 통째로 틀어진다.
-                var skip = new[] { "가상절토_DH", "가상성토_DH", "정지면_DH", SectionCommand.PurePadSurfaceBase };
+                // ★★★[검토 0901] 판정 기준이 <b>삼각형 수</b>인데 우리 산출물 목록이 여기만 낡았다.
+                //   지층면은 최대 201×201 격자라 <b>8만 개</b>다 — 서버에서 작은 범위로 받은 원지반보다
+                //   많으면 <b>지층면이 원지반으로 뽑힌다</b>. 그러면 토공량 CSV와 옹벽 저면 표고가
+                //   지층면 기준으로 계산되는데 예외도 안 나고 로그 한 줄만 남는다.
+                //   SectionCommand는 0828에 이미 고친 자리다 — <b>같은 규칙</b>을 쓴다(§50).
                 Autodesk.Civil.DatabaseServices.TinSurface? bestSurf = null; int bestTri = -1;
                 foreach (ObjectId sid in civilDoc.GetSurfaceIds())
                 {
                     if (trG.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.TinSurface ts) continue;
-                    bool ours = false;
-                    foreach (var sk in skip) if (ts.Name.StartsWith(sk)) { ours = true; break; }
-                    if (ours) continue;
+                    string nmG = ts.Name ?? "";
+                    if (nmG.Contains("_DH") || nmG.StartsWith("DH_", System.StringComparison.Ordinal)
+                        || nmG.StartsWith(SectionCommand.PadSurfaceBase, System.StringComparison.Ordinal)) continue;
                     int tri = 0; try { tri = ts.GetTriangles(false).Count; } catch { }
                     if (tri > bestTri) { bestTri = tri; bestSurf = ts; }
                 }

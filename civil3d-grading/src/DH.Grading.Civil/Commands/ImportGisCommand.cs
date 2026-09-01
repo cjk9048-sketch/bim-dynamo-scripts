@@ -23,11 +23,18 @@ public sealed class ImportGisCommand
     internal const string LayerContourIndex = "DH-등고선-계곡선";
     internal const string LayerParcel = "DH-지적도";
     internal const string LayerJibun = "DH-지번";
+    /// <summary>수치지도 DXF의 표고점 — 서버 지표면에는 없고 DXF에만 있다.</summary>
+    internal const string LayerSpot = "DH-표고점";
+
     internal const string GroundSurfaceName = "원지반";
+
+    /// <summary>원지반을 만들 때 <b>갈아 끼우는</b> 레이어 — 서버·수치지도 두 경로가 같이 쓴다.</summary>
+    internal static readonly string[] GroundImportLayers =
+        { LayerContour, LayerContourIndex, LayerSpot };
 
     /// <summary>가져온 데이터가 올라가는 레이어(초기화·보존 판정 공용).</summary>
     internal static readonly string[] ImportLayers =
-        { LayerContour, LayerContourIndex, LayerParcel, LayerJibun };
+        { LayerContour, LayerContourIndex, LayerParcel, LayerJibun, LayerSpot };
 
     private const int MaxContourRows = 60000;   // 안전 상한(실측 5km각 754가닥이라 사실상 여유)
     private const int MaxParcelRows = 20000;    // 실측 5km각 6만 필지 → 상한 걸고 안내
@@ -105,9 +112,15 @@ public sealed class ImportGisCommand
             var ids = new ObjectIdCollection();
             using (var tr = db.TransactionManager.StartTransaction())
             {
-                EraseOnLayers(db, tr, new[] { LayerContour, LayerContourIndex });   // 다시 불러오면 교체
+                // ★★[검토 0901] <b>표고점도 같이 지운다.</b> 수치지도로 받은 뒤 서버로 다시 받으면
+                //   지표면은 새로 만들어지는데 표고점 851개는 <b>아무 지표면도 안 문 채</b> 남는다.
+                //   레이어가 꺼져 있어 눈에도 안 띈다. 두 경로가 <b>같은 목록</b>을 지워야 한다(§50).
+                EraseOnLayers(db, tr, GroundImportLayers);   // 다시 불러오면 교체
                 ObjectId layMain = EnsureLayer(db, tr, LayerContour, 8);            // 주곡선 회색
                 ObjectId layIdx = EnsureLayer(db, tr, LayerContourIndex, 30);       // 계곡선 주황
+                // ★원본 선은 꺼 둔다 — 지표면이 제 등고선을 그리므로 두 벌이 겹친다(JACK 0901).
+                HideLayer(db, tr, LayerContour);
+                HideLayer(db, tr, LayerContourIndex);
                 var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
                 foreach (var ln in lines)
                 {
@@ -273,7 +286,17 @@ public sealed class ImportGisCommand
     // ── 공통 ──────────────────────────────────────────────────────────────────
 
     /// <summary>등고선 폴리선들로 "원지반" TIN 지표면 생성(있으면 교체). 반환=안내문.</summary>
-    private static string BuildGroundSurface(Database db, Editor ed, ObjectIdCollection contourIds)
+    /// <summary>수치지도 명령도 이것을 쓴다 — <b>원지반을 만드는 규칙은 한 벌</b>이다(§50).</summary>
+    /// <param name="spotIds">표고점(DBPoint). ★★<b>등고선과 같은 자루에 넣으면 안 된다</b>(검토 0901) —
+    ///   등고선 정의는 <b>선만</b> 받으므로 점은 조용히 무시된다. 봉우리·안부·계곡 바닥처럼
+    ///   등고선 사이에 표고점만 있는 자리가 <b>납작해지는데</b> "표고점 851개"라고 보고되어 맞아 보인다.</param>
+    internal static string BuildGroundSurfaceFrom(Database db, Editor ed,
+                                                  ObjectIdCollection contourIds,
+                                                  ObjectIdCollection spotIds = null)
+        => BuildGroundSurface(db, ed, contourIds, spotIds);
+
+    private static string BuildGroundSurface(Database db, Editor ed, ObjectIdCollection contourIds,
+                                             ObjectIdCollection spotIds = null)
     {
         if (contourIds.Count == 0) return "지표면 생략(등고선 없음)";
         try
@@ -283,7 +306,24 @@ public sealed class ImportGisCommand
                 GradingBuilder.EraseSurfacesByBaseName(tr0, GroundSurfaceName);   // 다시 불러오면 교체
                 tr0.Commit();
             }
-            ObjectId surfId = TinSurface.Create(db, GroundSurfaceName);
+            // ★★★[검토 0901] <b>이름이 정말 비었는지 보고 만든다.</b>
+            //   지우기가 실패해도(다른 것이 이 지표면을 물고 있으면 그렇다) 조용히 넘어가는데,
+            //   그 상태로 같은 이름을 만들면 터진다 — 그때는 <b>옛 등고선은 이미 지웠고</b>
+            //   <b>레이어도 이미 꺼 놓은</b> 뒤라 화면에 낡은 지표면만 남고 사유를 알 수 없다.
+            string useName = GroundSurfaceName;
+            try
+            {
+                using var trChk = db.TransactionManager.StartTransaction();
+                if (GradingBuilder.SurfaceExistsByBaseName(trChk, GroundSurfaceName))
+                {
+                    useName = GradingBuilder.UniqueName(db, trChk, GroundSurfaceName);
+                    ed.WriteMessage($"\n[지표면] 옛 '{GroundSurfaceName}'을 못 지웠습니다"
+                                  + $" — 새 이름 '{useName}'으로 만듭니다(옛것을 지우고 다시 하세요).");
+                }
+                trChk.Commit();
+            }
+            catch { }
+            ObjectId surfId = TinSurface.Create(db, useName);
             using var tr = db.TransactionManager.StartTransaction();
             var surf = (TinSurface)tr.GetObject(surfId, OpenMode.ForWrite);
             // [JACK 0731 — 지표면이 뭉뚱그려짐] 정밀도 3종 세트:
@@ -301,13 +341,29 @@ public sealed class ImportGisCommand
                 try { surf.ContoursDefinition.AddContours(contourIds, 1.0, 15.0, 0.1, 1.0, flat); }
                 catch { surf.ContoursDefinition.AddContours(contourIds, 1.0, 100.0, 0.3, 1.0); }
             }
-            // [JACK 0731] 처음 만들어질 때 스타일은 삼각망이 아니라 **등고선**(주 5m·보조 1m — JACK 0901)으로.
+            // [JACK 0731] 처음 만들어질 때 스타일은 삼각망이 아니라 **등고선**(주 10m·보조 2m — JACK 0901)으로.
             try
             {
                 ObjectId stId = EnsureContourStyle(tr);
                 if (!stId.IsNull) surf.StyleId = stId;
             }
             catch (System.Exception sex) { ed.WriteMessage("\n[등고선] 지표면 스타일 적용 생략 — " + sex.Message); }
+            // ★표고점은 <b>따로</b> 넣는다 — 도면객체(점) 정의가 그 길이다.
+            //   실패해도 등고선으로 만든 지표면은 살려야 하므로 여기만 따로 감싼다.
+            string spotNote = "";
+            if (spotIds != null && spotIds.Count > 0)
+            {
+                try
+                {
+                    surf.DrawingObjectsDefinition.AddFromPoints(spotIds, "표고점");
+                    spotNote = $" · 표고점 {spotIds.Count}개 반영";
+                }
+                catch (System.Exception pex)
+                {
+                    spotNote = " · ⚠표고점 반영 실패";
+                    ed.WriteMessage("\n[지표면] 표고점을 못 넣었습니다 — " + pex.Message);
+                }
+            }
             tr.Commit();
 
             int pts = 0, tris = 0;
@@ -320,7 +376,7 @@ public sealed class ImportGisCommand
                 trS.Commit();
             }
             catch { }
-            return $"'{GroundSurfaceName}' 지표면 생성(점 {pts}·삼각형 {tris})";
+            return $"'{useName}' 지표면 생성(점 {pts}·삼각형 {tris}){spotNote}";
         }
         catch (System.Exception ex)
         {
@@ -333,11 +389,11 @@ public sealed class ImportGisCommand
     ///   · 보조등고선 <see cref="MinorInterval"/>m · 주등고선 <see cref="MajorInterval"/>m
     ///   · 표시 항목은 등고선 + 경계만(경계를 켜둬야 클릭으로 지표면을 집을 수 있다)
     /// 이름이 같은 스타일이 이미 있으면 그것을 갱신해 쓴다(중복 생성 방지). 실패하면 Null → 기본 스타일 유지.</summary>
-    /// <summary>★[JACK 0901 "주등고선은 5m 보조는 1m로 불러지게 해"]
-    /// <para>예전 값(보조 5·주 25)은 넓은 지형을 훑어보는 축척이었다.
-    /// 정지 설계는 <b>1m 단위로 흙이 오간다</b> — 5m 간격으로는 계단이 안 보인다.</para></summary>
-    private const double MinorInterval = 1.0;
-    private const double MajorInterval = 5.0;
+    /// <summary>★[JACK 0901 "등고선 간격 그냥 DXF나 서버나 <b>10m에 2m</b>로 해 줘"]
+    /// <para>처음엔 25·5(지형 훑어보기), 그다음 5·1(너무 촘촘)을 거쳐 여기로 왔다.
+    /// <b>DXF든 서버든 같은 값</b>이다 — 어디서 받았느냐로 도면이 달라 보이면 안 된다.</para></summary>
+    private const double MinorInterval = 2.0;
+    private const double MajorInterval = 10.0;
     /// <summary>지표면 스타일 이름 — <b>간격을 이름에 넣지 않는다</b>(검토 0901).
     /// <para>예전 이름은 "(5·25)"였는데 간격을 5·1로 바꾸자 이름만 거짓말이 됐다.</para></summary>
     internal const string GroundStyleName = "DH-원지반 등고선";
@@ -356,6 +412,9 @@ public sealed class ImportGisCommand
         try { st.GetDisplayStylePlan(t).Color = c; } catch { }
         try { st.GetDisplayStyleModel(t).Color = c; } catch { }
     }
+
+    /// <summary>자르기도 이 스타일을 쓴다 — 잘라 만든 지표면은 기본 스타일로 나오기 때문이다(§50).</summary>
+    internal static ObjectId EnsureGroundStyle(Transaction tr) => EnsureContourStyle(tr);
 
     private static ObjectId EnsureContourStyle(Transaction tr)
     {
@@ -512,7 +571,7 @@ public sealed class ImportGisCommand
         return cut.Length > 0 ? cut : s;
     }
 
-    private static void EraseOnLayers(Database db, Transaction tr, string[] layers)
+    internal static void EraseOnLayers(Database db, Transaction tr, string[] layers)
     {
         var want = new System.Collections.Generic.HashSet<string>(layers, System.StringComparer.OrdinalIgnoreCase);
         var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
@@ -557,7 +616,27 @@ public sealed class ImportGisCommand
         catch { return ObjectId.Null; }
     }
 
-    private static ObjectId EnsureLayer(Database db, Transaction tr, string name, short aci)
+    /// <summary>★★★[JACK 0901 "원본 선을 아예 안 그리게 하고"]
+    /// <para><b>지우지 않고 <u>끈다</u>.</b> 지표면은 이 선들을 <b>자료로 물고 있어서</b>
+    /// 지우면 정의가 끊긴다(다시 만들기를 하면 자료를 못 찾는다).
+    /// 레이어를 꺼 두면 화면에서는 사라지고 지표면은 멀쩡하다 —
+    /// 보고 싶으면 레이어만 켜면 된다.</para>
+    /// <para>왜 겹치는가: 원지반 지표면이 <b>제 등고선을 따로 그린다</b>(주 10m·보조 2m).
+    /// 원본까지 보이면 두 벌이 겹쳐 도면이 지저분해진다.</para></summary>
+    internal static void HideLayer(Database db, Transaction tr, string name)
+    {
+        try
+        {
+            var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+            if (!lt.Has(name)) return;
+            var ltr = (LayerTableRecord)tr.GetObject(lt[name], OpenMode.ForWrite);
+            // ★<b>끄기(Off)</b>지 동결(Freeze)이 아니다 — 동결된 레이어는 지표면 자료로 못 쓰는 판이 있다.
+            if (!ltr.IsOff) ltr.IsOff = true;
+        }
+        catch { }
+    }
+
+    internal static ObjectId EnsureLayer(Database db, Transaction tr, string name, short aci)
     {
         var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
         if (lt.Has(name)) return lt[name];

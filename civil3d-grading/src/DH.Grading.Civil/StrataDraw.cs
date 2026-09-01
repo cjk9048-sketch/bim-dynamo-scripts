@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
@@ -374,6 +374,7 @@ public static class StrataDraw
             double x0 = double.MaxValue, y0 = double.MaxValue, x1 = double.MinValue, y1 = double.MinValue;
             foreach (var b in model.Logs)
             { x0 = Math.Min(x0, b.X); x1 = Math.Max(x1, b.X); y0 = Math.Min(y0, b.Y); y1 = Math.Max(y1, b.Y); }
+            double bx0 = x0, by0 = y0, bx1 = x1, by1 = y1;   // 보링공만의 범위(뒤에서 되돌릴 때 쓴다)
             string extNote = "보링공 기준";
             try
             {
@@ -395,9 +396,29 @@ public static class StrataDraw
 
             // ★격자 수도 범위에 맞춰 늘린다 — 범위가 열 배 넓어졌는데 41×41이면 <b>칸이 성겨진다</b>.
             //   한 칸이 5m를 넘지 않게 하되 201×201에서 멈춘다(그 위는 만드는 데만 한참 걸린다).
-            int N = (int)Math.Round(Math.Max(x1 - x0, y1 - y0) / 5.0);
-            N = Math.Max(40, Math.Min(200, N));
+            //
+            //   ★★★[검토 0901] <b>수치지도 도엽은 한 장이 수 km다.</b> 그러면 여기서 N이 800으로
+            //   나왔다가 200에서 잘려 <b>한 칸이 20m</b>가 된다 — 지층 표고가 뭉개지고, 바로 위에서
+            //   경고한 그대로 <c>Above</c>가 NaN 칸을 조용히 건너뛰어 <b>수량이 말없이 틀린다</b>.
+            //   → 칸이 5m를 넘게 되면 <b>보링공 범위로 되돌린다</b>. 원지반 전체를 덮는 것보다
+            //     보링공 주변을 촘촘히 덮는 편이 낫다 — 어차피 지층은 보링공에서 나오는 값이다.
+            const double CellMax = 5.0, GridMax = 200;
+            if (Math.Max(x1 - x0, y1 - y0) / GridMax > CellMax)
+            {
+                double bpad = Math.Max(200.0, Math.Max(bx1 - bx0, by1 - by0) * 0.5);
+                double sx0 = bx0 - bpad, sy0 = by0 - bpad;
+                double sx1 = bx1 + bpad, sy1 = by1 + bpad;
+                log.AppendLine($"  ⚠범위가 너무 넓어({x1 - x0:F0}×{y1 - y0:F0}m) 칸이 {Math.Max(x1 - x0, y1 - y0) / GridMax:F1}m가 된다"
+                             + $" — <b>보링공 주변 {sx1 - sx0:F0}×{sy1 - sy0:F0}m</b>로 좁혀 촘촘히 만든다.");
+                x0 = Math.Max(x0, sx0); x1 = Math.Min(x1, sx1);
+                y0 = Math.Max(y0, sy0); y1 = Math.Min(y1, sy1);
+                extNote += " (범위 좁힘)";
+            }
+            int N = (int)Math.Round(Math.Max(x1 - x0, y1 - y0) / CellMax);
+            N = Math.Max(40, Math.Min((int)GridMax, N));
             double dx = (x1 - x0) / N, dy = (y1 - y0) / N;
+            log.AppendLine($"  격자 {N}×{N} · 한 칸 {dx:F1}×{dy:F1}m · 범위 {extNote}"
+                         + (Math.Max(dx, dy) > CellMax ? "  ⚠칸이 5m보다 크다(지층 표고가 뭉개진다)" : ""));
 
             int nFix = 0; double worstDrop = 0;
             // ★★[JACK 0828] <b>어느 층이 뒤집혔는지</b>까지 센다 —

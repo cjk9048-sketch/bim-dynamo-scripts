@@ -1,4 +1,4 @@
-﻿// WallBlocks 오프라인 하네스 — 옹벽 3D 보강토 블록 그리드 필터링 + 우각부 반블록 플러시 검증
+// WallBlocks 오프라인 하네스 — 옹벽 3D 보강토 블록 그리드 필터링 + 우각부 반블록 플러시 검증
 // (walltest와 같은 PASS/FAIL 방식)
 using DH.Grading.Core;
 
@@ -7940,6 +7940,162 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
         }
     }
     Check("S93 ★옛 식 → KoreaTm 되돌리기도 1mm 미만", worstBack93 < 0.001, $"{worstBack93 * 1000:F4}mm");
+}
+
+
+// ── S94 ★★★[JACK 0901 수치지도 DXF에서 원지반] 레이어 판정과 읽기 ────────────────────
+//   레이어 이름이 곧 지형지물 코드다. 잘못 갈리면 <b>글자(수치)를 지형으로</b> 읽어
+//   지표면이 0m로 꺼지는데, 오류는 안 나고 그림만 이상해진다.
+{
+    Console.WriteLine("\n== S94 수치지도 DXF ==");
+
+    // ① 코드 판정 — 별표1 표준코드 표 그대로
+    Check("S94 ★F0017111(주곡선)은 등고선", NgiiDxf.IsContourLayer("F0017111"), "");
+    Check("S94 ★F0017114(계곡선)은 등고선이자 <b>계곡선</b>",
+          NgiiDxf.IsContourLayer("F0017114") && NgiiDxf.IsIndexContourLayer("F0017114"), "");
+    Check("S94 ★F0017111은 계곡선이 <b>아니다</b>", !NgiiDxf.IsIndexContourLayer("F0017111"), "");
+    Check("S94 ★간곡선·조곡선도 등고선(도엽마다 있고 없고가 다르다)",
+          NgiiDxf.IsContourLayer("F0017112") && NgiiDxf.IsContourLayer("F0017113"), "");
+    Check("S94 ★오목지 계열도 등고선", NgiiDxf.IsContourLayer("F0017121") && NgiiDxf.IsContourLayer("F0017124"), "");
+    Check("S94 ★★오목지 계곡선(F0017124)도 계곡선", NgiiDxf.IsIndexContourLayer("F0017124"), "");
+    Check("S94 ★★★<b>등고수치(F0017131)는 글자다</b> — 등고선이 아니다",
+          !NgiiDxf.IsContourLayer("F0017131"), "");
+    Check("S94 ★F0027217은 표고점", NgiiDxf.IsSpotLayer("F0027217"), "");
+    Check("S94 ★★★<b>표고점수치(F0027132)는 글자다</b> — 표고점이 아니다",
+          !NgiiDxf.IsSpotLayer("F0027132"), "");
+    Check("S94 ★남의 레이어는 안 받는다(A0013118=도로경계)",
+          !NgiiDxf.IsContourLayer("A0013118") && !NgiiDxf.IsSpotLayer("A0013118"), "");
+    Check("S94 ★소문자로 와도 같게 본다", NgiiDxf.IsContourLayer("f0017111"), "");
+    // ★★★[JACK 0901 "F001·F002로 시작해도 등고선이 아닌 지형 객체가 있다 — 표고가 없다",
+    //   "특히 F002는 표고점 블록 외엔 쓰면 안 된다"]
+    Check("S94 ★★★<b>F0010000(등고선 미분류)은 안 받는다</b> — 표고가 없는 자리다",
+          !NgiiDxf.IsContourLayer("F0010000"), "");
+    Check("S94 ★★★<b>F0020000(표고점 미분류)은 안 받는다</b> — F002는 표고점 블록만",
+          !NgiiDxf.IsSpotLayer("F0020000"), "");
+    Check("S94 ★★F002 계열 중 <b>F0027217만</b> 받는다",
+          NgiiDxf.IsSpotLayer("F0027217") && !NgiiDxf.IsSpotLayer("F0027218")
+       && !NgiiDxf.IsSpotLayer("F0027200") && !NgiiDxf.IsSpotLayer("F0021111"), "");
+    Check("S94 ★끝자리 5~9는 등고선이 아니다(표에 없는 코드)",
+          !NgiiDxf.IsContourLayer("F0017115") && !NgiiDxf.IsContourLayer("F0017119"), "");
+    Check("S94 ★여덟 자리가 아니면 안 받는다(남이 만든 F001 레이어)",
+          !NgiiDxf.IsContourLayer("F001") && !NgiiDxf.IsContourLayer("F0017111X"), "");
+
+    // ② 손으로 만든 작은 DXF — 규칙 하나하나를 눈으로 확인할 수 있게
+    string tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dh_s94.dxf");
+    var sb94 = new System.Text.StringBuilder();
+    void P(string c, string v) { sb94.Append(c).Append("\r\n").Append(v).Append("\r\n"); }
+    P("0", "SECTION"); P("2", "HEADER"); P("9", "$ACADVER"); P("1", "AC1009"); P("0", "ENDSEC");
+    // ★블록 정의 안에도 같은 레이어의 도형이 있다 — 이것을 읽으면 원점에 유령이 생긴다.
+    P("0", "SECTION"); P("2", "BLOCKS");
+    P("0", "BLOCK"); P("8", "F0027217"); P("2", "F0027217"); P("10", "0.0"); P("20", "0.0"); P("30", "0.0");
+    P("0", "POINT"); P("8", "F0027217"); P("10", "0.0"); P("20", "0.0"); P("30", "0.0");
+    P("0", "ENDBLK"); P("0", "ENDSEC");
+    P("0", "SECTION"); P("2", "ENTITIES");
+    // 주곡선 한 가닥(표고 85) — POLYLINE 자신의 좌표는 (0,0,85) 더미
+    P("0", "POLYLINE"); P("8", "F0017111"); P("66", "1"); P("10", "0.0"); P("20", "0.0"); P("30", "85.0");
+    P("0", "VERTEX"); P("8", "F0017111"); P("10", "100.0"); P("20", "200.0"); P("30", "85.0");
+    P("0", "VERTEX"); P("8", "F0017111"); P("10", "110.0"); P("20", "205.0"); P("30", "85.0");
+    P("0", "VERTEX"); P("8", "F0017111"); P("10", "120.0"); P("20", "215.0"); P("30", "85.0");
+    P("0", "SEQEND"); P("8", "F0017111");
+    // 계곡선 한 가닥(표고 100)
+    P("0", "POLYLINE"); P("8", "F0017114"); P("10", "0.0"); P("20", "0.0"); P("30", "100.0");
+    P("0", "VERTEX"); P("8", "F0017114"); P("10", "300.0"); P("20", "400.0"); P("30", "100.0");
+    P("0", "VERTEX"); P("8", "F0017114"); P("10", "310.0"); P("20", "410.0"); P("30", "100.0");
+    P("0", "SEQEND"); P("8", "F0017114");
+    // ★표고 0인 등고선 — JACK 지시대로 통째로 버려야 한다
+    P("0", "POLYLINE"); P("8", "F0017111"); P("10", "0.0"); P("20", "0.0"); P("30", "0.0");
+    P("0", "VERTEX"); P("8", "F0017111"); P("10", "500.0"); P("20", "600.0"); P("30", "0.0");
+    P("0", "VERTEX"); P("8", "F0017111"); P("10", "510.0"); P("20", "610.0"); P("30", "0.0");
+    P("0", "SEQEND"); P("8", "F0017111");
+    // 표고점 둘 — 하나는 0이라 버려야 한다
+    P("0", "INSERT"); P("8", "F0027217"); P("2", "F0027217"); P("10", "150.0"); P("20", "250.0"); P("30", "88.5");
+    P("0", "INSERT"); P("8", "F0027217"); P("2", "F0027217"); P("10", "160.0"); P("20", "260.0"); P("30", "0.0");
+    // 글자들 — 절대 안 받아야 한다
+    P("0", "TEXT"); P("8", "F0017131"); P("10", "170.0"); P("20", "270.0"); P("30", "0.0"); P("1", "85");
+    P("0", "TEXT"); P("8", "F0027132"); P("10", "180.0"); P("20", "280.0"); P("30", "0.0"); P("1", "88.5");
+    // 남의 레이어
+    P("0", "POLYLINE"); P("8", "A0013118"); P("10", "0.0"); P("20", "0.0"); P("30", "50.0");
+    P("0", "VERTEX"); P("8", "A0013118"); P("10", "900.0"); P("20", "900.0"); P("30", "50.0");
+    P("0", "SEQEND"); P("8", "A0013118");
+    P("0", "ENDSEC"); P("0", "EOF");
+    System.IO.File.WriteAllText(tmp, sb94.ToString());
+
+    var sh94 = NgiiDxf.Read(tmp, out string why94);
+    Check("S94 ★읽기 성공", why94 == null, why94 ?? "");
+    Check("S94 ★★등고선 <b>2가닥</b>만 남는다(표고0 하나·남의 레이어 하나 버림)",
+          sh94.Contours.Count == 2, $"{sh94.Contours.Count}가닥");
+    Check("S94 ★★★<b>표고 0인 등고선을 버렸다</b>(JACK 지시)",
+          sh94.DroppedZeroContours == 1, $"버림 {sh94.DroppedZeroContours}가닥");
+    Check("S94 ★★표고점은 <b>1개</b>만(0인 것 버림)", sh94.Spots.Count == 1, $"{sh94.Spots.Count}개");
+    Check("S94 ★★★<b>표고 0인 표고점을 버렸다</b>", sh94.DroppedZeroSpots == 1, $"버림 {sh94.DroppedZeroSpots}개");
+    Check("S94 ★★★<b>블록 정의 안의 도형을 안 읽었다</b> — 읽었으면 원점(0,0)에 표고점이 생긴다",
+          sh94.Spots.TrueForAll(p => System.Math.Abs(p.X) > 1e-9), "원점 표고점 없음");
+    Check("S94 ★★★<b>POLYLINE 더미점(0,0)을 안 넣었다</b>",
+          sh94.Contours.TrueForAll(c => c.Pts.TrueForAll(p => System.Math.Abs(p.X) > 1e-9)), "원점 정점 없음");
+    Check("S94 ★계곡선이 계곡선으로 표시됐다",
+          sh94.Contours.Exists(c => c.IsIndex && System.Math.Abs(c.Elev - 100) < 1e-9) &&
+          sh94.Contours.Exists(c => !c.IsIndex && System.Math.Abs(c.Elev - 85) < 1e-9), "");
+    Check("S94 ★정점 수가 맞다(3 + 2)", sh94.VertexCount == 5, $"{sh94.VertexCount}점");
+    Check("S94 ★표고점 값이 그대로", System.Math.Abs(sh94.Spots[0].Z - 88.5) < 1e-9, $"{sh94.Spots[0].Z}");
+
+    // ③ 여러 도엽 합치기 — 겹친 표고점은 하나로
+    var m94 = NgiiDxf.Merge(new[] { sh94, sh94 });
+    Check("S94 ★★같은 도엽을 두 번 넣으면 표고점은 <b>1개</b>(겹친 것 걸러짐)",
+          m94.Spots.Count == 1, $"{m94.Spots.Count}개");
+    Check("S94 ★등고선은 둘 다 남는다(가닥은 안 지운다)", m94.Contours.Count == 4, $"{m94.Contours.Count}가닥");
+    Check("S94 ★겹쳐 걸러진 표고점 수를 셀 수 있다",
+          NgiiDxf.DuplicateSpots(new[] { sh94, sh94 }, m94) == 1, "");
+
+    // ④ 범위
+    Check("S94 ★범위가 나온다", NgiiDxf.Extent(sh94, out double ex0, out double ey0, out double ex1, out double ey1),
+          $"{ex0:F0},{ey0:F0} ~ {ex1:F0},{ey1:F0}");
+    Check("S94 ★★범위에 원점(0,0)이 안 들어간다 — 더미점을 걸렀다는 증거",
+          ex0 > 50 && ey0 > 50, $"최소 {ex0:F0},{ey0:F0}");
+    NgiiDxf.ElevRange(sh94, out double z94a, out double z94b);
+    Check("S94 ★표고 범위 85~100", System.Math.Abs(z94a - 85) < 1e-9 && System.Math.Abs(z94b - 100) < 1e-9,
+          $"{z94a}~{z94b}");
+
+    try { System.IO.File.Delete(tmp); } catch { }
+
+    // ⑤ ★★★<b>진짜 도엽</b>이 있으면 그것으로도 잰다 — 손으로 만든 것만 믿지 않는다.
+    string real = null;
+    foreach (var cand in new[]
+             {
+                 @"C:\Users\user\Desktop\AI\참고자료",
+                 System.IO.Path.Combine(System.AppContext.BaseDirectory, "..", "..", "..", "..", "..", "참고자료"),
+             })
+    {
+        try
+        {
+            if (!System.IO.Directory.Exists(cand)) continue;
+            foreach (var f in System.IO.Directory.GetFiles(cand, "*수치지도*.dxf"))
+            { real = f; break; }
+        }
+        catch { }
+        if (real != null) break;
+    }
+    if (real == null)
+    {
+        Console.WriteLine("      S94 실제 도엽 파일 없음 — 합성 검사만 수행(참고자료에 넣으면 자동으로 함께 잰다)");
+    }
+    else
+    {
+        var rs = NgiiDxf.Read(real, out string rwhy);
+        Check("S94 ★★★실제 도엽을 읽었다", rwhy == null, rwhy ?? System.IO.Path.GetFileName(real));
+        Check("S94 ★★실제 도엽 등고선 181가닥(주 143 + 계곡 38)", rs.Contours.Count == 181, $"{rs.Contours.Count}가닥");
+        int idx = rs.Contours.FindAll(c => c.IsIndex).Count;
+        Check("S94 ★★계곡선 38가닥", idx == 38, $"{idx}가닥");
+        Check("S94 ★★표고점 851개", rs.Spots.Count == 851, $"{rs.Spots.Count}개");
+        Check("S94 ★정점 61,758점(주 48,530 + 계곡 13,228)", rs.VertexCount == 61758, $"{rs.VertexCount}점");
+        NgiiDxf.ElevRange(rs, out double rz0, out double rz1);
+        Check("S94 ★★표고 26.97~150.22m — <b>0이 하나도 없다</b>", rz0 > 20 && rz1 < 200, $"{rz0:F2}~{rz1:F2}m");
+        NgiiDxf.Extent(rs, out double rx0, out double ry0, out double rx1, out double ry1);
+        Check("S94 ★★★<b>범위에 원점(0,0)이 없다</b> — 더미점 143개를 걸렀다는 증거",
+              rx0 > 100000 && ry0 > 100000, $"{rx0:F0},{ry0:F0} ~ {rx1:F0},{ry1:F0}");
+        Check("S94 ★한 도엽이 2~5km쯤", (rx1 - rx0) > 500 && (rx1 - rx0) < 6000,
+              $"가로 {rx1 - rx0:F0}m × 세로 {ry1 - ry0:F0}m");
+        Console.WriteLine($"      S94 실제 도엽 레이어별: {string.Join(" · ", System.Linq.Enumerable.Select(rs.ByLayer, kv => kv.Key + " " + kv.Value))}");
+    }
 }
 
 
