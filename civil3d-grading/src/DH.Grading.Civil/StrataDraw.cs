@@ -34,9 +34,16 @@ public static class StrataDraw
         return us >= 0 && us + 1 < rest.Length ? rest.Substring(us + 1) : rest;
     }
 
-    /// <summary>보링공 표식 크기(도면 단위 m) — 동그라미 반지름.
-    /// <para>★[JACK 0828 "GP점 표시가 너무 커. 지금 크기에서 70% 정도로 해 줘"] 2.0 → <b>1.4m</b>.</para></summary>
+    /// <summary>보링공 표식의 <b>본디 크기</b>(도면 단위 m) — 동그라미 반지름. 블록이 이 크기로 만들어진다.
+    /// <para>★[JACK 0828 "BH점 표시가 너무 커. 지금 크기에서 70% 정도로 해 줘"] 2.0 → <b>1.4m</b>.</para>
+    /// <para>여기서 더 키우고 줄이는 것은 <see cref="MarkScale"/>이 한다 — 부지마다 알맞은 크기가 다르다.</para></summary>
     private const double MarkR = 1.4;
+
+    /// <summary>★★[JACK 0831 "BH점 크기를 조절할 수 있는 바 넣어(음량조절처럼)"]
+    /// <b>블록은 그대로 두고 참조만 늘리고 줄인다.</b>
+    /// <para>블록 자체를 다시 만들면 그 블록을 쓰는 <b>모든 도면 객체</b>가 한꺼번에 바뀌고
+    /// 되돌리기도 어렵다. 참조 배율은 표식 하나하나에 걸리므로 안전하고 빠르다.</para></summary>
+    internal static double MarkScale = 1.0;
 
     [CommandMethod("DHSTRATAPICK", CommandFlags.Modal)]
     public static void PickOne()
@@ -114,26 +121,105 @@ public static class StrataDraw
                 SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
             var lay = Commands.SectionCommand.EnsureLayer(db, tr, StrataPalette.MarkLayer, 2);
             var kst = Commands.ImportGisCommand.EnsureKoreanTextStyle(db, tr);
-
-            // 동그라미와 글자를 한 덩이로 묶는다 — 옮길 때 함께 따라오게.
-            var grp = new BlockReference(new Point3d(b.X, b.Y, 0), EnsureMarkBlock(db, tr, lay, kst))
-            { LayerId = lay };
-            ms.AppendEntity(grp); tr.AddNewlyCreatedDBObject(grp, true);
-
-            // 이름은 속성으로 넣는다 — 블록 하나로 GP1·GP2를 다 쓴다.
-            foreach (ObjectId aid in ((BlockTableRecord)tr.GetObject(grp.BlockTableRecord, OpenMode.ForRead)))
-            {
-                if (tr.GetObject(aid, OpenMode.ForRead) is not AttributeDefinition ad || ad.Constant) continue;
-                var ar = new AttributeReference();
-                ar.SetAttributeFromBlock(ad, grp.BlockTransform);
-                ar.TextString = b.Name;
-                grp.AttributeCollection.AppendAttribute(ar);
-                tr.AddNewlyCreatedDBObject(ar, true);
-            }
-            b.MarkId = grp.ObjectId;
+            DrawOne(db, tr, ms, lay, kst, b);
             tr.Commit();
         }
         catch { }
+    }
+
+    /// <summary>★★[JACK 0831] <b>크기를 바꾸면 다 다시 그린다 — 한 트랜잭션에서.</b>
+    ///
+    /// <para><b>왜 배율만 고쳐 두지 않는가.</b> 표식은 동그라미와 이름 글자가 든 블록인데,
+    /// 이름 글자(<c>AttributeReference</c>)는 <b>붙일 때의 변환</b>으로 자리와 크기가 정해진다 —
+    /// 나중에 참조 배율만 바꾸면 <b>동그라미만 커지고 글자는 그대로</b> 있다.
+    /// JACK이 0828에 겪은 "원만 옮겨지고 BH1 글씨는 제자리" 와 <b>같은 종류</b>다.</para>
+    ///
+    /// <para>→ 지우고 새로 그린다. 글자도 새 변환으로 다시 붙으므로 <b>어긋날 자리가 없다</b>.
+    /// 공은 많아야 수십 개고 트랜잭션은 하나라 느리지 않다.</para></summary>
+    internal static int Redraw(System.Collections.Generic.IEnumerable<BoreRow> rows)
+    {
+        if (rows == null) return 0;
+        int n = 0;
+        try
+        {
+            var doc = AcadApp.DocumentManager.MdiActiveDocument;
+            if (doc == null) return 0;
+            using var dl = Lock();
+            var db = doc.Database;
+            using var tr = db.TransactionManager.StartTransaction();
+            var ms = (BlockTableRecord)tr.GetObject(
+                SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+            var lay = Commands.SectionCommand.EnsureLayer(db, tr, StrataPalette.MarkLayer, 2);
+            var kst = Commands.ImportGisCommand.EnsureKoreanTextStyle(db, tr);
+            foreach (var b in rows)
+            {
+                if (b == null) continue;
+                try
+                {
+                    if (!b.MarkId.IsNull && b.MarkId.Database == db
+                        && tr.GetObject(b.MarkId, OpenMode.ForWrite, false, true) is Entity old && !old.IsErased)
+                        old.Erase();
+                }
+                catch { }
+                b.MarkId = ObjectId.Null;
+                DrawOne(db, tr, ms, lay, kst, b);
+                n++;
+            }
+            tr.Commit();
+        }
+        catch (System.Exception ex)
+        { try { DiagLog.Append("\n  시추 표식 다시 그리기 실패 — " + ex.Message); } catch { } }
+        return n;
+    }
+
+    /// <summary>표식 하나를 <b>이미 열린 트랜잭션 안에</b> 그린다.
+    /// <para>★한 자리에서만 그린다 — 찍기·붙여넣기·크기 바꾸기가 따로 그리면
+    /// 한쪽만 고쳐지는 §50 함정에 빠진다.</para></summary>
+    private static void DrawOne(Database db, Transaction tr, BlockTableRecord ms,
+                                ObjectId lay, ObjectId kst, BoreRow b)
+    {
+        // 동그라미와 글자를 한 덩이로 묶는다 — 옮길 때 함께 따라오게.
+        var grp = new BlockReference(new Point3d(b.X, b.Y, 0), EnsureMarkBlock(db, tr, lay, kst))
+        { LayerId = lay };
+        // ★크기 조절 — 블록은 그대로, 이 표식만 늘리고 줄인다.
+        double k = MarkScale > 1e-6 ? MarkScale : 1.0;
+        try { grp.ScaleFactors = new Scale3d(k); } catch { }
+        ms.AppendEntity(grp); tr.AddNewlyCreatedDBObject(grp, true);
+
+        // 이름은 속성으로 넣는다 — 블록 하나로 BH1·BH2를 다 쓴다.
+        //   ★<c>BlockTransform</c>을 <b>배율을 건 뒤에</b> 읽어야 글자도 같이 커진다.
+        foreach (ObjectId aid in ((BlockTableRecord)tr.GetObject(grp.BlockTableRecord, OpenMode.ForRead)))
+        {
+            if (tr.GetObject(aid, OpenMode.ForRead) is not AttributeDefinition ad || ad.Constant) continue;
+            var ar = new AttributeReference();
+            ar.SetAttributeFromBlock(ad, grp.BlockTransform);
+            ar.TextString = b.Name;
+            // ★★★[JACK 0831 "글씨가 원 테두리 밖에 넘어가니깐 글씨 크기도 조정하고.
+            //   크기 바로 바꿔도 계속 넘어가"]
+            //
+            //   <b>원인 둘.</b> ① 글자 높이를 원 반지름의 <b>90%</b>로 박아 뒀다 —
+            //   원 지름이 2.8인데 <c>BH1</c> 가로가 2.6이라 이미 꽉 찼고 <c>BH10</c>이면 넘친다.
+            //   ② 크기 바는 <b>원과 글자를 같이</b> 키우므로 비율이 안 변한다 — 그래서 아무리 끌어도 그대로였다.
+            //
+            //   → <b>이름 길이를 보고 그때그때 높이를 낸다.</b> 원 안에 글자 상자가 들어가려면
+            //     <c>(W/2)² + (H/2)² ≤ R²</c>이고, 글자 상자 가로는 <c>글자수 × 0.7 × H</c>쯤이다.
+            //     여백 15%를 두고 뒤집어 풀면 아래 식이다. <c>BH1</c>이든 <c>BH120</c>이든 안 넘친다.
+            try
+            {
+                double nch = System.Math.Max(1, (b.Name ?? "").Length);
+                double wRatio = nch * 0.7;                                   // 글자 높이 대비 가로 배수
+                double denom = System.Math.Sqrt(wRatio * wRatio / 4.0 + 0.25);
+                double h = MarkR * 0.85 / denom;                             // 0.85 = 테두리 여백
+                ar.Height = h * k;                                           // 블록 배율만큼 같이 커진다
+                // 가운데 맞춤이라 <c>AlignmentPoint</c>가 자리를 정한다 — 원 한가운데로 다시 잡는다.
+                ar.AlignmentPoint = grp.Position;
+                ar.AdjustAlignment(db);
+            }
+            catch { }
+            grp.AttributeCollection.AppendAttribute(ar);
+            tr.AddNewlyCreatedDBObject(ar, true);
+        }
+        b.MarkId = grp.ObjectId;
     }
 
     /// <summary>★ 표에서 좌표를 고치면 <b>표식이 그 자리로 옮겨간다</b>(JACK 요구).</summary>
@@ -164,7 +250,7 @@ public static class StrataDraw
             using var tr = db.TransactionManager.StartTransaction();
             if (tr.GetObject(b.MarkId, OpenMode.ForWrite, false, true) is BlockReference br && !br.IsErased)
             {
-                // ★★★[JACK 0828 "XY로 쳐서 바꾸면 원 객체만 옮겨지고 GP1 글씨는 그 자리 그대로 있어"]
+                // ★★★[JACK 0828 "XY로 쳐서 바꾸면 원 객체만 옮겨지고 BH1 글씨는 그 자리 그대로 있어"]
                 //   <b>속성 글씨는 블록을 안 따라간다.</b> <c>AttributeReference</c>는 블록 안에 들어 있어도
                 //   <b>제 좌표를 따로</b> 가진다 — <c>Position</c>만 바꾸면 동그라미만 옮겨지고 글씨는 남는다.
                 //   → <b>움직인 만큼 속성도 같이 민다.</b> 옛 자리와 새 자리의 차이를 그대로 더한다.
@@ -191,20 +277,31 @@ public static class StrataDraw
     }
 
     /// <summary>표식을 지운다.</summary>
-    internal static void EraseMark(BoreRow b)
+    /// <summary>★[JACK 0828 검토] <b>지웠는지 아닌지를 돌려준다.</b>
+    /// <para>종전엔 <c>void</c>에 <c>catch { }</c>라, 못 지워도 부르는 쪽은 성공으로 알고
+    /// 표에서 줄을 지웠다 — 평면에 <b>유령 표식</b>이 남고 그것을 가리키던 줄이 사라져
+    /// <b>지울 길이 영영 없어진다</b>.</para>
+    /// <para>이미 없는 것(<c>MarkId</c>가 비었거나 이미 지워진 것)은 <b>성공</b>이다 —
+    /// 부르는 쪽이 바라는 것은 "지워라"가 아니라 "없게 하라"다.</para></summary>
+    internal static bool EraseMark(BoreRow b)
     {
         try
         {
-            if (b.MarkId.IsNull) return;
+            if (b.MarkId.IsNull) return true;
             using var dl = Lock();
             var db = AcadApp.DocumentManager.MdiActiveDocument?.Database;
-            if (db == null) return;
+            if (db == null) return false;
             using var tr = db.TransactionManager.StartTransaction();
             if (tr.GetObject(b.MarkId, OpenMode.ForWrite, false, true) is Entity e && !e.IsErased) e.Erase();
             tr.Commit();
             b.MarkId = ObjectId.Null;
+            return true;
         }
-        catch { }
+        catch (System.Exception ex)
+        {
+            try { DiagLog.Append("\n  시추 표식을 못 지웠다 — " + ex.Message); } catch { }
+            return false;
+        }
     }
 
     /// <summary>표식 블록을 만든다(없으면) — 동그라미 + 가운데 이름 속성.</summary>
@@ -221,9 +318,11 @@ public static class StrataDraw
         var c = new Circle(Point3d.Origin, Vector3d.ZAxis, MarkR) { LayerId = lay };
         btr.AppendEntity(c); tr.AddNewlyCreatedDBObject(c, true);
 
-        var ad = new AttributeDefinition(Point3d.Origin, "GP1", "NAME", "공 이름", ObjectId.Null)
+        var ad = new AttributeDefinition(Point3d.Origin, "BH1", "NAME", "공 이름", ObjectId.Null)
         {
-            Height = MarkR * 0.9,
+            // ★[JACK 0831] 기본 높이도 낮춘다 — 실제 높이는 <c>DrawOne</c>이 이름 길이를 보고 다시 잡지만,
+            //   여기 값이 크면 <b>블록 편집기에서 열어 볼 때</b> 넘쳐 보여 사람이 헷갈린다.
+            Height = MarkR * 0.6,
             Justify = AttachmentPoint.MiddleCenter,
             LayerId = lay,
         };
@@ -238,8 +337,13 @@ public static class StrataDraw
     /// 괜히 평면에서 보이면 더 헷갈리고 무겁기만 해."</i></para>
     /// <para>지층 다섯이면 평면에 지표면이 <b>일곱 겹</b>이라 등고선이 겹쳐 평면도를 못 쓴다 —
     /// <b>숨기는 것이 곁다리가 아니라 요건</b>이다.</para></summary>
-    internal static string BuildSurfaces(StrataModel model, out int made, out string note)
+    /// <param name="shows">층마다 <b>도면에 그릴까</b>. 비거나 짧으면 그린다.
+    /// <para>★[JACK 0831] 지표면은 <b>늘 만든다</b> — 수량은 모든 층이 있어야 갈리기 때문이다.
+    /// 이 값은 <b>보일지</b>만 정하고 설명란(<c>DH_SHOW=</c>)에 적혀 도면과 함께 저장된다.</para></param>
+    internal static string BuildSurfaces(StrataModel model, out int made, out string note,
+                                         System.Collections.Generic.IReadOnlyList<bool> shows = null)
     {
+        shows ??= System.Array.Empty<bool>();
         made = 0; note = "";
         var log = new System.Text.StringBuilder();
         log.AppendLine($"\n■ 지층 만들기 {DateTime.Now:yyyy-MM-dd HH:mm:ss}  [DH.Grading {GradingSettings.Version}]");
@@ -257,14 +361,42 @@ public static class StrataDraw
             foreach (var s in surfs) if (s.Label == "원지반") { gid = s.SurfId; break; }
             if (gid.IsNull) { note = "원지반을 못 찾았다 — 등고선을 먼저 불러오세요"; log.AppendLine("  " + note); Flush(log); return note; }
 
-            // 만들 범위 — <b>보링공을 넉넉히 감싸는</b> 네모. 부지 전체를 덮도록 여유를 준다.
+            // ★★★[JACK 0831 · 수량 검토] <b>범위는 원지반이 정한다 — 보링공이 아니다.</b>
+            //
+            //   종전엔 보링공을 감싼 네모에 여유만 줬다. 보링공 넷이 30m 안에 모여 있고
+            //   부지가 400m면 지층면이 <b>130m만 덮는다</b>. 그 밖 절단선에서는 지층 표고가
+            //   <c>NaN</c>이 되는데, <c>CrossSectionArea.Above</c>는 NaN 칸을 <b>조용히 건너뛰고</b>
+            //   나머지를 더한다 — 즉 <b>지층별 합이 전체 절토보다 적은데 아무 말이 없다</b>.
+            //   토적표만 보면 멀쩡해서 <b>수량이 빈 채로 납품될</b> 수 있는 종류다.
+            //
+            //   → 원지반이 덮는 범위를 받아 <b>합집합</b>으로 잡는다. IDW는 보링공 밖에서도
+            //     답을 내므로(가까운 공을 따라간다) 넓혀도 값이 깨지지 않는다.
             double x0 = double.MaxValue, y0 = double.MaxValue, x1 = double.MinValue, y1 = double.MinValue;
             foreach (var b in model.Logs)
             { x0 = Math.Min(x0, b.X); x1 = Math.Max(x1, b.X); y0 = Math.Min(y0, b.Y); y1 = Math.Max(y1, b.Y); }
-            double padXY = Math.Max(50.0, Math.Max(x1 - x0, y1 - y0) * 0.5);
+            string extNote = "보링공 기준";
+            try
+            {
+                using var trG = db.TransactionManager.StartTransaction();
+                if (trG.GetObject(gid, OpenMode.ForRead) is CivilDb.TinSurface tsG)
+                {
+                    var gp = tsG.GetGeneralProperties();
+                    x0 = Math.Min(x0, gp.MinimumCoordinateX); x1 = Math.Max(x1, gp.MaximumCoordinateX);
+                    y0 = Math.Min(y0, gp.MinimumCoordinateY); y1 = Math.Max(y1, gp.MaximumCoordinateY);
+                    extNote = "원지반 ∪ 보링공";
+                }
+                trG.Commit();
+            }
+            catch (System.Exception exG)
+            { log.AppendLine("  ⚠원지반 범위를 못 읽어 보링공 기준으로만 잡는다 — " + exG.Message
+                           + " (부지 밖 측점에서 지층 수량이 빠질 수 있다)"); }
+            double padXY = Math.Max(50.0, Math.Max(x1 - x0, y1 - y0) * 0.1);
             x0 -= padXY; x1 += padXY; y0 -= padXY; y1 += padXY;
 
-            const int N = 40;                       // 격자 41×41 — 촘촘함과 무게의 절충
+            // ★격자 수도 범위에 맞춰 늘린다 — 범위가 열 배 넓어졌는데 41×41이면 <b>칸이 성겨진다</b>.
+            //   한 칸이 5m를 넘지 않게 하되 201×201에서 멈춘다(그 위는 만드는 데만 한참 걸린다).
+            int N = (int)Math.Round(Math.Max(x1 - x0, y1 - y0) / 5.0);
+            N = Math.Max(40, Math.Min(200, N));
             double dx = (x1 - x0) / N, dy = (y1 - y0) / N;
 
             int nFix = 0; double worstDrop = 0;
@@ -294,7 +426,15 @@ public static class StrataDraw
                         catch { ok[k] = false; continue; }      // 원지반 밖 — 그 자리는 안 만든다
                         ok[k] = true;
                         var col = model.At(x, y, gz);
-                        for (int i = 0; i < model.Defs.Count; i++) zs[i][k] = col.Bottom[i];
+                        // ★★★[JACK 0831 "암선은 해당 층의 상단을 기준으로 작성해.
+                        //   우리는 두께로 계산하다 보니 하단이 표시되는 것 같아"]
+                        //   <b>맞다.</b> 종전엔 층 i의 면을 <c>Bottom[i]</c>(그 층의 <b>바닥</b>)으로 만들었다 —
+                        //   그래서 <c>풍화암</c>이라고 적힌 선이 실제로는 <b>풍화암이 끝나는 자리</b>였다.
+                        //   도면 관례는 <b>"그 층이 시작되는 자리"</b>에 층 이름을 적는 것이다.
+                        //   → 층 i의 면 = <b>그 층의 상단</b> = 앞 층의 바닥(첫 층은 원지반).
+                        //   ※표고 값 자체는 이미 다 갖고 있다 — <b>이름이 한 칸 밀린 것</b>이 전부였다.
+                        for (int i = 0; i < model.Defs.Count; i++)
+                            zs[i][k] = i == 0 ? col.Ground : col.Bottom[i - 1];
                         zw[k] = col.Water;
                         if (col.Fixed.Count > 0)
                         {
@@ -350,7 +490,18 @@ public static class StrataDraw
             {
                 string nm = $"{SurfPrefix}{i + 1}_{model.Defs[i].Name}";
                 if (MakeSurface(db, nm, x0, y0, dx, dy, N, zs[i], ok, out string w))
-                { made++; names.Add(nm); }
+                {
+                    made++; names.Add(nm);
+                    // ★★★[JACK 0831] <b>암종을 도면에 남긴다.</b>
+                    //   토적표는 층마다 "이것이 토사냐 풍화암이냐"를 알아야 하는데,
+                    //   그 값은 지금까지 <b>도킹바 메모리에만</b> 있었다 —
+                    //   창을 닫거나 도면을 다시 열면 사라져 <b>수량이 조용히 전부 토사</b>가 된다.
+                    //   지표면 설명란에 적어 두면 도면과 함께 저장된다.
+                    // ★★[JACK 0901] <b>그릴지는 부르는 쪽이 정한다</b>(<c>Confirm</c>: 암층만 그린다).
+                    //   첫 층 잠금 장치는 없앴다 — 첫 층은 어차피 토사라 안 그린다.
+                    bool showI = i < shows.Count ? shows[i] : true;
+                    WriteRock(db, nm, model.Defs[i].Bucket, showI);
+                }
                 else why2.Append($"\n      {nm} — {w}");
             }
             if (MakeSurface(db, WaterSurfName, x0, y0, dx, dy, N, zw, ok, out string ww))
@@ -361,8 +512,47 @@ public static class StrataDraw
             // ★ 평면에서 숨긴다 — 만드는 순간부터. 나중에 사람이 끄는 것이 아니다.
             int nHid = HideInPlan(db, names);
 
-            log.AppendLine($"  범위 {x0:F1},{y0:F1} ~ {x1:F1},{y1:F1} · 격자 {N + 1}×{N + 1} · 보링공 {model.Logs.Count}개");
+            log.AppendLine($"  범위 {x0:F1},{y0:F1} ~ {x1:F1},{y1:F1}({extNote})"
+                         + $" · 격자 {N + 1}×{N + 1}(칸 {dx:F1}×{dy:F1}m) · 보링공 {model.Logs.Count}개");
+            // ★★★[JACK 0901 "혹시 도면상에 윗선·아랫선 적용이 잘못된 거 아니야?"]
+            //   <b>말로 답하지 않고 보링공 자리에서 재서 남긴다.</b>
+            //   그 자리는 보간이 <b>친 값을 그대로</b> 돌려주는 자리라(같은 점 규칙),
+            //   여기 찍힌 깊이가 시추주상도와 다르면 <b>그때는 정말 배선이 틀린 것</b>이다.
+            //   ★<b>선은 그 층의 상단</b>이므로, 지표에서 <c>풍화암</c> 선까지는
+            //     그 위 층들(표토·풍화토)의 두께를 <b>다 더한 값</b>이라야 맞다.
+            try
+            {
+                foreach (var bl in model.Logs)
+                {
+                    var c = model.At(bl.X, bl.Y, bl.Gl);
+                    var sb2 = new System.Text.StringBuilder();
+                    for (int i = 0; i < model.Defs.Count; i++)
+                    {
+                        double topZ = i == 0 ? c.Ground : c.Bottom[i - 1];
+                        double depth = c.Ground - topZ;                 // 지표에서 그 선까지
+                        sb2.Append($"\n        {model.Defs[i].Name} 상단 EL.{topZ:F2}"
+                                 + $" (지표에서 {depth:F2}m)");
+                    }
+                    log.AppendLine($"    ★{bl.Name} 되읽기 — 지반고 EL.{bl.Gl:F2}"
+                                 + $" · 친 값 [{string.Join(", ", System.Array.ConvertAll(bl.Thickness, v => double.IsNaN(v) ? "-" : v.ToString("0.##")))}]"
+                                 + sb2);
+                }
+            }
+            catch { }
             log.AppendLine($"  만든 지표면 {made}장: {string.Join(" · ", names)}");
+            // ★[JACK 0831] 무엇을 도면에 그리고 무엇을 숨겼는지 <b>반드시 남긴다</b> —
+            //   "왜 이 선이 안 보이지"를 다음에 다시 헤매지 않으려는 것이다.
+            {
+                var onN = new System.Text.StringBuilder(); var offN = new System.Text.StringBuilder();
+                for (int i = 0; i < model.Defs.Count; i++)
+                {
+                    bool on = i >= shows.Count || shows[i];
+                    (on ? onN : offN).Append(' ').Append(model.Defs[i].Name);
+                }
+                log.AppendLine($"  도면 표시 — 그림:{(onN.Length > 0 ? onN.ToString() : " (없음)")}"
+                             + $" · 숨김:{(offN.Length > 0 ? offN.ToString() : " (없음)")}"
+                             + "  ※숨겨도 수량은 그대로 갈린다");
+            }
             if (nFix > 0)
             {
                 var per = new System.Text.StringBuilder();
@@ -387,6 +577,154 @@ public static class StrataDraw
             Flush(log);
             return note;
         }
+    }
+
+    /// <summary>지표면 설명란에 적는 암종 표시 — <c>DH_ROCK=Weathered</c>.
+    /// <para>사람이 설명란에 딴 글을 써 넣어도 이 조각만 골라 읽는다.</para></summary>
+    internal const string RockTag = "DH_ROCK=";
+
+    /// <summary>★[JACK 0831] 도면에 보일까 — 설명란에 <c>DH_SHOW=0/1</c>로 적어 둔다.
+    /// <para>암종과 같은 자리에 담아 <b>도면과 함께 저장</b>된다 — 창을 닫아도 안 잃는다.</para></summary>
+    internal const string ShowTag = "DH_SHOW=";
+
+    /// <summary>★★★[JACK 0831 검토] 지층면을 <b>어느 방식으로 만들었는가</b>.
+    /// <para><c>1</c>=층의 <b>하단</b>(0828~0831 오전) · <c>2</c>=층의 <b>상단</b>(0831 오후~).</para>
+    /// <para><b>왜 필요한가.</b> 옛 도면에 남은 지표면은 하단인데 지금 코드는 상단으로 읽는다 —
+    /// 그러면 <b>암종이 한 층씩 밀린다</b>(토사가 풍화암 몫을 먹는다).
+    /// 합계는 그대로 맞아 <c>Recon</c> 대조로도 안 잡힌다(S83이 그것을 증명한다).
+    /// 그래서 <b>만든 방식을 도면에 적어 두고</b>, 옛 것이면 소리 내어 알린다.</para></summary>
+    internal const string VerTag = "DH_SVER=";
+
+    /// <summary>지금 만드는 방식 — <b>층의 상단</b>.</summary>
+    internal const int SurfVer = 2;
+
+    /// <summary>지표면이 어느 방식으로 만들어졌나. 표시가 없으면 <b>1(옛 방식)</b>로 본다.</summary>
+    internal static int VerOf(CivilDb.Surface surf)
+    {
+        try
+        {
+            string d = surf?.Description ?? "";
+            int at = d.IndexOf(VerTag, System.StringComparison.Ordinal);
+            if (at < 0) return 1;
+            string rest = d.Substring(at + VerTag.Length);
+            int semi = rest.IndexOf(';');
+            if (semi >= 0) rest = rest.Substring(0, semi);
+            return int.TryParse(rest.Trim(), out int v) ? v : 1;
+        }
+        catch { return 1; }
+    }
+
+    /// <summary>★[JACK 0831] 암종을 지표면 설명란에 적는다 — <b>도면과 함께 저장된다</b>.</summary>
+    internal static void WriteRock(Database db, string surfName, RockClass rock, bool show = true)
+    {
+        try
+        {
+            var cdoc = CivilApp.CivilApplication.ActiveDocument;
+            using var tr = db.TransactionManager.StartTransaction();
+            foreach (ObjectId sid in cdoc.GetSurfaceIds())
+                try
+                {
+                    if (tr.GetObject(sid, OpenMode.ForRead) is not CivilDb.Surface s0 || s0.Name != surfName) continue;
+                    var sw = (CivilDb.Surface)tr.GetObject(sid, OpenMode.ForWrite);
+                    string old = "";
+                    try { old = sw.Description ?? ""; } catch { }
+                    // 옛 표시는 지우고 새로 적는다 — 두 개가 남으면 어느 것이 참인지 알 수 없다.
+                    var keep = new System.Text.StringBuilder();
+                    foreach (var part in old.Split(';'))
+                        if (part.Trim().Length > 0 && !part.Contains(RockTag)
+                            && !part.Contains(ShowTag) && !part.Contains(VerTag))
+                            keep.Append(part.Trim()).Append(';');
+                    keep.Append(RockTag).Append(rock)
+                        .Append(';').Append(ShowTag).Append(show ? 1 : 0)
+                        .Append(';').Append(VerTag).Append(SurfVer);
+                    sw.Description = keep.ToString();
+                    break;
+                }
+                catch { }
+            tr.Commit();
+        }
+        catch { }
+    }
+
+    /// <summary>★★[JACK 0831] 지표면에서 암종을 읽는다 — <b>토적표가 이것으로 층을 가른다</b>.
+    ///
+    /// <para>세 곳을 차례로 본다. <b>앞의 것이 없을 때만</b> 다음으로 간다:</para>
+    /// <list type="number">
+    /// <item>지표면 <b>설명란</b>(<c>DH_ROCK=…</c>) — 만들 때 우리가 적어 둔 것. 가장 믿을 만하다.</item>
+    /// <item>도킹바가 <b>열려 있으면</b> 그 표의 층 이름과 맞춰 본다.</item>
+    /// <item>층 <b>이름 자체</b>가 표준 이름(토사·풍화암·연암·보통암·경암)과 같으면 그것으로 본다.</item>
+    /// </list>
+    /// <para>셋 다 아니면 <b>토사</b>로 본다 — 그리고 <b>그 사실을 부르는 쪽이 로그에 남긴다</b>.
+    /// 조용히 토사로 세면 암 수량이 통째로 사라지는데 도면에는 아무 자국이 없다.</para></summary>
+    /// <summary>★[JACK 0831] 이 지표면을 <b>도면에 그릴까</b>. 설명란에 표시가 없으면 <b>그린다</b>(옛 도면 대비).</summary>
+    internal static bool ShowOf(ObjectId surfId)
+    {
+        try
+        {
+            var db = AcadApp.DocumentManager.MdiActiveDocument?.Database;
+            if (db == null || surfId.IsNull) return true;
+            using var tr = db.TransactionManager.StartTransaction();
+            bool v = true;
+            if (tr.GetObject(surfId, OpenMode.ForRead) is CivilDb.Surface su)
+            {
+                string d = "";
+                try { d = su.Description ?? ""; } catch { }
+                int at = d.IndexOf(ShowTag, System.StringComparison.Ordinal);
+                if (at >= 0)
+                {
+                    string rest = d.Substring(at + ShowTag.Length);
+                    int semi = rest.IndexOf(';');
+                    if (semi >= 0) rest = rest.Substring(0, semi);
+                    v = rest.Trim() != "0";
+                }
+            }
+            tr.Commit();
+            return v;
+        }
+        catch { return true; }
+    }
+
+    internal static RockClass RockOf(CivilDb.Surface surf, out string how)
+    {
+        how = "";
+        string nm = "";
+        try { nm = surf?.Name ?? ""; } catch { }
+        // ① 설명란
+        try
+        {
+            string d = surf?.Description ?? "";
+            int at = d.IndexOf(RockTag, System.StringComparison.Ordinal);
+            if (at >= 0)
+            {
+                string rest = d.Substring(at + RockTag.Length);
+                int semi = rest.IndexOf(';');
+                if (semi >= 0) rest = rest.Substring(0, semi);
+                if (System.Enum.TryParse(rest.Trim(), out RockClass rc))
+                { how = "설명란"; return rc; }
+            }
+        }
+        catch { }
+
+        string shortNm = ShortName(nm);
+        // ② 열려 있는 도킹바
+        try
+        {
+            var panel = StrataPanel.Current;
+            if (panel != null)
+                foreach (var lr in panel.Layers)
+                    if (lr != null && lr.Name == shortNm) { how = "도킹바"; return lr.Rock; }
+        }
+        catch { }
+        // ③ 이름이 표준 이름 그대로일 때
+        try
+        {
+            foreach (RockClass r in System.Enum.GetValues(typeof(RockClass)))
+                if (QtyTableSpec.NameOf(r).Replace(" ", "") == shortNm.Replace(" ", ""))
+                { how = "이름"; return r; }
+        }
+        catch { }
+        how = "모름";
+        return RockClass.Soil;
     }
 
     /// <summary>격자 하나로 지표면을 만든다(같은 이름이 있으면 지우고 새로).

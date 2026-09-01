@@ -6768,7 +6768,8 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
 
     // 아주 단순한 단면 — 손으로 풀 수 있게 <b>평평하게</b> 만든다.
     //   폭 10m. 원지반 EL.100, 계획면 EL.100(절토 0), 터파기 바닥 EL.92 → 깊이 8m.
-    //   지층: 토사 하단 97(두께 3) · 풍화암 하단 94(두께 3) · 그 아래는 연암.
+    //   지층: 토사 100~97 · 풍화암 97~94 · 연암 94~아래.
+    //   ★[JACK 0831] 넘기는 값은 각 층의 <b>상단</b>이다(암선 관례) — 기하는 그대로다.
     //   지하수위 EL.95.
     double[] X = { 0, 10 };
     double[] G = { 100, 100 };
@@ -6777,9 +6778,9 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     double[] WT = { 95, 95 };
     var strata = new List<StrataQuantity.Band>
     {
-        new(RockClass.Soil,      X, new double[] { 97, 97 }),
-        new(RockClass.Weathered, X, new double[] { 94, 94 }),
-        new(RockClass.Soft,      X, new double[] { 90, 90 }),
+        new(RockClass.Soil,      X, new double[] { 100, 100 }),   // 토사 상단 = 원지반
+        new(RockClass.Weathered, X, new double[] {  97,  97 }),   // 풍화암 상단
+        new(RockClass.Soft,      X, new double[] {  94,  94 }),   // 연암 상단(아래로 계속)
     };
 
     var led = new QtyLedger();
@@ -6857,10 +6858,10 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     }
 
     // ── ★ 마지막 층 아래는 <b>그 층이 이어진다</b> — 시추가 안 닿은 깊이를 조용히 버리지 않는다.
-    //   층을 토사 하나(하단 97)만 주고 EL.92까지 파면, 97~92의 5m가 전부 토사여야 한다.
+    //   층을 토사 하나(상단 = 원지반 100)만 주고 EL.92까지 파면, 100~92의 8m가 전부 토사여야 한다.
     {
         var led5 = new QtyLedger();
-        var one = new List<StrataQuantity.Band> { new(RockClass.Soil, X, new double[] { 97, 97 }) };
+        var one = new List<StrataQuantity.Band> { new(RockClass.Soil, X, new double[] { 100, 100 }) };
         StrataQuantity.Accumulate(led5, X, G, X, P, X, E, one, null, null);
         double sum = led5.Get(QtyKey.OfExc(RockClass.Soil, DepthClass.Le, WaterClass.Land))
                    + led5.Get(QtyKey.OfExc(RockClass.Soil, DepthClass.Gt, WaterClass.Land));
@@ -6874,7 +6875,8 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
         var es = new double[n + 1]; var ws = new double[n + 1];
         var s1 = new double[n + 1]; var s2 = new double[n + 1]; var s3 = new double[n + 1];
         for (int i = 0; i <= n; i++)
-        { xs[i] = 10.0 * i / n; gs[i] = 100; ps[i] = 100; es[i] = 92; ws[i] = 95; s1[i] = 97; s2[i] = 94; s3[i] = 90; }
+        { xs[i] = 10.0 * i / n; gs[i] = 100; ps[i] = 100; es[i] = 92; ws[i] = 95;
+          s1[i] = 100; s2[i] = 97; s3[i] = 94; }   // ★상단 기준(토사 100 · 풍화암 97 · 연암 94)
         var led6 = new QtyLedger();
         var st6 = new List<StrataQuantity.Band>
         {
@@ -6888,6 +6890,1056 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
               Math.Abs(led6.Get(QtyKey.OfExc(RockClass.Soft, DepthClass.Gt, WaterClass.Water)) - 20.0) < 1e-6,
               $"{led6.Get(QtyKey.OfExc(RockClass.Soft, DepthClass.Gt, WaterClass.Water)):F4}");
     }
+}
+
+// ── S82 ★★★[JACK 0831] 토적표는 <b>실제 나온 조합만</b> 세운다(합집합) ─────────────────
+{
+    Console.WriteLine("\n== S82 합집합으로 표 짓기 ==");
+
+    // 한 측점에서는 토사만, 다른 측점에서는 풍화암까지 나왔다고 하자.
+    var keys = new List<QtyKey>
+    {
+        QtyKey.OfFill(), QtyKey.OfBackfill(),
+        QtyKey.OfCut(RockClass.Soil),
+        QtyKey.OfCut(RockClass.Weathered),
+        QtyKey.OfExc(RockClass.Soil, DepthClass.Le, WaterClass.Land),
+        QtyKey.OfExc(RockClass.Weathered, DepthClass.Le, WaterClass.Land),
+        QtyKey.OfExc(RockClass.Soil, DepthClass.Gt, WaterClass.Land),
+        QtyKey.OfExc(RockClass.Soil, DepthClass.Le, WaterClass.Water),
+    };
+    var sp = QtyTableSpec.BuildFromKeys(keys);
+
+    int nCut = 0, nExc = 0;
+    foreach (var r in sp.Left)
+    {
+        if (r.Key is not QtyKey k) continue;
+        if (k.Kind == QtyKeyKind.Cut) nCut++;
+        if (k.Kind == QtyKeyKind.Exc) nExc++;
+    }
+    Check("S82 ★절토는 실제 깎인 2줄만(연암·경암 없음)", nCut == 2, $"{nCut}줄");
+    Check("S82 ★터파기는 실제 나온 4줄만(전부 곱하면 8줄)", nExc == 4, $"{nExc}줄");
+
+    // 안 나온 조합은 <b>줄이 아예 없다</b> — 이것이 "최적화"의 뜻이다.
+    bool hasGhost = false;
+    foreach (var r in sp.Left)
+        if (r.Key is QtyKey k2
+            && k2.Equals(QtyKey.OfExc(RockClass.Weathered, DepthClass.Gt, WaterClass.Water)))
+            hasGhost = true;
+    Check("S82 ★한 번도 안 나온 조합은 줄이 없다", !hasGhost, hasGhost ? "있다" : "없다");
+
+    // 차례는 <b>어느 측점에서 먼저 나왔느냐와 무관</b>하다 — 도면끼리 견줄 수 있어야 한다.
+    var shuffled = new List<QtyKey>(keys);
+    shuffled.Reverse();
+    var sp2 = QtyTableSpec.BuildFromKeys(shuffled);
+    bool sameOrder = sp.Left.Count == sp2.Left.Count;
+    if (sameOrder)
+        for (int i = 0; i < sp.Left.Count; i++)
+            if (!Equals(sp.Left[i].Key, sp2.Left[i].Key)) { sameOrder = false; break; }
+    Check("S82 ★★열쇠 차례가 뒤바뀌어도 표 차례는 같다", sameOrder, sameOrder ? "같다" : "달라졌다");
+
+    // 늘 서는 줄은 그대로 선다.
+    Check("S82 ★규칙을 지킨다(성토·되메우기·오른쪽 공종)",
+          QtyTableSpecRules.Holds(sp, out string whyU), whyU);
+    Check("S82 ★두 단 길이가 같다(직사각형)", sp.Left.Count == sp.Right.Count,
+          $"{sp.Left.Count}/{sp.Right.Count}");
+
+    // 바닥면고르기는 <b>터파기에 나온</b> 암종에서 토사를 뺀 것.
+    Check("S82 ★바닥면고르기 = 풍화암 하나", sp.FloorTrim.Count == 1 && sp.FloorTrim[0] == RockClass.Weathered,
+          string.Join(",", sp.FloorTrim));
+
+    // ★축척이 읽는 값이 <b>실제 줄 수</b>를 따라간다 — 표가 커지면 그림이 작아져야 한다.
+    var spBig = QtyTableSpec.Build(
+        new[] { RockClass.Soil, RockClass.Weathered, RockClass.Soft, RockClass.Medium, RockClass.Hard },
+        hasDeep: true, hasWater: true);
+    Check("S82 ★★전부 나오면 표가 더 길다", spBig.TotalRows > sp.TotalRows,
+          $"{sp.TotalRows}줄 → {spBig.TotalRows}줄");
+
+    // 아무것도 안 나온 도면 — 표가 깨지지 않는다.
+    var spNone = QtyTableSpec.BuildFromKeys(new List<QtyKey>());
+    Check("S82 ★값이 하나도 없어도 표는 선다", spNone.Left.Count == spNone.Right.Count && spNone.Left.Count > 0,
+          $"{spNone.Left.Count}줄");
+    Check("S82 ★그때도 규칙을 지킨다", QtyTableSpecRules.Holds(spNone, out string whyN), whyN);
+}
+
+// ── S83 ★★★[JACK 0831] 지층면이 좁으면 <b>수량이 조용히 빠진다</b> ────────────────────
+//   ★넘기는 선은 각 층의 <b>상단</b>이다(암선 관례). 그래서 띠는 <c>이 선 ~ 다음 선</c>이고
+//     마지막 층은 아래로 끝없이 이어진다.
+{
+    Console.WriteLine("\n== S83 지층이 부지를 못 덮을 때 ==");
+
+    // 폭 100m 단면. 원지반 z=10, 계획면 z=0 → 절토 1,000㎡.
+    int n = 101;
+    var x = new double[n]; var g = new double[n]; var p = new double[n];
+    for (int i = 0; i < n; i++) { x[i] = i; g[i] = 10; p[i] = 0; }
+    double whole = CrossSectionArea.Above(x, g, p);
+    Check("S83 전체 절토는 1,000㎡", Math.Abs(whole - 1000.0) < 1e-6, $"{whole:F2}㎡");
+
+    // 두 층: 토사(상단=원지반) · 풍화암(상단 z=5).
+    //   ★풍화암 면이 <b>가운데 50m만</b> 덮으면 그 밖에서는 두 층 다 잘려 나간다.
+    var fullx = new double[n]; var fullz = new double[n];
+    for (int i = 0; i < n; i++) { fullx[i] = i; fullz[i] = 10; }          // 토사 상단 = 원지반
+    var narx = new double[51]; var narz = new double[51];
+    for (int i = 0; i < 51; i++) { narx[i] = 25 + i; narz[i] = 5; }       // 풍화암 상단(좁다)
+
+    var led = new QtyLedger();
+    StrataQuantity.Accumulate(led, x, g, x, p, null, null, new[]
+    {
+        new StrataQuantity.Band(RockClass.Soil, fullx, fullz),
+        new StrataQuantity.Band(RockClass.Weathered, narx, narz),
+    }, null, null);
+    double sum = 0;
+    foreach (var k in led.Keys)
+    {
+        double v = led.Get(k);
+        if (k.Kind == QtyKeyKind.Cut && !double.IsNaN(v)) sum += v;
+    }
+    // ★이것이 핵심이다: 지층면이 좁으면 <b>합이 안 맞는다</b>. 예외도 경고도 안 난다.
+    Check("S83 ★★지층면이 좁으면 지층합 < 전체 (조용히 빠진다)", sum < whole - 1.0,
+          $"지층합 {sum:F2}㎡ vs 전체 {whole:F2}㎡");
+    Check("S83 ★그래서 <b>대조가 필요하다</b>(도면 쪽이 매 측점 견준다)",
+          Math.Abs(whole - sum) > 1.0, $"차이 {whole - sum:F2}㎡");
+
+    // 다 덮으면 합이 맞는다 — 대조가 <b>참을 낼 수 있다</b>는 확인.
+    var wfx = new double[n]; var wfz = new double[n];
+    for (int i = 0; i < n; i++) { wfx[i] = i; wfz[i] = 5; }
+    var led2 = new QtyLedger();
+    StrataQuantity.Accumulate(led2, x, g, x, p, null, null, new[]
+    {
+        new StrataQuantity.Band(RockClass.Soil, fullx, fullz),
+        new StrataQuantity.Band(RockClass.Weathered, wfx, wfz),
+    }, null, null);
+    double sum2 = 0;
+    foreach (var k in led2.Keys)
+    {
+        double v = led2.Get(k);
+        if (k.Kind == QtyKeyKind.Cut && !double.IsNaN(v)) sum2 += v;
+    }
+    Check("S83 ★★다 덮으면 지층합 = 전체", Math.Abs(sum2 - whole) < 1e-6,
+          $"지층합 {sum2:F2}㎡ vs 전체 {whole:F2}㎡");
+    Check("S83 토사 500㎡(10~5)", Math.Abs(led2.Get(QtyKey.OfCut(RockClass.Soil)) - 500.0) < 1e-6,
+          $"{led2.Get(QtyKey.OfCut(RockClass.Soil)):F2}㎡");
+    Check("S83 ★마지막 층은 아래로 이어진다 — 풍화암 500㎡(5~0)",
+          Math.Abs(led2.Get(QtyKey.OfCut(RockClass.Weathered)) - 500.0) < 1e-6,
+          $"{led2.Get(QtyKey.OfCut(RockClass.Weathered)):F2}㎡");
+
+    // ★★층 하나를 <b>빼먹으면</b> — 상단 기준에서는 <b>윗층</b>이 그 몫을 먹는다.
+    //   (하단 기준이던 옛 판에서는 아랫층이 먹었다. 방향만 바뀌고 위험은 같다.)
+    var t7x = new double[n]; var t7z = new double[n];
+    var t4x = new double[n]; var t4z = new double[n];
+    for (int i = 0; i < n; i++) { t7x[i] = i; t7z[i] = 7; t4x[i] = i; t4z[i] = 4; }
+    var ledA = new QtyLedger();
+    StrataQuantity.Accumulate(ledA, x, g, x, p, null, null, new[]
+    {
+        new StrataQuantity.Band(RockClass.Soil, fullx, fullz),        // 토사 10~7
+        new StrataQuantity.Band(RockClass.Weathered, t7x, t7z),       // 풍화암 7~4
+        new StrataQuantity.Band(RockClass.Soft, t4x, t4z),            // 연암 4~아래
+    }, null, null);
+    var ledB = new QtyLedger();
+    StrataQuantity.Accumulate(ledB, x, g, x, p, null, null, new[]
+    {
+        new StrataQuantity.Band(RockClass.Soil, fullx, fullz),        // 풍화암 층을 빼먹었다
+        new StrataQuantity.Band(RockClass.Soft, t4x, t4z),
+    }, null, null);
+    double soilA = ledA.Get(QtyKey.OfCut(RockClass.Soil));
+    double weathA = ledA.Get(QtyKey.OfCut(RockClass.Weathered));
+    double softA = ledA.Get(QtyKey.OfCut(RockClass.Soft));
+    double soilB = ledB.Get(QtyKey.OfCut(RockClass.Soil));
+    Check("S83 세 층이 다 있으면 토사 300㎡", Math.Abs(soilA - 300.0) < 1e-6, $"{soilA:F2}㎡");
+    Check("S83 세 층이 다 있으면 풍화암 300㎡", Math.Abs(weathA - 300.0) < 1e-6, $"{weathA:F2}㎡");
+    Check("S83 세 층이 다 있으면 연암 400㎡(아래로 이어짐)", Math.Abs(softA - 400.0) < 1e-6, $"{softA:F2}㎡");
+    Check("S83 ★합은 전체와 같다", Math.Abs((soilA + weathA + softA) - whole) < 1e-6,
+          $"{soilA + weathA + softA:F2}㎡");
+    Check("S83 ★★한 층을 빼먹으면 풍화암이 사라진다",
+          double.IsNaN(ledB.Get(QtyKey.OfCut(RockClass.Weathered))),
+          $"{ledB.Get(QtyKey.OfCut(RockClass.Weathered))}");
+    Check("S83 ★★그 몫을 <b>윗층</b>이 먹는다(토사 600㎡)", Math.Abs(soilB - 600.0) < 1e-6, $"{soilB:F2}㎡");
+    Check("S83 ★★★그래도 <b>합은 전체와 같다</b> — 합계 대조로는 못 잡는다",
+          Math.Abs((soilB + ledB.Get(QtyKey.OfCut(RockClass.Soft))) - whole) < 1e-6,
+          $"{soilB + ledB.Get(QtyKey.OfCut(RockClass.Soft)):F2}㎡");
+}
+
+// ── S84 ★★★[JACK 0831 · 검토] 검사는 <b>그리는 것</b>을 봐야 한다 ────────────────────
+{
+    Console.WriteLine("\n== S84 그리는 얼개를 검사한다 ==");
+
+    // ★검토 HIGH-2: 대분류(깊이)가 육상·용수를 <b>통째로</b> 먹어야 한다 —
+    //   한국 토적표 관례이고, 이 저장소가 베낀 원본 표가 그 모양이다.
+    var keys = new List<QtyKey> { QtyKey.OfFill(), QtyKey.OfBackfill() };
+    foreach (var w in new[] { WaterClass.Land, WaterClass.Water })
+        foreach (var d in new[] { DepthClass.Le, DepthClass.Gt })
+            foreach (var r in new[] { RockClass.Soil, RockClass.Weathered })
+                keys.Add(QtyKey.OfExc(r, d, w));
+    var sp = QtyTableSpec.BuildFromKeys(keys);
+
+    // 대분류에 깊이 딱지가 <b>몇 번</b> 나오나 — 깊이 종류만큼이라야 한다(네 번이면 쪼개진 것).
+    int nDepthLabel = 0;
+    foreach (var row in sp.Left)
+        if (row.Group != null && row.Group.Contains("m")) nDepthLabel++;
+    Check("S84 ★★깊이 딱지는 깊이 종류 수만큼만(2번)", nDepthLabel == 2, $"{nDepthLabel}번");
+
+    // 그 딱지 아래로 <b>육상과 용수가 둘 다</b> 들어 있어야 한다.
+    int firstDepth = -1, landAfter = 0, waterAfter = 0;
+    for (int i = 0; i < sp.Left.Count; i++)
+    {
+        var row = sp.Left[i];
+        if (row.Group != null && row.Group.Contains("m") && firstDepth < 0) { firstDepth = i; continue; }
+        if (firstDepth < 0) continue;
+        if (row.Group != null && row.Group.Contains("m")) break;      // 다음 깊이 블록
+        if (row.Sub != null && row.Sub.Contains("육상")) landAfter++;
+        if (row.Sub != null && row.Sub.Contains("용수")) waterAfter++;
+    }
+    Check("S84 ★★한 깊이 블록 안에 육상·용수가 둘 다 있다",
+          landAfter >= 0 && waterAfter == 1, $"육상 {landAfter} · 용수 {waterAfter}");
+
+    // ★검토 HIGH-1: 그리는 쪽이 이 검사를 부른다. 여기서도 같은 것을 본다.
+    Check("S84 ★그린 얼개가 규칙을 지킨다", QtyTableSpecRules.Holds(sp, out string why), why);
+    Check("S84 ★두 단 길이가 같다", sp.Left.Count == sp.Right.Count,
+          $"{sp.Left.Count}/{sp.Right.Count}");
+
+    // ★채움 줄은 <b>왼쪽·오른쪽 모두 비어</b> 있어야 한다 — 도면 쪽이 그 판정으로 병합을 끊는다.
+    int nFill = 0;
+    foreach (var row in sp.Left)
+        if (row.Group == null && row.Sub == null && row.Item == null && row.Key == null) nFill++;
+    Check("S84 채움 줄 판정이 성립한다(왼쪽 " + nFill + "줄)", nFill >= 0, $"{nFill}줄");
+
+    // ★성토·되메우기는 <b>언제나</b> 열쇠를 갖는다 — 없으면 표에 값이 못 들어간다(검토 HIGH-1의 짝).
+    bool hasFill = false, hasBack = false;
+    foreach (var row in sp.Left)
+    {
+        if (row.Key is not QtyKey k) continue;
+        if (k.Kind == QtyKeyKind.Fill) hasFill = true;
+        if (k.Kind == QtyKeyKind.Backfill) hasBack = true;
+    }
+    Check("S84 ★★성토 줄에 열쇠가 있다(없으면 값이 영영 안 들어간다)", hasFill, hasFill ? "있다" : "없다");
+    Check("S84 ★★되메우기 줄에 열쇠가 있다", hasBack, hasBack ? "있다" : "없다");
+}
+
+// ── S85 ★★★[JACK 0831 "셀 합치기가 이상하게 됐어"] 병합은 <b>겹치면 안 된다</b> ──────────
+{
+    Console.WriteLine("\n== S85 셀 합치기 ==");
+
+    // JACK 스샷 그대로: 터파기(용수) 세 줄 + 되메우기 두 줄.
+    //   종전엔 <b>터파기 (용수)</b>가 되메우기 줄까지 먹어 표가 찌그러졌다.
+    var keys = new List<QtyKey>
+    {
+        QtyKey.OfFill(), QtyKey.OfBackfill(),
+        QtyKey.OfCut(RockClass.Soil), QtyKey.OfCut(RockClass.Weathered),
+        QtyKey.OfCut(RockClass.Soft), QtyKey.OfCut(RockClass.Hard),
+        QtyKey.OfExc(RockClass.Weathered, DepthClass.Le, WaterClass.Water),
+        QtyKey.OfExc(RockClass.Soft, DepthClass.Le, WaterClass.Water),
+        QtyKey.OfExc(RockClass.Hard, DepthClass.Le, WaterClass.Water),
+    };
+    var sp = QtyTableSpec.BuildFromKeys(keys);
+
+    Check("S85 ★★★병합이 서로 안 겹친다", sp.MergesValid(out string mw), mw);
+
+    // 중분류(터파기(용수))가 <b>되메우기 줄까지 먹지 않는다</b> — 그 잘못을 콕 집어 본다.
+    int subRow = -1, backRow = -1;
+    for (int r = 0; r < sp.BodyRows; r++)
+    {
+        if (sp.Left[r].Sub != null && sp.Left[r].Sub.Contains("터파기")) subRow = r;
+        if (sp.Left[r].Group != null && sp.Left[r].Group.Contains("되메우기")) backRow = r;
+    }
+    Check("S85 터파기 중분류와 되메우기가 둘 다 있다", subRow >= 0 && backRow > subRow,
+          $"중분류 {subRow}줄 · 되메우기 {backRow}줄");
+    int span = subRow >= 0 ? sp.SpanSub(subRow) : 0;
+    Check("S85 ★★중분류가 되메우기 줄을 안 먹는다",
+          subRow >= 0 && backRow > subRow && subRow + span <= backRow,
+          $"중분류가 {subRow}~{subRow + span - 1}줄, 되메우기는 {backRow}줄");
+
+    // 대분류가 두 칸을 먹는 줄(성토·절토·되메우기)은 중분류 자리를 <b>비워야</b> 한다.
+    bool ok2 = true;
+    for (int r = 0; r < sp.BodyRows; r++)
+        if (sp.GroupTakesTwo(r) && sp.SpanSub(r) > 0) ok2 = false;
+    Check("S85 ★대분류가 두 칸을 먹으면 그 줄 중분류는 비어 있다", ok2, ok2 ? "맞다" : "겹친다");
+
+    // 채움 줄에서는 <b>모든</b> 병합이 끊긴다.
+    bool ok3 = true;
+    for (int r = 0; r < sp.BodyRows; r++)
+        if (sp.IsFillerLeft(r) && (sp.SpanGroup(r) > 0 || sp.SpanSub(r) > 0)) ok3 = false;
+    Check("S85 채움 줄에서는 병합이 안 시작된다", ok3, ok3 ? "맞다" : "시작한다");
+
+    // 여러 모양을 두루 걸어 본다 — 어떤 현장이 와도 표가 안 찌그러져야 한다.
+    int nCase = 0;
+    foreach (bool deep in new[] { false, true })
+        foreach (bool water in new[] { false, true })
+            foreach (int nr in new[] { 1, 2, 3, 5 })
+            {
+                var rocks = new List<RockClass>();
+                for (int i = 0; i < nr; i++) rocks.Add((RockClass)i);
+                var s2 = QtyTableSpec.Build(rocks, deep, water);
+                nCase++;
+                if (!s2.MergesValid(out string w2))
+                { Check($"S85 ★병합 겹침(암종{nr}·깊이{deep}·물{water})", false, w2); break; }
+            }
+    Check($"S85 ★★모든 모양({nCase}가지)에서 병합이 안 겹친다", nCase == 16, $"{nCase}가지");
+}
+
+// ── S86 ★★★[JACK 0831 "경우의 수가 너무 많아서 프로그래밍이 가능한 거야?"] ─────────────
+//   <b>경우를 세지 않고 성질을 묻는다.</b> 무작위로 수천 판을 지어
+//   "어느 칸이든 주인이 둘이면 안 된다"를 확인한다 — 3가지든 300만 가지든 참이어야 하는 성질이다.
+{
+    Console.WriteLine("\n== S86 무작위 수천 판 ==");
+
+    const int Trials = 5000;
+    var rnd = new Random(20260831);          // ★씨앗을 못 박는다 — 깨지면 <b>같은 판</b>을 다시 만들 수 있다
+    int nBad = 0, nRect = 0, nRule = 0, nOrder = 0;
+    string firstBad = null;
+    int minRows = int.MaxValue, maxRows = 0;
+    var seenShapes = new HashSet<string>();
+
+    for (int t = 0; t < Trials; t++)
+    {
+        var keys = new List<QtyKey> { QtyKey.OfFill(), QtyKey.OfBackfill() };
+        foreach (RockClass r in new[] { RockClass.Soil, RockClass.Weathered,
+                                        RockClass.Soft, RockClass.Medium, RockClass.Hard })
+            if (rnd.Next(2) == 0) keys.Add(QtyKey.OfCut(r));
+        foreach (WaterClass w in new[] { WaterClass.Land, WaterClass.Water })
+            foreach (DepthClass d in new[] { DepthClass.Le, DepthClass.Gt })
+                foreach (RockClass r in new[] { RockClass.Soil, RockClass.Weathered,
+                                                RockClass.Soft, RockClass.Medium, RockClass.Hard })
+                    if (rnd.Next(3) == 0) keys.Add(QtyKey.OfExc(r, d, w));
+
+        var sp = QtyTableSpec.BuildFromKeys(keys);
+        minRows = Math.Min(minRows, sp.TotalRows);
+        maxRows = Math.Max(maxRows, sp.TotalRows);
+
+        // ① 병합이 안 겹친다 — 겹치면 AutoCAD가 뒤 병합을 조용히 버려 표가 찌그러진다.
+        if (!sp.MergesValid(out string why))
+        { nBad++; firstBad ??= $"{t}판 — {why}"; }
+        // ② 두 단 길이가 같다(직사각형)
+        if (sp.Left.Count != sp.Right.Count) nRect++;
+        // ③ 늘 서는 줄이 다 있다
+        if (!QtyTableSpecRules.Holds(sp, out _)) nRule++;
+        // ④ 열쇠 차례가 뒤바뀌어도 표 차례가 같다 — 도면끼리 견줄 수 있어야 한다.
+        var shuffled = new List<QtyKey>(keys);
+        for (int i = shuffled.Count - 1; i > 0; i--)
+        { int j = rnd.Next(i + 1); (shuffled[i], shuffled[j]) = (shuffled[j], shuffled[i]); }
+        var sp2 = QtyTableSpec.BuildFromKeys(shuffled);
+        if (sp2.Left.Count != sp.Left.Count) nOrder++;
+        else
+            for (int i = 0; i < sp.Left.Count; i++)
+                if (!Equals(sp.Left[i].Key, sp2.Left[i].Key)) { nOrder++; break; }
+
+        // 어떤 모양들을 실제로 걸어 봤는지 센다 — "돌긴 했는데 다 같은 판"이면 검사가 아니다.
+        seenShapes.Add($"{sp.Rocks.Count}/{sp.Depths.Count}/{sp.Waters.Count}/{sp.BodyRows}");
+    }
+
+    Check($"S86 ★★★{Trials}판 전부 병합이 안 겹친다", nBad == 0, nBad == 0 ? "0판" : $"{nBad}판 ({firstBad})");
+    Check($"S86 ★{Trials}판 전부 직사각형", nRect == 0, $"{nRect}판");
+    Check($"S86 ★{Trials}판 전부 늘 서는 줄이 있다", nRule == 0, $"{nRule}판");
+    Check($"S86 ★★{Trials}판 전부 차례가 열쇠 순서와 무관", nOrder == 0, $"{nOrder}판");
+    // ★검사가 <b>여러 모양</b>을 실제로 걸었는지 — 한 판만 반복했으면 통과해도 뜻이 없다.
+    Check("S86 ★★서로 다른 표 모양을 30가지 넘게 걸었다", seenShapes.Count > 30, $"{seenShapes.Count}가지");
+    Check($"S86 줄 수가 {minRows}~{maxRows}까지 벌어졌다(현장에 따라 늘고 준다)",
+          maxRows > minRows + 5, $"{minRows}~{maxRows}줄");
+}
+
+// ── S87 ★★★[JACK 0831 "3단 접기"] 긴 쪽을 접어 <b>빈칸을 줄인다</b> ──────────────────
+{
+    Console.WriteLine("\n== S87 표 접기 ==");
+
+    // ① 차이가 작으면 <b>안 접는다</b> — 두세 줄 때문에 표를 넓히는 것은 손해다.
+    var small = QtyTableSpec.Build(new[] { RockClass.Soil, RockClass.Weathered },
+                                   hasDeep: false, hasWater: false);
+    var f1 = QtyTableFold.Make(small);
+    Check("S87 차이가 작으면 안 접는다(7칸)", f1.Cols == 7, $"{f1.Cols}칸 · {f1.Note}");
+
+    // ② 지층이 다 나오면 왼쪽이 폭발한다 → <b>두 단으로 접는다</b>.
+    var big = QtyTableSpec.Build(
+        new[] { RockClass.Soil, RockClass.Weathered, RockClass.Soft, RockClass.Medium, RockClass.Hard },
+        hasDeep: true, hasWater: true);
+    var f2 = QtyTableFold.Make(big);
+    Check("S87 ★★왼쪽이 길면 11칸으로 접는다", f2.Cols == 11, $"{f2.Cols}칸 · {f2.Note}");
+    Check("S87 ★★접으면 표가 낮아진다", f2.BodyRows < big.BodyRows,
+          $"{big.BodyRows}줄 → {f2.BodyRows}줄");
+    Check("S87 ★접은 표도 병합이 안 겹친다", big.MergesValid(f2, out string w2), w2);
+
+    // ③ 접은 단은 <b>블록 경계</b>에서만 끊긴다 — 터파기 한가운데가 잘리면 안 된다.
+    int cut = -1;
+    foreach (var seg in f2.Segs) if (seg.Left && seg.From > 0) cut = seg.From;
+    Check("S87 ★★끊는 자리가 대분류가 시작하는 줄이다",
+          cut > 0 && big.Left[cut].Group != null,
+          cut > 0 ? $"{cut}줄 대분류='{big.Left[cut].Group}'" : "못 찾음");
+
+    // ④ 어느 줄도 <b>빠지거나 두 번 나오지 않는다</b> — 접다가 잃으면 수량이 사라진다.
+    for (int t = 0; t < 3; t++)
+    {
+        QtyTableSpec sp = t == 0 ? small : t == 1 ? big
+            : QtyTableSpec.Build(new[] { RockClass.Soil }, hasDeep: false, hasWater: false);
+        var fd = QtyTableFold.Make(sp);
+        var seenL = new List<int>(); var seenR = new List<int>();
+        foreach (var seg in fd.Segs)
+            for (int i = 0; i < seg.Count; i++) (seg.Left ? seenL : seenR).Add(seg.From + i);
+        bool dupL = seenL.Count != new HashSet<int>(seenL).Count;
+        bool dupR = seenR.Count != new HashSet<int>(seenR).Count;
+        Check($"S87 ★★({t}) 왼쪽 줄이 안 겹치고 안 빠진다", !dupL && seenL.Count > 0,
+              $"{seenL.Count}줄 · 중복 {dupL}");
+        Check($"S87 ★★({t}) 오른쪽 줄이 안 겹치고 안 빠진다", !dupR && seenR.Count > 0,
+              $"{seenR.Count}줄 · 중복 {dupR}");
+        // 열쇠가 든 줄은 <b>하나도 빠지면 안 된다</b> — 빠지면 그 수량이 표에서 사라진다.
+        int keyed = 0; foreach (var row in sp.Left) if (row.Key != null) keyed++;
+        int keyedShown = 0; foreach (int r in seenL) if (sp.Left[r].Key != null) keyedShown++;
+        Check($"S87 ★★★({t}) 열쇠가 든 줄이 하나도 안 빠졌다", keyed == keyedShown,
+              $"{keyedShown}/{keyed}줄");
+    }
+
+    // ⑤ ★무작위 수천 판 — 접어도 안 깨지나.
+    var rnd = new Random(20260901);
+    int nBad = 0, nLost = 0, nWide = 0; string first = null;
+    for (int t = 0; t < 3000; t++)
+    {
+        var keys = new List<QtyKey> { QtyKey.OfFill(), QtyKey.OfBackfill() };
+        foreach (RockClass r in new[] { RockClass.Soil, RockClass.Weathered,
+                                        RockClass.Soft, RockClass.Medium, RockClass.Hard })
+            if (rnd.Next(2) == 0) keys.Add(QtyKey.OfCut(r));
+        foreach (WaterClass w in new[] { WaterClass.Land, WaterClass.Water })
+            foreach (DepthClass d in new[] { DepthClass.Le, DepthClass.Gt })
+                foreach (RockClass r in new[] { RockClass.Soil, RockClass.Weathered,
+                                                RockClass.Soft, RockClass.Medium, RockClass.Hard })
+                    if (rnd.Next(3) == 0) keys.Add(QtyKey.OfExc(r, d, w));
+        var sp = QtyTableSpec.BuildFromKeys(keys);
+        var fd = QtyTableFold.Make(sp);
+        if (!sp.MergesValid(fd, out string w3)) { nBad++; first ??= $"{t}판 — {w3}"; }
+        if (fd.Cols != 7 && fd.Cols != 10 && fd.Cols != 11) nWide++;
+        // 열쇠가 든 줄이 다 실렸나
+        var shown = new HashSet<int>();
+        foreach (var seg in fd.Segs) if (seg.Left)
+            for (int i = 0; i < seg.Count; i++) shown.Add(seg.From + i);
+        foreach (int r in Enumerable.Range(0, sp.BodyRows))
+            if (sp.Left[r].Key != null && !shown.Contains(r)) { nLost++; break; }
+    }
+    Check("S87 ★★★3000판 접어도 병합이 안 겹친다", nBad == 0, nBad == 0 ? "0판" : $"{nBad}판({first})");
+    Check("S87 ★★★3000판 열쇠가 든 줄이 하나도 안 빠진다", nLost == 0, $"{nLost}판");
+    Check("S87 칸 수가 7·10·11 중 하나다", nWide == 0, $"{nWide}판");
+}
+
+// ── S88 ★★★[JACK 0831 "도면의 암층 표시 기준은 달라졌지만 계산까지 영향 미친 것 있어?"]
+//   <b>말로 답하지 않고 재서 답한다.</b> 옛 판(하단 기준)의 띠 배정을 여기서 직접 만들어,
+//   지금 판(상단 기준)과 <b>같은 답이 나오는지</b> 견준다.
+{
+    Console.WriteLine("\n== S88 상단/하단 뒤집기가 수량을 바꾸나 ==");
+
+    // 옛 판이 하던 대로 띠를 만든다 — <c>앞 선 ~ 이 선</c>, 그리고 마지막 층 아래로 확장 띠 하나.
+    //   (지금 <c>Accumulate</c>는 <c>이 선 ~ 다음 선</c>이다.)
+    static QtyLedger OldWay(double[] x, double[] g, double[] p, double[] e, double[] w,
+                            (RockClass Rock, double[] Z)[] bottoms, double deep)
+    {
+        var led = new QtyLedger();
+        // 옛 배정을 <b>상단 목록</b>으로 바꿔 지금 함수에 먹인다:
+        //   옛: rock_i 는 [하단(i-1), 하단(i)]  ·  마지막은 [하단(n-2), -무한]
+        //   →  상단 목록: 1층 상단 = 원지반, i층 상단 = 하단(i-1)
+        var tops = new List<StrataQuantity.Band>();
+        for (int i = 0; i < bottoms.Length; i++)
+            tops.Add(new StrataQuantity.Band(bottoms[i].Rock, x, i == 0 ? g : bottoms[i - 1].Z));
+        StrataQuantity.Accumulate(led, x, g, x, p, x, e, tops, x, w, deep);
+        return led;
+    }
+
+    // 손으로 푼 답이 있는 S81과 같은 단면 — 하단 목록으로 적는다(옛 판 표기).
+    double[] X = { 0, 10 };
+    double[] G = { 100, 100 }, P = { 100, 100 }, E = { 92, 92 }, WL = { 95, 95 };
+    var bots3 = new (RockClass, double[])[]
+    {
+        (RockClass.Soil,      new double[] { 97, 97 }),   // 토사 하단
+        (RockClass.Weathered, new double[] { 94, 94 }),   // 풍화암 하단
+        (RockClass.Soft,      new double[] { 90, 90 }),   // 연암 하단(그 아래도 연암)
+    };
+    var oldLed = OldWay(X, G, P, E, WL, bots3, 5.0);
+
+    // 지금 판 — 상단 목록으로 그대로 적는다.
+    var nowLed = new QtyLedger();
+    StrataQuantity.Accumulate(nowLed, X, G, X, P, X, E, new List<StrataQuantity.Band>
+    {
+        new(RockClass.Soil,      X, new double[] { 100, 100 }),
+        new(RockClass.Weathered, X, new double[] {  97,  97 }),
+        new(RockClass.Soft,      X, new double[] {  94,  94 }),
+    }, X, WL, 5.0);
+
+    // ★두 원장을 <b>열쇠 하나하나</b> 견준다 — 하나라도 다르면 불합격.
+    static bool Same(QtyLedger a, QtyLedger b, out string why)
+    {
+        var keys = new HashSet<QtyKey>();
+        foreach (var k in a.Keys) keys.Add(k);
+        foreach (var k in b.Keys) keys.Add(k);
+        foreach (var k in keys)
+        {
+            double va = a.Get(k), vb = b.Get(k);
+            bool na = double.IsNaN(va), nb = double.IsNaN(vb);
+            if (na && nb) continue;
+            if (na != nb || Math.Abs(va - vb) > 1e-9)
+            { why = $"{k.Kind}/{k.Rock}/{k.Depth}/{k.Water}: 옛 {va:F4} vs 지금 {vb:F4}"; return false; }
+        }
+        why = $"열쇠 {keys.Count}개 전부 같다";
+        return true;
+    }
+    Check("S88 ★★★세 층 — 옛 배정과 지금 배정이 같다", Same(oldLed, nowLed, out string w3), w3);
+
+    // 층이 <b>하나</b>일 때 — 확장 띠 하나만 있던 경우.
+    {
+        var b1 = new (RockClass, double[])[] { (RockClass.Soil, new double[] { 97, 97 }) };
+        var o1 = OldWay(X, G, P, E, WL, b1, 5.0);
+        var n1 = new QtyLedger();
+        StrataQuantity.Accumulate(n1, X, G, X, P, X, E, new List<StrataQuantity.Band>
+        { new(RockClass.Soil, X, new double[] { 100, 100 }) }, X, WL, 5.0);
+        Check("S88 ★★한 층 — 같다", Same(o1, n1, out string w1), w1);
+    }
+
+    // 층이 <b>둘</b>일 때.
+    {
+        var b2 = new (RockClass, double[])[]
+        { (RockClass.Soil, new double[] { 97, 97 }), (RockClass.Weathered, new double[] { 93, 93 }) };
+        var o2 = OldWay(X, G, P, E, WL, b2, 5.0);
+        var n2 = new QtyLedger();
+        StrataQuantity.Accumulate(n2, X, G, X, P, X, E, new List<StrataQuantity.Band>
+        {
+            new(RockClass.Soil, X, new double[] { 100, 100 }),
+            new(RockClass.Weathered, X, new double[] { 97, 97 }),
+        }, X, WL, 5.0);
+        Check("S88 ★★두 층 — 같다", Same(o2, n2, out string w2), w2);
+    }
+
+    // ★<b>1층 면은 계산에 안 쓰인다</b> — 엉뚱한 값을 넣어도 답이 그대로여야 한다.
+    {
+        var nA = new QtyLedger();
+        StrataQuantity.Accumulate(nA, X, G, X, P, X, E, new List<StrataQuantity.Band>
+        {
+            new(RockClass.Soil,      X, new double[] { 100, 100 }),
+            new(RockClass.Weathered, X, new double[] {  97,  97 }),
+            new(RockClass.Soft,      X, new double[] {  94,  94 }),
+        }, X, WL, 5.0);
+        var nB = new QtyLedger();
+        StrataQuantity.Accumulate(nB, X, G, X, P, X, E, new List<StrataQuantity.Band>
+        {
+            new(RockClass.Soil,      X, new double[] { 999, 999 }),   // ★말도 안 되는 값
+            new(RockClass.Weathered, X, new double[] {  97,  97 }),
+            new(RockClass.Soft,      X, new double[] {  94,  94 }),
+        }, X, WL, 5.0);
+        Check("S88 ★★1층 면 값은 계산에 안 쓰인다(원지반을 쓴다)", Same(nA, nB, out string wA), wA);
+    }
+}
+
+// ── S89 ★★★[JACK 0901 "층을 넣었다가 추가했다 했을 경우 계산 결과에 오류가 없는지"] ──────
+//   <b>넣고 빼기를 무작위로 되풀이해도 두께가 층과 안 어긋나는지</b> 잰다.
+//   여기서 어긋나면 두께가 <b>엉뚱한 층</b>에 붙어 조용히 틀린 지층면이 나온다.
+{
+    Console.WriteLine("\n== S89 층을 넣었다 뺐다 ==");
+
+    // 층 이름 대신 <b>번호</b>를 두께 값으로 쓴다 — 두께 100+i면 "i번 층의 두께"라는 뜻이다.
+    //   그러면 밀렸는지를 <b>값만 보고</b> 알 수 있다.
+    static List<double> Row(int n) { var r = new List<double>(); for (int i = 0; i < n; i++) r.Add(100 + i); return r; }
+
+    // ① 가운데를 지우면 <b>그 자리</b>가 빠진다 — 끝에서 빠지면 안 된다.
+    {
+        var names = new List<int> { 0, 1, 2, 3, 4 };
+        var rows = new List<List<double>> { Row(5), Row(5) };
+        StrataEdit.RemoveLayer(1, rows);            // 2번째 층을 지운다
+        names.RemoveAt(1);
+        StrataEdit.SyncLength(names.Count, rows);
+        bool ok = true;
+        foreach (var r in rows)
+            for (int i = 0; i < names.Count; i++)
+                if (Math.Abs(r[i] - (100 + names[i])) > 1e-9) ok = false;
+        Check("S89 ★★가운데를 지우면 그 자리가 빠진다", ok,
+              string.Join(",", rows[0]) + " ← 층 " + string.Join(",", names));
+    }
+
+    // ② 층을 더하면 <b>끝에 모른다(NaN)</b>가 붙고 앞 값은 그대로다.
+    {
+        var rows = new List<List<double>> { Row(3) };
+        StrataEdit.SyncLength(5, rows);
+        Check("S89 층을 더하면 끝에 NaN이 붙는다",
+              rows[0].Count == 5 && double.IsNaN(rows[0][3]) && double.IsNaN(rows[0][4])
+              && Math.Abs(rows[0][0] - 100) < 1e-9 && Math.Abs(rows[0][2] - 102) < 1e-9,
+              string.Join(",", rows[0]));
+    }
+
+    // ③ ★<b>무작위로 3,000판</b> 넣고 빼도 두께[i]가 층[i]의 것이어야 한다.
+    {
+        var rnd = new Random(20260901);
+        int bad = 0; string first = null;
+        for (int t = 0; t < 3000; t++)
+        {
+            var names = new List<int>();
+            int next = 0;
+            for (int i = 0; i < 3; i++) names.Add(next++);            // 세 층으로 시작
+            var rows = new List<List<double>>();
+            for (int b = 0; b < 3; b++)
+            {
+                var r = new List<double>();
+                foreach (int nm in names) r.Add(100 + nm);
+                rows.Add(r);
+            }
+            // 넣고 빼기를 20번 되풀이한다.
+            for (int step = 0; step < 20; step++)
+            {
+                if (names.Count > 1 && rnd.Next(2) == 0)
+                {
+                    int ix = rnd.Next(names.Count);
+                    StrataEdit.RemoveLayer(ix, rows);                 // ★같은 자리에서
+                    names.RemoveAt(ix);
+                    StrataEdit.SyncLength(names.Count, rows);
+                }
+                else
+                {
+                    names.Add(next);                                  // 끝에 새 층
+                    StrataEdit.SyncLength(names.Count, rows);
+                    foreach (var r in rows) r[names.Count - 1] = 100 + next;   // 사람이 값을 친다
+                    next++;
+                }
+            }
+            // ★판정: 모든 공에서 두께[i] == 100 + 층[i] 여야 한다.
+            foreach (var r in rows)
+            {
+                if (r.Count != names.Count)
+                { bad++; first ??= $"{t}판 — 칸 수 {r.Count} vs 층 {names.Count}"; break; }
+                bool shifted = false;
+                for (int i = 0; i < names.Count; i++)
+                    if (Math.Abs(r[i] - (100 + names[i])) > 1e-9) shifted = true;
+                if (shifted)
+                { bad++; first ??= $"{t}판 — 두께 [{string.Join(",", r)}] vs 층 [{string.Join(",", names)}]"; break; }
+            }
+        }
+        Check("S89 ★★★3000판 넣고 빼도 두께가 층과 안 어긋난다", bad == 0,
+              bad == 0 ? "0판" : $"{bad}판 ({first})");
+    }
+
+    // ④ 짝이 안 맞으면 <b>만들기 전에</b> 걸러야 한다 — 조용히 만들면 안 된다.
+    {
+        var good = new List<List<double>> { Row(4), Row(4) };
+        Check("S89 짝이 맞으면 통과", StrataEdit.Aligned(4, good, out string w1), w1);
+        var bad2 = new List<List<double>> { Row(4), Row(3) };
+        Check("S89 ★★짝이 안 맞으면 막는다", !StrataEdit.Aligned(4, bad2, out string w2), w2);
+    }
+
+    // ⑤ ★넣고 뺀 <b>뒤</b>의 두께로 지층 모델을 세워도 층 차례가 맞는지 —
+    //    실제 계산까지 이어서 확인한다(칸 수만 맞아서는 부족하다).
+    {
+        var defs = new List<StratumDef>
+        {
+            new("표토",   RockClass.Soil,      InterpMode.Thickness),
+            new("풍화토", RockClass.Soil,      InterpMode.Thickness),
+            new("풍화암", RockClass.Weathered, InterpMode.Thickness),
+        };
+        // 가운데(풍화토)를 지운 상태를 흉내 낸다.
+        var th = new List<double> { 2, 3, 5 };                 // 표토2 · 풍화토3 · 풍화암5
+        var rows2 = new List<List<double>> { th };
+        StrataEdit.RemoveLayer(1, rows2);                      // 풍화토를 뺀다
+        defs.RemoveAt(1);
+        StrataEdit.SyncLength(defs.Count, rows2);
+        Check("S89 지운 뒤 두께가 [2,5]다", th.Count == 2 && Math.Abs(th[0] - 2) < 1e-9 && Math.Abs(th[1] - 5) < 1e-9,
+              string.Join(",", th));
+
+        var logs = new List<BoreLog> { new("BH1", 0, 0, 100, th.ToArray(), double.NaN) };
+        var model = StrataModel.Build(defs, logs, out string why);
+        Check("S89 모델이 선다", model != null, why);
+        if (model != null)
+        {
+            var col = model.At(0, 0, 100);
+            // 표토 100~98 · 풍화암 98~93. 지운 층의 두께(3)가 어디에도 안 섞여야 한다.
+            Check("S89 ★★표토 하단 98(두께 2)", Math.Abs(col.Bottom[0] - 98.0) < 1e-6, $"{col.Bottom[0]:F2}");
+            Check("S89 ★★풍화암 하단 93(두께 5) — 지운 3이 안 섞였다",
+                  Math.Abs(col.Bottom[1] - 93.0) < 1e-6, $"{col.Bottom[1]:F2}");
+        }
+    }
+}
+
+// ── S90 ★★★[JACK 0901] GL 모드 — 사람이 친 <b>암층 상단</b>을 모델의 <b>층 바닥</b>으로 ──────
+{
+    Console.WriteLine("\n== S90 GL 모드 옮기기 ==");
+
+    var rocks = new List<(string, RockClass)>
+    {
+        ("풍화암", RockClass.Weathered),
+        ("연암",   RockClass.Soft),
+        ("보통암", RockClass.Medium),
+        ("경암",   RockClass.Hard),
+    };
+    // 원지반 100. 풍화암 상단 95 · 연암 90 · 보통암 85 · 경암 80.
+    var tops = new List<double[]> { new double[] { 95, 90, 85, 80 } };
+
+    var gls = new List<double> { 100 };
+    bool ok = StrataInput.FromRockTops(rocks, tops, gls, out var defs, out var vals, out string why);
+    Check("S90 옮기기 성공", ok, why);
+    Check("S90 ★★토사가 저절로 맨 앞에 생긴다", defs.Count == 5 && defs[0].Bucket == RockClass.Soil,
+          defs.Count + "층 · 첫 층 " + (defs.Count > 0 ? defs[0].Name : "?"));
+    // ★모델에 넣는 것은 <b>두께</b>다 — 토사 5(100→95) · 풍화암 5 · 연암 5 · 보통암 5 · 경암(안 쓰임)
+    Check("S90 ★★토사 두께 = 5(100→95)", Math.Abs(vals[0][0] - 5.0) < 1e-9, $"{vals[0][0]}");
+    Check("S90 ★★풍화암 두께 = 5(95→90)", Math.Abs(vals[0][1] - 5.0) < 1e-9, $"{vals[0][1]}");
+    Check("S90 ★보통암 두께 = 5(85→80)", Math.Abs(vals[0][3] - 5.0) < 1e-9, $"{vals[0][3]}");
+
+    // ★모델을 세워 <b>면(상단)</b>이 사람이 친 값과 그대로 맞는지 본다 — 이것이 핵심이다.
+    var logs = new List<BoreLog> { new("BH1", 0, 0, 100, vals[0], double.NaN) };
+    var model = StrataModel.Build(defs, logs, out string w2);
+    Check("S90 모델이 선다", model != null, w2);
+    if (model != null)
+    {
+        var col = model.At(0, 0, 100);
+        // 면[i] = i==0 ? 원지반 : Bottom[i-1]  (StrataDraw가 쓰는 그 식)
+        double S(int i) => i == 0 ? col.Ground : col.Bottom[i - 1];
+        Check("S90 ★★★면0(토사 상단) = 원지반 100", Math.Abs(S(0) - 100.0) < 1e-6, $"{S(0):F2}");
+        Check("S90 ★★★면1(풍화암 상단) = 95 — 친 값 그대로", Math.Abs(S(1) - 95.0) < 1e-6, $"{S(1):F2}");
+        Check("S90 ★★★면2(연암 상단) = 90", Math.Abs(S(2) - 90.0) < 1e-6, $"{S(2):F2}");
+        Check("S90 ★★★면3(보통암 상단) = 85", Math.Abs(S(3) - 85.0) < 1e-6, $"{S(3):F2}");
+        Check("S90 ★★★면4(경암 상단) = 80", Math.Abs(S(4) - 80.0) < 1e-6, $"{S(4):F2}");
+    }
+
+    // ★<b>마지막 층 바닥은 안 쓰인다</b> — 말도 안 되는 값을 넣어도 답이 같아야 한다.
+    {
+        var v2 = (double[])vals[0].Clone();
+        v2[4] = 9999;                                   // ★터무니없는 두께
+        var m2 = StrataModel.Build(defs, new List<BoreLog> { new("BH1", 0, 0, 100, v2, double.NaN) }, out _);
+        var c1 = model.At(0, 0, 100);
+        var c2 = m2.At(0, 0, 100);
+        bool same = true;
+        for (int i = 0; i + 1 < defs.Count; i++)        // 면은 Bottom[0..n-2]만 쓴다
+            if (Math.Abs(c1.Bottom[i] - c2.Bottom[i]) > 1e-9) same = false;
+        Check("S90 ★★마지막 층 바닥은 면에 안 쓰인다", same, same ? "같다" : "달라졌다");
+    }
+
+    // ★<b>지반고를 몰라도</b> 암층 상단은 친 값 그대로여야 한다.
+    {
+        StrataInput.FromRockTops(rocks, tops, new List<double> { double.NaN },
+                                 out var d2, out var v3, out _);
+        var m3 = StrataModel.Build(d2, new List<BoreLog> { new("BH1", 0, 0, 95, v3[0], double.NaN) }, out _);
+        var c3 = m3.At(0, 0, 95);
+        Check("S90 ★★지반고를 몰라도 풍화암 상단 95", Math.Abs(c3.Ground - 95.0) < 1e-6, $"{c3.Ground:F2}");
+        Check("S90 ★★지반고를 몰라도 연암 상단 90", Math.Abs(c3.Bottom[1] - 90.0) < 1e-6, $"{c3.Bottom[1]:F2}");
+    }
+
+    // ★수량도 같은지 — 지표 100, 계획 0으로 다 깎았을 때 층별 두께가 5·5·5·5·나머지여야 한다.
+    {
+        int n = 2;
+        var x = new double[] { 0, 10 };
+        var g = new double[] { 100, 100 };
+        var p = new double[] { 0, 0 };
+        var col = model.At(0, 0, 100);
+        double S(int i) => i == 0 ? col.Ground : col.Bottom[i - 1];
+        var bands = new List<StrataQuantity.Band>();
+        for (int i = 0; i < defs.Count; i++)
+        {
+            var z = new double[n];
+            for (int j = 0; j < n; j++) z[j] = S(i);
+            bands.Add(new StrataQuantity.Band(defs[i].Bucket, x, z));
+        }
+        var led = new QtyLedger();
+        StrataQuantity.Accumulate(led, x, g, x, p, null, null, bands, null, null);
+        Check("S90 ★★토사 절토 = 50㎡(100~95 × 10m)",
+              Math.Abs(led.Get(QtyKey.OfCut(RockClass.Soil)) - 50.0) < 1e-6,
+              $"{led.Get(QtyKey.OfCut(RockClass.Soil)):F2}");
+        Check("S90 ★★풍화암 = 50㎡(95~90)",
+              Math.Abs(led.Get(QtyKey.OfCut(RockClass.Weathered)) - 50.0) < 1e-6,
+              $"{led.Get(QtyKey.OfCut(RockClass.Weathered)):F2}");
+        Check("S90 ★★★경암 = 800㎡(80~0, 아래로 끝없이)",
+              Math.Abs(led.Get(QtyKey.OfCut(RockClass.Hard)) - 800.0) < 1e-6,
+              $"{led.Get(QtyKey.OfCut(RockClass.Hard)):F2}");
+        double sum = 0;
+        foreach (var k in led.Keys) { double v = led.Get(k); if (k.Kind == QtyKeyKind.Cut && !double.IsNaN(v)) sum += v; }
+        Check("S90 ★★★합이 전체 절토 1,000㎡", Math.Abs(sum - 1000.0) < 1e-6, $"{sum:F2}㎡");
+    }
+
+    // ★<b>토사를 안 넣으면 어떻게 되는지</b> — 구상 그대로 갔을 때의 위험을 못 박아 둔다.
+    {
+        int n = 2;
+        var x = new double[] { 0, 10 };
+        var g = new double[] { 100, 100 };
+        var p = new double[] { 0, 0 };
+        var badBands = new List<StrataQuantity.Band>();
+        double[] Z(double v) { var a = new double[n]; for (int j = 0; j < n; j++) a[j] = v; return a; }
+        badBands.Add(new StrataQuantity.Band(RockClass.Weathered, x, Z(95)));   // 토사 없이 암부터
+        badBands.Add(new StrataQuantity.Band(RockClass.Soft, x, Z(90)));
+        var ledBad = new QtyLedger();
+        StrataQuantity.Accumulate(ledBad, x, g, x, p, null, null, badBands, null, null);
+        Check("S90 ★★★토사를 빼면 그 흙이 <b>풍화암</b>으로 잡힌다(암이 부푼다)",
+              Math.Abs(ledBad.Get(QtyKey.OfCut(RockClass.Weathered)) - 100.0) < 1e-6,
+              $"풍화암 {ledBad.Get(QtyKey.OfCut(RockClass.Weathered)):F2}㎡(맞게 넣으면 50㎡)");
+        Check("S90 ★★★그리고 토사가 통째로 사라진다",
+              double.IsNaN(ledBad.Get(QtyKey.OfCut(RockClass.Soil))),
+              $"{ledBad.Get(QtyKey.OfCut(RockClass.Soil))}");
+    }
+}
+
+// ── S91 ★★★[JACK 0901 "없는 층에 0을 입력하면 되는 거야? 수량엔 문제없어?"] ──────────────
+//   <b>말로 답하지 않고 잰다.</b> 두께 모드와 GL 모드는 <b>답이 다르다</b>.
+{
+    Console.WriteLine("\n== S91 없는 층을 0으로 ==");
+
+    // 공 둘. BH1엔 풍화토가 3m, BH2엔 <b>없다</b>. 둘 다 지반고 100.
+    //   층: 표토 2 · 풍화토 ? · 풍화암 5 · 경암(마지막)
+    var defs = new List<StratumDef>
+    {
+        new("표토",   RockClass.Soil,      InterpMode.Thickness),
+        new("풍화토", RockClass.Soil,      InterpMode.Thickness),
+        new("풍화암", RockClass.Weathered, InterpMode.Thickness),
+        new("경암",   RockClass.Hard,      InterpMode.Thickness),
+    };
+
+    // ① <b>0을 친 경우</b> — "없다"
+    {
+        var logs = new List<BoreLog>
+        {
+            new("BH1",   0, 0, 100, new double[] { 2, 3, 5, 1 }, double.NaN),
+            new("BH2", 100, 0, 100, new double[] { 2, 0, 5, 1 }, double.NaN),
+        };
+        var m = StrataModel.Build(defs, logs, out string why);
+        Check("S91 모델이 선다(0)", m != null, why);
+        var c2 = m.At(100, 0, 100);       // BH2 자리
+        // 표토 100~98 · 풍화토 <b>두께 0</b> → 98~98 · 풍화암 98~93
+        Check("S91 ★★BH2에서 풍화토가 사라진다(하단 98 = 표토 하단)",
+              Math.Abs(c2.Bottom[1] - 98.0) < 1e-6, $"{c2.Bottom[1]:F2}");
+        Check("S91 ★BH2 풍화암 하단 93", Math.Abs(c2.Bottom[2] - 93.0) < 1e-6, $"{c2.Bottom[2]:F2}");
+        var c1 = m.At(0, 0, 100);         // BH1 자리 — 그대로 3m
+        Check("S91 ★BH1은 풍화토 3m 그대로(하단 95)", Math.Abs(c1.Bottom[1] - 95.0) < 1e-6, $"{c1.Bottom[1]:F2}");
+        var cm = m.At(50, 0, 100);        // 가운데 — 사이에서 얇아진다
+        double th = c1.Bottom[0] - cm.Bottom[1] - (c1.Bottom[0] - cm.Bottom[0]);
+        Check("S91 ★★가운데에서는 <b>얇아진다</b>(0과 3 사이)",
+              cm.Bottom[1] > 95.0 - 1e-9 && cm.Bottom[1] < 98.0 + 1e-9, $"하단 {cm.Bottom[1]:F2}");
+    }
+
+    // ② <b>비워 둔 경우</b> — "모른다" → 다른 공에서 끌어온다
+    {
+        var logs = new List<BoreLog>
+        {
+            new("BH1",   0, 0, 100, new double[] { 2, 3, 5, 1 }, double.NaN),
+            new("BH2", 100, 0, 100, new double[] { 2, double.NaN, 5, 1 }, double.NaN),
+        };
+        var m = StrataModel.Build(defs, logs, out _);
+        var c2 = m.At(100, 0, 100);
+        Check("S91 ★★★비워 두면 BH2에도 <b>풍화토 3m가 생긴다</b>(없는 흙이 생긴다)",
+              Math.Abs(c2.Bottom[1] - 95.0) < 1e-6, $"하단 {c2.Bottom[1]:F2}(0을 쳤으면 98)");
+    }
+
+    // ③ 수량 — 0을 친 층은 <b>줄이 아예 안 선다</b>(0 줄이 표를 늘리지 않는다)
+    {
+        int n = 2;
+        var x = new double[] { 0, 10 };
+        var g = new double[] { 100, 100 };
+        var p = new double[] { 90, 90 };            // 10m 절토
+        double[] Z(double v) { var a = new double[n]; for (int j = 0; j < n; j++) a[j] = v; return a; }
+        var led = new QtyLedger();
+        StrataQuantity.Accumulate(led, x, g, x, p, null, null, new List<StrataQuantity.Band>
+        {
+            new(RockClass.Soil,      x, Z(100)),    // 표토 100~98
+            new(RockClass.Soil,      x, Z(98)),     // 풍화토 98~98 (두께 0)
+            new(RockClass.Weathered, x, Z(98)),     // 풍화암 98~93
+            new(RockClass.Hard,      x, Z(93)),     // 경암 93~아래
+        }, null, null);
+        Check("S91 ★★토사 = 20㎡(100~98만, 두께 0인 층은 안 보탠다)",
+              Math.Abs(led.Get(QtyKey.OfCut(RockClass.Soil)) - 20.0) < 1e-6,
+              $"{led.Get(QtyKey.OfCut(RockClass.Soil)):F2}");
+        Check("S91 ★풍화암 = 50㎡(98~93)",
+              Math.Abs(led.Get(QtyKey.OfCut(RockClass.Weathered)) - 50.0) < 1e-6,
+              $"{led.Get(QtyKey.OfCut(RockClass.Weathered)):F2}");
+        Check("S91 ★경암 = 30㎡(93~90)",
+              Math.Abs(led.Get(QtyKey.OfCut(RockClass.Hard)) - 30.0) < 1e-6,
+              $"{led.Get(QtyKey.OfCut(RockClass.Hard)):F2}");
+        double sum = 0;
+        foreach (var k in led.Keys) { double v = led.Get(k); if (k.Kind == QtyKeyKind.Cut && !double.IsNaN(v)) sum += v; }
+        Check("S91 ★★★합이 전체 절토 100㎡ — 0인 층이 있어도 안 새고 안 겹친다",
+              Math.Abs(sum - 100.0) < 1e-6, $"{sum:F2}㎡");
+    }
+
+    // ④ ★★<b>GL 모드에서 0은 재앙이다</b> — 표고 0m는 부지보다 100m 아래다.
+    {
+        var rocks = new List<(string, RockClass)>
+        {
+            ("풍화암", RockClass.Weathered), ("연암", RockClass.Soft), ("경암", RockClass.Hard),
+        };
+        // 연암이 없다고 <b>0</b>을 친 경우
+        StrataInput.FromRockTops(rocks, new List<double[]> { new double[] { 95, 0, 80 } },
+                                 new List<double> { 100 }, out var d1, out var v1, out _);
+        // 연암이 없다고 <b>아래층과 같은 표고(80)</b>를 친 경우
+        StrataInput.FromRockTops(rocks, new List<double[]> { new double[] { 95, 80, 80 } },
+                                 new List<double> { 100 }, out var d2, out var v2, out _);
+        Check("S91 ★★★GL에 0을 치면 풍화암 두께가 95m가 된다(재앙)",
+              Math.Abs(v1[0][1] - 95.0) < 1e-9, $"{v1[0][1]}m");
+        Check("S91 ★★GL은 <b>아래층과 같은 표고</b>를 쳐야 한다 — 그때 두께 15·0",
+              Math.Abs(v2[0][1] - 15.0) < 1e-9 && Math.Abs(v2[0][2] - 0.0) < 1e-9,
+              $"풍화암 {v2[0][1]}m · 연암 {v2[0][2]}m");
+    }
+}
+
+// ── S92 ★★★[JACK 0901 지도에서 범위 가져오기] 위경도 ↔ TM <b>왕복</b> ────────────────────
+//   한 방향만 맞으면 지도에서 친 박스가 <b>엉뚱한 데로</b> 간다. 그래서 왕복을 잰다.
+{
+    Console.WriteLine("\n== S92 위경도 ↔ TM ==");
+
+    // 원점 넷 — 서부125 · 중부127 · 동부129 · 동해131 (신 좌표계 FN=600000)
+    var belts = new (string Name, double Cm, double Fn)[]
+    {
+        ("서부(5185)", 125, 600000), ("중부(5186)", 127, 600000),
+        ("동부(5187)", 129, 600000), ("동해(5188)", 131, 600000),
+    };
+    // 우리나라 곳곳 — 위도 33~38.5, 경도 126~131
+    var pts = new (double Lon, double Lat, string Where)[]
+    {
+        (126.978, 37.567, "서울시청"), (129.075, 35.180, "부산시청"),
+        (127.385, 36.350, "대전"),     (126.531, 33.499, "제주"),
+        (128.601, 35.871, "대구"),     (130.906, 37.484, "울릉"),
+    };
+
+    // ★★[검증 중 알아낸 것] TM 급수는 <b>중앙자오선에서 멀어지면 벌어진다</b>.
+    //   한국 원점은 1° 간격이라 실제로는 <b>±2° 안</b>에서만 쓴다(도엽이 그렇게 나뉜다).
+    //   그래서 <b>제 원점에 맞는 자리만</b> 잰다 — 서부원점으로 울릉도를 재는 일은 없다.
+    double worst = 0; string worstAt = ""; int nPair = 0;
+    foreach (var b in belts)
+        foreach (var p in pts)
+        {
+            if (Math.Abs(p.Lon - b.Cm) > 2.0) continue;      // 제 원점이 아니다
+            nPair++;
+            var (e, n) = KoreaTm.FromLonLat(p.Lon, p.Lat, b.Cm, b.Fn);
+            var (lon2, lat2) = KoreaTm.ToLonLat(e, n, b.Cm, b.Fn);
+            // 되돌린 위경도를 다시 TM으로 — <b>미터로</b> 견줘야 얼마나 틀렸는지 안다.
+            var (e2, n2) = KoreaTm.FromLonLat(lon2, lat2, b.Cm, b.Fn);
+            double d = Math.Sqrt((e - e2) * (e - e2) + (n - n2) * (n - n2));
+            if (d > worst) { worst = d; worstAt = $"{b.Name}/{p.Where}"; }
+        }
+    Check($"S92 ★★★왕복 오차가 1mm 미만(제 원점 {nPair}쌍)", worst < 0.001 && nPair >= 6,
+          $"{nPair}쌍 · 가장 큰 어긋남 {worst * 1000:F4}mm ({worstAt})");
+
+    // ★<b>한계를 못 박아 둔다</b> — 원점에서 멀면 벌어진다는 것을 검사가 알고 있어야
+    //   나중에 누가 "왜 안 맞지" 하며 문턱만 늘리는 일이 없다.
+    {
+        var (e, n) = KoreaTm.FromLonLat(130.9, 37.5, 125.0, 600000.0);   // 서부원점 × 울릉(5.9° 밖)
+        var (lo, la) = KoreaTm.ToLonLat(e, n, 125.0, 600000.0);
+        var (e2, n2) = KoreaTm.FromLonLat(lo, la, 125.0, 600000.0);
+        double d = Math.Sqrt((e - e2) * (e - e2) + (n - n2) * (n - n2));
+        Check("S92 ★★원점에서 6° 밖이면 cm 단위로 벌어진다(그래서 원점을 지켜야 한다)",
+              d > 0.005, $"{d * 1000:F1}mm — <b>엉뚱한 원점을 고르면 이만큼 틀어진다</b>");
+    }
+
+    // ★<b>중부원점에서 서울시청</b> — 알려진 값과 대조(대략 E 198,000 · N 552,000대).
+    {
+        var (e, n) = KoreaTm.FromLonLat(126.9780, 37.5665, 127.0, 600000.0);
+        Check("S92 ★서울시청 중부TM E가 19만대", e > 195000 && e < 200000, $"E {e:F1}");
+        Check("S92 ★서울시청 중부TM N이 55만대", n > 550000 && n < 555000, $"N {n:F1}");
+        // 중앙자오선(127°)에서 서쪽이므로 E는 20만보다 작아야 한다 — 부호가 뒤집혔으면 여기서 걸린다.
+        Check("S92 ★★중앙자오선 서쪽이면 E < 200000", e < 200000.0, $"E {e:F1}");
+    }
+
+    // ★<b>중앙자오선 위</b>에서는 E가 정확히 200000이라야 한다.
+    {
+        var (e, _) = KoreaTm.FromLonLat(127.0, 36.0, 127.0, 600000.0);
+        Check("S92 ★★중앙자오선 위에서 E = 200000", Math.Abs(e - 200000.0) < 1e-6, $"{e:F6}");
+    }
+    // ★<b>lat0(38°N)</b>에서는 N이 정확히 FN이라야 한다.
+    {
+        var (_, n) = KoreaTm.FromLonLat(127.0, 38.0, 127.0, 600000.0);
+        Check("S92 ★★원점 위도(38°)에서 N = 600000", Math.Abs(n - 600000.0) < 1e-6, $"{n:F6}");
+    }
+
+    // ★박스 하나를 통째로 옮겨 <b>모양이 안 뒤집히는지</b> — 왼쪽아래·오른쪽위가 그대로여야 한다.
+    {
+        double lo1 = 127.10, la1 = 37.40, lo2 = 127.13, la2 = 37.42;
+        var p1 = KoreaTm.FromLonLat(lo1, la1, 127.0, 600000.0);
+        var p2 = KoreaTm.FromLonLat(lo2, la2, 127.0, 600000.0);
+        Check("S92 ★동쪽이 E가 크다", p2.E > p1.E, $"{p1.E:F1} → {p2.E:F1}");
+        Check("S92 ★북쪽이 N이 크다", p2.N > p1.N, $"{p1.N:F1} → {p2.N:F1}");
+        // 위도 0.02° ≈ 2.2km, 경도 0.03° ≈ 2.65km(위도 37°에서)
+        Check("S92 ★박스 세로가 2.2km쯤", Math.Abs((p2.N - p1.N) - 2220) < 60, $"{p2.N - p1.N:F0}m");
+        Check("S92 ★박스 가로가 2.65km쯤", Math.Abs((p2.E - p1.E) - 2650) < 80, $"{p2.E - p1.E:F0}m");
+    }
+}
+
+
+// ── S93 ★★★[검토 0901] TM 역투영이 <b>두 벌</b>이었다 — 같은 답인지 재고 나서 하나로 줄인다 ─────
+//   VWorldImagery는 제 안에 private으로 같은 식을 들고 있었다(§50 그 병).
+//   지우기 전에 <b>옛 식을 여기 그대로 옮겨 놓고</b> KoreaTm과 맞대 본다 — S88과 같은 방식이다.
+//   맞으면 배경지도는 하나도 안 변한다는 증거가 되고, 안 맞으면 여기서 걸린다.
+{
+    Console.WriteLine("\n== S93 옛 역투영 vs KoreaTm ==");
+
+    // ↓↓ VWorldImagery.TmToLonLat 를 글자 그대로 옮긴 것(2026-09-01 삭제 직전 판)
+    static double OldMeridArc(double phi, double a, double e2)
+        => a * ((1 - e2 / 4 - 3 * e2 * e2 / 64 - 5 * e2 * e2 * e2 / 256) * phi
+              - (3 * e2 / 8 + 3 * e2 * e2 / 32 + 45 * e2 * e2 * e2 / 1024) * Math.Sin(2 * phi)
+              + (15 * e2 * e2 / 256 + 45 * e2 * e2 * e2 / 1024) * Math.Sin(4 * phi)
+              - (35 * e2 * e2 * e2 / 3072) * Math.Sin(6 * phi));
+
+    static (double lon, double lat) OldTmToLonLat(double E, double N, double lon0Deg, double FN)
+    {
+        const double a = 6378137.0;
+        const double f = 1.0 / 298.257222101;
+        const double k0 = 1.0, FE = 200000.0;
+        const double lat0 = 38.0 * Math.PI / 180.0;
+        double lon0 = lon0Deg * Math.PI / 180.0;
+
+        double e2 = 2 * f - f * f;
+        double ep2 = e2 / (1 - e2);
+
+        double M0 = OldMeridArc(lat0, a, e2);
+        double M = M0 + (N - FN) / k0;
+        double mu = M / (a * (1 - e2 / 4 - 3 * e2 * e2 / 64 - 5 * e2 * e2 * e2 / 256));
+        double e1 = (1 - Math.Sqrt(1 - e2)) / (1 + Math.Sqrt(1 - e2));
+
+        double phi1 = mu
+            + (3 * e1 / 2 - 27 * Math.Pow(e1, 3) / 32) * Math.Sin(2 * mu)
+            + (21 * e1 * e1 / 16 - 55 * Math.Pow(e1, 4) / 32) * Math.Sin(4 * mu)
+            + (151 * Math.Pow(e1, 3) / 96) * Math.Sin(6 * mu)
+            + (1097 * Math.Pow(e1, 4) / 512) * Math.Sin(8 * mu);
+
+        double sinp = Math.Sin(phi1), cosp = Math.Cos(phi1), tanp = Math.Tan(phi1);
+        double C1 = ep2 * cosp * cosp;
+        double T1 = tanp * tanp;
+        double N1 = a / Math.Sqrt(1 - e2 * sinp * sinp);
+        double R1 = a * (1 - e2) / Math.Pow(1 - e2 * sinp * sinp, 1.5);
+        double D = (E - FE) / (N1 * k0);
+
+        double lat = phi1 - (N1 * tanp / R1) * (D * D / 2
+            - (5 + 3 * T1 + 10 * C1 - 4 * C1 * C1 - 9 * ep2) * Math.Pow(D, 4) / 24
+            + (61 + 90 * T1 + 298 * C1 + 45 * T1 * T1 - 252 * ep2 - 3 * C1 * C1) * Math.Pow(D, 6) / 720);
+        double lon = lon0 + (D
+            - (1 + 2 * T1 + C1) * Math.Pow(D, 3) / 6
+            + (5 - 2 * C1 + 28 * T1 - 3 * C1 * C1 + 8 * ep2 + 24 * T1 * T1) * Math.Pow(D, 5) / 120) / cosp;
+
+        return (lon * 180.0 / Math.PI, lat * 180.0 / Math.PI);
+    }
+    // ↑↑ 여기까지 옛 식
+
+    var belts93 = new (string Name, double Cm, double Fn)[]
+    {
+        ("서부(5185)", 125, 600000), ("중부(5186)", 127, 600000),
+        ("동부(5187)", 129, 600000), ("동해(5188)", 131, 600000),
+        ("중부구(5181)", 127, 500000), ("제주(5182)", 127, 550000),
+    };
+
+    double worst93 = 0, worstMm93 = 0;
+    string where93 = "";
+    int n93 = 0;
+    foreach (var b in belts93)
+    {
+        // 배경지도가 실제로 훑는 범위 — 원점 좌우 ±120km, 남북 33~38.7° 어름
+        for (double E = 80000; E <= 320000; E += 20000)
+        {
+            for (double N = 150000; N <= 800000; N += 50000)
+            {
+                var o = OldTmToLonLat(E, N, b.Cm, b.Fn);
+                var v = KoreaTm.ToLonLat(E, N, b.Cm, b.Fn);
+                double dLon = Math.Abs(o.lon - v.Lon), dLat = Math.Abs(o.lat - v.Lat);
+                double d = Math.Max(dLon, dLat);
+                // 도 차이를 미터로 — 위도 1° ≒ 111.3km
+                double mm = d * 111320.0 * 1000.0;
+                n93++;
+                if (mm > worstMm93) { worstMm93 = mm; worst93 = d; where93 = $"{b.Name} E{E:F0} N{N:F0}"; }
+            }
+        }
+    }
+    Check($"S93 ★★★옛 식과 KoreaTm이 <b>같은 답</b>이다 — 배경지도는 안 바뀐다({n93}점)",
+          worstMm93 < 0.001 && n93 >= 300,
+          $"최대 차 {worstMm93:F6}mm ({worst93:E1}°) @ {where93}");
+
+    // 되돌려 보내도 제자리 — 옛 식이 준 위경도를 KoreaTm으로 다시 TM으로.
+    double worstBack93 = 0;
+    for (double E = 120000; E <= 280000; E += 40000)
+    {
+        for (double N = 200000; N <= 750000; N += 110000)
+        {
+            var o = OldTmToLonLat(E, N, 127, 600000);
+            var back = KoreaTm.FromLonLat(o.lon, o.lat, 127, 600000);
+            worstBack93 = Math.Max(worstBack93, Math.Max(Math.Abs(back.E - E), Math.Abs(back.N - N)));
+        }
+    }
+    Check("S93 ★옛 식 → KoreaTm 되돌리기도 1mm 미만", worstBack93 < 0.001, $"{worstBack93 * 1000:F4}mm");
 }
 
 
