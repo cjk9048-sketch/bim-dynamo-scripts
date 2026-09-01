@@ -71,6 +71,7 @@ public sealed class GradingSettingsCommand
 
             try
             {
+                // ★사용자가 <b>바꿨을 때</b>만 여기 온다 — 덮어써도 되는 자리다.
                 var (ok, note) = KoreaCs.Assign(doc.Database, GradingSettings.ExportEpsg);
                 doc.Editor.WriteMessage("\n[정지 옵션] " + note);
                 if (!ok)
@@ -92,6 +93,22 @@ public sealed class GradingSettingsCommand
                 try { DiagLog.Append($"\n■ DHGRADESET 좌표계 반영 오류 — {ex.Message}\n"); } catch { }
             }
         }
+        // ★★★[JACK 0901 "정지옵션에서 저장을 누르는 순간 도면에 좌표계가 정의가 안 되어 있다면
+        //   정의해 줘야 되는 거 아니야?"] — <b>맞다. 구멍이었다.</b>
+        //
+        //   위 블록은 <b>콤보를 실제로 바꿨을 때만</b> 돈다. 빈 도면은 콤보가 이미 중부원점으로
+        //   떠 있어서, 손대지 않고 [저장]을 누르면 <b>도면 좌표계가 계속 비어 있다</b>.
+        //   우리 애드인 안에서는 정지옵션 값으로 대신하니 잘 돌지만, 그 도면이 <b>밖으로 나가면</b>
+        //   여기가 어디인지 아무도 모른다(InfraWorks·QGIS·MAPIMPORT).
+        //
+        //   ★<b>비어 있을 때만</b> 채운다 — 이미 잡아 놓고 쓰던 도면은 절대 안 건드린다.
+        try
+        {
+            var (setIt, csNote2) = KoreaCs.AssignIfMissing(doc.Database, GradingSettings.ExportEpsg);
+            if (setIt && csNote2.Contains("지정")) doc.Editor.WriteMessage("\n[정지 옵션] " + csNote2);
+        }
+        catch { }
+
     AfterCs:
 
         // [JACK 0728] '결과지표면만 표시' 저장 즉시 반영 — 해제=숨겼던 지표면 전부 표시 / 체크=정지면_DH만(있을 때).

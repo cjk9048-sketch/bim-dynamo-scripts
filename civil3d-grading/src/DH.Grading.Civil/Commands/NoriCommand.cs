@@ -1,4 +1,4 @@
-﻿using Autodesk.AutoCAD.ApplicationServices;
+using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Runtime;
@@ -84,14 +84,21 @@ public sealed class NoriCommand
                     transFaces ??= vs.TransitionFaces; // 전환사면은 경계에서만 유도 — 절/성 동일, 구역당 한 번
                     if (!vs.HasSlope) { detail += $"\n{rTag}{label}: 링 복원 결과 사면 없음"; continue; }
 
-                    // [JACK 0724] 이 방향이 옹벽으로 작성되면(스타일≠사면 + 경사 n≤0.05) 노리선/사면선/소단선 생략 — 옹벽엔 노리선 없음.
+                    // ★★★[JACK 0901 "처음 정지설정에서 만들었든 <b>사면변환으로 만들었든</b>
+                    //   사면이면 노리선은 나와야지"] — <b>맞다. 여기가 틀렸다.</b>
+                    //
+                    //   종전엔 <b>정지설정의 전역 스타일</b>만 보고 그 방향을 <b>통째로 건너뛰었다</b>.
+                    //   그래서 절토·성토를 옹벽으로 잡아 두고 [사면 변환]으로 일부를 사면으로 돌려 놔도
+                    //   <b>노리선이 한 개도 안 나왔다</b> — 화면에는 "완료"만 뜨니 고장으로 보인다.
+                    //
+                    //   ★<b>구간별 판정은 아래 생성기가 이미 한다.</b> <c>zones</c>(번들에 적힌 실제 옹벽 구간)와
+                    //   구배를 넘겨받아 옹벽 자리는 빼고 사면 자리만 그린다 — 바로 아래 0804 주석이 그 얘기다.
+                    //   그러니 여기서 미리 자르면 안 된다. <b>세는 것은 생성기에 맡기고, 우리는 적기만 한다.</b>
                     double slopeN = up ? bundle.Params.CutSlope : bundle.Params.FillSlope;
                     WallStyle style = up ? GradingSettings.CutWallStyle : GradingSettings.FillWallStyle;
-                    if (style != WallStyle.없음_사면 && slopeN <= GradingSettings.WallGateSlope + 1e-9)
-                    {
-                        detail += $"\n{rTag}{label}: 옹벽({style}) — 노리선 생략";
-                        continue;
-                    }
+                    bool wallDefault = style != WallStyle.없음_사면 && slopeN <= GradingSettings.WallGateSlope + 1e-9;
+                    if (wallDefault)
+                        detail += $"\n{rTag}{label}: 기본 옹벽({style}) — 사면으로 바꾼 구간만 노리선";
 
                     int slN = 0, blN = 0, tN = 0;
                     foreach (var finalRing in ringList)
@@ -179,8 +186,27 @@ public sealed class NoriCommand
                 System.Array.Empty<System.Collections.Generic.IReadOnlyList<Point3>>());
             tr.Commit();
 
-            // 팝업은 성패만 — 개수·레이어 등 상세는 명령창과 로그로(공용 배포용, JACK 0720).
-            AcadApp.ShowAlertDialog("노리선 생성 완료");
+            // ★★★[JACK 0901 "노리선 작성 기능이 안 돼"] — <b>안 된 게 아니라 그릴 것이 없었다.</b>
+            //   정지옵션에서 절토·성토가 <b>둘 다 옹벽</b>이면 노리선을 그릴 <b>사면이 없다</b>.
+            //   그런데 팝업이 "노리선 생성 완료" 한 줄뿐이라 <b>0개를 그려 놓고 완료</b>라고 했다 —
+            //   사용자 눈에는 고장이다. 사유는 로그에만 있었다.
+            //   → <b>숫자를 팝업에 싣고</b>, 아무것도 안 그렸으면 왜인지 말한다.
+            int drawn = ticks.Count + wallLines.Count;
+            if (drawn == 0)
+            {
+                string why = detail.Contains("기본 옹벽(")
+                    ? "절토·성토가 모두 옹벽이고, 사면으로 바꾼 구간이 없습니다."
+                      + "\n[사면 변환]으로 일부를 사면으로 돌리면 그 구간에 노리선이 나옵니다."
+                    : "그릴 사면을 찾지 못했습니다 — [계획부지 생성]을 먼저 돌렸는지 확인해 주세요.";
+                AcadApp.ShowAlertDialog("노리선 — 그린 것이 없습니다\n\n" + why
+                                      + "\n\n자세한 사유:" + detail.Replace("\n\n", "\n"));
+            }
+            else
+            {
+                AcadApp.ShowAlertDialog($"노리선 생성 완료\n\n노리선 {ticks.Count}개"
+                                      + (wallLines.Count > 0 ? $" · 옹벽선 {wallLines.Count}개" : "")
+                                      + (fglMarks.Count > 0 ? $" · FGL 표기 {fglMarks.Count}건" : ""));
+            }
             ed.WriteMessage("\n" + ("노리선 생성 완료" + note + detail +
                 $"\n레이어: DH-사면선-절토/성토 · DH-소단선-절토/성토 · DH-노리선(노랑)" +
                 $"\n긴선 {GradingSettings.HatchLong}m마다 · 짧은선 {GradingSettings.HatchShort}m마다(절반)").Replace("\n\n", "\n"));

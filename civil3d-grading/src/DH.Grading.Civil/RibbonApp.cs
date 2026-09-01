@@ -174,13 +174,13 @@ public sealed class RibbonApp : IExtensionApplication
             // ★★[JACK 0824] <b>지표면 생성 = 스플릿 버튼.</b> 계획지표면과 터파기 지표면을 한 자리에 둔다.
             //   기본(윗부분 클릭)은 계획지표면 — 지금까지 하던 그것. 드롭다운에서 터파기를 고른다.
             var btnPlan = MakeButton(
-                "지표면\n생성", "DHGRADE ", "계획 폴리곤+원지반 → 계단식 절성토 TIN Surface 생성", "정지면");
-            btnPlan.ToolTip = MakeTip("계획지표면 생성 (DHGRADE)",
+                "계획부지\n정지", "DHGRADE ", "계획 폴리곤+원지반 → 계단식 절성토 TIN Surface 생성", "정지면");
+            btnPlan.ToolTip = MakeTip("계획부지 정지 (DHGRADE)",
                 "계획 경계 폴리선과 원지반을 고르면 계단식 절·성토 지표면을 만듭니다.\n" +
                 "제원은 [정지 설정]에서 정합니다.", null);
             var btnExc = MakeButton(
-                "터파기\n지표면", "DHEXCAV ", "구조물 바닥 폴리선 → 굴착 법면·바닥만 지표면으로 생성", "터파기");
-            btnExc.ToolTip = MakeTip("터파기 지표면 생성 (DHEXCAV)",
+                "구조물\n터파기", "DHEXCAV ", "구조물 바닥 폴리선 → 굴착 법면·바닥만 지표면으로 생성", "터파기");
+            btnExc.ToolTip = MakeTip("구조물 터파기 (DHEXCAV)",
                 "배수지·정수장 같은 **지하구조물**의 터파기를 만듭니다.\n" +
                 "구조물 바닥계획고가 들어간 닫힌 폴리선을 고르고, 제원(단높이·구배·소단)을 그 자리에서 정합니다.\n" +
                 "법면이 올라가 닿는 목표면은 **계획면과 원지반 중 낮은 쪽**입니다 —\n" +
@@ -201,8 +201,8 @@ public sealed class RibbonApp : IExtensionApplication
                 IsSynchronizedWithCurrentItem = false,
                 ListStyle = RibbonSplitButtonListStyle.List,
                 ToolTip = MakeTip("지표면 생성",
-                    "**계획지표면** — 부지 정지(지금까지 하던 그것).\n" +
-                    "**터파기 지표면** — 배수지·정수장 같은 지하구조물의 굴착.\n" +
+                    "**계획부지 정지** — 부지 정지(지금까지 하던 그것).\n" +
+                    "**구조물 터파기** — 배수지·정수장 같은 지하구조물의 굴착.\n" +
                     "아래 화살표를 눌러 고릅니다.", null),
             };
             splitSurf.Items.Add(btnPlan);
@@ -280,7 +280,7 @@ public sealed class RibbonApp : IExtensionApplication
                 "노리선", "DHNORI ", "정지 결과(번들)로 사면선·소단선·노리선을 한 번에 작도 — DHGRADE 실행 후 사용", "노리선");
             // [JACK 0731] 배경지도·지도끄기는 도면화 중분류로 이동(별도 패널 폐지).
             var btnMap = MakeButton(
-                "배경지도", "DHMAP ", "두 점으로 범위를 찍으면 그 범위의 위성사진을 도면 좌표계에 맞춰 깔아줍니다(화질=도면설정)", "지도");
+                "위성지도\n추가", "DHMAP ", "두 점으로 범위를 찍으면 그 범위의 위성사진을 도면 좌표계에 맞춰 깔아줍니다(화질=도면설정)", "지도");
             btnMap.ToolTip = MakeTip("배경지도 (DHMAP)",
                 "범위 두 모서리를 클릭하면 브이월드 위성사진을 받아\n" +
                 "도면 좌표계(정지옵션의 좌표계)에 정확히 맞춰 깔아줍니다.\n" +
@@ -418,6 +418,28 @@ public sealed class RibbonApp : IExtensionApplication
 
             // ★★★[JACK 0901 "수치지도를 불러 버리면 계획지역보다 너무 클 수 있어서"]
             //   도엽 한 장이 2×3km인데 현장은 200m다 — 삼각형 수만 개가 계산을 매번 따라다닌다.
+            // ★[JACK 0901] 위성지도 켜기·끄기를 <b>한 자리</b>로 — 나란히 두면 자리만 먹는다.
+            var splitMap = new RibbonSplitButton
+            {
+                Text = "위성지도\n삽입",
+                ShowText = true,
+                ShowImage = true,
+                LargeImage = MakeGlyph("위성지도"),
+                Image = MakeGlyph("위성지도"),
+                Size = RibbonItemSize.Large,
+                Orientation = System.Windows.Controls.Orientation.Vertical,
+                IsSplit = true,
+                IsSynchronizedWithCurrentItem = false,
+                ListStyle = RibbonSplitButtonListStyle.List,
+                ToolTip = MakeTip("위성지도 삽입",
+                    "**위성지도 추가** — 두 점을 찍으면 그 범위의 위성사진을 도면 좌표계에 맞춰 깝니다.\n" +
+                    "**지도끄기** — 깔아 둔 위성사진을 한 번에 모두 제거합니다.\n" +
+                    "아래 화살표를 눌러 고릅니다.", null),
+            };
+            splitMap.Items.Add(btnMap);
+            splitMap.Items.Add(btnMapOff);
+            splitMap.Current = btnMap;
+
             var btnCrop = MakeButton(
                 "원지형\n자르기", "DHCROP ", "드래그로 박스를 그리면 그 안의 지형만 남기고 나머지는 지웁니다", "자르기");
             btnCrop.ToolTip = MakeTip("원지형 자르기 (DHCROP)",
@@ -485,6 +507,23 @@ public sealed class RibbonApp : IExtensionApplication
             splitProf.Items.Add(btnStnFb);
             splitProf.Current = btnProf;
 
+            // ── 무엇이 있어야 눌 수 있나(JACK 0901) ───────────────────────────
+            //   여기 한 곳만 보면 <b>일하는 순서</b>가 그대로 읽힌다.
+            _needGround.Clear(); _needPlan.Clear();
+            _needGround.Add(btnCrop);        // 원지형 자르기 — 자를 지형이 있어야
+            _needGround.Add(btnStrata);      // 지층 구성 — 지반고를 원지반에서 읽는다
+            //   ※[계획부지 생성] 스플릿은 <b>안 끈다</b> — 통째로 끄면 그 안의
+            //     [계획부지 정지]까지 못 눌러 아무것도 시작할 수 없다. 안의 [구조물 터파기]만 끈다.
+            _needPlan.Add(btnExc);           // 구조물 터파기 — 목표면(계획면)이 있어야
+            _needPlan.Add(splitSlope);       // 사면 수정 — 고칠 사면이 있어야
+            _needPlan.Add(btnWall);
+            _needPlan.Add(btnSlope);
+            _needPlan.Add(btnNori);          // 노리선
+            _needPlan.Add(btnProf);          // 종단 생성
+            _needPlan.Add(btnStn);
+            _needPlan.Add(btnStnFb);
+            _needPlan.Add(btnXsec);          // 횡단
+
             // ── 패널 늘어놓기 ─────────────────────────────────────────────────
             tab.Panels.Add(new RibbonPanel { Source = pGrade });
             pGrade.Items.Add(Spacer());
@@ -516,9 +555,7 @@ public sealed class RibbonApp : IExtensionApplication
             pMisc.Items.Add(Spacer());
             pMisc.Items.Add(btnParcel);
             pMisc.Items.Add(Spacer());
-            pMisc.Items.Add(btnMap);
-            pMisc.Items.Add(Spacer());
-            pMisc.Items.Add(btnMapOff);
+            pMisc.Items.Add(splitMap);
             pMisc.Items.Add(Spacer());
             pMisc.Items.Add(btnReset);
             pMisc.Items.Add(Spacer());
@@ -832,6 +869,16 @@ public sealed class RibbonApp : IExtensionApplication
                         break;
 
                     // ── 기타 ─────────────────────────────────────────────────
+                    case "위성지도": // 지도 위의 위성 — 위성사진을 깐다
+                        var sm = P(0x3f, 0x8f, 0xd8);
+                        dc.DrawRectangle(null, P(0x9c, 0xc4, 0xe8), new Rect(3, 14, 26, 15));  // 지면(지도)
+                        dc.DrawLine(P(0x9c, 0xc4, 0xe8), new Point(12, 14), new Point(12, 29));
+                        dc.DrawEllipse(Brushes.White, sm, new Point(16, 8), 3.4, 3.4);          // 위성 본체
+                        dc.DrawLine(sm, new Point(8, 5), new Point(12, 8));                     // 날개
+                        dc.DrawLine(sm, new Point(20, 8), new Point(24, 5));
+                        dc.DrawLine(sm, new Point(16, 12), new Point(16, 14));                  // 내려보내는 신호
+                        break;
+
                     case "자르기": // 언덕 위에 점선 네모 + 가위 — 남길 자리만 오려낸다
                         var cg = P(0xb8, 0xa0, 0x88);
                         var ch = new StreamGeometry();
@@ -869,18 +916,30 @@ public sealed class RibbonApp : IExtensionApplication
                         dc.DrawLine(mo, new Point(7, 25), new Point(25, 7));
                         break;
 
-                    case "초기화": // 되돌리는 화살표(회색)
+                    case "초기화": // 되돌리는 화살표 — <b>열린 고리 + 화살촉</b>
+                        //   ★[JACK 0901 스샷] 종전에는 호를 그린 뒤 직선 두 개를 덧대어
+                        //   화살촉이 <b>고리에서 떨어져</b> ㄱ자로 보였다. 끝점 접선 방향으로 그린다.
                         var rs = P(0x8a, 0x9a, 0xaa);
-                        var arc = new StreamGeometry();
-                        using (var g = arc.Open())
+                        double cxr = 16, cyr = 17, rr = 9.5;
+                        double a0 = -60 * System.Math.PI / 180;   // 시작(오른쪽 위)
+                        double a1 = 250 * System.Math.PI / 180;   // 끝(왼쪽 위) — 한 바퀴에서 조금 못 미치게
+                        var ring = new StreamGeometry();
+                        using (var g = ring.Open())
                         {
-                            g.BeginFigure(new Point(26, 16), false, false);
-                            g.ArcTo(new Point(9, 10), new Size(10, 10), 0, true, SweepDirection.Clockwise, true, false);
+                            g.BeginFigure(new Point(cxr + rr * System.Math.Cos(a0), cyr + rr * System.Math.Sin(a0)), false, false);
+                            g.ArcTo(new Point(cxr + rr * System.Math.Cos(a1), cyr + rr * System.Math.Sin(a1)),
+                                    new Size(rr, rr), 0, true, SweepDirection.Counterclockwise, true, false);
                         }
-                        arc.Freeze();
-                        dc.DrawGeometry(null, rs, arc);
-                        dc.DrawLine(rs, new Point(9, 10), new Point(9, 17));
-                        dc.DrawLine(rs, new Point(9, 10), new Point(15, 10));
+                        ring.Freeze();
+                        dc.DrawGeometry(null, rs, ring);
+                        // 화살촉 — 끝점에서 <b>진행 방향의 접선</b>을 기준으로 양쪽 날개
+                        var tip = new Point(cxr + rr * System.Math.Cos(a0), cyr + rr * System.Math.Sin(a0));
+                        double tan = a0 - System.Math.PI / 2;      // 반시계로 들어오는 방향
+                        for (int wsgn = -1; wsgn <= 1; wsgn += 2)
+                        {
+                            double aw = tan + wsgn * 0.62 + System.Math.PI;
+                            dc.DrawLine(rs, tip, new Point(tip.X + 6.5 * System.Math.Cos(aw), tip.Y + 6.5 * System.Math.Sin(aw)));
+                        }
                         break;
 
                     // ── 내보내기 ─────────────────────────────────────────────
@@ -986,6 +1045,14 @@ public sealed class RibbonApp : IExtensionApplication
     /// <summary>★[JACK 0825] 상태에 따라 켜고 꺼야 하는 보기 버튼 — 만들 때 여기 담아 둔다.</summary>
     private static RibbonButton? _btnViewPlan, _btnViewExcav;
 
+    /// <summary>★★★[JACK 0901 "계획부지정지가 수행되지 않은 상태면 비활성"]
+    /// <para><b>순서가 있는 일이다.</b> 원지반이 있어야 정지를 하고, 정지를 해야 사면을 고치고
+    /// 노리선·종단·횡단을 그린다. 순서를 모르는 사람은 <b>눌러 보고 나서야</b> 안 된다는 것을 알게 되는데,
+    /// 꺼 두면 <b>누를 수 있는 것만 보인다</b> — 그것이 곧 순서 안내다.</para>
+    /// <para>★단추 상태는 <b>편의</b>이지 안전장치가 아니다 — 명령 자체도 없으면 안내하고 물러난다.</para></summary>
+    private static readonly System.Collections.Generic.List<RibbonItem> _needPlan = new();
+    private static readonly System.Collections.Generic.List<RibbonItem> _needGround = new();
+
     /// <summary>★★[JACK 0825] <b>계획지표면·터파기가 없으면 그 보기 버튼을 끈다.</b>
     ///
     /// <para>도면을 바꾸거나 우리 명령이 끝날 때마다 부른다. 실패해도 조용히 넘어간다 —
@@ -1001,8 +1068,11 @@ public sealed class RibbonApp : IExtensionApplication
                 var (pp, ee) = Commands.ViewSurfaceCommand.WhatExists(doc.Database);
                 hasPlan = pp; hasExc = ee;
             }
+            bool hasGround = doc != null && Commands.ImportGisCommand.HasGroundSurface(doc.Database);
             if (_btnViewPlan != null) _btnViewPlan.IsEnabled = hasPlan;
             if (_btnViewExcav != null) _btnViewExcav.IsEnabled = hasExc;
+            foreach (var it in _needPlan) if (it != null) it.IsEnabled = hasPlan;
+            foreach (var it in _needGround) if (it != null) it.IsEnabled = hasGround;
         }
         catch { }
     }

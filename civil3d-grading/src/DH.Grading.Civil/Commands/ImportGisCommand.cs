@@ -65,6 +65,14 @@ public sealed class ImportGisCommand
             int epsg = GradingSettings.ExportEpsg;
             string csNote = $"정지옵션 EPSG:{epsg}";
             ed.WriteMessage($"\n[등고선] 좌표계: {csNote}");
+            // ★[JACK 0901] 도면에 좌표계가 <b>없을 때만</b> 채운다 — 있으면 안 건드린다.
+            //   비워 두면 이 도면이 밖으로 나갔을 때 여기가 어디인지 아무도 모른다.
+            try
+            {
+                var (setIt, csFix) = KoreaCs.AssignIfMissing(db, epsg);
+                if (setIt && csFix.Contains("지정")) ed.WriteMessage("\n[등고선] " + csFix);
+            }
+            catch { }
             // ★★<b>접속부터 본다</b> — 10분 걸려 범위를 고른 뒤에 "VPN을 확인하세요"는
             //   못 할 짓이다. 서버가 없으면 어차피 범위를 골라도 소용이 없다(검토 0901).
             if (!Reachable(ed)) return;
@@ -286,6 +294,40 @@ public sealed class ImportGisCommand
     // ── 공통 ──────────────────────────────────────────────────────────────────
 
     /// <summary>등고선 폴리선들로 "원지반" TIN 지표면 생성(있으면 교체). 반환=안내문.</summary>
+    /// <summary>★<b>원지반을 고르는 규칙은 여기 하나</b>다(§50).
+    /// <para>"우리 산출물이 아닌 지표면 중 삼각형이 제일 많은 것" — 이름을 못 박지 않는 이유는
+    /// 사용자가 직접 만든 지표면일 수도 있어서다. 이 판정이 <b>세 곳에 따로</b> 있었고
+    /// 한 곳만 고쳐져 있었다(검토 0901) — 그래서 인프라웍스가 지층면을 원지반으로 오인했다.</para></summary>
+    internal static ObjectId FindGroundSurface(Database db, out string name, out int tris)
+    {
+        name = ""; tris = 0;
+        ObjectId best = ObjectId.Null;
+        try
+        {
+            var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+            using var tr = db.TransactionManager.StartTransaction();
+            foreach (ObjectId sid in civilDoc.GetSurfaceIds())
+            {
+                try
+                {
+                    if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.TinSurface ts) continue;
+                    string nm = ts.Name ?? "";
+                    if (nm.Contains("_DH") || nm.StartsWith("DH_", System.StringComparison.Ordinal)) continue;
+                    int n = 0; try { n = ts.Triangles.Count; } catch { }
+                    if (n > tris) { tris = n; best = sid; name = nm; }
+                }
+                catch { }
+            }
+            tr.Commit();
+        }
+        catch { }
+        return best;
+    }
+
+    /// <summary>원지반이 있는가 — 리본 단추를 켜고 끄는 데 쓴다.</summary>
+    internal static bool HasGroundSurface(Database db)
+        => !FindGroundSurface(db, out _, out int t).IsNull && t > 0;
+
     /// <summary>수치지도 명령도 이것을 쓴다 — <b>원지반을 만드는 규칙은 한 벌</b>이다(§50).</summary>
     /// <param name="spotIds">표고점(DBPoint). ★★<b>등고선과 같은 자루에 넣으면 안 된다</b>(검토 0901) —
     ///   등고선 정의는 <b>선만</b> 받으므로 점은 조용히 무시된다. 봉우리·안부·계곡 바닥처럼

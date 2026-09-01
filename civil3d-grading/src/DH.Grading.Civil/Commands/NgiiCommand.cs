@@ -84,6 +84,14 @@ public sealed class NgiiCommand
             int epsg = GradingSettings.ExportEpsg;
             string csWarn = BeltCheck(epsg, x0, y0, x1, y1);
             ed.WriteMessage($"\n[수치지도] 좌표계: 정지옵션 EPSG:{epsg}" + (csWarn == null ? "" : "\n  " + csWarn));
+            // ★[JACK 0901] 도면에 좌표계가 <b>없을 때만</b> 채운다 — 있으면 안 건드린다.
+            //   비워 두면 이 도면이 밖으로 나갔을 때 여기가 어디인지 아무도 모른다.
+            try
+            {
+                var (setIt, csFix) = KoreaCs.AssignIfMissing(db, epsg);
+                if (setIt && csFix.Contains("지정")) ed.WriteMessage("\n[수치지도] " + csFix);
+            }
+            catch { }
 
             // ── 작도 ──────────────────────────────────────────────────────────
             // ★★<b>등고선과 표고점을 갈라 담는다</b>(검토 0901) — 한 자루에 넣으면
