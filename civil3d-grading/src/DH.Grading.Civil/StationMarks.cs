@@ -80,7 +80,21 @@ public static class StationMarks
     ///
     /// <para>그래서 <see cref="DH.Grading.Core.XsecSpan.Place"/>가 <b>사람이 정한 것</b>과
     /// <b>벽</b>을 갈라 다룬다 — 부르는 쪽은 어느 쪽인지만 넘긴다.</para></summary>
-    public const double FrontBackHalf = 0.05;
+    /// <para>★★★[JACK 0902 "의미 없는 곳을 눌렀을 때는 사실 똑같이 나와야 하는데 차이가 나서
+    /// 왜 그런가 보니, 경사 지점에서는 <b>좌우 5cm 합 10cm에 대한 높이차</b>에 의한 토공량 차이가
+    /// 나더라고. 어쩔 수 없는 건 아는데 <b>조금이라도 줄여</b> 보려고"]</para>
+    ///
+    /// <para><b>5cm → 1cm.</b> 앞뒤 거리가 10cm에서 <b>2cm</b>로 줄어, 경사 1:1.5에서 지반 높이차가
+    /// 6.7cm → <b>1.3cm</b>가 된다(5분의 1). 구조물 투영 자리는 모델에 구조물이 없어
+    /// <b>두 단면이 같아야 정상</b>이므로, 벌어진 만큼이 그대로 오차다.</para>
+    ///
+    /// <para>★<b>더 줄이지 않는 이유.</b> 이 저장소는 <b>1cm 안의 측점을 같은 것으로 보고 합친다</b>
+    /// (<see cref="MergeTol"/>). 반폭을 5mm로 하면 앞뒤가 정확히 1cm가 되어 그 경계에 걸린다 —
+    /// 어떤 경로에서는 합쳐지고 어떤 경로에서는 안 합쳐지는 <b>가장 나쁜 종류의 불일치</b>다.</para>
+    ///
+    /// <para>★<b>옹벽에는 영향이 없다.</b> 이 값은 <b>사람이 찍은 (전)(후)에만</b> 쓰인다 —
+    /// 옹벽은 제 두께로 자리를 따로 계산한다(<see cref="XsecSpan.Place"/>).</para>
+    public const double FrontBackHalf = 0.01;
 
     /// <summary>수동 (전)(후) 자리의 <see cref="WallSpan.Kind"/> 표식 —
     /// 이 이름을 보고 <b>밀어내지 않는다</b>고 판단한다. 문자열 비교는 <see cref="IsFixedSpan"/> 하나뿐이다.</summary>

@@ -24,7 +24,7 @@ public static class LandXmlExport
             if (!index.TryGetValue(key, out int i)) { i = pts.Count + 1; index[key] = i; pts.Add((p.X, p.Y, p.Z)); }
             return i;
         }
-        var tris = tin.GetTriangles(false);   // 보이는 삼각형만
+        using var tris = tin.GetTriangles(false);   // 보이는 삼각형만(네이티브 — 닫는다)
         foreach (var t in tris)
         {
             try { faces.Add((Idx(t.Vertex1.Location), Idx(t.Vertex2.Location), Idx(t.Vertex3.Location))); }

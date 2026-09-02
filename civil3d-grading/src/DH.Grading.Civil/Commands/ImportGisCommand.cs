@@ -97,6 +97,10 @@ public sealed class ImportGisCommand
     {
         Editor ed = doc.Editor;
         Database db = doc.Database;
+        // ★[검토 0901] <b>도면을 만지는 자리는 스스로 잠근다.</b> 지금 부르는 곳은 둘 다 명령이라
+        //   AutoCAD가 알아서 잠가 주지만, 나중에 누가 도킹바 단추에서 바로 부르면 그 순간 터진다.
+        //   잠금은 겹쳐도 안전하다 — 어디서 불렸는지 따지지 않는다(StrataDraw와 같은 방식).
+        using var dlAll = SafeLock(doc);
         try
         {
             ed.WriteMessage("\n[등고선] 사내 DB에서 받는 중…");
@@ -205,6 +209,7 @@ public sealed class ImportGisCommand
     {
         Editor ed = doc.Editor;
         Database db = doc.Database;
+        using var dlAll2 = SafeLock(doc);
         try
         {
             ed.WriteMessage("\n[지적도] 사내 DB에서 받는 중…");
@@ -294,6 +299,12 @@ public sealed class ImportGisCommand
     // ── 공통 ──────────────────────────────────────────────────────────────────
 
     /// <summary>등고선 폴리선들로 "원지반" TIN 지표면 생성(있으면 교체). 반환=안내문.</summary>
+    /// <summary>문서 잠금 — 실패해도 넘어간다(명령 안이면 이미 잠겨 있다).</summary>
+    private static IDisposable SafeLock(Document doc)
+    {
+        try { return doc?.LockDocument(); } catch { return null; }
+    }
+
     /// <summary>★<b>원지반을 고르는 규칙은 여기 하나</b>다(§50).
     /// <para>"우리 산출물이 아닌 지표면 중 삼각형이 제일 많은 것" — 이름을 못 박지 않는 이유는
     /// 사용자가 직접 만든 지표면일 수도 있어서다. 이 판정이 <b>세 곳에 따로</b> 있었고

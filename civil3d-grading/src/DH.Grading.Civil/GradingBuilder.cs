@@ -625,7 +625,8 @@ public static class GradingBuilder
             var dir = new HashSet<((long, long), (long, long))>();
             int nTri = 0, nDup = 0;
 
-            foreach (TinSurfaceTriangle t in tin.GetTriangles(false))
+            using var tinTris = tin.GetTriangles(false);   // 네이티브 메모리 — 닫아 준다(검토 0901)
+            foreach (TinSurfaceTriangle t in tinTris)
             {
                 nTri++;
                 Point3d a = t.Vertex1.Location, b = t.Vertex2.Location, c = t.Vertex3.Location;
@@ -1296,7 +1297,7 @@ public static class GradingBuilder
             string nm = w.Name;
 
             int before = -1;
-            try { before = w.GetTriangles(false).Count; } catch { }
+            try { using var tcB = w.GetTriangles(false); before = tcB.Count; } catch { }
             if (before <= 0) { diag = $"'{nm}' 삼각형을 못 읽어 건너뜀"; return false; }
             if (!w.HasSnapshot) { diag = $"'{nm}' 스냅샷이 없어 건너뜀(지우면 형상이 사라진다)"; return false; }
 
@@ -1312,7 +1313,7 @@ public static class GradingBuilder
 
             try { w.Rebuild(); } catch { }
             int after = -1;
-            try { after = w.GetTriangles(false).Count; } catch { }
+            try { using var tcA = w.GetTriangles(false); after = tcA.Count; } catch { }
 
             // ★ 안전판 — 형상이 깎이면 커밋하지 않는다(자동으로 무른다).
             if (after < before)
@@ -1344,7 +1345,7 @@ public static class GradingBuilder
                     continue;
 
                 string tri = "?";
-                try { if (w is TinSurface ts) tri = ts.GetTriangles(false).Count.ToString(); } catch { }
+                try { if (w is TinSurface ts) { using var tc2 = ts.GetTriangles(false); tri = tc2.Count.ToString(); } } catch { }
                 string ops = "?";
                 try
                 {
@@ -1502,7 +1503,7 @@ public static class GradingBuilder
                         //   숨겨 둔 표면은 도면에서 선택이 안 되므로 <b>빈 것과 구분이 안 된다</b>.
                         //   숫자가 0이면 진짜로 빈 것이고, 크면 그냥 안 보이는 것이다.
                         string tri = "?";
-                        try { if (w is TinSurface ts) tri = ts.GetTriangles(false).Count.ToString(); } catch { }
+                        try { if (w is TinSurface ts) { using var tc2 = ts.GetTriangles(false); tri = tc2.Count.ToString(); } } catch { }
 
                         // ★★[v32.11 · 조사 반영] <b>정의 목록의 실제 모양을 처음으로 로그에 남긴다.</b>
                         //   조사 결론: 정의 탭의 ⚠는 <b>작업(operation) 한 줄 단위</b>인데

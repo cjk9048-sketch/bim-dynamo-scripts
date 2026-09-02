@@ -121,7 +121,7 @@ public sealed class InfraworksCommand
                     string nmG = ts.Name ?? "";
                     if (nmG.Contains("_DH") || nmG.StartsWith("DH_", System.StringComparison.Ordinal)
                         || nmG.StartsWith(SectionCommand.PadSurfaceBase, System.StringComparison.Ordinal)) continue;
-                    int tri = 0; try { tri = ts.GetTriangles(false).Count; } catch { }
+                    int tri = 0; try { using var tc = ts.GetTriangles(false); tri = tc.Count; } catch { }
                     if (tri > bestTri) { bestTri = tri; bestSurf = ts; }
                 }
                 if (bestSurf != null) { groundSampler = new CachedGroundSurface(bestSurf); groundName = bestSurf.Name; }

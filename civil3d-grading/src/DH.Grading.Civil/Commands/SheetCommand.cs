@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Autodesk.AutoCAD.DatabaseServices;
@@ -312,7 +312,7 @@ public static class SheetCommand
         //   우리가 먼저 숨기면 <see cref="SpreadBandLabels"/>가 그 숨은 라벨까지 줄 세우기에 넣어
         //   <b>순정 글씨는 밀려가고 우리 글씨는 제자리</b>에 남아 간격이 좁아진다.
         //   벽 자리는 측점이 몰리는 곳이라 밀릴 확률이 높다.
-        SpreadBandLabels(db, scale, log);
+        SpreadBandLabels(db, pvId, scale, log);
         WallBandPairs(db, pvId, scale, log);   // ★[JACK 0827] 수직부는 한 칸에 두 값   // ★[v32.38] 떡진 밴드 값을 오른쪽으로 밀어 떨어뜨린다
         DumpBandLabels(db, log);            // ★[v32.37] 민 뒤의 상태를 남긴다(간격이 벌어졌는지)
 
@@ -354,6 +354,55 @@ public static class SheetCommand
     /// 과장 1배로 한 번 재서 밴드 높이를 알아낸 뒤, 표준 축척을 작은 것부터 훑으며
     /// ①폭이 종이에 들어가고 ②밴드가 자리를 남기고 ③남은 자리를 채우는 과장이 있는 첫 축척을 고른다.
     /// 작은 축척부터 보므로 <b>가장 크게 그려지는 조합</b>이 뽑힌다.</para></summary>
+    /// <summary>★★★[JACK 0902 "항상 모든 사항에 대처 가능한 애드인이 되어야 해"]
+    /// <b>되돌린 측점을 우리가 아는 측점에 붙인다 — 자가 없다.</b>
+    ///
+    /// <para>밴드 값은 <b>단면검토선 측점마다 하나씩</b> 선다(구성상 1:1). 그러니 글씨의 측점은
+    /// 반드시 그 목록 안의 어느 하나다 — 가장 가까운 것을 고르면 그것이 <b>답</b>이다.
+    /// 측점끼리는 최소 수 cm 떨어져 있고 되돌린 뒤 남는 오차는 mm라 헷갈릴 여지가 없다.</para>
+    ///
+    /// <para>★자를 세 번 고쳤다(30cm → 1cm → 0.5m). 셋 다 <b>이번 도면이 되게</b> 만드는 짓이었다 —
+    /// 축척·측점 간격·옹벽 개수가 달라지면 또 깨진다. <b>붙일 곳이 있으면 자가 필요 없다.</b></para>
+    /// <returns>붙인 측점. 목록이 없으면 받은 값 그대로.</returns></summary>
+    private static double SnapToKnownStation(double st, out double moved)
+    {
+        moved = 0;
+        try
+        {
+            var sl = ProfileCommand.LastSampleLinesPublic;
+            if (sl == null || sl.Count == 0) return st;
+            double best = st, bd = double.MaxValue;
+            foreach (var e in sl)
+            {
+                double d = System.Math.Abs(e.St - st);
+                if (d < bd) { bd = d; best = e.St; }
+            }
+            if (bd == double.MaxValue) return st;
+            moved = bd;
+            return best;
+        }
+        catch { return st; }
+    }
+
+
+    /// <summary>★[JACK 0902] <b>얼마나 벗어났는지</b>를 한 줄로 — 짐작 대신 숫자로 고치기 위해.
+    /// <para>글씨 측점 범위와 벽 측점 범위를 <b>나란히</b> 적는다. 둘이 겹치면 자(허용오차) 문제이고,
+    /// 아예 다른 구간이면 <b>측점 환산이 어긋난 것</b>이라 자를 늘려도 소용없다.</para></summary>
+    private static string FarReport(System.Collections.Generic.List<double> far,
+                                    double stMin, double stMax, double wMin, double wMax)
+    {
+        if (far == null || far.Count == 0) return "";
+        far.Sort();
+        double lo = far[0], mid = far[far.Count / 2], hi = far[far.Count - 1];
+        string rng = (stMin <= stMax && wMin <= wMax)
+            ? $" · 글씨 측점 {stMin:F1}~{stMax:F1}m vs 벽 측점 {wMin:F1}~{wMax:F1}m"
+            : "";
+        // ★★[검증 0902] <b>판정문을 붙이지 않는다.</b> 종전의 "자만 늘리면 된다"가
+        //   <b>우연을 신호로 읽게</b> 만들었다 — 438m에 라벨 213개·벽 12곳이면 아무 상관이 없어도
+        //   가장 가까운 쌍은 8.6cm쯤 나온다(관측 8.9cm). 숫자만 보여 주고 해석은 사람이 한다.
+        return $" · 벗어난 거리 최소 {lo:F3}m · 중간 {mid:F3}m · 최대 {hi:F3}m{rng}";
+    }
+
     private static string FitSheet(Database db, ObjectId pvId, System.Text.StringBuilder log,
                                    out double scale, out bool overflow)
     {
@@ -4420,10 +4469,26 @@ public static class SheetCommand
     /// 그룹은 <c>StyleName</c>에 "계획"이 든 것만 고른다 — 지반고 칸은 건드리지 않는다.</para></summary>
     private static void WallBandPairs(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log)
     {
+        // ★★[검증 0902 · M5] <b>남의 도면 값을 쓰지 않는다.</b> 벽 목록은 프로그램 전역이라
+        //   A 도면에서 종단을 돌린 뒤 B 도면에서 도곽을 그리면 <b>A의 벽</b>을 B에 대고 맞춘다.
+        //   저장소에 이미 관문이 있는데(<c>ProfileCommand.SameDrawing</c>) 여기만 안 쓰고 있었다.
+        if (!ProfileCommand.SameDrawing(db))
+        { log.AppendLine("  수직부 두 값: 벽 목록이 <b>다른 도면</b> 것이라 건너뜀 — [종단]을 이 도면에서 먼저 돌리세요"); return; }
         var spans = ProfileCommand.LastWallSpans;
         if (spans == null || spans.Count == 0) { log.AppendLine("  수직부 두 값: 옹벽·가시설이 없어 건너뜀"); return; }
 
         int nHide = 0, nDraw = 0, nGrp = 0, nMiss = 0, nSkipKind = 0, nSkipManual = 0, wipedAll = 0, nFar = 0, nBand = 0, nProbe = 0;
+        // ★★★[JACK 0902 "옹벽 부분이 누락됐어"] <b>얼마나 벗어났는지 재 둔다.</b>
+        //   0827에 자를 30cm→1cm로 좁히면서 "오차는 mm 수준"이라고 <b>짐작</b>했는데,
+        //   이번 도면에서 213개가 전부 밖으로 나갔다. 5cm면 자를 늘리면 되지만
+        //   50m면 <b>측점 환산이 어긋난 것</b>이라 전혀 다른 고침이 필요하다 — 재고 나서 고친다.
+        //   ※그때 "부족하면 로그로 드러난다"고 적어 뒀고 계수기는 제 할 일을 했는데, <b>아무도 그 줄을 안 봤다</b>.
+        var farD = new System.Collections.Generic.List<double>();
+        // ★<b>되돌린 값이 진짜인지 잰다.</b> 우리가 쓴 밀림값이 읽을 때 그대로 돌아온다는 보장이 없다 —
+        //   로그가 증명한 것은 "쓴 만큼 움직였다"이지 "쓴 값이 그대로 읽힌다"가 아니다(검증 0902).
+        int nDrag = 0; double dragMax = 0;
+        int nSnap = 0; double snapMax = 0;
+        double stMin = double.MaxValue, stMax = double.MinValue, wallMin = double.MaxValue, wallMax = double.MinValue;
         string howFind = "?";
         int nBlank = 0;
         var probe = new System.Text.StringBuilder();
@@ -4605,7 +4670,17 @@ public static class SheetCommand
             foreach (var (idx, kind) in new[] { (iPlan, "계획고"), (iCut, "절토고"), (iFill, "성토고") })
             {
                 int gi = groupsY.FindIndex(g => g.Nm.IndexOf(kind, System.StringComparison.Ordinal) >= 0);
-                if (gi < 0) gi = idx;   // 이름이 비어 있으면 밴드 순번(칸 수가 같을 때만 여기 온다)
+                // ★★[검증 0902 · M6] <b>주석이 사실이 아니었다.</b> 위 관문은 <c>byName</c>이면 통째로
+                //   꺼진다 — 이름이 하나라도 잡히면 셋 다 검사를 안 하고, 그러고도 이름이 빈 칸은
+                //   여기로 떨어져 <b>관문이 지켜 주던 순번 짐작</b>을 그대로 한다.
+                //   순번이 어긋나면 <b>절토고 칸에 성토고 값</b>이 적히는데 오류는 안 난다.
+                //   → 이름으로 못 찾았으면 <b>칸 수가 같을 때만</b> 순번으로 간다.
+                if (gi < 0)
+                {
+                    if (nBand > 0 && groupsY.Count != nBand)
+                    { done.Append($" {kind}=이름없음·칸수불일치({groupsY.Count}≠{nBand})"); continue; }
+                    gi = idx;
+                }
                 if (gi < 0 || gi >= groupsY.Count) { done.Append($" {kind}=" + (idx < 0 ? "밴드이름없음" : "라벨그룹없음")); continue; }
                 var lg = groupsY[gi].G;
                 uint n;
@@ -4637,12 +4712,51 @@ public static class SheetCommand
                         //   위에서 우리 옛 글씨를 지웠으므로 다시 그려도 겹치지 않는다.
                         if (se == null) continue;
                         var loc = se.LabelLocation;
-                        double st3 = StOf(loc.X);
+                        // ★★★[JACK 0902 "밴드에서 최초로 나오는 문자는 글씨의 중심점이 잡히잖아
+                        //   그걸 좌표값으로 이용해서…"] — <b>그 생각이 원인을 찾아냈다.</b>
+                        //
+                        //   <b>글씨는 이미 옮겨져 있다.</b> 바로 앞 단계 <c>SpreadBandLabels</c>가
+                        //   겹침을 풀려고 옆으로 밀어 놓는데(<c>DraggedOffset</c>), <c>LabelLocation</c>은
+                        //   <b>밀린 자리</b>를 돌려준다(로그 실측: 최소간격 0.087m → 1.860m).
+                        //   게다가 밀림은 <b>누적</b>이라 옹벽이 1.05m 간격으로 아홉 개면 마지막은 6.5m 밀린다.
+                        //   그 자리를 측점으로 되돌리니 벽과 안 맞았고, 자를 늘리는 고침은
+                        //   <b>원리적으로 불가능</b>했다(밀림 0.81m > 벽간격 1.05m의 절반).
+                        //
+                        //   → <b>밀어낸 만큼 빼서 원래 자리로 되돌린다.</b> 자를 조정하는 것이 아니라
+                        //     원인을 없애는 것이라 도면이 달라져도 성립한다(JACK: "모든 사항에 대처").
+                        //   ★<b>그리는 자리는 그대로 <c>loc</c></b>다 — 되돌린 좌표는 <b>측점 환산에만</b> 쓴다.
+                        //     그리는 데 쓰면 벌려 놓은 이웃 위로 되돌아가 겹친다.
+                        double dragX = 0;
+                        try { dragX = se.DraggedOffset.X; } catch { }
+                        if (System.Math.Abs(dragX) > 1e-9) { nDrag++; dragMax = System.Math.Max(dragMax, System.Math.Abs(dragX)); }
+                        double stRaw = StOf(loc.X - dragX);
 
+                        // ★★★[검증 0902 · JACK "모든 사항에 대처 가능해야"] <b>자를 없앤다.</b>
+                        //   되돌린 측점은 아직 선형보간 오차(mm~cm)를 안고 있다. 그것을 자로 덮는 대신
+                        //   <b>우리가 아는 측점 목록</b>(단면검토선)에 붙인다 — 밴드 값은 그 측점마다
+                        //   하나씩 서므로, 가장 가까운 측점이 곧 <b>그 글씨의 진짜 측점</b>이다.
+                        //   측점끼리는 최소 8cm 떨어져 있고 남는 오차는 mm라 <b>헷갈릴 수가 없다</b>.
+                        //   목록이 없으면(다른 경로로 만든 도면) 되돌린 값을 그대로 쓴다.
+                        double st3 = SnapToKnownStation(stRaw, out double snapD);
+                        if (snapD > 0) { nSnap++; snapMax = System.Math.Max(snapMax, snapD); }
+
+                        // ★★★[JACK 0902 계측] <b>자를 8.9cm짜리 현실에 맞춘다.</b>
+                        //   0827에 30cm→1cm로 좁히면서 "오차는 mm 수준"이라 <b>짐작</b>했는데,
+                        //   실측은 <b>가장 가까운 것이 8.9cm</b>였다 — 벽 12곳 중 하나만 자 안에 들어와
+                        //   나머지 열한 곳이 통째로 건너뛰어졌다. 밴드 글씨 자리는 그래프 가로눈금을
+                        //   선형 보간해 되돌린 값이라 mm가 아니라 <b>cm 단위</b>로 흔들린다.
+                        //
+                        //   ★그때 좁힌 <b>이유는 옳았다</b> — "옹벽과 가시설이 가까이 있으면 엉뚱한 쪽을 집는다".
+                        //   그래서 자를 넓히되 <b>가시설을 후보에서 먼저 뺀다</b> — 그러면 넓혀도 안 헷갈린다.
+                        //   (가시설은 아래에서 어차피 건너뛰므로, 후보로 두면 <b>옹벽을 가리기만</b> 한다.)
                         var hit = default(StationMarks.WallSpan);
                         double bestD = double.MaxValue;
                         foreach (var w in spans)
                         {
+                            if (w.Mid < wallMin) wallMin = w.Mid;
+                            if (w.Mid > wallMax) wallMax = w.Mid;
+                            if (w.Kind != null && w.Kind.IndexOf("가시설", System.StringComparison.Ordinal) >= 0)
+                            { nSkipKind++; continue; }
                             double d = System.Math.Abs(w.Mid - st3);
                             if (d < bestD) { bestD = d; hit = w; }
                         }
@@ -4652,14 +4766,16 @@ public static class SheetCommand
                         //   30cm면 옹벽과 가시설이 그 안에 함께 있을 때 <b>엉뚱한 쪽을 집을 수 있다</b>.
                         //   라벨 자리는 측점에서 계산되고 환산도 선형 보간이라 오차가 mm 수준이므로
                         //   같은 자로 충분하다. 못 찾은 글씨는 아래 계수기가 세니 부족하면 로그로 드러난다.
-                        if (bestD > StationMarks.MergeTol) { nFar++; continue; }
+                        if (st3 < stMin) stMin = st3; if (st3 > stMax) stMax = st3;
+                        // ★측점에 붙였으므로 이제는 <b>같은 측점인가</b>만 보면 된다 — 자를 조율할 것이 없다.
+                        //   벽 위치도 같은 측점 목록에서 나온 값이라 <b>구성상</b> 1cm 안에서 만난다.
+                        if (bestD > StationMarks.MergeTol) { nFar++; farD.Add(bestD); continue; }
                         if (System.Math.Abs(hit.Back - hit.Front) < 1e-9) continue;
 
                         // ★★[JACK 0827] <b>가시설(터파기)은 제외한다.</b>
                         //   JACK: <i>"터파기는 엄밀히 말하면 복구할 거라 계획고에 포함이 안 돼.
                         //   터파기 가시설 수직부는 그냥 계획고로 나타내면 되고 옹벽부만 적용하면 돼."</i>
-                        if (hit.Kind != null && hit.Kind.IndexOf("가시설", System.StringComparison.Ordinal) >= 0)
-                        { nSkipKind++; continue; }
+                        // (가시설은 위 후보 고르기에서 이미 뺐다)
 
                         // ★★★[JACK 0828 "전후 측점 기능은 구조물에 쓸 거라 계획고나 절성토고가
                         //   바뀔 이유가 없어서 밴드를 두 개 숫자로 표현 안 해도 돼"]
@@ -4757,20 +4873,69 @@ public static class SheetCommand
                      + (wipedAll > 0 ? $" · 지난 판 글씨 {wipedAll}개 지움" : "")
                      + (nBlank > 0 ? $" · 빈칸 {nBlank}곳(그 자리에 없는 공종)" : "")
                      + (nSkipKind > 0 ? $" · 가시설 제외 {nSkipKind}곳" : "")
+                     + $" · 되돌린 글씨 {nDrag}개(최대 {dragMax:F2}m)"
+                     + (nSnap > 0 ? $" · 측점에 붙임 {nSnap}개(최대 {snapMax:F3}m)" : " · 측점 목록 없음(되돌린 값 그대로)")
+                     + FarReport(farD, stMin, stMax, wallMin, wallMax)
                      + (nSkipManual > 0 ? $" · <b>수동 (전)(후) 제외 {nSkipManual}곳</b>(구조물 자리라 표고가 안 바뀜다 — 숫자 하나)" : "")
                      + (nMiss > 0 ? $" · ⚠표고를 못 읽은 것 {nMiss}곳" : "")
-                     + (nHide == 0 && nFar > 0 ? $" · ⚠벽에 안 닿은 글씨 {nFar}개(자 {StationMarks.MergeTol * 100:F0}cm)" : "")
+                     // ★[검증 0902] <b>숨기지 않는다.</b> 종전엔 숨긴 글씨가 하나라도 있으면
+                     //   이 경고를 아예 안 찍었다 — 열 곳이 누락되는데 <b>증거가 사라졌다</b>.
+                     + (nFar > 0 ? $" · ⚠벽에 안 닿은 글씨 {nFar}개(자 {StationMarks.MergeTol * 100:F0}cm)" : "")
                      + $" · 찾은 길: {howFind}"
                      + probe.ToString());
     }
 
 
-    private static void SpreadBandLabels(Database db, double scale, System.Text.StringBuilder log)
+    /// <summary>옹벽 측점이 놓이는 <b>원래 가로자리</b>(밀리기 전).
+    /// <para>측점 → 가로자리는 <b>Civil에게 직접 묻는다</b>(<c>FindXYAtStationAndElevation</c>) —
+    /// 우리가 비례로 되돌리면 오차가 끼는데, 그 오차가 오늘 하루를 먹었다.</para>
+    /// <para>남의 도면 벽 목록은 안 쓴다 — 저장소에 이미 있는 관문을 지난다.</para></summary>
+    private static List<double> WallXs(Database db, ObjectId pvId, System.Text.StringBuilder log)
+    {
+        var xs = new List<double>();
+        try
+        {
+            if (!ProfileCommand.SameDrawing(db)) return xs;
+            var spans = ProfileCommand.LastWallSpans;
+            if (spans == null || spans.Count == 0) return xs;
+            using var tr = db.TransactionManager.StartTransaction();
+            if (tr.GetObject(pvId, OpenMode.ForRead) is CivilDb.ProfileView pv)
+            {
+                foreach (var w in spans)
+                {
+                    // 손으로 찍은 (전)(후)는 값이 하나뿐이라 두 칸이 필요 없다.
+                    if (StationMarks.IsFixedSpan(w.Kind)) continue;
+                    double x = 0, y = 0;
+                    try
+                    {
+                        if (pv.FindXYAtStationAndElevation(w.Mid, pv.ElevationMin, ref x, ref y)) xs.Add(x);
+                    }
+                    catch { }
+                }
+            }
+            tr.Commit();
+        }
+        catch (System.Exception ex) { log?.AppendLine("  옹벽 가로자리 못 구함 — " + Brief(ex)); }
+        return xs;
+    }
+
+    /// <summary>★★★[JACK 0902 "지반고나 누가거리처럼 한 측점에 하나인 건 좌측부터 겹치면 밀려나는데,
+    /// <b>전후 측점 가진 애들도</b> 그렇게 해야 해"] — <b>맞다. 자리 폭만 다르게 주면 된다.</b>
+    ///
+    /// <para>옹벽 측점에는 값이 <b>둘</b>(벽 위·아래) 들어간다. 그런데 벌리는 이 코드는
+    /// <b>전부 하나</b>라고 보고 자리를 나눴다 — 두 개짜리가 옆자리를 침범해 떡졌다.
+    /// 종이 3.1mm씩 주는데 두 개는 5.9mm가 필요했다(글자 2.5mm × (벌림 1.35 + 글자 1)).</para>
+    ///
+    /// <para>→ <b>같은 줄 세우기에 태우되 폭만 다르게</b> 준다. 가운데 사이 거리는
+    /// <c>(앞 폭 + 내 폭) / 2</c>다 — 둘 다 하나짜리면 예전과 똑같은 식이 된다.</para></summary>
+    private static void SpreadBandLabels(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log)
     {
         try
         {
             double minGap = MinLabelGapMm / 1000.0 * scale;      // 종이 mm → 모형 m
-            int groups = 0, moved = 0;
+            double wideGap = 2.0 * minGap;                       // 값이 둘인 자리
+            var wallX = WallXs(db, pvId, log);
+            int groups = 0, moved = 0, wide = 0;
             double worstBefore = double.MaxValue, worstAfter = double.MaxValue;
 
             using var tr = db.TransactionManager.StartTransaction();
@@ -4792,15 +4957,23 @@ public static class SheetCommand
                 groups++;
 
                 // ① 자리를 읽어 <b>왼쪽부터</b> 줄 세운다. 목록 순서가 측점 순서라는 보장이 없다.
-                var items = new List<(uint I, double X)>();
+                var items = new List<(uint I, double X, double W)>();
                 for (uint i = 0; i < n; i++)
                 {
                     try
                     {
                         var se = lg.GetAt(i);
-                        // ★[검토 0827] <b>숨긴 라벨은 벌릴 것이 없다.</b> 우리가 끈 것을 밀어 봐야
-                        //   화면에 없는 글씨의 자리만 옮겨져, 그 자리에 그린 우리 글씨와 어긋난다.
-                        if (se != null && se.Visibility) items.Add((i, se.LabelLocation.X));
+                        // ★[검토 0827] <b>숨긴 라벨은 벌릴 것이 없다.</b>
+                        if (se == null || !se.Visibility) continue;
+                        double x = se.LabelLocation.X;
+                        // ★<b>밀린 것을 빼고</b> 벽과 맞춘다 — 다시 돌릴 때는 이미 밀려 있다.
+                        double d0 = 0; try { d0 = se.DraggedOffset.X; } catch { }
+                        double ax = x - d0;
+                        bool two = false;
+                        foreach (double wx in wallX)
+                            if (System.Math.Abs(wx - ax) < minGap * 0.25) { two = true; break; }
+                        if (two) wide++;
+                        items.Add((i, x, two ? wideGap : minGap));
                     }
                     catch { }
                 }
@@ -4812,10 +4985,11 @@ public static class SheetCommand
 
                 // ② 앞 글씨가 놓인 자리를 기준으로, 모자라면 그만큼 민다.
                 //    <b>민 자리를 기준으로</b> 다음을 보므로 몰려 있으면 줄줄이 밀려 나란히 선다.
-                double prev = double.NegativeInfinity;
+                double prev = double.NegativeInfinity, prevW = 0;
                 foreach (var it in items)
                 {
-                    double want = System.Math.Max(it.X, prev + minGap);
+                    // 가운데 사이 거리 = (앞 폭 + 내 폭)/2 — 둘 다 하나짜리면 예전 식과 같다.
+                    double want = System.Math.Max(it.X, prev + (prevW + it.W) * 0.5);
                     double dx = want - it.X;
                     if (dx > 1e-9)
                     {
@@ -4824,7 +4998,13 @@ public static class SheetCommand
                             var se = lg.GetAt(it.I);
                             if (se != null)
                             {
-                                se.DraggedOffset = new Vector3d(dx, 0, 0);
+                                // ★★[검증 0902] <b>덮어쓰지 않고 더한다.</b>
+                                //   <c>dx</c>는 <b>이미 밀린 자리</b>(<c>it.X</c>)를 기준으로 잰 값이다.
+                                //   그대로 넣으면 지난 판의 밀림 <c>D0</c>가 사라져 <c>want − D0</c>에 선다 —
+                                //   [도곽]만 다시 돌릴 때 조용히 어긋나던 자리다.
+                                double d0 = 0;
+                                try { d0 = se.DraggedOffset.X; } catch { }
+                                se.DraggedOffset = new Vector3d(d0 + dx, 0, 0);
                                 // 옮긴 글씨에 지시선이 붙으면 밴드 칸이 지저분해진다 — 끈다.
                                 try { se.LeaderVisibility = Autodesk.Civil.LeaderVisibilityType.AlwaysHide; } catch { }
                                 moved++;
@@ -4832,7 +5012,7 @@ public static class SheetCommand
                         }
                         catch { }
                     }
-                    prev = want;
+                    prev = want; prevW = it.W;
                     if (worstAfter > minGap * 0.999) worstAfter = minGap;
                 }
             }
@@ -4840,6 +5020,7 @@ public static class SheetCommand
 
             if (groups == 0) { log.AppendLine("  밴드 값 벌리기: 밴드 라벨 그룹을 못 찾았다"); return; }
             log.AppendLine($"  밴드 값 벌리기: 그룹 {groups}개 · 옮긴 글씨 {moved}개"
+                         + (wallX.Count > 0 ? $" · 옹벽 두칸 {wide}개(폭 {wideGap:F2}m)" : " · 옹벽 목록 없음")
                          + $" · 최소간격 {(worstBefore == double.MaxValue ? 0 : worstBefore):F3}m"
                          + $" → {minGap:F3}m 이상(종이 {MinLabelGapMm:F1}mm)"
                          + (moved == 0 ? "  ※겹친 곳이 없어 그대로 뒀다" : ""));
