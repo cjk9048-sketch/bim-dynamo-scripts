@@ -249,6 +249,9 @@ internal sealed class MapPanel : UserControl
     private bool _starting;
     private bool _ready;
     private bool _loaded;
+
+    /// <summary>브라우저 판 — <b>프로세스에 하나</b>. 같은 작업 폴더로 두 번 만들면 안 된다.</summary>
+    private static CoreWebView2Environment _env;
     private System.Windows.Threading.DispatcherTimer _watchdog;
 
     /// <summary>지도 페이지를 놓아 둘 자리 — <b>쓸 수 있는 곳</b>이어야 한다.
@@ -348,8 +351,17 @@ internal sealed class MapPanel : UserControl
             var doc = AcadApp.DocumentManager.MdiActiveDocument;
             if (doc == null) return;
 
-            GradingSettings.ExportEpsg = epsg;                     // 정지설정
-            var (ok, note) = KoreaCs.Assign(doc.Database, epsg);   // 도면 좌표계
+            GradingSettings.ExportEpsg = epsg;                     // 정지설정 — 그냥 값이라 안전
+
+            // ★★★[검토 0901] <b>도킹바에서 도면을 만지려면 문서를 잠가야 한다.</b>
+            //   여기는 콤보를 고른 <b>순간</b> 화면 스레드에서 바로 들어오는 자리다 — 명령이 아니다.
+            //   그대로 도면 좌표계를 바꾸면 <c>eLockViolation</c>이고, 운이 나쁘면 AutoCAD가 죽는다.
+            //   ★<b>이 저장소가 §57에 똑같은 이유로 데였다고 적어 둔 자리다</b>
+            //   (<see cref="StrataDraw"/>의 <c>Lock()</c>) — 읽고도 새 도킹바에서 반복했다.
+            //   잠금은 겹쳐도 안전하므로 <b>도면을 만지는 자리마다 무조건</b> 두른다.
+            bool ok; string note;
+            using (var dl = doc.LockDocument())
+                (ok, note) = KoreaCs.Assign(doc.Database, epsg);   // 도면 좌표계
             _epsg = epsg;
             _csNote = note;
             _csHint.Text = ok
@@ -372,7 +384,14 @@ internal sealed class MapPanel : UserControl
         try
         {
             System.IO.Directory.CreateDirectory(HomeDir);
-            var env = await CoreWebView2Environment.CreateAsync(null, HomeDir);
+            // ★★★[검토 0901] <b>브라우저 판(env)은 한 번만 만든다.</b>
+            //   이것은 <c>IDisposable</c>이고 <b>바깥 브라우저 프로세스 무리</b>를 붙잡고 있다.
+            //   종전엔 부를 때마다 새로 만들고 <b>한 번도 안 놓아줬다</b> — 지도가 한 번 실패하면
+            //   <c>ShowFallback</c>이 상태를 되돌려 다음에 <b>또 새로 만든다</b>.
+            //   사내망이 CDN을 막는 자리에서는 누를 때마다 유령 프로세스가 쌓인다
+            //   — JACK이 말한 <i>"느려지다가 리소스가 부족한지 튕긴다"</i>와 모양이 같다.
+            _env ??= await CoreWebView2Environment.CreateAsync(null, HomeDir);
+            var env = _env;
 
             // ★★★<b>붙이고 나서 띄운다 — 순서를 바꾸면 안 된다</b>(JACK 0901 "아까는 도킹바일 때도 나왔었어").
             //   <b>원인이 여기였다.</b> 검토가 "실패하면 반쯤 만들어진 것이 남는다"고 해서
@@ -527,8 +546,17 @@ internal sealed class MapPanel : UserControl
             };
             b.Click += (_, __) =>
             {
-                MapPalette.Close();
-                _doc?.SendStringToExecute("DHCONTOURWEB ", true, false, true);
+                // ★[검토 0901] 붙잡아 둔 <c>_doc</c>은 <b>이미 닫힌 도면</b>일 수 있다 —
+                //   팔레트가 도면보다 오래 살기 때문이다(이 파일이 아래에 적어 둔 그 이유).
+                //   WPF 이벤트 안이라 터지면 받아 줄 사람도 없다.
+                try
+                {
+                    MapPalette.Close();
+                    AcadApp.DocumentManager.MdiActiveDocument?
+                        .SendStringToExecute("DHCONTOURWEB ", true, false, true);
+                }
+                catch (System.Exception bex)
+                { try { DiagLog.Append("\n[지도도킹바] 브라우저 열기 실패 — " + bex.Message); } catch { } }
             };
             _fallback.Children.Add(b);
             _fallback.Children.Add(new TextBlock

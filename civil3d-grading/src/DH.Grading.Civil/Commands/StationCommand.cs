@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Linq;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
@@ -40,7 +40,7 @@ public static class StationCommand
     /// 횡단은 그 사유를 보고 <b>벽과 같은 길</b>로 두 장을 만든다.
     /// 갈라지는 자리를 <b>새로 만들지 않는다</b> — 벽이 쓰던 <see cref="StationMarks.WallSpan"/>에 얹는다.</para>
     ///
-    /// <para>벌어지는 거리는 <b>벽과 자가 다르다</b> — 측점 기준 좌우 <b>5cm</b> 고정
+    /// <para>벌어지는 거리는 <b>벽과 자가 다르다</b> — 측점 기준 좌우 <see cref="StationMarks.FrontBackHalf"/> 고정
     /// (<see cref="StationMarks.FrontBackHalf"/>).
     /// 벽은 두께가 얇아 밀어내야 하지만 여기는 <b>밀어낼 두께가 없다</b> —
     /// 사람이 정한 자리가 곧 답이라 <see cref="DH.Grading.Core.XsecSpan.Place"/>가 그대로 쓴다.</para></summary>
@@ -72,7 +72,8 @@ public static class StationCommand
         //     정작 방금 무엇이 추가됐는지가 안 보인다.
         ShowList(db, ed, alignId);
         ed.WriteMessage(frontBack
-            ? "\n  ※ 찍은 자리에 종단은 측점 하나, 횡단면도만 (전)(후) 두 장으로 나옵니다(좌우 5cm)."
+            ? $"\n  ※ 찍은 자리에 종단은 측점 하나, 횡단면도만 (전)(후) 두 장으로 나옵니다"
+              + $"(좌우 {StationMarks.FrontBackHalf * 100:0.#}cm)."
             : "\n  ※ 측점을 찍으면 단면검토선이 생기고 종단도가 그 자리에서 다시 그려집니다.");
 
         while (true)

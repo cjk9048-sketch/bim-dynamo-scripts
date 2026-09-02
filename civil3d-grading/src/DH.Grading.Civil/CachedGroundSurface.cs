@@ -27,7 +27,9 @@ public sealed class CachedGroundSurface : IGroundSurface
 
     public CachedGroundSurface(TinSurface surface)
     {
-        var tris = surface.GetTriangles(false); // false = 모든 삼각형 (TinSurfaceTriangleCollection)
+        // ★[검토 0901] 삼각형 목록은 <b>네이티브 메모리</b>라 GC 압박을 안 준다 —
+        //   안 닫으면 관리 힙은 멀쩡한데 바깥 메모리만 조용히 는다.
+        using var tris = surface.GetTriangles(false); // false = 모든 삼각형 (TinSurfaceTriangleCollection)
         int n = tris.Count;
         _ax = new double[n]; _ay = new double[n]; _az = new double[n];
         _bx = new double[n]; _by = new double[n]; _bz = new double[n];

@@ -46,9 +46,13 @@ public sealed class ExcavCommand
     internal const string BaseName = "터파기기준면_DH";
     internal const string VirtName = "가상터파기_DH";
 
+    /// <summary>명령 들어올 때의 메모리 자국 — 끝에서 견준다(JACK 0901).</summary>
+    private static (long Alloc, long Live) _mem0;
+
     [CommandMethod("DHEXCAV")]
     public void Run()
     {
+        _mem0 = StageTimer.Mem();
         Document doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
         GradingSettings.SyncToDocument(doc);
@@ -411,7 +415,8 @@ public sealed class ExcavCommand
             tr.Commit();
         }
 
-        try { DiagLog.Append("\n" + diag); } catch { }
+        // ★[JACK 0901 "튕긴다"] 이 명령이 메모리를 얼마나 쓰는지 한 줄로 남긴다 — 고치기 전에 <b>재고</b> 본다.
+        try { DiagLog.Append("\n" + diag + "\n  ★" + StageTimer.MemSince(_mem0) + "\n"); } catch { }
         ed.WriteMessage($"\n[터파기 지표면] 완료 — {SurfName} (구조물 {made}개)" +
                         $"\n  굴착 구배 1:{Slope:0.##}{(Slope <= GradingSettings.WallGateSlope + 1e-9 ? " (수직)" : "")}" +
                         $"\n  자세한 내용: {DiagLog.FilePath}");

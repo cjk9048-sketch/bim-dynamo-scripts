@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Threading.Tasks;
@@ -81,7 +81,9 @@ public static class RawTriangleIntersectionFinder
         // A 삼각형 POCO 추출(Civil 객체는 여기서만 접근 후 Dispose → 병렬 안전). CrossesSurface 필터 없음.
         var aTris = new List<Tri>();
         double aMinX = double.MaxValue, aMinY = double.MaxValue, aMaxX = double.MinValue, aMaxY = double.MinValue;
-        foreach (TinSurfaceTriangle t in surfA.GetTriangles(false))
+        // ★삼각형 목록은 <b>네이티브 메모리</b>라 GC가 못 본다 — 닫아 준다(검토 0901).
+        using var aTriCol = surfA.GetTriangles(false);
+        foreach (TinSurfaceTriangle t in aTriCol)
         {
             try
             {
@@ -103,13 +105,24 @@ public static class RawTriangleIntersectionFinder
         var aEnv = new Envelope(aMinX, aMaxX, aMinY, aMaxY);
 
         var tree = new STRtree<Tri>();
-        foreach (TinSurfaceTriangle t in surfB.GetTriangles(false))
+        using var bTriCol = surfB.GetTriangles(false);
+        foreach (TinSurfaceTriangle t in bTriCol)
         {
             try
             {
                 var p1 = t.Vertex1.Location; var p2 = t.Vertex2.Location; var p3 = t.Vertex3.Location;
+                // ★★[계측 0901] <b>만들기 전에 거른다.</b> 종전엔 다각형을 만들어 놓고
+                //   "범위 밖이네" 하고 버렸다 — 삼각형 하나당 열 개쯤 되는 잔물건을 만들어서 말이다.
+                //   지형 대부분은 계획부지 밖이라 <b>거의 다 헛만들기</b>였다.
+                //   ★경계는 <b>닿기만 해도 통과</b>시킨다(<c>Envelope.Intersects</c>와 같은 셈) —
+                //     여기서 한 칸 어긋나면 가장자리 삼각형이 조용히 빠진다.
+                double bx0 = Math.Min(p1.X, Math.Min(p2.X, p3.X));
+                double bx1 = Math.Max(p1.X, Math.Max(p2.X, p3.X));
+                double by0 = Math.Min(p1.Y, Math.Min(p2.Y, p3.Y));
+                double by1 = Math.Max(p1.Y, Math.Max(p2.Y, p3.Y));
+                if (bx1 < aEnv.MinX || bx0 > aEnv.MaxX || by1 < aEnv.MinY || by0 > aEnv.MaxY) continue;
                 var poly = ToNtsPolygon(p1, p2, p3);
-                if (poly == null || !poly.EnvelopeInternal.Intersects(aEnv)) continue;
+                if (poly == null) continue;
                 var plane = new TrianglePlane(p1, p2, p3);
                 if (!plane.Valid) continue;
                 double mn = Math.Min(p1.Z, Math.Min(p2.Z, p3.Z));
@@ -147,7 +160,14 @@ public static class RawTriangleIntersectionFinder
                 // [중요] 면 조각 수집은 Z-겹침 필터 '앞'에서 — 성토/절토가 두꺼운 구역(가상면과 원지반 높이가
                 // 안 겹침)도 영역에는 포함돼야 한다. 필터 뒤에 두면 그 구역 조각이 통째로 빠져 합집합 외곽선이
                 // 디테일을 잃고 직선으로 질러감(성토 경계 부정확·각진 잘림의 원인 — 정합검증으로 확정).
-                CollectSignedParts(overlap, dA, dB, dC, posParts, negParts);
+                // ★★★[계측 0901] <b>여기가 43.8GB의 큰 몫이었다.</b>
+                //   삼각형 쌍마다 반평면으로 자른 조각을 만들어 자루에 담았는데,
+                //   <b>그 자루를 꺼내 쓰는 코드는 아래 <c>if (false)</c> 안</b>이다.
+                //   언젠가 그 방식을 끄면서 <b>쓰는 쪽만 끄고 만드는 쪽은 안 껐다</b>.
+                //   자루는 함수가 끝날 때까지 아무것도 놓아주지 않으므로, 쌍이 많을수록 그대로 쌓인다.
+                //   → <b>안 만든다.</b> 자루 선언은 남긴다(아래 죽은 블록이 참조한다 — 늘 비어 있다).
+                //   ※그 방식을 되살릴 일이 생기면 이 줄을 되살리면 된다.
+                // CollectSignedParts(overlap, dA, dB, dC, posParts, negParts);
                 if (a.MinZ > b.MaxZ + 1e-6 || a.MaxZ < b.MinZ - 1e-6) continue; // 높이 안 겹침 → '교선'만 없음(조각은 위에서 수집)
                 if (Math.Abs(dA) < 1e-12 && Math.Abs(dB) < 1e-12) continue; // 완전 평행 → 교선 부정(스킵)
 

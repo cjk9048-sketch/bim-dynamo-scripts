@@ -64,10 +64,18 @@ public sealed class ResetCommand
             ed.Regen();
             string msg = $"초기화 완료 — 지표면 {surfs}개 · 객체 {ents}개 삭제" +
                          (bundleCleared ? " · 정지 기록 제거" : "");
-            ed.WriteMessage("\n[초기화] " + msg + " · 계획폴리곤만 남음");
+            // ★★★[JACK 0902 "초기화할 때 종단에 찌꺼기가 남아"]
+            //   <b>지웠다고 말하기 전에 무엇이 남았는지 센다.</b> 지우는 코드가 조용히 실패하면
+            //   (다른 것이 물고 있으면 그렇다) <c>catch { }</c>가 삼켜 "완료"만 남는다 —
+            //   이 저장소가 여러 번 데인 그 모양이다(§60 "0을 만들어 놓고 완료라고 하기").
+            string left = Survivors(doc);
+            ed.WriteMessage("\n[초기화] " + msg + " · 계획폴리곤만 남음"
+                          + (left.Length > 0 ? "\n  ⚠남은 것 — " + left : ""));
             AcadApp.ShowAlertDialog("초기화 완료\n\n" + msg +
                 "\n\n계획폴리곤만 남았습니다.\n[서버 지표면]부터 다시 시작하세요.");
-            try { DiagLog.Append($"\n■ DHRESET(초기화)\n  {msg}\n"); } catch { }
+            try { DiagLog.Append($"\n■ DHRESET(초기화)\n  {msg}"
+                               + (left.Length > 0 ? $"\n  ⚠남은 것 — {left}" : "\n  남은 것 없음")
+                               + "\n"); } catch { }
         }
         catch (System.Exception ex)
         {
@@ -215,6 +223,77 @@ public sealed class ResetCommand
             catch { }
         }
         return n;
+    }
+
+    /// <summary>★[JACK 0902] 초기화 뒤에 <b>우리 것이 무엇이 남았는지</b> 센다.
+    /// <para>지우는 코드는 전부 <c>catch { }</c>로 감싸여 있어 <b>실패해도 조용하다</b> —
+    /// 다른 객체가 물고 있으면 지우기가 안 되는데 화면에는 "완료"만 뜬다.
+    /// 그래서 <b>새 트랜잭션에서 되읽어</b> 남은 것을 이름까지 적는다(§53: 되읽기는 실제로 남은 것을 재야 한다).</para></summary>
+    private static string Survivors(Document doc)
+    {
+        var parts = new System.Collections.Generic.List<string>();
+        try
+        {
+            var db = doc.Database;
+            var cdoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+            using var tr = db.TransactionManager.StartTransaction();
+
+            int nAl = 0, nPv = 0, nPf = 0, nSlg = 0;
+            var names = new System.Collections.Generic.List<string>();
+            foreach (ObjectId aid in cdoc.GetAlignmentIds())
+            {
+                try
+                {
+                    if (tr.GetObject(aid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Alignment al) continue;
+                    if (!al.Name.StartsWith(SectionCommand.AlignBase, System.StringComparison.OrdinalIgnoreCase)) continue;
+                    nAl++; if (names.Count < 4) names.Add(al.Name);
+                    try { nPv += al.GetProfileViewIds().Count; } catch { }
+                    try { nPf += al.GetProfileIds().Count; } catch { }
+                    try { nSlg += al.GetSampleLineGroupIds().Count; } catch { }
+                }
+                catch { }
+            }
+            if (nAl > 0) parts.Add($"선형 {nAl}개({string.Join(",", names)})"
+                                 + (nPv > 0 ? $" · 종단도 {nPv}" : "") + (nPf > 0 ? $" · 종단 {nPf}" : "")
+                                 + (nSlg > 0 ? $" · 측점선그룹 {nSlg}" : ""));
+
+            // DH- 레이어에 남은 객체 — 레이어별로 몇 개인지
+            var byLayer = new System.Collections.Generic.Dictionary<string, int>(System.StringComparer.OrdinalIgnoreCase);
+            var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+            foreach (ObjectId bid in bt)
+            {
+                try
+                {
+                    if (tr.GetObject(bid, OpenMode.ForRead) is not BlockTableRecord btr) continue;
+                    // ★모형만 보지 않는다 — 배치탭에 그린 것이 있으면 그것도 찌꺼기다.
+                    if (btr.IsFromExternalReference || btr.IsFromOverlayReference) continue;
+                    if (!btr.IsLayout) continue;
+                    foreach (ObjectId id in btr)
+                    {
+                        try
+                        {
+                            if (tr.GetObject(id, OpenMode.ForRead) is not AcadEntity e) continue;
+                            string ly = e.Layer ?? "";
+                            if (!ly.StartsWith("DH", System.StringComparison.Ordinal)) continue;
+                            if (System.Array.IndexOf(ImportGisCommand.ImportLayers, ly) >= 0) continue;   // 가져온 자료는 뺀다
+                            byLayer.TryGetValue(ly, out int c); byLayer[ly] = c + 1;
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+            }
+            if (byLayer.Count > 0)
+            {
+                var top = new System.Collections.Generic.List<string>();
+                foreach (var kv in byLayer) top.Add($"{kv.Key} {kv.Value}개");
+                top.Sort();
+                parts.Add("레이어 — " + string.Join(" · ", top));
+            }
+            tr.Commit();
+        }
+        catch (System.Exception ex) { parts.Add("세다 실패 — " + ex.Message); }
+        return string.Join(" · ", parts);
     }
 
     /// <summary>도면에 우리 기능으로 가져온 등고선·지적도가 있는가(좌표계 변경 경고 판단용).</summary>

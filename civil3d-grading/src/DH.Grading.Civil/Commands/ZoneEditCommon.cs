@@ -1,4 +1,4 @@
-﻿using System.Linq;
+using System.Linq;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.Colors;
 using Autodesk.AutoCAD.DatabaseServices;
@@ -39,6 +39,32 @@ internal static class ZoneEditCommon
     }
 
     /// <summary>취소 시 일반(무태그) 옹벽선 복원용 좌표 — 진입 때 레이어를 비우므로 종료 때 되돌린다.</summary>
+    /// <summary>노리선이 이미 그려져 있나 — <b>그 레이어에 객체가 하나라도 있으면</b> 그렇다.
+    /// <para>번들이나 설정이 아니라 <b>도면에 실제로 있는 것</b>으로 판단한다 —
+    /// 사용자가 손으로 지웠으면 다시 그리지 않는 편이 맞다.</para></summary>
+    private static bool HasNoriLines(Database db)
+    {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+            var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
+            foreach (ObjectId id in ms)
+            {
+                try
+                {
+                    if (tr.GetObject(id, OpenMode.ForRead) is Entity e &&
+                        string.Equals(e.Layer, "DH-노리선", System.StringComparison.OrdinalIgnoreCase))
+                    { tr.Commit(); return true; }
+                }
+                catch { }
+            }
+            tr.Commit();
+        }
+        catch { }
+        return false;
+    }
+
     private static System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? _restoreLines;
 
     public static void Run(Document doc, bool wallMode)
@@ -524,6 +550,23 @@ internal static class ZoneEditCommon
                 }
             }
             CreateGradingCommand.DoGrade(doc, planId, groundId, GradeMode.RerunLast);
+
+            // ★★★[JACK 0902 "노리선 기능 후 옹벽이나 사면변환을 하면 꼭 노리선 기능을 눌러야
+            //   업데이트되는데, 노리선 기능을 사용했으면 그 후 변화되는 지형에 맞춰서 계속 자동 업뎃"]
+            //
+            //   정지면을 다시 만들면 사면·소단·옹벽이 <b>다 바뀌는데</b> 노리선은 옛 자리에 그대로 남는다.
+            //   사람이 [노리선]을 다시 눌러야 맞춰지고, 안 누르면 <b>도면이 조용히 틀린 채</b>로 있다.
+            //
+            //   ★<b>이미 그려 둔 경우에만</b> 다시 그린다 — 한 번도 안 그린 사람에게 갑자기
+            //   노리선이 생기면 그것도 놀랄 일이다. "쓰던 사람은 계속 맞고, 안 쓰던 사람은 그대로".
+            //   ★명령으로 태운다 — 여기는 이미 명령 문맥이지만, 노리선은 제 트랜잭션·잠금을 쓰므로
+            //   같은 흐름 안에서 직접 부르면 정지면 재생성이 쥔 것과 부딪힐 수 있다.
+            if (HasNoriLines(db))
+            {
+                ed.WriteMessage($"\n[{cmdLabel}] 노리선을 새 형상에 맞춰 다시 그립니다…");
+                Log($"■ {cmdLabel} — 노리선이 있어 자동 갱신(DHNORI)");
+                try { doc.SendStringToExecute("DHNORI ", true, false, true); } catch { }
+            }
         }
         catch (System.Exception ex)
         {

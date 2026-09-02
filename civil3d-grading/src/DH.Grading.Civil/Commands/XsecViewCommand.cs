@@ -1,4 +1,4 @@
-﻿using QT = DH.Grading.Core.QuantityTable;
+using QT = DH.Grading.Core.QuantityTable;
 using System.Collections.Generic;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
@@ -70,8 +70,15 @@ public sealed class XsecViewCommand
         catch { return false; }
     }
 
+    /// <summary>명령 들어올 때의 메모리 자국 — 끝에서 견준다(JACK 0901 "튕긴다").</summary>
+    private static (long Alloc, long Live) _mem0;
+
     [CommandMethod("DHXVIEW")]
-    public void Run() => Build(AcadApp.DocumentManager.MdiActiveDocument, null);
+    public void Run()
+    {
+        _mem0 = StageTimer.Mem();
+        Build(AcadApp.DocumentManager.MdiActiveDocument, null);
+    }
 
     /// <summary>본체 — <paramref name="at"/>가 있으면 자리를 <b>묻지 않는다</b>(다시 그리기).</summary>
     private static void Build(Autodesk.AutoCAD.ApplicationServices.Document doc, Point3d? at0)
