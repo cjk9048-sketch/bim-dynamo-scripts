@@ -324,10 +324,16 @@ public sealed class ExcavCommand
                     var vid = GradingBuilder.BuildVirtualSlope(db, tr, vs.Rings, $"{VirtName}{k + 1}", vs.CornerLines, groundId);
                     var vTin = (TinSurface)tr.GetObject(vid, OpenMode.ForWrite);
                     var bTin = (TinSurface)tr.GetObject(baseId, OpenMode.ForRead);
-                    // ★[JACK 0903] 굴착 법면도 같은 함수를 쓴다 — 바깥선을 함께 넘겨 껍질이 메운
-                    //   가짜 삼각형을 교선에서 뺀다(DHGRADE와 같은 자, 같은 이유).
-                    var loops = RawTriangleIntersectionFinder.GetExactDaylight(
-                        vTin, bTin, null, vs.Rings.Count > 0 ? vs.Rings[vs.Rings.Count - 1] : null);
+                    // ★★★[검토 0903 — 치명] <b>굴착에는 바깥선을 안 넘긴다.</b>
+                    //   ① <b>필요가 없다.</b> 파인 자리는 "둘레 일부만 옹벽"일 때 생기는데, 굴착은
+                    //      옹벽 구간을 안 쓴다(위 Build 호출의 wallZones = null) — 파일 데가 없다.
+                    //   ② <b>넘기면 위험하다.</b> 정지면은 수직 예산에 원지반 <b>전 범위</b>가 들어가
+                    //      바깥 링이 원지반을 넉넉히 넘기지만(교선이 한참 안쪽에 생긴다),
+                    //      굴착 예산(RiseOf)은 <b>구덩이 바닥 정점에서만</b> 목표면을 표본한다 —
+                    //      구덩이가 비탈 발치에 있으면 교선이 바깥 링에 <b>바로 붙는다</b>.
+                    //      그 띠를 버리면 "굴착 상단선을 찾지 못했습니다 — 구배를 더 완만하게" 라는
+                    //      <b>틀린 원인</b>의 예외가 뜨거나(새 기록), 그 구조물이 <b>조용히 빠진다</b>(옛 기록).
+                    var loops = RawTriangleIntersectionFinder.GetExactDaylight(vTin, bTin, null);
                     var own = RawTriangleIntersectionFinder.FilterPlanRelated(loops, e.Bottom, 5.0, out string fdiag);
                     log.AppendLine($"■ {tag} 교선 {loops.Count}개 → 루프필터 {fdiag}");
 
