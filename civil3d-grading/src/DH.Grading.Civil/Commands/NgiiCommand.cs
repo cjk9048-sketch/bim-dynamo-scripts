@@ -167,8 +167,11 @@ public sealed class NgiiCommand
 
             ed.WriteMessage($"\n[수치지도] {done}");
             ZoomTo(doc, x0, y0, x1, y1);
-            AcadApp.ShowAlertDialog($"수치지도 원지반 생성 완료\n\n{done}\n"
-                                  + $"표고 {z0:F1}~{z1:F1}m · 범위 {x1 - x0:F0}×{y1 - y0:F0}m" + extra);
+            // ★★★[JACK 0903 "잘되는데 별도 팝업은 안 띄웠으면 좋겠어" · "DXF 가져오기도"]
+            //   잘된 일은 <b>화면이 이미 말해 준다</b> — 결과가 그려지고 그 범위로 확대된다.
+            //   거기에 확인 단추를 더하면 클릭만 하나 늘 뿐이다.
+            //   명령창과 로그에는 그대로 남는다 — 나중에 숫자를 짚을 수 있게.
+            //   ※못 한 때와 오류는 그대로 띄운다 — 아무 일도 안 일어난 것을 명령창만으로 알리면 모르고 지나간다.
             try
             {
                 DiagLog.Append($"\n■ DHNGII — {done} · 표고 {z0:F1}~{z1:F1}m · EPSG:{epsg}"

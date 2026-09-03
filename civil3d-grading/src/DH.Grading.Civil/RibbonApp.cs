@@ -22,7 +22,8 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.BasemapCommand))]             // DHMAP/DHMAPOFF(위성 배경지도 켜기·끄기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SectionCommand))]             // DHSECTION(종단·횡단 생성)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ProfileCommand))]             // DHPROFILE(종단도 — 노선 직접 그리기)
-[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ImportGisCommand))]           // DHCONTOUR/DHPARCEL(등고선·지적도 가져오기)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ImportGisCommand))]
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ParcelOffCommand))]        // DHPARCELOFF(지적도 삭제)           // DHCONTOUR/DHPARCEL(등고선·지적도 가져오기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.CoordSysProbeCommand))]       // DHCS(좌표계 API 진단 — 임시)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.BandInfoCommand))]            // DHBANDINFO(밴드 검토 — 읽기 전용 진단)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.StationCommand))]             // DHSTATION(측점 추가·삭제 — 밸브실 등)
@@ -318,6 +319,15 @@ public sealed class RibbonApp : IExtensionApplication
             //   나란히 놓기보다 <b>한 자리에 겹쳐 두는 것</b>이 맞다.
             //   ※[JACK 0824 교훈] 스플릿 버튼은 <b>자기 이미지를 따로 줘야</b> 한다 —
             //     목록 항목의 아이콘을 물려받지 않아 자리가 비어 보인다.
+            // ★★★[JACK 0902 "종단 스플릿버튼안에 측점 삭제기능도 만들어야해"]
+            var btnStnDel = MakeButton(
+                "측점\n삭제", "DHSTATIONDEL ", "지울 측점 근처를 클릭하면 그 측점을 지웁니다(횡단에서도 사라집니다)", "측점전후");
+            btnStnDel.ToolTip = MakeTip("측점 삭제 (DHSTATIONDEL)",
+                "종단도나 노선에서 지울 측점 근처를 클릭하면 <b>가장 가까운 수동 측점</b>을 지웁니다.\n" +
+                "· <b>자동 측점</b>(정측점·보조측점·굴곡부·옹벽)은 지울 수 없습니다 — 모양에서 저절로 나오는 것입니다.\n" +
+                "· 지우면 종단도·횡단면도가 다시 그려지고, <b>밴드도 기준대로 다시 배치</b>됩니다.\n" +
+                "· 명령창에서 <b>전체삭제(A)</b>도 고를 수 있습니다.", null);
+
             var btnStnFb = MakeButton(
                 "전/후\n측점", "DHSTATIONFB ", "찍은 자리를 횡단면도에서만 (전)(후) 두 장으로 만듭니다", "측점전후");
             btnStnFb.ToolTip = MakeTip("전/후 측점 (DHSTATIONFB)",
@@ -440,6 +450,37 @@ public sealed class RibbonApp : IExtensionApplication
             splitMap.Items.Add(btnMapOff);
             splitMap.Current = btnMap;
 
+            // ★★★[JACK 0902 <i>"지적도도 위성지도 삽입처럼 스플릿버튼으로 지적도라고 만들고
+            //   안에 지적도 삽입버튼하고 지적도삭제 버튼 만들어줘"</i>]
+            //   위성지도와 <b>같은 모양</b>으로 묶는다 — 넣는 자리와 빼는 자리를 한 단추에.
+            var btnParcelOff = MakeButton(
+                "지적도\n삭제", "DHPARCELOFF ", "가져온 지적도(필지 경계·지번)를 레이어 통째로 지웁니다", "지적");
+            btnParcelOff.ToolTip = MakeTip("지적도 삭제 (DHPARCELOFF)",
+                "[지적도 삽입]으로 가져온 것을 <b>레이어 통째로</b> 지웁니다 — 필지 경계와 지번 글씨.\n" +
+                "· 레이어 자체는 남겨 다음에 다시 씁니다.\n" +
+                "· [초기화]는 <b>가져온 자료까지 함께</b> 지웁니다 — 지적도만 따로 버리고 싶을 때 쓰는 단추입니다.", null);
+
+            var splitParcel = new RibbonSplitButton
+            {
+                Text = "지적도",
+                ShowText = true,
+                ShowImage = true,
+                LargeImage = MakeGlyph("지적"),
+                Image = MakeGlyph("지적"),
+                Size = RibbonItemSize.Large,
+                Orientation = System.Windows.Controls.Orientation.Vertical,
+                IsSplit = true,
+                IsSynchronizedWithCurrentItem = false,
+                ListStyle = RibbonSplitButtonListStyle.List,
+                ToolTip = MakeTip("지적도",
+                    "**지적도 삽입** — 두 점으로 범위를 찍으면 그 범위 필지 경계와 지번을 가져옵니다.\n" +
+                    "**지적도 삭제** — 가져온 지적도를 레이어 통째로 지웁니다.\n" +
+                    "아래 화살표를 눌러 고릅니다.", null),
+            };
+            splitParcel.Items.Add(btnParcel);
+            splitParcel.Items.Add(btnParcelOff);
+            splitParcel.Current = btnParcel;
+
             var btnCrop = MakeButton(
                 "원지형\n자르기", "DHCROP ", "드래그로 박스를 그리면 그 안의 지형만 남기고 나머지는 지웁니다", "자르기");
             btnCrop.ToolTip = MakeTip("원지형 자르기 (DHCROP)",
@@ -498,6 +539,7 @@ public sealed class RibbonApp : IExtensionApplication
                     "**지층 구성** — 시추주상도로 지층을 만듭니다(우측 도킹창).\n" +
                     "**종단 생성** — 노선을 그리면 그 노선의 종단면도.\n" +
                     "**측점 추가** — 밸브실처럼 원하는 자리에 측점을 더합니다.\n" +
+                    "**측점 삭제** — 찍은 자리의 수동 측점을 지웁니다(횡단도 같이).\n" +
                     "**전/후 측점** — 횡단만 (전)(후) 두 장으로.\n" +
                     "아래 화살표를 눌러 고릅니다.", null),
             };
@@ -505,6 +547,7 @@ public sealed class RibbonApp : IExtensionApplication
             splitProf.Items.Add(btnProf);
             splitProf.Items.Add(btnStn);
             splitProf.Items.Add(btnStnFb);
+            splitProf.Items.Add(btnStnDel);
             splitProf.Current = btnProf;
 
             // ── 무엇이 있어야 눌 수 있나(JACK 0901) ───────────────────────────
@@ -522,6 +565,7 @@ public sealed class RibbonApp : IExtensionApplication
             _needPlan.Add(btnProf);          // 종단 생성
             _needPlan.Add(btnStn);
             _needPlan.Add(btnStnFb);
+            _needPlan.Add(btnStnDel);   // ★[검토 0902] 형제 둘은 있는데 이것만 빠져 있었다
             _needPlan.Add(btnXsec);          // 횡단
 
             // ── 패널 늘어놓기 ─────────────────────────────────────────────────
@@ -553,7 +597,7 @@ public sealed class RibbonApp : IExtensionApplication
             pMisc.Items.Add(Spacer());
             pMisc.Items.Add(btnCrop);
             pMisc.Items.Add(Spacer());
-            pMisc.Items.Add(btnParcel);
+            pMisc.Items.Add(splitParcel);
             pMisc.Items.Add(Spacer());
             pMisc.Items.Add(splitMap);
             pMisc.Items.Add(Spacer());
@@ -917,29 +961,44 @@ public sealed class RibbonApp : IExtensionApplication
                         break;
 
                     case "초기화": // 되돌리는 화살표 — <b>열린 고리 + 화살촉</b>
-                        //   ★[JACK 0901 스샷] 종전에는 호를 그린 뒤 직선 두 개를 덧대어
-                        //   화살촉이 <b>고리에서 떨어져</b> ㄱ자로 보였다. 끝점 접선 방향으로 그린다.
+                        // ★★★[JACK 0902 "초기화 버튼 이미지 이상해" · "화살표가 이상해 잘렸어"]
+                        //   <b>오프라인으로 그려 보았다</b>(32×32를 10배로 렌더해 눈으로 확인) — 원인이 둘이었다:
+                        //     ① <c>ArcTo</c>의 <c>isLargeArc·SweepDirection</c> 조합이 <b>우리가 생각한 원과 다른 원</b>을
+                        //       그려 고리가 <b>화면 밖으로 나갔다</b>(위쪽이 통째로 잘렸다).
+                        //     ② 화살촉을 각도 식(<c>tan ± 0.62 + π</c>)으로 그려 날개 둘이 <b>71° 벌어져 옆을</b> 봤다.
+                        //   → <b>각도를 짐작하지 않는다.</b> 원 위의 점을 직접 찍어 선으로 잉고,
+                        //     화살촉도 <b>원 위의 두 자리</b>(밑변 −42° · 꼭지점 −70°)로 만든다.
+                        //     고리 끝(−55°)을 <b>촉 아래로 넣어</b> 둥근 마감이 튀어나오는 이음매를 없앱다.
+                        //   실측: 32×32 안에서 x 7.4~24.6 · y 9.2~25.6 (선굵기 반 1.2 포함) — 안 잘린다.
                         var rs = P(0x8a, 0x9a, 0xaa);
-                        double cxr = 16, cyr = 17, rr = 9.5;
-                        double a0 = -60 * System.Math.PI / 180;   // 시작(오른쪽 위)
-                        double a1 = 250 * System.Math.PI / 180;   // 끝(왼쪽 위) — 한 바퀴에서 조금 못 미치게
+                        double cxr = 16, cyr = 17, rr = 8.6;
+                        double tS = 245 * System.Math.PI / 180, tE = -55 * System.Math.PI / 180;
+                        Point OnRing(double t) => new(cxr + rr * System.Math.Cos(t), cyr + rr * System.Math.Sin(t));
+                        var rpts = new System.Collections.Generic.List<Point>();
+                        for (int ri = 0; ri <= 64; ri++) rpts.Add(OnRing(tS + (tE - tS) * ri / 64.0));
                         var ring = new StreamGeometry();
                         using (var g = ring.Open())
                         {
-                            g.BeginFigure(new Point(cxr + rr * System.Math.Cos(a0), cyr + rr * System.Math.Sin(a0)), false, false);
-                            g.ArcTo(new Point(cxr + rr * System.Math.Cos(a1), cyr + rr * System.Math.Sin(a1)),
-                                    new Size(rr, rr), 0, true, SweepDirection.Counterclockwise, true, false);
+                            g.BeginFigure(rpts[0], false, false);
+                            g.PolyLineTo(rpts.GetRange(1, rpts.Count - 1), true, true);
                         }
                         ring.Freeze();
                         dc.DrawGeometry(null, rs, ring);
-                        // 화살촉 — 끝점에서 <b>진행 방향의 접선</b>을 기준으로 양쪽 날개
-                        var tip = new Point(cxr + rr * System.Math.Cos(a0), cyr + rr * System.Math.Sin(a0));
-                        double tan = a0 - System.Math.PI / 2;      // 반시계로 들어오는 방향
-                        for (int wsgn = -1; wsgn <= 1; wsgn += 2)
+
+                        var pB = OnRing(-42 * System.Math.PI / 180);   // 밑변 중심
+                        var pT = OnRing(-70 * System.Math.PI / 180);   // 꼭지점
+                        double hvx = pT.X - pB.X, hvy = pT.Y - pB.Y;
+                        double hvl = System.Math.Sqrt(hvx * hvx + hvy * hvy); hvx /= hvl; hvy /= hvl;
+                        const double hHalf = 3.9;
+                        var head = new StreamGeometry();
+                        using (var g = head.Open())
                         {
-                            double aw = tan + wsgn * 0.62 + System.Math.PI;
-                            dc.DrawLine(rs, tip, new Point(tip.X + 6.5 * System.Math.Cos(aw), tip.Y + 6.5 * System.Math.Sin(aw)));
+                            g.BeginFigure(pT, true, true);
+                            g.LineTo(new Point(pB.X - hvy * hHalf, pB.Y + hvx * hHalf), false, false);
+                            g.LineTo(new Point(pB.X + hvy * hHalf, pB.Y - hvx * hHalf), false, false);
                         }
+                        head.Freeze();
+                        dc.DrawGeometry(new SolidColorBrush(Color.FromRgb(0x8a, 0x9a, 0xaa)), null, head);
                         break;
 
                     // ── 내보내기 ─────────────────────────────────────────────

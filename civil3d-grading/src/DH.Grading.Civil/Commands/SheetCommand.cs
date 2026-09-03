@@ -2248,6 +2248,46 @@ public static class SheetCommand
 
     private const string LayVgpGrid = CalsLayerGridV;    // CALS 수직그리드(색 1)
 
+    /// <summary>종단띑의 <b>측점 세로선</b>이 서는 레이어 — [측점 삭제]가 이 이름으로 골라낸다.</summary>
+    internal const string GridVertLayer = CalsLayerGridV;
+
+    /// <summary>★★★[JACK 0903] 종단띑 가로자리 <c>x</c>를 <b>측점으로 되돌린다</b>.
+    /// <para>자리 → 측점은 눈금으로 환산한다(밴드 글씨가 그래프 아래에 있어 그래프 좌표 API를 못 쓴다 —
+    /// 이 파일 4526줄에 적어 둔 그 이유다). 종단띑를 못 찾으면 <c>null</c>.</para></summary>
+    internal static double? StationAtX(Database db, double x)
+    {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            ObjectId pvId = PickAnyProfileView(db, tr);
+            if (pvId.IsNull) { tr.Commit(); return null; }
+            if (tr.GetObject(pvId, OpenMode.ForRead) is not CivilDb.ProfileView pv) { tr.Commit(); return null; }
+            double gx0 = 0, gy0 = 0, gx1 = 0, gy1 = 0;
+            if (!pv.FindXYAtStationAndElevation(pv.StationStart, pv.ElevationMin, ref gx0, ref gy0) ||
+                !pv.FindXYAtStationAndElevation(pv.StationEnd, pv.ElevationMin, ref gx1, ref gy1) ||
+                System.Math.Abs(gx1 - gx0) < 1e-9) { tr.Commit(); return null; }
+            double st = pv.StationStart + (x - gx0) * (pv.StationEnd - pv.StationStart) / (gx1 - gx0);
+            tr.Commit();
+            return st;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>도면의 종단띑 하나 — 여럿이면 마지막 것(방금 만든 것).</summary>
+    private static ObjectId PickAnyProfileView(Database db, Transaction tr)
+    {
+        ObjectId found = ObjectId.Null;
+        try
+        {
+            var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+            var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
+            foreach (ObjectId id in ms)
+                try { if (tr.GetObject(id, OpenMode.ForRead) is CivilDb.ProfileView) found = id; } catch { }
+        }
+        catch { }
+        return found;
+    }
+
     private static void DrawVgpGrid(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log)
     {
         try
@@ -3842,6 +3882,10 @@ public static class SheetCommand
     /// <para>지운 개수를 <b>레이어별로</b> 남긴다 — <c>CR-*</c>는 회사 표준 레이어라 사용자가 거기에
     /// 무언가 그려 두었을 수 있다. 예상 밖의 숫자가 찍히면 그때 알 수 있어야 한다.</para>
     /// 반환=지운 객체 수(배치는 따로 로그에 적는다).</summary>
+    /// <summary>★★★[JACK 0902 "초기화 누르면 스샷처럼 남어"] <b><c>log</c>가 없어도 돌아야 한다.</b>
+    /// <para>초기화가 이 함수를 부를 때 <c>null</c>을 넘겼는데, 안에서 <c>log.AppendLine</c>을
+    /// 그대로 불러 <b>예외가 나고 밖의 <c>catch</c>가 조용히 삼켰다</b> — 지우기가 통째로 안 돌았다.
+    /// 이 저장소가 계속 데이는 <b>조용한 실패</b>다 — <c>log?.</c>로 바꿔 원인을 없앨다.</para></summary>
     internal static int EraseAll(Database db, System.Text.StringBuilder log)
     {
         int total = 0;
@@ -3909,13 +3953,13 @@ public static class SheetCommand
                     }
                 }
                 if (hit.Count > 0)
-                    log.AppendLine("  종단도 객체 정리: " +
+                    log?.AppendLine("  종단도 객체 정리: " +
                         string.Join(" · ", hit.Select(kv => $"{kv.Key} {kv.Value}개")));
-                else log.AppendLine("  종단도 객체 정리: 지울 것이 없었다");
+                else log?.AppendLine("  종단도 객체 정리: 지울 것이 없었다");
             }
             tr.Commit();
         }
-        catch (System.Exception ex) { log.AppendLine("  종단도 객체 정리 실패 — " + Brief(ex)); }
+        catch (System.Exception ex) { log?.AppendLine("  종단도 객체 정리 실패 — " + Brief(ex)); }
 
         // ── 배치도 지운다. 안 지우면 <c>DH-종단도_2</c>, <c>_3</c>… 으로 쌓인다.
         //   지우려는 배치가 지금 열려 있으면 <b>모형으로 옮기고</b> 지운다(열린 배치는 못 지운다).
@@ -3940,11 +3984,11 @@ public static class SheetCommand
                     lm.DeleteLayout(nm);
                     gone++;
                 }
-                catch (System.Exception ex) { log.AppendLine($"  배치 '{nm}' 삭제 실패 — " + Brief(ex)); }
+                catch (System.Exception ex) { log?.AppendLine($"  배치 '{nm}' 삭제 실패 — " + Brief(ex)); }
             }
-            if (gone > 0) log.AppendLine($"  종단도 배치 {gone}개 삭제");
+            if (gone > 0) log?.AppendLine($"  종단도 배치 {gone}개 삭제");
         }
-        catch (System.Exception ex) { log.AppendLine("  배치 정리 실패 — " + Brief(ex)); }
+        catch (System.Exception ex) { log?.AppendLine("  배치 정리 실패 — " + Brief(ex)); }
 
         return total;
     }
@@ -4477,7 +4521,8 @@ public static class SheetCommand
         var spans = ProfileCommand.LastWallSpans;
         if (spans == null || spans.Count == 0) { log.AppendLine("  수직부 두 값: 옹벽·가시설이 없어 건너뜀"); return; }
 
-        int nHide = 0, nDraw = 0, nGrp = 0, nMiss = 0, nSkipKind = 0, nSkipManual = 0, wipedAll = 0, nFar = 0, nBand = 0, nProbe = 0;
+        int nHide = 0, nDraw = 0, nGrp = 0, nMiss = 0, nSkipKind = 0, nSkipManual = 0, wipedAll = 0, nFar = 0, nBand = 0, nProbe = 0, nSkipView = 0, nNoWall = 0, nOnMark = 0, nOneSide = 0, nHalfZ = 0;
+        double wallOffMax = 0;
         // ★★★[JACK 0902 "옹벽 부분이 누락됐어"] <b>얼마나 벗어났는지 재 둔다.</b>
         //   0827에 자를 30cm→1cm로 좁히면서 "오차는 mm 수준"이라고 <b>짐작</b>했는데,
         //   이번 도면에서 213개가 전부 밖으로 나갔다. 5cm면 자를 늘리면 되지만
@@ -4575,6 +4620,18 @@ public static class SheetCommand
                 try
                 {
                     if (tr.GetObject(oid, OpenMode.ForRead) is not Entity e0 || e0.LayerId != layer) continue;
+                    // ★★[검토 0902] <b>이 뷰 것만 지운다.</b> 레이어는 뷰별이 아니다 —
+                    //   종단도가 둘인 도면에서 B 뷰로 [도곽]을 돌리면 <b>A 뷰의 글씨까지</b> 지워졌고,
+                    //   A의 순정 라벨은 <b>숨긴 채로 되돌리는 곳이 없어</b> 그 칸이 영영 빈칸이 됐다.
+                    //   <see cref="SpreadBandLabels"/>에 넣은 가로범위와 <b>같은 잣대</b>를 쓴다.
+                    try
+                    {
+                        var ee = e0.GeometricExtents;
+                        double cx = (ee.MinPoint.X + ee.MaxPoint.X) * 0.5;
+                        if (cx < System.Math.Min(gx0, gx1) - 1.0 || cx > System.Math.Max(gx0, gx1) + 1.0)
+                        { nSkipView++; continue; }
+                    }
+                    catch { }
                     tr.GetObject(oid, OpenMode.ForWrite).Erase(); wiped++;
                 }
                 catch { }
@@ -4769,6 +4826,9 @@ public static class SheetCommand
                         if (st3 < stMin) stMin = st3; if (st3 > stMax) stMax = st3;
                         // ★측점에 붙였으므로 이제는 <b>같은 측점인가</b>만 보면 된다 — 자를 조율할 것이 없다.
                         //   벽 위치도 같은 측점 목록에서 나온 값이라 <b>구성상</b> 1cm 안에서 만난다.
+                        // ★[검토 0902] 후보가 <b>전부 가시설</b>이면 <c>bestD</c>가 <c>MaxValue</c> 그대로 남는다.
+                        //   그것을 <c>farD</c>에 넣으면 로그 한 줄이 <b>310자리 숫자</b>로 터진다.
+                        if (bestD == double.MaxValue) { nNoWall++; continue; }
                         if (bestD > StationMarks.MergeTol) { nFar++; farD.Add(bestD); continue; }
                         if (System.Math.Abs(hit.Back - hit.Front) < 1e-9) continue;
 
@@ -4803,7 +4863,14 @@ public static class SheetCommand
                                           ? $" · 막대 {vb.Value.ZTop:F2}/{vb.Value.ZBottom:F2}" : " · 막대 없음"));
                             nProbe++;
                         }
-                        if (double.IsNaN(zF) || double.IsNaN(zB)) { nMiss++; continue; }
+                        // ★★★[JACK 0902 "옹벽의 시점과 종점은 측점문자가 하나만 나와"]
+                        //   종전엔 <b>한쪽만 못 읽어도 통째로 건너뛰었다</b>. 그러면 우리 글씨를
+                        //   하나도 안 그리고 순정 라벨만 남아 <b>값이 하나만 보인다</b>.
+                        //   벽의 시점·종점은 한쪽이 <b>부지 밖</b>이라 계획고가 없는 것이 정상이다.
+                        //   → <b>읽힌 쪽만 그린다.</b> 둘 다 못 읽을 때만 건너뛰다.
+                        bool okZF = !double.IsNaN(zF), okZB = !double.IsNaN(zB);
+                        if (!okZF && !okZB) { nMiss++; continue; }
+                        if (!okZF || !okZB) nHalfZ++;
                         double vF, vB;
                         if (kind == "계획고") { vF = zF; vB = zB; }
                         else
@@ -4821,29 +4888,101 @@ public static class SheetCommand
                         //   음수를 그대로 찍으면 "성토 −2.16"처럼 <b>있지도 않은 성토</b>가 표에 남는다.
                         //   → <b>양수만 그린다.</b> 0도 안 그린다(원지반=계획이면 깎지도 쌓지도 않는다).
                         //   <b>앞뒤가 다를 수 있다</b> — 앞은 깎고 뒤는 쌓는 벽이면
-                        //   절토고 칸에 <b>앞만</b>, 성토고 칸에 <b>뒤만</b> 적힌다. 그래도 자리는 지킨다
-                        //   (앞은 위·뒤는 아래) — 어느 쪽 값인지가 자리로 읽히기 때문이다.
+                        //   절토고 칸에 <b>앞만</b>, 성토고 칸에 <b>뒤만</b> 적힌다.
+                        //   ★★[JACK 0902 바뀌었다] 종전엔 <i>"그래도 자리는 지킨다(앞은 위·뒤는 아래) —
+                        //   어느 쪽 값인지가 자리로 읽히기 때문"</i>이라 적혀 있었다. 그러나 JACK이
+                        //   <i>"첫 시점은 맞아야 해"</i>라고 정했고, 둘은 한쪽만 있을 때 부딪친다.
+                        //   → <b>있는 것 중 첫 값을 측점 위에</b> 놓는 쪽을 택했다(아래 <c>slot</c>).
+                        //     한쪽만 있을 때 앞인지 뒤인지는 <b>옆 칸이 말해 준다</b> —
+                        //     앞이 절토면 절토고 칸에 값이 서고 성토고 칸은 비므로 둘을 함께 읽으면 갈린다.
+                        //     (JACK이 다르게 정하면 값 뒤에 (전)/(후)를 붙이는 길이 있다.)
+                        // ★★★[JACK 0903 "절토시점이 옹벽으로 시작할때 왜 (4.71)부터 나오지?
+                        //   0.00(4.71) 이렇게 붙은 걸로 나와야하는거아니야?"]
+                        //   <b>맞다.</b> 종전엔 <c>&gt; 1e-6</c>라 <b>0을 안 그렸다</b>.
+                        //   그 규칙은 0827에 JACK이 <i>"성토가 없는데 −로 찍혔다"</i>고 하셔
+                        //   <b>음수를 막으려고</b> 넣은 것인데, 0까지 같이 막고 있었다.
+                        //   ★옹벽 시점의 절토고는 <b>0에서 시작하는 것이 사실</b>이다 — 벘이 거기서 서니까.
+                        //   → <b>짝이 양수면 0도 그린다.</b> 음수는 여전히 안 그린다(0827 규칙은 그대로).
+                        //   그래서 <c>0.00 (4.71)</c>로 나오고, 짝이 없는 자리의 0은 여전히 빈칸이다.
                         bool plan = kind == "계획고";
-                        bool okF = plan || vF > 1e-6;
-                        bool okB = plan || vB > 1e-6;
+                        bool okF = okZF && (plan || vF > 1e-6 || (vF >= -1e-6 && okZB && vB > 1e-6));
+                        bool okB = okZB && (plan || vB > 1e-6 || (vB >= -1e-6 && okZF && vF > 1e-6));
+                        // ★★★[JACK 0902 <i>"축척 때문에 계단옹벽구간이 너무 떡질경우 옹벽의 윗선 계획고만
+                        //   표현한다(그외는 지금처럼 아래위를 다 쓴다)"</i>]
+                        //   계단이 붙어 있으면 한 자리에 두 값을 못 넣는다 — <b>윗선 하나만</b> 쓴다.
+                        //   윗선 = 계획고가 <b>높은</b> 쪽. 절토고·성토고도 <b>같은 쪽</b>을 쓴다 —
+                        //   여섯 칸이 한 자리표를 공유하므로 칸마다 개수가 다르면 <b>세로줄이 안 맞는다</b>.
+                        //   (이 판단은 내가 했다 — JACK은 계획고만 말했지만 칸끼리 어긋나면 더 못 읽는다.)
+                        //   ★둘 다 읽힌 때만 줄인다 — 한쪽뿐이면 이미 하나다.
+                        if (okF && okB && WallIsCrowded(spans, hit.Mid, 2.0 * MinLabelGapMm / 1000.0 * scale))
+                        {
+                            if (zF >= zB) okB = false; else okF = false;
+                            nOneSide++;
+                        }
 
-                        double h = 2.5 * scale / 1000.0;
+                        double h = CalsT25 * scale / 1000.0;   // ★[검토 0902] 리터럴 2.5 → 상수로(벌리기의 pairGap과 같은 식이어야 한다)
                         // 순정 글씨는 <b>어느 경우든</b> 숨긴다 — 벽 한복판을 뚫고 잰 값이라 틀렸다.
                         //   둘 다 안 그릴 때는 그래서 <b>빈칸</b>이 된다. 그것이 맞는 그림이다.
                         se.Visibility = false; nHide++;
                         if (!okF && !okB) { nBlank++; continue; }
                         hid++;
 
-                        // 위=앞(Front) · 아래=뒤(Back). 진행방향 순서(JACK 확인).
+                        // 앞(Front)이 먼저 · 뒤(Back)이 그 다음. 진행방향 순서(JACK 확인).
                         double gap = h * 1.35;
                         double ux = System.Math.Cos(rot + System.Math.PI / 2.0);
                         double uy = System.Math.Sin(rot + System.Math.PI / 2.0);
+                        // ★★★[JACK 0902 <i>"성토 옹벽의 문자 시점의 측점은 비어있고 정렬시작하는 첫문자가
+                        //   뒤에 있다. 한마디로 시작 측점하고 문자가 안맞는다"</i>] — <b>두 가지가 겹쳐 있었다.</b>
+                        //
+                        //   ① 두 값을 라벨 자리를 <b>가운데 두고 좌우로</b> ±<c>gap</c>/2씩 갈라 놓았다.
+                        //      1:600에서 ±1.01m다 — <b>측점 선 위에는 구조적으로 아무것도 없다.</b>
+                        //   ② 게다가 그 라벨 자리(<c>loc</c>)는 <see cref="SpreadBandLabels"/>가 밀어 놓은 자리라
+                        //      두 값이 <b>둘 다</b> 측점 오른쪽으로 넘어가 있었다(실측 3m).
+                        //
+                        //   → <b>첫 값을 측점 그 자리에</b> 놓고 다음 값을 그 뒤에 놓는다.
+                        //     JACK: <i>"글자는 얼마든지 뒤로 밀려도 되지만 첫 시점은 맞아야 해."</i>
+                        //     한 쪽뿐이면 그 하나가 측점 위에 온다(<c>slot</c>이 0부터 오르므로).
+                        //   ★자리는 <c>loc</c>가 아니라 <b>측점에서 되돌린 X</b>다 — 밀림을 안 탄다.
+                        //     <b>검증(JACK 0902):</b> JACK이 고른 선 x=162199.694 · 데이터시작 x=162139.330
+                        //     → 차가 60.364m = <b>옹벽 시점</b>. 그 자리에 첫 값이 서야 한다.
+                        //   ★★[검토 0902] <b>측점 → 가로자리는 Civil에게 직접 묻는다.</b>
+                        //   <see cref="WallXs"/> 주석이 이미 적어 둔 규칙이다 — <i>"우리가 비례로 되돌리면
+                        //   오\李가 끼는데, 그 오\李가 오늘 하루를 먹었다"</i>. 그리는 자리와
+                        //   벌리기가 잡는 자리(<see cref="WallXs"/>)가 <b>같은 질의에서</b> 나와야 줄이 맞는다.
+                        //   측점도 <c>st3</c>가 아니라 <b><c>hit.Mid</c></b>를 쓴다 — <c>wallX</c>가 그것으로 만들어졌다.
+                        double sx = 0, byTmp = 0;
+                        if (!pv.FindXYAtStationAndElevation(hit.Mid, pv.ElevationMin, ref sx, ref byTmp))
+                            sx = gx0 + (hit.Mid - pv.StationStart) / stPerX;   // 못 물으면 그때만 비례로
+                        // ★★★[JACK 0902 "떡짐"] <b>그리는 자리는 벌리기가 정한 자리(<c>loc.X</c>)다.</b>
+                        //   측점 자리(<c>sx</c>)에 <b>무조건</b> 그리면, 벽 계단이 1.05m 간격인 곳에서
+                        //   벽끼리 겹쳐 <b>떡진다</b>. 벌리기는 이미 ‘첫 벽은 제 측점 · 뒤는 밀림’을
+                        //   계산해 <c>DraggedOffset</c>에 넣어 둔다 — 그 답을 그대로 따른다.
+                        //   ★<c>sx</c>는 이제 <b>재는 데만</b> 쓴다: 벽 글씨가 제 측점에서 얼마나 벗어났는지.
+                        //   첫 벽은 0이어야 하고, 큰 값은 뒤로 밀린 벽이다.
+                        // ★★★[JACK 0902 "예전처럼 측점 중심을 기준으로 좌우로 문자가 있어야 하는데
+                        //   측점에 하나, 측점 우측에 하나 이렇게 배치가 돼"]
+                        //   둘일 때는 <b>측점을 가운데 두고 ∓반칸</b>, 하나면 <b>측점 위</b>에 놓는다.
+                        //   (0902 낮에 ‘선 위가 비었다’고 보였던 것은 <b>중심이 3m 밀려</b> 있었기 때문이지,
+                        //    좌우로 가르는 것 자체가 문제가 아니었다 — 지금은 중심이 측점에 정확히 선다.)
+                        int nVal = (okF ? 1 : 0) + (okB ? 1 : 0);
+                        double bx = loc.X;
+                        double wOff = System.Math.Abs(bx - sx);
+                        if (wOff > wallOffMax) wallOffMax = wOff;
+                        if (wOff <= StationMarks.MergeTol) nOnMark++;
+                        int slot = 0;
                         for (int m2 = 0; m2 < 2; m2++)
                         {
-                            if (m2 == 0 ? !okF : !okB) continue;   // 없는 쪽은 자리를 비운다
+                            if (m2 == 0 ? !okF : !okB) continue;   // 없는 쪽은 건너뛴 뿐 — 자리는 앞으로 당긴다
                             var t = new DBText
                             {
-                                TextString = (m2 == 0 ? vF : vB).ToString("F2"),
+                                // ★★★[JACK 0902 "좀 헤깔리는데 옹벽의 우측값은 ()를 넣어서 구분했으면 좋겠어"]
+                                //   뒤(오른쪽) 값에 괄호를 붙인다 — <c>85.00</c> / <c>(90.00)</c>.
+                                //   ★<b>하나만 나올 때도 붙인다</b>(내 판단 — 이유를 적어 둔다):
+                                //     벽 시점·종점은 한쪽 표고가 부지 밖이라 <b>값이 하나만</b> 서고, 그때는
+                                //     측점 가운데에 놓이므로 <b>앞인지 뒤인지 자리로는 못 읽는다</b>.
+                                //     괄호가 그것까지 가려 준다 — 괄호가 없으면 앞, 있으면 뒤.
+                                //   높이: 값 5자 + 괄호 2자 = 7자 × 2.5mm = <b>17.5mm</b> < 밴드 칸 20mm — 들어간다.
+                                TextString = m2 == 0 ? vF.ToString("F2") : "(" + vB.ToString("F2") + ")",
                                 Height = h,
                                 Rotation = rot,
                                 Justify = AttachmentPoint.MiddleCenter,
@@ -4851,12 +4990,17 @@ public static class SheetCommand
                             t.SetDatabaseDefaults(db);
                             t.LayerId = layer;
                             if (!kst.IsNull) t.TextStyleId = kst;
-                            var pt = new Point3d(loc.X + ux * gap * (m2 == 0 ? 0.5 : -0.5),
-                                                 loc.Y + uy * gap * (m2 == 0 ? 0.5 : -0.5), 0);
+                            // 첫째(slot 0)는 측점 위, 둘째는 그 뒤 — 뒤쪽 방향은 (−ux, −uy)다.
+                            // ★[검토 0902] Y도 밀림을 민다 — X만 면역이면 밴드 칸 밖으로 나갈 수 있다
+                            //   (벌리기가 그 그룹을 건너뛰었거나 쓰기가 실패한 판에서 사람이 준 Y 밀림이 남는다).
+                            double dy0 = 0; try { dy0 = se.DraggedOffset.Y; } catch { }
+                            //   둘이면 −반칸/+반칸, 하나면 0 — 측점을 가운데 둔다.
+                            double off = nVal >= 2 ? (slot - 0.5) * gap : 0.0;
+                            var pt = new Point3d(bx - ux * off, loc.Y - dy0 - uy * off, 0);
                             t.Position = pt; t.AlignmentPoint = pt;
                             ms.AppendEntity(t);
                             tr.AddNewlyCreatedDBObject(t, true);
-                            nDraw++;
+                            nDraw++; slot++;
                         }
                     }
                     catch { }
@@ -4877,46 +5021,166 @@ public static class SheetCommand
                      + (nSnap > 0 ? $" · 측점에 붙임 {nSnap}개(최대 {snapMax:F3}m)" : " · 측점 목록 없음(되돌린 값 그대로)")
                      + FarReport(farD, stMin, stMax, wallMin, wallMax)
                      + (nSkipManual > 0 ? $" · <b>수동 (전)(후) 제외 {nSkipManual}곳</b>(구조물 자리라 표고가 안 바뀜다 — 숫자 하나)" : "")
+                     + $" · 벽 글씨가 측점 위에 선 곳 {nOnMark}곳(벗어남 최대 {wallOffMax:F2}m)"
+                     + (nOneSide > 0 ? $" · 떡져서 윗선 하나만 쓴 곳 {nOneSide}곳" : "")
+                     + (nHalfZ > 0 ? $" · 한쪽 표고만 읽혀 한 값만 쓴 곳 {nHalfZ}곳(벽 시점·종점 — 정상)" : "")
                      + (nMiss > 0 ? $" · ⚠표고를 못 읽은 것 {nMiss}곳" : "")
                      // ★[검증 0902] <b>숨기지 않는다.</b> 종전엔 숨긴 글씨가 하나라도 있으면
                      //   이 경고를 아예 안 찍었다 — 열 곳이 누락되는데 <b>증거가 사라졌다</b>.
-                     + (nFar > 0 ? $" · ⚠벽에 안 닿은 글씨 {nFar}개(자 {StationMarks.MergeTol * 100:F0}cm)" : "")
+                     + (nFar > 0 ? $" · 이 자리에 벽이 없는 글씨 {nFar}개(자 {StationMarks.MergeTol * 100:F0}cm · 대부분 정상)" : "")
+                     + (nNoWall > 0 ? $" · 후보가 전부 가시설이라 건너뜀 {nNoWall}개" : "")
+                     + (nSkipView > 0 ? $" · 다른 종단도 옆 안 지움 {nSkipView}개" : "")
                      + $" · 찾은 길: {howFind}"
                      + probe.ToString());
     }
 
 
-    /// <summary>옹벽 측점이 놓이는 <b>원래 가로자리</b>(밀리기 전).
-    /// <para>측점 → 가로자리는 <b>Civil에게 직접 묻는다</b>(<c>FindXYAtStationAndElevation</c>) —
-    /// 우리가 비례로 되돌리면 오차가 끼는데, 그 오차가 오늘 하루를 먹었다.</para>
-    /// <para>남의 도면 벽 목록은 안 쓴다 — 저장소에 이미 있는 관문을 지난다.</para></summary>
-    private static List<double> WallXs(Database db, ObjectId pvId, System.Text.StringBuilder log)
+    /// <summary>★★★[검토 0902 CRITICAL] <b>측점의 정체를 거리가 아니라 사유로 묻기 위해,
+    /// 자리와 사유를 <b>같이</b> 돌려준다.</b>
+    ///
+    /// <para><b>왜 바꿨었나.</b> 종전엔 굴곡부의 X만 목록으로 넘기고, 라벨이 그 X에서
+    /// <c>minGap×0.25</c>(1:500에서 <b>0.39m</b>) 안에 있으면 <b>무엇이든</b> 굴곡부로 찍었다.
+    /// 그런데 측점끼리는 <b>1.8cm까지</b> 붙는다(로그 실측). 결과:
+    /// 보조측점 <c>230.00</c>(굴곡부 230.02에서 2cm) · 보조측점 <c>330.00</c> · 데이라잇 <c>84.70</c>이
+    /// 굴곡부로 오인되어 <b>지워졌다</b> — JACK 기준 4 정면 위반이다.</para>
+    ///
+    /// <para>→ 라벨을 <b>가장 가까운 측점 하나</b>에 1:1로 붙이고(벽 붙이기가 이미 쓰는 방식),
+    /// 그 측점의 사유로 <see cref="StationMarks.IsBendOnly"/>를 묻는다.</para></summary>
+    private static List<(double X, double St, string Why)> MarkXs(Database db, ObjectId pvId)
     {
-        var xs = new List<double>();
+        var xs = new List<(double X, double St, string Why)>();
+        try
+        {
+            if (!ProfileCommand.SameDrawing(db)) return xs;
+            var marks = ProfileCommand.LastMarks;
+            if (marks == null || marks.Count == 0) return xs;
+            using var tr = db.TransactionManager.StartTransaction();
+            if (tr.GetObject(pvId, OpenMode.ForRead) is CivilDb.ProfileView pv)
+                foreach (var m in marks)
+                {
+                    double x = 0, y = 0;
+                    try { if (pv.FindXYAtStationAndElevation(m.Station, pv.ElevationMin, ref x, ref y)) xs.Add((x, m.Station, m.Why ?? "")); }
+                    catch { }
+                }
+            tr.Commit();
+        }
+        catch { }
+        return xs;
+    }
+
+    /// <summary>벽 자리를 <b>분류와 함께</b> 돌려준다.
+    /// <para><c>Two</c> = 두 값을 다 쓸 만큼 한가하다 · <c>First</c> = 계단 무리의 첫 번째다.</para>
+    /// <para>★자리는 <b>Civil에게 직접 묻는다</b> — 비례로 되돌리면 오차가 끼고, 그 오차가 하루를 먹었다.</para></summary>
+    /// <summary>빈 칸의 지난 판 밀림을 0으로 되돌리고 <b>다시 보이게</b> 한다.
+    /// <para>★[검토 0902] 종전엔 밀림만 되돌리고 <c>Visibility</c>는 안 건드려, 지난 판에 숨겨진 라벨이
+    /// 이번 판에 빈칸으로 분류되면 <b>숨은 채로 굳었다</b>.</para></summary>
+    private static void RestoreBlanks(CivilDb.LabelGroup lg, System.Collections.Generic.List<uint> blanks)
+    {
+        foreach (uint i in blanks)
+        {
+            try
+            {
+                var se = lg.GetAt(i);
+                if (se == null) continue;
+                double dx = 0, dy = 0;
+                try { dx = se.DraggedOffset.X; dy = se.DraggedOffset.Y; } catch { }
+                if (System.Math.Abs(dx) > 1e-9 || System.Math.Abs(dy) > 1e-9) se.DraggedOffset = new Vector3d(0, 0, 0);
+                if (!se.Visibility) se.Visibility = true;
+            }
+            catch { }
+        }
+    }
+
+    /// <summary>줄 세울 것이 하나도 없을 때라도 <b>숨긴 라벨은 되살린다</b> — 안 그러면 그 칸이 영영 빈칸이다.</summary>
+    private static void RestoreHidden(CivilDb.LabelGroup lg, uint n, System.Collections.Generic.List<uint> blanks)
+    {
+        for (uint i = 0; i < n; i++)
+        {
+            try { var se = lg.GetAt(i); if (se != null && !se.Visibility) se.Visibility = true; } catch { }
+        }
+    }
+
+    /// <summary>종단 하나에서 그 측점의 표고 — 없으면 <c>NaN</c>.</summary>
+    private static double ZAt(Transaction tr, ObjectId pid, double st)
+    {
+        if (pid.IsNull) return double.NaN;
+        try
+        {
+            if (tr.GetObject(pid, OpenMode.ForRead) is not CivilDb.Profile pf) return double.NaN;
+            return pf.ElevationAt(st);
+        }
+        catch { return double.NaN; }
+    }
+
+    private static List<(double X, double Mid, bool Two, bool First)> WallXs(
+        Database db, ObjectId pvId, double scale, System.Text.StringBuilder log)
+    {
+        var xs = new List<(double X, double Mid, bool Two, bool First)>();
         try
         {
             if (!ProfileCommand.SameDrawing(db)) return xs;
             var spans = ProfileCommand.LastWallSpans;
             if (spans == null || spans.Count == 0) return xs;
+            double need = 2.0 * MinLabelGapMm / 1000.0 * scale;   // 두 값이 들어가려면 이만큼
             using var tr = db.TransactionManager.StartTransaction();
             if (tr.GetObject(pvId, OpenMode.ForRead) is CivilDb.ProfileView pv)
-            {
                 foreach (var w in spans)
                 {
-                    // 손으로 찍은 (전)(후)는 값이 하나뿐이라 두 칸이 필요 없다.
-                    if (StationMarks.IsFixedSpan(w.Kind)) continue;
+                    if (!WallCounts(w)) continue;
                     double x = 0, y = 0;
                     try
                     {
-                        if (pv.FindXYAtStationAndElevation(w.Mid, pv.ElevationMin, ref x, ref y)) xs.Add(x);
+                        if (pv.FindXYAtStationAndElevation(w.Mid, pv.ElevationMin, ref x, ref y))
+                            xs.Add((x, w.Mid,
+                                    !WallIsCrowded(spans, w.Mid, need),
+                                    WallIsGroupFirst(spans, w.Mid, need)));
                     }
                     catch { }
                 }
-            }
             tr.Commit();
         }
         catch (System.Exception ex) { log?.AppendLine("  옹벽 가로자리 못 구함 — " + Brief(ex)); }
         return xs;
+    }
+
+    /// <summary>밴드에서 <b>두 칸을 쓰는 벽</b>인가. 손으로 찍은 (전)(후)와 가시설은 아니다 —
+    /// 가시설은 <see cref="WallBandPairs"/>가 어차피 건너뛰므로 자리를 잡으면 헛되이 밀기만 한다.
+    /// <para>★자리를 잡는 쪽과 그리는 쪽이 <b>같은 잣대</b>를 쓰게 하려고 한 곳으로 모았다.</para></summary>
+    internal static bool WallCounts(StationMarks.WallSpan w)
+        => !StationMarks.IsFixedSpan(w.Kind)
+           && !(w.Kind != null && w.Kind.IndexOf("가시설", System.StringComparison.Ordinal) >= 0);
+
+    /// <summary>★★★[JACK 0902 <i>"종단축척이 너무 커서 옹벽선이 떡지면 옹벽의 윗선표고만
+    /// 종단에 넣고, 표현할 공간이 충분하면 지금처럼 두개 다 넣는 기준을 하나 넣자"</i>]
+    /// <b>옆 계단이 한 글씨 자리도 안 남길 만큼 가까운가.</b>
+    /// <para>잣대는 <b>임의의 허용치가 아니라</b> 두 값이 차지하는 폭(<c>2×minGap</c>)이다 —
+    /// 축척이 바뀌면 기준도 같이 바뀐다. JACK이 말한 <i>"축척 때문에"</i>가 그 뜻이다.</para>
+    /// <para>실측: 계단 1.05m 간격 · 1:500에서 두 값은 3.10m 필요 → <b>떡즄다</b>.
+    /// 일곱 계단이면 21.7m가 필요한데 6.3m밖에 없어 15m가 밀려 나갔다
+    /// (로그: <c>벗어남 최대 28.84m</c> · <c>눈금 밖으로 나간 글씨 18개</c>).</para></summary>
+    internal static bool WallIsCrowded(IReadOnlyList<StationMarks.WallSpan> spans, double mid, double need)
+    {
+        if (spans == null) return false;
+        foreach (var w in spans)
+        {
+            if (!WallCounts(w)) continue;
+            double d = System.Math.Abs(w.Mid - mid);
+            if (d > 1e-9 && d < need) return true;
+        }
+        return false;
+    }
+
+    /// <summary>★★★[JACK 0902 <i>"글자는 얼마든지 뒤로 밀려도 되지만 <b>첫 시점은 맞아야 해</b>"</i>]
+    /// 계단 무리의 <b>맨 앞</b>인가 — 이 하나만은 제 측점에 <b>못을 박는다</b>. 뒤 계단은 밀린다.</summary>
+    internal static bool WallIsGroupFirst(IReadOnlyList<StationMarks.WallSpan> spans, double mid, double need)
+    {
+        if (spans == null) return true;
+        foreach (var w in spans)
+        {
+            if (!WallCounts(w)) continue;
+            if (w.Mid < mid - 1e-9 && mid - w.Mid < need) return false;
+        }
+        return true;
     }
 
     /// <summary>★★★[JACK 0902 "지반고나 누가거리처럼 한 측점에 하나인 건 좌측부터 겹치면 밀려나는데,
@@ -4932,98 +5196,357 @@ public static class SheetCommand
     {
         try
         {
-            double minGap = MinLabelGapMm / 1000.0 * scale;      // 종이 mm → 모형 m
-            double wideGap = 2.0 * minGap;                       // 값이 둘인 자리
-            var wallX = WallXs(db, pvId, log);
-            int groups = 0, moved = 0, wide = 0;
-            double worstBefore = double.MaxValue, worstAfter = double.MaxValue;
+            double minGap = MinLabelGapMm / 1000.0 * scale;      // 글씨 한 자리(종이 mm → 모형 m)
+            double pairGap = (CalsT25 * scale / 1000.0) * 1.35;  // 두 값 사이 거리 — 그리는 쪽과 같은 식
+            var walls = WallXs(db, pvId, scale, log);
+            var marks = MarkXs(db, pvId);
+            int groups = 0, moved = 0, wide = 0, back = 0, fail = 0, outside = 0;
+            int skipView = 0, crowd = 0, noName = 0, dropped = 0, kept = 0, nLead = 0, nailed = 0, farMark = 0, blankSkip = 0;
+            double farMarkMax = 0;
+            double backMax = 0, anchorOff = 0;
+            double worstBefore = double.MaxValue, clearMin = double.MaxValue;
 
             using var tr = db.TransactionManager.StartTransaction();
             var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
             var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
 
+            // ★★[검토 0902] 이 뷰 것만 건드린다 — 종단도가 둘이면 남의 밴드를 덮어쓴다.
+            double xLo = double.NegativeInfinity, xHi = double.PositiveInfinity, xR = double.PositiveInfinity;
+            try
+            {
+                if (tr.GetObject(pvId, OpenMode.ForRead) is CivilDb.ProfileView pv0)
+                {
+                    double a0 = 0, b0 = 0, a1 = 0, b1 = 0;
+                    if (pv0.FindXYAtStationAndElevation(pv0.StationStart, pv0.ElevationMin, ref a0, ref b0) &&
+                        pv0.FindXYAtStationAndElevation(pv0.StationEnd, pv0.ElevationMin, ref a1, ref b1) &&
+                        System.Math.Abs(a1 - a0) > 1e-9)
+                    {
+                        xR = System.Math.Max(a0, a1);
+                        xLo = System.Math.Min(a0, a1) - minGap;
+                        xHi = xR + minGap;
+                    }
+                }
+            }
+            catch { }
+
+            // ★★[검토 0902] 못 구했으면 관문이 <b>통째로 열린다</b> — 남의 종단도를 덮어쓴다.
+            //   <see cref="WallBandPairs"/>는 같은 상황에서 그냥 빠져나간다 — 잣대를 맞춘다.
+            if (double.IsInfinity(xR))
+            { tr.Commit(); log.AppendLine("  밴드 값 벌리기: 가로 눈금을 못 잡아 건너뜀"); return; }
+
+            // ★★★[JACK 0902 "성토고와 절토고는 그부분이 아직 계획부지가아니라 값은 없는 부분인데
+            //   그런데도 문자높이만큼 인식해서 옹벽시작점문자가 뒤로 밀렸어. 이건 오류아닌가?
+            //   성토고·절토고·계획고와 지반고·누가거리·측점은 서로 다른 로직으로 산정해야하는거아니야?"]
+            //   <b>맞다 — 오류였다.</b> 밴드마다 값이 있는 자리가 다른데, 벌리기는 <b>빈 칸도</b>
+            //   글자 한 자리를 잡았다. 그만큼 오른쪽이 밀렸다.
+            //   ★라벨에서 <b>글씨를 읽는 API가 없다</b>(<c>LabelGroupSubEntity</c>에 글자 속성이 없다 — 확인함).
+            //     그래서 <b>종단에서 직접 계산</b>해 빈 칸을 가린다:
+            //       계획고 = 계획종단이 없으면 빈칸 · 절토고 = 원지반−계획 ≤ 0 이면 빈칸 · 성토고 = 그 반대
+            //   ★어느 칸인지는 <b>Y 순서</b>로 가른다 — 이름(<c>StyleName</c>)은 이 도면에서
+            //     <b>여섯 칸 모두 빈 문자열</b>로 나온다(로그: ⚠칸 이름을 못 읽은 그룹 6개).
+            //     <see cref="WallBandPairs"/>가 쓰는 것과 같은 길이다.
+            int iPlan = -1, iCut = -1, iFill = -1, nBandTop = 0, axisOff = -1;
+            ObjectId pidPad = ObjectId.Null, pidGnd = ObjectId.Null;
+            try
+            {
+                if (tr.GetObject(pvId, OpenMode.ForRead) is CivilDb.ProfileView pvB)
+                {
+                    using var bi = pvB.Bands.GetBottomBandItems();
+                    for (int b = 0; b < bi.Count; b++)
+                    {
+                        string bn = "";
+                        try { if (tr.GetObject(bi[b].BandStyleId, OpenMode.ForRead) is CivilDb.Styles.StyleBase sb) bn = sb.Name ?? ""; }
+                        catch { }
+                        if (iPlan < 0 && bn.IndexOf("계획", System.StringComparison.Ordinal) >= 0) iPlan = b;
+                        if (iCut < 0 && bn.IndexOf("절토", System.StringComparison.Ordinal) >= 0) iCut = b;
+                        if (iFill < 0 && bn.IndexOf("성토", System.StringComparison.Ordinal) >= 0) iFill = b;
+                        nBandTop++;
+                    }
+                }
+                if (ProfileCommand.SameDrawing(db)) { pidPad = ProfileCommand.LastPidPad; pidGnd = ProfileCommand.LastPidGround; }
+            }
+            catch { }
+
+            // 밴드 라벨 그룹을 모아 <b>위에서 아래로</b> 번호를 매긴다(밴드 순서와 같다).
+            var glist = new List<(ObjectId Id, double Y)>();
+            foreach (ObjectId id0 in ms)
+            {
+                try
+                {
+                    if (tr.GetObject(id0, OpenMode.ForRead) is not CivilDb.LabelGroup lg0b) continue;
+                    if (!lg0b.GetType().Name.Contains("BandLabelGroup")) continue;
+                    uint n0b = lg0b.SubEntityCount;
+                    if (n0b == 0) continue;
+                    double sy = 0, sx = 0; int c0 = 0;
+                    for (uint q = 0; q < n0b; q++)
+                        try { var e0 = lg0b.GetAt(q); if (e0 != null) { sy += e0.LabelLocation.Y; sx += e0.LabelLocation.X; c0++; } }
+                        catch { }
+                    if (c0 == 0) continue;
+                    double mx = sx / c0;
+                    if (mx < xLo || mx > xHi) continue;              // 다른 종단도 것
+                    glist.Add((id0, sy / c0));
+                }
+                catch { }
+            }
+            glist.Sort((a, b) => b.Y.CompareTo(a.Y));                 // Y 큰 것(위)이 밴드 0
+            var bandOf = new System.Collections.Generic.Dictionary<ObjectId, int>();
+            for (int i = 0; i < glist.Count; i++) bandOf[glist[i].Id] = i;
+            // ★★★[검토 0902 HIGH] <b>두 축이 같은지 먼저 확인한다.</b>
+            //   <c>iPlan/iCut/iFill</c>은 <b>하단 밴드만</b> 센 번호(<c>GetBottomBandItems</c>)인데,
+            //   <c>glist</c>는 모형공간의 <b>모든</b> 밴드 라벨 그룹을 Y로 줄 세운 번호다.
+            //   상단 밴드가 있으면(<see cref="ProfileCommand"/>가 만든다) Y가 더 커서 0번부터 차지해
+            //   <b>하단 번호가 통째로 밀린다</b> — 지반고 칸이 계획고로 오인되고 예외도 안 난다.
+            //   → 개수가 다르면 <b>빈칸·두칸 판정을 끄고</b> 종전 동작으로 물러선다.
+            //   (<see cref="WallBandPairs"/>도 같은 위험에 칸수 관문을 두고 있다.)
+            bool bandsOk = nBandTop > 0 && glist.Count == nBandTop;
+            if (!bandsOk) axisOff = glist.Count;
+
             foreach (ObjectId id in ms)
             {
                 object o;
-                try { o = tr.GetObject(id, OpenMode.ForWrite); } catch { continue; }
-                // 밴드 값 글씨만 — 선형 라벨(측점·기하점)은 종단도 밖의 것이라 건드리지 않는다.
+                try { o = tr.GetObject(id, OpenMode.ForRead); } catch { continue; }
                 if (o is not CivilDb.LabelGroup lg) continue;
-                string kind = o.GetType().Name;
-                if (!kind.Contains("BandLabelGroup")) continue;
-
+                if (!o.GetType().Name.Contains("BandLabelGroup")) continue;
                 uint n;
                 try { n = lg.SubEntityCount; } catch { continue; }
-                if (n < 2) continue;
-                groups++;
+                if (n < 1) continue;
 
-                // ① 자리를 읽어 <b>왼쪽부터</b> 줄 세운다. 목록 순서가 측점 순서라는 보장이 없다.
-                var items = new List<(uint I, double X, double W)>();
+                // 벽 두 값을 받는 칸은 계획고·절토고·성토고 셋뿐이다. 이름을 못 읽으면 종전대로.
+                int bIdx = bandOf.TryGetValue(id, out int bi2) ? bi2 : -1;
+                bool isPlan = bIdx >= 0 && bIdx == iPlan;
+                bool isCut  = bIdx >= 0 && bIdx == iCut;
+                bool isFill = bIdx >= 0 && bIdx == iFill;
+                bool pairBand = bandsOk ? (isPlan || isCut || isFill) : true;   // 축이 안 맞으면 종전대로
+                if (bIdx < 0) pairBand = true;
+
+                // ① 제 측점(앵커)을 읽어 왼쪽부터 줄 세운다. 밀린 것을 빼야 진짜 자리가 나온다.
+                var items = new List<(uint I, double A, double Nail, bool Two, bool Wall, bool First, bool Bend)>();
+                var blanks = new System.Collections.Generic.List<uint>();   // 값이 없는 칸 — 자리를 안 먹는다
                 for (uint i = 0; i < n; i++)
                 {
                     try
                     {
                         var se = lg.GetAt(i);
-                        // ★[검토 0827] <b>숨긴 라벨은 벌릴 것이 없다.</b>
-                        if (se == null || !se.Visibility) continue;
-                        double x = se.LabelLocation.X;
-                        // ★<b>밀린 것을 빼고</b> 벽과 맞춘다 — 다시 돌릴 때는 이미 밀려 있다.
+                        if (se == null) continue;
                         double d0 = 0; try { d0 = se.DraggedOffset.X; } catch { }
-                        double ax = x - d0;
-                        bool two = false;
-                        foreach (double wx in wallX)
-                            if (System.Math.Abs(wx - ax) < minGap * 0.25) { two = true; break; }
-                        if (two) wide++;
-                        items.Add((i, x, two ? wideGap : minGap));
+                        double ax = se.LabelLocation.X - d0;
+                        if (double.IsNaN(ax)) continue;   // NaN 하나가 그룹 나머지를 조용히 멈춘다
+                        // ★가장 가까운 측점 <b>하나</b>에 붙인다 — "근처에 있으면 굴곡부"가 아니다.
+                        string why = ""; double st0 = double.NaN;
+                        double bd0 = double.MaxValue;
+                        foreach (var mk in marks)
+                        {
+                            double d = System.Math.Abs(mk.X - ax);
+                            if (d < bd0) { bd0 = d; why = mk.Why; st0 = mk.St; }
+                        }
+                        // ★[검토 0902] 붙인 측점이 <b>터무니없이 멀면</b> 목록이 낡은 것이다 —
+                        //   자를 대지 않고(맞추는 것은 그대로 둔다) <b>수로 남겨</b> 다음 판에 짚힌다.
+                        // ★★★[검토 0902 HIGH] <b>먼 측점의 사유를 믿으면 안 된다.</b>
+                        //   종전엔 "터무니없이 멀다"고 <b>세기만 하고</b>, 그 낡은 사유로 굴곡부를 단정해
+                        //   <b>지웠다</b> — 50m 떨어진 굴곡부 때문에 이 자리 값이 사라질 수 있었다(기준 4 위반).
+                        //   → 자 안에 들어온 것만 믿는다. 밖이면 <b>지우지도, 빈칸으로 보지도 않는다</b>.
+                        bool trustMark = bd0 <= StationMarks.MergeTol * 10.0;
+                        if (!trustMark) { farMark++; if (bd0 < double.MaxValue && bd0 > farMarkMax) farMarkMax = bd0; }
+                        bool bend = trustMark && StationMarks.IsBendOnly(why);
+                        // ★값이 없는 칸은 <b>자리를 안 먹는다</b>(JACK 0902).
+                        if (trustMark && pairBand && bIdx >= 0 && bandsOk)
+                        {
+                            double zp = ZAt(tr, pidPad, st0), zg = ZAt(tr, pidGnd, st0);
+                            bool blank = isPlan ? double.IsNaN(zp)
+                                       : isCut  ? (double.IsNaN(zp) || double.IsNaN(zg) || zg - zp <= 1e-6)
+                                       : isFill ? (double.IsNaN(zp) || double.IsNaN(zg) || zp - zg <= 1e-6)
+                                                : false;
+                            if (blank) { blankSkip++; blanks.Add(i); continue; }   // 목록에 안 넣는다 = 자리를 안 먹는다
+                        }
+                        items.Add((i, ax, ax, false, false, false, bend));
                     }
                     catch { }
                 }
-                if (items.Count < 2) continue;
-                items.Sort((a, b) => a.X.CompareTo(b.X));
+                // ★★★[검토 0902 HIGH] <b>되돌리기를 먼저 한다.</b> 종전엔 <c>items.Count &lt; 1</c>이면
+                //   여기서 빠져나가 <b>빈칸 밀림 되돌리기도, 숨긴 라벨 되살리기도 통째로 건너뛰었다</b> —
+                //   한 칸이 전부 빈칸이면 지난 판이 숨긴 글씨가 <b>영영 안 돌아온다</b>.
+                //   이 저장소가 이미 한 번 당한 사고다(<see cref="WallBandPairs"/> 주석).
+                RestoreBlanks(lg, blanks);
+                if (items.Count < 1) { RestoreHidden(lg, n, blanks); continue; }
+                items.Sort((a, b) => a.A.CompareTo(b.A));
+
+                // ② 벽 하나에 글씨 <b>하나</b>만 붙인다.
+                //   측점이 1.8cm 간격으로 붙은 곳이 있어, 자를 그냥 대면 둘이 같이 걸려 두 칸을 두 번 잡는다.
+                int wideG = 0;
+                foreach (var w in walls)
+                {
+                    int bi = -1; double bd = minGap * 0.25;
+                    for (int k = 0; k < items.Count; k++)
+                    {
+                        if (items[k].Wall) continue;
+                        double d = System.Math.Abs(items[k].A - w.X);
+                        if (d < bd) { bd = d; bi = k; }
+                    }
+                    if (bi < 0) continue;
+                    var t0 = items[bi];
+                    items[bi] = (t0.I, t0.A, w.X, pairBand && w.Two, true, w.First, false);
+                    if (pairBand && w.Two) wideG++;
+                }
+
+                if (items[items.Count / 2].A < xLo || items[items.Count / 2].A > xHi) { skipView++; continue; }
+                groups++; wide += wideG;
+                try { lg.UpgradeOpen(); } catch { }
 
                 for (int k = 1; k < items.Count; k++)
-                    worstBefore = System.Math.Min(worstBefore, items[k].X - items[k - 1].X);
+                    worstBefore = System.Math.Min(worstBefore, items[k].A - items[k - 1].A);
 
-                // ② 앞 글씨가 놓인 자리를 기준으로, 모자라면 그만큼 민다.
-                //    <b>민 자리를 기준으로</b> 다음을 보므로 몰려 있으면 줄줄이 밀려 나란히 선다.
-                double prev = double.NegativeInfinity, prevW = 0;
-                foreach (var it in items)
+                // ③ <b>자리를 정한다 — 메모리에서 몇 번 다시 돌리고, 쓰기는 한 번이다.</b>
+                //
+                //   ★★★[JACK 0902 기준 다섯 줄 · 인터뷰 답]
+                //     ① 측점이 뭉치면 글자를 <b>좌에서 우로</b> 벌려 겹치지 않게 한다.
+                //     ② 옹벽은 한 측점에 아래위 둘을 쓰되, 계단이 붙으면 <b>윗선만</b>(그 판단은 <see cref="WallXs"/>).
+                //     ③ 자리가 없고 <b>굴곡부</b>이면 그 측점은 <b>생략</b>한다.
+                //     ④ 주측점·보조측점은 <b>어떤 경우에도</b> 생략하지 않는다
+                //        — 인터뷰에서 <b>데이라잇·절성경계·꺾임점도 생략 안 함</b>으로 정해졌다(굴곡부만).
+                //     ⑤ [측점추가]·[전후측점]으로 넣은 것은 <b>무조건 들어가고</b>, 겹치면 오른쪽으로 밀린다
+                //        — 사유가 '직접 찍음'이라 <b>굴곡부가 아니므로</b> 이 알고리즘에서 절대 안 지워진다.
+                //
+                //   ★<b>옹벽이 이긴다</b>(JACK 인터뷰): 무리 첫 계단은 <b>제 측점에 못을 박고</b>,
+                //     앞에서 밀려온 글자가 부딪치면 <b>그 앞의 굴곡부를 하나 지우고 다시 돌린다</b>.
+                //     지울 것이 없으면(앞이 전부 보존 대상이면) 그때만 어쩔 수 없이 겹치고, 그 수를 로그에 적는다.
+                //     <b>자를 대지 않는다</b> — 못 한 것을 숫자로 남긴다.
+                var pos = new double[items.Count];
+                var forced = new bool[items.Count];   // 벽에 자리를 내주려고 지운기로 한 굴곡부(라운드 넘어 유지)
+                var drop = new bool[items.Count];
+                int wallHit = 0;
+                for (int round = 0; round <= items.Count + 1; round++)
                 {
-                    // 가운데 사이 거리 = (앞 폭 + 내 폭)/2 — 둘 다 하나짜리면 예전 식과 같다.
-                    double want = System.Math.Max(it.X, prev + (prevW + it.W) * 0.5);
-                    double dx = want - it.X;
-                    if (dx > 1e-9)
+                    System.Array.Clear(drop, 0, drop.Length);
+                    double prevRight = double.NegativeInfinity;
+                    bool again = false;
+                    wallHit = 0;
+                    for (int k = 0; k < items.Count; k++)
                     {
-                        try
+                        if (forced[k]) { drop[k] = true; continue; }
+                        var it = items[k];
+                        // ★★★[JACK 0902 "좌우 배치할때 이미 좌측에 측점이 겹칠만큼 가까이 있으면 어떻게 돼?"]
+                        //   두 값을 <b>측점 좌우로</b> 가르니, 차지하는 자리도 <b>왼쪽으로 같이 커진다</b>.
+                        //   종전엔 오른쪽으로만 늘어난다고 보고 <c>[pos, pos+pairGap]</c>로 재어,
+                        //   그대로 두면 <b>왼쪽 이웃과 조용히 겹친다</b>.
+                        //   → <b>좌우 대칭</b>으로 재다: 왼쪽끝 <c>pos − 반칸 − 글자반</c> · 오른쪽끝 <c>pos + 반칸 + 글자반</c>.
+                        //   왼쪽 이웃이 그 안으로 들어오면 — 지울 수 있는 굴곡부면 지우고,
+                        //   못 지우면 <b>옹벽이 오른쪽으로 밀린다</b>(JACK이 정한 규칙 그대로).
+                        double half = (it.Two ? pairGap : 0.0) * 0.5;
+                        double lo = prevRight == double.NegativeInfinity
+                                  ? double.NegativeInfinity : prevRight + half + minGap * 0.5;
+                        // 굴곡부는 밀리는 대신 지운다 — 자리가 남으면 제 측점에 그대로 선다.
+                        if (it.Bend && it.A < lo - 1e-9) { drop[k] = true; continue; }
+                        double p = (it.Wall && it.First) ? it.Nail                       // 무리 첫 계단 — 못
+                                 : it.Wall ? System.Math.Max(it.Nail, lo)                // 뒤 계단 — 밀린다
+                                           : System.Math.Max(it.A, lo);                  // 나머지 — 밀린다
+                        if (it.Wall && it.First && p - half - minGap * 0.5 < prevRight - 1e-9)
                         {
-                            var se = lg.GetAt(it.I);
-                            if (se != null)
+                            // ★★★[검토 0902 CRITICAL] <b>지우는 것은 못 바로 앞의 '막는 사슬' 안에서만.</b>
+                            //   종전엔 왼쪽 끝까지 훑으며 굴곡부를 찾았다 — 실측으로 벽 하나 때문에
+                            //   측점 16.67m부터 319.42m까지 <b>굴곡부 28개를 헛되이 지우고</b> 그러고도 실패했다.
+                            //   막는 것은 <b>못 자리에 걸친 글씨들</b>뿐이다 — 거기서 벗어나면 멈춘다.
+                            double nailLeft = it.Nail - half - minGap * 0.5;
+                            bool freed = false;
+                            for (int j = k - 1; j >= 0; j--)
                             {
-                                // ★★[검증 0902] <b>덮어쓰지 않고 더한다.</b>
-                                //   <c>dx</c>는 <b>이미 밀린 자리</b>(<c>it.X</c>)를 기준으로 잰 값이다.
-                                //   그대로 넣으면 지난 판의 밀림 <c>D0</c>가 사라져 <c>want − D0</c>에 선다 —
-                                //   [도곽]만 다시 돌릴 때 조용히 어긋나던 자리다.
-                                double d0 = 0;
-                                try { d0 = se.DraggedOffset.X; } catch { }
-                                se.DraggedOffset = new Vector3d(d0 + dx, 0, 0);
-                                // 옮긴 글씨에 지시선이 붙으면 밴드 칸이 지저분해진다 — 끈다.
-                                try { se.LeaderVisibility = Autodesk.Civil.LeaderVisibilityType.AlwaysHide; } catch { }
-                                moved++;
+                                if (drop[j]) continue;
+                                double rj = pos[j] + (items[j].Two ? pairGap : 0.0) * 0.5 + minGap * 0.5;
+                                if (rj <= nailLeft + 1e-9) break;          // 여기부터는 안 막는다
+                                if (items[j].Bend && !forced[j]) { forced[j] = true; freed = true; break; }
                             }
+                            if (freed) { again = true; break; }
+                            // ★★★[JACK 0902 인터뷰: "그때만 옹벽이 밀린다"]
+                            //   지울 굴곡부가 없으면 못을 <b>푸고 밀린다</b> — 글자가 겹쳐
+                            //   셋째 숫자처럼 보이는 일은 만들지 않는다. 밀린 것은 수로 남긴다.
+                            p = System.Math.Max(it.Nail, lo);
+                            wallHit++;
                         }
-                        catch { }
+                        pos[k] = p;
+                        // ★[검토 0902] 못이 앞보다 왼쪽이면 <c>prevRight</c>가 <b>뒤로 간다</b> —
+                        //   그러면 다음 글씨가 벽이 아니라 <b>그 앞 글씨와</b> 겹친다. 안 물러게 한다.
+                        prevRight = System.Math.Max(prevRight, p + half + minGap * 0.5);
                     }
-                    prev = want; prevW = it.W;
-                    if (worstAfter > minGap * 0.999) worstAfter = minGap;
+                    if (!again) break;
                 }
+
+                // ④ 이제 한 번만 쓴다.
+                double prevR2 = double.NegativeInfinity;
+                for (int k = 0; k < items.Count; k++)
+                {
+                    var it = items[k];
+                    // 굴곡부만 보임/숨김을 우리가 정한다 — 매 판 다시 정하므로 여러 번 돌려도 같다.
+                    //   (벽 라벨의 숨김은 <see cref="WallBandPairs"/>의 일이다 — 여기서 건드리지 않는다.)
+                    // ★★★[검토 0902 HIGH] <b>되돌리기를 굴곡부 밖으로 버헌다.</b>
+                    //   종전엔 <c>it.Bend</c>일 때만 보임/숨김을 손봅는데, 측점 목록이 비면
+                    //   (AutoCAD를 꺼다 켜면 <c>LastMarks</c>가 비어 있다) <c>Bend</c>가 전부 false가 되어
+                    //   <b>지난 판이 숨긴 글씨가 영영 안 돌아온다</b> — 그 칸이 빈칸으로 굳는다.
+                    //   이 저장소가 <see cref="WallBandPairs"/>에서 이미 한 번 당한 사고다.
+                    //   ★벽 라벨은 <see cref="WallBandPairs"/>가 숨기는 것이므로 <b>여기서 손대지 않는다</b>.
+                    if (!it.Wall)
+                        try { var seB = lg.GetAt(it.I); if (seB != null && seB.Visibility == drop[k]) seB.Visibility = !drop[k]; }
+                        catch { }
+                    if (drop[k]) { dropped++; continue; }
+                    if (it.Bend) kept++;
+                    if (it.Wall && it.First) nailed++;
+
+                    double half2 = (it.Two ? pairGap : 0.0) * 0.5;
+                    double left = pos[k] - half2 - minGap * 0.5, right = pos[k] + half2 + minGap * 0.5;
+                    if (prevR2 > double.NegativeInfinity) clearMin = System.Math.Min(clearMin, left - prevR2);
+                    prevR2 = right;
+
+                    // 밀림은 <c>자리 − 제 측점</c> 그 자체다 — 더하면 지난 판이 쌓인다.
+                    //   벽을 왼쪽으로 당겨야 할 때는 <b>음수</b>가 된다 — 그래야 측점에 선다.
+                    double nd = pos[k] - it.A;
+                    bool wrote = false;
+                    try
+                    {
+                        var se = lg.GetAt(it.I);
+                        if (se != null)
+                        {
+                            double d0 = 0; try { d0 = se.DraggedOffset.X; } catch { }
+                            if (d0 > nd + 1e-9) { back++; backMax = System.Math.Max(backMax, d0 - nd); }
+                            // ★[검토 0902] X만 보면 <b>Y 밀림이 살아남아</b> 글씨가 밴드 칸 밖으로 나간다.
+                            double dy0 = 0; try { dy0 = se.DraggedOffset.Y; } catch { }
+                            if (System.Math.Abs(nd - d0) > 1e-9 || System.Math.Abs(dy0) > 1e-9)
+                                se.DraggedOffset = new Vector3d(nd, 0, 0);
+                            if (nd > 1e-9) moved++;
+                            // 밴드 값은 어느 경우에도 지시선이 필요 없다 — 조건 없이 끔다.
+                            try { se.LeaderVisibility = Autodesk.Civil.LeaderVisibilityType.AlwaysHide; nLead++; } catch { }
+                            wrote = true;
+                        }
+                    }
+                    catch { }
+                    if (!wrote) fail++;
+                    if (right > xR) outside++;
+                    if (nd > anchorOff) anchorOff = nd;
+                }
+                crowd += wallHit;
             }
             tr.Commit();
 
-            if (groups == 0) { log.AppendLine("  밴드 값 벌리기: 밴드 라벨 그룹을 못 찾았다"); return; }
-            log.AppendLine($"  밴드 값 벌리기: 그룹 {groups}개 · 옮긴 글씨 {moved}개"
-                         + (wallX.Count > 0 ? $" · 옹벽 두칸 {wide}개(폭 {wideGap:F2}m)" : " · 옹벽 목록 없음")
-                         + $" · 최소간격 {(worstBefore == double.MaxValue ? 0 : worstBefore):F3}m"
-                         + $" → {minGap:F3}m 이상(종이 {MinLabelGapMm:F1}mm)"
-                         + (moved == 0 ? "  ※겹친 곳이 없어 그대로 뒀다" : ""));
+            if (groups == 0)
+            {
+                log.AppendLine("  밴드 값 벌리기: 밴드 라벨 그룹을 못 찾았다"
+                             + (skipView > 0 ? $" — 다른 종단도 것이라 건너뛴 것이 {skipView}그룹(가로범위 {xLo:F1}~{xHi:F1})" : ""));
+                return;
+            }
+            int wTwo = 0, wOne = 0, wFirst = 0;
+            foreach (var w in walls) { if (w.Two) wTwo++; else wOne++; if (w.First) wFirst++; }
+            log.AppendLine($"  밴드 값 벌리기: 그룹 {groups}개 · 앵커에서 벗어난 글씨 {moved}개(최대 {anchorOff:F2}m)"
+                         + $" · 벽 {walls.Count}곳(두칸 {wTwo} · 한칸 {wOne} · 무리첫 못박음 {nailed}개/{wFirst * groups})"
+                         + (back > 0 ? $" · 지난판 밀림 되돌림 {back}개(최대 {backMax:F2}m)" : "")
+                         + $" · 측점 최소간격 {(worstBefore == double.MaxValue ? 0 : worstBefore):F3}m"
+                         + $" → 가장 좀은 틈 {(clearMin == double.MaxValue ? 0 : clearMin):F3}m(0 이상이면 안 겹친다)"
+                         + (marks.Count > 0 ? $" · 굴곡부 지움 {dropped}개(살린 굴곡부 {kept}개 · 측점 목록 {marks.Count}곳)" : " · 측점 목록 없음([종단]을 먼저)")
+                         + $" · 지시선 끔 글씨 {nLead}개"
+                         + (crowd > 0 ? $" · 지울 굴곡부가 없어 밀린 벽 {crowd}개" : "")
+                         + (outside > 0 ? $" · ⚠오른쪽 눈금 밖으로 나간 글씨 {outside}개" : "")
+                         + (fail > 0 ? $" · ⚠못 쓴 글씨 {fail}개" : "")
+                         + (skipView > 0 ? $" · 다른 종단도 것 건너뜀 {skipView}그룹" : "")
+                         + (blankSkip > 0 ? $" · 값 없는 칸 {blankSkip}개(자리 안 먹음)" : "")
+                         + (farMark > 0 ? $" · ⚠측점과 멀리 붙은 글씨 {farMark}개(최대 {farMarkMax:F2}m)" : "")
+                         + (axisOff >= 0 ? $" · ⚠밴드 번호축이 안 맞아 빈칸·두칸 판정을 끔(그룹 {axisOff}개 vs 밴드 {nBandTop}칸)" : "")
+                         + (wide > 0 ? $" · 두칸 잡은 라벨 {wide}개" : ""));
         }
         catch (System.Exception ex) { log.AppendLine("  밴드 값 벌리기 실패 — " + Brief(ex)); }
     }

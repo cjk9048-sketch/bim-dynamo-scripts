@@ -274,6 +274,7 @@ public sealed class ProfileCommand
         //   ※ '남겨두고추가'일 때는 건지지 않는다 — 옛 선형이 그대로 살아 있으므로
         //     새 선형에 같은 측점을 또 넣으면 <b>두 벌</b>이 된다.
         var carry = new System.Collections.Generic.List<StationMarks.Mark>();
+        var carryDrop = new System.Collections.Generic.List<double>();   // ★[JACK 0903] 지운 자리도 건진다
 
         // ★★[검토 반영 · 치명] <b>건진 뒤 중간에 포기하면 그 사본이 유일본이라 통째로 사라진다.</b>
         //   원본(선형의 확장사전)은 이미 지워졌고 새 선형은 아직 없다 —
@@ -294,7 +295,7 @@ public sealed class ProfileCommand
         if (rebuild)
         {
             log.AppendLine("이전 종단도 정리(다시 그리기 — 묻지 않음):");
-            carry = HarvestMarks(db, cdoc, log);
+            carry = HarvestMarks(db, cdoc, log, carryDrop);
             int wiped = EraseExisting(db, cdoc, log);
             ed.WriteMessage($"\n  · 이전 종단도를 지웠습니다(객체 {wiped}개).");
         }
@@ -310,7 +311,7 @@ public sealed class ProfileCommand
             if (kr.Status == PromptStatus.None || kr.StringResult == "지우고새로")
             {
                 log.AppendLine("이전 종단도 정리:");
-                carry = HarvestMarks(db, cdoc, log);      // ★[v32.35] 선형과 함께 죽기 전에 건진다
+                carry = HarvestMarks(db, cdoc, log, carryDrop);      // ★[v32.35] 선형과 함께 죽기 전에 건진다
                 int erased = EraseExisting(db, cdoc, log);
                 ed.WriteMessage($"\n  · 이전 종단도를 지웠습니다(객체 {erased}개 — 노선·도곽범위·표고바·제목부·배치 포함).");
             }
@@ -393,6 +394,14 @@ public sealed class ProfileCommand
                 if (ok) trM.Commit(); else trM.Abort();
             }
             catch (System.Exception ex) { log.AppendLine("  수동 측점 이월 실패 — " + ex.Message); }
+            // ★[JACK 0903] 지운 자리도 함께 이월한다 — 안 그러면 선형을 다시 만들 때 되살아난다.
+            try
+            {
+                using var trD = db.TransactionManager.StartTransaction();
+                if (carryDrop.Count > 0) StationMarks.SaveDropped(trD, alignId, carryDrop);
+                trD.Commit();
+            }
+            catch { }
             log.AppendLine(ok
                 ? $"  수동 측점 {carry.Count}개를 새 선형으로 이월했다"
                 : $"  ⚠수동 측점 {carry.Count}개를 이월하지 못했다 — 이번 판에서 사라진다");
@@ -1571,6 +1580,27 @@ public sealed class ProfileCommand
                     bool onMain = System.Math.Abs(all[i].Station - System.Math.Round(all[i].Station / interval) * interval) < 1e-6;
                     all[i] = all[i] with { Why = onMain ? $"정측점({interval:0.#}m)" : $"보조측점({sub:0.#}m)" };
                 }
+            // ★★★[JACK 0902 "너무 떡지는 부분에 한해서 변곱 측점은 삭제하는 기준을 좀 두자"]
+            //   밴드가 어느 측점을 지워도 되는지 알려면 <b>측점의 종류</b>가 있어야 한다.
+            //   단면검토선 목록(<see cref="LastSampleLinesPublic"/>)은 측점값만 들고 있어
+            //   정측점인지 굴곡부인지 가릴 수 없었다 — 여기서 통째로 넘긴다.
+            // ★★★[JACK 0903] <b>지운 자리를 여기서 뺀다.</b> 여기가 측점 목록이 확정되는 <b>한 곳</b>이라
+            //   종단도·단면검토선·횡단면도·밴드가 모두 이 결과를 쓴다 — 한 자리만 고치면 전부 따라온다.
+            var dropped = new System.Collections.Generic.List<double>();
+            try
+            {
+                using var trD2 = db.TransactionManager.StartTransaction();
+                dropped = StationMarks.LoadDropped(trD2, alignId);
+                trD2.Commit();
+            }
+            catch { }
+            if (dropped.Count > 0)
+            {
+                int before0 = all.Count;
+                all.RemoveAll(m => StationMarks.IsDropped(dropped, m.Station));
+                log.AppendLine($"  지운 자리 {dropped.Count}곳 → 측점 {before0 - all.Count}개 뺐다");
+            }
+            LastMarks = new System.Collections.Generic.List<StationMarks.Mark>(all);
             log.AppendLine($"측점 목록 {all.Count}개(정측점 {interval:0.#}m + 굴곡부 + 수동):\n    " +
                            string.Join("\n    ", all.ConvertAll(m => $"{m.Station,9:0.00}m  {StationMarks.Fmt(m.Station, interval),-12} {m.Why}")));
 
@@ -2550,7 +2580,8 @@ public sealed class ProfileCommand
     /// <para>선형이 여럿이면 <b>전부 모아</b> 합친다(같은 측점은 <see cref="StationMarks.MergeTol"/> 안에서 하나로).
     /// 어느 하나만 고르면 나머지에 적어 둔 밸브실이 조용히 사라진다.</para></summary>
     private static System.Collections.Generic.List<StationMarks.Mark> HarvestMarks(
-        Database db, CivilApp.CivilDocument cdoc, System.Text.StringBuilder log)
+        Database db, CivilApp.CivilDocument cdoc, System.Text.StringBuilder log,
+        System.Collections.Generic.List<double> dropOut = null)
     {
         var all = new System.Collections.Generic.List<StationMarks.Mark>();
         try
@@ -2560,6 +2591,10 @@ public sealed class ProfileCommand
             {
                 if (tr.GetObject(aid, OpenMode.ForRead) is not CivilDb.Alignment al ||
                     !al.Name.StartsWith(SectionCommand.AlignBase)) continue;
+                // ★[JACK 0903] 지운 자리도 같이 건진다 — 안 건지면 선형을 다시 만들 때 되살아난다.
+                if (dropOut != null)
+                    foreach (double d0 in StationMarks.LoadDropped(tr, aid))
+                        if (!StationMarks.IsDropped(dropOut, d0)) dropOut.Add(d0);
                 foreach (var m in StationMarks.Load(tr, aid))
                     if (!all.Exists(x => System.Math.Abs(x.Station - m.Station) <= StationMarks.MergeTol))
                         all.Add(m);
@@ -2642,6 +2677,11 @@ public sealed class ProfileCommand
 
     /// <summary>★[JACK 0825] 벽의 앞·뒤 자리 — 종단 막대가 지표면을 읽을 때 쓴다.</summary>
     internal static System.Collections.Generic.List<StationMarks.WallSpan> LastWallSpans = new();
+
+    /// <summary>★[JACK 0902] <b>측점 목록을 종류와 함께</b> 남긴다 — 밴드가 떡질 때
+    /// <b>무엇부터 지울지</b>를 정하려면 정측점·굴곡부·옹벽을 가려야 하기 때문이다.
+    /// <para><see cref="LastSampleLinesPublic"/>은 측점 <b>값만</b> 들고 있어 종류를 못 말해 준다.</para></summary>
+    internal static System.Collections.Generic.List<StationMarks.Mark> LastMarks = new();
 
     /// <summary>★★[JACK 0826] 측점 수집 때 만든 <b>막대 목록</b> — 이미 중심 보정을 받은 것이다.
     /// <para>JACK: <i>"아직도 절토 옹벽은 시점부에 측점이 만들어져."</i> 실측:

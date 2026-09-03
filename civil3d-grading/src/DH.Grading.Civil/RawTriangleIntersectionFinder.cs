@@ -32,6 +32,9 @@ public static class RawTriangleIntersectionFinder
     private static readonly double[] InteriorTs = { 0.25, 0.5, 0.75 }; // 지름길 판정용 선분 내부 검사 지점
 
     /// <summary>직전 실행 진단(단계별 개수) — 끊김/누락 원인 추적용.</summary>
+    /// <summary>★[JACK 0903] 직전 교선의 <b>껍질컷</b> 결과 — 조기 반환에서도 안 잃게 따로 둔다.</summary>
+    public static string LastAClipDiag { get; private set; } = "";
+
     public static string LastDiag { get; private set; } = "";
 
     /// <summary>[검증로그] 실행마다 단계별 상태를 이 파일에 기록 — 스샷 대신 정밀 분석용(JACK 제안).</summary>
@@ -71,13 +74,45 @@ public static class RawTriangleIntersectionFinder
     }
 
     /// <param name="plan">계획 폴리곤(선택). 주어지면 ①계획과 무관한 루프/선 삭제 ②계획과 닿는 폐합 루프는 계획과 합집합.</param>
-    public static List<List<Point3>> GetExactDaylight(TinSurface surfA, TinSurface surfB, IReadOnlyList<Point3>? plan = null)
+    /// <param name="aOuterRing">★★★[JACK 0903 "옹벽 변환했는데 지표면이 이상하게 작성되는 부분이 발생했어"]
+    /// <b>A면의 진짜 바깥선.</b> 주면 이 선 밖의 삼각형은 교선 계산에서 뺀다.
+    ///
+    /// <para><b>왜 필요한가(예측→실측으로 확정).</b> 1단계 가상면은 브레이크라인만 넣고 <b>경계를 안 넣는다</b>.
+    /// Civil 3D는 경계가 없으면 점들을 <b>가장 크게 감싸는 볼록한 껍질까지</b> 삼각형으로 채운다.
+    /// 사면만 있을 땐 바깥선이 볼록해서 껍질과 같아 아무 일이 없다. 그런데 <b>둘레의 일부에만</b> 옹벽을 씌우면
+    /// 그 구간의 내밀기가 120.3m → 15.7m로 줄어 바깥선이 <b>ㄱ자로 파이고</b>, 껍질이 그 자리를 가로질러
+    /// <b>바닥 자료가 없는 가짜 삼각형</b>을 깐다(실측: 가상절토_DH 최장 변 <b>192.02m</b> @210346,510101,
+    /// 계단 지도에 어느 단에도 없는 표고 159.3m).
+    /// 데이라잇은 그 가짜 위에서 계산되어 절토 교선이 <b>3985㎡ → 183㎡</b>로 무너졌다.</para>
+    ///
+    /// <para><b>왜 여기서 거르나(표면에 경계를 넣지 않고).</b> 저장소를 전수 확인한 결과
+    /// <b>경계가 안 붙은 가상면을 보는 곳은 이 함수 하나뿐</b>이다 — 나머지(토량·노리선·INFRAWORKS·종단·횡단)는
+    /// 전부 클립 이후를 본다. 그래서 정확한 문장은 "가상면을 항상 잘라라"가 아니라
+    /// <b>"교선을 구하기 직전에만 잘라라"</b>이다. 도면 객체를 하나도 안 바꾸므로
+    /// 경계 개수·순서 사고(이 저장소에서 이미 세 번 났다)가 원리적으로 불가능하고,
+    /// 실패해도 <b>종전 동작</b>으로 자연히 돌아온다.</para>
+    ///
+    /// <para><b>자기교차한 링에 주의.</b> 옹벽 전환부에서 바깥선은 자기접촉할 수 있다.
+    /// <see cref="CleanRing"/>은 <b>가장 큰 조각 하나만</b> 남기므로(옹벽 로브를 조용히 버린다)
+    /// 반드시 <see cref="NtsSupport.ToCleanGeometry"/>(조각 전부 보존)를 쓴다.</para></param>
+    public static List<List<Point3>> GetExactDaylight(TinSurface surfA, TinSurface surfB,
+                                                     IReadOnlyList<Point3>? plan = null,
+                                                     IReadOnlyList<Point3>? aOuterRing = null)
     {
         LastCutSpans.Clear(); LastBridgeSpans.Clear(); // 실행마다 초기화(이전 실행 잔재 방지)
         var dbg = new System.Text.StringBuilder();
         void WriteLog() { try { System.IO.File.WriteAllText(LogPath, dbg.ToString()); } catch { } }
         try { dbg.AppendLine($"[DHXSEC 진단] A='{surfA.Name}' B='{surfB.Name}' 계획={(plan == null ? "없음" : plan.Count + "점")}"); }
         catch { dbg.AppendLine("[DHXSEC 진단]"); }
+        // ★[JACK 0903] 바깥선을 준비한다 — 못 만들면 <b>거르지 않고</b> 종전대로 간다(로그에 남긴다).
+        var aClipSw = System.Diagnostics.Stopwatch.StartNew();
+        Geometry? aClipGeom = aOuterRing != null && aOuterRing.Count >= 3
+                            ? NtsSupport.ToCleanGeometry(aOuterRing) : null;
+        NetTopologySuite.Geometries.Prepared.IPreparedGeometry? aClip =
+            aClipGeom != null ? NetTopologySuite.Geometries.Prepared.PreparedGeometryFactory.Prepare(aClipGeom) : null;
+        int aKept = 0, aDrop = 0, aEdge = 0;
+        string aClipMsg = aOuterRing == null ? "" : aClip == null ? " · ⚠껍질컷 못 함(바깥선 무효)" : "";
+
         // A 삼각형 POCO 추출(Civil 객체는 여기서만 접근 후 Dispose → 병렬 안전). CrossesSurface 필터 없음.
         var aTris = new List<Tri>();
         double aMinX = double.MaxValue, aMinY = double.MaxValue, aMaxX = double.MinValue, aMaxY = double.MinValue;
@@ -92,6 +127,24 @@ public static class RawTriangleIntersectionFinder
                 if (!plane.Valid) continue;
                 var poly = ToNtsPolygon(p1, p2, p3);
                 if (poly == null) continue;
+                // ★[JACK 0903] 껍질이 메운 가짜 삼각형을 여기서 뺀다.
+                //   <b>세 단계로 나눠 싸게 판정한다</b> — 대부분은 통째로 안이거나 통째로 밖이라 한 번에 끝난다.
+                //   경계에 걸친 것(얇은 띠 하나뿐)만 실제로 잘라 보고 <b>절반 이상 남으면 살린다</b>.
+                //   무게중심 하나로 판정하지 않는 이유: 다이브가 브레이크라인에서 빠져 있어
+                //   삼각형이 파인 자리의 입을 <b>가로지를</b> 수 있고, 그때 무게중심은 안쪽에 떨어질 수 있다.
+                if (aClip != null)
+                {
+                    if (aClip.Contains(poly)) { }
+                    else if (!aClip.Intersects(poly)) { aDrop++; continue; }
+                    else
+                    {
+                        aEdge++;
+                        double inA;
+                        try { inA = aClipGeom!.Intersection(poly).Area; } catch { inA = poly.Area; }
+                        if (inA < poly.Area * 0.5) { aDrop++; continue; }
+                    }
+                    aKept++;
+                }
                 double mn = Math.Min(p1.Z, Math.Min(p2.Z, p3.Z));
                 double mx = Math.Max(p1.Z, Math.Max(p2.Z, p3.Z));
                 aTris.Add(new Tri(poly, plane, mn, mx));
@@ -101,7 +154,27 @@ public static class RawTriangleIntersectionFinder
             }
             finally { t.Dispose(); }
         }
-        if (aTris.Count == 0) { LastDiag = "A표면 삼각형 0"; return new List<List<Point3>>(); }
+        aClipSw.Stop();
+        if (aClip != null)
+        {
+            // ★[검토 0903] <b>자르는 자의 크기도 함께 남긴다.</b> 바깥선이 잘못 만들어져(자기교차 정리 실패 등)
+            //   실제보다 작아지면 <b>멀쩡한 삼각형을 버리면서도 "껍질컷 성공"으로 보인다</b> —
+            //   조용히 틀리는 유일한 길이라, 면적을 찍어 눈으로 걸러 낼 수 있게 한다.
+            // ★★[JACK 0903 "여전히 똑같은 오류가 나"] 껍질컷이 34366개 중 <b>114개(0.3%)</b>만 버렸다 —
+            //   즉 가짜 삼각형이 <b>자 안쪽</b>에 들어 있다. 자를 만드는 과정에서 파인 자리가 메워졌는지
+            //   확인하려면 <b>정리 전 넓이와 정리 후 넓이</b>를 나란히 봐야 한다.
+            //   ToCleanGeometry는 자기교차한 링에서 "링이 감싼 <b>모든</b> 영역"을 복원하므로,
+            //   파인 자리가 닫힌 칸으로 잡히면 <b>메워진다</b>. 그러면 넓이가 늘어난다.
+            double rawA = 0;
+            for (int i = 0; i + 1 < aOuterRing!.Count; i++)
+                rawA += aOuterRing[i].X * aOuterRing[i + 1].Y - aOuterRing[i + 1].X * aOuterRing[i].Y;
+            rawA = Math.Abs(rawA * 0.5);
+            aClipMsg = $" · 껍질컷 {aDrop}개 버림/{aKept + aDrop}개(걸친 {aEdge})"
+                     + $" 자={aClipGeom!.Area:F0}㎡(정리전 {rawA:F0}㎡ · 링 {aOuterRing.Count}점 · 조각 {aClipGeom.NumGeometries})"
+                     + $" {aClipSw.ElapsedMilliseconds}ms";
+        }
+        LastAClipDiag = aClipMsg;
+        if (aTris.Count == 0) { LastDiag = "A표면 삼각형 0" + aClipMsg; return new List<List<Point3>>(); }
         var aEnv = new Envelope(aMinX, aMaxX, aMinY, aMaxY);
 
         var tree = new STRtree<Tri>();
@@ -791,7 +864,8 @@ public static class RawTriangleIntersectionFinder
         }
 
         // 진단: 끊김이 남으면 이 숫자로 원인 특정(교차예외↑=삼각형 교차 실패 / 지름길컷↑=검증이 자름 / 틈메움=접선지대 연결 / 경계폐합=측량 범위 밖 폐합).
-        LastDiag = $"원세그 {segLines.Count} · 교차예외 {exSkip} · 병합선 {mergedLines} · 접힘제거 {foldsRemoved} · 지름길컷 {bogusCuts} · 틈메움 {bridged} · 경계폐합 {hullClosed} · 계획삭제 {dropped} · 계획폐합 {planClosed} · 계획합집합 {unioned} · 띠부호 {bandSign} · 출력 {result.Count}";
+        LastDiag = LastAClipDiag.TrimStart(' ', '\u00b7', ' ') + (LastAClipDiag.Length > 0 ? " · " : "")
+                 + $"원세그 {segLines.Count} · 교차예외 {exSkip} · 병합선 {mergedLines} · 접힘제거 {foldsRemoved} · 지름길컷 {bogusCuts} · 틈메움 {bridged} · 경계폐합 {hullClosed} · 계획삭제 {dropped} · 계획폐합 {planClosed} · 계획합집합 {unioned} · 띠부호 {bandSign} · 출력 {result.Count}";
         DumpChains("최종 출력");
         dbg.AppendLine(LastDiag);
         WriteLog(); // 검증로그 저장 — 스샷 대신 이 파일로 정밀 분석(JACK 제안)

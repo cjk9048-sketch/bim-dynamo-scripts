@@ -380,6 +380,29 @@ public sealed class CreateGradingCommand
                 tr.Commit();
             }
 
+            // ★★★[검토 0903 — 판별 계측] <b>여기가 두 가설을 가르는 자리다.</b>
+            //
+            //   <b>왜 하필 여기인가.</b> 1단계 가상면(<c>BuildVirtualSlope</c>)은 브레이크라인만 넣고
+            //   <b>경계(Outer/Hide)를 안 넣는다</b>. 그리고 이 저장소 어디에도 삼각형 최대 길이 설정이 없다.
+            //   그러면 Civil 3D는 점들을 <b>가장 크게 감싸는 볼록한 껍질까지</b> 삼각형으로 다 채운다.
+            //
+            //   옹벽을 씌우면 절토 계단이 NW 모서리에서만 120.3m 밖 → 15.7m로 확 줄어, 바깥선이
+            //   <b>ㄱ자로 파인 모양</b>이 된다. 파인 자리를 껍질이 메우면 <b>바닥 데이터가 없는 가짜 삼각형</b>이
+            //   깔리고, 교선(데이라잇)은 <b>그 가짜 삼각형 위에서</b> 계산된다 — 절토 교선이
+            //   3985㎡ → 183㎡로 무너진 것이 이것으로 설명된다.
+            //
+            //   <b>예측을 미리 적어 둔다(맞히기가 아니라 판별이다).</b>
+            //     메운다면 → 가상절토_DH 최장 변이 <b>100m 이상</b>, 좌표는 NW 파인 자리 안
+            //     안 메운다면 → 15m 안팎으로 사면 판과 비슷
+            //   재기만 하고 도면은 안 건드린다(읽기 전용).
+            try
+            {
+                DiagLog.Append("\n■ 1단계 가상면 검사(경계 주입 전)"
+                             + SurfaceEdgeScan(db, cutId, "가상절토_DH")
+                             + SurfaceEdgeScan(db, fillId, "가상성토_DH") + "\n");
+            }
+            catch { }
+
             // ── 2단계: 교선 생성 → 각 가상면에 Outer 경계 주입 (성토 → 절토 순서, JACK 설계) ──
             stw.Stage("2단계 교선·경계주입");
             // DHXSEC 엔진(RawTriangleIntersectionFinder)을 그대로 호출. 초록선 그리기는 맨 마지막 한 번만 —
@@ -387,6 +410,32 @@ public sealed class CreateGradingCommand
             var allLoops = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
             var injectedRings = new System.Collections.Generic.Dictionary<string, (ObjectId id, System.Collections.Generic.List<Point3> ring)>();
             // 표면별 '최종' 경계 링(정규화 재주입 시 갱신) — 4단계 노리선 클립 기준(§0-HH 다음 단계)
+            // ★★★[JACK 0903 "옹벽 변환했는데 지표면이 이상하게 작성되는 부분이 발생했어"]
+            //   <b>계측부터.</b> 실측으로 갈린 것은 여기까지다:
+            //     사면 변환 → 절토링 <b>633점</b> · 링 최장변 <b>1.00m</b> · 불일치 0
+            //     옹벽 변환 → 절토링 <b>220점</b> · 링 최장변 <b>102.31m</b> · 불일치 18 · 초록선이 톱니
+            //   즉 <b>점 413개가 빠지고 그 자리가 102m짜리 직선 한 변</b>이 됐다.
+            //   그런데 지금 로그는 <b>끝 숫자만</b> 말한다 — 어느 단계에서 줄었는지는 안 남는다.
+            //   → 링이 지나는 <b>네 자리</b>에서 같은 자를 대고 찍는다(점수 · 최장변 · 그 자리 좌표).
+            //     추측하지 않고 <b>어디서</b>부터 좁힌다.
+            var ringTrace = new System.Text.StringBuilder();
+            void TraceRing(string where, string lab, System.Collections.Generic.List<Point3>? r)
+            {
+                try
+                {
+                    if (r == null) { ringTrace.Append($"\n    [링추적] {where} · {lab}: 없음"); return; }
+                    double mx = 0; double ax = 0, ay = 0;
+                    for (int i = 1; i < r.Count; i++)
+                    {
+                        double dx = r[i].X - r[i - 1].X, dy = r[i].Y - r[i - 1].Y;
+                        double d = System.Math.Sqrt(dx * dx + dy * dy);
+                        if (d > mx) { mx = d; ax = r[i - 1].X; ay = r[i - 1].Y; }
+                    }
+                    ringTrace.Append($"\n    [링추적] {where} · {lab}: {r.Count}점 · 최장변 {mx:F2}m @ {ax:F0},{ay:F0}");
+                }
+                catch { }
+            }
+
             var finalRings = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<Point3>>();
             // [v2 번들 — 리뷰 D] 계획관련 '전체' 순수교선 링(다조각 보존) — 옹벽선 영역필터·작은 정상영역용
             var allRings = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<System.Collections.Generic.List<Point3>>>();
@@ -401,13 +450,19 @@ public sealed class CreateGradingCommand
                 var groundSampler2 = new CachedGroundSurface(groundTin2);
                 var pureLoops = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<System.Collections.Generic.List<Point3>>>();
                 var vsIdOf = new System.Collections.Generic.Dictionary<string, ObjectId>();
-                void ComputePure(ObjectId vsId, string label)
+                // ★★★[JACK 0903 "옹벽 변환했는데 지표면이 이상하게 작성되는 부분이 발생했어"]
+                //   <paramref name="outerRing"/> = 이 사면의 <b>진짜 바깥선</b>(마지막 링).
+                //   가상면에는 경계가 없어 Civil 3D가 <b>볼록껍질까지</b> 삼각형을 채우는데,
+                //   둘레 일부만 옹벽이면 바깥선이 ㄱ자로 파여 그 자리가 <b>가짜 삼각형</b>으로 메워진다.
+                //   교선은 그 위에서 계산되므로 절토 교선이 3985㎡ → 183㎡로 무너졌다.
+                //   → <b>교선을 구하기 직전에만</b> 걸러 낸다. 도면 객체는 하나도 안 바꾼다.
+                void ComputePure(ObjectId vsId, string label, System.Collections.Generic.IReadOnlyList<Point3>? outerRing)
                 {
                     if (vsId.IsNull) return;
                     try
                     {
                         var vs = (TinSurface)tr2.GetObject(vsId, OpenMode.ForWrite);
-                        var loops = RawTriangleIntersectionFinder.GetExactDaylight(vs, groundTin2, null);
+                        var loops = RawTriangleIntersectionFinder.GetExactDaylight(vs, groundTin2, null, outerRing);
                         diagX += $"\n■ 교선({label})\n" + RawTriangleIntersectionFinder.LastDiag + "\n";
                         try // [리뷰 L-1] 상세 진단이 다음 호출에 덮이지 않게 표면별 사본 보존
                         {
@@ -425,8 +480,17 @@ public sealed class CreateGradingCommand
                         bndMsg += $"\n{label}: 교선 생성 실패 — {ex.Message}";
                     }
                 }
-                ComputePure(fillId, "성토");
-                ComputePure(cutId, "절토");
+                // 마지막 링 = 바깥 링. 이 저장소가 이미 같은 자를 쓴다(GradingBuilder.cs:112 "계단 전체").
+                //   면적으로 고르지 않는 이유: 자기교차한 링은 신발끈 면적이 서로 상쇄돼 거의 0이 되어
+                //   <b>안쪽 링을 바깥으로 착각</b>할 수 있다.
+                // ★★[JACK 0903 "여전히 똑같은 오류가 나"] <b>링을 파일로 뽑는다.</b>
+                //   껍질컷이 0.3%만 버렸다 = 자가 파인 자리까지 덮고 있다는 뜻인데,
+                //   자가 잘못된 것인지 링이 애초에 안 파인 것인지는 <b>링을 직접 봐야</b> 안다.
+                //   도면을 여러 번 돌리는 대신 한 번에 다 뽑아 오프라인에서 재현한다(형상 무변경).
+                DumpRingsCsv("절토", cut.Rings);
+                DumpRingsCsv("성토", fill.Rings);
+                ComputePure(fillId, "성토", fill.Rings.Count > 0 ? fill.Rings[fill.Rings.Count - 1] : null);
+                ComputePure(cutId, "절토", cut.Rings.Count > 0 ? cut.Rings[cut.Rings.Count - 1] : null);
 
                 // [0728 — JACK] 사면(데이라잇)이 원지반(측량) 경계에 닿을 정도면 경고 후 수행 중단.
                 //   경계 밖 지반 정보가 없어 결과(정지면·토량)를 신뢰할 수 없음 — 계획고/구배/측량범위 조정 필요.
@@ -508,6 +572,9 @@ public sealed class CreateGradingCommand
                     // ⓐ finalRing = 순수 교선 최대 루프(전이선 정확) — 초록선은 필터된 순수 루프 전부 그림.
                     var pureBest = Largest(own, out double pureArea);
                     if (pureBest != null) { finalRings[label] = pureBest; allRings[label] = own; allLoops.AddRange(own); }
+                    TraceRing("①교선링 뽑은 직후", label, pureBest);
+                    // ★[JACK 0903] 옹벽 판에서만 10점짜리 두 번째 링이 생겼다(최장변 37.63m) — 어디서 오는지 전부 찍는다.
+                    for (int oi = 0; oi < own.Count; oi++) TraceRing($"①-조각[{oi}]", label, own[oi]);
                     // ⓑ 클립용 = 교선 ∪ 계획 전체(+스냅·정제) → 표면 Outer 경계 주입.
                     var clipRings = RawTriangleIntersectionFinder.UnionLoopsWithPlan(
                         own, opp, boundary, groundSampler2, out string udiag, subtractOpposite: false);
@@ -742,12 +809,26 @@ public sealed class CreateGradingCommand
                     var cleanedR = RawTriangleIntersectionFinder.CleanRing(info.ring);
                     if (cleanedR == null) { pasteLog += $"\n  → {failLabel} 링 정규화 실패"; break; }
                     var vsT = (TinSurface)tr3.GetObject(info.id, OpenMode.ForWrite);
-                    GradingBuilder.ReplaceOuterBoundary(vsT, cleanedR, failLabel == "절토" ? boundary : null); // 절토는 도넛(Hide) 재적용
+                    // ★[검토 0903] <b>도넛 조건을 처음 걸 때와 똑같이 맞춘다.</b>
+                    //   여기서는 "절토냐"만 보고 다시 뚫었는데, 도넛을 <b>처음</b> 거는 자리는
+                    //   "절토와 성토가 <b>둘 다 실제로 있을 때만</b>"이다(위 '순수 절토/성토' 주석).
+                    //   순수 절토 부지에서 절토 붙이기가 한 번 실패하면 여기가 <b>없던 구멍을 처음으로 뚫어</b>
+                    //   계획부지에 구멍이 난다 — 그 주석이 경고한 바로 그 결과다.
+                    bool donut = failLabel == "절토" && !cutId.IsNull && !fillId.IsNull
+                              && finalRings.ContainsKey("절토") && finalRings.ContainsKey("성토");
+                    GradingBuilder.ReplaceOuterBoundary(vsT, cleanedR, donut ? boundary : null);
                     // [링 2개 구조] finalRings는 순수교선 유지 — 클립링 정규화는 injected(클립)에만 반영.
                     pasteLog += $"\n  → {failLabel} 경계 정규화 재주입(정점 {cleanedR.Count})";
+                    TraceRing("②경계 정규화 재주입 뒤", failLabel,
+                              finalRings.TryGetValue(failLabel, out var fr2) ? fr2 : null);
                     injectedRings.Remove(failLabel); // 같은 표면 재정규화 무한루프 방지
                 }
                 pasteLog += ok ? "\n  ★합성 성공 — 정지면_DH 완성" : "\n  ✖합성 실패 — 자문 대기";
+                // ★[검토 0903 · JACK "도면 수행 시 무거우면 안 되"] <b>합성면 검사는 뺐다.</b>
+                //   합성면은 원지반을 깔고 만드는 면이라 삼각형이 25만 개(314ms)인데 그 대부분이
+                //   <b>원지반</b>이다 — 실제로 최장 변 549m가 찍힌 자리도 정지 구역이 아니라
+                //   수치지도 서쪽 끝이었다. <b>정지와 무관한 것을 비싸게 잰 것이다.</b>
+                //   순수 정지면(1~2ms)만 재도 부채꼴은 똑같이 보인다.
 
                 // ── ★★[v32.2 · JACK 0812] <b>순수 정지면 — 원지반을 빼고 정지된 면만.</b>
                 //   위 합성면은 <b>원지반을 깔고</b> 시작하므로 정지 바깥에서도 값이 나오고, 그 값은 원지반과 같다.
@@ -809,7 +890,8 @@ public sealed class CreateGradingCommand
                     if (outline.Count > 0)
                     {
                         GradingBuilder.DrawDaylight(db, trO, outline, "DH-정지경계", 3, layerOff: false);
-                        oMsg = $"정지경계 재작도(순수면 외곽선): {oDiag} · {GradingBuilder.LastDaylightDiag}";
+                        oMsg = $"정지경계 재작도(순수면 외곽선): {oDiag} · {GradingBuilder.LastDaylightDiag}"
+                             + FoldDiag(outline) + SurfaceEdgeScan(db, pureId, PureBase);
                     }
                     else oMsg = $"정지경계 재작도 건너뜀 — 외곽선을 못 뽑았다({oDiag}) · 종전 교선 작도를 그대로 둔다";
                 }
@@ -849,6 +931,7 @@ public sealed class CreateGradingCommand
                             ? new System.Collections.Generic.List<System.Collections.Generic.List<Point3>> { fr0 }
                             : null);
                     if (ringList == null) continue;
+                    for (int ri = 0; ri < ringList.Count; ri++) TraceRing($"③옹벽선 확정 직전[{ri}]", label, ringList[ri]);
                     foreach (var fr in ringList)
                     {
                         if (fr == null || fr.Count < 3) continue;
@@ -997,6 +1080,8 @@ public sealed class CreateGradingCommand
                 using Transaction tr4 = db.TransactionManager.StartTransaction();
                 GradingBundleStore.SaveAll(db, tr4, save);
                 tr4.Commit();
+                TraceRing("④번들에 담기 직전", "절토", bundle.CutFinalRing);
+                TraceRing("④번들에 담기 직전", "성토", bundle.FillFinalRing);
                 bundleMsg = $"번들 저장 v{GradingBundleStore.Version} — 구역 {save.Count}개 · 이번 구역 경계 {boundary.Count}점 · " +
                             $"절토링 {(bundle.CutFinalRing?.Count ?? 0)}점 · 성토링 {(bundle.FillFinalRing?.Count ?? 0)}점 · " +
                             $"클립링 절 {(bundle.CutClipRing?.Count ?? 0)}점/성 {(bundle.FillClipRing?.Count ?? 0)}점 · " +
@@ -1009,6 +1094,12 @@ public sealed class CreateGradingCommand
             {
                 DiagLog.Append(
                     "\n■ 번들 저장(4단계)\n  " + bundleMsg.Replace("\n", "\n  ") + "\n");
+                // ★[검토 0903] <b>계측기가 사고 순간에 꺼지면 안 된다.</b>
+                //   종전에는 링추적을 bundleMsg에 실어 보냈는데, 그 블록은 통째로 catch된다 —
+                //   번들 저장이 실패하는 판(<b>지금 쫓는 것이 바로 그런 판이다</b>)에서는
+                //   "번들 저장 실패"만 남고 어느 단계에서 링이 무너졌는지는 못 본다.
+                //   → 성공하든 실패하든 <b>따로</b> 내보낸다.
+                if (ringTrace.Length > 0) DiagLog.Append(ringTrace.ToString() + "\n");
             }
             catch { }
 
@@ -1186,6 +1277,29 @@ public sealed class CreateGradingCommand
 
     /// <summary>[진단 0729] 병합 교선 루프 전체를 CSV로 — 진단 로그와 같은 폴더에 DHGRADE_교선덤프_{label}.csv.
     /// 형식: loop,idx,x,y,z (loop=-1은 계획경계). 루프 전멸(생성 실패) 시에만 호출 — 오프라인 재현용.</summary>
+    /// <summary>★[JACK 0903] 계단 링 전부를 CSV로 — 오프라인 재현용(형상 무변경).
+    /// 열: 링번호, 점번호, X, Y, Z. 링번호가 클수록 바깥이다.</summary>
+    private static void DumpRingsCsv(string label, System.Collections.Generic.IReadOnlyList<System.Collections.Generic.List<Point3>> rings)
+    {
+        try
+        {
+            if (rings == null || rings.Count == 0) return;
+            var sb = new System.Text.StringBuilder("ring,i,x,y,z\n");
+            for (int r = 0; r < rings.Count; r++)
+            {
+                var g = rings[r];
+                for (int i = 0; i < g.Count; i++)
+                    sb.Append(r).Append(',').Append(i).Append(',')
+                      .Append(g[i].X.ToString("F4")).Append(',')
+                      .Append(g[i].Y.ToString("F4")).Append(',')
+                      .Append(g[i].Z.ToString("F4")).Append('\n');
+            }
+            string dir = System.IO.Path.GetDirectoryName(DiagLog.FilePath) ?? ".";
+            System.IO.File.WriteAllText(System.IO.Path.Combine(dir, $"DHGRADE_계단링_{label}.csv"), sb.ToString());
+        }
+        catch { }
+    }
+
     private static void DumpLoopsCsv(string label,
         System.Collections.Generic.List<System.Collections.Generic.List<Point3>> loops,
         System.Collections.Generic.List<Point3> boundary)
@@ -1316,6 +1430,127 @@ public sealed class CreateGradingCommand
     }
 
     /// <summary>가상표면(ObjectId)을 지운다 — daylight 없는 억지 생성 표면 정리용.</summary>
+    /// <summary>★★★[JACK 0903 "구배를 0으로 주고 하면 오류 없이 잘 되는데
+    /// 구배를 1.5로 주고 만든 걸 옹벽 변환하면 그런 오류가 생겨"]
+    /// <b>초록선(정지경계)이 톱니인지 숫자로 잰다.</b>
+    ///
+    /// <para><b>톱니는 눈으로만 보이고 로그에는 안 남았다.</b> 지금 로그가 말하는 것은 점 수(695개)뿐이라
+    /// 그 점들이 <b>매끈하게</b> 놓였는지 <b>지그재그로</b> 놓였는지는 알 수 없다. 그래서 자를 하나 댄다:
+    /// 앞 변과 뒤 변이 <b>90°보다 크게 되꺾이면</b> 한 번 센다. 매끈한 곡선은 한 걸음에 조금씩만 돌아서
+    /// 거의 안 걸리고, 옹벽 윗선·아랫선 사이를 왔다 갔다 하면 <b>거의 매 점마다</b> 걸린다.</para>
+    ///
+    /// <para>가장 심한 자리의 <b>좌표</b>도 남긴다 — 도면에서 바로 그 자리를 볼 수 있게.</para></summary>
+    private static string FoldDiag(System.Collections.Generic.List<System.Collections.Generic.List<Point3>> rings)
+    {
+        try
+        {
+            if (rings == null || rings.Count == 0) return "";
+            int fold = 0, pts = 0; double worst = 1.0, wx = 0, wy = 0;
+            double minLen = double.MaxValue, maxLen = 0, mx = 0, my = 0;
+            foreach (var r in rings)
+            {
+                if (r == null || r.Count < 3) continue;
+                pts += r.Count;
+                // ★[검토 0903] <b>이음매 한 칸이 사각지대였다.</b>
+                //   닫힌 링은 첫 점을 끝에 한 번 더 넣는다(SurfaceOutline). 종전 루프는 1..n-2라
+                //   <b>마지막 변과 이음매 꼭짓점을 한 번도 안 쟀다</b> — 그런데 이음매는 걷기가 끊겼다
+                //   다시 시작하는 자리라 <b>긴 변이 가장 잘 생기는 곳</b>이다.
+                //   "접힘 2%로 깨끗하다"는 판정이 이 사각지대 탓일 수 있어 링 전체를 감아서 돈다.
+                int n = r.Count;
+                bool closed = System.Math.Abs(r[0].X - r[n - 1].X) < 1e-6
+                           && System.Math.Abs(r[0].Y - r[n - 1].Y) < 1e-6;
+                int m = closed ? n - 1 : n;          // 닫힌 링은 겹친 끝점을 빼고 센다
+                int lo = closed ? 0 : 1;
+                for (int i = lo; i < (closed ? m : n - 1); i++)
+                {
+                    int im = closed ? (i - 1 + m) % m : i - 1;
+                    int ip = closed ? (i + 1) % m : i + 1;
+                    double ax = r[i].X - r[im].X, ay = r[i].Y - r[im].Y;
+                    double bx = r[ip].X - r[i].X, by = r[ip].Y - r[i].Y;
+                    double la = System.Math.Sqrt(ax * ax + ay * ay), lb = System.Math.Sqrt(bx * bx + by * by);
+                    if (la > 1e-9)
+                    {
+                        if (la < minLen) minLen = la;
+                        if (la > maxLen) { maxLen = la; mx = r[i - 1].X; my = r[i - 1].Y; }
+                    }
+                    if (la < 1e-9 || lb < 1e-9) continue;
+                    double cos = (ax * bx + ay * by) / (la * lb);   // 1=직진 · -1=완전히 되꺾임
+                    if (cos < 0.0) fold++;
+                    if (cos < worst) { worst = cos; wx = r[i].X; wy = r[i].Y; }
+                }
+            }
+            double deg = System.Math.Acos(System.Math.Max(-1.0, System.Math.Min(1.0, worst))) * 180.0 / System.Math.PI;
+            double rate = pts > 0 ? fold * 100.0 / pts : 0;
+            return $" · 접힘 {fold}곳/{pts}점({rate:F0}%) · 가장 심한 곳 {deg:F0}도 @ {wx:F0},{wy:F0}"
+                 + $" · 변길이 {(minLen == double.MaxValue ? 0 : minLen):F3}~{maxLen:F2}m(최장 @ {mx:F0},{my:F0})";
+        }
+        catch { return ""; }
+    }
+
+    /// <summary>★★★[JACK 0903 "옹벽 변환했는데 지표면이 이상하게 작성되는 부분이 발생했어"]
+    /// <b>완성된 지표면의 삼각형 변을 직접 잰다 — 증상 자체를 재는 자다.</b>
+    ///
+    /// <para><b>왜 여기까지 왔나.</b> 초록선(정지경계)을 의심해 접힘을 쟀더니 <b>2%로 깨끗했고</b>,
+    /// 링도 처음부터 203점으로 <b>정상적으로 태어났다</b>. 두 가설이 다 죽었으니 남은 것은 <b>면 자체</b>다.
+    /// 스샷의 부채꼴은 삼각망이 <b>멀리 떨어진 두 점을 이어</b> 생기는 모양이므로,
+    /// <b>비정상적으로 긴 변</b>을 세면 있는지 없는지가 곧바로 나온다.</para>
+    ///
+    /// <para><b>무겁지 않게.</b> JACK: <i>"중요한 건 도면 수행 시 무거우면 안 되"</i> —
+    /// 삼각형 수를 <see cref="ScanCap"/>으로 막고 걸린 시간도 함께 남겨 <b>비용을 눈으로 본다</b>.
+    /// 재기만 하고 도면은 건드리지 않는다.</para></summary>
+    private const int ScanCap = 400000;
+
+    /// <remarks>★[검토 0903] <b>이름이 아니라 그 면을 받는다.</b> 이름으로 찾으면
+    /// 옛 면이 안 지워졌을 때(<c>EraseSurfacesByBaseName</c>은 실패를 삼킨다) 새 면은 <c>_2</c>가 되고
+    /// 검사는 <b>옛 면</b>을 잰다 — 그러면 이 자가 낸 숫자를 근거로 쓸 수 없다.</remarks>
+    private static string SurfaceEdgeScan(Database db, ObjectId id, string label)
+    {
+        try
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            if (id.IsNull) return $"\n  [면검사] {label}: 없음";
+            using var tr = db.TransactionManager.StartTransaction();
+            if (tr.GetObject(id, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.TinSurface tin)
+            { tr.Commit(); return $"\n  [면검사] {label}: TIN이 아니다"; }
+
+            int n = 0, over = 0; double worst = 0, wx = 0, wy = 0; bool capped = false;
+            const double Long = 5.0;   // 등고선 간격 1m — 정상 변은 1~3m다. 5m를 넘으면 먼 점끼리 이어진 것.
+            // ★[검토 0903] <b>네이티브 메모리를 닫는다.</b> 삼각형 컬렉션과 삼각형은 둘 다 IDisposable이고,
+            //   이 저장소의 다른 자리는 이미 전부 닫고 있다(검토 0901). 안 닫으면 25만 삼각형마다 래퍼가
+            //   파이널라이저 대기열에 쌓여, JACK이 겪은 <i>"간혹 느려지다가 리소스가 부족한지 튕긴다"</i>와
+            //   같은 압박이 된다.
+            using (var tris = tin.GetTriangles(false))
+            {
+                foreach (Autodesk.Civil.DatabaseServices.TinSurfaceTriangle t in tris)
+                {
+                    try
+                    {
+                        if (++n > ScanCap) { capped = true; break; }
+                        var a = t.Vertex1.Location; var b = t.Vertex2.Location; var c = t.Vertex3.Location;
+                        for (int e = 0; e < 3; e++)
+                        {
+                            var pp = e == 0 ? a : e == 1 ? b : c;
+                            var qq = e == 0 ? b : e == 1 ? c : a;
+                            double dx = qq.X - pp.X, dy = qq.Y - pp.Y;
+                            double d = System.Math.Sqrt(dx * dx + dy * dy);
+                            if (d > Long) over++;
+                            if (d > worst) { worst = d; wx = (pp.X + qq.X) / 2; wy = (pp.Y + qq.Y) / 2; }
+                        }
+                    }
+                    finally { t.Dispose(); }
+                }
+            }
+            tr.Commit();
+            sw.Stop();
+            // ★[검토 0903] 삼각형마다 세 변을 다 세므로 <b>안쪽 변은 두 번 세어진다</b>(바깥 변만 한 번).
+            //   숫자를 부풀린 채로 두면 다음 판단이 틀어진다 — 무엇을 센 것인지 그대로 적는다.
+            return $"\n  [면검사] {label}: 삼각형 {n}개{(capped ? "(상한에서 멈춤)" : "")}"
+                 + $" · {Long:F0}m 넘는 변 {over}회 검사(안쪽 변은 2회 계수) · 최장 {worst:F2}m @ {wx:F0},{wy:F0}"
+                 + $" · {sw.ElapsedMilliseconds}ms";
+        }
+        catch (System.Exception ex) { return $"\n  [면검사] {label}: 못 쟀다 — {ex.Message}"; }
+    }
+
     private static void EraseSurface(Transaction tr, ObjectId id)
     {
         try { if (!id.IsNull && tr.GetObject(id, OpenMode.ForWrite) is Autodesk.AutoCAD.DatabaseServices.Entity e) e.Erase(); }

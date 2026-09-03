@@ -56,19 +56,36 @@ internal static class MapPage
   /* ★막대가 몇 줄로 접히든 지도가 그만큼 줄어든다 — 52px을 박아 두면 좁은 도킹바에서
      막대가 지도 위를 덮고, 그 자리는 클릭도 안 먹는다(검토 0901). */
   body{display:flex;flex-direction:column}
+  /* ★★★[JACK 0902 — 창 크기 때문에 계속 윗줄됐다 아랫줄됐다 하는데
+     그냥 깔끔하게 아랫줄로 넣어]
+     종전엔 막대가 <b>한 줄짜리 flex + wrap</b>이라 도킹바 폭이 조금만 바뀌어도
+     뒤쪽 셋(범위없음·가져오기·그만두기)이 <b>윗줄과 아랫줄을 오갔다</b>.
+     → 막대를 <b>세로 2줄</b>로 나누고 줄마다 따로 접게 한다.
+     높이는 여전히 <c>flex:0 0 auto</c>라 지도가 그만큼 줄어든다(막대가 지도를 안 덮는다). */
   #bar{flex:0 0 auto;background:#1f2430;color:#eaeef7;
-       padding:10px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:14px}
+       padding:9px 14px;display:flex;flex-direction:column;gap:8px;font-size:14px}
+  #bar .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
   #bar b{color:#8ab4ff}
   #map{flex:1 1 auto;min-height:0;background:#111}
+  /* ★★★[JACK 0902 — 점 찍을려고 하는데 마우스가 손바닥 모양이라 좀 매칭이 안 되는데.
+     보통 손바닥 모양 마우스는 이동할때쟐나]
+     Leaflet 기본 커서는 <b>손바닥(grab)</b>이다 — 그건 <b>지도를 끔다</b>는 뜻이라
+     모서리를 <b>찍는</b> 일과 뜻이 안 맞는다.
+     → 찍는 동안에만 <b>십자</b>로 바꾸고, 두 점을 다 찍으면 손바닥으로 돌아온다. */
+  #map.pick,
+  #map.pick .leaflet-container,
+  #map.pick .leaflet-grab,
+  #map.pick .leaflet-interactive{cursor:crosshair}
   button{font:inherit;padding:6px 12px;border-radius:6px;border:1px solid #4a5268;
          background:#2b3242;color:#eaeef7;cursor:pointer}
   button.go{background:#2f6fed;border-color:#2f6fed;font-weight:bold}
   button:disabled{opacity:.45;cursor:default}
-  #info{margin-left:auto;color:#c9d3e8}
+  #info{color:#c9d3e8}   /* 아랫줄 맨 앞이라 오른쪽으로 밀던 margin-left:auto 는 뺀다 */
   #noweb{display:none;flex:1 1 auto;background:#fff;
          padding:24px;font-size:15px;line-height:1.7}
 </style></head><body>
 <div id='bar'>
+ <div class='row'>
   <span><b>모서리 2곳</b> 클릭</span>
   <button id='clr'>다시 찍기</button>
   <label title='지도에만 표시 · 도면에는 안 들어옴'><input type='checkbox' id='cadview'> 지적 보기</label>
@@ -77,9 +94,12 @@ internal static class MapPage
   <label><input type='checkbox' id='lbl' checked> 지명·도로</label>
   <label><input type='radio' name='bm' value='Satellite' checked> 항공사진</label>
   <label><input type='radio' name='bm' value='Base'> 일반지도</label>
+ </div>
+ <div class='row'>
   <span id='info'>범위 없음</span>
   <button class='go' id='send' disabled>이 범위 가져오기</button>
   <button id='cancel'>그만두기</button>
+ </div>
 </div>
 <div id='map'></div>
 <div id='noweb'>
@@ -206,10 +226,14 @@ internal static class MapPage
   });
 
   var p1=null,rect=null,mark=null,box=null;
+  var mapDiv=document.getElementById('map');
+  function pickOn(v){ if(mapDiv) mapDiv.classList.toggle('pick', !!v); }
+  pickOn(true);
   function reset(){
     if(rect){map.removeLayer(rect);rect=null;}
     if(mark){map.removeLayer(mark);mark=null;}
     p1=null;box=null;send.disabled=true;info.textContent='범위 없음';
+    pickOn(true);
   }
   document.getElementById('clr').addEventListener('click',reset);
 
@@ -234,6 +258,8 @@ internal static class MapPage
     if(w<1||h<1){ info.textContent='범위 너무 작음'; send.disabled=true; return; }
     info.textContent='약 '+Math.round(w)+'m × '+Math.round(h)+'m';
     send.disabled=false;
+    // ★[검토 0902] 여기서 손바닥으로 바꾸면 안 된다 — 바로 위에서 p1=null 로 되돌려
+    //   <b>다음 클릭이 곷바로 새 찍기</b>다. 커서만 ‘끌기’라고 말하면 거짓이 된다.
   });
 
   send.addEventListener('click',function(){
