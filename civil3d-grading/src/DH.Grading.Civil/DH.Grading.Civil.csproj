@@ -90,4 +90,41 @@
           DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" ContinueOnError="true" />
   </Target>
 
+  <!--
+    ★★★[JACK 0903 "닫았어 설치해줘" — 그런데 깔린 것은 어제 DLL이었다]
+    <b>빌드 결과를 번들 폴더에 곧바로 넣는다.</b>
+
+    <b>왜.</b> 설치 스크립트(배포/설치.ps1)는 <b>번들 폴더</b>를 통째로 복사한다.
+    그런데 빌드는 bin\에만 결과를 놓았고 둘을 잇는 단계가 없었다 —
+    그래서 "빌드 성공 · 설치 완료"라고 적히면서도 <b>실제로는 어제 DLL이 다시 깔렸다</b>.
+    md5도 맞았다(둘 다 옛것이라 맞은 것이다). 사람이 매번 손으로 옮기는 한 언제든 또 난다.
+    → 잇는 단계를 여기 못 박는다. 이제 빌드하면 번들이 곧 최신이다.
+  -->
+  <!--
+    ★[검토 0903 — 치명] <b>이름을 하나씩 적었더니 4개를 빠뜨렸다.</b>
+      bin에는 10개인데 적어 둔 것은 6개 — NetTopologySuite·Npgsql·Microsoft.Extensions 둘이 빠졌다.
+      NetTopologySuite는 교선 계산(RawTriangleIntersectionFinder)이 쓰므로 <b>없으면 정지가 죽는다</b>.
+      지금 안 터진 이유는 설치본에 <b>예전에 손으로 넣은 것이 남아 있어서</b>일 뿐이다 —
+      새 컴퓨터·배포 zip·번들을 지우고 다시 깔면 그 자리에서 터진다.
+    → <b>목록을 손으로 적지 않는다.</b> OutDir에 나온 것을 통째로 옮긴다.
+      참조 DLL(Autodesk 등)은 Private=false라 애초에 OutDir에 오지 않으므로 섞일 것이 없다.
+
+    ★[검토 0903] ContinueOnError를 뺐다 — 복사가 실패해도 "빌드 성공"이 되어
+      <b>이 단계가 없애려던 바로 그 사고</b>(옛 DLL을 최신인 줄 알고 설치)가 되살아난다.
+    ★[검토 0903] Release에서만 돌게 했다 — 없으면 Debug 빌드 한 번에 배포 번들이
+      조용히 Debug 판으로 바뀐다(로그에도 안 남는다).
+    ★[검토 0903] WebView2Loader가 OutDir에 놓인 <b>뒤에</b> 돌아야 하므로 그 타깃 뒤로 못 박았다
+      (종전에는 선언 순서에만 기대고 있었다).
+  -->
+  <Target Name="CopyToBundle" AfterTargets="CopyWebView2Loader" Condition="'$(Configuration)' == 'Release'">
+    <ItemGroup>
+      <_BundlePayload Include="$(OutDir)*.dll" />
+      <_BundlePayload Include="$(OutDir)DH.Grading.*.pdb" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_BundlePayload)"
+          DestinationFolder="$(MSBuildProjectDirectory)\DH.Grading.bundle\Contents"
+          SkipUnchangedFiles="true" />
+    <Message Importance="high" Text="번들 갱신 — 구성 $(Configuration)" />
+  </Target>
+
 </Project>

@@ -324,7 +324,10 @@ public sealed class ExcavCommand
                     var vid = GradingBuilder.BuildVirtualSlope(db, tr, vs.Rings, $"{VirtName}{k + 1}", vs.CornerLines, groundId);
                     var vTin = (TinSurface)tr.GetObject(vid, OpenMode.ForWrite);
                     var bTin = (TinSurface)tr.GetObject(baseId, OpenMode.ForRead);
-                    var loops = RawTriangleIntersectionFinder.GetExactDaylight(vTin, bTin, null);
+                    // ★[JACK 0903] 굴착 법면도 같은 함수를 쓴다 — 바깥선을 함께 넘겨 껍질이 메운
+                    //   가짜 삼각형을 교선에서 뺀다(DHGRADE와 같은 자, 같은 이유).
+                    var loops = RawTriangleIntersectionFinder.GetExactDaylight(
+                        vTin, bTin, null, vs.Rings.Count > 0 ? vs.Rings[vs.Rings.Count - 1] : null);
                     var own = RawTriangleIntersectionFinder.FilterPlanRelated(loops, e.Bottom, 5.0, out string fdiag);
                     log.AppendLine($"■ {tag} 교선 {loops.Count}개 → 루프필터 {fdiag}");
 

@@ -47,13 +47,22 @@ public static class StationCommand
     [CommandMethod("DHSTATIONFB", CommandFlags.Modal)]
     public static void RunFrontBack() => Run(frontBack: true);
 
-    private static void Run(bool frontBack)
+    /// <summary>★★★[JACK 0902 "종단 스플릿버튼안에 측점 삭제기능도 만들어야해.
+    /// 해당하는 측점을 선택하면 삭제되게 해야해. 마찬가지로 삭제되면 횡단에서도 없어져야해"]
+    /// <b>지우기를 단추 하나로.</b>
+    /// <para>지우는 일 자체는 이미 <c>[측점]</c> 안에 <c>삭제(D)</c> 키워드로 있었다 —
+    /// 단추를 누르면 <b>곧바로 찍기</b>로 들어가게 모드만 갈라 놓았다.</para>
+    /// <para>횡단은 <see cref="XsecViewCommand.Refresh"/>가 같이 다시 그리므로 <b>자동으로 사라진다</b>.</para></summary>
+    [CommandMethod("DHSTATIONDEL", CommandFlags.Modal)]
+    public static void RunDelete() => Run(frontBack: false, del: true);
+
+    private static void Run(bool frontBack, bool del = false)
     {
         var doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
         var db = doc.Database;
         Editor ed = doc.Editor;
-        string kind = frontBack ? "전후측점" : "측점";
+        string kind = del ? "측점 삭제" : frontBack ? "전후측점" : "측점";
 
         ObjectId alignId = PickAlignment(db, ed);
         if (alignId.IsNull) return;
@@ -70,6 +79,15 @@ public static class StationCommand
         //
         //   ※ 목록은 처음 한 번만 보여 준다 — 찍을 때마다 쏟아지면 명령창이 목록으로 덮여
         //     정작 방금 무엇이 추가됐는지가 안 보인다.
+        // ★[검토 0902] 다시 그리면 선형이 죽으므로 <b>이름을 먼저</b> 잡아 둔다.
+        string alignName = "";
+        try
+        {
+            using var trA = db.TransactionManager.StartTransaction();
+            if (trA.GetObject(alignId, OpenMode.ForRead) is CivilDb.Alignment al0) alignName = al0.Name ?? "";
+            trA.Commit();
+        }
+        catch { }
         ShowList(db, ed, alignId);
         ed.WriteMessage(frontBack
             ? $"\n  ※ 찍은 자리에 종단은 측점 하나, 횡단면도만 (전)(후) 두 장으로 나옵니다"
@@ -78,11 +96,30 @@ public static class StationCommand
 
         while (true)
         {
+            // ★★★[JACK 0903 "측점 삭제 기능은 종단뷰의 세로선(빨간색)을 선택하면
+            //   해당 측점이(밴드 포함) 사라지는 것으로 해줘"]
+            //   <b>삭제는 점이 아니라 선을 고른다.</b> 점으로 받으면 "가장 가까운 수동 측점"을 짐작해야 하고,
+            //   그래서 <b>엉뚱한 것이 지워지거나 자동 측점은 아예 못 지웠다</b>.
+            //   세로선(<c>CR-GRID-VERT</c>)은 <b>측점 하나에 하나씩</b> 서 있으므로 짐작할 것이 없다.
+            if (del)
+            {
+                bool changedD = DeleteByLine(doc, db, ed, ref alignId, alignName);
+                if (!changedD) return;
+                RedrawProfile(doc, ed);
+                try { if (XsecViewCommand.Refresh(doc)) ed.WriteMessage("\n  · 횡단도도 다시 그렸습니다(같은 자리)."); }
+                catch (System.Exception exD) { ed.WriteMessage("\n  · 횡단도 갱신 실패 — " + exD.Message); }
+                alignId = Reacquire(db, alignId, alignName);
+                if (alignId.IsNull) { ed.WriteMessage($"\n  · 노선을 다시 잡지 못했습니다 — [{kind}]을 다시 실행해 주세요."); return; }
+                continue;
+            }
+
             var ppo = new PromptPointOptions(
                 $"\n[{kind}] 종단도(또는 노선)에서 추가할 자리를 클릭 [목록(L)/삭제(D)/전체삭제(A)/끝(X)]: ")
             { AllowNone = true };
             ppo.Keywords.Add("목록", "L", "목록(L)", true, true);
-            ppo.Keywords.Add("삭제", "D", "삭제(D)", true, true);
+            // ★[검토 0902] 삭제 모드에선 이 키워드가 <b>덧 클릭 경로</b>가 된다 —
+            //   문구엔 안 적으면서 우클릭 메뉴엔 떠서, 누르면 점을 <b>한 번 더</b> 묻는다.
+            if (!del) ppo.Keywords.Add("삭제", "D", "삭제(D)", true, true);
             ppo.Keywords.Add("전체삭제", "A", "전체삭제(A)", true, true);
             ppo.Keywords.Add("끝", "X", "끝(X)", true, true);
 
@@ -105,7 +142,9 @@ public static class StationCommand
             }
             else if (pp.Status == PromptStatus.OK)
             {
-                changed = AddAt(db, ed, alignId, pp.Value.TransformBy(ed.CurrentUserCoordinateSystem), frontBack);
+                var wcsPt = pp.Value.TransformBy(ed.CurrentUserCoordinateSystem);
+                changed = del ? DeleteAtPoint(db, ed, alignId, wcsPt)
+                              : AddAt(db, ed, alignId, wcsPt, frontBack);
             }
             // ★[검토 반영] <b>남은 상태(Error 등)는 끝낸다 — <c>continue</c>면 무한 루프다.</b>
             //   <c>GetPoint</c>가 <c>Error</c>를 돌려주는 상황(도면이 닫히는 중·스크립트 입력 고갈)에서는
@@ -132,12 +171,24 @@ public static class StationCommand
             }
             catch (System.Exception exX) { ed.WriteMessage("\n  · 횡단도 갱신 실패 — " + exX.Message); }
 
+            // ★★★[검토 0902 · 되돌림] <b>여기서 [도곽]을 또 걸면 안 된다.</b>
+            //   JACK 요구는 "측점을 바꾸면 밴드가 기준대로 다시 배치되어야 한다"였고 나는 그것이
+            //   안 되고 있다고 보고 <c>DHSHEET</c>를 뒤이어 걸었다 — <b>전제가 틀렸다.</b>
+            //   <see cref="ProfileCommand"/> 637행이 종단도를 다시 그리면서 <b>이미</b>
+            //   <c>SheetCommand.Build</c>를 부른다(JACK 0810: "도곽 버튼이 왜 필요하지?
+            //   그냥 종단도 누르면 모형탭하고 배치까지 자동으로 되야 되").
+            //   <b>로그 실측</b>: <c>DHSHEET</c> 단독 실행 <b>0건</b>인데 <c>밴드 값 벌리기</c>는 <b>7건</b> —
+            //   측점을 찍을 때마다 이미 돌고 있었다.
+            //   ★한 번 더 걸면 해롭다: <c>Build</c> 앞의 <c>EraseAll</c> 없이 도는 두 번째 판이라
+            //   <c>DrawModelFrames</c>가 <b>도곽 사각형을 2개씩 쌓고</b>, 종단도가 없으면 <c>DHSHEET</c>가
+            //   <b>확인 팝업</b>을, 종단도가 둘이면 <b>클릭 요구</b>를 띄운다 — 자동이 아니게 된다.
+
             // ★★★[v32.35] <b>다시 그리면 선형이 새것으로 바뀐다 — 들고 있던 ID는 죽는다.</b>
             //   <see cref="ProfileCommand"/>는 옛 선형을 지우고 같은 좌표로 <b>새로 만든다</b>
             //   (선형 생성 API가 폴리선을 소모하는 구조라 '고쳐 쓰기'가 안 된다).
             //   그래서 다음 클릭에서 <b>지워진 선형</b>에 측점을 저장하려 들면 조용히 실패한다 —
             //   찍었는데 아무 일도 안 일어나는, 가장 알아채기 어려운 증상이다.
-            alignId = Reacquire(db, alignId);
+            alignId = Reacquire(db, alignId, alignName);
             if (alignId.IsNull)
             {
                 ed.WriteMessage($"\n  · 노선을 다시 잡지 못했습니다 — [{kind}]을 다시 실행해 주세요.");
@@ -148,7 +199,7 @@ public static class StationCommand
 
     /// <summary>다시 그린 뒤의 노선을 잡는다 — 옛 ID가 아직 살아 있으면 그대로 쓴다.
     /// <para>여럿이면 <b>마지막 것</b>을 쓴다(<see cref="ProfileCommand"/>가 방금 만든 것이 마지막이다).</para></summary>
-    private static ObjectId Reacquire(Database db, ObjectId old)
+    private static ObjectId Reacquire(Database db, ObjectId old, string wantName)
     {
         try
         {
@@ -157,13 +208,20 @@ public static class StationCommand
                 tr.GetObject(old, OpenMode.ForRead, false, true) is CivilDb.Alignment { IsErased: false })
             { tr.Commit(); return old; }
 
-            ObjectId last = ObjectId.Null;
+            // ★★[검토 0902] <b>이름을 대조한다.</b> 종전엔 이름을 안 보고 <b>마지막 것</b>을 집었다 —
+            //   노선이 여러개면 두 번째 클릭부터 <b>남의 노선</b>을 잡고, 삭제 모드에선 남의 측점을 지운다.
+            //   이름은 지워지기 전에 밖에서 받아 둔다(여기서는 <c>old</c>가 이미 죽어 이름을 못 읽는다).
+            ObjectId last = ObjectId.Null, byName = ObjectId.Null;
             var cdoc = CivilApp.CivilApplication.ActiveDocument;
             foreach (ObjectId id in cdoc.GetAlignmentIds())
                 if (tr.GetObject(id, OpenMode.ForRead) is CivilDb.Alignment al && !al.IsErased &&
-                    al.Name.StartsWith(SectionCommand.AlignBase)) last = id;
+                    al.Name.StartsWith(SectionCommand.AlignBase))
+                {
+                    last = id;
+                    if (wantName.Length > 0 && string.Equals(al.Name, wantName, StringComparison.Ordinal)) byName = id;
+                }
             tr.Commit();
-            return last;
+            return byName.IsNull ? last : byName;
         }
         catch { return ObjectId.Null; }
     }
@@ -594,8 +652,74 @@ public static class StationCommand
         //   지우기만 평면 노선으로 가라고 하면 화면을 오갈 일이 생긴다.
         var pp = ed.GetPoint("\n[측점] 지울 측점 근처를 종단도(또는 노선)에서 클릭 (Esc=취소): ");
         if (pp.Status != PromptStatus.OK) return false;
-        var wcs = pp.Value.TransformBy(ed.CurrentUserCoordinateSystem);
+        return DeleteAtPoint(db, ed, alignId, pp.Value.TransformBy(ed.CurrentUserCoordinateSystem));
+    }
 
+    /// <summary>★★★[JACK 0903] <b>종단뷰의 빨간 세로선을 골라 그 측점을 지운다.</b>
+    ///
+    /// <para>세로선은 측점 하나에 하나씩 서 있으므로(<see cref="SheetCommand"/>가 검토선마다 그린다)
+    /// <b>짐작할 것이 없다</b> — 고른 선의 X를 측점으로 되돌리면 그것이 답이다.</para>
+    ///
+    /// <para><b>자동 측점도 지운다.</b> 정측점·굴곡부·옹벽처럼 모양에서 저절로 나오는 것은
+    /// 목록에서 빼는 것으로는 안 지워진다(다시 그리면 되살아난다) —
+    /// <see cref="StationMarks.SaveDropped"/>에 <b>"여기는 넣지 마라"</b>를 적어 둔다.
+    /// 수동 측점이면 목록에서도 함께 뺀다.</para></summary>
+    private static bool DeleteByLine(Autodesk.AutoCAD.ApplicationServices.Document doc, Database db, Editor ed, ref ObjectId alignId, string alignName)
+    {
+        var peo = new PromptEntityOptions("\n[측점 삭제] 지울 측점의 세로선(빨강)을 고르세요 (Esc=끝): ");
+        peo.SetRejectMessage("\n  · 종단뷰의 세로선(레이어 " + SheetCommand.GridVertLayer + ")을 골라 주세요.");
+        peo.AddAllowedClass(typeof(Line), exactMatch: false);
+        peo.AllowNone = false;
+        var per = ed.GetEntity(peo);
+        if (per.Status != PromptStatus.OK) return false;
+
+        double x = double.NaN;
+        using (var tr = db.TransactionManager.StartTransaction())
+        {
+            if (tr.GetObject(per.ObjectId, OpenMode.ForRead) is Line ln &&
+                string.Equals(ln.Layer, SheetCommand.GridVertLayer, StringComparison.OrdinalIgnoreCase))
+                x = ln.StartPoint.X;
+            tr.Commit();
+        }
+        if (double.IsNaN(x))
+        {
+            ed.WriteMessage("\n  · 그건 측점 세로선이 아닙니다(레이어 " + SheetCommand.GridVertLayer + ").");
+            return false;
+        }
+
+        double? st = SheetCommand.StationAtX(db, x);
+        if (!st.HasValue)
+        {
+            ed.WriteMessage("\n  · 그 선의 측점을 못 읽었습니다 — 종단도를 다시 그려 보세요.");
+            return false;
+        }
+
+        using (var dl = doc.LockDocument())
+        using (var tr = db.TransactionManager.StartTransaction())
+        {
+            var drop = StationMarks.LoadDropped(tr, alignId);
+            if (StationMarks.IsDropped(drop, st.Value))
+            { ed.WriteMessage($"\n  · {StationMarks.Fmt(st.Value, GradingSettings.XsecInterval)}는 이미 지워진 자리입니다."); tr.Commit(); return false; }
+            drop.Add(st.Value);
+            bool okD = StationMarks.SaveDropped(tr, alignId, drop);
+
+            // 수동으로 찍은 것이면 그 목록에서도 뺀다 — 두 목록이 서로를 모르면 다음에 되살아난다.
+            var man = StationMarks.Load(tr, alignId);
+            int cut = man.RemoveAll(m => System.Math.Abs(m.Station - st.Value) <= StationMarks.MergeTol);
+            if (cut > 0) StationMarks.Save(tr, alignId, man);
+
+            if (okD) ed.WriteMessage($"\n  · 지움: {StationMarks.Fmt(st.Value, GradingSettings.XsecInterval)}"
+                                   + (cut > 0 ? " (수동 측점)" : " (자동 측점 — 다시 그려도 안 나옵니다)"));
+            else ed.WriteMessage("\n  · ⚠저장하지 못했습니다.");
+            tr.Commit();
+            return okD;
+        }
+    }
+
+    /// <summary>이미 찍은 자리에서 가장 가까운 <b>수동 측점</b>을 지운다.
+    /// <para>물어보는 자리만 다르고 속은 <see cref="DeleteOne"/>과 같다 — 단추로 들어오면 점을 밖에서 받는다.</para></summary>
+    private static bool DeleteAtPoint(Database db, Editor ed, ObjectId alignId, Point3d wcs)
+    {
         using var tr = db.TransactionManager.StartTransaction();
         if (tr.GetObject(alignId, OpenMode.ForRead) is not CivilDb.Alignment al) { tr.Commit(); return false; }
         var st = StationFromPick(tr, ed, wcs, al, out _);
@@ -607,6 +731,18 @@ public static class StationCommand
         int best = 0;
         for (int i = 1; i < marks.Count; i++)
             if (System.Math.Abs(marks[i].Station - st.Value) < System.Math.Abs(marks[best].Station - st.Value)) best = i;
+        // ★★★[검토 0902 HIGH] <b>거리 상한이 없었다.</b> 지우려던 것이 자동 측점이면
+        //   (정측점·데이라잇·터파기·굴곡부 — 지울 수 없는 것들) 대신 <b>수십 m 떨어진 수동 측점</b>이
+        //   지워지고 "지움: …"이라고 <b>성공을 보고</b>했다. 자료가 조용히 사라지는 가장 나쁜 종류다.
+        //   → 한 측점 간격(<see cref="GradingSettings.XsecInterval"/>) 밖이면 <b>안 지우고 거리로 알린다</b>.
+        double away = System.Math.Abs(marks[best].Station - st.Value);
+        if (away > idx)
+        {
+            ed.WriteMessage($"\n  · 그 자리엔 수동 측점이 없습니다 — 가장 가까운 것이 {away:F1}m 떨어져 있습니다."
+                          + "\n    (정측점·보조측점·굴곡부·옹벽·데이라잇은 모양에서 저절로 나오는 것이라 지울 수 없습니다.)");
+            tr.Commit();
+            return false;
+        }
         var gone = marks[best];
         marks.RemoveAt(best);
         bool ok = StationMarks.Save(tr, alignId, marks);

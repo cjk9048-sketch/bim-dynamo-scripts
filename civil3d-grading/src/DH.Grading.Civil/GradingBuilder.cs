@@ -29,6 +29,7 @@ public static class GradingBuilder
         int sharedPts = 0;
         if (cornerLines != null && cornerLines.Count > 0)
             sharedPts = BreaklinePrep.SplitLineRingCrossings(rings, cornerLines);
+        DiveReset();
         ObjectId id = TinSurface.Create(db, UniqueName(db, tr, name));
         var tin = (TinSurface)tr.GetObject(id, OpenMode.ForWrite);
         foreach (var ring in rings) AddRingBreakline(tin, ring);
@@ -47,6 +48,9 @@ public static class GradingBuilder
             int defCount = -1;
             try { defCount = tin.BreaklinesDefinition.Count; } catch { }
             vb.AppendLine($"  브레이크라인 의도 {intended} / 정의됨 {defCount}" +
+                          (DiveCount > 0
+                            ? $" · ★링이 끊긴 자리 {DiveCount}곳(최장 {DiveMaxLen:F1}m @ {DiveMaxX:F0},{DiveMaxY:F0}){DiveWhere}"
+                            : " · 링 안 끊김") +
                           (sharedPts > 0 ? $" · 보조선-링 공유정점 {sharedPts}개 삽입(교차 경고 제거, maxΔZ {BreaklinePrep.LastMaxZGap:F3}m)" : "") +
                           (BreaklinePrep.LastMaxZGap > 2.0 ? " · ΔZ>2m 교차는 스냅 생략(안전판 — 형상 무해, Civil3D 경고만 남음)" : ""));
             // 부지 중심(첫 링 평균)
@@ -122,7 +126,11 @@ public static class GradingBuilder
                         catch { hole++; }
                     }
                 // 바깥 모서리는 원래 표면 밖이라 비는 게 정상 — 전체의 45%까지는 정상으로 본다(원뿔형 계단면).
-                if (hole > nDiv * nDiv * 0.45) Grid(title, extent, nDiv);      // 이상하게 많이 비었다 → 지도를 펼친다
+                // ★[검토 0903] <b>옹벽 판에서는 문턱을 안 기다린다.</b> 빈칸 36/256(14%)이라 45% 문턱에
+                //   못 미쳐 지도가 안 펼쳐졌는데, 정작 알아야 할 것은 <b>그 36개가 어디에 몰려 있는가</b>였다.
+                //   NW 파인 자리에 몰려 있고 그 안쪽이 단 없는 매끈한 경사면이면 <b>가짜 삼각형</b>이 확정된다.
+                //   링이 끊긴 판(=옹벽 판)에서만 펼치므로 평소 로그는 그대로다.
+                if (hole > nDiv * nDiv * 0.45 || (hole > 0 && DiveCount > 0)) Grid(title, extent, nDiv);
                 else vb.AppendLine($"  [{title}] X {minX:F1}~{maxX:F1} / Y {minY:F1}~{maxY:F1} · 표본 {hit}/{nDiv * nDiv}개 Z {lo:F1}~{hi:F1}m(빈칸 {hole} — 정상 범위)");
             }
         }
@@ -1561,6 +1569,13 @@ public static class GradingBuilder
     }
 
     // ── helpers ──
+    /// <summary>★[JACK 0903] <b>링이 끊긴 자리</b>를 모은다 — <see cref="BuildVirtualSlope"/>가 한 면을
+    /// 다 만든 뒤 한 줄로 남긴다. 재기만 한다(형상 무변경).</summary>
+    internal static int DiveCount;
+    internal static double DiveMaxLen, DiveMaxX, DiveMaxY;
+    internal static readonly System.Text.StringBuilder DiveWhere = new();
+    internal static void DiveReset() { DiveCount = 0; DiveMaxLen = 0; DiveMaxX = 0; DiveMaxY = 0; DiveWhere.Clear(); }
+
     private static void AddRingBreakline(TinSurface tin, IReadOnlyList<Point3> loop)
     {
         if (loop.Count < 3) return;
@@ -1584,7 +1599,22 @@ public static class GradingBuilder
         for (int i = 1; i < pts.Count; i++)
         {
             double dx = pts[i].X - pts[i - 1].X, dy = pts[i].Y - pts[i - 1].Y;
-            if (dx * dx + dy * dy > MaxSeg2) { if (cur.Count >= 2) runs.Add(cur); cur = new List<Point3d>(); }
+            if (dx * dx + dy * dy > MaxSeg2)
+            {
+                // ★★★[JACK 0903 "옹벽 변환했는데 지표면이 이상하게 작성되는 부분이 발생했어"]
+                //   <b>여기가 링이 끊기는 자리다 — 좌표를 남긴다.</b>
+                //   실측으로 확인된 것: 옹벽을 씌운 절토 가상면만 브레이크라인이 35 → 65로 잘리고,
+                //   같은 판에서 지표면이 <b>경계 밖 8.0m까지 삐져나왔다(11곳)</b>.
+                //   끊긴 자리에는 지시선이 없어 TIN이 마음대로 잇는데, 그 자리가 정말 같은 곳인지
+                //   <b>좌표로 맞대 보기 전에는 단정하지 않는다</b>.
+                DiveCount++;
+                double dlen = System.Math.Sqrt(dx * dx + dy * dy);
+                if (dlen > DiveMaxLen) { DiveMaxLen = dlen; DiveMaxX = pts[i - 1].X; DiveMaxY = pts[i - 1].Y; }
+                if (DiveWhere.Length < 400)
+                    DiveWhere.Append($" [{pts[i - 1].X:F1},{pts[i - 1].Y:F1} {dlen:F1}m]");
+                if (cur.Count >= 2) runs.Add(cur);
+                cur = new List<Point3d>();
+            }
             cur.Add(pts[i]);
         }
         double cdx = pts[0].X - pts[^1].X, cdy = pts[0].Y - pts[^1].Y;

@@ -33,6 +33,57 @@ public static class StationMarks
     /// <summary>선형 확장 사전 안에서 이 목록이 사는 자리.</summary>
     private const string DictKey = "DH_측점목록";
 
+    /// <summary>★★★[JACK 0903 "측점 삭제 기능은 종단뷰의 세로선(빨간색)을 선택하면
+    /// 해당 측점이(밴드 포함) 사라지는 것으로 해줘"] <b>지운 자리 목록.</b>
+    /// <para><b>왜 목록이 따로 필요한가.</b> 자동 측점(정측점·굴곡부·옹벽·데이라잇)은 <b>모양에서 매번
+    /// 새로 나온다</b> — 지워도 다음에 종단도를 다시 그리면 되살아난다. 수동 목록에서 빼는 것으로는 안 되고
+    /// <b>"여기는 넣지 마라"</b>를 따로 적어 둬야 한다. 수동 목록과 같은 자리(선형 확장사전)에 둔다.</para></summary>
+    private const string DictKeyDrop = "DH_측점제외";
+
+    /// <summary>지운 자리인가 — 자는 <see cref="MergeTol"/>(1cm) 하나뿐이다.</summary>
+    public static bool IsDropped(IReadOnlyList<double> dropped, double station)
+    {
+        if (dropped == null) return false;
+        foreach (double d in dropped) if (Math.Abs(d - station) <= MergeTol) return true;
+        return false;
+    }
+
+    /// <summary>선형에 적어 둔 <b>지운 자리</b>를 읽는다.</summary>
+    public static List<double> LoadDropped(Transaction tr, ObjectId alignId)
+    {
+        var list = new List<double>();
+        try
+        {
+            var obj = tr.GetObject(alignId, OpenMode.ForRead);
+            if (obj.ExtensionDictionary.IsNull) return list;
+            var d = (DBDictionary)tr.GetObject(obj.ExtensionDictionary, OpenMode.ForRead);
+            if (!d.Contains(DictKeyDrop)) return list;
+            if (tr.GetObject(d.GetAt(DictKeyDrop), OpenMode.ForRead) is not Xrecord xr || xr.Data == null) return list;
+            foreach (TypedValue tv in xr.Data)
+                if (tv.TypeCode == (short)DxfCode.Real) list.Add(Convert.ToDouble(tv.Value));
+        }
+        catch { }
+        return list;
+    }
+
+    /// <summary>지운 자리를 선형에 적는다.</summary>
+    public static bool SaveDropped(Transaction tr, ObjectId alignId, IEnumerable<double> stations)
+    {
+        try
+        {
+            var obj = tr.GetObject(alignId, OpenMode.ForWrite);
+            if (obj.ExtensionDictionary.IsNull) obj.CreateExtensionDictionary();
+            var d = (DBDictionary)tr.GetObject(obj.ExtensionDictionary, OpenMode.ForWrite);
+            var rb = new ResultBuffer();
+            foreach (double st in stations.OrderBy(x => x)) rb.Add(new TypedValue((short)DxfCode.Real, st));
+            var xr = new Xrecord { Data = rb };
+            d.SetAt(DictKeyDrop, xr);
+            tr.AddNewlyCreatedDBObject(xr, true);
+            return true;
+        }
+        catch { return false; }
+    }
+
     /// <summary>★★[v29.0 점검 반영 · JACK 0811 확정] <b>같은 자리만 합친다 — 솎아내지 않는다.</b>
     ///
     /// <para>종전 값은 <b>0.5m</b>였다. 그러면 굴곡부가 20.4m에 있을 때 <c>No.1</c>(20.00m)
@@ -65,6 +116,34 @@ public static class StationMarks
     /// <para>판정은 <see cref="IsFrontBack"/> <b>하나로만</b> 한다 —
     /// 문자열을 여기저기서 직접 비교하면 언젠가 한 곳이 어긋난다(§50).</para></summary>
     public const string FrontBackWhy = "전후(직접 찍음)";
+
+    /// <summary>★★★[JACK 0902 기준 3·4·5 · 인터뷰 확정] <b>이 측점의 밴드 값을 생략해도 되는가.</b>
+    ///
+    /// <para><b>생략해도 되는 것은 굴곡부 하나뿐이다.</b> 주측점·보조측점·사면·소단·데이라잇·
+    /// 절성경계·꺾임점·옹벽·가시설·[측점추가]·[전후측점]은 <b>어떤 경우에도</b> 안 지운다.</para>
+    ///
+    /// <para>★<b>사유는 하나가 아니다.</b> <c>Merge</c>가 1cm 안의 측점을 합치면서 사유를
+    /// <c>·</c>로 이어 붙인다 — <c>"원지반굴곡·직접 찍음"</c>이 실제로 생긴다.
+    /// 그래서 <c>사유에 "굴곡"이 있다</c>로 판단하면 <b>수동 측점이 지워진다</b> —
+    /// 보존 사유가 <b>하나라도 섞여 있으면 생략 대상이 아니다</b>.</para></summary>
+    public static bool IsBendOnly(string why)
+    {
+        if (why == null) return false;
+        if (why.IndexOf("굴곡", StringComparison.Ordinal) < 0) return false;
+        foreach (var keep in KeepWhy)
+            if (why.IndexOf(keep, StringComparison.Ordinal) >= 0) return false;
+        return true;
+    }
+
+    /// <summary>생략하면 안 되는 사유들 — 하나라도 섞이면 그 측점은 살린다.
+    /// <para><c>정체인</c>은 정측점·보조측점이 되기 전 이름이고, 흡수된 자리에도 붙여 둔다.</para></summary>
+    private static readonly string[] KeepWhy =
+    {
+        "정측점", "보조측점", "정체인", "직접 찍음",
+        "옹벽", "가시설", "터파기",   // ★[검토 0902] "터파기"가 빠져 있었다(로그 실측 4건) —
+        "사면", "소단", "데이라잇",   //   "원지반굴곡·터파기"가 되면 그 측점이 지워졌다
+        "절성경계", "꺾임", "종점", "기점"
+    };
 
     /// <summary>이 측점이 <b>수동 (전)(후)</b>인가. 사유를 읽는 자는 여기 하나뿐이다.</summary>
     public static bool IsFrontBack(string why)
@@ -1236,7 +1315,18 @@ public static class StationMarks
             for (double s = stStart; s <= stEnd + 1e-9; s += interval)
             {
                 double st = Math.Min(Math.Max(s, stStart), stEnd);
-                if (outp.Any(x => Math.Abs(x.Station - st) <= tol)) continue;
+                // ★★★[검토 0902] <b>흡수되더라도 사유를 남긴다.</b>
+                //   종전엔 특수측점 1cm 안의 정체인을 <b>그냥 버렸다</b>. 그러면 도면엔 <c>No.n</c>이
+                //   서 있는데 목록에는 <c>"원지반굴곡"</c>이라는 이름만 남아,
+                //   밴드가 <b>그 정측점을 굴곡부로 보고 지운다</b>(JACK 기준 4 위반).
+                //   → 흡수한 자리에 <c>·정체인</c>을 붙여 <see cref="IsBendOnly"/>가 알아보게 한다.
+                int eat = outp.FindIndex(x => Math.Abs(x.Station - st) <= tol);
+                if (eat >= 0)
+                {
+                    if (!outp[eat].Why.Contains("정체인"))
+                        outp[eat] = outp[eat] with { Why = outp[eat].Why + "·정체인" };
+                    continue;
+                }
                 outp.Add(new Mark(st, "정체인"));
             }
             // 끝단이 정체인에서 멀면 하나 더(횡단 끝이 잘리지 않게)

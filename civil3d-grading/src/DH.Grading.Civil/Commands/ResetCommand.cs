@@ -95,6 +95,28 @@ public sealed class ResetCommand
     {
         Database db = doc.Database;
         int ents = 0, surfs = 0; bool bundleCleared = false;
+
+        // ★★★[JACK 0902 "초기화 하면 종단 관련 선이랑 잔재들 남는거"]
+        //   <b>아래 ①은 <c>DH-</c>로 시작하는 레이어만 훑는다.</b> 그런데 [도곽]이 그린
+        //   검토선·표고바·제목칸·축척배너는 <b>CALS 표준 이름</b>이라 <c>CR-</c>로 시작한다
+        //   (<c>CR-GRID-VERT</c>·<c>CR-GSCL-LINE</c>·<c>CR-TABL-DECO</c>) — 그래서 통째로 살아남았다.
+        //   ★지우는 목록은 <see cref="SheetCommand.EraseAll"/>에 <b>이미 있었다</b> —
+        //   다만 그것을 <b>종단도를 다시 그릴 때만</b> 불렀고 초기화에서는 안 불렀다.
+        //   목록을 또 베끼지 않고 <b>그 함수를 부른다</b> — 두 곳이 같은 목록을 보게.
+        //   (자기 트랜잭션을 여므로 아래 <c>using</c> <b>밖</b>에서 불러야 한다.)
+        //   ★<b><c>null</c>을 넘기지 않는다.</b> 그 함수는 안에서 기록장에 쓴다 —
+        //   처음엔 <c>null</c>을 넘겨 예외가 났고, 아래 <c>catch</c>가 그것을 <b>조용히 삼켜</b>
+        //   지우기가 통째로 안 돌았다(JACK 스샷 — 검토선·표고바·제목칸이 그대로 남음).
+        //   ★실패하면 <b>조용히 넘어가지 않고</b> 화면과 로그에 남긴다.
+        var sheetLog = new System.Text.StringBuilder();
+        try { ents += SheetCommand.EraseAll(db, sheetLog); }
+        catch (System.Exception sx)
+        {
+            doc.Editor.WriteMessage("\n  ⚠종단도 잔재를 못 지웠습니다 — " + sx.Message);
+            try { DiagLog.Append("\n■ 초기화 — 종단도 잔재 삭제 실패: " + sx.Message + "\n"); } catch { }
+        }
+        try { if (sheetLog.Length > 0) DiagLog.Append("\n■ 초기화 — 종단도 잔재\n" + sheetLog); } catch { }
+
         using (Transaction tr = db.TransactionManager.StartTransaction())
         {
             // ⓪ [종단·횡단 0731] 우리가 만든 Civil3D 객체(선형·종단·종단도·측점선·횡단도)를 **먼저** 정리.
@@ -274,7 +296,12 @@ public sealed class ResetCommand
                         {
                             if (tr.GetObject(id, OpenMode.ForRead) is not AcadEntity e) continue;
                             string ly = e.Layer ?? "";
-                            if (!ly.StartsWith("DH", System.StringComparison.Ordinal)) continue;
+                            // ★★★[검토 0902 HIGH] <b>CR- 도 센다.</b> 이번 판이 지우기 시작한
+                            //   도곽 잔재(<c>CR-GRID-VERT</c>·<c>CR-GSCL-LINE</c>·<c>CR-TABL-DECO</c>)를
+                            //   검산이 안 세면, <c>EraseAll</c>이 조용히 실패해도 화면엔 "남은 것 없음"이 뜬다 —
+                            //   §60이 이름 붙인 "0을 만들어 놓고 완료라고 하기"가 고친 자리 바로 옆에 남아 있었다.
+                            if (!ly.StartsWith("DH", System.StringComparison.Ordinal)
+                             && !ly.StartsWith("CR-", System.StringComparison.OrdinalIgnoreCase)) continue;
                             if (System.Array.IndexOf(ImportGisCommand.ImportLayers, ly) >= 0) continue;   // 가져온 자료는 뺀다
                             byLayer.TryGetValue(ly, out int c); byLayer[ly] = c + 1;
                         }
