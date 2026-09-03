@@ -35,6 +35,11 @@ public static class RawTriangleIntersectionFinder
     /// <summary>★[JACK 0903] 직전 교선의 <b>껍질컷</b> 결과 — 조기 반환에서도 안 잃게 따로 둔다.</summary>
     public static string LastAClipDiag { get; private set; } = "";
 
+    /// <summary>★[검토 0903] 껍질컷 자를 바깥으로 부풀리는 폭(m) — <b>자가 곧은 자</b>라서 둔다.
+    /// 바깥 링의 209m가 우리가 합성한 직선인데 실제 측벽 삼각형은 거기서 벗어난다(실측 0.3m, 로그상 최대 8m).
+    /// 계단 폭보다 훨씬 작고 파인 자리는 폭이 100m대라, 부풀려도 가짜는 안 살아난다.</summary>
+    private const double ClipSlackM = 1.0;
+
     public static string LastDiag { get; private set; } = "";
 
     /// <summary>[검증로그] 실행마다 단계별 상태를 이 파일에 기록 — 스샷 대신 정밀 분석용(JACK 제안).</summary>
@@ -106,12 +111,27 @@ public static class RawTriangleIntersectionFinder
         catch { dbg.AppendLine("[DHXSEC 진단]"); }
         // ★[JACK 0903] 바깥선을 준비한다 — 못 만들면 <b>거르지 않고</b> 종전대로 간다(로그에 남긴다).
         var aClipSw = System.Diagnostics.Stopwatch.StartNew();
+        // ★★[검토 0903] <b>자를 1m 부풀린다.</b> 자가 곧은 자라서 그렇다 —
+        //   바깥 링은 사실 <b>열린 호 두 개</b>이고, 그 사이 <b>209m가 우리가 합성한 직선</b>이다
+        //   (실측: 인덱스 842→843의 104.63m 점프, 그리고 첫점→끝점을 닫는 104.64m).
+        //   그 구간에는 브레이크라인이 없어(2.5m 넘는 선분은 일부러 뺀다) Civil 3D가 자유롭게 잇고,
+        //   실제 측벽 삼각형은 그 직선에서 <b>벗어난다</b>(실측: 다른 링 정점 6개가 0.3m 밖).
+        //   곧은 자로 그대로 자르면 <b>멀쩡한 측벽 띠를 파고든다</b> — 부지선이 볼록하면 특히.
+        //   1m는 계단 폭보다 훨씬 작고 파인 자리는 폭이 100m대라, 부풀려도 가짜는 안 살아난다.
+        //   ★같은 좌표 눈금을 쓰게 gfSnap을 넘긴다 — ToCleanGeometry의 기본 팩토리는 1mm 격자라
+        //   자기교차 링을 정리할 때 자가 0.7mm 줄어들 수 있다(삼각형은 부동소수 그대로다).
         Geometry? aClipGeom = aOuterRing != null && aOuterRing.Count >= 3
-                            ? NtsSupport.ToCleanGeometry(aOuterRing) : null;
+                            ? NtsSupport.ToCleanGeometry(aOuterRing, gfSnap) : null;
+        if (aClipGeom != null)
+            try { aClipGeom = aClipGeom.Buffer(ClipSlackM); } catch { }
         NetTopologySuite.Geometries.Prepared.IPreparedGeometry? aClip =
             aClipGeom != null ? NetTopologySuite.Geometries.Prepared.PreparedGeometryFactory.Prepare(aClipGeom) : null;
         int aKept = 0, aDrop = 0, aEdge = 0;
-        string aClipMsg = aOuterRing == null ? "" : aClip == null ? " · ⚠껍질컷 못 함(바깥선 무효)" : "";
+        double aKeptMax = 0, aEdgeMax = 0, aEdgeX = 0, aEdgeY = 0;
+        // ★[검토 0903] <b>안 넘긴 경우도 남긴다.</b> 종전엔 빈 문자열이라, 바깥선이 안 넘어와
+        //   껍질컷이 통째로 꺼진 채 옛 버그 그대로 도는데도 로그만 봐선 알 수 없었다.
+        string aClipMsg = aOuterRing == null ? " · 껍질컷 없음(바깥선 미전달)"
+                        : aClip == null ? " · ⚠껍질컷 못 함(바깥선 무효)" : "";
 
         // A 삼각형 POCO 추출(Civil 객체는 여기서만 접근 후 Dispose → 병렬 안전). CrossesSurface 필터 없음.
         var aTris = new List<Tri>();
@@ -128,22 +148,34 @@ public static class RawTriangleIntersectionFinder
                 var poly = ToNtsPolygon(p1, p2, p3);
                 if (poly == null) continue;
                 // ★[JACK 0903] 껍질이 메운 가짜 삼각형을 여기서 뺀다.
-                //   <b>세 단계로 나눠 싸게 판정한다</b> — 대부분은 통째로 안이거나 통째로 밖이라 한 번에 끝난다.
-                //   경계에 걸친 것(얇은 띠 하나뿐)만 실제로 잘라 보고 <b>절반 이상 남으면 살린다</b>.
-                //   무게중심 하나로 판정하지 않는 이유: 다이브가 브레이크라인에서 빠져 있어
-                //   삼각형이 파인 자리의 입을 <b>가로지를</b> 수 있고, 그때 무게중심은 안쪽에 떨어질 수 있다.
                 if (aClip != null)
                 {
-                    if (aClip.Contains(poly)) { }
-                    else if (!aClip.Intersects(poly)) { aDrop++; continue; }
-                    else
+                    // ★★[JACK 0903 실측] <b>걸친 것은 전부 버린다.</b>
+                    //   종전엔 "절반 이상 남으면 살린다"였는데 그게 헐거웠다 —
+                    //   파인 자리(8,552㎡)에는 <b>점이 하나도 없어</b> 껍질이 그것을
+                    //   <b>몇 개 안 되는 거대한 삼각형</b>으로 덮는다. 그 큰 삼각형은 절반쯤 링 안에 걸쳐
+                    //   절반 규칙을 통과했고, 결과가 34366개 중 <b>114개(0.3%)</b>만 걸러진 것이었다.
+                    //
+                    //   <b>버려도 안전한 이유.</b> 계단의 수직 예산은 '원지반 표고 전 범위 + 여유 2단'이라
+                    //   바깥 링은 언제나 원지반을 <b>넘겨서</b> 끝난다 — 교선은 바깥 링에서 한참 안쪽에 생긴다.
+                    //   정상 판(성토)은 애초에 '걸친 것 0개'라 잃을 것이 없다.
+                    if (!aClip.Contains(poly))
                     {
-                        aEdge++;
-                        double inA;
-                        try { inA = aClipGeom!.Intersection(poly).Area; } catch { inA = poly.Area; }
-                        if (inA < poly.Area * 0.5) { aDrop++; continue; }
+                        aDrop++;
+                        // ★[검토 0903] <b>버린 이유를 갈라 센다.</b> "통째로 밖이라 버림"은 정상이고
+                        //   "걸쳐서 버림"은 이 변경이 만들 수 있는 <b>유일한 새 사고</b>(멀쩡한 띠를 버림)다.
+                        //   한 숫자로 뭉치면 그 위험이 로그에서 안 보인다.
+                        if (aClip.Intersects(poly)) { aEdge++; if (poly.Area > aEdgeMax) { aEdgeMax = poly.Area; var c0 = poly.Centroid; aEdgeX = c0.X; aEdgeY = c0.Y; } }
+                        continue;
                     }
                     aKept++;
+                    for (int k2 = 0; k2 < 3; k2++)
+                    {
+                        var u = k2 == 0 ? p1 : k2 == 1 ? p2 : p3;
+                        var v = k2 == 0 ? p2 : k2 == 1 ? p3 : p1;
+                        double dd = Math.Sqrt((v.X - u.X) * (v.X - u.X) + (v.Y - u.Y) * (v.Y - u.Y));
+                        if (dd > aKeptMax) aKeptMax = dd;
+                    }
                 }
                 double mn = Math.Min(p1.Z, Math.Min(p2.Z, p3.Z));
                 double mx = Math.Max(p1.Z, Math.Max(p2.Z, p3.Z));
@@ -153,6 +185,33 @@ public static class RawTriangleIntersectionFinder
                 if (e.MinY < aMinY) aMinY = e.MinY; if (e.MaxY > aMaxY) aMaxY = e.MaxY;
             }
             finally { t.Dispose(); }
+        }
+        // ★[검토 0903] <b>전부 버려졌으면 클립을 버리고 다시 돈다.</b> 이 함수의 원칙은
+        //   "실패해도 종전 동작으로 자연히 돌아온다"인데, 여기만 그 원칙에서 벗어나 <b>빈 결과</b>를 냈다.
+        //   자가 잘못 만들어졌을 때 "이상한 지표면"보다 "종전 지표면"이 낫다.
+        if (aClip != null && aTris.Count == 0 && aDrop > 0)
+        {
+            aClipMsg = $" · ⚠껍질컷이 전부({aDrop}개) 버려 클립을 버리고 다시 함";
+            aClip = null; aDrop = 0; aEdge = 0;
+            using var aRetry = surfA.GetTriangles(false);
+            foreach (TinSurfaceTriangle t in aRetry)
+            {
+                try
+                {
+                    var p1 = t.Vertex1.Location; var p2 = t.Vertex2.Location; var p3 = t.Vertex3.Location;
+                    var plane = new TrianglePlane(p1, p2, p3);
+                    if (!plane.Valid) continue;
+                    var poly = ToNtsPolygon(p1, p2, p3);
+                    if (poly == null) continue;
+                    double mn = Math.Min(p1.Z, Math.Min(p2.Z, p3.Z));
+                    double mx = Math.Max(p1.Z, Math.Max(p2.Z, p3.Z));
+                    aTris.Add(new Tri(poly, plane, mn, mx));
+                    var e2 = poly.EnvelopeInternal;
+                    if (e2.MinX < aMinX) aMinX = e2.MinX; if (e2.MaxX > aMaxX) aMaxX = e2.MaxX;
+                    if (e2.MinY < aMinY) aMinY = e2.MinY; if (e2.MaxY > aMaxY) aMaxY = e2.MaxY;
+                }
+                finally { t.Dispose(); }
+            }
         }
         aClipSw.Stop();
         if (aClip != null)
@@ -165,13 +224,16 @@ public static class RawTriangleIntersectionFinder
             //   확인하려면 <b>정리 전 넓이와 정리 후 넓이</b>를 나란히 봐야 한다.
             //   ToCleanGeometry는 자기교차한 링에서 "링이 감싼 <b>모든</b> 영역"을 복원하므로,
             //   파인 자리가 닫힌 칸으로 잡히면 <b>메워진다</b>. 그러면 넓이가 늘어난다.
-            double rawA = 0;
-            for (int i = 0; i + 1 < aOuterRing!.Count; i++)
-                rawA += aOuterRing[i].X * aOuterRing[i + 1].Y - aOuterRing[i + 1].X * aOuterRing[i].Y;
-            rawA = Math.Abs(rawA * 0.5);
-            aClipMsg = $" · 껍질컷 {aDrop}개 버림/{aKept + aDrop}개(걸친 {aEdge})"
-                     + $" 자={aClipGeom!.Area:F0}㎡(정리전 {rawA:F0}㎡ · 링 {aOuterRing.Count}점 · 조각 {aClipGeom.NumGeometries})"
-                     + $" {aClipSw.ElapsedMilliseconds}ms";
+            // ★[JACK 0903] 종전엔 '정리 전 넓이'도 찍었는데 <b>그 값이 틀렸다</b> —
+            //   절토 바깥 링은 첫점과 끝점이 104.6m 떨어진 <b>열린 링</b>인데 닫지 않고 쟀다(1,070만㎡).
+            //   닫고 재면 60,251㎡로 정리 후와 같다 = 자는 멀쩡했다. 틀린 자는 남겨 두지 않는다.
+            //   대신 <b>남긴 것 중 가장 긴 변</b>을 찍는다 — 이게 합격 기준이다.
+            //   가짜 삼각형이 남아 있으면 100m대, 다 걸러졌으면 계단 간격(수십 m) 안쪽이어야 한다.
+            aClipMsg = $" · 껍질컷 {aDrop}개 버림(그중 걸친 {aEdge})/{aKept + aDrop}개"
+                     + $" · 남긴 것 최장변 {aKeptMax:F1}m"
+                     + (aEdge > 0 ? $" · 걸쳐서 버린 것 최대 {aEdgeMax:F0}㎡ @ {aEdgeX:F0},{aEdgeY:F0}" : "")
+                     + $" · 자={aClipGeom!.Area:F0}㎡+{ClipSlackM:F1}m({aOuterRing!.Count}점 · 조각 {aClipGeom.NumGeometries})"
+                     + $" · A추출+껍질컷 {aClipSw.ElapsedMilliseconds}ms";
         }
         LastAClipDiag = aClipMsg;
         if (aTris.Count == 0) { LastDiag = "A표면 삼각형 0" + aClipMsg; return new List<List<Point3>>(); }

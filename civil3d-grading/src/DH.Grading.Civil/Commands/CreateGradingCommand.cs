@@ -489,8 +489,11 @@ public sealed class CreateGradingCommand
                 //   도면을 여러 번 돌리는 대신 한 번에 다 뽑아 오프라인에서 재현한다(형상 무변경).
                 DumpRingsCsv("절토", cut.Rings);
                 DumpRingsCsv("성토", fill.Rings);
-                ComputePure(fillId, "성토", fill.Rings.Count > 0 ? fill.Rings[fill.Rings.Count - 1] : null);
-                ComputePure(cutId, "절토", cut.Rings.Count > 0 ? cut.Rings[cut.Rings.Count - 1] : null);
+                // ★[검토 0903] <b>HasSlope를 함께 본다.</b> 사면이 하나도 안 생기면 Rings에는
+                //   <b>패드 하나만</b> 남는다(GradingGeometry가 패드를 Rings[0]으로 먼저 넣는다) —
+                //   그러면 rings[^1]이 패드가 되어 <b>사면 삼각형을 전부 버린다</b>.
+                ComputePure(fillId, "성토", fill.HasSlope && fill.Rings.Count > 1 ? fill.Rings[fill.Rings.Count - 1] : null);
+                ComputePure(cutId, "절토", cut.HasSlope && cut.Rings.Count > 1 ? cut.Rings[cut.Rings.Count - 1] : null);
 
                 // [0728 — JACK] 사면(데이라잇)이 원지반(측량) 경계에 닿을 정도면 경고 후 수행 중단.
                 //   경계 밖 지반 정보가 없어 결과(정지면·토량)를 신뢰할 수 없음 — 계획고/구배/측량범위 조정 필요.
