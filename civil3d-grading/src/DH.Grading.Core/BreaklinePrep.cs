@@ -1,4 +1,4 @@
-namespace DH.Grading.Core;
+﻿namespace DH.Grading.Core;
 
 /// <summary>[0729 — JACK] 보조 브레이크라인(코너 능선·플래토 직선·단차 경계선 레이)이 계단 링과 평면에서
 /// 교차하면 Civil3D가 교차 지점마다 이벤트 뷰어에 경고를 남긴다(형상은 정상 — 완화로 Z가 맞춰져 있음).
@@ -9,6 +9,12 @@ public static class BreaklinePrep
     /// <summary>직전 실행에서 교차점의 max|보조선Z − 링Z|(m) — 완화 전제 검증용 진단(정상≈0).
     /// 값이 크면 상류(완화) 회귀 징후: 보조선이 그만큼 조용히 수직 이동했다는 뜻(리뷰 0729 사소3).</summary>
     public static double LastMaxZGap { get; private set; }
+
+    /// <summary>★[JACK 0903 · §68] <b>링을 브레이크라인으로 끊는 문턱(m).</b> 이보다 긴 변은 TIN에
+    /// 등록되지 않는다(옹벽 구간의 다이브·찢어진 자리를 가로지르는 현) — <b>없는 변이다.</b>
+    /// <para>여기 한 번만 적는다. 종전엔 <c>GradingBuilder.AddRingBreakline</c>에만 있어서, 교차를 재는 쪽은
+    /// 그 변을 <b>있는 것으로 세고 있었다</b>(하니스 S95 실측: 사슬↔링 교차 90건이 전부 이 유령 변).</para></summary>
+    public const double RingSegMaxM = 2.5;
 
     /// <summary>lines × rings의 2D 진교차점을 양쪽에 삽입(in-place). 반환=삽입 정점 수(양쪽 합).
     /// tol(m)=기존 정점과 이 거리 안이면 그쪽엔 삽입 생략(정점이 이미 접점 역할).</summary>
@@ -46,6 +52,15 @@ public static class BreaklinePrep
             var a = ring[i]; var b = ring[(i + 1) % n];
             double abLen = Dist2D(a, b);
             if (abLen < 1e-9) continue;
+            // ★[§68] <b>브레이크라인이 안 되는 변과의 교차는 교차가 아니다.</b> 이 변은 TIN에 없으므로
+            //   Civil 3D가 경고할 일도, 공유 정점을 박을 일도 없다.
+            // ★[검토 0904 정정] 종전 주석은 "진단(LastMaxZGap)만 오염된다"고 적었는데 <b>틀렸다.</b>
+            //   이 함수는 링과 보조선을 <b>양쪽 다 제자리에서 수정</b>하고(:85-86), AddRingBreakline보다
+            //   <b>먼저</b> 돈다(GradingBuilder.cs:31 → :35). 그래서 종전엔 2.5m 넘는 링 변이 교차점에서
+            //   쪼개져 <b>둘 다 브레이크라인으로 승격</b>되는 길이 있었다 — 기하가 바뀌는 경로가 실재한다.
+            //   실측(0904 도면): 링 변 길이가 [1.0m, 5.0m) 구간에 <b>하나도 없어</b>(densify가 1m 보장)
+            //   이 문턱에 걸리는 변은 전부 5m 이상 = 다이브·찢어진 자리의 현뿐이고, 보조선 교차도 0건이었다.
+            if (abLen > RingSegMaxM) continue;
             for (int j = 0; j + 1 < line.Count; j++)
             {
                 var c = line[j]; var d = line[j + 1];

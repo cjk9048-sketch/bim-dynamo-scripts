@@ -599,6 +599,14 @@ public sealed class CreateGradingCommand
                                 clipLoopsDraw.Add(ring); // 하늘색 참고선으로 표시(JACK: 클립링 눈으로 확인)
                                 bndMsg += $"\n{label}: 클립경계 주입[{tag}](∪계획 {clipArea:F0}㎡) · finalRing=순수교선 {pureArea:F0}㎡";
                                 diagX += GradingBuilder.VerifyBoundaryClip(vs2, ring);
+                                // ★[JACK 0904] 자른 뒤 표면이 <b>어느 둘레 칸에서</b> 경계보다 더 나갔는지 —
+                                //   "11곳 이탈"만으론 옹벽 구간인지 사면 구간인지 알 수 없었다.
+                                diagX += GradingBuilder.VerifySurfaceExtent(vs2, boundary, ring);
+                                // ★[JACK 0904] <b>주입한 클립링 좌표를 남긴다.</b> 이음매에서 안 잘린 혀가
+                                //   이 링 <b>안</b>이면 링(교선)이 틀린 것이고, <b>밖</b>이면 Civil이 안 자른 것이다 —
+                                //   갈림길이 정반대라 좌표 없이는 못 고른다.
+                                DumpLoopsCsv(label, new System.Collections.Generic.List<System.Collections.Generic.List<Point3>> { ring },
+                                             boundary, "클립링");
                                 injected = true;
                                 break;
                             }
@@ -894,7 +902,10 @@ public sealed class CreateGradingCommand
                     {
                         GradingBuilder.DrawDaylight(db, trO, outline, "DH-정지경계", 3, layerOff: false);
                         oMsg = $"정지경계 재작도(순수면 외곽선): {oDiag} · {GradingBuilder.LastDaylightDiag}"
-                             + FoldDiag(outline) + SurfaceEdgeScan(db, pureId, PureBase);
+                             + FoldDiag(outline) + SurfaceEdgeScan(db, pureId, PureBase)
+                             // ★[JACK 0904] <b>화면에 보이는 그 면</b>을 잰다 — 가상면이 아니라 완성면이
+                             //   부지 밖 어디까지 나가 있는지. JACK이 "사면이 계획면보다 넓어진다"고 한 자리다.
+                             + "\n" + GradingBuilder.VerifySurfaceExtent(pureTin, boundary, null);
                     }
                     else oMsg = $"정지경계 재작도 건너뜀 — 외곽선을 못 뽑았다({oDiag}) · 종전 교선 작도를 그대로 둔다";
                 }
@@ -1305,7 +1316,7 @@ public sealed class CreateGradingCommand
 
     private static void DumpLoopsCsv(string label,
         System.Collections.Generic.List<System.Collections.Generic.List<Point3>> loops,
-        System.Collections.Generic.List<Point3> boundary)
+        System.Collections.Generic.List<Point3> boundary, string kind = "교선덤프")
     {
         try
         {
@@ -1318,7 +1329,7 @@ public sealed class CreateGradingCommand
                 for (int i = 0; i < loops[l].Count; i++)
                     sb.AppendLine(string.Create(System.Globalization.CultureInfo.InvariantCulture,
                         $"{l},{i},{loops[l][i].X:F3},{loops[l][i].Y:F3},{loops[l][i].Z:F3}"));
-            System.IO.File.WriteAllText(System.IO.Path.Combine(dir, $"DHGRADE_교선덤프_{label}.csv"), sb.ToString());
+            System.IO.File.WriteAllText(System.IO.Path.Combine(dir, $"DHGRADE_{kind}_{label}.csv"), sb.ToString());
         }
         catch { }
     }

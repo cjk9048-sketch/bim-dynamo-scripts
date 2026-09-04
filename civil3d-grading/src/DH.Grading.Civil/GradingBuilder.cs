@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.Colors;
+﻿using Autodesk.AutoCAD.Colors;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Geometry;
 using Autodesk.Civil.DatabaseServices;
@@ -175,7 +175,29 @@ public static class GradingBuilder
         for (int i = 0; i < n; i++)
         { var a = ring[i]; var b = ring[(i + 1) % n]; area += a.X * b.Y - b.X * a.Y; }
         double s = area > 0 ? 1.0 : -1.0; // CCW면 내부는 진행방향 왼쪽
-        int samples = 0, outHit = 0, inMiss = 0; double maxSpill = 0; string worst = "";
+        // ★★★[검토 0904 실측] <b>이 자는 얇은 링에서 못 믿는다 — 세기 전에 검산한다.</b>
+        //   ±25cm 탐침이 링의 <b>국소 두께보다 크면</b> "바깥" 탐침이 링 안쪽에 떨어진다.
+        //   실측(절토 클립링): 163개 변 중 <b>158개가 1m 미만, 59개가 25cm 미만</b>.
+        //   그래서 8cm짜리 변(seg162)에서 "바깥"이라며 잰 사다리가 <b>부지를 가로질러 30m를 걸어 들어가</b>
+        //   패드 한복판 (210430.0,510046.5)을 "32.0m 이탈"이라고 찍었다.
+        //   전수 검산으로 잘못 센 표본이 <b>밖 10 / 안 9</b> — 로그의 `경계밖 10 · 경계안 9`와 완전 일치했다.
+        //   → 두 탐침점을 링에 넣어 보고 <b>바깥점이 안</b>이거나 <b>안쪽점이 밖</b>이면 그 표본은 안 센다.
+        //     (실측: 절토 19개 버리고 결과 0·0 — 새 자의 `★안 잘린 칸 0/16`과 결론이 맞는다. 성토는 0개 버림.)
+        bool InRing(double x, double y)
+        {
+            bool ins = false;
+            for (int i = 0, j = n - 1; i < n; j = i++)
+            {
+                var a = ring[i]; var b = ring[j];
+                if ((a.Y > y) != (b.Y > y))
+                {
+                    double xi = a.X + (y - a.Y) * (b.X - a.X) / (b.Y - a.Y);
+                    if (x < xi) ins = !ins;
+                }
+            }
+            return ins;
+        }
+        int samples = 0, outHit = 0, inMiss = 0, unfit = 0; double maxSpill = 0; string worst = "";
         int step = System.Math.Max(1, n / 200);
         for (int i = 0; i < n; i += step)
         {
@@ -184,18 +206,212 @@ public static class GradingBuilder
             double el = System.Math.Sqrt(ex * ex + ey * ey); if (el < 1e-9) continue;
             double mx = (a.X + b.X) * 0.5, my = (a.Y + b.Y) * 0.5;
             double nx = s * (-ey / el), ny = s * (ex / el); // 내부 방향 법선
+            // ★검산 — 이 표본 자리에서 자가 성립하지 않으면 세지 않는다.
+            if (InRing(mx - nx * 0.25, my - ny * 0.25) || !InRing(mx + nx * 0.25, my + ny * 0.25))
+            { unfit++; continue; }
             samples++;
             if (!TryElev(mx + nx * 0.25, my + ny * 0.25)) inMiss++;
             if (TryElev(mx - nx * 0.25, my - ny * 0.25))
             {
                 outHit++;
                 double spill = 0.25;
-                foreach (var dOut in new[] { 0.5, 1.0, 2.0, 4.0, 8.0 })
+                // ★★[JACK 0904] <b>자가 8m에서 끝나 있었다.</b> "최대 8.0m 이탈"이 실제 값인지
+                //   <b>자의 끝값</b>인지 구분이 안 됐다 — 옹벽 구간은 평면에서 15.7m까지 퍼진다.
+                foreach (var dOut in new[] { 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0 })
                 { if (TryElev(mx - nx * dOut, my - ny * dOut)) spill = dOut; else break; }
                 if (spill > maxSpill) { maxSpill = spill; worst = $"({(mx - nx * spill):F1},{(my - ny * spill):F1})"; }
             }
         }
-        return $"  [경계 정합 검증] 표본 {samples} · 경계밖 표면존재 {outHit}(최대 {maxSpill:F1}m 이탈{(worst == "" ? "" : " 예 " + worst)}) · 경계안 비어있음 {inMiss}\n";
+        return $"  [경계 정합 검증] 표본 {samples}"
+             + (unfit > 0 ? $"(+검산 탈락 {unfit} — 링이 탐침 25cm보다 얇은 자리)" : "")
+             + $" · 경계밖 표면존재 {outHit}(최대 {maxSpill:F1}m 이탈{(worst == "" ? "" : " 예 " + worst)}) · 경계안 비어있음 {inMiss}\n";
+    }
+
+    /// <summary>★★★[JACK 0904 "계획 지표면보다 사면이 넓어지는 부분이 있다"] <b>표면이 부지 밖으로
+    /// 얼마나 나갔는지를 클립링과 나란히 잰다 — 둘레를 칸으로 갈라서.</b>
+    /// <para>왜 칸으로 가르나: 옹벽 구간은 평면에서 <b>15.7m</b>까지 퍼지는데(15단 × 소단 1m) 그중 실제로
+    /// 필요한 것은 절토 깊이만큼뿐이다. 전체 최댓값 하나로는 <b>어느 구간이 안 잘렸는지</b>가 안 보인다.</para>
+    /// <para>표면은 <b>보이는 삼각형</b>만 본다(경계로 숨겨진 것은 GetTriangles(false)가 제외) —
+    /// 이 값이 곧 화면에 그려지는 지표면의 실제 범위다.</para></summary>
+    public static string VerifySurfaceExtent(TinSurface tin, IReadOnlyList<Point3> plan, IReadOnlyList<Point3>? clipRing)
+    {
+        if (plan == null || plan.Count < 3) return "  [표면 내밀기 실측] 계획 경계 부족\n";
+        var cum = DH.Grading.Core.GradingGeometry.CumLen2D(plan);
+        double perim = cum[cum.Length - 1];
+        if (perim < 1e-6) return "  [표면 내밀기 실측] 둘레 0\n";
+        const int NB = 16;
+        double binLen = perim / NB;
+        var surfMax = new double[NB]; var clipMax = new double[NB];
+        var surfX = new double[NB]; var surfY = new double[NB];
+        int m = cum.Length - 1;
+
+        // 계획 폴리곤 밖으로 나간 거리(안이면 0).
+        double OutDist(double x, double y)
+        {
+            double best = double.MaxValue; bool inside = false;
+            for (int i = 0, jj = m - 1; i < m; jj = i++)
+            {
+                var a = plan[i]; var b = plan[jj];
+                if ((a.Y > y) != (b.Y > y))
+                {
+                    double xi = a.X + (y - a.Y) * (b.X - a.X) / (b.Y - a.Y);
+                    if (x < xi) inside = !inside;
+                }
+                var p0 = plan[i]; var p1 = plan[(i + 1) % m];
+                double ex = p1.X - p0.X, ey = p1.Y - p0.Y, l2 = ex * ex + ey * ey;
+                double u = l2 < 1e-18 ? 0 : ((x - p0.X) * ex + (y - p0.Y) * ey) / l2;
+                u = u < 0 ? 0 : (u > 1 ? 1 : u);
+                double px = p0.X + ex * u, py = p0.Y + ey * u;
+                double d2 = (x - px) * (x - px) + (y - py) * (y - py);
+                if (d2 < best) best = d2;
+            }
+            return inside ? 0 : Math.Sqrt(best);
+        }
+
+        // 계획 폴리곤 밖으로 나간 거리(안이면 0)와 그 자리의 둘레 파라미터.
+        void Feed(double x, double y, double[] into, double[]? bx, double[]? by)
+        {
+            double best = double.MaxValue, bestT = 0; bool inside = false;
+            for (int i = 0, jj = m - 1; i < m; jj = i++)
+            {
+                var a = plan[i]; var b = plan[jj];
+                if ((a.Y > y) != (b.Y > y))
+                {
+                    double xi = a.X + (y - a.Y) * (b.X - a.X) / (b.Y - a.Y);
+                    if (x < xi) inside = !inside;
+                }
+                var p0 = plan[i]; var p1 = plan[(i + 1) % m];
+                double ex = p1.X - p0.X, ey = p1.Y - p0.Y, l2 = ex * ex + ey * ey;
+                double u = l2 < 1e-18 ? 0 : ((x - p0.X) * ex + (y - p0.Y) * ey) / l2;
+                u = u < 0 ? 0 : (u > 1 ? 1 : u);
+                double px = p0.X + ex * u, py = p0.Y + ey * u;
+                double d2 = (x - px) * (x - px) + (y - py) * (y - py);
+                if (d2 < best) { best = d2; bestT = cum[i] + Math.Sqrt(l2) * u; }
+            }
+            if (inside) return;
+            double d = Math.Sqrt(best);
+            int bi2 = (int)(bestT / binLen); if (bi2 < 0) bi2 = 0; if (bi2 >= NB) bi2 = NB - 1;
+            if (d > into[bi2]) { into[bi2] = d; if (bx != null && by != null) { bx[bi2] = x; by[bi2] = y; } }
+        }
+
+        // ★★★[JACK 0904 "무조건 잘리는 코드 말고 원인을 파악하는 코드부터"]
+        //   <b>안 잘린 표면이 클립링 안인지 밖인지를 로그가 직접 판정한다.</b>
+        //   밖이면 = 자르라고 준 선대로 <b>Civil이 안 자른 것</b>(경계 주입 문제),
+        //   안이면 = <b>선 자체가 그 자리를 감싸고 있는 것</b>(교선 문제). 고칠 자리가 정반대다.
+        bool InClip(double x, double y)
+        {
+            if (clipRing == null || clipRing.Count < 3) return true;
+            int cn = clipRing.Count;
+            bool dup = Math.Abs(clipRing[0].X - clipRing[cn - 1].X) < 1e-9
+                    && Math.Abs(clipRing[0].Y - clipRing[cn - 1].Y) < 1e-9;
+            int mm = dup ? cn - 1 : cn;
+            bool inside = false;
+            for (int i = 0, j = mm - 1; i < mm; j = i++)
+            {
+                var a = clipRing[i]; var b = clipRing[j];
+                if ((a.Y > y) != (b.Y > y))
+                {
+                    double xi = a.X + (y - a.Y) * (b.X - a.X) / (b.Y - a.Y);
+                    if (x < xi) inside = !inside;
+                }
+            }
+            return inside;
+        }
+        int outPad = 0, outClip = 0; double ocX = 0, ocY = 0, ocD = -1;
+        var seenOut = new HashSet<(long, long)>();
+        // 점에서 클립링 폴리라인까지의 최근접 거리 — '링 위'인지 가리는 데만 쓴다.
+        double DistToRing(double x, double y)
+        {
+            if (clipRing == null || clipRing.Count < 2) return double.MaxValue;
+            double best = double.MaxValue;
+            for (int i = 0; i < clipRing.Count; i++)
+            {
+                var a = clipRing[i]; var b = clipRing[(i + 1) % clipRing.Count];
+                double ex = b.X - a.X, ey = b.Y - a.Y, l2 = ex * ex + ey * ey;
+                double u = l2 < 1e-18 ? 0 : ((x - a.X) * ex + (y - a.Y) * ey) / l2;
+                u = u < 0 ? 0 : (u > 1 ? 1 : u);
+                double px = a.X + ex * u, py = a.Y + ey * u;
+                double d2 = (x - px) * (x - px) + (y - py) * (y - py);
+                if (d2 < best) best = d2;
+            }
+            return Math.Sqrt(best);
+        }
+
+        // ★[검토 0904] <b>진단이 비용이 되면 안 된다</b>(0805 교훈). 삼각형 하나에 정점 3개를 다 재면
+        //   정점이 이웃 삼각형과 6번쯤 겹쳐 <b>같은 점을 여섯 번</b> 잰다. 실무 도면(경계 200점 ·
+        //   클립링 2000점 · 삼각형 5만)이면 호출당 수 초가 되고, 이 함수는 한 번 돌 때 <b>세 번</b> 불린다.
+        //   → ① mm 격자로 <b>같은 점은 한 번만</b> ② 상한을 두고 넘으면 <b>솎아서</b> 잰다(최댓값 추정치).
+        const int MaxVtx = 60000;
+        var seenV = new HashSet<(long, long)>();
+        int skipped = 0;
+        bool Take(double x, double y)
+        {
+            if (!seenV.Add(((long)Math.Round(x * 1000), (long)Math.Round(y * 1000)))) return false;
+            if (seenV.Count > MaxVtx) { skipped++; return false; }
+            return true;
+        }
+        var swE = System.Diagnostics.Stopwatch.StartNew();
+        int vN = 0;
+        try
+        {
+            using var tc = tin.GetTriangles(false);   // 보이는 삼각형만 = 화면에 그려지는 것
+            foreach (TinSurfaceTriangle t in tc)
+            {
+                try
+                {
+                    var p1 = t.Vertex1.Location; var p2 = t.Vertex2.Location; var p3 = t.Vertex3.Location;
+                    if (Take(p1.X, p1.Y)) { Feed(p1.X, p1.Y, surfMax, surfX, surfY); vN++; }
+                    if (Take(p2.X, p2.Y)) { Feed(p2.X, p2.Y, surfMax, surfX, surfY); vN++; }
+                    if (Take(p3.X, p3.Y)) { Feed(p3.X, p3.Y, surfMax, surfX, surfY); vN++; }
+                    if (clipRing != null)
+                        for (int k2 = 0; k2 < 3; k2++)
+                        {
+                            var q0 = k2 == 0 ? p1 : k2 == 1 ? p2 : p3;
+                            if (!seenOut.Add(((long)Math.Round(q0.X * 1000), (long)Math.Round(q0.Y * 1000)))) continue;
+                            double dOut = OutDist(q0.X, q0.Y);
+                            if (dOut <= 0.001) continue;          // 부지 안 — 볼 것 없음
+                            outPad++;
+                            // ★★[검토 0904 실측] <b>링 위에 놓인 점을 밖으로 세고 있었다.</b>
+                            //   비파괴 클립은 경계선 <b>위</b>에 정점을 박는데, 교차수 판정은 경계 위 점의
+                            //   답이 정의되지 않아 대략 절반이 "밖"으로 떨어진다(절토 32% · 성토 47%).
+                            //   실측: "밖" 51개의 최원거리 3.0m가 <b>클립링 자신의 최대치와 같았다</b> —
+                            //   전부 링 위의 점이었다. tol 2cm를 두면 51개 → <b>0개</b>.
+                            if (!InClip(q0.X, q0.Y) && DistToRing(q0.X, q0.Y) > 0.02)
+                            { outClip++; if (dOut > ocD) { ocD = dOut; ocX = q0.X; ocY = q0.Y; } }
+                        }
+                }
+                finally { t.Dispose(); }
+            }
+        }
+        catch (System.Exception ex) { return $"  [표면 내밀기 실측] 삼각형 읽기 실패 — {ex.Message}\n"; }
+
+        if (clipRing != null)
+            foreach (var q in clipRing) Feed(q.X, q.Y, clipMax, null, null);
+
+        var sb = new System.Text.StringBuilder();
+        double sAll = 0, cAll = 0; int leak = 0;
+        for (int i = 0; i < NB; i++) { if (surfMax[i] > sAll) sAll = surfMax[i]; if (clipMax[i] > cAll) cAll = clipMax[i]; }
+        swE.Stop();
+        sb.Append($"  [표면 내밀기 실측] 정점 {vN}개(중복 제외) · 둘레 {perim:F0}m를 {NB}칸({binLen:F1}m)으로 · {swE.ElapsedMilliseconds}ms"
+                + (skipped > 0 ? $" · ⚠{MaxVtx}개 넘어 {skipped}개 솎음(최댓값은 추정)" : ""));
+        for (int i = 0; i < NB; i++)
+        {
+            // ★[JACK 0904] 클립링을 안 넘긴 호출(완성면)에서는 <b>비교 대상이 없다</b> —
+            //   그런데 전 칸에 ★가 떠서 "16/16 안 잘림"으로 읽혔다. 틀린 자는 남겨 두지 않는다.
+            bool bad = clipRing != null && surfMax[i] > clipMax[i] + 1.0;
+            if (bad) leak++;
+            sb.Append($"\n    t={i * binLen,5:F0}~{(i + 1) * binLen,-5:F0} 표면 {surfMax[i],6:F1}m / 클립 {clipMax[i],6:F1}m"
+                    + (bad ? $"  ★안 잘림 @ ({surfX[i]:F1},{surfY[i]:F1})" : ""));
+        }
+        sb.Append(clipRing != null
+            ? $"\n    → 표면 최대 {sAll:F1}m · 클립링 최대 {cAll:F1}m · ★안 잘린 칸 {leak}/{NB}"
+            : $"\n    → 표면 최대 {sAll:F1}m (클립링 미전달 — 비교 없음)");
+        if (clipRing != null)
+            sb.Append($"\n    ★★판정 — 부지 밖 표면 정점 {outPad}개 중 <b>클립링 밖</b> {outClip}개"
+                    + (outClip > 0 ? $" (최원거리 {ocD:F1}m @ {ocX:F1},{ocY:F1}) → 자르라고 준 선대로 안 잘렸다"
+                                   : " → 클립링 밖은 없다 = 클립링 자신이 그 자리를 감싸고 있다"));
+        sb.Append("\n");
+        return sb.ToString();
     }
 
     /// <summary>기존 경계 정의를 모두 제거하고 새 Outer(+선택 Hide)로 교체 — paste 거부 시 정규화 링 재주입용.</summary>
@@ -1592,7 +1808,8 @@ public static class GradingBuilder
         // [§75 — 0728] 옹벽 구간 좌우 끝의 '급하강(다이브)' 긴 선분(>2.5m)은 브레이크라인에서 제외.
         //   깊은 단일수록 다이브가 수십 m라 이웃 링(1m 간격)의 다이브끼리 평면 교차 → 이벤트 뷰어 오류 홍수.
         //   정상 링은 densify로 전 선분 ≤1m라 무영향. 측벽 면은 TIN 삼각화가 채우므로 형상은 유지된다.
-        const double MaxSeg = 2.5;
+        //   ★[§68] 문턱은 Core에 하나만 둔다 — 교차를 재는 쪽(BreaklinePrep)이 같은 값을 봐야 한다.
+        const double MaxSeg = DH.Grading.Core.BreaklinePrep.RingSegMaxM;
         const double MaxSeg2 = MaxSeg * MaxSeg;
         var runs = new List<List<Point3d>>();
         var cur = new List<Point3d> { pts[0] };

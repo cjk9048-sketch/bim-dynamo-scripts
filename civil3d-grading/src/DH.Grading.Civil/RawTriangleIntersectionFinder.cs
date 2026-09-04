@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Threading.Tasks;
@@ -859,7 +859,46 @@ public static class RawTriangleIntersectionFinder
             double DD(Point3 a, Point3 b) => Math.Sqrt((a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y));
             const double MAXGAP = 25.0;
             var closedLoops = new List<List<Point3>>(); var pool = new List<List<Point3>>();
-            foreach (var c in result) { if (c.Count < 2) continue; if (c.Count > 3 && DD(c[0], c[c.Count - 1]) < 0.5) closedLoops.Add(c); else pool.Add(new List<Point3>(c)); }
+            // ★★★[JACK 0904 "옹벽 옆에 부채꼴이 남는다" — 원인 확정] <b>이미 닫힌 껍데기를 이어붙이기 통에 넣고 있었다.</b>
+            //
+            //   종전 조건은 <c>c.Count &gt; 3</c>였다. 그런데 점 3개짜리 닫힌 사슬(첫=끝, 실제 정점 2개)은
+            //   <b>넓이 0인 껍데기</b>인데도 이 조건에 걸려 <b>열린 사슬 취급</b>으로 통에 들어갔다.
+            //   통은 25m 안의 끝점을 무조건 잇는다 → 실측(0904 절토):
+            //     고리B(1.9m)@210406,510046 →14.4m→ 고리C(0.1m)@210410,510060 →23.6m→ 고리A(0.6m)@210393,510027
+            //     →37.7m 직선 폐합 = <b>점 10개 · 둘레 78.3m · 최장변 37.6m의 가짜 고리</b>
+            //   (로그의 `체인3: 점10 길이78.3m … 최장변 37.63m`와 0.1m 오차로 일치)
+            //   그 가짜 고리는 <b>면적이 커서</b> 짜투리 필터를 통과하고(반대로 진짜 4.5㎡ 절토는 버려졌다),
+            //   부지와 합쳐지며 <b>8m짜리 바늘 가시</b>가 되어 클립 경계에 박혔다.
+            //   Civil 3D는 그 가시대로 <b>1.5cm 오차로 정확히</b> 잘랐다 — 자른 쪽이 아니라 <b>준 선</b>이 가짜였다.
+            //
+            //   → 닫힌 사슬은 점 수와 무관하게 <b>통에 넣지 않는다.</b> 넓이가 있으면 고리로 인정하고,
+            //     없으면(점 3개 이하) <b>버린다</b>. 껍데기는 원래 아무 일도 안 해야 한다.
+            int shellDrop = 0;
+            var shells = new List<List<Point3>>();
+            foreach (var c in result)
+            {
+                if (c.Count < 2) continue;
+                if (DD(c[0], c[c.Count - 1]) < 0.5)          // 이미 닫혀 있다
+                {
+                    if (c.Count > 3) closedLoops.Add(c);      // 정점 3개 이상 = 넓이가 있다
+                    else { shellDrop++; shells.Add(new List<Point3>(c)); }   // 넓이 0 껍데기
+                    continue;
+                }
+                pool.Add(new List<Point3>(c));
+            }
+            // ★★[검토 0904] <b>진짜 고리가 하나도 없으면 껍데기를 도로 넣는다 — 실패해도 종전 동작.</b>
+            //   껍데기만 나오는 도면(계획고가 지반과 ±0.5m로 붙은 얕은 정지, 절토 부지의 성토 자락 등)에서
+            //   전부 버리면 루프가 0개가 되고, 그러면 <b>원인과 무관한 중단 팝업</b>
+            //   ("계획 폴리곤의 고도(Z)를 확인하세요")이나 굴착의 <b>조용한 구조물 누락</b>으로 간다.
+            //   이 변경의 목적은 '진짜 고리 옆에 붙는 가짜 고리'를 없애는 것이지, 없던 실패를 만드는 게 아니다.
+            //   ※조건은 <b>"진짜 닫힌 고리가 하나도 없다"</b> 하나뿐이다 — 통에 열린 조각이 있어도
+            //     그것만으로 5㎡를 못 넘길 수 있고, 그때 껍데기가 있었으면 종전엔 넘겼다.
+            if (closedLoops.Count == 0 && shells.Count > 0)
+            {
+                dbg.AppendLine($"[이어닫기] ⚠진짜 고리가 없다 — 껍데기 {shells.Count}개를 종전대로 이어붙인다(회귀 방지)");
+                pool.AddRange(shells); shellDrop = 0;
+            }
+            if (shellDrop > 0) dbg.AppendLine($"[이어닫기] 넓이 0 껍데기 {shellDrop}개 버림(닫혀 있는데 점 3개 이하 — 이어붙이기에 안 씀)");
             while (pool.Count > 0)
             {
                 int li = 0; double ll = -1;
@@ -883,6 +922,9 @@ public static class RawTriangleIntersectionFinder
                     }
                     if (bi < 0) break;
                     var cand = pool[bi]; pool.RemoveAt(bi);
+                    // ★[JACK 0904] <b>이을 때마다 간격을 남긴다.</b> 잘못 이어지면 이 숫자가 먼저 티가 난다
+                    //   (정지경계 잇기가 이미 쓰는 방식). 5m 넘는 이음만 남긴다 — 정상은 수십 cm다.
+                    if (bd > 5.0) dbg.AppendLine($"[이어닫기] ⚠먼 이음 {bd:F1}m — 사슬끝({ce.X:F1},{ce.Y:F1}) ↔ 조각({cand[0].X:F1},{cand[0].Y:F1})");
                     if (mode == 1) chain.AddRange(cand);
                     else if (mode == 2) { cand.Reverse(); chain.AddRange(cand); }
                     else if (mode == 3) { cand.Reverse(); cand.AddRange(chain); chain = cand; }
@@ -916,6 +958,8 @@ public static class RawTriangleIntersectionFinder
                         viaHull = true; break;
                     }
                     if (viaHull) dbg.AppendLine($"[이어닫기] hull 경로 폐합(끝간격 {DD(cs2, ce2):F1}m, 최소면적 방향)");
+                    else if (DD(cs2, ce2) > 5.0)
+                        dbg.AppendLine($"[이어닫기] ⚠직선 폐합 {DD(cs2, ce2):F1}m — ({cs2.X:F1},{cs2.Y:F1})↔({ce2.X:F1},{ce2.Y:F1})");
                     chain.Add(new Point3(chain[0].X, chain[0].Y, chain[0].Z));
                 }
                 if (chain.Count >= 4) closedLoops.Add(chain);
