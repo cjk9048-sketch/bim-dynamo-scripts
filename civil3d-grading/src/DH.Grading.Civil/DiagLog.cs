@@ -55,6 +55,47 @@ public static class DiagLog
     {
         string carry = "";
         try { if (Carry.Length > 0) { carry = Carry.ToString(); Carry.Clear(); } } catch { }
+        Archive();
         try { System.IO.File.WriteAllText(Resolved, text + carry); } catch { }
+    }
+
+    /// <summary>★[JACK 0904] <b>덮어쓰기 전에 직전 판을 옆에 남긴다.</b>
+    /// <para>고침 전/후를 나란히 놓아야 판정이 되는 국면이 계속 나오는데(§67 A/B/A, §68, 0904 이음매),
+    /// 로그가 실행마다 통째로 덮여 <b>비교 자료가 사라졌다</b>(0904 실측: 11:02 판 성토 체인 덤프 복구 불가).
+    /// 시각을 붙여 <c>진단이력</c> 폴더로 옮기고 최근 20판만 남긴다 — 용량은 판당 수십 KB다.</para></summary>
+    private static void Archive()
+    {
+        try
+        {
+            if (!System.IO.File.Exists(Resolved)) return;
+            string dir = System.IO.Path.GetDirectoryName(Resolved) ?? ".";
+            string hist = System.IO.Path.Combine(dir, "진단이력");
+            System.IO.Directory.CreateDirectory(hist);
+            string stamp = System.IO.File.GetLastWriteTime(Resolved).ToString("yyyyMMdd_HHmmss");
+            // 같은 초에 두 번 돌아도 안 덮이게 — 이미 있으면 그대로 둔다(먼저 것이 원본).
+            string dst = System.IO.Path.Combine(hist, $"DHGRADE_진단_{stamp}.log");
+            if (!System.IO.File.Exists(dst)) System.IO.File.Copy(Resolved, dst);
+            // 곁다리 덤프도 같은 시각으로 함께 — 체인·클립링은 이 로그와 짝이라 따로 두면 못 맞춘다.
+            foreach (var side in new[] { "DHXSEC_진단.log", "DHXSEC_진단_절토.log", "DHXSEC_진단_성토.log" })
+            {
+                string src = System.IO.Path.Combine(dir, side);
+                if (!System.IO.File.Exists(src)) continue;
+                string d2 = System.IO.Path.Combine(hist, System.IO.Path.GetFileNameWithoutExtension(side) + "_" + stamp + ".log");
+                if (!System.IO.File.Exists(d2)) System.IO.File.Copy(src, d2);
+            }
+            // 오래된 것부터 정리 — 최근 20판(짝 파일 포함이라 파일 수는 그 몇 배)만.
+            var files = new System.IO.DirectoryInfo(hist).GetFiles("DHGRADE_진단_*.log");
+            if (files.Length > 20)
+            {
+                System.Array.Sort(files, (a, b) => a.LastWriteTime.CompareTo(b.LastWriteTime));
+                for (int i = 0; i < files.Length - 20; i++)
+                {
+                    string tag = System.IO.Path.GetFileNameWithoutExtension(files[i].Name).Replace("DHGRADE_진단_", "");
+                    foreach (var f in new System.IO.DirectoryInfo(hist).GetFiles("*_" + tag + ".log"))
+                        try { f.Delete(); } catch { }
+                }
+            }
+        }
+        catch { }
     }
 }

@@ -1,4 +1,4 @@
-// WallBlocks 오프라인 하네스 — 옹벽 3D 보강토 블록 그리드 필터링 + 우각부 반블록 플러시 검증
+﻿// WallBlocks 오프라인 하네스 — 옹벽 3D 보강토 블록 그리드 필터링 + 우각부 반블록 플러시 검증
 // (walltest와 같은 PASS/FAIL 방식)
 using DH.Grading.Core;
 
@@ -833,6 +833,11 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
                 foreach (var ring in vs.Rings)
                     for (int i = 0; i + 1 < ring.Count; i++)
                     {
+                        // ★[§68] 프로덕션(BreaklinePrep)과 같은 규칙 — 브레이크라인이 안 되는 긴 변
+                        //   (찢어진 자리를 가로지르는 현)은 TIN에 없으므로 교차로 세지 않는다.
+                        double segL = Math.Sqrt((ring[i + 1].X - ring[i].X) * (ring[i + 1].X - ring[i].X)
+                                              + (ring[i + 1].Y - ring[i].Y) * (ring[i + 1].Y - ring[i].Y));
+                        if (segL > BreaklinePrep.RingSegMaxM) continue;
                         if (!SegX(ring[i], ring[i + 1], line[j], line[j + 1], out double u, out double v)) continue;
                         double zr = ring[i].Z + (ring[i + 1].Z - ring[i].Z) * u;
                         double zl = line[j].Z + (line[j + 1].Z - line[j].Z) * v;
@@ -3938,7 +3943,7 @@ double WidthOf(WallBlocks.Block b) => b.Half ? HW : W;
     }
 }
 
-Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+
 
 /// <summary>로컬 (u,v) 다각형 안에 점이 있는가 — 도넛 네 모서리 검사(하니스용 사본).</summary>
 static bool PointInPolyLocal(double u, double v, IReadOnlyList<(double u, double v)> poly)
@@ -8099,6 +8104,10 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
 }
 
 
+// ★★[검토 0904] <b>요약이 파일 48% 지점에서 찍히고 있었다.</b> 그 뒤 S54~S95의 Check 426개가
+//   요약에 안 잡혀, '전부 통과'가 <b>절반만 보증하는 문장</b>이었다(실측: 요약 뒤에서 S54가 FAIL한 판이 있었다).
+//   fails 계수 자체는 맞았고 세는 자리만 틀렸다 — 맨 끝으로 옮긴다.
+Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
 return fails == 0 ? 0 : 1;
 
 static double BaseOf(GradingParams p, bool up) => up ? p.CutSlope : p.FillSlope;
