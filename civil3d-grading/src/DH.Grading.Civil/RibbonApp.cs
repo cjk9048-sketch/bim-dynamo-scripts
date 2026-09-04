@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -1136,15 +1136,29 @@ public sealed class RibbonApp : IExtensionApplication
         catch { }
     }
 
-    /// <summary>리본 버튼 → 명령줄로 명령 문자열 전송.</summary>
+    /// <summary>리본 버튼 → 명령줄로 명령 문자열 전송.
+    ///
+    /// <para>★★★[JACK 0904 "측점 삭제로 작업하다가 측점 추가를 눌러도 계속 삭제 상태고,
+    /// 꼭 ESC를 누르고 다시 눌러야 해 — 반대일 때도 마찬가지"]
+    /// <b>돌고 있는 명령을 먼저 취소한다.</b></para>
+    ///
+    /// <para>종전엔 명령 문자열만 보냈다. 그런데 측점 추가·삭제처럼 <b>스스로 물어보며 도는 명령</b>은
+    /// 입력을 기다리는 중이라, 새 명령 문자열은 <b>그 물음의 답으로 먹히거나 줄에 쌓여</b>
+    /// 사용자가 ESC를 누를 때까지 시작되지 않는다 — 커서는 앞 명령의 모양(네모) 그대로다.</para>
+    ///
+    /// <para>→ AutoCAD 매크로가 예부터 쓰는 방식대로 <b>ESC 두 번</b>(<c>^C^C</c>)을 앞에 붙인다.
+    /// 돌던 명령이 있으면 끊고, 없으면 아무 일도 안 한다(빈 명령줄에서 ESC는 무해하다).</para></summary>
     private sealed class RelayCommand(string command) : ICommand
     {
+        /// <summary>ESC 두 번 — AutoCAD 매크로의 <c>^C^C</c>와 같은 것(0x03 = Ctrl+C).</summary>
+        private const string CancelPrefix = "\u0003\u0003";
+
         public event EventHandler? CanExecuteChanged;
         public bool CanExecute(object? parameter) => true;
         public void Execute(object? parameter)
         {
             var doc = AcadApp.DocumentManager.MdiActiveDocument;
-            doc?.SendStringToExecute(command, true, false, true);
+            doc?.SendStringToExecute(CancelPrefix + command, true, false, true);
         }
     }
 }
