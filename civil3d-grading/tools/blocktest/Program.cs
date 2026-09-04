@@ -8104,6 +8104,54 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
 }
 
 
+// ★ S95 [JACK 0904 · §68 미해결이던 안전망] <b>가짜 옹벽선을 끊는 문턱이 꺼져 있었다.</b>
+//   `SplitAtBogusSeg`의 문턱 = `MaxSegOfRing(crest) × 1.5 + 0.5m`인데, 옹벽 구간이 있으면 링이
+//   이음매에서 벌어진 채 조립돼(§68) 그 <b>벌어진 자리(100m대)까지 최대 변으로 세고 있었다</b>.
+//   실측 0904 로그: `변길이 링 102.31m` → 문턱 154m. 정상 옹벽선 변은 1.00m이니 사실상 무방비였고,
+//   0805에 겪은 "사선으로 존재하지 않는 옹벽"이 바로 이 안전망이 잡아야 했던 것이다.
+//   → 링은 densify로 1m 이하가 보장되므로 2.5m(BreaklinePrep.RingSegMaxM)를 넘는 변은 정상 변이
+//     아니다(TIN에도 안 들어간다). 그걸 빼고 재면 문턱이 제 크기로 돌아온다.
+//   ※이 검사는 <b>고치기 전에는 반드시 실패한다</b> — 무동작으로 통과하지 않는다.
+{
+    var bnd95 = new List<Point3>
+    {
+        new(210401.11, 510061.32, 90), new(210401.11, 510011.32, 90),
+        new(210431.11, 510011.32, 90), new(210431.11, 510061.32, 90),
+    };
+    var pr95 = new GradingParams
+    {
+        CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 1.5, FillSlope = 1.5, CellSize = 1.0,
+        MaxBenches = 15, MaxRise = 75,
+        VertexSpacing = 2.0, MinSlope = 0.05, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+    var zW95 = new List<SlopeZone> { SlopeZone.Wall(150.1, 30.2, 0, int.MaxValue, 0.05, 1.5) };
+    var vW95 = GradingGeometry.Build(bnd95, new FlatGround(150), pr95, true, zW95);
+
+    // 재현 조건 — 링이 실제로 찢어져 있어야 이 검사가 의미가 있다.
+    double maxGap95 = 0;
+    for (int i = 1; i < vW95.Rings.Count; i++)
+    {
+        var r = vW95.Rings[i];
+        maxGap95 = Math.Max(maxGap95, Math.Sqrt((r[0].X - r[^1].X) * (r[0].X - r[^1].X) + (r[0].Y - r[^1].Y) * (r[0].Y - r[^1].Y)));
+    }
+    Check("S95 재현 조건: 옹벽 구간에서 링이 찢어져 있다", maxGap95 > 50, $"최대 벌어짐 {maxGap95:F1}m");
+
+    var rs95 = vW95.Rings.Select(r => (IReadOnlyList<Point3>)r).ToList();
+    WallRunBuilder.Build(bnd95, rs95, zW95, up: true, globalSlope: 1.5, minSlope: 0.05);
+    var m95 = System.Text.RegularExpressions.Regex.Match(WallRunBuilder.LastDiag, @"변길이 링 ([0-9.]+)m");
+    Console.WriteLine($"      S95 {WallRunBuilder.LastDiag}");
+    Check("S95 진단에 변길이가 찍힌다(시험 조건)", m95.Success, WallRunBuilder.LastDiag);
+    if (m95.Success)
+    {
+        double ringSeg = double.Parse(m95.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+        double lim = ringSeg * 1.5 + 0.5;
+        // ★★★고치기 전: 102.31m → 문턱 154m(무방비). 고친 뒤: ~1m → 문턱 ~2m.
+        Check("S95 ★★★가짜 옹벽선 문턱이 켜져 있다(찢어진 자리를 안 센다)", ringSeg <= 2.5,
+            $"변길이 링 {ringSeg:F2}m → 문턱 {lim:F1}m (고치기 전 102.31m → 154m)");
+    }
+}
+
 // ★★[검토 0904] <b>요약이 파일 48% 지점에서 찍히고 있었다.</b> 그 뒤 S54~S95의 Check 426개가
 //   요약에 안 잡혀, '전부 통과'가 <b>절반만 보증하는 문장</b>이었다(실측: 요약 뒤에서 S54가 FAIL한 판이 있었다).
 //   fails 계수 자체는 맞았고 세는 자리만 틀렸다 — 맨 끝으로 옮긴다.
