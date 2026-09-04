@@ -364,13 +364,31 @@ public static class WallRunBuilder
         return l[l.Count / 2];
     }
 
-    /// <summary>링의 최대 변 길이(닫는 변 포함).</summary>
+    /// <summary>링의 최대 변 길이 — <b>찢어진 자리는 뺀다</b>(닫는 변 포함).
+    /// <para>★★★[JACK 0904 · §68 미해결이던 것] 이 값은 <b>가짜 옹벽선을 끊는 문턱</b>의 재료다
+    /// (<see cref="SplitAtBogusSeg"/>: 문턱 = 이 값 × 1.5 + 0.5m). 그런데 옹벽 구간이 있으면 링이
+    /// 이음매에서 벌어진 채 조립되므로(§68), 여기서 그 <b>벌어진 자리를 같이 세고 있었다</b>:</para>
+    /// <code>
+    /// 실측 0904: 변길이 링 102.31m → 문턱 102.31×1.5+0.5 = 154m
+    ///            정상 옹벽선 변은 1.00m — 즉 안전망이 <b>사실상 꺼져 있었다</b>
+    /// </code>
+    /// <para>0805에 겪은 <i>"사선으로 존재하지 않는 옹벽"</i>이 바로 이 안전망이 잡아야 했던 것이다.
+    /// 링은 densify로 <b>1m 이하</b>가 보장되므로, <see cref="BreaklinePrep.RingSegMaxM"/>(2.5m)를
+    /// 넘는 변은 정상 변이 아니라 <b>찢어진 자리를 가로지르는 현</b>이다 — TIN에도 안 들어간다.
+    /// 그걸 빼고 재면 문턱이 제 크기(1.0×1.5+0.5 = 2.0m)로 돌아온다.</para>
+    /// <para>※전부 문턱을 넘는 퇴화 링이면 <b>종전대로</b> 전체 최댓값을 쓴다 — 문턱이 0이 되어
+    /// 멀쩡한 옹벽선까지 토막 내는 것이 더 나쁘다(실패해도 종전 동작).</para></summary>
     private static double MaxSegOfRing(IReadOnlyList<Point3> r)
     {
-        double mx = 0;
+        double mx = 0, mxAll = 0;
         int c = r.Count;
-        for (int i = 0; i < c; i++) mx = System.Math.Max(mx, Dist2D(r[i], r[(i + 1) % c]));
-        return mx;
+        for (int i = 0; i < c; i++)
+        {
+            double d = Dist2D(r[i], r[(i + 1) % c]);
+            if (d > mxAll) mxAll = d;
+            if (d <= BreaklinePrep.RingSegMaxM && d > mx) mx = d;
+        }
+        return mx > 0 ? mx : mxAll;
     }
 
     /// <summary>옹벽선을 '가짜로 긴 변'에서 끊는다 — 인접하지 않은 정점이 이어진 자리.

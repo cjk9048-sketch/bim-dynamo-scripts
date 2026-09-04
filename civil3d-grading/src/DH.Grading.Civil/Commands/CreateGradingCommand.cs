@@ -1608,6 +1608,15 @@ public sealed class CreateGradingCommand
             double net = fill - cut;
             string netWord = net >= 0 ? "부족(반입)" : "여유(반출)";
             var ci = System.Globalization.CultureInfo.InvariantCulture;
+            // ★[JACK 0904] <b>토량을 로그에도 남긴다.</b> 종전엔 팝업뿐이라 창을 닫으면 사라졌고,
+            //   그래서 0904에 "가짜 가시를 걷어내 토량이 얼마나 정정됐나"를 <b>잴 수가 없었다</b>.
+            //   고침마다 "토량이 안 변했나"를 확인하려면 남아 있어야 한다(진단이력에 판별로 보관된다).
+            try
+            {
+                DiagLog.Append(string.Create(ci,
+                    $"\n■ 토량\n  절토 {cut:N0}㎥ · 성토 {fill:N0}㎥ · 순토 {System.Math.Abs(net):N0}㎥({netWord})\n"));
+            }
+            catch { }
             return string.Create(ci, $"절토량 : {cut,12:N0} ㎥\n성토량 : {fill,12:N0} ㎥\n순토량 : {System.Math.Abs(net),12:N0} ㎥  ({netWord})");
         }
         catch (System.Exception ex)
