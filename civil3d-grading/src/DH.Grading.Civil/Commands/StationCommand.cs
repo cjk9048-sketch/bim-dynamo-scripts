@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
@@ -103,8 +103,9 @@ public static class StationCommand
             //   세로선(<c>CR-GRID-VERT</c>)은 <b>측점 하나에 하나씩</b> 서 있으므로 짐작할 것이 없다.
             if (del)
             {
-                bool changedD = DeleteByLine(doc, db, ed, ref alignId, alignName);
-                if (!changedD) return;
+                int actD = DeleteByLine(doc, db, ed, ref alignId, alignName);
+                if (actD == 0) return;
+                if (actD == 2) continue;          // 못 지운 것 — 다시 그리지 않고 또 고른다
                 RedrawProfile(doc, ed);
                 try { if (XsecViewCommand.Refresh(doc)) ed.WriteMessage("\n  · 횡단도도 다시 그렸습니다(같은 자리)."); }
                 catch (System.Exception exD) { ed.WriteMessage("\n  · 횡단도 갱신 실패 — " + exD.Message); }
@@ -618,6 +619,30 @@ public static class StationCommand
         string why = frontBack ? StationMarks.FrontBackWhy : "직접 찍음";
 
         // ── ② 측점 목록 저장 — 이건 <b>반드시 남아야 하는 것</b>이라 따로 커밋한다.
+        // ★★★[JACK 0904 "옹벽부 측점을 지우면 측점추가로 다시 살릴 순 없는 거 맞지?"]
+        //   <b>지웠던 자리 근처를 찍으면 그 자리로 붙여서 되살린다.</b>
+        //
+        //   지운 자리는 <b>1cm</b>(MergeTol) 안에서만 같은 자리로 친다. 그런데 종단도 축척이 1:1000이면
+        //   1cm는 종이에서 <b>0.01mm</b>다 — 클릭으로는 절대 못 맞춘다. 그래서 "지운 자리에서 빼기"만으로는
+        //   <b>자동 측점(옹벽·데이라잇·굴곡부)을 되살릴 길이 없었다.</b>
+        //   → 한 측점 간격 안에 지웠던 자리가 있으면 <b>찍은 값 대신 그 자리를 쓴다.</b>
+        //     (지우기 쪽이 "한 간격 밖이면 안 지운다"고 같은 자를 쓰고 있다 — 짝을 맞춘다.)
+        try
+        {
+            using var trR = db.TransactionManager.StartTransaction();
+            var dropR = StationMarks.LoadDropped(trR, alignId);
+            trR.Commit();
+            double bestD = double.MaxValue, bestS = 0;
+            foreach (double d0 in dropR)
+            { double dd = System.Math.Abs(d0 - st); if (dd < bestD) { bestD = dd; bestS = d0; } }
+            if (bestD <= System.Math.Max(1.0, GradingSettings.XsecInterval) && bestD > StationMarks.MergeTol)
+            {
+                ed.WriteMessage($"\n  · 지웠던 자리 {StationMarks.Fmt(bestS, idx)}가 {bestD:F2}m 옆에 있어 그 자리로 되살립니다.");
+                st = bestS;   // 아래에서 unDrop이 이 자리를 목록에서 빼 준다
+            }
+        }
+        catch { }
+
         bool saved;
         using (var tr1 = db.TransactionManager.StartTransaction())
         {
@@ -627,7 +652,22 @@ public static class StationCommand
             if (hit >= 0) { marks[hit] = new StationMarks.Mark(st, why); ed.WriteMessage("\n  · 같은 자리에 있어 이름만 바꿨습니다."); }
             else marks.Add(new StationMarks.Mark(st, why));
             saved = StationMarks.Save(tr1, alignId, marks);
-            if (saved) { tr1.Commit(); ed.WriteMessage($"\n  · 추가: {StationMarks.Fmt(st, idx)} '{why}'"); }
+            // ★★★[JACK 0904 "지웠던 곳을 다시 측점 추가하면 추가가 안 돼"]
+            //   <b>지운 자리 목록에서 그 자리를 빼 준다.</b> 종전엔 수동 목록에 넣기만 했는데,
+            //   측점 목록이 확정되는 자리(ProfileCommand)가 "여기는 넣지 마라"를 <b>수동·자동 가리지 않고</b>
+            //   적용하므로 방금 넣은 측점이 <b>그 자리에서 도로 걸러졌다</b>.
+            //   지우기와 추가는 같은 자리를 두고 겨루는 두 목록이라 <b>한쪽을 쓰면 다른 쪽도 손봐야</b> 한다
+            //   (지우기 쪽은 이미 그렇게 한다 — 수동 목록에서도 뺀다).
+            int unDrop = 0;
+            if (saved)
+                try
+                {
+                    var drop0 = StationMarks.LoadDropped(tr1, alignId);
+                    unDrop = drop0.RemoveAll(d => System.Math.Abs(d - st) <= StationMarks.MergeTol);
+                    if (unDrop > 0) StationMarks.SaveDropped(tr1, alignId, drop0);
+                }
+                catch { }
+            if (saved) { tr1.Commit(); ed.WriteMessage($"\n  · 추가: {StationMarks.Fmt(st, idx)} '{why}'" + (unDrop > 0 ? " (지웠던 자리를 되살렸습니다)" : "")); }
             else { tr1.Abort(); ed.WriteMessage("\n  · ⚠저장하지 못했습니다 — PVI도 심지 않습니다(도면과 목록이 어긋나면 안 됩니다)."); }
         }
         if (!saved) return false;
@@ -664,14 +704,17 @@ public static class StationCommand
     /// 목록에서 빼는 것으로는 안 지워진다(다시 그리면 되살아난다) —
     /// <see cref="StationMarks.SaveDropped"/>에 <b>"여기는 넣지 마라"</b>를 적어 둔다.
     /// 수동 측점이면 목록에서도 함께 뺀다.</para></summary>
-    private static bool DeleteByLine(Autodesk.AutoCAD.ApplicationServices.Document doc, Database db, Editor ed, ref ObjectId alignId, string alignName)
+    /// <returns>0=끝낸다 · 1=지웠다(다시 그린다) · <b>2=이번 것은 못 지운다(다시 그리지 않고 또 고르게 한다)</b>.
+    /// ★[JACK 0904] 주측점처럼 <b>지우면 안 되는 것</b>을 골랐을 때 <c>true</c>를 주면 <b>헛되이 전면 재작도</b>가 돌고,
+    /// <c>false</c>를 주면 <b>명령이 끝나</b> 다시 눌러야 한다 — 둘 다 틀렸다.</returns>
+    private static int DeleteByLine(Autodesk.AutoCAD.ApplicationServices.Document doc, Database db, Editor ed, ref ObjectId alignId, string alignName)
     {
         var peo = new PromptEntityOptions("\n[측점 삭제] 지울 측점의 세로선(빨강)을 고르세요 (Esc=끝): ");
         peo.SetRejectMessage("\n  · 종단뷰의 세로선(레이어 " + SheetCommand.GridVertLayer + ")을 골라 주세요.");
         peo.AddAllowedClass(typeof(Line), exactMatch: false);
         peo.AllowNone = false;
         var per = ed.GetEntity(peo);
-        if (per.Status != PromptStatus.OK) return false;
+        if (per.Status != PromptStatus.OK) return 0;
 
         double x = double.NaN;
         using (var tr = db.TransactionManager.StartTransaction())
@@ -684,14 +727,27 @@ public static class StationCommand
         if (double.IsNaN(x))
         {
             ed.WriteMessage("\n  · 그건 측점 세로선이 아닙니다(레이어 " + SheetCommand.GridVertLayer + ").");
-            return false;
+            return 2;
         }
 
         double? st = SheetCommand.StationAtX(db, x);
         if (!st.HasValue)
         {
             ed.WriteMessage("\n  · 그 선의 측점을 못 읽었습니다 — 종단도를 다시 그려 보세요.");
-            return false;
+            return 2;
+        }
+
+        // ★★★[JACK 0904 "주측점은 삭제 안 되게 해줘 — 팝업으로 알리고, 보조측점은 지워져도 된다"]
+        //   <b>주측점(No.n)은 노선의 뼈대</b>다. 도면을 읽는 기준이고 다른 도면·수량과 맞춰 보는 자리라
+        //   지우면 안 된다. 보조측점·굴곡부·옹벽·데이라잇은 형상에서 나오는 것이라 지워도 된다.
+        //   ※ <b>지우기 전에</b> 막는다 — '지운 자리' 목록에 적고 나서 되돌리는 것보다 안전하다.
+        if (StationMarks.IsMajor(st.Value, GradingSettings.XsecInterval, out int noMajor))
+        {
+            string nm = StationMarks.Fmt(st.Value, GradingSettings.XsecInterval);
+            try { AcadApp.ShowAlertDialog($"주측점은 삭제할 수 없습니다.\n\n  · {nm}  (No.{noMajor})\n\n보조측점·굴곡부·옹벽 측점은 지울 수 있습니다."); }
+            catch { }
+            ed.WriteMessage($"\n  · 주측점 {nm}은 삭제할 수 없습니다 — 다른 세로선을 고르세요.");
+            return 2;   // 다시 그리지 않고 또 고르게 한다
         }
 
         using (var dl = doc.LockDocument())
@@ -699,7 +755,7 @@ public static class StationCommand
         {
             var drop = StationMarks.LoadDropped(tr, alignId);
             if (StationMarks.IsDropped(drop, st.Value))
-            { ed.WriteMessage($"\n  · {StationMarks.Fmt(st.Value, GradingSettings.XsecInterval)}는 이미 지워진 자리입니다."); tr.Commit(); return false; }
+            { ed.WriteMessage($"\n  · {StationMarks.Fmt(st.Value, GradingSettings.XsecInterval)}는 이미 지워진 자리입니다."); tr.Commit(); return 2; }
             drop.Add(st.Value);
             bool okD = StationMarks.SaveDropped(tr, alignId, drop);
 
@@ -712,7 +768,7 @@ public static class StationCommand
                                    + (cut > 0 ? " (수동 측점)" : " (자동 측점 — 다시 그려도 안 나옵니다)"));
             else ed.WriteMessage("\n  · ⚠저장하지 못했습니다.");
             tr.Commit();
-            return okD;
+            return okD ? 1 : 2;
         }
     }
 

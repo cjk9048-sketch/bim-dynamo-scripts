@@ -394,17 +394,35 @@ public sealed class ProfileCommand
                 if (ok) trM.Commit(); else trM.Abort();
             }
             catch (System.Exception ex) { log.AppendLine("  수동 측점 이월 실패 — " + ex.Message); }
-            // ★[JACK 0903] 지운 자리도 함께 이월한다 — 안 그러면 선형을 다시 만들 때 되살아난다.
-            try
-            {
-                using var trD = db.TransactionManager.StartTransaction();
-                if (carryDrop.Count > 0) StationMarks.SaveDropped(trD, alignId, carryDrop);
-                trD.Commit();
-            }
-            catch { }
             log.AppendLine(ok
                 ? $"  수동 측점 {carry.Count}개를 새 선형으로 이월했다"
                 : $"  ⚠수동 측점 {carry.Count}개를 이월하지 못했다 — 이번 판에서 사라진다");
+        }
+
+        // ★★★[JACK 0904 "최초 종단이 만들어질 때 생성된 측점도 삭제가 되어야 하는데
+        //   측점 추가로 만든 것만 삭제가 돼"] <b>지운 자리 이월은 수동 측점과 무관해야 한다.</b>
+        //
+        //   종전엔 이 블록이 <c>if (carry.Count &gt; 0)</c> <b>안에</b> 있었다 — carry는 <b>수동</b> 측점이다.
+        //   그래서 수동 측점이 하나도 없는 도면에서는 지운 자리가 <b>새 선형에 안 실렸다.</b>
+        //   종단도를 다시 그리면 선형이 새로 만들어지고, 지운 자리는 선형 확장사전에 사는 값이라
+        //   함께 사라진다 → <b>자동 측점(정측점·굴곡부·옹벽·데이라잇)은 매번 되살아났다.</b>
+        //
+        //   수동 측점이 지워진 것처럼 보였던 이유는 따로 있다 — 삭제할 때 <b>수동 목록에서도 빼기</b>
+        //   때문에(<see cref="StationCommand"/>) 이월이 실패해도 안 돌아온다.
+        //   <b>자동 측점은 오로지 이 목록에만 의존한다.</b>
+        if (carryDrop.Count > 0)
+        {
+            bool okD = false;
+            try
+            {
+                using var trD = db.TransactionManager.StartTransaction();
+                okD = StationMarks.SaveDropped(trD, alignId, carryDrop);
+                if (okD) trD.Commit(); else trD.Abort();
+            }
+            catch (System.Exception ex) { log.AppendLine("  지운 자리 이월 실패 — " + ex.Message); }
+            log.AppendLine(okD
+                ? $"  지운 자리 {carryDrop.Count}곳을 새 선형으로 이월했다(수동 측점 {carry.Count}개와 무관)"
+                : $"  ⚠지운 자리 {carryDrop.Count}곳을 이월하지 못했다 — 자동 측점이 되살아난다");
         }
 
         // ── ④-b ★[JACK 0811] <b>"측점은 20m 간격으로 하고, 주측점은 No.1 같이, 보조는 +00.00 형태로."</b>
