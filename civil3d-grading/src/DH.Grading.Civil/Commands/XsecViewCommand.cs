@@ -1,4 +1,4 @@
-using QT = DH.Grading.Core.QuantityTable;
+﻿using QT = DH.Grading.Core.QuantityTable;
 using System.Collections.Generic;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
@@ -426,7 +426,12 @@ public sealed class XsecViewCommand
         double cellHmm = XsecInnerH / rows;              // 칸 높이(종이 mm)
         // ★★★[JACK 0831 "표를 어떻게 하면 빈 셀이 없게"] <b>접을지 여기서 정한다.</b>
         //   폭과 높이가 둘 다 접기에 달려 있고, 그 둘이 축척을 정한다.
-        var fold = DH.Grading.Core.QtyTableFold.Make(qty.Spec);
+        // ★[검토 0907 · L-4] <b>그리는 쪽(<c>DrawQtyTables</c>)과 같은 가드를 둔다.</b>
+        //   거기만 <c>?? BuildFromKeys(빈 열쇠)</c>가 있어, <c>Spec</c>이 없으면
+        //   축척은 <b>빈 표</b>로 재고 그림은 <b>제대로 된 표</b>를 그려 둘이 갈렸다.
+        var foldSpec = qty.Spec ?? DH.Grading.Core.QtyTableSpec.BuildFromKeys(
+            System.Array.Empty<DH.Grading.Core.QtyKey>(), null, DH.Grading.Core.QuantityTable.DeepLimitM);
+        var fold = DH.Grading.Core.QtyTableFold.Make(foldSpec);
         double tableWmm = QtWidthMmOf(fold);
         // ★[검토 §50] 표 높이를 <b>두 곳에서 다르게</b> 세고 있었다 —
         //   자리 잡는 쪽은 19.0줄, 그리는 쪽은 머리줄 1.4배를 반영해 19.4줄. 2.3mm 어긋났다.
@@ -467,8 +472,13 @@ public sealed class XsecViewCommand
         //   3칸을 미리 예약하면 쓰지도 않는 자리가 그림을 깎는다(칸 높이만큼).
         double bandPaperMm = bandRows * BandHeightMm;
 
-        double padW = 2 * CellPadMm, padH = 2 * CellPadMm + NameRoomMm + bandPaperMm;
-        double gwRight = System.Math.Max(10.0, cellWmm - padW - TableGapMm - tableWmm);
+        double padH = 2 * CellPadMm + NameRoomMm + bandPaperMm;
+        // ★★★[검토 0907 · H-1] <b>이 산수는 이제 Core에 있다.</b> 시험대(S96)가 같은 것을 불러
+        //   "표가 칸에 들어가나"를 <b>도면을 열기 전에</b> 잰다 — 종전엔 이 셈이 여기에만 있어
+        //   시험대 824개가 2×3 배치의 실패를 하나도 못 잡았다.
+        DH.Grading.Core.QtyTablePaper.GraphRoom(fold, cellWmm, cellHmm, bandPaperMm,
+                                                out double gwRight, out double ghRight,
+                                                out double gwBelow, out double ghBelow);
         // ★★★[JACK 0831 · 검토 MED-4] <b>오른쪽 배치도 표 높이를 봐야 한다.</b>
         //   종전엔 <c>ghRight</c>에 표가 안 들어 있었다 — 표가 그래프보다 길어도
         //   "칸에 들어간다"고 판정하고 실제로는 칸을 넘었다.
@@ -477,14 +487,24 @@ public sealed class XsecViewCommand
         //   ★<c>Math.Max(10.0, …)</c>가 음수 자리를 10mm로 바꿔 <b>말도 안 되는 축척</b>을
         //   되돌려 주던 것도 여기서 갈린다(검토 MED-3) → 자리가 모자라면 <b>0</b>을 준다.
         double roomH = cellHmm - padH;
-        // 표가 남는 자리보다 길면 그림 자리는 <b>없다</b> — 10mm로 눙치지 않는다.
-        double ghRight = tableHmm > roomH ? 0.0 : roomH;
-        double gwBelow = System.Math.Max(10.0, cellWmm - padW);
         // ★[검토 MED-3] 아래 배치도 마찬가지 — 자리가 모자라면 <b>0</b>을 줘서
         //   <c>PickScale</c>이 "맞는 값이 없다"고 답하게 한다. 10mm로 눙치면
         //   <c>1:3000</c> 같은 값이 <b>유효한 답처럼</b> 돌아온다.
-        double roomBelow = cellHmm - padH - TableGapMm - tableHmm;
-        double ghBelow = roomBelow > 0 ? roomBelow : 0.0;
+        // ★★★[검토 0907 · H-1] <b>표가 칸을 넘으면 원인을 짚어 말한다.</b>
+        //   두 단으로 바꾸며 표가 좁아지고 <b>높아졌다</b>(§72). 지층이 다 나오는 현장에서
+        //   2×3처럼 칸이 낮은 배치를 고르면 <b>표 하나가 칸 높이를 넘어</b>
+        //   오른쪽도 아래도 자리가 0이 되고, 축척이 <b>사다리 끝(1:5000)</b>으로 튄다.
+        //   종전 경고는 <c>자리 0×0mm</c>라고만 해서 <b>왜</b>인지 알 수 없었다 —
+        //   사용자가 손쓸 수 있으려면 <b>무엇이 얼마나 넘쳤는지</b>를 말해야 한다.
+        // ★[검토 0907] 시험대(S96)는 도곽 치수를 <b>제 손으로 적어</b> 쓴다 — 아직 같은지 매 판 묻는다.
+        if (!DH.Grading.Core.QtyTablePaper.Matches(SheetCommand.InnerW, XsecInnerH, out string pnote2))
+            log.AppendLine("  ⚠" + pnote2);
+        if (ghRight <= 0 && ghBelow <= 0)
+            log.AppendLine($"  ⚠표가 칸에 안 들어간다 — 표 {tableHmm:F0}mm({fold.BodyRows + 1}줄)"
+                         + $" > 칸에 남는 높이 {roomH:F0}mm(배치 {cols}×{rows})"
+                         + " → 배치를 성기게(2×2 이하) 하거나 도면설정에서 축척을 고정하세요");
+        else if (tableHmm > roomH)
+            log.AppendLine($"  표가 칸 높이를 넘어 오른쪽 배치는 못 쓴다 — 표 {tableHmm:F0}mm > {roomH:F0}mm(아래로 내린다)");
         double sRight = PickScale(mv.W, mv.H, gwRight, ghRight);
         double sBelow = PickScale(mv.W, mv.H, gwBelow, ghBelow);
         bool tableRight = sRight > 0 && (sBelow <= 0 || sRight <= sBelow);   // 같으면 오른쪽(참고 도면)
@@ -1380,13 +1400,13 @@ public sealed class XsecViewCommand
 
     /// <summary>칸선에서 사방으로 띄우는 여백(종이 mm). ★거터(칸 사이 틈)를 두는 대신 <b>칸 안쪽</b>에 둔다 —
     /// 칸 사이를 벌리면 그림 자리가 줄어 축척이 한 단계 밀린다(2mm 때문에 그림이 20% 작아지는 일이 생긴다).</summary>
-    private const double CellPadMm = 4.0;
+    private const double CellPadMm = DH.Grading.Core.QtyTablePaper.CellPadMm;
 
     /// <summary>측점 이름이 앉을 자리(뷰 아래, 종이 mm).</summary>
-    private const double NameRoomMm = 6.0;
+    private const double NameRoomMm = DH.Grading.Core.QtyTablePaper.NameRoomMm;
 
     /// <summary>그림과 수량표 사이 틈(종이 mm).</summary>
-    private const double TableGapMm = 12.0;   // ★[JACK 0826] "그래프와의 간격도 조금만 더" — 5 → 12mm
+    private const double TableGapMm = DH.Grading.Core.QtyTablePaper.TableGapMm;   // ★[JACK 0826] "그래프와의 간격도 조금만 더" — 5 → 12mm
 
     /// <summary>횡단면도 이름 글자 크기(종이 mm) — 도면 제목 관례는 3~5mm다.</summary>
     private const double NameTextMm = 3.5;
@@ -1413,14 +1433,14 @@ public sealed class XsecViewCommand
 
     /// <summary>표 글자 높이(종이 mm). <b>A3로 줄여 찍어도 1.8mm</b>가 되도록 잡았다 —
     /// 제본 도서는 보통 A3이고(A1의 정확히 절반), 감리가 자로 재는 것도 종이다.</summary>
-    private const double QtTextMm = 3.6;
+    private const double QtTextMm = DH.Grading.Core.QtyTablePaper.TextMm;
 
     /// <summary>표 한 줄 높이(종이 mm) — 글자가 줄 안에서 숨 쉴 만큼.</summary>
     /// <summary>줄 높이(종이 mm). ★[JACK 0827 "표가 너무 넓어"]
-    /// <para>종전 5.81mm는 <b>글자 3.6mm에 여유가 거의 없는</b> 값이었다. 새 표는 칸이 일곱이라
+    /// <para>종전 5.81mm는 <b>글자 3.6mm에 여유가 거의 없는</b> 값이었다. 새 표는 칸이 여덟이라(두 단 × 넉 칸)
     /// 폭이 크게 늘었는데 줄 높이는 그대로여서 <b>가로:세로가 3.4:1</b>로 납작해졌다
     /// (JACK 원본은 <b>1.4:1</b>). 글자의 두 배쯤을 주면 원본에 가까워진다.</para></summary>
-    private const double QtRowH = 7.4;
+    private const double QtRowH = DH.Grading.Core.QtyTablePaper.RowMm;
 
     /// <summary>표 전체 높이(종이 mm) — <b>머리줄이 1.4배</b>인 것까지 센다.
     /// ★한 곳에서만 정한다: 자리 잡는 쪽과 그리는 쪽이 다르게 세면 표가 어긋난 자리에 앉는다.</summary>
@@ -1429,26 +1449,13 @@ public sealed class XsecViewCommand
     /// <b>축척이 그 값을 읽어야</b> 표가 커진 만큼 그림이 작아진다.</para>
     /// <para><c>+0.4</c>는 머리줄이 본문보다 1.4배 높기 때문이다 — 자리 잡는 쪽과 그리는 쪽이
     /// 이 값을 <b>같이</b> 써야 어긋나지 않는다(§50에서 2.3mm 어긋난 적이 있다).</para></summary>
-    private static double QtTableHmmOf(int totalRows) => QtRowH * (totalRows + 0.4);
+    private static double QtTableHmmOf(int totalRows) => DH.Grading.Core.QtyTablePaper.HeightMm(totalRows);
 
-    /// <summary>표 전체 폭(종이 mm) — 열 너비의 합이다. 축척 계산이 이 값을 쓴다.</summary>
-    /// <summary>표 폭(종이 mm). ★[JACK 0827] 새 표는 <b>일곱 칸 두 단</b>이라 종전보다
-    /// <b>훨씬 넓고 낮다</b>(비율 합 25.5 → 70, 줄 19 → 13).
-    /// <para>그래서 <b>오른쪽에 두면</b> 그림 폭을 크게 잡아먹고, <b>아래에 두면</b> 덜 먹는다 —
-    /// 축척 고르기가 그 둘을 재서 나은 쪽을 택하므로(<c>tableRight</c>) 값만 맞으면 배치는 따라온다.</para></summary>
-    private static double QtWidthMm
-    {
-        get { double s = 0; foreach (double r in QtColRatio) s += r; return s * QtTextMm; }
-    }
+    // ★[검토 0907 · L-5] <b>안 쓰는 속성 <c>QtWidthMm</c>을 지웠다.</b>
+    //   7칸 판의 폭 합(44.6)을 세던 것인데, 두 단 합도 <b>우연히 같은 44.6</b>이라
+    //   틀린 채로 남아 있어도 아무도 몰랐을 자리다. 부르는 곳은 <b>한 곳도 없었다</b>.
 
-    /// <summary>★★[JACK 0831] 접은 표의 폭 — <b>칸마다 제 몫의 폭</b>을 더한다.
-    /// <para>단을 늘리면 폭이 늘어난다. 축척이 이 값을 읽으므로 <b>여기 하나만</b> 맞으면 된다.</para></summary>
-    private static double QtWidthMmOf(DH.Grading.Core.QtyTableFold fold)
-    {
-        double s = 0;
-        foreach (int ix in fold.ColRatioIndex) s += QtColRatio[ix];
-        return s * QtTextMm;
-    }
+    private static double QtWidthMmOf(DH.Grading.Core.QtyTableFold fold) => DH.Grading.Core.QtyTablePaper.WidthMm(fold);
     internal const string QtLayerEdge = "DH-횡단-표(테두리)";   // 초록
     internal const string QtLayerLine = "DH-횡단-표(줄)";       // 빨강
     internal const string QtLayerText = "DH-횡단-표(글씨)";     // 흰색
@@ -1481,7 +1488,7 @@ public sealed class XsecViewCommand
             System.Array.Empty<DH.Grading.Core.QtyKey>(), null, DH.Grading.Core.QuantityTable.DeepLimitM);
         // ★★★[JACK 0831] 줄 수·칸 수는 <b>접기</b>가 정한다.
         int nRow = fold.BodyRows + 1;                  // 머리 1줄 + 내용 N줄
-        int nCol = fold.Cols;                          // 7(안 접음) · 10 · 11
+        int nCol = fold.Cols;                          // ★[JACK 0907] 두 단 = 8칸(4+4)
         double txtH = QtTextMm * sc;                   // 글자 높이(모형)
         double rowH = QtRowH * sc;                     // 줄 높이
         // ★[JACK 0827] 열 비율은 <b>표가 들고 있다</b> — 표 모양이 바뀌면 폭도 같이 바뀐다.
@@ -1582,7 +1589,9 @@ public sealed class XsecViewCommand
                         for (int i = 0; i < seg.Count; i++)
                         {
                             int src = seg.From + i;
-                            int row = i + 1;
+                            // ★★★[JACK 0907] <b>한 단에 수량 항목과 공종이 잇달아 들어온다.</b>
+                            //   <c>seg.Row</c>가 그 조각이 단의 몇째 줄부터인지 말해 준다(+1은 머리줄).
+                            int row = seg.Row + i + 1;
                             int c0 = seg.Col;
 
                             void Put(int col, string text, int rowSpan, int colSpan)
@@ -1602,9 +1611,9 @@ public sealed class XsecViewCommand
                             if (seg.Left)
                             {
                                 var Lr = spec.Left[src];
-                                Put(c0, Lr.Group, spec.SpanGroup(src, segEnd), spec.GroupTakesTwo(src) ? 2 : 1);
-                                Put(c0 + 1, Lr.Sub, spec.SpanSub(src, segEnd), 1);
-                                if (Lr.Item != null) tb.Cells[row, c0 + 2].TextString = Lr.Item;
+                                Put(c0, Lr.Group, spec.SpanGroup(src, segEnd), spec.LeftColSpan(src));
+                                Put(c0 + DH.Grading.Core.QtyTableSpec.ColSub, Lr.Sub, spec.SpanSub(src, segEnd), 1);
+                                if (Lr.Item != null) tb.Cells[row, c0 + DH.Grading.Core.QtyTableSpec.ColItem].TextString = Lr.Item;
                                 // ★[검토 MED-6] 채움 줄에는 아무것도 안 쓴다 —
                                 //   <c>–</c>는 "해당 없음"인데 그 줄엔 해당할 항목 자체가 없다.
                                 if (!spec.IsFillerLeft(src))
@@ -1613,16 +1622,20 @@ public sealed class XsecViewCommand
                                                 ? led.Get(kk) : double.NaN;
                                     string tL = Fmt(vL);
                                     if (tL != QT.Blank) filled++;
-                                    tb.Cells[row, c0 + 3].TextString = tL;
+                                    tb.Cells[row, c0 + DH.Grading.Core.QtyTableSpec.ColValue].TextString = tL;
                                 }
                             }
                             else
                             {
                                 var Rr = spec.Right[src];
-                                Put(c0, Rr.Item, spec.SpanRight(src, segEnd), spec.RightTakesTwo(src) ? 2 : 1);
-                                if (Rr.Sub != null) tb.Cells[row, c0 + 1].TextString = Rr.Sub;
+                                // ★★★[JACK 0907] <b>공종도 넉 칸 단에 들어간다.</b> 공종에는 중분류가
+                                //   없으므로 앞 두 칸(대분류+중분류 자리)을 합쳐 쓰고, 세부까지 없으면 세 칸이다.
+                                //   칸 셈은 <see cref="QtyTableSpec.RightColSpan"/> <b>한 곳</b>에만 있다 —
+                                //   검사도 같은 것을 부르므로 갈라질 수 없다.
+                                Put(c0, Rr.Item, spec.SpanRight(src, segEnd), spec.RightColSpan(src, segEnd));
+                                if (Rr.Sub != null) tb.Cells[row, c0 + DH.Grading.Core.QtyTableSpec.ColItem].TextString = Rr.Sub;
                                 // ★[검토 MED-7] 오른쪽 값은 아직 통로가 없다(공종 수량은 STEP 4).
-                                if (!spec.IsFillerRight(src)) tb.Cells[row, c0 + 2].TextString = QT.Blank;
+                                if (!spec.IsFillerRight(src)) tb.Cells[row, c0 + DH.Grading.Core.QtyTableSpec.ColValue].TextString = QT.Blank;
                             }
                         }
                     }
@@ -1725,7 +1738,15 @@ public sealed class XsecViewCommand
         //   "세로 병합 맞음"이 <b>늘</b> 찍혔다. §53에서 겪은 <b>"검사가 엉뚱한 것을 재고 있었다"</b>
         //   그대로다 — 이번엔 하니스가 아니라 로그 쪽에서 되풀이됐다.
         //   → <b>그린 얼개를 묻는다</b>(<c>QtyTableSpecRules.Holds</c>).
-        bool paired = QT.WidthsPaired(out string wnote);
+        // ★★★[JACK 0907 "마지막 카테고리에만 공백이 생겨야 해"] <b>지켰는지 매번 말한다.</b>
+        //   블록(터파기 한 덩어리 등)이 표의 절반보다 크면 못 지킬 수 있다 —
+        //   그때 <b>말없이 넘어가면</b> 도면을 열어 보고서야 안다.
+        log?.AppendLine($"  표 나누기 — {fold.Note}"
+                      + (fold.TailOnlyGap ? " ✔빈칸은 마지막 단에만" : " ⚠빈칸이 앞 단에도 생겼다"));
+        // ★★★[검토 0907 · M-1] <b>안 그리는 칸을 재던 검사를 바꿨다.</b>
+        //   <c>QT.WidthsPaired</c>는 <c>ColRatio[4..6]</c>(E·F·G)을 보는데, 두 단이 된 뒤
+        //   그 셋은 <b>어디서도 안 쓰인다</b> — 맞는 도면에 "어긋남"이라 말할 수 있었다.
+        bool paired = fold.PanelsAligned(out string wnote);
         bool rules = DH.Grading.Core.QtyTableSpecRules.Holds(spec, out string rnote);
         bool rect = spec.Left.Count == spec.Right.Count;
         // ★★★[JACK 0831] <b>병합이 겹치는지 매번 묻는다.</b> 겹치면 AutoCAD가 뒤 병합을

@@ -6055,73 +6055,21 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
 }
 
 
-// ── S69 ★★[JACK 0827] 수량표 — 두 단 12줄 구조가 앞뒤 맞는지 ────────────────────────
-//   표는 도면에서만 눈에 띄는데, 병합이 한 줄 어긋나면 표 전체가 밀린다.
-//   새 형태는 <b>왼쪽 12줄과 오른쪽 12줄이 대응</b>하므로 그 대칭이 곧 검사다.
+// ── S69 ★★★[검토 0907 · L-5] 수량표 얼개 — <b>그리는 것만</b> 잰다 ──────────────────
+//   여기 있던 검사 열두 개는 <c>QuantityTable.Rows</c>(12줄 못 박은 <b>참고표</b>)를 재고 있었다.
+//   그 배열은 도면 어디에서도 안 그려진다 — 지금 그리는 것은 <c>QtyTableSpec</c>이 현장에서
+//   지어 내는 표다(§57). 즉 <b>통과해도 도면이 맞다는 뜻이 아니었다</b>.
+//   §53에서 한 번, §57에서 또 한 번 겪은 <b>"검사가 그리지 않는 것을 잰다"</b>가
+//   세 번째로 남아 있던 자리다. 참고표와 함께 지웠다.
+//   지금 표의 얼개를 재는 것은 <b>S85·S86·S87·S96</b>이다.
 {
-    Console.WriteLine("\n== S69 수량표 구조(두 단) ==");
-    // ★★[검토 0828 · LOW-6] <b>Core의 검사를 하니스에서도 돌린다.</b>
-    //   <c>SpansValid()</c>·<c>WidthsPaired()</c>는 <b>AutoCAD 안에서만</b> 불리고 있었다 —
-    //   도면을 켜야 확인되는 검사는 <b>안 켜면 안 도는 검사</b>다.
-    //   (<c>SpansValid</c>는 한동안 <b>아무 데서도 안 불렸다</b> — 같은 실수를 반복하지 않는다.)
-    Check("S69 ★Core 세로 병합 검사가 통과한다", QuantityTable.SpansValid(), "맞음");
-    Check("S69 ★Core 좌우 짝 폭 검사가 통과한다", QuantityTable.WidthsPaired(out string w69), w69);
-
-    Check("S69 내용 12줄", QuantityTable.BodyRows == 12, $"{QuantityTable.BodyRows}줄");
-    Check("S69 머리까지 13줄", QuantityTable.TotalRows == 13, $"{QuantityTable.TotalRows}줄");
-    Check("S69 줄 배열도 12개", QuantityTable.Rows.Length == 12, $"{QuantityTable.Rows.Length}개");
-    Check("S69 가로 7칸", QuantityTable.Cols == 7, $"{QuantityTable.Cols}칸");
-    Check("S69 열 비율도 7개", QuantityTable.ColRatio.Length == 7, $"{QuantityTable.ColRatio.Length}개");
-
-    // ★재료 칸(2열)은 세로 병합이 없다 — 12줄이 그대로 12칸이어야 한다.
-    int l3 = 0;
-    foreach (var r in QuantityTable.Rows) l3 += r.L3.RowSpan;
-    Check("S69 ★재료 칸 = 12줄", l3 == 12, $"{l3}줄");
-
-    // ★★각 열이 <b>12줄을 빈틈없이 덮는가</b>. 세로 병합이 덮는 줄 + 옆 칸이
-    //   <b>가로로 먹은</b> 줄을 합치면 정확히 12여야 한다.
-    //   (성토·절토·되메우기는 대분류가 2열을 먹으므로 그 줄엔 중분류 칸이 없다.)
-    int Covered(Func<QuantityTable.Row, QuantityTable.Cell> self,
-                Func<QuantityTable.Row, QuantityTable.Cell> left)
-    {
-        int n = 0, wide = 0;
-        foreach (var r in QuantityTable.Rows)
-        {
-            if (left != null)
-            {
-                var lc = left(r);
-                if (lc.RowSpan > 0 && lc.ColSpan >= 2) wide = lc.RowSpan;
-                if (wide > 0) { wide--; n++; continue; }   // 옆 칸이 가로로 먹은 줄
-            }
-            n += self(r).RowSpan;
-        }
-        return n;
-    }
-    Check("S69 ★★왼쪽 대분류가 12줄을 덮는다", Covered(r => r.L1, null) == 12,
-          $"{Covered(r => r.L1, null)}줄");
-    Check("S69 ★★왼쪽 중분류가 12줄을 덮는다", Covered(r => r.L2, r => r.L1) == 12,
-          $"{Covered(r => r.L2, r => r.L1)}줄");
-    Check("S69 ★★오른쪽 항목이 12줄을 덮는다", Covered(r => r.R1, null) == 12,
-          $"{Covered(r => r.R1, null)}줄");
-    Check("S69 ★★오른쪽 세부가 12줄을 덮는다", Covered(r => r.R2, r => r.R1) == 12,
-          $"{Covered(r => r.R2, r => r.R1)}줄");
-
-    // ★깊이 딱지는 <b>글자를 못 박지 않는다</b> — 값이 바뀌면 따라 바뀌어야 한다.
-    string dl = QuantityTable.L1TextOf(QuantityTable.DepthRow);
-    Check("S69 ★깊이 딱지가 값을 따른다", dl != null && dl.Contains($"{QuantityTable.DeepLimitM:0.#}m"), dl ?? "없음");
-
-    // ★계산이 실제로 들어가는 자리 — 지금은 넷(절토·성토·터파기얕음·되메우기).
-    Check("S69 값이 들어가는 자리 4곳", QuantityTable.FilledSlots() == 4, $"{QuantityTable.FilledSlots()}곳");
-
-    // ★같은 종류를 두 자리에 넣지 않는다 — 넣으면 합계가 두 배가 된다.
-    var seen = new HashSet<QuantityTable.QtyKind>();
-    bool dup = false;
-    foreach (var r in QuantityTable.Rows)
-    {
-        if (r.LKind != QuantityTable.QtyKind.None && !seen.Add(r.LKind)) dup = true;
-        if (r.RKind != QuantityTable.QtyKind.None && !seen.Add(r.RKind)) dup = true;
-    }
-    Check("S69 ★★같은 수량이 두 자리에 안 들어간다", !dup, dup ? "중복 있음" : "겹침 없음");
+    Console.WriteLine("\n== S69 수량표 얼개(그리는 것) ==");
+    var fPair = QtyTableFold.Make(QtyTableSpec.Build(new[] { RockClass.Soil },
+                                                     hasDeep: false, hasWater: false));
+    Check("S69 ★Core 두 단 폭이 나란하다", fPair.PanelsAligned(out string pnote), pnote);
+    Check("S69 ★칸 폭 순번이 전부 한 단 안(0~3)이다",
+          fPair.ColRatioIndex.All(ix => ix >= 0 && ix < 4),
+          string.Join(",", fPair.ColRatioIndex));
 }
 
 
@@ -6262,58 +6210,9 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
 }
 
 
-// ── S73 ★★[JACK 0827] 표의 줄과 값이 제 짝인지 (두 단) ──────────────────────────────
-{
-    Console.WriteLine("\n== S73 줄↔값 짝 ==");
-
-    var q = new XsecQty(11.0, 22.0, 33.0, 44.0, 55.0);   // 절토·성토·얕은터파기·깊은터파기·되메우기
-
-    // 재료 칸(2열) 글자로 줄을 찾는다 — 줄을 옮겨도 이 검사가 잡아 준다.
-    int RowOfLeft(string l1, string l3)
-    {
-        for (int i = 0; i < QuantityTable.Rows.Length; i++)
-        {
-            string a = (QuantityTable.L1TextOf(i) ?? "").Replace(" ", "");
-            string b = (QuantityTable.Rows[i].L2.Text ?? "").Replace(" ", "");
-            string c = (QuantityTable.Rows[i].L3.Text ?? "").Replace(" ", "");
-            if ((a.Contains(l1) || b.Contains(l1)) && c.Contains(l3)) return i;
-        }
-        return -1;
-    }
-
-    int rFill = RowOfLeft("성토", "토사");
-    int rCut  = RowOfLeft("절토", "토사");
-    int rExc  = RowOfLeft("터파기", "토사");
-    Check("S73 성토 → Fill", Math.Abs(QuantityTable.PickLeft(q, rFill) - 22.0) < 1e-9, $"줄{rFill}");
-    Check("S73 절토 → Cut", Math.Abs(QuantityTable.PickLeft(q, rCut) - 11.0) < 1e-9, $"줄{rCut}");
-    Check("S73 터파기(육상)토사 → ExcShallow", Math.Abs(QuantityTable.PickLeft(q, rExc) - 33.0) < 1e-9, $"줄{rExc}");
-
-    // 되메우기는 <b>주위</b> 줄이 받는다(구조물 칸은 아직 못 구한다).
-    int rBack = -1;
-    for (int i = 0; i < QuantityTable.Rows.Length; i++)
-        if (QuantityTable.Rows[i].LKind == QuantityTable.QtyKind.Backfill) rBack = i;
-    Check("S73 되메우기 → Backfill", rBack >= 0 && Math.Abs(QuantityTable.PickLeft(q, rBack) - 55.0) < 1e-9, $"줄{rBack}");
-
-    // ★위아래 순서 — 성토가 절토보다 위, 절토가 터파기보다 위여야 표가 스크린샷과 같다.
-    Check("S73 ★성토 < 절토 < 터파기 순서", rFill < rCut && rCut < rExc, $"{rFill} < {rCut} < {rExc}");
-
-    // ★아직 안 재는 자리는 NaN — 0이면 "없다"로 읽혀 잘못이다.
-    int nan = 0, val = 0;
-    for (int i = 0; i < QuantityTable.Rows.Length; i++)
-    {
-        if (double.IsNaN(QuantityTable.PickLeft(q, i))) nan++; else val++;
-        if (double.IsNaN(QuantityTable.PickRight(q, i))) nan++; else val++;
-    }
-    Check("S73 값이 들어가는 자리 4곳", val == 4, $"{val}곳");
-    Check("S73 나머지는 NaN(빈칸)", nan == QuantityTable.BodyRows * 2 - 4, $"{nan}곳");
-
-    // ★깊은 터파기(ExcDeep)는 새 표에 자리가 없다 — 계산은 하지만 안 적는다.
-    //   자리가 생기면 이 검사가 알려 준다(그때 기대값을 바꾸면 된다).
-    bool hasDeep = false;
-    foreach (var r in QuantityTable.Rows)
-        if (r.LKind == QuantityTable.QtyKind.ExcDeep || r.RKind == QuantityTable.QtyKind.ExcDeep) hasDeep = true;
-    Check("S73 깊은 터파기는 아직 표에 자리가 없다", !hasDeep, hasDeep ? "자리 생김" : "없음(계산은 함)");
-}
+// ── S73 ★[검토 0907 · L-5] <b>지웠다</b> — 참고표(<c>QuantityTable.Rows</c>) 전용 검사였다.
+//   줄↔값 짝은 이제 <b>열쇠</b>(<c>QtyKey</c>)로 맺어지고(§50), 그것은 S86이 잰다:
+//   "실제로 값이 나온 조합만 줄이 선다"·"차례가 열쇠 순서와 무관하다"·"열쇠가 든 줄이 안 빠진다".
 
 
 // ── S74 ★★★[JACK 0826] 터파기 기준면 — <b>실제로 굴착을 시작하는 면</b> ────────────────
@@ -7136,7 +7035,9 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     };
     var sp = QtyTableSpec.BuildFromKeys(keys);
 
-    Check("S85 ★★★병합이 서로 안 겹친다", sp.MergesValid(out string mw), mw);
+    // ★[검토 0907 · M-2] <b>그리는 얼개로 잰다</b> — 옛 7칸 판 검사는 지웠다.
+    Check("S85 ★★★병합이 서로 안 겹친다(글자 칸까지)",
+          sp.MergesValid(QtyTableFold.Make(sp), out string mw), mw);
 
     // 중분류(터파기(용수))가 <b>되메우기 줄까지 먹지 않는다</b> — 그 잘못을 콕 집어 본다.
     int subRow = -1, backRow = -1;
@@ -7174,7 +7075,7 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
                 for (int i = 0; i < nr; i++) rocks.Add((RockClass)i);
                 var s2 = QtyTableSpec.Build(rocks, deep, water);
                 nCase++;
-                if (!s2.MergesValid(out string w2))
+                if (!s2.MergesValid(QtyTableFold.Make(s2), out string w2))
                 { Check($"S85 ★병합 겹침(암종{nr}·깊이{deep}·물{water})", false, w2); break; }
             }
     Check($"S85 ★★모든 모양({nCase}가지)에서 병합이 안 겹친다", nCase == 16, $"{nCase}가지");
@@ -7210,7 +7111,7 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
         maxRows = Math.Max(maxRows, sp.TotalRows);
 
         // ① 병합이 안 겹친다 — 겹치면 AutoCAD가 뒤 병합을 조용히 버려 표가 찌그러진다.
-        if (!sp.MergesValid(out string why))
+        if (!sp.MergesValid(QtyTableFold.Make(sp), out string why))
         { nBad++; firstBad ??= $"{t}판 — {why}"; }
         // ② 두 단 길이가 같다(직사각형)
         if (sp.Left.Count != sp.Right.Count) nRect++;
@@ -7240,34 +7141,192 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
           maxRows > minRows + 5, $"{minRows}~{maxRows}줄");
 }
 
-// ── S87 ★★★[JACK 0831 "3단 접기"] 긴 쪽을 접어 <b>빈칸을 줄인다</b> ──────────────────
+// ── S87 ★★★[JACK 0907 "2칸 카테고리로 · 마지막 카테고리에만 공백"] 두 단으로 <b>이어서</b> 흘린다 ──
 {
-    Console.WriteLine("\n== S87 표 접기 ==");
+    Console.WriteLine("\n== S87 표 두 단 나누기 ==");
 
-    // ① 차이가 작으면 <b>안 접는다</b> — 두세 줄 때문에 표를 넓히는 것은 손해다.
+    // 줄기의 길이 — 채움 줄을 뺀 실제 내용.
+    static (int L, int R) Content(QtyTableSpec sp)
+    {
+        int l = -1, r = -1;
+        for (int i = 0; i < sp.BodyRows; i++)
+        {
+            if (!sp.IsFillerLeft(i)) l = i;
+            if (!sp.IsFillerRight(i)) r = i;
+        }
+        return (l + 1, r + 1);
+    }
+
+    // 한 판을 통째로 검사한다 — 이 자가 모든 판에 같이 간다.
+    static string Audit(QtyTableSpec sp, QtyTableFold fd)
+    {
+        var (L, R) = Content(sp);
+        int N = L + R;
+        if (fd.Cols != 8) return $"칸이 {fd.Cols}개다(두 단이면 8칸)";
+
+        // ① 단마다 조각을 줄 자리 순으로 모아, 구멍도 겹침도 없는지 본다.
+        for (int col = 0; col <= 4; col += 4)
+        {
+            int filled = 0, top = 0;
+            var rowsUsed = new List<(int From, int To)>();
+            foreach (var g in fd.Segs)
+            {
+                if (g.Col != col) continue;
+                rowsUsed.Add((g.Row, g.Row + g.Count));
+                filled += g.Count;
+                top = Math.Max(top, g.Row + g.Count);
+            }
+            rowsUsed.Sort();
+            int at = 0;
+            foreach (var (f, t) in rowsUsed)
+            {
+                if (f != at) return $"{col}칸 단에 구멍/겹침 — {at}줄 다음이 {f}줄";
+                at = t;
+            }
+            if (top > fd.BodyRows) return $"{col}칸 단이 표 밖으로 나간다({top} > {fd.BodyRows})";
+            if (col == 0 && filled != fd.BodyRows) return $"1단이 안 찼다({filled}/{fd.BodyRows})";
+        }
+
+        // ② 줄기가 <b>끊기지 않았나</b> — 1단 위에서 아래로, 그다음 2단 위에서 아래로 읽으면
+        //    수량 항목 0..L-1 다음에 공종 0..R-1이 <b>차례대로</b> 나와야 한다.
+        var order = new List<(int Col, int Row, bool Left, int From, int Count)>();
+        foreach (var g in fd.Segs) order.Add((g.Col, g.Row, g.Left, g.From, g.Count));
+        order.Sort((a, b) => a.Col != b.Col ? a.Col.CompareTo(b.Col) : a.Row.CompareTo(b.Row));
+        int want = 0;
+        foreach (var g in order)
+            for (int i = 0; i < g.Count; i++)
+            {
+                int seq = g.Left ? g.From + i : L + g.From + i;
+                if (seq != want) return $"줄기가 끊겼다 — {want}번째 자리에 {seq}번이 왔다";
+                want++;
+            }
+        if (want != N) return $"줄이 {want}개뿐이다(내용은 {N}줄)";
+
+        // ③ 병합이 안 겹치나.
+        if (!sp.MergesValid(fd, out string w)) return "병합 겹침 — " + w;
+
+        // ④ 빈칸이 <b>마지막 단에만</b> 있나.
+        if (!fd.TailOnlyGap) return "빈칸이 앞 단에도 생겼다 — " + fd.Note;
+        return null;
+    }
+
+    // ★[JACK 0907 · 검토 0907 M-3] <b>표를 글자로 그려 본다 — 병합까지 그대로.</b>
+    //   도면을 열어 보고서야 아는 것을 여기서 본다. ★<b>칸 합치기를 표현해야</b> 뜻이 있다 —
+    //   글자 자리만 찍으면 <c>층 따 기</c>가 세 칸을 먹는지 한 칸을 먹는지 구분이 안 되고,
+    //   병합이 옆 글자를 삼켜도 출력이 <b>한 글자도 안 바뀐다</b>(검토가 짚은 그대로).
+    static void Dump(string title, QtyTableSpec sp, QtyTableFold fd)
+    {
+        int L = 0, R = 0;
+        for (int i = 0; i < sp.BodyRows; i++)
+        { if (!sp.IsFillerLeft(i)) L = i + 1; if (!sp.IsFillerRight(i)) R = i + 1; }
+
+        var txt = new string[fd.BodyRows, fd.Cols];
+        var wide = new int[fd.BodyRows, fd.Cols];    // 이 칸이 먹는 <b>가로 칸 수</b>(0 = 왼쪽 칸에 먹힘)
+        var down = new bool[fd.BodyRows, fd.Cols];   // 위 칸이 <b>세로로</b> 먹은 자리
+        for (int r = 0; r < fd.BodyRows; r++)
+            for (int c = 0; c < fd.Cols; c++) wide[r, c] = 1;
+
+        void Merge(int r, int c, int rs, int cs, string t)
+        {
+            if (rs <= 0) return;
+            txt[r, c] = t?.Replace("|", " ");
+            wide[r, c] = cs;
+            for (int cc = c + 1; cc < c + cs && cc < fd.Cols; cc++) wide[r, cc] = 0;
+            for (int rr = r + 1; rr < r + rs && rr < fd.BodyRows; rr++)
+                for (int cc = c; cc < c + cs && cc < fd.Cols; cc++)
+                { down[rr, cc] = true; wide[rr, cc] = cc == c ? cs : 0; }
+        }
+
+        foreach (var seg in fd.Segs)
+        {
+            int end = seg.From + seg.Count;
+            for (int i = 0; i < seg.Count; i++)
+            {
+                int src = seg.From + i, row = seg.Row + i, c0 = seg.Col;
+                if (seg.Left)
+                {
+                    var lr = sp.Left[src];
+                    Merge(row, c0, sp.SpanGroup(src, end), sp.LeftColSpan(src), lr.Group);
+                    Merge(row, c0 + 1, sp.SpanSub(src, end), 1, lr.Sub);
+                    if (lr.Item != null) txt[row, c0 + 2] = lr.Item;
+                    if (!sp.IsFillerLeft(src)) txt[row, c0 + 3] = "-";
+                }
+                else
+                {
+                    var rr = sp.Right[src];
+                    Merge(row, c0, sp.SpanRight(src, end), sp.RightColSpan(src, end), rr.Item);
+                    if (rr.Sub != null) txt[row, c0 + 2] = rr.Sub;
+                    if (!sp.IsFillerRight(src)) txt[row, c0 + 3] = "-";
+                }
+            }
+        }
+
+        // 한글은 두 자리를 먹는다 — 자릿수를 세어 맞춘다.
+        static int Wcs(string t)
+        {
+            int w = 0;
+            foreach (char ch in t ?? "") w += ch >= 0x1100 ? 2 : 1;
+            return w;
+        }
+        const int CellW = 10;   // 한 칸의 자릿수
+        Console.WriteLine($"      [{title}] 수량항목 {L}줄 + 공종 {R}줄 = {L + R}줄 → {fd.BodyRows}줄 {fd.Cols}칸");
+        for (int r = 0; r < fd.BodyRows; r++)
+        {
+            var sb = new System.Text.StringBuilder("      |");
+            for (int c = 0; c < fd.Cols; )
+            {
+                int cs = wide[r, c];
+                if (cs <= 0) { c++; continue; }             // 왼쪽 칸에 먹힌 자리 — 칸선을 안 긋는다
+                string t = down[r, c] ? "" : (txt[r, c] ?? "");
+                int room = CellW * cs + (cs - 1);           // 합친 칸은 사이 칸선 자리까지 쓴다
+                sb.Append(t).Append(new string(' ', Math.Max(0, room - Wcs(t)))).Append('|');
+                if (c + cs == 4) sb.Append('|');            // 단 사이는 두 줄
+                c += cs;
+            }
+            Console.WriteLine(sb.ToString());
+        }
+    }
+
+    // ① 지층이 적은 판.
     var small = QtyTableSpec.Build(new[] { RockClass.Soil, RockClass.Weathered },
                                    hasDeep: false, hasWater: false);
     var f1 = QtyTableFold.Make(small);
-    Check("S87 차이가 작으면 안 접는다(7칸)", f1.Cols == 7, $"{f1.Cols}칸 · {f1.Note}");
+    Check("S87 ★★★언제나 두 단(8칸)이다", f1.Cols == 8, $"{f1.Cols}칸 · {f1.Note}");
+    Check("S87 ★작은 판이 규칙을 다 지킨다", Audit(small, f1) == null, Audit(small, f1) ?? f1.Note);
 
-    // ② 지층이 다 나오면 왼쪽이 폭발한다 → <b>두 단으로 접는다</b>.
+    // ★[JACK 0907 스샷] <b>지층 자료가 없는 지금의 도면</b> — 이것이 화면에 나오는 모양이다.
+    var now = QtyTableSpec.BuildFromKeys(new[] { QtyKey.OfFill(), QtyKey.OfCut(RockClass.Soil),
+                                                 QtyKey.OfBackfill() });
+    var fNow = QtyTableFold.Make(now);
+    Check("S87 ★★★지금 도면(지층 자료 없음)이 규칙을 지킨다", Audit(now, fNow) == null,
+          Audit(now, fNow) ?? fNow.Note);
+    Dump("지금 도면", now, fNow);
+
+    // ② 지층이 다 나오는 판 — 왼쪽이 폭발한다.
     var big = QtyTableSpec.Build(
         new[] { RockClass.Soil, RockClass.Weathered, RockClass.Soft, RockClass.Medium, RockClass.Hard },
         hasDeep: true, hasWater: true);
     var f2 = QtyTableFold.Make(big);
-    Check("S87 ★★왼쪽이 길면 11칸으로 접는다", f2.Cols == 11, $"{f2.Cols}칸 · {f2.Note}");
-    Check("S87 ★★접으면 표가 낮아진다", f2.BodyRows < big.BodyRows,
+    Check("S87 ★★큰 판도 두 단이다", f2.Cols == 8, $"{f2.Cols}칸 · {f2.Note}");
+    Check("S87 ★★나누면 표가 낮아진다", f2.BodyRows < big.BodyRows,
           $"{big.BodyRows}줄 → {f2.BodyRows}줄");
-    Check("S87 ★접은 표도 병합이 안 겹친다", big.MergesValid(f2, out string w2), w2);
+    Check("S87 ★큰 판이 규칙을 다 지킨다", Audit(big, f2) == null, Audit(big, f2) ?? f2.Note);
 
-    // ③ 접은 단은 <b>블록 경계</b>에서만 끊긴다 — 터파기 한가운데가 잘리면 안 된다.
-    int cut = -1;
-    foreach (var seg in f2.Segs) if (seg.Left && seg.From > 0) cut = seg.From;
-    Check("S87 ★★끊는 자리가 대분류가 시작하는 줄이다",
-          cut > 0 && big.Left[cut].Group != null,
-          cut > 0 ? $"{cut}줄 대분류='{big.Left[cut].Group}'" : "못 찾음");
+    // ③ 끊는 자리는 <b>블록 경계</b>다 — 터파기 한가운데가 잘리면 안 된다.
+    {
+        var (L2, _) = Content(big);
+        int cutAt = -1;
+        foreach (var g in f2.Segs) if (g.Col == 4 && g.Row == 0) cutAt = g.Left ? g.From : L2 + g.From;
+        bool okCut = cutAt > 0 && (cutAt < L2 ? big.Left[cutAt].Group != null
+                                 : cutAt == L2 || big.Right[cutAt - L2].Item != null);
+        Check("S87 ★★끊는 자리가 블록이 시작하는 줄이다", okCut,
+              cutAt < 0 ? "못 찾음"
+              : cutAt < L2 ? $"{cutAt}줄 대분류={big.Left[cutAt].Group}"
+              : cutAt == L2 ? "항목→공종 경계"
+              : $"공종 {cutAt - L2}줄 {big.Right[cutAt - L2].Item}");
+    }
 
-    // ④ 어느 줄도 <b>빠지거나 두 번 나오지 않는다</b> — 접다가 잃으면 수량이 사라진다.
+    // ④ 열쇠가 든 줄은 <b>하나도</b> 빠지면 안 된다 — 빠지면 그 수량이 표에서 사라진다.
     for (int t = 0; t < 3; t++)
     {
         QtyTableSpec sp = t == 0 ? small : t == 1 ? big
@@ -7278,20 +7337,21 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
             for (int i = 0; i < seg.Count; i++) (seg.Left ? seenL : seenR).Add(seg.From + i);
         bool dupL = seenL.Count != new HashSet<int>(seenL).Count;
         bool dupR = seenR.Count != new HashSet<int>(seenR).Count;
-        Check($"S87 ★★({t}) 왼쪽 줄이 안 겹치고 안 빠진다", !dupL && seenL.Count > 0,
+        Check($"S87 ★★({t}) 수량 항목이 안 겹치고 안 빠진다", !dupL && seenL.Count > 0,
               $"{seenL.Count}줄 · 중복 {dupL}");
-        Check($"S87 ★★({t}) 오른쪽 줄이 안 겹치고 안 빠진다", !dupR && seenR.Count > 0,
+        Check($"S87 ★★({t}) 공종이 안 겹치고 안 빠진다", !dupR && seenR.Count > 0,
               $"{seenR.Count}줄 · 중복 {dupR}");
-        // 열쇠가 든 줄은 <b>하나도 빠지면 안 된다</b> — 빠지면 그 수량이 표에서 사라진다.
         int keyed = 0; foreach (var row in sp.Left) if (row.Key != null) keyed++;
         int keyedShown = 0; foreach (int r in seenL) if (sp.Left[r].Key != null) keyedShown++;
         Check($"S87 ★★★({t}) 열쇠가 든 줄이 하나도 안 빠졌다", keyed == keyedShown,
               $"{keyedShown}/{keyed}줄");
     }
 
-    // ⑤ ★무작위 수천 판 — 접어도 안 깨지나.
+    // ⑤ ★무작위 수천 판 — <b>모든 현장 구성</b>에서 규칙이 서나.
     var rnd = new Random(20260901);
-    int nBad = 0, nLost = 0, nWide = 0; string first = null;
+    int nBad = 0, nLost = 0; string first = null;
+    var shapes = new HashSet<string>();
+    int minRows = int.MaxValue, maxRows = 0;
     for (int t = 0; t < 3000; t++)
     {
         var keys = new List<QtyKey> { QtyKey.OfFill(), QtyKey.OfBackfill() };
@@ -7305,18 +7365,82 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
                     if (rnd.Next(3) == 0) keys.Add(QtyKey.OfExc(r, d, w));
         var sp = QtyTableSpec.BuildFromKeys(keys);
         var fd = QtyTableFold.Make(sp);
-        if (!sp.MergesValid(fd, out string w3)) { nBad++; first ??= $"{t}판 — {w3}"; }
-        if (fd.Cols != 7 && fd.Cols != 10 && fd.Cols != 11) nWide++;
-        // 열쇠가 든 줄이 다 실렸나
+        string why = Audit(sp, fd);
+        if (why != null) { nBad++; first ??= $"{t}판 — {why}"; }
+        shapes.Add($"{fd.BodyRows}x{fd.Cols}");
+        minRows = Math.Min(minRows, fd.BodyRows); maxRows = Math.Max(maxRows, fd.BodyRows);
         var shown = new HashSet<int>();
         foreach (var seg in fd.Segs) if (seg.Left)
             for (int i = 0; i < seg.Count; i++) shown.Add(seg.From + i);
         foreach (int r in Enumerable.Range(0, sp.BodyRows))
             if (sp.Left[r].Key != null && !shown.Contains(r)) { nLost++; break; }
     }
-    Check("S87 ★★★3000판 접어도 병합이 안 겹친다", nBad == 0, nBad == 0 ? "0판" : $"{nBad}판({first})");
+    Check("S87 ★★★3000판 전부 규칙을 지킨다(두 단·이어짐·빈칸은 뒤에만·병합)",
+          nBad == 0, nBad == 0 ? "0판" : $"{nBad}판({first})");
     Check("S87 ★★★3000판 열쇠가 든 줄이 하나도 안 빠진다", nLost == 0, $"{nLost}판");
-    Check("S87 칸 수가 7·10·11 중 하나다", nWide == 0, $"{nWide}판");
+    Check($"S87 줄 수가 {minRows}~{maxRows}까지 벌어졌다(현장에 따라 늘고 준다)",
+          maxRows > minRows + 5, $"{minRows}~{maxRows}줄 · {shapes.Count}가지 모양");
+}
+
+// ── S96 ★★★[검토 0907 · H-1] <b>표가 배치 칸에 들어가나</b> — 도면을 열기 전에 잰다 ──────
+//   두 단으로 바꾸며 표가 좁아지고 <b>높아졌다</b>(§72). 그 대가로 칸이 낮은 배치(2×3)에서는
+//   <b>표 하나가 칸 높이를 넘어</b> 축척이 사다리 끝으로 튄다.
+//   ★그 실패가 <b>824개 검사를 뚫고</b> 도면까지 갔다 — 종이 위 산수가 전부
+//   <c>XsecViewCommand</c>(AutoCAD 없이는 못 도는 곳)에만 있었기 때문이다.
+//   → 산수를 <c>QtyTablePaper</c>로 옮기고, 여기서 <b>배치 6가지 × 현장 5가지</b>를 전부 건다.
+{
+    Console.WriteLine("\n== S96 표가 배치 칸에 들어가나 ==");
+
+    const double BandMm = 3 * 4.0;      // 밴드 3칸 × 4mm(XsecViewCommand.BandHeightMm)
+    var layouts = new (int C, int R)[] { (1, 1), (1, 2), (2, 1), (2, 2), (2, 3), (3, 2) };
+    var sites = new (string Name, RockClass[] Rocks, bool Deep, bool Water)[]
+    {
+        ("1층",          new[] { RockClass.Soil }, false, false),
+        ("3층",          new[] { RockClass.Soil, RockClass.Weathered, RockClass.Soft }, false, false),
+        ("3층·깊음·용수", new[] { RockClass.Soil, RockClass.Weathered, RockClass.Soft }, true, true),
+        ("4층·깊음·용수", new[] { RockClass.Soil, RockClass.Weathered, RockClass.Soft,
+                                  RockClass.Medium }, true, true),
+        ("5층·깊음·용수", new[] { RockClass.Soil, RockClass.Weathered, RockClass.Soft,
+                                  RockClass.Medium, RockClass.Hard }, true, true),
+    };
+
+    int tight = 0;                      // 2×2 이하에서 못 들어간 수 — <b>0이라야 한다</b>
+    var miss = new List<string>();      // 못 들어간 조합 전부
+    foreach (var st in sites)
+    {
+        var fd = QtyTableFold.Make(QtyTableSpec.Build(st.Rocks, st.Deep, st.Water));
+        double wmm = QtyTablePaper.WidthMm(fd), hmm = QtyTablePaper.HeightMm(fd.BodyRows + 1);
+        var line = new System.Text.StringBuilder(
+            $"      {st.Name,-14} {fd.BodyRows,2}줄 {wmm,3:F0}×{hmm,3:F0}mm →");
+        foreach (var (C, R) in layouts)
+        {
+            double cw = QtyTablePaper.SheetInnerWmm / C, ch = QtyTablePaper.XsecInnerHmm / R;
+            bool fit = QtyTablePaper.FitsInCell(fd, cw, ch, BandMm);
+            line.Append($" {C}×{R}{(fit ? "○" : "✗")}");
+            if (!fit) { miss.Add($"{st.Name}@{C}×{R}"); if (C <= 2 && R <= 2) tight++; }
+        }
+        Console.WriteLine(line.ToString());
+    }
+
+    // ★가장 중요한 것 — <b>흔히 쓰는 배치(2×2 이하)에서는 어떤 현장이든 선다.</b>
+    Check("S96 ★★★2×2 이하 배치는 어떤 현장이든 표가 들어간다", tight == 0,
+          tight == 0 ? "6가지 현장 × 4가지 배치 전부 들어감" : string.Join(" · ", miss));
+
+    // ★못 들어가는 조합은 <b>알려진 것뿐</b>이라야 한다 — 늘어나면 표가 또 커진 것이다.
+    //   [실측 0907] 2×3에서 4층·5층(깊음·용수) 둘. JACK이 값을 알고 받아들인 자리다.
+    Check("S96 ★★못 들어가는 배치가 알려진 둘뿐이다", miss.Count == 2,
+          miss.Count == 0 ? "없음" : string.Join(" · ", miss));
+
+    // ★표 높이가 <b>칸 높이의 절반</b>을 넘으면 아래 배치가 죽는다 — 어디서 갈리는지 적어 둔다.
+    {
+        var f5 = QtyTableFold.Make(QtyTableSpec.Build(
+            new[] { RockClass.Soil, RockClass.Weathered, RockClass.Soft,
+                    RockClass.Medium, RockClass.Hard }, true, true));
+        double h5 = QtyTablePaper.HeightMm(f5.BodyRows + 1);
+        double cell23 = QtyTablePaper.XsecInnerHmm / 3;
+        Check($"S96 가장 큰 표 {h5:F0}mm · 2×3 칸 {cell23:F0}mm", h5 > 0 && cell23 > 0,
+              $"{f5.BodyRows}줄 · 표가 칸보다 {h5 - cell23:F0}mm {(h5 > cell23 ? "크다" : "작다")}");
+    }
 }
 
 // ── S88 ★★★[JACK 0831 "도면의 암층 표시 기준은 달라졌지만 계산까지 영향 미친 것 있어?"]
