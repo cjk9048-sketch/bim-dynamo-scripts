@@ -7158,16 +7158,21 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     }
 
     // 한 판을 통째로 검사한다 — 이 자가 모든 판에 같이 간다.
-    static string Audit(QtyTableSpec sp, QtyTableFold fd)
+    //   ★[JACK 0907] <b>단이 둘이든 셋이든 같은 자로 잰다.</b> 표가 커서 단을 늘린 판도
+    //   줄기가 이어지고 병합이 안 겹쳐야 하는 것은 똑같다.
+    static string Audit(QtyTableSpec sp, QtyTableFold fd, bool wantTailOnly = true)
     {
         var (L, R) = Content(sp);
         int N = L + R;
-        if (fd.Cols != 8) return $"칸이 {fd.Cols}개다(두 단이면 8칸)";
+        int W = QtyTableFold.PanelWidth;
+        if (fd.Cols % W != 0 || fd.Cols < W) return $"칸이 {fd.Cols}개다(한 단 {W}칸의 배수라야 한다)";
+        int panels = fd.Cols / W;
+        if (fd.Gaps.Count != panels) return $"단은 {panels}개인데 빈칸 장부는 {fd.Gaps.Count}개다";
 
         // ① 단마다 조각을 줄 자리 순으로 모아, 구멍도 겹침도 없는지 본다.
-        for (int col = 0; col <= 4; col += 4)
+        for (int p = 0; p < panels; p++)
         {
-            int filled = 0, top = 0;
+            int col = p * W, filled = 0, top = 0;
             var rowsUsed = new List<(int From, int To)>();
             foreach (var g in fd.Segs)
             {
@@ -7180,14 +7185,20 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
             int at = 0;
             foreach (var (f, t) in rowsUsed)
             {
-                if (f != at) return $"{col}칸 단에 구멍/겹침 — {at}줄 다음이 {f}줄";
+                if (f != at) return $"{p + 1}단에 구멍/겹침 — {at}줄 다음이 {f}줄";
                 at = t;
             }
-            if (top > fd.BodyRows) return $"{col}칸 단이 표 밖으로 나간다({top} > {fd.BodyRows})";
-            if (col == 0 && filled != fd.BodyRows) return $"1단이 안 찼다({filled}/{fd.BodyRows})";
+            if (top > fd.BodyRows) return $"{p + 1}단이 표 밖으로 나간다({top} > {fd.BodyRows})";
+            // ★얼개가 말하는 빈칸이 <b>실제와 맞나</b> — 여기가 합치고 대각선 그을 자리다.
+            if (fd.Gaps[p].Col != col) return $"{p + 1}단 칸 번호가 어긋난다({fd.Gaps[p].Col} vs {col})";
+            if (fd.Gaps[p].Filled != filled)
+                return $"{p + 1}단 찬 줄이 어긋난다 — 얼개 {fd.Gaps[p].Filled} vs 실제 {filled}";
+            if (fd.Gaps[p].Filled + fd.Gaps[p].Blank != fd.BodyRows)
+                return $"{p + 1}단 찬 줄+빈 줄이 표 높이와 다르다"
+                     + $"({fd.Gaps[p].Filled}+{fd.Gaps[p].Blank} != {fd.BodyRows})";
         }
 
-        // ② 줄기가 <b>끊기지 않았나</b> — 1단 위에서 아래로, 그다음 2단 위에서 아래로 읽으면
+        // ② 줄기가 <b>끊기지 않았나</b> — 왼쪽 단부터 위에서 아래로 읽으면
         //    수량 항목 0..L-1 다음에 공종 0..R-1이 <b>차례대로</b> 나와야 한다.
         var order = new List<(int Col, int Row, bool Left, int From, int Count)>();
         foreach (var g in fd.Segs) order.Add((g.Col, g.Row, g.Left, g.From, g.Count));
@@ -7205,8 +7216,13 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
         // ③ 병합이 안 겹치나.
         if (!sp.MergesValid(fd, out string w)) return "병합 겹침 — " + w;
 
-        // ④ 빈칸이 <b>마지막 단에만</b> 있나.
-        if (!fd.TailOnlyGap) return "빈칸이 앞 단에도 생겼다 — " + fd.Note;
+        // ④ 빈칸이 <b>마지막 단에만</b> 있나 — 원칙(두 단)에서만 묻는다.
+        //   표가 커서 단을 늘린 판은 딱 안 나뉠 수 있고, 그때는 얼개가 스스로 신고한다.
+        if (wantTailOnly && !fd.TailOnlyGap) return "빈칸이 앞 단에도 생겼다 — " + fd.Note;
+        if (fd.TailOnlyGap)
+            for (int p = 0; p + 1 < panels; p++)
+                if (fd.Gaps[p].Blank != 0)
+                    return $"빈칸 없다고 해 놓고 {p + 1}단에 {fd.Gaps[p].Blank}줄 비었다";
         return null;
     }
 
@@ -7269,7 +7285,18 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
             return w;
         }
         const int CellW = 10;   // 한 칸의 자릿수
-        Console.WriteLine($"      [{title}] 수량항목 {L}줄 + 공종 {R}줄 = {L + R}줄 → {fd.BodyRows}줄 {fd.Cols}칸");
+        // ★[JACK 0907] 끝 빈칸은 <b>한 칸으로 합치고 대각선</b> — 그것도 그려 봐야 안다.
+        foreach (var gp in fd.Gaps)
+        {
+            if (gp.Blank <= 0) continue;
+            int w2 = Math.Min(QtyTableFold.PanelWidth, fd.Cols - gp.Col);
+            for (int r = gp.Filled; r < fd.BodyRows; r++)
+                for (int c = gp.Col; c < gp.Col + w2; c++)
+                { wide[r, c] = c == gp.Col ? w2 : 0; down[r, c] = r > gp.Filled; }
+            txt[gp.Filled, gp.Col] = "＼(대각선)";
+        }
+        Console.WriteLine($"      [{title}] 수량항목 {L}줄 + 공종 {R}줄 = {L + R}줄 → {fd.BodyRows}줄 {fd.Cols}칸"
+                        + " · " + fd.Note);
         for (int r = 0; r < fd.BodyRows; r++)
         {
             var sb = new System.Text.StringBuilder("      |");
@@ -7280,7 +7307,8 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
                 string t = down[r, c] ? "" : (txt[r, c] ?? "");
                 int room = CellW * cs + (cs - 1);           // 합친 칸은 사이 칸선 자리까지 쓴다
                 sb.Append(t).Append(new string(' ', Math.Max(0, room - Wcs(t)))).Append('|');
-                if (c + cs == 4) sb.Append('|');            // 단 사이는 두 줄
+                if ((c + cs) % QtyTableFold.PanelWidth == 0 && c + cs < fd.Cols)
+                    sb.Append('|');                        // 단 사이는 두 줄
                 c += cs;
             }
             Console.WriteLine(sb.ToString());
@@ -7311,6 +7339,14 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     Check("S87 ★★나누면 표가 낮아진다", f2.BodyRows < big.BodyRows,
           $"{big.BodyRows}줄 → {f2.BodyRows}줄");
     Check("S87 ★큰 판이 규칙을 다 지킨다", Audit(big, f2) == null, Audit(big, f2) ?? f2.Note);
+
+    // ★[JACK 0907 "그 도면만 표를 3칸으로"] 2×3 칸에 안 들어가 <b>세 단으로 물러선</b> 모습.
+    var f3 = QtyTableFold.Make(big, 3);
+    Check("S87 ★★★세 단으로 물러서도 얼개가 성하다", Audit(big, f3, wantTailOnly: false) == null,
+          Audit(big, f3, wantTailOnly: false) ?? f3.Note);
+    Check("S87 ★★세 단이면 표가 더 낮아진다", f3.BodyRows < f2.BodyRows,
+          $"두 단 {f2.BodyRows}줄 → 세 단 {f3.BodyRows}줄");
+    Dump("5층·깊음·용수 세 단", big, f3);
 
     // ③ 끊는 자리는 <b>블록 경계</b>다 — 터파기 한가운데가 잘리면 안 된다.
     {
@@ -7367,6 +7403,15 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
         var fd = QtyTableFold.Make(sp);
         string why = Audit(sp, fd);
         if (why != null) { nBad++; first ??= $"{t}판 — {why}"; }
+        // ★★[JACK 0907] 표가 커서 <b>단을 늘린 판</b>도 같은 자로 재다 —
+        //   줄기가 이어지고 병합이 안 겹치는 것은 단이 몇이든 같다.
+        //   (빈칸이 앞 단에 생기는 것만 허용한다 — 딱 안 나누어질 수 있다.)
+        for (int p3 = 3; p3 <= 4; p3++)
+        {
+            var fdp = QtyTableFold.Make(sp, p3);
+            string whyp = Audit(sp, fdp, wantTailOnly: false);
+            if (whyp != null) { nBad++; first ??= $"{t}판 {p3}단 — {whyp}"; break; }
+        }
         shapes.Add($"{fd.BodyRows}x{fd.Cols}");
         minRows = Math.Min(minRows, fd.BodyRows); maxRows = Math.Max(maxRows, fd.BodyRows);
         var shown = new HashSet<int>();
@@ -7426,10 +7471,43 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     Check("S96 ★★★2×2 이하 배치는 어떤 현장이든 표가 들어간다", tight == 0,
           tight == 0 ? "6가지 현장 × 4가지 배치 전부 들어감" : string.Join(" · ", miss));
 
-    // ★못 들어가는 조합은 <b>알려진 것뿐</b>이라야 한다 — 늘어나면 표가 또 커진 것이다.
-    //   [실측 0907] 2×3에서 4층·5층(깊음·용수) 둘. JACK이 값을 알고 받아들인 자리다.
-    Check("S96 ★★못 들어가는 배치가 알려진 둘뿐이다", miss.Count == 2,
-          miss.Count == 0 ? "없음" : string.Join(" · ", miss));
+    // ★★★[JACK 0907 "그 도면만 표를 3칸으로"] <b>단을 늘리면 전부 서야 한다.</b>
+    //   두 단으로 안 들어가는 조합(2×3 × 4~5층·깊음·용수)에서 도면 쪽은 3단·4단을 차례로 청한다.
+    //   그것으로도 안 서면 <b>도면이 종이 밖으로 나간다</b> — 여기서 못 박는다.
+    {
+        int stillBad = 0; var hard = new List<string>();
+        var grew = new List<string>();
+        foreach (var st in sites)
+        {
+            var sp2 = QtyTableSpec.Build(st.Rocks, st.Deep, st.Water);
+            foreach (var (C, R) in layouts)
+            {
+                double cw = QtyTablePaper.SheetInnerWmm / C, ch = QtyTablePaper.XsecInnerHmm / R;
+                var fd2 = QtyTableFold.Make(sp2);
+                int used = 2;
+                if (!QtyTablePaper.FitsInCell(fd2, cw, ch, BandMm))
+                    for (int p = 3; p <= 4; p++)
+                    {
+                        var fp = QtyTableFold.Make(sp2, p);
+                        if (!QtyTablePaper.FitsInCell(fp, cw, ch, BandMm)) continue;
+                        fd2 = fp; used = p; break;
+                    }
+                if (!QtyTablePaper.FitsInCell(fd2, cw, ch, BandMm))
+                { stillBad++; hard.Add($"{st.Name}@{C}×{R}"); continue; }
+                if (used > 2) grew.Add($"{st.Name}@{C}×{R}→{used}단({fd2.BodyRows}줄)");
+                // ★단을 늘린 판도 병합이 안 겹치고 장부가 맞아야 한다.
+                //   (줄기가 이어지는지는 S87이 무작위 3,000판으로 따로 재다.)
+                if (!sp2.MergesValid(fd2, out string w4))
+                { stillBad++; hard.Add($"{st.Name}@{C}×{R} — 병합 {w4}"); continue; }
+                foreach (var gp in fd2.Gaps)
+                    if (gp.Filled + gp.Blank != fd2.BodyRows)
+                    { stillBad++; hard.Add($"{st.Name}@{C}×{R} — 장부 {gp.Filled}+{gp.Blank}!={fd2.BodyRows}"); break; }
+            }
+        }
+        Check("S96 ★★★단을 늘리면 배치 6 × 현장 5가 전부 선다", stillBad == 0,
+              stillBad == 0 ? $"30가지 전부 · 단을 늘린 판 {grew.Count}가지" : string.Join(" · ", hard));
+        if (grew.Count > 0) Console.WriteLine("      단 늘림: " + string.Join(" · ", grew));
+    }
 
     // ★표 높이가 <b>칸 높이의 절반</b>을 넘으면 아래 배치가 죽는다 — 어디서 갈리는지 적어 둔다.
     {

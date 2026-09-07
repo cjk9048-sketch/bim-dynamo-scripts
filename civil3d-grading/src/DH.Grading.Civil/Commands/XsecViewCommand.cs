@@ -431,11 +431,8 @@ public sealed class XsecViewCommand
         //   축척은 <b>빈 표</b>로 재고 그림은 <b>제대로 된 표</b>를 그려 둘이 갈렸다.
         var foldSpec = qty.Spec ?? DH.Grading.Core.QtyTableSpec.BuildFromKeys(
             System.Array.Empty<DH.Grading.Core.QtyKey>(), null, DH.Grading.Core.QuantityTable.DeepLimitM);
+        // ★원칙은 <b>두 단</b>이다. 칸에 안 들어가면 아래에서 단을 늘린다(밴드 높이를 알아야 잴 수 있다).
         var fold = DH.Grading.Core.QtyTableFold.Make(foldSpec);
-        double tableWmm = QtWidthMmOf(fold);
-        // ★[검토 §50] 표 높이를 <b>두 곳에서 다르게</b> 세고 있었다 —
-        //   자리 잡는 쪽은 19.0줄, 그리는 쪽은 머리줄 1.4배를 반영해 19.4줄. 2.3mm 어긋났다.
-        double tableHmm = QtTableHmmOf(fold.BodyRows + 1);
 
         // ★★[검토] 표를 <b>오른쪽</b>에 둘 때와 <b>아래</b>에 둘 때를 <b>둘 다 계산</b>해
         //   축척이 작은 쪽(=그림이 큰 쪽)을 고른다. 3×2처럼 칸이 좁은 배치에서는
@@ -471,6 +468,39 @@ public sealed class XsecViewCommand
         //   ★[JACK 0827 "너무 여유를 둬서 횡단뷰가 작아지지 않게"] <b>실제 칸 수</b>로 잰다 —
         //   3칸을 미리 예약하면 쓰지도 않는 자리가 그림을 깎는다(칸 높이만큼).
         double bandPaperMm = bandRows * BandHeightMm;
+
+        // ── ★★★[JACK 0907 "그 도면만 표를 3칸으로"] <b>안 들어가면 단을 늘린다.</b>
+        //
+        //   지층이 다 나오는 현장은 표가 26줄(203mm)까지 커지는데, 2×3 배치의 칸 자리는 135mm다 —
+        //   <b>산수로 안 들어간다.</b> 종전엔 그대로 그려 덩어리가 칸 <b>위로</b> 자라
+        //   윗칸을 침범하고, 맨 윗줄에서는 <b>A1 종이 밖으로 21mm</b> 나갔다(검토 0907 실측).
+        //
+        //   JACK이 고른 길: <b>배치는 그대로 두고 그 도면의 표만</b> 단을 늘린다.
+        //   장 수도, 사용자가 고른 배치도 안 건드린다. 표 모양만 그 도면에서 달라진다.
+        //   (단을 늘리면 표가 낮아진다 — 5층·깊음·용수 26줄 → 세 단 16줄.)
+        if (!DH.Grading.Core.QtyTablePaper.FitsInCell(fold, cellWmm, cellHmm, bandPaperMm))
+        {
+            double wasH = DH.Grading.Core.QtyTablePaper.HeightMm(fold.BodyRows + 1);
+            bool fixedUp = false;
+            for (int p = 3; p <= MaxQtyPanels && !fixedUp; p++)
+            {
+                var fp = DH.Grading.Core.QtyTableFold.Make(foldSpec, p);
+                if (!DH.Grading.Core.QtyTablePaper.FitsInCell(fp, cellWmm, cellHmm, bandPaperMm)) continue;
+                log.AppendLine($"  ★두 단으로는 표 {wasH:F0}mm({fold.BodyRows}줄)가 칸 {cellHmm:F0}mm에"
+                             + $" 안 들어가 <b>{p}단</b>으로 나눴다 — {fp.Note}");
+                fold = fp; fixedUp = true;
+            }
+            // ★못 줄이면 <b>말한다</b>. 여기서 조용히 넘어가면 도면이 종이 밖으로 나간다.
+            if (!fixedUp)
+                log.AppendLine($"  ⚠단을 {MaxQtyPanels}개까지 늘려도 표가 칸에 안 들어간다"
+                             + $" — 표 {wasH:F0}mm({fold.BodyRows}줄) vs 칸 {cellHmm:F0}mm"
+                             + $" (배치 {cols}×{rows}) → 배치를 성기게 하시거나 축척을 고정하세요");
+        }
+
+        double tableWmm = QtWidthMmOf(fold);
+        // ★[검토 §50] 표 높이를 <b>두 곳에서 다르게</b> 세고 있었다 —
+        //   자리 잡는 쪽은 19.0줄, 그리는 쪽은 머리줄 1.4배를 반영해 19.4줄. 2.3mm 어긋났다.
+        double tableHmm = QtTableHmmOf(fold.BodyRows + 1);
 
         double padH = 2 * CellPadMm + NameRoomMm + bandPaperMm;
         // ★★★[검토 0907 · H-1] <b>이 산수는 이제 Core에 있다.</b> 시험대(S96)가 같은 것을 불러
@@ -1498,7 +1528,7 @@ public sealed class XsecViewCommand
         // ★★[JACK 0828 · 검토] 종전 꼬리말은 <c>(값은 아직 '–')</c>를 <b>조건 없이</b> 찍었다 —
         //   값이 실제로 들어가고 있는데도 로그만 "아직 비었다"고 말했다.
         //   낡은 문구가 남아 <b>고친 뒤에도 안 고쳐진 것처럼</b> 보이게 만든다. → <b>세어서 말한다.</b>
-        int n = 0, nQty = 0, nCells = 0;
+        int n = 0, nQty = 0, nCells = 0, nDiag = 0;
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
@@ -1639,6 +1669,24 @@ public sealed class XsecViewCommand
                             }
                         }
                     }
+                    // ── ★★★[JACK 0907 "마지막 공백칸은 모두 셀병합하고 대각선 선 하나만"]
+                    //   <b>표 끝의 남는 칸을 하나로 합친다.</b> 도면 관례다 —
+                    //   빈칸을 그냥 두면 <b>아직 안 적은 것</b>으로 읽히고, 합쳐서 대각선을 그으면
+                    //   "여기는 더 없다"가 된다(이 저장소가 <c>–</c>와 빈칸을 갈라 쓰는 이유와 같다).
+                    //   ★<b>다른 병합과 같은 자리에서</b> 해야 한다 — 색 칠하기는 병합을 다 끝낸
+                    //   뒤라야 남기 때문이다(0827에 겪었다).
+                    //   ★[JACK 0907] 원칙(두 단)에서는 <b>마지막 단</b>에만 빈칸이 있지만,
+                    //   표가 커서 세 단으로 물러선 판에서는 앞 단에도 생길 수 있다 —
+                    //   <b>단마다</b> 제 빈칸을 합친다. 얼개(<c>Gaps</c>)가 어디인지 안다.
+                    foreach (var gp in fold.Gaps)
+                    {
+                        if (gp.Blank <= 0) continue;
+                        int r0 = gp.Filled + 1, r1 = fold.BodyRows;
+                        int c1 = System.Math.Min(gp.Col + DH.Grading.Core.QtyTableFold.PanelWidth - 1, nCol - 1);
+                        if (r1 < r0 || c1 < gp.Col) continue;
+                        try { tb.MergeCells(CellRange.Create(tb, r0, gp.Col, r1, c1)); } catch { }
+                    }
+
                     // 한 칸이라도 숫자가 든 표를 <b>값이 든 표</b>로 친다. 칸 수도 함께 센다.
                     if (filled > 0) nQty++;
                     nCells += filled;
@@ -1713,6 +1761,41 @@ public sealed class XsecViewCommand
                         ? botY2 + tableH                            // 아랫변을 맞추고 위로 자란다
                         : ext.MinPoint.Y - bandM - gapM;
                     tb.Position = new Point3d(px, py, 0);
+
+                    // ★★★[JACK 0907] <b>합친 빈칸에 대각선 하나.</b>
+                    //   <c>Table</c>에는 대각선 칸선이 없다 — 선을 따로 그어야 한다.
+                    //   ★자리를 <b>정한 뒤</b>라야 한다(<c>Position</c>이 표의 <b>왼쪽 위</b>다).
+                    //
+                    //   ★★★[검토 0907 · M-1] <b>레이어는 표와 같은 것을 쓴다.</b>
+                    //   처음엔 <c>QtLayerLine</c>("표(줄)")에 뒀는데, 그 이름은 <b>여태 아무것도
+                    //   안 그려지던 빈 레이어</b>였다 — 표는 통째로 <c>QtLayerEdge</c>에 있고
+                    //   안쪽 줄의 빨강은 레이어가 아니라 <c>SetGridColor</c> <b>색 재정의</b>다.
+                    //   그대로 뒀으면 <b>표 레이어를 끄면 대각선만 허공에 남고</b>,
+                    //   굵기도 레이어 기본(0.25mm)이라 표 줄(0.13mm)보다 <b>두 배 굵게</b> 인쇄됐다.
+                    //   → 표와 같은 레이어에 두고, 색·굵기를 <b>선에 직접</b> 준다(표 안쪽 줄과 똑같이).
+                    foreach (var gp in fold.Gaps)
+                    {
+                        if (gp.Blank <= 0) continue;
+                        try
+                        {
+                            int r0 = gp.Filled + 1, r1 = fold.BodyRows;
+                            int c1 = System.Math.Min(gp.Col + DH.Grading.Core.QtyTableFold.PanelWidth - 1, nCol - 1);
+                            if (r1 < r0 || c1 < gp.Col) continue;
+                            double xL = px, xR = px;
+                            for (int c = 0; c < gp.Col; c++) xL += colW[c];
+                            for (int c = 0; c <= c1; c++) xR += colW[c];
+                            double head = rowH * 1.4;                       // 머리줄만 1.4배다
+                            double yT = py - (head + (r0 - 1) * rowH);
+                            double yB = py - (head + r1 * rowH);
+                            var diag = new Line(new Point3d(xL, yT, 0), new Point3d(xR, yB, 0));
+                            if (!layE.IsNull) diag.LayerId = layE;          // 표와 같은 레이어
+                            diag.ColorIndex = 1;                            // 표 안쪽 줄과 같은 빨강
+                            diag.LineWeight = LineWeight.LineWeight013;     // 안쪽 줄과 같은 굵기
+                            ms.AppendEntity(diag); tr.AddNewlyCreatedDBObject(diag, true);
+                            nDiag++;
+                        }
+                        catch (System.Exception exD) { firstTbErr ??= "대각선: " + exD.Message; }
+                    }
                     // ★[JACK 0826] <c>GenerateLayout()</c>을 <b>부르지 않는다</b> — 그것이 행 높이를
                     //   글자와 여백에서 <b>다시 계산</b>해, 우리가 지정한 높이를 덮어쓴다.
                     ms.AppendEntity(tb); tr.AddNewlyCreatedDBObject(tb, true);
@@ -1728,6 +1811,7 @@ public sealed class XsecViewCommand
         log?.AppendLine($"  수량표 {n}개 · {nRow}줄 · AutoCAD Table 객체(셀 병합·열 너비를 표가 관리한다)"
                       + $" · 글자 {QtTextMm:0.##}mm · 줄 {QtRowH:0.##}mm · 폭 {tw / sc:F0}mm"
                       + $" · <b>숫자가 든 표 {nQty}/{n}개</b> · 채워진 칸 {nCells}개 · 안쪽 칸선 색 {tbIn}곳"
+                      + (nDiag > 0 ? $" · 빈칸 합치고 대각선 {nDiag}개" : " · 딱 맞아 합칠 빈칸 없음")
                       + (nQty < n ? $" (나머지 {n - nQty}장은 잰 것이 없어 전부 '{QT.Blank}')" : ""));
         // ★★[JACK 0828] <b>표의 두 규칙을 매번 물어보고 남긴다.</b>
         //   <c>SpansValid</c>는 만들어 두고 <b>아무도 안 불러</b> 죽어 있었다 —
@@ -2132,6 +2216,11 @@ public sealed class XsecViewCommand
     /// 한 줄뿐이라 <b>쓰지도 않는 18mm가 그림을 깎고 있었다</b>(3칸 × 6mm).</para>
     /// <para>이것도 <b>종이 기준</b>이라 축척 보정을 받는다 — 글자만 키우고 칸을 그대로 두면 눌린다.</para></summary>
     private const double BandHeightMm = 4.0;
+
+    /// <summary>★[JACK 0907] 표를 <b>몇 단까지</b> 늘려도 되나. 원칙은 둘, 안 들어가면 셋·넷.
+    /// <para>넷이면 폭이 321mm라 A1 한 칸(2×3 기준 398mm)에서 그림 자리가 57mm밖에 안 남는다 —
+    /// 그보다 늘리는 것은 <b>표를 위해 그림을 버리는 일</b>이라 거기서 멈추고 말한다.</para></summary>
+    private const int MaxQtyPanels = 4;
 
     /// <summary>★★★[JACK 0827 "먼저 밴드 3칸 길이만큼을 고려해서 전체 축척부터 맞추고 시작하는 게 좋겠어"]
     /// <b>밴드 칸 수를 미리 잡는다 — 측점·GL·FGL 셋.</b>
