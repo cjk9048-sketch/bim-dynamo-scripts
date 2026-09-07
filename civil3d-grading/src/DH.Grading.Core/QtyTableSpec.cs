@@ -508,96 +508,149 @@ public sealed class QtyTableFold
     /// 블록이 너무 커서 못 지킨 판이 있으면 <b>말없이 넘어가지 않는다</b>.</summary>
     public bool TailOnlyGap { get; }
 
+    /// <summary>★★★[JACK 0907 "마지막 공백칸은 모두 셀병합하고 대각선 선 하나만 넣어서 마무리해줘"]
+    /// <b>한 단에서 찬 줄과 빈 줄.</b>
+    /// <para>도면 관례다: 표 끝의 남는 칸은 <b>하나로 합치고 대각선</b>을 그어
+    /// "여기는 더 없다"를 눈으로 말한다. 빈칸을 그냥 두면 <b>아직 안 적은 것</b>으로 읽힌다 —
+    /// 이 저장소가 <c>–</c>와 빈칸을 갈라 쓰는 이유와 같다.</para>
+    /// <para>★<b>단마다</b> 들고 있다. 원칙(두 단)에서는 마지막 단에만 빈칸이 있지만,
+    /// 표가 커져 세 단으로 물러선 판에서는 앞 단에도 생길 수 있다 — <b>그 자리도 같이 마무리한다</b>.</para></summary>
+    /// <param name="Col">그 단이 시작하는 칸 번호.</param>
+    /// <param name="Filled">그 단에 실제로 든 줄 수 — 빈칸은 <b>이 줄 다음부터</b>다.</param>
+    /// <param name="Blank">비어 있는 줄 수. <c>0</c>이면 딱 맞아 합칠 자리가 없다.</param>
+    public readonly record struct PanelGap(int Col, int Filled, int Blank);
+
+    /// <summary>단마다의 빈칸 — 그리는 쪽이 <b>합치고 대각선</b>을 그을 자리다.</summary>
+    public IReadOnlyList<PanelGap> Gaps { get; }
+
     private QtyTableFold(int bodyRows, int cols, IReadOnlyList<Seg> segs,
-                         IReadOnlyList<int> ratioIx, string note, bool tailOnly)
-    { BodyRows = bodyRows; Cols = cols; Segs = segs; ColRatioIndex = ratioIx; Note = note; TailOnlyGap = tailOnly; }
+                         IReadOnlyList<int> ratioIx, string note, bool tailOnly,
+                         IReadOnlyList<PanelGap> gaps)
+    {
+        BodyRows = bodyRows; Cols = cols; Segs = segs; ColRatioIndex = ratioIx;
+        Note = note; TailOnlyGap = tailOnly; Gaps = gaps;
+    }
 
     /// <summary>한 단(4칸)이 쓰는 폭 순번 — 대분류·중분류·재료·값.</summary>
     private static readonly int[] PanelCols = { 0, 1, 2, 3 };
 
-    /// <summary>★[JACK 0907] 단 수는 <b>둘</b>이다. 셋이 되면 한 줄에 카테고리가 셋 나온다.</summary>
+    /// <summary>★[JACK 0907] <b>원칙은 두 단</b>이다 — 셋이 되면 한 줄에 카테고리가 셋 나온다.
+    /// <para>표가 커서 고른 배치의 칸에 <b>물리적으로 안 들어갈 때만</b> 그리는 쪽이 셋을 청한다
+    /// (JACK 0907: <i>"그 도면만 표를 3칸으로"</i>). 배치도 장 수도 그대로 둔다.</para></summary>
     public const int Panels = 2;
 
     /// <summary>한 단이 몇 칸인가.</summary>
     public const int PanelWidth = 4;
 
-    /// <summary>★ 두 단으로 나눈다.</summary>
-    public static QtyTableFold Make(QtyTableSpec spec)
+    /// <summary>★ 표를 <paramref name="panels"/>개 단으로 나눈다.
+    ///
+    /// <para><b>원칙은 두 단</b>이다(JACK 0907). 그런데 지층이 다 나오는 현장은 표가 26줄까지 커져
+    /// <b>2×3처럼 칸이 낮은 배치에서는 물리적으로 안 들어간다</b> — 표 203mm에 칸 자리 135mm다.
+    /// 그때만 <b>그 도면의 표를</b> 세 단으로 나눈다(JACK 0907: <i>"그 도면만 표를 3칸으로"</i>).
+    /// 배치는 사용자가 고른 대로 두고, 장 수도 그대로다.</para>
+    ///
+    /// <para><b>고르는 법은 단이 몇이든 같다.</b> 앞 단들이 <b>정확히 꽉 차야</b>(빈칸 0)
+    /// 빈칸이 마지막 단에만 남는다 — 즉 <c>1×rows</c>·<c>2×rows</c>…가 전부 <b>블록 경계</b>라야 한다.
+    /// 그런 <c>rows</c> 중 가장 작은 것을 고른다.</para>
+    ///
+    /// <para>그런 <c>rows</c>가 없으면(블록 크기가 안 맞아떨어지면) <b>욕심껏 담기</b>로 물러선다 —
+    /// 앞 단에도 빈칸이 조금 생기지만 표는 선다. 물러섰다는 것을 <see cref="TailOnlyGap"/>과
+    /// <see cref="Note"/>가 <b>말한다</b>.</para></summary>
+    public static QtyTableFold Make(QtyTableSpec spec, int panels = Panels)
     {
         int L = ContentRows(spec, true), R = ContentRows(spec, false);
         int N = L + R;
         var segs = new List<Seg>();
 
         if (spec == null || N <= 0)
-            return new QtyTableFold(1, PanelWidth, segs, new List<int>(PanelCols), "표가 비었다", true);
+            return new QtyTableFold(1, PanelWidth, segs, new List<int>(PanelCols), "표가 비었다", true,
+                                    new List<PanelGap>());
+        if (panels < 1) panels = 1;
 
-        // ── 끊을 수 있는 자리 — <b>블록이 시작하는 줄</b>만.
-        //   왼쪽은 대분류가 새로 서는 줄, 오른쪽은 공종이 새로 서는 줄,
-        //   그리고 수량 항목에서 공종으로 넘어가는 자리(<c>L</c>)다.
+        // ── 블록 — <b>끊을 수 있는 자리</b>로 잘린 덩어리. 이 안은 절대 안 자른다.
+        //   (왼쪽은 대분류가 새로 서는 줄, 오른쪽은 공종이 새로 서는 줄, 그리고 항목→공종 경계.)
+        var bound = new List<int> { 0 };
+        for (int r = 1; r < L; r++) if (spec.Left[r].Group != null) bound.Add(r);
+        if (L > 0 && R > 0) bound.Add(L);
+        for (int r = 1; r < R; r++) if (spec.Right[r].Item != null) bound.Add(L + r);
+        bound.Add(N);                                   // 끝도 경계다
+        var isBound = new HashSet<int>(bound);
+
+        // ── 앞 단들이 <b>정확히</b> 꽉 차는 가장 작은 줄 수.
+        int maxBlock = 0;
+        for (int i = 0; i + 1 < bound.Count; i++)
+            maxBlock = System.Math.Max(maxBlock, bound[i + 1] - bound[i]);
+        int lo = System.Math.Max(maxBlock, (N + panels - 1) / panels);
+
+        int rows = -1;
+        bool exact = false;
+        for (int cand = lo; cand <= N; cand++)
+        {
+            bool ok = true;
+            for (int p = 1; p < panels && ok; p++)
+                if (!isBound.Contains(p * cand)) ok = false;      // 앞 단 끝이 블록 경계라야 한다
+            int last = N - (panels - 1) * cand;
+            if (ok && last > 0 && last <= cand) { rows = cand; exact = true; break; }
+        }
+
+        // ── 물러서기 — 욕심껏 담는다. 앞 단에도 빈칸이 조금 생긴다.
         var cuts = new List<int>();
-        for (int r = 1; r < L; r++) if (spec.Left[r].Group != null) cuts.Add(r);
-        if (L > 0 && R > 0) cuts.Add(L);
-        for (int r = 1; r < R; r++) if (spec.Right[r].Item != null) cuts.Add(L + r);
-
-        // ── ★★★[JACK 0907] <b>빈칸이 마지막 단에만 생기게</b> 고른다.
-        //   1단이 2단보다 <b>길거나 같아야</b> 그렇게 된다(<c>k >= N-k</c>).
-        //   그 조건을 지키는 것 중 <b>가장 작은</b> k가 표를 제일 낮게 만든다.
-        //   ★[검토 0907] <b>"조건을 지키는 것들 안에서" 최소다.</b> 조건을 어기면 한 줄 더 낮은
-        //   판이 있을 수 있다 — 무작위 3,000판 중 25%가 그렇고, 손해는 <b>언제나 딱 한 줄</b>(7.4mm)이다.
-        //   그 한 줄이 JACK 규칙의 값이다. 실무에서 큰 판(3~5층·깊음·용수)은 <b>하나도 안 어긋난다</b>.
-        int cut = -1;
-        foreach (int k in cuts)
-            if (k >= N - k) { cut = k; break; }      // cuts는 오름차순이라 첫 번째가 가장 작다
-
-        bool tailOnly = cut > 0;
-        if (!tailOnly)
+        if (exact)
         {
-            // ★[검토 0907 · L-1] <b>지금 자료로는 여기 안 온다.</b> <c>cuts</c>의 마지막은 늘 <c>N-1</c>이고
-            //   (맨 끝 공종 <c>잡 석 부 설</c>은 언제나 <c>Item != null</c>), <c>N >= 2</c>면
-            //   <c>N-1 >= N-(N-1)</c>이라 조건을 만족하는 k가 <b>반드시</b> 있다(전수 3,020판 확인).
-            //   그래도 남긴다 — 공종 목록을 손대면 그 전제가 깨질 수 있고,
-            //   그때 <b>말없이 이상한 표</b>가 나오는 것보다 로그에 걸리는 편이 낫다.
-            // 지킬 수 없는 판 — 마지막 블록이 표의 절반보다 크다.
-            // 그래도 표는 서야 하므로 <b>가장 고르게</b> 나누고, 못 지켰다고 말한다.
-            int bestBad = int.MaxValue;
-            foreach (int k in cuts)
+            for (int p = 1; p < panels; p++) cuts.Add(p * rows);
+        }
+        else
+        {
+            for (int cand = lo; cand <= N && rows < 0; cand++)
             {
-                int bad = System.Math.Max(k, N - k);
-                if (bad < bestBad) { bestBad = bad; cut = k; }
+                var c2 = Greedy(bound, cand, panels);
+                if (c2 != null) { rows = cand; cuts = c2; }
             }
+            if (rows < 0) { rows = N; cuts.Clear(); }             // 한 단으로라도 세운다
         }
 
-        if (cut <= 0 || cut >= N)
+        // ── 자리에 앉힌다.
+        int used = cuts.Count + 1;                                // 실제로 쓴 단 수
+        var gaps = new List<PanelGap>();
+        int at = 0;
+        for (int p = 0; p < used; p++)
         {
-            // 끊을 자리가 하나도 없다(있을 수 없지만) — 한 단으로 세운다.
-            Emit(segs, L, 0, N, 0);
-            return new QtyTableFold(N, PanelWidth, segs, new List<int>(PanelCols),
-                                    $"끊을 자리가 없어 한 단({N}줄)", true);
+            int end = p < cuts.Count ? cuts[p] : N;
+            Emit(segs, L, at, end - at, p * PanelWidth);
+            gaps.Add(new PanelGap(p * PanelWidth, end - at, rows - (end - at)));
+            at = end;
         }
 
-        int rows = System.Math.Max(cut, N - cut);
-        Emit(segs, L, 0, cut, 0);
-        Emit(segs, L, cut, N - cut, PanelWidth);
+        var ix = new List<int>();
+        for (int p = 0; p < used; p++) ix.AddRange(PanelCols);
 
-        var ix = new List<int>(); ix.AddRange(PanelCols); ix.AddRange(PanelCols);
-        int gap1 = rows - cut, gap2 = rows - (N - cut);
-        string note = $"두 단 — 1단 {cut}줄 · 2단 {N - cut}줄 · {rows}줄 {PanelWidth * Panels}칸"
-                    + $" · 빈칸 1단 {gap1} · 2단 {gap2}"
-                    + (tailOnly ? "" : " ⚠마지막 단에만 못 몰았다(막 블록이 너무 크다)");
-        return new QtyTableFold(rows, PanelWidth * Panels, segs, ix, note, tailOnly && gap1 == 0);
+        bool tailOnly = true;
+        for (int p = 0; p + 1 < gaps.Count; p++) if (gaps[p].Blank != 0) tailOnly = false;
+
+        var sb = new System.Text.StringBuilder($"{used}단 — ");
+        for (int p = 0; p < gaps.Count; p++)
+            sb.Append($"{p + 1}단 {gaps[p].Filled}줄(빈 {gaps[p].Blank})").Append(p + 1 < gaps.Count ? " · " : "");
+        sb.Append($" · {rows}줄 {used * PanelWidth}칸");
+        if (!exact) sb.Append(" ⚠딱 나뉘지 않아 욕심껏 담았다(앞 단에도 빈칸)");
+
+        return new QtyTableFold(rows, used * PanelWidth, segs, ix, sb.ToString(), tailOnly, gaps);
     }
 
-    /// <summary>줄기의 <paramref name="from"/>부터 <paramref name="count"/>줄을 <paramref name="col"/> 단에 붓는다.
-    /// <para>줄기는 <b>수량 항목 <paramref name="L"/>줄 + 공종</b>으로 이어져 있으므로,
-    /// 한 단이 두 목록에 걸치면 조각이 <b>둘</b>로 나온다.</para></summary>
-    private static void Emit(List<Seg> segs, int L, int from, int count, int col)
+    /// <summary>욕심껏 담는다 — 각 단에 <b>들어갈 수 있는 만큼</b>. 못 담으면 <c>null</c>.</summary>
+    private static List<int> Greedy(List<int> bound, int rows, int panels)
     {
-        if (count <= 0) return;
-        int end = from + count, row = 0;
-        int lEnd = System.Math.Min(end, L);
-        if (from < lEnd) { segs.Add(new Seg(true, from, lEnd - from, col, 0)); row = lEnd - from; }
-        int rFrom = System.Math.Max(from, L) - L, rEnd = end - L;
-        if (rEnd > rFrom) segs.Add(new Seg(false, rFrom, rEnd - rFrom, col, row));
+        var cuts = new List<int>();
+        int start = 0;
+        for (int i = 1; i < bound.Count; i++)
+        {
+            if (bound[i] - start <= rows) continue;               // 아직 이 단에 들어간다
+            if (bound[i - 1] == start) return null;               // 블록 하나가 단보다 크다
+            cuts.Add(bound[i - 1]);
+            start = bound[i - 1];
+            if (cuts.Count > panels - 1) return null;
+            if (bound[i] - start > rows) return null;             // 그래도 안 들어간다
+        }
+        return cuts.Count <= panels - 1 ? cuts : null;
     }
 
     /// <summary>★★★[검토 0907 · M-1] <b>두 단의 칸 폭이 나란한가</b> — 그리는 것을 재는 검사.
@@ -620,6 +673,19 @@ public sealed class QtyTableFold
     }
 
     /// <summary>채움 줄을 뺀 <b>실제 내용</b> 줄 수.</summary>
+    /// <summary>줄기의 <paramref name="from"/>부터 <paramref name="count"/>줄을 <paramref name="col"/> 단에 붓는다.
+    /// <para>줄기는 <b>수량 항목 <paramref name="L"/>줄 + 공종</b>으로 이어져 있으므로,
+    /// 한 단이 두 목록에 걸치면 조각이 <b>둘</b>로 나온다.</para></summary>
+    private static void Emit(List<Seg> segs, int L, int from, int count, int col)
+    {
+        if (count <= 0) return;
+        int end = from + count, row = 0;
+        int lEnd = System.Math.Min(end, L);
+        if (from < lEnd) { segs.Add(new Seg(true, from, lEnd - from, col, 0)); row = lEnd - from; }
+        int rFrom = System.Math.Max(from, L) - L, rEnd = end - L;
+        if (rEnd > rFrom) segs.Add(new Seg(false, rFrom, rEnd - rFrom, col, row));
+    }
+
     private static int ContentRows(QtyTableSpec spec, bool left)
     {
         if (spec == null) return 0;
