@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.ApplicationServices;
+﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Runtime;
@@ -120,6 +120,12 @@ public sealed class ExcavCommand
         {
             ed.WriteMessage("\n[터파기 오류] " + ex.Message);
             AcadApp.ShowAlertDialog("터파기 지표면 생성 중 오류:\n" + ex.Message);
+            // ★★★[JACK 0907] <b>터지면 여태 쓴 로그가 통째로 사라지고 있었다.</b>
+            //   <c>DoExcav</c>는 로그를 끝에서 한 번에 쓴다(413·428행). 예외가 그 앞을 지나가면
+            //   <b>목표면을 어떻게 합성했는지·어느 정점이 어긋났는지</b>가 전부 날아가고
+            //   예외 문구 한 줄만 남는다 — 이번에 그것 때문에 <b>어디인지</b>를 못 봤다.
+            //   §71·§73에서 배운 그대로: <b>사고 난 판의 로그가 가장 값지다.</b>
+            try { DiagLog.Append("\n" + LastLog + "\n"); } catch { }
             try { DiagLog.Append($"\n■ 터파기 예외 — {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}\n"); } catch { }
         }
     }
@@ -147,11 +153,16 @@ public sealed class ExcavCommand
     }
 
     // ────────────────────────────────────────────────────────────────────
+    /// <summary>★[JACK 0907] <b>터졌을 때 건져 낼 로그.</b> <see cref="DoExcav"/>는 로그를 끝에서
+    /// 한 번에 쓰므로, 중간에 터지면 <c>Run</c>이 이것을 대신 써 준다.</summary>
+    private static string LastLog = "";
+
     internal static void DoExcav(Document doc, ObjectId boxPolyId, ObjectId groundId)
     {
         Editor ed = doc.Editor;
         Database db = doc.Database;
         var log = new System.Text.StringBuilder();
+        LastLog = "";
         log.AppendLine($"[터파기 지표면] {System.DateTime.Now:yyyy-MM-dd HH:mm:ss}  [DH.Grading {GradingSettings.Version}]");
 
         string boxHandle = boxPolyId.Handle.ToString();
@@ -266,8 +277,14 @@ public sealed class ExcavCommand
                     double bottomZ = double.MaxValue;
                     foreach (var q in e.Bottom) bottomZ = System.Math.Min(bottomZ, q.Z);
 
+                    // ★★★[JACK 0907 "스샷 같은 오류가 계속 떠"] <b>어디인지 말한다.</b>
+                    //   종전 메시지는 <c>1곳 · 최대 6.87m</c>가 전부였다 — 사용자가 도면에서
+                    //   <b>어느 모서리를 고쳐야 하는지 알 수 없다</b>. 좌표와 두 표고를 같이 준다.
+                    //   ★<b>목표면이 무엇인지도</b> 말한다: 성토부면 원지반, 절토부면 계획면이다.
+                    //   그 자리가 성토부라는 것을 알면 "왜 105로 정지했는데 93이 나오지"가 풀린다.
                     int below = 0, above = 0;
                     double worstAbove = 0;
+                    var bad = new System.Collections.Generic.List<string>();
                     foreach (var q in e.Bottom)
                     {
                         if (!target.TryGetElevation(q.X, q.Y, out double tz)) continue;
@@ -276,9 +293,13 @@ public sealed class ExcavCommand
                         {
                             above++;
                             worstAbove = System.Math.Max(worstAbove, q.Z - tz);
+                            if (bad.Count < 5)
+                                bad.Add($"({q.X:F1}, {q.Y:F1}) 바닥 {q.Z:F2}m vs 목표면 {tz:F2}m — {q.Z - tz:F2}m 높다");
                         }
                     }
                     log.AppendLine($"■ {tag} 바닥 {bottomZ:F2}m · 구배 1:{e.Slope:0.##} — 목표면보다 낮은 정점 {below}개 · 높은 정점 {above}개");
+                    foreach (string b in bad) log.AppendLine("    ⚠" + b);
+                    LastLog = log.ToString();   // ★여기서 터져도 여태 쓴 것은 남는다
                     if (below == 0)
                     {
                         log.AppendLine($"■ {tag} — 목표면보다 낮은 데가 없어 건너뜀(팔 것이 없다)");
@@ -288,27 +309,31 @@ public sealed class ExcavCommand
                                 "바닥 표고를 확인하시거나, 정지면을 먼저 만들어 주세요.");
                         continue;
                     }
-                    // ★★★[JACK 0901 "실수로 계획지반보다 높은 고도로 돌렸는데 경고 멘트는 떴는데
-                    //   <b>이상한 지표면이 생겼어</b>. 이렇게 실수했을 경우 이런 지표면이 생성이 안 되게"]
+                    // ★★★[JACK 0907 "터파기 폴리곤 영역에서 조금이라도 높은 부분이 생기면 안 되네.
+                    //   무조건 다 원지반보다 낮아야만 인식하는데 이건 좀 아닌데?"]
+                    //   <b>일부만 높은 것은 막지 않는다.</b>
                     //
-                    //   <b>경고만 하고 만들고 있었다.</b> 바닥의 일부가 목표면보다 높으면
-                    //   그 자리는 <b>팔 것이 없는데 위로 올라가는 법면</b>을 만들라는 셈이라
-                    //   삼각형이 뒤집히고 스스로 교차한다 — 실제 로그가 그 자리다
-                    //   (<i>낮은 정점 2개 · 높은 정점 2개</i>).
+                    //   <b>0901에 넣은 가드가 틀린 자리를 막고 있었다.</b> 그때 주석은
+                    //   <i>"팔 것이 없는데 위로 올라가는 법면이라 삼각형이 뒤집히고 스스로 교차한다"</i>
+                    //   고 적었는데, <b>그것은 계측하지 않은 짐작이었다</b>.
+                    //   0907에 JACK 상황(40×40 바닥 z=100 · 목표면 92→108 기울기)을 그대로
+                    //   <see cref="GradingGeometry.Build"/>에 넣어 오프라인으로 돌려 보니
+                    //   <b>링은 멀쩡했다</b> — 바닥판 Z=100 균일 · 넓이 1600㎡ 정확 · 부호 정상 ·
+                    //   뒤집힘도 자기교차도 없었다. 그럴 수밖에 없다:
+                    //   <c>Build</c>는 <b>목표면을 한 번도 안 본다</b>(널 검사뿐).
                     //
-                    //   → <b>만들지 않는다.</b> 얼마나 높은지까지 알려 줘야 고칠 수 있다.
+                    //   <b>진짜 원인은 데이라잇이다.</b> 성토쪽은 사면이 바깥으로 올라가는데
+                    //   목표면은 내려가서 <b>영원히 안 만난다</b>(실측 d=0 +8.00m → d=12 +36.80m).
+                    //   그래서 상단선이 <b>절토쪽만 감싸다 끊긴 열린 선</b>이 되고,
+                    //   그것을 그대로 넘기면 Civil이 끝점↔첫점을 <b>직선으로 강제 봉합</b>해
+                    //   면을 아무렇게나 잘라낸다 — 그것이 "이상한 지표면"이었다.
+                    //
+                    //   → 막을 자리는 여기가 아니라 <b>상단선을 넣기 전</b>이다(아래 닫힘 검사).
+                    //   JACK: <i>"원지반보다 아래인 부분은 터파기로 잡혀야 하는 거 아니냐."</i> — 맞다.
+                    //   사면에 정지하면 구조물이 절·성토에 걸치는 것이 <b>정상</b>이다.
                     if (above > 0)
-                    {
-                        log.AppendLine($"■ {tag} — 바닥이 목표면보다 높은 정점 {above}개(최대 {worstAbove:F2}m) → 만들지 않음");
-                        if (k == newIdx)
-                            throw new System.Exception(
-                                $"구조물 바닥이 목표면(계획면·원지반 중 낮은 쪽)보다 <b>높은 자리가 {above}곳</b> 있습니다"
-                                    .Replace("<b>", "").Replace("</b>", "") + $" — 최대 {worstAbove:F2}m."
-                              + "\n\n그 자리는 파는 것이 아니라 <b>쌓는 것</b>이라 굴착 형상을 만들 수 없습니다."
-                                    .Replace("<b>", "").Replace("</b>", "")
-                              + "\n\n구조물 바닥 표고를 낮추거나, 정지면(계획고)을 먼저 맞춰 주세요.");
-                        continue;   // 옛 기록이면 그것만 건너뛴다(나머지는 그대로 만든다)
-                    }
+                        log.AppendLine($"■ {tag} — 바닥 일부가 목표면보다 높다(정점 {above}개 · 최대 {worstAbove:F2}m)"
+                                     + " → 그 자리는 팔 것이 없다. <b>낮은 쪽만</b> 굴착 형상을 만든다");
 
                     // ★[JACK 0825] 하한은 <b>그 기록이 들고 있는 값</b>으로 — 세션 전역이 아니다.
                     //   전역을 읽으면 구조물 하나 추가했을 뿐인데 기존 터파기가 통째로 다른 형상이 된다.
@@ -336,26 +361,199 @@ public sealed class ExcavCommand
                     var loops = RawTriangleIntersectionFinder.GetExactDaylight(vTin, bTin, null);
                     var own = RawTriangleIntersectionFinder.FilterPlanRelated(loops, e.Bottom, 5.0, out string fdiag);
                     log.AppendLine($"■ {tag} 교선 {loops.Count}개 → 루프필터 {fdiag}");
+                    // ★[JACK 0907] <b>고리마다 닫혔는지·얼마나 넓은지</b> 적는다 — 도면을 열기 전에 안다.
+                    {
+                        int shown = 0;
+                        foreach (var r in own)
+                        {
+                            if (r == null || r.Count < 2 || shown++ >= 6) continue;
+                            double a = 0;
+                            for (int i = 0; i < r.Count - 1; i++) a += r[i].X * r[i + 1].Y - r[i + 1].X * r[i].Y;
+                            double dx = r[0].X - r[r.Count - 1].X, dy = r[0].Y - r[r.Count - 1].Y;
+                            double gap = System.Math.Sqrt(dx * dx + dy * dy);
+                            log.AppendLine($"    고리 {shown}: {r.Count}점 · {System.Math.Abs(a * 0.5):F0}㎡ · "
+                                         + (gap < 0.5 ? "닫힘" : $"⚠열림({gap:F1}m)"));
+                        }
+                    }
+                    LastLog = log.ToString();
 
+                    // ★★★[JACK 0907 · 재현 0907] <b>닫힌 고리만 쓴다.</b>
+                    //
+                    //   종전엔 <b>넓이가 가장 큰 것</b> 하나만 골랐고 <b>닫혔는지는 안 봤다</b>.
+                    //   구조물이 절·성토에 걸치면 상단선이 <b>절토쪽만 감싸다 끊긴 열린 선</b>이 되는데,
+                    //   그것을 <see cref="GradingBuilder.AddOuterBoundary"/>에 넘기면
+                    //   Civil이 끝점↔첫점을 <b>직선으로 이어</b> 면을 엉뚱하게 잘라낸다.
+                    //   그 직선이 성토쪽 빈 구간을 가로지른 것이 0901의 "이상한 지표면"이다.
+                    //
+                    //   ★열린 선은 <b>버리는 것이 아니라 안 쓰는 것</b>이다 — 몇 개가 어떤 모양이었는지
+                    //   로그에 남긴다. 닫힌 것이 하나도 없으면 <b>만들지 않고</b> 왜인지 말한다.
+                    //   (종전처럼 조용히 이상한 면을 만드는 것보다 안 만드는 편이 낫다.)
+                    const double CloseTol = 0.5;   // 교선 이어닫기가 쓰는 자와 같다
                     System.Collections.Generic.List<Point3>? best = null; double bestA = 0;
+                    int nOpen = 0; double openBestA = 0, openGap = 0;
                     foreach (var r in own)
                     {
+                        if (r == null || r.Count < 4) continue;
                         double a = 0;
                         for (int i = 0; i < r.Count - 1; i++) a += r[i].X * r[i + 1].Y - r[i + 1].X * r[i].Y;
                         a = System.Math.Abs(a * 0.5);
+                        double dx = r[0].X - r[r.Count - 1].X, dy = r[0].Y - r[r.Count - 1].Y;
+                        double gap = System.Math.Sqrt(dx * dx + dy * dy);
+                        if (gap >= CloseTol)
+                        {
+                            nOpen++;
+                            if (a > openBestA) { openBestA = a; openGap = gap; }
+                            continue;                                    // ★열린 선은 안 쓴다
+                        }
                         if (a > bestA) { bestA = a; best = r; }
                     }
+                    if (nOpen > 0)
+                        log.AppendLine($"■ {tag} 열린 상단선 {nOpen}개 안 씀"
+                                     + $"(가장 넓은 것 {openBestA:F0}㎡ · 양 끝이 {openGap:F1}m 벌어짐)"
+                                     + " — 그대로 쓰면 Civil이 직선으로 봉합해 면이 잘린다");
                     if (best == null)
                     {
-                        log.AppendLine($"■ {tag} 굴착 상단선 없음 — 건너뜀");
+                        log.AppendLine($"■ {tag} 닫힌 굴착 상단선 없음 — 건너뜀(교선 {loops.Count}개 · 걸러 남은 {own.Count}개 · 열린 {nOpen}개)");
                         if (k == newIdx) throw new System.Exception(
-                            "굴착 상단선(데이라잇)을 찾지 못했습니다 — 굴착이 목표면에 닿지 않았습니다.\n" +
-                            "구배를 더 완만하게 해 보세요.");
+                            nOpen > 0
+                            ? $"굴착 상단선이 닫히지 않았습니다 — 양 끝이 {openGap:F1}m 벌어져 있습니다.\n\n"
+                              + "구조물이 성토부에 너무 많이 걸쳐 굴착이 한 바퀴 돌지 못했습니다.\n"
+                              + "구조물을 절토부 쪽으로 옮기거나, 바닥 표고를 낮춰 주세요.\n\n"
+                              + "(열린 선을 그대로 쓰면 면이 엉뚱하게 잘립니다 — 그래서 만들지 않았습니다.)"
+                            : "굴착 상단선(데이라잇)을 찾지 못했습니다 — 굴착이 목표면에 닿지 않았습니다.\n" +
+                              "구배를 더 완만하게 해 보세요.");
                         continue;
                     }
 
+                    // ── ★★★[JACK 0907 "살짝 깨짐이 나타났어"] <b>상단선을 재고, 바늘을 뽑는다.</b>
+                    //
+                    //   구조물이 절·성토에 걸치면 굴착 영역이 <b>한쪽 끝에서 폭 0으로 좁아진다</b>
+                    //   (목표면이 바닥과 같아지는 자리). 그 뾰족한 끝에서 교선이 <b>되돌아 꺾이면</b>
+                    //   삼각망에 바늘 같은 조각이 남는다 — 이 저장소가 정지 링에서 이미 겪은 그것이다
+                    //   (0619 <c>RemoveSpikes</c>: <i>"꺾임 &gt;135°인 점 사후 제거; 진짜 코너는 ≤90°라 안전"</i>).
+                    //
+                    //   ★<b>재고 나서 뽑는다.</b> 링을 통째로 CSV로 떨궈 두고(오프라인에서 그림을 볼 수 있게),
+                    //   되돌아 꺾인 자리를 세어 로그에 적은 뒤, <b>확실한 바늘만</b> 뽑는다 —
+                    //   양옆 변이 둘 다 <c>SpikeSegM</c>보다 짧고 <c>SpikeDeg</c>보다 심하게 꺾인 점.
+                    //   진짜 뾰족한 끝(폭 0으로 좁아지는 자리)은 변이 길므로 <b>안 건드린다</b>.
+                    const double SpikeDeg = 150.0;   // 이보다 심하게 꺾이면 되돌아간 것
+                    const double SpikeSegM = 0.5;    // 양옆 변이 둘 다 이보다 짧아야 바늘로 친다
+                    try
+                    {
+                        var csv = new System.Text.StringBuilder("i,x,y,z,seg_m,turn_deg\n");
+                        int nRev = 0; double worstDeg = 0; string worstAt = "";
+                        double segMin = double.MaxValue, segMax = 0;
+                        int m = best.Count;
+                        for (int i = 0; i < m; i++)
+                        {
+                            var a0 = best[(i - 1 + m) % m]; var b0 = best[i]; var c0 = best[(i + 1) % m];
+                            double ux = b0.X - a0.X, uy = b0.Y - a0.Y;
+                            double vx = c0.X - b0.X, vy = c0.Y - b0.Y;
+                            double lu = System.Math.Sqrt(ux * ux + uy * uy), lv = System.Math.Sqrt(vx * vx + vy * vy);
+                            double deg = 0;
+                            if (lu > 1e-9 && lv > 1e-9)
+                            {
+                                double cs = (ux * vx + uy * vy) / (lu * lv);
+                                deg = System.Math.Acos(System.Math.Clamp(cs, -1, 1)) * 180.0 / System.Math.PI;
+                            }
+                            if (lv > 1e-9) { segMin = System.Math.Min(segMin, lv); segMax = System.Math.Max(segMax, lv); }
+                            if (deg > 135.0) { nRev++; if (deg > worstDeg) { worstDeg = deg; worstAt = $"({b0.X:F1},{b0.Y:F1})"; } }
+                            csv.Append($"{i},{b0.X:F3},{b0.Y:F3},{b0.Z:F3},{lv:F3},{deg:F1}\n");
+                        }
+                        string cp = System.IO.Path.Combine(
+                            System.IO.Path.GetDirectoryName(DiagLog.FilePath) ?? ".", $"DHGRADE_터파기상단_{k + 1}.csv");
+                        try { System.IO.File.WriteAllText(cp, csv.ToString()); } catch { }
+                        log.AppendLine($"    상단선 실측 — {m}점 · 변 {(segMin == double.MaxValue ? 0 : segMin):F3}~{segMax:F1}m"
+                                     + $" · 135°넘게 꺾인 점 {nRev}개" + (nRev > 0 ? $"(최대 {worstDeg:F0}° @{worstAt})" : "")
+                                     + $" · 링 덤프 {System.IO.Path.GetFileName(cp)}");
+                    }
+                    catch (System.Exception exM) { log.AppendLine("    ⚠상단선 실측 실패 — " + exM.Message); }
+
+                    // ★[JACK 0907 실측] <b>겹친 점을 먼저 걷어낸다.</b>
+                    //   0907 링 덤프에서 <b>길이 0인 변</b>과 1cm 미만 변 9개가 나왔다.
+                    //   같은 자리에 점이 둘이면 삼각망이 흔들린다 — 도면에 나오기 전에 없앤다.
+                    int nDup = 0;
+                    {
+                        const double DupM = 0.001;   // 1mm 안이면 같은 점으로 본다
+                        var uniq = new System.Collections.Generic.List<Point3>(best.Count);
+                        foreach (var q in best)
+                        {
+                            if (uniq.Count > 0)
+                            {
+                                var pr = uniq[uniq.Count - 1];
+                                if (System.Math.Abs(q.X - pr.X) < DupM && System.Math.Abs(q.Y - pr.Y) < DupM)
+                                { nDup++; continue; }
+                            }
+                            uniq.Add(q);
+                        }
+                        // 첫점과 끝점이 겹치는 것은 <b>닫힘 표시</b>라 남긴다 — 여기서 지우면 열린 것이 된다.
+                        if (nDup > 0 && uniq.Count >= 4) { best = uniq; log.AppendLine($"    겹친 점 {nDup}개 걷어냄 → {best.Count}점"); }
+                        else if (nDup > 0) nDup = 0;
+                    }
+
+                    // 바늘 뽑기 — 더 뽑을 것이 없을 때까지.
+                    int nSpike = 0;
+                    for (int pass = 0; pass < 8; pass++)
+                    {
+                        int m2 = best.Count;
+                        if (m2 < 8) break;
+                        var keep = new System.Collections.Generic.List<Point3>(m2);
+                        bool cut = false;
+                        for (int i = 0; i < m2; i++)
+                        {
+                            var a0 = best[(i - 1 + m2) % m2]; var b0 = best[i]; var c0 = best[(i + 1) % m2];
+                            double ux = b0.X - a0.X, uy = b0.Y - a0.Y;
+                            double vx = c0.X - b0.X, vy = c0.Y - b0.Y;
+                            double lu = System.Math.Sqrt(ux * ux + uy * uy), lv = System.Math.Sqrt(vx * vx + vy * vy);
+                            if (lu > 1e-9 && lv > 1e-9 && lu < SpikeSegM && lv < SpikeSegM)
+                            {
+                                double cs = (ux * vx + uy * vy) / (lu * lv);
+                                double deg = System.Math.Acos(System.Math.Clamp(cs, -1, 1)) * 180.0 / System.Math.PI;
+                                if (deg > SpikeDeg) { nSpike++; cut = true; continue; }   // 이 점을 버린다
+                            }
+                            keep.Add(b0);
+                        }
+                        if (!cut) break;
+                        best = keep;
+                    }
+                    if (nSpike > 0)
+                        log.AppendLine($"    바늘 {nSpike}개 뽑음(양옆 변 {SpikeSegM:0.##}m 미만 · {SpikeDeg:F0}° 넘게 꺾인 점) → {best.Count}점");
+                    LastLog = log.ToString();
+
+                    // ★★★[JACK 0907 "이 위치에서 쪼개지듯이 깨짐이 발생함" — ID (210289.7, 509800.8, 100.000)]
+                    //   <b>링이 스스로 겹쳤는지 먼저 묻는다.</b>
+                    //
+                    //   JACK이 찍어 준 자리는 <c>Z=100.000</c>, 즉 <b>굴착 바닥면 위</b>이고,
+                    //   로그에서 "목표면보다 높다"고 나온 꼭짓점과 <b>Y가 같다</b>(509800.8) —
+                    //   굴착 영역이 <b>폭 0으로 좁아지는 바로 그 자리</b>다.
+                    //   거기서 상단선이 되돌아 꺾이거나 <b>스스로 살짝 겹치면</b>,
+                    //   <see cref="GradingBuilder.AddOuterBoundary"/>가 그 링으로 자를 때 면이 접힌다.
+                    //
+                    //   ★<b>겹쳤으면 정규화한 것을 먼저 쓴다.</b> 종전엔 <b>원본을 먼저</b> 넣고
+                    //   그것이 <b>예외를 던졌을 때만</b> 정규화로 넘어갔다 — 그런데 겹친 링은
+                    //   예외를 안 내고 <b>조용히 접힌 면</b>을 만든다. 그래서 정규화가 한 번도 안 돌았다.
+                    //   (<c>CleanRing</c>은 NTS <c>Buffer(0)</c>으로 자기교차를 풀어 준다.)
+                    bool ringOk = true;
+                    try
+                    {
+                        var gfChk = new NetTopologySuite.Geometries.GeometryFactory();
+                        int mm = best.Count;
+                        var cc = new NetTopologySuite.Geometries.Coordinate[mm + 1];
+                        for (int i = 0; i < mm; i++) cc[i] = new NetTopologySuite.Geometries.Coordinate(best[i].X, best[i].Y);
+                        cc[mm] = new NetTopologySuite.Geometries.Coordinate(best[0].X, best[0].Y);
+                        var pg = gfChk.CreatePolygon(cc);
+                        ringOk = pg.IsValid;
+                        log.AppendLine($"    상단선 자기겹침 검사 — {(ringOk ? "겹침 없음" : "⚠스스로 겹친다(정규화한 것을 먼저 쓴다)")}");
+                    }
+                    catch (System.Exception exV) { ringOk = false; log.AppendLine("    ⚠상단선 겹침 검사 실패 — " + exV.Message + "(정규화 먼저)"); }
+                    LastLog = log.ToString();
+
+                    var tryOrder = ringOk
+                        ? new[] { (best, "원본"), (RawTriangleIntersectionFinder.CleanRing(best), "정규화") }
+                        : new[] { (RawTriangleIntersectionFinder.CleanRing(best), "정규화"), (best, "원본") };
+
                     bool clipped = false;
-                    foreach (var (ring, tg) in new[] { (best, "원본"), (RawTriangleIntersectionFinder.CleanRing(best), "정규화") })
+                    foreach (var (ring, tg) in tryOrder)
                     {
                         if (ring == null) continue;
                         try
@@ -411,6 +609,7 @@ public sealed class ExcavCommand
             log.AppendLine($"■ 터파기 기록 저장 — 구조물 {recs.Count}개(다시 만들 때 폴리선을 안 골라도 된다)");
 
             diag = log.ToString();
+            LastLog = diag;
             tr.Commit();
         }
 

@@ -660,15 +660,24 @@ public sealed class QtyTableFold
     /// <para>지금 재는 것: 두 단이 <b>같은 폭 순번</b>을 쓰는가. 어긋나면 가운데 세로선이 안 맞는다.</para></summary>
     public bool PanelsAligned(out string note)
     {
-        if (Cols == PanelWidth) { note = $"한 단({PanelWidth}칸)"; return true; }
-        if (Cols != PanelWidth * Panels) { note = $"칸이 {Cols}개다(두 단이면 {PanelWidth * Panels}칸)"; return false; }
-        for (int c = 0; c < PanelWidth; c++)
-            if (ColRatioIndex[c] != ColRatioIndex[c + PanelWidth])
-            {
-                note = $"{c}칸 폭이 두 단에서 다르다(순번 {ColRatioIndex[c]} ↔ {ColRatioIndex[c + PanelWidth]})";
-                return false;
-            }
-        note = $"두 단 폭이 같다(순번 {string.Join(",", ColRatioIndex)})";
+        // ★★★[검토 0907 · H-3] <b>단 수를 못 박지 않는다.</b>
+        //   종전엔 <c>Cols != PanelWidth * Panels</c>(=8)로 재서, 표가 커서 <b>3·4단으로 승격된
+        //   바로 그 도면</b>마다 로그에 <c>⚠좌우 짝 폭 어긋남</c>이 찍혔다 — 도면은 멀쩡한데
+        //   검사가 틀린 것이고, 하필 <b>JACK이 로그를 열어 볼 확률이 가장 높은 판</b>이다.
+        //   §53·§57·§72에 이어 <b>"검사가 엉뚱한 것을 재고 있었다"</b>가 또 나왔다.
+        if (Cols % PanelWidth != 0 || Cols < PanelWidth)
+        { note = $"칸이 {Cols}개다(한 단 {PanelWidth}칸의 배수라야 한다)"; return false; }
+        int np = Cols / PanelWidth;
+        for (int p = 1; p < np; p++)
+            for (int c = 0; c < PanelWidth; c++)
+                if (ColRatioIndex[c] != ColRatioIndex[p * PanelWidth + c])
+                {
+                    note = $"{c}칸 폭이 1단과 {p + 1}단에서 다르다"
+                         + $"(순번 {ColRatioIndex[c]} ↔ {ColRatioIndex[p * PanelWidth + c]})";
+                    return false;
+                }
+        note = np == 1 ? $"한 단({PanelWidth}칸)"
+                       : $"{np}단 폭이 모두 같다(순번 {string.Join(",", ColRatioIndex)})";
         return true;
     }
 

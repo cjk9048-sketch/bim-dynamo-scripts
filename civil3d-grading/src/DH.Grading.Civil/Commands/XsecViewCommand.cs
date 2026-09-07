@@ -88,6 +88,22 @@ public sealed class XsecViewCommand
         Database db = doc.Database;
         var cdoc = CivilApp.CivilApplication.ActiveDocument;
         var log = new System.Text.StringBuilder();
+
+        // ★★★[JACK 0907 "2×3으로 바꾸니깐 횡단이 그냥 지워져버리고 3×2로 바꾸니깐 튕겨버렸어"]
+        //   <b>단계마다 디스크에 바로 쓴다.</b>
+        //
+        //   <c>log</c>는 명령이 <b>끝날 때</b> 한 번에 쓰인다(<see cref="Flush"/>). 그래서 중간에
+        //   죽으면 <b>흔적이 한 줄도 안 남는다</b> — JACK의 2×3 판이 정확히 그랬다:
+        //   지난번 것을 지운 뒤(맨 앞) 어딘가에서 죽어 <b>빈 도면만</b> 남았다.
+        //   ★AutoCAD의 ARX 어설션(<c>eNotOpenForWrite</c> 등)은 <c>try/catch</c>를 <b>통과</b>해
+        //   프로세스를 통째로 죽이므로, 잡을 방법은 <b>바로 쓰는 로그</b>뿐이다(§71에서 겪었다).
+        int step9 = 0;
+        void X9(string what)
+        {
+            try { DiagLog.Append($"\n  [횡단추적 {++step9:00}] {what}"); } catch { }
+        }
+        X9($"명령 시작 — 배치 {GradingSettings.XsecLayoutC}×{GradingSettings.XsecLayoutR}"
+         + $" · 축척 {(GradingSettings.XsecScale > 0 ? $"고정 1:{GradingSettings.XsecScale:F0}" : "자동")}");
         log.AppendLine($"\n[횡단도] {System.DateTime.Now:yyyy-MM-dd HH:mm:ss}  [DH.Grading {GradingSettings.Version}]");
 
         // ── ① 선형 — 종단도가 만든 것.
@@ -150,6 +166,7 @@ public sealed class XsecViewCommand
         }
         LastAt = at;   // ★다음에 측점을 고치면 이 자리에 다시 그린다
 
+        X9("지난번 것 지우기 시작 — 여기서 죽으면 빈 도면만 남는다");
         // ★[JACK 0826] <b>지난번 것을 지운다</b> — 안 지우면 유령이 겹친다.
         //   ★자리를 받은 <b>뒤</b>라야 한다(위 주석) — 다시 그릴 것이 확정된 다음에만 지운다.
         WipeOld(db, log);
@@ -301,6 +318,7 @@ public sealed class XsecViewCommand
             return c != 0 ? c : a.Ord.CompareTo(b.Ord);
         });
 
+        X9($"검토선 {slIds.Count}개 — 뷰 만들기로 간다");
         // ── ⑤ 횡단면도 배치 — 초안: 가로로 늘어놓고 줄바꿈.
         //   간격은 검토선 폭에서 잡는다(좌우폭 + 여유). 축척·도곽은 나중에.
         // ★[JACK 0826 '횡단면도는 너무 겹쳐져서 보기가 힘들어'] 간격을 실제 크기에서 잡는다.
@@ -416,6 +434,7 @@ public sealed class XsecViewCommand
 
         var mv = MeasureViews(db, viewIds, log);
 
+        X9($"뷰 {viewIds.Count}개 만듬 — 배치 {cols}×{rows}");
         // ── ★★축척 고르기 — 종단도 <c>FitSheet</c>과 같은 셈이다.
         //   <c>종이 mm = 모형 m × 1000 ÷ 축척</c>이므로 뒤집으면 <c>필요 축척 = 모형 m × 1000 ÷ 종이 mm</c>.
         //   가로·세로 중 <b>엄한 쪽</b>이 이기고, 사다리에서 그 값 이상인 첫 값을 고른다.
@@ -497,6 +516,7 @@ public sealed class XsecViewCommand
                              + $" (배치 {cols}×{rows}) → 배치를 성기게 하시거나 축척을 고정하세요");
         }
 
+        X9($"표 {fold.BodyRows}줄 {fold.Cols}칸 — {fold.Note}");
         double tableWmm = QtWidthMmOf(fold);
         // ★[검토 §50] 표 높이를 <b>두 곳에서 다르게</b> 세고 있었다 —
         //   자리 잡는 쪽은 19.0줄, 그리는 쪽은 머리줄 1.4배를 반영해 19.4줄. 2.3mm 어긋났다.
@@ -535,6 +555,7 @@ public sealed class XsecViewCommand
                          + " → 배치를 성기게(2×2 이하) 하거나 도면설정에서 축척을 고정하세요");
         else if (tableHmm > roomH)
             log.AppendLine($"  표가 칸 높이를 넘어 오른쪽 배치는 못 쓴다 — 표 {tableHmm:F0}mm > {roomH:F0}mm(아래로 내린다)");
+        X9($"자리 셈 — 오른쪽 {gwRight:F0}×{ghRight:F0} · 아래 {gwBelow:F0}×{ghBelow:F0}mm");
         double sRight = PickScale(mv.W, mv.H, gwRight, ghRight);
         double sBelow = PickScale(mv.W, mv.H, gwBelow, ghBelow);
         bool tableRight = sRight > 0 && (sBelow <= 0 || sRight <= sBelow);   // 같으면 오른쪽(참고 도면)
@@ -567,6 +588,7 @@ public sealed class XsecViewCommand
             log.AppendLine($"  ⚠사다리 끝까지 맞는 축척이 없다 — 가장 큰 1:{scale:F0}으로 둔다"
                          + $" (그림 {mv.W:F1}×{mv.H:F1}m · 자리 {graphWmm:F0}×{graphHmm:F0}mm)");
         }
+        X9($"축척 1:{scale:F0} · 표는 {(tableRight ? "오른쪽" : "아래")}");
         double sc = scale / 1000.0;                       // 종이 1mm = 모형 sc m
         const double PageGapMm = 0.0;                     // 장과 장을 맞붙인다(JACK)
         double PageGap = PageGapMm * sc;
@@ -598,6 +620,7 @@ public sealed class XsecViewCommand
             cellAt.Add((at.X + page * (sheetW + PageGap) + (idx % cols) * cellW,
                         at.Y + innerH - (idx / cols + 1) * cellH));
         }
+        X9($"칸 자리 {cellAt.Count}개 잡음");
         int nMoved = 0;
         if (mv.N > 0 && mv.W > 0 && mv.H > 0)
         {
@@ -654,6 +677,7 @@ public sealed class XsecViewCommand
             }
             catch (System.Exception exM) { log.AppendLine("  뷰 옮기기 실패 — " + exM.Message); }
         }
+        X9($"뷰 옮김 {nMoved}개");
         double fitW = graphWmm * sc, fitH = graphHmm * sc;
         // ★★[검토 MED-4] 넘쳤는지 볼 때 <b>표까지 포함한 덩어리</b>를 견준다 —
         //   그래프만 보면 표가 칸을 넘어도 "들어간다"고 말한다.
@@ -696,6 +720,7 @@ public sealed class XsecViewCommand
             trN2.Commit();
         }
         catch { }
+        X9("이름 그리기");
         int nTxt = DrawViewNames(db, nameAt, NameTextMm * sc, log);
         // 회사 스타일이 축을 안 그려 줄 때만 우리가 그린다 — 옮긴 뒤라야 자리가 맞다.
         if (nStyled == 0) DrawCenterAxis(db, viewIds, alignId, log);
@@ -704,13 +729,20 @@ public sealed class XsecViewCommand
         //   <b>축선·눈금 자국은 Civil이 그대로 그린다</b> — 안 되는 것 하나만 가져오는 것이 규칙이다.
         //   자리는 뷰를 옮긴 <b>뒤</b>라야 맞으므로 <see cref="DrawCenterAxis"/>와 같은 자리에 둔다.
         else DrawCenterTickLabels(db, viewIds, XsecStyleId(db, viewIds), scale, annoScale, log);
+        X9($"중심축/눈금 끝 — 도곽 {nPages}장 그리기");
         DrawXsecFrames(db, at, nPages, sc, cols, rows, PageGap, scale, log);
+        X9("도곽 끝 — 수량표 그리기");
         DrawQtyTables(db, viewIds, bandPaperMm, sc, tableRight, TableGapMm * sc, qty, fold, log);
         // ★[JACK 0826] 선 색·눈금은 <b>숨기기 전</b>에 — 숨긴 뒤에도 되지만 로그 차례가 헷갈린다.
+        X9("수량표 끝 — 단면 스타일");
         ApplySectionStyles(db, cdoc, slIds, kindOf, log);
+        X9("지층 이름");
         DrawStrataNames(db, viewIds, kindOf, alignId, wl, wr, scale, log);   // ★[JACK 0828] 지층·지하수위 이름
+        X9("밴드 묶기");
         BindBandSections(db, viewIds, kindOf, scale, annoScale, log);
+        X9("측점 밴드");
         DrawStationBand(db, viewIds, scale, annoScale, log);   // ★[JACK 0827] 측점 칸에 우리 이름
+        X9("검토선 숨기기");
         HideSampleLines(db, cdoc, slIds, groupId, log);   // ★뷰를 다 만든 뒤에 숨긴다
 
         log.AppendLine($"  횡단면도 이름 {nTxt}개 직접 씀(레이어 '{XsecTitleLayer}') — " +
@@ -723,6 +755,7 @@ public sealed class XsecViewCommand
         ed.WriteMessage((string.IsNullOrEmpty(qty.Warn) ? "" : qty.Warn) +
                         $"\n[횡단도] 횡단면도 {nView}장 · 검토선 {slIds.Count}개" +
                         $"\n  자세한 내용: {DiagLog.FilePath}");
+        X9("끝 — 로그를 쓴다");
         Flush(log);
     }
 
@@ -1424,7 +1457,9 @@ public sealed class XsecViewCommand
     //   자를 하나로: 제목 칸 치수는 <c>SheetCommand.TitleMm</c>가 정한다.
     private const double XsecTitleMm = SheetCommand.TitleMm;
 
-    /// <summary>횡단도 내부 네모 높이(종이 mm) — 검산: 하 50 + 474 + 제목 50 + 상 20 = 594 = A1 세로.</summary>
+    /// <summary>횡단도 내부 네모 높이(종이 mm) — 검산: 하 50 + <b>484</b> + 제목 <b>40</b> + 상 20 = 594 = A1 세로.
+    /// <para>★[검토 0907 · L-6] 종전 주석은 <c>474 / 제목 50</c>이라 <b>실제와 달랐다</b> —
+    /// 제목칸은 <see cref="SheetCommand.TitleMm"/>(40)이다. 낡은 검산은 <b>맞는 코드를 의심하게</b> 만든다.</para></summary>
     private static double XsecInnerH =>
         SheetCommand.SheetH - SheetCommand.MarginTop - SheetCommand.MarginBottom - XsecTitleMm;
 
@@ -1762,9 +1797,15 @@ public sealed class XsecViewCommand
                         : ext.MinPoint.Y - bandM - gapM;
                     tb.Position = new Point3d(px, py, 0);
 
+                    // ★[JACK 0826] <c>GenerateLayout()</c>을 <b>부르지 않는다</b> — 그것이 행 높이를
+                    //   글자와 여백에서 <b>다시 계산</b>해, 우리가 지정한 높이를 덮어쓴다.
+                    ms.AppendEntity(tb); tr.AddNewlyCreatedDBObject(tb, true);
+
                     // ★★★[JACK 0907] <b>합친 빈칸에 대각선 하나.</b>
                     //   <c>Table</c>에는 대각선 칸선이 없다 — 선을 따로 그어야 한다.
                     //   ★자리를 <b>정한 뒤</b>라야 한다(<c>Position</c>이 표의 <b>왼쪽 위</b>다).
+                    //   ★[검토 0907 · L-2] <b>표를 붙인 뒤에</b> 긋는다 — 종전엔 먼저 그어서,
+                    //   표 붙이기가 터지면 <b>대각선만 덩그러니</b> 남았다.
                     //
                     //   ★★★[검토 0907 · M-1] <b>레이어는 표와 같은 것을 쓴다.</b>
                     //   처음엔 <c>QtLayerLine</c>("표(줄)")에 뒀는데, 그 이름은 <b>여태 아무것도
@@ -1796,9 +1837,6 @@ public sealed class XsecViewCommand
                         }
                         catch (System.Exception exD) { firstTbErr ??= "대각선: " + exD.Message; }
                     }
-                    // ★[JACK 0826] <c>GenerateLayout()</c>을 <b>부르지 않는다</b> — 그것이 행 높이를
-                    //   글자와 여백에서 <b>다시 계산</b>해, 우리가 지정한 높이를 덮어쓴다.
-                    ms.AppendEntity(tb); tr.AddNewlyCreatedDBObject(tb, true);
                     n++;
                 }
                 catch (System.Exception ex) { firstTbErr ??= ex.GetType().Name + ": " + ex.Message; }
@@ -4172,15 +4210,35 @@ public sealed class XsecViewCommand
             var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
             var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
             var want = new System.Collections.Generic.HashSet<string>(mine, System.StringComparer.OrdinalIgnoreCase);
+            // ★★★[JACK 0907 "2×3으로 바꾸니깐 횡단이 그냥 지워져버리고 3×2에서 튕겼어" · 검토 0907 C1]
+            //   <b>훑으면서 지우지 않는다.</b>
+            //
+            //   종전엔 모형(<c>ms</c>)을 <b>돌면서 그 안의 것을 지웠다</b> — 소유자 목록이 바뀌는데
+            //   반복자는 그 목록을 걷고 있었고, 게다가 <c>ms</c>는 <b>읽기</b>로 열려 있었다.
+            //   §71에서 세 번 튕긴 것이 정확히 이 모양이다(읽기로 연 것에 쓰기).
+            //   ★그 오류(<c>eNotOpenForWrite</c>)는 <b>ARX 어설션이라 <c>try/catch</c>를 통과</b>해
+            //   프로세스를 통째로 죽인다 — 그래서 <b>로그가 한 줄도 안 남았다</b>.
+            //
+            //   증상도 들어맞는다: 지우는 도중에 죽으면 <b>지워지기만 하고 아무것도 안 그려진다</b>.
+            //   같은 파일의 <see cref="WipeOldGroups"/>는 이미 <b>모아 두고 밖에서 지우는</b>
+            //   정석대로였다 — 여기만 옛 방식으로 남아 있었다.
+            //
+            //   → ① 읽기로 <b>훑어서 목록만</b> 만들고 ② 반복문 <b>밖에서</b> 쓰기로 열어 지운다.
+            var kill = new System.Collections.Generic.List<ObjectId>();
             foreach (ObjectId id in ms)
             {
                 try
                 {
                     if (tr.GetObject(id, OpenMode.ForRead) is not Entity e) continue;
-                    if (!want.Contains(e.Layer)) continue;
-                    e.UpgradeOpen();
-                    e.Erase();
-                    n++;
+                    if (want.Contains(e.Layer)) kill.Add(id);
+                }
+                catch { }
+            }
+            foreach (ObjectId id in kill)
+            {
+                try
+                {
+                    if (tr.GetObject(id, OpenMode.ForWrite) is Entity e2) { e2.Erase(); n++; }
                 }
                 catch { }
             }
@@ -4240,6 +4298,12 @@ public sealed class XsecViewCommand
                     try
                     {
                         if (tr.GetObject(gid, OpenMode.ForWrite) is Entity e) { e.Erase(); nG++; }
+                        // ★[검토 0907 · C2] <b>지운 것의 자국을 static에 남기지 않는다.</b>
+                        //   종전엔 <c>ProfileCommand.LastXsecGroupId</c>가 <b>지워진 그룹</b>을 계속
+                        //   가리켰다. 지금은 견주기만 해서 안 터지지만, 언젠가 그 값을 <b>열면</b>
+                        //   <c>eWasErased</c>다 — 지운 사람이 자국도 지우는 것이 맞다.
+                        if (ProfileCommand.LastXsecGroupId == gid)
+                            ProfileCommand.LastXsecGroupId = ObjectId.Null;
                     }
                     catch (System.Exception exG) { log?.AppendLine("  옛 검토선 그룹 지우기 실패 — " + exG.Message); }
                 }
