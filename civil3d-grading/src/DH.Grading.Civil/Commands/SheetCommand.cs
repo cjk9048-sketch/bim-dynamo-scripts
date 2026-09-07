@@ -142,6 +142,7 @@ public static class SheetCommand
     /// 실측(1:100에서 50mm)에 맞춰 잡는다 — <b>모형이 아니라 종이에서 재는 것</b>이 요점이다.</para></summary>
     private const double AxisRoomMm = 50.0;
 
+
     /// <summary>★★[v32.31 · JACK 0813] 좌측 아래 정렬에서 <b>도곽 선과 도면 사이를 띄우는 양</b>(종이 mm).
     /// <i>"너무 딱 붙여서 축척 화살표가 너무 좌측벽과 아래에 너무 붙지 않게 해줘."</i>
     /// <para><b>종이 기준</b>이라 축척이 바뀌어도 눈에 같은 간격으로 보인다(1:150이면 모형 1.8m·1.5m).
@@ -233,17 +234,33 @@ public static class SheetCommand
     /// 버튼을 따로 두지 않는 이유가 그것이다. 명령(DHSHEET)은 이미 만든 종단도에 다시 씌울 때만 쓴다.
     /// <para>나중에 '도곽 버튼'이 생긴다면 그건 <b>불러오기 전용</b>이 될 자리다 —
     /// 회사 도곽 파일을 골라 배치탭에 붙여넣는 기능(JACK 예고, 지금은 구현하지 않는다).</para></summary>
-    public static string Build(Database db, Editor ed, ObjectId pvId, System.Text.StringBuilder log)
+    /// <param name="startLabel">★★★[검토 0904] <b>시작측점 라벨(<c>No.X</c> 자리)을 켤지 — 전역이 아니라 인자다.</b>
+    /// <para>여러 장에서 <b>둘째 장부터</b> 끈다(뷰 시작을 1cm 당겨 놓아 <c>No.5+19.99</c> 같은 군더더기가 되므로).
+    /// 첫 장·한 장 도면은 켠다 — 그 라벨이 노선 기점의 <c>No.0</c>을 그리는 주체다.</para>
+    /// <para><b>왜 전역이 아닌가.</b> <c>static</c>으로 두면 장 루프 중간에 예외가 났을 때
+    /// 되돌리는 줄에 안 닿아 <b>false로 굳고</b>, 그 뒤 <c>DHSHEET</c> 단독 실행이 그 값을 물려받아
+    /// <b>멀쩡한 도면의 기점 글씨를 끈다</b>(검토 0904 실측 경로 — 그 예외는 실제로 났었다).
+    /// 부르는 곳이 둘뿐이라 인자로 넘기는 비용이 없다.</para></param>
+    public static string Build(Database db, Editor ed, ObjectId pvId, System.Text.StringBuilder log, bool startLabel = true)
     {
         // ★[v32.31] 지난 판이 적어 둔 '장식 자리'를 먼저 지운다 — 축척이 바뀌면 그 좌표는
         //   전혀 다른 곳을 가리키고, 도곽만 엉뚱하게 넓어진다.
         ResetDeco();
 
+        // ★★★[JACK 0904 "튕겼어"] <b>도곽 안에서도 단계마다 디스크에 바로 쓴다.</b>
+        //   여러 장 추적으로 <b>둘째 장의 도곽</b>에서 죽는 것까지 좁혔는데, 이 함수 안에 함수가
+        //   열댓 개라 그중 어느 것인지 알 수가 없다. Civil 크래시는 예외로 못 잡으므로
+        //   <b>마지막으로 찍힌 줄</b>이 유일한 증거다.
+        void B9(string t) { try { DiagLog.Append("\n[도곽] " + t); } catch { } }
+        B9("① 밴드 정규화");
+
         // ── ① 밴드를 표로 만든다(칸 균등·간격 0). 크기를 재기 **전에** 해야 뒤 계산이 맞는다.
-        string bandNote = NormalizeBands(db, pvId, log);
+        string bandNote = NormalizeBands(db, pvId, log, startLabel);
 
         // ── ② 축척과 수직과장을 **함께** 푼다 — 따로 정하면 서로를 무너뜨린다.
+        B9("② 축척 풀기");
         string veNote = FitSheet(db, pvId, log, out double scale, out bool overflow);
+        B9($"② 축척 1:{scale:F0}");
 
         // ── ②-a 표 끝 여백은 **종이 기준**이므로 축척을 알아야 모형 거리로 바꿀 수 있다.
         //   ★[JACK 0810] "축척에 따라 모든 기능이 자연스럽게 연동되어야 해."
@@ -257,24 +274,33 @@ public static class SheetCommand
         //   종전엔 <see cref="FitSheet"/> 안에서 걸었는데, 그 함수가 두 번 불리므로
         //   <b>1차에서 건 축척이 2차 측정을 부풀렸다</b>(실측 68.6m → 664.6m, 정확히 120배 여분).
         //   재는 도중에 자를 바꾸면 안 된다.
+        B9("③ 도면 축척 걸기");
         SetDrawingScale(db, scale, log);
         LogGrid(db, pvId, log, "① 축척 건 뒤");        // ★[v32.32] 격자가 어느 단계에서 좁아지는지 — 설명은 LogGrid
 
         // ── ②-b 뷰 스타일이 정해진 **뒤에** 왼쪽 축 눈금을 세운다(JACK: "왼쪽 바를 스케일(체크)로").
+        B9("④ 축 눈금");
         SetAxisTicks(db, pvId, scale, log);
         LogGrid(db, pvId, log, "② 축 눈금 뒤");
+        B9("⑤ 밴드 솎기");
         SetBandWeeding(db, pvId, scale, log);   // 굴곡부 라벨 솎아내기 — 축척을 알아야 정할 수 있다
         LogGrid(db, pvId, log, "③ 밴드 솎기 뒤");
+        B9("⑥ 뷰 다듬기");
         PolishView(db, pvId, log);      // V·H 표시 자리 · 종단선 화살표
         LogGrid(db, pvId, log, "④ 뷰 다듬기 뒤");
+        B9("⑦ 표고바");
         DrawScaleBar(db, pvId, scale, log);   // 흑백 교차 표고바 — 직접 그린다(축 스타일엔 그 기능이 없다)
+        B9("⑧ 제목칸");
         DecorateBandTitles(db, pvId, scale, log);   // 제목칸 이중 테두리(JACK 0812)
+        B9("⑨ 축척 배너");
         PlaceScaleBanner(db, pvId, scale, log);     // 축척 배너 블록 + V·H 글자
         // ★★[v24.1] 굴곡부 세로줄은 <b>직접 그린 선</b>이라 선형이 바뀌어도 따라오지 않는다
         //   (JACK: "선형이 변경될 때 변경되야 하거든"). 굴곡부를 다시 켤 때 <b>순정 격자로 낼 방법</b>부터
         //   찾는다. 지금은 <see cref="VgpOn"/>이 꺼져 있어 <b>지우기만</b> 하고 그리지 않는다 —
         //   그냥 건너뛰면 지난 판에 그어 둔 빨간 줄이 도면에 그대로 남는다.
+        B9("⑩ 세로격자");
         DrawVgpGrid(db, pvId, scale, log);
+        B9("⑪ 크기 재기");
 
         // ── ③ 정해진 스타일로 실제 크기를 다시 잰다(밴드까지 포함한 전체 상자)
         Extents3d ext;
@@ -304,16 +330,21 @@ public static class SheetCommand
         //               배치탭에서 사용자가 도곽을 가져오기만 할 수 있게."
         //   이 구조라야 나중에 관로에서 '정해진 거리마다 장이 넘어가게'가 그대로 얹힌다 —
         //   모형에 도곽을 여러 장 늘어놓고 배치를 그 수만큼 만들면 된다.
+        B9("⑫ 도곽 그리기");
         var frames = DrawModelFrames(db, ext, scale, log);
 
         DumpBands(db, pvId, log);   // ★ 마지막 상태를 통째로 — 다음 판에서 로그만 보고 짚게
+        B9("⑬ 끌기상태");
         FixDraggedState(db, pvId, log);     // ★[v32.38] 밀기 전에 — 끌어 옮겨도 눕지 않게(설명은 그 함수에)
         // ★★[검토 0827] <b>벌린 뒤에 숨기고 그린다.</b> 종전엔 순서가 거꾸로였다 —
         //   우리가 먼저 숨기면 <see cref="SpreadBandLabels"/>가 그 숨은 라벨까지 줄 세우기에 넣어
         //   <b>순정 글씨는 밀려가고 우리 글씨는 제자리</b>에 남아 간격이 좁아진다.
         //   벽 자리는 측점이 몰리는 곳이라 밀릴 확률이 높다.
+        B9("⑭ 밴드 벌리기");
         SpreadBandLabels(db, pvId, scale, log);
-        WallBandPairs(db, pvId, scale, log);   // ★[JACK 0827] 수직부는 한 칸에 두 값   // ★[v32.38] 떡진 밴드 값을 오른쪽으로 밀어 떨어뜨린다
+        B9("⑮ 옹벽 두 값");
+        WallBandPairs(db, pvId, scale, log);
+        B9("⑯ 끝");   // ★[JACK 0827] 수직부는 한 칸에 두 값   // ★[v32.38] 떡진 밴드 값을 오른쪽으로 밀어 떨어뜨린다
         DumpBandLabels(db, log);            // ★[v32.37] 민 뒤의 상태를 남긴다(간격이 벌어졌는지)
 
         // ── ⑤ 배치탭 도면화는 **여기서 끊는다**.
@@ -720,7 +751,7 @@ public static class SheetCommand
     /// 그 안을 <b>칸 수만큼 균등 분할</b>한다(JACK: "6등분"). 간격은 전부 0.
     /// 크기를 <b>종이 기준</b>으로 넣으므로 축척이 바뀌어도 종이 위 모양은 그대로다 —
     /// Civil 3D가 종이 크기에 도면 축척을 곱해 그리기 때문이다.</para></summary>
-    private static string NormalizeBands(Database db, ObjectId pvId, System.Text.StringBuilder log)
+    private static string NormalizeBands(Database db, ObjectId pvId, System.Text.StringBuilder log, bool startLabel)
     {
         int n = 0, hOk = 0, gOk = 0, tOk = 0, tTry = 0, vOk = 0, vTry = 0, kOk = 0, eOk = 0, dOk = 0;
         double eachM = 0;
@@ -841,10 +872,17 @@ public static class SheetCommand
                     //   전에 <c>No.0</c>과 <c>+0.00</c>이 같이 보였던 것은 이 라벨 탓이 아니라
                     //   <b>기점에 굴곡부(PVI)가 하나 있어서</b>였다 — 그쪽을 끄는 게 맞는 처방이다.
                     //   ※ 이 라벨은 <b>주 형식</b>(<c>No.X</c>)으로 그려진다.
+                    // ★★★[JACK 0904 "+19.99 사라지되 No.측점이 정위치로 가야 해"]
+                    //   <b>끄는 시점이 벌리기보다 앞이어야 한다.</b> 도곽이 끝난 <b>뒤에</b> 끄면
+                    //   <see cref="SpreadBandLabels"/>가 이미 <c>+19.99</c>를 피해 <c>No.6</c>을 밀어 놓은 상태라
+                    //   그 민 자리가 그대로 남는다. 그래서 <b>여기서</b> 켤지 말지를 정한다.
                     bool sOk = false;
-                    try { items[i].LabelAtStartStation = true; sOk = items[i].LabelAtStartStation; }
+                    try { items[i].LabelAtStartStation = startLabel; sOk = items[i].LabelAtStartStation == startLabel; }
                     catch (System.Exception ex) { log.AppendLine($"   [{i}칸] 시작측점 라벨 켜기 실패 — {Brief(ex)}"); }
-                    if (!sOk) log.AppendLine($"   [{i}칸] ⚠시작측점 라벨: 켰는데 다시 읽으니 꺼져 있다(기점 No.0이 빠진다)");
+                    // ★[검토 0904] 경고 문구는 <b>글씨가 실제로 생기는 칸</b>에만 맞는 말이다 —
+                    //   이 스위치는 여섯 칸 전부에 걸리지만 <c>No.X</c>가 나오는 것은 측점 행(ProfileData) 하나다.
+                    if (!sOk) log.AppendLine($"   [{i}칸] ⚠시작측점 라벨: {(startLabel ? "켰는데 꺼져" : "껐는데 켜져")} 있다"
+                                           + (startLabel ? "(측점 행이면 기점 No.0이 빠진다)" : "(측점 행이면 장 시작에 +xx.xx가 덧붙는다)"));
 
                     // ★★[v24.1 · JACK 0811] <b>"굴곡부 측점부는 잠깐 미뤄두고 정체인 20미터 간격으로
                     //   측점 나오게 먼저 만들어봐."</b> — <see cref="VgpOn"/> 하나로 굴곡부를 통째로 끈다.
@@ -1904,6 +1942,10 @@ public static class SheetCommand
     /// 사라진다. 그리고 이 함수는 <b>축척을 정하기 전에</b> 불러야 한다 — 폭이 바뀌기 때문이다.</para></summary>
     private const double TailPaperMm = 8.0;
 
+    /// <summary>★[JACK 0904 여러 장] 표 끝 여백(모형 m) — <see cref="ExtendTail"/>과 <b>같은 식</b>이다.
+    /// 여러 장은 측점범위를 직접 지정하므로 그 함수의 관문에 걸려 여백을 못 받는다. 값만 빌려 쓴다.</summary>
+    internal static double TailPadModel(double scale) => TailPaperMm / 1000.0 * (scale > 0 ? scale : 200.0);
+
     private static bool ExtendTail(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log)
     {
         try
@@ -2515,6 +2557,94 @@ public static class SheetCommand
         return pts;
     }
 
+    /// <summary>★★★[JACK 0904 여러 장] <b>이 종단뷰가 쓰는 종이 한 장의 가로 범위.</b>
+    /// <para>장식(표고바·제목칸·축척배너)은 <b>자기 레이어를 통째로 지우고 다시 그린다</b>.
+    /// 한 장일 때는 맞는 방식이었지만 여러 장이 되면 <b>뒷 장이 앞 장 것을 지운다</b> —
+    /// JACK 실측: <i>"맨 마지막 종단을 제외하고 모든 뷰에서 스케일바·밴드 꾸밈·축척 화살표가 사라짐."</i></para>
+    /// <para>→ 지울 때 <b>이 장 범위 안</b>만 지운다. 그래프 좌우로 여백(도곽 좌·우 여백)을 더해
+    /// 축 왼쪽에 그린 표고바까지 덮는다. 한 장짜리 도면에서는 모든 것이 범위 안이라 종전과 같다.</para></summary>
+    /// <summary>이 장이 가로로 쓰는 창(모형 X). <b>도곽 여백이 아니라 실제로 그리는 것</b>에서 나온다.
+    /// <para>★★[검토 0904] 종전에는 <c>MarginLeft</c>(25mm)를 썼는데, 왼쪽에 그리는 것 중 가장 먼
+    /// <b>축척배너</b>가 <c>AxisRoomMm 50 + BannerGapMm 4</c>보다 더 나간다 — 필요 31.5mm 대 자 25mm로
+    /// <b>모자랐고</b>, 지금 통과하는 것은 이 판정이 경계상자가 아니라 <b>중심</b>을 보기 때문일 뿐이다.
+    /// 배너를 조금만 키우면 <b>자기 배너를 못 지워 겹겹이 쌓인다</b>.</para>
+    /// <para>예산 검산(종이 mm): 왼쪽 <c>60</c> + 그래프 최대 <c>InnerW−AxisRoomMm=746</c> + 표 끝 여백 <c>8</c>
+    /// + 오른쪽 <c>12</c> = <b>826 ≤ 841</b>(뷰 피치) — 이웃 장과 15mm 남는다.
+    /// <c>AxisRoomMm</c>에 묶어 두면 <see cref="SplitPlan"/>의 용량 계산과 <b>같이 움직인다</b>.</para></summary>
+    private const double SpanLeftMm = AxisRoomMm + BannerGapMm + 6.0;   // 60
+    private const double SpanRightMm = 12.0;
+
+    private static bool SheetXSpan(Transaction tr, ObjectId pvId, double scale, out double xLo, out double xHi)
+    {
+        xLo = double.NegativeInfinity; xHi = double.PositiveInfinity;
+        try
+        {
+            if (tr.GetObject(pvId, OpenMode.ForRead) is not CivilDb.ProfileView pv) return false;
+            double gx0 = 0, gy0 = 0, gx1 = 0, gy1 = 0;
+            if (!pv.FindXYAtStationAndElevation(pv.StationStart, pv.ElevationMin, ref gx0, ref gy0) ||
+                !pv.FindXYAtStationAndElevation(pv.StationEnd, pv.ElevationMin, ref gx1, ref gy1))
+            {
+                // ★★★[검토 0904] <b>범위를 못 구했을 때가 가장 위험하다.</b>
+                //   종전엔 조용히 "전부 지운다"로 갔다 — 종단도가 여러 장이면 <b>다른 장 것을 통째로</b> 지운다.
+                //   이 실패는 가정이 아니다: <c>FindXY</c>는 데이터 범위 밖에서 실패하고
+                //   (<see cref="DrawScaleBar"/> 주석), 격자 표고는 5m 배수로 다시 잡히므로
+                //   <c>ElevationMin</c>이 격자 밖으로 나갈 수 있다.
+                //   → 종단뷰가 둘 이상이면 <b>안 지운다</b>. 안 지우면 겹쳐 쌓일 뿐이지만,
+                //     지우면 <b>남의 장이 날아간다</b> — 손해의 크기가 다르다.
+                if (CountProfileViews(tr) > 1) { xLo = double.NaN; xHi = double.NaN; }
+                return false;
+            }
+            double s = scale / 1000.0;
+            xLo = System.Math.Min(gx0, gx1) - SpanLeftMm * s;
+            xHi = System.Math.Max(gx0, gx1) + SpanRightMm * s;
+            return true;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>도면의 종단뷰 개수 — <b>여러 장인가</b>를 판정하는 데만 쓴다.</summary>
+    private static int CountProfileViews(Transaction tr)
+    {
+        int n = 0;
+        try
+        {
+            var db2 = HostApplicationServices.WorkingDatabase;
+            var bt = (BlockTable)tr.GetObject(db2.BlockTableId, OpenMode.ForRead);
+            var ms2 = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
+            foreach (ObjectId id in ms2)
+                try { if (tr.GetObject(id, OpenMode.ForRead) is CivilDb.ProfileView) n++; } catch { }
+        }
+        catch { }
+        return n;
+    }
+
+    /// <summary>★[검토 0904] 축척을 모르는 곳(<see cref="ProfileCommand"/>)에서 쓰는 판 —
+    /// 도면 축척을 스스로 읽는다. 없으면 200으로 물러선다(종전 기본).</summary>
+    internal static bool SheetXSpanOf(Transaction tr, ObjectId pvId, out double xLo, out double xHi)
+    {
+        double sc = GradingSettings.ProfileScale > 0 ? GradingSettings.ProfileScale : 200.0;
+        return SheetXSpan(tr, pvId, sc, out xLo, out xHi);
+    }
+
+    /// <summary>★[검토 0904] <see cref="InSheetX"/>의 공개 판.</summary>
+    internal static bool InSheetXOf(Entity e, bool ok, double xLo, double xHi) => InSheetX(e, ok, xLo, xHi);
+
+    /// <summary>지울 대상이 이 장 안에 있나 — 범위를 못 구했으면 <b>종전대로 전부</b>(한 장 도면).</summary>
+    private static bool InSheetX(Entity e, bool ok, double xLo, double xHi)
+    {
+        // 범위를 못 구했다 — 여러 장이면 NaN이 와서 <b>안 지운다</b>, 한 장이면 종전대로 전부 지운다.
+        if (!ok) return !double.IsNaN(xLo);
+        try
+        {
+            var ex = e.GeometricExtents;
+            double cx = (ex.MinPoint.X + ex.MaxPoint.X) * 0.5;
+            return cx >= xLo && cx <= xHi;
+        }
+        // ★★[검토 0904] <b>못 재면 안 지운다.</b> 종전엔 <c>true</c>(지운다)라,
+        //   경계상자를 못 내는 물건(빈 글자·속성 없는 블록참조) 하나가 <b>남의 장에서도 지워졌다</b>.
+        catch { return false; }
+    }
+
     private static void PlaceScaleBanner(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log)
     {
         try
@@ -2557,6 +2687,7 @@ public static class SheetCommand
                 SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
 
             // 지난 판에 놓은 같은 블록만 지운다(우리가 놓은 것만 — 남의 것은 건드리지 않는다).
+            bool spanOk = SheetXSpan(tr, pvId, scale, out double sxLo, out double sxHi);
             int wiped = 0;
             foreach (ObjectId id in ms)
             {
@@ -2564,6 +2695,7 @@ public static class SheetCommand
                 {
                     if (tr.GetObject(id, OpenMode.ForRead) is not BlockReference br) continue;
                     if (br.BlockTableRecord != defId) continue;
+                    if (!InSheetX(br, spanOk, sxLo, sxHi)) continue;   // ★[JACK 0904] 남의 장 것은 안 지운다
                     tr.GetObject(id, OpenMode.ForWrite).Erase(); wiped++;
                 }
                 catch { }
@@ -2729,12 +2861,14 @@ public static class SheetCommand
             var ms = (BlockTableRecord)tr.GetObject(
                 SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
 
+            bool spanOk = SheetXSpan(tr, pvId, scale, out double sxLo, out double sxHi);
             int wiped = 0;
             foreach (ObjectId id in ms)
             {
                 try
                 {
                     if (tr.GetObject(id, OpenMode.ForRead) is not Entity e || e.LayerId != layer) continue;
+                    if (!InSheetX(e, spanOk, sxLo, sxHi)) continue;    // ★[JACK 0904] 남의 장 것은 안 지운다
                     tr.GetObject(id, OpenMode.ForWrite).Erase(); wiped++;
                 }
                 catch { }
@@ -2876,12 +3010,14 @@ public static class SheetCommand
                 SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
 
             // ── 다시 돌릴 때 겹치지 않게 먼저 지운다. 우리가 만든 레이어라 남의 것을 건드릴 일이 없다.
+            bool spanOk = SheetXSpan(tr, pvId, scale, out double sxLo, out double sxHi);
             int wiped = 0;
             foreach (ObjectId id in ms)
             {
                 try
                 {
                     if (tr.GetObject(id, OpenMode.ForRead) is not Entity e || e.LayerId != layer) continue;
+                    if (!InSheetX(e, spanOk, sxLo, sxHi)) continue;    // ★[JACK 0904] 남의 장 것은 안 지운다
                     tr.GetObject(id, OpenMode.ForWrite).Erase(); wiped++;
                 }
                 catch { }
@@ -3819,6 +3955,100 @@ public static class SheetCommand
     /// <summary>모형공간에 <b>도곽 범위</b>를 그린다 — 축척을 곱한 실제 크기.
     /// 바깥 사각형=종이 전체, 안쪽 사각형=배치 뷰포트가 보여줄 자리(아래 2/3).
     /// 눈으로 '종단도가 한 장에 들어오는지'를 바로 대볼 수 있다.</summary>
+    /// <summary>★★★[JACK 0904 "자동축척이 아닌 사용자 축척 때 여러 장 분리"] <b>장을 어디서 끊을지 계산한다.</b>
+    ///
+    /// <para>JACK: <i>"최대한 그 축척에서 종단뷰 범위 내에서 가장 꽉 차는 주측점 또는 보조측점까지 넣고,
+    /// 넘어가는 부분은 다음 장으로 넘기는 식으로."</i></para>
+    ///
+    /// <para><b>한 장 용량</b> = 안쪽 폭에서 축 자리를 뺀 <see cref="InnerW"/>−<see cref="AxisRoomMm"/>(746mm)
+    /// × 축척. 1:200이면 149.2m다. 그 안에 들어가는 <b>측점 간격의 배수</b>로 내려 끊는다 —
+    /// 측점 아닌 자리에서 끊으면 장 경계에 반쪽 측점이 남는다.</para>
+    ///
+    /// <para><b>경계 측점은 양쪽 장에 다 나온다</b>(앞 장의 끝 = 뒷 장의 시작).
+    /// 도면을 이어 볼 때 같은 측점이 양쪽에 보여야 <b>이어지는 자리를 눈으로 확인</b>할 수 있다.</para>
+    ///
+    /// <para>자동 축척(<c>ProfileScale ≤ 0</c>)이면 한 장이다 — 자동은 <b>한 장에 맞추는 것</b>이 그 뜻이다.</para></summary>
+    /// <returns>장마다 (시작측점, 끝측점). 한 장이면 원소 하나.</returns>
+    /// <summary>★[검토 0904] 장 경계를 뷰 <b>안쪽</b>으로 들이는 양(측점 m). 축척과 무관하다 —
+    /// 측점 거리라 1:80이든 1:1000이든 같은 값이 먹는다(실측).</summary>
+    internal const double SheetLeadM = 0.01;
+
+    internal static List<(double S0, double S1)> SplitPlan(double stStart, double stEnd, double scale,
+                                                           double interval, System.Text.StringBuilder log)
+    {
+        var spans = new List<(double, double)>();
+        double total = stEnd - stStart;
+        if (total <= 1e-6 || scale <= 0) { spans.Add((stStart, stEnd)); return spans; }
+
+        double usableMm = System.Math.Max(50.0, InnerW - AxisRoomMm);
+        double cap = usableMm * scale / 1000.0;                 // 한 장에 들어가는 측점 길이(m)
+        double iv = interval > 0.01 ? interval : 20.0;
+        int steps = (int)System.Math.Floor(cap / iv + 1e-9);
+        if (steps < 1) steps = 1;                                // 한 칸도 안 들어가면 한 칸은 넣는다
+        double lenPer = steps * iv;
+
+        double s0 = stStart;
+        int guard = 0;
+        while (s0 < stEnd - 1e-6 && guard++ < 1000)
+        {
+            double s1 = System.Math.Min(s0 + lenPer, stEnd);
+            // ★★★[검토 0904] <b>경계를 뷰 안쪽으로 들이는 것을 여기서 한다.</b>
+            //
+            //   Civil은 <b>뷰 시작측점 그 자리에는 주 증분 라벨을 안 찍는다</b>(실측: 60.00이 주측점인데도
+            //   2장 시작에 <c>No.3</c>이 없었다). 그리고 시작측점 라벨은 그 자리가 <b>노선 기점일 때만</b>
+            //   색인형식(<c>No.X</c>)이고 그 밖에는 <c>+xx.xx</c>다 — Civil API에 그 형식을 바꾸는 자리가
+            //   <b>없다</b>(검토 0904가 어셈블리를 직접 뜯어 확인: <c>ProfileDataBandStyle</c> 속성 13개에
+            //   시작/끝 라벨 슬롯 없음, <c>BandLabelStyleType</c>에도 항목 없음).
+            //   → 경계 측점을 <b>뷰 안쪽</b>으로 들이는 것이 <b>유일한 통로</b>다.
+            //
+            //   ※<b>여기서</b> 빼는 이유: 종전엔 계획은 60.0으로 잡고 뷰를 만들 때만 몰래 뺐다 —
+            //     그래서 <b>계획과 실제가 달라</b> 도곽 자리 계산이 1cm 어긋났다.
+            //     한 숫자를 로그·자리계산·뷰가 함께 보게 한다.
+            double emitS0 = spans.Count == 0 ? s0 : s0 - SheetLeadM;
+            spans.Add((emitS0, s1));
+            s0 = s1;                       // 다음 장의 경계는 <b>깨끗한 측점</b>에서 잰다
+        }
+        if (spans.Count == 0) spans.Add((stStart, stEnd));
+
+        // ★★[검토 0904] <b>부동소수 잔여로 생기는 0에 가까운 장을 버린다.</b>
+        //   길이가 용량의 배수 + 1e-5 같은 도면에서 <c>0.00001m짜리 장</c>이 생긴다 —
+        //   그 장은 창이 폭 0이라 <b>자기 장식이 전부 창 밖</b>으로 나간다.
+        while (spans.Count > 1 && spans[spans.Count - 1].Item2 - spans[spans.Count - 1].Item1 < 1e-3)
+        {
+            var prev = spans[spans.Count - 2];
+            spans[spans.Count - 2] = (prev.Item1, spans[spans.Count - 1].Item2);
+            spans.RemoveAt(spans.Count - 1);
+        }
+        // ★★[검토 0904] <b>아주 짧은 마지막 장은 앞 장에 붙인다.</b> A1 한 장에 종이 19mm짜리 그림이
+        //   따로 서는 것은 도면이 아니다. 앞 장이 <b>용량을 안 넘는 선</b>에서만 붙인다.
+        if (spans.Count > 1)
+        {
+            double lastLen = spans[spans.Count - 1].Item2 - spans[spans.Count - 1].Item1;
+            var pv2 = spans[spans.Count - 2];
+            if (lastLen < lenPer * 0.5 && (spans[spans.Count - 1].Item2 - pv2.Item1) <= cap + 1e-6)
+            {
+                spans[spans.Count - 2] = (pv2.Item1, spans[spans.Count - 1].Item2);
+                spans.RemoveAt(spans.Count - 1);
+                log?.AppendLine($"  장 나누기: 마지막 {lastLen:F1}m는 짧아 앞 장에 붙였다(앞 장 {spans[spans.Count - 1].Item2 - spans[spans.Count - 1].Item1:F1}m ≤ 용량 {cap:F1}m)");
+            }
+        }
+
+        // ★★[검토 0904] <b>불변식을 코드가 스스로 검산한다.</b>
+        //   한 장이 가로로 쓰는 것 = 왼쪽 창 + 그래프 + 표 끝 여백 + 오른쪽 창.
+        //   이것이 뷰 피치(SheetW)를 넘으면 <b>이웃 장을 문다</b> — 그 순간 장식이 남의 장을 지운다.
+        //   깰 수 있는 유일한 길이 아래 <c>steps &lt; 1</c> 클램프다(측점 간격이 용량보다 클 때).
+        {
+            double needMm = SpanLeftMm + lenPer * 1000.0 / scale + TailPaperMm + SpanRightMm;
+            if (needMm > SheetW + 1e-6)
+                log?.AppendLine($"  ⚠장 창 {needMm:F0}mm > 종이 {SheetW:F0}mm — 이웃 장을 문다"
+                              + $" (측점 간격 {iv:F0}m이 한 장 용량 {cap:F1}m보다 커서 한 칸을 억지로 넣었다)");
+        }
+        log?.AppendLine($"  장 나누기: 노선 {total:F1}m · 축척 1:{scale:F0} · 한 장 자리 {usableMm:F0}mm = {cap:F1}m"
+                      + $" → 측점 {iv:F0}m 간격 {steps}칸 = <b>{lenPer:F0}m/장</b> · <b>{spans.Count}장</b>"
+                      + (spans.Count > 1 ? $" (마지막 장 {spans[spans.Count - 1].Item2 - spans[spans.Count - 1].Item1:F1}m)" : ""));
+        return spans;
+    }
+
     private static List<Frame> DrawModelFrames(Database db, Extents3d ext, double scale,
                                                System.Text.StringBuilder log)
     {
@@ -5321,10 +5551,16 @@ public static class SheetCommand
     {
         try
         {
+            // ★[JACK 0904 크래시 추적] 이 함수 안에서 죽는 것까지 좁혔다 — 단계마다 디스크에 바로 쓴다.
+            void S9(string t) { try { DiagLog.Append("\n[벌리기] " + t); } catch { } }
+            S9("a 시작");
             double minGap = MinLabelGapMm / 1000.0 * scale;      // 글씨 한 자리(종이 mm → 모형 m)
             double pairGap = (CalsT25 * scale / 1000.0) * 1.35;  // 두 값 사이 거리 — 그리는 쪽과 같은 식
+            S9("b 벽 자리");
             var walls = WallXs(db, pvId, scale, log);
+            S9($"b 벽 {walls.Count}곳");
             var marks = MarkXs(db, pvId);
+            S9($"c 측점 {marks.Count}곳");
             int groups = 0, moved = 0, wide = 0, back = 0, fail = 0, outside = 0;
             int skipView = 0, crowd = 0, noName = 0, dropped = 0, kept = 0, nLead = 0, nailed = 0, farMark = 0, blankSkip = 0;
             double farMarkMax = 0;
@@ -5465,10 +5701,75 @@ public static class SheetCommand
             long SeatKey(double x) => (long)System.Math.Round(x * 1000.0);
             var zCache = new System.Collections.Generic.Dictionary<long, (double P, double G)>();
 
-            foreach (ObjectId id0s in ms)
+            // ★★★[JACK 0907 "+19.99 여전히 있어" — 정체 확정] <b>뷰 시작의 굴곡부 라벨을 숨긴다.</b>
+            //
+            //   스타일 핸들을 밴드 스타일 슬롯과 맞대어 확정했다(0907 실측):
+            //     뷰 시작 자리(119.99) = <c>320AC</c> = <b>VGP(굴곡부)</b> · 그 1cm 뒤(120.00) = <c>3205B</c> = 주증분.
+            //   즉 <c>+19.99</c>는 시작측점 라벨이 아니라(그건 되읽기로 <b>0/6</b> 꺼짐 확인) <b>굴곡부 라벨</b>이다 —
+            //   뷰를 측점 범위로 자르면 그 자리가 <b>잘린 종단선의 꺾임점</b>이 되어 Civil이 굴곡부로 찍는다.
+            //   여러 장을 만들면서 <b>경계를 1cm 안으로 들인 대가</b>이고, 첫 장(노선 기점)에는 안 생긴다.
+            //
+            //   → 그 <b>한 개만</b> 숨긴다. 굴곡부 표시 자체는 끄지 않는다(정상 굴곡부는 그대로 나와야 한다).
+            //   ※<b>벌리기가 좌석을 만들기 전에</b> 해야 한다 — 뒤에 하면 이미 그것을 피해 <c>No.X</c>를
+            //     밀어 놓은 자리가 남는다(JACK: <i>"No.가 +19.99 뒤로 밀렸다"</i>).
+            int hidStart = 0;
+            // ★★[JACK 0907] <b>방금 숨긴 것만</b> 기록한다. "안 보이면 건너뛴다"로 뭉뚱그리면
+            //   지난 판이 숨긴 글씨가 <b>영영 안 돌아온다</b>(이 저장소가 이미 데인 사고 — 아래 쓰기 루프 주석).
+            var hidKeys = new System.Collections.Generic.HashSet<string>();
+            try
+            {
+                if (tr.GetObject(pvId, OpenMode.ForRead) is CivilDb.ProfileView pvS0)
+                {
+                    double alnS0 = double.NaN;
+                    try { if (tr.GetObject(pvS0.AlignmentId, OpenMode.ForRead) is CivilDb.Alignment alS0) alnS0 = alS0.StartingStation; }
+                    catch { }
+                    // 노선 기점이면 손대지 않는다 — 거기 굴곡부는 진짜다(첫 장).
+                    if (!double.IsNaN(alnS0) && pvS0.StationStart > alnS0 + 1e-6)
+                    {
+                        double sx0 = 0, sy0 = 0;
+                        if (pvS0.FindXYAtStationAndElevation(pvS0.StationStart, pvS0.ElevationMin, ref sx0, ref sy0))
+                            foreach (ObjectId gid in ms)
+                            {
+                                object go; try { go = tr.GetObject(gid, OpenMode.ForRead); } catch { continue; }
+                                if (go is not CivilDb.LabelGroup lgh) continue;
+                                if (!go.GetType().Name.Contains("ProfileData")) continue;
+                                uint nh; try { nh = lgh.SubEntityCount; } catch { continue; }
+                                try { lgh.UpgradeOpen(); } catch { }
+                                for (uint h = 0; h < nh; h++)
+                                    try
+                                    {
+                                        var seh = lgh.GetAt(h);
+                                        if (seh == null || !seh.Visibility) continue;
+                                        double dh = 0; try { dh = seh.DraggedOffset.X; } catch { }
+                                        // 가로는 측점 1m = 모형 1m다. 주증분은 1cm 뒤에 있으므로 5mm 자로 갈린다.
+                                        if (System.Math.Abs(seh.LabelLocation.X - dh - sx0) > 0.005) continue;
+                                        seh.Visibility = false; hidStart++;
+                                        hidKeys.Add(gid.ToString() + ":" + h);
+                                    }
+                                    catch { }
+                            }
+                    }
+                }
+            }
+            catch { }
+            if (hidStart > 0) S9($"d0 뷰 시작 굴곡부 라벨 {hidStart}개 숨김(경계를 안으로 들인 대가)");
+
+            S9("d 자리표 만들기");
+            // ★★★[JACK 0904 크래시 "eNotOpenForWrite"] <b>자리표는 자기 트랜잭션에서 읽고 닫는다.</b>
+            //
+            //   실측: `[벌리기] g 쓰기 시작` 직후 <c>eNotOpenForWrite</c>로 죽었다.
+            //   이 훑기가 <b>모든 밴드 그룹을 읽기로 열어 둔 채</b> 끝나고, 곧이어 쓰기 루프가 같은 객체를
+            //   <c>UpgradeOpen</c>으로 승격하려다 거부당한 것이다 —
+            //   자리표를 넣기 전에는 그룹을 <b>한 번만</b> 열었기에 없던 일이다.
+            //   → 읽기 트랜잭션을 <b>따로 열고 닫는다</b>. 도면은 안 건드리므로 커밋해도 바뀌는 것이 없다.
+            using (var trPre = db.TransactionManager.StartTransaction())
+            {
+            var btP = (BlockTable)trPre.GetObject(db.BlockTableId, OpenMode.ForRead);
+            var msP = (BlockTableRecord)trPre.GetObject(btP[BlockTableRecord.ModelSpace], OpenMode.ForRead);
+            foreach (ObjectId id0s in msP)
             {
                 object os;
-                try { os = tr.GetObject(id0s, OpenMode.ForRead); } catch { continue; }
+                try { os = trPre.GetObject(id0s, OpenMode.ForRead); } catch { continue; }
                 if (os is not CivilDb.LabelGroup lgS) continue;
                 if (!os.GetType().Name.Contains("BandLabelGroup")) continue;
                 uint nS; try { nS = lgS.SubEntityCount; } catch { continue; }
@@ -5485,6 +5786,10 @@ public static class SheetCommand
                     {
                         var seS = lgS.GetAt(iS);
                         if (seS == null) continue;
+                        // ★★[JACK 0907] <b>방금 숨긴 글씨는 자리를 안 먹는다.</b> 숨겨 놓고 좌석을 남기면
+                        //   이웃이 그것을 피해 밀려나(<c>No.X</c>가 글자 한 칸 밀림) 숨긴 보람이 없다.
+                        //   ※<b>지난 판이 숨긴 것</b>은 여기서 빼지 않는다 — 그것은 되살려야 하는 대상이다.
+                        if (hidKeys.Contains(id0s.ToString() + ":" + iS)) continue;
                         double dS = 0; try { dS = seS.DraggedOffset.X; } catch { }
                         double axS = seS.LabelLocation.X - dS;
                         if (double.IsNaN(axS)) continue;
@@ -5501,7 +5806,7 @@ public static class SheetCommand
                         {
                             long zk = (long)System.Math.Round(stS * 1000.0);
                             if (!zCache.TryGetValue(zk, out var zz))
-                            { zz = (ZAt(tr, pidPad, stS), ZAt(tr, pidGnd, stS)); zCache[zk] = zz; }
+                            { zz = (ZAt(trPre, pidPad, stS), ZAt(trPre, pidGnd, stS)); zCache[zk] = zz; }
                             const double BlankEps0 = 0.005;
                             hasVal = isPlanS ? !double.IsNaN(zz.P)
                                    : isCutS  ? !(double.IsNaN(zz.P) || double.IsNaN(zz.G) || zz.G - zz.P < -BlankEps0)
@@ -5519,7 +5824,9 @@ public static class SheetCommand
                 }
             }
 
-            // ② 벽을 좌석에 붙인다 — 한 벽에 좌석 하나(그룹 루프와 같은 자).
+            trPre.Commit();
+            }
+            S9($"d 좌석 {seatA.Count}개");
             var seatWall = new bool[seatA.Count];
             var seatTwo = new bool[seatA.Count];
             var seatFirst = new bool[seatA.Count];
@@ -5556,6 +5863,7 @@ public static class SheetCommand
             }
 
             // ③ 자리를 정한다 — <b>측점 단위로 한 번</b>. 종전 라운드 루프를 그대로 옮겼다.
+            S9("f 자리 정하기");
             var order = new System.Collections.Generic.List<int>();
             for (int k = 0; k < seatA.Count; k++) if (seatAny[k]) order.Add(k);
             order.Sort((a, b) => seatA[a].CompareTo(seatA[b]));
@@ -5609,6 +5917,7 @@ public static class SheetCommand
                 worstBefore = System.Math.Min(worstBefore, seatA[order[k]] - seatA[order[k - 1]]);
             // ══════════════════════════════════════════════════════════════════════════════
 
+            S9($"g 쓰기 시작(좌석 {order.Count}개)");
             foreach (ObjectId id in ms)
             {
                 object o;
@@ -5618,6 +5927,24 @@ public static class SheetCommand
                 uint n;
                 try { n = lg.SubEntityCount; } catch { continue; }
                 if (n < 1) continue;
+
+                // ★★★[JACK 0904 여러 장 크래시] <b>다른 장 밴드는 손도 대지 않는다 — 쓰기 전에 거른다.</b>
+                //
+                //   자리표는 이 장 범위(<c>xLo~xHi</c>)만 모은다. 그런데 이 쓰기 루프는 <b>모형공간의
+                //   모든 밴드 그룹</b>을 훑으므로, 여러 장이 되면 <b>남의 장 그룹</b>이 들어온다.
+                //   그 그룹의 라벨은 좌석을 못 찾아 전부 '빈칸'으로 몰리고,
+                //   <c>RestoreBlanks</c>/<c>RestoreHidden</c>이 <b>남의 장 라벨에 쓰기</b>를 한다 —
+                //   앞 장에서 애써 맞춰 둔 자리를 되돌리고, 그 쓰기가 <c>eNotOpenForWrite</c>로 죽었다.
+                //   ※한 장짜리 도면에서는 모든 그룹이 범위 안이라 <b>종전과 똑같이</b> 돈다.
+                {
+                    double sxg = 0; int cg = 0;
+                    for (uint qg = 0; qg < n; qg++)
+                        try { var eg = lg.GetAt(qg); if (eg != null) { sxg += eg.LabelLocation.X; cg++; } }
+                        catch { }
+                    if (cg == 0) continue;
+                    double mxg = sxg / cg;
+                    if (mxg < xLo || mxg > xHi) { skipView++; continue; }
+                }
 
                 // 벽 두 값을 받는 칸은 계획고·절토고·성토고 셋뿐이다. 이름을 못 읽으면 종전대로.
                 int bIdx = bandOf.TryGetValue(id, out int bi2) ? bi2 : -1;
@@ -5641,6 +5968,9 @@ public static class SheetCommand
                     {
                         var se = lg.GetAt(i);
                         if (se == null) continue;
+                        // ★[JACK 0907] 방금 숨긴 것은 좌석표에도 없다 — 여기서도 건드리지 않는다
+                        //   (건드리면 도로 켜진다). 지난 판이 숨긴 것은 종전대로 되살린다.
+                        if (hidKeys.Contains(id.ToString() + ":" + i)) continue;
                         double d0 = 0; try { d0 = se.DraggedOffset.X; } catch { }
                         double ax = se.LabelLocation.X - d0;
                         if (double.IsNaN(ax)) continue;   // NaN 하나가 그룹 나머지를 조용히 멈춘다
@@ -5709,6 +6039,16 @@ public static class SheetCommand
                 //   여기서 빠져나가 <b>빈칸 밀림 되돌리기도, 숨긴 라벨 되살리기도 통째로 건너뛰었다</b> —
                 //   한 칸이 전부 빈칸이면 지난 판이 숨긴 글씨가 <b>영영 안 돌아온다</b>.
                 //   이 저장소가 이미 한 번 당한 사고다(<see cref="WallBandPairs"/> 주석).
+                // ★★★[검토 0904 · 1순위 차단] <b>쓰기 전에 승격한다.</b>
+                //
+                //   <c>RestoreBlanks</c>/<c>RestoreHidden</c>은 <c>DraggedOffset</c>·<c>Visibility</c>를
+                //   <b>쓴다</b>. 그런데 이 그룹은 위에서 <c>OpenMode.ForRead</c>로 열렸고
+                //   <c>UpgradeOpen()</c>은 <b>한참 아래</b>에 있었다 —
+                //   그래서 <c>!dbobji.cpp@8703: eNotOpenForWrite</c>(스샷)로 죽었다.
+                //   ★<b>이 오류는 ARX 어설션이라 <c>try/catch</c>가 못 막는다</b> — 프로세스가 통째로 죽는다.
+                //   여태 안 터진 이유는 갓 만든 뷰가 밀림 0·전부 보임이라 <b>쓸 것이 없어서</b>였다.
+                //   지난 판이 숨기거나 민 라벨이 있으면(측점 하나 찍을 때마다 재작도가 돈다) 언제든 터진다.
+                try { lg.UpgradeOpen(); } catch { }
                 RestoreBlanks(lg, blanks);
                 if (items.Count < 1) { RestoreHidden(lg, n, blanks); continue; }
                 items.Sort((a, b) => seatA[a.Seat].CompareTo(seatA[b.Seat]));
@@ -5718,7 +6058,7 @@ public static class SheetCommand
                 if (seatA[items[items.Count / 2].Seat] < xLo || seatA[items[items.Count / 2].Seat] > xHi) { skipView++; continue; }
                 groups++;
                 for (int k = 0; k < items.Count; k++) if (seatTwo[items[k].Seat]) wide++;
-                try { lg.UpgradeOpen(); } catch { }
+                // (승격은 위에서 이미 했다 — 쓰기보다 앞이어야 한다.)
 
                 // ④ 이제 한 번만 쓴다.
                 double prevR2 = double.NegativeInfinity;
@@ -5815,7 +6155,9 @@ public static class SheetCommand
                     }
                 }
             }
+            S9("h 커밋");
             tr.Commit();
+            S9("i 커밋 끝");
 
             if (groups == 0)
             {
