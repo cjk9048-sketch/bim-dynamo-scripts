@@ -1,33 +1,13 @@
-namespace DH.Grading.Core;
+﻿namespace DH.Grading.Core;
 
-/// <summary>★★★[JACK 0827 스크린샷] <b>토적표 — 두 단으로 접은 새 형태.</b>
+/// <summary>★★★[검토 0907] <b>도면이 읽는 몇 가지만 남은 자리.</b>
 ///
-/// <para><b>왜 바꿨나.</b> 종전은 <b>18줄 한 단</b>이라 세로로 길쭉했다. 새 형태는 같은 항목을
-/// <b>12줄 두 단</b>으로 접어 가로로 눕힌다 — 횡단면도 옆에 붙이기에 그 편이 맞다.</para>
+/// <para>0827에 스크린샷을 옮겨 적은 <b>참고표</b>가 여기 있었다(12줄 7칸 고정).
+/// 0831부터 표는 <see cref="QtyTableSpec"/>가 <b>현장의 지층 구성</b>에서 지어 내고(§57),
+/// 0907부터 <see cref="QtyTableFold"/>가 그것을 <b>두 단</b>으로 나눈다(§72).</para>
 ///
-/// <para><b>왼쪽 12줄과 오른쪽 12줄이 정확히 대응한다.</b> 그래서 표는 언제나 직사각형이고,
-/// 병합 계산이 어긋날 자리가 없다.</para>
-///
-/// <code>
-/// ┌─────────────────────────────────────────────────────────┐
-/// │ 측  점 :  No.2+13.92                                    │
-/// ├──────┬──────┬──────┬───────┬──────────┬──────┬─────────┤
-/// │ 성  토      │ 토 사 │ 49.98 │ 벌개재근 │성토부│  16.99  │
-/// │ 절  토      │ 토 사 │ 44.48 │          │절토부│  22.32  │
-/// │             │ 풍화암│  1.68 │ 표토제거 │성토부│    –    │
-/// │             │ 연 암 │  0.53 │          │절토부│    –    │
-/// │ 4.5m │터파기│ 토 사 │  5.39 │ 면고르기 │성토부│    –    │
-/// │ 이하 │(육상)│ 풍화암│   –   │          │절토부│  14.66  │
-/// │      │      │ 연 암 │   –   │바닥면고르기│풍화암│  –    │
-/// │      │터파기│ 토 사 │   –   │          │연 암 │    –    │
-/// │      │(용수)│ 풍화암│   –   │ 식생공법 │성토부│    –    │
-/// │      │      │ 연 암 │   –   │          │절토부│    –    │
-/// │ 되메우기    │ 구조물│  0.58 │ 층  따  기      │  5.03   │
-/// │             │ 주 위 │   –   │ 잡 석 부 설     │    –    │
-/// └──────┴──────┴──────┴───────┴──────────┴──────┴─────────┘
-/// </code>
-///
-/// <para><b>열은 일곱이다.</b> 왼쪽 넷(대분류·중분류·재료·값) + 오른쪽 셋(항목·세부·값).</para></summary>
+/// <para>그래서 이 클래스에는 <b>표 모양이 없다</b> — 도면이 실제로 읽는 넷만 남았다:
+/// 빈칸 글자·머리줄 글자·깊이 기준·칸 폭 비율.</para></summary>
 public static class QuantityTable
 {
     /// <summary>값이 없는 칸에 적는 글자. <b>빈칸으로 두지 않는다</b> —
@@ -37,146 +17,24 @@ public static class QuantityTable
     /// <summary>표 맨 윗줄. 측점 이름이 뒤에 붙는다.</summary>
     public const string HeaderLeft = "측  점";
 
-    /// <summary>본문 줄 수 — 왼쪽과 오른쪽이 같다.</summary>
-    public const int BodyRows = 12;
-
-    /// <summary>머리 한 줄을 더한 전체 줄 수.</summary>
-    public const int TotalRows = BodyRows + 1;
-
-    /// <summary>가로 칸 수.</summary>
-    public const int Cols = 7;
-
-    /// <summary>어느 값을 넣을 자리인가. <c>None</c>은 <b>지금은 못 구하는 것</b>이다 —
-    /// 지층·지하수위 자료가 들어오면 그때 채운다.</summary>
-    public enum QtyKind { None, Cut, Fill, ExcShallow, ExcDeep, Backfill }
-
-    /// <summary>한 칸. <paramref name="RowSpan"/>이 0이면 <b>위 칸에 먹힌 자리</b>다.</summary>
-    public readonly record struct Cell(string Text, int RowSpan = 1, int ColSpan = 1);
-
-    /// <summary>본문 한 줄 — 왼쪽 세 칸 + 왼쪽 값 + 오른쪽 두 칸 + 오른쪽 값.</summary>
-    public readonly record struct Row(
-        Cell L1, Cell L2, Cell L3, QtyKind LKind,
-        Cell R1, Cell R2, QtyKind RKind);
-
-    private static Cell C(string t, int rs = 1, int cs = 1) => new(t, rs, cs);
-    private static readonly Cell Eaten = new(null, 0, 0);   // 위 칸이 먹은 자리
-
-    /// <summary>★[JACK 0827] 터파기 깊이 구분. 표 제목에 그대로 쓰인다.
-    /// <para>스크린샷은 <b>4.5m</b>였다. 계산 쪽(<c>XsecQuantity.DeepLimit</c>)과 <b>같은 값</b>이라야
-    /// 표에 적힌 글자와 실제 가른 깊이가 어긋나지 않는다.</para></summary>
+    /// <summary>★[JACK 0827] 터파기 깊이 구분(m). 표에 적히는 글자와
+    /// 계산 쪽(<c>XsecQuantity.DeepLimit</c>)이 <b>같은 값</b>을 써야 어긋나지 않는다.</summary>
     public const double DeepLimitM = 5.0;
 
-    /// <summary>깊이 구분 글자 — 값이 바뀌면 따라 바뀐다. <b>글자를 못 박지 않는다.</b></summary>
-    public static string DepthLabel => $"{DeepLimitM:0.#}m|이하";
-
-    public static readonly Row[] Rows =
-    {
-        // 0
-        new(C("성    토", 1, 2), Eaten,              C("토  사"), QtyKind.Fill,
-            C("벌개재근", 2),    C("성토부"),        QtyKind.None),
-        // 1
-        new(C("절    토", 3, 2), Eaten,              C("토  사"), QtyKind.Cut,
-            Eaten,               C("절토부"),        QtyKind.None),
-        // 2
-        new(Eaten,               Eaten,              C("풍화암"), QtyKind.None,
-            C("표토제거", 2),    C("성토부"),        QtyKind.None),
-        // 3
-        new(Eaten,               Eaten,              C("연  암"), QtyKind.None,
-            Eaten,               C("절토부"),        QtyKind.None),
-        // 4
-        new(C(null, 6),          C("터파기|(육상)", 3), C("토  사"), QtyKind.ExcShallow,
-            C("면고르기", 2),    C("성토부"),        QtyKind.None),
-        // 5
-        new(Eaten,               Eaten,              C("풍화암"), QtyKind.None,
-            Eaten,               C("절토부"),        QtyKind.None),
-        // 6
-        new(Eaten,               Eaten,              C("연  암"), QtyKind.None,
-            C("바닥면고르기", 2), C("풍화암"),       QtyKind.None),
-        // 7
-        new(Eaten,               C("터파기|(용수)", 3), C("토  사"), QtyKind.None,
-            Eaten,               C("연  암"),        QtyKind.None),
-        // 8
-        new(Eaten,               Eaten,              C("풍화암"), QtyKind.None,
-            C("식생공법", 2),    C("성토부"),        QtyKind.None),
-        // 9
-        new(Eaten,               Eaten,              C("연  암"), QtyKind.None,
-            Eaten,               C("절토부"),        QtyKind.None),
-        // 10
-        new(C("되메우기", 2, 2), Eaten,              C("구조물"), QtyKind.None,
-            C("층 따 기", 1, 2), Eaten,              QtyKind.None),
-        // 11
-        new(Eaten,               Eaten,              C("주  위"), QtyKind.Backfill,
-            C("잡 석 부 설", 1, 2), Eaten,           QtyKind.None),
-    };
-
-    /// <summary>왼쪽 대분류(0열)에서 <see cref="DepthLabel"/>이 들어갈 줄 — 4번이다.
-    /// <para>글자를 배열에 직접 못 박으면 깊이를 바꿀 때 <b>두 곳을 고쳐야</b> 하므로 여기서 끼워 넣는다.</para></summary>
-    public const int DepthRow = 4;
-
-    /// <summary>그 줄의 0열 글자 — <see cref="DepthRow"/>만 깊이 딱지를 돌려준다.</summary>
-    public static string L1TextOf(int row)
-    {
-        if (row < 0 || row >= Rows.Length) return null;
-        if (row == DepthRow) return DepthLabel;
-        return Rows[row].L1.Text;
-    }
-
-    /// <summary>세로 병합의 합이 줄 수와 맞는가 — 어긋나면 표가 찌그러진다.</summary>
-    public static bool SpansValid()
-    {
-        int l1 = 0, l2 = 0, l3 = 0, r1 = 0, r2 = 0;
-        foreach (var r in Rows)
-        {
-            l1 += r.L1.RowSpan; l2 += r.L2.RowSpan; l3 += r.L3.RowSpan;
-            r1 += r.R1.RowSpan; r2 += r.R2.RowSpan;
-        }
-        // L1·L2는 서로 먹고 먹히므로 둘을 합쳐서 본다(2열 병합이 섞인다).
-        return l3 == BodyRows && r1 + r2 == BodyRows * 2 - CountColSpan2Right()
-            && l1 + l2 == BodyRows * 2 - CountColSpan2Left();
-    }
-
-    private static int CountColSpan2Left()
-    {
-        int n = 0;
-        foreach (var r in Rows) if (r.L1.ColSpan == 2) n += r.L1.RowSpan;
-        return n;
-    }
-
-    private static int CountColSpan2Right()
-    {
-        int n = 0;
-        foreach (var r in Rows) if (r.R1.ColSpan == 2) n += r.R1.RowSpan;
-        return n;
-    }
-
-    /// <summary>왼쪽 값 — 그 줄이 어느 수량을 받는가.</summary>
-    public static double PickLeft(XsecQty q, int row) => Pick(q, row < 0 || row >= Rows.Length ? QtyKind.None : Rows[row].LKind);
-
-    /// <summary>오른쪽 값.</summary>
-    public static double PickRight(XsecQty q, int row) => Pick(q, row < 0 || row >= Rows.Length ? QtyKind.None : Rows[row].RKind);
-
-    private static double Pick(XsecQty q, QtyKind k) => k switch
-    {
-        QtyKind.Cut => q.Cut,
-        QtyKind.Fill => q.Fill,
-        QtyKind.ExcShallow => q.ExcShallow,
-        QtyKind.ExcDeep => q.ExcDeep,
-        QtyKind.Backfill => q.Backfill,
-        _ => double.NaN,
-    };
-
-    /// <summary>지금 실제로 값이 들어가는 자리 수 — 나머지는 <c>–</c>다.
-    /// <para>자료(지층·지하수위)가 들어오면 이 수가 늘어난다. 로그에 남겨 진행을 눈으로 본다.</para></summary>
-    public static int FilledSlots()
-    {
-        int n = 0;
-        foreach (var r in Rows)
-        {
-            if (r.LKind != QtyKind.None) n++;
-            if (r.RKind != QtyKind.None) n++;
-        }
-        return n;
-    }
+    // ★★★[검토 0907 · L-5] <b>참고표(12줄 못 박은 <c>Rows</c> 배열)를 지웠다.</b>
+    //
+    //   0827에 스크린샷을 그대로 옮겨 적은 표다. 0831에 <see cref="QtyTableSpec"/>가
+    //   <b>현장의 지층 구성</b>에서 표를 지어 내게 되면서(§57) 도면은 그것만 그린다 —
+    //   이 배열은 그 뒤로 <b>한 번도 안 그려졌다</b>. 그런데 시험대가 열두 개 검사로
+    //   이것을 재며 통과 도장을 찍고 있었다(S69·S73).
+    //
+    //   <b>지운 것</b>: <c>Rows</c>·<c>Cell</c>·<c>Row</c>·<c>QtyKind</c>·<c>BodyRows</c>·
+    //   <c>TotalRows</c>·<c>Cols</c>·<c>DepthRow</c>·<c>DepthLabel</c>·<c>L1TextOf</c>·
+    //   <c>SpansValid</c>·<c>PickLeft</c>·<c>PickRight</c>·<c>FilledSlots</c>.
+    //   <b>남긴 것</b>: <c>Blank</c>·<c>HeaderLeft</c>·<c>DeepLimitM</c>·<c>ColRatio</c> —
+    //   도면이 실제로 읽는 넷이다.
+    //
+    //   깊이 딱지가 필요하면 <c>QtyTableSpec.DepthLabel(깊이, 기준m)</c>을 쓴다.
 
     /// <summary>가로 칸 폭의 비율. ★[JACK 0827 "표가 너무 넓어"]
     /// <para>종전 합 70은 <b>폭 252mm</b>가 되어 그림 자리를 크게 잡아먹었고 표가 납작해 보였다.
@@ -205,6 +63,14 @@ public static class QuantityTable
     /// <para>사람이 눈으로 지킬 규칙이 아니다. <see cref="ColRatio"/>를 한 자리라도 고치면
     /// 짝이 깨질 수 있으므로 <b>그리는 쪽이 매번 물어보고 로그에 남긴다</b>.
     /// (<see cref="SpansValid"/>는 만들어 놓고 <b>아무 데서도 안 불렀다</b> — 같은 실수를 반복하지 않는다.)</para></summary>
+    /// <summary>★★★[검토 0907 · M-1] <b>옛 7칸 판을 위한 것이다 — 지금 도면은 안 쓴다.</b>
+    /// <para>단이 둘이 된 뒤로 도면은 <see cref="ColRatio"/>의 <b>0~3번만</b> 읽는다
+    /// (<c>QtyTableFold.ColRatioIndex</c>가 두 단 모두 <c>{0,1,2,3}</c>을 준다).
+    /// 4~6번(E·F·G)은 <b>한 곳에서도 안 쓰인다</b>.</para>
+    /// <para>그래서 <b>이 검사를 로그와 시험대에서 뺐다</b> — 맞는 도면에 "어긋남"이라 말할 수 있었다.
+    /// 지금 쓰는 검사는 <c>QtyTableFold.PanelsAligned</c>다.
+    /// 남겨 두는 이유는 하나 — 0~3번 값이 <b>옛 E·F·G와 같은 폭</b>이라는 내력을 적어 두기 위해서다.
+    /// 그 덕에 얼개를 통째로 바꾸고도 표 폭이 안 흔들렸다(§72).</para></summary>
     public static bool WidthsPaired(out string note)
     {
         double ab = ColRatio[0] + ColRatio[1], e = ColRatio[4];

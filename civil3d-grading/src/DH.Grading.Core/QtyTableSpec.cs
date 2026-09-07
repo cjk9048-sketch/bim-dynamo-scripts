@@ -182,6 +182,39 @@ public sealed class QtyTableSpec
     /// <summary>오른쪽 공종이 세부 칸까지 먹는가 — 세부가 없으면 두 칸이다(층 따 기·잡 석 부 설).</summary>
     public bool RightTakesTwo(int r) => r >= 0 && r < BodyRows && Right[r].Item != null && Right[r].Sub == null;
 
+    /// <summary>★[검토 0907 · L-3] <b>한 단 안의 칸 자리에 이름을 준다.</b>
+    /// <para>종전엔 <c>c0+1</c>·<c>c0+2</c>·<c>c0+3</c>이 그리는 쪽·검사·시험대 <b>세 곳에</b>
+    /// 손으로 적혀 있었다. 단 모양을 바꿀 때 한 곳만 고쳐지면 글자가 엉뚱한 칸에 앉는다.</para>
+    /// <para>공종 줄에서는 <see cref="ColItem"/>이 <b>세부</b> 자리로 쓰인다 — 재료와 세부가
+    /// 같은 칸을 나눠 쓰는 것이 두 단 얼개의 뼈대다(§72).</para></summary>
+    public const int ColGroup = 0, ColSub = 1, ColItem = 2, ColValue = 3;
+
+    /// <summary>★★★[JACK 0907 "2칸 카테고리로"] <b>한 단은 넉 칸이다</b> — 대분류·중분류·재료·값.
+    /// <para>왼쪽 대분류가 몇 칸을 먹느냐. 중분류가 없으면 두 칸(성토·절토·되메우기).</para></summary>
+    public int LeftColSpan(int r) => GroupTakesTwo(r) ? 2 : 1;
+
+    /// <summary>★★★[JACK 0907] <b>오른쪽 공종이 넉 칸 단에서 몇 칸을 먹느냐.</b>
+    /// <para>공종에는 중분류가 없으므로 <b>늘 두 칸</b>(대분류+중분류 자리)을 먹고,
+    /// 세부까지 없으면 <b>세 칸</b>이다(층 따 기·잡 석 부 설).</para>
+    /// <para>★<b>이 셈이 한 벌뿐이라야 한다.</b> 종전엔 그리는 쪽과 검사하는 쪽이
+    /// 각자 <c>RightTakesTwo(r) ? 2 : 1</c>을 적어 두었다 — 단 모양이 바뀌면
+    /// 한쪽만 고쳐져 <b>검사가 그리지 않는 표를 재게 된다</b>(§53에서 겪었다).</para></summary>
+    /// <param name="end">병합이 이 줄 <b>앞까지만</b> 미친다(단 경계).</param>
+    public int RightColSpan(int r, int end = -1)
+    {
+        if (!RightTakesTwo(r)) return 2;
+        // ★★★[검토 0907 · M-4] <b>세 칸 병합이 아랫줄의 세부를 삼키면 안 된다.</b>
+        //   세 칸(<c>c0..c0+2</c>)은 세부 자리(<c>c0+2</c>)를 덮는다. 지금 자료로는
+        //   세부 없는 공종(<c>층 따 기</c>·<c>잡 석 부 설</c>)이 <b>한 줄짜리</b>라 안 터지지만,
+        //   나중에 <c>새공종 / (빈칸)+성토부</c> 꼴이 하나만 들어와도 그리는 쪽이
+        //   <b>병합된 칸에 덮어써</b> 공종 이름이 세부로 바뀐다.
+        //   → 병합이 미치는 줄 중 <b>하나라도</b> 세부가 있으면 두 칸으로 물러선다.
+        int n = SpanRight(r, end);
+        for (int k = r; k < r + n && k < Right.Count; k++)
+            if (Right[k].Sub != null) return 2;
+        return 3;
+    }
+
     /// <summary>★★[JACK 0831] <b>병합이 서로 겹치지 않는가</b> — 검사가 이걸 물어야 한다.
     /// <para>겹치면 AutoCAD가 뒤 병합을 조용히 버리고 표가 찌그러진다.
     /// 칸마다 "누가 먹었나"를 칠해 보고 두 번 칠해지는 자리가 있으면 불합격이다.</para></summary>
@@ -209,17 +242,37 @@ public sealed class QtyTableSpec
             for (int i = 0; i < seg.Count; i++)
             {
                 int src = seg.From + i;
+                // ★★★[JACK 0907] <b>한 단 안에 수량 항목과 공종이 <u>이어서</u> 들어온다.</b>
+                //   종전엔 단 하나가 한 목록만 담아 <c>i</c>가 곧 줄 번호였다.
+                //   이제는 <c>seg.Row</c>가 그 조각이 <b>단의 몇째 줄부터</b> 시작하는지 말해 준다.
+                int row = seg.Row + i;
                 if (seg.Left)
                 {
                     int gs = SpanGroup(src, end);
-                    if (gs > 0 && !Paint(i, seg.Col, gs, GroupTakesTwo(src) ? 2 : 1, "대분류")) { why = bad; return false; }
+                    if (gs > 0 && !Paint(row, seg.Col, gs, LeftColSpan(src), "대분류")) { why = bad; return false; }
                     int ss = SpanSub(src, end);
-                    if (ss > 0 && !Paint(i, seg.Col + 1, ss, 1, "중분류")) { why = bad; return false; }
+                    if (ss > 0 && !Paint(row, seg.Col + 1, ss, 1, "중분류")) { why = bad; return false; }
                 }
                 else
                 {
                     int rs = SpanRight(src, end);
-                    if (rs > 0 && !Paint(i, seg.Col, rs, RightTakesTwo(src) ? 2 : 1, "공종")) { why = bad; return false; }
+                    if (rs > 0 && !Paint(row, seg.Col, rs, RightColSpan(src, end), "공종")) { why = bad; return false; }
+                }
+
+                // ★★★[검토 0907 · M-4] <b>글자가 들어가는 칸도 칠한다.</b>
+                //   종전엔 <b>병합만</b> 칠했다 — 그래서 "병합이 글자 칸을 삼켰다"를 못 잡았다.
+                //   AutoCAD는 병합된 칸에 덮어써도 <b>말없이</b> 앞 글자를 지운다.
+                //   그리는 쪽(<c>DrawQtyTables</c>)이 어느 칸에 쓰는지 <b>그대로</b> 옮겨 적는다 —
+                //   이 검사가 곧 그림이라야 뜻이 있다(§53).
+                if (seg.Left)
+                {
+                    if (Left[src].Item != null && !Paint(row, seg.Col + 2, 1, 1, "재료")) { why = bad; return false; }
+                    if (!IsFillerLeft(src) && !Paint(row, seg.Col + 3, 1, 1, "값")) { why = bad; return false; }
+                }
+                else
+                {
+                    if (Right[src].Sub != null && !Paint(row, seg.Col + 2, 1, 1, "세부")) { why = bad; return false; }
+                    if (!IsFillerRight(src) && !Paint(row, seg.Col + 3, 1, 1, "값")) { why = bad; return false; }
                 }
             }
         }
@@ -227,35 +280,11 @@ public sealed class QtyTableSpec
         return true;
     }
 
-    public bool MergesValid(out string why)
-    {
-        int rows = BodyRows, cols = 7;
-        var owner = new int[rows, cols];        // 0=빈칸, 그 외=주인 줄 번호+1
-        string bad = null;
-        bool Paint(int r0, int c0, int rs, int cs, string what)
-        {
-            for (int r = r0; r < r0 + rs; r++)
-                for (int c = c0; c < c0 + cs; c++)
-                {
-                    if (r >= rows || c >= cols) { bad = $"{what}({r0}줄)이 표 밖으로 나간다"; return false; }
-                    if (owner[r, c] != 0)
-                    { bad = $"{what}({r0}줄)이 {owner[r, c] - 1}줄 것과 겹친다 — {r}줄 {c}칸"; return false; }
-                    owner[r, c] = r0 + 1;
-                }
-            return true;
-        }
-        for (int r = 0; r < rows; r++)
-        {
-            int gs = SpanGroup(r);
-            if (gs > 0 && !Paint(r, 0, gs, GroupTakesTwo(r) ? 2 : 1, "대분류")) { why = bad; return false; }
-            int ss = SpanSub(r);
-            if (ss > 0 && !Paint(r, 1, ss, 1, "중분류")) { why = bad; return false; }
-            int rs = SpanRight(r);
-            if (rs > 0 && !Paint(r, 4, rs, RightTakesTwo(r) ? 2 : 1, "공종")) { why = bad; return false; }
-        }
-        why = "";
-        return true;
-    }
+    // ★★★[검토 0907 · M-2] <b>옛 7칸 판 검사를 지웠다.</b>
+    //   접지 않은 7칸 얼개는 이제 <b>아무도 그리지 않는다</b>(단은 늘 둘, 8칸).
+    //   그런데 그 검사가 시험대 세 곳에서 통과 도장을 찍고 있었고,
+    //   <c>RightTakesTwo(r) ? 2 : 1</c>을 <b>제 손으로 다시 적어</b> 두 번째 벌이 됐다 —
+    //   칸 셈을 한 곳으로 모은 이번 작업의 취지가 바로 거기서 새고 있었다(§53·§57·§72).
 
     /// <summary>★★★[JACK 0831] <b>실제로 값이 나온 조합만</b> 줄을 세운다 — 이것이 정본이다.
     ///
@@ -421,31 +450,50 @@ public sealed class QtyTableSpec
     }
 }
 
-/// <summary>★★★[JACK 0831 "표를 좀 어떻게 하면 모든 상황에 대처해서 최대한 빈 셀이 없게 쓸 수 있지?"]
-/// <b>긴 쪽을 두 단으로 접는다.</b>
+/// <summary>★★★[JACK 0831 "표를 좀 어떻게 하면 모든 상황에 대처해서 최대한 빈 셀이 없게 쓸 수 있지?"
+/// · JACK 0907 "2칸 카테고리로 나와야 해 · 마지막 카테고리에만 공백이 생겨야 해"]
+/// <b>표를 두 단으로 세우고, 내용을 <u>이어서</u> 흘린다.</b>
 ///
-/// <para><b>왜 빈칸이 생기나.</b> 왼쪽(수량 항목)은 <b>지층</b>이 정하고 오른쪽(공종)은 거의 고정이다.
-/// 왼쪽 4~28줄 · 오른쪽 10~14줄이라 어느 쪽이 길어질지도 현장마다 다르다 —
-/// 표는 직사각형이라야 하므로 짧은 쪽에 <b>빈 줄</b>이 남는다.</para>
+/// <para><b>종전은 무엇이 문제였나.</b> 왼쪽(수량 항목)과 오른쪽(공종)을 <b>따로</b> 세워 놓고
+/// 긴 쪽만 접었다. 그러면 단이 <b>셋</b>이 되고(JACK 스샷: 성토·벌개재근·면고르기가 한 줄),
+/// 짧은 단마다 <b>제 아래에 빈칸</b>이 생겼다 — 1단 밑에도 2단 밑에도 구멍이 났다.</para>
 ///
-/// <para><b>접으면 두 가지가 같이 좋아진다.</b> 왼쪽 28 · 오른쪽 14면
-/// 왼쪽을 14+14 두 단으로 나눠 <b>빈칸이 0</b>이 되고, <b>표 높이도 절반</b>이라 축척이 살아난다.</para>
+/// <para><b>새 규칙.</b> 수량 항목과 공종을 <b>한 줄기</b>로 잇는다(항목이 먼저, 공종이 뒤).
+/// 그 줄기를 <b>두 단</b>에만 나눠 담되, <b>1단을 꽉 채우고</b> 남는 것을 2단에 붓는다.
+/// 그래서 빈칸은 <b>마지막 단 아래</b>에만 생긴다.</para>
+///
+/// <code>
+/// ┌───────────────────────┬───────────────────────┐
+/// │ 성    토 │토 사│ –    │ 면고르기 │성토부│ –   │
+/// │ 절    토 │토 사│ –    │          │절토부│ –   │
+/// │ 되메우기 │구조물│ –   │ 식생공법 │성토부│ –   │
+/// │          │주  위│ –   │          │절토부│ –   │
+/// │ 벌개재근 │성토부│ –   │ 층  따  기      │ –   │
+/// │          │절토부│ –   │ 잡 석 부 설     │ –   │
+/// │ 표토제거 │성토부│ –   │                 │     │← 빈칸은 여기만
+/// │          │절토부│ –   │                 │     │
+/// └───────────────────────┴───────────────────────┘
+/// </code>
 ///
 /// <para><b>끊는 자리는 블록 경계다.</b> 줄 수로 반 나누면 <c>터파기 (용수)</c> 한가운데가 잘려
 /// 대분류·중분류 병합이 두 단에 걸친다 — 읽기도 나쁘고 병합도 못 한다.
-/// 그래서 <b>대분류가 새로 시작하는 자리</b>에서만 끊고, 그중 가장 고른 곳을 고른다.</para>
+/// 그래서 <b>대분류(또는 공종)가 새로 시작하는 자리</b>에서만 끊는다.</para>
 ///
-/// <para>경우의 수는 많지만 <b>세지 않는다</b> — 줄 수 두 개와 경계 목록으로 <b>산수</b>를 한다.</para></summary>
+/// <para><b>한 단은 넉 칸이다</b> — 대분류·중분류·재료·값. 공종 줄은 중분류가 없으므로
+/// 앞 두 칸을 합쳐 쓴다. 좌우 짝 폭이 이미 같게 맞춰져 있어(<c>A+B=E · C=F · D=G</c>)
+/// 두 단의 세로선이 <b>저절로</b> 나란해진다 — 그 규칙이 여기서 비로소 쓸모를 낸다.</para></summary>
 public sealed class QtyTableFold
 {
-    /// <summary>단 하나 — 어느 목록(<paramref name="Left"/>)의 <paramref name="From"/>부터
-    /// <paramref name="Count"/>줄을 <paramref name="Col"/> 칸부터 그린다.</summary>
-    public readonly record struct Seg(bool Left, int From, int Count, int Col);
+    /// <summary>단 하나의 조각 — 어느 목록(<paramref name="Left"/>)의 <paramref name="From"/>부터
+    /// <paramref name="Count"/>줄을, <paramref name="Col"/> 칸 <paramref name="Row"/>줄부터 그린다.</summary>
+    /// <param name="Row">★[JACK 0907] <b>단 안에서 몇째 줄부터인가</b>(0이 첫 줄).
+    /// 한 단에 수량 항목과 공종이 <b>잇달아</b> 들어오므로 이 값이 있어야 한다.</param>
+    public readonly record struct Seg(bool Left, int From, int Count, int Col, int Row);
 
     /// <summary>본문 줄 수(머리줄 제외).</summary>
     public int BodyRows { get; }
 
-    /// <summary>전체 칸 수 — 안 접으면 7, 왼쪽을 접으면 11, 오른쪽을 접으면 10.</summary>
+    /// <summary>전체 칸 수 — 두 단이면 8, 끊을 자리가 없어 한 단이면 4.</summary>
     public int Cols { get; }
 
     public IReadOnlyList<Seg> Segs { get; }
@@ -453,84 +501,132 @@ public sealed class QtyTableFold
     /// <summary>각 칸이 <b>원래 어느 칸의 폭</b>을 쓰나 — <c>QuantityTable.ColRatio</c>의 순번.</summary>
     public IReadOnlyList<int> ColRatioIndex { get; }
 
-    /// <summary>왜 이렇게 접었나 — 로그에 그대로 쓴다.</summary>
+    /// <summary>왜 이렇게 나눴나 — 로그에 그대로 쓴다.</summary>
     public string Note { get; }
 
+    /// <summary>★[JACK 0907] <b>빈칸이 마지막 단에만 있는가.</b> 그리는 쪽이 로그에 남긴다 —
+    /// 블록이 너무 커서 못 지킨 판이 있으면 <b>말없이 넘어가지 않는다</b>.</summary>
+    public bool TailOnlyGap { get; }
+
     private QtyTableFold(int bodyRows, int cols, IReadOnlyList<Seg> segs,
-                         IReadOnlyList<int> ratioIx, string note)
-    { BodyRows = bodyRows; Cols = cols; Segs = segs; ColRatioIndex = ratioIx; Note = note; }
+                         IReadOnlyList<int> ratioIx, string note, bool tailOnly)
+    { BodyRows = bodyRows; Cols = cols; Segs = segs; ColRatioIndex = ratioIx; Note = note; TailOnlyGap = tailOnly; }
 
-    /// <summary>왼쪽 한 단(4칸) 폭 순번.</summary>
-    private static readonly int[] LeftCols = { 0, 1, 2, 3 };
-    /// <summary>오른쪽 한 단(3칸) 폭 순번.</summary>
-    private static readonly int[] RightCols = { 4, 5, 6 };
+    /// <summary>한 단(4칸)이 쓰는 폭 순번 — 대분류·중분류·재료·값.</summary>
+    private static readonly int[] PanelCols = { 0, 1, 2, 3 };
 
-    /// <summary>★ 접을지 말지 정한다.
-    /// <param name="gapMax">빈 줄이 이만큼 이하면 <b>접지 않는다</b> — 두세 줄 때문에 표를 넓히는 것은 손해다.</param></summary>
-    public static QtyTableFold Make(QtyTableSpec spec, int gapMax = 4)
+    /// <summary>★[JACK 0907] 단 수는 <b>둘</b>이다. 셋이 되면 한 줄에 카테고리가 셋 나온다.</summary>
+    public const int Panels = 2;
+
+    /// <summary>한 단이 몇 칸인가.</summary>
+    public const int PanelWidth = 4;
+
+    /// <summary>★ 두 단으로 나눈다.</summary>
+    public static QtyTableFold Make(QtyTableSpec spec)
     {
         int L = ContentRows(spec, true), R = ContentRows(spec, false);
+        int N = L + R;
         var segs = new List<Seg>();
-        var ix = new List<int>();
 
-        // ── 안 접는다 — 차이가 작으면 넓히는 손해가 더 크다.
-        if (System.Math.Abs(L - R) <= gapMax)
+        if (spec == null || N <= 0)
+            return new QtyTableFold(1, PanelWidth, segs, new List<int>(PanelCols), "표가 비었다", true);
+
+        // ── 끊을 수 있는 자리 — <b>블록이 시작하는 줄</b>만.
+        //   왼쪽은 대분류가 새로 서는 줄, 오른쪽은 공종이 새로 서는 줄,
+        //   그리고 수량 항목에서 공종으로 넘어가는 자리(<c>L</c>)다.
+        var cuts = new List<int>();
+        for (int r = 1; r < L; r++) if (spec.Left[r].Group != null) cuts.Add(r);
+        if (L > 0 && R > 0) cuts.Add(L);
+        for (int r = 1; r < R; r++) if (spec.Right[r].Item != null) cuts.Add(L + r);
+
+        // ── ★★★[JACK 0907] <b>빈칸이 마지막 단에만 생기게</b> 고른다.
+        //   1단이 2단보다 <b>길거나 같아야</b> 그렇게 된다(<c>k >= N-k</c>).
+        //   그 조건을 지키는 것 중 <b>가장 작은</b> k가 표를 제일 낮게 만든다.
+        //   ★[검토 0907] <b>"조건을 지키는 것들 안에서" 최소다.</b> 조건을 어기면 한 줄 더 낮은
+        //   판이 있을 수 있다 — 무작위 3,000판 중 25%가 그렇고, 손해는 <b>언제나 딱 한 줄</b>(7.4mm)이다.
+        //   그 한 줄이 JACK 규칙의 값이다. 실무에서 큰 판(3~5층·깊음·용수)은 <b>하나도 안 어긋난다</b>.
+        int cut = -1;
+        foreach (int k in cuts)
+            if (k >= N - k) { cut = k; break; }      // cuts는 오름차순이라 첫 번째가 가장 작다
+
+        bool tailOnly = cut > 0;
+        if (!tailOnly)
         {
-            int rows = System.Math.Max(System.Math.Max(L, R), 1);
-            segs.Add(new Seg(true, 0, L, 0));
-            segs.Add(new Seg(false, 0, R, 4));
-            ix.AddRange(LeftCols); ix.AddRange(RightCols);
-            return new QtyTableFold(rows, 7, segs, ix,
-                $"안 접음(왼쪽 {L} · 오른쪽 {R} · 빈 {System.Math.Abs(L - R)}줄)");
+            // ★[검토 0907 · L-1] <b>지금 자료로는 여기 안 온다.</b> <c>cuts</c>의 마지막은 늘 <c>N-1</c>이고
+            //   (맨 끝 공종 <c>잡 석 부 설</c>은 언제나 <c>Item != null</c>), <c>N >= 2</c>면
+            //   <c>N-1 >= N-(N-1)</c>이라 조건을 만족하는 k가 <b>반드시</b> 있다(전수 3,020판 확인).
+            //   그래도 남긴다 — 공종 목록을 손대면 그 전제가 깨질 수 있고,
+            //   그때 <b>말없이 이상한 표</b>가 나오는 것보다 로그에 걸리는 편이 낫다.
+            // 지킬 수 없는 판 — 마지막 블록이 표의 절반보다 크다.
+            // 그래도 표는 서야 하므로 <b>가장 고르게</b> 나누고, 못 지켰다고 말한다.
+            int bestBad = int.MaxValue;
+            foreach (int k in cuts)
+            {
+                int bad = System.Math.Max(k, N - k);
+                if (bad < bestBad) { bestBad = bad; cut = k; }
+            }
         }
 
-        // ── 긴 쪽을 두 단으로.
-        bool foldLeft = L > R;
-        int len = foldLeft ? L : R;
-        int cut = BestCut(spec, foldLeft, len);
-        int a = cut, b = len - cut;
-        int rows2 = System.Math.Max(System.Math.Max(a, b), foldLeft ? R : L);
-        if (rows2 < 1) rows2 = 1;
-
-        if (foldLeft)
+        if (cut <= 0 || cut >= N)
         {
-            segs.Add(new Seg(true, 0, a, 0));
-            segs.Add(new Seg(true, cut, b, 4));
-            segs.Add(new Seg(false, 0, R, 8));
-            ix.AddRange(LeftCols); ix.AddRange(LeftCols); ix.AddRange(RightCols);
-            return new QtyTableFold(rows2, 11, segs, ix,
-                $"왼쪽을 {a}+{b}로 접음(오른쪽 {R}) — {rows2}줄 · 빈 {rows2 * 2 - L + rows2 - R}칸분");
+            // 끊을 자리가 하나도 없다(있을 수 없지만) — 한 단으로 세운다.
+            Emit(segs, L, 0, N, 0);
+            return new QtyTableFold(N, PanelWidth, segs, new List<int>(PanelCols),
+                                    $"끊을 자리가 없어 한 단({N}줄)", true);
         }
-        segs.Add(new Seg(true, 0, L, 0));
-        segs.Add(new Seg(false, 0, a, 4));
-        segs.Add(new Seg(false, cut, b, 7));
-        ix.AddRange(LeftCols); ix.AddRange(RightCols); ix.AddRange(RightCols);
-        return new QtyTableFold(rows2, 10, segs, ix,
-            $"오른쪽을 {a}+{b}로 접음(왼쪽 {L}) — {rows2}줄");
+
+        int rows = System.Math.Max(cut, N - cut);
+        Emit(segs, L, 0, cut, 0);
+        Emit(segs, L, cut, N - cut, PanelWidth);
+
+        var ix = new List<int>(); ix.AddRange(PanelCols); ix.AddRange(PanelCols);
+        int gap1 = rows - cut, gap2 = rows - (N - cut);
+        string note = $"두 단 — 1단 {cut}줄 · 2단 {N - cut}줄 · {rows}줄 {PanelWidth * Panels}칸"
+                    + $" · 빈칸 1단 {gap1} · 2단 {gap2}"
+                    + (tailOnly ? "" : " ⚠마지막 단에만 못 몰았다(막 블록이 너무 크다)");
+        return new QtyTableFold(rows, PanelWidth * Panels, segs, ix, note, tailOnly && gap1 == 0);
+    }
+
+    /// <summary>줄기의 <paramref name="from"/>부터 <paramref name="count"/>줄을 <paramref name="col"/> 단에 붓는다.
+    /// <para>줄기는 <b>수량 항목 <paramref name="L"/>줄 + 공종</b>으로 이어져 있으므로,
+    /// 한 단이 두 목록에 걸치면 조각이 <b>둘</b>로 나온다.</para></summary>
+    private static void Emit(List<Seg> segs, int L, int from, int count, int col)
+    {
+        if (count <= 0) return;
+        int end = from + count, row = 0;
+        int lEnd = System.Math.Min(end, L);
+        if (from < lEnd) { segs.Add(new Seg(true, from, lEnd - from, col, 0)); row = lEnd - from; }
+        int rFrom = System.Math.Max(from, L) - L, rEnd = end - L;
+        if (rEnd > rFrom) segs.Add(new Seg(false, rFrom, rEnd - rFrom, col, row));
+    }
+
+    /// <summary>★★★[검토 0907 · M-1] <b>두 단의 칸 폭이 나란한가</b> — 그리는 것을 재는 검사.
+    /// <para>종전엔 <c>QuantityTable.WidthsPaired</c>(A+B=E · C=F · D=G)를 물어 로그에 찍었는데,
+    /// 두 단이 된 뒤로 <c>ColRatio[4..6]</c>(E·F·G)은 <b>어디서도 안 쓰인다</b> —
+    /// 맞는 도면에 "어긋남"이라 말하고, 틀린 도면에 "맞음"이라 말할 수 있었다(§53의 되풀이).</para>
+    /// <para>지금 재는 것: 두 단이 <b>같은 폭 순번</b>을 쓰는가. 어긋나면 가운데 세로선이 안 맞는다.</para></summary>
+    public bool PanelsAligned(out string note)
+    {
+        if (Cols == PanelWidth) { note = $"한 단({PanelWidth}칸)"; return true; }
+        if (Cols != PanelWidth * Panels) { note = $"칸이 {Cols}개다(두 단이면 {PanelWidth * Panels}칸)"; return false; }
+        for (int c = 0; c < PanelWidth; c++)
+            if (ColRatioIndex[c] != ColRatioIndex[c + PanelWidth])
+            {
+                note = $"{c}칸 폭이 두 단에서 다르다(순번 {ColRatioIndex[c]} ↔ {ColRatioIndex[c + PanelWidth]})";
+                return false;
+            }
+        note = $"두 단 폭이 같다(순번 {string.Join(",", ColRatioIndex)})";
+        return true;
     }
 
     /// <summary>채움 줄을 뺀 <b>실제 내용</b> 줄 수.</summary>
     private static int ContentRows(QtyTableSpec spec, bool left)
     {
+        if (spec == null) return 0;
         int last = -1;
         for (int r = 0; r < spec.BodyRows; r++)
             if (!(left ? spec.IsFillerLeft(r) : spec.IsFillerRight(r))) last = r;
         return last + 1;
-    }
-
-    /// <summary>가장 고르게 나뉘는 <b>블록 경계</b>를 고른다.
-    /// <para>경계가 하나도 없으면(있을 수 없지만) 절반에서 끊는다 — 그래도 표는 서야 한다.</para></summary>
-    private static int BestCut(QtyTableSpec spec, bool left, int len)
-    {
-        int best = -1, bestBad = int.MaxValue;
-        for (int r = 1; r < len; r++)
-        {
-            bool boundary = left ? spec.Left[r].Group != null : spec.Right[r].Item != null;
-            if (!boundary) continue;
-            int bad = System.Math.Max(r, len - r);          // 두 단 중 <b>긴 쪽</b>이 표 높이를 정한다
-            if (bad < bestBad) { bestBad = bad; best = r; }
-        }
-        return best > 0 ? best : (len + 1) / 2;
     }
 }
 
