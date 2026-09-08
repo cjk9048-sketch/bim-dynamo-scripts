@@ -892,7 +892,11 @@ public sealed class ProfileCommand
 
             // ★[v32.45] 축척이 정해진 <b>뒤에</b> 검토선을 꾸민다 — 글씨가 종단 밴드와 같은 크기가 되려면
             //   도면 축척을 알아야 한다(설명은 DecorateSampleLines).
-            DecorateSampleLines(db, cdoc, alignId, bandIv, GradingSettings.XsecLeft, GradingSettings.XsecRight, log);
+            // ★[JACK 0908] 꾸미기도 같은 자를 쓴다 — 검토선을 만든 폭과 어긋나면 안 된다.
+            {
+                var (dwl, dwr) = XsecWidth.Resolve(db, alignId, log);
+                DecorateSampleLines(db, cdoc, alignId, bandIv, dwl, dwr, log);
+            }
             log.AppendLine("도곽: " + sheet);
             ed.WriteMessage("\n  · 도곽: " + sheet);
 
@@ -1625,8 +1629,10 @@ public sealed class ProfileCommand
         allMarks = new System.Collections.Generic.List<StationMarks.Mark>();
         try
         {
-            double wl = System.Math.Max(1.0, GradingSettings.XsecLeft);
-            double wr = System.Math.Max(1.0, GradingSettings.XsecRight);
+            // ★[JACK 0908] 폭은 <see cref="XsecWidth"/> 한 자에서만 나온다(§50).
+            var (wl0, wr0) = XsecWidth.Resolve(db, alignId, log);
+            double wl = System.Math.Max(1.0, wl0);
+            double wr = System.Math.Max(1.0, wr0);
             var marks = new System.Collections.Generic.List<StationMarks.Mark>();
             var vbars = new System.Collections.Generic.List<StationMarks.VertBar>();   // 벽의 자리·두께
             var wspans = new System.Collections.Generic.List<StationMarks.WallSpan>(); // 벽의 앞·뒤(횡단 (전)(후))

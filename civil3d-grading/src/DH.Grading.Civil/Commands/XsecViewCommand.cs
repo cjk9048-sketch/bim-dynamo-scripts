@@ -737,7 +737,19 @@ public sealed class XsecViewCommand
         X9("수량표 끝 — 단면 스타일");
         ApplySectionStyles(db, cdoc, slIds, kindOf, log);
         X9("지층 이름");
-        DrawStrataNames(db, viewIds, kindOf, alignId, wl, wr, scale, log);   // ★[JACK 0828] 지층·지하수위 이름
+        // ★★★[JACK 0908 "층 지시선과 문자가 왼쪽 밖으로 넘어가 · 도곽 쓰는 영역을 넘어가서 작성되고 있어"]
+        //   <b>칸의 왼쪽 한계를 알려 준다.</b>
+        //   지시선은 지층선 왼쪽 끝에서 <b>바깥으로</b> 뻗는데(JACK 0908 확정),
+        //   지층면이 절단선 온 폭을 덮으면 그 끝이 곧 그래프 왼쪽 변이라 <b>칸을 넘는다</b>.
+        //   ★그리는 함수는 <b>칸을 모른다</b> — 뷰 경계상자만 안다. 그래서 여기서 넘겨 준다.
+        //   (0907에 이것을 뷰 경계로 재려다 42개 뷰가 전부 엉뚱하게 돌아갔다 — 자를 잘못 댄 것이다.)
+        var leftLim = new System.Collections.Generic.Dictionary<ObjectId, double>();
+        {
+            double padM2 = CellPadMm * sc;
+            for (int i = 0; i < viewIds.Count && i < cellAt.Count; i++)
+                leftLim[viewIds[i].Id] = cellAt[i].X + padM2;
+        }
+        DrawStrataNames(db, viewIds, kindOf, alignId, wl, wr, scale, leftLim, log);   // ★[JACK 0828] 지층·지하수위 이름
         X9("밴드 묶기");
         BindBandSections(db, viewIds, kindOf, scale, annoScale, log);
         X9("측점 밴드");
@@ -798,17 +810,30 @@ public sealed class XsecViewCommand
     /// 수량 계산에는 못 쓰는 성질이지만, <b>글씨를 놓는 데는 바로 그것이 필요하다.</b></para>
     ///
     /// <para><b>뷰 밖은 버린다.</b> 지층면이 절단선보다 좁으면 좌표가 격자 밖으로 나갈 수 있어
-    /// 옆 칸 도면을 침범한다 → 뷰 외곽선 안에 드는 점만 쓰고, 버린 수를 로그에 남긴다.</para></summary>
+    /// 옆 칸 도면을 침범한다 → 뷰 외곽선 안에 드는 점만 쓰고, 버린 수를 로그에 남긴다.</para>
+    ///
+    /// <para>★[검토 0907] <b>그 말은 이제 <u>닻</u>에만 해당한다.</b> 0907부터 이름표에 지시선이 붙어
+    /// 글씨는 닻에서 <b>지시선+글씨폭</b>만큼 옆으로, 겹치면 <b>세로로도</b> 밀려 난다 —
+    /// 그 자리는 뷰 밖일 수 있다. 그래서 밀어낸 <b>뒤에</b> 가로·세로를 다시 재고,
+    /// 자리가 없으면 방향을 돌리거나(오른쪽) 덩어리째 내리고, 그래도 모자라면 <b>말한다</b>.</para></summary>
     private static int DrawStrataNames(Database db,
         System.Collections.Generic.List<(ObjectId Id, double St, string Name)> views,
         System.Collections.Generic.Dictionary<ObjectId, string> kindOf,
         ObjectId alignId, double wl, double wr,
-        double scale, System.Text.StringBuilder log)
+        double scale,
+        System.Collections.Generic.Dictionary<ObjectId, double> leftLim,
+        System.Text.StringBuilder log)
     {
         if (views == null || views.Count == 0 || kindOf == null) return 0;
         double txtH = StrataNameMm / 1000.0 * scale;
-        double gap = txtH * 0.4;
-        int n = 0, noZ = 0, noXY = 0;
+        // ★[JACK 0907] 자는 단면검토선 쪽(<c>ProfileCommand</c>)과 <b>같은 비율</b>이다 —
+        //   같은 도면에서 두 지시선이 다르게 생기면 눈에 거슬린다.
+        double gap0 = txtH * 0.6;                                   // 선 끝에서 지시선 시작까지
+        double La = txtH * 0.8, Lb = txtH * 1.4, Lc = txtH * 0.6;   // 세 도막(합이 늘 같다)
+        double gapT = txtH * 0.5;                                   // 지시선 끝에서 글씨까지
+        double minGap = txtH * 1.25;                                // 글씨끼리 이만큼은 떨어진다
+        int n = 0, noZ = 0, noXY = 0, nLead = 0, nBent = 0, nPushed = 0, nSpill = 0;
+        int nShrunk = 0, nTight = 0;   // 칸에 맞춰 당긴 뷰 · 자리가 모자라 바짝 붙인 뷰
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
@@ -832,6 +857,8 @@ public sealed class XsecViewCommand
                     if (tr.GetObject(vid, OpenMode.ForRead) is not CivilDb.SectionView sv) continue;
                     if (tr.GetObject(sv.SampleLineId, OpenMode.ForRead) is not CivilDb.SampleLine ln) continue;
                     double st = ln.Station;
+                    // 이 뷰의 이름표를 <b>모아 두었다가</b> 한꺼번에 벌린다 — 하나씩 그리면 서로를 모른다.
+                    var picks = new System.Collections.Generic.List<(string Name, double X, double Y, short Aci, bool Water)>();
 
                     foreach (ObjectId secId in ln.GetSectionIds())
                     {
@@ -869,22 +896,172 @@ public sealed class XsecViewCommand
                             //   <b>검증된 길</b>이다 — 뷰가 어디 놓였든 축척이 얼마든 맞는다.
                             double tx = 0, ty = 0;
                             if (!sv.FindXYAtOffsetAndElevation(useOff, useZ, ref tx, ref ty)) { noXY++; continue; }
+                            picks.Add((nm, tx, ty, water ? (short)5 : AciOfName(ts.Name), water));
+                        }
+                        catch { }
+                    }
+
+                    // ── ★★★[JACK 0907 "평면뷰에서 단면검토선에 측점을 지시선을 이용해서 겹치지 않게
+                    //   문자높이를 벌려가면서 표현했잖아? 이것처럼 횡단뷰에서도 지층색과 같은 직선 지시선과
+                    //   지층이름을 넣어주고 축척 때문에 문자가 겹치면 단면검토선 때처럼 처리해줘"]
+                    //
+                    //   <b>단면검토선(<see cref="ProfileCommand"/>의 검토선 꾸미기)과 같은 셈을 쓴다.</b>
+                    //   ① <b>지시선을 전부에게</b> 그린다 — 겹친 것에만 달면 글씨 시작 자리가
+                    //      제각각이 되어 "들쑥날쑥"해진다(JACK 0819에 이미 겪은 것).
+                    //   ② 선 방향 길이(<c>La+Lb+Lc</c>)를 <b>모두 같게</b> 두고, 밀어낼 일이 있으면
+                    //      그 <b>안에서 사선</b>으로 처리한다 — 그래야 글씨가 한 줄로 선다.
+                    //   ③ 미는 방향은 <b>세로</b>다(지층은 위아래로 쌓이므로).
+                    //
+                    //   ★자를 그쪽과 같은 비율로 둔다 — 두 도면이 같아 보여야 한다.
+                    // ── ★★★[JACK 0907 · 검토 0907 B-2] <b>밀어낸 뒤 뷰 안인지 다시 본다.</b>
+                    //   그리디는 <b>위로만</b> 민다. 이름표가 아홉이면(층 8 + 지하수위) 최악에
+                    //   맨 위가 <c>8 × minGap</c>만큼 떠올라 <b>그림틀 위로 나간다</b>.
+                    //   → 넘치면 <b>덩어리째 내린다</b>. 그래도 안 들어가면 <b>말한다</b>(조용히 넘기지 않는다).
+                    // 세로 한계는 <b>뷰</b>에서, 가로 한계는 <b>칸</b>에서 온다(<c>leftLim</c>) —
+                    //   세로는 그래프 안에 있어야 하고, 가로는 그래프 밖으로 나가되 칸은 안 넘어야 한다.
+                    double vTop = double.NaN, vBot = double.NaN;
+                    try
+                    {
+                        var ext = ((Entity)sv).GeometricExtents;
+                        vTop = ext.MaxPoint.Y; vBot = ext.MinPoint.Y;
+                    }
+                    catch { }
+
+                    // ★★★[검토 0907 · B-2 가로] <b>왼쪽에 자리가 없으면 오른쪽으로 뺀다.</b>
+                    //   JACK은 왼쪽(그림 밖)을 고르셨지만, 지층면이 절단선 <b>온 폭을 덮으면</b>
+                    //   그 왼쪽 끝이 곧 그래프 왼쪽 변이라 지시선이 <b>칸 밖으로</b> 나간다
+                    //   (지시선 7.02mm > 칸 여백 4mm — 옆 칸을 침범한다).
+                    //   → 그 뷰만 통째로 오른쪽으로 돌린다. <b>한 뷰 안에서는 방향이 하나</b>라야
+                    //   글씨가 한 줄로 서는 성질이 안 깨진다.
+                    // ★★★[JACK 0908 "방향이 반대로 생겼어 — 그래프쪽으로 들어오지 말고
+                    //   바깥으로 나가게 해줘 단면검토선처럼"] <b>언제나 바깥(왼쪽)으로.</b>
+                    //
+                    //   0907에 "왼쪽에 자리가 없으면 오른쪽으로 돌린다"를 넣었는데 <b>자를 잘못 댔다</b> —
+                    //   자리를 <b>뷰</b>에 대고 쟀다. 그런데 이름표의 닻은 <b>지층선의 왼쪽 끝</b>이고,
+                    //   지층면이 절단선 온 폭을 덮으면 그 끝이 곧 그래프 왼쪽 변이다.
+                    //   그러니 남는 자리가 0으로 나와 <b>42개 뷰가 전부</b> 오른쪽으로 돌아갔다 —
+                    //   막으려던 바로 그것(그림 속으로 들어가기)을 <b>전부</b>에 대해 해 버렸다.
+                    //
+                    //   ★재려면 <b>칸</b>에 남는 자리를 봐야 하는데 이 함수는 칸을 모른다.
+                    //   그리고 본보기(단면검토선)는 <b>그런 검사를 아예 안 한다</b> —
+                    //   선이 끝난 자리에서 그냥 나아간다. 같은 규칙을 쓴다.
+                    //   대신 <b>얼마나 나갔는지</b>를 로그에 남겨, 넘치면 눈이 아니라 숫자로 알게 한다.
+                    double wideName = 0;
+                    foreach (var pk0 in picks)
+                        wideName = System.Math.Max(wideName, (pk0.Name ?? "").Length * txtH * 0.95);
+
+                    // ★★★[JACK 0908] <b>칸을 넘지 않게 줄인다.</b>
+                    //   자리가 모자라면 지시선을 <b>같은 비율로</b> 줄인다 — 한 뷰 안에서 길이가 같아야
+                    //   글씨 시작이 한 줄로 서는 성질이 안 깨진다(본보기가 그렇게 하는 이유다).
+                    //   글씨조차 못 들어가면 그때만 <b>오른쪽(그림 속)</b>으로 돌린다 —
+                    //   도곽 밖으로 나가는 것보다는 낫다. 그 수를 세어 로그에 적는다.
+                    // ── ★★★[JACK 0908 "지시선이 있으니깐 상관없지 않아?"] <b>글씨를 한 줄로 세운다.</b>
+                    //
+                    //   종전엔 지시선 길이를 모두 같게 두어, 이름표가 <b>제 층이 시작하는 자리마다</b>
+                    //   따로 섰다. 지층면은 보링공을 둘러싼 사각형이라 절단선보다 좁을 수 있고,
+                    //   그러면 그 층은 <b>그래프 안쪽에서</b> 시작해 이름표도 안쪽에 붙는다 —
+                    //   단면마다 자리가 달라 들쭉날쭉해 보인다(JACK이 본 그것).
+                    //
+                    //   ★내가 <i>"한 줄로 세우면 지층이 없는 자리를 가리킨다"</i>고 걱정했는데
+                    //   JACK이 바로잡았다 — <b>지시선이 어디를 가리키는지 말해 준다</b>.
+                    //   그러니 <b>글씨는 한 줄</b>로 세우고 <b>지시선 끝만</b> 제 층에 두면 된다.
+                    //   그것이 지시선을 쓰는 이유이기도 하다.
+                    //
+                    //   → 이름표 오른쪽 끝을 뷰마다 <c>colX</c> 하나로 맞춘다.
+                    //     지시선은 층에서 출발해 그 줄까지 <b>길이가 저마다 다르게</b> 뻗는다.
+                    double minA = double.MaxValue;
+                    foreach (var pk0 in picks) minA = System.Math.Min(minA, pk0.X);
+                    double colX = minA - (gap0 + La + Lb + Lc + gapT);   // 글씨 오른쪽 끝이 설 자리
+
+                    // 칸을 넘으면 그만큼 안쪽으로 당긴다 — 도곽 밖으로 나가지 않게(JACK 0908).
+                    if (leftLim != null && leftLim.TryGetValue(vid, out double limX))
+                    {
+                        double want = limX + wideName;                   // 글씨 폭까지 칸 안에
+                        if (colX < want) { colX = want; nShrunk++; }
+                        // 그래도 층보다 오른쪽이면 자리가 아예 없다 — 층 왼쪽에 바짝 붙인다.
+                        if (colX > minA - gap0) { colX = minA - gap0; nTight++; }
+                    }
+
+                    // ★[검토 0907] <c>List.Sort</c>는 <b>안정 정렬이 아니다</b> — 두께 0으로 겹쳐
+                    //   Y가 똑같은 이름표들의 차례가 판마다 뒤집혀, 같은 도면을 다시 뽑으면 순서가 달라진다.
+                    //   이름을 두 번째 자로 대면 <b>언제나 같은 그림</b>이 나온다.
+                    picks.Sort((p, q) =>
+                    {
+                        int c = p.Y.CompareTo(q.Y);
+                        return c != 0 ? c : string.CompareOrdinal(p.Name ?? "", q.Name ?? "");
+                    });
+                    var slot = new double[picks.Count];
+                    {
+                        double prevY = double.NegativeInfinity;
+                        for (int pi = 0; pi < picks.Count; pi++)
+                        {
+                            double want = System.Math.Max(picks[pi].Y, prevY + minGap);
+                            slot[pi] = want; prevY = want;
+                        }
+                        // 넘친 만큼 덩어리째 내린다 — 서로 간격은 그대로 유지된다.
+                        if (!double.IsNaN(vTop) && picks.Count > 0)
+                        {
+                            double over = slot[picks.Count - 1] - (vTop - txtH * 0.5);
+                            if (over > 0)
+                            {
+                                double room = !double.IsNaN(vBot) ? slot[0] - over - (vBot + txtH * 0.5) : 0;
+                                double drop = room >= 0 ? over : System.Math.Max(0, over + room);
+                                for (int pi = 0; pi < slot.Length; pi++) slot[pi] -= drop;
+                                nPushed++;
+                                if (drop < over - 1e-9) nSpill++;   // 다 못 내렸다 — 칸이 모자란다
+                            }
+                        }
+                    }
+
+                    for (int pi = 0; pi < picks.Count; pi++)
+                    {
+                        var pk = picks[pi];
+                        try
+                        {
+                            double dy = slot[pi] - pk.Y;
+                            if (System.Math.Abs(dy) > 1e-9) nBent++;
+
+                            // ★★★[JACK 0907 "왼쪽(그림 밖)으로"] <b>본보기와 같은 쪽으로 뺀다.</b>
+                            //   단면검토선은 <b>선이 끝난 자리에서 계속 나아가 빈 곳으로</b> 빠져나간다.
+                            //   처음엔 오른쪽(그림 속)으로 뺐는데, 그러면 글씨가 종전보다 <b>6.3mm 더 깊이</b>
+                            //   들어가(1:200에서 모형 1.26m) 다른 지층선과 겹칠 확률이 올라간다(검토 실측).
+                            //   → 왼쪽으로 빼고 글씨는 <b>오른쪽 정렬</b> — 그림을 안 건드린다.
+                            // 층에서 살짝 띄워 출발 → 짧은 곧은 도막 → 글씨 줄까지 사선 → 짧은 꼬리.
+                            //   가운데 사선만 길이가 다르다 — <b>끝(꼬리)은 언제나 같은 X</b>라
+                            //   글씨가 한 줄로 선다.
+                            var q0 = new Point2d(pk.X - gap0, pk.Y);
+                            var q1 = new Point2d(q0.X - La, q0.Y);
+                            var q3 = new Point2d(colX + gapT, slot[pi]);
+                            var q2 = new Point2d(q3.X + Lc, q3.Y);
+                            var pl = new Polyline();
+                            pl.AddVertexAt(0, q0, 0, 0, 0);
+                            pl.AddVertexAt(1, q1, 0, 0, 0);
+                            pl.AddVertexAt(2, q2, 0, 0, 0);
+                            pl.AddVertexAt(3, q3, 0, 0, 0);
+                            pl.SetDatabaseDefaults(db);
+                            var layL = pk.Water ? layW : layS;
+                            if (!layL.IsNull) pl.LayerId = layL;
+                            // ★JACK: <b>지층색과 같은</b> 지시선 — 선·글씨·지시선이 한 짝임이 한눈에 보인다.
+                            pl.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
+                                Autodesk.AutoCAD.Colors.ColorMethod.ByAci, pk.Aci);
+                            ms.AppendEntity(pl); tr.AddNewlyCreatedDBObject(pl, true);
+                            nLead++;
 
                             var t = new DBText
                             {
-                                TextString = nm,
+                                TextString = pk.Name,
                                 Height = txtH,
-                                Justify = AttachmentPoint.BottomLeft,   // 선 <b>위에</b> 얹는다
+                                HorizontalMode = TextHorizontalMode.TextRight,   // 오른쪽 끝을 한 줄로 맞춘다
+                                VerticalMode = TextVerticalMode.TextVerticalMid,
                             };
                             t.SetDatabaseDefaults(db);
-                            var lay = water ? layW : layS;
-                            if (!lay.IsNull) t.LayerId = lay;
+                            if (!layL.IsNull) t.LayerId = layL;
                             if (!kst.IsNull) t.TextStyleId = kst;
-                            // ★색은 그 층 선과 같게 — 글자와 선이 짝이라는 것이 한눈에 보여야 한다.
                             t.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
-                                Autodesk.AutoCAD.Colors.ColorMethod.ByAci, water ? (short)5 : AciOfName(ts.Name));
-                            var p = new Point3d(tx + gap, ty + gap, 0);
-                            t.Position = p; t.AlignmentPoint = p;
+                                Autodesk.AutoCAD.Colors.ColorMethod.ByAci, pk.Aci);
+                            // ★[JACK 0819 정렬] 정렬을 쓰면 기준점은 <c>AlignmentPoint</c> 하나다 —
+                            //   <c>Position</c>을 같이 대입하면 그것이 기준을 되돌려 세로가 어긋난다.
+                            t.AlignmentPoint = new Point3d(colX, slot[pi], 0);
                             ms.AppendEntity(t); tr.AddNewlyCreatedDBObject(t, true);
                             n++;
                         }
@@ -897,7 +1074,13 @@ public sealed class XsecViewCommand
         }
         catch (System.Exception ex) { log?.AppendLine("  횡단 지층이름 실패 — " + ex.Message); return 0; }
 
-        log?.AppendLine($"  횡단 지층이름 {n}개 — 각 선 <b>왼쪽 끝 위</b>에 직접 씀(종이 {StrataNameMm:0.#}mm × 축척 {scale:0.#} = 모형 {txtH:F2}m · 선과 같은 색)"
+        log?.AppendLine($"  횡단 지층이름 {n}개 · 지시선 {nLead}개(그중 {nBent}개는 꺾어서 띄움)"
+                      + $" — 각 선 <b>왼쪽 끝</b>에서 지시선을 빼 씀(종이 {StrataNameMm:0.#}mm × 축척 {scale:0.#} = 모형 {txtH:F2}m · 선·지시선·글씨가 같은 색)"
+                      + $" · 글씨끼리 최소 {minGap:F2}m 띄움"
+                      + (nPushed > 0 ? $" · 뷰 위로 넘쳐 내린 뷰 {nPushed}개" : "")
+                      + (nSpill > 0 ? $" · ⚠칸이 모자라 다 못 내린 뷰 {nSpill}개(층을 줄이거나 축척을 키우세요)" : "")
+                      + (nShrunk > 0 ? $" · 칸에 맞춰 지시선을 줄인 뷰 {nShrunk}개" : "")
+                      + (nTight > 0 ? $" · ⚠자리가 모자라 층에 바짝 붙인 뷰 {nTight}개(축척을 키우면 벌어집니다)" : "")
                       + (noZ > 0 ? $" · ⚠절단선 어디서도 지표면을 못 만난 것 {noZ}개" : "")
                       + (noXY > 0 ? $" · ⚠뷰가 자리를 못 준 것 {noXY}개(표고 범위 밖)" : ""));
         return n;

@@ -6497,8 +6497,13 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
         //   → 지형이 보링공이 안 본 <b>골짜기</b>로 내려가면 암반이 흙을 뚫고 올라온다. 그것이 실제 위험이다.
         var l2 = new[]
         {
+            // ★[JACK 0907] <b>공을 셋으로 늘렸다.</b> 새 규칙(<c>Strata.MinAreaLogs</c>)은
+            //   공이 셋 미만이면 표고 모드라도 <b>두께로 물러선다</b> — 두께로는 역전이 원천 불가라
+            //   공이 둘이면 이 시험이 <b>재려던 것을 못 재게</b> 된다.
+            //   시험의 뜻(역전을 눌러 내리고 그 폭을 남긴다)은 그대로 두고 자료만 늘린다.
             new BoreLog("BH-A", 0,  0, 100.0, new[] { 2.0, 1.0 }, double.NaN),   // 표토하단 98 · 연암하단 97
             new BoreLog("BH-B", 10, 0, 100.0, new[] { 2.0, 1.0 }, double.NaN),
+            new BoreLog("BH-C", 5, 10, 100.0, new[] { 2.0, 1.0 }, double.NaN),
         };
         var m2 = StrataModel.Build(d2, l2, out _);
         int fixedSeen = 0; double maxDrop = 0; bool anyUp = false;
@@ -6518,8 +6523,12 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     // ── 지하수위는 <b>지층 제약을 안 받는다</b> — 풍화암 속에 있어도 그대로 둔다.
     {
         var d3 = new[] { new StratumDef("표토", RockClass.Soil, InterpMode.Thickness) };
-        var l3 = new[] { new BoreLog("BH-W", 0, 0, 100.0, new[] { 1.0 }, 5.0) };   // 표토 1m, 수위 5m 아래
-        var m3 = StrataModel.Build(d3, l3, out _);
+        // ★[검토 0907] <b>공을 셋으로.</b> 공이 하나면 새 규칙이 심도 경로로 물러서, 이 시험이
+        //   재려던 <b>표고 경로</b>를 안 재게 된다(지금은 지반=GL인 자리라 통과만 하고 있었다).
+        var l3 = new[] { new BoreLog("BH-W", 0, 0, 100.0, new[] { 1.0 }, 5.0),   // 표토 1m, 수위 5m 아래
+                         new BoreLog("BH-W2", 40, 0, 100.0, new[] { 1.0 }, 5.0),
+                         new BoreLog("BH-W3", 0, 40, 100.0, new[] { 1.0 }, 5.0) };
+        var m3 = StrataModel.Build(d3, l3, out _, WaterInput.Depth);
         var c3 = m3.At(0, 0, 100.0);
         Check("S79 ★지하수위는 층 밑이어도 안 끌어올린다", Math.Abs(c3.Water - 95.0) < 1e-9, $"{c3.Water:F2}m");
         Check("S79   (그 자리 표토 하단은 99.0)", Math.Abs(c3.Bottom[0] - 99.0) < 1e-9, $"{c3.Bottom[0]:F2}m");
@@ -6528,8 +6537,11 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     // ── 지하수위가 <b>땅 위로는</b> 못 올라간다(그건 침수다).
     {
         var d4 = new[] { new StratumDef("표토", RockClass.Soil, InterpMode.Thickness) };
-        var l4 = new[] { new BoreLog("BH-U", 0, 0, 100.0, new[] { 1.0 }, -3.0) };  // 심도 음수 = 지표 위
-        var m4 = StrataModel.Build(d4, l4, out _);
+        // ★[검토 0907] 공 셋 — 표고 경로의 클램프를 재려는 시험이므로 문턱을 넘겨 둔다.
+        var l4 = new[] { new BoreLog("BH-U", 0, 0, 100.0, new[] { 1.0 }, -3.0),   // 심도 음수 = 지표 위
+                         new BoreLog("BH-U2", 40, 0, 100.0, new[] { 1.0 }, -3.0),
+                         new BoreLog("BH-U3", 0, 40, 100.0, new[] { 1.0 }, -3.0) };
+        var m4 = StrataModel.Build(d4, l4, out _, WaterInput.Depth);
         var c4 = m4.At(0, 0, 100.0);
         Check("S79 ★지하수위는 지표를 못 넘는다", Math.Abs(c4.Water - 100.0) < 1e-9, $"{c4.Water:F2}m");
     }
@@ -7518,6 +7530,156 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
         double cell23 = QtyTablePaper.XsecInnerHmm / 3;
         Check($"S96 가장 큰 표 {h5:F0}mm · 2×3 칸 {cell23:F0}mm", h5 > 0 && cell23 > 0,
               $"{f5.BodyRows}줄 · 표가 칸보다 {h5 - cell23:F0}mm {(h5 > cell23 ? "크다" : "작다")}");
+    }
+}
+
+// ── S97 ★★★[JACK 0907] 지하수위·지층을 <b>무엇으로 잇는가</b> ────────────────────────
+//   JACK: <i>"보링공이 하나이거나 너무 적을 경우 해당 두께나 깊이로 평균으로 원지반에서
+//   오프셋하고, 일반적으로는 그려지게 해야 해."</i>
+//   그리고: <i>"다 1로 넣었는데 왜 곡선이 원지반하고 평행하지 않지?"</i>
+//   → 심도를 <b>다 같게</b> 넣었으면 그건 "지반에서 몇 m 아래"를 말한 것이다.
+{
+    Console.WriteLine("\n== S97 지하수위 이어붙이기 ==");
+
+    static StratumDef[] Defs() => new[]
+    {
+        new StratumDef("표토",   RockClass.Soil,      InterpMode.Thickness),
+        new StratumDef("풍화암", RockClass.Weathered, InterpMode.Elevation),
+    };
+    // 지반이 기울어진 자리 — 공은 낮은 데(100)와 높은 데(120)에 있고, 그 사이 봉우리는 130이다.
+    static BoreLog Log(string n, double x, double y, double gl, double t1, double t2, double wd)
+        => new BoreLog(n, x, y, gl, new[] { t1, t2 }, wd);
+
+    // ── ① 공이 하나 — 표고로 이으면 도면 전체가 수평이 된다.
+    {
+        var m = StrataModel.Build(Defs(), new[] { Log("B1", 0, 0, 100, 2, 3, 1.0) }, out string why);
+        Check("S97 공 1개로도 모델이 선다", m != null, why);
+        double w1 = m.At(0, 0, 100).Water, w2 = m.At(500, 500, 130).Water;
+        Check("S97 ★★★공이 적으면 수위가 지형을 따라간다(원지반−심도)",
+              Math.Abs(w1 - 99.0) < 1e-6 && Math.Abs(w2 - 129.0) < 1e-6,
+              $"지반100→{w1:F2} · 지반130→{w2:F2} (기대 99.00 / 129.00)");
+        // 표고 모드인 2층도 공이 모자라면 두께로 물러선다.
+        var c2 = m.At(500, 500, 130);
+        Check("S97 ★★표고 모드 층도 공이 적으면 두께로 물러선다",
+              Math.Abs(c2.Bottom[0] - 128.0) < 1e-6 && Math.Abs(c2.Bottom[1] - 125.0) < 1e-6,
+              $"바닥 {c2.Bottom[0]:F2} / {c2.Bottom[1]:F2} (기대 128.00 / 125.00)");
+        Check("S97 물러선 것을 로그에 말한다", m.HowNote.Contains("오프셋"), m.HowNote);
+    }
+
+    // ── ② 공이 여럿인데 심도가 <b>전부 같다</b> — "지반에서 1m 아래"를 말한 것이다.
+    {
+        var logs = new[] { Log("B1", 0, 0, 100, 2, 3, 1.0), Log("B2", 400, 0, 110, 2, 3, 1.0),
+                           Log("B3", 0, 400, 120, 2, 3, 1.0), Log("B4", 400, 400, 115, 2, 3, 1.0) };
+        // ★★★[JACK 0908] <b>잇는 것은 언제나 표고다</b> — 원지반 경향을 무시하고 측점들을 잇는다.
+        //   0907에 넣었던 "심도가 다 같으면 지형과 나란" 짐작도, 그 뒤 넣었던 도킹바 선택칸도
+        //   <b>둘 다 없앴다</b>(JACK 0908: <i>"그냥 시스템적으로 정하는 게 좋겠다"</i>).
+        //   규칙이 하나라 같은 자료면 언제나 같은 그림이 나온다.
+        var mE = StrataModel.Build(Defs(), logs, out _, WaterInput.Depth);
+        double wE = mE.At(200, 200, 130).Water;
+        Check("S97 ★★★심도가 다 같아도 <b>표고로</b> 잇는다(원지반 경향 무시)",
+              Math.Abs(wE - 129.0) > 1.0, $"지반130 → 수위 {wE:F2} (129.00이면 짐작이 되살아난 것)");
+        Check("S97 물러서지 않았다고 말한다",
+              mE.HowNote.Contains("표고로") && !mE.HowNote.Contains("오프셋"), mE.HowNote);
+
+        // ★친 값이 <b>표고</b>일 때 — 도킹바가 층별 GL값 모드일 때 그렇다.
+        //   그때는 친 값이 곧 표고이므로 GL을 빼지 않는다.
+        var mZ = StrataModel.Build(Defs(), new[] { Log("B1", 0, 0, 100, 2, 3, 95.0),
+                                                   Log("B2", 400, 0, 110, 2, 3, 95.0),
+                                                   Log("B3", 0, 400, 120, 2, 3, 95.0),
+                                                   Log("B4", 400, 400, 115, 2, 3, 95.0) },
+                                   out _, WaterInput.Elevation);
+        Check("S97 ★★★친 값이 표고면 그 표고를 그대로 잇는다",
+              Math.Abs(mZ.At(200, 200, 130).Water - 95.0) < 1e-6,
+              $"표고 95를 네 공에 쳤다 → {mZ.At(200, 200, 130).Water:F2} (기대 95.00)");
+    }
+
+    // ── ③ 심도가 <b>하나라도 다르면</b> 진짜 관측값이므로 표고로 잇는다(물의 성질).
+    {
+        var logs = new[] { Log("B1", 0, 0, 100, 2, 3, 1.0), Log("B2", 400, 0, 110, 2, 3, 4.0),
+                           Log("B3", 0, 400, 120, 2, 3, 2.0), Log("B4", 400, 400, 115, 2, 3, 3.0) };
+        var m = StrataModel.Build(Defs(), logs, out _);
+        double w = m.At(200, 200, 130).Water;
+        // ★[검토 0907] <b>자를 조인다.</b> 종전은 95~125로 폭이 30m라 표고 보간이
+        //   상당히 망가져도 통과했다. 네 공이 등거리라 <b>정확히 108.75</b>가 나온다 —
+        //   그 값을 콕 집는다. (실패 문구의 자도 실제와 같게 맞춘다 — 종전엔 말과 자가 달랐다.)
+        Check("S97 ★★★심도가 다르면 표고로 잇는다(지형을 안 따라간다)",
+              Math.Abs(w - 108.75) < 1e-6, $"지반130 → 수위 {w:F2} (기대 정확히 108.75 · 129.00이면 짐작이 살아 있는 것)");
+        Check("S97 그때는 물러섰다고 안 한다", !m.HowNote.Contains("오프셋"), m.HowNote);
+    }
+
+    // ── ④ 물은 <b>땅 위로 못 올라간다</b> — 그건 침수다. <b>두 경로를 따로</b> 잰다.
+    //   ★[검토 0907] 종전엔 이름은 "땅 위로 안 올라간다"인데 <b>표고 경로의 클램프</b>만 쟀다 —
+    //   심도 경로의 <c>Max(0, ·)</c>는 한 번도 안 재고 있었다.
+    {
+        var logs = new[] { Log("B1", 0, 0, 100, 2, 3, 0.5), Log("B2", 400, 0, 110, 2, 3, 4.0),
+                           Log("B3", 0, 400, 120, 2, 3, 2.0) };
+        var m = StrataModel.Build(Defs(), logs, out _, WaterInput.Depth);
+        double w = m.At(200, 200, 90).Water;     // 골짜기(90) — 공들의 수위 표고보다 낮다
+        Check("S97 ★★[표고 경로] 물이 땅 위로 안 올라간다", w <= 90.0 + 1e-9, $"지반90 → 수위 {w:F2}");
+
+        // 심도가 <b>음수</b>(지표 위)로 들어오면 심도 경로가 0으로 눌러야 한다.
+        // 공 <b>둘</b> — 문턱 미만이라 심도 경로로 간다(강제 스위치는 없앴다).
+        var neg = new[] { Log("B1", 0, 0, 100, 2, 3, -3.0), Log("B2", 400, 0, 110, 2, 3, -3.0) };
+        var mn = StrataModel.Build(Defs(), neg, out _, WaterInput.Depth);
+        double wn = mn.At(200, 200, 130).Water;
+        Check("S97 ★★[심도 경로] 음수 심도는 지표에 붙는다", Math.Abs(wn - 130.0) < 1e-6,
+              $"심도 −3m · 지반130 → 수위 {wn:F2} (기대 130.00)");
+    }
+
+    // ── ⑥ ★[검토 0907] <b>문턱 경계를 직접 겨눈다</b> — 2공과 3공이 갈리는가.
+    {
+        var two = new[] { Log("B1", 0, 0, 100, 2, 3, 1.0), Log("B2", 400, 0, 110, 2, 3, 4.0) };
+        var three = new[] { Log("B1", 0, 0, 100, 2, 3, 1.0), Log("B2", 400, 0, 110, 2, 3, 4.0),
+                            Log("B3", 0, 400, 120, 2, 3, 2.0) };
+        double w2 = StrataModel.Build(Defs(), two, out _, WaterInput.Depth).At(200, 200, 130).Water;
+        double w3 = StrataModel.Build(Defs(), three, out _, WaterInput.Depth).At(200, 200, 130).Water;
+        Check("S97 ★★★2공은 심도로 물러서고 3공은 표고로 잇는다",
+              w2 > w3 + 10.0, $"2공 {w2:F2} vs 3공 {w3:F2} (2공이 지형을 따라 훨씬 높아야 한다)");
+    }
+
+    // ── ⑦ ★[검토 0907] 여섯 공 중 <b>둘만</b> 수위가 있으면 그 둘로 문턱을 잰다.
+    {
+        var logs = new[] { Log("B1", 0, 0, 100, 2, 3, 1.0), Log("B2", 400, 0, 110, 2, 3, 4.0),
+                           Log("B3", 0, 400, 120, 2, 3, double.NaN),
+                           Log("B4", 400, 400, 115, 2, 3, double.NaN),
+                           Log("B5", 200, 0, 105, 2, 3, double.NaN),
+                           Log("B6", 0, 200, 108, 2, 3, double.NaN) };
+        var m = StrataModel.Build(Defs(), logs, out _, WaterInput.Depth);
+        Check("S97 ★★수위가 있는 공만 센다(둘뿐이면 심도로 물러선다)",
+              m.HowNote.Contains("2개뿐"), m.HowNote);
+    }
+
+    // ── ⑥ ★★★[검토 0907 · 치명 A-1] <b>세는 자와 실제로 이어지는 자료가 같은가.</b>
+    //   위층 칸이 빈 공은 그 아래 층의 <b>표고를 못 낸다</b>(위층을 모르면 그 층 표고도 모른다).
+    //   종전엔 그런 공까지 세어 "표고로 이을 만큼 있다"고 판정했고,
+    //   실제로는 한 공만 기여해 <b>온 부지가 완전 수평</b>이 됐다 — 막겠다고 만든 그 사고가
+    //   막는 장치를 켠 채로 일어났다. 게다가 로그는 "전부 제 방식대로"라고 <b>거짓말</b>했다.
+    {
+        // 공 셋인데 <b>표토 칸이 빈</b> 공이 둘 — 풍화암 표고를 낼 수 있는 공은 하나뿐이다.
+        var logs = new[]
+        {
+            Log("B1", 0,   0,   100, 2.0,          3.0, 1.0),
+            Log("B2", 400, 0,   110, double.NaN,   3.0, 1.5),
+            Log("B3", 0,   400, 120, double.NaN,   3.0, 2.0),
+        };
+        var m = StrataModel.Build(Defs(), logs, out _);
+        double b1 = m.At(0,   0,   100).Bottom[1];
+        double b2 = m.At(400, 0,   110).Bottom[1];
+        double b3 = m.At(200, 200, 130).Bottom[1];
+        Check("S97 ★★★위층이 빈 공은 표고에 한 표도 못 던진다(온 부지 수평이 안 된다)",
+              !(Math.Abs(b1 - b2) < 1e-6 && Math.Abs(b2 - b3) < 1e-6),
+              $"풍화암 바닥 {b1:F2} / {b2:F2} / {b3:F2} (셋이 같으면 완전 수평 = 사고)");
+        Check("S97 ★★그때는 물러섰다고 <b>말한다</b>", m.HowNote.Contains("오프셋"), m.HowNote);
+    }
+
+    // ── ⑤ 보링공 자리에서는 <b>친 값이 그대로</b> 나온다(완료기준 1번).
+    {
+        var logs = new[] { Log("B1", 0, 0, 100, 2, 3, 1.0), Log("B2", 400, 0, 110, 2, 3, 4.0),
+                           Log("B3", 0, 400, 120, 2, 3, 2.0) };
+        var m = StrataModel.Build(Defs(), logs, out _);
+        double w = m.At(400, 0, 110).Water;
+        Check("S97 ★★★보링공 자리에서는 친 값 그대로", Math.Abs(w - 106.0) < 1e-6,
+              $"B2(지반110·심도4) → 수위 {w:F2} (기대 106.00)");
     }
 }
 

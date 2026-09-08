@@ -68,6 +68,11 @@ public sealed class CreateGradingCommand
         }
         catch { }
 
+        // ★★★[검토 0908] <b>지난번 자국을 치우는 장치가 통째로 없어졌다.</b>
+        //   첫 판은 객체 색을 진짜로 바꾸고 원래 색을 도면에 적어 두었다가
+        //   다음 실행이 되돌리게 했는데, 그 되돌리기가 <b>세 군데에서 샜다</b>(검토 0908).
+        //   지금은 <see cref="PickMark"/>가 <b>임시 그래픽</b>으로 덧그리므로
+        //   도면에 아무것도 안 남는다 — <b>치울 자국 자체가 없다</b>.
         // 1) 계획 폴리곤 선택
         var peoPoly = new PromptEntityOptions("\n계획 경계(닫힌 폴리라인/3D폴리라인/피처라인)를 선택: ");
         peoPoly.SetRejectMessage("\n폴리라인 또는 피처라인이어야 합니다.");
@@ -76,6 +81,12 @@ public sealed class CreateGradingCommand
         peoPoly.AddAllowedClass(typeof(FeatureLine), false);
         var rPoly = ed.GetEntity(peoPoly);
         if (rPoly.Status != PromptStatus.OK) return;
+
+        // ★★★[JACK 0908 "선택한 걸 알 수 있도록 알아보기 쉽게 빨간색으로 색 바뀌고,
+        //   정지가 끝나면 다시 원래색으로 복귀"] <b>고른 것을 빨갛게.</b>
+        //   <c>using</c>이라 <b>정상 끝·예외·Esc</b> 어느 쪽으로 빠져나가도 되돌아온다 —
+        //   이 메서드에는 <c>return</c>이 여럿이라(설정 취소·지반 선택 취소 등) 그것이 중요하다.
+        using var pickMark = PickMark.Paint(doc.Database, rPoly.ObjectId);
 
         // [다중 구역 0729 — 방식A] 기존 정지면·번들이 있으면 '이어서(누적)/새로시작' 선택.
         //   이어서 = 기존 정지면_DH를 새 원지반 삼아 이 계획선 구역을 추가(1번 구역 유지).

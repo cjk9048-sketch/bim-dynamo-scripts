@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.ApplicationServices;
+﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Runtime;
@@ -28,7 +28,8 @@ public sealed class ResetCommand
         { "정지면_DH", "정지면_DH이전", SectionCommand.PurePadSurfaceBase, SectionCommand.PurePadSurfaceBase + "이전",
           "가상절토_DH", "가상성토_DH", "_DH토량임시",
           // ★[JACK 0824] 터파기 산출물도 함께 — 안 지우면 "초기화했는데 터파기가 남아 있다"가 된다.
-          ExcavCommand.SurfName, ExcavCommand.BaseName, ViewSurfaceCommand.AllName };
+          ExcavCommand.SurfName, ExcavCommand.BaseName,
+          ViewSurfaceCommand.AllName, ViewSurfaceCommand.ExcavAllName };   // ★[JACK 0908] 보기 전용 합성면도 치운다
 
     [CommandMethod("DHRESET")]
     public void Run()

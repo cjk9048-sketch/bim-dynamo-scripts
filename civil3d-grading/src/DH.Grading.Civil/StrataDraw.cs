@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
@@ -53,13 +53,35 @@ public static class StrataDraw
         var panel = StrataPanel.Current;
         if (panel == null) { doc.Editor.WriteMessage("\n[지층구성] 창이 안 열려 있습니다 — DHSTRATA를 먼저 치세요."); return; }
 
-        // ★한 번에 하나만 받고 돌아간다 — 여러 번 찍으려면 단추를 다시 누른다.
-        //   반복 루프를 여기 두면 도킹바가 그동안 잠긴다.
-        var ppo = new PromptPointOptions("\n[지층구성] 시추 위치를 클릭 (Esc=그만): ") { AllowNone = true };
-        var pr = doc.Editor.GetPoint(ppo);
-        if (pr.Status != PromptStatus.OK) return;
-        var p = pr.Value.TransformBy(doc.Editor.CurrentUserCoordinateSystem);
-        panel.AddBore(p);
+        // ★★★[JACK 0908 "ESC로 취소하기 전까지 연속으로 찍기"] <b>Esc를 누를 때까지 계속 받는다.</b>
+        //
+        //   종전엔 <b>한 번 찍고 돌아갔다</b>. 주석에 <i>"반복 루프를 여기 두면 도킹바가 그동안 잠긴다"</i>고
+        //   적어 두었는데, 시추공은 보통 대여섯 개를 <b>내리 찍는</b> 일이라
+        //   그때마다 단추를 다시 누르는 것이 더 성가시다(JACK).
+        //
+        //   ★도킹바가 잠기는 것은 찍는 동안뿐이고, 한 점을 받을 때마다
+        //   <see cref="StrataPanel.AddBore"/>가 표에 넣으므로 <b>찍는 족족 쌓이는 것이 보인다</b>.
+        //   Esc를 누르면 그 자리에서 빠져나온다 — 종전의 "단추를 다시 누른다"와 같은 자리다.
+        var ed = doc.Editor;
+        int nPick = 0;
+        while (true)
+        {
+            var ppo = new PromptPointOptions(
+                nPick == 0 ? "\n[지층구성] 시추 위치를 클릭 (Esc=그만): "
+                           : $"\n[지층구성] {nPick}개 찍음 — 다음 위치 (Esc=그만): ")
+            { AllowNone = true };
+            var pr = ed.GetPoint(ppo);
+            // Esc·Enter·오른쪽단추 — 전부 "그만"이다.
+            if (pr.Status != PromptStatus.OK) break;
+            var p = pr.Value.TransformBy(ed.CurrentUserCoordinateSystem);
+            try { panel.AddBore(p); nPick++; }
+            catch (System.Exception ex)
+            {
+                // 한 점이 잘못돼도 <b>찍기를 통째로 끝내지 않는다</b> — 다음 점을 계속 받는다.
+                ed.WriteMessage("\n[지층구성] 이 자리는 못 넣었습니다 — " + ex.Message);
+            }
+        }
+        if (nPick > 0) ed.WriteMessage($"\n[지층구성] 시추 위치 {nPick}개를 넣었습니다.");
     }
 
     /// <summary>★★★[JACK 0828] <b>도킹바에서 도면을 건드리려면 문서를 잠가야 한다.</b>
@@ -535,6 +557,10 @@ public static class StrataDraw
 
             log.AppendLine($"  범위 {x0:F1},{y0:F1} ~ {x1:F1},{y1:F1}({extNote})"
                          + $" · 격자 {N + 1}×{N + 1}(칸 {dx:F1}×{dy:F1}m) · 보링공 {model.Logs.Count}개");
+            // ★★★[JACK 0907] <b>어느 방식으로 그렸는지 말한다.</b>
+            //   자료가 모자라거나 심도를 다 같게 넣어 <b>원지반 오프셋</b>으로 물러선 자리가 있으면
+            //   그것을 알려야 한다 — 조용히 다른 그림을 그려 놓으면 사용자는 알 길이 없다.
+            log.AppendLine("  이어붙이기 — " + model.HowNote);
             // ★★★[JACK 0901 "혹시 도면상에 윗선·아랫선 적용이 잘못된 거 아니야?"]
             //   <b>말로 답하지 않고 보링공 자리에서 재서 남긴다.</b>
             //   그 자리는 보간이 <b>친 값을 그대로</b> 돌려주는 자리라(같은 점 규칙),
@@ -588,6 +614,13 @@ public static class StrataDraw
             else log.AppendLine("  역전은 한 자리도 없었다");
             log.AppendLine($"  평면에서 숨김 {nHid}장 — 종단·횡단에서만 보인다(JACK 확정)");
             note = nFix > 0 ? $"역전 {nFix}곳(최대 {worstDrop:F2}m)을 눌러 내렸다" : "역전 없음";
+            // ★★★[검토 0907 · A-4] <b>물러선 사실을 화면에도 올린다.</b>
+            //   <c>HowNote</c>를 로그에만 넣어 두었더니, 정작 사용자가 보는 문장에는
+            //   안 실려 <b>조용히 다른 그림</b>이 그려졌다 — 그것을 막겠다고 만든 값인데
+            //   전달 경로가 빠져 있었다. 로그 파일은 사람이 열어 봐야 안다.
+            // 물러섰거나(오프셋) 알려 줄 것(ⓘ)이 있으면 화면 문장에도 싣는다.
+            if (model.HowNote.Contains("오프셋") || model.HowNote.Contains("ⓘ"))
+                note += " · " + model.HowNote.Replace("<b>", "").Replace("</b>", "");
             Flush(log);
             return "";
         }
