@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.ApplicationServices;
+﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Runtime;
@@ -34,6 +34,13 @@ public sealed class ViewSurfaceCommand
     /// <summary>★[JACK 0824] '전부' = 원지반·계획·터파기를 합성한 <b>한 장</b>. 터파기를 만들 때 함께 굽는다.</summary>
     internal const string AllName = "전체면_DH";
 
+    /// <summary>★★★[JACK 0908] <b>원지반+터파기</b> 합성면 — <c>[보기] 터파기만</c>이 켜는 것.
+    /// <para>굴착 형상(<c>터파기면_DH</c>)만 켜면 <b>구덩이 껍데기</b>라 허공에 뜬 것처럼 보인다.
+    /// <see cref="AllName"/>은 <b>계획면까지</b> 품으므로 대신 못 쓴다 —
+    /// "터파기만"의 뜻은 <b>정지를 빼고</b> 보겠다는 것이다.</para>
+    /// <para>만드는 곳은 <c>ExcavCommand</c>다 — <b>보기는 형상을 안 건드린다</b>(켜고 끄기만).</para></summary>
+    internal const string ExcavAllName = "터파기전체_DH";
+
     /// <summary>정지·터파기가 그려 두는 선 레이어 — 지표면과 <b>한 벌</b>로 켜고 끈다.</summary>
     private static readonly string[] PlanLayers =
     {
@@ -49,7 +56,7 @@ public sealed class ViewSurfaceCommand
     {
         var l = new System.Collections.Generic.List<string>
         {
-            Plan, Plan + "이전", PurePlan, PurePlan + "이전", AllName,
+            Plan, Plan + "이전", PurePlan, PurePlan + "이전", AllName, ExcavAllName,
             Excav, ExcavCommand.BaseName, "가상절토_DH", "가상성토_DH", "_DH토량임시",
         };
         for (int k = 1; k <= 16; k++) l.Add($"{ExcavCommand.VirtName}{k}");
@@ -153,9 +160,19 @@ public sealed class ViewSurfaceCommand
 
                 case "E":
                     if (!hasExc) { ed.WriteMessage("\n[보기] 터파기 지표면이 아직 없습니다."); tr.Commit(); return; }
-                    keeps.Add(Excav); showGround = false; lines = false;
+                    // ★★★[JACK 0908] <b>원지반과 합성된 면</b>을 켠다 — 굴착 껍데기만 켜면 허공에 뜬다.
+                    //   합성면이 아직 없으면(옛 도면·합성 실패) 종전대로 굴착 형상만 켜고 <b>말해 준다</b>.
+                    {
+                        bool hasExcAll = !GradingBuilder.FindSurfaceByBaseName(tr, ExcavAllName).IsNull;
+                        if (hasExcAll) { keeps.Add(ExcavAllName); msg = $"터파기만({ExcavAllName} — 원지반 합성)"; }
+                        else
+                        {
+                            keeps.Add(Excav);
+                            msg = "터파기만(굴착 형상만 — 원지반 합성면이 없습니다. 터파기를 다시 만들면 생깁니다)";
+                        }
+                    }
+                    showGround = false; lines = false;
                     keep = null;
-                    msg = "터파기만";
                     break;
 
                 default:

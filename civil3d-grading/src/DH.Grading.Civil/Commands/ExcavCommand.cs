@@ -71,7 +71,11 @@ public sealed class ExcavCommand
         }
         catch { }
 
-        // ── 1) 구조물 바닥 폴리선 ──
+        // ★★★[검토 0908] <b>지난번 자국을 치우는 장치가 통째로 없어졌다.</b>
+        //   첫 판은 객체 색을 진짜로 바꾸고 원래 색을 도면에 적어 두었다가
+        //   다음 실행이 되돌리게 했는데, 그 되돌리기가 <b>세 군데에서 샜다</b>(검토 0908).
+        //   지금은 <see cref="PickMark"/>가 <b>임시 그래픽</b>으로 덧그리므로
+        //   도면에 아무것도 안 남는다 — <b>치울 자국 자체가 없다</b>.
         var peo = new PromptEntityOptions("\n구조물 바닥 경계(닫힌 폴리라인/3D폴리라인/피처라인)를 선택: ");
         peo.SetRejectMessage("\n폴리라인 또는 피처라인이어야 합니다.");
         peo.AddAllowedClass(typeof(Polyline), false);
@@ -79,6 +83,9 @@ public sealed class ExcavCommand
         peo.AddAllowedClass(typeof(FeatureLine), false);
         var rPoly = ed.GetEntity(peo);
         if (rPoly.Status != PromptStatus.OK) return;
+
+        // ★★★[JACK 0908] 고른 것을 빨갛게 — <c>using</c>이 예외·Esc까지 덮는다.
+        using var pickMark = PickMark.Paint(db, rPoly.ObjectId);
 
         // ── 2) 원지반 ──
         ObjectId groundId = ObjectId.Null;
@@ -604,6 +611,32 @@ public sealed class ExcavCommand
                 log.AppendLine($"■ 전체면({ViewSurfaceCommand.AllName}) — 원지반+계획+터파기 합성\n  " + alog.Replace("\n", "\n  "));
             }
             catch (System.Exception ax) { log.AppendLine($"■ 전체면 합성 실패 — {ax.Message}(보기 '전부'는 정지면으로 물러납니다)"); }
+
+            // ★★★[JACK 0908 "보기에서 터파기만 선택했을 때 터파기와 원지반의 합성 지표면이 보여야 해"]
+            //   <b>원지반+터파기 합성면도 함께 굽는다.</b>
+            //
+            //   종전 <c>[보기] 터파기만</c>은 <c>터파기면_DH</c>(굴착 형상 = 바닥+법면)만 켰다.
+            //   그것은 <b>구덩이 껍데기</b>라 원지반이 없으면 <b>허공에 뜬 것처럼</b> 보인다 —
+            //   깊이도 자리도 눈으로 가늠할 수가 없다.
+            //
+            //   ★<b>전체면으로는 대신 못 한다</b>: 전체면은 <b>계획면까지</b> 품는다.
+            //   정지를 이미 돌린 도면에서 "터파기만" 보려는 뜻은 <b>정지를 빼고</b> 보겠다는 것이다.
+            //   그래서 <b>원지반 위에 굴착만 얹은</b> 면을 따로 만든다.
+            //
+            //   ★만드는 자리는 <b>여기</b>다 — 보기 명령은 형상을 안 건드린다(켜고 끄기만 한다).
+            try
+            {
+                var excOrder = new System.Collections.Generic.List<(ObjectId, string)>
+                {
+                    (groundId, "원지반"),
+                    (outId, "터파기"),      // 나중에 붙는 것이 이긴다 = 굴착이 파인다
+                };
+                GradingBuilder.Composite(db, tr, ViewSurfaceCommand.ExcavAllName, excOrder, out string elog, true, groundId);
+                GradingBuilder.SetSurfaceVisible(tr, ViewSurfaceCommand.ExcavAllName, false);
+                log.AppendLine($"■ 터파기전체({ViewSurfaceCommand.ExcavAllName}) — 원지반+터파기 합성\n  " + elog.Replace("\n", "\n  "));
+            }
+            catch (System.Exception ex2)
+            { log.AppendLine($"■ 터파기전체 합성 실패 — {ex2.Message}(보기 '터파기만'은 굴착 형상만 보입니다)"); }
 
             ExcavBundleStore.SaveAll(db, tr, recs);
             log.AppendLine($"■ 터파기 기록 저장 — 구조물 {recs.Count}개(다시 만들 때 폴리선을 안 골라도 된다)");

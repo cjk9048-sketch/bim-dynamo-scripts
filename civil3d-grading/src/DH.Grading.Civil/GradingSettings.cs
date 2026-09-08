@@ -101,6 +101,13 @@ public static class GradingSettings
     public const string InfraTerrainXml = "지형.xml";   // 지형 LandXML 고정 파일명
     public const string InfraWallDwg = "옹벽3D.dwg";     // 옹벽 3D DWG 고정 파일명
 
+    // ★★★[JACK 0908] <b>지하수위 선택칸을 없앴다 — 시스템이 정한다.</b>
+    //   0907에 넣었다가 하루 만에 걷었다. JACK: <i>"그냥 시스템적으로 정하는 게 좋을 것 같아."</i>
+    //   맞는 말이었다 — <b>같은 뜻의 스위치가 이미 도킹바 위에 있었다</b>(층별 GL값/층별 두께).
+    //   지금 규칙: 잇는 것은 <b>언제나 표고</b>(원지반 경향 무시), 공이 셋 미만일 때만 원지반 오프셋.
+    //   친 값이 표고냐 심도냐는 그 위 스위치가 정한다(<c>WaterInput</c>).
+
+
     public static int ExportEpsg = 5186;       // 도면 좌표계(원점) — 설정 대화상자 드롭박스로 선택. SHP .prj·지형 LandXML·위성 역투영에 공통 사용. 신 5185~5188·구 5180~5184.
 
     // [JACK 0728] 결과지표면만 표시 — 체크(기본): 정지면_DH 생성 시 다른 지표면 숨김.
@@ -118,6 +125,16 @@ public static class GradingSettings
     public static double XsecLeft = 30.0;
     /// <summary>중심선 오른쪽으로 자를 폭 (m).</summary>
     public static double XsecRight = 30.0;
+
+    /// <summary>★★★[JACK 0908] <b>절단선 폭을 자동으로 잴지.</b>
+    /// <para><c>true</c>(기본) = 정지 결과(데이라잇 링)에서 재어 <b>좌우 같은 폭</b>으로 정한다.
+    /// 여유 5m를 더해 5m 단위로 올리고, <b>이 설정값에도 되돌려 적는다</b> —
+    /// 그래야 사용자가 무엇이 쓰였는지 도면설정에서 본다.</para>
+    /// <para><c>false</c> = 도면설정에 친 값을 그대로 쓴다.</para>
+    /// <para><b>왜 자동이 기본인가.</b> JACK 현장 실측(0908): 계획 부지 55.7m인데
+    /// 정지 결과는 사면까지 <b>83.0m</b>였고, 절단선은 60m라 <b>사면이 잘렸다</b>.
+    /// 사람이 매번 재서 칠 수는 없다.</para></summary>
+    public static bool XsecWidthAuto = true;
     /// <summary>횡단면도를 가로로 몇 개씩 늘어놓을지.</summary>
     // ★[검토] <c>XsecCols</c>를 없앴다 — <c>XsecLayoutC</c>와 <b>같은 뜻</b>인데 저장할 때만
     //   베껴 넣고 있어, 저장 안 하고 배치를 바꾸면 두 값이 갈라졌다(§50 그 모양).
@@ -538,6 +555,7 @@ public static class GradingSettings
             if (k?.GetValue("MiterConvex") is int v) MiterConvex = v != 0;
             // ★[JACK 0831] 보링공 표식 크기 — 부지마다 알맞은 값이 달라 한 번 맞추면 계속 쓴다.
             //   레지스트리에 실수를 못 넣으므로 <b>100배 정수</b>로 담는다(×1.4 → 140).
+            if (k?.GetValue("XsecWidthAuto") is int xwa) XsecWidthAuto = xwa != 0;
             if (k?.GetValue("StrataMarkScale") is int ms && ms >= 20 && ms <= 260)
                 StrataDraw.MarkScale = ms / 100.0;
         }
@@ -558,12 +576,32 @@ public static class GradingSettings
     public const string BandSet = "토공";
 
     /// <summary>정지옵션 [저장]에서 호출 — 사면형상을 다음 세션 기본값으로 기록.</summary>
+    /// <summary>★★★[검토 0908 · 심각] <b>키 하나만 쓴다</b> — 통짜 저장이 못 하는 일.
+    ///
+    /// <para><see cref="SaveUserPrefs"/>는 <c>MiterConvex</c>를 <b>무조건</b> 함께 쓴다.
+    /// 그래서 도면설정에서 그것을 부르면, <c>SyncToDocument</c>가 그 도면 값으로 맞춰 놓은
+    /// 사면형상이 <b>레지스트리에 박힌다</b> — 다음에 켠 새 도면이 그 모양으로 시작한다
+    /// (v17.6 <i>"같은 부지인데 옹벽 6장↔163장"</i>의 뿌리).</para>
+    ///
+    /// <para><b>"바뀌었을 때만" 가드로는 못 막는다</b> — 한 번이라도 불리면 쓴다.
+    /// 그러니 <b>쓸 키만 쓰는 문</b>을 따로 낸다. 새 설정을 도면설정에 넣을 때는 이 길을 쓸 것.</para></summary>
+    public static void SaveUserPrefInt(string name, int value)
+    {
+        try
+        {
+            using var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(PrefsRegKey);
+            k?.SetValue(name, value, Microsoft.Win32.RegistryValueKind.DWord);
+        }
+        catch { }
+    }
+
     public static void SaveUserPrefs()
     {
         try
         {
             using var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(PrefsRegKey);
             k?.SetValue("MiterConvex", MiterConvex ? 1 : 0, Microsoft.Win32.RegistryValueKind.DWord);
+            k?.SetValue("XsecWidthAuto", XsecWidthAuto ? 1 : 0, Microsoft.Win32.RegistryValueKind.DWord);
             k?.SetValue("StrataMarkScale",
                         (int)System.Math.Round(System.Math.Max(0.2, System.Math.Min(2.6, StrataDraw.MarkScale)) * 100),
                         Microsoft.Win32.RegistryValueKind.DWord);

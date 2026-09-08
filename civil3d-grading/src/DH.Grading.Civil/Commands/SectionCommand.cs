@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.ApplicationServices;
+﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.Colors;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
@@ -197,8 +197,8 @@ public sealed class SectionCommand
 
         // ── ⑥ 측점선(횡단 위치) ─────────────────────────────────────────────
         double interval = System.Math.Max(0.5, GradingSettings.XsecInterval);
-        double wl = System.Math.Max(0.0, GradingSettings.XsecLeft);
-        double wr = System.Math.Max(0.0, GradingSettings.XsecRight);
+        // ★[JACK 0908] 폭은 <see cref="XsecWidth"/> 한 자에서만 나온다(§50).
+        var (wl, wr) = XsecWidth.Resolve(db, alignId, null);
         if (wl + wr < 0.5) { wl = wr = 30.0; }
 
         var cuts = PlanSampleLines(db, alignId, interval, wl, wr, out double stStart, out double stEnd);
@@ -754,6 +754,13 @@ public sealed class SectionCommand
             if (IsBase(nm, Commands.ExcavCommand.SurfName)) { exc = sid; excNm = nm; continue; }
             // 터파기 작업용 중간 산물은 종단 대상이 아니다(목표면·복원 절토부).
             if (IsBase(nm, Commands.ExcavCommand.BaseName) || nm.StartsWith("터파기_절토복원")) continue;
+            // ★★★[JACK 0908] <b>보기 전용 합성면은 종단·횡단이 안 쓴다.</b>
+            //   JACK: <i>"종단이나 횡단은 지금처럼 터파기 단독 지표면을 사용하되,
+            //   보기 기능에서만 원지반과 터파기의 합성 지표면이 보여야 해."</i>
+            //   ★<b>명시적으로 건너뛰지 않으면 원지반으로 오인된다</b> — 아래 폴백이
+            //   "우리 산출물이 아닌 것 중 삼각형이 가장 많은 것"을 원지반으로 삼는데,
+            //   이 면은 원지반을 통째로 품고 있어 <b>거의 언제나 그 싸움을 이긴다</b>.
+            if (IsBase(nm, ViewSurfaceCommand.ExcavAllName)) continue;
             // ★[v32.2] 순수 정지면이 있으면 그것이 종단·횡단의 정지면이다(위 설명).
             if (IsBase(nm, PurePadSurfaceBase)) { pure = sid; pureNm = nm; continue; }
             // 정지면_DH(또는 정지면_DH_N) — 가장 마지막 것을 쓴다.

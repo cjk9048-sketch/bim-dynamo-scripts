@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 
@@ -22,6 +22,8 @@ namespace DH.Grading.Civil;
 public sealed class SheetDialog : Window
 {
     private readonly TextBox _xsecInterval;
+    /// <summary>★[JACK 0908] 절단선 폭을 자동으로 쟴지 고르는 칸.</summary>
+    private readonly ComboBox _xsecAuto;
     private readonly TextBox _xsecLeft;
     private readonly TextBox _xsecRight;
     private readonly Slider _groundTolZ;
@@ -47,6 +49,13 @@ public sealed class SheetDialog : Window
             "[종단도]·[종단/횡단] 버튼이 쓰는 값. 노선 길이 ÷ 간격이 횡단 개수가 됩니다(권장 상한 200개).",
             first: true);
         _xsecInterval = GradingDialog.AddRow(root, "횡단 간격 (m)", GradingSettings.XsecInterval, "");
+        // ★★★[JACK 0908] <b>절단선 폭 — 자동/수동.</b>
+        //   자동이면 정지 결과(데이라잇 링)에서 재어 <b>좀우 같은 폭</b>으로 정하고,
+        //   그 값을 <b>아래 두 칸에도 되돌려 적는다</b> — 무엇이 쓰였는지 여기서 보여야 한다.
+        _xsecAuto = AddCombo(root, "횡단 폭 정하기",
+            new[] { "자동 — 정지 결과에서 잼(여유 5m · 5m 단위 · 좌우 같게)", "수동 — 아래 값 사용" },
+            GradingSettings.XsecWidthAuto ? 0 : 1,
+            "자동이면 아래 두 값은 재는 값으로 덮어씁니다");
         _xsecLeft = GradingDialog.AddRow(root, "횡단 폭 — 좌 (m)", GradingSettings.XsecLeft, "");
         _xsecRight = GradingDialog.AddRow(root, "횡단 폭 — 우 (m)", GradingSettings.XsecRight, "");
         // ★★[JACK 0826] 배치는 <b>여기서</b> 고른다 — 명령을 누를 때마다 묻지 않는다.
@@ -169,6 +178,16 @@ public sealed class SheetDialog : Window
         }
 
         GradingSettings.XsecInterval = xi;
+        // ★[JACK 0908] 자동이면 아래 두 값은 다음 실행 때 재는 값으로 덮어쓴다.
+        //   그래도 지금 친 값을 담아 둔다 — 자동이 재을 것을 못 찾으면 이 값으로 물러서기 때문이다.
+        GradingSettings.XsecWidthAuto = _xsecAuto.SelectedIndex == 0;
+        // ★★★[검토 0908 · 심각] <b>이 선택은 재시작해도 남아야 한다.</b>
+        //   종전엔 저장하는 통로가 <c>XsecWidth</c>의 <c>SaveUserPrefs()</c> 하나뿐이었는데
+        //   그것을 지우면서(심각 3) <b>저장 통로가 통째로 사라졌다</b> —
+        //   수동을 골라도 Civil3D를 껐다 켜면 자동으로 되돌아갔다.
+        //   ★그렇다고 통짜 <c>SaveUserPrefs()</c>를 부르면 심각 3을 되살린다(사면형상이 새어 나간다).
+        //   → <b>키 하나만 쓰는 문</b>으로 저장한다.
+        GradingSettings.SaveUserPrefInt("XsecWidthAuto", GradingSettings.XsecWidthAuto ? 1 : 0);
         GradingSettings.XsecLeft = xl;
         GradingSettings.XsecRight = xr;
         GradingSettings.XsecLayout = System.Math.Clamp(_xsecLayout.SelectedIndex, 0,

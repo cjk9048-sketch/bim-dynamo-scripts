@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.ApplicationServices;
+﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.Runtime;
 using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 
@@ -27,14 +27,14 @@ public sealed class SheetSettingsCommand
         AcadApp.ShowModalWindow(dlg);
         if (dlg.DialogResult != true) return;
 
-        doc.Editor.WriteMessage(
-            "\n[도면 설정] 저장했습니다 — 횡단 간격 " + GradingSettings.XsecInterval.ToString("0.#") + "m"
-            + " · 폭 좌" + GradingSettings.XsecLeft.ToString("0.#") + "/우" + GradingSettings.XsecRight.ToString("0.#") + "m"
-            + " · 원지반 굴곡 " + GradingSettings.GroundBreakLabels[GradingSettings.GroundBreakStep()]
-            + "(" + GradingSettings.GroundBreakTolZ.ToString("0.###") + "m)"
-            + " · 종단뷰 축척 " + (GradingSettings.ProfileScale > 0
-                                   ? "1:" + GradingSettings.ProfileScale.ToString("F0") + "(고정)"
-                                   : "자동"));
+        // ★★★[검토 0908 · 심각] <b>안내문은 재생성 <u>뒤에</u> 찍는다.</b>
+        //
+        //   종전엔 여기서 먼저 찍고 아래에서 <c>Rebuild</c>를 불렀다. 그런데 폭이 <b>자동</b>이면
+        //   <c>Rebuild</c> 안에서 <see cref="XsecWidth"/>가 정지 결과를 재어 폭을 <b>덮어쓴다</b> —
+        //   그래서 <b>[저장] 한 번 누르는 사이에</b> 사용자가 친 30이 50으로 바뀌는데
+        //   화면에는 30이라고 찍혀 있었다. 도면설정을 다시 열면 50이 들어 있다.
+        //   <b>자기가 방금 한 말을 스스로 거짓말로 만드는</b> 순서였다.
+        //   → 다시 그린 <b>뒤에</b> 최종 값을 찍는다.
 
         // ★★[v32.29 · JACK 0813] <b>저장하면 이미 만든 종단도가 그 자리에서 갱신된다.</b>
         //   JACK: <i>"도면설정에서 원지반 표현을 바꾸고 저장해도 업데이트가 되지 않아."</i>
@@ -42,5 +42,16 @@ public sealed class SheetSettingsCommand
         //   <b>다시 그리는 것이 곧 갱신</b>이다. 노선과 놓은 자리를 재사용하므로 다시 찍을 것이 없다.
         //   종단도가 없으면 <see cref="ProfileCommand.Rebuild"/>가 조용히 안내만 하고 돌아선다.
         ProfileCommand.Rebuild(doc);
+
+        // ★재생성이 폭을 고쳤을 수 있으므로 <b>지금</b> 읽어 찍는다.
+        doc.Editor.WriteMessage(
+            "\n[도면 설정] 저장했습니다 — 횡단 간격 " + GradingSettings.XsecInterval.ToString("0.#") + "m"
+            + " · 폭 좌" + GradingSettings.XsecLeft.ToString("0.#") + "/우" + GradingSettings.XsecRight.ToString("0.#") + "m"
+            + (GradingSettings.XsecWidthAuto ? "(자동 — 정지 결과에서 쟀습니다)" : "(수동 — 치신 값)")
+            + " · 원지반 굴곡 " + GradingSettings.GroundBreakLabels[GradingSettings.GroundBreakStep()]
+            + "(" + GradingSettings.GroundBreakTolZ.ToString("0.###") + "m)"
+            + " · 종단뷰 축척 " + (GradingSettings.ProfileScale > 0
+                                   ? "1:" + GradingSettings.ProfileScale.ToString("F0") + "(고정)"
+                                   : "자동"));
     }
 }

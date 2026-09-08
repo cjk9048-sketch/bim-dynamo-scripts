@@ -43,8 +43,9 @@ public static class SampleLineCommand
 
         // ── ① 측점 목록을 만든다(정체인 ∪ 꺾임점 ∪ 구배변화점 ∪ 수동)
         double interval = System.Math.Max(0.5, GradingSettings.XsecInterval);
-        double wl = System.Math.Max(0.0, GradingSettings.XsecLeft);
-        double wr = System.Math.Max(0.0, GradingSettings.XsecRight);
+        // ★★★[JACK 0908] 폭은 <see cref="XsecWidth"/> 한 자에서만 나온다 —
+        //   네 곳이 따로 <c>GradingSettings</c>를 읽으면 <b>자동으로 잰 값과 갈라진다</b>(§50).
+        var (wl, wr) = XsecWidth.Resolve(db, alignId, null);
         if (wl + wr < 0.5) { wl = wr = 30.0; }
 
         List<StationMarks.Mark> plan;

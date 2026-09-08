@@ -27,6 +27,7 @@ public sealed class StrataPanel : UserControl
 
     private readonly DataGrid _gLayer = new();
     private readonly DataGrid _gBore = new();
+    
     private readonly TextBlock _status = new();
     /// <summary>표식 크기 바의 양 끝 — ★[JACK 0831] <b>×1이 정확히 1/3 자리</b>에 오도록 잡았다.
     /// <para><c>(1 − 0.2) / (2.6 − 0.2) = 1/3</c>. 더 크게 키울 일이 있으면 이 두 값을 함께 옮긴다
@@ -38,6 +39,11 @@ public sealed class StrataPanel : UserControl
     /// <b>깊이를 읽거나 표고를 읽거나</b> 둘 중 하나다.</para></summary>
     /// <para>★[JACK 0901] 기본은 <b>층별 GL값</b>이다 — 실무에서 암선 표고를 그대로 옮겨 적는 일이 흔하다.</para>
     internal StrataHeightMode Mode { get; private set; } = StrataHeightMode.Elevation;
+
+    /// <summary>★[JACK 0908] 지하수위 칸 이름 — <b>모드가 정한다</b>.
+    /// <para>표고 모드면 <c>지하수위 표고</c>(GL.m를 그대로), 두께 모드면 <c>지하수위 심도</c>(지반에서 아래로).
+    /// 값의 뜻이 다르므로 이름도 달라야 한다 — 같은 칸에 다른 뜻을 넣게 하면 조용히 틀린 도면이 나온다.</para></summary>
+    private string WaterHeader => Mode == StrataHeightMode.Elevation ? "지하수위 표고" : "지하수위 심도";
 
     private readonly RadioButton _rbTh = new();
     private readonly RadioButton _rbGl = new();
@@ -109,13 +115,20 @@ public sealed class StrataPanel : UserControl
         if (Mode == m) return;
         Mode = m;
         SeedDefaultLayers();
-        foreach (var b in Bores) { b.Th.Clear(); }
+        // ★★★[검토 0908 · 치명] <b>지하수위도 비운다.</b>
+        //   종전엔 층 두께만 비웠다. 그런데 0908부터 지하수위 칸의 뜻도 모드가 정한다 —
+        //   두께 모드에서 <b>심도 3</b>을 치고 GL 모드로 바꾸면 그 3이 <b>표고 3</b>으로 읽혀
+        //   지반에서 <b>97~127m 아래</b>에 수위면이 깔린다(검토 실측).
+        //   ★그러고도 <b>아무 경고가 없다</b> — 열 머리만 얌전히 바뀌어 일부러 그런 것처럼 보이고,
+        //   표에 남은 숫자 3은 사람 눈에 멀쩡하다. <b>조용히 틀리는 것</b>이 가장 나쁘다.
+        foreach (var b in Bores) { b.Th.Clear(); b.Water = double.NaN; }
         StrataEdit.SyncLength(Layers.Count, Bores.Select(b => b.Th));
         SafeRefresh();
         _modeHint.Text = HintFor(Mode);
+        // ★[검토 0908] 두 문장을 <b>나란히</b> 둔다 — 한쪽만 꾸미면 왜 다른지가 안 보인다.
         Say(Mode == StrataHeightMode.Elevation
-            ? "층별 GL값으로 바꿨습니다 — 친 값의 뜻이 달라져 표를 비웠습니다."
-            : "층별 두께로 바꿨습니다 — 친 값의 뜻이 달라져 표를 비웠습니다.");
+            ? "층별 GL값으로 바꿨습니다 — 친 값의 뜻이 달라져 층 두께와 지하수위를 비웠습니다."
+            : "층별 두께로 바꿨습니다 — 친 값의 뜻이 달라져 층 두께와 지하수위를 비웠습니다.");
     }
 
     private void Build()
@@ -194,6 +207,13 @@ public sealed class StrataPanel : UserControl
         c2.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // 표
         // ★[JACK 0901 문구 확정] 짧게 — 무엇을 치는지는 <b>위 모드 안내</b>가 이미 말한다.
         c2.Children.Add(MakeHead("② 보링공", "지층 데이터 입력. (지반고 자동 로딩)"));
+
+        // ★★★[JACK 0908] <b>선택칸을 없앴다 — 시스템이 정한다.</b>
+        //   0907에 "지하수위 잇기(표고로/심도로)" 칸을 넣었는데, JACK이 하루 써 보고
+        //   <i>"그냥 시스템적으로 정하는 게 좋겠다"</i>고 하셨다. 맞는 말이다 —
+        //   <b>이미 위에 같은 뜻의 스위치가 있다</b>(<c>① 지층 높이 설정</c>의 층별 GL값/층별 두께).
+        //   같은 것을 두 곳에서 묻는 것은 사람을 헷갈리게만 한다(§50의 사람 판).
+        //   → 지하수위 칸은 <b>그 스위치를 따라간다</b>(<see cref="WaterHeader"/>).
 
         _gBore.ItemsSource = Bores;
         _gBore.AutoGenerateColumns = false;
@@ -497,7 +517,14 @@ public sealed class StrataPanel : UserControl
         //   그 뒤에 둔 것은 무엇이든 오른쪽으로 밀려 <b>가로로 긁어야</b> 보인다.
         //   지하수위는 층 수와 무관하게 <b>공마다 하나</b>인 값이므로 지반고 옆에 붙는 것이 자리다.
         //   → <b>늘어나는 칸은 언제나 맨 끝</b>. 고정 칸을 그 뒤에 두지 않는다.
-        Col(new DataGridTextColumn { Header = "지하수위 심도", Binding = Fmt("Water", "0.##"), Width = WWater },
+        // ★★★[JACK 0908] <b>지하수위 칸은 위 스위치를 따라간다.</b>
+        //   JACK: <i>"층별 GL값으로 선택 시 지하수위는 '지하수위 표고'라고 바꾸고 해당 표고값을 입력하게,
+        //   층별 두께 선택 시 '지하수위 심도'라고 하고 심도(깊이)값을 넣게."</i>
+        //   ★모드를 바꾸면 <see cref="SetMode"/>가 <b>층 두께와 지하수위를 함께 비운다</b> —
+        //   그래야 뜻이 섞이지 않는다. (0908 첫 판은 지하수위를 <b>안 비웠고</b>, 주석은
+        //   <c>OnModeChanged</c>라는 <b>없는 함수</b>를 근거로 댔다 — 검토가 잡았다.
+        //   없는 이름을 적으면 다음 사람은 그것을 찾다 못 찾고 <b>주석을 믿는다</b>.)
+        Col(new DataGridTextColumn { Header = WaterHeader, Binding = Fmt("Water", "0.##"), Width = WWater },
             ColKind.Water);
 
         for (int i = 0; i < Layers.Count; i++)
@@ -624,7 +651,12 @@ public sealed class StrataPanel : UserControl
                 _sizeTimer.Stop();
                 if (Bores.Count == 0) return;
                 int n = StrataDraw.Redraw(Bores);
-                try { GradingSettings.SaveUserPrefs(); } catch { }   // 다음에 켤 때도 이 크기
+                // ★★[검토 0908 · 기존 결함] <b>통짜 저장이 아니라 이 키만</b> 쓴다.
+                //   <c>SaveUserPrefs()</c>는 <c>MiterConvex</c>를 함께 쓰는데, 도킹바는
+                //   그 도면의 사면형상을 물고 있을 수 있다 — 표식 크기를 바꿨 뿐인데
+                //   <b>사면형상이 레지스트리에 박힌다</b>(v17.6 결함의 뿌리와 같은 문).
+                GradingSettings.SaveUserPrefInt("StrataMarkScale",
+                    (int)System.Math.Round(System.Math.Clamp(StrataDraw.MarkScale, 0.2, 2.6) * 100));
                 Say($"표식 크기 ×{StrataDraw.MarkScale:0.0} — {n}개 다시 그림");
             };
         }
@@ -938,7 +970,11 @@ public sealed class StrataPanel : UserControl
             logs = Bores.Select(b => new BoreLog(b.Name, b.X, b.Y, b.Gl, b.Th.ToArray(), b.Water)).ToList();
         }
 
-        var model = StrataModel.Build(defs, logs, out string why);
+        // ★★★[JACK 0908] 지하수위 값의 <b>뜻</b>을 넘긴다 — 위 스위치가 정한 그대로.
+        //   표고 모드면 친 값이 <b>표고</b>이고, 두께 모드면 <b>심도</b>다.
+        //   어느 쪽이든 잇는 것은 <b>표고</b>다(원지반 경향을 무시한다 — JACK 0908 확정).
+        var model = StrataModel.Build(defs, logs, out string why,
+            Mode == StrataHeightMode.Elevation ? WaterInput.Elevation : WaterInput.Depth);
         if (model == null) { Say("만들 수 없습니다 — " + why); return; }
 
         string r = StrataDraw.BuildSurfaces(model, out int made, out string note, shows);
