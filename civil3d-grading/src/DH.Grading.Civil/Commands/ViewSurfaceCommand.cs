@@ -194,7 +194,8 @@ public sealed class ViewSurfaceCommand
 
             SetLayers(db, tr, lines);
             tr.Commit();
-            ed.WriteMessage($"\n[보기] {msg}");
+            int nVs = Wireframe(db);
+            ed.WriteMessage($"\n[보기] {msg}" + (nVs > 0 ? $" · 뷰 {nVs}개를 2D 와이어프레임으로" : ""));
         }
         catch (System.Exception ex) { ed.WriteMessage("\n[보기 오류] " + ex.Message); }
     }
@@ -319,6 +320,74 @@ public sealed class ViewSurfaceCommand
             tr.AddNewlyCreatedDBObject(xr, true);
         }
         catch { }
+    }
+
+    /// <summary>★★★[JACK 0908 "보기에서 모든 뷰의 모드를 와이어프레임으로 해줘"]
+    /// <b>모든 뷰를 2D 와이어프레임으로 돌린다.</b>
+    ///
+    /// <para><b>왜 필요한가.</b> 0908에 JACK이 세 가지를 한꺼번에 신고했다 —
+    /// <i>"밴드에 회색 배경이 생겼어"</i> · <i>"글씨가 외곽선으로 쓰고 안에 검/흰으로 채운 것 같아"</i> ·
+    /// <i>"옹벽 막대도 채우기가 이상해"</i>. 셋 다 <b>채워진 것</b>이었고(밴드 면 · 트루타입 글씨 ·
+    /// 폭 있는 폴리라인), 원인은 뷰포트가 <c>회색 음영처리</c>로 걸려 있던 것이었다.
+    /// <b>2D 와이어프레임으로 바꾸니 셋 다 정상 — 코드는 한 줄도 안 건드렸다.</b></para>
+    ///
+    /// <para>도면 산출물은 <b>평면 도면</b>이라 음영 모드에서는 언제나 이상해 보인다.
+    /// 그러니 <b>보기를 누를 때마다</b> 제자리로 돌려 놓는다 — 사용자가 그것을 알 필요가 없게.</para>
+    ///
+    /// <para>★<b>두 갈래로 건다.</b> <c>VSCURRENT</c>는 <b>지금 보는 뷰</b>만 바꾸므로,
+    /// 나뉜 뷰(타일)까지 닿으려면 <c>ViewportTable</c>을 훑어야 한다. 둘 다 한다.</para>
+    /// <para>실패해도 <b>일을 막지 않는다</b> — 보기의 본 일은 지표면 켜고 끄기다.</para></summary>
+    private static int Wireframe(Database db)
+    {
+        int n = 0;
+        ObjectId vsId = ObjectId.Null;
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var d = (DBDictionary)tr.GetObject(db.VisualStyleDictionaryId, OpenMode.ForRead);
+            // 이름은 도면 언어를 안 탄다(내부 이름은 언제나 영문이다).
+            if (d.Contains("2dWireframe")) vsId = d.GetAt("2dWireframe");
+            tr.Commit();
+        }
+        catch { }
+
+        // ① 지금 보는 뷰 — 시스템 변수가 가장 확실하다.
+        //   ★★[검토 0908] <b>바꾼 것만 센다.</b> 종전엔 <c>SetSystemVariable</c>이
+        //   무엇을 했는지와 무관하게 무조건 <c>n++</c>이라, 이미 2D였는데도
+        //   <b>"뷰 1개를 2D 와이어프레임으로"</b>라고 찍었다 —
+        //   이 저장소가 스스로 세운 규칙(<i>짐작을 사실처럼 적지 말 것</i>)에 걸린다.
+        //   먼저 <b>읽어 보고</b>, 이미 그것이면 손대지 않는다.
+        try
+        {
+            string? before = AcadApp.GetSystemVariable("VSCURRENT") as string;
+            bool already = before != null
+                           && before.Replace(" ", "").Equals("2dwireframe", System.StringComparison.OrdinalIgnoreCase);
+            if (!already) { AcadApp.SetSystemVariable("VSCURRENT", "2dwireframe"); n++; }
+        }
+        catch { }
+
+        // ② 나뉜 뷰(타일)까지 — 표를 훑어 하나씩 건다.
+        if (!vsId.IsNull)
+            try
+            {
+                using var tr = db.TransactionManager.StartTransaction();
+                var vt = (ViewportTable)tr.GetObject(db.ViewportTableId, OpenMode.ForRead);
+                foreach (ObjectId id in vt)
+                    try
+                    {
+                        if (tr.GetObject(id, OpenMode.ForRead) is not ViewportTableRecord vr) continue;
+                        if (vr.VisualStyleId == vsId) continue;      // 이미 그것이면 손대지 않는다
+                        tr.GetObject(id, OpenMode.ForWrite);
+                        vr.VisualStyleId = vsId;
+                        n++;
+                    }
+                    catch { }
+                tr.Commit();
+            }
+            catch { }
+
+        try { AcadApp.DocumentManager.MdiActiveDocument?.Editor?.UpdateScreen(); } catch { }
+        return n;
     }
 
     /// <summary>★[JACK 0824] 생성 명령이 쓰는 <b>되돌릴 수 있는</b> 화면 전환.

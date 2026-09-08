@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Windows;
 using System.Windows.Controls;
 using Autodesk.AutoCAD.ApplicationServices;
@@ -281,8 +281,8 @@ internal sealed class MapPanel : UserControl
 
         var head = new Border
         {
-            Background = System.Windows.Media.Brushes.WhiteSmoke,
-            BorderBrush = System.Windows.Media.Brushes.Gainsboro,
+            Background = DhBrand.Wall,      // ★[JACK 0908] 회사색 한 벌 — 창마다 색을 따로 적지 않는다
+            BorderBrush = DhBrand.Line,
             BorderThickness = new Thickness(0, 0, 0, 1),
             Child = stack,
         };
@@ -293,6 +293,14 @@ internal sealed class MapPanel : UserControl
         Grid.SetRow(_fallback, 1);
         _root.Children.Add(_msg);
         _root.Children.Add(_fallback);
+        // ★★[검토 0908 · 보통] <b>색만 바꾼 것은 통일이 아니었다.</b>
+        //   머리 바탕을 WhiteSmoke(#F5F5F5)→Wall(#F5F8F8)로 바꿔 봐야 255단계에서 3 차이라
+        //   <b>화면에서 구분이 안 된다</b>. 정작 그 안의 콤보와 단추는 윈도우 기본 회색 3D 그대로여서,
+        //   팝업 둘이 청록 둥근 모양이 된 지금은 <b>전보다 더 따로 논다</b>.
+        //   ★여기는 표(DataGrid)가 없으므로 지층 도킹창과 달리 <b>창 전체에</b> 걸어도 된다
+        //   (지층에서 피한 이유는 표 편집칸이 28px 상자가 되어 표가 둔해지기 때문이다).
+        //   ★WebView2는 네이티브라 WPF 모양표가 닿지 않는다 — 지도 그림 자체는 그대로다.
+        DhBrand.Apply(this);
         Content = _root;
     }
 
@@ -333,7 +341,7 @@ internal sealed class MapPanel : UserControl
             }
             _csPick.SelectedIndex = sel;
             _csHint.Text = "변경 시 정지옵션에 저장";
-            _csHint.Foreground = System.Windows.Media.Brushes.DimGray;
+            _csHint.Foreground = DhBrand.Sub;
         }
         catch { }
         finally { _csFilling = false; }
@@ -368,8 +376,8 @@ internal sealed class MapPanel : UserControl
                 ? "정지옵션 저장됨 · 도면 좌표계 적용됨"
                 : "정지옵션 저장됨 · 도면 좌표계 적용 실패 — " + note;
             _csHint.Foreground = ok
-                ? System.Windows.Media.Brushes.DarkGreen
-                : System.Windows.Media.Brushes.SaddleBrown;
+                ? DhBrand.Ok       // ★[검토 0908] 강조색과 같으면 '됐다'로 안 읽힌다
+                : DhBrand.Warn;
             try { doc.Editor.WriteMessage("\n[서버 지표면] 좌표 기준 변경 — " + note); } catch { }
             try { DiagLog.Append($"\n[지도도킹바] 좌표 기준 바꿈 → EPSG:{epsg} · {note}"); } catch { }
         }
