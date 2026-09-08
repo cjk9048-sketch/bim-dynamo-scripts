@@ -22,3 +22,9 @@ dhgrade_debug.txt
 
 DHXSEC_진단*.log
 DHGRADE_진단.log
+
+# ★[0908] 위 규칙이 새 덤프 이름을 못 잡고 있었다 — 같은 갈래를 마저 넣는다.
+#   전부 실행할 때마다 다시 생기는 것이라 저장소에 둘 이유가 없다(진단이력만 7.5M·72개였다).
+DHGRADE_*.csv
+DHXSEC_*.csv
+진단이력/
