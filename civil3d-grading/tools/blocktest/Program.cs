@@ -8516,6 +8516,139 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     }
 }
 
+// ── S98 ★★★[JACK 0909] 터파기 <b>기준면 두 갈래</b> ─────────────────────────────
+//   JACK: <i>"공정에 따라 다르다 — 터파기선까지 먼저 공사하고 구조물 설치하고 계획고로 성토하는 방법과,
+//   계획고까지 만들고 다시 터파기 하고 되메우거나 현장 상황에 따라 다른 것이었어."</i>
+//
+//   ★<b>이 시험이 지키는 것</b>(0908 검토 치명 2): 이 규칙의 <b>사본이 셋</b>이었다 —
+//   토적표(<c>StrataQuantity</c>) · 횡단 면적(<c>XsecQuantity</c>) · 굴착 형상(<c>ExcavCommand</c>).
+//   셋이 서로 몰라서, 기준면만 바꾸면 <b>그림은 깊어지는데 숫자는 그대로</b>가 된다.
+//   → 이제 <see cref="CrossSectionArea.SurfaceFor"/> <b>하나</b>만 본다. 그것을 여기서 재 둔다.
+{
+    Console.WriteLine("\n== S98 터파기 기준면 두 갈래 ==");
+    var x98 = new[] { 0.0, 10.0 };
+    const CrossSectionArea.ExcavBase LOW = CrossSectionArea.ExcavBase.Lower;
+    const CrossSectionArea.ExcavBase PLN = CrossSectionArea.ExcavBase.Plan;
+
+    // ── ① 성토부 — 여기서만 갈린다. 원지반 95 · 계획 100 · 바닥 90
+    var eg98 = new[] { 95.0, 95.0 };
+    var fg98 = new[] { 100.0, 100.0 };
+    var ex98 = new[] { 90.0, 90.0 };
+    var fLow = XsecQuantity.Compute(x98, eg98, x98, fg98, x98, ex98, LOW);
+    var fPln = XsecQuantity.Compute(x98, eg98, x98, fg98, x98, ex98, PLN);
+
+    Check("S98 성토부·원지반 기준 — 5m×10 = 50㎡ (지금까지의 값)",
+          Math.Abs(fLow.ExcTotal - 50.0) < 1e-6, $"{fLow.ExcTotal:F2}㎡");
+    Check("S98 ★성토부·계획면 기준 — 10m×10 = 100㎡ (성토하고 다시 판다)",
+          Math.Abs(fPln.ExcTotal - 100.0) < 1e-6, $"{fPln.ExcTotal:F2}㎡");
+    Check("S98 ★★두 갈래가 <b>실제로</b> 갈린다 — 차이 = 성토 두께 5m×10",
+          Math.Abs((fPln.ExcTotal - fLow.ExcTotal) - 50.0) < 1e-6,
+          $"{fPln.ExcTotal - fLow.ExcTotal:F2}㎡");
+
+    // ── ② 5m 구분도 따라간다 — 안 따라가면 단가가 다른 칸에 들어간다
+    Check("S98 원지반 기준 5m 딱 — 초과 0", Math.Abs(fLow.ExcDeep) < 1e-6, $"{fLow.ExcDeep:F2}");
+    Check("S98 ★★계획면 기준 10m — 이하 50 · 초과 50 (5m 구분이 따라왔다)",
+          Math.Abs(fPln.ExcShallow - 50.0) < 1e-6 && Math.Abs(fPln.ExcDeep - 50.0) < 1e-6,
+          $"이하 {fPln.ExcShallow:F2} / 초과 {fPln.ExcDeep:F2}");
+
+    // ── ③ ★되메우기도 같이 따라간다 (계획 §2.3 — "없는" 게 아니라 "틀리던" 자리)
+    Check("S98 ★★★되메우기가 기준면을 따라간다 — 판 것과 같다",
+          Math.Abs(fPln.Backfill - fPln.ExcTotal) < 1e-6 && Math.Abs(fPln.Backfill - 100.0) < 1e-6,
+          $"되메 {fPln.Backfill:F2} vs 터파기 {fPln.ExcTotal:F2}");
+    Check("S98 ★되메우기도 두 갈래가 갈린다(50 → 100)",
+          Math.Abs(fLow.Backfill - 50.0) < 1e-6 && Math.Abs(fPln.Backfill - 100.0) < 1e-6,
+          $"{fLow.Backfill:F2} → {fPln.Backfill:F2}");
+
+    // ── ④ ★★★절토부는 두 갈래가 <b>같아야</b> 한다 — 계획서 §2.1의 핵심 주장
+    //    원지반부터 재면 그 흙을 부지 절토에서 한 번, 터파기에서 또 한 번 센다(이중 계상).
+    var eg98C = new[] { 106.0, 106.0 };
+    var fg98C = new[] { 100.0, 100.0 };
+    var ex98C = new[] { 95.0, 95.0 };
+    var cLow = XsecQuantity.Compute(x98, eg98C, x98, fg98C, x98, ex98C, LOW);
+    var cPln = XsecQuantity.Compute(x98, eg98C, x98, fg98C, x98, ex98C, PLN);
+    Check("S98 ★★★절토부는 두 갈래가 <b>같다</b> — 어느 공정이든 계획면부터 판다",
+          Math.Abs(cLow.ExcTotal - cPln.ExcTotal) < 1e-9,
+          $"낮은쪽 {cLow.ExcTotal:F2} vs 계획면 {cPln.ExcTotal:F2}");
+    Check("S98 절토부 — 둘 다 계획고 기준 5m×10 = 50㎡(원지반 기준 110㎡가 아니다)",
+          Math.Abs(cLow.ExcTotal - 50.0) < 1e-6 && Math.Abs(cPln.ExcTotal - 50.0) < 1e-6,
+          $"{cLow.ExcTotal:F2} / {cPln.ExcTotal:F2}");
+
+    // ── ⑤ 계획면이 없는 자리는 계획면 기준도 <b>원지반으로 물러선다</b>
+    var pNaN = new[] { double.NaN, double.NaN };
+    var nLow = XsecQuantity.Compute(x98, eg98, x98, pNaN, x98, ex98, LOW);
+    var nPln = XsecQuantity.Compute(x98, eg98, x98, pNaN, x98, ex98, PLN);
+    Check("S98 ★계획면이 없으면 계획면 기준도 원지반으로 물러선다(둘이 같다)",
+          Math.Abs(nLow.ExcTotal - nPln.ExcTotal) < 1e-9 && Math.Abs(nPln.ExcTotal - 50.0) < 1e-6,
+          $"{nLow.ExcTotal:F2} / {nPln.ExcTotal:F2}");
+
+    // ── ⑥ ★기본값은 <b>지금까지의 동작</b> — 부르는 곳을 안 고쳐도 값이 안 바뀐다
+    var dflt = XsecQuantity.Compute(x98, eg98, x98, fg98, x98, ex98);
+    Check("S98 ★★안 주면 원지반 기준 — 옛 호출부의 값이 한 톨도 안 바뀐다",
+          Math.Abs(dflt.ExcTotal - fLow.ExcTotal) < 1e-12, $"{dflt.ExcTotal:F6}");
+
+    // ── ⑦ 지표선을 내는 자 자체
+    var sLow = CrossSectionArea.SurfaceFor(eg98, fg98, LOW);
+    var sPln = CrossSectionArea.SurfaceFor(eg98, fg98, PLN);
+    Check("S98 SurfaceFor — 성토부: 낮은쪽 95 · 계획면 100",
+          Math.Abs(sLow[0] - 95.0) < 1e-9 && Math.Abs(sPln[0] - 100.0) < 1e-9,
+          $"{sLow[0]:F1} / {sPln[0]:F1}");
+    Check("S98 SurfaceFor — 절토부: 둘 다 계획면 100",
+          Math.Abs(CrossSectionArea.SurfaceFor(eg98C, fg98C, LOW)[0] - 100.0) < 1e-9 &&
+          Math.Abs(CrossSectionArea.SurfaceFor(eg98C, fg98C, PLN)[0] - 100.0) < 1e-9, "");
+    Check("S98 SurfaceFor — 계획면이 통째로 없으면(null) 원지반",
+          CrossSectionArea.SurfaceFor(eg98, null, PLN)[0] == 95.0, "");
+
+    // ── ⑧ ★★★<b>토적표와 횡단 면적이 같은 값을 본다</b> — 셋이 갈라져 있던 바로 그 자리
+    //     지층을 안 주면 전부 토사, 수위를 안 주면 전부 육상이라 손으로 풀 수 있다.
+    foreach (var (basis, name, want) in new[] { (LOW, "원지반", 50.0), (PLN, "계획면", 100.0) })
+    {
+        var led98 = new QtyLedger();
+        StrataQuantity.Accumulate(led98, x98, eg98, x98, fg98, x98, ex98,
+                                  new List<StrataQuantity.Band>(), null, null,
+                                  deepLimit: 5.0, axis: null, basis: basis);
+        double le = led98.Get(QtyKey.OfExc(RockClass.Soil, DepthClass.Le, WaterClass.Land));
+        double gt = led98.Get(QtyKey.OfExc(RockClass.Soil, DepthClass.Gt, WaterClass.Land));
+        double sum = (double.IsNaN(le) ? 0 : le) + (double.IsNaN(gt) ? 0 : gt);
+        var q = XsecQuantity.Compute(x98, eg98, x98, fg98, x98, ex98, basis);
+        Check($"S98 ★★★{name} 기준 — 토적표 합({sum:F2}) = 횡단 면적({q.ExcTotal:F2})",
+              Math.Abs(sum - q.ExcTotal) < 1e-6, $"{sum:F3} vs {q.ExcTotal:F3}");
+        Check($"S98 ★{name} 기준 — 손으로 푼 답 {want:F0}㎡",
+              Math.Abs(sum - want) < 1e-6, $"{sum:F2}㎡");
+    }
+
+    // ── ⑨ ★★★<b>쌓은 흙은 토사다</b> — 맨 위 지층을 위로 늘리면 안 되는 이유.
+    //     표층이 <b>풍화암</b>인 부지에서 계획면 기준으로 파면, 원지반 위 성토재까지
+    //     풍화암으로 계상돼 <b>단가가 통째로 틀린다</b>. 그래서 토사 띠를 따로 얹었다.
+    //     원지반 95 · 계획 100 · 바닥 90 · 표층 풍화암(상단 95).
+    {
+        var rockTop = new List<StrataQuantity.Band>
+        {
+            new(RockClass.Weathered, x98, new double[] { 95, 95 }),   // 표층부터 풍화암
+        };
+        var ledR = new QtyLedger();
+        StrataQuantity.Accumulate(ledR, x98, eg98, x98, fg98, x98, ex98, rockTop, null, null,
+                                  deepLimit: 5.0, axis: null, basis: PLN);
+        double soil = ledR.Get(QtyKey.OfExc(RockClass.Soil, DepthClass.Le, WaterClass.Land));
+        double weat = ledR.Get(QtyKey.OfExc(RockClass.Weathered, DepthClass.Gt, WaterClass.Land));
+        Check("S98 ★★★쌓은 흙(원지반→계획면 5m)은 <b>토사</b> 50㎡",
+              !double.IsNaN(soil) && Math.Abs(soil - 50.0) < 1e-6, $"{soil:F2}㎡");
+        Check("S98 ★★★표층 암은 원지반 아래 5m만 — 풍화암 50㎡(100㎡가 아니다)",
+              !double.IsNaN(weat) && Math.Abs(weat - 50.0) < 1e-6, $"{weat:F2}㎡");
+        double sumR = (double.IsNaN(soil) ? 0 : soil) + (double.IsNaN(weat) ? 0 : weat);
+        var qR = XsecQuantity.Compute(x98, eg98, x98, fg98, x98, ex98, PLN);
+        Check("S98 ★★암층이 있어도 토적표 합 = 횡단 면적",
+              Math.Abs(sumR - qR.ExcTotal) < 1e-6, $"{sumR:F2} vs {qR.ExcTotal:F2}");
+
+        // 원지반 기준으로는 성토재 띠가 아예 안 생긴다 — 팔 일이 없기 때문이다.
+        var ledR2 = new QtyLedger();
+        StrataQuantity.Accumulate(ledR2, x98, eg98, x98, fg98, x98, ex98, rockTop, null, null,
+                                  deepLimit: 5.0, axis: null, basis: LOW);
+        Check("S98 ★원지반 기준에는 성토재 칸이 안 생긴다",
+              double.IsNaN(ledR2.Get(QtyKey.OfExc(RockClass.Soil, DepthClass.Le, WaterClass.Land))),
+              "NaN");
+    }
+}
+
 // ★★[검토 0904] <b>요약이 파일 48% 지점에서 찍히고 있었다.</b> 그 뒤 S54~S95의 Check 426개가
 //   요약에 안 잡혀, '전부 통과'가 <b>절반만 보증하는 문장</b>이었다(실측: 요약 뒤에서 S54가 FAIL한 판이 있었다).
 //   fails 계수 자체는 맞았고 세는 자리만 틀렸다 — 맨 끝으로 옮긴다.

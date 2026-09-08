@@ -1,4 +1,4 @@
-namespace DH.Grading.Core;
+﻿namespace DH.Grading.Core;
 
 /// <summary>★★[JACK 0826] <b>횡단면 한 장의 면적</b>을 잰다 — 수량표의 알맹이다.
 ///
@@ -133,6 +133,49 @@ public static class CrossSectionArea
 
     /// <summary>두 선 중 <b>낮은 쪽</b>을 골라 새 선을 만든다 — 터파기 지표는
     /// <c>min(계획면, 원지반)</c>이다(성토 구간은 아직 흙이 없으니 원지반이 지표다).</summary>
+    /// <summary>★★★[JACK 0909 · 계획 §2] <b>터파기를 어느 면에서부터 재는가.</b>
+    ///
+    /// <para>JACK: <i>"공정에 따라 다르다 — 터파기선까지 먼저 공사하고 구조물을 설치하고
+    /// 계획고로 성토하는 방법과, 계획고까지 만들고 다시 터파기 하고 되메우거나
+    /// 현장 상황에 따라 다른 것이었어."</i></para>
+    ///
+    /// <para><b>갈리는 곳은 성토부뿐이다.</b> 절토부에서 원지반부터 재면 그 흙을
+    /// <b>부지 절토에서 한 번, 터파기에서 또 한 번</b> 센다 — 이중 계상이라 어느 공정이든 계획면이 맞다.</para></summary>
+    public enum ExcavBase
+    {
+        /// <summary><b>원지반 기준</b>(먼저 파고 구조물 세우고 나중 성토) —
+        /// 성토부는 원지반, 절토부는 계획면. <b>지금까지의 동작이며 기본값</b>이다.</summary>
+        Lower = 0,
+
+        /// <summary><b>계획지표면 기준</b>(계획고까지 성토·다짐 후 판다) — 성토부도 계획면.
+        /// <para>계획면이 없는 자리는 원지반으로 물러선다 — <see cref="Lower"/>가 NaN을 다루는 것과 같은 규칙.</para></summary>
+        Plan = 1,
+    }
+
+    /// <summary>★★★[JACK 0909] <b>터파기 지표선을 내는 단 한 곳.</b>
+    ///
+    /// <para><b>왜 함수로 뺐나.</b> 0908 검토가 잡았다 — 이 규칙의 <b>사본이 셋</b>이었다:
+    /// <c>StrataQuantity</c>(토적표 지표선) · <c>XsecQuantity</c>(횡단 면적·되메우기) ·
+    /// <c>ExcavCommand</c>(굴착 형상). 셋이 서로 몰라서, 기준면을 바꾸면
+    /// <b>그림만 깊어지고 숫자는 그대로</b>가 된다 — 성토 두께만큼 물량이 <b>조용히 빠진다</b>.</para>
+    ///
+    /// <para><c>StrataQuantity.cs</c>가 이미 값비싸게 적어 뒀다 —
+    /// <i>"두 계산이 서로 다른 지표면을 쓰면 합이 맞을 리가 없다 → 같은 것을 쓴다."</i>
+    /// 이제 <b>같은 함수</b>를 쓴다.</para></summary>
+    /// <param name="G">원지반. <param name="P">계획면(없으면 <c>null</c>).</param></param>
+    public static double[] SurfaceFor(double[] G, double[] P, ExcavBase basis)
+    {
+        if (P == null) return G;
+        if (G == null) return P;
+        if (basis == ExcavBase.Lower) return Lower(G, P);
+
+        // 계획면 기준 — 계획면을 쓰되 <b>없는 자리만</b> 원지반으로 물러선다.
+        int n = System.Math.Min(G.Length, P.Length);
+        var r = new double[n];
+        for (int i = 0; i < n; i++) r[i] = double.IsNaN(P[i]) ? G[i] : P[i];
+        return r;
+    }
+
     public static double[] Lower(double[] a, double[] b)
     {
         if (a == null) return b;
@@ -189,10 +232,13 @@ public static class XsecQuantity
     /// <param name="gx">원지반 가로 위치(m)와 <paramref name="gy"/> 표고.</param>
     /// <param name="px">계획면. 없으면 null.</param>
     /// <param name="ex">터파기면. 없으면 null.</param>
+    /// <param name="basis">★[JACK 0909] 터파기를 어느 면에서부터 재는가.
+    /// 안 주면 <b>지금까지의 동작</b>(낮은 쪽)이다 — 부르는 곳을 한꺼번에 안 고쳐도 값이 안 바뀐다.</param>
     public static XsecQty Compute(
         double[] gx, double[] gy,
         double[] px, double[] py,
-        double[] ex, double[] ey)
+        double[] ex, double[] ey,
+        CrossSectionArea.ExcavBase basis = CrossSectionArea.ExcavBase.Lower)
     {
         // ★★★[검토 0828 · M9] <b>조기 반환이 <c>MissG</c>를 못 켜고 나갔다.</b>
         //   호출부(<c>CollectQty</c>)가 <c>⚠원지반이 없던 측점 N개</c>를 찍으려고 이 깃발을 보는데,
@@ -229,7 +275,9 @@ public static class XsecQuantity
             //   <c>Lower</c>는 한쪽이 NaN이면 다른 쪽을 쓰는데, 터파기 구간에 계획면이 안 깔려 있으면
             //   그 자리만 <b>원지반 기준</b>이 되어 터파기가 부풀어 오른다(실측 예: 50 → 62.5㎡).
             //   경고 없이 과다 계상되므로 <b>몇 칸이 그랬는지 세어</b> 호출부가 알 수 있게 한다.
-            double[] top = P == null ? G : CrossSectionArea.Lower(G, P);
+            //   ★[JACK 0909] 규칙은 <see cref="CrossSectionArea.SurfaceFor"/> 하나뿐이다 —
+            //   토적표(<c>StrataQuantity</c>)와 굴착 형상이 <b>같은 함수</b>를 본다.
+            double[] top = CrossSectionArea.SurfaceFor(G, P, basis);
             if (P != null)
                 for (int i = 0; i < E.Length && i < P.Length; i++)
                     if (!double.IsNaN(E[i]) && double.IsNaN(P[i]) && !double.IsNaN(G[i])) noPlan++;
@@ -245,6 +293,11 @@ public static class XsecQuantity
             //    <b>이중 계산</b>이다. 기준면을 터파기와 <b>같은 자</b>(낮은 쪽)로 맞춘다.
             //
             //    구조물이 차지하는 몫은 아직 못 뺀다(구조물 형상이 모델에 없다) — 그만큼 많게 나온다.
+            //
+            //    ★★[JACK 0909] <b>기준면을 바꾸면 되메우기도 같이 따라간다</b> —
+            //      <c>shallow</c>·<c>deep</c>이 위 <c>top</c>에서 나오기 때문이다.
+            //      0908 검토가 짚었다: 되메우기는 "없는" 것이 아니라 <b>이미 인쇄되고 있어서</b>,
+            //      터파기만 계획면으로 올리면 <b>그 자리에서 어긋난다</b>. 한 몸으로 묶어 둔다.
             back = shallow + deep;
         }
         return new XsecQty(cut, fill, shallow, deep, back)
