@@ -114,8 +114,24 @@ public sealed class ProfileCommand
     /// 조용히 삼킨다(이 저장소가 §25에서 배운 '스타일은 도면에 남는다'의 다른 얼굴).</para></summary>
     internal static bool QuietRebuild { get; private set; }
 
-    internal static bool Rebuild(Document doc)
+    internal static bool Rebuild(Document doc) => Rebuild(doc, out _);
+
+    /// <summary>★★★[검토 0908 · 낮음] <b>손을 댔는지</b>를 따로 알려 준다.
+    ///
+    /// <para><b>왜 거짓 하나로는 모자란가.</b> 이 함수가 거짓을 돌려주는 길은 <b>둘</b>인데
+    /// 뒷일이 정반대다 —
+    /// ① <b>다시 그릴 종단도가 아예 없다</b>(노선·놓은 자리 기록이 없음) → <b>아무것도 안 부쉈다</b>.
+    /// ② <b>하다가 실패했다</b>(<c>Body</c>가 포기했거나 예외) → <b>이미 부순 뒤</b>일 수 있다.</para>
+    ///
+    /// <para>부른 쪽(<see cref="SheetSettingsCommand"/>)은 이 뒤에 <b>횡단도를 다시 그린다</b>.
+    /// ①인데도 다시 그리면, <b>부서진 것도 없는데</b> 뷰 수십 장을 새로 굽고 —
+    /// 게다가 종단은 옛 설정 그대로인데 횡단만 새 설정으로 그려져 <b>둘이 어긋난다</b>.
+    /// ②에서는 반대로 <b>꼭 다시 그려야</b> 한다.</para></summary>
+    /// <param name="started">종단도를 <b>실제로 건드리기 시작</b>했으면 참
+    /// (곧 <b>횡단도 딸려 지워졌을 수 있다</b>는 뜻).</param>
+    internal static bool Rebuild(Document doc, out bool started)
     {
+        started = false;
         Database db = doc.Database;
         Editor ed = doc.Editor;
         bool wasQuiet = QuietRebuild;
@@ -127,8 +143,9 @@ public sealed class ProfileCommand
                 ed.WriteMessage("\n[도면 설정] 다시 그릴 종단도가 없습니다 — [종단도] 버튼으로 먼저 만드세요."
                                 + "\n  ※v32.29 이전에 만든 종단도라면 '어디에 놓았는지'가 기록돼 있지 않습니다."
                                 + " 한 번만 [종단도]로 새로 만들면 그 뒤로는 저장할 때마다 자동으로 갱신됩니다.");
-                return false;
+                return false;   // ★started는 거짓 그대로 — 손을 안 댔다
             }
+            started = true;     // ★여기서부터는 부술 수 있다 — 실패해도 복구가 필요하다
             ed.WriteMessage($"\n[도면 설정] 종단도를 그 자리에 다시 그립니다(노선 {pts.Count}점 재사용)...");
             // ★[검토 반영] <see cref="Body"/>가 <b>중간에 포기했는지</b>를 그대로 넘긴다 —
             //   종전엔 무조건 참이라 부른 쪽이 성공과 실패를 구분할 수 없었다.

@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -32,7 +32,8 @@ public sealed class GradingDialog : Window
     private readonly ComboBox _fillWallStyle;
     private readonly ComboBox _coordSys;
 
-    internal static readonly SolidColorBrush GreyBrush = new(Color.FromRgb(0x99, 0x99, 0x99));
+    /// <summary>★[JACK 0908] 옅은 글자 — <b>회사색 한 벌</b>에서 가져온다(창마다 회색을 따로 적지 않는다).</summary>
+    internal static readonly Brush GreyBrush = DhBrand.Sub;
     private static readonly SolidColorBrush BlackBrush = new(Colors.Black);
 
     // 좌표계 드롭박스 — 표시 라벨과 대응 EPSG(신 2010 N+600000 먼저, 그다음 구 N+500000, 제주). 순서 일치 필수.
@@ -151,7 +152,7 @@ public sealed class GradingDialog : Window
         // 4. 좌표계 (오른쪽)
         AddSection(colR, "4. 좌표계 (내보내기 원점)",
             "도면이 어느 평면직각좌표계(원점)로 작성됐는지 선택. 위성사진·지형·SHP가 이 원점으로 맞춰짐. 대부분 신(2010, 원점가산 N=600000). 원점(서부125·중부127·동부129·동해131)을 측량성과에 맞게 고르세요.");
-        _coordSys = new ComboBox { Width = 260, Height = 24, Margin = new Thickness(0, 0, 0, 8), VerticalContentAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Left };
+        _coordSys = new ComboBox { Width = 260, Height = 28, Margin = new Thickness(0, 0, 0, 8), VerticalContentAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Left };
         foreach (var s in CoordLabels) _coordSys.Items.Add(s);
         int csIdx = System.Array.IndexOf(EpsgCodes, GradingSettings.ExportEpsg);
         _coordSys.SelectedIndex = csIdx >= 0 ? csIdx : 0;   // 기본 중부(5186)
@@ -183,25 +184,16 @@ public sealed class GradingDialog : Window
         _fillWallStyle.SelectionChanged += (_, _) => RedrawDiagram();
         RedrawDiagram();
 
-        root.Children.Add(new Border { Height = 8 });
+        // [JACK 0724] 글씨 잘림 방지 — 아래 여백.
+        //   ★종전 48px에서 12px로 줄였다. 그 아래에 <b>바닥 단추띠</b>가 새로 생겼고
+        //   그 띠가 자기 여백(위 12·아래 14)을 갖고 있어, 그대로 두면 빈 칸이 60px 넘게 벌어진다.
+        root.Children.Add(new Border { Height = 12 });
 
-        var btns = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            HorizontalAlignment = HorizontalAlignment.Right,
-        };
-        // [JACK 0728] Enter로 저장되지 않게(IsDefault 제거) — 저장은 클릭으로만.
-        var ok = new Button { Content = okText, Width = 96, Height = 30, Margin = new Thickness(0, 0, 8, 0) };
-        var cancel = new Button { Content = "취소", Width = 80, Height = 30, IsCancel = true };
+        // ★★★[JACK 0908 "너무 옛스럽고 딱딱한데" · "회사로고 활용"]
+        //   [JACK 0728] Enter로 저장되지 않게(IsDefault 제거) — 저장은 클릭으로만.
+        var (ok, cancel) = DhBrand.FooterButtons(okText);
         ok.Click += OnOk;
-        btns.Children.Add(ok);
-        btns.Children.Add(cancel);
-        root.Children.Add(btns);
-
-        // [JACK 0724] 글씨 잘림 방지 — 세로로 약 10% 여유(하단 여백).
-        root.Children.Add(new Border { Height = 48 });
-
-        Content = root;
+        DhBrand.Dress(this, "정지 옵션", "흙을 어떻게 깎고 쌓을지 — 정지면 형상을 정하는 값", root, ok, cancel);
     }
 
     private readonly Canvas? _cutCanvas, _fillCanvas;   // [JACK 0728 UI예시] 절토/성토 예시 그림
@@ -214,7 +206,7 @@ public sealed class GradingDialog : Window
     {
         Text = $"※ 구배 0(~{GradingSettings.MinSlope:0.###} 미만) 입력은 {GradingSettings.MinSlope:0.###}(수직 옹벽)로 처리됩니다.",
         FontSize = 11,
-        Foreground = new SolidColorBrush(Color.FromRgb(0xB0, 0x30, 0x28)),
+        Foreground = DhBrand.Warn,
         TextWrapping = TextWrapping.Wrap,
         Margin = new Thickness(4, 4, 0, 0),
         Visibility = Visibility.Collapsed,
@@ -467,7 +459,9 @@ public sealed class GradingDialog : Window
         T(20, cut ? yPlan + 8 : yPlan - 22, "계획면(부지)", 11);
     }
 
-    /// <summary>[JACK 0728 정렬] 번호 중단락 제목 — 굵은 13pt, 윗 블록과 넉넉한 간격(첫 단락만 0).</summary>
+    /// <summary>[JACK 0728 정렬] 번호 중단락 제목 — 윗 블록과 넉넉한 간격(첫 단락만 0).
+    /// <para>★[JACK 0908] <b>회사색 글자 + 그 아래 가는 실선.</b> 굵은 검정만으로는
+    /// 어디까지가 한 덩이인지 눈에 안 들어왔다 — 실선이 <b>덩이의 경계</b>를 말해 준다.</para></summary>
     internal static void AddSection(Panel parent, string title, string? tip = null, bool first = false)
     {
         parent.Children.Add(new TextBlock
@@ -475,7 +469,15 @@ public sealed class GradingDialog : Window
             Text = title,
             FontSize = 13,
             FontWeight = FontWeights.Bold,
-            Margin = new Thickness(0, first ? 0 : 18, 0, 8),
+            Foreground = DhBrand.Brand,
+            Margin = new Thickness(0, first ? 0 : 20, 0, 5),
+            ToolTip = tip,
+        });
+        parent.Children.Add(new Border
+        {
+            Height = 1,
+            Background = DhBrand.Line,
+            Margin = new Thickness(0, 0, 0, 11),
             ToolTip = tip,
         });
     }
@@ -487,7 +489,7 @@ public sealed class GradingDialog : Window
         labelBlock = lbl;
         DockPanel.SetDock(lbl, Dock.Left);
         row.Children.Add(lbl);
-        var cb = new ComboBox { Width = 180, Height = 24, VerticalContentAlignment = VerticalAlignment.Center };
+        var cb = new ComboBox { Width = 180, Height = 28, VerticalContentAlignment = VerticalAlignment.Center };
         cb.Items.Add("없음 (사면만)");
         cb.Items.Add("보강토 (블록)");
         cb.Items.Add("앵커판넬식");
@@ -598,7 +600,7 @@ public sealed class GradingDialog : Window
         {
             Text = value.ToString(CultureInfo.InvariantCulture),
             Width = 80,
-            Height = 24,
+            Height = 28,
             VerticalContentAlignment = VerticalAlignment.Center,
         };
         DockPanel.SetDock(box, Dock.Left);
@@ -608,7 +610,7 @@ public sealed class GradingDialog : Window
         {
             Text = "  " + hint,
             VerticalAlignment = VerticalAlignment.Center,
-            Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
+            Foreground = DhBrand.Sub,
             FontSize = 11,
         };
         DockPanel.SetDock(hintBlock, Dock.Left);

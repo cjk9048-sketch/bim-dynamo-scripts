@@ -134,8 +134,10 @@ public sealed class StrataPanel : UserControl
     private void Build()
     {
         var root = new Grid { Margin = new Thickness(10) };
+        // ★★[JACK 0908 "회사로고 활용"] 맨 위 <b>로고 머리띠</b> — 팝업 둘과 같은 얼굴.
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });                      // 머리띠
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });                      // ① 카드
-        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // ② 카드
+        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // ② 카드 (늘어나는 칸)
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });                      // 알림
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });                      // 확인
 
@@ -158,6 +160,11 @@ public sealed class StrataPanel : UserControl
             rb.Margin = new Thickness(0, 0, 14, 0);
             rb.Foreground = Ink;
             rb.FontSize = 12;
+            // ★★[JACK 0908] 동그라미를 <b>회사색</b>으로. 기본 WPF 옵션단추는 윈도우 강조색
+            //   (보통 <b>파랑</b>)으로 칠해져 이 창에서 <b>유일하게 남의 색</b>이었다.
+            //   ★모양표를 <b>이 컨트롤에만</b> 건다 — 창 전체에 걸면 아래 표(DataGrid)의
+            //   글자 편집칸까지 높이 28px짜리 테두리 상자가 되어 표가 되레 둔해진다.
+            DhBrand.StyleOne(rb);
             rb.VerticalContentAlignment = VerticalAlignment.Center;
             rb.Checked += (_, _) => SetMode(m);
             modeBox.Children.Add(rb);
@@ -196,7 +203,19 @@ public sealed class StrataPanel : UserControl
         // ★★[JACK 0901 "층 추가·선택 삭제 등 기능은 없애자 — 버튼이 많으면 헷갈리거든"]
         //   층 목록은 <b>모드가 정한다</b>(SeedFor). 수량 분류가 다섯뿐이라
         //   더 넣을 것도 뺄 것도 없다 — 안 쓰는 층은 <b>비워 두면</b> 수량에서 저절로 빠진다.
-        root.Children.Add(MakeCard(c1, 0));
+        // 0번 자리는 머리띠가 쓴다 — 카드는 1번부터.
+        var brandBar = DhBrand.Header("지층 데이터", "시추주상도를 넣고 [확인]을 누르면 지층면이 만들어집니다",
+                                      drag: null, onClose: null, logoHeight: 17, titleSize: 13,
+                                      // ★[검토 0908 · 낮음] 옆 카드와 <b>세로줄을 맞춘다</b>.
+                                      //   카드 안 글자 왼쪽은 테두리1+안여백8 = 9px이다.
+                                      //   종전엔 팝업용 16px이 그대로 와서 로고만 7px 더 밀려 있었다.
+                                      //   ★<c>brandBar.Padding = 0</c>은 <b>아무 일도 안 했다</b> —
+                                      //   여백은 Border가 아니라 그 안 DockPanel에 있다(엉뚱한 데를 눌렀다).
+                                      pad: new Thickness(9, 4, 0, 4));
+        brandBar.Background = Brushes.Transparent;   // 도킹창 바탕(Wall) 위에 그대로 얹는다
+        brandBar.Margin = new Thickness(0, 0, 0, 2);
+        Grid.SetRow(brandBar, 0); root.Children.Add(brandBar);
+        root.Children.Add(MakeCard(c1, 1));
 
         // ── ② 보링공 카드 ────────────────────────────────────────────
         var c2 = new Grid();
@@ -304,7 +323,7 @@ public sealed class StrataPanel : UserControl
         bbtn.Children.Add(_sizeText);
 
         Grid.SetRow(bbtn, 1); c2.Children.Add(bbtn);
-        root.Children.Add(MakeCard(c2, 1));
+        root.Children.Add(MakeCard(c2, 2));
 
         // ── 알림 줄 — 옅은 바탕에 담아 <b>말이 눈에 띄되 시끄럽지 않게</b>.
         _status.TextWrapping = TextWrapping.Wrap;
@@ -318,7 +337,7 @@ public sealed class StrataPanel : UserControl
             Margin = new Thickness(0, 0, 0, 8),
             Child = _status,
         };
-        Grid.SetRow(sbox, 2); root.Children.Add(sbox);
+        Grid.SetRow(sbox, 3); root.Children.Add(sbox);
         Say("① 지층을 정하고 ② 평면에서 찍기로 시추 위치를 클릭하세요.");
 
         // ── 확인 — 하나뿐인 큰 단추. 무엇을 눌러야 하는지 헷갈릴 자리가 없다.
@@ -327,7 +346,7 @@ public sealed class StrataPanel : UserControl
         ok.FontSize = 13;
         ok.FontWeight = FontWeights.SemiBold;
         ok.Margin = new Thickness(0);
-        Grid.SetRow(ok, 3); root.Children.Add(ok);
+        Grid.SetRow(ok, 4); root.Children.Add(ok);
 
         Background = Wall;
         Content = root;
@@ -338,14 +357,24 @@ public sealed class StrataPanel : UserControl
     //   <b>모서리를 둥글리고 · 여백을 주고 · 선을 옅게</b> 하는 셋만으로 훨씬 부드러워진다.
     //   ★색은 <b>한 가지 강조색</b>만 쓴다 — 여러 색을 쓰면 어디를 봐야 할지 알 수 없다.
 
-    private static readonly Brush Ink = new SolidColorBrush(Color.FromRgb(0x24, 0x2A, 0x33));      // 글자
-    private static readonly Brush Sub = new SolidColorBrush(Color.FromRgb(0x6B, 0x74, 0x84));      // 옅은 글자
-    private static readonly Brush Line = new SolidColorBrush(Color.FromRgb(0xDF, 0xE4, 0xEA));     // 옅은 선
-    private static readonly Brush Card = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF));     // 카드 바탕
-    private static readonly Brush Wall = new SolidColorBrush(Color.FromRgb(0xF4, 0xF6, 0xF9));     // 창 바탕
-    private static readonly Brush Zebra = new SolidColorBrush(Color.FromRgb(0xFA, 0xFB, 0xFD));    // 줄무늬
-    private static readonly Brush Accent = new SolidColorBrush(Color.FromRgb(0x1F, 0x6F, 0xEB));   // 강조
-    private static readonly Brush AccentDim = new SolidColorBrush(Color.FromRgb(0xE8, 0xF0, 0xFE));
+    // ★★★[JACK 0908 "색상까지 통일해서 꾸밀꺼면 도킹창 부분도 일관성있는 색으로 꾸며"]
+    //   <b>색을 여기서 정하지 않는다</b> — <see cref="DhBrand"/> 한 곳에서 가져온다.
+    //
+    //   <b>무엇이 어긋나 있었나.</b> 이 창의 강조색은 <b>파랑</b>(<c>#1F6FEB</c>)이었고
+    //   옅은 회색들도 푸른기가 도는 값(<c>#DFE4EA</c>·<c>#F4F6F9</c>)이었다. 회사 로고는
+    //   <b>짙은 청록</b>(<c>#00484E</c>)이다 — 같은 애드인인데 창마다 다른 색을 쓰고 있었다.
+    //
+    //   ★<b>이름은 그대로 둔다</b>(Ink·Sub·Card…). 이 파일 안에서 800줄이 이 이름들을 쓰고 있어
+    //   이름까지 바꾸면 고칠 자리가 수십 곳으로 늘고, 그만큼 <b>한 곳만 놓칠 위험</b>이 생긴다.
+    //   바뀌는 것은 <b>가리키는 곳</b>뿐이다.
+    private static readonly Brush Ink = DhBrand.Ink;
+    private static readonly Brush Sub = DhBrand.Sub;
+    private static readonly Brush Line = DhBrand.Line;
+    private static readonly Brush Card = DhBrand.Card;
+    private static readonly Brush Wall = DhBrand.Wall;
+    private static readonly Brush Zebra = DhBrand.Zebra;
+    private static readonly Brush Accent = DhBrand.Brand;
+    private static readonly Brush AccentDim = DhBrand.BrandDim;
 
     /// <summary>카드 — 둥근 모서리에 옅은 테두리. 구역을 <b>눈으로</b> 가른다.</summary>
     private static Border MakeCard(UIElement inner, int row)

@@ -66,7 +66,8 @@ public sealed class XsecViewCommand
     internal static bool Refresh(Autodesk.AutoCAD.ApplicationServices.Document doc)
     {
         if (LastAt == null || doc == null) return false;
-        try { Build(doc, LastAt); return true; }
+        // ★[검토 0908 · 높음] <b>Build가 말한 것을 그대로 넘긴다</b> — 종전엔 무조건 true였다.
+        try { return Build(doc, LastAt); }
         catch { return false; }
     }
 
@@ -77,13 +78,26 @@ public sealed class XsecViewCommand
     public void Run()
     {
         _mem0 = StageTimer.Mem();
-        Build(AcadApp.DocumentManager.MdiActiveDocument, null);
+        _ = Build(AcadApp.DocumentManager.MdiActiveDocument, null);   // 사람이 부른 것이라 결과는 화면 메시지로 본다
     }
 
     /// <summary>본체 — <paramref name="at"/>가 있으면 자리를 <b>묻지 않는다</b>(다시 그리기).</summary>
-    private static void Build(Autodesk.AutoCAD.ApplicationServices.Document doc, Point3d? at0)
+    /// <summary>★★★[검토 0908 · 높음] <b>그렸는지를 돌려준다.</b>
+    ///
+    /// <para><b>왜 <c>void</c>가 아니라 <c>bool</c>인가.</b> 종전에 <see cref="Refresh"/>는
+    /// <i>예외만 안 나면</i> 무조건 <c>true</c>를 돌려줬다 — 이 함수가 아무것도 안 알려 줬기 때문이다.
+    /// 그런데 이 함수에는 <b>정상 return으로 빠지는 이탈구가 여섯</b> 있고, 그중 둘은
+    /// <c>WipeOld</c> <b>뒤</b>다. 즉 <b>지난번 횡단면도를 다 지운 뒤 한 장도 못 그리고 돌아서는데</b>
+    /// 부른 쪽은 "그렸다"고 들었다.</para>
+    ///
+    /// <para>하필 그것이 JACK이 0908에 신고한 바로 그 증상이다 —
+    /// <i>"횡단은 그냥 지워져버려"</i>. 고치겠다고 넣은 줄이 그 증상 위에
+    /// <b>"횡단도도 같은 자리에 다시 그렸습니다"</b>라는 거짓 확인을 덮을 뻔했다.
+    /// <b>조용히 틀리는 것보다, 틀렸다고 말하지 않는 것이 더 나쁘다.</b></para></summary>
+    /// <returns>횡단면도를 <b>실제로</b> 그려 냈으면 참.</returns>
+    private static bool Build(Autodesk.AutoCAD.ApplicationServices.Document doc, Point3d? at0)
     {
-        if (doc == null) return;
+        if (doc == null) return false;
         Editor ed = doc.Editor;
         Database db = doc.Database;
         var cdoc = CivilApp.CivilApplication.ActiveDocument;
@@ -124,7 +138,7 @@ public sealed class XsecViewCommand
         if (alignId.IsNull)
         {
             ed.WriteMessage("\n[횡단도] 노선이 없습니다 — [종단도]를 먼저 돌리세요.");
-            Flush(log); return;
+            Flush(log); return false;
         }
 
         // ── ② 측점 — 종단도와 <b>같은 자</b>를 쓴다. 여기서 다시 계산하지 않는다.
@@ -136,12 +150,12 @@ public sealed class XsecViewCommand
         {
             ed.WriteMessage("\n[횡단도] 이 측점 목록은 다른 도면의 것입니다 — 이 도면에서 [종단도]를 먼저 돌려 주세요.");
             log.AppendLine("  ⚠측점 목록이 다른 도면 것이라 쓰지 않았다 — 이 도면에서 [종단도]를 먼저 돌려야 한다");
-            Flush(log); return;
+            Flush(log); return false;
         }
         if (made == null || made.Count == 0)
         {
             ed.WriteMessage("\n[횡단도] 이 세션에서 [종단도]를 먼저 돌려 주세요 — 측점 목록이 필요합니다.");
-            Flush(log); return;
+            Flush(log); return false;
         }
         log.AppendLine($"  노선 '{alignName}' · 측점 {made.Count}개 · 벽 자리 {spans.Count}곳" +
                        $" · 측점명 간격 {ProfileCommand.LastStationInterval:0.#}m(종단과 같아야 한다)");
@@ -161,7 +175,7 @@ public sealed class XsecViewCommand
         else
         {
             var pr = ed.GetPoint("\n[횡단도] 횡단면도를 놓을 왼쪽 아래 자리를 클릭 (Esc=취소): ");
-            if (pr.Status != PromptStatus.OK) { ed.WriteMessage("\n[횡단도] 취소."); Flush(log); return; }
+            if (pr.Status != PromptStatus.OK) { ed.WriteMessage("\n[횡단도] 취소."); Flush(log); return false; }
             at = pr.Value.TransformBy(ed.CurrentUserCoordinateSystem);
         }
         LastAt = at;   // ★다음에 측점을 고치면 이 자리에 다시 그린다
@@ -218,7 +232,7 @@ public sealed class XsecViewCommand
         {
             string gname = SectionCommand.UniqueName(db, cdoc, SectionCommand.GroupBase + "_횡단");
             groupId = CivilDb.SampleLineGroup.Create(gname, alignId);
-            if (groupId.IsNull) { ed.WriteMessage("\n[횡단도] 검토선 그룹을 못 만들었습니다."); Flush(log); return; }
+            if (groupId.IsNull) { ed.WriteMessage("\n[횡단도] 검토선 그룹을 못 만들었습니다."); Flush(log); return false; }
             // ★[검토 지적] <b>만든 사람이 등록한다.</b> 종단 세로줄이 이 그룹을 빼려면 알아야 하는데,
             //   종전엔 옛 경로(ProfileCommand)만 등록해서 <b>[횡단도]가 만든 그룹은 아무도 몰랐다</b>.
             ProfileCommand.LastXsecGroupId = groupId;
@@ -302,7 +316,7 @@ public sealed class XsecViewCommand
         {
             log.AppendLine("  검토선 실패 — " + ex.Message);
             ed.WriteMessage("\n[횡단도] 검토선을 못 만들었습니다 — " + ex.Message);
-            Flush(log); return;
+            Flush(log); return false;
         }
 
         // ★[JACK 0826 '순서가 측점 순서대로 나오는 것 같지가 않다'] <b>측점 순으로 정렬한다.</b>
@@ -769,6 +783,7 @@ public sealed class XsecViewCommand
                         $"\n  자세한 내용: {DiagLog.FilePath}");
         X9("끝 — 로그를 쓴다");
         Flush(log);
+        return true;
     }
 
     /// <summary>★[JACK 0831] 점선 <b>한 무늬</b>가 도면에서 차지할 길이(m).
