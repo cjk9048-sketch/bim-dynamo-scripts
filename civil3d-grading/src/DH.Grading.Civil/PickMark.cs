@@ -98,6 +98,11 @@ internal sealed class PickMark : System.IDisposable
     /// <para>도면에는 아무것도 안 남겼으므로 여기서 못 걷어도 <b>도면은 멀쩡하다</b>.</para></summary>
     public void Dispose() => Clear();
 
+    /// <summary>못 걷어서 <b>일부러 안 놓아 준</b> 개수 — 관리 객체 하나 새는 것이
+    /// AutoCAD가 죽는 것보다 낫다. 세어 두지 않으면 <b>일어났는지조차 모른다</b>.</summary>
+    internal static int LeakedCount => _leaked;
+    private static int _leaked;
+
     private void Clear()
     {
         if (_marks.Count == 0) return;
@@ -111,10 +116,18 @@ internal sealed class PickMark : System.IDisposable
                 //   종전엔 걷기가 실패해도 무조건 해제했다 — 그러면 임시 그래픽 관리자가
                 //   <b>이미 없는 객체를 가리키게</b> 되어 다음 화면 갱신에서 AutoCAD가 죽을 수 있다.
                 //   관리 객체 하나가 새는 것이 <b>AutoCAD가 죽는 것보다 낫다</b>.
+                //   ★★★[계획검토 0908 · 치명] <b>돌려주는 값을 실제로 봐야 한다.</b>
+                //     <c>EraseTransient</c>는 <b><c>bool</c>을 돌려준다</b>. 못 걷어도
+                //     <b>예외를 안 던지고 <c>false</c>만</b> 돌려준다 — 그런데 종전 코드는
+                //     그 값을 버리고 "예외가 안 났으니 걷혔다"고 쳤다.
+                //     ★그러면 <b>바로 위에 적어 둔 방어가 통째로 헛돈다</b> —
+                //     못 걷은 것을 해제해 관리자가 죽은 포인터를 쥐게 된다.
+                //     (오늘 아침 이 방어를 넣으면서 <b>걷혔는지를 안 본</b> 것이다.)
                 bool erased = false;
-                try { tm.EraseTransient(d, noIds); erased = true; }
-                catch { }
+                try { erased = tm.EraseTransient(d, noIds); }
+                catch { erased = false; }
                 if (erased) try { (d as Entity)?.Dispose(); } catch { }
+                else _leaked++;
             }
         }
         catch { }   // 관리자 자체를 못 얻었다 — 그때는 <b>아무것도 해제하지 않는다</b>(위와 같은 이유)
