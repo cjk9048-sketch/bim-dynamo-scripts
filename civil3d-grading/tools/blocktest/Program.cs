@@ -8670,6 +8670,97 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     }
 }
 
+// ── S99 ★★★[수량검토 0909 · 치명] <b>절토와 성토가 한 단면에 섞인 측점</b> ─────────────
+//   <c>CrossSectionArea</c>가 첫머리에 적어 둔 그대로다 —
+//   <i>"한 단면에 절토와 성토가 같이 있는 것이 보통이다 … 서로 상쇄돼 합계는 그럴듯해 보이므로 더 위험하다"</i>.
+//   그런데 S98은 <b>평평한 2점 단면</b>만 재서 이 모양을 한 번도 안 만들었다 —
+//   그래서 <b>25%가 조용히 빠지는 결함이 시험을 통과했다</b>.
+//   ★<b>배수지가 사면에 앉는 것은 정상적인 경우</b>다. 특수한 상황이 아니다.
+{
+    Console.WriteLine("\n== S99 절성 혼재 측점 ==");
+    const CrossSectionArea.ExcavBase LOW9 = CrossSectionArea.ExcavBase.Lower;
+    const CrossSectionArea.ExcavBase PLN9 = CrossSectionArea.ExcavBase.Plan;
+
+    // 원지반이 95 → 106으로 기운다. 계획 100 · 바닥 90 · 폭 10m.
+    //   x=0 쪽은 성토부(원지반 95 < 계획 100), x=10 쪽은 절토부(106 > 100).
+    //   경계는 원지반이 100이 되는 자리 = x = 10 × (100-95)/(106-95) = 4.5454...
+    var x9 = new[] { 0.0, 10.0 };
+    var g9 = new[] { 95.0, 106.0 };
+    var p9 = new[] { 100.0, 100.0 };
+    var e9 = new[] { 90.0, 90.0 };
+
+    double Led(double[] gg, double[] pp, double[] ee, double[] xx, CrossSectionArea.ExcavBase b)
+    {
+        var led = new QtyLedger();
+        StrataQuantity.Accumulate(led, xx, gg, xx, pp, xx, ee,
+                                  new List<StrataQuantity.Band>(), null, null,
+                                  deepLimit: 5.0, axis: null, basis: b);
+        double sum = 0;
+        foreach (var k in led.Keys)
+            if (k.Kind == QtyKeyKind.Exc) { double v = led.Get(k); if (!double.IsNaN(v)) sum += v; }
+        return sum;
+    }
+
+    // ── ① 계획면 기준 — 토적표 합이 횡단 면적과 같아야 한다
+    var qP = XsecQuantity.Compute(x9, g9, x9, p9, x9, e9, PLN9);
+    double lP = Led(g9, p9, e9, x9, PLN9);
+    Check("S99 ★★★절성혼재·계획면 기준 — 토적표 합 = 횡단 면적",
+          Math.Abs(lP - qP.ExcTotal) < 1e-6, $"토적표 {lP:F3} vs 횡단 {qP.ExcTotal:F3}");
+    Check("S99 ★★★손으로 푼 답 100㎡ (계획면 100 → 바닥 90, 폭 10)",
+          Math.Abs(lP - 100.0) < 1e-6, $"{lP:F3}㎡");
+    Check("S99 ★★고치기 전 값(75㎡)이 아니다 — 25%가 조용히 빠지던 자리",
+          Math.Abs(lP - 75.0) > 1.0, $"{lP:F3}㎡");
+
+    // ── ② 절성 경계 노드를 <b>미리 넣어도</b> 같은 답이라야 한다
+    double xc9 = 10.0 * (100.0 - 95.0) / (106.0 - 95.0);
+    var xN = new[] { 0.0, xc9, 10.0 };
+    var gN = new[] { 95.0, 100.0, 106.0 };
+    var pN = new[] { 100.0, 100.0, 100.0 };
+    var eN = new[] { 90.0, 90.0, 90.0 };
+    double lN = Led(gN, pN, eN, xN, PLN9);
+    Check("S99 ★★경계 노드를 미리 넣어도 같은 답",
+          Math.Abs(lN - 100.0) < 1e-6, $"{lN:F3}㎡");
+
+    // ── ③ 원지반 기준은 <b>한 톨도 안 바뀐다</b>
+    var qL = XsecQuantity.Compute(x9, g9, x9, p9, x9, e9, LOW9);
+    double lL = Led(g9, p9, e9, x9, LOW9);
+    Check("S99 ★★★원지반 기준 — 토적표 합 = 횡단 면적(옛 동작 그대로)",
+          Math.Abs(lL - qL.ExcTotal) < 1e-6, $"토적표 {lL:F3} vs 횡단 {qL.ExcTotal:F3}");
+
+    // ── ④ 순수 절토·순수 성토도 그대로여야 한다(고침이 다른 데를 안 건드렸나)
+    var gCut = new[] { 106.0, 106.0 };
+    var gFil = new[] { 95.0, 95.0 };
+    // ★순수 절토는 <b>두 갈래가 같아야</b> 한다 — 계획면 100에서 바닥 90까지 10m × 10 = 100㎡.
+    //   (S98은 바닥 95라 50㎡였다. 여기 자료는 바닥 90이다 — 숫자를 옮겨 적다 틀릴 뻔했다.)
+    Check("S99 ★★순수 절토 — 두 갈래가 같다(둘 다 100㎡)",
+          Math.Abs(Led(gCut, p9, e9, x9, PLN9) - 100.0) < 1e-6 &&
+          Math.Abs(Led(gCut, p9, e9, x9, LOW9) - 100.0) < 1e-6,
+          $"{Led(gCut, p9, e9, x9, PLN9):F2} / {Led(gCut, p9, e9, x9, LOW9):F2}");
+    Check("S99 순수 성토 — 계획면 100㎡ · 원지반 50㎡",
+          Math.Abs(Led(gFil, p9, e9, x9, PLN9) - 100.0) < 1e-6 &&
+          Math.Abs(Led(gFil, p9, e9, x9, LOW9) - 50.0) < 1e-6,
+          $"{Led(gFil, p9, e9, x9, PLN9):F2} / {Led(gFil, p9, e9, x9, LOW9):F2}");
+
+    // ── ⑤ 암층이 섞여도 합이 맞나 — 표층 풍화암(원지반 아래)
+    {
+        var led = new QtyLedger();
+        StrataQuantity.Accumulate(led, x9, g9, x9, p9, x9, e9,
+            new List<StrataQuantity.Band> { new(RockClass.Weathered, x9, g9) }, null, null,
+            deepLimit: 5.0, axis: null, basis: PLN9);
+        double sum = 0;
+        foreach (var k in led.Keys)
+            if (k.Kind == QtyKeyKind.Exc) { double v = led.Get(k); if (!double.IsNaN(v)) sum += v; }
+        Check("S99 ★★암층이 섞여도 토적표 합 = 횡단 면적",
+              Math.Abs(sum - qP.ExcTotal) < 1e-6, $"{sum:F3} vs {qP.ExcTotal:F3}");
+        double soil = 0;
+        foreach (var k in led.Keys)
+            if (k.Kind == QtyKeyKind.Exc && k.Rock == RockClass.Soil)
+            { double v = led.Get(k); if (!double.IsNaN(v)) soil += v; }
+        Check("S99 ★★★쌓은 흙만 토사다 — 표층 암이 성토재를 안 먹는다",
+              soil > 1.0 && soil < qP.ExcTotal - 1.0, $"토사 {soil:F2} / 전체 {qP.ExcTotal:F2}");
+    }
+}
+
 // ★★[검토 0904] <b>요약이 파일 48% 지점에서 찍히고 있었다.</b> 그 뒤 S54~S95의 Check 426개가
 //   요약에 안 잡혀, '전부 통과'가 <b>절반만 보증하는 문장</b>이었다(실측: 요약 뒤에서 S54가 FAIL한 판이 있었다).
 //   fails 계수 자체는 맞았고 세는 자리만 틀렸다 — 맨 끝으로 옮긴다.

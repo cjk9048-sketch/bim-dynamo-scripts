@@ -57,11 +57,15 @@ internal static class PickSession
     internal static bool Busy { get; private set; }
 
     /// <summary>고른 것이 바뀌었다 — 창이 이것을 듣고 다시 그린다.
+    /// <para>★<b>지금은 구독자가 없다</b>(검토 0909 확인). 5b에서 창이, 8단계에서 리본이 붙는다.</para>
     /// <para>★<b>정적 이벤트다</b> — 창이 닫힐 때 <b>반드시 해지</b>해야 한다(안 하면 죽은 UI로 호출이 간다).</para></summary>
     internal static event System.Action Changed;
 
     // ── 세는 것들 ★[JACK 규칙] 자주 고치는 자리는 추적표를 둔다 ──────────────
     private static int _nPick, _nReplace, _nStale, _nDocClear, _nReject, _nUnstick;
+
+    /// <summary>지금 어떤 명령이 도는 중인가 — 배치 훅이 남의 일 한복판에 끼어들지 않게(검토 0909).</summary>
+    private static bool _inCommand;
 
     /// <summary>한 줄 자가검증 — <c>DHPICKSTATUS</c>가 찍는다.</summary>
     internal static string Tally =>
@@ -220,7 +224,10 @@ internal static class PickSession
             return false;
         }
         Busy = true;
-        Raise();          // 창이 단추를 회색으로 내린다
+        // ★[검토 0909] <b>아직 아무도 이 신호를 안 듣는다.</b> 종전 주석은 "창이 단추를 회색으로
+        //   내린다"였는데 <c>Changed</c> 구독자가 <b>0명</b>이었다 — 주석이 코드보다 앞선 자리다.
+        //   5b에서 창이, 8단계에서 리본이 구독한다. 그때까지는 <b>아무 일도 안 일어난다</b>.
+        Raise();
         return true;
     }
 
@@ -286,6 +293,13 @@ internal static class PickSession
             // 돌아왔다 — 살아 있는 것만 다시 칠한다.
             dm.DocumentActivated += (_, e) => Repaint(e.Document);
             // 완전히 닫힌다 — 관리자도 사라지므로 붙잡아 둔 것을 놓아 준다.
+            // ★★★[검토 0909 · 치명] <c>ToBeDestroyed</c>는 <b>닫히기 전</b>이라 관리자가 아직 살아 있다 —
+            //   여기서 걷는 것이 맞다. 종전에 위험했던 것은 <b>같은 핸들러가 방금 붙잡은 것을
+            //   곧바로 <c>Dispose</c>했기 때문</b>이었다.
+            //   ★이제 <see cref="PickMark.ReleaseFor"/>는 <b>목록에서 빼기만</b> 하고 해제하지 않으므로
+            //     여기서 불러도 안전하다.
+            //   ★<c>DocumentDestroyed</c>로 미루는 길은 못 쓴다 — 그 이벤트는 도면을 안 넘겨준다
+            //     (이미 사라진 뒤라 <c>FileName</c>만 준다). 어느 도면 몫인지 가릴 수가 없다.
             dm.DocumentToBeDestroyed += (_, e) =>
             {
                 _nDocClear++;
@@ -299,7 +313,8 @@ internal static class PickSession
         catch { _hooked = false; }
     }
 
-    private static readonly HashSet<string> _docHooked = new();
+    /// <summary>이 도면에 이미 걸었는가 — <b>도면에 매달아</b> 표시한다.</summary>
+    private const string HookedKey = "DH.Grading.PickHooked";
 
     /// <summary>도면 하나에 거는 것 — 배치 전환과 <b>명령 끝</b>(자물쇠 감시견).</summary>
     private static void HookDoc(AcDoc doc)
@@ -307,16 +322,31 @@ internal static class PickSession
         if (doc == null) return;
         try
         {
-            string k = doc.Name ?? doc.GetHashCode().ToString();
-            if (!_docHooked.Add(k)) return;
+            // ★★[검토 0909 · 높음] <b>이름으로 잠그면 안 된다.</b>
+            //   <c>doc.Name</c>은 <b>저장 경로</b>다. <c>SAVEAS</c>를 하면 이름이 바뀌어
+            //   정적 목록에 <b>옛 이름이 영영 남고</b>, 나중에 어떤 도면이 그 이름을 얻으면
+            //   <b>훅을 아예 안 건다</b> — 그 도면에서는 감시견도 배치 훅도 없다.
+            //   그러면 찍기가 비정상으로 끝났을 때 <b>자물쇠를 풀 길이 사라진다</b>(감시견을 넣은 이유가 무효).
+            //   ★도면에 매달아 두면 이름이 바뀌어도 같이 산다 — <see cref="Bag"/>와 같은 방식이다.
+            if (doc.UserData.Contains(HookedKey)) return;
+            doc.UserData[HookedKey] = true;
 
             // ★[검토 0909 · 보통] <b>배치 전환</b>도 걷는 자리다 — 계획서가 적어 뒀는데 빠져 있었다.
             //   가상의 경로가 아니다: 도면 생성이 <b>애드인 스스로</b> 배치 탭으로 넘긴다.
-            doc.LayoutSwitching += (_, __) => DropMarks(doc);
-            doc.LayoutSwitched += (_, __) => Repaint(doc);
+            // ★★[검토 0909 · 높음] <b>명령이 도는 중에는 건드리지 않는다.</b>
+            //   이 저장소는 배치를 <b>프로그램으로</b> 넘긴다(<c>SheetCommand</c>가 도곽마다).
+            //   그때 여기가 돌면 <b>남의 트랜잭션 한복판에서</b> 임시 그래픽 수천 개를
+            //   걷고 다시 만든다 — 도곽 20장이면 20번이다.
+            doc.LayoutSwitching += (_, __) => { if (!_inCommand) DropMarks(doc); };
+            doc.LayoutSwitched += (_, __) => { if (!_inCommand) Repaint(doc); };
 
             // ★[검토 0909 · 높음] <b>자물쇠 감시견.</b> 우리 찍기 명령이 어떻게 끝나든 자물쇠를 푼다.
-            void Watch(string name) { if (name != null && name.StartsWith("DHPICK", System.StringComparison.OrdinalIgnoreCase)) End(); }
+            void Watch(string name)
+            {
+                _inCommand = false;
+                if (name != null && name.StartsWith("DHPICK", System.StringComparison.OrdinalIgnoreCase)) End();
+            }
+            doc.CommandWillStart += (_, __) => _inCommand = true;
             doc.CommandEnded += (_, e) => Watch(e.GlobalCommandName);
             doc.CommandCancelled += (_, e) => Watch(e.GlobalCommandName);
             doc.CommandFailed += (_, e) => Watch(e.GlobalCommandName);

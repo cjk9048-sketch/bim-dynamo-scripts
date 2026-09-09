@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using Autodesk.AutoCAD.DatabaseServices;
@@ -793,7 +793,10 @@ public static class StationMarks
         List<ExcavBundle> exs;
         try
         {
-            var loaded = ExcavBundleStore.TryLoadAll(db, tr, out string why0);
+            // ★[계획감사 0909 · 치명] 여기도 "더 최신 판"을 가른다 — 못 읽으면 가시설 구간이
+            //   통째로 빠져 종단 막대가 안 나온다(그리고 아무 말이 없다).
+            var loaded = ExcavBundleStore.TryLoadAll(db, tr, out string why0, out bool tooNew0);
+            if (tooNew0) why0 = why0 + " ⚠터파기 표식이 빠집니다";
             if (loaded == null || loaded.Count == 0) { log?.AppendLine($"   터파기: 없음({why0})"); return list; }
             exs = loaded;
         }

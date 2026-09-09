@@ -441,7 +441,10 @@ public sealed class StrataPanel : UserControl
 
         var over = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
         over.Setters.Add(new Setter(Control.BackgroundProperty,
-            primary ? (Brush)new SolidColorBrush(Color.FromRgb(0x17, 0x5C, 0xC8)) : AccentDim));
+            // ★[UI검토 0909] 여기만 <b>옛 파랑</b>(#175CC8)이 남아 있었다 —
+            //   색을 회사색으로 통일하면서 <c>Accent</c>만 바꾸고 이 손올림 색을 놓쳤다.
+            //   "색상까지 통일"한 화면에서 단추에 손만 올리면 파래졌다.
+            primary ? (Brush)DhBrand.BrandHi : AccentDim));
         tpl.Triggers.Add(over);
 
         b.Template = tpl;

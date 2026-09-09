@@ -74,6 +74,43 @@ public static class StrataQuantity
         double[] E = ex != null && ey != null ? XsecQuantity.Resample(ex, ey, x) : null;
         double[] W = wx != null && wy != null ? XsecQuantity.Resample(wx, wy, x) : null;
 
+        // ★★★[수량검토 0909 · 치명 ②] <b>절성 경계를 가로축에 넣는다.</b>
+        //
+        //   계획면 기준에서는 지표선이 계획면이라 <b>원지반과 한 칸 안에서 교차</b>한다.
+        //   그 자리가 축에 없으면 띠의 윗선이 <b>꺾이는 자리 없이 직선으로 뭉개진다</b>.
+        //   ★<see cref="CrossSectionArea.SplitByDepth"/>가 5m 선에 대해 이미 하는 처리와
+        //     <b>같은 모양</b>이다 — 그쪽에는 있고 여기에는 없었다.
+        //   실측(원지반 95→106 · 계획 100 · 바닥 90 · 폭 10m): 안 넣으면 86.4㎡, 넣으면 <b>정확히 100.0㎡</b>.
+        //   ★<b>여기서 해야 한다</b> — 아래 지층 띠·터파기·물 구분이 전부 이 축을 쓰기 때문이다.
+        if (basis == CrossSectionArea.ExcavBase.Plan && P != null && G != null)
+        {
+            var cuts = new List<double>();
+            int n0 = System.Math.Min(x.Length, System.Math.Min(G.Length, P.Length));
+            for (int i = 0; i + 1 < n0; i++)
+            {
+                double d0 = P[i] - G[i], d1 = P[i + 1] - G[i + 1];
+                if (double.IsNaN(d0) || double.IsNaN(d1)) continue;
+                if ((d0 > 0 && d1 < 0) || (d0 < 0 && d1 > 0))
+                {
+                    double t = d0 / (d0 - d1);
+                    double xc = x[i] + t * (x[i + 1] - x[i]);
+                    if (xc > x[i] + 1e-9 && xc < x[i + 1] - 1e-9) cuts.Add(xc);
+                }
+            }
+            if (cuts.Count > 0)
+            {
+                var merged = new List<double>(x);
+                merged.AddRange(cuts);
+                merged.Sort();
+                x = merged.ToArray();
+                // 축이 바뀌었으니 <b>전부 다시</b> 표본한다 — 하나라도 옛 축이면 칸이 어긋난다.
+                G = XsecQuantity.Resample(gx, gy, x);
+                P = XsecQuantity.Resample(px, py, x);
+                E = ex != null && ey != null ? XsecQuantity.Resample(ex, ey, x) : null;
+                W = wx != null && wy != null ? XsecQuantity.Resample(wx, wy, x) : null;
+            }
+        }
+
         // ── ② 암종 띠를 만든다. <b>위 경계는 앞 층의 하단</b>이고 첫 층은 원지반이다.
         var bands = new List<(RockClass Rock, double[] Top, double[] Bot)>();
         if (strata != null && strata.Count > 0)
@@ -121,36 +158,38 @@ public static class StrataQuantity
 
         // ★★★[JACK 0909 · 시험 S98이 잡은 구멍] <b>쌓은 흙도 지층이다.</b>
         //
-        //   <b>무엇이 빠졌나.</b> 지층 띠는 맨 위가 <b>원지반</b>에서 시작한다(위 ②).
+        //   <b>무엇이 빠졌나.</b> 지층 띠는 맨 위가 <b>원지반</b>에서 시작한다.
         //   그런데 계획면 기준으로 파면 지표가 원지반 <b>위</b>에 있다 —
         //   그 사이(원지반→계획면)는 <b>방금 쌓아 다진 흙</b>인데 <b>어느 띠에도 안 들어</b>
-        //   통째로 수량에서 빠졌다. 실측: 횡단 면적은 100㎡인데 토적표 합이 <b>50㎡</b>였다.
-        //   ★이것이 바로 이 파일이 경계하던 <i>"두 계산이 서로 다른 지표면을 쓰면"</i> 그 자리다 —
-        //   기준면은 맞췄는데 <b>재료 목록</b>을 안 맞춘 것이다.
+        //   통째로 수량에서 빠졌다(횡단 100㎡ · 토적표 50㎡).
         //
         //   <b>왜 토사인가.</b> 쌓은 것은 성토재다 — 암이 아니다.
-        //   맨 위 지층을 그냥 위로 늘리면 <b>표층이 풍화암인 부지에서 성토재가 암으로 계상</b>된다
-        //   (단가가 다르다). 그래서 <b>토사 띠를 따로 얹는다</b>.
+        //   맨 위 지층을 그냥 위로 늘리면 <b>표층이 풍화암인 부지에서 성토재가 암으로 계상</b>된다.
         //
-        //   ★원지반 기준일 때는 <c>surf ≤ G</c>라 이 띠가 <b>뒤집혀 넓이 0</b>이 되지만,
-        //   그때는 아예 만들지 않는다 — 있으나 마나 한 것을 두면 다음 사람이 뜻을 헷갈린다.
+        //   ★★★[수량검토 0909 · 치명] <b>NaN으로 비우면 그 칸이 통째로 사라진다.</b>
+        //     첫 판은 "원지반 위로 올라간 점만" 값을 넣고 나머지를 <c>NaN</c>으로 뒀다.
+        //     그런데 <see cref="CrossSectionArea.Above"/>는 <b>한쪽 끝이 NaN인 칸을 건너뛴다</b> —
+        //     절성 경계를 끼고 있는 칸은 한쪽 끝이 <b>반드시</b> NaN이라 그 칸이 전부 없어졌다.
+        //     <b>배수지가 사면에 앉는 정상적인 경우</b>가 바로 그 모양이고,
+        //     실측 손실이 <b>25%</b>였다(부호는 언제나 한쪽, 늘 적게).
+        //   → <b>비우지 않는다.</b> 뒤집힌 띠(계획면이 원지반보다 아래)는
+        //     <c>Above</c>가 이미 넓이 0으로 처리하고 <b>교차점을 보간해 끊어</b> 준다.
+        //     그 교차점은 위에서 <b>축에 넣어 뒀다</b>(치명 ②).
         if (basis == CrossSectionArea.ExcavBase.Plan)
         {
             var fillTop = new double[x.Length];
             var fillBot = new double[x.Length];
-            int nFillCell = 0;
+            bool anyUp = false;
             for (int i = 0; i < x.Length; i++)
             {
-                double g = i < G.Length ? G[i] : double.NaN;
-                double sfc = i < surf.Length ? surf[i] : double.NaN;
-                // 원지반 위로 올라간 만큼만 — 아니면 뒤집어 두어 넓이 0이 되게 한다.
-                bool up = !double.IsNaN(g) && !double.IsNaN(sfc) && sfc > g + 1e-9;
-                fillTop[i] = up ? sfc : double.NaN;
-                fillBot[i] = up ? g : double.NaN;
-                if (up) nFillCell++;
+                fillTop[i] = i < surf.Length ? surf[i] : double.NaN;
+                fillBot[i] = i < G.Length ? G[i] : double.NaN;
+                if (!double.IsNaN(fillTop[i]) && !double.IsNaN(fillBot[i]) && fillTop[i] > fillBot[i] + 1e-9)
+                    anyUp = true;
             }
-            if (nFillCell > 0) bands.Insert(0, (RockClass.Soil, fillTop, fillBot));
+            if (anyUp) bands.Insert(0, (RockClass.Soil, fillTop, fillBot));
         }
+
         // ★★★[JACK 0908 확인] <b>각 지점에서 연직으로</b> 5m를 뺀다 — 사선을 따라 잰 거리가 아니다.
         //
         //   JACK: <i>"각 지점의 깊이가 맞는 것 같아. 각 지점의 연직 5m."</i>

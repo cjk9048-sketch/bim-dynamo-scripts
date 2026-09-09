@@ -53,6 +53,12 @@ internal sealed class PickMark : System.IDisposable
     /// <summary>띠를 만들 수 없을 만큼 작은 도형일 때의 굵기(m).</summary>
     private const double BandMin = 0.05;
 
+    /// <summary>★[검토 0909 · 높음] 띠 조각의 <b>상한</b> — 이 위로는 솎아 그린다.</summary>
+    private const int MaxBands = 300;
+
+    /// <summary>모서리 메움 동그라미의 <b>상한</b>.</summary>
+    private const int MaxDots = 200;
+
     private readonly List<Drawable> _marks = new();
 
     /// <summary>★★★[계획 3단계] <b>이 표시가 사는 도면.</b>
@@ -97,15 +103,41 @@ internal sealed class PickMark : System.IDisposable
     /// <summary>지금 붙잡고 있는 개수 — 자가검증에 찍는다.</summary>
     internal static int HeldCount => _held.Count;
 
-    /// <summary>그 도면이 <b>완전히 닫혔다</b> — 관리자도 없으니 이제 놓아 준다.</summary>
+    /// <summary>★★★[검토 0909 · 치명] <b>붙잡는 유일한 문 — 소멸자를 여기서 끈다.</b>
+    ///
+    /// <para><b>정적 뿌리에 담는 것만으로는 모자랐다.</b> 그것은 GC가 <b>언제</b> 거두느냐를
+    /// 미룰 뿐이고, 도면이 닫혀 목록을 비우는 순간 소멸자가 되살아난다.
+    /// <c>Line</c>·<c>Solid</c>·<c>Circle</c>은 도면에 안 넣었으므로 <c>AutoDelete</c>가 참이라
+    /// <b>소멸자가 네이티브를 진짜로 지운다</b> — 관리자가 그 포인터를 쥔 채로.</para>
+    ///
+    /// <para>→ <c>SuppressFinalize</c>로 <b>소멸자 자체를 끈다.</b> 그러면 목록을 비우든,
+    /// AutoCAD가 먼저 네이티브를 지우든, <b>두 번 지우는 일이 없다</b>.
+    /// 관리 객체 몇 개가 새는 것이 AutoCAD가 죽는 것보다 낫다 — 이 파일의 규칙 그대로.</para></summary>
+    private static void Hold(object doc, Drawable d)
+    {
+        try { System.GC.SuppressFinalize(d); } catch { }
+        _held.Add((doc, d));
+    }
+
+    /// <summary>★★★[검토 0909 · 치명] 그 도면이 닫혔다 — <b>목록에서만 뺀다.</b>
+    ///
+    /// <para><b>종전엔 여기서 <c>Dispose</c>를 불렀다.</b> 그런데 <c>_held</c>에 들어가는 것은
+    /// <b>정의상 "관리자가 아직 쥐고 있는 것"</b>이다 —
+    /// 즉 <i>"못 걷은 것은 절대 놓아 주지 않는다"</i>는 규칙이
+    /// <b>놓아 주는 함수에서 통째로 뒤집혀</b> 있었다.</para>
+    ///
+    /// <para>게다가 <c>DocumentToBeDestroyed</c>는 이름 그대로 <b>닫히기 전</b>이라
+    /// 그 시점에 도면·뷰·임시 그래픽 관리자가 <b>아직 살아 있다</b>.
+    /// 같은 핸들러가 <c>ClearAll</c>로 방금 <c>_held</c>에 넣은 것을 곧바로 지우기까지 했다.</para>
+    ///
+    /// <para>→ <b>아무것도 해제하지 않는다.</b> 소멸자는 <see cref="Hold"/>에서 이미 껐으므로
+    /// 목록에서 빼는 것으로 충분하다(관리 객체 몇 개가 샌다 — 그것이 값이다).</para></summary>
     internal static void ReleaseFor(object doc)
     {
+        int n = 0;
         for (int i = _held.Count - 1; i >= 0; i--)
-            if (ReferenceEquals(_held[i].Doc, doc))
-            {
-                try { (_held[i].D as Entity)?.Dispose(); } catch { }
-                _held.RemoveAt(i);
-            }
+            if (ReferenceEquals(_held[i].Doc, doc)) { _held.RemoveAt(i); n++; }
+        if (n > 0) Note($"도면이 닫혀 붙잡아 둔 임시선 {n}개를 목록에서 뺐다(해제하지 않는다)");
     }
 
     /// <summary>표시가 실제로 그려졌는가 — 지표면처럼 <b>모양을 못 읽는 것</b>은 거짓이다.</summary>
@@ -175,9 +207,17 @@ internal sealed class PickMark : System.IDisposable
             double half = diag * BandFrac * 0.5;
             if (!(half > 1e-9) || double.IsNaN(half)) half = BandMin * 0.5;
 
-            for (int i = 0; i + 1 < v.Count; i++)
+            // ★★[검토 0909 · 높음] <b>개수에 상한을 둔다.</b>
+            //   동그라미만 솎고 띠는 안 솎았다. 그런데 <see cref="BoundaryReader"/>가 호를 <b>2m마다</b>
+            //   잘게 나눈다 — 지름 500m 곡선 경계면 785점 → 임시선 <b>1,770개</b>,
+            //   수치지도에서 온 3,000점 경계면 <b>6,200개</b>다.
+            //   ★게다가 이 표시는 명령이 끝나도 안 사라진다(창이 들고 있는 것이 이 판의 설계라).
+            //     도면을 옮겨 다닐 때마다 전부 걷고 전부 다시 만든다.
+            //   굵은 띠라 몇 개 건너뛰어도 눈에는 똑같다.
+            int segStep = (v.Count - 1) > MaxBands ? ((v.Count - 1) / MaxBands) + 1 : 1;
+            for (int i = 0; i + 1 < v.Count; i += segStep)
             {
-                Point3d a = v[i], b = v[i + 1];
+                Point3d a = v[i], b = v[System.Math.Min(i + segStep, v.Count - 1)];
                 double dx = b.X - a.X, dy = b.Y - a.Y;
                 double len = System.Math.Sqrt(dx * dx + dy * dy);
                 if (len < 1e-9) continue;                     // 같은 점이 겹쳐 있다 — 띠를 못 만든다
@@ -194,7 +234,7 @@ internal sealed class PickMark : System.IDisposable
             // 모서리 메움 — 띠와 띠 사이에 생기는 쐐기 틈을 동그라미로 덮는다(둥근 모서리가 된다).
             //   ★꼭짓점이 아주 많으면(수치지도에서 온 선 등) 다 그리면 화면이 빨개진다 — 골라 그린다.
             int nV = v.Count;
-            int step = nV > 200 ? (nV / 200) + 1 : 1;
+            int step = nV > MaxDots ? (nV / MaxDots) + 1 : 1;
             for (int i = 0; i < nV; i += step)
                 m._marks.Add(new Circle(v[i], Vector3d.ZAxis, half) { ColorIndex = PickAci });
 
@@ -227,7 +267,15 @@ internal sealed class PickMark : System.IDisposable
             if (nAdd == 0) Note("임시선을 하나도 못 걸었다 — 표시가 화면에 없다");
             Redraw();
         }
-        catch (System.Exception ex) { Note("표시 실패 — " + ex.Message); m.Clear(); }
+        catch (System.Exception ex)
+        {
+            // ★[검토 0909 · 낮음] 여기서 터졌으면 <b>아직 관리자에 안 넣은</b> 것이다 —
+            //   그것을 <c>Clear()</c>로 보내면 걷기가 실패해 <b>괜히 붙잡는 목록만 늘어난다</b>.
+            //   안 넣은 것은 그 자리에서 놓아 주는 것이 맞다.
+            Note("표시 실패 — " + ex.Message);
+            foreach (var d in m._marks) { try { (d as Entity)?.Dispose(); } catch { } }
+            m._marks.Clear();
+        }
         return m;
     }
 
@@ -256,7 +304,7 @@ internal sealed class PickMark : System.IDisposable
                 //   그것이 마지막 참조를 버리는 것이라, GC 소멸자가 네이티브를 지워
                 //   <b>막으려던 죽은 포인터를 스스로 만들었다</b>(<see cref="_held"/> 참고).
                 _stranded += _marks.Count;
-                foreach (var d in _marks) _held.Add((_doc, d));
+                foreach (var d in _marks) Hold(_doc, d);
                 _marks.Clear();
                 return;
             }
@@ -285,13 +333,13 @@ internal sealed class PickMark : System.IDisposable
                 catch { erased = false; }
                 if (erased) { try { (d as Entity)?.Dispose(); } catch { } }
                 // ★[검토 0909 · 치명] 못 걷은 것은 <b>붙잡는다</b> — 놓아 주면 소멸자가 네이티브를 지운다.
-                else { _leaked++; _held.Add((_doc, d)); }
+                else { _leaked++; Hold(_doc, d); Note("임시선을 못 걷어 붙잡아 둔다"); }
             }
         }
         catch
         {
             // 관리자 자체를 못 얻었다 — 아무것도 해제하지 않고 <b>붙잡는다</b>(위와 같은 이유).
-            foreach (var d in _marks) { _leaked++; _held.Add((_doc, d)); }
+            foreach (var d in _marks) { _leaked++; Hold(_doc, d); }
         }
         _marks.Clear();
         Redraw();

@@ -296,8 +296,24 @@ internal static class DhBrand
             Put(Header(title, subtitle, w, w.Close), 1);
             Put(Rule(), 2);
 
-            var bodyWrap = new Border { Background = Wall, Child = body };
+            // ★★[UI검토 0909] <b>화면보다 커지면 아래가 잘려 손댈 수가 없다.</b>
+            //   정지 옵션 창은 높이가 약 1,015px인데, 노트북 125% 배율의 작업 영역은 826px다 —
+            //   <b>약 190px(기타 옵션·좌표계)가 화면 밖</b>으로 나가고
+            //   <c>ResizeMode=NoResize</c>라 늘릴 수도 없다.
+            //   → 본문에 스크롤을 두고 창 높이에 <b>화면 상한</b>을 건다.
+            //   ([저장]/[취소]는 이미 별도 행이라 잘리지 않는다.)
+            var bodyWrap = new Border
+            {
+                Background = Wall,
+                Child = new ScrollViewer
+                {
+                    Content = body,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                },
+            };
             Put(bodyWrap, 3);
+            try { w.MaxHeight = System.Windows.SystemParameters.WorkArea.Height - 40; } catch { }
 
             Put(Rule(), 4);
 
@@ -752,7 +768,11 @@ internal static class DhBrand
             <Border.Effect>
               <DropShadowEffect BlurRadius="12" ShadowDepth="2" Opacity="0.18" Color="#00484E"/>
             </Border.Effect>
-            <ContentPresenter/>
+            <!-- ★[회귀검토 0909] <b>줄바꿈을 걸어야 한다.</b> MaxWidth 420만 주고 ContentPresenter를 쓰면
+                 그 안 TextBlock이 NoWrap이라 <b>긴 글이 줄바꿈 없이 잘린다</b>(11.5px 한글 약 36자).
+                 종전(기본 스타일)에는 MaxWidth가 없어 옆으로 길게 늘어나 전부 보였다 — 내가 줄인 것이다.
+                 ★ContentStringFormat까지 넘겨야 숫자 서식이 안 깨진다. -->
+            <TextBlock Text="{TemplateBinding Content}" TextWrapping="Wrap"/>
           </Border>
         </ControlTemplate>
       </Setter.Value>
