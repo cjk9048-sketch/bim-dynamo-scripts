@@ -37,14 +37,77 @@ internal sealed class PickMark : System.IDisposable
 
     private readonly List<Drawable> _marks = new();
 
+    /// <summary>★★★[계획 3단계] <b>이 표시가 사는 도면.</b>
+    ///
+    /// <para><b>왜 필요한가.</b> <c>TransientManager.CurrentTransientManager</c>는
+    /// <b>지금 보고 있는 도면</b>의 것이다. 종전엔 명령이 끝날 때 바로 걷었으므로
+    /// 도면이 바뀔 틈이 없었다 — 그런데 <b>도킹창이 표시를 들고 있게</b> 되면
+    /// 사용자가 언제든 다른 도면으로 넘어간다.</para>
+    ///
+    /// <para>그때 걷으라고 시키면 <b>새 도면의 관리자에게 옛 도면 객체를 걷으라</b>고 하는 꼴이다 —
+    /// <c>false</c>가 돌아오고, 그것을 못 보면 해제까지 해서 <b>옛 도면 관리자가 죽은 포인터를 쥔다</b>.
+    /// 그 도면으로 돌아가 화면이 갱신되는 순간 AutoCAD가 죽는다.</para>
+    ///
+    /// <para>→ <b>내 도면이 아니면 아무것도 안 한다</b>(걷지도, 해제하지도 않는다).
+    /// 관리 객체가 새는 것이 AutoCAD가 죽는 것보다 낫다 — 이 파일의 기존 규칙 그대로다.</para></summary>
+    private Autodesk.AutoCAD.ApplicationServices.Document _doc;
+
+    /// <summary>도면이 달라 <b>손대지 않고 버린</b> 횟수 — 일어났는지조차 모르면 안 된다.</summary>
+    internal static int StrandedCount => _stranded;
+    private static int _stranded;
+
+    /// <summary>★★★[검토 0909 · 치명] <b>못 걷은 임시선을 붙잡아 두는 자리.</b>
+    ///
+    /// <para><b>내가 정확히 반대로 했다.</b> 아래 <see cref="Clear"/>에 <i>"놓아 주지 않는다 —
+    /// 관리자가 아직 쥐고 있다"</i>고 써 놓고 <c>_marks.Clear()</c>를 불렀는데,
+    /// 그것이 바로 <b>마지막 관리 참조를 버리는 것</b>이다.</para>
+    ///
+    /// <para><c>Line</c>은 <c>DisposableWrapper</c>를 물려받고, 도면에 넣지 않은 것은
+    /// <c>AutoDelete</c>가 참이라 <b>쓰레기 수집기가 소멸자에서 네이티브 객체를 지운다</b>.
+    /// 그런데 임시 그래픽 관리자는 <b>그 포인터를 아직 쥐고 있다</b> —
+    /// 몇 초~몇 분 뒤 그 도면을 다시 그리는 순간 AutoCAD가 <b>예외도 로그도 없이</b> 사라진다.
+    /// <b>막겠다던 바로 그 죽은 포인터를 내가 만든 것이다.</b></para>
+    ///
+    /// <para>→ <b>정적 뿌리에 붙잡아 둔다.</b> 관리 객체 몇 개가 새는 것이
+    /// AutoCAD가 죽는 것보다 낫다 — 이 파일이 처음부터 세운 규칙 그대로,
+    /// 이제 <b>말만이 아니라 실제로</b> 그렇게 한다.</para>
+    ///
+    /// <para>도면이 <b>완전히 닫힐 때</b>는 관리자도 같이 사라지므로 그때 놓아 준다
+    /// (<see cref="ReleaseFor"/>).</para></summary>
+    private static readonly List<(object Doc, Drawable D)> _held = new();
+
+    /// <summary>지금 붙잡고 있는 개수 — 자가검증에 찍는다.</summary>
+    internal static int HeldCount => _held.Count;
+
+    /// <summary>그 도면이 <b>완전히 닫혔다</b> — 관리자도 없으니 이제 놓아 준다.</summary>
+    internal static void ReleaseFor(object doc)
+    {
+        for (int i = _held.Count - 1; i >= 0; i--)
+            if (ReferenceEquals(_held[i].Doc, doc))
+            {
+                try { (_held[i].D as Entity)?.Dispose(); } catch { }
+                _held.RemoveAt(i);
+            }
+    }
+
+    /// <summary>표시가 실제로 그려졌는가 — 지표면처럼 <b>모양을 못 읽는 것</b>은 거짓이다.</summary>
+    internal bool HasMarks => _marks.Count > 0;
+
     private PickMark() { }
 
     /// <summary>★ 고른 것의 모양을 베껴 <b>빨간 임시 선</b>으로 덧그린다.
     /// <para>못 그려도 <b>일을 막지 않는다</b> — 색은 거들 뿐이다. 다만 <b>조용히 넘어가지도 않는다</b>.</para></summary>
     public static PickMark Paint(Database db, ObjectId id)
+        => Paint(null, db, id);
+
+    /// <summary>★[검토 0909 · 보통] <b>도면을 받아서 적는다.</b>
+    /// 종전엔 <c>MdiActiveDocument</c>를 적었는데, 부르는 쪽이 넘긴 <c>db</c>와 다른 순간이 오면
+    /// 표시는 B 관리자에 그려지고 소유자는 B로 적히는데 <b>기록은 A에 담겨</b> 방어가 헛돈다.</summary>
+    public static PickMark Paint(Autodesk.AutoCAD.ApplicationServices.Document doc, Database db, ObjectId id)
     {
         var m = new PickMark();
         if (db == null || id.IsNull) return m;
+        try { m._doc = doc ?? AcadApp.DocumentManager.MdiActiveDocument; } catch { }
         try
         {
             List<Core.Point3> pts;
@@ -87,7 +150,24 @@ internal sealed class PickMark : System.IDisposable
             //   그동안 사용자가 확대·이동·REGEN을 한다 — 중간에 사라지면 <b>아무도 못 알아챈다</b>
             //   (예외도 안 나고 <see cref="Paint"/>는 이미 성공을 돌려준 뒤다).
             var noIds = new IntegerCollection();
-            foreach (var d in m._marks) tm.AddTransient(d, TransientDrawingMode.Main, 128, noIds);
+            // ★★★[검토 0909 · 높음] <b><c>AddTransient</c>도 <c>bool</c>을 돌려준다.</b>
+            //   오늘 아침 <c>EraseTransient</c>에서 고친 것과 <b>똑같은 실수</b>를 다섯 줄 위에서 했다.
+            //   안 들어갔는데 <c>_marks</c>에 남으면, 나중에 걷기가 실패해 <b>붙잡는 자리로 흘러간다</b>.
+            //   ★안 들어간 것은 관리자가 <b>안 쥐고 있으므로</b> 그 자리에서 놓아 줘도 안전하다.
+            int nAdd = 0;
+            for (int i = m._marks.Count - 1; i >= 0; i--)
+            {
+                bool ok = false;
+                try { ok = tm.AddTransient(m._marks[i], TransientDrawingMode.Main, 128, noIds); }
+                catch { ok = false; }
+                if (ok) nAdd++;
+                else
+                {
+                    try { (m._marks[i] as Entity)?.Dispose(); } catch { }
+                    m._marks.RemoveAt(i);
+                }
+            }
+            if (nAdd == 0) Note("임시선을 하나도 못 걸었다 — 표시가 화면에 없다");
             Redraw();
         }
         catch (System.Exception ex) { Note("표시 실패 — " + ex.Message); m.Clear(); }
@@ -106,6 +186,26 @@ internal sealed class PickMark : System.IDisposable
     private void Clear()
     {
         if (_marks.Count == 0) return;
+
+        // ★★★[계획 3단계] <b>내 도면일 때만 걷는다.</b>
+        //   다른 도면에서 걷으라고 시키면 그 도면의 관리자가 <b>죽은 포인터</b>를 쥔다(위 설명).
+        //   ★<c>_doc</c>을 못 적었으면(옛 경로) 종전대로 걷는다 — 그때는 명령 안에서 바로 걷던 시절이다.
+        try
+        {
+            var now = AcadApp.DocumentManager.MdiActiveDocument;
+            if (_doc != null && !ReferenceEquals(_doc, now))
+            {
+                // ★★★[검토 0909 · 치명] <b>진짜로 붙잡는다.</b> 종전엔 여기서 <c>_marks.Clear()</c>였는데
+                //   그것이 마지막 참조를 버리는 것이라, GC 소멸자가 네이티브를 지워
+                //   <b>막으려던 죽은 포인터를 스스로 만들었다</b>(<see cref="_held"/> 참고).
+                _stranded += _marks.Count;
+                foreach (var d in _marks) _held.Add((_doc, d));
+                _marks.Clear();
+                return;
+            }
+        }
+        catch { }
+
         try
         {
             var tm = TransientManager.CurrentTransientManager;
@@ -126,11 +226,16 @@ internal sealed class PickMark : System.IDisposable
                 bool erased = false;
                 try { erased = tm.EraseTransient(d, noIds); }
                 catch { erased = false; }
-                if (erased) try { (d as Entity)?.Dispose(); } catch { }
-                else _leaked++;
+                if (erased) { try { (d as Entity)?.Dispose(); } catch { } }
+                // ★[검토 0909 · 치명] 못 걷은 것은 <b>붙잡는다</b> — 놓아 주면 소멸자가 네이티브를 지운다.
+                else { _leaked++; _held.Add((_doc, d)); }
             }
         }
-        catch { }   // 관리자 자체를 못 얻었다 — 그때는 <b>아무것도 해제하지 않는다</b>(위와 같은 이유)
+        catch
+        {
+            // 관리자 자체를 못 얻었다 — 아무것도 해제하지 않고 <b>붙잡는다</b>(위와 같은 이유).
+            foreach (var d in _marks) { _leaked++; _held.Add((_doc, d)); }
+        }
         _marks.Clear();
         Redraw();
     }

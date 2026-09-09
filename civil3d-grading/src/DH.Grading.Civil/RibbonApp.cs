@@ -33,6 +33,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SheetSettingsCommand))]       // DHSHEETSET(도면 설정 — 횡단·원지반굴곡·표·배경지도)
 [assembly: CommandClass(typeof(DH.Grading.Civil.StrataPalette))]                       // DHSTRATA(지층 구성 — 우측 도킹바)
 [assembly: CommandClass(typeof(DH.Grading.Civil.StrataDraw))]                          // DHSTRATAPICK(평면에서 시추 위치 찍기)
+[assembly: CommandClass(typeof(DH.Grading.Civil.PickCommands))]                       // DHPICKPLAN/GROUND/EXCAV/CLEAR/STATUS(도킹창이 부르는 찍기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.MapPickCommand))]            // DHMAPPICK(지도에서 범위 고르기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.MapPalette))]                // DHCONTOURBOX(지도 도킹바가 넘긴 범위로 지표면 가져오기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.NgiiCommand))]               // DHNGII(수치지도 DXF → 원지반)
