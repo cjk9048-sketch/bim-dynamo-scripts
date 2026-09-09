@@ -746,7 +746,7 @@ public sealed class XsecViewCommand
         X9($"중심축/눈금 끝 — 도곽 {nPages}장 그리기");
         DrawXsecFrames(db, at, nPages, sc, cols, rows, PageGap, scale, log);
         X9("도곽 끝 — 수량표 그리기");
-        DrawQtyTables(db, viewIds, bandPaperMm, sc, tableRight, TableGapMm * sc, qty, fold, log);
+        DrawQtyTables(db, viewIds, bandPaperMm, sc, tableRight, TableGapMm * sc, qty, fold, log, qty.Basis);
         // ★[JACK 0826] 선 색·눈금은 <b>숨기기 전</b>에 — 숨긴 뒤에도 되지만 로그 차례가 헷갈린다.
         X9("수량표 끝 — 단면 스타일");
         ApplySectionStyles(db, cdoc, slIds, kindOf, log);
@@ -1739,7 +1739,9 @@ public sealed class XsecViewCommand
                                      double bandPaperMm,
                                      double sc, bool onRight, double gapM,
                                      QtyResult qty, DH.Grading.Core.QtyTableFold fold,
-                                     System.Text.StringBuilder log)
+                                     System.Text.StringBuilder log,
+                                     DH.Grading.Core.CrossSectionArea.ExcavBase basis
+                                         = DH.Grading.Core.CrossSectionArea.ExcavBase.Lower)
     {
         // ★[검토 0828 · LOW-1] <b>안 쓰는 계수기를 지웠다.</b> 대입만 하고 로그에 안 써서
         //   C# 경고도 안 났다 — "경고 0개"가 못 잡는 종류다.
@@ -1761,7 +1763,7 @@ public sealed class XsecViewCommand
         // ★★[JACK 0828 · 검토] 종전 꼬리말은 <c>(값은 아직 '–')</c>를 <b>조건 없이</b> 찍었다 —
         //   값이 실제로 들어가고 있는데도 로그만 "아직 비었다"고 말했다.
         //   낡은 문구가 남아 <b>고친 뒤에도 안 고쳐진 것처럼</b> 보이게 만든다. → <b>세어서 말한다.</b>
-        int n = 0, nQty = 0, nCells = 0, nDiag = 0;
+        int n = 0, nQty = 0, nCells = 0, nDiag = 0, nNote = 0;
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
@@ -1998,6 +2000,38 @@ public sealed class XsecViewCommand
                     // ★[JACK 0826] <c>GenerateLayout()</c>을 <b>부르지 않는다</b> — 그것이 행 높이를
                     //   글자와 여백에서 <b>다시 계산</b>해, 우리가 지정한 높이를 덮어쓴다.
                     ms.AppendEntity(tb); tr.AddNewlyCreatedDBObject(tb, true);
+
+                    // ★★★[JACK 0909 확정 "그대로 세고 표에 밝힌다"] <b>겹치는 것을 표가 말한다.</b>
+                    //
+                    //   계획지표면 기준으로 파면 구조물 자리의 흙이 표에 <b>세 번</b> 실린다 —
+                    //   <b>성토</b>(계획고까지 쌓았다) · <b>터파기</b>(그 자리를 다시 팠다) ·
+                    //   <b>되메우기</b>(판 것을 채웠다). 셋 다 <b>실제로 한 일</b>이라 틀린 값이 아니다.
+                    //   그런데 표가 그 사실을 말하지 않으면, 토량수지를 맞춰 보는 사람이
+                    //   <b>어느 항목이 틀렸는지</b>를 찾다가 못 찾는다(실측 규모: 40×40·두께 3m = 4,800㎥).
+                    //   ★<b>조용히 겹치는 것</b>은 조용히 빠지는 것만큼 나쁘다.
+                    //
+                    //   표에는 비고 칸이 없다 — 줄을 더하면 단 나누기(<c>QtyTableFold</c>)와
+                    //   종이 맞춤이 통째로 흔들린다. 그래서 <b>표 바로 밑에 한 줄</b>로 쓴다.
+                    if (basis == DH.Grading.Core.CrossSectionArea.ExcavBase.Plan)
+                        try
+                        {
+                            double noteH = txtH * 0.8;
+                            var note = new DBText
+                            {
+                                TextString = "※ 계획지표면 기준 — 구조물 자리 성토는 되메우기와 겹칩니다"
+                                           + "(쌓고·파고·되메우는 각각 실제 시공 물량입니다).",
+                                Height = noteH,
+                                LayerId = layE,      // ★EnsureLayer는 ObjectId를 돌려준다(이름이 아니다)
+                                ColorIndex = 256,
+                                HorizontalMode = TextHorizontalMode.TextLeft,
+                                VerticalMode = TextVerticalMode.TextTop,
+                            };
+                            // ★표의 <c>Position</c>은 <b>왼쪽 위</b>다 — 아래로 표 높이만큼 내리고 한 줄 띄운다.
+                            note.AlignmentPoint = new Point3d(px, py - tableH - noteH * 0.9, 0);
+                            ms.AppendEntity(note); tr.AddNewlyCreatedDBObject(note, true);
+                            nNote++;
+                        }
+                        catch (System.Exception exN) { log?.AppendLine("  ⚠표 밑 안내문 실패 — " + exN.Message); }
 
                     // ★★★[JACK 0907] <b>합친 빈칸에 대각선 하나.</b>
                     //   <c>Table</c>에는 대각선 칸선이 없다 — 선을 따로 그어야 한다.
@@ -3962,7 +3996,9 @@ public sealed class XsecViewCommand
         System.Collections.Generic.IReadOnlyList<(DH.Grading.Core.RockClass Rock, CachedGroundSurface Cs)> strata = null,
         CachedGroundSurface csW = null,
         DH.Grading.Core.QtyLedger led = null,
-        double deepLimit = 5.0)
+        double deepLimit = 5.0,
+        DH.Grading.Core.CrossSectionArea.ExcavBase basis
+            = DH.Grading.Core.CrossSectionArea.ExcavBase.Lower)
     {
         // 절단선의 좌우 끝을 구한다 — 종단도·횡단도가 쓰는 것과 <b>같은 함수</b>다.
         if (!SectionCommand.TryCut(al, station, wl, wr, out var cut))
@@ -4094,7 +4130,9 @@ public sealed class XsecViewCommand
                     // ★[JACK 0831 검토] <b>축을 정말 넘긴다.</b> 주석은 넘긴다고 적혀 있었는데
                     //   코드는 <c>deepLimit</c>에서 끝나 <c>axis</c>가 기본 <c>null</c>이었다 —
                     //   오늘만 세 번째인 "주석이 코드보다 앞선" 자리다.
-                    led, xs, gy, xs, py2, xs, ey, bands, xs, wz, deepLimit, xs);
+                    //   ★★★[JACK 0909] <b>기준면을 여기까지 흘린다.</b> 0908 검토 치명 2 —
+                    //   이 계산과 굴착 형상이 <b>서로 모르는 채로</b> 각자 min을 다시 구하고 있었다.
+                    led, xs, gy, xs, py2, xs, ey, bands, xs, wz, deepLimit, xs, basis);
                 dbg?.Append(" | 지층 " + note);
             }
             catch (System.Exception exS) { dbg?.Append(" | ⚠지층 수량 실패 — " + exS.Message); }
@@ -4115,7 +4153,7 @@ public sealed class XsecViewCommand
             Rng("원지반", gy); Rng("계획", py2); Rng("터파기", ey);
         }
 
-        var qq = DH.Grading.Core.XsecQuantity.Compute(xs, gy, xs, py2, xs, ey);
+        var qq = DH.Grading.Core.XsecQuantity.Compute(xs, gy, xs, py2, xs, ey, basis);
         if (dbg != null)
         // ★[JACK 0827 "토적표 정확도 향상"] <b>어느 구간을 쟀는지</b> 남긴다 —
         //   BO로 잡은 영역과 맞대 보려면 우리가 센 자리를 알아야 한다.
@@ -4167,7 +4205,10 @@ public sealed class XsecViewCommand
         System.Collections.Generic.Dictionary<string, DH.Grading.Core.XsecQty> Map,
         System.Collections.Generic.Dictionary<string, DH.Grading.Core.QtyLedger> Ledgers,
         DH.Grading.Core.QtyTableSpec Spec,
-        string Warn);
+        string Warn,
+        /// <summary>★[JACK 0909] <b>이 수량을 어느 기준면으로 냈는가.</b>
+        /// 그리는 쪽이 알아야 표에 그 사실을 밝힐 수 있다(계획면 기준이면 성토와 되메우기가 겹친다).</summary>
+        DH.Grading.Core.CrossSectionArea.ExcavBase Basis);
 
     /// <summary>측점 이름 → 그 측점의 수량. 표를 그릴 때 이 표를 찾아 값을 채운다.
     /// <para>★★★[JACK 0831] <b>표 얼개도 여기서 나온다</b> — 어느 한 측점에서라도 나온 조합을
@@ -4184,6 +4225,9 @@ public sealed class XsecViewCommand
         // ★경고 계수기는 <c>Done()</c>보다 <b>먼저</b> 선언한다 — 지역 함수가 이것들을 읽는다.
         int nMismatch = 0; string firstMismatch = null;
         int nRockUnknown = 0;
+        // ★[JACK 0909] <b>메서드 범위</b>에 둔다 — 아래 <c>Done()</c>이 이 값을 <c>QtyResult</c>에 담아
+        //   그리는 쪽까지 넘겨야 한다. 안쪽 블록에 두면 <c>Done()</c>에서 안 보인다.
+        var qtyBasis = DH.Grading.Core.CrossSectionArea.ExcavBase.Lower;
         int nOldVer = 0;          // ★옛 방식(층 하단)으로 만들어진 지층면 수
         QtyResult Done()
         {
@@ -4221,7 +4265,7 @@ public sealed class XsecViewCommand
             if (nMismatch > 0)
                 warn.Append($"\n  ⚠측점 {nMismatch}개에서 지층별 합이 전체와 다릅니다"
                           + " — 지층면이 부지를 다 못 덮었습니다.");
-            return new QtyResult(map, ledgers, spec, warn.ToString());
+            return new QtyResult(map, ledgers, spec, warn.ToString(), qtyBasis);
         }
         if (sl == null || sl.Count == 0) return Done();
         int nOk = 0, nNo = 0, nThrow = 0; string firstThrow = null;
@@ -4292,6 +4336,40 @@ public sealed class XsecViewCommand
                                : t.How == "도킹바" ? " (도킹바에서 읽음 — 도면에는 없다)"
                                : t.How == "이름" ? " (층 이름이 표준 이름과 같아 그렇게 봤다)"
                                : " ⚠<b>못 알아내 토사로 셌다 — 수량이 틀릴 수 있다</b>"));
+            // ★★★[JACK 0909] <b>터파기를 어느 면에서부터 팠는지 도면에서 읽는다.</b>
+            //
+            //   <b>왜 도면에서 읽나.</b> 세션 값(<c>ExcavCommand.Basis</c>)을 읽으면
+            //   <b>남이 만든 도면·다시 연 도면</b>에서 엉뚱한 값이 된다 —
+            //   같은 DWG가 컴퓨터마다 다른 토적표를 내게 된다.
+            //   기록(<c>ExcavBundle.Base</c>, v3)이 <b>그때 실제로 쓴 값</b>을 들고 있다.
+            //
+            //   ★<b>측점마다 읽지 않는다</b> — 43개 측점이면 트랜잭션을 43번 여는 셈이다. 한 번만 읽는다.
+            //   ★기준면은 도면 안에서 <b>하나로 통일</b>돼 있다(<see cref="ExcavCommand"/>가 섞이면 막는다).
+            //     그래서 첫 기록의 값이 곧 이 도면의 값이다.
+            try
+            {
+                var exRecs = ExcavBundleStore.TryLoadAll(db, tr, out string bwhy);
+                if (exRecs != null && exRecs.Count > 0)
+                {
+                    qtyBasis = exRecs[0].Base == 1
+                             ? DH.Grading.Core.CrossSectionArea.ExcavBase.Plan
+                             : DH.Grading.Core.CrossSectionArea.ExcavBase.Lower;
+                    // ★<b>섞여 있으면 말한다.</b> 막고 있지만, 옛 도면·손댄 도면에서 올 수 있다.
+                    //   조용히 첫 기록을 따르면 나머지 구조물 수량이 <b>말없이 틀린다</b>.
+                    int nOther = exRecs.FindAll(r => r.Base != exRecs[0].Base).Count;
+                    log?.AppendLine($"  터파기 기준면 = <b>{(qtyBasis == DH.Grading.Core.CrossSectionArea.ExcavBase.Plan ? "계획지표면" : "원지반")}</b>"
+                                  + $" (구조물 {exRecs.Count}개)"
+                                  + (nOther > 0
+                                     ? $" ⚠<b>기준면이 다른 구조물 {nOther}개가 섞여 있다 — 그 몫은 수량이 틀린다</b>"
+                                     : ""));
+                    if (nOther > 0)
+                        AcadApp.DocumentManager.MdiActiveDocument?.Editor?.WriteMessage($"\n[횡단도] ⚠터파기 기준면이 섞여 있습니다(구조물 {nOther}개)"
+                                      + " — 토적표가 그 몫만큼 틀립니다. [구조물 터파기]를 다시 돌려 기준면을 맞춰 주세요.");
+                }
+                else log?.AppendLine($"  터파기 기록 없음({bwhy}) — 기준면은 원지반(기본)");
+            }
+            catch (System.Exception exB) { log?.AppendLine("  ⚠터파기 기준면을 못 읽었다 — 원지반으로 본다: " + exB.Message); }
+
             foreach (var s in sl)
             {
                 try
@@ -4304,7 +4382,8 @@ public sealed class XsecViewCommand
                     // ★측점마다 <b>새 원장</b>이다 — 돌려 쓰면 값이 겹쳐 쌓인다.
                     var led = new DH.Grading.Core.QtyLedger();
                     var q = QtyAt(tr, al0, s.St, wl, wr, csG, csP, csE, dbg,
-                                  strata, csW, led, DH.Grading.Core.QuantityTable.DeepLimitM);
+                                  strata, csW, led, DH.Grading.Core.QuantityTable.DeepLimitM,
+                                  qtyBasis);
                     // ★★★[JACK 0831 · 검토 HIGH-1] <b>성토·되메우기를 원장에 넣는다.</b>
                     //   표가 이제 원장만 읽는데 <c>StrataQuantity.Accumulate</c>는
                     //   <b>절토·터파기만</b> 담는다 — 성토와 되메우기를 넣는 코드가 아예 없었다.

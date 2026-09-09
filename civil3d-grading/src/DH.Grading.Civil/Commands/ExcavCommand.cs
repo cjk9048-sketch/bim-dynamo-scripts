@@ -41,6 +41,17 @@ public sealed class ExcavCommand
     /// <para>세션 동안 기억한다 — 정지옵션과는 섞지 않는다(JACK: "초반에 세팅하는 게 많아 보여서").</para></summary>
     internal static double Slope = 0.5;
 
+    /// <summary>★★★[JACK 0909] <b>이번에 팔 기준면</b> — 계획지표면이냐 원지반이냐.
+    ///
+    /// <para>갈리는 곳은 <b>성토부뿐</b>이다. 절토부는 어느 공정이든 계획면부터 판다 —
+    /// 원지반부터 재면 그 흙을 <b>부지 절토에서 한 번, 터파기에서 또 한 번</b> 센다(이중 계상).</para>
+    ///
+    /// <para>이 값은 <b>기록에 굳는다</b>(<see cref="ExcavBundle.Base"/>) — 세션 값에 기대면
+    /// 구조물 하나를 더할 때 <b>앞의 것들이 말없이 다시 구워진다</b>.
+    /// 여기 있는 것은 <b>이번에 만들 것의 기본값</b>일 뿐이다.</para></summary>
+    internal static DH.Grading.Core.CrossSectionArea.ExcavBase Basis =
+        DH.Grading.Core.CrossSectionArea.ExcavBase.Lower;
+
     /// <summary>[보기] 상태 — 마지막으로 무엇만 보이게 했는지(null=전부 보임).</summary>
     internal const string SurfName = "터파기면_DH";
     internal const string BaseName = "터파기기준면_DH";
@@ -144,6 +155,30 @@ public sealed class ExcavCommand
         var v = Ask(ed, "굴착 구배 1:n (0=수직)", Slope, 0.0, 30.0);
         if (v == null) return false;
         Slope = v.Value;
+
+        // ★★★[JACK 0909] <b>어느 면에서부터 파는가</b> — 공정에 따라 다르다.
+        //   ※이 물음은 <b>도킹창이 생기면 라디오로 옮긴다</b>(계획 6단계).
+        //     그때까지는 여기서 묻는다 — 값이 있는데 고를 길이 없으면 있으나 마나다.
+        // ★[검토 0909 · 보통] 취소하면 <b>고르기 전 값으로 되돌린다</b> —
+        //   안 되돌리면 다음 실행의 기본값이 <b>취소한 값</b>이 되어 조용히 따라붙는다.
+        var was = Basis;
+        var pko = new PromptKeywordOptions(
+            "\n터파기 기준면 — 성토부를 어디서부터 팝니까? (절토부는 어느 쪽이든 계획면)");
+        pko.Keywords.Add("원지반");
+        pko.Keywords.Add("계획지표면");
+        pko.Keywords.Default =
+            Basis == DH.Grading.Core.CrossSectionArea.ExcavBase.Plan ? "계획지표면" : "원지반";
+        pko.AllowNone = true;
+        var kr = ed.GetKeywords(pko);
+        if (kr.Status == PromptStatus.Cancel) { Basis = was; return false; }
+        string kw = kr.Status == PromptStatus.Keyword || kr.Status == PromptStatus.OK
+                  ? kr.StringResult : pko.Keywords.Default;
+        Basis = kw == "계획지표면"
+              ? DH.Grading.Core.CrossSectionArea.ExcavBase.Plan
+              : DH.Grading.Core.CrossSectionArea.ExcavBase.Lower;
+        ed.WriteMessage(Basis == DH.Grading.Core.CrossSectionArea.ExcavBase.Plan
+            ? "\n  · 계획지표면 기준 — 계획고까지 성토·다짐한 뒤 팝니다(그만큼 깊어집니다)."
+            : "\n  · 원지반 기준 — 먼저 파고 구조물을 세운 뒤 둘레를 성토합니다.");
         return true;
     }
 
@@ -185,9 +220,66 @@ public sealed class ExcavCommand
             if (box0 == null || box0.Count < 3)
                 throw new System.Exception("구조물 바닥 경계를 읽지 못했습니다(닫힌 폴리선이어야 합니다).");
 
-            var old = ExcavBundleStore.TryLoadAll(db, tr, out string ewhy);
+            var old = ExcavBundleStore.TryLoadAll(db, tr, out string ewhy, out bool tooNew);
+            // ★★★[검토 0909 · 치명] <b>못 읽은 것을 "없다"로 보면 남의 기록을 지운다.</b>
+            //   끝에서 <c>SaveAll</c>이 <b>이번 하나짜리로 덮어쓰고</b> 지표면도 그것만으로 다시 굽는다.
+            //   되돌릴 길이 없으므로 <b>진행하지 않는다</b>.
+            if (tooNew)
+                throw new System.Exception(
+                    ewhy + "\n\n지금 진행하면 이 도면의 기존 터파기 기록이 지워집니다."
+                         + "\n애드인을 최신으로 올린 뒤 다시 실행하세요.");
             if (old != null) recs.AddRange(old);
             else log.AppendLine($"■ 터파기 기록 없음({ewhy}) — 이번이 첫 구조물");
+
+            // ★★★[JACK 0909 · 계획 §8-A] <b>한 도면 안에서 기준면을 섞지 않는다.</b>
+            //
+            //   <b>왜 막나.</b> 형상은 구조물마다 자기 기준면으로 만들 수 있다. 그런데 <b>수량</b>은
+            //   측점마다 지표선을 하나로 정해 재므로, 한 도면에 두 기준면이 섞이면
+            //   그 측점이 어느 쪽인지 <b>수량 계산이 알 길이 없다</b>.
+            //   섞인 채로 내보내면 <b>도면은 맞는데 토적표가 조용히 틀린다</b> — 가장 나쁜 실패다.
+            //
+            //   ★<b>기록은 구조물마다 갖고 있다</b>(v3). 나중에 목표면을 측점마다 <b>샘플링</b>하게 되면
+            //     이 관문만 풀면 된다 — 그때까지는 <b>묻고 맞춘다</b>.
+            {
+                // ★★★[검토 0909 · 높음] <b>지금 다시 고른 그 구조물은 세지 않는다.</b>
+                //   그 기록은 바로 아래에서 <c>recs[newIdx] = cur</c>로 <b>어차피 교체된다</b>.
+                //   그런데 종전엔 그것을 "이 도면의 <b>다른</b> 구조물"이라고 말했다 — 사실이 아니다.
+                //   ★배수지 하나짜리 도면(이 애드인의 대표 사례)에서 기준면을 바꿔 보려는
+                //     <b>첫 시도에 100% 뜨고</b>, Enter가 취소라서 <b>기능이 고장 난 것처럼</b> 보였다.
+                int mixed = recs.FindIndex(r => r.PolyHandle != boxHandle && r.Base != (int)Basis);
+                if (mixed >= 0)
+                {
+                    string had = recs[mixed].Base == 1 ? "계획지표면" : "원지반";
+                    string now = Basis == DH.Grading.Core.CrossSectionArea.ExcavBase.Plan ? "계획지표면" : "원지반";
+                    var pk = new PromptKeywordOptions(
+                        $"\n이 도면의 다른 구조물은 <{had}> 기준입니다 — 전부 <{now}> 기준으로 바꿀까요?"
+                      + "\n  (한 도면에 두 기준면이 섞이면 토적표를 낼 수 없습니다)"
+                      + "\n  Enter=취소 · 바꾸려면 '전부바꾼다'를 치세요");
+                    pk.Keywords.Add("전부바꾼다");
+                    pk.Keywords.Add("취소");
+                    pk.Keywords.Default = "취소";
+                    pk.AllowNone = true;
+                    var rk = ed.GetKeywords(pk);
+                    string ans = rk.Status == PromptStatus.Keyword || rk.Status == PromptStatus.OK
+                               ? rk.StringResult : "취소";
+                    if (ans != "전부바꾼다")
+                    {
+                        ed.WriteMessage($"\n[터파기 지표면] 취소했습니다 — 기존 <{had}> 기준을 그대로 두려면"
+                                      + $" 다시 실행해 기준면을 <{had}>으로 고르세요.");
+                        log.AppendLine($"■ 기준면이 섞여 취소 — 기존 {had} · 이번 {now}");
+                        // ★이 파일은 <c>LastLog</c> + <c>DiagLog</c>로 남긴다(전용 Flush가 없다).
+                        //   일찍 나가더라도 <b>왜 나갔는지</b>는 파일에 남아야 한다.
+                        LastLog = log.ToString();
+                        try { DiagLog.Append("\n" + LastLog + "\n"); } catch { }
+                        return;
+                    }
+                    int changed = 0;
+                    foreach (var r in recs)
+                        if (r.PolyHandle != boxHandle && r.Base != (int)Basis) { r.Base = (int)Basis; changed++; }
+                    ed.WriteMessage($"\n  · 기존 구조물 {changed}개도 <{now}> 기준으로 바꿉니다(형상이 다시 만들어집니다).");
+                    log.AppendLine($"■ 기준면 통일 — {had} → {now} · 바뀐 기록 {changed}개");
+                }
+            }
 
             newIdx = recs.FindIndex(r => r.PolyHandle == boxHandle);
             var cur = new ExcavBundle
@@ -195,6 +287,8 @@ public sealed class ExcavCommand
                 PolyHandle = boxHandle, GroundHandle = groundHandle, Slope = Slope, Bottom = box0,
                 // ★[JACK 0825] 지금의 하한을 함께 굳힌다 — 나중에 전역값이 바뀌어도 이 터파기는 안 변한다.
                 MinSlope = GradingSettings.MinSlope,
+                // ★[JACK 0909] 기준면도 같은 이유로 굳힌다 — 다음 구조물이 이것을 안 바꾸게.
+                Base = (int)Basis,
             };
             if (newIdx >= 0) { recs[newIdx] = cur; log.AppendLine($"■ 같은 구조물 다시 — 기록 {newIdx + 1}번을 교체"); }
             else { recs.Add(cur); newIdx = recs.Count - 1; }
@@ -202,16 +296,81 @@ public sealed class ExcavCommand
             tr.Commit();
         }
 
-        // ── ② 목표면(=두 면 중 낮은 쪽)을 진짜 지표면으로 만든다 ──
+        // ── ② 목표면을 진짜 지표면으로 만든다 ──
+        //   ★★★[JACK 0909] <b>기준면에 따라 두 갈래다.</b>
+        //     · 원지반 기준 → 원지반 + 절토부 조각 = <b>둘 중 낮은 쪽</b>(아래 합성. 지금까지의 동작)
+        //     · 계획지표면 기준 → <b><c>정지면_DH</c>를 그대로 쓴다</b>.
+        //
+        //   ★<c>전체면_DH</c>가 아니다. 그것은 이 명령이 <b>끝에서 굽는 자기 산출물</b>(정지면+터파기)이라
+        //   목표면으로 쓰면 <b>지난번에 판 구덩이가 이번 목표면에 들어간다</b>(0908 검토 치명 1).
+        //   <c>정지면_DH</c>는 이미 "원지반+계획 합성면"이라 정지 구역 밖은 저절로 원지반이다.
+        bool planBase = Basis == DH.Grading.Core.CrossSectionArea.ExcavBase.Plan;
+        ObjectId planBaseId = ObjectId.Null;
+        if (planBase)
+        {
+            string bad = "";
+            try
+            {
+                using var trP = db.TransactionManager.StartTransaction();
+                var sid = GradingBuilder.FindSurfaceByBaseName(trP, "정지면_DH");
+                if (sid.IsNull) bad = "계획지표면(정지면_DH)이 없습니다.";
+                // ★★[검토 0909 · 높음] <b>원지반 이름이 '정지면_DH'일 수 있다.</b>
+                //   이 저장소가 이미 아는 사실이다(GradingBuilder: "LandXML 지반 이름이 정지면_DH여도 삭제 금지").
+                //   그 도면에서 계획지표면을 고르면 <b>기준면이 원지반이 된다</b> — 그런데 기록엔 Base=1이 남아
+                //   <b>형상과 수량이 서로 다른 면을 보게 된다</b>. 이 애드인에서 가장 위험한 종류다.
+                else if (sid == groundId) bad = "원지반과 계획지표면이 같은 면입니다(이름이 '정지면_DH'인 원지반).";
+                // ★★[검토 0909 · 높음] <b>TIN인지 확인하고 캐스트한다.</b> 종전엔 이 면을 처음으로
+                //   <c>TinSurface</c>로 캐스트해 삼각형을 읽는데, 체적면·격자면이면
+                //   <i>"지정한 캐스트가 잘못되었습니다"</i>라는 원인 불명 문구만 뜬다.
+                else if (trP.GetObject(sid, OpenMode.ForRead) is not TinSurface)
+                    bad = "계획지표면(정지면_DH)이 TIN 지표면이 아닙니다.";
+                else planBaseId = sid;
+                trP.Commit();
+            }
+            catch (System.Exception px) { bad = "계획지표면을 읽지 못했습니다 — " + px.Message; }
+
+            // ★★★[검토 0909 · 높음] <b>말없이 물러서지 않는다 — 멈춘다.</b>
+            //
+            //   종전엔 <c>planBase = false</c>로 물러서면서 <b>도면 안 모든 기록의 Base를 0으로 되돌렸다</b>.
+            //   계획지표면 기준으로 만들어 둔 구조물 셋의 <b>기록된 의사가 통째로 지워지고</b>
+            //   같은 실행에서 셋 다 원지반 기준 형상으로 다시 구워졌다 — 알림은 명령창 한 줄뿐이었다.
+            //   현실적인 길: <c>DHGRADE</c>를 [이어서]로 돌리면 정지면_DH가 잠시 개명된다.
+            //   그 사이에 터파기를 돌리면 그렇게 된다.
+            //   ★이 명령의 관문 철학은 <b>"묻고 맞춘다"</b>다 — 여기도 같아야 한다.
+            if (planBaseId.IsNull)
+                throw new System.Exception(
+                    bad + "\n\n[계획부지 정지]를 먼저 돌리거나, 기준면을 <원지반>으로 골라 다시 실행하세요."
+                        + "\n(기록해 둔 기준면을 말없이 바꾸지 않습니다.)");
+        }
+
         using (Transaction tr = db.TransactionManager.StartTransaction())
         {
             var groundTin = (TinSurface)tr.GetObject(groundId, OpenMode.ForRead);
             var order = new System.Collections.Generic.List<(ObjectId, string)> { (groundId, "원지반") };
 
             // 정지 번들이 있으면 **절토부만** 되살려 붙인다 = min(계획, 원지반).
-            //   성토부는 붙이지 않는다 — 붙이면 목표면이 계획면(원지반보다 위)이 되어
-            //   "굳이 다 성토해 놓고 다시 파진 않는다"는 JACK 규칙을 어긴다.
+            //   성토부는 붙이지 않는다 — 그래야 목표면이 <b>원지반 기준</b>이 된다.
+            //   ★[JACK 0909] 계획면 기준을 고른 경우는 애초에 <c>정지면_DH</c>를 통째로 쓰므로
+            //     여기서 되살릴 것이 없다.
             int cutParts = 0;
+            // ★★[검토 0909 · 보통] <b>버릴 것을 굽지 않는다.</b>
+            //   종전엔 계획면 기준일 때도 이 블록을 다 돌았다 — 구역마다·조각마다
+            //   <c>BuildVirtualSlope</c>(브레이크라인 + Rebuild)와 경계 붙이기를 하고
+            //   <b>결과를 안 쓰고 버렸다</b>. 큰 부지에서 매 실행 몇 초가 그냥 날아간다.
+            //   ★덤으로, 계획면 기준에서는 <c>Composite(BaseName…)</c>을 안 부르므로
+            //     <b>옛 원지반 기준 실행이 남긴 터파기기준면_DH</b>가 갱신도 삭제도 안 된 채 남았다 —
+            //     헷갈리는 지표면이 도면에 남는 것은 이 저장소가 여러 번 고쳐 온 종류의 결함이다. 지운다.
+            if (planBase)
+            {
+                try
+                {
+                    // 반환이 없는 함수다 — 몇 장을 지웠는지는 안 알려 준다.
+                    GradingBuilder.EraseSurfacesByBaseName(tr, BaseName, groundId);
+                    log.AppendLine($"■ 계획면 기준 — 절토부 복원을 건너뛴다(정지면_DH가 곧 목표면) · 낡은 {BaseName} 정리");
+                }
+                catch (System.Exception ex0) { log.AppendLine("■ 낡은 목표면 정리 실패 — " + ex0.Message); }
+            }
+            else
             try
             {
                 var regions = GradingBundleStore.TryLoadAll(db, tr, out string why);
@@ -261,8 +420,16 @@ public sealed class ExcavCommand
             }
             catch (System.Exception rx) { log.AppendLine($"■ 절토부 복원 예외 — {rx.GetType().Name}: {rx.Message}"); }
 
-            baseId = GradingBuilder.Composite(db, tr, BaseName, order, out string clog, true, groundId);
-            log.AppendLine("■ 목표면 합성\n  " + clog.Replace("\n", "\n  "));
+            if (planBase)
+            {
+                baseId = planBaseId;
+                log.AppendLine("■ 목표면 = <b>계획지표면</b>(정지면_DH를 그대로) — 계획고까지 성토·다짐한 뒤 판다");
+            }
+            else
+            {
+                baseId = GradingBuilder.Composite(db, tr, BaseName, order, out string clog, true, groundId);
+                log.AppendLine("■ 목표면 합성\n  " + clog.Replace("\n", "\n  "));
+            }
             tr.Commit();
         }
 
@@ -626,9 +793,12 @@ public sealed class ExcavCommand
             //   ★만드는 자리는 <b>여기</b>다 — 보기 명령은 형상을 안 건드린다(켜고 끄기만 한다).
             try
             {
+                // ★[검토 0909 · 보통] 계획면 기준이면 구덩이 상단선이 <b>계획면 위</b>에서 딴 것이다.
+                //   원지반에 붙이면 성토부에서 테두리가 <b>허공에 뜬 것처럼</b> 보인다 —
+                //   0908에 JACK이 지적해 만든 이 면이 새 모드에서 그 증상을 되찾는다.
                 var excOrder = new System.Collections.Generic.List<(ObjectId, string)>
                 {
-                    (groundId, "원지반"),
+                    (planBase ? planBaseId : groundId, planBase ? "계획지표면" : "원지반"),
                     (outId, "터파기"),      // 나중에 붙는 것이 이긴다 = 굴착이 파인다
                 };
                 GradingBuilder.Composite(db, tr, ViewSurfaceCommand.ExcavAllName, excOrder, out string elog, true, groundId);
@@ -649,7 +819,12 @@ public sealed class ExcavCommand
         // ── ④ 뒷정리: 목표면·복원 절토부는 숨긴다(헷갈리지 않게) ──
         using (Transaction tr = db.TransactionManager.StartTransaction())
         {
-            GradingBuilder.SetSurfaceVisible(tr, BaseName, false);
+            // ★[검토 0909 · 낮음] <b>주석을 사실대로 고친다.</b>
+            //   종전 주석은 "숨기면 사용자의 계획지표면이 사라진다"였는데 <b>틀렸다</b> —
+            //   이 함수는 <b>이름</b>(터파기기준면_DH)으로 찾으므로 정지면_DH에 애초에 안 닿는다.
+            //   조건을 남겨 두는 이유는 <b>계획면 기준일 때는 그 이름의 면을 안 만들기 때문</b>이다
+            //   (없는 것을 숨기라고 시킬 이유가 없다).
+            if (!planBase) GradingBuilder.SetSurfaceVisible(tr, BaseName, false);
             for (int i = 1; i <= 8; i++)
                 for (int r = 1; r <= 8; r++)
                     GradingBuilder.SetSurfaceVisible(tr, $"터파기_절토복원{i}_{r}_DH", false);
