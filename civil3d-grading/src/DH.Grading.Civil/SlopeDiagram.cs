@@ -59,7 +59,10 @@ internal static class SlopeDiagram
         {
             Child = canvas,
             Stretch = Stretch.Uniform,
-            StretchDirection = StretchDirection.Both,
+            // ★[검토 0909] <b>줄이기만 한다.</b> <c>Both</c>면 창을 넓게 띄웠을 때
+            //   420을 넘어 <b>확대</b>되어, 그림 하나가 800×570을 먹고 글자가 우스꽝스럽게 커진다.
+            StretchDirection = StretchDirection.DownOnly,
+            MaxWidth = W0,
             HorizontalAlignment = HorizontalAlignment.Left,
         };
     }

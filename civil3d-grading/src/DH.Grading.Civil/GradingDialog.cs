@@ -94,10 +94,10 @@ public sealed class GradingDialog : Window
         // [절성토 분리 0803 — JACK] 절토 3줄 / 성토 3줄로 묶어 배치(위 예시 그림과 좌우 순서 일치).
         _cutBenchHeight = AddRow(colL, "절토 단높이 (m)", GradingSettings.CutBenchHeight, "");
         _cutBenchWidth = AddRow(colL, "절토 소단폭 (m)", GradingSettings.CutBenchWidth, "");
-        _cutSlope = AddRow(colL, "절토구배  1 :", SlopeShown(GradingSettings.CutSlope), "");
+        _cutSlope = AddRow(colL, "절토구배  1 :", GradingForm.SlopeShown(GradingSettings.CutSlope), "");
         _fillBenchHeight = AddRow(colL, "성토 단높이 (m)", GradingSettings.FillBenchHeight, "");
         _fillBenchWidth = AddRow(colL, "성토 소단폭 (m)", GradingSettings.FillBenchWidth, "");
-        _fillSlope = AddRow(colL, "성토구배  1 :", SlopeShown(GradingSettings.FillSlope), "");
+        _fillSlope = AddRow(colL, "성토구배  1 :", GradingForm.SlopeShown(GradingSettings.FillSlope), "");
 
         // [JACK 0728] 사면형상 — 체크박스 대신 옵션단추(라디오): 직각 / 라운드.
         var shapeRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = false };
@@ -278,6 +278,40 @@ public sealed class GradingDialog : Window
         }
     }
 
+    /// <summary>★[JACK 0908 · 5단계에 공용으로 올림] <b>동그란 단추 둘</b>을 한 줄에 — 자동/수동처럼 <b>둘 중 하나</b>인 값에 쓴다.
+    /// <para>콤보로 두면 펼쳐 봐야 무엇이 골라져 있는지 안다. 둘뿐이면 <b>보이는 채로</b> 두는 편이 낫다.</para></summary>
+    internal static RadioButton AddRadioPair(Panel parent, string label, string firstText, bool firstOn,
+                                        out RadioButton second, string secondText, string hint)
+    {
+        var row = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = false };
+        var lab = new TextBlock
+        {
+            Text = label,
+            Width = 150,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        DockPanel.SetDock(lab, Dock.Left);
+        row.Children.Add(lab);
+
+        string grp = "g" + System.Guid.NewGuid().ToString("N");   // 창 안에서 <b>이 줄만</b> 한 묶음
+        var a = new RadioButton
+        {
+            Content = firstText, GroupName = grp, IsChecked = firstOn,
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 0),
+        };
+        second = new RadioButton
+        {
+            Content = secondText, GroupName = grp, IsChecked = !firstOn,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        if (!string.IsNullOrEmpty(hint)) { a.ToolTip = hint; second.ToolTip = hint; lab.ToolTip = hint; }
+        DockPanel.SetDock(a, Dock.Left);
+        row.Children.Add(a);
+        row.Children.Add(second);
+        parent.Children.Add(row);
+        return a;
+    }
+
     /// <summary>[JACK 0728 정렬] 번호 중단락 제목 — 윗 블록과 넉넉한 간격(첫 단락만 0).
     /// <para>★[JACK 0908] <b>회사색 글자 + 그 아래 가는 실선.</b> 굵은 검정만으로는
     /// 어디까지가 한 덩이인지 눈에 안 들어왔다 — 실선이 <b>덩이의 경계</b>를 말해 준다.</para></summary>
@@ -396,8 +430,6 @@ public sealed class GradingDialog : Window
     ///
     /// <para>하한 이하는 전부 0으로 보인다 — 0.01을 직접 넣었든 0을 넣어 끌어올려졌든
     /// <b>뜻이 같기 때문</b>이다(둘 다 수직 옹벽). 저장할 때는 <c>OnOk</c>가 다시 하한으로 끌어올린다.</para></summary>
-    private static double SlopeShown(double n)
-        => n <= GradingSettings.MinSlope + 1e-9 ? 0.0 : n;
 
     internal static TextBox AddRow(Panel parent, string label, double value, string hint)
         => AddRow(parent, label, value, hint, out _);
@@ -439,72 +471,22 @@ public sealed class GradingDialog : Window
         return box;
     }
 
+    /// <summary>[저장] — <b>검사와 저장은 <see cref="GradingForm"/>가 한다</b>.
+    /// <para>★[5단계] 도킹창도 같은 값을 받으므로 그 60줄을 <b>공용</b>으로 뺐다.
+    /// 베껴 두면 하한 하나를 고칠 때 <b>한쪽만 고쳐진다</b>(§20·§26).</para></summary>
     private void OnOk(object sender, RoutedEventArgs e)
     {
-        if (!TryParse(_cutBenchHeight, "절토 단높이", out double cbh, positive: true) ||
-            !TryParse(_cutBenchWidth, "절토 소단폭", out double cbw, positive: false) ||
-            !TryParse(_fillBenchHeight, "성토 단높이", out double fbh, positive: true) ||
-            !TryParse(_fillBenchWidth, "성토 소단폭", out double fbw, positive: false) ||
-            !TryParse(_cutSlope, "절토구배", out double cs, positive: false) ||
-            !TryParse(_fillSlope, "성토구배", out double fs, positive: false) ||
-            !TryParse(_terraceInterval, "대소단 간격", out double ti, positive: true) ||
-            !TryParse(_terraceWidth, "대소단 폭", out double tw, positive: false))
-            return;
-
-        // [단높이 하한 0803] 예시 그림의 클램프(0.2m)와 같은 값을 검증에도 건다 — 안 걸면 0.01 같은 값이
-        //   경고 없이 저장되고(그림은 0.2m로 그려져 화면과 실제가 어긋남), 필요한 단수가 폭증해 사면이 잘린다.
-        const double benchMin = 0.2;
-        if (cbh < benchMin - 1e-9 || fbh < benchMin - 1e-9)
+        if (!GradingForm.Apply(this, new GradingForm.Controls
         {
-            bool cutBad = cbh < benchMin - 1e-9;
-            MessageBox.Show(this, $"{(cutBad ? "절토" : "성토")} 단높이는 {benchMin}m 이상이어야 합니다.", "입력 오류",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-            var bad = cutBad ? _cutBenchHeight : _fillBenchHeight;
-            bad.Focus(); bad.SelectAll();
+            CutBenchHeight = _cutBenchHeight, CutBenchWidth = _cutBenchWidth, CutSlope = _cutSlope,
+            FillBenchHeight = _fillBenchHeight, FillBenchWidth = _fillBenchWidth, FillSlope = _fillSlope,
+            ShapeMiter = _shapeMiter,
+            MountainTerrace = _mountainTerrace,
+            TerraceInterval = _terraceInterval, TerraceWidth = _terraceWidth,
+            CutWallStyle = _cutWallStyle, FillWallStyle = _fillWallStyle,
+            ShowOnlyResult = _showOnlyResult, CoordSys = _coordSys,
+        }, _miterAtOpen))
             return;
-        }
-
-
-        // [구배 하한 0.05 — JACK] 사용자가 0.05 이하(거의 수직 옹벽)를 넣어도 무조건 0.05로 처리.
-        // 그 아래는 Civil3D TIN이 예기치 못한 오류를 내는 사례가 있어 미연 방지. (0 입력=옹벽 의도 → 0.05)
-        // ★★[JACK 0825] 하드코딩 0.05였다. <b>여기가 진짜 하한</b>이라, 엔진 상수만 바꾸면
-        //   이 줄이 다시 0.05로 끌어올려 <b>낮춘 것이 아무 효과가 없었다</b>. 한 곳에서만 정하게 바꾼다.
-        double slopeFloor = GradingSettings.MinSlope;
-        if (cs > 0 && cs < slopeFloor) cs = slopeFloor; else if (cs == 0) cs = slopeFloor;
-        if (fs > 0 && fs < slopeFloor) fs = slopeFloor; else if (fs == 0) fs = slopeFloor;
-
-        // ★★[JACK 0819] <b>단높이 상한 15m</b> — 그 위로는 사면이라 부르기 어렵고, 대소단(법정 15m)과도 어긋난다.
-        //   JACK: <i>"맥시멈은 15미터로 하고, 대소단은 자투리 생겨도 돼 — 10M로 설정하면 10M, 5M(자투리)가 생기는 게 맞어."</i>
-        //   <b>자투리는 막지 않는다.</b> 단높이 10m + 대소단 15m면 10m 사면 뒤 5m 자투리가 남는데,
-        //   그것이 실제 시공 모습이므로 <b>있는 그대로 보여준다</b>(GradingGeometry가 이미 그렇게 처리한다).
-        const double benchMax = 15.0;
-        if (cbh > benchMax + 1e-9 || fbh > benchMax + 1e-9)
-        {
-            MessageBox.Show(this,
-                $"단높이는 {benchMax:0.#}m 이하여야 합니다(절토 {cbh:0.##}m · 성토 {fbh:0.##}m).\n\n" +
-                "그보다 높은 사면은 한 단으로 세우지 않습니다 — 산지전용허가법의 대소단 간격도 15m입니다.",
-                "입력 오류", MessageBoxButton.OK, MessageBoxImage.Warning);
-            (cbh > benchMax ? _cutBenchHeight : _fillBenchHeight).Focus();
-            (cbh > benchMax ? _cutBenchHeight : _fillBenchHeight).SelectAll();
-            return;
-        }
-
-        GradingSettings.CutBenchHeight = cbh;
-        GradingSettings.CutBenchWidth = cbw;
-        GradingSettings.FillBenchHeight = fbh;
-        GradingSettings.FillBenchWidth = fbw;
-        GradingSettings.CutSlope = cs;
-        GradingSettings.FillSlope = fs;
-        GradingSettings.MiterConvex = _shapeMiter.IsChecked == true;
-        GradingSettings.MountainTerrace = _mountainTerrace.IsChecked == true;
-        GradingSettings.ShowOnlyResultSurface = _showOnlyResult.IsChecked == true;
-        GradingSettings.TerraceInterval = ti;
-        GradingSettings.TerraceWidth = tw;
-        GradingSettings.CutWallStyle = (WallStyle)System.Math.Max(0, _cutWallStyle.SelectedIndex);
-        GradingSettings.FillWallStyle = (WallStyle)System.Math.Max(0, _fillWallStyle.SelectedIndex);
-        GradingSettings.ExportEpsg = EpsgCodes[System.Math.Clamp(_coordSys.SelectedIndex, 0, EpsgCodes.Length - 1)];
-        // [재시작 보존 0805] 사용자가 이 대화상자에서 사면형상을 실제로 바꿨을 때만 다음 세션 기본값으로 기록.
-        if (GradingSettings.MiterConvex != _miterAtOpen) GradingSettings.SaveUserPrefs();
 
         DialogResult = true;
         Close();
@@ -516,18 +498,5 @@ public sealed class GradingDialog : Window
     /// <summary>★[v32.28] 검증을 <b>정지옵션 밖에서도</b> 쓸 수 있게 뺐다(도면설정 창이 같은 규칙을 쓴다).
     /// 두 창이 각자 검증하면 한쪽만 고쳐진다 — 이 저장소가 되풀이해 배운 실패다.</summary>
     internal static bool TryParseCore(Window owner, TextBox box, string name, out double value, bool positive)
-    {
-        // '.'과 ',' 둘 다 허용 (한국 사용자 입력 편의)
-        string text = box.Text.Trim().Replace(',', '.');
-        if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value) ||
-            value < 0 || (positive && value <= 0))
-        {
-            MessageBox.Show(owner, $"'{name}' 값을 확인하세요. {(positive ? "0보다 큰" : "0 이상의")} 숫자여야 합니다.",
-                "입력 오류", MessageBoxButton.OK, MessageBoxImage.Warning);
-            box.Focus();
-            box.SelectAll();
-            return false;
-        }
-        return true;
-    }
+        => GradingForm.TryParse(owner, box, name, out value, positive);
 }
