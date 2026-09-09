@@ -8536,6 +8536,11 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     var ex98 = new[] { 90.0, 90.0 };
     var fLow = XsecQuantity.Compute(x98, eg98, x98, fg98, x98, ex98, LOW);
     var fPln = XsecQuantity.Compute(x98, eg98, x98, fg98, x98, ex98, PLN);
+    // 절토부 흙깎기도 기준면과 무관해야 한다 — 아래 ④에서 쓰는 것과 같은 자료다.
+    double cLowFillChk = XsecQuantity.Compute(x98, new[] { 106.0, 106.0 }, x98, new[] { 100.0, 100.0 },
+                                              x98, new[] { 95.0, 95.0 }, LOW).Cut;
+    double cPlnFillChk = XsecQuantity.Compute(x98, new[] { 106.0, 106.0 }, x98, new[] { 100.0, 100.0 },
+                                              x98, new[] { 95.0, 95.0 }, PLN).Cut;
 
     Check("S98 성토부·원지반 기준 — 5m×10 = 50㎡ (지금까지의 값)",
           Math.Abs(fLow.ExcTotal - 50.0) < 1e-6, $"{fLow.ExcTotal:F2}㎡");
@@ -8544,6 +8549,22 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     Check("S98 ★★두 갈래가 <b>실제로</b> 갈린다 — 차이 = 성토 두께 5m×10",
           Math.Abs((fPln.ExcTotal - fLow.ExcTotal) - 50.0) < 1e-6,
           $"{fPln.ExcTotal - fLow.ExcTotal:F2}㎡");
+
+    // ── ①-2 ★★★[JACK 0909 확정] <b>성토는 두 갈래에서 같다</b> — 그리고 그것이 규약이다.
+    //     계획면 기준으로 파면 구조물 자리의 흙이 표에 <b>세 번</b> 실린다:
+    //       성토(계획고까지 쌓았다) · 터파기(그 자리를 다시 팠다) · 되메우기(판 것을 채웠다).
+    //     JACK 확정: <i>"그대로 세고 표에 밝힌다"</i> — 셋 다 <b>실제로 한 일</b>이라 틀린 값이 아니다.
+    //     ★<b>이 검사가 지키는 것</b>: 나중에 누가 "이중 계상이네" 하고 성토에서 구덩이를 빼면
+    //       여기서 걸린다. 규약을 바꾸려면 <b>이 검사와 표의 안내문을 같이</b> 고쳐야 한다.
+    Check("S98 ★★★성토는 두 갈래가 같다 — 구덩이 자리도 쌓는다(JACK 확정)",
+          Math.Abs(fLow.Fill - fPln.Fill) < 1e-9 && Math.Abs(fPln.Fill - 50.0) < 1e-6,
+          $"낮은쪽 {fLow.Fill:F2} / 계획면 {fPln.Fill:F2}");
+    Check("S98 ★계획면 기준에서 성토·터파기·되메우기가 <b>겹친다</b>(표가 이 사실을 밝혀야 한다)",
+          Math.Abs(fPln.Fill - 50.0) < 1e-6 && Math.Abs(fPln.ExcTotal - 100.0) < 1e-6
+          && Math.Abs(fPln.Backfill - 100.0) < 1e-6,
+          $"성토 {fPln.Fill:F0} · 터파기 {fPln.ExcTotal:F0} · 되메 {fPln.Backfill:F0}");
+    Check("S98 절토도 두 갈래가 같다(원지반→계획면 그대로)",
+          Math.Abs(cLowFillChk - cPlnFillChk) < 1e-9, $"{cLowFillChk:F2} / {cPlnFillChk:F2}");
 
     // ── ② 5m 구분도 따라간다 — 안 따라가면 단가가 다른 칸에 들어간다
     Check("S98 원지반 기준 5m 딱 — 초과 0", Math.Abs(fLow.ExcDeep) < 1e-6, $"{fLow.ExcDeep:F2}");
