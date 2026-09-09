@@ -157,8 +157,8 @@ public sealed class ExcavCommand
         Slope = v.Value;
 
         // ★★★[JACK 0909] <b>어느 면에서부터 파는가</b> — 공정에 따라 다르다.
-        //   ※이 물음은 <b>도킹창이 생기면 라디오로 옮긴다</b>(계획 6단계).
-        //     그때까지는 여기서 묻는다 — 값이 있는데 고를 길이 없으면 있으나 마나다.
+        //   ※도킹창(6단계)에서는 <b>라디오로 이미 골랐다</b> — 그쪽은 이 함수를 안 부른다.
+        //     리본·타이핑으로 들어온 길에서는 여기서 묻는다(고를 길이 없으면 값이 있으나 마나다).
         // ★[검토 0909 · 보통] 취소하면 <b>고르기 전 값으로 되돌린다</b> —
         //   안 되돌리면 다음 실행의 기본값이 <b>취소한 값</b>이 되어 조용히 따라붙는다.
         var was = Basis;
@@ -201,6 +201,10 @@ public sealed class ExcavCommand
 
     internal static void DoExcav(Document doc, ObjectId boxPolyId, ObjectId groundId)
     {
+        // ★[검토 0909 · 보통] <b>여기서 잰다.</b> 종전엔 <c>Run</c>에서만 채워, 창으로 들어온 판은
+        //   <b>직전 리본 실행(또는 0)</b> 기준으로 재서 로그에 <b>거짓 계측치</b>를 찍었다
+        //   — "짐작을 사실처럼 적지 말 것"에 걸린다.
+        _mem0 = StageTimer.Mem();
         Editor ed = doc.Editor;
         Database db = doc.Database;
         var log = new System.Text.StringBuilder();
@@ -305,6 +309,10 @@ public sealed class ExcavCommand
         //   목표면으로 쓰면 <b>지난번에 판 구덩이가 이번 목표면에 들어간다</b>(0908 검토 치명 1).
         //   <c>정지면_DH</c>는 이미 "원지반+계획 합성면"이라 정지 구역 밖은 저절로 원지반이다.
         bool planBase = Basis == DH.Grading.Core.CrossSectionArea.ExcavBase.Plan;
+        // ★★[검토 0909 · 보통] <b>무엇으로 팠는지 로그에 남긴다.</b> §77이 검증 항목으로 적어 뒀는데
+        //   소스에 그 줄이 없었다 — 나중에 수량이 이상할 때 <b>가릴 근거가 없다</b>.
+        log.AppendLine($"■ 터파기 기준면 = <b>{(planBase ? "계획지표면" : "원지반")}</b>"
+                     + $" · 구배 1:{Slope:0.##} · 구조물 {recs.Count}개");
         ObjectId planBaseId = ObjectId.Null;
         if (planBase)
         {
@@ -833,6 +841,10 @@ public sealed class ExcavCommand
 
         // ★[JACK 0901 "튕긴다"] 이 명령이 메모리를 얼마나 쓰는지 한 줄로 남긴다 — 고치기 전에 <b>재고</b> 본다.
         try { DiagLog.Append("\n" + diag + "\n  ★" + StageTimer.MemSince(_mem0) + "\n"); } catch { }
+        // ★[검토 0909 · 높음] 리본으로 기준면을 바꿨으면 <b>창에도 알린다</b> —
+        //   안 알리면 창은 옛 값을 보여 주고, 그 상태에서 창의 [생성]을 누르면
+        //   <b>화면에 적힌 것과 다른 기준면</b>으로 파진다.
+        try { ExcavPalette.Refresh(); } catch { }
         ed.WriteMessage($"\n[터파기 지표면] 완료 — {SurfName} (구조물 {made}개)" +
                         $"\n  굴착 구배 1:{Slope:0.##}{(Slope <= GradingSettings.WallGateSlope + 1e-9 ? " (수직)" : "")}" +
                         $"\n  자세한 내용: {DiagLog.FilePath}");
