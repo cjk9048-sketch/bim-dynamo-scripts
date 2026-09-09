@@ -62,7 +62,7 @@ public sealed class SheetDialog : Window
         // ★★★[JACK 0908] <b>단면검토선 폭 — 자동/수동을 동그란 단추로.</b>
         //   종전 이름은 "횡단 폭"이었는데, 이 값이 정하는 것은 <b>절단선의 길이</b>다
         //   (그 절단선이 횡단면도가 된다). 이름을 실제 물건에 맞춘다.
-        _widthAuto = AddRadio(root, "단면검토선 폭", "자동 — 정지 결과에서 잼",
+        _widthAuto = GradingDialog.AddRadioPair(root, "단면검토선 폭", "자동 — 정지 결과에서 잼",
                               GradingSettings.XsecWidthAuto, out _widthManual, "수동 — 아래 값 사용",
                               "자동: 사면 끝까지 담기게 재고 여유 5m를 더해 5m 단위로 올립니다(좌우 같은 폭)."
                             + " 잰 값은 아래 두 칸에도 적힙니다.");
@@ -135,39 +135,6 @@ public sealed class SheetDialog : Window
         DhBrand.Dress(this, "도면 설정", "도면을 어떻게 그릴지 — 정지면 형상은 바뀌지 않습니다", root, ok, cancel);
     }
 
-    /// <summary>★[JACK 0908] <b>동그란 단추 둘</b>을 한 줄에 — 자동/수동처럼 <b>둘 중 하나</b>인 값에 쓴다.
-    /// <para>콤보로 두면 펼쳐 봐야 무엇이 골라져 있는지 안다. 둘뿐이면 <b>보이는 채로</b> 두는 편이 낫다.</para></summary>
-    private static RadioButton AddRadio(Panel parent, string label, string firstText, bool firstOn,
-                                        out RadioButton second, string secondText, string hint)
-    {
-        var row = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = false };
-        var lab = new TextBlock
-        {
-            Text = label,
-            Width = 150,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        DockPanel.SetDock(lab, Dock.Left);
-        row.Children.Add(lab);
-
-        string grp = "g" + System.Guid.NewGuid().ToString("N");   // 창 안에서 <b>이 줄만</b> 한 묶음
-        var a = new RadioButton
-        {
-            Content = firstText, GroupName = grp, IsChecked = firstOn,
-            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 0),
-        };
-        second = new RadioButton
-        {
-            Content = secondText, GroupName = grp, IsChecked = !firstOn,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        if (!string.IsNullOrEmpty(hint)) { a.ToolTip = hint; second.ToolTip = hint; lab.ToolTip = hint; }
-        DockPanel.SetDock(a, Dock.Left);
-        row.Children.Add(a);
-        row.Children.Add(second);
-        parent.Children.Add(row);
-        return a;
-    }
 
     /// <summary>라벨 + 콤보 한 줄 — <see cref="GradingDialog.AddRow"/>와 같은 자리맞춤(라벨 110).</summary>
     private static ComboBox AddCombo(Panel parent, string label, string[] items, int index, string hint)

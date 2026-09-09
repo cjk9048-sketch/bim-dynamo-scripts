@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.ApplicationServices;
+﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.Runtime;
 using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 
@@ -30,6 +30,10 @@ public sealed class GradingSettingsCommand
 
         var dlg = new GradingDialog("저장");
         AcadApp.ShowModalWindow(dlg); // [저장] 시 GradingSettings에 반영됨
+        // ★★★[검토 0909 · 높음] <b>도킹창이 떠 있으면 그 화면도 다시 채운다.</b>
+        //   안 그러면 도킹창이 <b>낡은 값</b>을 들고 있다가 다음 [값 저장]에서 그것을 되박는다.
+        //   ★취소했을 때도 부른다 — 이 명령은 좌표계를 자동으로 바로잡기도 하기 때문이다.
+        GradingPalette.Refresh();
         if (dlg.DialogResult != true) return;
 
         // [JACK 0731 — 좌표계 연동] 사용자가 좌표계를 **실제로 바꿨을 때만** 도면 좌표계에 반영(MAPCSASSIGN 상당)
