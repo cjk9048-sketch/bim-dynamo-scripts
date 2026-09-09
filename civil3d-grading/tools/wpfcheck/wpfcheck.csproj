@@ -1,0 +1,28 @@
+<!--
+  ★★★[§77] <b>화면을 재는 자.</b>
+  <c>DhBrand</c>·<c>SlopeDiagram</c>은 AutoCAD 타입을 안 쓰므로 <b>떼어내 돌릴 수 있다</b> -
+  그림·모양표가 진짜로 그려지는지, 값이 그림에 닿는지, 좁은 창에서 살아남는지를 잰다.
+  오프라인 검사기(tools/blocktest)는 Core만 덮어 이 층을 한 줄도 못 본다.
+  ★한동안 스크래치패드에만 있어 <b>다음 사람이 못 돌렸다</b> - 그래서 저장소로 옮겼다.
+  돌리는 법:  dotnet run -c Release --project tools/wpfcheck
+
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Close.cs" />
+    <Compile Include="Diag.cs" />
+    <Compile Include="..\..\src\DH.Grading.Civil\SlopeDiagram.cs" />
+    <Compile Include="..\..\src\DH.Grading.Civil\WallStyle.cs" />
+    <Compile Include="..\..\src\DH.Grading.Civil\DhBrand.cs" />
+  </ItemGroup>
+</Project>

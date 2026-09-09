@@ -44,6 +44,26 @@ internal static class XsecWidth
             return (curL, curR);
         }
 
+        // ★★★[회귀검토 0909 · 높음] <b>비대칭으로 맞춰 둔 설정을 말없이 지우지 않는다.</b>
+        //
+        //   자동이 <b>기본값</b>이라, 이 판으로 올리는 순간 기존 사용자가 전부 자동으로 넘어간다.
+        //   그런데 자동은 좌우를 <b>같은 값으로 강제</b>하고 그 값을 설정에 되돌려 적는다 —
+        //   좌20/우40처럼 손으로 맞춰 둔 것이 <b>복구 불가로 사라진다</b>.
+        //
+        //   → 좌우가 <b>다르게 맞춰져 있으면</b> 그것은 사람이 일부러 한 것이다.
+        //     이번 한 번은 자동을 접고 <b>수동으로 돌린 뒤 말한다</b>. 다음부터는 그 뜻을 따른다.
+        if (System.Math.Abs(GradingSettings.XsecLeft - GradingSettings.XsecRight) > 0.01)
+        {
+            GradingSettings.XsecWidthAuto = false;
+            GradingSettings.SaveUserPrefInt("XsecWidthAuto", 0);
+            string msg = $"절단선 폭이 좌{GradingSettings.XsecLeft:0.#}/우{GradingSettings.XsecRight:0.#}m로"
+                       + " <b>서로 다르게</b> 맞춰져 있어 자동을 켜지 않았습니다"
+                       + " — 자동은 좌우를 같은 값으로 만듭니다. [도면 설정]에서 언제든 자동으로 바꿀 수 있습니다.";
+            log?.AppendLine("  " + msg);
+            try { Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument?.Editor?.WriteMessage("\n[횡단] " + msg); } catch { }
+            return (GradingSettings.XsecLeft, GradingSettings.XsecRight);
+        }
+
         double far = FarthestOffset(db, alignId, out int nPts, out string why, out string perNote);
         if (double.IsNaN(far) || nPts == 0)
         {

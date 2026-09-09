@@ -568,7 +568,7 @@ public static class GradingSettings
     /// 조용히 안 바뀌는 값보다 낫다.</para></summary>
     public const string BandSet = "토공";
 
-    /// <summary>정지옵션 [저장]에서 호출 — 사면형상을 다음 세션 기본값으로 기록.</summary>
+
     /// <summary>★★★[검토 0908 · 심각] <b>키 하나만 쓴다</b> — 통짜 저장이 못 하는 일.
     ///
     /// <para><see cref="SaveUserPrefs"/>는 <c>MiterConvex</c>를 <b>무조건</b> 함께 쓴다.
@@ -588,6 +588,9 @@ public static class GradingSettings
         catch { }
     }
 
+    /// <summary>정지 화면 [저장]에서 호출 — 사면형상을 다음 세션 기본값으로 기록.
+    /// <para>★<b>다른 화면에서 부르면 안 된다</b> — <c>MiterConvex</c>를 <b>무조건</b> 함께 쓰므로
+    /// 그 값의 주인이 아닌 창이 부르면 취향이 새어 나간다(v17.6). 그때는 <see cref="SaveUserPrefInt"/>다.</para></summary>
     public static void SaveUserPrefs()
     {
         try

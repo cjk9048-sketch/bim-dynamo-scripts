@@ -28,8 +28,10 @@ internal sealed class GradingPanel : UserControl
     private readonly RadioButton _shapeMiter, _shapeRound;
     private readonly CheckBox _terrace;
     private readonly ComboBox _cutWall, _fillWall;
-    private readonly Canvas _cutCanvas, _fillCanvas;
-    private readonly TextBlock _cutNote, _fillNote, _status, _said;
+    /// <summary>★[UI검토 0909] 그림은 <b>한 장만</b> 그린다 — 아래 <see cref="_showCut"/>가 고른 쪽.</summary>
+    private readonly Canvas _canvas;
+    private readonly TextBlock _note, _status, _said;
+    private readonly RadioButton _showCut, _showFill;
 
     /// <summary>★<b>이 도면에 맞췄을 때</b>의 사면형상 — 팝업의 <c>_miterAtOpen</c>에 해당한다.
     ///
@@ -43,7 +45,7 @@ internal sealed class GradingPanel : UserControl
 
     internal GradingPanel()
     {
-        var root = new StackPanel { Margin = new Thickness(10) };
+        var root = new StackPanel { Margin = new Thickness(10, 4, 10, 10) };
         DhBrand.Apply(this);
         Background = DhBrand.Wall;
 
@@ -52,7 +54,6 @@ internal sealed class GradingPanel : UserControl
                                   drag: null, onClose: null, logoHeight: 17, titleSize: 13,
                                   pad: new Thickness(0, 0, 0, 6));
         head.Background = Brushes.Transparent;
-        root.Children.Add(head);
 
         // ★[5a] 아직 없는 것을 <b>말한다</b> — 없는 단추를 만들어 두는 것보다 낫다.
         _status = new TextBlock
@@ -63,7 +64,6 @@ internal sealed class GradingPanel : UserControl
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 8),
         };
-        root.Children.Add(_status);
 
         // 결과 한 줄 — 안내문과 <b>다른 칸</b>이다(위 <see cref="Say"/> 참고).
         _said = new TextBlock
@@ -74,7 +74,6 @@ internal sealed class GradingPanel : UserControl
             Margin = new Thickness(0, 0, 0, 8),
             Visibility = Visibility.Collapsed,
         };
-        root.Children.Add(_said);
 
         // ── ① 절토 / 성토 ────────────────────────────────────────────────
         GradingDialog.AddSection(root, "1. 절토 / 성토", "사면을 어떻게 계단으로 세울지", first: true);
@@ -103,39 +102,76 @@ internal sealed class GradingPanel : UserControl
 
         // ── ③ 옹벽 형태 ──────────────────────────────────────────────────
         GradingDialog.AddSection(root, "3. 옹벽 형태", "구배가 수직에 가까울 때 그 단을 무엇으로 세울지");
-        _cutWall = StyleRow(root, "절토 옹벽", GradingSettings.CutWallStyle);
-        _fillWall = StyleRow(root, "성토 옹벽", GradingSettings.FillWallStyle);
-
-        // ── ④ 예시 ───────────────────────────────────────────────────────
-        //   ★팝업은 420×300 둘을 <b>나란히</b>(940 폭) 놓는다. 도킹창을 그렇게 열면 화면 절반을 먹는다.
-        //     <b>세로로 쌓고</b> 창 폭에 맞춰 <see cref="SlopeDiagram.Wrap"/>가 줄인다.
-        GradingDialog.AddSection(root, "4. 예시", "지금 값으로 사면이 어떻게 서는지");
-        root.Children.Add(Example("절토 예시", out _cutCanvas, out _cutNote));
-        root.Children.Add(Example("성토 예시", out _fillCanvas, out _fillNote));
-
-        // ── ⑤ 저장 ───────────────────────────────────────────────────────
-        var save = new Button { Content = "값 저장", MinWidth = 100, Height = 32, Margin = new Thickness(0, 12, 0, 4) };
-        try { if (DhBrand.Skin != null) save.Style = (Style)DhBrand.Skin["DhPrimary"]; } catch { }
-        save.HorizontalAlignment = HorizontalAlignment.Left;
-        save.Click += (_, __) => Save();
-        root.Children.Add(save);
+        _cutWall = GradingDialog.AddStyleRow(root, "절토 옹벽", GradingSettings.CutWallStyle, out _);
+        _fillWall = GradingDialog.AddStyleRow(root, "성토 옹벽", GradingSettings.FillWallStyle, out _);
 
         // 값이 바뀌면 예시를 바로 다시 그린다 — 도킹창의 값어치가 여기 있다.
         foreach (var b in new[] { _cutH, _cutW, _cutS, _fillH, _fillW, _fillS, _tInt, _tW })
             b.TextChanged += (_, __) => Redraw();
         _shapeMiter.Checked += (_, __) => Redraw();
         _shapeRound.Checked += (_, __) => Redraw();
-        _terrace.Checked += (_, __) => Redraw();
-        _terrace.Unchecked += (_, __) => Redraw();
+        // ★[UI검토 0909] <b>안 쓰는 칸은 잠근다</b> — 팝업·도면설정과 같은 규칙.
+        void SyncTerrace()
+        {
+            bool on = _terrace.IsChecked == true;
+            _tInt.IsEnabled = on; _tW.IsEnabled = on;
+        }
+        _terrace.Checked += (_, __) => { SyncTerrace(); Redraw(); };
+        _terrace.Unchecked += (_, __) => { SyncTerrace(); Redraw(); };
+        SyncTerrace();
         _cutWall.SelectionChanged += (_, __) => Redraw();
         _fillWall.SelectionChanged += (_, __) => Redraw();
 
-        Content = new ScrollViewer
+        // ══ 배치 ★★★[UI검토 0909 · P1] ═════════════════════════════════
+        //
+        //   <b>무엇이 문제였나.</b> 값·그림·저장을 한 <c>ScrollViewer</c>에 세로로 쌓으니
+        //   창이 <b>1,400px</b>이 됐다. 그런데 우측 도킹 팔레트가 쓸 수 있는 세로는
+        //   FHD에서 <b>850~950px</b>뿐이다. 그림 두 장이 650px를 먹고 맨 아래에 있어서,
+        //   <b>값 칸과 그림이 같은 화면에 절대 같이 안 나왔다</b>.
+        //   머리띠에 <i>"값을 고치면 예시가 바로 바뀝니다"</i>라고 적어 놓고
+        //   그 그림은 1,000px 아래에서 혼자 바뀌고 있었던 것이다 —
+        //   <b>도킹창을 만든 이유가 화면 배치 때문에 무효</b>였다.
+        //
+        //   → ①그림을 <b>맨 위 고정 자리</b>로 ②절토/성토는 <b>토글로 한 장만</b>(325px 절약)
+        //     ③<b>저장은 바닥에 못 박는다</b>(지층창이 이미 그렇게 한다).
+        //     값 칸만 가운데에서 스크롤한다.
+        var deck = new DockPanel { LastChildFill = true };
+
+        var top = new StackPanel { Margin = new Thickness(10, 10, 10, 0) };
+        top.Children.Add(head);
+        top.Children.Add(_status);
+        top.Children.Add(_said);
+        _showCut = GradingDialog.AddRadioPair(top, "예시", "절토", true, out _showFill, "성토",
+            "값을 고치면 이 그림이 바로 바뀝니다 — 두 장을 같이 두면 값 칸이 화면 밖으로 밀려납니다.");
+        top.Children.Add(Example(out _canvas, out _note));
+        DockPanel.SetDock(top, Dock.Top);
+        deck.Children.Add(top);
+
+        var bottom = new Border
+        {
+            Background = DhBrand.Card,
+            BorderBrush = DhBrand.Line,
+            BorderThickness = new Thickness(0, 1, 0, 0),
+            Padding = new Thickness(10, 8, 10, 8),
+        };
+        var save = new Button { Content = "값 저장", MinWidth = 100, Height = 32 };
+        try { if (DhBrand.Skin != null) save.Style = (Style)DhBrand.Skin["DhPrimary"]; } catch { }
+        save.HorizontalAlignment = HorizontalAlignment.Left;
+        save.Click += (_, __) => Save();
+        bottom.Child = save;
+        DockPanel.SetDock(bottom, Dock.Bottom);
+        deck.Children.Add(bottom);
+
+        deck.Children.Add(new ScrollViewer
         {
             Content = root,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-        };
+        });
+        Content = deck;
+
+        _showCut.Checked += (_, __) => Redraw();
+        _showFill.Checked += (_, __) => Redraw();
         _miterAtSync = GradingSettings.MiterConvex;
         Redraw();
     }
@@ -149,6 +185,15 @@ internal sealed class GradingPanel : UserControl
     internal void SyncTo(AcDoc doc)
     {
         if (doc == null) return;
+
+        // ★★★[UI검토 0909 · P1] <b>사람이 친 것을 말없이 지우지 않는다.</b>
+        //
+        //   값을 고치고 <b>저장을 안 한 채</b> 다른 도면 탭을 누르면, 여기가 화면을
+        //   그 도면 값으로 <b>덮어쓴다</b>. 종전엔 아무 말이 없었다 —
+        //   "안 하고 지나가는 것"이 아니라 <b>한 일을 지우는 것</b>이라 반드시 말해야 한다.
+        //   ★막지는 않는다. 도면이 바뀌면 그 도면 값을 보여 주는 것이 맞기 때문이다.
+        bool dirty = Dirty();
+
         try { GradingSettings.SyncToDocument(doc); } catch { }
         _loading = true;
         try
@@ -172,6 +217,32 @@ internal sealed class GradingPanel : UserControl
         // ★여기가 팝업의 "창을 연 순간"에 해당한다(위 <see cref="_miterAtSync"/> 참고).
         _miterAtSync = GradingSettings.MiterConvex;
         Redraw();
+        if (dirty) Say("이 도면의 값으로 바꿨습니다 — <b>저장하지 않은 입력은 사라졌습니다</b>.");
+    }
+
+    /// <summary>화면에 <b>저장 안 한 고침</b>이 있는가 — 덮어쓰기 전에 묻는 자리.
+    /// <para>여덟 칸과 세 스위치를 저장된 값과 견준다. 글자로 견주므로
+    /// <c>1.5</c>와 <c>1.50</c>이 다르게 잡힐 수 있는데, <b>안전한 쪽</b>이다
+    /// (안 지웠는데 지웠다고 말하는 것이, 지워 놓고 말 안 하는 것보다 낫다).</para></summary>
+    private bool Dirty()
+    {
+        try
+        {
+            if (_cutH.Text != N(GradingSettings.CutBenchHeight)) return true;
+            if (_cutW.Text != N(GradingSettings.CutBenchWidth)) return true;
+            if (_cutS.Text != N(GradingForm.SlopeShown(GradingSettings.CutSlope))) return true;
+            if (_fillH.Text != N(GradingSettings.FillBenchHeight)) return true;
+            if (_fillW.Text != N(GradingSettings.FillBenchWidth)) return true;
+            if (_fillS.Text != N(GradingForm.SlopeShown(GradingSettings.FillSlope))) return true;
+            if (_tInt.Text != N(GradingSettings.TerraceInterval)) return true;
+            if (_tW.Text != N(GradingSettings.TerraceWidth)) return true;
+            if ((_shapeMiter.IsChecked == true) != GradingSettings.MiterConvex) return true;
+            if ((_terrace.IsChecked == true) != GradingSettings.MountainTerrace) return true;
+            if (_cutWall.SelectedIndex != (int)GradingSettings.CutWallStyle) return true;
+            if (_fillWall.SelectedIndex != (int)GradingSettings.FillWallStyle) return true;
+        }
+        catch { }
+        return false;
     }
 
     private void Save()
@@ -209,8 +280,9 @@ internal sealed class GradingPanel : UserControl
     private void Redraw()
     {
         if (_loading) return;
-        Draw(_cutCanvas, _cutNote, _cutH, _cutW, _cutS, _cutWall, cut: true);
-        Draw(_fillCanvas, _fillNote, _fillH, _fillW, _fillS, _fillWall, cut: false);
+        bool cut = _showCut == null || _showCut.IsChecked == true;
+        if (cut) Draw(_canvas, _note, _cutH, _cutW, _cutS, _cutWall, cut: true);
+        else Draw(_canvas, _note, _fillH, _fillW, _fillS, _fillWall, cut: false);
     }
 
     private void Draw(Canvas c, TextBlock note, TextBox h, TextBox w, TextBox s, ComboBox wall, bool cut)
@@ -250,29 +322,10 @@ internal sealed class GradingPanel : UserControl
     private static TextBox Row(Panel parent, string label, double value)
         => GradingDialog.AddRow(parent, label, value, "");
 
-    private static ComboBox StyleRow(Panel parent, string label, WallStyle cur)
-    {
-        var row = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = false };
-        var lbl = new TextBlock { Text = label, Width = 110, VerticalAlignment = VerticalAlignment.Center };
-        DockPanel.SetDock(lbl, Dock.Left);
-        row.Children.Add(lbl);
-        var cb = new ComboBox { Width = 180, MinHeight = 28, VerticalContentAlignment = VerticalAlignment.Center };
-        foreach (var n in System.Enum.GetNames(typeof(WallStyle))) cb.Items.Add(n.Replace('_', ' '));
-        cb.SelectedIndex = System.Math.Clamp((int)cur, 0, cb.Items.Count - 1);
-        DockPanel.SetDock(cb, Dock.Left);
-        row.Children.Add(cb);
-        parent.Children.Add(row);
-        return cb;
-    }
 
-    private static StackPanel Example(string title, out Canvas canvas, out TextBlock note)
+    private static StackPanel Example(out Canvas canvas, out TextBlock note)
     {
-        var col = new StackPanel { Margin = new Thickness(0, 0, 0, 10) };
-        col.Children.Add(new TextBlock
-        {
-            Text = title, FontSize = 12, FontWeight = FontWeights.SemiBold,
-            Foreground = DhBrand.Ink, Margin = new Thickness(0, 0, 0, 4),
-        });
+        var col = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
         var box = new Border
         {
             BorderBrush = DhBrand.Line, BorderThickness = new Thickness(1),

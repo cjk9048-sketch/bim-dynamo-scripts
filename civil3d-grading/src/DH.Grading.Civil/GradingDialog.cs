@@ -178,8 +178,17 @@ public sealed class GradingDialog : Window
         _fillSlope.TextChanged += (_, _) => RedrawDiagram();
         _terraceInterval.TextChanged += (_, _) => RedrawDiagram();
         _terraceWidth.TextChanged += (_, _) => RedrawDiagram();
-        _mountainTerrace.Checked += (_, _) => RedrawDiagram();
-        _mountainTerrace.Unchecked += (_, _) => RedrawDiagram();
+        // ★[UI검토 0909] <b>안 쓰는 칸은 잠근다</b> — 쳐도 소용없는 칸이 멀쩡해 보이면 안 된다.
+        //   도면 설정 창은 이미 그렇게 한다(자동이면 좌·우 폭 칸을 회색으로) — 여기만 없었다.
+        void SyncTerrace()
+        {
+            bool on = _mountainTerrace?.IsChecked == true;
+            if (_terraceInterval != null) _terraceInterval.IsEnabled = on;
+            if (_terraceWidth != null) _terraceWidth.IsEnabled = on;
+        }
+        _mountainTerrace.Checked += (_, _) => { SyncTerrace(); RedrawDiagram(); };
+        _mountainTerrace.Unchecked += (_, _) => { SyncTerrace(); RedrawDiagram(); };
+        SyncTerrace();
         _cutWallStyle.SelectionChanged += (_, _) => RedrawDiagram();
         _fillWallStyle.SelectionChanged += (_, _) => RedrawDiagram();
         RedrawDiagram();
@@ -335,7 +344,11 @@ public sealed class GradingDialog : Window
         });
     }
 
-    private static ComboBox AddStyleRow(Panel parent, string label, WallStyle current, out TextBlock labelBlock)
+    /// <summary>옹벽 형태 한 줄 — <b>목록 글자와 역T형 안내까지</b> 여기 하나뿐이다.
+    /// <para>★[UI검토 0909] 도킹창이 <c>Enum.GetNames</c>로 <b>제 목록을 따로 만들고</b> 있었다 —
+    /// 같은 값인데 팝업은 <i>"없음 (사면만)"</i>, 창은 <i>"없음 사면"</i>이었고,
+    /// <b>역T형 안내가 창에서만 안 떴다</b>. <i>"베끼지 않았다"</i>고 주석까지 써 놓고 베낀 자리다(§20).</para></summary>
+    internal static ComboBox AddStyleRow(Panel parent, string label, WallStyle current, out TextBlock labelBlock)
     {
         var row = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = false };
         var lbl = new TextBlock { Text = label, Width = 110, VerticalAlignment = VerticalAlignment.Center };

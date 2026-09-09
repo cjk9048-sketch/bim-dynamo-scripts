@@ -1763,7 +1763,7 @@ public sealed class XsecViewCommand
         // ★★[JACK 0828 · 검토] 종전 꼬리말은 <c>(값은 아직 '–')</c>를 <b>조건 없이</b> 찍었다 —
         //   값이 실제로 들어가고 있는데도 로그만 "아직 비었다"고 말했다.
         //   낡은 문구가 남아 <b>고친 뒤에도 안 고쳐진 것처럼</b> 보이게 만든다. → <b>세어서 말한다.</b>
-        int n = 0, nQty = 0, nCells = 0, nDiag = 0, nNote = 0;
+        int n = 0, nQty = 0, nCells = 0, nDiag = 0, nNote = 0, nMiss = 0;
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
@@ -2012,6 +2012,30 @@ public sealed class XsecViewCommand
                     //
                     //   표에는 비고 칸이 없다 — 줄을 더하면 단 나누기(<c>QtyTableFold</c>)와
                     //   종이 맞춤이 통째로 흔들린다. 그래서 <b>표 바로 밑에 한 줄</b>로 쓴다.
+                    // ★★★[계획감사 0909] <b>§2.4가 약속한 "미포함"을 실제로 적는다.</b>
+                    //   계획서는 <i>"토적표·로그에 미포함으로 명시한다. 조용히 빠지면 수량이 맞는 줄 안다"</i>
+                    //   고 적어 놓고 <b>어디에도 안 썼다</b> — 소스 전체에 "흙막이"가 0건이었다.
+                    //   ★기준면과 <b>무관하게</b> 언제나 빠지는 것이므로 조건 없이 붙인다.
+                    //   규모: 배수지 둘레 160m × 깊이 9m ≒ <b>1,440㎡</b>(토공 다음으로 큰 항목).
+                    try
+                    {
+                        double nh0 = txtH * 0.8;
+                        var miss = new DBText
+                        {
+                            TextString = "※ 미포함 — 흙막이(가시설) 면적 · 성토에서 구조물 부피 공제"
+                                       + " · 되메우기에서 구조물 부피 공제",
+                            Height = nh0,
+                            LayerId = layE,
+                            ColorIndex = 256,
+                            HorizontalMode = TextHorizontalMode.TextLeft,
+                            VerticalMode = TextVerticalMode.TextTop,
+                        };
+                        miss.AlignmentPoint = new Point3d(px, py - tableH - nh0 * 0.9, 0);
+                        ms.AppendEntity(miss); tr.AddNewlyCreatedDBObject(miss, true);
+                        nMiss++;
+                    }
+                    catch (System.Exception exM) { log?.AppendLine("  ⚠미포함 안내문 실패 — " + exM.Message); }
+
                     if (basis == DH.Grading.Core.CrossSectionArea.ExcavBase.Plan)
                         try
                         {
@@ -2027,7 +2051,8 @@ public sealed class XsecViewCommand
                                 VerticalMode = TextVerticalMode.TextTop,
                             };
                             // ★표의 <c>Position</c>은 <b>왼쪽 위</b>다 — 아래로 표 높이만큼 내리고 한 줄 띄운다.
-                            note.AlignmentPoint = new Point3d(px, py - tableH - noteH * 0.9, 0);
+                            // 미포함 줄 아래로 한 줄 더(겹치지 않게).
+                            note.AlignmentPoint = new Point3d(px, py - tableH - noteH * 2.2, 0);
                             ms.AppendEntity(note); tr.AddNewlyCreatedDBObject(note, true);
                             nNote++;
                         }
@@ -2082,6 +2107,10 @@ public sealed class XsecViewCommand
                       + $" · 글자 {QtTextMm:0.##}mm · 줄 {QtRowH:0.##}mm · 폭 {tw / sc:F0}mm"
                       + $" · <b>숫자가 든 표 {nQty}/{n}개</b> · 채워진 칸 {nCells}개 · 안쪽 칸선 색 {tbIn}곳"
                       + (nDiag > 0 ? $" · 빈칸 합치고 대각선 {nDiag}개" : " · 딱 맞아 합칠 빈칸 없음")
+                      // ★[계획감사 0909] <b>약속한 안내문이 실제로 그려졌는지</b>를 남긴다.
+                      //   같은 함수 머리에 "대입만 하고 로그에 안 써서 C# 경고도 안 났다"고 적어 놓고
+                      //   300줄 아래서 똑같은 실수를 다시 했다(nNote를 세기만 하고 안 찍었다).
+                      + $" · 겹침 안내문 {nNote}장 · 미포함 안내문 {nMiss}장"
                       + (nQty < n ? $" (나머지 {n - nQty}장은 잰 것이 없어 전부 '{QT.Blank}')" : ""));
         // ★★[JACK 0828] <b>표의 두 규칙을 매번 물어보고 남긴다.</b>
         //   <c>SpansValid</c>는 만들어 두고 <b>아무도 안 불러</b> 죽어 있었다 —
@@ -4348,7 +4377,20 @@ public sealed class XsecViewCommand
             //     그래서 첫 기록의 값이 곧 이 도면의 값이다.
             try
             {
-                var exRecs = ExcavBundleStore.TryLoadAll(db, tr, out string bwhy);
+                var exRecs = ExcavBundleStore.TryLoadAll(db, tr, out string bwhy, out bool bTooNew);
+                // ★★★[계획감사 0909 · 치명] <b>고침이 한 곳에만 들어가 있었다.</b>
+                //   <c>TryLoadAll</c>이 "기록 없음"과 "더 최신 판이 만든 기록"을 가르게 고쳤는데,
+                //   그것을 실제로 <b>본 곳은 <see cref="ExcavCommand"/> 하나뿐</b>이었다.
+                //   여기(토적표를 내는 자리)는 여전히 <c>null</c>을 "기록 없음"으로 보고
+                //   기준면을 <b>말없이 원지반</b>으로 삼는다 — 계획면 기준으로 판 도면의
+                //   <b>수량이 통째로 틀리고 아무 말이 없다</b>. 조용히 틀리는 것이 가장 나쁘다.
+                if (bTooNew)
+                {
+                    log?.AppendLine("  ⚠<b>" + bwhy + "</b> — 터파기 기준면을 못 읽어 수량이 틀릴 수 있다");
+                    AcadApp.DocumentManager.MdiActiveDocument?.Editor?.WriteMessage(
+                        "\n[횡단도] ⚠" + bwhy
+                      + "\n  터파기 기준면을 읽지 못해 <b>토적표가 틀릴 수 있습니다</b> — 애드인을 최신으로 올리세요.");
+                }
                 if (exRecs != null && exRecs.Count > 0)
                 {
                     qtyBasis = exRecs[0].Base == 1
