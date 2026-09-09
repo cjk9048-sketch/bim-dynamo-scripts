@@ -291,8 +291,19 @@ public sealed class GradingDialog : Window
     /// <para>콤보로 두면 펼쳐 봐야 무엇이 골라져 있는지 안다. 둘뿐이면 <b>보이는 채로</b> 두는 편이 낫다.</para></summary>
     internal static RadioButton AddRadioPair(Panel parent, string label, string firstText, bool firstOn,
                                         out RadioButton second, string secondText, string hint)
+        => AddRadioPair(parent, label, firstText, firstOn, out second, secondText, hint, out _);
+
+    /// <summary>★[검토 0909 · 높음] <b>줄 컨테이너를 돌려준다.</b>
+    /// <para>부르는 쪽이 <c>_append.Parent as StackPanel</c>로 짐작했다가 <b>언제나 null</b>이었다 —
+    /// 이 함수는 <c>DockPanel</c>을 만드는데 <c>StackPanel</c>로 캐스트했기 때문이다.
+    /// 그래서 "기존 결과가 없으면 이 줄을 숨긴다"가 <b>통째로 죽어</b> 새 도면에서도 늘 보였다.
+    /// ★<b>컨테이너 종류를 부르는 쪽이 짐작하게 두지 않는다.</b></para></summary>
+    internal static RadioButton AddRadioPair(Panel parent, string label, string firstText, bool firstOn,
+                                        out RadioButton second, string secondText, string hint,
+                                        out Panel rowPanel)
     {
         var row = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = false };
+        rowPanel = row;
         var lab = new TextBlock
         {
             Text = label,

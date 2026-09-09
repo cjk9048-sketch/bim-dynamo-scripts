@@ -91,71 +91,45 @@ public sealed class CreateGradingCommand
         // [다중 구역 0729 — 방식A] 기존 정지면·번들이 있으면 '이어서(누적)/새로시작' 선택.
         //   이어서 = 기존 정지면_DH를 새 원지반 삼아 이 계획선 구역을 추가(1번 구역 유지).
         //   같은 계획선을 다시 고르면 = 마지막 구역 재실행(설정 바꿔 다시). 중간 구역 수정은 미지원.
+        // ★★★[검토 0909 · H6] <b>판정을 <see cref="GradeStart.Decide"/> 하나로.</b>
+        //
+        //   이 45줄을 도킹창이 쓸 수 없어 <see cref="GradeStart"/>로 떼어냈는데,
+        //   <b>정작 여기는 옛 사본을 그대로 쓰고 있었다</b> — 함정을 피하려고 만든 파일이
+        //   그 자리에서 <b>함정을 하나 더 만든 셈</b>이다(§20·§26).
+        //   여섯 갈래를 대조해 보니 오늘은 답이 같았다 — 그래서 <b>내일 갈라진다</b>.
+        //   ★검사기가 이것을 못 잡는다(§7: 5b는 "불가"). 그러니 사본을 안 두는 것이 유일한 방어다.
         var mode = GradeMode.Fresh;
-        System.Collections.Generic.List<GradingBundle>? regions0 = null;
         ObjectId groundSel = ObjectId.Null;
-        try
         {
-            using var trQ = doc.Database.TransactionManager.StartTransaction();
-            regions0 = GradingBundleStore.TryLoadAll(doc.Database, trQ, out _);
-            bool hasPrev = regions0 != null && regions0.Count > 0
-                        && GradingBuilder.SurfaceExistsByBaseName(trQ, "정지면_DH");
-            if (hasPrev)
+            // 기존 결과가 있으면 <b>먼저 묻는다</b> — 옛 흐름 그대로(창은 라디오로 답을 받는다).
+            bool append = true;
+            if (GradeStart.HasPrevious(doc.Database, out int nRegion))
             {
                 var pko = new PromptKeywordOptions(
-                    $"\n기존 정지면_DH(구역 {regions0!.Count}개)가 있습니다 — 이어서 추가할까요, 새로 시작할까요?");
+                    $"\n기존 정지면_DH(구역 {nRegion}개)가 있습니다 — 이어서 추가할까요, 새로 시작할까요?");
                 pko.Keywords.Add("이어서");
                 pko.Keywords.Add("새로시작");
                 pko.Keywords.Default = "이어서";
                 pko.AllowNone = true;
                 var kr = ed.GetKeywords(pko);
                 if (kr.Status == PromptStatus.Cancel) return;
-                string kw = kr.Status == PromptStatus.Keyword ? kr.StringResult
-                          : kr.Status == PromptStatus.OK ? kr.StringResult : "이어서";
-                if (kw == "이어서")
-                {
-                    // 선택한 계획선이 기존 구역과 같은가 — 핸들 또는 fingerprint로 판정.
-                    string ph = rPoly.ObjectId.Handle.ToString();
-                    System.Collections.Generic.List<Point3>? curB = null;
-                    try { curB = BoundaryReader.Read(trQ, rPoly.ObjectId); } catch { }
-                    int matchIdx = -1;
-                    for (int k = 0; k < regions0.Count; k++)
-                        if (regions0[k].PlanHandle == ph ||
-                            (curB != null && curB.Count >= 3 && regions0[k].FingerprintMatches(curB)))
-                        { matchIdx = k; break; }
-
-                    if (matchIdx < 0)
-                    {
-                        mode = GradeMode.Append;
-                        groundSel = GradingBuilder.FindSurfaceByBaseName(trQ, "정지면_DH"); // 기준=현재 누적면(자동)
-                    }
-                    else if (matchIdx == regions0.Count - 1)
-                    {
-                        mode = GradeMode.RerunLast;   // 마지막 구역 다시(설정 변경 재실행)
-                        groundSel = NoriCommand.FindByHandle(doc.Database, regions0[^1].GroundHandle);
-                        if (groundSel.IsNull)
-                            ed.WriteMessage("\n(마지막 구역의 기준 지반을 못 찾아 직접 선택합니다)");
-                    }
-                    else
-                    {
-                        trQ.Commit();
-                        AcadApp.ShowAlertDialog(
-                            $"이 계획선은 이미 구역{matchIdx + 1}로 정지되어 있습니다.\n" +
-                            "중간 구역 수정은 아직 지원하지 않습니다 — [새로시작]으로 처음부터 다시 만들어 주세요.");
-                        return;
-                    }
-                }
-                else mode = GradeMode.Fresh;
+                string kw = kr.Status == PromptStatus.Keyword || kr.Status == PromptStatus.OK
+                          ? kr.StringResult : "이어서";
+                append = kw == "이어서";
             }
-            trQ.Commit();
+
+            var plan = GradeStart.Decide(doc, rPoly.ObjectId, append);
+            if (plan.Blocked)
+            {
+                ed.WriteMessage("\n[DHGRADE] " + plan.Note.Replace("\n", "\n  "));
+                AcadApp.ShowAlertDialog(plan.Note);
+                return;
+            }
+            mode = plan.Mode;
+            groundSel = plan.GroundAuto;
+            if (!string.IsNullOrEmpty(plan.Note)) ed.WriteMessage("\n" + plan.Note);
         }
-        catch (System.Exception qx)
-        {
-            // [안전] 구역 판정 중 예외 — 조용히 '새로시작'으로 흘러 기존 구역을 날리면 안 됨 → 중단.
-            ed.WriteMessage("\n[DHGRADE] 기존 구역 확인 실패 — " + qx.Message);
-            AcadApp.ShowAlertDialog("기존 정지 구역 확인 중 오류가 나 중단합니다(기존 결과 보호):\n" + qx.Message);
-            return;
-        }
+
 
         // 2) 원지반 TinSurface 선택 — 이어서(누적)는 기준이 자동(현재 정지면)이라 생략.
         if (groundSel.IsNull)

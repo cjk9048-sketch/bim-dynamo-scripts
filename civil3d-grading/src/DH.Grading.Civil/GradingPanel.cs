@@ -33,6 +33,14 @@ internal sealed class GradingPanel : UserControl
     private readonly TextBlock _note, _status, _said;
     private readonly RadioButton _showCut, _showFill;
 
+    // ── ★[5b] 대상 ────────────────────────────────────────────────────────
+    private readonly Button _pickPlan, _pickGround, _build;
+    private readonly TextBlock _planWhat, _groundWhat;
+    private readonly RadioButton _append, _restart;
+    /// <summary>이어서/새로시작 줄 — ★<c>StackPanel</c>이 아니라 <c>DockPanel</c>이다.
+    /// 종류를 짐작해 캐스트했다가 <b>언제나 null</b>이 되어 숨김이 통째로 죽었다(검토 0909).</summary>
+    private readonly Panel _modeRow;
+
     /// <summary>★<b>이 도면에 맞췄을 때</b>의 사면형상 — 팝업의 <c>_miterAtOpen</c>에 해당한다.
     ///
     /// <para>팝업은 <i>"창을 연 순간"</i>이 있어 그때 값을 적어 두면 됐다.
@@ -58,7 +66,8 @@ internal sealed class GradingPanel : UserControl
         // ★[5a] 아직 없는 것을 <b>말한다</b> — 없는 단추를 만들어 두는 것보다 낫다.
         _status = new TextBlock
         {
-            Text = "이번 판은 값만 정합니다 — 폴리곤 찍기·지표면 생성은 리본 [계획부지 정지]로 하세요.",
+            Text = "[계획 경계 선택] → [원지반 선택] → [지표면 생성] 차례로 누르세요."
+                 + " 고른 것은 도면에서 빨간 띠로 보입니다.",
             FontSize = 11,
             Foreground = DhBrand.Sub,
             TextWrapping = TextWrapping.Wrap,
@@ -75,8 +84,34 @@ internal sealed class GradingPanel : UserControl
             Visibility = Visibility.Collapsed,
         };
 
+        // ══ ★[5b] 대상 ═══════════════════════════════════════════════════
+        //   JACK 0908: <i>"창 안에서 선택버튼을 누르고 폴리곤을 선택하면 빨간색으로 바뀌고,
+        //   이어서 지표면 선택하고 엔터 또는 도킹창의 지표면생성 버튼을 누르면 부지가 정지되게"</i>
+        //   ★단추는 <b>이름 있는 명령</b>을 부른다 — 창 클릭은 명령 문맥이 아니라
+        //     여기서 바로 도면을 찍으면 안 되거나 AutoCAD가 죽는다(<see cref="PickSession"/>).
+        GradingDialog.AddSection(root, "1. 대상", "무엇을 가지고 정지면을 만들지", first: true);
+        _pickPlan = PickRow(root, "계획 경계 선택", out _planWhat,
+                            () => PickSession.Send(Doc, PickCommands.CmdPlan));
+        _pickGround = PickRow(root, "원지반 선택", out _groundWhat,
+                              () => PickSession.Send(Doc, PickCommands.CmdGround));
+
+        // ★[계획 §5.1] <b>이어서/새로시작</b> — 기존 정지 결과가 있을 때만 보인다.
+        //   종전 명령은 계획선을 찍은 <b>뒤</b> 이것을 묻고, 그 답에 따라 원지반을 아예 안 물었다.
+        //   창에서는 <b>미리 보여 주고</b>, 뜻을 가리는 것은 [생성]을 누르는 순간 다시 한다.
+        _append = GradingDialog.AddRadioPair(root, "기존 결과", "이어서", true, out _restart, "새로시작",
+            "이어서 = 지금 정지면을 기준 삼아 새 구역을 더합니다. 새로시작 = 처음부터 다시 만듭니다.",
+            out _modeRow);
+        _append.Checked += (_, __) => PickSession.AppendMode = true;
+        _restart.Checked += (_, __) => PickSession.AppendMode = false;
+
+        _build = new Button { Content = "지표면 생성", MinWidth = 120, Height = 32, Margin = new Thickness(0, 2, 0, 4) };
+        try { if (DhBrand.Skin != null) _build.Style = (Style)DhBrand.Skin["DhPrimary"]; } catch { }
+        _build.HorizontalAlignment = HorizontalAlignment.Left;
+        _build.Click += (_, __) => PickSession.Send(Doc, PickCommands.CmdBuild);
+        root.Children.Add(_build);
+
         // ── ① 절토 / 성토 ────────────────────────────────────────────────
-        GradingDialog.AddSection(root, "1. 절토 / 성토", "사면을 어떻게 계단으로 세울지", first: true);
+        GradingDialog.AddSection(root, "2. 절토 / 성토", "사면을 어떻게 계단으로 세울지");
         _cutH = Row(root, "절토 단높이 (m)", GradingSettings.CutBenchHeight);
         _cutW = Row(root, "절토 소단폭 (m)", GradingSettings.CutBenchWidth);
         _cutS = Row(root, "절토구배  1 :", GradingForm.SlopeShown(GradingSettings.CutSlope));
@@ -89,7 +124,7 @@ internal sealed class GradingPanel : UserControl
             "볼록한 모서리를 직각으로 세울지 둥글릴지 — 옹벽 장수가 크게 달라집니다.");
 
         // ── ② 산지 대소단 ────────────────────────────────────────────────
-        GradingDialog.AddSection(root, "2. 산지 대소단", "산지전용허가법 — 일정 높이마다 넓은 소단을 둡니다");
+        GradingDialog.AddSection(root, "3. 산지 대소단", "산지전용허가법 — 일정 높이마다 넓은 소단을 둡니다");
         _terrace = new CheckBox
         {
             Content = "계단식 산지(대소단) 적용",
@@ -101,7 +136,7 @@ internal sealed class GradingPanel : UserControl
         _tW = Row(root, "대소단 폭 (m)", GradingSettings.TerraceWidth);
 
         // ── ③ 옹벽 형태 ──────────────────────────────────────────────────
-        GradingDialog.AddSection(root, "3. 옹벽 형태", "구배가 수직에 가까울 때 그 단을 무엇으로 세울지");
+        GradingDialog.AddSection(root, "4. 옹벽 형태", "구배가 수직에 가까울 때 그 단을 무엇으로 세울지");
         _cutWall = GradingDialog.AddStyleRow(root, "절토 옹벽", GradingSettings.CutWallStyle, out _);
         _fillWall = GradingDialog.AddStyleRow(root, "성토 옹벽", GradingSettings.FillWallStyle, out _);
 
@@ -172,6 +207,19 @@ internal sealed class GradingPanel : UserControl
 
         _showCut.Checked += (_, __) => Redraw();
         _showFill.Checked += (_, __) => Redraw();
+
+        // ★[검토 0909] <c>Changed</c>는 <b>정적 이벤트</b>다 — 창이 사라질 때 반드시 해지한다.
+        //   안 하면 죽은 UI로 호출이 가고, 창이 영원히 살아 있게 된다.
+        // ★★[검토 0909 · 높음] <b>다시 붙는 자리도 있어야 한다.</b>
+        //   <c>PaletteSet</c>은 도킹·부유·자동숨김을 오갈 때 시각 트리에서 뺐다 붙인다.
+        //   해지만 있고 <c>Loaded</c>가 없으면, 한 번 접었다 편 뒤로 <b>영영 안 갱신</b>된다 —
+        //   도면엔 빨간 띠가 뜨는데 창은 "○ 미선택"에 [지표면 생성]이 회색인 채로 남는다.
+        //   ★두 번 붙지 않게 <b>떼고 붙인다</b>(이벤트는 중복 구독이 된다).
+        void Wire() { try { PickSession.Changed -= RefreshPicks; PickSession.Changed += RefreshPicks; } catch { } }
+        Loaded += (_, __) => { Wire(); RefreshPicks(); };
+        Unloaded += (_, __) => { try { PickSession.Changed -= RefreshPicks; } catch { } };
+        Wire();
+        RefreshPicks();
         _miterAtSync = GradingSettings.MiterConvex;
         Redraw();
     }
@@ -214,9 +262,18 @@ internal sealed class GradingPanel : UserControl
         }
         catch { }
         finally { _loading = false; }
+        // ★★[검토 0909 · 보통] <b>이어서/새로시작도 도면마다 되돌린다.</b>
+        //   라디오 → 정적값 방향만 있고 반대가 없어, 도면 A에서 [새로시작]을 고른 뒤
+        //   도면 B로 넘어가면 <b>A의 답</b>을 들고 있었다 —
+        //   계획 §4가 경고한 "앞 도면 값을 새 도면에 밀어 넣는다" 그대로다.
+        _append.IsChecked = true;
+        _restart.IsChecked = false;
+        PickSession.AppendMode = true;
+
         // ★여기가 팝업의 "창을 연 순간"에 해당한다(위 <see cref="_miterAtSync"/> 참고).
         _miterAtSync = GradingSettings.MiterConvex;
         Redraw();
+        RefreshPicks();
         if (dirty) Say("이 도면의 값으로 바꿨습니다 — <b>저장하지 않은 입력은 사라졌습니다</b>.");
     }
 
@@ -268,6 +325,50 @@ internal sealed class GradingPanel : UserControl
     /// <summary>★[검토 0909 · 낮음] <b>안내문과 결과를 같은 칸에 쓰지 않는다.</b>
     /// <para>종전엔 첫 [값 저장]에 <i>"찍기·생성은 리본으로"</i>라는 안내가 영영 사라졌다 —
     /// 5a의 설계 취지(없는 단추 대신 <b>말한다</b>)가 첫 클릭에 무너지는 것이다.</para></summary>
+    /// <summary>지금 도면 — 창은 늘 떠 있으므로 <b>부를 때마다</b> 묻는다(붙잡아 두지 않는다).</summary>
+    private static AcDoc Doc => AcadApp.DocumentManager.MdiActiveDocument;
+
+    /// <summary>★<b>찍기 상태를 화면에 옮긴다</b> — 고른 것 이름, 단추 켜짐, 이어서 칸 보임.
+    /// <para><see cref="PickSession.Changed"/>가 이것을 부른다. 찍는 중에는 단추를 <b>회색으로</b> 내려
+    /// 겹쳐 누르지 못하게 한다 — 계획 §4가 적어 둔 자리다.</para></summary>
+    internal void RefreshPicks()
+    {
+        try
+        {
+            var doc = Doc;
+            bool busy = PickSession.Busy;
+
+            var pl = doc == null ? null : PickSession.Peek(doc, PickSession.KeyPlan);
+            var gr = doc == null ? null : PickSession.Peek(doc, PickSession.KeyGround);
+            bool hasPlan = pl != null, hasGround = gr != null;
+            _planWhat.Text = hasPlan ? "● " + pl.What : "○ 미선택";
+            _planWhat.Foreground = hasPlan ? DhBrand.Brand : DhBrand.Sub;
+
+            // 기존 결과가 있을 때만 이어서/새로시작을 보여 준다 — 없으면 고를 것이 없다.
+            bool hasPrev = doc != null && GradeStart.HasPrevious(doc.Database, out int nR) && nR > 0;
+            if (_modeRow != null) _modeRow.Visibility = hasPrev ? Visibility.Visible : Visibility.Collapsed;
+
+            // ★이어서·다시는 원지반이 <b>자동</b>으로 정해진다 — 그때는 안 골라도 만들 수 있다.
+            bool needGround = !(hasPrev && _append.IsChecked == true);
+            _pickPlan.IsEnabled = !busy;
+            // ★★[검토 0909 · 높음] <b>안 쓸 거면 잠근다.</b> 종전엔 흐리게만 하고 눌리게 뒀는데,
+            //   눌러서 고른 것이 <b>결과에 안 쓰였다</b> — 알림은 명령창 한 줄뿐이었다.
+            //   "고를 수 있는데 무시한다"는 것이 사용자에게 가장 나쁜 상태다.
+            _pickGround.IsEnabled = !busy && needGround;
+            _groundWhat.Text = needGround
+                ? (hasGround ? "● " + gr.What : "○ 미선택")
+                : "● 자동 — 지금 정지면_DH";
+            _groundWhat.Foreground = needGround && !hasGround ? DhBrand.Sub : DhBrand.Brand;
+            _build.IsEnabled = !busy && hasPlan && (hasGround || !needGround);
+        }
+        catch (System.Exception ex)
+        {
+            // ★[검토 0909] <b>조용히 안 바뀌면 아무도 모른다.</b> 이 저장소 규칙 —
+            //   자주 고치는 자리는 로그 한 줄(JACK: "단계마다 로그").
+            try { DiagLog.Append("\n■ 정지창 상태 갱신 실패 — " + ex.Message + "\n"); } catch { }
+        }
+    }
+
     private void Say(string s)
     {
         _said.Text = s;
@@ -319,6 +420,27 @@ internal sealed class GradingPanel : UserControl
     private static string N(double v) => v.ToString(CultureInfo.InvariantCulture);
 
     
+    /// <summary>찍기 한 줄 — [단추] 와 <b>고른 것 이름</b>.</summary>
+    private static Button PickRow(Panel parent, string label, out TextBlock what, System.Action onClick)
+    {
+        var row = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = true };
+        var b = new Button { Content = label, MinWidth = 130, Height = 30 };
+        b.Click += (_, __) => onClick();
+        DockPanel.SetDock(b, Dock.Left);
+        row.Children.Add(b);
+        what = new TextBlock
+        {
+            Text = "○ 미선택",
+            Margin = new Thickness(10, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = DhBrand.Sub,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        row.Children.Add(what);
+        parent.Children.Add(row);
+        return b;
+    }
+
     private static TextBox Row(Panel parent, string label, double value)
         => GradingDialog.AddRow(parent, label, value, "");
 

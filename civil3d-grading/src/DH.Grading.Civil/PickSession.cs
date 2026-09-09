@@ -56,6 +56,11 @@ internal static class PickSession
     /// <summary>★찍는 중인가 — <b>두 창이 나눠 쓰는 자물쇠 하나</b>.</summary>
     internal static bool Busy { get; private set; }
 
+    /// <summary>창에서 고른 <b>이어서/새로시작</b> — <c>DHGRADEBUILD</c>가 읽는다.
+    /// <para>★값 자체는 창이 정하지만 <b>그것이 뜻하는 방식</b>은 <see cref="GradeStart.Decide"/>가
+    /// [생성]을 누르는 순간 다시 가린다 — 그 사이 도면이 바뀌었을 수 있다.</para></summary>
+    internal static bool AppendMode = true;
+
     /// <summary>고른 것이 바뀌었다 — 창이 이것을 듣고 다시 그린다.
     /// <para>★<b>지금은 구독자가 없다</b>(검토 0909 확인). 5b에서 창이, 8단계에서 리본이 붙는다.</para>
     /// <para>★<b>정적 이벤트다</b> — 창이 닫힐 때 <b>반드시 해지</b>해야 한다(안 하면 죽은 UI로 호출이 간다).</para></summary>
@@ -344,7 +349,10 @@ internal static class PickSession
             void Watch(string name)
             {
                 _inCommand = false;
-                if (name != null && name.StartsWith("DHPICK", System.StringComparison.OrdinalIgnoreCase)) End();
+                // ★[검토 0909 · H3] 만들기 명령도 이 감시견이 풀어야 한다 —
+                //   안 그러면 만드는 중에 도면을 닫았을 때 자물쇠가 고착된다(감시견을 넣은 바로 그 사고).
+                if (name != null && (name.StartsWith("DHPICK", System.StringComparison.OrdinalIgnoreCase)
+                                  || name.Equals(PickCommands.CmdBuild, System.StringComparison.OrdinalIgnoreCase))) End();
             }
             doc.CommandWillStart += (_, __) => _inCommand = true;
             doc.CommandEnded += (_, e) => Watch(e.GlobalCommandName);
@@ -362,6 +370,8 @@ public sealed class PickCommands
     internal const string CmdPlan = "DHPICKPLAN";
     internal const string CmdGround = "DHPICKGROUND";
     internal const string CmdExcav = "DHPICKEXCAV";
+    /// <summary>★[검토 0909 · 낮음] 형제 셋은 상수인데 이것만 문자열로 박혀 있었다.</summary>
+    internal const string CmdBuild = "DHGRADEBUILD";
 
     /// <summary>계획 경계(닫힌 폴리라인/3D폴리라인/피처라인)를 찍는다.</summary>
     [CommandMethod(CmdPlan, CommandFlags.Modal)]
@@ -377,6 +387,92 @@ public sealed class PickCommands
     [CommandMethod(CmdGround, CommandFlags.Modal)]
     public static void PickGround() => PickOne(PickSession.KeyGround, "원지반",
         "\n원지반 지표면을 선택: ", wantSurface: true);
+
+    /// <summary>★★★[계획 5b단계] <b>고른 것으로 정지면을 만든다</b> — 도킹창의 [지표면 생성]이 부른다.
+    ///
+    /// <para>찍기와 만들기를 <b>시간적으로 갈랐기 때문에</b>, 여기서 다시 확인할 것이 셋이다:
+    /// ①고른 것이 <b>아직 도면에 있는가</b>(그 사이 지웠을 수 있다)
+    /// ②원지반이 <b>정말 TIN인가</b>
+    /// ③<b>이어서/새로시작</b>이 지금도 그 답인가 — 그 사이 초기화나 사면수정이 끼면 뒤집힌다.</para>
+    ///
+    /// <para>만들기가 <b>끝나면</b>(성공이든 실패든) 고른 것과 빨간 표시를 걷는다 —
+    /// 계획 §4가 적어 둔 <b>걷는 자리 1·2</b>다.</para></summary>
+    [CommandMethod(CmdBuild, CommandFlags.Modal)]
+    public static void GradeBuild()
+    {
+        var doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        var ed = doc.Editor;
+        try { GradingSettings.SyncToDocument(doc); } catch { }
+        PickSession.Hook();
+        // ★★[검토 0909 · H3] <b>만드는 동안에도 자물쇠를 잡는다.</b>
+        //   안 잡으면 몇 분 걸리는 이 일이 도는 내내 창의 단추가 전부 살아 있어,
+        //   [원지반 선택]을 누르면 <c>^C^C</c>가 입력 큐에 쌓인다.
+        if (!PickSession.Begin(ed, "정지면 생성")) return;
+        try
+        {
+
+        // ① 고른 것이 아직 있는가 — 없으면 자리를 비우고(창이 "미선택"으로) 말한다.
+        var planId = PickSession.ResolveForUse(doc, PickSession.KeyPlan);
+        if (planId.IsNull)
+        {
+            ed.WriteMessage("\n[계획부지 정지] 계획 경계를 고르지 않았습니다(또는 그 사이 지워졌습니다).");
+            return;
+        }
+
+        // ③ 이어서/새로시작을 <b>지금</b> 다시 가린다.
+        var plan = GradeStart.Decide(doc, planId, PickSession.AppendMode);
+        if (plan.Blocked)
+        {
+            ed.WriteMessage("\n[계획부지 정지] " + plan.Note.Replace("\n", "\n  "));
+            try { AcadApp.ShowAlertDialog(plan.Note); } catch { }
+            return;
+        }
+
+        // ② 원지반 — 이어서·다시는 자동으로 정해진다(사용자가 고른 것보다 우선).
+        ObjectId groundId = plan.GroundAuto;
+        if (groundId.IsNull) groundId = PickSession.ResolveForUse(doc, PickSession.KeyGround);
+        if (!GradeStart.CheckGround(doc, groundId, out string why))
+        {
+            ed.WriteMessage("\n[계획부지 정지] " + why);
+            return;
+        }
+        if (!string.IsNullOrEmpty(plan.Note)) ed.WriteMessage("\n" + plan.Note);
+
+        try
+        {
+            Commands.CreateGradingCommand.DoGrade(doc, planId, groundId, plan.Mode);
+        }
+        catch (System.Exception ex)
+        {
+            // ★명령 안에서 잡는다 — 여기서 안 잡으면 프로세스가 죽는다.
+            ed.WriteMessage("\n[계획부지 정지] 실패 — " + ex.Message);
+            try { DiagLog.Append($"\n■ 도킹창 정지 예외 — {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}\n"); } catch { }
+        }
+        finally
+        {
+            // ★[계획 §4 · 걷는 자리 1·2] <b>만들어졌으면</b> 걷는다.
+            //   ★[검토 0909 · M1] 종전엔 <b>실패해도</b> 지웠다 — 사용자는 오류 팝업을 본 뒤
+            //     폴리곤과 원지반을 <b>둘 다 다시 찍어야</b> 했다. 실패는 흔히 값을 고쳐 다시 하는 일이다.
+            //   그래서 <b>결과가 실제로 생겼는지</b> 보고 정한다(<c>DoGrade</c>는 성패를 안 돌려준다).
+            bool made = false;
+            try
+            {
+                using var tr = doc.Database.TransactionManager.StartTransaction();
+                made = GradingBuilder.SurfaceExistsByBaseName(tr, "정지면_DH");
+                tr.Commit();
+            }
+            catch { }
+            if (made) PickSession.ClearAll(doc);
+            else
+            {
+                PickSession.DropMarks(doc);      // 띠만 걷고 고른 것은 남긴다
+                ed.WriteMessage("\n[계획부지 정지] 고른 것을 그대로 둡니다 — 값을 고쳐 다시 [지표면 생성]을 누르세요.");
+            }
+        }
+        }
+        finally { PickSession.End(); }
+    }
 
     /// <summary>고른 것을 전부 잊는다(빨간 표시도 걷는다). <b>자물쇠도 푼다</b> — 비상 탈출구.</summary>
     [CommandMethod("DHPICKCLEAR", CommandFlags.Modal)]
@@ -464,6 +560,31 @@ public sealed class PickCommands
             ed.WriteMessage(wantSurface
                 ? $"\n[찍기] {what} = {name} — 골랐습니다(면은 색으로 표시하지 않습니다)."
                 : $"\n[찍기] {what} = {name} — 빨갛게 표시했습니다.");
+
+            // ★★★[JACK 0908 <i>"이어서 지표면 선택하고 <b>엔터</b> 또는 도킹창의 지표면생성 버튼"</i>]
+            //   <b>다 골랐으면 그 자리에서 엔터를 받는다.</b> 창으로 마우스를 옮겨 단추를 누르는 것과
+            //   <b>둘 다</b> 되어야 한다 — 도면을 보며 찍던 손이 그대로 이어지는 쪽이 빠르다.
+            //   ★<b>엔터가 기본</b>이다(<c>AllowNone</c>). Esc면 고른 것만 남기고 나온다.
+            if (key == PickSession.KeyGround && PickSession.Peek(doc, PickSession.KeyPlan) != null)
+            {
+                var go = new PromptKeywordOptions("\n다 골랐습니다 — Enter=정지면 만들기 · Esc=고른 것만 두고 나가기");
+                go.Keywords.Add("만들기");
+                go.Keywords.Add("나중에");
+                go.Keywords.Default = "만들기";
+                go.AllowNone = true;
+                var gr = ed.GetKeywords(go);
+                bool build = gr.Status == PromptStatus.None
+                          || ((gr.Status == PromptStatus.OK || gr.Status == PromptStatus.Keyword)
+                              && gr.StringResult == "만들기");
+                if (build)
+                {
+                    // ★자물쇠를 <b>먼저 풀고</b> 보낸다 — 안 그러면 다음 명령이 거절당한다.
+                    PickSession.End();
+                    PickSession.Send(doc, "DHGRADEBUILD");
+                    return;
+                }
+                ed.WriteMessage("\n[찍기] 고른 것을 그대로 둡니다 — 창의 [지표면 생성]으로 언제든 만들 수 있습니다.");
+            }
         }
         catch (System.Exception ex)
         {
