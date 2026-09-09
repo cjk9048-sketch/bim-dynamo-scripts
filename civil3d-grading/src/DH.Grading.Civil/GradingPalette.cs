@@ -48,6 +48,37 @@ public static class GradingPalette
                     MinimumSize = new System.Drawing.Size(PanelW, 420),
                 };
                 _ps.AddVisual("정지", _panel);
+
+                // ★★★[계획 §4 · 걷는 자리 5] <b>창을 닫거나 말아 두면 빨간 표시를 걷는다.</b>
+                //
+                //   계획서가 걷을 자리를 <b>여섯</b> 적어 뒀는데 이것만 빠져 있었다(감사 확인).
+                //   창이 안 보이는데 도면에 빨간 띠만 남아 있으면, 사용자는 <b>그것을 지울 방법을
+                //   찾을 수가 없다</b> — 임시 그래픽이라 선택도 안 되고 지우기도 안 먹는다.
+                //   ★<c>DHPICKCLEAR</c>가 비상구지만, 그것을 아는 사람은 이 코드를 쓴 사람뿐이다.
+                //
+                //   ★<b>고른 것은 남긴다</b>(표시만 걷는다) — 창을 잠깐 접었다 폈다고
+                //     다시 찍게 하면 번거롭다. 도면 전환 때와 같은 규칙이다.
+                try
+                {
+                    _ps.StateChanged += (_, e) =>
+                    {
+                        try
+                        {
+                            var doc = AcadApp.DocumentManager.MdiActiveDocument;
+                            if (doc == null) return;
+                            // ★이 열거형에는 <b>Hide·Show·ThemeChange 셋뿐</b>이다
+                            //   (<c>tools/apidump</c>로 실제 어셈블리에서 확인 — 자동숨김 전용 값은 없다).
+                            //   자동숨김으로 말아 두면 <c>Hide</c>가 온다.
+                            if (e.NewState == StateEventIndex.Hide) PickSession.DropMarks(doc);
+                            else if (e.NewState == StateEventIndex.Show) _panel?.SyncTo(doc);
+                        }
+                        catch { }
+                    };
+                }
+                catch (System.Exception exS)
+                {
+                    try { DiagLog.Append("\n■ 팔레트 상태 훅 실패 — " + exS.Message + "\n"); } catch { }
+                }
                 // ★뜰 때의 크기도 같이 준다 — <c>MinimumSize</c>만 주면 도킹 폭이 안 따라오는 판이 있다.
                 try { _ps.Size = new System.Drawing.Size(PanelW, 780); } catch { }
                 Hook();
