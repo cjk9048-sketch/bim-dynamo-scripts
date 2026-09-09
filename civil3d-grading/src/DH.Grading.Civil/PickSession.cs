@@ -352,7 +352,8 @@ internal static class PickSession
                 // ★[검토 0909 · H3] 만들기 명령도 이 감시견이 풀어야 한다 —
                 //   안 그러면 만드는 중에 도면을 닫았을 때 자물쇠가 고착된다(감시견을 넣은 바로 그 사고).
                 if (name != null && (name.StartsWith("DHPICK", System.StringComparison.OrdinalIgnoreCase)
-                                  || name.Equals(PickCommands.CmdBuild, System.StringComparison.OrdinalIgnoreCase))) End();
+                                  || name.Equals(PickCommands.CmdBuild, System.StringComparison.OrdinalIgnoreCase)
+                                  || name.Equals(PickCommands.CmdExcavBuild, System.StringComparison.OrdinalIgnoreCase))) End();
             }
             doc.CommandWillStart += (_, __) => _inCommand = true;
             doc.CommandEnded += (_, e) => Watch(e.GlobalCommandName);
@@ -372,6 +373,7 @@ public sealed class PickCommands
     internal const string CmdExcav = "DHPICKEXCAV";
     /// <summary>★[검토 0909 · 낮음] 형제 셋은 상수인데 이것만 문자열로 박혀 있었다.</summary>
     internal const string CmdBuild = "DHGRADEBUILD";
+    internal const string CmdExcavBuild = "DHEXCAVBUILD";
 
     /// <summary>계획 경계(닫힌 폴리라인/3D폴리라인/피처라인)를 찍는다.</summary>
     [CommandMethod(CmdPlan, CommandFlags.Modal)]
@@ -474,6 +476,119 @@ public sealed class PickCommands
         finally { PickSession.End(); }
     }
 
+    /// <summary>★★★[계획 6단계] <b>고른 터파기선으로 굴착 지표면을 만든다</b> — 창의 [생성]이 부른다.
+    ///
+    /// <para>명령판(<c>DHEXCAV</c>)과 <b>같은 파이프라인</b>(<see cref="Commands.ExcavCommand.DoExcav"/>)을 부른다.
+    /// 다른 것은 <b>값을 어디서 얻느냐</b>뿐이다 — 구배와 기준면은 창이 이미 세션에 옮겨 놓았고,
+    /// 여기서는 <b>찍은 것이 아직 있는지</b>와 <b>원지반</b>만 다시 확인한다.</para>
+    ///
+    /// <para>★<b>화면 되돌리기</b>도 명령판과 같다 — 만드는 동안 전부 보이게 하고,
+    /// 끝나면 전부 보기로 돌아온다(JACK 0825: <i>"완료가 되면 전부 보기 상태로 복원되게"</i>).</para></summary>
+    [CommandMethod(CmdExcavBuild, CommandFlags.Modal)]
+    public static void ExcavBuild()
+    {
+        var doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        var ed = doc.Editor;
+        var db = doc.Database;
+        try { GradingSettings.SyncToDocument(doc); } catch { }
+        PickSession.Hook();
+        if (!PickSession.Begin(ed, "터파기 지표면 생성")) return;
+        try
+        {
+            var boxId = PickSession.ResolveForUse(doc, PickSession.KeyExcav);
+            if (boxId.IsNull)
+            {
+                ed.WriteMessage("\n[구조물 터파기] 터파기선을 고르지 않았습니다(또는 그 사이 지워졌습니다).");
+                return;
+            }
+
+            // ── 원지반 ──
+            //   ★★★[검토 0909 · 치명] <b>세션 핸들 하나에 기대면 안 된다.</b>
+            //     <c>LastGroundHandle</c>은 <b>도면이 바뀔 때마다 지워지고 도면에서 되살아나지 않는다</b> —
+            //     즉 <b>어제 만든 도면을 열면 여기가 늘 실패했다</b>. 창을 열기만 해도 지워진다.
+            //   → ①사람이 창에서 고른 것 ②마지막 정지에 쓴 지반 차례로 본다.
+            ObjectId groundId = PickSession.ResolveForUse(doc, PickSession.KeyGround);
+            if (groundId.IsNull)
+                try
+                {
+                    using var trG = db.TransactionManager.StartTransaction();
+                    groundId = Commands.NoriCommand.FindByHandle(db, GradingSettings.LastGroundHandle);
+                    trG.Commit();
+                }
+                catch { }
+
+            // ★★[검토 0909 · 높음] <b>TIN인지 보고 넘긴다.</b>
+            //   <c>FindByHandle</c>은 핸들만 보고 형을 안 본다. 그런데 <c>DoExcav</c>는
+            //   <b>하드 캐스트</b>라 엉뚱한 객체면 <i>"지정한 캐스트가 잘못되었습니다"</i> 한 줄만 뜬다.
+            //   이 저장소는 바로 옆(계획면)에서 같은 함정을 이미 고쳤는데 원지반에는 안 넣었다.
+            string gname = "";
+            if (!groundId.IsNull)
+                try
+                {
+                    using var trT = db.TransactionManager.StartTransaction();
+                    if (trT.GetObject(groundId, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.TinSurface ts)
+                        gname = ts.Name;
+                    else groundId = ObjectId.Null;
+                    trT.Commit();
+                }
+                catch { groundId = ObjectId.Null; }
+
+            if (groundId.IsNull)
+            {
+                ed.WriteMessage("\n[구조물 터파기] 원지반을 못 찾았습니다 — 창의 [원지반 선택]으로 골라 주세요.");
+                PickSession.Send(doc, CmdGround);      // 그 자리에서 고르게 이어 준다
+                return;
+            }
+            ed.WriteMessage($"\n[구조물 터파기] 원지반 = {gname}"
+                          + $" · 기준면 = {(Commands.ExcavCommand.Basis == Core.CrossSectionArea.ExcavBase.Plan ? "계획지표면" : "원지반")}");
+
+            bool made = false;
+            try
+            {
+                using (Commands.ViewSurfaceCommand.Focus(db, null))   // 만드는 동안엔 전부 보이게
+                    Commands.ExcavCommand.DoExcav(doc, boxId, groundId);
+                Commands.ViewSurfaceCommand.ShowAll();
+                // ★★[검토 0909 · 높음] <b>"예외가 안 났다"는 성공이 아니다.</b>
+                //   <c>DoExcav</c>는 기준면 통일 물음에서 <b>예외 없이 그냥 돌아선다</b> —
+                //   그때도 성공으로 보면 고른 것과 빨간 표시를 지워, 사용자 눈엔 "단추가 고장 났다"가 된다.
+                //   → <b>결과가 실제로 생겼는지 되읽는다</b>(정지 창과 같은 규칙).
+                try
+                {
+                    using var trC = db.TransactionManager.StartTransaction();
+                    made = GradingBuilder.SurfaceExistsByBaseName(trC, Commands.ExcavCommand.SurfName);
+                    trC.Commit();
+                }
+                catch { }
+            }
+            catch (System.Exception ex)
+            {
+                ed.WriteMessage("\n[구조물 터파기] 실패 — " + ex.Message);
+                try { AcadApp.ShowAlertDialog("터파기 지표면 생성 중 오류:\n" + ex.Message); } catch { }
+                try { DiagLog.Append($"\n■ 도킹창 터파기 예외 — {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}\n"); } catch { }
+                try { Commands.ViewSurfaceCommand.ShowAll(); } catch { }
+            }
+
+            // ★[계획 §4 · 걷는 자리 1·2] 만들어졌으면 걷고, 실패면 고른 것을 남긴다
+            //   — 실패는 흔히 값을 고쳐 다시 하는 일이다(정지 창과 같은 규칙).
+            if (made)
+            {
+                PickSession.ClearAll(doc);
+                // ★[검토 0909 · 보통] 창에도 말한다 — 도킹창을 보는 사람은 명령창을 안 본다.
+                ExcavPalette.Say("터파기 지표면을 만들었습니다 — 기준면 "
+                    + (Commands.ExcavCommand.Basis == Core.CrossSectionArea.ExcavBase.Plan ? "계획지표면" : "원지반") + ".");
+            }
+            else
+            {
+                PickSession.DropMarks(doc);
+                ed.WriteMessage("\n[구조물 터파기] 고른 것을 그대로 둡니다 — 값을 고쳐 다시 [생성]을 누르세요.");
+                ExcavPalette.Say("만들지 못했습니다 — 고른 것은 그대로 뒀습니다(명령창의 메시지를 보세요).");
+            }
+            ExcavPalette.Refresh();
+        }
+        finally { PickSession.End(); }
+    }
+
     /// <summary>고른 것을 전부 잊는다(빨간 표시도 걷는다). <b>자물쇠도 푼다</b> — 비상 탈출구.</summary>
     [CommandMethod("DHPICKCLEAR", CommandFlags.Modal)]
     public static void PickClear()
@@ -565,6 +680,22 @@ public sealed class PickCommands
             //   <b>다 골랐으면 그 자리에서 엔터를 받는다.</b> 창으로 마우스를 옮겨 단추를 누르는 것과
             //   <b>둘 다</b> 되어야 한다 — 도면을 보며 찍던 손이 그대로 이어지는 쪽이 빠르다.
             //   ★<b>엔터가 기본</b>이다(<c>AllowNone</c>). Esc면 고른 것만 남기고 나온다.
+            // ★[검토 0909 · 보통] <b>터파기선도 엔터로 이어진다</b> — JACK 지시 9가 그것이었다.
+            if (key == PickSession.KeyExcav)
+            {
+                var go2 = new PromptKeywordOptions("\n터파기선을 골랐습니다 — Enter=지표면 만들기 · Esc=고른 것만 두고 나가기");
+                go2.Keywords.Add("만들기");
+                go2.Keywords.Add("나중에");
+                go2.Keywords.Default = "만들기";
+                go2.AllowNone = true;
+                var gr2 = ed.GetKeywords(go2);
+                bool go = gr2.Status == PromptStatus.None
+                       || ((gr2.Status == PromptStatus.OK || gr2.Status == PromptStatus.Keyword)
+                           && gr2.StringResult == "만들기");
+                if (go) { PickSession.End(); PickSession.Send(doc, CmdExcavBuild); return; }
+                ed.WriteMessage("\n[찍기] 고른 것을 그대로 둡니다 — 창의 [생성]으로 언제든 만들 수 있습니다.");
+            }
+
             if (key == PickSession.KeyGround && PickSession.Peek(doc, PickSession.KeyPlan) != null)
             {
                 var go = new PromptKeywordOptions("\n다 골랐습니다 — Enter=정지면 만들기 · Esc=고른 것만 두고 나가기");
