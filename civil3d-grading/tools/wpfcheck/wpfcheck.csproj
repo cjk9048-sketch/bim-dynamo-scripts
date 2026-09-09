@@ -1,12 +1,14 @@
 <!--
-  ★★★[§77] <b>화면을 재는 자.</b>
-  <c>DhBrand</c>·<c>SlopeDiagram</c>은 AutoCAD 타입을 안 쓰므로 <b>떼어내 돌릴 수 있다</b> -
+  ★★★[§77] 화면을 재는 자.
+  DhBrand·SlopeDiagram은 AutoCAD 타입을 안 쓰므로 떼어내 돌릴 수 있다 -
   그림·모양표가 진짜로 그려지는지, 값이 그림에 닿는지, 좁은 창에서 살아남는지를 잰다.
   오프라인 검사기(tools/blocktest)는 Core만 덮어 이 층을 한 줄도 못 본다.
-  ★한동안 스크래치패드에만 있어 <b>다음 사람이 못 돌렸다</b> - 그래서 저장소로 옮겼다.
-  돌리는 법:  dotnet run -c Release --project tools/wpfcheck
+  ★한동안 스크래치패드에만 있어 다음 사람이 못 돌렸다 - 그래서 저장소로 옮겼다.
 
+  돌리는 법:  dotnet run -c Release 로 이 폴더를 project 지정해 돌린다
+  (XML 주석 안에는 하이픈 둘을 못 써서 옵션을 그대로 못 적는다).
 -->
+
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>

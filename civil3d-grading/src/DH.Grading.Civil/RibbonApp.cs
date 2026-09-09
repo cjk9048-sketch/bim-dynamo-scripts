@@ -92,6 +92,7 @@ public sealed class RibbonApp : IExtensionApplication
             AcadApp.DocumentManager.DocumentActivated += (_, _) => RefreshEnabled();
             AcadApp.DocumentManager.DocumentCreated += (_, e2) => HookDoc(e2.Document);
             foreach (Document d0 in AcadApp.DocumentManager) HookDoc(d0);
+            HookPickLock();   // ★[검토 0909 H2] Busy가 바뀔 때 리본이 다시 칠해지게
             RefreshEnabled();
         }
         catch { }
@@ -554,7 +555,7 @@ public sealed class RibbonApp : IExtensionApplication
 
             // ── 무엇이 있어야 눌 수 있나(JACK 0901) ───────────────────────────
             //   여기 한 곳만 보면 <b>일하는 순서</b>가 그대로 읽힌다.
-            _needGround.Clear(); _needPlan.Clear();
+            _needGround.Clear(); _needPlan.Clear(); _all.Clear();
             _needGround.Add(btnCrop);        // 원지형 자르기 — 자를 지형이 있어야
             _needGround.Add(btnStrata);      // 지층 구성 — 지반고를 원지반에서 읽는다
             //   ※[계획부지 생성] 스플릿은 <b>안 끈다</b> — 통째로 끄면 그 안의
@@ -569,6 +570,10 @@ public sealed class RibbonApp : IExtensionApplication
             _needPlan.Add(btnStnFb);
             _needPlan.Add(btnStnDel);   // ★[검토 0902] 형제 둘은 있는데 이것만 빠져 있었다
             _needPlan.Add(btnXsec);          // 횡단
+
+            // ★[계획 §4] 찍는 중에 한꺼번에 잠글 목록 — <b>둘의 합집합</b>이면 충분하다.
+            //   (여기 없는 항목은 찍기를 죽여도 사용자가 곧 알아차리는 것들이다.)
+            _all.AddRange(_needGround); _all.AddRange(_needPlan);
 
             // ── 패널 늘어놓기 ─────────────────────────────────────────────────
             tab.Panels.Add(new RibbonPanel { Source = pGrade });
@@ -1112,6 +1117,20 @@ public sealed class RibbonApp : IExtensionApplication
     /// 꺼 두면 <b>누를 수 있는 것만 보인다</b> — 그것이 곧 순서 안내다.</para>
     /// <para>★단추 상태는 <b>편의</b>이지 안전장치가 아니다 — 명령 자체도 없으면 안내하고 물러난다.</para></summary>
     private static readonly System.Collections.Generic.List<RibbonItem> _needPlan = new();
+
+    /// <summary>리본 항목 전부 — 찍는 중에 한꺼번에 잠그기 위해 들고 있는다(계획 §4).</summary>
+    private static readonly System.Collections.Generic.List<RibbonItem> _all = new();
+
+    /// <summary>찍기 상태가 바뀔 때 리본을 다시 칠하도록 <b>한 번만</b> 잇는다.
+    /// <para>★[검토 0909] 안 이으면 <c>Busy==true</c>인 순간에 <see cref="RefreshEnabled"/>가
+    /// <b>도는 경로가 하나도 없어</b> 잠금이 영영 안 걸린다 — 주석만 그렇게 하겠다고 적혀 있었다.</para></summary>
+    private static bool _pickHooked;
+    internal static void HookPickLock()
+    {
+        if (_pickHooked) return;
+        _pickHooked = true;
+        try { PickSession.Changed += RefreshEnabled; } catch { _pickHooked = false; }
+    }
     private static readonly System.Collections.Generic.List<RibbonItem> _needGround = new();
 
     /// <summary>★★[JACK 0825] <b>계획지표면·터파기가 없으면 그 보기 버튼을 끈다.</b>
@@ -1134,6 +1153,14 @@ public sealed class RibbonApp : IExtensionApplication
             if (_btnViewExcav != null) _btnViewExcav.IsEnabled = hasExc;
             foreach (var it in _needPlan) if (it != null) it.IsEnabled = hasPlan;
             foreach (var it in _needGround) if (it != null) it.IsEnabled = hasGround;
+
+            // ★★★[계획 §4 · 검토 0909 H2] <b>찍는 중에는 리본을 잠근다 — 맨 끝에서.</b>
+            //   리본 단추는 명령 앞에 <c>^C^C</c>를 붙여 보낸다 — 그것이 <b>진행 중인 찍기를 죽인다</b>.
+            //   사용자는 "단추가 고장 났다"고 볼 뿐 이유를 알 수 없다.
+            //   ★<b>맨 끝이라야 한다</b> — 종전엔 잠금을 위에 두어 바로 아래 줄이 절반을 되살렸다.
+            //   ★그리고 <c>Busy</c>가 <b>바뀔 때</b> 이 함수가 돌아야 한다 — 아래 <c>Changed</c> 구독.
+            if (PickSession.Busy)
+                foreach (var it in _all) if (it != null) it.IsEnabled = false;
         }
         catch { }
     }
