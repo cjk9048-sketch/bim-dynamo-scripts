@@ -35,6 +35,24 @@ internal sealed class PickMark : System.IDisposable
     /// <summary>고른 것을 칠할 색 — 빨강.</summary>
     private const short PickAci = 1;
 
+    /// <summary>★★[JACK 0909 <i>"줄이는 것보다 두껍게 하는 건 어때?"</i>] <b>띠의 굵기 — 도형 대각선의 몇 %인가.</b>
+    ///
+    /// <para><b>왜 굵기인가.</b> 빨간 표시는 고른 폴리선과 <b>똑같은 자리</b>에 있어
+    /// 어느 쪽이 나중에 그려지느냐로 보이고 안 보이고가 갈린다. 그 순서는 우리가 못 정한다.
+    /// 그런데 <b>굵게 그리면 순서를 이길 필요가 없다</b> — 뒤에 있어도 얇은 흰 선 <b>양옆으로</b>
+    /// 빨간 띠가 삐져나오기 때문이다. JACK의 생각이 맞았고 동그라미보다 이쪽이 낫다.</para>
+    ///
+    /// <para><b>왜 비율인가.</b> 화면 배율을 알 수 없다. 고정 굵기로 두면 작은 밸브실에서는
+    /// 도형을 덮어 버리고 큰 부지에서는 실오라기가 된다. 사용자는 어차피 그 도형이 보이게
+    /// 확대해 놓고 보므로 <b>도형 크기에 맞추는 것</b>이 언제나 비슷하게 보인다.</para>
+    ///
+    /// <para>★<b>이 값은 그림에만 쓴다</b> — 정지·터파기 계산은 이것을 <b>쳐다보지도 않는다</b>
+    /// (JACK 0909 확인). 0으로 두어 띠를 없애도 결과는 소수점 한 자리도 안 바뀐다.</para></summary>
+    private const double BandFrac = 0.005;
+
+    /// <summary>띠를 만들 수 없을 만큼 작은 도형일 때의 굵기(m).</summary>
+    private const double BandMin = 0.05;
+
     private readonly List<Drawable> _marks = new();
 
     /// <summary>★★★[계획 3단계] <b>이 표시가 사는 도면.</b>
@@ -143,6 +161,43 @@ internal sealed class PickMark : System.IDisposable
                 });
             }
 
+            // ★★★[JACK 0909 "줄이는 것보다 두껍게 하는 건 어때?"] <b>빨간 띠로 그린다.</b>
+            //   굵게 그리면 흰 선 <b>양옆으로</b> 빨강이 삐져나와, 뒤에 있어도 보인다(<see cref="BandFrac"/>).
+            double xMin = double.MaxValue, yMin = double.MaxValue, xMax = double.MinValue, yMax = double.MinValue;
+            foreach (var q in v)
+            {
+                if (q.X < xMin) xMin = q.X;
+                if (q.X > xMax) xMax = q.X;
+                if (q.Y < yMin) yMin = q.Y;
+                if (q.Y > yMax) yMax = q.Y;
+            }
+            double diag = System.Math.Sqrt((xMax - xMin) * (xMax - xMin) + (yMax - yMin) * (yMax - yMin));
+            double half = diag * BandFrac * 0.5;
+            if (!(half > 1e-9) || double.IsNaN(half)) half = BandMin * 0.5;
+
+            for (int i = 0; i + 1 < v.Count; i++)
+            {
+                Point3d a = v[i], b = v[i + 1];
+                double dx = b.X - a.X, dy = b.Y - a.Y;
+                double len = System.Math.Sqrt(dx * dx + dy * dy);
+                if (len < 1e-9) continue;                     // 같은 점이 겹쳐 있다 — 띠를 못 만든다
+                // 평면에서의 직각 방향 — Z는 그대로 두어 <b>3D 계획선도 제 높이에</b> 그려진다.
+                double nx = -dy / len * half, ny = dx / len * half;
+                // ★점 차례는 이 저장소의 선례를 따른다(SheetCommand: 좌하·우하·좌상·우상).
+                //   순서를 틀리면 나비넥타이 모양으로 꼬인다.
+                m._marks.Add(new Solid(
+                    new Point3d(a.X - nx, a.Y - ny, a.Z), new Point3d(a.X + nx, a.Y + ny, a.Z),
+                    new Point3d(b.X - nx, b.Y - ny, b.Z), new Point3d(b.X + nx, b.Y + ny, b.Z))
+                { ColorIndex = PickAci });
+            }
+
+            // 모서리 메움 — 띠와 띠 사이에 생기는 쐐기 틈을 동그라미로 덮는다(둥근 모서리가 된다).
+            //   ★꼭짓점이 아주 많으면(수치지도에서 온 선 등) 다 그리면 화면이 빨개진다 — 골라 그린다.
+            int nV = v.Count;
+            int step = nV > 200 ? (nV / 200) + 1 : 1;
+            for (int i = 0; i < nV; i += step)
+                m._marks.Add(new Circle(v[i], Vector3d.ZAxis, half) { ColorIndex = PickAci });
+
             var tm = TransientManager.CurrentTransientManager;
             // ★★★[검토 0908] <b><c>Main</c>이라야 재생성을 견딘다.</b>
             //   첫 판은 <c>DirectShortTerm</c>이었는데 그것은 <b>끌기·지그</b>용(몇 백 밀리초)이고
@@ -158,7 +213,9 @@ internal sealed class PickMark : System.IDisposable
             for (int i = m._marks.Count - 1; i >= 0; i--)
             {
                 bool ok = false;
-                try { ok = tm.AddTransient(m._marks[i], TransientDrawingMode.Main, 128, noIds); }
+                // ★[JACK 0909] 순서값을 <b>최대</b>로. 이 값은 <b>임시 그래픽끼리의</b> 순서라
+                //   흰 폴리선을 이기지는 못하지만, 우리가 정할 수 있는 것은 정해 둔다.
+                try { ok = tm.AddTransient(m._marks[i], TransientDrawingMode.Main, 255, noIds); }
                 catch { ok = false; }
                 if (ok) nAdd++;
                 else
