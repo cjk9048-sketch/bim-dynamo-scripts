@@ -181,12 +181,16 @@ public sealed class RibbonApp : IExtensionApplication
             //   정지 제원은 <b>일하면서 계속 고치는 값</b>이라 창이 떠 있어야 하고(도킹창),
             //   좌표계·표시는 <b>한 번 정하면 거의 안 바꾸는</b> 값이라 [기타]로 갔다.
             var btnSet = MakeButton(
-                "정지\n창", "DHGRADEPANEL ", "계획부지 정지 도킹창 — 대상 선택·절성토 제원·대소단·옹벽형태·사면 수정", "설정");
+                "정지\n창", "DHGRADEPANEL ", "계획부지 정지 도킹창 — 대상 선택·절성토 제원·대소단·사면 수정", "설정");
+            // ★★[JACK 0910 · 검토 H-1] <b>여기가 화면에 뜨는 글이다.</b> 위 <c>MakeButton</c>의
+            //   셋째 인자는 <b>이 줄에서 덮어써진다</b> — 그것만 고치면 아무것도 안 바뀐다.
             btnSet.ToolTip = MakeTip("계획부지 정지 창 (DHGRADEPANEL)",
                 "오른쪽에 <b>도킹창</b>이 열립니다. 이 안에서 전부 합니다:\n" +
-                "· [계획 경계 선택] → [원지반 선택] → [지표면 생성]\n" +
-                "· 절토/성토 제원과 예시 그림 · 산지 대소단 · 옹벽 형태\n" +
+                "· [계획 경계 선택] → [원지반 선택] → 값을 정하고 → [지표면 생성]\n" +
+                "· 절토/성토 제원과 예시 그림 · 산지 대소단\n" +
                 "· 사면 수정(옹벽 변환 / 사면 변환)\n\n" +
+                "※ 칸 제목(1. 대상 …)을 누르면 그 칸을 접었다 펼칠 수 있습니다.\n" +
+                "※ <b>옹벽 형태</b>는 [기타] → [기타 설정]으로 옮겼습니다.\n" +
                 "※ 값을 고쳤으면 [값 저장]을 눌러야 다음 생성에 반영됩니다.", null);
             var btnExcPanel = MakeButton(
                 "터파기\n창", "DHEXCAVPANEL ", "구조물 터파기 도킹창 — 기준면 선택·터파기선 선택·굴착 구배·가시설 구간", "터파기");       // ★글리프는 있는 이름으로 — 없는 이름은 밋밋한 기본 그림이 된다
@@ -198,19 +202,36 @@ public sealed class RibbonApp : IExtensionApplication
                 "※ 가시설엔 소단·대소단·옹벽형태가 없습니다 — 흙막이는 벽체 하나로 섭니다.", null);
             // ★★[JACK 0824] <b>지표면 생성 = 스플릿 버튼.</b> 계획지표면과 터파기 지표면을 한 자리에 둔다.
             //   기본(윗부분 클릭)은 계획지표면 — 지금까지 하던 그것. 드롭다운에서 터파기를 고른다.
+            // ★★★[JACK 0910 "정지옵션을 누르면 켜지는데 그게아니라 스플릿버튼의
+            //   계획부지정지를 누르면 켜지는거야"] <b>이 항목이 도킹창을 연다.</b>
+            //
+            //   <para>종전엔 <c>DHGRADE</c>(명령창 흐름)를 돌렸고, 창은 옆의 [정지 창] 단추로 따로 열었다.
+            //   그런데 <b>일은 전부 창 안에서</b> 한다(찍기·값·생성) — 그러면 <b>일하러 들어가는 문</b>이
+            //   [계획부지 정지] 하나여야 맞다. 리본의 [정지 창] 단추는 그래서 뺐다.</para>
+            //
+            //   <para>★<c>DHGRADE</c> 명령은 <b>그대로 산다</b> — 손에 익은 사람이 있고,
+            //   안내문 여러 곳이 그 이름을 부른다. 리본 단추가 부르는 것만 바뀐다
+            //   (사면수정을 리본에서 뺄 때 쓴 규칙과 같다).</para>
             var btnPlan = MakeButton(
-                "계획부지\n정지", "DHGRADE ", "계획 폴리곤+원지반 → 계단식 절성토 TIN Surface 생성", "정지면");
-            btnPlan.ToolTip = MakeTip("계획부지 정지 (DHGRADE)",
-                "계획 경계 폴리선과 원지반을 고르면 계단식 절·성토 지표면을 만듭니다.\n" +
-                "제원은 [정지 창]에서 정합니다.", null);
+                "계획부지\n정지", "DHGRADEPANEL ", "계획부지 정지 창을 엽니다 — 대상 선택·절성토 값·생성", "정지면");
+            btnPlan.ToolTip = MakeTip("계획부지 정지 (창)",
+                "오른쪽에 <b>계획부지 정지 창</b>이 열립니다. 이 안에서 전부 합니다:\n" +
+                "· [계획 경계 선택] → [원지반 선택] → 값을 정하고 → [지표면 생성]\n" +
+                "· 절토성토 옵션(예시 그림 · 산지 대소단) · 사면 수정\n\n" +
+                "※ 칸 제목을 누르면 그 칸만 펼쳐집니다.\n" +
+                "※ 옛 명령창 방식이 필요하면 DHGRADE를 직접 치면 됩니다.", null);
+            // ★[JACK 0910] 같은 규칙 — 이 항목도 <b>터파기 창</b>을 연다(<c>DHEXCAV</c> 명령은 그대로 산다).
             var btnExc = MakeButton(
-                "구조물\n터파기", "DHEXCAV ", "구조물 바닥 폴리선 → 굴착 법면·바닥만 지표면으로 생성", "터파기");
-            btnExc.ToolTip = MakeTip("구조물 터파기 (DHEXCAV)",
-                "배수지·정수장 같은 **지하구조물**의 터파기를 만듭니다.\n" +
-                "구조물 바닥계획고가 들어간 닫힌 폴리선을 고르고, 제원(단높이·구배·소단)을 그 자리에서 정합니다.\n" +
-                "법면이 올라가 닿는 목표면은 **고른 <b>기준면</b>(계획지표면 또는 원지반)**입니다 —\n" +
+                "구조물\n터파기", "DHEXCAVPANEL ", "구조물 터파기 창을 엽니다 — 기준면·터파기선·굴착 구배·가시설", "터파기");
+            btnExc.ToolTip = MakeTip("구조물 터파기 (창)",
+                "오른쪽에 <b>구조물 터파기 창</b>이 열립니다 — 배수지·정수장 같은 지하구조물의 터파기.\n" +
+                "· <b>기준면</b>(계획지표면 / 원지반)을 고르고 [이 면만 보기]로 그 면 위에서 작업\n" +
+                "· [터파기선 선택] → 굴착 구배 → [터파기 지표면 생성]\n" +
+                "· <b>가시설 구간</b>(둘레의 한 구간만 수직으로) — 이 창에만 있습니다\n\n" +
                 "절토부는 이미 깎아 둔 계획면에서, 성토부는 원지반에서 팝니다(시공 순서).\n" +
-                "결과는 **굴착 형상만**(바닥+법면)이라 종단에도 구조물 위에만 나옵니다.", null);
+                "결과는 굴착 형상만(바닥+법면)이라 종단에도 구조물 위에만 나옵니다.\n" +
+                "※ 계획면이 없어도 창은 열립니다(원지반 기준으로 팔 수 있습니다).\n" +
+                "※ 옛 명령창 방식이 필요하면 DHEXCAV를 직접 치면 됩니다.", null);
             var splitSurf = new RibbonSplitButton
             {
                 Text = "계획부지\n생성",
@@ -392,13 +413,15 @@ public sealed class RibbonApp : IExtensionApplication
             var pMisc = new RibbonPanelSource { Title = "기타" };
             // ★★★[계획 8단계 · JACK 지시 14] 좌표계와 표시 옵션은 <b>여기</b>로 옮겼다.
             var btnMisc = MakeButton(
-                "기타\n설정", "DHMISCSET ", "좌표계(내보내기 원점) · 결과지표면만 표시", "설정");
+                "기타\n설정", "DHMISCSET ", "좌표계(내보내기 원점) · 결과지표면만 표시 · 옹벽 형태", "설정");
             btnMisc.ToolTip = MakeTip("기타 설정 (DHMISCSET)",
                 "<b>좌표계</b> — 도면이 어느 평면직각좌표계로 작성됐는지.\n" +
                 "  위성사진·지형·지적도가 이 원점으로 맞춰집니다.\n" +
                 "  바꾸면 이미 가져온 자료가 안 맞으므로 지울지 물어봅니다.\n\n" +
                 "<b>결과지표면만 표시</b> — 만든 뒤 정지면_DH만 남기고 나머지는 숨김.\n\n" +
-                "※ 정지 제원(단높이·소단·구배)은 [정지 창]으로 옮겼습니다.", null);
+                "<b>옹벽 형태</b> — 절토·성토 옹벽을 무엇으로 세울지(보강토·앵커판넬·역T형).\n" +
+                "  정지면 형상은 이 값과 무관하고, <b>3D 옹벽·노리선·인프라웍스</b>가 씁니다.\n\n" +
+                "※ 정지 제원(단높이·소단·구배)은 [계획부지 생성] ▸ [계획부지 정지] 창으로 옮겼습니다.", null);
             var btnParcel = MakeButton(
                 "지적도", "DHPARCEL ", "두 점으로 범위를 찍으면 그 범위 필지 경계와 지번을 도면 좌표계로 가져옵니다", "지적");
             btnParcel.ToolTip = MakeTip("지적도 가져오기 (DHPARCEL)",
@@ -575,8 +598,15 @@ public sealed class RibbonApp : IExtensionApplication
             _needGround.Add(btnCrop);        // 원지형 자르기 — 자를 지형이 있어야
             _needGround.Add(btnStrata);      // 지층 구성 — 지반고를 원지반에서 읽는다
             //   ※[계획부지 생성] 스플릿은 <b>안 끈다</b> — 통째로 끄면 그 안의
-            //     [계획부지 정지]까지 못 눌러 아무것도 시작할 수 없다. 안의 [구조물 터파기]만 끈다.
-            _needPlan.Add(btnExc);           // 구조물 터파기 — 목표면(계획면)이 있어야
+            //     [계획부지 정지]까지 못 눌러 아무것도 시작할 수 없다.
+            //   ★[JACK 0910] 안의 [구조물 터파기]도 <b>이제 안 끈다</b> — 그것은 실행 단추가 아니라
+            //     <b>창을 여는 문</b>이 되었다(아래 참조). 옛 주석("안의 [구조물 터파기]만 끈다")은 지웠다.
+            // ★★★[JACK 0910] <b>btnExc를 잠금 목록에서 뺐다.</b>
+            //   이 단추는 이제 <b>터파기 창을 여는 문</b>이지 실행 단추가 아니다.
+            //   창은 <b>계획면이 없을 때를 위해</b> 만든 화면이라(8단계 검토 높음1) 잠그면
+            //   ①계획면이 없을 때만 뜨는 안내문을 영영 못 보고 ②[가시설 변환]은 이 창에만 있어
+            //   통째로 손이 안 닿는다. <b>실행을 막는 관문은 창 안에 그대로 있다</b> —
+            //   `ExcavPanel`이 계획지표면 라디오를 잠그고, `DoExcav`가 만들 때 다시 가린다.
             // ★[8단계] 사면 수정 스플릿은 리본에서 빠졌다 — 대신 <b>터파기 창</b>이 목표면을 탄다.
             // ★★★[8단계 검토 · 높음1] <b>터파기 창은 잠그지 않는다.</b>
             //   내가 붙였던 주석("계획면이 있어야 기준면을 고를 수 있다")은 <b>사실과 반대</b>였다 —
@@ -584,8 +614,9 @@ public sealed class RibbonApp : IExtensionApplication
             //     · 창은 이미 제 안에서 잠근다(<c>_basePlan.IsEnabled = hasPlan</c>, 원지반 라디오는 늘 켜짐)
             //     · 계획면이 없을 때만 뜨는 안내문이 창에 따로 쓰여 있다 — 잠그면 <b>영영 못 본다</b>
             //     · 7단계 [가시설 변환]은 <b>리본에 없고 이 창에만</b> 있다 — 잠그면 통째로 손이 안 닿는다
-            //   ★JACK 지시 6("정지가 끝나면 터파기 활성화")은 <b>[구조물 터파기] 실행</b> 단추 얘기다.
-            //     그것(<c>btnExc</c>)은 아래에 그대로 잠가 둔다 — <b>창 열기와 실행은 다르다</b>.
+            //   ★JACK 지시 6("정지가 끝나면 터파기 활성화")은 <b>[구조물 터파기] 실행</b> 단추 얘기였다.
+            //     ★[JACK 0910] 그 단추가 <b>창을 여는 문</b>이 되면서 잠글 자리가 없어졌다 —
+            //     실행을 막는 관문은 <c>ExcavPanel</c>(계획지표면 라디오)과 <c>DoExcav</c>에 그대로 있다.
             //   ※btnWall/btnSlope는 리본에 안 얹히므로 잠금 목록에서도 뺀다 — 헛돈다.
             _needPlan.Add(btnNori);          // 노리선
             _needPlan.Add(btnProf);          // 종단 생성
@@ -597,14 +628,25 @@ public sealed class RibbonApp : IExtensionApplication
             // ★[계획 §4] 찍는 중에 한꺼번에 잠글 목록 — <b>둘의 합집합</b>이면 충분하다.
             //   (여기 없는 항목은 찍기를 죽여도 사용자가 곧 알아차리는 것들이다.)
             _all.AddRange(_needGround); _all.AddRange(_needPlan);
+            // ★★[검토 0910 · 보통3] <b>창 여는 단추도 찍는 중에는 잠근다.</b>
+            //   리본 단추는 <c>^C^C</c>를 앞세워 보내므로(<see cref="RelayCommand"/>),
+            //   찍는 도중에 눌리면 <b>그 찍기가 죽는다</b>. 계획면 잠금(<c>_needPlan</c>)에서 뺀 것과
+            //   <b>다른 이야기</b>다 — 그것은 "계획면이 없어도 열려야 한다"는 뜻이었다.
+            //   ★그리고 <b>켜는 목록에도</b> 넣는다 — 안 넣으면 한 번 꺼진 뒤 못 살아난다(0910 실측).
+            _always.Clear();
+            _always.Add(btnExc);
+            _always.Add(btnPlan);
+            _all.AddRange(_always);
 
             // ── 패널 늘어놓기 ─────────────────────────────────────────────────
             tab.Panels.Add(new RibbonPanel { Source = pGrade });
             pGrade.Items.Add(Spacer());
-            pGrade.Items.Add(btnSet);
-            pGrade.Items.Add(Spacer());
-            pGrade.Items.Add(btnExcPanel);
-            pGrade.Items.Add(Spacer());
+            // ★★[JACK 0910] <b>[정지 창]·[터파기 창] 단추는 리본에서 뺐다.</b>
+            //   같은 창을 여는 문이 <b>둘씩</b>이 되기 때문이다 —
+            //   이제 [계획부지 생성] 스플릿의 두 항목이 각각 그 창을 연다.
+            //   ★<c>btnSet</c>/<c>btnExcPanel</c> 객체는 <b>만들어만 두고 안 얹는다</b>
+            //     (btnWall/btnSlope와 같은 처리 — 툴팁 문구가 나중에 다시 쓰일 수 있다).
+            //     명령 <c>DHGRADEPANEL</c>·<c>DHEXCAVPANEL</c>은 타이핑으로도 그대로 된다.
             pGrade.Items.Add(splitGround);
             pGrade.Items.Add(Spacer());
             pGrade.Items.Add(splitSurf);
@@ -1150,6 +1192,11 @@ public sealed class RibbonApp : IExtensionApplication
     /// <summary>리본 항목 전부 — 찍는 중에 한꺼번에 잠그기 위해 들고 있는다(계획 §4).</summary>
     private static readonly System.Collections.Generic.List<RibbonItem> _all = new();
 
+    /// <summary>★[JACK 0910] <b>늘 켜져 있어야 하는 것</b> — 찍는 중에만 잠깐 꺼진다.
+    /// <para>[계획부지 정지]·[구조물 터파기]는 이제 <b>창을 여는 문</b>이라 조건이 없다.
+    /// <c>_all</c>에만 넣고 여기 안 넣으면 <b>한 번 꺼진 뒤 되살릴 자리가 없다</b>.</para></summary>
+    private static readonly System.Collections.Generic.List<RibbonItem> _always = new();
+
     /// <summary>찍기 상태가 바뀔 때 리본을 다시 칠하도록 <b>한 번만</b> 잇는다.
     /// <para>★[검토 0909] 안 이으면 <c>Busy==true</c>인 순간에 <see cref="RefreshEnabled"/>가
     /// <b>도는 경로가 하나도 없어</b> 잠금이 영영 안 걸린다 — 주석만 그렇게 하겠다고 적혀 있었다.</para></summary>
@@ -1182,6 +1229,18 @@ public sealed class RibbonApp : IExtensionApplication
             if (_btnViewExcav != null) _btnViewExcav.IsEnabled = hasExc;
             foreach (var it in _needPlan) if (it != null) it.IsEnabled = hasPlan;
             foreach (var it in _needGround) if (it != null) it.IsEnabled = hasGround;
+            // ★★★[JACK 0910 "계획지표면을 생성하니깐 스플릿버튼 모두 비활성화가 되었어"]
+            //   <b>끄는 자리만 있고 켜는 자리가 없었다.</b>
+            //
+            //   <para>같은 판에서 [계획부지 정지]·[구조물 터파기]를 <c>_needPlan</c>에서 빼고
+            //   <c>_all</c>(찍는 중 잠금)에만 넣었다. 그런데 이 함수가 다시 켜는 것은
+            //   <c>_needPlan</c>·<c>_needGround</c>에 든 것뿐이라 —
+            //   <b>정지면을 만드는 동안 꺼진 뒤 영영 안 켜졌다</b>. 스플릿의 기본 항목이 꺼지면
+            //   스플릿 단추 자체가 죽은 것처럼 보인다.</para>
+            //
+            //   <para>★<b>끄는 목록에 넣었으면 켜는 목록에도 넣어야 한다</b> — 이 저장소가
+            //   "고침이 낸 구멍"으로 여러 번 값을 치른 그 모양이다(§75 ⑤ · §77 ④).</para>
+            foreach (var it in _always) if (it != null) it.IsEnabled = true;
 
             // ★★★[계획 §4 · 검토 0909 H2] <b>찍는 중에는 리본을 잠근다 — 맨 끝에서.</b>
             //   리본 단추는 명령 앞에 <c>^C^C</c>를 붙여 보낸다 — 그것이 <b>진행 중인 찍기를 죽인다</b>.

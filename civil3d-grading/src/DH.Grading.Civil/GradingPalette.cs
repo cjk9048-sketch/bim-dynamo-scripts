@@ -15,10 +15,25 @@ namespace DH.Grading.Civil;
 /// (<i>"civil3d를 키면 바로 도킹바가 떠 있는데 눌러야만 뜨게 해줘"</i>).</para></summary>
 public static class GradingPalette
 {
-    /// <summary>창 기본 너비 — 예시 그림의 치수 글자가 <b>읽히는</b> 최소치에서 잡았다.
-    /// <para>그림은 420px 자리에서 그려지고, 여기에 팔레트 테두리·세로 캡션·여백·스크롤바가
-    /// 얹히므로 470쯤은 있어야 배율이 0.85 아래로 안 떨어진다.</para></summary>
-    internal const int PanelW = 470;
+    /// <summary>창 기본 너비 — <b>처음 열 때는 무조건 이 값</b>이고, 이 아래로는 안 열린다.
+    ///
+    /// <para>★★[JACK 0910 <i>"470은 너무 작어. 적어도 단높이 소단폭 구배가 한줄에 들어오는 크기로"</i>]
+    /// <b>470 → 720.</b> 이 숫자는 취향이 아니라 <b>재서 나온 값</b>이다:</para>
+    ///
+    /// <para><b>한 열에 필요한 폭</b> = <c>단높이(m)</c> 49 + 여백 4 + 칸 48 + 사이 6 = 107,
+    /// <c>소단폭(m)</c> 107, <c>구배 1:</c> 35+4+48+6 = 93 → <b>307px</b>.
+    /// <b>창에서 빠지는 것</b> = 팔레트 테두리·세로 제목(약 26) + 스크롤바 17 + 바깥 여백 20 = 63,
+    /// 그리고 두 열 사이 여백이 열마다 7. → 필요한 창 폭 = (307+7)×2 + 63 ≈ <b>691</b>.
+    /// 글꼴 대체·글자 배율을 감안해 <b>720</b>으로 잡는다(열마다 약 29px 여유).</para>
+    ///
+    /// <para>맞는지는 <b>짐작하지 않는다</b> — <see cref="GradingPanel"/>이 열릴 때 실제 폭과
+    /// 값 줄이 <b>한 줄인지</b>를 재어 로그에 적는다(<c>창 실측 —</c>).
+    /// 780까지 갔다가 470으로 되돌렸다가, 이 한 줄 조건으로 정착한 값이다.</para></summary>
+    internal const int PanelW = 720;
+
+    /// <summary>이 세션에서 <b>폭을 한 번 강제했는가</b> — 처음 열 때만 470으로 되돌린다.
+    /// <para>이것이 없으면 넓혀 놓고 창을 접었다 펼 때마다 도로 좁아져 <b>손으로 넓힐 수가 없다</b>.</para></summary>
+    private static bool _sizedOnce;
 
     private static PaletteSet _ps;
     private static GradingPanel _panel;
@@ -42,9 +57,8 @@ public static class GradingPalette
                           | PaletteSetStyles.ShowAutoHideButton
                           | PaletteSetStyles.ShowCloseButton,
                     DockEnabled = DockSides.Left | DockSides.Right,
-                    // ★★[검토 0909] 320이면 그림 글자가 <b>5.8px</b>이 되어 치수를 못 읽는다 —
-                    //   옹벽 콤보 줄(라벨 110 + 콤보 180 = 290)도 잘린다.
-                    //   <b>읽히지 않으면 예시 그림을 넣은 뜻이 없다</b>(JACK: "예시 그림까지도").
+                    // ★[JACK 0910] 최소 폭 = 기본 폭. 이 아래로 줄이면 값 세 칸이 접히고
+                    //   예시 그림 글자가 안 읽힌다 — 근거는 <see cref="PanelW"/>에 셈까지 적어 뒀다.
                     MinimumSize = new System.Drawing.Size(PanelW, 420),
                 };
                 _ps.AddVisual("정지", _panel);
@@ -93,6 +107,21 @@ public static class GradingPalette
             //   ★그리고 <b>부를 때마다</b> 확인한다 — 떼어 놓았다가 다시 누르면 그때도 붙는 편이 낫다.
             _ps.Visible = true;
             try { if (_ps.Dock != DockSides.Right) _ps.Dock = DockSides.Right; } catch { }
+            // ★★[JACK 0910 <i>"처음 도킹창이 뜰때는 무조건 … 닫고 다시 열더라도"</i>]
+            //   <b>이 세션에서 처음 열 때 한 번만</b> 폭을 정해 준다.
+            //   ★<b>열 때마다</b> 하면 안 된다 — 넓혀 놓고 창을 접었다 펼 때마다 도로 좁아져
+            //     <b>손으로 넓힐 수가 없는 창</b>이 된다. 그래서 딱 한 번이다.
+            //   ★AutoCAD를 껐다 켜면 정적 값이 초기화되므로 <b>다시 기본 폭</b>으로 뜬다
+            //     (이 팔레트는 GUID를 안 줘서 크기를 기억하지도 않는다).
+            try
+            {
+                if (!_sizedOnce)
+                {
+                    _sizedOnce = true;
+                    _ps.Size = new System.Drawing.Size(PanelW, System.Math.Max(_ps.Size.Height, 780));
+                }
+            }
+            catch { }
             // ★되읽어 남긴다 — 안 붙었으면 그 사실이 로그에 있어야 다음에 헤매지 않는다.
             try
             {
@@ -127,6 +156,17 @@ public static class GradingPalette
     internal static void Refresh()
     {
         try { if (_ps != null && _ps.Visible) _panel?.SyncTo(AcadApp.DocumentManager.MdiActiveDocument); }
+        catch { }
+    }
+
+    /// <summary>★[JACK 0910] <b>예시 그림만</b> 다시 그린다 — [기타 설정]에서 옹벽 형태를 바꿨을 때.
+    ///
+    /// <para><see cref="Refresh"/>를 쓰면 안 된다. 그것은 <c>SyncTo</c>라
+    /// <b>화면 값을 도면 값으로 통째로 되돌린다</b> — 정지 창에서 고치다 만 숫자가 사라진다.
+    /// 바뀐 것은 그림 하나뿐이므로 그림만 건드린다.</para></summary>
+    internal static void RedrawExample()
+    {
+        try { if (_ps != null && _ps.Visible) _panel?.RedrawExample(); }
         catch { }
     }
 

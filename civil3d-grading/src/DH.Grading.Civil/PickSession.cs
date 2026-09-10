@@ -678,41 +678,40 @@ public sealed class PickCommands
             //   <b>둘 다</b> 되어야 한다 — 도면을 보며 찍던 손이 그대로 이어지는 쪽이 빠르다.
             //   ★<b>엔터가 기본</b>이다(<c>AllowNone</c>). Esc면 고른 것만 남기고 나온다.
             // ★[검토 0909 · 보통] <b>터파기선도 엔터로 이어진다</b> — JACK 지시 9가 그것이었다.
+            // ★★★[검토 0910 · 높음2] <b>터파기도 자동으로 만들지 않는다.</b>
+            //
+            //   <para>여기 있던 <i>"Enter=지표면 만들기"</i>는 <b>기본값이 '만들기'</b>였다.
+            //   그것을 남겨 둔 근거는 <i>"그 창은 제원이 구배 하나뿐이라 찍은 뒤에 정할 값이 없다"</i>였는데,
+            //   <b>같은 판이 그 전제를 뒤집었다</b> — 터파기 창의 차례가
+            //   <b>① 기준면 → ② 터파기선 → ③ 굴착 구배 → ④ [생성]</b>이 되었고,
+            //   <c>3. 굴착</c>은 <b>기본이 접힘</b>이라 사용자는 구배 칸을 한 번도 못 본 채
+            //   ②에서 Enter를 눌러 ③을 건너뛰게 된다.</para>
+            //
+            //   <para>JACK이 정지 쪽에서 짚은 <i>"지표면 생성 누르기도 전에 생성되버리는데"</i>가
+            //   터파기 창에 그대로 남아 있던 셈이다. <b>두 창의 규칙을 같게 한다.</b></para>
             if (key == PickSession.KeyExcav)
-            {
-                var go2 = new PromptKeywordOptions("\n터파기선을 골랐습니다 — Enter=지표면 만들기 · Esc=고른 것만 두고 나가기");
-                go2.Keywords.Add("만들기");
-                go2.Keywords.Add("나중에");
-                go2.Keywords.Default = "만들기";
-                go2.AllowNone = true;
-                var gr2 = ed.GetKeywords(go2);
-                bool go = gr2.Status == PromptStatus.None
-                       || ((gr2.Status == PromptStatus.OK || gr2.Status == PromptStatus.Keyword)
-                           && gr2.StringResult == "만들기");
-                if (go) { PickSession.End(); PickSession.Send(doc, CmdExcavBuild); return; }
-                ed.WriteMessage("\n[찍기] 고른 것을 그대로 둡니다 — 창의 [생성]으로 언제든 만들 수 있습니다.");
-            }
+                ed.WriteMessage("\n[찍기] 터파기선을 골랐습니다 — 창에서 굴착 구배를 정한 뒤"
+                              + " [터파기 지표면 생성]을 누르세요.");
 
+            // ★★★[JACK 0910] <b>원지반을 고른 것으로 만들기를 시작하지 않는다.</b>
+            //
+            //   <para>종전엔 여기서 <i>"Enter=정지면 만들기"</i>를 묻고 <b>기본값이 '만들기'</b>였다.
+            //   원지반을 고른 뒤 Enter가 한 번 들어가면 <b>단추를 누른 적이 없는데 정지면이 만들어졌다</b> —
+            //   JACK 0910: <i>"지표면 생성 누르기도 전에 생성되버리는데 그렇게 하지 말고"</i>.</para>
+            //
+            //   <para>★<b>이것은 지시가 바뀐 것이지 고장이 아니었다.</b> 0908 지시는
+            //   <i>"지표면 선택하고 엔터 또는 도킹창의 지표면생성 버튼을 누르면"</i>이었다.
+            //   새 흐름은 <b>찍기 → 값 정하기(절성토·대소단) → [지표면 생성]</b>이라,
+            //   값을 정하기 전에 만들어 버리면 <b>방금 고친 값이 안 들어간 결과</b>가 나온다.</para>
+            //
+            //   <para>터파기(<c>KeyExcav</c>) 쪽은 <b>그대로 둔다</b> — 그 창은 제원이 구배 하나뿐이라
+            //   찍은 뒤에 정할 값이 없다(JACK 지시 9).</para>
+            //   ★[검토 M-2] <b>이 자리는 터파기 창도 지나간다</b> — <c>ExcavPanel</c>의 [원지반 선택]도
+            //     같은 <c>DHPICKGROUND</c>를 부른다. 그래서 <b>한쪽 창의 단추 이름만</b> 대면
+            //     터파기 창 사용자는 없는 단추를 찾게 된다. 둘 다 적는다.
             if (key == PickSession.KeyGround && PickSession.Peek(doc, PickSession.KeyPlan) != null)
-            {
-                var go = new PromptKeywordOptions("\n다 골랐습니다 — Enter=정지면 만들기 · Esc=고른 것만 두고 나가기");
-                go.Keywords.Add("만들기");
-                go.Keywords.Add("나중에");
-                go.Keywords.Default = "만들기";
-                go.AllowNone = true;
-                var gr = ed.GetKeywords(go);
-                bool build = gr.Status == PromptStatus.None
-                          || ((gr.Status == PromptStatus.OK || gr.Status == PromptStatus.Keyword)
-                              && gr.StringResult == "만들기");
-                if (build)
-                {
-                    // ★자물쇠를 <b>먼저 풀고</b> 보낸다 — 안 그러면 다음 명령이 거절당한다.
-                    PickSession.End();
-                    PickSession.Send(doc, "DHGRADEBUILD");
-                    return;
-                }
-                ed.WriteMessage("\n[찍기] 고른 것을 그대로 둡니다 — 창의 [지표면 생성]으로 언제든 만들 수 있습니다.");
-            }
+                ed.WriteMessage("\n[찍기] 골랐습니다 — 창에서 값을 정한 뒤 생성 단추를 누르세요"
+                              + "(정지 창은 [지표면 생성] · 터파기 창은 [터파기 지표면 생성]).");
         }
         catch (System.Exception ex)
         {

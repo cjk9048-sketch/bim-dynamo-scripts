@@ -25,7 +25,7 @@ public static class GradingSettings
     /// <b>같은 번호를 단 빌드가 여러 개</b>가 되어, 어느 것이 깔렸는지 물으면 답할 수가 없었다.</para>
     /// <para><c>x.0</c> = 화면·명령이 바뀌어 <b>사용자가 다르게 일하게</b> 되는 판 ·
     /// <c>x.y</c> = 같은 화면에서 결함을 고친 판.</para></summary>
-    public const string Version = "v73.0 (2026-09-10)";
+    public const string Version = "v78.0 (2026-09-10)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -556,6 +556,17 @@ public static class GradingSettings
             if (k?.GetValue("XsecWidthAuto") is int xwa) XsecWidthAuto = xwa != 0;
             if (k?.GetValue("StrataMarkScale") is int ms && ms >= 20 && ms <= 260)
                 StrataDraw.MarkScale = ms / 100.0;
+            // ★★★[JACK 0910 · 검토 M-3] <b>옹벽 형태도 재시작을 넘긴다.</b>
+            //   <para>이 둘은 <b>도면에도 레지스트리에도 저장된 적이 없었다</b> —
+            //   <c>GradingParams</c>에도 없어 번들로도 안 따라간다. 즉 Civil 3D를 껐다 켜면
+            //   <b>절토=앵커판넬 · 성토=보강토</b>로 되돌아갔다.</para>
+            //   <para>종전엔 정지 창에 콤보가 늘 떠 있어 되돌아간 것이 <b>눈에 띄었다</b>.
+            //   [기타 설정] 팝업으로 들어가면서 <b>안 보이게</b> 됐고, 그러면 인프라웍스 3D·노리선
+            //   결과가 조용히 달라진다 — <b>옮긴 쪽이 만든 위험이라 옮긴 판에서 막는다.</b></para>
+            if (k?.GetValue("CutWallStyle") is int cw && System.Enum.IsDefined(typeof(WallStyle), cw))
+                CutWallStyle = (WallStyle)cw;
+            if (k?.GetValue("FillWallStyle") is int fw && System.Enum.IsDefined(typeof(WallStyle), fw))
+                FillWallStyle = (WallStyle)fw;
         }
         catch { }
     }

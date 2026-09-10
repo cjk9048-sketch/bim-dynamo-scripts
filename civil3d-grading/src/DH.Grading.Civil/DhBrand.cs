@@ -153,6 +153,40 @@ internal static class DhBrand
         catch { }
     }
 
+    // ── 배경 로고(워터마크) ────────────────────────────────────────────────
+    /// <summary>★[JACK 0910 <i>"도화로고는 추가적으로 도킹창 배경에 희미하게 크게 들어갔으면좋겠어"</i>]
+    /// 준 내용 <b>뒤에</b> 회사 로고를 크게, 아주 옅게 깐다.
+    ///
+    /// <para><b>지키는 것 셋.</b>
+    /// ①<c>IsHitTestVisible = false</c> — 로고가 <b>마우스를 먹으면</b> 그 자리 단추가 안 눌린다.
+    /// ②<c>Stretch.Uniform</c> — 회사 로고는 비율이 틀어지면 안 되는 물건이다.
+    /// ③로고를 <b>못 읽으면 그냥 내용만</b> 돌려준다 — 꾸밈 때문에 창이 안 뜨는 일은 없어야 한다.</para>
+    ///
+    /// <para>진하기 기본 <b>0.05</b> — 이 정도가 글자를 안 가리면서 "있다"는 것은 보이는 선이다.
+    /// 값 칸 배경은 흰 카드라 로고가 그 뒤로 가려지고, <b>빈자리에서만</b> 비친다.</para></summary>
+    internal static Grid Watermark(UIElement content, double opacity = 0.05, double inset = 24)
+    {
+        var g = new Grid();
+        try
+        {
+            var src = Logo;
+            if (src != null)
+                g.Children.Add(new Image
+                {
+                    Source = src,
+                    Opacity = opacity,
+                    Stretch = Stretch.Uniform,
+                    Margin = new Thickness(inset),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    IsHitTestVisible = false,       // ★없으면 이 위의 단추가 안 눌린다
+                });
+        }
+        catch { }
+        g.Children.Add(content);
+        return g;
+    }
+
     // ── 머리띠(로고 + 제목) ────────────────────────────────────────────────
     /// <summary>회사 로고와 제목이 든 <b>머리띠</b>.
     /// <param name="drag">여기를 끌어 창을 옮길 수 있게 할 창. 도킹창이면 <c>null</c>.</param>

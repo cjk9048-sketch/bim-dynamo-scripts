@@ -12,7 +12,11 @@ namespace DH.Grading.Civil;
 /// 정지 창에서 값을 치르고 배운 둘을 여기서는 처음부터 지킨다.</para></summary>
 public static class ExcavPalette
 {
-    /// <summary>창 기본 너비 — 정지 창과 같은 값(둘을 나란히 놓아도 어긋나 보이지 않게).</summary>
+    /// <summary>창 기본 너비.
+    /// <para>★[JACK 0910] 정지 창은 예시 그림 두 장을 나란히 놓느라 780으로 넓혔지만,
+    /// <b>이 창은 470을 그대로 둔다</b> — 여기엔 그림이 없고 가장 긴 줄이 단추 셋(가시설 변환·사면 변환·전체 해제)이라
+    /// 470이면 다 들어간다. 넓히면 <b>도면 볼 자리만 줄어든다</b>.
+    /// 대신 <b>이 폭 아래로는 안 열리게</b> 하는 규칙은 정지 창과 같이 지킨다.</para></summary>
     internal const int PanelW = 470;
 
     private static PaletteSet _ps;
@@ -72,6 +76,15 @@ public static class ExcavPalette
             // ★도킹은 <b>보인 뒤에</b> — 안 뜬 팔레트에는 AutoCAD가 Dock을 무시한다(0831 교훈).
             _ps.Visible = true;
             try { if (_ps.Dock != DockSides.Right) _ps.Dock = DockSides.Right; } catch { }
+            // ★[JACK 0910] <b>열 때마다</b> 최소 폭을 지킨다(정지 창과 같은 규칙) —
+            //   <c>MinimumSize</c>는 <b>끌어서 줄이는 것</b>만 막고, 이미 좁게 떠 있던 창은 그대로 둔다.
+            //   ★넓혀 놓고 쓰던 폭은 안 줄인다.
+            try
+            {
+                if (_ps.Size.Width < PanelW)
+                    _ps.Size = new System.Drawing.Size(PanelW, System.Math.Max(_ps.Size.Height, 620));
+            }
+            catch { }
             try
             {
                 var got = _ps.Dock;
