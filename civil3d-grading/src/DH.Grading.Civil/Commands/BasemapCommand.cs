@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.ApplicationServices;
+﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.Colors;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
@@ -44,7 +44,7 @@ public sealed class BasemapCommand
             var (epsg, lon0, fn, csNote, csOk) = ResolveCs(db);
             if (!csOk)
             {
-                Refuse(ed, "좌표계를 알 수 없습니다.\n정지 옵션에서 좌표계(원점)를 먼저 지정하세요.");
+                Refuse(ed, "좌표계를 알 수 없습니다.\n[기타] > [기타 설정]에서 좌표계(원점)를 먼저 지정하세요.");
                 return;
             }
 
@@ -196,9 +196,9 @@ public sealed class BasemapCommand
         string csCode = KoreaCs.Read(db);
         int? det = KoreaCs.ResolveEpsgFromCode(csCode);
         if (KoreaCs.CodeForEpsg(optEpsg) == null)
-            note = $"정지옵션 좌표계 EPSG:{epsg}(도면 좌표계로 표현 불가한 원점이라 옵션 값 사용)";
+            note = $"[기타 설정] 좌표계 EPSG:{epsg}(도면 좌표계로 표현 불가한 원점이라 옵션 값 사용)";
         else if (det.HasValue) { epsg = det.Value; note = $"도면 좌표계 '{csCode}' → EPSG:{epsg}"; }
-        else note = $"도면 좌표계 미지정/미인식 → 정지옵션 값 EPSG:{epsg}";
+        else note = $"도면 좌표계 미지정/미인식 → [기타 설정] 값 EPSG:{epsg}";
         var belt = ShapefileWriter.Belt(epsg);
         if (belt == null) return (epsg, 127, 600000, note, false);
         return (epsg, belt.Value.cm, belt.Value.fn, note, true);

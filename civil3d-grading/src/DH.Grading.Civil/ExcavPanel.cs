@@ -26,6 +26,7 @@ internal sealed class ExcavPanel : UserControl
 {
     private readonly RadioButton _basePlan, _baseGround;
     private readonly Button _viewBase, _viewAll, _pick, _pickGround, _build;
+    private readonly Button _toWall, _toSlope, _clearWall;
     private readonly TextBlock _pickWhat, _groundWhat, _status, _said, _baseHint;
     private readonly TextBox _slope;
 
@@ -156,11 +157,32 @@ internal sealed class ExcavPanel : UserControl
             FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 4),
         });
+        // ── 4. 사면 수정 (가시설) ─────────────────────────────────────────
+        //   ★★★[JACK 0909 확정 "(가) 제대로 한다"] 이제 <b>구간별</b>로 가시설을 지정한다.
+        //     ★<b>옹벽이 아니라 가시설</b>이다 — 이 저장소는 둘을 이미 갈라 놓았고
+        //       (종단 막대 끝이 다르고 밴드 표기가 다르다) 섞으면 종단면도가 틀리게 그려진다.
+        //     ★<b>소단·대소단·라운드·옹벽형태는 없다</b>(JACK 지시 11~13).
+        GradingDialog.AddSection(root, "4. 사면 수정 (가시설)",
+            "둘레의 한 구간만 수직으로 세웁니다 — 자리를 찍고 길이를 주면 됩니다");
+        var wRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
+        Button WBtn(string t, string cmd, string tip)
+        {
+            var b = new Button { Content = t, MinWidth = 96, Height = 30, Margin = new Thickness(0, 0, 6, 0), ToolTip = tip };
+            b.Click += (_, __) => PickSession.Send(Doc, cmd);
+            wRow.Children.Add(b);
+            return b;
+        }
+        _toWall = WBtn("가시설 변환", "DHEXCAVWALL",
+            "터파기 둘레 근처를 찍고 구간 길이를 주면 그 구간이 수직(가시설)이 됩니다.");
+        _toSlope = WBtn("사면 변환", "DHEXCAVSLOPE",
+            "찍은 자리에 겹치는 가시설 구간을 지워 다시 사면으로 되돌립니다.");
+        _clearWall = WBtn("전체 해제", "DHEXCAVWALLCLEAR",
+            "이 도면의 가시설 구간을 전부 지우고 순수 사면으로 다시 만듭니다.");
+        root.Children.Add(wRow);
         root.Children.Add(new TextBlock
         {
-            Text = "※ 가시설 구간 지정(사면수정)은 다음 판에 들어갑니다 — 지금은 구조물 전체 구배가"
-                 + " 수직일 때만 가시설로 인식합니다.",
-            FontSize = 11, Foreground = DhBrand.Warn, TextWrapping = TextWrapping.Wrap,
+            Text = "※ 가시설엔 소단·대소단·옹벽형태가 없습니다 — 흙막이는 벽체 하나로 섭니다.",
+            FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 4),
         });
 
@@ -234,6 +256,57 @@ internal sealed class ExcavPanel : UserControl
             Say($"이 도면은 <{(rec == 1 ? "계획지표면" : "원지반")}> 기준으로 기록돼 있어 그쪽으로 맞췄습니다.");
         _syncedDoc = doc;
         Refresh();
+    }
+
+    /// <summary>이 도면에 <b>이미 만든 터파기</b>가 있는가 — 가시설 구간은 그것이 있어야 고친다.</summary>
+    private static bool HasExcav(AcDoc doc) => ReadBasisFromDrawing(doc) >= 0;
+
+    /// <summary>★★[검토 0909 · 치명3의 뿌리] <b>지금 고른 구조물</b>이 실제로 쓴 구배 — 없으면 −1.
+    ///
+    /// <para>종전엔 창이 <c>ExcavCommand.Slope</c>(정적 변수)에서만 값을 채웠다. 그래서
+    /// AutoCAD를 새로 켜고 <b>1:0.3으로 만든 도면</b>을 열면 창에 <b>0.5</b>가 떠 있었고,
+    /// 그대로 무엇이든 누르면 그 값으로 다시 구워 <b>토공 수량이 조용히 바뀌었다</b>.
+    /// 기준면은 이미 도면에서 되읽고 있었는데(<see cref="ReadBasisFromDrawing"/>) 구배만 빠져 있었다.</para></summary>
+    private static double ReadSlopeFromDrawing(AcDoc doc)
+    {
+        try
+        {
+            using var tr = doc.Database.TransactionManager.StartTransaction();
+            var recs = ExcavBundleStore.TryLoadAll(doc.Database, tr, out _, out bool tooNew);
+            tr.Commit();
+            if (tooNew || recs == null || recs.Count == 0) return -1;
+            // ★★★[2차 검토 0909 · 치명3] <b>"마지막 기록"이 아니라 "고른 그 구조물"이다.</b>
+            //   종전엔 <c>recs[^1]</c>을 썼는데, 기준면은 <c>recs[0]</c>에서 읽고 있었다 — <b>자가 둘</b>이었다.
+            //   구조물 1(1:0.5)·2(수직)가 있는 도면에서 <b>1을 다시 고르면 2의 구배로 구워졌다</b>.
+            //   → 고른 폴리선의 핸들로 <b>그 기록을</b> 찾는다. 못 찾으면 −1(덮지 않는다).
+            var picked = PickSession.TryResolve(doc, PickSession.KeyExcav, out _);
+            if (picked.IsNull) return -1;
+            string h = picked.Handle.ToString();
+            foreach (var r in recs) if (r.PolyHandle == h) return r.Slope;
+            return -1;
+        }
+        catch { return -1; }
+    }
+
+    /// <summary>고른 구조물의 구배를 칸에 <b>비춘다</b> — 사람이 치는 중에는 절대 안 덮는다.
+    ///
+    /// <para>★★★[2차 검토 0909 · 치명3] 종전엔 <see cref="Refresh"/>가 무조건 덮었다.
+    /// <c>_slope.TextChanged → PushSlope → Refresh → _slope.Text = 도면값</c>이라
+    /// <b>글자를 한 자 칠 때마다 즉시 되박혔다</b> — 첫 구조물을 만든 뒤에는 창에서
+    /// 구배를 <b>영영 못 고쳤다</b>. 6단계에서 만든 창이 통째로 무력해지는 결함이었다.</para>
+    ///
+    /// <para>그래서 ①불러오는 중이 아니고 ②<b>그 칸에 포커스가 없을 때만</b> 덮는다.</para></summary>
+    private void MirrorSlope(AcDoc doc)
+    {
+        if (_loading || doc == null) return;
+        try { if (_slope.IsKeyboardFocusWithin) return; } catch { }
+        double sl = ReadSlopeFromDrawing(doc);
+        if (sl < 0) return;
+        string t = sl.ToString("0.###");
+        if (_slope.Text == t) return;
+        _loading = true;
+        try { _slope.Text = t; Commands.ExcavCommand.Slope = sl; }
+        finally { _loading = false; }
     }
 
     /// <summary>이 도면이 이미 쓰고 있는 기준면 — 없으면 −1.</summary>
@@ -319,6 +392,19 @@ internal sealed class ExcavPanel : UserControl
             _viewBase.IsEnabled = !busy;
             _viewAll.IsEnabled = !busy;
             _build.IsEnabled = !busy && has && _slopeOk;
+            // 가시설 구간은 <b>이미 만든 터파기</b>가 있어야 고칠 수 있다.
+            bool madeAny = doc != null && HasExcav(doc);
+            _toWall.IsEnabled = !busy && madeAny;
+            _toSlope.IsEnabled = !busy && madeAny;
+            _clearWall.IsEnabled = !busy && madeAny;
+            // ★★★[3차 검토 0909 · 치명2] <b>명령이 도는 중에는 안 비춘다.</b>
+            //   <c>Refresh</c>는 <c>PickSession.Changed</c> 구독자인데, <c>Begin()</c>이 그것을 쏜다 —
+            //   즉 <b>[생성]을 누르는 그 순간</b> 방금 친 구배가 옛 기록값으로 되돌아가
+            //   <b>기존 구조물의 구배를 창에서 영영 못 고쳤다</b>. 포커스 방패는 단추를 누르면
+            //   포커스가 단추로 가 버려 <b>안 먹는다</b>.
+            //   ★모달 명령 한복판에서 트랜잭션을 여는 것도 막는다(eLockViolation — 이 저장소가
+            //     <c>PickSession</c>에 이미 적어 둔 함정이다).
+            if (!busy) { try { MirrorSlope(doc); } catch { } }
             if (!_slopeOk)
             {
                 _baseHint.Text = "굴착 구배가 0~30 사이 숫자여야 합니다 — 고치면 [생성]이 켜집니다.";

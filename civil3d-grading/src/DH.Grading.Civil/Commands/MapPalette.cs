@@ -269,7 +269,7 @@ internal sealed class MapPanel : UserControl
         var line = new StackPanel { Orientation = Orientation.Horizontal };
         line.Children.Add(new TextBlock
         {
-            Text = "정지옵션 좌표계",
+            Text = "기타 설정 좌표계",
             VerticalAlignment = VerticalAlignment.Center,
             FontWeight = FontWeights.SemiBold,
         });
@@ -340,7 +340,7 @@ internal sealed class MapPanel : UserControl
                 sel = _csPick.Items.Count - 1;
             }
             _csPick.SelectedIndex = sel;
-            _csHint.Text = "변경 시 정지옵션에 저장";
+            _csHint.Text = "변경 시 기타 설정에 저장";
             _csHint.Foreground = DhBrand.Sub;
         }
         catch { }
@@ -634,7 +634,7 @@ internal sealed class MapPanel : UserControl
         {
             _epsg = epsg; _doc = doc;
             ShowCs();
-            ed.WriteMessage($"\n[서버 지표면] 정지옵션 좌표계가 바뀌어 다시 잡았습니다 — EPSG:{epsg}");
+            ed.WriteMessage($"\n[서버 지표면] 기타 설정 좌표계가 바뀌어 다시 잡았습니다 — EPSG:{epsg}");
         }
         if (!MapPickCommand.ToTm(ed, epsg, box, out double x0, out double y0, out double x1, out double y1))
         {

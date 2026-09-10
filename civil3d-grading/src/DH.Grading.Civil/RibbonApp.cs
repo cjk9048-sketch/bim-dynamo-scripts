@@ -10,6 +10,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: ExtensionApplication(typeof(DH.Grading.Civil.RibbonApp))]
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.CreateGradingCommand))]
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.GradingSettingsCommand))]
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.MiscSettingsCommand))]                     // DHMISCSET(기타 설정 — 좌표계·표시)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SurfaceIntersectionCommand))] // DHXSEC(지표면 교선 TEST)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SlopeLineCommand))]           // DHSLOPELINE(노리선 수동, 레거시)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.NoriCommand))]                // DHNORI(노리선 버튼 — 번들 기반)
@@ -35,7 +36,8 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.StrataDraw))]                          // DHSTRATAPICK(평면에서 시추 위치 찍기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.PickCommands))]                       // DHPICKPLAN/GROUND/EXCAV/CLEAR/STATUS(도킹창이 부르는 찍기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.GradingPalette))]
-[assembly: CommandClass(typeof(DH.Grading.Civil.ExcavPalette))]                       // DHEXCAVPANEL(구조물 터파기 도킹창)                     // DHGRADEPANEL(계획부지 정지 도킹창)
+[assembly: CommandClass(typeof(DH.Grading.Civil.ExcavPalette))]
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ExcavWallCommand))]           // DHEXCAVWALL/SLOPE/WALLCLEAR(가시설 구간)                       // DHEXCAVPANEL(구조물 터파기 도킹창)                     // DHGRADEPANEL(계획부지 정지 도킹창)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.MapPickCommand))]            // DHMAPPICK(지도에서 범위 고르기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.MapPalette))]                // DHCONTOURBOX(지도 도킹바가 넘긴 범위로 지표면 가져오기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.NgiiCommand))]               // DHNGII(수치지도 DXF → 원지반)
@@ -174,15 +176,33 @@ public sealed class RibbonApp : IExtensionApplication
 
             // [리본 분류 — JACK 0724/0731] 부지정지 / 도면화 / 가져오기 / 내보내기 / 기타.
             var pGrade = new RibbonPanelSource { Title = "부지정지" };
+            // ★★★[계획 8단계 · JACK 지시 1·8·14] <b>설정은 이제 도킹창이다.</b>
+            //   종전 [정지 옵션] 팝업 하나에 다섯 덩어리가 섞여 있었다 —
+            //   정지 제원은 <b>일하면서 계속 고치는 값</b>이라 창이 떠 있어야 하고(도킹창),
+            //   좌표계·표시는 <b>한 번 정하면 거의 안 바꾸는</b> 값이라 [기타]로 갔다.
             var btnSet = MakeButton(
-                "정지\n옵션", "DHGRADESET ", "단높이·소단폭·구배·사면형상·대소단·옹벽형태·좌표계·표시 옵션", "설정");
+                "정지\n창", "DHGRADEPANEL ", "계획부지 정지 도킹창 — 대상 선택·절성토 제원·대소단·옹벽형태·사면 수정", "설정");
+            btnSet.ToolTip = MakeTip("계획부지 정지 창 (DHGRADEPANEL)",
+                "오른쪽에 <b>도킹창</b>이 열립니다. 이 안에서 전부 합니다:\n" +
+                "· [계획 경계 선택] → [원지반 선택] → [지표면 생성]\n" +
+                "· 절토/성토 제원과 예시 그림 · 산지 대소단 · 옹벽 형태\n" +
+                "· 사면 수정(옹벽 변환 / 사면 변환)\n\n" +
+                "※ 값을 고쳤으면 [값 저장]을 눌러야 다음 생성에 반영됩니다.", null);
+            var btnExcPanel = MakeButton(
+                "터파기\n창", "DHEXCAVPANEL ", "구조물 터파기 도킹창 — 기준면 선택·터파기선 선택·굴착 구배·가시설 구간", "터파기");       // ★글리프는 있는 이름으로 — 없는 이름은 밋밋한 기본 그림이 된다
+            btnExcPanel.ToolTip = MakeTip("구조물 터파기 창 (DHEXCAVPANEL)",
+                "오른쪽에 <b>터파기 도킹창</b>이 열립니다:\n" +
+                "· <b>기준면</b>(계획지표면 / 원지반)을 고르고 [이 면만 보기]로 그 면 위에서 작업\n" +
+                "· [터파기선 선택] → [터파기 지표면 생성]\n" +
+                "· 굴착 구배 · <b>가시설 구간</b>(둘레의 한 구간만 수직으로)\n\n" +
+                "※ 가시설엔 소단·대소단·옹벽형태가 없습니다 — 흙막이는 벽체 하나로 섭니다.", null);
             // ★★[JACK 0824] <b>지표면 생성 = 스플릿 버튼.</b> 계획지표면과 터파기 지표면을 한 자리에 둔다.
             //   기본(윗부분 클릭)은 계획지표면 — 지금까지 하던 그것. 드롭다운에서 터파기를 고른다.
             var btnPlan = MakeButton(
                 "계획부지\n정지", "DHGRADE ", "계획 폴리곤+원지반 → 계단식 절성토 TIN Surface 생성", "정지면");
             btnPlan.ToolTip = MakeTip("계획부지 정지 (DHGRADE)",
                 "계획 경계 폴리선과 원지반을 고르면 계단식 절·성토 지표면을 만듭니다.\n" +
-                "제원은 [정지 설정]에서 정합니다.", null);
+                "제원은 [정지 창]에서 정합니다.", null);
             var btnExc = MakeButton(
                 "구조물\n터파기", "DHEXCAV ", "구조물 바닥 폴리선 → 굴착 법면·바닥만 지표면으로 생성", "터파기");
             btnExc.ToolTip = MakeTip("구조물 터파기 (DHEXCAV)",
@@ -288,7 +308,7 @@ public sealed class RibbonApp : IExtensionApplication
                 "위성지도\n추가", "DHMAP ", "두 점으로 범위를 찍으면 그 범위의 위성사진을 도면 좌표계에 맞춰 깔아줍니다(화질=도면설정)", "지도");
             btnMap.ToolTip = MakeTip("배경지도 (DHMAP)",
                 "범위 두 모서리를 클릭하면 브이월드 위성사진을 받아\n" +
-                "도면 좌표계(정지옵션의 좌표계)에 정확히 맞춰 깔아줍니다.\n" +
+                "도면 좌표계([기타 설정]의 좌표계)에 정확히 맞춰 깔아줍니다.\n" +
                 "여러 번 눌러 여러 곳에 깔 수 있고, 화질은 [도면설정]에서 선택합니다.", null);
             var btnMapOff = MakeButton(
                 "지도끄기", "DHMAPOFF ", "이 기능으로 깐 위성사진을 한 번에 전부 제거", "지도끄기");
@@ -370,6 +390,15 @@ public sealed class RibbonApp : IExtensionApplication
             // ★[JACK 0901] 가져오기 → <b>기타</b>. 원지반 가져오기가 부지정지로 올라가면서
             //   여기 남는 것은 보조 기능뿐이 됐다.
             var pMisc = new RibbonPanelSource { Title = "기타" };
+            // ★★★[계획 8단계 · JACK 지시 14] 좌표계와 표시 옵션은 <b>여기</b>로 옮겼다.
+            var btnMisc = MakeButton(
+                "기타\n설정", "DHMISCSET ", "좌표계(내보내기 원점) · 결과지표면만 표시", "설정");
+            btnMisc.ToolTip = MakeTip("기타 설정 (DHMISCSET)",
+                "<b>좌표계</b> — 도면이 어느 평면직각좌표계로 작성됐는지.\n" +
+                "  위성사진·지형·지적도가 이 원점으로 맞춰집니다.\n" +
+                "  바꾸면 이미 가져온 자료가 안 맞으므로 지울지 물어봅니다.\n\n" +
+                "<b>결과지표면만 표시</b> — 만든 뒤 정지면_DH만 남기고 나머지는 숨김.\n\n" +
+                "※ 정지 제원(단높이·소단·구배)은 [정지 창]으로 옮겼습니다.", null);
             var btnParcel = MakeButton(
                 "지적도", "DHPARCEL ", "두 점으로 범위를 찍으면 그 범위 필지 경계와 지번을 도면 좌표계로 가져옵니다", "지적");
             btnParcel.ToolTip = MakeTip("지적도 가져오기 (DHPARCEL)",
@@ -399,7 +428,7 @@ public sealed class RibbonApp : IExtensionApplication
                 "· 읽는 레이어: 등고선(F001…) · 표고점(F002…). 표고를 적어 둔 글자는 뺍니다.\n" +
                 "· <b>표고가 0인 등고선·표고점은 버립니다</b> — 측량이 안 된 자리라\n" +
                 "  그대로 두면 지표면에 절벽이 생깁니다.\n\n" +
-                "좌표계는 정지옵션을 따릅니다(DXF에는 좌표계가 안 담겨 있습니다).", null);
+                "좌표계는 [기타 설정]을 따릅니다(DXF에는 좌표계가 안 담겨 있습니다).", null);
             // ★★★[JACK 0901 "원지반 가져오기 스플릿 버튼 만들고 그 안에 수치지도 DXF, 서버 지표면 넣어 줘"]
             //   원지반을 얻는 길이 둘이 됐다 — 나란히 두면 <b>어느 것을 눌러야 하나</b>가 된다.
             //   하나로 묶고 화살표로 고르게 한다.
@@ -506,26 +535,12 @@ public sealed class RibbonApp : IExtensionApplication
             //   정지옵션 → 원지반 가져오기 → 계획부지 생성 → 사면 수정 → 보기.
             //   단추를 만드는 자리와 <b>늘어놓는 자리를 갈랐다</b>: 순서를 바꿀 때
             //   설명문 수십 줄을 통째로 옮기지 않아도 여기 한 곳만 고치면 된다.
-            var splitSlope = new RibbonSplitButton
-            {
-                Text = "사면\n수정",
-                ShowText = true,
-                ShowImage = true,
-                LargeImage = MakeGlyph("사면수정"),
-                Image = MakeGlyph("사면수정"),
-                Size = RibbonItemSize.Large,
-                Orientation = System.Windows.Controls.Orientation.Vertical,
-                IsSplit = true,
-                IsSynchronizedWithCurrentItem = false,
-                ListStyle = RibbonSplitButtonListStyle.List,
-                ToolTip = MakeTip("사면 수정",
-                    "**옹벽 변환** — 고른 선부터 바깥 단을 옹벽으로.\n" +
-                    "**사면 변환** — 옹벽선을 골라 그 단부터 다시 사면으로.\n" +
-                    "아래 화살표를 눌러 고릅니다.", null),
-            };
-            splitSlope.Items.Add(btnWall);
-            splitSlope.Items.Add(btnSlope);
-            splitSlope.Current = btnWall;
+            // ★★★[계획 8단계 · JACK 지시 3] <b>[사면 수정] 스플릿은 없앴다.</b>
+            //   기능은 <b>도킹창 안</b>으로 갔다 — 정지는 [정지 창] §5, 터파기는 [터파기 창] §4.
+            //   ★<c>btnWall</c>/<c>btnSlope</c>는 <b>만들기만 하고 안 쓴다</b> — 명령
+            //     <c>DHWALL</c>/<c>DHSLOPE</c>는 그대로 살아 있고(도킹창 단추가 그것을 부른다)
+            //     타이핑으로도 된다. 여기 두 개는 <b>리본 단추 객체</b>일 뿐이라 아무도 안 본다.
+            //     지우지 않는 이유는 툴팁 문구가 나중에 다시 쓰일 수 있어서다.
 
             var splitProf = new RibbonSplitButton
             {
@@ -562,9 +577,16 @@ public sealed class RibbonApp : IExtensionApplication
             //   ※[계획부지 생성] 스플릿은 <b>안 끈다</b> — 통째로 끄면 그 안의
             //     [계획부지 정지]까지 못 눌러 아무것도 시작할 수 없다. 안의 [구조물 터파기]만 끈다.
             _needPlan.Add(btnExc);           // 구조물 터파기 — 목표면(계획면)이 있어야
-            _needPlan.Add(splitSlope);       // 사면 수정 — 고칠 사면이 있어야
-            _needPlan.Add(btnWall);
-            _needPlan.Add(btnSlope);
+            // ★[8단계] 사면 수정 스플릿은 리본에서 빠졌다 — 대신 <b>터파기 창</b>이 목표면을 탄다.
+            // ★★★[8단계 검토 · 높음1] <b>터파기 창은 잠그지 않는다.</b>
+            //   내가 붙였던 주석("계획면이 있어야 기준면을 고를 수 있다")은 <b>사실과 반대</b>였다 —
+            //   이 창은 <b>계획면이 없을 때를 위해</b> 만든 화면이다:
+            //     · 창은 이미 제 안에서 잠근다(<c>_basePlan.IsEnabled = hasPlan</c>, 원지반 라디오는 늘 켜짐)
+            //     · 계획면이 없을 때만 뜨는 안내문이 창에 따로 쓰여 있다 — 잠그면 <b>영영 못 본다</b>
+            //     · 7단계 [가시설 변환]은 <b>리본에 없고 이 창에만</b> 있다 — 잠그면 통째로 손이 안 닿는다
+            //   ★JACK 지시 6("정지가 끝나면 터파기 활성화")은 <b>[구조물 터파기] 실행</b> 단추 얘기다.
+            //     그것(<c>btnExc</c>)은 아래에 그대로 잠가 둔다 — <b>창 열기와 실행은 다르다</b>.
+            //   ※btnWall/btnSlope는 리본에 안 얹히므로 잠금 목록에서도 뺀다 — 헛돈다.
             _needPlan.Add(btnNori);          // 노리선
             _needPlan.Add(btnProf);          // 종단 생성
             _needPlan.Add(btnStn);
@@ -581,12 +603,16 @@ public sealed class RibbonApp : IExtensionApplication
             pGrade.Items.Add(Spacer());
             pGrade.Items.Add(btnSet);
             pGrade.Items.Add(Spacer());
+            pGrade.Items.Add(btnExcPanel);
+            pGrade.Items.Add(Spacer());
             pGrade.Items.Add(splitGround);
             pGrade.Items.Add(Spacer());
             pGrade.Items.Add(splitSurf);
             pGrade.Items.Add(Spacer());
-            pGrade.Items.Add(splitSlope);
-            pGrade.Items.Add(Spacer());
+            // ★★[계획 8단계 · JACK 지시 3 "UI에서 사면수정버튼은 없애고"]
+            //   사면 수정은 <b>도킹창 안</b>으로 들어갔다 — 정지는 [정지 창], 터파기는 [터파기 창].
+            //   ★명령(DHWALL/DHSLOPE)은 <b>그대로 산다</b> — 손에 익은 사람이 있고,
+            //     도킹창의 단추도 결국 그 명령을 부른다. 리본에서만 뺀다.
             pGrade.Items.Add(splitView);
             pGrade.Items.Add(Spacer());
 
@@ -602,6 +628,8 @@ public sealed class RibbonApp : IExtensionApplication
             pDraw.Items.Add(Spacer());
 
             tab.Panels.Add(new RibbonPanel { Source = pMisc });
+            pMisc.Items.Add(Spacer());
+            pMisc.Items.Add(btnMisc);            // ★[8단계] 좌표계·표시 — 정지옵션에서 옮겨 왔다
             pMisc.Items.Add(Spacer());
             pMisc.Items.Add(btnCrop);
             pMisc.Items.Add(Spacer());

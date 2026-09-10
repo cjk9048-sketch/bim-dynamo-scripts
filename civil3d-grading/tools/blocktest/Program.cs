@@ -8761,6 +8761,233 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     }
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// S100 ★★★[7단계] <b>가시설 구간 판정 — 측점이 기대는 그 자를 잰다.</b>
+//
+//   <c>StationMarks.SplitByZones</c>는 이제 링의 점마다 <see cref="SlopeZone.IsWallAtPoint"/>를
+//   물어 가시설/열린굴착을 가른다. 그 자가 틀리면 <b>종단면도의 마젠타 막대가 엉뚱한 데 선다</b>.
+//   Civil 쪽 코드는 여기서 못 부르지만 <b>판정하는 자는 Core에 있다</b> — 그것을 잰다.
+//
+//   ★검토 0909 '높음2'가 바로 이 자리였다: 처음엔 "구간 안이면 수직, 밖이면 사면"으로 갈랐는데,
+//     <b>원래 구배가 0(수직)인 구조물</b>은 둘레 전체가 이미 수직이라 구간 밖도 수직이어야 맞다.
+{
+    // 20×20 정사각 바닥 — 둘레 80m. 자는 0번 점(0,0)에서 시작해 시계 반대 방향.
+    var box = new List<Point3> { new(0, 0, 90), new(20, 0, 90), new(20, 20, 90), new(0, 20, 90) };
+    var cum = GradingGeometry.CumLen2D(box);
+    double gate = 0.10;
+
+    // 남쪽 변(0~20m)만 가시설.
+    var z = new SlopeZone { T0 = 0, T1 = 20 };
+    z.Rules.Add((0, 0.05, -1));
+    z.Normalize();
+    var zones = new List<SlopeZone> { z };
+
+    // ① 구간 안 = 수직 · 구간 밖 = 사면 (바탕 구배가 사면일 때)
+    Check("S100 구간 안(남쪽 변 한가운데)은 수직이다",
+          SlopeZone.IsWallAtPoint(zones, 10, 0, 0, 0.5, gate, box, cum), "");
+    Check("S100 구간 밖(북쪽 변)은 사면이다",
+          !SlopeZone.IsWallAtPoint(zones, 10, 20, 0, 0.5, gate, box, cum), "");
+    Check("S100 구간 밖(동쪽 변)은 사면이다",
+          !SlopeZone.IsWallAtPoint(zones, 20, 10, 0, 0.5, gate, box, cum), "");
+
+    // ② ★★★높음2 — <b>바탕이 이미 수직</b>이면 구간 밖도 수직이다.
+    //    종전 코드는 여기서 "열린굴착"이라 답해, 실제로 수직인 벽면의 막대를 지웠다.
+    Check("S100 ★★★바탕이 수직이면 구간 밖도 수직이다(높음2)",
+          SlopeZone.IsWallAtPoint(zones, 10, 20, 0, 0.0, gate, box, cum), "");
+    Check("S100 ★★바탕이 수직이면 구간 안도 당연히 수직",
+          SlopeZone.IsWallAtPoint(zones, 10, 0, 0, 0.0, gate, box, cum), "");
+
+    // ③ ★★★높음1 — <b>둘레 전체</b> 구간(T0=0, T1=둘레)은 어디서나 수직이다.
+    //    종전엔 T0==T1이 되어 <b>한 점만</b> 수직이었다(2×2m 집수정에서 Enter만 눌러도 걸렸다).
+    var zAll = new SlopeZone { T0 = 0, T1 = 80 };
+    zAll.Rules.Add((0, 0.05, -1));
+    zAll.Normalize();
+    var all = new List<SlopeZone> { zAll };
+    int nAll = 0;
+    foreach (var (px, py) in new[] { (10.0, 0.0), (20.0, 10.0), (10.0, 20.0), (0.0, 10.0), (0.0, 0.0) })
+        if (SlopeZone.IsWallAtPoint(all, px, py, 0, 0.5, gate, box, cum)) nAll++;
+    Check("S100 ★★★둘레 전체 구간은 네 변 어디서나 수직이다(높음1)", nAll == 5, $"수직 {nAll}/5");
+
+    // ④ 0을 지나 이어지는 구간(랩) — 서쪽 변 끝 → 남쪽 변 앞.
+    var zw = new SlopeZone { T0 = 75, T1 = 5 };
+    zw.Rules.Add((0, 0.05, -1));
+    zw.Normalize();
+    var wrap = new List<SlopeZone> { zw };
+    Check("S100 랩 구간 — 0 바로 앞(서쪽 변 끝)이 수직",
+          SlopeZone.IsWallAtPoint(wrap, 0, 2, 0, 0.5, gate, box, cum), "");
+    Check("S100 랩 구간 — 0 바로 뒤(남쪽 변 앞)가 수직",
+          SlopeZone.IsWallAtPoint(wrap, 2, 0, 0, 0.5, gate, box, cum), "");
+    Check("S100 랩 구간 — 반대편(동쪽 변)은 사면",
+          !SlopeZone.IsWallAtPoint(wrap, 20, 10, 0, 0.5, gate, box, cum), "");
+
+    // ⑤ 짝짓기 키 — <b>같은 구간</b>이면 상단·바닥이 같은 번호를 받는다(치명2).
+    //    상단 링은 바닥보다 바깥에 있지만 <b>같은 바닥 둘레에 투영</b>하므로 같은 구간에 든다.
+    //    (구배 1:0.5 · 깊이 5m → 2.5m 바깥)
+    bool botIn = zones[0].ContainsAt(10, 0, box, cum);
+    bool topIn = zones[0].ContainsAt(10, -2.5, box, cum);
+    Check("S100 ★★★상단 링과 바닥 링이 같은 구간에 든다(치명2 짝짓기)",
+          botIn && topIn, $"바닥 {botIn} · 상단 {topIn}");
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// S101 ★★★[2차 검토 0909 · 높음3] <b>자르기와 짝짓기 키를 진짜로 잰다.</b>
+//
+//   S100은 <c>IsWallAtPoint</c>만 쟀다. 그런데 반려 사유 1순위였던 <b>치명2(짝짓기 키)</b>는
+//   <b>자르는 코드</b>에 있었고, 그 코드가 AutoCAD 계층이라 <b>868개 중 0개</b>가 못 봤다.
+//   → <c>Core.WallSplit</c>으로 내려서 <b>여기서 잰다</b>. 이제 이것이 출하되는 그 코드다.
+{
+    var box = new List<Point3> { new(0, 0, 90), new(20, 0, 90), new(20, 20, 90), new(0, 20, 90) };
+    var cum = GradingGeometry.CumLen2D(box);
+    double gate = 0.10;
+
+    // 링을 촘촘히 훑는 표본으로 만든다(실제 링도 VertexSpacing으로 촘촘하다).
+    static List<Point3> Ring(double off, double z)
+    {
+        var r = new List<Point3>();
+        for (double t = 0; t < 80.0 - 1e-9; t += 0.5)
+        {
+            double x, y;
+            if (t < 20) { x = t; y = 0; }
+            else if (t < 40) { x = 20; y = t - 20; }
+            else if (t < 60) { x = 60 - t; y = 20; }
+            else { x = 0; y = 80 - t; }
+            // 바깥으로 off만큼 — 사각형이라 중심(10,10)에서 멀어지는 쪽
+            double cx = x - 10, cy = y - 10;
+            double m = Math.Max(Math.Abs(cx), Math.Abs(cy));
+            if (m > 1e-9) { x += cx / m * off; y += cy / m * off; }
+            r.Add(new Point3(x, y, z));
+        }
+        r.Add(r[0]);                                   // 닫는다(실제 코드의 Closed()와 같은 모양)
+        return r;
+    }
+
+    var z1 = new SlopeZone { T0 = 5, T1 = 15 };        // 남쪽 변 한가운데 10m
+    z1.Rules.Add((0, 0.05, -1));
+    z1.Normalize();
+    var zones = new List<SlopeZone> { z1 };
+
+    var bot = Ring(0.0, 85.0);                          // 바닥
+    var top = Ring(2.5, 90.0);                          // 상단(깊이 5m · 1:0.5)
+
+    var pb = WallSplit.Split(bot, box, cum, zones, 0.5, gate);
+    var pt = WallSplit.Split(top, box, cum, zones, 0.5, gate);
+
+    var wb = pb.Where(g => g.Wall).ToList();
+    var wt = pt.Where(g => g.Wall).ToList();
+    Check("S101 바닥 링이 가시설 토막을 낸다", wb.Count >= 1, $"수직 토막 {wb.Count}");
+    Check("S101 상단 링도 가시설 토막을 낸다", wt.Count >= 1, $"수직 토막 {wt.Count}");
+
+    // ★★★치명2 — <b>상단과 바닥이 같은 키를 받아야</b> 종단에서 짝이 된다.
+    //   종전 코드는 토막에 번호를 <b>순서대로</b> 매겨(상단 1·2, 바닥 3·4) 모든 조가 한쪽뿐이었고,
+    //   그 결과 막대 높이 0 · 측점 둘 · 횡단 (전)(후) 소멸이 한꺼번에 났다.
+    var kb = wb.Select(g => g.Zi).Distinct().OrderBy(v => v).ToList();
+    var kt = wt.Select(g => g.Zi).Distinct().OrderBy(v => v).ToList();
+    Check("S101 ★★★상단·바닥이 같은 짝짓기 키를 받는다(치명2)",
+          kb.Count == 1 && kt.Count == 1 && kb[0] == kt[0] && kb[0] == 0,
+          $"바닥 [{string.Join(",", kb)}] · 상단 [{string.Join(",", kt)}]");
+
+    // 열린굴착 쪽도 남아야 한다(둘레 전체가 가시설이 되면 안 된다).
+    Check("S101 나머지 둘레는 열린굴착으로 남는다",
+          pb.Any(g => !g.Wall) && pt.Any(g => !g.Wall), "");
+
+    // 수직 토막의 실제 길이가 지정한 10m 언저리인가.
+    double wlen = 0;
+    foreach (var g in wb)
+        for (int i = 1; i < g.Pts.Count; i++)
+            wlen += Math.Sqrt(Math.Pow(g.Pts[i].X - g.Pts[i - 1].X, 2) + Math.Pow(g.Pts[i].Y - g.Pts[i - 1].Y, 2));
+    Check("S101 가시설 토막 길이가 지정한 10m 언저리다", wlen > 9.0 && wlen < 12.0, $"{wlen:F2}m");
+
+    // ★이음매 — 0을 지나 이어지는 구간이 <b>한 토막</b>으로 붙는가.
+    //   안 붙이면 같은 자리에 벽이 둘 서고, 짝짓기가 4조각으로 흩어진다.
+    var zw = new SlopeZone { T0 = 75, T1 = 5 };
+    zw.Rules.Add((0, 0.05, -1));
+    zw.Normalize();
+    var wrap = new List<SlopeZone> { zw };
+    var pw = WallSplit.Split(bot, box, cum, wrap, 0.5, gate);
+    int nWall = pw.Count(g => g.Wall);
+    Check("S101 ★★0을 걸친 구간이 한 토막으로 붙는다(이음매)", nWall == 1, $"수직 토막 {nWall}개");
+
+    // ★바탕이 이미 수직이면 <b>둘레 전체</b>가 한 토막이다(높음2를 자르기 수준에서 다시 확인).
+    var pv = WallSplit.Split(bot, box, cum, zones, 0.0, gate);
+    Check("S101 ★★바탕이 수직이면 둘레 전체가 가시설 한 토막(높음2)",
+          pv.Count == 1 && pv[0].Wall, $"토막 {pv.Count}개");
+
+    // ★구간이 없으면 <b>빈 목록</b> — 부르는 쪽이 옛 규칙으로 가야 한다(옛 도면 불변).
+    Check("S101 구간이 없으면 아무것도 자르지 않는다(옛 도면 불변)",
+          WallSplit.Split(bot, box, cum, new List<SlopeZone>(), 0.5, gate).Count == 0, "");
+
+    // ★토막이 원래 링을 <b>빠짐없이</b> 덮는가 — 점을 잃으면 벽이 짧아진다.
+    // ★자르기가 <b>제 안에서 조밀화</b>하므로 점 수로는 못 잰다 — <b>길이</b>로 잰다.
+    static double PolyLen(List<Point3> r)
+    { double t = 0; for (int i = 1; i < r.Count; i++) t += Math.Sqrt(Math.Pow(r[i].X - r[i - 1].X, 2) + Math.Pow(r[i].Y - r[i - 1].Y, 2)); return t; }
+    double sumLen = pb.Sum(g => PolyLen(g.Pts));
+    Check("S101 토막이 원래 링을 빠짐없이 덮는다(길이)",
+          Math.Abs(sumLen - PolyLen(bot)) < 0.01, $"{sumLen:F2} / {PolyLen(bot):F2}");
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// S102 ★★★[3차 검토 0909 · 치명1] <b>출하되는 그 입력으로 잰다 — 4점짜리 바닥 링.</b>
+//
+//   S101은 0.5m 간격 161점짜리 링을 먹였다. 그런데 <b>실제 바닥 링은 4점</b>이다
+//   (진단로그 "경계 4점" — 설계자가 그린 폴리선 원본 그대로다).
+//   구간은 호길이로 자르는데 잘릴 점이 없어 <b>바닥이 통째로 남고 짝이 한 조도 안 맺혔다</b>.
+//   → 877개 중 <b>0개</b>가 그것을 볼 수 없었다. <b>먹이는 값이 출하되는 값이 아니면</b>
+//     아무리 많이 통과해도 증거가 아니다 — 이번 판에서 두 번째로 겪은 일이다.
+{
+    var box = new List<Point3> { new(0, 0, 90), new(20, 0, 90), new(20, 20, 90), new(0, 20, 90) };
+    var cum = GradingGeometry.CumLen2D(box);
+    double gate = 0.10;
+
+    static List<Point3> Closed(List<Point3> r)
+    { var c = new List<Point3>(r); c.Add(r[0]); return c; }
+    static double PLen(List<Point3> r)
+    { double t = 0; for (int i = 1; i < r.Count; i++) t += Math.Sqrt(Math.Pow(r[i].X - r[i - 1].X, 2) + Math.Pow(r[i].Y - r[i - 1].Y, 2)); return t; }
+
+    var z = new SlopeZone { T0 = 5, T1 = 15 };      // 남쪽 변 한가운데 10m
+    z.Rules.Add((0, 0.05, -1));
+    z.Normalize();
+    var zones = new List<SlopeZone> { z };
+
+    // ★★★출하되는 바닥 링 — 5점(4정점 + 닫는 점).
+    var bot4 = Closed(box);
+    var pb = WallSplit.Split(bot4, box, cum, zones, 0.5, gate);
+    var wall = pb.Where(g => g.Wall).ToList();
+
+    Check("S102 ★★★4점 바닥 링에서도 가시설 토막이 나온다(치명1)",
+          wall.Count == 1, $"수직 토막 {wall.Count}개 / 전체 {pb.Count}개");
+    double wl = wall.Sum(g => PLen(g.Pts));
+    Check("S102 ★★그 토막 길이가 지정한 10m 언저리다",
+          wl > 9.0 && wl < 12.0, $"{wl:F2}m (지정 10m)");
+
+    // ★지정한 곳이 <b>남쪽 변</b>인가 — 코너로 밀려나면 엉뚱한 변이 수직이 된다.
+    bool south = wall.Count == 1 && wall[0].Pts.All(p => Math.Abs(p.Y) < 1e-6 && p.X >= 4.0 && p.X <= 16.0);
+    Check("S102 ★★지정한 남쪽 변에 선다(엉뚱한 변으로 안 밀린다)", south,
+          wall.Count == 1 ? $"x {wall[0].Pts.Min(p => p.X):F1}~{wall[0].Pts.Max(p => p.X):F1} · y {wall[0].Pts.Max(p => Math.Abs(p.Y)):F2}" : "토막 없음");
+
+    // ★상단 링(2.5m 바깥, 역시 <b>4점</b>)과 <b>같은 키</b>를 받는가 — 이래야 종단에서 짝이 된다.
+    var box2 = new List<Point3> { new(-2.5, -2.5, 95), new(22.5, -2.5, 95), new(22.5, 22.5, 95), new(-2.5, 22.5, 95) };
+    var pt = WallSplit.Split(Closed(box2), box, cum, zones, 0.5, gate);
+    var wt = pt.Where(g => g.Wall).ToList();
+    Check("S102 ★★★4점 상단 링도 같은 키를 받는다(짝짓기)",
+          wall.Count == 1 && wt.Count == 1 && wall[0].Zi == wt[0].Zi && wall[0].Zi == 0,
+          wt.Count == 1 ? $"바닥 {wall[0].Zi} · 상단 {wt[0].Zi}" : $"상단 토막 {wt.Count}개");
+
+    // ★긴 변 한쪽 전체(30m)를 지정해도 넘치지 않는가 — 30×15 배수지.
+    var rec = new List<Point3> { new(0, 0, 90), new(30, 0, 90), new(30, 15, 90), new(0, 15, 90) };
+    var rcum = GradingGeometry.CumLen2D(rec);
+    var zr = new SlopeZone { T0 = 0, T1 = 30 };
+    zr.Rules.Add((0, 0.05, -1));
+    zr.Normalize();
+    var pr = WallSplit.Split(Closed(rec), rec, rcum, new List<SlopeZone> { zr }, 0.5, gate);
+    double rl = pr.Where(g => g.Wall).Sum(g => PLen(g.Pts));
+    Check("S102 ★긴 변 전체 30m 지정이 30m로 잘린다(45m로 안 넘친다)",
+          rl > 29.0 && rl < 32.0, $"{rl:F2}m (지정 30m)");
+
+    // ★구간이 없으면 여전히 아무것도 안 자른다(옛 도면 불변) — 조밀화가 그것을 안 깨뜨린다.
+    Check("S102 구간이 없으면 4점 링도 그대로 둔다",
+          WallSplit.Split(bot4, box, rcum, new List<SlopeZone>(), 0.5, gate).Count == 0, "");
+}
+
 // ★★[검토 0904] <b>요약이 파일 48% 지점에서 찍히고 있었다.</b> 그 뒤 S54~S95의 Check 426개가
 //   요약에 안 잡혀, '전부 통과'가 <b>절반만 보증하는 문장</b>이었다(실측: 요약 뒤에서 S54가 FAIL한 판이 있었다).
 //   fails 계수 자체는 맞았고 세는 자리만 틀렸다 — 맨 끝으로 옮긴다.

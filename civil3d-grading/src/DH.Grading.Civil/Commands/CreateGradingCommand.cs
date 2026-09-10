@@ -1224,6 +1224,15 @@ public sealed class CreateGradingCommand
                 $" / 성토 1:{p.FillSlope} 단높이 {p.FillBenchHeight}m·소단 {p.FillBenchWidth}m{terrace}" +
                 $"\n  {gradeTime}" +
                 $"\n  자세한 내용: {DiagLog.FilePath}");
+
+            // ★★★[8단계 검토 · 높음2] <b>도킹창이 떠 있으면 다시 채운다.</b>
+            //   터파기는 제 창을 챙기는데(<c>ExcavCommand</c> 끝) <b>정지만 그 한 줄이 없었다</b> —
+            //   그래서 리본으로 정지면을 만들면 창의 [옹벽 변환]·[사면 변환]과
+            //   [이어서/새로시작]이 <b>회색인 채로 굳었다</b>(도면 탭을 왕복해야 풀렸다).
+            //   ★<c>GradingPalette.Refresh()</c>는 8단계에서 호출자가 <b>0개</b>가 됐었다 —
+            //     "고침이 한 곳에만 들어간다"(§77 ④)의 거울상이다: 여기서는 <b>한 곳에도</b> 안 들어갔다.
+            try { GradingPalette.Refresh(); } catch { }
+
             // ★[검토 0824 S-1] 저장이 실패했으면 **팝업에도** 적는다 — 로그만 보고 알 수는 없다.
             if (bundleFailed)
                 AcadApp.ShowAlertDialog(msg +

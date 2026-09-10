@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
@@ -209,7 +209,7 @@ public sealed class NgiiCommand
     private static string BeltCheck(int epsg, double x0, double y0, double x1, double y1)
     {
         var belt = ShapefileWriter.Belt(epsg);
-        if (belt == null) return $"EPSG:{epsg}는 아직 못 다루는 원점입니다 — 정지설정에서 다시 고르세요.";
+        if (belt == null) return $"EPSG:{epsg}는 아직 못 다루는 원점입니다 — [기타 설정]에서 다시 고르세요.";
 
         // 한국 TM: 원점가산 E=200,000이고 국내는 중앙자오선 ±150km 안이다.
         double cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
@@ -223,8 +223,8 @@ public sealed class NgiiCommand
             double other = belt.Value.fn == 600000 ? 500000 : 600000;
             double dOther = other - cy;
             if (dOther >= -50000 && dOther <= 400000)
-                return $"세로좌표를 보면 원점가산 {other:N0} 쪽입니다 — 정지설정에서 신/구를 바꿔 보세요.";
-            return $"세로좌표({cy:N0})가 이 원점과 안 맞습니다 — 정지설정의 좌표계를 확인해 주세요.";
+                return $"세로좌표를 보면 원점가산 {other:N0} 쪽입니다 — [기타 설정]에서 신/구를 바꿔 보세요.";
+            return $"세로좌표({cy:N0})가 이 원점과 안 맞습니다 — [기타 설정]의 좌표계를 확인해 주세요.";
         }
         return null;
     }
