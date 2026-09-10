@@ -586,7 +586,9 @@ public sealed class InfraworksCommand
                     }
                 }
                 else if (zoneMode && style == WallStyle.없음_사면)
-                    log.AppendLine($"{rPre}{label}: 옹벽 구간은 있으나 옹벽 형태가 '없음' — 옹벽3D 생략(정지 옵션에서 형태 선택)");
+                    // ★[JACK 0910] 옹벽 형태가 [기타 설정]으로 옮겨 갔다 — 안내도 같이 옮긴다.
+                    //   §78이 적은 그대로: <b>없는 창을 가리키는 안내는 막다른 길</b>이다.
+                    log.AppendLine($"{rPre}{label}: 옹벽 구간은 있으나 옹벽 형태가 '없음' — 옹벽3D 생략(리본 [기타] → [기타 설정]에서 형태 선택)");
                 else if (!zoneMode && !wallOk)
                     log.AppendLine($"{rPre}{label}: 옹벽 없음(사면)");
             }

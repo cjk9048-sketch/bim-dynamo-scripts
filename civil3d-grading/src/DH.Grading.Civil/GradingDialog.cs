@@ -364,6 +364,150 @@ public sealed class GradingDialog : Window
         });
     }
 
+    /// <summary>★<b>접었다 펼치는 칸</b> — 제목을 누르면 그 칸 내용이 숨는다(JACK 0910).
+    ///
+    /// <para><b>왜 필요한가.</b> 정지 창은 칸이 다섯이고 값 줄이 열넷이라 우측 도킹 팔레트
+    /// 세로(FHD 850~950px)를 넘긴다. 위쪽 예시 그림은 고정 자리라, 밀려나는 것은 <b>값 칸</b>이다.
+    /// 지금 안 쓰는 칸을 접으면 쓰는 칸이 한 화면에 들어온다.</para>
+    ///
+    /// <para><b><see cref="AddSection"/>과의 관계.</b> 이것은 <b>대체가 아니라 형제</b>다 —
+    /// 팝업(도면 설정·기타 설정)은 창 크기가 내용에 맞춰 늘어나므로 접을 이유가 없다.
+    /// 도킹창만 이것을 쓴다. 머리글 모양(글자 크기·색·밑줄)은 둘이 같아야 해서
+    /// <b>같은 값</b>을 쓴다 — 한쪽만 고치면 두 화면이 달라 보인다.</para>
+    ///
+    /// <para><b>돌려주는 것은 내용 상자</b>다. 부르는 쪽은 <c>root</c>가 아니라 이 상자에
+    /// 줄을 담아야 접힌다 — <c>root</c>에 담으면 제목만 접히고 줄은 그대로 남는다.</para>
+    ///
+    /// <para>접은 상태는 <paramref name="key"/>(없으면 제목)로 <b>이 AutoCAD가 도는 동안</b>
+    /// 기억한다. 도면을 바꾸거나 창을 접었다 펴도 유지된다. 도면에는 저장하지 않는다 —
+    /// 화면 습관이지 도면 값이 아니다.</para></summary>
+    /// <param name="open">처음 열 때 펼쳐 둘지. 한 번이라도 사람이 누른 칸은 <b>그 뜻이 이긴다</b>.</param>
+    /// <param name="group">★[JACK 0910] <b>아코디언 묶음 이름.</b> 같은 이름을 준 칸들은
+    /// <b>한 번에 하나만</b> 열린다 — 하나를 펼치면 나머지가 닫힌다.
+    /// JACK: <i>"처음엔 전부 접힌상태고 하나라도 누르면 펼쳐지고 다른카테고리를 누르면
+    /// 그 카테고리는 열리고 다른 카테고리는 닫히게"</i>. <c>null</c>이면 각자 따로 접힌다.</param>
+    internal static StackPanel AddCollapsible(Panel parent, string title, string? tip = null,
+                                              bool first = false, bool open = true,
+                                              string? key = null, string? group = null)
+        => AddCollapsible(parent, title, out _, tip, first, open, key, group);
+
+    /// <summary>★[검토 M-1] <b>접었을 때 보여 줄 요약칸</b>까지 돌려주는 판.
+    ///
+    /// <para>접으면 그 안의 것이 통째로 사라진다 — <c>1. 대상</c>처럼 <b>무엇을 골랐는지</b>가
+    /// 든 칸에서는 그것이 곧 <b>상태를 못 보게 되는 것</b>이다.
+    /// 그래서 접힌 동안만 제목 옆에 한 줄 요약을 띄운다. 펼치면 진짜 줄들이 보이므로 요약은 숨는다.</para></summary>
+    internal static StackPanel AddCollapsible(Panel parent, string title, out TextBlock badge,
+                                              string? tip = null, bool first = false,
+                                              bool open = true, string? key = null, string? group = null)
+    {
+        string k = key ?? title;
+        bool on = SectionOpen.TryGetValue(k, out bool remembered) ? remembered : open;
+
+        var arrow = new TextBlock
+        {
+            Text = on ? "▾" : "▸",
+            FontSize = 11,
+            Foreground = DhBrand.Brand,
+            Width = 14,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var label = new TextBlock
+        {
+            Text = title,
+            FontSize = 13,                       // ★AddSection과 같은 값 — 다르면 두 화면이 달라 보인다
+            FontWeight = FontWeights.Bold,
+            Foreground = DhBrand.Brand,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        // 접혀 있을 때만 보이는 요약 — 부르는 쪽이 글자를 채운다(안 채우면 빈칸이라 안 보인다).
+        var sum = new TextBlock
+        {
+            FontSize = 11,
+            Foreground = DhBrand.Sub,
+            Margin = new Thickness(8, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Visibility = on ? Visibility.Collapsed : Visibility.Visible,
+        };
+        badge = sum;
+
+        var headRow = new StackPanel { Orientation = Orientation.Horizontal };
+        headRow.Children.Add(arrow);
+        headRow.Children.Add(label);
+        headRow.Children.Add(sum);
+
+        // ★바탕이 <c>Transparent</c>여야 글자 없는 자리도 눌린다(<c>null</c>이면 그 자리는 안 맞는다).
+        var head = new Border
+        {
+            Child = headRow,
+            Background = Brushes.Transparent,
+            Padding = new Thickness(0, 3, 0, 3),
+            Margin = new Thickness(0, first ? 0 : 14, 0, 5),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            ToolTip = tip == null ? "누르면 접거나 펼칩니다." : tip + "\n(제목을 누르면 접거나 펼칩니다)",
+        };
+
+        var line = new Border
+        {
+            Height = 1,
+            Background = DhBrand.Line,
+            Margin = new Thickness(0, 0, 0, 11),
+            ToolTip = tip,
+        };
+
+        var body = new StackPanel { Visibility = on ? Visibility.Visible : Visibility.Collapsed };
+
+        // ★한 자리에서만 모양을 바꾼다 — 누를 때와 <b>남이 닫을 때</b>가 같은 길을 타야
+        //   화살표·요약·여백이 어긋나지 않는다.
+        void SetOpen(bool now)
+        {
+            body.Visibility = now ? Visibility.Visible : Visibility.Collapsed;
+            arrow.Text = now ? "▾" : "▸";
+            sum.Visibility = now ? Visibility.Collapsed : Visibility.Visible;
+            // ★접었을 때 밑줄만 남으면 <b>빈 줄이 떠 있는 것</b>처럼 보인다 — 아래 여백을 줄인다.
+            line.Margin = new Thickness(0, 0, 0, now ? 11 : 2);
+            SectionOpen[k] = now;
+        }
+
+        // 아코디언 묶음에 <b>내 닫는 손잡이</b>를 걸어 둔다(같은 키면 갈아 끼운다 —
+        // 창을 다시 만들면 죽은 화면을 붙잡고 있으면 안 된다).
+        if (group != null)
+        {
+            if (!Accordion.TryGetValue(group, out var members))
+                Accordion[group] = members = new System.Collections.Generic.Dictionary<string, System.Action>();
+            members[k] = () => SetOpen(false);
+        }
+
+        head.MouseLeftButtonUp += (_, __) =>
+        {
+            bool now = body.Visibility != Visibility.Visible;
+            // ★펼치는 참이면 <b>같은 묶음의 나머지를 먼저 닫는다</b>(JACK 0910).
+            //   닫는 참일 때는 아무것도 안 건드린다 — 그러면 전부 닫힌 상태가 된다.
+            if (now && group != null && Accordion.TryGetValue(group, out var members))
+                foreach (var kv in members)
+                    if (kv.Key != k) { try { kv.Value(); } catch { } }
+            SetOpen(now);
+        };
+        head.MouseEnter += (_, __) => head.Background = DhBrand.BrandDim;
+        head.MouseLeave += (_, __) => head.Background = Brushes.Transparent;
+
+        if (!on) line.Margin = new Thickness(0, 0, 0, 2);
+
+        parent.Children.Add(head);
+        parent.Children.Add(line);
+        parent.Children.Add(body);
+        return body;
+    }
+
+    /// <summary>접은 칸 기억 — 창을 다시 만들어도 유지된다(AutoCAD가 도는 동안).</summary>
+    private static readonly System.Collections.Generic.Dictionary<string, bool> SectionOpen = new();
+
+    /// <summary>아코디언 묶음 — 묶음 이름 → (칸 키 → 그 칸을 닫는 손잡이).
+    /// <para>같은 키로 다시 등록되면 갈아 끼운다. 안 그러면 창을 다시 만들 때
+    /// <b>죽은 화면을 닫으려 드는 손잡이</b>가 쌓인다.</para></summary>
+    private static readonly System.Collections.Generic.Dictionary<
+        string, System.Collections.Generic.Dictionary<string, System.Action>> Accordion = new();
+
     /// <summary>옹벽 형태 한 줄 — <b>목록 글자와 역T형 안내까지</b> 여기 하나뿐이다.
     /// <para>★[UI검토 0909] 도킹창이 <c>Enum.GetNames</c>로 <b>제 목록을 따로 만들고</b> 있었다 —
     /// 같은 값인데 팝업은 <i>"없음 (사면만)"</i>, 창은 <i>"없음 사면"</i>이었고,

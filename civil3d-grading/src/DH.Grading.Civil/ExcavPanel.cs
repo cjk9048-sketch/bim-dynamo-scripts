@@ -30,6 +30,17 @@ internal sealed class ExcavPanel : UserControl
     private readonly TextBlock _pickWhat, _groundWhat, _status, _said, _baseHint;
     private readonly TextBox _slope;
 
+    /// <summary>★[JACK 0910] 이 창의 <b>아코디언 묶음 이름</b> — 네 칸이 한 묶음이라 한 번에 하나만 열린다.
+    /// 정지 창과 <b>다른 이름</b>이어야 서로를 닫지 않는다.</summary>
+    private const string G = "터파기창";
+
+    /// <summary>접힌 칸의 제목 옆에 뜨는 상태 한 줄 — 접어 놓고도 무엇으로 파는지 알아야 한다.</summary>
+    private readonly TextBlock _baseBadge, _targetBadge, _digBadge;
+
+    /// <summary>★[검토 0910 · 높음1] 구배가 쓸 수 없는 값일 때 <b>구배 칸 바로 밑</b>에 뜨는 안내.
+    /// <para><c>_baseHint</c>에 쓰면 그것은 다른 칸(1. 기준면) 안이라 <b>접혀서 안 보인다</b>.</para></summary>
+    private readonly TextBlock _slopeHint;
+
     private bool _loading;
 
     /// <summary>지금 화면이 맞춰져 있는 도면 — <b>같은 도면이면 사람이 고른 것을 안 덮는다</b>.
@@ -58,7 +69,9 @@ internal sealed class ExcavPanel : UserControl
 
         _status = new TextBlock
         {
-            Text = "① 기준면을 고르고 → ② 터파기선을 찍고 → ③ [터파기 지표면 생성].",
+            // ★[JACK 0910] 차례가 하나 늘었다 — 굴착 구배를 <b>정하고 나서</b> 만든다.
+            Text = "① 기준면 → ② 터파기선 → ③ 굴착 구배 → ④ [터파기 지표면 생성]."
+                 + " 칸 제목을 누르면 그 칸만 펼쳐집니다.",
             FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 8),
         };
@@ -69,8 +82,12 @@ internal sealed class ExcavPanel : UserControl
         };
 
         // ── 1. 기준면 ─────────────────────────────────────────────────────
-        GradingDialog.AddSection(root, "1. 터파기 기준면", "성토부를 어디서부터 팔지 — 절토부는 어느 쪽이든 계획면", first: true);
-        _basePlan = GradingDialog.AddRadioPair(root, "기준면", "계획지표면", false, out _baseGround, "원지반",
+        // ★[JACK 0910 "터파기도 마찬가지고"] 정지 창과 <b>같은 규칙</b>: 칸 접기(아코디언) ·
+        //   처음엔 전부 접힘 · 하나 열면 나머지 닫힘 · 접힌 칸은 제목 옆에 상태 요약.
+        var secBase = GradingDialog.AddCollapsible(root, "1. 터파기 기준면", out _baseBadge,
+            "성토부를 어디서부터 팔지 — 절토부는 어느 쪽이든 계획면",
+            first: true, open: false, key: "터파기:1.기준면", group: G);
+        _basePlan = GradingDialog.AddRadioPair(secBase, "기준면", "계획지표면", false, out _baseGround, "원지반",
             "계획지표면 = 계획고까지 성토·다짐한 뒤 팝니다(그만큼 깊어집니다).\n"
           + "원지반 = 먼저 파고 구조물을 세운 뒤 둘레를 성토합니다.\n"
           + "★절토부는 어느 쪽을 골라도 계획면부터입니다 — 원지반부터 재면 부지 절토와 이중 계상입니다.",
@@ -82,7 +99,7 @@ internal sealed class ExcavPanel : UserControl
             FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 6),
         };
-        root.Children.Add(_baseHint);
+        secBase.Children.Add(_baseHint);
 
         _viewBase = new Button { Content = "이 면만 보기", MinWidth = 110, Height = 28, Margin = new Thickness(0, 0, 0, 8) };
         _viewBase.HorizontalAlignment = HorizontalAlignment.Left;
@@ -100,10 +117,12 @@ internal sealed class ExcavPanel : UserControl
         var vRow = new StackPanel { Orientation = Orientation.Horizontal };
         vRow.Children.Add(_viewBase);
         vRow.Children.Add(_viewAll);
-        root.Children.Add(vRow);
+        secBase.Children.Add(vRow);
 
         // ── 2. 대상 ───────────────────────────────────────────────────────
-        GradingDialog.AddSection(root, "2. 대상", "구조물 바닥 경계(계획고가 들어간 닫힌 폴리선)");
+        var secTarget = GradingDialog.AddCollapsible(root, "2. 대상", out _targetBadge,
+            "구조물 바닥 경계(계획고가 들어간 닫힌 폴리선)",
+            open: false, key: "터파기:2.대상", group: G);
         var row = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = true };
         _pick = new Button { Content = "터파기선 선택", MinWidth = 130, Height = 30 };
         _pick.Click += (_, __) => PickSession.Send(Doc, PickCommands.CmdExcav);
@@ -116,7 +135,7 @@ internal sealed class ExcavPanel : UserControl
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
         row.Children.Add(_pickWhat);
-        root.Children.Add(row);
+        secTarget.Children.Add(row);
 
         // ★★★[검토 0909 · 치명] <b>원지반을 고를 길이 있어야 한다.</b>
         //   종전엔 <c>GradingSettings.LastGroundHandle</c> 하나에 기댔는데, 그 값은
@@ -137,33 +156,60 @@ internal sealed class ExcavPanel : UserControl
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
         gRow.Children.Add(_groundWhat);
-        root.Children.Add(gRow);
-
-        _build = new Button { Content = "터파기 지표면 생성", MinWidth = 150, Height = 32, Margin = new Thickness(0, 2, 0, 4) };
-        try { if (DhBrand.Skin != null) _build.Style = (Style)DhBrand.Skin["DhPrimary"]; } catch { }
-        _build.HorizontalAlignment = HorizontalAlignment.Left;
-        _build.Click += (_, __) => PickSession.Send(Doc, PickCommands.CmdExcavBuild);
-        root.Children.Add(_build);
+        secTarget.Children.Add(gRow);
 
         // ── 3. 굴착 ───────────────────────────────────────────────────────
         //   ★[JACK 0824] 터파기 제원은 <b>구배 하나뿐</b>이다 — <i>"단높이 설정은 필요 없어,
         //     어차피 구배로만 치는 거야."</i> 소단·대소단·옹벽형태는 여기 없다.
-        GradingDialog.AddSection(root, "3. 굴착", "터파기 제원은 구배 하나입니다(단높이·소단은 안 씁니다)");
-        _slope = GradingDialog.AddRow(root, "굴착 구배  1 :", Commands.ExcavCommand.Slope, "");
+        var secDig = GradingDialog.AddCollapsible(root, "3. 굴착", out _digBadge,
+            "터파기 제원은 구배 하나입니다(단높이·소단은 안 씁니다)",
+            open: false, key: "터파기:3.굴착", group: G);
+        _slope = GradingDialog.AddRow(secDig, "굴착 구배  1 :", Commands.ExcavCommand.Slope, "");
         _slope.ToolTip = "0을 넣으면 수직(가시설)입니다. 너무 작은 값은 자동으로 하한으로 올립니다.";
-        root.Children.Add(new TextBlock
+        // ★★★[검토 0910 · 높음1] <b>구배가 틀렸다는 말은 구배 칸 옆에 있어야 한다.</b>
+        //   <para>종전엔 그 문구를 <c>_baseHint</c>에 썼는데, 칸 접기가 생기면서 그것이
+        //   <c>1. 터파기 기준면</c> <b>안</b>으로 들어갔다. 구배를 치려면 <c>3. 굴착</c>을 펼쳐야 하고,
+        //   아코디언이 그 순간 기준면 칸을 <b>닫는다</b> — 즉 <b>[생성]이 회색으로 죽는데
+        //   왜 죽었는지 화면 어디에도 안 뜬다</b>. 접기를 넣으면서 만든 구멍이다.</para>
+        //   <para>→ 이 칸 <b>제 자리</b>에 안내를 둔다. 접혀 있을 때는 제목 옆 배지가 <c>⚠값 확인</c>을 든다.</para>
+        _slopeHint = new TextBlock
+        {
+            FontSize = 11, Foreground = DhBrand.Warn, TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 4),
+            Visibility = Visibility.Collapsed,
+        };
+        secDig.Children.Add(_slopeHint);
+        secDig.Children.Add(new TextBlock
         {
             Text = "※ 사면형상은 터파기에서 직각만 씁니다 — 라운드·소단·옹벽형태는 여기 없습니다.",
             FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 4),
         });
+        // ══ ★★[JACK 0910] <b>만들기는 값을 다 정한 뒤에</b> — 정지 창과 같은 차례 ══
+        //   <para>종전엔 이 단추가 <c>2. 대상</c> 안에 있어서, 터파기선을 찍자마자 누르게 되고
+        //   <b>굴착 구배는 옛 값인 채로</b> 파였다. 순서를 바꾸면 그 실수가 안 생긴다:
+        //   <b>기준면 → 대상 → 굴착 값 → 만들기</b>.</para>
+        //   <para>★<b>칸 밖에 둔다</b> — 위 칸을 다 접어도 이 단추는 자리를 지킨다.</para>
+        _build = new Button
+        {
+            Content = "터파기 지표면 생성",
+            MinWidth = 150,
+            Height = 34,
+            Margin = new Thickness(0, 6, 0, 6),
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        try { if (DhBrand.Skin != null) _build.Style = (Style)DhBrand.Skin["DhPrimary"]; } catch { }
+        _build.Click += (_, __) => PickSession.Send(Doc, PickCommands.CmdExcavBuild);
+        root.Children.Add(_build);
+
         // ── 4. 사면 수정 (가시설) ─────────────────────────────────────────
         //   ★★★[JACK 0909 확정 "(가) 제대로 한다"] 이제 <b>구간별</b>로 가시설을 지정한다.
         //     ★<b>옹벽이 아니라 가시설</b>이다 — 이 저장소는 둘을 이미 갈라 놓았고
         //       (종단 막대 끝이 다르고 밴드 표기가 다르다) 섞으면 종단면도가 틀리게 그려진다.
         //     ★<b>소단·대소단·라운드·옹벽형태는 없다</b>(JACK 지시 11~13).
-        GradingDialog.AddSection(root, "4. 사면 수정 (가시설)",
-            "둘레의 한 구간만 수직으로 세웁니다 — 자리를 찍고 길이를 주면 됩니다");
+        var secWall = GradingDialog.AddCollapsible(root, "4. 사면 수정 (가시설)",
+            "둘레의 한 구간만 수직으로 세웁니다 — 자리를 찍고 길이를 주면 됩니다",
+            open: false, key: "터파기:4.가시설", group: G);
         var wRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
         Button WBtn(string t, string cmd, string tip)
         {
@@ -178,8 +224,8 @@ internal sealed class ExcavPanel : UserControl
             "찍은 자리에 겹치는 가시설 구간을 지워 다시 사면으로 되돌립니다.");
         _clearWall = WBtn("전체 해제", "DHEXCAVWALLCLEAR",
             "이 도면의 가시설 구간을 전부 지우고 순수 사면으로 다시 만듭니다.");
-        root.Children.Add(wRow);
-        root.Children.Add(new TextBlock
+        secWall.Children.Add(wRow);
+        secWall.Children.Add(new TextBlock
         {
             Text = "※ 가시설엔 소단·대소단·옹벽형태가 없습니다 — 흙막이는 벽체 하나로 섭니다.",
             FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap,
@@ -199,12 +245,14 @@ internal sealed class ExcavPanel : UserControl
         top.Children.Add(_said);
         DockPanel.SetDock(top, Dock.Top);
         deck.Children.Add(top);
-        deck.Children.Add(new ScrollViewer
+        // ★[JACK 0910] 정지 창과 같이 — 값 칸 <b>뒤에</b> 회사 로고를 크게 옅게 깐다.
+        deck.Children.Add(DhBrand.Watermark(new ScrollViewer
         {
             Content = root,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-        });
+            Background = Brushes.Transparent,   // ★바탕이 칠해지면 로고가 통째로 가려진다
+        }));
         Content = deck;
 
         // ★[검토 0909] 붙었다 떨어졌다 하는 창이므로 <b>붙을 때마다</b> 다시 구독한다.
@@ -333,7 +381,7 @@ internal sealed class ExcavPanel : UserControl
         if (_loading) return;
         string t = (_slope.Text ?? "").Trim().Replace(',', '.');
         _slopeOk = double.TryParse(t, NumberStyles.Float, CultureInfo.InvariantCulture, out double v)
-                && v >= 0 && v <= 30;
+                && v >= 0 && v <= GradingForm.SlopeMax;   // ★[검토 0910] 정지 창과 <b>같은 상수</b>
         if (_slopeOk) Commands.ExcavCommand.Slope = v;
         Refresh();
     }
@@ -407,9 +455,24 @@ internal sealed class ExcavPanel : UserControl
             if (!busy) { try { MirrorSlope(doc); } catch { } }
             if (!_slopeOk)
             {
-                _baseHint.Text = "굴착 구배가 0~30 사이 숫자여야 합니다 — 고치면 [생성]이 켜집니다.";
-                _baseHint.Foreground = DhBrand.Warn;
+                // ★[검토 0910 · 높음1] <b>구배 칸이 있는 그 칸</b>에 적는다 — 기준면 칸에 적으면
+                //   아코디언이 그 칸을 닫아 버려 <b>아무 데도 안 보인다</b>.
+                _slopeHint.Text = $"굴착 구배가 0~{GradingForm.SlopeMax:0.#} 사이 숫자여야 합니다 — 고치면 [생성]이 켜집니다.";
+                _slopeHint.Visibility = Visibility.Visible;
             }
+            else if (_slopeHint != null) _slopeHint.Visibility = Visibility.Collapsed;
+
+            // ★★[JACK 0910] <b>접어 놓으면 무엇으로 파는지 안 보인다.</b>
+            //   접힌 칸 제목 옆에 그 칸의 결론만 적는다 — 특히 <b>기준면</b>은
+            //   틀린 채로 만들면 토적표가 통째로 달라지는 값이다.
+            if (_baseBadge != null)
+                _baseBadge.Text = "· " + (wantPlan ? "계획지표면" : "원지반")
+                                + (wantPlan && !hasPlan ? " ⚠아직 없음" : "");
+            if (_targetBadge != null)
+                _targetBadge.Text = "· 터파기선 " + (has ? "●" : "○")
+                                  + " 지반 " + (g != null ? "●" : "자동");
+            if (_digBadge != null)
+                _digBadge.Text = _slopeOk ? "· 구배 1:" + (_slope.Text ?? "").Trim() : "· ⚠값 확인";
         }
         catch (System.Exception ex)
         {

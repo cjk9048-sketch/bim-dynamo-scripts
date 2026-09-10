@@ -26,6 +26,19 @@ internal static class GradingForm
     /// <summary>단높이 상한(m) — ★[JACK 0819] 그 위로는 사면이라 부르기 어렵고 대소단(법정 15m)과도 어긋난다.</summary>
     internal const double BenchMax = 15.0;
 
+    /// <summary>★★★[검토 0910] <b>구배 상한 1:30 — 여기가 그 값을 정하는 한 곳이다.</b>
+    ///
+    /// <para><b>없어서 생긴 일.</b> 단높이는 하한·상한을 둘 다 검사하는데 <b>구배는 하한만</b> 있었다
+    /// (아래 <c>slopeFloor</c>). 그래서 <c>1:99</c>를 넣으면 <b>경고 없이 통과</b>해 저장됐는데,
+    /// 예시 그림은 30에서 잘라 그린다 — <b>그림은 1:30인데 값은 1:99</b>인 상태가 된다.
+    /// 이 저장소가 단높이 하한을 넣으며 적어 둔 말이 그대로 적용된다:
+    /// <i>"예시 그림의 클램프와 같은 값이라야 화면과 실제가 안 어긋난다."</i></para>
+    ///
+    /// <para>터파기 창은 이미 0~30을 검사하고 있었다 — <b>두 창이 어긋나 있었던 것</b>이라
+    /// 같은 상수를 쓰게 한다. 1:30이면 수평 30m에 수직 1m다(약 1.9°) — 그보다 완만하면
+    /// 사면이 아니라 <b>평지</b>고, 데이라잇이 부지 밖 수백 m로 뻗는다.</para></summary>
+    internal const double SlopeMax = 30.0;
+
     /// <summary>정지 창이 다루는 칸 한 벌 — 팝업이든 도킹창이든 이 모양으로 넘긴다.</summary>
     internal sealed class Controls
     {
@@ -76,6 +89,17 @@ internal static class GradingForm
         if (cs > 0 && cs < slopeFloor) cs = slopeFloor; else if (cs == 0) cs = slopeFloor;
         if (fs > 0 && fs < slopeFloor) fs = slopeFloor; else if (fs == 0) fs = slopeFloor;
 
+        // ★★★[검토 0910] <b>구배 상한.</b> 하한만 있고 상한이 없어 1:99가 조용히 통과했다 —
+        //   그림은 30에서 잘라 그리므로 <b>화면과 실제가 갈렸다</b>. 자세한 근거는 <see cref="SlopeMax"/>.
+        if (cs > SlopeMax + 1e-9 || fs > SlopeMax + 1e-9)
+        {
+            bool cutBad = cs > SlopeMax + 1e-9;
+            Warn(owner, $"구배는 1:{SlopeMax:0.#} 이하여야 합니다({(cutBad ? "절토" : "성토")} 1:{(cutBad ? cs : fs):0.##}).\n\n"
+                      + $"1:{SlopeMax:0.#}보다 완만하면 사면이 아니라 평지에 가깝고, 사면이 닿는 자리가 부지 밖 멀리까지 뻗습니다.");
+            Focus(cutBad ? c.CutSlope : c.FillSlope);
+            return false;
+        }
+
         // ★★[JACK 0819] <b>단높이 상한 15m</b>.
         //   JACK: <i>"맥시멈은 15미터로 하고, 대소단은 자투리 생겨도 돼 — 10M로 설정하면 10M, 5M(자투리)가 생기는 게 맞어."</i>
         //   <b>자투리는 막지 않는다</b> — 그것이 실제 시공 모습이다.
@@ -98,8 +122,15 @@ internal static class GradingForm
         GradingSettings.MountainTerrace = c.MountainTerrace?.IsChecked == true;
         GradingSettings.TerraceInterval = ti;
         GradingSettings.TerraceWidth = tw;
-        GradingSettings.CutWallStyle = (WallStyle)System.Math.Max(0, c.CutWallStyle?.SelectedIndex ?? 0);
-        GradingSettings.FillWallStyle = (WallStyle)System.Math.Max(0, c.FillWallStyle?.SelectedIndex ?? 0);
+        // ★★★[JACK 0910 · 옮기면서 생길 뻔한 구멍] <b>없는 칸은 안 건드린다.</b>
+        //   종전엔 <c>?? 0</c>이라 <c>null</c>이 곧 <b>0 = "없음(사면만)"</b>이었다.
+        //   옹벽 형태가 [기타 설정]으로 간 지금, 정지 창에서 [값 저장]을 누를 때마다
+        //   <b>옹벽 형태가 말없이 "없음"으로 초기화</b>됐을 것이다 —
+        //   아래 두 줄이 <c>ShowOnlyResult</c>·<c>CoordSys</c>와 같은 규칙을 따라야 하는 이유다.
+        if (c.CutWallStyle != null)
+            GradingSettings.CutWallStyle = (WallStyle)System.Math.Max(0, c.CutWallStyle.SelectedIndex);
+        if (c.FillWallStyle != null)
+            GradingSettings.FillWallStyle = (WallStyle)System.Math.Max(0, c.FillWallStyle.SelectedIndex);
 
         // 기타 설정으로 옮겨 갈 것들 — 도킹창에는 없다(null이면 안 건드린다).
         if (c.ShowOnlyResult != null) GradingSettings.ShowOnlyResultSurface = c.ShowOnlyResult.IsChecked == true;

@@ -24,8 +24,9 @@ public sealed class GradingSettingsCommand
         try
         {
             doc.Editor.WriteMessage(
-                "\n[정지 설정] 오른쪽 <계획부지 정지> 창에서 값을 고치고 [값 저장]을 누르세요."
-              + "\n  · 좌표계·표시 옵션은 리본 [기타] → [기타 설정](DHMISCSET)으로 옮겼습니다.");
+                // ★[JACK 0910] [값 저장]은 없어졌다 — 친 값은 바로 반영되고, 만들기는 그 칸 안에 있다.
+                "\n[정지 설정] 오른쪽 <계획부지 정지> 창에서 값을 고치면 바로 반영됩니다 — [계획부지생성하기]로 만드세요."
+              + "\n  · 좌표계·표시 옵션과 옹벽 형태는 리본 [기타] → [기타 설정](DHMISCSET)으로 옮겼습니다.");
         }
         catch { }
     }
@@ -58,7 +59,9 @@ public sealed class MiscSettingsCommand
 
         var dlg = new MiscSettingsDialog();
         AcadApp.ShowModalWindow(dlg); // [저장] 시 GradingSettings에 반영됨
-        // ★이 화면은 정지 제원을 안 건드리므로 도킹창을 되채울 것이 없다.
+        // ★이 화면은 정지 <b>제원</b>(단높이·소단·구배)을 안 건드리므로 도킹창 값을 되채울 것이 없다.
+        //   ★[JACK 0910] 단, <b>옹벽 형태</b>가 이리로 왔다 — 그것은 값 칸이 아니라
+        //     정지 창의 <b>예시 그림</b>에 나타나므로, 맨 아래에서 그림만 다시 그리게 한다.
         if (dlg.DialogResult != true) return;
 
         // [JACK 0731 — 좌표계 연동] 사용자가 좌표계를 **실제로 바꿨을 때만** 도면 좌표계에 반영(MAPCSASSIGN 상당)
@@ -168,5 +171,10 @@ public sealed class MiscSettingsCommand
             doc.Editor.Regen();
         }
         catch { }
+
+        // ★[JACK 0910] 옹벽 형태가 이 창으로 옮겨 왔다 — 정지 창의 <b>예시 그림</b>이 그 값을 그린다.
+        //   여기서 안 알리면 창은 <b>옛 옹벽 모양</b>을 계속 보여 준다(§78 "화면을 옮기면 사슬도 옮겨라").
+        //   ★<c>Refresh</c>가 아니라 <c>RedrawExample</c>이다 — 고치다 만 숫자를 지우지 않기 위해서다.
+        try { GradingPalette.RedrawExample(); } catch { }
     }
 }
