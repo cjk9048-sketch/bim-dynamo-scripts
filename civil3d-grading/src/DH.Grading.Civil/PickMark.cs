@@ -157,24 +157,46 @@ internal sealed class PickMark : System.IDisposable
     {
         var m = new PickMark();
         if (db == null || id.IsNull) return m;
-        try { m._doc = doc ?? AcadApp.DocumentManager.MdiActiveDocument; } catch { }
+        List<Core.Point3> pts;
+        bool closed;
         try
         {
-            List<Core.Point3> pts;
-            bool closed;
-            using (var tr = db.TransactionManager.StartTransaction())
-            {
-                // ★읽기만 한다 — 문서 잠금이 필요 없고, 뒤에 명령이 같은 객체를 쓰기로 여는 것과도 안 부딪힌다.
-                pts = BoundaryReader.Read(tr, id);
-                closed = IsClosed(tr, id);
-                tr.Commit();
-            }
-            if (pts == null || pts.Count < 2)
-            {
-                Note($"고른 것에서 점을 {pts?.Count ?? 0}개밖에 못 읽어 표시를 안 했다");
-                return m;
-            }
+            using var tr = db.TransactionManager.StartTransaction();
+            // ★읽기만 한다 — 문서 잠금이 필요 없고, 뒤에 명령이 같은 객체를 쓰기로 여는 것과도 안 부딪힌다.
+            pts = BoundaryReader.Read(tr, id);
+            closed = IsClosed(tr, id);
+            tr.Commit();
+        }
+        catch (System.Exception rex) { Note("고른 것을 못 읽었다 — " + rex.Message); return m; }
+        if (pts == null || pts.Count < 2)
+        {
+            Note($"고른 것에서 점을 {pts?.Count ?? 0}개밖에 못 읽어 표시를 안 했다");
+            return m;
+        }
+        return PaintPath(doc, pts, closed);
+    }
 
+    /// <summary>★★[JACK 0910] <b>도면에 없는 선</b>도 빨간 띠로 보여 준다 — 구간 미리보기용.
+    ///
+    /// <para><see cref="Paint"/>는 <b>도면 객체</b>를 받아 그 점을 읽어 그린다. 그런데
+    /// [옹벽 변환]에서 <i>"이 구간의 이 부분만"</i>을 찍을 때 보여 줄 것은 <b>도면에 없는 조각</b>이다
+    /// (그 조각은 아직 아무것도 아니고, 만들면 도면이 더러워진다).
+    /// → 점 목록을 그대로 받는 문을 낸다. 그리는 방식·걷는 방식은 <b>완전히 같다</b>.</para></summary>
+    /// <param name="halfOverride">주면 <b>이 반폭(m)</b>으로 그린다 — 안 주면 제 바운딩박스에서 뽑는다.
+    /// <para>★[검토 0910 · 보통3] 바운딩박스로 뽑으면 <b>조각이 짧을수록 얇아진다</b> —
+    /// 3m 조각이면 반폭 <b>7.5mm</b>라 사실상 안 보인다. 그런데 <c>AskPart</c>는
+    /// <i>"빨간 띠가 바뀔 자리입니다"</i>라고 말하고 JACK이 요구한 것은 <b>두꺼운 빨간선</b>이었다.
+    /// 부분 구간을 그릴 때는 <b>자(고리)의 둘레</b>로 뽑은 굵기를 넘겨 준다 —
+    /// 커서를 따라가는 띠와 <b>같은 식</b>이 되어 확정 전후로 굵기가 안 바뀐다.</para></param>
+    public static PickMark PaintPath(Autodesk.AutoCAD.ApplicationServices.Document doc,
+                                     IReadOnlyList<Core.Point3> pts, bool closed,
+                                     double halfOverride = 0)
+    {
+        var m = new PickMark();
+        try { m._doc = doc ?? AcadApp.DocumentManager.MdiActiveDocument; } catch { }
+        if (pts == null || pts.Count < 2) return m;
+        try
+        {
             var v = new List<Point3d>(pts.Count + 1);
             foreach (var q in pts) v.Add(new Point3d(q.X, q.Y, q.Z));
             // ★★[검토 0908] <b>열린 것은 열린 채로 그린다.</b> 종전엔 무조건 첫 점을 다시 붙였는데,
@@ -204,7 +226,7 @@ internal sealed class PickMark : System.IDisposable
                 if (q.Y > yMax) yMax = q.Y;
             }
             double diag = System.Math.Sqrt((xMax - xMin) * (xMax - xMin) + (yMax - yMin) * (yMax - yMin));
-            double half = diag * BandFrac * 0.5;
+            double half = halfOverride > 1e-9 ? halfOverride : diag * BandFrac * 0.5;
             if (!(half > 1e-9) || double.IsNaN(half)) half = BandMin * 0.5;
 
             // ★★[검토 0909 · 높음] <b>개수에 상한을 둔다.</b>

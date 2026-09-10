@@ -15,6 +15,17 @@ public static class WallRunBuilder
     /// <summary>직전 <see cref="Build"/>의 진단 — 조용히 버려지는 자리마다 사유별 계수기.</summary>
     public static string LastDiag { get; private set; } = "";
 
+    /// <summary>★★★[검토 0910 · 치명1] <b>구간 밖인데 벽으로 잡힌 점 수</b> — 0이어야 한다.
+    ///
+    /// <para><b>왜 따로 내놓나.</b> 이 숫자는 <see cref="LastDiag"/> 안에 ⚠와 함께 <b>인쇄만</b> 되고 있었다.
+    /// 0910에 이음매를 점으로 채웠을 때 이 값이 <b>0 → 226점</b>으로 뛰었는데,
+    /// 검사기는 그 줄을 찍어 놓고 <b>PASS로 지나갔다</b> — 아무도 단언하지 않았기 때문이다.
+    /// 문장을 <c>Contains</c>로 뒤지는 검사는 문구를 다듬는 순간 조용히 깨지므로 <b>수를 내놓는다</b>.</para>
+    ///
+    /// <para>0이 아니면 <b>규칙은 사면인데 기하는 벽</b>이라는 뜻이고,
+    /// 0805 <i>"사선으로 존재하지 않는 옹벽"</i>이 돌아온 자리다.</para></summary>
+    public static int LastExtraWall { get; private set; }
+
     /// <summary>[하니스 전용] 토우/크레스트를 표고 대신 링 인덱스로 정하던 옛 동작으로 되돌린다 —
     /// 성토가 뒤집히는 버그를 재현해 S25가 실제로 그걸 잡는 검사인지 확인하는 용도.
     /// 운영 코드에서는 절대 켜지 않는다.</summary>
@@ -43,7 +54,7 @@ public static class WallRunBuilder
     {
         var outp = new List<WallRun>();
         if (boundary == null || boundary.Count < 3 || rings == null || rings.Count < 2)
-        { LastDiag = "경계/링 없음"; return outp; }
+        { LastDiag = "경계/링 없음"; LastExtraWall = 0; return outp; }   // ★지난 판의 수가 남으면 안 된다
 
         var cum = GradingGeometry.CumLen2D(boundary);
         double zBase = System.Math.Max(globalSlope, minSlope);
@@ -287,6 +298,7 @@ public static class WallRunBuilder
             }
         }
 
+        LastExtraWall = extraWall;   // ★검토 0910 치명1 — 인쇄만 하지 말고 <b>단언할 수 있게</b> 내놓는다
         LastDiag = $"옹벽선 {outp.Count}줄 · 링 {rings.Count}개 · 벽면쌍 {faceN}(기대 {rings.Count / 2})" +
                    $" · 건너뜀(평탄 {skipFlat} · 퇴화 {skipDegen} · 옹벽아님 {skipNoWall} · 짧음 {skipShort})" +
                    $" · 전역 1:{globalSlope}{(globalIsWall ? "(수직)" : "")} · 구간 {(zones?.Count ?? 0)}개" +

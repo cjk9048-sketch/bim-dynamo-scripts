@@ -1,8 +1,9 @@
-using System.Linq;
+﻿using System.Linq;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.Colors;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
+using Autodesk.AutoCAD.Geometry;   // ★[JACK 0910] 커서 자리(Point3d)를 받으려고 — PickOnRing
 using DH.Grading.Core;
 using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 
@@ -27,6 +28,29 @@ internal static class ZoneEditCommon
 {
     private const short SelAci = 2;   // 선택 = 노랑(대상선 시안과 구분)
 
+    /// <summary>부분 구간의 <b>최소 길이(m)</b> — <see cref="GradingGeometry.MinPartSpan"/>가 정한다.
+    /// <para>★[검토 0910 · 보통4] 종전엔 여기 <c>3.0</c> 리터럴이 있었다. 그런데 그 값이 성립하는
+    /// 근거(조밀화 간격 <c>dens</c> · <c>CollectRuns</c>의 <c>cur.Count &gt;= 2</c>)는 전부 Core에 있어서,
+    /// 누가 그 둘을 손대면 <b>이 상수가 조용히 틀린 값</b>이 됐다. 이제 <b>같은 함수</b>를
+    /// 명령도 검사기도 부른다.</para></summary>
+    private static double MinPartOf() => GradingGeometry.MinPartSpan(GradingSettings.ToParams());
+
+    /// <summary>빨간 띠의 <b>반폭(m)</b> — 고리 둘레 하나로 정한다.
+    /// <para>★[검토 0910 · 보통3] 커서를 따라가는 띠와 확정된 띠가 <b>서로 다른 식</b>을 쓰고 있었다
+    /// (하나는 고리 둘레, 하나는 그 조각의 바운딩박스). 그래서 조각이 짧으면 확정 순간
+    /// 띠가 <b>홀쭉해졌다</b>. 식을 하나로 모은다 — 부지가 커도 선을 안 덮고, 조각이 짧아도 보인다.</para></summary>
+    private static double BandHalf(double ringLen)
+        => System.Math.Max(0.35, System.Math.Min(ringLen * 0.004, 2.0));
+
+    /// <summary>커서를 따라 그리는 표식의 색 — 고른 선(노랑)·대상선(시안)과 <b>구분되는</b> 빨강.</summary>
+    private const short GlyphAci = 1;
+
+    /// <summary>커서 표식이 <b>한 번이라도</b> 자빠졌나 — 그 사실을 로그에 한 번만 남기려는 걸쇠.
+    /// <para>★[검토 0910 · 보통5] 이 자리는 마우스가 움직이는 내내 도는 곳이라
+    /// 실패를 매번 적으면 로그가 못 쓰게 된다. 그렇다고 <c>catch { }</c>로 삼키면
+    /// "안 보인다"의 원인을 영영 못 찾는다. 그래서 <b>처음 한 번만</b> 적는다.</para></summary>
+    private static bool _glyphLogged;
+
     /// <summary>★[JACK 0820 '정지옵션과 변환은 연동되긴 해야 해'] 변환 기본값 = <b>지금 정지옵션에 있는 값</b>.
     /// <para>고정 숫자도, 번들 저장값도 아니다 — 사용자가 정지옵션에서 방금 바꾼 값이 그대로 기본값이 된다.
     /// 절토·성토는 단높이·소단폭·구배가 따로이므로(v16.6) <b>클릭한 방향</b>의 값을 따라간다.</para>
@@ -36,6 +60,225 @@ internal static class ZoneEditCommon
     {
         var p = GradingSettings.ToParams();
         return (p.BenchHeightAt(up, bench), BaseSlopeOf(p, up), p.BenchWidthOf(up));
+    }
+
+    // ══ ★★★[JACK 0910] 형상선 위에서 찍기 — <b>Civil 3D 정지와 같은 방식</b> ══════════
+    //
+    //   <para>JACK 스샷(0910 13:35)이 보여 준 것: <c>CREATEGRADING 시작점 선택:</c> 에서
+    //   커서가 형상선에 붙고 <b>ㄴ자 표식 + 방향 화살표</b>가 따라오며 툴팁에
+    //   <i>「측점:0+123.05m, 표고:93.000m」</i>이 뜬다. <b>자리와 방향을 한 번에</b> 보여 주는 것이다.</para>
+    //
+    //   <para>AutoCAD에는 <b>커서 움직임을 듣는 문</b>(<c>Editor.PointMonitor</c>)이 있고,
+    //   그 자리에서 툴팁에 글자를 붙일 수 있다(<c>AppendToolTipText</c>).
+    //   표시는 이 저장소가 이미 쓰는 <b>임시 그래픽</b>으로 그린다 — 도면에는 아무것도 안 남는다.</para>
+
+    /// <summary>고리 위 <paramref name="t"/> 자리의 <b>바깥쪽</b> 방향(길이 <paramref name="len"/>)의 점.
+    /// <para>바깥 = 고리 <b>무게중심의 반대쪽</b>. 사면은 언제나 바깥으로 나므로 그쪽을 가리킨다.</para></summary>
+    //   ★[검토 0910] 셈은 <see cref="GradingGeometry.OutwardAt"/>에 있다 — 무게중심 방식이
+    //     오목한 부지에서 <b>안쪽을 바깥이라고</b> 가리켜서 폴리곤이 도는 방향으로 고쳤고,
+    //     오프라인 검사기가 닿게 Core로 내렸다.
+
+    // ══ ★★★[JACK 0910 두 번째 지시] <b>커서 표시를 다시 만든다</b> ═══════════════════
+    //
+    //   <para>JACK: <i>"커서가 L자 모양으로 나오고 거기서 떨어져서 그으면 점선이 마우스를 클릭한
+    //   지점에서 그려져서 엄청 헷갈려. L자 모양도 직관적이지 않고. … 처음 찍고 그 좌표를 기준으로
+    //   상하좌우를 인식하고 노선방향쪽으로 화살표가 실시간으로 보이게 해. 그리고 그 방향으로
+    //   두꺼운 빨간선이 쭉 생겼다가 마지막 위치 찍으면 진행되게."</i></para>
+    //
+    //   <para><b>무엇이 헷갈렸나.</b> ①ㄴ자는 "무엇을 뜻하는 표시인지" 안 보였다.
+    //   ②두 번째 점을 <c>UseBasePoint</c>로 받아서 AutoCAD가 <b>찍은 자리</b>에서 고무줄 점선을 그렸다 —
+    //   그런데 실제로 잡히는 자리는 <b>계단선 위에 투영된 점</b>이라, 점선과 결과가 서로 딴 데를 가리켰다.</para>
+    //
+    //   <para>→ ①고무줄 점선을 없애고 ②시작점은 <b>계단선을 가로지르는 짧고 굵은 표시</b>로,
+    //   ③끝점을 찍는 동안에는 <b>시작점부터 커서까지 계단선을 따라 굵은 빨간 띠</b>를 그리고
+    //   그 끝에 <b>진행 방향 화살표</b>를 얹는다. 보이는 것이 곧 잡히는 것이 된다.</para>
+
+    /// <summary>화면에 얹을 <b>굵은 띠</b> — 선을 따라 사각형을 이어 칠한다.
+    /// <para>임시 그래픽이 아니라 <c>ViewportDraw</c>라 <b>이 프레임에만</b> 그려지고 저절로 사라진다.</para></summary>
+    private static void DrawBand(Autodesk.AutoCAD.GraphicsInterface.ViewportDraw dc,
+                                 System.Collections.Generic.IReadOnlyList<Point3> path, double half)
+    {
+        if (dc == null || path == null || path.Count < 2) return;
+        // 점이 아주 많으면 몇 개 건너뛰어 그린다 — 굵은 띠라 눈에는 똑같고, 한 프레임 안에 끝나야 한다.
+        int step = path.Count > 400 ? path.Count / 400 + 1 : 1;
+        // ★★★[검토 0910 · 높음2] <b>담는 그릇은 하나만 만들어 다시 쓴다.</b>
+        //   <c>Point3dCollection</c>은 네이티브 배열을 쥔 <c>DisposableWrapper</c>다.
+        //   여기는 <c>PointMonitor</c> 안이라 <b>마우스가 움직이는 내내</b> 돈다 —
+        //   띠 한 줄에 최대 400개씩, 초당 30~60프레임이면 <b>초당 1~2만 개</b>가
+        //   소멸자 대기줄에 쌓인다. 하나를 <c>Clear()</c>해 가며 쓰면 프레임당 <b>하나</b>다.
+        using var quad = new Point3dCollection();
+        for (int i = 0; i + step < path.Count; i += step)
+        {
+            var a = path[i]; var b = path[System.Math.Min(i + step, path.Count - 1)];
+            double dx = b.X - a.X, dy = b.Y - a.Y;
+            double L = System.Math.Sqrt(dx * dx + dy * dy);
+            if (L < 1e-9) continue;
+            double nx = -dy / L * half, ny = dx / L * half;
+            quad.Clear();
+            quad.Add(new Point3d(a.X - nx, a.Y - ny, a.Z));
+            quad.Add(new Point3d(a.X + nx, a.Y + ny, a.Z));
+            quad.Add(new Point3d(b.X + nx, b.Y + ny, b.Z));
+            quad.Add(new Point3d(b.X - nx, b.Y - ny, b.Z));
+            try { dc.Geometry.Polygon(quad); } catch { }
+        }
+    }
+
+    /// <summary>진행 방향 <b>화살촉</b> — 띠 끝에 얹어 "이쪽으로 간다"를 보여 준다.</summary>
+    private static void DrawArrow(Autodesk.AutoCAD.GraphicsInterface.ViewportDraw dc,
+                                  Point3 tip, double dirX, double dirY, double size)
+    {
+        if (dc == null) return;
+        double L = System.Math.Sqrt(dirX * dirX + dirY * dirY);
+        if (L < 1e-9) return;
+        double ux = dirX / L, uy = dirY / L;         // 진행 방향
+        double px = -uy, py = ux;                     // 그 직각
+        // ★[검토 0910 · 높음2] 여기도 <c>PointMonitor</c> 안이다 — 쥔 것을 <b>반드시 버린다</b>.
+        using var tri = new Point3dCollection
+        {
+            new Point3d(tip.X + ux * size, tip.Y + uy * size, tip.Z),
+            new Point3d(tip.X - ux * size * 0.4 + px * size * 0.55,
+                        tip.Y - uy * size * 0.4 + py * size * 0.55, tip.Z),
+            new Point3d(tip.X - ux * size * 0.4 - px * size * 0.55,
+                        tip.Y - uy * size * 0.4 - py * size * 0.55, tip.Z),
+        };
+        try { dc.Geometry.Polygon(tri); } catch { }
+    }
+
+    /// <summary>★★★[JACK 0910] <b>형상선 위에서 한 점을 찍는다</b> — 커서를 따라 자리·표고·방향을 보여 준다.
+    ///
+    /// <para>찍은 점을 그냥 받는 것과 다르다: 커서가 움직이는 <b>동안</b> 그 자리를 고리에 투영해
+    /// ①표식을 그리고 ②툴팁에 둘레 위치와 표고를 적는다. 그래서 <b>클릭하기 전에</b>
+    /// 어디가 잡히는지 보인다 — 스샷의 Civil 3D가 하는 그것이다.</para>
+    ///
+    /// <para>★<b>구간이 정해져 있으면 그 안으로 가둔 자리</b>를 보여 준다 —
+    /// 밖을 가리키면 표식이 구간 끝에 붙어 <b>더는 못 간다</b>는 것이 눈에 보인다.</para>
+    ///
+    /// <para>★★<paramref name="fromT"/>가 있으면 <b>그 자리부터 커서까지</b> 계단선을 따라
+    /// <b>굵은 빨간 띠</b>를 그리고 그 끝에 <b>진행 방향 화살촉</b>을 얹는다 —
+    /// 어느 쪽으로 얼마나 잡힐지가 <b>클릭하기 전에</b> 보인다(JACK 0910
+    /// <i>"그 좌표를 기준으로 상하좌우를 인식하고 노선방향쪽으로 화살표가 실시간으로"</i>).
+    /// 없으면(시작점) 계단선을 <b>가로지르는 짧고 굵은 표시</b> 하나만 그린다.</para>
+    ///
+    /// <para>★그리는 자리는 <c>InputPointContext.DrawContext</c> — <b>이 프레임에만</b> 얹히고
+    /// 저절로 사라져 걷을 것도, 화면을 갱신할 일도 없다. 그래서 <b>떨림도 없다</b>.</para></summary>
+    private static PromptPointResult PickOnRing(
+        Editor ed, string msg, double? fromT,
+        System.Collections.Generic.IReadOnlyList<Point3> ring, double[] cum,
+        double f0, double f1, bool whole, out double t)
+    {
+        double total = cum[cum.Length - 1];
+        // 띠 굵기·화살촉 크기 — 부지 크기에 따라 눈에 보이게(너무 얇으면 안 보이고 너무 굵으면 선을 덮는다).
+        double half = BandHalf(total);
+        double arrow = System.Math.Max(1.5, System.Math.Min(total * 0.02, 8.0));
+        double minPart = MinPartOf();
+
+        void OnMove(object? s, PointMonitorEventArgs e)
+        {
+            try
+            {
+                // ★[검토 0910] <b>지금 그 점이 뜻이 있는가</b>부터 묻는다 — 좌표를 타이핑하는 중에도
+                //   이 이벤트가 돈다(<c>PointHistoryBits.CoordinatePending</c>).
+                if (!e.Context.PointComputed) return;
+                var p = e.Context.ComputedPoint;
+                double tt = GradingGeometry.ParamAt(ring, cum, p.X, p.Y);
+                if (!whole) tt = GradingGeometry.ClampInto(f0, f1, tt, total, out _);
+                var at = GradingGeometry.PointAtParam(ring, cum, tt);
+
+                // ★★★[검토 0910 · 높음1] <b>AutoCAD가 이 자리에 그리라고 준 문으로 그린다.</b>
+                //   <c>InputPointContext.DrawContext</c>는 <b>지금 그리는 중인 화면</b>에 바로 얹는 자리다 —
+                //   프레임이 끝나면 저절로 사라져 걷을 것이 없고, 화면을 따로 갱신할 필요도 없다.
+                //   (첫 판은 임시 그래픽을 넣었다 뺐다 하며 화면을 강제 갱신했는데, 그 갱신이
+                //    이 이벤트를 다시 부르면 손잡이를 덮어써 <b>죽은 포인터</b>가 된다.)
+                var dc = e.Context.DrawContext;
+                if (dc != null) { try { dc.SubEntityTraits.Color = GlyphAci; } catch { } }
+
+                if (fromT == null)
+                {
+                    // ── 시작점 — <b>계단선을 가로지르는 짧고 굵은 표시</b>. "여기"만 뜻한다.
+                    e.AppendToolTipText($"시작점 · 둘레 {tt:0.00}m · 표고 {at.Z:0.000}m");
+                    if (dc == null) return;
+                    var o = GradingGeometry.OutwardAt(ring, cum, tt, arrow * 0.5);
+                    var i2 = GradingGeometry.OutwardAt(ring, cum, tt, -arrow * 0.5);
+                    DrawBand(dc, new System.Collections.Generic.List<Point3> { i2, o }, half);
+                    return;
+                }
+
+                // ── 끝점 — <b>시작점부터 커서까지 계단선을 따라 굵은 빨간 띠</b> + 진행 방향 화살촉.
+                // ★[검토 0910 · 보통1] 시작점은 <b>날것</b>으로 넘어온다(그래야 나중에 "밖을 찍었다"를 말할 수 있다).
+                //   화면에 그릴 때는 커서와 <b>같은 자로</b> 가둔다 — 안 그러면 띠가 구간 밖에서 시작한다.
+                double a0 = fromT.Value;
+                if (!whole) a0 = GradingGeometry.ClampInto(f0, f1, a0, total, out _);
+                double fwd = tt >= a0 ? tt - a0 : total - a0 + tt;      // 앞으로 가는 길이
+                double bwd = total - fwd;                                // 뒤로 가는 길이
+                bool goFwd;
+                if (whole)
+                {
+                    // 한 바퀴면 두 점 사이 호가 <b>둘</b> — <b>짧은 쪽</b>이 기본이다.
+                    goFwd = fwd <= bwd;
+                    // ★적용하는 손(<c>GradingGeometry.PartInterval</c>)과 <b>같은 규칙</b>을 써야
+                    //   보이는 것과 잡히는 것이 갈라지지 않는다 —
+                    //   짧은 쪽이 최소 길이에 못 미치면 그쪽은 애초에 못 쓰므로 <b>반대쪽</b>으로 넘어간다.
+                    double ch = goFwd ? fwd : bwd, ot = goFwd ? bwd : fwd;
+                    if (ch < minPart && ot >= minPart) goFwd = !goFwd;
+                }
+                else
+                {
+                    // 조각 구간이면 <b>구간이 흐르는 방향</b>으로 잰다 — 답이 하나뿐인 그 방향.
+                    double Rel(double x) { double r2 = x - f0; return r2 >= 0 ? r2 : total + r2; }
+                    goFwd = Rel(a0) <= Rel(tt);
+                }
+                double s0 = goFwd ? a0 : tt, s1 = goFwd ? tt : a0;
+                double span = goFwd ? fwd : bwd;
+                e.AppendToolTipText($"구간 {span:0.00}m · 둘레 {tt:0.00}m · 표고 {at.Z:0.000}m");
+                if (dc == null || span < 1e-6) return;
+
+                var path = GradingGeometry.SubPath(ring, cum, s0, s1);
+                if (path.Count < 2) return;
+                DrawBand(dc, path, half);
+
+                // 화살촉은 <b>커서 쪽 끝</b>에 — 지금 어디로 늘고 있는지가 그것이다.
+                var tip = at;
+                var near = GradingGeometry.PointAtParam(ring, cum, tt + (goFwd ? -1.0 : 1.0));
+                DrawArrow(dc, tip, tip.X - near.X, tip.Y - near.Y, arrow);
+            }
+            // ★★[검토 0910 · 보통5] <b>전건 침묵이었다.</b> <c>PointMonitor</c>·<c>AppendToolTipText</c>·
+            //   <c>ViewportDraw</c>는 이 저장소에서 <b>여기서만</b> 쓴다 — 처음 쓰는 문이다.
+            //   그런데 예외가 나면 아무 자국 없이 <b>띠만 안 그려진다</b>. JACK이 "띠가 안 보여"라고 하면
+            //   원인을 알 길이 없다("기하 버그는 계측부터"를 못 지키는 자리).
+            //   ★프레임마다 적을 수는 없으니 <b>한 번만 적는 걸쇠</b>를 둔다.
+            catch (System.Exception gex)
+            {
+                if (!_glyphLogged) { _glyphLogged = true; Log("   ⚠ 커서 표식 실패 — " + gex.Message); }
+            }
+        }
+
+        // ★[JACK 0910] <b>고무줄 점선을 안 쓴다</b>(<c>UseBasePoint</c>를 안 건다) —
+        //   그 점선은 <b>찍은 자리</b>에서 나오는데 실제로 잡히는 것은 <b>계단선에 투영된 점</b>이라
+        //   둘이 서로 딴 데를 가리켜 헷갈린다(JACK 0910). 보여 줄 것은 위의 띠 하나면 된다.
+        var opt = new PromptPointOptions(msg) { AllowNone = false };
+        bool hooked = false;
+        try { ed.PointMonitor += OnMove; hooked = true; } catch { }
+        PromptPointResult r;
+        // ★어느 길로 빠져나가든 <b>듣기를 끊는다</b> — 안 그러면 커서가 다른 명령에서도 우리 것을 끌고 다닌다.
+        try { r = ed.GetPoint(opt); }
+        finally { if (hooked) { try { ed.PointMonitor -= OnMove; } catch { } } }
+
+        // ★★[검토 0910 · 높음2] <b>찍힌 그 점을 다시 잰다</b> — 커서 값을 쓰지 않는다.
+        //   스냅으로 잡거나 좌표를 쳐 넣으면 찍힌 자리와 커서가 있던 자리가 다르다.
+        //
+        // ★★★[검토 0910 · 보통1] <b>여기서 가두지 않는다 — 날것으로 돌려준다.</b>
+        //   <para>종전엔 여기서 <c>ClampInto</c>를 걸어 돌려줬다. 그러면 <c>PartInterval</c>이 받는 값은
+        //   <b>이미 구간 안</b>이라 가둘 것이 없고, <c>moved</c>가 <b>언제나 0</b>이 된다
+        //   (독립 계측 2만 건: <c>moved&gt;0</c> 0건). 그래서 구간 밖을 찍은 사람에게
+        //   <i>"구간 밖을 찍어 끝으로 붙였습니다"</i> 대신 <i>"두 점이 너무 가깝습니다"</i>가 떴다 —
+        //   <b>원인을 잘못 짚어 주는</b> 안내이고, §78이 값을 치른 바로 그 실수다.</para>
+        //   <para>★화면은 <b>그대로 가둔 자리</b>에 그린다(위 <c>OnMove</c>) — 표식이 구간 끝에 붙어
+        //   "더는 못 간다"가 눈에 보이는 것이 맞다. 가두는 셈은 순수 함수라
+        //   <c>PartInterval</c>이 다시 걸어도 <b>같은 자리</b>가 나온다. 보이는 것과 잡히는 것은 같고,
+        //   <b>왜 그리 됐는지만</b> 이제 말할 수 있게 된다.</para>
+        t = 0;
+        if (r.Status == PromptStatus.OK) t = GradingGeometry.ParamAt(ring, cum, r.Value.X, r.Value.Y);
+        return r;
     }
 
     /// <summary>취소 시 일반(무태그) 옹벽선 복원용 좌표 — 진입 때 레이어를 비우므로 종료 때 되돌린다.</summary>
@@ -85,6 +328,20 @@ internal static class ZoneEditCommon
         //   '경계 투영이 무너졌다'는 뜻이라, 이 둘을 나란히 봐야 원인이 갈린다.
         var lineLen = new System.Collections.Generic.Dictionary<(bool up, int gid, int bench), (double Len, int N)>();
         var wholeLoop = new System.Collections.Generic.HashSet<(bool up, int gid, int bench)>();
+        // ★★★[JACK 0910 <i>"그 구간을 선택한 후에 그 구간내에서 시점 종점을 별도로 클릭해서 그부분만 변환"</i>]
+        //   <b>고른 선이 덮는 구간 안의 더 작은 조각</b>. 비어 있으면 <c>lineArc</c>(구간 전체)를 쓴다.
+        //   ★<b>조각 구간</b>이면 두 점을 그 안으로 가두므로 답이 하나다.
+        //     <b>한 바퀴 고리</b>(닫힌 계단선)면 가두는 것이 아무 제약이 아니라 호가 <b>둘</b>이다 —
+        //     그때만 짧은 쪽을 보여 주고 <b>반대쪽(R)</b>으로 뒤집게 한다(검토 0910 치명2).
+        var partArc = new System.Collections.Generic.Dictionary<(bool up, int gid, int bench), (double T0, double T1)>();
+        // ★<c>ShowPart</c>가 잡아 쓰려면 <b>그 앞에</b> 있어야 한다 — 계획 경계를 읽은 뒤 채운다.
+        System.Collections.Generic.List<Point3>? boundaryRef = null;
+        PickMark? partMark = null;   // 부분 구간 미리보기(빨간 띠) — 도면에는 아무것도 안 남긴다
+        void DropPart()
+        {
+            try { partMark?.Dispose(); } catch { }
+            partMark = null;
+        }
         // ★★★[JACK 0824 "단마다 해당 단의 가상 계획폴리곤을 기억하고 그걸로 시작한다"]
         //   그 단의 링(닫힌 폴리곤) = 이 단 구간을 재는 **자**. 계획 폴리곤은 너무 작아
         //   바깥 단 조각이 코너 한 점으로 뭉개진다(0820 실측: 선 3m → 구간 0.000000m).
@@ -94,6 +351,28 @@ internal static class ZoneEditCommon
             System.Collections.Generic.List<Point3>>();
         // ★[JACK 0824] 클릭한 선의 한가운데 — '이 자리 지금 값이 뭐냐'를 되묻는 데 쓴다.
         var lineMid = new System.Collections.Generic.Dictionary<(bool up, int gid, int bench), Point3>();
+        // ★[검토 0910 · 높음3] <b>지정과 그림을 늘 같이 움직인다.</b>
+        //   종전엔 다른 선을 골랐다 돌아오면 프롬프트엔 〈부분 20m〉가 뜨는데 <b>띠는 없었다</b> —
+        //   화면과 적용될 값이 갈리는 자리다. 고를 때마다 그 선의 지정을 다시 그린다.
+        void ShowPart((bool up, int gid, int bench) k)
+        {
+            DropPart();
+            if (!partArc.TryGetValue(k, out var pa)) return;
+            try
+            {
+                var rr = lineRef.TryGetValue(k, out var rp3) ? rp3 : boundaryRef;
+                if (rr == null || rr.Count < 3) return;
+                var rc = GradingGeometry.CumLen2D(rr);
+                var path = GradingGeometry.SubPath(rr, rc, pa.T0, pa.T1);
+                // ★[검토 0910 · 보통3] 굵기는 <b>자의 둘레</b>로 뽑는다 — 조각 길이로 뽑으면
+                //   3m 조각에서 반폭 7.5mm가 되어 "두꺼운 빨간선"이 아니게 된다.
+                //   커서를 따라가던 띠와 <b>같은 식</b>이라 확정 전후로 굵기가 안 바뀐다.
+                if (path.Count >= 2)
+                    partMark = PickMark.PaintPath(doc, path, closed: false, BandHalf(rc[rc.Length - 1]));
+            }
+            catch { }
+        }
+
         (bool up, int gid, int bench)? pick = null;   // [1회 1개] 선택은 항상 최대 하나
         bool finishedByEnter = false;
         bool clearAll = false;
@@ -121,6 +400,7 @@ internal static class ZoneEditCommon
                     return;
                 }
                 boundary = region.Boundary;
+                boundaryRef = boundary;      // ★로컬 함수(ShowPart)가 쓸 사본 손잡이
                 cumB = GradingGeometry.CumLen2D(boundary);
                 // ★[검토 0824 M-4] 화면의 클릭 대상선은 **번들 제원**(지금 그려진 모양)으로 만들고,
                 //   재생성은 **정지옵션 제원**으로 돈다. 둘이 다르면 자로 박아 넣은 링이 재생성 결과에
@@ -155,6 +435,19 @@ internal static class ZoneEditCommon
                     System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? many,
                     System.Collections.Generic.List<Point3>? one)
                     => many ?? (one != null ? new() { one } : null);
+                // ★★★[검토 0910 · 치명] <b>"있다고 한 방향인데 아무것도 못 만들었나"</b> —
+                //   되돌리기를 걸지 말지는 <b>오직 이것</b>으로 정한다.
+                //   <para>첫 판은 옛 줄의 <b>방향 꼬리표</b>로 갈랐는데, 재 보니 <b>출하 경로에서 한 번도 안 걸린다</b> —
+                //   명령이 끝날 때 <c>RestoreAndCleanup</c>이 꼬리표 달린 줄을 <b>지우고</b> 맨 것으로 다시 그리고
+                //   (<c>GradingBuilder.DrawWallLines</c>는 XData를 안 붙인다), 이 레이어에 그리는 다른 두 자리
+                //   (<c>CreateGradingCommand</c>·<c>NoriCommand</c>)도 전부 맨 것이다.
+                //   그래서 <c>TryReadPick</c>이 늘 거짓 → 꼬리표는 늘 <c>null</c> → <b>"둘 다 비었을 때만"</b>이라는
+                //   고치기 전 조건으로 되돌아갔다.</para>
+                //   <para>★물어야 할 것은 "이 옛 줄이 어느 방향인가"가 아니라 <b>관문이 어디서 걸렸나</b>다.
+                //   ①번들이 <b>애초에 없다</b>고 한 방향은 잃을 것이 없다(전부 절토인 부지의 성토가 여기 걸린다 —
+                //   그래서 한 방향뿐인 부지에서 헛되이 되돌리지 않는다).
+                //   ②·③은 <b>있다고 해 놓고 못 만든</b> 것이라 그 방향 옹벽선을 잃는다.</para>
+                bool lost = false;
                 foreach (var (up, hasSlope, ringList, zones, target) in new[]
                 {
                     (true, region.CutHasSlope, RingsOf(region.CutFinalRings, region.CutFinalRing),
@@ -163,10 +456,33 @@ internal static class ZoneEditCommon
                      region.FillWallZones, fillEdges),
                 })
                 {
-                    if (!hasSlope || ringList == null) continue;
+                    // ★★★[JACK 0910 <i>"옹벽으로 바꾸면 사면변환 눌렀을 때 가이드선이 안 뜨네?"</i>]
+                    //   <b>이 관문이 완전히 침묵이었다.</b> 여기서 건너뛰면 그 방향은 클릭할 선이 <b>하나도</b>
+                    //   안 생기는데(아래 <c>DrawWallLines</c>가 레이어를 통째로 지우고 새것만 그린다),
+                    //   왜 없는지 로그에 아무 자국이 없었다 — "기하 버그는 계측부터"를 어긴 자리다.
+                    //   ★<b>지나가든 걸리든</b> 적는다. 걸린 것만 적으면 "정상일 때 무엇이었는지"를 못 견준다.
+                    Log($"   대상선 재료[{(up ? "절토" : "성토")}] — 사면있음={hasSlope}"
+                      + $" · 링 {(ringList == null ? "없음(null)" : ringList.Count + "개")}"
+                      + $" · 구간 {(zones == null ? 0 : zones.Count)}개");
+                    if (!hasSlope || ringList == null)
+                    {
+                        Log($"     → 건너뜀 — 이 방향은 클릭할 대상선이 <b>하나도</b> 안 생긴다"
+                          + $"({(ringList == null ? "데이라잇 링이 없다" : "사면이 없다")})");
+                        continue;
+                    }
                     double bs = BaseSlopeOf(region.Params, up), ms = region.Params.WallGateSlope;
                     var vs = GradingGeometry.Build(region.Boundary, ng, region.Params, up, zones);
-                    if (!vs.HasSlope) continue;
+                    if (!vs.HasSlope)
+                    {
+                        // ★관문 ② — 번들엔 있다는데 지금 구간으로 다시 지으니 사면이 없다.
+                        //   <b>이 방향 옹벽선을 잃는다</b>: JACK이 겪은 그 길이다
+                        //   (절토를 전부 옹벽으로 바꾸면 절토 쪽이 여기 걸린다).
+                        lost = true;
+                        Log($"     → 건너뜀 — 다시 지은 기하에 사면이 없다(링 {vs.Rings.Count}개)"
+                          + " · <b>이 방향 옹벽선을 잃는다</b> — 되돌리기를 건다");
+                        continue;
+                    }
+                    int madeBefore = target.Count;
                     // ★[JACK 0824] 단마다 **클릭 대상 선이 놓인 링**을 자로 삼는다.
                     //   GenerateEdgeLinesTagged와 같은 짝짓기(2k, 2k+1)·같은 고르기(절토=아랫선/성토=윗선)여야
                     //   클릭한 선과 자가 어긋나지 않는다.
@@ -191,12 +507,41 @@ internal static class ZoneEditCommon
                         foreach (var e in plain)
                             if (up != e.IsSlope) target.Add((e.IsSlope, e.Bench, e.Seg, e.Pts));
                     }
+                    // ★관문 ③ — 사면은 있다는데 클릭할 선이 <b>하나도</b> 안 나왔다. 이것도 잃은 것이다.
+                    if (target.Count == madeBefore)
+                    {
+                        lost = true;
+                        Log($"     → ⚠ 사면은 있는데 대상선이 <b>하나도</b> 안 나왔다(링 {vs.Rings.Count}개)"
+                          + " — 되돌리기를 건다");
+                    }
                 }
+                // ★★★[JACK 0910] <b>지우기 전에 지금 있는 것을 떠 둔다.</b>
+                //   <para>바로 아래 <c>DrawWallLines(빈 배열)</c>은 "DH-옹벽선" 레이어를 <b>조건 없이 통째로</b>
+                //   지운다(<c>GradingBuilder.EraseOnLayer</c>). 그리고 새로 만든 것만 다시 그린다 —
+                //   그래서 한 방향이 비면 <b>그 방향 옹벽선이 화면에서 사라지고 Esc로도 안 돌아왔다</b>.</para>
+                //   <para>★<b>못 그릴 것을 지우지 않는다</b> — 되돌릴 밑천을 먼저 잡아 둔다.</para>
+                var priorWall = ReadWallLines(db, tr);
                 GradingBuilder.DrawWallLines(db, tr, System.Array.Empty<System.Collections.Generic.List<Point3>>());
                 madeIds = GradingBuilder.DrawWallLinesTagged(db, tr, cutEdges, fillEdges, activePlan);
                 _restoreLines = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
                 foreach (var (_, _, _, pts) in cutEdges) _restoreLines.Add(pts);
                 foreach (var (_, _, _, pts) in fillEdges) _restoreLines.Add(pts);
+
+                // ★★★[검토 0910 · 치명] <b>한 방향이라도 잃었으면 <u>있던 그대로</u> 되돌린다.</b>
+                //   <para>종전 조건은 <c>_restoreLines.Count == 0</c> — <b>둘 다</b> 비었을 때만 걸렸다.
+                //   그런데 실제 길은 <b>한 방향만</b> 빈다: 절토를 전부 옹벽으로 바꾸면 절토 쪽에
+                //   사면이 없어 대상선이 안 나오는데, 성토는 남아 있으니 방어가 안 걸린다 →
+                //   위 <c>DrawWallLines(빈 배열)</c>이 레이어를 통째로 지운 뒤라
+                //   <b>절토 쪽 선은 Esc로도 안 돌아온다</b>(JACK 0910 <i>"가이드선이 안 뜨네?"</i>).</para>
+                //   <para>★<b>반쪽만 섞지 않는다.</b> <c>priorWall</c>은 지우기 직전 레이어 <b>전체</b> 사본이라
+                //   성공한 방향까지 들어 있다. 새로 만든 것과 섞으면 살아남은 방향이 <b>두 벌</b> 그려진다.
+                //   잃었으면 <b>명령 시작 전 그대로</b>가 맞다.</para>
+                if (lost && priorWall.Count > 0)
+                {
+                    _restoreLines = priorWall;
+                    Log($"   ⚠ 한 방향을 잃었다 — 지웠던 옹벽선 {priorWall.Count}줄을 있던 그대로 되돌린다"
+                      + $" (새로 만든 것: 절토 {cutEdges.Count} · 성토 {fillEdges.Count})");
+                }
 
                 double total = cumB[cumB.Length - 1];
                 foreach (var id in madeIds)
@@ -255,9 +600,10 @@ internal static class ZoneEditCommon
             }
             Log($"■ {cmdLabel} 시작 {System.DateTime.Now:HH:mm:ss} — 대상선 {madeIds.Count}개");
             // [JACK 0804] 멘트 간결화 — 안내는 한 줄로.
-            ed.WriteMessage($"\n[{cmdLabel}] 계단선을 클릭하고 Enter. 제원은 " +
-                            (wallMode ? "단높이(H)·소단길이(T)" : "단높이(H)·사면구배(R)·소단길이(T)") +
-                            " 키를 눌러 바꿉니다. 전체해제(C). (Esc=취소)");
+            // ★[JACK 0910] 차례가 셋으로 갈렸으므로 <b>그 차례를 그대로</b> 적는다.
+            ed.WriteMessage($"\n[{cmdLabel}] ① 계단선을 클릭 → ② 전체구간/구간지정 → ③ "
+                          + (wallMode ? "단높이·소단길이" : "단높이·사면구배·소단길이")
+                          + " 정하고 Enter. (전체해제=C · Esc=취소)");
 
             PickGuard.Enter(doc, "DH-옹벽선");
 
@@ -265,8 +611,100 @@ internal static class ZoneEditCommon
             //   종전엔 Enter 뒤에 제원을 <b>순서대로 물었다</b> — 무엇을 고르고 있는지 보이지 않는 상태에서
             //   숫자를 세 번 받아야 했다. 옵션으로 빼면 <b>현재 값이 프롬프트에 늘 보이고</b>
             //   바꿀 것만 바꾸면 된다(AutoCAD 명령들의 방식).
+            // ★[JACK 0910] <b>고른 것을 놓는다</b> — 색을 되돌리고 구간지정·빨간 띠까지 같이 걷는다.
+            //   차례가 셋으로 갈리면서 <b>뒤로 물러나는 자리</b>가 생겼다(2·3단계에서 Esc·다시선택).
+            void Deselect((bool up, int gid, int bench) k)
+            {
+                try
+                {
+                    using var trD = db.TransactionManager.StartTransaction();
+                    if (groups.TryGetValue(k, out var gD))
+                        foreach (var gid in gD) SetColorByLayer(trD, gid);
+                    trD.Commit();
+                }
+                catch { }
+                pick = null;
+                partArc.Remove(k);
+                DropPart();
+            }
+
+            // ★★★[JACK 0910] <b>구간지정</b> — 고른 구간 안에서 시점·종점을 찍는다.
+            //   <para>고른 선이 정해진 <b>뒤에</b> 부르는 것이라 함수로 뗐다(차례가 셋으로 갈렸다).
+            //   돌려주는 값: <c>true</c>=정했거나 전체로 두기로 했다 · <c>false</c>=취소(선을 다시 고른다).</para>
+            bool AskPart((bool up, int gid, int bench) keyP)
+            {
+                var ruler = lineRef.TryGetValue(keyP, out var rp2) ? rp2 : boundary;
+                if (ruler == null || ruler.Count < 3) { ed.WriteMessage("\n → 이 선의 자를 못 찾았습니다."); return false; }
+                var rcum = GradingGeometry.CumLen2D(ruler);
+                double tot = rcum[rcum.Length - 1];
+                var full = lineArc[keyP];
+                double fullSpan = GradingGeometry.SpanOf(full.T0, full.T1, tot);
+                bool wholeRing = GradingGeometry.WholeRing(full.T0, full.T1, tot);
+
+                // ★커서를 따라 <b>자리·표고·방향</b>이 보인다(<see cref="PickOnRing"/>) — Civil 3D 정지와 같은 방식.
+                var p1 = PickOnRing(ed, "\n시작점 선택: ", null,
+                                    ruler, rcum, full.T0, full.T1, wholeRing, out double ta);
+                if (p1.Status != PromptStatus.OK) { ed.WriteMessage("\n → 구간지정 취소."); return false; }
+                var p2 = PickOnRing(ed, "\n끝점 선택: ", ta,
+                                    ruler, rcum, full.T0, full.T1, wholeRing, out double tb);
+                if (p2.Status != PromptStatus.OK) { ed.WriteMessage("\n → 구간지정 취소."); return false; }
+
+                bool flip = false;
+                while (true)
+                {
+                    // ★★★[검토 0910] <b>판정은 Core가 한다</b>(<c>GradingGeometry.PartInterval</c>) —
+                    //   가두기 · 방향 · 너무 짧은지 · 구간 전체인지가 한 함수에 있다.
+                    //   여기 두면 오프라인 검사기가 못 닿아 <b>먹이는 값이 출하되는 값이 아닌</b> 검사가 된다(§78 ③·④).
+                    var got = GradingGeometry.PartInterval(full.T0, full.T1, ta, tb, tot,
+                                                           MinPartOf(), flip, out double moved, out string why,
+                                                           out var fail, out bool onlySide);
+                    if (got == null)
+                    {
+                        ed.WriteMessage("\n → " + why);
+                        if (fail == GradingGeometry.PartFail.WholeInterval)
+                        { partArc.Remove(keyP); DropPart(); return true; }
+                        return false;   // 너무 짧다 — 선을 다시 고르거나 다시 찍게 한다
+                    }
+                    var (pt0, pt1, span2, wasWhole) = got.Value;
+                    partArc[keyP] = (pt0, pt1);
+                    ShowPart(keyP);
+                    bool banded = partMark != null && partMark.HasMarks;
+                    ed.WriteMessage($"\n → 구간지정 {span2:0.#}m (전체 {fullSpan:0.#}m 중)"
+                                  + (moved > 0.01 ? $" · 구간 밖을 찍어 끝으로 붙였습니다(최대 {moved:0.#}m)" : "")
+                                  + (string.IsNullOrEmpty(why) ? "" : " · " + why)
+                                  + (banded ? " — 빨간 띠가 바뀔 자리입니다." : ""));
+
+                    // ★★[검토 0910 · 치명2] <b>한 바퀴 고리는 방향이 안 정해진다</b> — 그때만 뒤집을 기회를 준다.
+                    if (!wasWhole) return true;
+                    // ★★[검토 0910 · 보통2] <b>먹지도 않을 R을 걸지 않는다.</b>
+                    //   한쪽이 최소 길이에 못 미치면 뒤집어도 <b>같은 답</b>이 나오는데,
+                    //   종전엔 R을 걸어 놓고 눌러도 아무 일이 없었다 — 게다가 그때는
+                    //   <c>tookOther</c>가 거짓이라 <b>안내조차 안 나갔다</b>.
+                    //   쓸 수 있는 답이 하나뿐이면 R을 안 걸고, 위 <c>why</c>가 그 사실을 말한다.
+                    if (onlySide) return true;
+                    var pk2 = new PromptKeywordOptions($"\n이 조각으로 할까요? 〈{span2:0.#}m〉  Enter=예");
+                    pk2.Keywords.Add("R", "R", "반대쪽(R)");
+                    pk2.AllowNone = true;
+                    var rr2 = ed.GetKeywords(pk2);
+                    if (rr2.Status == PromptStatus.Cancel)
+                    {
+                        partArc.Remove(keyP); DropPart();
+                        ed.WriteMessage("\n → 구간지정 취소.");
+                        return false;
+                    }
+                    // ★★★[검토 0910 · 치명1] <c>GetKeywords</c>는 키워드를 <c>OK</c>로 돌려준다 —
+                    //   <c>Keyword</c>만 보면 <b>R이 통째로 무시</b>된다(이 저장소의 다른 세 곳이 이미 둘 다 받는다).
+                    if ((rr2.Status == PromptStatus.Keyword || rr2.Status == PromptStatus.OK)
+                        && (rr2.StringResult ?? "").Trim().ToUpperInvariant() == "R")
+                    { flip = !flip; continue; }
+                    return true;
+                }
+            }
+
             var d0 = DefaultsFor(true, 0);
-            double optH = d0.H, optW = d0.W, optN = d0.N;
+            double optH = d0.H, optW = d0.W;
+            // ★[JACK 0910] 사면 변환이면 수직 기본값을 쓰지 않는다 — 아래 SlopeDefaultFor 참고.
+            double optN = SlopeDefaultFor(wallMode, d0.N);
             bool setH = false, setN = false, setW = false;   // 사용자가 손댄 항목만 지킨다
 
             while (true)
@@ -278,50 +716,48 @@ internal static class ZoneEditCommon
                 //   → 상태는 〈 〉로 감싼다. 대괄호는 AutoCAD가 키워드를 붙일 자리로 비워 둔다.
                 string cur = pick == null ? ""
                     : $" 〈선택 {(pick.Value.up ? "절토" : "성토")} {pick.Value.bench + 1}단〉";
+                // ★[JACK 0910] 부분 지정이 걸려 있으면 <b>그 사실과 길이</b>를 프롬프트에 늘 보여 준다 —
+                //   안 보이면 "전체를 바꾸는 줄 알았는데 일부만 바뀌었다"가 된다.
+                string part = "";
+                if (pick != null && partArc.TryGetValue(pick.Value, out var pv))
+                {
+                    var rr = lineRef.TryGetValue(pick.Value, out var rp) ? rp : boundary;
+                    var rc = GradingGeometry.CumLen2D(rr);
+                    // ★[검토 0910 · 낮음] 길이는 <b>한 함수</b>로 잰다 — 인라인 식이 남으면 규약이 갈린다.
+                    double sp = GradingGeometry.SpanOf(pv.T0, pv.T1, rc[rc.Length - 1]);
+                    part = $" 〈부분 {sp:0.#}m〉";
+                }
                 string spec = wallMode
                     ? $"〈단높이 {optH:0.##}m · 소단 {optW:0.##}m · 수직〉"
                     : $"〈단높이 {optH:0.##}m · 구배 1:{optN:0.##} · 소단 {optW:0.##}m〉";
-                // ★★[JACK 0820] 제원은 **프롬프트에 바로 걸린 키워드**로 바꾼다(AutoCAD 명령들의 방식) —
-                //   옹벽: 단높이(H) · 소단길이(T)   /   사면: 단높이(H) · 사면구배(R) · 소단길이(T)
-                //   globalName을 'H'·'R'·'T'로 두어 그 글자만 쳐도 먹는다(StringResult가 globalName을 준다).
-                var peo = new PromptEntityOptions($"\n계단선 클릭{cur} {spec} (Enter=적용)");
-                peo.AllowNone = true;
+                // ★★★[JACK 0910 <i>"먼저 … 선택옵션이 없는 그냥 일단 구간 선택하게 뜨고,
+                //   선택하면 … 명령창옵션에서 전체구간·구간지정이 뜨고, 그후에 … 단높이나 사면구배같이
+                //   옵션들 뜨고나서 다시 누르면 바뀌는거"</i>] <b>차례를 셋으로 가른다.</b>
+                //
+                //   <para><b>왜.</b> 종전엔 제원(H·R·T)·구간지정(P)·전체해제(C)가 <b>한 프롬프트에 다</b> 걸려 있었다.
+                //   대괄호 안에 다섯이 늘어서니 <b>구간지정이 눈에 안 들어왔다</b>
+                //   (JACK 0910: <i>"기능이 어디에 있는거야? 그냥 기존하고 똑같은데?"</i>).</para>
+                //
+                //   <para>이제 <b>①선만 고르고 → ②전체/구간을 정하고 → ③제원을 정한 뒤 Enter</b>다.
+                //   한 화면에 물어보는 것이 하나씩이라 <b>다음에 뭘 해야 하는지가 프롬프트에 그대로</b> 있다.</para>
+                //
+                //   <para>★<b>제원 키워드는 이 단계에 없다</b> — 선을 고르기 전에 값을 바꾸는 것은
+                //   무엇에 걸리는지 모르는 채로 값을 만지는 일이었다.</para>
+                var peo = new PromptEntityOptions($"\n계단선을 클릭하세요{cur}{part} (Esc=취소)");
+                peo.AllowNone = false;
                 //   ※★[0820 실측] AutoCAD는 입력을 <b>localName의 앞글자</b>와 맞춘다.
                 //     "단높이(H)"처럼 H가 <b>맨 뒤</b>면 앞글자가 아니라 'H'를 쳐도 "유효하지 않은 선택"이 된다.
                 //     → <b>매칭용 이름(localName)은 글자 하나</b>로 두고, 한글은 <b>표시용(displayName)</b>에만 쓴다.
                 //     세 인자가 각각 다른 일을 한다: global=코드가 받는 값 · local=사용자가 치는 값 · display=화면.
-                peo.Keywords.Add("H", "H", "단높이(H)");
-                if (!wallMode) peo.Keywords.Add("R", "R", "사면구배(R)");
-                peo.Keywords.Add("T", "T", "소단길이(T)");
-                peo.Keywords.Add("C", "C", "전체해제(C)");
+                peo.Keywords.Add("C", "C", "전체해제(C)");   // ★선을 안 골라도 쓰는 것이라 이 단계에 남긴다
                 var per = ed.GetEntity(peo);
-                if (per.Status == PromptStatus.None) { finishedByEnter = true; break; }
                 if (per.Status == PromptStatus.Cancel) break;
-                if (per.Status == PromptStatus.Keyword)
+                // ★[검토 0910 · 치명1] 키워드는 <c>Keyword</c>로도 <c>OK</c>로도 온다 — 둘 다 받는다.
+                if (per.Status == PromptStatus.Keyword
+                    || (per.Status == PromptStatus.OK && per.ObjectId.IsNull))
                 {
-                    // 값 하나만 바꾸고 곧바로 선택 프롬프트로 돌아온다 — 취소해도 현재 값은 그대로 둔다.
                     // ★[JACK 0820 '대문자로 표기되었지만 대문자나 소문자 다 먹어야 돼'] 대소문자를 안 가린다.
-                    //   AutoCAD 자체는 원래 안 가리지만, 비교를 대문자로 못 박아 두면 그 보장이 여기서 끊긴다.
-                    string kw = (per.StringResult ?? "").Trim().ToUpperInvariant();
-                    if (kw == "H")
-                    {
-                        var h2 = AskPositive(ed, "단높이 (m)", optH, 0.2, 15.0);
-                        if (h2 != null) { optH = h2.Value; setH = true; ed.WriteMessage($"\n → 단높이 {optH:0.##}m"); }
-                        continue;
-                    }
-                    if (kw == "R")
-                    {
-                        var n2 = AskPositive(ed, "사면 구배 1:n", optN, GradingSettings.MinSlope, 30.0);
-                        if (n2 != null) { optN = n2.Value; setN = true; ed.WriteMessage($"\n → 사면 구배 1:{optN:0.##}"); }
-                        continue;
-                    }
-                    if (kw == "T")
-                    {
-                        var w2 = AskPositive(ed, "소단 길이 (m)", optW, 0.0, 60.0);
-                        if (w2 != null) { optW = w2.Value; setW = true; ed.WriteMessage($"\n → 소단 길이 {optW:0.##}m"); }
-                        continue;
-                    }
-                    if (kw != "C") continue;                 // 모르는 키워드는 무시(프롬프트 유지)
+                    if ((per.StringResult ?? "").Trim().ToUpperInvariant() != "C") continue;
                     clearAll = true; finishedByEnter = true;
                     ed.WriteMessage("\n → 전체 해제 — 순수 사면으로 재생성합니다.");
                     break;
@@ -353,25 +789,96 @@ internal static class ZoneEditCommon
                 }
                 // [1회 1개 — JACK] 연달아 누르면 이전 선택은 해제하고 마지막 것만 남긴다.
                 if (pick != null && !pick.Value.Equals(key)) ColorGroup(pick.Value, false);
-                if (pick != null && pick.Value.Equals(key))
+                pick = key; ColorGroup(key, true);
+                ShowPart(key);   // ★그 선에 걸린 구간지정이 있으면 <b>다시 그린다</b>(없으면 걷는다)
+                // ★[JACK 0820] 안 손댄 항목은 **그 방향·그 단의 현재 값**으로 갱신한다 —
+                //   절토·성토는 제원이 따로라(v16.6), 절토 값을 보여 주다 성토 선을 고르면 엉뚱한 값이 기본이 된다.
+                var dk = DefaultsFor(pk.up, pk.bench);
+                if (!setH) optH = dk.H;
+                if (!setN) optN = SlopeDefaultFor(wallMode, dk.N);
+                if (!setW) optW = dk.W;
+                double pickSpan = GradingGeometry.SpanOf(lineArc[key].T0, lineArc[key].T1,
+                    GradingGeometry.CumLen2D(lineRef.TryGetValue(key, out var rSel) ? rSel : boundary)[^1]);
+                ed.WriteMessage($"\n → {(pk.up ? "절토" : "성토")} {pk.bench + 1}단 선택 · 이 구간 {pickSpan:0.#}m"
+                              + (wholeLoop.Contains(key) ? " (한 바퀴 고리)" : ""));
+                // ★★[JACK 0910] 사면 변환인데 <b>지금 그 자리가 수직</b>이면, 기본값을 사면으로 올렸다는 것을
+                //   그 자리에서 말한다 — 안 말하면 "왜 1.5가 됐지"가 되고, 안 올리면 "왜 안 바뀌지"가 된다.
+                if (!wallMode && !setN && dk.N <= GradingSettings.WallGateSlope)
+                    ed.WriteMessage($"\n   이 자리는 지금 수직(옹벽)입니다 — 사면 기본값을 1:{optN:0.##}로 둡니다"
+                                  + "(사면구배 R로 바꿀 수 있습니다).");
+                tr.Commit();
+
+                // ══ ★★★[JACK 0910] <b>2단계 — 전체구간이냐 구간지정이냐</b> ══════════════
+                //   <para>선을 고른 <b>바로 그 자리</b>에서 묻는다. 종전엔 제원과 한데 섞여 있어
+                //   <i>"기능이 어디 있는지"</i> 보이지 않았다.</para>
+                var scope = new PromptKeywordOptions(
+                    $"\n무엇을 바꿀까요? 〈{(pk.up ? "절토" : "성토")} {pk.bench + 1}단 · {pickSpan:0.#}m〉"
+                  + " [전체구간(A)/구간지정(P)] <전체구간(A)>");
+                scope.Keywords.Add("A", "A", "전체구간(A)");
+                scope.Keywords.Add("P", "P", "구간지정(P)");
+                scope.Keywords.Default = "A";
+                scope.AllowNone = true;
+                var scr = ed.GetKeywords(scope);
+                if (scr.Status == PromptStatus.Cancel) { Deselect(key); continue; }
+                string scopeKw = (scr.Status == PromptStatus.Keyword || scr.Status == PromptStatus.OK)
+                               ? (scr.StringResult ?? "A").Trim().ToUpperInvariant() : "A";
+                if (scopeKw == "P")
                 {
-                    pick = null; ColorGroup(key, false);
-                    ed.WriteMessage("\n → 선택 해제.");
+                    if (!AskPart(key)) { Deselect(key); continue; }   // 취소 — 선부터 다시 고른다
                 }
                 else
                 {
-                    pick = key; ColorGroup(key, true);
-                    // ★[JACK 0820] 안 손댄 항목은 **그 방향·그 단의 현재 값**으로 갱신한다 —
-                    //   절토·성토는 제원이 따로라(v16.6), 절토 값을 보여 주다 성토 선을 고르면 엉뚱한 값이 기본이 된다.
-                    var dk = DefaultsFor(pk.up, pk.bench);
-                    if (!setH) optH = dk.H;
-                    if (!setN) optN = dk.N;
-                    if (!setW) optW = dk.W;
-                    ed.WriteMessage($"\n → {(pk.up ? "절토" : "성토")} {pk.bench + 1}단 선택");
-                    if (wholeLoop.Contains(key))
-                        ed.WriteMessage(" (한 바퀴 고리 — 둘레 전체 적용)");
+                    // ★전체구간을 골랐으면 <b>걸려 있던 구간지정을 푼다</b> — 안 풀면 화면과 결과가 갈린다.
+                    partArc.Remove(key); DropPart();
+                    ed.WriteMessage($"\n → 전체구간({pickSpan:0.#}m)을 바꿉니다.");
                 }
-                tr.Commit();
+
+                // ══ ★★★[JACK 0910] <b>3단계 — 제원을 정하고 Enter로 적용</b> ═══════════════
+                bool goBack = false;
+                while (true)
+                {
+                    // ★[JACK 0910] <b>1:0.01이 "수직"이라는 것을 글자로 적는다</b> — 숫자만으로는
+                    //   그것이 옹벽이라는 것을 모른다(그래서 사면 변환이 옹벽을 만드는 일이 생겼다).
+                    string spec3 = wallMode
+                        ? $"〈단높이 {optH:0.##}m · 소단 {optW:0.##}m · 수직〉"
+                        : $"〈단높이 {optH:0.##}m · 구배 1:{optN:0.##}"
+                          + (optN <= GradingSettings.WallGateSlope ? "(수직=옹벽)" : "")
+                          + $" · 소단 {optW:0.##}m〉";
+                    string part3 = partArc.TryGetValue(key, out var pv3)
+                        ? $" 〈구간 {GradingGeometry.SpanOf(pv3.T0, pv3.T1, GradingGeometry.CumLen2D(lineRef.TryGetValue(key, out var r3) ? r3 : boundary)[^1]):0.#}m〉"
+                        : $" 〈전체 {pickSpan:0.#}m〉";
+                    var spo = new PromptKeywordOptions($"\n제원 {spec3}{part3} (Enter=적용)");
+                    spo.Keywords.Add("H", "H", "단높이(H)");
+                    if (!wallMode) spo.Keywords.Add("R", "R", "사면구배(R)");
+                    spo.Keywords.Add("T", "T", "소단길이(T)");
+                    spo.Keywords.Add("S", "S", "다시선택(S)");
+                    spo.AllowNone = true;
+                    var spr = ed.GetKeywords(spo);
+                    if (spr.Status == PromptStatus.None) { finishedByEnter = true; break; }
+                    if (spr.Status == PromptStatus.Cancel) { goBack = true; break; }
+                    string kw = (spr.StringResult ?? "").Trim().ToUpperInvariant();
+                    if (kw == "H")
+                    {
+                        var h2 = AskPositive(ed, "단높이 (m)", optH, 0.2, 15.0);
+                        if (h2 != null) { optH = h2.Value; setH = true; ed.WriteMessage($"\n → 단높이 {optH:0.##}m"); }
+                        continue;
+                    }
+                    if (kw == "R")
+                    {
+                        var n2 = AskPositive(ed, "사면 구배 1:n", optN, GradingSettings.MinSlope, 30.0);
+                        if (n2 != null) { optN = n2.Value; setN = true; ed.WriteMessage($"\n → 사면 구배 1:{optN:0.##}"); }
+                        continue;
+                    }
+                    if (kw == "T")
+                    {
+                        var w2 = AskPositive(ed, "소단 길이 (m)", optW, 0.0, 60.0);
+                        if (w2 != null) { optW = w2.Value; setW = true; ed.WriteMessage($"\n → 소단 길이 {optW:0.##}m"); }
+                        continue;
+                    }
+                    if (kw == "S") { goBack = true; break; }
+                }
+                if (goBack) { Deselect(key); continue; }   // 선부터 다시
+                break;                                      // Enter — 아래 적용으로
             }
 
             // ── 제원 = 옵션(O)에서 정해 둔 값. Enter는 적용만 한다(JACK 0820). ──
@@ -384,6 +891,7 @@ internal static class ZoneEditCommon
                 askH = optH;
             }
 
+            DropPart();   // ★[JACK 0910] 빨간 띠는 명령이 끝나면 반드시 걷는다(도면엔 아무것도 안 남는다)
             RestoreAndCleanup(db, madeIds);
             Log($"■ {cmdLabel} 종료({(finishedByEnter ? "Enter" : "Esc")}) — 선택 {(pick == null ? "없음" : "1건")}");
 
@@ -413,7 +921,13 @@ internal static class ZoneEditCommon
                         foreach (var z in src)
                             target.Add(new SlopeZone { T0 = z.T0, T1 = z.T1, Rules = new(z.Rules), Ref = z.Ref });
                     if (pick!.Value.up != up) continue;
-                    var a = lineArc[pick.Value];
+                    // ★★★[JACK 0910] <b>부분 지정이 있으면 그것</b>, 없으면 구간 전체.
+                    //   자료 구조는 처음부터 <c>[T0,T1]</c>이었다 — 새로 만든 것은 <b>입력 방식</b>뿐이다.
+                    bool isPart = partArc.TryGetValue(pick.Value, out var pArc);
+                    var a = isPart ? pArc : lineArc[pick.Value];
+                    // ★[JACK 0910] 부분인지 전체인지 <b>로그에 남긴다</b> — 나중에 "왜 여기만 바뀌었지"를
+                    //   되짚을 자리가 이 한 줄이다(이 저장소가 "단계마다 로그"로 정한 그 규칙).
+                    Log($"■ 적용 구간 = {(isPart ? "부분 지정" : "선이 덮는 구간 전체")} [{a.T0:0.##} ~ {a.T1:0.##}]");
                     // ★[JACK 0824] 이 구간이 어느 자로 잰 값인지 함께 들려 보낸다 — 안 붙이면 재생성이
                     //   계획 폴리곤으로 되읽어 엉뚱한 자리가 된다.
                     var nz = new SlopeZone
@@ -576,6 +1090,12 @@ internal static class ZoneEditCommon
         }
         finally
         {
+            // ★★[검토 0910 · 높음1] <b>어느 길로 빠져나가든 띠를 걷는다.</b>
+            //   종전엔 정상 경로에만 있었다 — 예외로 빠지면 <c>partMark</c>가 지역 변수째 버려지는데
+            //   <c>TransientManager</c>는 그 물건을 계속 쥔다. 관리 쪽 참조가 사라지면
+            //   <b>소멸자가 네이티브를 지우는</b> 바로 그 죽은 포인터 경로다
+            //   (<see cref="PickMark"/>가 <i>"막겠다던 그 죽은 포인터를 내가 만들었다"</i>고 적어 둔 것).
+            DropPart();
             PickGuard.Exit();
         }
     }
@@ -583,6 +1103,23 @@ internal static class ZoneEditCommon
     /// <summary>그 방향의 전역(원래) 구배 — 최소구배 하한 적용.</summary>
     private static double BaseSlopeOf(GradingParams p, bool up)
         => System.Math.Max(up ? p.CutSlope : p.FillSlope, p.MinSlope);
+
+    /// <summary>★★★[JACK 0910 <i>"옹벽으로 바꾸고나서 사면변환을 다시 수행했더니 안바꿔"</i>]
+    /// <b>사면 변환의 기본 구배는 수직이면 안 된다.</b>
+    ///
+    /// <para><b>무엇이 있었나.</b> 기본값은 <see cref="BaseSlopeOf"/> — <b>전역 정지 구배</b>다.
+    /// 그런데 JACK 도면은 전역이 <c>1:0.01</c>(수직)이라, [사면 변환]을 눌러도 기본값이 <b>수직</b>이었다.
+    /// 그대로 Enter를 치면 <b>옹벽을 옹벽으로</b> 바꾼다 — 로그가 그 자리에서
+    /// <i>"값이 지금과 같다"</i>고 적어 두었지만, 사용자는 "사면 변환이니 사면이 되겠지" 하고 누른다.</para>
+    ///
+    /// <para>→ 사면 변환일 때 기본값이 <b>수직 문턱 이하</b>면 <see cref="SlopeFallback"/>으로 올린다.
+    /// 옹벽 변환은 그대로 둔다 — 그쪽은 수직이 <b>맞는 값</b>이다.</para></summary>
+    private static double SlopeDefaultFor(bool wallMode, double n)
+        => wallMode || n > GradingSettings.WallGateSlope ? n : SlopeFallback;
+
+    /// <summary>전역이 수직일 때 사면 변환이 쓸 기본 구배 — 이 저장소의 처음 기본값과 같은 1:1.5.
+    /// <para>★임의로 고른 수가 아니라 <c>GradingSettings.CutSlope</c>·<c>FillSlope</c>의 초기값이다.</para></summary>
+    private const double SlopeFallback = 1.5;
 
     /// <summary>숫자 하나 입력 — 기본값은 현재 값(프롬프트의 &lt;&gt;는 AutoCAD가 자동 표시).
     /// 범위 밖이면 다시 묻는다. Esc/취소면 null.</summary>
@@ -607,6 +1144,41 @@ internal static class ZoneEditCommon
             }
             return r.Value;
         }
+    }
+
+    /// <summary>★[JACK 0910] 지금 도면에 있는 <b>옹벽선</b>을 읽어 둔다 — 지우기 전에 떠 두는 밑천.</summary>
+    /// <summary>이 레이어에 지금 있는 줄을 <b>있는 그대로</b> 떠 온다 — 지우기 직전의 사본.
+    /// <para>★[검토 0910] 한때 <b>방향 꼬리표</b>도 같이 읽게 했는데 <b>쓸모가 없었다</b> —
+    /// 이 레이어에 줄을 그리는 세 자리가 전부 <c>DrawWallLines</c>(맨 것)라 XData가 없다.
+    /// 꼬리표는 <c>DrawWallLinesTagged</c>가 이 명령 <b>안에서</b> 그리는 동안만 붙어 있고,
+    /// 끝날 때 <c>RestoreAndCleanup</c>이 지우고 맨 것으로 다시 그린다.
+    /// → 방향은 꼬리표가 아니라 <b>관문이 어디서 걸렸나</b>로 안다(<c>lost</c>).</para></summary>
+    private static System.Collections.Generic.List<System.Collections.Generic.List<Point3>> ReadWallLines(
+        Database db, Transaction tr)
+    {
+        var outp = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
+        try
+        {
+            var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+            var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
+            foreach (ObjectId id in ms)
+            {
+                try
+                {
+                    if (tr.GetObject(id, OpenMode.ForRead) is not Entity e) continue;
+                    if (!string.Equals(e.Layer, "DH-옹벽선", System.StringComparison.OrdinalIgnoreCase)) continue;
+                    if (e is not Polyline3d p3) continue;
+                    var pts = new System.Collections.Generic.List<Point3>();
+                    foreach (ObjectId vId in p3)
+                        if (tr.GetObject(vId, OpenMode.ForRead) is PolylineVertex3d pv)
+                            pts.Add(new Point3(pv.Position.X, pv.Position.Y, pv.Position.Z));
+                    if (pts.Count >= 2) outp.Add(pts);
+                }
+                catch { }
+            }
+        }
+        catch { }
+        return outp;
     }
 
     private static void RestoreAndCleanup(Database db, System.Collections.Generic.List<ObjectId> madeIds)
