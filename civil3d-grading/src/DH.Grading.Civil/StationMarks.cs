@@ -819,21 +819,68 @@ public static class StationMarks
         {
             var e = exs[i];
             if (e == null) continue;
-            bool vertical = e.Slope <= GradingSettings.WallGateSlope + 1e-9;
             var bottom = (e.Bottom != null && e.Bottom.Count >= 3) ? Closed(e.Bottom) : null;
             var top = (e.FinalRing != null && e.FinalRing.Count >= 3) ? Closed(e.FinalRing) : null;
-            if (vertical)
+            double realN = System.Math.Max(e.Slope, e.MinSlope);
+
+            // ★★★[JACK 0909 확정 "(가) 제대로 한다" · 계획 §5.3] <b>구간별로 가른다.</b>
+            //
+            //   <b>종전</b>: 구조물 <b>전체</b>의 구배 하나로 가시설이냐 열린굴착이냐를 정했다 —
+            //   <i>"둘레 중 남쪽 절반만 가시설"</i>을 표현할 수가 없었다.
+            //   크기: 수직/사면 지정 하나가 <b>토공 4,900㎥</b>를 움직인 실측이 있다.
+            //
+            //   <b>지금</b>: 기록에 가시설 구간(<c>WallZones</c>, v4)이 있으면 <b>그 구간 안쪽만</b>
+            //   가시설로 세우고 나머지는 열린굴착으로 둔다.
+            //   ★구간이 없으면(옛 기록·아직 안 지정) <b>옛 규칙 그대로</b> — 전체 구배로 가른다.
+            //     그래야 지금까지 만든 도면이 한 톨도 안 바뀐다.
+            var zones = e.WallZones;
+            bool wholeVertical = e.Slope <= GradingSettings.WallGateSlope + 1e-9;
+
+            if (zones == null || zones.Count == 0)
             {
-                if (top != null) pairs.Add(((i, 0), true, top, System.Math.Max(e.Slope, e.MinSlope)));
-                if (bottom != null) pairs.Add(((i, 0), false, bottom, System.Math.Max(e.Slope, e.MinSlope)));
-                // ★[JACK 0825] 세션 전역이 아니라 <b>그 기록의 하한</b>을 쓴다 — 옛 터파기를 열어도 두께가 안 변한다.
-                nVert++;
+                if (wholeVertical)
+                {
+                    if (top != null) pairs.Add(((i, 0), true, top, realN));
+                    if (bottom != null) pairs.Add(((i, 0), false, bottom, realN));
+                    // ★[JACK 0825] 세션 전역이 아니라 <b>그 기록의 하한</b>을 쓴다.
+                    nVert++;
+                }
+                else
+                {
+                    if (top != null) flat.Add(top);
+                    if (bottom != null) flat.Add(bottom);
+                    nOpen++;
+                }
             }
             else
             {
-                if (top != null) flat.Add(top);
-                if (bottom != null) flat.Add(bottom);
-                nOpen++;
+                // 구간 안/밖으로 링을 <b>토막 내어</b> 각각 다른 쪽으로 보낸다.
+                //   ★자를 때 쓰는 <b>자</b>는 구간을 지정할 때 쓴 것과 같아야 한다 —
+                //     <see cref="Core.SlopeZone.Ref"/>가 있으면 그것, 없으면 바닥 경계다.
+                // ★★★[검토 0909 · 치명2] <b>짝짓기 키는 "몇 번째 토막"이 아니라 "몇 번째 구간"이다.</b>
+                //   종전엔 두 링이 번호 하나를 나눠 써서 상단 조각과 바닥 조각이 <b>다른 키</b>를 받았고,
+                //   <c>FromWallPairs</c>가 키로 조를 짜므로 <b>모든 조가 한쪽뿐</b>이 됐다.
+                //   결과: 막대 높이 0 · 측점 둘 · 횡단 (전)(후) 소멸 — 셋 다 한 원인이었다.
+                //   ★한 구간이 링에서 여러 토막으로 갈려도 괜찮다 — 짝짓기가 측점 거리로 다시 맞춘다.
+                var cum = Core.GradingGeometry.CumLen2D(e.Bottom);
+                int nSeg = 0;
+                foreach (var ring in new[] { top, bottom })
+                {
+                    if (ring == null) continue;
+                    bool isCrest = ReferenceEquals(ring, top);
+                    var inZone = new List<(int Zi, List<Point3d> Pts)>();
+                    var outZone = new List<List<Point3d>>();
+                    SplitByZones(ring, e.Bottom, cum, zones, realN, inZone, outZone);
+                    foreach (var (zi, seg) in inZone) { pairs.Add(((i, zi), isCrest, seg, realN)); nSeg++; }
+                    foreach (var seg in outZone) flat.Add(seg);
+                }
+                // ★[2차 검토 0909 · 보통] <b>계수기가 무엇을 세는지 정확히 적는다.</b>
+                //   종전 "가시설 1"은 둘레 95%가 열린굴착인 구조물도 똑같이 1로 셌고,
+                //   토막 수는 상단·바닥을 <b>둘 다</b> 세어 실제 벽 줄기의 두 배였다 —
+                //   나중에 이 숫자로 판단하면 틀린다("짐작을 사실처럼 적지 말 것").
+                if (nSeg > 0) nVert++; else nOpen++;
+                log?.AppendLine($"   구조물 {i + 1} — 가시설 구간 {zones.Count}개 지정 · 잘린 토막 {nSeg}개"
+                              + $"(상단+바닥 합이라 벽 줄기는 약 {nSeg / 2}개) · 나머지 둘레는 열린굴착");
             }
         }
 
@@ -976,6 +1023,34 @@ public static class StationMarks
                             (dup > 0 ? $" · 합쳐서 {dup}개 줄었다" : "") + note);
         }
         return moved;
+    }
+
+    /// <summary>★★★[7단계] 링 하나를 <b>가시설 구간 안/밖으로 토막 낸다</b> —
+    /// 셈은 <see cref="Core.WallSplit"/>에 있고 여기서는 <b>좌표만 옮긴다</b>.
+    ///
+    /// <para>★<b>왜 Core로 내렸나.</b> 이 셈이 여기 있는 동안엔 오프라인 검사기가 한 줄도 못 쟀다 —
+    /// 그래서 <b>짝짓기 키 결함</b>을 868개 중 <b>0개</b>가 못 봤다. 재려면 내려가야 했다.</para></summary>
+    private static void SplitByZones(List<Point3d> ring, IReadOnlyList<Core.Point3> refB, double[] refCum,
+                                     IReadOnlyList<Core.SlopeZone> zones, double baseSlope,
+                                     List<(int Zi, List<Point3d> Pts)> inZone, List<List<Point3d>> outZone)
+    {
+        if (ring == null || ring.Count < 2) return;
+        var src = new List<Core.Point3>(ring.Count);
+        foreach (var p in ring) src.Add(new Core.Point3(p.X, p.Y, p.Z));
+
+        // ★간격은 <b>형상이 쓰는 것과 같게</b> — 그래야 종단이 형상과 같은 자로 잘린다.
+        //   (<c>GradingGeometry.Build</c>의 <c>dens</c>와 같은 식이다. 상한 1m는 가시설 자르기용으로
+        //    따로 둔다 — 사용자가 정점간격을 키워도 여기서는 성기어지면 안 된다.)
+        double dens = System.Math.Max(0.3, System.Math.Min(GradingSettings.VertexSpacing, 1.0));
+        var pieces = Core.WallSplit.Split(src, refB, refCum, zones, baseSlope,
+                                          GradingSettings.WallGateSlope, dens);
+        foreach (var g in pieces)
+        {
+            var pts = new List<Point3d>(g.Pts.Count);
+            foreach (var q in g.Pts) pts.Add(new Point3d(q.X, q.Y, q.Z));
+            if (g.Wall) inZone.Add((g.Zi, pts));
+            else outZone.Add(pts);
+        }
     }
 
     /// <summary>★[JACK 0825] 종단에 세울 <b>수직 막대</b>를 전부 모은다 — 옹벽 + 터파기 가시설.

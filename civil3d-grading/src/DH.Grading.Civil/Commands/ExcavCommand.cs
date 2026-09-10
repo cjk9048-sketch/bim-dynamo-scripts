@@ -71,7 +71,7 @@ public sealed class ExcavCommand
         Database db = doc.Database;
 
         ed.WriteMessage("\n[터파기 지표면] 구조물 바닥계획고가 들어간 닫힌 폴리선을 고릅니다. " +
-                        "굴착 구배는 그 다음에 묻습니다(정지옵션과 별도 · 단높이는 안 씁니다).");
+                        "굴착 구배는 그 다음에 묻습니다([정지 창]과 별도 · 단높이는 안 씁니다).");
 
         // 이전 실행이 지표면을 숨겨 놨을 수 있다 — 원지반을 클릭해야 하므로 전부 복원.
         try
@@ -199,7 +199,13 @@ public sealed class ExcavCommand
     /// 한 번에 쓰므로, 중간에 터지면 <c>Run</c>이 이것을 대신 써 준다.</summary>
     private static string LastLog = "";
 
-    internal static void DoExcav(Document doc, ObjectId boxPolyId, ObjectId groundId)
+    /// <returns>★★[2차 검토 0909 · 높음1] <b>실제로 다시 구웠는가.</b>
+    /// 종전엔 <c>void</c>라 부르는 쪽이 "예외가 안 났으니 됐다"로 판정할 수밖에 없었고,
+    /// 기준면 통일 물음을 <b>취소하면 조용히 돌아서는데도</b> 성공이라 말했다.
+    /// 그 판에서 <c>SurfaceExistsByBaseName</c>은 <b>직전에 만든 옛 지표면</b>을 보고 참을 냈다 —
+    /// <i>"되읽기는 화면을 정하는 값을 재라"</i>에 걸리는 가짜 확인이었다.</returns>
+    internal static bool DoExcav(Document doc, ObjectId boxPolyId, ObjectId groundId,
+                                bool keepSpec = false)
     {
         // ★[검토 0909 · 보통] <b>여기서 잰다.</b> 종전엔 <c>Run</c>에서만 채워, 창으로 들어온 판은
         //   <b>직전 리본 실행(또는 0)</b> 기준으로 재서 로그에 <b>거짓 계측치</b>를 찍었다
@@ -216,6 +222,10 @@ public sealed class ExcavCommand
         ObjectId baseId;
         var recs = new System.Collections.Generic.List<ExcavBundle>();
         int newIdx;
+        // ★★[2차 검토 0909] 이번 실행이 쓸 제원 — <b>정적 변수를 안 만지려고</b> 지역으로 든다.
+        //   트랜잭션 밖에서도 써야 해서(기준면 갈래·로그) 여기서 선언한다.
+        double useSlope = Slope, useMin = GradingSettings.MinSlope;
+        var useBasis = Basis;
 
         // ── ① 기록을 읽고 이번 구조물을 더한다(같은 폴리선이면 교체 — 중복 누적 방지) ──
         using (Transaction tr = db.TransactionManager.StartTransaction())
@@ -235,6 +245,41 @@ public sealed class ExcavCommand
             if (old != null) recs.AddRange(old);
             else log.AppendLine($"■ 터파기 기록 없음({ewhy}) — 이번이 첫 구조물");
 
+            // ══ 이번에 쓸 제원을 <b>여기서</b> 정한다 ══════════════════════════
+            //
+            //   ★★★[2차 검토 0909 · 치명1·2] <b>정적 변수를 만지지 않는다.</b>
+            //     1차 처방은 <c>Slope</c>·<c>GradingSettings.MinSlope</c>·<c>Basis</c> 셋에
+            //     <b>대입만 하고 되돌리지 않았다</b>. 셋 다 세션 전역이라:
+            //       · <c>GradingSettings.MinSlope</c>는 <b>정지 쪽이 읽는 값</b>이다 —
+            //         가시설 단추 한 번에 부지가 <b>8.16% · 655㎡ · 토공 4,900㎥</b> 부풀 수 있었다.
+            //       · <c>Basis</c>는 창의 라디오와 <b>어긋난 채</b> 남아, 화면엔 [계획지표면]인데
+            //         실제로는 원지반으로 굳었다.
+            //     → <b>지역 변수</b>로 받아 이 실행 안에서만 쓴다. 밖으로 새지 않는다.
+            //
+            //   ★★[2차 검토 0909 · 높음2] <b>기준면 물음보다 위에</b> 있어야 한다.
+            //     아래에 두면 물음이 <b>세션 값</b>으로 먼저 판정해, 구간만 고치러 온 판에도
+            //     "전부 바꿀까요?"가 뜨고 '전부바꾼다'를 고르면 <b>모든 구조물이 다시 구워졌다</b>.
+            newIdx = recs.FindIndex(r => r.PolyHandle == boxHandle);
+            // ★★★[검토 0909 · 치명1] <b>그 구조물이 들고 있던 것을 물려받는다.</b>
+            //   종전엔 <b>칸을 비운 새 기록</b>으로 갈아끼워 <b>가시설 구간이 조용히 사라졌다</b> —
+            //   구조물 하나짜리 도면은 100% 무동작이었다.
+            //   ★<c>ExcavBundle</c>에 칸을 더하면 <b>이 자리를 반드시 함께 고쳐야 한다</b>(§77 ④).
+            var prev = newIdx >= 0 ? recs[newIdx] : null;
+
+            //   <b>제원은 언제 물려받나.</b> 구간만 고치려고 다시 구울 때(<c>keepSpec</c>)다.
+            //   안 그러면 AutoCAD를 새로 켜고 어제 도면을 열어 [가시설 변환]만 눌렀을 뿐인데
+            //   <b>세션 기본값 1:0.5로 되박혀</b> 토공 수량이 조용히 바뀐다.
+            bool keep = keepSpec && prev != null;
+            if (keep)
+            {
+                useSlope = prev.Slope;
+                useMin = prev.MinSlope;
+                useBasis = (DH.Grading.Core.CrossSectionArea.ExcavBase)prev.Base;
+            }
+            if (keep)
+                log.AppendLine($"■ 제원 유지(구간만 수정) — 구배 1:{useSlope:0.##} · 하한 1:{useMin:0.###}"
+                             + $" · 기준면 {(useBasis == DH.Grading.Core.CrossSectionArea.ExcavBase.Plan ? "계획지표면" : "원지반")}");
+
             // ★★★[JACK 0909 · 계획 §8-A] <b>한 도면 안에서 기준면을 섞지 않는다.</b>
             //
             //   <b>왜 막나.</b> 형상은 구조물마다 자기 기준면으로 만들 수 있다. 그런데 <b>수량</b>은
@@ -250,11 +295,11 @@ public sealed class ExcavCommand
                 //   그런데 종전엔 그것을 "이 도면의 <b>다른</b> 구조물"이라고 말했다 — 사실이 아니다.
                 //   ★배수지 하나짜리 도면(이 애드인의 대표 사례)에서 기준면을 바꿔 보려는
                 //     <b>첫 시도에 100% 뜨고</b>, Enter가 취소라서 <b>기능이 고장 난 것처럼</b> 보였다.
-                int mixed = recs.FindIndex(r => r.PolyHandle != boxHandle && r.Base != (int)Basis);
+                int mixed = recs.FindIndex(r => r.PolyHandle != boxHandle && r.Base != (int)useBasis);
                 if (mixed >= 0)
                 {
                     string had = recs[mixed].Base == 1 ? "계획지표면" : "원지반";
-                    string now = Basis == DH.Grading.Core.CrossSectionArea.ExcavBase.Plan ? "계획지표면" : "원지반";
+                    string now = useBasis == DH.Grading.Core.CrossSectionArea.ExcavBase.Plan ? "계획지표면" : "원지반";
                     var pk = new PromptKeywordOptions(
                         $"\n이 도면의 다른 구조물은 <{had}> 기준입니다 — 전부 <{now}> 기준으로 바꿀까요?"
                       + "\n  (한 도면에 두 기준면이 섞이면 토적표를 낼 수 없습니다)"
@@ -275,24 +320,27 @@ public sealed class ExcavCommand
                         //   일찍 나가더라도 <b>왜 나갔는지</b>는 파일에 남아야 한다.
                         LastLog = log.ToString();
                         try { DiagLog.Append("\n" + LastLog + "\n"); } catch { }
-                        return;
+                        // ★★[2차 검토 0909 · 높은1] <b>거짓을 돌려준다</b> — 여기가 그 조용한 출구다.
+                        return false;
                     }
                     int changed = 0;
                     foreach (var r in recs)
-                        if (r.PolyHandle != boxHandle && r.Base != (int)Basis) { r.Base = (int)Basis; changed++; }
+                        if (r.PolyHandle != boxHandle && r.Base != (int)useBasis) { r.Base = (int)useBasis; changed++; }
                     ed.WriteMessage($"\n  · 기존 구조물 {changed}개도 <{now}> 기준으로 바꿉니다(형상이 다시 만들어집니다).");
                     log.AppendLine($"■ 기준면 통일 — {had} → {now} · 바뀐 기록 {changed}개");
                 }
             }
 
-            newIdx = recs.FindIndex(r => r.PolyHandle == boxHandle);
             var cur = new ExcavBundle
             {
-                PolyHandle = boxHandle, GroundHandle = groundHandle, Slope = Slope, Bottom = box0,
+                PolyHandle = boxHandle, GroundHandle = groundHandle, Slope = useSlope, Bottom = box0,
+                // ★가시설 구간은 <b>언제나</b> 물려받는다 — 사람이 도면에 직접 지정한 것이라
+                //   다시 굽는다고 날리면 안 된다(세션 설정과 성격이 다르다).
+                WallZones = ZonesStillFit(prev, box0, log, ed),
                 // ★[JACK 0825] 지금의 하한을 함께 굳힌다 — 나중에 전역값이 바뀌어도 이 터파기는 안 변한다.
-                MinSlope = GradingSettings.MinSlope,
+                MinSlope = useMin,
                 // ★[JACK 0909] 기준면도 같은 이유로 굳힌다 — 다음 구조물이 이것을 안 바꾸게.
-                Base = (int)Basis,
+                Base = (int)useBasis,
             };
             if (newIdx >= 0) { recs[newIdx] = cur; log.AppendLine($"■ 같은 구조물 다시 — 기록 {newIdx + 1}번을 교체"); }
             else { recs.Add(cur); newIdx = recs.Count - 1; }
@@ -308,11 +356,11 @@ public sealed class ExcavCommand
         //   ★<c>전체면_DH</c>가 아니다. 그것은 이 명령이 <b>끝에서 굽는 자기 산출물</b>(정지면+터파기)이라
         //   목표면으로 쓰면 <b>지난번에 판 구덩이가 이번 목표면에 들어간다</b>(0908 검토 치명 1).
         //   <c>정지면_DH</c>는 이미 "원지반+계획 합성면"이라 정지 구역 밖은 저절로 원지반이다.
-        bool planBase = Basis == DH.Grading.Core.CrossSectionArea.ExcavBase.Plan;
+        bool planBase = useBasis == DH.Grading.Core.CrossSectionArea.ExcavBase.Plan;
         // ★★[검토 0909 · 보통] <b>무엇으로 팠는지 로그에 남긴다.</b> §77이 검증 항목으로 적어 뒀는데
         //   소스에 그 줄이 없었다 — 나중에 수량이 이상할 때 <b>가릴 근거가 없다</b>.
         log.AppendLine($"■ 터파기 기준면 = <b>{(planBase ? "계획지표면" : "원지반")}</b>"
-                     + $" · 구배 1:{Slope:0.##} · 구조물 {recs.Count}개");
+                     + $" · 구배 1:{useSlope:0.##} · 구조물 {recs.Count}개");
         ObjectId planBaseId = ObjectId.Null;
         if (planBase)
         {
@@ -520,7 +568,11 @@ public sealed class ExcavCommand
                     // ★[JACK 0825] 하한은 <b>그 기록이 들고 있는 값</b>으로 — 세션 전역이 아니다.
                     //   전역을 읽으면 구조물 하나 추가했을 뿐인데 기존 터파기가 통째로 다른 형상이 된다.
                     var p = MakeParams(e.Bottom, target, e.Slope, e.MinSlope);
-                    var vs = GradingGeometry.Build(e.Bottom, target, p, up: true, null);
+                    // ★★★[JACK 0909 확정 "(가)" · 계획 §5.3] <b>가시설 구간을 넘긴다.</b>
+                    //   종전엔 <c>null</c>이라 구간을 지정해도 <b>형상이 한 톨도 안 바뀌었다</b> —
+                    //   바로 위 절토부 복원(<c>b.CutWallZones</c>)은 이미 넘기고 있었는데 여기만 빠져 있었다.
+                    //   ★기록에 구간이 없으면(v1~v3, 또는 아직 안 지정) <c>null</c>과 같아 옛 형상 그대로다.
+                    var vs = GradingGeometry.Build(e.Bottom, target, p, up: true, e.WallZones);
                     if (!vs.HasSlope)
                     {
                         log.AppendLine($"■ {tag} 굴착 법면 없음 — 건너뜀");
@@ -846,10 +898,58 @@ public sealed class ExcavCommand
         //   <b>화면에 적힌 것과 다른 기준면</b>으로 파진다.
         try { ExcavPalette.Refresh(); } catch { }
         ed.WriteMessage($"\n[터파기 지표면] 완료 — {SurfName} (구조물 {made}개)" +
-                        $"\n  굴착 구배 1:{Slope:0.##}{(Slope <= GradingSettings.WallGateSlope + 1e-9 ? " (수직)" : "")}" +
+                        $"\n  굴착 구배 1:{useSlope:0.##}{(useSlope <= GradingSettings.WallGateSlope + 1e-9 ? " (수직)" : "")}" +
                         $"\n  자세한 내용: {DiagLog.FilePath}");
+        // ★★[2차 검토 0909 · 높은1] 여기까지 왔으면 <b>실제로 구웠다</b> — 그때만 참이다.
+        return made > 0;
     }
 
+
+    /// <summary>★★[2차 검토 0909 · 빠진 것] <b>구간의 자가 아직 맞는가.</b>
+    ///
+    /// <para>구간은 지정하던 순간의 바닥 둘레(<c>z.Ref</c>)를 <b>복사해서</b> 들고 다닌다.
+    /// 그런데 설계자가 <b>터파기선을 옮기고</b> 다시 만들면 바닥은 새 자리로 가는데
+    /// 구간의 자는 <b>옛 자리에 남는다</b> — 지정한 데가 아닌 <b>엉뚱한 곳이 수직</b>이 된다.
+    /// 도면은 멀쩡해 보이고 수량만 틀리는, 이 애드인에서 가장 나쁜 종류다.</para>
+    ///
+    /// <para>그래서 <b>둘레 길이가 크게 달라졌으면 구간을 버리고 그 사실을 말한다</b>.
+    /// 조용히 두는 것보다 낫다 — 다시 지정하면 되고, 안 알리면 못 고친다.</para></summary>
+    private static System.Collections.Generic.List<DH.Grading.Core.SlopeZone> ZonesStillFit(
+        ExcavBundle prev, System.Collections.Generic.List<Point3> now, System.Text.StringBuilder log, Editor ed)
+    {
+        var zs = prev?.WallZones;
+        if (zs == null || zs.Count == 0) return null;
+        if (prev.Bottom == null || prev.Bottom.Count < 3 || now == null || now.Count < 3) return zs;
+        double a = Len(prev.Bottom), b = Len(now);
+        if (a <= 1e-6) return zs;
+        double diff = System.Math.Abs(b - a) / a;
+        if (diff <= 0.02) return zs;                    // 2%까지는 표본 간격 차이로 본다
+        log.AppendLine($"■ ⚠ 가시설 구간 {zs.Count}개를 <b>버렸다</b> — 터파기선이 바뀌었다"
+                     + $"(둘레 {a:0.#}m → {b:0.#}m, {diff * 100:0.#}% 차이). 구간을 다시 지정하세요.");
+        // ★★[3차 검토 0909 · 높음1] <b>로그 파일에만 적으면 아무도 못 본다.</b>
+        //   버린 직후에도 "다시 만들었습니다"가 뜨므로, 사용자는 <b>성공했다고 듣고</b>
+        //   종단에 아무것도 없는 것을 나중에 발견한다 — 조용한 실패의 전형이다.
+        try
+        {
+            ed.WriteMessage($"\n  ⚠ 터파기선이 바뀌어(둘레 {a:0.#}m → {b:0.#}m) <b>가시설 구간 {zs.Count}개를 버렸습니다</b>."
+                          + "\n     구간은 그린 그 자리를 기준으로 잡혀 있어, 선이 바뀌면 엉뚱한 데가 수직이 됩니다."
+                          + "\n     → [가시설 변환]으로 다시 지정해 주세요.");
+            ExcavPalette.Say($"터파기선이 바뀌어 가시설 구간 {zs.Count}개를 버렸습니다 — 다시 지정해 주세요.");
+        }
+        catch { }
+        return null;
+
+        static double Len(System.Collections.Generic.IReadOnlyList<Point3> r)
+        {
+            double t = 0;
+            for (int i = 0; i < r.Count; i++)
+            {
+                var p = r[i]; var q = r[(i + 1) % r.Count];
+                t += System.Math.Sqrt((q.X - p.X) * (q.X - p.X) + (q.Y - p.Y) * (q.Y - p.Y));
+            }
+            return t;
+        }
+    }
 
     /// <summary>터파기 제원으로 <see cref="GradingParams"/>를 만든다 — 절·성토 양쪽에 같은 값을 넣는다.
     /// <para>수직 예산은 <b>실제 표고차</b>에서 온다(정지면과 같은 이유) — 단높이로 곱해 잡으면

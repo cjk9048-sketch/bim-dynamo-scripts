@@ -547,19 +547,16 @@ public sealed class PickCommands
             try
             {
                 using (Commands.ViewSurfaceCommand.Focus(db, null))   // 만드는 동안엔 전부 보이게
-                    Commands.ExcavCommand.DoExcav(doc, boxId, groundId);
+                    made = Commands.ExcavCommand.DoExcav(doc, boxId, groundId);
                 Commands.ViewSurfaceCommand.ShowAll();
                 // ★★[검토 0909 · 높음] <b>"예외가 안 났다"는 성공이 아니다.</b>
                 //   <c>DoExcav</c>는 기준면 통일 물음에서 <b>예외 없이 그냥 돌아선다</b> —
                 //   그때도 성공으로 보면 고른 것과 빨간 표시를 지워, 사용자 눈엔 "단추가 고장 났다"가 된다.
-                //   → <b>결과가 실제로 생겼는지 되읽는다</b>(정지 창과 같은 규칙).
-                try
-                {
-                    using var trC = db.TransactionManager.StartTransaction();
-                    made = GradingBuilder.SurfaceExistsByBaseName(trC, Commands.ExcavCommand.SurfName);
-                    trC.Commit();
-                }
-                catch { }
+                //
+                //   ★★★[2차 검토 0909 · 높음1] 1차 처방은 <c>SurfaceExistsByBaseName</c>으로 <b>있는지만</b>
+                //     봤는데, 조용히 돌아설 때 <b>아무것도 지우지 않으므로</b> 직전 지표면이 그대로 남아
+                //     <b>언제나 참</b>이었다 — 막겠다던 그 상태를 못 잡았다.
+                //     이제 <c>DoExcav</c>가 <b>자기가 구웠는지</b>를 직접 답한다.
             }
             catch (System.Exception ex)
             {

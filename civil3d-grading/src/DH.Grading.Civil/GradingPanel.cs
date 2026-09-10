@@ -35,6 +35,7 @@ internal sealed class GradingPanel : UserControl
 
     // ── ★[5b] 대상 ────────────────────────────────────────────────────────
     private readonly Button _pickPlan, _pickGround, _build;
+    private readonly Button _toWall, _toSlope;
     private readonly TextBlock _planWhat, _groundWhat;
     private readonly RadioButton _append, _restart;
     /// <summary>이어서/새로시작 줄 — ★<c>StackPanel</c>이 아니라 <c>DockPanel</c>이다.
@@ -139,6 +140,35 @@ internal sealed class GradingPanel : UserControl
         GradingDialog.AddSection(root, "4. 옹벽 형태", "구배가 수직에 가까울 때 그 단을 무엇으로 세울지");
         _cutWall = GradingDialog.AddStyleRow(root, "절토 옹벽", GradingSettings.CutWallStyle, out _);
         _fillWall = GradingDialog.AddStyleRow(root, "성토 옹벽", GradingSettings.FillWallStyle, out _);
+
+        // ── 5. 사면 수정 ──────────────────────────────────────────────────
+        //   ★★★[계획 8단계 · JACK 지시 3 "도킹창안에 사면수정 기능을 넣어서 … UI에서 사면수정버튼은 없애고"]
+        //     ★<b>리본에서 빼기 전에 갈 곳부터 만든다.</b> 순서를 뒤집으면 그 사이에
+        //       <b>사면 수정을 아예 못 쓰는 판</b>이 나간다 — 터파기 창에는 이미 넣어 두고
+        //       정지 창에는 안 넣은 채로 리본을 지울 뻔했다.
+        //     ★단추는 <b>기존 명령을 그대로 부른다</b>(DHWALL/DHSLOPE) — 671줄짜리 편집기를
+        //       베끼지 않는다(§20). 도킹창은 <b>부르는 자리</b>일 뿐이다.
+        GradingDialog.AddSection(root, "5. 사면 수정",
+            "이미 만든 사면의 한 구간을 옹벽으로 세우거나 다시 사면으로 되돌립니다");
+        var wRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
+        Button WBtn(string t, string cmd, string tip)
+        {
+            var b = new Button { Content = t, MinWidth = 104, Height = 30, Margin = new Thickness(0, 0, 6, 0), ToolTip = tip };
+            b.Click += (_, __) => PickSession.Send(Doc, cmd);
+            wRow.Children.Add(b);
+            return b;
+        }
+        _toWall = WBtn("옹벽 변환", "DHWALL",
+            "고른 선부터 바깥 단을 옹벽으로 세웁니다. 단높이·소단길이를 그 자리에서 정합니다.");
+        _toSlope = WBtn("사면 변환", "DHSLOPE",
+            "옹벽선을 골라 그 단부터 다시 사면으로 되돌립니다. 사면구배도 그 자리에서 정합니다.");
+        root.Children.Add(wRow);
+        root.Children.Add(new TextBlock
+        {
+            Text = "※ 정지면을 먼저 만들어야 고칠 사면이 생깁니다.",
+            FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 4),
+        });
 
         // 값이 바뀌면 예시를 바로 다시 그린다 — 도킹창의 값어치가 여기 있다.
         foreach (var b in new[] { _cutH, _cutW, _cutS, _fillH, _fillW, _fillS, _tInt, _tW })
@@ -360,6 +390,14 @@ internal sealed class GradingPanel : UserControl
                 : "● 자동 — 지금 정지면_DH";
             _groundWhat.Foreground = needGround && !hasGround ? DhBrand.Sub : DhBrand.Brand;
             _build.IsEnabled = !busy && hasPlan && (hasGround || !needGround);
+            // ★[8단계] 사면 수정은 <b>이미 만든 정지면</b>이 있어야 한다 —
+            //   "이어서/새로시작"을 보여 주는 그 조건과 같다(기존 결과가 있는가).
+            //   ★<b>화면 상태가 아니라 사실을 읽는다</b> — 바로 위에서 구한 <c>hasPrev</c>다.
+            //     <c>_modeRow.Visibility</c>를 읽으면 <b>줄 순서에 기대는</b> 코드가 되어,
+            //     나중에 배치를 바꾸는 순간 단추가 조용히 잠긴다.
+            bool madeAny = hasPrev;
+            _toWall.IsEnabled = !busy && madeAny;
+            _toSlope.IsEnabled = !busy && madeAny;
         }
         catch (System.Exception ex)
         {

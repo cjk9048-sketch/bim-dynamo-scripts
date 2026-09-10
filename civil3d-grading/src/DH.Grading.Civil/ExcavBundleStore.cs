@@ -48,6 +48,22 @@ public sealed class ExcavBundle
     /// <para>v1·v2 기록에는 이 값이 없다 — 그 시절은 <b>언제나 낮은 쪽</b>이었으므로
     /// 읽을 때 <c>Lower(0)</c>로 채운다. 형상이 안 바뀐다.</para></summary>
     public int Base;   // 0 = 낮은 쪽(원지반 기준) · 1 = 계획지표면 기준
+
+    /// <summary>★★★[JACK 0909 확정 "(가) 제대로 한다" · 계획 §5.3] <b>가시설 구간</b>(v4).
+    ///
+    /// <para><b>왜 필요한가.</b> 종전에는 <b>구조물 전체</b>의 구배 하나로만 가시설인지 아닌지를 갈랐다
+    /// (<see cref="DH.Grading.Civil.StationMarks"/>). 그래서 <i>"둘레 중 남쪽 절반만 가시설"</i> 같은
+    /// 실제 시공 모습을 <b>표현할 수가 없었다</b>.</para>
+    ///
+    /// <para>크기: 수직/사면 지정 하나가 <b>토공 4,900㎥</b>를 움직인 실측이 있다
+    /// (<c>GradingSettings</c> 주석). 이것이 없으면 그만큼이 늘 한쪽으로 틀린다.</para>
+    ///
+    /// <para>★자료형은 정지의 <c>CutWallZones</c>와 <b>같다</b> — 기하 엔진이 이미 이 모양을 받는다.
+    /// 새로 만들지 않는다(§20).</para>
+    ///
+    /// <para>v1~v3에는 이 값이 없다 — 그 시절은 <b>구조물 전체</b>로만 갈랐으므로
+    /// 읽을 때 비워 두면 <b>형상이 안 바뀐다</b>.</para></summary>
+    public System.Collections.Generic.List<DH.Grading.Core.SlopeZone>? WallZones;
 }
 
 /// <summary>
@@ -70,8 +86,10 @@ public static class ExcavBundleStore
     /// <para>★[JACK 0825] <b>v2 = v1 + 구배 하한(MinSlope).</b> 하한을 세션 전역에서 읽던 것이
     /// 전역값이 바뀌는 순간 옛 터파기를 다른 형상으로 되살렸다 — 이제 기록이 자기 값을 들고 있다.</para>
     /// <para>★[JACK 0909] <b>v3 = v2 + 기준면(<see cref="ExcavBundle.Base"/>).</b>
-    /// v1·v2를 읽으면 <c>Lower</c>로 채운다 — 그 시절 형상 그대로다.</para></summary>
-    private const int Version = 3;
+    /// v1·v2를 읽으면 <c>Lower</c>로 채운다 — 그 시절 형상 그대로다.</para>
+    /// <para>★[JACK 0909] <b>v4 = v3 + 가시설 구간(<see cref="ExcavBundle.WallZones"/>).</b>
+    /// v1~v3을 읽으면 비워 둔다 — 그 시절은 구조물 전체로만 갈랐으므로 형상이 안 바뀐다.</para></summary>
+    private const int Version = 4;
     private const string Sig = "DH_EXCAV";
 
     public static void SaveAll(Database db, Transaction tr,
@@ -90,6 +108,7 @@ public static class ExcavBundleStore
             vals.Add(new((int)DxfCode.Real, e.Slope));
             vals.Add(new((int)DxfCode.Real, e.MinSlope));       // v2 — 그때의 하한을 함께 굳힌다
             vals.Add(new((int)DxfCode.Int32, e.Base));          // v3 — 그때의 기준면을 함께 굳힌다
+            WriteZones(vals, e.WallZones);                      // v4 — 가시설 구간
             WritePts(vals, e.Bottom);
             WritePts(vals, e.FinalRing);
         }
@@ -168,6 +187,8 @@ public static class ExcavBundleStore
                 e.MinSlope = ver >= 2 ? Dbl(arr, ref i) : 0.05;
                 // ★v1·v2에는 기준면이 없다 — 그 시절은 <b>언제나 낮은 쪽</b>이었다(형상이 안 바뀐다).
                 e.Base = ver >= 3 ? I32(arr, ref i) : 0;
+                // ★v1~v3에는 가시설 구간이 없다 — 비워 두면 그 시절 형상 그대로다.
+                e.WallZones = ver >= 4 ? ReadZones(arr, ref i) : null;
                 e.Bottom = ReadPts(arr, ref i) ?? new System.Collections.Generic.List<Point3>();
                 e.FinalRing = ReadPts(arr, ref i);
                 if (e.Bottom.Count >= 3) list.Add(e);
@@ -214,6 +235,48 @@ public static class ExcavBundleStore
             pts.Add(new Point3(x, y, z));
         }
         return pts;
+    }
+
+    /// <summary>가시설 구간 쓰기 — <b>정지 번들과 같은 형식</b>이다(<c>GradingBundleStore.WriteZones</c>).
+    /// <para>★형식을 새로 만들지 않는다 — 같은 자료를 두 가지로 적으면 한쪽만 고쳐진다.</para></summary>
+    private static void WriteZones(System.Collections.Generic.List<TypedValue> v,
+                                   System.Collections.Generic.List<DH.Grading.Core.SlopeZone>? zs)
+    {
+        v.Add(new((int)DxfCode.Int32, zs?.Count ?? 0));
+        if (zs == null) return;
+        foreach (var z in zs)
+        {
+            v.Add(new((int)DxfCode.Real, z.T0));
+            v.Add(new((int)DxfCode.Real, z.T1));
+            v.Add(new((int)DxfCode.Int32, z.Rules.Count));
+            foreach (var r in z.Rules)
+            {
+                v.Add(new((int)DxfCode.Int32, r.FromBench));
+                v.Add(new((int)DxfCode.Real, r.Slope));
+                v.Add(new((int)DxfCode.Real, r.BenchW));
+            }
+            WritePts(v, z.Ref);
+        }
+    }
+
+    private static System.Collections.Generic.List<DH.Grading.Core.SlopeZone>? ReadZones(
+        TypedValue[] a, ref int i)
+    {
+        int n = I32(a, ref i);
+        if (n <= 0) return null;
+        var zs = new System.Collections.Generic.List<DH.Grading.Core.SlopeZone>(n);
+        for (int k = 0; k < n; k++)
+        {
+            var z = new DH.Grading.Core.SlopeZone { T0 = Dbl(a, ref i), T1 = Dbl(a, ref i) };
+            int nr = I32(a, ref i);
+            for (int r = 0; r < nr; r++)
+                z.Rules.Add((I32(a, ref i), Dbl(a, ref i), Dbl(a, ref i)));
+            z.Ref = ReadPts(a, ref i);
+            // ★[검토 0909 · 낮음] 정지 번들과 <b>정말로</b> 같은 형식이 되게 — 저쪽은 이 줄이 있다.
+            z.Normalize();
+            zs.Add(z);
+        }
+        return zs;
     }
 
     private static string Str(TypedValue[] a, ref int i) => (a[i++].Value as string) ?? "";
