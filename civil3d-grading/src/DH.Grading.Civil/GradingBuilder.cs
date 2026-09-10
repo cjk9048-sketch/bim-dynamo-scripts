@@ -1794,68 +1794,45 @@ public static class GradingBuilder
 
     private static void AddRingBreakline(TinSurface tin, IReadOnlyList<Point3> loop)
     {
-        if (loop.Count < 3) return;
-        var seen = new HashSet<(long, long)>(); // 링마다 독립 — 링 간 정점 충돌로 정점이 스킵되어 브레이크라인에 구멍 나는 것 방지
-        var pts = new List<Point3d>();
-        foreach (var pt in loop)
-        {
-            var key = ((long)Math.Round(pt.X * 1000), (long)Math.Round(pt.Y * 1000));
-            if (!seen.Add(key)) continue;
-            pts.Add(new Point3d(pt.X, pt.Y, pt.Z));
-        }
-        if (pts.Count < 3) return;
-
         // [§75 — 0728] 옹벽 구간 좌우 끝의 '급하강(다이브)' 긴 선분(>2.5m)은 브레이크라인에서 제외.
         //   깊은 단일수록 다이브가 수십 m라 이웃 링(1m 간격)의 다이브끼리 평면 교차 → 이벤트 뷰어 오류 홍수.
         //   정상 링은 densify로 전 선분 ≤1m라 무영향. 측벽 면은 TIN 삼각화가 채우므로 형상은 유지된다.
-        //   ★[§68] 문턱은 Core에 하나만 둔다 — 교차를 재는 쪽(BreaklinePrep)이 같은 값을 봐야 한다.
-        const double MaxSeg = DH.Grading.Core.BreaklinePrep.RingSegMaxM;
-        const double MaxSeg2 = MaxSeg * MaxSeg;
-        var runs = new List<List<Point3d>>();
-        var cur = new List<Point3d> { pts[0] };
-        for (int i = 1; i < pts.Count; i++)
+        //
+        // ★★★[JACK 0903 "옹벽 변환했는데 지표면이 이상하게 작성되는 부분이 발생했어"]
+        //   실측으로 확인된 것: 옹벽을 씌운 절토 가상면만 브레이크라인이 35 → 65로 잘리고,
+        //   같은 판에서 지표면이 <b>경계 밖 8.0m까지 삐져나왔다(11곳)</b>.
+        //   끊긴 자리에는 지시선이 없어 TIN이 마음대로 잇는다.
+        //
+        // ★★★[검토 0910] <b>쪼개는 규칙은 이제 Core에 있다</b>(<see cref="BreaklinePrep.SplitRingRuns"/>).
+        //   여기에만 두면 <b>오프라인 검사기가 못 닿는다</b> — 그래서 우리는 <b>링</b>만 재면서
+        //   <b>TIN</b>이 깨진다고 말하고 있었다(현장 로그: 링 최장변 14.67m ↔ 완성 TIN 최장변 55.71m).
+        //   규칙을 Core에 두면 검사기가 <b>출하되는 그 규칙</b>을 먹고 TIN을 떠서 잰다(S107).
+        //   이 함수에 남는 일은 <b>Civil에 넣는 것</b>뿐이다.
+        var runs = BreaklinePrep.SplitRingRuns(loop, out bool closed, out int dives, out double diveLen, out _);
+        if (runs.Count == 0) return;
+
+        // ★[JACK 0903] 링이 끊긴 자리를 남긴다 — 좌표로 맞대 보기 전에는 단정하지 않는다.
+        DiveCount += dives;
+        if (diveLen > DiveMaxLen)
         {
-            double dx = pts[i].X - pts[i - 1].X, dy = pts[i].Y - pts[i - 1].Y;
-            if (dx * dx + dy * dy > MaxSeg2)
+            DiveMaxLen = diveLen;
+            // 가장 긴 다이브의 자리 — 한 조각의 끝과 다음 조각의 머리 사이가 그 자리다.
+            for (int r = 0; r + 1 < runs.Count; r++)
             {
-                // ★★★[JACK 0903 "옹벽 변환했는데 지표면이 이상하게 작성되는 부분이 발생했어"]
-                //   <b>여기가 링이 끊기는 자리다 — 좌표를 남긴다.</b>
-                //   실측으로 확인된 것: 옹벽을 씌운 절토 가상면만 브레이크라인이 35 → 65로 잘리고,
-                //   같은 판에서 지표면이 <b>경계 밖 8.0m까지 삐져나왔다(11곳)</b>.
-                //   끊긴 자리에는 지시선이 없어 TIN이 마음대로 잇는데, 그 자리가 정말 같은 곳인지
-                //   <b>좌표로 맞대 보기 전에는 단정하지 않는다</b>.
-                DiveCount++;
-                double dlen = System.Math.Sqrt(dx * dx + dy * dy);
-                if (dlen > DiveMaxLen) { DiveMaxLen = dlen; DiveMaxX = pts[i - 1].X; DiveMaxY = pts[i - 1].Y; }
-                if (DiveWhere.Length < 400)
-                    DiveWhere.Append($" [{pts[i - 1].X:F1},{pts[i - 1].Y:F1} {dlen:F1}m]");
-                if (cur.Count >= 2) runs.Add(cur);
-                cur = new List<Point3d>();
+                var a = runs[r][^1]; var b = runs[r + 1][0];
+                double dl = Math.Sqrt((b.X - a.X) * (b.X - a.X) + (b.Y - a.Y) * (b.Y - a.Y));
+                if (Math.Abs(dl - diveLen) < 1e-6) { DiveMaxX = a.X; DiveMaxY = a.Y; break; }
             }
-            cur.Add(pts[i]);
         }
-        double cdx = pts[0].X - pts[^1].X, cdy = pts[0].Y - pts[^1].Y;
-        bool closeOk = cdx * cdx + cdy * cdy <= MaxSeg2;
-        if (runs.Count == 0 && closeOk)
-        {
-            // 다이브 없음 = 정상 링 — 기존과 동일하게 닫아서 등록(이음매 거대 삼각형 방지).
-            var pc = new Point3dCollection();
-            foreach (var q in cur) pc.Add(q);
-            pc.Add(cur[0]);
-            try { tin.BreaklinesDefinition.AddStandardBreaklines(pc, 1.0, 0.0, 0.0, 0.0); } catch { }
-            return;
-        }
-        if (closeOk && runs.Count > 0 && cur.Count > 0)
-        {
-            cur.AddRange(runs[0]); // 꼬리 run이 이음새(마지막→첫)로 머리 run과 이어짐 → 병합
-            runs[0] = cur;
-        }
-        else if (cur.Count >= 2) runs.Add(cur);
+        if (dives > 0 && DiveWhere.Length < 400)
+            DiveWhere.Append($" [{runs[0][^1].X:F1},{runs[0][^1].Y:F1} {diveLen:F1}m]");
+
         foreach (var run in runs)
         {
-            if (run.Count < 2) continue;
             var pc = new Point3dCollection();
-            foreach (var q in run) pc.Add(q);
+            foreach (var q in run) pc.Add(new Point3d(q.X, q.Y, q.Z));
+            // 다이브 없음 = 정상 링 — 닫아서 등록한다(이음매 거대 삼각형 방지).
+            if (closed) pc.Add(new Point3d(run[0].X, run[0].Y, run[0].Z));
             try { tin.BreaklinesDefinition.AddStandardBreaklines(pc, 1.0, 0.0, 0.0, 0.0); } catch { }
         }
     }

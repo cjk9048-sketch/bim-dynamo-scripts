@@ -114,6 +114,67 @@ public static class BreaklinePrep
         }
     }
 
+    /// <summary>★★★[검토 0910] <b>링이 TIN에 들어가는 그 모양</b> — 끊긴 조각들로 쪼갠다.
+    ///
+    /// <para><b>왜 Core로 옮겼나.</b> 이 규칙은 <c>GradingBuilder.AddRingBreakline</c>(Civil 프로젝트) 안에만
+    /// 있었다. 그런데 오프라인 검사기는 Civil을 못 부른다 — 그래서 <b>TIN에 실제로 뭐가 들어가는지</b>를
+    /// 잴 방법이 없었고, 우리는 <b>링</b>만 재면서 <b>TIN</b>이 깨진다고 말하고 있었다
+    /// (0910 실측: 현장 로그가 잰 것은 <i>"링 최장변 14.67m인데 완성 TIN 최장변 55.71m"</i> —
+    /// 링은 이미 괜찮았고 TIN이 깨졌다). 규칙을 여기 두면 검사기가 <b>출하되는 그 규칙</b>을 먹는다.</para>
+    ///
+    /// <para><b>규칙.</b> ①mm로 반올림해 겹친 점을 버린다 · ②<see cref="RingSegMaxM"/>보다 긴 변에서 끊는다
+    /// (그 변은 다이브라 TIN에 없다) · ③점이 둘 미만인 조각은 버린다(브레이크라인이 안 된다) ·
+    /// ④닫는 변이 짧으면 꼬리 조각과 머리 조각을 <b>하나로 잇는다</b>.</para>
+    ///
+    /// <para>돌려주는 것: 조각 목록. 끊긴 데가 없으면 조각 하나이고 <paramref name="closed"/>가 참이다
+    /// (그때는 부르는 쪽이 첫 점을 다시 붙여 닫는다 — 이음매 거대 삼각형 방지).</para></summary>
+    public static List<List<Point3>> SplitRingRuns(IReadOnlyList<Point3> loop, out bool closed, out int diveCount,
+                                                  out double diveMaxLen, out int dropped)
+    {
+        closed = false; diveCount = 0; diveMaxLen = 0; dropped = 0;
+        var runs = new List<List<Point3>>();
+        if (loop == null || loop.Count < 3) return runs;
+
+        // ① mm로 겹친 점 버리기 — 링마다 독립(링 간 충돌로 정점이 빠지면 브레이크라인에 구멍이 난다)
+        var seen = new HashSet<(long, long)>();
+        var pts = new List<Point3>();
+        foreach (var pt in loop)
+        {
+            var key = ((long)System.Math.Round(pt.X * 1000), (long)System.Math.Round(pt.Y * 1000));
+            if (!seen.Add(key)) continue;
+            pts.Add(pt);
+        }
+        if (pts.Count < 3) return runs;
+
+        const double MaxSeg2 = RingSegMaxM * RingSegMaxM;
+        var cur = new List<Point3> { pts[0] };
+        for (int i = 1; i < pts.Count; i++)
+        {
+            double dx = pts[i].X - pts[i - 1].X, dy = pts[i].Y - pts[i - 1].Y;
+            if (dx * dx + dy * dy > MaxSeg2)
+            {
+                diveCount++;
+                double dlen = System.Math.Sqrt(dx * dx + dy * dy);
+                if (dlen > diveMaxLen) diveMaxLen = dlen;
+                if (cur.Count >= 2) runs.Add(cur); else dropped += cur.Count;
+                cur = new List<Point3>();
+            }
+            cur.Add(pts[i]);
+        }
+        double cdx = pts[0].X - pts[^1].X, cdy = pts[0].Y - pts[^1].Y;
+        bool closeOk = cdx * cdx + cdy * cdy <= MaxSeg2;
+        if (runs.Count == 0 && closeOk) { closed = true; runs.Add(cur); return runs; }
+        if (closeOk && runs.Count > 0 && cur.Count > 0)
+        {
+            cur.AddRange(runs[0]);   // 꼬리 조각이 이음새로 머리 조각과 이어진다
+            runs[0] = cur;
+        }
+        else if (cur.Count >= 2) runs.Add(cur); else dropped += cur.Count;
+        foreach (var r in runs) if (r.Count < 2) dropped += r.Count;
+        runs.RemoveAll(r => r.Count < 2);
+        return runs;
+    }
+
     /// <summary>2D 선분 진교차(평행/공선 제외). u=a→b, v=c→d 파라미터(0..1, 경계 포함).</summary>
     private static bool SegX2D(Point3 a, Point3 b, Point3 c, Point3 d, out double u, out double v)
     {

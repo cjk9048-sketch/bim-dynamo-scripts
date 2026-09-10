@@ -336,7 +336,7 @@ public static class GradingGeometry
         //   전부 코너 한 파라미터로 몰려 <b>여러 조각이 같은 키</b>를 갖는다 → 불안정 정렬이 순서를 뒤섞어
         //   자기교차하는 링이 나온다. 같은 세대의 큰 링(w)을 축으로 쓰면 키가 균등하게 퍼진다.
         void CollectRuns(List<Point3> ring, IReadOnlyList<Point3> keyPoly, double[] keyCum,
-                         double[] masks, double want, List<(double key, List<Point3> pts)> outRuns)
+                         double[] masks, double want, List<(double key, List<Point3> pts, double dist)> outRuns)
         {
             int n = ring.Count;
             if (n >= 2 && Math.Abs(ring[0].X - ring[n - 1].X) < 1e-9 && Math.Abs(ring[0].Y - ring[n - 1].Y) < 1e-9) n--;
@@ -345,15 +345,15 @@ public static class GradingGeometry
             // ★[JACK 0824] 유지 판정은 **점**으로 한다(구간마다 자가 다르다). tv는 조립 순서용 정렬키일 뿐이다.
             for (int i = 0; i < n; i++) { tv[i] = ParamAt(keyPoly, keyCum, ring[i].X, ring[i].Y); kv[i] = Math.Abs(masks[i] - want) <= 1e-9; }
             int start = System.Array.IndexOf(kv, false);
-            if (start < 0) { outRuns.Add((tv[0], ring.GetRange(0, n))); return; } // 전부 유지
+            if (start < 0) { outRuns.Add((tv[0], ring.GetRange(0, n), want)); return; } // 전부 유지
             List<Point3>? cur = null; double curKey = 0;
             for (int s = 1; s <= n; s++)
             {
                 int i = (start + s) % n;
                 if (kv[i]) { if (cur == null) { cur = new List<Point3>(); curKey = tv[i]; } cur.Add(ring[i]); }
-                else if (cur != null) { if (cur.Count >= 2) outRuns.Add((curKey, cur)); cur = null; }
+                else if (cur != null) { if (cur.Count >= 2) outRuns.Add((curKey, cur, want)); cur = null; }
             }
-            if (cur != null && cur.Count >= 2) outRuns.Add((curKey, cur));
+            if (cur != null && cur.Count >= 2) outRuns.Add((curKey, cur, want));
         }
 
         for (int e = 0; e < profile.Edges.Count; e++)
@@ -385,7 +385,7 @@ public static class GradingGeometry
                 foreach (var dm0 in mset) if (Math.Abs(dm0 - dist) > 1e-9) { anyDiff = true; break; }
                 if (anyDiff)
                 {
-                    var runs2 = new List<(double key, List<Point3> pts)>();
+                    var runs2 = new List<(double key, List<Point3> pts, double dist)>();
                     var cumW = CumLen2D(w);                       // 조립 정렬축 = 이 세대의 전역 링
                     // ★[검토 C-1] 서로 다른 조합이라도 **거리가 같으면 링도 같다** — 거리로 캐시한다.
                     //   종전엔 조합마다 NTS 버퍼를 새로 떴다(조합 수 × 모서리 수 = 수백 번).
@@ -415,6 +415,40 @@ public static class GradingGeometry
                     if (runs2.Count > 0)
                     {
                         runs2.Sort((a, bb) => a.key.CompareTo(bb.key));
+                        // ★★★[JACK 0910 <i>"부분변환한 자리가 엄청 깨진다"</i> · 검토 0910 실측]
+                        //   <b>여기가 이음매다. 그리고 아직 <u>고치지 않았다</u> — 두 번 시도하고 두 번 되돌렸다.</b>
+                        //
+                        //   <para><b>증상.</b> 조각(구간 밖 사면 + 구간 안 벽)은 경계에서 <b>바깥으로 나간
+                        //   거리가 다르다</b> — 벽은 1m, 사면은 19m. 그래서 이음매가 <b>점 두 개짜리 89m 변</b>이
+                        //   되고, 그 자리에 지시선이 없어 Civil의 TIN이 빈 면을 부채꼴로 건넌다.
+                        //   <b>실측(S107): 이음매 골목의 최장 삼각형 7.52m → 37.41m · 10m 넘는 변 0개 → 22개.</b></para>
+                        //
+                        //   <para><b>①점으로 메우기 — 되돌림.</b> 채운 점이 전부 그 선 <b>위</b>(공선)라
+                        //   모양이 안 바뀌고, <c>BreaklinePrep.RingSegMaxM</c> 문턱만 우회했다.
+                        //   대가: 옹벽선 15→29줄 · <b>구간 밖인데 벽 0→226점</b>(0805 사선 옹벽 재발) ·
+                        //   브레이크라인 평면 교차 0→120건. 그리고 <b>TIN은 안 나아졌다</b>(골목 최장 −11%).
+                        //   빠진 것은 선이 아니라 <b>면</b>이었다 — 벽 링과 사면 링 사이 18m 폭에 점이 없다.</para>
+                        //
+                        //   <para><b>②거리를 경사로로(조립 자리에서) — 되돌림.</b> 이음매에서 둘레를 따라
+                        //   폭 <c>w</c> 안에서 거리를 태웠다. 찢어짐은 실제로 줄었다(<b>다이브 89.4m → 12.0m</b>,
+                        //   골목 최장 37.4 → 24.4m). 그런데 <b>기하만 바꾸고 규칙은 안 바꿨다</b> —
+                        //   <c>SlopeZone.ContainsAt</c>은 여전히 <b>둘레 위치로만</b> 안팎을 가르는 계단이라,
+                        //   전이 구간의 점들이 "구간 밖인데 벽"으로 읽혔고(214점) 구간이 기하를 못 바꾸게 됐다
+                        //   (S47 118.6 → <b>118.5</b>, 즉 규칙이 안 먹었다). 검사 14개가 떨어졌다.</para>
+                        //
+                        //   <para>★★★<b>그래서 고칠 자리는 여기가 아니라 <c>DistOf</c>다</b> —
+                        //   기하와 규칙을 <b>같이</b> 정하는 유일한 자리. 다만 그러면 거리가 연속이 되어
+                        //   <c>mset</c>(거리 하나당 버퍼 하나)이 터진다. 쓸 만한 길은
+                        //   <b>전이 구간을 진짜 <c>SlopeZone</c> 몇 개로 쪼개 넣는 것</b>이다 —
+                        //   그러면 규칙과 기하가 저절로 같아지고 버퍼도 그 수만큼만 는다.
+                        //   <b>비용을 재고 나서</b> 짓는다(S54: 구간 16개 1,672ms).</para>
+                        //
+                        //   <para>★쓸 만한 재료는 이미 잰 것이 둘 있다:
+                        //   ⓐ<b>부지 꼭짓점에서 0.5m만 떨어지면</b> <c>OutwardAt</c>으로 놓은 점이
+                        //   진짜 NTS 버퍼와 <b>0.000m로 일치</b>한다(사각형·ㄴ자·ㄷ자 × 거리 4.8·23.9·47.8m).
+                        //   즉 전이 구간의 점은 <b>버퍼를 새로 안 떠도</b> 정확히 놓을 수 있다.
+                        //   ⓑ볼록 코너의 부채꼴은 <b>전부 한 둘레 자리로 투영</b>되므로 창이 꼭짓점을 물면
+                        //   비켜 가야 한다(안 그러면 그 자리만 다시 계단이 된다).</para>
                         var asm2 = new List<Point3>();
                         foreach (var r in runs2) asm2.AddRange(r.pts);
                         if (asm2.Count >= 3) w = asm2;
@@ -591,15 +625,6 @@ public static class GradingGeometry
         // PrecisionModel(1000) = 1mm 스냅 → 소수점 미세 단차 위상오류 차단(설계도 방어로직 1).
         => new(new PrecisionModel(1000.0));
 
-    /// <summary>[§75] 링(2D) 누적 호길이 — cum[i]=정점 i까지, cum[^1]=닫힘 변 포함 전체 둘레.</summary>
-    /// <summary>★[JACK 0820] 클릭한 선이 덮는 <b>경계 호길이 구간</b> — 선의 점들을 경계에 투영해
-    /// <b>가장 큰 빈틈</b>을 찾고 그 여집합을 준다(선이 없는 쪽이 빈틈이므로).
-    /// <para>Civil 층(GradingSettings)에 있던 것을 여기로 옮겼다 — 순수 기하라 시험할 수 있어야 한다.
-    /// 바깥 단의 링은 경계에서 아주 멀어(성토 47m·1:1.5면 70m 이상) 코너 바깥 조각은
-    /// <b>모든 점이 코너 하나로 투영</b>된다. 그러면 구간 길이가 0이 되고,
-    /// <c>SlopeZone.Flatten</c>이 '길이 0 구간'을 버려 <b>변환이 통째로 사라진다</b>
-    /// (JACK 0820 '사면 맨 아랫단은 안 바뀌네'). 그래서 여기서 <b>최소 폭을 보장</b>한다.</para></summary>
-    /// <param name="minSpan">이보다 좁게 나오면 중심을 유지한 채 이 폭으로 넓힌다(0이면 넓히지 않음).</param>
     /// <summary>호길이 t(0..둘레, 랩) 위치의 XY — 어느 폴리곤 위에서든.</summary>
     public static Point3 PointAtParam(IReadOnlyList<Point3> poly, double[] cum, double t)
     {
@@ -614,6 +639,14 @@ public static class GradingGeometry
         return new Point3(a.X + (b.X - a.X) * u, a.Y + (b.Y - a.Y) * u, a.Z + (b.Z - a.Z) * u);
     }
 
+    /// <summary>★[JACK 0820] 클릭한 선이 덮는 <b>경계 호길이 구간</b> — 선의 점들을 경계에 투영해
+    /// <b>가장 큰 빈틈</b>을 찾고 그 여집합을 준다(선이 없는 쪽이 빈틈이므로).
+    /// <para>Civil 층(GradingSettings)에 있던 것을 여기로 옮겼다 — 순수 기하라 시험할 수 있어야 한다.
+    /// 바깥 단의 링은 경계에서 아주 멀어(성토 47m·1:1.5면 70m 이상) 코너 바깥 조각은
+    /// <b>모든 점이 코너 하나로 투영</b>된다. 그러면 구간 길이가 0이 되고,
+    /// <c>SlopeZone.Flatten</c>이 '길이 0 구간'을 버려 <b>변환이 통째로 사라진다</b>
+    /// (JACK 0820 '사면 맨 아랫단은 안 바뀌네'). 그래서 여기서 <b>최소 폭을 보장</b>한다.</para></summary>
+    /// <param name="minSpan">이보다 좁게 나오면 중심을 유지한 채 이 폭으로 넓힌다(0이면 넓히지 않음).</param>
     public static (double T0, double T1)? PickInterval(
         IReadOnlyList<Point3> pts, IReadOnlyList<Point3> boundary, double[] cum, double minSpan = 0.0)
     {
@@ -654,6 +687,7 @@ public static class GradingGeometry
         return (t0, t1);
     }
 
+    /// <summary>[§75] 링(2D) 누적 호길이 — cum[i]=정점 i까지, cum[^1]=닫힘 변 포함 전체 둘레.</summary>
     public static double[] CumLen2D(IReadOnlyList<Point3> ring)
     {
         int n = ring.Count;
@@ -666,6 +700,305 @@ public static class GradingGeometry
             cum[i + 1] = cum[i] + Math.Sqrt((b.X - a.X) * (b.X - a.X) + (b.Y - a.Y) * (b.Y - a.Y));
         }
         return cum;
+    }
+
+    /// <summary>★★★[JACK 0910] 호길이 <paramref name="t"/>가 구간 <c>[T0,T1]</c> 안에 있는가(랩 대응).
+    /// <para>구간은 고리 위의 조각이라 <c>T0 &gt; T1</c>이면 0을 지나 이어진다 —
+    /// 그때는 <b>바깥이 안</b>이 되므로 판정이 뒤집힌다. 이 저장소가 여러 곳에서 쓰는 규약이다.</para></summary>
+    /// <summary>★★[JACK 0910 · 검토 0910] 부분 구간의 <b>최소 길이(m)</b> — 이보다 짧으면 거절한다.
+    ///
+    /// <para><b>왜 Core에 있나(검토 0910 보통4).</b> 이 값이 성립하는 근거가 전부 이 파일에 있다 —
+    /// 조밀화 간격 <c>dens</c>와 <c>CollectRuns</c>의 <c>cur.Count &gt;= 2</c>. 상수만 명령(Civil) 쪽에
+    /// 두면 누가 그 둘을 손댔을 때 <b>이 값이 조용히 틀린 값이 된다</b>. 그리고 검사기가 3.0을
+    /// 리터럴로 먹고 있어서 그 어긋남을 <b>잡지도 못했다</b>. 이제 셋이 같은 것을 본다.</para>
+    ///
+    /// <para><b>첫 판은 0.5m였고 근거가 틀렸다.</b> 그때 적은 이유는 <i>"길이 0에 가까우면
+    /// <c>SlopeZone.Flatten</c>이 버린다"</i>였는데, 재 보니 <b>자(<c>Ref</c>)가 붙은 구간은
+    /// 그 검사를 아예 안 받는다</b>. 부분 구간은 늘 자가 붙는다.</para>
+    ///
+    /// <para><b>진짜 걸리는 자리는 <c>CollectRuns</c>의 <c>cur.Count &gt;= 2</c>다.</b>
+    /// 정점이 <b>하나뿐인 런은 말없이 버려지고</b> 그 자리는 전역 값을 그대로 쓴다 —
+    /// 즉 구간이 형상에 아무 일도 안 한다. 링 조밀화 간격은 <b>1m 미만</b>이므로
+    /// (<c>dens = Max(0.3, Min(VertexSpacing, 1.0))</c>) 3m 창이면 정점을 <b>최소 셋</b> 품는다.
+    /// 0.5m는 <b>0개가 될 수 있었다</b>.</para>
+    ///
+    /// <para>★<b>"언제나 충분"은 아니다 — 평탄·볼록에서 충분하다.</b> 마스크는 그 세대 링의 정점을
+    /// 구간의 <b>자</b>에 투영해 묻는데, 자의 <b>오목한</b> 자리에서는 바깥 링의 호가 줄어든다.
+    /// 자 위의 3m가 링 위에서 더 짧아져 두 점 아래로 떨어질 수 있다 —
+    /// <b>버퍼 기하에서 따라 나온 추론이고 실제 지형으로 재 본 것이 아니다.</b>
+    /// 오목한 자리에서 "지정했는데 안 바뀐다"가 나오면 여기부터 의심할 것.</para></summary>
+    /// <summary>★[계측용 0910] 부지를 <paramref name="dist"/>만큼 <b>바깥으로 밀어낸 링</b> —
+    /// <c>Build</c> 안의 <c>MakeRingXY</c>와 <b>같은 셈</b>을 밖에서도 부를 수 있게 낸 문.
+    /// <para>전이면을 어떻게 지을지 정하려면 <b>중간 거리 링이 어떻게 생겼는지</b>를 재야 하는데,
+    /// 그 셈이 <c>Build</c> 안 지역 함수에 갇혀 있어 오프라인에서 잴 수가 없었다.
+    /// (「검사 입력은 출하 입력이어야 한다」 — 재려면 같은 셈이어야 한다.)</para></summary>
+    public static List<Point3>? OffsetRingForTest(IReadOnlyList<Point3> pad, double dist, GradingParams p)
+    {
+        if (pad == null || pad.Count < 3 || dist <= 1e-9) return null;
+        var gf = NtsFactory();
+        var cs = new Coordinate[pad.Count + 1];
+        for (int i = 0; i < pad.Count; i++) cs[i] = new Coordinate(pad[i].X, pad[i].Y);
+        cs[pad.Count] = new Coordinate(pad[0].X, pad[0].Y);
+        Geometry basePoly;
+        try { basePoly = gf.CreatePolygon(cs); } catch { return null; }
+        var bp = new BufferParameters
+        {
+            JoinStyle = p.MiterConvex ? JoinStyle.Mitre : JoinStyle.Round,
+            MitreLimit = p.MiterLimit,
+            QuadrantSegments = 12,
+        };
+        Geometry g;
+        try { g = basePoly.Buffer(dist, bp); } catch { return null; }
+        var pg = LargestPolygon(g);
+        if (pg == null) return null;
+        var pts = new List<Point3>();
+        foreach (var c in pg.ExteriorRing.Coordinates) pts.Add(new Point3(c.X, c.Y, 0));
+        double dens = Math.Max(0.3, Math.Min(p.VertexSpacing, 1.0));
+        var d2 = Densify(Weed(pts), dens);
+        return d2.Count >= 3 ? d2 : null;
+    }
+
+    public static double MinPartSpan(GradingParams p)
+    {
+        double dens = Math.Max(0.3, Math.Min(p.VertexSpacing, 1.0));
+        return Math.Max(3.0, dens * 3.0);   // 정점을 최소 셋 품는 창
+    }
+
+    public static bool InInterval(double t0, double t1, double t)
+        => t0 <= t1 ? (t >= t0 - 1e-9 && t <= t1 + 1e-9) : (t >= t0 - 1e-9 || t <= t1 + 1e-9);
+
+    /// <summary>★[검토 0910] 부분 구간을 못 정한 <b>이유</b> — 부르는 쪽이 이것으로 갈린다.
+    /// <para>종전엔 한글 문장을 <c>StartsWith</c>로 읽어 <c>partArc</c>를 풀지 말지를 정했다 —
+    /// <b>문구를 다듬는 순간 조용히 깨지는</b> 제어 흐름이다.</para></summary>
+    public enum PartFail
+    {
+        /// <summary>정했다.</summary>
+        None,
+        /// <summary>너무 짧다(찍은 자리가 가깝거나, 밖을 찍어 붙였더니 짧아졌다).</summary>
+        TooShort,
+        /// <summary>구간 전체다 — <b>부분 지정을 푸는 뜻</b>이다.</summary>
+        WholeInterval,
+    }
+
+    /// <summary>★★★[JACK 0910 · 검토 0910] 고리 위 <paramref name="t"/> 자리에서 <b>바깥쪽</b>으로
+    /// <paramref name="len"/>만큼 나간 점 — 커서 표식의 방향 화살표가 이것을 가리킨다.
+    ///
+    /// <para><b>무게중심을 쓰면 안 된다.</b> 첫 판은 <i>"무게중심의 반대쪽이 바깥"</i>이었는데,
+    /// ㄷ자·L자 부지의 <b>오목한 굽이</b>에서는 무게중심이 부지 밖에 있거나 굽이 반대편에 있어
+    /// <b>안쪽을 바깥이라고</b> 가리킨다(검토가 오프라인으로 재서 확인).</para>
+    ///
+    /// <para>→ <b>폴리곤이 도는 방향</b>으로 정한다. 단순 닫힌 폴리곤에서 반시계(면적 부호 +)면
+    /// 안쪽은 진행 방향의 <b>왼쪽</b>이므로 바깥은 오른쪽 <c>(dy, −dx)</c>, 시계면 그 반대다.
+    /// 이것은 <b>오목·볼록을 안 가린다</b> — 모양이 아니라 방향에서 나오는 값이기 때문이다.</para></summary>
+    public static Point3 OutwardAt(IReadOnlyList<Point3> ring, double[] cum, double t, double len)
+    {
+        var p = PointAtParam(ring, cum, t);
+        var q = PointAtParam(ring, cum, t + 0.5);
+        double dx = q.X - p.X, dy = q.Y - p.Y;
+        double L = Math.Sqrt(dx * dx + dy * dy);
+        if (L < 1e-9) { dx = 1; dy = 0; L = 1; }
+        dx /= L; dy /= L;
+
+        // 부호 있는 면적(신발끈) — 양수면 반시계.
+        double a2 = 0;
+        int n = ring.Count;
+        for (int i = 0; i < n; i++)
+        {
+            var u = ring[i]; var v = ring[(i + 1) % n];
+            a2 += u.X * v.Y - v.X * u.Y;
+        }
+        bool ccw = a2 > 0;
+        double nx = ccw ? dy : -dy;
+        double ny = ccw ? -dx : dx;
+        return new Point3(p.X + nx * len, p.Y + ny * len, p.Z);
+    }
+
+    /// <summary>구간이 <b>고리 한 바퀴</b>인가 — 그러면 "안/밖"이라는 말 자체가 뜻을 잃는다.</summary>
+    public static bool WholeRing(double t0, double t1, double total)
+    {
+        if (total <= 1e-9) return true;
+        double span = t1 >= t0 ? t1 - t0 : total - t0 + t1;
+        return span >= total - 1e-6 || System.Math.Abs(span) < 1e-9;
+    }
+
+    /// <summary>구간 <c>[t0,t1]</c>의 길이(랩 대응). 같은 자리면 <b>한 바퀴</b>로 본다(이 저장소의 고리 규약).</summary>
+    public static double SpanOf(double t0, double t1, double total)
+    {
+        if (total <= 1e-9) return 0;
+        double s = t1 >= t0 ? t1 - t0 : total - t0 + t1;
+        return System.Math.Abs(s) < 1e-9 ? total : s;
+    }
+
+    /// <summary>★★★[JACK 0910] <b>고른 구간 안에서 두 점으로 부분 구간을 정한다 — 판정 전부.</b>
+    ///
+    /// <para>화면 쪽(<c>ZoneEditCommon</c>)이 이 함수 하나만 부른다. 판정을 명령 안에 두면
+    /// <b>오프라인 검사기가 닿지 못해</b> "먹이는 값이 출하되는 값이 아닌" 검사가 된다 —
+    /// 이 저장소가 §78 ③·④에서 두 번 값을 치른 자리라 처음부터 여기 둔다.</para>
+    ///
+    /// <para><b>두 갈래</b>가 있다.
+    /// ①구간이 고리 한 바퀴면(닫힌 계단선) <b>가두는 것이 아무 제약이 아니다</b> —
+    /// 두 점 사이 호가 <b>둘</b>이므로 <b>짧은 쪽</b>을 택하고, 부르는 쪽이
+    /// <paramref name="flip"/>으로 뒤집을 수 있게 한다.
+    /// ②구간이 조각이면 두 점을 그 안으로 가두고, 구간이 흐르는 방향으로 차례를 매긴다 —
+    /// 그때는 답이 하나뿐이라 <paramref name="flip"/>이 뜻이 없다.</para></summary>
+    /// <param name="moved">구간 밖을 찍어 끝으로 붙인 거리 중 <b>큰 쪽</b>(0이면 둘 다 안).</param>
+    /// <param name="why">못 정했을 때의 이유 — 부르는 쪽이 그대로 사람에게 보여 준다.</param>
+    public static (double T0, double T1, double Span, bool WasWhole)? PartInterval(
+        double f0, double f1, double ta, double tb, double total, double minSpan, bool flip,
+        out double moved, out string why, out PartFail fail, out bool onlySide)
+    {
+        moved = 0; why = ""; fail = PartFail.None; onlySide = false;
+        if (total <= 1e-9) { why = "둘레를 잴 수 없습니다."; fail = PartFail.TooShort; return null; }
+
+        double fullSpan = SpanOf(f0, f1, total);
+        bool whole = WholeRing(f0, f1, total);
+
+        double t0, t1, span;
+        bool tookOther = false;
+        if (whole)
+        {
+            // 두 점 사이 호는 둘 — 짧은 쪽을 기본으로, flip이면 반대쪽.
+            double W(double v) { v %= total; return v < 0 ? v + total : v; }
+            double a = W(ta), b = W(tb);
+            double fwd = b >= a ? b - a : total - a + b;   // a → b (★여기서는 0을 0으로 둔다)
+            double bwd = total - fwd;                       // b → a
+            bool takeFwd = fwd <= bwd;
+            if (flip) takeFwd = !takeFwd;
+            double Chosen(bool f) => f ? fwd : bwd;
+
+            // ★★[검토 0910 · 보통2] <b>"이 2m만 빼고 나머지 전부"도 정상적인 요구다.</b>
+            //   짧은 쪽이 최소 길이에 못 미치면 <b>반대쪽</b>이 답인 경우가 많다(닫힌 고리에서
+            //   개구부 하나만 남기는 모양). 한쪽만 쓸 수 있으면 <b>그쪽으로 넘어간다</b>.
+            if (Chosen(takeFwd) < minSpan && Chosen(!takeFwd) >= minSpan)
+            { takeFwd = !takeFwd; tookOther = true; }
+            // ★한쪽이 최소 길이에 못 미치면 <b>뒤집어도 답이 같다</b> — 부르는 쪽이 R을 안 걸게 알려 준다.
+            onlySide = fwd < minSpan || bwd < minSpan;
+
+            t0 = takeFwd ? a : b;
+            t1 = takeFwd ? b : a;
+            span = Chosen(takeFwd);
+
+            // ★★★[검토 0910 · 보통1] <b>규약이 저장소와 정반대가 되는 자리를 막는다.</b>
+            //   여기서 두 점이 같으면 <c>T0 == T1</c>인 채 "한 바퀴"가 나온다. 그런데
+            //   <c>SlopeZone.Contains</c>·<c>Models.LenOf</c>는 <b>같은 값 = 한 점(길이 0)</b>으로 읽는다 —
+            //   "전체"라고 적어 놓고 <b>0</b>이 되는, 0909 터파기에서 값을 치른 그 모양이다.
+            //   → 한 바퀴는 <b>언제나 <c>(0, total)</c>로 적는다</b>. 그러면 세 규약이 같아진다.
+            if (span >= total - 1e-6) { t0 = 0; t1 = total; span = total; }
+        }
+        else
+        {
+            double ca = ClampInto(f0, f1, ta, total, out double m1);
+            double cb = ClampInto(f0, f1, tb, total, out double m2);
+            moved = System.Math.Max(m1, m2);
+            double Rel(double t) { double r = t - f0; return r >= 0 ? r : total + r; }
+            double ra = Rel(ca), rb = Rel(cb);
+            if (ra > rb) { (ca, cb) = (cb, ca); (ra, rb) = (rb, ra); }
+            t0 = ca; t1 = cb; span = rb - ra;
+        }
+
+        if (span < minSpan)
+        {
+            fail = PartFail.TooShort;
+            // ★[검토 0910 · 보통3] <b>두 사실을 같이 적는다.</b> 종전엔 밖을 찍었으면 "밖입니다"만 말해
+            //   <b>붙인 뒤 길이가 모자란 것</b>이 진짜 이유인 경우에 사용자를 엉뚱한 곳으로 보냈다.
+            why = moved > 0.01
+                ? $"구간 밖을 찍어 끝으로 붙였더니 {span:0.##}m뿐입니다(최대 {moved:0.#}m 벗어남)"
+                  + $" — 노란 선 위에서 {minSpan:0.#}m 이상 벌려 찍으세요."
+                : $"두 점이 너무 가깝습니다({span:0.##}m) — {minSpan:0.#}m 이상 벌려 찍으세요.";
+            return null;
+        }
+        if (!whole && span >= fullSpan - 1e-6)
+        {
+            fail = PartFail.WholeInterval;
+            why = "구간 전체입니다 — 부분 지정을 풉니다.";
+            return null;
+        }
+        // ★★[검토 0910 · 보통2] <b>"반대쪽(R)이 말없이 안 먹는" 자리를 없앤다.</b>
+        //   <para>닫힌 계단선에서 두 점을 아주 가깝게 찍으면 짧은 쪽이 최소 길이에 못 미쳐
+        //   <b>반대쪽으로 구제</b>된다. 그때 사용자가 짧은 쪽을 원해 <b>R</b>을 눌러도,
+        //   뒤집은 결과가 다시 구제에 걸려 <b>같은 답</b>이 나온다 — 그런데 그때는
+        //   <c>tookOther</c>가 거짓이라 <b>안내조차 안 나갔다</b>. 사용자가 보는 것은
+        //   "R을 눌렀는데 아무 일도 안 일어난다"였다.</para>
+        //   <para>★값은 맞다(그 짧은 쪽은 정말 못 쓴다). 틀린 것은 <b>말하기</b>다 —
+        //   그래서 부르는 쪽이 <b>R을 걸지 말지</b> 정할 수 있게 사실을 그대로 알려 준다.</para>
+        //   ★<c>onlySide</c>: 한쪽밖에 쓸 수 없다 = 뒤집어도 같은 답이다.
+        if (tookOther)
+            why = $"짧은 쪽이 {minSpan:0.#}m에 못 미쳐 반대쪽만 쓸 수 있습니다 — 이 {span:0.#}m 하나뿐입니다.";
+        return (t0, t1, span, whole);
+    }
+
+    /// <summary>★★★[JACK 0910 <i>"그 구간을 선택한 후에 그 구간내에서 시점 종점을 별도로 클릭해서
+    /// 그부분만 변환"</i>] 찍은 자리를 <b>그 구간 안으로 가둔다</b>.
+    ///
+    /// <para>구간 밖을 찍었으면 <b>가까운 쪽 끝</b>으로 붙인다 — 조용히 버리면 사용자는
+    /// "왜 안 되지"만 남고, 구간 밖까지 바꿔 버리면 <b>고른 적 없는 자리가 옹벽</b>이 된다.
+    /// 붙였다는 사실은 부르는 쪽이 말해 준다(<paramref name="moved"/>).</para></summary>
+    public static double ClampInto(double t0, double t1, double t, double total, out double moved)
+    {
+        moved = 0;
+        if (total <= 1e-9) return t;
+        // ★[검토 0910] <b>한 바퀴면 가둘 것이 없다</b> — 고리 전체가 곧 구간이다.
+        //   이 방어가 없으면 <c>W(둘레) = 0</c>이라 <c>[0, 둘레]</c>가 <b><c>[0,0]</c> 한 점</b>으로 접히고,
+        //   <c>InInterval</c>이 <c>t0 &lt;= t1</c> 가지를 타서 <b>0 말고는 전부 밖</b>이 된다.
+        //   ★단, <b>지금 출하되는 길에서는 여기 안 온다</b> —
+        //     <see cref="PartInterval"/>이 한 바퀴를 <b>제 갈래에서</b> 처리하기 때문이다.
+        //     그쪽이 치명1의 진짜 수정이고, 이것은 <b>공개 API를 쓰는 다음 사람</b>을 위한 방어다.
+        //   ★랩은 그대로 걸어 돌려준다 — 안 걸면 200이 200으로 나와 고리 밖 값이 샌다.
+        if (WholeRing(t0, t1, total)) { double w = t % total; return w < 0 ? w + total : w; }
+        double W(double v) { v %= total; return v < 0 ? v + total : v; }
+        t = W(t); t0 = W(t0); t1 = W(t1);
+        if (InInterval(t0, t1, t)) return t;
+
+        // 고리 위 거리 — 어느 끝이 더 가까운가.
+        double D(double a, double b) { double d = System.Math.Abs(W(a - b)); return System.Math.Min(d, total - d); }
+        double d0 = D(t, t0), d1 = D(t, t1);
+        double pick = d0 <= d1 ? t0 : t1;
+        moved = System.Math.Min(d0, d1);
+        return pick;
+    }
+
+    /// <summary>★[JACK 0910] 고리에서 <c>t0 → t1</c> 조각을 <b>점 목록</b>으로 떠낸다(랩 대응).
+    ///
+    /// <para>구간을 화면에 <b>보여 주려고</b> 쓴다 — 양 끝은 정확히 그 자리로 끊고,
+    /// 사이에 있는 꼭짓점은 그대로 담는다. 끊는 자리가 꼭짓점과 겹치면 겹친 점은 한 번만 담는다.</para>
+    ///
+    /// <para>★<c>t1 &lt; t0</c>이면 0을 지나 <b>앞으로</b> 간다(고리라 그 길이 곧 그 구간이다).</para></summary>
+    public static List<Point3> SubPath(IReadOnlyList<Point3> ring, double[] cum, double t0, double t1)
+    {
+        var outPts = new List<Point3>();
+        if (ring == null || ring.Count < 2 || cum == null || cum.Length < 2) return outPts;
+        double total = cum[cum.Length - 1];
+        if (total <= 1e-9) return outPts;
+        double W(double v) { v %= total; return v < 0 ? v + total : v; }
+        double a = W(t0), b = W(t1);
+        double span = b >= a ? b - a : total - a + b;
+        if (span <= 1e-9) span = total;              // 같은 자리 = 한 바퀴로 본다(닫힌 고리 규약)
+
+        outPts.Add(PointAtParam(ring, cum, a));
+
+        // ★★<b>차례를 t가 아니라 "시점에서 얼마나 갔나"로 매긴다.</b>
+        //   <c>cum</c>은 오름차순이지만, 0을 지나 이어지는 구간에서는 그 차례가 <b>뒤집힌다</b> —
+        //   0 근처 꼭짓점(끝쪽)이 큰 t 꼭짓점(앞쪽)보다 먼저 담겨 <b>선이 왔다 갔다</b> 꼬인다.
+        int m = cum.Length - 1;
+        var mid = new List<(double Rel, Point3 P)>();
+        for (int i = 0; i < m; i++)
+        {
+            double ti = cum[i];
+            double rel = ti >= a ? ti - a : total - a + ti;
+            if (rel > 1e-9 && rel < span - 1e-9) mid.Add((rel, ring[i]));
+        }
+        mid.Sort((x, y) => x.Rel.CompareTo(y.Rel));
+        foreach (var (_, p) in mid)
+        {
+            var last = outPts[outPts.Count - 1];
+            if (System.Math.Abs(p.X - last.X) > 1e-9 || System.Math.Abs(p.Y - last.Y) > 1e-9)
+                outPts.Add(p);
+        }
+        var end = PointAtParam(ring, cum, W(a + span));
+        var lastP = outPts[outPts.Count - 1];
+        if (System.Math.Abs(end.X - lastP.X) > 1e-9 || System.Math.Abs(end.Y - lastP.Y) > 1e-9)
+            outPts.Add(end);
+        return outPts;
     }
 
     /// <summary>[§75] (x,y)를 닫힌 경계에 수선 투영한 지점의 호길이 파라미터(0..둘레). cum=CumLen2D(ring).</summary>

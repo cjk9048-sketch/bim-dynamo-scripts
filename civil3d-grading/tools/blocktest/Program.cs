@@ -4784,6 +4784,13 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
             foreach (var q in ring)
             {
                 if (!z.ContainsAt(q.X, q.Y, b, bc)) continue;
+                // ★★[검토 0910 · 보통1] 0910에 여기서 <b>구간 양 끝 5m를 빼고</b> 쟀었다.
+                //   이음매를 점으로 채우던 판에서 그 점들이 최원점을 0.5m 바깥으로 밀어
+                //   이 검사가 <b>간발로</b> 떨어졌기 때문이다(118.6 → 117.6, 문턱은 >1.0).
+                //   <para>★그런데 재 보니 <b>제외를 켜면 채우기 전·후의 숫자가 완전히 같아졌다</b>
+                //   (둘 다 118.5 → 117.0) — 즉 이 검사가 <b>그 변화를 아예 못 보게</b> 됐다.
+                //   검사가 진짜를 잡았는데 그 눈을 가린 셈이다.</para>
+                //   → 이음매 채우기를 되돌렸으므로 <b>제외도 같이 걷는다</b>. 이 검사는 다시 눈을 뜬다.
                 double d = double.MaxValue;
                 for (int i2 = 0, j2 = b.Count - 1; i2 < b.Count; j2 = i2++)
                 {
@@ -5282,9 +5289,21 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
         return sw.ElapsedMilliseconds;
     }
 
-    Ms(null);   // 워밍업(JIT)
-    long t0 = Ms(null), t4 = Ms(MakeZones(4)), t8 = Ms(MakeZones(8)), t16 = Ms(MakeZones(16));
-    Console.WriteLine($"      S54 단 {nb}개 · Build 시간 — 구간 0개 {t0}ms · 4개 {t4}ms · 8개 {t8}ms · 16개 {t16}ms");
+    // ★★[검토 0910] <b>세 번 재서 가장 빠른 값을 쓴다.</b>
+    //   <para>이 검사가 <b>기계 사정에 따라 떨어졌다</b> — 이 기계에서 311ms로 떨어진 판이
+    //   다시 돌리니 276·195·160ms였고, 검토자 기계(빌드를 같이 돌리던 중)에서는 두 건이 떨어졌다.
+    //   묻는 것은 <b>"이만큼 빠를 수 있나"</b>(=코드가 느려졌나)이지 "언제나 이만큼인가"가 아니다.
+    //   한 번만 재면 옆에서 도는 빌드·바이러스 검사가 <b>가짜 경보</b>를 내고,
+    //   가짜 경보가 잦으면 <b>진짜 경보를 무시하게 된다</b> — 그게 더 비싸다.</para>
+    long Best(List<SlopeZone>? zs)
+    {
+        long best = long.MaxValue;
+        for (int i = 0; i < 3; i++) best = Math.Min(best, Ms(zs));
+        return best;
+    }
+    Ms(null); Ms(null);   // 워밍업(JIT)
+    long t0 = Best(null), t4 = Best(MakeZones(4)), t8 = Best(MakeZones(8)), t16 = Best(MakeZones(16));
+    Console.WriteLine($"      S54 단 {nb}개 · Build 시간(3판 중 최단) — 구간 0개 {t0}ms · 4개 {t4}ms · 8개 {t8}ms · 16개 {t16}ms");
     // 0824 최적화 실측: 4개 132ms · 8개 264ms · 16개 411ms(최적화 전 291/832/1542ms).
     //   문턱은 실측의 두 배 — 느려지면 바로 걸린다.
     Check("S54 ★★★구간 16개에 Build가 900ms 안(변환 1회에 4번 돈다)", t16 < 900, $"{t16}ms");
@@ -8499,7 +8518,15 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
         var r = vW95.Rings[i];
         maxGap95 = Math.Max(maxGap95, Math.Sqrt((r[0].X - r[^1].X) * (r[0].X - r[^1].X) + (r[0].Y - r[^1].Y) * (r[0].Y - r[^1].Y)));
     }
-    Check("S95 재현 조건: 옹벽 구간에서 링이 찢어져 있다", maxGap95 > 50, $"최대 벌어짐 {maxGap95:F1}m");
+    // ★★[JACK 0910 · 검토 0910 실측] <b>이 재현 조건은 아직 살아 있다.</b>
+    //   옹벽 구간이 있으면 링이 이음매에서 벌어진 채 조립된다(§68) — 그 벌어진 자리가 100m대라
+    //   아래 <b>가짜 옹벽선 문턱</b>이 무방비가 되는 것이 이 검사의 뜻이다.
+    //   <para>0910에 한 번 <b>이음매를 점으로 채워</b> 이 값을 1.0m로 내렸는데, 재 보니
+    //   그것은 <b>모양을 안 바꾸고 브레이크라인 문턱만 우회</b>하는 일이었다
+    //   (옹벽선 15→29줄 · 구간 밖인데 벽 0→226점). 그래서 <b>되돌렸다</b>.
+    //   근원은 전이면(마감면)을 세워야 없어진다 — S106 참조.</para>
+    Check("S95 ★재현 조건: 부분 구간이면 링이 이음매에서 벌어져 있다", maxGap95 > 50,
+          $"최대 벌어짐 {maxGap95:F1}m (전이면을 세우면 이 값이 내려간다)");
 
     var rs95 = vW95.Rings.Select(r => (IReadOnlyList<Point3>)r).ToList();
     WallRunBuilder.Build(bnd95, rs95, zW95, up: true, globalSlope: 1.5, minSlope: 0.05);
@@ -8514,6 +8541,15 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
         Check("S95 ★★★가짜 옹벽선 문턱이 켜져 있다(찢어진 자리를 안 센다)", ringSeg <= 2.5,
             $"변길이 링 {ringSeg:F2}m → 문턱 {lim:F1}m (고치기 전 102.31m → 154m)");
     }
+
+    // ★★★[검토 0910 · 치명1] <b>여태 아무도 이것을 단언하지 않았다.</b>
+    //   진단줄은 <c>⚠구간 밖인데 벽 226점</c>까지 찍어 놓고 <b>PASS로 지나갔다</b>.
+    //   그 226점이 0910 이음매 채우기가 부른 회귀였는데, 검사기가 인쇄만 해서 못 잡았다.
+    //   → 이제 <b>수로 단언한다</b>(<c>WallRunBuilder.LastExtraWall</c>).
+    //     0이 아니면 "규칙은 사면인데 기하는 벽" — 0805 사선 옹벽이 돌아온 것이다.
+    Check("S95 ★★★구간 밖에 옹벽이 서지 않는다(사선 옹벽 되돌아옴 감시)",
+        WallRunBuilder.LastExtraWall == 0,
+        $"구간 밖인데 벽 {WallRunBuilder.LastExtraWall}점 (0이어야 한다)");
 }
 
 // ── S98 ★★★[JACK 0909] 터파기 <b>기준면 두 갈래</b> ─────────────────────────────
@@ -8988,9 +9024,466 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
           WallSplit.Split(bot4, box, rcum, new List<SlopeZone>(), 0.5, gate).Count == 0, "");
 }
 
+// ══ S103 구간 안의 부분 구간 — [옹벽 변환]에서 시점·종점을 찍는 셈 (JACK 0910) ══
+//   화면은 못 시험하지만 <b>셈은 여기서 다 시험한다</b> — 이 저장소가 §78 ③에서 값을 치르고 정한 규칙.
+{
+    // 40×40 사각 링, 둘레 160. 꼭짓점 t = 0/40/80/120.
+    var ring = new List<Point3> { new(0,0,0), new(40,0,0), new(40,40,0), new(0,40,0) };
+    var cum = GradingGeometry.CumLen2D(ring);
+    double total = cum[cum.Length - 1];
+    Check("S103 둘레가 160이다", System.Math.Abs(total - 160) < 1e-6, $"{total:0.###}");
+
+    // ① 안/밖 판정 — 보통 구간과 0을 지나는 구간
+    Check("S103 보통 구간: 안에 있다", GradingGeometry.InInterval(10, 50, 30), "");
+    Check("S103 보통 구간: 밖에 있다", !GradingGeometry.InInterval(10, 50, 60), "");
+    Check("S103 ★랩 구간: 0 바로 뒤가 안이다", GradingGeometry.InInterval(150, 10, 5), "");
+    Check("S103 ★랩 구간: 가운데는 밖이다", !GradingGeometry.InInterval(150, 10, 80), "");
+
+    // ② 가두기 — 구간 밖을 찍으면 가까운 끝으로 붙는다
+    double t = GradingGeometry.ClampInto(10, 50, 30, total, out double mv);
+    Check("S103 구간 안이면 그대로 둔다", System.Math.Abs(t - 30) < 1e-9 && mv == 0, $"{t:0.##}");
+    t = GradingGeometry.ClampInto(10, 50, 55, total, out mv);
+    Check("S103 ★구간 밖은 가까운 끝(50)으로 붙는다", System.Math.Abs(t - 50) < 1e-9 && System.Math.Abs(mv - 5) < 1e-9, $"{t:0.##} · {mv:0.##}m");
+    t = GradingGeometry.ClampInto(10, 50, 5, total, out mv);
+    Check("S103 ★반대쪽 밖은 시점(10)으로 붙는다", System.Math.Abs(t - 10) < 1e-9 && System.Math.Abs(mv - 5) < 1e-9, $"{t:0.##} · {mv:0.##}m");
+    t = GradingGeometry.ClampInto(150, 10, 140, total, out mv);
+    Check("S103 ★랩 구간 밖도 가까운 끝(150)으로", System.Math.Abs(t - 150) < 1e-9, $"{t:0.##}");
+
+    // ③ 조각 떠내기 — 한 변 안, 꼭짓점을 지나는 것, 0을 지나는 것
+    var seg = GradingGeometry.SubPath(ring, cum, 10, 30);
+    double SegLen(List<Point3> v)
+    {
+        double L = 0;
+        for (int i = 1; i < v.Count; i++) { double dx = v[i].X - v[i-1].X, dy = v[i].Y - v[i-1].Y; L += System.Math.Sqrt(dx*dx + dy*dy); }
+        return L;
+    }
+    Check("S103 한 변 안 조각은 두 점이다", seg.Count == 2, $"{seg.Count}점");
+    Check("S103 그 길이가 20m다", System.Math.Abs(SegLen(seg) - 20) < 1e-6, $"{SegLen(seg):0.###}m");
+
+    seg = GradingGeometry.SubPath(ring, cum, 30, 50);
+    Check("S103 ★꼭짓점을 지나면 그 점이 낀다(3점)", seg.Count == 3, $"{seg.Count}점");
+    Check("S103 그 길이도 20m다", System.Math.Abs(SegLen(seg) - 20) < 1e-6, $"{SegLen(seg):0.###}m");
+
+    seg = GradingGeometry.SubPath(ring, cum, 150, 10);
+    Check("S103 ★★0을 지나는 조각도 이어진다", seg.Count == 3, $"{seg.Count}점");
+    Check("S103 ★★그 길이가 20m다(꼬이면 300m가 된다)", System.Math.Abs(SegLen(seg) - 20) < 1e-6, $"{SegLen(seg):0.###}m");
+
+    seg = GradingGeometry.SubPath(ring, cum, 0, 160);
+    Check("S103 둘레 전체는 한 바퀴가 된다", System.Math.Abs(SegLen(seg) - 160) < 1e-6, $"{SegLen(seg):0.###}m");
+
+    // ④ 찍은 점 → 호길이 → 다시 점 (실제로 쓰는 길)
+    double tp = GradingGeometry.ParamAt(ring, cum, 25, 0.4);   // 아랫변 위 25m 자리를 살짝 벗어나 찍는다
+    Check("S103 ★찍은 자리가 호길이 25m로 읽힌다", System.Math.Abs(tp - 25) < 0.5, $"{tp:0.###}m");
+    var back = GradingGeometry.PointAtParam(ring, cum, tp);
+    Check("S103 그 호길이의 좌표가 원래 자리 근처다",
+          System.Math.Abs(back.X - 25) < 0.5 && System.Math.Abs(back.Y) < 1e-6, $"({back.X:0.##},{back.Y:0.##})");
+}
+
+// ══ S104 부분 구간 판정 — <b>명령이 실제로 부르는 그 함수</b>를 그대로 먹인다 (JACK 0910) ══
+//   ★S103은 조각 셈만 시험했다. 판정(가두기·방향·거절)은 명령 안에 있어 검사기가 못 닿았고,
+//     그래서 <b>닫힌 고리에서 언제나 거절되는 치명 결함</b>이 검사를 통째로 빠져나갔다(검토 0910).
+//     → 판정을 Core로 내리고 여기서 <b>출하되는 그 판정</b>을 시험한다(§78 ③·④의 교훈).
+{
+    const double TOT = 160.0, MIN = 3.0;
+    (double T0, double T1, double Span, bool Whole)? P(double f0, double f1, double a, double b, bool flip,
+                                                       out double mv, out string why)
+        => GradingGeometry.PartInterval(f0, f1, a, b, TOT, MIN, flip, out mv, out why, out _, out _);
+
+    (double T0, double T1, double Span, bool Whole)? PF(double f0, double f1, double a, double b, bool flip,
+                                                        out GradingGeometry.PartFail fail)
+        => GradingGeometry.PartInterval(f0, f1, a, b, TOT, MIN, flip, out _, out _, out fail, out _);
+
+    // ① 조각 구간 [10,50]
+    var r = P(10, 50, 20, 40, false, out double mv, out string why);
+    Check("S104 조각 구간: 두 점 사이 20m", r != null && System.Math.Abs(r.Value.Span - 20) < 1e-6, r == null ? why : $"{r.Value.Span:0.##}m");
+    Check("S104 조각 구간: 한 바퀴가 아니다", r != null && !r.Value.Whole, "");
+    var r2 = P(10, 50, 40, 20, false, out _, out _);
+    Check("S104 ★찍는 차례를 바꿔도 같다", r2 != null && System.Math.Abs(r2.Value.Span - 20) < 1e-6
+          && System.Math.Abs(r2.Value.T0 - r.Value.T0) < 1e-6, "");
+
+    r = P(10, 50, 30, 60, false, out mv, out why);
+    Check("S104 ★한 점이 구간 밖이면 끝(50)으로 붙는다",
+          r != null && System.Math.Abs(r.Value.T1 - 50) < 1e-6 && System.Math.Abs(mv - 10) < 1e-6, $"{mv:0.#}m 붙임");
+
+    r = P(10, 50, 60, 70, false, out mv, out why);
+    Check("S104 ★★두 점이 다 밖이면 거절하고 <b>그 이유</b>를 말한다",
+          r == null && why.Contains("구간 밖"), why);
+
+    r = P(10, 50, 20, 21.5, false, out mv, out why);
+    Check("S104 너무 가까우면 거절한다", r == null && why.Contains("가깝"), why);
+
+    r = P(10, 50, 10, 50, false, out mv, out why);
+    Check("S104 구간 전체를 찍으면 '푼다'고 말한다", r == null && why.Contains("구간 전체"), why);
+
+    // ② ★★★한 바퀴 고리 [0,160] — 검토 0910 치명1이 살던 자리
+    r = P(0, TOT, 20, 60, false, out mv, out why);
+    Check("S104 ★★★닫힌 고리에서도 부분 지정이 된다(치명1)",
+          r != null && System.Math.Abs(r.Value.Span - 40) < 1e-6, r == null ? why : $"{r.Value.Span:0.##}m");
+    Check("S104 ★★★그때 '한 바퀴'라고 알려 준다(방향을 물어야 하므로)", r != null && r.Value.Whole, "");
+
+    r = P(0, TOT, 5, 155, false, out mv, out why);
+    Check("S104 ★★한 바퀴: 짧은 쪽(0을 지나는 10m)을 고른다",
+          r != null && System.Math.Abs(r.Value.Span - 10) < 1e-6, r == null ? why : $"{r.Value.Span:0.##}m");
+    Check("S104 ★★그 조각은 155 → 5로 흐른다",
+          r != null && System.Math.Abs(r.Value.T0 - 155) < 1e-6 && System.Math.Abs(r.Value.T1 - 5) < 1e-6,
+          r == null ? "" : $"{r.Value.T0:0.#}→{r.Value.T1:0.#}");
+
+    r = P(0, TOT, 5, 155, true, out mv, out why);
+    Check("S104 ★★반대쪽(R)을 고르면 150m가 된다",
+          r != null && System.Math.Abs(r.Value.Span - 150) < 1e-6, r == null ? why : $"{r.Value.Span:0.##}m");
+
+    r = P(0, TOT, 0, 80, false, out mv, out why);
+    Check("S104 한 바퀴: 정반대 두 점은 어느 쪽이든 80m", r != null && System.Math.Abs(r.Value.Span - 80) < 1e-6,
+          r == null ? why : $"{r.Value.Span:0.##}m");
+
+    // ③ 랩 구간 [150,10] — 0을 지나는 조각 구간
+    r = P(150, 10, 155, 5, false, out mv, out why);
+    Check("S104 ★★랩 구간 안의 부분 지정(10m)", r != null && System.Math.Abs(r.Value.Span - 10) < 1e-6,
+          r == null ? why : $"{r.Value.Span:0.##}m");
+    r = P(150, 10, 80, 5, false, out mv, out why);
+    Check("S104 ★랩 구간 밖을 찍으면 가까운 끝으로 붙는다", r != null && mv > 1, $"{mv:0.#}m 붙임");
+
+    // ④ 최소 길이는 <b>실제로 쓰는 값</b>이어야 한다
+    // ★<b>조각 구간</b>에서 잰다 — 한 바퀴 고리는 짧은 쪽이 모자라면 <b>반대쪽</b>을 고르는 것이 맞다(아래 ⑤).
+    Check("S104 ★2m 조각은 거절된다(링 정점이 모자라 안 먹는다)",
+          P(10, 50, 20, 22, false, out _, out string w2) == null && w2.Contains("가깝"), w2);
+    Check("S104 3.5m 조각은 통과한다",
+          P(10, 50, 20, 23.5, false, out _, out _) != null, "");
+
+    // ⑤ ★[검토 0910 2차] 규약이 저장소와 어긋나던 자리 셋
+    //   ①한 바퀴가 <c>T0 == T1</c>로 나오면 "전체"라고 적고 실제로는 <b>0</b>이 된다
+    //     (<c>SlopeZone.Contains</c>·<c>LenOf</c>는 같은 값을 <b>한 점</b>으로 읽는다).
+    r = P(0, TOT, 30, 30, true, out mv, out why);
+    Check("S104 ★★★한 바퀴는 언제나 (0, 둘레)로 적는다(같은 점+반대쪽)",
+          r != null && System.Math.Abs(r.Value.T0) < 1e-9 && System.Math.Abs(r.Value.T1 - TOT) < 1e-6
+          && System.Math.Abs(r.Value.Span - TOT) < 1e-6,
+          r == null ? why : $"({r.Value.T0:0.#},{r.Value.T1:0.#}) {r.Value.Span:0.#}m");
+
+    //   ②닫힌 고리에서 "이 2m 개구부만 빼고 나머지 전부"는 정상적인 요구다.
+    r = P(0, TOT, 20, 22, false, out mv, out why);
+    Check("S104 ★★짧은 쪽이 최소치 미만이면 반대쪽(158m)을 고른다",
+          r != null && System.Math.Abs(r.Value.Span - 158) < 1e-6, r == null ? why : $"{r.Value.Span:0.##}m");
+    Check("S104 ★그때 그렇게 했다고 말해 준다", r != null && why.Contains("반대쪽"), why);
+
+    //   ③한 점만 밖인데 "둘 다 밖"이라고 하면 사용자를 엉뚱한 곳으로 보낸다.
+    r = P(10, 50, 48, 70, false, out mv, out why);
+    Check("S104 ★붙인 뒤 짧아진 것이면 그 사실을 같이 적는다",
+          r == null && why.Contains("붙였더니") && why.Contains("벗어남"), why);
+
+    //   ④거절 사유는 <b>문장이 아니라 값</b>으로 갈린다.
+    PF(10, 50, 10, 50, false, out var f1);
+    Check("S104 ★구간 전체는 사유가 WholeInterval", f1 == GradingGeometry.PartFail.WholeInterval, f1.ToString());
+    PF(10, 50, 20, 21, false, out var f2);
+    Check("S104 ★너무 짧으면 사유가 TooShort", f2 == GradingGeometry.PartFail.TooShort, f2.ToString());
+    PF(0, TOT, 20, 60, false, out var f3);
+    Check("S104 ★정해지면 사유가 None", f3 == GradingGeometry.PartFail.None, f3.ToString());
+}
+
+// ══ S106 구간 경계의 <b>끊김</b> — JACK 0910 "부분변환한 자리가 엄청 깨진다" 오프라인 재현 ══
+//   ★현장 로그가 잰 것: 링 최장변 14.67m인데 <b>완성된 지표면의 최장 변이 55.71m</b>,
+//     둘레 16칸 내밀기가 13칸은 0~4.5m인데 3칸만 17~19m.
+//     → 구간 경계에서 <b>벽 끝(1m)과 사면 끝(19m)</b>이 만나는데 그 사이를 이어 주는 면이 없다.
+//   ★이 검사는 <b>고치기 전에 자를 만드는 것</b>이다 — 지금은 얼마나 벌어지는지 재서 남기고,
+//     고친 뒤 이 숫자가 줄어드는지로 판정한다("기하 버그는 계측부터").
+{
+    var pad = new List<Point3> { new(0,0,100), new(80,0,100), new(80,60,100), new(0,60,100) };
+    var cum106 = GradingGeometry.CumLen2D(pad);
+    double per = cum106[^1];
+    var gnd = new FlatGround(140);          // 원지반 140 → 절토 40m
+    var par = new GradingParams
+    {
+        CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 1.5, FillSlope = 1.5, CellSize = 0.5, MaxBenches = 20, MaxRise = 60,
+        VertexSpacing = 2.0, MinSlope = 0.01, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+
+    static (double Max, int Over5, double AtX, double AtY) EdgeStat(IReadOnlyList<Point3> r)
+    {
+        double mx = 0, ax = 0, ay = 0; int over = 0;
+        for (int i = 0; i < r.Count; i++)
+        {
+            var a = r[i]; var b = r[(i + 1) % r.Count];
+            double d = System.Math.Sqrt((b.X-a.X)*(b.X-a.X) + (b.Y-a.Y)*(b.Y-a.Y));
+            if (d > 5.0) over++;
+            if (d > mx) { mx = d; ax = a.X; ay = a.Y; }
+        }
+        return (mx, over, ax, ay);
+    }
+    static (double Max, int Over5) WorstOf(List<List<Point3>> rings)
+    {
+        double mx = 0; int over = 0;
+        foreach (var r in rings) { if (r.Count < 3) continue; var s = EdgeStat(r); mx = System.Math.Max(mx, s.Max); over += s.Over5; }
+        return (mx, over);
+    }
+
+    // ① 구간 없음 — 전부 사면. 이것이 "깨지지 않은" 기준이다.
+    var vPlain = GradingGeometry.Build(pad, gnd, par, true);
+    var sPlain = WorstOf(vPlain.Rings);
+    Check("S106 구간이 없으면 링 변이 짧다(기준)", sPlain.Max < 8.0,
+          $"최장변 {sPlain.Max:0.##}m · 5m 초과 {sPlain.Over5}개 · 링 {vPlain.Rings.Count}개");
+
+    // ② 둘레의 <b>일부만</b> 수직(옹벽) — JACK이 한 그것.
+    var zPart = new List<SlopeZone> { SlopeZone.Wall(0.0, per * 0.35, 0, int.MaxValue, 0.01, 1.0) };
+    var vPart = GradingGeometry.Build(pad, gnd, par, true, zPart);
+    var sPart = WorstOf(vPart.Rings);
+    // ★★★[검토 0910 · 높음2] <b>조건이 <c>true</c>였다 — 이름과 값이 정반대인 채 통과했다.</b>
+    //   이름은 "긴 변이 생긴다(재현)"인데 이음매를 채운 판에서는 "최장변 1m"가 찍혔다.
+    //   <b>못 떨어지는 검사는 검사가 아니다</b>(「검사 입력은 출하 입력이어야 한다」의 짝).
+    //   → 이제 진짜로 단언한다: 이 결함이 살아 있는 동안 이 검사는 <b>재현 검사</b>다.
+    //     전이면을 세워 근원을 없애면 이 줄이 <b>떨어져서</b> 알려 준다 — 그때 뜻을 뒤집으면 된다.
+    Check("S106 ★재현: 부분 구간을 넣으면 링에 <b>긴 변</b>이 생긴다", sPart.Max > 50.0 && sPart.Over5 > 0,
+          $"최장변 {sPart.Max:0.##}m · 5m 초과 {sPart.Over5}개 · 링 {vPart.Rings.Count}개"
+        + $" (기준 {sPlain.Max:0.##}m)");
+
+    // ③ 얼마나 벌어지나 — 벽 쪽과 사면 쪽의 <b>내밀기</b> 차이(현장 로그의 1m ↔ 19m에 해당).
+    static double OutMax(IReadOnlyList<Point3> ring, IReadOnlyList<Point3> pad0, double[] cum0)
+    {
+        double mx = 0;
+        foreach (var q in ring)
+        {
+            double t = GradingGeometry.ParamAt(pad0, cum0, q.X, q.Y);
+            var p0 = GradingGeometry.PointAtParam(pad0, cum0, t);
+            mx = System.Math.Max(mx, System.Math.Sqrt((q.X-p0.X)*(q.X-p0.X) + (q.Y-p0.Y)*(q.Y-p0.Y)));
+        }
+        return mx;
+    }
+    double outPlain = vPlain.Rings.Count > 0 ? OutMax(vPlain.Rings[^1], pad, cum106) : 0;
+    double outPart  = vPart.Rings.Count  > 0 ? OutMax(vPart.Rings[^1],  pad, cum106) : 0;
+
+    // ★★[검토 0910 · 높음2] 여기도 조건이 <c>true</c>였다 — 두 숫자를 <b>나란히 인쇄만</b> 했다.
+    //   재야 할 것은 "전체 최대 내밀기"가 아니라 <b>구간 안과 밖의 차이</b>다.
+    //   그 차이가 곧 이음매에서 벌어지는 거리이고, <b>깨짐의 크기 그 자체</b>다.
+    static double OutMaxIn(IReadOnlyList<Point3> ring, IReadOnlyList<Point3> pad0, double[] cum0,
+                           double zt0, double zt1, bool inside)
+    {
+        double mx = 0;
+        foreach (var q in ring)
+        {
+            double t = GradingGeometry.ParamAt(pad0, cum0, q.X, q.Y);
+            if (GradingGeometry.InInterval(zt0, zt1, t) != inside) continue;
+            var p0 = GradingGeometry.PointAtParam(pad0, cum0, t);
+            mx = System.Math.Max(mx, System.Math.Sqrt((q.X-p0.X)*(q.X-p0.X) + (q.Y-p0.Y)*(q.Y-p0.Y)));
+        }
+        return mx;
+    }
+    double inWall  = vPart.Rings.Count > 0 ? OutMaxIn(vPart.Rings[^1], pad, cum106, 0.0, per*0.35, true)  : 0;
+    double inSlope = vPart.Rings.Count > 0 ? OutMaxIn(vPart.Rings[^1], pad, cum106, 0.0, per*0.35, false) : 0;
+    Check("S106 ★내밀기 실측 — 구간 안(벽)은 가깝고 구간 밖(사면)은 멀다", inSlope > inWall + 20.0,
+          $"구간 안 {inWall:0.#}m ↔ 구간 밖 {inSlope:0.#}m — 이 차이가 이음매에서 그대로 벌어진다"
+        + $" · 전체 최대 전부사면 {outPlain:0.#}m / 부분구간 {outPart:0.#}m");
+
+    // ④ ★<b>이음매를 무엇으로 메우고 있나.</b>
+    //   ★[검토 0910 · 높음2] 종전엔 <c>TransitionFaces</c>를 셌는데 <b>엉뚱한 컬렉션</b>이었다 —
+    //     그건 경계 플래토 사이의 전환띠(무늬용)이지 <b>구간 이음매</b>가 아니라, 전에도 후에도 0개다.
+    //     "고치면 이 값이 바뀐다"는 전제 자체가 틀렸다.
+    //   → 대신 <b>가장 긴 변에 중간점이 있는가</b>를 본다. 지금은 <b>점 두 개짜리 맨 변</b>이다.
+    //     0910에 여기를 <c>dens</c> 간격 점으로 채워 봤는데, 그 점들은 전부 <b>같은 직선 위</b>라
+    //     모양을 못 바꾸고 브레이크라인 문턱(2.5m)만 우회해 <b>가짜 옹벽선</b>을 불렀다(되돌림).
+    //     진짜 마감은 <b>단이 진 면</b>을 세우는 일이고, 그때 이 자리의 모양이 바뀐다.
+    var worstRing = vPart.Rings.Count > 0 ? vPart.Rings[^1] : new List<Point3>();
+    var es = worstRing.Count >= 3 ? EdgeStat(worstRing) : (Max: 0.0, Over5: 0, AtX: 0.0, AtY: 0.0);
+    Check("S106 ★이음매는 아직 <b>점 두 개짜리 맨 변</b>이다(전이면 미구현)", es.Max > 50.0,
+          $"맨아랫단 최장변 {es.Max:0.##}m @({es.AtX:0.#},{es.AtY:0.#})"
+        + $" · TransitionFaces {vPart.TransitionFaces.Count}개(이 값은 구간 이음매와 무관)");
+}
+
+// ══ S105 커서 표식의 <b>바깥 방향</b> — 오목한 부지에서도 맞는가 (검토 0910) ══
+//   ★첫 판은 <b>무게중심의 반대쪽</b>을 바깥으로 봤다. ㄷ자·L자 부지의 오목한 굽이에서는
+//     무게중심이 부지 밖이거나 굽이 반대편이라 <b>안쪽을 바깥이라고</b> 가리킨다.
+//     지금은 <b>폴리곤이 도는 방향</b>으로 정한다 — 모양을 안 가린다.
+{
+    // 점이 폴리곤 안인가(홀짝 규칙) — 이 검사만을 위한 자다.
+    static bool Inside(List<Point3> poly, double x, double y)
+    {
+        bool inside = false;
+        int n = poly.Count;
+        for (int i = 0, j = n - 1; i < n; j = i++)
+        {
+            double xi = poly[i].X, yi = poly[i].Y, xj = poly[j].X, yj = poly[j].Y;
+            if (yi > y != yj > y && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+        }
+        return inside;
+    }
+
+    // L자 부지 — 오목 굽이가 하나(40×40에서 오른쪽 위 20×20을 파낸 모양).
+    var L = new List<Point3>
+    {
+        new(0,0,0), new(40,0,0), new(40,20,0), new(20,20,0), new(20,40,0), new(0,40,0),
+    };
+    // ㄷ자 부지 — 오목 굽이가 둘.
+    var U = new List<Point3>
+    {
+        new(0,0,0), new(40,0,0), new(40,40,0), new(30,40,0), new(30,15,0),
+        new(10,15,0), new(10,40,0), new(0,40,0),
+    };
+    var box = new List<Point3> { new(0,0,0), new(40,0,0), new(40,40,0), new(0,40,0) };
+
+    foreach (var (name, ring) in new[] { ("사각형", box), ("L자", L), ("ㄷ자", U) })
+    {
+        var cum = GradingGeometry.CumLen2D(ring);
+        double tot = cum[cum.Length - 1];
+        int bad = 0, n = 0;
+        double worstT = -1;
+        // 둘레를 0.5m마다 훑어 <b>모든 자리</b>에서 바깥인지 본다(꼭짓점 언저리는 건너뛴다 —
+        // 정확히 모서리 위는 방향이 정의되지 않는다).
+        for (double t = 0.25; t < tot; t += 0.5)
+        {
+            bool nearCorner = false;
+            for (int i = 0; i < cum.Length - 1; i++)
+                if (System.Math.Abs(t - cum[i]) < 0.6) { nearCorner = true; break; }
+            if (nearCorner) continue;
+            var o = GradingGeometry.OutwardAt(ring, cum, t, 0.5);
+            n++;
+            if (Inside(ring, o.X, o.Y)) { bad++; if (worstT < 0) worstT = t; }
+        }
+        Check($"S105 ★{name}: 모든 자리에서 바깥을 가리킨다", bad == 0 && n > 0,
+              bad == 0 ? $"{n}자리 확인" : $"{bad}/{n}자리 안쪽을 가리킴(첫 자리 {worstT:0.#}m)");
+    }
+
+    // ★시계·반시계 어느 쪽으로 그렸든 같아야 한다 — 사용자가 그린 방향을 우리가 못 정한다.
+    var cw = new List<Point3>(box); cw.Reverse();
+    var cumCw = GradingGeometry.CumLen2D(cw);
+    var oCw = GradingGeometry.OutwardAt(cw, cumCw, 20, 1.0);
+    Check("S105 ★★시계 방향으로 그린 부지도 바깥을 가리킨다",
+          !Inside(cw, oCw.X, oCw.Y), $"({oCw.X:0.#},{oCw.Y:0.#})");
+}
+
 // ★★[검토 0904] <b>요약이 파일 48% 지점에서 찍히고 있었다.</b> 그 뒤 S54~S95의 Check 426개가
 //   요약에 안 잡혀, '전부 통과'가 <b>절반만 보증하는 문장</b>이었다(실측: 요약 뒤에서 S54가 FAIL한 판이 있었다).
 //   fails 계수 자체는 맞았고 세는 자리만 틀렸다 — 맨 끝으로 옮긴다.
+// ══ S107 ★★★[JACK 0910 · 검토 0910] <b>TIN을 실제로 떠서 잰다</b> ══════════════
+//
+//   ★<b>왜 이 검사가 이제야 생겼나.</b> 우리는 여태 <b>링</b>만 재면서 <b>TIN</b>이 깨진다고 말하고 있었다.
+//     현장 로그가 잰 것은 <i>"링 최장변 14.67m인데 완성 지표면 TIN 최장변 55.71m"</i> —
+//     <b>링은 이미 괜찮았고 TIN이 깨졌다</b>. 그런데 링을 89m에서 1m로 만드는 수정을 하고
+//     "고쳤다"고 했다(0910, 되돌림). <b>증상과 따로 노는 값을 재고 있었기 때문</b>이다.
+//
+//   ★<b>이제 잴 수 있다.</b> 두 가지가 맞물렸다:
+//     ①TIN에 <b>무엇이 들어가는지</b> 정하는 규칙을 Core로 옮겼다(<see cref="BreaklinePrep.SplitRingRuns"/>) —
+//       그래서 이 검사가 <b>출하되는 그 규칙</b>을 먹는다(「검사 입력은 출하 입력이어야 한다」).
+//     ②삼각망은 NTS가 이미 들고 있다(<c>DelaunayTriangulationBuilder</c>, Core의 의존성).
+//
+//   ★<b>정직하게 단서를 단다.</b> NTS는 Civil이 아니고, 여기 값은 브레이크라인을 <b>강제하지 않은</b>
+//     삼각화다. 그러니 이 숫자로 "Civil에서 부채꼴이 사라진다"를 단정하지 않는다.
+//     이 자가 말해 주는 것은 <b>지시선이 없는 빈 면이 얼마나 넓게 남았나</b>이고,
+//     부채꼴은 바로 그 빈 면을 삼각화가 길쭉하게 건너서 생긴다.
+{
+    Console.WriteLine("\n== S107 TIN 실측 — 지시선 없는 빈 면이 얼마나 남나 ==");
+
+    var pad107 = new List<Point3> { new(0,0,100), new(80,0,100), new(80,60,100), new(0,60,100) };
+    var cum107 = GradingGeometry.CumLen2D(pad107);
+    double per107 = cum107[^1];
+    var gnd107 = new FlatGround(140);       // 절토 40m
+    var par107 = new GradingParams
+    {
+        CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 1.5, FillSlope = 1.5, CellSize = 0.5, MaxBenches = 20, MaxRise = 60,
+        VertexSpacing = 2.0, MinSlope = 0.01, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+
+    // ── TIN에 실제로 들어가는 점만 모은다 — 출하되는 쪼개기 규칙 그대로.
+    static (List<NetTopologySuite.Geometries.Coordinate> Pts, int Runs, int Dives, double DiveMax, int Lost)
+        TinInput(IReadOnlyList<List<Point3>> rings)
+    {
+        var pts = new List<NetTopologySuite.Geometries.Coordinate>();
+        int runN = 0, dives = 0, lost = 0; double dmax = 0;
+        foreach (var r in rings)
+        {
+            var runs = BreaklinePrep.SplitRingRuns(r, out _, out int dv, out double dl, out int drop);
+            dives += dv; dmax = Math.Max(dmax, dl); runN += runs.Count;
+            foreach (var run in runs)
+            {
+                foreach (var q in run) pts.Add(new NetTopologySuite.Geometries.Coordinate(q.X, q.Y));
+            }
+            // 쪼개기가 <b>버린</b> 점 — 점 하나짜리 조각은 브레이크라인이 못 되어 통째로 사라진다.
+            //   ★겹친 점(닫힘 중복) 제거와 <b>구분해서</b> 센다 — 그건 버린 것이 아니다.
+            lost += drop;
+        }
+        return (pts, runN, dives, dmax, lost);
+    }
+
+    // ── 삼각망을 떠서 변을 잰다. 창(win)을 주면 그 안의 변만 센다.
+    static (double Max, int Over5, int Over10, int Edges, double AtX, double AtY)
+        TinEdges(List<NetTopologySuite.Geometries.Coordinate> pts,
+                 double x0 = double.MinValue, double x1 = double.MaxValue,
+                 double y0 = double.MinValue, double y1 = double.MaxValue)
+    {
+        var b = new NetTopologySuite.Triangulate.DelaunayTriangulationBuilder();
+        b.SetSites(pts);
+        var gf = NetTopologySuite.Geometries.GeometryFactory.Default;
+        var edges = b.GetEdges(gf);
+        double mx = 0, ax = 0, ay = 0; int o5 = 0, o10 = 0, n = 0;
+        for (int i = 0; i < edges.NumGeometries; i++)
+        {
+            var ls = (NetTopologySuite.Geometries.LineString)edges.GetGeometryN(i);
+            var c0 = ls.Coordinates[0]; var c1 = ls.Coordinates[^1];
+            double mx2 = (c0.X + c1.X) * 0.5, my2 = (c0.Y + c1.Y) * 0.5;
+            if (mx2 < x0 || mx2 > x1 || my2 < y0 || my2 > y1) continue;
+            double d = Math.Sqrt((c1.X-c0.X)*(c1.X-c0.X) + (c1.Y-c0.Y)*(c1.Y-c0.Y));
+            n++;
+            if (d > 5.0) o5++;
+            if (d > 10.0) o10++;
+            if (d > mx) { mx = d; ax = c0.X; ay = c0.Y; }
+        }
+        return (mx, o5, o10, n, ax, ay);
+    }
+
+    // ① 구간 없음 — 전부 사면. 지시선이 빈틈없이 깔린 기준.
+    var vP = GradingGeometry.Build(pad107, gnd107, par107, true);
+    var tiP = TinInput(vP.Rings);
+    var eP = TinEdges(tiP.Pts);
+    Console.WriteLine($"      S107 [구간없음] 링 {vP.Rings.Count}개 · 브레이크라인 {tiP.Runs}줄"
+        + $" · 끊긴자리 {tiP.Dives}곳 · TIN 점 {tiP.Pts.Count}개"
+        + $" · 최장변 {eP.Max:0.00}m · 5m초과 {eP.Over5} · 10m초과 {eP.Over10}");
+    Check("S107 구간이 없으면 TIN에 끊긴 자리가 없다(기준)", tiP.Dives == 0,
+          $"끊긴자리 {tiP.Dives}곳 · 브레이크라인 {tiP.Runs}줄(링 {vP.Rings.Count}개)");
+
+    // ② 둘레의 <b>일부만</b> 수직 — JACK이 한 그것.
+    var zW = new List<SlopeZone> { SlopeZone.Wall(0.0, per107 * 0.35, 0, int.MaxValue, 0.01, 1.0) };
+    var vW = GradingGeometry.Build(pad107, gnd107, par107, true, zW);
+    var tiW = TinInput(vW.Rings);
+    var eW = TinEdges(tiW.Pts);
+    Console.WriteLine($"      S107 [부분구간] 링 {vW.Rings.Count}개 · 브레이크라인 {tiW.Runs}줄"
+        + $" · 끊긴자리 {tiW.Dives}곳(최장 {tiW.DiveMax:0.0}m) · TIN 점 {tiW.Pts.Count}개"
+        + $" · 최장변 {eW.Max:0.00}m · 5m초과 {eW.Over5} · 10m초과 {eW.Over10}");
+
+    // ③ ★★★<b>이음매 골목</b>만 따로 — 부채꼴이 나는 그 자리.
+    //   전체 최장변에는 <b>부지 밖 정상 삼각형</b>이 섞인다(오버사이즈 가상면은 볼록껍질까지 차는 것이 정상이고,
+    //   경계는 나중에 교선으로 넣는다). 그래서 구간 끝에서 바깥으로 뻗는 통로만 창으로 잘라 본다.
+    var endPt = GradingGeometry.PointAtParam(pad107, cum107, per107 * 0.35);
+    double wx0 = endPt.X - 2, wx1 = endPt.X + 62, wy0 = endPt.Y - 12, wy1 = endPt.Y + 12;
+    var aP = TinEdges(tiP.Pts, wx0, wx1, wy0, wy1);
+    var aW = TinEdges(tiW.Pts, wx0, wx1, wy0, wy1);
+    Console.WriteLine($"      S107 [골목 x{wx0:0}~{wx1:0} y{wy0:0}~{wy1:0}]"
+        + $" 구간없음 최장 {aP.Max:0.00}m(5m초과 {aP.Over5} · 10m초과 {aP.Over10} · 변 {aP.Edges})"
+        + $" ↔ 부분구간 최장 {aW.Max:0.00}m(5m초과 {aW.Over5} · 10m초과 {aW.Over10} · 변 {aW.Edges})"
+        + $" @({aW.AtX:0.0},{aW.AtY:0.0})");
+
+    // ★<b>재현 검사</b> — 전이면을 세우기 전에는 골목이 기준보다 훨씬 험하다.
+    //   고치면 이 줄이 <b>떨어져서</b> 알려 준다. 그때 뜻을 뒤집으면 된다.
+    Check("S107 ★재현: 이음매 골목에 <b>긴 삼각형</b>이 남는다(전이면 미구현)",
+          aW.Over10 > aP.Over10 || aW.Max > aP.Max + 1.0,
+          $"골목 10m초과 기준 {aP.Over10} → 부분구간 {aW.Over10}"
+        + $" · 최장 {aP.Max:0.00}m → {aW.Max:0.00}m");
+
+    // ④ ★<b>끊긴 자리</b>가 곧 지시선이 사라진 자리다 — 그 수를 못박아 둔다.
+    Check("S107 ★재현: 부분 구간이면 링이 끊겨 브레이크라인이 갈라진다",
+          tiW.Dives > 0 && tiW.Runs > tiP.Runs,
+          $"끊긴자리 {tiP.Dives} → {tiW.Dives}곳 · 브레이크라인 {tiP.Runs} → {tiW.Runs}줄"
+        + $" (최장 다이브 {tiW.DiveMax:0.0}m)");
+
+    // ⑤ ★<b>점이 사라져서 생긴 구멍은 아니다</b> — 후보 하나를 못박아 배제한다.
+    //   끊긴 조각에서 점이 증발했다면 그것이 원인일 텐데, 실측은 점이 <b>더 많다</b>고 말한다.
+    // ★★[0910 실측 정정] 처음엔 <c>TIN 점 수가 안 줄었다</c>로 썼는데 <b>떨어졌다</b>(17612 → 12950).
+    //   그건 점을 버려서가 아니라 <b>부지가 달라져서</b>다 — 구간 안 벽 링은 경계에 붙어 있어
+    //   둘레가 짧고, 그래서 점이 적다. 두 판은 애초에 <b>다른 기하</b>라 총점 수를 견줄 값이 아니다.
+    //   → 물어야 할 것은 <b>쪼개기가 점을 버렸나</b>이고, 그것은 따로 세야 한다.
+    Check("S107 ★긴 삼각형은 점이 <b>버려져서</b> 생긴 것이 아니다(빈 면이 원인)",
+          tiW.Lost == 0 && tiP.Lost == 0,
+          $"쪼개기가 버린 점 구간없음 {tiP.Lost}개 · 부분구간 {tiW.Lost}개"
+        + $" (총 TIN 점 {tiP.Pts.Count} → {tiW.Pts.Count} — 이건 기하가 달라서지 버려서가 아니다)");
+}
+
 Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
 return fails == 0 ? 0 : 1;
 
