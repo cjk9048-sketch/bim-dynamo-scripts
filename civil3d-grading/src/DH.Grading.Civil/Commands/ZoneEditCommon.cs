@@ -799,7 +799,25 @@ internal static class ZoneEditCommon
                 if (!setW) optW = dk.W;
                 double pickSpan = GradingGeometry.SpanOf(lineArc[key].T0, lineArc[key].T1,
                     GradingGeometry.CumLen2D(lineRef.TryGetValue(key, out var rSel) ? rSel : boundary)[^1]);
+                // ★★★[JACK 0910 <i>"코너찍고 한쪽만 변환시키면 옹벽으로 마감되지않아"</i>]
+                //   <b>고른 선이 <u>지금</u> 무엇인지 그 자리에서 말한다.</b>
+                //   <para>실측 로그(0910 16:40)가 보여 준 것: JACK이 고른 성토 1단 선은
+                //   <b>이미 수직이던 구간 그 자체</b>였다(호길이 [44.5..173.6] = 옹벽 구간 [44.5..173.6]).
+                //   대상선은 구간 경계에서 갈리므로, <b>이미 옹벽인 선</b>과 사면인 선이 생김새로는 똑같다.
+                //   그래서 이미 벽인 선을 골라 벽으로 바꾸고 <i>"안 바뀐다"</i>가 됐다.</para>
+                //   ★값이 같은지는 <b>맨 끝(Enter)에서도</b> 잡아 주지만(아래), 그때는 이미
+                //   제원을 다 정한 뒤다. <b>고르는 순간</b> 보여 주는 편이 되돌아갈 길이 짧다.
+                string nowTxt = "";
+                if (lineMid.TryGetValue(key, out var pmidSel) && boundary != null)
+                {
+                    var zNow = pk.up ? region!.CutWallZones : region!.FillWallZones;
+                    var (nS, nW) = SlopeZone.ResolveAt(zNow, pmidSel.X, pmidSel.Y, pk.bench,
+                        BaseSlopeOf(region.Params, pk.up), region.Params.BenchWidthOf(pk.up), boundary, cumB!);
+                    nowTxt = $" · 지금 {(nS <= GradingSettings.WallGateSlope ? "<수직=옹벽>" : $"1:{nS:0.##}")}"
+                           + $"·소단 {nW:0.##}m";
+                }
                 ed.WriteMessage($"\n → {(pk.up ? "절토" : "성토")} {pk.bench + 1}단 선택 · 이 구간 {pickSpan:0.#}m"
+                              + nowTxt
                               + (wholeLoop.Contains(key) ? " (한 바퀴 고리)" : ""));
                 // ★★[JACK 0910] 사면 변환인데 <b>지금 그 자리가 수직</b>이면, 기본값을 사면으로 올렸다는 것을
                 //   그 자리에서 말한다 — 안 말하면 "왜 1.5가 됐지"가 되고, 안 올리면 "왜 안 바뀌지"가 된다.
@@ -995,7 +1013,24 @@ internal static class ZoneEditCommon
                 bool pu = pick.Value.up;
                 var oldZones = pu ? region!.CutWallZones : region!.FillWallZones;
                 var pOld = region.Params;
-                var (curS, curW) = SlopeZone.ResolveAt(oldZones, pmid.X, pmid.Y, pick.Value.bench,
+                // ★★★[JACK 0910 로그] <b>구간지정을 했으면 <u>그 조각의 한가운데</u>에서 물어야 한다.</b>
+                //   <para>여기는 <c>lineMid</c> — <b>클릭한 선 전체</b>의 한가운데를 쓰고 있었다.
+                //   그런데 구간지정은 그 선의 <b>일부</b>다. 129m 선 안의 7m 조각을 골랐는데
+                //   129m 한가운데 값을 가져다 견주면 그 조각의 현재 값과 다를 수 있다 —
+                //   "같다"고 해 놓고 실제로는 바뀌거나, 그 반대가 된다.</para>
+                var askPt = pmid;
+                if (partArc.TryGetValue(pick.Value, out var paNow))
+                {
+                    var rrN = lineRef.TryGetValue(pick.Value, out var rpN) ? rpN : boundary;
+                    if (rrN != null && rrN.Count >= 3)
+                    {
+                        var rcN = GradingGeometry.CumLen2D(rrN);
+                        double totN = rcN[rcN.Length - 1];
+                        double midT = paNow.T0 + GradingGeometry.SpanOf(paNow.T0, paNow.T1, totN) * 0.5;
+                        askPt = GradingGeometry.PointAtParam(rrN, rcN, midT);
+                    }
+                }
+                var (curS, curW) = SlopeZone.ResolveAt(oldZones, askPt.X, askPt.Y, pick.Value.bench,
                     BaseSlopeOf(pOld, pu), pOld.BenchWidthOf(pu), boundary, cumB!);
                 double curH = beforeH;
                 bool sameS = System.Math.Abs(curS - askN!.Value) < 1e-9;
@@ -1008,7 +1043,32 @@ internal static class ZoneEditCommon
                     ed.WriteMessage($"\n[{cmdLabel}] ⚠ {msg}");
                     ed.WriteMessage($"\n   바꾸려면 {(wallMode ? "단높이(H)·소단길이(T)" : "단높이(H)·사면구배(R)·소단길이(T)")}로 값을 먼저 바꾸세요.");
                     Log($"■ {cmdLabel} ⚠ 값이 지금과 같다 — {(pu ? "절토" : "성토")} {pick.Value.bench + 1}단 " +
+                        (partArc.ContainsKey(pick.Value) ? "(구간지정 한가운데에서 잼) " : "(선 한가운데에서 잼) ") +
                         $"현재 1:{curS:0.###}·소단{curW:0.##}m·단높이{curH:0.##}m / 넣은 값 1:{askN:0.###}·소단{askW:0.##}m·단높이{askH:0.##}m");
+
+                    // ★★★[JACK 0910 <i>"코너찍고 한쪽만 변환시키면 옹벽으로 마감되지않아"</i>]
+                    //   <b>안 바뀔 것을 13초 걸려 다시 만들지 않는다.</b>
+                    //   <para>종전엔 위 두 줄을 적어 놓고 <b>그대로 재생성으로 들어갔다</b>.
+                    //   13.6초가 지나고 화면은 그대로다 — 사용자는 <b>고장으로 읽는다</b>.
+                    //   실측 로그(0910 16:40)가 정확히 그 판이다: 성토 1단이 이미 [44.5..173.6] 수직인데
+                    //   그 안의 [83.0..90.1]에 <b>다시 수직</b>을 넣었다. 애드인은 옳게 알렸고,
+                    //   그 다음에 <b>아무 일도 안 일어날 재생성</b>을 13.6초 돌렸다.</para>
+                    //   ★<b>묻고 멈춘다.</b> 기본은 <b>아니오</b> — 값을 바꿔 다시 하는 편이 거의 언제나 맞다.
+                    //     (그래도 다시 만들고 싶을 때가 있다: 다른 이유로 면이 낡았을 때.)
+                    var pkSame = new PromptKeywordOptions("\n그래도 다시 만들까요?  Enter=아니오");
+                    pkSame.Keywords.Add("Y", "Y", "예(Y)");
+                    pkSame.Keywords.Add("N", "N", "아니오(N)");
+                    pkSame.AllowNone = true;
+                    var rSame = ed.GetKeywords(pkSame);
+                    // ★키워드는 <c>Keyword</c>로도 <c>OK</c>로도 온다 — 둘 다 받는다(0910 치명1과 같은 자리).
+                    bool goOn = (rSame.Status == PromptStatus.Keyword || rSame.Status == PromptStatus.OK)
+                                && (rSame.StringResult ?? "").Trim().ToUpperInvariant() == "Y";
+                    if (!goOn)
+                    {
+                        ed.WriteMessage("\n → 그대로 두었습니다 — 값을 바꿔 다시 해 보세요.");
+                        Log($"■ {cmdLabel} — 값이 같아 재생성을 <b>안 했다</b>(사용자가 아니오)");
+                        return;
+                    }
                 }
             }
             string what = clearAll ? "전체 해제"

@@ -267,6 +267,10 @@ public static class GradingGeometry
             cumB = CumLen2D(shape);
             zlist = new List<SlopeZone>();
             zcache = new Dictionary<long, StepProfile>();
+            // ★★★[JACK 0910 · 마감면] 구간 양 끝에 <b>마감면 구간</b>을 끼운다 —
+            //   진짜 구간이라 <c>MaskAt</c>도 <c>SlopeZone.ResolveAt</c>도 <b>저절로</b> 같은 답을 낸다.
+            wallZones = SlopeZone.WithTransitions(wallZones, benchH, slope, benchW,
+                                                  p.MinFaceRun, cumB[cumB.Length - 1], p.TransitionSteps);
             foreach (var z in wallZones)
             {
                 if (z == null || z.Rules.Count == 0) continue;
@@ -282,6 +286,14 @@ public static class GradingGeometry
         }
 
         // 이 점을 덮는 구간들의 비트마스크 — 0이면 어느 구간도 안 덮는다(= 전역 프로파일).
+        //   ★★[JACK 0910 · 날개벽] 여기에 <b>단마다 벌어지는 폭</b>을 태워 봤다가 <b>되돌렸다</b>.
+        //     모양(경계가 직선이 되는 것)은 맞았는데, 같은 판정을 <c>SlopeZone.ResolveAt</c> 쪽에도
+        //     태우지 않아 <b>기하와 규칙이 갈라졌다</b>(구간 밖인데 벽 252점 · S15·S16이
+        //     "구간 안 250m vs 구간 밖 250m"로 구간이 아무 일도 안 하게 됨).
+        //     <c>ResolveAt</c>은 <b>26곳</b>에서 부른다 — 인자를 늘려 다 꿰는 것은 반쪽으로 하면 더 위험하다.
+        //     → 쓸 만한 길은 <b>구간을 단마다 하나씩, 벌어진 폭으로 쪼개 넣는 것</b>이다.
+        //       그러면 모든 소비자가 <b>평범한 구간</b>으로 읽어 저절로 같아지고, 서명도 안 바뀐다.
+        //       (거리는 여전히 벽/사면 둘뿐이라 버퍼도 안 는다.)
         long MaskAt(double x, double y)
         {
             if (zlist == null || cumB == null) return 0;
