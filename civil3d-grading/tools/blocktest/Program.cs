@@ -9935,6 +9935,200 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     }
 }
 
+
+// ══ S115 ★★★[검토 0911] 가상 폴리곤 — <b>검토가 잡은 세 결함의 재현 검사</b> ═══════════
+//
+//   <para>S112(열두 판)가 <b>전부 통과하는데도</b> 검토가 계측으로 셋을 잡아냈다.
+//   그 판들을 여기 그대로 넣어 <b>다시 못 들어오게</b> 한다.</para>
+//
+//   <para><b>①ㄷ자 부지의 오목한 안쪽 벽</b>(치명) — 4m 구간인데 폴리곤이 <b>47,909㎡</b>
+//   (기대 ~486㎡, <b>98배</b>)가 나왔고 계획 경계 정점 <b>여덟 개가 모두</b> 폴리곤 안에 들어갔다.
+//   즉 부지와 그 사면을 통째로 감쌌다. <b>여섯 불변식은 전부 통과했다</b> —
+//   불변식이 "면적"과 "부지를 품나"를 안 봤기 때문이다.</para>
+//
+//   <para><b>②원지반 조회 실패</b>(치명) — <c>TryGetElevation</c>은 TIN 바깥에서 <c>false</c>다.
+//   마감 링은 경계에서 60~85m 나가 있어 TIN을 벗어나는 것이 <b>정상</b>인데,
+//   종전엔 그때 <b>옹벽 표고</b>를 써서 바깥 변 <b>154점이 전부 105</b>가 됐다.
+//   Z 띠 단언은 105가 띠 안이라 <b>통과했다</b> — 그래서 "각 점의 Z가 그 XY의 원지반 Z인가"로 바꾼다.</para>
+//
+//   <para><b>③날개 둘이 같은 변에 닿는 판</b>(높음) — 구간 폭을 늘리면 면적이 단조 증가해야 하는데
+//   70%에서만 17,189 → <b>28,421㎡</b>로 튀었다가 내려왔다. 두 날개 끝이 마감 링의
+//   <b>같은 변 8.95m 안</b>에 앉아 갈래 판정이 뒤집혔다.</para>
+{
+    Console.WriteLine("\n== S115 검토가 잡은 세 결함 — 재현 검사 ==");
+    var par115 = new GradingParams
+    {
+        CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 1.5, FillSlope = 1.5, CellSize = 0.5, MaxBenches = 20, MaxRise = 60,
+        VertexSpacing = 2.0, MinSlope = 0.01, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+    static double Area115(IReadOnlyList<Point3> r)
+    {
+        double a = 0;
+        for (int i = 0; i < r.Count; i++)
+        { var u = r[i]; var v = r[(i + 1) % r.Count]; a += u.X * v.Y - v.X * u.Y; }
+        return System.Math.Abs(a) * 0.5;
+    }
+    static bool In115(IReadOnlyList<Point3> r, double x, double y)
+    {
+        bool q = false;
+        for (int i = 0, j = r.Count - 1; i < r.Count; j = i++)
+        {
+            if ((r[i].Y > y) == (r[j].Y > y)) continue;
+            double xx = r[j].X + (y - r[j].Y) / (r[i].Y - r[j].Y) * (r[i].X - r[j].X);
+            if (x < xx) q = !q;
+        }
+        return q;
+    }
+
+    // ══ ① ㄷ자 부지의 오목한 안쪽 벽 ══
+    {
+        var padC = new List<Point3> { new(0,0,100), new(100,0,100), new(100,30,100), new(30,30,100),
+                                      new(30,70,100), new(100,70,100), new(100,100,100), new(0,100,100) };
+        var cC = GradingGeometry.CumLen2D(padC);
+        var gndC = new FlatGround(140);
+        var rulerC = GradingGeometry.OffsetRingForTest(padC, 8.5, par115);
+        var oldC = GradingGeometry.OffsetRingForTest(padC, 60.0, par115);
+        Check("S115 ① 시험 조건 — ㄷ자 부지의 자·옛 데이라잇이 있다",
+              rulerC != null && oldC != null, $"자 {rulerC?.Count ?? 0}점 · 옛 데이라잇 {oldC?.Count ?? 0}점");
+        if (rulerC != null && oldC != null)
+        {
+            for (int i = 0; i < rulerC.Count; i++)
+                rulerC[i] = new Point3(rulerC[i].X, rulerC[i].Y, 105.0);
+            var rcC = GradingGeometry.CumLen2D(rulerC);
+            double rtC = rcC[^1];
+            // 오목한 안쪽 벽 = 정점 (30,30)~(30,70) 사이. 그 자리의 자 둘레값을 찾는다.
+            double tMid = GradingGeometry.ParamAt(rulerC, rcC, 30.0 - 8.5, 50.0);
+            int okN = 0, badN = 0; string worst = "";
+            foreach (double w in new[] { 4.0, 8.0, 16.0, 40.0 })
+            {
+                double t0 = ((tMid - w * 0.5) % rtC + rtC) % rtC;
+                double t1 = ((tMid + w * 0.5) % rtC + rtC) % rtC;
+                var poly = GradingGeometry.BuildWallPolygon(
+                    rulerC, rcC, t0, t1, padC, cC, oldC, gndC,
+                    par115, up: true, wallSlope: par115.MinSlope, cornerTol: 1.5, out string whyC);
+                if (poly == null) { okN++; continue; }   // 거절도 정답이다(고리가 되는 판)
+                int eats = 0;
+                foreach (var q in padC) if (In115(poly, q.X, q.Y)) eats++;
+                double ar = Area115(poly);
+                // ★검토가 제안한 <b>면적 상한</b> — 찍은 구간 길이 × 날개 길이 × 2.
+                //   날개 길이는 폴리곤에서 실제로 잰다(코너 연장이면 길어지므로 상한도 같이 커진다).
+                var pp = GradingGeometry.LastWallPolyParts;
+                double wingLen = 0;
+                if (pp.Inner >= 1 && pp.Inner + pp.Wing1 - 1 < poly.Count)
+                {
+                    var a2 = poly[pp.Inner - 1]; var b2 = poly[pp.Inner + pp.Wing1 - 1];
+                    wingLen = System.Math.Sqrt((b2.X-a2.X)*(b2.X-a2.X) + (b2.Y-a2.Y)*(b2.Y-a2.Y));
+                }
+                double cap = System.Math.Max(100.0, w * wingLen * 2.0);
+                bool good = eats == 0 && ar <= cap;
+                if (good) okN++; else { badN++; if (worst.Length == 0) worst = $"구간 {w:0.#}m: 면적 {ar:0}㎡ / 상한 {cap:0}㎡ · 계획정점 품음 {eats}/8"; }
+                Console.WriteLine($"      S115 ① 구간 {w,4:0.#}m — 면적 {ar,8:0}㎡ / 상한 {cap,7:0}㎡"
+                    + $" · 품음 {eats}/8 · {poly.Count}점 {(good ? "✓" : "<b>⚠</b>")}");
+            }
+            Check("S115 ★★★①ㄷ자 오목부 — 폴리곤이 <b>부지를 감싸지 않고 면적 상한 안</b>이다",
+                  badN == 0, badN == 0 ? $"판 {okN}개 전부 통과" : $"<b>{badN}판 실패</b> — {worst}");
+        }
+    }
+
+    // ══ ② 원지반 조회가 실패하는 판 — TIN이 부지만 덮는다 ══
+    {
+        var padB = new List<Point3> { new(0,0,100), new(80,0,100), new(80,60,100), new(0,60,100) };
+        var cB = GradingGeometry.CumLen2D(padB);
+        var rulerB = GradingGeometry.OffsetRingForTest(padB, 8.5, par115);
+        var oldB = GradingGeometry.OffsetRingForTest(padB, 60.0, par115);
+        if (rulerB != null && oldB != null)
+        {
+            for (int i = 0; i < rulerB.Count; i++)
+                rulerB[i] = new Point3(rulerB[i].X, rulerB[i].Y, 105.0);
+            var rcB = GradingGeometry.CumLen2D(rulerB);
+            double rtB = rcB[^1];
+            foreach (var (nm, gb) in new (string, IGroundSurface)[]
+            {
+                ("TIN이 전부 덮음", new FlatGround(140)),
+                ("TIN이 부지+20m만", new BoxGround(140, -20, -20, 100, 80)),
+                ("TIN이 부지만", new BoxGround(140, 0, 0, 80, 60)),
+            })
+            {
+                var poly = GradingGeometry.BuildWallPolygon(
+                    rulerB, rcB, rtB * 0.08, rtB * 0.22, padB, cB, oldB, gb,
+                    par115, up: true, wallSlope: par115.MinSlope, cornerTol: 1.5, out string whyB);
+                var pp = GradingGeometry.LastWallPolyParts;
+                if (poly == null)
+                {
+                    // ★거절도 정답이다 — 다만 <b>왜</b>인지 말해야 한다.
+                    Console.WriteLine($"      S115 ② [{nm}] <b>거절</b> — {whyB}");
+                    Check($"S115 ★★★②[{nm}] 못 만들면 <b>까닭을 말한다</b>(조용히 틀린 것을 내놓지 않는다)",
+                          whyB.Contains("원지반") || whyB.Contains("고리") || whyB.Contains("링"),
+                          $"까닭 '{whyB}'");
+                    continue;
+                }
+                // ★★★바깥 변의 <b>각 점</b>의 Z가 그 XY의 <b>진짜 원지반 Z</b>인가.
+                //   "Z가 띠 안"으로 재면 옹벽 표고(105)도 띠 안이라 통과한다 — 그래서 못 잡았다.
+                int lo = pp.Inner + pp.Wing1, hi = pp.Inner + pp.Wing1 + pp.Far;
+                int mismatch = 0, checked115 = 0; double worstD = 0;
+                for (int i = lo + 1; i < hi - 1 && i < poly.Count; i++)
+                {
+                    if (!gb.TryGetElevation(poly[i].X, poly[i].Y, out double gz)) continue;  // TIN 밖은 물어볼 수 없다
+                    checked115++;
+                    double d = System.Math.Abs(poly[i].Z - gz);
+                    if (d > 0.01) mismatch++;
+                    worstD = System.Math.Max(worstD, d);
+                }
+                Console.WriteLine($"      S115 ② [{nm}] {poly.Count}점 · 바깥 변 {pp.Far}점"
+                    + $" · TIN 안에서 잰 점 {checked115}개 · 원지반과 어긋남 {mismatch}개(최악 {worstD:0.###}m)"
+                    + $" · {GradingGeometry.LastWallPolyLog.Substring(0, System.Math.Min(90, GradingGeometry.LastWallPolyLog.Length))}");
+                Check($"S115 ★★★②[{nm}] 바깥 변의 Z가 <b>그 XY의 원지반 Z</b>다(띠 안이 아니라 <b>같은 값</b>)",
+                      mismatch == 0, $"어긋난 점 {mismatch}/{checked115}개 · 최악 {worstD:0.###}m");
+            }
+        }
+    }
+
+    // ══ ③ 구간 폭을 늘리면 면적이 <b>단조 증가</b>하나 ══
+    {
+        var padR = new List<Point3> { new(0,0,100), new(80,0,100), new(80,60,100), new(0,60,100) };
+        var cR = GradingGeometry.CumLen2D(padR);
+        var gndR = new FlatGround(140);
+        var rulerR = GradingGeometry.OffsetRingForTest(padR, 8.5, par115);
+        var oldR = GradingGeometry.OffsetRingForTest(padR, 60.0, par115);
+        if (rulerR != null && oldR != null)
+        {
+            for (int i = 0; i < rulerR.Count; i++)
+                rulerR[i] = new Point3(rulerR[i].X, rulerR[i].Y, 105.0);
+            var rcR = GradingGeometry.CumLen2D(rulerR);
+            double rtR = rcR[^1];
+            double prev = -1; int jumps = 0; string jumpAt = "";
+            for (double frac = 0.30; frac <= 0.951; frac += 0.05)
+            {
+                var poly = GradingGeometry.BuildWallPolygon(
+                    rulerR, rcR, 0.0, rtR * frac, padR, cR, oldR, gndR,
+                    par115, up: true, wallSlope: par115.MinSlope, cornerTol: 1.5, out string why3);
+                if (poly == null)
+                {
+                    // ★거절도 정답이다 — 다만 <b>무엇 때문에</b> 거절했는지 적는다.
+                    int ci3 = why3.IndexOf(" 구간을 조금");
+                    Console.WriteLine($"      S115 ③ 폭 {frac:0.00} — <b>거절</b>: "
+                        + (ci3 > 0 ? why3.Substring(0, ci3) : why3));
+                    continue;
+                }
+                double ar = Area115(poly);
+                // ★면적이 <b>줄면</b> 갈래가 뒤집힌 것이다(폭이 늘었는데 몫이 작아질 수는 없다).
+                bool drop = prev > 0 && ar < prev - 1.0;
+                if (drop) { jumps++; if (jumpAt.Length == 0) jumpAt = $"폭 {frac:0.00}에서 {prev:0}㎡ → {ar:0}㎡"; }
+                Console.WriteLine($"      S115 ③ 폭 {frac:0.00} — 면적 {ar,8:0}㎡ {(drop ? "<b>⚠줄었다</b>" : "")}");
+                if (drop || System.Math.Abs(frac - 0.70) < 0.01 || System.Math.Abs(frac - 0.75) < 0.01)
+                {
+                    int ci = GradingGeometry.LastWallPolyLog.IndexOf("갈래 비교");
+                    Console.WriteLine($"        S115 ③ [{frac:0.00}] {(ci >= 0 ? GradingGeometry.LastWallPolyLog.Substring(ci) : GradingGeometry.LastWallPolyLog)}");
+                }
+                prev = ar;
+            }
+            Check("S115 ★★★③구간 폭을 늘리면 폴리곤 면적이 <b>줄지 않는다</b>(갈래가 안 뒤집힌다)",
+                  jumps == 0, jumps == 0 ? "폭 0.30~0.95 전부 단조" : $"<b>{jumps}번 줄었다</b> — {jumpAt}");
+        }
+    }
+}
+
 // ══ S105 커서 표식의 <b>바깥 방향</b> — 오목한 부지에서도 맞는가 (검토 0910) ══
 //   ★첫 판은 <b>무게중심의 반대쪽</b>을 바깥으로 봤다. ㄷ자·L자 부지의 오목한 굽이에서는
 //     무게중심이 부지 밖이거나 굽이 반대편이라 <b>안쪽을 바깥이라고</b> 가리킨다.
@@ -10643,6 +10837,21 @@ sealed class HoleGround(double z, double xMax) : IGroundSurface
 sealed class FlatGround(double z) : IGroundSurface
 {
     public bool TryGetElevation(double x, double y, out double zz) { zz = z; return true; }
+}
+
+/// <summary>★★★[검토 0911 · 치명2] <b>범위가 유한한 원지반</b> — 상자 밖에서는 <c>false</c>를 돌려준다.
+/// <para>출하되는 <c>CachedGroundSurface</c>가 그렇게 동작한다(TIN 바깥 = <c>false</c>).
+/// <c>FlatGround</c>는 <b>언제나 true</b>라서 "표면이 그 자리를 안 덮는" 판을 <b>영원히 못 잰다</b> —
+/// 검토가 계측으로 잡은 결함이 정확히 그 눈먼 자리에 있었다.</para>
+/// <para>가상 폴리곤의 바깥 마감 링은 경계에서 <b>60~85m</b> 나가므로 TIN을 벗어나는 것이
+/// 예외가 아니라 <b>정상</b>이다. 그러니 이 대역이 있어야 검사가 진짜 증거가 된다.</para></summary>
+sealed class BoxGround(double z, double x0, double y0, double x1, double y1) : IGroundSurface
+{
+    public bool TryGetElevation(double x, double y, out double zz)
+    {
+        zz = z;
+        return x >= x0 && x <= x1 && y >= y0 && y <= y1;
+    }
 }
 
 /// <summary>기준점에서 x·y로 기울어진 원지반 — 절토 daylight가 자리마다 다르게 걸리도록.</summary>

@@ -1233,15 +1233,25 @@ public static class GradingGeometry
         //   같은 링의 <b>변</b>은 60m다. 코너 값 하나가 뽑히자 폴리곤이 사방으로 85.5m 부풀어
         //   진짜 마감선을 <b>25m나 넘어섰다</b>. 거리는 자리마다 다르다 — 그러니 <b>링 자체</b>를 쓴다.
         double farNew = 0;
+        int farMiss = 0;
         {
             double d0 = OffsetOf(picked[0]);
             double tp0 = ParamAt(plan, planCum, picked[0].X, picked[0].Y);
+            // ★★★[검토 0911 · 치명2] <b>조회 실패를 "아직 안 넘었다"로 읽으면 안 된다.</b>
+            //   종전 조건은 <c>TryGetElevation(...) &amp;&amp; (z &gt;= gz)</c>였다. 표면이 그 자리를 안 덮으면
+            //   <b>break가 절대 안 걸려</b> 단 수를 다 써 버린다 — 검토 실측: 기대 15.85m 자리에서
+            //   <b>29.5m</b>(= d0 + run × MaxBenches)가 나왔다.
+            //   → <b>마지막으로 성공한 원지반 표고</b>와 견준다. 한 번도 성공 못 하면 첫 단에서 멈춘다.
+            double lastGz = double.NaN;
             for (int b = 1; b <= Math.Max(1, p.MaxBenches); b++)
             {
                 double z = zLine + (up ? +1 : -1) * benchH * b;
                 farNew = d0 + run * b;
                 var q = OutwardAt(plan, planCum, tp0, farNew);
-                if (ground.TryGetElevation(q.X, q.Y, out double gz) && (up ? z >= gz : z <= gz)) break;
+                if (ground.TryGetElevation(q.X, q.Y, out double gz)) lastGz = gz;
+                else farMiss++;
+                if (double.IsNaN(lastGz)) break;                         // 한 점도 못 물었다 — 더 나가지 않는다
+                if (up ? z >= lastGz : z <= lastGz) break;
             }
         }
         var outer = OuterDaylightRing(plan, oldDaylight, farNew, p);
@@ -1305,8 +1315,9 @@ public static class GradingGeometry
             return L < 1e-9 ? (0, 0) : (dx / L, dy / L);
         }
         // ★거리를 재서 멈추지 않는다 — <b>링에 닿는 자리</b>가 마감이다.
-        List<Point3> Wing(Point3 start, (double X, double Y) dir)
+        List<Point3> Wing(Point3 start, (double X, double Y) dir, out int miss)
         {
+            miss = 0;
             var line = new List<Point3> { start };
             if (Math.Abs(dir.X) < 1e-9 && Math.Abs(dir.Y) < 1e-9) return line;
             var hit = RayHit(start.X, start.Y, dir.X, dir.Y, outer, 2000.0);
@@ -1315,7 +1326,22 @@ public static class GradingGeometry
                                  + (hit.Value.Y - start.Y) * (hit.Value.Y - start.Y));
             if (len < 1e-6) return line;
             int n = Math.Max(1, (int)Math.Ceiling(len / dens));
-            double endZ = ground.TryGetElevation(hit.Value.X, hit.Value.Y, out double eg) ? eg : zLine;
+            // ★★[검토 0911 · 치명2] 끝점 원지반 조회가 실패하면 <c>endZ = zLine</c>이 되어
+            //   날개가 <b>수평</b>이 된다 — 로그에 한 줄도 안 남았다. 이제 <b>세서 알린다</b>.
+            //   끝점이 안 되면 <b>닿기 전 지점을 되짚어</b> 가장 먼 성공 지점의 표고를 쓴다.
+            double endZ = zLine; bool got = false;
+            if (ground.TryGetElevation(hit.Value.X, hit.Value.Y, out double eg)) { endZ = eg; got = true; }
+            else
+            {
+                miss++;
+                for (int k = n - 1; k >= 1 && !got; k--)
+                {
+                    double u2 = (double)k / n;
+                    if (ground.TryGetElevation(start.X + dir.X * len * u2,
+                                               start.Y + dir.Y * len * u2, out double g2))
+                    { endZ = g2; got = true; }
+                }
+            }
             for (int i = 1; i <= n; i++)
             {
                 double u = (double)i / n;
@@ -1325,8 +1351,8 @@ public static class GradingGeometry
             return line;
         }
         bool c0 = AtCorner(t0), c1 = AtCorner(t1);
-        var wing0 = Wing(inner[0], WingDir(t0, false, c0));
-        var wing1 = Wing(inner[inner.Count - 1], WingDir(t1, true, c1));
+        var wing0 = Wing(inner[0], WingDir(t0, false, c0), out int wMiss0);
+        var wing1 = Wing(inner[inner.Count - 1], WingDir(t1, true, c1), out int wMiss1);
         if (wing0.Count < 2 || wing1.Count < 2)
         {
             why = $"날개 변을 못 만들었습니다(시작 {wing0.Count}점 · 끝 {wing1.Count}점"
@@ -1339,55 +1365,193 @@ public static class GradingGeometry
         var farB = wing1[wing1.Count - 1];      // 끝 쪽 날개 끝
         double tA = ParamAt(outer, ocum, farA.X, farA.Y);
         double tB = ParamAt(outer, ocum, farB.X, farB.Y);
-        var far = new List<Point3> { farB };
+        double fwdSpan = tA >= tB ? tA - tB : oTot - tB + tA;
+
+        // ★★★[검토 0911 · 치명1·높음3] <b>갈래는 "가까운 쪽"으로 고르면 안 된다 — 만들어 보고 고른다.</b>
+        //
+        //   <para>종전엔 두 갈래의 <b>가운데 한 점</b>이 찍은 선 중점에 가까운지로 골랐다.
+        //   검토가 ㄷ자 부지의 <b>오목한 안쪽 벽</b>에서 재니, 4m 구간인데 폴리곤이
+        //   <b>47,909㎡</b>(기대 ~486㎡, <b>98배</b>)가 나왔고 계획 경계 정점 <b>여덟 개가 모두</b>
+        //   폴리곤 안에 들어갔다 — 즉 <b>부지와 그 사면을 통째로 감쌌다</b>.
+        //   그런데 여섯 불변식이 <b>전부 통과</b>했다(닫힘 0m · 교차 0 · 안쪽 1.05~1.05m · 날개↔링 0m).
+        //   직사각 부지에서도 두 날개 끝이 마감 링의 <b>같은 변에 8.95m 안</b>으로 나란히 앉는 판이
+        //   있어(구간 70%) 면적이 17,189 → <b>28,421㎡</b>로 튀었다가 다시 내려왔다.</para>
+        //
+        //   <para>→ <b>두 갈래로 각각 폴리곤을 만들어</b> 셋으로 고른다:
+        //   ①<b>계획 경계 정점을 품지 않는</b> 쪽 ②<b>자기교차가 없는</b> 쪽 ③<b>면적이 작은</b> 쪽.
+        //   두 갈래는 서로 여집합이라 이 판정으로 곧바로 갈린다. 링 점이 수백 개라 셈은 무시할 만하다.
+        //   둘 다 부지를 품으면 <b>거절한다</b> — 구간이 둘레 대부분이면 쐐기가 실은 <b>고리</b>여서
+        //   단순 폴리곤으로 표현할 수가 없다(「모든 경우에 대처」 — 허용오차가 아니라 판정을 바꾼다).</para>
+        List<Point3> BuildFar(bool useFwd, out int zMiss, out int zFill)
         {
-            // B → A 두 갈래 중 <b>찍은 선 쪽</b>을 고른다.
-            //   ★"짧은 쪽"으로 고르면 안 된다 — 구간이 부지 둘레의 절반을 넘으면 <b>긴 쪽</b>이 맞는 길이다.
-            double fwd = tA >= tB ? tA - tB : oTot - tB + tA;
-            var mid = picked[picked.Count / 2];
-            double D(Point3 q) => (q.X - mid.X) * (q.X - mid.X) + (q.Y - mid.Y) * (q.Y - mid.Y);
-            var mF = PointAtParam(outer, ocum, Wrap(tB + fwd * 0.5, oTot));
-            var mB = PointAtParam(outer, ocum, Wrap(tB - (oTot - fwd) * 0.5, oTot));
-            bool useFwd = D(mF) <= D(mB);
-            double span = useFwd ? fwd : oTot - fwd;
+            double span = useFwd ? fwdSpan : oTot - fwdSpan;
             int sgn = useFwd ? +1 : -1;
             int n = Math.Max(1, (int)Math.Ceiling(span / dens));
+            var pts = new List<Point3> { farB };
+            // ★★[검토 0911 · 치명2] <b>원지반 조회 실패를 <c>zLine</c>으로 덮으면 안 된다.</b>
+            //   <c>TryGetElevation</c>은 TIN <b>바깥에서 false</b>를 돌려주고, 마감 링은 경계에서
+            //   60~85m 나가 있어 TIN을 벗어나는 것이 <b>정상</b>이다. 종전엔 그럴 때 옹벽 표고를 써서
+            //   바깥 변 <b>154점이 전부 105</b>가 되어 폴리곤이 한 표고의 평면이 됐다(검토 실측) —
+            //   로그에 한 줄도 안 남고, Z 띠 단언은 105가 띠 안이라 <b>통과했다</b>.
+            //   → 실패한 점은 <b>비워 두고</b> 나중에 가장 가까운 성공 지점의 Z로 채운다. 몇 점인지 센다.
+            var raw = new List<(double X, double Y, double Z, bool Ok)>();
             for (int i = 1; i < n; i++)
             {
                 var w = PointAtParam(outer, ocum, Wrap(tB + sgn * span * i / n, oTot));
-                double gz = ground.TryGetElevation(w.X, w.Y, out double g) ? g : zLine;
-                far.Add(new Point3(w.X, w.Y, gz));
+                bool ok = ground.TryGetElevation(w.X, w.Y, out double g);
+                raw.Add((w.X, w.Y, ok ? g : double.NaN, ok));
             }
-            far.Add(farA);      // 끝은 <b>날개 끝 그 점</b> — 어긋나면 그 틈에서 자기교차가 난다
-            LastWallPolyLog = $"안쪽 {inner.Count}점 · 날개 {wing0.Count}/{wing1.Count}점"
-                + $"(코너 {(c0 ? "예" : "아니오")}/{(c1 ? "예" : "아니오")}) · 바깥 {far.Count}점"
-                + $" · 마감 링 {outer.Count}점 · 새 데이라잇 {farNew:0.##}m"
-                + $" · 바깥 갈래 {(useFwd ? "정" : "역")}방향 {span:0.#}m/{oTot:0.#}m";
+            zMiss = 0; zFill = 0;
+            foreach (var r in raw) if (!r.Ok) zMiss++;
+            for (int i = 0; i < raw.Count; i++)
+            {
+                if (raw[i].Ok) { pts.Add(new Point3(raw[i].X, raw[i].Y, raw[i].Z)); continue; }
+                // 가장 가까운 성공 지점 — 앞뒤로 훑는다(양 끝은 날개 끝 표고로 받친다)
+                double z = double.NaN;
+                for (int d = 1; d <= raw.Count && double.IsNaN(z); d++)
+                {
+                    if (i - d >= 0 && raw[i - d].Ok) z = raw[i - d].Z;
+                    else if (i + d < raw.Count && raw[i + d].Ok) z = raw[i + d].Z;
+                }
+                if (double.IsNaN(z)) z = i * 2 < raw.Count ? farB.Z : farA.Z;
+                zFill++;
+                pts.Add(new Point3(raw[i].X, raw[i].Y, z));
+            }
+            pts.Add(farA);      // 끝은 <b>날개 끝 그 점</b> — 어긋나면 그 틈에서 자기교차가 난다
+            return pts;
         }
 
-        // ── 조립: 안쪽 변 → 날개1 → 바깥 변(B→A) → 날개0(거꾸로)
-        var poly = new List<Point3>();
-        void Push(IReadOnlyList<Point3> l, bool rev)
+        List<Point3> Assemble(IReadOnlyList<Point3> farPath, out (int I, int W1, int F, int W0) parts)
         {
-            for (int i = 0; i < l.Count; i++)
+            var acc = new List<Point3>();
+            void Push(IReadOnlyList<Point3> l, bool rev)
             {
-                var q = l[rev ? l.Count - 1 - i : i];
-                if (poly.Count > 0)
+                for (int i = 0; i < l.Count; i++)
                 {
-                    var last = poly[poly.Count - 1];
-                    if (Math.Abs(q.X - last.X) < 1e-6 && Math.Abs(q.Y - last.Y) < 1e-6) continue;
+                    var q = l[rev ? l.Count - 1 - i : i];
+                    if (acc.Count > 0)
+                    {
+                        var last = acc[acc.Count - 1];
+                        if (Math.Abs(q.X - last.X) < 1e-6 && Math.Abs(q.Y - last.Y) < 1e-6) continue;
+                    }
+                    acc.Add(q);
                 }
-                poly.Add(q);
             }
+            Push(inner, false);    int nIn = acc.Count;
+            Push(wing1, false);    int nW1 = acc.Count - nIn;
+            Push(farPath, false);  int nFar = acc.Count - nIn - nW1;
+            Push(wing0, true);     int nW0 = acc.Count - nIn - nW1 - nFar;
+            parts = (nIn, nW1, nFar, nW0);
+            return acc;
         }
-        Push(inner, false);  int nIn = poly.Count;
-        Push(wing1, false);  int nW1 = poly.Count - nIn;
-        Push(far, false);    int nFar = poly.Count - nIn - nW1;
-        Push(wing0, true);   int nW0 = poly.Count - nIn - nW1 - nFar;
-        // ★네 변의 <b>경계를 밖으로 낸다</b> — 안 내면 검사가 "어디가 안쪽 변인지"를
-        //   표고로 짐작해야 하고, 그러면 날개 첫 점까지 안쪽 변으로 세어 자가 무뎌진다.
-        LastWallPolyParts = (nIn, nW1, nFar, nW0);
-        if (poly.Count < 4) { why = $"폴리곤 점이 {poly.Count}개뿐입니다."; return null; }
+
+        // 판정용 셈 셋 — 면적 · 자기교차 · 계획 정점을 품나
+        static double Area2D(IReadOnlyList<Point3> r)
+        {
+            double a = 0;
+            for (int i = 0; i < r.Count; i++)
+            { var u = r[i]; var v = r[(i + 1) % r.Count]; a += u.X * v.Y - v.X * u.Y; }
+            return Math.Abs(a) * 0.5;
+        }
+        static bool Inside2D(IReadOnlyList<Point3> r, double x, double y)
+        {
+            bool In = false;
+            for (int i = 0, j = r.Count - 1; i < r.Count; j = i++)
+            {
+                if ((r[i].Y > y) == (r[j].Y > y)) continue;
+                double xx = r[j].X + (y - r[j].Y) / (r[i].Y - r[j].Y) * (r[i].X - r[j].X);
+                if (x < xx) In = !In;
+            }
+            return In;
+        }
+        static int SelfCross(IReadOnlyList<Point3> r)
+        {
+            int c = 0;
+            for (int i = 0; i + 1 < r.Count; i++)
+                for (int j = i + 2; j + 1 < r.Count; j++)
+                {
+                    if (i == 0 && j + 2 == r.Count) continue;
+                    double rx = r[i + 1].X - r[i].X, ry = r[i + 1].Y - r[i].Y;
+                    double sx = r[j + 1].X - r[j].X, sy = r[j + 1].Y - r[j].Y;
+                    double den = rx * sy - ry * sx;
+                    if (Math.Abs(den) < 1e-12) continue;
+                    double qx = r[j].X - r[i].X, qy = r[j].Y - r[i].Y;
+                    double u = (qx * sy - qy * sx) / den, v = (qx * ry - qy * rx) / den;
+                    if (u > 1e-6 && u < 1 - 1e-6 && v > 1e-6 && v < 1 - 1e-6) { if (++c >= 3) return c; }
+                }
+            return c;
+        }
+
+        List<Point3>? poly = null;
+        (int I, int W1, int F, int W0) pk = default;
+        bool pickedFwd = true; double pickedArea = 0; int pickedEats = 0, pickedCross = 0;
+        int missTot = 0, fillTot = 0; double pickedSpan = 0;
+        string cmp = "";
+        {
+            List<Point3>? bestPoly = null;
+            (int I, int W1, int F, int W0) bestParts = default;
+            int bestRank = int.MaxValue; double bestArea = double.MaxValue;
+            foreach (bool useFwd in new[] { true, false })
+            {
+                var farPath = BuildFar(useFwd, out int zMiss, out int zFill);
+                var cand = Assemble(farPath, out var cParts);
+                if (cand.Count < 4) continue;
+                double ar = Area2D(cand);
+                int cross = SelfCross(cand);
+                int eats = 0;
+                foreach (var q in plan) if (Inside2D(cand, q.X, q.Y)) eats++;
+                // 순위: 부지를 품으면 최악(2) · 꼬이면 다음(1) · 둘 다 아니면 최선(0)
+                int rank = eats > 0 ? 2 : (cross > 0 ? 1 : 0);
+                double span = useFwd ? fwdSpan : oTot - fwdSpan;
+                cmp += $" · {(useFwd ? "정" : "역")}방향[{span:0.#}m 면적 {ar:0}㎡ 교차 {cross} 품음 {eats}/{plan.Count}"
+                     + (zMiss > 0 ? $" 원지반실패 {zMiss}" : "") + "]";
+                if (rank < bestRank || (rank == bestRank && ar < bestArea))
+                {
+                    bestRank = rank; bestArea = ar;
+                    bestPoly = cand; bestParts = cParts;
+                    pickedFwd = useFwd; pickedArea = ar; pickedEats = eats; pickedCross = cross;
+                    missTot = zMiss; fillTot = zFill; pickedSpan = span;
+                }
+            }
+            // ★★★<b>꼬인 것도 내놓지 않는다.</b> 검토가 잡은 판(구간 폭 75%)에서는 <b>두 갈래 모두</b>
+            //   깨끗하지 않았다 — 정방향은 부지를 안 품는데 <b>교차 1</b>, 역방향은 교차 1에 <b>부지를 품음</b>.
+            //   그때 종전 순위는 "덜 나쁜" 정방향을 골랐고 면적이 <b>40,346㎡</b>로 나왔다.
+            //   자기교차한 폴리곤의 신발끈 면적은 <b>뜻이 없는 값</b>이고, 그것을 버퍼에 넘기면
+            //   엉뚱한 것이 나온다. → <b>rank 0(품지도 않고 꼬이지도 않은)만 받는다.</b>
+            //   <para>못 만드는 판이 있는 것은 사실이다 — 그럴 때는 <b>까닭을 말하고 거절한다</b>.
+            //   「모든 경우에 대처 가능하게」는 <i>허용오차로 증상을 덮지 말고 못 하면 밝히라</i>는 뜻이다.</para>
+            if (bestPoly == null || bestRank >= 1)
+            {
+                string kind = bestRank >= 2
+                    ? $"찍은 구간이 둘레({oTot:0.#}m)의 너무 큰 몫이라 벽 자리가 <b>고리</b>가 됩니다"
+                      + "(단순 폴리곤으로 표현 불가)"
+                    : "두 갈래 모두 <b>자기교차</b>합니다 — 두 날개가 마감 링에서 만나 오므라드는 자리입니다";
+                why = $"쓸 수 있는 폴리곤을 못 만들었습니다 — {kind}. 구간을 조금 줄이거나 옮겨 주세요.{cmp}";
+                LastWallPolyLog = "거절 — " + why;
+                return null;
+            }
+            poly = bestPoly; pk = bestParts;
+        }
+
+        // ★★[검토 0911 · 치명2] 원지반을 <b>한 점도</b> 못 물었으면 폴리곤이 뜻을 잃는다 — 거절한다.
+        if (pk.F > 2 && missTot >= pk.F - 2)
+        {
+            why = $"바깥 변의 원지반 표고를 <b>한 점도</b> 못 얻었습니다(조회 실패 {missTot}/{pk.F - 2}점)"
+                + " — 원지반 표면이 그 자리를 안 덮습니다. 표면 범위를 넓히거나 구간을 옮겨 주세요.";
+            LastWallPolyLog = "거절 — " + why;
+            return null;
+        }
+
+        LastWallPolyParts = (pk.I, pk.W1, pk.F, pk.W0);
+        LastWallPolyLog = $"안쪽 {inner.Count}점 · 날개 {wing0.Count}/{wing1.Count}점"
+            + $"(코너 {(c0 ? "예" : "아니오")}/{(c1 ? "예" : "아니오")}) · 바깥 {pk.F}점"
+            + $" · 마감 링 {outer.Count}점 · 새 데이라잇 {farNew:0.##}m"
+            + (farMiss > 0 ? $"(원지반 조회 실패 {farMiss}회 — 마지막 성공 표고로 판단)" : "")
+            + $" · 날개 원지반실패 {wMiss0}/{wMiss1}"
+            + $" · 바깥 갈래 <b>{(pickedFwd ? "정" : "역")}방향</b> {pickedSpan:0.#}m/{oTot:0.#}m"
+            + $" · 면적 {pickedArea:0}㎡ · 교차 {pickedCross} · 계획정점 품음 {pickedEats}/{plan.Count}"
+            + (missTot > 0 ? $" · <b>바깥 변 원지반 조회 실패 {missTot}점 → 가장 가까운 성공 표고로 채움 {fillTot}점</b>" : "")
+            + " · 갈래 비교" + cmp;
         return poly;
     }
 
