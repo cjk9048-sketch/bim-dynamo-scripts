@@ -18,8 +18,11 @@ public static class GradingBuilder
 
     /// <summary>오버사이즈 가상 사면 TIN — 계단 링을 Standard 브레이크라인으로(동심 비교차 → 톱니 0).
     /// cornerLines(코너 능선)를 주면 열린 브레이크라인으로 추가 — 코너 모따기(사선) 방지(직각 모드).</summary>
+    /// <param name="seamLines">★[JACK 0911] <b>이음매 선(날개벽 등고선)</b> — TIN에만 넣는다.
+    /// 코너 능선과 달리 <c>BreaklinePrep</c>의 교차 처리에 <b>안 넣는다</b>(수백 건이 생겨 둘 다 망가진다).</param>
     public static ObjectId BuildVirtualSlope(Database db, Transaction tr, IReadOnlyList<List<Point3>> rings, string name,
-        IReadOnlyList<List<Point3>>? cornerLines = null, ObjectId protect = default)
+        IReadOnlyList<List<Point3>>? cornerLines = null, ObjectId protect = default,
+        IReadOnlyList<List<Point3>>? seamLines = null)
     {
         // [재실행 정리] 같은 이름(및 _2, _3… 번호 변형)의 옛 DH 가상면을 먼저 삭제 — 실행마다 쌓여
         // 옛 표면을 보고 "안 생겼다"고 오인하는 혼란 방지(JACK). 항상 최신 하나만 남는다. 원지반(protect)은 제외.
@@ -39,6 +42,14 @@ public static class GradingBuilder
             foreach (var cl in cornerLines) AddOpenBreakline(tin, cl);
             intended += cornerLines.Count;
         }
+        // ★[JACK 0911] 이음매 선 — <b>TIN에만</b> 넣는다(교차 처리·옹벽선 판정에는 안 들어간다).
+        int seamOk = 0;
+        if (seamLines != null)
+        {
+            foreach (var sl in seamLines) { AddOpenBreakline(tin, sl); seamOk++; }
+            intended += seamLines.Count;
+        }
+        LastSeamLines = seamLines;   // ★아래 자가검증이 쓴다 — 끊긴 자리를 정말 덮었나
         tin.Rebuild();
 
         // [TIN 실측 검증] 의도한 링 점 Z vs 실제 TIN 표고 — 불일치가 어느 방향에 몰렸는지 기록(비대칭 원인 추적).
@@ -51,6 +62,7 @@ public static class GradingBuilder
                           (DiveCount > 0
                             ? $" · ★링이 끊긴 자리 {DiveCount}곳(최장 {DiveMaxLen:F1}m @ {DiveMaxX:F0},{DiveMaxY:F0}){DiveWhere}"
                             : " · 링 안 끊김") +
+                          SeamCoverText() +
                           (sharedPts > 0 ? $" · 보조선-링 공유정점 {sharedPts}개 삽입(교차 경고 제거, maxΔZ {BreaklinePrep.LastMaxZGap:F3}m)" : "") +
                           (BreaklinePrep.LastMaxZGap > 2.0 ? " · ΔZ>2m 교차는 스냅 생략(안전판 — 형상 무해, Civil3D 경고만 남음)" : ""));
             // 부지 중심(첫 링 평균)
@@ -1790,7 +1802,40 @@ public static class GradingBuilder
     internal static int DiveCount;
     internal static double DiveMaxLen, DiveMaxX, DiveMaxY;
     internal static readonly System.Text.StringBuilder DiveWhere = new();
-    internal static void DiveReset() { DiveCount = 0; DiveMaxLen = 0; DiveMaxX = 0; DiveMaxY = 0; DiveWhere.Clear(); }
+
+    /// <summary>★[JACK 0911] 직전 판에 넣은 <b>이음매 선</b> — 자가검증이 쓴다.</summary>
+    internal static IReadOnlyList<List<Point3>>? LastSeamLines;
+
+    /// <summary>★[JACK 0911] 링이 끊긴 자리를 모은다 — 이음매 선이 그 자리를 덮었는지 맞대 보려고.</summary>
+    internal static readonly List<(double X, double Y, double Len)> DiveSpots = new();
+    internal static void DiveReset() { DiveCount = 0; DiveMaxLen = 0; DiveMaxX = 0; DiveMaxY = 0; DiveWhere.Clear(); DiveSpots.Clear(); }
+
+    /// <summary>★★[JACK 0911 <i>"로그를 촘촘히 넣어"</i>] <b>자가검증 한 줄 — 이음매 선이 끊긴 자리를 덮었나.</b>
+    /// <para>끊긴 자리마다 그 한가운데를 지나는 이음매 선이 있어야 한다. 수가 모자라면
+    /// <b>그만큼 TIN에 빈 면이 남는다</b> — 스샷 없이도 이 한 줄로 판단할 수 있다.</para></summary>
+    private static string SeamCoverText()
+    {
+        if (DiveSpots.Count == 0) return "";
+        var seams = LastSeamLines;
+        if (seams == null || seams.Count == 0)
+            return $" · ⚠이음매 선 <b>0개</b> — 끊긴 자리 {DiveSpots.Count}곳이 <b>전부 빈 채</b>로 남는다";
+        int covered = 0; double worst = 0; double wx = 0, wy = 0;
+        foreach (var (dx, dy, dl) in DiveSpots)
+        {
+            bool hit = false;
+            foreach (var sl in seams)
+            {
+                foreach (var q in sl)
+                    if (Math.Abs(q.X - dx) < 2.0 && Math.Abs(q.Y - dy) < 2.0) { hit = true; break; }
+                if (hit) break;
+            }
+            if (hit) covered++;
+            else if (dl > worst) { worst = dl; wx = dx; wy = dy; }
+        }
+        return $" · ★이음매 선 {seams.Count}개가 끊긴 자리 <b>{covered}/{DiveSpots.Count}곳</b>을 덮었다"
+             + (covered == DiveSpots.Count ? " (전부 덮음)"
+                                           : $" · ⚠안 덮인 것 중 최장 {worst:F1}m @ {wx:F0},{wy:F0}");
+    }
 
     private static void AddRingBreakline(TinSurface tin, IReadOnlyList<Point3> loop)
     {
@@ -1826,6 +1871,13 @@ public static class GradingBuilder
         }
         if (dives > 0 && DiveWhere.Length < 400)
             DiveWhere.Append($" [{runs[0][^1].X:F1},{runs[0][^1].Y:F1} {diveLen:F1}m]");
+        // ★[JACK 0911] 끊긴 자리를 <b>전부</b> 모은다 — 이음매 선이 그 자리를 덮었는지 세려고.
+        for (int r = 0; r + 1 < runs.Count; r++)
+        {
+            var a4 = runs[r][^1]; var b4 = runs[r + 1][0];
+            double dl2 = Math.Sqrt((b4.X - a4.X) * (b4.X - a4.X) + (b4.Y - a4.Y) * (b4.Y - a4.Y));
+            DiveSpots.Add(((a4.X + b4.X) * 0.5, (a4.Y + b4.Y) * 0.5, dl2));
+        }
 
         foreach (var run in runs)
         {
@@ -1866,7 +1918,7 @@ public static class GradingBuilder
         for (int i = 2; ; i++) { string c = $"{baseName}_{i}"; if (!existing.Contains(c)) return c; }
     }
 
-    private static ObjectId EnsureLayer(Database db, Transaction tr, string name, short aci)
+    internal static ObjectId EnsureLayer(Database db, Transaction tr, string name, short aci)
     {
         var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
         if (lt.Has(name)) return lt[name];
@@ -1876,7 +1928,7 @@ public static class GradingBuilder
         return id;
     }
 
-    private static void EraseOnLayer(Database db, Transaction tr, string layerName)
+    internal static void EraseOnLayer(Database db, Transaction tr, string layerName)
     {
         var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
         if (!lt.Has(layerName)) return;

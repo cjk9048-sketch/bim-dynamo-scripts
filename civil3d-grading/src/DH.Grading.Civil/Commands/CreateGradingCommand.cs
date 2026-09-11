@@ -352,8 +352,8 @@ public sealed class CreateGradingCommand
                 catch { }
 
                 string verifyCut = "", verifyFill = "";
-                if (cut.HasSlope) { cutId = GradingBuilder.BuildVirtualSlope(db, tr, cut.Rings, "가상절토_DH", cut.CornerLines, groundId); verifyCut = GradingBuilder.LastVerify; }
-                if (fill.HasSlope) { fillId = GradingBuilder.BuildVirtualSlope(db, tr, fill.Rings, "가상성토_DH", fill.CornerLines, groundId); verifyFill = GradingBuilder.LastVerify; }
+                if (cut.HasSlope) { cutId = GradingBuilder.BuildVirtualSlope(db, tr, cut.Rings, "가상절토_DH", cut.CornerLines, groundId, cut.SeamLines); verifyCut = GradingBuilder.LastVerify; }
+                if (fill.HasSlope) { fillId = GradingBuilder.BuildVirtualSlope(db, tr, fill.Rings, "가상성토_DH", fill.CornerLines, groundId, fill.SeamLines); verifyFill = GradingBuilder.LastVerify; }
                 // 검증 로그에 TIN 실측 대조 결과 덧붙임(비대칭/누락 방향 추적)
                 try
                 {
@@ -1716,6 +1716,7 @@ public sealed class CreateGradingCommand
             MountainTerrace = s.MountainTerrace,
             TerraceInterval = s.TerraceInterval,
             TerraceWidth = s.TerraceWidth,
+            NoPlatform = GradingSettings.NoPlatform,   // ★[검토 0911] 종전엔 빠져 있어 Append로는 켤 수 없었다
             // ★★★[JACK 0820 '단높이를 2m로 바꿔도 5m로 쳐져'] **여기서 규칙이 버려지고 있었다.**
             //   BuildParams는 마지막에 GradingParams를 <b>필드별로 새로 만들어</b> 돌려준다.
             //   단높이 규칙을 이 목록에 안 넣으면, 앞에서 아무리 잘 전달해도 <b>여기서 조용히 사라진다</b>

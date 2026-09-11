@@ -14,6 +14,18 @@ public sealed class VirtualSlope
     /// <summary>코너 능선(힙) — 부지 코너에서 바깥 대각선으로 각 링의 코너 점을 꿰는 열린 브레이크라인.
     /// TIN이 코너를 대각 삼각형으로 깎는(모따기처럼 보이는) 것을 막아 벽·소단이 각지게 딱 떨어지게 한다(직각 모드).</summary>
     public List<List<Point3>> CornerLines { get; } = new();
+
+    /// <summary>★★★[JACK 0911] <b>이음매 선(날개벽 등고선)</b> — 구간 경계에서 벽 링과 사면 링을 잇는 선.
+    ///
+    /// <para><b>왜 <see cref="CornerLines"/>와 따로 두나.</b> 코너 능선은 제 뜻이 따로 있다 —
+    /// <c>BreaklinePrep.SplitLineRingCrossings</c>가 링과의 교차를 <b>공유 정점으로 박고</b>,
+    /// 검사(S57)가 그 개수를 센다. 이음매 선을 거기 섞으면 교차가 수백 건 생기고
+    /// (0911 실측: 보조선–링 Z간극 <b>160m</b>, 코너 능선 4개 → <b>140개</b>) 둘 다 망가진다.</para>
+    ///
+    /// <para>★<b>링에도 안 넣는다.</b> 링에 넣으면 <c>WallRunBuilder</c>가 그 점을 토우·크레스트로 읽어
+    /// <b>가짜 옹벽선</b>이 된다(0910 실측 226점). 이 선은 <b>TIN에만</b> 들어가야 한다 —
+    /// 그래서 제 목록을 따로 갖는다.</para></summary>
+    public List<List<Point3>> SeamLines { get; } = new();
     /// <summary>실제 계단이 생겼는지(평지 외 사면 링 존재).</summary>
     public bool HasSlope { get; set; }
 
@@ -98,7 +110,10 @@ public static class GradingGeometry
 
         // 평지(계획 부지) 경계 링 — Z=경계 정점의 실제 계획고(3D 폴리선 그대로). 내부는 TIN이 보간.
         var platform = Densify(Weed(PadRing(shape)), dens);
-        if (platform.Count >= 3) result.Rings.Add(platform);
+        // ★[JACK 0911] <c>NoPlatform</c>이면 <b>안쪽 평지 링을 안 넣는다</b> —
+        //   가상 폴리곤으로 벽만 칠 때 안쪽이 원지반(또는 앞 구역)으로 남게 하려는 것이다.
+        //   바깥으로 쌓는 계단은 그대로다.
+        if (platform.Count >= 3 && !p.NoPlatform) result.Rings.Add(platform);
 
         // [같은 레벨 정점 직선 브레이크라인 — 3D 계획선] 경계의 '같은 Z 연속 구간(플래토)' 양 끝 정점을
         // 부지 안쪽 직선으로 연결 → 상단·하단이 각각 평평하게 유지되고 전환 사면이 그 사이 좁은 띠로 갇힘
@@ -373,6 +388,8 @@ public static class GradingGeometry
             var (dist, rise) = profile.Edges[e];
             var w = MakeRingXY(dist);
             if (w == null) continue;
+            // ★이 모서리의 이음매 자리(XY만) — Z가 정해진 뒤에 선으로 만든다.
+            var seamXY = new List<(Point3 pa, Point3 pb, double dA, double dB)>();
             if (zlist != null && zlist.Count > 0 && cumB != null)
             {
                 // ★★[검토 0824 중간-2] 조합(마스크)이 아니라 **그 조합이 주는 거리**로 묶는다.
@@ -463,6 +480,40 @@ public static class GradingGeometry
                         //   비켜 가야 한다(안 그러면 그 자리만 다시 계단이 된다).</para>
                         var asm2 = new List<Point3>();
                         foreach (var r in runs2) asm2.AddRange(r.pts);
+
+                        // ★★★[JACK 0911] <b>이음매 선을 <u>링 밖에</u> 따로 넣는다 — 그것이 날개벽 등고선이다.</b>
+                        //
+                        //   <para><b>무엇이 달라졌나.</b> 0910에 이 선을 <b>링 안에</b> 점으로 채워 봤다가 되돌렸다 —
+                        //   링에 들어가면 <c>WallRunBuilder</c>가 그 점들을 토우·크레스트로 읽어
+                        //   <b>가짜 옹벽선 226점</b>이 났다(0805 "사선으로 존재하지 않는 옹벽" 재발).</para>
+                        //
+                        //   <para>★<b>그런데 그 선은 실재한다.</b> JACK: <i>"날개벽쪽도 옹벽쪽하고 똑같이
+                        //   소단하고 높이하고 생긴다"</i> — 벽 링과 사면 링 사이를 잇는 그 방사 선분이
+                        //   바로 <b>날개벽이 그 표고에서 지나가는 자리</b>다. 버리니까 TIN이 빈 면을 부채꼴로 때웠다.</para>
+                        //
+                        //   <para>→ <b>링에는 안 넣고</b> <see cref="VirtualSlope.CornerLines"/>에 넣는다.
+                        //   그러면 ①TIN에는 브레이크라인으로 들어가 빈 면이 채워지고
+                        //   ②<c>WallRunBuilder</c>는 링만 보므로 <b>가짜 옹벽선이 안 생긴다</b>.
+                        //   같은 선이지만 <b>들어가는 문이 다르다</b>.</para>
+                        // ★★★[JACK 0911 로그 실측] <b>여기서는 자리(XY)만 기억한다 — Z가 아직 0이다.</b>
+                        //   <para>링의 Z는 <b>한참 뒤</b>에 한꺼번에 정해진다(<c>BoundaryZAt + zOff</c>).
+                        //   첫 판은 여기서 점을 떠 갔다가 이음매 선이 <b>전부 표고 0</b>이 됐다 —
+                        //   부지는 105~160m인데 브레이크라인 30개가 <b>지하 100m</b>로 TIN을 끌어내렸다
+                        //   (0911 로그: <c>이음매 선 #1 … Z 0.00→0.00</c>). JACK: <i>"엄청 이상하게 생성되었어"</i>.</para>
+                        //   → <b>Z가 정해진 뒤에</b> 만든다(아래).
+                        for (int ri = 1; ri < runs2.Count; ri++)
+                        {
+                            var pa = runs2[ri - 1].pts; var pb = runs2[ri].pts;
+                            if (pa.Count == 0 || pb.Count == 0) continue;
+                            seamXY.Add((pa[pa.Count - 1], pb[0], runs2[ri - 1].dist, runs2[ri].dist));
+                        }
+                        if (runs2.Count > 1)
+                        {
+                            var pl = runs2[runs2.Count - 1].pts; var pf = runs2[0].pts;
+                            if (pl.Count > 0 && pf.Count > 0)
+                                seamXY.Add((pl[pl.Count - 1], pf[0],
+                                            runs2[runs2.Count - 1].dist, runs2[0].dist));
+                        }
                         if (asm2.Count >= 3) w = asm2;
                     }
                 }
@@ -512,6 +563,30 @@ public static class GradingGeometry
             for (int wi = 0; wi < w.Count; wi++)
                 w[wi] = new Point3(w[wi].X, w[wi].Y, BoundaryZAt(shape, w[wi].X, w[wi].Y) + zOff);
             int relaxed = RelaxRingZ(w, maxGrad); // 영향권 경계의 잔여 Z 점프를 전환부 경사로 완화
+
+            // ★★★[JACK 0911] <b>이제 Z가 정해졌다 — 이음매 선을 여기서 만든다.</b>
+            //   양 끝 표고는 링과 <b>같은 셈</b>으로 낸다(<c>BoundaryZAt + zOff</c>) —
+            //   그래야 이 선이 링과 <b>같은 면 위</b>에 놓인다. 링에서 떠 오면 그 점이
+            //   완화(<c>RelaxRingZ</c>)를 거친 값이라 살짝 다를 수 있어, 같은 식으로 다시 낸다.
+            //   ★★★[JACK 0911 자문 §3] <b>구간 밖에는 아무것도 놓지 않는다 — 규칙으로 못박는다.</b>
+            //
+            //   <para><b>왜.</b> 0911에 이음매 선의 끝점을 옆으로 옮겨 봤다(두 번: 양쪽 다 / 사면 쪽만).
+            //   둘 다 지표면에 <b>수직 칼날</b>이 섰다. 옮긴 자리는 <b>구간 밖</b>이고,
+            //   거기 실제 표면은 사면(낮다)인데 선에는 <b>옹벽 표고(높다)</b>를 줬기 때문이다.
+            //   <b>실측(S107 칼날 검사): 정상 0.7:1 ↔ 옮긴 판 423.3:1.</b></para>
+            //
+            //   <para>★그래서 <b>양 끝 다 조각이 실제로 끝난 그 점</b>을 쓴다.
+            //   둘 다 <b>진짜 링 위의 점</b>이라 없는 자리에 표고를 주는 일이 없다.
+            //   대신 이 선들은 같은 둘레 자리에 <b>세로로 겹친다</b> —
+            //   그 겹침을 푸는 것은 <b>선을 옮기는 일이 아니라</b>
+            //   전이 영역을 따로 두고 그 안의 기존 면을 걷어내는 일이다(자문 §9·§18). 아직 안 했다.</para>
+            foreach (var (paR, pbR, dA, dB) in (p.SeamLines ? seamXY : new List<(Point3, Point3, double, double)>()))
+            {
+                double lo = Math.Min(dA, dB);
+                var pa2 = new Point3(paR.X, paR.Y, BoundaryZAt(shape, paR.X, paR.Y) + zOff);
+                var pb2 = new Point3(pbR.X, pbR.Y, BoundaryZAt(shape, pbR.X, pbR.Y) + zOff);
+                AddSeamLine(result, pa2, pb2, dens, dbg, e, lo);
+            }
 
             // 단차 경계선에 이 링의 교점(최종 Z 포함)을 수집 — 링 정점과 완전 동일 좌표(교차 거부 불가)
             foreach (var (ray, px, py) in ringHits)
@@ -627,7 +702,26 @@ public static class GradingGeometry
 
         if (ringN > 0)
             dbg.AppendLine($"  링 {ringN}개 요약 — 점 {ringLo}~{ringHi}개 · Z {ringZLo:F2}~{ringZHi:F2}m · 완화 평균 {(double)ringRelax / ringN:F1}점");
-        dbg.AppendLine($"  결과: 링 {result.Rings.Count} · 코너/플래토선 {result.CornerLines.Count} · HasSlope={result.HasSlope}");
+        // ★★[JACK 0911] <b>이음매 선 요약 — 자가검증 한 줄.</b>
+        //   링이 끊긴 자리마다 이음매 선이 하나씩 있어야 한다. 수가 다르면 그 자체가 신호다.
+        if (result.SeamLines.Count > 0)
+        {
+            double sMin = double.MaxValue, sMax = 0, sSum = 0;
+            foreach (var sl in result.SeamLines)
+            {
+                double L2 = 0;
+                for (int i = 0; i + 1 < sl.Count; i++)
+                    L2 += Math.Sqrt((sl[i + 1].X - sl[i].X) * (sl[i + 1].X - sl[i].X)
+                                  + (sl[i + 1].Y - sl[i].Y) * (sl[i + 1].Y - sl[i].Y));
+                sMin = Math.Min(sMin, L2); sMax = Math.Max(sMax, L2); sSum += L2;
+            }
+            dbg.AppendLine($"  ★이음매 선(날개벽 등고선) {result.SeamLines.Count}개 —"
+                         + $" 길이 {sMin:F1}~{sMax:F1}m(평균 {sSum / result.SeamLines.Count:F1}m)"
+                         + " · <b>링에는 안 들어감</b>(옹벽선 판정 제외) · TIN에만 들어감");
+        }
+        else dbg.AppendLine("  이음매 선 0개 — 구간 경계에서 링이 안 끊겼거나 구간이 없다");
+        dbg.AppendLine($"  결과: 링 {result.Rings.Count} · 코너/플래토선 {result.CornerLines.Count}"
+                     + $" · 이음매선 {result.SeamLines.Count} · HasSlope={result.HasSlope}");
         LastDiag = dbg.ToString();
         return result;
     }
@@ -775,6 +869,573 @@ public static class GradingGeometry
         double dens = Math.Max(0.3, Math.Min(p.VertexSpacing, 1.0));
         return Math.Max(3.0, dens * 3.0);   // 정점을 최소 셋 품는 창
     }
+
+    /// <summary>★★★[JACK 0911] <b>날개벽 선 하나를 뽑는다 — 끝점에서 데이라잇까지.</b>
+    ///
+    /// <para>JACK: <i>"선택부분 끝점에서 <b>직각</b>부분, <b>코너</b>라면 연장(평면 기준으로
+    /// 연장선이 데이라잇과 만나는 지점까지의 평면거리만큼)으로 가상선을 만들어서
+    /// 그 3개 선 모두 만들어지는 걸로 먼저 만들어 봐"</i>.</para>
+    ///
+    /// <para><b>방향 두 가지.</b>
+    /// ①<b>직선 끝</b> — 고른 선과 <b>직각</b>(바깥쪽). ②<b>코너 끝</b> — 고른 선을 <b>그대로 연장</b>.
+    /// 둘 다 <paramref name="daylight"/>(사면이 원지반과 닿는 선)에 <b>처음 닿는 자리</b>에서 끊는다.</para>
+    ///
+    /// <para>★<b>재기만 한다</b> — 형상을 안 바꾼다. 먼저 그려 보고 판단하려는 것이다(JACK 0911).</para></summary>
+    /// <param name="ring">고른 선이 놓인 고리(자).</param>
+    /// <param name="cum"><paramref name="ring"/>의 누적 호길이.</param>
+    /// <param name="t">끝점의 호길이.</param>
+    /// <param name="corner">참이면 <b>노선 연장</b>, 거짓이면 <b>직각</b>.</param>
+    /// <param name="towardT1">구간이 이 끝에서 <b>어느 쪽으로 뻗어 있나</b> —
+    /// 연장 방향(바깥쪽)을 그 반대로 잡으려고 쓴다.</param>
+    /// <param name="daylight">사면이 원지반과 닿는 선(닫힌 고리).</param>
+    /// <param name="maxLen">여기까지 가도 안 닿으면 포기한다(m).</param>
+    /// <returns>끝점 → 닿은 자리. 못 찾으면 <c>null</c>.</returns>
+    public static List<Point3>? WingLine(
+        IReadOnlyList<Point3> ring, double[] cum, double t, bool corner, bool towardT1,
+        IReadOnlyList<Point3>? daylight, double maxLen, out double groundZ)
+    {
+        groundZ = double.NaN;
+        if (ring == null || ring.Count < 3 || cum == null || cum.Length < 2) return null;
+        var from = PointAtParam(ring, cum, t);
+
+        double dx, dy;
+        if (corner)
+        {
+            // ★<b>노선 연장</b> — 구간이 뻗은 <b>반대쪽</b>으로 곧게 더 간다.
+            //   (구간 안쪽으로 연장하면 제 몸을 자르는 꼴이라 뜻이 없다.)
+            double back = towardT1 ? t - 1.0 : t + 1.0;
+            var b = PointAtParam(ring, cum, back);
+            dx = from.X - b.X; dy = from.Y - b.Y;
+        }
+        else
+        {
+            // ★<b>직각</b> — 고리 바깥쪽. 방향은 <see cref="OutwardAt"/>가 도는 방향으로 정한다.
+            var o = OutwardAt(ring, cum, t, 1.0);
+            dx = o.X - from.X; dy = o.Y - from.Y;
+        }
+        double L = Math.Sqrt(dx * dx + dy * dy);
+        if (L < 1e-9) return null;
+        dx /= L; dy /= L;
+
+        var hit = RayHit(from.X, from.Y, dx, dy, daylight, maxLen);
+        if (hit == null) return null;
+        // ★★★[JACK 0911] <b>표고는 노선 그대로 — 수평선이다.</b>
+        //   <para>JACK: <i>"선이 지반 끝에 닿는 3D 폴리선이 아니고 그냥 <b>노선의 표고와 같은 평면 선</b>이어야 해.
+        //   그 상태에서 지표면까지 그레이딩하고 사면하고 합성하면 어떨까"</i>.</para>
+        //   <para>데이라잇은 <b>평면 거리를 정하는 데만</b> 쓴다 — 어디서 끊을지. 표고는 안 가져온다.
+        //   그래야 이 선 셋이 <b>한 표고의 계획선</b>이 되어, 거기서 다시 정지를 칠 수 있다.</para>
+        groundZ = hit.Value.Z;    // ★닿은 자리의 <b>원지반 표고</b> — 어디까지 쌓을지 정할 때 쓴다
+        return new List<Point3> { from, new Point3(hit.Value.X, hit.Value.Y, from.Z) };
+    }
+
+    /// <summary>표고가 필요 없을 때 쓰는 짧은 문.</summary>
+    public static List<Point3>? WingLine(
+        IReadOnlyList<Point3> ring, double[] cum, double t, bool corner, bool towardT1,
+        IReadOnlyList<Point3>? daylight, double maxLen = 500.0)
+        => WingLine(ring, cum, t, corner, towardT1, daylight, maxLen, out _);
+
+    /// <summary>반직선이 닫힌 선에 <b>처음 닿는 자리</b>(2D). 못 닿으면 <c>null</c>.
+    /// <para>★가장 가까운 교점을 준다 — 여러 번 닿으면 <b>첫 번째</b>가 마감 자리다.</para></summary>
+    public static (double X, double Y, double Z)? RayHit(
+        double x0, double y0, double dx, double dy,
+        IReadOnlyList<Point3>? path, double maxLen = 500.0)
+    {
+        if (path == null || path.Count < 2) return null;
+        double best = double.MaxValue; double bx = 0, by = 0, bz = 0;
+        int n = path.Count;
+        for (int i = 0; i < n; i++)
+        {
+            var a = path[i]; var b = path[(i + 1) % n];
+            double sx = b.X - a.X, sy = b.Y - a.Y;
+            double den = dx * sy - dy * sx;
+            if (Math.Abs(den) < 1e-12) continue;               // 나란하다 — 안 닿는다
+            double qx = a.X - x0, qy = a.Y - y0;
+            double u = (qx * sy - qy * sx) / den;              // 반직선 위 거리
+            double v = (qx * dy - qy * dx) / den;              // 선분 위 0..1
+            if (u <= 1e-9 || u > maxLen) continue;
+            if (v < -1e-9 || v > 1 + 1e-9) continue;
+            if (u < best) { best = u; bx = x0 + dx * u; by = y0 + dy * u; bz = a.Z + (b.Z - a.Z) * v; }
+        }
+        return best < double.MaxValue ? (bx, by, bz) : null;
+    }
+
+    /// <summary>★★★[JACK 0911] <b>평면 선 하나에서 지표면까지 옹벽을 쌓는다.</b>
+    ///
+    /// <para>JACK: <i>"그냥 <b>노선의 표고와 같은 평면 선</b>이어야 해.
+    /// 그 상태에서 <b>지표면까지 그레이딩</b>하고 사면하고 <b>합성</b>하면 어떨까"</i>.</para>
+    ///
+    /// <para><b>왜 이 방식인가.</b> 0910~0911에 마감면을 아홉 번 짓고 아홉 번 되돌렸다.
+    /// 전부 <b>둘레 고리 안에서</b> 자리마다 거리를 다르게 주려다 실패했다 —
+    /// 옹벽 쪽(12.6m)과 사면 쪽(102m)이 <b>진짜로 다른 거리</b>라 그 사이에 반드시 턱이 생긴다.</para>
+    ///
+    /// <para>★그래서 <b>고리를 고치지 않는다.</b> 옹벽을 <b>제 선에서 따로 쌓아</b> 만들고,
+    /// 그것을 기존 사면과 <b>합성</b>한다. 고를 때 만든 세 선(고른 구간 + 날개 둘)이 그 선이다.</para>
+    ///
+    /// <para><b>쌓는 법.</b> 선을 <b>한쪽으로만</b> 밀어 가며 한 단씩 올린다 —
+    /// 한 단 폭은 <c>단높이 × 구배 + 소단폭</c>, 사면 프로파일과 <b>같은 셈</b>이다.
+    /// 원지반을 넘어서면 거기서 멈춘다 — 더 쌓을 데가 없다는 뜻이다.</para>
+    ///
+    /// <para>★<b>미는 것은 셈으로 한다</b> — 버퍼를 안 뜬다.
+    /// 0910 실측: 꼭짓점에서 0.5m만 떨어지면 이 셈이 NTS 버퍼와 <b>0.000m로 일치</b>한다.
+    /// 선이 열려 있으므로(닫힌 고리가 아니므로) 버퍼로는 오히려 다루기 어렵다.</para></summary>
+    /// <param name="line">평면 선(열림). 전부 같은 표고여야 한다.</param>
+    /// <param name="zStop">이 표고에 닿으면 멈춘다(날개선이 데이라잇에 닿은 자리의 원지반 표고).</param>
+    /// <param name="p">정지 제원.</param>
+    /// <param name="up">참=절토(위로 쌓는다) · 거짓=성토(아래로).</param>
+    /// <param name="slope">이 옹벽의 구배(1:n). 수직이면 <c>MinSlope</c>.</param>
+    /// <param name="benchW">소단폭(m).</param>
+    /// <param name="outSign">미는 쪽 — <c>+1</c>이면 선의 진행 방향 <b>왼쪽</b>, <c>-1</c>이면 오른쪽.</param>
+    /// <returns>단마다 한 줄씩. 첫 줄이 <paramref name="line"/> 자신이다.</returns>
+    /// <summary>★[JACK 0911] 멈출 자리를 <b>원지반 표면에 직접 묻는</b> 판 —
+    /// 원지반은 자리마다 다르므로 한 표고로 끊으면 <b>모자라거나 넘친다</b>
+    /// (0911 실측: 한 표고로 끊으니 4단에서 멈췄는데 원지반은 그보다 30m 위였다).
+    /// <para>한 단의 점이 <b>모두</b> 원지반을 넘었을 때만 멈춘다 —
+    /// 일부만 넘었으면 그 단은 아직 쓸모가 있다(데이라잇이 기울어 있다).</para></summary>
+    public static List<List<Point3>> WallFromLine(
+        IReadOnlyList<Point3> line, IGroundSurface ground, GradingParams p, bool up,
+        double slope, double benchW, int outSign)
+    {
+        var outp = new List<List<Point3>>();
+        if (line == null || line.Count < 2 || ground == null) return outp;
+        double benchH = p.BenchHeightOf(up);
+        double run = Math.Max(benchH * Math.Max(slope, p.MinSlope), p.MinFaceRun) + Math.Max(benchW, 0);
+        if (!(run > 1e-6) || !(benchH > 1e-6)) return outp;
+        int maxB = Math.Max(1, p.MaxBenches);
+        double zdir = up ? +1 : -1;
+        var cur0 = new List<Point3>(line.Count);
+        foreach (var q in line) cur0.Add(q);
+        outp.Add(cur0);
+        for (int b = 1; b <= maxB; b++)
+        {
+            double z = line[0].Z + zdir * benchH * b;
+            var nxt = OffsetOpen(line, run * b, outSign, z);
+            if (nxt == null || nxt.Count < 2) break;
+            outp.Add(nxt);
+            int over = 0;
+            foreach (var q in nxt)
+                if (ground.TryGetElevation(q.X, q.Y, out double gz) && (up ? z >= gz : z <= gz)) over++;
+            if (over >= nxt.Count) break;
+        }
+        return outp;
+    }
+
+    public static List<List<Point3>> WallFromLine(
+        IReadOnlyList<Point3> line, double zStop, GradingParams p, bool up,
+        double slope, double benchW, int outSign)
+    {
+        var outp = new List<List<Point3>>();
+        if (line == null || line.Count < 2) return outp;
+
+        double benchH = p.BenchHeightOf(up);
+        double run = Math.Max(benchH * Math.Max(slope, p.MinSlope), p.MinFaceRun) + Math.Max(benchW, 0);
+        if (!(run > 1e-6) || !(benchH > 1e-6)) return outp;
+        int maxB = Math.Max(1, p.MaxBenches);
+        double zdir = up ? +1 : -1;
+
+        var cur = new List<Point3>(line.Count);
+        foreach (var q in line) cur.Add(q);
+        outp.Add(cur);
+
+        for (int b = 1; b <= maxB; b++)
+        {
+            double z = line[0].Z + zdir * benchH * b;
+            var nxt = OffsetOpen(line, run * b, outSign, z);
+            if (nxt == null || nxt.Count < 2) break;
+
+            outp.Add(nxt);
+            // ★<b>원지반 표고를 넘으면 멈춘다</b> — 더 쌓을 데가 없다는 뜻이다.
+            //   표면을 통째로 들고 다니지 않고 <b>한 표고</b>로 묻는다: 날개선이 이미 데이라잇에서
+            //   끊겼으므로 그 자리 원지반 표고가 곧 멈출 자리다(<see cref="WingLine"/>가 알려 준다).
+            if (up ? z >= zStop : z <= zStop) break;
+        }
+        return outp;
+    }
+
+    /// <summary>열린 선을 <b>한쪽으로</b> <paramref name="dist"/>만큼 민다(표고는 <paramref name="z"/>로 고정).
+    /// <para>끝 점은 그 자리 방향으로, 사이 점은 <b>두 방향의 가운데</b>로 민다 — 마이터.
+    /// 아주 뾰족한 굽이는 마이터가 폭발하므로 <c>MiterLimit</c>으로 자른다.</para></summary>
+    public static List<Point3>? OffsetOpen(IReadOnlyList<Point3> line, double dist, int outSign, double z)
+    {
+        int n = line.Count;
+        if (n < 2 || dist <= 0) return null;
+        double s = outSign >= 0 ? 1 : -1;
+        var res = new List<Point3>(n);
+        for (int i = 0; i < n; i++)
+        {
+            // 이 점에서의 '앞으로 가는 방향' — 끝에서는 한쪽만 있다.
+            double ax = 0, ay = 0, bx = 0, by = 0;
+            if (i > 0) { ax = line[i].X - line[i - 1].X; ay = line[i].Y - line[i - 1].Y; }
+            if (i + 1 < n) { bx = line[i + 1].X - line[i].X; by = line[i + 1].Y - line[i].Y; }
+            if (i == 0) { ax = bx; ay = by; }
+            if (i + 1 == n) { bx = ax; by = ay; }
+            double la = Math.Sqrt(ax * ax + ay * ay), lb = Math.Sqrt(bx * bx + by * by);
+            if (la < 1e-12 || lb < 1e-12) continue;
+            ax /= la; ay /= la; bx /= lb; by /= lb;
+            // 두 변의 법선을 더해 가운데 방향 — 마이터.
+            double nx = s * (-ay - by), ny = s * (ax + bx);
+            double ln = Math.Sqrt(nx * nx + ny * ny);
+            if (ln < 1e-9) continue;                       // 180° 되꺾임 — 이 점은 버린다
+            nx /= ln; ny /= ln;
+            // 마이터 길이 보정: 두 변 사이 각이 좁을수록 더 멀리 나가야 한다.
+            double cos = ax * bx + ay * by;                // 1=일직선
+            double m = Math.Sqrt(Math.Max(0.5 * (1 + cos), 1e-6));
+            double scale = Math.Min(1.0 / m, Math.Max(1.0, p_MiterLimit));
+            res.Add(new Point3(line[i].X + nx * dist * scale, line[i].Y + ny * dist * scale, z));
+        }
+        DeCusp(res);
+        return res.Count >= 2 ? res : null;
+    }
+
+    /// <summary>★★★[검토 0911] <b>되돌아가는 가시(커스프)를 걷는다.</b>
+    ///
+    /// <para>선을 한쪽으로 밀면 <b>굽이</b>에서 코너 양옆 점이 코너를 <b>지나쳐</b> 앉는다.
+    /// 안쪽으로 밀 때는 볼록한 굽이에서, 바깥으로 밀 때는 오목한 굽이에서 그렇다.
+    /// 점 하나하나는 제 법선으로 정확히 밀린 <b>맞는 점</b>인데 <b>순서가 되돌아가</b>
+    /// 아주 작은 고리가 생긴다 — 실측한 자리는 이랬다(0.06m):</para>
+    /// <code>
+    /// #20 (-7.4500, 67.5128)   ← 코너를 지나침
+    /// #21 (-7.4500, 67.4500)   ← 마이터 코너
+    /// #22 (-7.5102, 67.4500)   ← 반대로 지나침
+    /// </code>
+    ///
+    /// <para>그 고리가 폴리곤의 <b>자기교차</b>가 되고, 자기교차한 폴리곤은 버퍼가
+    /// 엉뚱한 것을 만든다. <b>구간이 코너를 가로지르는 판 넷이 전부</b> 여기서 걸렸다(S112).</para>
+    ///
+    /// <para>방향이 뒤집히는 점을 뺀다. 하나를 빼면 그 이웃이 새로 뒤집힐 수 있으므로
+    /// <b>더 없어질 때까지</b> 훑는다(뺀 자리 바로 앞으로 되돌아가 다시 본다).</para></summary>
+    static void DeCusp(List<Point3> pts)
+    {
+        for (int pass = 0; pass < 8; pass++)
+        {
+            bool cut = false;
+            for (int i = 1; i + 1 < pts.Count; )
+            {
+                double ax = pts[i].X - pts[i - 1].X, ay = pts[i].Y - pts[i - 1].Y;
+                double bx = pts[i + 1].X - pts[i].X, by = pts[i + 1].Y - pts[i].Y;
+                if (ax * bx + ay * by < -1e-12) { pts.RemoveAt(i); cut = true; if (i > 1) i--; }
+                else i++;
+            }
+            if (!cut) break;
+        }
+    }
+
+    /// <summary>마이터 한도 — 뾰족한 굽이에서 오프셋이 폭발하는 것을 막는다(이 저장소 기본 2.0).</summary>
+    private const double p_MiterLimit = 2.0;
+
+    /// <summary>★[JACK 0911] 이음매 선 하나를 <b>브레이크라인으로</b> 담는다(링에는 안 넣는다).
+    /// <para>양 끝만 있으면 <c>BreaklinePrep.RingSegMaxM</c>(2.5m) 문턱에 걸려 TIN에서 빠지므로
+    /// <paramref name="dens"/> 간격으로 점을 채운다. 링이 아니라 <b>보조선</b>이라
+    /// 옹벽선 판정에는 안 들어간다 — 그것이 0910 판과 다른 점이다.</para></summary>
+    private static void AddSeamLine(VirtualSlope result, Point3 a, Point3 b, double dens,
+                                    System.Text.StringBuilder? dbg = null, int edge = -1, double flare = 0)
+    {
+        double dx = b.X - a.X, dy = b.Y - a.Y;
+        double L = Math.Sqrt(dx * dx + dy * dy);
+        if (L <= dens * 1.5)
+        {
+            // ★[JACK 0911 <i>"로그를 촘촘히 넣어"</i>] <b>안 넣은 것도 적는다</b> —
+            //   "이음매가 24곳인데 선은 20개"일 때 나머지 넷이 어디로 갔는지 알 수 있어야 한다.
+            dbg?.AppendLine($"    이음매 건너뜀 — 모서리{edge} 길이 {L:F2}m ≤ {dens * 1.5:F2}m(이미 TIN에 들어간다)"
+                          + $" @ {a.X:F1},{a.Y:F1}");
+            return;
+        }
+        int sub = Math.Max(1, (int)Math.Floor(L / dens));
+        var line = new List<Point3>(sub + 2) { a };
+        for (int k = 1; k <= sub; k++)
+        {
+            double u = (double)k / (sub + 1);
+            line.Add(new Point3(a.X + dx * u, a.Y + dy * u, a.Z + (b.Z - a.Z) * u));
+        }
+        line.Add(b);
+        result.SeamLines.Add(line);
+        dbg?.AppendLine($"    이음매 선 #{result.SeamLines.Count} — 모서리{edge} 길이 {L:F1}m · 점 {line.Count}개"
+                      + $" · 옆으로 물린 폭 {flare:F2}m"
+                      + $" · Z {a.Z:F2}→{b.Z:F2} · ({a.X:F1},{a.Y:F1})→({b.X:F1},{b.Y:F1})"
+                      + $" · 변길이 {L / (sub + 1):F2}m");
+    }
+
+    /// <summary>★★★[JACK 0911] <b>부분변환용 가상 계획폴리곤을 <u>계산으로</u> 만든다.</b>
+    ///
+    /// <para>JACK: <i>"그냥 구간에서 선을 설정하면 그 선이 포함된 계획폴리곤(가상)이 생성되고
+    /// 그게 기존에 있던 이어서하기를 응용해서 합성하는 식으로 하면 깔끔히 될 것 같아"</i> ·
+    /// <i>"우린 계산해서 그려야되"</i>.</para>
+    ///
+    /// <para><b>왜 이 길인가.</b> 0910~0911에 <b>열두 번</b> 짓고 열두 번 되돌렸다. 전부
+    /// <b>한 고리 안에서</b> 자리마다 거리를 다르게 주려는 시도였고, 전부 같은 바닥에 걸렸다:
+    /// 이웃한 전이 단계의 반경 차이가 <b>언제나 7.45m</b>(=사면 8.5 − 벽 1.05)로
+    /// <c>BreaklinePrep.RingSegMaxM</c>(2.5m)의 <b>세 배</b>다. 그리고 더 근본적으로,
+    /// <c>SlopeZone</c>은 자리를 <b>둘레 호길이 하나</b>로만 말해서 <b>부지 밖으로 나가는 선을 못 쓴다</b> —
+    /// 넓히면 반드시 둘레를 따라 넓어져 코너에서 남의 변을 먹는다(검토 실측).</para>
+    ///
+    /// <para>★<b>폴리곤은 그 제약이 없다.</b> 제 경계를 갖고, 코너를 돌고, 부지 밖으로 나간다.
+    /// 그리고 JACK이 손으로 그려 [이어서]로 친 판이 <b>월등히 깨끗했다</b>.</para>
+    ///
+    /// <para><b>네 변이 전부 계산에서 나온다 — 짐작이 없다.</b>
+    /// <list type="number">
+    /// <item><description><b>안쪽 변</b> = 찍은 구간에서 <b>한 단 내밀기만큼 안쪽</b>.
+    /// 정지가 폴리곤에서 그만큼 밖으로 나가므로, 그래야 <b>첫 단이 찍은 자리에 정확히</b> 선다.
+    /// (JACK 실측 지적: <i>"소단만큼 내가 그린 계획폴리곤보다 퍼져서 만들어져"</i>)</description></item>
+    /// <item><description><b>옆 변(날개)</b> = 직선 끝이면 <b>직각</b>, 코너면 <b>노선 연장</b>
+    /// (<see cref="WingLine"/>). 길이는 바깥 변이 정한다.</description></item>
+    /// <item><description><b>바깥 변</b> = <b>옛 데이라잇과 새 데이라잇 중 먼 쪽</b>.
+    /// 선호가 아니라 <b>강제</b>다 — 발자국은 제 데이라잇까지만 덮으므로,
+    /// 옛 사면이 나가 있던 데까지 안 덮으면 <b>그것이 안 지워진다</b>.</description></item>
+    /// <item><description><b>표고</b> — 안쪽 변은 <b>찍은 선의 표고</b>, 바깥 변은 <b>그 자리 원지반 표고</b>.
+    /// 바깥에서 높이차가 0이라 거기서는 정지가 안 일어난다. 찍은 표고로 두면 부지 밖을 깎는다.</description></item>
+    /// </list></para></summary>
+    /// <param name="ruler">찍은 선이 놓인 고리(그 단의 링).</param>
+    /// <param name="rcum"><paramref name="ruler"/>의 누적 호길이.</param>
+    /// <param name="t0">찍은 구간 시작(자 위 호길이).</param>
+    /// <param name="t1">찍은 구간 끝.</param>
+    /// <param name="plan">계획 경계.</param>
+    /// <param name="planCum"><paramref name="plan"/>의 누적 호길이.</param>
+    /// <param name="oldDaylight">옛 데이라잇(없으면 새 것만 본다).</param>
+    /// <param name="ground">원지반 — 바깥 변 표고와 새 데이라잇을 정한다.</param>
+    /// <param name="p">정지 제원.</param>
+    /// <param name="up">참=절토 · 거짓=성토.</param>
+    /// <param name="wallSlope">새로 적용할 구배(옹벽이면 <c>MinSlope</c>).</param>
+    /// <param name="cornerTol">구간 끝이 계획 꼭짓점에서 이 거리 안이면 <b>코너</b>로 본다(m).</param>
+    /// <param name="why">못 만들었을 때의 이유 — 부르는 쪽이 그대로 사람에게 보여 준다.</param>
+    /// <returns>닫힌 3D 폴리곤. 못 만들면 <c>null</c>.</returns>
+    public static List<Point3>? BuildWallPolygon(
+        IReadOnlyList<Point3> ruler, double[] rcum, double t0, double t1,
+        IReadOnlyList<Point3> plan, double[] planCum,
+        IReadOnlyList<Point3>? oldDaylight, IGroundSurface ground,
+        GradingParams p, bool up, double wallSlope, double cornerTol, out string why)
+    {
+        why = "";
+        if (ruler == null || ruler.Count < 3 || plan == null || plan.Count < 3 || ground == null)
+        { why = "자·계획경계·원지반 중 없는 것이 있습니다."; return null; }
+
+        double dens = Math.Max(0.3, Math.Min(p.VertexSpacing, 1.0));
+        double benchH = p.BenchHeightOf(up);
+        double benchW = p.BenchWidthOf(up);
+        double run = Math.Max(benchH * Math.Max(wallSlope, p.MinSlope), p.MinFaceRun) + Math.Max(benchW, 0);
+        double planTot = planCum[planCum.Length - 1];
+
+        // 찍은 구간의 점들 — 이 선이 곧 "벽이 서야 할 자리"다.
+        var picked = SubPath(ruler, rcum, t0, t1);
+        if (picked.Count < 2) { why = "찍은 구간이 너무 짧습니다."; return null; }
+        double zLine = picked[0].Z;
+
+        // 그 점이 계획 경계에서 밖으로 나간 거리 — 안쪽 변을 놓을 때 쓴다.
+        double OffsetOf(Point3 q)
+        {
+            double t = ParamAt(plan, planCum, q.X, q.Y);
+            var b = PointAtParam(plan, planCum, t);
+            return Math.Sqrt((q.X - b.X) * (q.X - b.X) + (q.Y - b.Y) * (q.Y - b.Y));
+        }
+
+        // ── ③ <b>바깥 마감 링</b> — 옛 데이라잇과 새 데이라잇 중 <b>바깥쪽</b>을 하나로 합친 링.
+        //
+        //   ★★<b>거리 하나로 줄이면 안 된다</b>(0911 실측). 첫 판은 "먼 쪽 거리 하나"를 구해
+        //   사방으로 그만큼 밀었다. 그런데 옛 데이라잇의 <b>마이터 코너</b>는 경계에서 84.85m인데
+        //   같은 링의 <b>변</b>은 60m다. 코너 값 하나가 뽑히자 폴리곤이 사방으로 85.5m 부풀어
+        //   진짜 마감선을 <b>25m나 넘어섰다</b>. 거리는 자리마다 다르다 — 그러니 <b>링 자체</b>를 쓴다.
+        double farNew = 0;
+        {
+            double d0 = OffsetOf(picked[0]);
+            double tp0 = ParamAt(plan, planCum, picked[0].X, picked[0].Y);
+            for (int b = 1; b <= Math.Max(1, p.MaxBenches); b++)
+            {
+                double z = zLine + (up ? +1 : -1) * benchH * b;
+                farNew = d0 + run * b;
+                var q = OutwardAt(plan, planCum, tp0, farNew);
+                if (ground.TryGetElevation(q.X, q.Y, out double gz) && (up ? z >= gz : z <= gz)) break;
+            }
+        }
+        var outer = OuterDaylightRing(plan, oldDaylight, farNew, p);
+        if (outer == null || outer.Count < 3)
+        { why = "바깥 마감 링을 못 만들었습니다."; return null; }
+        var ocum = CumLen2D(outer);
+        double oTot = ocum[ocum.Length - 1];
+
+        // ── ① 안쪽 변 — <b>찍은 선 자신의 법선</b>으로 한 단 내밀기만큼 안쪽. 표고는 찍은 선 표고.
+        //
+        //   ★★<b>계획 경계의 직각을 쓰면 안 된다</b>(0911 실측). 종전엔 자리마다
+        //   <c>OutwardAt(plan, …, OffsetOf(q) − run)</c>을 불렀다. 그런데 자가 <b>코너</b>에 닿는 자리에서는
+        //   경계의 직각이 두 변 중 <b>한쪽으로 쏠려</b>, 안쪽 변이 7.45m에서 <b>10.7m로 3.2m 튀어나갔다</b> —
+        //   그것도 <b>벽과 날개가 만나는 바로 그 자리</b>다. 찍은 선을 제 법선으로 미는 것이 맞는 셈이다.
+        //   (부호는 짐작하지 않고 <b>재서</b> 고른다 — 경계에 더 가까워지는 쪽이 안쪽이다.)
+        List<Point3>? innerTry = null;
+        foreach (int sgn in new[] { +1, -1 })
+        {
+            var cand = OffsetOpen(picked, run, sgn, zLine);
+            if (cand == null || cand.Count < 2) continue;
+            if (OffsetOf(cand[0]) < OffsetOf(picked[0])) { innerTry = cand; break; }
+        }
+        if (innerTry == null || innerTry.Count < 2)
+        { why = $"안쪽 변을 못 만들었습니다(찍은 구간 {picked.Count}점 · 한 단 내밀기 {run:0.##}m)."; return null; }
+        var inner = innerTry;
+
+        // ── ② 옆 변(날개) — 방향은 직각/연장, <b>바깥 마감 링에 닿을 때까지</b>
+        bool AtCorner(double t)
+        {
+            var q = PointAtParam(ruler, rcum, t);
+            double tp = ParamAt(plan, planCum, q.X, q.Y);
+            for (int i = 0; i + 1 < planCum.Length; i++)
+            {
+                double d = Math.Abs(tp - planCum[i]);
+                d = Math.Min(d, planTot - d);
+                if (d < cornerTol) return true;
+            }
+            return false;
+        }
+        // ★★★<b>코너에서는 "구간 안쪽" 이웃을 본다</b>(0911 실측으로 고침).
+        //   JACK: <i>"옹벽을 연장해서 (옹벽연장선 ∩ 데이라잇선)까지"</i> — 즉 <b>찍은 변의 방향을 그대로 늘린다</b>.
+        //   종전엔 구간 <b>바깥쪽</b> 이웃(<c>t1+1</c>)을 봤다. 그 자리는 <b>이미 꺾인 다음 변</b>이라
+        //   방향이 (0,+1)이어야 할 자리에서 (−0.83,−0.55)가 나왔고, 날개가 부지 쪽으로 69m 대각선을
+        //   그으며 바깥 변과 <b>교차</b>했다(실측: 교차 1곳 @(−62.4,19.3)).
+        (double X, double Y) WingDir(double t, bool atT1, bool corner)
+        {
+            var from = PointAtParam(ruler, rcum, t);
+            double dx, dy;
+            if (corner)
+            {
+                // 구간 <b>안쪽</b> 이웃 → 그 반대가 연장 방향이다.
+                var inSide = PointAtParam(ruler, rcum, atT1 ? t - 1.0 : t + 1.0);
+                dx = from.X - inSide.X; dy = from.Y - inSide.Y;
+            }
+            else
+            {
+                var o = OutwardAt(ruler, rcum, t, 1.0);
+                dx = o.X - from.X; dy = o.Y - from.Y;
+            }
+            double L = Math.Sqrt(dx * dx + dy * dy);
+            return L < 1e-9 ? (0, 0) : (dx / L, dy / L);
+        }
+        // ★거리를 재서 멈추지 않는다 — <b>링에 닿는 자리</b>가 마감이다.
+        List<Point3> Wing(Point3 start, (double X, double Y) dir)
+        {
+            var line = new List<Point3> { start };
+            if (Math.Abs(dir.X) < 1e-9 && Math.Abs(dir.Y) < 1e-9) return line;
+            var hit = RayHit(start.X, start.Y, dir.X, dir.Y, outer, 2000.0);
+            if (hit == null) return line;
+            double len = Math.Sqrt((hit.Value.X - start.X) * (hit.Value.X - start.X)
+                                 + (hit.Value.Y - start.Y) * (hit.Value.Y - start.Y));
+            if (len < 1e-6) return line;
+            int n = Math.Max(1, (int)Math.Ceiling(len / dens));
+            double endZ = ground.TryGetElevation(hit.Value.X, hit.Value.Y, out double eg) ? eg : zLine;
+            for (int i = 1; i <= n; i++)
+            {
+                double u = (double)i / n;
+                double x = start.X + dir.X * len * u, y = start.Y + dir.Y * len * u;
+                line.Add(new Point3(x, y, zLine + (endZ - zLine) * u));   // 찍은 표고 → 원지반 표고로 전이
+            }
+            return line;
+        }
+        bool c0 = AtCorner(t0), c1 = AtCorner(t1);
+        var wing0 = Wing(inner[0], WingDir(t0, false, c0));
+        var wing1 = Wing(inner[inner.Count - 1], WingDir(t1, true, c1));
+        if (wing0.Count < 2 || wing1.Count < 2)
+        {
+            why = $"날개 변을 못 만들었습니다(시작 {wing0.Count}점 · 끝 {wing1.Count}점"
+                + " — 반직선이 마감 링에 안 닿았습니다).";
+            return null;
+        }
+
+        // ── ④ 바깥 변 — 두 날개 끝을 <b>마감 링을 따라</b> 잇는다(표고=원지반)
+        var farA = wing0[wing0.Count - 1];      // 시작 쪽 날개 끝
+        var farB = wing1[wing1.Count - 1];      // 끝 쪽 날개 끝
+        double tA = ParamAt(outer, ocum, farA.X, farA.Y);
+        double tB = ParamAt(outer, ocum, farB.X, farB.Y);
+        var far = new List<Point3> { farB };
+        {
+            // B → A 두 갈래 중 <b>찍은 선 쪽</b>을 고른다.
+            //   ★"짧은 쪽"으로 고르면 안 된다 — 구간이 부지 둘레의 절반을 넘으면 <b>긴 쪽</b>이 맞는 길이다.
+            double fwd = tA >= tB ? tA - tB : oTot - tB + tA;
+            var mid = picked[picked.Count / 2];
+            double D(Point3 q) => (q.X - mid.X) * (q.X - mid.X) + (q.Y - mid.Y) * (q.Y - mid.Y);
+            var mF = PointAtParam(outer, ocum, Wrap(tB + fwd * 0.5, oTot));
+            var mB = PointAtParam(outer, ocum, Wrap(tB - (oTot - fwd) * 0.5, oTot));
+            bool useFwd = D(mF) <= D(mB);
+            double span = useFwd ? fwd : oTot - fwd;
+            int sgn = useFwd ? +1 : -1;
+            int n = Math.Max(1, (int)Math.Ceiling(span / dens));
+            for (int i = 1; i < n; i++)
+            {
+                var w = PointAtParam(outer, ocum, Wrap(tB + sgn * span * i / n, oTot));
+                double gz = ground.TryGetElevation(w.X, w.Y, out double g) ? g : zLine;
+                far.Add(new Point3(w.X, w.Y, gz));
+            }
+            far.Add(farA);      // 끝은 <b>날개 끝 그 점</b> — 어긋나면 그 틈에서 자기교차가 난다
+            LastWallPolyLog = $"안쪽 {inner.Count}점 · 날개 {wing0.Count}/{wing1.Count}점"
+                + $"(코너 {(c0 ? "예" : "아니오")}/{(c1 ? "예" : "아니오")}) · 바깥 {far.Count}점"
+                + $" · 마감 링 {outer.Count}점 · 새 데이라잇 {farNew:0.##}m"
+                + $" · 바깥 갈래 {(useFwd ? "정" : "역")}방향 {span:0.#}m/{oTot:0.#}m";
+        }
+
+        // ── 조립: 안쪽 변 → 날개1 → 바깥 변(B→A) → 날개0(거꾸로)
+        var poly = new List<Point3>();
+        void Push(IReadOnlyList<Point3> l, bool rev)
+        {
+            for (int i = 0; i < l.Count; i++)
+            {
+                var q = l[rev ? l.Count - 1 - i : i];
+                if (poly.Count > 0)
+                {
+                    var last = poly[poly.Count - 1];
+                    if (Math.Abs(q.X - last.X) < 1e-6 && Math.Abs(q.Y - last.Y) < 1e-6) continue;
+                }
+                poly.Add(q);
+            }
+        }
+        Push(inner, false);  int nIn = poly.Count;
+        Push(wing1, false);  int nW1 = poly.Count - nIn;
+        Push(far, false);    int nFar = poly.Count - nIn - nW1;
+        Push(wing0, true);   int nW0 = poly.Count - nIn - nW1 - nFar;
+        // ★네 변의 <b>경계를 밖으로 낸다</b> — 안 내면 검사가 "어디가 안쪽 변인지"를
+        //   표고로 짐작해야 하고, 그러면 날개 첫 점까지 안쪽 변으로 세어 자가 무뎌진다.
+        LastWallPolyParts = (nIn, nW1, nFar, nW0);
+        if (poly.Count < 4) { why = $"폴리곤 점이 {poly.Count}개뿐입니다."; return null; }
+        return poly;
+    }
+
+    static double Wrap(double t, double tot) => tot <= 1e-9 ? 0 : ((t % tot) + tot) % tot;
+
+    /// <summary>★★★[JACK 0911] <b>바깥 마감 링</b> — 옛 데이라잇과 새 데이라잇 중 바깥쪽.
+    /// <para>가상 계획폴리곤의 <b>바깥 변</b>이 여기에 앉아야 옛 사면이 남김없이 덮인다.
+    /// 하나만 쓰면 ①새 것만: 옛 사면이 바깥에 남아 턱이 진다 ②옛 것만: 새 벽이 더 나가면 잘린다.</para>
+    /// <para>★거리 하나로 줄이지 않고 <b>합집합</b>을 쓰는 이유는 <c>BuildWallPolygon</c>의 ③에 적었다 —
+    /// 마이터 코너의 반경거리(84.85m)와 변의 거리(60m)가 <b>다른 값</b>이기 때문이다.</para></summary>
+    public static List<Point3>? OuterDaylightRing(
+        IReadOnlyList<Point3> plan, IReadOnlyList<Point3>? oldDaylight, double newDist, GradingParams p)
+    {
+        var fresh = OffsetRingForTest(plan, Math.Max(newDist, 0.05), p);
+        if (oldDaylight == null || oldDaylight.Count < 3) return fresh;
+        if (fresh == null) return new List<Point3>(oldDaylight);
+        try
+        {
+            var gf = NtsFactory();
+            Geometry a = gf.CreatePolygon(ClosedRing(oldDaylight));
+            Geometry b = gf.CreatePolygon(ClosedRing(fresh));
+            var pg = LargestPolygon(a.Union(b));
+            if (pg == null) return fresh;
+            var pts = new List<Point3>();
+            foreach (var c in pg.ExteriorRing.Coordinates) pts.Add(new Point3(c.X, c.Y, 0));
+            double dens = Math.Max(0.3, Math.Min(p.VertexSpacing, 1.0));
+            var d2 = Densify(Weed(pts), dens);
+            return d2.Count >= 3 ? d2 : fresh;
+        }
+        catch { return fresh; }
+    }
+
+    static Coordinate[] ClosedRing(IReadOnlyList<Point3> r)
+    {
+        int n = r.Count;
+        bool shut = Math.Abs(r[0].X - r[n - 1].X) < 1e-9 && Math.Abs(r[0].Y - r[n - 1].Y) < 1e-9;
+        var c = new Coordinate[shut ? n : n + 1];
+        for (int i = 0; i < n; i++) c[i] = new Coordinate(r[i].X, r[i].Y);
+        if (!shut) c[n] = new Coordinate(r[0].X, r[0].Y);
+        return c;
+    }
+
+    /// <summary>★마지막 <c>BuildWallPolygon</c>이 무엇을 만들었는지 — <b>화면 없이 파악하려면</b> 이 줄을 본다.</summary>
+    public static string LastWallPolyLog = "";
+
+    /// <summary>★마지막 폴리곤의 <b>네 변이 각각 몇 점인지</b> — 순서는 조립 순서대로
+    /// (안쪽 변 · 끝쪽 날개 · 바깥 변 · 시작쪽 날개). 검사가 변을 <b>잘라 보려면</b> 이 경계가 있어야 한다.</summary>
+    public static (int Inner, int Wing1, int Far, int Wing0) LastWallPolyParts;
 
     public static bool InInterval(double t0, double t1, double t)
         => t0 <= t1 ? (t >= t0 - 1e-9 && t <= t1 + 1e-9) : (t >= t0 - 1e-9 || t <= t1 + 1e-9);

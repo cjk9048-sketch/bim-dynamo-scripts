@@ -25,7 +25,7 @@ public static class GradingSettings
     /// <b>같은 번호를 단 빌드가 여러 개</b>가 되어, 어느 것이 깔렸는지 물으면 답할 수가 없었다.</para>
     /// <para><c>x.0</c> = 화면·명령이 바뀌어 <b>사용자가 다르게 일하게</b> 되는 판 ·
     /// <c>x.y</c> = 같은 화면에서 결함을 고친 판.</para></summary>
-    public const string Version = "v83.1 (2026-09-10)";
+    public const string Version = "v88.0 (2026-09-11)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -92,6 +92,13 @@ public static class GradingSettings
     public static bool MountainTerrace = false;     // 계단식 산지 적용(산지전용허가법) — 수직 누적 15m마다 대소단
     public static double TerraceInterval = 15.0;    // 대소단 수직 간격 (m) — 법정 15m
     public static double TerraceWidth = 15.0;       // 대소단 폭 (m) — 법정 15m
+
+    // ★★★[검토 0911] <b>계획폴리곤 안쪽을 평탄화하지 않는다</b>(가상 계획폴리곤 합성용 · 화면엔 안 낸다).
+    //   <para><c>GradingParams.NoPlatform</c>으로 넘어간다. 종전엔 이 필드가 <b>아예 없어서</b>
+    //   <c>GradeMode.Append</c> 경로로는 <b>켤 방법이 없었다</b> — 검사에서만 켜졌다(S109).
+    //   "가상 계획폴리곤을 이어서하기로 합성한다"는 방향에는 이 스위치가 <b>필수 재료</b>다.</para>
+    //   <para>★기본값 <c>false</c>다 — 켜지 않으면 지금까지와 <b>한 점도</b> 달라지지 않는다.</para>
+    public static bool NoPlatform = false;
     public static double HatchShort = 1.0;     // 노리선 짧은선 간격 (m, 길이=사면폭 절반)
     public static double HatchLong = 5.0;      // 노리선 긴선 간격 (m, 길이=사면폭 전체)
     public static bool KeepIntermediateSurfaces = true; // true=중간 지표면(가상절토/가상성토/Pad) 유지(오류 확인용). false=최종면만 남기고 정리
@@ -640,6 +647,7 @@ public static class GradingSettings
         MountainTerrace = MountainTerrace,
         TerraceInterval = TerraceInterval,
         TerraceWidth = TerraceWidth,
+        NoPlatform = NoPlatform,        // ★[검토 0911] 안 실으면 <b>여기서 조용히 떨어진다</b>(S113이 지킨다)
         // ★[JACK 0820] 단높이 변경 규칙 — 목록은 **복사해서** 넘긴다. 참조를 넘기면 재생성 때
         //   Params와 Settings가 같은 목록을 가리켜, 한쪽을 지우면 다른 쪽도 조용히 비어 버린다.
         CutBenchSteps = new System.Collections.Generic.List<(int, double)>(CutBenchSteps),
