@@ -682,7 +682,9 @@ internal static class ZoneEditCommon
                     //   <para>★그리고 <b>같은 셈을 여기 또 두지 않는다</b> — 종전엔 이 판정이
                     //   <c>ZoneEditCommon</c>·<c>WingLine</c>·<c>BuildWallPolygon</c> 세 군데에 있었고
                     //   그중 하나만 고쳐져 <b>화면의 날개와 폴리곤의 날개가 90° 달랐다</b>.</para>
-                    var rulerCorners = GradingGeometry.RingCornerParams(ruler, rcum);
+                    if (boundary == null || cumB == null)
+                    { Log("   날개벽선 — 계획 경계가 없어 코너를 판정할 수 없다"); return; }
+                    var rulerCorners = GradingGeometry.CornerParamsOf(boundary, ruler, rcum);
                     double rTotW = rcum[rcum.Length - 1];
                     bool IsCorner(double t) => GradingGeometry.AtRingCorner(rulerCorners, t, rTotW, 1.5);
 
@@ -764,15 +766,22 @@ internal static class ZoneEditCommon
                     {
                         var gId = NoriCommand.FindByHandle(db, GradingSettings.LastGroundHandle);
                         if (gId.IsNull) gId = NoriCommand.FindByHandle(db, region!.GroundHandle);
-                        if (!gId.IsNull)
+                        if (gId.IsNull)
+                            // ★[검토 0911 · 보통13] 종전엔 <c>catch { }</c>여서 <b>핸들이 없는 것</b>과
+                            //   <b>다른 이유로 실패한 것</b>을 구별할 수 없었다.
+                            Log($"     원지반 — 핸들로 못 찾았다(설정 '{GradingSettings.LastGroundHandle}'"
+                              + $" · 구역 '{region!.GroundHandle}')");
+                        else
                         {
                             using var trg = db.TransactionManager.StartTransaction();
                             if (trg.GetObject(gId, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.TinSurface gt)
                                 realGround = new CachedGroundSurface(gt);
+                            else Log("     원지반 — 찾은 객체가 TinSurface가 아니다");
                             trg.Commit();
                         }
                     }
-                    catch { }
+                    catch (System.Exception gex)
+                    { Log($"     원지반 — 여는 중 멈췄다: {gex.GetType().Name}: {gex.Message}"); }
 
                     int faceN = 0;
                     if (chain.Count >= 3 && (realGround != null || !double.IsNaN(zStop)))
@@ -892,7 +901,13 @@ internal static class ZoneEditCommon
                             else
                             {
                                 // ★닫아서 그린다 — 계획폴리곤은 닫힌 선이어야 한다.
-                                var closed = new System.Collections.Generic.List<Point3>(vpoly) { vpoly[0] };
+                                //   ★[검토 0911 · 낮음15] <b>이미 닫혀 있으면 또 붙이지 않는다.</b>
+                                //   <c>BuildWallPolygon</c>은 시작쪽 날개를 거꾸로 밀며 안쪽 변 첫 점을
+                                //   마지막에 다시 담으므로 <c>poly[^1] == poly[0]</c>이다(S111 "닫힘 0m"가 증거).
+                                //   여기서 또 붙이면 같은 점이 <b>셋</b>이 되어 길이 0 선분 둘이 들어간다.
+                                var closed = new System.Collections.Generic.List<Point3>(vpoly);
+                                if (System.Math.Abs(vpoly[^1].X - vpoly[0].X) > 1e-6
+                                 || System.Math.Abs(vpoly[^1].Y - vpoly[0].Y) > 1e-6) closed.Add(vpoly[0]);
                                 DrawWingLines(db,
                                     new System.Collections.Generic.List<System.Collections.Generic.List<Point3>> { closed },
                                     "DH-가상계획선", 6);
@@ -913,7 +928,13 @@ internal static class ZoneEditCommon
                             }
                         }
                     }
-                    catch (System.Exception vex) { Log("   ⚠ 가상 계획폴리곤 실패 — " + vex.Message); }
+                    catch (System.Exception vex)
+                    {
+                        // ★[검토 0911 · 보통13] 정상 실패는 화면에 알리는데 <b>예외는 조용했다</b>.
+                        //   형식 이름까지 적는다 — 메시지만으로는 어느 단계인지 모른다.
+                        Log($"   ⚠ 가상 계획폴리곤 실패 — {vex.GetType().Name}: {vex.Message}");
+                        ed.WriteMessage($"\n   ⚠ 가상 계획폴리곤을 만들다 멈췄습니다 — {vex.Message}");
+                    }
                 }
                 catch (System.Exception wex) { Log("   ⚠ 날개벽선 실패 — " + wex.Message); }
             }
