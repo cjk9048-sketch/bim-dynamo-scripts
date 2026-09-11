@@ -628,6 +628,289 @@ internal static class ZoneEditCommon
                 DropPart();
             }
 
+            // ══ ★★★[JACK 0911] <b>날개벽 선을 그려 본다 — 먼저 보고 정하려고.</b> ═══════════
+            //   JACK: <i>"선택부분 끝점에서 <b>직각</b>부분, <b>코너</b>라면 연장(평면 기준으로
+            //   연장선이 데이라잇과 만나는 지점까지의 평면거리만큼)으로 가상선을 만들어서
+            //   그 <b>3개 선 모두</b> 만들어지는 걸로 먼저 만들어 봐. 그거 보고 결정하자."</i>
+            //
+            //   <para>★<b>형상을 안 바꾼다.</b> 지표면도 옹벽선도 안 건드리고 <b>선만</b> 그린다.
+            //   0910~0911에 마감면을 아홉 번 짓고 아홉 번 되돌렸는데, 그 공통 원인이
+            //   <b>모양을 눈으로 확인하기 전에 지은 것</b>이었다. 이번엔 보고 정한다.</para>
+            //
+            //   <para>선은 <c>DH-날개벽선</c> 레이어에 그린다 — <c>DHRESET</c>이 걷어 간다.</para>
+            void ShowWings((bool up, int gid, int bench) k,
+                           System.Collections.Generic.IReadOnlyList<Point3> ruler,
+                           double[] rcum, double t0, double t1)
+            {
+                try
+                {
+                    var many = k.up ? region!.CutFinalRings : region!.FillFinalRings;
+                    var one = k.up ? region.CutFinalRing : region.FillFinalRing;
+                    // ★<b>가장 바깥 고리</b>가 데이라잇이다 — 여러 조각이면 제일 큰 것.
+                    System.Collections.Generic.List<Point3>? day = one;
+                    if (many != null && many.Count > 0)
+                    {
+                        double best = -1;
+                        foreach (var r in many)
+                        {
+                            if (r == null || r.Count < 3) continue;
+                            double a2 = 0;
+                            for (int i = 0; i < r.Count; i++)
+                            { var u = r[i]; var w2 = r[(i + 1) % r.Count]; a2 += u.X * w2.Y - w2.X * u.Y; }
+                            a2 = System.Math.Abs(a2) * 0.5;
+                            if (a2 > best) { best = a2; day = r; }
+                        }
+                    }
+                    if (day == null || day.Count < 3)
+                    { Log("   날개벽선 — 데이라잇 선이 없어 못 그린다"); return; }
+
+                    // ★끝이 <b>계획 꼭짓점</b>에 놓였나 = 코너다. 볼록 코너의 바깥 점은
+                    //   전부 그 꼭짓점 하나로 투영되므로 판정이 또렷하다(0910 실측).
+                    bool IsCorner(double t)
+                    {
+                        if (boundary == null || cumB == null) return false;
+                        var q = GradingGeometry.PointAtParam(ruler, rcum, t);
+                        double tp = GradingGeometry.ParamAt(boundary, cumB, q.X, q.Y);
+                        double tot2 = cumB[cumB.Length - 1];
+                        for (int i = 0; i + 1 < cumB.Length; i++)
+                        {
+                            double d = System.Math.Abs(tp - cumB[i]);
+                            d = System.Math.Min(d, tot2 - d);
+                            if (d < 1.5) return true;
+                        }
+                        return false;
+                    }
+
+                    var segs = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
+                    // ① 고른 구간 그 자체
+                    var midPath = GradingGeometry.SubPath(ruler, rcum, t0, t1);
+                    if (midPath.Count >= 2) segs.Add(midPath);
+                    double zLine = midPath.Count > 0 ? midPath[0].Z : 0;   // 노선 표고 — 셋 다 이 표고다
+                    // ②③ 양 끝의 날개선
+                    string txt = "";
+                    System.Collections.Generic.List<Point3>? wing0 = null, wing1 = null;
+                    double zStop = double.NaN;
+                    foreach (var (t, towardT1, nm) in new[] { (t0, true, "시점"), (t1, false, "종점") })
+                    {
+                        bool corner = IsCorner(t);
+                        var w = GradingGeometry.WingLine(ruler, rcum, t, corner, towardT1, day, 500.0, out double gz);
+                        // ★[JACK 0911 <i>"로그를 촘촘히 넣어"</i>] <b>못 만든 것도 왜 못 만들었는지 적는다.</b>
+                        var atP = GradingGeometry.PointAtParam(ruler, rcum, t);
+                        if (w == null)
+                        {
+                            txt += $" · {nm} {(corner ? "연장" : "직각")}=데이라잇에 <b>못 닿음</b>";
+                            Log($"     {nm} 날개선 실패 — {(corner ? "연장(코너)" : "직각")}"
+                              + $" · 끝점({atP.X:F1},{atP.Y:F1},{atP.Z:F2}) 호길이 {t:F1}m"
+                              + $" · 데이라잇 {day.Count}점 — <b>반직선이 데이라잇에 안 닿는다</b>"
+                              + "(데이라잇이 그 방향에 없거나 500m를 넘는다)");
+                            continue;
+                        }
+                        segs.Add(w);
+                        if (towardT1) wing0 = w; else wing1 = w;
+                        // ★어디까지 쌓을지 — 두 끝 중 <b>더 멀리 가는 쪽</b>에 맞춘다(모자라면 끊겨 보인다).
+                        if (double.IsNaN(zStop)) zStop = gz;
+                        else zStop = k.up ? System.Math.Max(zStop, gz) : System.Math.Min(zStop, gz);
+                        double len = System.Math.Sqrt((w[1].X - w[0].X) * (w[1].X - w[0].X)
+                                                    + (w[1].Y - w[0].Y) * (w[1].Y - w[0].Y));
+                        txt += $" · {nm} {(corner ? "연장(코너)" : "직각")} {len:0.#}m";
+                        Log($"     {nm} 날개선 — {(corner ? "<b>연장(코너)</b>" : "직각")}"
+                          + $" · 끝점({w[0].X:F1},{w[0].Y:F1},{w[0].Z:F2}) 호길이 {t:F1}m"
+                          + $" → 닿은 곳({w[1].X:F1},{w[1].Y:F1}) 길이 {len:F1}m"
+                          + $" · 그 자리 원지반 {gz:F2}m · 방향({(w[1].X - w[0].X) / len:F3},{(w[1].Y - w[0].Y) / len:F3})");
+                    }
+                    DrawWingLines(db, segs, "DH-날개벽선", 4);
+
+                    // ★★★[JACK 0911] <b>선에서 그치지 않고 지표면까지 쌓아 면을 만든다.</b>
+                    //   <i>"그 상태에서 지표면까지 그레이딩하고 사면하고 합성하면 어떨까"</i>
+                    //   <para>세 선을 <b>한 줄</b>로 잇고, 그 선에서 한 단씩 밀어 올려
+                    //   원지반 표고에 닿을 때까지 쌓는다. 고리(링)를 <b>안 고치므로</b>
+                    //   0910~0911에 아홉 번 되돌린 그 턱이 <b>생길 자리가 없다</b>.</para>
+                    Log($"   ★날개벽 — 고른 구간 [{t0:F1}..{t1:F1}] 길이 {GradingGeometry.SpanOf(t0, t1, rcum[rcum.Length - 1]):F1}m"
+                      + $" · 노선 표고 {zLine:F2}m · 자 {ruler.Count}점(둘레 {rcum[rcum.Length - 1]:F1}m)"
+                      + $" · 데이라잇 {day.Count}점");
+                    var chain = new System.Collections.Generic.List<Point3>();
+                    void Push(System.Collections.Generic.IReadOnlyList<Point3> l, bool rev)
+                    {
+                        for (int i = 0; i < l.Count; i++)
+                        {
+                            var q = l[rev ? l.Count - 1 - i : i];
+                            if (chain.Count > 0)
+                            {
+                                var last = chain[chain.Count - 1];
+                                if (System.Math.Abs(q.X - last.X) < 1e-6 && System.Math.Abs(q.Y - last.Y) < 1e-6) continue;
+                            }
+                            chain.Add(new Point3(q.X, q.Y, zLine));   // ★표고는 노선 그대로 — 수평
+                        }
+                    }
+                    if (wing0 != null) Push(wing0, rev: true);     // 시점 날개(바깥 → 안쪽)
+                    Push(midPath, rev: false);                     // 고른 구간
+                    if (wing1 != null) Push(wing1, rev: false);    // 종점 날개(안쪽 → 바깥)
+
+                    // ★★★[JACK 0911 <i>"날개벽쪽이 생성되어야하는데 안생성되었어"</i>]
+                    //   <b>멈출 표고를 <u>자리마다</u> 묻는다 — 한 숫자로 끊으면 모자란다.</b>
+                    //   <para>첫 판은 날개선이 데이라잇에 닿은 <b>한 점</b>의 표고로 전부 끊었다.
+                    //   실측(0911 로그): <c>표고 105 → 120</c>에서 멈춰 <b>4단</b>밖에 안 쌓였다 —
+                    //   그 부지 원지반은 27~150m라 한참 모자라다. 원지반은 자리마다 다르므로
+                    //   <b>표면에 직접 물어야</b> 한다.</para>
+                    IGroundSurface? realGround = null;
+                    try
+                    {
+                        var gId = NoriCommand.FindByHandle(db, GradingSettings.LastGroundHandle);
+                        if (gId.IsNull) gId = NoriCommand.FindByHandle(db, region!.GroundHandle);
+                        if (!gId.IsNull)
+                        {
+                            using var trg = db.TransactionManager.StartTransaction();
+                            if (trg.GetObject(gId, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.TinSurface gt)
+                                realGround = new CachedGroundSurface(gt);
+                            trg.Commit();
+                        }
+                    }
+                    catch { }
+
+                    int faceN = 0;
+                    if (chain.Count >= 3 && (realGround != null || !double.IsNaN(zStop)))
+                    {
+                        var pw = GradingSettings.ToParams();
+                        // ★미는 쪽 = <b>부지 바깥</b>. 선이 가는 방향의 어느 쪽이 바깥인지로 부호를 정한다.
+                        double tmid = (t0 + t1) * 0.5;
+                        var mid2 = GradingGeometry.PointAtParam(ruler, rcum, tmid);
+                        var out2 = GradingGeometry.OutwardAt(ruler, rcum, tmid, 1.0);
+                        int im = System.Math.Max(0, System.Math.Min(chain.Count - 2, chain.Count / 2));
+                        double tx = chain[im + 1].X - chain[im].X, ty = chain[im + 1].Y - chain[im].Y;
+                        double ox = out2.X - mid2.X, oy = out2.Y - mid2.Y;
+                        int sgn = (-ty * ox + tx * oy) >= 0 ? +1 : -1;
+                        var faces = realGround != null
+                            ? GradingGeometry.WallFromLine(chain, realGround, pw, k.up,
+                                  slope: pw.MinSlope, benchW: pw.BenchWidthOf(k.up), outSign: sgn)
+                            : GradingGeometry.WallFromLine(chain, zStop, pw, k.up,
+                                  slope: pw.MinSlope, benchW: pw.BenchWidthOf(k.up), outSign: sgn);
+                        faceN = faces.Count;
+                        if (faceN > 0) DrawWingLines(db, faces, "DH-날개벽면", 2);
+                        // ★★[JACK 0911] <b>쌓은 것이 제대로인지 한 줄로 판단할 수 있게</b> —
+                        //   단 수 · 표고 범위 · 한 단 폭 · 점 수 · 날개가 살아 있나.
+                        if (faceN >= 2)
+                        {
+                            double dx0 = faces[1][0].X - faces[0][0].X, dy0 = faces[1][0].Y - faces[0][0].Y;
+                            double stepRun = System.Math.Sqrt(dx0 * dx0 + dy0 * dy0);
+                            double wantRun = System.Math.Max(pw.BenchHeightOf(k.up) * pw.MinSlope, pw.MinFaceRun)
+                                           + pw.BenchWidthOf(k.up);
+                            int wingKept = 0;
+                            foreach (var f in faces)
+                            {
+                                bool a5 = wing0 == null, b5 = wing1 == null;
+                                foreach (var q in f)
+                                {
+                                    if (wing0 != null && System.Math.Abs(q.X - wing0[1].X) < 15
+                                                      && System.Math.Abs(q.Y - wing0[1].Y) < 15) a5 = true;
+                                    if (wing1 != null && System.Math.Abs(q.X - wing1[1].X) < 15
+                                                      && System.Math.Abs(q.Y - wing1[1].Y) < 15) b5 = true;
+                                }
+                                if (a5 && b5) wingKept++;
+                            }
+                            Log($"     쌓기 — 단 {faceN}개 · 표고 {faces[0][0].Z:F2} → {faces[faceN - 1][0].Z:F2}"
+                              + $" · 한 단 폭 실측 {stepRun:F3}m / 기대 {wantRun:F3}m"
+                              + (System.Math.Abs(stepRun - wantRun) > 0.05 ? " <b>⚠어긋남</b>" : " ✓")
+                              + $" · 점 {faces[0].Count}→{faces[faceN - 1].Count}개"
+                              + $" · <b>날개 양쪽이 살아 있는 단 {wingKept}/{faceN}</b>"
+                              + (wingKept == faceN ? " ✓" : " <b>⚠날개가 빠진 단이 있다</b>")
+                              + $" · 미는 쪽 {(sgn > 0 ? "왼쪽(+1)" : "오른쪽(-1)")}"
+                              + $" · 원지반 {(realGround != null ? "표면에 직접" : $"한 표고 {zStop:F1}")}");
+                        }
+                        else Log($"     쌓기 — 단 {faceN}개뿐 <b>⚠</b>"
+                               + $" (선 {chain.Count}점 · 원지반 {(realGround != null ? "표면" : $"{zStop:F1}")})");
+                    }
+                    txt += $" · 쌓은 단 {faceN}개(표고 {zLine:0.#}부터"
+                         + (realGround != null ? " · 원지반 표면에 직접 물음)" : $" · 한 표고 {zStop:0.#}로 끊음)");
+                    ed.WriteMessage($"\n   날개벽선 {segs.Count}개(DH-날개벽선) · 면(DH-날개벽면){txt}");
+                    Log($"   날개벽선 {segs.Count}개{txt}");
+
+                    // ══ ★★★[JACK 0911] <b>가상 계획폴리곤</b> — 구간에서 <u>계산으로</u> 만든다 ══════
+                    //
+                    //   <para>JACK: <i>"난 복잡하게 TIN을 억지로 날들고 날개벽을 만들어서 끼워넣고
+                    //   막 그런거보다도 그냥 구간에서 선을 설정하면 그선이 포함된 <b>계획폴리곤(가상)</b>이
+                    //   생성되고 그게 기존에있던 <b>이어서하기</b>를 어떻게 응용해서 만들어서
+                    //   합성하는식으로하면 깔끔히 될것같아"</i></para>
+                    //
+                    //   <para>★<b>베끼지 않고 계산한다.</b> JACK: <i>"내가 그린건 그냥 사면선에 대충 대고
+                    //   그은거야 그거대로 보고가면안되 우린 <b>계산해서</b> 그려야되"</i>.
+                    //   네 변이 전부 셈에서 나온다 —
+                    //   ①안쪽 = 찍은 선에서 <b>한 단 내밀기</b>(단높이×구배+소단폭)만큼 안쪽,
+                    //   ②③날개 = 직각(변 가운데) 또는 <b>연장</b>(코너)으로 <b>마감 링에 닿을 때까지</b>,
+                    //   ④바깥 = <b>옛 데이라잇 ∪ 새 데이라잇</b> 링을 그대로 따라.</para>
+                    //
+                    //   <para>★<b>왜 거리 하나로 안 줄이나.</b> 첫 판은 "먼 쪽 거리"를 하나 구해 사방으로
+                    //   그만큼 밀었다. 그런데 데이라잇 링의 <b>마이터 코너</b>는 경계에서 84.85m인데
+                    //   같은 링의 <b>변</b>은 60m다. 코너 값이 뽑히자 폴리곤이 사방으로 부풀어
+                    //   진짜 마감선을 <b>25m 넘어섰다</b>(오프라인 실측 S111).</para>
+                    //
+                    //   <para>★<b>지금은 그려서 보여 주기만 한다 — 지표면을 안 건드린다.</b>
+                    //   0910~0911에 마감면을 <b>열두 번</b> 짓고 열두 번 되돌렸고, 그 공통 원인이
+                    //   <b>모양을 눈으로 확인하기 전에 지은 것</b>이었다. 폴리곤은 <c>DH-가상계획선</c>에
+                    //   그려지고 <c>DHRESET</c>이 걷어 간다. 형상 합성은 이 모양을 보고 정한다.</para>
+                    try
+                    {
+                        if (boundary == null || cumB == null)
+                            Log("   가상 계획폴리곤 — 계획 경계가 없어 못 만든다");
+                        else if (realGround == null)
+                            Log("   가상 계획폴리곤 — 원지반 표면을 못 찾아 못 만든다"
+                              + $"(설정 핸들 '{GradingSettings.LastGroundHandle}' · 구역 핸들 '{region!.GroundHandle}')");
+                        else
+                        {
+                            var pv = GradingSettings.ToParams();
+                            // ★★★[JACK 0911] <b>날개벽을 어떤 구배로 마감하나</b> — JACK이 정한 규칙:
+                            //   <i>"옹벽-옹벽, 옹벽-사면, 사면-옹벽에서의 날개벽은 <b>무조건 옹벽</b>으로해야하고
+                            //   사면-사면은 <b>급한경사의 사면</b>으로 날개벽을 마감해야해"</i>
+                            //
+                            //   <para>★<b>옹벽 변환</b>은 정해진다 — 바꾼 쪽이 옹벽이고 나머지가 사면이니
+                            //   "사면-옹벽"이라 날개벽은 <b>옹벽</b>이다. 그래서 <c>MinSlope</c>를 쓴다.</para>
+                            //
+                            //   <para>★<b>사면 변환의 "사면-사면"은 아직 정해지지 않았다.</b>
+                            //   이 저장소에 <i>급한 경사</i>에 해당하는 값이 <b>없다</b> —
+                            //   <c>WallGateSlope</c>(0.05)는 "옹벽으로 볼 문턱"이라 사실상 수직이고,
+                            //   <c>SlopeFallback</c>(1.5)은 보통 사면이다. 없는 값을 <b>지어내지 않는다</b>.
+                            //   지금은 옹벽 구배를 쓰고 <b>무엇을 썼는지 로그에 적는다</b> — JACK이 값을 정하면 여기만 바꾼다.
+                            //   (또 하나: 이 자리는 제원을 묻기 <b>전</b>이라 목표 구배를 아직 모른다.
+                            //    제원을 받은 뒤 다시 그리려면 부르는 차례도 같이 옮겨야 한다.)</para>
+                            double wingSlope = pv.MinSlope;
+                            Log($"     날개벽 구배 — {(wallMode ? "<b>옹벽 변환</b>이라 사면-옹벽 → 옹벽(1:{0})".Replace("{0}", $"{wingSlope:0.###}") : $"<b>사면 변환</b>인데 사면-사면의 '급한 경사'가 <b>아직 안 정해졌다</b> — 우선 옹벽 구배(1:{wingSlope:0.###})로 그린다")}"
+                              + $" · 한 단 내밀기 {System.Math.Max(pv.BenchHeightOf(k.up) * System.Math.Max(wingSlope, pv.MinSlope), pv.MinFaceRun) + pv.BenchWidthOf(k.up):F3}m");
+                            var vpoly = GradingGeometry.BuildWallPolygon(
+                                ruler, rcum, t0, t1, boundary, cumB, day, realGround,
+                                pv, k.up, wingSlope, cornerTol: 1.5, out string vwhy);
+                            if (vpoly == null || vpoly.Count < 4)
+                            {
+                                Log($"   가상 계획폴리곤 <b>못 만들었다</b> — {vwhy}");
+                                ed.WriteMessage("\n   가상 계획폴리곤 — 못 만들었습니다: " + vwhy);
+                            }
+                            else
+                            {
+                                // ★닫아서 그린다 — 계획폴리곤은 닫힌 선이어야 한다.
+                                var closed = new System.Collections.Generic.List<Point3>(vpoly) { vpoly[0] };
+                                DrawWingLines(db,
+                                    new System.Collections.Generic.List<System.Collections.Generic.List<Point3>> { closed },
+                                    "DH-가상계획선", 6);
+                                double zLo = double.MaxValue, zHi = double.MinValue;
+                                foreach (var q in vpoly)
+                                { zLo = System.Math.Min(zLo, q.Z); zHi = System.Math.Max(zHi, q.Z); }
+                                var pp = GradingGeometry.LastWallPolyParts;
+                                Log($"   ★가상 계획폴리곤 {vpoly.Count}점 · 표고 {zLo:F2}~{zHi:F2}m"
+                                  + $" · 네 변(안쪽 {pp.Inner} · 날개끝 {pp.Wing1} · 바깥 {pp.Far} · 날개시작 {pp.Wing0})");
+                                Log($"     {GradingGeometry.LastWallPolyLog}");
+                                Log($"     첫 점({vpoly[0].X:F1},{vpoly[0].Y:F1},{vpoly[0].Z:F2})"
+                                  + $" · 안쪽 끝({vpoly[System.Math.Max(0, pp.Inner - 1)].X:F1},"
+                                  + $"{vpoly[System.Math.Max(0, pp.Inner - 1)].Y:F1})"
+                                  + $" · 바깥 첫({vpoly[System.Math.Min(vpoly.Count - 1, pp.Inner + pp.Wing1)].X:F1},"
+                                  + $"{vpoly[System.Math.Min(vpoly.Count - 1, pp.Inner + pp.Wing1)].Y:F1})");
+                                ed.WriteMessage($"\n   ★가상 계획폴리곤 {vpoly.Count}점(DH-가상계획선)"
+                                  + $" · 표고 {zLo:0.#}~{zHi:0.#}m — <b>그리기만</b> 했습니다(지표면 안 바뀜).");
+                            }
+                        }
+                    }
+                    catch (System.Exception vex) { Log("   ⚠ 가상 계획폴리곤 실패 — " + vex.Message); }
+                }
+                catch (System.Exception wex) { Log("   ⚠ 날개벽선 실패 — " + wex.Message); }
+            }
+
             // ★★★[JACK 0910] <b>구간지정</b> — 고른 구간 안에서 시점·종점을 찍는다.
             //   <para>고른 선이 정해진 <b>뒤에</b> 부르는 것이라 함수로 뗐다(차례가 셋으로 갈렸다).
             //   돌려주는 값: <c>true</c>=정했거나 전체로 두기로 했다 · <c>false</c>=취소(선을 다시 고른다).</para>
@@ -668,6 +951,7 @@ internal static class ZoneEditCommon
                     var (pt0, pt1, span2, wasWhole) = got.Value;
                     partArc[keyP] = (pt0, pt1);
                     ShowPart(keyP);
+                    ShowWings(keyP, ruler, rcum, pt0, pt1);
                     bool banded = partMark != null && partMark.HasMarks;
                     ed.WriteMessage($"\n → 구간지정 {span2:0.#}m (전체 {fullSpan:0.#}m 중)"
                                   + (moved > 0.01 ? $" · 구간 밖을 찍어 끝으로 붙였습니다(최대 {moved:0.#}m)" : "")
@@ -1207,6 +1491,41 @@ internal static class ZoneEditCommon
     }
 
     /// <summary>★[JACK 0910] 지금 도면에 있는 <b>옹벽선</b>을 읽어 둔다 — 지우기 전에 떠 두는 밑천.</summary>
+    /// <summary>★[JACK 0911] <b>날개벽선을 도면에 그린다</b> — 보고 판단하려는 것이라 <b>선만</b> 그린다.
+    /// <para>레이어 <c>DH-날개벽선</c>. 부를 때마다 <b>먼저 비우고</b> 새로 그린다 —
+    /// 구간을 다시 찍으면 옛 선이 남아 겹치면 무엇이 지금 것인지 알 수 없다.</para></summary>
+    private static void DrawWingLines(Database db,
+        System.Collections.Generic.IReadOnlyList<System.Collections.Generic.List<Point3>> segs,
+        string layer, short aci)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        try
+        {
+            GradingBuilder.EnsureLayer(db, tr, layer, aci);
+            GradingBuilder.EraseOnLayer(db, tr, layer);
+            var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+            var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+            var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+            var layerId = lt.Has(layer) ? lt[layer] : ObjectId.Null;
+            foreach (var seg in segs)
+            {
+                if (seg == null || seg.Count < 2) continue;
+                var pl = new Polyline3d();
+                if (!layerId.IsNull) pl.LayerId = layerId;
+                ms.AppendEntity(pl);
+                tr.AddNewlyCreatedDBObject(pl, true);
+                foreach (var q in seg)
+                {
+                    var v = new PolylineVertex3d(new Point3d(q.X, q.Y, q.Z));
+                    pl.AppendVertex(v);
+                    tr.AddNewlyCreatedDBObject(v, true);
+                }
+            }
+            tr.Commit();
+        }
+        catch { }
+    }
+
     /// <summary>이 레이어에 지금 있는 줄을 <b>있는 그대로</b> 떠 온다 — 지우기 직전의 사본.
     /// <para>★[검토 0910] 한때 <b>방향 꼬리표</b>도 같이 읽게 했는데 <b>쓸모가 없었다</b> —
     /// 이 레이어에 줄을 그리는 세 자리가 전부 <c>DrawWallLines</c>(맨 것)라 XData가 없다.
