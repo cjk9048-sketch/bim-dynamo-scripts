@@ -10129,6 +10129,179 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     }
 }
 
+
+// ══ S116 ★★★[검토 0911 · 높음4·5] 코너 판정과 날개 방향 ═════════════════════════════
+//
+//   <para><b>높음4 — 유효 창이 문턱이 아니라 <u>내밀기 거리</u>로 정해졌다.</b>
+//   종전 판정은 자 위 점을 <b>계획 경계에 투영</b>해 정점 거리를 봤다. 볼록 코너에서는
+//   자의 코너 다리 <b>전체</b>가 정점 하나로 투영되므로 창이 자꾸 벌어진다. 검토 실측:</para>
+//   <code>
+//   자 내밀기  1.05m: 코너로 보는 호  7.1% | 최대 창   5.1m
+//   자 내밀기  8.50m: 코너로 보는 호 23.0% | 최대 창  20.0m
+//   자 내밀기 20.00m: 코너로 보는 호 39.1% | 최대 창  43.0m
+//   자 내밀기 40.00m: 코너로 보는 호 55.3% | 최대 창  83.0m
+//   자 내밀기 60.00m: 코너로 보는 호 64.7% | 최대 창 123.0m
+//   </code>
+//   <para>여기서는 <b>고친 판정</b>(<c>RingCornerParams</c>, 고리 자신의 꺾임)이
+//   <b>내밀기 거리에 안 끌려가는지</b>를 같은 자로 잰다.</para>
+//
+//   <para><b>높음5 — 같은 셈이 세 군데 있었고 하나만 고쳐져 있었다.</b>
+//   <c>WingLine</c>이 옛 식(구간 <b>바깥쪽</b> 이웃)을 써서 화면의 날개와 폴리곤의 날개가
+//   <b>코너마다 90° 달랐다</b>. 이제 둘 다 <c>WingDirection</c> 한 자리에서 온다 —
+//   <b>두 경로가 같은 방향을 주는지</b> 잰다.</para>
+{
+    Console.WriteLine("\n== S116 코너 판정과 날개 방향 ==");
+    var pad116 = new List<Point3> { new(0,0,100), new(80,0,100), new(80,60,100), new(0,60,100) };
+    var nook116 = new List<Point3> { new(0,0,100), new(80,0,100), new(80,30,100),
+                                     new(40,30,100), new(40,60,100), new(0,60,100) };
+    var par116 = new GradingParams
+    {
+        CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 1.5, FillSlope = 1.5, CellSize = 0.5, MaxBenches = 20, MaxRise = 60,
+        VertexSpacing = 2.0, MinSlope = 0.01, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+
+    // ══ ① 유효 창이 내밀기 거리에 끌려가지 않나 ══
+    {
+        double worstFrac = 0, worstWin = 0; double atOff = 0; int badCount = 0;
+        foreach (double off in new[] { 1.05, 8.5, 20.0, 40.0, 60.0 })
+        {
+            var ring = GradingGeometry.OffsetRingForTest(pad116, off, par116);
+            if (ring == null) { Check($"S116 ① 시험 조건 — 내밀기 {off}m 링", false, "못 만들었다"); continue; }
+            var rc = GradingGeometry.CumLen2D(ring);
+            double tot = rc[^1];
+            var corners = GradingGeometry.RingCornerParams(ring, rc);
+            // 둘레를 0.5m마다 훑어 코너로 보는 호의 비율과 <b>가장 긴 연속 창</b>을 잰다
+            int hit = 0, all = 0, run = 0, maxRun = 0;
+            for (double t = 0; t < tot; t += 0.5)
+            {
+                all++;
+                if (GradingGeometry.AtRingCorner(corners, t, tot, 1.5)) { hit++; run++; maxRun = System.Math.Max(maxRun, run); }
+                else run = 0;
+            }
+            double frac = all == 0 ? 0 : 100.0 * hit / all;
+            double win = maxRun * 0.5;
+            Console.WriteLine($"      S116 ① 내밀기 {off,5:0.00}m — 코너 자리 {corners.Count}개"
+                + $" · 코너로 보는 호 {frac,4:0.0}% · 가장 긴 창 {win,5:0.0}m");
+            // ★★코너를 <b>하나도 못 찾으면</b> 호는 0%가 되어 창 단언이 <b>헛통과</b>한다.
+            //   실제로 첫 판이 그랬다(가드가 틀려 늘 빈 목록) — 개수도 같이 단언한다.
+            if (corners.Count != 4) badCount++;
+            if (frac > worstFrac) { worstFrac = frac; worstWin = win; atOff = off; }
+        }
+        // ★직사각 부지의 코너는 넷이고 문턱이 1.5m이므로 창은 <b>3m 남짓</b>이어야 한다 —
+        //   내밀기가 60배 늘어도 창이 같아야 "내밀기에 안 끌려간다"는 뜻이다.
+        Check("S116 ★★★①코너 창이 <b>자의 내밀기 거리에 끌려가지 않는다</b>",
+              badCount == 0 && worstWin <= 6.0 && worstFrac <= 12.0,
+              $"내밀기 다섯 판 중 코너 넷을 못 찾은 판 {badCount}개 · 가장 나쁜 판 내밀기 {atOff:0.##}m"
+            + $" — 호 {worstFrac:0.0}% · 창 {worstWin:0.0}m"
+            + " (고치기 전: 내밀기 60m에서 호 64.7% · 창 123.0m)");
+    }
+
+    // ══ ② 코너를 <b>제자리에서</b> 찾나 ══
+    {
+        var ring = GradingGeometry.OffsetRingForTest(pad116, 8.5, par116);
+        if (ring != null)
+        {
+            var rc = GradingGeometry.CumLen2D(ring);
+            var corners = GradingGeometry.RingCornerParams(ring, rc);
+            // 찾은 자리의 좌표가 <b>마이터 코너 네 점</b> 근처인가
+            double worst = 0;
+            var want = new[] { (-8.5, -8.5), (88.5, -8.5), (88.5, 68.5), (-8.5, 68.5) };
+            foreach (double t in corners)
+            {
+                var q = GradingGeometry.PointAtParam(ring, rc, t);
+                double best = double.MaxValue;
+                foreach (var w in want)
+                    best = System.Math.Min(best, System.Math.Sqrt((q.X-w.Item1)*(q.X-w.Item1) + (q.Y-w.Item2)*(q.Y-w.Item2)));
+                worst = System.Math.Max(worst, best);
+            }
+            Console.WriteLine($"      S116 ② 직사각 8.5m 링 — 코너 {corners.Count}개 · 마이터 점과 가장 먼 것 {worst:0.###}m");
+            Check("S116 ★★★②코너를 <b>정확히 넷</b> 찾고 그 자리가 마이터 점이다",
+                  corners.Count == 4 && worst < 1.5,
+                  $"찾은 개수 {corners.Count}(4이어야) · 마이터 점과 가장 먼 것 {worst:0.###}m");
+        }
+    }
+
+    // ══ ③ 화면의 날개와 폴리곤의 날개가 <b>같은 방향</b>인가 ══
+    {
+        foreach (var (nm, pad) in new[] { ("직사각", pad116), ("ㄴ자", nook116) })
+        {
+            var cB = GradingGeometry.CumLen2D(pad);
+            var ring = GradingGeometry.OffsetRingForTest(pad, 8.5, par116);
+            var day = GradingGeometry.OffsetRingForTest(pad, 60.0, par116);
+            if (ring == null || day == null) continue;
+            for (int i = 0; i < ring.Count; i++) ring[i] = new Point3(ring[i].X, ring[i].Y, 105.0);
+            var rc = GradingGeometry.CumLen2D(ring);
+            double tot = rc[^1];
+            var corners = GradingGeometry.RingCornerParams(ring, rc);
+            int checkedN = 0, diff = 0; double worstDeg = 0;
+            // 코너 자리와 변 가운데를 섞어 훑는다
+            var spots = new List<double>(corners);
+            for (double t = tot * 0.06; t < tot; t += tot * 0.11) spots.Add(t);
+            foreach (double t in spots)
+            {
+                bool corner = GradingGeometry.AtRingCorner(corners, t, tot, 1.5);
+                foreach (bool atT1 in new[] { false, true })
+                {
+                    // (가) 폴리곤이 쓰는 방향
+                    var d1 = GradingGeometry.WingDirection(ring, rc, t, atT1, corner);
+                    // (나) 화면에 그리는 날개선의 방향
+                    var w = GradingGeometry.WingLine(ring, rc, t, corner, atT1, day, 500.0);
+                    if (w == null || w.Count < 2) continue;
+                    double dx = w[1].X - w[0].X, dy = w[1].Y - w[0].Y;
+                    double L = System.Math.Sqrt(dx*dx + dy*dy);
+                    if (L < 1e-9) continue;
+                    dx /= L; dy /= L;
+                    double cos = System.Math.Max(-1, System.Math.Min(1, d1.X*dx + d1.Y*dy));
+                    double deg = System.Math.Acos(cos) * 180.0 / System.Math.PI;
+                    checkedN++;
+                    if (deg > 1.0) diff++;
+                    worstDeg = System.Math.Max(worstDeg, deg);
+                }
+            }
+            Console.WriteLine($"      S116 ③ [{nm}] 잰 자리 {checkedN}개 · 방향이 다른 곳 {diff}개 · 최악 {worstDeg:0.##}°");
+            Check($"S116 ★★★③[{nm}] <b>화면의 날개와 폴리곤의 날개가 같은 방향</b>이다",
+                  checkedN > 0 && diff == 0,
+                  $"잰 자리 {checkedN}개 중 다른 곳 {diff}개 · 최악 {worstDeg:0.##}°"
+                + " (고치기 전: 코너마다 90° 달랐다)");
+        }
+    }
+
+    // ══ ④ 라운드 조인에서도 코너를 찾나 — 한 정점만 보는 cos 판정은 못 찾는다 ══
+    {
+        var parRound = new GradingParams
+        {
+            CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+            CutSlope = 1.5, FillSlope = 1.5, CellSize = 0.5, MaxBenches = 20, MaxRise = 60,
+            VertexSpacing = 2.0, MinSlope = 0.01, MinFaceRun = 0.005,
+            MiterConvex = false, MiterLimit = 2.0,        // ★라운드
+        };
+        var ring = GradingGeometry.OffsetRingForTest(pad116, 8.5, parRound);
+        if (ring != null)
+        {
+            var rc = GradingGeometry.CumLen2D(ring);
+            var corners = GradingGeometry.RingCornerParams(ring, rc);
+            // 한 정점만 보는 옛 판정(cos < 0.87)으로는 몇 개가 잡히나 — 비교용
+            int oneVertex = 0;
+            int n = ring.Count;
+            for (int i = 0; i < n; i++)
+            {
+                var a = ring[(i-1+n)%n]; var b = ring[i]; var c = ring[(i+1)%n];
+                double ax=b.X-a.X, ay=b.Y-a.Y, bx=c.X-b.X, by=c.Y-b.Y;
+                double la=System.Math.Sqrt(ax*ax+ay*ay), lb=System.Math.Sqrt(bx*bx+by*by);
+                if (la<1e-9||lb<1e-9) continue;
+                if ((ax*bx+ay*by)/(la*lb) < 0.87) oneVertex++;
+            }
+            Console.WriteLine($"      S116 ④ 라운드 조인 8.5m 링 — 창으로 합쳐 본 코너 {corners.Count}개"
+                + $" · 한 정점만 본 코너 {oneVertex}개");
+            Check("S116 ★★★④<b>라운드 조인</b>에서도 코너를 찾는다(한 정점만 보면 못 찾는다)",
+                  corners.Count == 4 && oneVertex == 0,
+                  $"창으로 {corners.Count}개(4이어야) · 한 정점만 보면 {oneVertex}개"
+                + " — 한 마디가 7.5°라 cos≈0.991이어서 하나도 안 잡힌다");
+        }
+    }
+}
+
 // ══ S105 커서 표식의 <b>바깥 방향</b> — 오목한 부지에서도 맞는가 (검토 0910) ══
 //   ★첫 판은 <b>무게중심의 반대쪽</b>을 바깥으로 봤다. ㄷ자·L자 부지의 오목한 굽이에서는
 //     무게중심이 부지 밖이거나 굽이 반대편이라 <b>안쪽을 바깥이라고</b> 가리킨다.
@@ -10510,7 +10683,7 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
 
     // ── ① 직선 한가운데 끝 — 직각으로 나간다
     double tMid = rt108 * 0.15;                       // 아랫변 한가운데쯤
-    var wMid = GradingGeometry.WingLine(ruler108, rc108, tMid, corner: false, towardT1: true, day);
+    var wMid = GradingGeometry.WingLine(ruler108, rc108, tMid, corner: false, atT1: true, day);
     Check("S108 ★직선 끝 — 직각 날개선이 데이라잇에 닿는다", wMid != null && Len(wMid) > 1.0,
           wMid == null ? "못 닿음" : $"길이 {Len(wMid):0.0}m · ({wMid[0].X:0.0},{wMid[0].Y:0.0}) → ({wMid[1].X:0.0},{wMid[1].Y:0.0})");
     // ★<b>어느 변인지에 안 매이게</b> 잰다 — 그 자리 고리의 <b>접선</b>과 견준다.
@@ -10534,13 +10707,27 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     // ── ② 코너 끝 — 노선을 연장한다
     //   부지 꼭짓점 (80,0)의 자 위 호길이를 찾는다.
     double tCorner = GradingGeometry.ParamAt(ruler108, rc108, 80, 0);
-    var wCor = GradingGeometry.WingLine(ruler108, rc108, tCorner, corner: true, towardT1: false, day);
+    var wCor = GradingGeometry.WingLine(ruler108, rc108, tCorner, corner: true, atT1: false, day);
     Check("S108 ★코너 끝 — 연장 날개선이 데이라잇에 닿는다", wCor != null && Len(wCor) > 1.0,
           wCor == null ? "못 닿음" : $"길이 {Len(wCor):0.0}m · ({wCor[0].X:0.0},{wCor[0].Y:0.0}) → ({wCor[1].X:0.0},{wCor[1].Y:0.0})");
     if (wCor != null)
         Check("S108 ★연장 날개선은 그 자리 접선과 <b>나란하다</b>",
               System.Math.Abs(System.Math.Abs(TanCos(ruler108, rc108, tCorner, wCor)) - 1.0) < 0.1,
               $"접선과의 코사인 {TanCos(ruler108, rc108, tCorner, wCor):0.###} (±1이면 나란함)");
+
+    // ── ②-b ★★★[검토 0911 · 높음5] <b>부호</b>도 잰다.
+    //   종전 단언은 "접선과 나란하다"(|cos|≈1)까지만 봤다 — <b>±가 둘 다 통과</b>한다.
+    //   그래서 <c>WingLine</c>이 반대쪽으로 뻗는 결함을 <b>이 검사가 못 잡았다</b>.
+    //   연장은 구간에서 <b>멀어지는</b> 쪽이어야 한다: 구간이 t에서 앞으로 뻗으면(atT1=false)
+    //   날개는 뒤로 가야 하므로, 날개 끝은 <b>구간 가운데에서 더 멀어야</b> 한다.
+    if (wCor != null)
+    {
+        var midPt = GradingGeometry.PointAtParam(ruler108, rc108, tCorner + 20.0);   // 구간 가운데쯤
+        double d0 = System.Math.Sqrt((wCor[0].X-midPt.X)*(wCor[0].X-midPt.X) + (wCor[0].Y-midPt.Y)*(wCor[0].Y-midPt.Y));
+        double d1 = System.Math.Sqrt((wCor[1].X-midPt.X)*(wCor[1].X-midPt.X) + (wCor[1].Y-midPt.Y)*(wCor[1].Y-midPt.Y));
+        Check("S108 ★★★연장 날개선은 구간에서 <b>멀어지는</b> 쪽이다(부호까지)",
+              d1 > d0 + 1.0, $"구간 가운데까지 시작 {d0:0.#}m → 끝 {d1:0.#}m (끝이 더 멀어야)");
+    }
 
     // ── ③ 둘이 <b>다른 방향</b>이어야 한다 — 같으면 코너 규칙이 안 먹은 것이다.
     if (wMid != null && wCor != null)
@@ -10554,7 +10741,7 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     }
 
     // ── ④ 반직선이 안 닿으면 <b>말없이 null</b>이어야 한다(없는 선을 지어내지 않는다).
-    var wNone = GradingGeometry.WingLine(ruler108, rc108, tMid, corner: false, towardT1: true, day, maxLen: 1.0);
+    var wNone = GradingGeometry.WingLine(ruler108, rc108, tMid, corner: false, atT1: true, day, maxLen: 1.0);
     Check("S108 ★못 닿으면 선을 지어내지 않는다", wNone == null, wNone == null ? "null" : "선이 나왔다");
 
     // ── ⑤ <c>RayHit</c>은 <b>가장 가까운</b> 교점을 준다(여러 번 닿아도 첫 자리).
@@ -10631,7 +10818,7 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
         foreach (var q in ruler108) rz.Add(new Point3(q.X, q.Y, 117.0));   // 노선 표고 117
         var dz = new List<Point3>();
         foreach (var q in day) dz.Add(new Point3(q.X, q.Y, 145.0));        // 데이라잇 표고 145(다르게)
-        var wFlat = GradingGeometry.WingLine(rz, rc108, tMid, corner: false, towardT1: true, dz);
+        var wFlat = GradingGeometry.WingLine(rz, rc108, tMid, corner: false, atT1: true, dz);
         Check("S108 ★★날개선은 <b>수평</b>이다(노선 표고 그대로)",
               wFlat != null && System.Math.Abs(wFlat[0].Z - 117.0) < 1e-6
                             && System.Math.Abs(wFlat[1].Z - 117.0) < 1e-6,
