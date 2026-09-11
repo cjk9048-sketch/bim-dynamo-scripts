@@ -870,103 +870,78 @@ public static class GradingGeometry
         return Math.Max(3.0, dens * 3.0);   // 정점을 최소 셋 품는 창
     }
 
-    /// <summary>★★★[검토 0911 · 높음4] 고리 자신의 <b>꺾임</b>으로 코너 자리를 찾는다.
+    /// <summary>★★★[검토 0911 · 높음4] <b>코너 자리</b> — 계획 경계의 <u>설계 코너</u>를 자 위 둘레값으로 옮긴다.
     ///
-    /// <para><b>왜 계획 경계 투영을 쓰면 안 되나.</b> 종전 판정은 자 위 점을 <b>계획 경계에 투영</b>해
-    /// 정점까지의 둘레거리를 봤다. 그런데 <b>볼록 코너</b>에서는 자의 코너 다리 <b>전체</b>가
-    /// 정점 하나로 투영된다 — 그래서 유효 창이 <c>cornerTol</c>이 아니라 <b>자의 내밀기 거리</b>로
-    /// 정해졌다. 검토 실측:</para>
+    /// <para><b>왜 방향이 중요한가.</b> 종전 판정은 <b>자 위 점을 계획 경계에 투영</b>해 정점 거리를 봤다.
+    /// 볼록 코너에서는 자의 코너 다리 <b>전체</b>가 계획 정점 하나로 투영되므로 고원이 생겨,
+    /// 유효 창이 <c>cornerTol</c>이 아니라 <b>자의 내밀기 거리</b>로 정해졌다. 검토 실측:</para>
     /// <code>
     /// 자 내밀기  1.05m: 코너로 보는 호  7.1% | 최대 창   5.1m
     /// 자 내밀기  8.50m: 코너로 보는 호 23.0% | 최대 창  20.0m
     /// 자 내밀기 40.00m: 코너로 보는 호 55.3% | 최대 창  83.0m
+    /// 자 내밀기 60.00m: 코너로 보는 호 64.7% | 최대 창 123.0m
     /// </code>
-    /// <para>1단 링에서도 <b>코너에서 10m 떨어진 자리</b>를 코너로 봤고, <c>cornerTol</c>을
-    /// 어떻게 바꿔도 이 창은 줄지 않았다. 실제로 이것 때문에 구간 폭 70% 판에서
-    /// 코너를 2.6m 지난 변인데 코너로 보고 <b>연장 날개가 바닥 변을 145.9m 달렸다</b>.</para>
+    /// <para>1단 링에서도 <b>코너에서 10m 떨어진 자리</b>를 코너로 봤고, 그 탓에 연장 날개가
+    /// 엉뚱한 변을 <b>145.9m</b> 달렸다. <c>cornerTol</c>을 어떻게 바꿔도 창은 줄지 않았다 —
+    /// 창을 정하는 것이 문턱이 아니라 <b>투영 방향</b>이었다.</para>
     ///
-    /// <para><b>그래서 고리 자신을 본다.</b> 정점마다 <paramref name="windowM"/> 창 안의
-    /// 꺾임 각을 <b>합쳐</b> <paramref name="turnDeg"/>를 넘으면 코너 자리다.
-    /// 마이터 조인은 한 정점에서 90°가 한 번에 나오고, <b>라운드 조인</b>은
-    /// 여러 마디(<c>QuadrantSegments = 12</c> → 한 마디 7.5°)가 합쳐져 넘는다 —
-    /// 한 정점만 보는 <c>cos</c> 판정은 라운드에서 <b>코너를 하나도 못 찾는다</b>(0.991 &gt; 0.87).</para>
+    /// <para>→ <b>방향만 뒤집는다.</b> 계획 정점 하나를 <b>자 위 한 점</b>으로 옮기면 고원이 없다.
+    /// 검토 실측: 마이터·라운드 × 내밀기 8.5·40m <b>네 판 전부</b> 코너 4곳 ·
+    /// 창 폭 정확히 <b>2×tol</b> · 코너로 보는 호 2.0~3.6%. 조인 방식과 내밀기 거리에 안 흔들린다.</para>
     ///
-    /// <para>돌려주는 것은 <b>꺾임이 가장 큰 자리</b>들의 둘레값이다(구간마다 하나) —
-    /// 전부 돌려주면 창이 <c>windowM + cornerTol</c>로 넓어져 고치려던 문제가 남는다.</para></summary>
-    public static List<double> RingCornerParams(
-        IReadOnlyList<Point3> ring, double[] cum, double turnDeg = 30.0, double windowM = 3.0)
+    /// <para>★<b>고리의 꺾임을 창으로 합치는 방식은 쓰지 않는다</b>(먼저 지어 보고 재서 버렸다).
+    /// 라운드 조인은 코너 호가 <c>내밀기 × π/2</c>라 내밀기 40m면 한 마디가 5.24m가 되어
+    /// ±3m 창에 정점이 하나만 들어간다 → 7.5° &lt; 30°로 <b>코너를 하나도 못 찾았다</b>(실측 0곳).
+    /// 창을 거리에 비례해 키우면 고치려던 병이 되돌아온다.</para>
+    ///
+    /// <para>★<b>완만한 코너를 거르는 문턱은 계획 폴리곤에 건다</b> — 고리가 아니라.
+    /// 실측: 꺾임 27.65°인 계획 정점의 고리 창값이 정확히 27.65°였다. 고리는 계획의 꺾임을
+    /// 그대로 옮기므로 <b>계획에서 직접 재면 창도 노이즈도 없다</b>.</para></summary>
+    /// <param name="turnMin">이 각(도)보다 완만한 계획 정점은 코너로 보지 않는다.</param>
+    public static List<double> CornerParamsOf(
+        IReadOnlyList<Point3> plan, IReadOnlyList<Point3> ruler, double[] rulerCum, double turnMin = 30.0)
     {
         var res = new List<double>();
-        // ★<c>CumLen2D</c>는 <b>닫힘 중복을 뺀</b> 유효 정점 수 m에 대해 m+1개를 준다 —
-        //   그래서 유효 정점 수는 <c>ring.Count</c>가 아니라 <b><c>cum.Length - 1</c></b>이다.
-        //   (첫 판은 <c>cum.Length &lt; n + 1</c>을 요구해 닫힌 고리에서 <b>늘 빈 목록</b>을 냈다.)
-        if (ring == null || cum == null || cum.Length < 5) return res;
-        int n = Math.Min(cum.Length - 1, ring.Count);
-        if (n < 4) return res;
-        double total = cum[n];
-        if (!(total > 1e-9)) return res;
-
-        // ① 정점마다 꺾임 각(도)
-        var turn = new double[n];
-        for (int i = 0; i < n; i++)
+        if (plan == null || ruler == null || rulerCum == null || ruler.Count < 3 || rulerCum.Length < 2)
+            return res;
+        var planCum = CumLen2D(plan);
+        // ★유효 정점 수는 <c>plan.Count</c>가 아니다 — 닫힘 중복이 있으면 그 이웃이 길이 0이 되어
+        //   <b>첫 정점의 꺾임이 0°</b>가 되고 그 코너가 조용히 빠진다(검토가 잡은 함정).
+        int m = plan.Count;
+        if (m >= 2 && Math.Abs(plan[0].X - plan[m - 1].X) < 1e-9
+                   && Math.Abs(plan[0].Y - plan[m - 1].Y) < 1e-9) m--;
+        if (m < 3) return res;
+        for (int i = 0; i < m; i++)
         {
-            var a = ring[(i - 1 + n) % n]; var b = ring[i]; var c = ring[(i + 1) % n];
+            var a = plan[(i - 1 + m) % m]; var b = plan[i]; var c = plan[(i + 1) % m];
             double ax = b.X - a.X, ay = b.Y - a.Y, bx = c.X - b.X, by = c.Y - b.Y;
             double la = Math.Sqrt(ax * ax + ay * ay), lb = Math.Sqrt(bx * bx + by * by);
             if (la < 1e-9 || lb < 1e-9) continue;
             double cos = Math.Max(-1.0, Math.Min(1.0, (ax * bx + ay * by) / (la * lb)));
-            turn[i] = Math.Acos(cos) * 180.0 / Math.PI;
-        }
+            double deg = Math.Acos(cos) * 180.0 / Math.PI;
+            if (deg < turnMin) continue;                       // 완만하다 — 설계 코너로 안 본다
 
-        // ② 창 안의 꺾임을 합친다
-        double Arc(int i, int j)
-        {
-            double d = Math.Abs(cum[j] - cum[i]);
-            return Math.Min(d, total - d);
+            // ★★★<b>자리는 자 자신에서 찾는다 — 계획 정점의 최근접점이 아니다.</b>
+            //   <para>계획 정점을 자에 <b>그냥 투영</b>하면 자리를 잘못 짚는다(실측).
+            //   계획 코너 (0,60)의 자(내밀기 8.5m) 위 최근접점은 <b>변 위</b>(둘레 68.5)이고
+            //   거리는 8.5m인데, 자의 <b>마이터 꼭짓점</b>은 둘레 77 자리에 있고 거리는 8.5√2=12.02m다.
+            //   최근접으로 고르면 <b>8.5m 어긋난 자리</b>를 코너로 기록하고, 그러면
+            //   꼭짓점을 찍었는데도 코너로 안 보여 <b>직각 날개</b>가 나온다(S111이 82.2°로 떨어졌다).</para>
+            //   <para>→ 계획 정점에서 <b>바깥 이등분선</b>을 그어 자와 만나는 자리를 쓴다.
+            //   마이터 조인이면 그 자리가 마이터 꼭짓점, 라운드 조인이면 <b>호의 가운데</b>다 —
+            //   조인 방식이 달라도 "설계 코너에 해당하는 자 위 자리"를 정확히 짚는다.</para>
+            double ta = 0.5 * (planCum[(i - 1 + m) % m] + planCum[((i - 1 + m) % m) + 1]);
+            double tb = 0.5 * (planCum[i] + planCum[i + 1]);
+            var pa = PointAtParam(plan, planCum, ta); var oa = OutwardAt(plan, planCum, ta, 1.0);
+            var pb = PointAtParam(plan, planCum, tb); var ob = OutwardAt(plan, planCum, tb, 1.0);
+            double bx2 = (oa.X - pa.X) + (ob.X - pb.X), by2 = (oa.Y - pa.Y) + (ob.Y - pb.Y);
+            double bl = Math.Sqrt(bx2 * bx2 + by2 * by2);
+            if (bl < 1e-9) { res.Add(ParamAt(ruler, rulerCum, b.X, b.Y)); continue; }
+            bx2 /= bl; by2 /= bl;
+            var hit = RayHit(b.X, b.Y, bx2, by2, ruler, 5000.0);
+            res.Add(hit == null ? ParamAt(ruler, rulerCum, b.X, b.Y)
+                                : ParamAt(ruler, rulerCum, hit.Value.X, hit.Value.Y));
         }
-        var sum = new double[n];
-        for (int i = 0; i < n; i++)
-        {
-            double s = turn[i];
-            for (int d = 1; d < n; d++)
-            { int j = (i + d) % n; if (Arc(i, j) > windowM) break; s += turn[j]; }
-            for (int d = 1; d < n; d++)
-            { int j = (i - d + n) % n; if (Arc(i, j) > windowM) break; s += turn[j]; }
-            sum[i] = s;
-        }
-
-        // ③ 넘은 자리들을 <b>이어진 묶음</b>으로 보고 묶음마다 가장 큰 정점 하나만 남긴다
-        var hot = new bool[n];
-        for (int i = 0; i < n; i++) hot[i] = sum[i] >= turnDeg;
-        var used = new bool[n];
-        for (int i = 0; i < n; i++)
-        {
-            if (!hot[i] || used[i]) continue;
-            // 이 묶음의 시작이 아니면(앞도 hot이면) 나중에 그 시작에서 함께 다룬다
-            if (hot[(i - 1 + n) % n] && !used[(i - 1 + n) % n]) continue;
-            // ★★<b>창 합계로 고르면 안 된다 — 동점이 많다.</b> 창(±3m)이 코너의 90°를 통째로
-            //   품으므로 코너 양옆 정점 여럿이 <b>같은 합계</b>를 갖는다. 그때 먼저 훑은 것을 집으면
-            //   실제 꼭짓점에서 <b>2.969m 떨어진 자리</b>가 코너로 기록된다(실측) — 그러면
-            //   문턱 1.5m 안에 꼭짓점이 안 들어와 <b>코너를 놓친다</b>.
-            //   → 묶음 안에서 <b>제 꺾임이 가장 큰</b> 정점을 집는다(마이터는 그 자리가 꼭짓점).
-            //     라운드 조인은 마디마다 꺾임이 같으므로 <b>동점들의 가운데</b>를 집는다(호의 중앙).
-            var runIdx = new List<int>();
-            for (int d = 0; d < n; d++)
-            {
-                int j = (i + d) % n;
-                if (!hot[j]) break;
-                used[j] = true;
-                runIdx.Add(j);
-            }
-            if (runIdx.Count == 0) continue;
-            double topTurn = 0;
-            foreach (int j in runIdx) topTurn = Math.Max(topTurn, turn[j]);
-            var tied = new List<int>();
-            foreach (int j in runIdx) if (turn[j] >= topTurn - 1e-9) tied.Add(j);
-            res.Add(cum[tied[tied.Count / 2]]);
-        }
-        // 고리가 전부 hot이면(아주 둥근 고리) 코너가 없는 것과 같다 — 빈 목록을 준다.
-        if (res.Count >= n) res.Clear();
         return res;
     }
 
@@ -993,8 +968,17 @@ public static class GradingGeometry
     ///
     /// <para><b>코너에서는 구간 <u>안쪽</u> 이웃을 본다.</b> JACK: <i>"옹벽을 연장해서
     /// (옹벽연장선 ∩ 데이라잇선)까지"</i> — 즉 <b>찍은 변의 방향을 그대로 늘린다</b>.
-    /// 구간 <b>바깥쪽</b> 이웃은 <b>이미 꺾인 다음 변</b>이라 방향이 90° 틀어진다
-    /// (실측: (0,+1)이어야 할 자리에서 (−0.83,−0.55)가 나와 날개가 부지로 69m 대각선을 그었다).</para></summary>
+    /// 구간 <b>바깥쪽</b> 이웃은 <b>이미 꺾인 다음 변</b>이라 방향이 틀어진다.</para>
+    ///
+    /// <para>★<b>실측 조건을 적어 둔다</b>(검토가 재현을 못 해 물었다). 직사각 부지 · 자 내밀기 8.5m ·
+    /// <c>t1 = 76.6</c>(마이터 꼭짓점 77.0보다 <b>0.4m 앞</b>)일 때 <c>t1+1 = 77.6</c>은 꼭짓점을
+    /// <b>0.6m 지나</b> 다음 변에 떨어진다 → <c>from − b</c> = (−0.6,−0.4) → 정규화 <b>(−0.83,−0.55)</b>.
+    /// 옳은 값은 <c>t1−1</c>을 본 <b>(0,+1)</b>이다. 그때 날개가 부지 쪽으로 대각선을 그으며
+    /// 바깥 변과 교차했다(교차 1곳 @(−62.4,19.3)).</para>
+    ///
+    /// <para>★끝점이 꼭짓점에 <b>정확히</b> 놓이면 두 식 모두 축에 맞는 값을 내므로 이 수치는
+    /// 나오지 않는다 — <b>꼭짓점 바로 앞을 찍었을 때만</b> 나온다. 그래서 꼭짓점에서만 재면
+    /// 이 결함이 안 보인다.</para></summary>
     /// <param name="atT1">이 끝이 구간의 <b>끝점(T1)</b>인가. 참이면 안쪽 이웃은 <c>t − step</c>,
     /// 거짓(시작점 T0)이면 <c>t + step</c>이다.</param>
     public static (double X, double Y) WingDirection(
@@ -1338,6 +1322,9 @@ public static class GradingGeometry
         GradingParams p, bool up, double wallSlope, double cornerTol, out string why)
     {
         why = "";
+        // ★[검토 0911 · 낮음15] <b>기록을 먼저 지운다</b> — 안 지우면 중간에 null로 빠질 때
+        //   <b>직전 성공 판의 값</b>이 남아 로그를 읽는 사람을 속인다.
+        LastWallPolyLog = ""; LastWallPolyParts = default;
         if (ruler == null || ruler.Count < 3 || plan == null || plan.Count < 3 || ground == null)
         { why = "자·계획경계·원지반 중 없는 것이 있습니다."; return null; }
 
@@ -1391,6 +1378,37 @@ public static class GradingGeometry
         var outer = OuterDaylightRing(plan, oldDaylight, farNew, p);
         if (outer == null || outer.Count < 3)
         { why = "바깥 마감 링을 못 만들었습니다."; return null; }
+
+        // ★★★[검토 0911] <b>옛 데이라잇에서 받아 온 표고를 그대로 믿지 않는다 — 대조한다.</b>
+        //   <para>데이라잇 선은 정의상 그 자리 원지반 표고를 갖지만, <b>Z가 비어 있는 링</b>
+        //   (계측용 오프셋 링처럼 Z=0)이 들어오면 바깥 변이 조용히 0m가 된다 —
+        //   실측으로 그 일이 났다(<c>Z[0..105]</c>).</para>
+        //   <para>→ 원지반이 <b>답할 수 있는 자리</b>에서만 견준다. 평균 차가 단높이를 넘으면
+        //   그 Z를 <b>못 믿는 값</b>으로 보고 지운다(그러면 아래에서 원지반에 다시 묻는다).
+        //   원지반이 한 자리도 못 답하면 견줄 수가 없으니 <b>그대로 쓰고 그 사실을 적는다</b>.</para>
+        string zTrust;
+        {
+            int n2 = 0; double sum2 = 0;
+            for (int i = 0; i < outer.Count; i++)
+            {
+                if (double.IsNaN(outer[i].Z)) continue;
+                if (!ground.TryGetElevation(outer[i].X, outer[i].Y, out double gz)) continue;
+                n2++; sum2 += Math.Abs(outer[i].Z - gz);
+            }
+            double avg = n2 == 0 ? double.NaN : sum2 / n2;
+            if (n2 > 0 && avg > benchH)
+            {
+                for (int i = 0; i < outer.Count; i++)
+                    outer[i] = new Point3(outer[i].X, outer[i].Y, double.NaN);
+                zTrust = $"옛 데이라잇 표고를 <b>버렸다</b>(원지반과 평균 {avg:0.##}m 차 · 견준 점 {n2}개"
+                       + $" · 문턱 단높이 {benchH:0.##}m) — 원지반에 다시 묻는다";
+            }
+            else if (n2 > 0)
+                zTrust = $"옛 데이라잇 표고를 <b>믿는다</b>(원지반과 평균 {avg:0.###}m 차 · 견준 점 {n2}개)";
+            else
+                zTrust = "옛 데이라잇 표고를 <b>견줄 수 없었다</b>(원지반이 그 자리를 안 덮는다) — 그대로 쓴다";
+        }
+
         var ocum = CumLen2D(outer);
         double oTot = ocum[ocum.Length - 1];
 
@@ -1409,14 +1427,27 @@ public static class GradingGeometry
             if (OffsetOf(cand[0]) < OffsetOf(picked[0])) { innerTry = cand; break; }
         }
         if (innerTry == null || innerTry.Count < 2)
-        { why = $"안쪽 변을 못 만들었습니다(찍은 구간 {picked.Count}점 · 한 단 내밀기 {run:0.##}m)."; return null; }
+        {
+            // ★[검토 0911 · 보통11] <b>진짜 까닭을 말한다.</b> 두 부호 모두 거절되는 자리는
+            //   대개 "찍은 선이 경계에서 한 단 내밀기보다 가깝다"다 — 이미 옹벽인 구간을
+            //   다시 찍으면 바로 그 경계선상이다. 종전엔 점 수만 말해 손 쓸 수가 없었다.
+            double off0 = OffsetOf(picked[0]);
+            why = off0 < run + 0.05
+                ? $"찍은 선이 계획 경계에서 <b>{off0:0.##}m</b>밖에 안 떨어져 있어"
+                  + $" 한 단 내밀기({run:0.##}m)만큼 안쪽으로 밀 자리가 없습니다."
+                  + " 이미 옹벽인 구간이면 사면으로 먼저 바꾸거나, 한 단 밖의 선을 찍어 주세요."
+                : $"안쪽 변을 못 만들었습니다(찍은 구간 {picked.Count}점 · 경계에서 {off0:0.##}m"
+                  + $" · 한 단 내밀기 {run:0.##}m).";
+            LastWallPolyLog = "거절 — " + why;
+            return null;
+        }
         var inner = innerTry;
 
         // ── ② 옆 변(날개) — 방향은 직각/연장, <b>바깥 마감 링에 닿을 때까지</b>
         // ★★★[검토 0911 · 높음4] 코너 판정은 <b>자 자신의 꺾임</b>으로 한다 —
         //   계획 경계 투영은 볼록 코너에서 유효 창이 <b>자의 내밀기 거리</b>로 정해져
         //   1단 링에서도 코너에서 10m 떨어진 자리를 코너로 봤다(<see cref="RingCornerParams"/> 참조).
-        var rulerCorners = RingCornerParams(ruler, rcum);
+        var rulerCorners = CornerParamsOf(plan, ruler, rcum);
         bool AtCorner(double t) => AtRingCorner(rulerCorners, t, rcum[rcum.Length - 1], cornerTol);
         // ★거리를 재서 멈추지 않는다 — <b>링에 닿는 자리</b>가 마감이다.
         List<Point3> Wing(Point3 start, (double X, double Y) dir, out int miss)
@@ -1433,9 +1464,15 @@ public static class GradingGeometry
             // ★★[검토 0911 · 치명2] 끝점 원지반 조회가 실패하면 <c>endZ = zLine</c>이 되어
             //   날개가 <b>수평</b>이 된다 — 로그에 한 줄도 안 남았다. 이제 <b>세서 알린다</b>.
             //   끝점이 안 되면 <b>닿기 전 지점을 되짚어</b> 가장 먼 성공 지점의 표고를 쓴다.
+            // ★★★[검토 0911 · 높음·새] <b>마감 링이 이미 표고를 갖고 있으면 그것을 쓴다.</b>
+            //   <c>RayHit</c>은 닿은 자리의 Z를 선분에서 보간해 준다. 마감 링의 Z는
+            //   <see cref="ZFromDaylight"/>가 <b>옛 데이라잇 선</b>에서 받아 둔 값이고,
+            //   그 선은 정의상 "사면이 원지반과 닿는 선"이라 <b>그 자리 원지반 표고</b>다.
+            //   TIN에 다시 묻지 않아도 되고, TIN 밖이어도 멈추지 않는다.
             double endZ = zLine; bool got = false;
-            if (ground.TryGetElevation(hit.Value.X, hit.Value.Y, out double eg)) { endZ = eg; got = true; }
-            else
+            if (!double.IsNaN(hit.Value.Z)) { endZ = hit.Value.Z; got = true; }
+            else if (ground.TryGetElevation(hit.Value.X, hit.Value.Y, out double eg)) { endZ = eg; got = true; }
+            if (!got)
             {
                 miss++;
                 for (int k = n - 1; k >= 1 && !got; k--)
@@ -1486,6 +1523,7 @@ public static class GradingGeometry
         //   두 갈래는 서로 여집합이라 이 판정으로 곧바로 갈린다. 링 점이 수백 개라 셈은 무시할 만하다.
         //   둘 다 부지를 품으면 <b>거절한다</b> — 구간이 둘레 대부분이면 쐐기가 실은 <b>고리</b>여서
         //   단순 폴리곤으로 표현할 수가 없다(「모든 경우에 대처」 — 허용오차가 아니라 판정을 바꾼다).</para>
+        int farRawTot = 0;
         List<Point3> BuildFar(bool useFwd, out int zMiss, out int zFill)
         {
             double span = useFwd ? fwdSpan : oTot - fwdSpan;
@@ -1502,10 +1540,14 @@ public static class GradingGeometry
             for (int i = 1; i < n; i++)
             {
                 var w = PointAtParam(outer, ocum, Wrap(tB + sgn * span * i / n, oTot));
-                bool ok = ground.TryGetElevation(w.X, w.Y, out double g);
-                raw.Add((w.X, w.Y, ok ? g : double.NaN, ok));
+                // ★①마감 링이 옛 데이라잇에서 받아 둔 표고 → ②원지반 TIN → ③(뒤에서) 가장 가까운 성공값
+                bool ok = !double.IsNaN(w.Z);
+                double gz2 = w.Z;
+                if (!ok) { ok = ground.TryGetElevation(w.X, w.Y, out gz2); }
+                raw.Add((w.X, w.Y, ok ? gz2 : double.NaN, ok));
             }
             zMiss = 0; zFill = 0;
+            farRawTot = raw.Count;          // ★분모를 <b>같은 기준</b>으로 남긴다
             foreach (var r in raw) if (!r.Ok) zMiss++;
             for (int i = 0; i < raw.Count; i++)
             {
@@ -1638,10 +1680,14 @@ public static class GradingGeometry
         }
 
         // ★★[검토 0911 · 치명2] 원지반을 <b>한 점도</b> 못 물었으면 폴리곤이 뜻을 잃는다 — 거절한다.
-        if (pk.F > 2 && missTot >= pk.F - 2)
+        // ★[검토 0911 · 보통·새] 분자와 분모의 <b>기준을 맞춘다.</b> 종전엔 "153/152점"처럼
+        //   분자가 분모보다 컸다 — <c>missTot</c>은 <c>BuildFar</c>가 만든 <b>날점</b> 수이고
+        //   <c>pk.F</c>는 <b>겹친 점을 걸러 낸</b> 수라 기준이 달랐다. 문턱도 그만큼 우연이었다.
+        if (farRawTot > 0 && missTot >= farRawTot)
         {
-            why = $"바깥 변의 원지반 표고를 <b>한 점도</b> 못 얻었습니다(조회 실패 {missTot}/{pk.F - 2}점)"
-                + " — 원지반 표면이 그 자리를 안 덮습니다. 표면 범위를 넓히거나 구간을 옮겨 주세요.";
+            why = $"바깥 변의 원지반 표고를 <b>한 점도</b> 못 얻었습니다(조회 실패 {missTot}/{farRawTot}점)"
+                + " — 원지반 표면도 옛 데이라잇 선도 그 자리를 안 덮습니다."
+                + " 원지반 표면 범위를 넓히거나 구간을 옮겨 주세요.";
             LastWallPolyLog = "거절 — " + why;
             return null;
         }
@@ -1655,7 +1701,8 @@ public static class GradingGeometry
             + $" · 바깥 갈래 <b>{(pickedFwd ? "정" : "역")}방향</b> {pickedSpan:0.#}m/{oTot:0.#}m"
             + $" · 면적 {pickedArea:0}㎡ · 교차 {pickedCross} · 계획정점 품음 {pickedEats}/{plan.Count}"
             + (missTot > 0 ? $" · <b>바깥 변 원지반 조회 실패 {missTot}점 → 가장 가까운 성공 표고로 채움 {fillTot}점</b>" : "")
-            + " · 갈래 비교" + cmp;
+            + " · 갈래 비교" + cmp
+            + " · " + zTrust + " · 마감 링: " + LastOuterRingLog;
         return poly;
     }
 
@@ -1669,24 +1716,100 @@ public static class GradingGeometry
     public static List<Point3>? OuterDaylightRing(
         IReadOnlyList<Point3> plan, IReadOnlyList<Point3>? oldDaylight, double newDist, GradingParams p)
     {
+        LastOuterRingLog = "";
         var fresh = OffsetRingForTest(plan, Math.Max(newDist, 0.05), p);
-        if (oldDaylight == null || oldDaylight.Count < 3) return fresh;
-        if (fresh == null) return new List<Point3>(oldDaylight);
+        if (oldDaylight == null || oldDaylight.Count < 3)
+        {
+            LastOuterRingLog = $"옛 데이라잇이 없어 <b>새 데이라잇만</b> 썼다({newDist:0.##}m)";
+            return fresh;
+        }
+        if (fresh == null)
+        {
+            LastOuterRingLog = "새 데이라잇 링을 못 만들어 <b>옛 데이라잇만</b> 썼다";
+            return ZFromDaylight(new List<Point3>(oldDaylight), oldDaylight, p);
+        }
         try
         {
             var gf = NtsFactory();
-            Geometry a = gf.CreatePolygon(ClosedRing(oldDaylight));
+            // ★★★[검토 0911 · 높음6] <b>옛 데이라잇의 꼬임을 먼저 펴 준다.</b>
+            //   Civil이 만든 실제 데이라잇 링은 <b>자기교차가 흔하다</b>. 그러면
+            //   <c>CreatePolygon</c>이 던지고 <c>catch</c>가 옛 데이라잇을 <b>조용히 버렸다</b> —
+            //   검토 실측: 마감 링이 765점·84.85m에서 <b>409점·22.42m</b>로 줄어
+            //   옛 사면이 안 덮이고, 그런데 <b>로그가 한 줄도 없었다</b>.
+            //   <c>Buffer(0)</c>은 자기교차를 펴는 표준 수법이다.
+            Geometry a;
+            try { a = gf.CreatePolygon(ClosedRing(oldDaylight)); }
+            catch { a = gf.CreateLineString(ClosedRing(oldDaylight)).Buffer(0.0); }
+            if (!a.IsValid) { a = a.Buffer(0.0); LastOuterRingLog += "옛 데이라잇이 꼬여 <b>Buffer(0)로 폈다</b> · "; }
             Geometry b = gf.CreatePolygon(ClosedRing(fresh));
-            var pg = LargestPolygon(a.Union(b));
-            if (pg == null) return fresh;
+            var u = a.Union(b);
+            var pg = LargestPolygon(u);
+            if (pg == null)
+            {
+                LastOuterRingLog += "합집합에서 쓸 조각을 못 골라 <b>새 데이라잇만</b> 썼다";
+                return fresh;
+            }
+            if (u.NumGeometries > 1)
+                LastOuterRingLog += $"합집합이 <b>{u.NumGeometries}조각</b>으로 갈려 가장 큰 것만 썼다 · ";
             var pts = new List<Point3>();
-            foreach (var c in pg.ExteriorRing.Coordinates) pts.Add(new Point3(c.X, c.Y, 0));
+            foreach (var c in pg.ExteriorRing.Coordinates) pts.Add(new Point3(c.X, c.Y, double.NaN));
             double dens = Math.Max(0.3, Math.Min(p.VertexSpacing, 1.0));
             var d2 = Densify(Weed(pts), dens);
-            return d2.Count >= 3 ? d2 : fresh;
+            if (d2.Count < 3)
+            {
+                LastOuterRingLog += "합집합 링이 너무 짧아 <b>새 데이라잇만</b> 썼다";
+                return fresh;
+            }
+            return ZFromDaylight(d2, oldDaylight, p);
         }
-        catch { return fresh; }
+        catch (System.Exception ex)
+        {
+            // ★★[검토 0911 · 높음6] 버렸으면 <b>버렸다고 적는다</b> — 종전엔 말없이 삼켰다.
+            LastOuterRingLog += $"옛 데이라잇을 <b>버렸다</b>(합집합 실패: {ex.GetType().Name}) — 새 데이라잇만 썼다";
+            return fresh;
+        }
     }
+
+    /// <summary>★★★[검토 0911 · 높음·새] 마감 링의 Z를 <b>옛 데이라잇 선에서 가져온다</b>.
+    ///
+    /// <para><b>왜 원지반 TIN에 묻지 않나.</b> 마감 링은 경계에서 60~85m 나가 있어
+    /// <b>TIN 밖이 정상</b>이다 — 현장 측량은 보통 부지 주변만 덮는다. 그래서 "못 물으면 거절"로
+    /// 두면 <b>현장 대부분에서 기능이 멈춘다</b>(검토 실측: TIN이 부지+20m만 덮으면 거절).</para>
+    ///
+    /// <para>그런데 <b>옛 데이라잇 선은 정의상 "사면이 원지반과 닿는 선"</b>이다 —
+    /// 그 선의 Z가 이미 그 자리 원지반 표고다. 물어볼 필요 없이 <b>가져오면 된다</b>.
+    /// 종전엔 <c>new Point3(c.X, c.Y, 0)</c>으로 그 Z를 <b>버리고</b> 다시 TIN에 물었다.</para>
+    ///
+    /// <para>가까운 자리가 없으면 <c>NaN</c>으로 둔다 — 부르는 쪽이 그때 TIN에 묻는다.
+    /// <b>0으로 덮지 않는다</b>(0은 "쟀더니 0"과 구별이 안 된다).</para></summary>
+    static List<Point3> ZFromDaylight(List<Point3> ring, IReadOnlyList<Point3> daylight, GradingParams p)
+    {
+        double dens = Math.Max(0.3, Math.Min(p.VertexSpacing, 1.0));
+        double tol = Math.Max(1.0, dens * 2.0);
+        int got = 0;
+        for (int i = 0; i < ring.Count; i++)
+        {
+            double best = double.MaxValue, bz = double.NaN;
+            for (int k = 0; k < daylight.Count; k++)
+            {
+                var u = daylight[k]; var v = daylight[(k + 1) % daylight.Count];
+                double sx = v.X - u.X, sy = v.Y - u.Y, L2 = sx * sx + sy * sy;
+                double t = L2 < 1e-12 ? 0 : Math.Max(0, Math.Min(1,
+                    ((ring[i].X - u.X) * sx + (ring[i].Y - u.Y) * sy) / L2));
+                double px = u.X + sx * t, py = u.Y + sy * t;
+                double d = (ring[i].X - px) * (ring[i].X - px) + (ring[i].Y - py) * (ring[i].Y - py);
+                if (d < best) { best = d; bz = u.Z + (v.Z - u.Z) * t; }
+            }
+            if (Math.Sqrt(best) <= tol && !double.IsNaN(bz))
+            { ring[i] = new Point3(ring[i].X, ring[i].Y, bz); got++; }
+        }
+        LastOuterRingLog += $"마감 링 {ring.Count}점 중 <b>{got}점</b>이 옛 데이라잇 선에서 표고를 받았다"
+            + $"(나머지 {ring.Count - got}점은 원지반에 묻는다 · 문턱 {tol:0.##}m)";
+        return ring;
+    }
+
+    /// <summary>★마지막 <see cref="OuterDaylightRing"/>이 무엇을 했는지 — 버렸으면 버렸다고 적힌다.</summary>
+    public static string LastOuterRingLog = "";
 
     static Coordinate[] ClosedRing(IReadOnlyList<Point3> r)
     {
