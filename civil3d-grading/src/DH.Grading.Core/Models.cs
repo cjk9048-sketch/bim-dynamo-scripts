@@ -172,9 +172,60 @@ public sealed class SlopeZone
     }
 
     /// <summary>이 점이 이 구간 안인가 — <b>자기 자</b>가 있으면 그 위에서, 없으면 계획 폴리곤 위에서 잰다.</summary>
-    public bool ContainsAt(double x, double y, IReadOnlyList<Point3> planB, double[] planCum)
-        => RefCum != null ? Contains(ParamOnRef(x, y))
-                          : Contains(GradingGeometry.ParamAt(planB, planCum, x, y));
+    /// <param name="flare">★★★<b>날개벽</b> — 이 단에서 구간을 양쪽으로 얼마나 넓힐지(m).
+    ///
+    /// <para><b>왜 넓히나</b>(JACK 0910 스샷 두 장). 옹벽 구간이 <b>모든 단에서 똑같이</b> <c>[T0..T1]</c>이면
+    /// 단마다 벽↔사면이 <b>같은 자리</b>에서 튄다. 그 자리들이 한 방사선 위에 겹쳐 쌓여
+    /// 데이라잇 경계가 <b>계단꼴 톱니</b>가 된다 — JACK: <i>"자글자글하게 잘림"</i>.</para>
+    ///
+    /// <para>실무의 <b>날개벽</b>은 그렇지 않다. 옹벽이 끝나는 자리에서 벽이 <b>비스듬히</b> 물러나며
+    /// 계단으로 마감된다. 그러려면 위로 올라갈수록 구간이 <b>옆으로도 벌어져야</b> 하고,
+    /// 벌어지는 양이 <b>그 단에서 벽이 밖으로 나간 거리와 같으면</b>
+    /// 튀는 자리들이 <b>일직선</b> 위에 놓인다 — JACK이 그린 파란 선이 그것이다.
+    /// 그것이 곧 <i>"옹벽+소단으로 깔끔한 직선형태"</i>이고 <i>"가파른 쪽 기준으로 마감"</i>이다.</para>
+    ///
+    /// <para>★JACK은 이것을 0910에 이미 말했다 —
+    /// <i>"옹벽부가 찍은 코너점보다 <b>연장해서</b> 사면부끝까지 옹벽으로 쳐지는게맞는데"</i>.
+    /// 단이 올라갈수록 실제로 연장되는 것이 맞다.</para>
+    ///
+    /// <para>★<b>0이면 종전 그대로</b>다 — 넓히지 않는다.</para></param>
+    public bool ContainsAt(double x, double y, IReadOnlyList<Point3> planB, double[] planCum,
+                           double flare = 0)
+    {
+        bool onRef = RefCum != null;
+        double t = onRef ? ParamOnRef(x, y) : GradingGeometry.ParamAt(planB, planCum, x, y);
+        if (System.Math.Abs(flare) <= 1e-9) return Contains(t);
+        double total = onRef ? RefCum![RefCum.Length - 1] : planCum[planCum.Length - 1];
+        return ContainsFlared(t, flare, total);
+    }
+
+    /// <summary>구간을 양쪽으로 <paramref name="flare"/>만큼 넓혀서 판정한다(랩 대응).
+    /// <para>넓힌 폭이 둘레를 넘으면 <b>고리 전체</b>다 — 그때는 언제나 참.</para></summary>
+    public bool ContainsFlared(double t, double flare, double total)
+    {
+        if (total <= 1e-9) return Contains(t);
+        double span = T1 >= T0 ? T1 - T0 : total - T0 + T1;
+        if (span + 2 * flare <= 1e-9) return false;             // 좁히다 없어졌다 — 이 단은 구간 밖
+        if (span + 2 * flare >= total - 1e-9) return true;      // 넓히다 한 바퀴를 덮었다
+        double W(double v) { v %= total; return v < 0 ? v + total : v; }
+        double a = W(T0 - flare), b = W(T1 + flare);
+        return a <= b ? (t >= a - 1e-9 && t <= b + 1e-9) : (t >= a - 1e-9 || t <= b + 1e-9);
+    }
+
+    /// <summary>★★★[JACK 0910] <b>이 단에서 이 구간이 밖으로 나간 거리</b> — 날개벽이 옆으로 벌어질 양.
+    /// <para>벽면 폭(<c>단높이 × 구배</c>)과 소단폭을 1단부터 이 단까지 더한 것 —
+    /// <c>StepProfile.Build</c>가 링을 밀어내는 것과 <b>같은 셈</b>이다.
+    /// 그래서 "옆으로 벌어진 양 = 밖으로 나간 양"이 되고, 마감면이 <b>직선</b>이 된다.</para></summary>
+    public double FlareAt(int bench, double benchH, double baseSlope, double baseW, double minFaceRun = 0)
+    {
+        double d = 0;
+        for (int b = 0; b <= bench; b++)
+        {
+            var (sl, bw) = At(b, baseSlope, baseW);
+            d += System.Math.Max(benchH * sl, minFaceRun) + bw;
+        }
+        return d;
+    }
 
     /// <summary>★★[JACK 0824] 이 점·이 단에 적용될 (구배, 소단폭) — 구간을 <b>만들어진 순서대로</b> 겹쳐 본다.
     /// <para><see cref="Flatten"/>이 조각마다 <i>미리</i> 하던 합성을 <b>점마다</b> 한다. 구간이 저마다
@@ -427,6 +478,96 @@ public sealed class SlopeZone
 
     /// <summary>옛 표현(시작단부터 끝단까지 수직)에서 만들기 — 번들 v6 이하 하위호환·옹벽 변환용.
     /// toBench가 끝이 아니면 그 다음 단부터 전역 구배로 되돌리는 규칙을 함께 넣는다(옛 ToBench와 동일 의미).</summary>
+    /// <summary>★★★[JACK 0910 스샷 <i>"옹벽+소단으로 깔끔한 직선형태로 채워져야함"</i>]
+    /// <b>구간 양 끝에 <u>마감면 구간</u>을 끼워 넣는다 — 그러면 벽과 사면 사이가 실제로 채워진다.</b>
+    ///
+    /// <para><b>왜 이 방식인가.</b> 0910~0911에 세 가지를 지어 보고 셋 다 되돌렸다:
+    /// ①이음매를 점으로 메우기(모양이 안 바뀌고 가짜 옹벽선 226점) ·
+    /// ②조립 자리에서 거리를 경사로로(기하만 바뀌고 규칙은 그대로라 갈라짐) ·
+    /// ③날개벽(자르는 자리만 옮겨 빈 쐐기는 그대로 — <b>끊긴 자리 89.4m가 세 판 다 안 움직였다</b>).</para>
+    ///
+    /// <para>남은 길은 <b>그 사이에 진짜 중간 값을 넣는 것</b>뿐이다. 그리고 그것을
+    /// <b>진짜 구간으로</b> 넣으면 <c>ContainsAt</c>·<c>ResolveAt</c>·<c>MaskAt</c>이 <b>전부 저절로</b>
+    /// 같은 답을 낸다 — 함수 서명을 하나도 안 바꾸고, 갈라질 자리가 생기지 않는다.
+    /// ②가 죽은 이유가 바로 그 갈라짐이었다.</para>
+    ///
+    /// <para><b>모양.</b> 구간 <c>[T0,T1]</c> 바깥쪽으로 <paramref name="steps"/>칸을 붙인다.
+    /// 칸마다 구배를 <b>구간 값 → 전역 값</b>으로 고르게 태운다. 칸 하나의 폭은
+    /// <b>가파른 쪽이 한 단에서 밖으로 나가는 거리</b>(<c>단높이×구배 + 소단폭</c>)다 —
+    /// 그래야 마감면이 <b>벽면과 같은 기울기</b>로 서고, 튀는 자리가 <b>직선</b>에 놓인다(JACK의 파란 선).</para>
+    ///
+    /// <para>★<b>바꿀 것이 없으면 안 넣는다</b> — 구간 구배와 전역 구배가 같으면 마감면도 없다.
+    /// 그때 이 함수는 받은 목록을 <b>그대로</b> 돌려준다.</para>
+    ///
+    /// <para>★<b>순수 함수</b>다 — 같은 입력이면 언제 몇 번 불러도 같은 목록이 나온다.
+    /// 그래서 여러 소비자가 각자 불러도 <b>서로 어긋날 수가 없다</b>.</para></summary>
+    /// <para>★★★<b>재 보니 이 방식으로는 안 된다 — 칸을 늘릴수록 <u>더 나빠진다</u></b>
+    /// (0911 실측, 80×60 부지 · 20단 · 둘레 35% 수직):</para>
+    /// <list type="table">
+    /// <item><description>칸 0개 — 끊긴자리 24곳(최장 89.4m) · 부지전체 최장 94.67m · 10m초과 295</description></item>
+    /// <item><description>칸 4개 — 끊긴자리 36곳(최장 89.6m) · 부지전체 최장 96.05m · 10m초과 304</description></item>
+    /// <item><description>칸 16개 — 끊긴자리 69곳(최장 83.9m) · 부지전체 최장 101.51m · 10m초과 329</description></item>
+    /// </list>
+    /// <para><b>왜.</b> 칸마다 <b>제 거리 경계</b>가 생겨 <b>제 다이브</b>를 만든다. 큰 턱 하나가
+    /// 작은 턱 여럿이 될 뿐인데, 그 작은 턱도 여전히 <c>BreaklinePrep.RingSegMaxM</c>(2.5m)보다 크다.
+    /// 바깥 단의 벌어짐이 <b>89m</b>라 2.5m 아래로 내리려면 칸이 <b>36개</b> 필요하고,
+    /// 필요한 칸 수가 <b>단마다 다르다</b>(1단 3개 ↔ 11단 36개) — 구간 하나로는 표현이 안 된다.</para>
+    /// <para>★그래서 <b>기본값 0</b>이다. 켜지 말 것. 다음 사람이 같은 길을 다시 파지 않게
+    /// 길과 숫자를 남겨 둔다(지우면 또 판다).</para>
+    /// <param name="total">자의 둘레(m). 0 이하면 넣지 않는다.</param>
+    /// <param name="steps">칸 수. 0 이하면 넣지 않는다(<b>기본이자 권장</b>).</param>
+    public static List<SlopeZone> WithTransitions(
+        IReadOnlyList<SlopeZone>? zones, double benchH, double baseSlope, double baseW,
+        double minFaceRun, double total, int steps)
+    {
+        var outp = new List<SlopeZone>();
+        if (zones != null) outp.AddRange(zones);
+        if (zones == null || zones.Count == 0 || steps <= 0 || total <= 1e-9) return outp;
+
+        double BaseRun(double sl, double bw) => System.Math.Max(benchH * sl, minFaceRun) + bw;
+        double W(double v) { v %= total; return v < 0 ? v + total : v; }
+
+        var add = new List<SlopeZone>();
+        foreach (var z in zones)
+        {
+            if (z == null || z.Rules.Count == 0) continue;
+            int f = z.FirstBench;
+            var (zs, zw) = z.At(f, baseSlope, baseW);
+            if (System.Math.Abs(zs - baseSlope) < 1e-9 && System.Math.Abs(zw - baseW) < 1e-9) continue;
+
+            // 칸 폭 = 가파른 쪽의 한 단 내밀기. 그래야 마감면이 그 쪽 기울기로 선다.
+            double runZ = BaseRun(zs, zw), runG = BaseRun(baseSlope, baseW);
+            double cell = System.Math.Min(runZ, runG);
+            if (!(cell > 1e-6)) continue;
+
+            double span = z.T1 >= z.T0 ? z.T1 - z.T0 : total - z.T0 + z.T1;
+            // 마감면이 구간보다 길면 구간이 사라진다 — 그때는 구간 절반까지만 쓴다.
+            double room = System.Math.Min(cell * steps, System.Math.Max(0, (total - span) * 0.45));
+            if (!(room > 1e-6)) continue;
+            double cw = room / steps;
+
+            for (int k = 1; k <= steps; k++)
+            {
+                // k가 클수록 전역 쪽 — 구간에서 멀어질수록 전역 구배에 가깝다.
+                double u = (double)k / (steps + 1);
+                double s = zs + (baseSlope - zs) * u;
+                double bw = zw + (baseW - zw) * u;
+                // 구간 <b>뒤</b>쪽 칸
+                var zb = new SlopeZone { T0 = W(z.T1 + (k - 1) * cw), T1 = W(z.T1 + k * cw), Ref = z.Ref };
+                zb.Rules.Add((f, s, bw)); zb.Normalize(); add.Add(zb);
+                // 구간 <b>앞</b>쪽 칸
+                var za = new SlopeZone { T0 = W(z.T0 - k * cw), T1 = W(z.T0 - (k - 1) * cw), Ref = z.Ref };
+                za.Rules.Add((f, s, bw)); za.Normalize(); add.Add(za);
+            }
+        }
+        // ★<b>마감면은 원래 구간보다 <u>먼저</u> 놓는다.</b> <c>ResolveAt</c>은 나중 구간이 이기므로,
+        //   원래 구간이 뒤에 와야 겹치는 자리에서 <b>원래 값</b>이 남는다(마감면이 구간을 갉아먹지 않는다).
+        var res = new List<SlopeZone>(add.Count + outp.Count);
+        res.AddRange(add);
+        res.AddRange(outp);
+        return res;
+    }
+
     public static SlopeZone Wall(double t0, double t1, int fromBench, int toBench, double minSlope, double baseSlope)
     {
         var z = new SlopeZone { T0 = t0, T1 = t1 };
@@ -630,6 +771,13 @@ public sealed class GradingParams
     /// 옹벽 벽면 분할이 완전히 달라져 결과 차이가 극단적 — v17.6 옹벽 6장↔163장).
     /// </summary>
     public bool MiterConvex { get; init; } = true;
+
+    /// <summary>★★★[JACK 0910] <b>마감면(전이면)을 몇 칸으로 나눌지</b> — 0이면 안 넣는다(종전 동작).
+    /// <para>옹벽 구간 양 끝에 붙는 칸 수. 칸마다 구배가 구간 값에서 전역 값으로 고르게 넘어가고,
+    /// 그 사이가 <b>실제로 채워진다</b> — JACK: <i>"옹벽+소단으로 깔끔한 직선형태로 채워져야함"</i>.</para>
+    /// <para>★칸마다 링을 하나씩 더 떠야 하므로 <b>시간이 그만큼 든다</b>(S54가 지킨다).
+    /// 값은 재서 정한다 — 짐작으로 올리지 말 것.</para></summary>
+    public int TransitionSteps { get; init; } = 0;
 
     /// <summary>직각(마이터) 모서리 최대 연장 비율 — 모서리 길이 ÷ 단거리. 이보다 뾰족하면 라운드로 폴백.</summary>
     public double MiterLimit { get; init; } = 2.0;
