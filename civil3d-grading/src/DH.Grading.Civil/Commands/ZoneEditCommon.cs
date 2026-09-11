@@ -664,22 +664,27 @@ internal static class ZoneEditCommon
                     if (day == null || day.Count < 3)
                     { Log("   날개벽선 — 데이라잇 선이 없어 못 그린다"); return; }
 
-                    // ★끝이 <b>계획 꼭짓점</b>에 놓였나 = 코너다. 볼록 코너의 바깥 점은
-                    //   전부 그 꼭짓점 하나로 투영되므로 판정이 또렷하다(0910 실측).
-                    bool IsCorner(double t)
-                    {
-                        if (boundary == null || cumB == null) return false;
-                        var q = GradingGeometry.PointAtParam(ruler, rcum, t);
-                        double tp = GradingGeometry.ParamAt(boundary, cumB, q.X, q.Y);
-                        double tot2 = cumB[cumB.Length - 1];
-                        for (int i = 0; i + 1 < cumB.Length; i++)
-                        {
-                            double d = System.Math.Abs(tp - cumB[i]);
-                            d = System.Math.Min(d, tot2 - d);
-                            if (d < 1.5) return true;
-                        }
-                        return false;
-                    }
+                    // ★★★[검토 0911 · 높음4] 코너 판정은 <b>자 자신의 꺾임</b>으로 한다
+                    //   (<c>GradingGeometry.RingCornerParams</c>).
+                    //
+                    //   <para>종전엔 <i>"볼록 코너의 바깥 점은 전부 그 꼭짓점 하나로 투영되므로
+                    //   판정이 또렷하다"</i>고 적어 두었는데, <b>그 투영이 바로 문제였다</b>.
+                    //   자 위 점을 계획 경계에 투영하면 코너 다리 <b>전체</b>가 정점 하나로 투영되어
+                    //   유효 창이 문턱(1.5m)이 아니라 <b>자의 내밀기 거리</b>로 정해진다. 검토 실측:</para>
+                    //   <code>
+                    //   자 내밀기  1.05m: 코너로 보는 호  7.1% | 최대 창   5.1m
+                    //   자 내밀기  8.50m: 코너로 보는 호 23.0% | 최대 창  20.0m
+                    //   자 내밀기 40.00m: 코너로 보는 호 55.3% | 최대 창  83.0m
+                    //   </code>
+                    //   <para>1단 링에서도 <b>코너에서 10m 떨어진 자리</b>를 코너로 봤다.
+                    //   그 탓에 연장 날개가 엉뚱한 변을 <b>145.9m</b> 달린 판이 있었다(검토 실측).</para>
+                    //
+                    //   <para>★그리고 <b>같은 셈을 여기 또 두지 않는다</b> — 종전엔 이 판정이
+                    //   <c>ZoneEditCommon</c>·<c>WingLine</c>·<c>BuildWallPolygon</c> 세 군데에 있었고
+                    //   그중 하나만 고쳐져 <b>화면의 날개와 폴리곤의 날개가 90° 달랐다</b>.</para>
+                    var rulerCorners = GradingGeometry.RingCornerParams(ruler, rcum);
+                    double rTotW = rcum[rcum.Length - 1];
+                    bool IsCorner(double t) => GradingGeometry.AtRingCorner(rulerCorners, t, rTotW, 1.5);
 
                     var segs = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
                     // ① 고른 구간 그 자체
@@ -690,10 +695,12 @@ internal static class ZoneEditCommon
                     string txt = "";
                     System.Collections.Generic.List<Point3>? wing0 = null, wing1 = null;
                     double zStop = double.NaN;
-                    foreach (var (t, towardT1, nm) in new[] { (t0, true, "시점"), (t1, false, "종점") })
+                    // ★[검토 0911 · 높음5] 인자 뜻이 <c>towardT1</c> → <c>atT1</c>로 바뀌었다 —
+                    //   "이 끝이 구간의 끝점(T1)인가". 시점은 거짓, 종점은 참이다(종전과 반대).
+                    foreach (var (t, atT1, nm) in new[] { (t0, false, "시점"), (t1, true, "종점") })
                     {
                         bool corner = IsCorner(t);
-                        var w = GradingGeometry.WingLine(ruler, rcum, t, corner, towardT1, day, 500.0, out double gz);
+                        var w = GradingGeometry.WingLine(ruler, rcum, t, corner, atT1, day, 500.0, out double gz);
                         // ★[JACK 0911 <i>"로그를 촘촘히 넣어"</i>] <b>못 만든 것도 왜 못 만들었는지 적는다.</b>
                         var atP = GradingGeometry.PointAtParam(ruler, rcum, t);
                         if (w == null)
@@ -706,7 +713,7 @@ internal static class ZoneEditCommon
                             continue;
                         }
                         segs.Add(w);
-                        if (towardT1) wing0 = w; else wing1 = w;
+                        if (!atT1) wing0 = w; else wing1 = w;
                         // ★어디까지 쌓을지 — 두 끝 중 <b>더 멀리 가는 쪽</b>에 맞춘다(모자라면 끊겨 보인다).
                         if (double.IsNaN(zStop)) zStop = gz;
                         else zStop = k.up ? System.Math.Max(zStop, gz) : System.Math.Min(zStop, gz);

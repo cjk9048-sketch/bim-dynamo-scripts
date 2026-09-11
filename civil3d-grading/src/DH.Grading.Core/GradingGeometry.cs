@@ -870,6 +870,152 @@ public static class GradingGeometry
         return Math.Max(3.0, dens * 3.0);   // 정점을 최소 셋 품는 창
     }
 
+    /// <summary>★★★[검토 0911 · 높음4] 고리 자신의 <b>꺾임</b>으로 코너 자리를 찾는다.
+    ///
+    /// <para><b>왜 계획 경계 투영을 쓰면 안 되나.</b> 종전 판정은 자 위 점을 <b>계획 경계에 투영</b>해
+    /// 정점까지의 둘레거리를 봤다. 그런데 <b>볼록 코너</b>에서는 자의 코너 다리 <b>전체</b>가
+    /// 정점 하나로 투영된다 — 그래서 유효 창이 <c>cornerTol</c>이 아니라 <b>자의 내밀기 거리</b>로
+    /// 정해졌다. 검토 실측:</para>
+    /// <code>
+    /// 자 내밀기  1.05m: 코너로 보는 호  7.1% | 최대 창   5.1m
+    /// 자 내밀기  8.50m: 코너로 보는 호 23.0% | 최대 창  20.0m
+    /// 자 내밀기 40.00m: 코너로 보는 호 55.3% | 최대 창  83.0m
+    /// </code>
+    /// <para>1단 링에서도 <b>코너에서 10m 떨어진 자리</b>를 코너로 봤고, <c>cornerTol</c>을
+    /// 어떻게 바꿔도 이 창은 줄지 않았다. 실제로 이것 때문에 구간 폭 70% 판에서
+    /// 코너를 2.6m 지난 변인데 코너로 보고 <b>연장 날개가 바닥 변을 145.9m 달렸다</b>.</para>
+    ///
+    /// <para><b>그래서 고리 자신을 본다.</b> 정점마다 <paramref name="windowM"/> 창 안의
+    /// 꺾임 각을 <b>합쳐</b> <paramref name="turnDeg"/>를 넘으면 코너 자리다.
+    /// 마이터 조인은 한 정점에서 90°가 한 번에 나오고, <b>라운드 조인</b>은
+    /// 여러 마디(<c>QuadrantSegments = 12</c> → 한 마디 7.5°)가 합쳐져 넘는다 —
+    /// 한 정점만 보는 <c>cos</c> 판정은 라운드에서 <b>코너를 하나도 못 찾는다</b>(0.991 &gt; 0.87).</para>
+    ///
+    /// <para>돌려주는 것은 <b>꺾임이 가장 큰 자리</b>들의 둘레값이다(구간마다 하나) —
+    /// 전부 돌려주면 창이 <c>windowM + cornerTol</c>로 넓어져 고치려던 문제가 남는다.</para></summary>
+    public static List<double> RingCornerParams(
+        IReadOnlyList<Point3> ring, double[] cum, double turnDeg = 30.0, double windowM = 3.0)
+    {
+        var res = new List<double>();
+        // ★<c>CumLen2D</c>는 <b>닫힘 중복을 뺀</b> 유효 정점 수 m에 대해 m+1개를 준다 —
+        //   그래서 유효 정점 수는 <c>ring.Count</c>가 아니라 <b><c>cum.Length - 1</c></b>이다.
+        //   (첫 판은 <c>cum.Length &lt; n + 1</c>을 요구해 닫힌 고리에서 <b>늘 빈 목록</b>을 냈다.)
+        if (ring == null || cum == null || cum.Length < 5) return res;
+        int n = Math.Min(cum.Length - 1, ring.Count);
+        if (n < 4) return res;
+        double total = cum[n];
+        if (!(total > 1e-9)) return res;
+
+        // ① 정점마다 꺾임 각(도)
+        var turn = new double[n];
+        for (int i = 0; i < n; i++)
+        {
+            var a = ring[(i - 1 + n) % n]; var b = ring[i]; var c = ring[(i + 1) % n];
+            double ax = b.X - a.X, ay = b.Y - a.Y, bx = c.X - b.X, by = c.Y - b.Y;
+            double la = Math.Sqrt(ax * ax + ay * ay), lb = Math.Sqrt(bx * bx + by * by);
+            if (la < 1e-9 || lb < 1e-9) continue;
+            double cos = Math.Max(-1.0, Math.Min(1.0, (ax * bx + ay * by) / (la * lb)));
+            turn[i] = Math.Acos(cos) * 180.0 / Math.PI;
+        }
+
+        // ② 창 안의 꺾임을 합친다
+        double Arc(int i, int j)
+        {
+            double d = Math.Abs(cum[j] - cum[i]);
+            return Math.Min(d, total - d);
+        }
+        var sum = new double[n];
+        for (int i = 0; i < n; i++)
+        {
+            double s = turn[i];
+            for (int d = 1; d < n; d++)
+            { int j = (i + d) % n; if (Arc(i, j) > windowM) break; s += turn[j]; }
+            for (int d = 1; d < n; d++)
+            { int j = (i - d + n) % n; if (Arc(i, j) > windowM) break; s += turn[j]; }
+            sum[i] = s;
+        }
+
+        // ③ 넘은 자리들을 <b>이어진 묶음</b>으로 보고 묶음마다 가장 큰 정점 하나만 남긴다
+        var hot = new bool[n];
+        for (int i = 0; i < n; i++) hot[i] = sum[i] >= turnDeg;
+        var used = new bool[n];
+        for (int i = 0; i < n; i++)
+        {
+            if (!hot[i] || used[i]) continue;
+            // 이 묶음의 시작이 아니면(앞도 hot이면) 나중에 그 시작에서 함께 다룬다
+            if (hot[(i - 1 + n) % n] && !used[(i - 1 + n) % n]) continue;
+            // ★★<b>창 합계로 고르면 안 된다 — 동점이 많다.</b> 창(±3m)이 코너의 90°를 통째로
+            //   품으므로 코너 양옆 정점 여럿이 <b>같은 합계</b>를 갖는다. 그때 먼저 훑은 것을 집으면
+            //   실제 꼭짓점에서 <b>2.969m 떨어진 자리</b>가 코너로 기록된다(실측) — 그러면
+            //   문턱 1.5m 안에 꼭짓점이 안 들어와 <b>코너를 놓친다</b>.
+            //   → 묶음 안에서 <b>제 꺾임이 가장 큰</b> 정점을 집는다(마이터는 그 자리가 꼭짓점).
+            //     라운드 조인은 마디마다 꺾임이 같으므로 <b>동점들의 가운데</b>를 집는다(호의 중앙).
+            var runIdx = new List<int>();
+            for (int d = 0; d < n; d++)
+            {
+                int j = (i + d) % n;
+                if (!hot[j]) break;
+                used[j] = true;
+                runIdx.Add(j);
+            }
+            if (runIdx.Count == 0) continue;
+            double topTurn = 0;
+            foreach (int j in runIdx) topTurn = Math.Max(topTurn, turn[j]);
+            var tied = new List<int>();
+            foreach (int j in runIdx) if (turn[j] >= topTurn - 1e-9) tied.Add(j);
+            res.Add(cum[tied[tied.Count / 2]]);
+        }
+        // 고리가 전부 hot이면(아주 둥근 고리) 코너가 없는 것과 같다 — 빈 목록을 준다.
+        if (res.Count >= n) res.Clear();
+        return res;
+    }
+
+    /// <summary>★[검토 0911 · 높음4] <paramref name="t"/>가 <see cref="RingCornerParams"/>가 찾은
+    /// 코너 자리 중 하나와 <paramref name="tol"/> 안인가. 둘레를 감아 재므로 시작점 근처도 맞게 본다.</summary>
+    public static bool AtRingCorner(IReadOnlyList<double>? corners, double t, double total, double tol)
+    {
+        if (corners == null || corners.Count == 0 || !(total > 1e-9)) return false;
+        foreach (double c in corners)
+        {
+            double d = Math.Abs(t - c);
+            d = Math.Min(d, total - d);
+            if (d <= tol) return true;
+        }
+        return false;
+    }
+
+    /// <summary>★★★[검토 0911 · 높음5] <b>날개가 뻗는 방향</b> — 이 셈은 <u>한 자리에만</u> 있어야 한다.
+    ///
+    /// <para>검토 실측: 같은 일을 하는 셈이 <b>세 군데</b>에 있었고
+    /// (<c>WingLine</c> · <c>BuildWallPolygon</c>의 지역 함수 · <c>ZoneEditCommon.IsCorner</c>)
+    /// 그중 <c>WingLine</c>만 <b>고치기 전 식</b>이 남아 있어 화면에 그리는 날개와
+    /// 폴리곤의 날개가 <b>코너마다 90° 달랐다</b>. 그래서 하나로 모았다.</para>
+    ///
+    /// <para><b>코너에서는 구간 <u>안쪽</u> 이웃을 본다.</b> JACK: <i>"옹벽을 연장해서
+    /// (옹벽연장선 ∩ 데이라잇선)까지"</i> — 즉 <b>찍은 변의 방향을 그대로 늘린다</b>.
+    /// 구간 <b>바깥쪽</b> 이웃은 <b>이미 꺾인 다음 변</b>이라 방향이 90° 틀어진다
+    /// (실측: (0,+1)이어야 할 자리에서 (−0.83,−0.55)가 나와 날개가 부지로 69m 대각선을 그었다).</para></summary>
+    /// <param name="atT1">이 끝이 구간의 <b>끝점(T1)</b>인가. 참이면 안쪽 이웃은 <c>t − step</c>,
+    /// 거짓(시작점 T0)이면 <c>t + step</c>이다.</param>
+    public static (double X, double Y) WingDirection(
+        IReadOnlyList<Point3> ring, double[] cum, double t, bool atT1, bool corner, double step = 1.0)
+    {
+        var from = PointAtParam(ring, cum, t);
+        double dx, dy;
+        if (corner)
+        {
+            var inSide = PointAtParam(ring, cum, atT1 ? t - step : t + step);
+            dx = from.X - inSide.X; dy = from.Y - inSide.Y;     // 안쪽 이웃의 <b>반대</b> = 연장
+        }
+        else
+        {
+            var o = OutwardAt(ring, cum, t, 1.0);
+            dx = o.X - from.X; dy = o.Y - from.Y;               // 직각(바깥쪽)
+        }
+        double L = Math.Sqrt(dx * dx + dy * dy);
+        return L < 1e-9 ? (0, 0) : (dx / L, dy / L);
+    }
+
     /// <summary>★★★[JACK 0911] <b>날개벽 선 하나를 뽑는다 — 끝점에서 데이라잇까지.</b>
     ///
     /// <para>JACK: <i>"선택부분 끝점에서 <b>직각</b>부분, <b>코너</b>라면 연장(평면 기준으로
@@ -891,31 +1037,19 @@ public static class GradingGeometry
     /// <param name="maxLen">여기까지 가도 안 닿으면 포기한다(m).</param>
     /// <returns>끝점 → 닿은 자리. 못 찾으면 <c>null</c>.</returns>
     public static List<Point3>? WingLine(
-        IReadOnlyList<Point3> ring, double[] cum, double t, bool corner, bool towardT1,
+        IReadOnlyList<Point3> ring, double[] cum, double t, bool corner, bool atT1,
         IReadOnlyList<Point3>? daylight, double maxLen, out double groundZ)
     {
         groundZ = double.NaN;
         if (ring == null || ring.Count < 3 || cum == null || cum.Length < 2) return null;
         var from = PointAtParam(ring, cum, t);
 
-        double dx, dy;
-        if (corner)
-        {
-            // ★<b>노선 연장</b> — 구간이 뻗은 <b>반대쪽</b>으로 곧게 더 간다.
-            //   (구간 안쪽으로 연장하면 제 몸을 자르는 꼴이라 뜻이 없다.)
-            double back = towardT1 ? t - 1.0 : t + 1.0;
-            var b = PointAtParam(ring, cum, back);
-            dx = from.X - b.X; dy = from.Y - b.Y;
-        }
-        else
-        {
-            // ★<b>직각</b> — 고리 바깥쪽. 방향은 <see cref="OutwardAt"/>가 도는 방향으로 정한다.
-            var o = OutwardAt(ring, cum, t, 1.0);
-            dx = o.X - from.X; dy = o.Y - from.Y;
-        }
-        double L = Math.Sqrt(dx * dx + dy * dy);
-        if (L < 1e-9) return null;
-        dx /= L; dy /= L;
+        // ★★★[검토 0911 · 높음5] 방향 셈은 <see cref="WingDirection"/> <b>한 자리</b>에서 온다.
+        //   종전엔 이 함수만 <b>고치기 전 식</b>(구간 바깥쪽 이웃)이 남아 있어,
+        //   화면에 그리는 날개와 가상 폴리곤의 날개가 <b>코너마다 90° 달랐다</b>(검토 실측).
+        var wd = WingDirection(ring, cum, t, atT1, corner);
+        double dx = wd.X, dy = wd.Y;
+        if (Math.Abs(dx) < 1e-9 && Math.Abs(dy) < 1e-9) return null;
 
         var hit = RayHit(from.X, from.Y, dx, dy, daylight, maxLen);
         if (hit == null) return null;
@@ -930,9 +1064,9 @@ public static class GradingGeometry
 
     /// <summary>표고가 필요 없을 때 쓰는 짧은 문.</summary>
     public static List<Point3>? WingLine(
-        IReadOnlyList<Point3> ring, double[] cum, double t, bool corner, bool towardT1,
+        IReadOnlyList<Point3> ring, double[] cum, double t, bool corner, bool atT1,
         IReadOnlyList<Point3>? daylight, double maxLen = 500.0)
-        => WingLine(ring, cum, t, corner, towardT1, daylight, maxLen, out _);
+        => WingLine(ring, cum, t, corner, atT1, daylight, maxLen, out _);
 
     /// <summary>반직선이 닫힌 선에 <b>처음 닿는 자리</b>(2D). 못 닿으면 <c>null</c>.
     /// <para>★가장 가까운 교점을 준다 — 여러 번 닿으면 <b>첫 번째</b>가 마감 자리다.</para></summary>
@@ -1279,41 +1413,11 @@ public static class GradingGeometry
         var inner = innerTry;
 
         // ── ② 옆 변(날개) — 방향은 직각/연장, <b>바깥 마감 링에 닿을 때까지</b>
-        bool AtCorner(double t)
-        {
-            var q = PointAtParam(ruler, rcum, t);
-            double tp = ParamAt(plan, planCum, q.X, q.Y);
-            for (int i = 0; i + 1 < planCum.Length; i++)
-            {
-                double d = Math.Abs(tp - planCum[i]);
-                d = Math.Min(d, planTot - d);
-                if (d < cornerTol) return true;
-            }
-            return false;
-        }
-        // ★★★<b>코너에서는 "구간 안쪽" 이웃을 본다</b>(0911 실측으로 고침).
-        //   JACK: <i>"옹벽을 연장해서 (옹벽연장선 ∩ 데이라잇선)까지"</i> — 즉 <b>찍은 변의 방향을 그대로 늘린다</b>.
-        //   종전엔 구간 <b>바깥쪽</b> 이웃(<c>t1+1</c>)을 봤다. 그 자리는 <b>이미 꺾인 다음 변</b>이라
-        //   방향이 (0,+1)이어야 할 자리에서 (−0.83,−0.55)가 나왔고, 날개가 부지 쪽으로 69m 대각선을
-        //   그으며 바깥 변과 <b>교차</b>했다(실측: 교차 1곳 @(−62.4,19.3)).
-        (double X, double Y) WingDir(double t, bool atT1, bool corner)
-        {
-            var from = PointAtParam(ruler, rcum, t);
-            double dx, dy;
-            if (corner)
-            {
-                // 구간 <b>안쪽</b> 이웃 → 그 반대가 연장 방향이다.
-                var inSide = PointAtParam(ruler, rcum, atT1 ? t - 1.0 : t + 1.0);
-                dx = from.X - inSide.X; dy = from.Y - inSide.Y;
-            }
-            else
-            {
-                var o = OutwardAt(ruler, rcum, t, 1.0);
-                dx = o.X - from.X; dy = o.Y - from.Y;
-            }
-            double L = Math.Sqrt(dx * dx + dy * dy);
-            return L < 1e-9 ? (0, 0) : (dx / L, dy / L);
-        }
+        // ★★★[검토 0911 · 높음4] 코너 판정은 <b>자 자신의 꺾임</b>으로 한다 —
+        //   계획 경계 투영은 볼록 코너에서 유효 창이 <b>자의 내밀기 거리</b>로 정해져
+        //   1단 링에서도 코너에서 10m 떨어진 자리를 코너로 봤다(<see cref="RingCornerParams"/> 참조).
+        var rulerCorners = RingCornerParams(ruler, rcum);
+        bool AtCorner(double t) => AtRingCorner(rulerCorners, t, rcum[rcum.Length - 1], cornerTol);
         // ★거리를 재서 멈추지 않는다 — <b>링에 닿는 자리</b>가 마감이다.
         List<Point3> Wing(Point3 start, (double X, double Y) dir, out int miss)
         {
@@ -1351,8 +1455,8 @@ public static class GradingGeometry
             return line;
         }
         bool c0 = AtCorner(t0), c1 = AtCorner(t1);
-        var wing0 = Wing(inner[0], WingDir(t0, false, c0), out int wMiss0);
-        var wing1 = Wing(inner[inner.Count - 1], WingDir(t1, true, c1), out int wMiss1);
+        var wing0 = Wing(inner[0], WingDirection(ruler, rcum, t0, false, c0), out int wMiss0);
+        var wing1 = Wing(inner[inner.Count - 1], WingDirection(ruler, rcum, t1, true, c1), out int wMiss1);
         if (wing0.Count < 2 || wing1.Count < 2)
         {
             why = $"날개 변을 못 만들었습니다(시작 {wing0.Count}점 · 끝 {wing1.Count}점"
