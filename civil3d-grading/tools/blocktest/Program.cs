@@ -1,6 +1,7 @@
 ﻿// WallBlocks 오프라인 하네스 — 옹벽 3D 보강토 블록 그리드 필터링 + 우각부 반블록 플러시 검증
 // (walltest와 같은 PASS/FAIL 방식)
 using DH.Grading.Core;
+using NetTopologySuite.Geometries; // S120~S122 — RingDifference/Buffer(0) 가설을 직접 재려고 씀(팀장 요청 0914)
 
 int fails = 0;
 void Check(string name, bool ok, string detail = "")
@@ -9963,6 +9964,33 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
                 return inside;
             }
 
+            // ★★★[JACK 0911] <b>기준면을 바꿔 나란히 잰다.</b> 종전엔 원지반(<c>FlatGround 140</c>)
+            //   하나로만 재서 "부지 안 1196점"이 나왔는데, <b>이어서하기는 그 면을 안 쓴다</b> —
+            //   합성된 면(부지 안은 계획고 105 평지)을 쓴다. 그러면 안쪽 변에서 부지 쪽으로
+            //   칠 일이 <b>0</b>일 수 있다. 오진이었는지 여기서 갈린다.
+            var comp114 = new ComposedGround(pad114, 100.0, 5.0 / 8.5, 140.0);
+            foreach (var (gname, gsurf) in new (string, IGroundSurface)[]
+            {
+                ("원지반만(옛 계측)", gnd114),
+                ("이어서하기 기준면(합성면)", comp114),
+            })
+            {
+                var vv = GradingGeometry.Build(vpoly114, gsurf, Par114(false), true, null);
+                int ip = 0, ab = 0, bl = 0; double dp = 0;
+                foreach (var r in vv.Rings)
+                    foreach (var q in r)
+                    {
+                        if (!InPad(pad114, q.X, q.Y)) continue;
+                        ip++;
+                        if (q.Z > 100.0) ab++; else bl++;
+                        double t = GradingGeometry.ParamAt(pad114, c114, q.X, q.Y);
+                        var b = GradingGeometry.PointAtParam(pad114, c114, t);
+                        dp = System.Math.Max(dp, System.Math.Sqrt((q.X-b.X)*(q.X-b.X) + (q.Y-b.Y)*(q.Y-b.Y)));
+                    }
+                Console.WriteLine($"      S114 [기준면={gname}] 링 {vv.Rings.Count}개"
+                    + $" · <b>부지 안 점 {ip}개</b>(위 {ab}/아래 {bl} · 가장 깊이 {dp:0.#}m)");
+            }
+
             int[] inPadBy = new int[2];
             foreach (bool noPlat in new[] { false, true })
             {
@@ -10445,6 +10473,432 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
                       poly != null && System.Math.Abs(zHi - 140.0) < 0.5,
                       poly == null ? $"거절됐다 — {why6}" : $"{poly.Count}점 · Z[{zLo:0.#}..{zHi:0.#}] (바깥 변이 140이어야)");
             }
+        }
+    }
+}
+
+
+// ══ S117 ★★★[JACK 0911] <b>벽 + 원지반 띠</b> — 현장 로그의 숫자로 잰다 ══════════════════
+//
+//   <para>JACK: <i>"이어서하기 기준면을 쓸 때 <b>정지기준면</b>인데 우린 사실 <b>원지반까지</b>
+//   치는 것이기 때문에 이 부분 해결이 중요하다"</i> · <i>"로직 아이디어만 이어서하기를 쓰되
+//   <b>새롭게 생각해야 해</b>"</i>.</para>
+//
+//   <para><b>현장 로그(17:30) 그대로 먹인다</b> — 검사 입력이 출하 입력이어야 하므로:</para>
+//   <code>
+//   찍은 선 표고 105.00  · 그 자리 원지반 120.00(시점) / 119.18(종점)
+//   고른 구간 46.6m      · 자 둘레 280.1m(= 계획 경계)
+//   날개 직각 24.5m / 23.3m
+//   벽 한 단 내밀기 1.050m · 단높이 5m
+//   </code>
+//
+//   <para><b>재는 것</b>: ①벽이 <b>자리마다</b> 원지반에 닿나(한 표고로 끊지 않나)
+//   ②원지반 띠가 <b>옛 사면 데이라잇까지</b> 가나 ③띠의 표고가 <b>원지반과 같나</b>
+//   ④두 끝의 원지반이 다를 때(120 vs 119.18) 그것을 따라가나.</para>
+{
+    Console.WriteLine("\n== S117 벽 + 원지반 띠 (현장 숫자) ==");
+    var par117 = new GradingParams
+    {
+        CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 1.5, FillSlope = 1.5, CellSize = 0.5, MaxBenches = 20, MaxRise = 60,
+        VertexSpacing = 2.0, MinSlope = 0.01, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+    double run117 = System.Math.Max(5 * par117.MinSlope, par117.MinFaceRun) + 1.0;   // 1.050m
+
+    // ㄷ자 선 — 날개(서쪽으로 24.5m) + 고른 구간(46.6m) + 날개(23.3m). 표고는 찍은 선 105.
+    var chain117 = new List<Point3>();
+    for (double x = -24.5; x <= -0.01; x += 1.0) chain117.Add(new Point3(x, 0, 105));
+    for (double y = 0; y <= 46.6; y += 1.0) chain117.Add(new Point3(0, y, 105));
+    for (double x = -1.0; x >= -23.3; x -= 1.0) chain117.Add(new Point3(x, 46.6, 105));
+    Check("S117 시험 조건 — ㄷ자 선이 있다", chain117.Count > 60, $"{chain117.Count}점");
+
+    // 원지반 — 두 끝이 다르게(120.00 / 119.18) 기울어져 있다
+    var gnd117 = new TiltGround(0, 0, 120.0, 0.0, -0.82 / 46.6);
+
+    foreach (double outer in new[] { 25.5, 60.0 })
+    {
+        var lines = GradingGeometry.WallThenGround(
+            chain117, gnd117, par117, up: true, slope: par117.MinSlope,
+            benchW: 1.0, outSign: -1, outerDist: outer, out string log117);
+        Console.WriteLine($"      S117 [바깥 {outer:0.#}m] {log117}");
+        {
+            // ★찍은 선의 테두리와 만든 것의 테두리를 견준다 — <b>옆으로 번지나</b>.
+            double cx0=1e9,cx1=-1e9,cy0=1e9,cy1=-1e9;
+            foreach (var q in chain117){cx0=System.Math.Min(cx0,q.X);cx1=System.Math.Max(cx1,q.X);cy0=System.Math.Min(cy0,q.Y);cy1=System.Math.Max(cy1,q.Y);}
+            double lx0=1e9,lx1=-1e9,ly0=1e9,ly1=-1e9;
+            foreach (var l in lines) foreach (var q in l)
+            {lx0=System.Math.Min(lx0,q.X);lx1=System.Math.Max(lx1,q.X);ly0=System.Math.Min(ly0,q.Y);ly1=System.Math.Max(ly1,q.Y);}
+            Console.WriteLine($"        S117 테두리 — 찍은 선 X[{cx0:0.#}..{cx1:0.#}] Y[{cy0:0.#}..{cy1:0.#}]"
+              + $" → 만든 것 X[{lx0:0.#}..{lx1:0.#}] Y[{ly0:0.#}..{ly1:0.#}]"
+              + $"  <b>옆으로 번진 양 아래 {cy0-ly0:0.#}m · 위 {ly1-cy1:0.#}m</b>");
+        }
+
+        Check($"S117 ★줄이 만들어진다(바깥 {outer:0.#}m)", lines.Count >= 3, $"{lines.Count}줄");
+        if (lines.Count < 3) continue;
+
+        // ①벽이 자리마다 원지반에 닿나 — 마지막 벽 줄의 두 끝 표고가 서로 달라야 한다
+        //   (한 표고로 끊으면 둘이 같다 — 그것이 종전 방식의 결함이었다)
+        // ②③띠의 표고가 원지반과 같나
+        int band = 0, bad = 0; double worst = 0, farthest = 0;
+        foreach (var l in lines)
+            foreach (var q in l)
+            {
+                if (!gnd117.TryGetElevation(q.X, q.Y, out double gz)) continue;
+                double d = System.Math.Abs(q.Z - gz);
+                // 바깥으로 멀리 나간 점은 <b>원지반과 같아야</b> 한다
+                double off = System.Math.Abs(q.X);      // 서쪽으로 밀리므로 |X|가 내민 거리
+                farthest = System.Math.Max(farthest, off);
+                if (off > run117 * 4.0 && q.Y > 1.0 && q.Y < 45.0)
+                { band++; if (d > 0.01) { bad++; worst = System.Math.Max(worst, d); } }
+            }
+        Check($"S117 ★★★원지반 띠의 표고가 <b>원지반과 같다</b>(바깥 {outer:0.#}m)",
+              band > 0 && bad == 0,
+              $"띠에서 잰 점 {band}개 · 어긋난 점 {bad}개 · 최악 {worst:0.###}m");
+        Check($"S117 ★★★띠가 <b>목표 거리까지</b> 간다(바깥 {outer:0.#}m)",
+              farthest >= outer - run117 - 0.01,
+              $"가장 멀리 내민 거리 {farthest:0.##}m / 목표 {outer:0.#}m");
+
+        // ④두 끝의 원지반이 다르면 벽 마지막 줄도 달라야 한다
+        var lastWall = lines[System.Math.Min(3, lines.Count - 1)];
+        double zA = lastWall[0].Z, zB = lastWall[lastWall.Count - 1].Z;
+        Console.WriteLine($"      S117 [바깥 {outer:0.#}m] 벽 마지막 줄 두 끝 표고 {zA:0.##} / {zB:0.##}");
+    }
+
+    // ★★자체검증 — <b>한 표고로 끊는 옛 방식</b>과 견준다. 안 다르면 이 자는 쓸모가 없다.
+    {
+        var oldWay = GradingGeometry.WallFromLine(chain117, 120.0, par117, true,
+                         par117.MinSlope, 1.0, -1);
+        var newWay = GradingGeometry.WallThenGround(chain117, gnd117, par117, true,
+                         par117.MinSlope, 1.0, -1, 25.5, out _);
+        int oldN = 0, newN = 0;
+        foreach (var l in oldWay) oldN += l.Count;
+        foreach (var l in newWay) newN += l.Count;
+        Console.WriteLine($"      S117 [자체검증] 옛 방식 {oldWay.Count}줄/{oldN}점 · 새 방식 {newWay.Count}줄/{newN}점");
+        Check("S117 ★★자체검증 — 새 방식이 <b>옛 방식보다 바깥까지</b> 만든다(원지반 띠가 있다)",
+              newWay.Count > oldWay.Count,
+              $"옛 {oldWay.Count}줄 → 새 {newWay.Count}줄 (띠가 없으면 같아야 한다)");
+    }
+}
+
+
+// ══ S118 ★★★[JACK 0911] 원지반 띠 — <b>옆으로 안 번지나</b> ══════════════════════════════
+//
+//   <para>v89.0이 붙기는 붙었는데 모양이 틀렸다. 실측:</para>
+//   <code>
+//   찍은 선   X[-24.5..0]   Y[0..46.6]
+//   선 밀기   X[-24.5..25.5] Y[-25.5..72.1]   ← 옆으로 아래 25.5m · 위 25.5m
+//   </code>
+//   <para>JACK: <i>"내 생각엔 이런 식으론 해결 못할 것 같은데?"</i> — 맞았다.
+//   ⊐자 선을 바깥으로 밀면 <b>날개 토막이 옆으로</b> 움직여 멀쩡한 사면을 덮는다.</para>
+//
+//   <para>그래서 띠를 <b>면</b>으로 다시 지었다(<see cref="GradingGeometry.GroundBand"/>).
+//   여기서 재는 것은 단 하나 — <b>구간의 호길이 범위를 한 뼘도 안 넘나</b>.
+//   그리고 표고가 <b>원지반과 같나</b>.</para>
+{
+    Console.WriteLine("\n== S118 원지반 띠 — 옆으로 안 번지나 ==");
+    var par118 = new GradingParams
+    {
+        CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 1.5, FillSlope = 1.5, CellSize = 0.5, MaxBenches = 20, MaxRise = 60,
+        VertexSpacing = 2.0, MinSlope = 0.01, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+    // 현장과 같은 판 — 부지 55.7 × 84.35(둘레 280.1m), 찍은 구간 46.6m
+    var pad118 = new List<Point3> { new(0,0,105), new(55.7,0,105), new(55.7,84.35,105), new(0,84.35,105) };
+    var c118 = GradingGeometry.CumLen2D(pad118);
+    var gnd118 = new TiltGround(0, 0, 120.0, 0.01, -0.01);
+
+    foreach (var (nm, t0, t1) in new[] { ("변 가운데", 120.0, 166.6), ("코너에 걸침", 250.0, 15.9) })
+    {
+        var band = GradingGeometry.GroundBand(pad118, c118, t0, t1, gnd118, par118,
+                       fromDist: 3.15, toDist: 24.5, out string log118);
+        Console.WriteLine($"      S118 [{nm}] {log118}");
+        Check($"S118 ★띠가 만들어진다({nm})", band.Count >= 3, $"{band.Count}줄");
+        if (band.Count < 3) continue;
+
+        // ★★★<b>구간의 호길이 범위를 넘지 않나</b> — 이것이 "옆으로 안 번진다"의 뜻이다.
+        double tot = c118[^1];
+        double span = t1 >= t0 ? t1 - t0 : tot - t0 + t1;
+        double over = 0; int outside = 0;
+        foreach (var l in band)
+            foreach (var q in l)
+            {
+                double t = GradingGeometry.ParamAt(pad118, c118, q.X, q.Y);
+                // t가 [t0..t1] 안인가 — 랩 대응
+                // ★<b>랩을 부호 있는 거리로 푼다.</b> 첫 판은 <c>t</c>가 <c>t0</c>보다 <b>아주 조금
+                //   앞</b>일 때(투영이 한 뼘 앞에 떨어질 때) <c>rel</c>이 둘레만큼 커져
+                //   233.5m가 나왔다 — <b>코드가 아니라 이 자가 틀린 것</b>이었다.
+                double rel = t - t0;
+                if (rel < -tot * 0.5) rel += tot;
+                if (rel > tot * 0.5) rel -= tot;
+                if (rel < -0.6 || rel > span + 0.6)
+                { outside++; over = System.Math.Max(over, rel < 0 ? -rel : rel - span); }
+            }
+        Check($"S118 ★★★띠가 <b>구간을 옆으로 넘지 않는다</b>({nm})",
+              outside == 0,
+              $"구간 {span:0.#}m 밖으로 나간 점 {outside}개 · 가장 많이 {over:0.##}m"
+            + " (선 밀기 방식은 25.5m 번졌다)");
+
+        // ★표고가 원지반과 같나
+        int bad = 0; double worst = 0;
+        foreach (var l in band)
+            foreach (var q in l)
+            {
+                if (!gnd118.TryGetElevation(q.X, q.Y, out double gz)) continue;
+                double d = System.Math.Abs(q.Z - gz);
+                if (d > 0.01) bad++;
+                worst = System.Math.Max(worst, d);
+            }
+        Check($"S118 ★★★띠의 표고가 <b>원지반과 같다</b>({nm})",
+              bad == 0, $"어긋난 점 {bad}개 · 최악 {worst:0.###}m");
+
+        // ★바깥 거리가 벽 끝에서 시작해 목표까지 가나
+        double dLo = double.MaxValue, dHi = 0;
+        foreach (var l in band)
+            foreach (var q in l)
+            {
+                double t = GradingGeometry.ParamAt(pad118, c118, q.X, q.Y);
+                var b2 = GradingGeometry.PointAtParam(pad118, c118, t);
+                double d = System.Math.Sqrt((q.X-b2.X)*(q.X-b2.X) + (q.Y-b2.Y)*(q.Y-b2.Y));
+                dLo = System.Math.Min(dLo, d); dHi = System.Math.Max(dHi, d);
+            }
+        Check($"S118 ★★★띠가 <b>벽 끝에서 옛 데이라잇까지</b> 덮는다({nm})",
+              System.Math.Abs(dLo - 3.15) < 0.6 && System.Math.Abs(dHi - 24.5) < 0.6,
+              $"내밀기 {dLo:0.##}~{dHi:0.##}m / 기대 3.15~24.5m");
+    }
+
+    // ══ ★★★출하되는 조립 그대로 — <b>벽 + 띠가 틈 없이 만나나</b> ══
+    //   <para>벽은 ⊐자 선 밀기, 띠는 빗살 — <b>두 다른 셈</b>이라 이어지는 자리를 재야 한다.
+    //   벽의 마지막 줄이 <c>wallEnd</c>m에 있고 띠가 그 거리에서 시작하므로
+    //   둘 사이 <b>가장 가까운 거리가 0에 가까워야</b> 한다. 벌어지면 TIN에 틈이 생긴다.</para>
+    {
+        var chain2 = new List<Point3>();
+        for (double x = -24.5; x <= -0.01; x += 1.0) chain2.Add(new Point3(x, 0, 105));
+        for (double y = 0; y <= 46.6; y += 1.0) chain2.Add(new Point3(0, y, 105));
+        for (double x = -1.0; x >= -23.3; x -= 1.0) chain2.Add(new Point3(x, 46.6, 105));
+        // 자 = 그 구간이 놓인 변(X=0), 구간 = Y 0~46.6
+        var ruler2 = new List<Point3> { new(0,0,105), new(0,84.35,105), new(55.7,84.35,105), new(55.7,0,105) };
+        var rc2 = GradingGeometry.CumLen2D(ruler2);
+        var wall = GradingGeometry.WallThenGround(chain2, gnd118, par118, true,
+                       par118.MinSlope, 1.0, +1, 0, out string wl2, out double wallEnd2);
+        var band2 = GradingGeometry.GroundBand(ruler2, rc2, 0.0, 46.6, gnd118, par118,
+                        System.Math.Max(wallEnd2, 0.05), 24.5, out string bl2);
+        Console.WriteLine($"      S118 [조립] 벽 {wall.Count}줄(끝 {wallEnd2:0.##}m) · 띠 {band2.Count}줄 · {wl2}");
+        Console.WriteLine($"      S118 [조립] 띠 — {bl2}");
+        // 벽 마지막 줄 ↔ 띠 첫 점들 사이 가장 가까운 거리
+        double gap2 = double.MaxValue;
+        if (wall.Count >= 2 && band2.Count >= 2)
+        {
+            var lastW = wall[wall.Count - 1];
+            foreach (var l in band2)
+            {
+                if (l.Count == 0) continue;
+                var q = l[0];
+                foreach (var w in lastW)
+                    gap2 = System.Math.Min(gap2, System.Math.Sqrt((q.X-w.X)*(q.X-w.X) + (q.Y-w.Y)*(q.Y-w.Y)));
+            }
+        }
+        Check("S118 ★★★벽과 띠가 <b>틈 없이 만난다</b>(조립)",
+              wall.Count >= 2 && band2.Count >= 2 && gap2 < 1.5,
+              $"벽 {wall.Count}줄 · 띠 {band2.Count}줄 · 가장 가까운 거리 {(gap2 < 1e8 ? gap2 : -1):0.###}m");
+    }
+
+    // ★★자체검증 — <b>선 밀기 방식과 견준다</b>. 안 다르면 이 자는 쓸모가 없다.
+    {
+        var chain = new List<Point3>();
+        for (double x = -24.5; x <= -0.01; x += 1.0) chain.Add(new Point3(x, 0, 105));
+        for (double y = 0; y <= 46.6; y += 1.0) chain.Add(new Point3(0, y, 105));
+        for (double x = -1.0; x >= -23.3; x -= 1.0) chain.Add(new Point3(x, 46.6, 105));
+        // ★★★<b>부호 둘을 다 재야 한다.</b> 첫 계측은 부호를 하나만(−1) 써서
+        //   "옆으로 25.5m 번진다"고 적었는데, 다른 부호(+1)로는 <b>0m</b>였다.
+        //   출하되는 부호는 "부지 바깥"으로 정해지므로, <b>어느 쪽이 바깥인지</b>가 답을 가른다.
+        int spread = 0;
+        foreach (int sg in new[] { +1, -1 })
+        {
+            var push = GradingGeometry.WallThenGround(chain, gnd118, par118, true,
+                           par118.MinSlope, 1.0, sg, 24.5, out _);
+            double py0 = 1e9, py1 = -1e9, px0 = 1e9, px1 = -1e9;
+            foreach (var l in push) foreach (var q in l)
+            { py0 = System.Math.Min(py0, q.Y); py1 = System.Math.Max(py1, q.Y);
+              px0 = System.Math.Min(px0, q.X); px1 = System.Math.Max(px1, q.X); }
+            double sideways = System.Math.Max(0 - py0, py1 - 46.6);
+            if (sideways > 10.0) spread++;
+            Console.WriteLine($"      S118 [자체검증 부호 {sg:+0;-0}] X[{px0:0.#}..{px1:0.#}] Y[{py0:0.#}..{py1:0.#}]"
+                + $" — 찍은 선 X[-24.5..0] Y[0..46.6] · <b>옆으로 {sideways:0.#}m</b>"
+                + (sg > 0 ? "  (구간이 −X로 밀린다 = 날개와 같은 쪽)" : "  (구간이 +X로 밀린다 = 날개 반대쪽)"));
+        }
+        Check("S118 ★★자체검증 — 선 밀기는 <b>한쪽 부호에서 옆으로 번진다</b>(면으로 바꾼 까닭)",
+              spread == 1,
+              $"번지는 부호 {spread}개 / 둘 (하나여야 — 부호에 따라 갈리는 것이 이 방식의 문제다)");
+    }
+}
+
+
+// ══ S119 ★★★[JACK 0914] <b>넉넉히 만든 옹벽면</b> — 자를 수 있는 재료인가 ═══════════════
+//
+//   <para>JACK이 준 순서의 ①번이다: <i>"원지반의 높이를 계산해서 <b>그만큼 넉넉히</b> 일단
+//   옹벽을 만들어. 그다음에 그 지표면과 원지반이 만나는 데이라잇을 만들고 <b>그걸로 잘라</b>."</i></para>
+//
+//   <para><b>재는 것은 "넉넉한가" 하나다.</b> 딱 맞게 만들면 데이라잇이 안 생겨 자를 수가 없다.
+//   ①<b>위로</b> — 구간 자리 원지반 최고점을 <b>넘는가</b>(안 넘으면 교선이 없다)
+//   ②<b>옆으로</b> — 구간 양 끝을 <b>넘는가</b>(정지면과의 교선이 잘라 줄 몫)
+//   ③<b>한 단 내밀기</b>가 옹벽 제원(1.05m)인가
+//   ④밑줄이 <b>찍은 선 그 자리</b>에 있는가(벽이 거기 서야 한다)</para>
+{
+    Console.WriteLine("\n== S119 넉넉히 만든 옹벽면 — 자를 수 있는 재료인가 ==");
+    var par119 = new GradingParams
+    {
+        CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 1.5, FillSlope = 1.5, CellSize = 0.5, MaxBenches = 20, MaxRise = 60,
+        VertexSpacing = 2.0, MinSlope = 0.01, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+    double run119 = System.Math.Max(5 * par119.MinSlope, par119.MinFaceRun) + 1.0;   // 1.05m
+    // 현장과 같은 판 — 55.7 × 84.35(둘레 280.1m), 찍은 선 표고 105
+    var pad119 = new List<Point3> { new(0,0,105), new(55.7,0,105), new(55.7,84.35,105), new(0,84.35,105) };
+    var c119 = GradingGeometry.CumLen2D(pad119);
+
+    foreach (var (nm, gnd, zMax) in new (string, IGroundSurface, double)[]
+    {
+        ("평지 원지반 120", new FlatGround(120.0), 120.0),
+        ("기울어진 원지반 ~135", new TiltGround(0, 0, 120.0, 0.15, 0.10), 135.0),
+    })
+    foreach (var (spotNm, t0, t1) in new[] { ("변 가운데", 20.0, 40.0), ("코너에 걸침", 45.0, 70.0) })
+    {
+        var slab = GradingGeometry.WallInWedge(pad119, c119, t0, t1, daylightDist: 24.5,
+                       ground: gnd, p: par119, up: true, slope: par119.MinSlope, benchW: 1.0,
+                       polygon: out var poly119, wedgePolygon: out var wedge119, log: out string log119);
+        Console.WriteLine($"      S119 [{nm}·{spotNm}] {log119}");
+        Check($"S119 ★줄이 만들어진다({nm}·{spotNm})", slab.Count >= 3, $"{slab.Count}줄");
+        if (slab.Count < 3) continue;
+
+        double zLo = double.MaxValue, zHi = double.MinValue;
+        double tLo = double.MaxValue, tHi = double.MinValue;
+        double tot = c119[^1];
+        double span = t1 - t0;
+        foreach (var l in slab)
+            foreach (var q in l)
+            {
+                zLo = System.Math.Min(zLo, q.Z); zHi = System.Math.Max(zHi, q.Z);
+                double t = GradingGeometry.ParamAt(pad119, c119, q.X, q.Y);
+                double rel = t - t0;
+                if (rel < -tot * 0.5) rel += tot;
+                if (rel > tot * 0.5) rel -= tot;
+                tLo = System.Math.Min(tLo, rel); tHi = System.Math.Max(tHi, rel);
+            }
+
+        // ①위로 넉넉한가 — 원지반 최고점을 넘어야 교선이 생긴다
+        // ★★★[JACK 0914] <b>원지반 최고점이 <u>포함된 단까지만</u></b> — 넉넉히 더 올리지 않는다.
+        //   단 b는 표고 z0+H(b−1) ~ z0+Hb를 품는다. 그러니 꼭대기는 최고점을 넘되
+        //   <b>한 단 아래는 최고점에 못 미쳐야</b> 한다(더 올렸으면 한 단이 남는다).
+        int nbTop = (slab.Count - 1) / 2;
+        double oneLess = 105.0 + 5.0 * System.Math.Max(0, nbTop - 1);
+        // ★<b>"해당영역"은 부지 전체가 아니라 <u>벽 발자국</u>이다.</b> 첫 판은 부지 전체 최고(135m)를
+        //   기댓값으로 박아 헛울렸다 — 발자국은 몇 m 폭이라 그 봉우리에 닿지 않는다.
+        //   만든 것의 점 XY에서 원지반을 물어 <b>그 영역의 최고</b>를 구한다.
+        double zMaxFoot = double.MinValue;
+        foreach (var l in slab)
+            foreach (var q in l)
+                if (gnd.TryGetElevation(q.X, q.Y, out double gz2)) zMaxFoot = System.Math.Max(zMaxFoot, gz2);
+        if (poly119 != null)
+            foreach (var q in poly119)
+                if (gnd.TryGetElevation(q.X, q.Y, out double gz3)) zMaxFoot = System.Math.Max(zMaxFoot, gz3);
+        Check($"S119 ★★★<b>원지반 최고점이 든 단까지만</b> 친다({nm}·{spotNm})",
+              zHi >= zMaxFoot - 1e-6 && oneLess < zMaxFoot + 1e-6,
+              $"단 {nbTop}개 · 꼭대기 {zHi:0.##}m · 한 단 아래 {oneLess:0.##}m"
+            + $" · <b>발자국 안 원지반 최고 {zMaxFoot:0.##}m</b>(부지 전체 최고는 {zMax:0.##}m)"
+            + " — 꼭대기 ≥ 발자국 최고 > 한 단 아래여야");
+
+
+        // ★★★[JACK 0914 · 검토 B-1] <b>줄이 ㄷ자인가</b> — 전면 + 날개 둘.
+        //
+        //   <para>앞 판은 줄이 <b>전면 하나</b>뿐이었다. 나는 "세 변에서 안쪽으로"를
+        //   <b>줄 끝을 45°로 깎는 것</b>으로 구현했는데, 그건 날개벽이 아니라 <b>모서리 모따기</b>다 —
+        //   검토 실측: 양 끝 직각선 0.25m 안에 든 점이 <b>320개 중 2개</b>였고
+        //   구간 제 끝에서 벽 높이가 <b>0.00m</b>였다.</para>
+        //
+        //   <para>이제 줄은 ㄷ자다: ①왼쪽 날개(직각선을 따라 밖→안) ②전면 ③오른쪽 날개(안→밖).
+        //   그래서 <b>내밀기의 최솟값</b>이 그 단의 <c>d</c>이고, <b>최댓값</b>은 날개 끝(데이라잇)이다 —
+        //   자도 그 기준으로 재야 한다(첫 점을 전면으로 알고 재면 날개 끝을 잰다).</para>
+        double OffOf(Point3 q)
+        {
+            double tt = GradingGeometry.ParamAt(pad119, c119, q.X, q.Y);
+            var bb = GradingGeometry.PointAtParam(pad119, c119, tt);
+            return System.Math.Sqrt((q.X - bb.X) * (q.X - bb.X) + (q.Y - bb.Y) * (q.Y - bb.Y));
+        }
+        double[] dMin = new double[slab.Count], dMax = new double[slab.Count];
+        for (int k = 0; k < slab.Count; k++)
+        {
+            dMin[k] = double.MaxValue; dMax[k] = 0;
+            foreach (var q in slab[k])
+            { double o = OffOf(q); dMin[k] = System.Math.Min(dMin[k], o); dMax[k] = System.Math.Max(dMax[k], o); }
+        }
+
+        // ①줄마다 날개가 <b>데이라잇까지</b> 뻗는가
+        {
+            int noLeg = 0; double worstLeg = 0;
+            for (int k = 0; k < slab.Count; k++)
+                if (dMax[k] < 24.5 - 0.6) { noLeg++; worstLeg = System.Math.Max(worstLeg, 24.5 - dMax[k]); }
+            Check($"S119 ★★★줄이 <b>ㄷ자</b>다 — 날개가 데이라잇까지 뻗는다({nm}·{spotNm})",
+                  slab.Count >= 3 && noLeg == 0,
+                  noLeg == 0 ? $"줄 {slab.Count}개 모두 날개가 24.5m까지 뻗는다"
+                             : $"<b>{noLeg}줄이 전면뿐</b>(최대 {worstLeg:0.##}m 모자람) — 모따기지 날개벽이 아니다");
+        }
+
+        // ②한 단 = 줄 둘(면 + 소단) — 내밀기 <b>최솟값</b>으로 잰다
+        {
+            double faceRun = System.Math.Max(5 * par119.MinSlope, par119.MinFaceRun);
+            int nb = 0, badZ = 0, badW = 0, badF = 0;
+            double worstW = 0, worstF = 0;
+            for (int k = 1; k + 1 < slab.Count; k += 2)
+            {
+                nb++;
+                double df = dMin[k] - dMin[k - 1];
+                double dw = dMin[k + 1] - dMin[k];
+                if (System.Math.Abs(slab[k][0].Z - slab[k + 1][0].Z) > 1e-6) badZ++;
+                if (System.Math.Abs(df - faceRun) > 0.02)
+                { badF++; worstF = System.Math.Max(worstF, System.Math.Abs(df - faceRun)); }
+                if (System.Math.Abs(dw - 1.0) > 0.02)
+                { badW++; worstW = System.Math.Max(worstW, System.Math.Abs(dw - 1.0)); }
+            }
+            Console.WriteLine($"      S119 [{nm}·{spotNm}] 프로파일 — 줄 {slab.Count}개 · 잰 단 {nb}개"
+                + $" · 내밀기 {dMin[0]:0.###}~{dMin[slab.Count - 1]:0.###}m · 날개 끝 {dMax[0]:0.#}m");
+            Check($"S119 ★★★<b>면과 소단이 번갈아</b> 나온다({nm}·{spotNm})",
+                  nb >= 1 && badZ == 0 && badW == 0 && badF == 0,
+                  $"잰 단 {nb}개 · 표고 {badZ} · 면 run {badF}(기대 {faceRun:0.###}m · 최악 {worstF:0.###}m)"
+                + $" · 소단폭 {badW}(기대 1.00m · 최악 {worstW:0.###}m)");
+        }
+
+        // ③마지막은 <b>옹벽(면)</b>에서 끝난다
+        {
+            double faceRun = System.Math.Max(5 * par119.MinSlope, par119.MinFaceRun);
+            double lastStep = slab.Count >= 2 ? dMin[slab.Count - 1] - dMin[slab.Count - 2] : -1;
+            Check($"S119 ★★★마지막이 <b>소단이 아니라 옹벽(면)</b>에서 끝난다({nm}·{spotNm})",
+                  System.Math.Abs(lastStep - faceRun) < 0.02,
+                  $"마지막 두 줄 사이 {lastStep:0.###}m — 면 run {faceRun:0.###}m면 면에서 끝");
+        }
+
+        // ④밑줄의 <b>전면</b>이 찍은 선 그 자리인가(날개는 밖으로 나가므로 최솟값으로 잰다)
+        Check($"S119 ★★★밑줄의 <b>전면</b>이 찍은 선 그 자리다({nm}·{spotNm})",
+              dMin[0] < 0.05 && System.Math.Abs(zLo - 105.0) < 0.05,
+              $"밑줄 내밀기 최소 {dMin[0]:0.###}m(0이어야) · 최대 {dMax[0]:0.#}m(날개 끝)"
+            + $" · 밑줄 표고 {zLo:0.##}m(105여야)");
+
+        // ⑤쐐기 폴리곤이 <b>데이라잇까지</b> 가는가(JACK: "평면뷰 기준 데이라잇까지 가지도 않았어")
+        {
+            double wMax = 0;
+            if (wedge119 != null) foreach (var q in wedge119) wMax = System.Math.Max(wMax, OffOf(q));
+            Check($"S119 ★★★쐐기 폴리곤이 <b>데이라잇까지</b> 간다({nm}·{spotNm})",
+                  wedge119 != null && wedge119.Count >= 8 && wMax > 24.5 - 0.6,
+                  $"쐐기 {wedge119?.Count ?? 0}점 · 가장 먼 내밀기 {wMax:0.##}m / 목표 24.5m");
+        }
+
+        // ⑥발자국 폴리곤은 <b>벽까지만</b>(표면 경계로 쓴다 — 쐐기를 쓰면 빈 자리를 보간이 메운다)
+        {
+            double fMax = 0;
+            if (poly119 != null) foreach (var q in poly119) fMax = System.Math.Max(fMax, OffOf(q));
+            Check($"S119 ★★★발자국 폴리곤은 <b>벽 끝까지만</b>이다({nm}·{spotNm})",
+                  poly119 != null && poly119.Count >= 8 && fMax > 24.5 - 0.6,
+                  $"발자국 {poly119?.Count ?? 0}점 · 가장 먼 내밀기 {fMax:0.##}m"
+                + " (ㄷ자라 날개가 데이라잇까지 가므로 이 값도 24.5m 근처가 맞다)");
         }
     }
 }
@@ -11125,6 +11579,693 @@ static IReadOnlyList<IReadOnlyList<Point3>> WallBlocks_TryBuild(List<Point3> bnd
     }
 }
 
+// ══════════════════════════════════════════════════════════════════════════════════
+// S12x ★★★[팀장요청 0914 · 계측] <b>뚜껑(옹벽뚜껑A/B) 셈의 링을 잰다</b> — DHGRADE_진단.log 18:06.
+//
+//   임무: ②③④⑤의 실측값을 오프라인으로 재현·계측한다. 출하 코드(src/)는 절대 안 고친다 —
+//   GradingGeometry.RingDifference(src/DH.Grading.Core/GradingGeometry.cs:1186)를 <b>그대로</b> 부른다.
+//
+//   현장 로그(DHGRADE_진단.log:150~158) 요약:
+//     ②옹벽∩원지반 — 교선 2개 · 가장 넓은 것 300점 · 103.3㎡ = "A"
+//     ③옹벽∩정지면 — 교선 2개 · 가장 넓은 것 103점 · 26.4㎡(이번 단계 안 씀)
+//     ④넓이대조 — 쐐기 1243.7㎡ · 발자국(띠) 296.3㎡ · A 103.3㎡ → 옹벽 몫 193.0㎡ · 뚜껑 1050.8㎡
+//     ④옹벽자름(AddHideBoundary(slabT, A)) — 원본·정규화 둘 다 IllegalBoundary
+//     ⑤뚜껑A(RingDifference(쐐기,발자국)→ReplaceOuterBoundary) — 143점 · 948.3㎡(기대 947.5) · <b>원본으로 성공</b>
+//     ⑤뚜껑B(ReplaceOuterBoundary(t2L, A)) — 원본·정규화(CleanRing) 둘 다 IllegalBoundary
+//   ★뚜껑A만 GradingGeometry.RingDifference(NTS Buffer(0) 포함)를 거쳤고, 뚜껑B/④는 raw 링 A를
+//     RingDifference 없이 직접 넣었다(CreateGradingCommand.cs:1233 vs :1219,:1252) — 이 차이가 S122의 핵심 가설이다.
+// ══════════════════════════════════════════════════════════════════════════════════
+
+/// <summary>[S12x] 링 하나의 위생 상태를 한 번에 잰다 — 닫힘·중복점·짧은변·자기교차·간격·방향·볼록성.
+/// <para>링은 <b>닫힌 표현</b>(ring[0]==ring[^1])을 전제한다 — RingDifference의 출력·ClosedRing 관례와 같다.</para></summary>
+static (bool Closed, double CloseGap, int ExactDup, int NearDup1e6, int ZeroLen, int ShortUnder1e3,
+        double MinSpacing, double MaxSpacingNZ, int SelfX, bool CCW, bool Convex, double Area, int N)
+    RingHealth(IReadOnlyList<Point3> ring)
+{
+    int n = ring.Count;
+    if (n < 2) return (false, double.NaN, 0, 0, 0, 0, double.NaN, double.NaN, 0, false, false, 0, n);
+    double cgx = ring[0].X - ring[n - 1].X, cgy = ring[0].Y - ring[n - 1].Y;
+    double closeGap = Math.Sqrt(cgx * cgx + cgy * cgy);
+    bool closed = closeGap < 1e-9;
+
+    int exactDup = 0, nearDup = 0, zeroLen = 0, shortU = 0;
+    double minSp = double.MaxValue, maxSpNZ = 0;
+    for (int i = 0; i + 1 < n; i++)
+    {
+        double dx = ring[i + 1].X - ring[i].X, dy = ring[i + 1].Y - ring[i].Y;
+        double d = Math.Sqrt(dx * dx + dy * dy);
+        if (d < 1e-9) { exactDup++; zeroLen++; }
+        else if (d < 1e-6) nearDup++;
+        if (d < 1e-3) shortU++;
+        if (d < minSp) minSp = d;
+        if (d > 1e-9 && d > maxSpNZ) maxSpNZ = d;
+    }
+    if (minSp == double.MaxValue) minSp = double.NaN;
+
+    // 자기교차 — S111(9455행 부근)과 같은 방식: 안 이웃한 변끼리 <b>내부에서 진짜로</b> 교차하는가.
+    //   닫힌 링 관례(ring[0]==ring[^1])라 변은 n-1개(인덱스 i의 변 = ring[i]→ring[i+1]), 랩어라운드 쌍만 특별 제외.
+    int m = n - 1; // 변 개수
+    int cross = 0;
+    for (int i = 0; i + 1 < m; i++)
+        for (int j = i + 2; j < m; j++)
+        {
+            if (i == 0 && j == m - 1) continue; // 첫 변·마지막 변은 닫는 점에서 만나는 이웃 — 교차 아님
+            var a1 = ring[i]; var a2 = ring[i + 1]; var b1 = ring[j]; var b2 = ring[j + 1];
+            double rx = a2.X - a1.X, ry = a2.Y - a1.Y, sx = b2.X - b1.X, sy = b2.Y - b1.Y;
+            double den = rx * sy - ry * sx;
+            if (Math.Abs(den) < 1e-12) continue;
+            double qx = b1.X - a1.X, qy = b1.Y - a1.Y;
+            double u = (qx * sy - qy * sx) / den, v = (qx * ry - qy * rx) / den;
+            if (u > 1e-9 && u < 1 - 1e-9 && v > 1e-9 && v < 1 - 1e-9) cross++;
+        }
+
+    double area2 = SignedArea2(ring); // 표준 신발끈(양수=CCW) — Shoelace()와 부호 관례가 달라 따로 둔다(자체검증 S12x0)
+    bool ccw = area2 > 0;
+
+    // 볼록성 — 닫는 점을 뺀 m개 정점에서 도는 방향이 전부 같은가(공선 허용오차 있음).
+    bool convex = true;
+    if (m >= 3)
+    {
+        int sign = 0;
+        for (int i = 0; i < m; i++)
+        {
+            var p0 = ring[(i - 1 + m) % m]; var p1 = ring[i]; var p2 = ring[(i + 1) % m];
+            double cx = (p1.X - p0.X) * (p2.Y - p1.Y) - (p1.Y - p0.Y) * (p2.X - p1.X);
+            if (Math.Abs(cx) < 1e-9) continue; // 공선 — 통과
+            int s = cx > 0 ? 1 : -1;
+            if (sign == 0) sign = s;
+            else if (s != sign) { convex = false; break; }
+        }
+    }
+    return (closed, closeGap, exactDup, nearDup, zeroLen, shortU, minSp, maxSpNZ, cross, ccw, convex, Math.Abs(area2) / 2.0, n);
+}
+
+/// <summary>표준 신발끈 2×넓이(부호=방향, 양수 CCW) — Σ(x_i·y_{i+1} − x_{i+1}·y_i). Shoelace()와는 부호 관례가 다르다(따로 둔 이유).</summary>
+static double SignedArea2(IReadOnlyList<Point3> r)
+{
+    double a = 0; int n = r.Count;
+    for (int i = 0; i + 1 < n; i++) a += r[i].X * r[i + 1].Y - r[i + 1].X * r[i].Y;
+    return a;
+}
+
+/// <summary>[S122] <b>비연속</b> 재방문(핀치 후보) — 닫는 종점을 뺀 정점들 중 같은 XY(1e-9)가 <b>이웃이 아닌</b> 자리에
+/// 두 번 이상 나오는 좌표 개수. RingHealth의 ExactDup은 <b>연속</b> 중복(길이0 변)만 잡으므로,
+/// 핀치 링(정사각형 둘이 한 점에서 만나는 모양)의 "중복점"은 그쪽에서 0으로 읽혀 <b>따로 재야</b> 한다.</summary>
+static int CountNonAdjacentRevisits(IReadOnlyList<Point3> ring)
+{
+    int m = ring.Count - 1; // 닫는 종점 제외 고유 정점 개수
+    if (m < 1) return 0;
+    int revisits = 0;
+    for (int i = 0; i < m; i++)
+        for (int j = i + 1; j < m; j++)
+        {
+            bool adjacent = j == i + 1 || (i == 0 && j == m - 1);
+            if (adjacent) continue;
+            double dx = ring[i].X - ring[j].X, dy = ring[i].Y - ring[j].Y;
+            if (dx * dx + dy * dy < 1e-18) revisits++;
+        }
+    return revisits;
+}
+
+/// <summary>닫힌 링(Point3, 중복 종점 포함)을 NTS Coordinate[]로 — RingDifference 속 ClosedRing과 같은 규칙(자체 구현 — src 안 건드림).</summary>
+static Coordinate[] CloseXY(IReadOnlyList<Point3> r)
+{
+    int n = r.Count;
+    bool shut = n >= 2 && Math.Abs(r[0].X - r[n - 1].X) < 1e-9 && Math.Abs(r[0].Y - r[n - 1].Y) < 1e-9;
+    var c = new Coordinate[shut ? n : n + 1];
+    for (int i = 0; i < n; i++) c[i] = new Coordinate(r[i].X, r[i].Y);
+    if (!shut) c[n] = new Coordinate(r[0].X, r[0].Y);
+    return c;
+}
+
+// ── S120 ★★★<b>RingDifference(쐐기−발자국) 출력 링의 위생</b> — 현장 재현(변 가운데, 코너 안 낌) ──
+{
+    Console.WriteLine("\n== S120 RingDifference(쐐기−발자국) 출력 링의 위생 — 현장 18:06 재현 ==");
+
+    // ★0 자체검증 — 이 잣대(RingHealth·SignedArea2)부터 믿을 수 있는지 잰다(추측 금지 원칙).
+    {
+        var ccwSq = new List<Point3> { new(0, 0, 0), new(10, 0, 0), new(10, 10, 0), new(0, 10, 0), new(0, 0, 0) };
+        var cwSq = new List<Point3> { new(0, 0, 0), new(0, 10, 0), new(10, 10, 0), new(10, 0, 0), new(0, 0, 0) };
+        var hCcw = RingHealth(ccwSq); var hCw = RingHealth(cwSq);
+        Check("S120 ★자체검증 — CCW 정사각형을 CCW로 잰다", hCcw.CCW, $"방향={(hCcw.CCW ? "CCW" : "CW")}");
+        Check("S120 ★자체검증 — CW 정사각형을 CW로 잰다", !hCw.CCW, $"방향={(hCw.CCW ? "CCW" : "CW")}");
+        Check("S120 ★자체검증 — 정사각형 넓이 100", Math.Abs(hCcw.Area - 100) < 1e-9, $"{hCcw.Area:0.###}");
+        Check("S120 ★자체검증 — 정사각형은 닫히고 볼록이고 자기교차 0", hCcw.Closed && hCcw.Convex && hCcw.SelfX == 0,
+              $"닫힘={hCcw.Closed}·볼록={hCcw.Convex}·자기교차={hCcw.SelfX}");
+        var bowtieChk = new List<Point3> { new(0, 0, 0), new(10, 10, 0), new(10, 0, 0), new(0, 10, 0), new(0, 0, 0) };
+        var hBow = RingHealth(bowtieChk);
+        Check("S120 ★자체검증 — 이 잣대가 나비넥타이(자기교차 1)를 잡는다", hBow.SelfX == 1, $"자기교차 {hBow.SelfX}곳(기대 1)");
+    }
+
+    var par120 = new GradingParams
+    {
+        CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 1.5, FillSlope = 1.5, CellSize = 0.5, MaxBenches = 20, MaxRise = 60,
+        VertexSpacing = 1.0, MinSlope = 0.01, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+    // 현장과 같은 판(DHGRADE_진단.log:6~8) — 55.7 × 84.35(둘레 280.1m), 찍은 선 표고 105 (S119의 pad119와 동일 규격).
+    var pad120 = new List<Point3> { new(0, 0, 105), new(55.7, 0, 105), new(55.7, 84.35, 105), new(0, 84.35, 105) };
+    var c120 = GradingGeometry.CumLen2D(pad120);
+    // 현장과 같은 구간(DHGRADE_진단.log:99 "적용 구간 = 부분 지정 [220.95 ~ 271.68]") — 왼쪽 변 한가운데(코너 안 낌).
+    double t0120 = 220.95, t1120 = 271.68;
+    // 옛 사면 데이라잇 23.26~27.83m(DHGRADE_진단.log:127 "①-f") — 한 값이 아니라 자리마다 물결치게 흉내(실제는 더 거칠 것).
+    double farLo120 = 23.26, farHi120 = 27.83;
+    double FarAt120(double t)
+    {
+        double u = (t - t0120) / (t1120 - t0120);
+        double w = 0.5 - 0.5 * Math.Cos(u * Math.PI * 4.6);
+        return farLo120 + (farHi120 - farLo120) * w;
+    }
+    // 원지반 — 판 바깥(−X쪽)으로 갈수록 오른다. 발자국 근방 최고 ≈121.6㎡(로그 129행)를 겨냥한 <b>재현용 평면</b>
+    // (실제 지형의 대역이 아니다 — 규모만 맞춘다. 이 값 자체가 추측이라고 밝혀 둔다).
+    var gnd120 = new TiltGround(0, 0, 105.0, -0.6, 0.0);
+
+    var slab120 = GradingGeometry.WallInWedge(pad120, c120, t0120, t1120, farAt: FarAt120, daylightDist: farHi120,
+                      ground: gnd120, p: par120, up: true, slope: 0.01, benchW: 1.0,
+                      polygon: out var foot120, wedgePolygon: out var wedge120, log: out string log120);
+    Console.WriteLine($"      S120 {log120}");
+    Check("S120 시험 조건 — 줄·쐐기·발자국이 다 나온다",
+          slab120.Count >= 3 && wedge120 != null && wedge120.Count >= 4 && foot120 != null && foot120.Count >= 4,
+          $"줄 {slab120.Count} · 쐐기 {wedge120?.Count ?? 0}점 · 발자국 {foot120?.Count ?? 0}점");
+
+    if (wedge120 != null && foot120 != null)
+    {
+        double areaW120 = Math.Abs(Shoelace(wedge120)), areaF120 = Math.Abs(Shoelace(foot120));
+        Console.WriteLine($"      S120 넓이 — 쐐기 {areaW120:F1}㎡({wedge120.Count}점) · 발자국 {areaF120:F1}㎡({foot120.Count}점)"
+            + $" (현장 로그: 쐐기 1243.7㎡·104점 · 발자국 296.3㎡·191점 — 규모 대조용, 정확 일치는 기대하지 않는다)");
+
+        // ★출하 함수 그대로 부른다 — src/DH.Grading.Core/GradingGeometry.cs:1186. 손 안 댐.
+        var lidRings120 = GradingGeometry.RingDifference(wedge120, foot120,
+                              wedge120.Count > 0 ? wedge120[0].Z : 0.0, par120.VertexSpacing);
+        Check("S120 ★RingDifference가 조각을 낸다", lidRings120.Count >= 1, $"조각 {lidRings120.Count}개");
+
+        List<Point3>? widest120 = null; double bestArea120 = 0;
+        foreach (var r in lidRings120)
+        { double a = Math.Abs(Shoelace(r)); if (a > bestArea120) { bestArea120 = a; widest120 = r; } }
+
+        if (widest120 != null)
+        {
+            var h = RingHealth(widest120);
+            Console.WriteLine($"      S120 [가장 넓은 조각] {widest120.Count}점 · {bestArea120:F1}㎡"
+                + $" · 닫힘={h.Closed}(틈 {h.CloseGap:0.###e+0}m) · 완전중복 {h.ExactDup} · 근접중복(<1e-6) {h.NearDup1e6}"
+                + $" · 길이0 변 {h.ZeroLen} · 1e-3m 미만 변 {h.ShortUnder1e3}"
+                + $" · 간격 {h.MinSpacing:0.####}~{h.MaxSpacingNZ:0.##}m(0 제외)"
+                + $" · 자기교차 {h.SelfX}곳 · 방향={(h.CCW ? "CCW" : "CW")} · {(h.Convex ? "볼록" : "오목")}");
+            Console.WriteLine($"      S120 참고 — 현장 143점/948.3㎡(기대 947.5) 대조: 이 재현은 {widest120.Count}점/{bestArea120:F1}㎡");
+
+            Check("S120 ★★★출력 링이 닫혀 있다(첫점=끝점, 정확히)", h.Closed, $"틈 {h.CloseGap:0.###e+0}m");
+            Check("S120 ★★★출력 링에 완전중복(길이0) 연속점이 없다", h.ExactDup == 0, $"완전중복 {h.ExactDup}개");
+            Check("S120 ★★★출력 링에 자기교차가 없다", h.SelfX == 0, $"자기교차 {h.SelfX}곳");
+            Check("S120 출력 링에 1e-3m 미만 변이 없다", h.ShortUnder1e3 == 0, $"짧은 변 {h.ShortUnder1e3}개");
+            Console.WriteLine(h.Convex
+                ? "      S120 참고 — 볼록(쐐기−발자국 치고는 드묾 — 파라미터를 다시 볼 것)"
+                : "      S120 참고 — 오목(ㄷ자 빈 가운데를 빼는 셈이므로 정상)");
+        }
+        else Console.WriteLine("      S120 ⚠조각이 하나도 안 나왔다 — 아래 항목은 못 잰다");
+    }
+}
+
+// ── S121 ★★★<b>GetExactDaylight 링과의 대조</b> — Civil3D 타입 의존 때문에 <b>못 돌린다</b>는 것부터 잰다 ──
+{
+    Console.WriteLine("\n== S121 GetExactDaylight(②옹벽∩원지반 → A) 대조 — 실행 가능성부터 계측 ==");
+
+    // ★추측이 아니라 실제 파일을 읽어 의존성을 <b>잰다</b> — repo 루트를 실행 위치와 무관하게 찾는다.
+    string? FindUp(string startDir, string relTarget)
+    {
+        var dir = new System.IO.DirectoryInfo(startDir);
+        for (int i = 0; i < 8 && dir != null; i++, dir = dir.Parent)
+        {
+            var cand = System.IO.Path.Combine(dir.FullName, relTarget);
+            if (System.IO.File.Exists(cand)) return cand;
+        }
+        return null;
+    }
+    string? blocktestCsproj = FindUp(AppContext.BaseDirectory, "tools/blocktest/blocktest.csproj")
+                           ?? FindUp(System.IO.Directory.GetCurrentDirectory(), "tools/blocktest/blocktest.csproj");
+    string? rawFinderCs = FindUp(AppContext.BaseDirectory, "src/DH.Grading.Civil/RawTriangleIntersectionFinder.cs")
+                       ?? FindUp(System.IO.Directory.GetCurrentDirectory(), "src/DH.Grading.Civil/RawTriangleIntersectionFinder.cs");
+
+    if (blocktestCsproj == null || rawFinderCs == null)
+    {
+        Check("S121 시험 조건 — 관련 파일을 찾았다(repo 루트 탐색)", false,
+              $"blocktest.csproj={(blocktestCsproj != null)} · RawTriangleIntersectionFinder.cs={(rawFinderCs != null)}"
+            + " — 못 찾으면 아래는 다 '못 쟀다'");
+    }
+    else
+    {
+        string csprojTxt = System.IO.File.ReadAllText(blocktestCsproj);
+        string finderTxt = System.IO.File.ReadAllText(rawFinderCs);
+        bool refsCivilProj = csprojTxt.Contains("DH.Grading.Civil");
+        bool finderUsesAutocad = finderTxt.Contains("using Autodesk.AutoCAD.Geometry;")
+                               && finderTxt.Contains("using Autodesk.Civil.DatabaseServices;");
+        bool finderUsesTinSurface = finderTxt.Contains("TinSurface");
+        Console.WriteLine($"      S121 [실측] {blocktestCsproj} → DH.Grading.Civil 참조 = {refsCivilProj}");
+        Console.WriteLine($"      S121 [실측] {rawFinderCs} → Autodesk.AutoCAD/Civil using = {finderUsesAutocad}"
+            + $" · TinSurface 사용 = {finderUsesTinSurface}");
+        Check("S121 ★★★blocktest는 DH.Grading.Civil을 참조하지 않는다(csproj 실측)", !refsCivilProj,
+              refsCivilProj ? "참조함(예상과 다름 — 재확인 필요)" : "참조 없음 — RawTriangleIntersectionFinder에 못 닿는다");
+        Check("S121 ★★★GetExactDaylight은 Autodesk.AutoCAD/Civil·TinSurface에 의존한다(소스 실측)",
+              finderUsesAutocad && finderUsesTinSurface,
+              $"AutoCAD/Civil using={finderUsesAutocad} · TinSurface 사용={finderUsesTinSurface}");
+        Console.WriteLine("      S121 ⚠결론 — 위 두 줄이 참이면 GetExactDaylight는 이 오프라인 콘솔(dotnet run)에서"
+            + " <b>원천적으로 못 돌린다</b>(TinSurface는 살아있는 Civil3D 문서가 있어야 존재한다)."
+            + " 아래는 <b>실행이 아니라 코드를 읽어</b> 남는 성질을 추론한 것 — '쟀다'가 아니라 '읽었다'로 표시한다.");
+    }
+
+    // ★코드로 읽은 것(추측 아님, 파일:줄 인용) — 실행해서 잰 것이 아니므로 Check가 아니라 로그로만 남긴다.
+    Console.WriteLine("      S121 [코드 근거 — 실행 아님] RawTriangleIntersectionFinder.GetExactDaylight:");
+    Console.WriteLine("        · 세그먼트 끝점을 3mm 해시그리드로 강제 융합(SnapTolerance=0.003, .cs:26,320-330)"
+        + " → 인접 세그먼트 이음매는 합쳐지지만 <b>먼 곳의 우연한 좌표 일치까지는 안 잡는다</b>.");
+    Console.WriteLine("        · UnaryUnionOp.Union으로 겹침을 노딩한 뒤 LineMerger로 체인을 잇는다(.cs:336-340)"
+        + " → 이 단계는 <b>선의 위상만</b> 다루고 결과 링이 단순(simple)한지는 검사하지 않는다.");
+    Console.WriteLine("        · 열린 체인 끝점을 최대 15m까지, '두 표면 위에 계속 있는지' 촘촘히 검증하며 잇는다"
+        + "(OnBothSurfaces, .cs:474-487, 508) → 검증은 <b>표고차</b>만 보지 <b>평면 자기교차</b>는 안 본다.");
+    Console.WriteLine("        · RemoveFoldbacks가 <b>연속</b> 중복점(길이0 변)과 180°에 가까운 짧은 되꺾임만 지운다"
+        + "(.cs:1437-1455, l1<1e-9||l2<1e-9 검사) → <b>안 이웃한</b> 자기교차·자기접촉(핀치)은 이 함수의 대상이 아니다.");
+    Console.WriteLine("        · CleanRing은 Buffer(0).Buffer(-0.005).Buffer(0.005)(5mm 열기)를 쓴다(.cs:1346)"
+        + " — RingDifference의 Buffer(0) 한 번보다 <b>강하다</b>(가는 실오라기까지 지운다).");
+    Console.WriteLine("        · 그런데도 현장 로그(DHGRADE_진단.log:156,158)에서 A는 <b>CleanRing 정규화 뒤에도"
+        + " IllegalBoundary였다</b> — S122에서 이 '5mm 열기로도 안 낫는' 병을 흉내 낼 수 있는지 확인한다.");
+    Console.WriteLine("        · 결론(코드 근거, 실행 검증 아님) — 이 파이프라인 어디에도 '자기교차 카운트·Buffer(0)"
+        + " 정리'가 <b>자동으로는</b> 없다(CleanRing은 특정 호출부에서만 <b>선택적으로</b> 씀,"
+        + " CreateGradingCommand.cs:1154). 그러니 A가 자기교차나 핀치를 갖고 나올 <b>가능성 자체는 코드로 배제할 수 없다</b>"
+        + " — 이건 추측이다, 실측 아님.");
+}
+
+// ── S122 ★★★<b>가설 검증</b> — 병든 링을 NTS(CreatePolygon→Buffer(0)→ExteriorRing)로 한 번 통과시키면 낫는가 ──
+{
+    Console.WriteLine("\n== S122 Buffer(0) 가설 — 일부러 병든 링을 만들어 실측 ==");
+    var gf122 = new GeometryFactory();
+
+    // 진단 도구 — 병든 링 → (원시 NTS 파이프라인 결과, 출하 RingDifference 결과)를 한 번에 잰다.
+    void Probe(string label, List<Point3> diseased)
+    {
+        var hBefore = RingHealth(diseased);
+        int revisits = CountNonAdjacentRevisits(diseased);
+        Console.WriteLine($"      S122 [{label}] 병든 링 입력 — {diseased.Count}점 · 닫힘={hBefore.Closed}"
+            + $" · 완전중복(연속) {hBefore.ExactDup} · 비연속 재방문(핀치 후보) {revisits}"
+            + $" · 자기교차 {hBefore.SelfX} · 넓이(신발끈) {hBefore.Area:0.###}");
+
+        // (a) 가설이 말한 그대로 — CreatePolygon → Buffer(0) → ExteriorRing (raw NTS, Weed/Densify 없음).
+        //   ★<b>무조건</b> Buffer(0)을 먹인다(팀장이 말한 가설 그대로) — IsValid로 건너뛰지 않는다.
+        try
+        {
+            var poly = gf122.CreatePolygon(CloseXY(diseased));
+            bool wasValid = poly.IsValid;
+            Geometry cleaned = poly.Buffer(0.0);
+            int ng = cleaned.NumGeometries;
+            var pieceAreas = new List<double>();
+            for (int i = 0; i < ng; i++) pieceAreas.Add(cleaned.GetGeometryN(i).Area);
+            Console.WriteLine($"      S122 [{label}] (a)raw CreatePolygon.IsValid(정리 전)={wasValid} → Buffer(0) — NumGeometries={ng}"
+                + $" · 조각 넓이=[{string.Join(", ", pieceAreas.ConvertAll(a => a.ToString("0.###")))}]"
+                + $" · 합계 {pieceAreas.Sum():0.###}(입력 신발끈 {hBefore.Area:0.###}과 대조)");
+
+            if (cleaned is Polygon pg1)
+            {
+                var h1 = RingFromNts(pg1);
+                Console.WriteLine($"      S122 [{label}] (a)raw 결과(가장/유일 폴리곤) — {h1.N}점 · 닫힘={h1.Closed}"
+                    + $" · 완전중복 {h1.ExactDup} · 자기교차 {h1.SelfX} · 방향={(h1.CCW ? "CCW" : "CW")}");
+                Check($"S122 [{label}] (a)raw Buffer(0) 결과는 자기교차가 없다", h1.SelfX == 0, $"자기교차 {h1.SelfX}곳");
+                Check($"S122 [{label}] (a)raw Buffer(0) 결과는 완전중복점이 없다", h1.ExactDup == 0, $"완전중복 {h1.ExactDup}개");
+            }
+            else if (cleaned is MultiPolygon mp1)
+            {
+                Console.WriteLine($"      S122 [{label}] (a)raw 결과 = MultiPolygon({mp1.NumGeometries}조각) — 조각별로 잰다");
+                bool anyBad = false;
+                for (int i = 0; i < mp1.NumGeometries; i++)
+                {
+                    var h1 = RingFromNts((Polygon)mp1.GetGeometryN(i));
+                    Console.WriteLine($"      S122 [{label}] (a)raw 조각[{i}] — {h1.N}점 · {mp1.GetGeometryN(i).Area:0.###}㎡"
+                        + $" · 자기교차 {h1.SelfX} · 완전중복 {h1.ExactDup}");
+                    if (h1.SelfX != 0 || h1.ExactDup != 0) anyBad = true;
+                }
+                Check($"S122 [{label}] (a)raw — 쪼개진 조각들도 전부 깨끗하다", !anyBad, anyBad ? "조각 중 병든 것 있음" : "전부 깨끗");
+            }
+            else
+                Console.WriteLine($"      S122 [{label}] (a)raw 결과 타입 = {cleaned.GeometryType}(폴리곤류 아님 — 면이 통째로 사라졌을 수 있다)");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"      S122 [{label}] (a)raw 파이프라인 예외 — {ex.GetType().Name}: {ex.Message}");
+            Check($"S122 [{label}] (a)raw Buffer(0)이 예외 없이 돈다", false, ex.GetType().Name);
+        }
+
+        // (b) 출하 함수 그대로 — GradingGeometry.RingDifference(diseased, null, z, dens) (Weed+Densify 포함)
+        var rd = GradingGeometry.RingDifference(diseased, null, diseased.Count > 0 ? diseased[0].Z : 0.0, 1.0);
+        Console.WriteLine($"      S122 [{label}] (b)RingDifference(출하 그대로) — 조각 {rd.Count}개"
+            + $" · 넓이=[{string.Join(", ", rd.ConvertAll(r => Math.Abs(Shoelace(r)).ToString("0.###")))}]");
+        bool rdBad = false;
+        foreach (var r in rd)
+        {
+            var h2 = RingHealth(r);
+            if (h2.SelfX != 0 || h2.ExactDup != 0 || !h2.Closed) rdBad = true;
+            Console.WriteLine($"      S122 [{label}] (b) 조각 — {h2.N}점 · 닫힘={h2.Closed} · 완전중복 {h2.ExactDup}"
+                + $" · 자기교차 {h2.SelfX} · 짧은변(<1e-3) {h2.ShortUnder1e3}");
+        }
+        Check($"S122 [{label}] (b)RingDifference(그대로) 결과가 전부 깨끗하다", rd.Count > 0 && !rdBad,
+              rd.Count == 0 ? "조각 0개(다 사라짐)" : (rdBad ? "병든 조각이 남아 있다" : "전부 깨끗"));
+    }
+
+    // 자기교차 하나(나비넥타이=8자 모양) — 대각선 둘이 한가운데서 교차.
+    Probe("자기교차1(=8자모양)", new List<Point3> { new(0, 0, 0), new(10, 10, 0), new(10, 0, 0), new(0, 10, 0), new(0, 0, 0) });
+    // ★위 결과가 점 순서(감는 방향)의 우연인지 확인 — 같은 나비넥타이를 <b>반대 순서</b>로 감아 본다.
+    Probe("자기교차1(역순)", new List<Point3> { new(0, 0, 0), new(0, 10, 0), new(10, 0, 0), new(10, 10, 0), new(0, 0, 0) });
+    // ★대각선 쌍을 바꿔도(다른 두 점을 먼저 잇고 나중에 교차) 마찬가지인지 — 세 번째 독립 확인.
+    Probe("자기교차1(다른 짝)", new List<Point3> { new(0, 10, 0), new(10, 0, 0), new(0, 0, 0), new(10, 10, 0), new(0, 10, 0) });
+
+    // 중복점 몇 개 — 안 이웃한 꼭짓점에서 같은 자리로 되돌아오는 <b>핀치(자기접촉)</b>: 정사각형 둘이 원점 한 점에서 만난다.
+    //   [0728 — 계단식 산지 IllegalBoundary] 주석(RawTriangleIntersectionFinder.cs:614~615)이 말한 그 결함 모양.
+    Probe("중복점(핀치 링)", new List<Point3> {
+        new(0,0,0), new(10,0,0), new(10,10,0), new(0,10,0), new(0,0,0),
+        new(-10,0,0), new(-10,-10,0), new(0,-10,0), new(0,0,0) });
+
+    // 길이 0 변 — 그 외엔 멀쩡한 사각형에 한 점만 그대로 반복.
+    Probe("길이0변", new List<Point3> { new(0, 0, 0), new(10, 0, 0), new(10, 0, 0), new(10, 10, 0), new(0, 10, 0), new(0, 0, 0) });
+
+    // 종합(자기교차+중복점+길이0변을 한 링에) — GetExactDaylight가 낼 법한 <b>최악의 경우</b> 흉내.
+    Probe("종합(자기교차+중복+길이0)", new List<Point3> {
+        new(0, 0, 0), new(0, 0, 0), new(10, 10, 0), new(10, 0, 0), new(0, 10, 0), new(0, 10, 0), new(0, 0, 0) });
+}
+
+// ── S123 ★★★<b>넓이 장부</b> — 쐐기 = 옹벽 몫 + 뚜껑A + 뚜껑B, 현장 18:06 로그값으로 산수 ──
+{
+    Console.WriteLine("\n== S123 넓이 장부 — DHGRADE_진단.log:155,157,158 값으로 산수 ==");
+    // DHGRADE_진단.log:155 — 쐐기 1243.7㎡ · 발자국(띠) 296.3㎡ · A 103.3㎡ → 옹벽이 남길 몫 193.0㎡ · 뚜껑 1050.8㎡
+    double wedgeLog = 1243.7, footLog = 296.3, aLog = 103.3;
+    double wallShareLog = footLog - aLog;              // 로그가 보인 산식 그대로(193.0)
+    double lidTotalLog = wedgeLog - footLog + aLog;    // 로그가 보인 산식 그대로(1050.8, 반올림 오차 0.1 포함)
+    Check("S123 로그 문장 재현 — 옹벽 몫 = 발자국 − A", Math.Abs(wallShareLog - 193.0) < 0.05, $"{wallShareLog:F1}㎡(로그 193.0)");
+    Check("S123 로그 문장 재현 — 뚜껑(총) = 쐐기 − 옹벽몫", Math.Abs(lidTotalLog - 1050.8) < 0.15, $"{lidTotalLog:F1}㎡(로그 1050.8)");
+
+    // DHGRADE_진단.log:157 — 뚜껑A(RingDifference, 실제로 성공해서 <b>측정된</b> 값) 143점 948.3㎡(기대 947.5㎡)
+    double lidA_measured = 948.3, lidA_expected = wedgeLog - footLog; // = 947.4 ≈ 로그가 적은 "기대 ≈947.5"(반올림차)
+    Check("S123 뚜껑A '기대값' 문구도 쐐기−발자국 산수와 맞는다", Math.Abs(lidA_expected - 947.5) < 0.15, $"{lidA_expected:F1}㎡(로그 표기 947.5)");
+
+    // ★뚜껑B는 IllegalBoundary로 <b>실패</b> — 링도 넓이도 '측정된' 적이 없다(DHGRADE_진단.log:158).
+    //   로그가 댄 "벽이 솟았던 자리 ≈103.3㎡"는 A의 넓이를 <b>그대로 재활용한 기대치</b>일 뿐,
+    //   뚜껑B 자신의 폴리곤을 재서 나온 수가 아니다 — 이 줄은 그 사실을 <b>수식으로</b> 못박는다(추측 표시).
+    double lidB_neverMeasured_guess = aLog; // = 103.3 — 코드가 그렇게 <b>주장</b>했을 뿐, 링이 없으니 검증 불가
+    Console.WriteLine("      S123 ⚠뚜껑B는 링 생성 자체가 실패했다(IllegalBoundary, 원본·정규화 둘 다)"
+        + $" — '{lidB_neverMeasured_guess:F1}㎡'는 <b>추측</b>이다(A의 넓이를 그대로 가져다 쓴 것, 실측 아님).");
+
+    // 장부: 쐐기 ?= 옹벽몫 + 뚜껑A(측정) + 뚜껑B(추측)
+    double sumMeasured = wallShareLog + lidA_measured + lidB_neverMeasured_guess;
+    double sumExpected = wallShareLog + lidA_expected + lidB_neverMeasured_guess;
+    Console.WriteLine($"      S123 장부(측정 뚜껑A=948.3 사용) — 옹벽몫 {wallShareLog:F1} + 뚜껑A {lidA_measured:F1}"
+        + $" + 뚜껑B(추측) {lidB_neverMeasured_guess:F1} = {sumMeasured:F1}㎡ vs 쐐기 {wedgeLog:F1}㎡"
+        + $" (차 {sumMeasured - wedgeLog:+0.0;-0.0;0.0}㎡)");
+    Console.WriteLine($"      S123 장부(기대 뚜껑A=947.4 사용) — 옹벽몫 {wallShareLog:F1} + 뚜껑A {lidA_expected:F1}"
+        + $" + 뚜껑B(추측) {lidB_neverMeasured_guess:F1} = {sumExpected:F1}㎡ vs 쐐기 {wedgeLog:F1}㎡"
+        + $" (차 {sumExpected - wedgeLog:+0.0;-0.0;0.0}㎡)");
+
+    // 산식상 항등식이므로(뚜껑B_추측 := A, 옹벽몫 := 발자국−A) 대수적으로는 반드시 맞는다 — 그걸 확인한다.
+    //   sumExpected = (발자국−A) + (쐐기−발자국) + A = 쐐기 (정확히, 반올림오차 안에서).
+    Check("S123 ★★★대수적으로는 항등식이다(뚜껑B를 A로 정의했으므로 당연히 맞는다)",
+          Math.Abs(sumExpected - wedgeLog) < 0.15, $"차 {sumExpected - wedgeLog:F2}㎡ — 0에 가까워야(로그 반올림 오차만)");
+    // ★측정값(948.3)을 쓰면 기대치(947.4)와의 차(0.9㎡)만큼 장부가 넘친다 — 이게 <b>진짜 누수</b>다.
+    Check("S123 ★★★실측 뚜껑A(948.3)를 쓰면 장부가 0.9㎡ 남짓 넘친다(RingDifference의 Weed/Densify 이산화 오차로 추정 — 추측)",
+          Math.Abs(sumMeasured - wedgeLog) < 1.5, $"차 {sumMeasured - wedgeLog:F2}㎡(허용 1.5㎡ 안 — 크게 벗어나면 다른 누수 의심)");
+    Console.WriteLine("      S123 결론 — 장부는 <b>정의상</b> 맞는다(뚜껑B := A로 정의됐으므로). 실측 뚜껑A를 쓰면 0.9㎡"
+        + " 뜨는데, 이는 산식 오류가 아니라 <b>뚜껑B가 한 번도 측정된 적이 없다</b>는 사실을 가린다 — "
+        + "뚜껑B의 '실제' 넓이(있었다면)는 이 산수로는 못 잰다(자문요청/실측 필요, 추측 금지).");
+}
+
+
+// ── S124 ★★★[JACK 0914] <b>칼금으로 조각내기</b>(SplitFaces) + <b>구멍 알림</b>(RingUnion) ──
+//   v93.2는 교선 링을 <b>경계</b>로 넣어 IllegalBoundary로 두 번 터졌다. v93.3은 링을 <b>칼금(선)</b>으로만
+//   쓰고, Civil에는 폴리고나이즈가 낸 테두리만 준다. 그 두 함수가 정말 그렇게 도는지 여기서 잰다.
+{
+    Console.WriteLine("\n== S124 칼금으로 조각내기(SplitFaces) · 구멍 알림(RingUnion) ==");
+
+    static double AreaOf(IReadOnlyList<Point3> r)
+    {
+        double a = 0;
+        for (int i = 0; i < r.Count; i++) { var u = r[i]; var v = r[(i + 1) % r.Count]; a += u.X * v.Y - v.X * u.Y; }
+        return Math.Abs(a) * 0.5;
+    }
+    static List<Point3> Box(double x0, double y0, double x1, double y1, double z = 0)
+        => new() { new(x0, y0, z), new(x1, y0, z), new(x1, y1, z), new(x0, y1, z) };
+
+    // ★0 자체검증 — 칼금이 없으면 판 하나가 그대로 나와야 한다(이 잣대가 눈뜬장님이 아님을 먼저 보인다)
+    {
+        var f0 = GradingGeometry.SplitFaces(Box(0, 0, 10, 10), null, 0, 1.0);
+        Check("S124 ★자체검증 — 칼금이 없으면 조각은 1개", f0.Count == 1, $"{f0.Count}조각");
+        Check("S124 ★자체검증 — 그 1조각의 넓이는 판 그대로 100㎡",
+              f0.Count == 1 && Math.Abs(f0[0].Area - 100) < 1e-6, f0.Count == 1 ? $"{f0[0].Area:F3}㎡" : "-");
+        Check("S124 ★자체검증 — 표본이 여러 점 나온다(한 점이면 길쭉한 띠에서 뒤집힌다)",
+              f0.Count == 1 && f0[0].Samples.Count >= 5, f0.Count == 1 ? $"{f0[0].Samples.Count}점" : "-");
+    }
+
+    // ★1 칼금 하나로 판이 둘로 갈리고, 넓이 장부가 맞는다
+    {
+        var faces = GradingGeometry.SplitFaces(Box(0, 0, 10, 10),
+                        new List<IReadOnlyList<Point3>?> { Box(-5, 0, 5, 10) }, 0, 1.0);
+        double sum = 0; foreach (var f in faces) sum += f.Area;
+        Check("S124 ★칼금 하나 → 조각 2개", faces.Count == 2, $"{faces.Count}조각");
+        Check("S124 ★★★조각 합 = 판 넓이(빈 데도 겹치는 데도 없다)", Math.Abs(sum - 100) < 1e-6, $"{sum:F4}㎡ (판 100)");
+        bool halves = faces.Count == 2 && Math.Abs(faces[0].Area - 50) < 1e-6 && Math.Abs(faces[1].Area - 50) < 1e-6;
+        Check("S124 ★반씩 갈린다", halves, faces.Count == 2 ? $"{faces[0].Area:F2} / {faces[1].Area:F2}" : "-");
+    }
+
+    // ★2 ★★★<b>핀치·자기교차 칼금</b> — v93.2가 경계로 못 쓴 바로 그 모양이다.
+    //   측정(계측 에이전트): Buffer(0)은 나비넥타이에서 <b>로브 하나(50㎡ 중 25㎡)를 통째로 버린다</b>.
+    //   칼금으로 쓰면 그 병이 <b>아예 발생하지 않아야</b> 한다 — 노딩이 교차점을 정점으로 바꾸기 때문.
+    {
+        // 나비넥타이(8자) — (0,0)-(10,10)-(10,0)-(0,10) 순서로 꿰면 한가운데서 스스로 교차한다
+        var bow = new List<Point3> { new(2, 2, 0), new(8, 8, 0), new(8, 2, 0), new(2, 8, 0) };
+        var faces = GradingGeometry.SplitFaces(Box(0, 0, 10, 10),
+                        new List<IReadOnlyList<Point3>?> { bow }, 0, 1.0);
+        double sum = 0; foreach (var f in faces) sum += f.Area;
+        Check("S124 ★★★자기교차 칼금에도 예외가 안 난다(조각이 나온다)", faces.Count >= 2, $"{faces.Count}조각");
+        Check("S124 ★★★자기교차 칼금에도 <b>넓이가 안 샌다</b>(Buffer(0)은 25㎡를 버렸다)",
+              Math.Abs(sum - 100) < 1e-6, $"{sum:F4}㎡ (판 100 · 새면 Buffer(0)과 같은 병)");
+        int bad = 0;
+        foreach (var f in faces) if (f.Samples.Count == 0) bad++;
+        Check("S124 ★조각마다 표본이 적어도 하나", bad == 0, $"표본 없는 조각 {bad}개");
+    }
+
+    // ★3 <b>가짜 칼금은 도로 붙는다</b> — GetExactDaylight이 작은 넓이 쪽으로 닫으며 만드는 그 선.
+    //   같은 판정을 받은 조각을 RingUnion으로 붙이면 <b>가짜 금이 지워져야</b> 한다.
+    {
+        var faces = GradingGeometry.SplitFaces(Box(0, 0, 10, 10),
+                        new List<IReadOnlyList<Point3>?> { Box(-5, 0, 5, 10) }, 0, 1.0);
+        var all = new List<IReadOnlyList<Point3>?>(); foreach (var f in faces) all.Add(f.Ring);
+        var merged = GradingGeometry.RingUnion(all, 0, out int holes, 1.0);
+        Check("S124 ★★★같은 판정끼리 붙이면 <b>한 덩이</b>로 돌아온다", merged.Count == 1, $"{merged.Count}덩이");
+        Check("S124 ★붙인 덩이의 넓이가 판 그대로",
+              merged.Count == 1 && Math.Abs(AreaOf(merged[0].Ring) - 100) < 1e-3,
+              merged.Count == 1 ? $"{AreaOf(merged[0].Ring):F3}㎡" : "-");
+        Check("S124 ★구멍 0", holes == 0, $"구멍 {holes}개");
+    }
+
+    // ★4 ★★★<b>구멍을 정말 알아채나</b>(검토 0914 · 높음) — 못 알아채면 벽이 뚜껑 자리를 덮는다.
+    {
+        // 가운데가 빈 ㅁ자 — 네 조각으로 에워싸면 합친 뒤 구멍 1개가 나와야 한다
+        var ring4 = new List<IReadOnlyList<Point3>?>
+        {
+            Box(0, 0, 10, 2), Box(0, 8, 10, 10), Box(0, 2, 2, 8), Box(8, 2, 10, 8),
+        };
+        var merged = GradingGeometry.RingUnion(ring4, 0, out int holes, 1.0);
+        Check("S124 ★★★가운데가 빈 ㅁ자를 붙이면 <b>구멍을 알린다</b>", holes == 1, $"구멍 {holes}개(기대 1)");
+        Check("S124 ★그때 바깥 덩이는 1개", merged.Count == 1, $"{merged.Count}덩이");
+        // ★자체검증 — 구멍이 없을 땐 0을 준다(늘 1을 주는 눈뜬장님이 아니다)
+        var solid = GradingGeometry.RingUnion(
+            new List<IReadOnlyList<Point3>?> { Box(0, 0, 10, 10) }, 0, out int h0, 1.0);
+        Check("S124 ★자체검증 — 구멍 없는 판엔 0을 준다", h0 == 0 && solid.Count == 1, $"구멍 {h0}개 · {solid.Count}덩이");
+    }
+
+    // ★5 ★★★<b>현장 제원</b> — 실제 옹벽 쐐기·발자국으로 조각내고 장부를 맞춘다.
+    //   출하 코드가 먹이는 것과 <b>같은 입력</b>이어야 증거가 된다(JACK 원칙).
+    {
+        var par = new GradingParams
+        {
+            CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+            CutSlope = 1.5, FillSlope = 1.5, CellSize = 0.5, MaxBenches = 20, MaxRise = 60,
+            VertexSpacing = 2.0, MinSlope = 0.01, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+        };
+        var pad = new List<Point3> { new(0, 0, 105), new(55.7, 0, 105), new(55.7, 84.35, 105), new(0, 84.35, 105) };
+        var cum = GradingGeometry.CumLen2D(pad);
+        foreach (var (spotNm, t0, t1) in new[] { ("변 가운데", 20.0, 40.0), ("코너에 걸침", 45.0, 70.0) })
+        {
+            GradingGeometry.WallInWedge(pad, cum, t0, t1, daylightDist: 24.5,
+                ground: new TiltGround(0, 0, 120.0, 0.15, 0.10), p: par, up: true,
+                slope: par.MinSlope, benchW: 1.0,
+                polygon: out var foot, wedgePolygon: out var wedge, log: out _);
+            if (foot == null || wedge == null)
+            { Check($"S124 [{spotNm}] 발자국·쐐기가 만들어진다", false, "null"); continue; }
+
+            double aW = AreaOf(wedge), aF = AreaOf(foot);
+            var faces = GradingGeometry.SplitFaces(wedge,
+                            new List<IReadOnlyList<Point3>?> { foot }, wedge[0].Z, par.VertexSpacing);
+            double sum = 0; foreach (var f in faces) sum += f.Area;
+            Console.WriteLine($"      S124 [{spotNm}] 쐐기 {aW:F1}㎡ · 발자국 {aF:F1}㎡ → 조각 {faces.Count}개 · 합 {sum:F1}㎡");
+            Check($"S124 ★★★[{spotNm}] 발자국 칼금이 쐐기를 <b>정말 가른다</b>(조각 2개 이상)",
+                  faces.Count >= 2, $"{faces.Count}조각");
+            Check($"S124 ★★★[{spotNm}] 조각 합 = 쐐기(빈 데도 겹치는 데도 없다 — 겹치면 paste가 깨진다)",
+                  Math.Abs(sum - aW) < aW * 0.02, $"{sum:F1} vs {aW:F1}㎡(2% 안)");
+            // 발자국만큼의 조각이 실제로 나왔나 — 하나는 발자국 넓이에 가까워야 한다
+            double best = double.MaxValue;
+            foreach (var f in faces) best = Math.Min(best, Math.Abs(f.Area - aF));
+            Check($"S124 ★[{spotNm}] 발자국 넓이({aF:F1}㎡)에 맞는 조각이 있다",
+                  best < aF * 0.05, $"가장 가까운 조각과의 차 {best:F2}㎡");
+            int noSample = 0;
+            foreach (var f in faces) if (f.Samples.Count == 0) noSample++;
+            Check($"S124 ★[{spotNm}] 조각마다 표본이 있다(없으면 판정을 못 한다)", noSample == 0, $"표본 없는 조각 {noSample}개");
+        }
+    }
+}
+
+// ── S125 ★★★[검토 0914 · 치명] <b>칼금이 판 경계와 겹쳐도 되나</b> ──
+//   검토: <i>"GetExactDaylight은 열린 사슬을 <b>옹벽 자신의 발자국을 따라</b> 닫는다(실측 46m).
+//   그 닫힌 링을 발자국과 <b>함께</b> 칼금으로 넣으면 폴리고나이즈가 <b>폭 0 조각</b>을 쏟아낸다."</i>
+//   → 논쟁 대신 <b>잰다</b>. 겹치는 변은 노딩에서 <b>하나로 녹아야</b> 한다.
+{
+    Console.WriteLine("\n== S125 칼금이 판 경계와 겹쳐도 되나(현장 A의 hull 폐합 재현) ==");
+    static double AreaOf125(IReadOnlyList<Point3> r)
+    {
+        double a = 0;
+        for (int i = 0; i < r.Count; i++) { var u = r[i]; var v = r[(i + 1) % r.Count]; a += u.X * v.Y - v.X * u.Y; }
+        return Math.Abs(a) * 0.5;
+    }
+    // 판 = 0..10 사각형. 칼금 = 아래 변(y=0)을 <b>그대로 되짚어</b> 닫은 링 —
+    //   (0,0)→(10,0) 구간이 판 경계와 <b>완전히 포개진다</b>. 현장 A가 꼭 이 모양이다.
+    var plate = new List<Point3> { new(0,0,0), new(10,0,0), new(10,10,0), new(0,10,0) };
+    var cutterOnEdge = new List<Point3> { new(0,0,0), new(10,0,0), new(10,4,0), new(0,4,0) };
+    var faces = GradingGeometry.SplitFaces(plate,
+                    new List<IReadOnlyList<Point3>?> { cutterOnEdge }, 0, 1.0);
+    double sum = 0; int zeroish = 0;
+    foreach (var f in faces) { sum += f.Area; if (f.Area < 1e-3) zeroish++; }
+    Console.WriteLine($"      S125 판 100㎡ · 경계와 10m 포개진 칼금 → 조각 {faces.Count}개 · 합 {sum:F4}㎡ · 폭0급 {zeroish}개");
+    Check("S125 ★★★겹친 변이 <b>폭 0 조각</b>을 안 만든다", zeroish == 0, $"0.001㎡ 미만 조각 {zeroish}개");
+    Check("S125 ★★★장부가 맞는다(겹친 변은 노딩에서 하나로 녹는다)", Math.Abs(sum - 100) < 1e-6, $"{sum:F4}㎡ (판 100)");
+    Check("S125 ★칼금대로 4㎡:6㎡ 두 조각", faces.Count == 2, $"{faces.Count}조각");
+    bool split46 = faces.Count == 2
+        && Math.Abs(Math.Min(faces[0].Area, faces[1].Area) - 40) < 1e-6
+        && Math.Abs(Math.Max(faces[0].Area, faces[1].Area) - 60) < 1e-6;
+    Check("S125 ★넓이가 40 / 60", split46, faces.Count == 2 ? $"{faces[0].Area:F2} / {faces[1].Area:F2}" : "-");
+
+    // ★현장 모양 그대로 — 발자국(ㄷ자 띠)과 <b>그 띠의 바깥 변을 되짚어 닫은</b> 칼금을 함께 넣는다
+    {
+        var par = new GradingParams
+        {
+            CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+            CutSlope = 1.5, FillSlope = 1.5, CellSize = 0.5, MaxBenches = 20, MaxRise = 60,
+            VertexSpacing = 2.0, MinSlope = 0.01, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+        };
+        var pad = new List<Point3> { new(0,0,105), new(55.7,0,105), new(55.7,84.35,105), new(0,84.35,105) };
+        var cum = GradingGeometry.CumLen2D(pad);
+        GradingGeometry.WallInWedge(pad, cum, 20.0, 40.0, daylightDist: 24.5,
+            ground: new TiltGround(0, 0, 120.0, 0.15, 0.10), p: par, up: true,
+            slope: par.MinSlope, benchW: 1.0,
+            polygon: out var foot, wedgePolygon: out var wedge, log: out _);
+        if (foot != null && wedge != null)
+        {
+            // 발자국 자신을 칼금으로 <b>두 번</b> 넣는다 = 모든 변이 저 자신과 포개지는 최악의 경우
+            var cut2 = new List<IReadOnlyList<Point3>?> { foot, foot };
+            var fs = GradingGeometry.SplitFaces(wedge, cut2, wedge[0].Z, par.VertexSpacing);
+            double s2 = 0; int z2 = 0;
+            foreach (var f in fs) { s2 += f.Area; if (f.Area < 1e-3) z2++; }
+            double aW = AreaOf125(wedge);
+            Console.WriteLine($"      S125 [현장·최악] 쐐기 {aW:F1}㎡ · 같은 칼금 2번 → 조각 {fs.Count}개 · 합 {s2:F1}㎡ · 폭0급 {z2}개");
+            Check("S125 ★★★[현장·최악] 같은 칼금을 두 번 넣어도 폭 0 조각이 안 생긴다", z2 == 0, $"{z2}개");
+            Check("S125 ★★★[현장·최악] 장부가 맞는다", Math.Abs(s2 - aW) < aW * 0.02, $"{s2:F1} vs {aW:F1}㎡");
+            Check("S125 ★[현장·최악] 조각 수가 한 번 넣었을 때와 같다(2개)", fs.Count == 2, $"{fs.Count}조각");
+        }
+        else Check("S125 [현장·최악] 발자국·쐐기가 만들어진다", false, "null");
+    }
+}
+
+// ── S126 ★★★[검토 0914 · 치명] <b>장부 검사가 눈뜬장님이었다</b> ──
+//   S124·S125의 "조각 합 = 판"은 <c>f.Area</c>를 더한다. 그런데 <c>f.Area</c>는 <b>구멍을 뺀</b> 넓이다.
+//   조각을 <b>테두리 링</b>으로 Civil에 주는데도 검사는 구멍을 뺀 값을 보니,
+//   "테두리가 안쪽 조각을 통째로 삼키는" 병을 <b>원리적으로 못 잡는다</b>.
+//   → 여기서는 <b>테두리 넓이</b>로 잰다. 그것이 Civil이 실제로 보는 값이다.
+{
+    Console.WriteLine("\n== S126 조각을 <b>테두리</b>로 줄 때 정말 안 겹치나(구멍 병) ==");
+    static double RingA(IReadOnlyList<Point3> r)
+    {
+        double a = 0;
+        for (int i = 0; i < r.Count; i++) { var u = r[i]; var v = r[(i + 1) % r.Count]; a += u.X * v.Y - v.X * u.Y; }
+        return Math.Abs(a) * 0.5;
+    }
+    static (double FaceSum, double RingSum, int N, int Holes) Measure(
+        IReadOnlyList<Point3> plate, List<IReadOnlyList<Point3>?> cutters, double dens = 1.0)
+    {
+        var fs = GradingGeometry.SplitFaces(plate, cutters, 0, dens);
+        double fa = 0, ra = 0; int hh = 0;
+        // ★테두리에서 <b>구멍을 뺀다</b> — 그것이 Civil이 Outer+Hide로 실제 덮는 넓이다
+        foreach (var f in fs)
+        {
+            fa += f.Area; ra += RingA(f.Ring); hh += f.Holes.Count;
+            foreach (var h in f.Holes) ra -= RingA(h);
+        }
+        return (fa, ra, fs.Count, hh);
+    }
+    static List<Point3> B126(double x0, double y0, double x1, double y1)
+        => new() { new(x0, y0, 0), new(x1, y0, 0), new(x1, y1, 0), new(x0, y1, 0) };
+
+    // ★대조군 — 칼금이 판을 <b>가로지르면</b> 구멍이 안 생긴다(여기선 두 값이 같아야 한다)
+    {
+        var m = Measure(B126(0, 0, 10, 10), new List<IReadOnlyList<Point3>?> { B126(-5, 0, 5, 10) });
+        Console.WriteLine($"      S126 [대조·가로지름] 조각 {m.N}(구멍 {m.Holes}개) · 구멍뺀합 {m.FaceSum:F2} · <b>테두리합 {m.RingSum:F2}</b>(판 100)");
+        Check("S126 ★대조군 — 가로지르는 칼금은 테두리합도 판과 같다",
+              Math.Abs(m.RingSum - 100) < 1e-6, $"테두리합 {m.RingSum:F4}㎡");
+    }
+
+    // ★★★본론 — 칼금이 판 <b>안쪽에 통째로</b> 들어앉으면(교선 링의 흔한 꼴)
+    {
+        var m = Measure(B126(0, 0, 10, 10), new List<IReadOnlyList<Point3>?> { B126(3, 3, 7, 7) });
+        double overlap = m.RingSum - 100;
+        Console.WriteLine($"      S126 [안쪽 칼금] 조각 {m.N}(구멍 {m.Holes}개) · 구멍뺀합 {m.FaceSum:F2} · <b>테두리합 {m.RingSum:F2}</b>"
+            + $" → <b>겹침 {overlap:F2}㎡</b>(안쪽 조각 16㎡를 바깥 테두리가 삼키면 +16)");
+        Check("S126 ★★★안쪽 칼금에도 <b>테두리가 안 겹친다</b>(겹치면 paste가 깨진다)",
+              Math.Abs(overlap) < 0.01, $"겹침 {overlap:F3}㎡");
+        Check("S126 ★그때도 구멍뺀합은 100이다 — <b>이래서 옛 장부가 눈뜬장님이었다</b>",
+              Math.Abs(m.FaceSum - 100) < 1e-6, $"구멍뺀합 {m.FaceSum:F4}㎡(이 값만 보면 병을 못 본다)");
+    }
+
+    // ★★★현장꼴 — 쐐기 + 발자국 + <b>쐐기 안쪽에만 있는 교선</b>
+    {
+        var par = new GradingParams
+        {
+            CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+            CutSlope = 1.5, FillSlope = 1.5, CellSize = 0.5, MaxBenches = 20, MaxRise = 60,
+            VertexSpacing = 2.0, MinSlope = 0.01, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+        };
+        var pad = new List<Point3> { new(0,0,105), new(55.7,0,105), new(55.7,84.35,105), new(0,84.35,105) };
+        var cum = GradingGeometry.CumLen2D(pad);
+        GradingGeometry.WallInWedge(pad, cum, 20.0, 40.0, daylightDist: 24.5,
+            ground: new TiltGround(0, 0, 120.0, 0.15, 0.10), p: par, up: true,
+            slope: par.MinSlope, benchW: 1.0,
+            polygon: out var foot, wedgePolygon: out var wedge, log: out _);
+        if (foot == null || wedge == null) { Check("S126 [현장꼴] 재료가 만들어진다", false, "null"); }
+        else
+        {
+            // 쐐기 안쪽 어딘가에 통째로 들어앉은 닫힌 교선(현장 A가 hull로 닫히면 이런 꼴이 나올 수 있다)
+            double cx = 0, cy = 0; foreach (var q in wedge) { cx += q.X; cy += q.Y; }
+            cx /= wedge.Count; cy /= wedge.Count;
+            var island = B126(cx - 4, cy - 4, cx + 4, cy + 4);
+            var m = Measure(wedge, new List<IReadOnlyList<Point3>?> { foot, island }, par.VertexSpacing);
+            double aW = RingA(wedge);
+            double overlap = m.RingSum - aW;
+            Console.WriteLine($"      S126 [현장꼴·안쪽교선] 쐐기 {aW:F1}㎡ · 조각 {m.N}(구멍 {m.Holes}개) · 구멍뺀합 {m.FaceSum:F1}"
+                + $" · <b>테두리합 {m.RingSum:F1}</b> → <b>겹침 {overlap:F1}㎡</b>");
+            Check("S126 ★★★[현장꼴] 안쪽 교선이 있어도 테두리가 안 겹친다",
+                  Math.Abs(overlap) < aW * 0.005, $"겹침 {overlap:F1}㎡ (쐐기 {aW:F1}㎡의 0.5% 안)");
+        }
+    }
+}
+
+/// <summary>[S122] NTS Polygon 하나를 우리 관례(닫힌 Point3 링, z=0)로 바꿔 RingHealth로 잰다.</summary>
+static (bool Closed, double CloseGap, int ExactDup, int NearDup1e6, int ZeroLen, int ShortUnder1e3,
+        double MinSpacing, double MaxSpacingNZ, int SelfX, bool CCW, bool Convex, double Area, int N)
+    RingFromNts(Polygon pg)
+{
+    var pts = new List<Point3>();
+    foreach (var c in pg.ExteriorRing.Coordinates) pts.Add(new Point3(c.X, c.Y, 0));
+    return RingHealth(pts);
+}
+
 Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
 return fails == 0 ? 0 : 1;
 
@@ -11179,6 +12320,43 @@ sealed class FlatGround(double z) : IGroundSurface
 /// 검토가 계측으로 잡은 결함이 정확히 그 눈먼 자리에 있었다.</para>
 /// <para>가상 폴리곤의 바깥 마감 링은 경계에서 <b>60~85m</b> 나가므로 TIN을 벗어나는 것이
 /// 예외가 아니라 <b>정상</b>이다. 그러니 이 대역이 있어야 검사가 진짜 증거가 된다.</para></summary>
+/// <summary>★★★[JACK 0911] <b>이어서하기가 실제로 쓰는 기준면</b> — 원지반이 아니다.
+/// <para>실측으로 확인했다: <c>GradeMode.Append</c>의 기준면은 <c>GradeStart.Decide</c>가
+/// <b>지금까지 합성된 면</b>(<c>정지면_DH</c>)으로 자동으로 잡는다(<c>GradeStart.cs:80-83</c>),
+/// 그래서 Append면 원지반을 <b>아예 안 묻는다</b>(<c>CreateGradingCommand.cs:128-129,146-147</c>).</para>
+/// <para>그 면은 <b>부지 안에서는 계획고 평지</b>이고, 부지 밖에서는 기존 사면이 원지반까지
+/// 올라간다. 원지반 하나로 먹이면 <b>부지 안에서 있지도 않은 절토</b>가 잡힌다 —
+/// S114의 "부지 안 1196점"이 그 오진이었다.</para></summary>
+sealed class ComposedGround(IReadOnlyList<Point3> pad, double padZ, double grad, double groundZ) : IGroundSurface
+{
+    public bool TryGetElevation(double x, double y, out double zz)
+    {
+        // 부지 안 → 계획고 평지
+        bool inside = false;
+        int n = pad.Count;
+        for (int i = 0, j = n - 1; i < n; j = i++)
+        {
+            if ((pad[i].Y > y) == (pad[j].Y > y)) continue;
+            double xx = pad[j].X + (y - pad[j].Y) / (pad[i].Y - pad[j].Y) * (pad[i].X - pad[j].X);
+            if (x < xx) inside = !inside;
+        }
+        if (inside) { zz = padZ; return true; }
+        // 부지 밖 → 경계에서 멀어질수록 사면 구배로 올라가다 원지반에서 멈춘다
+        double best = double.MaxValue;
+        for (int i = 0; i < n; i++)
+        {
+            var u = pad[i]; var v = pad[(i + 1) % n];
+            double sx = v.X - u.X, sy = v.Y - u.Y, L2 = sx * sx + sy * sy;
+            double t = L2 < 1e-12 ? 0 : System.Math.Max(0, System.Math.Min(1,
+                ((x - u.X) * sx + (y - u.Y) * sy) / L2));
+            double px = u.X + sx * t, py = u.Y + sy * t;
+            best = System.Math.Min(best, (x - px) * (x - px) + (y - py) * (y - py));
+        }
+        zz = System.Math.Min(groundZ, padZ + System.Math.Sqrt(best) * grad);
+        return true;
+    }
+}
+
 sealed class BoxGround(double z, double x0, double y0, double x1, double y1) : IGroundSurface
 {
     public bool TryGetElevation(double x, double y, out double zz)
