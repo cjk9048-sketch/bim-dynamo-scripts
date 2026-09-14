@@ -1169,6 +1169,783 @@ public static class GradingGeometry
         return outp;
     }
 
+    /// <summary>★★★[검토 0914 · 치명] <b>면에서 면을 뺀다</b>(NTS) — 뚜껑을 만드는 맞는 셈.
+    ///
+    /// <para><b>왜 Civil의 Outer+Hide로 안 하나.</b> 뚜껑을 <c>Outer=쐐기 + Hide=옹벽띠</c>로 만들면
+    /// 그 Hide 링이 Outer 경계에 <b>세 변에서 닿는다</b>(옹벽은 찍은 선과 직각선 둘에 붙어 있다).
+    /// 경계에 닿는 Hide를 Civil은 싫어하고, 이 저장소는 이미 거기서 다쳤다
+    /// (<c>자문요청-Paste합성-SurfaceException.md</c>).</para>
+    ///
+    /// <para><b>그리고 "가장 큰 조각 하나 고르기"도 틀렸다.</b> 원지반이 벽의 표고 범위를 벗어나면
+    /// 교선이 <b>여러 조각</b>으로 끊긴다(검토 실측: 31.5m + 33.1m). 하나만 쓰면 뚜껑 경계의
+    /// 절반이 사라진다. 조각을 고르는 문제가 아니라 <b>면 빼기</b> 문제다.</para>
+    ///
+    /// <para>NTS는 이 저장소에 이미 있다(<c>NetTopologySuite 2.5.0</c>). 링의 점 순서가
+    /// 뒤죽박죽이어도 면 연산은 옳게 나온다 — 순서를 걱정할 필요가 없는 것이 이 길의 장점이다.</para></summary>
+    /// <returns>뺀 결과의 바깥 링들. 구멍은 버린다(표면 경계로 쓸 것이므로).</returns>
+    public static List<List<Point3>> RingDifference(
+        IReadOnlyList<Point3> outerRing, IReadOnlyList<Point3>? minusRing, double z, double dens = 1.0)
+    {
+        var res = new List<List<Point3>>();
+        if (outerRing == null || outerRing.Count < 3) return res;
+        try
+        {
+            var gf = NtsFactory();
+            Geometry A = gf.CreatePolygon(ClosedRing(outerRing));
+            if (!A.IsValid) A = A.Buffer(0.0);
+            Geometry outG = A;
+            if (minusRing != null && minusRing.Count >= 3)
+            {
+                Geometry B = gf.CreatePolygon(ClosedRing(minusRing));
+                if (!B.IsValid) B = B.Buffer(0.0);
+                outG = A.Difference(B);
+            }
+            for (int i = 0; i < outG.NumGeometries; i++)
+            {
+                if (outG.GetGeometryN(i) is not Polygon pg) continue;
+                var pts = new List<Point3>();
+                foreach (var c in pg.ExteriorRing.Coordinates) pts.Add(new Point3(c.X, c.Y, z));
+                var d2 = Densify(Weed(pts), Math.Max(0.3, dens));
+                if (d2.Count >= 4) res.Add(d2);
+            }
+        }
+        catch { }
+        return res;
+    }
+
+    /// <summary>★★★[JACK 0914 로그 · 치명] <b>판을 칼금으로 잘라 조각을 전부 돌려준다</b>(NTS 폴리고나이즈).
+    ///
+    /// <para><b>왜 이 길인가 — 현장이 답을 줬다.</b> 교선 링 A를 Civil 경계로 넣을 때마다
+    /// <c>SurfaceException[IllegalBoundary]</c>가 났다. <b>원본도, <c>CleanRing</c> 정규화도</b>(로그 ④·⑤).
+    /// 그런데 같은 실행에서 NTS <b>면 빼기</b>가 낸 링(143점)은 <b>그대로 통과</b>했다(뚜껑A 948.3㎡).
+    /// 까닭은 이 저장소가 이미 적어 뒀다 — <c>NtsSupport.ToCleanGeometry</c> 주석:
+    /// <i>"교선(daylight) 링은 <b>자기접촉(핀치)</b>이 흔한데(<b>경계 주입 IllegalBoundary가 그 증거</b>)"</i>.
+    /// 게다가 <c>CleanRing</c>은 <c>Buffer(0)</c>을 거치므로 <b>감김이 반대인 로브를 소거</b>하고
+    /// <b>가장 큰 조각 하나만</b> 남긴다(<c>RawTriangleIntersectionFinder</c> 101줄이 그리 경고한다).
+    /// 그래서 정규화해도 안 고쳐진다.</para>
+    ///
+    /// <para>→ <b>교선 링을 경계로 쓰지 않는다. <u>칼금(선)</u>으로만 쓴다.</b>
+    /// 선으로 노딩하면 핀치도 자기교차도 그저 <b>교차점</b>이 되어 사라진다.
+    /// Civil에는 폴리고나이즈가 낸 <b>멀쩡한 조각의 테두리</b>만 준다.</para>
+    ///
+    /// <para>★<b>덤으로 "어느 쪽이 안인가"가 통째로 사라진다.</b> 교선이 판을 몇 조각으로 가르든
+    /// 조각마다 <b>안쪽 점</b>을 하나씩 돌려주므로, 부르는 쪽이 <b>표고를 재서</b> 고르면 된다
+    /// (<c>TinSurface.FindElevationAtXY</c>는 Civil 쪽에만 있어 여기서 못 부른다).
+    /// <c>GetExactDaylight</c>이 열린 사슬을 <b>작은 넓이 쪽으로</b> 닫으며 만든 <b>가짜 칼금</b>도 무해하다 —
+    /// 그 양쪽 조각은 같은 판정을 받아 <b>도로 붙기</b> 때문이다.</para></summary>
+    /// <param name="outer">자를 판(예: 옹벽 발자국).</param>
+    /// <param name="cutters">칼금이 될 링들(예: 옹벽∩원지반, 옹벽∩정지면). <b>조각이 여럿이어도 전부</b> 넣는다 —
+    /// 종전처럼 "가장 넓은 것 하나"만 쓰면 나머지 칼금이 통째로 빠진다(로그: 교선 <b>2개</b>).</param>
+    /// <returns>조각마다 (테두리 링, <b>구멍 링들</b>, <b>표본 점들</b>, 넓이). 판 밖 조각은 뺀다.
+    ///
+    /// <para>★★★[검토 0914 · 치명 — <b>계측으로 잡혔다</b>] <b>구멍을 반드시 함께 돌려준다.</b>
+    /// 칼금이 판 <b>안쪽에 통째로</b> 들어앉으면(닫힌 교선 링의 흔한 꼴) 폴리고나이즈는
+    /// <b>구멍 있는 조각</b>을 낸다. 그때 테두리만 쓰면 <b>바깥 조각이 안쪽 조각을 통째로 삼킨다</b>.
+    /// 실측(S126): 10×10 판 + 안쪽 4×4 칼금 → 테두리합 <b>116㎡</b>(겹침 16) ·
+    /// 현장꼴 쐐기 490㎡ → 테두리합 554㎡(<b>겹침 64㎡</b>).
+    /// 그런데 <c>Area</c>(구멍 뺀 값)를 더한 장부는 <b>둘 다 정확히 100·490을 준다</b> —
+    /// 옛 검사가 이 병을 <b>원리적으로 못 잡던</b> 까닭이다. 검사 잣대가 눈뜬장님이었다.</para>
+    ///
+    /// <para>구멍은 <b>판 안쪽에만</b> 있으므로(테두리에 절대 안 닿는다) Civil의 <c>Hide</c>로 안전히 뚫린다 —
+    /// v93.2가 다친 것은 <b>Outer와 46m 포개진</b> Hide였지, 안쪽에 떠 있는 Hide가 아니다.</para></returns>
+    /// <remarks>표본이 <b>여럿</b>인 까닭(검토 0914 · 높음): 길쭉한 띠 조각은 안에서 판정이 뒤집힐 수 있어
+    /// 안쪽 점 <b>하나</b>로는 못 가른다. 첫 점은 <see cref="Polygon.InteriorPoint"/>(오목해도 반드시 안쪽),
+    /// 나머지는 격자에서 조각 안에 드는 점만 골라 붙인다. 부르는 쪽이 <b>다수결</b>로 정한다.</remarks>
+    public static List<(List<Point3> Ring, List<List<Point3>> Holes,
+                        List<(double X, double Y)> Samples, double Area)> SplitFaces(
+        IReadOnlyList<Point3> outer, IEnumerable<IReadOnlyList<Point3>?>? cutters,
+        double z, double dens = 1.0)
+    {
+        var res = new List<(List<Point3>, List<List<Point3>>, List<(double, double)>, double)>();
+        if (outer == null || outer.Count < 3) return res;
+        try
+        {
+            var gf = NtsFactory();
+            Geometry? w = NtsSupport.ToCleanGeometry(outer, gf);
+            if (w == null) return res;
+            var lines = new List<Geometry> { gf.CreateLineString(ClosedRing(outer)) };
+            if (cutters != null)
+                foreach (var c in cutters)
+                {
+                    if (c == null || c.Count < 3) continue;
+                    try { lines.Add(gf.CreateLineString(ClosedRing(c))); } catch { }
+                }
+            // 단항 합집합 = 자기교차·핀치를 전부 <b>정점</b>으로 바꾼다(노딩)
+            Geometry noded = UnaryUnionOp.Union((Geometry)gf.CreateGeometryCollection(lines.ToArray()));
+            var pz = new Polygonizer();
+            pz.Add(noded);
+            foreach (var gg in pz.GetPolygons())
+            {
+                if (gg is not Polygon f || f.IsEmpty || f.Area < 1e-6) continue;
+                var ip = f.InteriorPoint;                       // 오목해도 <b>반드시 안쪽</b>에 찍힌다
+                if (ip == null || !w.Intersects(ip)) continue;  // 판 밖 조각은 버린다
+                // ★[검토 0914 · 높음] 표본을 <b>여럿</b> 모은다 — 안쪽 점 하나로는 길쭉한 띠에서 뒤집힌다.
+                var samples = new List<(double, double)> { (ip.X, ip.Y) };
+                {
+                    var env = f.EnvelopeInternal;
+                    const int NG = 5;
+                    for (int gx = 0; gx < NG; gx++)
+                        for (int gy = 0; gy < NG; gy++)
+                        {
+                            double sx = env.MinX + (env.MaxX - env.MinX) * (gx + 0.5) / NG;
+                            double sy = env.MinY + (env.MaxY - env.MinY) * (gy + 0.5) / NG;
+                            try { if (f.Contains(gf.CreatePoint(new Coordinate(sx, sy)))) samples.Add((sx, sy)); }
+                            catch { }
+                        }
+                }
+                // ★<b>Weed를 안 쓴다.</b> 옹벽 발자국은 평면에서 <b>0.05m</b> 계단이라
+                //   WeedDist(0.05m)에 걸려 계단이 한 줄로 펴질 수 있다(v93.2에서 이미 데인 자리).
+                List<Point3> RingOf(LineString ls)
+                {
+                    var pts = new List<Point3>();
+                    foreach (var c in ls.Coordinates)
+                    {
+                        if (pts.Count > 0)
+                        {
+                            var l = pts[pts.Count - 1];
+                            if (Math.Abs(l.X - c.X) < 1e-9 && Math.Abs(l.Y - c.Y) < 1e-9) continue;
+                        }
+                        pts.Add(new Point3(c.X, c.Y, z));
+                    }
+                    return Densify(pts, Math.Max(0.3, dens));
+                }
+                var d2 = RingOf(f.ExteriorRing);
+                if (d2.Count < 4) continue;
+                var holes = new List<List<Point3>>();
+                for (int h = 0; h < f.NumInteriorRings; h++)
+                {
+                    var hr = RingOf(f.GetInteriorRingN(h));
+                    if (hr.Count >= 4) holes.Add(hr);
+                }
+                res.Add((d2, holes, samples, f.Area));
+            }
+        }
+        catch { }
+        return res;
+    }
+
+    /// <summary>★★★[JACK 0914] <b>링 여러 개를 하나로 합친다</b>(NTS 합집합) — 조각의 테두리들을 돌려준다.
+    ///
+    /// <para><see cref="SplitFaces"/>로 갈라 <b>표고를 재서 고른</b> 조각들을 도로 붙이는 데 쓴다.
+    /// 붙으면 <b>가짜 칼금이 지워지고</b> 테두리가 단순해진다.</para></summary>
+    /// <para>★★★[검토 0914 · 치명] <b>구멍을 버리지 않고 돌려준다.</b> 남긴 조각이 버린 조각을
+    /// 에워싸면 합친 덩이에 구멍이 생기는데, 그 구멍을 메우면 <b>벽이 뚜껑 자리를 덮는다</b>.
+    /// 구멍은 덩이 <b>안쪽에만</b> 있으므로 Civil의 <c>Hide</c>로 안전히 뚫린다.</para></summary>
+    /// <param name="holes">합친 결과에 생긴 <b>구멍 개수</b>(로그용).</param>
+    /// <returns>합친 결과의 (바깥 링, 구멍 링들) — 넓은 것부터.</returns>
+    public static List<(List<Point3> Ring, List<List<Point3>> Holes)> RingUnion(
+        IEnumerable<IReadOnlyList<Point3>?>? rings, double z, out int holes, double dens = 1.0)
+    {
+        var res = new List<(List<Point3>, List<List<Point3>>)>();
+        holes = 0;
+        if (rings == null) return res;
+        try
+        {
+            var gf = NtsFactory();
+            var gs = new List<Geometry>();
+            foreach (var r in rings)
+            {
+                if (r == null || r.Count < 3) continue;
+                var g = NtsSupport.ToCleanGeometry(r, gf);
+                if (g != null && !g.IsEmpty) gs.Add(g);
+            }
+            if (gs.Count == 0) return res;
+            Geometry u = gs.Count == 1 ? gs[0]
+                       : UnaryUnionOp.Union((Geometry)gf.CreateGeometryCollection(gs.ToArray()));
+            List<Point3> RingOf(LineString ls)
+            {
+                var pts = new List<Point3>();
+                foreach (var c in ls.Coordinates)
+                {
+                    if (pts.Count > 0)
+                    {
+                        var l = pts[pts.Count - 1];
+                        if (Math.Abs(l.X - c.X) < 1e-9 && Math.Abs(l.Y - c.Y) < 1e-9) continue;
+                    }
+                    pts.Add(new Point3(c.X, c.Y, z));
+                }
+                return Densify(pts, Math.Max(0.3, dens));
+            }
+            var tmp = new List<(List<Point3> R, List<List<Point3>> H, double A)>();
+            for (int i = 0; i < u.NumGeometries; i++)
+            {
+                if (u.GetGeometryN(i) is not Polygon pg || pg.IsEmpty) continue;
+                holes += pg.NumInteriorRings;
+                var d2 = RingOf(pg.ExteriorRing);
+                if (d2.Count < 4) continue;
+                var hs = new List<List<Point3>>();
+                for (int h = 0; h < pg.NumInteriorRings; h++)
+                {
+                    var hr = RingOf(pg.GetInteriorRingN(h));
+                    if (hr.Count >= 4) hs.Add(hr);
+                }
+                tmp.Add((d2, hs, pg.Area));
+            }
+            tmp.Sort((x, y) => y.A.CompareTo(x.A));     // ★넓이순 — 잘릴 때 큰 것이 남게(검토 0914 · 높음)
+            foreach (var t in tmp) res.Add((t.R, t.H));
+        }
+        catch { }
+        return res;
+    }
+
+    /// <summary>★★★[JACK 0914] <b>원지반 조각을 잘라 낼 링</b> — 구간 × 내밀기 범위의 테두리.
+    ///
+    /// <para>JACK 순서의 ④: <i>"원지반에서 가상지표면에 의해 잘린 원지반면"</i>.
+    /// 옛 사면을 지우고 <b>원지반을 살려야</b> 하는 자리는 「가상옹벽의 데이라잇 ~ 옛 사면의 데이라잇」
+    /// 사이이고, <b>찍은 구간의 좌우 범위 안</b>이다. 그 테두리를 닫힌 링으로 만든다.</para>
+    ///
+    /// <para><b>(둘레 t, 내밀기 d) 좌표에서는 사각형</b>이다 —
+    /// ①<c>d = fromDist</c>를 따라 <c>t0 → t1</c> ②<c>t1</c>에서 <c>d</c>를 <c>toDist</c>까지
+    /// ③<c>d = toDist</c>를 따라 <c>t1 → t0</c> ④<c>t0</c>에서 되돌아 닫는다.
+    /// 그것을 <see cref="OutwardAt"/>로 평면에 옮긴다. 구간이 <b>좌우로 한 뼘도 안 번진다</b> —
+    /// <c>t</c>가 <c>[t0..t1]</c>을 벗어나는 점이 하나도 없기 때문이다.</para>
+    ///
+    /// <para>★<b>원지반을 새로 뜨지 않는다.</b> 이 링은 <b>자를 칼</b>일 뿐이고,
+    /// 표고는 잘린 <b>원지반 객체 자신</b>이 갖고 있다(JACK: <i>"원지반을 살려서"</i>).
+    /// 앞서 내가 원지반을 다시 떠서 덮은 것이 틀린 자리였다.</para></summary>
+    /// <param name="z">링 점의 표고 — 경계로만 쓰이므로 값은 중요하지 않다(자를 때 평면만 본다).</param>
+    public static List<Point3>? BandRing(
+        IReadOnlyList<Point3> ruler, double[] rcum, double t0, double t1,
+        double fromDist, double toDist, double z, double dens = 1.0)
+    {
+        if (ruler == null || rcum == null || ruler.Count < 3) return null;
+        if (!(toDist > fromDist + 1e-6)) return null;
+        double tot = rcum[rcum.Length - 1];
+        double span = t1 >= t0 ? t1 - t0 : tot - t0 + t1;
+        if (!(span > 1e-6)) return null;
+        double st = Math.Max(0.3, Math.Min(dens, 2.0));
+        int nA = Math.Max(2, (int)Math.Ceiling(span / st));
+        int nD = Math.Max(2, (int)Math.Ceiling((toDist - fromDist) / Math.Max(st, 1.0)));
+        var ring = new List<Point3>();
+        void Add(double t, double d)
+        {
+            double tw = ((t % tot) + tot) % tot;
+            var w = OutwardAt(ruler, rcum, tw, d);
+            if (ring.Count > 0)
+            {
+                var l = ring[ring.Count - 1];
+                if (Math.Abs(w.X - l.X) < 1e-6 && Math.Abs(w.Y - l.Y) < 1e-6) return;
+            }
+            ring.Add(new Point3(w.X, w.Y, z));
+        }
+        for (int i = 0; i <= nA; i++) Add(t0 + span * i / nA, fromDist);                      // ①안쪽 t0→t1
+        for (int j = 1; j <= nD; j++) Add(t1, fromDist + (toDist - fromDist) * j / nD);       // ②t1에서 밖으로
+        for (int i = nA; i >= 0; i--) Add(t0 + span * i / nA, toDist);                        // ③바깥 t1→t0
+        for (int j = nD - 1; j >= 1; j--) Add(t0, fromDist + (toDist - fromDist) * j / nD);   // ④t0에서 안으로
+        return ring.Count >= 4 ? ring : null;
+    }
+
+    /// <summary>★★★[JACK 0914] 벽이 <b>원지반에 닿는 거리</b> — 구간을 훑어 가장 먼 자리를 준다.
+    ///
+    /// <para><see cref="BandRing"/>의 <c>fromDist</c>가 이 값이다. 원지반이 자리마다 다르므로
+    /// (현장 로그: 한 끝 120.00 · 다른 끝 119.18) <b>가장 먼 자리</b>를 써야 벽과 띠 사이에 틈이 없다.</para>
+    ///
+    /// <para>★면-면 교선(<c>GetExactDaylight</c>)을 기다리지 않고 <b>여기서 바로</b> 재는 까닭:
+    /// 교선은 도면 객체가 있어야 나오는데 이 값은 <b>자를 링을 만들기 전에</b> 필요하다.
+    /// 셈이 같으므로(한 단씩 올리며 원지반과 견준다) 두 값은 어긋나지 않는다.</para></summary>
+    public static double WallDaylightDist(
+        IReadOnlyList<Point3> ruler, double[] rcum, double t0, double t1,
+        IGroundSurface ground, GradingParams p, bool up, double slope, double benchW,
+        out string log)
+    {
+        log = "";
+        double benchH = p.BenchHeightOf(up);
+        double run = Math.Max(benchH * Math.Max(slope, p.MinSlope), p.MinFaceRun) + Math.Max(benchW, 0);
+        if (ruler == null || rcum == null || ruler.Count < 3 || !(run > 1e-6))
+        { log = "자나 제원이 없다"; return run; }
+
+        double tot = rcum[rcum.Length - 1];
+        double span = t1 >= t0 ? t1 - t0 : tot - t0 + t1;
+        int nA = Math.Max(2, (int)Math.Ceiling(span / Math.Max(1.0, p.VertexSpacing)));
+        int maxB = Math.Max(1, p.MaxBenches) * 4;
+        double far = run, zAtFar = double.NaN; int miss = 0, done = 0;
+
+        for (int i = 0; i <= nA; i++)
+        {
+            double t = t0 + span * i / nA; if (t >= tot) t -= tot;
+            var q0 = PointAtParam(ruler, rcum, t);
+            double zLine = q0.Z;
+            bool hit = false;
+            for (int b = 1; b <= maxB; b++)
+            {
+                double d = run * b;
+                double z = zLine + (up ? +1 : -1) * benchH * b;
+                var w = OutwardAt(ruler, rcum, t, d);
+                if (!ground.TryGetElevation(w.X, w.Y, out double gz)) { miss++; continue; }
+                if (up ? z >= gz : z <= gz)
+                { if (d > far) { far = d; zAtFar = gz; } hit = true; done++; break; }
+            }
+            if (!hit) { far = Math.Max(far, run * maxB); }
+        }
+        log = $"벽 데이라잇 거리 <b>{far:0.##}m</b>(한 단 {run:0.###}m · 훑은 자리 {nA + 1}개 중 닿은 자리 {done}개"
+            + (miss > 0 ? $" · 원지반 조회 실패 {miss}회" : "")
+            + (double.IsNaN(zAtFar) ? "" : $" · 가장 먼 자리 원지반 {zAtFar:0.##}m") + ")";
+        return far;
+    }
+
+    /// <summary>★★★[JACK 0914] <b>구간 + 양 끝 직각선 + 데이라잇</b>으로 폴리곤을 만들고,
+    /// <b>그 안쪽으로</b> 옹벽을 친다. 폴리곤 안 최대 원지반 높이를 <b>품는 단까지</b>.
+    ///
+    /// <para>JACK: <i>"구간을 설정하면 그 선에서 <b>직각방향으로 선을 그리고</b>
+    /// <b>데이라잇과 만나는</b> 폴리곤을 만들고, 구간선과 직각방향선 <b>3방향</b>으로
+    /// <b>폴리곤 안쪽으로</b> 옹벽이 해당 폴리곤 구간 안의 <b>최대 원지반높이를 포함한 높이의 단</b>이
+    /// 포함되게 치는 거야."</i></para>
+    ///
+    /// <para>★<b>앞서 틀린 것 — 좌우로 늘렸다.</b> 구간을 양옆으로 13.9m씩 늘려 놓고 쌓으니
+    /// <b>좌우에 날개가 생겼다</b>. JACK: <i>"왜 좌우측에 날개가 생겼지 <b>반대로</b> 생겨야지"</i>.
+    /// 늘리는 것이 아니라 <b>가두는</b> 것이다 — 구간 밖으로는 한 뼘도 안 나간다.</para>
+    ///
+    /// <para><b>폴리곤 네 변</b>(JACK이 센 "3방향"은 직접 긋는 셋이다):
+    /// ①구간선(내밀기 0) ②<c>t1</c>에서 직각으로 데이라잇까지
+    /// ③데이라잇을 따라 <c>t1</c>→<c>t0</c> ④<c>t0</c>에서 직각으로 되돌아온다.</para>
+    ///
+    /// <para><b>쌓는 법.</b> 줄마다 <c>t</c>를 <c>[t0..t1]</c>만 훑어 <see cref="OutwardAt"/>로
+    /// 직각 바깥으로 나간다 — <c>OffsetOpen</c>(선 밀기)을 안 쓰므로 <b>마이터도 날개도 없다</b>.
+    /// 한 단은 줄 둘이다: 거의 수직인 면(단높이×구배)과 수평 소단(소단폭), 표고가 같다.</para>
+    ///
+    /// <para>★<b>폴리곤은 평면 기준이다</b>(JACK: <i>"직각방향과 데이라잇이 만나는 폴리곤은
+    /// <b>평면기준</b>이야"</i>) — 직각선이 데이라잇과 만나는 자리를 <b>위에서 본 거리</b>로 잡고,
+    /// 링의 표고는 찍은 선 표고 하나로 둔다. 경계로만 쓰이므로 표고는 판정에 안 들어간다.</para></summary>
+    /// <param name="daylightDist">데이라잇까지의 <b>평면</b> 내밀기(m) — 폴리곤의 바깥 변이 여기에 앉는다.</param>
+    public static List<List<Point3>> WallInWedge(
+        IReadOnlyList<Point3> ruler, double[] rcum, double t0, double t1,
+        double daylightDist, IGroundSurface ground, GradingParams p, bool up,
+        double slope, double benchW, out List<Point3>? polygon, out string log)
+        => WallInWedge(ruler, rcum, t0, t1, daylightDist, ground, p, up, slope, benchW,
+                       out polygon, out _, out log);
+
+    /// <summary>★[JACK 0914] <b>쐐기 폴리곤</b>도 함께 돌려주는 판.
+    /// <para>JACK: <i>"가상폴리곤이 <b>평면뷰 기준 데이라잇까지</b> 가지도 않았어"</i> —
+    /// 보고 싶은 것은 <b>쐐기</b>(구간선 + 직각선 둘 + 데이라잇)다. 그런데 <b>표면 경계</b>로는
+    /// 쐐기를 쓰면 안 된다(빈 자리를 TIN이 보간으로 메워 벽을 덮는다) — 경계는 <b>벽 발자국</b>이다.
+    /// 그래서 <b>둘 다</b> 내보낸다: 그리는 것은 쐐기, 가두는 것은 발자국.</para></summary>
+    public static List<List<Point3>> WallInWedge(
+        IReadOnlyList<Point3> ruler, double[] rcum, double t0, double t1,
+        double daylightDist, IGroundSurface ground, GradingParams p, bool up,
+        double slope, double benchW,
+        out List<Point3>? polygon, out List<Point3>? wedgePolygon, out string log)
+        => WallInWedge(ruler, rcum, t0, t1, null, daylightDist, ground, p, up, slope, benchW,
+                       out polygon, out wedgePolygon, out log);
+
+    /// <summary>★★★[검토 0914 · 치명] <b>데이라잇까지의 거리는 자리마다 다르다.</b>
+    ///
+    /// <para>검토 실측: 정지면 데이라잇이 구간 안에서 <b>18.74 ~ 28.80m</b>로 <b>10m나 오르내린다</b>.
+    /// 그런데 쐐기의 바깥 변을 <b>최댓값 하나</b>로 파면, 그 최댓값이 난 자리 <b>한 곳에서만</b>
+    /// 입구가 데이라잇에 앉고 나머지는 최대 <b>8.17m 바깥</b>에 뜬다.
+    /// A(옹벽 ∩ 원지반)의 끝점은 쐐기 입구에 앉으므로 —
+    /// <b>A와 정지면 데이라잇은 원리적으로 한쪽 끝에서만 만난다</b>(실측 0.02m vs 8.17m).
+    /// 그러면 뚜껑 링이 <b>안 닫힌다</b>.</para>
+    ///
+    /// <para>→ <paramref name="farAt"/>로 <b>자리마다</b> 받는다. 날개는 <c>t</c>가 고정이라
+    /// 여전히 줄마다 숫자 하나이고, 쐐기의 바깥 변만 <c>t</c>를 따라 물결친다.</para>
+    ///
+    /// <para>★<b>바닥을 깔아야 한다.</b> 파임 판에서는 데이라잇 거리가 <b>0.01m까지</b> 내려간다(실측).
+    /// 그대로 쓰면 쐐기가 한 점으로 오므라들어 <b>핀치 링</b>이 되고, 그것이 이 저장소가 이미 당한
+    /// <c>IllegalBoundary</c>다. 그래서 <b>옹벽이 내민 거리</b>를 바닥으로 둔다.</para></summary>
+    /// <param name="farAt">둘레 <c>t</c> → 데이라잇까지의 <b>평면</b> 거리(m). <c>null</c>이면
+    /// <paramref name="daylightDist"/> 하나를 쓴다(옛 동작).</param>
+    public static List<List<Point3>> WallInWedge(
+        IReadOnlyList<Point3> ruler, double[] rcum, double t0, double t1,
+        Func<double, double>? farAt, double daylightDist,
+        IGroundSurface ground, GradingParams p, bool up,
+        double slope, double benchW,
+        out List<Point3>? polygon, out List<Point3>? wedgePolygon, out string log)
+    {
+        var outp = new List<List<Point3>>();
+        polygon = null; wedgePolygon = null; log = "";
+        if (ruler == null || rcum == null || ruler.Count < 3 || ground == null)
+        { log = "자나 원지반이 없다"; return outp; }
+
+        double benchH = p.BenchHeightOf(up);
+        double faceRun = Math.Max(benchH * Math.Max(slope, p.MinSlope), p.MinFaceRun);
+        double benchOut = Math.Max(benchW, 0);
+        double run = faceRun + benchOut;
+        if (!(run > 1e-6) || !(benchH > 1e-6))
+        { log = $"한 단 내밀기({run:0.###}m)나 단높이가 0이다"; return outp; }
+
+        double tot = rcum[rcum.Length - 1];
+        double span = t1 >= t0 ? t1 - t0 : tot - t0 + t1;
+        if (!(span > 1e-6)) { log = "구간 길이가 0이다"; return outp; }
+        double dens = Math.Max(0.3, Math.Min(p.VertexSpacing, 1.0));
+        int nA = Math.Max(2, (int)Math.Ceiling(span / dens));
+        double z0 = PointAtParam(ruler, rcum, t0).Z;
+        double far = Math.Max(daylightDist, run);
+        // 자리마다 다른 데이라잇 거리 — 바닥은 <b>옹벽이 내밀 거리</b>(핀치 링 방지)
+        double farFloor = run * Math.Max(1, p.MaxBenches) * 0 + run;   // 최소 한 단
+        double FarOf(double t) => farAt == null ? far
+            : Math.Max(farFloor, Math.Min(farAt(((t % tot) + tot) % tot), far * 3));
+
+        // ★★★[JACK 0914 "측면이 안 나왔어" · 검토 B-1] <b>줄을 ㄷ자로 만든다 — 전면 + 날개 둘.</b>
+        //
+        //   <para><b>앞서 틀린 것.</b> 나는 "세 변 모두에서 안쪽으로"를 <b>줄 끝을 45°로 깎는 것</b>으로
+        //   구현했다. 그건 날개벽이 아니라 <b>모서리 모따기</b>다 — 어떤 줄도 직각선 위로 올라가지 않아
+        //   측면을 막는 면이 없고, 정작 <b>구간의 제 끝에서 벽 높이가 0</b>이 됐다(검토 실측:
+        //   u=0.00m에서 높이 0.00m · u=3.30m에서 20m · 양 끝 직각선 0.25m 안에 든 점이 320개 중 <b>2개</b>).</para>
+        //
+        //   <para><b>맞는 모양.</b> (둘레 t, 내밀기 d) 좌표에서 세 변은
+        //   <c>d=0</c>(구간선) · <c>t=t0</c>·<c>t=t1</c>(직각선 둘)이다.
+        //   셋에서 <c>d</c>만큼 안으로 들어온 자리의 <b>테두리</b>가 곧 그 단의 줄이고, 그것은 <b>ㄷ자</b>다:</para>
+        //   <code>
+        //   ①왼쪽 날개 : t = t0+d 에서  d' = far → d   (직각선을 따라 안으로)
+        //   ②전면     : d' = d   에서  t  = t0+d → t1−d
+        //   ③오른쪽 날개: t = t1−d 에서 d' = d → far   (직각선을 따라 밖으로)
+        //   </code>
+        //   <para>표고는 셋 다 같다 — 소단은 한 표고의 등고선이기 때문이다.
+        //   이렇게 하면 날개도 <b>전면과 똑같은 기준</b>(면 + 소단)으로 쌓인다.</para>
+        List<Point3>? Row(double d, double z)
+        {
+            double lo = t0 + d, hi = t0 + span - d;      // 좌우 직각선이 d만큼 안으로
+            double inner = hi - lo;
+            if (inner <= dens) return null;               // 양쪽에서 만났다 — 여기서 닫힌다
+            // ★날개는 t가 고정이라 <b>줄마다 숫자 하나</b>다 — 그 자리의 데이라잇까지.
+            double farLo = FarOf(lo), farHi = FarOf(hi);
+            var r = new List<Point3>();
+            void Add(double t, double dd)
+            {
+                double tw = ((t % tot) + tot) % tot;
+                var w = OutwardAt(ruler, rcum, tw, dd);
+                if (r.Count > 0)
+                {
+                    var l = r[r.Count - 1];
+                    if (Math.Abs(w.X - l.X) < 1e-9 && Math.Abs(w.Y - l.Y) < 1e-9) return;
+                }
+                r.Add(new Point3(w.X, w.Y, z));
+            }
+            double legLo = Math.Max(0.0, farLo - d), legHi = Math.Max(0.0, farHi - d);
+            int nLo = Math.Max(1, (int)Math.Ceiling(legLo / dens));
+            int nHi = Math.Max(1, (int)Math.Ceiling(legHi / dens));
+            int nF = Math.Max(2, (int)Math.Ceiling(inner / dens));
+            for (int j = nLo; j >= 0; j--) Add(lo, d + legLo * j / nLo);       // ①왼쪽 날개(밖→안)
+            for (int i = 0; i <= nF; i++) Add(lo + inner * i / nF, d);         // ②전면
+            for (int j = 0; j <= nHi; j++) Add(hi, d + legHi * j / nHi);       // ③오른쪽 날개(안→밖)
+            return r.Count >= 2 ? r : null;
+        }
+
+        // ── 쐐기(구간선 + 직각선 둘 + 데이라잇) — <b>원지반 최고점을 찾는 영역</b>으로만 쓴다.
+        //   ★★[JACK 0914 "폴리곤이 구간보다 더 돌출되어서 작성돼"] 이것을 <b>표면 경계로 쓰면 안 된다</b>.
+        //   쐐기는 데이라잇(수십 m)까지 가는데 벽은 몇 m밖에 안 나간다 — 그 차이만큼
+        //   <b>빈 자리를 TIN이 보간으로 메워</b> 벽을 덮어 버리고(그래서 측면이 안 보였다),
+        //   그려 놓으면 구간보다 훌쩍 튀어나온 것으로 보인다.
+        // ★쐐기의 바깥 변도 <b>자리마다</b> 물결친다 — 그래야 A의 두 끝이 데이라잇 위에 앉는다.
+        List<Point3>? wedge;
+        {
+            int nA2 = Math.Max(2, (int)Math.Ceiling(span / dens));
+            var ring = new List<Point3>();
+            void P(double t, double dd)
+            {
+                double tw = ((t % tot) + tot) % tot;
+                var w = OutwardAt(ruler, rcum, tw, dd);
+                if (ring.Count > 0)
+                {
+                    var l = ring[ring.Count - 1];
+                    if (Math.Abs(w.X - l.X) < 1e-6 && Math.Abs(w.Y - l.Y) < 1e-6) return;
+                }
+                ring.Add(new Point3(w.X, w.Y, z0));
+            }
+            for (int i = 0; i <= nA2; i++) P(t0 + span * i / nA2, 0.0);                       // 구간선
+            for (int i = nA2; i >= 0; i--) { double t = t0 + span * i / nA2; P(t, FarOf(t)); } // 데이라잇(되짚기)
+            wedge = ring.Count >= 4 ? ring : BandRing(ruler, rcum, t0, t1, 0.0, far, z0, dens);
+        }
+        wedgePolygon = wedge;      // ★그리는 것은 이것 — 데이라잇까지 간다
+
+        // ── 폴리곤 <b>안</b>의 최대 원지반 높이
+        double gTop = double.NaN; int miss = 0, looked = 0;
+        {
+            int nD = Math.Max(4, (int)Math.Ceiling(far / Math.Max(dens, 1.0)));
+            for (int i = 0; i <= nA; i++)
+            {
+                double t = t0 + span * i / nA; if (t >= tot) t -= tot;
+                for (int j = 0; j <= nD; j++)
+                {
+                    var w = OutwardAt(ruler, rcum, t, FarOf(t) * j / nD);
+                    if (!ground.TryGetElevation(w.X, w.Y, out double gz)) { miss++; continue; }
+                    looked++;
+                    if (double.IsNaN(gTop) || (up ? gz > gTop : gz < gTop)) gTop = gz;
+                }
+            }
+        }
+        if (double.IsNaN(gTop))
+        { log = $"폴리곤 안에서 원지반을 한 점도 못 물었다(조회 실패 {miss}회)"; return outp; }
+
+        // ★그 높이를 <b>품는</b> 단 — 단 b는 표고 z0+H(b−1) ~ z0+Hb를 품는다. 허용오차는 1mm.
+        int nB = (int)Math.Ceiling((Math.Abs(gTop - z0) - 1e-3) / benchH);
+        nB = Math.Max(1, Math.Min(nB, Math.Max(1, p.MaxBenches) * 4));
+
+        // ── 쌓기 — 한 단에 줄 둘(면 위 · 소단 밖). 줄이 닫히면 거기서 멈춘다.
+        var r0 = Row(0.0, z0);
+        if (r0 == null) { log = $"구간({span:0.#}m)이 너무 짧아 줄을 못 만들었다"; return outp; }
+        outp.Add(r0);
+        double dAcc = 0; int made = 0; bool closed = false;
+        for (int i = 1; i <= nB && !closed; i++)
+        {
+            double z = z0 + (up ? +1 : -1) * benchH * i;
+            dAcc += faceRun;
+            var rf = Row(dAcc, z);
+            if (rf == null) { closed = true; break; }
+            outp.Add(rf);                                             // 면 위(사면끝)
+            // ★★★[JACK 0914] <b>마지막 단은 소단에서 끝내지 않고 옹벽(면)에서 끝낸다.</b>
+            //   <para>JACK: <i>"단의 마지막은 소단에서 끝내지 말고 <b>옹벽에서 끝내</b>"</i>.
+            //   꼭대기에 1m 소단이 허공으로 튀어나오면 안 된다 — 벽 면에서 끝나고
+            //   거기서 원지반과 만나야 한다. 그래서 마지막 단에는 <b>소단 줄을 안 만든다</b>.</para>
+            if (benchOut > 1e-6 && i < nB)
+            {
+                dAcc += benchOut;
+                var rb = Row(dAcc, z);
+                if (rb == null) { closed = true; made = i; break; }
+                outp.Add(rb);                                         // 소단 밖(소단끝)
+            }
+            made = i;
+        }
+
+        // ── 돌려주는 폴리곤은 <b>벽의 진짜 발자국</b>이다 — 표면 경계도 이것으로 가둔다.
+        //
+        //   ★★★[JACK 0914 "날개벽쪽이 없어"] <b>줄은 물러나는데 경계가 안 물러나면 측면이 뭉개진다.</b>
+        //   <para>첫 판은 경계를 <c>BandRing(t0..t1 × 0..dAcc)</c> — 즉 <b>직사각형</b>으로 줬다.
+        //   그런데 줄은 단마다 좌우로 물러나 <b>사다리꼴</b>이다. 그 차이만큼 경계 안에
+        //   <b>데이터가 없는 구석</b>이 생기고, Civil은 그 구석을 <b>보간으로 메운다</b> —
+        //   측면 벽이 그 매끈한 보간면에 묻혀 사라진다.</para>
+        //   <para>→ 경계를 <b>줄들의 끝을 따라간 계단</b>으로 만든다. 데이터와 경계가 같은 모양이 된다.</para>
+        {
+            var foot = new List<Point3>();
+            void Push(Point3 q)
+            {
+                if (foot.Count > 0)
+                {
+                    var l = foot[foot.Count - 1];
+                    if (Math.Abs(q.X - l.X) < 1e-6 && Math.Abs(q.Y - l.Y) < 1e-6) return;
+                }
+                foot.Add(new Point3(q.X, q.Y, z0));
+            }
+            // ★줄이 ㄷ자가 됐으므로 발자국은 <b>맨 아래 ㄷ자</b>와 <b>맨 위 ㄷ자</b>로 감싼다.
+            foreach (var q in outp[0]) Push(q);                               // ①밑 ㄷ자(밖→안→밖)
+            var top = outp[outp.Count - 1];
+            for (int i = top.Count - 1; i >= 0; i--) Push(top[i]);            // ②꼭대기 ㄷ자 되짚기
+            polygon = foot.Count >= 4 ? foot : BandRing(ruler, rcum, t0, t1, 0.0,
+                          Math.Max(dAcc, faceRun), z0, dens);
+        }
+
+        int pts = 0; foreach (var l in outp) pts += l.Count;
+        double zTopMade = z0 + (up ? +1 : -1) * benchH * made;
+        log = $"단 <b>{made}</b>개 · 줄 {outp.Count}개(한 단에 둘: 면 {faceRun:0.###}m + 소단 {benchOut:0.##}m"
+            + " · <b>마지막 단은 면에서 끝</b>)"
+            + $" · 점 {pts}개 · 한 단 합계 {run:0.###}m · <b>옹벽 내민 거리 {dAcc:0.##}m</b>"
+            + $" · 찍은 선 {z0:0.##}m → 꼭대기 {zTopMade:0.##}m"
+            + $" · <b>폴리곤 안 원지반 최고 {gTop:0.##}m</b>(품음"
+            + $" {(up ? zTopMade >= gTop - 1e-3 : zTopMade <= gTop + 1e-3)}"
+            + $" · 한 단 아래 {z0 + (up ? +1 : -1) * benchH * Math.Max(0, made - 1):0.##}m)"
+            + $" · <b>발자국 폴리곤 {(polygon?.Count ?? 0)}점</b>(줄 끝을 따라간 <b>계단</b> · 벽 끝 {dAcc:0.##}m까지)"
+            + $" · 쐐기 {(wedge?.Count ?? 0)}점(데이라잇 {far:0.##}m까지 — 최고점 찾기에만 씀)"
+            + $" · 구간 {span:0.#}m · <b>세 변 모두에서 안쪽으로</b>(줄이 단마다 좌우 {run:0.###}m씩 물러난다)"
+            + (closed ? $" · <b>{made}단에서 닫혔다</b>(양쪽에서 만났다 — 구간이 짧다)" : "")
+            + $" · 원지반 잰 점 {looked}개" + (miss > 0 ? $" · 조회 실패 {miss}회" : "");
+        return outp;
+    }
+
+    /// <summary>★★★[JACK 0911] <b>원지반 띠 — 선을 밀지 않고 <u>면 안에서</u> 원지반을 뜬다.</b>
+    ///
+    /// <para><b>왜 다시 지었나.</b> 첫 판은 ⊐자 선을 바깥으로 밀어 띠를 만들었다.
+    /// 그런데 선을 밀면 <b>날개 토막이 옆으로</b> 움직인다 — 벽 단에는 맞는 셈이지만
+    /// (소단도 옆으로 물러난다) 띠에는 틀렸다. 실측:</para>
+    /// <code>
+    /// 찍은 선   X[-24.5..0]   Y[0..46.6]
+    /// 선 밀기   X[-24.5..25.5] Y[-25.5..72.1]   ← 옆으로 아래 25.5m · 위 25.5m 번짐
+    /// </code>
+    /// <para>구간 양옆으로 <b>바깥 거리만큼</b> 번져 멀쩡한 사면을 덮었다.
+    /// JACK: <i>"내 생각엔 이런 식으론 해결 못할 것 같은데?"</i> — 맞는 지적이었다.</para>
+    ///
+    /// <para>→ <b>띠는 면이다.</b> 찍은 구간을 따라가며, 각 자리에서 <b>바깥으로만</b>
+    /// <paramref name="fromDist"/>(벽이 다 닿은 거리)에서 <paramref name="toDist"/>
+    /// (옛 사면 데이라잇까지)까지 <b>한 줄로</b> 뻗는다. 옆으로는 <b>한 뼘도 안 나간다</b> —
+    /// 구간 끝을 넘는 자리가 없기 때문이다. 표고는 <b>원지반 그대로</b>.</para>
+    ///
+    /// <para>돌려주는 것은 <b>바깥 방향 빗살</b>이다 — 각 줄이 "이 자리에서 바깥으로" 한 줄.
+    /// 빗살은 서로 안 만나므로 어떤 모양에서도 <b>겹치거나 꼬이지 않는다</b>.</para></summary>
+    /// <param name="ruler">찍은 선이 놓인 고리(자).</param>
+    /// <param name="t0">구간 시작 호길이.</param>
+    /// <param name="t1">구간 끝 호길이.</param>
+    /// <param name="fromDist">벽이 원지반에 다 닿은 거리 — 여기서부터 원지반이다.</param>
+    /// <param name="toDist">여기까지 뜬다(옛 사면 데이라잇까지의 거리).</param>
+    public static List<List<Point3>> GroundBand(
+        IReadOnlyList<Point3> ruler, double[] rcum, double t0, double t1,
+        IGroundSurface ground, GradingParams p,
+        double fromDist, double toDist, out string log)
+    {
+        var outp = new List<List<Point3>>();
+        log = "";
+        if (ruler == null || rcum == null || ruler.Count < 3 || ground == null)
+        { log = "자나 원지반이 없다"; return outp; }
+        if (!(toDist > fromDist + 0.05))
+        { log = $"뜰 폭이 없다(벽이 {fromDist:0.##}m에서 닿았고 목표가 {toDist:0.##}m)"; return outp; }
+
+        double dens = Math.Max(0.3, Math.Min(p.VertexSpacing, 1.0));
+        double tot = rcum[rcum.Length - 1];
+        double span = t1 >= t0 ? t1 - t0 : tot - t0 + t1;
+        if (!(span > 1e-6)) { log = "구간 길이가 0이다"; return outp; }
+
+        int nAlong = Math.Max(2, (int)Math.Ceiling(span / dens));
+        int nOut = Math.Max(2, (int)Math.Ceiling((toDist - fromDist) / Math.Max(dens, 1.0)));
+        int miss = 0, pts = 0;
+        double zLo = double.MaxValue, zHi = double.MinValue;
+
+        for (int i = 0; i <= nAlong; i++)
+        {
+            double t = t0 + span * i / nAlong;
+            if (t >= tot) t -= tot;
+            var teeth = new List<Point3>(nOut + 1);
+            for (int j = 0; j <= nOut; j++)
+            {
+                double d = fromDist + (toDist - fromDist) * j / nOut;
+                var w = OutwardAt(ruler, rcum, t, d);
+                if (!ground.TryGetElevation(w.X, w.Y, out double gz)) { miss++; continue; }
+                teeth.Add(new Point3(w.X, w.Y, gz));
+                pts++; zLo = Math.Min(zLo, gz); zHi = Math.Max(zHi, gz);
+            }
+            if (teeth.Count >= 2) outp.Add(teeth);
+        }
+
+        log = $"빗살 {outp.Count}줄 × 최대 {nOut + 1}점 · 점 {pts}개"
+            + $" · 바깥 {fromDist:0.##}~{toDist:0.##}m · 구간 {span:0.#}m(둘레 {tot:0.#}m)"
+            + $" · 표고 {(pts > 0 ? zLo : 0):0.##}~{(pts > 0 ? zHi : 0):0.##}m"
+            + (miss > 0 ? $" · <b>원지반 조회 실패 {miss}점</b>(그 자리는 비웠다 — 0으로 안 덮는다)" : "");
+        return outp;
+    }
+
+    /// <summary>★★★[JACK 0911] <b>벽을 쌓고, 원지반에 닿은 뒤에는 원지반을 그대로 떠서 더 나간다.</b>
+    ///
+    /// <para>JACK: <i>"로직 아이디어만 이어서하기를 쓰되 새롭게 생각해야해"</i> ·
+    /// <i>"이어서하기 기준면을 쓸 때 <b>정지기준면</b>인데 우린 사실 <b>원지반까지</b> 치는 것이기 때문에
+    /// 이 부분 해결이 중요하다"</i>.</para>
+    ///
+    /// <para><b>그 지적이 정확했다.</b> <c>GradeMode.Append</c>의 기준면은 <c>GradeStart.Decide</c>가
+    /// 지금까지 <b>합성된 면</b>(<c>정지면_DH</c>)으로 자동으로 잡는다(<c>GradeStart.cs:80-83</c>) —
+    /// 그 면에는 <b>옛 사면이 이미 구워져</b> 있다. 그런데 옹벽으로 바꾼 자리는
+    /// 벽 바깥이 <b>원지반으로 돌아가야</b> 한다. 합성면을 기준으로 치면 그 일을 할 수가 없다.</para>
+    ///
+    /// <para>★그리고 계획폴리곤으로 넘기는 길도 <b>재서 닫혔다</b>: 정지 엔진은 계획폴리곤을
+    /// <b>사방으로 버퍼</b>해 링을 먼저 만들므로(<c>Build</c>의 <c>basePoly.Buffer(+dist)</c>),
+    /// 쐐기 모양 폴리곤의 안쪽 변에서 <b>부지 쪽으로</b> 자란다 — 실측 1196점 · 29.8m.
+    /// 기준면을 원지반에서 합성면으로 바꿔도 <b>똑같이 1196점</b>이었다(원지반은 "언제 멈출지"만 정한다).</para>
+    ///
+    /// <para><b>그래서 폴리곤을 안 쓴다.</b> 고른 구간 + 날개 둘로 만든 <b>ㄷ자 선</b>에서
+    /// 직접 쌓는다(그 선은 이미 만들고 있었고, 출하되는 자가검증도 통과한다 —
+    /// 현장 로그: <i>"단 5개 · 표고 105→125 · 한 단 폭 1.050m ✓ · 날개 양쪽이 살아 있는 단 5/5 ✓"</i>).
+    /// 다만 <b>TIN에 안 넣고 있었을 뿐</b>이다.</para>
+    ///
+    /// <para><b>두 토막으로 쌓는다.</b>
+    /// ①<b>벽</b> — 한 단씩 밀며 올린다. 표고는 자리마다 <c>min(단 표고, 원지반)</c>으로 <b>가둔다</b>
+    ///   (한 표고로 끊으면 안 된다 — 현장 로그의 두 끝이 <b>120.00 vs 119.18</b>로 달랐다).
+    /// ②<b>원지반 띠</b> — 벽이 다 닿은 뒤부터 <paramref name="outerDist"/>까지 계속 밀되
+    ///   표고는 <b>원지반 그대로</b>. 이 띠가 <b>옛 사면을 덮어 원지반으로 되돌리는</b> 몫이다.</para>
+    ///
+    /// <para>이 선들을 브레이크라인으로 별도 지표면에 넣고 <b>정지면 위에 붙이면</b>(합성 순서 맨 끝)
+    /// 붙인 자리만 덮인다. <b>링을 한 줄도 고치지 않으므로</b> 끊긴 자리(현장 로그 24곳)가
+    /// 생길 자리가 없다.</para></summary>
+    /// <param name="line">ㄷ자 선 — 고른 구간과 날개 둘을 이은 것(표고는 찍은 선 그대로).</param>
+    /// <param name="outerDist">여기까지 원지반을 뜬다(m) — 보통 <b>옛 사면 데이라잇까지의 거리</b>.</param>
+    /// <param name="log">무엇을 몇 줄 만들었는지 — 화면 없이 파악하려면 이 줄을 본다.</param>
+    public static List<List<Point3>> WallThenGround(
+        IReadOnlyList<Point3> line, IGroundSurface ground, GradingParams p, bool up,
+        double slope, double benchW, int outSign, double outerDist, out string log)
+        => WallThenGround(line, ground, p, up, slope, benchW, outSign, outerDist, out log, out _);
+
+    /// <summary>★[JACK 0911] 벽이 <b>다 닿은 거리</b>도 돌려주는 판 — <see cref="GroundBand"/>가
+    /// 그 거리에서 시작해야 벽과 띠 사이에 틈이 없다.</summary>
+    public static List<List<Point3>> WallThenGround(
+        IReadOnlyList<Point3> line, IGroundSurface ground, GradingParams p, bool up,
+        double slope, double benchW, int outSign, double outerDist,
+        out string log, out double wallEndDist)
+    {
+        var outp = new List<List<Point3>>();
+        log = "";
+        wallEndDist = 0;
+        if (line == null || line.Count < 2 || ground == null) { log = "선이나 원지반이 없다"; return outp; }
+
+        double benchH = p.BenchHeightOf(up);
+        double run = Math.Max(benchH * Math.Max(slope, p.MinSlope), p.MinFaceRun) + Math.Max(benchW, 0);
+        if (!(run > 1e-6) || !(benchH > 1e-6)) { log = $"한 단 내밀기({run:0.###}m)나 단높이가 0이다"; return outp; }
+        int maxB = Math.Max(1, p.MaxBenches);
+        double zdir = up ? +1 : -1;
+        double z0 = line[0].Z;
+
+        // ── ① 찍은 선 그 자리(벽 밑) — 표고는 찍은 선 그대로
+        var first = new List<Point3>(line.Count);
+        foreach (var q in line) first.Add(q);
+        outp.Add(first);
+
+        // 자리마다 원지반 표고 — 못 물으면 NaN(0으로 덮지 않는다)
+        double Gz(double x, double y) => ground.TryGetElevation(x, y, out double g) ? g : double.NaN;
+
+        int wallN = 0, bandN = 0, miss = 0;
+        double doneAt = double.NaN;     // 벽이 다 닿은 거리
+        double lastDist = 0;
+
+        // ── ② 벽 — 한 단씩. 표고는 자리마다 원지반에서 가둔다.
+        for (int b = 1; b <= maxB; b++)
+        {
+            double dist = run * b;
+            var nxt = OffsetOpen(line, dist, outSign, z0 + zdir * benchH * b);
+            if (nxt == null || nxt.Count < 2) { log += $"벽 {b}단에서 밀기 실패 · "; break; }
+            double zb = z0 + zdir * benchH * b;
+            int reached = 0;
+            for (int i = 0; i < nxt.Count; i++)
+            {
+                double gz = Gz(nxt[i].X, nxt[i].Y);
+                if (double.IsNaN(gz)) { miss++; continue; }         // 못 물었다 — 단 표고를 그대로 둔다
+                double zc = up ? Math.Min(zb, gz) : Math.Max(zb, gz);
+                if (Math.Abs(zc - gz) < 1e-6) reached++;             // 이 자리는 원지반에 닿았다
+                nxt[i] = new Point3(nxt[i].X, nxt[i].Y, zc);
+            }
+            outp.Add(nxt); wallN++; lastDist = dist; wallEndDist = dist;
+            if (reached >= nxt.Count) { doneAt = dist; break; }      // <b>모든 자리가</b> 닿았다 → 벽 끝
+        }
+
+        // ── ③ 원지반 띠 — 벽이 닿은 뒤부터 바깥 거리까지. 표고는 원지반 그대로.
+        if (outerDist > lastDist + 1e-6)
+        {
+            double step = Math.Max(run, Math.Max(0.5, Math.Min(p.VertexSpacing, 2.0)));
+            int guard = 0;
+            for (double d = lastDist + step; d <= outerDist + 1e-9 && guard++ < 400; d += step)
+            {
+                var nxt = OffsetOpen(line, d, outSign, z0);
+                if (nxt == null || nxt.Count < 2) { log += $"원지반 띠 {d:0.#}m에서 밀기 실패 · "; break; }
+                for (int i = 0; i < nxt.Count; i++)
+                {
+                    double gz = Gz(nxt[i].X, nxt[i].Y);
+                    if (double.IsNaN(gz)) { miss++; continue; }
+                    nxt[i] = new Point3(nxt[i].X, nxt[i].Y, gz);
+                }
+                outp.Add(nxt); bandN++; lastDist = d;
+            }
+            // ★<b>마지막 줄은 정확히 목표 거리에</b> 둔다 — 걸음 단위로 끊으면 한 걸음(최대 2m)이
+            //   모자라 옛 사면이 그 띠만큼 남는다(실측: 목표 60m인데 58.2m까지만 갔다).
+            if (outerDist > lastDist + 0.05)
+            {
+                var tail = OffsetOpen(line, outerDist, outSign, z0);
+                if (tail != null && tail.Count >= 2)
+                {
+                    for (int i = 0; i < tail.Count; i++)
+                    {
+                        double gz = Gz(tail[i].X, tail[i].Y);
+                        if (double.IsNaN(gz)) { miss++; continue; }
+                        tail[i] = new Point3(tail[i].X, tail[i].Y, gz);
+                    }
+                    outp.Add(tail); bandN++; lastDist = outerDist;
+                }
+            }
+        }
+
+        double zLo = double.MaxValue, zHi = double.MinValue; int pts = 0;
+        foreach (var l in outp) foreach (var q in l)
+        { pts++; if (!double.IsNaN(q.Z)) { zLo = Math.Min(zLo, q.Z); zHi = Math.Max(zHi, q.Z); } }
+        log = $"벽 {wallN}단(한 단 {run:0.###}m"
+            + (double.IsNaN(doneAt) ? " · <b>원지반에 못 닿고 단 수를 다 썼다</b>" : $" · {doneAt:0.##}m에서 다 닿음")
+            + $") · 원지반 띠 {bandN}줄({lastDist:0.#}m까지 · 목표 {outerDist:0.#}m)"
+            + $" · 줄 {outp.Count}개 · 점 {pts}개 · 표고 {(pts > 0 ? zLo : 0):0.##}~{(pts > 0 ? zHi : 0):0.##}m"
+            + (miss > 0 ? $" · <b>원지반 조회 실패 {miss}점</b>(그 자리는 단 표고를 그대로 뒀다)" : "")
+            + " " + log;
+        return outp;
+    }
+
     /// <summary>열린 선을 <b>한쪽으로</b> <paramref name="dist"/>만큼 민다(표고는 <paramref name="z"/>로 고정).
     /// <para>끝 점은 그 자리 방향으로, 사이 점은 <b>두 방향의 가운데</b>로 민다 — 마이터.
     /// 아주 뾰족한 굽이는 마이터가 폭발하므로 <c>MiterLimit</c>으로 자른다.</para></summary>
@@ -1419,25 +2196,62 @@ public static class GradingGeometry
         //   경계의 직각이 두 변 중 <b>한쪽으로 쏠려</b>, 안쪽 변이 7.45m에서 <b>10.7m로 3.2m 튀어나갔다</b> —
         //   그것도 <b>벽과 날개가 만나는 바로 그 자리</b>다. 찍은 선을 제 법선으로 미는 것이 맞는 셈이다.
         //   (부호는 짐작하지 않고 <b>재서</b> 고른다 — 경계에 더 가까워지는 쪽이 안쪽이다.)
+        // ★★★[JACK 0911 현장 로그] <b>부호는 "거리"가 아니라 "방향"으로 고른다.</b>
+        //
+        //   <para>종전엔 <c>OffsetOf(cand[0]) &lt; OffsetOf(picked[0])</c>으로, 즉 <b>경계에 더
+        //   가까워지는 쪽</b>을 안쪽으로 봤다. 그런데 찍은 선이 <b>계획 경계에 얹혀 있으면</b>
+        //   (내밀기 0m — <b>1단을 찍는 가장 흔한 경우</b>) 두 부호 모두 경계에서 1.05m가 되어
+        //   <b>어느 쪽도 "더 가깝지" 않다</b> → 둘 다 거절되고 폴리곤이 안 만들어졌다.</para>
+        //
+        //   <para>현장 로그(17:30) 그대로: <i>"찍은 선이 계획 경계에서 <b>0m</b>밖에 안 떨어져 있어…"</i>
+        //   — 자 둘레 280.1m가 계획 경계 둘레 280.0m와 같았다(= 자가 곧 경계).</para>
+        //
+        //   <para>★<b>검사 열네 판이 전부 내밀기 8.5m 링을 썼다</b> — 출하되는 입력(내밀기 0m)을
+        //   한 번도 안 밟았다. 「검사 입력은 출하 입력이어야 한다」를 어긴 자리다.</para>
+        //
+        //   <para>→ <b>자의 바깥 방향</b>과 견준다. 밀린 방향이 바깥의 <b>반대</b>면 그것이 안쪽이다.
+        //   이 판정은 찍은 선이 경계 위에 있어도, 한참 밖에 있어도 <b>똑같이 동작한다</b>.</para>
         List<Point3>? innerTry = null;
-        foreach (int sgn in new[] { +1, -1 })
         {
-            var cand = OffsetOpen(picked, run, sgn, zLine);
-            if (cand == null || cand.Count < 2) continue;
-            if (OffsetOf(cand[0]) < OffsetOf(picked[0])) { innerTry = cand; break; }
+            var pMid = picked[picked.Count / 2];
+            double tMidR = ParamAt(ruler, rcum, pMid.X, pMid.Y);
+            var rMid = PointAtParam(ruler, rcum, tMidR);
+            var oMid = OutwardAt(ruler, rcum, tMidR, 1.0);
+            double ox = oMid.X - rMid.X, oy = oMid.Y - rMid.Y;
+            double ol = Math.Sqrt(ox * ox + oy * oy);
+            if (ol > 1e-9) { ox /= ol; oy /= ol; }
+            foreach (int sgn in new[] { +1, -1 })
+            {
+                var cand = OffsetOpen(picked, run, sgn, zLine);
+                if (cand == null || cand.Count < 2) continue;
+                // 후보 가운데 점이 <b>찍은 선의 최근접점에서 어느 쪽으로</b> 밀렸나
+                var q = cand[cand.Count / 2];
+                double bestD = double.MaxValue, nx = q.X, ny = q.Y;
+                for (int m = 0; m + 1 < picked.Count; m++)
+                {
+                    var a3 = picked[m]; var b3 = picked[m + 1];
+                    double sx = b3.X - a3.X, sy = b3.Y - a3.Y, L2 = sx * sx + sy * sy;
+                    double u = L2 < 1e-12 ? 0 : Math.Max(0, Math.Min(1,
+                        ((q.X - a3.X) * sx + (q.Y - a3.Y) * sy) / L2));
+                    double px = a3.X + sx * u, py = a3.Y + sy * u;
+                    double d = (q.X - px) * (q.X - px) + (q.Y - py) * (q.Y - py);
+                    if (d < bestD) { bestD = d; nx = px; ny = py; }
+                }
+                double dx = q.X - nx, dy = q.Y - ny;
+                if (dx * ox + dy * oy < 0) { innerTry = cand; break; }   // 바깥의 반대 = 안쪽
+            }
         }
         if (innerTry == null || innerTry.Count < 2)
         {
             // ★[검토 0911 · 보통11] <b>진짜 까닭을 말한다.</b> 두 부호 모두 거절되는 자리는
             //   대개 "찍은 선이 경계에서 한 단 내밀기보다 가깝다"다 — 이미 옹벽인 구간을
             //   다시 찍으면 바로 그 경계선상이다. 종전엔 점 수만 말해 손 쓸 수가 없었다.
+            // ★[JACK 0911] <b>"경계에서 가깝다"는 까닭이 아니다.</b> 경계에 얹힌 선(내밀기 0m)은
+            //   <b>정상</b>이고 가장 흔한 경우다 — 그때 거절하던 것이 결함이었다.
             double off0 = OffsetOf(picked[0]);
-            why = off0 < run + 0.05
-                ? $"찍은 선이 계획 경계에서 <b>{off0:0.##}m</b>밖에 안 떨어져 있어"
-                  + $" 한 단 내밀기({run:0.##}m)만큼 안쪽으로 밀 자리가 없습니다."
-                  + " 이미 옹벽인 구간이면 사면으로 먼저 바꾸거나, 한 단 밖의 선을 찍어 주세요."
-                : $"안쪽 변을 못 만들었습니다(찍은 구간 {picked.Count}점 · 경계에서 {off0:0.##}m"
-                  + $" · 한 단 내밀기 {run:0.##}m).";
+            why = $"안쪽 변을 못 만들었습니다 — 찍은 구간 {picked.Count}점 ·"
+                + $" 경계에서 {off0:0.##}m · 한 단 내밀기 {run:0.##}m."
+                + " 찍은 구간이 너무 짧거나 제 몸에서 되꺾여 있는지 확인해 주세요.";
             LastWallPolyLog = "거절 — " + why;
             return null;
         }

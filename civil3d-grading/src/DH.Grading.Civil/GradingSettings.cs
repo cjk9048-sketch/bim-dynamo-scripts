@@ -25,7 +25,7 @@ public static class GradingSettings
     /// <b>같은 번호를 단 빌드가 여러 개</b>가 되어, 어느 것이 깔렸는지 물으면 답할 수가 없었다.</para>
     /// <para><c>x.0</c> = 화면·명령이 바뀌어 <b>사용자가 다르게 일하게</b> 되는 판 ·
     /// <c>x.y</c> = 같은 화면에서 결함을 고친 판.</para></summary>
-    public const string Version = "v88.3 (2026-09-11)";
+    public const string Version = "v93.3 (2026-09-14)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -99,6 +99,42 @@ public static class GradingSettings
     //   "가상 계획폴리곤을 이어서하기로 합성한다"는 방향에는 이 스위치가 <b>필수 재료</b>다.</para>
     //   <para>★기본값 <c>false</c>다 — 켜지 않으면 지금까지와 <b>한 점도</b> 달라지지 않는다.</para>
     public static bool NoPlatform = false;
+
+    /// <summary>★★★[JACK 0911] <b>전이면 선</b> — 옹벽 변환 자리의 <b>벽 + 원지반 띠</b>.
+    ///
+    /// <para>JACK: <i>"로직 아이디어만 이어서하기를 쓰되 <b>새롭게 생각해야 해</b>"</i> ·
+    /// <i>"이어서하기 기준면을 쓸 때 <b>정지기준면</b>인데 우린 사실 <b>원지반까지</b> 치는 것이기 때문에
+    /// 이 부분 해결이 중요하다"</i>.</para>
+    ///
+    /// <para><c>ZoneEditCommon</c>이 <see cref="GradingGeometry.WallThenGround"/>로 만들어 담고,
+    /// <c>CreateGradingCommand</c>가 별도 지표면(<c>전이면_DH</c>)으로 구워
+    /// <b>합성 순서 맨 끝</b>에 붙인다. 맨 끝이라 <b>그 자리만</b> 옛 사면을 덮는다.</para>
+    ///
+    /// <para>★<c>ZoneOverride</c>와 같은 <b>한 번만 쓰는</b> 통로다 — 진입 즉시 떠서 비운다.
+    /// <b>그래서 재생성하면 전이면이 사라진다</b>(번들에 아직 안 담는다) — 다음 걸음에서 담을 것.</para></summary>
+    public static System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? TransitionLines;
+
+    /// <summary>★★★[JACK 0914] <b>전이면을 어디까지 할까 — 한 단계씩</b>.
+    ///
+    /// <para>JACK: <i>"일단 한 단계씩 가자 <b>합성 부분은 빼고</b> 먼저 가상 옹벽만 만드는 것까지만 해봐."</i>
+    /// 앞서 ①~⑤를 한꺼번에 켰더니 로그로는 전부 성공인데(교선 289점·212점 · 합성 전부 OK)
+    /// 화면은 이상했다 — <b>어느 단계가 틀렸는지 가릴 수가 없었다</b>. 그래서 단계를 쪼갠다.</para>
+    ///
+    /// <list type="table">
+    /// <item><term>0</term><description>끈다 — v88.3과 <b>한 점도 다르지 않다</b></description></item>
+    /// <item><term>1</term><description><b>가상옹벽_DH만</b> 만든다. 자르지도, 합성하지도 않는다 —
+    ///   정지면은 안 건드린다. 눈으로 벽 모양만 본다.</description></item>
+    /// <item><term>2</term><description>+ 원지반·사면과의 데이라잇으로 <b>자른다</b>. 아직 합성 안 한다.</description></item>
+    /// <item><term>3</term><description>+ 원지반 조각과 함께 <b>합성한다</b>(완성).</description></item>
+    /// </list>
+    ///
+    /// <para>지금 <b>1</b>이다 — JACK이 벽 모양을 먼저 보기로 했다.</para></summary>
+    public static int TransitionStage = 2;
+
+    /// <summary>★[JACK 0914] 옹벽 전환에서 만드는 <b>조각 표면의 최대 개수</b>(벽·뚜껑 각각).
+    /// <c>CreateGradingCommand</c>와 <c>ResetCommand</c>가 <b>같은 값을 보게</b> 여기 둔다 —
+    /// 따로 적어 두면 조용히 어긋나 지워지지 않는 표면이 남는다(검토 0914 · 낮음).</summary>
+    public const int WallPartMax = 16;
     public static double HatchShort = 1.0;     // 노리선 짧은선 간격 (m, 길이=사면폭 절반)
     public static double HatchLong = 5.0;      // 노리선 긴선 간격 (m, 길이=사면폭 전체)
     public static bool KeepIntermediateSurfaces = true; // true=중간 지표면(가상절토/가상성토/Pad) 유지(오류 확인용). false=최종면만 남기고 정리

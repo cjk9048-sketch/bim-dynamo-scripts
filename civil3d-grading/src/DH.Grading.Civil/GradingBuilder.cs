@@ -20,9 +20,11 @@ public static class GradingBuilder
     /// cornerLines(코너 능선)를 주면 열린 브레이크라인으로 추가 — 코너 모따기(사선) 방지(직각 모드).</summary>
     /// <param name="seamLines">★[JACK 0911] <b>이음매 선(날개벽 등고선)</b> — TIN에만 넣는다.
     /// 코너 능선과 달리 <c>BreaklinePrep</c>의 교차 처리에 <b>안 넣는다</b>(수백 건이 생겨 둘 다 망가진다).</param>
+    /// <param name="midOrd">브레이크라인 허용오차(m). <b>넣는 형상보다 작아야 한다</b> —
+    /// 옹벽처럼 0.05m 면이 있는 것은 기본값 1.0m로는 뭉개진다(JACK 0914 실측: 측면이 사라졌다).</param>
     public static ObjectId BuildVirtualSlope(Database db, Transaction tr, IReadOnlyList<List<Point3>> rings, string name,
         IReadOnlyList<List<Point3>>? cornerLines = null, ObjectId protect = default,
-        IReadOnlyList<List<Point3>>? seamLines = null)
+        IReadOnlyList<List<Point3>>? seamLines = null, double midOrd = 1.0)
     {
         // [재실행 정리] 같은 이름(및 _2, _3… 번호 변형)의 옛 DH 가상면을 먼저 삭제 — 실행마다 쌓여
         // 옛 표면을 보고 "안 생겼다"고 오인하는 혼란 방지(JACK). 항상 최신 하나만 남는다. 원지반(protect)은 제외.
@@ -39,7 +41,7 @@ public static class GradingBuilder
         int intended = rings.Count;
         if (cornerLines != null)
         {
-            foreach (var cl in cornerLines) AddOpenBreakline(tin, cl);
+            foreach (var cl in cornerLines) AddOpenBreakline(tin, cl, midOrd);
             intended += cornerLines.Count;
         }
         // ★[JACK 0911] 이음매 선 — <b>TIN에만</b> 넣는다(교차 처리·옹벽선 판정에는 안 들어간다).
@@ -65,9 +67,14 @@ public static class GradingBuilder
                           SeamCoverText() +
                           (sharedPts > 0 ? $" · 보조선-링 공유정점 {sharedPts}개 삽입(교차 경고 제거, maxΔZ {BreaklinePrep.LastMaxZGap:F3}m)" : "") +
                           (BreaklinePrep.LastMaxZGap > 2.0 ? " · ΔZ>2m 교차는 스냅 생략(안전판 — 형상 무해, Civil3D 경고만 남음)" : ""));
+            // ★[JACK 0914 로그] <b>링이 하나도 없을 수 있다.</b> 옹벽 판은 링이 아니라
+            //   <b>열린 줄 8개</b>로 만든다 — 그때 rings[0]이 터져
+            //   "검증 실패: Index was out of range"만 남고 <b>진단이 통째로 죽었다</b>(v93.2 로그 146줄).
+            bool hasRings = rings != null && rings.Count > 0;
+            if (!hasRings) vb.AppendLine("  [격자 탐침] 링이 없어 건너뜀(열린 줄로만 만든 판 — 옹벽 등)");
             // 부지 중심(첫 링 평균)
             double cx = 0, cy = 0; int cn = 0;
-            foreach (var pt in rings[0]) { cx += pt.X; cy += pt.Y; cn++; }
+            if (hasRings) foreach (var pt in rings![0]) { cx += pt.X; cy += pt.Y; cn++; }
             cx /= Math.Max(cn, 1); cy /= Math.Max(cn, 1);
             for (int r = 0; r < rings.Count; r++)
             {
@@ -117,11 +124,11 @@ public static class GradingBuilder
                     vb.AppendLine(row.ToString());
                 }
             }
-            Grid("부지 내부", rings[0], 6);
+            if (hasRings) Grid("부지 내부", rings![0], 6);
             // ★[0806 JACK '로그가 너무 길다'] 계단 전체 16×16 숫자 지도는 **16줄**을 차지하는데,
             //   '어느 쪽이 안 생겼나'를 찾던 시절(v13~v15 비대칭 추적)에 만든 것이고 그 문제는 닫혔다.
             //   구멍(빈 셀)이 실제로 있을 때만 지도를 펼치고, 없으면 한 줄 요약으로 끝낸다.
-            GridOrSummary("계단 전체", rings[rings.Count - 1], 16);
+            if (hasRings) GridOrSummary("계단 전체", rings![rings.Count - 1], 16);
 
             void GridOrSummary(string title, IReadOnlyList<Point3> extent, int nDiv)
             {
@@ -153,7 +160,7 @@ public static class GradingBuilder
 
     /// <summary>교선(폐합 루프)을 가상면의 Outer 경계로 주입(비파괴 = 경계선에서 삼각형 정밀 절단) 후 Rebuild.
     /// 경계는 표면 정의에 저장되므로 이후 다른 표면 작업/재그리기에 영향받지 않는다.</summary>
-    public static void AddOuterBoundary(TinSurface tin, IReadOnlyList<Point3> ring)
+    public static void AddOuterBoundary(TinSurface tin, IReadOnlyList<Point3> ring, double midOrd = 1.0)
     {
         int n = ring.Count;
         if (n >= 2)
@@ -167,7 +174,9 @@ public static class GradingBuilder
         // nonDestructive=true: 경계에 걸친 삼각형을 경계선에서 '정밀 절단'(정점 삽입).
         // ※false로 A/B 실험 결과 절토까지 톱니(걸친 삼각형 통째 제거) — true가 올바른 의미로 확정(2026-07-03).
         //   성토가 경계 밖으로 튀어나오던 문제는 별개 원인 → VerifyBoundaryClip 실측으로 추적.
-        tin.BoundariesDefinition.AddBoundaries(pc, 1.0, Autodesk.Civil.SurfaceBoundaryType.Outer, true);
+        // ★★★[JACK 0914] 허용오차가 형상보다 크면 <b>경계의 계단이 뭉개진다</b> —
+        //   옹벽 발자국은 0.05m·1.0m 계단이라 1.0m로는 한 줄로 펴진다(측면이 잘려 나간다).
+        tin.BoundariesDefinition.AddBoundaries(pc, midOrd, Autodesk.Civil.SurfaceBoundaryType.Outer, true);
         tin.Rebuild();
     }
 
@@ -427,16 +436,20 @@ public static class GradingBuilder
     }
 
     /// <summary>기존 경계 정의를 모두 제거하고 새 Outer(+선택 Hide)로 교체 — paste 거부 시 정규화 링 재주입용.</summary>
-    public static void ReplaceOuterBoundary(TinSurface tin, IReadOnlyList<Point3> ring, IReadOnlyList<Point3>? hideRing = null)
+    /// <param name="midOrd">허용오차(m). ★[JACK 0914 로그] 종전엔 이 값을 <b>안 넘겼다</b> —
+    /// 부르는 쪽이 0.001을 줘도 <c>AddOuterBoundary</c>가 기본값 1.0으로 받아 <b>조용히 무시</b>됐다.
+    /// 옹벽 발자국은 평면에서 0.05m 계단이라 1.0m로는 한 줄로 펴진다.</param>
+    public static void ReplaceOuterBoundary(TinSurface tin, IReadOnlyList<Point3> ring,
+                                            IReadOnlyList<Point3>? hideRing = null, double midOrd = 1.0)
     {
         try { var bd = tin.BoundariesDefinition; while (bd.Count > 0) bd.RemoveAt(0); } catch { }
-        AddOuterBoundary(tin, ring);
-        if (hideRing != null) AddHideBoundary(tin, hideRing);
+        AddOuterBoundary(tin, ring, midOrd);
+        if (hideRing != null) AddHideBoundary(tin, hideRing, midOrd);
         try { tin.Rebuild(); } catch { }
     }
 
     /// <summary>내부 숨김(Hide) 경계 — 링 안쪽을 도넛처럼 뚫는다(절토면에서 pad 제거 → 성토와 겹침 제거).</summary>
-    public static void AddHideBoundary(TinSurface tin, IReadOnlyList<Point3> ring)
+    public static void AddHideBoundary(TinSurface tin, IReadOnlyList<Point3> ring, double midOrd = 1.0)
     {
         int n = ring.Count;
         if (n >= 2)
@@ -447,7 +460,7 @@ public static class GradingBuilder
         if (n < 3) return;
         var pc = new Point3dCollection();
         for (int i = 0; i < n; i++) pc.Add(new Point3d(ring[i].X, ring[i].Y, ring[i].Z));
-        tin.BoundariesDefinition.AddBoundaries(pc, 1.0, Autodesk.Civil.SurfaceBoundaryType.Hide, true);
+        tin.BoundariesDefinition.AddBoundaries(pc, midOrd, Autodesk.Civil.SurfaceBoundaryType.Hide, true);
         tin.Rebuild();
     }
 
@@ -478,9 +491,15 @@ public static class GradingBuilder
     /// 스냅샷을 맨 끝으로 옮기면 <b>세 개 다</b> 구워져 그 기대가 비로소 사실이 된다.</para>
     ///
     /// <para>→ 붙여넣는 동안은 <c>Rebuild</c>만 하고, <b>다 붙인 뒤 한 번만</b> 굳힌다.</para></summary>
+    /// <param name="freeze">끝에서 <b>스냅샷을 구울지</b>. ★[검토 0914 · 높음]
+    /// <c>Composite</c>는 여태 <paramref name="freezeEach"/>와 <b>무관하게</b> 끝에서 반드시 굳혔다.
+    /// 그런데 옹벽 전환의 <b>중간 조각</b>들은 소스가 <b>원지반 전체</b>(이 저장소 실측 삼각형 <b>25만 개</b>)라,
+    /// 조각이 N개면 25만 삼각형 스냅샷이 <b>N벌</b> 도면에 굳는다. 게다가 경계는 스냅샷 <b>뒤에</b>
+    /// 걸리므로 굳은 자료가 줄지도 않는다. 중간 조각엔 <c>false</c>를 주고, 마지막 결과만 굳힌다
+    /// (<c>정지면_DH</c>가 <c>가상절토_DH</c>를 붙이는 방식 그대로 — 소스는 도면에 남으니 안전하다).</param>
     public static ObjectId Composite(Database db, Transaction tr, string name,
         IReadOnlyList<(ObjectId id, string label)> pasteOrder, out string log, bool freezeEach = false,
-        ObjectId protect = default)
+        ObjectId protect = default, bool freeze = true)
     {
         var sb = new System.Text.StringBuilder();
         EraseSurfacesByBaseName(tr, name, protect); // 재실행 스택 방지 — 원지반(protect)은 이름이 겹쳐도 보호(JACK 0715)
@@ -507,9 +526,10 @@ public static class GradingBuilder
             }
             catch (System.Exception ex) { sb.Append($"{label}:실패[{ex.GetType().Name}] {ex.Message}  "); }
         }
-        try { Freeze(final); } catch { }
+        if (freeze) { try { Freeze(final); } catch { } }
+        else { try { final.Rebuild(); } catch { } }
         // ★[v32.14 · 자문2 §12] 굳히기가 실제로 무엇을 했는지 함께 남긴다 — 조용한 실패를 없앤다.
-        sb.Append(" · 굳히기: " + LastFreezeDiag);
+        sb.Append(freeze ? " · 굳히기: " + LastFreezeDiag : " · 굳히기 <b>생략</b>(중간 조각)");
         log = sb.ToString().Trim();
         return id;
     }
@@ -585,12 +605,18 @@ public static class GradingBuilder
     public static string LastFreezeDiag { get; private set; } = "";
 
     /// <summary>열린 브레이크라인(코너 능선 등) — 링과 달리 닫지 않는다.</summary>
-    private static void AddOpenBreakline(TinSurface tin, IReadOnlyList<Point3> pts)
+    /// <summary>열린 브레이크라인 하나.
+    /// <para>★★★[JACK 0914 "모형뷰어로 봐야만 보여 · 전면만 나와"] <b>허용오차가 형상보다 크면
+    /// 형상이 뭉개진다.</b> 종전엔 <c>midOrdinate</c>가 <b>1.0m</b>로 박혀 있었다.
+    /// 옹벽의 <b>면 run은 0.05m</b>(단높이 5m × 구배 1:0.01)이고 소단은 1.0m다 —
+    /// 허용오차가 그보다 크거나 같으니 <b>계단이 한 줄로 뭉개지고</b> 측면(날개벽)이 사라진다.
+    /// 옹벽처럼 잔 것을 넣을 때는 <paramref name="midOrd"/>를 <b>그 형상보다 작게</b> 줘야 한다.</para></summary>
+    private static void AddOpenBreakline(TinSurface tin, IReadOnlyList<Point3> pts, double midOrd = 1.0)
     {
         if (pts.Count < 2) return;
         var pc = new Point3dCollection();
         foreach (var pt in pts) pc.Add(new Point3d(pt.X, pt.Y, pt.Z));
-        try { tin.BreaklinesDefinition.AddStandardBreaklines(pc, 1.0, 0.0, 0.0, 0.0); } catch { }
+        try { tin.BreaklinesDefinition.AddStandardBreaklines(pc, midOrd, 0.0, 0.0, 0.0); } catch { }
     }
 
     /// <summary>★★[v30.4 · JACK 0812] <b>끝점이 맞닿는 조각끼리 이어 붙인다 — 데이라잇을 폐합시킨다.</b>
@@ -1662,6 +1688,89 @@ public static class GradingBuilder
         return $"지표면 재작성 — 소스 {nSrc}개 먼저 · 합성면 {nComp}개 나중(스냅샷 {snap}) · 표면단위 플래그 잔여 {stuck.Count}"
              + (stuck.Count > 0 ? " ⚠[" + string.Join(" · ", stuck) + "]" : "")
              + "  ※정의 탭 ⚠는 <작업 한 줄> 단위라 이 값으로 안 잡힌다(2026 API에 읽을 속성 없음 — 조사 확인)";
+    }
+
+    /// <summary>★★★[JACK 0914 "가상옹벽에 안 보여 모형뷰어로 봐야만 보여"]
+    /// <b>지표면을 평면에서 보이게 만든다</b> — 전용 스타일(삼각형 켬)과 레이어를 준다.
+    ///
+    /// <para><b>왜 안 보였나.</b> <see cref="BuildVirtualSlope"/>는 표면을 만들 때
+    /// <b>레이어도 스타일도 안 준다</b> — 현재 레이어에 <b>기본 스타일</b>로 만들어진다.
+    /// 기본 스타일은 평면에서 아무것도 안 그리는 경우가 많고(특히 "(Background)" 계열),
+    /// 그러면 <b>모형 뷰어에서만</b> 보인다. 정지면은 따로 스타일을 받아서 보였던 것이다.</para>
+    ///
+    /// <para>남의 스타일을 고치지 않는다 — <b>이 이름의 스타일을 따로 만들어</b> 쓴다.
+    /// 평면·모형 둘 다 <b>삼각형과 경계</b>를 켜고, 좁은 띠에서 지저분한 <b>등고선은 끈다</b>.</para></summary>
+    /// <returns>무엇을 했는지 — 로그에 그대로 실을 한 줄.</returns>
+    public static string MakeSurfaceVisible(Database db, Transaction tr, string baseName,
+        string styleName, string layerName, short aci)
+    {
+        var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+        var sb = new System.Text.StringBuilder();
+
+        // ① 전용 스타일 — 없으면 만든다
+        ObjectId styleId = ObjectId.Null;
+        try
+        {
+            var styles = civilDoc.Styles.SurfaceStyles;
+            foreach (ObjectId sid in styles)
+                if (tr.GetObject(sid, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.Styles.SurfaceStyle st0
+                    && string.Equals(st0.Name, styleName, System.StringComparison.OrdinalIgnoreCase))
+                { styleId = sid; break; }
+            if (styleId.IsNull) { styleId = styles.Add(styleName); sb.Append("스타일 새로 만듦 · "); }
+            else sb.Append("스타일 있음 · ");
+
+            var st = (Autodesk.Civil.DatabaseServices.Styles.SurfaceStyle)tr.GetObject(styleId, OpenMode.ForWrite);
+            var DT = typeof(Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType);
+            int on = 0, off = 0;
+            foreach (Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType t
+                     in System.Enum.GetValues(DT))
+            {
+                bool want = t == Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType.Triangles
+                         || t == Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType.Boundary;
+                try { st.GetDisplayStylePlan(t).Visible = want; } catch { }
+                try { st.GetDisplayStyleModel(t).Visible = want; } catch { }
+                if (want) on++; else off++;
+            }
+            sb.Append($"평면·모형에서 삼각형·경계 켬({on}종 켜고 {off}종 끔) · ");
+        }
+        catch (System.Exception ex) { sb.Append($"스타일 실패[{ex.GetType().Name}] · "); }
+
+        // ② 레이어 — 꺼져 있으면 켜고, 표면을 거기 올린다
+        ObjectId layerId = ObjectId.Null;
+        try
+        {
+            EnsureLayer(db, tr, layerName, aci);
+            var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+            if (lt.Has(layerName))
+            {
+                layerId = lt[layerName];
+                var ltr = (LayerTableRecord)tr.GetObject(layerId, OpenMode.ForWrite);
+                if (ltr.IsOff) { ltr.IsOff = false; sb.Append("레이어가 꺼져 있어 켬 · "); }
+                if (ltr.IsFrozen) { try { ltr.IsFrozen = false; sb.Append("레이어가 동결이라 품 · "); } catch { } }
+            }
+        }
+        catch (System.Exception ex) { sb.Append($"레이어 실패[{ex.GetType().Name}] · "); }
+
+        // ③ 표면에 붙이고 표시를 켠다
+        int n = 0;
+        foreach (ObjectId sid in civilDoc.GetSurfaceIds())
+        {
+            if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
+            string nm = s.Name;
+            if (nm != baseName && !(nm.StartsWith(baseName + "_") && int.TryParse(nm.Substring(baseName.Length + 1), out _)))
+                continue;
+            try
+            {
+                var w = (Autodesk.Civil.DatabaseServices.Surface)tr.GetObject(sid, OpenMode.ForWrite);
+                if (!styleId.IsNull) w.StyleId = styleId;
+                if (!layerId.IsNull) ((AcadEntity)w).LayerId = layerId;
+                ((AcadEntity)w).Visible = true;
+                n++;
+            }
+            catch (System.Exception ex) { sb.Append($"표면 '{nm}' 실패[{ex.GetType().Name}] · "); }
+        }
+        sb.Append($"<b>표면 {n}개</b>에 적용(스타일 '{styleName}' · 레이어 '{layerName}' · 표시 켬)");
+        return sb.ToString();
     }
 
     /// <summary>★[v32.2] 이름(또는 이름_N)인 지표면의 <b>표시 여부만</b> 바꾼다.

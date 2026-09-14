@@ -24,12 +24,25 @@ public sealed class ResetCommand
     // 지울 지표면 기준 이름(이름 또는 이름_N).
     // ★[v32.2] 순수 정지면(종단·횡단용)도 우리 산출물이라 같이 지운다 — 안 지우면 <b>낡은 순수면이 남아</b>
     //   초기화 뒤에도 종단이 그걸 보고 옛 형상을 그린다(지표면 목록에서 눈에 안 띄어 더 고약하다).
-    private static readonly string[] SurfaceBaseNames =
+    private static readonly string[] SurfaceBaseNames = BuildSurfaceBaseNames();
+
+    /// <summary>★[검토 0914 · 낮음] 옹벽 조각 이름은 <b>세어서</b> 만든다 —
+    /// <c>GradingSettings.WallPartMax</c>가 바뀌어도 조용히 어긋나지 않게.</summary>
+    private static string[] BuildSurfaceBaseNames()
+    {
+        var l = new System.Collections.Generic.List<string>
         { "정지면_DH", "정지면_DH이전", SectionCommand.PurePadSurfaceBase, SectionCommand.PurePadSurfaceBase + "이전",
           "가상절토_DH", "가상성토_DH", "_DH토량임시",
           // ★[JACK 0824] 터파기 산출물도 함께 — 안 지우면 "초기화했는데 터파기가 남아 있다"가 된다.
           ExcavCommand.SurfName, ExcavCommand.BaseName,
-          ViewSurfaceCommand.AllName, ViewSurfaceCommand.ExcavAllName };   // ★[JACK 0908] 보기 전용 합성면도 치운다
+          ViewSurfaceCommand.AllName, ViewSurfaceCommand.ExcavAllName,   // ★[JACK 0908] 보기 전용 합성면도 치운다
+          // ★[JACK 0914] <b>옹벽 전환 산출물</b> — 안 지우면 돌릴 때마다 '가상옹벽_DH_1, _2…'로 쌓인다.
+          //   재료(뚜껑·조각)는 눈에 안 보이게 꺼 두므로 <b>쌓여도 안 보인다</b> — 그래서 더 고약하다.
+          "가상옹벽_DH", "순수옹벽_DH", "옹벽뚜껑원본_DH", "옹벽뚜껑_DH", "옹벽뚜껑A_DH", "옹벽뚜껑B_DH" };
+        for (int i = 1; i <= GradingSettings.WallPartMax; i++)
+        { l.Add($"옹벽조각{i}_DH"); l.Add($"옹벽뚜껑{i}_DH"); }
+        return l.ToArray();
+    }
 
     [CommandMethod("DHRESET")]
     public void Run()
