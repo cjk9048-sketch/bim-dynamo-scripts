@@ -534,6 +534,12 @@ public static class GradingBuilder
         return id;
     }
 
+    /// <summary>★[JACK 0915] <b>굳히기를 밖에서도 부를 수 있게.</b>
+    /// <c>Composite</c>는 붙인 <b>직후</b> 굳히는데, 우리는 <b>경계로 자른 뒤</b> 굳혀야 한다 —
+    /// 그래야 스냅샷이 <b>자른 만큼만</b> 작게 굳는다(원지반을 그대로 굳히면 삼각형 25만 개).
+    /// 그리고 붙여넣기로 만든 면을 <b>다시 붙일</b> 때는 스냅샷이 있어야 안정적이다.</summary>
+    public static void FreezeSurface(TinSurface s) => Freeze(s);
+
     private static void Freeze(TinSurface s)
     {
         // ★[JACK 0807 'DH정지면에 스냅샷 재작성 느낌표가 뜬 상태로 작성됨'] 순서가 문제였다.

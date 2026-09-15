@@ -1282,16 +1282,26 @@ public static class GradingGeometry
                 // ★[검토 0914 · 높음] 표본을 <b>여럿</b> 모은다 — 안쪽 점 하나로는 길쭉한 띠에서 뒤집힌다.
                 var samples = new List<(double, double)> { (ip.X, ip.Y) };
                 {
+                    // ★★[JACK 0915 로그] <b>격자를 촘촘히 한다.</b> 현장에서 106.1㎡짜리 조각이
+                    //   표본을 <b>1점</b>밖에 못 잡았다 — ㄷ자 띠는 폭이 3.2m인데 감싸는 상자는 51×25m라
+                    //   5×5 격자(10m 간격)가 거의 다 조각 <b>밖</b>으로 떨어진다.
+                    //   그러면 다수결이 무의미해진다(검토 0914 · 높음이 걱정한 바로 그 자리).
+                    //   → 적게 잡히면 <b>촘촘히 다시</b> 훑는다.
                     var env = f.EnvelopeInternal;
-                    const int NG = 5;
-                    for (int gx = 0; gx < NG; gx++)
-                        for (int gy = 0; gy < NG; gy++)
-                        {
-                            double sx = env.MinX + (env.MaxX - env.MinX) * (gx + 0.5) / NG;
-                            double sy = env.MinY + (env.MaxY - env.MinY) * (gy + 0.5) / NG;
-                            try { if (f.Contains(gf.CreatePoint(new Coordinate(sx, sy)))) samples.Add((sx, sy)); }
-                            catch { }
-                        }
+                    void Scan(int ng)
+                    {
+                        for (int gx = 0; gx < ng; gx++)
+                            for (int gy = 0; gy < ng; gy++)
+                            {
+                                double sx = env.MinX + (env.MaxX - env.MinX) * (gx + 0.5) / ng;
+                                double sy = env.MinY + (env.MaxY - env.MinY) * (gy + 0.5) / ng;
+                                try { if (f.Contains(gf.CreatePoint(new Coordinate(sx, sy)))) samples.Add((sx, sy)); }
+                                catch { }
+                            }
+                    }
+                    Scan(5);
+                    if (samples.Count < 5) Scan(17);            // 289칸 — 3.2m 띠도 여러 점이 든다
+                    if (samples.Count < 5) Scan(51);            // 그래도 모자라면 더 촘촘히(아주 가는 조각)
                 }
                 // ★<b>Weed를 안 쓴다.</b> 옹벽 발자국은 평면에서 <b>0.05m</b> 계단이라
                 //   WeedDist(0.05m)에 걸려 계단이 한 줄로 펴질 수 있다(v93.2에서 이미 데인 자리).
