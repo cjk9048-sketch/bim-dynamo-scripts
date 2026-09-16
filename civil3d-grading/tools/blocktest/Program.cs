@@ -12256,6 +12256,110 @@ static Coordinate[] CloseXY(IReadOnlyList<Point3> r)
     }
 }
 
+// ── S127 ★★★[JACK 0916] <b>줄마다 3D로 자르기</b>(WallTrim) — 평면 투영을 버린 새 길 ──
+//   평면에서 자르면 5m 높이가 평면 5cm라 판정이 안 선다(0914~0916에 열 번 데인 자리).
+//   줄은 표고가 일정하므로 <b>줄을 따라가며 지형과 견주면</b> 1차원 문제가 된다 —
+//   그리고 <b>끝점 위에서 표고차는 정의상 0</b>이라 자가검증이 공짜다.
+{
+    Console.WriteLine("\n== S127 줄마다 3D로 자르기(WallTrim) ==");
+
+    // 줄: y = 0, 10, 20, 30, 40 에 각각 x 0~100 인 <b>표고 일정</b>한 줄(등고선)
+    //   z = 100, 105, 110, 115, 120
+    static List<List<Point3>> Rows5()
+    {
+        var rows = new List<List<Point3>>();
+        for (int i = 0; i < 5; i++)
+        {
+            double z = 100 + 5 * i, y = 10 * i;
+            var r = new List<Point3>();
+            for (int k = 0; k <= 100; k += 5) r.Add(new Point3(k, y, z));
+            rows.Add(r);
+        }
+        return rows;
+    }
+
+    // ★0 자체검증 — 두 면이 줄을 <b>다 품으면</b> 전부 남아야 한다
+    {
+        Func<double, double, double?> g = (x, y) => 1000.0;   // 아주 높은 원지반
+        Func<double, double, double?> d = (x, y) => 0.0;      // 아주 낮은 정지면
+        var lobes = WallTrim.Trim(Rows5(), g, d, 1.0, 0.01, out string lg);
+        Console.WriteLine("      S127 [다 품음] " + lg);
+        Check("S127 ★자체검증 — 다 품으면 덩이 1개", lobes.Count == 1, $"{lobes.Count}덩이");
+        Check("S127 ★자체검증 — 줄 5개가 다 남는다",
+              lobes.Count == 1 && lobes[0].Chains.Count == 5,
+              lobes.Count == 1 ? $"{lobes[0].Chains.Count}줄" : "-");
+    }
+
+    // ★1 ★★★<b>원지반이 기울어져 있으면 그 자리에서 잘린다</b> — 끝점이 곧 데이라잇
+    {
+        // 원지반: x가 클수록 높다. z=100+5i 인 줄은 x = (z-100)*2 에서 만난다.
+        Func<double, double, double?> g = (x, y) => 100.0 + x * 0.5;
+        Func<double, double, double?> d = (x, y) => 0.0;
+        var lobes = WallTrim.Trim(Rows5(), g, d, 1.0, 0.001, out string lg);
+        Console.WriteLine("      S127 [기운 원지반] " + lg);
+        Check("S127 ★덩이 1개", lobes.Count == 1, $"{lobes.Count}덩이");
+        if (lobes.Count == 1)
+        {
+            double worst = 0; int nEnd = 0;
+            foreach (var c in lobes[0].Chains)
+            {
+                // 잘린 끝(x가 큰 쪽)은 원지반과 만나야 한다 — |z − 원지반| ≈ 0
+                var p = c.Pts[0];                       // ★잘린 쪽은 <b>시작</b>이다 — 원지반이 x와 함께 오르므로
+                double gz = 100.0 + p.X * 0.5;
+                double e = Math.Abs(p.Z - gz);
+                if (p.X > 0.5) { nEnd++; if (e > worst) worst = e; }    // 줄 처음부터 남은 것은 제외
+            }
+            Console.WriteLine($"      S127 잘린 끝 {nEnd}개 · <b>|줄z − 원지반z| 최악 {worst:F4}m</b>");
+            Check("S127 ★★★끝점이 <b>데이라잇 위에</b> 앉는다(표고차 ≈ 0)", nEnd > 0 && worst < 0.02,
+                  $"끝 {nEnd}개 · 최악 {worst:F4}m");
+            // 이론값: z=105 → x=10, z=110 → x=20, z=115 → x=30, z=120 → x=40
+            var xs = new List<double>();
+            foreach (var c in lobes[0].Chains) xs.Add(c.Pts[0].X);
+            Console.WriteLine("      S127 잘린 x = " + string.Join(", ", xs.ConvertAll(v => v.ToString("F2"))));
+            bool okX = xs.Count == 5
+                    && Math.Abs(xs[1] - 10) < 0.05 && Math.Abs(xs[2] - 20) < 0.05
+                    && Math.Abs(xs[3] - 30) < 0.05 && Math.Abs(xs[4] - 40) < 0.05;
+            Check("S127 ★★★<b>이론값과 맞는다</b>(z=105→x=10 · 110→20 · 115→30 · 120→40)", okX,
+                  xs.Count == 5 ? $"{xs[1]:F2} {xs[2]:F2} {xs[3]:F2} {xs[4]:F2}" : $"{xs.Count}개");
+        }
+    }
+
+    // ★2 <b>아래쪽도 잘린다</b> — 정지면이 위로 올라오면 그만큼 빠진다
+    {
+        Func<double, double, double?> g = (x, y) => 1000.0;
+        Func<double, double, double?> d = (x, y) => 122.0;   // 120짜리 줄까지 전부 묻힌다
+        var lobes = WallTrim.Trim(Rows5(), g, d, 1.0, 0.01, out string lg);
+        Console.WriteLine("      S127 [정지면 122] " + lg);
+        int total = 0; foreach (var l in lobes) total += l.Chains.Count;
+        Check("S127 ★★★정지면보다 낮은 줄은 <b>하나도 안 남는다</b>", total == 0, $"{total}줄 남음");
+    }
+
+    // ★3 <b>줄이 가운데서 끊기면 덩이가 갈린다</b> — 평면 폴리고나이즈가 못 하던 것
+    {
+        // 가운데(40<x<60)만 원지반이 낮아 줄이 솟는다 → 좌우 두 덩이
+        Func<double, double, double?> g = (x, y) => (x > 40 && x < 60) ? 99.0 : 1000.0;
+        Func<double, double, double?> d = (x, y) => 0.0;
+        var lobes = WallTrim.Trim(Rows5(), g, d, 1.0, 0.01, out string lg);
+        Console.WriteLine("      S127 [가운데 패임] " + lg);
+        Check("S127 ★★★가운데가 끊기면 <b>덩이가 둘</b>이 된다", lobes.Count == 2, $"{lobes.Count}덩이");
+        bool ringsOk = true;
+        foreach (var l in lobes) if (l.Ring.Count < 4) ringsOk = false;
+        Check("S127 ★덩이마다 테두리가 만들어진다", ringsOk && lobes.Count == 2,
+              string.Join(" · ", lobes.ConvertAll(l => $"{l.Ring.Count}점")));
+    }
+
+    // ★4 <b>못 재는 자리엔 벽을 안 세운다</b>
+    {
+        Func<double, double, double?> g = (x, y) => x < 50 ? (double?)1000.0 : null;
+        Func<double, double, double?> d = (x, y) => 0.0;
+        var lobes = WallTrim.Trim(Rows5(), g, d, 1.0, 0.01, out string lg);
+        Console.WriteLine("      S127 [절반은 못 잼] " + lg);
+        double maxX = 0;
+        foreach (var l in lobes) foreach (var c in l.Chains) foreach (var q in c.Pts) if (q.X > maxX) maxX = q.X;
+        Check("S127 ★★★표고를 <b>못 잰 자리는 안 남긴다</b>(x<50만 남는다)", maxX < 51, $"가장 먼 x = {maxX:F1}");
+    }
+}
+
 /// <summary>[S122] NTS Polygon 하나를 우리 관례(닫힌 Point3 링, z=0)로 바꿔 RingHealth로 잰다.</summary>
 static (bool Closed, double CloseGap, int ExactDup, int NearDup1e6, int ZeroLen, int ShortUnder1e3,
         double MinSpacing, double MaxSpacingNZ, int SelfX, bool CCW, bool Convex, double Area, int N)

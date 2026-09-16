@@ -621,6 +621,45 @@ public sealed class PickCommands
         ed.WriteMessage($"\n  {PickSession.Tally}");
     }
 
+    /// <summary>★[JACK 0915] <b>고른 것이 무엇이고 <u>어느 높이</u>인지</b> 한 줄로.
+    ///
+    /// <para>JACK: <i>"계획경계 선택하면 미선택이 폴리곤이나 그런 객체이름으로 바뀌잖아 —
+    /// 그때 해당 객체의 <b>고도값</b>도 표시해줘. <c>고도 00m 폴리곤</c> 이런식으로"</i></para>
+    ///
+    /// <para><b>왜 쓸모 있나.</b> 계획 경계의 표고가 곧 <b>계획고</b>다 — 그런데 창에는
+    /// <c>Polyline</c>이라는 <b>영어 형식 이름</b>만 떴다. 엉뚱한 선을 고른 것을
+    /// 알아채는 가장 빠른 길이 그 숫자인데, 그것을 보려면 객체 특성창을 따로 열어야 했다.</para>
+    ///
+    /// <para>표고는 <see cref="BoundaryReader"/>가 읽는 <b>그 점들</b>에서 뽑는다 —
+    /// 정지가 실제로 쓰는 값과 <b>같은 값</b>이어야 하기 때문이다. 점마다 높이가 다르면
+    /// (3D 폴리선·피처라인) <b>범위</b>로 적는다. 못 읽으면 <b>고도를 안 적는다</b> —
+    /// 틀린 숫자를 적느니 없는 편이 낫다.</para></summary>
+    private static string Describe(Transaction tr, ObjectId id, DBObject o)
+    {
+        string kind = o switch
+        {
+            Polyline => "폴리곤",
+            Polyline3d => "3D폴리곤",
+            Autodesk.Civil.DatabaseServices.FeatureLine => "피처라인",
+            _ => o.GetType().Name,
+        };
+        try
+        {
+            var pts = BoundaryReader.Read(tr, id);
+            if (pts.Count > 0)
+            {
+                double lo = double.MaxValue, hi = double.MinValue;
+                foreach (var q in pts) { if (q.Z < lo) lo = q.Z; if (q.Z > hi) hi = q.Z; }
+                string z = hi - lo < 0.005
+                         ? $"고도 {lo:0.##}m"
+                         : $"고도 {lo:0.##}~{hi:0.##}m";
+                return $"{z} {kind}";
+            }
+        }
+        catch { }   // 읽을 수 없는 모양 — 이름만 적는다(틀린 고도를 적지 않는다)
+        return kind;
+    }
+
     /// <summary>하나 찍는 일의 뼈대 — <b>어떤 길로 빠져나가도 자물쇠를 푼다</b>.</summary>
     private static void PickOne(string key, string what, string prompt, bool wantSurface)
     {
@@ -659,7 +698,7 @@ public sealed class PickCommands
             {
                 using var tr = doc.Database.TransactionManager.StartTransaction();
                 var o = tr.GetObject(r.ObjectId, OpenMode.ForRead);
-                name = o is Autodesk.Civil.DatabaseServices.TinSurface ts ? ts.Name : o.GetType().Name;
+                name = o is Autodesk.Civil.DatabaseServices.TinSurface ts ? ts.Name : Describe(tr, r.ObjectId, o);
                 tr.Commit();
             }
             catch { }

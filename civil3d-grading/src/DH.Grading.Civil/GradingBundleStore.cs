@@ -127,8 +127,12 @@ public static class GradingBundleStore
     // v8: 실제 주입 클립링(Cut/FillClipRing) — 다중 구역 발자국 마스크 정본(GroundHandle 뒤에 추가).
     // v9: 옹벽선 정본(Cut/FillWallRuns) — 정지면 생성 때 확정 저장, 내보내기는 읽기만(옹벽선_재설계.md).
     /// <summary>v11 = 구간마다 <b>자(기준 폴리곤)</b> 추가 — JACK 0824.
-    /// 그 단의 링을 함께 저장해야 도면을 다시 열어도 구간이 같은 자리를 가리킨다.</summary>
-    public const int Version = 11;
+    /// 그 단의 링을 함께 저장해야 도면을 다시 열어도 구간이 같은 자리를 가리킨다.
+    ///
+    /// <para>★★[JACK 0915] <b>v12 = 구간마다 「부분 지정인가」</b>.
+    /// 이 한 칸이 없어서, 도면을 다시 열고 돌리면 <b>부분 지정이던 구간이 전체로</b> 되살아났다.
+    /// 옛 번들(v11 이하)에는 이 칸이 없으므로 <b>전체</b>로 읽는다 — 그것이 <b>종전 동작</b>이다.</para></summary>
+    public const int Version = 12;
 
     /// <summary>[v4] 구역 전체 저장 — 헤더(서명·버전·구역수) 뒤에 구역 본문을 차례로.</summary>
     public static void SaveAll(Database db, Transaction tr, IReadOnlyList<GradingBundle> regions)
@@ -233,7 +237,8 @@ public static class GradingBundleStore
 
     private static GradingBundle ReadRegion(TypedValue[] arr, ref int i, bool withGroundHandle, bool withZoneTo,
                                             bool splitBench, bool withRules, bool withClip, bool withRuns,
-                                            bool withSteps = false, bool withZoneRef = false)
+                                            bool withSteps = false, bool withZoneRef = false,
+                                            bool withPartial = false)
     {
         var b = new GradingBundle { PlanHandle = Str(arr, ref i), VertexCount = I32(arr, ref i) };
         b.CentroidX = Dbl(arr, ref i); b.CentroidY = Dbl(arr, ref i);
@@ -250,8 +255,8 @@ public static class GradingBundleStore
         b.FillFinalRings = ReadRingList(arr, ref i);
         // 옛 구간을 새 규칙으로 바꿀 때 '수직'은 그때의 MinSlope, '되돌림'은 그 방향의 전역 구배여야 한다.
         double minS = b.Params.MinSlope;
-        b.CutWallZones = ReadZones(arr, ref i, withZoneTo, withRules, minS, System.Math.Max(b.Params.CutSlope, minS), withZoneRef);
-        b.FillWallZones = ReadZones(arr, ref i, withZoneTo, withRules, minS, System.Math.Max(b.Params.FillSlope, minS), withZoneRef);
+        b.CutWallZones = ReadZones(arr, ref i, withZoneTo, withRules, minS, System.Math.Max(b.Params.CutSlope, minS), withZoneRef, withPartial);
+        b.FillWallZones = ReadZones(arr, ref i, withZoneTo, withRules, minS, System.Math.Max(b.Params.FillSlope, minS), withZoneRef, withPartial);
         if (withGroundHandle) b.GroundHandle = Str(arr, ref i);
         if (withClip)
         {
@@ -299,7 +304,9 @@ public static class GradingBundleStore
                 for (int k = 0; k < n; k++)
                     l.Add(ReadRegion(arr, ref i, withGroundHandle: true, withZoneTo: ver >= 5,
                                      splitBench: ver >= 6, withRules: ver >= 7, withClip: ver >= 8, withSteps: ver >= 10,
-                                     withZoneRef: ver >= 11, withRuns: ver >= 9));
+                                     withZoneRef: ver >= 11, withRuns: ver >= 9,
+                                     // ★[v12 · JACK 0915] 옛 번들엔 칸이 없다 → 전체로 읽는다(종전 동작)
+                                     withPartial: ver >= 12));
                 return l;
             }
             if (ver == 3)   // 하위호환 — 기존 도면(v3 단일 구역)도 그대로 사용
@@ -332,6 +339,8 @@ public static class GradingBundleStore
         {
             vals.Add(new((int)DxfCode.Real, z.T0));
             vals.Add(new((int)DxfCode.Real, z.T1));
+            // ★[v12 · JACK 0915] 부분 지정인가 — 전체 구간 변환은 종전 길로 가야 한다.
+            vals.Add(new((int)DxfCode.Int32, z.Partial ? 1 : 0));
             vals.Add(new((int)DxfCode.Int32, z.Rules.Count));
             foreach (var r in z.Rules)
             {
@@ -349,7 +358,7 @@ public static class GradingBundleStore
     /// 옛 구간의 '수직'은 그때의 MinSlope, '되돌림'은 그때의 전역 구배여야 하므로 params를 함께 받는다.</summary>
     private static List<SlopeZone>? ReadZones(
         TypedValue[] arr, ref int i, bool withToBench, bool withRules, double minSlope, double baseSlope,
-        bool withRef = false)
+        bool withRef = false, bool withPartial = false)
     {
         int n = I32(arr, ref i);
         if (n <= 0) return null;
@@ -357,9 +366,11 @@ public static class GradingBundleStore
         for (int k = 0; k < n; k++)
         {
             double t0 = Dbl(arr, ref i), t1 = Dbl(arr, ref i);
+            // ★[v12 · JACK 0915] 옛 번들엔 이 칸이 없다 → <b>전체</b>(false) = 종전 동작.
+            bool part = withPartial && I32(arr, ref i) != 0;
             if (withRules)
             {
-                var z = new SlopeZone { T0 = t0, T1 = t1 };
+                var z = new SlopeZone { T0 = t0, T1 = t1, Partial = part };
                 int rc = I32(arr, ref i);
                 for (int r = 0; r < rc; r++)
                 {

@@ -91,6 +91,27 @@ try
         try { if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true); } catch { }
     }
     Console.WriteLine("   완료 — Civil3D 시작 시 자동 로드됩니다.");
+    // ★[JACK 0915 배포판] <b>무엇을 깔았는지 찍는다.</b> 버전을 안 찍으면
+    //   "설치했는데 예전 것이 도는 것 같다"를 확인할 길이 사용자 쪽에 없다.
+    //   매니페스트의 AppVersion과 DLL 지문을 같이 보여 준다(우리가 재는 값과 같은 것).
+    try
+    {
+        string pcx = Path.Combine(pluginDir, "PackageContents.xml");
+        string ver = "?";
+        if (File.Exists(pcx))
+        {
+            string x = File.ReadAllText(pcx);
+            int a = x.IndexOf("AppVersion=\"", StringComparison.Ordinal);
+            if (a >= 0) { a += 12; int b = x.IndexOf('"', a); if (b > a) ver = x.Substring(a, b - a); }
+        }
+        string dll = Path.Combine(pluginDir, "Contents", "DH.Grading.Civil.dll");
+        string fp = "?";
+        if (File.Exists(dll))
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+                fp = Convert.ToHexString(sha.ComputeHash(File.ReadAllBytes(dll))).Substring(0, 12).ToLowerInvariant();
+        Console.WriteLine($"   버전 {ver} · 지문 {fp}");
+    }
+    catch { }
     Console.WriteLine();
 
     // ── ② 한국 좌표계 9종(KOREA_GRS80/BESSEL 125·127·129·131TM + UTM-K) ──

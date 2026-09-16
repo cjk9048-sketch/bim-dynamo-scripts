@@ -357,8 +357,16 @@ public sealed class CreateGradingCommand
                 cutZonesR = cutZones; fillZonesR = fillZones;
                 if (GradingSettings.TransitionStage >= 1)
                 {
+                    // ★★★[JACK 0915] <b>부분 지정일 때만 뗀다.</b>
+                    //   <para>JACK: <i>"옹벽변환 전체구간으로 했는데 … 구간변환만 손댄 거잖아.
+                    //   <b>전체구간변환기능은 이전이랑 동일해야 해.</b>"</i></para>
+                    //   <para>0914엔 이 줄에 <c>Partial</c> 검사가 없어 <b>선 전체를 옹벽으로 바꾸는</b>
+                    //   원래 기능까지 실험 중인 전이면 길로 갔다 — 벽이 정지면에서 빠지고
+                    //   <c>가상옹벽_DH</c>로만 따로 떠서, 쓰던 결과와 <b>다른 그림</b>이 나왔다
+                    //   (현장 12:37 로그: <c>적용 구간 = 선이 덮는 구간 전체</c>인데 전이면이 돌았다).</para>
                     static bool IsWall(SlopeZone z) =>
-                        z.Rules.Count > 0 && z.Rules[0].Slope <= GradingSettings.WallGateSlope + 1e-9;
+                        z.Partial
+                        && z.Rules.Count > 0 && z.Rules[0].Slope <= GradingSettings.WallGateSlope + 1e-9;
                     var cR = new System.Collections.Generic.List<SlopeZone>();
                     var fR = new System.Collections.Generic.List<SlopeZone>();
                     foreach (var z in cutZones) { if (IsWall(z)) wallZoneCut.Add(z); else cR.Add(z); }
@@ -369,8 +377,9 @@ public sealed class CreateGradingCommand
                         DiagLog.Append($"\n  ★옹벽 구간을 <b>정지면에서 뗐다</b> — 절토 {wallZoneCut.Count}개"
                             + $" · 성토 {wallZoneFill.Count}개(링 셈에서 뺌 · 번들에는 남긴다)."
                             + " 정지면은 그 자리도 <b>사면</b>으로 만들어지고, 옹벽은 '가상옹벽_DH'로 따로 나온다.\n");
-                        ed.WriteMessage($"\n[옹벽 분리] 옹벽 구간 {wallZoneCut.Count + wallZoneFill.Count}개를"
-                            + " 정지면에서 떼고 '가상옹벽_DH'로 따로 만듭니다.");
+                        ed.WriteMessage($"\n[옹벽 분리] <b>부분 지정</b> 옹벽 구간 {wallZoneCut.Count + wallZoneFill.Count}개를"
+                            .Replace("<b>", "").Replace("</b>", "")
+                            + " 정지면에서 떼고 '가상옹벽_DH'로 따로 만듭니다(전체 구간 변환은 종전대로).");
                     }
                 }
 
@@ -861,6 +870,14 @@ public sealed class CreateGradingCommand
                 ObjectId wallSlabId = ObjectId.Null, groundPieceId = ObjectId.Null;
                 // ★[JACK 0914] 쐐기·발자국은 <b>합성 뒤</b>에도 쓴다(뚜껑을 자를 칼) — 밖에 둔다.
                 System.Collections.Generic.List<Point3>? wedgePolyKeep = null, wallPolyKeep = null;
+                // ★★[JACK 0916] <b>절토인지 성토인지</b>도 들고 나간다 — 벽을 어느 쪽에서 잘라야 하는지가
+                //   그것으로 갈린다(아래 ④의 <c>inEarth</c>).
+                bool wallUpKeep = true;
+                // ★★★[JACK 0916] <b>줄(row)</b>을 2단계로 들고 나간다 — 새 로직의 재료다.
+                System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? slabKeep = null;
+                // ★★[JACK 0916 스샷] 정지 <b>데이라잇 링</b>도 들고 나간다 — 쐐기의 바깥 변은
+                //   표본으로 흉내 낸 선이라 진짜 곡선과 어긋난다. 마지막에 이 링으로 한 번 더 자른다.
+                System.Collections.Generic.List<Point3>? dayRingKeep = null;
                 int tStage = GradingSettings.TransitionStage;
                 if (tStage <= 0)
                     DiagLog.Append("\n  전이면 — <b>꺼져 있다</b>(TransitionStage=0)\n");
@@ -986,7 +1003,9 @@ public sealed class CreateGradingCommand
                                        ground: gSam3, p: p, up: wUp, slope: slopeW, benchW: benchWW,
                                        polygon: out var wallPoly, wedgePolygon: out var wedgePoly,
                                        log: out string slog);
-                        wedgePolyKeep = wedgePoly; wallPolyKeep = wallPoly;
+                        wedgePolyKeep = wedgePoly; wallPolyKeep = wallPoly; wallUpKeep = wUp; slabKeep = slab;
+                        if (finalRings.TryGetValue(wSide, out var dayR0) && dayR0 != null && dayR0.Count >= 3)
+                            dayRingKeep = new System.Collections.Generic.List<Point3>(dayR0);
                         DiagLog.Append($"    ①옹벽면 — {slog}\n");
 
                         if (slab.Count < 3)
@@ -1184,15 +1203,63 @@ public sealed class CreateGradingCommand
                         //   나머지 칼금이 통째로 빠지면 판이 덜 갈린다.
                         var lA = RawTriangleIntersectionFinder.GetExactDaylight(slabT, gndT, null, null);
                         var lB = RawTriangleIntersectionFinder.GetExactDaylight(slabT, jiT, null, null);
-                        string SizeOf(System.Collections.Generic.List<System.Collections.Generic.List<Point3>> ls)
+                        // ══ ★★★[JACK 0916] <b>딴 것이 진짜 데이라잇인지 잰다.</b>
+                        //
+                        //   <para>JACK: <i>"지금 우리는 <b>데이라잇과의 싸움</b>이야. 지표면들을 조합해서
+                        //   데이라잇을 따고 그걸 원하는 지표면의 경계에 추가해서 자르는 로직이야 —
+                        //   <b>최대한 데이라잇을 따는 로직에 집중해.</b>"</i></para>
+                        //
+                        //   <para>그런데 우리는 <b>딴 것이 데이라잇이 맞는지 한 번도 안 쟀다.</b>
+                        //   데이라잇의 뜻은 <b>두 면의 표고가 같은 선</b>이다 — 그러니 그 선 위 점마다
+                        //   <c>|벽 − 상대면|</c>을 재면 <b>0이어야 한다</b>. 0이 아닌 구간이 있다면
+                        //   그만큼은 데이라잇이 아니라 <b>이어 붙인 가짜 선</b>이다
+                        //   (<c>GetExactDaylight</c>은 열린 사슬을 <b>옹벽 자신의 바깥 경계</b>를 따라 닫는다 —
+                        //   0915에 실측한 그 46m가 그것이다).</para>
+                        //
+                        //   <para>이 한 줄이 있으면 <b>따는 로직</b>을 고칠 때마다
+                        //   좋아졌는지 나빠졌는지 <b>숫자로</b> 갈린다.</para>
+                        string DayQ(System.Collections.Generic.List<System.Collections.Generic.List<Point3>> ls,
+                                    TinSurface other, string otherName)
                         {
                             var sb2 = new System.Text.StringBuilder();
                             for (int i = 0; i < ls.Count; i++)
-                                sb2.Append(i > 0 ? " + " : "").Append($"{ls[i].Count}점/{RingArea(ls[i]):F0}㎡");
+                            {
+                                var r = ls[i];
+                                double len = 0;
+                                for (int k = 0; k < r.Count; k++)
+                                {
+                                    var u = r[k]; var v = r[(k + 1) % r.Count];
+                                    len += System.Math.Sqrt((u.X - v.X) * (u.X - v.X) + (u.Y - v.Y) * (u.Y - v.Y));
+                                }
+                                // ★점마다 <b>두 면의 표고차</b> — 진짜 데이라잇이면 0이다.
+                                int nOn = 0, nOff = 0, nMiss = 0; double worst = 0, offLen = 0;
+                                for (int k = 0; k < r.Count; k++)
+                                {
+                                    bool okW = TryZ(slabT, r[k].X, r[k].Y, out double zw);
+                                    bool okO = TryZ(other, r[k].X, r[k].Y, out double zo);
+                                    if (!okW || !okO) { nMiss++; continue; }
+                                    double d = System.Math.Abs(zw - zo);
+                                    if (d > worst) worst = d;
+                                    if (d <= 0.05) nOn++;
+                                    else
+                                    {
+                                        nOff++;
+                                        var v = r[(k + 1) % r.Count];
+                                        offLen += System.Math.Sqrt((r[k].X - v.X) * (r[k].X - v.X) + (r[k].Y - v.Y) * (r[k].Y - v.Y));
+                                    }
+                                }
+                                int tot = nOn + nOff;
+                                sb2.Append(i > 0 ? " + " : "")
+                                   .Append($"[{i + 1}] {r.Count}점/{RingArea(r):F0}㎡/{len:F0}m")
+                                   .Append(tot > 0 ? $" · <b>진짜 {100.0 * nOn / tot:F0}%</b>" : " · <b>못 쟀다</b>")
+                                   .Append(nOff > 0 ? $"(가짜 {nOff}점 ≈{offLen:F0}m · 최악 {worst:F2}m)" : "(전부 5cm 안)")
+                                   .Append(nMiss > 0 ? $" · 표고 못 잰 점 {nMiss}" : "");
+                            }
                             return ls.Count == 0 ? "없음" : sb2.ToString();
                         }
-                        DiagLog.Append($"\n  ②칼금 — 옹벽∩<b>원지반</b> {lA.Count}개({SizeOf(lA)})"
-                            + $" · 옹벽∩<b>정지면</b> {lB.Count}개({SizeOf(lB)})"
+                        DiagLog.Append($"\n  ②칼금 <b>품질</b>(진짜 = 두 면 표고차 5cm 안 · 가짜 = 이어 붙인 선)"
+                            + $"\n    옹벽∩<b>원지반</b> {lA.Count}개 — {DayQ(lA, gndT, "원지반")}"
+                            + $"\n    옹벽∩<b>정지면</b> {lB.Count}개 — {DayQ(lB, jiT, "정지면")}"
                             + " · <b>경계로 안 쓴다</b>(교선 링은 핀치라 Civil이 IllegalBoundary로 되돌린다 — v93.2 실측)\n");
 
                         if (wallPolyKeep == null || wedgePolyKeep == null)
@@ -1202,298 +1269,82 @@ public sealed class CreateGradingCommand
                         {
                             double zBase = wedgePolyKeep.Count > 0 ? wedgePolyKeep[0].Z : 0.0;
                             double areaW = RingArea(wedgePolyKeep), areaF = RingArea(wallPolyKeep);
-
-                            // ③ <b>쐐기를</b> 칼금으로 조각낸다 — 발자국도 칼금으로 같이 넣는다.
-                            //   ★<b>발자국이 아니라 쐐기를 가른다.</b> 그래야 조각들이 쐐기를 <b>빈 데 없이</b> 덮고,
-                            //   벽 몫과 뚜껑 몫이 <b>평면에서 한 뼘도 안 겹친다</b>.
-                            //   겹치면 안 되는 까닭은 실측되어 있다 — 같은 자리를 가진 두 면을 붙이면
-                            //   마지막 paste가 <c>SurfaceException(Failure)</c>로 깨진다(이 파일 671줄 '도넛' 주석).
-                            // ★★[JACK 0915 09:22 로그] <b>쓰레기 칼금을 거른다.</b> 실측에서
-                            //   <c>옹벽∩원지반</c>이 <b>8점/0㎡</b>짜리를 하나 냈다 — 넓이가 없는 링이다.
-                            //   그런 것이 섞이면 폴리고나이즈가 <b>0.0㎡ 슬리버 조각</b>을 뱉고,
-                            //   그 조각이 저마다 표면이 되어 삼각형 1개짜리가 합성에 끼어든다(실측 [5][6]).
-                            int cutDrop = 0;
-                            var cutters = new System.Collections.Generic.List<System.Collections.Generic.IReadOnlyList<Point3>?> { wallPolyKeep };
-                            foreach (var r in lA)
-                                if (r != null && r.Count >= 4 && RingArea(r) >= 0.01) cutters.Add(r); else cutDrop++;
-                            foreach (var r in lB)
-                                if (r != null && r.Count >= 4 && RingArea(r) >= 0.01) cutters.Add(r); else cutDrop++;
-                            if (cutDrop > 0)
-                                DiagLog.Append($"  ②-거름 — 넓이 없는 칼금 <b>{cutDrop}개</b>를 버렸다"
-                                    + "(0.01㎡ 미만 — 슬리버 조각의 씨앗이다)" + "\n");
-                            var faces = GradingGeometry.SplitFaces(wedgePolyKeep, cutters, zBase, p.VertexSpacing);
-
-                            // ④ 조각마다 <b>표본 여러 점에서 표고를 재서</b> 고른다 — "어느 쪽이 안인가"를 안 묻는다.
+                            // ※[JACK 0916] <b>칼금 만들기는 걷었다.</b> 폴리고나이즈로 판을 가르던 길을
+                            //   통째로 버렸으므로(아래 ③) 교선 링도, 진짜 구간 끊기도 더는 필요 없다.
+                            //   교선은 이제 <b>품질 계측(②)에만</b> 쓴다 — 데이라잇이 얼마나 진짜인지 보는 눈이다.
+                            // ══ ★★★[JACK 0916 · 검토 셋] <b>평면으로 자르는 길을 버린다.</b>
                             //
-                            //   ★★<b>잣대는 「옹벽이 원지반보다 위」 하나다.</b> JACK은 세 면(옹벽·정지면·원지반)을
-                            //   말했지만, <b>뚜껑으로 까는 면이 원지반</b>이라 잣대도 원지반이어야 앞뒤가 맞는다.
-                            //   정지면까지 잣대에 넣으면 성토 구간에서 「원지반 &lt; 벽 &lt; 정지면」인 띠가 버려지는데
-                            //   그 자리에 깔리는 것은 <b>원지반</b>이라, 보는 사람 눈에는 벽이 <b>까닭 없이 파먹힌</b> 것이 된다
-                            //   (검토 0914 · 치명). → 정지면은 <b>재서 적기만</b> 하고, 두 잣대가 <b>갈리는 조각 수</b>를
-                            //   세어 둔다. 그 수가 0이 아닌 날 다시 판단하면 된다(오늘 현장은 절토라 늘 0이다).
-                            const double ZTol = 0.02;
-                            const double TinyM2 = 0.5;   // 이 저장소 관례 — 이보다 작은 조각은 슬리버로 본다
-                            var wallFaces = new System.Collections.Generic.List<(System.Collections.Generic.List<Point3> Ring, System.Collections.Generic.List<System.Collections.Generic.List<Point3>> Holes)>();
-                            var lidFaces = new System.Collections.Generic.List<(System.Collections.Generic.List<Point3> Ring, System.Collections.Generic.List<System.Collections.Generic.List<Point3>> Holes)>();
-                            double aWall = 0, aLid = 0, aTiny = 0;
-                            int nTiny = 0, nNoW = 0, nNoG = 0, nNoJ = 0, nSplitVote = 0, nJiDiff = 0;
-                            var rowsSb = new System.Text.StringBuilder();
+                            //   <para>검토 결론: <i>"평면에서 자르는 접근 자체가 원리적으로 틀렸다.
+                            //   줄마다 3D로 자르면 <b>데이라잇은 따로 딸 필요가 없다</b> — 잘린 점이 곧 데이라잇이다."</i></para>
+                            //
+                            //   <para><b>까닭이 숫자로 있다.</b> 옹벽은 1:0.01이라 <b>5m 높이가 평면에서 5cm</b>다.
+                            //   그런데 판정이 필요한 선(데이라잇)이 하필 그 5cm 안에 있어,
+                            //   폴리고나이즈·안쪽점·격자표본·표고조회가 전부 <b>5cm 표적</b>을 맞춰야 했다.
+                            //   0914~0916에 열 번 넘게 고쳤지만 증상만 바뀌었다 —
+                            //   가짜 데이라잇 30% · 표결이 갈리는 조각 · 뚜껑의 8~14m 절벽 · 안 맞는 평면 데이라잇.</para>
+                            //
+                            //   <para>★그리고 <c>⑥-데이라잇 자르기</c>가 쓰던 링은 <b>옛 사면의 데이라잇</b>이었다
+                            //   (<c>finalRings</c> = 가상사면 ∩ 원지반). <b>벽과 아무 상관없는 선</b>으로 자르고 있었다 —
+                            //   JACK이 세 판 연속 말한 <i>"평면에서 데이라잇도 안 맞어"</i>가 그것이다.</para>
+                            //
+                            //   <para>→ <see cref="WallTrim"/>: 줄은 <b>표고가 일정</b>하므로 줄을 따라가며
+                            //   원지반·정지면과 견주면 <b>1차원 문제</b>가 된다. 남길 구간의 양 끝이 곧 데이라잇이고,
+                            //   <b>끝점 위에서 표고차는 정의상 0</b>이라 자가검증이 공짜다(S127 실측 0.001m).</para>
+                            var lobes = WallTrim.Trim(slabKeep,
+                                (x, y) => { return TryZ(gndT, x, y, out double z) ? z : (double?)null; },
+                                (x, y) => { return TryZ(jiT, x, y, out double z) ? z : (double?)null; },
+                                System.Math.Max(0.2, p.VertexSpacing * 0.25), 0.02, out string trimLog);
+                            DiagLog.Append($"  ③<b>줄마다 3D로 자름</b> — {trimLog}\n");
+
+                            // 벽 몫 = 덩이들의 테두리
+                            var Pw = new System.Collections.Generic.List<(System.Collections.Generic.List<Point3> Ring,
+                                System.Collections.Generic.List<System.Collections.Generic.List<Point3>> Holes)>();
+                            double aWall = 0;
+                            foreach (var lb in lobes)
+                            { Pw.Add((lb.Ring, new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>())); aWall += RingArea(lb.Ring); }
+                            Pw.Sort((x, y) => RingArea(y.Ring).CompareTo(RingArea(x.Ring)));
+
+                            // 뚜껑 몫 = 쐐기 − 벽 몫 · 뚫을 몫 = 발자국 − 벽 몫
+                            var pwFlat = new System.Collections.Generic.List<System.Collections.Generic.IReadOnlyList<Point3>?>();
+                            foreach (var q in Pw) pwFlat.Add(q.Ring);
+                            var Pl = GradingGeometry.RingSubtract(wedgePolyKeep, pwFlat, zBase, out string lidLog, p.VertexSpacing);
+                            var CutRegions = GradingGeometry.RingSubtract(wallPolyKeep, pwFlat, zBase, out string cutLog, p.VertexSpacing);
+                            double aLid = 0; foreach (var q in Pl) aLid += RingArea(q.Ring);
+                            DiagLog.Append($"  ④몫 나누기 — <b>옹벽 {aWall:F1}㎡</b>({Pw.Count}덩이)"
+                                + $" · <b>상부 원지반 {aLid:F1}㎡</b>({Pl.Count}덩이 · {lidLog})"
+                                + $" · 발자국에서 뚫을 몫 {CutRegions.Count}덩이({cutLog})\n");
+                            // ★★[검토 0916 · 보통] <b>탐침은 테두리에서 떨어진 자리만</b> 쓴다 —
+                            //   경계에 붙은 점은 근수직 계단 옆에서 어느 값이든 주므로 잣대가 안 된다
+                            //   (실측: 종전 표본이 경계에서 <b>5.7mm</b>까지 붙었다).
                             var probes = new System.Collections.Generic.List<(double X, double Y, bool Wall, double ZW, double ZG)>();
-                            foreach (var f in faces)
-                            {
-                                if (f.Area < TinyM2)
-                                {   // 슬리버는 <b>버리지 않고</b> 뚜껑에 준다 — 버리면 그 자리가 진짜 구멍이 된다
-                                    lidFaces.Add((f.Ring, f.Holes)); aLid += f.Area; aTiny += f.Area; nTiny++; continue;
-                                }
-                                int voteUp = 0, voteDn = 0, jiUp = 0, jiDn = 0;
-                                double zwS = 0, zgS = 0, zjS = 0; int nOk = 0;
-                                foreach (var (sx, sy) in f.Samples)
-                                {
-                                    bool okW = TryZ(slabT, sx, sy, out double zw);
-                                    bool okG = TryZ(gndT, sx, sy, out double zg);
-                                    bool okJ = TryZ(jiT, sx, sy, out double zj);
-                                    if (!okW) { nNoW++; continue; }
-                                    if (!okG) { nNoG++; continue; }
-                                    if (!okJ) nNoJ++;
-                                    if (zw > zg + ZTol) voteUp++; else voteDn++;
-                                    if (okJ) { if (zw > zj + ZTol) jiUp++; else jiDn++; }
-                                    zwS += zw; zgS += zg; zjS += okJ ? zj : zg; nOk++;
-                                }
-                                bool take = voteUp > voteDn;
-                                if (voteUp > 0 && voteDn > 0) nSplitVote++;              // 조각 안에서 판정이 갈렸다
-                                if (take && jiDn > jiUp) nJiDiff++;                       // 정지면 잣대와 <b>갈리는</b> 조각
-                                if (take) { wallFaces.Add((f.Ring, f.Holes)); aWall += f.Area; }
-                                else { lidFaces.Add((f.Ring, f.Holes)); aLid += f.Area; }
-                                // ★[검토 0914] <b>되읽기</b>용 탐침 — 다 만든 뒤 그 자리에서 정말 벽/원지반이 나오나 잰다.
-                                //   (memory: "되읽기는 화면을 정하는 값을 재라")
-                                if (nOk > 0 && probes.Count < 8)
-                                    probes.Add((f.Samples[0].X, f.Samples[0].Y, take, zwS / nOk, zgS / nOk));
-                                // ★표본이 <b>하나도 안 잡힌</b> 조각은 그 자리에 <b>벽이 없다</b>는 뜻이다
-                                //   (옹벽 표면은 발자국 밖에서 표고를 못 준다) — 뚜껑으로 간다. 그 줄도 남긴다.
-                                if (rowsSb.Length < 1600 && nOk == 0)
-                                    rowsSb.Append($"\n      · {f.Area,8:F1}㎡ 표본 {f.Samples.Count,2}점 ")
-                                          .Append("<b>다 못 쟀다</b>(그 자리엔 벽이 없다) → 뚜껑");
-                                if (rowsSb.Length < 1600 && nOk > 0)
-                                    rowsSb.Append($"\n      · {f.Area,8:F1}㎡ 표본 {f.Samples.Count,2}점 ")
-                                          .Append($"벽 {zwS / nOk:F2} / 원지반 {zgS / nOk:F2} / 정지면 {zjS / nOk:F2}")
-                                          .Append($" · 표결 위 {voteUp}:아래 {voteDn}")
-                                          .Append(take ? " → <b>옹벽</b>" : " → 뚜껑");
-                            }
-                            DiagLog.Append($"  ③<b>쐐기</b>를 칼금으로 조각냄 — {faces.Count}조각"
-                                + $"(쐐기 {areaW:F1}㎡ · 조각 합 {aWall + aLid:F1}㎡"
-                                + $"{(System.Math.Abs(aWall + aLid - areaW) > areaW * 0.02 ? " <b>⚠장부가 안 맞는다</b>" : " · 장부 맞음")}"
-                                + $" · 칼금 {cutters.Count}개[발자국 + 원지반교선 {lA.Count} + 정지면교선 {lB.Count}])\n");
-                            DiagLog.Append($"  ④표고 재서 가름 — <b>옹벽 {aWall:F1}㎡</b> · 뚜껑 {aLid:F1}㎡"
-                                + (nTiny > 0 ? $" · 슬리버 {nTiny}개({aTiny:F2}㎡)는 뚜껑에 줬다" : "")
-                                + (nSplitVote > 0 ? $" · <b>⚠조각 안에서 표결이 갈린 것 {nSplitVote}개</b>(다수결로 정했다)" : "")
-                                + (nJiDiff > 0 ? $" · <b>⚠정지면 잣대와 갈리는 조각 {nJiDiff}개</b>(성토 구간이면 여기를 다시 봐야 한다)" : " · 정지면 잣대와 어긋난 조각 없음")
-                                + (nNoW + nNoG + nNoJ > 0 ? $" · 못 잰 표본 벽{nNoW}/원지반{nNoG}/정지면{nNoJ}" : "")
-                                + rowsSb.ToString() + "\n");
+                            foreach (var q in Pw)
+                                foreach (var (px2, py2) in GradingGeometry.InteriorPoints(q.Ring, 60, 0.3))
+                                    if (TryZ(slabT, px2, py2, out double zw2)) probes.Add((px2, py2, true, zw2, zw2));
+                            foreach (var q in Pl)
+                                foreach (var (px2, py2) in GradingGeometry.InteriorPoints(q.Ring, 60, 0.3))
+                                    if (TryZ(gndT, px2, py2, out double zg2)) probes.Add((px2, py2, false, zg2, zg2));
+                            bool ledgerOk = System.Math.Abs(aWall + aLid - areaW) < areaW * 0.03;
+                            DiagLog.Append($"    <b>장부</b> 옹벽 {aWall:F1} + 원지반 {aLid:F1} = {aWall + aLid:F1}㎡"
+                                + $" vs 쐐기 {areaW:F1}㎡ — "
+                                + (ledgerOk ? "<b>맞음</b>" : $"<b>⚠어긋남 {aWall + aLid - areaW:+0.0;-0.0}㎡</b>") + "\n");
+                            // ★[JACK 0916] 합성면 경계 = <b>쐐기 그대로</b>.
+                            //   벽 몫과 원지반 몫이 쐐기를 빈 데 없이 나눠 가지므로 따로 합칠 것이 없다.
+                            //   ※<c>⑥-데이라잇 자르기</c>는 걷었다 — 자르던 링이 <b>옛 사면의 데이라잇</b>이라
+                            //     벽과 아무 상관이 없었다(검토 셋이 같은 결론). 벽의 경계는 이제
+                            //     <see cref="WallTrim"/>이 <b>정확히</b> 낸다.
+                            var Keep = new System.Collections.Generic.List<(System.Collections.Generic.List<Point3> Ring,
+                                System.Collections.Generic.List<System.Collections.Generic.List<Point3>> Holes)>
+                                { (new System.Collections.Generic.List<Point3>(wedgePolyKeep),
+                                   new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>()) };
+                            DiagLog.Append($"  ⑥합성면 경계 — <b>쐐기 그대로</b> {wedgePolyKeep.Count}점/{areaW:F1}㎡" + "\n");
 
-                            // ⑤ 두 몫을 각각 <b>표면으로</b> 뜬다. 조각마다 Outer 하나씩 —
-                            //   한 표면에 Outer를 여럿 넣지 않는다(작업과정.md 17차: <i>"경계가 여러 개라 표면 찢김·구멍"</i>).
-                            const int MaxParts = GradingSettings.WallPartMax;
-                            for (int i = 1; i <= MaxParts; i++)
-                            {
-                                GradingBuilder.EraseSurfacesByBaseName(trW2, $"옹벽조각{i}_DH", groundId);
-                                GradingBuilder.EraseSurfacesByBaseName(trW2, $"옹벽뚜껑{i}_DH", groundId);
-                            }
-                            foreach (var old in new[] { "옹벽뚜껑_DH", "옹벽뚜껑A_DH", "옹벽뚜껑B_DH", "옹벽뚜껑원본_DH" })
-                                GradingBuilder.EraseSurfacesByBaseName(trW2, old, groundId);
-
-                            // ⑤ 붙일 수 있으면 붙인다 — <b>구멍은 버리지 않고 들고 간다</b>.
-                            //   구멍을 메우면 벽이 뚜껑 자리를 덮는다(S126 실측: 쐐기 490㎡에서 <b>겹침 64㎡</b>).
-                            //   구멍은 덩이 <b>안쪽에만</b> 있어 Hide로 안전히 뚫린다 —
-                            //   v93.2가 다친 것은 <b>Outer와 46m 포개진</b> Hide였지 안쪽에 뜬 Hide가 아니다.
-                            System.Collections.Generic.List<(System.Collections.Generic.List<Point3> Ring,
-                                System.Collections.Generic.List<System.Collections.Generic.List<Point3>> Holes)> Merge(
-                                System.Collections.Generic.List<(System.Collections.Generic.List<Point3> Ring,
-                                    System.Collections.Generic.List<System.Collections.Generic.List<Point3>> Holes)> src,
-                                string tag, out string mlog)
-                            {
-                                var flat = new System.Collections.Generic.List<System.Collections.Generic.IReadOnlyList<Point3>?>();
-                                // ★★[JACK 0915 09:22 로그] <b>구멍 없는 것끼리는 붙인다.</b>
-                                //   종전엔 조각 하나라도 구멍이 있으면 <b>전부</b> 안 붙였다 —
-                                //   그래서 뚜껑이 <b>6조각</b>으로 남았고, 조각이 많을수록 경계 주입이 실패할 자리도 는다
-                                //   (실측: 6조각 중 <b>둘이 실패</b>해 161㎡가 빈 채로 합성에 갔다).
-                                //   구멍 있는 조각만 따로 두고 나머지는 붙이면 조각 수가 확 준다.
-                                var holed = new System.Collections.Generic.List<(System.Collections.Generic.List<Point3>,
-                                    System.Collections.Generic.List<System.Collections.Generic.List<Point3>>)>();
-                                foreach (var q in src)
-                                { if (q.Holes.Count > 0) holed.Add((q.Ring, q.Holes)); else flat.Add(q.Ring); }
-                                var outp = new System.Collections.Generic.List<(System.Collections.Generic.List<Point3>,
-                                    System.Collections.Generic.List<System.Collections.Generic.List<Point3>>)>();
-                                int hl = 0;
-                                if (flat.Count > 0)
-                                {
-                                    var u = GradingGeometry.RingUnion(flat, zBase, out hl, p.VertexSpacing);
-                                    if (u.Count > 0) outp.AddRange(u);
-                                    else foreach (var r in flat)
-                                        if (r != null) outp.Add((new System.Collections.Generic.List<Point3>(r),
-                                            new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>()));
-                                }
-                                outp.AddRange(holed);
-                                outp.Sort((x, y) => RingArea(y.Item1).CompareTo(RingArea(x.Item1)));   // ★넓이순
-                                mlog = $"{tag} {src.Count}조각 → <b>{outp.Count}덩이</b>"
-                                     + $"(구멍 없는 {flat.Count}개는 붙였고, 구멍 있는 {holed.Count}개는 따로 뒀다"
-                                     + (hl > 0 ? $" · 붙인 덩이에 생긴 구멍 {hl}개는 <b>Hide로 뚫는다</b>" : "") + ")";
-                                return outp;
-                            }
-                            var Pw = Merge(wallFaces, "옹벽", out string mW);
-                            var Pl = Merge(lidFaces, "뚜껑", out string mL);
-                            // ★★★[검토 0914 · 치명] <b>테두리로 장부를 다시 잰다.</b> 종전 장부는 구멍을 뺀 넓이를 더해
-                            //   "테두리가 안쪽 조각을 삼키는" 병을 <b>원리적으로 못 봤다</b>(S126이 그 눈뜬장님을 재현했다).
-                            double RingSum(System.Collections.Generic.List<(System.Collections.Generic.List<Point3> Ring,
-                                System.Collections.Generic.List<System.Collections.Generic.List<Point3>> Holes)> ls)
-                            {
-                                double a = 0;
-                                foreach (var q in ls)
-                                { a += RingArea(q.Ring); foreach (var h in q.Holes) a -= RingArea(h); }
-                                return a;
-                            }
-                            double netSum = RingSum(Pw) + RingSum(Pl);
-                            bool ledgerOk = System.Math.Abs(netSum - areaW) < areaW * 0.02;
-                            DiagLog.Append($"  ⑤조각 다듬기 — {mW} · {mL}\n"
-                                + $"    <b>테두리 장부</b>(구멍 뺀 실제 넓이) {netSum:F1}㎡ vs 쐐기 {areaW:F1}㎡ — "
-                                + (ledgerOk ? "<b>맞음</b>(겹침 없다)" : $"<b>⚠어긋남 {netSum - areaW:+0.0;-0.0}㎡ — 조각이 겹친다</b>") + "\n");
-
-                            // ★★[JACK 0915 스샷 "죄다 느낌표"] <b>붙이기 단계를 한 겹 줄인다.</b>
-                            //   종전엔 원지반 → <c>옹벽뚜껑원본_DH</c> → <c>옹벽뚜껑N_DH</c> → <c>순수옹벽_DH</c>로
-                            //   <b>세 겹</b>을 쌓았다. 겹이 늘수록 소스가 하나만 흔들려도 아래가 다 ⚠를 단다.
-                            //   무게 걱정(원지반 삼각형 25만 개)은 <b>자른 뒤에 굳히는 것</b>으로 이미 풀렸으므로
-                            //   가운데 한 겹은 없어도 된다 — v93.2가 쓰던 두 겹으로 돌아간다.
-                            ObjectId lidSrc = groundId; string lidSrcLbl = "원지반";
-
-                            // 조각마다 표면 하나 — Outer 하나 + (있으면) 안쪽 구멍을 Hide로.
-                            // 조각마다 (id, 이름, 테두리, 구멍) — 붙이기가 실패하면 <b>다시 가두려고</b> 링을 들고 다닌다.
-                            System.Collections.Generic.List<(ObjectId Id, string Label,
-                                System.Collections.Generic.List<Point3> Ring,
-                                System.Collections.Generic.List<System.Collections.Generic.List<Point3>> Holes)> MakeParts(
-                                System.Collections.Generic.List<(System.Collections.Generic.List<Point3> Ring,
-                                    System.Collections.Generic.List<System.Collections.Generic.List<Point3>> Holes)> rings,
-                                ObjectId srcId, string srcLabel, string namePat, out string plog, out bool cut)
-                            {
-                                var outp = new System.Collections.Generic.List<(ObjectId, string,
-                                    System.Collections.Generic.List<Point3>,
-                                    System.Collections.Generic.List<System.Collections.Generic.List<Point3>>)>();
-                                var sb3 = new System.Text.StringBuilder();
-                                int failN = 0;
-                                cut = rings.Count > MaxParts;
-                                for (int i = 0; i < rings.Count && i < MaxParts; i++)
-                                {
-                                    string nm = string.Format(namePat, i + 1);
-                                    ObjectId pid = GradingBuilder.Composite(db, trW2, nm,
-                                        new System.Collections.Generic.List<(ObjectId, string)> { (srcId, srcLabel) },
-                                        out string pl2, false, groundId, freeze: false);
-                                    // ★[검토 0914 · 높음] <c>Composite</c>는 붙여넣기가 <b>실패해도 id를 돌려준다</b> —
-                                    //   실패는 로그 문자열에만 적힌다. 그래서 id가 아니라 <b>로그</b>로 판정한다
-                                    //   (이 파일 1083줄의 정지면 합성이 이미 그렇게 한다).
-                                    if (pid.IsNull || pl2.Contains("실패"))
-                                    { sb3.Append($" [{i + 1}]<b>붙이기 실패</b>({pl2})"); continue; }
-                                    // ★★★[JACK 0915 09:22 로그 · 치명] 조각 <b>둘이 경계를 못 받았다</b>
-                                    //   (<c>[2]실패 IllegalBoundary</c>, <c>[4]실패</c>). 그런데 합성은 그냥 갔고,
-                                    //   빠진 161㎡ 자리를 TIN이 <b>가로질러 이어</b> 버렸다 —
-                                    //   JACK 스샷의 <i>"원지반이 옹벽 선까지 채워짐"</i>과 <i>"지표면 찢어짐"</i>이 그것이다.
-                                    //   → <b>원본 → 5mm 정규화</b> 차례로 넣고(저장소 선례), 그래도 안 되면
-                                    //     그 표면을 <b>지우고</b> 실패로 센다. 안 지우면 <b>안 잘린 원지반 25만 삼각형</b>이
-                                    //     도면에 그대로 남는다(실측 옹벽뚜껑2_DH 삼각형=249841).
-                                    try
-                                    {
-                                        var pt = (TinSurface)trW2.GetObject(pid, OpenMode.ForWrite);
-                                        System.Exception? lastB = null; bool bndOk = false; string bndTag = "";
-                                        foreach (var (rr, tg) in new[] { (rings[i].Ring, "원본"),
-                                                 (RawTriangleIntersectionFinder.CleanRing(rings[i].Ring), "정규화") })
-                                        {
-                                            if (rr == null || rr.Count < 3) continue;
-                                            try { GradingBuilder.ReplaceOuterBoundary(pt, rr, null, 0.001); bndOk = true; bndTag = tg; break; }
-                                            catch (System.Exception be2) { lastB = be2; }
-                                        }
-                                        if (!bndOk) throw lastB ?? new System.Exception("경계를 못 넣었다");
-                                        int hOk = 0;
-                                        foreach (var h in rings[i].Holes)
-                                        { try { GradingBuilder.AddHideBoundary(pt, h, 0.001); hOk++; } catch { } }
-                                        // ★자른 <b>뒤에</b> 굳힌다 — 스냅샷이 잘린 만큼만 작게 굳는다.
-                                        //   ※<b>굳히기는 붙이기 실패의 원인이 아니었다</b>(09:04 판에서 스냅샷=True인데도 실패).
-                                        //     무게를 줄이려고 하는 것이지, 실패를 막으려고 하는 것이 아니다.
-                                        GradingBuilder.FreezeSurface(pt);
-                                        int tri = -1; try { using var tc = pt.GetTriangles(false); tri = tc.Count; } catch { }
-                                        outp.Add((pid, nm.Replace("_DH", ""), rings[i].Ring, rings[i].Holes));
-                                        sb3.Append($" [{i + 1}]{rings[i].Ring.Count}점/{RingArea(rings[i].Ring):F1}㎡"
-                                                 + (bndTag == "정규화" ? "<b>(정규화로 됨)</b>" : "")
-                                                 + (tri >= 0 ? $"·삼각형 {tri}개" : "·삼각형 못 셈")
-                                                 + (hOk > 0 ? $"·구멍 {hOk}개 뚫음" : ""));
-                                    }
-                                    catch (System.Exception be)
-                                    {
-                                        sb3.Append($" [{i + 1}]<b>실패</b> {be.GetType().Name}[{be.Message}] — 표면을 지웠다");
-                                        try { GradingBuilder.EraseSurfacesByBaseName(trW2, nm, groundId); } catch { }
-                                        failN++;
-                                    }
-                                }
-                                plog = (cut ? $"<b>⚠{rings.Count}조각인데 {MaxParts}개까지만 — 나머지가 빈다</b>" : $"{rings.Count}조각")
-                                     + $" → 표면 {outp.Count}개"
-                                     + (failN > 0 ? $" · <b>⚠못 만든 조각 {failN}개</b>(그 자리가 빈다)" : "")
-                                     + sb3;
-                                if (failN > 0) cut = true;   // 빠진 자리가 생기면 ⑦에서 멈춘다
-                                return outp;
-                            }
-                            var lidParts = MakeParts(Pl, lidSrc, lidSrcLbl, "옹벽뚜껑{0}_DH", out string lp, out bool cutL);
-                            // ★★★[JACK 0915 로그 · 확정] <b>옹벽은 복사본을 붙이면 안 된다.</b>
-                            //   <code>
-                            //   v93.2  붙인 것 = <b>가상옹벽_DH 자신</b>(계단 브레이크라인으로 지은 면) → 옹벽:OK
-                            //   v93.3  붙인 것 = 그것을 <b>복사해 자른 면</b>(옹벽조각1_DH)             → 실패[Failure]
-                            //   </code>
-                            //   두 번째 판에서 <b>후보 둘을 다 지웠다</b> — 스냅샷=True인데도 실패했고(굳히기가 아니다),
-                            //   5mm 정규화 링(295→253점)으로도 실패했다(테두리가 아니다). 조각은 비지도 않았다(<b>삼각형 975개</b>).
-                            //   남는 차이는 <b>붙여넣기로 지은 면을 다시 붙인다</b>는 것 하나뿐이다.
-                            var wallParts = new System.Collections.Generic.List<(ObjectId Id, string Label,
-                                System.Collections.Generic.List<Point3> Ring,
-                                System.Collections.Generic.List<System.Collections.Generic.List<Point3>> Holes)>();
-                            string wp = "남긴 덩이가 없다"; bool cutW = Pw.Count > MaxParts;
-                            if (Pw.Count > 0)
-                            {
-                                var wsb = new System.Text.StringBuilder();
-                                try
-                                {
-                                    var slabW = (TinSurface)trW2.GetObject(wallSlabId, OpenMode.ForWrite);
-                                    GradingBuilder.ReplaceOuterBoundary(slabW, Pw[0].Ring, null, 0.001);
-                                    int hOk = 0;
-                                    foreach (var h in Pw[0].Holes) { GradingBuilder.AddHideBoundary(slabW, h, 0.001); hOk++; }
-                                    for (int i = 1; i < Pw.Count && i < MaxParts; i++)
-                                    {
-                                        GradingBuilder.AddOuterBoundary(slabW, Pw[i].Ring, 0.001);
-                                        foreach (var h in Pw[i].Holes) { GradingBuilder.AddHideBoundary(slabW, h, 0.001); hOk++; }
-                                    }
-                                    int tri = -1; try { using var tc = slabW.GetTriangles(false); tri = tc.Count; } catch { }
-                                    wallParts.Add((wallSlabId, "옹벽", Pw[0].Ring, Pw[0].Holes));
-                                    wsb.Append($"<b>가상옹벽_DH 자신</b>을 {Pw.Count}덩이로 가둠"
-                                             + (Pw.Count > 1 ? " (<b>⚠Outer 여러 개</b> — 흔치 않은 모양이다)" : "")
-                                             + $" · {Pw[0].Ring.Count}점/{RingArea(Pw[0].Ring):F1}㎡"
-                                             + (tri >= 0 ? $" · 삼각형 {tri}개" : "")
-                                             + (hOk > 0 ? $" · 구멍 {hOk}개 뚫음" : ""));
-                                }
-                                catch (System.Exception we)
-                                { wsb.Append($"<b>실패</b> {we.GetType().Name}[{we.Message}]"); }
-                                wp = wsb.ToString();
-                            }
-                            DiagLog.Append($"  ⑥뚜껑 조각 — {lp}\n  ⑥옹벽 — {wp}\n");
-
-                            // ⑦ 한 지표면으로. 조각들이 <b>안 겹치므로</b> 순서에 기대지 않는다.
-                            //   ★[검토 0914 · 높음] 조각이 <b>잘렸거나</b> 장부가 어긋나면 <b>안 붙인다</b> —
+                            // ⑦ <b>한 지표면으로</b> — 붙이는 것은 <b>원지반과 가상옹벽_DH 둘뿐</b>이다.
+                            //   ★[검토 0914 · 높음] 장부가 어긋나면 <b>안 붙인다</b> —
                             //   반쪽짜리를 "만들었다"고 켜 놓으면 화면만 보고는 구별할 길이 없다(v93.2가 그랬다).
-                            var allParts = new System.Collections.Generic.List<(ObjectId Id, string Label,
-                                System.Collections.Generic.List<Point3> Ring,
-                                System.Collections.Generic.List<System.Collections.Generic.List<Point3>> Holes)>();
-                            allParts.AddRange(lidParts); allParts.AddRange(wallParts);
-                            var pieces = new System.Collections.Generic.List<(ObjectId, string)>();
-                            foreach (var q in allParts) pieces.Add((q.Id, q.Label));
-                            // ★[검토 0915 · 높음] 덩이가 둘 이상이면 <b>멈춘다</b> — 한 면에 Outer를 여럿 걸면
-                            //   작업과정.md 17차가 적어 둔 "구멍·찢김"을 밟고, 재시도의 경계 교체가 나머지 로브를 지운다.
                             // ★★[검토 0915 · 높음] <b>멈출 때는 옹벽 경계를 되돌린다.</b>
-                            //   위에서 <c>가상옹벽_DH</c>의 경계를 「지상으로 솟은 몫」으로 갈아 끼웠는데,
+                            //   위에서 <c>가상옹벽_DH</c>의 경계를 「남길 몫」으로 갈아 끼웠는데,
                             //   2단계가 멈추면 JACK에게 <b>보여 주는 것이 그 잘린 면</b>이 된다 —
-                            //   그러면 <c>DH-가상옹벽선</c>(안 잘린 선)과 <b>어긋나</b> 보이고,
-                            //   "재료는 그대로 두니 살펴볼 수 있다"는 말이 <b>거짓이 된다</b>.
+                            //   그러면 <c>DH-가상옹벽선</c>(안 잘린 선)과 <b>어긋나</b> 보인다.
                             void RestoreWallBnd(string why)
                             {
                                 if (wallPolyKeep == null) return;
@@ -1503,16 +1354,19 @@ public sealed class CreateGradingCommand
                                         (TinSurface)trW2.GetObject(wallSlabId, OpenMode.ForWrite),
                                         wallPolyKeep, null, 0.001);
                                     DiagLog.Append($"  ⑦되돌림 — 옹벽 경계를 <b>발자국 {wallPolyKeep.Count}점</b>으로 되돌렸다"
-                                        + $"({why} · 재료를 온전히 보여 주려고)" + "\n");
+                                        + $"({why} · 재료를 온전히 보여 주려고)\n");
                                 }
                                 catch (System.Exception rx)
-                                { DiagLog.Append($"  ⚠⑦되돌림 실패 — {rx.GetType().Name}[{rx.Message}]" + "\n"); }
+                                { DiagLog.Append($"  ⚠⑦되돌림 실패 — {rx.GetType().Name}[{rx.Message}]\n"); }
                             }
-                            string stopWhy = Pw.Count > 1 ? $"옹벽이 <b>{Pw.Count}덩이</b>다(한 면에 Outer를 여럿 걸 수 없다)"
+                            // ★[JACK 0916] <b>덩이가 여럿이어도 멈추지 않는다</b>(위 ⑥옹벽 가둠 주석).
+                            //   합성면 경계는 여전히 한 덩이여야 한다 — 그건 옹벽+원지반을 합친 것이라
+                            //   보통 하나로 이어진다(갈라지면 그때는 진짜로 이상한 판이다).
+                            string stopWhy = Pw.Count == 0 ? "남길 <b>옹벽</b> 몫이 하나도 없다"
                                            : !ledgerOk ? "테두리 장부가 어긋난다(조각이 겹친다)"
-                                           : (cutL || cutW) ? $"조각이 {MaxParts}개에서 잘렸다"
-                                           : wallParts.Count == 0 ? "붙일 <b>옹벽</b> 조각이 하나도 없다"
-                                           : lidParts.Count == 0 ? "붙일 <b>뚜껑</b> 조각이 하나도 없다" : "";
+                                           : Keep.Count == 0 ? "합성면에 걸 경계를 못 만들었다"
+                                           : Keep.Count > 1 ? $"합성면 경계가 <b>{Keep.Count}덩이</b>다(한 면에 Outer를 여럿 걸 수 없다)"
+                                           : "";
                             ObjectId one = ObjectId.Null; string oneLog = "";
                             if (stopWhy.Length > 0)
                             {
@@ -1525,56 +1379,57 @@ public sealed class CreateGradingCommand
                             }
                             else
                             {
-                                // ★★★[JACK 0915 로그] <b>붙이기가 실패하면 그 조각만 정규화해 한 번 더.</b>
-                                //   이 저장소의 선례 그대로다(이 파일 830줄): <i>"표면마다 paste가 받아주는 링이
-                                //   다름(성토=원본 OK/정규화 실패, 절토=원본 실패/정규화 OK — NTS 검사로는 구분 불가).
-                                //   → paste 결과로 판단해 실패한 표면만 경계를 5mm 정규화 링으로 교체하고 재시도."</i>
-                                //   현장 08:50에서 <c>옹벽조각1:실패[SurfaceException] Failure</c>가 났는데,
-                                //   그 조각은 <b>계단을 비스듬히 자른</b> 302점 테두리였다.
-                                bool madeOk = false;
-                                for (int attempt = 1; attempt <= 2; attempt++)
+                                // 원지반을 깔고 그 위에 옹벽을 얹는다 — 옹벽은 이미 제 몫으로 가둬 뒀다.
+                                var pieces = new System.Collections.Generic.List<(ObjectId, string)>
+                                    { (groundId, "원지반"), (wallSlabId, "옹벽") };
+                                one = GradingBuilder.Composite(db, trW2, "순수옹벽_DH", pieces,
+                                          out oneLog, false, groundId, freeze: false);
+                                // ★[검토 0915 · 치명] <b>붙이기 결과만 본다</b> — 굳히기 진단이 섞이면 멀쩡한 것을 지운다.
+                                string pasteOnly = oneLog.Split(new[] { " · 굳히기:" }, System.StringSplitOptions.None)[0];
+                                bool madeOk = !one.IsNull && !pasteOnly.Contains("실패");
+                                string bndLog = "안 함";
+                                if (madeOk)
                                 {
-                                    one = GradingBuilder.Composite(db, trW2, "순수옹벽_DH", pieces,
-                                              out oneLog, true, groundId);
-                                    // ★[검토 0915 · 치명] <b>붙이기 결과만 본다.</b>
-                                    //   <c>Composite</c>는 로그 끝에 굳히기 진단(<c>LastFreezeDiag</c>)을 붙이는데,
-                                    //   거기 "⚠스냅샷갱신실패" 같은 말이 섞이면 <b>멀쩡한 결과를 지워 버린다</b>.
-                                    string pasteOnly = oneLog.Split(new[] { " · 굳히기:" }, System.StringSplitOptions.None)[0];
-                                    madeOk = !one.IsNull && !pasteOnly.Contains("실패");
-                                    if (madeOk || attempt == 2) break;
-                                    int fixedN = 0; var fsb = new System.Text.StringBuilder();
-                                    foreach (var q in allParts)
+                                    // ★경계는 <b>합성면에 한 번</b> 건다 — 원본 → 5mm 정규화 차례로(저장소 선례 830줄).
+                                    var oneT = (TinSurface)trW2.GetObject(one, OpenMode.ForWrite);
+                                    System.Exception? lastB = null; bool bOk = false; string bTag = "";
+                                    foreach (var (rr, tg) in new[] { (Keep[0].Ring, "원본"),
+                                             (RawTriangleIntersectionFinder.CleanRing(Keep[0].Ring), "정규화") })
                                     {
-                                        if (!pasteOnly.Contains($"{q.Label}:실패")) continue;
-                                        var cl = RawTriangleIntersectionFinder.CleanRing(q.Ring);
-                                        if (cl == null || cl.Count < 3) { fsb.Append($" {q.Label}:정규화 못함"); continue; }
-                                        try
-                                        {
-                                            var qt = (TinSurface)trW2.GetObject(q.Id, OpenMode.ForWrite);
-                                            GradingBuilder.ReplaceOuterBoundary(qt, cl, null, 0.001);
-                                            foreach (var h in q.Holes)
-                                            {
-                                                var hc = RawTriangleIntersectionFinder.CleanRing(h) ?? h;
-                                                GradingBuilder.AddHideBoundary(qt, hc, 0.001);
-                                            }
-                                            GradingBuilder.FreezeSurface(qt);
-                                            fixedN++;
-                                            fsb.Append($" {q.Label}:{q.Ring.Count}→{cl.Count}점");
-                                        }
-                                        catch (System.Exception re) { fsb.Append($" {q.Label}:{re.GetType().Name}"); }
+                                        if (rr == null || rr.Count < 3) continue;
+                                        try { GradingBuilder.ReplaceOuterBoundary(oneT, rr, null, 0.001); bOk = true; bTag = tg; break; }
+                                        catch (System.Exception be3) { lastB = be3; }
                                     }
-                                    DiagLog.Append($"  ⑦-재시도 — 붙이기 실패한 조각 <b>{fixedN}개</b>를"
-                                        + $" 5mm 정규화 링으로 다시 가뒀다{fsb} · 한 번 더 붙인다" + $"\n");
-                                    if (fixedN == 0) break;
+                                    int hOk2 = 0;
+                                    if (bOk)
+                                        foreach (var h in Keep[0].Holes)
+                                        { try { GradingBuilder.AddHideBoundary(oneT, h, 0.001); hOk2++; } catch { } }
+                                    int triOne = -1;
+                                    try { using var tcO = oneT.GetTriangles(false); triOne = tcO.Count; } catch { }
+                                    // ★★★[JACK 0916 <i>"순수옹벽에 정의에 느낌표가 들어오고
+                                    //   스냅샷 재정의를 눌러야 사라져"</i>] <b>굳히는 차례가 문제였다.</b>
+                                    //   <c>FreezeSurface</c>는 <b>재작성으로 끝난다</b> — 이 저장소의 v32.10 계측이
+                                    //   그 증상을 그대로 적어 뒀다: <i>"찍고 나서 또 지으면 <b>스냅샷이 구식</b>
+                                    //   (붙여넣기 느낌표는 사라지고 <b>스냅샷 느낌표만 남았다</b>)"</i>.
+                                    //   → <b>짓고 나서 찍고, 끝</b>낸다(<c>RebuildSurfacesByBaseName</c>과 같은 차례).
+                                    if (bOk)
+                                    {
+                                        try { oneT.Rebuild(); } catch { }
+                                        try { if (oneT.IsOutOfDate) oneT.Rebuild(); } catch { }
+                                        try { if (oneT.HasSnapshot) oneT.RebuildSnapshot(); else oneT.CreateSnapshot(); } catch { }
+                                    }
+                                    bndLog = bOk
+                                        ? $"<b>{bTag}</b>({Keep[0].Ring.Count}점/{RingArea(Keep[0].Ring):F1}㎡)로 가둠"
+                                          + (hOk2 > 0 ? $" · 구멍 {hOk2}개 뚫음" : "")
+                                          + (triOne >= 0 ? $" · 삼각형 {triOne}개" : "")
+                                        : $"<b>실패</b> {lastB?.GetType().Name}[{lastB?.Message}]";
+                                    if (!bOk) madeOk = false;
                                 }
                                 DiagLog.Append($"  ⑦합성 — '순수옹벽_DH' {(madeOk ? "만들었다" : "<b>실패</b>")}"
-                                    + $"(뚜껑 {lidParts.Count} + 옹벽 {wallParts.Count} 조각 · 서로 안 겹친다) · {oneLog}\n");
+                                    + $"(붙인 것: <b>원지반 + 가상옹벽_DH 둘뿐</b> — 뚜껑 조각 표면은 안 만든다)"
+                                    + $"\n    경계 — {bndLog} · {oneLog}\n");
                                 if (!madeOk)
                                 {
-                                    // ★★[JACK 0915 스샷 "붙여넣기에 느낌표"] <b>지운다.</b>
-                                    //   <c>Composite</c>는 <c>TinSurface.Create</c>를 <b>먼저</b> 하므로,
-                                    //   붙이기가 실패해도 표면은 남고 정의 탭에 <b>⚠ 붙여넣기</b>가 찍힌다.
-                                    //   숨기기만 해서는 그 찌꺼기가 그대로 남는다.
                                     try { GradingBuilder.EraseSurfacesByBaseName(trW2, "순수옹벽_DH", groundId); } catch { }
                                     DiagLog.Append("  ⑦정리 — 반쪽짜리 '순수옹벽_DH'를 <b>지웠다</b>\n");
                                     RestoreWallBnd("붙이기가 실패했다");
@@ -1596,25 +1451,35 @@ public sealed class CreateGradingCommand
                             {
                                 var vsb = new System.Text.StringBuilder();
                                 int okN = 0, badN = 0, missN = 0;
+                                double worstW = 0, worstL = 0; int nW = 0, nL = 0;
+                                double wx = 0, wy = 0, lx = 0, ly = 0;
                                 var oneT = (TinSurface)trW2.GetObject(one, OpenMode.ForRead);
                                 foreach (var (px, py, isWall, zw, zg) in probes)
                                 {
                                     double want = isWall ? zw : zg;
                                     if (!TryZ(oneT, px, py, out double got)) { missN++; vsb.Append($"\n      · ({px:F0},{py:F0}) {(isWall ? "벽" : "뚜껑")} — <b>표고가 없다</b>(기대 {want:F2})"); continue; }
-                                    bool hit = System.Math.Abs(got - want) < 0.25;
+                                    double d = System.Math.Abs(got - want);
+                                    bool hit = d < 0.01;                       // ★1cm — <b>같은 면이면 딱 맞아야 한다</b>
                                     if (hit) okN++; else badN++;
-                                    vsb.Append($"\n      · ({px:F0},{py:F0}) {(isWall ? "벽" : "뚜껑")} — 합성면 {got:F2} · 기대 {want:F2}"
-                                             + (hit ? " ✔" : $" <b>✖ 어긋남 {got - want:+0.00;-0.00}m</b>"));
+                                    if (isWall) { nW++; if (d > worstW) { worstW = d; wx = px; wy = py; } }
+                                    else { nL++; if (d > worstL) { worstL = d; lx = px; ly = py; } }
+                                    if (!hit && vsb.Length < 900)
+                                        vsb.Append($"\n      · ({px:F0},{py:F0}) {(isWall ? "벽" : "뚜껑")} — 합성면 {got:F2} · 원래 면 {want:F2}"
+                                                 + $" <b>✖ {got - want:+0.00;-0.00}m</b>");
                                 }
-                                DiagLog.Append($"  ⑧되읽기 — 탐침 {probes.Count}곳 중 <b>맞음 {okN}</b>"
+                                DiagLog.Append($"  ⑧되읽기 — 탐침 {probes.Count}곳(벽 {nW} · 뚜껑 {nL}) 중 <b>맞음 {okN}</b>"
                                     + (badN > 0 ? $" · <b>어긋남 {badN}</b>" : "")
-                                    + (missN > 0 ? $" · 표고 없음 {missN}" : "")
-                                    + (badN == 0 && missN == 0 ? " — 벽 자리엔 벽이, 뚜껑 자리엔 원지반이 나온다" : "")
+                                    + (missN > 0 ? $" · <b>표고 없음 {missN}</b>(구멍이다)" : "")
+                                    + $" · 최악 차이 — 벽 <b>{worstW:F3}m</b>"
+                                    + (worstW > 0.01 ? $"@({wx:F0},{wy:F0})" : "")
+                                    + $" · 뚜껑 <b>{worstL:F3}m</b>"
+                                    + (worstL > 0.01 ? $"@({lx:F0},{ly:F0})" : "")
+                                    + (badN == 0 && missN == 0 ? " — <b>합성면이 원래 면과 같다</b>(1cm 안)" : "")
                                     + vsb.ToString() + "\n");
                             }
                             // 재료는 숨긴다 — 결과 하나만 보이게
                             var hideNames = new System.Collections.Generic.List<string> { "가상옹벽_DH", "옹벽뚜껑원본_DH" };
-                            for (int i = 1; i <= MaxParts; i++)
+                            for (int i = 1; i <= GradingSettings.WallPartMax; i++)
                             { hideNames.Add($"옹벽조각{i}_DH"); hideNames.Add($"옹벽뚜껑{i}_DH"); }
                             int hidN = 0;
                             foreach (var nmH in hideNames) hidN += GradingBuilder.SetSurfaceVisible(trW2, nmH, false);
@@ -1819,12 +1684,14 @@ public sealed class CreateGradingCommand
                     var wsb2 = new System.Text.StringBuilder(); int rebN = 0;
                     for (int i2 = 1; i2 <= GradingSettings.WallPartMax; i2++)
                         try { var r = GradingBuilder.RebuildSurfacesByBaseName(trE, $"옹벽뚜껑{i2}_DH");
-                              if (!string.IsNullOrWhiteSpace(r) && !r.Contains("없음")) { rebN++; wsb2.Append(" " + r); } }
+                              // ★[JACK 0916] <c>Contains("없음")</c>은 <b>"스냅샷 없음"</b>에도 걸린다 —
+                              //   그래서 진짜로 구운 표면이 로그에서 통째로 사라졌다. <b>"표면 0개"</b>로만 거른다.
+                              if (!string.IsNullOrWhiteSpace(r) && !r.Contains("표면 0개")) { rebN++; wsb2.Append(" " + r); } }
                         catch { }
                     // ※가상옹벽_DH는 <b>붙여넣기가 없는 면</b>(계단 브레이크라인으로 짓는다)이라
                     //   원지반을 숨겨도 구식이 될 수 없다. 여기서 구우면 <b>없던 스냅샷만 새로 생겨</b> ⚠ 위험만 는다.
                     try { var r = GradingBuilder.RebuildSurfacesByBaseName(trE, "순수옹벽_DH");
-                          if (!string.IsNullOrWhiteSpace(r) && !r.Contains("없음")) { rebN++; wsb2.Append(" " + r); } }
+                          if (!string.IsNullOrWhiteSpace(r) && !r.Contains("표면 0개")) { rebN++; wsb2.Append(" " + r); } }
                     catch { }
                     DiagLog.Append($"  ★옹벽 사슬 재작성 — <b>{rebN}개</b>(소스 → 의존 차례){wsb2}"
                         + "(숨김이 ⚠를 붙이므로 — 이 파일 1710줄의 처방을 옹벽에도)" + "\n");
