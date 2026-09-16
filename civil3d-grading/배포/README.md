@@ -1,59 +1,93 @@
-# DH.Grading 애드인 배포·설치
+# DH 정지 플러그인 — 배포판 v93.8
 
-## 가장 간단한 방법 — 단일 exe (v12.2~)
+## 받는 사람이 할 일
 
-`DH정지플러그인_설치_vXX.exe` 파일 **하나만** 전달하면 됩니다.
-받는 사람은 Civil3D를 닫고 더블클릭 → 애드인 복사 + 한국 좌표계 9종 설치까지 자동.
-(.NET 미설치 PC에서도 동작하는 자체 완비형입니다. 만들기: `tools\setup`에서
-`dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true`
-— 그 전에 배포 번들 내용물을 `tools\setup\bundle.zip`으로 갱신할 것.)
+**Civil 3D를 완전히 닫고**, 아래 파일 하나를 더블클릭하면 끝입니다.
 
-## zip + 설치 스크립트 방식 (폴더 구성)
+| 파일 | 크기 | 쓰는 경우 |
+|---|---|---|
+| `DH정지플러그인_설치_v93.8.exe` | 38.5 MB | **보통은 이것** — .NET이 없는 PC에서도 돕니다 |
+| `DH정지플러그인_v93.8_수동설치.zip` | 3.4 MB | 회사 보안정책으로 exe가 막힐 때 |
 
-아래처럼 한 폴더에 담아 zip으로 전달하면 됩니다:
+설치가 끝나면 창에 **버전과 지문**이 찍힙니다 — 그것으로 무엇이 깔렸는지 확인하세요.
 
 ```
-DH.Grading_설치/
-  DH.Grading.bundle/      ← 애드인 본체(Contents\coordsys\ 포함 — DLL·NetTopologySuite·좌표계 사전)
-  설치.bat                 ← 받는 사람이 더블클릭
-  설치.ps1
-  README.md
+   버전 93.8.0 · 지문 ca7f53a8dbca
 ```
 
-받는 사람은 **Civil3D를 닫고 `설치.bat`을 더블클릭**하면 끝입니다.
-(스크립트를 못 쓰는 환경이면 `DH.Grading.bundle` 폴더를
-`%APPDATA%\Autodesk\ApplicationPlugins\` 에 복사만 해도 됩니다 — 아래 자동 검사 참고.)
+### ⚠ 처음 받는 분이 겪는 것 — 미리 알려 주세요
 
-## 설치 스크립트가 하는 일
+이 exe는 **코드 서명이 없습니다**(사내 배포용). 그래서 처음 실행하면 Windows가 막습니다:
 
-1. **애드인 복사** — `DH.Grading.bundle` 을 `%APPDATA%\Autodesk\ApplicationPlugins\` 로 복사 (Civil3D 시작 시 자동 로드)
-2. **한국 좌표계 정의 설치(딱 한 번)** — `KOREA_GRS80/BESSEL_{125·127·129·131}TM` + UTM-K 9종이 사용자 좌표계 사전에 없으면 설치
-   - 사용자 사전이 없음 → 신규 설치 (대부분 이 경우)
-   - 이미 한국 좌표계 있음 → 건너뜀
-   - 다른 커스텀 좌표계 사전이 이미 있음 → **덮어쓰지 않고 백업만**(`Coordsys.CSD.dhbak`),
-     `MAPCSLIBRARY` 명령 → 가져오기에서 `Contents\coordsys\CSLibrary.xml` 을 선택해 수동 병합
+```
+Windows에서 PC를 보호했습니다   →  [추가 정보]를 누르고  →  [실행] 을 누르세요
+```
 
-## 애드인 내장 자동 검사 (v12.1~)
+인터넷(사내망 공유 포함)에서 내려받은 파일은 **차단 표시**가 붙기도 합니다 —
+그때는 파일 우클릭 → 속성 → 아래쪽 **[차단 해제]** 체크 → 확인.
 
-애드인 자체가 Civil3D 시작 시 좌표계를 검사합니다 — 설치 스크립트를 안 거쳐도:
-- 사용자 좌표계 사전이 없으면 → 자동으로 9종을 등록하고 1회 안내 팝업
-- 이미 있으면 → 조용히 통과
-- 다른 커스텀 사전이 있으면 → 덮어쓰지 않고 수동 가져오기(CSLibrary.xml) 안내 팝업
+## 설치되는 것
 
-좌표계 사전은 **Windows 계정별**(`%LOCALAPPDATA%`)이므로, 한 PC를 여러 계정이 쓰는 경우에도
-각 계정의 첫 실행 때 자동으로 채워집니다.
+```
+%APPDATA%\Autodesk\ApplicationPlugins\DH.Grading.bundle\
+  PackageContents.xml            자동 로드 매니페스트(명령 51개)
+  Contents\*.dll                 애드인 본체 + NetTopologySuite · Npgsql · WebView2
+  Contents\*.pdb                 진단 로그에 줄번호가 찍히게(문제 추적용)
+  Contents\3D_VIEW_LOCATION.LSP  3D 뷰 전환 단축(v1~v4 · vv1~vv3)
+  Contents\coordsys\             한국 좌표계 9종
+```
 
-좌표계가 설치되면, 좌표계가 지정 안 된 도면에서 DHINFRA 실행 시 애드인이
-`KOREA_GRS80_{원점}TM` 을 도면에 자동 지정하고, 위성.tif도 그 좌표계로 재투영해 내보냅니다.
+한국 좌표계(KOREA_GRS80/BESSEL 125·127·129·131TM + UTM-K)는 **사용자 사전이 없을 때만** 새로 넣습니다.
+이미 쓰던 사전이 있으면 **건드리지 않고** 백업(`.dhbak`)만 남기고 안내합니다.
 
-## 지원 버전
-- **Civil3D 2026 (검증 완료)**. 매니페스트는 2025(R25.0)도 허용하지만 2025는 미검증.
-- 2024 이하는 불가(.NET 세대가 달라 재빌드 필요).
+- 설치 위치가 사용자 계정 폴더라 **관리자 권한이 필요 없습니다**
+- 대상: AutoCAD Civil 3D **2025 ~ 2026** (R25.0 ~ R25.1) · Windows 64비트
 
-## 주의
-- 설치 중에는 **Civil3D를 완전히 닫아야** 합니다(DLL 잠김 방지).
-- 좌표계 정의는 등록 직후 인식되지만, 목록에 안 보이면 Civil3D를 **한 번 재시작**하세요.
-- 위성 영상 내보내기는 인터넷이 필요합니다(안 되면 위성.tif만 생략, 나머지는 정상).
-- 진단 로그: 배포 PC에서는 `%LOCALAPPDATA%\DHGrading\DHGRADE_진단.log` 에 기록됩니다.
-- 좌표계 정의 원본: JACK이 직접 정의한 GRS80(Korea 2000)·Bessel(구 1985) 8종 + UTM-K
-  (`Contents\coordsys\CSLibrary.xml`, 한국어판 Civil3D에도 기본 포함 아님).
+## ★ 여러 사람이 쓸 때 — 판을 섞지 마세요
+
+이 판은 도면에 저장하는 정지 기록이 **번들 v12**입니다.
+
+- **낮은 판으로 만든 도면** → 이 판에서 그대로 읽힙니다(문제 없음)
+- **이 판으로 만든 도면을 낮은 판에서 열면** → *"더 최신 애드인으로 만들어졌습니다"* 라고 뜹니다.
+  그 상태로 [계획부지생성하기]를 누르면 **옹벽·사면 구간 설정이 지워집니다.**
+  (지우기 전에 말은 해 줍니다 — 조용히 날리지는 않습니다.)
+
+→ **같은 도면을 함께 보는 사람들은 같은 판을 쓰세요.**
+
+## 안 될 때
+
+- **"실행 중입니다"** — 작업관리자에서 `acad.exe`가 남아 있는지 보세요.
+  Civil 3D가 켜져 있으면 두 설치 방식 모두 **아무것도 바꾸지 않고 멈춥니다**
+  (파일이 잠겨 옛 것과 새 것이 섞이는 것을 막으려고 일부러 그렇게 했습니다).
+- **리본이 안 보인다** — 명령창에 `DHGRADE`를 쳐 보세요. 그래도 없으면 `NETLOAD`로
+  `Contents\DH.Grading.Civil.dll`을 직접 지정해 보시면 원인이 자동로드 쪽인지 갈립니다.
+- **지우려면** 위 `DH.Grading.bundle` 폴더를 통째로 지우면 됩니다.
+
+## 이 판에 대해 (솔직히)
+
+- **정지 · 종단 · 횡단 · 도곽 · 터파기 · 서버 지표면** — 현장에서 계속 쓰고 있는 기능입니다.
+- **옹벽 전체 구간 변환** — 종전대로 돕니다.
+- **옹벽 <u>부분 구간</u> 변환(`순수옹벽_DH`)** — **아직 다듬는 중**입니다.
+  만들다 어긋나면 **찢어진 면을 내놓지 않고 멈추고** 명령창에 알립니다(까닭은 진단 로그에).
+  급한 일에는 **전체 구간 변환**을 쓰세요.
+
+문제가 나면 `civil3d-grading\DHGRADE_진단.log` 를 함께 보내 주시면 원인을 짚을 수 있습니다.
+
+## 다시 만들기
+
+```
+dotnet build src/DH.Grading.Civil/DH.Grading.Civil.csproj -c Release
+python tools/setup/pkg.py         # PackageContents 버전·명령 목록 맞추기
+python tools/setup/mkbundle.py    # src의 .bundle → tools/setup/bundle.zip
+dotnet publish tools/setup/DHGradingSetup.csproj -c Release -r win-x64 \
+  --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true
+python tools/setup/mkzip.py       # 수동 설치 zip
+python tools/setup/relnote.py     # 이 문서(숫자는 전부 파일에서 잰다)
+```
+
+## 지문 (SHA-256)
+
+```
+601c5ac5efc7402afc2d74803a6ff9fa375f828a4222c82624290ecaf8b3fb70  DH정지플러그인_설치_v93.8.exe
+cc63ede0cf1279fae670129b08bad1cea9e0f03377cd428759f1815bb3a5fc0a  DH정지플러그인_v93.8_수동설치.zip
+```

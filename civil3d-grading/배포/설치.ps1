@@ -11,10 +11,16 @@ function Say($m, $c='White'){ Write-Host $m -ForegroundColor $c }
 
 Say "==== DH.Grading 애드인 설치 ====" 'Cyan'
 
-# Civil3D/AutoCAD 실행 중이면 DLL이 잠겨 복사 실패 → 안내
+# ★★[JACK 0915 배포판] Civil3D가 켜져 있으면 <b>아무것도 안 하고 멈춘다</b>.
+#   종전엔 경고만 하고 Enter를 받으면 그대로 복사했다. 그런데 robocopy는 잠긴 파일을
+#   <b>조용히 건너뛴다</b> — 그러면 옛 DLL과 새 DLL이 섞인 채로 "복사 완료"가 뜬다.
+#   exe 설치기는 이 '부분 설치'를 막으려고 잠김 사전검사를 넣어 뒀는데(0728),
+#   같은 일을 하는 이 스크립트에는 그 처방이 안 퍼져 있었다.
 if (Get-Process -Name acad -ErrorAction SilentlyContinue) {
-    Say "! Civil3D(acad.exe)가 실행 중입니다. 완전히 닫은 뒤 다시 실행하세요." 'Yellow'
-    Read-Host "Enter를 누르면 계속(복사 실패할 수 있음), 창을 닫으면 중단"
+    Say "! Civil3D(acad.exe)가 실행 중입니다." 'Red'
+    Say "  파일이 잠겨 <옛 것과 새 것이 섞인 채로> 설치될 수 있어 중단합니다." 'Yellow'
+    Say "  Civil3D를 완전히 닫은 뒤 다시 실행해 주세요." 'Yellow'
+    exit 1
 }
 
 # ── ① 번들 복사 ──────────────────────────────────────────────

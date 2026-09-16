@@ -43,8 +43,15 @@ internal sealed class GradingPanel : UserControl
     private readonly Button _pickPlan, _pickGround, _build;
     private readonly Button _toWall, _toSlope;
     private readonly TextBlock _planWhat, _groundWhat;
-    /// <summary>★[검토 M-1] <c>1. 대상</c>을 접었을 때 제목 옆에 뜨는 상태 한 줄.</summary>
-    private readonly TextBlock _targetBadge;
+
+    /// <summary>★[JACK 0915] <b>합친 칸의 요약 한 줄</b> — 접었을 때 제목 옆에 뜬다.
+    /// 종전의 <c>_targetBadge</c>(무엇을 골랐나)와 <c>_slopeBadge</c>(값이 맞나)를 합쳤다.
+    /// 쓰는 쪽이 둘이므로 <b>각자 제 몫만 적고</b> <see cref="SyncBadge"/>가 이어 붙인다 —
+    /// 한쪽이 통째로 덮어쓰면 다른 쪽 경고가 조용히 사라진다.</summary>
+    private readonly TextBlock _makeBadge;
+    private string _badgePicks = "", _badgeVal = "";
+    private void SyncBadge()
+    { if (_makeBadge != null) _makeBadge.Text = (_badgePicks + _badgeVal).Trim(); }
     private readonly RadioButton _append, _restart;
     /// <summary>이어서/새로시작 줄 — ★<c>StackPanel</c>이 아니라 <c>DockPanel</c>이다.
     /// 종류를 짐작해 캐스트했다가 <b>언제나 null</b>이 되어 숨김이 통째로 죽었다(검토 0909).</summary>
@@ -60,8 +67,8 @@ internal sealed class GradingPanel : UserControl
     /// <summary>지금 값을 채워 넣는 중인가 — 그때 오는 <c>TextChanged</c>로 그림을 다시 그리지 않는다.</summary>
     private bool _loading;
 
-    /// <summary>★[JACK 0910] <c>2. 계획부지생성</c>을 접었을 때 제목 옆에 뜨는 한 마디(값이 틀리면 ⚠).</summary>
-    private readonly TextBlock _slopeBadge;
+
+
 
     /// <summary>단추를 켜도 되는가 — 세 조건을 <b>따로</b> 재고 <see cref="SyncEnabled"/>가 합친다.
     /// <para><c>_picksOk</c>=고른 것이 갖춰졌나 · <c>_fixOk</c>=고칠 정지면이 있나 ·
@@ -97,10 +104,31 @@ internal sealed class GradingPanel : UserControl
         //     여기서 바로 도면을 찍으면 안 되거나 AutoCAD가 죽는다(<see cref="PickSession"/>).
         // ★[JACK 0910] 칸마다 <b>접었다 펼친다</b> — 다섯 칸이 다 펼쳐지면 값 줄이 화면 밖으로 나간다.
         //   내용은 <c>root</c>가 아니라 <b>돌려받은 상자</b>에 담아야 같이 접힌다.
-        var secTarget = GradingDialog.AddCollapsible(root, "1. 대상", out _targetBadge,
-                                                     "무엇을 가지고 정지면을 만들지",
-                                                     first: true, open: false,
-                                                     key: "정지:1.대상", group: G);
+        // ══ ★★★[JACK 0915] <b>「대상」과 「계획부지생성」을 한 칸으로 합쳤다.</b>
+        //
+        //   <para>JACK: <i>"도킹창 내 카테고리 다 열고 1.대상하고 2.계획부지생성을 합쳐.
+        //   머리기호 하나 넣고 계획부지생성이라고 하고 그 안에 기존 1.대상 내용 그대로,
+        //   2.계획부지생성 내용 그대로 넣어."</i></para>
+        //
+        //   <para><b>말이 되는 합침이다.</b> 두 칸은 원래 <b>한 가지 일</b>의 앞뒤였다 —
+        //   무엇으로 만들지 고르고(대상), 어떻게 만들지 정하고(값), 만든다(단추).
+        //   그런데 칸이 갈려 있으니 <b>대상 칸을 접어 둔 채</b> [계획부지생성하기]를 누르는 일이 생겼다
+        //   (그 위험을 요약 badge로 덮고 있었다 — 덮개가 필요했다는 것 자체가 신호였다).</para>
+        //
+        //   <para>★칸을 하나로 하면 <b>요약도 하나</b>여야 한다. 두 badge를 합쳐
+        //   <c>· 경계 ● 지반 ● · ⚠값 확인</c>처럼 한 줄로 적는다(<see cref="SyncBadge"/>).</para>
+        var secTarget = GradingDialog.AddCollapsible(root, "■ 계획부지생성", out _makeBadge,
+                                                     "무엇으로 만들지 고르고 · 어떻게 세울지 정하고 · 만든다",
+                                                     first: true, open: true,
+                                                     // ★★★[검토 0915 · 높음] <b>묶음(group)을 뺀다.</b>
+                                                     //   묶음은 <b>아코디언</b>이다 — 하나를 펴면 나머지를 닫는다
+                                                     //   (<see cref="GradingDialog"/> 486줄). 그러면 JACK이 말한
+                                                     //   <i>"열림상태로 놔"</i>가 <b>처음 한 번 접었다 펴는 순간</b> 무너진다.
+                                                     //   게다가 접힌 상태는 <c>SectionOpen</c>에 <b>static으로 기억</b>돼
+                                                     //   창을 껐다 켜도 닫힌 채로 뜬다(404줄이 <c>open:true</c>를 이긴다).
+                                                     //   ★묶음을 둔 까닭은 <b>다섯 칸이 850px을 넘던 것</b>이었는데
+                                                     //     이제 <b>칸이 둘</b>이라 그 까닭이 사라졌다.
+                                                     key: "정지:계획부지생성", group: null);
         _pickPlan = PickRow(secTarget, "계획 경계 선택", out _planWhat,
                             () => PickSession.Send(Doc, PickCommands.CmdPlan));
         _pickGround = PickRow(secTarget, "원지반 선택", out _groundWhat,
@@ -118,9 +146,10 @@ internal sealed class GradingPanel : UserControl
         // ── ① 절토성토 옵션 (절토/성토 + 산지 대소단) ─────────────────────
         //   ★[JACK 0910] <b>둘을 한 칸으로 합쳤다.</b> 대소단은 절성토 사면의 <b>변형</b>이지
         //   따로 정하는 물건이 아니다 — 켜면 그 값이 두 예시 그림에 바로 나타난다.
-        var secSlope = GradingDialog.AddCollapsible(root, "2. 계획부지생성", out _slopeBadge,
-                                                    "사면을 어떻게 계단으로 세울지 — 산지 대소단까지, 그리고 만들기",
-                                                    open: false, key: "정지:2.절성토", group: G);
+        // ★위 칸과 <b>같은 상자</b>다 — 이름만 남기고 합쳤다(JACK 0915).
+        //   아래 코드는 손대지 않는다: 담는 자리가 같으면 내용은 <b>쓰던 그대로</b> 들어간다.
+        var secSlope = secTarget;
+        secSlope.Children.Add(SubHead("사면을 어떻게 계단으로 세울지"));
         // ══ ★★★[JACK 0910] <b>예시는 이 칸 안에, 두 장 다.</b> ═══════════════
         //
         //   <para>JACK: <i>"예시 이미지는 절토/성토안에 넣어줘. 그림을 작게하더라도
@@ -220,9 +249,10 @@ internal sealed class GradingPanel : UserControl
         //       정지 창에는 안 넣은 채로 리본을 지울 뻔했다.
         //     ★단추는 <b>기존 명령을 그대로 부른다</b>(DHWALL/DHSLOPE) — 671줄짜리 편집기를
         //       베끼지 않는다(§20). 도킹창은 <b>부르는 자리</b>일 뿐이다.
-        var secFix = GradingDialog.AddCollapsible(root, "3. 계획부지수정",
+        // ★[JACK 0915] <i>"3계획부지수정은 그냥 앞에 머리기호 똑같은거 넣고 계획부지 수정이라고 하고 <b>열림상태로</b> 놔"</i>
+        var secFix = GradingDialog.AddCollapsible(root, "■ 계획부지 수정",
             "이미 만든 사면의 한 구간을 옹벽으로 세우거나 다시 사면으로 되돌립니다",
-            open: false, key: "정지:4.사면수정", group: G);
+            open: true, key: "정지:계획부지수정", group: null);   // ★묶음 없음 — 위 주석과 같은 까닭
         var wRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
         Button WBtn(string t, string cmd, string tip)
         {
@@ -467,7 +497,7 @@ internal sealed class GradingPanel : UserControl
                 //   <b>만들기를 눌렀을 때</b>의 뜻이다(<see cref="Apply"/>가 한다).
             }
 
-            if (_slopeBadge != null) _slopeBadge.Text = _valOk ? "" : "· ⚠값 확인";
+            _badgeVal = _valOk ? "" : " · ⚠값 확인"; SyncBadge();
             SyncEnabled();
         }
         catch { }
@@ -576,10 +606,10 @@ internal sealed class GradingPanel : UserControl
             //   그 칸을 접은 동안만 제목 옆에 상태를 적는다 — 접힌 채로 [지표면 생성]을 누르는 일이
             //   흔할 텐데, <b>무엇으로 만드는지 모르고 누르는 것</b>이 가장 나쁘다.
             //   ★<c>이어서</c>인지도 함께 적는다 — 그것이 원지반을 자동으로 바꿔 버리기 때문이다.
-            if (_targetBadge != null)
-                _targetBadge.Text = "· 경계 " + (hasPlan ? "●" : "○")
-                                  + " 지반 " + (needGround ? (hasGround ? "●" : "○") : "자동")
-                                  + (hasPrev ? (_append.IsChecked == true ? " · 이어서" : " · 새로시작") : "");
+            _badgePicks = "· 경계 " + (hasPlan ? "●" : "○")
+                        + " 지반 " + (needGround ? (hasGround ? "●" : "○") : "자동")
+                        + (hasPrev ? (_append.IsChecked == true ? " · 이어서" : " · 새로시작") : "");
+            SyncBadge();
             _picksOk = !busy && hasPlan && (hasGround || !needGround);
             // ★[8단계] 사면 수정은 <b>이미 만든 정지면</b>이 있어야 한다 —
             //   "이어서/새로시작"을 보여 주는 그 조건과 같다(기존 결과가 있는가).
@@ -741,9 +771,21 @@ internal sealed class GradingPanel : UserControl
         var box = new TextBox
         {
             Text = value.ToString(CultureInfo.InvariantCulture),
-            // ★[검토 0910 · 보통4] 56 → 50 → <b>48</b>. 세 칸이 <b>한 줄에</b> 들어가는 것이
-            //   창 폭을 정하는 조건이 됐으므로(JACK 0910), 칸을 조금 줄여 여유를 만든다.
-            Width = 48,
+            // ★★★[JACK 0915 <i>"소수점 치면 잘려서 안 보여"</i>] <b>폭이 아니라 <u>패딩</u>이 범인이었다.</b>
+            //
+            //   <para>칸은 48px인데 스킨이 <c>Padding="8,0,8,0"</c>을 준다(<see cref="DhBrand"/>) —
+            //   테두리까지 더하면 <b>18px가 글자 아닌 것</b>이고, 남는 글자 자리는 <b>30px뿐</b>이다.
+            //   맑은 고딕 12px에서 숫자 한 글자가 약 6.7px이니 <b>네 글자가 겨우</b>다 —
+            //   <c>0.005</c>는 원리적으로 안 들어간다. 0910에 56→50→48로 줄일 때
+            //   <b>패딩을 빼고 세지 않은 것</b>이 실수였다.</para>
+            //
+            //   <para>→ 이 칸만 패딩을 <b>3</b>으로 줄이고 폭을 60으로 올린다.
+            //   글자 자리 <b>30px → 52px</b>(73% 넓어진다)인데 칸은 12px만 커진다.</para>
+            //   <para>★그래도 한 줄에 안 들어가면 <c>WrapPanel</c>이 <b>아래로 접어 내린다</b> —
+            //   잘려서 안 보이는 것보다 낫다(0910 주석이 이미 그렇게 정해 뒀다).
+            //   한 줄인지 두 줄인지는 <b>창 실측</b> 로그가 그 자리에서 적는다.</para>
+            Width = 60,
+            Padding = new Thickness(3, 0, 3, 0),
             Height = 26,
             VerticalContentAlignment = VerticalAlignment.Center,
             HorizontalContentAlignment = HorizontalAlignment.Center,

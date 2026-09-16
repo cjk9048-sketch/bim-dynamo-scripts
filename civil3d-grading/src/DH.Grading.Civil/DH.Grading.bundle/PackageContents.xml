@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <!--
   Civil3D 자동 로드 매니페스트(소스 템플릿 — 배포본과 동일하게 유지할 것).
   이 .bundle 폴더 전체를 아래 위치에 복사하면 Civil3D 시작 시 자동 로드된다:
@@ -6,7 +6,7 @@
   Contents 폴더에 빌드 산출물(DH.Grading.Civil.dll, DH.Grading.Core.dll)과 뷰 LISP를 넣을 것.
 -->
 <ApplicationPackage SchemaVersion="1.0"
-                    AppVersion="16.0.0"
+                    AppVersion="93.8.0"
                     ProductType="Application"
                     Name="DH 정지(절성토)"
                     Description="계단식 정지 비탈면 자동 생성 (distance-field)">
@@ -32,6 +32,46 @@
         <Command Global="DHXSEC" Local="DHXSEC" />
         <Command Global="DHSLOPELINE" Local="DHSLOPELINE" />
         <Command Global="DHCS" Local="DHCS" />
+        <!-- ★[JACK 0915 배포판] 코드의 [CommandMethod]를 전부 싣는다 —
+             자동 로드라 없어도 돌긴 하지만, 매니페스트가 실제와 어긋나 있으면
+             도면 쪽에서 "이 명령이 있는지" 확인할 길이 남지 않는다. -->
+        <Command Global="DHBANDCHK" Local="DHBANDCHK" />
+        <Command Global="DHBANDINFO" Local="DHBANDINFO" />
+        <Command Global="DHCONTOURBOX" Local="DHCONTOURBOX" />
+        <Command Global="DHCONTOURWEB" Local="DHCONTOURWEB" />
+        <Command Global="DHCROP" Local="DHCROP" />
+        <Command Global="DHEXCAV" Local="DHEXCAV" />
+        <Command Global="DHEXCAVPANEL" Local="DHEXCAVPANEL" />
+        <Command Global="DHEXCAVSLOPE" Local="DHEXCAVSLOPE" />
+        <Command Global="DHEXCAVWALL" Local="DHEXCAVWALL" />
+        <Command Global="DHEXCAVWALLCLEAR" Local="DHEXCAVWALLCLEAR" />
+        <Command Global="DHGNDREBUILD" Local="DHGNDREBUILD" />
+        <Command Global="DHGRADEPANEL" Local="DHGRADEPANEL" />
+        <Command Global="DHMAPPICK" Local="DHMAPPICK" />
+        <Command Global="DHMISCSET" Local="DHMISCSET" />
+        <Command Global="DHNGII" Local="DHNGII" />
+        <Command Global="DHPARCELOFF" Local="DHPARCELOFF" />
+        <Command Global="DHPICKCLEAR" Local="DHPICKCLEAR" />
+        <Command Global="DHPICKSTATUS" Local="DHPICKSTATUS" />
+        <Command Global="DHPROFILE" Local="DHPROFILE" />
+        <Command Global="DHSAMPLE" Local="DHSAMPLE" />
+        <Command Global="DHSECTION" Local="DHSECTION" />
+        <Command Global="DHSHEET" Local="DHSHEET" />
+        <Command Global="DHSHEETSET" Local="DHSHEETSET" />
+        <Command Global="DHSTATION" Local="DHSTATION" />
+        <Command Global="DHSTATIONDEL" Local="DHSTATIONDEL" />
+        <Command Global="DHSTATIONFB" Local="DHSTATIONFB" />
+        <Command Global="DHSTRATA" Local="DHSTRATA" />
+        <Command Global="DHSTRATAPICK" Local="DHSTRATAPICK" />
+        <Command Global="DHTICKCHK" Local="DHTICKCHK" />
+        <Command Global="DHTICKDIAG" Local="DHTICKDIAG" />
+        <Command Global="DHTICKSET" Local="DHTICKSET" />
+        <Command Global="DHVIEW" Local="DHVIEW" />
+        <Command Global="DHVIEWALL" Local="DHVIEWALL" />
+        <Command Global="DHVIEWE" Local="DHVIEWE" />
+        <Command Global="DHVIEWG" Local="DHVIEWG" />
+        <Command Global="DHVIEWP" Local="DHVIEWP" />
+        <Command Global="DHXVIEW" Local="DHXVIEW" />
       </Commands>
     </ComponentEntry>
     <!-- [JACK 0731] 3D 뷰 전환 단축 LISP(v1~v4·vv1~vv3) — 애드인과 함께 항상 자동 로드(설치 안 돼 있으면 이걸로 대체).

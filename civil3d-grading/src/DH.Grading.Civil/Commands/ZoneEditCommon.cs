@@ -978,6 +978,10 @@ internal static class ZoneEditCommon
                     var nz = new SlopeZone
                     {
                         T0 = a.T0, T1 = a.T1,
+                        // ★[JACK 0915] <b>부분인지 전체인지 들려 보낸다.</b> 여기서만 알던 사실이라
+                        //   아래쪽(정지면 만들기)은 둘을 구별할 길이 없었다 — 그래서 전체 변환까지
+                        //   실험 중인 전이면 길로 끌려갔다.
+                        Partial = isPart,
                         Ref = lineRef.TryGetValue(pick.Value, out var pr) ? pr : null,
                     };
                     nz.Rules.Add((pick.Value.bench, askN!.Value, askW!.Value));

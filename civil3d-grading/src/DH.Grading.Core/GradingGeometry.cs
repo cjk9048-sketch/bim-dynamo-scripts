@@ -1255,6 +1255,24 @@ public static class GradingGeometry
                         List<(double X, double Y)> Samples, double Area)> SplitFaces(
         IReadOnlyList<Point3> outer, IEnumerable<IReadOnlyList<Point3>?>? cutters,
         double z, double dens = 1.0)
+        => SplitFaces(outer, cutters, null, z, dens);
+
+    /// <summary>★★★[JACK 0916] <b>칼금을 「열린 사슬」로도 받는다.</b>
+    ///
+    /// <para>JACK: <i>"지금 우리는 <b>데이라잇과의 싸움</b>이야 … 최대한 데이라잇을 따는 로직에 집중해."</i></para>
+    ///
+    /// <para>현장 11:37 계측: 교선 링의 <b>30%가 가짜</b>였다(171m 중 74m · 최악 10.12m).
+    /// <c>GetExactDaylight</c>이 열린 사슬을 <b>닫으려고 이어 붙인</b> 구간이다.
+    /// 그 가짜까지 칼금으로 쓰면 판이 <b>엉뚱한 자리에서</b> 갈린다.</para>
+    ///
+    /// <para>→ 진짜 구간만 <b>열린 사슬</b>로 끊어서 넘긴다. 사슬의 양 끝은 발자국 테두리에 닿으므로
+    /// 폴리고나이즈가 판을 제대로 가른다(닫지 않아도 된다 — 닫으면 <b>없는 선</b>이 하나 생긴다).</para></summary>
+    /// <param name="openCutters">닫지 않고 <b>선 그대로</b> 쓸 칼금들.</param>
+    public static List<(List<Point3> Ring, List<List<Point3>> Holes,
+                        List<(double X, double Y)> Samples, double Area)> SplitFaces(
+        IReadOnlyList<Point3> outer, IEnumerable<IReadOnlyList<Point3>?>? cutters,
+        IEnumerable<IReadOnlyList<Point3>?>? openCutters,
+        double z, double dens = 1.0)
     {
         var res = new List<(List<Point3>, List<List<Point3>>, List<(double, double)>, double)>();
         if (outer == null || outer.Count < 3) return res;
@@ -1269,6 +1287,15 @@ public static class GradingGeometry
                 {
                     if (c == null || c.Count < 3) continue;
                     try { lines.Add(gf.CreateLineString(ClosedRing(c))); } catch { }
+                }
+            if (openCutters != null)
+                foreach (var c in openCutters)
+                {
+                    if (c == null || c.Count < 2) continue;
+                    // ★닫지 않는다 — 있는 그대로의 선이다.
+                    var cs = new Coordinate[c.Count];
+                    for (int i = 0; i < c.Count; i++) cs[i] = new Coordinate(c[i].X, c[i].Y);
+                    try { lines.Add(gf.CreateLineString(cs)); } catch { }
                 }
             // 단항 합집합 = 자기교차·핀치를 전부 <b>정점</b>으로 바꾼다(노딩)
             Geometry noded = UnaryUnionOp.Union((Geometry)gf.CreateGeometryCollection(lines.ToArray()));
@@ -1343,6 +1370,177 @@ public static class GradingGeometry
     /// 구멍은 덩이 <b>안쪽에만</b> 있으므로 Civil의 <c>Hide</c>로 안전히 뚫린다.</para></summary>
     /// <param name="holes">합친 결과에 생긴 <b>구멍 개수</b>(로그용).</param>
     /// <returns>합친 결과의 (바깥 링, 구멍 링들) — 넓은 것부터.</returns>
+    /// <summary>★★★[JACK 0916] <b>진짜 데이라잇 링으로 잘라낸다</b>(NTS 교집합).
+    ///
+    /// <para>JACK 스샷: <i>"데이라잇과 <b>미세하게 맞지 않음</b>"</i> · <i>"데이라잇과 맞지 않게 <b>튀어나옴</b>"</i>.</para>
+    ///
+    /// <para><b>까닭.</b> 쐐기의 바깥 변은 데이라잇을 <b>표본으로 흉내 낸 선</b>이다 —
+    /// 둘레를 129칸으로 나눠 그 칸의 데이라잇 거리를 재고, 못 잰 칸은 <b>이웃 값으로 메운다</b>
+    /// (<c>①-f</c> 로그의 <i>"표본 129칸 중 ○칸에서 잼"</i>). 그러니 진짜 곡선과 어긋나는 것이
+    /// <b>원리적으로 당연</b>하다 — 촘촘히 해도 <b>흉내</b>일 뿐이다.</para>
+    ///
+    /// <para>→ 흉내로 만든 판을 <b>진짜 링으로 한 번 더 자른다.</b> 그러면 바깥 변이
+    /// <b>데이라잇 그 자체</b>가 된다(표본 간격과 무관해진다).</para></summary>
+    /// <param name="clip">자를 링(정지 데이라잇). <c>null</c>이거나 못 읽으면 <b>그대로 돌려준다</b> —
+    /// 못 자르는 것이 <b>틀리게 자르는 것</b>보다 낫다.</param>
+    /// <summary>★[JACK 0916] <b>판에서 조각들을 뺀다</b>(NTS 차집합) — 구멍까지 돌려준다.</summary>
+    /// <summary>★[JACK 0916] 링 <b>안쪽</b>의 점들 — 되읽기 탐침에 쓴다.
+    /// <para>★테두리에서 <paramref name="away"/>만큼 <b>떨어진</b> 점만 준다.
+    /// 경계에 붙은 점은 근수직 계단 옆에서 어느 값이든 주므로 <b>잣대가 될 수 없다</b>
+    /// (검토 0916 실측: 표본이 경계에서 5.7mm까지 붙었다).</para></summary>
+    public static List<(double X, double Y)> InteriorPoints(
+        IReadOnlyList<Point3>? ring, int maxN, double away = 0.3)
+    {
+        var res = new List<(double, double)>();
+        if (ring == null || ring.Count < 4) return res;
+        try
+        {
+            var gf = NtsFactory();
+            var g = NtsSupport.ToCleanGeometry(ring, gf);
+            if (g == null || g.IsEmpty) return res;
+            var inner = g.Buffer(-away);            // ★테두리에서 물러난 자리만
+            if (inner == null || inner.IsEmpty) inner = g;
+            var env = inner.EnvelopeInternal;
+            int n = Math.Max(4, (int)Math.Ceiling(Math.Sqrt(maxN * 4.0)));
+            for (int gx = 0; gx < n && res.Count < maxN; gx++)
+                for (int gy = 0; gy < n && res.Count < maxN; gy++)
+                {
+                    double x = env.MinX + (env.MaxX - env.MinX) * (gx + 0.5) / n;
+                    double y = env.MinY + (env.MaxY - env.MinY) * (gy + 0.5) / n;
+                    try { if (inner.Contains(gf.CreatePoint(new Coordinate(x, y)))) res.Add((x, y)); }
+                    catch { }
+                }
+        }
+        catch { }
+        return res;
+    }
+
+    public static List<(List<Point3> Ring, List<List<Point3>> Holes)> RingSubtract(
+        IReadOnlyList<Point3>? outer, IEnumerable<IReadOnlyList<Point3>?>? minus,
+        double z, out string log, double dens = 1.0)
+    {
+        var res = new List<(List<Point3>, List<List<Point3>>)>();
+        log = "";
+        if (outer == null || outer.Count < 3) { log = "판이 없다"; return res; }
+        try
+        {
+            var gf = NtsFactory();
+            Geometry? a0 = NtsSupport.ToCleanGeometry(outer, gf);
+            if (a0 == null) { log = "판이 무효다"; return res; }
+            double before = a0.Area;
+            if (minus != null)
+                foreach (var m in minus)
+                {
+                    if (m == null || m.Count < 3) continue;
+                    var mg = NtsSupport.ToCleanGeometry(m, gf);
+                    if (mg != null) { try { a0 = a0.Difference(mg); } catch { } }
+                }
+            List<Point3> RingOf(LineString ls)
+            {
+                var pts = new List<Point3>();
+                foreach (var c in ls.Coordinates)
+                {
+                    if (pts.Count > 0)
+                    {
+                        var l = pts[pts.Count - 1];
+                        if (Math.Abs(l.X - c.X) < 1e-9 && Math.Abs(l.Y - c.Y) < 1e-9) continue;
+                    }
+                    pts.Add(new Point3(c.X, c.Y, z));
+                }
+                return Densify(pts, Math.Max(0.3, dens));
+            }
+            double after = 0;
+            for (int i = 0; i < a0.NumGeometries; i++)
+            {
+                if (a0.GetGeometryN(i) is not Polygon pg || pg.IsEmpty || pg.Area < 0.05) continue;
+                after += pg.Area;
+                var ext = RingOf(pg.ExteriorRing);
+                if (ext.Count < 4) continue;
+                var hs = new List<List<Point3>>();
+                for (int h = 0; h < pg.NumInteriorRings; h++)
+                { var hr = RingOf(pg.GetInteriorRingN(h)); if (hr.Count >= 4) hs.Add(hr); }
+                res.Add((ext, hs));
+            }
+            log = $"{before:F1}㎡ − 뺀 것 = <b>{after:F1}㎡</b>";
+        }
+        catch { log = "빼기 실패"; }
+        return res;
+    }
+
+    public static List<(List<Point3> Ring, List<List<Point3>> Holes)> RingIntersect(
+        IEnumerable<(List<Point3> Ring, List<List<Point3>> Holes)>? src,
+        IReadOnlyList<Point3>? clip, double z, out string log, double dens = 1.0)
+    {
+        var res = new List<(List<Point3>, List<List<Point3>>)>();
+        log = "";
+        if (src == null) return res;
+        var keep = new List<(List<Point3> Ring, List<List<Point3>> Holes)>(src);
+        if (clip == null || clip.Count < 3)
+        { log = "자를 링이 없어 <b>그대로 둔다</b>"; return keep; }
+        try
+        {
+            var gf = NtsFactory();
+            Geometry? cg = NtsSupport.ToCleanGeometry(clip, gf);
+            if (cg == null || cg.IsEmpty)
+            { log = "자를 링이 무효라 <b>그대로 둔다</b>"; return keep; }
+            double before = 0, after = 0;
+            foreach (var q in keep)
+            {
+                Geometry? a0 = NtsSupport.ToCleanGeometry(q.Ring, gf);
+                if (a0 == null) continue;
+                foreach (var h in q.Holes)
+                {
+                    var hg = NtsSupport.ToCleanGeometry(h, gf);
+                    if (hg != null) { try { a0 = a0.Difference(hg); } catch { } }
+                }
+                before += a0.Area;
+                Geometry cut;
+                try { cut = a0.Intersection(cg); } catch { continue; }
+                for (int i = 0; i < cut.NumGeometries; i++)
+                {
+                    if (cut.GetGeometryN(i) is not Polygon pg || pg.IsEmpty || pg.Area < 0.01) continue;
+                    after += pg.Area;
+                    List<Point3> RingOf(LineString ls)
+                    {
+                        var pts = new List<Point3>();
+                        foreach (var c in ls.Coordinates)
+                        {
+                            if (pts.Count > 0)
+                            {
+                                var l = pts[pts.Count - 1];
+                                if (Math.Abs(l.X - c.X) < 1e-9 && Math.Abs(l.Y - c.Y) < 1e-9) continue;
+                            }
+                            pts.Add(new Point3(c.X, c.Y, z));
+                        }
+                        return Densify(pts, Math.Max(0.3, dens));
+                    }
+                    var ext = RingOf(pg.ExteriorRing);
+                    if (ext.Count < 4) continue;
+                    var hs = new List<List<Point3>>();
+                    for (int h = 0; h < pg.NumInteriorRings; h++)
+                    {
+                        var hr = RingOf(pg.GetInteriorRingN(h));
+                        if (hr.Count >= 4) hs.Add(hr);
+                    }
+                    res.Add((ext, hs));
+                }
+            }
+            if (res.Count == 0) { log = "<b>남는 것이 없어</b> 그대로 둔다"; return keep; }
+            res.Sort((x, y) => RingArea2(y.Item1).CompareTo(RingArea2(x.Item1)));
+            log = $"{before:F1}㎡ → <b>{after:F1}㎡</b>(잘린 몫 {before - after:F1}㎡ · 덩이 {res.Count}개)";
+            return res;
+        }
+        catch { log = "자르기 실패 — <b>그대로 둔다</b>"; return keep; }
+    }
+
+    private static double RingArea2(IReadOnlyList<Point3> r)
+    {
+        double a = 0;
+        for (int i = 0; i < r.Count; i++)
+        { var u = r[i]; var v = r[(i + 1) % r.Count]; a += u.X * v.Y - v.X * u.Y; }
+        return Math.Abs(a) * 0.5;
+    }
+
     public static List<(List<Point3> Ring, List<List<Point3>> Holes)> RingUnion(
         IEnumerable<IReadOnlyList<Point3>?>? rings, double z, out int holes, double dens = 1.0)
     {
