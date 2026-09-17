@@ -251,6 +251,132 @@ public sealed class CreateGradingCommand
         }
         catch { }
 
+    /// <summary>★★★[JACK 0916] <b>구간을 고르면 폴리곤 하나만 그린다.</b>
+    ///
+    /// <para><b>길이</b>는 고른 구간 그대로. <b>폭</b>은
+    /// 「남은 단수 × (단높이 × <b>계획 구배</b> + 소단폭)」 + 여유.
+    /// 미는 방향은 구간선의 <b>직각방향</b>이고, 어느 쪽이 사면인지는 <b>땅을 재서</b> 정한다.</para>
+    ///
+    /// <para>★<b>계획 구배</b>를 쓴다(옹벽 구배가 아니다). 0916 실측: 옹벽 구배 1:0.01로 재니
+    /// 폭이 <b>14.2m</b>였는데 데이라잇은 <b>27.83m</b>였다 — 절반에서 끝났다.
+    /// 폭은 「벽이 얼마나 가느냐」가 아니라 「<b>사면이었다면</b> 얼마나 갔겠느냐」다.</para></summary>
+    static string BuildWallBoxPolygon(Database db, Transaction tr,
+        SlopeZone wz, bool wUp, GradingParams p, IGroundSurface ground,
+        System.Collections.Generic.List<Point3> boundary, double toD)
+    {
+        var rul = wz.Ref ?? boundary;
+        var rcm = wz.RefCum ?? GradingGeometry.CumLen2D(rul);
+        double rTot = rcm[rcm.Length - 1];
+        double spanW = wz.T1 >= wz.T0 ? wz.T1 - wz.T0 : rTot - wz.T0 + wz.T1;
+        double zBase = GradingGeometry.PointAtParam(rul, rcm, wz.T0).Z;
+        double benchH = p.BenchHeightOf(wUp);
+        double slopePlan = System.Math.Max(wUp ? p.CutSlope : p.FillSlope, p.MinSlope);
+        double benchWPlan = p.BenchWidthOf(wUp);
+        double runPer = benchH * slopePlan + benchWPlan;      // 한 단이 평면에서 가는 거리
+        int nStepT = 64, maxBench = 80;
+        int calcN = 0, walkN = 0, nMeasured = 0, nNoGround = 0;
+        double worstCut = 0;
+        for (int i = 0; i <= nStepT; i++)
+        {
+            double t = wz.T0 + spanW * i / nStepT;
+            double tw = ((t % rTot) + rTot) % rTot;
+            var pOn = GradingGeometry.PointAtParam(rul, rcm, tw);
+            // ① 남은 단수 — 선 위 <b>지반고</b>와 <b>계획고</b>의 차(JACK이 정한 식)
+            if (ground.TryGetElevation(pOn.X, pOn.Y, out double zgOn))
+            {
+                double cutH = wUp ? zgOn - pOn.Z : pOn.Z - zgOn;
+                if (cutH > worstCut) worstCut = cutH;
+                int nc = (int)System.Math.Ceiling(System.Math.Max(0, cutH) / System.Math.Max(0.01, benchH));
+                if (nc > calcN) calcN = nc;
+            }
+            else nNoGround++;
+            // ② 견줌 — 땅에 대고 한 단씩 나가며 세 본다(쓰지는 않는다)
+            double zCur = pOn.Z, dCur = 0; int nb = 0; bool met = false;
+            for (; nb < maxBench; nb++)
+            {
+                dCur += benchH * slopePlan; zCur += wUp ? benchH : -benchH;
+                var q = GradingGeometry.OutwardAt(rul, rcm, tw, dCur);
+                if (ground.TryGetElevation(q.X, q.Y, out double zg))
+                { if (wUp ? zg <= zCur : zg >= zCur) { nb++; met = true; break; } }
+                dCur += benchWPlan;
+            }
+            if (met) nMeasured++;
+            if (nb > walkN) walkN = nb;
+        }
+        if (calcN <= 0) calcN = 1;
+        double widthW = calcN * runPer + GradingSettings.WallPolygonMargin;
+        double walkD = walkN * runPer;                      // 땅에 대고 센 데이라잇 거리
+
+        // ── ★방향 — <b>재서</b> 정한다. 바깥이 늘 사면 쪽이라고 가정하지 않는다 ──
+        double sgn = 1.0; string dirWhy;
+        {
+            double twm = (((wz.T0 + spanW * 0.5) % rTot) + rTot) % rTot;
+            var pm = GradingGeometry.PointAtParam(rul, rcm, twm);
+            double probe = System.Math.Max(2.0, widthW * 0.25);
+            var qP = GradingGeometry.OutwardAt(rul, rcm, twm, probe);
+            var qM = GradingGeometry.OutwardAt(rul, rcm, twm, -probe);
+            bool okP = ground.TryGetElevation(qP.X, qP.Y, out double zP);
+            bool okM = ground.TryGetElevation(qM.X, qM.Y, out double zM);
+            if (okP && okM)
+            {
+                double sP = wUp ? zP - pm.Z : pm.Z - zP;    // 사면 쪽일수록 큰 값
+                double sM = wUp ? zM - pm.Z : pm.Z - zM;
+                sgn = sP >= sM ? 1.0 : -1.0;
+                dirWhy = $"바깥 {sP:+0.0;-0.0}m / 안쪽 {sM:+0.0;-0.0}m → <b>{(sgn > 0 ? "바깥" : "안쪽")}</b>이 사면 쪽";
+            }
+            else dirWhy = okP ? "안쪽 땅을 못 재 <b>바깥</b>으로 간다" : "양쪽 다 못 재 <b>바깥</b>으로 간다";
+        }
+
+        // ── 구간선(안쪽) + 직각으로 민 선(바깥) → 닫는다 ──
+        int nDiv = System.Math.Max(8, (int)System.Math.Ceiling(spanW /
+                       System.Math.Max(0.5, System.Math.Min(p.VertexSpacing, 1.0))));
+        var inner = new System.Collections.Generic.List<Point3>();
+        var outer = new System.Collections.Generic.List<Point3>();
+        for (int i = 0; i <= nDiv; i++)
+        {
+            double tw = (((wz.T0 + spanW * i / nDiv) % rTot) + rTot) % rTot;
+            var qi = GradingGeometry.OutwardAt(rul, rcm, tw, 0.0);
+            var qo = GradingGeometry.OutwardAt(rul, rcm, tw, widthW * sgn);
+            inner.Add(new Point3(qi.X, qi.Y, zBase));
+            outer.Add(new Point3(qo.X, qo.Y, zBase));
+        }
+        var box = new System.Collections.Generic.List<Point3>(inner);
+        for (int i = outer.Count - 1; i >= 0; i--) box.Add(outer[i]);
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append($"    ★<b>폴리곤 폭</b> — 선 위 최대 {(wUp ? "절토" : "성토")}고 <b>{worstCut:F2}m</b>"
+            + $" ÷ 단높이 {benchH:0.##} → <b>남은 단수 {calcN}단</b>"
+            + $" × (단높이 {benchH:0.##} × <b>계획 구배 1:{slopePlan:0.###}</b> + 소단 {benchWPlan:0.##} = {runPer:F2}m)"
+            + $" = {calcN * runPer:F1}m + 여유 {GradingSettings.WallPolygonMargin:0.#}m"
+            + $" → <b>폭 {widthW:F1}m</b>\n");
+        sb.Append($"    ★<b>견줌</b> — 땅에 대고 세면 <b>{walkN}단({walkD:F1}m)</b>"
+            + $"(구간 {nStepT + 1}자리 중 땅에 닿은 데 {nMeasured}"
+            + (nNoGround > 0 ? $" · 선 위 땅을 못 잰 자리 {nNoGround}" : "") + ")"
+            + $" → 폭이 그보다 <b>{widthW - walkD:+0.0;-0.0}m</b>"
+            + (widthW > walkD ? " <b>넘어선다</b>" : " <b>⚠못 미친다</b>")
+            + (toD > 0 ? $" · 옛 사면 데이라잇 {toD:F1}m 대비 {widthW - toD:+0.0;-0.0}m" : "")
+            + $" · 방향: {dirWhy}\n");
+
+        bool simpleBox = GradingGeometry.RingIsSimple(box);
+        double aBox = GradingGeometry.RingAreaNts(box);
+        if (box.Count >= 4 && simpleBox && aBox > 1.0)
+        {
+            var pl = new System.Collections.Generic.List<Point3>(box) { box[0] };
+            DrawLinesOnLayer(db, tr,
+                new System.Collections.Generic.List<System.Collections.Generic.List<Point3>> { pl },
+                "DH-가상폴리곤", 1);
+            sb.Append($"    ★<b>폴리곤만 그렸다</b> — 'DH-가상폴리곤' <b>{box.Count}점 / {aBox:F1}㎡</b>"
+                + $" · 길이 {spanW:F1}m(구간 [{wz.T0:F1}..{wz.T1:F1}]) × 폭 {widthW:F1}m"
+                + $" · 표고 {zBase:F2}m · <b>경로에 평행</b>(직각방향으로 밀었다)"
+                + " · 표면은 <b>안 만든다</b> · DHRESET이 걷어 간다\n");
+        }
+        else
+            sb.Append($"    ⚠<b>폴리곤을 못 만들었다</b> — 점 {box.Count}개"
+                + $" · 제 몸을 지르지 않는가 {(simpleBox ? "예" : "<b>아니오</b>")}"
+                + $" · 넓이 {aBox:F1}㎡\n");
+        return sb.ToString();
+    }
+
         // ★[JACK 0807 '옹벽변환이 여전히 오래 걸린다'] 어디서 시간을 쓰는지 **재고 나서** 고친다.
         //   종전엔 DoGrade 전체에 시계가 하나도 없어, 느리다는 체감만 있고 근거가 없었다.
         //   추측으로 후보를 고르면 헛짚는다(0805~0806에서 성능만 두 번 자책골) — 단계별 초를 남긴다.
@@ -381,6 +507,48 @@ public sealed class CreateGradingCommand
                             .Replace("<b>", "").Replace("</b>", "")
                             + " 정지면에서 떼고 '가상옹벽_DH'로 따로 만듭니다(전체 구간 변환은 종전대로).");
                     }
+                }
+
+                // ══ ★★★[JACK 0916 <i>"폴리곤만 생성하는 건데 왜 이렇게 처리속도가 오래 걸리는 거야?"</i>]
+                //   <b>맞는 말이라 재 봤다 — 폴리곤은 공짜였다.</b>
+                //
+                //   <para><b>실측(그 판 로그)</b>: 총 <b>16.1초</b> 중
+                //   2단계 교선·경계주입 <b>10.4초/34.2GB</b> · 토량 산출 2.3초 ·
+                //   1단계 가상면 1.7초(삼각형 30,760 + 57,544) · 3단계 합성 1.4초.
+                //   <b>폴리곤은 따로 잡히지도 않았다.</b></para>
+                //
+                //   <para>옹벽 변환을 누르면 <b>정지면을 통째로 다시 만든다</b>. 옹벽이 정지면을 바꾸던
+                //   시절엔 당연한 일이었는데, <b>지금은 폴리곤 한 줄만 그리므로 정지면이 바뀔 일이 없다</b> —
+                //   16초가 통째로 헛일이다.</para>
+                //
+                //   <para>→ 여기서 <b>끝낸다</b>. 폴리곤에 필요한 것(자·구간·원지반·설정)은
+                //   <b>이미 다 손에 있다</b>. 화면의 <c>정지면_DH</c>는 <b>건드리지 않으므로</b> 그대로 남는다.</para>
+                if (GradingSettings.WallPolygonOnly)
+                {
+                    SlopeZone? wzF = null; bool wUpF = true; string wSideF = ""; int nWZ = 0;
+                    foreach (var (zs, upv, nm) in new[] { (wallZoneCut, true, "절토"), (wallZoneFill, false, "성토") })
+                        foreach (var z in zs) { nWZ++; if (wzF == null) { wzF = z; wUpF = upv; wSideF = nm; } }
+                    var sbP = new System.Text.StringBuilder();
+                    sbP.Append("[DHGRADE 진단] " + System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+                        + "\n■ <b>폴리곤만 만든다</b>(WallPolygonOnly) — 정지면은 <b>안 건드린다</b>"
+                        + "(그래서 <b>다시 만들지 않는다</b> — 0916 실측으로 그 재생성이 16.1초 중 16초였다)\n");
+                    if (wzF == null)
+                        sbP.Append("  ⚠옹벽 구간이 없다(수직 구배 규칙을 가진 <b>부분 지정</b> 구간 0개)"
+                            + $" · 절토 구간 {cutZones.Count} · 성토 구간 {fillZones.Count}"
+                            + " — 구간을 다시 고르세요.\n");
+                    else
+                    {
+                        sbP.Append($"  ★구간 — {wSideF} · [{wzF.T0:F1}..{wzF.T1:F1}]"
+                            + (nWZ > 1 ? $" (옹벽 구간 {nWZ}개 중 <b>첫 구간</b>만)" : "") + "\n");
+                        try { sbP.Append(BuildWallBoxPolygon(db, tr, wzF, wUpF, p, ground, boundary, 0)); }
+                        catch (System.Exception bex)
+                        { sbP.Append($"  ⚠폴리곤 만들기가 <b>터졌다</b> — {bex.GetType().Name}: {bex.Message}\n"); }
+                    }
+                    sbP.Append($"\n■ 걸린 시간 — {stw.Report()}\n");
+                    tr.Commit();
+                    try { DiagLog.Reset(sbP.ToString()); } catch { }
+                    try { ed.WriteMessage("\n[DHGRADE] 폴리곤만 만들었습니다(정지면은 그대로). 진단 로그를 보세요."); } catch { }
+                    return;
                 }
 
                 cut = GradingGeometry.Build(boundary, ground, p, up: true, cutZonesR);
@@ -875,6 +1043,9 @@ public sealed class CreateGradingCommand
                 bool wallUpKeep = true;
                 // ★★★[JACK 0916] <b>줄(row)</b>을 2단계로 들고 나간다 — 새 로직의 재료다.
                 System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? slabKeep = null;
+                // ★[JACK 0916] 자·구간도 들고 나간다 — 뚜껑 바깥 변을 직각선으로 찾는 데 쓴다.
+                System.Collections.Generic.List<Point3>? rulKeep = null; double[]? rcmKeep = null;
+                double wzT0 = 0, wzSpan = 0, wzFar = 0;
                 // ★★[JACK 0916 스샷] 정지 <b>데이라잇 링</b>도 들고 나간다 — 쐐기의 바깥 변은
                 //   표본으로 흉내 낸 선이라 진짜 곡선과 어긋난다. 마지막에 이 링으로 한 번 더 자른다.
                 System.Collections.Generic.List<Point3>? dayRingKeep = null;
@@ -1004,11 +1175,185 @@ public sealed class CreateGradingCommand
                                        polygon: out var wallPoly, wedgePolygon: out var wedgePoly,
                                        log: out string slog);
                         wedgePolyKeep = wedgePoly; wallPolyKeep = wallPoly; wallUpKeep = wUp; slabKeep = slab;
+                        rulKeep = new System.Collections.Generic.List<Point3>(rul); rcmKeep = rcm;
+                        wzT0 = wz.T0; wzSpan = wz.T1 >= wz.T0 ? wz.T1 - wz.T0 : rTot - wz.T0 + wz.T1;
+                        wzFar = toD;
                         if (finalRings.TryGetValue(wSide, out var dayR0) && dayR0 != null && dayR0.Count >= 3)
                             dayRingKeep = new System.Collections.Generic.List<Point3>(dayR0);
                         DiagLog.Append($"    ①옹벽면 — {slog}\n");
 
-                        if (slab.Count < 3)
+                        // ══ ★★★[JACK 0916 <i>"누르면 폴리곤만 생성되는 것까지만"</i>] ═══════════
+                        //   표면을 <b>하나도 안 만들고</b> 쐐기 폴리곤 한 줄만 그린다.
+                        //   빨간 미리보기(화살표·경로)는 이 위에서 이미 끝난 일이라 그대로 남는다.
+                        if (GradingSettings.WallPolygonOnly)
+                        {
+                            // ══ ★★★[JACK 0916] <b>폴리곤은 이렇게 만든다.</b>
+                            //
+                            //   <para><b>길이</b>는 사용자가 고른 경로 그대로 — 구간 [T0..T1].
+                            //   <b>폭</b>은 계획지표면에서 「그 선에 <b>남은 단수</b> × 구배」로 거리를 구하고
+                            //   거기에 <b>여유 10m</b>를 더한다. 그 폭만큼 <b>경로에 평행한 선</b>을 만들되,
+                            //   미는 방향은 <b>경로의 직각방향</b>이다.</para>
+                            //
+                            //   <code>
+                            //     한 단이 평면에서 가는 거리 = 단높이 × 구배 + 소단폭
+                            //     폭 = 남은 단수 × 그 거리 + 여유 10m
+                            //   </code>
+                            //
+                            //   <para><b>남은 단수</b>는 땅에 대고 센다 — 찍은 선에서 한 단씩 나가며
+                            //   원지반을 만나는 데까지. 구간을 따라 여러 자리에서 세어 <b>가장 많은 데</b>를 쓴다
+                            //   (한 곳만 재면 나머지가 폴리곤 밖으로 나간다 — 전에 데이라잇이 구간 안에서
+                             //   <b>10m나 오르내리는</b> 것을 이미 쟀다).</para>
+                            // ── ★<b>폭</b> — JACK이 정한 식 그대로 ────────────────────────────
+                            //   <code>
+                            //     남은 단수 = |선 위 <b>지반고</b> − 선의 <b>계획고</b>| ÷ 단높이   (올림)
+                            //     한 단이 평면에서 가는 거리 = 단높이 × 구배 + 소단폭
+                            //     폭 = 남은 단수 × 그 거리 + 여유 10m
+                            //   </code>
+                            //   <para>구간을 따라 여러 자리에서 재고 <b>가장 큰 값 하나</b>를 쓴다 —
+                            //   JACK: <i>"그 값을 <b>양 끝</b> 직각방향 선에 적용"</i>. 자리마다 다른 폭을 주면
+                            //   양 끝이 어긋나고, 작은 쪽을 쓰면 그 자리에서 데이라잇이 폴리곤 밖으로 나간다.</para>
+                            //
+                            //   <para>★<b>땅에 대고 센 값도 나란히 적는다.</b> 계산식은 선 <b>위</b> 한 점만 보므로,
+                            //   바깥으로 갈수록 땅이 더 오르면 <b>모자랄 수 있다</b>. 둘을 같이 찍어 두면
+                            //   여유 10m로 되는지 안 되는지가 <b>숫자로</b> 보인다.</para>
+                            // ★★★[JACK 0916 스샷 <i>"딱 봐도 빨간선이 더 작지? 데이라잇보다도 더 왼쪽으로 10m 더 나가야 되는데"</i>]
+                            //   <b>구배를 잘못 썼다 — 옹벽 구배를 넣었다.</b>
+                            //
+                            //   <para><b>그 판 로그 그대로</b>: <i>"구배 1:<b>0.01</b> · 남은 단수 4단 ×
+                            //   (단높이 5 × 0.01 + 소단 1) = <b>4.2m</b> + 여유 10m → 폭 <b>14.2m</b>"</i>.
+                            //   그런데 같은 로그에 <i>"옛 사면 데이라잇까지 <b>27.83m</b>"</i>라고 적혀 있다 —
+                            //   폴리곤이 데이라잇의 <b>절반</b>에서 끝났다.</para>
+                            //
+                            //   <para><c>slopeW</c>는 <b>이 구간의 옹벽 구배</b>(1:0.01 = 수직)다.
+                            //   JACK이 말한 것은 <b>계획지표면의 구배</b>, 곧 <b>인공사면</b>이 서는 구배(1:1.5)다.
+                            //   폭은 「벽이 얼마나 가느냐」가 아니라 「<b>사면이었다면</b> 얼마나 갔겠느냐」이므로
+                            //   여기서는 <b>전역 구배</b>를 써야 한다.</para>
+                            //
+                            //   <code>
+                            //     틀린 값: 4단 × (5 × <b>0.01</b> + 1) =  4.2m + 10 = 14.2m   ← 데이라잇 27.83m에 한참 못 미친다
+                            //     맞는 값: 4단 × (5 × <b>1.5 </b> + 1) = 34.0m + 10 = 44.0m   ← 데이라잇을 16m 넘어선다
+                            //   </code>
+                            double benchH = p.BenchHeightOf(wUp);
+                            double slopePlan = System.Math.Max(wUp ? p.CutSlope : p.FillSlope, p.MinSlope);
+                            double benchWPlan = p.BenchWidthOf(wUp);
+                            double runPer = benchH * slopePlan + benchWPlan;  // 한 단이 평면에서 가는 거리
+                            int nStepT = 64, maxBench = 80;
+                            double spanW = wz.T1 >= wz.T0 ? wz.T1 - wz.T0 : rTot - wz.T0 + wz.T1;
+                            int calcN = 0, walkN = 0, nMeasured = 0, nNoGround = 0;
+                            double worstCut = 0;
+                            for (int i4 = 0; i4 <= nStepT; i4++)
+                            {
+                                double t4 = wz.T0 + spanW * i4 / nStepT;
+                                double tw4 = ((t4 % rTot) + rTot) % rTot;
+                                var pOn = GradingGeometry.PointAtParam(rul, rcm, tw4);
+
+                                // ① JACK 식 — 선 위 지반고와 계획고의 차
+                                if (gSam3.TryGetElevation(pOn.X, pOn.Y, out double zgOn))
+                                {
+                                    double cutH = wUp ? zgOn - pOn.Z : pOn.Z - zgOn;  // 절토면 땅이 위, 성토면 아래
+                                    if (cutH > worstCut) worstCut = cutH;
+                                    int nc = (int)System.Math.Ceiling(System.Math.Max(0, cutH) / System.Math.Max(0.01, benchH));
+                                    if (nc > calcN) calcN = nc;
+                                }
+                                else nNoGround++;
+
+                                // ② 견줌 — 땅에 대고 한 단씩 나가며 세 본다(쓰지는 않는다)
+                                double zCur = pOn.Z, dCur = 0; int nb = 0; bool met = false;
+                                for (; nb < maxBench; nb++)
+                                {
+                                    dCur += benchH * slopePlan; zCur += wUp ? benchH : -benchH;
+                                    var q4 = GradingGeometry.OutwardAt(rul, rcm, tw4, dCur);
+                                    if (gSam3.TryGetElevation(q4.X, q4.Y, out double zg4))
+                                    { if (wUp ? zg4 <= zCur : zg4 >= zCur) { nb++; met = true; break; } }
+                                    dCur += benchWPlan;
+                                }
+                                if (met) nMeasured++;
+                                if (nb > walkN) walkN = nb;
+                            }
+                            if (calcN <= 0) calcN = 1;
+                            double widthW = calcN * runPer + GradingSettings.WallPolygonMargin;
+
+                            // ── ★<b>방향이 맞나</b> — 인공사면 쪽으로 갔는지 <b>재서</b> 확인한다 ──
+                            //   <para>바깥(<c>OutwardAt</c>)이 늘 사면 쪽이라고 <b>가정하지 않는다</b>.
+                            //   구간 가운데에서 양쪽으로 나가 보고, <b>절토면 땅이 더 높은 쪽</b>(성토면 더 낮은 쪽)이
+                            //   사면 쪽이다. 어긋나면 <b>뒤집고 로그에 적는다</b>.</para>
+                            double sgn = 1.0; string dirWhy = "확인 못 함";
+                            {
+                                double tm = wz.T0 + spanW * 0.5;
+                                double twm = ((tm % rTot) + rTot) % rTot;
+                                var pm = GradingGeometry.PointAtParam(rul, rcm, twm);
+                                double probe = System.Math.Max(2.0, widthW * 0.25);
+                                var qP = GradingGeometry.OutwardAt(rul, rcm, twm, probe);
+                                var qM = GradingGeometry.OutwardAt(rul, rcm, twm, -probe);
+                                bool okP = gSam3.TryGetElevation(qP.X, qP.Y, out double zP);
+                                bool okM = gSam3.TryGetElevation(qM.X, qM.Y, out double zM);
+                                if (okP && okM)
+                                {
+                                    double sP = wUp ? zP - pm.Z : pm.Z - zP;   // 사면 쪽일수록 큰 값
+                                    double sM = wUp ? zM - pm.Z : pm.Z - zM;
+                                    sgn = sP >= sM ? 1.0 : -1.0;
+                                    dirWhy = $"바깥 {sP:+0.0;-0.0}m / 안쪽 {sM:+0.0;-0.0}m → <b>{(sgn > 0 ? "바깥" : "안쪽")}</b>이 사면 쪽";
+                                }
+                                else if (okP) dirWhy = "안쪽 땅을 못 재 <b>바깥</b>으로 간다";
+                                else dirWhy = "양쪽 다 못 재 <b>바깥</b>으로 간다";
+                            }
+                            DiagLog.Append($"    ★<b>폴리곤 폭</b> — 선 위 최대 {(wUp ? "절토" : "성토")}고 <b>{worstCut:F2}m</b>"
+                                + $" ÷ 단높이 {benchH:0.##} → <b>남은 단수 {calcN}단</b>"
+                                + $" × (단높이 {benchH:0.##} × <b>계획 구배 1:{slopePlan:0.###}</b> + 소단 {benchWPlan:0.##} = {runPer:F2}m)"
+                                + $" = {calcN * runPer:F1}m + 여유 {GradingSettings.WallPolygonMargin:0.#}m"
+                                + $" → <b>폭 {widthW:F1}m</b>"
+                                + $" · 옛 사면 데이라잇까지 {toD:F1}m 이므로 <b>{widthW - toD:+0.0;-0.0}m</b>"
+                                + (widthW > toD ? " <b>넘어선다</b>" : " <b>⚠못 미친다</b>") + "\n");
+                            DiagLog.Append($"    ★<b>견줌</b> — 땅에 대고 세면 <b>{walkN}단</b>"
+                                + $"(구간 {nStepT + 1}자리 중 땅에 닿은 데 {nMeasured}"
+                                + (nNoGround > 0 ? $" · 선 위 땅을 못 잰 자리 {nNoGround}" : "") + ")"
+                                + (walkN > calcN
+                                   ? $" — <b>계산보다 {walkN - calcN}단 많다</b>. 모자란 몫 {(walkN - calcN) * runPer:F1}m를"
+                                     + $" 여유 {GradingSettings.WallPolygonMargin:0.#}m가 <b>{((walkN - calcN) * runPer <= GradingSettings.WallPolygonMargin ? "덮는다" : "못 덮는다")}</b>"
+                                   : " — 계산이 <b>넉넉하다</b>")
+                                + $" · 방향: {dirWhy}\n");
+
+                            // ── 경로에 <b>평행한</b> 선 두 줄 — 안쪽은 경로 그대로, 바깥은 직각으로 widthW ──
+                            int nDiv = System.Math.Max(8, (int)System.Math.Ceiling(spanW / System.Math.Max(0.5,
+                                          System.Math.Min(p.VertexSpacing, 1.0))));
+                            var inner = new System.Collections.Generic.List<Point3>();
+                            var outer = new System.Collections.Generic.List<Point3>();
+                            for (int i4 = 0; i4 <= nDiv; i4++)
+                            {
+                                double t4 = wz.T0 + spanW * i4 / nDiv;
+                                double tw4 = ((t4 % rTot) + rTot) % rTot;
+                                var qi = GradingGeometry.OutwardAt(rul, rcm, tw4, 0.0);
+                                var qo = GradingGeometry.OutwardAt(rul, rcm, tw4, widthW * sgn);
+                                inner.Add(new Point3(qi.X, qi.Y, zBase));
+                                outer.Add(new Point3(qo.X, qo.Y, zBase));
+                            }
+                            var wallBox = new System.Collections.Generic.List<Point3>(inner);
+                            for (int i4 = outer.Count - 1; i4 >= 0; i4--) wallBox.Add(outer[i4]);
+
+                            bool simpleBox = GradingGeometry.RingIsSimple(wallBox);
+                            double aBox = GradingGeometry.RingAreaNts(wallBox);
+                            if (wallBox.Count >= 4 && simpleBox && aBox > 1.0)
+                            {
+                                try
+                                {
+                                    var pl0 = new System.Collections.Generic.List<Point3>(wallBox) { wallBox[0] };
+                                    DrawLinesOnLayer(db, tr3,
+                                        new System.Collections.Generic.List<System.Collections.Generic.List<Point3>> { pl0 },
+                                        "DH-가상폴리곤", 1);
+                                    DiagLog.Append($"    ★<b>폴리곤만 그렸다</b> — 'DH-가상폴리곤' <b>{wallBox.Count}점 / {aBox:F1}㎡</b>"
+                                        + $" · 길이 {spanW:F1}m(구간 [{wz.T0:F1}..{wz.T1:F1}]) × 폭 {widthW:F1}m"
+                                        + $" · 표고 {zBase:F2}m · <b>경로에 평행</b>(직각방향으로 밀었다)"
+                                        + " · 표면은 <b>안 만든다</b> · DHRESET이 걷어 간다\n");
+                                }
+                                catch (System.Exception pex0)
+                                { DiagLog.Append($"    ⚠폴리곤 그리기 실패 — {pex0.GetType().Name}: {pex0.Message}\n"); }
+                            }
+                            else
+                                DiagLog.Append($"    ⚠<b>폴리곤을 못 만들었다</b> — 점 {wallBox.Count}개"
+                                    + $" · 제 몸을 지르지 않는가 {(simpleBox ? "예" : "<b>아니오</b>")}"
+                                    + $" · 넓이 {aBox:F1}㎡\n");
+                        }
+                        else if (slab.Count < 3)
                             DiagLog.Append("    ⚠전이면 — 옹벽면 줄이 모자라 그만둔다\n");
                         else
                         {
@@ -1195,6 +1540,17 @@ public sealed class CreateGradingCommand
                             { var u = r[i]; var v = r[(i + 1) % r.Count]; a += u.X * v.Y - v.X * u.Y; }
                             return System.Math.Abs(a) * 0.5;
                         }
+                        // ★★[검토 0916 · 치명 재발방지] <b>구멍을 뺀 넓이</b>.
+                        //   <c>RingArea</c>는 <b>테두리만</b> 잰다 — 구멍이 든 덩이를 그것으로 재면
+                        //   넓이가 부풀고, 겹침과 틈이 서로 상쇄돼 <b>장부가 눈을 감는다</b>
+                        //   (이 저장소가 한 번 겪은 일이다 — 64㎡ 겹침을 못 봤다 · 하네스 S126).
+                        static double NetArea(System.Collections.Generic.IReadOnlyList<Point3> ring,
+                                              System.Collections.Generic.IReadOnlyList<System.Collections.Generic.List<Point3>>? holes)
+                        {
+                            double a = RingArea(ring);
+                            if (holes != null) foreach (var h in holes) a -= RingArea(h);
+                            return a;
+                        }
                         static bool TryZ(TinSurface s, double x, double y, out double z)
                         { try { z = s.FindElevationAtXY(x, y); return true; } catch { z = 0; return false; } }
 
@@ -1268,7 +1624,96 @@ public sealed class CreateGradingCommand
                         else
                         {
                             double zBase = wedgePolyKeep.Count > 0 ? wedgePolyKeep[0].Z : 0.0;
-                            double areaW = RingArea(wedgePolyKeep), areaF = RingArea(wallPolyKeep);
+
+                            // ══ ★★★[JACK 0916 <i>"뚜껑 바깥변까지 해 왜 그건 자꾸 안 고치는 거야"</i>]
+                            //
+                            //   <para>맞는 지적이다 — 계속 미뤘다. 쐐기의 바깥 변은 여태 <b>흉내</b>였다:
+                            //   둘레를 129칸으로 나눠 데이라잇 거리를 재고 <b>못 잰 칸은 이웃 값으로 메웠다</b>
+                            //   (<c>①-f</c> 로그의 <i>"표본 129칸 중 ○칸에서 잼"</i>).
+                            //   그러니 진짜 곡선과 어긋나는 것이 당연했다 —
+                            //   스샷의 <i>"미세하게 맞지 않음 · 튀어나옴"</i>이 그것이다.</para>
+                            //
+                            //   <para>★<b>벽과 똑같은 방법</b>으로 딴다. 벽은 「줄을 따라가며 지형과 견주는」
+                            //   1차원 문제였고, 뚜껑의 바깥 변은 「<b>직각선을 따라가며 정지면과 원지반을 견주는</b>」
+                            //   1차원 문제다 — 둘이 만나는 자리가 곧 정지 데이라잇이고 거기가 뚜껑의 끝이다.
+                            //   표본 간격과 무관하다(자리마다 <b>직접 찾는다</b>).</para>
+                            // ★[검토 0916 · 높음8] <b>여기서 던져도 벽은 살아야 한다.</b>
+                            //   이 블록이 던지면 stage-2의 바깥 catch까지 올라가 <b>③④⑤⑥⑦이 통째로</b> 날아간다 —
+                            //   오늘 두 번이나 잃은 ⑤옹벽 가둠이 그 안에 있다.
+                            //   뚜껑 변 하나 때문에 벽 가둠이 날아갈 이유는 없다.
+                            try
+                            {
+                            if (rulKeep != null && rcmKeep != null && wzSpan > 1e-6)
+                            {
+                                // ★[검토 0916 · 높음3] 안쪽 변 간격은 <b>옛 쐐기와 같게</b> 한다 —
+                                //   옛 <c>WallInWedge</c>는 «max(0.3, min(VertexSpacing, 1.0))»으로 <b>1m 상한</b>이 있었다.
+                                //   내가 «max(0.5, VertexSpacing)»으로 두는 바람에 기본값(2.0)에서 간격이 2배가 됐다
+                                //   (검토 실측: 안쪽 변이 자를 벗어나는 최댓값 0.117m → 0.334m).
+                                //   <b>미세하게 안 맞는 걸 고치는 판에 되레 성기게 만든 것</b>이다.
+                                double sp2 = System.Math.Max(0.3, System.Math.Min(p.VertexSpacing, 1.0));
+                                int nT = System.Math.Max(8, (int)System.Math.Ceiling(wzSpan / sp2));
+                                // ★[검토 0916 · 보통6] 찾아볼 거리의 바닥값을 <b>20m → 80m</b>로 올린다.
+                                //   <c>wzFar</c>는 <b>옛 사면의</b> 데이라잇에서 온 값이라(이 파일이 스스로
+                                //   "벽과 아무 상관없는 선"이라 적어 뒀다) 믿을 수 없다. 모자라면 못 찾고,
+                                //   못 찾으면 그만큼 이웃으로 메워져 바깥 변이 흐려진다.
+                                //   성토 47m·1:1.5면 70m를 넘는다고 이 파일이 이미 적어 뒀다.
+                                double far2 = System.Math.Max(wzFar * 1.6, 80.0);
+                                var dayOut = WallTrim.DaylightOutward(rulKeep, rcmKeep, wzT0, wzSpan,
+                                    (x, y) => { return TryZ(gndT, x, y, out double z) ? z : (double?)null; },
+                                    (x, y) => { return TryZ(jiT, x, y, out double z) ? z : (double?)null; },
+                                    far2, nT, System.Math.Max(0.25, sp2 * 0.5), zBase,
+                                    out int dayMiss, out double dayStep, out int dayMulti, out string dayLog);
+                                if (dayOut.Count >= 3)
+                                {
+                                    // 쐐기 = 찍은 선(구간) + 데이라잇(되짚기)
+                                    var ring2 = new System.Collections.Generic.List<Point3>();
+                                    for (int i2 = 0; i2 <= nT; i2++)
+                                    {
+                                        double t2 = wzT0 + wzSpan * i2 / nT;
+                                        var q2 = GradingGeometry.OutwardAt(rulKeep, rcmKeep,
+                                                     ((t2 % rcmKeep[rcmKeep.Length - 1]) + rcmKeep[rcmKeep.Length - 1]) % rcmKeep[rcmKeep.Length - 1], 0.0);
+                                        ring2.Add(new Point3(q2.X, q2.Y, zBase));
+                                    }
+                                    for (int i2 = dayOut.Count - 1; i2 >= 0; i2--) ring2.Add(dayOut[i2]);
+                                    double aOld = RingArea(wedgePolyKeep), aNew = RingArea(ring2);
+                                    // ★★★[검토 0916 · 치명1·4] <b>넓이는 모양의 잣대가 아니다.</b>
+                                    //   검토 실측: 25자리 중 <b>2곳만</b> 찾은 27점짜리 링이 넓이 관문을 통과했다.
+                                    //   그래서 관문을 셋으로 바꾼다 —
+                                    //   ①<b>제 몸을 안 지를 것</b>(NTS IsSimple) ②<b>한 걸음이 칸의 6배를 안 넘을 것</b>
+                                    //   ③못 찾은 자리가 <b>1/4을 안 넘을 것</b>. 넓이는 마지막 그물로만 둔다.
+                                    double nomStep = wzSpan / System.Math.Max(1, nT);
+                                    bool simple = GradingGeometry.RingIsSimple(ring2);
+                                    bool okStep = dayStep <= nomStep * 6.0 + 1e-9;
+                                    bool okMiss = dayMiss * 4 <= nT + 1;
+                                    bool okArea = aNew > aOld * 0.3 && aNew < aOld * 3.0;
+                                    if (simple && okStep && okMiss && okArea)
+                                    {
+                                        wedgePolyKeep = ring2;
+                                        DiagLog.Append($"  ②-뚜껑 바깥 변 — <b>진짜 데이라잇으로 갈아 끼웠다</b>({dayLog})"
+                                            + $" · 쐐기 {aOld:F1} → <b>{aNew:F1}㎡</b>" + "\n");
+                                    }
+                                    else
+                                        DiagLog.Append($"  ⚠②-뚜껑 바깥 변 — <b>안 바꿨다</b>(흉내 낸 쐐기를 그대로 쓴다) — "
+                                            + (!simple ? "<b>제 몸을 지른다</b> · " : "")
+                                            + (!okStep ? $"<b>한 걸음 {dayStep:F2}m</b>(칸 {nomStep:F2}m의 6배 넘음) · " : "")
+                                            + (!okMiss ? $"<b>못 찾음 {dayMiss}/{nT + 1}</b>(1/4 넘음) · " : "")
+                                            + (!okArea ? $"<b>넓이 {aOld:F1} → {aNew:F1}㎡</b> · " : "")
+                                            + dayLog + "\n");
+                                }
+                                else
+                                    DiagLog.Append($"  ⚠②-뚜껑 바깥 변 — <b>못 땄다</b>({dayLog}) — 흉내 낸 쐐기를 그대로 쓴다" + "\n");
+                            }
+                            else
+                                DiagLog.Append($"  ⚠②-뚜껑 바깥 변 — <b>재료가 없다</b>"
+                                    + $"(자 {(rulKeep == null ? "없음" : rulKeep.Count + "점")}"
+                                    + $" · 구간 {wzSpan:F1}m) — 흉내 낸 쐐기를 그대로 쓴다" + "\n");
+                            }
+                            catch (System.Exception dex)
+                            {
+                                DiagLog.Append($"  ⚠②-뚜껑 바깥 변 — <b>터졌다</b> {dex.GetType().Name}[{dex.Message}]"
+                                    + " — 흉내 낸 쐐기를 그대로 쓰고 <b>벽 작업은 계속한다</b>" + "\n");
+                            }
+
                             // ※[JACK 0916] <b>칼금 만들기는 걷었다.</b> 폴리고나이즈로 판을 가르던 길을
                             //   통째로 버렸으므로(아래 ③) 교선 링도, 진짜 구간 끊기도 더는 필요 없다.
                             //   교선은 이제 <b>품질 계측(②)에만</b> 쓴다 — 데이라잇이 얼마나 진짜인지 보는 눈이다.
@@ -1290,29 +1735,164 @@ public sealed class CreateGradingCommand
                             //   <para>→ <see cref="WallTrim"/>: 줄은 <b>표고가 일정</b>하므로 줄을 따라가며
                             //   원지반·정지면과 견주면 <b>1차원 문제</b>가 된다. 남길 구간의 양 끝이 곧 데이라잇이고,
                             //   <b>끝점 위에서 표고차는 정의상 0</b>이라 자가검증이 공짜다(S127 실측 0.001m).</para>
+                            // ★★[검토 0916 · 높음4] 기준값도 <b>NTS 넓이</b>로 잰다 — 아래 셈이 전부 NTS다.
+                            //   신발끈은 꼬인 링에서 서로 상쇄된다(실측: 꼬인 발자국 신발끈 0.0 vs NTS 400.0㎡)
+                            //   → 그대로 두면 장부가 «−400㎡ 여기가 빈다»는 <b>거짓 경보</b>를 낸다.
+                            double areaW = GradingGeometry.RingAreaNts(wedgePolyKeep);
+                            double areaF = GradingGeometry.RingAreaNts(wallPolyKeep);
                             var lobes = WallTrim.Trim(slabKeep,
                                 (x, y) => { return TryZ(gndT, x, y, out double z) ? z : (double?)null; },
                                 (x, y) => { return TryZ(jiT, x, y, out double z) ? z : (double?)null; },
                                 System.Math.Max(0.2, p.VertexSpacing * 0.25), 0.02, out string trimLog);
                             DiagLog.Append($"  ③<b>줄마다 3D로 자름</b> — {trimLog}\n");
 
-                            // 벽 몫 = 덩이들의 테두리
-                            var Pw = new System.Collections.Generic.List<(System.Collections.Generic.List<Point3> Ring,
-                                System.Collections.Generic.List<System.Collections.Generic.List<Point3>> Holes)>();
-                            double aWall = 0;
+                            // ══ ★★★[검토 0916 · 치명 · 현장 좌표로 재현] <b>덩이의 테두리는 벽 자리가 아니었다.</b>
+                            //
+                            //   <para><b>계측.</b> 덩이 링 <b>759.9㎡</b> vs 발자국 <b>404.9㎡</b> —
+                            //   발자국보다 6배 깊고 바깥으로 <b>26.3m</b>. 덩이 ∖ 발자국 = <b>485.6㎡</b>.
+                            //   옹벽 몫 합이 발자국 <b>전체의 2배</b>(798.8 vs 404.9)인데도 장부는 <b>"맞음"</b>이었다
+                            //   (실차 +35.6 &lt; 문턱 41.7). <b>아무것도 안 자르면 0.0㎡다 — 자르기 시작해야 터진다.</b></para>
+                            //
+                            //   <para><b>까닭.</b> 테두리를 「첫 줄 전부 → 끝점들 → 마지막 줄 되짚기 → 첫점들」로
+                            //   둘렀다. 가운데 줄들을 <b>건너뛴 현(弦)</b>이다. 벽은 ㄷ자이고 날개가
+                            //   데이라잇까지(23~28m) 뻗으므로, 아래 줄이 26m 밖에서 끝나고 위 줄이 앞에서 끝나면
+                            //   그 현이 <b>벽 없는 쐐기를 가로질러</b> 수백 ㎡를 삼킨다.</para>
+                            //
+                            //   <para>★<b>이제 띠를 쓴다</b> — 이웃한 두 줄 사이를 한 장씩 만들어 합친다
+                            //   (<see cref="WallTrim.Lobe.Bands"/>). 어긋나 봐야 <b>줄 한 칸(1.05m)</b>에 갇힌다.</para>
+                            var bandsAll = new System.Collections.Generic.List<System.Collections.Generic.IReadOnlyList<Point3>?>();
+                            double aRaw = 0;
                             foreach (var lb in lobes)
-                            { Pw.Add((lb.Ring, new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>())); aWall += RingArea(lb.Ring); }
+                                foreach (var bd in lb.Bands) { bandsAll.Add(bd); aRaw += RingArea(bd); }
+                            var Pw = GradingGeometry.RingUnion(bandsAll, zBase, out int bandHoles, p.VertexSpacing);
+                            double aUni = 0; foreach (var q in Pw) aUni += NetArea(q.Ring, q.Holes);
+                            DiagLog.Append($"  ③-<b>띠를 합친다</b> — 띠 {bandsAll.Count}장 {aRaw:F1}㎡(따로 잰 합)"
+                                + $" → <b>{Pw.Count}덩이 {aUni:F1}㎡</b>(합집합)"
+                                + (bandHoles > 0 ? $" · 구멍 {bandHoles}개" : "")
+                                + $" · <b>겹쳐 있던 몫 {aRaw - aUni:F1}㎡</b>" + "\n");
+
+                            // ══ ★★★[JACK 0916 스샷 <i>"깨지고 난리났어"</i>] <b>틈이 생긴 까닭 — 장부가 안 맞았다.</b>
+                            //
+                            //   <para><b>계측(12:51 로그)</b>: 발자국 307.8㎡ · 벽 덩이 248.3㎡ ·
+                            //   「발자국 − 벽」 = <b>87.8㎡</b>. 셋이 못 맞는다 — 307.8 − 248.3 = 59.5인데 87.8이 나왔다.
+                            //   차이 <b>28.3㎡</b>가 <b>발자국 바깥에 있는 덩이</b>다.</para>
+                            //
+                            //   <para><b>까닭 후보는 둘이고, 아직 어느 쪽인지 안 쟀다</b>(둘 다 똑같은 증상을 낸다):
+                            //   <b>①부풂</b> — 덩이의 테두리는 「맨 바깥 줄 → 한쪽 끝점들 → 맨 안쪽 줄 되짚기 →
+                            //   반대쪽 끝점들」로 짓는다. 가운데 줄들은 테두리에 안 들어가고 <b>곧은 선으로 건너뛴다</b>;
+                            //   줄이 단마다 1.05m씩 물러나므로 그 곧은 선이 계단 바깥으로 부풀 수 있다.
+                            //   <b>②자기교차</b> — 테두리가 제 몸을 지르면 <b>신발끈 넓이와 NTS 넓이가 어긋난다</b>
+                            //   (하네스 S128 실측: 나비 테두리의 신발끈 0.0㎡ / NTS 450.0㎡).</para>
+                            //
+                            //   <para>★<b>아래 로그가 그것을 가른다</b> — <c>fitLog</c>의 앞 숫자가 NTS가 본 넓이다.
+                            //   그것이 신발끈({aRaw})과 <b>같으면 ①부풂</b>, <b>다르면 ②자기교차</b>다.</para>
+                            //
+                            //   <para>그러면 어떻게 되나 — 그 28.3㎡는
+                            //   <b>벽도 못 받고(발자국 Outer 밖이라 잘려 나간다) 뚜껑도 못 받는다(벽 몫이라고 빼 버렸다)</b>.
+                            //   <b>빈 자리</b>가 남고, Civil이 그 위를 <b>긴 삼각형으로 건너질러</b> 메운다 —
+                            //   되읽기의 <i>"합성면 117.7 · 원래 면 120.00 ✖ −2.3m"</i>이 바로 그 삼각형이다
+                            //   (117.7은 어느 줄의 표고도 아니다 — 115와 120 사이를 이은 값이다).</para>
+                            //
+                            //   <para>★고침: <b>덩이를 발자국 안으로 잘라 놓고</b> 그 다음에 나눈다.
+                            //   벽 삼각형은 애초에 발자국 안에만 있으니 <b>잃는 것이 없고</b>,
+                            //   이제 <b>벽 몫 ∪ 뚜껑 몫 = 쐐기</b>가 정확히 성립한다 — 틈이 생길 수 없다.</para>
+                            var Pfit = GradingGeometry.RingIntersect(Pw, wallPolyKeep, zBase, out string fitLog, p.VertexSpacing);
+                            double aFit = 0; int nHole = 0;
+                            foreach (var q in Pfit) { aFit += NetArea(q.Ring, q.Holes); nHole += q.Holes.Count; }
+                            // ★관문은 <b>양쪽</b>을 본다 — 자기교차 테두리면 신발끈({aRaw})이 0에 가까워져
+                            //   «aFit > aRaw*0.5» 하나만으로는 무엇이든 통과한다(하네스 S128 나비 사례).
+                            // ★★[검토 0916 · 높음3] <b>되돌아가지 않는다.</b> 종전 관문은
+                            //   «많이 잘리면 원본을 쓴다»였는데, 많이 잘렸다는 건 <b>원본이 부풀었다는 증거</b>지
+                            //   맞춤이 틀렸다는 증거가 아니다. 검토 실측: 밖으로 50% 넘으면 거절 →
+                            //   <b>틈 −160㎡ · ledgerOk=False → ⑦합성이 통째로 멈췄다</b>(고치려는 병이 심할수록 약을 안 줬다).
+                            //   <c>RingIntersect</c>의 결과는 <b>언제나 성한 폴리곤이고 발자국 안</b>이다 — 그것을 쓴다.
+                            bool fitOk = Pfit.Count > 0 && aFit > 1.0;
+                            if (fitOk) Pw = Pfit;
+                            double aWall = fitOk ? aFit : aUni;
+                            DiagLog.Append($"  ③-<b>발자국 안으로 맞춤</b> — 합집합 {aUni:F1}㎡ → "
+                                + (fitOk ? $"<b>{Pw.Count}덩이 {aWall:F1}㎡</b> · 발자국 밖이라 덜어낸 몫 <b>{aUni - aFit:F1}㎡</b> · {fitLog}"
+                                           + (nHole > 0 ? $" · <b>⚠구멍 {nHole}개</b>(뚫을 몫 계산이 테두리만 본다)" : "")
+                                         : $"<b>⚠안 맞췄다</b>({fitLog}) — 너무 많이 잘려 원본을 쓴다")
+                                + "\n");
                             Pw.Sort((x, y) => RingArea(y.Ring).CompareTo(RingArea(x.Ring)));
 
                             // 뚜껑 몫 = 쐐기 − 벽 몫 · 뚫을 몫 = 발자국 − 벽 몫
-                            var pwFlat = new System.Collections.Generic.List<System.Collections.Generic.IReadOnlyList<Point3>?>();
-                            foreach (var q in Pw) pwFlat.Add(q.Ring);
-                            var Pl = GradingGeometry.RingSubtract(wedgePolyKeep, pwFlat, zBase, out string lidLog, p.VertexSpacing);
-                            var CutRegions = GradingGeometry.RingSubtract(wallPolyKeep, pwFlat, zBase, out string cutLog, p.VertexSpacing);
-                            double aLid = 0; foreach (var q in Pl) aLid += RingArea(q.Ring);
+                            // ★★[검토 0916 · 보통6] <b>구멍까지</b> 제대로 뺀다 — 종전엔 테두리만 넘겨
+                            //   구멍(벽이 <b>없는</b> 자리)이 Hide에서도 뚜껑에서도 빠져 <b>주인이 없어졌다</b>.
+                            //   띠를 합치면 ㄷ자 안뜰이 구멍으로 나올 수 있으므로 실제로 일어난다.
+                            var Pl = GradingGeometry.RingSubtractRegions(wedgePolyKeep, Pw, zBase, out string lidLog, p.VertexSpacing);
+                            var CutRegions = GradingGeometry.RingSubtractRegions(wallPolyKeep, Pw, zBase, out string cutLog, p.VertexSpacing);
+                            double aLid = 0; foreach (var q in Pl) aLid += NetArea(q.Ring, q.Holes);
+                            double aCut = 0; foreach (var q in CutRegions) aCut += NetArea(q.Ring, q.Holes);
+                            // ★<b>틈 장부</b> — 쐐기를 벽과 뚜껑이 남김없이 나눠 가졌는지 <b>직접</b> 잰다.
+                            //   (0916 실측: 종전엔 여기서 28.3㎡가 새고 있었는데 넓이 합만 보느라 안 보였다)
+                            // ★<b>부호가 뜻이 다르다</b> — 양수면 <b>틈</b>(아무도 안 가진 자리),
+                            //   음수면 <b>겹침</b>(둘이 같은 자리를 제 몫이라 한다). 종전엔 둘 다 "여기가 빈다"로 적었다.
+                            double gapFoot = areaF - aWall - aCut;      // 발자국 = 벽 + 뚫을 몫 이어야 한다
                             DiagLog.Append($"  ④몫 나누기 — <b>옹벽 {aWall:F1}㎡</b>({Pw.Count}덩이)"
                                 + $" · <b>상부 원지반 {aLid:F1}㎡</b>({Pl.Count}덩이 · {lidLog})"
-                                + $" · 발자국에서 뚫을 몫 {CutRegions.Count}덩이({cutLog})\n");
+                                + $" · 발자국에서 뚫을 몫 {CutRegions.Count}덩이({cutLog})" + "\n"
+                                + $"    <b>틈 장부</b> 발자국 {areaF:F1} − 벽 {aWall:F1} − 뚫을 몫 {aCut:F1} = "
+                                + (System.Math.Abs(gapFoot) < 1.0 ? $"<b>{gapFoot:+0.0;-0.0;0.0}㎡ — 틈 없다</b>"
+                                   : gapFoot > 0 ? $"<b>⚠+{gapFoot:F1}㎡ — 여기가 빈다</b>(아무도 안 가진 자리 · 긴 삼각형이 건너지른다)"
+                                                 : $"<b>⚠{gapFoot:F1}㎡ — 여기가 겹친다</b>(둘이 같은 자리를 제 몫이라 한다)")
+                                + "\n");
+
+                            // ══ ★★★[JACK 0916] <b>옹벽을 제 몫으로 가둔다.</b>
+                            //
+                            //   <para>★<b>이 블록을 오늘 두 번 잃었다.</b> 구조를 갈아엎으면서 스플라이스가
+                            //   두 번 다 삼켰고, 그때마다 <b>안 잘린 벽 전체</b>가 화면에 나갔다
+                            //   (12:39 로그에 <c>⑥옹벽 가둠</c> 줄이 통째로 없었다).
+                            //   그래서 <b>안 돌면 로그가 소리치게</b> 해 둔다 — 조용히 사라지지 않게.</para>
+                            //
+                            //   <para><b>Outer 하나(발자국) + Hide 여럿(뚫을 몫)</b> — 도넛이다.
+                            //   한 면에 Outer를 여럿 걸면 파괴된다(0916 실측: 삼각형 1311 → 137개).</para>
+                            //
+                            //   <para>★<b>복사본이 아니라 <c>가상옹벽_DH</c> 자신</b>에 건다 —
+                            //   복사본을 붙이면 <c>SurfaceException[Failure]</c>가 난다(0915 세 판으로 확인).</para>
+                            string wp;
+                            if (Pw.Count == 0) wp = "<b>⚠남길 덩이가 없다</b>";
+                            else
+                            {
+                                var wsb = new System.Text.StringBuilder();
+                                try
+                                {
+                                    var slabW = (TinSurface)trW2.GetObject(wallSlabId, OpenMode.ForWrite);
+                                    GradingBuilder.ReplaceOuterBoundary(slabW, wallPolyKeep, null, 0.001);
+                                    int hOk = 0, hBad = 0, sOk = 0, sBad = 0;
+                                    foreach (var q3 in CutRegions)
+                                    {
+                                        try { GradingBuilder.AddHideBoundary(slabW, q3.Ring, 0.001); hOk++; }
+                                        catch (System.Exception he) { hBad++; wsb.Append($" <b>Hide실패</b>{he.GetType().Name}"); }
+                                        // ★★★[검토 0916 · 치명] 덩이의 <b>구멍</b>은 남길 벽 섬이다 — 도로 살린다.
+                                        //   <b>여기서 Outer를 또 걸고 있었다</b> — 바로 위 주석이 금지한 그것이다
+                                        //   (한 면에 Outer 여럿 = 삼각형 1311 → 137개). Civil에는 이 용도의
+                                        //   경계형이 따로 있다: <c>Show</c>. 그리고 <b>조용한 catch도 걷었다</b> —
+                                        //   부서지든 실패하든 로그에 한 줄도 안 남던 자리다.
+                                        foreach (var hh in q3.Holes)
+                                        {
+                                            try { GradingBuilder.AddShowBoundary(slabW, hh, 0.001); sOk++; }
+                                            catch (System.Exception se) { sBad++; wsb.Append($" <b>Show실패</b>{se.GetType().Name}"); }
+                                        }
+                                    }
+                                    int tri = -1;
+                                    try { using var tc = slabW.GetTriangles(false); tri = tc.Count; } catch { }
+                                    wsb.Insert(0, $"<b>Outer=발자국 {wallPolyKeep.Count}점</b> + <b>Hide {hOk}개</b>"
+                                               + (hBad > 0 ? $"(실패 {hBad})" : "")
+                                               + (sOk + sBad > 0 ? $" + <b>Show {sOk}개</b>(벽 섬)" + (sBad > 0 ? $"(실패 {sBad})" : "") : "")
+                                               + $" → 남는 몫 {Pw.Count}덩이 {aWall:F1}㎡"
+                                               + (tri >= 0 ? $" · <b>삼각형 {tri}개</b>" : ""));
+                                }
+                                catch (System.Exception we)
+                                { wsb.Append($"<b>⚠실패</b> {we.GetType().Name}[{we.Message}]"); }
+                                wp = wsb.ToString();
+                            }
+                            DiagLog.Append($"  ⑤<b>옹벽 가둠</b> — {wp}\n");
+                            // ★[검토 0916 · 낮음] 종전엔 «Outer…»로 시작하기만 하면 조용했다 —
+                            //   Hide가 통째로 실패해도 <b>안 잘린 벽</b>이 조용히 나갔다.
+                            if (Pw.Count > 0 && (!wp.StartsWith("<b>Outer") || wp.Contains("실패")))
+                                try { ed.WriteMessage("\n[DHGRADE] ⚠옹벽을 제대로 못 가뒀습니다 — 안 잘린 벽이 나갈 수 있습니다. 진단 로그를 보세요."); }
+                                catch { }
                             // ★★[검토 0916 · 보통] <b>탐침은 테두리에서 떨어진 자리만</b> 쓴다 —
                             //   경계에 붙은 점은 근수직 계단 옆에서 어느 값이든 주므로 잣대가 안 된다
                             //   (실측: 종전 표본이 경계에서 <b>5.7mm</b>까지 붙었다).
@@ -1362,7 +1942,13 @@ public sealed class CreateGradingCommand
                             // ★[JACK 0916] <b>덩이가 여럿이어도 멈추지 않는다</b>(위 ⑥옹벽 가둠 주석).
                             //   합성면 경계는 여전히 한 덩이여야 한다 — 그건 옹벽+원지반을 합친 것이라
                             //   보통 하나로 이어진다(갈라지면 그때는 진짜로 이상한 판이다).
+                            // ★★[검토 0916] <b>틈 장부도 관문이다.</b> 종전엔 로그일 뿐이었다 —
+                            //   검토 실측: 겹침 −30.87㎡인데 <c>ledgerOk</c>는 30.9 &lt; 문턱 41.7로 <b>통과</b>시켰다.
+                            //   그 장부는 벽과 뚜껑의 오차가 <b>부호만 바꿔 상쇄</b>되므로 사실상 항등식이다.
                             string stopWhy = Pw.Count == 0 ? "남길 <b>옹벽</b> 몫이 하나도 없다"
+                                           : System.Math.Abs(gapFoot) > System.Math.Max(2.0, areaF * 0.05)
+                                             ? (gapFoot > 0 ? $"발자국에 <b>빈 자리 {gapFoot:F1}㎡</b>가 남는다"
+                                                            : $"발자국에서 <b>{-gapFoot:F1}㎡가 겹친다</b>")
                                            : !ledgerOk ? "테두리 장부가 어긋난다(조각이 겹친다)"
                                            : Keep.Count == 0 ? "합성면에 걸 경계를 못 만들었다"
                                            : Keep.Count > 1 ? $"합성면 경계가 <b>{Keep.Count}덩이</b>다(한 면에 Outer를 여럿 걸 수 없다)"
@@ -1509,9 +2095,30 @@ public sealed class CreateGradingCommand
                     }
                 }
                 else if (tStage >= 1)
+                {
+                    // ★[JACK 0916 <i>"가상 옹벽만 나오게"</i>] <b>지난 판의 찌꺼기를 걷는다.</b>
+                    //   2단계에서 만들던 면들(순수옹벽·옹벽뚜껑N)은 이제 안 만든다 —
+                    //   그런데 <b>지우지 않으면 도면에 그대로 남아</b> 새 결과처럼 보인다.
+                    int wipeN = 0;
+                    try
+                    {
+                        using var trK = db.TransactionManager.StartTransaction();
+                        try { GradingBuilder.EraseSurfacesByBaseName(trK, "순수옹벽_DH", groundId); wipeN++; } catch { }
+                        try { GradingBuilder.EraseSurfacesByBaseName(trK, "옹벽뚜껑원본_DH", groundId); wipeN++; } catch { }
+                        for (int i3 = 1; i3 <= GradingSettings.WallPartMax; i3++)
+                        {
+                            try { GradingBuilder.EraseSurfacesByBaseName(trK, $"옹벽조각{i3}_DH", groundId); wipeN++; } catch { }
+                            try { GradingBuilder.EraseSurfacesByBaseName(trK, $"옹벽뚜껑{i3}_DH", groundId); wipeN++; } catch { }
+                        }
+                        trK.Commit();
+                    }
+                    catch { }
                     DiagLog.Append($"\n  ②~⑦ — <b>안 한다</b>(단계 {tStage}"
                         + $" · 옹벽 {(wallSlabId.IsNull ? "없음" : "있음")}"
-                        + $" · 정지면 {(finalSurfId.IsNull ? "없음" : "있음")}). 옹벽 재료만 만들고 멈춘다.\n");
+                        + $" · 정지면 {(finalSurfId.IsNull ? "없음" : "있음")})."
+                        + $" <b>가상옹벽_DH만</b> 만들고 멈춘다"
+                        + " · 지난 판 찌꺼기(순수옹벽·옹벽뚜껑)를 걷었다" + ".\n");
+                }
                 // ★[검토 0903 · JACK "도면 수행 시 무거우면 안 되"] <b>합성면 검사는 뺐다.</b>
                 //   합성면은 원지반을 깔고 만드는 면이라 삼각형이 25만 개(314ms)인데 그 대부분이
                 //   <b>원지반</b>이다 — 실제로 최장 변 549m가 찍힌 자리도 정지 구역이 아니라
@@ -1662,8 +2269,10 @@ public sealed class CreateGradingCommand
                 //   결과물은 <c>IsolateSurfaces</c>에 꺼진 채로 남았다 — 앞의 실수와 <b>똑같은 실수</b>다.</para>
                 //   ★[검토 0914 · 높음] <b>깃발을 본다</b> — 이름만 보고 켜면 <b>지난 실행의 찌꺼기</b>를
                 //   새 결과처럼 켤 수 있다(위 <c>pureWallOk</c> 주석). 못 됐으면 재료를 보여 준다.
+                // ★[JACK 0916] 폴리곤만 만드는 판에서는 <b>켤 표면이 없다</b> — 억지로 찾으면 못 찾았다고 로그만 시끄럽다.
                 string wallShowName = (GradingSettings.TransitionStage >= 2 && pureWallOk) ? "순수옹벽_DH" : "가상옹벽_DH";
-                int wallVis = GradingBuilder.SetSurfaceVisible(trE, wallShowName, true);
+                bool polyOnly = GradingSettings.WallPolygonOnly;
+                int wallVis = polyOnly ? 0 : GradingBuilder.SetSurfaceVisible(trE, wallShowName, true);
                 if (GradingSettings.TransitionStage >= 2 && !pureWallOk)
                 {
                     // 못 만든 '순수옹벽_DH'가 지난 실행에서 남아 있으면 <b>꺼 둔다</b> — 새것으로 오인하지 않게
@@ -1671,8 +2280,10 @@ public sealed class CreateGradingCommand
                     DiagLog.Append("\n  ⚠순수옹벽을 <b>못 만들었다</b> — 같은 이름의 옛 표면이 있으면 꺼 두고,"
                         + " 재료('가상옹벽_DH')만 보여 준다\n");
                 }
-                DiagLog.Append($"\n  ★옹벽 표시 — 가려 놓은 뒤 <b>'{wallShowName}'</b>을 다시 켰다 · 켠 표면 {wallVis}개"
-                    + $"(단계 {GradingSettings.TransitionStage} · ShowOnlyResultSurface={GradingSettings.ShowOnlyResultSurface})\n");
+                DiagLog.Append(polyOnly
+                    ? "\n  ★옹벽 표시 — <b>켤 표면이 없다</b>(폴리곤만 만드는 판이다). 화면에 남는 것은 <b>정지면_DH</b>와 빨간 <b>'DH-가상폴리곤'</b> 한 줄이다.\n"
+                    : $"\n  ★옹벽 표시 — 가려 놓은 뒤 <b>'{wallShowName}'</b>을 다시 켰다 · 켠 표면 {wallVis}개"
+                      + $"(단계 {GradingSettings.TransitionStage} · ShowOnlyResultSurface={GradingSettings.ShowOnlyResultSurface})\n");
                 // [JACK 0728] 정지면_DH 표시 스타일 = Contours 2m and 10m (Background) (한글 템플릿 이름 폴백 포함).
                 // ★★★[검토 0915 · 치명] <b>여기가 재작성 자리다.</b>
                 //   위 <c>IsolateSurfaces</c>가 <b>원지반까지</b> 숨겼고, 이 파일 1710줄은 정지면_DH만 다시 굽는다.

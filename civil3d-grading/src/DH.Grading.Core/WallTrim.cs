@@ -54,6 +54,25 @@ public static class WallTrim
         public List<Point3> Ring = new();
         /// <summary>테두리 중 <b>데이라잇</b>인 두 줄(진단·검증용).</summary>
         public List<Point3> SideA = new(), SideB = new();
+
+        /// <summary>★★★[검토 0916 · 치명] <b>이웃한 두 줄 사이의 띠</b>들. 이것이 <b>진짜 벽 자리</b>다.
+        ///
+        /// <para><b>왜 따로 두나.</b> <see cref="Ring"/>은 「첫 줄 전부 → 끝점들 → 마지막 줄 되짚기 →
+        /// 첫점들」로 두른 선이다. 가운데 줄들을 <b>건너뛴 현(弦)</b>이라, 벽이 ㄷ자이고 날개가
+        /// 데이라잇까지(23~28m) 뻗으면 그 현이 <b>벽 없는 땅을 가로질러 삼킨다</b>.</para>
+        ///
+        /// <para><b>계측</b>(현장 좌표 재현): 덩이 링 <b>759.9㎡</b> vs 발자국 <b>404.9㎡</b> —
+        /// 발자국보다 6배 깊고 바깥으로 <b>26.3m</b>. 덩이 ∖ 발자국 = <b>485.6㎡</b>.
+        /// 아무것도 안 자르면 0.0㎡다 — <b>자르기 시작해야 터진다</b>.</para>
+        ///
+        /// <code>
+        ///   현 하나로 두르기(옛)          띠를 쌓기(지금)
+        ///   ┌───────────────┐            ┌───┐
+        ///   │╲             ╱│            ├───┤   ← 줄 사이마다 한 장
+        ///   │ ╲   벽 없음 ╱ │            ├───┤
+        ///   │  ╲_________╱  │            └───┘
+        /// </code></summary>
+        public List<List<Point3>> Bands = new();
     }
 
     /// <summary>★<b>줄마다 잘라 낸다.</b>
@@ -165,6 +184,9 @@ public static class WallTrim
         lobes.AddRange(openL);
 
         // ── 덩이마다 테두리를 짓는다 ──
+        //   ※<see cref="Lobe.Ring"/>은 <b>진단·표시용</b>으로만 남긴다(데이라잇 양옆을 보여 준다).
+        //     자르고 나누는 데 쓰는 것은 아래 <see cref="Lobe.Bands"/>다.
+        int nThin = 0;
         foreach (var lb in lobes)
         {
             var c0 = lb.Chains[0];
@@ -177,12 +199,37 @@ public static class WallTrim
             for (int i = lb.Chains.Count - 1; i >= 0; i--)               // ④반대쪽 데이라잇(시작점들)
             { var q = lb.Chains[i].Pts[0]; ring.Add(q); lb.SideA.Add(q); }
             lb.Ring = Weed(ring);
+
+            // ── ★<b>띠</b> — 이웃한 두 줄 사이를 한 장씩. 이것이 진짜 벽 자리다 ──
+            for (int i = 0; i + 1 < lb.Chains.Count; i++)
+            {
+                var A = lb.Chains[i].Pts; var B = lb.Chains[i + 1].Pts;
+                if (A.Count < 2 || B.Count < 2) continue;
+                var band = new List<Point3>(A.Count + B.Count);
+                foreach (var q in A) band.Add(q);
+                for (int k = B.Count - 1; k >= 0; k--) band.Add(B[k]);
+                band = Weed(band);
+                if (band.Count >= 4) lb.Bands.Add(band);
+            }
+            // ★줄이 <b>하나뿐인 덩이</b>는 「갔다 온 선」이라 넓이가 0이다(검토 실측: 링 41점 · 0.000㎡ ·
+            //   <c>ToCleanGeometry</c>가 null). 그러면 장부에도 안 잡히고, 쐐기에서도 발자국에서도
+            //   안 빠져 <b>Hide에 먹혀 그 줄의 벽이 통째로 지워진다</b>(한 판에서 6덩이 중 3개가 그랬다).
+            //   → <b>이웃 줄까지의 실제 거리</b>만큼 폭을 준 띠로 세운다.
+            if (lb.Chains.Count == 1)
+            {
+                var c = lb.Chains[0];
+                int rn = NearRow(rows, c.Row);
+                var band = rn >= 0 ? WidenToward(c.Pts, rows[rn]) : new List<Point3>();
+                if (band.Count >= 4) { lb.Bands.Add(band); nThin++; }
+            }
         }
         lobes.RemoveAll(l => l.Ring.Count < 4);
 
         sb.Append($"줄 {rows.Count}개를 훑어 조각 ");
         int nch = 0; foreach (var r in byRow) nch += r.Count;
-        sb.Append($"<b>{nch}개</b> → 덩이 <b>{lobes.Count}개</b>");
+        int nBand = 0; foreach (var l in lobes) nBand += l.Bands.Count;
+        sb.Append($"<b>{nch}개</b> → 덩이 <b>{lobes.Count}개</b> · 띠 <b>{nBand}장</b>");
+        if (nThin > 0) sb.Append($"(줄 하나짜리 <b>{nThin}덩이</b>는 폭을 줬다)");
         sb.Append($" · 훑은 점 {nSamp}");
         if (nMissG > 0 || nMissD > 0) sb.Append($" · 못 잰 점 원지반 {nMissG}/정지면 {nMissD}");
         sb.Append(nEndChk > 0
@@ -190,6 +237,199 @@ public static class WallTrim
             : " · 잘린 끝이 없다(줄이 전부 두 면 사이에 있다)");
         log = sb.ToString();
         return lobes;
+    }
+
+    /// <summary>★★★[JACK 0916 <i>"뚜껑 바깥변까지 해"</i>] <b>쐐기의 바깥 변을 진짜 데이라잇으로 딴다.</b>
+    ///
+    /// <para>여태 쐐기의 바깥 변은 <b>흉내</b>였다 — 둘레를 129칸으로 나눠 데이라잇 거리를 재고
+    /// 못 잰 칸은 이웃 값으로 메웠다(<c>farAt</c>). 그러니 진짜 곡선과 어긋나는 것이 당연했고,
+    /// JACK이 스샷에 <i>"미세하게 맞지 않음 · 튀어나옴"</i>이라 짚은 것이 그것이다.</para>
+    ///
+    /// <para>★<b>벽과 똑같은 방법</b>을 쓴다. 벽은 「줄을 따라가며 지형과 견주는」 1차원 문제였다.
+    /// 뚜껑의 바깥 변은 「<b>직각선을 따라가며 정지면과 원지반을 견주는</b>」 1차원 문제다 —
+    /// 둘이 만나는 자리가 곧 <b>정지 데이라잇</b>이고, 거기가 뚜껑의 끝이다.</para>
+    ///
+    /// <code>
+    ///   찍은 선 ├──────→ 바깥으로  ●  ← 정지면 = 원지반 (여기가 데이라잇)
+    ///                              그 너머는 손대지 않은 땅이다
+    /// </code>
+    ///
+    /// <para>표본 간격과 무관하다 — 자리마다 <b>직접 찾기</b> 때문이다.</para></summary>
+    /// <param name="ruler">자(구간을 재는 폴리곤).</param>
+    /// <param name="cum">자의 누적 길이.</param>
+    /// <param name="t0">구간 시작 둘레값.</param>
+    /// <param name="span">구간 길이.</param>
+    /// <param name="maxD">바깥으로 찾아볼 최대 거리(m).</param>
+    /// <param name="nT">구간을 몇 칸으로 훑을지.</param>
+    /// <returns>구간을 따라간 <b>데이라잇 점들</b>(t0 → t0+span 차례).</returns>
+    /// <param name="nMiss">못 찾은 자리 수 — <b>0이 아니면 그만큼 이웃으로 메웠다</b>는 뜻이다.</param>
+    /// <param name="maxStep">이웃한 두 점 사이 <b>가장 긴 걸음</b>(m). 링이 어딘가를 가로질렀는지 보는 잣대.</param>
+    /// <param name="nMulti">뿌리가 <b>둘 이상</b>이던 자리 수(소단이 지형을 두 번 스친 자리).</param>
+    public static List<Point3> DaylightOutward(
+        IReadOnlyList<Point3> ruler, double[] cum, double t0, double span,
+        Func<double, double, double?> ground, Func<double, double, double?> design,
+        double maxD, int nT, double step, double z,
+        out int nMiss, out double maxStep, out int nMulti, out string log)
+    {
+        var res = new List<Point3>();
+        double tot = cum[cum.Length - 1];
+        nMulti = 0;
+
+        // ── ①자리마다 <b>거리</b>를 찾는다. 못 찾으면 null로 <b>자리를 비워 둔다</b> ──
+        //   ★★★[검토 0916 · 치명1] 종전엔 못 찾은 자리를 <b>소리 없이 건너뛰었다</b>.
+        //     안쪽 사슬은 늘 nT+1점인데 바깥 사슬만 짧아져, 되짚는 변이 그 자리를
+        //     <b>곧은 선으로 가로질렀다</b>(검토 실측: 한 걸음 <b>17.19m</b> · 정상 칸은 1.00m ·
+        //     25자리 중 2곳만 찾고도 넓이 관문을 통과했다).
+        var dist = new double?[nT + 1];
+        for (int i = 0; i <= nT; i++)
+        {
+            double t = t0 + span * i / nT;
+            double tw = ((t % tot) + tot) % tot;
+            // ══ ★★★[검토 0916 · 치명 · <b>내가 만든 회귀</b>] <b>0은 부호가 바뀐 게 아니다.</b>
+            //
+            //   <para><b>데이라잇 <u>바깥</u>에서는 정지면이 곧 원지반</b>이다 — 이 저장소가 스스로 적어 뒀다:
+            //   <i>"합성면은 원지반을 깔고 시작하므로 정지 바깥에서도 값이 나오고, <b>그 값은 원지반과 같다</b>"</i>.
+            //   즉 <c>diff = 정지면 − 원지반</c>이 데이라잇 너머로 <b>쭉 0</b>이다.</para>
+            //
+            //   <para>그런데 관문이 «곱 ≤ 0»이라 <b>0도 뿌리로 쳤다</b>. v95.2는 첫 뿌리에서 <c>break</c>해
+            //   이 성질이 안 드러났는데, 「가장 바깥 뿌리」로 바꾸며 break를 걷자
+            //   <b>찾을거리 끝까지 계속 덮어썼다</b>. 검토 실측(참 데이라잇 10.00m):</para>
+            //
+            //   <code>
+            //     찾을거리 80m → 딴 거리 <b>79.50m</b>    단순 O · 한걸음 O · 못찾음 O → <b>갈아 끼웠다</b>
+            //     찾을거리 40m → 딴 거리 <b>39.50m</b>    새 관문 넷 중 <b>셋이 통과</b>한다
+            //   </code>
+            //
+            //   <para>바깥 변이 <b>고르게</b> 밀려나 완벽히 매끈하므로 한 걸음·단순·못찾음이 다 통과한다.
+            //   (같이 올린 「찾을거리 바닥 20→80m」가 이 증상을 <b>키웠다</b> — 멀리 볼수록 더 멀리 달아난다.)</para>
+            //
+            //   <para>★<b>데이라잇은 「두 면이 갈라지기를 멈추는 자리」</b>다. 그러니 판정은 하나다 —
+            //   <c>|diff|</c>가 <b>처음 0으로 잦아드는 자리</b>. 참 부호 뒤집힘도 같은 자리에서 잡힌다.
+            //   평평한 0이 <b>이어지면</b> 정지 구역 밖이니 더 볼 것이 없다 — <b>멈춘다</b>.</para>
+            const double ZT = 0.005;                      // 이보다 작으면 "같은 면"으로 본다(5mm)
+            double? found = null; int roots = 0; double lastRoot = double.NegativeInfinity;
+            int prevSign = 0; bool havePrev = false; int flatRun = 0; double prevD = 0;
+            for (double d = 0; d <= maxD + 1e-9; d += step)
+            {
+                var q = GradingGeometry.OutwardAt(ruler, cum, tw, d);
+                double? g = ground(q.X, q.Y), de = design(q.X, q.Y);
+                if (g == null || de == null) { havePrev = false; flatRun = 0; prevD = d; continue; }
+                double diff = de.Value - g.Value;            // 정지면 − 원지반
+                int sg = diff > ZT ? 1 : (diff < -ZT ? -1 : 0);
+                if (havePrev && prevSign != 0 && sg != prevSign && d > 0)
+                {
+                    // ★<b>이분법</b> — 「여기부터 같은 면」인 자리를 정확히 좁힌다.
+                    double a2 = prevD, b2 = d;
+                    for (int it = 0; it < 30 && b2 - a2 > 1e-4; it++)
+                    {
+                        double m = (a2 + b2) * 0.5;
+                        var qm = GradingGeometry.OutwardAt(ruler, cum, tw, m);
+                        double? gm = ground(qm.X, qm.Y), dm = design(qm.X, qm.Y);
+                        if (gm == null || dm == null) { b2 = m; continue; }
+                        double dv = dm.Value - gm.Value;
+                        int sm = dv > ZT ? 1 : (dv < -ZT ? -1 : 0);
+                        if (sm == prevSign) a2 = m; else b2 = m;
+                    }
+                    // ★소단이 원지반을 <b>두 번</b> 스치면 뿌리가 둘이다 — 뚜껑의 끝은 <b>바깥</b> 것이다.
+                    //   한 걸음 안에 든 두 번째는 같은 뿌리로 본다(표본이 뿌리에 딱 떨어질 때 생긴다).
+                    double rd = (a2 + b2) * 0.5;
+                    if (rd - lastRoot > step * 1.5) roots++;
+                    lastRoot = rd; found = rd;
+                }
+                if (sg == 0)
+                {
+                    // ★평평한 0이 <b>이어지면</b> 정지 구역 밖이다 — 더 가 봐야 같은 값뿐이다.
+                    flatRun++;
+                    if (found != null && flatRun >= 3) break;
+                }
+                else flatRun = 0;
+                prevSign = sg; prevD = d; havePrev = true;
+            }
+            if (roots > 1) nMulti++;
+            dist[i] = found;
+        }
+
+        // ── ②빈 자리를 <b>이웃으로 메운다</b> — 자리와 점의 짝이 어긋나지 않게 ──
+        int hit = 0; foreach (var v in dist) if (v != null) hit++;
+        nMiss = nT + 1 - hit;
+        if (hit == 0)
+        {
+            nMiss = nT + 1; maxStep = 0;
+            log = $"<b>⚠한 자리도 못 찾았다</b>(훑은 자리 {nT + 1} · 찾아본 거리 {maxD:F0}m)";
+            return res;
+        }
+        for (int i = 0; i <= nT; i++)
+        {
+            if (dist[i] != null) continue;
+            int lo = i, hi = i;
+            while (lo >= 0 && dist[lo] == null) lo--;
+            while (hi <= nT && dist[hi] == null) hi++;
+            if (lo < 0 && hi > nT) continue;
+            if (lo < 0) dist[i] = dist[hi];
+            else if (hi > nT) dist[i] = dist[lo];
+            else dist[i] = dist[lo]!.Value + (dist[hi]!.Value - dist[lo]!.Value) * (i - lo) / (double)(hi - lo);
+        }
+
+        for (int i = 0; i <= nT; i++)
+        {
+            double t = t0 + span * i / nT;
+            double tw = ((t % tot) + tot) % tot;
+            var pt = GradingGeometry.OutwardAt(ruler, cum, tw, dist[i]!.Value);
+            res.Add(new Point3(pt.X, pt.Y, z));
+        }
+
+        // ── ③<b>진짜 잣대</b> — 이웃한 두 점 사이 가장 긴 걸음 ──
+        //   ★★★[검토 0916 · 치명2] 종전의 "자가검증 최악 0.000m"은 <b>아무것도 검증하지 않았다</b>.
+        //     찾은 점에서 |원지반−정지면|을 쟀는데 그 점은 <b>정의상 뿌리</b>라 늘 0이다 —
+        //     링이 17m를 가로지르고 25자리 중 2곳만 찾은 판에서도 0.000m가 찍혔다.
+        maxStep = 0;
+        for (int i = 1; i < res.Count; i++)
+        {
+            double dx = res[i].X - res[i - 1].X, dy = res[i].Y - res[i - 1].Y;
+            maxStep = Math.Max(maxStep, Math.Sqrt(dx * dx + dy * dy));
+        }
+        double nominal = span / Math.Max(1, nT);
+        log = $"자리 {nT + 1} 중 <b>{hit}곳</b>에서 찾음"
+            + (nMiss > 0 ? $" · <b>못 찾음 {nMiss}</b>(이웃으로 메웠다)" : "")
+            + (nMulti > 0 ? $" · 뿌리 둘 이상 {nMulti}곳(가장 바깥을 씀)" : "")
+            + $" · <b>한 걸음 최악 {maxStep:F2}m</b>(칸 {nominal:F2}m)";
+        return res;
+    }
+
+    /// <summary>줄 <paramref name="r"/>의 <b>이웃 줄</b> 번호 — 없으면 −1.</summary>
+    private static int NearRow(IReadOnlyList<IReadOnlyList<Point3>> rows, int r)
+    {
+        if (r + 1 < rows.Count && rows[r + 1].Count >= 2) return r + 1;
+        if (r - 1 >= 0 && rows[r - 1].Count >= 2) return r - 1;
+        return -1;
+    }
+
+    /// <summary>줄 하나짜리 덩이에 <b>이웃 줄 쪽으로만</b> 폭을 준다.
+    ///
+    /// <para>★<b>양쪽으로 넓히면 안 된다.</b> 벽은 두 줄 <b>사이</b>에만 있다 —
+    /// 반대쪽으로 넓히면 벽이 없는 땅을 제 몫이라 주장하고, 그만큼 발자국 밖으로 삐져나간다
+    /// (하네스 S130 실측: 좌우로 넓혔더니 발자국 밖 <b>19.9㎡</b>).</para></summary>
+    private static List<Point3> WidenToward(IReadOnlyList<Point3> line, IReadOnlyList<Point3> target)
+    {
+        int n = line.Count;
+        var res = new List<Point3>();
+        if (n < 2 || target.Count < 1) return res;
+        var far = new List<Point3>(n);
+        for (int i = 0; i < n; i++)
+        {
+            // 이웃 줄에서 <b>가장 가까운 점</b> 쪽으로 민다 — 그 자리가 곧 띠의 반대 변이다.
+            double bx = 0, by = 0, best = double.MaxValue;
+            foreach (var q in target)
+            {
+                double dx = q.X - line[i].X, dy = q.Y - line[i].Y, d2 = dx * dx + dy * dy;
+                if (d2 < best) { best = d2; bx = q.X; by = q.Y; }
+            }
+            if (best == double.MaxValue) return new List<Point3>();
+            far.Add(new Point3(bx, by, line[i].Z));
+        }
+        for (int i = 0; i < n; i++) res.Add(line[i]);
+        for (int i = n - 1; i >= 0; i--) res.Add(far[i]);
+        return Weed(res);
     }
 
     /// <summary>표고가 안 맞는 쪽 점과 맞는 쪽 점 사이에서 <b>만나는 자리</b>를 선형보간으로 찾는다.
