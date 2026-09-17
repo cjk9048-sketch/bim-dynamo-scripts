@@ -1467,6 +1467,124 @@ public static class GradingGeometry
         return res;
     }
 
+    /// <summary>★★[검토 0916 · 높음4] 링의 <b>NTS 넓이</b> — 신발끈이 아니라 <b>자르고 빼는 데 쓰는 잣대</b>.
+    ///
+    /// <para><b>왜 둘을 섞으면 안 되나.</b> 신발끈은 제 몸을 지르는 링에서 <b>서로 상쇄</b>된다 —
+    /// 검토 실측: 꼬인 발자국의 신발끈 <b>0.0㎡</b> vs NTS <b>400.0㎡</b>.
+    /// 그 값으로 장부를 재면 «−400㎡ 여기가 빈다»는 <b>거짓 경보</b>가 난다.
+    /// <c>RingSubtract</c>·<c>RingIntersect</c>는 전부 NTS로 셈하므로 <b>기준값도 NTS라야</b> 맞는다.</para></summary>
+    public static double RingAreaNts(IReadOnlyList<Point3>? ring)
+    {
+        if (ring == null || ring.Count < 3) return 0;
+        try
+        {
+            var g = NtsSupport.ToCleanGeometry(ring, NtsFactory());
+            return g == null || g.IsEmpty ? 0 : g.Area;
+        }
+        catch { return 0; }
+    }
+
+    /// <summary>★★[검토 0916 · 보통6] <b>영역(테두리+구멍)</b>을 판에서 뺀다.
+    ///
+    /// <para><c>RingSubtract</c>는 <b>테두리만</b> 받는다. 덩이에 구멍이 있으면 그 구멍까지 빼 버려,
+    /// 구멍 자리가 <b>Hide에서도 뚜껑에서도 빠져 주인이 없어진다</b>.
+    /// 여기서는 <c>ring − holes</c>를 제대로 만들어 뺀다.</para></summary>
+    public static List<(List<Point3> Ring, List<List<Point3>> Holes)> RingSubtractRegions(
+        IReadOnlyList<Point3>? outer,
+        IEnumerable<(List<Point3> Ring, List<List<Point3>> Holes)>? minus,
+        double z, out string log, double dens = 1.0)
+    {
+        var res = new List<(List<Point3>, List<List<Point3>>)>();
+        log = "";
+        if (outer == null || outer.Count < 3) { log = "판이 없다"; return res; }
+        try
+        {
+            var gf = NtsFactory();
+            Geometry? a0 = NtsSupport.ToCleanGeometry(outer, gf);
+            if (a0 == null || a0.IsEmpty) { log = "판이 무효다"; return res; }
+            double before = a0.Area;
+            if (minus != null)
+                foreach (var q in minus)
+                {
+                    var rg = NtsSupport.ToCleanGeometry(q.Ring, gf);
+                    if (rg == null || rg.IsEmpty) continue;
+                    foreach (var h in q.Holes)
+                    {
+                        var hg = NtsSupport.ToCleanGeometry(h, gf);
+                        if (hg != null && !hg.IsEmpty) { try { rg = rg.Difference(hg); } catch { } }
+                    }
+                    try { a0 = a0.Difference(rg); } catch { }
+                }
+            for (int i = 0; i < a0.NumGeometries; i++)
+            {
+                if (a0.GetGeometryN(i) is not Polygon pg || pg.IsEmpty || pg.Area < 0.01) continue;
+                List<Point3> RingOf(LineString ls)
+                {
+                    var pts = new List<Point3>();
+                    foreach (var c in ls.Coordinates)
+                    {
+                        if (pts.Count > 0)
+                        {
+                            var l = pts[pts.Count - 1];
+                            if (Math.Abs(l.X - c.X) < 1e-9 && Math.Abs(l.Y - c.Y) < 1e-9) continue;
+                        }
+                        pts.Add(new Point3(c.X, c.Y, z));
+                    }
+                    return Densify(pts, Math.Max(0.3, dens));
+                }
+                var ext = RingOf(pg.ExteriorRing);
+                if (ext.Count < 4) continue;
+                var hs = new List<List<Point3>>();
+                for (int h = 0; h < pg.NumInteriorRings; h++)
+                {
+                    var hr = RingOf(pg.GetInteriorRingN(h));
+                    if (hr.Count >= 4) hs.Add(hr);
+                }
+                res.Add((ext, hs));
+            }
+            res.Sort((x, y) => RingArea2(y.Item1).CompareTo(RingArea2(x.Item1)));
+            double after = 0; foreach (var q in res) { after += RingArea2(q.Item1); foreach (var h in q.Item2) after -= RingArea2(h); }
+            log = $"{before:F1}㎡ − 뺀 것 = <b>{after:F1}㎡</b>";
+        }
+        catch { log = "빼기 실패"; }
+        return res;
+    }
+
+    /// <summary>★★★[검토 0916 · 치명4] 링이 <b>제 몸을 지르지 않는가</b>(단순한가).
+    ///
+    /// <para><b>왜 필요한가.</b> 넓이는 <b>모양의 잣대가 아니다</b> — 검토 실측에서
+    /// 25자리 중 <b>2곳만</b> 찾아 만든 27점짜리 링이 「넓이가 0.3~3배 안」 관문을 그대로 통과했다.
+    /// 나비 모양처럼 제 몸을 지르면 신발끈 넓이가 <b>서로 상쇄돼</b> 엉뚱한 값이 나오기도 한다
+    /// (하네스 S128 실측: 신발끈 0.0㎡ / NTS 450.0㎡).</para>
+    ///
+    /// <para>NTS에 그대로 물어본다. 판정을 못 하면 <b>false</b>(안전한 쪽)를 준다.</para></summary>
+    public static bool RingIsSimple(IReadOnlyList<Point3>? ring)
+    {
+        if (ring == null || ring.Count < 4) return false;
+        try
+        {
+            var gf = NtsFactory();
+            var cs = new List<Coordinate>();
+            foreach (var q in ring)
+            {
+                if (cs.Count > 0)
+                {
+                    var l = cs[cs.Count - 1];
+                    if (Math.Abs(l.X - q.X) < 1e-9 && Math.Abs(l.Y - q.Y) < 1e-9) continue;
+                }
+                cs.Add(new Coordinate(q.X, q.Y));
+            }
+            if (cs.Count < 3) return false;
+            var f0 = cs[0]; var lN = cs[cs.Count - 1];
+            if (Math.Abs(f0.X - lN.X) > 1e-9 || Math.Abs(f0.Y - lN.Y) > 1e-9)
+                cs.Add(new Coordinate(f0.X, f0.Y));
+            if (cs.Count < 4) return false;
+            var lr = gf.CreateLinearRing(cs.ToArray());
+            return lr.IsSimple && gf.CreatePolygon(lr).IsValid;
+        }
+        catch { return false; }
+    }
+
     public static List<(List<Point3> Ring, List<List<Point3>> Holes)> RingIntersect(
         IEnumerable<(List<Point3> Ring, List<List<Point3>> Holes)>? src,
         IReadOnlyList<Point3>? clip, double z, out string log, double dens = 1.0)

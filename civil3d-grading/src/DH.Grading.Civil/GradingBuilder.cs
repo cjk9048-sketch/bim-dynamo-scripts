@@ -464,6 +464,33 @@ public static class GradingBuilder
         tin.Rebuild();
     }
 
+    /// <summary>★★★[검토 0916 · 치명5] <b>숨긴 자리 안을 도로 보이게</b> 하는 경계(Show).
+    ///
+    /// <para><b>고친 까닭.</b> 여태 「뚫은 덩이의 구멍」(= 남길 벽 섬)을 도로 살리려고
+    /// <see cref="AddOuterBoundary"/>를 <b>한 면에 여러 번</b> 걸었다. 그런데 바로 그것이
+    /// 이 저장소가 0916에 실측해 금지해 둔 짓이다 — <b>Outer를 여럿 걸면 면이 부서진다
+    /// (삼각형 1311 → 137개)</b>. Civil에는 이 용도의 경계형이 따로 있다: <c>Show</c>.</para>
+    ///
+    /// <code>
+    ///   Outer(발자국)  ─ 이 밖은 없다
+    ///     └ Hide(뚫을 몫)   ─ 이 안은 지운다
+    ///         └ Show(벽 섬) ─ 그 안의 이것만 도로 살린다
+    /// </code></summary>
+    public static void AddShowBoundary(TinSurface tin, IReadOnlyList<Point3> ring, double midOrd = 1.0)
+    {
+        int n = ring.Count;
+        if (n >= 2)
+        {
+            var f = ring[0]; var l = ring[n - 1];
+            if ((f.X - l.X) * (f.X - l.X) + (f.Y - l.Y) * (f.Y - l.Y) < 1e-12) n--; // 중복 닫음점 제거
+        }
+        if (n < 3) return;
+        var pc = new Point3dCollection();
+        for (int i = 0; i < n; i++) pc.Add(new Point3d(ring[i].X, ring[i].Y, ring[i].Z));
+        tin.BoundariesDefinition.AddBoundaries(pc, midOrd, Autodesk.Civil.SurfaceBoundaryType.Show, true);
+        tin.Rebuild();
+    }
+
     /// <summary>최종 합성 — 빈 TIN에 pasteOrder 순서로 PasteSurface.
     /// paste별 성공/실패와 Civil 예외 메시지를 log로 반환(병합 느낌표 원인 특정용, JACK 검증 지시).
     ///
