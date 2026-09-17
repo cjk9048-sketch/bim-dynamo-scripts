@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.ApplicationServices;
+﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.Colors;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
@@ -127,7 +127,17 @@ public sealed class ImportGisCommand
                 // ★★[검토 0901] <b>표고점도 같이 지운다.</b> 수치지도로 받은 뒤 서버로 다시 받으면
                 //   지표면은 새로 만들어지는데 표고점 851개는 <b>아무 지표면도 안 문 채</b> 남는다.
                 //   레이어가 꺼져 있어 눈에도 안 띈다. 두 경로가 <b>같은 목록</b>을 지워야 한다(§50).
-                EraseOnLayers(db, tr, GroundImportLayers);   // 다시 불러오면 교체
+                // ★[검토 0917] 지적도와 <b>같은 자</b>를 쓴다 — 못 지웠으면 그 자리에서 멈춘다.
+                //   (§65 "두 경로가 다른 자를 쓴다"가 바로 이번 중복의 뿌리였다)
+                int cFail = EraseOnLayers(db, tr, GroundImportLayers);   // 다시 불러오면 교체
+                if (cFail > 0)
+                {
+                    ed.WriteMessage($"\n[등고선] 이전 등고선·표고점 {cFail}개를 못 지웠습니다 — 새로 그리지 않았습니다."
+                        + "\n  해당 레이어의 잠금을 풀고 다시 하세요.");
+                    AcadApp.ShowAlertDialog($"등고선을 다시 가져오지 못했습니다.\n\n"
+                        + $"이전 자료 {cFail}개를 못 지웠습니다(레이어 잠금 확인).");
+                    return false;
+                }
                 ObjectId layMain = EnsureLayer(db, tr, LayerContour, 8);            // 주곡선 회색
                 ObjectId layIdx = EnsureLayer(db, tr, LayerContourIndex, 30);       // 계곡선 주황
                 // ★원본 선은 꺼 둔다 — 지표면이 제 등고선을 그리므로 두 벌이 겹친다(JACK 0901).
@@ -230,20 +240,97 @@ public sealed class ImportGisCommand
             }
 
             const double txtH = 1.0;   // 지번 글자 크기 — 1.0 고정(JACK 0731)
-            int nLine = 0, nText = 0;
+            int nLine = 0, nText = 0; string dupNote = ""; int eraseFail = 0;
             using (var tr = db.TransactionManager.StartTransaction())
             {
-                EraseOnLayers(db, tr, new[] { LayerParcel, LayerJibun });   // 다시 불러오면 교체
+                // ★못 지웠으면 <b>새로 그리지 않는다</b> — 그리면 옛것 위에 겹쳐 두 벌이 된다.
+                //   (트랜잭션을 커밋 안 하고 나가므로 도면은 <b>건드린 자국조차 안 남는다</b>.)
+                eraseFail = EraseOnLayers(db, tr, new[] { LayerParcel, LayerJibun });   // 다시 불러오면 교체
+                if (eraseFail > 0) goto erasedFailed;
                 ObjectId layP = EnsureLayer(db, tr, LayerParcel, 2);        // 필지 노란색(JACK 0731)
                 ObjectId layT = EnsureLayer(db, tr, LayerJibun, 7);         // 지번 흰색(별도 레이어 — JACK)
                 // [JACK 0731] 지번이 '?'로 깨지는 문제 — 기본 글꼴(txt.shx)이 한글을 못 그린다('산12-1' 등).
                 //   한글 트루타입 글꼴 스타일을 만들어 지번 문자에 지정한다.
                 ObjectId styleId = EnsureKoreanTextStyle(db, tr);
                 var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+
+                // ══ ★★★[JACK 0917 <i>"지적도 기능을 쓰면 문자랑 선이 중복돼서 들어와"</i>] ═══════
+                //
+                //   <para><b>중복이 생길 수 있는 길이 둘</b>이고, 여기서 <b>둘 다</b> 막는다.</para>
+                //
+                //   <para><b>① 같은 필지가 여러 줄로 온다.</b> 표 <c>lsmd_cont_ldreg</c>(연속지적)는
+                //   도엽별로 만든 자료를 이어 붙인 것이라 <b>같은 필지가 여러 도엽에 겹쳐</b> 들어 있는 일이 흔하다.
+                //   질의에 <c>DISTINCT</c>도 PNU 묶음도 없어, 오는 대로 다 그린다.</para>
+                //
+                //   <para><b>② <c>ST_Dump</c>가 한 필지를 여러 조각으로 쪼갠다.</b> 교집합이 여러 폴리곤이 되면
+                //   <b>조각마다 한 줄</b>씩 오고, 선은 조각마다 있는 게 맞지만
+                //   <b>지번 문자는 조각 수만큼 찍힌다</b> — 같은 지번이 두 번 세 번 보인다.</para>
+                //
+                //   <para>※<b>[검토 0917 정정]</b> 처음에 여기에 <i>"범위 상자에 걸친 필지는 (으레) 여러 폴리곤"</i>이라
+                //   적었는데 <b>틀렸다</b>. 볼록한 도형은 볼록한 사각 박스와 만나도 <b>언제나 한 덩이</b>다
+                //   (볼록∩볼록=볼록). 쪼개지려면 <b>필지 자체가 오목</b>(ㄱ자·잘록한 목)하고
+                //   박스 변이 <b>하필 그 잘록한 자리</b>를 지나야 한다. 실무 필지에 오목한 것이 드물지 않아
+                //   ②가 일어나는 것 자체는 맞지만, <b>"걸치면 으레"는 아니다</b>.
+                //   고치는 방법에는 영향이 없다 — 쪼개지든 아니든 아래가 그대로 맞게 돈다.</para>
+                //
+                //   <para>★고침: <b>선은 같은 모양이면 한 번만</b>, <b>문자는 한 필지(PNU)에 한 번만</b>
+                //   — 그 필지의 <b>가장 큰 조각</b> 위에 놓는다.
+                //   그리고 <b>몇 개를 걷어냈는지 로그에 적는다</b> — 그 숫자가 곧 어느 길이었는지 말해 준다
+                //   (선도 문자도 걷혔으면 ①, 문자만 걷혔으면 ②).</para>
+                var seenRing = new System.Collections.Generic.HashSet<string>();
+                // ★[검토 0917] 표식은 <b>mm까지 같아야</b> 걸린다. 도엽 두 장이 <b>따로 디지타이징</b>돼
+                //   좌표가 cm쯤 어긋난 진짜 중복이면 표식으로는 못 잡는다.
+                //   → 같은 필지(PNU) 안에서 <b>넓이와 중심</b>으로 한 번 더 본다.
+                //   갈라진 조각은 <b>중심이 멀리 떨어져</b> 있으므로 살아남는다.
+                //   ※이 cm 차이 중복이 실제로 오는지는 <b>안 쟀다</b>(사내 DB를 안 봤다).
+                var seenShape = new System.Collections.Generic.Dictionary<string,
+                    System.Collections.Generic.List<(double A, double Cx, double Cy)>>();
+                var bestLabel = new System.Collections.Generic.Dictionary<string, (double Area, Point3d At, string Jibun)>();
+                int dupLine = 0, dupText = 0, dupNear = 0;
+
+                static string RingSig(Point3dCollection r)
+                {
+                    // 시작 정점이 달라도 같은 모양이면 같은 값이 나오게 — 순서에 안 기대는 표식
+                    int n = r.Count; double sx = 0, sy = 0, mnx = double.MaxValue, mny = double.MaxValue,
+                        mxx = double.MinValue, mxy = double.MinValue;
+                    foreach (Point3d q in r)
+                    {
+                        sx += q.X; sy += q.Y;
+                        if (q.X < mnx) mnx = q.X; if (q.Y < mny) mny = q.Y;
+                        if (q.X > mxx) mxx = q.X; if (q.Y > mxy) mxy = q.Y;
+                    }
+                    return $"{n}|{sx:F3}|{sy:F3}|{mnx:F3}|{mny:F3}|{mxx:F3}|{mxy:F3}";
+                }
+                static double RingArea2D(Point3dCollection r)
+                {
+                    double a2 = 0; int n = r.Count;
+                    for (int i = 0; i < n; i++)
+                    { var u = r[i]; var v = r[(i + 1) % n]; a2 += u.X * v.Y - v.X * u.Y; }
+                    return System.Math.Abs(a2) * 0.5;
+                }
+
                 foreach (var p in parcels)
                 {
+                    string pk = p.Pnu.Length > 0 ? p.Pnu : StripJimok(p.Jibun);
                     foreach (var ring in p.Rings)
                     {
+                        if (!seenRing.Add(RingSig(ring))) { dupLine++; continue; }   // ★똑같은 선은 한 번만
+                        // ★거의 같은 선도 한 번만 — 같은 필지 · 넓이 0.5% 안 · 중심 1m 안
+                        double aR = RingArea2D(ring), cx = 0, cy = 0;
+                        foreach (Point3d q in ring) { cx += q.X; cy += q.Y; }
+                        if (ring.Count > 0) { cx /= ring.Count; cy /= ring.Count; }
+                        if (pk.Length > 0)
+                        {
+                            if (!seenShape.TryGetValue(pk, out var lst))
+                            { lst = new System.Collections.Generic.List<(double, double, double)>(); seenShape[pk] = lst; }
+                            bool near = false;
+                            foreach (var (A, Cx, Cy) in lst)
+                                if (System.Math.Abs(A - aR) <= System.Math.Max(0.01, A * 0.005)
+                                 && (Cx - cx) * (Cx - cx) + (Cy - cy) * (Cy - cy) <= 1.0)
+                                { near = true; break; }
+                            if (near) { dupNear++; continue; }
+                            lst.Add((aR, cx, cy));
+                        }
                         try
                         {
                             var pl = new Polyline3d(Poly3dType.SimplePoly, ring, true);   // 닫힌 링
@@ -256,16 +343,28 @@ public sealed class ImportGisCommand
                     // 지번 문자 — 지목 꼬리(한글)를 떼고 지번만(예 '645-1전' → '645-1')
                     string jibun = StripJimok(p.Jibun);
                     if (jibun.Length == 0) continue;
+                    // ★한 필지에 한 번만. PNU가 비면 지번을 열쇠로 쓴다(그래도 없으면 자리별로).
+                    string key = p.Pnu.Length > 0 ? "P:" + p.Pnu : "J:" + jibun;
+                    double aBig = 0; foreach (var ring in p.Rings) aBig = System.Math.Max(aBig, RingArea2D(ring));
+                    if (bestLabel.TryGetValue(key, out var prev))
+                    {
+                        dupText++;
+                        if (aBig > prev.Area) bestLabel[key] = (aBig, p.Label, jibun);   // <b>가장 큰 조각</b>에 붙인다
+                    }
+                    else bestLabel[key] = (aBig, p.Label, jibun);
+                }
+                foreach (var kv in bestLabel)
+                {
                     try
                     {
                         var t = new DBText
                         {
-                            TextString = jibun,
-                            Position = p.Label,
+                            TextString = kv.Value.Jibun,
+                            Position = kv.Value.At,
                             Height = txtH,
                             HorizontalMode = TextHorizontalMode.TextCenter,
                             VerticalMode = TextVerticalMode.TextVerticalMid,
-                            AlignmentPoint = p.Label,
+                            AlignmentPoint = kv.Value.At,
                             LayerId = layT,
                         };
                         if (!styleId.IsNull) t.TextStyleId = styleId;   // 한글 글꼴
@@ -274,12 +373,34 @@ public sealed class ImportGisCommand
                     }
                     catch { }
                 }
+                dupNote = (dupLine > 0 || dupNear > 0 || dupText > 0)
+                    ? $" · <b>겹친 것 걷어냄</b>(선 {dupLine}"
+                      + (dupNear > 0 ? $"+거의같음 {dupNear}" : "") + $" · 지번 {dupText})"
+                      + (dupLine + dupNear > 0 && dupText > 0 ? " — <b>같은 필지가 여러 줄로 온다</b>"
+                         : dupLine + dupNear > 0 ? " — 같은 모양의 선이 여러 줄로 온다"
+                         : " — <b>한 필지가 조각으로 쪼개져 온다</b>(ST_Dump)")
+                      + (dupNear > 0 ? "(<b>거의같음</b> = 좌표가 cm쯤 어긋난 중복 — 도엽을 따로 딴 자료다)" : "")
+                    : " · 겹친 것 없음";
                 tr.Commit();
             }
             DrawOrderFix.Apply(db);   // 배경지도 위로 지번이 보이게(JACK 0731)
             ed.Regen();
+            goto drawn;
 
-            string done = $"필지 {parcels.Count}개(선 {nLine}·지번 {nText})" +
+        erasedFailed:
+            ed.WriteMessage($"\n[지적도] 이전 지적도 {eraseFail}개를 <b>못 지웠습니다</b> — 새로 그리지 않았습니다."
+                .Replace("<b>", "").Replace("</b>", "")
+                + $"\n  '{LayerParcel}'·'{LayerJibun}' 레이어의 <b>잠금</b>을 풀고 다시 하세요."
+                .Replace("<b>", "").Replace("</b>", ""));
+            AcadApp.ShowAlertDialog("지적도를 다시 가져오지 못했습니다.\n\n"
+                + $"이전 필지·지번 {eraseFail}개를 못 지웠습니다(레이어 잠금 확인).\n"
+                + $"'{LayerParcel}'·'{LayerJibun}' 잠금을 풀고 다시 시도하세요.\n\n"
+                + "※그냥 그리면 옛것 위에 겹쳐 <b>두 벌</b>이 됩니다.".Replace("<b>", "").Replace("</b>", ""));
+            try { DiagLog.Append($"\n■ DHPARCEL — <b>안 그렸다</b>(이전 것 {eraseFail}개를 못 지움 · 레이어 잠금)\n"); } catch { }
+            return;
+
+        drawn:
+            string done = $"필지 {parcels.Count}개(선 {nLine}·지번 {nText})" + dupNote +
                           (cut ? $" · ⚠상한 {MaxParcelRows} 도달(범위 축소 권장)" : "");
             ed.WriteMessage($"\n[지적도] {done}");
             // ★지표면과 같이 올 때는 대화상자를 안 띄운다 — 둘이 연달아 뜨면 성가시다.
@@ -624,7 +745,19 @@ public sealed class ImportGisCommand
         return cut.Length > 0 ? cut : s;
     }
 
-    internal static void EraseOnLayers(Database db, Transaction tr, string[] layers)
+    /// <summary>주어진 레이어의 객체를 <b>모두</b> 지운다. <b>못 지운 개수</b>를 돌려준다.
+    ///
+    /// <para>★★★[검토 0917 · JACK <i>"지적도 기능을 쓰면 문자랑 선이 중복돼서 들어와"</i>]
+    /// <b>여기서 실패를 조용히 삼키고 있었다.</b> 이 함수를 부르는 쪽은 전부
+    /// <i>"다시 불러오면 교체"</i>를 전제로 <b>지운 다음 바로 새로 그린다</b> —
+    /// 그런데 레이어가 <b>잠겨 있으면</b> 지우기가 실패하고, 아무 신호 없이 그 위에 또 그린다.
+    /// <b>옛것 한 벌 + 새것 한 벌 = 중복</b>이다. 선도 문자도 같이 겹친다(둘 다 이 함수로 지운다).</para>
+    ///
+    /// <para>★<b>같은 저장소가 이미 아는 실패다.</b> 형제 명령 <see cref="ParcelOffCommand"/>는
+    /// 똑같은 두 레이어를 지우면서 <i>"★[검토 0902] 레이어가 잠겼으면 여기로 온다 — <b>숨기지 않는다</b>"</i>라고
+    /// 적어 두고 실패를 세어 경고까지 띄운다. <b>가져오기 쪽만 그 교훈이 빠져 있었다</b> —
+    /// 이 저장소가 되풀이해 겪은 <b>"두 경로가 다른 자를 쓴다"</b>가 또 난 것이다.</para></summary>
+    internal static int EraseOnLayers(Database db, Transaction tr, string[] layers)
     {
         var want = new System.Collections.Generic.HashSet<string>(layers, System.StringComparer.OrdinalIgnoreCase);
         var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
@@ -635,10 +768,13 @@ public sealed class ImportGisCommand
             try { if (tr.GetObject(id, OpenMode.ForRead) is AcadEntity e && want.Contains(e.Layer)) victims.Add(id); }
             catch { }
         }
+        int fail = 0;
         foreach (var id in victims)
         {
-            try { (tr.GetObject(id, OpenMode.ForWrite) as AcadEntity)?.Erase(); } catch { }
+            try { (tr.GetObject(id, OpenMode.ForWrite) as AcadEntity)?.Erase(); }
+            catch { fail++; }
         }
+        return fail;
     }
 
     /// <summary>[JACK 0731] 한글 글꼴 텍스트 스타일 확보 — 지번의 '산' 같은 한글이 '?'로 깨지는 것 방지.
