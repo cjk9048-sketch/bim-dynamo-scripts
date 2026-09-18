@@ -1467,6 +1467,385 @@ public static class GradingGeometry
         return res;
     }
 
+    /// <summary>★★★[JACK 0917] <b>광선이 링에 처음 닿는 자리.</b>
+    ///
+    /// <para>JACK: <i>"처음 찍은 지점이 고정된 상태로 다음 클릭하는 쪽으로 직선을 그리게 해줘.
+    /// 직선의 범위 무조건 해당 계획부지의 <b>데이라잇 경계 안에서만</b> 그려져야 해."</i></para>
+    ///
+    /// <para>기준점에서 <paramref name="dx"/>,<paramref name="dy"/> 쪽으로 <b>앞으로만</b> 나가며
+    /// 링의 변과 만나는 <b>가장 가까운</b> 자리를 찾는다. 못 만나면 <c>false</c>.</para>
+    ///
+    /// <code>
+    ///   기준●────────────▶●  ← 여기가 답(링 위)
+    ///          클릭 방향
+    /// </code>
+    ///
+    /// <para>★<b>기준점이 링 위에 있을 때</b>를 조심한다 — 그 자리(거리 0)를 답으로 주면
+    /// 선이 길이 0이 되어 아무 데도 못 간다. <paramref name="minDist"/>보다 가까운 것은 건너뛴다.</para></summary>
+    /// <param name="ring">닫힌 링(데이라잇 경계).</param>
+    /// <param name="minDist">이보다 가까운 교점은 무시한다(m). 기준점이 링 위일 때 쓰는 문턱.</param>
+    /// <param name="dist">기준점에서 만난 자리까지의 거리(m).</param>
+    public static bool RayRingHit(IReadOnlyList<Point3>? ring,
+        double ox, double oy, double dx, double dy,
+        out double hx, out double hy, out double dist, double minDist = 1e-6)
+    {
+        hx = ox; hy = oy; dist = 0;
+        if (ring == null || ring.Count < 2) return false;
+        double L = Math.Sqrt(dx * dx + dy * dy);
+        if (L < 1e-12) return false;
+        dx /= L; dy /= L;
+        double best = double.MaxValue;
+        int n = ring.Count;
+        for (int i = 0; i < n; i++)
+        {
+            var a = ring[i]; var b = ring[(i + 1) % n];
+            double ex = b.X - a.X, ey = b.Y - a.Y;
+            double den = dx * ey - dy * ex;
+            if (Math.Abs(den) < 1e-15) continue;              // 나란하다 — 안 만난다
+            double qx = a.X - ox, qy = a.Y - oy;
+            double t = (qx * ey - qy * ex) / den;              // 광선 위 거리
+            double u = (qx * dy - qy * dx) / den;              // 변 위 위치(0~1)
+            if (t < minDist || u < -1e-9 || u > 1 + 1e-9) continue;
+            if (t < best) { best = t; hx = ox + dx * t; hy = oy + dy * t; }
+        }
+        if (best == double.MaxValue) return false;
+        dist = best;
+        return true;
+    }
+
+    /// <summary>★★★[검토 0917 · 치명] <b>그 선이 링 안에 있는가</b>까지 본다.
+    ///
+    /// <para><see cref="RayRingHit"/>은 「앞쪽에서 가장 가까운 교점」만 준다 —
+    /// <b>기준점과 그 교점 사이가 안인지는 안 본다</b>. 그 성질은 기준점이 <b>안</b>에 있을 때만 성립하는데,
+    /// 이 명령은 <b>두 번째 클릭부터 기준점이 언제나 경계 위</b>다.</para>
+    ///
+    /// <para><b>검토 실측</b>: ㄷ자 링에서 기준점 (60,70)(변 위) · 방향 (−1,0) →
+    /// 착지 (40,70) · <b>20m짜리 선이 전 구간 밖</b>이었다.
+    /// JACK이 못 박은 <i>"무조건 데이라잇 경계 안에서만"</i>이 안 지켜지고 있었다.</para>
+    ///
+    /// <para>가운데 한 점으로 묻는다 — 선이 링을 들락거리면 그 사이에 또 교점이 있어야 하는데
+    /// <see cref="RayRingHit"/>이 <b>가장 가까운</b> 것을 주므로, 가운데가 안이면 선 전체가 안이다.</para></summary>
+    public static bool RayRingHitInside(IReadOnlyList<Point3>? ring,
+        double ox, double oy, double dx, double dy,
+        out double hx, out double hy, out double dist, double minDist = 1e-6)
+    {
+        if (!RayRingHit(ring, ox, oy, dx, dy, out hx, out hy, out dist, minDist)) return false;
+        if (PointInRing(ring, (ox + hx) * 0.5, (oy + hy) * 0.5)) return true;
+        hx = ox; hy = oy; dist = 0;
+        return false;                       // 밖으로 나가는 선 — 답이 아니다
+    }
+
+    /// <summary>★★★[JACK 0917] <b>노선 안쪽으로는 못 그린다.</b>
+    ///
+    /// <para>JACK: <i>"구간 노선의 <b>직각방향을 기준으로 노선 안쪽으로는 못 그리게</b> 한계를 두어 줘.
+    /// 예를 들어 ㄷ자에서 <b>안쪽으로 더 못 들어오게</b> 해 줘."</i></para>
+    ///
+    /// <para>구간선이 <b>울타리</b>다. 그 선의 바깥쪽 법선 <paramref name="nx"/>,<paramref name="ny"/>과
+    /// 견줘 <b>안쪽을 향하면 답을 주지 않는다</b>. 선을 따라 나란히 가는 것(내적 0)도 막는다 —
+    /// 그러면 넓이가 없는 살점만 나온다.</para>
+    ///
+    /// <code>
+    ///      ↑ n(바깥)        허용 ○
+    ///   ━━━━━━━━━━━━  ← 구간선(울타리)
+    ///                     금지 ✕  (ㄷ자 안뜰 쪽)
+    /// </code></summary>
+    /// <param name="nx">구간선의 <b>바깥쪽</b> 법선(길이는 상관없다).</param>
+    public static bool RayRingHitOutward(IReadOnlyList<Point3>? ring,
+        double ox, double oy, double dx, double dy, double nx, double ny,
+        out double hx, out double hy, out double dist, double minDist = 1e-6)
+    {
+        hx = ox; hy = oy; dist = 0;
+        double dl = Math.Sqrt(dx * dx + dy * dy), nl = Math.Sqrt(nx * nx + ny * ny);
+        if (dl < 1e-12) return false;
+        if (nl > 1e-12 && (dx * nx + dy * ny) / (dl * nl) <= 1e-9) return false;   // 안쪽이다
+        return RayRingHitInside(ring, ox, oy, dx, dy, out hx, out hy, out dist, minDist);
+    }
+
+    /// <summary>★★★[JACK 0918] <b>폴리곤에서 「선에 가까운 자리」를 빼고 남는 테두리.</b>
+    ///
+    /// <para><c>줄 = (폴리곤 ⊖ shrink) − (옹벽선 버퍼 d)</c>.
+    /// 코너 트림도 겹침 정리도 NTS가 <b>스스로</b> 한다 — 점마다 밀면 못 하던 것들이다.</para></summary>
+    /// <param name="line">옹벽이 서는 <b>열린 선</b>.</param>
+    /// <param name="dist">그 선에서 <b>이만큼</b> 떨어진 자리만 남긴다(m).</param>
+    /// <param name="shrink">폴리곤 전체를 <b>이만큼</b> 줄인다(m) — 위아래 줄이 평면에서 겹치지 않게.</param>
+    public static List<Point3>? PolyMinusLineBuffer(IReadOnlyList<Point3>? poly,
+        IReadOnlyList<Point3>? line, double dist, double shrink, double z)
+    {
+        if (poly == null || poly.Count < 3) return null;
+        try
+        {
+            var gf = NtsFactory();
+            Geometry? g = NtsSupport.ToCleanGeometry(poly, gf);
+            if (g == null || g.IsEmpty) return null;
+            if (shrink > 1e-9) { try { var e = g.Buffer(-shrink); if (e != null && !e.IsEmpty) g = e; } catch { } }
+            if (dist > 1e-9 && line != null && line.Count >= 2)
+            {
+                var cs = new List<Coordinate>();
+                foreach (var q in line)
+                {
+                    if (cs.Count > 0)
+                    {
+                        var l = cs[cs.Count - 1];
+                        if (Math.Abs(l.X - q.X) < 1e-9 && Math.Abs(l.Y - q.Y) < 1e-9) continue;
+                    }
+                    cs.Add(new Coordinate(q.X, q.Y));
+                }
+                if (cs.Count >= 2)
+                {
+                    var ls = gf.CreateLineString(cs.ToArray());
+                    var bp = new NetTopologySuite.Operation.Buffer.BufferParameters
+                    { EndCapStyle = NetTopologySuite.Operation.Buffer.EndCapStyle.Flat };
+                    Geometry buf = ls.Buffer(dist, bp);
+                    try { g = g.Difference(buf); } catch { }
+                }
+            }
+            if (g == null || g.IsEmpty) return null;
+            Polygon? big = null;
+            for (int i = 0; i < g.NumGeometries; i++)
+                if (g.GetGeometryN(i) is Polygon pg && (big == null || pg.Area > big.Area)) big = pg;
+            if (big == null || big.IsEmpty || big.Area < 0.01) return null;
+            var pts = new List<Point3>();
+            foreach (var c in big.ExteriorRing.Coordinates)
+            {
+                if (pts.Count > 0)
+                {
+                    var l = pts[pts.Count - 1];
+                    if (Math.Abs(l.X - c.X) < 1e-9 && Math.Abs(l.Y - c.Y) < 1e-9) continue;
+                }
+                pts.Add(new Point3(c.X, c.Y, z));
+            }
+            if (pts.Count >= 2)
+            {
+                var f = pts[0]; var lN = pts[pts.Count - 1];
+                if (Math.Abs(f.X - lN.X) < 1e-9 && Math.Abs(f.Y - lN.Y) < 1e-9) pts.RemoveAt(pts.Count - 1);
+            }
+            return pts.Count >= 3 ? pts : null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>★★★[하네스 S136] 제 몸을 지르는 링을 <b>성하게</b> 만든다(가장 넓은 조각의 테두리).
+    ///
+    /// <para><b>왜 필요한가.</b> 점마다 법선으로 미는 방식은 <b>코너에서 겹침을 못 잘라낸다</b> —
+    /// 물러난 거리가 점 간격보다 크면 두 변의 offset 선이 <b>코너를 넘어 서로를 지나간다</b>
+    /// (실측: 점 간격 2m · 물러남 2.10m에서 8줄 중 4줄이 질렀다).
+    /// 마이터로 꼭짓점을 옮겨도 <b>이웃 마디의 overshoot은 그대로</b>라 안 풀린다.</para>
+    ///
+    /// <para>NTS는 겹친 자리를 <b>스스로 정리</b>한다 — 데이라잇을 두를 때 쓴 것과 같은 처방이다.</para></summary>
+    public static List<Point3>? CleanRingNts(IReadOnlyList<Point3>? ring, double z)
+    {
+        if (ring == null || ring.Count < 3) return null;
+        try
+        {
+            var g = NtsSupport.ToCleanGeometry(ring, NtsFactory());
+            if (g == null || g.IsEmpty) return null;
+            Polygon? big = null;
+            for (int i = 0; i < g.NumGeometries; i++)
+                if (g.GetGeometryN(i) is Polygon pg && (big == null || pg.Area > big.Area)) big = pg;
+            if (big == null || big.IsEmpty) return null;
+            var pts = new List<Point3>();
+            foreach (var c in big.ExteriorRing.Coordinates)
+            {
+                if (pts.Count > 0)
+                {
+                    var l = pts[pts.Count - 1];
+                    if (Math.Abs(l.X - c.X) < 1e-9 && Math.Abs(l.Y - c.Y) < 1e-9) continue;
+                }
+                pts.Add(new Point3(c.X, c.Y, z));
+            }
+            if (pts.Count >= 2)
+            {
+                var f = pts[0]; var lN = pts[pts.Count - 1];
+                if (Math.Abs(f.X - lN.X) < 1e-9 && Math.Abs(f.Y - lN.Y) < 1e-9) pts.RemoveAt(pts.Count - 1);
+            }
+            return pts.Count >= 3 ? pts : null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>점이 링 <b>안</b>에 있는가(짝수-홀수 셈).</summary>
+    public static bool PointInRing(IReadOnlyList<Point3>? ring, double x, double y)
+    {
+        if (ring == null || ring.Count < 3) return false;
+        bool inside = false;
+        int n = ring.Count;
+        for (int i = 0, j = n - 1; i < n; j = i++)
+        {
+            double xi = ring[i].X, yi = ring[i].Y, xj = ring[j].X, yj = ring[j].Y;
+            if ((yi > y) != (yj > y)
+             && x < (xj - xi) * (y - yi) / (yj - yi + (Math.Abs(yj - yi) < 1e-300 ? 1e-300 : 0)) + xi)
+                inside = !inside;
+        }
+        return inside;
+    }
+
+    /// <summary>★★★[JACK 0917 스샷 <i>"이런 경우 폴리곤이 데이라잇 안에 들어와 버려"</i>]
+    /// <b>데이라잇을 따라 바깥으로 두르는 길.</b>
+    ///
+    /// <para><b>왜 필요한가.</b> 시점·종점을 데이라잇 밖에 잡아도 <b>그 둘을 이은 직선</b>은
+    /// 데이라잇이 가운데서 부풀어 있으면 <b>안으로 파고든다</b>. 그러면 폴리곤이 데이라잇 띠를
+    /// 다 품지 못하고, 그 폴리곤으로 옹벽을 치면 모자란 자리가 생긴다.</para>
+    ///
+    /// <code>
+    ///   ✕ 직선으로 이으면          ○ 데이라잇을 따라 두르면
+    ///     시점●────────●종점         시점●─╮      ╭─●종점
+    ///          ╲ 데이라잇 ╱               │  데이라잇 │  (+여유)
+    ///           ╲______╱                 ╰────────╯
+    /// </code>
+    ///
+    /// <para><b>어느 쪽 호인가.</b> 두 점이 링을 두 갈래로 가른다. 구간선에 <b>가까운</b> 쪽을 고른다 —
+    /// 먼 쪽을 고르면 부지를 한 바퀴 감싼다.</para></summary>
+    /// <param name="ring">데이라잇 경계.</param>
+    /// <param name="aX">시작 자리(링 위 또는 그 부근).</param>
+    /// <param name="bX">끝 자리.</param>
+    /// <param name="nearX">구간선의 어느 점 — 이쪽에 가까운 호를 고른다.</param>
+    /// <param name="out_">바깥으로 밀 거리(m). 0이면 안 민다.</param>
+    /// <summary>★[JACK 0917] <b>펴는 세기</b> — 여유의 몇 배만큼 부풀렸다 오므리나.
+    /// <para>이만큼보다 <b>좁은 홈은 메워진다</b>. 0.5면 여유 10m에서 5m짜리 홈까지 메운다.</para></summary>
+    private const double SmoothFrac = 0.5;
+
+    /// <summary>★[JACK 0917] <b>점 솎는 문턱</b> — 여유의 몇 배(최소 0.2m).
+    /// <para>솎은 선이 원래 데이라잇을 <b>품지 못하면 안 쓴다</b>.</para></summary>
+    private const double SimplifyFrac = 0.05;
+
+    /// <summary>★[하네스 S135] 두른 선을 <b>이 간격으로 촘촘히</b> 한다(m).
+    /// <para>편 뒤에는 점이 확 줄어 변 하나가 껑충 뛴다 — 그 긴 변이 경계 주입 때 삼각망을 흔든다.</para></summary>
+    private const double ArcStep = 2.0;
+
+    public static List<Point3> RingArcOutward(IReadOnlyList<Point3>? ring,
+        double aX, double aY, double bX, double bY, double nearX, double nearY, double out_)
+    {
+        var res = new List<Point3>();
+        if (ring == null || ring.Count < 3) return res;
+        double z = ring[0].Z;
+
+        // ══ ★★★[JACK 0917 로그 <i>"제 몸을 지르지 않는가 <b>아니오</b>"</i>] ═══════════════
+        //
+        //   <para><b>점마다 법선으로 미는 것은 틀렸다.</b> 링이 촘촘하고 오목한 데가 있으면
+        //   그 밀기가 <b>서로 겹쳐 접힌다</b> — 현장 실측: 두른 점 266개로 만든 폴리곤이
+        //   <b>제 몸을 질렀고</b>, 그래서 관문에 걸려 계산한 띠로 물러났다
+        //   (JACK: <i>"그냥 선택 노선의 직각방향으로만 생성돼"</i>).</para>
+        //
+        //   <para>→ <b>NTS 버퍼</b>에 맡긴다. 버퍼는 접히는 자리를 <b>스스로 정리</b>해
+        //   언제나 <b>성한 폴리곤</b>을 준다. 그 테두리에서 호를 뜬다.</para>
+        var work = ring;
+        if (out_ > 1e-9)
+        {
+            try
+            {
+                var gf = NtsFactory();
+                var g0 = NtsSupport.ToCleanGeometry(ring, gf);
+                if (g0 != null && !g0.IsEmpty)
+                {
+                    // ══ ★★★[JACK 0917 <i>"데이라잇선이 <b>거칠어서</b> 문제가 될 수 있으니깐
+                    //   되도록 <b>펴서</b> 복제하는 걸로 할 수 있어?"</i>] ═══════════════════════
+                    //
+                    //   <para>맞는 지적이다. 데이라잇은 <b>삼각망 교선</b>에서 나온 선이라 결이 거칠다 —
+                    //   이 저장소가 잰 값으로도 변 길이가 25cm 미만인 것이 수십 개다.
+                    //   그대로 복제하면 그 거친 결이 <b>옹벽 벽면</b>이 된다.</para>
+                    //
+                    //   <para>★<b>부풀렸다 오므린다</b>(모폴로지 닫기). <c>d+s</c>만큼 부풀리고 <c>s</c>만큼 오므리면
+                    //   <b>s보다 좁은 홈이 메워진다</b>. 그리고 그 결과는 <c>Buffer(d)</c>를 <b>품는다</b> —
+                    //   즉 <b>안으로 파고들 수가 없다</b>(닫기의 성질).</para>
+                    //
+                    //   <code>
+                    //     원래 데이라잇  ∿∿∿∿∿∿∿   거친 결
+                    //     +d+s 부풀림    ▁▁▁▁▁▁▁   홈이 덮인다
+                    //     −s   오므림    ─────── ← 편 선, 그래도 +d 바깥
+                    //   </code>
+                    //
+                    //   <para>그 뒤 <b>점을 솎는다</b>(더글러스-포이커). 솎은 선이 원래 데이라잇을
+                    //   여전히 품는지 <b>확인하고</b> 쓴다 — 안 품으면 솎기 전 것을 쓴다.</para>
+                    double sm = Math.Max(0, out_ * SmoothFrac);
+                    Geometry bf;
+                    try
+                    {
+                        bf = sm > 1e-9 ? g0.Buffer(out_ + sm).Buffer(-sm) : g0.Buffer(out_);
+                        if (bf == null || bf.IsEmpty) bf = g0.Buffer(out_);
+                    }
+                    catch { bf = g0.Buffer(out_); }
+                    // ★솎기 — 품는지 재고 나서 쓴다
+                    try
+                    {
+                        double tol = Math.Max(0.2, out_ * SimplifyFrac);
+                        var sp = NetTopologySuite.Simplify.TopologyPreservingSimplifier.Simplify(bf, tol);
+                        if (sp != null && !sp.IsEmpty && sp.Covers(g0)) bf = sp;
+                    }
+                    catch { }
+                    Polygon? big = null;
+                    for (int i = 0; i < bf.NumGeometries; i++)
+                        if (bf.GetGeometryN(i) is Polygon pg && (big == null || pg.Area > big.Area)) big = pg;
+                    if (big != null && !big.IsEmpty)
+                    {
+                        var pts = new List<Point3>();
+                        foreach (var c in big.ExteriorRing.Coordinates)
+                        {
+                            if (pts.Count > 0)
+                            {
+                                var l = pts[pts.Count - 1];
+                                if (Math.Abs(l.X - c.X) < 1e-9 && Math.Abs(l.Y - c.Y) < 1e-9) continue;
+                            }
+                            pts.Add(new Point3(c.X, c.Y, z));
+                        }
+                        // 닫음점 중복 제거
+                        if (pts.Count >= 2)
+                        {
+                            var f0 = pts[0]; var lN = pts[pts.Count - 1];
+                            if (Math.Abs(f0.X - lN.X) < 1e-9 && Math.Abs(f0.Y - lN.Y) < 1e-9)
+                                pts.RemoveAt(pts.Count - 1);
+                        }
+                        if (pts.Count >= 3) work = pts;
+                    }
+                }
+            }
+            catch { /* 버퍼가 안 되면 원래 링에서 호만 뜬다(밀지 않음) */ }
+        }
+        int n = work.Count;
+
+        static int Nearest(IReadOnlyList<Point3> r, double x, double y)
+        {
+            int bi = 0; double bd = double.MaxValue;
+            for (int i = 0; i < r.Count; i++)
+            {
+                double dx = r[i].X - x, dy = r[i].Y - y, d2 = dx * dx + dy * dy;
+                if (d2 < bd) { bd = d2; bi = i; }
+            }
+            return bi;
+        }
+        int i0 = Nearest(work, aX, aY), i1 = Nearest(work, bX, bY);
+
+        // 두 갈래를 만들어, 가운데가 <b>구간선에 가까운</b> 쪽을 고른다
+        List<int> Walk(int from, int to)
+        {
+            var idx = new List<int>();
+            int i = from;
+            for (int guard = 0; guard <= n; guard++)
+            {
+                idx.Add(i);
+                if (i == to) break;
+                i = (i + 1) % n;
+            }
+            return idx;
+        }
+        var fwd = Walk(i0, i1);
+        var bwd = Walk(i1, i0);
+        bwd.Reverse();                                  // 둘 다 i0 → i1 차례로 본다
+        double Score(List<int> idx)
+        {
+            var m = work[idx[idx.Count / 2]];
+            double dx = m.X - nearX, dy = m.Y - nearY;
+            return dx * dx + dy * dy;
+        }
+        var pick = Score(fwd) <= Score(bwd) ? fwd : bwd;
+        foreach (int i in pick) res.Add(new Point3(work[i].X, work[i].Y, z));
+        // ★[하네스 S135] 편 뒤에는 점이 <b>확 줄어든다</b>(1887° → 0°, 360점 → 1점).
+        //   매끈한 건 좋지만 점이 둘뿐이면 <b>변 하나가 껑충 뛴다</b> —
+        //   경계로 주입할 때 그 긴 변이 삼각망을 흔든다. 그래서 <b>일정 간격으로 촘촘히</b> 한다.
+        //   (편 선에 점을 더하는 것이므로 <b>거칠어지지 않는다</b> — 같은 선 위의 점이다.)
+        if (res.Count >= 2) res = Densify(res, ArcStep);
+        return res;
+    }
+
     /// <summary>★★[검토 0916 · 높음4] 링의 <b>NTS 넓이</b> — 신발끈이 아니라 <b>자르고 빼는 데 쓰는 잣대</b>.
     ///
     /// <para><b>왜 둘을 섞으면 안 되나.</b> 신발끈은 제 몸을 지르는 링에서 <b>서로 상쇄</b>된다 —

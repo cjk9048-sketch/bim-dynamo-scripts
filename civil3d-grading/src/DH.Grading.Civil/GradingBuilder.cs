@@ -2070,6 +2070,30 @@ public static class GradingBuilder
         return id;
     }
 
+    /// <summary>★[JACK 0917] 레이어를 <b>끈다</b>(Off) — <b>지우지 않는다</b>.
+    /// <para>껐다는 뜻으로 <c>true</c>, 그런 레이어가 없으면 <c>false</c>.
+    /// 지우는 것과 다르다 — 켜면 그대로 있다.</para></summary>
+    internal static bool SetLayerOff(Database db, Transaction tr, string layerName)
+    {
+        var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+        if (!lt.Has(layerName)) return false;
+        var ltr = (LayerTableRecord)tr.GetObject(lt[layerName], OpenMode.ForWrite);
+        if (ltr.IsOff) return false;
+        ltr.IsOff = true;
+        return true;
+    }
+
+    /// <summary>★[JACK 0917] 레이어를 <b>켠다</b>(On). 그런 레이어가 없으면 <c>false</c>.</summary>
+    internal static bool SetLayerOn(Database db, Transaction tr, string layerName)
+    {
+        var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+        if (!lt.Has(layerName)) return false;
+        var ltr = (LayerTableRecord)tr.GetObject(lt[layerName], OpenMode.ForWrite);
+        if (!ltr.IsOff) return false;
+        ltr.IsOff = false;
+        return true;
+    }
+
     internal static void EraseOnLayer(Database db, Transaction tr, string layerName)
     {
         var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);

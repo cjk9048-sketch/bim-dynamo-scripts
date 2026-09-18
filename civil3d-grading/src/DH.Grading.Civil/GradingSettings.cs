@@ -25,7 +25,7 @@ public static class GradingSettings
     /// <b>같은 번호를 단 빌드가 여러 개</b>가 되어, 어느 것이 깔렸는지 물으면 답할 수가 없었다.</para>
     /// <para><c>x.0</c> = 화면·명령이 바뀌어 <b>사용자가 다르게 일하게</b> 되는 판 ·
     /// <c>x.y</c> = 같은 화면에서 결함을 고친 판.</para></summary>
-    public const string Version = "v96.8 (2026-09-17)";
+    public const string Version = "v99.7 (2026-09-18)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -168,6 +168,54 @@ public static class GradingSettings
     /// <para>폭 = 「남은 단수 × (단높이 × 구배 + 소단폭)」 + <b>이 값</b>.
     /// 데이라잇이 계산보다 조금 더 나가도 폴리곤 <b>안에 들어오게</b> 하는 몫이다.</para></summary>
     public static double WallPolygonMargin = 10.0;
+
+    /// <summary>★★★[JACK 0917] <b>손으로 그린 옹벽 폴리곤</b> — 있으면 계산한 띠 대신 이것을 쓴다.
+    ///
+    /// <para>구간을 고르고 Enter를 치면 <see cref="Commands.WallPolyDraw"/>가 화면에서 받아 여기 담고,
+    /// 정지면 만들기가 <b>꺼내 쓰고 비운다</b>(한 번 쓰면 사라진다 —
+    /// 안 비우면 다음 실행이 <b>지난번에 그린 것</b>을 제 것인 양 쓴다).</para>
+    ///
+    /// <para><b>왜 손으로 받나.</b> 계산식은 구간선 <b>위 한 점</b>만 보므로 바깥으로 갈수록
+    /// 땅이 더 오르면 모자란다 — 0917 실측: 계산 3단 vs 땅 4단(8.5m 부족, 여유 10m가 겨우 덮었다).</para></summary>
+    public static System.Collections.Generic.List<Point3>? WallPolyManual;
+
+    /// <summary>★[검토 0917 · 높음] 그 폴리곤을 <b>어느 도면에서</b> 그렸나.
+    /// <para>이 설정은 프로세스 전역이다 — A도면에서 그리고 B도면에서 만들면
+    /// <b>A의 좌표</b>가 넘어간다(<see cref="PickMark"/>가 같은 까닭으로 도면을 달고 있다).</para></summary>
+    public static string WallPolyManualDoc = "";
+
+    /// <summary>★[JACK 0918] 그 폴리곤에서 <b>옹벽이 서는 선</b>(열린 선).
+    /// <para>JACK: <i>"<b>선택구간</b>, 비스듬히 선택하는 구간 <b>시종점 2곳 선분</b>만 옹벽,
+    /// 나머지 폴리곤을 닫기 위한 선분은 <b>설정에 관계없이 수직</b>으로 침."</i></para>
+    /// <para>즉 측선 → 선택구간 → 측선이고, <b>폐합면은 안 들어간다</b>.</para></summary>
+    public static System.Collections.Generic.List<Point3>? WallPolyChain;
+
+    /// <summary>★[JACK 0918] 폴리곤 <b>점마다</b> — 여기가 옹벽 변인가.
+    /// <para>참이면 줄이 단마다 안쪽으로 물러나고(옹벽), 거짓이면 <b>제자리에서 수직</b>으로 올라간다(폐합면).
+    /// <see cref="WallPolyManual"/>과 <b>길이가 같다</b>.</para></summary>
+    public static System.Collections.Generic.List<bool>? WallPolyIsWall;
+
+    /// <summary>★[검토 0917 · 높음] <b>담는다</b> — 도면 이름을 같이 적어 둔다.</summary>
+    public static void SetWallPolyManual(System.Collections.Generic.List<Point3>? ring, string docName,
+                                        System.Collections.Generic.List<Point3>? chain = null,
+                                        System.Collections.Generic.List<bool>? isWall = null)
+    { WallPolyManual = ring; WallPolyManualDoc = docName ?? ""; WallPolyChain = chain; WallPolyIsWall = isWall; }
+
+    /// <summary>★[검토 0917 · 높음] <b>꺼내면서 비운다.</b> 도면이 다르면 <c>null</c>을 주고 <b>왜인지</b> 적는다.
+    ///
+    /// <para><b>왜 꺼내기와 비우기를 붙였나.</b> 종전엔 읽고 비우는 자리가 한 곳뿐이라,
+    /// 그 길로 안 가면(<c>WallPolygonOnly</c>가 꺼졌거나 · 그려 놓고 생성을 안 돌렸거나 · 도중에 터졌거나)
+    /// <b>정적에 그대로 남아</b> 다음 실행이 지난번 그림을 제 것인 양 썼다.</para></summary>
+    public static System.Collections.Generic.List<Point3>? TakeWallPolyManual(string docName, out string why)
+    {
+        var r = WallPolyManual; string d = WallPolyManualDoc;
+        WallPolyManual = null; WallPolyManualDoc = "";      // ★꺼내는 순간 비운다 — 어느 길로 오든
+        if (r == null || r.Count < 3) { why = ""; return null; }
+        if (!string.IsNullOrEmpty(d) && !string.Equals(d, docName ?? "", System.StringComparison.OrdinalIgnoreCase))
+        { why = $"    ⚠<b>손으로 그린 폴리곤을 버렸다</b> — 그린 도면({d})과 지금 도면({docName})이 다르다\n"; return null; }
+        why = "";
+        return r;
+    }
 
     /// <summary>★[JACK 0914] 옹벽 전환에서 만드는 <b>조각 표면의 최대 개수</b>(벽·뚜껑 각각).
     /// <c>CreateGradingCommand</c>와 <c>ResetCommand</c>가 <b>같은 값을 보게</b> 여기 둔다 —

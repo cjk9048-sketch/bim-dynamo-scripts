@@ -589,6 +589,8 @@ internal static class ZoneEditCommon
                     }
                 }
 
+                // ★[JACK 0917] 고르는 <b>동안에만</b> 보인다 — 끝나면 <c>RestoreAndCleanup</c>이 끈다.
+                try { GradingBuilder.SetLayerOn(db, tr, "DH-옹벽선"); } catch { }
                 GradingBuilder.SetLayersColor(db, tr, new[] { "DH-옹벽선" }, GradingBuilder.EdgePickAci); // 시안 강조
                 tr.Commit();
             }
@@ -944,6 +946,83 @@ internal static class ZoneEditCommon
             {
                 ed.WriteMessage(finishedByEnter ? $"\n[{cmdLabel}] 선택 없음 — 변경 없이 종료." : $"\n[{cmdLabel}] 취소.");
                 return;
+            }
+
+            // ══ ★★★[JACK 0917] <b>여기서 폴리곤을 손으로 그린다.</b> ═══════════════════
+            //
+            //   <para>JACK: <i>"옹벽구간 선택하고 엔터나 스페이스바 누르면 처음 찍은 지점이 고정된 상태로
+            //   다음 클릭하는 쪽으로 직선을 그리게 해줘. … 닫아서 폴리곤 만드는 걸로 바꿔줘."</i></para>
+            //
+            //   <para>선은 <b>데이라잇 경계 안에서만</b> 간다. 그 경계는 번들의 <b>클립링</b>이다 —
+            //   «표면이 <b>실제로</b> 존재하는 범위»라 정지면을 다시 만들지 않고도 읽을 수 있다.</para>
+            //
+            //   <para>★<b>못 그려도 막지 않는다.</b> 취소하거나 점이 모자라면 계산한 띠로 물러난다 —
+            //   폴리곤 하나 때문에 옹벽 변환이 통째로 멈출 이유가 없다.</para>
+            GradingSettings.SetWallPolyManual(null, "");
+            // ★★★[JACK 0918 <i>"선택구간 말고 <b>전체구간</b>을 해도 시점·종점 선택하는 게 뜨는데 그건 아니야.
+            //   전체구간 선택 시는 <b>기존 로직처럼</b> 되어야 해"</i>]
+            //   <para><b>부분 지정일 때만</b> 손으로 그린다. 전체구간은 손도 안 댄다 —
+            //   이 저장소가 0915에 이미 못 박은 규칙이다(<c>SlopeZone.Partial</c>이 그래서 있다):
+            //   <i>"전체구간 변환 기능은 이전이랑 동일해야 해."</i></para>
+            //   <para>정지면 쪽은 이미 그 문이 있었는데(<c>IsWall</c>이 <c>Partial</c>을 본다)
+            //   <b>화면 입력만 문 없이 끼어들고</b> 있었다 — 그래서 전체구간인데도 시점·종점을 물었다.</para>
+            bool drawPart = wallMode && pick != null && partArc.ContainsKey(pick.Value);
+            if (wallMode && pick != null && !drawPart)
+                Log("  전이면 폴리곤 — <b>안 그린다</b>(전체구간 변환이다 — 종전 길로 간다)");
+            if (drawPart && region != null)
+            {
+                var dayR = pick.Value.up ? region.CutClipRing : region.FillClipRing;
+                if (dayR == null || dayR.Count < 3)
+                    dayR = pick.Value.up ? region.CutFinalRing : region.FillFinalRing;
+                if (dayR != null && dayR.Count >= 3 && boundaryRef != null)
+                {
+                    // ★★[검토 0917 · 높음] <b>그 선의 자</b>로 잰다.
+                    //   <c>lineArc</c>/<c>partArc</c>의 T는 <b>계단링</b>(<c>lineRef</c>) 위 호길이다 —
+                    //   계획경계와 <b>둘레가 달라</b> 같은 T0가 딴 자리를 가리킨다.
+                    //   이 파일의 다른 여덟 자리는 전부 <c>lineRef</c>를 먼저 본다(:363 :664 :753 …).
+                    // ★★[검토 0917 · 높음] <b>그 선의 자</b>로 잰다 — <c>lineArc</c>의 T는 계단링 위 호길이다.
+                    var rulA = lineRef.TryGetValue(pick.Value, out var rpA) ? rpA : boundaryRef;
+                    var cumA = GradingGeometry.CumLen2D(rulA);
+                    bool isPartA = partArc.TryGetValue(pick.Value, out var pArcA);
+                    var arcA = isPartA ? pArcA : lineArc[pick.Value];
+
+                    // ★★★[JACK 0917] 고른 구간을 <b>점들로</b> 떠서 넘긴다 — 그것이 폴리곤의 <b>안쪽 변</b>이고,
+                    //   화면에 <b>두꺼운 빨강</b>으로 보여 줄 선이다(JACK: <i>"구간 선정 시 두꺼운 빨간 선이 보여야 해"</i>).
+                    double rTotA = cumA[cumA.Length - 1];
+                    double spanA = arcA.T1 >= arcA.T0 ? arcA.T1 - arcA.T0 : rTotA - arcA.T0 + arcA.T1;
+                    int nSegA = System.Math.Max(2, (int)System.Math.Ceiling(spanA / 1.0));
+                    var segA = new System.Collections.Generic.List<Point3>();
+                    for (int i5 = 0; i5 <= nSegA; i5++)
+                    {
+                        double tA = arcA.T0 + spanA * i5 / nSegA;
+                        segA.Add(GradingGeometry.PointAtParam(rulA, cumA, ((tA % rTotA) + rTotA) % rTotA));
+                    }
+                    // ★★★[JACK 0917] 구간선의 <b>바깥쪽 법선</b>을 양 끝에서 재 넘긴다 —
+                    //   그 반대쪽(노선 안쪽 · ㄷ자 안뜰)으로는 못 그리게 하는 울타리다.
+                    //   <c>OutwardAt</c>이 반시계 링의 <b>바깥</b>을 주므로 그 차이가 곧 법선이다.
+                    (double X, double Y) Nrm(double tt)
+                    {
+                        double tw = ((tt % rTotA) + rTotA) % rTotA;
+                        var o = GradingGeometry.PointAtParam(rulA, cumA, tw);
+                        var q = GradingGeometry.OutwardAt(rulA, cumA, tw, 1.0);
+                        return (q.X - o.X, q.Y - o.Y);
+                    }
+                    ed.WriteMessage($"\n[{cmdLabel}] 폴리곤을 그립니다 — 구간(빨간 굵은 선)의 양 끝에서"
+                        + " 시점과 종점을 차례로 찍으세요. 노선 안쪽으로는 안 그려집니다. (Esc=계산한 띠로)");
+                    var poly = WallPolyDraw.Run(doc, dayR, segA, Nrm(arcA.T0), Nrm(arcA.T1),
+                                                out var wchain, out var wflag, out string plog);
+                    Log(plog);
+                    if (poly != null && poly.Count >= 3)
+                    {
+                        GradingSettings.SetWallPolyManual(poly, doc.Name, wchain, wflag);
+                        ed.WriteMessage($"\n[{cmdLabel}] 폴리곤 {poly.Count}점 — 이것으로 만듭니다.");
+                    }
+                    else
+                        ed.WriteMessage($"\n[{cmdLabel}] 손으로 그린 폴리곤이 없어 <b>계산한 띠</b>로 갑니다."
+                            .Replace("<b>", "").Replace("</b>", ""));
+                }
+                else
+                    Log("  ⚠데이라잇 경계(클립링)가 번들에 없다 — 손으로 그리기를 건너뛴다(계산한 띠로).");
             }
 
             // ★[JACK 0824] 단높이는 아래 루프가 정지옵션을 고치므로 **고치기 전에** 지금 값을 떠 둔다 —
@@ -1319,6 +1398,12 @@ internal static class ZoneEditCommon
             if (_restoreLines != null && _restoreLines.Count > 0)
                 GradingBuilder.DrawWallLines(db, tr, _restoreLines);
             GradingBuilder.SetLayersColor(db, tr, new[] { "DH-옹벽선" }, 1);
+            // ★★★[JACK 0917 <i>"빨간 소단선 안 없어져. 이건 <b>변환 기능을 쓸 때만</b> 보여야 해"</i>]
+            //   <b>고르기가 끝나면 끈다.</b> 여태 색만 빨강으로 되돌리고 <b>켜 둔 채</b> 나갔다 —
+            //   그래서 변환이 끝난 뒤에도 소단 자리마다 빨간 선이 남아 있었다.
+            //   <b>지우지 않는다</b> — 표시만 끄므로 레이어를 켜면 그대로 있고,
+            //   다음에 고르기를 시작할 때 <see cref="GradingBuilder.SetLayerOn"/>이 도로 켠다.
+            try { GradingBuilder.SetLayerOff(db, tr, "DH-옹벽선"); } catch { }
             tr.Commit();
             _restoreLines = null;
         }

@@ -12648,6 +12648,808 @@ static Coordinate[] CloseXY(IReadOnlyList<Point3> r)
     Check("S130 ★띠가 만들어진다", nBand >= 4, $"{nBand}장");
 }
 
+// ── S131 ★★★[JACK 0917] <b>광선이 데이라잇에 닿는 자리</b>(RayRingHit) ──
+//
+//   <para>JACK: <i>"처음 찍은 지점이 고정된 상태로 다음 클릭하는 쪽으로 직선을 그리게 해줘.
+//   직선의 범위 무조건 해당 계획부지의 <b>데이라잇 경계 안에서만</b> 그려져야 해."</i></para>
+//
+//   <para>화면에서 마우스를 따라가는 그 선의 <b>끝을 정하는 셈</b>이다.
+//   여기가 틀리면 선이 경계를 뚫고 나가거나, 길이 0이 되어 아무 데도 못 간다.</para>
+{
+    Console.WriteLine("\n== S131 광선이 데이라잇에 닿는 자리(RayRingHit) ==");
+    // 한 변 100m 네모(0,0)-(100,100)
+    var box = new List<Point3> { new Point3(0, 0, 0), new Point3(100, 0, 0),
+                                 new Point3(100, 100, 0), new Point3(0, 100, 0) };
+
+    // ★0 안쪽에서 바깥으로 — 이론값과 맞는가
+    {
+        bool ok = GradingGeometry.RayRingHit(box, 50, 50, 1, 0, out double hx, out double hy, out double d);
+        Check("S131 ★오른쪽으로 쏘면 x=100에서 만난다", ok && Math.Abs(hx - 100) < 1e-9 && Math.Abs(hy - 50) < 1e-9
+              && Math.Abs(d - 50) < 1e-9, $"({hx:F3},{hy:F3}) 거리 {d:F3}");
+        ok = GradingGeometry.RayRingHit(box, 50, 50, 0, -1, out hx, out hy, out d);
+        Check("S131 ★아래로 쏘면 y=0에서 만난다", ok && Math.Abs(hy) < 1e-9 && Math.Abs(d - 50) < 1e-9,
+              $"({hx:F3},{hy:F3}) 거리 {d:F3}");
+        ok = GradingGeometry.RayRingHit(box, 50, 50, 1, 1, out hx, out hy, out d);
+        Check("S131 ★비스듬히 쏘면 모서리(100,100)", ok && Math.Abs(hx - 100) < 1e-6 && Math.Abs(hy - 100) < 1e-6,
+              $"({hx:F3},{hy:F3}) 거리 {d:F3}");
+    }
+
+    // ★1 ★★★<b>가장 가까운 것</b>을 고른다 — 뒤쪽 변까지 뚫고 가지 않는다
+    {
+        bool ok = GradingGeometry.RayRingHit(box, 10, 50, 1, 0, out double hx, out double hy, out double d);
+        Check("S131 ★★★<b>가장 가까운 변</b>에서 멈춘다(x=100이지 그 너머가 아니다)",
+              ok && Math.Abs(hx - 100) < 1e-9 && Math.Abs(d - 90) < 1e-9, $"x={hx:F3} 거리 {d:F3}");
+    }
+
+    // ★2 ★★★<b>기준점이 경계 위</b>일 때 — 길이 0을 답이라고 하지 않는다
+    {
+        bool ok = GradingGeometry.RayRingHit(box, 0, 50, 1, 0, out double hx, out double hy, out double d, 1e-6);
+        Console.WriteLine($"      S131 [경계 위에서 안쪽으로] ({hx:F2},{hy:F2}) 거리 {d:F2}");
+        Check("S131 ★★★경계 위에서 쏴도 <b>반대편</b>까지 간다(길이 0이 아니다)",
+              ok && Math.Abs(hx - 100) < 1e-9 && d > 99, $"x={hx:F3} 거리 {d:F3}");
+    }
+
+    // ★3 <b>뒤로는 안 간다</b> — 광선이지 직선이 아니다
+    {
+        bool ok = GradingGeometry.RayRingHit(box, 50, 50, -1, 0, out double hx, out double hy, out double d);
+        Check("S131 ★반대로 쏘면 <b>반대쪽</b> 변에서 만난다(뒤가 아니다)",
+              ok && Math.Abs(hx) < 1e-9 && Math.Abs(d - 50) < 1e-9, $"x={hx:F3} 거리 {d:F3}");
+    }
+
+    // ★4 <b>바깥에서 쏘면</b> — 링을 향하면 만나고, 등지면 못 만난다
+    {
+        bool ok1 = GradingGeometry.RayRingHit(box, -50, 50, 1, 0, out double hx1, out _, out double d1);
+        bool ok2 = GradingGeometry.RayRingHit(box, -50, 50, -1, 0, out _, out _, out _);
+        Check("S131 ★바깥에서 링을 향하면 <b>가까운 변</b>(x=0)에서 만난다",
+              ok1 && Math.Abs(hx1) < 1e-9 && Math.Abs(d1 - 50) < 1e-9, $"x={hx1:F3} 거리 {d1:F3}");
+        Check("S131 ★링을 등지면 <b>못 만난다</b>", !ok2, ok2 ? "만났다(틀림)" : "안 만남");
+    }
+
+    // ★5 <b>오목한 링</b>(ㄷ자) — 안뜰을 가로질러 엉뚱한 변을 잡지 않는다
+    {
+        //  ㄷ자: (0,0)-(100,0)-(100,100)-(60,100)-(60,40)-(40,40)-(40,100)-(0,100)
+        var u = new List<Point3> {
+            new Point3(0,0,0), new Point3(100,0,0), new Point3(100,100,0), new Point3(60,100,0),
+            new Point3(60,40,0), new Point3(40,40,0), new Point3(40,100,0), new Point3(0,100,0) };
+        bool ok = GradingGeometry.RayRingHit(u, 50, 20, 0, 1, out double hx, out double hy, out double d);
+        Check("S131 ★★★오목한 링 — 위로 쏘면 <b>안뜰 바닥(y=40)</b>에서 멈춘다",
+              ok && Math.Abs(hy - 40) < 1e-9 && Math.Abs(d - 20) < 1e-9, $"y={hy:F3} 거리 {d:F3}");
+        Check("S131 ★안·밖 판정", GradingGeometry.PointInRing(u, 50, 20)
+              && !GradingGeometry.PointInRing(u, 50, 70) && !GradingGeometry.PointInRing(u, -5, 50),
+              $"안(50,20)={GradingGeometry.PointInRing(u, 50, 20)} · 안뜰(50,70)={GradingGeometry.PointInRing(u, 50, 70)}");
+    }
+
+    // ★7 ★★★[검토 0917 · 치명] <b>선이 링 밖으로 나가면 답이 아니다</b>
+    //
+    //   <para>JACK이 못 박은 조건: <i>"직선의 범위 <b>무조건</b> 해당 계획부지의 데이라잇 경계 <b>안에서만</b>"</i>.
+    //   그런데 <c>RayRingHit</c>은 「앞쪽에서 가장 가까운 교점」만 준다 —
+    //   <b>기준점과 그 교점 사이가 안인지는 안 본다</b>.</para>
+    //
+    //   <para>그 성질은 기준점이 <b>안</b>일 때만 성립하는데, 이 명령은
+    //   <b>두 번째 클릭부터 기준점이 언제나 경계 위</b>다 — 바로 그 자리가 위험하다.</para>
+    //
+    //   <para><b>검토 실측</b>: ㄷ자 링 · 기준 (60,70)(변 위) · 방향 (−1,0)
+    //   → 착지 (40,70) · <b>20m짜리 선이 전 구간 밖</b>이었다.</para>
+    {
+        var u2 = new List<Point3> {
+            new Point3(0,0,0), new Point3(100,0,0), new Point3(100,100,0), new Point3(60,100,0),
+            new Point3(60,40,0), new Point3(40,40,0), new Point3(40,100,0), new Point3(0,100,0) };
+
+        // (가) 옛 셈 — 밖으로 나가는 선을 답이라고 준다(이 검사가 뜻이 있음을 보인다)
+        bool old1 = GradingGeometry.RayRingHit(u2, 60, 70, -1, 0, out double ox1, out double oy1, out double od1);
+        bool midIn = GradingGeometry.PointInRing(u2, (60 + ox1) * 0.5, (70 + oy1) * 0.5);
+        Console.WriteLine($"      S131 [안뜰 변 위에서 가로지르기] 옛 셈 = {(old1 ? "답을 줌" : "안 줌")}"
+                        + $" ({ox1:F2},{oy1:F2}) 거리 {od1:F2}m · 가운데가 링 안? <b>{(midIn ? "예" : "아니오")}</b>");
+        Check("S131 ★이 검사가 <b>뜻이 있다</b> — 옛 셈은 <b>밖으로 나가는 선</b>을 답이라 했다",
+              old1 && !midIn, $"거리 {od1:F2}m · 가운데 안? {midIn}");
+
+        // (나) 새 셈 — 안 준다
+        bool neo = GradingGeometry.RayRingHitInside(u2, 60, 70, -1, 0, out _, out _, out double nd);
+        Check("S131 ★★★<b>밖으로 나가는 선은 안 준다</b>", !neo, neo ? $"줬다({nd:F2}m)" : "안 줌");
+
+        // (다) 진짜 안쪽 방향은 그대로 준다 — 과잉 차단이 아님을 보인다
+        bool inOk = GradingGeometry.RayRingHitInside(u2, 60, 70, 1, 0, out double ix, out _, out double idd);
+        Check("S131 ★안쪽으로 가는 선은 <b>그대로 준다</b>(과잉 차단 아님)",
+              inOk && Math.Abs(ix - 100) < 1e-9 && Math.Abs(idd - 40) < 1e-9, $"x={ix:F2} 거리 {idd:F2}");
+
+        // (라) 링 <b>밖</b>에서 쏘는 것도 막는다 — 착지는 하지만 선이 전부 밖이다
+        bool outside = GradingGeometry.RayRingHitInside(u2, -30, 50, 1, 0, out _, out _, out _);
+        Check("S131 ★★★링 <b>밖</b>에서 쏘면 안 준다(선이 전부 밖이다)", !outside,
+              outside ? "줬다(틀림)" : "안 줌");
+
+        // (마) 네모에서는 종전과 똑같이 동작한다
+        bool box1 = GradingGeometry.RayRingHitInside(box, 50, 50, 1, 0, out double bx, out _, out double bd);
+        Check("S131 ★네모 안에서는 <b>종전과 같다</b>", box1 && Math.Abs(bx - 100) < 1e-9 && Math.Abs(bd - 50) < 1e-9,
+              $"x={bx:F2} 거리 {bd:F2}");
+    }
+
+    // ★8 ★★★[JACK 0917] <b>노선 안쪽으로는 못 그린다</b>(RayRingHitOutward)
+    //
+    //   <para>JACK: <i>"구간 노선의 <b>직각방향을 기준으로 노선 안쪽으로는 못 그리게</b> 한계를 두어 줘.
+    //   예를 들어 ㄷ자에서 <b>안쪽으로 더 못 들어오게</b>."</i></para>
+    //
+    //   <para>구간선이 울타리다. 바깥쪽 법선과 견줘 안쪽을 향하면 답을 주지 않는다.
+    //   선을 따라 나란히 가는 것(내적 0)도 막는다 — 넓이 없는 살점만 나오므로.</para>
+    {
+        // 구간선이 y=50 위에 놓였다고 보고, 바깥쪽 법선은 +y 라 하자.
+        double nx = 0, ny = 1;
+        bool up   = GradingGeometry.RayRingHitOutward(box, 50, 50, 0,  1, nx, ny, out _, out double uy, out double ud);
+        bool down = GradingGeometry.RayRingHitOutward(box, 50, 50, 0, -1, nx, ny, out _, out _, out _);
+        bool side = GradingGeometry.RayRingHitOutward(box, 50, 50, 1,  0, nx, ny, out _, out _, out _);
+        bool diagUp = GradingGeometry.RayRingHitOutward(box, 50, 50, 1,  1, nx, ny, out _, out _, out double dd);
+        bool diagDn = GradingGeometry.RayRingHitOutward(box, 50, 50, 1, -1, nx, ny, out _, out _, out _);
+        Console.WriteLine($"      S131 [울타리] 바깥(+y)={up} · 안쪽(−y)={down} · 나란히(+x)={side}"
+                        + $" · 비스듬바깥={diagUp} · 비스듬안쪽={diagDn}");
+        Check("S131 ★바깥으로는 <b>그려진다</b>(y=100까지)", up && Math.Abs(uy - 100) < 1e-9 && Math.Abs(ud - 50) < 1e-9,
+              $"y={uy:F2} 거리 {ud:F2}");
+        Check("S131 ★★★<b>안쪽으로는 못 그린다</b>", !down, down ? "그려졌다(틀림)" : "안 그려짐");
+        Check("S131 ★★★<b>노선과 나란히도 못 그린다</b>(넓이 없는 살점 방지)", !side, side ? "그려졌다(틀림)" : "안 그려짐");
+        Check("S131 ★비스듬히 <b>바깥</b>이면 그려진다", diagUp && dd > 1, $"거리 {dd:F2}");
+        Check("S131 ★비스듬히 <b>안쪽</b>이면 안 그려진다", !diagDn, diagDn ? "그려졌다(틀림)" : "안 그려짐");
+
+        // 법선을 안 주면(0,0) 울타리 없이 종전과 같다 — 물러나는 길이 막히지 않는가
+        bool noN = GradingGeometry.RayRingHitOutward(box, 50, 50, 0, -1, 0, 0, out _, out _, out _);
+        Check("S131 ★법선이 없으면 <b>울타리 없이</b> 종전과 같다", noN, noN ? "그려짐" : "막혔다(틀림)");
+
+        // ㄷ자 — 안뜰로 못 들어오는지(안뜰 쪽 법선을 주고 안뜰을 향해 쏜다)
+        var u3 = new List<Point3> {
+            new Point3(0,0,0), new Point3(100,0,0), new Point3(100,100,0), new Point3(60,100,0),
+            new Point3(60,40,0), new Point3(40,40,0), new Point3(40,100,0), new Point3(0,100,0) };
+        bool court = GradingGeometry.RayRingHitOutward(u3, 50, 20, 0, 1, 0, -1, out _, out _, out _);
+        Check("S131 ★★★ㄷ자 — <b>안뜰 쪽으로는 못 들어온다</b>", !court, court ? "들어왔다(틀림)" : "막힘");
+    }
+
+    // ★6 <b>길이 0 방향</b>·<b>빈 링</b> — 터지지 않는다
+    {
+        Check("S131 ★방향이 0이면 못 만났다고 한다",
+              !GradingGeometry.RayRingHit(box, 50, 50, 0, 0, out _, out _, out _), "-");
+        Check("S131 ★링이 없으면 못 만났다고 한다",
+              !GradingGeometry.RayRingHit(null, 50, 50, 1, 0, out _, out _, out _), "-");
+    }
+}
+
+// ── S134 ★★★[JACK 0917 스샷 <i>"이런 경우 폴리곤이 데이라잇 안에 들어와 버려"</i>] ──
+//
+//   <para>시점·종점을 데이라잇 <b>밖</b>에 잡아도, 그 둘을 <b>직선</b>으로 이으면
+//   데이라잇이 가운데서 부풀어 있으면 <b>안으로 파고든다</b>.
+//   그러면 폴리곤이 데이라잇 띠를 다 못 품고 그 자리에 옹벽이 모자란다.</para>
+//
+//   <para>여기서는 <b>부푼 데이라잇</b>을 만들어 ①직선으로 이으면 정말 파고드는지 재고,
+//   ②<c>RingArcOutward</c>로 두르면 안 파고드는지 잰다.</para>
+{
+    Console.WriteLine("\n== S134 폴리곤이 데이라잇 안으로 파고들지 않는가 ==");
+    static double Ar(IReadOnlyList<Point3> r) => Math.Abs(Shoelace(r));
+
+    // 데이라잇 — 서쪽(x가 작은 쪽)으로 <b>부푼</b> 고리.
+    //   구간선은 x=100 위에 세로로 있다고 본다.
+    var day = new List<Point3>();
+    for (int i = 0; i <= 72; i++)
+    {
+        double th = -System.Math.PI / 2 + System.Math.PI * i / 72;   // 아래 → 위(서쪽 반원)
+        double bulge = 40 + 25 * System.Math.Cos(th);                 // 가운데가 더 부푼다
+        day.Add(new Point3(100 - bulge * System.Math.Cos(th), 100 + 100 * System.Math.Sin(th), 0));
+    }
+    day.Add(new Point3(100, 200, 0)); day.Add(new Point3(160, 200, 0));
+    day.Add(new Point3(160, 0, 0));   day.Add(new Point3(100, 0, 0));
+
+    // 구간선 — x=100, y=20..180
+    var seg = new List<Point3>();
+    for (double y = 20; y <= 180.001; y += 5) seg.Add(new Point3(100, y, 0));
+
+    // 시점·종점 = 구간 양 끝에서 서쪽으로 쏴 데이라잇 + 여유 10m
+    const double MG = 10.0;
+    Point3 Shoot(Point3 from)
+    {
+        bool ok = GradingGeometry.RayRingHitInside(day, from.X, from.Y, -1, 0,
+                      out double hx, out double hy, out double d, 0.05);
+        if (!ok) return from;
+        return new Point3(hx - MG, hy, 0);
+    }
+    var pEnd = Shoot(seg[seg.Count - 1]);   // 시점(위 끝)
+    var pStart = Shoot(seg[0]);             // 종점(아래 끝)
+
+    // ① 직선으로 이었을 때 — 파고드는가
+    {
+        var ring = new List<Point3>(seg) { pEnd, pStart };
+        int inside = 0, n = 0;
+        for (int i = 0; i <= 40; i++)   // 바깥 변(시점→종점) 위를 훑는다
+        {
+            double t = i / 40.0;
+            double x = pEnd.X + (pStart.X - pEnd.X) * t, y = pEnd.Y + (pStart.Y - pEnd.Y) * t;
+            n++;
+            if (GradingGeometry.PointInRing(day, x, y)) inside++;
+        }
+        Console.WriteLine($"      S134 [직선으로 이음] 바깥 변 {n}자리 중 <b>데이라잇 안 {inside}자리</b>"
+                        + $" · 넓이 {Ar(ring):F0}㎡");
+        Check("S134 ★이 검사가 <b>뜻이 있다</b> — 직선으로 이으면 데이라잇 안으로 파고든다",
+              inside > 0, $"파고든 자리 {inside}/{n}");
+    }
+
+    // ② 데이라잇을 따라 둘렀을 때 — 안 파고드는가
+    {
+        var mid = seg[seg.Count / 2];
+        var arc = GradingGeometry.RingArcOutward(day, pEnd.X + MG, pEnd.Y, pStart.X + MG, pStart.Y,
+                                                 mid.X, mid.Y, MG);
+        // ★바깥 변은 <b>한 줄</b>이다 — 시점·종점도 두르는 선의 첫 점·끝 점을 그대로 쓴다.
+        //   (광선 방향으로 밀고 법선으로 두르면 이음매에 홈이 생긴다 — 이 검사가 그것을 잡았다)
+        var ring = new List<Point3>(seg);
+        if (arc.Count >= 2)
+        {
+            double d0 = (arc[0].X - pEnd.X) * (arc[0].X - pEnd.X) + (arc[0].Y - pEnd.Y) * (arc[0].Y - pEnd.Y);
+            double dN = (arc[^1].X - pEnd.X) * (arc[^1].X - pEnd.X) + (arc[^1].Y - pEnd.Y) * (arc[^1].Y - pEnd.Y);
+            if (dN < d0) arc.Reverse();
+            ring.AddRange(arc);
+        }
+        // ★<b>폐합면(바깥 변)만</b> 본다.
+        //   <para>폴리곤은 네 변이다 — 선택선(안쪽) · <b>측선 둘</b> · 폐합면(바깥).
+        //   <b>측선은 데이라잇을 반드시 가로지른다</b> — 구간선까지 되돌아와야 하므로.
+        //   그것을 어긴 것으로 세면 <b>영원히 통과할 수 없는 잣대</b>가 된다(내 첫 잣대가 그랬다).</para>
+        int inside = 0, n = 0;
+        int arc0 = seg.Count, arcN = ring.Count - 1;   // 두르는 선이 차지한 구간
+        for (int i = arc0; i + 1 <= arcN; i++)
+        {
+            double x = (ring[i].X + ring[i + 1].X) * 0.5, y = (ring[i].Y + ring[i + 1].Y) * 0.5;
+            n++;
+            if (GradingGeometry.PointInRing(day, x, y)) inside++;
+        }
+        Console.WriteLine($"      S134 [데이라잇을 따라 두름] 두른 점 {arc.Count}개 · 바깥 변 {n}자리 중"
+                        + $" <b>데이라잇 안 {inside}자리</b> · 넓이 {Ar(ring):F0}㎡");
+        Check("S134 ★두르는 점이 만들어진다", arc.Count >= 10, $"{arc.Count}점");
+        Check("S134 ★★★<b>데이라잇 안으로 안 파고든다</b>", inside == 0, $"파고든 자리 {inside}/{n}");
+        // ★<b>내 잣대가 틀렸었다</b>: 이 폴리곤은 데이라잇 <b>서쪽 띠만</b> 덮으므로
+        //   고리 전체 넓이와 견줄 값이 아니다. 봐야 할 것은 「<b>구간선 앞의 데이라잇 띠를 다 품는가</b>」다.
+        //   구간선에서 서쪽으로 쏜 데이라잇 착지점들이 <b>전부 폴리곤 안</b>이어야 한다.
+        {
+            int covered = 0, tried = 0;
+            for (int i = 2; i + 2 < seg.Count; i++)
+            {
+                if (!GradingGeometry.RayRingHitInside(day, seg[i].X, seg[i].Y, -1, 0,
+                        out double hx, out double hy, out _, 0.05)) continue;
+                tried++;
+                // 데이라잇 바로 안쪽(1m)이 폴리곤 안이어야 한다
+                if (GradingGeometry.PointInRing(ring, hx + 1.0, hy)) covered++;
+            }
+            Check("S134 ★★★구간선 앞의 <b>데이라잇 띠를 다 품는다</b>", tried > 0 && covered == tried,
+                  $"{covered}/{tried}자리");
+        }
+        Check("S134 ★제 몸을 안 지른다", GradingGeometry.RingIsSimple(ring), "단순");
+    }
+}
+
+// ── S135 ★★★[JACK 0917 로그 <i>"제 몸을 지르지 않는가 <b>아니오</b>"</i>] ──
+//
+//   <para><b>현장 실측</b>: 데이라잇을 점마다 법선으로 10m 밀어 두른 점 266개로 폴리곤을 만들었는데
+//   <b>제 몸을 질렀다</b>. 관문이 그것을 걸러 계산한 띠로 물러났고, JACK 눈에는
+//   <i>"그냥 선택 노선의 직각방향으로만 생성돼"</i>로 보였다.</para>
+//
+//   <para>까닭: 링이 <b>촘촘하고 오목</b>하면 점마다 미는 밀기가 <b>서로 겹쳐 접힌다</b>.
+//   → NTS 버퍼에 맡기면 접히는 자리를 스스로 정리해 <b>언제나 성한 폴리곤</b>을 준다.</para>
+{
+    Console.WriteLine("\n== S135 두른 선이 제 몸을 지르지 않는가 ==");
+
+    // 현장을 닮은 링 — 촘촘하고(1도마다) 오목한 데가 여럿인 물결 고리
+    var wig = new List<Point3>();
+    for (int i = 0; i < 360; i++)
+    {
+        double th = i * System.Math.PI / 180.0;
+        // ★★<b>거칠기는 잔 떨림이다.</b> 처음엔 진폭 20m짜리 굴곡을 거칠기로 쟀는데
+        //   그건 거칠기가 아니라 <b>진짜 모양</b>이다 — 펴면 안 되는 것이다.
+        //   삼각망 교선에서 나온 데이라잇은 <b>큰 굴곡 + 잔 떨림</b>이다(이 저장소 실측:
+        //   클립링 163개 변 중 <b>158개가 1m 미만, 59개가 25cm 미만</b>).
+        //   그래서 큰 굴곡(진폭 14m)에 <b>잔 떨림(진폭 0.5m · 고주파)</b>을 얹어 시험한다.
+        double r = 60 + 14 * System.Math.Sin(5 * th)          // 진짜 모양 — 펴면 안 된다
+                      + 0.5 * System.Math.Sin(97 * th);       // 잔 떨림 — 이것이 거칠기다
+        wig.Add(new Point3(200 + r * System.Math.Cos(th), 200 + r * System.Math.Sin(th), 0));
+    }
+    Console.WriteLine($"      S135 링 {wig.Count}점 · 성한가 {GradingGeometry.RingIsSimple(wig)}");
+
+    // 옛 방식(점마다 법선으로 밀기)을 여기서 그대로 재현해 <b>정말 접히는지</b> 잰다
+    static List<Point3> OldOffset(IReadOnlyList<Point3> r, double d)
+    {
+        int n = r.Count; double a2 = 0;
+        for (int i = 0; i < n; i++) { var u = r[i]; var v = r[(i + 1) % n]; a2 += u.X * v.Y - v.X * u.Y; }
+        double sg = a2 > 0 ? 1.0 : -1.0;
+        var o = new List<Point3>();
+        for (int i = 0; i < n; i++)
+        {
+            var pv = r[(i - 1 + n) % n]; var nx = r[(i + 1) % n];
+            double tx = nx.X - pv.X, ty = nx.Y - pv.Y, tl = Math.Sqrt(tx * tx + ty * ty);
+            if (tl < 1e-12) { o.Add(r[i]); continue; }
+            o.Add(new Point3(r[i].X + sg * (ty / tl) * d, r[i].Y + sg * (-tx / tl) * d, 0));
+        }
+        return o;
+    }
+    var old = OldOffset(wig, 10.0);
+    bool oldSimple = GradingGeometry.RingIsSimple(old);
+    Console.WriteLine($"      S135 [옛 방식 · 점마다 법선] {old.Count}점 · 성한가 <b>{oldSimple}</b>");
+    Check("S135 ★이 검사가 <b>뜻이 있다</b> — 점마다 밀면 <b>제 몸을 지른다</b>", !oldSimple,
+          oldSimple ? "안 질렀다(이 링으론 재현 안 됨)" : "질렀다");
+
+    // 새 방식 — 호를 뜨고 버퍼로 민다
+    {
+        // 구간선은 서쪽에 세로로 있다고 보고, 서쪽 두 자리를 시점·종점으로
+        // ★<b>내 잣대가 좁았다</b>: 10도(약 10m)만 떨어진 두 점은 호가 짧아 점이 적은 게 당연하다.
+        //   현장 구간은 50m 어름이므로 그만큼 떨어뜨려 본다.
+        var a0 = wig[160]; var b0 = wig[200];
+        var arc = GradingGeometry.RingArcOutward(wig, a0.X, a0.Y, b0.X, b0.Y, 120, 200, 10.0);
+        Console.WriteLine($"      S135 [새 방식 · NTS 버퍼] 두른 점 {arc.Count}개");
+        Check("S135 ★두르는 점이 만들어진다", arc.Count >= 3, $"{arc.Count}점");
+
+        // 두른 선이 원래 링보다 <b>바깥</b>인가 — 점마다 링 밖이어야 한다
+        int outCnt = 0;
+        foreach (var q in arc) if (!GradingGeometry.PointInRing(wig, q.X, q.Y)) outCnt++;
+        Check("S135 ★★★두른 점이 <b>전부 링 밖</b>이다", arc.Count > 0 && outCnt == arc.Count,
+              $"{outCnt}/{arc.Count}");
+
+        // 이 호로 만든 폴리곤이 <b>성한가</b> — 구간선(직선)과 이어 닫아 본다
+        // ★구간선을 <b>고른 두 끝에 맞춰</b> 만든다 — 고정 좌표(x=120)로 두면
+        //   호를 넓게 잡은 뒤로는 구간선이 호와 엇갈려, <b>코드가 아니라 검사가</b> 틀린다.
+        var seg = new List<Point3>();
+        for (int i = 0; i <= 20; i++)
+            seg.Add(new Point3(a0.X + (b0.X - a0.X) * i / 20.0 + (200 - a0.X) * 0.35,
+                               a0.Y + (b0.Y - a0.Y) * i / 20.0 + (200 - a0.Y) * 0.35, 0));
+        var ring = new List<Point3>(seg);
+        double d0 = (arc[0].X - seg[^1].X) * (arc[0].X - seg[^1].X) + (arc[0].Y - seg[^1].Y) * (arc[0].Y - seg[^1].Y);
+        double dN = (arc[^1].X - seg[^1].X) * (arc[^1].X - seg[^1].X) + (arc[^1].Y - seg[^1].Y) * (arc[^1].Y - seg[^1].Y);
+        if (dN < d0) arc.Reverse();
+        ring.AddRange(arc);
+        Console.WriteLine($"      S135 [닫은 폴리곤] 꼭짓점 {ring.Count}개 · 넓이 {GradingGeometry.RingAreaNts(ring):F0}㎡");
+        Check("S135 ★★★닫은 폴리곤이 <b>제 몸을 안 지른다</b>", GradingGeometry.RingIsSimple(ring),
+              GradingGeometry.RingIsSimple(ring) ? "단순" : "질렀다");
+    }
+
+    // ★★★[JACK 0917 <i>"데이라잇선이 거칠어서 … 되도록 <b>펴서</b> 복제하는 걸로 할 수 있어?
+    //   그래야 나중에 <b>합성할 때도 지표면 오류가 덜</b> 날 거야"</i>]
+    //   <b>편 선이 (가) 더 매끈하고 (나) 그래도 데이라잇을 품는가.</b>
+    {
+        // 거칠기 — 이웃 세 점이 이루는 <b>꺾임 각</b>의 합(작을수록 매끈하다)
+        static double Rough(IReadOnlyList<Point3> r)
+        {
+            double t = 0;
+            for (int i = 1; i + 1 < r.Count; i++)
+            {
+                double ax = r[i].X - r[i - 1].X, ay = r[i].Y - r[i - 1].Y;
+                double bx = r[i + 1].X - r[i].X, by = r[i + 1].Y - r[i].Y;
+                double la = Math.Sqrt(ax * ax + ay * ay), lb = Math.Sqrt(bx * bx + by * by);
+                if (la < 1e-9 || lb < 1e-9) continue;
+                double c = Math.Max(-1, Math.Min(1, (ax * bx + ay * by) / (la * lb)));
+                t += Math.Abs(Math.Acos(c));
+            }
+            return t * 180.0 / Math.PI;
+        }
+        // ★★<b>내 검사가 눈이 멀어 있었다.</b> 이웃한 두 점(wig[0]·wig[359])을 끝으로 주니
+        //   호가 <b>1점</b>이 되어 «꺾임 0°»로 통과했다 — 아무것도 안 재고 통과한 것이다
+        //   (이 저장소가 「검사 입력은 출하 입력이어야 한다」로 정해 둔 바로 그 함정).
+        //   → <b>서쪽 반 바퀴</b>를 실제로 두르게 하고, <b>길이로 나눠</b>(100m당 꺾임) 견준다.
+        static double Len(IReadOnlyList<Point3> r)
+        {
+            double L = 0;
+            for (int i = 0; i + 1 < r.Count; i++)
+            { double dx = r[i + 1].X - r[i].X, dy = r[i + 1].Y - r[i].Y; L += Math.Sqrt(dx * dx + dy * dy); }
+            return L;
+        }
+        var half = new List<Point3>();
+        for (int i = 90; i <= 270; i++) half.Add(wig[i]);          // 원래 데이라잇의 서쪽 반
+        var whole = GradingGeometry.RingArcOutward(wig, wig[90].X, wig[90].Y, wig[270].X, wig[270].Y,
+                                                   0, 200, 10.0);
+        double lOld = Len(half), lNew = Len(whole);
+        double rOld = Rough(half) / Math.Max(1, lOld) * 100.0;     // 100m당 꺾임
+        double rNew = Rough(whole) / Math.Max(1, lNew) * 100.0;
+        Console.WriteLine($"      S135 [거칠기] 원래 데이라잇 {half.Count}점/{lOld:F0}m · <b>100m당 {rOld:F0}°</b>"
+                        + $"  →  편 선 {whole.Count}점/{lNew:F0}m · <b>100m당 {rNew:F0}°</b>");
+        Check("S135 ★이 검사가 <b>뜻이 있다</b> — 두른 선이 실제로 만들어졌다", whole.Count >= 20,
+              $"{whole.Count}점 · {lNew:F0}m");
+        Check("S135 ★★★<b>펴진다</b>(100m당 꺾임이 준다)", rNew < rOld * 0.7, $"{rOld:F0}° → {rNew:F0}°");
+        int outAll = 0;
+        foreach (var q in whole) if (!GradingGeometry.PointInRing(wig, q.X, q.Y)) outAll++;
+        Check("S135 ★★★펴도 <b>데이라잇을 품는다</b>(안으로 안 파고든다)",
+              whole.Count > 0 && outAll == whole.Count, $"{outAll}/{whole.Count} 밖");
+    }
+
+    // 여유 0이면 원래 링 위를 그대로 뜬다 — 버퍼를 건너뛴다
+    {
+        var arc0 = GradingGeometry.RingArcOutward(wig, wig[175].X, wig[175].Y, wig[185].X, wig[185].Y, 120, 200, 0.0);
+        // ★<b>내 잣대가 낡았다</b>: 촘촘히 하기를 넣은 뒤로는 점이 <b>꼭짓점</b>이 아니라
+        //   <b>변 위</b>에 앉는다. 재야 할 것은 「꼭짓점과 같은가」가 아니라 「<b>링 선에 붙어 있나</b>」다.
+        static double DistToPolyline(IReadOnlyList<Point3> r, double x, double y)
+        {
+            double best = double.MaxValue; int n = r.Count;
+            for (int i = 0; i < n; i++)
+            {
+                var a1 = r[i]; var b1 = r[(i + 1) % n];
+                double ex = b1.X - a1.X, ey = b1.Y - a1.Y, L2 = ex * ex + ey * ey;
+                double t = L2 < 1e-18 ? 0 : Math.Max(0, Math.Min(1, ((x - a1.X) * ex + (y - a1.Y) * ey) / L2));
+                double dx = x - (a1.X + ex * t), dy = y - (a1.Y + ey * t);
+                best = Math.Min(best, dx * dx + dy * dy);
+            }
+            return Math.Sqrt(best);
+        }
+        double worstOff = 0;
+        foreach (var q in arc0) worstOff = Math.Max(worstOff, DistToPolyline(wig, q.X, q.Y));
+        Check("S135 ★여유 0이면 <b>원래 링 선 위</b>를 그대로 뜬다", arc0.Count > 0 && worstOff < 1e-6,
+              $"{arc0.Count}점 · 링에서 최악 {worstOff:E1}m");
+    }
+}
+
+// ── S136 ★★★[JACK 0918] <b>폴리곤 안에 정형화된 가상 옹벽</b>(WallInPoly) ──
+//
+//   <para>JACK: <i>"안쪽 해당 폴리곤 안에 속하는 <b>원지반 높이보다 높은 단</b>
+//   (단높이는 매개변수에 따름)까지 가상 옹벽을 치는 걸 추가해."</i></para>
+//
+//   <para>여기서 재는 것: ①폴리곤 안 원지반 최고를 제대로 찾나 ②그것을 <b>넘는</b> 단수를 내나
+//   ③줄이 단마다 안쪽으로 물러나나 ④줄이 <b>폴리곤 밖으로 안 나가나</b>.</para>
+{
+    Console.WriteLine("\n== S136 폴리곤 안에 정형화된 가상 옹벽 ==");
+    // 폴리곤 — 가로 60m × 세로 40m 네모(안쪽 = +y 쪽)
+    var poly = new List<Point3> { new Point3(0, 0, 0), new Point3(60, 0, 0),
+                                  new Point3(60, 40, 0), new Point3(0, 40, 0) };
+    // 옹벽이 서는 열린 선 — 측선(x=0) → 선택구간(y=0) → 측선(x=60)
+    var chain = new List<Point3>();
+    for (double y = 30; y >= 0; y -= 2) chain.Add(new Point3(0, y, 105));
+    for (double x = 2; x <= 60; x += 2)  chain.Add(new Point3(x, 0, 105));
+    for (double y = 2; y <= 30; y += 2)  chain.Add(new Point3(60, y, 105));
+
+    // ★① 폴리곤 안 원지반 최고 — 가운데에 봉우리를 숨겨 둔다(테두리만 보면 못 찾는다)
+    {
+        Func<double, double, double?> g = (x, y) =>
+        {
+            double d = Math.Sqrt((x - 30) * (x - 30) + (y - 20) * (y - 20));
+            return 100.0 + Math.Max(0, 22.0 - d);          // 가운데 (30,20)에서 122m
+        };
+        double? top = WallInPoly.MaxGroundIn(poly, g, 2.0, out int hit, out int miss);
+        Console.WriteLine($"      S136 [원지반 최고] {top:F2}m · 잰 자리 {hit} · 못 잰 자리 {miss}");
+        Check("S136 ★★★<b>가운데 봉우리를 찾는다</b>(테두리만 보면 못 찾는다)",
+              top != null && Math.Abs(top.Value - 122.0) < 0.6, $"{top:F2}m(기대 122)");
+
+        // ★② 단수 — "보다 높은"이므로 넘을 때까지
+        int nb = WallInPoly.BenchCount(105.0, top!.Value, 5.0);
+        Console.WriteLine($"      S136 [단수] 찍은 선 105m → 원지반 최고 {top:F2}m · 단높이 5m → <b>{nb}단</b>"
+                        + $"(꼭대기 {105 + 5 * nb:F0}m)");
+        Check("S136 ★★★원지반을 <b>넘는</b> 단수를 낸다", 105 + 5.0 * nb > top.Value, $"{nb}단 → {105 + 5.0 * nb:F0}m");
+        Check("S136 ★넘치게 쌓지 않는다(한 단 덜면 못 넘는다)", 105 + 5.0 * (nb - 1) <= top.Value,
+              $"{nb - 1}단이면 {105 + 5.0 * (nb - 1):F0}m");
+    }
+
+    // ★<b>딱 떨어질 때</b> — 같은 높이면 한 단 더 쌓아야 "보다 높은"이 된다
+    {
+        int nb = WallInPoly.BenchCount(105.0, 120.0, 5.0);
+        Check("S136 ★★★딱 떨어지면 <b>한 단 더</b>(같은 높이는 '보다 높은'이 아니다)",
+              nb == 4 && 105 + 5.0 * nb > 120.0, $"{nb}단 → {105 + 5.0 * nb:F0}m(원지반 120m)");
+    }
+
+    // ★③④ 줄 만들기
+    {
+        var rows = WallInPoly.Rows(chain, poly, 105.0, 4, 5.0, 0.01, 1.0, 0.005, (0, 1), out string lg);
+        Console.WriteLine("      S136 " + lg);
+        Check("S136 ★한 단에 줄 둘 · 마지막 단은 면에서 끝", rows.Count == 1 + 4 * 2 - 1, $"{rows.Count}줄(기대 8)");
+
+        // 표고가 단마다 오르는가
+        bool zUp = true;
+        for (int i = 1; i < rows.Count; i++) if (rows[i][0].Z < rows[i - 1][0].Z - 1e-9) zUp = false;
+        Check("S136 ★표고가 <b>안 내려간다</b>", zUp, "오름차순");
+
+        // 줄이 <b>안쪽으로</b> 물러나는가 — 선택구간(y=0) 위의 점으로 잰다
+        double y0 = rows[0][rows[0].Count / 2].Y, yN = rows[rows.Count - 1][rows[rows.Count - 1].Count / 2].Y;
+        Console.WriteLine($"      S136 [물러남] 첫 줄 y={y0:F2} → 마지막 줄 y={yN:F2}(안쪽 = +y)");
+        Check("S136 ★★★줄이 단마다 <b>안쪽으로</b> 물러난다", yN > y0 + 1.0, $"{y0:F2} → {yN:F2}");
+
+        // <b>폴리곤 밖으로 안 나가나</b>
+        int outside = 0, total = 0;
+        foreach (var r in rows) foreach (var q in r)
+        { total++; if (!GradingGeometry.PointInRing(poly, q.X, q.Y)) outside++; }
+        Check("S136 ★★★줄이 <b>폴리곤 밖으로 안 나간다</b>", outside <= rows[0].Count,
+              $"밖 {outside}/{total}(첫 줄은 테두리 위라 셈에서 뺀다)");
+
+        // 한 단이 가는 거리 — 매개변수대로인가
+        double run = WallInPoly.StepRun(5.0, 0.01, 1.0, 0.005);
+        Check("S136 ★한 단이 가는 거리 = 단높이×구배 + 소단", Math.Abs(run - (5 * 0.01 + 1.0)) < 1e-9,
+              $"{run:F3}m");
+        double run0 = WallInPoly.StepRun(5.0, 0.0, 1.0, 0.005);
+        Check("S136 ★구배 0이어도 <b>면 폭이 0이 안 된다</b>(줄이 겹치지 않게)", run0 > 1.0, $"{run0:F4}m");
+    }
+
+    // ★★★[JACK 0918 스샷 <i>"옹벽 선택구간만 옹벽이 아니고 <b>시점 종점 연결선도 옹벽</b>이어야 해"</i>]
+    //   <b>측선에 점이 없으면 벽이 한쪽으로 쏠린다.</b>
+    //   <para>현장 실측: 옹벽이 서는 선 60점 중 <b>58점이 선택구간</b>이고 측선은 양 끝 1점씩이었다.
+    //   그러면 줄이 측선을 <b>따라갈 수가 없어</b> 벽이 쐐기처럼 나온다.</para>
+    {
+        // 측선을 <b>점 하나</b>로만 넣은 선(옛 판) vs <b>점을 깐</b> 선(지금)
+        var sparse = new List<Point3> { new Point3(0, 30, 105) };
+        for (double x = 0; x <= 60; x += 2) sparse.Add(new Point3(x, 0, 105));
+        sparse.Add(new Point3(60, 30, 105));
+
+        var dense = new List<Point3>();
+        for (double y = 30; y >= 2; y -= 2) dense.Add(new Point3(0, y, 105));
+        for (double x = 0; x <= 60; x += 2)  dense.Add(new Point3(x, 0, 105));
+        for (double y = 2; y <= 30; y += 2)  dense.Add(new Point3(60, y, 105));
+
+        // 측선 위(x≈0·x≈60, y가 큰 쪽)에서 <b>벽이 물러난 자취</b>가 있는가
+        static int OnSides(List<List<Point3>> rows)
+        {
+            int n = 0;
+            foreach (var r in rows)
+                foreach (var q in r)
+                    if (q.Y > 12 && (q.X < 12 || q.X > 48)) n++;   // 측선 어름
+            return n;
+        }
+        var rowsSparse = WallInPoly.Rows(sparse, poly, 105.0, 4, 5.0, 0.01, 1.0, 0.005, (0, 1), out _);
+        var rowsDense  = WallInPoly.Rows(dense,  poly, 105.0, 4, 5.0, 0.01, 1.0, 0.005, (0, 1), out string lg2);
+        int nS = OnSides(rowsSparse), nD = OnSides(rowsDense);
+        Console.WriteLine($"      S136 [측선] 점 하나짜리 측선 → 측선 어름 점 <b>{nS}개</b>"
+                        + $" · 점을 깐 측선 → <b>{nD}개</b>   ({lg2})");
+        Check("S136 ★이 검사가 <b>뜻이 있다</b> — 점 하나짜리 측선은 벽이 거의 안 선다", nS < nD / 3,
+              $"{nS} vs {nD}");
+        Check("S136 ★★★측선에 점을 깔면 <b>거기에도 벽이 선다</b>", nD > 60, $"측선 어름 {nD}점");
+    }
+
+    // ★★★[JACK 0918 스샷 <i>"<b>폴리곤대로 만들어지지 않았어</b>, 옹벽면만 만들어졌지.
+    //   시점·종점 연장선으로 닫은 부분은 <b>옹벽이 아닌 수직</b>으로 <b>같은 높이만큼</b> 올라가야지"</i>]
+    //   <b>닫힌 링으로 짓고, 변마다 규칙이 다른가.</b>
+    {
+        // 네모 폴리곤 — 아래·좌·우 세 변은 옹벽, <b>위 변(y=40)은 폐합면(수직)</b>
+        var ring = new List<Point3>();
+        var isW = new List<bool>();
+        void Push(double x, double y, bool w) { ring.Add(new Point3(x, y, 0)); isW.Add(w); }
+        for (double x = 0; x <= 60; x += 2) Push(x, 0, true);          // 선택구간
+        for (double y = 2; y <= 40; y += 2) Push(60, y, true);         // 측선
+        for (double x = 58; x >= 0; x -= 2) Push(x, 40, false);        // 폐합면 — <b>수직</b>
+        for (double y = 38; y >= 2; y -= 2) Push(0, y, true);          // 측선
+
+        var rows = WallInPoly.RowsInRing(ring, isW, 105.0, 4, 5.0, 0.01, 1.0, 0.005, out string lg3);
+        Console.WriteLine("      S136 " + lg3);
+        // ★<b>어느 줄부터 지르는지</b> 짚는다 — 경고만 보고 넘어가지 않는다
+        {
+            var bad = new List<int>();
+            for (int i = 0; i < rows.Count; i++) if (!GradingGeometry.RingIsSimple(rows[i])) bad.Add(i);
+            Console.WriteLine($"      S136 [성함] 줄 {rows.Count}개 중 제 몸을 지르는 줄 "
+                            + (bad.Count == 0 ? "<b>없음</b>" : $"<b>{bad.Count}개</b> — 번호 {string.Join(",", bad)}"));
+            // ★<b>어디서</b> 지르는지 짚는다 — 추측하지 않는다
+            if (bad.Count > 0)
+            {
+                var r = rows[bad[0]];
+                int m = r.Count, shown = 0;
+                for (int i = 0; i < m && shown < 3; i++)
+                    for (int j = i + 2; j < m && shown < 3; j++)
+                    {
+                        if (i == 0 && j == m - 1) continue;
+                        var p1 = r[i]; var p2 = r[(i + 1) % m];
+                        var q1 = r[j]; var q2 = r[(j + 1) % m];
+                        double d1 = (p2.X-p1.X)*(q1.Y-p1.Y)-(p2.Y-p1.Y)*(q1.X-p1.X);
+                        double d2 = (p2.X-p1.X)*(q2.Y-p1.Y)-(p2.Y-p1.Y)*(q2.X-p1.X);
+                        double d3 = (q2.X-q1.X)*(p1.Y-q1.Y)-(q2.Y-q1.Y)*(p1.X-q1.X);
+                        double d4 = (q2.X-q1.X)*(p2.Y-q1.Y)-(q2.Y-q1.Y)*(p2.X-q1.X);
+                        if (d1*d2 < 0 && d3*d4 < 0)
+                        {
+                            Console.WriteLine($"      S136   줄{bad[0]} 마디 {i}[({p1.X:F2},{p1.Y:F2})→({p2.X:F2},{p2.Y:F2})]"
+                                            + $" ✕ 마디 {j}[({q1.X:F2},{q1.Y:F2})→({q2.X:F2},{q2.Y:F2})]"
+                                            + $" · 옹벽? {isW[i]}/{isW[j]}");
+                            shown++;
+                        }
+                    }
+            }
+            Check("S136 ★★★<b>어느 줄도 제 몸을 안 지른다</b>", bad.Count == 0,
+                  bad.Count == 0 ? "전부 성함" : $"{bad.Count}개");
+        }
+        // ★<b>내 잣대가 낡았다</b>: 코너 겹침을 NTS로 정리하면 점 수가 달라진다.
+        //   재야 할 것은 「점 수가 같은가」가 아니라 「<b>닫힌 링이고 성한가</b>」다.
+        Check("S136 ★줄이 <b>성한 닫힌 링</b>이다", rows.Count > 0 && rows[^1].Count >= 4,
+              $"맨 위 줄 {(rows.Count > 0 ? rows[^1].Count : 0)}점(폴리곤 {ring.Count}점)");
+
+        // ★폐합면(y=40) 점은 <b>제자리</b>에 있어야 한다
+        // ★★<b>내 잣대가 또 낡았다</b>: NTS가 코너를 정리하면서 <b>일직선 위 중간 점들을 솎아낸다</b>.
+        //   그러면 폐합면 한가운데 점은 「가장 가까운 <b>꼭짓점</b>」이 멀어 보인다 —
+        //   선은 제자리인데도. 재야 할 것은 <b>선까지의 거리</b>다.
+        static double ToLine(IReadOnlyList<Point3> r, double x, double y)
+        {
+            double best = double.MaxValue; int m = r.Count;
+            for (int i = 0; i < m; i++)
+            {
+                var a1 = r[i]; var b1 = r[(i + 1) % m];
+                double ex = b1.X - a1.X, ey = b1.Y - a1.Y, L2 = ex * ex + ey * ey;
+                double t = L2 < 1e-18 ? 0 : Math.Max(0, Math.Min(1, ((x - a1.X) * ex + (y - a1.Y) * ey) / L2));
+                double dx = x - (a1.X + ex * t), dy = y - (a1.Y + ey * t);
+                best = Math.Min(best, dx * dx + dy * dy);
+            }
+            return Math.Sqrt(best);
+        }
+        // ★★<b>또 내 잣대가 셌다</b>: 옹벽이 물러나면 <b>폐합면의 양 끝 모서리를 깎아 들어간다</b> —
+        //   그건 틀린 게 아니라 <b>맞는 모양</b>이다(벽이 그만큼 파고든 자리다).
+        //   재야 할 것은 「모든 폐합면 점이 제자리」가 아니라
+        //   「<b>양 끝을 뺀 가운데</b>가 제자리」다. 끝에서 물러난 거리만큼을 뺀다.
+        double moveWall = 0, moveMid = 0, moveEnd = 0;
+        var top = rows[rows.Count - 1];
+        int firstV = -1, lastV = -1;
+        for (int i = 0; i < ring.Count; i++) if (!isW[i]) { if (firstV < 0) firstV = i; lastV = i; }
+        double eat = 4.53 + 1.0;                        // 물러난 거리 + 여유
+        for (int i = 0; i < ring.Count; i++)
+        {
+            double d = ToLine(top, ring[i].X, ring[i].Y);
+            if (isW[i]) { moveWall = Math.Max(moveWall, d); continue; }
+            // 양 끝에서 <b>먹힌 만큼</b> 떨어진 점만 "가운데"로 본다
+            double dFirst = Math.Sqrt((ring[i].X - ring[firstV].X) * (ring[i].X - ring[firstV].X)
+                                    + (ring[i].Y - ring[firstV].Y) * (ring[i].Y - ring[firstV].Y));
+            double dLast  = Math.Sqrt((ring[i].X - ring[lastV].X) * (ring[i].X - ring[lastV].X)
+                                    + (ring[i].Y - ring[lastV].Y) * (ring[i].Y - ring[lastV].Y));
+            if (dFirst > eat && dLast > eat) moveMid = Math.Max(moveMid, d);
+            else moveEnd = Math.Max(moveEnd, d);
+        }
+        Console.WriteLine($"      S136 [변마다] 맨 위 줄 — 옹벽 변 <b>{moveWall:F2}m</b> 물러남"
+                        + $" · 폐합면 <b>가운데 {moveMid:F2}m</b>(제자리여야) · <b>양 끝 {moveEnd:F2}m</b>(벽이 깎아 든 자리)");
+        Check("S136 ★★★폐합면 <b>가운데는 제자리</b>(수직으로만 오른다)", moveMid < 0.1, $"{moveMid:F3}m");
+
+        // ★★★[JACK 0918 스샷 <i>"수직 부분이 … <b>톱니처럼 깨지고</b>"</i>]
+        //   <b>진짜 수직(평면 폭 0)이면 TIN이 못 그린다.</b> 위아래 줄이 같은 자리라 넓이 0짜리 삼각형이 된다.
+        //   → 폐합면도 <b>줄마다 아주 조금</b> 밀려 있어야 한다(눈으로는 수직).
+        {
+            double worstSame = 0; int nSame = 0;
+            for (int r1 = 0; r1 + 1 < rows.Count; r1++)
+            {
+                var A = rows[r1]; var B = rows[r1 + 1];
+                // 같은 표고끼리(한 단의 두 줄) 폐합면 자리가 <b>겹치는가</b>
+                if (Math.Abs(A[0].Z - B[0].Z) > 1e-9) continue;
+                foreach (var qa in A)
+                {
+                    double best = double.MaxValue;
+                    foreach (var qb in B)
+                    { double dx = qb.X - qa.X, dy = qb.Y - qa.Y; best = Math.Min(best, dx * dx + dy * dy); }
+                    if (Math.Sqrt(best) < 1e-9) { nSame++; worstSame = Math.Max(worstSame, 0); }
+                }
+            }
+            // 위아래 줄이 <b>평면에서 얼마나 떨어져 있나</b> — 0이면 넓이 0짜리 삼각형이 난다
+            double minGap = double.MaxValue;
+            for (int r1 = 0; r1 + 1 < rows.Count; r1++)
+            {
+                var A = rows[r1]; var B = rows[r1 + 1];
+                double g = double.MaxValue;
+                foreach (var qa in A)
+                {
+                    double best = double.MaxValue;
+                    foreach (var qb in B)
+                    { double dx = qb.X - qa.X, dy = qb.Y - qa.Y; best = Math.Min(best, dx * dx + dy * dy); }
+                    g = Math.Min(g, Math.Sqrt(best));
+                }
+                minGap = Math.Min(minGap, g);
+            }
+            Console.WriteLine($"      S136 [수직부] 이웃한 두 줄이 평면에서 가장 가까운 거리 <b>{minGap:F4}m</b>"
+                            + $" · 완전히 겹친 점 {nSame}개");
+            Check("S136 ★★★폐합면이 <b>평면에서 폭 0이 아니다</b>(톱니 방지)", minGap > 1e-6 && nSame == 0,
+                  $"가장 가까운 {minGap:F4}m · 겹친 점 {nSame}");
+        }
+        Check("S136 ★폐합면 <b>양 끝은 벽이 깎아 든다</b>(그게 맞는 모양)", moveEnd > 0.1, $"{moveEnd:F2}m");
+        Check("S136 ★★★<b>옹벽 변은 물러난다</b>", moveWall > 3.0, $"{moveWall:F2}m");
+
+        // ★<b>같은 높이만큼</b> 올라가는가 — 폐합면도 꼭대기가 같아야 한다
+        double zTop = top[0].Z, zVert = 0; bool any = false;
+        for (int i = 0; i < ring.Count; i++) if (!isW[i]) { zVert = top[i].Z; any = true; break; }
+        Check("S136 ★★★폐합면도 <b>같은 높이</b>까지 오른다", any && Math.Abs(zVert - zTop) < 1e-9,
+              $"옹벽 {zTop:F2}m · 폐합면 {zVert:F2}m");
+    }
+
+    // ★<b>못 재는 원지반</b> — 터지지 않고 null
+    {
+        double? top = WallInPoly.MaxGroundIn(poly, (x, y) => null, 2.0, out int hit, out int miss);
+        Check("S136 ★원지반을 못 재면 <b>null</b>(0m라고 하지 않는다)", top == null && hit == 0 && miss > 0,
+              $"{(top == null ? "null" : top.ToString())} · 못 잰 자리 {miss}");
+    }
+}
+
+// ── S137 ★★★[JACK 0918 <i>"니가 보기엔 저게 좋아진 거냐? 스샷 다시 봐봐"</i>] ──
+//   <b>세 변(측선·선택구간·측선)에 <u>다</u> 단이 서는가.</b>
+//
+//   <para>스샷에서 <b>측선에는 단이 없고</b> 비탈 하나였는데 <b>로그엔 경고가 없었다</b> —
+//   로그가 <b>볼 줄 모르는 것</b>을 화면이 보여 주고 있었다. 그래서 여기서 잰다.</para>
+//
+//   <para>재는 법: 맨 위 줄이 옹벽선의 <b>세 토막</b>에서 각각 얼마나 떨어졌나.
+//   제대로 물러났으면 셋 다 「단수 × 한 단」에 가깝고, <b>안 물러난 토막은 0</b>이다.</para>
+{
+    Console.WriteLine("\n== S137 세 변에 다 단이 서는가 ==");
+    // 현장을 닮은 모양 — 선택구간이 길고(60m) 측선은 짧다(25m)
+    var poly = new List<Point3>();
+    var wall = new List<Point3>();
+    for (double x = 0; x <= 60; x += 1) { poly.Add(new Point3(x, 0, 0)); }          // 선택구간
+    for (double y = 1; y <= 25; y += 1) { poly.Add(new Point3(60, y, 0)); }         // 측선(시점 쪽)
+    for (double x = 59; x >= 0; x -= 1) { poly.Add(new Point3(x, 25 + 3 * Math.Sin(x / 8.0), 0)); } // 폐합면(물결)
+    for (double y = 24; y >= 1; y -= 1) { poly.Add(new Point3(0, y, 0)); }          // 측선(종점 쪽)
+    // 옹벽선 = 측선(종점) → 선택구간 → 측선(시점)
+    for (double y = 24; y >= 1; y -= 1) wall.Add(new Point3(0, y, 0));
+    for (double x = 0; x <= 60; x += 1)  wall.Add(new Point3(x, 0, 0));
+    for (double y = 1; y <= 25; y += 1)  wall.Add(new Point3(60, y, 0));
+
+    var rows = WallInPoly.RowsByBuffer(poly, wall, 105.0, 4, 5.0, 0.01, 1.0, 0.005, out string lg);
+    Console.WriteLine("      S137 " + lg);
+    Check("S137 ★줄이 만들어진다", rows.Count == 8, $"{rows.Count}줄(기대 8)");
+
+    // 맨 위 줄이 세 토막에서 얼마나 떨어졌나
+    static double NearTo(IReadOnlyList<Point3> pts, IReadOnlyList<Point3> row)
+    {
+        double best = double.MaxValue;
+        foreach (var q in pts)
+        {
+            double d = double.MaxValue;
+            for (int k = 0; k < row.Count; k++)
+            {
+                var a1 = row[k]; var b1 = row[(k + 1) % row.Count];
+                double ex = b1.X - a1.X, ey = b1.Y - a1.Y, L2 = ex * ex + ey * ey;
+                double t = L2 < 1e-18 ? 0 : Math.Max(0, Math.Min(1, ((q.X - a1.X) * ex + (q.Y - a1.Y) * ey) / L2));
+                double dx = q.X - (a1.X + ex * t), dy = q.Y - (a1.Y + ey * t);
+                d = Math.Min(d, dx * dx + dy * dy);
+            }
+            best = Math.Min(best, d);
+        }
+        return Math.Sqrt(best);
+    }
+    // ★★★[JACK 0918] <b>끝까지</b> 재는 잣대를 따로 둔다.
+    //   <para>종전엔 측선의 가운데(y 20~5)만 재서 3.20m가 나왔는데, 스샷에서는
+    //   <b>폐합면에 닿는 끝</b>이 램프로 뭉개져 있었다 — <b>하필 안 재던 자리</b>였다.
+    //   버퍼의 <b>평평한 끝마개</b> 탓이었고, 옹벽선을 늘여 뜨는 것으로 고쳤다.</para>
+    {
+        var endL = new List<Point3>(); for (double y = 24; y >= 21; y -= 0.5) endL.Add(new Point3(0, y, 0));
+        var endR = new List<Point3>(); for (double y = 21; y <= 24; y += 0.5) endR.Add(new Point3(60, y, 0));
+        double wantE = (5 * 0.01 + 1.0) * 3 + Math.Max(5 * 0.01, 0.005);
+        double eL = NearTo(endL, rows[rows.Count - 1]), eR = NearTo(endR, rows[rows.Count - 1]);
+        Console.WriteLine($"      S137 [끝자락] 폐합면에 닿는 측선 끝 — 왼 <b>{eL:F2}</b> · 오른 <b>{eR:F2}</b>m"
+                        + $" (기대 {wantE:F2}m)");
+        Check("S137 ★★★측선 <b>끝자락</b>에서도 물러난다(램프가 안 생긴다)",
+              eL > wantE * 0.8 && eR > wantE * 0.8, $"왼 {eL:F2} · 오른 {eR:F2}m");
+    }
+
+    var segL = new List<Point3>(); for (double y = 20; y >= 5; y -= 1) segL.Add(new Point3(0, y, 0));   // 측선(왼)
+    var segM = new List<Point3>(); for (double x = 10; x <= 50; x += 1) segM.Add(new Point3(x, 0, 0));  // 선택구간
+    var segR = new List<Point3>(); for (double y = 5; y <= 20; y += 1) segR.Add(new Point3(60, y, 0));  // 측선(오른)
+
+    double want = (5 * 0.01 + 1.0) * 3 + Math.Max(5 * 0.01, 0.005);   // 단수 4 → step*3 + face
+    var top = rows[rows.Count - 1];
+    double dL = NearTo(segL, top), dM = NearTo(segM, top), dR = NearTo(segR, top);
+    Console.WriteLine($"      S137 [물러남] 기대 {want:F2}m — 측선(왼) <b>{dL:F2}</b>"
+                    + $" · 선택구간 <b>{dM:F2}</b> · 측선(오른) <b>{dR:F2}</b>m");
+    Check("S137 ★★★<b>선택구간</b>에 단이 선다", dM > want * 0.8, $"{dM:F2}m(기대 {want:F2})");
+    Check("S137 ★★★<b>측선(왼)</b>에도 단이 선다", dL > want * 0.8, $"{dL:F2}m(기대 {want:F2})");
+    Check("S137 ★★★<b>측선(오른)</b>에도 단이 선다", dR > want * 0.8, $"{dR:F2}m(기대 {want:F2})");
+
+    // ★★★[JACK 0918 <i>"왜 좀더 <b>각이 좁은 쪽</b>은 저렇게 나오지?"</i>]
+    //   <b>좁은 각에서도 끝자락이 램프로 뭉개지지 않는가.</b>
+    //   <para>버퍼의 <b>평평한 끝마개</b> 탓에 끝에서 offset이 0으로 줄어드는데,
+    //   그 <b>줄어드는 구간의 길이가 각에 비례</b>한다 — 넓은 각은 짧아 안 보이고
+    //   <b>좁은 각은 길게 늘어져</b> 눈에 띈다. 그래서 한쪽만 이상해 보였다.</para>
+    {
+        // 측선이 폐합면과 <b>30도</b>로 만나는 모양(좁은 각)
+        var pl2 = new List<Point3>(); var wl2 = new List<Point3>();
+        for (double x = 0; x <= 60; x += 1) { pl2.Add(new Point3(x, 0, 0)); wl2.Add(new Point3(x, 0, 0)); }
+        // 오른쪽 측선을 비스듬히(30도) 올린다
+        for (double t = 1; t <= 30; t += 1)
+        { var q = new Point3(60 + t * Math.Cos(Math.PI / 6), t * Math.Sin(Math.PI / 6), 0); pl2.Add(q); wl2.Add(q); }
+        for (double x = 60 + 30 * Math.Cos(Math.PI / 6); x >= -20; x -= 1) pl2.Add(new Point3(x, 15 + 30 * Math.Sin(Math.PI / 6) - 15, 0));
+        for (double y = 14; y >= 1; y -= 1) pl2.Add(new Point3(-20, y, 0));
+        for (double t = 20; t >= 1; t -= 1) { }                 // 왼쪽은 단순하게 둔다
+        wl2.Reverse();                                          // 측선(오른) → 선택구간 차례로
+
+        var rows2 = WallInPoly.RowsByBuffer(pl2, wl2, 105.0, 4, 5.0, 0.01, 1.0, 0.005, out string lg2);
+        Console.WriteLine("      S137 [좁은 각] " + lg2);
+        if (rows2.Count >= 2)
+        {
+            // 좁은 각 측선의 <b>끝자락</b>(폐합면에 닿는 쪽)에서 물러났는가
+            var tip = new List<Point3>();
+            for (double t = 30; t >= 26; t -= 0.5)
+                tip.Add(new Point3(60 + t * Math.Cos(Math.PI / 6), t * Math.Sin(Math.PI / 6), 0));
+            double want2 = (5 * 0.01 + 1.0) * 3 + Math.Max(5 * 0.01, 0.005);
+            double e2 = NearTo(tip, rows2[rows2.Count - 1]);
+            Console.WriteLine($"      S137 [좁은 각] 30도 측선의 끝자락 물러남 <b>{e2:F2}m</b>(기대 {want2:F2}m)");
+            Check("S137 ★★★<b>좁은 각(30도)에서도</b> 끝자락이 물러난다", e2 > want2 * 0.7,
+                  $"{e2:F2}m(기대 {want2:F2})");
+        }
+        else Check("S137 ★좁은 각에서도 줄이 만들어진다", false, $"{rows2.Count}줄");
+    }
+
+    // 줄마다 넓이가 <b>줄어드는가</b> — 단이 서면 반드시 준다
+    {
+        double prev = double.MaxValue; bool down = true;
+        var areas = new List<double>();
+        foreach (var r in rows) { double a = GradingGeometry.RingAreaNts(r); areas.Add(a); if (a > prev + 0.5) down = false; prev = a; }
+        Console.WriteLine("      S137 [넓이] " + string.Join(" → ", areas.ConvertAll(v => v.ToString("F0"))));
+        Check("S137 ★줄이 올라갈수록 <b>넓이가 준다</b>", down, down ? "줄어듦" : "늘어난 자리가 있다");
+    }
+}
+
 /// <summary>[S122] NTS Polygon 하나를 우리 관례(닫힌 Point3 링, z=0)로 바꿔 RingHealth로 잰다.</summary>
 static (bool Closed, double CloseGap, int ExactDup, int NearDup1e6, int ZeroLen, int ShortUnder1e3,
         double MinSpacing, double MaxSpacingNZ, int SelfX, bool CCW, bool Convex, double Area, int N)

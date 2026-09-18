@@ -260,15 +260,141 @@ public sealed class CreateGradingCommand
     /// <para>★<b>계획 구배</b>를 쓴다(옹벽 구배가 아니다). 0916 실측: 옹벽 구배 1:0.01로 재니
     /// 폭이 <b>14.2m</b>였는데 데이라잇은 <b>27.83m</b>였다 — 절반에서 끝났다.
     /// 폭은 「벽이 얼마나 가느냐」가 아니라 「<b>사면이었다면</b> 얼마나 갔겠느냐」다.</para></summary>
+    /// <summary>★★★[JACK 0918] <b>폴리곤 안에 정형화된 가상 옹벽을 세운다.</b>
+    ///
+    /// <para>JACK: <i>"안쪽 해당 폴리곤 안에 속하는 <b>원지반 높이보다 높은 단</b>
+    /// (단높이는 매개변수에 따름)까지 가상 옹벽을 치는 걸 추가해."</i></para>
+    ///
+    /// <para>서는 자리는 <b>측선 → 선택구간 → 측선</b> 셋이고, <b>폐합면은 수직</b>이라 빠진다
+    /// (JACK: <i>"나머지 폴리곤을 닫기 위한 선분은 설정에 관계없이 수직으로 침"</i>).</para>
+    ///
+    /// <para>★<b>못 세워도 막지 않는다</b> — 폴리곤은 이미 그렸으므로, 옹벽만 건너뛰고
+    /// <b>왜 못 세웠는지</b>를 적는다.</para></summary>
+    static string BuildWallInPolygon(Database db, Transaction tr,
+        System.Collections.Generic.List<Point3> poly, double zBase, bool wUp,
+        GradingParams p, IGroundSurface ground, ObjectId groundId)
+    {
+        try
+        {
+            // ★★★[JACK 0918 스샷 <i>"<b>폴리곤대로 만들어지지 않았어</b>, 옹벽면만 만들어졌지"</i>]
+            //   <b>폴리곤 전체</b>로 짓는다 — 변마다 규칙이 다르다.
+            //   <para>옹벽 변은 단마다 안쪽으로 물러나고, <b>폐합면은 제자리에서 수직</b>으로 오른다.
+            //   맨 위 줄이 곧 <b>뚜껑의 테두리</b>라 폴리곤이 다 채워진다
+            //   (첫 판은 옹벽이 서는 <b>열린 선</b>만 줄로 만들어 «옹벽면만» 생겼다).</para>
+            var flags = GradingSettings.WallPolyIsWall;
+            GradingSettings.WallPolyChain = null; GradingSettings.WallPolyIsWall = null;   // ★한 번 쓰고 비운다
+            if (flags == null || flags.Count != poly.Count)
+                return $"    ⚠<b>옹벽을 못 세웠다</b> — 변 나누기 표가 없다"
+                     + $"(폴리곤 {poly.Count}점 · 표 {(flags == null ? "없음" : flags.Count + "개")})\n";
+
+            // ① 폴리곤 안 원지반 최고
+            double? top = WallInPoly.MaxGroundIn(poly,
+                (x, y) => ground.TryGetElevation(x, y, out double gz) ? gz : (double?)null,
+                System.Math.Max(1.0, p.VertexSpacing), out int nHit, out int nMiss);
+            if (top == null)
+                return $"    ⚠<b>옹벽을 못 세웠다</b> — 폴리곤 안에서 원지반을 <b>한 자리도 못 쟀다</b>"
+                     + $"(못 잰 자리 {nMiss}) — 측량 범위를 벗어났는지 보세요\n";
+
+            // ② 원지반을 <b>넘는</b> 단수
+            double benchH = p.BenchHeightOf(wUp);
+            double slopeW = System.Math.Max(GradingSettings.MinSlope, 0);
+            double benchW = p.BenchWidthOf(wUp);
+            int nb = WallInPoly.BenchCount(zBase, top.Value, benchH);
+
+            // ③ 옹벽이 서는 <b>열린 선</b>을 표에서 뽑는다 — 이어지는 옹벽 점들
+            var wline = new System.Collections.Generic.List<Point3>();
+            {
+                int n0 = poly.Count, st = -1;
+                for (int i = 0; i < n0; i++)
+                    if (flags[i] && !flags[(i - 1 + n0) % n0]) { st = i; break; }   // 옹벽이 <b>시작</b>하는 자리
+                if (st < 0 && flags.Count > 0 && flags[0]) st = 0;                   // 전부 옹벽이면 아무 데서나
+                if (st >= 0)
+                    for (int k = 0; k < n0; k++)
+                    {
+                        int i = (st + k) % n0;
+                        if (!flags[i]) break;
+                        wline.Add(poly[i]);
+                    }
+            }
+            if (wline.Count < 2)
+                return $"    ⚠<b>옹벽을 못 세웠다</b> — 옹벽 변이 이어지지 않는다(옹벽 점 {wline.Count}개)\n";
+
+            // ④ 줄 — <b>「옹벽선에서 d만큼 떨어진 자리」</b>를 NTS에게 묻는다
+            //   <para>점마다 미는 방식은 옹벽과 폐합면이 만나는 모서리에서 <b>칼날 같은 삼각형</b>을 남겼다
+            //   (JACK 0918 스샷). NTS는 코너 트림도 겹침 정리도 <b>스스로</b> 한다.</para>
+            var rows = WallInPoly.RowsByBuffer(poly, wline, zBase, nb, benchH, slopeW, benchW,
+                                               p.MinFaceRun, out string rlog);
+            if (rows.Count < 2)
+                return $"    ⚠<b>옹벽을 못 세웠다</b> — 줄이 {rows.Count}개뿐({rlog})\n";
+
+            // ⑤ 면으로 — 계단 브레이크라인이라 허용오차는 <b>0.001</b>이어야 한다(면 폭이 5cm다)
+            var wid = GradingBuilder.BuildVirtualSlope(db, tr,
+                new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>(),
+                "가상옹벽_DH", rows, groundId, null, midOrd: 0.001);
+            string vseen = "";
+            try
+            {
+                var tin = (TinSurface)tr.GetObject(wid, OpenMode.ForWrite);
+                // ★제 폴리곤으로 가둔다 — 없으면 볼록껍질이 엉뚱한 자리를 메운다
+                try { GradingBuilder.AddOuterBoundary(tin, poly, midOrd: 0.001); }
+                catch (System.Exception be) { vseen += $" · ⚠경계 실패 {be.GetType().Name}"; }
+                try { using var tc = tin.GetTriangles(false); vseen += $" · <b>삼각형 {tc.Count}개</b>"; }
+                catch { }
+            }
+            catch (System.Exception te) { vseen += $" · ⚠면 손질 실패 {te.GetType().Name}"; }
+            try { vseen += " · " + GradingBuilder.MakeSurfaceVisible(db, tr, "가상옹벽_DH",
+                                       "DH-가상옹벽면", "DH-가상옹벽", 6); }
+            catch { }
+            try { DrawLinesOnLayer(db, tr, rows, "DH-가상옹벽선", 6); } catch { }
+
+            return $"    ★<b>가상 옹벽</b> — 폴리곤 안 원지반 최고 <b>{top:F2}m</b>"
+                 + $"(잰 자리 {nHit}{(nMiss > 0 ? $" · 못 잰 자리 {nMiss}" : "")})"
+                 + $" · 찍은 선 {zBase:F2}m → <b>{zBase + benchH * nb:F2}m</b>"
+                 + $" · {rlog}{vseen}\n";
+        }
+        catch (System.Exception ex)
+        { return $"    ⚠<b>옹벽을 못 세웠다</b> — {ex.GetType().Name}: {ex.Message}\n"; }
+    }
+
     static string BuildWallBoxPolygon(Database db, Transaction tr,
         SlopeZone wz, bool wUp, GradingParams p, IGroundSurface ground,
-        System.Collections.Generic.List<Point3> boundary, double toD)
+        System.Collections.Generic.List<Point3> boundary, double toD,
+        System.Collections.Generic.List<Point3>? manual, string manualWhy, ObjectId groundId)
     {
         var rul = wz.Ref ?? boundary;
         var rcm = wz.RefCum ?? GradingGeometry.CumLen2D(rul);
         double rTot = rcm[rcm.Length - 1];
         double spanW = wz.T1 >= wz.T0 ? wz.T1 - wz.T0 : rTot - wz.T0 + wz.T1;
         double zBase = GradingGeometry.PointAtParam(rul, rcm, wz.T0).Z;
+
+        // ── ★★★[JACK 0917] <b>손으로 그린 것이 있으면 그것을 쓴다.</b> ──
+        //   <para>한 번 쓰고 <b>비운다</b> — 안 비우면 다음 실행이 <b>지난번에 그린 것</b>을 제 것인 양 쓴다.</para>
+        //   <para>못 쓰게 생겼으면(제 몸을 지르거나 넓이가 없으면) <b>막지 않고</b>
+        //   계산한 띠로 물러난다. 다만 <b>왜 안 썼는지</b>는 반드시 적는다.</para>
+        string manualNote = manualWhy;
+        {
+            if (manual != null && manual.Count >= 3)
+            {
+                var mp = new System.Collections.Generic.List<Point3>();
+                foreach (var q in manual) mp.Add(new Point3(q.X, q.Y, zBase));
+                bool mOk = GradingGeometry.RingIsSimple(mp);
+                double mA = GradingGeometry.RingAreaNts(mp);
+                if (mOk && mA > 1.0)
+                {
+                    var plM = new System.Collections.Generic.List<Point3>(mp) { mp[0] };
+                    DrawLinesOnLayer(db, tr,
+                        new System.Collections.Generic.List<System.Collections.Generic.List<Point3>> { plM },
+                        "DH-가상폴리곤", PolyAci);
+                    string wallNote = BuildWallInPolygon(db, tr, mp, zBase, wUp, p, ground, groundId);
+                    return $"    ★<b>손으로 그린 폴리곤</b>을 썼다 — 'DH-가상폴리곤' <b>{mp.Count}점 / {mA:F1}㎡</b>"
+                         + $" · 표고 {zBase:F2}m · 계산한 띠는 <b>안 썼다</b> · DHRESET이 걷어 간다\n"
+                         + wallNote;
+                }
+                manualNote = $"    ⚠<b>손으로 그린 폴리곤을 못 썼다</b>(점 {mp.Count}개"
+                           + $" · 제 몸을 안 지르는가 {(mOk ? "예" : "<b>아니오</b>")}"
+                           + $" · 넓이 {mA:F1}㎡) — <b>계산한 띠</b>로 간다\n";
+            }
+        }
         double benchH = p.BenchHeightOf(wUp);
         double slopePlan = System.Math.Max(wUp ? p.CutSlope : p.FillSlope, p.MinSlope);
         double benchWPlan = p.BenchWidthOf(wUp);
@@ -364,7 +490,7 @@ public sealed class CreateGradingCommand
             var pl = new System.Collections.Generic.List<Point3>(box) { box[0] };
             DrawLinesOnLayer(db, tr,
                 new System.Collections.Generic.List<System.Collections.Generic.List<Point3>> { pl },
-                "DH-가상폴리곤", 1);
+                "DH-가상폴리곤", PolyAci);
             sb.Append($"    ★<b>폴리곤만 그렸다</b> — 'DH-가상폴리곤' <b>{box.Count}점 / {aBox:F1}㎡</b>"
                 + $" · 길이 {spanW:F1}m(구간 [{wz.T0:F1}..{wz.T1:F1}]) × 폭 {widthW:F1}m"
                 + $" · 표고 {zBase:F2}m · <b>경로에 평행</b>(직각방향으로 밀었다)"
@@ -374,13 +500,28 @@ public sealed class CreateGradingCommand
             sb.Append($"    ⚠<b>폴리곤을 못 만들었다</b> — 점 {box.Count}개"
                 + $" · 제 몸을 지르지 않는가 {(simpleBox ? "예" : "<b>아니오</b>")}"
                 + $" · 넓이 {aBox:F1}㎡\n");
-        return sb.ToString();
+        return manualNote + sb.ToString();
     }
 
         // ★[JACK 0807 '옹벽변환이 여전히 오래 걸린다'] 어디서 시간을 쓰는지 **재고 나서** 고친다.
         //   종전엔 DoGrade 전체에 시계가 하나도 없어, 느리다는 체감만 있고 근거가 없었다.
         //   추측으로 후보를 고르면 헛짚는다(0805~0806에서 성능만 두 번 자책골) — 단계별 초를 남긴다.
         var stw = new StageTimer();
+
+        // ══ ★★★[검토 0917 · 높음] <b>꺼내는 자리를 맨 앞으로 옮긴다.</b>
+        //
+        //   <para><b>주석만 고치고 코드는 안 고쳤다.</b> <c>TakeWallPolyManual</c>을 만들어 놓고
+        //   부르는 자리는 <c>BuildWallBoxPolygon</c> 한 곳 그대로였다 —
+        //   그 함수는 «<c>WallPolygonOnly</c>이고 옹벽 구간이 있을 때»만 불린다.
+        //   그래서 주석이 말한 <b>세 가지 새는 길이 셋 다 그대로</b> 있었다:
+        //   ①<c>WallPolygonOnly</c>가 꺼졌을 때 ②그려 놓고 생성을 안 돌렸을 때 ③도중에 터졌을 때.</para>
+        //
+        //   <para>이건 이 저장소가 스스로 정한 <b>「짐작을 사실처럼 적지 말 것」</b>에 걸리는 자리다 —
+        //   주석이 "고쳤다"고 말하는데 코드는 안 고쳐져 있었다.</para>
+        //
+        //   <para>→ <b>DoGrade가 어느 길로 가든 반드시 지나는 이 자리</b>에서 꺼낸다.
+        //   꺼내는 순간 정적은 비고, 값은 아래로 <b>인자로</b> 내려간다.</para>
+        var manualPoly = GradingSettings.TakeWallPolyManual(doc.Name, out string manualWhy);
 
         try
         {
@@ -523,7 +664,14 @@ public sealed class CreateGradingCommand
                 //
                 //   <para>→ 여기서 <b>끝낸다</b>. 폴리곤에 필요한 것(자·구간·원지반·설정)은
                 //   <b>이미 다 손에 있다</b>. 화면의 <c>정지면_DH</c>는 <b>건드리지 않으므로</b> 그대로 남는다.</para>
-                if (GradingSettings.WallPolygonOnly)
+                // ★★★[JACK 0917 <i>"계획경계 선택하고 원지반 선택했는데 <b>계획부지 생성하기가 안 돼</b>"</i>]
+                //   <b>내가 낸 회귀다.</b> <c>WallPolygonOnly</c>는 <b>전역</b>인데 여기서 그것만 보고 나갔다 —
+                //   옹벽 변환뿐 아니라 <b>보통 정지 작업</b>까지 폴리곤만 그리고 끝냈다.
+                //   실측(12:38 로그): <i>"⚠옹벽 구간이 없다 … 절토 구간 0 · 성토 구간 0"</i> ·
+                //   <i>"걸린 시간 0.4초"</i> — <b>정지면_DH를 아예 안 만들고 나갔다</b>.
+                //   → <b>옹벽 구간이 실제로 있을 때만</b> 짧게 끝낸다.
+                //     구간이 없으면 여기는 <b>보통 정지 작업</b>이므로 종전 길로 그대로 간다.
+                if (GradingSettings.WallPolygonOnly && (wallZoneCut.Count > 0 || wallZoneFill.Count > 0))
                 {
                     SlopeZone? wzF = null; bool wUpF = true; string wSideF = ""; int nWZ = 0;
                     foreach (var (zs, upv, nm) in new[] { (wallZoneCut, true, "절토"), (wallZoneFill, false, "성토") })
@@ -540,10 +688,38 @@ public sealed class CreateGradingCommand
                     {
                         sbP.Append($"  ★구간 — {wSideF} · [{wzF.T0:F1}..{wzF.T1:F1}]"
                             + (nWZ > 1 ? $" (옹벽 구간 {nWZ}개 중 <b>첫 구간</b>만)" : "") + "\n");
-                        try { sbP.Append(BuildWallBoxPolygon(db, tr, wzF, wUpF, p, ground, boundary, 0)); }
+                        try { sbP.Append(BuildWallBoxPolygon(db, tr, wzF, wUpF, p, ground, boundary, 0, manualPoly, manualWhy, groundId)); }
                         catch (System.Exception bex)
                         { sbP.Append($"  ⚠폴리곤 만들기가 <b>터졌다</b> — {bex.GetType().Name}: {bex.Message}\n"); }
                     }
+                    // ★[JACK 0917] 폴리곤만 보는 판이니 <b>태그 선들은 꺼 둔다</b> —
+                    //   지우지 않고 <b>표시만</b> 끄므로, 필요하면 레이어를 켜면 그대로 있다.
+                    //   (이 선들은 계획부지 생성이 그리는 '옹벽 전환용 태그'다 — 나중에 쓸 것이라 안 지운다.)
+                    // ★★★[JACK 0917] 어느 레이어가 <b>있었고 · 켜져 있었고 · 껐는지</b>를 낱낱이 적는다.
+                    //   지난 판 로그가 «레이어 0개»만 찍어 <b>없어서 0인지 이미 꺼져서 0인지</b> 알 수가 없었다.
+                    //   그 한 줄이 더 있었으면 빨간 선이 <c>DH-옹벽선</c>인 걸 바로 알았다.
+                    var offSb = new System.Text.StringBuilder();
+                    int offN = 0, onWas = 0, noLayer = 0;
+                    foreach (var lyr in new[] { "DH-옹벽선",
+                                                "DH-소단선-절토", "DH-사면선-절토",
+                                                "DH-소단선-성토", "DH-사면선-성토",
+                                                "DH-소단선-전환", "DH-사면선-전환" })
+                    {
+                        try
+                        {
+                            var lt0 = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+                            if (!lt0.Has(lyr)) { noLayer++; offSb.Append($" {lyr}=없음"); continue; }
+                            var r0 = (LayerTableRecord)tr.GetObject(lt0[lyr], OpenMode.ForRead);
+                            if (r0.IsOff) { offSb.Append($" {lyr}=이미꺼짐"); continue; }
+                            onWas++;
+                            if (GradingBuilder.SetLayerOff(db, tr, lyr)) { offN++; offSb.Append($" <b>{lyr}=껐다</b>"); }
+                        }
+                        catch (System.Exception lex0) { offSb.Append($" {lyr}=실패({lex0.GetType().Name})"); }
+                    }
+                    sbP.Append($"  ★<b>선 레이어 손질</b> — 켜져 있던 {onWas}개 중 <b>{offN}개를 껐다</b>"
+                        + (noLayer > 0 ? $" · 없는 레이어 {noLayer}개" : "") + " ·" + offSb
+                        + "\n    <b>지운 게 아니라 표시만</b> 껐다(레이어를 켜면 그대로 있다)"
+                        + " · 폴리곤은 <b>청록('DH-가상폴리곤')</b>이다\n");
                     sbP.Append($"\n■ 걸린 시간 — {stw.Report()}\n");
                     tr.Commit();
                     try { DiagLog.Reset(sbP.ToString()); } catch { }
@@ -1339,7 +1515,7 @@ public sealed class CreateGradingCommand
                                     var pl0 = new System.Collections.Generic.List<Point3>(wallBox) { wallBox[0] };
                                     DrawLinesOnLayer(db, tr3,
                                         new System.Collections.Generic.List<System.Collections.Generic.List<Point3>> { pl0 },
-                                        "DH-가상폴리곤", 1);
+                                        "DH-가상폴리곤", PolyAci);
                                     DiagLog.Append($"    ★<b>폴리곤만 그렸다</b> — 'DH-가상폴리곤' <b>{wallBox.Count}점 / {aBox:F1}㎡</b>"
                                         + $" · 길이 {spanW:F1}m(구간 [{wz.T0:F1}..{wz.T1:F1}]) × 폭 {widthW:F1}m"
                                         + $" · 표고 {zBase:F2}m · <b>경로에 평행</b>(직각방향으로 밀었다)"
@@ -1422,7 +1598,7 @@ public sealed class CreateGradingCommand
                                     var pl = new System.Collections.Generic.List<Point3>(wedgePoly) { wedgePoly[0] };
                                     DrawLinesOnLayer(db, tr3,
                                         new System.Collections.Generic.List<System.Collections.Generic.List<Point3>> { pl },
-                                        "DH-가상폴리곤", 1);
+                                        "DH-가상폴리곤", PolyAci);
                                 }
                                 DiagLog.Append($"    ①-c 선으로도 그렸다 — 'DH-가상옹벽선' {slab.Count}줄"
                                     + $"(한 단에 둘) · 'DH-가상폴리곤' {(wedgePoly?.Count ?? 0)}점"
@@ -2271,7 +2447,10 @@ public sealed class CreateGradingCommand
                 //   새 결과처럼 켤 수 있다(위 <c>pureWallOk</c> 주석). 못 됐으면 재료를 보여 준다.
                 // ★[JACK 0916] 폴리곤만 만드는 판에서는 <b>켤 표면이 없다</b> — 억지로 찾으면 못 찾았다고 로그만 시끄럽다.
                 string wallShowName = (GradingSettings.TransitionStage >= 2 && pureWallOk) ? "순수옹벽_DH" : "가상옹벽_DH";
-                bool polyOnly = GradingSettings.WallPolygonOnly;
+                // ★[JACK 0917] 같은 회귀를 여기서도 막는다 — <b>옹벽 구간이 있을 때만</b>
+                //   "폴리곤만 만드는 판"이다. 보통 정지 작업에서는 종전 문구가 나가야 한다.
+                bool polyOnly = GradingSettings.WallPolygonOnly
+                             && (wallZoneCut.Count > 0 || wallZoneFill.Count > 0);
                 int wallVis = polyOnly ? 0 : GradingBuilder.SetSurfaceVisible(trE, wallShowName, true);
                 if (GradingSettings.TransitionStage >= 2 && !pureWallOk)
                 {
@@ -2911,6 +3090,16 @@ public sealed class CreateGradingCommand
     /// <summary>★[JACK 0914] 선 묶음을 한 레이어에 3D 폴리선으로 그린다 — <b>부를 때마다 먼저 비운다</b>.
     /// <para>면만으로는 안 보이는 것(거의 수직인 벽 등)을 눈으로 확인하려고 쓴다.
     /// 레이어 이름이 "DH-"로 시작하므로 <c>DHRESET</c>이 걷어 간다.</para></summary>
+    /// <summary>★[JACK 0917 <i>"옹벽 폴리곤 외 소단에 <b>알 수 없는 빨간선</b>들이 생겼어"</i>]
+    /// 옹벽 폴리곤 색 — <b>청록(4)</b>.
+    ///
+    /// <para>여태 <b>빨강(1)</b>이었는데, <c>DH-소단선-절토</c>가 <b>똑같이 빨강</b>이다
+    /// (<c>GradingBuilder.cs</c>의 «("DH-소단선-절토", 1, cutBermLines)») —
+    /// 둘이 한 화면에 있으면 <b>어느 것이 옹벽 폴리곤인지 알 수가 없다</b>.
+    /// 소단선은 계획부지 생성이 3.5단계에서 그리는 <b>옹벽 전환용 태그</b>라 지울 것은 아니고,
+    /// <b>색을 갈라 두는 것</b>이 맞다.</para></summary>
+    private const short PolyAci = 4;          // 청록 — 빨강(소단선)·초록(데이라잇)과 안 겹친다
+
     private static void DrawLinesOnLayer(Database db, Transaction tr,
         System.Collections.Generic.IReadOnlyList<System.Collections.Generic.List<Point3>> segs,
         string layer, short aci)
