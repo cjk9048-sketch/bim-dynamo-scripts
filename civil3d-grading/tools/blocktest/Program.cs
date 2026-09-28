@@ -13460,6 +13460,793 @@ static (bool Closed, double CloseGap, int ExactDup, int NearDup1e6, int ZeroLen,
     return RingHealth(pts);
 }
 
+// ── S138 ★★★[JACK 0918 <i>"가상옹벽과 원지반이 닿는 데이라잇을 만드는 빌드를 바로 시작해.
+//   데이라잇은 3d폴리선으로 닫힘이 '예'인 상태로 만들어져야 해"</i>] ──
+//   <b>옹벽 데이라잇 — 닫힌 링 하나.</b>
+//
+//   <para>입력은 <b>출하와 같은 길</b>로 만든다 — 폴리곤 → <c>MaxGroundIn</c> → <c>BenchCount</c> →
+//   <c>RowsByBuffer</c> → <c>ClosedRows</c>(닫아서 제약선으로) → 삼각망. 좌표는 현장처럼 <b>21만·51만대</b>이고
+//   폴리곤은 <b>30도 돌려</b> 놓는다(축에 나란한 모양만 재면 격자 운에 기댄다).</para>
+//
+//   <para>재는 것: ①닫힘·단순 ②섬이 옳은 쪽인가(넓이) ③<b>점마다 반경 5mm 안에서 D의 부호가 바뀌는가</b>
+//   (= 진짜 닿는 자리인가 — 결과가 스스로 내놓은 숫자가 아니라 <b>따로</b> 잰다) ④테두리로 닫는 경우
+//   ⑤섬 둘 ⑥측량 범위 밖 ⑦<b>교선을 일부러 빼면 경보가 울리는가</b> ⑧현장 재생.</para>
+{
+    Console.WriteLine("\n== S138 옹벽 데이라잇 (가상옹벽 ∩ 원지반) ==");
+    const double Z0 = 100.0, BH = 5.0, SL = 0.01, BW = 1.0, MFR = 0.005;
+    double TH = Math.PI / 6, OXw = 210000.0, OYw = 510000.0;
+    Point3 ToW(double u, double v, double z)
+        => new(OXw + u * Math.Cos(TH) - v * Math.Sin(TH), OYw + u * Math.Sin(TH) + v * Math.Cos(TH), z);
+    (double U, double V) ToL(double x, double y)
+    {
+        double dx = x - OXw, dy = y - OYw;
+        return (dx * Math.Cos(TH) + dy * Math.Sin(TH), -dx * Math.Sin(TH) + dy * Math.Cos(TH));
+    }
+    // S137과 같은 모양 — 선택구간 60m · 측선 25m · 폐합면은 물결
+    var polyL = new List<(double U, double V)>();
+    var wallL = new List<(double U, double V)>();
+    for (double u = 0; u <= 60; u += 1) polyL.Add((u, 0));
+    for (double v = 1; v <= 25; v += 1) polyL.Add((60, v));
+    for (double u = 59; u >= 0; u -= 1) polyL.Add((u, 25 + 3 * Math.Sin(u / 8.0)));
+    for (double v = 24; v >= 1; v -= 1) polyL.Add((0, v));
+    for (double v = 24; v >= 1; v -= 1) wallL.Add((0, v));
+    for (double u = 0; u <= 60; u += 1) wallL.Add((u, 0));
+    for (double v = 1; v <= 25; v += 1) wallL.Add((60, v));
+    var poly = polyL.ConvertAll(q => ToW(q.U, q.V, Z0));
+    var wallLine = wallL.ConvertAll(q => ToW(q.U, q.V, Z0));
+    var gfH = new GeometryFactory();
+    var polyGeo = gfH.CreatePolygon(poly.Select(q => new Coordinate(q.X, q.Y)).Append(new Coordinate(poly[0].X, poly[0].Y)).ToArray());
+    double polyArea = polyGeo.Area;
+
+    List<WallDaylight.Tri> GroundTin(Func<double, double, double> f, double step, double uMax)
+    {
+        var res = new List<WallDaylight.Tri>();
+        for (double u = -5; u < Math.Min(uMax, 65) - 1e-9; u += step)
+            for (double v = -5; v < 35 - 1e-9; v += step)
+            {
+                double u1 = Math.Min(u + step, uMax), v1 = v + step;
+                var a = ToW(u, v, f(u, v)); var b = ToW(u1, v, f(u1, v));
+                var c = ToW(u1, v1, f(u1, v1)); var d = ToW(u, v1, f(u, v1));
+                res.Add(new WallDaylight.Tri(a, b, c)); res.Add(new WallDaylight.Tri(a, c, d));
+            }
+        return res;
+    }
+
+    (List<WallDaylight.Tri> Tris, int Nb, int Rows) WallTin(Func<double, double, double> f)
+    {
+        double top = WallInPoly.MaxGroundIn(poly, (x, y) => { var (u, v) = ToL(x, y); return f(u, v); },
+                                            1.0, out _, out _) ?? Z0;
+        int nb = WallInPoly.BenchCount(Z0, top, BH);
+        var rows = WallInPoly.RowsByBuffer(poly, wallLine, Z0, nb, BH, SL, BW, MFR, out _);
+        var cr = WallInPoly.ClosedRows(rows);
+        // ★줄 k를 바깥, 줄 k+1을 구멍으로 둔 <b>띠</b>마다 제약 들로네(점을 안 더한다) — 줄을 브레이크라인으로
+        //   넣은 Civil TIN과 같은 구조다. (전체를 ConformingDelaunay로 돌리면 5mm 간격으로 나란한 폐합면 줄에서
+        //   쪼개기를 끝없이 반복하다 포기한다 — 첫 판에서 실제로 그랬다.)
+        LinearRing RingOf(List<Point3> r) => gfH.CreateLinearRing(r.Select(q => new Coordinate(q.X, q.Y)).ToArray());
+        var tris = new List<WallDaylight.Tri>();
+        void AddTris(Geometry tg, Dictionary<(double, double), double> zmap)
+        {
+            for (int i = 0; i < tg.NumGeometries; i++)
+            {
+                var cs = ((Polygon)tg.GetGeometryN(i)).ExteriorRing.Coordinates;
+                Point3 P(Coordinate c) => new(c.X, c.Y, zmap[(c.X, c.Y)]);
+                tris.Add(new WallDaylight.Tri(P(cs[0]), P(cs[1]), P(cs[2])));
+            }
+        }
+        for (int k = 0; k < cr.Count; k++)
+        {
+            var zmap = new Dictionary<(double, double), double>();
+            foreach (var q in cr[k]) zmap[(q.X, q.Y)] = q.Z;
+            Polygon band;
+            if (k + 1 < cr.Count)
+            {
+                foreach (var q in cr[k + 1]) zmap[(q.X, q.Y)] = q.Z;
+                band = gfH.CreatePolygon(RingOf(cr[k]), new[] { RingOf(cr[k + 1]) });
+            }
+            else band = gfH.CreatePolygon(RingOf(cr[k]));        // 맨 위 = 뚜껑
+            if (!band.IsValid) throw new Exception($"S138 하네스: 띠 {k}가 무효 — 줄이 안 겹쳐 들어앉는다");
+            AddTris(NetTopologySuite.Triangulate.Polygon.ConstrainedDelaunayTriangulator.Triangulate(band), zmap);
+        }
+        return (tris, nb, cr.Count);
+    }
+
+    // 점마다 반경 5mm 안에서 D의 부호가 바뀌는가 — 결과와 <b>따로</b> 잰다
+    (int Bad, int OnEdge, string At) OnZero(List<Point3> ring, TinLook W, TinLook G)
+    {
+        int bad = 0, onEdge = 0; string at = "";
+        var edge = new NetTopologySuite.Operation.Distance.IndexedFacetDistance(polyGeo.ExteriorRing);
+        foreach (var q in ring)
+        {
+            double mn = double.MaxValue, mx = double.MinValue; bool hit = false;
+            for (int k = -1; k < 8; k++)
+            {
+                double x = q.X + (k < 0 ? 0 : 0.005 * Math.Cos(k * Math.PI / 4));
+                double y = q.Y + (k < 0 ? 0 : 0.005 * Math.Sin(k * Math.PI / 4));
+                if (!W.TryZ(x, y, out double zw) || !G.TryZ(x, y, out double zg)) continue;
+                double d = zw - zg; hit = true;
+                mn = Math.Min(mn, d); mx = Math.Max(mx, d);
+            }
+            bool ok = hit && (mn <= 1e-6 && mx >= -1e-6);
+            if (ok) continue;
+            if (edge.Distance(gfH.CreatePoint(new Coordinate(q.X, q.Y))) < 0.002) { onEdge++; continue; }
+            bad++;
+            if (at.Length < 160) at += $" ({q.X:F2},{q.Y:F2}) D {mn:F3}~{mx:F3}";
+        }
+        return (bad, onEdge, at);
+    }
+
+    // ★[검토 0918 · 낮음 6] 원지반 격자를 <b>세계 축</b>에 둔다 — 폴리곤(30도)과 어긋나게.
+    //   GroundTin은 폴리곤과 같이 돌아가 격자선이 옹벽선과 <b>겹친다</b>(운 좋은 배치만 재게 된다).
+    List<WallDaylight.Tri> GroundTinWorld(Func<double, double, double> f, double step)
+    {
+        var env = polyGeo.EnvelopeInternal;
+        var res = new List<WallDaylight.Tri>();
+        double Fw(double x, double y) { var (u, v) = ToL(x, y); return f(u, v); }
+        for (double x = Math.Floor(env.MinX) - 5.3; x < env.MaxX + 5; x += step)
+            for (double y = Math.Floor(env.MinY) - 5.7; y < env.MaxY + 5; y += step)
+            {
+                var a = new Point3(x, y, Fw(x, y)); var b = new Point3(x + step, y, Fw(x + step, y));
+                var c = new Point3(x + step, y + step, Fw(x + step, y + step)); var d = new Point3(x, y + step, Fw(x, y + step));
+                res.Add(new WallDaylight.Tri(a, b, c)); res.Add(new WallDaylight.Tri(a, c, d));
+            }
+        return res;
+    }
+
+    WallDaylight.Result Run(string tag, Func<double, double, double> f, double gStep, double uMax,
+                            Func<double, double, bool>? drop = null, bool worldGrid = false)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var (wt, nb, nr) = WallTin(f);
+        var gt = worldGrid ? GroundTinWorld(f, gStep) : GroundTin(f, gStep, uMax);
+        long tBuild = sw.ElapsedMilliseconds;
+        var r = WallDaylight.Build(poly, wt, gt, "합성원지반", drop);
+        Console.WriteLine($"      S138 [{tag}] 단 {nb} · 줄 {nr} · 옹벽 삼각형 {wt.Count} · 원지반 {gt.Count}"
+            + $" · 입력 {tBuild}ms · 데이라잇 {r.Ms}ms");
+        foreach (var line in r.Trace.Split('\n'))
+            if (line.Length > 0) Console.WriteLine("        " + line);
+        return r;
+    }
+    double F1(double u, double v) => Z0 + 3 + 0.3 * v + 0.4 * Math.Sin(u / 7);
+
+    // ① 보통 — 앞(3m 절토) · 측선 · 폐합면이 다 땅에 닿는다
+    {
+        var r = Run("보통", F1, 1.0, 1e9);
+        var (wt, _, _) = WallTin(F1);
+        var TW = new TinLook(wt); var TG = new TinLook(GroundTin(F1, 1.0, 1e9));
+        Check("S138 ①링이 나온다", r.Ring != null, r.Summary);
+        if (r.Ring != null)
+        {
+            Check("S138 ①⚠가 없다", !r.Warn, r.Summary);
+            Check("S138 ①제 몸을 안 지른다", r.Simple);
+            Check("S138 ①섬이 하나", r.Islands == 1, $"{r.Islands}개");
+            Check("S138 ①<b>전부 진짜 닿는 선</b>(테두리·측량경계로 닫은 길이 0)",
+                  r.LenPolyClose < 0.005 && r.LenHullClose < 0.005, $"테두리 {r.LenPolyClose:F3} · 측량 {r.LenHullClose:F3}m");
+            Check("S138 ①섬이 옳은 쪽 — 옹벽이 높은 곳이 폴리곤 대부분", r.ChosenArea > 0.9 * polyArea && r.ChosenArea < polyArea,
+                  $"{r.ChosenArea:F1} / 폴리곤 {polyArea:F1}㎡");
+            Check("S138 ①격자 검사 어긋남 0", r.GridChecked > 1000 && r.GridMismatch == 0, $"{r.GridMismatch}/{r.GridChecked}");
+            Check("S138 ①정리 이탈 1cm 이하", r.MaxDev <= 0.01 + 1e-9, $"{r.MaxDev * 100:F2}cm");
+            var (bad, onEdge, at) = OnZero(r.Ring, TW, TG);
+            Check("S138 ①★점마다 <b>반경 5mm 안에서 옹벽=땅</b>(따로 잼)", bad == 0 && onEdge == 0,
+                  $"{r.Ring.Count}점 중 아닌 점 {bad} · 테두리 위 {onEdge}{at}");
+        }
+    }
+    // ①-b 같은 땅을 <b>세계 축 격자</b>로 — 원지반 삼각형 변이 옹벽선과 비스듬히 엇갈린다
+    {
+        var r = Run("보통·어긋난 격자", F1, 0.7, 1e9, worldGrid: true);
+        var (wt, _, _) = WallTin(F1);
+        var TW = new TinLook(wt); var TG = new TinLook(GroundTinWorld(F1, 0.7));
+        Check("S138 ①-b링이 나온다", r.Ring != null, r.Summary);
+        if (r.Ring != null)
+        {
+            Check("S138 ①-b⚠가 없다", !r.Warn, r.Summary);
+            Check("S138 ①-b틀린 줄 아는 곳이 없다(Broken 아님)", !r.Broken);
+            Check("S138 ①-b전부 진짜 닿는 선", r.LenPolyClose < 0.005 && r.LenHullClose < 0.005,
+                  $"테두리 {r.LenPolyClose:F3} · 측량 {r.LenHullClose:F3}m");
+            Check("S138 ①-b격자 검사 어긋남 0", r.GridChecked > 1000 && r.GridMismatch == 0, $"{r.GridMismatch}/{r.GridChecked}");
+            var (bad, onEdge, at) = OnZero(r.Ring, TW, TG);
+            Check("S138 ①-b★점마다 반경 5mm 안에서 옹벽=땅(따로 잼)", bad == 0 && onEdge == 0,
+                  $"{r.Ring.Count}점 중 아닌 점 {bad} · 테두리 위 {onEdge}{at}");
+        }
+    }
+    // ② 측선 쪽 골짜기 — 땅이 옹벽 바닥보다 낮아 섬이 테두리에 닿는다 → 테두리로 이어 닫는다
+    {
+        double F2(double u, double v) => F1(u, v) - 6 * Math.Exp(-((u - 60) * (u - 60) + (v - 5) * (v - 5)) / 8);
+        var r = Run("측선 골짜기", F2, 1.0, 1e9);
+        var TW = new TinLook(WallTin(F2).Tris); var TG = new TinLook(GroundTin(F2, 1.0, 1e9));
+        Check("S138 ②링이 나온다", r.Ring != null, r.Summary);
+        if (r.Ring != null)
+        {
+            Check("S138 ②<b>폴리곤 테두리로 이어 닫았다</b>(그 길이를 밝힌다)", r.LenPolyClose > 0.1, $"{r.LenPolyClose:F2}m");
+            Check("S138 ②그래도 제 몸을 안 지른다", r.Simple);
+            Check("S138 ②⚠가 없다(테두리로 닫는 것은 정한 규칙)", !r.Warn, r.Summary);
+            Check("S138 ②격자 검사 어긋남 0", r.GridMismatch == 0, $"{r.GridMismatch}/{r.GridChecked}");
+            var (bad, onEdge, at) = OnZero(r.Ring, TW, TG);
+            Check("S138 ②닿지 않는 점은 <b>테두리 위에만</b> 있다", bad == 0 && onEdge > 0, $"테두리 밖 {bad} · 테두리 위 {onEdge}{at}");
+        }
+    }
+    // ③ 웅덩이 — 첫 소단(105m) 위 땅에 구멍이 파여 <b>작은 섬이 따로</b> 생긴다 → 큰 것 하나만
+    {
+        double F3(double u, double v) => Z0 + 7 + 0.3 * v + 0.4 * Math.Sin(u / 7)
+                                       - 5 * Math.Exp(-((u - 30) * (u - 30) + (v - 0.55) * (v - 0.55)) / (2 * 0.1 * 0.1));
+        var r = Run("웅덩이", F3, 0.25, 1e9);
+        Check("S138 ③링이 나온다", r.Ring != null, r.Summary);
+        if (r.Ring != null)
+        {
+            Check("S138 ③섬이 둘 — <b>큰 것 하나만</b> 쓰고 작은 것은 적는다",
+                  r.Islands == 2 && r.DroppedArea > 0.001 && r.DroppedArea < 1.0, $"섬 {r.Islands} · 버린 {r.DroppedArea:F3}㎡");
+            Check("S138 ③제 몸을 안 지른다", r.Simple);
+            Check("S138 ③⚠가 없다", !r.Warn, r.Summary);
+            Check("S138 ③격자 검사 어긋남 0", r.GridMismatch == 0, $"{r.GridMismatch}/{r.GridChecked}");
+        }
+    }
+    // ④ 측량 범위가 폴리곤 안에서 끝난다(u ≤ 45) — 모르는 조각을 세고 측량 경계로 닫는다
+    {
+        var r = Run("측량 범위 밖", F1, 1.0, 45);
+        Check("S138 ④링이 나온다", r.Ring != null, r.Summary);
+        if (r.Ring != null)
+        {
+            Check("S138 ④원지반 없는 조각을 센다", r.FacesUnknown > 0 && r.UnknownArea > 10, $"{r.FacesUnknown}개 · {r.UnknownArea:F1}㎡");
+            Check("S138 ④측량 경계로 닫은 길이를 밝힌다", r.LenHullClose > 0.1, $"{r.LenHullClose:F2}m");
+            Check("S138 ④<b>⚠를 띄운다</b>(조용히 넘어가지 않는다)", r.Warn, r.Summary);
+            Check("S138 ④제 몸을 안 지른다", r.Simple);
+        }
+    }
+    // ⑤ ★교선을 <b>일부러 2m 뺀다</b> — 검토 0918 · 높음 2의 시나리오. 경보가 반드시 울려야 한다.
+    {
+        var r = Run("교선 2m 뺌", F1, 1.0, 1e9, (x, y) => { var (u, v) = ToL(x, y); return u > 29 && u < 31 && v < 1.0; });
+        Check("S138 ⑤★선이 빠지면 <b>⚠가 뜨고 정식 레이어에 안 간다</b>(Broken)",
+              r.Warn && r.Broken && (r.Dangles > 0 || r.Mixed > 0 || r.GridMismatch > 0),
+              $"끊긴 끝 {r.Dangles} · 섞인 조각 {r.Mixed} · 격자 어긋남 {r.GridMismatch}");
+    }
+    // ⑦ ★★[JACK 0918 <i>"이제 계획지표면하고 가상옹벽의 데이라잇도 구하고싶어"</i>] 계획지표면 = 정지면_DH.
+    //   합성: 부지(v&lt;0)는 계획고 · 부지 끝(v=0)에서 1:1.5 절토 사면 · 사면 데이라잇 밖은 원지반.
+    //   옹벽 구간의 정지면은 <b>사면</b>이다(옹벽 구간을 떼고 만든 면) — 그래서 모양이 원지반 때와 다르다:
+    //   선택구간에서는 옹벽 밑선과 사면이 <b>둘 다 계획고</b>라 선이 밑선에 붙고,
+    //   측선에서는 날개벽이 옆 사면에 닿는다.
+    {
+        double FP(double u, double v) => v <= 0 ? Z0 : Math.Min(F1(u, v), Z0 + v / 1.5);
+        var rG = Run("원지반(비교용)", F1, 1.0, 1e9);
+        // 옹벽은 <b>원지반</b>으로 세운다(출하와 같다 — 단수는 원지반 최고로 정한다). 상대만 계획지표면
+        var (wt, _, _) = WallTin(F1);
+        var pt = GroundTin(FP, 1.0, 1e9);
+        var r = WallDaylight.Build(poly, wt, pt, "합성정지면");
+        Console.WriteLine("      S138 [계획지표면] 옹벽 삼각형 " + wt.Count + " · 정지면 " + pt.Count);
+        foreach (var line in r.Trace.Split('\n')) if (line.Length > 0) Console.WriteLine("        " + line);
+        Check("S138 ⑦계획 — 링이 나온다", r.Ring != null, r.Summary);
+        if (r.Ring != null)
+        {
+            Check("S138 ⑦계획 — 틀린 줄 아는 곳이 없다(Broken 아님)", !r.Broken, r.Summary);
+            Check("S138 ⑦계획 — 제 몸을 안 지른다", r.Simple);
+            Check("S138 ⑦계획 — 격자 검사 어긋남 0", r.GridChecked > 1000 && r.GridMismatch == 0, $"{r.GridMismatch}/{r.GridChecked}");
+            var ringG = gfH.CreateLinearRing(r.Ring.Select(q => new Coordinate(q.X, q.Y)).Append(new Coordinate(r.Ring[0].X, r.Ring[0].Y)).ToArray());
+            var rIdx = new NetTopologySuite.Operation.Distance.IndexedFacetDistance(ringG);
+            double Far(IEnumerable<(double U, double V)> pts)
+            { double m = 0; foreach (var (u, v) in pts) { var w = ToW(u, v, 0); m = Math.Max(m, rIdx.Distance(gfH.CreatePoint(new Coordinate(w.X, w.Y)))); } return m; }
+            var front = Enumerable.Range(1, 11).Select(i => (U: 5.0 * i, V: 0.0));
+            double fFar = Far(front);
+            Check("S138 ⑦계획 — ★선택구간에서 <b>옹벽 밑선에 붙는다</b>(1cm 안)", fFar <= 0.01, $"밑선에서 가장 먼 곳 {fFar * 1000:F1}mm");
+            // 측선 — 날개벽 계단이 <b>계획면 높이 h</b>까지 올라간 자리. 첫 판은 "10cm 안"을 기대했는데 틀렸다:
+            //   측선 뒤쪽은 계획면(=원지반)이 6~9m라 <b>둘째 면</b>에서 만난다(1.07~1.09m). 계단식으로 계산한다 —
+            //   한 단 = 면 0.05 + 소단 1.0, 면은 5m를 0.05m에 오른다.
+            double face = Math.Max(BH * SL, MFR), step = face + BW;
+            double ExpD(double h) { if (h <= 0) return 0; int k = (int)Math.Floor(h / BH); return k * step + face * (h - k * BH) / BH; }
+            var worstSide = (Diff: 0.0, At: "");
+            foreach (var (u, v) in Enumerable.Range(1, 4).SelectMany(i => new[] { (0.0, 5.0 * i), (60.0, 5.0 * i) }))
+            {
+                var w = ToW(u, v, 0);
+                double got = rIdx.Distance(gfH.CreatePoint(new Coordinate(w.X, w.Y)));
+                double want = ExpD(FP(u, v) - Z0);
+                if (Math.Abs(got - want) >= worstSide.Diff)
+                    worstSide = (Math.Abs(got - want), $"u={u:F0} v={v:F0}: 계획면 {FP(u, v) - Z0:F2}m → 기대 {want * 1000:F0}mm · 잰 값 {got * 1000:F0}mm");
+            }
+            Check("S138 ⑦계획 — ★측선에서 날개벽이 옆 사면에 닿는 자리가 <b>계단 계산과 맞는다</b>(2cm 안)",
+                  worstSide.Diff <= 0.02, $"가장 어긋난 곳 {worstSide.Diff * 1000:F1}mm — {worstSide.At}");
+            Check("S138 ⑦계획 — 섬이 원지반 때보다 넓다(계획지표면이 원지반보다 낮다)",
+                  rG.Ring != null && r.ChosenArea > rG.ChosenArea, $"계획 {r.ChosenArea:F1} · 원지반 {rG.ChosenArea:F1}㎡");
+            var (bad, onEdge, at) = OnZero(r.Ring, new TinLook(wt), new TinLook(pt));
+            Check("S138 ⑦계획 — 닿지 않는 점은 테두리 위에만(따로 잼)", bad == 0, $"테두리 밖 {bad} · 테두리 위 {onEdge}{at}");
+        }
+        // ⑦-b 정지면 격자를 세계 축으로 — 부지 끝의 꺾임이 격자선과 어긋난다(현장 정지면은 브레이크라인이 있지만 여기선 없다)
+        var pt2 = GroundTinWorld(FP, 0.7);
+        var r2 = WallDaylight.Build(poly, wt, pt2, "합성정지면(어긋난 격자)");
+        foreach (var line in r2.Trace.Split('\n')) if (line.Length > 0) Console.WriteLine("        " + line);
+        Check("S138 ⑦-b계획·어긋난 격자 — 링 · 단순 · 틀린 곳 없음",
+              r2.Ring != null && r2.Simple && !r2.Broken, r2.Summary);
+        // ⑦-c ★[검토 0918 v99.9 · 낮음 4] 부지 높이가 옹벽 바닥과 <b>딱 같지 않은</b> 경우 — 테두리에서 D≡0이 아니다
+        foreach (var (tagc, dz, grade) in new[] { ("부지 +2cm", 0.02, 0.0), ("부지 −2cm", -0.02, 0.0), ("부지 1% 구배", 0.0, 0.01) })
+        {
+            double FPc(double u, double v)
+            {
+                double pad = Z0 + dz + grade * (u - 30);
+                return v <= 0 ? pad : Math.Min(F1(u, v), pad + v / 1.5);
+            }
+            var rc = WallDaylight.Build(poly, wt, GroundTin(FPc, 1.0, 1e9), "합성정지면·" + tagc);
+            Console.WriteLine($"      S138 [계획 {tagc}] {rc.Summary}");
+            Check($"S138 ⑦-c계획·{tagc} — 링 · 단순 · 틀린 곳 없음", rc.Ring != null && rc.Simple && !rc.Broken,
+                  $"끊긴 끝 {rc.Dangles}(곁가지 {rc.Spurs}) · 섞임 {rc.Mixed} · 격자 {rc.GridMismatch} · {rc.Summary}");
+        }
+    }
+    // ⑧ ★★[검토 0918 v99.9 · 재현] <b>얕은 절토의 평범한 모양</b> — 교점 군집 반경이 1mm였을 때
+    //   폐합면 꼭짓점의 서로 다른 두 교점이 끌려가 짝이 어긋나 «끊긴 끝 566 → 노랑»이 됐다.
+    foreach (double lift in new[] { 0.5, 1.0 })
+    {
+        double F8(double u, double v) => Z0 + lift + 0.3 * v;
+        var r8 = Run($"얕은 절토 {lift}m", F8, 1.0, 1e9);
+        Check($"S138 ⑧얕은 절토 {lift}m — 평범한 모양이 <b>노랑이 안 된다</b>", r8.Ring != null && r8.Simple && !r8.Broken,
+              $"끊긴 끝 {r8.Dangles}(곁가지 {r8.Spurs}) · 섞임 {r8.Mixed} · 격자 {r8.GridMismatch}");
+    }
+    // ⑨ ★★[검토 0918 v99.9 · 중간 1 재현] <b>좁은 띠의 교선을 빼면 반드시 잡힌다</b>.
+    //   앞쪽 u≈30에만 폭 5mm쯤 되는 «옹벽이 땅보다 낮은» 띠가 있고 양 끝이 테두리에 닫힌다.
+    //   그 띠를 가르던 교선을 빼면 띠가 섬에 합쳐지는데, 조각이 통째로 1cm 안이라 옛 곁가지 규칙은 통과시켰다.
+    {
+        double H9(double u) => 3 + 0.4 * Math.Sin(u / 7) - 4.0 * Math.Exp(-((u - 30) / 5) * ((u - 30) / 5))
+                              + 1.5 * Math.Exp(-((u - 30) / 1.2) * ((u - 30) / 1.2));
+        double F9(double u, double v) => Z0 + H9(u) + 0.3 * v;
+        var (wt9, _, _) = WallTin(F9);
+        var gt9 = GroundTin(F9, 0.5, 1e9);
+        var r0 = WallDaylight.Build(poly, wt9, gt9, "좁은 띠(대조)");
+        Check("S138 ⑨좁은 띠 — 대조(아무것도 안 뺌)는 틀린 곳이 없다", r0.Ring != null && !r0.Broken,
+              $"끊긴 끝 {r0.Dangles}(곁가지 {r0.Spurs}) · 섞임 {r0.Mixed} · 격자 {r0.GridMismatch}");
+        foreach (var (a, b) in new[] { (29.999, 30.001), (29.99, 30.01), (29.9, 30.1) })
+        {
+            var r9 = WallDaylight.Build(poly, wt9, gt9, "좁은 띠(뺌)", (x, y) => { var (u, v) = ToL(x, y); return u > a && u < b && v < 0.1; });
+            Check($"S138 ⑨좁은 띠 — 교선을 u {a}~{b}에서 빼면 <b>틀린 곳으로 잡힌다</b>(Broken)", r9.Broken,
+                  $"끊긴 끝 {r9.Dangles}(곁가지 {r9.Spurs}, 최장 {r9.SpurMaxLen * 1000:F1}mm) · 섞임 {r9.Mixed} · 격자 {r9.GridMismatch}");
+        }
+    }
+    // ══ S139 ★★★[JACK 0918 <i>"원지반과의 데이라잇과, 정지면과의 데이라잇을 활용해서 순수하게 잘린걸 뽑아내야"</i>] ══
+    //   <b>남길 옹벽 띠</b> = 정지면보다 높고 원지반보다 높지는 않은 곳(파랑 안 − 빨강 안) — 폴리곤 한 장, 경계 하나.
+    //   재는 것: 닫힘·단순·틀린 곳 없음 · 링 점이 <b>날것 교선</b>(군집·스냅 전) 위이거나 옹벽 밑선 위(1.5mm)
+    //   · 띠 넓이 = <b>따로</b> 2cm 격자로 잰 넓이 · 같은 평면(옹벽 소단 = 원지반/정지면) · 얕은 앞면 · 구멍 · 교선 뺌.
+    {
+        Console.WriteLine("\n== S139 남길 옹벽 띠 (정지면 < 옹벽 ≤ 원지반) ==");
+        double FPof(Func<double, double, double> fg, double u, double v) => v <= 0 ? Z0 : Math.Min(fg(u, v), Z0 + v / 1.5);
+        var edgeIdx = new NetTopologySuite.Operation.Distance.IndexedFacetDistance(polyGeo.ExteriorRing);
+        var prepPoly = NetTopologySuite.Geometries.Prepared.PreparedGeometryFactory.Prepare(polyGeo);
+        (int Bad, string At) OnRaw(List<Point3> ring, List<(Point3 A, Point3 B)> segs)
+        {
+            var mls = gfH.CreateMultiLineString(segs.Select(q => gfH.CreateLineString(new[] { new Coordinate(q.A.X, q.A.Y), new Coordinate(q.B.X, q.B.Y) })).ToArray());
+            var sIdx = new NetTopologySuite.Operation.Distance.IndexedFacetDistance(mls);
+            int bad = 0; string at = "";
+            foreach (var q in ring)
+            {
+                var pt = gfH.CreatePoint(new Coordinate(q.X, q.Y));
+                double d = Math.Min(sIdx.Distance(pt), edgeIdx.Distance(pt));
+                if (d <= 0.0015) continue;
+                bad++; if (at.Length < 150) at += $" ({q.X:F3},{q.Y:F3}) {d * 1000:F1}mm";
+            }
+            return (bad, at);
+        }
+        // ★[JACK 0918 «자글자글»] 포개진 자리(|옹벽−원지반| 또는 |옹벽−정지면| ≤ 1e-6)는 남기든 버리든 맞다 —
+        //   그래서 «분명히 남길 넓이»(최소)와 «포개진 자리까지 다 남긴 넓이»(최대)를 따로 잰다
+        (double Strict, double WithCoplanar) GridArea(TinLook tw, TinLook tg, TinLook tp)
+        {
+            var ev = polyGeo.EnvelopeInternal; long n = 0, nc = 0;
+            for (double x = ev.MinX + 0.01; x < ev.MaxX; x += 0.02)
+                for (double y = ev.MinY + 0.01; y < ev.MaxY; y += 0.02)
+                {
+                    if (!tw.TryZ(x, y, out double zw) || !tg.TryZ(x, y, out double zg) || !tp.TryZ(x, y, out double zp)) continue;
+                    double dg = zw - zg, dp = zw - zp;
+                    if (dp < -1e-6 || dg > 1e-6) continue;                          // 분명히 버림
+                    if (!prepPoly.Contains(gfH.CreatePoint(new Coordinate(x, y)))) continue;
+                    if (dp > 1e-6 && dg < -1e-6) n++; else nc++;                   // 분명히 남김 · 포개진 자리
+                }
+            return (n * 0.0004, (n + nc) * 0.0004);
+        }
+            void ClipChecks(string tag, WallDaylight.BandResult rr, List<WallDaylight.Tri> w0)
+            {
+                var tris = WallDaylight.ClipToBand(w0, rr.Ring!, rr.Holes, out string cn, out int cbad);
+                var gfc = new GeometryFactory();
+                LinearRing LRc(List<Point3> r0) => gfc.CreateLinearRing(r0.Select(q => new Coordinate(q.X, q.Y)).Append(new Coordinate(r0[0].X, r0[0].Y)).ToArray());
+                var bandP = gfc.CreatePolygon(LRc(rr.Ring!), rr.Holes.Select(LRc).ToArray());
+                var tpolys = tris.Select(t => (Geometry)gfc.CreatePolygon(new[] { new Coordinate(t.A.X, t.A.Y), new Coordinate(t.B.X, t.B.Y), new Coordinate(t.C.X, t.C.Y), new Coordinate(t.A.X, t.A.Y) })).ToList();
+                var uni = NetTopologySuite.Operation.OverlayNG.OverlayNGRobust.Union(tpolys);
+                double symA = NetTopologySuite.Operation.OverlayNG.OverlayNGRobust.Overlay(uni, bandP, NetTopologySuite.Operation.Overlay.SpatialFunction.SymDifference).Area;
+                var hdo = new NetTopologySuite.Algorithm.Distance.DiscreteHausdorffDistance(uni.Boundary, bandP.Boundary) { DensifyFraction = 0.001 };
+                double hd = hdo.Distance();
+                // 한 번만 쓰인 변 = 테두리
+                var ecount = new Dictionary<((long, long), (long, long)), (int N, double L)>();
+                (long, long) K(Point3 q) => ((long)Math.Round(q.X * 1e7), (long)Math.Round(q.Y * 1e7));
+                foreach (var t in tris)
+                    foreach (var (a, b) in new[] { (t.A, t.B), (t.B, t.C), (t.C, t.A) })
+                    {
+                        var ka = K(a); var kb = K(b); if (ka.Equals(kb)) continue;
+                        var key = ka.CompareTo(kb) <= 0 ? (ka, kb) : (kb, ka);
+                        double L = Math.Sqrt((a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y));
+                        ecount[key] = ecount.TryGetValue(key, out var v) ? (v.N + 1, L) : (1, L);
+                    }
+                double borderL = ecount.Values.Where(v => v.N == 1).Sum(v => v.L);
+                double perim = bandP.Boundary.Length;
+                // 꼭짓점 높이 = 옹벽
+                var twl = new TinLook(w0);
+                double zOff = 0;
+                foreach (var t in tris) foreach (var q in new[] { t.A, t.B, t.C }) if (twl.TryZ(q.X, q.Y, out double zw)) zOff = Math.Max(zOff, Math.Abs(zw - q.Z));
+                // 초록 선 점마다 삼각형 꼭짓점 · 높이 차
+                //   (1µm 격자로 옮겼으니 1µm 안의 가장 가까운 꼭짓점과 견준다)
+                var vtx = new NetTopologySuite.Index.Strtree.STRtree<Point3>();
+                foreach (var t in tris) foreach (var q in new[] { t.A, t.B, t.C }) vtx.Insert(new Envelope(q.X, q.X, q.Y, q.Y), q);
+                vtx.Build();
+                int missing = 0; double gz = 0;
+                foreach (var r0 in rr.Holes.Prepend(rr.Ring!))
+                    foreach (var q in r0)
+                    {
+                        double bd = double.MaxValue, bz = 0;
+                        foreach (var v in vtx.Query(new Envelope(q.X - 2e-6, q.X + 2e-6, q.Y - 2e-6, q.Y + 2e-6)))
+                        { double dd = Math.Sqrt((v.X - q.X) * (v.X - q.X) + (v.Y - q.Y) * (v.Y - q.Y)); if (dd < bd) { bd = dd; bz = v.Z; } }
+                        if (bd > 1e-6) missing++; else gz = Math.Max(gz, Math.Abs(bz - q.Z));
+                    }
+                // ★기준은 1µm 격자 잇기에 맞춘다(삼각형마다 따로 자르던 첫 판은 조각이 안 맞물려 버렸다 — 변 하나를 네 삼각형이 씀):
+                //   격자 한 칸 대각 0.71µm → 최대 거리 2µm · 대칭차 ≤ 둘레 × 1µm · 테두리 길이 = 둘레(0.1mm 안) · 변은 한두 번만 쓰인다(맞물림)
+                int over2 = ecount.Values.Count(v => v.N > 2);
+                Check($"S139 ⑮[{tag}] 초록 선으로 직접 자른 삼각형 = 띠(1µm 격자 — 대칭차 ≤ 둘레×1µm · 최대 거리 ≤ 2µm · 테두리 길이 = 둘레 · 세 번 쓰인 변 0)",
+                      tris.Count > 0 && cbad == 0 && symA <= perim * 1e-6 && hd <= 2e-6 && Math.Abs(borderL - perim) <= 1e-4 && over2 == 0,
+                      $"{cn} · 대칭차 {symA:E2}㎡(허용 {perim * 1e-6:E2}) · 최대 거리 {hd * 1e6:F3}µm · 테두리 {borderL:F6}m / 둘레 {perim:F6}m · 세 번 이상 쓰인 변 {over2}");
+                Check($"S139 ⑮[{tag}] 꼭짓점 높이 = 옹벽(0.1mm — 1µm × 1:0.01) · 초록 선 점마다 1µm 안에 꼭짓점 · 초록 선과 높이 차 ≤ 1mm",
+                      zOff <= 1e-4 && missing == 0 && gz <= 0.001,
+                      $"옹벽과 {zOff * 1e6:F3}µm · 1µm 안에 꼭짓점 없는 초록 선 점 {missing} · 초록 선과 {gz * 1000:F3}mm");
+                // LandXML 되읽기
+                string xf = Path.Combine(Path.GetTempPath(), $"blocktest_purewall_{Environment.ProcessId}.xml");
+                WallDaylight.WriteLandXmlTin(xf, "PUREWALL", tris, 1e-7, out int np, out int nf, out int nd);
+                var doc = System.Xml.Linq.XDocument.Load(xf);
+                var ns = doc.Root!.GetDefaultNamespace();
+                var P = doc.Descendants(ns + "P").ToList(); var F = doc.Descendants(ns + "F").ToList();
+                var pts = P.ToDictionary(e => int.Parse(e.Attribute("id")!.Value), e => e.Value.Split(' ').Select(v => double.Parse(v, System.Globalization.CultureInfo.InvariantCulture)).ToArray());
+                int badIdx = 0, zeroA = 0; double xmlArea = 0;
+                foreach (var f in F)
+                {
+                    var ix = f.Value.Split(' ').Select(int.Parse).ToArray();
+                    if (ix.Length != 3 || ix.Any(i => !pts.ContainsKey(i))) { badIdx++; continue; }
+                    double[] a = pts[ix[0]], b = pts[ix[1]], c = pts[ix[2]];     // 북 동 표고
+                    double cr = (b[1] - a[1]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[1] - a[1]);
+                    if (Math.Abs(cr) < 1e-14) zeroA++; else xmlArea += Math.Abs(cr) * 0.5;
+                }
+                try { File.Delete(xf); } catch { }
+                double meshA = tpolys.Sum(g => g.Area);
+                Check($"S139 ⑮[{tag}] LandXML 되읽기 — 점·면 수 · 번호 · 넓이 0 면 없음 · 뺀 면 0 · 넓이 = 자른 삼각형 넓이",
+                      P.Count == np && F.Count == nf && badIdx == 0 && zeroA == 0 && nd == 0 && Math.Abs(xmlArea - meshA) <= 1e-8,
+                      $"점 {P.Count}/{np} · 면 {F.Count}/{nf}(뺀 것 {nd}) · 번호 틀림 {badIdx} · 넓이 0 {zeroA} · 넓이 {xmlArea:F6}/{bandP.Area:F6}㎡");
+            }
+        // ★★[v100.2 · JACK 0918 «또 수직방향이 톱니처럼 짤렸어 데이라잇에 깔끔하게 안잘려»] 띠 링을 1mm 격자에서 정확한 교선 위로 되돌렸는가.
+        //   기준은 <b>고치기 전에</b> 박았다(검토 v100.2 · 중간 6 — 결과를 보고 기준을 정하지 않는다):
+        //   ①테두리 높이(옹벽 TIN) = 띠 선 높이 1mm 안(고치기 전 현장 15:50 최대 69.7mm = 0.707mm × 1:0.01)
+        //   ②링 점이 날것 교선·폴리곤 테두리 위 1µm 안 ③스냅 그대로·길 없음·고침·포기 0 ④스냅 링과 새 링이 통로(0.75mm) 안
+        void RingChecks(string tag, WallDaylight.BandResult r, IReadOnlyList<Point3> p0, List<WallDaylight.Tri> w0, List<WallDaylight.Tri> g0, List<WallDaylight.Tri> pl0)
+        {
+            var rings = r.Holes.Prepend(r.Ring!).ToList();
+            var (gMax, gN, gAt) = BandRingProbe.EdgeGap(rings, w0);
+            var (gSnap, _, _) = BandRingProbe.EdgeGap(r.HolesSnap.Prepend(r.RingSnap!).ToList(), w0);
+            Check($"S139 [{tag}] ★테두리 높이 = 띠 선 높이(1mm 안 · Core와 따로 잼)", gN > 0 && gMax <= 0.001,
+                  $"{gN}점 · 최대 {gMax * 1000:F3}mm @{gAt} (스냅 링이었다면 {gSnap * 1000:F1}mm) · Core ⑦-c {r.EdgeGapMax * 1000:F3}mm");
+            var (oMax, oAt) = BandRingProbe.OffLine(rings, p0, w0, g0, pl0);
+            Check($"S139 [{tag}] 링 점이 날것 교선·폴리곤 테두리 위(1µm)", r.LenHull > 0 || oMax <= 1e-6, $"최대 {oMax * 1e6:F3}µm @{oAt}" + (r.LenHull > 0 ? " (측량 경계 변이 있어 건너뜀)" : ""));
+            Check($"S139 [{tag}] 정확한 자리로 다 되돌렸다(스냅 그대로·곧은 변·길 없음·고침·스냅 링·포기 0)",
+                  !r.UnsFallback && r.UnsKept == 0 && r.UnsNoPath == 0 && r.UnsRepaired == 0 && r.UnsStraight == 0 && r.UnsRingsSnapped == 0,
+                  $"포기 {r.UnsFallback} · 스냅 그대로 {r.UnsKept} · 곧은 변 {r.UnsStraight} · 길 없음 {r.UnsNoPath} · 고침 {r.UnsRepaired} · 스냅 링 {r.UnsRingsSnapped} · 짐작 {r.UnsFamGuess} · 가시 {r.UnsSpikes}");
+            var (sBad, sN, sAt, sWhere) = BandRingProbe.SideCheck(r, w0, g0, pl0);
+            // 어긋남은 Core가 적은 <b>격자보다 얇아 이음선으로 닫은 자리</b>(띠 끝 쐐기 · 떼어 낸 얇은 조각 · 2mm 안)에서만 허용한다 —
+            //   그 너머는 폭 1mm 못 되는 쐐기라 1mm 격자 위상으로 못 담는다(v100.1도 같다). 그 밖의 어긋남은 선을 잘못 고른 것이다
+            int unexplained = sWhere.Count(q => !r.UnsCutAt.Any(c => Math.Sqrt((c.X - q.X) * (c.X - q.X) + (c.Y - q.Y) * (c.Y - q.Y)) <= 0.002));
+            Check($"S139 [{tag}] ★링이 맞는 선 위(변마다 ±20µm — 안은 버릴 곳 아님 · 밖은 남길 곳 아님 · 따로 잼 · 얇아 닫은 자리만 예외)", sN > 0 && unexplained == 0,
+                  $"{sN}변 중 어긋남 {sBad}(그중 얇아 닫은 자리 {sBad - unexplained} · Core가 적은 자리 {r.UnsCuts} · 조각 {r.Pieces}){sAt}");
+            double s2e = BandRingProbe.SnapToExact(r);
+            Check($"S139 [{tag}] 새 링 ↔ 스냅 링이 통로 안(1.5mm — 격자 맞춤 두 번)", r.UnsToSnapMax <= 2 * WallDaylight.UnsnapTube && s2e <= 2 * WallDaylight.UnsnapTube,
+                  $"새→스냅 {r.UnsToSnapMax * 1000:F3}mm · 스냅→새 {s2e * 1000:F3}mm");
+        }
+        WallDaylight.BandResult RunB(string tag, Func<double, double, double> fg, Func<double, double, double> fp, double gStep,
+                                     Func<double, double, bool>? drop = null, bool fullCheck = true, bool worldGrid = false,
+                                     Func<double, double, bool>? dropPlan = null)
+        {
+            var (wtB, nb, _) = WallTin(fg);
+            // ★[검토 v100.0 · 중간 3] 격자가 폴리곤과 같이 돌면 «운 좋은 배치»만 잰다 — 세계 축 격자도 돌린다
+            var gt = worldGrid ? GroundTinWorld(fg, gStep) : GroundTin(fg, gStep, 1e9);
+            var pt = worldGrid ? GroundTinWorld(fp, gStep) : GroundTin(fp, gStep, 1e9);
+            var r = WallDaylight.KeepBand(poly, wtB, gt, pt, "합성원지반", "합성정지면", drop, dropPlan);
+            Console.WriteLine($"      S139 [{tag}] 단 {nb} · 옹벽 {wtB.Count} · 원지반 {gt.Count} · 정지면 {pt.Count}");
+            foreach (var line in r.Trace.Split('\n')) if (line.Length > 0) Console.WriteLine("        " + line);
+            if (fullCheck && r.Ring != null && !r.Broken)
+            {
+                // 띠는 두 높이(±ZeroD)의 교선을 다 쓴다(포개진 자리를 떼려고) — 기준도 두 높이 다
+                var segs = WallDaylight.ZeroSegmentsWorld(poly, wtB, gt, 1e-6); segs.AddRange(WallDaylight.ZeroSegmentsWorld(poly, wtB, gt, -1e-6));
+                segs.AddRange(WallDaylight.ZeroSegmentsWorld(poly, wtB, pt, 1e-6)); segs.AddRange(WallDaylight.ZeroSegmentsWorld(poly, wtB, pt, -1e-6));
+                var (bad, at) = OnRaw(r.Ring, segs);
+                Check($"S139 [{tag}] 링 점이 날것 교선 위이거나 옹벽 밑선 위(1.5mm)", bad == 0, $"{r.Ring.Count}점 중 벗어난 점 {bad}{at}");
+                // ★[검토 v100.0 · 중간 3] 높이도 잰다 — 점마다 원지반·정지면 중 하나와 1mm 안, 또는 밑선 위면 옹벽 바닥(Z0)
+                var tgL = new TinLook(gt); var tpL = new TinLook(pt);
+                int zBad = 0; string zAt = "";
+                foreach (var q in r.Ring)
+                {
+                    bool ok = (tgL.TryZ(q.X, q.Y, out double zg) && Math.Abs(zg - q.Z) <= 0.001)
+                           || (tpL.TryZ(q.X, q.Y, out double zp) && Math.Abs(zp - q.Z) <= 0.001)
+                           || (edgeIdx.Distance(gfH.CreatePoint(new Coordinate(q.X, q.Y))) <= 0.0015 && Math.Abs(q.Z - Z0) <= 0.001);
+                    if (!ok) { zBad++; if (zAt.Length < 120) zAt += $" ({q.X:F3},{q.Y:F3},{q.Z:F3})"; }
+                }
+                Check($"S139 [{tag}] 링 점 높이가 원지반·정지면·옹벽 바닥 중 하나와 1mm 안", zBad == 0, $"벗어난 점 {zBad}{zAt}");
+                var (gaS, gaC) = GridArea(new TinLook(wtB), tgL, tpL);
+                double perim = 0; for (int k = 0; k < r.Ring.Count; k++) { var a = r.Ring[k]; var b = r.Ring[(k + 1) % r.Ring.Count]; perim += Math.Sqrt((b.X - a.X) * (b.X - a.X) + (b.Y - a.Y) * (b.Y - a.Y)); }
+                // ★[검토 v100.0 · 중간 3] 허용을 조인다(종전 둘레×1cm+0.5㎡는 띠의 42%였다) · 버린 넓이는 더하지 않는다 —
+                //   더하면 측선 띠가 통째로 빠져도 통과한다. 그래서 «한 조각»일 때만 견준다
+                // 격자보다 얇은 조각(ThinDropped)은 ⚠로 길이를 밝히고 버린 것이라 넓이가 없다 — 넓이 있는 조각을 버렸는지만 본다
+                bool single = r.Pieces - r.Fragments - r.ThinDropped == 1;
+                double tol = perim * 0.0005 + 0.02;
+                Check($"S139 [{tag}] 한 조각이고 띠 넓이가 따로 잰 넓이 범위 안(분명히 남길 곳 ~ 포개진 자리까지 · 2cm 격자 · 허용 {tol:F3}㎡)",
+                      single && r.Area >= gaS - tol && r.Area <= gaC + tol,
+                      $"조각 {r.Pieces}(부스러기 {r.Fragments} · 얇은 조각 {r.ThinDropped}) · 띠 {r.Area:F3} · 격자 {gaS:F3}~{gaC:F3}㎡ · 포개진 자리 {r.CoplanarFaces}(남김 {r.CoplanarToKeep}·버림 {r.CoplanarToDrop})");
+                RingChecks(tag, r, poly, wtB, gt, pt);
+                if (r.Holes.Count > 0) ClipChecks(tag, r, wtB);
+            }
+            return r;
+        }
+        double FP1(double u, double v) => FPof(F1, u, v);
+        // ① 기본 — ⑦과 같은 옹벽·원지반·정지면
+        {
+            var r = RunB("기본", F1, FP1, 1.0);
+            Check("S139 ①링 · 단순 · 틀린 곳 없음 · 한 조각 · 구멍 0", r.Ring != null && r.Simple && !r.Broken && r.Pieces == 1 && r.Holes.Count == 0,
+                  $"조각 {r.Pieces} · 구멍 {r.Holes.Count} · {r.Summary}");
+            if (r.Ring != null)
+            {
+                var ring = gfH.CreatePolygon(r.Ring.Select(q => new Coordinate(q.X, q.Y)).Append(new Coordinate(r.Ring[0].X, r.Ring[0].Y)).ToArray());
+                bool In(double u, double v) { var w = ToW(u, v, 0); return ring.Contains(gfH.CreatePoint(new Coordinate(w.X, w.Y))); }
+                Check("S139 ①옹벽 밑선 바로 안(앞 5mm)은 <b>남긴다</b> · 앞 2m는 버린다(옹벽이 땅 위) · 측선 1mm는 버린다(사면이 위)",
+                      In(30, 0.005) && !In(30, 2.0) && !In(0.001, 5), $"앞5mm {In(30, 0.005)} · 앞2m {In(30, 2.0)} · 측선1mm {In(0.001, 5)}");
+            }
+        }
+        // ①-b 같은 땅을 <b>세계 축 격자</b>(원지반·정지면 둘 다) — 격자 변이 옹벽선과 비스듬히 엇갈린다
+        {
+            var r = RunB("기본·어긋난 격자", F1, FP1, 0.7, worldGrid: true);
+            Check("S139 ①-b어긋난 격자 — 링 · 단순 · 틀린 곳 없음", r.Ring != null && r.Simple && !r.Broken, r.Summary);
+        }
+        // ② 원지반이 1단 소단과 <b>같은 평면</b>(Z0+5.000) — 옹벽 = 원지반인 자리는 남긴다(현장 120.0m 34㎡와 같은 꼴)
+        double F2p(double u, double v) => (u >= 20 && u <= 40 && v >= -1 && v <= 3) ? Z0 + 5 : F1(u, v);
+        {
+            var r = RunB("원지반 = 소단(같은 평면)", F2p, (u, v) => FPof(F2p, u, v), 0.5);
+            Check("S139 ②같은 평면 — 틀린 곳 없음(섞임·격자 어긋남 0)", r.Ring != null && !r.Broken, $"섞임 {r.Mixed} · 격자 {r.GridMismatch} · {r.Summary}");
+        }
+        // ③ 그 평면을 ZeroD 바로 위로(+2e-6) — 옹벽이 원지반보다 <b>분명히</b> 낮다 → 역시 남긴다
+        double F3p(double u, double v) => (u >= 20 && u <= 40 && v >= -1 && v <= 3) ? Z0 + 5 + 2e-6 : F1(u, v);
+        {
+            var r = RunB("원지반 = 소단 + 2e-6", F3p, (u, v) => FPof(F3p, u, v), 0.5);
+            Check("S139 ③ZeroD 바로 위 — 틀린 곳 없음", r.Ring != null && !r.Broken, r.Summary);
+        }
+        // ③-b 대칭 — 원지반이 소단보다 <b>살짝 낮다</b>(−2e-6) → 옹벽이 원지반 위 → 그 소단은 <b>버린다</b>(A)
+        double F3m(double u, double v) => (u >= 20 && u <= 40 && v >= -1 && v <= 3) ? Z0 + 5 - 2e-6 : F1(u, v);
+        {
+            var r = RunB("원지반 = 소단 − 2e-6", F3m, (u, v) => FPof(F3m, u, v), 0.5);
+            Check("S139 ③-b소단보다 살짝 낮은 원지반 — 틀린 곳 없음", r.Ring != null && !r.Broken, r.Summary);
+        }
+        // ④ 정지면이 측선 쪽에서 1단 소단과 같은 평면(Z0+5) — 옹벽 = 정지면인 자리는 <b>버린다</b>(B 밖)
+        {
+            double FP4(double u, double v) => (u >= -1 && u <= 2 && v >= 8 && v <= 20) ? Math.Min(F1(u, v), Z0 + 5) : FP1(u, v);
+            var r = RunB("정지면 = 소단(측선)", F1, FP4, 0.5);
+            Check("S139 ④정지면과 같은 평면 — 틀린 곳 없음", r.Ring != null && !r.Broken, $"섞임 {r.Mixed} · 격자 {r.GridMismatch} · {r.Summary}");
+        }
+        // ⑤ ★얕은 앞면(절토 5cm) — 띠가 0.5mm라 1mm 스냅이 띠를 끊는다. <b>조용히 버리면 안 된다</b>(검토 0918 · 낮음)
+        {
+            double F5(double u, double v) => Z0 + 0.05 + 0.3 * v;
+            var r = RunB("얕은 앞면 5cm", F5, (u, v) => FPof(F5, u, v), 1.0, fullCheck: false);
+            Check("S139 ⑤얕은 앞면 — <b>격자보다 얇다</b>(TooThin)로 잡힌다 — 조용히 작은 띠만 남기지 않는다", r.Broken && (r.TooThin || r.Ring == null),
+                  $"조각 {r.Pieces} · 얇음 {r.TooThin}(평균 폭 {r.ChosenMeanWidth * 1000:F2}mm) · {r.Summary}");
+        }
+        // ⑥ 구멍 — 1단 소단 위 땅에 웅덩이(옹벽이 땅 위로 솟은 작은 섬)가 띠 안에 갇힌다 → Hide로 뚫는다(JACK 0918)
+        {
+            double F6(double u, double v) => Z0 + 7 + 0.3 * v + 0.4 * Math.Sin(u / 7)
+                                           - 5 * Math.Exp(-((u - 30) * (u - 30) + (v - 0.55) * (v - 0.55)) / (2 * 0.1 * 0.1));
+            var r = RunB("구멍(웅덩이)", F6, (u, v) => FPof(F6, u, v), 0.25);
+            Check("S139 ⑥구멍 하나 · 틀린 곳 없음", r.Ring != null && !r.Broken && r.Holes.Count == 1,
+                  $"구멍 {r.Holes.Count}({r.HoleArea:F3}㎡) · {r.Summary}");
+        }
+        // ⑦ 교선을 일부러 뺀다 — 반드시 틀린 곳으로 잡힌다
+        {
+            var r = RunB("원지반 교선 2m 뺌", F1, FP1, 1.0, (x, y) => { var (u, v) = ToL(x, y); return u > 29 && u < 31 && v < 1.0; }, fullCheck: false);
+            Check("S139 ⑦교선을 빼면 틀린 곳으로 잡히고 <b>사유에 끊긴 끝</b>이 적힌다", r.Broken && r.Dangles > 0,
+                  $"끊긴 끝 {r.Dangles} · 섞임 {r.Mixed} · 격자 {r.GridMismatch} · {r.Summary}");
+        }
+        // ⑦-b ★[검토 v100.0 · 중간 3] <b>띠가 남은 채로</b> 선이 빠진 경우 — 웅덩이(구멍) 테두리 선의 <b>절반</b>을 뺀다.
+        //   (측선 쪽 파랑을 빼 보니 띠 전체가 옆 조각과 합쳐져 링이 아예 안 났다 — 그 길은 ⑦이 잰다.)
+        {
+            double F7(double u, double v) => Z0 + 7 + 0.3 * v + 0.4 * Math.Sin(u / 7)
+                                           - 5 * Math.Exp(-((u - 30) * (u - 30) + (v - 0.55) * (v - 0.55)) / (2 * 0.1 * 0.1));
+            var r = RunB("웅덩이 테두리 절반 뺌", F7, (u, v) => FPof(F7, u, v), 0.25,
+                         (x, y) => { var (u, v) = ToL(x, y); return u > 29.6 && u < 30.0 && v > 0.2 && v < 0.9; }, fullCheck: false);
+            Check("S139 ⑦-b띠가 남아도 빠진 선은 잡힌다(링 있음 · Broken · 끊긴 끝/섞임/격자 중 하나)",
+                  r.Ring != null && r.Broken && (r.Dangles > 0 || r.Mixed > 0 || r.GridMismatch > 0),
+                  $"링 {(r.Ring != null)} · 끊긴 끝 {r.Dangles} · 섞임 {r.Mixed} · 격자 {r.GridMismatch} · {r.Summary}");
+        }
+        // ⑧ 부지 +2cm · 1% 구배 — 옹벽 바닥과 부지가 딱 같지 않다
+        foreach (var (tagc, dz, grade) in new[] { ("부지 +2cm", 0.02, 0.0), ("부지 1% 구배", 0.0, 0.01) })
+        {
+            double FP8(double u, double v) { double pad = Z0 + dz + grade * (u - 30); return v <= 0 ? pad : Math.Min(F1(u, v), pad + v / 1.5); }
+            var r = RunB(tagc, F1, FP8, 1.0);
+            Check($"S139 ⑧{tagc} — 틀린 곳 없음", r.Ring != null && !r.Broken, r.Summary);
+        }
+        // ⑨ 현장 재생 — 띠 파일(세 삼각망 한 파일)이 있으면 그것, 없으면 두 파일의 폴리곤·옹벽이 <b>완전히 같을 때만</b> 합친다
+        {
+            string? root = AppContext.BaseDirectory;
+            while (root != null && !File.Exists(Path.Combine(root, "작업과정.md"))) root = Path.GetDirectoryName(root);
+            List<Point3>? rp = null; List<WallDaylight.Tri>? rw = null, rg = null, rpl = null; string how = "";
+            // ★[검토 v100.0 · 낮음 5] 띠 파일이 두 파일보다 <b>오래됐으면</b> 안 쓴다(다른 실행의 것)
+            bool bandFresh = root != null && File.Exists(Path.Combine(root, "DHWALLDL_입력_띠.txt"))
+                && File.GetLastWriteTime(Path.Combine(root, "DHWALLDL_입력_띠.txt")) >= File.GetLastWriteTime(Path.Combine(root, "DHWALLDL_입력.txt")).AddSeconds(-5);
+            if (bandFresh && WallDaylight.TryReadBandInput(Path.Combine(root!, "DHWALLDL_입력_띠.txt"), out var bp, out var bw, out var bg, out var bpl, out _))
+            { rp = bp; rw = bw; rg = bg; rpl = bpl; how = "띠 파일"; }
+            else if (root != null && WallDaylight.TryReadInput(Path.Combine(root, "DHWALLDL_입력.txt"), out var p1, out var w1, out var g1, out _)
+                     && WallDaylight.TryReadInput(Path.Combine(root, "DHWALLDL_입력_계획.txt"), out var p2, out var w2, out var g2, out _))
+            {
+                bool same = p1.Count == p2.Count && w1.Count == w2.Count && p1.Zip(p2).All(t => t.First == t.Second) && w1.Zip(w2).All(t => t.First == t.Second);
+                if (same) { rp = p1; rw = w1; rg = g1; rpl = g2; how = "두 파일 합침(폴리곤·옹벽 같음)"; }
+                else Console.WriteLine("SKIP  S139 ⑨현장 재생 — 두 파일의 폴리곤·옹벽이 다르다(다른 실행)");
+            }
+            if (rp != null)
+            {
+                var r = WallDaylight.KeepBand(rp, rw!, rg!, rpl!, "현장 원지반", "현장 정지면");
+                Console.WriteLine($"      S139 [현장 재생 · {how}]");
+                foreach (var line in r.Trace.Split('\n')) if (line.Length > 0) Console.WriteLine("        " + line);
+                Check("S139 ⑨현장 재생 — 링 · 단순 · 틀린 곳 없음", r.Ring != null && r.Simple && !r.Broken, r.Summary);
+                if (r.Ring != null && !r.Broken) RingChecks("⑨현장 재생", r, rp, rw!, rg!, rpl!);
+            }
+            else if (how.Length == 0) Console.WriteLine("SKIP  S139 ⑨현장 재생 — 입력 파일이 없다");
+        }
+        // ⑩ ★[검토 v100.0 · 중간 3] <b>고정 시험 자료</b> — 0918 13:33 절토 현장(JACK «파란선도 잘 만들어진 것 같아»).
+        //   현장 파일은 실행마다 덮이므로 복사해 두고 값을 <b>못 박는다</b>: 한 조각 · 구멍 0 · 틀린 곳 없음.
+        //   ★v100.1: 218.18 → <b>185.97㎡</b> — 120m 소단과 포갠 원지반 평삼각형(32.35㎡)을 «포개진 자리 규칙»이 버림으로 정했다
+        //   (JACK «자글자글» — 그 자리는 남기든 버리든 최종 높이가 같고, 버리면 테두리가 소단 모서리로 곧게 간다).
+        {
+            string d = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "data");
+            string fg = Path.Combine(d, "현장0918_1333_원지반.txt"), fp = Path.Combine(d, "현장0918_1333_계획.txt");
+            if (WallDaylight.TryReadInput(fg, out var p1, out var w1, out var g1, out _) && WallDaylight.TryReadInput(fp, out _, out _, out var g2, out _))
+            {
+                var r = WallDaylight.KeepBand(p1, w1, g1, g2, "현장 원지반", "현장 정지면");
+                Console.WriteLine("      S139 [고정 자료 0918 13:33] " + r.Summary);
+                Check("S139 ⑩고정 자료 — 한 조각 185.97㎡(±0.05) · 구멍 0 · 틀린 곳 없음",
+                      r.Ring != null && !r.Broken && r.Pieces - r.Fragments == 1 && r.Holes.Count == 0 && Math.Abs(r.Area - 185.97) <= 0.05,
+                      $"조각 {r.Pieces}(부스러기 {r.Fragments}) · 구멍 {r.Holes.Count} · {r.Area:F3}㎡ · {r.Summary}");
+                if (r.Ring != null && !r.Broken) RingChecks("⑩고정 13:33", r, p1, w1, g1, g2);
+            }
+            else Check("S139 ⑩고정 시험 자료를 읽는다", false, d);
+
+            // ⑪ ★★[JACK 0918 «비스듬히 보면 완전 위아래로 들쑥날쑥해»] 14:43 현장 — 120m 소단 위 원지반 평삼각형이 만든 <b>쐐기</b>.
+            //   고치기 전 링은 소단 모서리(x=−2.15)를 따라 y=39.64까지 올라갔다가 평삼각형 변을 따라 (−2.99, 36.95)로 <b>되돌아왔다</b>.
+            //   고친 뒤 링은 그 뒤 꼭짓점을 지나지 않아야 한다(5cm 밖) — 포개진 자리가 «버림»을 따라가 테두리가 소단 모서리로 곧게 간다.
+            string fb = Path.Combine(d, "현장0918_1443_띠.txt");
+            if (WallDaylight.TryReadBandInput(fb, out var bp, out var bw, out var bg, out var bpl, out _))
+            {
+                var rb = WallDaylight.KeepBand(bp, bw, bg, bpl, "현장 원지반", "현장 정지면");
+                Console.WriteLine("      S139 [고정 자료 0918 14:43] " + rb.Summary);
+                double ox0 = bp[0].X, oy0 = bp[0].Y;
+                var ringB = gfH.CreateLinearRing(rb.Ring!.Select(q => new Coordinate(q.X - ox0, q.Y - oy0)).Append(new Coordinate(rb.Ring![0].X - ox0, rb.Ring![0].Y - oy0)).ToArray());
+                double dBack = ringB.Distance(gfH.CreatePoint(new Coordinate(-2.993, 36.954)));
+                Check("S139 ⑪14:43 현장 — 틀린 곳 없음 · 포개진 자리를 떼어 정했다",
+                      rb.Ring != null && !rb.Broken && rb.CoplanarFaces >= 1 && rb.CoplanarToDrop >= 1, rb.Summary);
+                Check("S139 ⑪14:43 현장 — ★120m 쐐기가 없다(쐐기 뒤 꼭짓점에서 링까지 5cm 넘음)", dBack > 0.05, $"{dBack * 100:F1}cm");
+                if (rb.Ring != null && !rb.Broken) RingChecks("⑪고정 14:43", rb, bp, bw, bg, bpl);
+            }
+            else Check("S139 ⑪고정 시험 자료(14:43 띠)를 읽는다", false, fb);
+
+            // ⑫ ★★[JACK 0918 «또 수직방향이 톱니처럼 짤렸어 데이라잇에 깔끔하게 안잘려»] 15:50 현장(v100.1) — 순수옹벽_DH 테두리가
+            //   초록 선에서 위아래로 톱니(스샷 15:53). 고치기 전 실측: 테두리 높이 − 띠 선 높이 최대 69.7mm(= 스냅 0.707mm × 1:0.01).
+            //   고친 뒤: 넓이·조각·틀린 곳은 그대로(링만 바뀐다 — 191.12㎡는 스냅 조각 넓이) · 테두리 높이 1mm 안(RingChecks).
+            string fc = Path.Combine(d, "현장0918_1550_띠.txt");
+            if (WallDaylight.TryReadBandInput(fc, out var cp, out var cw, out var cg, out var cpl, out _))
+            {
+                var rc = WallDaylight.KeepBand(cp, cw, cg, cpl, "현장 원지반", "현장 정지면");
+                Console.WriteLine("      S139 [고정 자료 0918 15:50] " + rc.Summary);
+                foreach (var line in rc.Trace.Split('\n')) if (line.Contains("⑦")) Console.WriteLine("        " + line);
+                Check("S139 ⑫15:50 현장 — 한 조각 191.12㎡(±0.05) · 구멍 0 · 틀린 곳 없음",
+                      rc.Ring != null && !rc.Broken && rc.Pieces - rc.Fragments == 1 && rc.Holes.Count == 0 && Math.Abs(rc.Area - 191.12) <= 0.05, rc.Summary);
+                if (rc.Ring != null && !rc.Broken) RingChecks("⑫고정 15:50", rc, cp, cw, cg, cpl);
+
+                // ⑬ ★[검토 v100.2 · 중간 4] 되돌리기를 <b>일부러 실패</b>시킨다 — 링은 스냅 링 그대로(v100.1과 같게) · 틀린 곳은 아니고 ·
+                //   ⑦-c가 흔들림(수 cm)을 재서 ⚠를 띄워야 한다(조용히 톱니로 돌아가지 않게)
+                WallDaylight.DebugForceUnsnapFail = true;
+                try
+                {
+                    var rf = WallDaylight.KeepBand(cp, cw, cg, cpl, "현장 원지반", "현장 정지면");
+                    bool same = rf.Ring != null && rf.RingSnap != null && rf.Ring.Count == rf.RingSnap.Count && rf.Ring.Zip(rf.RingSnap).All(t => t.First == t.Second);
+                    Check("S139 ⑬되돌리기 실패 → 스냅 링 그대로 · 틀린 곳 아님 · ⚠(⑦-c가 1cm 넘는 흔들림을 잰다)",
+                          rf.UnsFallback && same && !rf.Broken && rf.Warn && rf.EdgeGapMax > 0.01 && rf.UnsRingsSnapped == 1,
+                          $"포기 {rf.UnsFallback} · 같은 링 {same} · Broken {rf.Broken} · Warn {rf.Warn} · ⑦-c {rf.EdgeGapMax * 1000:F1}mm · 스냅 링 {rf.UnsRingsSnapped} · {rf.Summary}");
+                }
+                finally { WallDaylight.DebugForceUnsnapFail = false; }
+            }
+            else Check("S139 ⑫고정 시험 자료(15:50 띠)를 읽는다", false, fc);
+
+            // ⑭ ★★[v100.3 · JACK 0918 17:33 «너무 톱니같아»] 17:32 현장 — 정확한 링은 맞았는데(⑦-c 0.05mm) Civil 되읽기가
+            //   «최대 거리 41mm»로 걸려 1mm 격자 링(톱니 60mm)으로 되돌아갔다. 정확한 링은 소단 모서리·밑선을 <b>삼각망 변과 포개</b> 따라가고
+            //   7점은 삼각망 꼭짓점과 딱 겹쳤다 → 두 번째 시도: 그 자리만 띠 바깥으로 10µm 비킨다(OffTinEdges).
+            //   잰다: 비킨 점이 있고 · 비킨 링엔 더 비킬 곳이 없고 · 이동 ≤ 3×10µm · 링 유효 · 테두리 높이 1mm 안(Core와 따로)
+            string fd = Path.Combine(d, "현장0918_1732_띠.txt");
+            if (WallDaylight.TryReadBandInput(fd, out var dp, out var dw, out var dg, out var dpl, out _))
+            {
+                var rd = WallDaylight.KeepBand(dp, dw, dg, dpl, "현장 원지반", "현장 정지면");
+                Console.WriteLine("      S139 [고정 자료 0918 17:32] " + rd.Summary);
+                Check("S139 ⑭17:32 현장 — 한 조각 177.75㎡(±0.05) · 구멍 0 · 틀린 곳 없음",
+                      rd.Ring != null && !rd.Broken && rd.Pieces - rd.Fragments == 1 && rd.Holes.Count == 0 && Math.Abs(rd.Area - 177.75) <= 0.05, rd.Summary);
+                if (rd.Ring != null && !rd.Broken)
+                {
+                    RingChecks("⑭고정 17:32", rd, dp, dw, dg, dpl);
+                    var off = WallDaylight.OffTinEdges(rd.Ring, dw, false, 5e-6, out int mv, out string mvAt, out double mvDz);
+                    var off2 = WallDaylight.OffTinEdges(off, dw, false, 5e-6, out int mv2, out _, out _);
+                    double sh = 0; for (int i = 0; i < off.Count; i++) sh = Math.Max(sh, Math.Sqrt((off[i].X - rd.Ring[i].X) * (off[i].X - rd.Ring[i].X) + (off[i].Y - rd.Ring[i].Y) * (off[i].Y - rd.Ring[i].Y)));
+                    var (og, on, oat) = BandRingProbe.EdgeGap(new List<List<Point3>> { off }, dw);
+                    var gfo = new GeometryFactory();
+                    var pOff = gfo.CreatePolygon(off.Select(q => new Coordinate(q.X, q.Y)).Append(new Coordinate(off[0].X, off[0].Y)).ToArray());
+                    var pOrg = gfo.CreatePolygon(rd.Ring.Select(q => new Coordinate(q.X, q.Y)).Append(new Coordinate(rd.Ring[0].X, rd.Ring[0].Y)).ToArray());
+                    bool valid = pOff.IsValid;
+                    // ★[검토 v100.3 · 낮음 4] 바깥으로만 비킨다 — 새 링이 원래 링을 다 품는다(원래 − 새 = 0)
+                    double inward = valid ? NetTopologySuite.Operation.OverlayNG.OverlayNGRobust.Overlay(pOrg, pOff, NetTopologySuite.Operation.Overlay.SpatialFunction.Difference).Area : -1;
+                    // 테두리 높이 1mm는 비킨 링 기준(Civil이 줄 높이 = 그 링 높이인가) · 초록 선과 옮긴 점 높이 차는 따로 적는다(1:0.01에서 10µm = 1mm)
+                    Check("S139 ⑭삼각망 변·꼭짓점과 포갠 링을 5µm 비킨다 — 옮긴 점 있음 · 더 비킬 곳 없음 · 이동 ≤ 15µm(3ε) · 유효 · 바깥으로만 · 테두리 높이 1mm 안",
+                          mv > 0 && mv2 == 0 && sh <= 1.5e-5 + 1e-9 && valid && inward >= 0 && inward <= 1e-12 && on > 0 && og <= 0.001,
+                          $"옮긴 점 {mv} · 다시 {mv2} · 최대 이동 {sh * 1e6:F1}µm · 유효 {valid} · 원래−새 {inward:E2}㎡ · 테두리 높이 차 최대 {og * 1000:F3}mm @{oat} · 초록 선과 옮긴 점 높이 차 {mvDz * 1000:F3}mm ·{mvAt}");
+                }
+            }
+            else Check("S139 ⑭고정 시험 자료(17:32 띠)를 읽는다", false, fd);
+
+            // ⑮ ★★★[v100.3 · JACK 0918 «초록색선에 맞춰서 정확히 잘리지 않으면 이 기능은 의미가 없어 무조건 성공해야해»]
+            //   옹벽 삼각형을 띠로 <b>직접</b> 잘라 LandXML 면으로 넘긴다(Civil은 자르지 않고 받기만) — 현장 네 판(13:33·14:43·15:50·17:32)과 웅덩이 합성.
+            //   잰다(Core와 따로): ①삼각형 합 = 띠(대칭차 ≤ 1e-8㎡ · 양쪽 최대 거리 ≤ 1µm) ②한 번만 쓰인 변(테두리) 길이 = 띠 둘레
+            //   ③꼭짓점 높이 = 옹벽 높이(1µm) ④초록 선 점마다 그 자리 삼각형 꼭짓점이 있고 높이 차 ≤ 1mm ⑤LandXML 되읽기 — 점·면 수 · 번호 · 넓이 0 면 없음
+            foreach (var (tagc, fn, isBand) in new[] { ("13:33", "현장0918_1333_원지반.txt", false), ("14:43", "현장0918_1443_띠.txt", true), ("15:50", "현장0918_1550_띠.txt", true), ("17:32", "현장0918_1732_띠.txt", true) })
+            {
+                List<Point3>? cp0 = null; List<WallDaylight.Tri>? cw0 = null, cg0 = null, cpl0 = null;
+                if (isBand) { if (WallDaylight.TryReadBandInput(Path.Combine(d, fn), out var a1, out var a2, out var a3, out var a4, out _)) { cp0 = a1; cw0 = a2; cg0 = a3; cpl0 = a4; } }
+                else if (WallDaylight.TryReadInput(Path.Combine(d, fn), out var b1, out var b2, out var b3, out _) && WallDaylight.TryReadInput(Path.Combine(d, "현장0918_1333_계획.txt"), out _, out _, out var b4, out _)) { cp0 = b1; cw0 = b2; cg0 = b3; cpl0 = b4; }
+                if (cp0 == null) { Check($"S139 ⑮[{tagc}] 고정 자료를 읽는다", false, fn); continue; }
+                var rr = WallDaylight.KeepBand(cp0, cw0!, cg0!, cpl0!, "현장 원지반", "현장 정지면");
+                if (rr.Ring == null || rr.Broken) { Check($"S139 ⑮[{tagc}] 띠가 있다", false, rr.Summary); continue; }
+                ClipChecks(tagc, rr, cw0!);
+            }
+        }
+    }
+    // ⑥ 현장 재생 — Civil이 실행마다 떨군 입력을 그대로 다시 돌린다
+    {
+        string? root = AppContext.BaseDirectory;
+        while (root != null && !File.Exists(Path.Combine(root, "작업과정.md"))) root = Path.GetDirectoryName(root);
+        // ★원지반 · 계획지표면 두 파일(Civil이 실행마다 덮어쓴다)
+        foreach (var (fname, tag) in new[] { ("DHWALLDL_입력.txt", "원지반"), ("DHWALLDL_입력_계획.txt", "계획지표면") })
+        {
+            string fp = root == null ? "" : Path.Combine(root, fname);
+            if (root == null || !File.Exists(fp))
+            { Console.WriteLine($"SKIP  S138 ⑥현장 재생·{tag} — 입력 파일이 아직 없다(Civil에서 옹벽 변환을 한 번 돌리면 생긴다)"); continue; }
+            // ★[검토 0918 v99.9 · 낮음 3] 파일은 있는데 못 읽으면(대상 삼각형 0 등) <b>건너뛰기가 아니라 실패</b>다
+            if (!WallDaylight.TryReadInput(fp, out var rp, out var rw, out var rg, out var meta))
+            { Check($"S138 ⑥현장 재생·{tag} — 입력 파일을 읽는다", false, $"{fp} — 폴리곤·옹벽·대상 삼각형 중 빈 것이 있다"); continue; }
+            {
+                var r = WallDaylight.Build(rp, rw, rg, "현장 재생·" + tag);
+                Console.WriteLine($"      S138 [현장 재생·{tag}] {meta}");
+                foreach (var line in r.Trace.Split('\n')) if (line.Length > 0) Console.WriteLine("        " + line);
+                if (r.Ring == null)
+                {
+                    // ★[JACK 0918 13:02 현장] <b>링이 없으면 「정말 안 닿는가」를 따로 잰다.</b>
+                    //   그 판은 성토 구간이었다 — 계획 105m · 원지반 80~100m인데 옹벽이 <b>위로</b> 110m까지 쌓여
+                    //   통째로 땅 위에 떴다(RowsByBuffer가 성토에서도 위로 쌓는 기존 결함). 계산은 사실대로 «못 만듦»이었다.
+                    //   그러니 합격 기준은 «링이 나온다»가 아니라 <b>«없다고 한 말이 맞다»</b>이다.
+                    var tw = new TinLook(rw); var tg = new TinLook(rg);
+                    var pg = gfH.CreatePolygon(rp.Select(q => new Coordinate(q.X, q.Y)).Append(new Coordinate(rp[0].X, rp[0].Y)).ToArray());
+                    var pp = NetTopologySuite.Geometries.Prepared.PreparedGeometryFactory.Prepare(pg);
+                    var ev = pg.EnvelopeInternal; int pos = 0, neg = 0;
+                    for (double x = ev.MinX + 0.25; x < ev.MaxX; x += 0.5)
+                        for (double y = ev.MinY + 0.25; y < ev.MaxY; y += 0.5)
+                        {
+                            if (!pp.Contains(gfH.CreatePoint(new Coordinate(x, y)))) continue;
+                            if (!tw.TryZ(x, y, out double zw) || !tg.TryZ(x, y, out double zg)) continue;
+                            if (zw - zg > 1e-6) pos++; else if (zw - zg < -1e-6) neg++;
+                        }
+                    Console.WriteLine($"      S138 [현장 재생·{tag}] 링 없음 — 격자로 따로 잰 옹벽−{tag}: 높은 점 {pos} · 낮은 점 {neg}");
+                    // ★[검토 0918 v99.9 · 낮음 3] 사유도 본다 — 계산이 <b>터져서</b> 없는 것은 «안 닿는다»와 다르다
+                    bool honest = r.Summary.Contains("안 닿는다") || r.Summary.Contains("높은 곳이 없다");
+                    Check($"S138 ⑥현장 재생·{tag} — 링이 없다는 말이 맞다(사유가 «안 닿음»이고 격자에서 부호가 한 번도 안 바뀐다)",
+                          honest && (pos == 0) != (neg == 0), $"높은 {pos} · 낮은 {neg} · {r.Summary}");
+                    continue;
+                }
+                Check($"S138 ⑥현장 재생·{tag} — 제 몸을 안 지른다", r.Simple);
+                // ★[검토 0918 · 낮음 6] 합격은 <b>「틀린 줄 아는 곳이 없다」</b>로 — 측량 범위 밖 같은 <b>정당한 ⚠</b>는
+                //   현장 사정이라 막지 않는다(찍어서 보여 준다).
+                Check($"S138 ⑥현장 재생·{tag} — 틀린 줄 아는 곳이 없다(Broken 아님)", !r.Broken, r.Summary);
+            }
+        }
+    }
+}
+
 Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
 return fails == 0 ? 0 : 1;
 
@@ -13588,4 +14375,157 @@ sealed class WavyGround(double z0, double amp, double wave) : IGroundSurface
 {
     public bool TryGetElevation(double x, double y, out double zz)
     { zz = z0 + amp * System.Math.Sin(x / wave); return true; }
+}
+
+/// <summary>★★[v100.2 · JACK 0918 «또 수직방향이 톱니처럼 짤렸어»] 띠 링을 <b>Core와 따로</b> 재는 도구.
+/// <para>테두리 높이: Civil 비파괴 경계는 링 꼭짓점과 «링 변 × 옹벽 삼각형 변» 교점에 점을 넣고 높이를 옹벽 TIN에서 읽는다
+/// (현장 스샷 0918 15:53 — 노랑 꺾임점이 청록 삼각형 변 위). 그 점마다 |옹벽 높이 − 띠 선 높이|를 잰다.</para>
+/// <para>정확한 자리: 링 점이 날것 교선(스냅 전 · 두 높이)이나 폴리곤 테두리에서 얼마나 떨어졌나.</para></summary>
+static class BandRingProbe
+{
+    public static (double Max, int N, string At) EdgeGap(IEnumerable<List<Point3>> rings, List<WallDaylight.Tri> wall)
+    {
+        var box = wall.Select(t => (X0: Math.Min(t.A.X, Math.Min(t.B.X, t.C.X)), X1: Math.Max(t.A.X, Math.Max(t.B.X, t.C.X)),
+                                    Y0: Math.Min(t.A.Y, Math.Min(t.B.Y, t.C.Y)), Y1: Math.Max(t.A.Y, Math.Max(t.B.Y, t.C.Y)))).ToArray();
+        var look = new TinLook(wall);
+        double max = 0; int n = 0; string at = "";
+        void Upd(double g, double x, double y, double zw, double zr) { n++; if (g > max) { max = g; at = $"({x:F3},{y:F3}) 옹벽 {zw:F4} · 선 {zr:F4}"; } }
+        foreach (var r in rings)
+            for (int k = 0; k < r.Count; k++)
+            {
+                var p = r[k]; var q = r[(k + 1) % r.Count];
+                if (look.TryZ(p.X, p.Y, out double zv)) Upd(Math.Abs(zv - p.Z), p.X, p.Y, zv, p.Z);
+                double ex0 = Math.Min(p.X, q.X), ex1 = Math.Max(p.X, q.X), ey0 = Math.Min(p.Y, q.Y), ey1 = Math.Max(p.Y, q.Y);
+                double rx = q.X - p.X, ry = q.Y - p.Y;
+                for (int i = 0; i < wall.Count; i++)
+                {
+                    if (box[i].X1 < ex0 || box[i].X0 > ex1 || box[i].Y1 < ey0 || box[i].Y0 > ey1) continue;
+                    var P = new[] { wall[i].A, wall[i].B, wall[i].C };
+                    for (int e = 0; e < 3; e++)
+                    {
+                        var m = P[e]; var m2 = P[(e + 1) % 3];
+                        double sx = m2.X - m.X, sy = m2.Y - m.Y, den = rx * sy - ry * sx;
+                        if (Math.Abs(den) < 1e-18) continue;
+                        double t = ((m.X - p.X) * sy - (m.Y - p.Y) * sx) / den, u = ((m.X - p.X) * ry - (m.Y - p.Y) * rx) / den;
+                        if (t <= 1e-9 || t >= 1 - 1e-9 || u < 0 || u > 1) continue;
+                        double zw = m.Z + (m2.Z - m.Z) * u, zr = p.Z + (q.Z - p.Z) * t;
+                        Upd(Math.Abs(zw - zr), p.X + rx * t, p.Y + ry * t, zw, zr);
+                    }
+                }
+            }
+        return (max, n, at);
+    }
+
+    /// <summary>링 점마다 날것 교선(두 높이 · 원지반·정지면)과 폴리곤 테두리 중 가까운 것까지 거리의 최대.</summary>
+    public static (double Max, string At) OffLine(IEnumerable<List<Point3>> rings, IReadOnlyList<Point3> poly,
+        List<WallDaylight.Tri> wall, List<WallDaylight.Tri> gnd, List<WallDaylight.Tri> pln)
+    {
+        var gf = new GeometryFactory();
+        var segs = new List<(Point3 A, Point3 B)>();
+        foreach (var lev in new[] { 1e-6, -1e-6 })
+        {
+            segs.AddRange(WallDaylight.ZeroSegmentsWorld(poly, wall, gnd, lev));
+            segs.AddRange(WallDaylight.ZeroSegmentsWorld(poly, wall, pln, lev));
+        }
+        var ls = segs.Select(s => (Geometry)gf.CreateLineString(new[] { new Coordinate(s.A.X, s.A.Y), new Coordinate(s.B.X, s.B.Y) })).ToList();
+        ls.Add(gf.CreateLineString(poly.Select(q => new Coordinate(q.X, q.Y)).Append(new Coordinate(poly[0].X, poly[0].Y)).ToArray()));
+        var idx = new NetTopologySuite.Operation.Distance.IndexedFacetDistance(gf.CreateGeometryCollection(ls.ToArray()));
+        double max = 0; string at = "";
+        foreach (var r in rings)
+            foreach (var q in r)
+            {
+                double d = idx.Distance(gf.CreatePoint(new Coordinate(q.X, q.Y)));
+                if (d > max) { max = d; at = $"({q.X:F4},{q.Y:F4})"; }
+            }
+        return (max, at);
+    }
+
+    /// <summary>★[검토 v100.2 · 중간 4] 링이 <b>맞는 선</b> 위에 섰나 — 변 가운데에서 법선으로 ±20µm 두 점을 잡아
+    /// 안은 «분명히 버릴 곳»이 아니고 밖은 «분명히 남길 곳»(정지면 &lt; 옹벽 &lt; 원지반)이 아니어야 한다.
+    /// <para>테두리 높이 검사는 점을 올린 선의 짝 면 높이를 쓰므로, 원지반 선 대신 정지면 선에 올라가도 차이가 0으로 나온다 — 그것을 여기서 본다.
+    /// 포개진 자리(|옹벽 − 면| ≤ 1e-6)와 면이 없는 자리(폴리곤 밖)는 건너뛴다. 1mm 넘는 변만.
+    /// ★[검증 v100.2] 어긋난 변이 이음선보다 길면(통로 폭 두 배 3mm 초과) 예외 자리 목록에 못 들어가게 NaN으로 적는다.</para></summary>
+    public static (int Bad, int N, string At, List<(double X, double Y)> Where) SideCheck(WallDaylight.BandResult r, List<WallDaylight.Tri> w, List<WallDaylight.Tri> g, List<WallDaylight.Tri> pl)
+    {
+        var gf = new GeometryFactory();
+        LinearRing LR(List<Point3> r0) => gf.CreateLinearRing(r0.Select(q => new Coordinate(q.X, q.Y)).Append(new Coordinate(r0[0].X, r0[0].Y)).ToArray());
+        var band = gf.CreatePolygon(LR(r.Ring!), r.Holes.Select(LR).ToArray());
+        var prep = NetTopologySuite.Geometries.Prepared.PreparedGeometryFactory.Prepare(band);
+        var tw = new TinLook(w); var tg = new TinLook(g); var tp = new TinLook(pl);
+        const double off = 2e-5, eq = 1e-6;
+        // 분명히 남길 곳(+1) · 분명히 버릴 곳(−1) · 모름/포개짐(0)
+        int Cls(double x, double y)
+        {
+            if (!tw.TryZ(x, y, out double zw) || !tg.TryZ(x, y, out double zg) || !tp.TryZ(x, y, out double zp)) return 0;
+            double dg = zw - zg, dp = zw - zp;
+            if (Math.Abs(dg) <= eq || Math.Abs(dp) <= eq) return 0;
+            return dp > 0 && dg < 0 ? 1 : -1;
+        }
+        int bad = 0, n = 0; string at = ""; var where = new List<(double X, double Y)>();
+        foreach (var r0 in r.Holes.Prepend(r.Ring!))
+            for (int k = 0; k < r0.Count; k++)
+            {
+                var a = r0[k]; var b = r0[(k + 1) % r0.Count];
+                double dx = b.X - a.X, dy = b.Y - a.Y, L = Math.Sqrt(dx * dx + dy * dy);
+                if (L < 0.001) continue;
+                double mx = (a.X + b.X) * 0.5, my = (a.Y + b.Y) * 0.5, ux = -dy / L * off, uy = dx / L * off;
+                bool leftIn = prep.Contains(gf.CreatePoint(new Coordinate(mx + ux, my + uy)));
+                int cin = leftIn ? Cls(mx + ux, my + uy) : Cls(mx - ux, my - uy);
+                int cout = leftIn ? Cls(mx - ux, my - uy) : Cls(mx + ux, my + uy);
+                n++;
+                if (cin < 0 || cout > 0) { bad++; where.Add(L <= 2 * WallDaylight.UnsnapTube ? (mx, my) : (double.NaN, double.NaN)); if (at.Length < 240) at += $" ({mx:F3},{my:F3}){(cin < 0 ? " 안이 버릴 곳" : "")}{(cout > 0 ? " 밖이 남길 곳" : "")}"; }
+            }
+        return (bad, n, at, where);
+    }
+
+    /// <summary>스냅 링(종전) 점마다 새 링까지 거리의 최대 — 새 링이 스냅 링에서 통로 안에 있는가(반대쪽은 Core가 잰다).</summary>
+    public static double SnapToExact(WallDaylight.BandResult r)
+    {
+        var gf = new GeometryFactory();
+        LineString L(List<Point3> r0) => gf.CreateLineString(r0.Select(q => new Coordinate(q.X, q.Y)).Append(new Coordinate(r0[0].X, r0[0].Y)).ToArray());
+        var idx = new NetTopologySuite.Operation.Distance.IndexedFacetDistance(gf.CreateMultiLineString(r.Holes.Prepend(r.Ring!).Select(L).ToArray()));
+        double max = 0;
+        foreach (var r0 in r.HolesSnap.Prepend(r.RingSnap!)) foreach (var q in r0) max = Math.Max(max, idx.Distance(gf.CreatePoint(new Coordinate(q.X, q.Y))));
+        return max;
+    }
+}
+
+/// <summary>[S138] 하네스 전용 삼각망 표고 조회 — <b>데이라잇 코드와 따로</b> 짠다(같은 코드로 재면 같은 병을 못 본다).</summary>
+sealed class TinLook
+{
+    private readonly List<WallDaylight.Tri> _t;
+    private readonly Dictionary<(int, int), List<int>> _b = new();
+    private const double Cell = 2.0;
+    public TinLook(List<WallDaylight.Tri> t)
+    {
+        _t = t;
+        for (int i = 0; i < t.Count; i++)
+        {
+            var a = t[i].A; var b = t[i].B; var c = t[i].C;
+            int x0 = (int)Math.Floor(Math.Min(a.X, Math.Min(b.X, c.X)) / Cell), x1 = (int)Math.Floor(Math.Max(a.X, Math.Max(b.X, c.X)) / Cell);
+            int y0 = (int)Math.Floor(Math.Min(a.Y, Math.Min(b.Y, c.Y)) / Cell), y1 = (int)Math.Floor(Math.Max(a.Y, Math.Max(b.Y, c.Y)) / Cell);
+            for (int gx = x0; gx <= x1; gx++)
+                for (int gy = y0; gy <= y1; gy++)
+                {
+                    if (!_b.TryGetValue((gx, gy), out var l)) _b[(gx, gy)] = l = new List<int>();
+                    l.Add(i);
+                }
+        }
+    }
+    public bool TryZ(double x, double y, out double z)
+    {
+        z = 0;
+        if (!_b.TryGetValue(((int)Math.Floor(x / Cell), (int)Math.Floor(y / Cell)), out var l)) return false;
+        foreach (int i in l)
+        {
+            var a = _t[i].A; var b = _t[i].B; var c = _t[i].C;
+            double d = (b.Y - c.Y) * (a.X - c.X) + (c.X - b.X) * (a.Y - c.Y);
+            if (Math.Abs(d) < 1e-14) continue;
+            double u = ((b.Y - c.Y) * (x - c.X) + (c.X - b.X) * (y - c.Y)) / d;
+            double v = ((c.Y - a.Y) * (x - c.X) + (a.X - c.X) * (y - c.Y)) / d;
+            double w = 1 - u - v;
+            if (u >= -1e-9 && v >= -1e-9 && w >= -1e-9) { z = u * a.Z + v * b.Z + w * c.Z; return true; }
+        }
+        return false;
+    }
 }

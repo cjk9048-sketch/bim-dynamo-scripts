@@ -20,3 +20,9 @@ src/DH.Grading.Civil/Resources/DHT_백업_*.dwt
 
 # 빌드 산출물 — 번들에 자동 복사되는 pdb는 저장소에 둘 이유가 없다(0903).
 **/DH.Grading.bundle/Contents/*.pdb
+
+# 옹벽 데이라잇 재생 입력 — 실행마다 Civil이 덮어쓴다(하네스 S138 ⑥이 읽는다). 수 MB라 저장소에 안 둔다.
+DHWALLDL_입력.txt
+DHWALLDL_입력_계획.txt
+DHWALLDL_입력_띠.txt
+DHWALLDL_순수옹벽_되읽기_*.txt
