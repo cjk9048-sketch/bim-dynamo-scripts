@@ -328,15 +328,26 @@ public sealed class CreateGradingCommand
                 return $"    ⚠<b>옹벽을 못 세웠다</b> — 줄이 {rows.Count}개뿐({rlog})\n";
 
             // ⑤ 면으로 — 계단 브레이크라인이라 허용오차는 <b>0.001</b>이어야 한다(면 폭이 5cm다)
+            //   ★★[검토 0918 · 높음 4] <b>줄을 닫아서 넣는다.</b> <c>PolyMinusLineBuffer</c>는 닫는 점을 떼고 주는데
+            //   줄은 <b>열린 브레이크라인</b>으로 들어가므로, 종전엔 줄마다 <b>마지막 점 → 첫 점 변</b>이 빠져
+            //   그 자리를 Civil이 마음대로 이었다(GradingGeometry.cs PolyMinusLineBuffer 끝 · GradingBuilder.AddOpenBreakline).
+            var rowsC = WallInPoly.ClosedRows(rows);
             var wid = GradingBuilder.BuildVirtualSlope(db, tr,
                 new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>(),
-                "가상옹벽_DH", rows, groundId, null, midOrd: 0.001);
-            string vseen = "";
+                "가상옹벽_DH", rowsC, groundId, null, midOrd: 0.001);
+            // ★[검토 0918 · 미결] <b>닫은 줄을 Civil이 다 받았나</b> — <c>AddOpenBreakline</c>은 실패를 삼킨다.
+            //   받은 수가 모자라면 줄이 빠진 면이고, 그 위에서 딴 데이라잇은 확인용 레이어로 보낸다.
+            int bIn = GradingBuilder.LastIntended, bDef = GradingBuilder.LastDefined;
+            bool bladeOk = bIn >= 0 && bDef >= bIn;
+            string bladeNote = bDef < 0 ? "브레이크라인 수를 못 셌다"
+                             : bDef < bIn ? $"브레이크라인을 <b>{bIn}개 중 {bDef}개만</b> 받았다(줄이 빠진 면)" : "";
+            string vseen = $" · 브레이크라인 의도 {bIn} / 정의됨 {bDef}{(bladeOk ? "" : " ⚠")}";
+            bool boundOk = false;
             try
             {
                 var tin = (TinSurface)tr.GetObject(wid, OpenMode.ForWrite);
                 // ★제 폴리곤으로 가둔다 — 없으면 볼록껍질이 엉뚱한 자리를 메운다
-                try { GradingBuilder.AddOuterBoundary(tin, poly, midOrd: 0.001); }
+                try { GradingBuilder.AddOuterBoundary(tin, poly, midOrd: 0.001); boundOk = true; }
                 catch (System.Exception be) { vseen += $" · ⚠경계 실패 {be.GetType().Name}"; }
                 try { using var tc = tin.GetTriangles(false); vseen += $" · <b>삼각형 {tc.Count}개</b>"; }
                 catch { }
@@ -345,12 +356,32 @@ public sealed class CreateGradingCommand
             try { vseen += " · " + GradingBuilder.MakeSurfaceVisible(db, tr, "가상옹벽_DH",
                                        "DH-가상옹벽면", "DH-가상옹벽", 6); }
             catch { }
-            try { DrawLinesOnLayer(db, tr, rows, "DH-가상옹벽선", 6); } catch { }
+            try { DrawLinesOnLayer(db, tr, rowsC, "DH-가상옹벽선", 6); } catch { }
+
+            // ⑥ ★★★[JACK 0918] <b>데이라잇</b> — 가상옹벽과 원지반이 닿는 선, 닫힌 3D 폴리선
+            //   <para>경계가 안 붙었으면 옹벽 면이 볼록껍질까지 번져 있다 — 그 위에서 딴 선은 가짜다.
+            //   그러니 <b>따지 않고</b> 까닭을 적는다(검토 0918 · 중간 6).</para>
+            string dl;
+            if (!boundOk)
+            {
+                const string noB = "⚠데이라잇(원지반·계획지표면)을 안 만들었다 — 가상옹벽에 폴리곤 경계가 안 붙었다(면이 폴리곤 밖으로 번져 있다)";
+                WallDaylightBuilder.Summaries.Add(noB);
+                dl = "  " + noB + "\n";
+            }
+            else
+            {
+                dl = WallDaylightBuilder.Build(db, tr, wid, ground, groundId, poly, bladeOk, bladeNote, rowsC, wUp);
+                // ★[검토 0918 · 낮음 5] 폐합면은 줄마다 이만큼씩 안으로 들어간다. 1mm 스냅에 가까우면
+                //   이웃 줄의 교선이 한 점으로 붙어 가짜 경보가 날 수 있다 — 전제가 깨지면 한 줄로 알린다.
+                double vEps = System.Math.Max(1e-3, p.MinFaceRun);
+                if (vEps < 0.003)
+                    dl += $"    ⚠폐합면 줄 간격 {vEps * 1000:F1}mm — 데이라잇 잇기(1mm 스냅)에 가까워 경보가 헛울릴 수 있다(MinFaceRun)\n";
+            }
 
             return $"    ★<b>가상 옹벽</b> — 폴리곤 안 원지반 최고 <b>{top:F2}m</b>"
                  + $"(잰 자리 {nHit}{(nMiss > 0 ? $" · 못 잰 자리 {nMiss}" : "")})"
                  + $" · 찍은 선 {zBase:F2}m → <b>{zBase + benchH * nb:F2}m</b>"
-                 + $" · {rlog}{vseen}\n";
+                 + $" · {rlog}{vseen} · 줄은 <b>닫아서</b> 넣었다({rowsC.Count}개)\n" + dl;
         }
         catch (System.Exception ex)
         { return $"    ⚠<b>옹벽을 못 세웠다</b> — {ex.GetType().Name}: {ex.Message}\n"; }
@@ -673,6 +704,9 @@ public sealed class CreateGradingCommand
                 //     구간이 없으면 여기는 <b>보통 정지 작업</b>이므로 종전 길로 그대로 간다.
                 if (GradingSettings.WallPolygonOnly && (wallZoneCut.Count > 0 || wallZoneFill.Count > 0))
                 {
+                    // ★[검토 0918 · 중간 6] 지난 실행의 데이라잇을 <b>먼저</b> 지운다 — 이번에 못 만들면
+                    //   (손 폴리곤 거절 · 옹벽 못 세움 · 예외) 지난 선이 새것처럼 남는다.
+                    try { WallDaylightBuilder.EraseOld(db, tr, pureToo: true, protect: groundId); } catch { }
                     SlopeZone? wzF = null; bool wUpF = true; string wSideF = ""; int nWZ = 0;
                     foreach (var (zs, upv, nm) in new[] { (wallZoneCut, true, "절토"), (wallZoneFill, false, "성토") })
                         foreach (var z in zs) { nWZ++; if (wzF == null) { wzF = z; wUpF = upv; wSideF = nm; } }
@@ -724,6 +758,20 @@ public sealed class CreateGradingCommand
                     tr.Commit();
                     try { DiagLog.Reset(sbP.ToString()); } catch { }
                     try { ed.WriteMessage("\n[DHGRADE] 폴리곤만 만들었습니다(정지면은 그대로). 진단 로그를 보세요."); } catch { }
+                    // ★[JACK 0918] 데이라잇 한 줄 — 테두리로 닫은 길이·버린 고리·⚠를 <b>화면에도</b> 밝힌다
+                    try
+                    {
+                        var dls = new System.Collections.Generic.List<string>(WallDaylightBuilder.Summaries);
+                        // ★[검토 0918 · 낮음 2] 옹벽을 못 세운 길(손 폴리곤 거절 · 옹벽 못 세움)에서도 한 줄은 뜬다
+                        if (dls.Count == 0)
+                            dls.Add("데이라잇 없음 — 이번 실행은 가상옹벽을 세우지 않았다(진단 로그의 ⚠를 보세요)"
+                                + (WallDaylightBuilder.EraseNote.Length > 0 ? " · " + WallDaylightBuilder.EraseNote
+                                   : WallDaylightBuilder.EraseCount > 0 ? $" · 지난 데이라잇 {WallDaylightBuilder.EraseCount}개는 지웠다" : ""));
+                        // 원지반(빨강) · 계획지표면(파랑) — 한 줄씩
+                        foreach (var dl1 in dls)
+                            ed.WriteMessage("\n[DHGRADE] " + System.Text.RegularExpressions.Regex.Replace(dl1, "<[^>]+>", ""));
+                    }
+                    catch { }
                     return;
                 }
 
@@ -1535,6 +1583,8 @@ public sealed class CreateGradingCommand
                         {
                             //   ★[JACK 0914] 허용오차 <b>0.001m</b> — 기본 1.0m는 옹벽의 0.05m 면보다 커서
                             //   계단을 한 줄로 뭉개고 측면(날개벽)을 지운다(실측: "전면만 나와").
+                            // ★[검토 0918 · 중간 2] 가상옹벽_DH를 <b>다시 짓는다</b> — 그 위에서 딴 지난 데이라잇은 이제 남의 선이다.
+                            try { WallDaylightBuilder.EraseOld(db, tr3); } catch { }
                             wallSlabId = GradingBuilder.BuildVirtualSlope(db, tr3,
                                 new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>(),
                                 "가상옹벽_DH", slab, groundId, null, midOrd: 0.001);

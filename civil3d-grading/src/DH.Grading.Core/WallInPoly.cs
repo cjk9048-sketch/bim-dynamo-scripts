@@ -37,6 +37,27 @@ public static class WallInPoly
     public static double StepRun(double benchH, double slope, double benchW, double minFaceRun)
         => Math.Max(benchH * Math.Max(0, slope), Math.Max(1e-4, minFaceRun)) + Math.Max(0, benchW);
 
+    /// <summary>★★[검토 0918 · 높음 4] <b>줄을 닫아서 브레이크라인으로 넣는다.</b>
+    /// <para><see cref="GradingGeometry.PolyMinusLineBuffer"/>는 닫는 점을 떼고 돌려주는데,
+    /// 줄은 <b>열린 브레이크라인</b>으로 들어간다(<c>BuildVirtualSlope</c>의 cornerLines).
+    /// 그러면 줄마다 <b>마지막 점 → 첫 점 변</b>이 빠져 그 자리는 Civil이 마음대로 삼각형을 잇는다 —
+    /// 곧은 변 하나가 통째로 빠질 수 있다. 첫 점을 끝에 한 번 더 붙여 닫는다.</para></summary>
+    public static List<List<Point3>> ClosedRows(IReadOnlyList<List<Point3>> rows)
+    {
+        var res = new List<List<Point3>>(rows.Count);
+        foreach (var r in rows)
+        {
+            var c = new List<Point3>(r);
+            if (c.Count >= 3)
+            {
+                var f = c[0]; var l = c[c.Count - 1];
+                if (Math.Abs(f.X - l.X) > 1e-9 || Math.Abs(f.Y - l.Y) > 1e-9) c.Add(f);
+            }
+            res.Add(c);
+        }
+        return res;
+    }
+
     /// <summary>★[JACK 0918] 열린 선의 <b>양 끝을 곧게 늘인다</b>.
     /// <para>버퍼를 뜰 때 끝마개 때문에 <b>끝에서 offset이 0으로 줄어드는</b> 것을 막는다 —
     /// 늘인 부분은 폴리곤 밖으로 나가므로 결과에 영향이 없다.</para></summary>

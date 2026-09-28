@@ -29,7 +29,9 @@ public sealed class CachedGroundSurface : IGroundSurface
     {
         // ★[검토 0901] 삼각형 목록은 <b>네이티브 메모리</b>라 GC 압박을 안 준다 —
         //   안 닫으면 관리 힙은 멀쩡한데 바깥 메모리만 조용히 는다.
-        using var tris = surface.GetTriangles(false); // false = 모든 삼각형 (TinSurfaceTriangleCollection)
+        // ★[검토 0918 · 정정] false = <b>보이는</b> 삼각형만(경계로 가린 것은 빠진다) — 종전 주석 «모든 삼각형»은 틀렸다
+        //   (GradingBuilder가 경계를 넣고 Rebuild한 뒤 이 호출로 삼각형 수를 세어 그 차이를 이미 쓰고 있다).
+        using var tris = surface.GetTriangles(false);
         int n = tris.Count;
         _ax = new double[n]; _ay = new double[n]; _az = new double[n];
         _bx = new double[n]; _by = new double[n]; _bz = new double[n];
@@ -116,6 +118,36 @@ public sealed class CachedGroundSurface : IGroundSurface
             }
         }
         return false;
+    }
+
+    /// <summary>★[JACK 0918 · 옹벽 데이라잇] 상자에 걸치는 삼각형들 — 이미 메모리에 있는 것을 꺼낸다.
+    /// <para>원지반은 삼각형이 <b>25만 개</b>다. Civil에서 다시 읽으면(<c>GetTriangles</c>) 네이티브 목록을 한 번 더
+    /// 훑는다 — 여기 있는 것을 쓰면 안 훑고, 교선을 구하는 평면과 표고를 읽는 평면이 <b>같은 삼각형</b>이 된다(검토 0918 · 낮음 9).</para></summary>
+    public List<WallDaylight.Tri> TrianglesIn(double minX, double minY, double maxX, double maxY)
+    {
+        var res = new List<WallDaylight.Tri>();
+        if (_count == 0) return res;
+        int x0 = Clamp((int)((minX - _minX) / _cell), 0, _nx - 1), x1 = Clamp((int)((maxX - _minX) / _cell), 0, _nx - 1);
+        int y0 = Clamp((int)((minY - _minY) / _cell), 0, _ny - 1), y1 = Clamp((int)((maxY - _minY) / _cell), 0, _ny - 1);
+        if (maxX < _minX || minX > _maxX || maxY < _minY || minY > _maxY) return res;
+        var seen = new HashSet<int>();
+        for (int gy = y0; gy <= y1; gy++)
+            for (int gx = x0; gx <= x1; gx++)
+            {
+                var b = _grid[gy * _nx + gx];
+                if (b == null) continue;
+                foreach (int i in b)
+                {
+                    if (!seen.Add(i)) continue;
+                    double tMinX = Math.Min(_ax[i], Math.Min(_bx[i], _cx[i])), tMaxX = Math.Max(_ax[i], Math.Max(_bx[i], _cx[i]));
+                    double tMinY = Math.Min(_ay[i], Math.Min(_by[i], _cy[i])), tMaxY = Math.Max(_ay[i], Math.Max(_by[i], _cy[i]));
+                    if (tMaxX < minX || tMinX > maxX || tMaxY < minY || tMinY > maxY) continue;   // 닿기만 해도 넣는다
+                    res.Add(new WallDaylight.Tri(new Point3(_ax[i], _ay[i], _az[i]),
+                                                 new Point3(_bx[i], _by[i], _bz[i]),
+                                                 new Point3(_cx[i], _cy[i], _cz[i])));
+                }
+            }
+        return res;
     }
 
     /// <summary>표면의 최저/최고 표고 — 마진(필요 단수) 추정에 사용.</summary>

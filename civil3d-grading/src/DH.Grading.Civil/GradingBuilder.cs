@@ -15,6 +15,11 @@ public static class GradingBuilder
 {
     /// <summary>직전 BuildVirtualSlope의 TIN 실측 검증 결과 — 의도한 링 Z와 실제 TIN 표고 대조(진단로그용).</summary>
     public static string LastVerify { get; private set; } = "";
+    /// <summary>★[검토 0918] 직전 <see cref="BuildVirtualSlope"/>의 브레이크라인 <b>넣으려던 수 / Civil이 받은 수</b>.
+    /// <para><c>AddOpenBreakline</c>은 실패를 삼키므로, 받은 수가 모자라면 <b>줄이 빠진 면</b>이다 —
+    /// 그 위에서 딴 데이라잇은 믿으면 안 된다. 못 셌으면 -1.</para></summary>
+    public static int LastIntended { get; private set; } = -1;
+    public static int LastDefined { get; private set; } = -1;
 
     /// <summary>오버사이즈 가상 사면 TIN — 계단 링을 Standard 브레이크라인으로(동심 비교차 → 톱니 0).
     /// cornerLines(코너 능선)를 주면 열린 브레이크라인으로 추가 — 코너 모따기(사선) 방지(직각 모드).</summary>
@@ -35,6 +40,7 @@ public static class GradingBuilder
         if (cornerLines != null && cornerLines.Count > 0)
             sharedPts = BreaklinePrep.SplitLineRingCrossings(rings, cornerLines);
         DiveReset();
+        LastIntended = -1; LastDefined = -1;
         ObjectId id = TinSurface.Create(db, UniqueName(db, tr, name));
         var tin = (TinSurface)tr.GetObject(id, OpenMode.ForWrite);
         foreach (var ring in rings) AddRingBreakline(tin, ring);
@@ -60,6 +66,7 @@ public static class GradingBuilder
         {
             int defCount = -1;
             try { defCount = tin.BreaklinesDefinition.Count; } catch { }
+            LastIntended = intended; LastDefined = defCount;
             vb.AppendLine($"  브레이크라인 의도 {intended} / 정의됨 {defCount}" +
                           (DiveCount > 0
                             ? $" · ★링이 끊긴 자리 {DiveCount}곳(최장 {DiveMaxLen:F1}m @ {DiveMaxX:F0},{DiveMaxY:F0}){DiveWhere}"
