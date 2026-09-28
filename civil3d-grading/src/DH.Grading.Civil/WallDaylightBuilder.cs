@@ -266,6 +266,7 @@ public static class WallDaylightBuilder
             //     실패는 Civil이 경계를 받는 쪽이다. 명령줄 ⚠가 «띠는 그렸지만 순수옹벽_DH를 못 지었다»라고 밝힌다.
             // 순수옹벽_DH 하나 짓기 — 관문에 걸리면 지우고 던진다
             bool lastErased = true;
+            DH.Grading.Core.CivilSafeMesh.Report? lastCs = null;       // mode 2가 지은 판의 다듬기 보고(판정 1·2)
             string BuildPure(System.Collections.Generic.List<Point3> ring, System.Collections.Generic.List<System.Collections.Generic.List<Point3>> holes,
                              string tag, int mode, out (double Max, int N, string At) ez, out string offNote)
             {
@@ -275,7 +276,9 @@ public static class WallDaylightBuilder
                 try
                 {
                     TinSurface tin;
-                    int nBExpect = 1 + holes.Count, xmlFaces = -1;
+                    int nBExpect = 1 + holes.Count, xmlFaces = -1, xmlPts = -1, civPts = -1;
+                    System.Collections.Generic.List<WallDaylight.Tri>? safe = null;
+                    DH.Grading.Core.CivilSafeMesh.Report? cs = null;
                     if (mode == 2)
                     {
                         // ★★★[v100.3 · JACK «초록색선에 맞춰서 정확히 잘리지 않으면 이 기능은 의미가 없어 무조건 성공해야해»]
@@ -284,17 +287,26 @@ public static class WallDaylightBuilder
                         GradingBuilder.EraseSurfacesByBaseName(tr, PureName, groundId);
                         var clip = WallDaylight.ClipToBand(wallTris, ring, holes, out string cn, out int cbad);
                         if (clip.Count == 0 || cbad > 0) throw new SkipAttempt("띠를 삼각형으로 다 못 덮었다 — " + cn);
+                        // ★★★[v100.4 · 0928 화면 없는 Civil 실측] 1µm 격자 그대로 넘기면 Civil이 0.1mm 안 점을 합치고 바늘 면을 뒤집어
+                        //   (17:32: 775점 → 675 · 테두리 45mm) 관문에 걸려 톱니 길로 갔다 → Civil이 그대로 받는 삼각형으로 다듬어 넘긴다.
+                        //   판정 1(정확) · 2(거의 — 자리를 적음) · 3(못 함 — 이 길을 건너뜀)
+                        safe = DH.Grading.Core.CivilSafeMesh.Make(clip, ring, holes, wallTris, out cs);
+                        sb.Append($"    (Civil에 맞게 다듬기: {cs.Summary})\n");
+                        if (safe == null) throw new SkipAttempt("Civil이 그대로 받을 삼각형으로 못 다듬었다 — " + cs.Fail);
                         string xml = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(DiagLog.FilePath) ?? ".", "DHWALLDL_순수옹벽.xml");
-                        WallDaylight.WriteLandXmlTin(xml, "PUREWALL", clip, 1e-7, out int np, out int nf, out int nd);
+                        WallDaylight.WriteLandXmlTin(xml, "PUREWALL", safe, 1e-7, out int np, out int nf, out int nd);
                         if (nd > 0) throw new SkipAttempt($"넓이 0이라 뺀 면 {nd}개 — 면이 맞물리지 않을 수 있다");
+                        try { ArchiveDump(xml); } catch { }                // ★[검토 0928 · 중간 5] 덮어써 잃지 않게
                         pid = TinSurface.CreateFromLandXML(db, PureName, xml, "PUREWALL");
                         if (pid.IsNull) throw new System.InvalidOperationException("CreateFromLandXML이 빈 ObjectId를 돌려줬다");
                         tin = (TinSurface)tr.GetObject(pid, OpenMode.ForWrite);
                         // ★[검토 v100.3 · 낮음 7] 지난 면을 못 지워 이름이 «_2»로 붙었으면 면이 둘이다 — 이 길은 접는다
                         if (tin.Name != PureName) throw new GateFail($"새 면 이름이 '{tin.Name}'이다(지난 '{PureName}'를 못 지움)");
-                        xmlFaces = nf;
+                        // ★[검토 0928 · 중간 5] Civil이 점을 합쳤는가를 바로 보이는 숫자로
+                        try { civPts = tin.GetGeneralProperties().NumberOfPoints; } catch { }
+                        xmlFaces = nf; xmlPts = np;
                         nBExpect = 0;
-                        offNote = $"{cn} · LandXML 점 {np} · 면 {nf}" + (nd > 0 ? $"(넓이 0이라 뺀 면 {nd})" : "");
+                        offNote = $"{cn} · 다듬기 판정 {cs.Tier}({cs.TierText}) · LandXML 점 {np} · 면 {nf}";
                         sb.Append($"    (초록 선으로 직접 자름: {offNote} · {System.IO.Path.GetFileName(xml)})\n");
                     }
                     else
@@ -344,28 +356,48 @@ public static class WallDaylightBuilder
                     double dz = ZCheck(tr, tin, wallId, ring, holes, out int nz);
                     ez = EdgeZReadback(tin, ring, holes);
                     double symTol = 0.0002 * perim + 0.001;
-                    string s0 = $"순수옹벽_DH — 경계 {nB}개(기대 {nBExpect}{(mode == 2 ? ": 직접 자른 삼각형이라 경계 없음" : $": Outer 1 + Hide {holes.Count}")}) · 보이는 삼각형 {tri}개"
-                         + $" · 띠와 어긋난 넓이 {sym:F5}㎡(허용 {symTol:F4}) · 최대 거리 {hd * 1000:F2}mm(허용 1mm{(hd > 0.001 ? " · " + hdAt : "")})"
-                         + $" · 가상옹벽과 높이 차 최대 {dz * 1000:F2}mm({nz}점)"
-                         + $" · <b>테두리 높이 − 띠 선 높이 최대 {ez.Max * 1000:F2}mm</b>({ez.N}점{(ez.N > 0 ? " @" + ez.At : "")})";
-                    // ★[계획 검토 0918 · 중간 4 · 검토 v100.0 · 중간 2] 넓이 차가 아니라 <b>모양 차</b>로 본다 — 비파괴 경계는 정확히 자르므로
-                    //   기대 오차는 거의 0이다. 5mm는 1:0.01 면에서 높이 50cm라 헐거웠다 → 1mm · 둘레 비례.
-                    //   견주는 띠는 <b>TIN이 덮는 자리로 잘라</b> 본다 — 1mm 스냅 때문에 밑선 꼭짓점이 폴리곤 밖 0.65mm까지 나가
-                    //   그 자리는 Civil이 원래 못 보여 준다(현장 프로브: 0.005~0.0064㎡).
-                    // ★★[검토 v100.3 · 높음 1 · 중간 3] 직접 자른 길은 <b>초록 선 그대로</b>여야 한다 — 삼각형 수 = LandXML 면 수 · 대칭차 ≤ 둘레×10µm ·
-                    //   최대 거리 ≤ 10µm(1:0.01에서 높이 1mm) · 테두리 높이 − 초록 선 ≤ 1mm(잰 점 있어야). 다른 길은 종전 관문(1mm)
-                    bool gateOk = mode == 2
-                        ? tri == xmlFaces && nB == 0 && sym <= perim * 1e-5 && hd <= 1e-5 && nz > 0 && dz <= 0.001 && ez.N > 0 && ez.Max <= 0.001
-                        : !(tri <= 0 || nB != nBExpect || hd > 0.001 || sym > symTol || nz == 0 || dz > 0.001);
-                    if (mode == 2) s0 += $" · 삼각형 {tri}/LandXML 면 {xmlFaces}";
+                    string s0;
+                    bool gateOk;
+                    if (mode == 2)
+                    {
+                        // ★★[v100.4 · 검토 0928 · 중간 4·5] 직접 자른 길의 관문 — ①Civil이 <b>넘긴 그대로</b> 받았나: 점 수·삼각형 수가 같고,
+                        //   꼭짓점 셋으로 같은 면을 세고, 다른 삼각형만 골라 넘긴 면과 높이를 정확히 견준다(«수 = 수»와 25점 대조로는 다시 이은 것을 못 가렸다 —
+                        //   뒤집기는 수를 안 바꾸고, 꺾임을 가르는 뒤집기를 25점이 맞힐 확률은 0.3%). 모양은 넘긴 면과 견준다(뒤집다 면이 빠진 17:32 45mm가 여기서 걸린다).
+                        //   ②넘긴 면이 초록 선에 맞나: 다듬기 판정(1 정확 / 2 거의)의 허용으로 띠·테두리·가상옹벽을 다시 본다.
+                        var theirs = new System.Collections.Generic.List<WallDaylight.Tri>(vis.Count);
+                        foreach (var t in vis) theirs.Add(new WallDaylight.Tri(t.A, t.B, t.C));
+                        var cmp = DH.Grading.Core.CivilSafeMesh.Compare(safe!, theirs);
+                        bool t1 = cs!.Tier == 1;
+                        double planTol = t1 ? 1e-5 : 2e-4, zTol = t1 ? 1e-3 : 1e-2;
+                        s0 = $"순수옹벽_DH — 직접 자른 삼각형(경계 {nB}개 · 기대 0) · 점 {civPts}/{xmlPts} · 삼각형 {tri}/{xmlFaces} · {cmp.Summary}"
+                           + $" · 띠와 어긋난 넓이 {sym:F5}㎡(허용 {perim * (t1 ? 1e-5 : 2e-4):F4}) · 최대 거리 {hd * 1e6:F1}µm(허용 {planTol * 1e6:F0}µm{(hd > planTol ? " · " + hdAt : "")})"
+                           + $" · 가상옹벽과 높이 차 최대 {dz * 1000:F2}mm({nz}점)"
+                           + $" · <b>테두리 높이 − 띠 선 높이 최대 {ez.Max * 1000:F2}mm</b>({ez.N}점{(ez.N > 0 ? " @" + ez.At : "")})";
+                        gateOk = tri == xmlFaces && civPts == xmlPts && nB == 0
+                              && cmp.SymArea <= 1e-8 && cmp.Hausdorff <= 1e-6 && cmp.MaxDz <= 1e-3
+                              && sym <= perim * (t1 ? 1e-5 : 2e-4) && hd <= planTol && nz > 0 && dz <= zTol && ez.N > 0 && ez.Max <= zTol;
+                    }
+                    else
+                    {
+                        s0 = $"순수옹벽_DH — 경계 {nB}개(기대 {nBExpect}: Outer 1 + Hide {holes.Count}) · 보이는 삼각형 {tri}개"
+                           + $" · 띠와 어긋난 넓이 {sym:F5}㎡(허용 {symTol:F4}) · 최대 거리 {hd * 1000:F2}mm(허용 1mm{(hd > 0.001 ? " · " + hdAt : "")})"
+                           + $" · 가상옹벽과 높이 차 최대 {dz * 1000:F2}mm({nz}점)"
+                           + $" · <b>테두리 높이 − 띠 선 높이 최대 {ez.Max * 1000:F2}mm</b>({ez.N}점{(ez.N > 0 ? " @" + ez.At : "")})";
+                        // ★[계획 검토 0918 · 중간 4 · 검토 v100.0 · 중간 2] 넓이 차가 아니라 <b>모양 차</b>로 본다 — 비파괴 경계는 정확히 자르므로
+                        //   기대 오차는 거의 0이다. 5mm는 1:0.01 면에서 높이 50cm라 헐거웠다 → 1mm · 둘레 비례.
+                        //   견주는 띠는 <b>TIN이 덮는 자리로 잘라</b> 본다 — 1mm 스냅 때문에 밑선 꼭짓점이 폴리곤 밖 0.65mm까지 나가
+                        //   그 자리는 Civil이 원래 못 보여 준다(현장 프로브: 0.005~0.0064㎡).
+                        gateOk = !(tri <= 0 || nB != nBExpect || hd > 0.001 || sym > symTol || nz == 0 || dz > 0.001);
+                    }
                     if (!gateOk)
                     {
                         // ★[v100.3 · JACK 0918 17:33] 관문에 걸리면 <b>Civil이 실제로 만든 삼각형</b>을 남긴다 — 어디를 어떻게 달리 잘랐는지
                         //   오프라인에서 잰다(17:32엔 «41mm»만 알고 자리를 몰랐다)
                         string dumpNote = "";
                         try { dumpNote = " · 삼각형을 " + System.IO.Path.GetFileName(DumpReadback(tag, ring, holes, vis)) + "에 남겼다"; } catch (System.Exception de) { dumpNote = $" · (삼각형 못 남김 {de.GetType().Name})"; }
-                        throw new GateFail("Civil이 경계를 띠대로 안 받았다 — " + s0 + dumpNote);
+                        throw new GateFail((mode == 2 ? "Civil이 넘긴 삼각형을 그대로 안 받았다 — " : "Civil이 경계를 띠대로 안 받았다 — ") + s0 + dumpNote);
                     }
+                    if (mode == 2) lastCs = cs;
                     return s0;
                 }
                 catch
@@ -420,7 +452,11 @@ public static class WallDaylightBuilder
             }
             // ★[검토 v100.3 · 중간 2] 비킨 링이면 «1mm 안»이라고 박지 않고 옮긴 점의 높이 차를 <b>잰 값</b>으로 적는다
             if (tries[used].Tag == "직접")
-                ringNote = " · <b>초록 선으로 직접 자른 삼각형</b>으로 지었다(LandXML)";
+                // ★[v100.4 · 계획 검토 0928 · 높음 2] «거의»는 자리와 크기를 밝힌다 — 0.1mm 안에 진짜 꺾임점 둘이 있거나 옹벽 꺾임점이 초록 선 곁이면
+                //   Civil 해상도로는 원리상 10µm를 못 맞춘다(그래도 톱니 길 60mm보다 훨씬 낫다)
+                ringNote = lastCs != null && lastCs.Tier == 2
+                    ? $" · ⚠초록 선에 <b>거의</b> 맞춰 지었다(Civil 해상도 0.1mm — 평면 최대 {lastCs.PlanMax * 1e6:F0}µm @{lastCs.PlanAt} · 테두리 높이 {lastCs.BorderDz * 1000:F1}mm · 옹벽 높이 {lastCs.WallDz * 1000:F1}mm)"
+                    : " · <b>초록 선으로 직접 자른 삼각형</b>으로 지었다(LandXML · Civil에 맞게 다듬음)";
             else if (tries[used].Tag == "정확")
                 ringNote = r.UnsFallback ? " · ⚠1mm 격자 링(정확한 자리로 못 되돌림)" : " · ⚠직접 자른 삼각형을 Civil이 못 받아 <b>정확한 링 + 비파괴 경계</b>로 지었다";
             else if (tries[used].Tag == "비킴")
