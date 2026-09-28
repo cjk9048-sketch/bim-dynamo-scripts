@@ -13905,6 +13905,28 @@ static (bool Closed, double CloseGap, int ExactDup, int NearDup1e6, int ZeroLen,
                 Check($"S139 ⑮[{tag}] LandXML 되읽기 — 점·면 수 · 번호 · 넓이 0 면 없음 · 뺀 면 0 · 넓이 = 자른 삼각형 넓이",
                       P.Count == np && F.Count == nf && badIdx == 0 && zeroA == 0 && nd == 0 && Math.Abs(xmlArea - meshA) <= 1e-8,
                       $"점 {P.Count}/{np} · 면 {F.Count}/{nf}(뺀 것 {nd}) · 번호 틀림 {badIdx} · 넓이 0 {zeroA} · 넓이 {xmlArea:F6}/{bandP.Area:F6}㎡");
+                SafeChecks(tag, tris, rr, w0);
+            }
+            // ⑯ ★★★[v100.4 · 0928 화면 없는 Civil 실측] Civil이 그대로 받는 삼각형으로 다듬었나 — 출하 길과 같은 입력(ClipToBand 결과)으로,
+            //   Core 보고를 믿지 않고 하네스가 따로 잰다(SafeCheck): 점 네모 간격 ≥1.05e-4 · Civil 합치기 흉내 0 · 겹침 없음 · 초록 선과 평면 ≤10µm ·
+            //   테두리 높이 ≤1mm · 옹벽 높이(겹침 꼭짓점 — 정확) ≤1mm · Civil이 고칠 면 0 · LandXML 되읽기.
+            //   (1µm 격자 그대로는 Civil이 17:32에서 775점 → 675로 합치고 바늘 면을 뒤집어 테두리가 45mm 어긋났다 — ⑮는 LandXML을 제 자신과만 견줘 1438개가 다 통과했다)
+            void SafeChecks(string tag, List<WallDaylight.Tri> tris0, WallDaylight.BandResult rr, List<WallDaylight.Tri> w0)
+            {
+                var safe = CivilSafeMesh.Make(tris0, rr.Ring!, rr.Holes, w0, out var csr);
+                Check($"S139 ⑯[{tag}] Civil에 맞게 다듬기 — 판정 1(정확)", safe != null && csr.Tier == 1, csr.Summary);
+                if (safe == null) return;
+                var m = SafeCheck.Measure(safe, rr.Ring!, rr.Holes, w0);
+                Check($"S139 ⑯[{tag}] 하네스가 따로 잰 값 — 네모 ≥1.05e-4 · 합치기 흉내 0 · 겹침 0 · 평면 ≤10µm · 테두리·옹벽 높이 ≤1mm · Civil이 고칠 면 0",
+                      SafeCheck.Tier1(m), m.Text);
+                string xf = Path.Combine(Path.GetTempPath(), $"blocktest_safe_{Environment.ProcessId}.xml");
+                WallDaylight.WriteLandXmlTin(xf, "PUREWALL", safe, 1e-7, out int np2, out int nf2, out int nd2);
+                // BLOCKTEST_SAFE_DUMP=폴더 — 이 판의 LandXML을 남긴다(설치 전 화면 없는 Civil에 그대로 넣어 본다 · 구멍 판 포함)
+                string? dumpDir = Environment.GetEnvironmentVariable("BLOCKTEST_SAFE_DUMP");
+                if (!string.IsNullOrEmpty(dumpDir) && Directory.Exists(dumpDir))
+                    try { File.Copy(xf, Path.Combine(dumpDir, "lx_" + string.Concat(tag.Select(ch => char.IsLetterOrDigit(ch) ? ch : '_')) + ".xml"), true); } catch { }
+                try { File.Delete(xf); } catch { }
+                Check($"S139 ⑯[{tag}] LandXML — 점·면 수가 다듬은 그대로(뺀 면 0)", np2 == csr.PtsOut && nf2 == safe.Count && nd2 == 0, $"점 {np2}/{csr.PtsOut} · 면 {nf2}/{safe.Count} · 뺀 {nd2}");
             }
         // ★★[v100.2 · JACK 0918 «또 수직방향이 톱니처럼 짤렸어 데이라잇에 깔끔하게 안잘려»] 띠 링을 1mm 격자에서 정확한 교선 위로 되돌렸는가.
         //   기준은 <b>고치기 전에</b> 박았다(검토 v100.2 · 중간 6 — 결과를 보고 기준을 정하지 않는다):
@@ -14194,7 +14216,75 @@ static (bool Closed, double CloseGap, int ExactDup, int NearDup1e6, int ZeroLen,
                 var rr = WallDaylight.KeepBand(cp0, cw0!, cg0!, cpl0!, "현장 원지반", "현장 정지면");
                 if (rr.Ring == null || rr.Broken) { Check($"S139 ⑮[{tagc}] 띠가 있다", false, rr.Summary); continue; }
                 ClipChecks(tagc, rr, cw0!);
+                // ⑯-b 돌린 판 — 1µm 격자 맞춤이 달라진다(계획 검토 0928 · 높음 2: 40판 중 3판 null이던 각도 0.37° · 2.9° · 61.7° 포함).
+                //   판정 1이 기준이다 — 판정 2(거의)는 출하에서는 짓는 결과지만 여기서는 되돌아감의 신호로 본다
+                foreach (double deg in new[] { 0.37, 2.9, 23.0, 45.0, 61.7, 97.3 })
+                {
+                    var (qp, qw, qg, qpl) = SafeCheck.Rotate(cp0, cw0!, cg0!, cpl0!, deg);
+                    var qr = WallDaylight.KeepBand(qp, qw, qg, qpl, "현장 원지반", "현장 정지면");
+                    if (qr.Ring == null || qr.Broken) { Check($"S139 ⑯[{tagc}@{deg}°] 돌린 판에도 띠가 있다", false, qr.Summary); continue; }
+                    var qt = WallDaylight.ClipToBand(qw, qr.Ring, qr.Holes, out _, out int qbad);
+                    if (qbad > 0) { Check($"S139 ⑯[{tagc}@{deg}°] 돌린 판을 삼각형으로 다 덮는다", false, $"못 덮은 조각 {qbad}"); continue; }
+                    SafeChecks($"{tagc}@{deg}°", qt, qr, qw);
+                }
             }
+        }
+    }
+    // ⑰ ★★[v100.4] CivilSafeMesh 합성 — 기대 결과를 먼저 적었다(계획 검토 0928 · 중간 6 «합성 50µm은 기대가 없다»)
+    {
+        static WallDaylight.Tri T3(double x1, double y1, double x2, double y2, double x3, double y3, Func<double, double, double> z)
+            => new(new Point3(x1, y1, z(x1, y1)), new Point3(x2, y2, z(x2, y2)), new Point3(x3, y3, z(x3, y3)));
+        static List<WallDaylight.Tri> BigWall(Func<double, double, double> z)
+            => new() { T3(-1, -1, 2, -1, 2, 2, z), T3(-1, -1, 2, 2, -1, 2, z) };
+        static List<WallDaylight.Tri> Cdt(List<Point3> ring, Func<double, double, double> z)
+        {
+            var g = new GeometryFactory();
+            var pg = g.CreatePolygon(ring.Select(q => new Coordinate(q.X, q.Y)).Append(new Coordinate(ring[0].X, ring[0].Y)).ToArray());
+            var tr = NetTopologySuite.Triangulate.Polygon.ConstrainedDelaunayTriangulator.Triangulate(pg);
+            var res = new List<WallDaylight.Tri>();
+            for (int i = 0; i < tr.NumGeometries; i++) { var c = tr.GetGeometryN(i).Coordinates; res.Add(T3(c[0].X, c[0].Y, c[1].X, c[1].Y, c[2].X, c[2].Y, z)); }
+            return res;
+        }
+        // S1 — 한 줄 위 50µm 붙은 두 점(0.5,0)·(0.50005,0) → 합쳐지고 판정 1 · 평면 ≈0(같은 줄) · 높이 0(한 평면)
+        {
+            Func<double, double, double> z = (x, y) => 100 + 0.3 * x + 0.1 * y;
+            var ring = new List<Point3> { new(0, 0, 100), new(0.5, 0, z(0.5, 0)), new(0.50005, 0, z(0.50005, 0)), new(1, 0, z(1, 0)), new(1, 1, z(1, 1)), new(0, 1, z(0, 1)) };
+            ring[0] = new(0, 0, z(0, 0));
+            var safe = CivilSafeMesh.Make(Cdt(ring, z), ring, new List<List<Point3>>(), BigWall(z), out var r);
+            Check("S139 ⑰ S1 한 줄 위 50µm 두 점 — 합치고 판정 1 · 평면 ≤1µm · 높이 ≤1µm", safe != null && r.Tier == 1 && r.Moves >= 1 && r.PlanMax <= 1e-6 && r.WallDz <= 1e-6 && r.BorderDz <= 1e-6, r.Summary);
+        }
+        // S2 — 60µm 떨어진 진짜 모서리 둘(45° 모따기) → 어느 쪽을 빼도 평면 ≈60µm → 판정 2(거의) · 높이 0(평평)
+        {
+            Func<double, double, double> z = (x, y) => 100.0;
+            var ring = new List<Point3> { new(0, 0, 100), new(1, 0, 100), new(1, 1, 100), new(0.50006, 1, 100), new(0.5, 0.99994, 100), new(0, 0.99994, 100) };
+            var safe = CivilSafeMesh.Make(Cdt(ring, z), ring, new List<List<Point3>>(), BigWall(z), out var r);
+            Check("S139 ⑰ S2 60µm 모서리 둘 — 판정 2(거의) · 평면 10~100µm · 높이 ≤1µm(null로 떨어지지 않는다)",
+                  safe != null && r.Tier == 2 && r.PlanMax > 1e-5 && r.PlanMax < 1e-4 && r.WallDz <= 1e-6 && r.BorderDz <= 1e-6, r.Summary);
+        }
+        // S3 — 안쪽 긴 변을 낀 테두리 바늘 면(가운데 점이 30µm 솟음) → 같은 평면이라 우리가 먼저 뒤집어 납작한 면 0 · 판정 1
+        {
+            Func<double, double, double> z = (x, y) => 100 + 0.2 * x + 0.1 * y;
+            var q1 = new Point3(0, 0, z(0, 0)); var q2 = new Point3(1, 0, z(1, 0)); var q3 = new Point3(1, 1, z(1, 1)); var v = new Point3(0.5, 1.00003, z(0.5, 1.00003)); var q4 = new Point3(0, 1, z(0, 1));
+            var ring = new List<Point3> { q1, q2, q3, v, q4 };
+            var tris = new List<WallDaylight.Tri> { new(q1, q2, q3), new(q1, q3, q4), new(q3, v, q4) };
+            var safe = CivilSafeMesh.Make(tris, ring, new List<List<Point3>>(), BigWall(z), out var r);
+            Check("S139 ⑰ S3 안쪽 긴 변을 낀 바늘 면 — 먼저 뒤집기 ≥1 · 남은 납작한 면 0 · Civil이 고칠 면 0 · 판정 1",
+                  safe != null && r.Tier == 1 && r.OwnFlips >= 1 && r.FlatLeft == 0 && r.CivilRisk == 0, r.Summary);
+        }
+        // 대조 함수 — 같음 · 같은 평면 뒤집기(높이 0) · 꺾임 뒤집기(높이 차를 잡음) · 빠진 면(모양 차를 잡음)
+        {
+            Func<double, double, double> zp = (x, y) => 100 + 0.5 * x;
+            Func<double, double, double> zc = (x, y) => 100 + 50 * Math.Abs(x - y);   // x=y 꺾임
+            List<WallDaylight.Tri> Quad(Func<double, double, double> z, bool diag02)
+                => diag02 ? new() { T3(0, 0, 1, 0, 1, 1, z), T3(0, 0, 1, 1, 0, 1, z) } : new() { T3(0, 0, 1, 0, 0, 1, z), T3(1, 0, 1, 1, 0, 1, z) };
+            var a = CivilSafeMesh.Compare(Quad(zp, true), Quad(zp, true));
+            var b = CivilSafeMesh.Compare(Quad(zp, true), Quad(zp, false));
+            var c = CivilSafeMesh.Compare(Quad(zc, true), Quad(zc, false));
+            var dm = Quad(zp, true); var d = CivilSafeMesh.Compare(dm, new List<WallDaylight.Tri> { dm[0] });
+            Check("S139 ⑰ 대조 — 같으면 같음 2/2 · 높이 0 · 모양 0", a.Same == 2 && a.MaxDz == 0 && a.SymArea == 0 && a.Hausdorff == 0, a.Summary);
+            Check("S139 ⑰ 대조 — 같은 평면 뒤집기: 같음 0/2 · 높이 차 ≤1µm · 모양 0", b.Same == 0 && b.MaxDz <= 1e-6 && b.SymArea <= 1e-12, b.Summary);
+            Check("S139 ⑰ 대조 — 꺾임을 가르는 뒤집기: 높이 차를 잡는다(>1mm)", c.MaxDz > 1e-3, c.Summary);
+            Check("S139 ⑰ 대조 — 면 하나가 빠지면 모양 차를 잡는다", d.Same == 1 && d.SymArea > 0.4 && d.Hausdorff > 0.1, d.Summary);
         }
     }
     // ⑥ 현장 재생 — Civil이 실행마다 떨군 입력을 그대로 다시 돌린다
