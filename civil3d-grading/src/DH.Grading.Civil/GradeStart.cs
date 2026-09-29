@@ -37,9 +37,12 @@ internal static class GradeStart
         {
             using var tr = db.TransactionManager.StartTransaction();
             var regions = GradingBundleStore.TryLoadAll(db, tr, out _);
+            // ★[v101.1 · 계획 검토 낮음 8] 이름 바꾸기가 두 번 다 실패해 합성 전 면만 남아도 «기존 정지면 있음»이다 —
+            //   아니면 묻지 않고 새로 시작으로 가서 합성 전 면·정지면_DH이전을 지운다
             bool has = regions != null && regions.Count > 0
-                    && GradingBuilder.SurfaceExistsByBaseName(tr, "정지면_DH");
-            nRegion = has ? regions.Count : 0;
+                    && (GradingBuilder.SurfaceExistsByBaseName(tr, "정지면_DH")
+                        || GradingBuilder.SurfaceExistsByBaseName(tr, Commands.WallCompositeCommand.BaseName));
+            nRegion = has ? regions!.Count : 0;
             tr.Commit();
             return has;
         }
@@ -62,6 +65,17 @@ internal static class GradeStart
             var regions0 = GradingBundleStore.TryLoadAll(db, tr, out _);
             bool hasPrev = regions0 != null && regions0.Count > 0
                         && GradingBuilder.SurfaceExistsByBaseName(tr, "정지면_DH");
+            // ★[v101.1 · 코드 검토 낮음 4] 정지면_DH 없이 옹벽 합성 전 면만 남았다(예상 못 한 실패) — «이어서»를 골랐는데
+            //   말없이 새로 시작으로 가면 합성 전 면·구역을 지운다. 옹벽·사면 변환(마지막 구역 다시)이 합성 전 면을 정지면_DH로 되살린다
+            if (!hasPrev && append && regions0 != null && regions0.Count > 0
+                && GradingBuilder.SurfaceExistsByBaseName(tr, Commands.WallCompositeCommand.BaseName))
+            {
+                tr.Commit();
+                return new Plan(Commands.GradeMode.Fresh, ObjectId.Null,
+                    $"정지면_DH가 없고 옹벽 합성 전 정지면('{Commands.WallCompositeCommand.BaseName}')만 남아 있습니다.\n\n"
+                  + "옹벽 변환이나 사면 변환을 한 번 돌리면 합성 전 면이 정지면_DH로 돌아옵니다 — 그 뒤에 이어서 하세요.\n"
+                  + "(처음부터 다시 만들려면 [새로시작])", true);
+            }
             if (!hasPrev || !append) { tr.Commit(); return fresh; }
 
             // 선택한 계획선이 기존 구역과 같은가 — 핸들 또는 fingerprint로 판정.
@@ -124,9 +138,13 @@ internal static class GradeStart
         try
         {
             using var tr = doc.Database.TransactionManager.StartTransaction();
-            bool ok = tr.GetObject(id, OpenMode.ForRead) is CivilDb.TinSurface;
+            var ts = tr.GetObject(id, OpenMode.ForRead) as CivilDb.TinSurface;
+            bool ok = ts != null;
+            // ★[v101.1 · 계획 검토 중간 3] 합성 전 정지면(보관용)을 원지반으로 고르면 새로 시작이 그것을 지워 예외가 난다
+            bool keep = ts != null && (ts.Name == Commands.WallCompositeCommand.BaseName || ts.Name.StartsWith(Commands.WallCompositeCommand.BaseName + "_"));
             tr.Commit();
             if (!ok) { why = "고른 것이 TIN 지표면이 아닙니다."; return false; }
+            if (keep) { why = "고른 것은 옹벽 합성 전 정지면(보관용)입니다 — 원지반을 고르세요."; return false; }
             return true;
         }
         catch (System.Exception ex) { why = "원지반을 읽지 못했습니다 — " + ex.Message; return false; }

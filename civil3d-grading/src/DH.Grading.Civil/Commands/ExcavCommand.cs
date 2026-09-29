@@ -78,6 +78,7 @@ public sealed class ExcavCommand
         {
             using var trV = db.TransactionManager.StartTransaction();
             GradingBuilder.IsolateSurfaces(trV, null);
+            GradingBuilder.SetSurfaceVisible(trV, WallCompositeCommand.BaseName, false);   // ★[v101.1] 합성 전 정지면은 보관용
             trV.Commit();
         }
         catch { }
