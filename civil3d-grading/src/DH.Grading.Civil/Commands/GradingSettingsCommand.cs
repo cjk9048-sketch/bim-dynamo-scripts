@@ -148,7 +148,11 @@ public sealed class MiscSettingsCommand
         {
             using var tr = doc.Database.TransactionManager.StartTransaction();
             if (!GradingSettings.ShowOnlyResultSurface)
+            {
                 GradingBuilder.IsolateSurfaces(tr, null);
+                // ★[v101.1 · 계획 검토 중간 3] 합성 전 정지면은 보관용 — 켜면 합성과 겹쳐 «옹벽이 반만 보인다»로 읽힌다
+                GradingBuilder.SetSurfaceVisible(tr, WallCompositeCommand.BaseName, false);
+            }
             else if (GradingBuilder.SurfaceExistsByBaseName(tr, "정지면_DH"))
                 GradingBuilder.IsolateSurfaces(tr, "정지면_DH");
 

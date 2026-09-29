@@ -40,7 +40,8 @@ public sealed class ResetCommand
           //   재료(뚜껑·조각)는 눈에 안 보이게 꺼 두므로 <b>쌓여도 안 보인다</b> — 그래서 더 고약하다.
           "가상옹벽_DH", "순수옹벽_DH", "옹벽뚜껑원본_DH", "옹벽뚜껑_DH", "옹벽뚜껑A_DH", "옹벽뚜껑B_DH",
           // ★[v101.0] 옹벽 합성(DHWALLCOMP) 산출물
-          Commands.WallCompositeCommand.CompName, Commands.WallCompositeCommand.TempName };
+          Commands.WallCompositeCommand.BaseName, Commands.WallCompositeCommand.OldCompName,
+          Commands.WallCompositeCommand.TempName, Commands.WallCompositeCommand.OldTempName };
         for (int i = 1; i <= GradingSettings.WallPartMax; i++)
         { l.Add($"옹벽조각{i}_DH"); l.Add($"옹벽뚜껑{i}_DH"); }
         return l.ToArray();

@@ -55,23 +55,17 @@ public static class WallDaylightBuilder
         if (stuck > 0)
             EraseNote = $"⚠지난 데이라잇을 <b>{stuck}개 못 지웠다</b>(레이어가 잠겼는지 보세요) — 옛 선과 새 선이 같이 있을 수 있다";
         EraseCount = gone;
-        // ★[v101.0 · 2차 검토 N2] 옹벽을 다시 고치면 지난 합성지표면_DH는 낡는다 — 켜 둔 채면 옛 합성이 새 옹벽 위에 겹쳐 보이고
-        //   정지면_DH는 숨은 채다(합성이 숨겼으므로). 지우지 않고 숨기고 정지면_DH를 다시 보인다 — «옹벽 합성»을 누르면 새로 짓는다
+        // ★★[v101.1 · JACK 0929 «합성을 자동으로 풀기»] 옹벽을 다시 고치면 지난 옹벽 합성을 푼다 — 정지면_DH를 합성 전으로 되돌린다
+        //   (옹벽 변환은 합성 전 계획면 기준이어야 한다 — 합성된 면이면 남길 띠가 사라진다). 계획부지 생성 «마지막 구역 다시»가 먼저 풀므로
+        //   여기는 안전망이다(합성 전 면이 없으면 아무것도 안 한다). 원지반 보호 — 넘겨받은 것이 없으면 옹벽변환이 쓴 원지반
         try
         {
-            int shown = 0, comp = 0;
-            var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
-            foreach (ObjectId sid in civilDoc.GetSurfaceIds())
-                if (tr.GetObject(sid, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.Surface s0 && ((Autodesk.AutoCAD.DatabaseServices.Entity)s0).Visible
-                    && (s0.Name == Commands.WallCompositeCommand.CompName || (s0.Name.StartsWith(Commands.WallCompositeCommand.CompName + "_") && int.TryParse(s0.Name.Substring(Commands.WallCompositeCommand.CompName.Length + 1), out _))))
-                    comp++;
-            if (comp > 0)
-            {
-                GradingBuilder.SetSurfaceVisible(tr, Commands.WallCompositeCommand.CompName, false);
-                shown = GradingBuilder.SetSurfaceVisible(tr, PlanSurfaceBase, true);
-                EraseNote = (EraseNote.Length > 0 ? EraseNote + " · " : "")
-                          + $"지난 합성지표면_DH는 옹벽이 바뀌어 낡았다 — 숨기고 {PlanSurfaceBase} {shown}개를 다시 보이게 했다(«옹벽 합성»을 다시 누르세요)";
-            }
+            ObjectId gProt = protect;
+            if (gProt.IsNull) gProt = Commands.NoriCommand.FindByHandle(db, GradingSettings.LastGroundHandle);
+            // 여기까지 오면 계획부지 생성 들머리가 이미 풀었거나(마지막 구역 다시) 합성전을 지웠다(이어서·새로) — 보통 할 일이 없고
+            //   «합성 전 면 없는 합성» 안내만 붙는다. 못 풀었으면 들머리가 되돌리고 멈췄으므로 여기 안 온다
+            var (un, _) = Commands.WallCompositeCommand.UndoComposite(db, tr, gProt);
+            if (un.Length > 0) EraseNote = (EraseNote.Length > 0 ? EraseNote + " · " : "") + un;
         }
         catch { }
     }
@@ -184,6 +178,7 @@ public static class WallDaylightBuilder
             CachedGroundSurface? pCache = null;
             int hits1 = 0;
             bool stale = false;
+            bool composed = false;   // ★[v101.1 · 계획 검토 높음 1] 정지면_DH가 옹벽 합성(합성 전 면 없이 남은 것)
             try
             {
                 // 같은 기준 이름이 여럿이면(정지면_DH · 정지면_DH_2 …) <b>무엇을 썼는지</b> 밝힌다 — 정확한 이름이 먼저
@@ -214,14 +209,21 @@ public static class WallDaylightBuilder
                     return $"⚠계획지표면 데이라잇 못 만듦 — '{pName}'가 TIN 지표면이 아니다";
                 // ★[검토 0918 v99.9 · 중간 3] 낡은 면이면 적는다(옹벽 변환은 정지면을 다시 짓지 않는다)
                 try { if (pt.IsOutOfDate) { stale = true; note += (note.Length > 0 ? " · " : "") + $"'{pName}'가 <b>낡음(Out of date)</b> 상태"; } } catch { }
+                // ★[v101.1 · 계획 검토 높음 1·중간 2] 합성 전 면 없이 남은 옹벽 합성이면 그 위에서 딴 띠·파랑 선은 틀린다(옛 옹벽 머리가 섞인다)
+                try
+                {
+                    if (Commands.WallCompositeCommand.IsComposite(tr, pt))
+                    { composed = true; note += (note.Length > 0 ? " · " : "") + $"'{pName}'는 <b>옹벽 합성</b>인데 합성 전 면이 없어 못 풀었다 — {Commands.WallCompositeCommand.B1Help}"; }
+                }
+                catch { }
                 pCache = new CachedGroundSurface(pt);
             }
             catch (System.Exception ex)
             { return $"⚠계획지표면 데이라잇 못 만듦 — '{pName}'를 못 읽었다 {ex.GetType().Name}: {ex.Message}"; }
             long tRead = sw.ElapsedMilliseconds;
             // 이름이 여럿이면 어느 면이 맞는지 모른다 — 선은 맞아도 확인용으로
-            bool planOk = bladeOk && hits1 <= 1;
-            string planNote = !bladeOk ? bladeNote : hits1 > 1 ? "계획지표면 후보가 여럿" : "";
+            bool planOk = bladeOk && hits1 <= 1 && !composed;
+            string planNote = !bladeOk ? bladeNote : hits1 > 1 ? "계획지표면 후보가 여럿" : composed ? $"'{pName}'가 옹벽 합성(합성 전 면 없음)" : "";
             // ★[검토 v100.0 · 낮음 3] 여기서 터지면 바깥이 «옹벽을 못 세웠다»로 잘못 적는다 — 제 자리에서 잡는다
             try { planTris = pCache.TrianglesIn(mnx - 1.0, mny - 1.0, mxx + 1.0, mxy + 1.0); }
             catch (System.Exception tx) { planTris = null; return $"⚠계획지표면 데이라잇 못 만듦 — '{pName}' 삼각형을 못 꺼냈다 {tx.GetType().Name}"; }
@@ -229,8 +231,9 @@ public static class WallDaylightBuilder
                 $"'{pName}' 삼각형 읽기 {tRead}ms" + (note.Length > 0 ? " · ⚠" + note : "")));
             if (note.Length > 0 && Summaries.Count > 0) Summaries[^1] += " · ⚠" + note;
             // ★[계획 검토 0918 · 중간 2] 순수옹벽_DH 관문 — 후보 여럿 · 낡은 정지면이면 <b>면을 짓지 않는다</b>
-            planGate = hits1 <= 1 && !stale;
-            planGateNote = hits1 > 1 ? "계획지표면 후보가 여럿" : stale ? $"'{pName}'가 낡음(Out of date)" : "";
+            planGate = hits1 <= 1 && !stale && !composed;
+            planGateNote = hits1 > 1 ? "계획지표면 후보가 여럿" : stale ? $"'{pName}'가 낡음(Out of date)"
+                         : composed ? $"'{pName}'가 옹벽 합성인데 합성 전 면이 없다 — {Commands.WallCompositeCommand.B1Help}" : "";
             GradingSettings.LastWallPlanNote = !bladeOk ? bladeNote : planGateNote;      // 순수옹벽_DH 관문과 같은 까닭이면 합성도 안 짓는다
             return null;
         }

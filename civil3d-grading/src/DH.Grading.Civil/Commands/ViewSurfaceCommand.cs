@@ -58,8 +58,15 @@ public sealed class ViewSurfaceCommand
         {
             Plan, Plan + "이전", PurePlan, PurePlan + "이전", AllName, ExcavAllName,
             Excav, ExcavCommand.BaseName, "가상절토_DH", "가상성토_DH", "_DH토량임시",
+            // ★[v101.1 · JACK 0929 «계획지표면이어야해»] 옹벽 쪽 재료·보관 면 — 계획지표면은 정지면_DH 하나(옹벽 합성 포함)다.
+            //   목록에 없으면 «원지반만» 보기에서 원지반처럼 켜진다
+            WallCompositeCommand.BaseName, WallCompositeCommand.OldCompName, WallCompositeCommand.TempName, WallCompositeCommand.OldTempName,
+            "가상옹벽_DH", WallDaylightBuilder.PureName,
         };
         for (int k = 1; k <= 16; k++) l.Add($"{ExcavCommand.VirtName}{k}");
+        // ★[v101.1 · 계획 검토 낮음 7] 옹벽 전이면 단계의 재료 — 목록 밖이면 «원지반만» 보기에서 원지반처럼 켜진다
+        l.AddRange(new[] { "옹벽뚜껑원본_DH", "옹벽뚜껑_DH", "옹벽뚜껑A_DH", "옹벽뚜껑B_DH" });
+        for (int i = 1; i <= GradingSettings.WallPartMax; i++) { l.Add($"옹벽조각{i}_DH"); l.Add($"옹벽뚜껑{i}_DH"); }
         for (int i = 1; i <= 8; i++)
             for (int r = 1; r <= 8; r++) l.Add($"터파기_절토복원{i}_{r}_DH");
         return l;

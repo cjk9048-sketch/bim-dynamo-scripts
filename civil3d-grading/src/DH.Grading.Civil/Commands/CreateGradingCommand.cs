@@ -64,6 +64,8 @@ public sealed class CreateGradingCommand
         {
             using var trV = doc.Database.TransactionManager.StartTransaction();
             GradingBuilder.IsolateSurfaces(trV, null);
+            // ★[v101.1 · 계획 검토 중간 3] 합성 전 정지면은 보관용이다 — 켜 두면 원지반으로 잘못 고를 수 있다
+            GradingBuilder.SetSurfaceVisible(trV, WallCompositeCommand.BaseName, false);
             trV.Commit();
         }
         catch { }
@@ -183,11 +185,46 @@ public sealed class CreateGradingCommand
         //   합성면이 '이전 정지면'을 깔고 누적하듯, 순수면도 '이전 순수면'을 깔고 누적한다 —
         //   안 그러면 이어서 할 때마다 <b>앞 구역이 종단에서 사라진다</b>.
         ObjectId prevPureId = ObjectId.Null;
+        string compLog = "";   // 옹벽 합성 정리 한 줄 — 진단 로그를 새로 쓰는 자리(폴리곤만 · 1단계)에 다시 적는다
         const string PureBase = SectionCommand.PurePadSurfaceBase;
         const string PurePrev = PureBase + "이전";
         try
         {
             using var trM = db.TransactionManager.StartTransaction();
+            // ★★[v101.1 · JACK 0929] 옹벽 합성(정지면_DH에 들어간 합성)을 모드마다 정리한다 —
+            //   마지막 구역 다시(옹벽·사면 변환) = <b>합성을 푼다</b>(합성 전 면을 정지면_DH로 · 인터뷰 «합성을 자동으로 풀기») ·
+            //   이어서 = 합성이 새 구역의 기준면(정지면_DH이전)에 굳는다 → 합성 전 면은 낡음 · 새로 = 다 치운다(옛 판 합성지표면_DH 포함).
+            //   ★폴리곤만 만드는 옹벽 변환도 이 뒤(구역 준비 다음)에서 갈라져 나가므로 <b>여기서</b> 풀어야 합성 전 면이 산다
+            string compNote = ""; bool compOk = true;
+            try
+            {
+                if (mode == GradeMode.RerunLast) (compNote, compOk) = WallCompositeCommand.UndoComposite(db, trM, groundId);
+                else
+                {
+                    GradingBuilder.EraseSurfacesByBaseName(trM, WallCompositeCommand.BaseName, groundId);
+                    if (mode == GradeMode.Fresh) GradingBuilder.EraseSurfacesByBaseName(trM, WallCompositeCommand.OldCompName, groundId);
+                    // 합성 전 면이 남으면 나중에 새 계획면 곁에서 짝이 어긋난다 — 못 지웠으면 멈춘다
+                    var (bl, bln) = WallCompositeCommand.Candidates(Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument, trM, WallCompositeCommand.BaseName, groundId);
+                    if (bl.Count > 0) { compNote = $"⚠낡은 {string.Join(", ", bln)}를 못 지웠다(레이어 잠김?)"; compOk = false; }
+                }
+            }
+            catch (System.Exception cx) { compNote = $"⚠옹벽 합성 정리 실패 {cx.GetType().Name}: {cx.Message}"; compOk = false; }
+            compLog = compNote;
+            if (compNote.Length > 0)
+            {
+                try { ed.WriteMessage("\n[옹벽 합성] " + compNote); } catch { }
+                try { DiagLog.Append($"\n■ {System.DateTime.Now:HH:mm:ss} 계획부지 생성({mode}) [옹벽 합성] {compNote}{(compOk ? "" : " → 멈춤(도면은 명령 전 그대로)")}\n"); } catch { }
+            }
+            // ★★[코드 검토 v101.1 · 중간 1] 합성 정리를 못 끝냈으면 <b>커밋하지 않고</b> 멈춘다 — 트랜잭션이 되돌아간다.
+            //   계속 가면 합성된 면 위에 옹벽을 다시 세우거나, 새 계획면 곁에 낡은 합성 전 면이 남아 나중에 그것을 되살린다
+            if (!compOk)
+            {
+                trM.Abort();   // 먼저 되돌리고 알린다(«명령 전 그대로»가 참이 된 뒤에)
+                // ★[재검토 v101.1] 사면 변환의 구간 지정(ZoneOverride)은 들머리에서 이미 썼다 — 멈추면 다시 골라야 한다
+                try { AcadApp.ShowAlertDialog("옹벽 합성을 정리하지 못해 멈췄습니다(도면은 명령 전 그대로).\n\n" + compNote.Replace("⚠", "")
+                                              + "\n\n옹벽·사면 변환 중이었다면 원인을 푼 뒤 선을 다시 골라 변환하세요."); } catch { }
+                return;
+            }
             if (mode != GradeMode.Fresh)
                 regionsPrev = GradingBundleStore.TryLoadAll(db, trM, out _);
             if (mode == GradeMode.Append)
@@ -714,6 +751,7 @@ public sealed class CreateGradingCommand
                     sbP.Append("[DHGRADE 진단] " + System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
                         + "\n■ <b>폴리곤만 만든다</b>(WallPolygonOnly) — 정지면은 <b>안 건드린다</b>"
                         + "(그래서 <b>다시 만들지 않는다</b> — 0916 실측으로 그 재생성이 16.1초 중 16초였다)\n");
+                    if (compLog.Length > 0) sbP.Append("■ [옹벽 합성] " + compLog + "\n");
                     if (wzF == null)
                         sbP.Append("  ⚠옹벽 구간이 없다(수직 구배 규칙을 가진 <b>부분 지정</b> 구간 0개)"
                             + $" · 절토 구간 {cutZones.Count} · 성토 구간 {fillZones.Count}"
@@ -788,6 +826,7 @@ public sealed class CreateGradingCommand
                     DiagLog.Reset(
                         "[DHGRADE 진단] " + System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") +
                         "\n■ " + wallInfo +
+                        (compLog.Length > 0 ? "\n■ [옹벽 합성] " + compLog : "") +
                         (LastBudgetNote.Length > 0 ? "\n■ " + LastBudgetNote : "") +
                         "\n\n■ 절토\n" + diagCut + "\n■ 성토\n" + diagFill);
                 }

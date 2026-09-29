@@ -274,7 +274,7 @@ internal sealed class GradingPanel : UserControl
         //   창 값을 안 쓰므로 Apply()를 거치지 않고 바로 보낸다(값이 틀려도 합성은 된다)
         {
             var bComp = new Button { Content = "옹벽 합성", MinWidth = 104, Height = 30, Margin = new Thickness(0, 0, 6, 0),
-                ToolTip = "옹벽을 다 고친 뒤 누릅니다 — 정지면 + 순수옹벽 + 원지반 뚜껑을 합친 합성지표면_DH를 만듭니다(15~20초)." };
+                ToolTip = "옹벽을 다 고친 뒤 누릅니다 — 정지면_DH에 옹벽(순수옹벽 + 원지반 뚜껑)을 합성합니다(15~20초). 합성 전 정지면은 숨겨 두고, 옹벽 변환을 다시 하면 자동으로 되돌립니다." };
             bComp.Click += (_, __) => PickSession.Send(Doc, "DHWALLCOMP");
             wRow.Children.Add(bComp);
         }
