@@ -1826,7 +1826,13 @@ public static class GradingBuilder
             string nm = s.Name;
             if (nm != baseName && !(nm.StartsWith(baseName + "_") && int.TryParse(nm.Substring(baseName.Length + 1), out _)))
                 continue;
-            try { ((AcadEntity)tr.GetObject(sid, OpenMode.ForWrite)).Visible = visible; n++; }
+            // ★[검토 0929 v101 · 낮음 8] 같은 값이면 쓰지 않는다 — 쓰는 것 자체가 Civil에겐 «수정»이라 붙여넣은 합성면에 ⚠가 붙을 수 있다(IsolateSurfaces v32.11)
+            try
+            {
+                if (((AcadEntity)tr.GetObject(sid, OpenMode.ForRead)).Visible != visible)
+                    ((AcadEntity)tr.GetObject(sid, OpenMode.ForWrite)).Visible = visible;
+                n++;                                   // 원하는 상태가 된 수(잠겨 못 바꾸면 안 센다)
+            }
             catch { }
         }
         return n;

@@ -27,3 +27,8 @@ DHWALLDL_입력_계획.txt
 DHWALLDL_입력_띠.txt
 DHWALLDL_순수옹벽_되읽기_*.txt
 DHWALLDL_순수옹벽.xml
+
+# 옹벽 합성(DHWALLCOMP) — 실행마다 덮어쓴다(합성 xml은 정지면 전체라 수십 MB)
+DHWALLCOMP_입력.txt
+DHWALLCOMP_합성.xml
+DHWALLCOMP_진단.log

@@ -14287,6 +14287,28 @@ static (bool Closed, double CloseGap, int ExactDup, int NearDup1e6, int ZeroLen,
             Check("S139 ⑰ 대조 — 면 하나가 빠지면 모양 차를 잡는다", d.Same == 1 && d.SymArea > 0.4 && d.Hausdorff > 0.1, d.Summary);
         }
     }
+    // ══ S140 ★★★[v101.0 · JACK 0928 «원지반 뚜껑만들어서 합성하는걸로»] 합성지표면_DH = 폴리곤 안 max(정지면, min(옹벽, 원지반)) · 밖 정지면 ══
+    //   Core BuildComposite를 출하 길 그대로 돌리고 하네스가 따로 잰다(CompositeCheck) — 현장 다섯 판(0928 15:26 · 0918 네 판)
+    //   + 돌린 판 넷(1µm 격자 맞춤이 달라진다) + 옹벽 앞 성토가 섞인 합성 판(현장 다섯 판엔 성토 자리가 없다).
+    {
+        Console.WriteLine("\n== S140 합성지표면 (정지면 + 원지반 뚜껑) ==");
+        string d = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "data");
+        foreach (var (tag, fn, isBand) in new[] { ("0928 15:26", "현장0928_1526_띠.txt", true), ("13:33", "현장0918_1333_원지반.txt", false), ("14:43", "현장0918_1443_띠.txt", true), ("15:50", "현장0918_1550_띠.txt", true), ("17:32", "현장0918_1732_띠.txt", true) })
+        {
+            List<Point3>? p0 = null; List<WallDaylight.Tri>? w0 = null, g0 = null, pl0 = null;
+            if (isBand) { if (WallDaylight.TryReadBandInput(Path.Combine(d, fn), out var a1, out var a2, out var a3, out var a4, out _)) { p0 = a1; w0 = a2; g0 = a3; pl0 = a4; } }
+            else if (WallDaylight.TryReadInput(Path.Combine(d, fn), out var b1, out var b2, out var b3, out _) && WallDaylight.TryReadInput(Path.Combine(d, "현장0918_1333_계획.txt"), out _, out _, out var b4, out _)) { p0 = b1; w0 = b2; g0 = b3; pl0 = b4; }
+            if (p0 == null) { Check($"S140[{tag}] 고정 자료를 읽는다", false, fn); continue; }
+            CompositeCheck.Case(Check, tag, p0, w0!, g0!, pl0!);
+            if (tag is "0928 15:26" or "17:32")
+                foreach (double deg in new[] { 2.9, 61.7 })
+                {
+                    var (qp, qw, qg, qpl) = SafeCheck.Rotate(p0, w0!, g0!, pl0!, deg);
+                    CompositeCheck.Case(Check, $"{tag}@{deg}°", qp, qw, qg, qpl);
+                }
+        }
+        CompositeCheck.Synthetic(Check);
+    }
     // ⑥ 현장 재생 — Civil이 실행마다 떨군 입력을 그대로 다시 돌린다
     {
         string? root = AppContext.BaseDirectory;

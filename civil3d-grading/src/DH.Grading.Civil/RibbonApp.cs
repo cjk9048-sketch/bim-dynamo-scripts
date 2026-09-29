@@ -15,6 +15,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SlopeLineCommand))]           // DHSLOPELINE(노리선 수동, 레거시)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.NoriCommand))]                // DHNORI(노리선 버튼 — 번들 기반)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.WallPickCommand))]            // DHWALL(옹벽 변환 — 사면선/소단선 선택, §75)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.WallCompositeCommand))]       // DHWALLCOMP(옹벽 합성 — 합성지표면_DH = max(정지면, min(옹벽, 원지반)), §89)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SlopeReleaseCommand))]        // DHSLOPE(사면 변환 — 옹벽선 선택해 그 단부터 사면 복귀)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.InfraworksCommand))]          // DHINFRA(INFRAWORKS SHP 내보내기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ViewSurfaceCommand))]         // DHVIEW(지표면 보기 전환)
