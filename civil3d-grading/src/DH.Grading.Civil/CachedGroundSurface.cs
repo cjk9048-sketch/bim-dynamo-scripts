@@ -13,6 +13,9 @@ public sealed class CachedGroundSurface : IGroundSurface
     // 삼각형 정점 XY/Z (정점 3개 평탄 배열)
     private readonly double[] _ax, _ay, _az, _bx, _by, _bz, _cx, _cy, _cz;
     private readonly int _count;
+    private readonly int _reported;
+    /// <summary>★[검토 0929 v101 · 낮음 9] Civil이 준 삼각형 중 읽다 예외로 버린 수 — 0이 아니면 그 면은 빠진 채다(합성은 짓지 않는다).</summary>
+    public int ReadFailed => _reported - _count;
 
     // 격자 인덱스
     private readonly double _minX, _minY, _cell;
@@ -33,6 +36,7 @@ public sealed class CachedGroundSurface : IGroundSurface
         //   (GradingBuilder가 경계를 넣고 Rebuild한 뒤 이 호출로 삼각형 수를 세어 그 차이를 이미 쓰고 있다).
         using var tris = surface.GetTriangles(false);
         int n = tris.Count;
+        _reported = n;
         _ax = new double[n]; _ay = new double[n]; _az = new double[n];
         _bx = new double[n]; _by = new double[n]; _bz = new double[n];
         _cx = new double[n]; _cy = new double[n]; _cz = new double[n];
@@ -118,6 +122,15 @@ public sealed class CachedGroundSurface : IGroundSurface
             }
         }
         return false;
+    }
+
+    /// <summary>★[v101.0 · 합성지표면_DH] 보이는 삼각형 <b>전부</b>(받은 좌표 그대로) — 손 안 댄 정지면 삼각형을 그대로 옮긴다.</summary>
+    public List<WallDaylight.Tri> AllTriangles()
+    {
+        var res = new List<WallDaylight.Tri>(_count);
+        for (int i = 0; i < _count; i++)
+            res.Add(new WallDaylight.Tri(new Point3(_ax[i], _ay[i], _az[i]), new Point3(_bx[i], _by[i], _bz[i]), new Point3(_cx[i], _cy[i], _cz[i])));
+        return res;
     }
 
     /// <summary>★[JACK 0918 · 옹벽 데이라잇] 상자에 걸치는 삼각형들 — 이미 메모리에 있는 것을 꺼낸다.

@@ -17,7 +17,8 @@ namespace DH.Grading.Core;
 /// <para>그래서 ①네모 거리 <see cref="Gap"/> 안의 두 점은 <b>양쪽 방향을 다 재 보고</b> 오차가 작은 쪽으로 합치고 ②<see cref="FoldLen"/> 이하 변을 가진 납작한 면은 접고,
 /// 긴 변 가운데 점이 문제인 납작한 면은 같은 평면이면 우리가 먼저 대각선을 뒤집는다 ③결과를 <b>정확히</b> 잰다 —
 /// 옹벽 높이는 새 면과 옹벽 삼각형이 겹치는 다각형의 꼭짓점에서(면 가운데·변 가운데 표본은 참값의 절반만 봤다: 17:32 0.423 vs 0.847mm — 계획 검토 0928 · 높음 1),
-/// 테두리는 양쪽 꼭짓점과 1mm 간격 점에서.</para>
+/// 테두리는 양쪽 꼭짓점을 서로에게 비춘 자리와 5cm 간격 점에서(평면 거리는 이것으로 정확하다 — 높이 차는 모서리 이등분선에서 가장 가까운 초록 선 자리가
+/// 건너뛰어 조금 적게 나올 수 있다: 검토 0928 v100.4 · 낮음 3의 반례 1:0.01에서 0.775mm인데 3D 거리는 8µm라 잣대가 꺾이는 것).</para>
 /// <para>판정 3단(계획 검토 0928 · 높음 2): <b>1 정확</b>(평면 ≤10µm · 테두리·옹벽 높이 ≤1mm) · <b>2 거의</b>(≤0.2mm · ≤10mm — 자리를 적는다) · <b>3 못 함</b>(null).
 /// 0.1mm 안에 진짜 꺾임점 둘이 있거나 옹벽 꺾임점이 초록 선 10~100µm 곁에 있으면 Civil 해상도(0.1mm)로는 10µm를 <b>원리상</b> 못 맞춘다 —
 /// 그런 자리를 톱니 길(60mm)로 떨어뜨리지 않고 «거의»로 짓는다.</para></summary>
@@ -36,6 +37,16 @@ public static class CivilSafeMesh
     const double PlanTol2 = 2e-4, ZTol2 = 1e-2, FlipTol2 = 1e-3;
     const double OnRing = 1.5e-6;          // 초록 선 위로 치는 거리(ClipToBand 1µm 격자 맞춤 ≤0.71µm)
     const double OwnFlipDz = 2e-4;         // 우리가 먼저 뒤집어도 되는 높이 변화(두 대각선이 만나는 점) — 끝의 옹벽 높이 검사가 전체를 다시 지킨다
+    /// <summary>★[v101.0 · 0929 화면 없는 Civil 재시험] 구역 모드(합성)에서 이보다 짧은 변은 정확 기준 안일 때 접는다.
+    /// <para>합성 10판 중 1판(17:32@61.7°)에서 Civil이 옹벽 앞면의 바늘 면 하나(짧은 변 120µm · 높이 120µm · 긴 변 450mm, 긴 변은 들로네)와
+    /// 그 곁 두 면을 뒤집어 0.001㎡ 구멍을 냈다. 88점짜리 작은 판으로 떼어도 똑같이 깨졌고, 짧은 변을 접으면(어느 쪽으로든) 그대로 받았다.
+    /// 짧은 쪽 점을 옮겨 가며 잰 문턱: 긴 변 선까지 수직 거리 ≤122.0µm면 깨지고 ≥122.5µm면 받는다(거리·네모·방향을 바꿔 가른 것 — 네모나 점 사이 거리로는 안 맞음).
+    /// 다른 판에는 높이 105~130µm · 들로네 아닌 바늘이 수백 개 있어도 Civil이 받았다 — 규칙을 다 아는 것은 <b>아니다</b>.
+    /// 그래서 규칙을 흉내 내지 않고 이런 모양의 뿌리(0.25mm 안 짧은 변)를 정확 기준 안에서만 없앤다. 못 접은 것은 세어 적고, Civil 되읽기 관문이 끝을 지킨다.</para></summary>
+    public const double ShortFold = 2.5e-4;
+    /// <summary>짧은 변(납작하지는 않은 면)을 접을 때 쓰는 오차 한도 — 점수 0.2 = 높이 0.2mm(정확 기준 1mm의 1/5).
+    /// 0929 다섯 판·돌린 판: 1로 두나 0.2로 두나 접힌 수(284~400)·남은 짧은 변(0~1)·옹벽 높이 최대(0.48~0.50mm — 이건 Civil 합치기 쌍 몫)가 같아 아껴 쓴다.</summary>
+    const double ShortFoldScore = 0.2;
 
     public sealed class Report
     {
@@ -43,6 +54,10 @@ public static class CivilSafeMesh
         public int PtsIn, PtsOut, FacesIn, FacesOut;
         public int Pairs, Moves, MovesRing, MovesBorder, MovesInner, Unresolved; public double MoveMax; public string UnresolvedAt = "";
         public int Folds, OwnFlips, FlatLeft; public double FlatMinH = double.PositiveInfinity;
+        /// <summary>구역 모드: 짧은 변(&lt; <see cref="ShortFold"/>) 접기 수 · 못 접고 남은 짧은 변 수 · 그중 가장 짧은 것.</summary>
+        public int ShortFolds, ShortLeft; public double ShortMin = double.PositiveInfinity; public string ShortAt = "";
+        /// <summary>구역 모드: 짧은 변은 없어도 가장 낮은 높이가 125µm 아래인 면(긴 변 안쪽) — 0929 실험의 Civil 문턱(122µm) 곁. 판정엔 안 넣고 적는다.</summary>
+        public int ThinLeft; public string ThinAt = "";
         public int FlipRiskN; public double FlipRiskDz; public string FlipRiskAt = "";
         /// <summary>Civil이 고칠 면 — 가장 낮은 높이 &lt; 1e-4이고 가장 긴 변이 안쪽이며 들로네가 아닌 면(계획 검토 0928 · 중간 4: 73면 중 71~73면 일치).
         /// 이런 면 곁에서 Civil은 대각선을 뒤집고, 그러다 면이나 점을 통째로 빠뜨린 적이 있다(17:32 45mm · 돌린 13:33 460mm).</summary>
@@ -52,6 +67,10 @@ public static class CivilSafeMesh
         public double BorderDz; public string BorderAt = "";
         public double WallDz; public string WallAt = "";
         public double AreaSum, AreaUnion;
+        /// <summary>겹침 계산 예외·NaN 수 — 0이 아니면 그 자리 오차를 못 쟀으니 판정 3.</summary>
+        public int OverlayExc;
+        /// <summary>판정 2(거의)의 실제 까닭 — 정확 기준을 넘은 값과 자리.</summary>
+        public string Tier2Why = "";
         public string Fail = "";
         public string TierText => Tier == 1 ? "정확" : Tier == 2 ? "⚠거의" : "⚠못 함";
         public string Summary
@@ -63,6 +82,8 @@ public static class CivilSafeMesh
                 return $"판정 {Tier}({TierText}) · 점 {PtsIn}→{PtsOut} · 면 {FacesIn}→{FacesOut}"
                      + $" · 가까운 쌍 {Pairs}(합침 {Moves}: 초록 선 꼭짓점 {MovesRing} · 선 위 {MovesBorder} · 안쪽 {MovesInner} · 최대 이동 {MoveMax * 1e6:F0}µm{(Unresolved > 0 ? $" · ⚠못 푼 쌍 {Unresolved} @{UnresolvedAt}" : "")})"
                      + $" · 납작한 면 접기 {Folds} · 먼저 뒤집기 {OwnFlips} · 남은 납작한 면 {FlatLeft}{(FlatLeft > 0 ? $"(가장 낮은 {FlatMinH * 1e6:F0}µm)" : "")}"
+                     + (ShortFolds + ShortLeft > 0 ? $" · 짧은 변 접기 {ShortFolds} · 남은 짧은 변 {ShortLeft}{(ShortLeft > 0 ? $"(가장 짧은 {ShortMin * 1e6:F0}µm @{ShortAt})" : "")}" : "")
+                     + (ThinLeft > 0 ? $" · 가는 바늘(높이 <125µm) {ThinLeft} @{ThinAt}" : "")
                      + $" · 뒤집기 흉내 {FlipRiskN}변 최대 {FlipRiskDz * 1000:F3}mm{(FlipRiskDz > FlipTol1 ? " @" + FlipRiskAt : "")}"
                      + $" · Civil이 고칠 면 {CivilRisk}{(CivilRisk > 0 ? " @" + CivilRiskAt : "")}"
                      + $" · 남은 점 네모 최소 {minBox}µm"
@@ -70,6 +91,8 @@ public static class CivilSafeMesh
                      + $" · 테두리 높이 {BorderDz * 1000:F3}mm{(BorderDz > ZTol1 ? " @" + BorderAt : "")}"
                      + $" · 옹벽 높이 {WallDz * 1000:F3}mm{(WallDz > ZTol1 ? " @" + WallAt : "")}"
                      + (Math.Abs(AreaSum - AreaUnion) > 1e-9 + 1e-9 * AreaSum ? $" · ⚠면 겹침 {AreaSum - AreaUnion:E2}㎡" : "")
+                     + (OverlayExc > 0 ? $" · ⚠겹침 계산 예외 {OverlayExc}" : "")
+                     + (Tier2Why.Length > 0 ? $" · 거의인 까닭: {Tier2Why}" : "")
                      + (Fail.Length > 0 ? $" · ⚠{Fail}" : "");
             }
         }
@@ -84,18 +107,48 @@ public static class CivilSafeMesh
         if (tris == null || tris.Count == 0 || ring == null || ring.Count < 3 || wallTris == null || wallTris.Count == 0)
         { rep.Fail = "삼각형·띠·옹벽 중 빈 것이 있다"; return null; }
         var w = new Work(tris, ring, holes, wallTris);
+        return Run(w, rep);
+    }
+
+    /// <summary>★★[v101.0 · 합성지표면_DH] <b>구역 모드</b> — 초록 선 없이, 받은 삼각형 자체를 참값으로 다듬는다.
+    /// <para><paramref name="fixedPts"/>는 그대로 옮길 정지면 삼각형과 나누는 점이다 — 절대 없애지 않고(좌표도 비트 그대로),
+    /// 둘 다 고정인 쌍은 Civil이 이미 받은 자기 점이라 간격 검사에서 뺀다. 높이 대조는 바뀐 면만(안 바뀐 면은 곧 참값).</para></summary>
+    public static List<WallDaylight.Tri>? MakeZone(IReadOnlyList<WallDaylight.Tri> tris, IEnumerable<Point3> fixedPts, out Report rep)
+    {
+        rep = new Report();
+        if (tris == null || tris.Count == 0) { rep.Fail = "삼각형이 없다"; return null; }
+        var keys = new HashSet<(long, long)>(fixedPts.Select(q => ((long)Math.Round(q.X / 1e-7), (long)Math.Round(q.Y / 1e-7))));
+        var w = new Work(tris, null, Array.Empty<List<Point3>>(), tris, keys);
+        return Run(w, rep);
+    }
+
+    static List<WallDaylight.Tri>? Run(Work w, Report rep)
+    {
         rep.PtsIn = w.PtsAlive(); rep.FacesIn = w.FacesAlive();
         if (rep.FacesIn == 0) { rep.Fail = "넓이 있는 면이 없다"; return null; }
         w.ResolvePairs(rep);
         w.FoldFlat(rep);
         w.Measure(rep);
-        bool ok0 = rep.Unresolved == 0 && rep.MinBox >= Gap && Math.Abs(rep.AreaSum - rep.AreaUnion) <= 1e-9 + 1e-9 * rep.AreaSum;
+        rep.OverlayExc = w.OverlayExc;
+        bool ok0 = rep.Unresolved == 0 && rep.MinBox >= Gap && Math.Abs(rep.AreaSum - rep.AreaUnion) <= 1e-9 + 1e-9 * rep.AreaSum && rep.OverlayExc == 0;
         bool t1 = ok0 && rep.PlanMax <= PlanTol1 && rep.BorderDz <= ZTol1 && rep.WallDz <= ZTol1 && rep.FlipRiskDz <= FlipTol1 && rep.CivilRisk == 0;
         bool t2 = ok0 && rep.PlanMax <= PlanTol2 && rep.BorderDz <= ZTol2 && rep.WallDz <= ZTol2 && rep.FlipRiskDz <= FlipTol2;
         rep.Tier = t1 ? 1 : t2 ? 2 : 3;
+        if (rep.Tier == 2)
+        {
+            // ★[검토 0928 v100.4 · 낮음 8] «거의»의 까닭을 실제대로 — 해상도 탓만이 아니다(Civil이 고칠 면이 남았을 수도)
+            var why2 = new List<string>();
+            if (rep.PlanMax > PlanTol1) why2.Add($"초록 선과 평면 {rep.PlanMax * 1e6:F0}µm @{rep.PlanAt}");
+            if (rep.BorderDz > ZTol1) why2.Add($"테두리 높이 {rep.BorderDz * 1000:F1}mm @{rep.BorderAt}");
+            if (rep.WallDz > ZTol1) why2.Add($"옹벽 높이 {rep.WallDz * 1000:F1}mm @{rep.WallAt}");
+            if (rep.FlipRiskDz > FlipTol1) why2.Add($"Civil이 뒤집으면 높이 {rep.FlipRiskDz * 1000:F1}mm @{rep.FlipRiskAt}");
+            if (rep.CivilRisk > 0) why2.Add($"Civil이 고칠 면 {rep.CivilRisk} @{rep.CivilRiskAt}");
+            rep.Tier2Why = string.Join(" · ", why2);
+        }
         if (rep.Tier == 3)
         {
             var why = new List<string>();
+            if (rep.OverlayExc > 0) why.Add($"겹침 계산 예외 {rep.OverlayExc}");
             if (rep.Unresolved > 0) why.Add($"못 푼 쌍 {rep.Unresolved}");
             if (rep.MinBox < Gap) why.Add($"남은 점 네모 {rep.MinBox * 1e6:F0}µm");
             if (Math.Abs(rep.AreaSum - rep.AreaUnion) > 1e-9 + 1e-9 * rep.AreaSum) why.Add("면 겹침");
@@ -117,7 +170,12 @@ public static class CivilSafeMesh
         readonly GeometryFactory gf = new();
         // 점(국소 좌표 x·y, 높이 z)
         readonly List<double> X = new(), Y = new(), Z = new();
-        readonly List<bool> dead = new(), border = new(), ringV = new();
+        readonly List<bool> dead = new(), border = new(), ringV = new(), fixedV = new();
+        // ★[v101.0 · 계획 검토 0928 v101 · 중간 5] 내보낼 때는 받은 세계 좌표를 <b>그대로</b> — (x − ox) + ox는 마지막 비트가 달라질 수 있어
+        //   고정 점이 옆 정지면 삼각형과 어긋난 두 점이 되면 Civil이 합친다
+        readonly List<double> WX = new(), WY = new();
+        readonly bool zone;                       // 구역 모드(합성지표면) — 초록 선 없음 · 고정 점 · 참값 = 받은 삼각형
+        readonly HashSet<int> modified = new(); bool initDone;
         // 면(반시계) · 살았나 · 점 → 면
         readonly List<int[]> F = new();
         readonly List<bool> fAlive = new();
@@ -129,16 +187,19 @@ public static class CivilSafeMesh
         readonly List<(double X1, double Y1, double Z1, double X2, double Y2, double Z2, double X3, double Y3, double Z3)> wt = new();
         readonly STRtree<int> wtTree = new();
 
-        public Work(IReadOnlyList<WallDaylight.Tri> tris, IReadOnlyList<Point3> ring, IReadOnlyList<List<Point3>> holes, IReadOnlyList<WallDaylight.Tri> wallTris)
+        public Work(IReadOnlyList<WallDaylight.Tri> tris, IReadOnlyList<Point3>? ring, IReadOnlyList<List<Point3>> holes, IReadOnlyList<WallDaylight.Tri> wallTris,
+                    HashSet<(long, long)>? fixedKeys = null)
         {
-            ox = ring[0].X; oy = ring[0].Y;
+            zone = ring == null;
+            ox = ring != null ? ring[0].X : tris[0].A.X; oy = ring != null ? ring[0].Y : tris[0].A.Y;
             // 점·면 — WriteLandXmlTin과 같은 1e-7 버킷(ClipToBand는 같은 점을 같은 double로 낸다)
             var id = new Dictionary<(long, long), int>();
             int Id(Point3 q)
             {
                 var k = ((long)Math.Round(q.X / 1e-7), (long)Math.Round(q.Y / 1e-7));
                 if (id.TryGetValue(k, out int v)) return v;
-                X.Add(q.X - ox); Y.Add(q.Y - oy); Z.Add(q.Z); dead.Add(false); border.Add(false); ringV.Add(false); vf.Add(new HashSet<int>());
+                X.Add(q.X - ox); Y.Add(q.Y - oy); Z.Add(q.Z); WX.Add(q.X); WY.Add(q.Y);
+                dead.Add(false); border.Add(false); ringV.Add(false); fixedV.Add(fixedKeys != null && fixedKeys.Contains(k)); vf.Add(new HashSet<int>());
                 id[k] = X.Count - 1; return X.Count - 1;
             }
             foreach (var t in tris)
@@ -149,21 +210,24 @@ public static class CivilSafeMesh
                 if (s == 0) continue;
                 AddFace(s > 0 ? new[] { a, b, c } : new[] { a, c, b });
             }
-            // 초록 선
-            foreach (var r0 in new[] { ring }.Concat(holes))
-                for (int k = 0; k < r0.Count; k++)
-                {
-                    var a = r0[k]; var b = r0[(k + 1) % r0.Count];
-                    rsTree.Insert(new Envelope(a.X - ox, b.X - ox, a.Y - oy, b.Y - oy), rs.Count);
-                    rs.Add((a.X - ox, a.Y - oy, a.Z, b.X - ox, b.Y - oy, b.Z));
-                }
-            rsTree.Build();
+            // 초록 선(구역 모드엔 없다 — 테두리는 고정 점뿐)
+            if (!zone)
+            {
+                foreach (var r0 in new[] { ring! }.Concat(holes))
+                    for (int k = 0; k < r0.Count; k++)
+                    {
+                        var a = r0[k]; var b = r0[(k + 1) % r0.Count];
+                        rsTree.Insert(new Envelope(a.X - ox, b.X - ox, a.Y - oy, b.Y - oy), rs.Count);
+                        rs.Add((a.X - ox, a.Y - oy, a.Z, b.X - ox, b.Y - oy, b.Z));
+                    }
+                rsTree.Build();
+            }
             var rvTree = new STRtree<(double, double)>();
-            foreach (var r0 in new[] { ring }.Concat(holes)) foreach (var p in r0) rvTree.Insert(new Envelope(p.X - ox, p.X - ox, p.Y - oy, p.Y - oy), (p.X - ox, p.Y - oy));
-            rvTree.Build();
+            if (!zone) { foreach (var r0 in new[] { ring! }.Concat(holes)) foreach (var p in r0) rvTree.Insert(new Envelope(p.X - ox, p.X - ox, p.Y - oy, p.Y - oy), (p.X - ox, p.Y - oy)); rvTree.Build(); }
             for (int i = 0; i < X.Count; i++)
             {
                 if (vf[i].Count == 0) { dead[i] = true; continue; }
+                if (zone) continue;
                 border[i] = NearRing(X[i], Y[i], OnRing, out _, out _, out _) <= OnRing;
                 foreach (var (vx, vy) in rvTree.Query(new Envelope(X[i] - OnRing, X[i] + OnRing, Y[i] - OnRing, Y[i] + OnRing)))
                     if (Math.Max(Math.Abs(vx - X[i]), Math.Abs(vy - Y[i])) <= OnRing) { ringV[i] = true; break; }
@@ -179,9 +243,10 @@ public static class CivilSafeMesh
                 wt.Add(e);
             }
             wtTree.Build();
+            initDone = true;
         }
 
-        void AddFace(int[] f) { F.Add(f); fAlive.Add(true); foreach (int v in f) vf[v].Add(F.Count - 1); }
+        void AddFace(int[] f) { F.Add(f); fAlive.Add(true); foreach (int v in f) vf[v].Add(F.Count - 1); if (initDone) modified.Add(F.Count - 1); }
         void KillFace(int fi) { fAlive[fi] = false; foreach (int v in F[fi]) vf[v].Remove(fi); }
         public int PtsAlive() { int n = 0; for (int i = 0; i < X.Count; i++) if (!dead[i] && vf[i].Count > 0) n++; return n; }
         public int FacesAlive() { int n = 0; for (int i = 0; i < F.Count; i++) if (fAlive[i]) n++; return n; }
@@ -231,24 +296,38 @@ public static class CivilSafeMesh
                 var t = wt[k];
                 var wp = gf.CreatePolygon(new[] { new Coordinate(t.X1, t.Y1), new Coordinate(t.X2, t.Y2), new Coordinate(t.X3, t.Y3), new Coordinate(t.X1, t.Y1) });
                 Geometry inter;
+                // ★[검토 0928 v100.4 · 낮음 7] 예외·NaN을 조용히 건너뛰면 그 자리 오차가 0으로 셈해진다 — 세어서 판정 3으로
                 try { inter = OverlayNGRobust.Overlay(poly, wp, NetTopologySuite.Operation.Overlay.SpatialFunction.Intersection); }
-                catch { continue; }
+                catch { OverlayExc++; continue; }
                 if (inter.IsEmpty || inter.Area <= 0) continue;
                 foreach (var q in inter.Coordinates)
                 {
                     double zf = PlaneZ(X[a], Y[a], Z[a], X[b], Y[b], Z[b], X[c], Y[c], Z[c], q.X, q.Y);
                     double zw = PlaneZ(t.X1, t.Y1, t.Z1, t.X2, t.Y2, t.Z2, t.X3, t.Y3, t.Z3, q.X, q.Y);
                     double dz = Math.Abs(zf - zw);
+                    if (double.IsNaN(dz)) { OverlayExc++; continue; }
                     if (dz > max) { max = dz; atX = q.X; atY = q.Y; }
                 }
             }
             return max;
         }
 
+        /// <summary>겹침 계산 예외·NaN 수(0이 아니면 판정 3).</summary>
+        public int OverlayExc;
+
+        /// <summary>점이 이 삼각망의 바깥 테두리 위인가 — 그 점에서 나가는 변 중 면 하나만 쓰는 변이 있나.</summary>
+        bool OnMeshBorder(int v)
+        {
+            var cnt = new Dictionary<int, int>();
+            foreach (int fi in vf[v]) foreach (int x in F[fi]) if (x != v) cnt[x] = cnt.TryGetValue(x, out int n) ? n + 1 : 1;
+            return cnt.Values.Any(n => n == 1);
+        }
+
         /// <summary>gone을 keep 자리로 합쳐 보면 — 되나(이음 조건 · 뒤집힘 없음) · 점수(1 이하 = 정확 기준 안).</summary>
         bool EvalMove(int gone, int keep, out double score, out List<int[]> newFaces, out List<int> kill)
         {
             score = double.PositiveInfinity; newFaces = new(); kill = new();
+            if (fixedV[gone]) return false;                            // 고정 점(그대로 옮길 정지면과 나누는 점)은 안 없앤다
             var fg = vf[gone].ToList(); var fk = vf[keep];
             var both = fg.Where(fk.Contains).ToList();
             if (both.Count == 0) return false;                        // 변으로 이어지지 않은 쌍 — 합치면 겹친다
@@ -258,6 +337,9 @@ public static class CivilSafeMesh
             ng.Remove(keep); nk.Remove(gone); ng.IntersectWith(nk);
             var opp = new HashSet<int>(); foreach (int fi in both) foreach (int v in F[fi]) if (v != gone && v != keep) opp.Add(v);
             if (!ng.SetEquals(opp)) return false;
+            // ★[검토 0928 v100.4 · 낮음 5] 두 점이 다 바깥 테두리 위인데 둘을 잇는 변은 안쪽 변(면 둘) — 접으면 잘록한 목이
+            //   한 점으로 조여 두 삼각형이 꼭짓점 하나로만 닿는다(폭 60µm 모래시계에서 잼)
+            if (both.Count > 1 && OnMeshBorder(gone) && OnMeshBorder(keep)) return false;
             double wall = 0;
             foreach (int fi in fg)
             {
@@ -334,28 +416,39 @@ public static class CivilSafeMesh
                 foreach (int i in kv.Value)
                     for (long dx = -1; dx <= 1; dx++) for (long dy = -1; dy <= 1; dy++)
                         if (cell.TryGetValue((kv.Key.Item1 + dx, kv.Key.Item2 + dy), out var l))
-                            foreach (int j in l) if (j > i && Box(i, j) < Gap) pairs.Add((Box(i, j), i, j));
+                            foreach (int j in l) if (j > i && Box(i, j) < Gap && !(fixedV[i] && fixedV[j])) pairs.Add((Box(i, j), i, j));
             pairs.Sort((p, q) => p.D.CompareTo(q.D));
             rep.Pairs = pairs.Count;
-            foreach (var (_, a, b) in pairs)
+            // ★[검토 0928 v100.4 · 중간 2] 한 번 보고 버리지 않는다 — 먼저 본 쌍이 아직 변으로 안 이어졌거나(다른 변이 가로지름)
+            //   잘록한 목이라 막혀도, 다른 쌍을 합치고 나면 풀린다. 더 합칠 것이 없을 때까지 되풀이하고 남은 것만 «못 푼 쌍»으로
+            var pending = pairs;
+            for (int pass = 0; pass < 8 && pending.Count > 0; pass++)
+            {
+                var next = new List<(double D, int A, int B)>();
+                int moved = 0;
+                foreach (var (dd, a, b) in pending)
+                {
+                    if (dead[a] || dead[b]) continue;
+                    bool okA = EvalMove(a, b, out double sA, out var nfA, out var kA);     // a를 없앤다
+                    bool okB = EvalMove(b, a, out double sB, out var nfB, out var kB);     // b를 없앤다
+                    if (!okA && !okB) { next.Add((dd, a, b)); continue; }
+                    // 점수가 같으면 초록 선 꼭짓점 → 선 위 → 안쪽 순으로 남긴다
+                    int Rank(int v) => fixedV[v] ? -1 : ringV[v] ? 0 : border[v] ? 1 : 2;
+                    bool takeA = okA && (!okB || sA < sB || (sA == sB && Rank(a) >= Rank(b)));
+                    int gone = takeA ? a : b, keep = takeA ? b : a;
+                    rep.Moves++; moved++;
+                    if (ringV[gone]) rep.MovesRing++; else if (border[gone]) rep.MovesBorder++; else rep.MovesInner++;
+                    rep.MoveMax = Math.Max(rep.MoveMax, Len(gone, keep));
+                    if (takeA) ApplyMove(a, b, nfA, kA); else ApplyMove(b, a, nfB, kB);
+                }
+                pending = next;
+                if (moved == 0) break;
+            }
+            foreach (var (_, a, b) in pending)
             {
                 if (dead[a] || dead[b]) continue;
-                bool okA = EvalMove(a, b, out double sA, out var nfA, out var kA);     // a를 없앤다
-                bool okB = EvalMove(b, a, out double sB, out var nfB, out var kB);     // b를 없앤다
-                if (!okA && !okB)
-                {
-                    rep.Unresolved++;
-                    if (rep.UnresolvedAt.Length < 200) rep.UnresolvedAt += (rep.UnresolvedAt.Length > 0 ? " " : "") + At(X[a], Y[a]);
-                    continue;
-                }
-                // 점수가 같으면 초록 선 꼭짓점 → 선 위 → 안쪽 순으로 남긴다
-                int Rank(int v) => ringV[v] ? 0 : border[v] ? 1 : 2;
-                bool takeA = okA && (!okB || sA < sB || (sA == sB && Rank(a) >= Rank(b)));
-                int gone = takeA ? a : b, keep = takeA ? b : a;
-                rep.Moves++;
-                if (ringV[gone]) rep.MovesRing++; else if (border[gone]) rep.MovesBorder++; else rep.MovesInner++;
-                rep.MoveMax = Math.Max(rep.MoveMax, Len(gone, keep));
-                if (takeA) ApplyMove(a, b, nfA, kA); else ApplyMove(b, a, nfB, kB);
+                rep.Unresolved++;
+                if (rep.UnresolvedAt.Length < 200) rep.UnresolvedAt += (rep.UnresolvedAt.Length > 0 ? " " : "") + At(X[a], Y[a]);
             }
         }
 
@@ -369,23 +462,27 @@ public static class CivilSafeMesh
                 {
                     if (!fAlive[fi]) continue;
                     var f = F[fi];
-                    if (Low(f) >= Gap) continue;
                     // 가장 짧은 변
                     int su = -1, sv = -1; double sl = double.PositiveInfinity;
                     for (int e = 0; e < 3; e++) { int u = f[e], v = f[(e + 1) % 3]; double l = Len(u, v); if (l < sl) { sl = l; su = u; sv = v; } }
+                    bool flat = Low(f) < Gap;
+                    bool tiny = zone && sl < ShortFold;                  // ★[v101.0] 구역 모드: 0.25mm 안 짧은 변(ShortFold 설명)
+                    if (!flat && !tiny) continue;
                     if (sl <= FoldLen)
                     {
                         bool o1 = EvalMove(su, sv, out double s1, out var n1, out var k1);
                         bool o2 = EvalMove(sv, su, out double s2, out var n2, out var k2);
-                        bool t1 = o1 && s1 <= 1, t2 = o2 && s2 <= 1;
+                        double lim = flat ? 1 : ShortFoldScore;          // 짧은 변만인 면은 오차를 더 아껴 쓴다(ShortFoldScore)
+                        bool t1 = o1 && s1 <= lim, t2 = o2 && s2 <= lim;
                         if (t1 || t2)
                         {
                             bool take1 = t1 && (!t2 || s1 <= s2);
                             if (take1) ApplyMove(su, sv, n1, k1); else ApplyMove(sv, su, n2, k2);
-                            rep.Folds++; changed = true; continue;
+                            if (flat) rep.Folds++; else rep.ShortFolds++;
+                            changed = true; continue;
                         }
                     }
-                    if (TryOwnFlip(fi)) { rep.OwnFlips++; changed = true; }
+                    if (flat && TryOwnFlip(fi)) { rep.OwnFlips++; changed = true; }
                 }
                 if (!changed) break;
             }
@@ -467,6 +564,34 @@ public static class CivilSafeMesh
                     if (dz > rep.FlipRiskDz) { rep.FlipRiskDz = dz; rep.FlipRiskAt = At((X[u] + X[v]) / 2, (Y[u] + Y[v]) / 2); }
                 }
             }
+            // 구역 모드: 못 접고 남은 짧은 변(정확 기준을 넘어 못 접은 것 — 판정엔 안 넣고 적는다 · Civil 되읽기 관문이 지킨다)
+            if (zone)
+            {
+                var seenS = new HashSet<(int, int)>();
+                for (int fi = 0; fi < F.Count; fi++)
+                {
+                    if (!fAlive[fi]) continue; var f = F[fi];
+                    for (int e = 0; e < 3; e++)
+                    {
+                        int u = f[e], v = f[(e + 1) % 3];
+                        if (!seenS.Add(u < v ? (u, v) : (v, u))) continue;
+                        double l = Len(u, v);
+                        if (l >= ShortFold || (fixedV[u] && fixedV[v])) continue;
+                        rep.ShortLeft++;
+                        if (l < rep.ShortMin) { rep.ShortMin = l; rep.ShortAt = At((X[u] + X[v]) / 2, (Y[u] + Y[v]) / 2); }
+                    }
+                }
+                for (int fi = 0; fi < F.Count; fi++)
+                {
+                    if (!fAlive[fi]) continue; var f = F[fi];
+                    double h = Low(f); if (h >= 1.25e-4) continue;
+                    int lu = -1, lv = -1; double ll = -1;
+                    for (int e = 0; e < 3; e++) { int u = f[e], v = f[(e + 1) % 3]; double l = Len(u, v); if (l > ll) { ll = l; lu = u; lv = v; } }
+                    if (!vf[lu].Any(g => g != fi && vf[lv].Contains(g))) continue;          // 긴 변이 테두리면 Civil도 못 뒤집는다
+                    rep.ThinLeft++;
+                    if (rep.ThinAt.Length < 60) rep.ThinAt += (rep.ThinAt.Length > 0 ? " " : "") + At((X[f[0]] + X[f[1]] + X[f[2]]) / 3, (Y[f[0]] + Y[f[1]] + Y[f[2]]) / 3);
+                }
+            }
             // 남은 점 네모 최소
             var alive = Enumerable.Range(0, X.Count).Where(i => !dead[i] && vf[i].Count > 0).ToList();
             var cell = new Dictionary<(long, long), List<int>>();
@@ -475,7 +600,7 @@ public static class CivilSafeMesh
                 foreach (int i in kv.Value)
                     for (long dx = -1; dx <= 1; dx++) for (long dy = -1; dy <= 1; dy++)
                         if (cell.TryGetValue((kv.Key.Item1 + dx, kv.Key.Item2 + dy), out var l))
-                            foreach (int j in l) if (j != i) rep.MinBox = Math.Min(rep.MinBox, Box(i, j));
+                            foreach (int j in l) if (j != i && !(fixedV[i] && fixedV[j])) rep.MinBox = Math.Min(rep.MinBox, Box(i, j));
             // 겹침 — 넓이 합 = 합집합 넓이
             var polys = new List<Geometry>();
             for (int fi = 0; fi < F.Count; fi++)
@@ -502,13 +627,15 @@ public static class CivilSafeMesh
                 beTree.Insert(new Envelope(X[u], X[v], Y[u], Y[v]), i);
             }
             if (be.Count > 0) beTree.Build();
+            if (zone) be.Clear();                // 구역 모드: 테두리 = 고정 점뿐 — 초록 선 대조가 없다
             void Worse(double d, double dz, double x, double y)
             {
                 if (d > rep.PlanMax) { rep.PlanMax = d; rep.PlanAt = At(x, y); }
                 if (dz > rep.BorderDz) { rep.BorderDz = dz; rep.BorderAt = At(x, y); }
             }
-            // 두 선 사이 평면 거리·높이 차는 «한쪽 꼭짓점을 다른 쪽에 비춘 자리»에서만 꺾인다(그 사이는 1차) —
-            //   양쪽 꼭짓점을 서로에게 비춰 재면 최대가 정확히 나온다. 5cm 간격은 덧댐(둘레 250m에 1mm 간격이면 25만 점이라 느리다)
+            // 두 선 사이 <b>평면 거리</b>는 «한쪽 꼭짓점을 다른 쪽에 비춘 자리»에서 최대가 나온다 — 양쪽 꼭짓점을 서로에게 비춰 잰다.
+            //   ★[검토 0928 v100.4 · 낮음 3] 높이 차는 그렇지 않다: 모서리 이등분선에서 가장 가까운 초록 선 자리가 다른 변으로 건너뛰어
+            //   그 자리는 비춘 자리가 아니다 — 조금 적게 나올 수 있다(3D로는 µm 거리라 잣대가 꺾이는 것). 5cm 간격은 덧댐
             const double Step = 0.05;
             // (가) 테두리 → 초록 선: 꼭짓점과 5cm 간격
             foreach (var (u, v) in be)
@@ -538,7 +665,7 @@ public static class CivilSafeMesh
                     if (best <= wdw || wdw > 1e3) return best;
                 }
             }
-            if (be.Count > 0)
+            if (be.Count > 0 && !zone)
                 foreach (var s0 in rs)
                 {
                     double L = Math.Sqrt((s0.X2 - s0.X1) * (s0.X2 - s0.X1) + (s0.Y2 - s0.Y1) * (s0.Y2 - s0.Y1));
@@ -550,10 +677,11 @@ public static class CivilSafeMesh
                         Worse(d, double.IsNaN(zb) ? double.PositiveInfinity : Math.Abs(zb - z), x, y);
                     }
                 }
-            // 옹벽 높이 — 모든 면을 정확히
+            // 옹벽 높이 — 모든 면을 정확히(구역 모드는 참값 = 받은 삼각형이라 <b>바뀐 면만</b> — 삼각형 수만 개에서 시간이 여기서 갔다)
             for (int fi = 0; fi < F.Count; fi++)
             {
                 if (!fAlive[fi]) continue; var f = F[fi];
+                if (zone && !modified.Contains(fi)) continue;
                 double e = FaceWallErr(f[0], f[1], f[2], out double ax, out double ay);
                 if (e > rep.WallDz) { rep.WallDz = e; rep.WallAt = At(ax, ay); }
             }
@@ -565,7 +693,7 @@ public static class CivilSafeMesh
             for (int fi = 0; fi < F.Count; fi++)
             {
                 if (!fAlive[fi]) continue; var f = F[fi];
-                Point3 P(int i) => new(X[i] + ox, Y[i] + oy, Z[i]);
+                Point3 P(int i) => new(WX[i], WY[i], Z[i]);
                 res.Add(new WallDaylight.Tri(P(f[0]), P(f[1]), P(f[2])));
             }
             return res;
@@ -579,14 +707,23 @@ public static class CivilSafeMesh
     /// → 꼭짓점 셋으로 같은 면을 세고, <b>다른 삼각형만</b> 골라 겹침 다각형 꼭짓점에서 높이를 정확히 견준다. 모양은 합집합 대칭차·최대 거리.</para></summary>
     public sealed class Diff
     {
-        public int Ours, Theirs, Same;
+        public int Ours, Theirs, Same, Exceptions;
         public double SymArea, Hausdorff, MaxDz;
         public string DzAt = "", HdAt = "";
+        /// <summary>모양 계산을 건너뛰었나(받은 면이 넘긴 면과 전부 같고 높이도 같을 때).</summary>
+        public bool ShapeSkipped;
         public string Summary => string.Format(CultureInfo.InvariantCulture,
-            "넘긴 면과 같은 것 {0}/{1}(Civil 삼각형 {2}) · 다른 삼각형의 높이 차 최대 {3:F3}mm{4} · 모양 대칭차 {5:E2}㎡ · 최대 거리 {6:F2}µm{7}",
-            Same, Ours, Theirs, MaxDz * 1000, MaxDz > 0 ? " @" + DzAt : "", SymArea, Hausdorff * 1e6, Hausdorff > 1e-6 ? " @" + HdAt : "");
+            "넘긴 면과 같은 것 {0}/{1}(Civil 삼각형 {2}) · 다른 삼각형·같은 점의 높이 차 최대 {3:F3}mm{4} · 모양 {5}{6}",
+            Same, Ours, Theirs, MaxDz * 1000, MaxDz > 0 ? " @" + DzAt : "",
+            ShapeSkipped ? "전부 같음(계산 건너뜀)" : string.Format(CultureInfo.InvariantCulture, "대칭차 {0:E2}㎡ · 최대 거리 {1:F2}µm{2}", SymArea, Hausdorff * 1e6, Hausdorff > 1e-6 ? " @" + HdAt : ""),
+            Exceptions > 0 ? $" · ⚠겹침 계산 예외 {Exceptions}" : "");
     }
 
+    /// <summary>★[v100.4 · 검토 0928 v100.5 중간 1 · 낮음 6] Civil 되읽기 대조.
+    /// <para>모양 계산(DiscreteHausdorff DensifyFraction 0.001)이 테두리 점 수의 제곱이라 17:32 한 판 3~4초, 테두리 점 4002개면 149초였다 —
+    /// 합성지표면은 삼각형이 수만 개다. → 받은 면이 넘긴 면과 <b>전부 같고 높이도 같으면</b> 모양 계산을 건너뛰고(모양이 같을 수밖에 없다),
+    /// 아니면 두 테두리의 꼭짓점·변 가운데만 서로에게 색인 거리로 잰다(n log n).</para>
+    /// <para>같은 면은 XY로만 짝지으면 같은 자리에서 높이만 바뀐 것을 못 잡는다 — 짝이 맞은 면도 꼭짓점 높이를 견준다.</para></summary>
     public static Diff Compare(IReadOnlyList<WallDaylight.Tri> ours, IReadOnlyList<WallDaylight.Tri> theirs)
     {
         var d = new Diff { Ours = ours.Count, Theirs = theirs.Count };
@@ -598,9 +735,23 @@ public static class CivilSafeMesh
         {
             var a = new[] { K(t.A), K(t.B), K(t.C) }; Array.Sort(a); return (a[0], a[1], a[2]);
         }
+        string At(double x, double y) => string.Format(CultureInfo.InvariantCulture, "({0:F4},{1:F4})", x, y);
+        // 넘긴 점의 높이(같은 XY 짝) — 짝이 맞은 면도 높이를 견준다
+        var oz = new Dictionary<(long, long), double>();
+        foreach (var t in ours) { oz[K(t.A)] = t.A.Z; oz[K(t.B)] = t.B.Z; oz[K(t.C)] = t.C.Z; }
         var oKeys = new HashSet<((long, long), (long, long), (long, long))>(ours.Select(Key));
         var tKeys = new HashSet<((long, long), (long, long), (long, long))>(theirs.Select(Key));
-        d.Same = theirs.Count(t => oKeys.Contains(Key(t)));
+        foreach (var t in theirs)
+        {
+            if (!oKeys.Contains(Key(t))) continue;
+            d.Same++;
+            foreach (var q in new[] { t.A, t.B, t.C })
+            {
+                double dz = oz.TryGetValue(K(q), out double z0) ? Math.Abs(q.Z - z0) : double.NaN;
+                if (double.IsNaN(dz)) { d.Exceptions++; continue; }
+                if (dz > d.MaxDz) { d.MaxDz = dz; d.DzAt = At(q.X, q.Y); }
+            }
+        }
         Polygon Pg(WallDaylight.Tri t) => gf.CreatePolygon(new[] { new Coordinate(t.A.X - ox, t.A.Y - oy), new Coordinate(t.B.X - ox, t.B.Y - oy), new Coordinate(t.C.X - ox, t.C.Y - oy), new Coordinate(t.A.X - ox, t.A.Y - oy) });
         static double Pz(WallDaylight.Tri t, double ox, double oy, double x, double y)
         {
@@ -612,38 +763,65 @@ public static class CivilSafeMesh
         // 다른 삼각형만 골라 상대 쪽 면과 겹침 꼭짓점에서
         void Dz(IReadOnlyList<WallDaylight.Tri> src, HashSet<((long, long), (long, long), (long, long))> otherKeys, IReadOnlyList<WallDaylight.Tri> other)
         {
+            List<WallDaylight.Tri>? diff = null;
+            foreach (var t in src) if (!otherKeys.Contains(Key(t))) (diff ??= new()).Add(t);
+            if (diff == null) return;
             var tree = new STRtree<int>();
             for (int i = 0; i < other.Count; i++) tree.Insert(Pg(other[i]).EnvelopeInternal, i);
             tree.Build();
-            foreach (var t in src)
+            foreach (var t in diff)
             {
-                if (otherKeys.Contains(Key(t))) continue;
                 var p = Pg(t);
                 foreach (int i in tree.Query(p.EnvelopeInternal))
                 {
                     Geometry inter;
-                    try { inter = OverlayNGRobust.Overlay(p, Pg(other[i]), NetTopologySuite.Operation.Overlay.SpatialFunction.Intersection); } catch { continue; }
+                    try { inter = OverlayNGRobust.Overlay(p, Pg(other[i]), NetTopologySuite.Operation.Overlay.SpatialFunction.Intersection); }
+                    catch { d.Exceptions++; continue; }
                     if (inter.IsEmpty || inter.Area <= 0) continue;
                     foreach (var q in inter.Coordinates)
                     {
                         double dz = Math.Abs(Pz(t, ox, oy, q.X, q.Y) - Pz(other[i], ox, oy, q.X, q.Y));
-                        if (dz > d.MaxDz) { d.MaxDz = dz; d.DzAt = string.Format(CultureInfo.InvariantCulture, "({0:F4},{1:F4})", q.X + ox, q.Y + oy); }
+                        if (double.IsNaN(dz)) { d.Exceptions++; continue; }
+                        if (dz > d.MaxDz) { d.MaxDz = dz; d.DzAt = At(q.X + ox, q.Y + oy); }
                     }
                 }
             }
         }
         Dz(theirs, oKeys, ours);
         Dz(ours, tKeys, theirs);
+        // 전부 같고 높이도 같으면 모양은 같을 수밖에 없다 — 건너뛴다(삼각형 수만 개에서 수십 초 걸리던 자리)
+        if (d.Same == ours.Count && ours.Count == theirs.Count && oKeys.Count == ours.Count && tKeys.Count == theirs.Count && d.MaxDz == 0 && d.Exceptions == 0)
+        {
+            d.ShapeSkipped = true; d.SymArea = 0; d.Hausdorff = 0;
+            return d;
+        }
         try
         {
             var uo = OverlayNGRobust.Union(ours.Select(t => (Geometry)Pg(t)).ToList());
             var ut = OverlayNGRobust.Union(theirs.Select(t => (Geometry)Pg(t)).ToList());
             d.SymArea = OverlayNGRobust.Overlay(uo, ut, NetTopologySuite.Operation.Overlay.SpatialFunction.SymDifference).Area;
-            var h = new NetTopologySuite.Algorithm.Distance.DiscreteHausdorffDistance(uo.Boundary, ut.Boundary) { DensifyFraction = 0.001 };
-            d.Hausdorff = h.Distance();
-            var c = h.Coordinates; d.HdAt = string.Format(CultureInfo.InvariantCulture, "({0:F4},{1:F4})", c[0].X + ox, c[0].Y + oy);
+            // 두 테두리의 꼭짓점·변 가운데를 서로에게 — 색인 거리(n log n)
+            (double M, double X, double Y) Far(Geometry from, Geometry to)
+            {
+                var idx = new NetTopologySuite.Operation.Distance.IndexedFacetDistance(to);
+                double m = 0, mx = 0, my = 0;
+                foreach (var ls in NetTopologySuite.Geometries.Utilities.LinearComponentExtracter.GetLines(from))
+                {
+                    var cs = ls.Coordinates;
+                    for (int q = 0; q < cs.Length; q++)
+                        foreach (var c in q + 1 < cs.Length ? new[] { cs[q], new Coordinate((cs[q].X + cs[q + 1].X) / 2, (cs[q].Y + cs[q + 1].Y) / 2) } : new[] { cs[q] })
+                        {
+                            double dist = idx.Distance(gf.CreatePoint(c));
+                            if (dist > m) { m = dist; mx = c.X; my = c.Y; }
+                        }
+                }
+                return (m, mx, my);
+            }
+            var f1 = Far(uo.Boundary, ut.Boundary); var f2 = Far(ut.Boundary, uo.Boundary);
+            var f = f1.M >= f2.M ? f1 : f2;
+            d.Hausdorff = f.M; d.HdAt = At(f.X + ox, f.Y + oy);
         }
-        catch { d.SymArea = double.PositiveInfinity; d.Hausdorff = double.PositiveInfinity; }
+        catch { d.Exceptions++; d.SymArea = double.PositiveInfinity; d.Hausdorff = double.PositiveInfinity; }
         return d;
     }
 }

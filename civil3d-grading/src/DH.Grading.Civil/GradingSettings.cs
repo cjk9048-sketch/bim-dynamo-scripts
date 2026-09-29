@@ -25,7 +25,7 @@ public static class GradingSettings
     /// <b>같은 번호를 단 빌드가 여러 개</b>가 되어, 어느 것이 깔렸는지 물으면 답할 수가 없었다.</para>
     /// <para><c>x.0</c> = 화면·명령이 바뀌어 <b>사용자가 다르게 일하게</b> 되는 판 ·
     /// <c>x.y</c> = 같은 화면에서 결함을 고친 판.</para></summary>
-    public const string Version = "v100.4 (2026-09-28)";
+    public const string Version = "v101.0 (2026-09-29)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -490,6 +490,23 @@ public static class GradingSettings
     public static string LastPlanHandle = "";
     public static string LastGroundHandle = "";
 
+    /// <summary>★[v101.0 · 검토 0929 v101 · 중간 5] 마지막 옹벽 변환이 쓴 <b>짝</b>(세션 메모리) — 옹벽 합성(DHWALLCOMP)은 이것만 쓴다.
+    /// <para>폴리곤은 <b>점 그대로</b>(손으로 고친 폴리곤이나 다음 옹벽 변환의 상자와 섞이지 않게) · 가상옹벽_DH · 정지면_DH 핸들.
+    /// 옹벽 변환이 시작하며 지우고(<see cref="LastWallInvalid"/> = 참) 데이라잇까지 가면 채운다 — 중간에 멈춘 판의 폴리곤과 옛 옹벽을 짝짓지 않는다.
+    /// 도면을 바꾸거나 Civil을 다시 켜면 빈다 — 그때 합성은 이름으로 찾되 후보가 여럿·낡음이면 짓지 않는다.</para></summary>
+    public static System.Collections.Generic.List<Point3>? LastWallPoly;
+    public static string LastWallSurfHandle = "";
+    public static string LastWallPlanHandle = "";
+    /// <summary>순수옹벽_DH 관문과 같은 까닭(정지면 후보 여럿 · 낡음 · 브레이크라인 빠짐) — 비어 있지 않으면 합성도 안 짓는다.</summary>
+    public static string LastWallPlanNote = "";
+    public static bool LastWallInvalid;
+    public static string LastWallStamp = "";
+    public static void ClearLastWall(bool invalid)
+    {
+        LastWallPoly = null; LastWallSurfHandle = ""; LastWallPlanHandle = ""; LastWallPlanNote = ""; LastWallStamp = "";
+        LastWallInvalid = invalid;
+    }
+
     /// <summary>[§75] 선택한 선(Pts)이 계획경계에서 덮는 호길이 구간 [T0,T1](랩 대응) — DHWALL의
     /// '같은 구간 중복 선택' 즉시 감지·교체에 사용. 실패 시 null.</summary>
     public static (double T0, double T1)? PickInterval(
@@ -591,6 +608,7 @@ public static class GradingSettings
         // 다른 도면의 '마지막 작업 기억'은 이 도면에서 전부 무효(핸들은 엉뚱한 객체를 가리킬 수 있다).
         LastPlanHandle = "";
         LastGroundHandle = "";
+        ClearLastWall(false);
         WallPicks.Clear();
         ZoneOverride = null;
         WallZoneReplaceAll = false;

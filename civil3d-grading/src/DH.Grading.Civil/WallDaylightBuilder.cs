@@ -46,6 +46,8 @@ public static class WallDaylightBuilder
     {
         Summaries.Clear();
         EraseNote = "";
+        // ★[v101.0 · 검토 0929 v101 · 중간 5] 이번 판이 데이라잇까지 가야 옹벽 합성의 짝이 다시 선다 — 중간에 멈추면 옛 짝을 안 쓴다
+        GradingSettings.ClearLastWall(true);
         // ★[검토 v100.0 · 낮음 2] 원지반은 지키고(BuildVirtualSlope와 같은 규약) 지난 순수옹벽_DH만 지운다
         if (pureToo) { try { GradingBuilder.EraseSurfacesByBaseName(tr, PureName, protect); } catch { } }
         var (gone, stuck) = EraseLayers(db, tr, Ground.Layer, Ground.LayerSuspect, Plan.Layer, Plan.LayerSuspect,
@@ -53,6 +55,25 @@ public static class WallDaylightBuilder
         if (stuck > 0)
             EraseNote = $"⚠지난 데이라잇을 <b>{stuck}개 못 지웠다</b>(레이어가 잠겼는지 보세요) — 옛 선과 새 선이 같이 있을 수 있다";
         EraseCount = gone;
+        // ★[v101.0 · 2차 검토 N2] 옹벽을 다시 고치면 지난 합성지표면_DH는 낡는다 — 켜 둔 채면 옛 합성이 새 옹벽 위에 겹쳐 보이고
+        //   정지면_DH는 숨은 채다(합성이 숨겼으므로). 지우지 않고 숨기고 정지면_DH를 다시 보인다 — «옹벽 합성»을 누르면 새로 짓는다
+        try
+        {
+            int shown = 0, comp = 0;
+            var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+            foreach (ObjectId sid in civilDoc.GetSurfaceIds())
+                if (tr.GetObject(sid, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.Surface s0 && ((Autodesk.AutoCAD.DatabaseServices.Entity)s0).Visible
+                    && (s0.Name == Commands.WallCompositeCommand.CompName || (s0.Name.StartsWith(Commands.WallCompositeCommand.CompName + "_") && int.TryParse(s0.Name.Substring(Commands.WallCompositeCommand.CompName.Length + 1), out _))))
+                    comp++;
+            if (comp > 0)
+            {
+                GradingBuilder.SetSurfaceVisible(tr, Commands.WallCompositeCommand.CompName, false);
+                shown = GradingBuilder.SetSurfaceVisible(tr, PlanSurfaceBase, true);
+                EraseNote = (EraseNote.Length > 0 ? EraseNote + " · " : "")
+                          + $"지난 합성지표면_DH는 옹벽이 바뀌어 낡았다 — 숨기고 {PlanSurfaceBase} {shown}개를 다시 보이게 했다(«옹벽 합성»을 다시 누르세요)";
+            }
+        }
+        catch { }
     }
 
     /// <summary>레이어들 위의 선을 지운다 — 모형공간을 <b>한 번만</b> 훑는다(검토 0918 v99.9 · 낮음).
@@ -108,6 +129,12 @@ public static class WallDaylightBuilder
             wallTris = wallCache.TrianglesIn(wb.MinX, wb.MinY, wb.MaxX, wb.MaxY);
             foreach (var q in poly)
             { mnx = Math.Min(mnx, q.X); mny = Math.Min(mny, q.Y); mxx = Math.Max(mxx, q.X); mxy = Math.Max(mxy, q.Y); }
+            // ★[v101.0 · 검토 0929 v101 · 중간 5] 옹벽 합성이 쓸 짝 — 이 폴리곤(점 그대로) · 이 가상옹벽 · 아래 PlanPart가 고른 정지면
+            GradingSettings.ClearLastWall(false);
+            GradingSettings.LastWallPoly = new System.Collections.Generic.List<Point3>(poly);
+            GradingSettings.LastWallSurfHandle = wallId.Handle.ToString();
+            GradingSettings.LastWallPlanNote = "정지면_DH를 못 골랐다";
+            GradingSettings.LastWallStamp = System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
         }
         catch (System.Exception ex)
         {
@@ -135,7 +162,9 @@ public static class WallDaylightBuilder
 
         // ② 계획지표면(정지면_DH) — 옹벽 변환은 이 면을 <b>안 건드리므로</b> 지난 «계획부지 생성»의 결과다
         string? planMiss = PlanPart();
-        if (planMiss != null) { Summaries.Add(planMiss); sb.Append("  " + planMiss + "\n"); }
+        if (planMiss != null) { Summaries.Add(planMiss); sb.Append("  " + planMiss + "\n"); GradingSettings.LastWallPlanNote = planMiss; }
+        // ★[3차 검토 0929 · 낮음 1] 성토 구간은 순수옹벽을 안 짓는다(절토만 — 성토를 아래로 고치는 것이 다음 단계) — 합성도 짓지 않게 짝에 까닭을 남긴다
+        if (!wUp) GradingSettings.LastWallPlanNote = "성토 옹벽은 아직 합성하지 않는다(이번 단계는 절토만 — 성토 옹벽을 아래로 고치는 것이 다음 단계)";
 
         // ③ ★★★[JACK 0918] 남길 옹벽 띠 → 순수옹벽_DH
         if (!wUp)
@@ -180,6 +209,7 @@ public static class WallDaylightBuilder
                     note = $"'{PlanSurfaceBase}' 이름의 지표면이 {hits.Count}개({string.Join(", ", hits.ConvertAll(h => h.Name))}) — 가장 나중 것 '{hits[0].Name}'를 썼다(어느 것이 맞는지 확인)";
                 pName = hits[0].Name;
                 hits1 = hits.Count;
+                GradingSettings.LastWallPlanHandle = hits[0].Id.Handle.ToString();
                 if (tr.GetObject(hits[0].Id, OpenMode.ForRead) is not TinSurface pt)
                     return $"⚠계획지표면 데이라잇 못 만듦 — '{pName}'가 TIN 지표면이 아니다";
                 // ★[검토 0918 v99.9 · 중간 3] 낡은 면이면 적는다(옹벽 변환은 정지면을 다시 짓지 않는다)
@@ -201,6 +231,7 @@ public static class WallDaylightBuilder
             // ★[계획 검토 0918 · 중간 2] 순수옹벽_DH 관문 — 후보 여럿 · 낡은 정지면이면 <b>면을 짓지 않는다</b>
             planGate = hits1 <= 1 && !stale;
             planGateNote = hits1 > 1 ? "계획지표면 후보가 여럿" : stale ? $"'{pName}'가 낡음(Out of date)" : "";
+            GradingSettings.LastWallPlanNote = !bladeOk ? bladeNote : planGateNote;      // 순수옹벽_DH 관문과 같은 까닭이면 합성도 안 짓는다
             return null;
         }
     }
@@ -373,8 +404,9 @@ public static class WallDaylightBuilder
                            + $" · 띠와 어긋난 넓이 {sym:F5}㎡(허용 {perim * (t1 ? 1e-5 : 2e-4):F4}) · 최대 거리 {hd * 1e6:F1}µm(허용 {planTol * 1e6:F0}µm{(hd > planTol ? " · " + hdAt : "")})"
                            + $" · 가상옹벽과 높이 차 최대 {dz * 1000:F2}mm({nz}점)"
                            + $" · <b>테두리 높이 − 띠 선 높이 최대 {ez.Max * 1000:F2}mm</b>({ez.N}점{(ez.N > 0 ? " @" + ez.At : "")})";
-                        gateOk = tri == xmlFaces && civPts == xmlPts && nB == 0
-                              && cmp.SymArea <= 1e-8 && cmp.Hausdorff <= 1e-6 && cmp.MaxDz <= 1e-3
+                        // ★[검토 0928 v100.4 · 낮음 4] 높이 허용을 따로 두면 «다듬은 면의 옹벽 오차 1mm + Civil 차이 1mm»로 2mm까지 통과한다 — 묶는다
+                        gateOk = tri == xmlFaces && civPts == xmlPts && nB == 0 && cmp.Exceptions == 0
+                              && cmp.SymArea <= 1e-8 && cmp.Hausdorff <= 1e-6 && cs.WallDz + cmp.MaxDz <= zTol
                               && sym <= perim * (t1 ? 1e-5 : 2e-4) && hd <= planTol && nz > 0 && dz <= zTol && ez.N > 0 && ez.Max <= zTol;
                     }
                     else
@@ -454,8 +486,9 @@ public static class WallDaylightBuilder
             if (tries[used].Tag == "직접")
                 // ★[v100.4 · 계획 검토 0928 · 높음 2] «거의»는 자리와 크기를 밝힌다 — 0.1mm 안에 진짜 꺾임점 둘이 있거나 옹벽 꺾임점이 초록 선 곁이면
                 //   Civil 해상도로는 원리상 10µm를 못 맞춘다(그래도 톱니 길 60mm보다 훨씬 낫다)
+                // ★[검토 0928 v100.4 · 낮음 8] 까닭은 실제대로 — 해상도 탓만이 아니다(Civil이 고칠 면이 남았을 수도)
                 ringNote = lastCs != null && lastCs.Tier == 2
-                    ? $" · ⚠초록 선에 <b>거의</b> 맞춰 지었다(Civil 해상도 0.1mm — 평면 최대 {lastCs.PlanMax * 1e6:F0}µm @{lastCs.PlanAt} · 테두리 높이 {lastCs.BorderDz * 1000:F1}mm · 옹벽 높이 {lastCs.WallDz * 1000:F1}mm)"
+                    ? $" · ⚠초록 선에 <b>거의</b> 맞춰 지었다({lastCs.Tier2Why})"
                     : " · <b>초록 선으로 직접 자른 삼각형</b>으로 지었다(LandXML · Civil에 맞게 다듬음)";
             else if (tries[used].Tag == "정확")
                 ringNote = r.UnsFallback ? " · ⚠1mm 격자 링(정확한 자리로 못 되돌림)" : " · ⚠직접 자른 삼각형을 Civil이 못 받아 <b>정확한 링 + 비파괴 경계</b>로 지었다";
@@ -780,6 +813,9 @@ public static class WallDaylightBuilder
     /// <para>12:47 절토 판의 입력이 13:02 성토 판에 <b>덮여 사라졌다</b>(재생할 수 없게 됐다).
     /// <c>DiagLog.Archive</c>에 끼우지 않는 까닭: 그것은 <b>다음 실행이 시작될 때</b> 직전 로그를 옮기는데,
     /// 그때 입력 파일은 이미 이번 판 것이라 <b>짝이 어긋난다</b>. 쓰는 그 자리에서 바로 남긴다.</para></summary>
+    /// <summary>[v101.0] 옹벽 합성(DHWALLCOMP)도 같은 보관을 쓴다.</summary>
+    internal static void ArchiveDumpPublic(string dump) => ArchiveDump(dump);
+
     private static void ArchiveDump(string dump)
     {
         try
@@ -788,9 +824,12 @@ public static class WallDaylightBuilder
             string hist = System.IO.Path.Combine(dir, "진단이력");
             System.IO.Directory.CreateDirectory(hist);
             string stem = System.IO.Path.GetFileNameWithoutExtension(dump);
-            string dst = System.IO.Path.Combine(hist, $"{stem}_{System.DateTime.Now:yyyyMMdd_HHmmss}.txt");
+            // ★[검토 0928 v100.4 · 낮음 9] 원래 확장자를 지킨다(순수옹벽 xml이 .txt로 보관되던 것)
+            string ext = System.IO.Path.GetExtension(dump);
+            if (string.IsNullOrEmpty(ext)) ext = ".txt";
+            string dst = System.IO.Path.Combine(hist, $"{stem}_{System.DateTime.Now:yyyyMMdd_HHmmss}{ext}");
             if (!System.IO.File.Exists(dst)) System.IO.File.Copy(dump, dst);
-            var files = new System.IO.DirectoryInfo(hist).GetFiles(stem + "_2*.txt");   // 날짜로 시작하는 것만(_계획 파일과 안 섞이게)
+            var files = new System.IO.DirectoryInfo(hist).GetFiles(stem + "_2*" + ext);   // 날짜로 시작하는 것만(_계획 파일과 안 섞이게)
             if (files.Length > 20)
             {
                 System.Array.Sort(files, (a, b) => a.LastWriteTime.CompareTo(b.LastWriteTime));

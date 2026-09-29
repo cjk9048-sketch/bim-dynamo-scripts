@@ -270,6 +270,14 @@ internal sealed class GradingPanel : UserControl
             "고른 선부터 바깥 단을 옹벽으로 세웁니다. 단높이·소단길이를 그 자리에서 정합니다.");
         _toSlope = WBtn("사면 변환", "DHSLOPE",
             "옹벽선을 골라 그 단부터 다시 사면으로 되돌립니다. 사면구배도 그 자리에서 정합니다.");
+        // ★★[v101.0 · JACK 0928 «따로 명령»] 옹벽을 다 고친 뒤 한 번 — 합성지표면_DH(정지면 + 순수옹벽 + 원지반 뚜껑).
+        //   창 값을 안 쓰므로 Apply()를 거치지 않고 바로 보낸다(값이 틀려도 합성은 된다)
+        {
+            var bComp = new Button { Content = "옹벽 합성", MinWidth = 104, Height = 30, Margin = new Thickness(0, 0, 6, 0),
+                ToolTip = "옹벽을 다 고친 뒤 누릅니다 — 정지면 + 순수옹벽 + 원지반 뚜껑을 합친 합성지표면_DH를 만듭니다(15~20초)." };
+            bComp.Click += (_, __) => PickSession.Send(Doc, "DHWALLCOMP");
+            wRow.Children.Add(bComp);
+        }
         secFix.Children.Add(wRow);
         secFix.Children.Add(new TextBlock
         {

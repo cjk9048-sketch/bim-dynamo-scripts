@@ -30,7 +30,7 @@ namespace DH.Grading.Core;
 /// 부호가 섞이면 선이 빠진 것이므로 <b>⚠오류</b>(다수결로 덮지 않는다)
 /// ④D&gt;0 조각을 합쳐 가장 큰 덩이의 바깥 링 ⑤선의 <b>출처</b>로 닿는 선/테두리/측량경계를 가른다
 /// ⑥0.5m 격자에서 부호와 「섬 안인가」를 <b>따로</b> 대조한다(투표에 쓴 표본을 다시 세지 않는다).</para></summary>
-public static class WallDaylight
+public static partial class WallDaylight
 {
     public readonly record struct Tri(Point3 A, Point3 B, Point3 C);
 
