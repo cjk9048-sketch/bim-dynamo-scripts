@@ -47,6 +47,8 @@ public static class CivilSafeMesh
     /// <summary>짧은 변(납작하지는 않은 면)을 접을 때 쓰는 오차 한도 — 점수 0.2 = 높이 0.2mm(정확 기준 1mm의 1/5).
     /// 0929 다섯 판·돌린 판: 1로 두나 0.2로 두나 접힌 수(284~400)·남은 짧은 변(0~1)·옹벽 높이 최대(0.48~0.50mm — 이건 Civil 합치기 쌍 몫)가 같아 아껴 쓴다.</summary>
     const double ShortFoldScore = 0.2;
+    /// <summary>★[v102.1 · 0930 화면 없는 Civil] 가는 바늘 문턱 — Civil이 긴 변을 뒤집는 높이(0929 실험: 긴 변 선까지 ≤122.0µm면 깨지고 ≥122.5µm면 받는다) 곁.</summary>
+    const double ThinH = 1.25e-4;
 
     /// <summary>하네스 전용 계측 — null이 아니면 합치기·접기·먼저 뒤집기와 남은 위험 면을 한 줄씩 적는다(출하 경로는 null).</summary>
     internal static Action<string>? DebugLog;          // ★[코드 검토 낮음 9] 하네스 전용 — 출하 DLL 밖에서 못 건드리게 internal(InternalsVisibleTo blocktest)
@@ -54,6 +56,21 @@ public static class CivilSafeMesh
     /// <summary>하네스 전용 — 참이면 <b>옛 길</b>(v101: 여유 띠 쌍도 무조건 합침 · 마지막 수단 없음)만 돈다. 켬/끔 대조와
     /// «판정 1 판은 옛 길과 비트 그대로» 검사에 쓴다(계획 검토 r4 중간 2). 출하 경로는 거짓.</summary>
     internal static bool LegacyOnly;
+
+    /// <summary>★[v102.1] 하네스 전용 — 참이면 «Civil이 반드시 합칠 쌍» 허용을 끈다(0930 그날과 같은 판정 — 음성 시험). 출하 경로는 거짓.</summary>
+    internal static bool ForcedAllowOff;
+    /// <summary>★[v102.1] 하네스 전용 — NaN이 아니면 <see cref="MakeZone"/>의 허용 위 끝(wallCap)을 이 값으로(음성: 위 끝 &lt; 최종 옹벽 높이면 판정 3). 출하 경로는 NaN.</summary>
+    internal static double DebugWallCap = double.NaN;
+    /// <summary>★[v102.1] 하네스 전용 — NaN이 아니면 «반드시 합친 쌍 곁» 거리를 이 값으로(음성: 곁을 0으로 두면 넘은 오차가 전부 «그 밖»이라 허용 안 됨). 출하 경로는 NaN.</summary>
+    internal static double DebugForcedNear = double.NaN;
+
+    /// <summary>★★[v102.1 · JACK 0930 ③ «줄여 봐도 1cm 넘으면 짓고 ⚠로 자리·크기 알림»] 합성(구역 모드)에서 옹벽 높이 예산을 넘어도 짓는 위 끝 —
+    /// 넘은 오차가 전부 <b>Civil이 반드시 합칠 쌍</b>(네모 &lt; 1e-4 — 우리가 안 합쳐도 Civil이 합친다) 곁에 있을 때만.
+    /// 0930 13:40 현장 성토: 옹벽 앞면(1:0.01) 위 두 점이 네모 23~93µm라 합치면 1.7~11.1mm — 네모 1e-4·대각 √2 × 1:0.01 ≈ 14.1mm가 이 꼴의 위 끝이다.</summary>
+    public const double ForcedCap = 1.5e-2;
+    /// <summary>★[v102.1 · 계획 검토 H1] «반드시 합친 쌍 곁» — 그 쌍을 합친 자리에서 이만큼 안의 옹벽 높이 오차를 그 쌍 몫으로 본다
+    /// (그 자리는 쌍 합치기 뒤 납작한 면·마지막 수단이 다시 짓는다 — 0930 13:40 실측: 1mm 넘는 자리가 전부 0.60m 안). 그 밖의 오차는 예산 그대로.</summary>
+    public const double ForcedNear = 1.0;
 
     /// <summary>★★[v102.0 · 계획 검토 r3 C1] <b>반드시 합칠</b> 네모 거리 — Civil 문턱 1e-4(실측: 합친 쌍 ≤ 91µm · 남은 쌍 ≥ 100.00µm) +
     /// 1µm(격자 위 100µm 쌍의 부동소수 몫 — 좌표 차 부동소수 오차는 1e-10 m 대). [MustMerge, <see cref="Gap"/>) 쌍(5µm 여유 띠)은 Civil이 안 합친다 —
@@ -71,7 +88,7 @@ public static class CivilSafeMesh
         /// <summary>구역 모드: 짧은 변은 없어도 가장 낮은 높이가 125µm 아래인 면(긴 변 안쪽) — 0929 실험의 Civil 문턱(122µm) 곁. 판정엔 안 넣고 적는다.</summary>
         public int ThinLeft; public string ThinAt = "";
         public int FlipRiskN; public double FlipRiskDz; public string FlipRiskAt = "";
-        /// <summary>★[v102.0] 마지막 수단 — 위험한 납작한 면을 없앤 수 · 그중 꼭짓점 옮기기 · 가장 큰 점수(≤ 2).</summary>
+        /// <summary>★[v102.0] 마지막 수단 — 위험한 납작한 면을 없앤 수 · 그중 꼭짓점 옮기기 · 가장 큰 점수(≤ 2 · ★v102.1 반드시 합친 쌍 곁은 허용 위 끝까지 — 최대 2.5).</summary>
         public int Snaps, LastResort; public double LastResortScore;
         /// <summary>★[v102.0] 판정이 나빠져 되돌린 것 — 마지막 수단(돌리기 전 결과를 씀) · 새 길 전체(옛 길 결과를 씀 — 그때 새 길 판정).</summary>
         public int LastResortReverted, NewPathWorse;
@@ -79,9 +96,25 @@ public static class CivilSafeMesh
         public string NewPathWhy = ""; public double WallTol2 = ZTol2;
         /// <summary>★[v102.0 · C1] 합치지 않고 둔 여유 띠 쌍(네모 [MustMerge, Gap) · 합치면 정확 기준 밖) · 마지막 수단 뒤 다시 본 쌍 수.</summary>
         public int MarginKept, PairsAgain;
+        /// <summary>★[v102.1] Civil이 반드시 합칠 쌍(네모 &lt; 1e-4 · 처음 받은 점끼리)을 합쳐 1mm 넘게 어긋난 수 · 합칠 때 잰 가장 큰 오차와 그 자리 ·
+        /// 그 쌍의 네모 거리 · 두 점 높이 차 — <b>합칠 때 값</b>이다(그 뒤 손질로 줄었을 수 있다 — 지금 오차는 <see cref="WallDzNear"/>).</summary>
+        public int ForcedN; public double ForcedDz, ForcedBox, ForcedPairDz; public string ForcedAt = "";
+        /// <summary>★[v102.1 · 계획 검토 H1] 지금 옹벽 높이 오차를 자리로 가른 것 — 반드시 합친 쌍 곁(<see cref="ForcedNear"/> 안) 최대 · 그 밖 최대와 자리.</summary>
+        public double WallDzNear, WallDzFar; public string WallFarAt = "";
+        /// <summary>★[v102.1] 허용 — 위 끝(NaN = 허용 없음: 순수옹벽 · 옛 길) · 넘기기 전 예산(1cm − 나머지 — 0 이하면 허용 없음) · 이번 판정이 허용을 썼나(부를 때마다 새로).</summary>
+        public double WallCap = double.NaN, WallTol2Raw = ZTol2; public bool OverForced;
+        /// <summary>구역 모드(합성) · 새 길 — 허용의 전제.</summary>
+        public bool ZoneMode, NewPath;
+        /// <summary>★[v102.1] 마지막 수단이 옮긴 가장 먼 거리(변 접기·꼭짓점 옮기기) — «최대 이동»(쌍 합치기)과 가른다(0930 로그 «최대 이동 980916µm»은 이것이었다).</summary>
+        public double LrMoveMax;
+        /// <summary>★[v102.1 · 코드 검토 중간 1] 마지막 수단이 반드시 합친 쌍 곁의 위험한 면(«Civil이 깨뜨린 모양» 바늘 · 뒤집기 흉내)을 없애며 1cm 넘게 쓴 수 · 가장 큰 오차와 자리 —
+        /// 허용 판의 «넘은 몫»에 우리 손질이 들었으면 그 크기를 따로 적는다.</summary>
+        public int LrOverN; public double LrOverMax; public string LrOverAt = "";
+        /// <summary>★[v102.1 · 코드 검토 낮음] 반드시 합친 쌍 자리(세계 좌표) — 하네스가 «쌍 곁만 허용 한도»를 따로 잰다.</summary>
+        public List<(double X, double Y)> ForcedSpotsW = new();
         /// <summary>★[v102.0 · 계획 검토 r4 낮음 2] 정확 기준(점수 1)을 넘긴 손질의 자리 — 하네스가 «1mm 넘는 오차는 이 자리 곁에만»을 따로 잰다.</summary>
         public List<(double X, double Y, double Score)> BigOps = new();
-        public Report Clone() { var r = (Report)MemberwiseClone(); r.BigOps = new List<(double X, double Y, double Score)>(BigOps); return r; }
+        public Report Clone() { var r = (Report)MemberwiseClone(); r.BigOps = new List<(double X, double Y, double Score)>(BigOps); r.ForcedSpotsW = new List<(double X, double Y)>(ForcedSpotsW); return r; }
         /// <summary>Civil이 고칠 면 — 가장 낮은 높이 &lt; 1e-4이고 가장 긴 변이 안쪽이며 들로네가 아닌 면(계획 검토 0928 · 중간 4: 73면 중 71~73면 일치).
         /// 이런 면 곁에서 Civil은 대각선을 뒤집고, 그러다 면이나 점을 통째로 빠뜨린 적이 있다(17:32 45mm · 돌린 13:33 460mm).</summary>
         public int CivilRisk; public string CivilRiskAt = "";
@@ -104,7 +137,9 @@ public static class CivilSafeMesh
                 string minBox = double.IsPositiveInfinity(MinBox) ? $"≥{Gap * 1e6:F0}" : (MinBox * 1e6).ToString("F0", ci);
                 return $"판정 {Tier}({TierText}) · 점 {PtsIn}→{PtsOut} · 면 {FacesIn}→{FacesOut}"
                      + $" · 가까운 쌍 {Pairs}(합침 {Moves}: 초록 선 꼭짓점 {MovesRing} · 선 위 {MovesBorder} · 안쪽 {MovesInner} · 최대 이동 {MoveMax * 1e6:F0}µm{(Unresolved > 0 ? $" · ⚠못 푼 쌍 {Unresolved} @{UnresolvedAt}" : "")})"
-                     + $" · 납작한 면 접기 {Folds} · 먼저 뒤집기 {OwnFlips}{(LastResort > 0 ? $" · 마지막 수단 {LastResort}(꼭짓점 옮기기 {Snaps} · 가장 큰 점수 {LastResortScore:F2}{(PairsAgain > 0 ? $" · 다시 본 쌍 {PairsAgain}" : "")})" : "")}{(LastResortReverted > 0 ? $" · ⚠마지막 수단 {LastResortReverted}건은 열쇠(판정·위험 면·높이 오차)가 나빠져 돌리기 전 결과를 씀" : "")}{(NewPathWorse > 0 ? $" · ⚠{NewPathWhy}" : "")}{(MarginKept > 0 ? $" · 여유 띠 쌍 둠 {MarginKept}" : "")} · 남은 납작한 면 {FlatLeft}{(FlatLeft > 0 ? $"(가장 낮은 {FlatMinH * 1e6:F0}µm)" : "")}"
+                     + (ForcedN > 0 ? string.Format(ci, " · Civil이 반드시 합칠 쌍 {0}개(1mm 넘게 어긋남 · 합칠 때 최대 {1:F2}mm @{2} — 네모 {3:F0}µm · 두 점 높이 차 {4:F2}mm)",
+                                                     ForcedN, ForcedDz * 1e3, ForcedAt, ForcedBox * 1e6, ForcedPairDz * 1e3) : "")
+                     + $" · 납작한 면 접기 {Folds} · 먼저 뒤집기 {OwnFlips}{(LastResort > 0 ? $" · 마지막 수단 {LastResort}(꼭짓점 옮기기 {Snaps} · 가장 큰 점수 {LastResortScore:F2} · 가장 먼 이동 {LrMoveMax:F3}m{(PairsAgain > 0 ? $" · 다시 본 쌍 {PairsAgain}" : "")})" : "")}{(LastResortReverted > 0 ? $" · ⚠마지막 수단 {LastResortReverted}건은 열쇠(판정·위험 면·높이 오차)가 나빠져 돌리기 전 결과를 씀" : "")}{(NewPathWorse > 0 ? $" · ⚠{NewPathWhy}" : "")}{(MarginKept > 0 ? $" · 여유 띠 쌍 둠 {MarginKept}" : "")} · 남은 납작한 면 {FlatLeft}{(FlatLeft > 0 ? $"(가장 낮은 {FlatMinH * 1e6:F0}µm)" : "")}"
                      + (ShortFolds + ShortLeft > 0 ? $" · 짧은 변 접기 {ShortFolds} · 남은 짧은 변 {ShortLeft}{(ShortLeft > 0 ? $"(가장 짧은 {ShortMin * 1e6:F0}µm @{ShortAt})" : "")}" : "")
                      + (ThinLeft > 0 ? $" · 가는 바늘(높이 <125µm) {ThinLeft} @{ThinAt}" : "")
                      + $" · 뒤집기 흉내 {FlipRiskN}변 최대 {FlipRiskDz * 1000:F3}mm{(FlipRiskDz > FlipTol1 ? " @" + FlipRiskAt : "")}"
@@ -113,6 +148,9 @@ public static class CivilSafeMesh
                      + $" · 초록 선과 평면 {PlanMax * 1e6:F1}µm{(PlanMax > PlanTol1 ? " @" + PlanAt : "")}"
                      + $" · 테두리 높이 {BorderDz * 1000:F3}mm{(BorderDz > ZTol1 ? " @" + BorderAt : "")}"
                      + $" · 옹벽 높이 {WallDz * 1000:F3}mm{(WallDz > ZTol1 ? " @" + WallAt : "")}"
+                     + (ForcedN > 0 ? string.Format(ci, "(반드시 합친 쌍 곁 {0:F3} · 그 밖 {1:F3}mm{2})", WallDzNear * 1e3, WallDzFar * 1e3, WallDzFar > ZTol1 ? " @" + WallFarAt : "") : "")
+                     + (OverForced ? string.Format(ci, " · ⚠허용(위 끝 {0:F2}mm)", WallCap * 1e3) : "")
+                     + (LrOverN > 0 ? string.Format(ci, " · 마지막 수단이 쌍 곁 위험한 면을 없애며 예산을 넘게 쓴 것 {0}건(없앨 때 최대 {1:F2}mm @{2})", LrOverN, LrOverMax * 1e3, LrOverAt) : "")
                      + (Math.Abs(AreaSum - AreaUnion) > 1e-9 + 1e-9 * AreaSum ? $" · ⚠면 겹침 {AreaSum - AreaUnion:E2}㎡" : "")
                      + (OverlayExc > 0 ? $" · ⚠겹침 계산 예외 {OverlayExc}" : "")
                      + (Tier2Why.Length > 0 ? $" · 거의인 까닭: {Tier2Why}" : "")
@@ -129,7 +167,7 @@ public static class CivilSafeMesh
         rep = new Report();
         if (tris == null || tris.Count == 0 || ring == null || ring.Count < 3 || wallTris == null || wallTris.Count == 0)
         { rep.Fail = "삼각형·띠·옹벽 중 빈 것이 있다"; return null; }
-        var (res, r) = Run(() => new Work(tris, ring, holes, wallTris), ZTol2);
+        var (res, r) = Run(() => new Work(tris, ring, holes, wallTris), ZTol2, double.NaN, ZTol2);     // 순수옹벽 — 허용 없음(대체 길이 더 정확하다)
         rep = r;
         return res;
     }
@@ -139,36 +177,45 @@ public static class CivilSafeMesh
     /// 둘 다 고정인 쌍은 Civil이 이미 받은 자기 점이라 간격 검사에서 뺀다. 높이 대조는 바뀐 면만(안 바뀐 면은 곧 참값).</para></summary>
     /// <param name="wallTol2">★[v102.0 · 코드 검토 중간 2] 판정 2의 옹벽 높이 한도 — 합성은 «높이 오차 합 ≤ 1cm»라 나머지 세 항(미리 맞춤·규칙 대조·한 점 한 높이)을
     /// 뺀 몫을 넘긴다. 그래야 새 길·옛 길·마지막 수단 가운데 <b>합성 예산을 지키는 쪽</b>을 고른다(판정이 같다고 오차 큰 쪽을 골라 합성이 판정 3이 되지 않게).</param>
-    public static List<WallDaylight.Tri>? MakeZone(IReadOnlyList<WallDaylight.Tri> tris, IEnumerable<Point3> fixedPts, out Report rep, double wallTol2 = ZTol2)
+    /// <param name="wallCap">★★[v102.1 · JACK 0930 ③] 허용 위 끝 — 넘은 옹벽 높이 오차가 전부 Civil이 반드시 합칠 쌍 곁이면 판정 2의 한도를 이만큼까지(NaN = 허용 없음).
+    /// [예산, <see cref="ForcedCap"/>]으로 막고, 예산(<paramref name="wallTol2"/>)이 0 이하면 허용하지 않는다(나머지가 예산을 다 먹은 판 — 계획 검토 M2).</param>
+    public static List<WallDaylight.Tri>? MakeZone(IReadOnlyList<WallDaylight.Tri> tris, IEnumerable<Point3> fixedPts, out Report rep, double wallTol2 = ZTol2, double wallCap = double.NaN)
     {
         rep = new Report();
         if (tris == null || tris.Count == 0) { rep.Fail = "삼각형이 없다"; return null; }
         var keys = new HashSet<(long, long)>(fixedPts.Select(q => ((long)Math.Round(q.X / 1e-7), (long)Math.Round(q.Y / 1e-7))));
-        var (res, r) = Run(() => new Work(tris, null, Array.Empty<List<Point3>>(), tris, keys), Math.Min(ZTol2, Math.Max(0, wallTol2)));
+        double tol = Math.Min(ZTol2, Math.Max(0, wallTol2));
+        if (!double.IsNaN(DebugWallCap)) wallCap = DebugWallCap;
+        double cap = double.IsNaN(wallCap) ? double.NaN : Math.Min(ForcedCap, Math.Max(tol, wallCap));
+        var (res, r) = Run(() => new Work(tris, null, Array.Empty<List<Point3>>(), tris, keys), tol, cap, wallTol2);
         rep = r;
         return res;
     }
 
     /// <summary>★[v102.0 · 코드 검토 중간 2] 두 결과를 견주는 열쇠 — 작을수록 낫다: ①판정 ②위험한 납작한 면이 남았나(Civil이 고칠 면 · 뒤집기 흉내 &gt; 0.2mm)
     /// ③옹벽·테두리 높이 오차 중 큰 것. 판정이 같을 때 오차가 큰 쪽을 골라 합성 예산을 넘기지 않게 한다.</summary>
-    static (int Tier, int Risky, double Err) Key(Report r) => (r.Tier, r.CivilRisk > 0 || r.FlipRiskDz > FlipTol1 ? 1 : 0, Math.Max(r.WallDz, r.BorderDz));
-    static bool Better((int Tier, int Risky, double Err) a, (int Tier, int Risky, double Err) b) =>
-        a.Tier != b.Tier ? a.Tier < b.Tier : a.Risky != b.Risky ? a.Risky < b.Risky : a.Err < b.Err - 1e-12;
+    /// <para>★[v102.1 · 계획 검토 M4] 둘째 자리 = 허용을 썼나 — 허용으로 판정 2가 된 결과는 같은 판정의 허용 없는 결과 <b>뒤</b>다.
+    /// 그래서 허용이 없던 판(판정 1·2)의 고르기(새 길/옛 길 · 마지막 수단 되돌림)는 그대로이고, 허용은 판정 3만 2로 바꾼다.</para>
+    static (int Tier, int Over, int Risky, double Err) Key(Report r) => (r.Tier, r.OverForced ? 1 : 0, r.CivilRisk > 0 || r.FlipRiskDz > FlipTol1 ? 1 : 0, Math.Max(r.WallDz, r.BorderDz));
+    static bool Better((int Tier, int Over, int Risky, double Err) a, (int Tier, int Over, int Risky, double Err) b) =>
+        a.Tier != b.Tier ? a.Tier < b.Tier : a.Over != b.Over ? a.Over < b.Over : a.Risky != b.Risky ? a.Risky < b.Risky : a.Err < b.Err - 1e-12;
 
     /// <summary>다듬기 — 새 길(여유 띠 쌍은 정확할 때만 · 위험한 면이 남으면 마지막 수단)을 돌리고, 판정 1이 아니면 <b>옛 길</b>(v101)도 돌려
     /// <see cref="Key"/>가 나은 쪽을 쓴다(같으면 새 길 — 계획 검토 r4 중간 2 · 코드 검토 중간 2). 판정 1인 새 길은 옛 길을 안 돈다.</summary>
-    static (List<WallDaylight.Tri>? Res, Report Rep) Run(Func<Work> make, double wallTol2)
+    /// <param name="wallCap">허용 위 끝 — <b>새 길에만</b> 넘긴다(옛 길은 여유 띠 쌍을 무조건 합쳐, 넘은 오차가 반드시 합칠 쌍 몫이 아닐 수 있다).</param>
+    /// <param name="wallTol2Raw">넘기기 전 예산(1cm − 나머지) — 0 이하면 허용 없음.</param>
+    static (List<WallDaylight.Tri>? Res, Report Rep) Run(Func<Work> make, double wallTol2, double wallCap, double wallTol2Raw)
     {
-        if (LegacyOnly) return RunPath(make(), margin: false, lastResort: false, wallTol2);
-        var (resN, repN) = RunPath(make(), margin: true, lastResort: true, wallTol2);
+        if (LegacyOnly) return RunPath(make(), margin: false, lastResort: false, wallTol2, double.NaN, wallTol2Raw);
+        var (resN, repN) = RunPath(make(), margin: true, lastResort: true, wallTol2, wallCap, wallTol2Raw);
         if (repN.Tier == 1 || repN.FacesIn == 0) return (resN, repN);
-        var (resO, repO) = RunPath(make(), margin: false, lastResort: false, wallTol2);
+        var (resO, repO) = RunPath(make(), margin: false, lastResort: false, wallTol2, double.NaN, wallTol2Raw);
         // ★[재검토 2] 둘 다 판정 3(못 함)이면 아무것도 안 짓는다 — 새 길(출하 길)의 실패 까닭을 그대로 알린다
         if (!(repN.Tier == 3 && repO.Tier == 3) && Better(Key(repO), Key(repN)))
         {
             repO.NewPathWorse = repN.Tier;
-            repO.NewPathWhy = string.Format(CultureInfo.InvariantCulture, "새 길 판정 {0}·위험 면 {1}·높이 {2:F2}mm가 옛 길 판정 {3}·위험 면 {4}·높이 {5:F2}mm보다 나빠 옛 길로 지었다",
-                repN.Tier, Key(repN).Risky, Key(repN).Err * 1e3, repO.Tier, Key(repO).Risky, Key(repO).Err * 1e3);
+            repO.NewPathWhy = string.Format(CultureInfo.InvariantCulture, "새 길 판정 {0}{6}·위험 면 {1}·높이 {2:F2}mm가 옛 길 판정 {3}·위험 면 {4}·높이 {5:F2}mm보다 나빠 옛 길로 지었다",
+                repN.Tier, Key(repN).Risky, Key(repN).Err * 1e3, repO.Tier, Key(repO).Risky, Key(repO).Err * 1e3, repN.OverForced ? "(허용)" : "");
             DebugLog?.Invoke(repO.NewPathWhy);
             return (resO, repO);
         }
@@ -178,14 +225,19 @@ public static class CivilSafeMesh
     /// <summary>한 길 — 쌍 합치기 → 납작한 면 → 잼 → (마지막 수단이면 · 위험한 면이 남았으면) 마지막 수단 → 다시 잼.
     /// <para>★[v102.0 · 계획 4판 §2] 마지막 수단은 판정 1 조건(Civil이 고칠 면 0 · 뒤집기 흉내 ≤ 0.2mm)을 못 채운 판에서만 돈다.
     /// 돌린 뒤 판정이 더 나쁘면 <b>돌리기 전 결과</b>(스냅숏)를 쓴다 — 판정이 같으면 돌린 것을 쓴다.</para></summary>
-    static (List<WallDaylight.Tri>? Res, Report Rep) RunPath(Work w, bool margin, bool lastResort, double wallTol2)
+    static (List<WallDaylight.Tri>? Res, Report Rep) RunPath(Work w, bool margin, bool lastResort, double wallTol2, double wallCap, double wallTol2Raw)
     {
-        var rep = new Report { WallTol2 = wallTol2 };
+        var rep = new Report { WallTol2 = wallTol2, WallCap = wallCap, WallTol2Raw = wallTol2Raw, ZoneMode = w.IsZone, NewPath = margin };
         rep.PtsIn = w.PtsAlive(); rep.FacesIn = w.FacesAlive();
         if (rep.FacesIn == 0) { rep.Fail = "넓이 있는 면이 없다"; return (null, rep); }
         w.Margin = margin;
+        w.LrCap = margin && w.IsZone && !double.IsNaN(wallCap) && wallTol2Raw > 0 ? Math.Max(ZTol2, wallCap) : ZTol2;
+        w.LrBudget = wallTol2;
+        DebugLog?.Invoke($"[계측] {(margin ? "새 길" : "옛 길")} 시작 — {w.DebugWallMax()}");
         w.ResolvePairs(rep);
+        DebugLog?.Invoke($"[계측] 쌍 합친 뒤 — {w.DebugWallMax()}");
         w.FoldFlat(rep);
+        DebugLog?.Invoke($"[계측] 납작한 면 뒤 — {w.DebugWallMax()}");
         int e0 = w.OverlayExc;
         w.Measure(rep);
         rep.OverlayExc = w.OverlayExc;
@@ -202,8 +254,10 @@ public static class CivilSafeMesh
             int d = w.LastResort(rep);
             ops += d;
             if (d == 0) break;
+            DebugLog?.Invoke($"[계측] 마지막 수단[{k}] 뒤 — {w.DebugWallMax()}");
             w.ResolvePairs(rep, again: true);
             w.FoldFlat(rep);
+            DebugLog?.Invoke($"[계측] 마지막 수단[{k}] · 쌍 다시 · 납작한 면 뒤 — {w.DebugWallMax()}");
         }
         if (ops == 0) return (snapRes, snapRep);
         w.Measure(rep);
@@ -223,15 +277,29 @@ public static class CivilSafeMesh
         if (!rep.Fail.StartsWith("합치기 예외")) rep.Fail = "";
         bool ok0 = rep.Unresolved == 0 && rep.MinBox >= MustMerge && Math.Abs(rep.AreaSum - rep.AreaUnion) <= 1e-9 + 1e-9 * rep.AreaSum && rep.OverlayExc == 0 && rep.Fail.Length == 0;
         bool t1 = ok0 && rep.PlanMax <= PlanTol1 && rep.BorderDz <= ZTol1 && rep.WallDz <= Math.Min(ZTol1, rep.WallTol2) && rep.FlipRiskDz <= FlipTol1 && rep.CivilRisk == 0;
-        bool t2 = ok0 && rep.PlanMax <= PlanTol2 && rep.BorderDz <= ZTol2 && rep.WallDz <= rep.WallTol2 && rep.FlipRiskDz <= FlipTol2;
+        // ★★[v102.1 · JACK 0930 ③ · 계획 검토 H1·M2·M4·M5] 허용 — 구역 모드 · 새 길 · 위 끝이 있고 · 예산이 0보다 크고 ·
+        //   예산을 넘은 옹벽 높이 오차가 <b>전부</b> Civil이 반드시 합칠 쌍 곁(ForcedNear)에만 있고(그 밖은 예산 안) · 위험한 납작한 면이 없을 때만
+        bool allow = !ForcedAllowOff && rep.ZoneMode && rep.NewPath && !double.IsNaN(rep.WallCap) && rep.WallTol2Raw > 0
+                     && rep.ForcedN > 0 && rep.WallDzNear > rep.WallTol2 && rep.WallDzFar <= rep.WallTol2
+                     && rep.WallDzNear <= Math.Max(rep.ForcedDz, rep.WallTol2) + 1e-4          // ★[재검토 중간 1] 곁 오차 ≤ 그 쌍을 합칠 때 오차(우리 손질이 더 크면 허용 안 함)
+                     && rep.CivilRisk == 0 && rep.FlipRiskDz <= FlipTol1;
+        double wallLim2 = allow ? rep.WallCap : rep.WallTol2;
+        bool t2 = ok0 && rep.PlanMax <= PlanTol2 && rep.BorderDz <= ZTol2 && rep.WallDz <= wallLim2 && rep.FlipRiskDz <= FlipTol2;
         rep.Tier = t1 ? 1 : t2 ? 2 : 3;
+        rep.OverForced = rep.Tier == 2 && allow && rep.WallDz > rep.WallTol2;          // ★[계획 검토 M5] 부를 때마다 새로(같은 rep을 두 번 잰다)
         if (rep.Tier == 2)
         {
             // ★[검토 0928 v100.4 · 낮음 8] «거의»의 까닭을 실제대로 — 해상도 탓만이 아니다(Civil이 고칠 면이 남았을 수도)
             var why2 = new List<string>();
+            // ★[v102.1 · 계획 검토 M9] 잰 값만 적는다 — 지금 오차와 자리 · 그 밖 최대 · 반드시 합칠 쌍(수 · 합칠 때 가장 큰 쌍의 네모 거리 · 두 점 높이 차)
+            if (rep.OverForced)
+                why2.Add(string.Format(CultureInfo.InvariantCulture,
+                    "⚠옹벽 높이 {0:F1}mm @{1} — 예산 {2:F2}mm를 넘었다(허용 위 끝 {3:F1}mm): 넘은 자리는 전부 Civil이 반드시 합칠 쌍(네모 < 0.1mm) 곁 {4:F0}m 안 · 그 밖 최대 {5:F2}mm · 그런 쌍 {6}개(가장 큰 것 네모 {7:F0}µm · 두 점 높이 차 {8:F1}mm)",
+                    rep.WallDz * 1000, rep.WallAt, rep.WallTol2 * 1000, rep.WallCap * 1000, NearDist(), rep.WallDzFar * 1000, rep.ForcedN, rep.ForcedBox * 1e6, rep.ForcedPairDz * 1000)
+                    + (rep.LrOverN > 0 ? string.Format(CultureInfo.InvariantCulture, " · 그 곁 위험한 면 없애기 {0}건(없앨 때 최대 {1:F1}mm @{2})", rep.LrOverN, rep.LrOverMax * 1000, rep.LrOverAt) : ""));
             if (rep.PlanMax > PlanTol1) why2.Add($"초록 선과 평면 {rep.PlanMax * 1e6:F0}µm @{rep.PlanAt}");
             if (rep.BorderDz > ZTol1) why2.Add($"테두리 높이 {rep.BorderDz * 1000:F1}mm @{rep.BorderAt}");
-            if (rep.WallDz > ZTol1) why2.Add($"옹벽 높이 {rep.WallDz * 1000:F1}mm @{rep.WallAt}");
+            if (rep.WallDz > ZTol1 && !rep.OverForced) why2.Add($"옹벽 높이 {rep.WallDz * 1000:F1}mm @{rep.WallAt}");
             if (rep.FlipRiskDz > FlipTol1) why2.Add($"Civil이 뒤집으면 높이 {rep.FlipRiskDz * 1000:F1}mm @{rep.FlipRiskAt}");
             if (rep.CivilRisk > 0) why2.Add($"Civil이 고칠 면 {rep.CivilRisk} @{rep.CivilRiskAt}");
             rep.Tier2Why = string.Join(" · ", why2);
@@ -246,11 +314,34 @@ public static class CivilSafeMesh
             if (Math.Abs(rep.AreaSum - rep.AreaUnion) > 1e-9 + 1e-9 * rep.AreaSum) why.Add("면 겹침");
             if (rep.PlanMax > PlanTol2) why.Add($"평면 {rep.PlanMax * 1e6:F0}µm @{rep.PlanAt}");
             if (rep.BorderDz > ZTol2) why.Add($"테두리 높이 {rep.BorderDz * 1000:F1}mm @{rep.BorderAt}");
-            if (rep.WallDz > rep.WallTol2) why.Add($"옹벽 높이 {rep.WallDz * 1000:F1}mm{(rep.WallTol2 < ZTol2 ? $"(한도 {rep.WallTol2 * 1000:F2}mm — 합성 높이 오차 합 1cm에서 남은 몫)" : "")} @{rep.WallAt}");
+            if (allow && rep.WallDz > rep.WallTol2 && rep.WallDz <= wallLim2)
+                why.Add($"옹벽 높이 {rep.WallDz * 1000:F1}mm — 예산 {rep.WallTol2 * 1000:F2}mm를 넘었다(허용 위 끝 안이지만 다른 까닭으로 판정 3) @{rep.WallAt}");
+            if (rep.WallDz > wallLim2)
+            {
+                why.Add($"옹벽 높이 {rep.WallDz * 1000:F1}mm{(allow ? $"(한도 {wallLim2 * 1000:F2}mm — 반드시 합칠 쌍 허용 위 끝)" : rep.WallTol2 < ZTol2 ? $"(한도 {rep.WallTol2 * 1000:F2}mm — 합성 높이 오차 합 1cm에서 남은 몫)" : "")} @{rep.WallAt}");
+                // ★[v102.1 · 계획 검토 L11] 허용을 따져 본 판이면 왜 안 됐는지를 잰 값으로
+                if (!allow && rep.ZoneMode && rep.NewPath && !double.IsNaN(rep.WallCap))
+                {
+                    var no = new List<string>();
+                    if (ForcedAllowOff) no.Add("허용 꺼 둠(시험)");
+                    if (!(rep.WallTol2Raw > 0)) no.Add($"예산 {rep.WallTol2Raw * 1000:F2}mm ≤ 0(나머지가 1cm를 다 씀)");
+                    if (rep.ForcedN == 0) no.Add("Civil이 반드시 합칠 쌍 없음");
+                    else if (!(rep.WallDzNear > rep.WallTol2)) no.Add($"반드시 합친 쌍 곁 {rep.WallDzNear * 1000:F2}mm ≤ 예산");
+                    if (rep.WallDzFar > rep.WallTol2) no.Add($"그 곁 밖 {rep.WallDzFar * 1000:F2}mm @{rep.WallFarAt} > 예산 {rep.WallTol2 * 1000:F2}mm");
+                    if (rep.ForcedN > 0 && rep.WallDzNear > Math.Max(rep.ForcedDz, rep.WallTol2) + 1e-4)
+                        no.Add($"곁 오차 {rep.WallDzNear * 1000:F2}mm > 반드시 합칠 쌍을 합칠 때 오차 {rep.ForcedDz * 1000:F2}mm(우리 손질 몫이 더 크다)");
+                    if (rep.CivilRisk > 0) no.Add($"Civil이 고칠 면 {rep.CivilRisk}");
+                    if (rep.FlipRiskDz > FlipTol1) no.Add($"뒤집기 흉내 {rep.FlipRiskDz * 1000:F2}mm");
+                    if (no.Count > 0) why.Add("허용 안 됨: " + string.Join(" · ", no));
+                }
+            }
             if (rep.FlipRiskDz > FlipTol2) why.Add($"뒤집기 흉내 {rep.FlipRiskDz * 1000:F1}mm @{rep.FlipRiskAt}");
             rep.Fail = string.Join(" · ", why);
         }
     }
+
+    /// <summary>쓰는 «반드시 합친 쌍 곁» 거리(하네스가 바꿀 수 있다).</summary>
+    static double NearDist() => double.IsNaN(DebugForcedNear) ? ForcedNear : DebugForcedNear;
 
     // ══════════════════════════════ 안쪽 ══════════════════════════════
 
@@ -266,8 +357,18 @@ public static class CivilSafeMesh
         readonly List<double> WX = new(), WY = new();
         readonly bool zone;                       // 구역 모드(합성지표면) — 초록 선 없음 · 고정 점 · 참값 = 받은 삼각형
         readonly HashSet<int> modified = new(); bool initDone;
+        public bool IsZone => zone;
+        /// <summary>★[v102.1] 처음 받은 점 수 — 꼭짓점 옮기기가 가른 새 점(이 뒤 번호)은 «반드시 합칠 쌍» 자리에서 뺀다(계획 검토 H1 경로 3).</summary>
+        int nOrig;
+        /// <summary>★[v102.1] Civil이 반드시 합칠 쌍을 합쳐 1mm 넘게 어긋난 자리(국소 좌표) — <see cref="Measure"/>가 옹벽 높이 오차를 자리로 가른다.</summary>
+        readonly List<(double X, double Y)> forcedSpots = new();
         /// <summary>★[v102.0 · C1] 새 길이면 여유 띠 쌍([MustMerge, Gap))은 정확할 때만 합친다 — 옛 길(거짓)은 v101처럼 무조건.</summary>
         public bool Margin;
+        /// <summary>★[v102.1] 마지막 수단이 반드시 합친 쌍 곁(구역 모드 · 새 길 · 허용 위 끝이 있을 때)에서 받는 높이 오차 한도 — 그 밖은 1cm(점수 2) 그대로.
+        /// 그 자리의 «Civil이 깨뜨린 모양» 바늘은 없애는 데 소단 높이 차만큼(0930: 11.2mm) 든다.</summary>
+        public double LrCap = ZTol2;
+        /// <summary>★[재검토 낮음] 예산(합성 높이 오차 합 1cm에서 남은 몫) — 쌍 곁 손질이 이것을 넘으면 LrOver로 센다.</summary>
+        public double LrBudget = ZTol2;
         // 면(반시계) · 살았나 · 점 → 면
         readonly List<int[]> F = new();
         readonly List<bool> fAlive = new();
@@ -336,6 +437,7 @@ public static class CivilSafeMesh
             }
             wtTree.Build();
             initDone = true;
+            nOrig = X.Count;
         }
 
         void AddFace(int[] f) { F.Add(f); fAlive.Add(true); foreach (int v in f) vf[v].Add(F.Count - 1); if (initDone) modified.Add(F.Count - 1); }
@@ -558,6 +660,17 @@ public static class CivilSafeMesh
                     if (ringV[gone]) rep.MovesRing++; else if (border[gone]) rep.MovesBorder++; else rep.MovesInner++;
                     rep.MoveMax = Math.Max(rep.MoveMax, Len(gone, keep));
                     { double sc = takeA ? sA : sB; if (sc > 1) rep.BigOps.Add((X[gone] + ox, Y[gone] + oy, sc)); }
+                    // ★[v102.1 · 계획 검토 H1·L12] Civil이 반드시 합칠 쌍(네모 < 1e-4 — 부동소수 몫 1e-9을 빼고 · 처음 받은 점끼리)을 합쳐
+                    //   1mm 넘게 어긋났으면 그 자리를 적는다 — 지금 오차를 자리로 가를 때 쓴다(합칠 때 값은 참고로만)
+                    if (dd < CivilMerge - 1e-9 && a < nOrig && b < nOrig)
+                    {
+                        var ce2 = takeA ? eA : eB; double fe = Math.Max(ce2.Item1, ce2.Item2);
+                        if (fe > ZTol1)
+                        {
+                            rep.ForcedN++; forcedSpots.Add((X[gone], Y[gone])); rep.ForcedSpotsW.Add((X[gone] + ox, Y[gone] + oy));
+                            if (fe > rep.ForcedDz) { rep.ForcedDz = fe; rep.ForcedAt = At(X[gone], Y[gone]); rep.ForcedBox = dd; rep.ForcedPairDz = Math.Abs(Z[a] - Z[b]); }
+                        }
+                    }
                     if (takeA) ApplyMove(a, b, nfA, kA); else ApplyMove(b, a, nfB, kB);
                 }
                 pending = next;
@@ -620,8 +733,13 @@ public static class CivilSafeMesh
         {
             var f = F[fi]; civ = false; flipDz = 0;
             double h = Low(f);
-            if (h >= Gap) return false;
-            civ = h < CivilMerge && LongEdgeNonDelaunay(fi);
+            // ★[v102.1 · 0930 화면 없는 Civil] 구역 모드 · Civil이 반드시 합친 쌍 곁은 <b>Civil이 깨뜨린 모양</b>(0.25mm 안 짧은 변 + 높이 &lt; 125µm + 긴 변 안쪽·들로네 아님)까지 본다 —
+            //   0930 13:40 성토 합성: 소단 모서리(85.000)와 0.174mm 앞면 점(84.989)의 바늘(높이 112µm · 긴 변 0.65m)을 Civil이 뒤집어 11.2mm 어긋났다(43,115면 중 2면).
+            //   곁 밖·순수옹벽은 종전 그대로(그 모양이 남아도 Civil이 받은 판이 많다 — 되읽기 관문이 지킨다). 옛 길도 쌍 곁 이 모양을 Civil이 고칠 면으로 <b>센다</b>
+            //   (모양은 안 바꾸고 판정·열쇠만 — 새 길과 같은 잣대로 견준다)
+            bool shape = ShapeNeedle(fi, h);
+            if (h >= Gap) { civ = shape && LongEdgeNonDelaunay(fi); return civ; }
+            civ = (h < CivilMerge || shape) && LongEdgeNonDelaunay(fi);
             for (int e = 0; e < 3; e++)
             {
                 int u = f[e], v = f[(e + 1) % 3], w1 = f[(e + 2) % 3];
@@ -631,6 +749,15 @@ public static class CivilSafeMesh
                 if (DiagCross(u, v, w1, w2, out double dz)) flipDz = Math.Max(flipDz, dz);
             }
             return civ || flipDz > FlipTol1;
+        }
+
+        /// <summary>★[v102.1] 구역 모드 · 반드시 합친 쌍 곁(무게중심 1m)의 «Civil이 깨뜨린 모양» — 높이 &lt; 125µm · 가장 짧은 변 &lt; 0.25mm(들로네는 부르는 쪽이 본다).</summary>
+        bool ShapeNeedle(int fi, double h)
+        {
+            if (!zone || forcedSpots.Count == 0 || !(h < ThinH)) return false;
+            var f = F[fi];
+            if (Math.Min(Len(f[0], f[1]), Math.Min(Len(f[1], f[2]), Len(f[2], f[0]))) >= ShortFold) return false;
+            return NearForcedSpot((X[f[0]] + X[f[1]] + X[f[2]]) / 3, (Y[f[0]] + Y[f[1]] + Y[f[2]]) / 3);
         }
 
         /// <summary>★[검토 r3 M1] 마지막 수단이 옮기거나 없애도 되는 점 — 고정 점은 안 되고, 구역 모드(합성)에서는 삼각망 <b>바깥 테두리</b> 점도 안 된다
@@ -694,7 +821,7 @@ public static class CivilSafeMesh
 
         /// <summary>★★[v102.0 · 계획 4판 §2] 마지막 수단 — 종전 길이 다 못 없앤 <b>위험한</b> 납작한 면(<see cref="IsRisky"/>)을 오차가 가장 작은 방법으로 없앤다
         /// (남겨 두면 Civil이 뒤집거나 면·점을 빠뜨린다 — 17:32 45mm · 13:33 460mm).
-        /// <para>후보: 아무 변 접기(양쪽) · 꼭짓점 옮기기(긴 변을 발에서 갈라 모양 그대로 둔 뒤 합침) · 긴 변 뒤집기. <b>점수 ≤ 2</b>(판정 2 한도 안)만 —
+        /// <para>후보: 아무 변 접기(양쪽) · 꼭짓점 옮기기(긴 변을 발에서 갈라 모양 그대로 둔 뒤 합침) · 긴 변 뒤집기. <b>점수 ≤ 2</b>(판정 2 한도 안 · ★v102.1 반드시 합친 쌍 곁은 허용 위 끝 1 + LrCap/1cm까지)만 —
         /// 평가 중 겹침 예외가 난 후보는 버리고 그 예외는 셈에서 뺀다(검토 r3 L2·r4 낮음 4).</para>
         /// <para>②만인 면(Civil이 고칠 면은 아니고 뒤집기 흉내만 &gt; 0.2mm): 흉내 &gt; FlipTol2(판정 3)이면 한도 안 가장 싼 고침을,
         /// 아니면 고침의 높이 오차(mm)가 1mm 안이거나 흉내(mm)보다 작을 때만 한다(검토 r3 M2 — 높이 mm끼리 견줌).</para></summary>
@@ -711,6 +838,10 @@ public static class CivilSafeMesh
                     if (!IsRisky(fi, out bool civ, out double flipDz)) continue;
                     var f = F[fi];
                     double h = Low(f);
+                    // ★[v102.1] 반드시 합친 쌍 곁(무게중심 1m · 구역 모드 새 길 · 예산 > 0)의 위험한 면은 허용 위 끝까지 — 그 밖은 1cm(점수 2) 그대로.
+                    //   ★[코드 검토 중간 1 · 실측] «Civil이 깨뜨린 모양»에만 걸면 같은 띠의 납작한 면(높이 103µm · 뒤집기 흉내 10.3mm)을 1cm 안에서 못 고쳐 판정 3이었다 —
+                    //   그 띠에서는 어떤 위험한 면이든 고치는 값이 그 자리 높이 차(소단 − 원지반 ≈ 1cm)다. 1cm 넘게 쓴 것은 세어 ⚠에 잰 값으로 적는다(LrOver)
+                    double lim = LrCap > ZTol2 && NearForcedSpot((X[f[0]] + X[f[1]] + X[f[2]]) / 3, (Y[f[0]] + Y[f[1]] + Y[f[2]]) / 3) ? 1 + LrCap / ZTol2 : 2;
                     double best = double.PositiveInfinity, bestErr = double.PositiveInfinity; int kind = -1;
                     (int Gone, int Keep, List<int[]> Nf, List<int> K) bm = default;
                     // 평가 한 번 — 겹침 예외가 나면 그 후보는 버리고 예외 수는 되돌린다
@@ -720,7 +851,7 @@ public static class CivilSafeMesh
                         bool ok = EvalMove(gone, keep, out sc, out nf, out k);
                         err = Math.Max(lastWall, lastBz);
                         bool exc = OverlayExc != e0; OverlayExc = e0;
-                        return ok && !exc && sc <= 2;
+                        return ok && !exc && sc <= lim;
                     }
                     for (int e = 0; e < 3; e++)
                     {
@@ -738,7 +869,7 @@ public static class CivilSafeMesh
                         int e0 = OverlayExc;
                         double s4 = EvalFlip(fi, out int[]? t1, out int[]? t2, out int gi, out double r4);
                         bool exc = OverlayExc != e0; OverlayExc = e0;
-                        if (!exc && s4 <= 2 && s4 < best) { best = s4; bestErr = r4; kind = 2; }
+                        if (!exc && s4 <= lim && s4 < best) { best = s4; bestErr = r4; kind = 2; }
                         if (kind == 2) { bm = default; flipT1 = t1; flipT2 = t2; flipG = gi; }
                     }
                     if (kind < 0) continue;
@@ -746,15 +877,16 @@ public static class CivilSafeMesh
                     if (!civ && flipDz <= FlipTol2 && !(bestErr <= ZTol1 || bestErr < flipDz)) continue;
                     string before = DebugLog != null ? $"{Pt(f[0])} {Pt(f[1])} {Pt(f[2])}" : "";
                     double atX = (X[f[0]] + X[f[1]] + X[f[2]]) / 3 + ox, atY = (Y[f[0]] + Y[f[1]] + Y[f[2]]) / 3 + oy;
-                    if (kind == 0) { rep.MoveMax = Math.Max(rep.MoveMax, Len(bm.Gone, bm.Keep)); ApplyMove(bm.Gone, bm.Keep, bm.Nf, bm.K); }
+                    if (kind == 0) { rep.LrMoveMax = Math.Max(rep.LrMoveMax, Len(bm.Gone, bm.Keep)); ApplyMove(bm.Gone, bm.Keep, bm.Nf, bm.K); }
                     else if (kind == 1)
                     {
                         var sp = SplitEdge(lu, lv, t);
-                        if (EvalMove(w, sp.P, out _, out var nf, out var kill)) { rep.MoveMax = Math.Max(rep.MoveMax, Len(w, sp.P)); ApplyMove(w, sp.P, nf, kill); }
+                        if (EvalMove(w, sp.P, out _, out var nf, out var kill)) { rep.LrMoveMax = Math.Max(rep.LrMoveMax, Len(w, sp.P)); ApplyMove(w, sp.P, nf, kill); }
                         else { UndoSplit(sp); continue; }
                     }
                     else { KillFace(fi); KillFace(flipG); AddFace(flipT1!); AddFace(flipT2!); }
                     rep.LastResort++; if (kind == 1) rep.Snaps++; rep.LastResortScore = Math.Max(rep.LastResortScore, best);
+                    if (bestErr > Math.Min(ZTol2, LrBudget)) { rep.LrOverN++; if (bestErr > rep.LrOverMax) { rep.LrOverMax = bestErr; rep.LrOverAt = At(atX - ox, atY - oy); } }
                     if (best > 1) rep.BigOps.Add((atX, atY, best));
                     changed = true; done++;
                     DebugLog?.Invoke(string.Format(CultureInfo.InvariantCulture, "마지막 수단[{0}] {1} · 높이 {2:F1}µm · 점수 {3:F3} · 오차 {4:F3}mm · {5} · 면 {6}",
@@ -842,6 +974,7 @@ public static class CivilSafeMesh
             rep.ShortLeft = 0; rep.ShortMin = double.PositiveInfinity; rep.ShortAt = ""; rep.ThinLeft = 0; rep.ThinAt = "";
             rep.MinBox = double.PositiveInfinity; rep.AreaSum = 0; rep.AreaUnion = 0;
             rep.PlanMax = 0; rep.PlanAt = ""; rep.BorderDz = 0; rep.BorderAt = ""; rep.WallDz = 0; rep.WallAt = "";
+            rep.WallDzNear = 0; rep.WallDzFar = 0; rep.WallFarAt = "";
             if (rep.Fail.StartsWith("합치기 예외")) rep.Fail = "";
             rep.PtsOut = PtsAlive(); rep.FacesOut = FacesAlive();
             // 뒤집기 흉내 — 납작한 면이 낀 볼록 사각형의 대각선을 Civil이 뒤집는다고 치면
@@ -850,7 +983,18 @@ public static class CivilSafeMesh
             {
                 if (!fAlive[fi]) continue;
                 var f = F[fi]; double h = Low(f);
-                if (h >= Gap) continue;
+                if (h >= Gap)
+                {
+                    // ★[v102.1] 구역 모드 · 반드시 합친 쌍 곁의 가는 바늘(Civil이 깨뜨린 모양) — 마지막 수단의 대상과 같은 식
+                    if (zone && h < ThinH && forcedSpots.Count > 0 && IsRisky(fi, out bool civT, out _) && civT)
+                    {
+                        rep.CivilRisk++;
+                        if (rep.CivilRiskAt.Length < 160) rep.CivilRiskAt += (rep.CivilRiskAt.Length > 0 ? " " : "") + At((X[f[0]] + X[f[1]] + X[f[2]]) / 3, (Y[f[0]] + Y[f[1]] + Y[f[2]]) / 3);
+                        DebugLog?.Invoke(string.Format(CultureInfo.InvariantCulture, "남은 가는 바늘(반드시 합친 쌍 곁) 높이 {0:F1}µm · 변 {1:F3}/{2:F3}/{3:F3}mm · {4} {5} {6} · ⚠Civil이 고칠 면",
+                            h * 1e6, Len(f[0], f[1]) * 1e3, Len(f[1], f[2]) * 1e3, Len(f[2], f[0]) * 1e3, Pt(f[0]), Pt(f[1]), Pt(f[2])));
+                    }
+                    continue;
+                }
                 rep.FlatLeft++; rep.FlatMinH = Math.Min(rep.FlatMinH, h);
                 IsRisky(fi, out bool civ, out _);          // ★[검토 r3 L4] 마지막 수단의 대상과 같은 식
                 DebugLog?.Invoke(string.Format(CultureInfo.InvariantCulture, "남은 납작한 면 높이 {0:F1}µm · 변 {1:F1}/{2:F1}/{3:F1}mm · {4} {5} {6}{7}",
@@ -894,7 +1038,7 @@ public static class CivilSafeMesh
                 for (int fi = 0; fi < F.Count; fi++)
                 {
                     if (!fAlive[fi]) continue; var f = F[fi];
-                    double h = Low(f); if (h >= 1.25e-4) continue;
+                    double h = Low(f); if (h >= ThinH) continue;
                     int lu = -1, lv = -1; double ll = -1;
                     for (int e = 0; e < 3; e++) { int u = f[e], v = f[(e + 1) % 3]; double l = Len(u, v); if (l > ll) { ll = l; lu = u; lv = v; } }
                     if (!vf[lu].Any(g => g != fi && vf[lv].Contains(g))) continue;          // 긴 변이 테두리면 Civil도 못 뒤집는다
@@ -994,7 +1138,38 @@ public static class CivilSafeMesh
                 if (zone && !modified.Contains(fi)) continue;
                 double e = FaceWallErr(f[0], f[1], f[2], out double ax, out double ay);
                 if (e > rep.WallDz) { rep.WallDz = e; rep.WallAt = At(ax, ay); }
+                // ★[v102.1 · 계획 검토 H1] 지금 오차를 자리로 — 반드시 합친 쌍 곁이면 «곁», 아니면 «그 밖»(허용은 «그 밖»이 예산 안일 때만)
+                if (e > 0)
+                {
+                    if (NearForcedSpot(ax, ay)) rep.WallDzNear = Math.Max(rep.WallDzNear, e);
+                    else if (e > rep.WallDzFar) { rep.WallDzFar = e; rep.WallFarAt = At(ax, ay); }
+                }
             }
+        }
+
+        bool NearForcedSpot(double x, double y)
+        {
+            double r = NearDist(), r2 = r * r;
+            foreach (var (sx, sy) in forcedSpots) if ((sx - x) * (sx - x) + (sy - y) * (sy - y) <= r2) return true;
+            return false;
+        }
+
+        /// <summary>계측 전용(<see cref="DebugLog"/>가 있을 때만 부른다) — 지금 면들의 옹벽 높이 최대와 그 면. 겹침 예외 수는 되돌린다(판정에 안 샌다).</summary>
+        public string DebugWallMax()
+        {
+            if (DebugLog == null) return "";
+            int exc0 = OverlayExc;
+            double mx = 0; string at = ""; int fm = -1;
+            for (int fi = 0; fi < F.Count; fi++)
+            {
+                if (!fAlive[fi]) continue;
+                if (zone && !modified.Contains(fi)) continue;
+                var f = F[fi];
+                double e = FaceWallErr(f[0], f[1], f[2], out double ax, out double ay);
+                if (e > mx) { mx = e; at = At(ax, ay); fm = fi; }
+            }
+            OverlayExc = exc0;
+            return fm < 0 ? "옹벽 높이 0" : string.Format(CultureInfo.InvariantCulture, "옹벽 높이 최대 {0:F3}mm @{1} · 면 {2} {3} {4}", mx * 1e3, at, Pt(F[fm][0]), Pt(F[fm][1]), Pt(F[fm][2]));
         }
 
         public List<WallDaylight.Tri> Output()

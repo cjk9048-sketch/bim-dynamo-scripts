@@ -46,6 +46,9 @@ public static partial class WallDaylight
         public int SeamEdges, SeamMissing; public string SeamAt = ""; public double ZoneArea, TouchedArea;
         /// <summary>높이 오차 합(규칙 대조 + 한 점 한 높이 + 다듬기) — 합성이 규칙에서 벗어날 수 있는 위 끝(판정에 넣는다 · 검토 0929 v101 · 낮음 8).</summary>
         public double HeightBudget;
+        /// <summary>★[v102.1 · JACK 0930 ③] 높이 오차 합의 한도 — 보통 1cm · 다듬기가 «Civil이 반드시 합칠 쌍» 허용을 썼으면 <see cref="CivilSafeMesh.ForcedCap"/>.
+        /// Civil 되읽기 관문도 이 한도를 쓴다(허용 판은 Civil이 넘긴 면을 하나도 안 바꿨을 때만 받는다 — 명령 쪽).</summary>
+        public double HeightLimit = 1e-2;
         /// <summary>손댄 정지면 삼각형이 차지하는 상자(세계 좌표) — 입력 파일을 이 상자로 떨궈야 재생이 출하와 같다(검토 0929 v101 · 낮음 11).</summary>
         public double TouchMinX = double.MaxValue, TouchMinY = double.MaxValue, TouchMaxX = double.MinValue, TouchMaxY = double.MinValue;
         public long MsTouch, MsZero, MsNode, MsPieces, MsClean;
@@ -81,7 +84,8 @@ public static partial class WallDaylight
             EdgeSamples, EdgeMax * 1000, EdgeMax > 1e-3 ? " @" + EdgeAt : "",
             ZOneN, ZOneMax * 1000, ZOneMax > 1e-3 ? " @" + ZOneAt : "", ZOneMiss > 0 ? $" · ⚠규칙을 못 읽은 꼭짓점 {ZOneMiss} @{ZOneMissAt}" : "",
             0, PreSnapRefused, 0, SeamEdges, SeamMissing, SeamMissing > 0 ? " @" + SeamAt : "",
-            HeightBudget * 1000);
+            HeightBudget * 1000)
+            + (HeightLimit > 1e-2 ? string.Format(CultureInfo.InvariantCulture, " · ⚠높이 오차 합 한도 {0:F0}mm(Civil이 반드시 합칠 쌍 허용)", HeightLimit * 1000) : "");
     }
 
     /// <param name="poly">옹벽 폴리곤(세계 좌표 · 첫점 반복 없음).</param>
@@ -91,6 +95,9 @@ public static partial class WallDaylight
     /// <summary>★[검토 0929 v101 · 낮음 7] 폴리곤에 이만큼 가까운 정지면 삼각형까지 손댄다 — 폴리곤 곁 네모 1.05e-4(대각 1.49e-4) 안 정지면 꼭짓점은
     /// 부채꼴이 전부 손댄 삼각형이라 <b>고정 점이 아니다</b> — 미리 맞춤·다듬기가 그 점을 옮길 수 있다(고정이면 가파른 옹벽 쪽을 옮겨야 했다).</summary>
     const double TouchD = 2e-4;
+
+    /// <summary>★[v102.1] 하네스 전용 — 나머지(미리 맞춤 + 규칙 대조 + 한 점 한 높이)에 더해 다듬기 예산을 줄인다(음성: 예산 ≤ 0이면 허용 없음). 출하 경로는 0.</summary>
+    internal static double DebugRestAdd;
 
     /// <param name="down">★★[v102.0 · JACK 0929 «성토 — 앞 = 원지반 · 뒤 = 계획면»] 성토 — 폴리곤 안 = <b>min(정지면, max(옹벽, 원지반))</b>
     /// (절토 규칙의 −z 거울: 옹벽이 땅 위면 옹벽 · 땅에 묻히면 원지반(성토 사면이 없어진다) · 원지반이 계획면 위면 계획면).
@@ -501,8 +508,11 @@ public static partial class WallDaylight
 
         // ⑦ 다듬기 — 고정 점은 안 없애고, 참값 = 조각 삼각형
         // ★[v102.0 · 코드 검토 중간 2] 다듬기에 합성 높이 예산(1cm − 미리 맞춤 − 규칙 대조 − 한 점 한 높이)을 넘긴다 — 판정이 같은 길 중 예산을 지키는 쪽을 고른다
-        R.Zone = CivilSafeMesh.MakeZone(raw, fixedW.Values, out var cr, wallTol2: 1e-2 - (R.PreSnapDz + R.RuleMax + R.ZOneMax));
+        // ★[v102.1 · JACK 0930 ③] 허용 위 끝 = 1.5cm − 나머지(넘은 오차가 전부 Civil이 반드시 합칠 쌍 곁일 때만 — CivilSafeMesh.Judge)
+        double rest = R.PreSnapDz + R.RuleMax + R.ZOneMax + DebugRestAdd;
+        R.Zone = CivilSafeMesh.MakeZone(raw, fixedW.Values, out var cr, wallTol2: 1e-2 - rest, wallCap: CivilSafeMesh.ForcedCap - rest);
         R.Clean = cr;
+        R.HeightLimit = cr.OverForced ? CivilSafeMesh.ForcedCap : 1e-2;
         R.MsClean = sw.ElapsedMilliseconds;
         // ⑦-b ★[검토 0929 v101 · 낮음 7] 이음매 — 손댄 삼각형과 안 댄 삼각형이 나누는 변은 합성에 <b>비트 그대로</b> 한 번 있어야 한다
         //   (없으면 T자 이음·틈·겹침). 합성 넓이 = 손댄 정지면 넓이(구멍·덧붙음이 없다)
@@ -545,7 +555,13 @@ public static partial class WallDaylight
         // 넓이 허용: 이음매(고정 점끼리)는 비트 그대로라 0 — 정지면 바깥 테두리에 걸린 손댄 변만 1µm 격자 몫(길이 × 1µm) + 1e-8㎡ + 1e-9 상대(2차 검토 N9)
         if (R.Zone != null && Math.Abs(R.ZoneArea - R.TouchedArea) > planEdgeLen * 1e-6 + 1e-8 + 1e-9 * R.TouchedArea)
         { tier = 3; why.Add($"합성 넓이 {R.ZoneArea:F6}㎡ ≠ 손댄 정지면 넓이 {R.TouchedArea:F6}㎡(구멍·덧붙음)"); }
-        if (R.HeightBudget > 1e-2) { tier = 3; why.Add($"높이 오차 합 {R.HeightBudget * 1000:F1}mm(규칙 대조 + 한 점 한 높이 + 다듬기)"); }
+        if (R.HeightBudget > R.HeightLimit) { tier = 3; why.Add($"높이 오차 합 {R.HeightBudget * 1000:F1}mm(한도 {R.HeightLimit * 1000:F0}mm · 규칙 대조 + 한 점 한 높이 + 다듬기)"); }
+        else if (R.HeightBudget > 1e-2)
+        {
+            // ★[v102.1 · JACK 0930 ③ «짓고 ⚠»] 1cm를 넘었지만 넘은 몫이 전부 Civil이 반드시 합칠 쌍 곁 — 짓고 자리·크기를 알린다(잰 값만)
+            tier = Math.Max(tier, 2);
+            why.Add($"높이 오차 합 {R.HeightBudget * 1000:F2}mm — 1cm 넘음(한도 {R.HeightLimit * 1000:F0}mm) = 미리 맞춤 {R.PreSnapDz * 1000:F2} + 규칙 대조 {R.RuleMax * 1000:F2} + 한 점 한 높이 {R.ZOneMax * 1000:F2} + 다듬기 {cr.WallDz * 1000:F2} @{cr.WallAt}");
+        }
         else if (R.HeightBudget > 1e-3) { tier = Math.Max(tier, 2); why.Add($"높이 오차 합 {R.HeightBudget * 1000:F2}mm(미리 맞춤 {R.PreSnapDz * 1000:F2} + 규칙 대조 {R.RuleMax * 1000:F2} + 한 점 한 높이 {R.ZOneMax * 1000:F2} + 다듬기 {cr.WallDz * 1000:F2})"); }
         if (R.Zone == null) { tier = 3; why.Add("다듬기 못 함 — " + cr.Fail); }
         // ★[v102.0 · 계획 검토 M3] 옹벽이 한 곳도 안 드러난다 — 합성이 곧 정지면이다. 방향을 거꾸로 쓰면(절토 자료에 성토 규칙 · 그 반대)

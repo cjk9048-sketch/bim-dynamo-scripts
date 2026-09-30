@@ -30,6 +30,13 @@ static class FillCheck
             Field(check, dataDir);
             return;
         }
+        // 계측용 — BLOCKTEST_FILL_CASE=R면 S145(현장 0930 성토)만
+        if (OnlyCase.Contains('R'))
+        {
+            Console.WriteLine("\n== S145 현장 0930 13:39~13:40 성토(계측) ==");
+            FieldReal(check, dataDir);
+            return;
+        }
         Console.WriteLine("\n== S136 거울 · 성토 옹벽 모양(아래로) · 옹벽 머리 높이 ==");
         Shape(check);
         Console.WriteLine("\n== S142 성토 뜻 시험(직접 만든 판 · 폴리곤 z = +105) ==");
@@ -39,6 +46,8 @@ static class FillCheck
         Completeness(check, dataDir, cases);
         Console.WriteLine("\n== S143 현장 0929 15:39 성토 ==");
         Field(check, dataDir);
+        Console.WriteLine("\n== S145 현장 0930 13:39~13:40 성토(첫 실제 성토 덤프 · Civil 옹벽 그대로) ==");
+        FieldReal(check, dataDir);
         SafeLrCheck.Run(check);
     }
 
@@ -663,7 +672,7 @@ static class FillCheck
                 // ★[0930 계측] 가설(들로네 동점)은 틀렸다 — 55개 중 뒤집기 한 번 짝 6개 · 그마저 한 원에서 상대 2.6e-3(R 16m에 42mm).
                 //   하네스 WallTin(띠마다 제약 들로네)은 Civil 옹벽 TIN의 모형이 <b>아니다</b> → S143은 근사다(현장 옹벽 삼각형은 Civil이 짓는다).
                 //   첫 현장 성토 덤프(SIDE·WALLLINE 붙음)를 고정 자료로 더할 때 이 줄을 검사로 바꾼다
-                Console.WriteLine("      S143 ⚠하네스 WallTin은 Civil 옹벽 TIN 모형이 아니다 — 이 판(S143)은 근사 · 첫 현장 성토 덤프로 바꿀 것");
+                Console.WriteLine("      S143 ⚠하네스 WallTin은 Civil 옹벽 TIN 모형이 아니다 — 이 판(S143)은 근사 · 첫 현장 성토 덤프(Civil 옹벽 그대로)는 S145(0930 13:39~13:40)");
             }
             // (같은 삼각형 수는 계측 줄로만 — 다른 것이 «들로네 동점»인지는 아래 L6 검사가 가른다)
         }
@@ -677,6 +686,97 @@ static class FillCheck
         var W = WallTin(WallInPoly.ClosedRows(rows));
         var c = new Case { Tag = "15:39 성토", Poly = poly, WallLine = wl, W = W, G = G, P = P, Nb = nb };
         RunField(check, c);
+    }
+
+    // ───────────────────────────── S145 현장 0930 13:39~13:40 성토 — 첫 실제 성토 덤프 ─────────────────────────────
+    //   ★[v102.1] S143(15:39)은 하네스 WallTin으로 옹벽을 다시 지은 근사였다 — 이 판은 Civil이 지은 옹벽 삼각형 그대로(SIDE·WALLLINE·HEAD 붙음).
+    //   그날: 순수옹벽 다듬기 판정 3(옹벽 10.331mm) → 대체 길 · 합성 판정 3(10.281mm > 예산 9.90mm) — 합성 없음.
+    //   계측: 1mm 넘는 합치기는 전부 Civil이 반드시 합칠 쌍(네모 < 1e-4) — 85m 소단 모서리(85.000)와 앞면 위 점(84.989~84.998), 합치면 1.7~11.1mm.
+    //   JACK 0930 ③ «줄여 봐도 1cm 넘으면 짓고 ⚠» → v102.1 허용(구역 모드 · 새 길 · 넘은 오차가 전부 그 쌍 곁 1m 안일 때만 1.5cm까지).
+    /// <summary>«(x,y)» 글자 자리가 (x0,y0)에서 tol 안인가.</summary>
+    static bool NearAt(string at, double x0, double y0, double tol)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(at ?? "", @"\(([-0-9.]+),([-0-9.]+)\)");
+        if (!m.Success) return false;
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        double x = double.Parse(m.Groups[1].Value, ci), y = double.Parse(m.Groups[2].Value, ci);
+        return Math.Abs(x - x0) <= tol && Math.Abs(y - y0) <= tol;
+    }
+
+    static void FieldReal(Action<string, bool, string> check, string d)
+    {
+        string T = "S145[0930]";
+        string fb = Path.Combine(d, "현장0930_1339_성토_띠.txt"), fc = Path.Combine(d, "현장0930_1340_성토_합성.txt");
+        bool okB = WallDaylight.TryReadBandInput(fb, out var p, out var w, out var g, out var pl, out _);
+        bool okC = WallDaylight.TryReadBandInput(fc, out var p2, out var w2, out var g2, out var pl2, out _);
+        var tb = WallDaylight.ReadInputTail(fb); var tc = WallDaylight.ReadInputTail(fc);
+        check($"{T} 고정 자료 — 띠(폴리곤 187 · 옹벽 1906 · 원지반 329 · 정지면 2144 · SIDE 성토 · 옹벽선 137 · HEAD 105 5 1 5 0) · 합성(같은 폴리곤·옹벽·원지반 · 정지면 3391 · SIDE 성토)",
+              okB && okC && p.Count == 187 && w.Count == 1906 && g.Count == 329 && pl.Count == 2144 && tb.Side == "성토" && tb.WallLine.Count == 137
+              && tb.Head.SequenceEqual(new double[] { 105, 5, 1, 5, 0 })
+              && p2.Count == 187 && w2.Count == 1906 && g2.Count == 329 && pl2.Count == 3391 && tc.Side == "성토" && p.Zip(p2).All(z => z.First == z.Second),
+              $"{p.Count} · {w.Count} · {g.Count} · {pl.Count} · {tb.Side} · {tb.WallLine.Count} · [{string.Join(" ", tb.Head)}] / {p2.Count} · {w2.Count} · {g2.Count} · {pl2.Count} · {tc.Side}");
+        if (!okB || !okC) return;
+        var c = new Case { Tag = "0930 13:39 성토", Poly = p, WallLine = tb.WallLine, W = w, G = g, P = pl, Nb = 5 };
+        var lw = new TinLook(w); var lg = new TinLook(g); var lp = new TinLook(pl);
+        // ① 띠 — 그날 로그와 같은 넓이 · 따로 잰 격자 · 테두리 높이 · 링이 맞는 선 위
+        var b = WallDaylight.KeepBand(p, w, g, pl, "현장 원지반", "현장 정지면", null, null, down: true);
+        Console.WriteLine($"      {T} 띠 " + b.Summary);
+        check($"{T} 띠 — 링 · 틀림 없음 · 넓이 185.26㎡(그날 로그 «가장 큰 것 185.26㎡»)", b.Ring != null && !b.Broken && Math.Abs(b.Area - 185.26) < 0.005, b.Summary);
+        if (b.Ring == null || b.Broken) return;
+        {
+            var (n, bad, drop, encl, at) = RegionGridCC(p, b.Ring, b.Holes, (x, y) =>
+            {
+                if (!lw.TryZ(x, y, out double zw) || !lg.TryZ(x, y, out double zg) || !lp.TryZ(x, y, out double zp)) return null;
+                if (Math.Abs(zw - zg) <= 1e-4 || Math.Abs(zw - zp) <= 1e-4) return null;
+                return zg <= zw && zw < zp;
+            }, allowEnclosed: false);
+            check($"{T} 띠 — 따로 잰 격자: 띠 안 = 원지반 ≤ 옹벽 < 정지면(어긋남 0)", n > 100 && bad == 0, $"{n}점 · 어긋남 {bad} · 버린 조각 칸 {drop}{at}");
+        }
+        var (gMax, gN, gAt) = BandRingProbe.EdgeGap(b.Holes.Prepend(b.Ring).ToList(), w);
+        check($"{T} 띠 — 테두리 높이 = 띠 선 높이(1mm · 하네스·Core 따로)", gN > 0 && gMax <= 0.001 && b.EdgeGapMax <= 0.001,
+              $"하네스 {gN}점 최대 {gMax * 1000:F3}mm @{gAt} · Core ⑦-c {b.EdgeGapMax * 1000:F3}mm");
+        SideOk(check, T, b, c);
+        // ② 순수옹벽 다듬기 — 판정 3 그대로(그날처럼 대체 길 — 그날 테두리 0.19mm로 더 정확) · 반드시 합칠 쌍 오차를 적는다 · 허용은 순수옹벽엔 없다
+        var tris = WallDaylight.ClipToBand(w, b.Ring, b.Holes, out string cn, out int cbad);
+        CivilSafeMesh.Report? csr = null;
+        var safe = cbad == 0 ? CivilSafeMesh.Make(tris, b.Ring, b.Holes, w, out csr) : null;
+        check($"{T} 순수옹벽 — 다듬기 판정 3 그대로(→ 대체 길) · Civil이 반드시 합칠 쌍 오차(합칠 때) 10~12mm 적힘 · 허용 안 씀(구역 모드 아님)",
+              cbad == 0 && safe == null && csr != null && csr.Tier == 3 && csr.ForcedDz > 0.010 && csr.ForcedDz < 0.012 && !csr.OverForced && !csr.ZoneMode,
+              cn + (csr != null ? " · 다듬기: " + csr.Summary : ""));
+        // ③ 합성 — 판정 2 · 허용(넘은 옹벽 높이 오차가 전부 반드시 합칠 쌍 곁 1m 안 · 그 밖은 예산 안) · 그날 자리와 값 · 구조 관문 전부 · 따로 잰 규칙
+        var r = WallDaylight.BuildComposite(p2, w2, g2, pl2, down: true);
+        var cl = r.Clean;
+        check($"{T} 합성 — 판정 2 · 허용(넘은 오차는 전부 Civil이 반드시 합칠 쌍 곁 · 그 밖은 예산 안 · 위험 면 0) · 옹벽 높이 10.281mm @(210348.3191,509798.3281)(그날 값) · 높이 오차 합 ≤ 한도 1.5cm",
+              r.Tier == 2 && r.Zone != null && cl != null && cl.OverForced && cl.WallDzNear > cl.WallTol2 && cl.WallDzFar <= cl.WallTol2 && cl.CivilRisk == 0
+              && Math.Abs(cl.WallDz - 0.010281) < 5e-6 && NearAt(cl.WallAt, 210348.3191, 509798.3281, 1e-3)
+              && r.HeightLimit == CivilSafeMesh.ForcedCap && r.HeightBudget > 1e-2 && r.HeightBudget <= r.HeightLimit,
+              r.Summary);
+        CompositeCheck.Case(check, "0930 13:40 성토", p2, w2, g2, pl2, wantTier1: false, grid: 0.2, down: true, sec: "S145", onOff: false, wantTier: 2, allowForced: true);
+        // ④ 음성 — 허용이 정확히 그 조건에서만 열린다
+        void Neg(string what, Func<Action> on, Func<WallDaylight.CompositeResult, bool> want)
+        {
+            var undo = on();                                 // 켜고 · 원래 값으로 되돌리는 일을 받는다
+            try { var q = WallDaylight.BuildComposite(p2, w2, g2, pl2, down: true); check($"{T} 음성 — {what}", want(q), $"판정 {q.Tier} · 허용 {q.Clean?.OverForced} · 옹벽 {(q.Clean?.WallDz ?? 0) * 1000:F3}mm · {q.Fail}"); }
+            finally { undo(); }
+        }
+        Neg("허용을 끄면 그날과 같이 판정 3(옹벽 높이 10.28mm · «허용 꺼 둠»)",
+            () => { var was = CivilSafeMesh.ForcedAllowOff; CivilSafeMesh.ForcedAllowOff = true; return () => CivilSafeMesh.ForcedAllowOff = was; },
+            q => q.Tier == 3 && q.Zone == null && Math.Abs((q.Clean?.WallDz ?? 0) - 0.010281) < 5e-6 && q.Fail.Contains("허용 꺼 둠"));
+        Neg("위 끝 10.0mm < 최종 옹벽 높이 10.281mm → 판정 3",
+            () => { var was = CivilSafeMesh.DebugWallCap; CivilSafeMesh.DebugWallCap = 0.0100; return () => CivilSafeMesh.DebugWallCap = was; },
+            q => q.Tier == 3 && q.Zone == null && !(q.Clean?.OverForced ?? false));
+        Neg("위 끝 10.5mm ≥ 최종 옹벽 높이 10.281mm → 판정 2(허용)",
+            () => { var was = CivilSafeMesh.DebugWallCap; CivilSafeMesh.DebugWallCap = 0.0105; return () => CivilSafeMesh.DebugWallCap = was; },
+            q => q.Tier == 2 && q.Zone != null && (q.Clean?.OverForced ?? false));
+        Neg("나머지가 1cm를 다 쓰면(예산 ≤ 0) 허용 없음 → 판정 3(«예산 … ≤ 0»)",
+            () => { var was = WallDaylight.DebugRestAdd; WallDaylight.DebugRestAdd = 0.0101; return () => WallDaylight.DebugRestAdd = was; },
+            q => q.Tier == 3 && q.Zone == null && !(q.Clean?.OverForced ?? false) && q.Fail.Contains("≤ 0"));
+        Neg("«반드시 합친 쌍 곁»을 0으로 두면 넘은 오차가 전부 «그 밖» → 허용 없음 · 판정 3(«그 곁 밖»)",
+            () => { var was = CivilSafeMesh.DebugForcedNear; CivilSafeMesh.DebugForcedNear = 1e-9; return () => CivilSafeMesh.DebugForcedNear = was; },
+            q => q.Tier == 3 && q.Zone == null && q.Fail.Contains("그 곁 밖"));
+        Neg("옛 길만이면 허용 없음(판정 3 · 허용 안 씀 · 새 길 아님)",
+            () => { var was = CivilSafeMesh.LegacyOnly; CivilSafeMesh.LegacyOnly = true; return () => CivilSafeMesh.LegacyOnly = was; },
+            q => q.Tier == 3 && q.Zone == null && !(q.Clean?.OverForced ?? false) && !(q.Clean?.NewPath ?? true));
     }
 
     static void RunField(Action<string, bool, string> check, Case c)
