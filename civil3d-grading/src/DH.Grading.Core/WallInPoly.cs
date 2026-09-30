@@ -552,4 +552,189 @@ public static class WallInPoly
         log = sb.ToString();
         return rows;
     }
+
+    /// <summary>★★[v102.2 · JACK 0930 «끝선을 꺾지 않고 연장선처럼 뺐는데 강제로 꺾여서 옹벽이 생겼다»] 손으로 그린 옹벽 폴리곤을 잇는다 — WallPolyDraw가 부른다.
+    /// <para>측선(옹벽) = 구간 끝 → <b>찍은 방향 그대로</b> «데이라잇 + 여유» 테두리(<see cref="GradingGeometry.BufferedRingOutward"/>)에 처음 닿는 점까지.
+    /// 두 닿은 점 사이는 그 테두리를 따라 두른다(폐합면 — 수직). 측선은 테두리 안에서 처음 밖으로 나가는 자리에서 끝나므로 두른 선이 측선을 가로지를 수 없다.</para>
+    /// <para>종전(0917 S134 이음매 고침)은 데이라잇에 닿은 점에서 <b>테두리의 가장 가까운 점</b>(법선 쪽)을 모서리로 써 측선이 찍은 방향에서 틀어졌고,
+    /// 측선이 옹벽이라 벽이 꺾였다. 새 길이 안 되면(테두리를 못 만듦 · 광선이 안 닿음 · 제 몸을 지름 · 넓이 &lt; 1㎡) <b>종전 모서리</b>로 물러나고 까닭을 적는다.</para>
+    /// <para>★[v102.2 · 코드 검토 중간 1] <b>어느 쪽으로 두르나</b> — 테두리의 두 갈래는 측선 + 구간을 사이에 두고 반대쪽을 덮는다.
+    /// 폴리곤은 구간의 <b>바깥쪽</b>(부지 반대쪽)에 서야 하므로, 두 갈래로 링을 다 이어 보고 <b>돌리는 방향</b>(넓이 부호)이 바깥쪽과 맞는 쪽을 쓴다.
+    /// 종전(두 갈래의 «가운데 번호 점»이 구간 가운데에 가까운 쪽)은 좁은 부지에서 한 바퀴 도는 쪽을 골라 <b>부지 전체를 덮는</b> 폴리곤이 됐다
+    /// (검토 재현: 폭 20m · 벽 100m — 짧은 쪽 점수 2725 · 한 바퀴 쪽 625). 바깥쪽을 모르면 종전 규칙으로 두르고 ⚠를 적는다.</para>
+    /// <para>★[v102.2 · 재검토 중간 1] 바깥쪽은 <b>자 고리가 도는 방향</b>으로 받는다(<see cref="GradingGeometry.OutwardSideOfTravel"/> — 울타리 법선을 만드는
+    /// <see cref="GradingGeometry.OutwardAt"/>과 같은 규칙). 끝 법선으로 가르던 첫 고침은 구간 끝(T1)이 자의 꼭짓점에 붙으면 그 법선이 <b>다음 변</b>의 것이라
+    /// 못 갈랐다(사각 부지 한 변을 모서리에서 모서리까지 고르면 흔하다).</para></summary>
+    /// <param name="seg">고른 구간 점(end0 → end1) — 자 위에서 T가 느는 쪽(<see cref="SegmentPoints"/>).</param>
+    /// <param name="dirA">시점 방향(end1에서 찍은 쪽) · <paramref name="dirB"/> 종점 방향(end0에서).</param>
+    /// <param name="outwardSide">바깥쪽이 구간 진행(end0 → end1)의 왼쪽이면 +1 · 오른쪽이면 −1 · 모르면 0(<see cref="GradingGeometry.OutwardSideOfTravel"/>).</param>
+    /// <param name="dayA">시점 광선이 데이라잇에 닿은 점 · <paramref name="dayB"/> 종점 — 물러날 때(종전 길) 쓴다.</param>
+    /// <param name="margin">데이라잇 바깥 여유(m).</param>
+    /// <param name="spacing">측선 점 간격(m) — 구간 점 간격과 맞춘다(줄이 측선을 따라가게).</param>
+    /// <param name="usedRay">참이면 찍은 방향 그대로 · 거짓이면 물러났다.</param>
+    public static List<Point3>? AssembleManual(IReadOnlyList<Point3> seg, (double X, double Y) dirA, (double X, double Y) dirB, int outwardSide,
+        Point3 dayA, Point3 dayB, IReadOnlyList<Point3> dayRing, double margin, double spacing, double z,
+        out List<bool> isWall, out bool usedRay, out string note)
+    {
+        isWall = new List<bool>(); usedRay = false; note = "";
+        if (seg == null || seg.Count < 2 || dayRing == null || dayRing.Count < 3) { note = "⚠구간 점·데이라잇이 모자라다"; return null; }
+        var end0 = seg[0]; var end1 = seg[seg.Count - 1];
+        var mid = seg[seg.Count / 2];
+        double sp = Math.Max(0.1, spacing);
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        int ow = Math.Sign(outwardSide);
+
+        // 링 하나를 잇는다 — 선택구간(옹벽) → 측선 A(옹벽) → 두른 선(수직 · 첫·끝 점은 측선 모서리) → 측선 B(옹벽)
+        List<Point3> Build(Point3 cA, Point3 cB, IReadOnlyList<Point3> arc, List<bool> flags)
+        {
+            var ring = new List<Point3>();
+            void Add(Point3 q, bool w)
+            {
+                if (ring.Count > 0 && Math.Abs(ring[^1].X - q.X) < 1e-9 && Math.Abs(ring[^1].Y - q.Y) < 1e-9) { if (w) flags[^1] = true; return; }
+                ring.Add(new Point3(q.X, q.Y, z)); flags.Add(w);
+            }
+            void Side(Point3 pa, Point3 pb, bool skipFirst)
+            {
+                double dx = pb.X - pa.X, dy = pb.Y - pa.Y, L = Math.Sqrt(dx * dx + dy * dy);
+                int n = Math.Max(1, (int)Math.Ceiling(L / sp));
+                for (int i = skipFirst ? 1 : 0; i <= n; i++) Add(new Point3(pa.X + dx * i / n, pa.Y + dy * i / n, z), true);   // 측선 = 옹벽
+            }
+            foreach (var q in seg) Add(q, true);                                            // 선택구간 = 옹벽(end0 → end1)
+            Side(end1, cA, true);                                                           // 측선(시점 쪽) — 모서리까지 옹벽
+            foreach (var q in arc) Add(q, false);                                           // 두른 선 = 수직(첫 점은 모서리와 겹쳐 옹벽으로 남는다)
+            Side(cB, end0, false);                                                          // 측선(종점 쪽) — 모서리부터 옹벽
+            if (ring.Count > 1 && Math.Abs(ring[^1].X - ring[0].X) < 1e-9 && Math.Abs(ring[^1].Y - ring[0].Y) < 1e-9)
+            { ring.RemoveAt(ring.Count - 1); flags.RemoveAt(flags.Count - 1); }             // 닫음점 중복 제거
+            return ring;
+        }
+        static double Deg((double X, double Y) d, Point3 a, Point3 b)
+        {
+            double ux = b.X - a.X, uy = b.Y - a.Y, l1 = Math.Sqrt(ux * ux + uy * uy), l2 = Math.Sqrt(d.X * d.X + d.Y * d.Y);
+            if (l1 < 1e-12 || l2 < 1e-12) return 0;
+            return Math.Acos(Math.Clamp((ux * d.X + uy * d.Y) / (l1 * l2), -1, 1)) * 180 / Math.PI;
+        }
+        // ★[v102.2 · 코드 검토 중간 1] 두 갈래로 링을 다 이어 보고 <b>돌리는 방향이 바깥쪽과 맞는</b> 쪽 — 못 가르면 종전 규칙(byScore)으로 두르고 까닭을 갈라 ⚠
+        (List<Point3> Ring, List<bool> Flags, List<Point3> Arc, string Side) Pick(Point3 cA, Point3 cB, List<Point3> fw, List<Point3> bw, Func<List<Point3>> byScore)
+        {
+            string warn = "⚠바깥쪽을 몰라(자 고리가 도는 방향을 못 정했다)";
+            if (ow != 0)
+            {
+                (List<Point3>, List<bool>, List<Point3>, string)? hit = null; int hits = 0;
+                foreach (var arc in new[] { fw, bw })
+                {
+                    if (arc.Count < 2) continue;
+                    var fl = new List<bool>(); var r = Build(cA, cB, arc, fl);
+                    double sa = SignedArea(r);
+                    if (Math.Abs(sa) >= 1.0 && Math.Sign(sa) == ow) { hits++; hit = (r, fl, arc, "바깥쪽으로 두름"); }
+                }
+                if (hits == 1) return hit!.Value;
+                // ★[재검토 낮음 1] 까닭을 섞지 않는다 — 바깥쪽은 아는데 두 갈래가 둘 다(또는 둘 다 아니게) 맞으면 링이 꼬인 것이다
+                warn = hits == 0 ? "⚠두 갈래 어느 쪽도 바깥쪽으로 돌지 않았다(링이 꼬였거나 넓이 1㎡ 미만)" : "⚠두 갈래가 둘 다 바깥쪽으로 돌았다(링이 꼬였다)";
+            }
+            var a0 = byScore();
+            var f0 = new List<bool>();
+            return (a0.Count >= 2 ? Build(cA, cB, a0, f0) : new List<Point3>(), f0, a0,
+                    warn + " — 두 갈래 중 가운데가 구간에 가까운 쪽으로 둘렀다(종전 규칙 · 좁은 부지면 부지를 덮을 수 있다)");
+        }
+
+        // ① 새 길 — 찍은 방향으로 여유 테두리까지
+        var why = new List<string>();
+        var work = GradingGeometry.BufferedRingOutward(dayRing, margin);
+        if (work == null || work.Count < 3) why.Add("여유 테두리를 못 만들었다");
+        else
+        {
+            bool okA = GradingGeometry.RayRingHitInside(work, end1.X, end1.Y, dirA.X, dirA.Y, out double ax, out double ay, out double dA, 1e-6);
+            bool okB = GradingGeometry.RayRingHitInside(work, end0.X, end0.Y, dirB.X, dirB.Y, out double bx, out double by, out double dB, 1e-6);
+            if (!okA) why.Add("시점 방향이 여유 테두리에 안 닿는다");
+            if (!okB) why.Add("종점 방향이 여유 테두리에 안 닿는다");
+            if (okA && okB)
+            {
+                var cA = new Point3(ax, ay, z); var cB = new Point3(bx, by, z);
+                int eA = GradingGeometry.RingEdgeOf(work, ax, ay), eB = GradingGeometry.RingEdgeOf(work, bx, by);
+                var (fw, bw) = GradingGeometry.RingArcSides(work, ax, ay, eA, bx, by, eB);
+                var pk = Pick(cA, cB, fw, bw, () => GradingGeometry.RingArcBetween(work, ax, ay, eA, bx, by, eB, mid.X, mid.Y));
+                if (pk.Arc.Count < 2) why.Add("두 모서리 사이를 두르지 못했다");
+                else
+                {
+                    var rR = pk.Ring;
+                    bool simple = GradingGeometry.RingIsSimple(rR); double area = GradingGeometry.RingAreaNts(rR);
+                    if (!simple) why.Add("제 몸을 지른다(두 측선이 엇갈렸나?)");
+                    if (!(area >= 1.0)) why.Add(string.Format(ci, "넓이 {0:F2}㎡", area));
+                    if (why.Count == 0)
+                    {
+                        usedRay = true; isWall = pk.Flags;
+                        note = string.Format(ci, "측선 — <b>찍은 방향 그대로</b> 여유 테두리까지(시점 모서리 ({0:F1},{1:F1}) · 구간 끝에서 {2:F1}m · 종점 모서리 ({3:F1},{4:F1}) · {5:F1}m) · 두른 선 {6}점 · {7}",
+                            ax, ay, dA, bx, by, dB, pk.Arc.Count, pk.Side);
+                        // ★[계획 검토 v102.2 · 치명 1 부기] 데이라잇과 거의 나란히 찍으면 측선이 여유 테두리까지 길게 간다(여유/cosθ) — 알린다(막지는 않는다)
+                        double gA = Math.Sqrt((ax - dayA.X) * (ax - dayA.X) + (ay - dayA.Y) * (ay - dayA.Y)), gB = Math.Sqrt((bx - dayB.X) * (bx - dayB.X) + (by - dayB.Y) * (by - dayB.Y));
+                        if (Math.Max(gA, gB) > 3 * Math.Max(1.0, margin))
+                            note += string.Format(ci, " · ⚠데이라잇 밖 측선이 시점 {0:F1}m · 종점 {1:F1}m로 길다(여유 {2:0.#}m의 3배 넘음 — 데이라잇과 거의 나란히 찍었다)", gA, gB, margin);
+                        return rR;
+                    }
+                }
+            }
+        }
+        // ② 물러남 — 종전 모서리(데이라잇에 닿은 점에서 테두리의 가장 가까운 꼭짓점 — RingArcOutward와 같은 모서리) · 두르는 쪽은 ①과 같이 바깥쪽
+        var work0 = work ?? dayRing;
+        static int Nearest(IReadOnlyList<Point3> r, double x, double y)
+        {
+            int bi = 0; double bd = double.MaxValue;
+            for (int i = 0; i < r.Count; i++) { double dx = r[i].X - x, dy = r[i].Y - y, d2 = dx * dx + dy * dy; if (d2 < bd) { bd = d2; bi = i; } }
+            return bi;
+        }
+        int i0 = Nearest(work0, dayA.X, dayA.Y), i1 = Nearest(work0, dayB.X, dayB.Y);
+        if (i0 == i1) { note = "⚠폴리곤을 못 이었다 — " + string.Join(" · ", why) + " · 종전 길도 두를 선이 없다(두 모서리가 한 점)"; return null; }
+        var oA = work0[i0]; var oB = work0[i1];
+        var (fwO, bwO) = GradingGeometry.RingArcSides(work0, oA.X, oA.Y, i0, oB.X, oB.Y, i1);
+        var pkO = Pick(new Point3(oA.X, oA.Y, z), new Point3(oB.X, oB.Y, z), fwO, bwO, () =>
+        {
+            var a = GradingGeometry.RingArcOutward(dayRing, dayA.X, dayA.Y, dayB.X, dayB.Y, mid.X, mid.Y, margin);
+            if (a.Count >= 2 && (a[^1].X - dayA.X) * (a[^1].X - dayA.X) + (a[^1].Y - dayA.Y) * (a[^1].Y - dayA.Y)
+                              < (a[0].X - dayA.X) * (a[0].X - dayA.X) + (a[0].Y - dayA.Y) * (a[0].Y - dayA.Y)) a.Reverse();
+            return a;
+        });
+        if (pkO.Arc.Count < 2) { note = "⚠폴리곤을 못 이었다 — " + string.Join(" · ", why) + " · 종전 길도 두를 선이 없다"; return null; }
+        var rO = pkO.Ring;
+        isWall = pkO.Flags;
+        note = string.Format(ci, "⚠측선을 <b>찍은 방향대로 못 그었다</b>({0}) — 종전처럼 데이라잇을 따라 두른 선의 끝 점 ({1:F1},{2:F1}) · ({3:F1},{4:F1})로 이었다(찍은 방향에서 시점 {5:F1}° · 종점 {6:F1}° 틀어짐) · {7}",
+            string.Join(" · ", why), pkO.Arc[0].X, pkO.Arc[0].Y, pkO.Arc[^1].X, pkO.Arc[^1].Y, Deg(dirA, end1, pkO.Arc[0]), Deg(dirB, end0, pkO.Arc[^1]), pkO.Side);
+        return GradingGeometry.RingIsSimple(rO) && GradingGeometry.RingAreaNts(rO) >= 1.0 ? rO : null;
+    }
+
+    /// <summary>★[v102.2 · 재검토 낮음 3 «검사 입력이 출하 입력이 아님»] 고른 구간 [t0, t1]을 자(고리) 위에서 1m 안팎 간격 점으로 뜬다(T가 느는 쪽 · 한 바퀴 넘김 대응).
+    /// ZoneEditCommon이 손 폴리곤의 안쪽 변으로 쓰고, 하네스 S146이 <b>같은 함수</b>로 뜬다.</summary>
+    public static List<Point3> SegmentPoints(IReadOnlyList<Point3> ruler, double[] cum, double t0, double t1)
+    {
+        double rTot = cum[cum.Length - 1];
+        double span = t1 >= t0 ? t1 - t0 : rTot - t0 + t1;
+        int nSeg = Math.Max(2, (int)Math.Ceiling(span / 1.0));
+        var seg = new List<Point3>();
+        for (int i = 0; i <= nSeg; i++)
+        {
+            double t = t0 + span * i / nSeg;
+            seg.Add(GradingGeometry.PointAtParam(ruler, cum, ((t % rTot) + rTot) % rTot));
+        }
+        return seg;
+    }
+
+    /// <summary>★[v102.2 · 재검토 낮음 3] 자 위 <paramref name="t"/> 자리의 <b>울타리 법선</b>(바깥쪽 · 길이 1) — WallPolyDraw가 «노선 안쪽으로는 못 그린다»에 쓴다.
+    /// <see cref="GradingGeometry.OutwardAt"/>이 T → T+0.5 접선으로 재므로 T가 꼭짓점이면 <b>다음 변</b>의 법선이다(구간 끝이 모서리면 연장선처럼 찍을 수 있는 까닭).</summary>
+    public static (double X, double Y) FenceNormal(IReadOnlyList<Point3> ruler, double[] cum, double t)
+    {
+        double rTot = cum[cum.Length - 1];
+        double tw = ((t % rTot) + rTot) % rTot;
+        var o = GradingGeometry.PointAtParam(ruler, cum, tw);
+        var q = GradingGeometry.OutwardAt(ruler, cum, tw, 1.0);
+        return (q.X - o.X, q.Y - o.Y);
+    }
+
+    /// <summary>링의 넓이 부호(반시계 +) — 큰 좌표에서 자릿수를 잃지 않게 첫 점을 원점으로 옮겨 잰다.</summary>
+    private static double SignedArea(IReadOnlyList<Point3> r)
+    {
+        if (r.Count < 3) return 0;
+        double x0 = r[0].X, y0 = r[0].Y, a = 0;
+        for (int i = 0, j = r.Count - 1; i < r.Count; j = i++)
+            a += (r[j].X - x0) * (r[i].Y - y0) - (r[i].X - x0) * (r[j].Y - y0);
+        return a * 0.5;
+    }
 }

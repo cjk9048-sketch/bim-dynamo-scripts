@@ -2063,6 +2063,41 @@ public static class GradingBuilder
         }
     }
 
+    /// <summary>★[v102.2] 기준 이름(이름·이름_N) 지표면 수 — 지우기 전에 세어 로그에 적는다(원지반은 뺀다).</summary>
+    internal static int CountSurfacesByBaseName(Transaction tr, string baseName, ObjectId protect = default)
+    {
+        var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+        int n = 0;
+        foreach (ObjectId sid in civilDoc.GetSurfaceIds())
+        {
+            if (sid == protect) continue;
+            if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
+            string nm = s.Name;
+            if (nm == baseName || (nm.StartsWith(baseName + "_") && int.TryParse(nm.Substring(baseName.Length + 1), out _))) n++;
+        }
+        return n;
+    }
+
+    /// <summary>★[v102.2] 레이어 위 객체를 지우고 지운 수를 준다(<see cref="EraseOnLayer"/>와 같은 순서 — 모았다가 하나씩).
+    /// <para>★[코드 검토 낮음 7] 못 지운 것(잠긴 레이어 등)은 <paramref name="failed"/>로 센다 — 조용히 남으면 옛 옹벽 선이 새것처럼 보인다.</para></summary>
+    internal static int EraseOnLayerCount(Database db, Transaction tr, string layerName, out int failed)
+    {
+        int n = 0; failed = 0;
+        try
+        {
+            var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+            if (!lt.Has(layerName)) return 0;
+            var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+            var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
+            var ids = new List<ObjectId>();
+            foreach (ObjectId id in ms)
+                if (tr.GetObject(id, OpenMode.ForRead) is AcadEntity e && string.Equals(e.Layer, layerName, StringComparison.OrdinalIgnoreCase)) ids.Add(id);
+            foreach (var id in ids) { try { tr.GetObject(id, OpenMode.ForWrite).Erase(); n++; } catch { failed++; } }
+        }
+        catch { }
+        return n;
+    }
+
     internal static string UniqueName(Database db, Transaction tr, string baseName)
     {
         var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
