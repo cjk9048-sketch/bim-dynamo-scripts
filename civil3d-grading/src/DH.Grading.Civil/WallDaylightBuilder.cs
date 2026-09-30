@@ -19,6 +19,42 @@ namespace DH.Grading.Civil;
 /// 그때는 확인용 레이어(노랑)에 그리고 명령줄에 ⚠를 띄운다.</para></summary>
 public static class WallDaylightBuilder
 {
+    /// <summary>★★[v102.0 · 계획 검토 M3·L2] 가상옹벽_DH의 <b>방향 표지</b> — 확장 사전 XRecord «DH_WALLSIDE» = "절토" | "성토".
+    /// <para>옹벽 합성은 이 표지를 먼저 믿고 옹벽 모양(첫 줄 z0 한쪽에만 있는가)으로 한 번 더 맞춘다. 방향을 거꾸로 쓰면 두 규칙 모두
+    /// = 정지면이 되어 «판정 1, 옹벽 없음»으로 조용히 끝난다. 세션 기억은 두지 않는다(곧 지워지거나 낡는다 — 계획 검토 L2).</para></summary>
+    public const string SideKey = "DH_WALLSIDE";
+
+    /// <param name="block">★[v102.0 · 코드 검토 중간 1] 합성을 막을 까닭(줄 버림 · 브레이크라인 빠짐) — 비었으면 합성해도 된다.
+    /// 세션 기억(LastWallPlanNote)만으로는 도면 탭을 바꾸거나 Civil을 다시 켜면 풀려, 이름으로 찾는 길이 옹벽이 원지반 너머까지 못 간 판을
+    /// «판정 1»로 합성했다 — 그래서 <b>도면에</b> 적는다(둘째 값).</param>
+    internal static void MarkSide(Transaction tr, ObjectId wallId, bool up, string block = "")
+    {
+        var o = tr.GetObject(wallId, OpenMode.ForWrite);
+        if (o.ExtensionDictionary.IsNull) o.CreateExtensionDictionary();
+        var d = (DBDictionary)tr.GetObject(o.ExtensionDictionary, OpenMode.ForWrite);
+        var rb = new ResultBuffer(new TypedValue((int)DxfCode.Text, up ? "절토" : "성토"));
+        if (!string.IsNullOrEmpty(block)) rb.Add(new TypedValue((int)DxfCode.Text, block));   // ★[재검토 5] 막을 까닭이 있을 때만 둘째 값
+        var xr = new Xrecord { Data = rb };
+        d.SetAt(SideKey, xr);                              // 새 면이라 없다 — 있으면 바꾼다
+        tr.AddNewlyCreatedDBObject(xr, true);
+    }
+
+    /// <summary>방향 표지 — "절토" · "성토" · 없으면 "". <paramref name="block"/>은 합성을 막을 까닭(없으면 "").</summary>
+    internal static string ReadSide(Transaction tr, Autodesk.AutoCAD.DatabaseServices.DBObject o, out string block)
+    {
+        block = "";
+        try
+        {
+            if (o.ExtensionDictionary.IsNull) return "";
+            if (tr.GetObject(o.ExtensionDictionary, OpenMode.ForRead) is not DBDictionary d || !d.Contains(SideKey)) return "";
+            if (tr.GetObject(d.GetAt(SideKey), OpenMode.ForRead) is not Xrecord xr || xr.Data == null) return "";
+            var a = xr.Data.AsArray();
+            if (a.Length >= 2 && a[1].Value is string b) block = b;
+            return a.Length >= 1 && a[0].Value is string s && (s == "절토" || s == "성토") ? s : "";
+        }
+        catch { return ""; }
+    }
+
     /// <summary>상대면 하나의 그리기 규칙.</summary>
     public sealed record Kind(string Tag, string Layer, short Aci, string LayerSuspect, string DumpName);
 
@@ -103,11 +139,20 @@ public static class WallDaylightBuilder
     /// <param name="bladeNote">그 까닭(로그·명령줄에 붙인다).</param>
     /// <returns>진단 로그에 붙일 추적표(여러 줄).</returns>
     /// <param name="rowsC">가상옹벽_DH를 지은 <b>닫은 줄</b> — 순수옹벽_DH를 같은 줄로 짓는다. null이면 띠만 그린다.</param>
-    /// <param name="wUp">절토인가. 성토는 이번 단계에서 띠를 안 만든다(JACK: 한 단계씩).</param>
+    /// <param name="wUp">절토인가. ★★[v102.0 · JACK 0929 «성토 — 절토의 거울»] 성토면 빨강·파랑·초록·순수옹벽을 <b>같은 길</b>로 짓되
+    /// Core에 down을 넘긴다(−z로 뒤집어 같은 셈 · 결과는 되뒤집음). 레이어·색·관문은 절토와 같다(인터뷰 «절토와 같게»).</param>
+    /// <param name="rowsNote">★[v102.0 · 계획 재검토 N1] 옹벽을 지을 때 줄을 버렸다(옹벽이 원지반 너머까지 못 가 윗면·바닥이 드러남) —
+    /// 띠는 확인용으로만 그리고 합성을 막는다. PlanPart가 짝 까닭을 덮어쓰므로 <b>뒤에서 덧붙인다</b>.</param>
+    /// <param name="sideNote">가상옹벽_DH에 방향 표지를 못 붙였다 — 합성만 막는다(띠는 짓는다).</param>
+    /// <param name="wallLine">옹벽선(측선 → 선택구간 → 측선) — 입력 파일 끝에 적어 하네스가 방향·옹벽선까지 같게 재생한다(계획 검토 L6).</param>
+    /// <param name="head">z0 · 단높이 · 소단 · 단수 · 버린 줄.</param>
     public static string Build(Database db, Transaction tr, ObjectId wallId, IGroundSurface ground,
         ObjectId groundId, System.Collections.Generic.List<Point3> poly, bool bladeOk = true, string bladeNote = "",
-        System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? rowsC = null, bool wUp = true)
+        System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? rowsC = null, bool wUp = true,
+        string rowsNote = "", string sideNote = "", System.Collections.Generic.IReadOnlyList<Point3>? wallLine = null, double[]? head = null)
     {
+        bool down = !wUp;
+        var tail = (Side: wUp ? "절토" : "성토", WallLine: wallLine, Head: head);
         System.Collections.Generic.List<WallDaylight.Tri>? groundTris = null, planTris = null;
         string gName = "원지반", pName = PlanSurfaceBase;
         bool planGate = true; string planGateNote = "";
@@ -150,24 +195,24 @@ public static class WallDaylightBuilder
             else
             {
                 groundTris = gCache.TrianglesIn(mnx - 1.0, mny - 1.0, mxx + 1.0, mxy + 1.0);
-                sb.Append(RunOne(db, tr, Ground, poly, wallTris, groundTris, gName, bladeOk, bladeNote, ""));
+                sb.Append(RunOne(db, tr, Ground, poly, wallTris, groundTris, gName, bladeOk, bladeNote, down ? "(성토)" : "", down, tail));
             }
         }
 
         // ② 계획지표면(정지면_DH) — 옹벽 변환은 이 면을 <b>안 건드리므로</b> 지난 «계획부지 생성»의 결과다
         string? planMiss = PlanPart();
         if (planMiss != null) { Summaries.Add(planMiss); sb.Append("  " + planMiss + "\n"); GradingSettings.LastWallPlanNote = planMiss; }
-        // ★[3차 검토 0929 · 낮음 1] 성토 구간은 순수옹벽을 안 짓는다(절토만 — 성토를 아래로 고치는 것이 다음 단계) — 합성도 짓지 않게 짝에 까닭을 남긴다
-        if (!wUp) GradingSettings.LastWallPlanNote = "성토 옹벽은 아직 합성하지 않는다(이번 단계는 절토만 — 성토 옹벽을 아래로 고치는 것이 다음 단계)";
+        // ★[v102.0 · 계획 재검토 N1] 옹벽을 지을 때 난 까닭(줄 버림 · 방향 표지 못 붙임)은 PlanPart가 덮어쓴 <b>뒤에</b> 덧붙인다 — 합성이 멈춘다
+        foreach (var gn in new[] { rowsNote, sideNote })
+            if (!string.IsNullOrEmpty(gn))
+                GradingSettings.LastWallPlanNote = (GradingSettings.LastWallPlanNote.Length > 0 ? GradingSettings.LastWallPlanNote + " · " : "") + gn;
 
-        // ③ ★★★[JACK 0918] 남길 옹벽 띠 → 순수옹벽_DH
-        if (!wUp)
-            Summaries.Add("[남길 띠] 성토 구간 — 이번 단계는 절토만 만든다(성토 옹벽을 아래로 고치는 것이 다음 단계)");
-        else if (groundTris == null || planTris == null)
+        // ③ ★★★[JACK 0918] 남길 옹벽 띠 → 순수옹벽_DH(★v102.0 성토도 같은 길 — Core에 down)
+        if (groundTris == null || planTris == null)
             Summaries.Add("[남길 띠] ⚠못 만듦 — " + (groundTris == null ? "원지반" : "계획지표면") + " 삼각형이 없다");
         else
             sb.Append(RunBand(db, tr, poly, wallTris, groundTris, gName, planTris, pName, rowsC, groundId, wallId,
-                              bladeOk && planGate, !bladeOk ? bladeNote : planGateNote));
+                              bladeOk && planGate && rowsNote.Length == 0, !bladeOk ? bladeNote : !planGate ? planGateNote : rowsNote, down, tail));
         return sb.ToString();
 
         // 계획지표면 부분 — 못 하면 사유 문자열, 하면 null
@@ -228,7 +273,7 @@ public static class WallDaylightBuilder
             try { planTris = pCache.TrianglesIn(mnx - 1.0, mny - 1.0, mxx + 1.0, mxy + 1.0); }
             catch (System.Exception tx) { planTris = null; return $"⚠계획지표면 데이라잇 못 만듦 — '{pName}' 삼각형을 못 꺼냈다 {tx.GetType().Name}"; }
             sb.Append(RunOne(db, tr, Plan, poly, wallTris, planTris, pName, planOk, planNote,
-                $"'{pName}' 삼각형 읽기 {tRead}ms" + (note.Length > 0 ? " · ⚠" + note : "")));
+                $"'{pName}' 삼각형 읽기 {tRead}ms" + (note.Length > 0 ? " · ⚠" + note : "") + (down ? " · (성토)" : ""), down, tail));
             if (note.Length > 0 && Summaries.Count > 0) Summaries[^1] += " · ⚠" + note;
             // ★[계획 검토 0918 · 중간 2] 순수옹벽_DH 관문 — 후보 여럿 · 낡은 정지면이면 <b>면을 짓지 않는다</b>
             planGate = hits1 <= 1 && !stale && !composed;
@@ -245,7 +290,7 @@ public static class WallDaylightBuilder
         System.Collections.Generic.List<WallDaylight.Tri> groundTris, string gName,
         System.Collections.Generic.List<WallDaylight.Tri> planTris, string pName,
         System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? rowsC, ObjectId groundId, ObjectId wallId,
-        bool gateOk, string gateNote)
+        bool gateOk, string gateNote, bool down, (string Side, System.Collections.Generic.IReadOnlyList<Point3>? WallLine, double[]? Head) tail)
     {
         var sb = new System.Text.StringBuilder();
         const string head = "[남길 띠] ";
@@ -258,11 +303,12 @@ public static class WallDaylightBuilder
                 dump = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(DiagLog.FilePath) ?? ".", BandDump);
                 WallDaylight.WriteBandInput(dump, poly, wallTris, groundTris, planTris,
                     $"{System.DateTime.Now:yyyy-MM-dd HH:mm:ss} {GradingSettings.Version} 원지반='{gName}' 계획='{pName}'");
+                WallDaylight.AppendInputTail(dump, tail.Side, tail.WallLine, tail.Head);   // ★[v102.0] 방향 · 옹벽선 · 머리 — 재생이 방향을 안다
                 ArchiveDump(dump);
             }
             catch (System.Exception de) { dump = $"(못 떨굼: {de.GetType().Name})"; }
 
-            var r = WallDaylight.KeepBand(poly, wallTris, groundTris, planTris, gName, pName);
+            var r = WallDaylight.KeepBand(poly, wallTris, groundTris, planTris, gName, pName, null, null, down);
             sb.Append("  ── [남길 띠] ──\n").Append(r.Trace).Append($"    입력 파일: {dump}\n");
             if (r.Ring == null) { Summaries.Add(head + r.Summary); return sb.ToString(); }
 
@@ -730,7 +776,8 @@ public static class WallDaylightBuilder
     /// <summary>상대면 하나 — 입력 떨구기 · 계산 · 그리기 · 되읽기.</summary>
     private static string RunOne(Database db, Transaction tr, Kind k, System.Collections.Generic.List<Point3> poly,
         System.Collections.Generic.List<WallDaylight.Tri> wallTris, System.Collections.Generic.List<WallDaylight.Tri> targetTris,
-        string targetName, bool bladeOk, string bladeNote, string extra)
+        string targetName, bool bladeOk, string bladeNote, string extra,
+        bool down, (string Side, System.Collections.Generic.IReadOnlyList<Point3>? WallLine, double[]? Head) tail)
     {
         var sb = new System.Text.StringBuilder();
         try
@@ -742,11 +789,12 @@ public static class WallDaylightBuilder
                 dump = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(DiagLog.FilePath) ?? ".", k.DumpName);
                 WallDaylight.WriteInput(dump, poly, wallTris, targetTris,
                     $"{System.DateTime.Now:yyyy-MM-dd HH:mm:ss} {GradingSettings.Version} {k.Tag}='{targetName}'");
+                WallDaylight.AppendInputTail(dump, tail.Side, tail.WallLine, tail.Head);   // ★[v102.0] 방향 · 옹벽선 · 머리 — 재생이 방향을 안다
                 ArchiveDump(dump);
             }
             catch (System.Exception de) { dump = $"(못 떨굼: {de.GetType().Name})"; }
 
-            var r = WallDaylight.Build(poly, wallTris, targetTris, targetName);
+            var r = WallDaylight.Build(poly, wallTris, targetTris, targetName, null, down);
             sb.Append($"  ── [{k.Tag}] ──{(extra.Length > 0 ? " " + extra : "")}\n");
             sb.Append(r.Trace);
             sb.Append($"    입력 파일: {dump}\n");

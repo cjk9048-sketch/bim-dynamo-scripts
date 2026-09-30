@@ -37,6 +37,10 @@ public static class WallInPoly
     public static double StepRun(double benchH, double slope, double benchW, double minFaceRun)
         => Math.Max(benchH * Math.Max(0, slope), Math.Max(1e-4, minFaceRun)) + Math.Max(0, benchW);
 
+    /// <summary>★[v102.0 · 계획 검토 물음] 직전 <see cref="RowsByBuffer"/>가 <b>남는 자리가 없어 버린 줄</b> 수 —
+    /// 0보다 크면 옹벽이 원지반 너머까지 못 가 윗면(절토)·바닥(성토)이 드러난다 → 부르는 쪽이 합성을 막는다.</summary>
+    [ThreadStatic] public static int LastLost;
+
     /// <summary>★★[검토 0918 · 높음 4] <b>줄을 닫아서 브레이크라인으로 넣는다.</b>
     /// <para><see cref="GradingGeometry.PolyMinusLineBuffer"/>는 닫는 점을 떼고 돌려주는데,
     /// 줄은 <b>열린 브레이크라인</b>으로 들어간다(<c>BuildVirtualSlope</c>의 cornerLines).
@@ -130,6 +134,50 @@ public static class WallInPoly
         return Math.Max(1, Math.Min(cap, n));
     }
 
+    /// <summary>★★[v102.0 · JACK 0929 «성토 — 절토의 거울, 계단으로 내려감»] <b>폴리곤 안의 원지반 최저 표고</b> — <see cref="MaxGroundIn"/>의 거울.
+    /// <para>−z로 뒤집어 같은 함수로 잰다(같은 격자·같은 테두리 표본 — 절토와 같은 정확도). 못 재면 <c>null</c>.</para></summary>
+    public static double? MinGroundIn(IReadOnlyList<Point3> ring,
+        Func<double, double, double?> ground, double grid, out int nHit, out int nMiss)
+    {
+        var v = MaxGroundIn(ring, (x, y) => { var g = ground(x, y); return g == null ? (double?)null : -g.Value; },
+                            grid, out nHit, out nMiss);
+        return v == null ? (double?)null : -v.Value;
+    }
+
+    /// <summary>★★[v102.0] <b>몇 단을 내려가야 원지반 아래로 가는가</b> — <see cref="BenchCount"/>의 거울
+    /// (z0 − n·단높이 &lt; 원지반 최저가 되는 가장 작은 n · 딱 떨어지면 한 단 더 · 이미 아래면 1).</summary>
+    public static int BenchCountDown(double z0, double bottomGround, double benchH, int cap = 200)
+        => BenchCount(-z0, -bottomGround, benchH, cap);
+
+    /// <summary>★★[v102.0 · JACK 0929 «성토=구간 최고점, 절토=구간 최저점»] <b>옹벽 머리(첫 줄) 높이</b> — 계획선 구간 [t0, t0+span]의
+    /// 최저(절토)·최고(성토).
+    /// <para>폴리곤 테두리에서 옹벽 첫 줄(W = z0)이 절토면 계획면 <b>이하</b>, 성토면 <b>이상</b>이어야 합성이 바깥 정지면과 턱 없이 잇는다
+    /// (절토 max(P, min(W,G)) · 성토 min(P, max(W,G)) 둘 다 테두리에서 P). 구간 시작점만 쓰면 기운 계획선에서 턱이 나 판정 3이었다.</para>
+    /// <para>선분 안은 1차식이라 극값은 <b>두 끝과 사이 꺾인점</b>에만 있다 — 그 셋만 본다(정확). 평평하면 시작점과 같다(현장 105m).
+    /// 구간이 0을 지나도(t0 + span &gt; 둘레) · 한 바퀴여도 된다(<see cref="GradingGeometry.PointAtParam"/>과 같은 고리 규약).</para></summary>
+    /// <param name="line">구간을 잰 자(계획 경계 또는 그 단의 링 — 닫는 점 반복은 있어도 없어도).</param>
+    /// <param name="cum"><see cref="GradingGeometry.CumLen2D"/>(line).</param>
+    /// <param name="up">절토인가(참 = 최저 · 거짓 = 최고).</param>
+    public static double HeadZ(IReadOnlyList<Point3> line, double[] cum, double t0, double span, bool up)
+    {
+        if (line == null || line.Count == 0 || cum == null || cum.Length == 0)
+            throw new ArgumentException("HeadZ — 구간을 잰 자(선)가 비었다");      // ★[재검토 4] 조용한 NaN은 폴리곤·옹벽 줄 높이로 퍼진다
+        double z = GradingGeometry.PointAtParam(line, cum, t0).Z;
+        double tot = cum[cum.Length - 1];
+        if (line.Count < 2 || tot < 1e-12) return z;
+        double zE = GradingGeometry.PointAtParam(line, cum, t0 + Math.Max(0, span)).Z;
+        double best = up ? Math.Min(z, zE) : Math.Max(z, zE);
+        bool whole = span >= tot - 1e-9;
+        int m = Math.Min(cum.Length - 1, line.Count);       // 닫는 점 반복을 뺀 꼭짓점 수
+        for (int i = 0; i < m; i++)
+        {
+            double rel = ((cum[i] - t0) % tot + tot) % tot;  // t0에서 고리를 따라 간 거리
+            if (whole || (rel > 0 && rel < span))
+                best = up ? Math.Min(best, line[i].Z) : Math.Max(best, line[i].Z);
+        }
+        return best;
+    }
+
     /// <summary>★★★[JACK 0918 스샷 <i>"옹벽과 수직벽이 <b>닿는 부분이 깨져</b>"</i>]
     /// <b>줄을 「옹벽선에서 d만큼 떨어진 자리」로 짓는다 — NTS에게 직접 묻는다.</b>
     ///
@@ -150,10 +198,15 @@ public static class WallInPoly
     /// 폴리곤 전체를 아주 조금 줄여, 위아래 줄이 평면에서 <b>겹치지 않게</b> 한다
     /// (겹치면 넓이 0짜리 삼각형이 되어 톱니가 난다).</para></summary>
     /// <param name="wallLine">옹벽이 서는 <b>열린 선</b>(측선 → 선택구간 → 측선).</param>
+    /// <param name="down">★★[v102.0] 성토 — 단마다 <b>내려간다</b>(zTop = z0 − 단높이·k). 물러나는 방향·폭은 절토와 같다
+    /// (옹벽선에서 폴리곤 안쪽 = 사면 쪽으로). 줄의 XY는 절토와 비트로 같고 z만 다르다.</param>
     public static List<List<Point3>> RowsByBuffer(IReadOnlyList<Point3> poly, IReadOnlyList<Point3> wallLine,
         double z0, int benches, double benchH, double slope, double benchW, double minFaceRun,
-        out string log)
+        out string log, bool down = false)
     {
+        double sgnZ = down ? -1.0 : 1.0;                // ×1.0·×(−1.0)은 정확 — 절토 줄은 종전과 비트로 같다
+        string lastRow = down ? "맨 아래 줄" : "맨 위 줄";
+        LastLost = 0;
         var rows = new List<List<Point3>>();
         var sb = new System.Text.StringBuilder();
         if (poly == null || poly.Count < 3 || wallLine == null || wallLine.Count < 2)
@@ -193,7 +246,7 @@ public static class WallInPoly
         if (r0 != null) rows.Add(r0); else { rows.Add(new List<Point3>(poly)); rowIx = 1; }
         for (int k = 1; k <= benches; k++)
         {
-            double zTop = z0 + benchH * k;
+            double zTop = z0 + sgnZ * benchH * k;
             var rf = Cut(step * (k - 1) + face, zTop);            // 면 끝
             if (rf != null) rows.Add(rf); else lost++;
             if (k < benches)
@@ -202,11 +255,12 @@ public static class WallInPoly
                 if (rb != null) rows.Add(rb); else lost++;
             }
         }
+        LastLost = lost;
 
-        sb.Append($"단 <b>{benches}</b>개 · 줄 <b>{rows.Count}</b>개(NTS로 깎음 · 한 단에 둘 · 마지막 단은 면에서 끝)");
+        sb.Append($"단 <b>{benches}</b>개{(down ? "(<b>성토 — 아래로</b>)" : "")} · 줄 <b>{rows.Count}</b>개(NTS로 깎음 · 한 단에 둘 · 마지막 단은 면에서 끝)");
         sb.Append($" · 면 {face:0.###}m + 소단 {Math.Max(0, benchW):0.##}m = 한 단 {step:0.###}m");
-        sb.Append($" · 표고 {z0:F2} → <b>{z0 + benchH * benches:F2}m</b>");
-        if (lost > 0) sb.Append($" · <b>⚠남는 자리가 없어 버린 줄 {lost}개</b>(단을 너무 많이 쌓았다)");
+        sb.Append($" · 표고 {z0:F2} → <b>{z0 + sgnZ * benchH * benches:F2}m</b>");
+        if (lost > 0) sb.Append($" · <b>⚠남는 자리가 없어 버린 줄 {lost}개</b>(단을 너무 많이 {(down ? "내렸다" : "쌓았다")} — 옹벽이 원지반 너머까지 못 가 {(down ? "바닥" : "윗면")}이 드러난다)");
         int nBad = 0; foreach (var r in rows) if (!GradingGeometry.RingIsSimple(r)) nBad++;
         if (nBad > 0) sb.Append($" · <b>⚠제 몸을 지르는 줄 {nBad}개</b>");
 
@@ -252,7 +306,7 @@ public static class WallInPoly
             double dA = NearLine(wallLine, 0, Math.Max(1, t1), top);
             double dB = NearLine(wallLine, t1, Math.Max(t1 + 1, t2), top);
             double dC = NearLine(wallLine, t2, m, top);
-            sb.Append($" · <b>물러난 거리</b>(맨 위 줄 · 기대 {want:F2}m) — 앞 {dA:F2} · 가운데 {dB:F2} · 뒤 {dC:F2}m");
+            sb.Append($" · <b>물러난 거리</b>({lastRow} · 기대 {want:F2}m) — 앞 {dA:F2} · 가운데 {dB:F2} · 뒤 {dC:F2}m");
             double worst = Math.Min(dA, Math.Min(dB, dC));
             if (worst < want * 0.5)
                 sb.Append($" · <b>⚠한 토막이 거의 안 물러났다</b>({worst:F2}m) — 그 자리엔 <b>단이 안 선다</b>");

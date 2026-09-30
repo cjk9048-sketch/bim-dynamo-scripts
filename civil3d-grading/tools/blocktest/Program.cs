@@ -9,6 +9,15 @@ void Check(string name, bool ok, string detail = "")
     Console.WriteLine($"{(ok ? "PASS" : "FAIL")}  {name} {detail}");
     if (!ok) fails++;
 }
+// [v102.0] BLOCKTEST_LEGACY=1 — CivilSafeMesh 옛 길(v101: 여유 띠 쌍 무조건 합침 · 마지막 수단 없음)만 — 새 길과 견줄 때
+if (Environment.GetEnvironmentVariable("BLOCKTEST_LEGACY") == "1") CivilSafeMesh.LegacyOnly = true;
+// ★[v102.0] BLOCKTEST_ONLY=fill — 성토 옹벽 시험(S136 거울 · S141~S143)만 빠르게 돈다(전체는 4분 남짓)
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "fill")
+{
+    FillCheck.Run(Check, Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "data"));
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
 
 const double W = 0.46, H = 0.2, STEP = 5.0, HW = W / 2;
 const double D = 0.5, FS = D / 2; // 깊이·전면 돌출(벽 중심=링, JACK 0720 Z-파이팅 해소): 절토 +FS(안쪽), 성토 −FS
@@ -13915,6 +13924,8 @@ static (bool Closed, double CloseGap, int ExactDup, int NearDup1e6, int ZeroLen,
             {
                 var safe = CivilSafeMesh.Make(tris0, rr.Ring!, rr.Holes, w0, out var csr);
                 Check($"S139 ⑯[{tag}] Civil에 맞게 다듬기 — 판정 1(정확)", safe != null && csr.Tier == 1, csr.Summary);
+                // ★[v102.0 · 계획 4판 §4 ⓐ·ⓑ·ⓔ] 마지막 수단 켬/끔 — 판정 1 판은 손대지 않는다(비트 그대로) · 켬이 더 나쁘지 않다 · 결정적
+                SafeLrCheck.OnOff(Check, $"S139 ⑯[{tag}]", () => { var s2 = CivilSafeMesh.Make(tris0, rr.Ring!, rr.Holes, w0, out var r2); return (r2.Tier, s2, r2.LastResort, r2.NewPathWorse + r2.LastResortReverted); });
                 if (safe == null) return;
                 var m = SafeCheck.Measure(safe, rr.Ring!, rr.Holes, w0);
                 Check($"S139 ⑯[{tag}] 하네스가 따로 잰 값 — 네모 ≥1.05e-4 · 합치기 흉내 0 · 겹침 0 · 평면 ≤10µm · 테두리·옹벽 높이 ≤1mm · Civil이 고칠 면 0",
@@ -13932,7 +13943,8 @@ static (bool Closed, double CloseGap, int ExactDup, int NearDup1e6, int ZeroLen,
         //   기준은 <b>고치기 전에</b> 박았다(검토 v100.2 · 중간 6 — 결과를 보고 기준을 정하지 않는다):
         //   ①테두리 높이(옹벽 TIN) = 띠 선 높이 1mm 안(고치기 전 현장 15:50 최대 69.7mm = 0.707mm × 1:0.01)
         //   ②링 점이 날것 교선·폴리곤 테두리 위 1µm 안 ③스냅 그대로·길 없음·고침·포기 0 ④스냅 링과 새 링이 통로(0.75mm) 안
-        void RingChecks(string tag, WallDaylight.BandResult r, IReadOnlyList<Point3> p0, List<WallDaylight.Tri> w0, List<WallDaylight.Tri> g0, List<WallDaylight.Tri> pl0)
+        void RingChecks(string tag, WallDaylight.BandResult r, IReadOnlyList<Point3> p0, List<WallDaylight.Tri> w0, List<WallDaylight.Tri> g0, List<WallDaylight.Tri> pl0,
+                        bool down = false)
         {
             var rings = r.Holes.Prepend(r.Ring!).ToList();
             var (gMax, gN, gAt) = BandRingProbe.EdgeGap(rings, w0);
@@ -13944,7 +13956,7 @@ static (bool Closed, double CloseGap, int ExactDup, int NearDup1e6, int ZeroLen,
             Check($"S139 [{tag}] 정확한 자리로 다 되돌렸다(스냅 그대로·곧은 변·길 없음·고침·스냅 링·포기 0)",
                   !r.UnsFallback && r.UnsKept == 0 && r.UnsNoPath == 0 && r.UnsRepaired == 0 && r.UnsStraight == 0 && r.UnsRingsSnapped == 0,
                   $"포기 {r.UnsFallback} · 스냅 그대로 {r.UnsKept} · 곧은 변 {r.UnsStraight} · 길 없음 {r.UnsNoPath} · 고침 {r.UnsRepaired} · 스냅 링 {r.UnsRingsSnapped} · 짐작 {r.UnsFamGuess} · 가시 {r.UnsSpikes}");
-            var (sBad, sN, sAt, sWhere) = BandRingProbe.SideCheck(r, w0, g0, pl0);
+            var (sBad, sN, sAt, sWhere) = BandRingProbe.SideCheck(r, w0, g0, pl0, down);
             // 어긋남은 Core가 적은 <b>격자보다 얇아 이음선으로 닫은 자리</b>(띠 끝 쐐기 · 떼어 낸 얇은 조각 · 2mm 안)에서만 허용한다 —
             //   그 너머는 폭 1mm 못 되는 쐐기라 1mm 격자 위상으로 못 담는다(v100.1도 같다). 그 밖의 어긋남은 선을 잘못 고른 것이다
             int unexplained = sWhere.Count(q => !r.UnsCutAt.Any(c => Math.Sqrt((c.X - q.X) * (c.X - q.X) + (c.Y - q.Y) * (c.Y - q.Y)) <= 0.002));
@@ -14097,13 +14109,23 @@ static (bool Closed, double CloseGap, int ExactDup, int NearDup1e6, int ZeroLen,
                 if (same) { rp = p1; rw = w1; rg = g1; rpl = g2; how = "두 파일 합침(폴리곤·옹벽 같음)"; }
                 else Console.WriteLine("SKIP  S139 ⑨현장 재생 — 두 파일의 폴리곤·옹벽이 다르다(다른 실행)");
             }
+            // ★[v102.0 · 계획 검토 M4·N2] 방향 — 덤프 끝 SIDE(v102~). 없으면 옛 덤프 — 성토로 보이면(계획면 > 원지반이 절반 넘음) 재생하지 않는다
+            //   (v101은 성토에서도 옹벽을 위로 지었다 — 0929 15:39 판을 절토로 돌려 «남길 띠 못 만듦»이 났다)
+            bool? downR = null; string sideWhy = "";
             if (rp != null)
             {
-                var r = WallDaylight.KeepBand(rp, rw!, rg!, rpl!, "현장 원지반", "현장 정지면");
-                Console.WriteLine($"      S139 [현장 재생 · {how}]");
+                var tail = WallDaylight.ReadInputTail(Path.Combine(root!, how == "띠 파일" ? "DHWALLDL_입력_띠.txt" : "DHWALLDL_입력.txt"));
+                downR = tail.Side == "성토" ? true : tail.Side == "절토" ? false : null;
+                if (downR == null && FillCheck.LooksFill(rp, rg!, rpl!, out sideWhy))
+                { Console.WriteLine($"SKIP  S139 ⑨현장 재생 — 방향 표시 없는 옛 성토 덤프(v101은 성토 옹벽을 위로 지었다 · {sideWhy}) — 재생 안 함"); rp = null; how = "건너뜀"; }
+            }
+            if (rp != null)
+            {
+                var r = WallDaylight.KeepBand(rp, rw!, rg!, rpl!, "현장 원지반", "현장 정지면", null, null, downR ?? false);
+                Console.WriteLine($"      S139 [현장 재생 · {how} · {(downR == true ? "성토" : downR == false ? "절토" : "절토(방향 표시 없음)")}]");
                 foreach (var line in r.Trace.Split('\n')) if (line.Length > 0) Console.WriteLine("        " + line);
                 Check("S139 ⑨현장 재생 — 링 · 단순 · 틀린 곳 없음", r.Ring != null && r.Simple && !r.Broken, r.Summary);
-                if (r.Ring != null && !r.Broken) RingChecks("⑨현장 재생", r, rp, rw!, rg!, rpl!);
+                if (r.Ring != null && !r.Broken) RingChecks("⑨현장 재생", r, rp, rw!, rg!, rpl!, downR ?? false);
             }
             else if (how.Length == 0) Console.WriteLine("SKIP  S139 ⑨현장 재생 — 입력 파일이 없다");
         }
@@ -14299,7 +14321,7 @@ static (bool Closed, double CloseGap, int ExactDup, int NearDup1e6, int ZeroLen,
             if (isBand) { if (WallDaylight.TryReadBandInput(Path.Combine(d, fn), out var a1, out var a2, out var a3, out var a4, out _)) { p0 = a1; w0 = a2; g0 = a3; pl0 = a4; } }
             else if (WallDaylight.TryReadInput(Path.Combine(d, fn), out var b1, out var b2, out var b3, out _) && WallDaylight.TryReadInput(Path.Combine(d, "현장0918_1333_계획.txt"), out _, out _, out var b4, out _)) { p0 = b1; w0 = b2; g0 = b3; pl0 = b4; }
             if (p0 == null) { Check($"S140[{tag}] 고정 자료를 읽는다", false, fn); continue; }
-            CompositeCheck.Case(Check, tag, p0, w0!, g0!, pl0!);
+            CompositeCheck.Case(Check, tag, p0, w0!, g0!, pl0!, onOff: true);
             if (tag is "0928 15:26" or "17:32")
                 foreach (double deg in new[] { 2.9, 61.7 })
                 {
@@ -14308,14 +14330,28 @@ static (bool Closed, double CloseGap, int ExactDup, int NearDup1e6, int ZeroLen,
                 }
         }
         CompositeCheck.Synthetic(Check);
+        // ★★★[v102.0] 성토 옹벽 — S136 거울 · S142 성토 뜻 · S141 들머리·날머리 완전성 · S143 현장 0929 15:39
+        FillCheck.Run(Check, d);
     }
     // ⑥ 현장 재생 — Civil이 실행마다 떨군 입력을 그대로 다시 돌린다
     {
         string? root = AppContext.BaseDirectory;
         while (root != null && !File.Exists(Path.Combine(root, "작업과정.md"))) root = Path.GetDirectoryName(root);
+        // ★[v102.0 · 계획 검토 M4·N2] 방향 — 덤프 끝 SIDE(v102~). 없으면 옛 덤프 — 성토로 보이면 재생하지 않는다(통과로 세지 않는다)
+        bool? down6 = null; bool skip6 = false; string why6 = "";
+        if (root != null)
+        {
+            var t6 = WallDaylight.ReadInputTail(Path.Combine(root, "DHWALLDL_입력.txt"));
+            down6 = t6.Side == "성토" ? true : t6.Side == "절토" ? false : null;
+            if (down6 == null && WallDaylight.TryReadInput(Path.Combine(root, "DHWALLDL_입력.txt"), out var p6, out _, out var g6, out _)
+                && WallDaylight.TryReadInput(Path.Combine(root, "DHWALLDL_입력_계획.txt"), out var p6b, out _, out var pl6, out _)
+                && p6.Count == p6b.Count && p6.Zip(p6b).All(t => t.First == t.Second)
+                && FillCheck.LooksFill(p6, g6, pl6, out why6)) skip6 = true;
+        }
         // ★원지반 · 계획지표면 두 파일(Civil이 실행마다 덮어쓴다)
         foreach (var (fname, tag) in new[] { ("DHWALLDL_입력.txt", "원지반"), ("DHWALLDL_입력_계획.txt", "계획지표면") })
         {
+            if (skip6) { Console.WriteLine($"SKIP  S138 ⑥현장 재생·{tag} — 방향 표시 없는 옛 성토 덤프(v101은 성토 옹벽을 위로 지었다 · {why6}) — 재생 안 함"); continue; }
             string fp = root == null ? "" : Path.Combine(root, fname);
             if (root == null || !File.Exists(fp))
             { Console.WriteLine($"SKIP  S138 ⑥현장 재생·{tag} — 입력 파일이 아직 없다(Civil에서 옹벽 변환을 한 번 돌리면 생긴다)"); continue; }
@@ -14323,8 +14359,8 @@ static (bool Closed, double CloseGap, int ExactDup, int NearDup1e6, int ZeroLen,
             if (!WallDaylight.TryReadInput(fp, out var rp, out var rw, out var rg, out var meta))
             { Check($"S138 ⑥현장 재생·{tag} — 입력 파일을 읽는다", false, $"{fp} — 폴리곤·옹벽·대상 삼각형 중 빈 것이 있다"); continue; }
             {
-                var r = WallDaylight.Build(rp, rw, rg, "현장 재생·" + tag);
-                Console.WriteLine($"      S138 [현장 재생·{tag}] {meta}");
+                var r = WallDaylight.Build(rp, rw, rg, "현장 재생·" + tag, null, down6 ?? false);
+                Console.WriteLine($"      S138 [현장 재생·{tag} · {(down6 == true ? "성토" : down6 == false ? "절토" : "절토(방향 표시 없음)")}] {meta}");
                 foreach (var line in r.Trace.Split('\n')) if (line.Length > 0) Console.WriteLine("        " + line);
                 if (r.Ring == null)
                 {
@@ -14345,7 +14381,7 @@ static (bool Closed, double CloseGap, int ExactDup, int NearDup1e6, int ZeroLen,
                         }
                     Console.WriteLine($"      S138 [현장 재생·{tag}] 링 없음 — 격자로 따로 잰 옹벽−{tag}: 높은 점 {pos} · 낮은 점 {neg}");
                     // ★[검토 0918 v99.9 · 낮음 3] 사유도 본다 — 계산이 <b>터져서</b> 없는 것은 «안 닿는다»와 다르다
-                    bool honest = r.Summary.Contains("안 닿는다") || r.Summary.Contains("높은 곳이 없다");
+                    bool honest = r.Summary.Contains("안 닿는다") || r.Summary.Contains("높은 곳이 없다") || r.Summary.Contains("낮은 곳이 없다");
                     Check($"S138 ⑥현장 재생·{tag} — 링이 없다는 말이 맞다(사유가 «안 닿음»이고 격자에서 부호가 한 번도 안 바뀐다)",
                           honest && (pos == 0) != (neg == 0), $"높은 {pos} · 낮은 {neg} · {r.Summary}");
                     continue;
@@ -14557,7 +14593,9 @@ static class BandRingProbe
     /// <para>테두리 높이 검사는 점을 올린 선의 짝 면 높이를 쓰므로, 원지반 선 대신 정지면 선에 올라가도 차이가 0으로 나온다 — 그것을 여기서 본다.
     /// 포개진 자리(|옹벽 − 면| ≤ 1e-6)와 면이 없는 자리(폴리곤 밖)는 건너뛴다. 1mm 넘는 변만.
     /// ★[검증 v100.2] 어긋난 변이 이음선보다 길면(통로 폭 두 배 3mm 초과) 예외 자리 목록에 못 들어가게 NaN으로 적는다.</para></summary>
-    public static (int Bad, int N, string At, List<(double X, double Y)> Where) SideCheck(WallDaylight.BandResult r, List<WallDaylight.Tri> w, List<WallDaylight.Tri> g, List<WallDaylight.Tri> pl)
+    /// <param name="down">★[v102.0] 성토 — 남길 곳 = 원지반 &lt; 옹벽 &lt; 정지면.</param>
+    public static (int Bad, int N, string At, List<(double X, double Y)> Where) SideCheck(WallDaylight.BandResult r, List<WallDaylight.Tri> w, List<WallDaylight.Tri> g, List<WallDaylight.Tri> pl,
+        bool down = false)
     {
         var gf = new GeometryFactory();
         LinearRing LR(List<Point3> r0) => gf.CreateLinearRing(r0.Select(q => new Coordinate(q.X, q.Y)).Append(new Coordinate(r0[0].X, r0[0].Y)).ToArray());
@@ -14571,7 +14609,7 @@ static class BandRingProbe
             if (!tw.TryZ(x, y, out double zw) || !tg.TryZ(x, y, out double zg) || !tp.TryZ(x, y, out double zp)) return 0;
             double dg = zw - zg, dp = zw - zp;
             if (Math.Abs(dg) <= eq || Math.Abs(dp) <= eq) return 0;
-            return dp > 0 && dg < 0 ? 1 : -1;
+            return (down ? dp < 0 && dg > 0 : dp > 0 && dg < 0) ? 1 : -1;
         }
         int bad = 0, n = 0; string at = ""; var where = new List<(double X, double Y)>();
         foreach (var r0 in r.Holes.Prepend(r.Ring!))

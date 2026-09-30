@@ -13,4 +13,9 @@
     <PackageReference Include="NetTopologySuite" Version="2.5.0" />
   </ItemGroup>
 
+  <!-- ★[v102.0 · 코드 검토 낮음 9] 하네스 전용 스위치(DebugSkipNeg · LegacyOnly · DebugLog)는 internal — 하네스만 본다 -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="blocktest" />
+  </ItemGroup>
+
 </Project>
