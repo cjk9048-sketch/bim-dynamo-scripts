@@ -48,7 +48,7 @@ static class CompositeCheck
     /// <param name="down">★[v102.0] 성토 — 잣대 규칙이 min(정지면, max(옹벽, 원지반))이 된다(하네스가 따로 읽는 세 면은 그대로 · 규칙만 거울).</param>
     /// <param name="sec">검사 이름 머리(S140 · S142 · S143).</param>
     public static void Case(Action<string, bool, string> check, string tag, List<Point3> poly, List<WallDaylight.Tri> W, List<WallDaylight.Tri> G, List<WallDaylight.Tri> Pl,
-                            bool wantTier1 = true, double grid = 0.2, bool down = false, string sec = "S140", bool onOff = false, int wantTier = 0)
+                            bool wantTier1 = true, double grid = 0.2, bool down = false, string sec = "S140", bool onOff = false, int wantTier = 0, bool allowForced = false)
     {
         // ★[v102.0 · 계획 4판 §4 ⓐ·ⓑ·ⓔ] 마지막 수단 켬/끔 · 결정성(합성은 무거워 고른 판만 — onOff)
         if (onOff) SafeLrCheck.OnOff(check, $"{sec}[{tag}] 합성", () => { var q = WallDaylight.BuildComposite(poly, W, G, Pl, down); return (q.Tier, q.Zone, q.Clean?.LastResort ?? 0, (q.Clean?.NewPathWorse ?? 0) + (q.Clean?.LastResortReverted ?? 0)); });
@@ -58,10 +58,20 @@ static class CompositeCheck
         // ★[v102.0 · 검토 r4 낮음 2] 판마다 판정을 정확히 — «≤ 2»로는 판정 1이 2로 나빠지는 회귀를 놓친다
         check($"{sec}[{tag}] 합성지표면 — 판정 {(wantTier > 0 ? wantTier.ToString() : wantTier1 ? "1(정확)" : "1·2")}",
               r.Zone != null && (wantTier > 0 ? r.Tier == wantTier : wantTier1 ? r.Tier == 1 : r.Tier <= 2), r.Summary);
+        // ★[v102.1 · 계획 검토 M5] «Civil이 반드시 합칠 쌍» 허용은 그 판만 — 나머지 판은 허용을 안 썼어야 한다(판정·결과가 v102.0 그대로)
+        check($"{sec}[{tag}] 반드시 합칠 쌍 허용 — {(allowForced ? "썼다(높이 오차 합 한도 1.5cm)" : "안 썼다(한도 1cm)")}",
+              (r.Clean?.OverForced ?? false) == allowForced && (r.HeightLimit > 1e-2) == allowForced,
+              $"허용 {r.Clean?.OverForced} · 한도 {r.HeightLimit * 1000:F0}mm · 옹벽 높이 {(r.Clean?.WallDz ?? 0) * 1000:F3}mm(쌍 곁 {(r.Clean?.WallDzNear ?? 0) * 1000:F3} · 그 밖 {(r.Clean?.WallDzFar ?? 0) * 1000:F3})");
         if (r.Zone == null) return;
-        // 판정 2 판: 1mm 넘는 자리는 Core가 적은 «정확 기준을 넘긴 손질» 곁 1m 안만 10mm까지 — 그 밖은 1mm 그대로
+        // 판정 2 판: 1mm 넘는 자리는 Core가 적은 «정확 기준을 넘긴 손질» 곁 1m 안만 10mm까지(허용 판은 허용 한도까지) — 그 밖은 1mm 그대로
         var big = r.Clean?.BigOps ?? new List<(double X, double Y, double Score)>();
-        double InLim(double x, double y) => r.Tier == 2 && big.Any(o => (o.X - x) * (o.X - x) + (o.Y - y) * (o.Y - y) <= 1.0) ? 1e-2 : 1e-3;
+        bool overF = r.Clean?.OverForced == true;
+        var spots = r.Clean?.ForcedSpotsW ?? new List<(double X, double Y)>();
+        double rr = CivilSafeMesh.ForcedNear * CivilSafeMesh.ForcedNear;
+        double InLim(double x, double y) =>
+            r.Tier != 2 ? 1e-3
+            : overF && spots.Any(o => (o.X - x) * (o.X - x) + (o.Y - y) * (o.Y - y) <= rr) ? r.HeightLimit
+            : big.Any(o => (o.X - x) * (o.X - x) + (o.Y - y) * (o.Y - y) <= 1.0) ? 1e-2 : 1e-3;
         var all = new List<WallDaylight.Tri>(r.Zone); all.AddRange(r.Untouched);
         // ① 손 안 댄 삼각형 = 받은 그대로(같은 double) · 받은 정지면 삼각형 수 = 손댐 + 손 안 댐
         var planKeys = new HashSet<(double, double, double, double, double, double, double, double, double)>(Pl.Select(t => (t.A.X, t.A.Y, t.A.Z, t.B.X, t.B.Y, t.B.Z, t.C.X, t.C.Y, t.C.Z)));
@@ -247,6 +257,26 @@ static class CompositeCheck
               nIn > 0 && inBad == 0 && miss == 0 && hole == 0 && Enumerable.Range(0, 4).All(c => gMax[c] <= Lim[c]),
               $"안 {nIn}점 최대 {inMax * 1000:F3}mm @{inAt}{(inBad > 0 ? $" · ⚠한도 넘은 점 {inBad}:{inBadAt}" : "")} · 밖 " + string.Join(" · ", Enumerable.Range(0, 4).Select(c => $"{LimName[c]} {gN[c]}점 최대 {gMax[c] * 1e6:F3}µm{(gMax[c] > Lim[c] ? gAt[c] : "")}"))
               + $" · 못 잰 점 {miss} · 구멍 {hole}{holeAt}");
+        // ★[v102.1 · 계획 검토 M7] 허용 판 — 손질 자리(BigOps)마다 ±0.2mm를 10µm 간격으로 따로 잰다(0.2m 격자는 최대 자리를 못 짚는다).
+        //   따로 잰 최대가 Core 옹벽 높이와 맞고(± 0.1mm + 나머지) 한도 안이어야 한다
+        if (r.Clean?.OverForced == true)
+        {
+            double dMax = 0; string dAt = ""; int dN = 0;
+            foreach (var (bx, by, _) in big)
+                for (int i = -20; i <= 20; i++)
+                    for (int j = -20; j <= 20; j++)
+                    {
+                        double x = bx + i * 1e-5, y = by + j * 1e-5;
+                        if (!prep.Contains(gf.CreatePoint(new Coordinate(x, y)))) continue;
+                        if (!look0.Z(x, y, out double zc) || !lp.Z(x, y, out double zpl) || !lw.Z(x, y, out double zw) || !lg.Z(x, y, out double zg)) continue;
+                        double dz = Math.Abs(zc - Rule(zpl, zw, zg)); dN++;
+                        if (dz > dMax) { dMax = dz; dAt = $"({x:F6},{y:F6})"; }
+                    }
+            double rest = r.PreSnapDz + r.RuleMax + r.ZOneMax, wd = r.Clean.WallDz;
+            check($"{sec}[{tag}] 허용 판 — 손질 자리 곁 ±0.2mm(10µm 간격)를 따로 잰 최대 = Core 옹벽 높이(±0.1mm + 나머지) · 한도 안",
+                  dN > 1000 && dMax <= r.HeightLimit && dMax >= wd - 1e-4 - rest && dMax <= wd + 1e-4 + rest,
+                  $"{dN}점 최대 {dMax * 1000:F3}mm @{dAt} · Core {wd * 1000:F3}mm @{r.Clean.WallAt} · 나머지 {rest * 1000:F3}mm · 한도 {r.HeightLimit * 1000:F0}mm");
+        }
         // ⑤-b 바깥 — 꼭짓점(합성·정지면)과 테두리 띠 바깥 표본을 칸별 잣대로
         var o0 = Outside(all);
         check($"{sec}[{tag}] 폴리곤 밖(꼭짓점 · 테두리 띠) — 먼 바깥 1µm · 격자로만 옮긴 부채꼴 2µm · 옮기거나 합친 부채꼴 1mm · 테두리 2µm 곁 0.2mm · 구멍 0",

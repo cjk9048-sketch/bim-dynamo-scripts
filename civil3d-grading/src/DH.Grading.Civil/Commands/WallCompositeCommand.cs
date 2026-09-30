@@ -345,9 +345,15 @@ public sealed class WallCompositeCommand
                     finally { t.Dispose(); }
                 }
             var cmp = CivilSafeMesh.Compare(all, theirs);
-            double zTol = r.Tier == 1 ? 1e-3 : 1e-2;
-            gateOk = theirs.Count == nf && civPts == np && cmp.Exceptions == 0 && cmp.SymArea <= 1e-8 && cmp.Hausdorff <= 1e-6 && r.HeightBudget + cmp.MaxDz <= zTol;
-            back = $"Civil 점 {civPts}/{np} · 삼각형 {theirs.Count}/{nf} · {cmp.Summary} · 높이 오차 합 {r.HeightBudget * 1000:F3} + Civil {cmp.MaxDz * 1000:F3}mm(한도 {zTol * 1000:F0}mm) · 가져오기 {tCreate}ms · 대조 {sw.ElapsedMilliseconds}ms";
+            double zTol = r.Tier == 1 ? 1e-3 : r.HeightLimit;
+            // ★[v102.1 · 계획 검토 M3] «Civil이 반드시 합칠 쌍» 허용 판(높이 오차 합 1cm 넘음)은 Civil이 넘긴 면을 <b>하나도 안 바꿨을 때만</b> 받는다 —
+            //   한도를 1.5cm로 늘린 만큼 Civil 쪽 변경까지 풀어 주지 않게(같은 면 수 = 넘긴 면 수 · 같은 점 높이 차 0)
+            bool over = r.Clean?.OverForced == true;
+            bool exact = !over || (cmp.Same == nf && theirs.Count == nf && cmp.MaxDz == 0);
+            gateOk = theirs.Count == nf && civPts == np && cmp.Exceptions == 0 && cmp.SymArea <= 1e-8 && cmp.Hausdorff <= 1e-6 && r.HeightBudget + cmp.MaxDz <= zTol && exact;
+            back = $"Civil 점 {civPts}/{np} · 삼각형 {theirs.Count}/{nf} · {cmp.Summary} · 높이 오차 합 {r.HeightBudget * 1000:F3} + Civil {cmp.MaxDz * 1000:F3}mm(한도 {zTol * 1000:F0}mm)"
+                 + (over ? $" · 허용 판 — Civil이 넘긴 면 그대로 {cmp.Same}/{nf}{(exact ? "" : " ⚠아님(허용 판은 그대로여야 받는다)")}" : "")
+                 + $" · 가져오기 {tCreate}ms · 대조 {sw.ElapsedMilliseconds}ms";
         }
         catch (System.Exception gx) { Drop(); log.AppendLine(gx.ToString()); return Fail($"새 합성을 되읽다 터졌다({gx.GetType().Name}) — 새 면은 지웠다"); }
         log.AppendLine("④ 되읽기: " + back);
@@ -380,9 +386,13 @@ public sealed class WallCompositeCommand
         // 정지면_DH가 늘 보이던 모양 그대로 — 합성 전 면의 스타일·레이어를 물려받는다
         try { cTin.StyleId = pW.StyleId; } catch (System.Exception sx) { log.AppendLine("스타일 물려받기 실패: " + sx.GetType().Name); }
         try { ((Autodesk.AutoCAD.DatabaseServices.Entity)cTin).LayerId = ((Autodesk.AutoCAD.DatabaseServices.Entity)pW).LayerId; } catch (System.Exception lx) { log.AppendLine("레이어 물려받기 실패: " + lx.GetType().Name); }
-        try { cTin.Description = $"DH 옹벽 합성({side}) {System.DateTime.Now:yyyy-MM-dd HH:mm} · {GradingSettings.Version} · 판정 {r.Tier}({r.TierText}) · {pairNote}"; } catch { }
+        // ★[v102.1 · 계획 검토 L13] 1cm 넘은 자리를 도면에도 남긴다(명령줄·로그는 지나간다)
+        string overNote = r.Clean?.OverForced == true
+            ? string.Format(System.Globalization.CultureInfo.InvariantCulture, " · ⚠높이 오차 합 {0:F1}mm(1cm 넘음) · 옹벽 높이 {1:F1}mm @{2}(Civil이 반드시 합칠 쌍 곁){3}", r.HeightBudget * 1000, r.Clean.WallDz * 1000, r.Clean.WallAt,
+                r.Clean.LrOverN > 0 ? string.Format(System.Globalization.CultureInfo.InvariantCulture, " · 그 곁 우리 손질 {0}건(없앨 때 최대 {1:F1}mm)", r.Clean.LrOverN, r.Clean.LrOverMax * 1000) : "") : "";
+        try { cTin.Description = $"DH 옹벽 합성({side}) {System.DateTime.Now:yyyy-MM-dd HH:mm} · {GradingSettings.Version} · 판정 {r.Tier}({r.TierText}){overNote} · {pairNote}"; } catch { }
         // ★[코드 검토 v101.1 · 낮음 6] 표지가 없으면 «합성 위에 또 합성» 막이와 풀기 짝 확인이 없다 — 못 붙이면 되돌린다
-        try { MarkComposite(tr, cTin, $"{System.DateTime.Now:yyyy-MM-dd HH:mm:ss} · {GradingSettings.Version} · 판정 {r.Tier}", pTin.ObjectId.Handle.ToString()); }
+        try { MarkComposite(tr, cTin, $"{System.DateTime.Now:yyyy-MM-dd HH:mm:ss} · {GradingSettings.Version} · 판정 {r.Tier}{overNote}", pTin.ObjectId.Handle.ToString()); }
         catch (System.Exception mx) { log.AppendLine("합성 표지 못 붙임: " + mx); throw new SwapFailed($"합성 표지를 못 붙였다({mx.GetType().Name})"); }
         // v101.0이 따로 만든 합성지표면_DH는 치운다
         int oldN = 0;
@@ -421,7 +431,14 @@ public sealed class WallCompositeCommand
         // ★[검토 0929 v101 · 중간 2] «거의»는 까닭과 자리를 — 다듬기 까닭 + 합성 까닭(규칙 대조 · 테두리 · 한 점 한 높이 · 높이 오차 합)
         string why2 = string.Join(" · ", new[] { r.Clean?.Tier2Why ?? "", r.Fail }.Where(x => x.Length > 0));
         string tierNote = r.Tier == 1 ? "" : $" · ⚠<b>거의</b>({why2})";
-        return $"<b>정지면_DH에 {side} 옹벽을 합성했다</b> — 판정 {r.Tier}({r.TierText}){tierNote} · 정지면 {r.PlanTotal}면 중 옹벽 둘레 {r.Touched}면을 다시 짓고 나머지는 그대로"
+        // ★[v102.1 · JACK 0930 ③ «짓고 ⚠로 자리·크기 알림»] 1cm 넘은 자리를 맨 앞에 — 크기 · 자리 · 그 밖은 1cm 안(잰 값만)
+        string overHead = r.Clean?.OverForced == true
+            ? string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "<b>⚠1cm 넘은 자리</b>: 높이 오차 합 {5:F1}mm(한도 {6:F0}mm) — 옹벽 높이 {0:F1}mm @{1} · Civil이 0.1mm 안 두 점을 반드시 합치는 자리 곁 {2:0.#}m 안(그런 쌍 {3}개 · 그 밖 최대 {4:F2}mm){7} · ",
+                r.Clean.WallDz * 1000, r.Clean.WallAt, CivilSafeMesh.ForcedNear, r.Clean.ForcedN, r.Clean.WallDzFar * 1000, r.HeightBudget * 1000, r.HeightLimit * 1000,
+                r.Clean.LrOverN > 0 ? string.Format(System.Globalization.CultureInfo.InvariantCulture, " · 그 곁 위험한 면 없애기 {0}건(없앨 때 최대 {1:F1}mm)", r.Clean.LrOverN, r.Clean.LrOverMax * 1000) : "")
+            : "";
+        return overHead + $"<b>정지면_DH에 {side} 옹벽을 합성했다</b> — 판정 {r.Tier}({r.TierText}){tierNote} · 정지면 {r.PlanTotal}면 중 옹벽 둘레 {r.Touched}면을 다시 짓고 나머지는 그대로"
              + $" · 점 {np} · 삼각형 {nf} Civil이 그대로 받음 · 높이 오차 합 {r.HeightBudget * 1000:F2}mm"
              + $" · 합성 전 정지면은 '{BaseName}'로 숨겨 둠(옹벽 변환을 다시 돌리면 되돌린다){excNote} · {pairNote}";
     }

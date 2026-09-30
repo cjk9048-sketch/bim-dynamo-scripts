@@ -14331,7 +14331,9 @@ static (bool Closed, double CloseGap, int ExactDup, int NearDup1e6, int ZeroLen,
         }
         CompositeCheck.Synthetic(Check);
         // ★★★[v102.0] 성토 옹벽 — S136 거울 · S142 성토 뜻 · S141 들머리·날머리 완전성 · S143 현장 0929 15:39
-        FillCheck.Run(Check, d);
+        // ★[v102.1 · JACK 0930 «시간만 줄이기»] BLOCKTEST_SKIP=fill이면 건너뛴다 — 성토 시험(BLOCKTEST_ONLY=fill)을 다른 창에서 동시에 돌려 전체 시간을 나눈다
+        if (Environment.GetEnvironmentVariable("BLOCKTEST_SKIP") == "fill") Console.WriteLine("SKIP  성토 시험(S136·S141~S145) — BLOCKTEST_SKIP=fill(따로 돌림)");
+        else FillCheck.Run(Check, d);
     }
     // ⑥ 현장 재생 — Civil이 실행마다 떨군 입력을 그대로 다시 돌린다
     {
