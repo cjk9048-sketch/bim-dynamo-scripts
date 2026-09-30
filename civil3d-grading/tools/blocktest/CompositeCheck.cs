@@ -45,12 +45,23 @@ static class CompositeCheck
     }
 
     /// <summary>한 판 — 판정 1을 기대하면 <paramref name="wantTier1"/>.</summary>
+    /// <param name="down">★[v102.0] 성토 — 잣대 규칙이 min(정지면, max(옹벽, 원지반))이 된다(하네스가 따로 읽는 세 면은 그대로 · 규칙만 거울).</param>
+    /// <param name="sec">검사 이름 머리(S140 · S142 · S143).</param>
     public static void Case(Action<string, bool, string> check, string tag, List<Point3> poly, List<WallDaylight.Tri> W, List<WallDaylight.Tri> G, List<WallDaylight.Tri> Pl,
-                            bool wantTier1 = true, double grid = 0.2)
+                            bool wantTier1 = true, double grid = 0.2, bool down = false, string sec = "S140", bool onOff = false, int wantTier = 0)
     {
-        var r = WallDaylight.BuildComposite(poly, W, G, Pl);
-        check($"S140[{tag}] 합성지표면 — 판정 {(wantTier1 ? "1(정확)" : "1·2")}", r.Zone != null && (wantTier1 ? r.Tier == 1 : r.Tier <= 2), r.Summary);
+        // ★[v102.0 · 계획 4판 §4 ⓐ·ⓑ·ⓔ] 마지막 수단 켬/끔 · 결정성(합성은 무거워 고른 판만 — onOff)
+        if (onOff) SafeLrCheck.OnOff(check, $"{sec}[{tag}] 합성", () => { var q = WallDaylight.BuildComposite(poly, W, G, Pl, down); return (q.Tier, q.Zone, q.Clean?.LastResort ?? 0, (q.Clean?.NewPathWorse ?? 0) + (q.Clean?.LastResortReverted ?? 0)); });
+        double Rule(double zpl, double zw, double zg) => down ? Math.Min(zpl, Math.Max(zw, zg)) : Math.Max(zpl, Math.Min(zw, zg));
+        string ruleText = down ? "min(정지면, max(옹벽, 원지반))" : "max(정지면, min(옹벽, 원지반))";
+        var r = WallDaylight.BuildComposite(poly, W, G, Pl, down);
+        // ★[v102.0 · 검토 r4 낮음 2] 판마다 판정을 정확히 — «≤ 2»로는 판정 1이 2로 나빠지는 회귀를 놓친다
+        check($"{sec}[{tag}] 합성지표면 — 판정 {(wantTier > 0 ? wantTier.ToString() : wantTier1 ? "1(정확)" : "1·2")}",
+              r.Zone != null && (wantTier > 0 ? r.Tier == wantTier : wantTier1 ? r.Tier == 1 : r.Tier <= 2), r.Summary);
         if (r.Zone == null) return;
+        // 판정 2 판: 1mm 넘는 자리는 Core가 적은 «정확 기준을 넘긴 손질» 곁 1m 안만 10mm까지 — 그 밖은 1mm 그대로
+        var big = r.Clean?.BigOps ?? new List<(double X, double Y, double Score)>();
+        double InLim(double x, double y) => r.Tier == 2 && big.Any(o => (o.X - x) * (o.X - x) + (o.Y - y) * (o.Y - y) <= 1.0) ? 1e-2 : 1e-3;
         var all = new List<WallDaylight.Tri>(r.Zone); all.AddRange(r.Untouched);
         // ① 손 안 댄 삼각형 = 받은 그대로(같은 double) · 받은 정지면 삼각형 수 = 손댐 + 손 안 댐
         var planKeys = new HashSet<(double, double, double, double, double, double, double, double, double)>(Pl.Select(t => (t.A.X, t.A.Y, t.A.Z, t.B.X, t.B.Y, t.B.Z, t.C.X, t.C.Y, t.C.Z)));
@@ -120,7 +131,7 @@ static class CompositeCheck
                 if (det * Math.Sign(orient) > 0) risk++;
             }
         }
-        check($"S140[{tag}] 손 안 댄 삼각형 = 받은 그대로 · T자 이음 0 · 1µm 안 딴 점 0 · 같은 XY에 다른 높이 0 · Civil 합치기 흉내 0 · 겹침 0 · 세 번 쓰인 변 0 · Civil이 고칠 면 0",
+        check($"{sec}[{tag}] 손 안 댄 삼각형 = 받은 그대로 · T자 이음 0 · 1µm 안 딴 점 0 · 같은 XY에 다른 높이 0 · Civil 합치기 흉내 0 · 겹침 0 · 세 번 쓰인 변 0 · Civil이 고칠 면 0",
               notOrig == 0 && r.Untouched.Count + r.Touched == Pl.Count && tj == 0 && near1 == 0 && multiZ == 0 && merge == 0 && over2 == 0 && Math.Abs(aSum - aUni) <= 1e-8 && risk == 0,
               $"손 안 댐 {r.Untouched.Count}(받은 것과 다른 것 {notOrig}) + 손댐 {r.Touched} = 받은 {Pl.Count} · T자 이음 {tj} · 1µm 안 {near1} · 같은 XY 다른 높이 {multiZ} · 합치기 흉내 {merge} · 겹침 {aSum - aUni:E2}㎡ · 세 번 쓰인 변 {over2} · Civil이 고칠 면 {risk}");
         // ⑤ 규칙 격자 · 테두리 띠 · 꼭짓점 — 폴리곤 안: max(정지면, min(옹벽, 원지반))(세 면을 따로) · 밖: 정지면
@@ -210,7 +221,7 @@ static class CompositeCheck
         var look0 = new Look(all);
         // ⑤-a 격자 — 안: 규칙 1mm · 밖: 칸별 잣대 · 구멍 0
         var env = pg.EnvelopeInternal; env.ExpandBy(2);
-        double inMax = 0; int nIn = 0, miss = 0, hole = 0; string inAt = "", holeAt = "";
+        double inMax = 0; int nIn = 0, miss = 0, hole = 0, inBad = 0; string inAt = "", holeAt = "", inBadAt = "";
         var gMax = new double[4]; var gN = new int[4]; var gAt = new[] { "", "", "", "" };
         for (double x = env.MinX + grid / 2; x < env.MaxX; x += grid)
             for (double y = env.MinY + grid / 2; y < env.MaxY; y += grid)
@@ -221,8 +232,9 @@ static class CompositeCheck
                 if (prep.Contains(pt))
                 {
                     if (!lw.Z(x, y, out double zw) || !lg.Z(x, y, out double zg)) { miss++; continue; }
-                    double zr = Math.Max(zpl, Math.Min(zw, zg)), dz = Math.Abs(zc - zr); nIn++;
+                    double zr = Rule(zpl, zw, zg), dz = Math.Abs(zc - zr); nIn++;
                     if (dz > inMax) { inMax = dz; inAt = $"({x:F3},{y:F3}) 합성 {zc:F4} · 규칙 {zr:F4}"; }
+                    if (dz > InLim(x, y)) { inBad++; if (inBadAt.Length < 120) inBadAt += $" ({x:F3},{y:F3}) {dz * 1000:F2}mm"; }
                 }
                 else
                 {
@@ -231,28 +243,29 @@ static class CompositeCheck
                     if (dv > gMax[c]) { gMax[c] = dv; gAt[c] = $" @({x:F3},{y:F3})"; }
                 }
             }
-        check($"S140[{tag}] 격자 {grid}m — 안: 합성 = max(정지면, min(옹벽, 원지반)) 1mm 안(세 면을 따로 읽음) · 밖: 칸별 잣대 · 구멍 0",
-              nIn > 0 && inMax <= 1e-3 && miss == 0 && hole == 0 && Enumerable.Range(0, 4).All(c => gMax[c] <= Lim[c]),
-              $"안 {nIn}점 최대 {inMax * 1000:F3}mm @{inAt} · 밖 " + string.Join(" · ", Enumerable.Range(0, 4).Select(c => $"{LimName[c]} {gN[c]}점 최대 {gMax[c] * 1e6:F3}µm{(gMax[c] > Lim[c] ? gAt[c] : "")}"))
+        check($"{sec}[{tag}] 격자 {grid}m — 안: 합성 = {ruleText} 1mm 안(판정 2면 손질 곁 1m만 10mm · 세 면을 따로 읽음) · 밖: 칸별 잣대 · 구멍 0",
+              nIn > 0 && inBad == 0 && miss == 0 && hole == 0 && Enumerable.Range(0, 4).All(c => gMax[c] <= Lim[c]),
+              $"안 {nIn}점 최대 {inMax * 1000:F3}mm @{inAt}{(inBad > 0 ? $" · ⚠한도 넘은 점 {inBad}:{inBadAt}" : "")} · 밖 " + string.Join(" · ", Enumerable.Range(0, 4).Select(c => $"{LimName[c]} {gN[c]}점 최대 {gMax[c] * 1e6:F3}µm{(gMax[c] > Lim[c] ? gAt[c] : "")}"))
               + $" · 못 잰 점 {miss} · 구멍 {hole}{holeAt}");
         // ⑤-b 바깥 — 꼭짓점(합성·정지면)과 테두리 띠 바깥 표본을 칸별 잣대로
         var o0 = Outside(all);
-        check($"S140[{tag}] 폴리곤 밖(꼭짓점 · 테두리 띠) — 먼 바깥 1µm · 격자로만 옮긴 부채꼴 2µm · 옮기거나 합친 부채꼴 1mm · 테두리 2µm 곁 0.2mm · 구멍 0",
+        check($"{sec}[{tag}] 폴리곤 밖(꼭짓점 · 테두리 띠) — 먼 바깥 1µm · 격자로만 옮긴 부채꼴 2µm · 옮기거나 합친 부채꼴 1mm · 테두리 2µm 곁 0.2mm · 구멍 0",
               o0.N[0] > 0 && o0.N[3] > 0 && Enumerable.Range(0, 4).All(c => o0.Max[c] <= Lim[c]) && o0.Hole == 0,
               $"옮긴 정지면 꼭짓점 격자 {movedCls.Values.Count(v => v == 1)} · 그 밖 {movedCls.Values.Count(v => v == 2)} · " + OutText(o0));
         // ⑤-c 테두리 띠 안쪽 — 규칙 1mm · 구멍 0
         {
-            double sIn = 0; int nsIn = 0, sHole = 0, sMiss = 0; string sInAt = "";
+            double sIn = 0; int nsIn = 0, sHole = 0, sMiss = 0, sBad = 0; string sInAt = "";
             foreach (var (x, y, inside) in strip)
             {
                 if (!inside || !lp.Z(x, y, out double zpl)) continue;
                 if (!look0.Z(x, y, out double zc)) { sHole++; continue; }
                 if (!lw.Z(x, y, out double zw) || !lg.Z(x, y, out double zg)) { sMiss++; continue; }
-                double dz = Math.Abs(zc - Math.Max(zpl, Math.Min(zw, zg))); nsIn++;
+                double dz = Math.Abs(zc - Rule(zpl, zw, zg)); nsIn++;
                 if (dz > sIn) { sIn = dz; sInAt = $" @({x:F3},{y:F3})"; }
+                if (dz > InLim(x, y)) sBad++;
             }
-            check($"S140[{tag}] 폴리곤 테두리 띠 안쪽(2cm 간격 · 2mm·1cm·5cm) — 합성 = 규칙 1mm 안 · 구멍 0",
-                  nsIn > 0 && sIn <= 1e-3 && sHole == 0 && sMiss == 0,
+            check($"{sec}[{tag}] 폴리곤 테두리 띠 안쪽(2cm 간격 · 2mm·1cm·5cm) — 합성 = 규칙 1mm 안(판정 2면 손질 곁 1m만 10mm) · 구멍 0",
+                  nsIn > 0 && sBad == 0 && sHole == 0 && sMiss == 0,
                   $"안 {nsIn}점 최대 {sIn * 1000:F3}mm{(sIn > 1e-3 ? sInAt : "")} · 구멍 {sHole} · 못 잰 점 {sMiss}");
         }
         // ⑤-d 카나리아 — 테두리 위 합성 꼭짓점 하나(곁 바깥 띠 표본이 1µm·2µm 칸인 것)를 +50µm 올리면 바깥 잣대가 잡아야 한다(2차 검토 N1)
@@ -266,7 +279,7 @@ static class CompositeCheck
                                            && look0.At(s.X, s.Y) is int ti && ti >= 0 && new[] { all[ti].A, all[ti].B, all[ti].C }.Any(q => q.X == v.Item1 && q.Y == v.Item2));
                 if (near) { pick = v; break; }
             }
-            if (pick == null) check($"S140[{tag}] 카나리아 — 건드릴 테두리 꼭짓점을 찾는다", false, "바깥 띠 표본이 닿는 테두리 꼭짓점이 없다");
+            if (pick == null) check($"{sec}[{tag}] 카나리아 — 건드릴 테두리 꼭짓점을 찾는다", false, "바깥 띠 표본이 닿는 테두리 꼭짓점이 없다");
             else
             {
                 var (cx, cy) = pick.Value;
@@ -274,7 +287,7 @@ static class CompositeCheck
                 var tampered = all.Select(t => new WallDaylight.Tri(Up(t.A), Up(t.B), Up(t.C))).ToList();
                 var oc = Outside(tampered);
                 bool caught = Enumerable.Range(0, 3).Any(c => oc.Max[c] > Lim[c]);
-                check($"S140[{tag}] 카나리아 — 테두리 꼭짓점 하나 +50µm면 바깥 잣대(1µm·2µm)가 잡는다", caught, $"({cx:F4},{cy:F4}) · " + OutText(oc));
+                check($"{sec}[{tag}] 카나리아 — 테두리 꼭짓점 하나 +50µm면 바깥 잣대(1µm·2µm)가 잡는다", caught, $"({cx:F4},{cy:F4}) · " + OutText(oc));
             }
         }
         // ⑥ LandXML — 점·면 수 · 뺀 면 0 · (BLOCKTEST_SAFE_DUMP면 떨군다 — 설치 전 화면 없는 Civil)
@@ -284,7 +297,7 @@ static class CompositeCheck
         if (!string.IsNullOrEmpty(dumpDir) && Directory.Exists(dumpDir))
             try { File.Copy(xf, Path.Combine(dumpDir, "lxc_" + string.Concat(tag.Select(ch => char.IsLetterOrDigit(ch) ? ch : '_')) + ".xml"), true); } catch { }
         try { File.Delete(xf); } catch { }
-        check($"S140[{tag}] LandXML — 면 수 = 합성 삼각형 수 · 뺀 면 0", nf == all.Count && nd == 0, $"점 {np} · 면 {nf}/{all.Count} · 뺀 {nd}");
+        check($"{sec}[{tag}] LandXML — 면 수 = 합성 삼각형 수 · 뺀 면 0", nf == all.Count && nd == 0, $"점 {np} · 면 {nf}/{all.Count} · 뺀 {nd}");
     }
 
     /// <summary>합성 — 옹벽 앞 성토(원지반 &lt; 정지면)·옹벽 뒤 성토가 섞인 판: 규칙 표의 모든 순서가 나온다(현장 다섯 판엔 성토 자리 0).</summary>

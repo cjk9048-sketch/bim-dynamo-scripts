@@ -25,7 +25,7 @@ public static class GradingSettings
     /// <b>같은 번호를 단 빌드가 여러 개</b>가 되어, 어느 것이 깔렸는지 물으면 답할 수가 없었다.</para>
     /// <para><c>x.0</c> = 화면·명령이 바뀌어 <b>사용자가 다르게 일하게</b> 되는 판 ·
     /// <c>x.y</c> = 같은 화면에서 결함을 고친 판.</para></summary>
-    public const string Version = "v101.1 (2026-09-29)";
+    public const string Version = "v102.0 (2026-09-30)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -200,6 +200,23 @@ public static class GradingSettings
                                         System.Collections.Generic.List<Point3>? chain = null,
                                         System.Collections.Generic.List<bool>? isWall = null)
     { WallPolyManual = ring; WallPolyManualDoc = docName ?? ""; WallPolyChain = chain; WallPolyIsWall = isWall; }
+
+    /// <summary>★★[v102.0 · 계획 4판 §3 · 검토 r3 M3] 옹벽 변환에서 <b>고른 구간</b> — 방향(절토 참) · T0·T1 · 그 T를 잰 <b>자</b>(링 객체 · 계획 폴리곤이면 null) · 도면.
+    /// <para>손 폴리곤을 그렸든 Esc로 건너뛰었든 부분 지정이면 둔다 — 종전엔 폴리곤과 함께만 들려, Esc면 정지 쪽이 «절토 먼저 · 첫 구간»으로
+    /// <b>지난 절토 옹벽</b>을 다시 지었다(번들엔 지난 옹벽 구간이 남는다).</para></summary>
+    public sealed record WallPickInfo(bool Up, double T0, double T1, System.Collections.Generic.List<Point3>? Ruler, string Doc);
+    public static WallPickInfo? WallZonePick;
+
+    /// <summary>★[v102.0] 고른 구간을 <b>꺼내면서 비운다</b>(손 폴리곤과 같은 규칙). 도면이 다르면 <c>null</c>과 까닭.</summary>
+    public static WallPickInfo? TakeWallZonePick(string docName, out string why)
+    {
+        var r = WallZonePick; WallZonePick = null;
+        why = "";
+        if (r == null) return null;
+        if (!string.IsNullOrEmpty(r.Doc) && !string.Equals(r.Doc, docName ?? "", System.StringComparison.OrdinalIgnoreCase))
+        { why = $"    ⚠고른 구간을 버렸다 — 고른 도면({r.Doc})과 지금 도면({docName})이 다르다\n"; return null; }
+        return r;
+    }
 
     /// <summary>★[검토 0917 · 높음] <b>꺼내면서 비운다.</b> 도면이 다르면 <c>null</c>을 주고 <b>왜인지</b> 적는다.
     ///

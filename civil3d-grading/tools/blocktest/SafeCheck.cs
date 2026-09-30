@@ -7,7 +7,8 @@ using NetTopologySuite.Geometries;
 static class SafeCheck
 {
     public sealed record Result(double MinBox, int CivilMerges, int Over2, double AreaSum, double AreaUnion,
-                                double Plan, double BorderDz, int BorderN, double WallDz, string WallAt, int Flat, int Risk, int Faces)
+                                double Plan, double BorderDz, int BorderN, double WallDz, string WallAt, int Flat, int Risk, int Faces,
+                                List<(double X, double Y)> Over1)
     {
         public string Text => $"면 {Faces} · 점 네모 최소 {(double.IsPositiveInfinity(MinBox) ? "≥200" : (MinBox * 1e6).ToString("F0"))}µm · Civil 합치기 흉내 {CivilMerges}"
                             + $" · 세 번 쓰인 변 {Over2} · 넓이 합−합집합 {AreaSum - AreaUnion:E2}㎡ · 초록 선과 평면 {Plan * 1e6:F1}µm"
@@ -86,19 +87,22 @@ static class SafeCheck
         for (int i = 0; i < bSegs.Count; i++) bTree.Insert(new Envelope(bSegs[i].Item1.X, bSegs[i].Item2.X, bSegs[i].Item1.Y, bSegs[i].Item2.Y), i);
         bTree.Build();
         double bdz = 0; int bn = 0;
+        // ★[v102.0 · 검토 r4 낮음 2] 1mm 넘는 표본 자리 — 판정 2 판에서 «다듬기가 손댄 자리 곁에만»을 하네스가 따로 잰다
+        var over1 = new List<(double X, double Y)>();
+        void O1(double x, double y, double dz) { if (dz > 1e-3 && over1.Count < 20000) over1.Add((x, y)); }
         foreach (var (u, v) in bEdges)
             foreach (var q in new[] { P[u], P[v] })
             {
                 var cand = rTree.Query(new Envelope(q.X - 0.01, q.X + 0.01, q.Y - 0.01, q.Y + 0.01)).Select(i => rSegs[i]);
                 var (_, z) = Near(q.X, q.Y, cand); if (double.IsNaN(z)) continue;
-                bdz = Math.Max(bdz, Math.Abs(q.Z - z)); bn++;
+                bdz = Math.Max(bdz, Math.Abs(q.Z - z)); bn++; O1(q.X, q.Y, Math.Abs(q.Z - z));
             }
         foreach (var r0 in holes.Prepend(ring))
             foreach (var q in r0)
             {
                 var cand = bTree.Query(new Envelope(q.X - 0.01, q.X + 0.01, q.Y - 0.01, q.Y + 0.01)).Select(i => bSegs[i]);
                 var (_, z) = Near(q.X, q.Y, cand); if (double.IsNaN(z)) continue;
-                bdz = Math.Max(bdz, Math.Abs(z - q.Z)); bn++;
+                bdz = Math.Max(bdz, Math.Abs(z - q.Z)); bn++; O1(q.X, q.Y, Math.Abs(z - q.Z));
             }
         // ⑤ 옹벽 높이 — 겹침 다각형 꼭짓점에서(두 평면의 차는 겹침 조각 안에서 1차라 최대는 꼭짓점)
         var wTree = new NetTopologySuite.Index.Strtree.STRtree<int>();
@@ -126,6 +130,7 @@ static class SafeCheck
                 {
                     double x = c.X + ox, y = c.Y + oy, dz = Math.Abs(Pz(tf, x, y) - Pz(t, x, y));
                     if (dz > wdz) { wdz = dz; wAt = $"({x:F4},{y:F4})"; }
+                    O1(x, y, dz);
                 }
             }
         }
@@ -148,13 +153,31 @@ static class SafeCheck
             double orient = (P[f[1]].X - P[f[0]].X) * (P[f[2]].Y - P[f[0]].Y) - (P[f[1]].Y - P[f[0]].Y) * (P[f[2]].X - P[f[0]].X);
             if (det * Math.Sign(orient) > 0) risk++;
         }
-        return new Result(minBox, merges, over2, aSum, U.Area, plan, bdz, bn, wdz, wAt, flat, risk, F.Count);
+        return new Result(minBox, merges, over2, aSum, U.Area, plan, bdz, bn, wdz, wAt, flat, risk, F.Count, over1);
     }
 
     /// <summary>판정 1(정확)이면 지켜야 할 것 — 하네스가 잰 값으로.</summary>
     public static bool Tier1(Result r) =>
-        r.Faces > 0 && r.MinBox >= CivilSafeMesh.Gap && r.CivilMerges == 0 && r.Over2 == 0 && Math.Abs(r.AreaSum - r.AreaUnion) <= 1e-9 + 1e-9 * r.AreaSum
+        r.Faces > 0 && r.MinBox >= CivilSafeMesh.MustMerge && r.CivilMerges == 0 && r.Over2 == 0 && Math.Abs(r.AreaSum - r.AreaUnion) <= 1e-9 + 1e-9 * r.AreaSum
         && r.Plan <= 1e-5 && r.BorderN > 0 && r.BorderDz <= 1e-3 && r.WallDz <= 1e-3 && r.Risk == 0;
+
+    /// <summary>★[v102.0] 판정 2(거의)면 지켜야 할 것 — 평면 200µm · 테두리·옹벽 높이 10mm · Civil이 고칠 면 0 · 나머지는 판정 1과 같다.</summary>
+    public static bool Tier2(Result r) =>
+        r.Faces > 0 && r.MinBox >= CivilSafeMesh.MustMerge && r.CivilMerges == 0 && r.Over2 == 0 && Math.Abs(r.AreaSum - r.AreaUnion) <= 1e-9 + 1e-9 * r.AreaSum
+        && r.Plan <= 2e-4 && r.BorderN > 0 && r.BorderDz <= 1e-2 && r.WallDz <= 1e-2 && r.Risk == 0;
+
+    /// <summary>★[v102.0 · 검토 r4 낮음 2] 1mm 넘는 표본이 전부 Core가 적은 «정확 기준을 넘긴 손질» 자리에서 <paramref name="radius"/> 안인가 —
+    /// 판정 2를 판 전체에 풀면 그 사이에 섞인 진짜 결함을 못 가린다. 넘긴 자리를 적는 것은 Core지만 오차는 하네스가 따로 쟀다.</summary>
+    public static (bool Ok, int Far, string At) Localized(List<(double X, double Y)> over1, List<(double X, double Y, double Score)> big, double radius = 1.0)
+    {
+        int far = 0; string at = "";
+        foreach (var (x, y) in over1)
+        {
+            bool near = big.Any(o => (o.X - x) * (o.X - x) + (o.Y - y) * (o.Y - y) <= radius * radius);
+            if (!near) { far++; if (at.Length < 120) at += $" ({x:F3},{y:F3})"; }
+        }
+        return (far == 0, far, at);
+    }
 
     /// <summary>입력 전체를 한 점 둘레로 돌린다(1µm 격자 맞춤이 달라지는 판 — 계획 검토 0928 · 높음 2가 40판 중 3판에서 null을 냈다).</summary>
     public static (List<Point3> Poly, List<WallDaylight.Tri> Wall, List<WallDaylight.Tri> Ground, List<WallDaylight.Tri> Plan) Rotate(

@@ -34,6 +34,52 @@ public static partial class WallDaylight
 {
     public readonly record struct Tri(Point3 A, Point3 B, Point3 C);
 
+    // ───────────── ★★[v102.0 · JACK 0929 «성토 — 절토의 거울»] 높이 뒤집기(−z) ─────────────
+    //   성토 결과 = −(절토 셈(−입력)). 부호 바꾸기는 비트까지 정확하고, 셈은 z의 절댓값을 안 쓴다(부호 판정은 D = W − S ·
+    //   비김·±ZeroD·⑦-b 양옆·가지치기·CivilSafeMesh |dz| 모두 거울 — 계획 검토 v102 Q1). ★절댓값이 들어가는 입력은 <b>폴리곤 z</b>
+    //   (KeepBand zBase = 옹벽 밑선 높이)뿐이라, 들머리에서 z를 가진 입력을 <b>형마다 전부</b> 뒤집고(목록으로 적지 않는다 — H1),
+    //   날머리에서 결과 클래스의 z 필드를 <b>전부</b> 되뒤집는다(각 클래스의 NegateZ — M1).
+    //   Simplify3D · CivilSafeMesh.MakeZone · ⑦-b · ⑦-c는 뒤집은 셈 <b>안에서</b> 돈다(XY와 |dz|만 본다 — 거울이 정확하다 · 계획 검토 L5).
+
+    /// <summary>하네스 전용 카나리아 — 이 이름의 뒤집기 하나를 <b>일부러 빼</b> S141(들머리·날머리 완전성)이 반드시 실패하는지 잰다
+    /// ("poly" · "wall" · "other" · "ground" · "plan" · "ring" · "holes" · "ringsnap" · "holessnap" · "zone" · "untouched"). 출하 경로는 "".</summary>
+    internal static string DebugSkipNeg = "";          // ★[코드 검토 낮음 9] 비어 있지 않으면 성토 결과가 조용히 틀린다 — 하네스만(InternalsVisibleTo blocktest)
+
+    static List<Point3> NegZ(IReadOnlyList<Point3> ps, string what)
+    {
+        var r = new List<Point3>(ps?.Count ?? 0);
+        if (ps == null) return r;
+        bool skip = DebugSkipNeg == what;
+        foreach (var q in ps) r.Add(skip ? q : new Point3(q.X, q.Y, -q.Z));
+        return r;
+    }
+
+    static List<Tri> NegZ(IReadOnlyList<Tri> ts, string what)
+    {
+        var r = new List<Tri>(ts?.Count ?? 0);
+        if (ts == null) return r;
+        bool skip = DebugSkipNeg == what;
+        static Point3 N(Point3 q) => new(q.X, q.Y, -q.Z);
+        foreach (var t in ts) r.Add(skip ? t : new Tri(N(t.A), N(t.B), N(t.C)));
+        return r;
+    }
+
+    static List<List<Point3>> NegZ(List<List<Point3>> rs, string what)
+    {
+        var r = new List<List<Point3>>(rs?.Count ?? 0);
+        if (rs != null) foreach (var x in rs) r.Add(NegZ(x, what));
+        return r;
+    }
+
+    /// <summary>뒤집은 셈의 추적표 첫 줄 뒤에 붙이는 말 — 표 속 높이 숫자는 부호가 반대다(명령줄 요약·⚠의 높이는 되뒤집어 찍는다).</summary>
+    const string DownNote = "  ※<b>성토</b> — 높이를 뒤집어(−z) 절토와 같은 셈을 했다: 이 표 속 높이·표고·D는 부호가 반대다(선·면·요약은 되뒤집었다)\n";
+
+    static string AfterFirstLine(string trace, string add)
+    {
+        int i = trace.IndexOf('\n');
+        return i < 0 ? trace + "\n" + add : trace.Substring(0, i + 1) + add + trace.Substring(i + 1);
+    }
+
     /// <summary>스냅라운딩 격자(1mm). 이 저장소의 NTS 규약(<c>NtsSupport.Factory</c>)과 같다.</summary>
     public const double SnapGrid = 0.001;
     /// <summary>교점 군집 반경. 이웃 쌍이 따로 구한 같은 교점은 1e-10쯤 어긋난다 — <b>그것만</b> 녹인다.
@@ -93,6 +139,10 @@ public static partial class WallDaylight
         /// <para>측량 범위 밖·원지반 높이 못 읽음·버린 섬처럼 <b>선은 맞는데 알려야 하는</b> 것은 여기 안 든다(⚠만).</para></summary>
         public bool Broken => Ring == null || !Simple || Dangles > 0 || Mixed > 0 || GridMismatch > 0
                            || UnknownProv > 0 || InvalidRings > 0 || CutEdges > 0 || OutsidePoly > 0 || OverlayFail > 0;
+
+        /// <summary>★[v102.0 · 성토] 뒤집은 셈의 결과를 되뒤집는다 — <b>z를 가진 필드는 여기 전부</b>(나머지는 수·넓이·길이·|차|).
+        /// 필드를 더하면 여기에도 더할 것(하네스 S141이 비트로 대조한다).</summary>
+        internal void NegateZ() { if (Ring != null) Ring = NegZ(Ring, "ring"); }
     }
 
     // ───────────────────────────── 삼각형 모음(지역 좌표) ─────────────────────────────
@@ -232,10 +282,24 @@ public static partial class WallDaylight
     /// <param name="groundTris">원지반 삼각형 — 폴리곤 둘레를 덮는 것만 넘겨도 된다.</param>
     /// <param name="dropSegAt">★하네스 전용 — 이 조건에 드는 교선 조각을 <b>일부러 뺀다</b>
     /// (선이 빠졌을 때 경보가 울리는지 재려고). 출하 경로는 null.</param>
+    /// <param name="down">★★[v102.0] 성토 — 섬 = 옹벽이 상대면보다 <b>낮은</b> 곳. −z로 뒤집어 같은 셈을 하고 링을 되뒤집는다.</param>
     public static Result Build(IReadOnlyList<Point3> poly, IReadOnlyList<Tri> wallTris,
         IReadOnlyList<Tri> groundTris, string groundName = "원지반",
-        Func<double, double, bool>? dropSegAt = null)
+        Func<double, double, bool>? dropSegAt = null, bool down = false)
     {
+        if (!down) return BuildCore(poly, wallTris, groundTris, groundName, dropSegAt, false);
+        var r = BuildCore(NegZ(poly, "poly"), NegZ(wallTris, "wall"), NegZ(groundTris, "other"), groundName, dropSegAt, true);
+        r.NegateZ();
+        r.Trace = AfterFirstLine(r.Trace, DownNote);
+        return r;
+    }
+
+    /// <param name="down">문구만 고른다(높은/낮은) — 입력은 이미 뒤집혀 왔다.</param>
+    static Result BuildCore(IReadOnlyList<Point3> poly, IReadOnlyList<Tri> wallTris,
+        IReadOnlyList<Tri> groundTris, string groundName,
+        Func<double, double, bool>? dropSegAt, bool down)
+    {
+        string hi = down ? "낮은" : "높은", lo = down ? "높은" : "낮은";   // 뒤집은 셈의 «높은» = 실제로 낮은
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var R = new Result();
         var tr = new StringBuilder();
@@ -370,7 +434,7 @@ public static partial class WallDaylight
                 if (unkG > 0) R.FacesUnknownGround++; else R.FacesUnknownWall++;
             }
         }
-        tr.Append($"  ④ 조각 {R.Faces}개 — 옹벽이 높은 곳 {R.FacesIsland} · 낮은 곳 {R.FacesOut}"
+        tr.Append($"  ④ 조각 {R.Faces}개 — 옹벽이 {hi} 곳 {R.FacesIsland} · {lo} 곳 {R.FacesOut}"
             + $" · ⚠섞임 {R.Mixed}{(R.Mixed > 0 ? $"({R.MixedArea:F1}㎡:{mixedAt})" : "")}"
             + $" · 일치(옹벽=땅) {R.FacesZero}{(R.FacesZero > 0 ? $"({R.ZeroArea:F1}㎡ — 섬에 안 넣음)" : "")}"
             + $" · 모름 {R.FacesUnknown}{(R.FacesUnknown > 0 ? $"({R.UnknownArea:F1}㎡ — {groundName} 없음 {R.FacesUnknownGround} · 옹벽 면 없음 {R.FacesUnknownWall})" : "")}"
@@ -381,7 +445,7 @@ public static partial class WallDaylight
 
         if (islandFaces.Count == 0)
         {
-            R.Summary = $"⚠데이라잇 못 만듦 — 옹벽이 '{groundName}'보다 <b>높은 곳이 없다</b>";
+            R.Summary = $"⚠데이라잇 못 만듦 — 옹벽이 '{groundName}'보다 <b>{hi} 곳이 없다</b>";
             R.Warn = true; R.Trace = tr + "  " + R.Summary + "\n"; return R;
         }
 
@@ -523,7 +587,7 @@ public static partial class WallDaylight
                     if ((d > 0) != islPrep.Contains(pt))
                     {
                         R.GridMismatch++;
-                        if (db > worst) { worst = db; worstAt = $"({x + ox:F2},{y + oy:F2}) D={d:+0.000;-0.000}m · 섬 경계에서 {db:F3}m"; }
+                        if (db > worst) { worst = db; worstAt = $"({x + ox:F2},{y + oy:F2}) D={(down ? -d : d):+0.000;-0.000}m · 섬 경계에서 {db:F3}m"; }
                     }
                 }
             tr.Append($"  ⑦ 독립 검사(0.5m 격자) — {R.GridChecked}점 중 부호와 섬이 어긋난 점 <b>{R.GridMismatch}</b>"
@@ -585,7 +649,7 @@ public static partial class WallDaylight
                 }
                 if (n == 0) return "D 못 읽음";
                 bool flip = mn < -ZeroD && mx > ZeroD;
-                return $"반경1cm D {mn:+0.0000;-0.0000}~{mx:+0.0000;-0.0000}m(부호 바뀜 {(flip ? "<b>예</b>" : "아니오")})";
+                return $"반경1cm D {(down ? -mx : mn):+0.0000;-0.0000}~{(down ? -mn : mx):+0.0000;-0.0000}m(부호 바뀜 {(flip ? "<b>예</b>" : "아니오")})";
             }
             int shown = 0;
             foreach (var dg in (realDangles.Count > 0 ? (IEnumerable<LineString>)realDangles : dangles))   // 진짜 끊김을 먼저 보인다
@@ -701,6 +765,16 @@ public static partial class WallDaylight
         /// <b>1cm 안에서 갈라진 조각</b>(얕은 절토에서 스냅이 띠를 끊은 것 — 진짜 벽이 버려진다).</summary>
         public bool Broken => Ring == null || !Simple || Dangles > 0 || Mixed > 0 || GridMismatch > 0 || UnknownProv > 0
                            || InvalidRings > 0 || CutEdges > 0 || OutsidePoly > 0 || OverlayFail > 0 || NearPieces > 0 || TooThin;
+
+        /// <summary>★[v102.0 · 성토] 뒤집은 셈의 결과를 되뒤집는다 — <b>z를 가진 필드는 여기 전부</b>(Ring · Holes · RingSnap · HolesSnap —
+        /// 계획 검토 v102 · M1: 스냅 링은 Civil이 되돌리기 실패·넷째 시도에서 쓴다). UnsCutAt은 XY · EdgeGap*는 |차|.</summary>
+        internal void NegateZ()
+        {
+            if (Ring != null) Ring = NegZ(Ring, "ring");
+            Holes = NegZ(Holes, "holes");
+            if (RingSnap != null) RingSnap = NegZ(RingSnap, "ringsnap");
+            HolesSnap = NegZ(HolesSnap, "holessnap");
+        }
     }
 
     /// <summary>★[S139 ⑤·⑥] 1mm 격자로 표현 못 하는 폭 — 평균 폭(2×넓이÷둘레)이 이 이하인 조각은 <b>격자보다 얇다</b>.
@@ -728,16 +802,36 @@ public static partial class WallDaylight
     ///
     /// <para><b>Civil에 넘기는 링은 1cm로 다듬지 않는다</b>(0.1mm만) — 옹벽 면이 1:0.01이라 평면 1cm가 높이 1m다(검토 중간 3).</para></summary>
     /// <param name="dropGroundSegAt">★하네스 전용 — 옹벽∩원지반 교선 조각을 일부러 뺀다. 출하 경로는 null.</param>
+    /// <param name="down">★★[v102.0] 성토 — 남길 곳 = 원지반 ≤ 옹벽 &lt; 정지면. 폴리곤 z(옹벽 밑선 = 머리 높이)까지 −z로 뒤집어 같은 셈을 하고
+    /// 링·구멍·스냅 링을 되뒤집는다(계획 검토 v102 · H1·M1).</param>
     public static BandResult KeepBand(IReadOnlyList<Point3> poly, IReadOnlyList<Tri> wallTris,
         IReadOnlyList<Tri> groundTris, IReadOnlyList<Tri> planTris,
         string groundName = "원지반", string planName = "정지면_DH",
-        Func<double, double, bool>? dropGroundSegAt = null, Func<double, double, bool>? dropPlanSegAt = null)
+        Func<double, double, bool>? dropGroundSegAt = null, Func<double, double, bool>? dropPlanSegAt = null,
+        bool down = false)
     {
+        if (!down) return KeepBandCore(poly, wallTris, groundTris, planTris, groundName, planName, dropGroundSegAt, dropPlanSegAt, false);
+        var r = KeepBandCore(NegZ(poly, "poly"), NegZ(wallTris, "wall"), NegZ(groundTris, "ground"), NegZ(planTris, "plan"),
+                             groundName, planName, dropGroundSegAt, dropPlanSegAt, true);
+        r.NegateZ();
+        r.Trace = AfterFirstLine(r.Trace, DownNote);
+        return r;
+    }
+
+    /// <param name="down">문구만 고른다 — 입력은 이미 뒤집혀 왔다(뒤집은 셈의 «높은» = 실제로 낮은 · «밑선» = 옹벽 머리선).</param>
+    static BandResult KeepBandCore(IReadOnlyList<Point3> poly, IReadOnlyList<Tri> wallTris,
+        IReadOnlyList<Tri> groundTris, IReadOnlyList<Tri> planTris,
+        string groundName, string planName,
+        Func<double, double, bool>? dropGroundSegAt, Func<double, double, bool>? dropPlanSegAt, bool down)
+    {
+        double Hz(double z) => down ? -z : z;                     // 사람에게 보이는 높이는 되뒤집어 적는다
+        string side = down ? "성토" : "절토", other = down ? "절토" : "성토", baseLine = down ? "옹벽 머리선" : "옹벽 밑선";
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var R = new BandResult();
         var tr = new StringBuilder();
         var warns = new List<string>();
-        tr.Append($"■ 남길 옹벽 띠 — '{planName}' < 옹벽 ≤ '{groundName}'(파랑 안 − 빨강 안)\n");
+        tr.Append(down ? $"■ 남길 옹벽 띠(성토) — '{groundName}' ≤ 옹벽 < '{planName}'(파랑 안 − 빨강 안)\n"
+                       : $"■ 남길 옹벽 띠 — '{planName}' < 옹벽 ≤ '{groundName}'(파랑 안 − 빨강 안)\n");
         BandResult Fail(string why) { R.Summary = why; R.Warn = true; R.Trace = tr + "  " + why + "\n"; R.Ms = sw.ElapsedMilliseconds; return R; }
         if (poly == null || poly.Count < 3) return Fail("⚠남길 띠 못 만듦 — 폴리곤이 없다");
 
@@ -1006,9 +1100,10 @@ public static partial class WallDaylight
         if (R.FacesUnknown > 0) warns.Add($"세 면 중 하나가 없는 조각 {R.FacesUnknown}개({R.UnknownArea:F1}㎡) — 범위 밖");
         // ★[검토 0918 · 중간 6] 정지면이 원지반보다 높은 곳(성토) — 이 셈은 절토 전제라 <b>조용히 버리지 않고</b> 알린다
         if (R.FacesPlanAboveGround > 0)
-            warns.Add($"정지면이 원지반보다 높은 조각 {R.FacesPlanAboveGround}개({R.AreaPlanAboveGround:F2}㎡) — 절토 전제가 안 맞는 자리(성토)");
+            warns.Add($"정지면이 원지반보다 {(down ? "낮은" : "높은")} 조각 {R.FacesPlanAboveGround}개({R.AreaPlanAboveGround:F2}㎡) — {side} 전제가 안 맞는 자리({other})");
         if (keepFaces.Count == 0)
-            return Fail("⚠남길 띠 못 만듦 — 정지면보다 높고 원지반보다 높지 않은 옹벽이 없다"
+            return Fail((down ? "⚠남길 띠 못 만듦 — 정지면보다 낮고 원지반보다 낮지 않은 옹벽이 없다"
+                             : "⚠남길 띠 못 만듦 — 정지면보다 높고 원지반보다 높지 않은 옹벽이 없다")
                 + (R.Dangles > 0 ? $"(★교선이 끊긴 끝 {R.Dangles}곳 — 계산이 선을 흘려 조각이 합쳐졌을 수 있다{At(dangles)})" : ""));
 
         // ⑤ 조각 합치기 → 가장 큰 것(JACK) · 1cm 안에 딴 조각이 있으면 갈라진 것
@@ -1065,15 +1160,15 @@ public static partial class WallDaylight
         if (R.ChosenMeanWidth <= TooThinWidth)
         {
             R.TooThin = true;
-            warns.Add($"띠가 <b>1mm 격자보다 얇다</b>(평균 폭 {R.ChosenMeanWidth * 1000:F2}mm) — 얕은 절토라 이 판은 순수 옹벽을 표현할 수 없다");
+            warns.Add($"띠가 <b>1mm 격자보다 얇다</b>(평균 폭 {R.ChosenMeanWidth * 1000:F2}mm) — 얕은 {side}라 이 판은 순수 옹벽을 표현할 수 없다");
         }
         tr.Append($"  ⑤ 띠 {R.Pieces}조각 — <b>가장 큰 것 {R.Area:F2}㎡</b>를 쓴다"
             + (R.Pieces > 1 ? $" · 버린 조각 {R.Pieces - 1}개(합 {R.DroppedArea:F2}㎡:{dropAt})" : "")
             + (chosen.NumInteriorRings > 0 ? $" · 구멍 {chosen.NumInteriorRings}개({R.HoleArea:F2}㎡ — Hide로 뚫는다)" : "") + "\n");
         if (R.Pieces - 1 - R.Fragments > 0)
             warns.Add($"띠가 {R.Pieces}조각 — 가장 큰 것만 쓰고 {R.Pieces - 1 - R.Fragments}개는 버렸다(합 {R.DroppedArea:F2}㎡ · 부스러기 {R.Fragments} 포함)"
-                + (R.ThinDropped > 0 ? $" · 그중 격자보다 얇은 조각 {R.ThinDropped}개 길이 합 <b>{R.ThinDroppedLen:F2}m</b>(그 자리는 절토가 수 cm뿐인 옹벽 — 순수옹벽_DH에 안 들어간다)" : ""));
-        if (R.NearPieces > 0) warns.Add($"띠가 <b>1cm 안에서 갈라졌다</b>({R.NearPieces}곳) — 얕은 절토에서 스냅이 띠를 끊은 것으로 보인다(진짜 벽이 버려진다)");
+                + (R.ThinDropped > 0 ? $" · 그중 격자보다 얇은 조각 {R.ThinDropped}개 길이 합 <b>{R.ThinDroppedLen:F2}m</b>(그 자리는 {side}가 수 cm뿐인 옹벽 — 순수옹벽_DH에 안 들어간다)" : ""));
+        if (R.NearPieces > 0) warns.Add($"띠가 <b>1cm 안에서 갈라졌다</b>({R.NearPieces}곳) — 얕은 {side}에서 스냅이 띠를 끊은 것으로 보인다(진짜 벽이 버려진다)");
 
         // ⑥ 끊긴 끝 — 곁가지(길이 ≤1cm · A·B·띠 경계에서 1cm 안) 규칙은 데이라잇과 같다
         {
@@ -1185,7 +1280,7 @@ public static partial class WallDaylight
             catch { R.Simple = false; warns.Add("띠 폴리곤을 못 만든다(구멍 포함)"); }
         }
         tr.Append($"  ⑦ 링(1mm 격자) — 점 {R.RawPts} → {ext.Count}점(겹친 점·0.1mm 일직선만 뺌) · 구멍 {holes.Count}"
-            + $" · 원지반 닿는 선 {R.LenZG:F2}m · 정지면 닿는 선 {R.LenZP:F2}m · 옹벽 밑선 {R.LenPoly:F2}m"
+            + $" · 원지반 닿는 선 {R.LenZG:F2}m · 정지면 닿는 선 {R.LenZP:F2}m · {baseLine} {R.LenPoly:F2}m"
             + (R.LenHull > 0 ? $" · 측량 경계 {R.LenHull:F2}m" : "") + (R.UnknownProv > 0 ? $" · ⚠출처 모름 {R.LenUnknown:F3}m" : "") + "\n");
 
         // ⑦-b ★★[JACK 0918 «또 수직방향이 톱니처럼 짤렸어 데이라잇에 깔끔하게 안잘려»] 링을 1mm 격자에서 <b>정확한 교선 위로</b> 되돌린다.
@@ -1807,7 +1902,7 @@ public static partial class WallDaylight
                 if (g > worst)
                 {
                     worst = g; double grad = Math.Sqrt(W.A[tri] * W.A[tri] + W.B[tri] * W.B[tri]);
-                    R.EdgeGapAt = $"({x + ox:F3},{y + oy:F3}) 옹벽 {zw:F3} · 선 {zr:F3} · 면 {(grad < 1e-9 ? "평평" : $"1:{1 / grad:0.####}")}";
+                    R.EdgeGapAt = $"({x + ox:F3},{y + oy:F3}) 옹벽 {Hz(zw):F3} · 선 {Hz(zr):F3} · 면 {(grad < 1e-9 ? "평평" : $"1:{1 / grad:0.####}")}";
                 }
             }
             foreach (var r0 in holes.Prepend(ext))
@@ -1916,6 +2011,53 @@ public static partial class WallDaylight
         foreach (var t in plan)
             w.WriteLine(string.Format(ci, "{0:R} {1:R} {2:R} {3:R} {4:R} {5:R} {6:R} {7:R} {8:R}",
                 t.A.X, t.A.Y, t.A.Z, t.B.X, t.B.Y, t.B.Z, t.C.X, t.C.Y, t.C.Z));
+    }
+
+    /// <summary>★★[v102.0 · 계획 검토 M4·L6] 입력 파일 <b>끝</b>에 덧붙이는 줄 — 방향(절토|성토) · 옹벽선 · 머리(z0 단높이 소단 단수 버린 줄).
+    /// <para>옛 파일엔 없다. 읽는 쪽(<see cref="TryReadInput"/>·<see cref="TryReadBandInput"/>)은 앞 블록만 읽으므로 그대로 받는다.
+    /// 재생이 방향을 모르고 성토 덤프를 절토로 돌리던 것(S139 ⑨ — 0929 15:39)을 막는다.</para></summary>
+    public sealed record InputTail(string Side, List<Point3> WallLine, double[] Head);
+
+    public static void AppendInputTail(string path, string side, IReadOnlyList<Point3>? wallLine, double[]? head)
+    {
+        var ci = CultureInfo.InvariantCulture;
+        using var w = new StreamWriter(path, true, new UTF8Encoding(false));
+        if (!string.IsNullOrEmpty(side)) w.WriteLine("SIDE " + side);
+        if (wallLine != null && wallLine.Count > 0)
+        {
+            w.WriteLine($"WALLLINE {wallLine.Count}");
+            foreach (var q in wallLine) w.WriteLine(string.Format(ci, "{0:R} {1:R} {2:R}", q.X, q.Y, q.Z));
+        }
+        if (head != null && head.Length > 0) w.WriteLine("HEAD " + string.Join(" ", head.Select(v => v.ToString("R", ci))));
+    }
+
+    public static InputTail ReadInputTail(string path)
+    {
+        string side = ""; var wl = new List<Point3>(); double[] head = Array.Empty<double>();
+        if (!File.Exists(path)) return new(side, wl, head);
+        var ci = CultureInfo.InvariantCulture;
+        var lines = File.ReadAllLines(path);
+        try
+        {
+            for (int k = 0; k < lines.Length; k++)
+            {
+                string l = lines[k];
+                if (l.StartsWith("SIDE ")) side = l.Substring(5).Trim();
+                else if (l.StartsWith("HEAD ")) head = l.Substring(5).Split(' ', StringSplitOptions.RemoveEmptyEntries).Select(v => double.Parse(v, ci)).ToArray();
+                else if (l.StartsWith("WALLLINE "))
+                {
+                    int n = int.Parse(l.Substring(9), ci);
+                    for (int i = 1; i <= n && k + i < lines.Length; i++)
+                    {
+                        var v = lines[k + i].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                        wl.Add(new Point3(double.Parse(v[0], ci), double.Parse(v[1], ci), double.Parse(v[2], ci)));
+                    }
+                    k += n;
+                }
+            }
+        }
+        catch { }
+        return new(side, wl, head);
     }
 
     public static bool TryReadBandInput(string path, out List<Point3> poly, out List<Tri> wall,

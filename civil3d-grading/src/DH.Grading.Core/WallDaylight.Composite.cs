@@ -51,7 +51,21 @@ public static partial class WallDaylight
         public long MsTouch, MsZero, MsNode, MsPieces, MsClean;
         public int Tier = 3;
         public string Fail = "";
+        /// <summary>★[v102.0 · 계획 검토 M3] 폴리곤 안에서 규칙이 정지면이 <b>아닌</b> 조각(옹벽·원지반을 고른 조각)의 넓이 —
+        /// 0이면 합성이 정지면과 같다(옹벽이 안 드러난다 — 방향을 거꾸로 쓰면 절토·성토 두 규칙 모두 = 정지면이 된다).</summary>
+        public double NonPlanArea;
+        /// <summary>그 조각들에서 고른 면 − 정지면의 최대(조각 안 점 · 뒤집은 셈에선 부호도 거울) — 1cm 안이면 옹벽이 사실상 안 드러난다(넓이만 보면 정지면과 원지반이
+        /// mm로 어긋난 부스러기가 넓이를 채워 관문을 빠져나간다 — 하네스 S142 음성).</summary>
+        public double NonPlanMaxDz;
         public string TierText => Tier == 1 ? "정확" : Tier == 2 ? "⚠거의" : "⚠못 함";
+
+        /// <summary>★[v102.0 · 성토] 뒤집은 셈의 결과를 되뒤집는다 — <b>z를 가진 필드는 여기 전부</b>(Zone · Untouched).
+        /// 나머지는 수·넓이·XY 상자·|차|(높이가 든 글 EdgeAt·ZOneAt은 셈 안에서 되뒤집어 적었다).</summary>
+        internal void NegateZ()
+        {
+            if (Zone != null) Zone = NegZ(Zone, "zone");
+            Untouched = NegZ(Untouched, "untouched");
+        }
         public string Summary => string.Format(CultureInfo.InvariantCulture,
             "판정 {0}({1}) · 정지면 {2}면 중 손댐 {3}(Civil이 고칠 면 곁 {4}) · 고정 점 {5} · 미리 맞춤(정지면 꼭짓점) {6}(최대 {7:F1}µm · 비틈 {8:F3}mm · 거절 {37})"
             + " · 선 {9} · 조각 {10}(폴리곤 안 {11} · 정지면 {12}{13}) · 규칙 대조 {14}점 최대 {15:F3}mm{16}{17} · 테두리 턱 {29}점 최대 {30:F3}mm{31}"
@@ -78,8 +92,23 @@ public static partial class WallDaylight
     /// 부채꼴이 전부 손댄 삼각형이라 <b>고정 점이 아니다</b> — 미리 맞춤·다듬기가 그 점을 옮길 수 있다(고정이면 가파른 옹벽 쪽을 옮겨야 했다).</summary>
     const double TouchD = 2e-4;
 
-    public static CompositeResult BuildComposite(IReadOnlyList<Point3> poly, IReadOnlyList<Tri> wallTris, IReadOnlyList<Tri> groundTris, IReadOnlyList<Tri> planAll)
+    /// <param name="down">★★[v102.0 · JACK 0929 «성토 — 앞 = 원지반 · 뒤 = 계획면»] 성토 — 폴리곤 안 = <b>min(정지면, max(옹벽, 원지반))</b>
+    /// (절토 규칙의 −z 거울: 옹벽이 땅 위면 옹벽 · 땅에 묻히면 원지반(성토 사면이 없어진다) · 원지반이 계획면 위면 계획면).
+    /// 입력을 전부 −z로 뒤집어 같은 셈을 하고 Zone·Untouched를 되뒤집는다 — 손 안 댄 삼각형은 −(−z) = z라 비트 그대로다.</param>
+    public static CompositeResult BuildComposite(IReadOnlyList<Point3> poly, IReadOnlyList<Tri> wallTris, IReadOnlyList<Tri> groundTris, IReadOnlyList<Tri> planAll,
+        bool down = false)
     {
+        if (!down) return BuildCompositeCore(poly, wallTris, groundTris, planAll, false);
+        var r = BuildCompositeCore(NegZ(poly, "poly"), NegZ(wallTris, "wall"), NegZ(groundTris, "ground"), NegZ(planAll, "plan"), true);
+        r.NegateZ();
+        return r;
+    }
+
+    /// <param name="down">사람에게 보이는 높이(EdgeAt·ZOneAt)만 되뒤집어 적는다 — 입력은 이미 뒤집혀 왔다.</param>
+    static CompositeResult BuildCompositeCore(IReadOnlyList<Point3> poly, IReadOnlyList<Tri> wallTris, IReadOnlyList<Tri> groundTris, IReadOnlyList<Tri> planAll,
+        bool down)
+    {
+        double Hz(double z) => down ? -z : z;
         var R = new CompositeResult();
         var sw = Stopwatch.StartNew();
         if (poly == null || poly.Count < 3 || wallTris == null || wallTris.Count == 0 || groundTris == null || groundTris.Count == 0 || planAll == null || planAll.Count == 0)
@@ -294,7 +323,7 @@ public static partial class WallDaylight
                     if (!W.TryZNear(x, y, 1e-5, out double zw) || !G.TryZNear(x, y, 1e-5, out double zg) || !P.TryZNear(x, y, 1e-5, out double zp)) continue;
                     R.EdgeSamples++;
                     double dz = Math.Abs(Math.Max(zp, Math.Min(zw, zg)) - zp);
-                    if (dz > R.EdgeMax) { R.EdgeMax = dz; R.EdgeAt = $"({x + ox:F3},{y + oy:F3}) 규칙 {Math.Max(zp, Math.Min(zw, zg)):F3} · 정지면 {zp:F3}"; }
+                    if (dz > R.EdgeMax) { R.EdgeMax = dz; R.EdgeAt = $"({x + ox:F3},{y + oy:F3}) 규칙 {Hz(Math.Max(zp, Math.Min(zw, zg))):F3} · 정지면 {Hz(zp):F3}"; }
                 }
             }
         }
@@ -379,8 +408,8 @@ public static partial class WallDaylight
                 double zw = W.Z(tw, ip.X, ip.Y), zg = G.Z(tg, ip.X, ip.Y), zp = P.Z(tp, ip.X, ip.Y);
                 double m = Math.Min(zw, zg);
                 if (zp >= m) { src = P; tIdx = tp; }
-                else if (zw <= zg) { src = W; tIdx = tw; }
-                else { src = G; tIdx = tg; }
+                else if (zw <= zg) { src = W; tIdx = tw; R.NonPlanArea += f.Area; R.NonPlanMaxDz = Math.Max(R.NonPlanMaxDz, m - zp); }
+                else { src = G; tIdx = tg; R.NonPlanArea += f.Area; R.NonPlanMaxDz = Math.Max(R.NonPlanMaxDz, m - zp); }   // m − 정지면 > 0(고른 면이 정지면 위)
             }
             Geometry trs;
             try { trs = NetTopologySuite.Triangulate.Polygon.ConstrainedDelaunayTriangulator.Triangulate(f); }
@@ -463,7 +492,7 @@ public static partial class WallDaylight
                 }
                 double dz = Math.Abs(z - q.Z);
                 if (dz > 1e-6) R.ZOneN++;
-                if (dz > R.ZOneMax) { R.ZOneMax = dz; R.ZOneAt = $"({q.X:F4},{q.Y:F4}) 조각 평면 {q.Z:F4} → {z:F4}"; }
+                if (dz > R.ZOneMax) { R.ZOneMax = dz; R.ZOneAt = $"({q.X:F4},{q.Y:F4}) 조각 평면 {Hz(q.Z):F4} → {Hz(z):F4}"; }
                 return dz == 0 ? q : new Point3(q.X, q.Y, z);
             }
             for (int i = 0; i < raw.Count; i++) raw[i] = new Tri(One(raw[i].A), One(raw[i].B), One(raw[i].C));
@@ -471,7 +500,8 @@ public static partial class WallDaylight
         R.ZoneTrisRaw = raw.Count;
 
         // ⑦ 다듬기 — 고정 점은 안 없애고, 참값 = 조각 삼각형
-        R.Zone = CivilSafeMesh.MakeZone(raw, fixedW.Values, out var cr);
+        // ★[v102.0 · 코드 검토 중간 2] 다듬기에 합성 높이 예산(1cm − 미리 맞춤 − 규칙 대조 − 한 점 한 높이)을 넘긴다 — 판정이 같은 길 중 예산을 지키는 쪽을 고른다
+        R.Zone = CivilSafeMesh.MakeZone(raw, fixedW.Values, out var cr, wallTol2: 1e-2 - (R.PreSnapDz + R.RuleMax + R.ZOneMax));
         R.Clean = cr;
         R.MsClean = sw.ElapsedMilliseconds;
         // ⑦-b ★[검토 0929 v101 · 낮음 7] 이음매 — 손댄 삼각형과 안 댄 삼각형이 나누는 변은 합성에 <b>비트 그대로</b> 한 번 있어야 한다
@@ -518,6 +548,10 @@ public static partial class WallDaylight
         if (R.HeightBudget > 1e-2) { tier = 3; why.Add($"높이 오차 합 {R.HeightBudget * 1000:F1}mm(규칙 대조 + 한 점 한 높이 + 다듬기)"); }
         else if (R.HeightBudget > 1e-3) { tier = Math.Max(tier, 2); why.Add($"높이 오차 합 {R.HeightBudget * 1000:F2}mm(미리 맞춤 {R.PreSnapDz * 1000:F2} + 규칙 대조 {R.RuleMax * 1000:F2} + 한 점 한 높이 {R.ZOneMax * 1000:F2} + 다듬기 {cr.WallDz * 1000:F2})"); }
         if (R.Zone == null) { tier = 3; why.Add("다듬기 못 함 — " + cr.Fail); }
+        // ★[v102.0 · 계획 검토 M3] 옹벽이 한 곳도 안 드러난다 — 합성이 곧 정지면이다. 방향을 거꾸로 쓰면(절토 자료에 성토 규칙 · 그 반대)
+        //   두 규칙 모두 = 정지면이라 테두리 턱도 0으로 재여 «판정 1, 옹벽 없음»으로 조용히 끝난다 — 여기서 멈춘다
+        if (R.NonPlanArea <= 1e-4 || R.NonPlanMaxDz <= 0.01)
+        { tier = 3; why.Add($"합성이 정지면과 같다(옹벽·원지반을 고른 조각 넓이 {R.NonPlanArea:G3}㎡ · 정지면과 최대 {R.NonPlanMaxDz * 1000:F1}mm — 옹벽이 안 드러난다 · 옹벽 방향(절토/성토)·폴리곤을 보세요)"); }
         if (R.Fail.Length > 0) { tier = 3; why.Add(R.Fail); }
         R.Tier = tier;
         if (why.Count > 0) R.Fail = string.Join(" · ", why);

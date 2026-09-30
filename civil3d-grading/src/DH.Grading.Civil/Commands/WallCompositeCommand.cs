@@ -174,7 +174,7 @@ public sealed class WallCompositeCommand
         if (GradingSettings.LastWallPoly != null)
         {
             if (GradingSettings.LastWallPlanNote.Length > 0)
-                return Fail($"옹벽 변환이 순수옹벽_DH를 안 지은 까닭이 그대로다 — {GradingSettings.LastWallPlanNote}");
+                return Fail($"옹벽 변환이 합성을 막은 까닭이 그대로다 — {GradingSettings.LastWallPlanNote}");
             ObjectId wId = NoriCommand.FindByHandle(db, GradingSettings.LastWallSurfHandle), pId = NoriCommand.FindByHandle(db, GradingSettings.LastWallPlanHandle);
             if (wId.IsNull || tr.GetObject(wId, OpenMode.ForRead) is not TinSurface w0)
                 return Fail("옹벽 변환이 지은 가상옹벽_DH가 없다(지워졌거나 다시 지어짐) — 옹벽 변환을 다시 돌리세요");
@@ -222,6 +222,15 @@ public sealed class WallCompositeCommand
             poly = polys[0]; wTin = w1; pTin = p1;
             pairNote = "옹벽 변환 기억이 없어 이름으로 찾음(폴리곤·가상옹벽·정지면 하나씩)";
         }
+        // ★★[v102.0 · JACK 0929 «옹벽 합성 버튼 하나가 절토/성토를 가린다»] 방향 — 가상옹벽_DH 표지(DH_WALLSIDE). 없으면 짐작하지 않는다
+        //   (방향을 거꾸로 쓰면 두 규칙 모두 = 정지면이라 «판정 1, 옹벽 없음»으로 조용히 끝난다 — 계획 검토 v102 · M3)
+        string side = WallDaylightBuilder.ReadSide(tr, wTin, out string sideBlock);
+        if (side.Length == 0)
+            return Fail($"'{wTin.Name}'에 옹벽 방향(절토/성토) 표지가 없다 — 옹벽 변환을 다시 돌리세요(v102.0 전에 지은 옹벽이거나 표지를 못 붙였다)");
+        // ★[코드 검토 중간 1] 옹벽 변환이 도면에 적어 둔 «합성 막음» — 기억 길이든 이름 길이든 멈춘다
+        if (sideBlock.Length > 0)
+            return Fail($"옹벽 변환이 이 옹벽의 합성을 막아 두었다 — {sideBlock} · 폴리곤을 넓히거나 옹벽 변환을 다시 돌리세요");
+        bool up = side == "절토";
         bool inS1 = pTin.Name == BaseName;                 // 합성이 이미 정지면_DH에 들어가 있다(다시 합성)
         // ★[계획 검토 v101.1 · 높음 1] 표지 붙은 면(합성)을 입력으로 받으면 합성 위에 또 합성한다
         if (IsComposite(tr, pTin))
@@ -258,7 +267,7 @@ public sealed class WallCompositeCommand
         catch (System.Exception rx) { log.AppendLine($"   다시 짓기 실패 {rx.GetType().Name}"); }
         try { if (pTin.IsOutOfDate) return Fail($"'{pTin.Name}'가 낡음(Out of date) — 다시 지어도 안 풀린다"); } catch { }
         try { if (wTin.IsOutOfDate) return Fail($"'{wTin.Name}'가 낡음(Out of date)"); } catch { }
-        log.AppendLine($"① 짝 — {pairNote} · 폴리곤 {poly.Count}점 · 원지반 '{gName}' · 옹벽 '{wTin.Name}' · 정지면 '{pTin.Name}'{(inS1 ? "(지난 합성의 합성 전 면 — 다시 합성)" : "")}");
+        log.AppendLine($"① 짝 — {pairNote} · 폴리곤 {poly.Count}점 · 원지반 '{gName}' · 옹벽 '{wTin.Name}'(<b>{side}</b>) · 정지면 '{pTin.Name}'{(inS1 ? "(지난 합성의 합성 전 면 — 다시 합성)" : "")}");
 
         // ③ 삼각형 — 옹벽·원지반은 폴리곤 둘레(±1m), 정지면은 전부(손 안 댄 것은 그대로 옮긴다)
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -268,6 +277,15 @@ public sealed class WallCompositeCommand
         if (wCache.ReadFailed + gCache.ReadFailed + planCache.ReadFailed > 0)
             return Fail($"삼각형을 다 못 읽었다(옹벽 {wCache.ReadFailed} · 원지반 {gCache.ReadFailed} · 정지면 {planCache.ReadFailed}개 빠짐)");
         var wallTris = wCache.TrianglesIn(mnx, mny, mxx, mxy);
+        // ★[v102.0 · 계획 검토 M3 ①] 기하로 한 번 더 — 옹벽 첫 줄 = 폴리곤 z(머리 높이). 절토면 옹벽이 전부 그 위 · 성토면 전부 그 아래(1mm)
+        {
+            double z0 = poly[0].Z; int wrong = 0; double worst = 0;
+            foreach (var t in wallTris)
+                foreach (var q in new[] { t.A, t.B, t.C })
+                { double dz = up ? z0 - q.Z : q.Z - z0; if (dz > 1e-3) { wrong++; worst = System.Math.Max(worst, dz); } }
+            if (wrong > 0)
+                return Fail($"옹벽 방향 표지('{side}')와 옹벽 모양이 안 맞는다 — 옹벽 꼭짓점 {wrong}개가 머리 높이 {z0:F3}m {(up ? "아래" : "위")}(최대 {worst:F3}m) · 옹벽 변환을 다시 돌리세요");
+        }
         var groundTris = gCache.TrianglesIn(mnx, mny, mxx, mxy);
         var planAll = planCache.AllTriangles();
         log.AppendLine($"② 삼각형 — 옹벽 {wallTris.Count} · 원지반 {groundTris.Count} · 정지면 전체 {planAll.Count} · {sw.ElapsedMilliseconds}ms");
@@ -279,6 +297,7 @@ public sealed class WallCompositeCommand
             try
             {
                 WallDaylight.WriteBandInput(dump, poly, wallTris, groundTris, planPart, head + $"(전체 {planAll.Count}면 중 {what} {planPart.Count})");
+                WallDaylight.AppendInputTail(dump, side, null, null);   // ★[v102.0] 재생이 방향을 안다
                 log.AppendLine($"   입력 파일({what}): {dump}");
             }
             catch (System.Exception de) { log.AppendLine($"   (입력 못 떨굼: {de.GetType().Name})"); }
@@ -286,7 +305,8 @@ public sealed class WallCompositeCommand
         Dump(planCache.TrianglesIn(mnx - 4, mny - 4, mxx + 4, mxy + 4), "폴리곤 ±5m");
 
         // ④ Core 합성
-        var r = WallDaylight.BuildComposite(poly, wallTris, groundTris, planAll);
+        // 절토 max(정지면, min(옹벽, 원지반)) · 성토 min(정지면, max(옹벽, 원지반)) — Core가 −z 거울로 같은 셈을 한다
+        var r = WallDaylight.BuildComposite(poly, wallTris, groundTris, planAll, down: !up);
         log.AppendLine("③ 합성: " + r.Summary);
         if (r.TouchMaxX >= r.TouchMinX) Dump(planCache.TrianglesIn(r.TouchMinX, r.TouchMinY, r.TouchMaxX, r.TouchMaxY), "손댄 상자에 걸친");
         try { WallDaylightBuilder.ArchiveDumpPublic(dump); } catch { }
@@ -360,7 +380,7 @@ public sealed class WallCompositeCommand
         // 정지면_DH가 늘 보이던 모양 그대로 — 합성 전 면의 스타일·레이어를 물려받는다
         try { cTin.StyleId = pW.StyleId; } catch (System.Exception sx) { log.AppendLine("스타일 물려받기 실패: " + sx.GetType().Name); }
         try { ((Autodesk.AutoCAD.DatabaseServices.Entity)cTin).LayerId = ((Autodesk.AutoCAD.DatabaseServices.Entity)pW).LayerId; } catch (System.Exception lx) { log.AppendLine("레이어 물려받기 실패: " + lx.GetType().Name); }
-        try { cTin.Description = $"DH 옹벽 합성 {System.DateTime.Now:yyyy-MM-dd HH:mm} · {GradingSettings.Version} · 판정 {r.Tier}({r.TierText}) · {pairNote}"; } catch { }
+        try { cTin.Description = $"DH 옹벽 합성({side}) {System.DateTime.Now:yyyy-MM-dd HH:mm} · {GradingSettings.Version} · 판정 {r.Tier}({r.TierText}) · {pairNote}"; } catch { }
         // ★[코드 검토 v101.1 · 낮음 6] 표지가 없으면 «합성 위에 또 합성» 막이와 풀기 짝 확인이 없다 — 못 붙이면 되돌린다
         try { MarkComposite(tr, cTin, $"{System.DateTime.Now:yyyy-MM-dd HH:mm:ss} · {GradingSettings.Version} · 판정 {r.Tier}", pTin.ObjectId.Handle.ToString()); }
         catch (System.Exception mx) { log.AppendLine("합성 표지 못 붙임: " + mx); throw new SwapFailed($"합성 표지를 못 붙였다({mx.GetType().Name})"); }
@@ -401,7 +421,7 @@ public sealed class WallCompositeCommand
         // ★[검토 0929 v101 · 중간 2] «거의»는 까닭과 자리를 — 다듬기 까닭 + 합성 까닭(규칙 대조 · 테두리 · 한 점 한 높이 · 높이 오차 합)
         string why2 = string.Join(" · ", new[] { r.Clean?.Tier2Why ?? "", r.Fail }.Where(x => x.Length > 0));
         string tierNote = r.Tier == 1 ? "" : $" · ⚠<b>거의</b>({why2})";
-        return $"<b>정지면_DH에 옹벽을 합성했다</b> — 판정 {r.Tier}({r.TierText}){tierNote} · 정지면 {r.PlanTotal}면 중 옹벽 둘레 {r.Touched}면을 다시 짓고 나머지는 그대로"
+        return $"<b>정지면_DH에 {side} 옹벽을 합성했다</b> — 판정 {r.Tier}({r.TierText}){tierNote} · 정지면 {r.PlanTotal}면 중 옹벽 둘레 {r.Touched}면을 다시 짓고 나머지는 그대로"
              + $" · 점 {np} · 삼각형 {nf} Civil이 그대로 받음 · 높이 오차 합 {r.HeightBudget * 1000:F2}mm"
              + $" · 합성 전 정지면은 '{BaseName}'로 숨겨 둠(옹벽 변환을 다시 돌리면 되돌린다){excNote} · {pairNote}";
     }

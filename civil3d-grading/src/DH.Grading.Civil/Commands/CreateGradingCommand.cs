@@ -172,6 +172,11 @@ public sealed class CreateGradingCommand
         //   남아서 다음 실행에 잘못 적용되는 누출 방지. 전체해제 플래그도 동일하게 1회성 소비.
         var zoneOverride = GradingSettings.ZoneOverride;
         GradingSettings.ZoneOverride = null;
+        // ★★[검토 0917 · 높음 · v102.0 코드 검토 낮음 4] 손 폴리곤 · 고른 구간도 <b>진입 즉시</b> 꺼낸다 — 합성 정리 실패·구역 준비 실패로
+        //   일찍 빠지면(아래 return 두 곳) 정적에 남아 다음 실행이 지난 그림·지난 구간을 제 것인 양 썼다. 꺼내는 순간 비고, 값은 인자로 내려간다.
+        var manualPoly = GradingSettings.TakeWallPolyManual(doc.Name, out string manualWhy);
+        var wallPick = GradingSettings.TakeWallZonePick(doc.Name, out string pickWhy);
+        manualWhy += pickWhy;
         // ★[JACK 0914] 전이면 선 통로는 <b>더 쓰지 않는다</b> — 지표면을 만들어 덮는 방식이 버려졌다.
         //   그래도 진입 때 비운다(옛 값이 남아 있으면 혼란을 준다).
         GradingSettings.TransitionLines = null;
@@ -324,10 +329,12 @@ public sealed class CreateGradingCommand
                 return $"    ⚠<b>옹벽을 못 세웠다</b> — 변 나누기 표가 없다"
                      + $"(폴리곤 {poly.Count}점 · 표 {(flags == null ? "없음" : flags.Count + "개")})\n";
 
-            // ① 폴리곤 안 원지반 최고
-            double? top = WallInPoly.MaxGroundIn(poly,
-                (x, y) => ground.TryGetElevation(x, y, out double gz) ? gz : (double?)null,
-                System.Math.Max(1.0, p.VertexSpacing), out int nHit, out int nMiss);
+            // ① 폴리곤 안 원지반 최고(절토) · ★★[v102.0 · JACK 0929 «성토 — 절토의 거울, 계단으로 내려감»] 최저(성토)
+            int nHit, nMiss;
+            System.Func<double, double, double?> gAt = (x, y) => ground.TryGetElevation(x, y, out double gz) ? gz : (double?)null;
+            double gridG = System.Math.Max(1.0, p.VertexSpacing);
+            double? top = wUp ? WallInPoly.MaxGroundIn(poly, gAt, gridG, out nHit, out nMiss)
+                              : WallInPoly.MinGroundIn(poly, gAt, gridG, out nHit, out nMiss);
             if (top == null)
                 return $"    ⚠<b>옹벽을 못 세웠다</b> — 폴리곤 안에서 원지반을 <b>한 자리도 못 쟀다</b>"
                      + $"(못 잰 자리 {nMiss}) — 측량 범위를 벗어났는지 보세요\n";
@@ -336,7 +343,8 @@ public sealed class CreateGradingCommand
             double benchH = p.BenchHeightOf(wUp);
             double slopeW = System.Math.Max(GradingSettings.MinSlope, 0);
             double benchW = p.BenchWidthOf(wUp);
-            int nb = WallInPoly.BenchCount(zBase, top.Value, benchH);
+            // 절토 = 원지반 최고를 <b>넘는</b> 단수 · 성토 = 원지반 최저 <b>아래로</b> 내려가는 단수(같으면 한 단 더 — 거울)
+            int nb = wUp ? WallInPoly.BenchCount(zBase, top.Value, benchH) : WallInPoly.BenchCountDown(zBase, top.Value, benchH);
 
             // ③ 옹벽이 서는 <b>열린 선</b>을 표에서 뽑는다 — 이어지는 옹벽 점들
             var wline = new System.Collections.Generic.List<Point3>();
@@ -360,7 +368,8 @@ public sealed class CreateGradingCommand
             //   <para>점마다 미는 방식은 옹벽과 폐합면이 만나는 모서리에서 <b>칼날 같은 삼각형</b>을 남겼다
             //   (JACK 0918 스샷). NTS는 코너 트림도 겹침 정리도 <b>스스로</b> 한다.</para>
             var rows = WallInPoly.RowsByBuffer(poly, wline, zBase, nb, benchH, slopeW, benchW,
-                                               p.MinFaceRun, out string rlog);
+                                               p.MinFaceRun, out string rlog, down: !wUp);
+            int lostRows = WallInPoly.LastLost;
             if (rows.Count < 2)
                 return $"    ⚠<b>옹벽을 못 세웠다</b> — 줄이 {rows.Count}개뿐({rlog})\n";
 
@@ -376,8 +385,19 @@ public sealed class CreateGradingCommand
             //   받은 수가 모자라면 줄이 빠진 면이고, 그 위에서 딴 데이라잇은 확인용 레이어로 보낸다.
             int bIn = GradingBuilder.LastIntended, bDef = GradingBuilder.LastDefined;
             bool bladeOk = bIn >= 0 && bDef >= bIn;
+            // ★[v102.0 · 계획 §3] 줄을 버렸으면 옹벽이 원지반 너머까지 못 간다 — 띠는 확인용으로만 · 합성은 막는다(절토도 같다)
+            string rowsNote = lostRows > 0
+                ? $"옹벽 줄을 {lostRows}개 버렸다(단을 너무 많이 {(wUp ? "쌓아" : "내려")} 폴리곤이 모자람 — 옹벽이 원지반 너머까지 못 가 {(wUp ? "윗면" : "바닥")}이 드러난다 · 합성 안 함)"
+                : "";
             string bladeNote = bDef < 0 ? "브레이크라인 수를 못 셌다"
                              : bDef < bIn ? $"브레이크라인을 <b>{bIn}개 중 {bDef}개만</b> 받았다(줄이 빠진 면)" : "";
+            // ★★[v102.0 · 계획 검토 M3·L2] 가상옹벽_DH에 <b>방향 표지</b>(DH_WALLSIDE) — 옹벽 합성이 표지 + 기하로 방향을 정한다.
+            //   세션 기억(LastWallUp)은 두지 않는다 — 곧바로 지워지거나(WallDaylightBuilder.Build · 도면 전환) 낡는다.
+            //   ★[코드 검토 중간 1] 합성을 막을 까닭(줄 버림 · 브레이크라인 빠짐)도 <b>표지에</b> 적는다 — 세션 기억은 도면 탭을 바꾸면 풀린다
+            string sideNote = "";
+            string blockNote = string.Join(" · ", new[] { rowsNote, bladeOk ? "" : bladeNote.Replace("<b>", "").Replace("</b>", "") }.Where(x => x.Length > 0));
+            try { WallDaylightBuilder.MarkSide(tr, wid, wUp, blockNote); }
+            catch (System.Exception mx) { sideNote = $"가상옹벽_DH에 방향 표지를 못 붙였다({mx.GetType().Name}) — 옹벽 합성이 방향을 모른다"; }
             string vseen = $" · 브레이크라인 의도 {bIn} / 정의됨 {bDef}{(bladeOk ? "" : " ⚠")}";
             bool boundOk = false;
             try
@@ -407,7 +427,8 @@ public sealed class CreateGradingCommand
             }
             else
             {
-                dl = WallDaylightBuilder.Build(db, tr, wid, ground, groundId, poly, bladeOk, bladeNote, rowsC, wUp);
+                dl = WallDaylightBuilder.Build(db, tr, wid, ground, groundId, poly, bladeOk, bladeNote, rowsC, wUp,
+                                               rowsNote, sideNote, wline, new double[] { zBase, benchH, benchW, nb, lostRows });
                 // ★[검토 0918 · 낮음 5] 폐합면은 줄마다 이만큼씩 안으로 들어간다. 1mm 스냅에 가까우면
                 //   이웃 줄의 교선이 한 점으로 붙어 가짜 경보가 날 수 있다 — 전제가 깨지면 한 줄로 알린다.
                 double vEps = System.Math.Max(1e-3, p.MinFaceRun);
@@ -415,9 +436,10 @@ public sealed class CreateGradingCommand
                     dl += $"    ⚠폐합면 줄 간격 {vEps * 1000:F1}mm — 데이라잇 잇기(1mm 스냅)에 가까워 경보가 헛울릴 수 있다(MinFaceRun)\n";
             }
 
-            return $"    ★<b>가상 옹벽</b> — 폴리곤 안 원지반 최고 <b>{top:F2}m</b>"
+            return $"    ★<b>가상 옹벽</b>{(wUp ? "" : "(<b>성토 — 아래로</b>)")} — 폴리곤 안 원지반 {(wUp ? "최고" : "최저")} <b>{top:F2}m</b>"
                  + $"(잰 자리 {nHit}{(nMiss > 0 ? $" · 못 잰 자리 {nMiss}" : "")})"
-                 + $" · 찍은 선 {zBase:F2}m → <b>{zBase + benchH * nb:F2}m</b>"
+                 + $" · 찍은 선 {zBase:F2}m → <b>{(wUp ? zBase + benchH * nb : zBase - benchH * nb):F2}m</b>"
+                 + (sideNote.Length > 0 ? " · ⚠" + sideNote : "") + (rowsNote.Length > 0 ? " · ⚠" + rowsNote : "")
                  + $" · {rlog}{vseen} · 줄은 <b>닫아서</b> 넣었다({rowsC.Count}개)\n" + dl;
         }
         catch (System.Exception ex)
@@ -433,13 +455,18 @@ public sealed class CreateGradingCommand
         var rcm = wz.RefCum ?? GradingGeometry.CumLen2D(rul);
         double rTot = rcm[rcm.Length - 1];
         double spanW = wz.T1 >= wz.T0 ? wz.T1 - wz.T0 : rTot - wz.T0 + wz.T1;
-        double zBase = GradingGeometry.PointAtParam(rul, rcm, wz.T0).Z;
+        // ★★[v102.0 · JACK 0929 «성토=구간 최고점, 절토=구간 최저점»] 옹벽 머리(첫 줄) 높이 — 구간 시작점만 쓰면 기운 계획선에서
+        //   폴리곤 테두리에 턱이 나 합성이 판정 3이었다. 평평하면 시작점과 같다(현장 105m)
+        double zStart = GradingGeometry.PointAtParam(rul, rcm, wz.T0).Z;
+        double zBase = WallInPoly.HeadZ(rul, rcm, wz.T0, spanW, wUp);
+        string headNote = System.Math.Abs(zBase - zStart) > 1e-9
+            ? $"    ★옹벽 머리 {zBase:F3}m = 구간 {(wUp ? "최저" : "최고")}(시작점 {zStart:F3}m와 {zBase - zStart:+0.000;-0.000}m)\n" : "";
 
         // ── ★★★[JACK 0917] <b>손으로 그린 것이 있으면 그것을 쓴다.</b> ──
         //   <para>한 번 쓰고 <b>비운다</b> — 안 비우면 다음 실행이 <b>지난번에 그린 것</b>을 제 것인 양 쓴다.</para>
         //   <para>못 쓰게 생겼으면(제 몸을 지르거나 넓이가 없으면) <b>막지 않고</b>
         //   계산한 띠로 물러난다. 다만 <b>왜 안 썼는지</b>는 반드시 적는다.</para>
-        string manualNote = manualWhy;
+        string manualNote = manualWhy + headNote;
         {
             if (manual != null && manual.Count >= 3)
             {
@@ -454,11 +481,11 @@ public sealed class CreateGradingCommand
                         new System.Collections.Generic.List<System.Collections.Generic.List<Point3>> { plM },
                         "DH-가상폴리곤", PolyAci);
                     string wallNote = BuildWallInPolygon(db, tr, mp, zBase, wUp, p, ground, groundId);
-                    return $"    ★<b>손으로 그린 폴리곤</b>을 썼다 — 'DH-가상폴리곤' <b>{mp.Count}점 / {mA:F1}㎡</b>"
+                    return manualNote + $"    ★<b>손으로 그린 폴리곤</b>을 썼다 — 'DH-가상폴리곤' <b>{mp.Count}점 / {mA:F1}㎡</b>"
                          + $" · 표고 {zBase:F2}m · 계산한 띠는 <b>안 썼다</b> · DHRESET이 걷어 간다\n"
                          + wallNote;
                 }
-                manualNote = $"    ⚠<b>손으로 그린 폴리곤을 못 썼다</b>(점 {mp.Count}개"
+                manualNote += $"    ⚠<b>손으로 그린 폴리곤을 못 썼다</b>(점 {mp.Count}개"
                            + $" · 제 몸을 안 지르는가 {(mOk ? "예" : "<b>아니오</b>")}"
                            + $" · 넓이 {mA:F1}㎡) — <b>계산한 띠</b>로 간다\n";
             }
@@ -589,7 +616,7 @@ public sealed class CreateGradingCommand
         //
         //   <para>→ <b>DoGrade가 어느 길로 가든 반드시 지나는 이 자리</b>에서 꺼낸다.
         //   꺼내는 순간 정적은 비고, 값은 아래로 <b>인자로</b> 내려간다.</para>
-        var manualPoly = GradingSettings.TakeWallPolyManual(doc.Name, out string manualWhy);
+        //   ★[v102.0 코드 검토 낮음 4] 그 «반드시 지나는 자리»도 앞에 일찍 빠지는 곳이 둘 있었다 — 진입 즉시로 옮겼다(DoGradeInner 첫머리).
 
         try
         {
@@ -741,25 +768,75 @@ public sealed class CreateGradingCommand
                 //     구간이 없으면 여기는 <b>보통 정지 작업</b>이므로 종전 길로 그대로 간다.
                 if (GradingSettings.WallPolygonOnly && (wallZoneCut.Count > 0 || wallZoneFill.Count > 0))
                 {
+                    SlopeZone? wzF = null; bool wUpF = true; string wSideF = ""; int nWZ = wallZoneCut.Count + wallZoneFill.Count;
+                    // ★★[v102.0 · 계획 4판 §3 · 검토 r3 M3·M4 · r4 중간 4·5] <b>고른 구간</b>을 짓는다 — 폴리곤을 그렸든 Esc였든.
+                    //   <para>종전엔 «절토 먼저 · 첫 구간»이라, 번들에 지난 절토 옹벽 구간이 남은 도면에서 성토 선을 고르면 <b>지난 절토 옹벽</b>을 다시 지었다.</para>
+                    //   <para>①같은 자(링 객체 — 같은 명령 안에서는 적용이 구간에 붙인 그 객체)이면 T가 뜻이 있다 — T로 가장 많이 겹치는 구간.
+                    //   ②없으면 <b>기하로</b> 양방향 겹침(고른 구간 표본이 구간 안 · 구간 표본이 고른 구간 안 — 끝점은 빼고) — 옛 큰 구간이 새 작은 구간을 이기지 않게.
+                    //   ③고른 기억이 있는데 못 찾으면 첫 구간으로 새지 않고 <b>지우기 전에</b> 멈춘다(검토 r4 낮음 3).</para>
+                    string pickNote = ""; bool pickStop = false;
+                    if (wallPick != null)
+                    {
+                        var zsP = wallPick.Up ? wallZoneCut : wallZoneFill;
+                        var cumBp = GradingGeometry.CumLen2D(boundary);
+                        var pz = new SlopeZone { T0 = wallPick.T0, T1 = wallPick.T1, Ref = wallPick.Ruler };
+                        double bestT = 0; string how = "";
+                        foreach (var z in zsP)
+                        {
+                            if (!ReferenceEquals(z.Ref, wallPick.Ruler)) continue;
+                            double tot = (z.RefCum ?? cumBp)[^1];
+                            double ov = TOverlap(wallPick.T0, wallPick.T1, z, tot);
+                            if (ov > bestT) { bestT = ov; wzF = z; how = $"같은 자 T 겹침 {ov:P0}"; }
+                        }
+                        if (wzF == null)
+                        {
+                            int bestG = 0;
+                            foreach (var z in zsP)
+                            {
+                                int fwd = PickHits(pz, z, boundary, cumBp), back = PickHits(z, pz, boundary, cumBp);
+                                if (fwd == 0) continue;
+                                if (fwd + back > bestG) { bestG = fwd + back; wzF = z; how = $"기하 겹침 고른→구간 {fwd}/24 · 구간→고른 {back}/24"; }
+                            }
+                        }
+                        if (wzF != null) { wUpF = wallPick.Up; wSideF = wUpF ? "절토" : "성토"; pickNote = $"고른 구간({wSideF} [{wallPick.T0:F1}..{wallPick.T1:F1}]) — {how}"; }
+                        else
+                        {
+                            pickStop = true; manualPoly = null;
+                            pickNote = $"⚠고른 구간({(wallPick.Up ? "절토" : "성토")} [{wallPick.T0:F1}..{wallPick.T1:F1}])을 옹벽 구간에서 <b>못 찾았다</b>"
+                                     + $"(절토 옹벽 구간 {wallZoneCut.Count} · 성토 {wallZoneFill.Count}) — 엉뚱한 옹벽을 짓지 않고 멈춘다(순수옹벽·데이라잇은 그대로 · "
+                                     + "지난 옹벽 합성은 계획부지 생성 들머리에서 이미 풀렸다) · 옹벽 변환에서 다시 고른 뒤 «옹벽 합성»";
+                            WallDaylightBuilder.Summaries.Clear();          // ★[코드 검토 낮음 1] 지난 실행의 데이라잇 요약을 이번 결과처럼 찍지 않는다
+                            WallDaylightBuilder.EraseCount = 0; WallDaylightBuilder.EraseNote = "";   // ★[재검토 1] «지난 데이라잇 N개는 지웠다»도 지난 실행 값이다
+                        }
+                    }
+                    else
+                    {
+                        foreach (var (zs, upv, nm) in new[] { (wallZoneCut, true, "절토"), (wallZoneFill, false, "성토") })
+                            foreach (var z in zs) { if (wzF == null) { wzF = z; wUpF = upv; wSideF = nm; } }
+                        // ★[검토 r3 M4 · r4 중간 4] 기억이 없을 때(계획부지 다시 생성 · 사면 변환 · Civil 다시 켬)는 종전 규칙 — 구간이 둘 이상이면 무슨 일이 났는지 알린다
+                        //   (여러 옹벽 관리는 JACK이 정한 다음 단계 — 알려진 한계)
+                        if (nWZ >= 2)
+                            pickNote = $"⚠옹벽 구간이 {nWZ}개(절토 {wallZoneCut.Count} · 성토 {wallZoneFill.Count})인데 고른 기억이 없다(계획부지 다시 생성 · 사면 변환 · Civil 다시 켬) — "
+                                     + $"지난 옹벽 합성을 풀고 순수옹벽·데이라잇을 지웠고, <b>{wSideF} 첫 구간</b>의 계산한 폴리곤만 그렸다 · 옹벽을 다시 지으려면 옹벽 변환에서 그 선을 고르세요";
+                    }
                     // ★[검토 0918 · 중간 6] 지난 실행의 데이라잇을 <b>먼저</b> 지운다 — 이번에 못 만들면
-                    //   (손 폴리곤 거절 · 옹벽 못 세움 · 예외) 지난 선이 새것처럼 남는다.
-                    try { WallDaylightBuilder.EraseOld(db, tr, pureToo: true, protect: groundId); } catch { }
-                    SlopeZone? wzF = null; bool wUpF = true; string wSideF = ""; int nWZ = 0;
-                    foreach (var (zs, upv, nm) in new[] { (wallZoneCut, true, "절토"), (wallZoneFill, false, "성토") })
-                        foreach (var z in zs) { nWZ++; if (wzF == null) { wzF = z; wUpF = upv; wSideF = nm; } }
+                    //   (손 폴리곤 거절 · 옹벽 못 세움 · 예외) 지난 선이 새것처럼 남는다. ★[검토 r4 낮음 3] 고른 구간을 못 찾아 멈추면 안 지운다
+                    if (!pickStop) { try { WallDaylightBuilder.EraseOld(db, tr, pureToo: true, protect: groundId); } catch { } }
                     var sbP = new System.Text.StringBuilder();
                     sbP.Append("[DHGRADE 진단] " + System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
                         + "\n■ <b>폴리곤만 만든다</b>(WallPolygonOnly) — 정지면은 <b>안 건드린다</b>"
                         + "(그래서 <b>다시 만들지 않는다</b> — 0916 실측으로 그 재생성이 16.1초 중 16초였다)\n");
                     if (compLog.Length > 0) sbP.Append("■ [옹벽 합성] " + compLog + "\n");
-                    if (wzF == null)
+                    if (pickNote.Length > 0) sbP.Append("  " + pickNote + "\n");
+                    if (pickStop) { }
+                    else if (wzF == null)
                         sbP.Append("  ⚠옹벽 구간이 없다(수직 구배 규칙을 가진 <b>부분 지정</b> 구간 0개)"
                             + $" · 절토 구간 {cutZones.Count} · 성토 구간 {fillZones.Count}"
                             + " — 구간을 다시 고르세요.\n");
                     else
                     {
                         sbP.Append($"  ★구간 — {wSideF} · [{wzF.T0:F1}..{wzF.T1:F1}]"
-                            + (nWZ > 1 ? $" (옹벽 구간 {nWZ}개 중 <b>첫 구간</b>만)" : "") + "\n");
+                            + (nWZ > 1 ? $" (옹벽 구간 {nWZ}개 중 {(wallPick != null ? "<b>고른 구간</b>" : "<b>첫 구간</b>")}만)" : "") + "\n");
                         try { sbP.Append(BuildWallBoxPolygon(db, tr, wzF, wUpF, p, ground, boundary, 0, manualPoly, manualWhy, groundId)); }
                         catch (System.Exception bex)
                         { sbP.Append($"  ⚠폴리곤 만들기가 <b>터졌다</b> — {bex.GetType().Name}: {bex.Message}\n"); }
@@ -795,7 +872,10 @@ public sealed class CreateGradingCommand
                     sbP.Append($"\n■ 걸린 시간 — {stw.Report()}\n");
                     tr.Commit();
                     try { DiagLog.Reset(sbP.ToString()); } catch { }
-                    try { ed.WriteMessage("\n[DHGRADE] 폴리곤만 만들었습니다(정지면은 그대로). 진단 로그를 보세요."); } catch { }
+                    try { ed.WriteMessage(pickStop ? "\n[DHGRADE] 고른 옹벽 구간을 못 찾아 멈췄습니다(아무것도 안 지었다). 진단 로그를 보세요."
+                                                   : "\n[DHGRADE] 폴리곤만 만들었습니다(정지면은 그대로). 진단 로그를 보세요."); } catch { }
+                    if (pickNote.StartsWith("⚠"))
+                        try { ed.WriteMessage("\n[DHGRADE] " + System.Text.RegularExpressions.Regex.Replace(pickNote, "<[^>]+>", "")); } catch { }
                     // ★[JACK 0918] 데이라잇 한 줄 — 테두리로 닫은 길이·버린 고리·⚠를 <b>화면에도</b> 밝힌다
                     try
                     {
@@ -2876,6 +2956,38 @@ public sealed class CreateGradingCommand
 
     /// <summary>[옹벽 유지 0729] 기존 구간과 새 선택 구간 병합 — 새 구간과 '겹치는' 기존 구간은 버림(교체 관례),
     /// 안 겹치는 기존 구간은 유지. 결과 = 새 구간 + 유지된 기존 구간.</summary>
+    /// <summary>★[v102.0 · 계획 4판 §3 · 검토 r3 M3 · r4 중간 5] 구간 <paramref name="from"/>의 표본 24점(끝점은 뺀 가운데 — 경계 비교의 부동소수 흔들림을 피한다) 중
+    /// 구간 <paramref name="to"/> 안에 드는 수 — <b>기하로</b> 잰다(자가 달라도 된다).</summary>
+    private static int PickHits(SlopeZone from, SlopeZone to, System.Collections.Generic.IReadOnlyList<Point3> planB, double[] planCum)
+    {
+        var poly = from.Ref ?? planB; var pc = from.RefCum ?? planCum;
+        if (pc == null || pc.Length < 2) return 0;
+        double tot = pc[pc.Length - 1];
+        double t0 = from.T0, t1 = from.T1 >= from.T0 ? from.T1 : from.T1 + tot;
+        int n = 0;
+        for (int k = 0; k < 24; k++)
+        {
+            double t = t0 + (t1 - t0) * (k + 0.5) / 24.0;
+            var q = GradingGeometry.PointAtParam(poly, pc, ((t % tot) + tot) % tot);
+            if (to.ContainsAt(q.X, q.Y, planB, planCum)) n++;
+        }
+        return n;
+    }
+
+    /// <summary>★[v102.0 · 검토 r4 중간 5] 같은 자 위 두 구간의 겹침 비율(고른 구간 [t0,t1] 표본 중 구간 <paramref name="z"/> 안 · 랩 대응).</summary>
+    private static double TOverlap(double t0, double t1, SlopeZone z, double tot)
+    {
+        if (tot <= 1e-9) return 0;
+        double span = GradingGeometry.SpanOf(t0, t1, tot);
+        int n = 0;
+        for (int k = 0; k < 48; k++)
+        {
+            double t = t0 + span * (k + 0.5) / 48.0;
+            if (z.Contains(((t % tot) + tot) % tot)) n++;
+        }
+        return n / 48.0;
+    }
+
     private static System.Collections.Generic.List<SlopeZone> MergeZones(
         System.Collections.Generic.List<SlopeZone>? existing,
         System.Collections.Generic.List<SlopeZone> newZones,

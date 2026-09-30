@@ -959,6 +959,7 @@ internal static class ZoneEditCommon
             //   <para>★<b>못 그려도 막지 않는다.</b> 취소하거나 점이 모자라면 계산한 띠로 물러난다 —
             //   폴리곤 하나 때문에 옹벽 변환이 통째로 멈출 이유가 없다.</para>
             GradingSettings.SetWallPolyManual(null, "");
+            GradingSettings.WallZonePick = null;      // ★[v102.0 · 계획 4판 §3] 고른 구간도 같이 비운다 — 아래 부분 지정일 때만 다시 둔다
             // ★★★[JACK 0918 <i>"선택구간 말고 <b>전체구간</b>을 해도 시점·종점 선택하는 게 뜨는데 그건 아니야.
             //   전체구간 선택 시는 <b>기존 로직처럼</b> 되어야 해"</i>]
             //   <para><b>부분 지정일 때만</b> 손으로 그린다. 전체구간은 손도 안 댄다 —
@@ -969,6 +970,14 @@ internal static class ZoneEditCommon
             bool drawPart = wallMode && pick != null && partArc.ContainsKey(pick.Value);
             if (wallMode && pick != null && !drawPart)
                 Log("  전이면 폴리곤 — <b>안 그린다</b>(전체구간 변환이다 — 종전 길로 간다)");
+            // ★★[v102.0 · 계획 4판 §3 · 검토 r4 중간 5] 고른 구간을 <b>먼저</b> 둔다 — 클립링이 없어 손 그리기를 건너뛰어도(Esc여도) 정지 쪽이 이 구간을 짓는다.
+            //   자는 아래 적용이 구간에 붙이는 것과 <b>같은 링 객체</b>(lineRef) · 없으면 계획 폴리곤(null)
+            if (drawPart)
+            {
+                var pArc0 = partArc[pick!.Value];
+                GradingSettings.WallZonePick = new GradingSettings.WallPickInfo(pick.Value.up, pArc0.T0, pArc0.T1,
+                    lineRef.TryGetValue(pick.Value, out var rpPick) ? rpPick : null, doc.Name);
+            }
             if (drawPart && region != null)
             {
                 var dayR = pick.Value.up ? region.CutClipRing : region.FillClipRing;
@@ -1091,6 +1100,8 @@ internal static class ZoneEditCommon
             if (groundId.IsNull) groundId = NoriCommand.FindByHandle(db, region!.GroundHandle);
             if (planId.IsNull || groundId.IsNull)
             {
+                // ★[v102.0 코드 검토 낮음 4] 여기서 빠지면 방금 둔 손 폴리곤·고른 구간이 다음 실행으로 샌다 — 비운다
+                GradingSettings.SetWallPolyManual(null, ""); GradingSettings.WallZonePick = null;
                 AcadApp.ShowAlertDialog("정지면을 재생성하려면 [정지면 생성](DHGRADE)을 먼저 한 번 실행해야 합니다.");
                 return;
             }
@@ -1175,6 +1186,7 @@ internal static class ZoneEditCommon
                                 && (rSame.StringResult ?? "").Trim().ToUpperInvariant() == "Y";
                     if (!goOn)
                     {
+                        GradingSettings.SetWallPolyManual(null, ""); GradingSettings.WallZonePick = null;   // ★[v102.0 코드 검토 낮음 4] 다음 실행으로 새지 않게
                         ed.WriteMessage("\n → 그대로 두었습니다 — 값을 바꿔 다시 해 보세요.");
                         Log($"■ {cmdLabel} — 값이 같아 재생성을 <b>안 했다</b>(사용자가 아니오)");
                         return;
