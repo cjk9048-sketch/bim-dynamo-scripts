@@ -143,6 +143,12 @@ public sealed class WallCompositeCommand
             catch (System.Exception ex2) { log.AppendLine("임시 면 치우기 실패: " + ex2); }
         }
         summary += $" · 전체 {sw.ElapsedMilliseconds / 1000.0:F1}초";
+        // ★[v102.2 · 계획 검토 중간 8] 옹벽 변환이 이어서 태운 합성이 못 했으면 알림창 — 버튼이 없어져 명령줄 한 줄로는 묻힌다
+        bool auto = GradingSettings.AutoCompDoc.Length > 0 && GradingSettings.AutoCompDoc == doc.Name;
+        GradingSettings.AutoCompDoc = "";
+        if (auto && (crashed || summary.StartsWith("⚠")))
+            try { AcadApp.ShowAlertDialog("옹벽 합성을 못 했습니다(정지면_DH는 합성 전 그대로).\n\n" + System.Text.RegularExpressions.Regex.Replace(summary, "<[^>]+>", "")
+                                          + "\n\n다시 하려면 명령줄에 DHWALLCOMP를 치세요. 자세한 것은 " + LogName); } catch { }
         log.AppendLine("■ " + summary);
         try { System.IO.File.WriteAllText(logPath, log.ToString()); WallDaylightBuilder.ArchiveDumpPublic(logPath); } catch { }
         try { ed.WriteMessage($"\n[옹벽 합성] {summary.Replace("<b>", "").Replace("</b>", "")}\n  로그: {logPath}\n"); } catch { }
@@ -506,7 +512,7 @@ public sealed class WallCompositeCommand
         GradingBuilder.SetSurfaceVisible(tr, PlanName, true);
         // 숨겨 둔 사이 붙은 ⚠(정의 구식) 풀기 — 구식일 때만(25만 면 재작성 + 스냅샷은 수 초 · 곧 새로 지을 면이면 헛일 — 계획 검토 v101.1 · 낮음 5)
         try { if (b0.IsOutOfDate) GradingBuilder.RebuildSurfacesByBaseName(tr, PlanName); } catch { }
-        return Done(true, "지난 옹벽 합성을 풀었다 — 정지면_DH를 합성 전으로 되돌렸다(«옹벽 합성»을 다시 누르세요)");
+        return Done(true, "지난 옹벽 합성을 풀었다 — 정지면_DH를 합성 전으로 되돌렸다(옹벽 변환이 옹벽을 지으면 이어서 다시 합성한다)");
     }
 
     /// <summary>못 한 길 — 바꿔 끼우기 전이거나 되돌렸으므로 정지면_DH·보이기는 명령 전 그대로다.</summary>

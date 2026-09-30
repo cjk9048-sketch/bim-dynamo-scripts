@@ -52,9 +52,10 @@ internal static class WallPolyDraw
     /// <param name="seg">고른 구간의 점들(안쪽 변) — 첫 점이 T0, 끝 점이 T1.</param>
     /// <param name="nStart">구간 <b>첫 끝</b>에서의 바깥쪽 법선 — 이 반대쪽으로는 못 그린다.</param>
     /// <param name="nEnd">구간 <b>끝 끝</b>에서의 바깥쪽 법선.</param>
+    /// <param name="outwardSide">★[v102.2] 바깥쪽이 구간 진행의 왼쪽 +1 · 오른쪽 −1 · 모름 0(<see cref="GradingGeometry.OutwardSideOfTravel"/>) — 폴리곤을 어느 쪽으로 두르나.</param>
     internal static List<Point3>? Run(Document doc, IReadOnlyList<Point3> dayRing,
                                       IReadOnlyList<Point3> seg,
-                                      (double X, double Y) nStart, (double X, double Y) nEnd,
+                                      (double X, double Y) nStart, (double X, double Y) nEnd, int outwardSide,
                                       out List<Point3>? wallChain, out List<bool>? isWall, out string log)
     {
         log = ""; wallChain = null; isWall = null;
@@ -126,6 +127,7 @@ internal static class WallPolyDraw
         var sb = new System.Text.StringBuilder();
         Point3? pA = null, pB = null;
         Point3? dayA = null, dayB = null;      // 데이라잇에 닿은 자리(여유를 안 더한 것)
+        (double X, double Y) dirA = (0, 0), dirB = (0, 0);   // ★[v102.2] 찍은 방향(단위) — 측선이 이 방향 그대로 여유 테두리까지 간다
         try
         {
             // ── ①고른 구간을 <b>두꺼운 빨강</b>으로 — 명령이 끝날 때까지 남는다 ──
@@ -208,10 +210,10 @@ internal static class WallPolyDraw
                     double ux = (fx - from.X) / (run < 1e-9 ? 1 : run), uy = (fy - from.Y) / (run < 1e-9 ? 1 : run);
                     double mg = System.Math.Max(0, GradingSettings.WallPolygonMargin);
                     var got = new Point3(fx + ux * mg, fy + uy * mg, z);
-                    if (step == 0) { pA = got; dayA = new Point3(fx, fy, z); }
-                    else { pB = got; dayB = new Point3(fx, fy, z); }
-                    sb.Append($"\n      {nm} — 데이라잇 ({fx:F1},{fy:F1}) · 구간 끝에서 {run:F1}m"
-                            + $" → 여유 {mg:0.#}m 더 <b>({got.X:F1},{got.Y:F1})</b>");
+                    if (step == 0) { pA = got; dayA = new Point3(fx, fy, z); dirA = (ux, uy); }
+                    else { pB = got; dayB = new Point3(fx, fy, z); dirB = (ux, uy); }
+                    sb.Append($"\n      {nm} — 데이라잇 ({fx:F1},{fy:F1}) · 구간 끝에서 {run:F1}m · 찍은 방향 ({ux:F3},{uy:F3})"
+                            + " → 측선은 이 방향 그대로 «데이라잇 + 여유» 테두리까지(모서리는 아래 조립 줄)");
 
                     // ★찍은 선은 <b>그대로 둔다</b> — JACK: "클릭하면 선이 보이는 상태에서 종점 선택".
                     //   <c>live</c>에 남아 있으므로 명령이 끝날 때 한꺼번에 걷힌다.
@@ -230,28 +232,16 @@ internal static class WallPolyDraw
 
         if (pA == null || pB == null) { log = "  ⚠두 점을 다 못 받았다.\n"; return null; }
 
-        // ── ④닫는다 — 구간(안쪽 변) → 종점 → 시점 ──
+        // ── ④닫는다 — 구간(안쪽 변) → 시점 측선 → 바깥 변 → 종점 측선 ──
         // ══ ★★★[JACK 0917 스샷 <i>"이런 경우 폴리곤이 데이라잇 안에 들어와 버려"</i>] ═══════
         //
         //   <para>시점·종점을 데이라잇 밖에 잡아도 <b>그 둘을 이은 직선</b>은,
         //   데이라잇이 가운데서 부풀어 있으면 <b>안으로 파고든다</b>.
         //   그러면 폴리곤이 데이라잇 띠를 다 못 품고 그 자리에 옹벽이 모자란다.</para>
         //
-        //   <para>→ 바깥 변을 <b>직선이 아니라 데이라잇을 따라</b> 두른다(여유만큼 밖으로 밀어서).
-        //   못 두르면 <b>직선으로 물러나되 로그에 적는다</b> — 조용히 안으로 파고들지 않게.</para>
+        //   <para>→ 바깥 변을 <b>직선이 아니라 «데이라잇 + 여유» 테두리를 따라</b> 두른다(S134 · 이음매 없이 한 줄).</para>
         double mgF = System.Math.Max(0, GradingSettings.WallPolygonMargin);
-        var mid = seg[seg.Count / 2];
-        var arc = (dayA != null && dayB != null)
-            ? GradingGeometry.RingArcOutward(dayRing, dayA.Value.X, dayA.Value.Y,
-                  dayB.Value.X, dayB.Value.Y, mid.X, mid.Y, mgF)
-            : new List<Point3>();
 
-        // ★★★[하네스 S134] <b>이음매를 없앤다.</b>
-        //   <para>시점·종점을 <b>광선 방향</b>으로 10m 밀고, 두르는 선은 <b>데이라잇 법선</b>으로 10m 밀면
-        //   두 밀기 방향이 달라 이음매에 <b>작은 홈</b>이 생긴다 —
-        //   S134 실측: 바깥 변 45자리 중 <b>1자리</b>가 데이라잇 안으로 들어갔다.</para>
-        //   <para>→ 바깥 변을 <b>한 줄로</b> 만든다. 시점·종점도 두르는 선의 <b>첫 점·끝 점</b>을 그대로 쓴다.
-        //   찍은 방향은 「어디서 시작해 어디서 끝낼지」를 정하는 데 쓰고, <b>미는 방향은 하나</b>다.</para>
         // ★★★[JACK 0918] <b>측선 점을 링에도 넣는다.</b> 종전엔 링이 «선택구간 + 폐합면»뿐이라
         //   측선이 <b>변 하나</b>였다 — 그러면 줄이 그 변을 따라갈 수가 없다.
         //   같이 <b>점마다 옹벽인지</b> 표를 만든다: 선택구간·측선 = 옹벽 · 폐합면 = 수직.
@@ -263,45 +253,20 @@ internal static class WallPolyDraw
                                      + (seg[i + 1].Y - seg[i].Y) * (seg[i + 1].Y - seg[i].Y));
             if (seg.Count >= 2) spR = System.Math.Max(0.5, Ls / System.Math.Max(1, seg.Count - 1));
         }
-        var ring = new List<Point3>();
-        var flag = new List<bool>();
-        void Add(Point3 q, bool w) { ring.Add(new Point3(q.X, q.Y, z)); flag.Add(w); }
-        void Side(Point3 pa, Point3 pb, bool skipFirst)
-        {
-            double dx = pb.X - pa.X, dy = pb.Y - pa.Y;
-            double Lw = System.Math.Sqrt(dx * dx + dy * dy);
-            int nw = System.Math.Max(1, (int)System.Math.Ceiling(Lw / System.Math.Max(0.1, spR)));
-            for (int i = skipFirst ? 1 : 0; i <= nw; i++)
-                Add(new Point3(pa.X + dx * i / nw, pa.Y + dy * i / nw, z), true);   // 측선 = 옹벽
-        }
-        foreach (var q in seg) Add(q, true);                        // 선택구간 = 옹벽 (end0 → end1)
-        if (arc.Count >= 2)
-        {
-            // 시점(end1 쪽)에서 종점(end0 쪽)으로 가는 차례가 되게 맞춘다
-            double d0 = (arc[0].X - pA.Value.X) * (arc[0].X - pA.Value.X)
-                      + (arc[0].Y - pA.Value.Y) * (arc[0].Y - pA.Value.Y);
-            double dN = (arc[arc.Count - 1].X - pA.Value.X) * (arc[arc.Count - 1].X - pA.Value.X)
-                      + (arc[arc.Count - 1].Y - pA.Value.Y) * (arc[arc.Count - 1].Y - pA.Value.Y);
-            if (dN < d0) arc.Reverse();
-            Side(new Point3(seg[seg.Count - 1].X, seg[seg.Count - 1].Y, z), arc[0], true);   // 측선(시점 쪽)
-            foreach (var q in arc) Add(q, false);                   // 폐합면 = <b>수직</b>
-            Side(arc[arc.Count - 1], new Point3(seg[0].X, seg[0].Y, z), true);               // 측선(종점 쪽)
-            if (flag.Count > 0) { ring.RemoveAt(ring.Count - 1); flag.RemoveAt(flag.Count - 1); } // 닫음점 중복 제거
-            sb.Append($"\n      바깥 변(폐합면) — <b>데이라잇을 따라 {arc.Count}점</b> 한 줄"
-                    + $"(여유 {mgF:0.#}m 밖으로 · 이음매 없음)");
-        }
-        else
-        {
-            // 못 둘렀다 — 찍은 두 점을 직선으로 이어 두되 <b>소리 내어</b> 적는다.
-            Side(new Point3(seg[seg.Count - 1].X, seg[seg.Count - 1].Y, z), pA.Value, true);
-            Add(pB.Value, false);
-            Side(pB.Value, new Point3(seg[0].X, seg[0].Y, z), true);
-            if (flag.Count > 0) { ring.RemoveAt(ring.Count - 1); flag.RemoveAt(flag.Count - 1); }
-            sb.Append("\n      ⚠바깥 변 — 데이라잇을 <b>못 둘렀다</b> → <b>직선으로 이었다</b>"
-                    + "(데이라잇이 부푼 자리에서 폴리곤이 안으로 파고들 수 있다)");
-        }
-        bool simple = GradingGeometry.RingIsSimple(ring);
-        double area = GradingGeometry.RingAreaNts(ring);
+        // ★★[v102.2 · JACK 0930 «끝선을 꺾지 않고 연장선처럼 뺐는데 강제로 꺾여서 옹벽이 생성됐다»] 조립은 Core(WallInPoly.AssembleManual · 하네스 S146이 같은 함수를 잰다) —
+        //   측선 = 구간 끝 → <b>찍은 방향 그대로</b> «데이라잇 + 여유» 테두리를 처음 빠져나가는 점 · 두 점 사이는 그 테두리를 따라(폐합면 · 수직).
+        //   종전(0917 S134)은 두른 선의 끝 점(데이라잇에 닿은 점에서 테두리의 가장 가까운 꼭짓점)을 모서리로 써 측선이 찍은 방향에서 틀어졌다(0930 16:58 — 7.0° · 7.8°).
+        //   두르는 쪽은 폴리곤이 구간의 <b>바깥쪽</b>(자 고리가 도는 방향 — outwardSide)에 서는 갈래(코드 검토 중간 1 — 좁은 부지에서 한 바퀴 돌던 자리).
+        //   안 되면(테두리 못 만듦 · 광선 안 닿음 · 제 몸 지름 · 넓이) 종전 모서리로 물러나고 까닭과 틀어진 각을 적는다 · 그것도 안 되면 null(계산한 띠로).
+        var ring = WallInPoly.AssembleManual(seg, dirA, dirB, outwardSide, dayA ?? pA.Value, dayB ?? pB.Value, dayRing, mgF, spR, z,
+                                             out var flag, out bool usedRay, out string asmNote)
+                   ?? new List<Point3>();
+        if (ring.Count == 0) flag = new List<bool>();               // ★[코드 검토 낮음 10] 물러난 링도 못 쓰면 표도 비운다(«수직 −N» 안 찍게)
+        sb.Append("\n      " + asmNote);
+        if (!usedRay || asmNote.Contains("⚠"))
+            try { ed.WriteMessage("\n[옹벽 폴리곤] " + System.Text.RegularExpressions.Regex.Replace(asmNote, "<[^>]+>", "")); } catch { }
+        bool simple = ring.Count >= 3 && GradingGeometry.RingIsSimple(ring);
+        double area = ring.Count >= 3 ? GradingGeometry.RingAreaNts(ring) : 0;
         sb.Insert(0, $"  ★<b>손으로 그린 폴리곤</b> — 구간 {seg.Count}점 + 시점·종점 2점"
             + $" → 꼭짓점 {ring.Count}개 · 넓이 <b>{area:F1}㎡</b>"
             + $"(데이라잇 바깥으로 <b>{System.Math.Max(0, GradingSettings.WallPolygonMargin):0.#}m</b> 여유)"

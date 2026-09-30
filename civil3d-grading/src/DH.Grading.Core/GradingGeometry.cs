@@ -1712,23 +1712,13 @@ public static class GradingGeometry
     /// <para>편 뒤에는 점이 확 줄어 변 하나가 껑충 뛴다 — 그 긴 변이 경계 주입 때 삼각망을 흔든다.</para></summary>
     private const double ArcStep = 2.0;
 
-    public static List<Point3> RingArcOutward(IReadOnlyList<Point3>? ring,
-        double aX, double aY, double bX, double bY, double nearX, double nearY, double out_)
+    /// <summary>★[v102.2] <see cref="RingArcOutward"/>가 쓰는 <b>여유 테두리</b> — 데이라잇을 <paramref name="out_"/>만큼 부풀리고(닫기로 편 뒤 솎음) 가장 큰 폴리곤의 테두리.
+    /// 못 만들면 null(부르는 쪽이 원래 링을 쓴다). 손 폴리곤의 측선이 찍은 방향으로 이 테두리까지 간다(WallInPoly.AssembleManual).</summary>
+    public static List<Point3>? BufferedRingOutward(IReadOnlyList<Point3>? ring, double out_)
     {
-        var res = new List<Point3>();
-        if (ring == null || ring.Count < 3) return res;
+        if (ring == null || ring.Count < 3) return null;
         double z = ring[0].Z;
-
-        // ══ ★★★[JACK 0917 로그 <i>"제 몸을 지르지 않는가 <b>아니오</b>"</i>] ═══════════════
-        //
-        //   <para><b>점마다 법선으로 미는 것은 틀렸다.</b> 링이 촘촘하고 오목한 데가 있으면
-        //   그 밀기가 <b>서로 겹쳐 접힌다</b> — 현장 실측: 두른 점 266개로 만든 폴리곤이
-        //   <b>제 몸을 질렀고</b>, 그래서 관문에 걸려 계산한 띠로 물러났다
-        //   (JACK: <i>"그냥 선택 노선의 직각방향으로만 생성돼"</i>).</para>
-        //
-        //   <para>→ <b>NTS 버퍼</b>에 맡긴다. 버퍼는 접히는 자리를 <b>스스로 정리</b>해
-        //   언제나 <b>성한 폴리곤</b>을 준다. 그 테두리에서 호를 뜬다.</para>
-        var work = ring;
+        List<Point3>? work = null;
         if (out_ > 1e-9)
         {
             try
@@ -1798,8 +1788,104 @@ public static class GradingGeometry
                     }
                 }
             }
-            catch { /* 버퍼가 안 되면 원래 링에서 호만 뜬다(밀지 않음) */ }
+            catch { /* 버퍼가 안 되면 null — 부르는 쪽이 원래 링을 쓴다 */ }
         }
+        return work;
+    }
+
+    /// <summary>★[v102.2] 링 위 두 점(각자 놓인 변 번호) 사이의 호 — 양쪽으로 걸어 가운데가 <paramref name="nearX"/>,<paramref name="nearY"/>에 가까운 쪽.
+    /// 두 끝 점은 <b>그대로</b> 넣고 일정 간격으로 촘촘히 한다(<see cref="RingArcOutward"/>와 같은 간격).
+    /// <para>★[v102.2 코드 검토 중간 1] «가운데 번호 점»이 가까운 쪽은 좁은 부지에서 <b>한 바퀴 도는 쪽</b>을 고른다 — 손 폴리곤은 이제
+    /// <see cref="RingArcSides"/>로 두 갈래를 다 받아 돌리는 방향으로 가르고, 이 함수는 바깥쪽을 못 가를 때만 쓴다.</para></summary>
+    public static List<Point3> RingArcBetween(IReadOnlyList<Point3> work, double aX, double aY, int aEdge, double bX, double bY, int bEdge, double nearX, double nearY)
+    {
+        if (work == null || work.Count < 3) return new List<Point3>();
+        var (f, b) = RingPathsBetween(work, aX, aY, aEdge, bX, bY, bEdge);
+        double Score(List<Point3> p) { var m = p[p.Count / 2]; return (m.X - nearX) * (m.X - nearX) + (m.Y - nearY) * (m.Y - nearY); }
+        return CleanArc(Score(f) <= Score(b) ? f : b);
+    }
+
+    /// <summary>★[v102.2 · 코드 검토 중간 1] 링 위 두 점 사이의 <b>두 갈래를 다</b> 준다(둘 다 A → B 차례 · 끝 점 그대로 · 촘촘히).
+    /// <para>두 갈래는 A·B를 잇는 선(손 폴리곤이면 측선 + 구간)을 사이에 두고 <b>반대쪽</b>을 덮는다 — 어느 쪽인지는 부르는 쪽이
+    /// 폴리곤이 구간의 <b>바깥쪽</b>에 서는가(돌리는 방향)로 가른다(<c>WallInPoly.AssembleManual</c>).</para></summary>
+    public static (List<Point3> Fwd, List<Point3> Bwd) RingArcSides(IReadOnlyList<Point3> work, double aX, double aY, int aEdge, double bX, double bY, int bEdge)
+    {
+        if (work == null || work.Count < 3) return (new List<Point3>(), new List<Point3>());
+        var (f, b) = RingPathsBetween(work, aX, aY, aEdge, bX, bY, bEdge);
+        return (CleanArc(f), CleanArc(b));
+    }
+
+    /// <summary>겹친 점을 빼고 일정 간격으로 촘촘히 한다(두 끝 점 그대로).</summary>
+    private static List<Point3> CleanArc(List<Point3> path)
+    {
+        var res = new List<Point3>();
+        foreach (var q in path) if (res.Count == 0 || Math.Abs(res[^1].X - q.X) > 1e-9 || Math.Abs(res[^1].Y - q.Y) > 1e-9) res.Add(q);
+        if (res.Count >= 2) res = Densify(res, ArcStep);
+        return res;
+    }
+
+    /// <summary>링 위 두 점 사이의 두 갈래 — 앞으로 걷는 쪽 · 뒤로 걷는 쪽(날것 — A, 링 꼭짓점들, B).</summary>
+    private static (List<Point3> F, List<Point3> B) RingPathsBetween(IReadOnlyList<Point3> work, double aX, double aY, int aEdge, double bX, double bY, int bEdge)
+    {
+        int n = work.Count; double z = work[0].Z;
+        var A = new Point3(aX, aY, z); var B = new Point3(bX, bY, z);
+        double ParamOn(int e, Point3 p)
+        {
+            var u = work[e]; var v = work[(e + 1) % n];
+            double ex = v.X - u.X, ey = v.Y - u.Y, L2 = ex * ex + ey * ey;
+            return L2 < 1e-24 ? 0 : ((p.X - u.X) * ex + (p.Y - u.Y) * ey) / L2;
+        }
+        List<Point3> Fwd()
+        {
+            var r = new List<Point3> { A };
+            if (aEdge == bEdge && ParamOn(aEdge, A) <= ParamOn(bEdge, B)) { r.Add(B); return r; }
+            int i = (aEdge + 1) % n;
+            for (int g = 0; g <= n; g++) { r.Add(work[i]); if (i == bEdge) break; i = (i + 1) % n; }
+            r.Add(B); return r;
+        }
+        List<Point3> Bwd()
+        {
+            var r = new List<Point3> { A };
+            if (aEdge == bEdge && ParamOn(aEdge, A) >= ParamOn(bEdge, B)) { r.Add(B); return r; }
+            int i = aEdge;
+            for (int g = 0; g <= n; g++) { r.Add(work[i]); if (i == (bEdge + 1) % n) break; i = (i - 1 + n) % n; }
+            r.Add(B); return r;
+        }
+        return (Fwd(), Bwd());
+    }
+
+    /// <summary>★[v102.2] 점이 놓인 링 변 번호(가장 가까운 변).</summary>
+    public static int RingEdgeOf(IReadOnlyList<Point3> ring, double x, double y)
+    {
+        int n = ring.Count, best = -1; double bd = double.MaxValue;
+        for (int i = 0; i < n; i++)
+        {
+            var u = ring[i]; var v = ring[(i + 1) % n];
+            double ex = v.X - u.X, ey = v.Y - u.Y, L2 = ex * ex + ey * ey;
+            double t = L2 < 1e-24 ? 0 : Math.Clamp(((x - u.X) * ex + (y - u.Y) * ey) / L2, 0, 1);
+            double qx = u.X + ex * t, qy = u.Y + ey * t, d = (x - qx) * (x - qx) + (y - qy) * (y - qy);
+            if (d < bd) { bd = d; best = i; }
+        }
+        return best;
+    }
+
+    public static List<Point3> RingArcOutward(IReadOnlyList<Point3>? ring,
+        double aX, double aY, double bX, double bY, double nearX, double nearY, double out_)
+    {
+        var res = new List<Point3>();
+        if (ring == null || ring.Count < 3) return res;
+        double z = ring[0].Z;
+
+        // ══ ★★★[JACK 0917 로그 <i>"제 몸을 지르지 않는가 <b>아니오</b>"</i>] ═══════════════
+        //
+        //   <para><b>점마다 법선으로 미는 것은 틀렸다.</b> 링이 촘촘하고 오목한 데가 있으면
+        //   그 밀기가 <b>서로 겹쳐 접힌다</b> — 현장 실측: 두른 점 266개로 만든 폴리곤이
+        //   <b>제 몸을 질렀고</b>, 그래서 관문에 걸려 계산한 띠로 물러났다
+        //   (JACK: <i>"그냥 선택 노선의 직각방향으로만 생성돼"</i>).</para>
+        //
+        //   <para>→ <b>NTS 버퍼</b>에 맡긴다. 버퍼는 접히는 자리를 <b>스스로 정리</b>해
+        //   언제나 <b>성한 폴리곤</b>을 준다. 그 테두리에서 호를 뜬다.</para>
+        var work = (out_ > 1e-9 ? BufferedRingOutward(ring, out_) : null) ?? ring;
         int n = work.Count;
 
         static int Nearest(IReadOnlyList<Point3> r, double x, double y)
@@ -3383,6 +3469,16 @@ public static class GradingGeometry
         dx /= L; dy /= L;
 
         // 부호 있는 면적(신발끈) — 양수면 반시계.
+        bool ccw = RingA2(ring) > 0;
+        double nx = ccw ? dy : -dy;
+        double ny = ccw ? -dx : dx;
+        return new Point3(p.X + nx * len, p.Y + ny * len, p.Z);
+    }
+
+    /// <summary><see cref="OutwardAt"/>이 도는 방향을 가르는 부호 있는 면적의 두 배(신발끈 — 양수면 반시계).
+    /// <see cref="OutwardSideOfTravel"/>이 <b>같은 셈</b>을 써 울타리 법선과 폴리곤 두르는 쪽이 어긋날 수 없다.</summary>
+    private static double RingA2(IReadOnlyList<Point3> ring)
+    {
         double a2 = 0;
         int n = ring.Count;
         for (int i = 0; i < n; i++)
@@ -3390,10 +3486,18 @@ public static class GradingGeometry
             var u = ring[i]; var v = ring[(i + 1) % n];
             a2 += u.X * v.Y - v.X * u.Y;
         }
-        bool ccw = a2 > 0;
-        double nx = ccw ? dy : -dy;
-        double ny = ccw ? -dx : dx;
-        return new Point3(p.X + nx * len, p.Y + ny * len, p.Z);
+        return a2;
+    }
+
+    /// <summary>★[v102.2 · 재검토 중간 1] 고리를 <b>T가 느는 쪽으로</b> 걸을 때 바깥(<see cref="OutwardAt"/>이 가리키는 쪽)이 진행의 왼쪽이면 +1 · 오른쪽이면 −1 · 못 정하면 0.
+    /// <para>OutwardAt과 같은 규칙(반시계면 바깥은 오른쪽)이라 울타리 법선과 어긋나지 않고, <b>접선을 안 써</b> 구간 끝이 꼭짓점에 붙어도 흔들리지 않는다
+    /// (끝 법선으로 가르던 첫 고침은 T1이 꼭짓점이면 다음 변의 법선을 받아 못 갈랐다).</para></summary>
+    public static int OutwardSideOfTravel(IReadOnlyList<Point3>? ring)
+    {
+        if (ring == null || ring.Count < 3) return 0;
+        double a2 = RingA2(ring);
+        if (!(Math.Abs(a2) > 1e-9)) return 0;          // 넓이 없는 고리 · NaN
+        return a2 > 0 ? -1 : 1;
     }
 
     /// <summary>구간이 <b>고리 한 바퀴</b>인가 — 그러면 "안/밖"이라는 말 자체가 뜻을 잃는다.</summary>

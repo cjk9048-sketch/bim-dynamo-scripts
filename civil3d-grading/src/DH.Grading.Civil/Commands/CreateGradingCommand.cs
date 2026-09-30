@@ -804,7 +804,7 @@ public sealed class CreateGradingCommand
                             pickStop = true; manualPoly = null;
                             pickNote = $"⚠고른 구간({(wallPick.Up ? "절토" : "성토")} [{wallPick.T0:F1}..{wallPick.T1:F1}])을 옹벽 구간에서 <b>못 찾았다</b>"
                                      + $"(절토 옹벽 구간 {wallZoneCut.Count} · 성토 {wallZoneFill.Count}) — 엉뚱한 옹벽을 짓지 않고 멈춘다(순수옹벽·데이라잇은 그대로 · "
-                                     + "지난 옹벽 합성은 계획부지 생성 들머리에서 이미 풀렸다) · 옹벽 변환에서 다시 고른 뒤 «옹벽 합성»";
+                                     + "지난 옹벽 합성은 계획부지 생성 들머리에서 이미 풀렸다) · 옹벽 변환에서 다시 고르면 옹벽을 짓고 이어서 합성한다";
                             WallDaylightBuilder.Summaries.Clear();          // ★[코드 검토 낮음 1] 지난 실행의 데이라잇 요약을 이번 결과처럼 찍지 않는다
                             WallDaylightBuilder.EraseCount = 0; WallDaylightBuilder.EraseNote = "";   // ★[재검토 1] «지난 데이라잇 N개는 지웠다»도 지난 실행 값이다
                         }
@@ -893,6 +893,44 @@ public sealed class CreateGradingCommand
                     return;
                 }
 
+                // ★★[v102.2 · JACK 0930 «옹벽변환했던 걸 다시 사면변환할 때 전에 옹벽변환 부분이 사라질 수 있게»] 전체 경로(사면 변환 · 계획부지 생성) —
+                //   부분 지정 옹벽은 번들에 없어 이 재생성에서 빠진다(들머리가 합성도 풀었다). 그런데 가상옹벽_DH·폴리곤·데이라잇 선은 남고,
+                //   아래 3.5단계가 가상옹벽_DH를 <b>다시 켜서</b> 옛 옹벽이 남아 보였다 → 여기서 지운다(한 벌 구조 — 여러 옹벽이 남는 것은 v103).
+                string wallGone = "";
+                // ★[계획 검토 v102.2 · 높음 4] «이어서»는 앞 구역 합성(옹벽이 든 정지면)이 정지면_DH이전으로 굳어 새 구역의 바탕이다 — 옹벽이 지형에 남으니 기록을 지우지 않는다
+                //   ★[코드 검토 낮음 6] 알림은 옹벽 결과물이 <b>있을 때만</b> — 옹벽이 없던 도면에 «굳었다»를 매번 찍지 않는다
+                if (mode == GradeMode.Append)
+                {
+                    try
+                    {
+                        int nVa = GradingBuilder.CountSurfacesByBaseName(tr, "가상옹벽_DH", groundId), nPa = GradingBuilder.CountSurfacesByBaseName(tr, WallDaylightBuilder.PureName, groundId);
+                        if (nVa + nPa > 0)
+                            wallGone = $"이어서 — 앞 구역의 옹벽은 정지면_DH이전에 굳었다(옹벽 결과물 가상옹벽 {nVa} · 순수옹벽 {nPa}는 그대로 둔다)";
+                    }
+                    catch { }
+                }
+                else
+                try
+                {
+                    int nV = GradingBuilder.CountSurfacesByBaseName(tr, "가상옹벽_DH", groundId), nP = GradingBuilder.CountSurfacesByBaseName(tr, WallDaylightBuilder.PureName, groundId);
+                    WallDaylightBuilder.EraseOld(db, tr, pureToo: true, protect: groundId);        // 데이라잇 6레이어 · 순수옹벽_DH · 짝 무효 · 합성 풀기 안전망
+                    GradingBuilder.EraseSurfacesByBaseName(tr, "가상옹벽_DH", groundId);
+                    int nL = GradingBuilder.EraseOnLayerCount(db, tr, "DH-가상폴리곤", out int fL1) + GradingBuilder.EraseOnLayerCount(db, tr, "DH-가상옹벽선", out int fL2);
+                    int nD = WallDaylightBuilder.EraseCount;
+                    // ★[계획 검토 v102.2 · 중간 10] 지운 뒤 다시 센다 — 잠긴 레이어 등으로 남으면 알린다(조용히 남으면 옛 옹벽이 다시 보인다)
+                    //   ★[코드 검토 낮음 7] 선(폴리곤·옹벽 줄)도 못 지운 수를 센다
+                    int leftV = GradingBuilder.CountSurfacesByBaseName(tr, "가상옹벽_DH", groundId), leftP = GradingBuilder.CountSurfacesByBaseName(tr, WallDaylightBuilder.PureName, groundId);
+                    int leftL = fL1 + fL2;
+                    wallGone = nV + nP + nL + nD + leftL > 0
+                        ? $"지난 옹벽(부분 지정) 결과물을 지웠다 — 가상옹벽 {nV} · 순수옹벽 {nP} · 폴리곤·옹벽 줄 {nL} · 데이라잇 선 {nD}"
+                          + (leftV + leftP + leftL > 0 ? $" · ⚠못 지운 것 가상옹벽 {leftV} · 순수옹벽 {leftP} · 폴리곤·옹벽 줄 {leftL}(레이어가 잠겼는지 보세요)" : "")
+                          + (WallDaylightBuilder.EraseNote.Length > 0 ? " · " + WallDaylightBuilder.EraseNote : "")
+                          + " · 옹벽은 정지면을 다시 만들면 빠진다(여러 옹벽이 남는 것은 다음 판)"
+                        : "";
+                }
+                catch (System.Exception wx) { wallGone = $"⚠지난 옹벽 결과물을 못 지웠다({wx.GetType().Name}: {wx.Message})"; }
+                if (wallGone.Length > 0) try { ed.WriteMessage("\n[DHGRADE] " + System.Text.RegularExpressions.Regex.Replace(wallGone, "<[^>]+>", "")); } catch { }
+
                 cut = GradingGeometry.Build(boundary, ground, p, up: true, cutZonesR);
                 string diagCut = GradingGeometry.LastDiag;
                 fill = GradingGeometry.Build(boundary, ground, p, up: false, fillZonesR);
@@ -907,6 +945,7 @@ public sealed class CreateGradingCommand
                         "[DHGRADE 진단] " + System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") +
                         "\n■ " + wallInfo +
                         (compLog.Length > 0 ? "\n■ [옹벽 합성] " + compLog : "") +
+                        (wallGone.Length > 0 ? "\n■ [옹벽 결과물] " + wallGone : "") +
                         (LastBudgetNote.Length > 0 ? "\n■ " + LastBudgetNote : "") +
                         "\n\n■ 절토\n" + diagCut + "\n■ 성토\n" + diagFill);
                 }
@@ -1323,6 +1362,7 @@ public sealed class CreateGradingCommand
             //   JACK 화면엔 <b>옛 결과가 새 결과인 양</b> 보인다 — 화면만으론 구별할 길이 없다.
             //   → 됐을 때만 그 이름을 켠다.
             bool pureWallOk = false;
+            bool wallSlabBuilt = false;   // ★[v102.2 · 코드 검토 낮음 8] 이번 실행이 가상옹벽_DH(전이면)를 짓고 굳혔나 — 3.5단계가 이것만 다시 켠다
             try
             {
                 using Transaction tr3 = db.TransactionManager.StartTransaction();
@@ -2496,6 +2536,7 @@ public sealed class CreateGradingCommand
                 catch (System.Exception px) { pasteLog += "\n  순수 정지면 실패(종단은 합성면으로 물러난다) — " + px.Message; }
 
                 tr3.Commit();
+                wallSlabBuilt = !wallSlabId.IsNull;
             }
             catch (System.Exception ex) { pasteLog += $"  합성 자체 실패: {ex.Message}"; }
             try
@@ -2620,7 +2661,10 @@ public sealed class CreateGradingCommand
                 //   "폴리곤만 만드는 판"이다. 보통 정지 작업에서는 종전 문구가 나가야 한다.
                 bool polyOnly = GradingSettings.WallPolygonOnly
                              && (wallZoneCut.Count > 0 || wallZoneFill.Count > 0);
-                int wallVis = polyOnly ? 0 : GradingBuilder.SetSurfaceVisible(trE, wallShowName, true);
+                // ★[v102.2 · 계획 검토 중간 10] 전체 경로는 부분 지정 옹벽을 짓지 않는다(WallPolygonOnly) — 남은 옛 가상옹벽_DH를 다시 켜 «옛 옹벽이 남아 보이던» 자리
+                //   ★[코드 검토 낮음 8] 끄는 것은 <b>이번 실행이 가상옹벽_DH를 안 지었을 때만</b>(wallSlabId) — 지었으면(전이면 길) 종전대로 켠다
+                bool wallNotBuilt = wallShowName == "가상옹벽_DH" && !wallSlabBuilt;
+                int wallVis = polyOnly || wallNotBuilt ? 0 : GradingBuilder.SetSurfaceVisible(trE, wallShowName, true);
                 if (GradingSettings.TransitionStage >= 2 && !pureWallOk)
                 {
                     // 못 만든 '순수옹벽_DH'가 지난 실행에서 남아 있으면 <b>꺼 둔다</b> — 새것으로 오인하지 않게
@@ -2630,6 +2674,8 @@ public sealed class CreateGradingCommand
                 }
                 DiagLog.Append(polyOnly
                     ? "\n  ★옹벽 표시 — <b>켤 표면이 없다</b>(폴리곤만 만드는 판이다). 화면에 남는 것은 <b>정지면_DH</b>와 빨간 <b>'DH-가상폴리곤'</b> 한 줄이다.\n"
+                    : wallNotBuilt
+                    ? "\n  ★옹벽 표시 — 이번 실행은 옹벽을 짓지 않았다(켤 옹벽 표면 없음 · 지난 옹벽 결과물은 위 «옹벽 결과물» 줄을 보세요)\n"
                     : $"\n  ★옹벽 표시 — 가려 놓은 뒤 <b>'{wallShowName}'</b>을 다시 켰다 · 켠 표면 {wallVis}개"
                       + $"(단계 {GradingSettings.TransitionStage} · ShowOnlyResultSurface={GradingSettings.ShowOnlyResultSurface})\n");
                 // [JACK 0728] 정지면_DH 표시 스타일 = Contours 2m and 10m (Background) (한글 템플릿 이름 폴백 포함).

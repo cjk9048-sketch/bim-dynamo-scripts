@@ -12925,6 +12925,196 @@ static Coordinate[] CloseXY(IReadOnlyList<Point3> r)
     }
 }
 
+// ── S146 ★★[v102.2 · JACK 0930 «끝선을 꺾지 않고 연장선처럼 뺐는데 강제로 꺾여서 옹벽이 생성됐다»] ──
+//   손으로 그린 옹벽 폴리곤의 측선이 <b>찍은 방향 그대로</b> «데이라잇 + 여유» 테두리까지 가는가 — WallPolyDraw가 부르는 Core 조립(WallInPoly.AssembleManual)을 그대로 잰다.
+//   종전(0917 S134 이음매 고침)은 테두리의 가장 가까운 점을 모서리로 써 측선이 찍은 방향에서 틀어졌다(현장 0930 16:58: 시점 7.0° · 종점 7.8° · 모서리 5.7·5.5m 밀림).
+//   옹벽 짓기(RowsByBuffer)까지 돌려 본다 — 모서리가 오목하면 늘인 벽선이 폴리곤을 갈라 줄이 깨진다(계획 검토 v102.2 치명 1).
+{
+    Console.WriteLine("\n== S146 손 폴리곤 측선이 찍은 방향 그대로(여유 테두리까지) ==");
+    const double MG = 10.0;
+    var day = new List<Point3>();                                     // S134와 같은 부푼 데이라잇(서쪽 반원) + 동쪽 사각
+    for (int i = 0; i <= 72; i++)
+    {
+        double th = -System.Math.PI / 2 + System.Math.PI * i / 72;
+        double bulge = 40 + 25 * System.Math.Cos(th);
+        day.Add(new Point3(100 - bulge * System.Math.Cos(th), 100 + 100 * System.Math.Sin(th), 0));
+    }
+    day.Add(new Point3(100, 200, 0)); day.Add(new Point3(160, 200, 0));
+    day.Add(new Point3(160, 0, 0)); day.Add(new Point3(100, 0, 0));
+    var seg = new List<Point3>();
+    for (double y = 60; y <= 140.001; y += 1) seg.Add(new Point3(90, y, 0));      // 구간 — x=90 세로(데이라잇 안) · end0 = (90,60) · end1 = (90,140)
+    var end0 = seg[0]; var end1 = seg[^1];
+    (double X, double Y) U(double x, double y) { double l = System.Math.Sqrt(x * x + y * y); return (x / l, y / l); }
+    (Point3 Day, bool Ok) Hit(Point3 from, (double X, double Y) d)
+    {
+        bool ok = GradingGeometry.RayRingHitOutward(day, from.X, from.Y, d.X, d.Y, -1, 0, out double hx, out double hy, out _, 0.05);
+        return (new Point3(hx, hy, 0), ok);
+    }
+    double OffRay(Point3 from, (double X, double Y) d, Point3 q) => System.Math.Abs((q.X - from.X) * d.Y - (q.Y - from.Y) * d.X);
+    // ★[v102.2 · 재검토 중간 1] 바깥쪽 = 자 고리가 도는 방향(출하와 같은 함수) — 구간(x=90 북쪽으로)을 서쪽 변으로 걷는 시계 방향 사각 → 왼쪽(서쪽) +1
+    int owS = GradingGeometry.OutwardSideOfTravel(new List<Point3> { new(90, 60, 0), new(90, 140, 0), new(150, 140, 0), new(150, 60, 0) });
+    Check("S146 바깥쪽 = 구간 진행의 왼쪽(서쪽 · 시계 방향 자)", owS == 1, $"{owS}");
+    // 옹벽선 뽑기 — BuildWallInPolygon과 같은 법(옹벽이 시작하는 자리부터 이어지는 옹벽 점)
+    List<Point3> WallLineOf(List<Point3> r, List<bool> f)
+    {
+        var wl = new List<Point3>(); int n0 = r.Count, st = -1;
+        for (int i = 0; i < n0; i++) if (f[i] && !f[(i - 1 + n0) % n0]) { st = i; break; }
+        for (int k = 0; k < n0 && st >= 0; k++) { int i = (st + k) % n0; if (!f[i]) break; wl.Add(r[i]); }
+        return wl;
+    }
+    foreach (var (tag, dA, dB) in new[]
+             {
+                 ("㉠시점 곧게(연장선) · 종점 직각", U(-0.03, 1), U(-1, 0)),
+                 ("㉡둘 다 비스듬히", U(-1, 0.8), U(-1, -0.6)),
+                 ("㉢둘 다 직각(부푼 데이라잇 — 법선보다 안쪽으로 기움)", U(-1, 0), U(-1, 0)),
+             })
+    {
+        var ha = Hit(end1, dA); var hb = Hit(end0, dB);
+        Check($"S146[{tag}] 두 광선이 데이라잇에 닿는다", ha.Ok && hb.Ok, $"{ha.Day} · {hb.Day}");
+        if (!ha.Ok || !hb.Ok) continue;
+        var ring = WallInPoly.AssembleManual(seg, dA, dB, owS, ha.Day, hb.Day, day, MG, 1.0, 0, out var flags, out bool usedRay, out string note);
+        Console.WriteLine($"      S146[{tag}] {note}");
+        Check($"S146[{tag}] 찍은 방향 그대로 이었다 · 링 · 표 수 같음", ring != null && usedRay && flags.Count == ring.Count, note);
+        if (ring == null || !usedRay) continue;
+        // ★[v102.2 · 코드 검토 중간 1] 두른 쪽 = 구간 바깥쪽(서쪽) — 돌리는 방향으로 갈랐다 · 구간 서쪽 1m는 안 · 동쪽(부지) 1m는 밖
+        Check($"S146[{tag}] ★두른 쪽 = 구간 바깥쪽(돌리는 방향으로 가름)", note.Contains("바깥쪽으로 두름") && GradingGeometry.PointInRing(ring, 89, 100) && !GradingGeometry.PointInRing(ring, 91, 100), note);
+        var wl = WallLineOf(ring, flags);
+        var cA = wl.Count > 0 ? wl[^1] : new Point3(double.NaN, double.NaN, 0); var cB = wl.Count > 0 ? wl[0] : new Point3(double.NaN, double.NaN, 0);
+        // ★측선이 광선 위 — 구간 끝 → 모서리 사이 옹벽 점 전부
+        double offA = 0, offB = 0; int iE1 = wl.FindIndex(q => q.X == end1.X && q.Y == end1.Y), iE0 = wl.FindIndex(q => q.X == end0.X && q.Y == end0.Y);
+        for (int i = iE1; i >= 0 && i < wl.Count; i++) offA = System.Math.Max(offA, OffRay(end1, dA, wl[i]));
+        for (int i = 0; i <= iE0 && iE0 >= 0; i++) offB = System.Math.Max(offB, OffRay(end0, dB, wl[i]));
+        Check($"S146[{tag}] ★측선이 찍은 광선 위(시점·종점 모서리까지 수직 거리 ≤ 1e-9)", iE1 >= 0 && iE0 >= 0 && offA <= 1e-9 && offB <= 1e-9, $"시점 {offA:E1} · 종점 {offB:E1}");
+        // ★옹벽선 = 종점 모서리 → … → 시점 모서리 · 두 모서리는 여유 테두리 위(데이라잇에서 ≥ 여유 − 0.5m)
+        double DistToDay(Point3 q)
+        {
+            double best = double.MaxValue;
+            for (int i = 0; i < day.Count; i++)
+            {
+                var u = day[i]; var v = day[(i + 1) % day.Count];
+                double ex = v.X - u.X, ey = v.Y - u.Y, L2 = ex * ex + ey * ey, t = L2 < 1e-24 ? 0 : System.Math.Clamp(((q.X - u.X) * ex + (q.Y - u.Y) * ey) / L2, 0, 1);
+                best = System.Math.Min(best, System.Math.Sqrt((q.X - u.X - ex * t) * (q.X - u.X - ex * t) + (q.Y - u.Y - ey * t) * (q.Y - u.Y - ey * t)));
+            }
+            return best;
+        }
+        Check($"S146[{tag}] 옹벽선 = 종점 모서리 → 구간 → 시점 모서리 · 두 모서리는 데이라잇 밖 여유 거리", wl.Count > seg.Count && !GradingGeometry.PointInRing(day, cA.X, cA.Y) && !GradingGeometry.PointInRing(day, cB.X, cB.Y)
+              && DistToDay(cA) >= MG - 0.5 && DistToDay(cB) >= MG - 0.5, $"옹벽선 {wl.Count}점 · 시점 모서리 {DistToDay(cA):F2}m · 종점 모서리 {DistToDay(cB):F2}m");
+        // 폐합면(옹벽 아닌 점을 낀 변)이 데이라잇 밖 · 단순 · 넓이
+        int inside = 0, n = 0;
+        for (int i = 0; i < ring.Count; i++)
+        {
+            int j = (i + 1) % ring.Count; if (flags[i] && flags[j]) continue;
+            for (int k = 1; k < 8; k++) { double t = k / 8.0; n++; if (GradingGeometry.PointInRing(day, ring[i].X + (ring[j].X - ring[i].X) * t, ring[i].Y + (ring[j].Y - ring[i].Y) * t)) inside++; }
+        }
+        Check($"S146[{tag}] 폐합면이 데이라잇 안으로 안 들어간다 · 단순 · 넓이", n > 0 && inside == 0 && GradingGeometry.RingIsSimple(ring) && GradingGeometry.RingAreaNts(ring) > 1,
+              $"{inside}/{n} · {GradingGeometry.RingAreaNts(ring):F0}㎡");
+        // ★옹벽 짓기까지 — 줄 3단(105 → 120) · 버린 줄 0 · 닫은 줄 전부 단순
+        var rows = WallInPoly.RowsByBuffer(ring, wl, 105, 3, 5, 0.01, 1.0, 0.005, out string rlog);
+        var closed = WallInPoly.ClosedRows(rows);
+        bool rowsOk = rows.Count >= 4 && WallInPoly.LastLost == 0 && closed.All(r => GradingGeometry.RingIsSimple(r));
+        Check($"S146[{tag}] ★옹벽 짓기(RowsByBuffer) — 줄 {rows.Count} · 버린 줄 0 · 닫은 줄 전부 단순", rowsOk, rlog);
+        // 카나리아 — 종전 모서리(테두리의 가장 가까운 점)였으면 측선이 찍은 방향에서 1° 넘게 틀어진다
+        if (tag.StartsWith("㉠") || tag.StartsWith("㉢"))
+        {
+            var arcO = GradingGeometry.RingArcOutward(day, ha.Day.X, ha.Day.Y, hb.Day.X, hb.Day.Y, seg[seg.Count / 2].X, seg[seg.Count / 2].Y, MG);
+            if (arcO.Count >= 2 && (arcO[^1].X - ha.Day.X) * (arcO[^1].X - ha.Day.X) + (arcO[^1].Y - ha.Day.Y) * (arcO[^1].Y - ha.Day.Y)
+                                 < (arcO[0].X - ha.Day.X) * (arcO[0].X - ha.Day.X) + (arcO[0].Y - ha.Day.Y) * (arcO[0].Y - ha.Day.Y)) arcO.Reverse();
+            double ux = arcO[0].X - end1.X, uy = arcO[0].Y - end1.Y, ul = System.Math.Sqrt(ux * ux + uy * uy);
+            double dOld = System.Math.Acos(System.Math.Clamp((ux * dA.X + uy * dA.Y) / ul, -1, 1)) * 180 / System.Math.PI;
+            Check($"S146[{tag}] 카나리아 — 종전 모서리였으면 측선이 찍은 방향에서 1° 넘게 틀어진다(잣대가 산다)", dOld > 1.0, $"{dOld:F1}°");
+        }
+    }
+    // 물러남 — 두 측선이 엇갈리게(시점은 아래로 · 종점은 위로 비스듬히) → 제 몸을 지른다 → 종전 모서리로 물러나고 까닭을 적는다
+    {
+        var dA = U(-1, -1.6); var dB = U(-1, 1.6);
+        var ha = Hit(end1, dA); var hb = Hit(end0, dB);
+        var ring = WallInPoly.AssembleManual(seg, dA, dB, owS, ha.Day, hb.Day, day, MG, 1.0, 0, out var flags, out bool usedRay, out string note);
+        Console.WriteLine($"      S146[물러남] {note}");
+        Check("S146[물러남] 두 측선이 엇갈리면 찍은 방향을 버리고 종전 모서리로 · 까닭을 적는다 · 표 수 같음",
+              ha.Ok && hb.Ok && !usedRay && note.Contains("찍은 방향대로 못 그었다") && (ring == null || flags.Count == ring.Count), note);
+        // ★[v102.2 · 코드 검토 중간 1] 물러난 링도 두르는 쪽은 바깥쪽이다(못 이으면 null — 그때는 계산한 띠로)
+        Check("S146[물러남] 물러난 링도 구간 바깥쪽(돌리는 방향으로 가름) — 못 이으면 null",
+              ring == null || (note.Contains("바깥쪽으로 두름") && GradingGeometry.PointInRing(ring, 89, 100) && !GradingGeometry.PointInRing(ring, 91, 100)),
+              ring == null ? "null(계산한 띠로)" : $"{ring.Count}점");
+    }
+    // ── ★★[v102.2 · 코드 검토 중간 1 · 재검토 중간 1] 좁은 부지 — 두 광선이 테두리의 같은 변으로 나가면 종전 규칙(두 갈래의 «가운데 번호 점»이 구간 가운데에 가까운 쪽)은
+    //   <b>한 바퀴 도는 쪽</b>을 골라 부지 전체를 덮는 폴리곤을 만들었다(검토 재현: 폭 20m · 벽 100m — 짧은 쪽 점수 2725 · 한 바퀴 쪽 625).
+    //   데이라잇: 남쪽 곧은 변(y=0) · 북쪽은 물결(y = 20 + 3·sin(2πx/40), 1m마다 — 테두리 북쪽에 점이 많아 한 바퀴 쪽 «가운데 번호 점»이 북쪽 가운데에 온다) · 길이 120m.
+    //   ★출하 입력 그대로(재검토 낮음 3): 구간 점 = WallInPoly.SegmentPoints · 울타리 법선 = WallInPoly.FenceNormal · 바깥쪽 = GradingGeometry.OutwardSideOfTravel —
+    //   ZoneEditCommon이 쓰는 그 함수들이다. 자(고리)는 부지 쪽 사각 [10,110]×[5,15] · 구간은 그 남쪽 변 한 변 전체라 <b>두 끝이 다 꼭짓점</b>이다
+    //   (재검토 중간 1: T1이 꼭짓점이면 끝 법선이 다음 변의 것 — 끝 법선으로 가르던 첫 고침은 여기서 못 갈랐다).
+    //   찍기: 종점(T0 끝)은 남쪽 직각 · 시점(T1 끝)은 벽선을 곧게 늘인 연장선(JACK 0930) — 둘 다 출하 울타리를 통과하는 방향.
+    {
+        var nd = new List<Point3> { new Point3(0, 0, 0), new Point3(120, 0, 0) };
+        for (int xi = 120; xi >= 0; xi--) nd.Add(new Point3(xi, 20 + 3 * System.Math.Sin(2 * System.Math.PI * xi / 40.0), 0));
+        var ndWork = GradingGeometry.BufferedRingOutward(nd, MG);
+        Console.WriteLine($"      S146[좁은 부지] 데이라잇 {nd.Count}점 · 여유 테두리 {(ndWork == null ? "없음" : ndWork.Count + "점")}");
+        // 자 고리의 도는 방향 → 바깥쪽(울타리 법선과 같은 규칙) · 넓이 없는 고리는 0
+        Check("S146[좁은 부지] 바깥쪽 함수 — 반시계 −1(오른쪽) · 시계 +1(왼쪽) · 넓이 없음 0",
+              GradingGeometry.OutwardSideOfTravel(new List<Point3> { new(0, 0, 0), new(10, 0, 0), new(10, 10, 0), new(0, 10, 0) }) == -1
+              && GradingGeometry.OutwardSideOfTravel(new List<Point3> { new(0, 0, 0), new(0, 10, 0), new(10, 10, 0), new(10, 0, 0) }) == 1
+              && GradingGeometry.OutwardSideOfTravel(new List<Point3> { new(0, 0, 0), new(5, 0, 0), new(10, 0, 0) }) == 0);
+        foreach (var (tagN, rul, extDir) in new[]
+                 {
+                     ("동쪽으로 진행(자 반시계)", new List<Point3> { new(10, 5, 0), new(110, 5, 0), new(110, 15, 0), new(10, 15, 0) }, (1.0, 0.0)),
+                     ("서쪽으로 진행(자 시계)", new List<Point3> { new(110, 5, 0), new(10, 5, 0), new(10, 15, 0), new(110, 15, 0) }, (-1.0, 0.0)),
+                 })
+        {
+            var cum = GradingGeometry.CumLen2D(rul);
+            var sg = WallInPoly.SegmentPoints(rul, cum, 0, 100);                   // 남쪽 변 전체 — T0 · T1 둘 다 꼭짓점
+            var nS = WallInPoly.FenceNormal(rul, cum, 0); var nE = WallInPoly.FenceNormal(rul, cum, 100);
+            int ow = GradingGeometry.OutwardSideOfTravel(rul);
+            var down = (0.0, -1.0);
+            bool okB = GradingGeometry.RayRingHitOutward(nd, sg[0].X, sg[0].Y, down.Item1, down.Item2, nS.X, nS.Y, out double bx, out double by, out _, 0.05);
+            bool okA = GradingGeometry.RayRingHitOutward(nd, sg[^1].X, sg[^1].Y, extDir.Item1, extDir.Item2, nE.X, nE.Y, out double ax, out double ay, out _, 0.05);
+            bool fenceDown = GradingGeometry.RayRingHitOutward(nd, sg[^1].X, sg[^1].Y, 0, -1, nE.X, nE.Y, out _, out _, out _, 0.05);
+            Console.WriteLine($"      S146[좁은 부지 · {tagN}] 구간 {sg.Count}점 ({sg[0].X:F0},{sg[0].Y:F0})→({sg[^1].X:F0},{sg[^1].Y:F0}) · 울타리 종점 ({nS.X:F2},{nS.Y:F2}) 시점 ({nE.X:F2},{nE.Y:F2})(다음 변) · 바깥쪽 {ow} · 시점 남쪽 직각은 울타리가 {(fenceDown ? "받음" : "막음")}");
+            var ring = WallInPoly.AssembleManual(sg, extDir, down, ow, new Point3(ax, ay, 0), new Point3(bx, by, 0), nd, MG, 1.0, 0, out var flags, out bool usedRay, out string note);
+            Console.WriteLine($"      S146[좁은 부지 · {tagN}] {note}");
+            double area = ring == null ? 0 : GradingGeometry.RingAreaNts(ring);
+            Check($"S146[좁은 부지 · {tagN}] ★폴리곤이 구간 바깥쪽만 덮는다(부지를 안 덮는다) · 찍은 방향 그대로 · 끝이 꼭짓점이어도",
+                  okA && okB && ring != null && usedRay && flags.Count == ring.Count && note.Contains("바깥쪽으로 두름")
+                  && GradingGeometry.PointInRing(ring, 60, 2) && !GradingGeometry.PointInRing(ring, 60, 10) && !GradingGeometry.PointInRing(ring, 60, 25),
+                  $"넓이 {area:F0}㎡ · (60,2) {(ring != null && GradingGeometry.PointInRing(ring, 60, 2) ? "안" : "밖")} · (60,10) {(ring != null && GradingGeometry.PointInRing(ring, 60, 10) ? "안" : "밖")} · (60,25) {(ring != null && GradingGeometry.PointInRing(ring, 60, 25) ? "안" : "밖")}");
+            if (ring == null || !usedRay) continue;
+            var wl = WallLineOf(ring, flags);
+            var rows = WallInPoly.RowsByBuffer(ring, wl, 105, 3, 5, 0.01, 1.0, 0.005, out string rlog);
+            var closed = WallInPoly.ClosedRows(rows);
+            Check($"S146[좁은 부지 · {tagN}] 옹벽 짓기(RowsByBuffer) — 줄 {rows.Count} · 버린 줄 0 · 닫은 줄 전부 단순",
+                  rows.Count >= 4 && WallInPoly.LastLost == 0 && closed.All(r => GradingGeometry.RingIsSimple(r)), rlog);
+            // 카나리아 ① 같은 두 모서리에서 종전 규칙이었으면 북쪽(부지 너머)으로 한 바퀴 돌았다
+            if (ndWork != null && wl.Count >= 2)
+            {
+                var cA = wl[^1]; var cB = wl[0]; var md = sg[sg.Count / 2];
+                int eA = GradingGeometry.RingEdgeOf(ndWork, cA.X, cA.Y), eB = GradingGeometry.RingEdgeOf(ndWork, cB.X, cB.Y);
+                var old = GradingGeometry.RingArcBetween(ndWork, cA.X, cA.Y, eA, cB.X, cB.Y, eB, md.X, md.Y);
+                double oldMaxY = old.Count == 0 ? double.NaN : old.Max(q => q.Y), newMaxY = ring.Where((q, i) => !flags[i]).DefaultIfEmpty(new Point3(0, double.NaN, 0)).Max(q => q.Y);
+                Check($"S146[좁은 부지 · {tagN}] 카나리아 ① 종전 규칙이었으면 북쪽으로 한 바퀴 돌았다(잣대가 산다)", oldMaxY > 25 && newMaxY < 10,
+                      $"종전 두른 선 최북 y {oldMaxY:F1} · 새 두른 선 최북 y {newMaxY:F1}");
+            }
+            // 카나리아 ② 끝 법선으로 갈랐으면(첫 고침) 시점 끝이 꼭짓점이라 두 끝이 안 맞아 못 갈랐다 — sin(끝 접선 → 울타리 법선)
+            {
+                static double Sin(Point3 a, Point3 b, (double X, double Y) n)
+                { double tx = b.X - a.X, ty = b.Y - a.Y, tl = System.Math.Sqrt(tx * tx + ty * ty), nl = System.Math.Sqrt(n.X * n.X + n.Y * n.Y); return (tx * n.Y - ty * n.X) / (tl * nl); }
+                double s0 = Sin(sg[0], sg[1], nS), s1 = Sin(sg[^2], sg[^1], nE);
+                Check($"S146[좁은 부지 · {tagN}] 카나리아 ② 끝 법선이면 두 끝이 어긋났다(시점 끝 법선 = 다음 변 것)", System.Math.Abs(s0) > 0.9 && System.Math.Abs(s1) < 0.1,
+                      $"sin 종점 {s0:F2} · 시점 {s1:F2}");
+            }
+        }
+        // 바깥쪽을 모르면(넓이 없는 자) 종전 규칙으로 두르되 ⚠를 적는다 — 조용히 부지를 덮지 않게
+        {
+            var sg = new List<Point3>();
+            for (int k = 0; k <= 100; k++) sg.Add(new Point3(10 + k, 5, 0));
+            var down = (0.0, -1.0);
+            bool okA = GradingGeometry.RayRingHitOutward(nd, sg[^1].X, sg[^1].Y, 0, -1, 0, -1, out double ax, out double ay, out _, 0.05);
+            bool okB = GradingGeometry.RayRingHitOutward(nd, sg[0].X, sg[0].Y, 0, -1, 0, -1, out double bx, out double by, out _, 0.05);
+            var ring = WallInPoly.AssembleManual(sg, down, down, 0, new Point3(ax, ay, 0), new Point3(bx, by, 0), nd, MG, 1.0, 0, out var flags, out bool usedRay, out string note);
+            Console.WriteLine($"      S146[좁은 부지 · 바깥쪽 모름] {note}");
+            Check("S146[좁은 부지 · 바깥쪽 모름] 바깥쪽을 모르면 ⚠를 적는다(명령줄에도 뜬다)", okA && okB && note.Contains("⚠바깥쪽을 몰라") && (ring == null || flags.Count == ring.Count), note);
+        }
+    }
+}
+
 // ── S135 ★★★[JACK 0917 로그 <i>"제 몸을 지르지 않는가 <b>아니오</b>"</i>] ──
 //
 //   <para><b>현장 실측</b>: 데이라잇을 점마다 법선으로 10m 밀어 두른 점 266개로 폴리곤을 만들었는데

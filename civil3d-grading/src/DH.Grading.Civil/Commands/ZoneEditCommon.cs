@@ -997,28 +997,17 @@ internal static class ZoneEditCommon
 
                     // ★★★[JACK 0917] 고른 구간을 <b>점들로</b> 떠서 넘긴다 — 그것이 폴리곤의 <b>안쪽 변</b>이고,
                     //   화면에 <b>두꺼운 빨강</b>으로 보여 줄 선이다(JACK: <i>"구간 선정 시 두꺼운 빨간 선이 보여야 해"</i>).
-                    double rTotA = cumA[cumA.Length - 1];
-                    double spanA = arcA.T1 >= arcA.T0 ? arcA.T1 - arcA.T0 : rTotA - arcA.T0 + arcA.T1;
-                    int nSegA = System.Math.Max(2, (int)System.Math.Ceiling(spanA / 1.0));
-                    var segA = new System.Collections.Generic.List<Point3>();
-                    for (int i5 = 0; i5 <= nSegA; i5++)
-                    {
-                        double tA = arcA.T0 + spanA * i5 / nSegA;
-                        segA.Add(GradingGeometry.PointAtParam(rulA, cumA, ((tA % rTotA) + rTotA) % rTotA));
-                    }
+                    //   ★[v102.2 · 재검토 낮음 3] 뜨기·울타리 법선·바깥쪽은 Core에서(하네스 S146이 <b>같은 함수</b>로 잰다)
+                    var segA = WallInPoly.SegmentPoints(rulA, cumA, arcA.T0, arcA.T1);
                     // ★★★[JACK 0917] 구간선의 <b>바깥쪽 법선</b>을 양 끝에서 재 넘긴다 —
                     //   그 반대쪽(노선 안쪽 · ㄷ자 안뜰)으로는 못 그리게 하는 울타리다.
                     //   <c>OutwardAt</c>이 반시계 링의 <b>바깥</b>을 주므로 그 차이가 곧 법선이다.
-                    (double X, double Y) Nrm(double tt)
-                    {
-                        double tw = ((tt % rTotA) + rTotA) % rTotA;
-                        var o = GradingGeometry.PointAtParam(rulA, cumA, tw);
-                        var q = GradingGeometry.OutwardAt(rulA, cumA, tw, 1.0);
-                        return (q.X - o.X, q.Y - o.Y);
-                    }
+                    // ★[v102.2 · 재검토 중간 1] 폴리곤을 두르는 쪽은 끝 법선이 아니라 <b>자 고리가 도는 방향</b>으로 — 구간 끝이 꼭짓점이면 끝 법선은 다음 변의 것이다
+                    int owA = GradingGeometry.OutwardSideOfTravel(rulA);
+                    Log($"  손 폴리곤 — 바깥쪽 = 구간 진행의 {(owA > 0 ? "왼쪽" : owA < 0 ? "오른쪽" : "⚠모름(자 고리가 넓이 없음)")}(자 {rulA.Count}점)");
                     ed.WriteMessage($"\n[{cmdLabel}] 폴리곤을 그립니다 — 구간(빨간 굵은 선)의 양 끝에서"
                         + " 시점과 종점을 차례로 찍으세요. 노선 안쪽으로는 안 그려집니다. (Esc=계산한 띠로)");
-                    var poly = WallPolyDraw.Run(doc, dayR, segA, Nrm(arcA.T0), Nrm(arcA.T1),
+                    var poly = WallPolyDraw.Run(doc, dayR, segA, WallInPoly.FenceNormal(rulA, cumA, arcA.T0), WallInPoly.FenceNormal(rulA, cumA, arcA.T1), owA,
                                                 out var wchain, out var wflag, out string plog);
                     Log(plog);
                     if (poly != null && poly.Count >= 3)
@@ -1245,7 +1234,37 @@ internal static class ZoneEditCommon
                         (z.Ref != null ? $" · 자=링({z.Ref.Count}점)" : " · 자=계획"));
                 }
             }
+            // ★★[v102.2 · JACK 0930 «옹벽합성 버튼은 없애고 노선 선정과정이 끝나면 자동으로 진행되게»] 이번 실행이 옹벽을 끝까지 지었는지 가르려고
+            //   <b>짝을 미리 비운다</b> — 폴리곤만 길은 옹벽·데이라잇까지 가야 짝을 다시 채운다. 중간에 멈춘 길(고른 구간 못 찾음 · 합성 풀기 실패)이
+            //   지난 옹벽의 짝을 남겨 옛 옹벽을 다시 합성하던 틈을 막는다(계획 검토 v102.2 · 높음 3)
+            if (wallMode && drawPart) GradingSettings.ClearLastWall(true);
             CreateGradingCommand.DoGrade(doc, planId, groundId, GradeMode.RerunLast);
+
+            // ★★[v102.2] 부분 지정 옹벽 변환이 옹벽을 끝까지 지었으면 <b>합성을 이어서 태운다</b>(버튼 없이).
+            //   노리선처럼 명령으로 태운다 — 같은 흐름 안에서 직접 부르면 재생성이 쥔 것과 부딪힐 수 있다. 노리선 갱신(아래)보다 먼저 줄 선다.
+            if (wallMode && drawPart)
+            {
+                bool built = !GradingSettings.LastWallInvalid && GradingSettings.LastWallPoly != null;
+                if (built && GradingSettings.LastWallPlanNote.Length == 0)
+                {
+                    ed.WriteMessage($"\n[{cmdLabel}] 옹벽을 지었습니다 — 이어서 정지면_DH에 합성합니다(약 30초)…");
+                    Log($"■ {cmdLabel} — 옹벽을 지어 합성을 이어서 태움(DHWALLCOMP · 짝 {GradingSettings.LastWallStamp})");
+                    GradingSettings.AutoCompDoc = doc.Name;
+                    try { doc.SendStringToExecute("DHWALLCOMP ", true, false, true); }
+                    catch (System.Exception sx)
+                    {
+                        GradingSettings.AutoCompDoc = "";
+                        ed.WriteMessage($"\n[{cmdLabel}] ⚠합성을 못 태웠다({sx.GetType().Name}) — 명령줄에 DHWALLCOMP를 치세요");
+                        try { AcadApp.ShowAlertDialog($"옹벽 합성을 이어서 태우지 못했습니다({sx.GetType().Name}).\n명령줄에 DHWALLCOMP를 치면 다시 합성합니다."); } catch { }
+                    }
+                }
+                else
+                {
+                    string why = !built ? "이번 옹벽 변환이 옹벽·데이라잇까지 못 갔다(진단 로그의 ⚠)" : GradingSettings.LastWallPlanNote;
+                    ed.WriteMessage($"\n[{cmdLabel}] ⚠합성은 안 했다 — {System.Text.RegularExpressions.Regex.Replace(why, "<[^>]+>", "")}");
+                    Log($"■ {cmdLabel} — 합성 안 함: {why}");
+                }
+            }
 
             // ★★★[JACK 0902 "노리선 기능 후 옹벽이나 사면변환을 하면 꼭 노리선 기능을 눌러야
             //   업데이트되는데, 노리선 기능을 사용했으면 그 후 변화되는 지형에 맞춰서 계속 자동 업뎃"]

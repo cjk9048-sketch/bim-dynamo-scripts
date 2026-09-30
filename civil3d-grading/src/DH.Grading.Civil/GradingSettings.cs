@@ -25,7 +25,7 @@ public static class GradingSettings
     /// <b>같은 번호를 단 빌드가 여러 개</b>가 되어, 어느 것이 깔렸는지 물으면 답할 수가 없었다.</para>
     /// <para><c>x.0</c> = 화면·명령이 바뀌어 <b>사용자가 다르게 일하게</b> 되는 판 ·
     /// <c>x.y</c> = 같은 화면에서 결함을 고친 판.</para></summary>
-    public const string Version = "v102.1 (2026-09-30)";
+    public const string Version = "v102.2 (2026-09-30)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -518,6 +518,8 @@ public static class GradingSettings
     public static string LastWallPlanNote = "";
     public static bool LastWallInvalid;
     public static string LastWallStamp = "";
+    /// <summary>★[v102.2] 옹벽 변환이 합성을 이어서 태운 도면 — DHWALLCOMP가 꺼내 비우고, 못 하면 알림창으로 알린다(버튼이 없어져 명령줄만으로는 묻힌다).</summary>
+    public static string AutoCompDoc = "";
     public static void ClearLastWall(bool invalid)
     {
         LastWallPoly = null; LastWallSurfHandle = ""; LastWallPlanHandle = ""; LastWallPlanNote = ""; LastWallStamp = "";
