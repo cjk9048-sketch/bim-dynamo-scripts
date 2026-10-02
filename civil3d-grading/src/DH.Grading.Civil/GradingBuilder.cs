@@ -1338,10 +1338,12 @@ public static class GradingBuilder
     /// <summary>[사면생성 DHSLOPE — JACK 0729] 클릭 대상용 '태그된' 옹벽선 작도 — 레이어 DH-옹벽선에
     /// XData [app, up, isSlope=1, bench, seg(방향 전체 유일), planHandle] 부착. 기존 선은 지우지 않고 덧그림
     /// (명령 종료 시 호출부가 반환된 ObjectId들만 지워 원상 복구). 반환=생성한 엔티티들.</summary>
+    /// <summary>★[v103.1] 클릭선 중 목록 옹벽 자리 조각의 색(주황) — 시안(고르기) · 노랑(고름) · 빨강(옹벽선) · 초록(데이라잇)과 안 겹친다.</summary>
+    public const short WallPieceAci = 30;
     public static List<ObjectId> DrawWallLinesTagged(Database db, Transaction tr,
         IEnumerable<(bool IsSlope, int Bench, int Seg, System.Collections.Generic.List<Point3> Pts)> cutEdges,
         IEnumerable<(bool IsSlope, int Bench, int Seg, System.Collections.Generic.List<Point3> Pts)> fillEdges,
-        string planHandle)
+        string planHandle, ISet<System.Collections.Generic.List<Point3>>? wallPieces = null)
     {
         EnsureRegApp(db, tr, GradingSettings.WallPickAppName);
         ObjectId layerId = EnsureLayer(db, tr, "DH-옹벽선", 1);
@@ -1355,6 +1357,7 @@ public static class GradingBuilder
             {
                 if (pts == null || pts.Count < 2) continue;
                 var pl = new Polyline3d { LayerId = layerId };
+                if (wallPieces != null && wallPieces.Contains(pts)) pl.ColorIndex = WallPieceAci;   // ★[v103.1] 옹벽 자리 조각
                 ms.AppendEntity(pl); tr.AddNewlyCreatedDBObject(pl, true);
                 foreach (var q in pts)
                 {
@@ -1426,26 +1429,24 @@ public static class GradingBuilder
         }
     }
 
-    /// <summary>[0728 — JACK] baseName 지표면의 표시 스타일을 이름 후보들 중 존재하는 것으로 설정.
-    /// 정확 일치 우선, 없으면 '2'와 '10'이 들어간 등고선 스타일 폴백. 적용된 스타일명 반환("" = 미적용).</summary>
+    public const string ContourLiftSuffix = " (DH +1cm)";
+    public const double ContourLift = 0.01;
     /// <summary>★[v103.0.1 · JACK 1002 «등고선 톱니 → 표시: 1cm 올려 그리기»] 등고선 기준 표고만 +1cm 올린 <b>형제 사본</b> 스타일(이름 = 원본 + <see cref="ContourLiftSuffix"/>).
     /// <para>사면 소단 · 옹벽 소단 · 원지반 평지가 정확히 등고선 높이(110 · 120 …)에 평평하게 놓이면 Civil이 그 높이 등고선을 들쭉날쭉 그린다.
     /// 화면 없는 Civil 계측(1002 · 그날 합성): 110.00m 되꺾임 23 → 110.01m 0 · 115.00m 23 → 0 · 120.00m 90 → 3 · 소단 아닌 높이(112 · 116m)는 .00/.01 둘 다 0(길이도 같음).
     /// 모양 · 토량은 그대로 — 등고선만 x.01m에 그린다. 원본은 안 건드린다. 간격은 부를 때마다 원본을 따라간다(원본을 고치면 다음 생성이 맞춘다).
     /// 이미 사본이면 그대로 돌려준다.</para></summary>
-    public const string ContourLiftSuffix = " (DH +1cm)";
-    public const double ContourLift = 0.01;
     public static ObjectId LiftedContourStyle(Transaction tr, ObjectId srcStyleId, out string note)
     {
         note = "";
         if (srcStyleId.IsNull) return ObjectId.Null;
         var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
         var src = (Autodesk.Civil.DatabaseServices.Styles.SurfaceStyle)tr.GetObject(srcStyleId, OpenMode.ForRead);
-        if (src.Name.EndsWith(ContourLiftSuffix, StringComparison.Ordinal)) return srcStyleId;
+        if (src.Name.EndsWith(ContourLiftSuffix, StringComparison.OrdinalIgnoreCase)) return srcStyleId;
         string want = src.Name + ContourLiftSuffix;
         ObjectId cid = ObjectId.Null;
         foreach (ObjectId sid in civilDoc.Styles.SurfaceStyles)
-            if (tr.GetObject(sid, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.Styles.SurfaceStyle st && st.Name == want) { cid = sid; break; }
+            if (tr.GetObject(sid, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.Styles.SurfaceStyle st && string.Equals(st.Name, want, StringComparison.OrdinalIgnoreCase)) { cid = sid; break; }
         bool made = cid.IsNull;
         if (made)
         {
@@ -1454,13 +1455,16 @@ public static class GradingBuilder
         }
         var c = (Autodesk.Civil.DatabaseServices.Styles.SurfaceStyle)tr.GetObject(cid, OpenMode.ForWrite);
         var sc = src.ContourStyle; var cc = c.ContourStyle;
-        cc.MinorContourInterval = sc.MinorContourInterval;
-        cc.MajorContourInterval = sc.MajorContourInterval;
+        // ★[v103.1 · v103.0.1 검토 낮음 3] 보조 → 주 차례가 중간 상태(보조 2 · 주 5 등)에서 거부될 수 있다 — 안 되면 주 → 보조로
+        try { cc.MinorContourInterval = sc.MinorContourInterval; cc.MajorContourInterval = sc.MajorContourInterval; }
+        catch { cc.MajorContourInterval = sc.MajorContourInterval; cc.MinorContourInterval = sc.MinorContourInterval; }
         cc.BaseElevationInterval = sc.BaseElevationInterval + ContourLift;
         note = $"등고선 +1cm 사본{(made ? " 만듦" : "")}(보조 {cc.MinorContourInterval:0.###}m · 주 {cc.MajorContourInterval:0.###}m · 기준 {cc.BaseElevationInterval:0.###}m)";
         return cid;
     }
 
+    /// <summary>[0728 — JACK] baseName 지표면의 표시 스타일을 이름 후보들 중 존재하는 것으로 설정.
+    /// 정확 일치 우선, 없으면 '2'와 '10'이 들어간 등고선 스타일 폴백. 적용된 스타일명 반환("" = 미적용).</summary>
     public static string SetSurfaceStyle(Transaction tr, string baseName, params string[] candidates)
     {
         var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
@@ -1483,13 +1487,6 @@ public static class GradingBuilder
         if (styleId.IsNull) return "";
         // [JACK 0728] 스타일에서 취하는 건 등고선 간격뿐 — '경계' 표시는 켜서 예전처럼 지표면 둘레가 보이고
         //   클릭 시 지표면이 선택되게(별도 초록 객체 불필요).
-        try
-        {
-            var stw = (Autodesk.Civil.DatabaseServices.Styles.SurfaceStyle)tr.GetObject(styleId, OpenMode.ForWrite);
-            stw.GetDisplayStylePlan(Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType.Boundary).Visible = true;
-            stw.GetDisplayStyleModel(Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType.Boundary).Visible = true;
-        }
-        catch { }
         // ★[v103.0.1 · JACK 1002 «등고선 톱니 → 표시: 1cm 올려 그리기»] 정지면_DH는 고른 스타일의 <b>+1cm 사본</b>으로 — 원본은 다른 지표면도 쓴다(안 건드린다)
         if (baseName == "정지면_DH")
         {
@@ -1500,6 +1497,14 @@ public static class GradingBuilder
             }
             catch (System.Exception lx) { styleName += $" · ⚠등고선 +1cm 사본 실패({lx.GetType().Name}) — 원본 스타일 그대로"; }
         }
+        // ★[v103.1 · v103.0.1 검토 낮음 2] 경계 켜기는 실제로 붙일 스타일에(사본이면 사본 — 공유 원본을 안 고친다)
+        try
+        {
+            var stw = (Autodesk.Civil.DatabaseServices.Styles.SurfaceStyle)tr.GetObject(styleId, OpenMode.ForWrite);
+            stw.GetDisplayStylePlan(Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType.Boundary).Visible = true;
+            stw.GetDisplayStyleModel(Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType.Boundary).Visible = true;
+        }
+        catch { }
         foreach (ObjectId sid in civilDoc.GetSurfaceIds())
         {
             if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;

@@ -13226,6 +13226,159 @@ static Coordinate[] CloseXY(IReadOnlyList<Point3> r)
     }
 }
 
+// ── S149~S152 ★★★[v103.1 · JACK 1002 «부분 변환한 곳은 반대로 돌리면 그 모양으로 · 지금은 옹벽 부분을 인식 못 함»] 옹벽 목록 판 2 · 단 링 · 자리 재기 · 덮임 · 클릭선 끊기 ──
+{
+    Console.WriteLine("\n== S149 옹벽 목록 판 2 — 왕복 · 판 1 읽기 · 보류 옹벽 판정 ==");
+    List<Point3> Sq9(double x0, double y0, double x1, double y1, double z = 100) => new() { new(x0, y0, z), new(x1, y0, z), new(x1, y1, z), new(x0, y1, z) };
+    List<Point3> Ln9(double x0, double y0, double x1, double y1, int n = 11) { var l = new List<Point3>(); for (int i = 0; i < n; i++) l.Add(new(x0 + (x1 - x0) * i / (n - 1), y0 + (y1 - y0) * i / (n - 1), 100)); return l; }
+    var h9 = new WallListHead { PlanHandle = "2A3F", GroundHandle = "1B", NextNo = 9, VerifiedP0 = "7C2" };
+    var a9 = new WallRec { No = 4, State = 1, Up = true, Bench = 1, H = 5, T = 1, T0 = 10, T1 = 30, HeadZ = 105, Seg = Ln9(0, 0, 20, 0), Poly = Sq9(0, -15, 20, 0), IsWall = new() { true, true, false, false },
+                           WallHandle = "4C1", PureHandle = "4D0", P0Handle = "7C2", SlopeW = 0.01, FaceRun = 0.005, Grid = 2.0, RulerKind = 1, Hold = "밑선이 840.0mm 움직였다" };
+    var e9 = WallList.Encode(h9, new[] { a9 });
+    bool d9 = WallList.TryDecode(e9, out var h9b, out var w9b, out string why9);
+    bool same9 = d9 && h9b.VerifiedP0 == "7C2" && w9b.Count == 1 && w9b[0].P0Handle == "7C2" && w9b[0].SlopeW == 0.01 && w9b[0].FaceRun == 0.005 && w9b[0].Grid == 2.0
+                 && w9b[0].RulerKind == 1 && w9b[0].Hold == a9.Hold && w9b[0].Seg.SequenceEqual(a9.Seg) && w9b[0].IsWall.SequenceEqual(a9.IsWall);
+    Check("S149 목록 판 2 왕복 — 새 칸(P0 · 지은 값 · 자 종류 · 보류 · 확인된 P0) 비트 같음", same9, why9);
+    // 판 1(v103.0이 쓴 꼴) — 머리에 확인된 P0가 없고 옹벽 끝 여섯 칸이 없다
+    var v1 = new List<(char, object)> { ('S', WallList.Sign), ('I', 1), ('S', "2A3F"), ('S', "1B"), ('I', 9), ('I', 1) };
+    v1.AddRange(new (char, object)[] { ('I', 4), ('I', 1), ('I', 1), ('I', 1), ('D', 5.0), ('D', 1.0), ('D', 10.0), ('D', 30.0), ('D', 105.0), ('I', 0),
+                                       ('S', "4C1"), ('S', "4D0"), ('S', ""), ('S', ""), ('S', "") });
+    void P9(List<Point3> p) { v1.Add(('I', p.Count)); foreach (var q in p) { v1.Add(('D', q.X)); v1.Add(('D', q.Y)); v1.Add(('D', q.Z)); } }
+    P9(a9.Seg); P9(a9.Poly); v1.Add(('I', 4)); foreach (var b in a9.IsWall) v1.Add(('I', b ? 1 : 0));
+    bool d1 = WallList.TryDecode(v1, out var h1b, out var w1b, out string why1);
+    Check("S149 목록 판 1(v103.0) 읽기 — 새 칸은 «모름»(빈 핸들 · 지은 값 −1 · 보류 없음)",
+          d1 && h1b.VerifiedP0 == "" && w1b.Count == 1 && w1b[0].P0Handle == "" && w1b[0].SlopeW < 0 && w1b[0].FaceRun < 0 && w1b[0].Grid < 0 && w1b[0].Hold == "" && w1b[0].HeadZ == 105,
+          why1 + (d1 ? $" · 머리 {w1b[0].HeadZ} · 지은 값 {w1b[0].SlopeW}/{w1b[0].FaceRun}/{w1b[0].Grid}" : ""));
+    var bad9 = new List<(char, object)>(e9); bad9[1] = ('I', 3);
+    Check("S149 목록 — 판 3(더 새 판)은 안 읽는다", !WallList.TryDecode(bad9, out _, out _, out string why9b) && why9b.Contains("판"), why9b);
+    var held = new WallRec { No = 5, State = 1, Up = true, Bench = 0, Seg = Ln9(0, 0, 50, 0), Poly = Sq9(0, -20, 50, 0), IsWall = new() { true, false, false, true }, Hold = "밑선이 움직였다" };
+    var rH1 = WallList.Conflict(Sq9(10, -20, 30, 0), Ln9(10, 0, 30, 0), true, 0, new[] { held });
+    Check("S149 판정 — 보류 옹벽과 같은 선이면 «바꿈»(겹침으로 안 막는다)", rH1.ReplaceNo == 5 && rH1.Stop == "", $"바꿀 {rH1.ReplaceNo} · {rH1.Stop}{rH1.Note}");
+    var rH2 = WallList.Conflict(Sq9(10, -40, 30, -10), Ln9(10, -40, 30, -40), false, 1, new[] { held });
+    Check("S149 판정 — 보류 옹벽은 다른 선이어도 겹침 판정에서 뺀다", rH2.ReplaceNo == 0 && rH2.Stop == "", $"{rH2.Stop} · {rH2.Note}");
+
+    Console.WriteLine("\n== S150~S152 단 링 · 자리 재기 · 덮임 · 클릭선 끊기 ==");
+    var bd = new List<Point3> { new(0, 0, 100), new(60, 0, 100), new(60, 40, 100), new(0, 40, 100) };
+    var pp = new GradingParams
+    {
+        CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+        CutSlope = 1.5, FillSlope = 1.5, CellSize = 1.0, MaxBenches = 8, MaxRise = 30,
+        VertexSpacing = 2.0, MinSlope = 0.05, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+    };
+    var ng9 = new NullGround();
+    // S150 — 옮기기 전 ZoneEditCommon 셈(그대로 베낀 기준)과 같은가
+    static Dictionary<int, List<Point3>> OldBenchRings(VirtualSlope vs, bool up)
+    {
+        var r = new Dictionary<int, List<Point3>>();
+        static double AvgZ(List<Point3> q) { double t = 0; foreach (var p in q) t += p.Z; return q.Count > 0 ? t / q.Count : 0; }
+        for (int k = 0; 2 * k + 1 < vs.Rings.Count; k++)
+        {
+            var rA = vs.Rings[2 * k]; var rB = vs.Rings[2 * k + 1];
+            if (rA.Count < 3 || rB.Count < 3) continue;
+            bool aHigher = AvgZ(rA) >= AvgZ(rB);
+            r[k] = up ? (aHigher ? rB : rA) : (aHigher ? rA : rB);
+        }
+        return r;
+    }
+    var zS = new SlopeZone { T0 = 5, T1 = 55 }; zS.Rules.Add((0, 3.0, -1)); zS.Normalize();   // 남쪽 변 · 0단부터 1:3.0
+    bool eqAll = true; string eqWhy = "";
+    foreach (bool up in new[] { true, false })
+        foreach (var zs in new List<SlopeZone>?[] { null, new() { zS } })
+        {
+            var vs = GradingGeometry.Build(bd, ng9, pp, up, zs);
+            var a = WallPlace.BenchRingsOf(vs, up); var b = OldBenchRings(vs, up); var c = WallPlace.BenchRings(bd, pp, up, zs);
+            bool eq = a.Count == b.Count && a.Count == c.Count && a.All(kv => b.TryGetValue(kv.Key, out var rb) && ReferenceEquals(rb, kv.Value) && c.TryGetValue(kv.Key, out var rc) && rc.SequenceEqual(kv.Value));
+            if (!eq) { eqAll = false; eqWhy += $" {(up ? "절토" : "성토")}{(zs == null ? "" : "+구간")} 다름({a.Count}/{b.Count}/{c.Count})"; }
+        }
+    Check("S150 단 링 — WallPlace.BenchRingsOf = 옮기기 전 ZoneEditCommon 셈 · BenchRings = 다시 지어도 비트 같음(절토 · 성토 · 구간 있음/없음)", eqAll, eqWhy);
+
+    // S151 — 1단(절토 아랫선 z 105) 북쪽 변 가운데 20m에 옹벽
+    var R0 = WallPlace.BenchRings(bd, pp, true, null);
+    bool haveR1 = R0.TryGetValue(1, out var ring1) && ring1.Count >= 3;
+    Check("S151 준비 — 절토 1단 자 링", haveR1, $"단 {R0.Count}개");
+    if (haveR1)
+    {
+        var c1 = GradingGeometry.CumLen2D(ring1!); double tot1 = c1[^1];
+        double yN = ring1!.Max(q => q.Y);
+        double tA = GradingGeometry.ParamAt(ring1, c1, 40, yN), tB = GradingGeometry.ParamAt(ring1, c1, 20, yN);
+        double Sp(double a, double b) => b >= a ? b - a : tot1 - a + b;
+        var (T0, T1) = Sp(tA, tB) <= Sp(tB, tA) ? (tA, tB) : (tB, tA);
+        var seg = WallInPoly.SegmentPoints(ring1, c1, T0, T1);
+        double head = WallInPoly.HeadZ(ring1, c1, T0, Sp(T0, T1), true);
+        var k0 = WallPlace.Check(seg, head, true, ring1);
+        Check("S151 같은 자 — 안 움직임(평면 · 높이 차 0)", !k0.Moved && k0.DXY < 1e-9 && k0.DZ < 1e-9, $"dXY {k0.DXY:E2} · dZ {k0.DZ:E2} · 머리 {head}");
+        // 남쪽 변만 바꿈(0단부터 1:3.0) — 북쪽 자리는 그대로여야 한다 · 그 흔들림을 잰다(허용의 근거)
+        var Rs = WallPlace.BenchRings(bd, pp, true, new List<SlopeZone> { zS });
+        var kS = WallPlace.Check(seg, head, true, Rs.TryGetValue(1, out var r1s) ? r1s : null);
+        Console.WriteLine($"      S151 다른 구간만 바꿨을 때 이 자리 링 흔들림 — 평면 {kS.DXY * 1e6:F3}µm · 높이 {kS.DZ * 1e6:F3}µm");
+        Check("S151 다른 구간(남쪽)만 바꿈 — 북쪽 옹벽은 안 움직임", !kS.Moved, $"{kS.Why} · dXY {kS.DXY:E2}");
+        // 같은 방향 단높이 바꿈(0단부터 4m) — 1단 링 높이가 104로
+        var pH = new GradingParams
+        {
+            CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+            CutSlope = 1.5, FillSlope = 1.5, CellSize = 1.0, MaxBenches = 8, MaxRise = 30,
+            VertexSpacing = 2.0, MinSlope = 0.05, MinFaceRun = 0.005, MiterConvex = true, MiterLimit = 2.0,
+            CutBenchSteps = { (0, 4.0) },
+        };
+        var kH = WallPlace.Check(seg, head, true, WallPlace.BenchRings(bd, pH, true, null).TryGetValue(1, out var r1h) ? r1h : null);
+        Check("S151 단높이 바꿈(0단부터 4m) — 움직임(머리 높이 차)", kH.Moved && kH.DZ > 0.5, kH.Why);
+        // 안쪽 단(0단) 구배를 옹벽 자리(북쪽)에서 바꿈 — 1단 링이 밀린다
+        var zN0 = new SlopeZone { T0 = 105, T1 = 155 }; zN0.Rules.Add((0, 3.0, -1)); zN0.Normalize();
+        var kN0 = WallPlace.Check(seg, head, true, WallPlace.BenchRings(bd, pp, true, new List<SlopeZone> { zN0 }).TryGetValue(1, out var r1n) ? r1n : null);
+        Check("S151 안쪽 단 구배 바꿈(옹벽 자리) — 움직임(밑선 평면 차)", kN0.Moved && kN0.DXY > 1.0, kN0.Why);
+        // 바깥 단(2단부터)만 바꿈 — 1단 링은 그대로
+        var zN2 = new SlopeZone { T0 = 105, T1 = 155 }; zN2.Rules.Add((2, 3.0, -1)); zN2.Normalize();
+        var kN2 = WallPlace.Check(seg, head, true, WallPlace.BenchRings(bd, pp, true, new List<SlopeZone> { zN2 }).TryGetValue(1, out var r1o) ? r1o : null);
+        Check("S151 바깥 단(2단부터)만 바꿈 — 1단 옹벽은 안 움직임", !kN2.Moved, $"{kN2.Why} · dXY {kN2.DXY:E2}");
+        // 링 시작점을 넘는 구간(T0 > T1)
+        double s0 = tot1 - 5, s1 = 5;
+        var segW = WallInPoly.SegmentPoints(ring1, c1, s0, s1);
+        double headW = WallInPoly.HeadZ(ring1, c1, s0, Sp(s0, s1), true);
+        var kW = WallPlace.Check(segW, headW, true, ring1);
+        Check("S151 링 시작점을 넘는 구간 — 안 움직임 · 새 T0 > T1", !kW.Moved && kW.T0 > kW.T1, $"T0 {kW.T0:F2} T1 {kW.T1:F2} · {kW.Why}");
+        // 자 도는 방향이 뒤집힌 링 — 그래도 같은 자리
+        var rev = new List<Point3>(ring1); rev.Reverse();
+        var kR = WallPlace.Check(seg, head, true, rev);
+        Check("S151 자 도는 방향이 뒤집혀도 같은 자리 — 안 움직임", !kR.Moved, $"dXY {kR.DXY:E2} · dZ {kR.DZ:E2}");
+        // 그 단이 없어짐
+        var kX = WallPlace.Check(seg, head, true, null);
+        Check("S151 그 단 링이 없으면 움직임(까닭 적음)", kX.Moved && kX.Why.Contains("없다"), kX.Why);
+
+        // S152 덮임 — 옹벽 폴리곤 = 안쪽 변(자 위) + 바깥으로 15m
+        var poly = new List<Point3>(seg); for (int i = seg.Count - 1; i >= 0; i--) poly.Add(new Point3(seg[i].X, seg[i].Y + 15, head));
+        var pickSame = WallInPoly.SegmentPoints(ring1, c1, T0 + 2, T0 + 12);          // 같은 단 · 안쪽 변 위 10m
+        double cvSame = WallPlace.CoveredLength(pickSame, poly);
+        Check("S152 덮임 — 같은 단 안쪽 변 위 10m를 고르면 덮음", cvSame > 9.9 && cvSame < 10.1, $"{cvSame:F3}m");
+        var pickEnd = WallInPoly.SegmentPoints(ring1, c1, T1 - 0.2, T1 + 10);         // 끝만 0.2m 닿음
+        double cvEnd = WallPlace.CoveredLength(pickEnd, poly);
+        Check("S152 덮임 — 옹벽 끝에 0.2m만 닿으면 안 덮음(0.5m 이하)", cvEnd <= 0.5, $"{cvEnd:F3}m");
+        var pickOut = new List<Point3> { new(25, yN + 5, 110), new(35, yN + 5, 110) };   // 바깥 단 — 폴리곤 속
+        double cvOut = WallPlace.CoveredLength(pickOut, poly);
+        Check("S152 덮임 — 바깥 단 선이 폴리곤 속을 지나면 덮음", cvOut > 9.9, $"{cvOut:F3}m");
+        var pickIn = new List<Point3> { new(25, yN - 8.5, 100), new(35, yN - 8.5, 100) }; // 안쪽 단 — 폴리곤 밖
+        double cvIn = WallPlace.CoveredLength(pickIn, poly);
+        Check("S152 덮임 — 안쪽 단 선은 폴리곤 밖이라 안 덮음(움직임으로 간다)", cvIn < 1e-9, $"{cvIn:F3}m");
+
+        // S152 클릭선 끊기 — 1단 링 북쪽 변 전체(옹벽 20m 포함)를 끊는다
+        double tL0 = GradingGeometry.ParamAt(ring1, c1, 58, yN), tL1 = GradingGeometry.ParamAt(ring1, c1, 2, yN);
+        var (L0, L1) = Sp(tL0, tL1) <= Sp(tL1, tL0) ? (tL0, tL1) : (tL1, tL0);
+        var click = WallInPoly.SegmentPoints(ring1, c1, L0, L1);
+        var pcs = WallPlace.SplitAtWalls(click, new List<(int, IReadOnlyList<Point3>)> { (7, seg) });
+        double Len(List<Point3> p) { double s = 0; for (int i = 1; i < p.Count; i++) s += Math.Sqrt((p[i].X - p[i - 1].X) * (p[i].X - p[i - 1].X) + (p[i].Y - p[i - 1].Y) * (p[i].Y - p[i - 1].Y)); return s; }
+        var wallPc = pcs.Where(q => q.WallNo == 7).ToList();
+        Check("S152 클릭선 끊기 — 사면 · 옹벽 7 · 사면 세 조각 · 옹벽 조각 길이 ≈ 20m(±0.1)",
+              pcs.Count == 3 && pcs[0].WallNo == 0 && pcs[1].WallNo == 7 && pcs[2].WallNo == 0 && wallPc.Count == 1 && Math.Abs(Len(wallPc[0].Pts) - 20) < 0.11,
+              string.Join(" · ", pcs.Select(q => $"{(q.WallNo > 0 ? "옹벽" + q.WallNo : "사면")} {Len(q.Pts):F2}m")));
+        Check("S152 클릭선 끊기 — 조각을 이으면 길이 그대로", Math.Abs(pcs.Sum(q => Len(q.Pts)) - Len(click)) < 1e-6, $"{pcs.Sum(q => Len(q.Pts)):F6} / {Len(click):F6}");
+        var segOff = seg.Select(q => new Point3(q.X, q.Y + 0.2, q.Z)).ToList();          // 단이 움직인 옹벽(20cm)
+        var pcOff = WallPlace.SplitAtWalls(click, new List<(int, IReadOnlyList<Point3>)> { (8, segOff) });
+        Check("S152 클릭선 끊기 — 선 위에 없는 옹벽(20cm 떨어짐)은 안 끊는다", pcOff.Count == 1 && pcOff[0].WallNo == 0, $"{pcOff.Count}조각");
+        var segTouch = WallInPoly.SegmentPoints(ring1, c1, L1 - 0.3, L1 + 10);           // 끝 0.3m만 겹침
+        var pcT = WallPlace.SplitAtWalls(click, new List<(int, IReadOnlyList<Point3>)> { (9, segTouch) });
+        Check("S152 클릭선 끊기 — 끝만 0.3m 겹친 옹벽은 안 끊는다", pcT.Count == 1, $"{pcT.Count}조각");
+    }
+}
+
 // ── S135 ★★★[JACK 0917 로그 <i>"제 몸을 지르지 않는가 <b>아니오</b>"</i>] ──
 //
 //   <para><b>현장 실측</b>: 데이라잇을 점마다 법선으로 10m 밀어 두른 점 266개로 폴리곤을 만들었는데

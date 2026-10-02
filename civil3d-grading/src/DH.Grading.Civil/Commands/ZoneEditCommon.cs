@@ -351,6 +351,11 @@ internal static class ZoneEditCommon
             System.Collections.Generic.List<Point3>>();
         // ★[JACK 0824] 클릭한 선의 한가운데 — '이 자리 지금 값이 뭐냐'를 되묻는 데 쓴다.
         var lineMid = new System.Collections.Generic.Dictionary<(bool up, int gid, int bench), Point3>();
+        // ★★★[v103.1 · JACK 1002 «옹벽이든 사면이든 부분 변환한 곳은 반대로 돌리면 그 모양으로 — 지금은 옹벽 부분을 인식 못 함»]
+        //   목록의 넣은 옹벽(이 구역) — 클릭선을 그 안쪽 변에서 끊어 옹벽 부분만 고르게 하고(주황) · 고른 선이 덮는 옹벽을 찾아 되돌린다
+        var listWalls = new System.Collections.Generic.List<WallRec>();
+        var idWall = new System.Collections.Generic.Dictionary<ObjectId, int>();
+        var wallOfKey = new System.Collections.Generic.Dictionary<(bool up, int gid, int bench), int>();
         // ★[검토 0910 · 높음3] <b>지정과 그림을 늘 같이 움직인다.</b>
         //   종전엔 다른 선을 골랐다 돌아오면 프롬프트엔 〈부분 20m〉가 뜨는데 <b>띠는 없었다</b> —
         //   화면과 적용될 값이 갈리는 자리다. 고를 때마다 그 선의 지정을 다시 그린다.
@@ -402,6 +407,12 @@ internal static class ZoneEditCommon
                 boundary = region.Boundary;
                 boundaryRef = boundary;      // ★로컬 함수(ShowPart)가 쓸 사본 손잡이
                 cumB = GradingGeometry.CumLen2D(boundary);
+                try
+                {
+                    if (WallListStore.TryLoad(db, tr, out var wHead0, out var wList0, out _) && (wHead0.PlanHandle.Length == 0 || wHead0.PlanHandle == region.PlanHandle))
+                        listWalls = wList0.Where(w => w.State == 1).ToList();
+                }
+                catch { }
                 // ★[검토 0824 M-4] 화면의 클릭 대상선은 **번들 제원**(지금 그려진 모양)으로 만들고,
                 //   재생성은 **정지옵션 제원**으로 돈다. 둘이 다르면 자로 박아 넣은 링이 재생성 결과에
                 //   없는 링이 된다 — 자리가 어긋나므로 그 자리에서 알린다(막지는 않는다: 사용자가
@@ -522,7 +533,48 @@ internal static class ZoneEditCommon
                 //   <para>★<b>못 그릴 것을 지우지 않는다</b> — 되돌릴 밑천을 먼저 잡아 둔다.</para>
                 var priorWall = ReadWallLines(db, tr);
                 GradingBuilder.DrawWallLines(db, tr, System.Array.Empty<System.Collections.Generic.List<Point3>>());
-                madeIds = GradingBuilder.DrawWallLinesTagged(db, tr, cutEdges, fillEdges, activePlan);
+                // ★★★[v103.1 · JACK 1002 «옹벽으로 바뀐 부분만 선택도 안 돼»] 클릭선을 목록 옹벽의 안쪽 변(같은 방향 · 같은 단)에서 끊는다 — 옹벽 부분만 따로 고른다(주황).
+                //   부분 옹벽은 번들이 아니라 목록에만 살아 클릭선이 그 자리에서 안 갈렸다. 단이 움직인 옹벽(선 위에 없음)은 안 끊긴다(WallPlace.SplitAtWalls)
+                var wallPieces = new System.Collections.Generic.HashSet<System.Collections.Generic.List<Point3>>(ReferenceEqualityComparer.Instance);
+                var pieceNo = new System.Collections.Generic.Dictionary<System.Collections.Generic.List<Point3>, int>(ReferenceEqualityComparer.Instance);
+                System.Collections.Generic.List<(bool, int, int, System.Collections.Generic.List<Point3>)> SplitW(
+                    System.Collections.Generic.List<(bool, int, int, System.Collections.Generic.List<Point3>)> edges, bool up)
+                {
+                    var ws = listWalls.Where(w => w.Up == up).ToList();
+                    if (ws.Count == 0) return edges;
+                    var outE = new System.Collections.Generic.List<(bool, int, int, System.Collections.Generic.List<Point3>)>();
+                    foreach (var (isS, bench, sg, pts) in edges)
+                    {
+                        var mine = ws.Where(w => w.Bench == bench).Select(w => (w.No, (System.Collections.Generic.IReadOnlyList<Point3>)w.Seg)).ToList();
+                        if (mine.Count == 0 || pts == null || pts.Count < 2) { outE.Add((isS, bench, sg, pts!)); continue; }
+                        var pcs = WallPlace.SplitAtWalls(pts, mine);
+                        // ★[v103.1 · 코드 검토 중간 2] 닫힌 고리면 이음매에서 갈린 첫 · 끝 조각(같은 종류)을 다시 잇는다 — 안 이으면 «전체구간»이 고리의 반쪽만 바꾼다
+                        bool closedL = pts.Count >= 3 && System.Math.Abs(pts[0].X - pts[^1].X) < 0.05 && System.Math.Abs(pts[0].Y - pts[^1].Y) < 0.05;
+                        if (closedL && pcs.Count >= 3 && pcs[0].WallNo == pcs[^1].WallNo)
+                        {
+                            var merged = new System.Collections.Generic.List<Point3>(pcs[^1].Pts);
+                            merged.AddRange(pcs[0].Pts.Skip(1));
+                            pcs[0] = (merged, pcs[0].WallNo);
+                            pcs.RemoveAt(pcs.Count - 1);
+                        }
+                        foreach (var (pp, no) in pcs)
+                        {
+                            outE.Add((isS, bench, sg, pp));
+                            if (no > 0) { wallPieces.Add(pp); pieceNo[pp] = no; Log($"   클릭선 — {(up ? "절토" : "성토")} {bench + 1}단을 옹벽 {no} 자리에서 끊었다(옹벽 조각 {pp.Count}점 · 주황)"); }
+                        }
+                    }
+                    return outE;
+                }
+                cutEdges = SplitW(cutEdges, true);
+                fillEdges = SplitW(fillEdges, false);
+                madeIds = GradingBuilder.DrawWallLinesTagged(db, tr, cutEdges, fillEdges, activePlan, wallPieces);
+                {
+                    // 그린 선 → 옹벽 번호(그리는 차례 = 절토 다음 성토 · 점 2개 미만은 안 그림 — DrawWallLinesTagged와 같다)
+                    var drawnNo = new System.Collections.Generic.List<int>();
+                    foreach (var (_, _, _, pts) in cutEdges) if (pts != null && pts.Count >= 2) drawnNo.Add(pieceNo.TryGetValue(pts, out var nn1) ? nn1 : 0);
+                    foreach (var (_, _, _, pts) in fillEdges) if (pts != null && pts.Count >= 2) drawnNo.Add(pieceNo.TryGetValue(pts, out var nn2) ? nn2 : 0);
+                    for (int di = 0; di < madeIds.Count && di < drawnNo.Count; di++) if (drawnNo[di] > 0) idWall[madeIds[di]] = drawnNo[di];
+                }
                 _restoreLines = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
                 foreach (var (_, _, _, pts) in cutEdges) _restoreLines.Add(pts);
                 foreach (var (_, _, _, pts) in fillEdges) _restoreLines.Add(pts);
@@ -554,6 +606,7 @@ internal static class ZoneEditCommon
                                 pts.Add(new Point3(pv.Position.X, pv.Position.Y, pv.Position.Z));
                     int gid = gidSeq++;
                     info[id] = (pki.up, pki.bench, gid);
+                    if (idWall.TryGetValue(id, out var wnoK)) wallOfKey[(pki.up, gid, pki.bench)] = wnoK;
                     var key = (pki.up, gid, pki.bench);
                     if (!groups.TryGetValue(key, out var g)) groups[key] = g = new();
                     g.Add(id);
@@ -621,7 +674,7 @@ internal static class ZoneEditCommon
                 {
                     using var trD = db.TransactionManager.StartTransaction();
                     if (groups.TryGetValue(k, out var gD))
-                        foreach (var gid in gD) SetColorByLayer(trD, gid);
+                        foreach (var gid in gD) { if (idWall.ContainsKey(gid)) SetColor(trD, gid, GradingBuilder.WallPieceAci); else SetColorByLayer(trD, gid); }
                     trD.Commit();
                 }
                 catch { }
@@ -814,7 +867,7 @@ internal static class ZoneEditCommon
                 void ColorGroup((bool up, int gid, int bench) k2, bool on)
                 {
                     if (!groups.TryGetValue(k2, out var g2)) return;
-                    foreach (var gid in g2) { if (on) SetColor(tr, gid, SelAci); else SetColorByLayer(tr, gid); }
+                    foreach (var gid in g2) { if (on) SetColor(tr, gid, SelAci); else if (idWall.ContainsKey(gid)) SetColor(tr, gid, GradingBuilder.WallPieceAci); else SetColorByLayer(tr, gid); }
                 }
                 // [1회 1개 — JACK] 연달아 누르면 이전 선택은 해제하고 마지막 것만 남긴다.
                 if (pick != null && !pick.Value.Equals(key)) ColorGroup(pick.Value, false);
@@ -845,6 +898,8 @@ internal static class ZoneEditCommon
                     nowTxt = $" · 지금 {(nS <= GradingSettings.WallGateSlope ? "<수직=옹벽>" : $"1:{nS:0.##}")}"
                            + $"·소단 {nW:0.##}m";
                 }
+                if (wallOfKey.TryGetValue(key, out var wSel))
+                    nowTxt = $" · 지금 <옹벽 {wSel}(구간 옹벽)>" + (wallMode ? " — 구간지정(P)으로 다시 옹벽 변환하면 이 옹벽을 새 값으로 바꿉니다" : " — 사면 변환하면 이 옹벽이 사면으로 돌아갑니다");
                 ed.WriteMessage($"\n → {(pk.up ? "절토" : "성토")} {pk.bench + 1}단 선택 · 이 구간 {pickSpan:0.#}m"
                               + nowTxt
                               + (wholeLoop.Contains(key) ? " (한 바퀴 고리)" : ""));
@@ -1028,6 +1083,18 @@ internal static class ZoneEditCommon
             double beforeH = pick == null ? 0
                 : GradingSettings.ToParams().BenchHeightAt(pick.Value.up, pick.Value.bench);
 
+            // ★★[v103.1 · 계획 v103.1 검토 높음 1 — v103.0에도 있던 틈] 이 아래에서 멈추면(계획선 못 찾음 · 같은 값 «아니오») 넣은 단높이 규칙 · 구간 · 손 폴리곤을
+            //   되돌린다 — 종전엔 남아 다음 계획부지 생성에 거절한 변환이 샜다(ZoneOverride · CutBenchSteps 제자리 Add)
+            var stepsCut0 = new System.Collections.Generic.List<(int, double)>(GradingSettings.CutBenchSteps);
+            var stepsFill0 = new System.Collections.Generic.List<(int, double)>(GradingSettings.FillBenchSteps);
+            void Abandon()
+            {
+                GradingSettings.CutBenchSteps = new System.Collections.Generic.List<(int, double)>(stepsCut0);
+                GradingSettings.FillBenchSteps = new System.Collections.Generic.List<(int, double)>(stepsFill0);
+                GradingSettings.ZoneOverride = null;
+                GradingSettings.SetWallPolyManual(null, ""); GradingSettings.WallZonePick = null;
+            }
+
             // ── 적용: 기존 구간 + 이번 규칙 하나 ──
             var newCut = new System.Collections.Generic.List<SlopeZone>();
             var newFill = new System.Collections.Generic.List<SlopeZone>();
@@ -1096,8 +1163,8 @@ internal static class ZoneEditCommon
             if (groundId.IsNull) groundId = NoriCommand.FindByHandle(db, region!.GroundHandle);
             if (planId.IsNull || groundId.IsNull)
             {
-                // ★[v102.0 코드 검토 낮음 4] 여기서 빠지면 방금 둔 손 폴리곤·고른 구간이 다음 실행으로 샌다 — 비운다
-                GradingSettings.SetWallPolyManual(null, ""); GradingSettings.WallZonePick = null;
+                // ★[v102.0 코드 검토 낮음 4 · v103.1] 여기서 빠지면 방금 둔 손 폴리곤·고른 구간·단높이 규칙이 다음 실행으로 샌다 — 되돌린다
+                Abandon();
                 AcadApp.ShowAlertDialog("정지면을 재생성하려면 [정지면 생성](DHGRADE)을 먼저 한 번 실행해야 합니다.");
                 return;
             }
@@ -1125,7 +1192,45 @@ internal static class ZoneEditCommon
             //   변환 기본값은 '그 단에 지금 적용 중인 값'이라, Enter만 치면 넣은 값이 지금 값과 같아
             //   아무 일도 안 일어난다 — 그런데 화면엔 '적용' 이라고만 떠서 고장으로 보인다(0824 실측:
             //   6단에 1:1.5를 넣었는데 이미 1단부터 1:1.5였다). 셋 다 같으면 그 자리에서 알린다.
-            if (!clearAll && pick != null && lineMid.TryGetValue(pick.Value, out var pmid) && boundary != null)
+            // ★★★[v103.1 · JACK 1002 «부분 변환한 곳은 반대로 돌리면 그 모양으로 — 지금은 옹벽 부분을 인식 못 하고 사면 속성이 같다며 진행이 안 돼»]
+            //   고른 선이 덮는 목록 옹벽(같은 방향 · 0.5m 넘게 — 0930 규칙 ②) — 있으면 «값이 같다»가 아니다(그 옹벽이 사면으로 돌아간다) · DoGrade가 합성을 풀 때 같은 트랜잭션에서 뺀다.
+            //   옹벽 더하기(부분 지정 옹벽 변환)는 겹침 · 바꿈 판정이 따로 맡는다
+            var covered = new System.Collections.Generic.List<WallRec>();
+            if (!clearAll && pick != null && !(wallMode && drawPart) && listWalls.Count > 0)
+            {
+                var rrC = lineRef.TryGetValue(pick.Value, out var rpC) ? rpC : boundary;
+                if (rrC != null && rrC.Count >= 3)
+                {
+                    var rcC = GradingGeometry.CumLen2D(rrC);
+                    var arcC = partArc.TryGetValue(pick.Value, out var paC) ? paC : lineArc[pick.Value];
+                    var pickSeg = WallInPoly.SegmentPoints(rrC, rcC, arcC.T0, arcC.T1);
+                    foreach (var w in listWalls)
+                    {
+                        double cl = WallPlace.CoveredLength(pickSeg, w.Poly);
+                        // ★[v103.1 · 코드 검토 중간 1] 되돌리는 것은 <b>같은 단</b>(그 옹벽이 선 단 링 — 주황 조각)을 골랐을 때만. 바깥 단은 옹벽 폴리곤 속을 지나도
+                        //   그 옹벽 자리를 안 움직인다(하네스 S151) — 지우지 않고 남겨 다시 합성한다. 안쪽 단은 자리가 움직이면 끝 확인이 보류로 잡는다
+                        bool sameBench = w.Up == pick.Value.up && w.Bench == pick.Value.bench;
+                        if (sameBench && cl > 0.5) covered.Add(w);
+                        Log($"   옹벽 {w.No}({w.Side} {w.Bench + 1}단) — 고른 선이 폴리곤 안에 {cl:F2}m{(w.Up != pick.Value.up ? "(다른 방향)" : !sameBench ? "(다른 단 — 안 되돌림)" : "")}");
+                    }
+                }
+            }
+            if (covered.Count > 0 && wallMode)
+            {
+                // ★[v103.1 · 코드 검토 중간 1] 옹벽 변환 «전체구간»으로 구간 옹벽 자리를 고르면 옹벽 위에 전체구간 옹벽이 겹친다 — 바꾸지 않고 길을 알린다
+                string cvw = string.Join(", ", covered.Select(w => $"옹벽 {w.No}"));
+                ed.WriteMessage($"\n[{cmdLabel}] 이 자리는 이미 구간 옹벽({cvw})입니다 — 값을 바꾸려면 구간지정(P)으로 다시 옹벽 변환(같은 선이면 새 값으로 바꿉니다) · 되돌리려면 사면 변환. 아무것도 안 바꿨습니다.");
+                Log($"■ {cmdLabel} — 전체구간 옹벽 변환이 구간 옹벽({cvw})을 덮어 멈춤(안 바꿈)");
+                Abandon();
+                return;
+            }
+            if (covered.Count > 0)
+            {
+                string cv = string.Join(", ", covered.Select(w => $"옹벽 {w.No}({w.Side} {w.Bench + 1}단)"));
+                ed.WriteMessage($"\n[{cmdLabel}] {cv}을 사면으로 되돌립니다 — 고른 구간에 덮였습니다.");
+                Log($"■ {cmdLabel} — 고른 선이 덮은 옹벽: {cv} → 되돌림(정지면을 다시 지으며 · 남은 옹벽은 다시 합성)");
+            }
+            if (!clearAll && pick != null && covered.Count == 0 && lineMid.TryGetValue(pick.Value, out var pmid) && boundary != null)
             {
                 bool pu = pick.Value.up;
                 var oldZones = pu ? region!.CutWallZones : region!.FillWallZones;
@@ -1182,7 +1287,7 @@ internal static class ZoneEditCommon
                                 && (rSame.StringResult ?? "").Trim().ToUpperInvariant() == "Y";
                     if (!goOn)
                     {
-                        GradingSettings.SetWallPolyManual(null, ""); GradingSettings.WallZonePick = null;   // ★[v102.0 코드 검토 낮음 4] 다음 실행으로 새지 않게
+                        Abandon();   // ★[v102.0 코드 검토 낮음 4 · v103.1] 다음 실행으로 새지 않게(단높이 규칙 · 구간도 — v103.0까지는 남았다)
                         ed.WriteMessage("\n → 그대로 두었습니다 — 값을 바꿔 다시 해 보세요.");
                         Log($"■ {cmdLabel} — 값이 같아 재생성을 <b>안 했다</b>(사용자가 아니오)");
                         return;
@@ -1249,8 +1354,11 @@ internal static class ZoneEditCommon
             GradingSettings.LastAddNo = 0; GradingSettings.LastAddNote = ""; GradingSettings.LastAddBlockedNo = 0;
             if (wallMode && drawPart)
                 GradingSettings.WallAddSpec = new GradingSettings.WallAddInfo(pick!.Value.up, pick.Value.bench, askH!.Value, askW!.Value, doc.Name);
+            if (covered.Count > 0)
+                GradingSettings.WallRerunSpec = new GradingSettings.WallRerunInfo(doc.Name, covered.Select(w => w.No).ToArray(), wallMode ? "전체구간 옹벽 변환이 덮음" : "사면 변환이 덮음");
             CreateGradingCommand.DoGrade(doc, planId, groundId, GradeMode.RerunLast);
             GradingSettings.WallAddSpec = null;   // 들머리에서 일찍 빠졌어도 다음 실행으로 새지 않게
+            GradingSettings.WallRerunSpec = null;
 
             // ★★[v102.2 · v103.0] 부분 지정 옹벽 변환이 옹벽을 «대기»로 지었으면 <b>합성을 이어서 태운다</b>(버튼 없이) — 목록 전부를 합성 전 면 위에 차례로(약 30초 × 옹벽 수).
             //   노리선처럼 명령으로 태운다 — 같은 흐름 안에서 직접 부르면 재생성이 쥔 것과 부딪힐 수 있다. 노리선 갱신(아래)보다 먼저 줄 선다.

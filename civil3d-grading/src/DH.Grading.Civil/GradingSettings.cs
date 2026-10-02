@@ -25,7 +25,7 @@ public static class GradingSettings
     /// <b>같은 번호를 단 빌드가 여러 개</b>가 되어, 어느 것이 깔렸는지 물으면 답할 수가 없었다.</para>
     /// <para><c>x.0</c> = 화면·명령이 바뀌어 <b>사용자가 다르게 일하게</b> 되는 판 ·
     /// <c>x.y</c> = 같은 화면에서 결함을 고친 판.</para></summary>
-    public const string Version = "v103.0.1 (2026-10-02)";
+    public const string Version = "v103.1 (2026-10-02)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -223,6 +223,23 @@ public static class GradingSettings
         { why = $"    ⚠옹벽 더하기 명세를 버렸다 — 고른 도면({r.Doc})과 지금 도면({docName})이 다르다\n"; return null; }
         return r;
     }
+
+    /// <summary>★★★[v103.1 · JACK 1002 «부분 변환한 곳은 반대로 돌리면 그 모양으로»] <b>되돌릴 옹벽 명세</b> — 사면 변환 · 전체구간 옹벽 변환 · 전체 해제가
+    /// 고른 선이 덮은 목록 옹벽 번호를 DoGrade에 한 번 넘긴다. DoGrade는 합성을 풀 때 <b>같은 트랜잭션에서</b> 그 옹벽만 지우고 목록에서 뺀다(나머지 옹벽은 정지면을 다시 지은 뒤 다시 합성).</summary>
+    public sealed record WallRerunInfo(string Doc, int[] CoveredNos, string Why);
+    public static WallRerunInfo? WallRerunSpec;
+
+    /// <summary>★[v103.1] 되돌릴 옹벽 명세를 <b>꺼내면서 비운다</b> · 도면이 다르면 <c>null</c>.</summary>
+    public static WallRerunInfo? TakeWallRerunSpec(string docName)
+    {
+        var r = WallRerunSpec; WallRerunSpec = null;
+        if (r == null) return null;
+        if (!string.IsNullOrEmpty(r.Doc) && !string.Equals(r.Doc, docName ?? "", System.StringComparison.OrdinalIgnoreCase)) return null;
+        return r;
+    }
+
+    /// <summary>★[v103.1 · 검토 v103.1 H4] 마지막 정지면 생성이 끝까지 성공했나(gradeOk) — DoGrade는 void라 이 칸으로 알린다(들머리에서 먼저 비운다).</summary>
+    public static bool LastGradeOk;
 
     /// <summary>★[v103.0] 이번 옹벽 변환이 목록에 «대기»로 써 둔 옹벽 번호(0이면 없음) · 못 쓴 까닭 — ZoneEditCommon이 보고 합성을 이어 태운다.</summary>
     public static int LastAddNo;
@@ -657,6 +674,7 @@ public static class GradingSettings
         ZoneOverride = null;
         WallZoneReplaceAll = false;
         WallAddSpec = null; LastAddNo = 0; LastAddNote = ""; LastAddBlockedNo = 0;   // ★[v103.0] 다른 도면의 옹벽 더하기는 이 도면에 안 들인다
+        WallRerunSpec = null;   // ★[v103.1] 되돌릴 옹벽 명세도
 
         var db = doc.Database;
 
