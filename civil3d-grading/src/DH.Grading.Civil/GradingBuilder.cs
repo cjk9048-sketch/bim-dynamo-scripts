@@ -1428,6 +1428,39 @@ public static class GradingBuilder
 
     /// <summary>[0728 — JACK] baseName 지표면의 표시 스타일을 이름 후보들 중 존재하는 것으로 설정.
     /// 정확 일치 우선, 없으면 '2'와 '10'이 들어간 등고선 스타일 폴백. 적용된 스타일명 반환("" = 미적용).</summary>
+    /// <summary>★[v103.0.1 · JACK 1002 «등고선 톱니 → 표시: 1cm 올려 그리기»] 등고선 기준 표고만 +1cm 올린 <b>형제 사본</b> 스타일(이름 = 원본 + <see cref="ContourLiftSuffix"/>).
+    /// <para>사면 소단 · 옹벽 소단 · 원지반 평지가 정확히 등고선 높이(110 · 120 …)에 평평하게 놓이면 Civil이 그 높이 등고선을 들쭉날쭉 그린다.
+    /// 화면 없는 Civil 계측(1002 · 그날 합성): 110.00m 되꺾임 23 → 110.01m 0 · 115.00m 23 → 0 · 120.00m 90 → 3 · 소단 아닌 높이(112 · 116m)는 .00/.01 둘 다 0(길이도 같음).
+    /// 모양 · 토량은 그대로 — 등고선만 x.01m에 그린다. 원본은 안 건드린다. 간격은 부를 때마다 원본을 따라간다(원본을 고치면 다음 생성이 맞춘다).
+    /// 이미 사본이면 그대로 돌려준다.</para></summary>
+    public const string ContourLiftSuffix = " (DH +1cm)";
+    public const double ContourLift = 0.01;
+    public static ObjectId LiftedContourStyle(Transaction tr, ObjectId srcStyleId, out string note)
+    {
+        note = "";
+        if (srcStyleId.IsNull) return ObjectId.Null;
+        var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+        var src = (Autodesk.Civil.DatabaseServices.Styles.SurfaceStyle)tr.GetObject(srcStyleId, OpenMode.ForRead);
+        if (src.Name.EndsWith(ContourLiftSuffix, StringComparison.Ordinal)) return srcStyleId;
+        string want = src.Name + ContourLiftSuffix;
+        ObjectId cid = ObjectId.Null;
+        foreach (ObjectId sid in civilDoc.Styles.SurfaceStyles)
+            if (tr.GetObject(sid, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.Styles.SurfaceStyle st && st.Name == want) { cid = sid; break; }
+        bool made = cid.IsNull;
+        if (made)
+        {
+            var srcW = (Autodesk.Civil.DatabaseServices.Styles.SurfaceStyle)tr.GetObject(srcStyleId, OpenMode.ForWrite);
+            cid = srcW.CopyAsSibling(want);
+        }
+        var c = (Autodesk.Civil.DatabaseServices.Styles.SurfaceStyle)tr.GetObject(cid, OpenMode.ForWrite);
+        var sc = src.ContourStyle; var cc = c.ContourStyle;
+        cc.MinorContourInterval = sc.MinorContourInterval;
+        cc.MajorContourInterval = sc.MajorContourInterval;
+        cc.BaseElevationInterval = sc.BaseElevationInterval + ContourLift;
+        note = $"등고선 +1cm 사본{(made ? " 만듦" : "")}(보조 {cc.MinorContourInterval:0.###}m · 주 {cc.MajorContourInterval:0.###}m · 기준 {cc.BaseElevationInterval:0.###}m)";
+        return cid;
+    }
+
     public static string SetSurfaceStyle(Transaction tr, string baseName, params string[] candidates)
     {
         var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
@@ -1457,6 +1490,16 @@ public static class GradingBuilder
             stw.GetDisplayStyleModel(Autodesk.Civil.DatabaseServices.Styles.SurfaceDisplayStyleType.Boundary).Visible = true;
         }
         catch { }
+        // ★[v103.0.1 · JACK 1002 «등고선 톱니 → 표시: 1cm 올려 그리기»] 정지면_DH는 고른 스타일의 <b>+1cm 사본</b>으로 — 원본은 다른 지표면도 쓴다(안 건드린다)
+        if (baseName == "정지면_DH")
+        {
+            try
+            {
+                var lifted = LiftedContourStyle(tr, styleId, out string liftNote);
+                if (!lifted.IsNull) { styleId = lifted; styleName = ((Autodesk.Civil.DatabaseServices.Styles.SurfaceStyle)tr.GetObject(lifted, OpenMode.ForRead)).Name + " · " + liftNote; }
+            }
+            catch (System.Exception lx) { styleName += $" · ⚠등고선 +1cm 사본 실패({lx.GetType().Name}) — 원본 스타일 그대로"; }
+        }
         foreach (ObjectId sid in civilDoc.GetSurfaceIds())
         {
             if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
