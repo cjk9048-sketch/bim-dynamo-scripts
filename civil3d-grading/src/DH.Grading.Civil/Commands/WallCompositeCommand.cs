@@ -111,6 +111,15 @@ public sealed class WallCompositeCommand
     [CommandMethod("DHWALLCOMP")]
     public void Run()
     {
+        // ★[v103.0.1 · JACK 1002 스샷 «저런 정보창»] 계획부지 생성처럼 이벤트 뷰어 <b>자동 알림만</b> 끈다(기록은 남는다 · EventViewerMute) —
+        //   합성 가져오기(LandXML)가 남기는 정보 한 줄(«V1.1 이전 알고리즘 … 인접이 없습니다»)에 창이 떴다. 옹벽 변환이 이어 태우는 명령이라 DoGrade의 끄기 밖이었다
+        var evPrev = EventViewerMute.Begin();
+        try { RunInner(); }
+        finally { EventViewerMute.End(evPrev); }
+    }
+
+    void RunInner()
+    {
         Document doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
         GradingSettings.SyncToDocument(doc);
@@ -440,6 +449,13 @@ public sealed class WallCompositeCommand
             throw new SwapFailed($"합성은 지었는데 이름을 '{PlanName}'로 못 바꿨다({(e2.Length > 0 ? e2 : $"'{cTin.Name}'")})");
         // 정지면_DH가 늘 보이던 모양 그대로 — 합성 전 면의 스타일·레이어를 물려받는다(계획 검토 v103 H1 — 지울 지난 합성이 아니라 합성 전 면에서)
         try { cTin.StyleId = pW.StyleId; } catch (System.Exception sx) { log.AppendLine("스타일 물려받기 실패: " + sx.GetType().Name); }
+        // ★[v103.0.1 · JACK 1002 «등고선 1cm 올려 그리기»] v103.0.1 전에 지은 합성 전 면은 원본 스타일이다 — 합성(정지면_DH)은 +1cm 사본으로(원본은 안 건드린다)
+        try
+        {
+            var lid = GradingBuilder.LiftedContourStyle(tr, pW.StyleId, out string ln);
+            if (!lid.IsNull && lid != pW.StyleId) { cTin.StyleId = lid; log.AppendLine("정지면_DH 스타일 — " + ln); }
+        }
+        catch (System.Exception lx) { log.AppendLine("등고선 +1cm 사본 실패(원본 스타일 그대로): " + lx.GetType().Name); }
         try { ((Autodesk.AutoCAD.DatabaseServices.Entity)cTin).LayerId = ((Autodesk.AutoCAD.DatabaseServices.Entity)pW).LayerId; } catch (System.Exception lx) { log.AppendLine("레이어 물려받기 실패: " + lx.GetType().Name); }
         string nos = string.Join(",", useOk.Select(w => w.No));
         var forcedStep = res.Steps.FirstOrDefault(s => s.R.Clean?.OverForced == true);
