@@ -33,6 +33,14 @@ public sealed class WallRec
     public string Block = "";
     /// <summary>마지막 합성 판정 글 · 시각.</summary>
     public string LastNote = "", Stamp = "";
+    /// <summary>★[v103.1 · 판 2] 지을 때 잰 합성 전 면(P0) 핸들 — 지금 P0와 다르면 정지면을 다시 지은 것이라 P0 몫을 다시 짓는다. 빈 값 = 모름(판 1).</summary>
+    public string P0Handle = "";
+    /// <summary>★[v103.1 · 판 2 · 검토 v103 H3 «지은 값을 저장»] 이 옹벽을 지은 앞면 구배 · 앞면 최소 너비 · 원지반 재는 간격. 음수 = 모름(판 1 — 지금 값을 쓰고 로그에 적는다).</summary>
+    public double SlopeW = -1, FaceRun = -1, Grid = -1;
+    /// <summary>★[v103.1 · 판 2] 안쪽 변을 잰 자 — 0 단 링 · 1 계획선(자 없는 구간).</summary>
+    public int RulerKind;
+    /// <summary>★[v103.1 · 판 2] 보류 까닭 — 정지면을 다시 지었더니 서 있던 단이 움직였다 등. 비었으면 보류 아님. 보류 옹벽은 합성에서 빼고(지우지 않음) 겹침 판정에서 «바꿈» 대상.</summary>
+    public string Hold = "";
 
     public string Side => Up ? "절토" : "성토";
     public static string WallSurfaceName(int no) => $"가상옹벽{no}_DH";
@@ -44,19 +52,21 @@ public sealed class WallListHead
 {
     public string PlanHandle = "", GroundHandle = "";
     public int NextNo = 1;
+    /// <summary>★[v103.1 · 판 2 · 검토 v103.1 높음 3] 끝까지 성공한 마지막 정지면 생성이 만든 정지면_DH 핸들 — 지금 P0가 이것과 다르면 확인 안 된 면이라 더하기 · 합성이 멈춘다. 빈 값 = 모름.</summary>
+    public string VerifiedP0 = "";
 }
 
 public static class WallList
 {
     public const string Sign = "DH_WALLS";
-    public const int Version = 1;
+    public const int Version = 2;
 
     /// <summary>(종류, 값) — 'S' 글 · 'I' 정수 · 'D' 실수. Civil이 DxfCode.Text · Int32 · Real로 옮긴다.</summary>
     public static List<(char Kind, object Value)> Encode(WallListHead head, IReadOnlyList<WallRec> walls)
     {
         var v = new List<(char, object)>
         {
-            ('S', Sign), ('I', Version), ('S', head.PlanHandle ?? ""), ('S', head.GroundHandle ?? ""), ('I', head.NextNo), ('I', walls.Count),
+            ('S', Sign), ('I', Version), ('S', head.PlanHandle ?? ""), ('S', head.GroundHandle ?? ""), ('I', head.NextNo), ('S', head.VerifiedP0 ?? ""), ('I', walls.Count),
         };
         void Pts(List<Point3> p) { v.Add(('I', p.Count)); foreach (var q in p) { v.Add(('D', q.X)); v.Add(('D', q.Y)); v.Add(('D', q.Z)); } }
         foreach (var w in walls)
@@ -67,6 +77,8 @@ public static class WallList
             v.Add(('S', w.WallHandle ?? "")); v.Add(('S', w.PureHandle ?? "")); v.Add(('S', w.Block ?? "")); v.Add(('S', w.LastNote ?? "")); v.Add(('S', w.Stamp ?? ""));
             Pts(w.Seg); Pts(w.Poly);
             v.Add(('I', w.IsWall.Count)); foreach (var b in w.IsWall) v.Add(('I', b ? 1 : 0));
+            // 판 2
+            v.Add(('S', w.P0Handle ?? "")); v.Add(('D', w.SlopeW)); v.Add(('D', w.FaceRun)); v.Add(('D', w.Grid)); v.Add(('I', w.RulerKind)); v.Add(('S', w.Hold ?? ""));
         }
         return v;
     }
@@ -84,8 +96,9 @@ public static class WallList
             List<Point3> Pts() { int n = I(); if (n < 0 || n > 1_000_000) throw new FormatException($"점 수 {n}"); var p = new List<Point3>(n); for (int k = 0; k < n; k++) p.Add(new Point3(D(), D(), D())); return p; }
             if (S() != Sign) { why = "옹벽 목록 서명이 다르다"; return false; }
             int ver = I();
-            if (ver != Version) { why = $"옹벽 목록 판 {ver}(이 애드인은 {Version}) — 더 새 판이 쓴 목록"; return false; }
+            if (ver < 1 || ver > Version) { why = $"옹벽 목록 판 {ver}(이 애드인은 {Version}) — 더 새 판이 쓴 목록"; return false; }
             head.PlanHandle = S(); head.GroundHandle = S(); head.NextNo = I();
+            if (ver >= 2) head.VerifiedP0 = S();
             int nw = I();
             if (nw < 0 || nw > 10_000) { why = $"옹벽 수 {nw}"; return false; }
             for (int k = 0; k < nw; k++)
@@ -95,6 +108,7 @@ public static class WallList
                 w.Seg = Pts(); w.Poly = Pts();
                 int nf = I(); if (nf < 0 || nf > 1_000_000) throw new FormatException($"표 수 {nf}");
                 for (int q = 0; q < nf; q++) w.IsWall.Add(I() != 0);
+                if (ver >= 2) { w.P0Handle = S(); w.SlopeW = D(); w.FaceRun = D(); w.Grid = D(); w.RulerKind = I(); w.Hold = S(); }
                 walls.Add(w);
             }
             if (i != v.Count) { why = $"옹벽 목록 끝에 값 {v.Count - i}개가 남았다"; return false; }
@@ -140,6 +154,15 @@ public static class WallList
         foreach (var w in existing)
         {
             if (w.State != 1) continue;
+            // ★[v103.1 · 검토 v103.1 새 중간 3] 보류 옹벽(정지면을 다시 지어 자리가 움직였다)은 합성에 안 들었다 — 겹침으로 막지 않고, 같은 선이면 «바꿈» 대상으로
+            if (w.Hold.Length > 0)
+            {
+                double hl = 0;
+                if (nS != null && w.Up == up && w.Bench == bench) { var hS = Line(w.Seg); if (hS != null) { try { hl = nS.Intersection(hS.Buffer(sameLineTol)).Length; } catch { } } }
+                if (hl > sameLineMin) same.Add((w.No, hl));
+                else notes.Add($"보류 옹벽 {w.No}은 겹침 판정에서 뺌");
+                continue;
+            }
             // ① 같은 선 — 같은 방향 · 같은 단 · 안쪽 변이 겹치는 길이
             double sameLen = 0;
             if (nS != null && w.Up == up && w.Bench == bench)

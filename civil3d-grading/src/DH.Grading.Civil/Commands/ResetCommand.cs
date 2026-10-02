@@ -184,7 +184,7 @@ public sealed class ResetCommand
         GradingSettings.LastPlanHandle = "";
         GradingSettings.LastGroundHandle = "";
         GradingSettings.ClearLastWall(false);
-        GradingSettings.WallAddSpec = null; GradingSettings.LastAddNo = 0; GradingSettings.LastAddNote = ""; GradingSettings.LastAddBlockedNo = 0; GradingSettings.AutoCompDoc = ""; GradingSettings.AutoCompNo = 0;
+        GradingSettings.WallAddSpec = null; GradingSettings.LastAddNo = 0; GradingSettings.LastAddNote = ""; GradingSettings.LastAddBlockedNo = 0; GradingSettings.WallRerunSpec = null; GradingSettings.AutoCompDoc = ""; GradingSettings.AutoCompNo = 0;
         return (surfs, ents, bundleCleared);
     }
 
