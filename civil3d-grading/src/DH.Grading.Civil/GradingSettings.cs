@@ -25,7 +25,7 @@ public static class GradingSettings
     /// <b>같은 번호를 단 빌드가 여러 개</b>가 되어, 어느 것이 깔렸는지 물으면 답할 수가 없었다.</para>
     /// <para><c>x.0</c> = 화면·명령이 바뀌어 <b>사용자가 다르게 일하게</b> 되는 판 ·
     /// <c>x.y</c> = 같은 화면에서 결함을 고친 판.</para></summary>
-    public const string Version = "v102.2 (2026-09-30)";
+    public const string Version = "v103.0 (2026-10-02)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -206,6 +206,29 @@ public static class GradingSettings
     /// <b>지난 절토 옹벽</b>을 다시 지었다(번들엔 지난 옹벽 구간이 남는다).</para></summary>
     public sealed record WallPickInfo(bool Up, double T0, double T1, System.Collections.Generic.List<Point3>? Ruler, string Doc);
     public static WallPickInfo? WallZonePick;
+
+    /// <summary>★★★[v103.0 · JACK 0930 «옹벽이 남아야» · 1002 «부분 옹벽은 전체 단높이 규칙에 안 넣음»] <b>옹벽 더하기 명세</b> — 부분 지정 옹벽 변환이 DoGrade에 한 번 넘긴다.
+    /// <para>이것이 있으면 DoGrade는 지난 합성을 <b>안 푼다</b>(지난 옹벽이 든 정지면_DH를 지킨다 — 실패하면 그대로) · 새 옹벽에 새 번호를 주고
+    /// 입력한 단높이(H) · 소단(T)으로 짓는다(종전엔 옹벽 변환이 받은 H를 방향 전체 단높이 규칙에만 넣고, 옹벽은 도킹창 기본값으로 지었다 — 코드 확인 1002).</para></summary>
+    public sealed record WallAddInfo(bool Up, int Bench, double H, double T, string Doc);
+    public static WallAddInfo? WallAddSpec;
+
+    /// <summary>★[v103.0] 더하기 명세를 <b>꺼내면서 비운다</b>(고른 구간과 같은 규칙). 도면이 다르면 <c>null</c>.</summary>
+    public static WallAddInfo? TakeWallAddSpec(string docName, out string why)
+    {
+        var r = WallAddSpec; WallAddSpec = null;
+        why = "";
+        if (r == null) return null;
+        if (!string.IsNullOrEmpty(r.Doc) && !string.Equals(r.Doc, docName ?? "", System.StringComparison.OrdinalIgnoreCase))
+        { why = $"    ⚠옹벽 더하기 명세를 버렸다 — 고른 도면({r.Doc})과 지금 도면({docName})이 다르다\n"; return null; }
+        return r;
+    }
+
+    /// <summary>★[v103.0] 이번 옹벽 변환이 목록에 «대기»로 써 둔 옹벽 번호(0이면 없음) · 못 쓴 까닭 — ZoneEditCommon이 보고 합성을 이어 태운다.</summary>
+    public static int LastAddNo;
+    public static string LastAddNote = "";
+    /// <summary>★[v103.0 · 재검토 낮음 4] 지었지만 합성을 막아 둔 옹벽 번호(0이면 없음) — «안 더했다»와 «지었지만 합성 막힘» 알림을 가른다.</summary>
+    public static int LastAddBlockedNo;
 
     /// <summary>★[v102.0] 고른 구간을 <b>꺼내면서 비운다</b>(손 폴리곤과 같은 규칙). 도면이 다르면 <c>null</c>과 까닭.</summary>
     public static WallPickInfo? TakeWallZonePick(string docName, out string why)
@@ -520,6 +543,8 @@ public static class GradingSettings
     public static string LastWallStamp = "";
     /// <summary>★[v102.2] 옹벽 변환이 합성을 이어서 태운 도면 — DHWALLCOMP가 꺼내 비우고, 못 하면 알림창으로 알린다(버튼이 없어져 명령줄만으로는 묻힌다).</summary>
     public static string AutoCompDoc = "";
+    /// <summary>★[v103.0] 이어 태운 합성이 넣을 «대기» 옹벽 번호 — 합성이 못 하면 그 옹벽만 버린다(지난 옹벽 · 정지면_DH는 그대로).</summary>
+    public static int AutoCompNo;
     public static void ClearLastWall(bool invalid)
     {
         LastWallPoly = null; LastWallSurfHandle = ""; LastWallPlanHandle = ""; LastWallPlanNote = ""; LastWallStamp = "";
@@ -631,6 +656,7 @@ public static class GradingSettings
         WallPicks.Clear();
         ZoneOverride = null;
         WallZoneReplaceAll = false;
+        WallAddSpec = null; LastAddNo = 0; LastAddNote = ""; LastAddBlockedNo = 0;   // ★[v103.0] 다른 도면의 옹벽 더하기는 이 도면에 안 들인다
 
         var db = doc.Database;
 

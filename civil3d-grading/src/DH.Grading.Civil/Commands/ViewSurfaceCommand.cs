@@ -198,6 +198,8 @@ public sealed class ViewSurfaceCommand
             if (keep != null) keeps.Add(keep);
             foreach (var nm in OurSurfaces())
                 GradingBuilder.SetSurfaceVisible(tr, nm, keeps.Contains(nm));
+            // ★[v103.0] 번호 붙은 옹벽 표면(가상옹벽{n}_DH · 순수옹벽{n}_DH)은 어느 보기에서도 끈다 — 목록(OurSurfaces)에 없으면 «원지반만»에서 원지반처럼 켜진다
+            try { WallTags.SetWallSurfacesVisible(tr, false); } catch { }
 
             SetLayers(db, tr, lines);
             tr.Commit();

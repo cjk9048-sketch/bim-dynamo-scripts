@@ -574,4 +574,200 @@ public static partial class WallDaylight
         if (tier == 3) R.Zone = null;
         return R;
     }
+
+    /// <summary>★★★[v103.0] 옹벽 하나 — <see cref="ComposeWalls"/> 입력(번호 · 폴리곤 · 가상옹벽 · 원지반 · 성토인가).</summary>
+    public sealed class WallInput
+    {
+        public int No;
+        public IReadOnlyList<Point3> Poly = Array.Empty<Point3>();
+        public IReadOnlyList<Tri> WallTris = Array.Empty<Tri>();
+        public IReadOnlyList<Tri> GroundTris = Array.Empty<Tri>();
+        public bool Down;
+    }
+
+    /// <summary>한 옹벽의 합성 단계 — 결과 · 앞 옹벽 폴리곤 안을 건드린 삼각형 수(0이어야 한다) · 앞 단계가 다시 지은 삼각형을 건드린 수.</summary>
+    public sealed class ComposeStep
+    {
+        public int No;
+        public CompositeResult R = new();
+        public int IntoPrev, IntoPrevNo;
+        public string IntoPrevAt = "";
+        public int TouchedPrevZone;
+        public long Ms;
+    }
+
+    public sealed class ComposeResult
+    {
+        /// <summary>마지막 합성의 삼각형 전부(다듬은 구역 + 그대로 옮긴 것) — 못 했으면 null.</summary>
+        public List<Tri>? All;
+        public List<ComposeStep> Steps = new();
+        /// <summary>못 한 단계(옹벽 차례 · 0부터) · 까닭.</summary>
+        public int FailIndex = -1;
+        public string Fail = "";
+        public int Tier = 3;
+        /// <summary>높이 오차 합 — 옹벽마다의 예산(폴리곤 안은 늘 합성 전 면 위에서 짓는다) 중 최대와, 손댄 구역이 겹친 바깥에서 합성 전 면과 <b>잰</b> 차이 중 큰 것.</summary>
+        public double HeightBudget;
+        /// <summary>손댄 구역이 겹친 바깥(모든 폴리곤 밖 · 다시 지은 삼각형 꼭짓점)에서 합성 전 면과 잰 높이 차 최대 — 겹치지 않으면 0.</summary>
+        public double SharedDev;
+        public double HeightLimit = 1e-2;
+        /// <summary>«Civil이 반드시 합칠 쌍» 허용을 쓴 옹벽이 하나라도 있다 — 되읽기 관문이 Civil이 넘긴 면을 그대로 받았을 때만 받는다.</summary>
+        public bool OverForced;
+        public bool ZonesOverlap;
+        public string TierText => Tier == 1 ? "정확" : Tier == 2 ? "⚠거의" : "⚠못 함";
+        public string Summary => string.Format(CultureInfo.InvariantCulture, "옹벽 {0}개 차례 합성 · 판정 {1}({2}) · 높이 오차 합 {3:F3}mm(옹벽마다의 최대{4}) · 한도 {5:F0}mm{6}",
+            Steps.Count, Tier, TierText, HeightBudget * 1000,
+            ZonesOverlap ? string.Format(CultureInfo.InvariantCulture, " · 손댄 구역이 겹친 바깥에서 합성 전 면과 잰 차 {0:F3}mm", SharedDev * 1000) : "",
+            HeightLimit * 1000, Fail.Length > 0 ? " · ⚠" + Fail : "");
+    }
+
+    /// <summary>★★★[v103.0 · JACK 0930 «옹벽이 남아야» · 계획 검토 v103 H2] <b>여러 옹벽을 합성 전 면 위에 차례로</b> — P_k = BuildComposite(P_{k−1}, 옹벽 k).
+    /// <para>더하기(새 옹벽 하나)와 다시 짓기(목록 전부)가 <b>같은 함수</b>다 — 더하기는 목록 끝에 새 옹벽을 붙여 처음부터 차례로 짓는다.
+    /// 옹벽이 하나면 <see cref="BuildComposite"/> 한 번과 비트 같다(삼각형 차례도 Zone 다음 Untouched).</para>
+    /// <para>★지키는 것: 뒤 옹벽이 앞 옹벽 <b>폴리곤 안</b> 삼각형을 건드리면 멈춘다(앞 옹벽 모양이 바뀐다) — 꼭짓점이 테두리에서 10µm 넘게 안쪽이거나
+    /// 무게중심이 안쪽인 삼각형. 폴리곤 테두리를 나누는 바깥 삼각형(평탄부를 가로지르는 큰 삼각형을 두 옹벽이 같이 건드리는 자리)은 된다 —
+    /// 그 테두리 꼭짓점은 손 안 댄 안쪽 삼각형과 나누므로 고정 점이라 안 움직인다.</para></summary>
+    public static ComposeResult ComposeWalls(IReadOnlyList<Tri> planAll, IReadOnlyList<WallInput> walls)
+    {
+        var res = new ComposeResult();
+        if (walls == null || walls.Count == 0) { res.Fail = "옹벽이 없다"; return res; }
+        if (planAll == null || planAll.Count == 0) { res.Fail = "정지면 삼각형이 없다"; return res; }
+        var original = new HashSet<Tri>(planAll);
+        IReadOnlyList<Tri> cur = planAll;
+        var gf = new GeometryFactory();
+        double ox = walls[0].Poly.Count > 0 ? walls[0].Poly[0].X : 0, oy = walls[0].Poly.Count > 0 ? walls[0].Poly[0].Y : 0;
+        var polys = new List<(int No, Polygon G, IPreparedGeometry Pg)>();
+        foreach (var w in walls)
+        {
+            if (w.Poly == null || w.Poly.Count < 3) { res.Fail = $"옹벽 {w.No}의 폴리곤이 없다"; return res; }
+            var ring = w.Poly.Select(q => new Coordinate(q.X - ox, q.Y - oy)).Append(new Coordinate(w.Poly[0].X - ox, w.Poly[0].Y - oy)).ToArray();
+            var pgon = gf.CreatePolygon(ring);
+            polys.Add((w.No, pgon, PreparedGeometryFactory.Prepare(pgon)));
+        }
+        // 삼각형이 폴리곤 <b>안</b>인가 — 무게중심이나 꼭짓점이 테두리에서 10µm 넘게 안쪽(1µm 격자로 맞춘 테두리 점은 안 걸린다)
+        const double InsideTol = 1e-5;
+        bool InsideOf(Tri t, Polygon g, IPreparedGeometry pg, out string at)
+        {
+            double cx = (t.A.X + t.B.X + t.C.X) / 3 - ox, cy = (t.A.Y + t.B.Y + t.C.Y) / 3 - oy;
+            at = string.Format(CultureInfo.InvariantCulture, "({0:F3},{1:F3})", cx + ox, cy + oy);
+            bool In(double x, double y)
+            {
+                var pt = gf.CreatePoint(new Coordinate(x, y));
+                return pg.Contains(pt) && g.ExteriorRing.Distance(pt) > InsideTol;
+            }
+            return In(cx, cy) || In(t.A.X - ox, t.A.Y - oy) || In(t.B.X - ox, t.B.Y - oy) || In(t.C.X - ox, t.C.Y - oy);
+        }
+        int worst = 1; double maxB = 0, lim = 1e-2; bool overF = false, overlap = false;
+        for (int k = 0; k < walls.Count; k++)
+        {
+            var w = walls[k];
+            var (_, gK, pgK) = polys[k];
+            // ①' 앞 옹벽들이 다시 지은 삼각형이 이 옹벽 폴리곤 <b>안</b>에 있으면 멈춘다 — 이 옹벽은 폴리곤 안을 언제나 합성 전 면 위에서 짓는다
+            //    (그래야 옹벽마다의 높이 예산이 합성 전 면 기준이고, 더하기 차례와 상관없이 폴리곤 안 모양이 같다)
+            if (k > 0)
+            {
+                int into = 0; string at0 = "";
+                foreach (var t in cur)
+                {
+                    if (original.Contains(t)) continue;
+                    if (InsideOf(t, gK, pgK, out string a1)) { if (into++ == 0) at0 = a1; }
+                }
+                if (into > 0)
+                {
+                    res.Steps.Add(new ComposeStep { No = w.No, IntoPrev = into, IntoPrevAt = at0 });
+                    res.FailIndex = k;
+                    res.Fail = string.Format(CultureInfo.InvariantCulture, "앞 옹벽이 다시 지은 삼각형 {0}개가 옹벽 {1}의 폴리곤 안에 있다 @{2} — 두 옹벽을 더 떨어뜨려 지정하세요", into, w.No, at0);
+                    return res;
+                }
+            }
+            var sw = Stopwatch.StartNew();
+            var r = BuildComposite(w.Poly, w.WallTris, w.GroundTris, cur, w.Down);
+            var st = new ComposeStep { No = w.No, R = r, Ms = sw.ElapsedMilliseconds };
+            res.Steps.Add(st);
+            if (r.Zone == null) { res.FailIndex = k; res.Fail = $"옹벽 {w.No} — {r.Fail}"; return res; }
+            // ② 손댄 삼각형(이번 입력 − 그대로 옮긴 것)이 앞 옹벽 폴리곤 <b>안</b>이면 멈춘다 — 앞 옹벽 모양이 바뀐다.
+            //    폴리곤 테두리를 나누는 바깥 삼각형(평탄부를 가로지르는 큰 삼각형을 두 옹벽이 같이 건드리는 자리 — 0930 덤프 973면)은 된다
+            var unt = new HashSet<Tri>(r.Untouched);
+            foreach (var t in cur)
+            {
+                if (unt.Contains(t)) continue;
+                if (!original.Contains(t)) st.TouchedPrevZone++;
+                for (int j = 0; j < k; j++)
+                    if (InsideOf(t, polys[j].G, polys[j].Pg, out string a2))
+                    {
+                        if (st.IntoPrev++ == 0) { st.IntoPrevNo = polys[j].No; st.IntoPrevAt = a2; }
+                        break;
+                    }
+            }
+            if (st.IntoPrev > 0)
+            {
+                res.FailIndex = k;
+                res.Fail = string.Format(CultureInfo.InvariantCulture, "옹벽 {0}가 앞 옹벽 {1}의 폴리곤 안 삼각형 {2}개를 건드린다 @{3} — 앞 옹벽 모양이 바뀌므로 짓지 않는다(두 옹벽을 더 떨어뜨려 지정하세요)",
+                    w.No, st.IntoPrevNo, st.IntoPrev, st.IntoPrevAt);
+                return res;
+            }
+            if (st.TouchedPrevZone > 0) overlap = true;
+            var next = new List<Tri>(r.Zone.Count + r.Untouched.Count);
+            next.AddRange(r.Zone); next.AddRange(r.Untouched);
+            cur = next;
+            worst = Math.Max(worst, r.Tier);
+            maxB = Math.Max(maxB, r.HeightBudget); lim = Math.Max(lim, r.HeightLimit);
+            if (r.Clean?.OverForced == true) overF = true;
+        }
+        res.ZonesOverlap = overlap;
+        res.HeightLimit = lim;
+        res.OverForced = overF;
+        // ③ 높이 오차 합 — 폴리곤 안은 옹벽마다 합성 전 면 기준 예산(①' 덕분). 손댄 구역이 겹친 바깥(평탄부 등)은 앞·뒤 구역 오차가 얹힐 수 있으므로
+        //    합성 전 면과 <b>잰다</b>: 다시 지은 삼각형 중 모든 폴리곤 밖의 꼭짓점 높이 − 합성 전 면 높이(더해서 짐작하지 않는다)
+        double dev = 0;
+        if (overlap)
+        {
+            var idx = new STRtree<Tri>();
+            foreach (var t in planAll)
+            {
+                var e = new Envelope(Math.Min(t.A.X, Math.Min(t.B.X, t.C.X)) - ox, Math.Max(t.A.X, Math.Max(t.B.X, t.C.X)) - ox,
+                                     Math.Min(t.A.Y, Math.Min(t.B.Y, t.C.Y)) - oy, Math.Max(t.A.Y, Math.Max(t.B.Y, t.C.Y)) - oy);
+                idx.Insert(e, t);
+            }
+            idx.Build();
+            double? P0At(double x, double y)
+            {
+                foreach (var t in idx.Query(new Envelope(x - ox, x - ox, y - oy, y - oy)))
+                {
+                    double d = (t.B.Y - t.C.Y) * (t.A.X - t.C.X) + (t.C.X - t.B.X) * (t.A.Y - t.C.Y);
+                    if (Math.Abs(d) < 1e-18) continue;
+                    double l1 = ((t.B.Y - t.C.Y) * (x - t.C.X) + (t.C.X - t.B.X) * (y - t.C.Y)) / d;
+                    double l2 = ((t.C.Y - t.A.Y) * (x - t.C.X) + (t.A.X - t.C.X) * (y - t.C.Y)) / d;
+                    double l3 = 1 - l1 - l2;
+                    if (l1 >= -1e-9 && l2 >= -1e-9 && l3 >= -1e-9) return l1 * t.A.Z + l2 * t.B.Z + l3 * t.C.Z;
+                }
+                return null;
+            }
+            foreach (var t in cur)
+            {
+                if (original.Contains(t)) continue;
+                bool inAny = false;
+                foreach (var (_, g, pg) in polys) { if (InsideOf(t, g, pg, out _)) { inAny = true; break; } }
+                if (inAny) continue;
+                foreach (var q in new[] { t.A, t.B, t.C })
+                {
+                    var z0 = P0At(q.X, q.Y);
+                    if (z0 != null) dev = Math.Max(dev, Math.Abs(q.Z - z0.Value));
+                }
+            }
+        }
+        res.SharedDev = dev;
+        res.HeightBudget = Math.Max(maxB, dev);
+        int tier = worst;
+        if (res.HeightBudget > lim)
+        {
+            res.Tier = 3; res.FailIndex = walls.Count - 1;
+            res.Fail = string.Format(CultureInfo.InvariantCulture, "손댄 구역이 겹친 바깥에서 합성 전 면과 {0:F1}mm 어긋난다(한도 {1:F0}mm) — 마지막 옹벽 {2}를 빼고 다시 지정하세요",
+                dev * 1000, lim * 1000, walls[^1].No);
+            return res;
+        }
+        if (res.HeightBudget > 1e-3) tier = Math.Max(tier, 2);
+        res.Tier = tier;
+        res.All = cur as List<Tri> ?? new List<Tri>(cur);
+        return res;
+    }
 }

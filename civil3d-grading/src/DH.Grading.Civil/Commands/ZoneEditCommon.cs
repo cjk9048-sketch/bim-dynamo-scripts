@@ -1071,11 +1071,18 @@ internal static class ZoneEditCommon
                     //   층 전체를 바꾸면 링마다 표고는 여전히 하나라 안전하다.
                     // ★★[JACK 0820 '정지옵션과 변환은 연동되긴 해야 해'] 규칙은 <b>정지옵션</b>에 쌓는다 —
                     //   재생성이 정지옵션을 읽으므로 여기 넣어야 먹고, 다음 변환의 기본값도 이 값이 된다.
+                    // ★★[v103.0 · JACK 1002 «부분 옹벽은 안 넣음»] 부분 지정 옹벽의 단높이는 <b>그 옹벽에만</b> 쓴다(옹벽 더하기 명세 → 옹벽 짓기) —
+                    //   방향 전체 규칙에 넣으면 다음 재생성 때 그 방향 소단 높이가 옹벽 밖 사면까지 전부 바뀐다(종전엔 옹벽 자신은 이 값을 안 쓰고 도킹창 기본값으로 지었다)
+                    if (wallMode && isPart)
+                        Log($"   단높이 {askH:0.##}m · 소단 {askW:0.##}m — 이 옹벽에만 쓴다(방향 전체 단높이 규칙엔 안 넣는다 · JACK 1002)");
+                    else
+                    {
                     var steps = up ? GradingSettings.CutBenchSteps : GradingSettings.FillBenchSteps;
                     steps.Add((pick.Value.bench, askH!.Value));
                     var norm = GradingSettings.ToParams(); norm.NormalizeBenchSteps();
                     GradingSettings.CutBenchSteps = new System.Collections.Generic.List<(int, double)>(norm.CutBenchSteps);
                     GradingSettings.FillBenchSteps = new System.Collections.Generic.List<(int, double)>(norm.FillBenchSteps);
+                    }
                     // [스샷 버그 0804] 겹침은 합치지 않고 조각으로 가른다 — 새 규칙은 클릭한 선의 범위 '안'에만 남는다.
                     SlopeZone.Flatten(target, cumB![cumB.Length - 1]);
                     // ★[JACK 0824] 뒤 규칙에 덮여 아무 일도 안 하는 구간은 뺀다 —
@@ -1237,32 +1244,46 @@ internal static class ZoneEditCommon
             // ★★[v102.2 · JACK 0930 «옹벽합성 버튼은 없애고 노선 선정과정이 끝나면 자동으로 진행되게»] 이번 실행이 옹벽을 끝까지 지었는지 가르려고
             //   <b>짝을 미리 비운다</b> — 폴리곤만 길은 옹벽·데이라잇까지 가야 짝을 다시 채운다. 중간에 멈춘 길(고른 구간 못 찾음 · 합성 풀기 실패)이
             //   지난 옹벽의 짝을 남겨 옛 옹벽을 다시 합성하던 틈을 막는다(계획 검토 v102.2 · 높음 3)
-            if (wallMode && drawPart) GradingSettings.ClearLastWall(true);
+            // ★★★[v103.0 · JACK 0930 «옹벽이 남아야» · 1002 «부분 옹벽 단높이는 그 옹벽에만»] 옹벽 <b>더하기</b> 명세 — DoGrade가 지난 합성을 안 풀고
+            //   새 번호로 짓는다(목록에 «대기»). v102.2의 «짝 비우기»(ClearLastWall)는 폴리곤만 길의 쌓기가 맡는다
+            GradingSettings.LastAddNo = 0; GradingSettings.LastAddNote = ""; GradingSettings.LastAddBlockedNo = 0;
+            if (wallMode && drawPart)
+                GradingSettings.WallAddSpec = new GradingSettings.WallAddInfo(pick!.Value.up, pick.Value.bench, askH!.Value, askW!.Value, doc.Name);
             CreateGradingCommand.DoGrade(doc, planId, groundId, GradeMode.RerunLast);
+            GradingSettings.WallAddSpec = null;   // 들머리에서 일찍 빠졌어도 다음 실행으로 새지 않게
 
-            // ★★[v102.2] 부분 지정 옹벽 변환이 옹벽을 끝까지 지었으면 <b>합성을 이어서 태운다</b>(버튼 없이).
+            // ★★[v102.2 · v103.0] 부분 지정 옹벽 변환이 옹벽을 «대기»로 지었으면 <b>합성을 이어서 태운다</b>(버튼 없이) — 목록 전부를 합성 전 면 위에 차례로(약 30초 × 옹벽 수).
             //   노리선처럼 명령으로 태운다 — 같은 흐름 안에서 직접 부르면 재생성이 쥔 것과 부딪힐 수 있다. 노리선 갱신(아래)보다 먼저 줄 선다.
             if (wallMode && drawPart)
             {
-                bool built = !GradingSettings.LastWallInvalid && GradingSettings.LastWallPoly != null;
-                if (built && GradingSettings.LastWallPlanNote.Length == 0)
+                if (GradingSettings.LastAddNo > 0)
                 {
-                    ed.WriteMessage($"\n[{cmdLabel}] 옹벽을 지었습니다 — 이어서 정지면_DH에 합성합니다(약 30초)…");
-                    Log($"■ {cmdLabel} — 옹벽을 지어 합성을 이어서 태움(DHWALLCOMP · 짝 {GradingSettings.LastWallStamp})");
-                    GradingSettings.AutoCompDoc = doc.Name;
+                    int addNo = GradingSettings.LastAddNo;
+                    ed.WriteMessage($"\n[{cmdLabel}] 옹벽 {addNo}를 지었습니다 — 이어서 정지면_DH에 합성합니다(지난 옹벽과 함께 · 옹벽 하나에 약 30초)…");
+                    Log($"■ {cmdLabel} — 옹벽 {addNo}를 «대기»로 지어 합성을 이어서 태움(DHWALLCOMP)");
+                    GradingSettings.AutoCompDoc = doc.Name; GradingSettings.AutoCompNo = addNo;
                     try { doc.SendStringToExecute("DHWALLCOMP ", true, false, true); }
                     catch (System.Exception sx)
                     {
-                        GradingSettings.AutoCompDoc = "";
+                        GradingSettings.AutoCompDoc = ""; GradingSettings.AutoCompNo = 0;
                         ed.WriteMessage($"\n[{cmdLabel}] ⚠합성을 못 태웠다({sx.GetType().Name}) — 명령줄에 DHWALLCOMP를 치세요");
-                        try { AcadApp.ShowAlertDialog($"옹벽 합성을 이어서 태우지 못했습니다({sx.GetType().Name}).\n명령줄에 DHWALLCOMP를 치면 다시 합성합니다."); } catch { }
+                        try { AcadApp.ShowAlertDialog($"옹벽 합성을 이어서 태우지 못했습니다({sx.GetType().Name}).\n명령줄에 DHWALLCOMP를 치면 다시 합성합니다(옹벽 {addNo}는 «대기»로 남아 있습니다)."); } catch { }
                     }
                 }
                 else
                 {
-                    string why = !built ? "이번 옹벽 변환이 옹벽·데이라잇까지 못 갔다(진단 로그의 ⚠)" : GradingSettings.LastWallPlanNote;
-                    ed.WriteMessage($"\n[{cmdLabel}] ⚠합성은 안 했다 — {System.Text.RegularExpressions.Regex.Replace(why, "<[^>]+>", "")}");
+                    string why = GradingSettings.LastAddNote.Length > 0 ? GradingSettings.LastAddNote : "이번 옹벽 변환이 옹벽·데이라잇까지 못 갔다(진단 로그의 ⚠)";
+                    string why0 = System.Text.RegularExpressions.Regex.Replace(why, "<[^>]+>", "");
+                    ed.WriteMessage($"\n[{cmdLabel}] ⚠합성은 안 했다 — {why0}");
                     Log($"■ {cmdLabel} — 합성 안 함: {why}");
+                    // ★[v103.0 · 코드 검토 낮음 5] 멈춘 까닭(겹침 · 폴리곤 없음 · 못 지음)은 알림창으로도 — 명령줄 한 줄로는 묻힌다(v102.2 중간 8과 같은 까닭)
+                    // ★[재검토 낮음 4] 지었지만 합성을 막아 둔 옹벽은 «안 더했다»가 아니다 — 도면에 «대기»로 남았다가 다음에 옹벽을 짓는 옹벽 변환(BuildWallAdd ②)이나
+                    //   다시 짓기(사면 변환 · 계획부지 생성 — 새로 · 다시 · 이어서 모두)가 치운다. 다음 옹벽 변환이 멈추면 그 정리도 함께 되돌려진다(검증 낮음)
+                    int blkNo = GradingSettings.LastAddBlockedNo;
+                    string alert = blkNo > 0
+                        ? $"옹벽 {blkNo}는 지었지만 정지면_DH에 합성하지 않았습니다(지난 옹벽과 정지면_DH는 그대로).\n\n{why0}\n\n옹벽 {blkNo}는 합성에 안 든 «대기»로 남았다가, 다음에 옹벽 변환이 옹벽을 짓거나 사면 변환·계획부지 생성이 정지면을 다시 지으면 치워집니다 — 까닭을 고친 뒤 옹벽 변환을 다시 하세요."
+                        : "옹벽을 더하지 않았습니다(지난 옹벽과 정지면_DH는 그대로).\n\n" + why0;
+                    try { AcadApp.ShowAlertDialog(alert); } catch { }
                 }
             }
 

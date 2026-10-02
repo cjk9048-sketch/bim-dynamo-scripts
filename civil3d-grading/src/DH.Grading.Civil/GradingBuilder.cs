@@ -1190,7 +1190,7 @@ public static class GradingBuilder
     }
 
     /// <summary>[§75 1-A] XData 앱(RegApp) 등록 보장 — 없으면 추가.</summary>
-    private static void EnsureRegApp(Database db, Transaction tr, string appName)
+    internal static void EnsureRegApp(Database db, Transaction tr, string appName)
     {
         var rat = (RegAppTable)tr.GetObject(db.RegAppTableId, OpenMode.ForRead);
         if (rat.Has(appName)) return;

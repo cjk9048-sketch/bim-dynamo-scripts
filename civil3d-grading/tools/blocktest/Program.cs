@@ -13115,6 +13115,117 @@ static Coordinate[] CloseXY(IReadOnlyList<Point3> r)
     }
 }
 
+// ── S147 ★★★[v103.0 · JACK 0930 «옹벽이 남아야» · 1002 «같은 선이면 바꿈»] 옹벽 목록 — 도면 저장 형식 왕복 · 겹침/바꿈 판정 ──
+//   Civil(WallListStore)은 (종류, 값)을 TypedValue로 옮기기만 한다 — 형식 자체는 Core(WallList)라 여기서 잰다.
+{
+    Console.WriteLine("\n== S147 옹벽 목록 — 저장 형식 왕복 · 겹침/바꿈 판정 ==");
+    List<Point3> Sq(double x0, double y0, double x1, double y1, double z = 100) => new() { new(x0, y0, z), new(x1, y0, z), new(x1, y1, z), new(x0, y1, z) };
+    List<Point3> Ln(double x0, double y0, double x1, double y1, int n = 11) { var l = new List<Point3>(); for (int i = 0; i < n; i++) l.Add(new(x0 + (x1 - x0) * i / (n - 1), y0 + (y1 - y0) * i / (n - 1), 100)); return l; }
+    var head = new WallListHead { PlanHandle = "2A3F", GroundHandle = "1B", NextNo = 7 };
+    var w1 = new WallRec { No = 3, State = 1, Up = true, Bench = 0, H = 5, T = 1, T0 = 214.6, T1 = 268.2, HeadZ = 105, ReplaceNo = 0, Seg = Ln(0, 0, 50, 0), Poly = Sq(0, -20, 50, 0), IsWall = new() { true, false, false, true },
+                         WallHandle = "4C1", PureHandle = "4D0", Block = "", LastNote = "판정 1(정확)", Stamp = "2026-10-02 10:00:00" };
+    var w2 = new WallRec { No = 6, State = 0, Up = false, Bench = 2, H = 3.5, T = 2.25, T0 = 70.6, T1 = 120.2, HeadZ = 84.123456789012345, ReplaceNo = 3, Seg = Ln(0, 100, 30, 100), Poly = Sq(0, 100, 30, 130, 84.123456789012345), IsWall = new() { true, true, false, false },
+                         WallHandle = "5E2", PureHandle = "", Block = "옹벽 줄을 1개 버렸다", LastNote = "", Stamp = "" };
+    var enc = WallList.Encode(head, new[] { w1, w2 });
+    bool okD = WallList.TryDecode(enc, out var h2, out var ws, out string why);
+    bool same = okD && h2.PlanHandle == head.PlanHandle && h2.GroundHandle == head.GroundHandle && h2.NextNo == 7 && ws.Count == 2
+        && ws.Zip(new[] { w1, w2 }).All(p => p.First.No == p.Second.No && p.First.State == p.Second.State && p.First.Up == p.Second.Up && p.First.Bench == p.Second.Bench
+            && p.First.H == p.Second.H && p.First.T == p.Second.T && p.First.T0 == p.Second.T0 && p.First.T1 == p.Second.T1 && p.First.HeadZ == p.Second.HeadZ && p.First.ReplaceNo == p.Second.ReplaceNo
+            && p.First.WallHandle == p.Second.WallHandle && p.First.PureHandle == p.Second.PureHandle && p.First.Block == p.Second.Block && p.First.LastNote == p.Second.LastNote && p.First.Stamp == p.Second.Stamp
+            && p.First.Seg.SequenceEqual(p.Second.Seg) && p.First.Poly.SequenceEqual(p.Second.Poly) && p.First.IsWall.SequenceEqual(p.Second.IsWall));
+    Check("S147 목록 인코딩 왕복 — 머리·옹벽 두 칸 비트 같음", same, why);
+    var bad = new List<(char, object)>(enc); bad[1] = ('I', 99);
+    Check("S147 목록 — 더 새 판이 쓴 목록은 안 읽는다", !WallList.TryDecode(bad, out _, out _, out string why2) && why2.Contains("판"), why2);
+    var bad2 = new List<(char, object)>(enc); bad2[6] = ('S', "x");
+    Check("S147 목록 — 값 종류가 어긋나면 안 읽는다(조용히 엉뚱한 값 없음)", !WallList.TryDecode(bad2, out _, out var ws3, out string why3) && ws3.Count == 0, why3);
+    var bad3 = new List<(char, object)>(enc); bad3.RemoveAt(bad3.Count - 1);
+    Check("S147 목록 — 잘린 목록은 안 읽는다", !WallList.TryDecode(bad3, out _, out _, out string why4) && why4.Contains("끊겼다"), why4);
+    // 판정 — 넣음 옹벽 a(절토 단 0 · 안쪽 변 (0,0)-(50,0) · 폴리곤 y −20..0)
+    var a = new WallRec { No = 1, State = 1, Up = true, Bench = 0, Seg = Ln(0, 0, 50, 0), Poly = Sq(0, -20, 50, 0) };
+    var b = new WallRec { No = 2, State = 1, Up = false, Bench = 0, Seg = Ln(0, 60, 40, 60), Poly = Sq(0, 60, 40, 80) };
+    var pend = new WallRec { No = 5, State = 0, Up = true, Bench = 0, Seg = Ln(100, 0, 140, 0), Poly = Sq(100, -20, 140, 0) };
+    var list = new[] { a, b, pend };
+    var r1 = WallList.Conflict(Sq(60, -20, 90, 0), Ln(60, 0, 90, 0), true, 0, list);
+    Check("S147 판정 — 떨어진 옹벽은 넣는다", r1.ReplaceNo == 0 && r1.Stop == "", $"{r1.Stop}{r1.Note}");
+    var r2 = WallList.Conflict(Sq(40, -20, 90, 0), Ln(40, 0, 90, 0), false, 0, list);
+    Check("S147 판정 — 다른 방향 옹벽과 폴리곤이 겹치면 멈춘다(규칙 ①)", r2.Stop.Contains("옹벽 1") && r2.Stop.Contains("겹친다"), r2.Stop);
+    var r3 = WallList.Conflict(Sq(50.005, -20, 90, 0), Ln(50.005, 0, 90, 0), false, 0, list);
+    Check("S147 판정 — 1cm 안 맞닿음도 멈춘다", r3.Stop.Contains("맞닿는다"), r3.Stop);
+    var r3b = WallList.Conflict(Sq(50.02, -20, 90, 0), Ln(50.02, 0, 90, 0), false, 0, list);
+    Check("S147 판정 — 2cm 떨어지면 넣는다", r3b.Stop == "", r3b.Stop);
+    var r4 = WallList.Conflict(Sq(10, -25, 45, 0), Ln(10, 0, 45, 0), true, 0, list);
+    Check("S147 판정 — 같은 방향 · 같은 단 · 안쪽 변 겹침 → 그 옹벽을 바꾼다(JACK 1002)", r4.ReplaceNo == 1 && r4.Stop == "", $"바꿀 {r4.ReplaceNo} · {r4.Note}");
+    var r5 = WallList.Conflict(Sq(10, -25, 45, 0), Ln(10, 0, 45, 0), true, 1, list);
+    Check("S147 판정 — 다른 단이면 바꾸기가 아니라 겹침(멈춤)", r5.ReplaceNo == 0 && r5.Stop.Contains("옹벽 1"), r5.Stop);
+    var c2 = new WallRec { No = 3, State = 1, Up = true, Bench = 0, Seg = Ln(52, 0, 90, 0), Poly = Sq(52, -20, 90, 0) };
+    var r6 = WallList.Conflict(Sq(30, -20, 70, 0), Ln(30, 0, 70, 0), true, 0, new[] { a, c2 });
+    Check("S147 판정 — 새 구간이 같은 선의 옹벽 둘에 걸치면 멈춘다", r6.ReplaceNo == 0 && r6.Stop.Contains("함께 걸친다"), r6.Stop);
+    var r7 = WallList.Conflict(Sq(100, -20, 140, 0), Ln(100, 0, 140, 0), true, 0, list);
+    Check("S147 판정 — 대기 칸(합성 전)은 판정에서 뺀다", r7.Stop == "" && r7.ReplaceNo == 0, r7.Stop);
+    var r8 = WallList.Conflict(Sq(49.99, -20, 90, 0), Ln(49.99, 0, 90, 0), true, 0, list);
+    Check("S147 판정 — 같은 선이어도 안쪽 변 겹침이 0.5m 안이면 바꾸기가 아니라 맞닿음(멈춤)", r8.ReplaceNo == 0 && r8.Stop.Contains("옹벽 1"), r8.Stop);
+}
+
+// ── S148 ★★★[v103.0 · JACK 0930 «절토 옹벽 뒤 성토 옹벽을 하면 절토 옹벽이 없어진다 — 남아야»] 여러 옹벽 차례 합성(ComposeWalls) — 현장 0930 덤프 ──
+//   절토(13:38 · [214.6..268.2]) + 성토(13:40 · [70.6..120.2]) 합성 입력의 정지면 조각을 합친 판(두 정지면 조각은 겹친 넓이 0 · 같은 부지 삼각형 973면을 함께 가진다 —
+//   평탄부를 가로지르는 큰 삼각형을 두 옹벽이 같이 건드리는 자리). 옹벽 하나면 BuildComposite와 비트 같아야 한다(기존 판 그대로).
+{
+    Console.WriteLine("\n== S148 여러 옹벽 차례 합성 — 현장 0930 절토 + 성토 ==");
+    string dd = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "data");
+    bool okA = WallDaylight.TryReadBandInput(Path.Combine(dd, "현장0930_1338_절토_합성.txt"), out var pA, out var wA, out var gA, out var plA, out _);
+    bool okB = WallDaylight.TryReadBandInput(Path.Combine(dd, "현장0930_1340_성토_합성.txt"), out var pB, out var wB, out var gB, out var plB, out _);
+    Check("S148 덤프 둘을 읽었다", okA && okB, $"절토 {okA} · 성토 {okB}");
+    if (okA && okB)
+    {
+        static string Key(WallDaylight.Tri t) { var v = new[] { t.A, t.B, t.C }.OrderBy(q => q.X).ThenBy(q => q.Y).ToArray(); return string.Join("|", v.Select(q => $"{q.X:R},{q.Y:R},{q.Z:R}")); }
+        var plan = new List<WallDaylight.Tri>(plA!); var seen = new HashSet<string>(plA!.Select(Key));
+        foreach (var t in plB!) if (seen.Add(Key(t))) plan.Add(t);
+        Console.WriteLine($"      시험 판: 정지면 {plan.Count}면(절토 덤프 {plA!.Count} ∪ 성토 덤프 {plB!.Count})");
+        var A = new WallDaylight.WallInput { No = 1, Poly = pA!, WallTris = wA!, GroundTris = gA!, Down = false };
+        var B = new WallDaylight.WallInput { No = 2, Poly = pB!, WallTris = wB!, GroundTris = gB!, Down = true };
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var rA = WallDaylight.BuildComposite(pA!, wA!, gA!, plan, false);
+        var cA = WallDaylight.ComposeWalls(plan, new[] { A });
+        var allA = rA.Zone == null ? null : rA.Zone.Concat(rA.Untouched).ToList();
+        Check("S148 옹벽 하나(절토) — ComposeWalls = BuildComposite 비트 같음(삼각형 차례 · 판정 · 높이 오차 합까지)",
+              allA != null && cA.All != null && allA.SequenceEqual(cA.All) && cA.Tier == rA.Tier && cA.HeightBudget == rA.HeightBudget && cA.HeightLimit == rA.HeightLimit,
+              $"{allA?.Count} / {cA.All?.Count} · 판정 {rA.Tier}/{cA.Tier}");
+        var rB = WallDaylight.BuildComposite(pB!, wB!, gB!, plan, true);
+        var cB = WallDaylight.ComposeWalls(plan, new[] { B });
+        var allB = rB.Zone == null ? null : rB.Zone.Concat(rB.Untouched).ToList();
+        Check("S148 옹벽 하나(성토 · 허용 판) — ComposeWalls = BuildComposite 비트 같음",
+              allB != null && cB.All != null && allB.SequenceEqual(cB.All) && cB.Tier == rB.Tier && cB.HeightBudget == rB.HeightBudget && cB.OverForced == (rB.Clean?.OverForced == true),
+              $"{allB?.Count} / {cB.All?.Count} · 판정 {rB.Tier}/{cB.Tier} · 허용 {cB.OverForced}");
+        var cAB = WallDaylight.ComposeWalls(plan, new[] { A, B });
+        Console.WriteLine($"      [절토, 성토] {cAB.Summary} · " + string.Join(" / ", cAB.Steps.Select(s => $"옹벽 {s.No} 판정 {s.R.Tier} 손댐 {s.R.Touched} 앞 구역 {s.TouchedPrevZone} {s.Ms}ms")));
+        Check("S148 ★[절토, 성토] 쌓기 — 둘 다 들어간다 · 앞 옹벽 폴리곤 안을 안 건드린다 · 판정 ≤ 2",
+              cAB.All != null && cAB.Steps.Count == 2 && cAB.Steps.All(s => s.IntoPrev == 0) && cAB.Tier <= 2, cAB.Fail);
+        // 잰 차는 0이 아니라 1µm 격자 맞춤 몫(<0.0005mm)이 남는다 — 평탄부·완경사라 0.01mm 안이면 된다(합으로 셌으면 0.595 + 10.383mm)
+        Check("S148 손댄 구역이 겹친다(부지 큰 삼각형) — 겹친 바깥은 합성 전 면과 잰 차로 센다(합으로 짐작 안 함) · 0.01mm 안",
+              cAB.ZonesOverlap && cAB.Steps[1].TouchedPrevZone > 0 && cAB.SharedDev <= 1e-5 && cAB.HeightBudget == Math.Max(cAB.Steps.Max(s => s.R.HeightBudget), cAB.SharedDev),
+              $"앞 구역 {cAB.Steps.ElementAtOrDefault(1)?.TouchedPrevZone} · 잰 차 {cAB.SharedDev:E2}m · 높이 오차 합 {cAB.HeightBudget * 1000:F3}mm");
+        if (cAB.All != null && cA.All != null)
+        {
+            var gf = new NetTopologySuite.Geometries.GeometryFactory();
+            double ox = pA![0].X, oy = pA![0].Y;
+            var polyA = gf.CreatePolygon(pA!.Select(q => new NetTopologySuite.Geometries.Coordinate(q.X - ox, q.Y - oy)).Append(new NetTopologySuite.Geometries.Coordinate(pA![0].X - ox, pA![0].Y - oy)).ToArray());
+            HashSet<string> Inside(List<WallDaylight.Tri> all)
+            { var s = new HashSet<string>(); foreach (var t in all) { var c = gf.CreatePoint(new NetTopologySuite.Geometries.Coordinate((t.A.X + t.B.X + t.C.X) / 3 - ox, (t.A.Y + t.B.Y + t.C.Y) / 3 - oy)); if (polyA.Contains(c)) s.Add(Key(t)); } return s; }
+            var in1 = Inside(cA.All); var in2 = Inside(cAB.All);
+            Check("S148 ★성토를 더해도 절토 폴리곤 안은 그대로(비트 같은 삼각형 집합) — 첫 옹벽이 안 사라지고 안 바뀐다", in1.Count > 0 && in1.SetEquals(in2), $"{in1.Count} / {in2.Count}");
+        }
+        // ★[v103.0 · 코드 검토 열린 물음] 차례를 바꿔도(성토 → 절토) 쌓인다 — 삼각형 나눔은 겹친 부지 삼각형 곁에서 조금 달라도(0930 판 101면) 둘 다 판정 ≤ 2
+        var cBA = WallDaylight.ComposeWalls(plan, new[] { B, A });
+        Check("S148 [성토, 절토] 차례로 쌓아도 둘 다 들어간다 · 앞 옹벽 폴리곤 안을 안 건드린다 · 판정 ≤ 2",
+              cBA.All != null && cBA.Steps.Count == 2 && cBA.Steps.All(s => s.IntoPrev == 0) && cBA.Tier <= 2, $"{cBA.Summary}");
+        var A2 = new WallDaylight.WallInput { No = 9, Poly = pA!, WallTris = wA!, GroundTris = gA!, Down = false };
+        var cAA = WallDaylight.ComposeWalls(plan, new[] { A, A2 });
+        Check("S148 음성 — 같은 자리에 옹벽 둘이면 뒤 옹벽 들머리에서 멈춘다(앞 옹벽이 다시 지은 삼각형이 뒤 옹벽 폴리곤 안) · 결과 없음",
+              cAA.All == null && cAA.FailIndex == 1 && cAA.Steps.Count == 2 && cAA.Steps[1].IntoPrev > 0 && cAA.Fail.Contains("폴리곤 안에 있다"), cAA.Fail);
+        Console.WriteLine($"      S148 걸린 시간 {sw.ElapsedMilliseconds / 1000.0:F1}초");
+    }
+}
+
 // ── S135 ★★★[JACK 0917 로그 <i>"제 몸을 지르지 않는가 <b>아니오</b>"</i>] ──
 //
 //   <para><b>현장 실측</b>: 데이라잇을 점마다 법선으로 10m 밀어 두른 점 266개로 폴리곤을 만들었는데

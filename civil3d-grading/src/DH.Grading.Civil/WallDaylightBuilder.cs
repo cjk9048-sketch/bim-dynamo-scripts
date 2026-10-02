@@ -71,6 +71,11 @@ public static class WallDaylightBuilder
     /// <summary>★[JACK 0918 인터뷰] 띠를 경계 하나로 넣은 새 지표면 — 가상옹벽_DH는 재료로 두고 숨긴다.</summary>
     public const string PureName = "순수옹벽_DH";
 
+    /// <summary>★★[v103.0] <b>지금 짓는 옹벽</b> — <see cref="Build"/> 안에서만 산다(끝나면 되돌린다). 번호가 있으면 이름은 <c>순수옹벽{번호}_DH</c> ·
+    /// 선(띠 · 데이라잇)에는 번호 표지(<see cref="WallTags"/>)를 단다 — 옹벽마다 따로 지우고 숨기게(v102까지는 한 벌).</summary>
+    static int _no;
+    static string _region = "", _pureName = PureName, _wallName = "가상옹벽_DH";
+
     /// <summary>명령줄에 찍을 줄들 — 옹벽변환 분기 끝에서 쓴다. 분기 시작(<see cref="EraseOld"/>)에서 비운다.</summary>
     public static readonly System.Collections.Generic.List<string> Summaries = new();
 
@@ -146,10 +151,25 @@ public static class WallDaylightBuilder
     /// <param name="sideNote">가상옹벽_DH에 방향 표지를 못 붙였다 — 합성만 막는다(띠는 짓는다).</param>
     /// <param name="wallLine">옹벽선(측선 → 선택구간 → 측선) — 입력 파일 끝에 적어 하네스가 방향·옹벽선까지 같게 재생한다(계획 검토 L6).</param>
     /// <param name="head">z0 · 단높이 · 소단 · 단수 · 버린 줄.</param>
+    /// <param name="wallNo">★[v103.0] 옹벽 번호 — 0이면 v102 한 벌 이름(순수옹벽_DH)으로 짓는다(전이면 길 등 옛 길).</param>
+    /// <param name="region">★[v103.0] 구역 계획선 핸들 — 선 표지에 적는다.</param>
     public static string Build(Database db, Transaction tr, ObjectId wallId, IGroundSurface ground,
         ObjectId groundId, System.Collections.Generic.List<Point3> poly, bool bladeOk = true, string bladeNote = "",
         System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? rowsC = null, bool wUp = true,
-        string rowsNote = "", string sideNote = "", System.Collections.Generic.IReadOnlyList<Point3>? wallLine = null, double[]? head = null)
+        string rowsNote = "", string sideNote = "", System.Collections.Generic.IReadOnlyList<Point3>? wallLine = null, double[]? head = null,
+        int wallNo = 0, string region = "")
+    {
+        _no = wallNo; _region = region ?? "";
+        _pureName = wallNo > 0 ? WallRec.PureSurfaceName(wallNo) : PureName;
+        _wallName = wallNo > 0 ? WallRec.WallSurfaceName(wallNo) : "가상옹벽_DH";
+        try { return BuildInner(db, tr, wallId, ground, groundId, poly, bladeOk, bladeNote, rowsC, wUp, rowsNote, sideNote, wallLine, head); }
+        finally { _no = 0; _region = ""; _pureName = PureName; _wallName = "가상옹벽_DH"; }
+    }
+
+    private static string BuildInner(Database db, Transaction tr, ObjectId wallId, IGroundSurface ground,
+        ObjectId groundId, System.Collections.Generic.List<Point3> poly, bool bladeOk, string bladeNote,
+        System.Collections.Generic.List<System.Collections.Generic.List<Point3>>? rowsC, bool wUp,
+        string rowsNote, string sideNote, System.Collections.Generic.IReadOnlyList<Point3>? wallLine, double[]? head)
     {
         bool down = !wUp;
         var tail = (Side: wUp ? "절토" : "성토", WallLine: wallLine, Head: head);
@@ -252,6 +272,32 @@ public static class WallDaylightBuilder
                 GradingSettings.LastWallPlanHandle = hits[0].Id.Handle.ToString();
                 if (tr.GetObject(hits[0].Id, OpenMode.ForRead) is not TinSurface pt)
                     return $"⚠계획지표면 데이라잇 못 만듦 — '{pName}'가 TIN 지표면이 아니다";
+                // ★★[v103.0 · 계획 검토 v103 H1 ②] 옹벽을 <b>쌓을</b> 때는 지난 합성을 안 푼다 — 정지면_DH가 옹벽 합성이면 그 <b>합성 전 면</b>(표지가 가리키는 짝)으로 잰다.
+                //   합성(앞 옹벽 머리가 섞인 면)으로 재면 남길 띠·파랑 선이 틀린다. 새 폴리곤은 앞 옹벽과 안 겹치므로 그 안은 합성 전 면 = 합성이지만,
+                //   다시 짓기(목록 전부)도 합성 전 면 위에서 하므로 같은 면으로 잰다(더하기 = 다시 짓기의 k번째)
+                if (Commands.WallCompositeCommand.IsComposite(tr, pt))
+                {
+                    string bh = Commands.WallCompositeCommand.CompositeBaseHandle(tr, pt);
+                    var (bIds, bNames) = Commands.WallCompositeCommand.Candidates(civilDoc, tr, Commands.WallCompositeCommand.BaseName, groundId);
+                    if (bh.Length > 0 && bIds.Count == 1 && bIds[0].Handle.ToString() == bh && tr.GetObject(bIds[0], OpenMode.ForRead) is TinSurface bt)
+                    {
+                        note += (note.Length > 0 ? " · " : "") + $"'{pName}'는 옹벽 합성 — 합성 전 면 '{bNames[0]}'으로 잰다(옹벽 쌓기)";
+                        pName = bNames[0];
+                        GradingSettings.LastWallPlanHandle = bIds[0].Handle.ToString();
+                        pt = bt;
+                    }
+                }
+                // ★[v103.0 · 코드 검토 높음 1] 낡았으면(원지반을 숨기거나 켜면 붙여넣기 면에 ⚠가 붙는다) <b>다시 짓고</b> 잰다 — v102.2는 들머리 합성 풀기가 다시 지어 줬는데
+                //   쌓기는 그 단계를 건너뛴다. 안 그러면 둘째 옹벽부터 «낡음»으로 순수옹벽·합성이 막힌다(합성 명령도 합성 전 면을 같은 법으로 다시 짓는다)
+                try
+                {
+                    if (pt.IsOutOfDate)
+                    {
+                        string rb = GradingBuilder.RebuildSurfacesByBaseName(tr, pName);   // ★[재검토 낮음 1] 잴 면 그 이름 그대로(이름_N이어도)
+                        note += (note.Length > 0 ? " · " : "") + $"'{pName}'가 낡아 다시 지었다({rb})";
+                    }
+                }
+                catch (System.Exception rx) { note += (note.Length > 0 ? " · " : "") + $"'{pName}' 다시 짓기 실패({rx.GetType().Name})"; }
                 // ★[검토 0918 v99.9 · 중간 3] 낡은 면이면 적는다(옹벽 변환은 정지면을 다시 짓지 않는다)
                 try { if (pt.IsOutOfDate) { stale = true; note += (note.Length > 0 ? " · " : "") + $"'{pName}'가 <b>낡음(Out of date)</b> 상태"; } } catch { }
                 // ★[v101.1 · 계획 검토 높음 1·중간 2] 합성 전 면 없이 남은 옹벽 합성이면 그 위에서 딴 띠·파랑 선은 틀린다(옛 옹벽 머리가 섞인다)
@@ -364,7 +410,7 @@ public static class WallDaylightBuilder
                         // ★★★[v100.3 · JACK «초록색선에 맞춰서 정확히 잘리지 않으면 이 기능은 의미가 없어 무조건 성공해야해»]
                         //   Civil에 자르기를 맡기지 않는다: 가상옹벽_DH 삼각형을 띠(초록 선 · 구멍 빼고)로 <b>직접</b> 잘라(Core ClipToBand — 1µm 격자로 한 번에 이음)
                         //   LandXML 면으로 넘긴다. Civil은 받기만 하므로 테두리 = 초록 선(1µm 안), 높이 = 옹벽 평면. 경계는 넣지 않는다(0개)
-                        GradingBuilder.EraseSurfacesByBaseName(tr, PureName, groundId);
+                        GradingBuilder.EraseSurfacesByBaseName(tr, _pureName, groundId);
                         var clip = WallDaylight.ClipToBand(wallTris, ring, holes, out string cn, out int cbad);
                         if (clip.Count == 0 || cbad > 0) throw new SkipAttempt("띠를 삼각형으로 다 못 덮었다 — " + cn);
                         // ★★★[v100.4 · 0928 화면 없는 Civil 실측] 1µm 격자 그대로 넘기면 Civil이 0.1mm 안 점을 합치고 바늘 면을 뒤집어
@@ -377,11 +423,11 @@ public static class WallDaylightBuilder
                         WallDaylight.WriteLandXmlTin(xml, "PUREWALL", safe, 1e-7, out int np, out int nf, out int nd);
                         if (nd > 0) throw new SkipAttempt($"넓이 0이라 뺀 면 {nd}개 — 면이 맞물리지 않을 수 있다");
                         try { ArchiveDump(xml); } catch { }                // ★[검토 0928 · 중간 5] 덮어써 잃지 않게
-                        pid = TinSurface.CreateFromLandXML(db, PureName, xml, "PUREWALL");
+                        pid = TinSurface.CreateFromLandXML(db, _pureName, xml, "PUREWALL");
                         if (pid.IsNull) throw new System.InvalidOperationException("CreateFromLandXML이 빈 ObjectId를 돌려줬다");
                         tin = (TinSurface)tr.GetObject(pid, OpenMode.ForWrite);
                         // ★[검토 v100.3 · 낮음 7] 지난 면을 못 지워 이름이 «_2»로 붙었으면 면이 둘이다 — 이 길은 접는다
-                        if (tin.Name != PureName) throw new GateFail($"새 면 이름이 '{tin.Name}'이다(지난 '{PureName}'를 못 지움)");
+                        if (tin.Name != _pureName) throw new GateFail($"새 면 이름이 '{tin.Name}'이다(지난 '{_pureName}'를 못 지움)");
                         // ★[검토 0928 · 중간 5] Civil이 점을 합쳤는가를 바로 보이는 숫자로
                         try { civPts = tin.GetGeneralProperties().NumberOfPoints; } catch { }
                         xmlFaces = nf; xmlPts = np;
@@ -393,7 +439,7 @@ public static class WallDaylightBuilder
                     {
                     pid = GradingBuilder.BuildVirtualSlope(db, tr,
                         new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>(),
-                        PureName, rowsC!, groundId, null, midOrd: 0.001);
+                        _pureName, rowsC!, groundId, null, midOrd: 0.001);
                     int bIn = GradingBuilder.LastIntended, bDef = GradingBuilder.LastDefined;
                     if (bIn < 0 || bDef < bIn) throw new System.InvalidOperationException($"브레이크라인을 {bIn}개 중 {bDef}개만 받았다");
                     tin = (TinSurface)tr.GetObject(pid, OpenMode.ForWrite);
@@ -489,7 +535,7 @@ public static class WallDaylightBuilder
                     try
                     {
                         if (!pid.IsNull) { tr.GetObject(pid, OpenMode.ForWrite).Erase(); lastErased = true; }
-                        else { GradingBuilder.EraseSurfacesByBaseName(tr, PureName, groundId); lastErased = true; }
+                        else { GradingBuilder.EraseSurfacesByBaseName(tr, _pureName, groundId); lastErased = true; }
                     }
                     catch { }
                     throw;
@@ -551,8 +597,10 @@ public static class WallDaylightBuilder
                             : ez.Max > 0.01 ? $" · ⚠되읽은 테두리 높이가 띠 선에서 최대 {ez.Max * 100:F1}cm 벗어난다"
                             : $" · 되읽은 테두리 높이 차 최대 {ez.Max * 1000:F1}mm";
             string vis = "";
-            try { vis = GradingBuilder.MakeSurfaceVisible(db, tr, PureName, "DH-순수옹벽면", "DH-순수옹벽", 6); } catch { }
-            int hid = 0; try { hid = GradingBuilder.SetSurfaceVisible(tr, "가상옹벽_DH", false); } catch { }
+            try { vis = GradingBuilder.MakeSurfaceVisible(db, tr, _pureName, "DH-순수옹벽면", "DH-순수옹벽", 6); } catch { }
+            int hid = 0; try { hid = GradingBuilder.SetSurfaceVisible(tr, _wallName, false); } catch { }
+            // ★[v103.0] 번호 표지 — 옹벽마다 따로 지우고 숨기게
+            if (_no > 0) { try { var pidT = GradingBuilder.FindSurfaceByBaseName(tr, _pureName); if (!pidT.IsNull) WallTags.TagSurface(tr, pidT, _no, _region); } catch { } }
             sb.Append($"    ★{pure}{ringNote} · 보이기: {vis} · 가상옹벽_DH 숨김 {hid}개\n");
             Summaries.Add(head + r.Summary + $" · <b>순수옹벽_DH 만듦</b>(어긋난 넓이 {sym3(pure)}{edgeNote}){ringNote}");
             return sb.ToString();
@@ -899,6 +947,7 @@ public static class WallDaylightBuilder
         var pl = new Polyline3d { LayerId = layerId };
         ms.AppendEntity(pl);
         tr.AddNewlyCreatedDBObject(pl, true);
+        if (_no > 0) WallTags.Tag(db, tr, pl, _no, _region);   // ★[v103.0] 옹벽 번호 표지
         try
         {
             foreach (var q in ring)    // 첫 점을 끝에 되풀이하지 않는다 — 닫힘은 Closed가 한다
