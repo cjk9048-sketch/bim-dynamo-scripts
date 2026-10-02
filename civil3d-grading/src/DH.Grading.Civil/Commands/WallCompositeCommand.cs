@@ -48,13 +48,16 @@ public sealed class WallCompositeCommand
     }
     /// <param name="baseHandle">합성 전 면(<see cref="BaseName"/>)의 핸들 — 풀기·다시 합성이 «이 합성의 합성 전 면인가»를 본다(코드 검토 v101.1 · 중간 1).
     /// 핸들은 도면을 닫았다 열어도 같다(ObjectId는 아니다).</param>
-    static void MarkComposite(Transaction tr, Autodesk.AutoCAD.DatabaseServices.DBObject o, string info, string baseHandle)
+    /// <param name="nos">★[v103.0] 든 옹벽 번호(«1,2,4») — 셋째 값. 없으면 v102 표지(옮길 한 벌 합성).</param>
+    static void MarkComposite(Transaction tr, Autodesk.AutoCAD.DatabaseServices.DBObject o, string info, string baseHandle, string nos = "")
     {
         if (!o.IsWriteEnabled) o.UpgradeOpen();
         if (o.ExtensionDictionary.IsNull) o.CreateExtensionDictionary();
         var d = (DBDictionary)tr.GetObject(o.ExtensionDictionary, OpenMode.ForWrite);
         if (d.Contains(TagKey)) throw new System.InvalidOperationException("새로 지은 면에 합성 표지가 벌써 있다");
-        var xr = new Xrecord { Data = new ResultBuffer(new TypedValue((int)DxfCode.Text, info), new TypedValue((int)DxfCode.Text, baseHandle)) };
+        var rb = new ResultBuffer(new TypedValue((int)DxfCode.Text, info), new TypedValue((int)DxfCode.Text, baseHandle));
+        if (!string.IsNullOrEmpty(nos)) rb.Add(new TypedValue((int)DxfCode.Text, nos));
+        var xr = new Xrecord { Data = rb };
         d.SetAt(TagKey, xr);
         tr.AddNewlyCreatedDBObject(xr, true);
     }
@@ -71,6 +74,23 @@ public sealed class WallCompositeCommand
         }
         catch { return ""; }
     }
+    /// <summary>★[v103.0] 합성 표지에 적힌 <b>든 옹벽 번호</b> — 표지가 없으면 null · v102까지의 표지(셋째 값 없음)면 빈 배열(옮길 한 벌 합성).</summary>
+    internal static int[]? CompositeWallNos(Transaction tr, Autodesk.AutoCAD.DatabaseServices.DBObject o)
+    {
+        try
+        {
+            if (o.ExtensionDictionary.IsNull) return null;
+            if (tr.GetObject(o.ExtensionDictionary, OpenMode.ForRead) is not DBDictionary d || !d.Contains(TagKey)) return null;
+            if (tr.GetObject(d.GetAt(TagKey), OpenMode.ForRead) is not Xrecord xr || xr.Data == null) return null;
+            var a = xr.Data.AsArray();
+            if (a.Length < 3 || a[2].Value is not string s) return System.Array.Empty<int>();
+            var l = new System.Collections.Generic.List<int>();
+            foreach (var part in s.Split(',', System.StringSplitOptions.RemoveEmptyEntries)) if (int.TryParse(part.Trim(), out int n) && n > 0) l.Add(n);
+            return l.ToArray();
+        }
+        catch { return null; }
+    }
+
     /// <summary>합성 전 면 없이 남은 합성에서 빠져나가는 길 — 정지면을 통째로 다시 짓는 것만 늘 된다
     /// (옹벽 구간이 남아 있으면 옹벽·사면 변환은 폴리곤만 만들고 정지면을 다시 짓지 않는다 — CreateGradingCommand «폴리곤만»).</summary>
     internal const string B1Help = "계획부지 생성 «새로 시작»으로 정지면을 다시 지은 뒤 옹벽 변환을 다시 하세요";
@@ -80,6 +100,10 @@ public sealed class WallCompositeCommand
     sealed class SwapFailed : System.Exception { public SwapFailed(string m) : base(m) { } }
     /// <summary>이번 실행이 Civil에 만든 새 면 — 되돌린 뒤에도 남았으면(가져오기가 트랜잭션 밖에서 만들었을 때) 이름과 상관없이 지운다.</summary>
     static ObjectId _made = ObjectId.Null;
+    /// <summary>★[v103.0] 이번 실행이 바꿔 끼우기까지 갔다(⚠가 있어도 합성은 됐다) — 알림창 문구를 가른다.</summary>
+    static bool _lastOk;
+    /// <summary>★[v103.0 · 재검토 낮음 4] 이번 실행이 버린 «대기» 옹벽 번호 — 알림창이 «DHWALLCOMP»가 아니라 «옹벽 변환을 다시»를 권하게(버린 옹벽은 합성으로 안 돌아온다).</summary>
+    static int _rejectedNo;
     const string LogName = "DHWALLCOMP_진단.log";
     const string DumpName = "DHWALLCOMP_입력.txt";
     const string XmlName = "DHWALLCOMP_합성.xml";
@@ -98,6 +122,7 @@ public sealed class WallCompositeCommand
         string summary;
         var sw = System.Diagnostics.Stopwatch.StartNew();
         bool crashed = false;
+        _lastOk = false; _rejectedNo = 0;
         _made = ObjectId.Null;
         try
         {
@@ -112,13 +137,13 @@ public sealed class WallCompositeCommand
         }
         catch (SwapFailed sf)
         {
-            crashed = true;
+            crashed = true; _lastOk = false; _rejectedNo = 0;   // ★[검증 낮음] 되돌렸으면 «버렸다»가 아니다 — 대기 옹벽은 그대로 남는다
             summary = $"⚠옹벽 합성 못 함 — {sf.Message} · 바꿔 끼우기를 통째로 되돌렸다(정지면_DH·보이기는 명령 전 그대로)";
             log.AppendLine(sf.ToString());
         }
         catch (System.Exception ex)
         {
-            crashed = true;
+            crashed = true; _lastOk = false; _rejectedNo = 0;
             summary = $"⚠옹벽 합성 못 함 — {ex.GetType().Name}: {ex.Message} · 이번 명령이 바꾼 것은 되돌렸다(정지면_DH·보이기는 명령 전 그대로)";
             log.AppendLine(ex.ToString());
         }
@@ -145,123 +170,78 @@ public sealed class WallCompositeCommand
         summary += $" · 전체 {sw.ElapsedMilliseconds / 1000.0:F1}초";
         // ★[v102.2 · 계획 검토 중간 8] 옹벽 변환이 이어서 태운 합성이 못 했으면 알림창 — 버튼이 없어져 명령줄 한 줄로는 묻힌다
         bool auto = GradingSettings.AutoCompDoc.Length > 0 && GradingSettings.AutoCompDoc == doc.Name;
-        GradingSettings.AutoCompDoc = "";
-        if (auto && (crashed || summary.StartsWith("⚠")))
-            try { AcadApp.ShowAlertDialog("옹벽 합성을 못 했습니다(정지면_DH는 합성 전 그대로).\n\n" + System.Text.RegularExpressions.Regex.Replace(summary, "<[^>]+>", "")
-                                          + "\n\n다시 하려면 명령줄에 DHWALLCOMP를 치세요. 자세한 것은 " + LogName); } catch { }
+        int autoNo = GradingSettings.AutoCompNo;
+        GradingSettings.AutoCompDoc = ""; GradingSettings.AutoCompNo = 0;
+        // ★[v103.0] 쌓기 — 못 하면 새 옹벽만 빠지고 지난 옹벽이 든 정지면_DH는 그대로다
+        // ★[v103.0 · 코드 검토 중간 3] 합성은 됐는데 넣은 옹벽이 빠졌으면(⚠) 손으로 친 합성이어도 알린다 — 명령줄 한 줄로는 묻힌다
+        if ((auto && (crashed || summary.StartsWith("⚠"))) || (_lastOk && summary.StartsWith("⚠")))
+            try
+            {
+                string head0 = _lastOk ? "옹벽 합성은 했지만 빠진 옹벽이 있습니다."
+                             : _rejectedNo > 0 ? $"옹벽 {_rejectedNo}를 정지면_DH에 못 넣어 버렸습니다(지난 옹벽과 정지면_DH는 그대로)."
+                             : $"옹벽 {(autoNo > 0 ? autoNo + " " : "")}합성을 못 했습니다(지난 옹벽과 정지면_DH는 그대로).";
+                string tail0 = _lastOk ? "빠진 옹벽은 옹벽 변환에서 다시 지정하세요."
+                             : _rejectedNo > 0 ? "버린 옹벽은 합성으로 돌아오지 않습니다 — 옹벽 변환을 다시 하세요."
+                             : "다시 하려면 옹벽 변환을 다시 하거나 명령줄에 DHWALLCOMP를 치세요.";
+                AcadApp.ShowAlertDialog(head0 + "\n\n" + System.Text.RegularExpressions.Regex.Replace(summary, "<[^>]+>", "") + "\n\n" + tail0 + " 자세한 것은 " + LogName);
+            }
+            catch { }
         log.AppendLine("■ " + summary);
         try { System.IO.File.WriteAllText(logPath, log.ToString()); WallDaylightBuilder.ArchiveDumpPublic(logPath); } catch { }
         try { ed.WriteMessage($"\n[옹벽 합성] {summary.Replace("<b>", "").Replace("</b>", "")}\n  로그: {logPath}\n"); } catch { }
         try { ed.Regen(); } catch { }
     }
 
-    /// <summary>재료 모으기 → Core 합성 → LandXML(임시 이름) → Civil → 되읽기 관문 → 정지면_DH로 바꿔 끼우기 → 보이기. 못 하면 까닭(⚠) 문자열.</summary>
+    /// <summary>재료 모으기 → Core 합성 → LandXML(임시 이름) → Civil → 되읽기 관문 → 정지면_DH로 바꿔 끼우기 → 보이기. 못 하면 까닭(⚠) 문자열.
+    /// <para>★★★[v103.0 · JACK 0930 «옹벽이 남아야»] 재료는 <b>옹벽 목록</b> — «넣음» 옹벽(바꿀 것 빼고) + «대기» 옹벽을 번호 차례로 <b>합성 전 면 위에</b> 짓는다
+    /// (<see cref="WallDaylight.ComposeWalls"/> — 더하기 = 다시 짓기의 마지막 단계). 세션 «짝»(LastWall*)은 안 쓴다 — Civil을 다시 켜도 같다.
+    /// 대기 옹벽이 못 들어가면 그 옹벽만 버린다(결과물 지움 · 칸 지움) — 지난 옹벽과 정지면_DH는 그대로.</para></summary>
     private static string Build(Database db, Transaction tr, System.Text.StringBuilder log, string dir)
     {
         var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
         int leftover = EraseTemp(tr);
         if (leftover > 0) log.AppendLine($"   지난번에 남은 임시 면 {leftover}개 지움");
 
-        // ① 원지반 — 옹벽변환이 쓴 것 먼저
-        ObjectId groundId = NoriCommand.FindByHandle(db, GradingSettings.LastGroundHandle);
+        // ① 옹벽 목록
+        if (!WallListStore.TryLoad(db, tr, out var head, out var walls, out string lwhy)) return Fail("옹벽 목록을 못 읽었다 — " + lwhy);
+        var replaced = new System.Collections.Generic.HashSet<int>(walls.Where(w => w.State == 0 && w.Block.Length == 0 && w.ReplaceNo > 0).Select(w => w.ReplaceNo));
+        var use = walls.Where(w => (w.State == 1 && !replaced.Contains(w.No)) || (w.State == 0 && w.Block.Length == 0)).OrderBy(w => w.No).ToList();
+        var blocked = walls.Where(w => w.State == 0 && w.Block.Length > 0).ToList();
+        log.AppendLine($"① 옹벽 목록 — 넣음 {walls.Count(w => w.State == 1)}({string.Join(",", walls.Where(w => w.State == 1).Select(w => w.No))}) · 대기 {walls.Count(w => w.State == 0)}"
+            + (replaced.Count > 0 ? $" · 바꿀 옹벽 {string.Join(",", replaced)}" : "") + (blocked.Count > 0 ? $" · 합성 막힌 대기 {string.Join(",", blocked.Select(w => w.No))}" : "")
+            + $" → 합성할 옹벽 {use.Count}개({string.Join(",", use.Select(w => w.No))}) · 다음 번호 {head.NextNo}");
+        if (use.Count == 0)
+            return Fail(walls.Count == 0 ? "옹벽 목록이 비었다 — 옹벽 변환(부분 지정)으로 옹벽을 먼저 지으세요"
+                                         : $"합성할 옹벽이 없다{(blocked.Count > 0 ? $" — 대기 옹벽 {string.Join(",", blocked.Select(w => w.No))}는 합성이 막혔다({blocked[0].Block})" : "")}");
+
+        // ② 원지반 — 목록 머리 → 옹벽변환이 쓴 것 → 이름
+        ObjectId groundId = NoriCommand.FindByHandle(db, head.GroundHandle);
+        if (groundId.IsNull) groundId = NoriCommand.FindByHandle(db, GradingSettings.LastGroundHandle);
         string gName = "";
         if (groundId.IsNull) groundId = ImportGisCommand.FindGroundSurface(db, out gName, out _);
         if (groundId.IsNull || tr.GetObject(groundId, OpenMode.ForRead) is not TinSurface gTin) return Fail("원지반 지표면을 못 찾았다");
         gName = gTin.Name;
 
-        // ② 짝 — ★[검토 0929 v101 · 중간 5] 옹벽 변환이 쓴 폴리곤(점 그대로)·가상옹벽·정지면만 쓴다.
-        //   정지면 = 합성 <b>전</b> 면 — 합성한 뒤면 이름이 정지면_DH합성전이다(짝 핸들은 같은 객체를 가리킨다)
-        System.Collections.Generic.List<Point3> poly;
-        TinSurface wTin, pTin;
-        string pairNote;
-        bool NameOk(string nm, string b) => nm == b || (nm.StartsWith(b + "_") && int.TryParse(nm.Substring(b.Length + 1), out _));
-        if (GradingSettings.LastWallInvalid)
-            return Fail("지난 옹벽 변환이 짝을 안 남겼다 — 데이라잇까지 못 갔거나 «폴리곤만» 판이 아니다(합성은 «폴리곤만» 옹벽 변환이 순수옹벽까지 간 뒤에 짓는다 · 옹벽 변환을 다시 돌리세요)");
-        if (GradingSettings.LastWallPoly != null)
+        // ③ 합성 전 면(P0) — 정지면_DH가 합성이면 그 표지가 가리키는 합성 전 면 · 아니면 정지면_DH 그대로
+        var (cIds, cNames) = Candidates(civilDoc, tr, PlanName, groundId);
+        if (cIds.Count != 1)
+            return Fail(cIds.Count == 0 ? $"{PlanName}가 없다 — 계획부지 생성을 먼저 돌리세요" : $"{PlanName} 후보가 {cIds.Count}개({string.Join(", ", cNames)}) — 어느 것과 합성할지 모른다");
+        if (tr.GetObject(cIds[0], OpenMode.ForRead) is not TinSurface curTin) return Fail("정지면이 TIN 지표면이 아니다");
+        TinSurface pTin; bool inS1;
+        if (IsComposite(tr, curTin))
         {
-            if (GradingSettings.LastWallPlanNote.Length > 0)
-                return Fail($"옹벽 변환이 합성을 막은 까닭이 그대로다 — {GradingSettings.LastWallPlanNote}");
-            ObjectId wId = NoriCommand.FindByHandle(db, GradingSettings.LastWallSurfHandle), pId = NoriCommand.FindByHandle(db, GradingSettings.LastWallPlanHandle);
-            if (wId.IsNull || tr.GetObject(wId, OpenMode.ForRead) is not TinSurface w0)
-                return Fail("옹벽 변환이 지은 가상옹벽_DH가 없다(지워졌거나 다시 지어짐) — 옹벽 변환을 다시 돌리세요");
-            if (pId.IsNull || tr.GetObject(pId, OpenMode.ForRead) is not TinSurface p0)
-                return Fail($"옹벽 변환이 쓴 {PlanName}가 없다(계획부지 생성을 다시 돌렸나?) — 옹벽 변환을 다시 돌리세요");
-            // ★[2차 검토 N5] 핸들은 도면을 닫았다 다시 열면 다른 면을 가리킬 수 있다 — 이름으로 한 번 더 확인
-            if (!NameOk(w0.Name, "가상옹벽_DH") || !(NameOk(p0.Name, PlanName) || p0.Name == BaseName))
-                return Fail($"기억한 짝의 면 이름이 다르다('{w0.Name}' · '{p0.Name}') — 옹벽 변환을 다시 돌리세요");
-            poly = new System.Collections.Generic.List<Point3>(GradingSettings.LastWallPoly);
-            wTin = w0; pTin = p0;
-            pairNote = $"옹벽 변환({GradingSettings.LastWallStamp})이 쓴 짝";
+            string bh = CompositeBaseHandle(tr, curTin);
+            var (bIds, bNames) = Candidates(civilDoc, tr, BaseName, groundId);
+            if (bIds.Count != 1 || bIds[0].Handle.ToString() != bh || tr.GetObject(bIds[0], OpenMode.ForRead) is not TinSurface b0)
+                return Fail($"'{curTin.Name}'는 옹벽 합성인데 그 합성 전 면을 못 찾았다(합성 전 면 {bIds.Count}개{(bIds.Count > 0 ? ": " + string.Join(", ", bNames) : "")}) — {B1Help}");
+            pTin = b0; inS1 = true;
         }
         else
         {
-            // 기억이 없다(도면 전환·Civil 재시작) — 이름으로 찾되 후보가 하나씩일 때만
-            var polys = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
-            var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
-            foreach (ObjectId id in ms)
-            {
-                if (tr.GetObject(id, OpenMode.ForRead) is not Polyline3d pl || !string.Equals(pl.Layer, "DH-가상폴리곤", System.StringComparison.OrdinalIgnoreCase)) continue;
-                var pts = new System.Collections.Generic.List<Point3>();
-                foreach (ObjectId vid in pl)
-                    if (tr.GetObject(vid, OpenMode.ForRead) is PolylineVertex3d v) pts.Add(new Point3(v.Position.X, v.Position.Y, v.Position.Z));
-                if (pts.Count > 1 && pts[0].X == pts[^1].X && pts[0].Y == pts[^1].Y) pts.RemoveAt(pts.Count - 1);
-                if (pts.Count >= 3) polys.Add(pts);
-            }
-            if (polys.Count == 0) return Fail("옹벽 폴리곤('DH-가상폴리곤')이 없다 — 옹벽 변환(DHWALL)을 먼저 돌리세요");
-            if (polys.Count > 1) return Fail($"옹벽 폴리곤('DH-가상폴리곤')이 {polys.Count}개 — 어느 것과 합성할지 모른다(옹벽 변환을 다시 돌리면 짝을 기억한다)");
-            var (wIds, wNames) = Candidates(civilDoc, tr, "가상옹벽_DH", groundId);
-            if (wIds.Count != 1 || tr.GetObject(wIds[0], OpenMode.ForRead) is not TinSurface w1)
-                return Fail(wIds.Count == 0 ? "가상옹벽_DH가 없다 — 옹벽 변환(DHWALL)을 먼저 돌리세요" : $"가상옹벽_DH 후보가 {wIds.Count}개({string.Join(", ", wNames)}) — 어느 것과 합성할지 모른다");
-            // 정지면 — 합성 전 면이 있으면 그것(지난 합성이 정지면_DH에 들어가 있다), 없으면 정지면_DH
-            var (bIds, bNames) = Candidates(civilDoc, tr, BaseName, groundId);
-            TinSurface? p1 = null;
-            if (bIds.Count > 1) return Fail($"합성 전 정지면이 {bIds.Count}개({string.Join(", ", bNames)}) — 어느 것에 합성할지 모른다");
-            if (bIds.Count == 1) p1 = tr.GetObject(bIds[0], OpenMode.ForRead) as TinSurface;
-            else
-            {
-                var (pIds, pNames) = Candidates(civilDoc, tr, PlanName, groundId);
-                if (pIds.Count != 1)
-                    return Fail(pIds.Count == 0 ? $"{PlanName}가 없다 — 계획부지 생성을 먼저 돌리세요" : $"{PlanName} 후보가 {pIds.Count}개({string.Join(", ", pNames)}) — 어느 것과 합성할지 모른다");
-                p1 = tr.GetObject(pIds[0], OpenMode.ForRead) as TinSurface;
-            }
-            if (p1 == null) return Fail("정지면이 TIN 지표면이 아니다");
-            poly = polys[0]; wTin = w1; pTin = p1;
-            pairNote = "옹벽 변환 기억이 없어 이름으로 찾음(폴리곤·가상옹벽·정지면 하나씩)";
-        }
-        // ★★[v102.0 · JACK 0929 «옹벽 합성 버튼 하나가 절토/성토를 가린다»] 방향 — 가상옹벽_DH 표지(DH_WALLSIDE). 없으면 짐작하지 않는다
-        //   (방향을 거꾸로 쓰면 두 규칙 모두 = 정지면이라 «판정 1, 옹벽 없음»으로 조용히 끝난다 — 계획 검토 v102 · M3)
-        string side = WallDaylightBuilder.ReadSide(tr, wTin, out string sideBlock);
-        if (side.Length == 0)
-            return Fail($"'{wTin.Name}'에 옹벽 방향(절토/성토) 표지가 없다 — 옹벽 변환을 다시 돌리세요(v102.0 전에 지은 옹벽이거나 표지를 못 붙였다)");
-        // ★[코드 검토 중간 1] 옹벽 변환이 도면에 적어 둔 «합성 막음» — 기억 길이든 이름 길이든 멈춘다
-        if (sideBlock.Length > 0)
-            return Fail($"옹벽 변환이 이 옹벽의 합성을 막아 두었다 — {sideBlock} · 폴리곤을 넓히거나 옹벽 변환을 다시 돌리세요");
-        bool up = side == "절토";
-        bool inS1 = pTin.Name == BaseName;                 // 합성이 이미 정지면_DH에 들어가 있다(다시 합성)
-        // ★[계획 검토 v101.1 · 높음 1] 표지 붙은 면(합성)을 입력으로 받으면 합성 위에 또 합성한다
-        if (IsComposite(tr, pTin))
-            return Fail($"'{pTin.Name}'는 이미 옹벽 합성인데 합성 전 면이 없다 — 합성 위에 또 합성하지 않는다({B1Help})");
-        // ★[계획 검토 v101.1 · 중간 2] 합성 전 면이 있으면 짝의 정지면이 곧 그것이어야 한다 — 아니면 짝이 어긋난 것
-        if (!inS1)
-        {
             var (bx, bxNames) = Candidates(civilDoc, tr, BaseName, groundId);
-            if (bx.Count > 0)
-                return Fail($"합성 전 면({string.Join(", ", bxNames)})이 남아 있는데 짝의 정지면은 '{pTin.Name}'다(짝이 어긋남) — {PairHelp}");
+            if (bx.Count > 0) return Fail($"합성 전 면({string.Join(", ", bxNames)})이 남아 있는데 정지면_DH는 합성이 아니다(짝이 어긋남) — {PairHelp}");
+            pTin = curTin; inS1 = false;
         }
-        // ★[코드 검토 v101.1 · 중간 1] 다시 합성이면 지금 정지면_DH는 전부 이 합성 전 면의 합성(표지 + 핸들)이어야 한다 —
-        //   표지 없는 정지면_DH는 새 계획면이다. 바꿔 끼우기가 그것을 지우면 새 계획면을 말없이 잃는다
-        if (inS1)
-        {
-            string ph = pTin.ObjectId.Handle.ToString();
-            var (cur, curNames) = Candidates(civilDoc, tr, PlanName, groundId);
-            for (int i = 0; i < cur.Count; i++)
-            {
-                var o = tr.GetObject(cur[i], OpenMode.ForRead);
-                if (!IsComposite(tr, o) || CompositeBaseHandle(tr, o) != ph)
-                    return Fail($"'{curNames[i]}'가 합성 전 면('{pTin.Name}')의 합성이 아니다(짝이 어긋남) — {PairHelp}");
-            }
-        }
-        // 붙여넣기 합성면은 원지반을 숨기거나 켤 때마다 ⚠(정의 구식)가 붙는다(보기·결과만 보기) — 한 번 다시 짓고 본다
         try
         {
             if (pTin.IsOutOfDate)
@@ -272,67 +252,133 @@ public sealed class WallCompositeCommand
         }
         catch (System.Exception rx) { log.AppendLine($"   다시 짓기 실패 {rx.GetType().Name}"); }
         try { if (pTin.IsOutOfDate) return Fail($"'{pTin.Name}'가 낡음(Out of date) — 다시 지어도 안 풀린다"); } catch { }
-        try { if (wTin.IsOutOfDate) return Fail($"'{wTin.Name}'가 낡음(Out of date)"); } catch { }
-        log.AppendLine($"① 짝 — {pairNote} · 폴리곤 {poly.Count}점 · 원지반 '{gName}' · 옹벽 '{wTin.Name}'(<b>{side}</b>) · 정지면 '{pTin.Name}'{(inS1 ? "(지난 합성의 합성 전 면 — 다시 합성)" : "")}");
+        log.AppendLine($"② 원지반 '{gName}' · 합성 전 면 '{pTin.Name}'{(inS1 ? "(정지면_DH는 지난 합성 — 그 합성 전 면 위에 처음부터 다시)" : "")}");
 
-        // ③ 삼각형 — 옹벽·원지반은 폴리곤 둘레(±1m), 정지면은 전부(손 안 댄 것은 그대로 옮긴다)
+        // 대기 옹벽을 버린다 — 결과물 지움 · 칸 지움 · 목록 저장(이 트랜잭션은 Fail이어도 커밋된다 — 바꿔 끼우기 전이라 남는 것은 이것뿐)
+        string Reject(WallRec w, string why)
+        {
+            _rejectedNo = w.No;
+            var er = WallTags.Erase(db, tr, (n, r) => n == w.No, false, groundId);
+            walls.RemoveAll(x => x.No == w.No);
+            try { WallListStore.Save(db, tr, head, walls); } catch (System.Exception sx) { log.AppendLine("목록 저장 실패: " + sx.GetType().Name); }
+            log.AppendLine($"   대기 옹벽 {w.No} 버림 — {why} · {er.Text}");
+            return Fail($"옹벽 {w.No}({w.Side})를 정지면_DH에 못 넣었다 — {why} · 그 옹벽 결과물을 지웠다({er.Text}) · 지난 옹벽 {walls.Count(x => x.State == 1)}개와 정지면_DH는 그대로");
+        }
+
+        // ④ 옹벽마다 재료 — 가상옹벽{번호}_DH · 방향 표지 · 막음 까닭 · 모양(머리 위/아래)
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        double mnx = poly.Min(q => q.X) - 1, mny = poly.Min(q => q.Y) - 1, mxx = poly.Max(q => q.X) + 1, mxy = poly.Max(q => q.Y) + 1;
-        var wCache = new CachedGroundSurface(wTin); var gCache = new CachedGroundSurface(gTin); var planCache = new CachedGroundSurface(pTin);
-        // ★[검토 0929 v101 · 낮음 9] 읽다 버린 삼각형이 있으면 그 면은 빠진 채다 — 되읽기 관문은 우리 목록끼리 견주므로 여기서 막는다
-        if (wCache.ReadFailed + gCache.ReadFailed + planCache.ReadFailed > 0)
-            return Fail($"삼각형을 다 못 읽었다(옹벽 {wCache.ReadFailed} · 원지반 {gCache.ReadFailed} · 정지면 {planCache.ReadFailed}개 빠짐)");
-        var wallTris = wCache.TrianglesIn(mnx, mny, mxx, mxy);
-        // ★[v102.0 · 계획 검토 M3 ①] 기하로 한 번 더 — 옹벽 첫 줄 = 폴리곤 z(머리 높이). 절토면 옹벽이 전부 그 위 · 성토면 전부 그 아래(1mm)
+        var gCache = new CachedGroundSurface(gTin); var planCache = new CachedGroundSurface(pTin);
+        if (gCache.ReadFailed + planCache.ReadFailed > 0)
+            return Fail($"삼각형을 다 못 읽었다(원지반 {gCache.ReadFailed} · 정지면 {planCache.ReadFailed}개 빠짐)");
+        var inputs = new System.Collections.Generic.List<WallDaylight.WallInput>();
+        var useOk = new System.Collections.Generic.List<WallRec>();
+        var dropped = new System.Collections.Generic.List<string>();
+        foreach (var w in use)
         {
-            double z0 = poly[0].Z; int wrong = 0; double worst = 0;
-            foreach (var t in wallTris)
-                foreach (var q in new[] { t.A, t.B, t.C })
-                { double dz = up ? z0 - q.Z : q.Z - z0; if (dz > 1e-3) { wrong++; worst = System.Math.Max(worst, dz); } }
-            if (wrong > 0)
-                return Fail($"옹벽 방향 표지('{side}')와 옹벽 모양이 안 맞는다 — 옹벽 꼭짓점 {wrong}개가 머리 높이 {z0:F3}m {(up ? "아래" : "위")}(최대 {worst:F3}m) · 옹벽 변환을 다시 돌리세요");
-        }
-        var groundTris = gCache.TrianglesIn(mnx, mny, mxx, mxy);
-        var planAll = planCache.AllTriangles();
-        log.AppendLine($"② 삼각형 — 옹벽 {wallTris.Count} · 원지반 {groundTris.Count} · 정지면 전체 {planAll.Count} · {sw.ElapsedMilliseconds}ms");
-        // 입력을 떨군다 — 오프라인 재생(먼저 폴리곤 ±5m, 합성 뒤 손댄 상자로 다시)
-        string dump = System.IO.Path.Combine(dir, DumpName);
-        string head = $"{System.DateTime.Now:yyyy-MM-dd HH:mm:ss} {GradingSettings.Version} 원지반='{gName}' 옹벽='{wTin.Name}' 정지면='{pTin.Name}' · {pairNote}";
-        void Dump(System.Collections.Generic.List<WallDaylight.Tri> planPart, string what)
-        {
-            try
+            string bad = "";
+            ObjectId wId = NoriCommand.FindByHandle(db, w.WallHandle);
+            TinSurface? wTin = null;
+            bool gone = false;   // ★[v103.0 · 재검토 낮음 3] 다시는 못 읽는 것(면이 지워짐 · 이름이 다름)만 뺀다 — 낡음·읽기 실패 등은 일시적일 수 있다
+            if (wId.IsNull || tr.GetObject(wId, OpenMode.ForRead) is not TinSurface wt) { bad = $"가상옹벽{w.No}_DH가 없다(지워졌다)"; gone = true; }
+            else
             {
-                WallDaylight.WriteBandInput(dump, poly, wallTris, groundTris, planPart, head + $"(전체 {planAll.Count}면 중 {what} {planPart.Count})");
-                WallDaylight.AppendInputTail(dump, side, null, null);   // ★[v102.0] 재생이 방향을 안다
-                log.AppendLine($"   입력 파일({what}): {dump}");
+                wTin = wt;
+                if (!WallTags.IsWallSurface(wt.Name, out int nn) || nn != w.No) { bad = $"기억한 가상옹벽 이름이 다르다('{wt.Name}')"; gone = true; }
+                else
+                {
+                    string side = WallDaylightBuilder.ReadSide(tr, wt, out string sideBlock);
+                    if (side != w.Side) bad = $"'{wt.Name}'의 방향 표지('{side}')가 목록('{w.Side}')과 다르다";
+                    else if (sideBlock.Length > 0) bad = $"옹벽 변환이 이 옹벽의 합성을 막아 두었다 — {sideBlock}";
+                    else
+                    {
+                        // ★[v103.0 · 코드 검토 중간 3] 낡았으면 다시 지어 본다(합성 전 면과 같은 법) — 그래도 낡았을 때만 걸린다
+                        try { if (wt.IsOutOfDate) { GradingBuilder.RebuildSurfacesByBaseName(tr, wt.Name); log.AppendLine($"   '{wt.Name}'가 낡아 다시 지음"); } } catch { }
+                        try { if (wt.IsOutOfDate) bad = $"'{wt.Name}'가 낡음(Out of date) — 다시 지어도 안 풀린다"; } catch { }
+                    }
+                }
             }
-            catch (System.Exception de) { log.AppendLine($"   (입력 못 떨굼: {de.GetType().Name})"); }
+            if (bad.Length == 0 && wTin != null)
+            {
+                var wCache = new CachedGroundSurface(wTin);
+                if (wCache.ReadFailed > 0) bad = $"가상옹벽{w.No}_DH 삼각형을 다 못 읽었다({wCache.ReadFailed}개 빠짐)";
+                else
+                {
+                    double mnx = w.Poly.Min(q => q.X) - 1, mny = w.Poly.Min(q => q.Y) - 1, mxx = w.Poly.Max(q => q.X) + 1, mxy = w.Poly.Max(q => q.Y) + 1;
+                    var wallTris = wCache.TrianglesIn(mnx, mny, mxx, mxy);
+                    // ★[v102.0 · 계획 검토 M3 ①] 기하로 한 번 더 — 옹벽 첫 줄 = 폴리곤 z(머리). 절토면 옹벽이 전부 그 위 · 성토면 전부 그 아래(1mm)
+                    double z0 = w.Poly[0].Z; int wrong = 0; double worst = 0;
+                    foreach (var t in wallTris)
+                        foreach (var q in new[] { t.A, t.B, t.C })
+                        { double dz = w.Up ? z0 - q.Z : q.Z - z0; if (dz > 1e-3) { wrong++; worst = System.Math.Max(worst, dz); } }
+                    if (wrong > 0) bad = $"방향('{w.Side}')과 옹벽 모양이 안 맞는다 — 꼭짓점 {wrong}개가 머리 {z0:F3}m {(w.Up ? "아래" : "위")}(최대 {worst:F3}m)";
+                    else
+                    {
+                        var groundTris = gCache.TrianglesIn(mnx, mny, mxx, mxy);
+                        inputs.Add(new WallDaylight.WallInput { No = w.No, Poly = w.Poly, WallTris = wallTris, GroundTris = groundTris, Down = !w.Up });
+                        useOk.Add(w);
+                        // 입력을 떨군다(옹벽마다 — 폴리곤 ±5m 합성 전 면) — 오프라인 재생
+                        try
+                        {
+                            string dump = System.IO.Path.Combine(dir, $"DHWALLCOMP_입력_옹벽{w.No}.txt");
+                            WallDaylight.WriteBandInput(dump, w.Poly, wallTris, groundTris, planCache.TrianglesIn(mnx - 4, mny - 4, mxx + 4, mxy + 4),
+                                $"{System.DateTime.Now:yyyy-MM-dd HH:mm:ss} {GradingSettings.Version} 원지반='{gName}' 옹벽='{wTin.Name}' 정지면='{pTin.Name}' · 옹벽 {w.No}({w.Side}) · 목록 차례 {inputs.Count}");
+                            WallDaylight.AppendInputTail(dump, w.Side, null, null);
+                            WallDaylightBuilder.ArchiveDumpPublic(dump);
+                        }
+                        catch (System.Exception de) { log.AppendLine($"   (옹벽 {w.No} 입력 못 떨굼: {de.GetType().Name})"); }
+                    }
+                }
+            }
+            if (bad.Length > 0)
+            {
+                if (w.State == 0) return Reject(w, bad);
+                if (gone) dropped.Add($"옹벽 {w.No}({bad})");
+                else
+                {
+                    // 넣은 옹벽을 지금 못 읽는다(일시적일 수 있다) — 빼지 않는다. 이번 새 옹벽이 있으면 그것을 버리고 지난 합성은 그대로 · 없으면 멈춘다
+                    var nw = use.LastOrDefault(x => x.State == 0);
+                    if (nw != null) return Reject(nw, $"넣은 옹벽 {w.No}를 지금 못 읽는다({bad}) — 지난 합성을 그대로 둔다");
+                    return Fail($"넣은 옹벽 {w.No}를 지금 못 읽는다 — {bad}");
+                }
+            }
         }
-        Dump(planCache.TrianglesIn(mnx - 4, mny - 4, mxx + 4, mxy + 4), "폴리곤 ±5m");
+        if (dropped.Count > 0) log.AppendLine("   ⚠넣음 옹벽을 뺀다 — " + string.Join(" · ", dropped));
+        if (inputs.Count == 0) return Fail("합성할 수 있는 옹벽이 없다 — " + string.Join(" · ", dropped));
+        var planAll = planCache.AllTriangles();
+        log.AppendLine($"③ 삼각형 — 옹벽 {inputs.Count}개({string.Join(",", inputs.Select(i => $"{i.No}:{i.WallTris.Count}"))}) · 정지면 전체 {planAll.Count} · {sw.ElapsedMilliseconds}ms");
 
-        // ④ Core 합성
-        // 절토 max(정지면, min(옹벽, 원지반)) · 성토 min(정지면, max(옹벽, 원지반)) — Core가 −z 거울로 같은 셈을 한다
-        var r = WallDaylight.BuildComposite(poly, wallTris, groundTris, planAll, down: !up);
-        log.AppendLine("③ 합성: " + r.Summary);
-        if (r.TouchMaxX >= r.TouchMinX) Dump(planCache.TrianglesIn(r.TouchMinX, r.TouchMinY, r.TouchMaxX, r.TouchMaxY), "손댄 상자에 걸친");
-        try { WallDaylightBuilder.ArchiveDumpPublic(dump); } catch { }
-        if (r.Zone == null) return Fail("합성을 못 만들었다 — " + r.Fail);
+        // ⑤ Core 차례 합성 — P_k = BuildComposite(P_{k−1}, 옹벽 k)
+        var res = WallDaylight.ComposeWalls(planAll, inputs);
+        foreach (var st in res.Steps)
+            log.AppendLine($"   옹벽 {st.No}: {(st.R.Zone != null || st.R.Tier < 3 ? st.R.Summary : (st.IntoPrev > 0 ? $"앞 옹벽 구역과 겹침 {st.IntoPrev} @{st.IntoPrevAt}" : st.R.Summary))} · 앞 구역 삼각형 {st.TouchedPrevZone} · {st.Ms}ms");
+        log.AppendLine("④ 합성: " + res.Summary);
+        if (res.All == null)
+        {
+            int failNo = res.FailIndex >= 0 && res.FailIndex < inputs.Count ? inputs[res.FailIndex].No : 0;
+            var fw = useOk.FirstOrDefault(w => w.No == failNo);
+            if (fw != null && fw.State == 0) return Reject(fw, res.Fail);
+            // ★[v103.0 · 코드 검토 낮음 6] 넣음 옹벽이 걸렸어도 이번에 새 옹벽이 있으면 그 탓일 수 있다(바꿈으로 차례가 바뀜 등) — 새 옹벽을 버리고 지난 합성은 그대로
+            var newest0 = useOk.LastOrDefault(w => w.State == 0);
+            if (newest0 != null) return Reject(newest0, $"넣은 옹벽 {failNo}가 이번 옹벽과 함께 안 들어간다 — {res.Fail}");
+            return Fail("옹벽 합성을 못 만들었다 — " + res.Fail);
+        }
 
-        // ⑤ LandXML → Civil(임시 이름 — 정지면_DH는 아직 안 건드린다)
-        var all = new System.Collections.Generic.List<WallDaylight.Tri>(r.Zone.Count + r.Untouched.Count);
-        all.AddRange(r.Zone); all.AddRange(r.Untouched);
+        // ⑥ LandXML → Civil(임시 이름 — 정지면_DH는 아직 안 건드린다)
+        var all = res.All;
         string xml = System.IO.Path.Combine(dir, XmlName);
         WallDaylight.WriteLandXmlTin(xml, "PUREWALL", all, 1e-7, out int np, out int nf, out int nd);
-        if (nd > 0) return Fail($"합성을 못 만들었다 — 넓이 0이라 뺀 면 {nd}개");
+        // ★[v103.0 · 코드 검토 낮음 8] 여기부터 못 하면 이번 새 옹벽(대기)을 버린다 — 대기 칸이 남아 다음 옹벽 변환까지 떠돌지 않게
+        string FailNew(string why) { var nw = useOk.LastOrDefault(w => w.State == 0); return nw != null ? Reject(nw, why) : Fail(why); }
+        if (nd > 0) return FailNew($"합성을 못 만들었다 — 넓이 0이라 뺀 면 {nd}개");
         sw.Restart();
         ObjectId cid = TinSurface.CreateFromLandXML(db, TempName, xml, "PUREWALL");
-        if (cid.IsNull) return Fail("합성을 못 만들었다 — CreateFromLandXML이 빈 ObjectId를 돌려줬다");
+        if (cid.IsNull) return FailNew("합성을 못 만들었다 — CreateFromLandXML이 빈 ObjectId를 돌려줬다");
         _made = cid;
         var cTin = (TinSurface)tr.GetObject(cid, OpenMode.ForWrite);
         long tCreate = sw.ElapsedMilliseconds;
         void Drop() { try { cTin.Erase(); } catch { } }
 
-        // ⑥ 되읽기 관문 — 점 수 · 삼각형 수 · 넘긴 면과 같은가(다른 면만 높이 · 모양) · 높이 오차 합이 판정 한도 안
+        // ⑦ 되읽기 관문 — 점 수 · 삼각형 수 · 넘긴 면과 같은가 · 높이 오차 합이 판정 한도 안(옹벽마다의 최대 · 겹친 바깥은 잰 값)
         string back;
         bool gateOk;
         try
@@ -351,32 +397,35 @@ public sealed class WallCompositeCommand
                     finally { t.Dispose(); }
                 }
             var cmp = CivilSafeMesh.Compare(all, theirs);
-            double zTol = r.Tier == 1 ? 1e-3 : r.HeightLimit;
-            // ★[v102.1 · 계획 검토 M3] «Civil이 반드시 합칠 쌍» 허용 판(높이 오차 합 1cm 넘음)은 Civil이 넘긴 면을 <b>하나도 안 바꿨을 때만</b> 받는다 —
-            //   한도를 1.5cm로 늘린 만큼 Civil 쪽 변경까지 풀어 주지 않게(같은 면 수 = 넘긴 면 수 · 같은 점 높이 차 0)
-            bool over = r.Clean?.OverForced == true;
+            double zTol = res.Tier == 1 ? 1e-3 : res.HeightLimit;
+            // ★[v102.1 · 계획 검토 M3] «Civil이 반드시 합칠 쌍» 허용 판은 Civil이 넘긴 면을 <b>하나도 안 바꿨을 때만</b> 받는다
+            bool over = res.OverForced;
             bool exact = !over || (cmp.Same == nf && theirs.Count == nf && cmp.MaxDz == 0);
-            gateOk = theirs.Count == nf && civPts == np && cmp.Exceptions == 0 && cmp.SymArea <= 1e-8 && cmp.Hausdorff <= 1e-6 && r.HeightBudget + cmp.MaxDz <= zTol && exact;
-            back = $"Civil 점 {civPts}/{np} · 삼각형 {theirs.Count}/{nf} · {cmp.Summary} · 높이 오차 합 {r.HeightBudget * 1000:F3} + Civil {cmp.MaxDz * 1000:F3}mm(한도 {zTol * 1000:F0}mm)"
+            gateOk = theirs.Count == nf && civPts == np && cmp.Exceptions == 0 && cmp.SymArea <= 1e-8 && cmp.Hausdorff <= 1e-6 && res.HeightBudget + cmp.MaxDz <= zTol && exact;
+            back = $"Civil 점 {civPts}/{np} · 삼각형 {theirs.Count}/{nf} · {cmp.Summary} · 높이 오차 합 {res.HeightBudget * 1000:F3} + Civil {cmp.MaxDz * 1000:F3}mm(한도 {zTol * 1000:F0}mm)"
                  + (over ? $" · 허용 판 — Civil이 넘긴 면 그대로 {cmp.Same}/{nf}{(exact ? "" : " ⚠아님(허용 판은 그대로여야 받는다)")}" : "")
                  + $" · 가져오기 {tCreate}ms · 대조 {sw.ElapsedMilliseconds}ms";
         }
-        catch (System.Exception gx) { Drop(); log.AppendLine(gx.ToString()); return Fail($"새 합성을 되읽다 터졌다({gx.GetType().Name}) — 새 면은 지웠다"); }
-        log.AppendLine("④ 되읽기: " + back);
-        if (!gateOk) { Drop(); return Fail("Civil이 넘긴 합성을 그대로 안 받았다 — 새 면은 지웠다 · " + back); }
+        catch (System.Exception gx) { Drop(); log.AppendLine(gx.ToString()); return FailNew($"새 합성을 되읽다 터졌다({gx.GetType().Name}) — 새 면은 지웠다"); }
+        log.AppendLine("⑤ 되읽기: " + back);
+        if (!gateOk)
+        {
+            Drop();
+            var newest = useOk.LastOrDefault(w => w.State == 0);
+            if (newest != null) return Reject(newest, "Civil이 넘긴 합성을 그대로 안 받았다 — " + back);
+            return Fail("Civil이 넘긴 합성을 그대로 안 받았다 — 새 면은 지웠다 · " + back);
+        }
 
-        // ⑦ 정지면_DH로 바꿔 끼운다 — 관문을 지난 뒤에만. 한 단계라도 못 하면 SwapFailed — 트랜잭션째 되돌려 명령 전 상태로
+        // ⑧ 정지면_DH로 바꿔 끼운다 — 관문을 지난 뒤에만. 한 단계라도 못 하면 SwapFailed — 트랜잭션째 되돌려 명령 전 상태로
         var pW = (Autodesk.Civil.DatabaseServices.Surface)tr.GetObject(pTin.ObjectId, OpenMode.ForWrite);
         if (inS1)
         {
-            // 지금 정지면_DH = 지난 합성 — 지운다(원지반은 보호 · 합성 전 면은 이름이 달라 안 걸린다)
             GradingBuilder.EraseSurfacesByBaseName(tr, PlanName, groundId);
             var (left, leftNames) = Candidates(civilDoc, tr, PlanName, groundId);
             if (left.Count > 0) throw new SwapFailed($"지난 합성({string.Join(", ", leftNames)})을 못 지웠다(레이어 잠김?)");
         }
         else
         {
-            // 남은 낡은 합성 전 면(있으면) 지우기 → 입력 정지면 이름을 합성 전으로
             GradingBuilder.EraseSurfacesByBaseName(tr, BaseName, groundId);
             var (left, leftNames) = Candidates(civilDoc, tr, BaseName, groundId);
             if (left.Count > 0) throw new SwapFailed($"낡은 {string.Join(", ", leftNames)}를 못 지웠다(레이어 잠김?)");
@@ -389,43 +438,67 @@ public sealed class WallCompositeCommand
         try { cTin.Name = PlanName; } catch (System.Exception nx) { e2 = nx.GetType().Name; log.AppendLine("합성 이름 바꾸기 실패: " + nx); }
         if (e2.Length > 0 || cTin.Name != PlanName)
             throw new SwapFailed($"합성은 지었는데 이름을 '{PlanName}'로 못 바꿨다({(e2.Length > 0 ? e2 : $"'{cTin.Name}'")})");
-        // 정지면_DH가 늘 보이던 모양 그대로 — 합성 전 면의 스타일·레이어를 물려받는다
+        // 정지면_DH가 늘 보이던 모양 그대로 — 합성 전 면의 스타일·레이어를 물려받는다(계획 검토 v103 H1 — 지울 지난 합성이 아니라 합성 전 면에서)
         try { cTin.StyleId = pW.StyleId; } catch (System.Exception sx) { log.AppendLine("스타일 물려받기 실패: " + sx.GetType().Name); }
         try { ((Autodesk.AutoCAD.DatabaseServices.Entity)cTin).LayerId = ((Autodesk.AutoCAD.DatabaseServices.Entity)pW).LayerId; } catch (System.Exception lx) { log.AppendLine("레이어 물려받기 실패: " + lx.GetType().Name); }
-        // ★[v102.1 · 계획 검토 L13] 1cm 넘은 자리를 도면에도 남긴다(명령줄·로그는 지나간다)
-        string overNote = r.Clean?.OverForced == true
-            ? string.Format(System.Globalization.CultureInfo.InvariantCulture, " · ⚠높이 오차 합 {0:F1}mm(1cm 넘음) · 옹벽 높이 {1:F1}mm @{2}(Civil이 반드시 합칠 쌍 곁){3}", r.HeightBudget * 1000, r.Clean.WallDz * 1000, r.Clean.WallAt,
-                r.Clean.LrOverN > 0 ? string.Format(System.Globalization.CultureInfo.InvariantCulture, " · 그 곁 우리 손질 {0}건(없앨 때 최대 {1:F1}mm)", r.Clean.LrOverN, r.Clean.LrOverMax * 1000) : "") : "";
-        try { cTin.Description = $"DH 옹벽 합성({side}) {System.DateTime.Now:yyyy-MM-dd HH:mm} · {GradingSettings.Version} · 판정 {r.Tier}({r.TierText}){overNote} · {pairNote}"; } catch { }
-        // ★[코드 검토 v101.1 · 낮음 6] 표지가 없으면 «합성 위에 또 합성» 막이와 풀기 짝 확인이 없다 — 못 붙이면 되돌린다
-        try { MarkComposite(tr, cTin, $"{System.DateTime.Now:yyyy-MM-dd HH:mm:ss} · {GradingSettings.Version} · 판정 {r.Tier}{overNote}", pTin.ObjectId.Handle.ToString()); }
+        string nos = string.Join(",", useOk.Select(w => w.No));
+        var forcedStep = res.Steps.FirstOrDefault(s => s.R.Clean?.OverForced == true);
+        string overNote = forcedStep != null
+            ? string.Format(System.Globalization.CultureInfo.InvariantCulture, " · ⚠높이 오차 합 {0:F1}mm(1cm 넘음 · 옹벽 {1}) · 옹벽 높이 {2:F1}mm @{3}(Civil이 반드시 합칠 쌍 곁)",
+                res.HeightBudget * 1000, forcedStep.No, forcedStep.R.Clean!.WallDz * 1000, forcedStep.R.Clean.WallAt) : "";
+        try { cTin.Description = $"DH 옹벽 합성 — 옹벽 {useOk.Count}개({nos}) {System.DateTime.Now:yyyy-MM-dd HH:mm} · {GradingSettings.Version} · 판정 {res.Tier}({res.TierText}){overNote}"; } catch { }
+        try { MarkComposite(tr, cTin, $"{System.DateTime.Now:yyyy-MM-dd HH:mm:ss} · {GradingSettings.Version} · 판정 {res.Tier}{overNote}", pTin.ObjectId.Handle.ToString(), nos); }
         catch (System.Exception mx) { log.AppendLine("합성 표지 못 붙임: " + mx); throw new SwapFailed($"합성 표지를 못 붙였다({mx.GetType().Name})"); }
-        // v101.0이 따로 만든 합성지표면_DH는 치운다
         int oldN = 0;
         try { var (o, _) = Candidates(civilDoc, tr, OldCompName, groundId); oldN = o.Count; if (oldN > 0) GradingBuilder.EraseSurfacesByBaseName(tr, OldCompName, groundId); } catch { }
 
-        // ⑧ 보이기 — 계획부지 생성이 끝날 때와 같게(JACK «옹벽 전체수정할때처럼»)
+        // ⑨ 목록 — 대기 → 넣음 · 바꾼 옹벽은 결과물 지우고 칸 지움 · 못 넣은 넣음 옹벽은 칸 지움(⚠)
+        var news = useOk.Where(w => w.State == 0).Select(w => w.No).ToList();
+        foreach (var w in useOk)
+        {
+            var st = res.Steps.FirstOrDefault(s => s.No == w.No);
+            w.State = 1;
+            w.LastNote = st != null ? $"판정 {st.R.Tier}({st.R.TierText})" : "";
+            w.Stamp = System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+        }
+        string repNote = "";
+        foreach (int rno in replaced)
+        {
+            var er = WallTags.Erase(db, tr, (n, r) => n == rno, false, groundId);
+            walls.RemoveAll(x => x.No == rno);
+            repNote += $" · 옛 옹벽 {rno}를 바꿨다(지움 {er.Text})";
+        }
+        string dropNote = "";
+        if (dropped.Count > 0)
+        {
+            // ★[v103.0 · 코드 검토 중간 3] 뺀 넣음 옹벽은 결과물도 지운다(합성에 없는 옹벽이 남아 보이지 않게) — 요약 맨 앞 ⚠ + 알림창(Run)
+            var dropNos = new System.Collections.Generic.HashSet<int>(use.Where(w => w.State == 1 && !useOk.Contains(w)).Select(w => w.No));
+            var erD = WallTags.Erase(db, tr, (n, r) => dropNos.Contains(n), false, groundId);
+            walls.RemoveAll(x => dropNos.Contains(x.No));
+            dropNote = $"⚠옹벽 {string.Join(",", dropNos)}을 정지면_DH에서 뺐다({string.Join(" · ", dropped)}) — 그 옹벽은 다시 지정하세요(결과물 지움 {erD.Text}) · ";
+        }
+        WallListStore.Save(db, tr, head, walls);
+
+        // ⑩ 보이기 — 계획부지 생성이 끝날 때와 같게(JACK «옹벽 전체수정할때처럼» · 인터뷰 ④ 정지면_DH만)
         string vis;
         if (GradingSettings.ShowOnlyResultSurface)
         {
             GradingBuilder.IsolateSurfaces(tr, PlanName);
-            // 원지반을 숨기면 그것을 붙여 넣은 합성 전 면에 ⚠(정의 구식)가 붙는다 — 계획부지 생성이 정지면_DH에 하듯 다시 지어 푼다
             string rb = ""; try { rb = GradingBuilder.RebuildSurfacesByBaseName(tr, BaseName); } catch (System.Exception rx) { rb = "실패 " + rx.GetType().Name; }
             vis = $"결과만 보기 — 정지면_DH만 켬 · 합성 전 면 다시 지음({rb})";
         }
         else
         {
-            int a = 0, b = 0, c = 0, d = 0;
+            int a = 0, b = 0, c = 0;
             try { a = GradingBuilder.SetSurfaceVisible(tr, PlanName, true); } catch { }
             try { b = GradingBuilder.SetSurfaceVisible(tr, BaseName, false); } catch { }
-            try { c = GradingBuilder.SetSurfaceVisible(tr, WallDaylightBuilder.PureName, false); } catch { }
-            try { d = GradingBuilder.SetSurfaceVisible(tr, "가상옹벽_DH", false); } catch { }
-            vis = $"정지면_DH 켬 {a} · 숨김 합성 전 {b} · 순수옹벽 {c} · 가상옹벽 {d}";
+            try { c = WallTags.SetWallSurfacesVisible(tr, false); } catch { }
+            vis = $"정지면_DH 켬 {a} · 숨김 합성 전 {b} · 옹벽 표면 {c}";
         }
-        try { GradingBuilder.SetSurfaceVisible(tr, SectionCommand.PurePadSurfaceBase, false); } catch { }   // 순수 정지면은 늘 숨김(계획부지 생성과 같다)
-        log.AppendLine($"⑤ 바꿔 끼움: {(inS1 ? "지난 합성을 지우고 새 합성을" : $"정지면_DH를 '{BaseName}'로 숨기고 합성을")} 정지면_DH로 · 옛 판 합성지표면_DH {oldN}개 치움 · 보이기: {vis}");
+        try { GradingBuilder.SetSurfaceVisible(tr, SectionCommand.PurePadSurfaceBase, false); } catch { }
+        log.AppendLine($"⑥ 바꿔 끼움: {(inS1 ? "지난 합성을 지우고 새 합성을" : $"정지면_DH를 '{BaseName}'로 숨기고 합성을")} 정지면_DH로 · 옛 판 합성지표면_DH {oldN}개 치움 · 보이기: {vis}");
+        log.AppendLine($"⑦ 목록 — 넣음 {string.Join(",", walls.Where(w => w.State == 1).Select(w => w.No))}{repNote}{(dropped.Count > 0 ? " · ⚠뺀 옹벽 " + string.Join(" · ", dropped) : "")}");
 
-        // ★[계획 검토 v101.1 · 낮음 4] 터파기 보기 합성면은 정지면_DH를 붙여 넣은 것 — 옛 정지면을 품고 있다
         string excNote = "";
         try
         {
@@ -434,19 +507,18 @@ public sealed class WallCompositeCommand
             if (xa.Count + xb.Count > 0) excNote = " · 터파기 보기 합성면(전체면_DH·터파기전체_DH)은 옛 정지면을 붙여 넣은 것이라 터파기를 다시 하면 새 정지면으로 바뀐다";
         }
         catch { }
-        // ★[검토 0929 v101 · 중간 2] «거의»는 까닭과 자리를 — 다듬기 까닭 + 합성 까닭(규칙 대조 · 테두리 · 한 점 한 높이 · 높이 오차 합)
-        string why2 = string.Join(" · ", new[] { r.Clean?.Tier2Why ?? "", r.Fail }.Where(x => x.Length > 0));
-        string tierNote = r.Tier == 1 ? "" : $" · ⚠<b>거의</b>({why2})";
-        // ★[v102.1 · JACK 0930 ③ «짓고 ⚠로 자리·크기 알림»] 1cm 넘은 자리를 맨 앞에 — 크기 · 자리 · 그 밖은 1cm 안(잰 값만)
-        string overHead = r.Clean?.OverForced == true
+        string why2 = string.Join(" · ", res.Steps.Select(s => string.Join(" · ", new[] { s.R.Clean?.Tier2Why ?? "", s.R.Fail }.Where(x => x.Length > 0))).Where(x => x.Length > 0));
+        string tierNote = res.Tier == 1 ? "" : $" · ⚠<b>거의</b>({why2})";
+        string overHead = forcedStep != null
             ? string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                "<b>⚠1cm 넘은 자리</b>: 높이 오차 합 {5:F1}mm(한도 {6:F0}mm) — 옹벽 높이 {0:F1}mm @{1} · Civil이 0.1mm 안 두 점을 반드시 합치는 자리 곁 {2:0.#}m 안(그런 쌍 {3}개 · 그 밖 최대 {4:F2}mm){7} · ",
-                r.Clean.WallDz * 1000, r.Clean.WallAt, CivilSafeMesh.ForcedNear, r.Clean.ForcedN, r.Clean.WallDzFar * 1000, r.HeightBudget * 1000, r.HeightLimit * 1000,
-                r.Clean.LrOverN > 0 ? string.Format(System.Globalization.CultureInfo.InvariantCulture, " · 그 곁 위험한 면 없애기 {0}건(없앨 때 최대 {1:F1}mm)", r.Clean.LrOverN, r.Clean.LrOverMax * 1000) : "")
+                "<b>⚠1cm 넘은 자리</b>(옹벽 {0}): 높이 오차 합 {1:F1}mm(한도 {2:F0}mm) — 옹벽 높이 {3:F1}mm @{4} · Civil이 0.1mm 안 두 점을 반드시 합치는 자리 곁 · ",
+                forcedStep.No, res.HeightBudget * 1000, res.HeightLimit * 1000, forcedStep.R.Clean!.WallDz * 1000, forcedStep.R.Clean.WallAt)
             : "";
-        return overHead + $"<b>정지면_DH에 {side} 옹벽을 합성했다</b> — 판정 {r.Tier}({r.TierText}){tierNote} · 정지면 {r.PlanTotal}면 중 옹벽 둘레 {r.Touched}면을 다시 짓고 나머지는 그대로"
-             + $" · 점 {np} · 삼각형 {nf} Civil이 그대로 받음 · 높이 오차 합 {r.HeightBudget * 1000:F2}mm"
-             + $" · 합성 전 정지면은 '{BaseName}'로 숨겨 둠(옹벽 변환을 다시 돌리면 되돌린다){excNote} · {pairNote}";
+        _lastOk = true;
+        return dropNote + overHead + $"<b>정지면_DH에 옹벽 {useOk.Count}개({nos})를 합성했다</b>{(news.Count > 0 ? $" — 새 옹벽 {string.Join(",", news)}" : " — 다시 합성")}{repNote}"
+             + $" · 판정 {res.Tier}({res.TierText}){tierNote} · 정지면 {planAll.Count}면 중 옹벽 둘레 {res.Steps.Sum(s => s.R.Touched)}면을 다시 짓고 나머지는 그대로"
+             + $" · 점 {np} · 삼각형 {nf} Civil이 그대로 받음 · 높이 오차 합 {res.HeightBudget * 1000:F2}mm"
+             + $" · 합성 전 정지면은 '{BaseName}'로 숨겨 둠{excNote}";
     }
 
     /// <summary>★★[v101.1 · JACK 0929 «합성을 자동으로 풀기»] 옹벽 합성을 푼다 — 정지면_DH(합성)를 지우고 <see cref="BaseName"/>을 정지면_DH로 되돌린다.

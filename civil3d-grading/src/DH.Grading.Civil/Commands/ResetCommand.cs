@@ -151,6 +151,8 @@ public sealed class ResetCommand
                 GradingBuilder.EraseSurfacesByBaseName(tr, baseName);
                 surfs += before;
             }
+            // ★[v103.0] 번호 붙은 옹벽 표면(가상옹벽{n}_DH · 순수옹벽{n}_DH)과 v102 한 벌 — 이름 목록에 없어 따로
+            try { var erW = WallTags.Erase(db, tr, (n, r) => true, true, ObjectId.Null); surfs += erW.Surfaces + erW.LegacySurfaces; ents += erW.Lines + erW.LegacyLines; } catch { }
             if (includeImported)
             {
                 var before = CountSurfaces(tr, ImportGisCommand.GroundSurfaceName);
@@ -160,6 +162,7 @@ public sealed class ResetCommand
 
             // ③ 저장된 번들 삭제 + 숨겼던 지표면 다시 표시.
             bundleCleared = GradingBundleStore.Clear(db, tr);
+            if (WallListStore.Clear(db, tr)) bundleCleared = true;   // ★[v103.0] 옹벽 목록(번호도 1부터)
             // ★[JACK 0824] 터파기 기록도 지운다 — 지표면만 지우고 기록을 남기면
             //   다음 실행이 옛 구조물을 되살려 "지웠는데 다시 생긴다"가 된다.
             if (ExcavBundleStore.Clear(db, tr)) bundleCleared = true;   // 보고에 같이 싣는다
@@ -181,6 +184,7 @@ public sealed class ResetCommand
         GradingSettings.LastPlanHandle = "";
         GradingSettings.LastGroundHandle = "";
         GradingSettings.ClearLastWall(false);
+        GradingSettings.WallAddSpec = null; GradingSettings.LastAddNo = 0; GradingSettings.LastAddNote = ""; GradingSettings.LastAddBlockedNo = 0; GradingSettings.AutoCompDoc = ""; GradingSettings.AutoCompNo = 0;
         return (surfs, ents, bundleCleared);
     }
 
