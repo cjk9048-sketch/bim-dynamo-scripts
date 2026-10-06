@@ -356,6 +356,10 @@ internal static class ZoneEditCommon
         var listWalls = new System.Collections.Generic.List<WallRec>();
         var idWall = new System.Collections.Generic.Dictionary<ObjectId, int>();
         var wallOfKey = new System.Collections.Generic.Dictionary<(bool up, int gid, int bench), int>();
+        // ★[v103.1.1] 클릭선 조각의 상태(구배 · 소단 · 값을 정한 규칙) — 고를 때 «처음 그대로 / 옹벽 / 직접 사면 변환»을 가른다
+        var idState = new System.Collections.Generic.Dictionary<ObjectId, ZonePiece.State>();
+        var stateOfKey = new System.Collections.Generic.Dictionary<(bool up, int gid, int bench), ZonePiece.State>();
+        int arcSnaps = 0; double arcSnapMax = 0;
         // ★[검토 0910 · 높음3] <b>지정과 그림을 늘 같이 움직인다.</b>
         //   종전엔 다른 선을 골랐다 돌아오면 프롬프트엔 〈부분 20m〉가 뜨는데 <b>띠는 없었다</b> —
         //   화면과 적용될 값이 갈리는 자리다. 고를 때마다 그 선의 지정을 다시 그린다.
@@ -567,13 +571,63 @@ internal static class ZoneEditCommon
                 }
                 cutEdges = SplitW(cutEdges, true);
                 fillEdges = SplitW(fillEdges, false);
+                // ★★★[v103.1.1 · JACK 1006 · 코드 검토 높음] 클릭선을 <b>구배 · 소단 · 규칙이 바뀌는 자리</b>에서도 끊는다 — 종전엔 수직↔사면 경계와 옹벽 자리에서만 갈려
+                //   구배만 바꾼 구간(120m 중 30m)이 조각 하나에 섞였다. 조각마다 상태를 들려 보내 고를 때 «처음 그대로 / 옹벽 / 직접 사면 변환»을 가른다(ZonePiece)
+                var pieceState = new System.Collections.Generic.Dictionary<System.Collections.Generic.List<Point3>, ZonePiece.State>(ReferenceEqualityComparer.Instance);
+                int zCuts = 0, zDropped = 0, zJoined = 0;
+                System.Collections.Generic.List<(bool, int, int, System.Collections.Generic.List<Point3>)> SplitZ(
+                    System.Collections.Generic.List<(bool, int, int, System.Collections.Generic.List<Point3>)> edges, bool up)
+                {
+                    var zs = up ? region!.CutWallZones : region!.FillWallZones;
+                    double bS = BaseSlopeOf(region.Params, up), bW = region.Params.BenchWidthOf(up);
+                    var outE = new System.Collections.Generic.List<(bool, int, int, System.Collections.Generic.List<Point3>)>();
+                    // ★[v103.1.1 · 재검토 중간 1] 구간이 있으면 같은 단의 이어진 조각을 <b>먼저 잇고</b> 끊는다 — 앞 단계(SplitByZone)는 수직↔사면 경계를 꼭짓점에서 끊어,
+                    //   그대로 끊으면 진짜 경계와 그 꼭짓점 사이가 1m 안 되는 옹벽 토막으로 따로 남는다. 옹벽 자리(주황) 조각은 안 잇는다. 구간이 없으면 종전 그대로
+                    if (zs != null && zs.Count > 0)
+                    {
+                        var keep = new System.Collections.Generic.List<(bool, int, int, System.Collections.Generic.List<Point3>)>();
+                        var byBench = new System.Collections.Generic.SortedDictionary<int, (bool isS, System.Collections.Generic.List<System.Collections.Generic.List<Point3>> ls)>();
+                        foreach (var (isS, bench, sg, pts) in edges)
+                        {
+                            if (pts == null || pts.Count < 2 || wallPieces.Contains(pts)) { keep.Add((isS, bench, sg, pts!)); continue; }
+                            if (!byBench.TryGetValue(bench, out var gB)) byBench[bench] = gB = (isS, new());
+                            gB.ls.Add(pts);
+                        }
+                        int before = edges.Count;
+                        edges = keep;
+                        foreach (var kv in byBench)
+                        {
+                            int sgJ = 0;
+                            foreach (var ch in ZonePiece.Join(kv.Value.ls)) edges.Add((kv.Value.isS, kv.Key, sgJ++, ch));
+                        }
+                        zJoined += before - edges.Count;
+                    }
+                    foreach (var (isS, bench, sg, pts) in edges)
+                    {
+                        if (pts == null || pts.Count < 2 || wallPieces.Contains(pts)) { outE.Add((isS, bench, sg, pts!)); continue; }
+                        if (zs == null || zs.Count == 0) { pieceState[pts] = new ZonePiece.State(bS, bW, -1, false); outE.Add((isS, bench, sg, pts)); continue; }
+                        int benchL = bench;
+                        var pcs = ZonePiece.Split(pts, (x, y) => ZonePiece.StateAt(zs, x, y, benchL, bS, bW, boundary!, cumB!), out int dr);
+                        zDropped += dr; zCuts += System.Math.Max(0, pcs.Count - 1);
+                        foreach (var (pp, st) in pcs) { outE.Add((isS, bench, sg, pp)); pieceState[pp] = st; }
+                    }
+                    return outE;
+                }
+                cutEdges = SplitZ(cutEdges, true);
+                fillEdges = SplitZ(fillEdges, false);
+                Log($"   클릭선 — 구간 값이 바뀌는 자리에서 {zCuts}번 끊었다(먼저 이은 조각 {zJoined} · 절토 {cutEdges.Count}조각 · 성토 {fillEdges.Count}조각{(zDropped > 0 ? $" · ⚠1mm 안 되는 조각 {zDropped}개 버림" : "")})");
                 madeIds = GradingBuilder.DrawWallLinesTagged(db, tr, cutEdges, fillEdges, activePlan, wallPieces);
                 {
-                    // 그린 선 → 옹벽 번호(그리는 차례 = 절토 다음 성토 · 점 2개 미만은 안 그림 — DrawWallLinesTagged와 같다)
+                    // 그린 선 → 옹벽 번호 · 상태(그리는 차례 = 절토 다음 성토 · 점 2개 미만은 안 그림 — DrawWallLinesTagged와 같다)
                     var drawnNo = new System.Collections.Generic.List<int>();
-                    foreach (var (_, _, _, pts) in cutEdges) if (pts != null && pts.Count >= 2) drawnNo.Add(pieceNo.TryGetValue(pts, out var nn1) ? nn1 : 0);
-                    foreach (var (_, _, _, pts) in fillEdges) if (pts != null && pts.Count >= 2) drawnNo.Add(pieceNo.TryGetValue(pts, out var nn2) ? nn2 : 0);
-                    for (int di = 0; di < madeIds.Count && di < drawnNo.Count; di++) if (drawnNo[di] > 0) idWall[madeIds[di]] = drawnNo[di];
+                    var drawnSt = new System.Collections.Generic.List<ZonePiece.State?>();
+                    foreach (var (_, _, _, pts) in cutEdges) if (pts != null && pts.Count >= 2) { drawnNo.Add(pieceNo.TryGetValue(pts, out var nn1) ? nn1 : 0); drawnSt.Add(pieceState.TryGetValue(pts, out var s1) ? s1 : null); }
+                    foreach (var (_, _, _, pts) in fillEdges) if (pts != null && pts.Count >= 2) { drawnNo.Add(pieceNo.TryGetValue(pts, out var nn2) ? nn2 : 0); drawnSt.Add(pieceState.TryGetValue(pts, out var s2) ? s2 : null); }
+                    for (int di = 0; di < madeIds.Count && di < drawnNo.Count; di++)
+                    {
+                        if (drawnNo[di] > 0) idWall[madeIds[di]] = drawnNo[di];
+                        if (drawnSt[di] != null) idState[madeIds[di]] = drawnSt[di]!.Value;
+                    }
                 }
                 _restoreLines = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
                 foreach (var (_, _, _, pts) in cutEdges) _restoreLines.Add(pts);
@@ -607,6 +661,7 @@ internal static class ZoneEditCommon
                     int gid = gidSeq++;
                     info[id] = (pki.up, pki.bench, gid);
                     if (idWall.TryGetValue(id, out var wnoK)) wallOfKey[(pki.up, gid, pki.bench)] = wnoK;
+                    if (idState.TryGetValue(id, out var stK)) stateOfKey[(pki.up, gid, pki.bench)] = stK;
                     var key = (pki.up, gid, pki.bench);
                     if (!groups.TryGetValue(key, out var g)) groups[key] = g = new();
                     g.Add(id);
@@ -620,7 +675,8 @@ internal static class ZoneEditCommon
                         len2d += System.Math.Sqrt(dx * dx + dy * dy);
                     }
                     lineLen[key] = (len2d, pts.Count);
-                    if (pts.Count > 0) lineMid[key] = pts[pts.Count / 2];
+                    // ★[v103.1.1 · 코드 검토 낮음] 한가운데는 꼭짓점 번호가 아니라 <b>호길이</b>로 — 2점짜리 조각은 pts[1]이 끝점(구간 경계)이었다
+                    if (pts.Count > 0) lineMid[key] = ZonePiece.MidPoint(pts);
 
                     bool closed = pts.Count >= 3
                         && System.Math.Abs(pts[0].X - pts[pts.Count - 1].X) < 0.05
@@ -638,9 +694,33 @@ internal static class ZoneEditCommon
                     else
                     {
                         var iv = GradingGeometry.PickInterval(pts, rulerPoly, rulerCum);
-                        if (iv != null) lineArc[key] = (iv.Value.T0, iv.Value.T1);
+                        if (iv != null)
+                        {
+                            // ★[v103.1.1] 조각 끝이 <b>같은 자</b>로 잰 번들 구간의 끝과 0.1mm 안이면 그 구간의 저장값을 그대로 쓴다 — 조각 끝은 1µm까지 좁혀 찾은 자리라
+                            //   역변환 구간이 옛 구간과 µm만큼 어긋나 실 같은 옛 구간이 남는다. 자가 다르면(다른 단에서 잰 구간) 안 맞춘다
+                            double a0 = iv.Value.T0, a1 = iv.Value.T1;
+                            var zsS = pki.up ? region!.CutWallZones : region!.FillWallZones;
+                            if (zsS != null)
+                                foreach (var z in zsS)
+                                {
+                                    if (z == null || z.Rules.Count == 0) continue;
+                                    bool sameRuler = ruler != null
+                                        ? (z.Ref != null && z.Ref.Count == ruler.Count && z.RefCum != null && System.Math.Abs(z.RefCum[^1] - rulerTot) < 1e-6
+                                           && System.Math.Abs(z.Ref[0].X - ruler[0].X) < 1e-6 && System.Math.Abs(z.Ref[0].Y - ruler[0].Y) < 1e-6)
+                                        : z.Ref == null;
+                                    if (!sameRuler) continue;
+                                    foreach (double zt in new[] { z.T0, z.T1 })
+                                    {
+                                        double dz0 = System.Math.Abs(a0 - zt), dz1 = System.Math.Abs(a1 - zt);
+                                        if (dz0 > 0 && dz0 < 1e-4) { a0 = zt; arcSnaps++; arcSnapMax = System.Math.Max(arcSnapMax, dz0); }
+                                        if (dz1 > 0 && dz1 < 1e-4) { a1 = zt; arcSnaps++; arcSnapMax = System.Math.Max(arcSnapMax, dz1); }
+                                    }
+                                }
+                            lineArc[key] = (a0, a1);
+                        }
                     }
                 }
+                if (arcSnaps > 0) Log($"   클릭선 — 조각 끝 {arcSnaps}곳을 번들 구간 끝 저장값에 맞췄다(최대 {arcSnapMax * 1e6:F2}µm)");
 
                 // ★[JACK 0917] 고르는 <b>동안에만</b> 보인다 — 끝나면 <c>RestoreAndCleanup</c>이 끈다.
                 try { GradingBuilder.SetLayerOn(db, tr, "DH-옹벽선"); } catch { }
@@ -656,7 +736,7 @@ internal static class ZoneEditCommon
             Log($"■ {cmdLabel} 시작 {System.DateTime.Now:HH:mm:ss} — 대상선 {madeIds.Count}개");
             // [JACK 0804] 멘트 간결화 — 안내는 한 줄로.
             // ★[JACK 0910] 차례가 셋으로 갈렸으므로 <b>그 차례를 그대로</b> 적는다.
-            ed.WriteMessage($"\n[{cmdLabel}] ① 계단선을 클릭 → ② 전체구간/구간지정 → ③ "
+            ed.WriteMessage($"\n[{cmdLabel}] ① 계단선을 클릭 → ② 전체구간/구간지정(이미 변환한 자리는 전체만) → ③ "
                           + (wallMode ? "단높이·소단길이" : "단높이·사면구배·소단길이")
                           + " 정하고 Enter. (전체해제=C · Esc=취소)");
 
@@ -890,19 +970,50 @@ internal static class ZoneEditCommon
                 //   ★값이 같은지는 <b>맨 끝(Enter)에서도</b> 잡아 주지만(아래), 그때는 이미
                 //   제원을 다 정한 뒤다. <b>고르는 순간</b> 보여 주는 편이 되돌아갈 길이 짧다.
                 string nowTxt = "";
-                if (lineMid.TryGetValue(key, out var pmidSel) && boundary != null)
+                // ★★★[v103.1.1 · JACK 1006 «옹벽변환을 수행했던 위치를 다시 사면변환할 때는 무조건 전체구간만 — 순수 처음 최초 계획지표면에서만 구간변환 ·
+                //   옹벽변환이나 사면변환을 수행 후에 해당 구간을 역변환할 때는 구간변환은 없게»] <b>이미 바꾼 조각</b>은 전체/구간을 안 묻고 조각 전체만 바꾼다.
+                //   이미 바꾼 조각 = ①목록 옹벽 자리(주황) ②번들 구간이 덮어 구배·소단이 기본값과 다른 자리. 대상선은 그 경계에서 이미 갈려 있다
+                // ★★★[v103.1.1 · JACK 1006 «이미 사면이나 옹벽인 구간을 다시 똑같은 변환옵션으로 클릭하면 "이미 OO입니다" 뜨고 아예 안 되게»]
+                //   같은 종류로 다시 = 막는다(옹벽 자리 + 옹벽 변환 · 사면 변환한 자리 + 사면 변환). 반대 종류 = 역변환 — 조각 전체만.
+                //   ★[JACK 1006 «직접 누른 단만 막음»] 아랫단 변환에 딸려 바뀐 윗단은 처음 그대로인 자리로 본다(층별 구배를 쌓을 수 있게) — 판정은 Core(ZonePiece)
+                var kindSel = ZonePiece.Kind.Untouched;
+                string stTxt = "상태 모름(조각에 상태가 없다 · 한가운데도 없다)";
                 {
-                    var zNow = pk.up ? region!.CutWallZones : region!.FillWallZones;
-                    var (nS, nW) = SlopeZone.ResolveAt(zNow, pmidSel.X, pmidSel.Y, pk.bench,
-                        BaseSlopeOf(region.Params, pk.up), region.Params.BenchWidthOf(pk.up), boundary, cumB!);
-                    nowTxt = $" · 지금 {(nS <= GradingSettings.WallGateSlope ? "<수직=옹벽>" : $"1:{nS:0.##}")}"
-                           + $"·소단 {nW:0.##}m";
+                    double bS = BaseSlopeOf(region!.Params, pk.up), bW = region.Params.BenchWidthOf(pk.up);
+                    ZonePiece.State? stSel = stateOfKey.TryGetValue(key, out var stKey) ? stKey : null;
+                    if (stSel == null && lineMid.TryGetValue(key, out var pmidSel) && boundary != null)
+                        stSel = ZonePiece.StateAt(pk.up ? region.CutWallZones : region.FillWallZones, pmidSel.X, pmidSel.Y, pk.bench, bS, bW, boundary, cumB!);
+                    if (stSel != null)
+                    {
+                        var st = stSel.Value;
+                        kindSel = ZonePiece.Classify(st, pk.bench, bS, bW, GradingSettings.WallGateSlope);
+                        nowTxt = $" · 지금 {(st.Slope <= GradingSettings.WallGateSlope ? "<수직=옹벽>" : $"1:{st.Slope:0.##}")}"
+                               + $"·소단 {st.BenchW:0.##}m";
+                        stTxt = $"1:{st.Slope:0.###}·소단 {st.BenchW:0.##}m(기본 1:{bS:0.###}·{bW:0.##}m) · 값을 정한 규칙 {(st.RuleFrom < 0 ? "없음" : $"{st.RuleFrom + 1}단부터{(st.RuleActs ? "" : "(앞 값과 같음)")}")}";
+                    }
                 }
-                if (wallOfKey.TryGetValue(key, out var wSel))
-                    nowTxt = $" · 지금 <옹벽 {wSel}(구간 옹벽)>" + (wallMode ? " — 구간지정(P)으로 다시 옹벽 변환하면 이 옹벽을 새 값으로 바꿉니다" : " — 사면 변환하면 이 옹벽이 사면으로 돌아갑니다");
+                bool wallPiece = wallOfKey.TryGetValue(key, out var wSel);
+                if (wallPiece)
+                    nowTxt = $" · 지금 <옹벽 {wSel}(구간 옹벽)>" + (wallMode ? "" : " — 사면 변환하면 이 옹벽이 사면으로 돌아갑니다");
+                var actSel = ZonePiece.Decide(wallMode, wallPiece, kindSel);
+                bool wallNow = wallPiece || kindSel == ZonePiece.Kind.Wall;      // 지금 옹벽인 자리(구간 옹벽 · 전체구간 옹벽)
+                bool sameKind = actSel == ZonePiece.Act.Block;                   // 같은 종류로 다시 — 막는다
+                bool wholeOnly = actSel == ZonePiece.Act.WholeOnly;              // 역변환 — 구간 안 묻고 조각 전체
                 ed.WriteMessage($"\n → {(pk.up ? "절토" : "성토")} {pk.bench + 1}단 선택 · 이 구간 {pickSpan:0.#}m"
                               + nowTxt
                               + (wholeLoop.Contains(key) ? " (한 바퀴 고리)" : ""));
+                Log($"   고른 조각 — {(pk.up ? "절토" : "성토")} {pk.bench + 1}단 {pickSpan:0.#}m · 옹벽 조각 {(wallPiece ? $"예(옹벽 {wSel})" : "아니오")} · {stTxt}"
+                  + $" · 종류 {(wallPiece ? "구간 옹벽" : kindSel == ZonePiece.Kind.Wall ? "옹벽(수직 구간)" : kindSel == ZonePiece.Kind.SlopeDirect ? "직접 사면 변환한 자리" : "처음 그대로(딸려 바뀐 윗단 포함)")}"
+                  + $" → {(sameKind ? "막음(같은 종류로 다시)" : wholeOnly ? "역변환 — 구간 안 묻고 조각 전체" : "전체구간/구간지정 묻기")}");
+                if (sameKind)
+                {
+                    ed.WriteMessage(wallMode
+                        ? $"\n   이미 옹벽입니다{(wallPiece ? $"(옹벽 {wSel})" : "")} — 옹벽 변환을 할 수 없습니다. 값을 바꾸려면 사면 변환으로 되돌린 뒤 다시 옹벽 변환하세요."
+                        : "\n   이미 사면 변환한 구간입니다 — 사면 변환을 할 수 없습니다. 값을 바꾸려면 옹벽 변환이나 전체해제(C)로 되돌린 뒤 다시 사면 변환하세요.");
+                    tr.Commit();
+                    Deselect(key);
+                    continue;
+                }
                 // ★★[JACK 0910] 사면 변환인데 <b>지금 그 자리가 수직</b>이면, 기본값을 사면으로 올렸다는 것을
                 //   그 자리에서 말한다 — 안 말하면 "왜 1.5가 됐지"가 되고, 안 올리면 "왜 안 바뀌지"가 된다.
                 if (!wallMode && !setN && dk.N <= GradingSettings.WallGateSlope)
@@ -913,17 +1024,26 @@ internal static class ZoneEditCommon
                 // ══ ★★★[JACK 0910] <b>2단계 — 전체구간이냐 구간지정이냐</b> ══════════════
                 //   <para>선을 고른 <b>바로 그 자리</b>에서 묻는다. 종전엔 제원과 한데 섞여 있어
                 //   <i>"기능이 어디 있는지"</i> 보이지 않았다.</para>
-                var scope = new PromptKeywordOptions(
-                    $"\n무엇을 바꿀까요? 〈{(pk.up ? "절토" : "성토")} {pk.bench + 1}단 · {pickSpan:0.#}m〉"
-                  + " [전체구간(A)/구간지정(P)] <전체구간(A)>");
-                scope.Keywords.Add("A", "A", "전체구간(A)");
-                scope.Keywords.Add("P", "P", "구간지정(P)");
-                scope.Keywords.Default = "A";
-                scope.AllowNone = true;
-                var scr = ed.GetKeywords(scope);
-                if (scr.Status == PromptStatus.Cancel) { Deselect(key); continue; }
-                string scopeKw = (scr.Status == PromptStatus.Keyword || scr.Status == PromptStatus.OK)
-                               ? (scr.StringResult ?? "A").Trim().ToUpperInvariant() : "A";
+                string scopeKw = "A";
+                if (wholeOnly)
+                {
+                    // ★[v103.1.1 · JACK 1006] 역변환 — 안 묻고 조각 전체(아래 else가 걸려 있던 구간지정도 푼다)
+                    ed.WriteMessage($"\n   이미 {(wallNow ? "옹벽" : "사면 변환한")} 자리입니다 — 구간지정 없이 이 조각 전체를 {(wallMode ? "옹벽" : "사면")}으로 바꿉니다.");
+                }
+                else
+                {
+                    var scope = new PromptKeywordOptions(
+                        $"\n무엇을 바꿀까요? 〈{(pk.up ? "절토" : "성토")} {pk.bench + 1}단 · {pickSpan:0.#}m〉"
+                      + " [전체구간(A)/구간지정(P)] <전체구간(A)>");
+                    scope.Keywords.Add("A", "A", "전체구간(A)");
+                    scope.Keywords.Add("P", "P", "구간지정(P)");
+                    scope.Keywords.Default = "A";
+                    scope.AllowNone = true;
+                    var scr = ed.GetKeywords(scope);
+                    if (scr.Status == PromptStatus.Cancel) { Deselect(key); continue; }
+                    scopeKw = (scr.Status == PromptStatus.Keyword || scr.Status == PromptStatus.OK)
+                            ? (scr.StringResult ?? "A").Trim().ToUpperInvariant() : "A";
+                }
                 if (scopeKw == "P")
                 {
                     if (!AskPart(key)) { Deselect(key); continue; }   // 취소 — 선부터 다시 고른다
@@ -1219,7 +1339,7 @@ internal static class ZoneEditCommon
             {
                 // ★[v103.1 · 코드 검토 중간 1] 옹벽 변환 «전체구간»으로 구간 옹벽 자리를 고르면 옹벽 위에 전체구간 옹벽이 겹친다 — 바꾸지 않고 길을 알린다
                 string cvw = string.Join(", ", covered.Select(w => $"옹벽 {w.No}"));
-                ed.WriteMessage($"\n[{cmdLabel}] 이 자리는 이미 구간 옹벽({cvw})입니다 — 값을 바꾸려면 구간지정(P)으로 다시 옹벽 변환(같은 선이면 새 값으로 바꿉니다) · 되돌리려면 사면 변환. 아무것도 안 바꿨습니다.");
+                ed.WriteMessage($"\n[{cmdLabel}] 이 자리는 이미 구간 옹벽({cvw})입니다 — 값을 바꾸려면 사면 변환으로 되돌린 뒤 다시 옹벽 변환하세요. 아무것도 안 바꿨습니다.");
                 Log($"■ {cmdLabel} — 전체구간 옹벽 변환이 구간 옹벽({cvw})을 덮어 멈춤(안 바꿈)");
                 Abandon();
                 return;
