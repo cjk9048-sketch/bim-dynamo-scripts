@@ -19,6 +19,15 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "fill")
     return fails == 0 ? 0 : 1;
 }
 
+// ★[v103.1.1] BLOCKTEST_ONLY=zone — 클릭선 조각 시험(S153)만 빠르게 돈다(개발 중 부분 시험)
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "zone")
+{
+    ZoneCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+ZoneCheck.Run(Check);
+
 const double W = 0.46, H = 0.2, STEP = 5.0, HW = W / 2;
 const double D = 0.5, FS = D / 2; // 깊이·전면 돌출(벽 중심=링, JACK 0720 Z-파이팅 해소): 절토 +FS(안쪽), 성토 −FS
 
