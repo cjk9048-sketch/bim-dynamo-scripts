@@ -868,6 +868,7 @@ internal static class ZoneEditCommon
             // ★[JACK 0910] 사면 변환이면 수직 기본값을 쓰지 않는다 — 아래 SlopeDefaultFor 참고.
             double optN = SlopeDefaultFor(wallMode, d0.N);
             bool setH = false, setN = false, setW = false;   // 사용자가 손댄 항목만 지킨다
+            bool reSlopePick = false;                        // ★[v103.1.2] 직접 사면 변환한 자리를 사면 변환으로 다시 골랐나(값 바꾸기)
 
             while (true)
             {
@@ -978,6 +979,7 @@ internal static class ZoneEditCommon
                 //   ★[JACK 1006 «직접 누른 단만 막음»] 아랫단 변환에 딸려 바뀐 윗단은 처음 그대로인 자리로 본다(층별 구배를 쌓을 수 있게) — 판정은 Core(ZonePiece)
                 var kindSel = ZonePiece.Kind.Untouched;
                 string stTxt = "상태 모름(조각에 상태가 없다 · 한가운데도 없다)";
+                double pieceS = double.NaN, pieceW = double.NaN;
                 {
                     double bS = BaseSlopeOf(region!.Params, pk.up), bW = region.Params.BenchWidthOf(pk.up);
                     ZonePiece.State? stSel = stateOfKey.TryGetValue(key, out var stKey) ? stKey : null;
@@ -986,6 +988,7 @@ internal static class ZoneEditCommon
                     if (stSel != null)
                     {
                         var st = stSel.Value;
+                        pieceS = st.Slope; pieceW = st.BenchW;
                         kindSel = ZonePiece.Classify(st, pk.bench, bS, bW, GradingSettings.WallGateSlope);
                         nowTxt = $" · 지금 {(st.Slope <= GradingSettings.WallGateSlope ? "<수직=옹벽>" : $"1:{st.Slope:0.##}")}"
                                + $"·소단 {st.BenchW:0.##}m";
@@ -997,19 +1000,25 @@ internal static class ZoneEditCommon
                     nowTxt = $" · 지금 <옹벽 {wSel}(구간 옹벽)>" + (wallMode ? "" : " — 사면 변환하면 이 옹벽이 사면으로 돌아갑니다");
                 var actSel = ZonePiece.Decide(wallMode, wallPiece, kindSel);
                 bool wallNow = wallPiece || kindSel == ZonePiece.Kind.Wall;      // 지금 옹벽인 자리(구간 옹벽 · 전체구간 옹벽)
-                bool sameKind = actSel == ZonePiece.Act.Block;                   // 같은 종류로 다시 — 막는다
-                bool wholeOnly = actSel == ZonePiece.Act.WholeOnly;              // 역변환 — 구간 안 묻고 조각 전체
+                bool sameKind = actSel == ZonePiece.Act.Block;                   // 옹벽을 옹벽 변환으로 다시 — 막는다
+                bool wholeOnly = actSel == ZonePiece.Act.WholeOnly;              // 이미 바꾼 자리 — 구간 안 묻고 조각 전체
+                // ★★★[v103.1.2 · JACK 1006 «구배 수정하려면 무조건 막으면 안 되겠다»] 직접 사면 변환한 자리를 사면 변환으로 다시 — 막지 않고 조각 전체로 값을 바꾼다.
+                //   기본값은 방향 값이 아니라 <b>이 조각의 지금 값</b>(안 그러면 Enter만 쳐도 1:1.0이 기본 1:1.5로 돌아간다) · 값이 같으면 적용 때 묻지 않고 멈춘다
+                reSlopePick = !wallMode && !wallNow && kindSel == ZonePiece.Kind.SlopeDirect;
+                if (reSlopePick && !double.IsNaN(pieceS))
+                {
+                    if (!setN) optN = pieceS;
+                    if (!setW) optW = pieceW;
+                }
                 ed.WriteMessage($"\n → {(pk.up ? "절토" : "성토")} {pk.bench + 1}단 선택 · 이 구간 {pickSpan:0.#}m"
                               + nowTxt
                               + (wholeLoop.Contains(key) ? " (한 바퀴 고리)" : ""));
                 Log($"   고른 조각 — {(pk.up ? "절토" : "성토")} {pk.bench + 1}단 {pickSpan:0.#}m · 옹벽 조각 {(wallPiece ? $"예(옹벽 {wSel})" : "아니오")} · {stTxt}"
                   + $" · 종류 {(wallPiece ? "구간 옹벽" : kindSel == ZonePiece.Kind.Wall ? "옹벽(수직 구간)" : kindSel == ZonePiece.Kind.SlopeDirect ? "직접 사면 변환한 자리" : "처음 그대로(딸려 바뀐 윗단 포함)")}"
-                  + $" → {(sameKind ? "막음(같은 종류로 다시)" : wholeOnly ? "역변환 — 구간 안 묻고 조각 전체" : "전체구간/구간지정 묻기")}");
+                  + $" → {(sameKind ? "막음(이미 옹벽)" : reSlopePick ? "값 바꾸기 — 구간 안 묻고 조각 전체(값이 같으면 멈춤)" : wholeOnly ? "역변환 — 구간 안 묻고 조각 전체" : "전체구간/구간지정 묻기")}");
                 if (sameKind)
                 {
-                    ed.WriteMessage(wallMode
-                        ? $"\n   이미 옹벽입니다{(wallPiece ? $"(옹벽 {wSel})" : "")} — 옹벽 변환을 할 수 없습니다. 값을 바꾸려면 사면 변환으로 되돌린 뒤 다시 옹벽 변환하세요."
-                        : "\n   이미 사면 변환한 구간입니다 — 사면 변환을 할 수 없습니다. 값을 바꾸려면 옹벽 변환이나 전체해제(C)로 되돌린 뒤 다시 사면 변환하세요.");
+                    ed.WriteMessage($"\n   이미 옹벽입니다{(wallPiece ? $"(옹벽 {wSel})" : "")} — 옹벽 변환을 할 수 없습니다. 값을 바꾸려면 사면 변환으로 되돌린 뒤 다시 옹벽 변환하세요.");
                     tr.Commit();
                     Deselect(key);
                     continue;
@@ -1028,7 +1037,9 @@ internal static class ZoneEditCommon
                 if (wholeOnly)
                 {
                     // ★[v103.1.1 · JACK 1006] 역변환 — 안 묻고 조각 전체(아래 else가 걸려 있던 구간지정도 푼다)
-                    ed.WriteMessage($"\n   이미 {(wallNow ? "옹벽" : "사면 변환한")} 자리입니다 — 구간지정 없이 이 조각 전체를 {(wallMode ? "옹벽" : "사면")}으로 바꿉니다.");
+                    ed.WriteMessage(reSlopePick
+                        ? $"\n   이미 사면 변환한 자리입니다(지금 1:{pieceS:0.##} · 소단 {pieceW:0.##}m) — 구간지정 없이 이 조각 전체의 값을 바꿉니다. 사면구배(R) · 소단길이(T) · 단높이(H)로 값을 바꾼 뒤 Enter."
+                        : $"\n   이미 {(wallNow ? "옹벽" : "사면 변환한")} 자리입니다 — 구간지정 없이 이 조각 전체를 {(wallMode ? "옹벽" : "사면")}으로 바꿉니다.");
                 }
                 else
                 {
@@ -1397,6 +1408,14 @@ internal static class ZoneEditCommon
                     //   그 다음에 <b>아무 일도 안 일어날 재생성</b>을 13.6초 돌렸다.</para>
                     //   ★<b>묻고 멈춘다.</b> 기본은 <b>아니오</b> — 값을 바꿔 다시 하는 편이 거의 언제나 맞다.
                     //     (그래도 다시 만들고 싶을 때가 있다: 다른 이유로 면이 낡았을 때.)
+                    // ★[v103.1.2 · JACK 1006 «이미 OO입니다 뜨고 아예 안 되게»] 이미 사면 변환한 자리에 같은 값 — 묻지 않고 멈춘다
+                    if (reSlopePick)
+                    {
+                        Abandon();
+                        ed.WriteMessage($"\n → 이미 1:{curS:0.###} · 소단 {curW:0.##}m · 단높이 {curH:0.##}m 사면입니다 — 아무것도 안 바꿨습니다.");
+                        Log($"■ {cmdLabel} — 이미 사면 변환한 자리에 같은 값 → 멈춤(안 바꿈)");
+                        return;
+                    }
                     var pkSame = new PromptKeywordOptions("\n그래도 다시 만들까요?  Enter=아니오");
                     pkSame.Keywords.Add("Y", "Y", "예(Y)");
                     pkSame.Keywords.Add("N", "N", "아니오(N)");
