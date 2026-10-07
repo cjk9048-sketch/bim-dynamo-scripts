@@ -74,8 +74,8 @@ static class ZoneCheck
                 check("S153 끊기 — 바꾼 조각을 같은 자로 되재면 저장한 T0 · T1(10µm 안 — 0.1mm 안이면 저장값에 맞춘다)",
                       iv != null && Math.Abs(iv.Value.T0 - T0) < 1e-5 && Math.Abs(iv.Value.T1 - T1) < 1e-5, iv == null ? "못 잼" : $"dT0 {(iv.Value.T0 - T0) * 1e6:F2}µm · dT1 {(iv.Value.T1 - T1) * 1e6:F2}µm");
                 check("S153 끊기 — 조각을 이으면 길이 그대로", Math.Abs(pcs.Sum(p => Len(p.Pts)) - Len(line)) < 1e-6, $"{pcs.Sum(p => Len(p.Pts)):F6} / {Len(line):F6}");
-                check("S153 할 일 — 직접 사면 변환한 조각: 사면 변환 = 막기 · 옹벽 변환 = 조각 전체만",
-                      ZonePiece.Decide(false, false, ZonePiece.Kind.SlopeDirect) == ZonePiece.Act.Block && ZonePiece.Decide(true, false, ZonePiece.Kind.SlopeDirect) == ZonePiece.Act.WholeOnly);
+                check("S153 할 일 — 직접 사면 변환한 조각: 사면 변환 = 조각 전체만(값 바꾸기 · JACK 1006 «무조건 막으면 안 되겠다») · 옹벽 변환 = 조각 전체만",
+                      ZonePiece.Decide(false, false, ZonePiece.Kind.SlopeDirect) == ZonePiece.Act.WholeOnly && ZonePiece.Decide(true, false, ZonePiece.Kind.SlopeDirect) == ZonePiece.Act.WholeOnly);
             }
             // 딸려 바뀐 윗단(2단) — 구간 경계에서 끊기되 처음 그대로로 본다(JACK 1006 «직접 누른 단만 막음»)
             var line2 = Closed(rings[2]);

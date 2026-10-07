@@ -58,16 +58,18 @@ public static class ZonePiece
         return st.RuleFrom == bench && st.RuleActs ? Kind.SlopeDirect : Kind.Untouched;
     }
 
-    /// <summary>고른 조각에 할 일 — 묻기(전체구간/구간지정) / 조각 전체만(역변환) / 막기(같은 종류로 다시).</summary>
+    /// <summary>고른 조각에 할 일 — 묻기(전체구간/구간지정) / 조각 전체만(이미 바꾼 자리) / 막기(옹벽을 옹벽 변환으로 다시).</summary>
     public enum Act { Ask, WholeOnly, Block }
 
+    /// <summary>★[v103.1.2 · JACK 1006 «구배 수정하려면 무조건 막으면 안 되겠다»] 직접 사면 변환한 자리를 사면 변환으로 다시 고르면 막지 않고
+    /// <b>조각 전체</b>로 값을 바꾼다(값이 지금과 같을 때만 부르는 쪽이 «이미 1:N입니다»로 멈춘다). 옹벽 → 옹벽은 그대로 막는다.</summary>
     /// <param name="wallMode">옹벽 변환이면 참 · 사면 변환이면 거짓</param>
     /// <param name="wallPiece">목록 옹벽 자리(주황 조각)인가</param>
     public static Act Decide(bool wallMode, bool wallPiece, Kind kind)
     {
         bool wallNow = wallPiece || kind == Kind.Wall;
         bool slopeConv = !wallNow && kind == Kind.SlopeDirect;
-        if (wallMode ? wallNow : slopeConv) return Act.Block;
+        if (wallMode && wallNow) return Act.Block;
         return wallNow || slopeConv ? Act.WholeOnly : Act.Ask;
     }
 
