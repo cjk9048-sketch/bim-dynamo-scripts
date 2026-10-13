@@ -136,6 +136,10 @@ public sealed class ResetCommand
 
         using (Transaction tr = db.TransactionManager.StartTransaction())
         {
+            // ★[v103.1.5 · 검토 1012 2차 중간 1] 면을 지우기 <b>전에</b> XML 원본을 한 번 훑는다 — 지금 물려 있는 원본의 낡은 «안 물림» 기록을 지운다
+            //   (GradingBuilder.TidyXml 설명). 지운 뒤의 원본은 다음 옹벽 합성 · 계획부지 생성의 들머리가 «안 물림»으로 적고 규칙대로 치운다
+            try { string td = GradingBuilder.TidyXml(db, tr); if (td.Length > 0) DiagLog.Append($"\n■ {System.DateTime.Now:HH:mm:ss} 초기화 들머리 — {td}\n"); } catch { }
+
             // ⓪ [종단·횡단 0731] 우리가 만든 Civil3D 객체(선형·종단·종단도·측점선·횡단도)를 **먼저** 정리.
             //    선형이 DH- 레이어에 있어 아래 ① 훑기에 걸리는데, 딸린 종단·뷰를 남긴 채 선형만 지우면
             //    남은 뷰가 깨진 참조가 된다 → 자식부터 순서대로 지운 뒤 선형을 지운다.
@@ -185,6 +189,7 @@ public sealed class ResetCommand
         GradingSettings.LastGroundHandle = "";
         GradingSettings.ClearLastWall(false);
         GradingSettings.WallAddSpec = null; GradingSettings.LastAddNo = 0; GradingSettings.LastAddNote = ""; GradingSettings.LastAddBlockedNo = 0; GradingSettings.WallRerunSpec = null; GradingSettings.AutoCompDoc = ""; GradingSettings.AutoCompNo = 0;
+        GradingSettings.AutoCompWantVolume = false; GradingSettings.LastRegenSkipped = false;   // ★[v103.1.4] 줄 세운 합성이 안 돌았어도 표시가 다음 합성으로 새지 않게
         return (surfs, ents, bundleCleared);
     }
 

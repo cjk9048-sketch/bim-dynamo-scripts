@@ -630,6 +630,8 @@ public static class GradingBuilder
         //
         //   ※ 이 순서의 원래 근거(0807): <c>CreateSnapshot</c>이 이미 있을 때 조용히 무시될 수 있으므로
         //     <b>예외에 기대지 말고 둘 다 순서대로</b> 부른다. 그 판단은 지금도 유효하다.
+        // ★[v103.1.6 · 검토 1013 낮음 9] 이 차례(스냅샷 재작성 뒤 Rebuild)는 <b>붙인 직후 — 소스가 살아 있을 때</b>만 밟는다(부르는 곳은 Composite뿐).
+        //   소스가 지워진 면에서 스냅샷 재작성이 실패한 뒤 Rebuild()를 부르면 Civil이 죽는다(1013 실측 — CanRebuildSnapshot 위 설명). 다른 자리에서 부르지 말 것.
         var fd = new System.Text.StringBuilder();
         try { s.CreateSnapshot(); fd.Append("스냅샷생성 "); }
         catch (System.Exception ex) { fd.Append($"스냅샷생성건너뜀[{ex.GetType().Name}] "); }
@@ -1594,14 +1596,15 @@ public static class GradingBuilder
         }
         catch { }
 
-        int a = StageOne(db, src, false);
-        int b = StageOne(db, compPrev, false) + StageOne(db, comp, false);
-        int c = StageOne(db, compPrev, true) + StageOne(db, comp, true);
-        return $"단계별 재작성(표면마다 트랜잭션 분리) — ①소스 {a}개 ②합성면 {b}개 ③스냅샷 {c}개";
+        var xml = new XmlTally(); var snapT = new SnapTally();
+        int a = StageOne(db, src, false, xml, snapT);
+        int b = StageOne(db, compPrev, false, xml, snapT) + StageOne(db, comp, false, xml, snapT);
+        int c = StageOne(db, compPrev, true, xml, snapT) + StageOne(db, comp, true, xml, snapT);
+        return $"단계별 재작성(표면마다 트랜잭션 분리) — ①소스 {a}개 ②합성면 {b}개 ③스냅샷 {c}개" + snapT.Text + xml.Text;
     }
 
     /// <summary>표면 하나에 <b>자기 트랜잭션</b>을 열어 재작성(또는 스냅샷 재작성)하고 바로 커밋한다.</summary>
-    private static int StageOne(Database db, List<ObjectId> ids, bool snapshot)
+    private static int StageOne(Database db, List<ObjectId> ids, bool snapshot, XmlTally xml, SnapTally snapT)
     {
         int n = 0;
         foreach (var sid in ids)
@@ -1610,14 +1613,389 @@ public static class GradingBuilder
             {
                 using var tr = db.TransactionManager.StartTransaction();
                 var w = (Autodesk.Civil.DatabaseServices.Surface)tr.GetObject(sid, OpenMode.ForWrite);
+                // ★★★[v103.1.5] XML로 만든 면은 굳힌 채 재작성만(①·② 단계에서 한 번) — 스냅샷 재작성(③)은 안 한다(HandleXmlBacked 설명)
+                if (IsXmlBacked(w)) { if (!snapshot && HandleXmlBacked(w, xml)) n++; tr.Commit(); continue; }
                 // ★[v32.16] 여기도 0807판과 같은 방식으로 되돌린다 — 한 곳만 다른 경로면 서로 덮는다.
-                if (snapshot) { if (w.HasSnapshot) { w.RebuildSnapshot(); n++; } }
-                else { w.Rebuild(); n++; }
+                // ★★★[v103.1.6] 붙여넣기 소스가 지워진 면(«이어서» 뒤의 …이전)은 스냅샷 재작성을 부르지 않는다(CanRebuildSnapshot 위 설명).
+                //   종전엔 여기서 예외로 끝나 트랜잭션이 물려 무사했다 — 결과는 같고(③에 안 센다), 건너뛴 면을 반환 글에 적는다.
+                //   그래도 실패하면 종전대로 예외 → 커밋 없이 끝난다(물리면 산다 — 실측).
+                if (snapshot)
+                {
+                    if (w.HasSnapshot)
+                    {
+                        if (!CanRebuildSnapshot(w, out string why)) { string nm = "?"; try { nm = w.Name ?? "?"; } catch { } snapT.Skip.Add($"{nm}({why})"); }
+                        else { w.RebuildSnapshot(); n++; }
+                    }
+                }
+                else
+                {
+                    // 소스가 지워진 우리 면은 재작성 전에 지금 모양을 되찍는다(옛 판이 깨 놓은 스냅샷을 살린다) —
+                    //   되찍지 못했으면 재작성도 커밋도 하지 않는다(RebuildGuarded · 이 트랜잭션은 물린다). 그 밖의 면은 종전과 같은 Rebuild() 한 번.
+                    if (!RebuildGuarded(w, snapT)) continue;
+                    n++;
+                }
                 tr.Commit();
             }
             catch { }
         }
         return n;
+    }
+
+    // ══ ★★★[v103.1.6 · 1013 화면 없는 Civil 실측] <b>실패한 스냅샷 재작성을 커밋하면 그다음 재작성에서 Civil이 죽는다</b> ══
+    //   «이어서»로 다음 구역을 만들면 앞 구역의 정지면_DH이전 · 정지순수_DH이전은 <b>붙여넣기 소스가 지워진 면</b>이 된다
+    //   (다음 구역의 가상면 짓기가 같은 이름의 옛 가상성토 · 가상절토를 지운다 — BuildVirtualSlope의 EraseSurfacesByBaseName).
+    //   그런 면의 RebuildSnapshot()은 SurfaceException(Failure)으로 끝나는데, 그 트랜잭션을 <b>커밋하면</b> 다음 Rebuild()에서 Civil이 죽는다(0xC0000005).
+    //   RebuildAllSurfaces(정지옵션 [저장])가 그 꼴이었다 — 예외를 삼키고 커밋했다. 출하 함수 그대로 재현했다: «이어서» 꼴 → [저장] → [저장] = 죽음(계획_v103_2.md 3-2).
+    //   · 트랜잭션을 <b>물리면</b> 산다 — StageOne이 그 꼴이라 정지면 생성 끝의 재작성은 무사했다.
+    //   · 실패 직후 같은 트랜잭션에서 CreateSnapshot()으로 <b>되찍어도</b> 산다(삼각형 그대로).
+    //   · 정의에 스냅샷 줄만 남은 면(붙여넣기 줄을 지운 면 — GradeFlags.StripPasteOps)은 더 나쁘다: 스냅샷 재작성이 «성공»하고도 그다음 Rebuild()에서 죽는다.
+    //   → ①그런 면은 스냅샷 재작성을 <b>부르지 않는다</b>(형상은 스냅샷이 물고 있고 Rebuild()는 스냅샷에서 시작해 그대로다 — 실측)
+    //     ②그래도 실패하면(모르는 까닭) 그 자리에서 되찍고 ⚠를 남긴다.
+    //     ③소스가 지워진 <b>우리 면</b>(이름에 _DH)은 재작성 <b>전에</b> 지금 모양을 되찍는다(RebuildGuarded) — 옛 판(≤ v103.1.5)이 이미 스냅샷을 깨 놓은 도면을 살린다:
+    //       깨진 채 저장된 면은 다시 연 뒤 그냥 Rebuild()하면 <b>말없이 바뀐다</b>(지워진 소스 몫이 빠져 원지반만 남는다 — 실측 73,067 → 73,819면).
+    //       재작성 전에 되찍으면 같은 세션이든 다시 연 뒤든 그대로다(실측). 안 깨진 면에는 같은 모양을 한 번 더 찍는 것뿐이다.
+    //       <b>되찍지 못하면 그 면은 재작성하지 않는다</b>(검토 1013 중간 1) — 깨진 면이면 그 재작성이 바로 «죽음 / 말없이 바뀜»이다 · 잃는 것은 «구식» 표시 지우기뿐이다.
+    //       되찍은 면은 재작성 앞뒤의 삼각형 · 점 수를 견준다(검토 1013 중간 2) — 화면 있는 Civil이 실측과 다르게 굴면 여기서 보인다.
+    //   소스가 다 살아 있는 면은 <b>종전과 같은 호출 · 같은 트랜잭션</b>이다(느낌표로 여러 번 고친 자리 — 멀쩡한 길은 건드리지 않는다 · 옛 판과 반환 글까지 같다).
+    //   못 잰 것: 화면 있는 Civil에서도 죽는지 · 도구공간에서 손으로 «스냅샷 재작성»을 눌렀을 때 · «구식» 표시가 붙은 면의 되찍기(화면 없는 Civil은 표시 끄기로 «구식»이 안 붙는다)
+    //             · …이전 면이 «찍고 → 짓고»로 끝나 스냅샷 느낌표가 남는지(종전에도 재작성으로 끝났다 — 남으면 재작성 뒤 한 번 더 찍는 것을 본다).
+
+#pragma warning disable CS0649   // 시험에서 반사로 넣는다
+    /// <summary>시험용 이음매 — 켜면 <see cref="CanRebuildSnapshot"/>이 늘 «된다»고 한다(되찍기 길을 출하 함수로 재려고). 평소엔 false.</summary>
+    static bool _snapCheckOffForTest;
+    /// <summary>시험용 이음매 — 켜면 <see cref="RebuildGuarded"/>의 되찍기가 실패한 것으로 친다(«되찍지 못하면 재작성하지 않는다»를 출하 함수로 재려고). 평소엔 false.</summary>
+    static bool _rebakeFailForTest;
+#pragma warning restore CS0649
+
+    /// <summary>이 면의 스냅샷 재작성을 막는 까닭 — 0 = 없다(불러도 된다) · 1 = <b>붙여넣기 소스가 지워졌다</b> · 2 = 정의에 스냅샷 줄만 있다(위 설명).
+    /// 붙여넣기 줄의 소스를 못 읽어도 «지워졌다»로 본다(안 부르는 쪽은 늘 무사하다 — 실측). 정의 자체를 못 읽었으면 0(종전대로 — 실패하면 <see cref="RebuildSnapshotSafe"/>가 되찍는다).
+    /// 지워진 소스는 같은 세션에서는 <c>IsErased</c>로, 저장하고 다시 연 도면에서는 <c>IsNull</c>로 읽힌다(실측).</summary>
+    static int SnapBlock(Autodesk.Civil.DatabaseServices.Surface w, out string why)
+    {
+        why = "";
+        try
+        {
+            var oc = w.Operations;
+            if (oc.Count <= 1) { why = "정의에 스냅샷 말고 줄이 없다"; return 2; }
+            int dead = 0;
+            for (int i = 0; i < oc.Count; i++)
+            {
+                // 붙여넣기 줄은 형식으로 직접 읽는다(TryXmlFilesOf의 선례 · 검토 1013 낮음 6 — 반사 읽기가 빗맞으면 멀쩡한 면이 말없이 «지워짐»으로 간다)
+                if (oc[i] is not Autodesk.Civil.DatabaseServices.SurfaceOperationPasteSurface ps) continue;
+                bool alive = false;
+                try { ObjectId sid = ps.SurfaceId; alive = !sid.IsNull && !sid.IsErased; } catch { }
+                if (!alive) dead++;
+            }
+            if (dead > 0) { why = $"붙여넣기 소스 {dead}개가 지워졌다"; return 1; }
+        }
+        catch { }
+        return 0;
+    }
+
+    /// <summary>이 면에 <c>RebuildSnapshot()</c>을 불러도 되나(<see cref="SnapBlock"/> = 0) — 까닭은 <paramref name="why"/>.</summary>
+    internal static bool CanRebuildSnapshot(Autodesk.Civil.DatabaseServices.Surface w, out string why)
+    {
+        why = "";
+        if (_snapCheckOffForTest) return true;
+        return SnapBlock(w, out why) == 0;
+    }
+
+    /// <summary>재작성 한 번(<c>Rebuild</c>) — <b>붙여넣기 소스가 지워진 우리 면</b>(스냅샷 있음 · 이름에 _DH)이면 먼저 지금 모양을 되찍는다(<c>CreateSnapshot</c> — 위 ③).
+    /// 옛 판이 스냅샷을 깨 놓은 면은 그냥 Rebuild()하면 죽거나 말없이 바뀐다 — 되찍으면 그대로다(실측). 깨졌는지는 읽을 길이 없어(표시가 깨끗하다) 그런 면이면 늘 되찍는다.
+    /// <para>반환: 재작성했나. <b>되찍지 못했으면 재작성하지 않고 false</b> — 자기 트랜잭션을 가진 쪽(StageOne)은 커밋하지 않는다.
+    /// 그 밖의 면은 종전과 같은 <c>Rebuild()</c> 한 번이고, <c>Rebuild()</c>의 예외는 종전처럼 부른 쪽으로 간다.</para>
+    /// <para>남의 면(이름에 _DH가 없다)은 되찍지 않는다 — 스냅샷 뒤에 밀린 변경이 있는 면이면 낡은 모양이 굳는다(검토 1013 낮음 4).
+    /// 옛 판이 스냅샷 재작성을 부르던 면은 이름이 전부 우리 꼴이라 살리는 범위는 줄지 않는다.</para>
+    /// <para>★자가검증: 되찍기 전과 재작성 뒤의 삼각형 · 점 수가 다르면 ⚠(<see cref="SnapTally.Changed"/>).</para></summary>
+    static bool RebuildGuarded(Autodesk.Civil.DatabaseServices.Surface w, SnapTally t)
+    {
+        string nm = "?"; bool gone = false;
+        try
+        {
+            nm = w.Name ?? "?";
+            gone = nm.IndexOf("_DH", System.StringComparison.Ordinal) >= 0 && w.HasSnapshot && SnapBlock(w, out _) == 1;
+        }
+        catch { }
+        if (!gone) { w.Rebuild(); return true; }
+
+        var c0 = XmlCounts(w);
+        try
+        {
+            if (_rebakeFailForTest) throw new System.InvalidOperationException("시험용 — 되찍기 실패");
+            w.CreateSnapshot();
+        }
+        catch (System.Exception ex) { t.RebakeBad.Add($"{nm}({ex.GetType().Name}: {ex.Message})"); return false; }
+        w.Rebuild();
+        var c1 = XmlCounts(w);
+        if (c0 != c1) t.Changed.Add($"{nm}(삼각형 {c0.Tris}→{c1.Tris} · 점 {c0.Pts}→{c1.Pts})");
+        t.Rebaked.Add(nm);
+        return true;
+    }
+
+    /// <summary>스냅샷 재작성을 <b>해도 되는 면에만</b> 한다(<see cref="CanRebuildSnapshot"/>) — 바깥 트랜잭션을 물릴 수 없는 자리에서 쓴다.
+    /// 반환: 1 = 했다 · 0 = 건너뜀 · −1 = 실패(<paramref name="note"/> = 면 이름과 까닭).
+    /// 실패했으면 그 자리에서 <c>CreateSnapshot()</c>으로 <b>지금 모양을 되찍는다</b> — 실패한 스냅샷 재작성을 그대로 커밋하면 다음 Rebuild()에서 Civil이 죽는다(1013 실측 · 되찍으면 산다).
+    /// 되찍기까지 실패하면 글에 «되찍기도 실패»가 들어간다 — 부른 쪽이 그 트랜잭션을 <b>물려야</b> 한다(물리면 산다 — 실측 · 정지옵션 [저장]이 그렇게 한다).
+    /// <para>★자가검증: 실패한 스냅샷 재작성이 삼각형 · 점 수를 바꿔 놓았으면 글에 ⚠로 적는다(그 모양이 굳는다 — 실측에서는 안 바뀌었다).</para></summary>
+    internal static int RebuildSnapshotSafe(Autodesk.Civil.DatabaseServices.Surface w, out string note)
+    {
+        note = "";
+        string nm = "?"; try { nm = w.Name ?? "?"; } catch { }
+        if (!CanRebuildSnapshot(w, out string why)) { note = $"{nm}({why})"; return 0; }
+        var c0 = XmlCounts(w);
+        try { w.RebuildSnapshot(); return 1; }
+        catch (System.Exception ex)
+        {
+            var c1 = XmlCounts(w);
+            string fix;
+            try { w.CreateSnapshot(); fix = "지금 모양으로 되찍었다"; }
+            catch (System.Exception ex2) { fix = $"되찍기도 실패 {ex2.GetType().Name}: {ex2.Message} — 이 면을 다시 재작성하면 Civil이 멈출 수 있다"; }
+            if (c0 != c1) fix += $" · ⚠실패한 스냅샷 재작성이 면을 바꿨다(삼각형 {c0.Tris}→{c1.Tris} · 점 {c0.Pts}→{c1.Pts})";
+            note = $"{nm}({ex.GetType().Name}: {ex.Message} · {fix})";
+            return -1;
+        }
+    }
+
+    /// <summary>재작성 도우미가 스냅샷을 다룬 일 — 스냅샷 재작성을 건너뛴 면 · 실패한 면 · 재작성 전에 되찍은 면 · 되찍지 못한 면 · 되찍은 뒤 바뀐 면.</summary>
+    sealed class SnapTally
+    {
+        public List<string> Skip = new(), Bad = new(), Rebaked = new(), RebakeBad = new(), Changed = new();
+        /// <summary>반환 글에 붙이는 요약 — 한 일이 없으면 빈 문자열(소스가 다 살아 있는 도면의 반환 글은 종전과 같다).</summary>
+        public string Text
+            => (Skip.Count > 0 ? $" · 스냅샷 재작성 건너뜀 {Skip.Count}[{string.Join(" · ", Skip)}]" : "")
+             + (Rebaked.Count > 0 ? $" · 재작성 전에 지금 모양을 되찍은 면 {Rebaked.Distinct().Count()}[{string.Join(" · ", Rebaked.Distinct())}]" : "")
+             + (RebakeBad.Count > 0 ? " · ⚠되찍지 못해 재작성하지 않은 면: " + string.Join(" · ", RebakeBad.Distinct()) : "")
+             + (Changed.Count > 0 ? " · ⚠되찍은 면이 재작성 뒤 바뀌었다: " + string.Join(" · ", Changed.Distinct()) : "")
+             + (Bad.Count > 0 ? " · ⚠스냅샷 재작성 실패: " + string.Join(" · ", Bad) : "");
+    }
+
+    // ══ ★★★[v103.1.5 · JACK 1012 «지금 바로 고침»] <b>LandXML로 만든 면은 재작성 때 XML 파일을 다시 읽는다</b> ══
+    //   1012 화면 없는 Civil 실측(계획_v103_2.md 3-1 · m7): CreateFromLandXML로 만든 면(정의 = SurfaceOperationAddXmlFile 한 줄)의 Rebuild()는
+    //   ①파일이 없으면 FileNotFound(삼각형은 남고 «구식») ②<b>파일 내용이 바뀌어 있으면 말없이 그 내용으로 바뀐다</b>(Civil이 그 면에 «구식» 표시도 붙인다).
+    //   옹벽 합성 결과(정지면_DH)와 순수옹벽{n}_DH가 그런 면이고, 원본 파일은 이름이 고정 · PC마다 한 폴더라 다음 합성 · 다음 옹벽 · 다른 도면이 덮어쓴다.
+    //   그 면을 우리가 Rebuild하는 자리가 있다(정지옵션 [저장]의 RebuildAllSurfaces · 정지면 생성 끝의 RebuildSurfacesStaged) —
+    //   앞 번호 순수옹벽 · «이어서» 뒤 정지면_DH이전 · 같은 PC 다른 도면의 정지면_DH가 <b>남의 내용으로 바뀔 수 있었다</b>
+    //   (Civil 동작은 잰 것 · 설치본 v103.1.4의 도우미 셋도 화면 없는 Civil에서 불러 다섯 경우 모두 바뀌는 것을 쟀다 · 그 조작 순서를 도면에서 해 본 것은 아니다).
+    //   실측(전부 화면 없는 Civil · 삼각형을 비트까지 견줌):
+    //   · 만든 직후 CreateSnapshot(74천 면에 5~6ms)으로 굳히면 <c>Rebuild()</c>는 스냅샷에서 시작한다 — 파일이 없든 바뀌든 삼각형이 그대로다.
+    //   · 이미 «구식»이 된 옛 면도 <b>재작성 없이</b> CreateSnapshot만 하면 지금 삼각형 그대로 굳는다.
+    //   · ★그러나 굳힌 면이라도 <b>파일 내용이 바뀐 뒤</b>에는 Civil이 «스냅샷 구식»을 붙이고, 그때 <c>RebuildSnapshot()</c>(도구공간의 «스냅샷 재작성»)을 하면
+    //     스냅샷이 <b>바뀐 파일 내용으로 다시 구워진다</b> — 바로는 안 보이고 <b>다음 Rebuild에서</b> 면이 바뀐다. 파일이 <b>없으면</b> RebuildSnapshot은 FileNotFound로 끝나고 면은 그대로다.
+    //   · 굳힌 뒤 가져오기 줄을 정의에서 지우면 재작성 차례에서 Civil이 죽는다(0xC0000005) — 줄은 지우지 않는다.
+    //   그래서 굳히는 것만으로는 모자란다 — <b>한 번 쓴 XML 파일은 다시 쓰지 않는다</b>:
+    //   · 만들 때마다 <b>새 이름의 파일</b>에 쓴다(NewXmlPath — 도면마다 폴더 · XmlStore) · 만든 직후 굳힌다 → 파일이 안 바뀌니 «구식» · «스냅샷 구식»이 안 붙고(실측), 무엇을 재작성해도 같은 내용이다.
+    //   · 아무 면도 안 물게 된 파일은 치운다(TidyXml · XmlStore.Deletable — 저장된 도면이 아직 물 수 있는 것은 남긴다). 물려 있던 파일이 없어져도 면은 굳어 있어 그대로이고 스냅샷 재작성은 예외로 끝난다(바뀌지 않는다).
+    //   · 옛 판의 고정 이름 파일(DHWALLCOMP_합성.xml · DHWALLDL_순수옹벽.xml)은 <b>이름을 바꿔 둔다</b>(XmlStore.RetireLegacy — 시작 때 · 정리 때) — 옛 판이 지은 면이 그 파일을 «없는 파일»로 보게(바뀐 내용을 다시 읽을 길을 끊는다).
+    //   · 재작성 도우미 셋(RebuildSurfacesStaged · RebuildAllSurfaces · RebuildSurfacesByBaseName)은 XML 면을 «굳히고 Rebuild만» — <b>스냅샷 재작성은 절대 안 한다</b>.
+    //     못 굳히면 건드리지 않는다(Rebuild가 파일을 다시 읽으므로)
+
+    static readonly System.Text.RegularExpressions.Regex DhXmlName = new(@"_DH(이전)?(_\d+)?$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary><b>우리가</b> LandXML로 만든 면인가 — 이름이 우리 XML 면의 꼴(«…_DH» · «…_DH이전» · 끝에 «_숫자»가 붙은 것: 정지면_DH · 정지면_DH이전 · 순수옹벽N_DH · 합성_짓는중_DH)이고
+    /// 정의의 «XML 파일 가져오기» 줄(<c>SurfaceOperationAddXmlFile</c>)이 <b>우리가 쓴 원본</b>(<see cref="XmlStore.IsOurs"/> — DH_XML 폴더 안이거나 옛 판의 고정 이름)을 물고 있다.
+    /// <para>★사용자가 LandXML로 들여온 원지반 같은 <b>남의 면은 여기에 안 든다</b> — 이름이 «현황_DHT» · «DH_현황»이어도(검토 1012 낮음 2),
+    /// 이름이 «원지반_DH»처럼 우리 꼴이어도 원본이 우리 것이 아니면 안 든다(검토 1012 2차 낮음 6).
+    /// 그 면을 굳히면 사용자가 XML을 고쳐도 안 따라오게 되고, 그것은 우리가 정할 일이 아니다. 남의 면은 종전 그대로 다룬다.</para>
+    /// <para>★이름은 맞는데 정의를 <b>못 읽으면 «그렇다»</b>로 답한다(검토 1012 낮음 1) — «아니다»로 답하면 부른 쪽이 그냥 Rebuild해 원본 파일을 다시 읽는다. 굳히고 재작성만 하는 길은 어느 면에도 해가 없다.</para>
+    /// <para>우리 면을 놓쳐도(이름을 손으로 바꿈 등) 틀린 모양이 되지는 않는다 — 새 판의 원본은 안 바뀌고 옛 판의 원본은 물려서 없다(그냥 재작성 = 같은 내용 또는 «파일 없음»).</para></summary>
+    public static bool IsXmlBacked(Autodesk.Civil.DatabaseServices.Surface s)
+    {
+        string nm;
+        try { nm = s.Name ?? ""; } catch { return false; }
+        if (!DhXmlName.IsMatch(nm)) return false;
+        var files = new List<string>();
+        if (!TryXmlFilesOf(s, files)) return true;
+        foreach (string f in files) if (XmlStore.IsOurs(f)) return true;
+        return false;
+    }
+
+    /// <summary>이 면의 정의가 물고 있는 XML 원본 파일들(가져오기 줄의 <c>XmlFileName</c>)을 <paramref name="into"/>에 담는다. 정의를 못 읽으면 false.</summary>
+    static bool TryXmlFilesOf(Autodesk.Civil.DatabaseServices.Surface s, List<string> into)
+    {
+        try
+        {
+            var oc = s.Operations;
+            for (int i = 0; i < oc.Count; i++)
+                if (oc[i] is Autodesk.Civil.DatabaseServices.SurfaceOperationAddXmlFile x)
+                { string f = x.XmlFileName; if (!string.IsNullOrEmpty(f)) into.Add(f); }
+            return true;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>저장된 도면이면 그 전체 경로 · 이름 없는 새 도면(템플릿에서 막 만든 것)이면 빈 문자열 — XML 원본 폴더와 «마지막 저장 시각»의 기준.</summary>
+    static string DwgPathOf(Database db)
+    {
+        try
+        {
+            foreach (Autodesk.AutoCAD.ApplicationServices.Document d in Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager)
+            {
+                if (d.Database.UnmanagedObject != db.UnmanagedObject) continue;
+                return d.IsNamedDrawing ? System.IO.Path.GetFullPath(d.Name) : "";
+            }
+        }
+        catch { }
+        // 문서를 못 찾았다(곁 데이터베이스 등) — 파일로 가른다
+        try
+        {
+            string fn = db.Filename ?? "";
+            if (fn.EndsWith(".dwg", System.StringComparison.OrdinalIgnoreCase) && System.IO.File.Exists(fn)) return System.IO.Path.GetFullPath(fn);
+        }
+        catch { }
+        return "";
+    }
+
+    /// <summary>새 XML 원본의 경로 — <b>부를 때마다 다른 이름</b>(한 번 쓴 파일은 다시 쓰지 않는다 — 위 설명 · <see cref="XmlStore"/>).</summary>
+    public static string NewXmlPath(Database db, string kind) => XmlStore.NewPath(DwgPathOf(db), kind);
+
+    /// <summary>★자가검증(검토 1012 2차 중간 3) — 방금 만든 XML 면이 <b>넘긴 경로 그대로</b>를 물고 있는가. 빈 문자열 = 그렇다.
+    /// <para>치우기(<see cref="TidyXml"/>)는 «면이 돌려주는 경로 = 우리가 넘긴 경로»에 기대어 물린 파일을 가린다. 어긋나면 살아 있는 면의 원본을 «안 물림»으로 보게 되므로,
+    /// 한 번이라도 어긋나면 <b>이 실행(Civil을 끌 때까지)에서는 아무것도 지우지 않는다</b>(<see cref="_xmlNoDelete"/>) — 느낌표가 붙는 쪽보다 파일이 남는 쪽이 낫다.</para></summary>
+    public static string XmlRefCheck(Autodesk.Civil.DatabaseServices.Surface s, string path)
+    {
+        var l = new List<string>();
+        string why;
+        if (!TryXmlFilesOf(s, l)) why = "방금 만든 면의 정의를 못 읽었다";
+        else
+        {
+            string want; try { want = System.IO.Path.GetFullPath(path); } catch { want = path; }
+            foreach (string f in l)
+            {
+                string got; try { got = System.IO.Path.GetFullPath(f); } catch { got = f; }
+                if (string.Equals(got, want, System.StringComparison.OrdinalIgnoreCase)) return "";
+            }
+            why = $"면이 무는 경로가 넘긴 것과 다르다(넘긴 «{path}» · 면 «{string.Join("» «", l)}»)";
+        }
+        _xmlNoDelete = why;
+        return why;
+    }
+    /// <summary>비어 있지 않으면 XML 원본을 지우지 않는다 — <see cref="XmlRefCheck"/>가 어긋남을 본 까닭.</summary>
+    static string _xmlNoDelete = "";
+
+    /// <summary>이 도면 폴더의 안 물린 XML 원본을 치우고 옛 판의 고정 이름 파일을 물린다(<see cref="XmlStore.Tidy"/>). 한 줄 요약(원본이 하나도 없으면 빈 문자열).
+    /// <para>★면 하나라도 정의를 못 읽으면 <b>아무것도 지우지 않는다</b> — 그 면이 무는 파일을 «안 물림»으로 볼 수 있어서다(옛 판 파일 물리기만 한다).</para>
+    /// <para>★면을 지우는 명령은 <b>들머리에서(지우기 전에)</b> 이것을 한 번 부른다 — 저장 안 하고 닫았다 다시 연 도면이 다시 무는 파일의 낡은 «안 물림» 기록을 지우려고
+    /// (검토 1012 2차 중간 1 · <see cref="XmlStore.Deletable"/> 설명). 부르는 자리: 계획부지 생성 들머리 · 옹벽 합성 들머리 · 초기화 들머리.</para></summary>
+    public static string TidyXml(Database db, Transaction tr)
+    {
+        if (_xmlNoDelete.Length > 0)
+        {
+            string lg0 = XmlStore.RetireLegacy();
+            return $"XML 원본 정리 안 함 — {_xmlNoDelete} · Civil을 다시 켤 때까지 아무것도 안 지운다" + (lg0.Length > 0 ? " · " + lg0 : "");
+        }
+        var used = new List<string>(); var unread = new List<string>();
+        try
+        {
+            var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+            foreach (ObjectId sid in civilDoc.GetSurfaceIds())
+            {
+                if (sid.IsNull || sid.IsErased) continue;   // 이 트랜잭션에서 방금 지운 면 — 그 원본은 «안 물림»이다
+                string nm = "?";
+                try
+                {
+                    if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
+                    nm = s.Name ?? "?";
+                    if (!TryXmlFilesOf(s, used)) unread.Add(nm);
+                }
+                catch (System.Exception ex) { unread.Add($"{nm}({ex.GetType().Name})"); }
+            }
+        }
+        catch (System.Exception ex) { unread.Add("면 목록(" + ex.GetType().Name + ")"); }
+        if (unread.Count > 0)
+        {
+            // ★[검토 1012 확인 낮음] 무엇이 물려 있는지 못 봤다 — «안 물림» 기록도 버린다. 못 본 채로 두면 그 면이 지워진 뒤의 정리(같은 명령 안)가 낡은 기록으로 지울 수 있다
+            XmlStore.ForgetSeen(DwgPathOf(db));
+            string lg = XmlStore.RetireLegacy();
+            return $"XML 원본 정리 건너뜀 — 정의를 못 읽은 면이 있다({string.Join(", ", unread)}) · 아무것도 안 지웠다 · «안 물림» 기록을 버렸다(처음부터 다시 센다)" + (lg.Length > 0 ? " · " + lg : "");
+        }
+        return XmlStore.Tidy(DwgPathOf(db), used);
+    }
+
+    /// <summary>XML 면을 굳힌다 — 스냅샷이 없으면 <b>재작성 없이</b> 만든다(지금 삼각형 그대로 · «구식»이어도 된다 — 1012 실측). 빈 문자열 = 굳어 있다 · 그 밖 = 못 굳힌 까닭.</summary>
+    public static string FreezeXmlBacked(Autodesk.Civil.DatabaseServices.Surface s)
+    {
+        try
+        {
+            if (s.HasSnapshot) return "";
+            if (!s.IsWriteEnabled) s.UpgradeOpen();
+            s.CreateSnapshot();
+            return s.HasSnapshot ? "" : "스냅샷이 안 생겼다";
+        }
+        catch (System.Exception ex) { return ex.GetType().Name + ": " + ex.Message; }
+    }
+
+    /// <summary>도면의 XML 면을 전부 굳힌다 — 옛 판(~v103.1.4)이 굳히지 않고 지은 면을 <b>지금 모양 그대로</b> 굳히려고 부른다(새 판이 지은 면은 만들 때 굳혔다).
+    /// 부르는 자리: 계획부지 생성 들머리 · 옹벽 합성 · 순수옹벽 짓기 · 합성이 되돌려진 뒤.
+    /// 한 줄 요약(XML 면이 없으면 빈 문자열) — «구식»이던 면을 굳혔으면 그 이름을 적는다(원본 파일이 이미 바뀐 뒤였다 — 지금 모양 그대로 굳혔다).</summary>
+    public static string FreezeAllXmlBacked(Transaction tr)
+    {
+        int had = 0, froze = 0; var stale = new List<string>(); var bad = new List<string>();
+        try
+        {
+            var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+            foreach (ObjectId sid in civilDoc.GetSurfaceIds())
+            {
+                string nm = "?";
+                try
+                {
+                    if (sid.IsNull || sid.IsErased) continue;   // 이 트랜잭션에서 방금 지운 면(같은 이름을 다시 짓기 전) — 셀 것이 아니다
+                    if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
+                    nm = s.Name ?? "?";
+                    if (!IsXmlBacked(s)) continue;
+                    if (s.HasSnapshot) { had++; continue; }
+                    bool wasOut = false; try { wasOut = s.IsOutOfDate; } catch { }
+                    var w = (Autodesk.Civil.DatabaseServices.Surface)tr.GetObject(sid, OpenMode.ForWrite);   // 잠긴 레이어면 여기서 던진다 — 이름과 함께 적는다
+                    string why = FreezeXmlBacked(w);
+                    if (why.Length > 0) { bad.Add($"{nm}({why})"); continue; }
+                    froze++;
+                    if (wasOut) stale.Add(nm);
+                }
+                catch (System.Exception ex) { bad.Add($"{nm}({ex.GetType().Name}: {ex.Message})"); }
+            }
+        }
+        catch (System.Exception ex) { bad.Add(ex.GetType().Name + ": " + ex.Message); }
+        if (had + froze + bad.Count == 0) return "";
+        return $"XML로 만든 면 {had + froze + bad.Count}개 — 이미 굳음 {had} · 지금 굳힘 {froze}"
+             + (stale.Count > 0 ? $"(그중 «구식»이던 것: {string.Join(", ", stale)} — 원본 파일이 바뀐 뒤였다 · 지금 모양 그대로 굳혔다)" : "")
+             + (bad.Count > 0 ? " · ⚠못 굳힘: " + string.Join(" · ", bad) : "");
+    }
+
+    /// <summary>재작성 도우미가 XML 면을 만났을 때 — 다룬 수 · 못 다룬 면.</summary>
+    sealed class XmlTally
+    {
+        public int N, Rebuilt; public List<string> Bad = new(), Healed = new();
+        public string Text => N == 0 ? "" : $" · XML로 만든 면 {N}개는 굳힌 채 재작성만({Rebuilt})"
+            + (Healed.Count > 0 ? $" · 지금 굳힌 옛 면: {string.Join(", ", Healed)}(모양은 그대로 · «스냅샷 구식» 표시는 그 면을 다시 지을 때까지 남는다)" : "")
+            + (Bad.Count > 0 ? " · ⚠못 다룸: " + string.Join(" · ", Bad) : "");
+    }
+
+    /// <summary>삼각형 수 · 점 수(재작성 앞뒤를 견줄 값) — 못 읽으면 (−1, −1).</summary>
+    static (int Tris, int Pts) XmlCounts(Autodesk.Civil.DatabaseServices.Surface w)
+    {
+        int t = -1, p = -1;
+        try { if (w is TinSurface ts) t = ts.GetTinProperties().NumberOfTriangles; } catch { }
+        try { p = (int)w.GetGeneralProperties().NumberOfPoints; } catch { }
+        return (t, p);
+    }
+
+    /// <summary>XML 면이면 여기서 끝낸다 — 굳히고(없으면 스냅샷) <c>Rebuild()</c>만 한다. 굳은 면의 Rebuild는 스냅샷에서 시작해 파일과 무관하고(실측),
+    /// 표시 끄기가 붙인 «구식»은 이것으로 풀린다. <b>스냅샷 재작성은 하지 않는다</b>(파일이 바뀌어 있으면 스냅샷이 그 내용으로 다시 구워진다 — 실측).
+    /// 못 굳혔으면 <b>건드리지 않는다</b>. 반환 = 재작성했나(부른 쪽은 XML 면에 더 손대지 않는다 — IsXmlBacked로 먼저 가른다).
+    /// <para>★자가검증(검토 1012 중간 2): 재작성 앞뒤의 삼각형 수 · 점 수가 다르면 ⚠로 적는다 — 화면 있는 Civil이 실측과 다르게 굴어 «말없이 바뀜»이 되살아나면 여기서 보인다.</para></summary>
+    static bool HandleXmlBacked(Autodesk.Civil.DatabaseServices.Surface w, XmlTally t)
+    {
+        t.N++;
+        string nm = "?"; try { nm = w.Name ?? "?"; } catch { }
+        bool had = false; try { had = w.HasSnapshot; } catch { }
+        string why = FreezeXmlBacked(w);
+        if (why.Length > 0) { t.Bad.Add($"{nm}(굳히지 못함 — {why} · 건드리지 않았다)"); return false; }
+        if (!had) t.Healed.Add(nm);
+        var c0 = XmlCounts(w);
+        try { w.Rebuild(); t.Rebuilt++; }
+        catch (System.Exception ex) { t.Bad.Add($"{nm}(Rebuild {ex.GetType().Name}: {ex.Message})"); return false; }
+        var c1 = XmlCounts(w);
+        if (c0 != c1) t.Bad.Add($"{nm}(⚠재작성 뒤 삼각형 {c0.Tris}→{c1.Tris} · 점 {c0.Pts}→{c1.Pts} — 굳힌 면이 바뀌었다)");
+        return true;
     }
 
     /// <summary>★★[v32.13 · JACK 0812] <b>붙여넣기 줄을 정의에서 지운다 — ⚠를 지우는 대신 ⚠가 붙을 줄을 없앤다.</b>
@@ -1744,8 +2122,15 @@ public static class GradingBuilder
         }
 
         int nSrc = 0, nComp = 0, snap = 0;
+        var snapT = new SnapTally();   // ★[v103.1.6] 스냅샷 재작성을 건너뛴 면 · 실패한 면 · 재작성 전에 되찍은 면(반환 글에 적는다)
+        var xml = new XmlTally();   // ★[v103.1.5] XML로 만든 면(옹벽 합성 · 순수옹벽)은 굳힌 채 재작성만 — 그냥 Rebuild하면 원본 파일을 다시 읽는다
         foreach (var sid in src)
-            try { var w = (Autodesk.Civil.DatabaseServices.Surface)tr.GetObject(sid, OpenMode.ForWrite); w.Rebuild(); nSrc++; }
+            try
+            {
+                var w = (Autodesk.Civil.DatabaseServices.Surface)tr.GetObject(sid, OpenMode.ForWrite);
+                if (IsXmlBacked(w)) { if (HandleXmlBacked(w, xml)) nSrc++; continue; }
+                if (RebuildGuarded(w, snapT)) nSrc++;   // ★[v103.1.6] 소스가 지워진 우리 면은 되찍고 재작성(못 찍으면 재작성 안 함) · 그 밖은 종전과 같은 Rebuild() 한 번
+            }
             catch { }
 
         foreach (var sid in compPrev.Concat(comp))
@@ -1753,9 +2138,20 @@ public static class GradingBuilder
             try
             {
                 var w = (Autodesk.Civil.DatabaseServices.Surface)tr.GetObject(sid, OpenMode.ForWrite);
-                w.Rebuild();                                                   // 붙여넣기 항목을 되살리고
+                if (IsXmlBacked(w)) { if (HandleXmlBacked(w, xml)) nComp++; continue; }   // 스냅샷 재작성은 안 한다(파일이 없으면 예외)
+                // ★★★[v103.1.6] 소스가 지워진 면(«이어서» 뒤의 …이전)은 재작성 전에 지금 모양을 되찍는다 — 옛 판(≤ v103.1.5)의 이 함수가
+                //   스냅샷을 깨 놓은 도면이면 그냥 Rebuild()할 때 죽거나 말없이 바뀐다(1013 실측 — CanRebuildSnapshot 위 설명 ③).
+                //   되찍지 못한 면은 재작성도 스냅샷 재작성도 하지 않는다. 그 밖의 면은 종전과 같은 Rebuild() 한 번이다.
+                if (!RebuildGuarded(w, snapT)) continue;                        // 붙여넣기 항목을 되살리고
                 // ★[v32.10] <b>스냅샷으로 끝낸다</b> — 찍은 뒤에 또 지으면 스냅샷이 구식이 된다(위 <see cref="Freeze"/> 설명).
-                if (w.HasSnapshot) { try { w.RebuildSnapshot(); snap++; } catch { } }
+                // ★★★[v103.1.6] 종전엔 <c>try { w.RebuildSnapshot(); } catch { }</c> — 붙여넣기 소스가 지워진 면(«이어서» 뒤의 …이전)에서 실패를 삼키고
+                //   <b>커밋</b>해서, 그다음 재작성(정지옵션 [저장]을 한 번 더 · «마지막 구역 다시»의 끝)에서 Civil이 죽었다(1013 실측 — CanRebuildSnapshot 위 설명).
+                //   소스가 살아 있는 면은 종전과 같은 호출이다.
+                if (w.HasSnapshot)
+                {
+                    int r = RebuildSnapshotSafe(w, out string sn);
+                    if (r > 0) snap++; else if (r == 0) snapT.Skip.Add(sn); else snapT.Bad.Add(sn);
+                }
                 nComp++;
             }
             catch { }
@@ -1774,7 +2170,7 @@ public static class GradingBuilder
             catch { }
         }
         return $"지표면 재작성 — 소스 {nSrc}개 먼저 · 합성면 {nComp}개 나중(스냅샷 {snap}) · 표면단위 플래그 잔여 {stuck.Count}"
-             + (stuck.Count > 0 ? " ⚠[" + string.Join(" · ", stuck) + "]" : "")
+             + (stuck.Count > 0 ? " ⚠[" + string.Join(" · ", stuck) + "]" : "") + snapT.Text + xml.Text
              + "  ※정의 탭 ⚠는 <작업 한 줄> 단위라 이 값으로 안 잡힌다(2026 API에 읽을 속성 없음 — 조사 확인)";
     }
 
@@ -1892,6 +2288,9 @@ public static class GradingBuilder
     {
         var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
         int hit = 0, snapOk = 0, snapNo = 0, reOk = 0; string first = "";
+        int snapSkip = 0; string skipWhy = "";   // ★[v103.1.6] 스냅샷 재작성을 건너뛴 면(붙여넣기 소스가 지워졌다) — 첫 까닭만 적는다
+        var snapT = new SnapTally();   // 그런 면을 재작성 전에 되찍은 것 · 못 찍은 것 · 되찍은 뒤 바뀐 것(건너뜀 · 실패는 위 값으로 센다)
+        var xmlT = new XmlTally();   // ★[v103.1.5] XML로 만든 면은 굳힌 채 재작성만 — 한 일은 반환 글 끝에 적는다
         string snapState = "";   // 스냅샷 상태 속성이 있으면 첫 표면 것만 남긴다(계측)
         foreach (ObjectId sid in civilDoc.GetSurfaceIds())
         {
@@ -1903,6 +2302,13 @@ public static class GradingBuilder
             try
             {
                 var w = (Autodesk.Civil.DatabaseServices.Surface)tr.GetObject(sid, OpenMode.ForWrite);
+                // ★★★[v103.1.5] XML로 만든 면은 굳힌 채 재작성만 — 그냥 Rebuild하면 원본 파일을 다시 읽고(바뀌어 있으면 그 내용으로 바뀐다),
+                //   스냅샷 재작성은 파일이 없으면 예외다(HandleXmlBacked 설명)
+                if (IsXmlBacked(w))
+                {
+                    if (HandleXmlBacked(w, xmlT)) reOk++;      // 스냅샷 갱신은 일부러 안 한다 — 세지도 않는다(검토 1012 중간 2: 안 한 일을 한 것처럼 적지 않는다)
+                    continue;
+                }
                 // [0807] 스냅샷 갱신이 **실제로 됐는지** 남긴다 — 종전엔 catch{}로 삼켜서
                 //   느낌표가 왜 안 없어지는지 로그로 알 길이 없었다.
                 //
@@ -1910,7 +2316,10 @@ public static class GradingBuilder
                 //   이 함수는 정지 생성의 <b>맨 마지막</b>에 불린다(사용자가 보는 시점).
                 //   스냅샷을 찍고 나서 `Rebuild()`를 하면 표면이 다시 스냅샷보다 새것이 되어
                 //   <b>정확히 이 자리에서</b> 느낌표가 되살아난다. → 짓고 나서 찍는다.
-                try { w.Rebuild(); reOk++; }
+                // ★★★[v103.1.6] 소스가 지워진 우리 면은 재작성 전에 지금 모양을 되찍는다(옛 판이 깨 놓은 스냅샷을 살린다 — CanRebuildSnapshot 위 설명 ③).
+                //   되찍지 못한 면은 재작성도 아래 스냅샷 손질도 하지 않는다(touch = false). 그 밖의 면은 종전과 같은 Rebuild() 한 번이다.
+                bool touch = true;
+                try { if (RebuildGuarded(w, snapT)) reOk++; else touch = false; }
                 catch (System.Exception ex) { if (first.Length == 0) first = ex.Message; }
 
                 // ★★[v32.4 · 검토 반영] <b>스냅샷이 없는데 <c>RebuildSnapshot</c>을 부르면 반드시 실패한다</b>
@@ -1918,15 +2327,25 @@ public static class GradingBuilder
                 //   종전엔 <see cref="Freeze"/>와 달리 여기엔 <c>CreateSnapshot</c>이 없어, 스냅샷 없는 표면에서는
                 //   <b>매번 확정 실패</b>였다 — 로그의 '스냅샷 실패' 숫자가 그래서 줄지 않았다.
                 //   그리고 아직 구식이면 스냅샷 호출 자체가 오류 조건이므로 한 번 더 짓고 간다.
+                if (touch)
                 try
                 {
                     if (w.IsOutOfDate) w.Rebuild();
-                    if (w.HasSnapshot) w.RebuildSnapshot(); else w.CreateSnapshot();
+                    // ★★★[v103.1.6] 스냅샷이 있으면 RebuildSnapshotSafe로 — 붙여넣기 소스가 지워진 면은 부르지 않고(건너뜀), 실패하면 그 자리에서 되찍는다.
+                    //   종전엔 실패를 세기만 하고 부른 쪽이 커밋했다 — 실패한 스냅샷 재작성을 커밋하면 그다음 재작성에서 Civil이 죽는다(1013 실측 · CanRebuildSnapshot 위 설명).
+                    //   소스가 살아 있는 면은 종전과 같은 호출(RebuildSnapshot 한 번)이다.
+                    if (!w.HasSnapshot) { w.CreateSnapshot(); snapOk++; }
+                    else
+                    {
+                        int r = RebuildSnapshotSafe(w, out string sn);
+                        if (r > 0) snapOk++;
+                        else if (r == 0) { snapSkip++; if (skipWhy.Length == 0) skipWhy = sn; }
+                        else { snapNo++; if (first.Length == 0) first = sn; }
+                    }
                     // ★★[v32.10] <b>여기서 또 짓지 않는다.</b> v32.5엔 트레일링 <c>Rebuild</c>가 있었는데,
                     //   그 근거(<c>구식=True</c>)는 <b>스냅샷이 정의 중간에 있을 때의 증상</b>이었다.
                     //   v32.9에서 스냅샷을 맨 끝으로 옮긴 뒤로는 <b>찍고 나서 또 지으면 스냅샷이 구식</b>이 된다
                     //   (JACK 실측: 붙여넣기 느낌표는 사라지고 스냅샷 느낌표만 남았다). <b>지은 뒤 찍고, 끝.</b>
-                    snapOk++;
                 }
                 catch (System.Exception ex) { snapNo++; if (first.Length == 0) first = ex.Message; }
 
@@ -1977,8 +2396,9 @@ public static class GradingBuilder
             catch (System.Exception ex) { if (first.Length == 0) first = ex.Message; }
         }
         return $"'{baseName}' 표면 {hit}개 — 재작성 {reOk} · 스냅샷 갱신 {snapOk}/실패 {snapNo}" +
+               (snapSkip > 0 ? $"/건너뜀 {snapSkip}[{skipWhy}]" : "") + snapT.Text +
                (snapState.Length > 0 ? " ·" + snapState : "") +
-               (first.Length > 0 ? $" · 첫 사유: {first}" : "");
+               (first.Length > 0 ? $" · 첫 사유: {first}" : "") + xmlT.Text;
     }
 
     /// <summary>이름(또는 이름_숫자)의 지표면 존재 여부 — DHNORI/DHINFRA 실행 게이트 ③용.</summary>

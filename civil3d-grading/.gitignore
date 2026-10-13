@@ -30,5 +30,10 @@ DHWALLDL_순수옹벽.xml
 
 # 옹벽 합성(DHWALLCOMP) — 실행마다 덮어쓴다(합성 xml은 정지면 전체라 수십 MB)
 DHWALLCOMP_입력.txt
+DHWALLCOMP_입력_옹벽*.txt
 DHWALLCOMP_합성.xml
 DHWALLCOMP_진단.log
+
+# LandXML로 만드는 면의 원본(v103.1.5 — 도면마다 폴더 · 합성 하나가 수십 MB) · 옛 판 고정 이름 파일을 물린 것
+DH_XML/
+*.옛판.xml

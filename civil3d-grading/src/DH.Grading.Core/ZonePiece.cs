@@ -73,12 +73,22 @@ public static class ZonePiece
         return wallNow || slopeConv ? Act.WholeOnly : Act.Ask;
     }
 
+    /// <summary>★★★[v103.1.3 · JACK 1007 «되돌린 자리에서 여전히 주황 조각이었던 부분으로 잘려 있는데 이게 정상이야?»] 클릭선을 <b>끊을지</b> 가르는 잣대 —
+    /// 구배 · 소단이 같고 종류(처음 그대로 / 옹벽 / 직접 사면 변환)도 같으면 <b>같은 조각</b>이다.
+    /// <para>v103.1.1은 «값을 정한 규칙»까지 견줘(<see cref="State.Same"/>), 기본값으로 되돌린 구간(값은 주변과 같고 규칙 기록만 남은 자리)의 경계에서도 끊었다 —
+    /// 현장 1007: 성토 클릭선 5줄이 14조각(구배는 전부 1:1.5). 규칙이 어디서 왔는지는 <b>고르는 데 아무 차이도 안 만든다</b>(할 일은 종류가 정한다).</para></summary>
+    public static bool SameForPick(State a, State b, int bench, double baseSlope, double baseW, double gateSlope)
+        => Math.Abs(a.Slope - b.Slope) < 1e-9 && Math.Abs(a.BenchW - b.BenchW) < 1e-9
+           && Classify(a, bench, baseSlope, baseW, gateSlope) == Classify(b, bench, baseSlope, baseW, gateSlope);
+
     /// <summary>선을 상태가 바뀌는 자리에서 끊는다 — 꼭짓점이 아니라 <b>바뀌는 그 자리</b>(변 위를 <paramref name="step"/> 간격으로 재고 <paramref name="tol"/>까지 좁힘)에
     /// 점을 넣어 양쪽 조각이 나눠 갖는다. 닫힌 선은 이음매에서 갈린 첫 · 끝 조각(같은 상태)을 다시 잇는다.
-    /// <paramref name="dropped"/> = 길이 1mm가 안 돼 버린 조각 수(구간 최소 길이 때문에 정상이면 0).</summary>
+    /// <paramref name="dropped"/> = 길이 1mm가 안 돼 버린 조각 수(구간 최소 길이 때문에 정상이면 0).
+    /// <paramref name="same"/> = 두 상태를 한 조각으로 볼 잣대(없으면 <see cref="State.Same"/> — 규칙까지 같아야 한다). 조각에 들려 보내는 상태는 그 조각 <b>첫 점</b>의 것이다.</summary>
     public static List<(List<Point3> Pts, State St)> Split(IReadOnlyList<Point3> line, Func<double, double, State> at,
-        out int dropped, double step = 0.25, double tol = 1e-6)
+        out int dropped, double step = 0.25, double tol = 1e-6, Func<State, State, bool>? same = null)
     {
+        same ??= static (x, y) => x.Same(y);
         var res = new List<(List<Point3>, State)>();
         dropped = 0;
         if (line == null || line.Count == 0) return res;
@@ -93,23 +103,26 @@ public static class ZonePiece
         {
             var sq = at(q.X, q.Y);
             int guard = 0;
-            while (!sPrev.Same(sq) && guard++ < 64)
+            while (!same(sPrev, sq) && guard++ < 64)
             {
                 var lo = pPrev; var hi = q;
                 while (D(lo, hi) > tol)
                 {
                     var mid = Lerp(lo, hi, 0.5);
-                    if (at(mid.X, mid.Y).Same(sPrev)) lo = mid; else hi = mid;
+                    if (same(at(mid.X, mid.Y), sPrev)) lo = mid; else hi = mid;
                 }
                 var sc = at(hi.X, hi.Y);
-                if (sc.Same(sPrev)) { sc = sq; hi = q; }      // 좁히다 놓쳤다(잰 값이 흔들림) — 표본 자리에서 끊는다
+                if (same(sc, sPrev)) { sc = sq; hi = q; }     // 좁히다 놓쳤다(잰 값이 흔들림) — 표본 자리에서 끊는다
                 if (D(cur[^1], hi) > 1e-12) cur.Add(hi);
                 res.Add((cur, sPrev));
                 cur = new List<Point3> { hi };
                 pPrev = hi; sPrev = sc;
             }
             if (vertex && D(cur[^1], q) > 1e-12) cur.Add(q);
-            pPrev = q; sPrev = sq;
+            // ★[v103.1.3] 조각의 상태는 그 조각 <b>첫 점</b>의 것으로 둔다 — 한 조각으로 보는 잣대가 느슨하면(SameForPick) 조각 안에서 규칙만 다른 상태가 이어지는데,
+            //   견주는 기준(sPrev)을 그때마다 갈아 끼우면 조각이 끝날 때 들려 보내는 상태가 «마지막 점»의 것이 된다. 값 · 종류는 어느 쪽이든 같다(잣대가 그것을 견준다)
+            pPrev = q;
+            if (!same(sPrev, sq)) sPrev = sq;                 // 한 걸음에서 64번을 넘겨 못 다 끊었다(있을 수 없는 일) — 기준을 지금 점으로 돌려 다음 걸음의 좁히기 전제(lo는 기준과 같다)를 지킨다
         }
         for (int i = 1; i < line.Count; i++)
         {
@@ -123,7 +136,7 @@ public static class ZonePiece
 
         static double Len(List<Point3> p) { double s = 0; for (int i = 1; i < p.Count; i++) s += D(p[i - 1], p[i]); return s; }
         bool closed = line.Count >= 3 && Math.Abs(line[0].X - line[^1].X) < 0.05 && Math.Abs(line[0].Y - line[^1].Y) < 0.05;
-        if (closed && res.Count >= 2 && res[0].Item2.Same(res[^1].Item2))
+        if (closed && res.Count >= 2 && same(res[0].Item2, res[^1].Item2))
         {
             var merged = new List<Point3>(res[^1].Item1);
             for (int i = 1; i < res[0].Item1.Count; i++) merged.Add(res[0].Item1[i]);

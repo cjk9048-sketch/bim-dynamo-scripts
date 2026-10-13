@@ -138,8 +138,48 @@ public static class WallPlace
             var a = line[i]; var b = line[i + 1];
             return new Point3(a.X + (b.X - a.X) * u, a.Y + (b.Y - a.Y) * u, a.Z + (b.Z - a.Z) * u);
         }
+        // ★★★[v103.1.3 · JACK 1007 «화면 · 기록 둘 다 고침» — 현장 1007: 옹벽 [70.09 ~ 122.19] 52.1m인데 주황 조각은 [70.04 ~ 122.24] 52.2m]
+        //   곁(<paramref name="tol"/>) 띠는 끝이 둥글어, 선이 옹벽 끝을 지나 이어지면 조각이 옹벽 끝보다 더 나갔다(곧은 선 tol · 예각 모서리를 돌면 tol/sin). 그 조각을 사면으로 되돌리며
+        //   구배를 바꾸면 옹벽보다 넓은 구간이 생기고, 그 옆 조각 끝은 옹벽 끝에서 떨어져 있었다. → 조각 끝 곁(4·tol 안)에 <b>옹벽 안쪽 변의 끝점</b>이 선 위(tol 안)에 놓여 있으면
+        //   조각 끝을 그 점으로 당긴다. 선이 옹벽에서 옆으로 멀어져 끝난 조각 끝 · 선이 먼저 끝난 끝은 곁에 그 끝점이 없어 그대로다. 곁 띠는 «이 옹벽이 이 선 위에 있나»를 가리는 데만 쓴다
+        double ParamNear(double x, double y, double e, double w)                  // 선 위 e 곁(±w) 안에서 (x,y)에 가장 가까운 자리 — 곁에 없으면 e 그대로
+        {
+            double best = double.MaxValue, bt = e;
+            for (int i = 0; i + 1 < n; i++)
+            {
+                if (cum[i + 1] < e - w || cum[i] > e + w) continue;
+                var a = line[i]; var b = line[i + 1];
+                double ex = b.X - a.X, ey = b.Y - a.Y, l2 = ex * ex + ey * ey;
+                double u = l2 < 1e-18 ? 0 : ((x - a.X) * ex + (y - a.Y) * ey) / l2;
+                u = u < 0 ? 0 : (u > 1 ? 1 : u);
+                double t = cum[i] + Math.Sqrt(l2) * u;
+                if (t < e - w || t > e + w) continue;
+                double px = a.X + ex * u, py = a.Y + ey * u, d2 = (x - px) * (x - px) + (y - py) * (y - py);
+                if (d2 < best) { best = d2; bt = t; }
+            }
+            return bt;
+        }
+        double Pull(double e, IReadOnlyList<Point3> sgp)
+        {
+            double best = e, bestGap = double.MaxValue;
+            for (int k = 0; k < 2; k++)
+            {
+                var p = k == 0 ? sgp[0] : sgp[sgp.Count - 1];
+                double t = ParamNear(p.X, p.Y, e, 4 * tol);
+                var q = At(t);
+                double d2 = (q.X - p.X) * (q.X - p.X) + (q.Y - p.Y) * (q.Y - p.Y);
+                if (d2 > tol * tol) continue;                                     // 그 끝점은 e 곁의 선 위(곁 띠 안)에 없다
+                double gap = Math.Abs(t - e);
+                if (gap < bestGap) { bestGap = gap; best = t; }
+            }
+            return best;
+        }
         var lg = Ls(line);
-        var cuts = new List<(double A, double B, int No)>();
+        // ★★[v103.1.3 · 하네스 S153이 잡음 — v103.1부터 있던 틈] 닫힌 선(첫 점 = 끝 점)의 이음매 점은 선 위 자리가 <b>둘</b>(0 · L)인데 ParamOn은 늘 0을 준다 —
+        //   옹벽이 이음매를 넘으면 뒤쪽 조각 [y, L]이 (0, y)로 읽혀 <b>옹벽 아닌 자리가 통째로 옹벽 조각</b>이 됐다(둘레 268m · 옹벽 13m → 옹벽 조각 7 + 255m).
+        //   조각의 <b>가운데 점</b>이 어느 쪽에 놓였는지로 가른다(PieceSpans) — 띠와 만난 조각은 선을 따라 이어진 한 토막이라 가운데가 두 끝 사이에 있어야 한다
+        bool closedLine = n >= 3 && Math.Abs(line[0].X - line[n - 1].X) < 1e-9 && Math.Abs(line[0].Y - line[n - 1].Y) < 1e-9;
+        var cuts = new List<(double A, double B, int No, double Min)>();
         if (lg != null)
             foreach (var (no, seg) in walls)
             {
@@ -148,12 +188,31 @@ public static class WallPlace
                 if (sg == null) continue;
                 Geometry inter;
                 try { inter = lg.Intersection(sg.Buffer(tol)); } catch { continue; }
+                var spans = new List<(double A, double B)>();
                 for (int g = 0; g < inter.NumGeometries; g++)
                 {
-                    if (inter.GetGeometryN(g) is not LineString piece || piece.Length <= minLen) continue;
+                    if (inter.GetGeometryN(g) is not LineString piece || piece.Length <= 1e-9) continue;
                     double a = ParamOn(piece.StartPoint.X + ox, piece.StartPoint.Y + oy), b = ParamOn(piece.EndPoint.X + ox, piece.EndPoint.Y + oy);
-                    if (b < a) (a, b) = (b, a);
-                    if (b - a > minLen) cuts.Add((a, b, no));
+                    var mc = new NetTopologySuite.LinearReferencing.LengthIndexedLine(piece).ExtractPoint(piece.Length * 0.5);
+                    foreach (var (sa, sb) in PieceSpans(a, b, ParamOn(mc.X + ox, mc.Y + oy), L, closedLine))
+                    {
+                        double pa = Pull(sa, seg), pb = Pull(sb, seg);
+                        if (pb - pa > 1e-6) spans.Add((pa, pb));
+                    }
+                }
+                // 닫힌 선의 이음매에 닿은 두 토막(0에서 시작 · L에서 끝)은 <b>한 옹벽 자리</b>다 — «끝만 닿음»(minLen)은 둘을 합친 길이로 잰다.
+                //   따로 재면 옹벽이 이음매를 0.3m만 넘을 때 그 0.3m가 사면 토막으로 떨어져 나간다
+                double seamLen = 0;
+                if (closedLine)
+                {
+                    double l0 = 0, l1 = 0;
+                    foreach (var (sa, sb) in spans) { if (sa < 1e-9) l0 = Math.Max(l0, sb - sa); if (L - sb < 1e-9) l1 = Math.Max(l1, sb - sa); }
+                    if (l0 > 0 && l1 > 0) seamLen = l0 + l1;
+                }
+                foreach (var (sa, sb) in spans)
+                {
+                    bool seamPart = seamLen > 0 && (sa < 1e-9 || L - sb < 1e-9);
+                    if ((seamPart ? seamLen : sb - sa) > minLen) cuts.Add((sa, sb, no, seamPart ? 1e-6 : minLen));
                 }
             }
         if (cuts.Count == 0) { res.Add((line.ToList(), 0)); return res; }
@@ -166,15 +225,37 @@ public static class WallPlace
             return p;
         }
         double cur = 0;
-        foreach (var (a0, b0, no) in cuts)
+        foreach (var (a0, b0, no, min) in cuts)
         {
             double a = Math.Max(a0, cur), b = b0;
-            if (b - a <= minLen) continue;                       // 앞 옹벽과 겹친 나머지 — 버림
+            if (b - a <= min) continue;                          // 앞 옹벽과 겹친 나머지 — 버림(이음매에 닿은 토막은 짧아도 그 옹벽 자리다)
             if (a - cur > 1e-6) res.Add((Sub(cur, a), 0));
             res.Add((Sub(a, b), no));
             cur = b;
         }
         if (L - cur > 1e-6) res.Add((Sub(cur, L), 0));
+        return res;
+    }
+
+    /// <summary>★[v103.1.3] 곁 띠와 만난 조각 하나를 선 위 토막으로 — 두 끝의 자리(<paramref name="a"/> · <paramref name="b"/>)와 조각 가운데 점의 자리(<paramref name="m"/>)를 받는다.
+    /// <para>열린 선이면 [작은 값, 큰 값] 하나. 닫힌 선(첫 점 = 끝 점)은 이음매 점의 자리가 0이기도 L이기도 해서 끝 자리만으로는 못 가른다 —
+    /// 가운데가 놓인 쪽이 그 조각이다: 한 끝이 이음매면 가운데가 다른 끝보다 앞이면 [0, x] · 뒤면 [x, L] · 두 끝이 다 이음매면 한 바퀴 [0, L] ·
+    /// 두 끝이 다 이음매가 아닌데 가운데가 그 사이에 없으면 조각이 이음매를 넘어 한 줄로 온 것이라 [큰 값, L]과 [0, 작은 값] 둘로 준다.</para></summary>
+    public static List<(double A, double B)> PieceSpans(double a, double b, double m, double L, bool closedLine)
+    {
+        var res = new List<(double, double)>(2);
+        if (!closedLine) { res.Add((Math.Min(a, b), Math.Max(a, b))); return res; }
+        bool sa = a < 1e-9 || L - a < 1e-9, sb = b < 1e-9 || L - b < 1e-9;      // 이음매 점인가
+        if (sa && sb) { res.Add((0, L)); return res; }
+        if (sa || sb)
+        {
+            double x = sa ? b : a;                                               // 이음매가 아닌 끝
+            res.Add(m < x ? (0, x) : (x, L));
+            return res;
+        }
+        double lo = Math.Min(a, b), hi = Math.Max(a, b);
+        if (m > lo && m < hi) res.Add((lo, hi));
+        else { res.Add((hi, L)); res.Add((0, lo)); }
         return res;
     }
 }
