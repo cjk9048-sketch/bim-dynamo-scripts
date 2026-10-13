@@ -78,6 +78,19 @@ public sealed class RibbonApp : IExtensionApplication
         //   시작이 끝난 뒤 <b>한 번 더 확인한다</b>. 여기(Initialize)가 아니라 Idle인 이유는 위와 같다 —
         //   시작 도중에는 창을 만지는 것도 위험하다.
         AcadApp.Idle += OnIdleCloseStrata;
+
+        // ★★★[v103.1.5 · JACK 1012 «지금 바로 고침»] 옛 판(v100.3~v103.1.4)의 고정 이름 XML 원본을 물린다(이름 바꾸기) — 시작 뒤 한 번.
+        //   옛 판이 지은 옹벽 합성 · 순수옹벽은 재작성 때 그 파일을 다시 읽는데, 파일은 실행마다 덮어써서 대부분 «남의 내용»이다(1012 실측 — XmlStore.RetireLegacy 설명).
+        //   명령을 하나도 안 돌린 도면에서 손으로 «재작성»을 눌러도 틀린 모양이 되지 않게, 첫 명령이 아니라 여기서 한다(파일 이름만 바꾼다 — 도면은 안 건드린다).
+        //   (잰 것은 화면 없는 Civil의 API Rebuild — 파일이 없으면 «파일 없음»으로 끝나고 삼각형은 남는다. 화면의 «재작성» 버튼이 같은 길인지는 못 쟀다)
+        AcadApp.Idle += OnIdleRetireXml;
+    }
+
+    /// <summary>시작 직후 한 번 — 옛 판의 고정 이름 XML 원본을 «.옛판.xml»로.</summary>
+    private void OnIdleRetireXml(object? sender, System.EventArgs e)
+    {
+        AcadApp.Idle -= OnIdleRetireXml;
+        try { string r = XmlStore.RetireLegacy(); if (r.Length > 0) DiagLog.Append($"\n■ {System.DateTime.Now:HH:mm:ss} 시작 — {r}\n"); } catch { }
     }
 
     /// <summary>시작 직후 한 번 — 사용자가 안 눌렀는데 떠 있는 지층 구성 창을 닫는다.</summary>

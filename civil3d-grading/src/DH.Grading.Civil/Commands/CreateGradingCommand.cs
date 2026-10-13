@@ -40,6 +40,8 @@ internal enum GradeMode { Fresh, Append, RerunLast }
 /// 붙여넣기 3줄을 지우니 형상은 온전했지만(삼각형 64978 → 64978) <b>⚠는 그대로였고</b>,
 /// 게다가 <c>스냅샷구식=True</c>가 <b>처음으로</b> 떴다 — 정의에 스냅샷을 다시 구울 재료가 없어졌기 때문이다.
 /// <b>증상은 그대로인데 상태만 나빠졌다.</b> 되돌린다.</para>
+/// <para>★★★[v103.1.6 · 1013 화면 없는 Civil 실측] <b>켜지 말 것.</b> 붙여넣기 줄을 지워 스냅샷 줄만 남은 면은
+/// 스냅샷 재작성(RebuildSnapshot)이 «성공»한 뒤 <b>그다음 Rebuild()에서 Civil이 죽는다</b>(0xC0000005) — <see cref="GradingBuilder.CanRebuildSnapshot"/> 위 설명.</para>
 internal static class GradeFlags { public const bool StripPasteOps = false; }
 
 public sealed class CreateGradingCommand
@@ -351,6 +353,137 @@ public sealed class CreateGradingCommand
         catch { }
     }
 
+    // ══ ★★★[v103.1.4 · JACK 1008 «재생성이 좀 오래 걸리는데 시간을 줄일 방법 없어?» → A «옹벽을 값 그대로 되돌릴 때 재생성 생략»] ══
+    //   현장 1007 실측: 정지면 재생성 16초(교선 · 경계주입 10초) + 남은 옹벽 다시 짓기 2~3초/개. 옹벽을 기본값 그대로 사면으로 되돌리면 v103.1.3부터
+    //   구간 기록이 안 바뀐다 — 다시 만들어도 <b>똑같은 정지면</b>이 나온다. 그때는 합성을 풀고 그 옹벽만 뺀 뒤(들머리가 이미 한다) 남은 옹벽만 다시 합성한다.
+    //   <b>«똑같다»는 짐작하지 않고 견준다</b> — 끝까지 성공한 마지막 정지면 생성이 무엇으로 그 면을 지었는지(계획선 · 원지반 지문 · 제원 전부 · 구간)를 세션에 적어 두고,
+    //   지금 다시 지으면 쓸 값과 하나하나 견준다. 정지면 객체(핸들)도 그때 그 면이어야 한다. 하나라도 다르거나 적어 둔 것이 없으면(Civil을 다시 켰다) 종전처럼 다시 만든다.
+    sealed class GradeSnapshot
+    {
+        public string Doc = "", Plan = "", Ground = "", P0 = "";
+        public System.IntPtr DbPtr;                 // 그 도면 데이터베이스 — 닫았다 다시 연 도면(이름 · 핸들이 우연히 같은)을 가린다(검토 1012 낮음)
+        public GradingParams Params = new();
+        public System.Collections.Generic.List<SlopeZone> Cut = new(), Fill = new();
+        public System.Collections.Generic.List<Point3> Boundary = new();
+        public ulong GroundSig;
+    }
+    static GradeSnapshot? _lastGrade;
+
+    static System.Collections.Generic.List<SlopeZone> CopyZones(System.Collections.Generic.IEnumerable<SlopeZone>? src)
+    {
+        var l = new System.Collections.Generic.List<SlopeZone>();
+        if (src != null)
+            foreach (var z in src)
+                if (z != null) l.Add(new SlopeZone { T0 = z.T0, T1 = z.T1, Partial = z.Partial, Rules = new(z.Rules), Ref = z.Ref });
+        return l;
+    }
+
+    //   견주기(제원 · 구간)는 Core의 GradeSame — AutoCAD에 안 기대는 순수 함수라 하네스 S154가 같은 함수를 잰다
+    /// <summary>지금 다시 지으면 쓸 것이 끝까지 성공한 마지막 정지면 생성과 같은가 — 같으면 빈 문자열 · 다르면 처음 다른 것.</summary>
+    static string SameAsLastGrade(string doc, System.IntPtr dbPtr, string plan, string ground, string p0Now, System.Collections.Generic.List<Point3> bNow, GradingParams pNow,
+        System.Collections.Generic.List<SlopeZone> cutNow, System.Collections.Generic.List<SlopeZone> fillNow, ulong groundSigNow)
+    {
+        var s = _lastGrade;
+        if (s == null) return "이 세션에 끝까지 성공한 정지면 생성 기록이 없다(Civil을 다시 켰거나 아직 안 돌렸다 · 지난 생성이 중간에 멈췄다)";
+        if (!string.Equals(s.Doc, doc, System.StringComparison.OrdinalIgnoreCase) || s.DbPtr != dbPtr) return "도면이 다르다(다른 도면이거나 닫았다 다시 열었다)";
+        if (s.Plan != plan) return "계획선이 다른 객체다";
+        if (s.Ground != ground) return "원지반 표면이 다른 객체다";
+        if (p0Now.Length == 0 || s.P0 != p0Now) return $"정지면이 그때 그 면이 아니다(그때 {s.P0} · 지금 {(p0Now.Length == 0 ? "없음" : p0Now)})";
+        if (s.GroundSig != groundSigNow) return "원지반이 바뀌었다(삼각형 지문이 다르다)";
+        if (s.Boundary.Count != bNow.Count) return $"계획선 점 수 {s.Boundary.Count} → {bNow.Count}";
+        for (int i = 0; i < bNow.Count; i++)
+            if (!s.Boundary[i].Equals(bNow[i])) return $"계획선 {i + 1}번 점이 다르다";
+        string pd = GradeSame.ParamsDiff(s.Params, pNow);
+        if (pd.Length > 0) return "제원이 다르다 — " + pd;
+        string zd = GradeSame.ZonesDiff(s.Cut, cutNow, GradingSettings.WallGateSlope);
+        if (zd.Length > 0) return "절토 " + zd;
+        zd = GradeSame.ZonesDiff(s.Fill, fillNow, GradingSettings.WallGateSlope);
+        if (zd.Length > 0) return "성토 " + zd;
+        return "";
+    }
+
+    /// <summary>★★[v103.1.4 · 검토 1012 높음] <b>되돌리기만의 전제</b> — 지금 «정지면_DH»가 <b>합성이 아닌 그 면 자신</b>인가.
+    /// <para>합성 표지가 가리키는 핸들(<see cref="WallCompositeCommand.CurrentP0Handle"/>)로 견주면 안 된다 — 합성 전 면이 없어진 도면(손으로 지웠거나 «새로 시작»이 중간에 터졌다)에서는
+    /// 들머리의 합성 풀기가 «풀 수 없다 — 정지면을 다시 지으면 새 면으로 바뀐다»고 하고 넘어가는데(Ok), 표지 핸들은 여전히 그때 그 면을 가리켜 «같다»가 나온다.
+    /// 그러면 방금 목록에서 뺀 옹벽이 <b>든 합성이 그대로</b> 정지면_DH로 남는다. 다시 짓는 길만이 거기서 빠져나온다.</para>
+    /// 함께 본다: 합성 전 면이 따로 남아 있지 않다 · 옹벽 목록을 읽을 수 있다 · «대기» 옹벽이 없다(재생성 1단계가 치우던 것) · 목록 머리의 확인된 정지면이 이 면이다(DHWALLCOMP가 거절하지 않게).</summary>
+    static (string P0, ObjectId Id, string Why) PlainP0(Database db, Transaction tr, ObjectId groundId)
+    {
+        var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+        var (ids, _) = WallCompositeCommand.Candidates(civilDoc, tr, WallCompositeCommand.PlanName, groundId);
+        if (ids.Count != 1) return ("", ObjectId.Null, $"정지면_DH가 {ids.Count}개다");
+        if (WallCompositeCommand.IsComposite(tr, tr.GetObject(ids[0], OpenMode.ForRead)))
+            return ("", ObjectId.Null, "정지면_DH가 아직 옹벽 합성이다(합성을 못 풀었다 — 합성 전 면이 없다) · 다시 지어야 새 면으로 바뀐다");
+        var (bIds, bNames) = WallCompositeCommand.Candidates(civilDoc, tr, WallCompositeCommand.BaseName, groundId);
+        if (bIds.Count > 0) return ("", ObjectId.Null, $"합성 전 면({string.Join(", ", bNames)})이 따로 남아 있다(짝이 어긋남)");
+        string h = ids[0].Handle.ToString();
+        if (!WallListStore.TryLoad(db, tr, out var head, out var walls, out string lwhy)) return ("", ObjectId.Null, "옹벽 목록을 못 읽었다 — " + lwhy);
+        var pend = walls.Where(w => w.State != 1).Select(w => w.No).ToList();
+        if (pend.Count > 0) return ("", ObjectId.Null, $"«대기» 옹벽({string.Join(",", pend)})이 남아 있다 — 정지면을 다시 지으며 치운다");
+        if (head.VerifiedP0 != h) return ("", ObjectId.Null, $"옹벽 목록의 확인된 정지면({(head.VerifiedP0.Length > 0 ? head.VerifiedP0 : "없음")})이 지금 정지면({h})이 아니다");
+        return (h, ids[0], "");
+    }
+
+    /// <summary>★[v103.1.4] <b>되돌리기만</b> — 들머리가 합성을 풀고 덮인 옹벽을 뺀 뒤, 정지면을 다시 안 만들고 끝낸다.
+    /// 남은 옹벽(보류 아닌 것)이 있으면 합성을 이어 태우고(정지면이 그대로라 옹벽을 다시 짓지 않는다 · 끝나면 토량) · 없으면 여기서 토량을 재 알린다.</summary>
+    static void FinishRevertOnly(Document doc, ObjectId groundId, ObjectId p0Id, GradingSettings.WallRerunInfo spec, long checkMs, string compLog)
+    {
+        var ed = doc.Editor; var db = doc.Database;
+        int n = 0; string p0h = p0Id.IsNull ? "" : p0Id.Handle.ToString();
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            if (WallListStore.TryLoad(db, tr, out _, out var ws, out _)) n = ws.Count(w => w.State == 1 && w.Hold.Length == 0);
+            tr.Commit();
+        }
+        catch { }
+        _rerunEndDone = true;                       // 출구 하나(RerunEpilogue)가 «중간에 멈췄다»로 읽지 않게 — 여기가 끝이다
+        GradingSettings.LastGradeOk = true; GradingSettings.LastRegenSkipped = true;
+        string nos = string.Join(",", spec.CoveredNos);
+        string tail, snap = "";
+        if (n > 0)
+        {
+            // ★[검토 1012 중간] 토량 표시는 합성이 실제로 돌 때까지 켜 둔다 — 못 태워도(아래 catch) 손으로 친 DHWALLCOMP가 토량을 낸다
+            GradingSettings.AutoCompDoc = doc.Name; GradingSettings.AutoCompNo = 0; GradingSettings.AutoCompWantVolume = true;
+            try
+            {
+                doc.SendStringToExecute("DHWALLCOMP ", true, false, true);
+                tail = $"남은 옹벽 {n}개만 다시 합성을 태움(옹벽은 다시 안 짓는다 · 끝나면 토량)";
+                try { ed.WriteMessage($"\n[DHGRADE] 옹벽 {nos}을 사면으로 되돌렸습니다 — 구간 · 제원 · 원지반이 그대로라 정지면은 다시 만들지 않고, 남은 옹벽 {n}개만 다시 합성합니다(옹벽 하나에 약 20초)…"); } catch { }
+            }
+            catch (System.Exception sx)
+            {
+                GradingSettings.AutoCompDoc = "";
+                tail = $"⚠남은 옹벽 {n}개 다시 합성을 못 태웠다({sx.GetType().Name})";
+                try { AcadApp.ShowAlertDialog($"옹벽 {nos}을 사면으로 되돌렸지만, 남은 옹벽 {n}개의 다시 합성을 이어 태우지 못했습니다({sx.GetType().Name}).\n명령줄에 DHWALLCOMP를 치면 다시 합성하고 토량도 나옵니다."); } catch { }
+            }
+        }
+        else
+        {
+            GradingSettings.AutoCompWantVolume = false;   // 다시 합성할 옹벽이 없다 — 토량은 여기서 잰다(지난 합성 실패가 켜 둔 표시를 넘기지 않는다)
+            string vol;
+            try { vol = p0Id.IsNull ? "토량: 정지면_DH를 못 찾아 재지 않았습니다" : ComputeVolumes(db, groundId, p0Id); }
+            catch (System.Exception vx) { vol = $"토량: 재지 못했습니다({vx.GetType().Name})"; }
+            // 정지면 생성 끝과 같게 — 토량 임시 표면을 만들고 지우면 정지면이 다시 «구식»(느낌표)이 될 수 있어 마무리 재작성을 한 번 돈다(검토 1012 열린 물음 · DoGrade 끝과 같은 함수)
+            try { snap = GradingBuilder.RebuildSurfacesStaged(db); } catch (System.Exception rx) { snap = "재작성 실패 — " + rx.GetType().Name; }
+            tail = "남은 옹벽 없음 · " + vol.Replace("\n", " · ");
+            try { ed.WriteMessage($"\n[DHGRADE] 옹벽 {nos}을 사면으로 되돌렸습니다 — 구간 · 제원 · 원지반이 그대로라 정지면은 다시 만들지 않았습니다  [DH.Grading {GradingSettings.Version}]\n  {vol.Replace("\n", " · ")}"); } catch { }
+            try { ed.Regen(); } catch { }
+            try { AcadApp.ShowAlertDialog($"옹벽 {nos}을 사면으로 되돌렸습니다.\n(구간 · 제원 · 원지반이 그대로라 정지면은 다시 만들지 않았습니다)\n\n{vol}"); } catch { }
+        }
+        try { GradingPalette.Refresh(); } catch { }
+        // 로그는 새 판으로 연다(폴리곤만 길과 같게) — 안 열면 사면 변환이 남긴 줄(AppendCarry)이 다음 정지면 생성의 로그 머리에 붙어 그 실행 것처럼 보인다(검토 1012 낮음)
+        try
+        {
+            DiagLog.Reset($"[DHGRADE 진단] {System.DateTime.Now:yyyy-MM-dd HH:mm:ss}  [DH.Grading {GradingSettings.Version}]\n"
+                        + $"■ <b>되돌리기만</b> — 정지면을 다시 안 만들었다(계획선 · 원지반 지문 · 제원 · 구간이 끝까지 성공한 마지막 정지면 생성과 같고 정지면_DH {p0h}가 그때 그 면이다 · 견주기 {checkMs}ms)\n"
+                        + (compLog.Length > 0 ? $"  [옹벽 합성] {compLog}\n" : "")
+                        + $"  옹벽 {nos} 뺌 · {tail}\n"
+                        + (snap.Length > 0 ? "  정지면 마무리 재작성: " + snap.Replace("\n", " · ") + "\n" : ""));
+        }
+        catch { }
+    }
+
     /// <summary>★★★[v103.1 · 검토 v103.1 높음 3 · 새 중간 2] 정지면 생성이 끝까지 성공한 뒤 — 목록 머리에 확인된 P0 · 남은 옹벽이 서 있던 단 그대로인지
     /// (같은 경계 · 제원 · 구간으로 다시 지은 단 링 — 번들을 다시 읽지 않는다) · 그대로인 옹벽은 DHWALLCOMP로 다시 짓고 합성(줄 세움) · 움직였으면 보류(지우지 않음).</summary>
     static (string Note, int Keep, int Held) WallRerunEnd(Document doc, Database db, GradeMode mode, string region, ObjectId finalSurfId,
@@ -397,9 +530,10 @@ public sealed class CreateGradingCommand
         string note = "";
         if (keep > 0)
         {
-            GradingSettings.AutoCompDoc = doc.Name; GradingSettings.AutoCompNo = 0;
+            // ★[v103.1.4 · C] 합성 전 토량을 안 쟀으므로(DoGrade 끝) 합성이 끝나면 반드시 토량을 재게 한다 — «다시 지은 옹벽 수»에 기대지 않는다
+            GradingSettings.AutoCompDoc = doc.Name; GradingSettings.AutoCompNo = 0; GradingSettings.AutoCompWantVolume = true;
             try { doc.SendStringToExecute("DHWALLCOMP ", true, false, true); note = $"남은 옹벽 {keep}개 — 이어서 새 정지면에 다시 짓고 합성합니다(옹벽 하나에 약 30초)"; }
-            catch (System.Exception sx) { GradingSettings.AutoCompDoc = ""; note = $"⚠남은 옹벽 {keep}개 다시 합성을 못 태웠다({sx.GetType().Name}) — 명령줄에 DHWALLCOMP를 치세요"; }
+            catch (System.Exception sx) { GradingSettings.AutoCompDoc = ""; note = $"⚠남은 옹벽 {keep}개 다시 합성을 못 태웠다({sx.GetType().Name}) — 명령줄에 DHWALLCOMP를 치세요(토량도 그때 다시 나옵니다)"; }
         }
         if (held > 0)
             note = $"⚠옹벽 {held}개를 보류했다 — 서 있던 단이 움직였다: {string.Join(" · ", holdTxt)} — 합성에서 뺐다(지우지 않음 · 사면 변환으로 되돌리거나 옹벽 변환으로 다시 지정)"
@@ -428,6 +562,7 @@ public sealed class CreateGradingCommand
         // ★★★[v103.1] 되돌릴 옹벽(고른 선이 덮은 목록 옹벽) — 합성을 풀 때 같은 트랜잭션에서 뺀다 · 성공 표시는 들머리에서 먼저 비운다(검토 v103.1 낮음 7)
         var rerunSpec = GradingSettings.TakeWallRerunSpec(doc.Name);
         GradingSettings.LastGradeOk = false;
+        GradingSettings.LastRegenSkipped = false;
         _rerunP0Before = ""; _rerunTrMDone = false; _rerunEndDone = false; _rerunGround = groundId;
         // ★[JACK 0914] 전이면 선 통로는 <b>더 쓰지 않는다</b> — 지표면을 만들어 덮는 방식이 버려졌다.
         //   그래도 진입 때 비운다(옛 값이 남아 있으면 혼란을 준다).
@@ -448,6 +583,26 @@ public sealed class CreateGradingCommand
         try
         {
             using var trM = db.TransactionManager.StartTransaction();
+            // ★★★[v103.1.5 · JACK 1012 «지금 바로 고침»] 옛 판(~v103.1.4)이 지은 XML 면(옹벽 합성 · 순수옹벽 — 굳히지 않았다)을 <b>들머리에서</b> 굳힌다.
+            //   그 면은 재작성될 때 원본 파일을 다시 읽는데(GradingBuilder의 «LandXML로 만든 면» 설명), 옛 판의 원본은 시작 때 물려서 없다 —
+            //   이 뒤의 흐름에서 Civil이 그 면을 다시 지으려 하면 «파일 없음»이 된다. 굳힌 면은 스냅샷에서 시작해 파일과 무관하다.
+            //   (잰 것: 화면 없는 Civil에서 붙여넣기는 소스를 다시 짓지 않았다 — 1012 X6~X8. 못 잰 것: 화면 있는 Civil의 «자동 재작성». 그래서 미리 굳혀 둔다)
+            //   새 판이 지은 면은 만들 때 굳혔으므로 여기서는 할 일이 없다(면 목록을 한 번 훑을 뿐)
+            // ★[검토 1012 2차 낮음 3] 굳힘은 이 트랜잭션에 든다 — 되돌려지면(!compOk · 예외) 굳힘도 되돌아간다. 그래서 «굳혔다»는 <b>커밋한 뒤에</b> 적는다
+            string xmlEntry = "";
+            try
+            {
+                string fz = GradingBuilder.FreezeAllXmlBacked(trM);
+                if (fz.Length > 0 && (!fz.Contains("지금 굳힘 0") || fz.Contains("⚠"))) xmlEntry = fz;
+            }
+            catch (System.Exception fx) { xmlEntry = $"⚠굳힘 실패 {fx.GetType().Name}: {fx.Message}"; }
+            // ★★[검토 1012 2차 중간 1] XML 원본 정리를 <b>면을 지우기 전에</b> 한 번 — 지금 물려 있는 원본의 낡은 «안 물림» 기록을 지운다.
+            //   저장 안 하고 닫았다 다시 연 도면은 지난번에 «안 물림»으로 적힌 원본을 다시 물고 있다. 이 명령은 그 면을 곧 지우므로(아래 합성 풀기 등),
+            //   여기서 안 보면 뒤의 정리가 낡은 기록으로 «안 물린 뒤 저장했다»고 보고 저장된 도면이 무는 원본을 지운다(느낌표 — XmlStore.Deletable 설명).
+            //   파일을 지우는 일은 트랜잭션과 무관하다(되돌려져도 지운 것은 «저장된 도면이 안 무는 것»뿐이다) — 그래서 이 줄은 <b>부른 즉시</b> 적는다
+            //   (커밋 뒤로 미루면 되돌려지는 길에서 «지운 것 K»가 어디에도 안 남는다 — 검토 1012 확인 낮음)
+            try { string td = GradingBuilder.TidyXml(db, trM); if (td.Length > 0) DiagLog.AppendCarry($"\n■ {System.DateTime.Now:HH:mm:ss} 계획부지 생성({mode}) 들머리 — {td}\n"); }
+            catch (System.Exception tx) { try { DiagLog.AppendCarry($"\n■ {System.DateTime.Now:HH:mm:ss} 계획부지 생성({mode}) 들머리 — ⚠XML 원본 정리 실패 {tx.GetType().Name}: {tx.Message}\n"); } catch { } }
             // ★★[v101.1 · JACK 0929] 옹벽 합성(정지면_DH에 들어간 합성)을 모드마다 정리한다 —
             //   마지막 구역 다시(옹벽·사면 변환) = <b>합성을 푼다</b>(합성 전 면을 정지면_DH로 · 인터뷰 «합성을 자동으로 풀기») ·
             //   이어서 = 합성이 새 구역의 기준면(정지면_DH이전)에 굳는다 → 합성 전 면은 낡음 · 새로 = 다 치운다(옛 판 합성지표면_DH 포함).
@@ -530,6 +685,8 @@ public sealed class CreateGradingCommand
                 try { prevPureId = GradingBuilder.FindSurfaceByBaseName(trM, PurePrev); } catch { }
             }
             trM.Commit();
+            // ★[v103.1.5] 들머리의 굳힘 — 커밋된 뒤에 적는다(다음 Reset을 넘겨 이번 실행의 로그 머리에 남는다)
+            if (xmlEntry.Length > 0) try { DiagLog.AppendCarry($"\n■ {System.DateTime.Now:HH:mm:ss} 계획부지 생성({mode}) 들머리 — {xmlEntry}\n"); } catch { }
             _rerunTrMDone = mode == GradeMode.RerunLast && addSpec == null;   // 합성을 풀었다 — 여기부터는 출구 하나(RerunEpilogue)가 지킨다
         }
         catch (System.Exception mx)
@@ -859,6 +1016,40 @@ public sealed class CreateGradingCommand
         // ★[JACK 0807 '옹벽변환이 여전히 오래 걸린다'] 어디서 시간을 쓰는지 **재고 나서** 고친다.
         //   종전엔 DoGrade 전체에 시계가 하나도 없어, 느리다는 체감만 있고 근거가 없었다.
         //   추측으로 후보를 고르면 헛짚는다(0805~0806에서 성능만 두 번 자책골) — 단계별 초를 남긴다.
+        // ★★★[v103.1.4 · JACK 1008 → A] <b>되돌리기만</b>이면 정지면을 다시 안 만든다 — 들머리가 합성을 풀고 덮인 옹벽을 이미 뺐다(같은 트랜잭션 · 커밋됨).
+        //   지금 다시 지으면 쓸 계획선 · 원지반 · 제원 · 구간이 끝까지 성공한 마지막 정지면 생성과 <b>전부 같고</b> 정지면도 그때 그 면일 때만 건너뛴다.
+        //   견주는 값은 아래 1단계가 쓰는 것과 <b>같은 함수</b>로 만든다(BoundaryReader.Read · CachedGroundSurface · BuildParams) — 다르면 그 까닭을 적고 종전 길로 간다
+        if (mode == GradeMode.RerunLast && addSpec == null && _rerunTrMDone && zoneOverride != null
+            && rerunSpec != null && rerunSpec.RevertOnly && rerunSpec.CoveredNos.Length > 0)
+        {
+            string diff; ObjectId p0IdNow = ObjectId.Null;
+            var swS = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                using var trS = db.TransactionManager.StartTransaction();
+                // ★[검토 1012 높음] 표지가 가리키는 핸들이 아니라 <b>정지면_DH 자신</b>이 합성 아닌 그 면이어야 한다(PlainP0) — 아니면 값은 견주지도 않는다
+                var (p0Now, p0IdS, p0Why) = PlainP0(db, trS, groundId);
+                if (p0Why.Length > 0) diff = p0Why;
+                else
+                {
+                    var bNow = BoundaryReader.Read(trS, planPolyId);
+                    var gNow = new CachedGroundSurface((TinSurface)trS.GetObject(groundId, OpenMode.ForRead));
+                    var pNow = BuildParams(bNow, gNow);
+                    diff = SameAsLastGrade(doc.Name, db.UnmanagedObject, planPolyId.Handle.ToString(), groundId.Handle.ToString(), p0Now, bNow, pNow,
+                                           zoneOverride.Value.Cut, zoneOverride.Value.Fill, gNow.Signature);
+                    if (diff.Length == 0) p0IdNow = p0IdS;
+                }
+                trS.Commit();
+            }
+            catch (System.Exception sx) { diff = $"견주다 터졌다({sx.GetType().Name}: {sx.Message})"; p0IdNow = ObjectId.Null; }
+            long msS = swS.ElapsedMilliseconds;
+            if (diff.Length == 0 && !p0IdNow.IsNull) { FinishRevertOnly(doc, groundId, p0IdNow, rerunSpec, msS, compLog); return; }
+            // ★[재검토 1012 낮음 1] 다음 Reset(1단계 머리말)을 살아남게 적는다 — 그냥 Append면 이 줄이 이번 로그에서 사라져 «왜 건너뛰지 않았나»를 현장에서 가릴 길이 없다
+            try { DiagLog.AppendCarry($"\n■ 되돌리기 — 정지면을 <b>다시 만든다</b>: {(diff.Length > 0 ? diff : "정지면_DH를 못 잡았다")}(견주기 {msS}ms)\n"); } catch { }
+        }
+        // ★[v103.1.4 · 검토 1012 낮음] 여기부터 정지면을 다시 짓는다 — 지난 기록은 버린다(끝까지 성공하면 새로 적는다 · 중간에 멈추거나 터지면 기록이 없어 다음 되돌리기는 다시 짓는다).
+        //   옹벽 더하기(addSpec)는 정지면을 안 건드리고 끝나므로(폴리곤만 길 · 아니면 멈춤) 기록을 둔다 — 지우면 «옹벽 짓고 → 되돌리기»에서 늘 다시 짓게 된다
+        if (addSpec == null) _lastGrade = null;
         var stw = new StageTimer();
 
         // ══ ★★★[검토 0917 · 높음] <b>꺼내는 자리를 맨 앞으로 옮긴다.</b>
@@ -880,6 +1071,7 @@ public sealed class CreateGradingCommand
         {
             System.Collections.Generic.List<Point3> boundary;
             GradingParams p;
+            ulong groundSig = 0;   // ★[v103.1.4] 이번 정지면을 지은 원지반의 지문 — 끝까지 성공하면 세션에 적어 둔다(되돌리기 때 견줌)
             VirtualSlope cut, fill;
             ObjectId cutId = ObjectId.Null, fillId = ObjectId.Null;
             // [§75 → 구간 구배 0804] 구간별 구배 규칙 — 3.5단계(태그 작도)·4단계(번들 저장)에서도 쓰므로 밖에 선언.
@@ -907,6 +1099,7 @@ public sealed class CreateGradingCommand
 
                 var groundTin = (TinSurface)tr.GetObject(groundId, OpenMode.ForRead);
                 var ground = new CachedGroundSurface(groundTin); // 원지반 표고 캐싱(단수 계산용)
+                groundSig = ground.Signature;
                 p = BuildParams(boundary, ground);
 
                 // [0729 — JACK 계획고 실수 감지] 경계를 따라 지반고를 표본해 '절토/성토가 필요한가'와
@@ -3198,16 +3391,30 @@ public sealed class CreateGradingCommand
             bool gradeOk = pasteLog.Contains("합성 성공") && !anyMissed && !bundleFailed;
             // ★★★[v103.1] 끝까지 성공했으면 — 확인된 P0 · 남은 옹벽 자리 확인 · 다시 합성 줄 세우기(출구 하나는 여기서 손을 뗀다)
             GradingSettings.LastGradeOk = gradeOk;
+            // ★[v103.1.4] 끝까지 성공한 정지면 생성이 무엇으로 이 면을 지었는지 세션에 적는다(되돌리기 때 견줌 — SameAsLastGrade) · 못 끝냈으면 지운다
+            _lastGrade = gradeOk && !finalSurfId.IsNull
+                ? new GradeSnapshot
+                {
+                    Doc = doc.Name, DbPtr = db.UnmanagedObject, Plan = planPolyId.Handle.ToString(), Ground = groundId.Handle.ToString(), P0 = finalSurfId.Handle.ToString(),
+                    Params = p, Cut = CopyZones(cutZones), Fill = CopyZones(fillZones), Boundary = new(boundary), GroundSig = groundSig,
+                }
+                : null;
             var (wallEnd, wallKeep, _) = gradeOk ? WallRerunEnd(doc, db, mode, planPolyId.Handle.ToString(), finalSurfId, boundary, p, cutZones, fillZones) : ("", 0, 0);
             if (gradeOk) _rerunEndDone = true;
             if (wallEnd.Length > 0) try { ed.WriteMessage("\n[DHGRADE] " + wallEnd); } catch { }
 
             // ── 토량 산출(체적표면: 원지반=기준, 정지면=비교) ──
             // 합성이 실패했으면 정지면이 온전하지 않아 **틀린 물량이 조용히 나온다** → 아예 계산하지 않는다.
+            // ★[v103.1.4 · JACK 1008 → C] 남은 옹벽을 이어서 다시 합성할 때는 <b>합성 전 토량을 안 잰다</b>(실측 2.3~2.6초) — 합성이 끝나면 DHWALLCOMP가 최종면으로 다시 재 명령줄에 적는다.
+            //   종전엔 여기서 한 번(옹벽 합성 전 — 곧 버릴 값) · 합성 뒤 한 번, 두 번 쟀다
             stw.Stage("토량 산출");
-            string volMsg = gradeOk
-                ? ComputeVolumes(db, groundId, finalSurfId) + (wallKeep > 0 ? "\n(옹벽 합성 전 — 옹벽을 다시 합성한 뒤 토량은 명령줄에 다시 적습니다)" : "")
-                : "토량: 정지면이 완성되지 않아 산출하지 않았습니다";
+            //   합성을 <b>실제로 태웠을 때만</b> 건너뛴다 — 못 태웠으면(WallRerunEnd가 ⚠로 알린다) 합성 뒤 토량이 안 나오므로 여기서 잰다
+            bool compQueued = wallKeep > 0 && GradingSettings.AutoCompWantVolume && string.Equals(GradingSettings.AutoCompDoc, doc.Name, System.StringComparison.OrdinalIgnoreCase);
+            //   다시 합성할 옹벽이 없으면 밀린 토량도 없다(바로 아래에서 잰다) — 지난 합성 실패가 켜 둔 표시를 다음 합성으로 넘기지 않는다
+            if (gradeOk && wallKeep == 0) GradingSettings.AutoCompWantVolume = false;
+            string volMsg = !gradeOk ? "토량: 정지면이 완성되지 않아 산출하지 않았습니다"
+                : compQueued ? "토량: 남은 옹벽을 다시 합성한 뒤 명령줄에 적습니다(옹벽 합성 전 토량은 재지 않았습니다)"
+                : ComputeVolumes(db, groundId, finalSurfId) + (wallKeep > 0 ? "\n(옹벽 합성 전 — 남은 옹벽 다시 합성을 못 태웠다 · 명령줄에 DHWALLCOMP)" : "");
             // [다중 구역] 이어서(누적)면 기준이 '직전 누적면'이라 이번 구역분 토량 — 전체 누적은 INFRAWORKS가 원지반 기준으로 계산.
             if (gradeOk && mode == GradeMode.Append)
                 volMsg += "\n(이번 구역 기준 — 전체 누적 토공량은 [INFRAWORKS] 토공량.csv)";

@@ -23,10 +23,12 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "fill")
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "zone")
 {
     ZoneCheck.Run(Check);
+    GradeSameCheck.Run(Check);
     Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
     return fails == 0 ? 0 : 1;
 }
 ZoneCheck.Run(Check);
+GradeSameCheck.Run(Check);   // ★[v103.1.4] S154 — 다시 지어도 같은가(제원 · 구간 견주기)
 
 const double W = 0.46, H = 0.2, STEP = 5.0, HW = W / 2;
 const double D = 0.5, FS = D / 2; // 깊이·전면 돌출(벽 중심=링, JACK 0720 Z-파이팅 해소): 절토 +FS(안쪽), 성토 −FS
@@ -13375,8 +13377,9 @@ static Coordinate[] CloseXY(IReadOnlyList<Point3> r)
         var pcs = WallPlace.SplitAtWalls(click, new List<(int, IReadOnlyList<Point3>)> { (7, seg) });
         double Len(List<Point3> p) { double s = 0; for (int i = 1; i < p.Count; i++) s += Math.Sqrt((p[i].X - p[i - 1].X) * (p[i].X - p[i - 1].X) + (p[i].Y - p[i - 1].Y) * (p[i].Y - p[i - 1].Y)); return s; }
         var wallPc = pcs.Where(q => q.WallNo == 7).ToList();
-        Check("S152 클릭선 끊기 — 사면 · 옹벽 7 · 사면 세 조각 · 옹벽 조각 길이 ≈ 20m(±0.1)",
-              pcs.Count == 3 && pcs[0].WallNo == 0 && pcs[1].WallNo == 7 && pcs[2].WallNo == 0 && wallPc.Count == 1 && Math.Abs(Len(wallPc[0].Pts) - 20) < 0.11,
+        // ★[v103.1.3] 옹벽 조각 끝 = 안쪽 변 끝점 — 종전 ±0.1(곁 띠의 둥근 끝만큼 양쪽 5cm 더 나갔다)을 1µm로 조인다
+        Check("S152 클릭선 끊기 — 사면 · 옹벽 7 · 사면 세 조각 · 옹벽 조각 길이 = 20m(1µm 안)",
+              pcs.Count == 3 && pcs[0].WallNo == 0 && pcs[1].WallNo == 7 && pcs[2].WallNo == 0 && wallPc.Count == 1 && Math.Abs(Len(wallPc[0].Pts) - 20) < 1e-6,
               string.Join(" · ", pcs.Select(q => $"{(q.WallNo > 0 ? "옹벽" + q.WallNo : "사면")} {Len(q.Pts):F2}m")));
         Check("S152 클릭선 끊기 — 조각을 이으면 길이 그대로", Math.Abs(pcs.Sum(q => Len(q.Pts)) - Len(click)) < 1e-6, $"{pcs.Sum(q => Len(q.Pts)):F6} / {Len(click):F6}");
         var segOff = seg.Select(q => new Point3(q.X, q.Y + 0.2, q.Z)).ToList();          // 단이 움직인 옹벽(20cm)

@@ -170,8 +170,35 @@ public sealed class MiscSettingsCommand
             GradingBuilder.SetSurfaceVisible(tr, SectionCommand.PurePadSurfaceBase + "이전", false);
             // ★★[v32.7] <b>둘만이 아니라 전부.</b> 숨김은 도면의 <b>모든</b> 지표면에 붙으므로
             //   되살리는 것도 전부여야 한다(둘만 챙겼더니 나머지에 느낌표가 남았다).
-            GradingBuilder.RebuildAllSurfaces(tr);
-            tr.Commit();
+            // ★[v103.1.5 · 검토 1012 중간 1] 한 일을 버리지 않는다 — 못 굳힌 XML 면이 있으면 로그와 명령줄에 남긴다(종전엔 반환 글을 아무도 안 받았다)
+            string rbNote = GradingBuilder.RebuildAllSurfaces(tr);
+            // ★★★[v103.1.6 · 검토 1013 낮음 3] 스냅샷 재작성이 실패했는데 되찍기까지 실패했으면 <b>커밋하지 않는다</b> — 실패한 스냅샷 재작성을 커밋하면
+            //   그다음 재작성에서 Civil이 죽는다(1013 실측 · 물리면 산다). 이 트랜잭션은 표시 바꾸기와 재작성뿐이라 물려도 잃는 것은 이번 표시 반영뿐이다.
+            bool snapDead = rbNote.IndexOf("되찍기도 실패", System.StringComparison.Ordinal) >= 0;
+            if (snapDead) tr.Abort(); else tr.Commit();
+            try { DiagLog.Append($"\n■ {System.DateTime.Now:HH:mm:ss} 정지옵션 저장 — {rbNote}{(snapDead ? "\n  ⚠되찍기까지 실패해 표시 반영 · 재작성을 되돌렸다(커밋 안 함)" : "")}\n"); } catch { }
+            if (rbNote.Contains("⚠못 다룸")) try { doc.Editor.WriteMessage("\n[기타 설정] 지표면 재작성 — " + rbNote.Substring(rbNote.IndexOf("⚠못 다룸", System.StringComparison.Ordinal))); } catch { }
+            // ★[v103.1.6] 스냅샷을 못 다룬 면이 있으면(되찍지 못함 · 되찍은 뒤 바뀜 · 스냅샷 재작성 실패) 명령줄에도 한 줄 — 조용히 넘기지 않는다
+            int snapBadAt = -1;
+            foreach (string mk in new[] { "⚠되찍", "⚠스냅샷 재작성 실패" })
+            {
+                int at = rbNote.IndexOf(mk, System.StringComparison.Ordinal);
+                if (at >= 0 && (snapBadAt < 0 || at < snapBadAt)) snapBadAt = at;
+            }
+            if (snapBadAt >= 0)
+            {
+                int snapBadEnd = rbNote.IndexOf(" · XML로 만든 면", snapBadAt, System.StringComparison.Ordinal);
+                if (snapBadEnd < 0) snapBadEnd = rbNote.IndexOf("  ※", snapBadAt, System.StringComparison.Ordinal);
+                try
+                {
+                    doc.Editor.WriteMessage("\n[기타 설정] 지표면 재작성 — " + (snapBadEnd > snapBadAt ? rbNote.Substring(snapBadAt, snapBadEnd - snapBadAt) : rbNote.Substring(snapBadAt))
+                        + (snapDead ? " — 표시 반영을 되돌렸습니다. 도면을 저장해 두고 진단 로그를 보여 주세요." : ""));
+                }
+                catch { }
+            }
+            // ★[검토 1012 2차 낮음 7] 옛 판(~v103.1.4)이 지은 옹벽 면을 <b>지금 모양 그대로</b> 굳혔으면 한 줄 알린다 — 옛 판에서 이미 바뀌어 버린 면이면 틀린 채 굳는다
+            if (rbNote.Contains("지금 굳힌 옛 면"))
+                try { doc.Editor.WriteMessage("\n[기타 설정] 옛 판(v103.1.4 이하)이 지은 옹벽 면을 지금 모양 그대로 굳혔습니다 — 느낌표가 남을 수 있습니다(원본 파일이 없다는 뜻). 옹벽 변환 · 사면 변환을 한 번 하면 새로 지어집니다."); } catch { }
             doc.Editor.Regen();
         }
         catch { }

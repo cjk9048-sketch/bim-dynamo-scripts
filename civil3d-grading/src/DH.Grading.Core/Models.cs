@@ -483,11 +483,105 @@ public sealed class SlopeZone
                     if (Math.Abs(zones[i].T0 - zones[j].T0) > eps || Math.Abs(zones[i].T1 - zones[j].T1) > eps) continue;
                     if (!ReferenceEquals(zones[i].Ref, zones[j].Ref)) continue;
                 }
+                else if (SameRuler(zones[i], zones[j]))
+                {
+                    // ★★[v103.1.3 · 검토 1007 열린 물음 → 하네스 S153 실측] <b>같은 자면 호길이로 정확히 견준다.</b>
+                    //   표본(CoversAll)은 구간 끝점을 자 위 점으로 바꿨다가 다시 자에 투영해 «안인가»를 묻는데, 끝은 양쪽 다 포함(t ≤ T1)이라 되투영 값이 1e-10만 어긋나도 «밖»이 된다.
+                    //   현장 크기 좌표(20만 · 50만대)에서 <b>똑같은 구간</b> 100쌍 중 옛 구간이 죽은 것은 19쌍뿐이었다 — 구배를 다시 바꿀 때마다 죽은 옛 구간이 번들에 쌓이고,
+                    //   기본값으로 돌린 자리의 기록 정리(DropNoOps)도 그 옛 구간에 걸려 못 했다. 같은 자의 T0 · T1은 같은 축의 눈금이라 숫자로 바로 견줄 수 있다(1e-9는 뺄셈 · 나머지셈 잡음)
+                    double totS = (zones[i].RefCum ?? planCumRef)[^1];
+                    double li = ArcLen(zones[i], totS);
+                    if (ArcOverlap(zones[i].T0, li, zones[j].T0, ArcLen(zones[j], totS), totS) < li - 1e-9) continue;
+                }
                 else if (!CoversAll(zones[i], zones[j], planRef, planCumRef)) continue;
                 dead[i] = true; break;
             }
         }
         for (int i = zones.Count - 1; i >= 0; i--) if (dead[i]) zones.RemoveAt(i);
+    }
+
+    /// <summary>두 구간이 <b>같은 자</b>로 잰 것인가 — 둘 다 자가 없거나(계획 폴리곤), 자의 점이 전부 같다(1µm 안). 같은 자면 T0 · T1을 숫자로 바로 견줄 수 있다.</summary>
+    private static bool SameRuler(SlopeZone a, SlopeZone b)
+    {
+        var ra = a.Ref; var rb = b.Ref;
+        if (ra == null || rb == null) return ra == null && rb == null;
+        if (ReferenceEquals(ra, rb)) return true;
+        if (ra.Count != rb.Count) return false;
+        for (int i = 0; i < ra.Count; i++)
+            if (Math.Abs(ra[i].X - rb[i].X) > 1e-6 || Math.Abs(ra[i].Y - rb[i].Y) > 1e-6) return false;
+        return true;
+    }
+
+    /// <summary>자 위에서 이 구간의 길이(랩 대응 · 한 바퀴를 넘지 않는다).</summary>
+    private static double ArcLen(SlopeZone z, double tot)
+        => Math.Min(z.T1 >= z.T0 ? z.T1 - z.T0 : z.T1 + tot - z.T0, tot);
+
+    /// <summary>같은 자 위 두 호 [a0, a0+aLen) · [b0, b0+bLen)이 겹치는 길이(랩 대응).</summary>
+    private static double ArcOverlap(double a0, double aLen, double b0, double bLen, double tot)
+    {
+        if (tot <= 1e-9) return 0;
+        aLen = Math.Min(aLen, tot); bLen = Math.Min(bLen, tot);
+        double d = ((b0 - a0) % tot + tot) % tot;            // b 시작 — a 시작에서 잰 자리 [0, tot)
+        double ov = Math.Max(0, Math.Min(aLen, d + bLen) - Math.Max(0, d));
+        ov += Math.Max(0, Math.Min(aLen, d - tot + bLen) - Math.Max(0, d - tot));
+        return ov;
+    }
+
+    /// <summary>★★★[v103.1.3 · JACK 1007 «되돌린 자리에서 여전히 잘려 있는데 이게 정상이야?» → «화면 · 기록 둘 다 고침»] <b>아무 일도 안 하는 구간</b>을 뺀다 —
+    /// 규칙이 전부 기본값(구배 = 기본 구배 · 소단 = 기본 소단 또는 «전역값 따름»)이고 <b>앞선 구간과 안 겹치는</b> 구간.
+    /// <para><b>왜.</b> 옹벽을 사면으로 되돌리면(또는 구배를 바꾼 사면을 기본값으로 돌리면) «그 단부터 1:1.5» 같은 기본값 규칙이 그 자리에 남았다. 모양은 안 바꾸지만
+    /// ①클릭선이 그 경계에서 갈리는 빌미가 되고 ②숫자가 박혀 있어, 나중에 정지옵션 기본 구배를 바꿔도 그 자리만 옛 값으로 남는다 — «되돌림»이 아니라 «고정»이다.</para>
+    /// <para><b>언제 안 빼나.</b> 앞선 구간과 겹치면 그 구간을 기본값으로 덮는 중일 수 있다(부분 되돌림 · 층별 구배) → 남긴다. 겹침은 같은 자면 호길이로 정확히 ·
+    /// 자가 다르면 양쪽 표본(끝점 포함)으로 재고 닿기만 해도 남긴다(틀려도 «남는» 쪽으로).
+    /// 뒤에 온 구간은 안 본다 — 겹치는 자리는 뒤 구간이 이기고, 안 겹치는 자리는 기본값 그대로다.</para>
+    /// <para><b>방금 넣은 구간(<paramref name="fresh"/>)과 전부터 있던 구간은 «맞닿음»을 다르게 본다</b>(검토 1007 중간 1). 구간 끝은 양쪽 다 포함이라, 맞닿은 끝이
+    /// 자의 볼록 모서리 꼭짓점이면 그 바깥 부채꼴의 링 점은 전부 그 꼭짓점 값으로 투영돼 <b>두 구간에 함께 들고 뒤 구간이 이긴다</b>(GradingGeometry.Build의 MaskAt).
+    /// · 방금 넣은 구간: 1µm 넘게 겹쳐야 겹침 — 맞닿기만 한 것은 빼도 <b>넣기 전 목록 그대로</b>라 넣기 전 모양과 같다(옹벽을 되돌렸더니 이웃 구간의 모서리 부채꼴까지 기본값으로 바뀌던 것도 없어진다).
+    /// · 전부터 있던 구간: 맞닿기만 해도 남긴다 — 화면의 부채꼴이 지금 이 구간(기본값)으로 지어져 있어, 빼면 앞 구간 값으로 바뀐다. 묻지도 않은 모양을 정리하다 바꾸지 않는다.
+    /// 부분 지정 표시(<see cref="Partial"/>)가 있는 전부터 있던 구간은 건드리지 않는다.</para></summary>
+    /// <param name="fresh">이번 변환이 방금 넣은 구간(같은 객체) — 없으면 전부 «전부터 있던 구간»으로 본다.</param>
+    /// <returns>뺀 구간 수 — <paramref name="notes"/>에 뺀 구간마다 한 줄.</returns>
+    public static int DropNoOps(List<SlopeZone> zones, double baseSlope, double baseW,
+                                IReadOnlyList<Point3> planB, double[] planCum, List<string>? notes = null, SlopeZone? fresh = null)
+    {
+        if (zones == null || zones.Count == 0 || planB == null || planCum == null || planCum.Length < 2) return 0;
+        int dropped = 0;
+        for (int i = 0; i < zones.Count;)
+        {
+            var z = zones[i];
+            bool isFresh = fresh != null && ReferenceEquals(z, fresh);
+            bool drop = false;
+            if (z != null && z.Rules.Count > 0 && (isFresh || !z.Partial))
+            {
+                bool allBase = true;
+                foreach (var r in z.Rules)
+                    if (Math.Abs(r.Slope - baseSlope) > 1e-9 || (r.BenchW >= 0 && Math.Abs(r.BenchW - baseW) > 1e-9)) { allBase = false; break; }
+                if (allBase)
+                {
+                    bool under = false;
+                    for (int j = 0; j < i && !under; j++)
+                    {
+                        var e = zones[j];
+                        if (e == null || e.Rules.Count == 0) continue;
+                        if (SameRuler(z, e))
+                        {
+                            double tot = (z.RefCum ?? planCum)[^1];
+                            double zl = ArcLen(z, tot), el = ArcLen(e, tot);
+                            under = isFresh ? ArcOverlap(z.T0, zl, e.T0, el, tot) > 1e-6                      // 겹쳐야 겹침
+                                            : ArcOverlap(z.T0 - 1e-6, zl + 2e-6, e.T0, el, tot) > 0;          // 맞닿기만 해도(1µm 안)
+                        }
+                        else under = RegionsOverlap(z, e, planB, planCum) || RegionsOverlap(e, z, planB, planCum);
+                    }
+                    drop = !under;
+                }
+            }
+            if (!drop) { i++; continue; }
+            notes?.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture, "[{0:F2}..{1:F2}] {2}", z!.T0, z.T1,
+                string.Join(" ", z.Rules.Select(r => string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0}단~1:{1:0.###}", r.FromBench + 1, r.Slope)))));
+            zones.RemoveAt(i);
+            dropped++;
+        }
+        return dropped;
     }
 
     /// <summary>옛 표현(시작단부터 끝단까지 수직)에서 만들기 — 번들 v6 이하 하위호환·옹벽 변환용.

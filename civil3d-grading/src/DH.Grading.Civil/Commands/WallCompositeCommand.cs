@@ -183,7 +183,6 @@ public sealed class WallCompositeCommand
 
     const string LogName = "DHWALLCOMP_진단.log";
     const string DumpName = "DHWALLCOMP_입력.txt";
-    const string XmlName = "DHWALLCOMP_합성.xml";
 
     [CommandMethod("DHWALLCOMP")]
     public void Run()
@@ -208,6 +207,8 @@ public sealed class WallCompositeCommand
         string summary;
         var sw = System.Diagnostics.Stopwatch.StartNew();
         bool crashed = false;
+        // ★[v103.1.4] 합성 뒤 토량을 재라는 표시 — 꺼내면서 비운다(정지면을 다시 안 만든 되돌리기 · 합성 전 토량을 생략한 재생성이 켠다)
+        bool wantVol = GradingSettings.AutoCompWantVolume; GradingSettings.AutoCompWantVolume = false;
         _lastOk = false; _rejectedNo = 0;
         _made = ObjectId.Null;
         _rebuiltN = 0; _heldNote = ""; _compId = ObjectId.Null; _compGround = ObjectId.Null; _rebuiltPure.Clear();
@@ -251,6 +252,10 @@ public sealed class WallCompositeCommand
                     // ★[v103.1 · 코드 검토 낮음 4] 되돌려졌는데 남은 다시 지은 순수옹벽(목록은 옛 핸들로 돌아갔다)
                     foreach (var pid in _rebuiltPure)
                         try { if (pid.IsValid && !pid.IsErased) { tr2.GetObject(pid, OpenMode.ForWrite).Erase(); n++; } } catch { }
+                    // ★[v103.1.5 · 검토 1012 낮음 3] 되돌려지면 본 트랜잭션의 굳힘도 되돌아간다(옛 판 파일 이름 바꾸기는 안 되돌아간다) — 옛 면을 여기서 다시 굳힌다
+                    try { string fz2 = GradingBuilder.FreezeAllXmlBacked(tr2); if (fz2.Length > 0) log.AppendLine("되돌린 뒤 굳힘: " + fz2); } catch { }
+                    // ★[검토 1012 2차 낮음 1] 되돌려져 살아난 면의 원본에 «안 물림»이 적혀 있다(되돌려진 트랜잭션 안에서 적은 것) — 다시 훑어 그 기록을 지운다
+                    try { string td2 = GradingBuilder.TidyXml(db, tr2); if (td2.Length > 0) log.AppendLine("되돌린 뒤 " + td2); } catch { }
                     tr2.Commit();
                     if (n > 0) summary += $" · 남은 임시 면 {n}개 지움";
                 }
@@ -258,10 +263,19 @@ public sealed class WallCompositeCommand
             catch (System.Exception ex2) { log.AppendLine("임시 면 치우기 실패: " + ex2); }
         }
         // ★[v103.1 · 검토 v103.1 중간 7] 정지면을 다시 지은 뒤 옹벽을 다시 합성했으면 토량을 다시 잰다(계획부지 생성 팝업 토량은 옹벽 합성 전)
-        if (_lastOk && _rebuiltN > 0 && !_compId.IsNull && !_compGround.IsNull)
+        // ★[v103.1.4] 정지면을 다시 안 만들고 남은 옹벽만 다시 합성했을 때(되돌리기만)도 잰다 — 그때는 옹벽을 다시 짓지 않아 «다시 지은 옹벽 수»가 0이다.
+        //   재생성 쪽은 합성 전 토량을 생략했으므로(v103.1.4 C) 이 값이 그 실행의 <b>하나뿐인</b> 토량이다 — 못 쟀으면 그렇다고 적는다
+        if (_lastOk && (_rebuiltN > 0 || wantVol) && !_compId.IsNull && !_compGround.IsNull)
         {
             try { summary += " · 옹벽 합성 뒤 " + CreateGradingCommand.ComputeVolumes(db, _compGround, _compId).Replace("\n", " "); }
-            catch (System.Exception vx) { log.AppendLine("토량 다시 재기 실패: " + vx.GetType().Name); }
+            catch (System.Exception vx) { summary += $" · ⚠옹벽 합성 뒤 토량을 못 쟀다({vx.GetType().Name})"; log.AppendLine("토량 다시 재기 실패: " + vx.GetType().Name); }
+        }
+        else if (wantVol && !_lastOk)
+        {
+            // ★[검토 1012 중간] 표시를 <b>다시 켜 둔다</b> — 다시 짓기는 이미 목록에 저장돼(Fail도 커밋) 다음 합성은 «다시 지은 옹벽 0»이고,
+            //   되돌리기만 길은 애초에 옹벽을 다시 안 짓는다. 안 켜 두면 손으로 다시 합성해 성공해도 토량이 끝내 안 나온다
+            GradingSettings.AutoCompWantVolume = true;
+            summary += " · 토량은 재지 않았다(합성을 못 했다 — 다시 합성하면 나온다)";
         }
         summary += $" · 전체 {sw.ElapsedMilliseconds / 1000.0:F1}초";
         // ★[v102.2 · 계획 검토 중간 8] 옹벽 변환이 이어서 태운 합성이 못 했으면 알림창 — 버튼이 없어져 명령줄 한 줄로는 묻힌다
@@ -295,6 +309,10 @@ public sealed class WallCompositeCommand
     private static string Build(Database db, Transaction tr, System.Text.StringBuilder log, string dir)
     {
         var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+        // ★★[v103.1.5 · 검토 1012 2차 중간 1] XML 원본 정리를 <b>면을 지우기 전에</b> 한 번 — 지금 물려 있는 원본의 낡은 «안 물림» 기록을 지운다
+        //   (저장 안 하고 닫았다 다시 연 도면 — GradingBuilder.TidyXml · XmlStore.Deletable 설명). 손으로 친 DHWALLCOMP는 계획부지 생성의 들머리를 안 거친다
+        try { string td0 = GradingBuilder.TidyXml(db, tr); if (td0.Length > 0) log.AppendLine("⓪ " + td0); }
+        catch (System.Exception tx0) { log.AppendLine("⓪ XML 원본 정리 실패: " + tx0.GetType().Name + " " + tx0.Message); }
         int leftover = EraseTemp(tr);
         if (leftover > 0) log.AppendLine($"   지난번에 남은 임시 면 {leftover}개 지움");
 
@@ -496,10 +514,22 @@ public sealed class WallCompositeCommand
 
         // ⑥ LandXML → Civil(임시 이름 — 정지면_DH는 아직 안 건드린다)
         var all = res.All;
-        string xml = System.IO.Path.Combine(dir, XmlName);
-        WallDaylight.WriteLandXmlTin(xml, "PUREWALL", all, 1e-7, out int np, out int nf, out int nd);
+        // ★★★[v103.1.5 · JACK 1012 «지금 바로 고침»] LandXML로 만든 면은 재작성 때 원본 파일을 다시 읽는다(바뀌어 있으면 말없이 그 내용으로 바뀐다 — 1012 실측 ·
+        //   GradingBuilder의 «LandXML로 만든 면» 설명). 그래서 ①도면의 XML 면(옛 판이 지은 합성 · 순수옹벽)을 지금 모양 그대로 굳히고
+        //   ②옛 판의 고정 이름 파일은 이름을 바꿔 두고 안 물린 묵은 파일을 치운 뒤 ③<b>새 이름의 파일</b>에 쓴다 — 한 번 쓴 파일은 다시 쓰지 않는다
+        try { string fz0 = GradingBuilder.FreezeAllXmlBacked(tr); if (fz0.Length > 0) log.AppendLine("④-b 굳힘: " + fz0); }
+        catch (System.Exception fx) { log.AppendLine("④-b 굳힘 실패: " + fx.GetType().Name + " " + fx.Message); }
+        try { string td = GradingBuilder.TidyXml(db, tr); if (td.Length > 0) log.AppendLine("④-c " + td); }
+        catch (System.Exception tx) { log.AppendLine("④-c XML 원본 정리 실패: " + tx.GetType().Name + " " + tx.Message); }
         // ★[v103.0 · 코드 검토 낮음 8] 여기부터 못 하면 이번 새 옹벽(대기)을 버린다 — 대기 칸이 남아 다음 옹벽 변환까지 떠돌지 않게
         string FailNew(string why) { var nw = useOk.LastOrDefault(w => w.State == 0); return nw != null ? Reject(nw, why) : Fail(why); }
+        // ★[검토 1012 2차 낮음 2] 폴더를 못 만들면(권한 · 디스크) 까닭을 알아볼 말로 던진다 — RunInner가 잡아 통째로 되돌린다(종전의 «파일을 못 썼다»와 같은 길).
+        //   새 옹벽(대기)을 버리지 않는다 — PC 사정이지 옹벽 탓이 아니다. 고친 뒤 DHWALLCOMP를 다시 치면 된다
+        string xml;
+        try { xml = GradingBuilder.NewXmlPath(db, "합성"); }
+        catch (System.Exception px) { throw new System.IO.IOException($"XML 원본을 둘 폴더를 못 만들었다 — {px.GetType().Name}: {px.Message}", px); }
+        log.AppendLine("④-d XML 원본: " + xml);
+        WallDaylight.WriteLandXmlTin(xml, "PUREWALL", all, 1e-7, out int np, out int nf, out int nd);
         if (nd > 0) return FailNew($"합성을 못 만들었다 — 넓이 0이라 뺀 면 {nd}개");
         sw.Restart();
         ObjectId cid = TinSurface.CreateFromLandXML(db, TempName, xml, "PUREWALL");
@@ -507,6 +537,9 @@ public sealed class WallCompositeCommand
         _made = cid;
         var cTin = (TinSurface)tr.GetObject(cid, OpenMode.ForWrite);
         long tCreate = sw.ElapsedMilliseconds;
+        // ★자가검증(검토 1012 2차 중간 3) — 새 면이 넘긴 경로 그대로를 무는가. 어긋나면 이 실행에서는 XML 원본을 지우지 않는다(합성은 계속한다 — 모양과 무관)
+        try { string rc = GradingBuilder.XmlRefCheck(cTin, xml); log.AppendLine(rc.Length == 0 ? "④-e 원본 경로 확인: 새 면이 넘긴 경로를 문다" : "④-e ⚠" + rc + " — 이 실행에서는 XML 원본을 지우지 않는다"); }
+        catch (System.Exception rx) { log.AppendLine("④-e 원본 경로 확인 실패: " + rx.GetType().Name); }
         void Drop() { try { cTin.Erase(); } catch { } }
 
         // ⑦ 되읽기 관문 — 점 수 · 삼각형 수 · 넘긴 면과 같은가 · 높이 오차 합이 판정 한도 안(옹벽마다의 최대 · 겹친 바깥은 잰 값)
@@ -546,6 +579,17 @@ public sealed class WallCompositeCommand
             if (newest != null) return Reject(newest, "Civil이 넘긴 합성을 그대로 안 받았다 — " + back);
             return Fail("Civil이 넘긴 합성을 그대로 안 받았다 — 새 면은 지웠다 · " + back);
         }
+
+        // ⑦-b ★★★[v103.1.5] 새 합성을 <b>굳힌다</b> — 관문을 지난 삼각형 그대로 스냅샷(실측 5~6ms). 굳힌 면의 재작성(Rebuild)은 스냅샷에서 시작해 원본 XML 없이도 그대로다.
+        //   (스냅샷 재작성은 원본을 다시 읽는다 — 그래서 원본을 새 이름으로 쓰고 다시는 안 쓴다: 안 바뀐 원본이면 무엇을 눌러도 같은 내용이다 · 1012 실측)
+        //   못 굳혀도 합성은 맞으므로 멈추지 않는다 — 요약에 ⚠로 알린다(우리 재작성 도우미는 굳히지 못한 XML 면을 건드리지 않는다)
+        string frz = GradingBuilder.FreezeXmlBacked(cTin);
+        int frzTris = -1; try { frzTris = cTin.GetTinProperties().NumberOfTriangles; } catch { }
+        // 자가검증(검토 1012 중간 2) — 굳힌 뒤 삼각형 수가 넘긴 수와 같은가
+        if (frz.Length == 0 && frzTris != nf) frz = $"굳힌 뒤 삼각형 수가 다르다({frzTris} ≠ 넘긴 {nf})";
+        log.AppendLine(frz.Length == 0 ? $"⑤-b 굳힘: 새 합성에 스냅샷(삼각형 {frzTris}/{nf}) — 재작성은 원본 XML 없이도 그대로다"
+                                       : $"⑤-b ⚠새 합성을 굳히지 못했다 — {frz}");
+        string frzNote = frz.Length == 0 ? "" : $" · ⚠합성을 굳히지 못했다({frz}) — 진단 로그를 보여 주세요";
 
         // ⑧ 정지면_DH로 바꿔 끼운다 — 관문을 지난 뒤에만. 한 단계라도 못 하면 SwapFailed — 트랜잭션째 되돌려 명령 전 상태로
         var pW = (Autodesk.Civil.DatabaseServices.Surface)tr.GetObject(pTin.ObjectId, OpenMode.ForWrite);
@@ -658,7 +702,7 @@ public sealed class WallCompositeCommand
         return _heldNote + dropNote + overHead + $"<b>정지면_DH에 옹벽 {useOk.Count}개({nos})를 합성했다</b>{(news.Count > 0 ? $" — 새 옹벽 {string.Join(",", news)}" : " — 다시 합성")}{(_rebuiltN > 0 ? $" · 새 정지면에 다시 지은 옹벽 {_rebuiltN}개" : "")}{repNote}"
              + $" · 판정 {res.Tier}({res.TierText}){tierNote} · 정지면 {planAll.Count}면 중 옹벽 둘레 {res.Steps.Sum(s => s.R.Touched)}면을 다시 짓고 나머지는 그대로"
              + $" · 점 {np} · 삼각형 {nf} Civil이 그대로 받음 · 높이 오차 합 {res.HeightBudget * 1000:F2}mm"
-             + $" · 합성 전 정지면은 '{BaseName}'로 숨겨 둠{excNote}";
+             + $" · 합성 전 정지면은 '{BaseName}'로 숨겨 둠{excNote}{frzNote}";
     }
 
     /// <summary>★★[v101.1 · JACK 0929 «합성을 자동으로 풀기»] 옹벽 합성을 푼다 — 정지면_DH(합성)를 지우고 <see cref="BaseName"/>을 정지면_DH로 되돌린다.

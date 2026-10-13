@@ -419,10 +419,21 @@ public static class WallDaylightBuilder
                         safe = DH.Grading.Core.CivilSafeMesh.Make(clip, ring, holes, wallTris, out cs);
                         sb.Append($"    (Civil에 맞게 다듬기: {cs.Summary})\n");
                         if (safe == null) throw new SkipAttempt("Civil이 그대로 받을 삼각형으로 못 다듬었다 — " + cs.Fail);
-                        string xml = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(DiagLog.FilePath) ?? ".", "DHWALLDL_순수옹벽.xml");
+                        // ★★★[v103.1.5 · JACK 1012 «지금 바로 고침»] 종전엔 옹벽마다 <b>같은 파일</b>(DHWALLDL_순수옹벽.xml)에 썼다 — LandXML로 만든 면은 재작성 때
+                        //   원본 파일을 다시 읽어(1012 실측 · GradingBuilder의 «LandXML로 만든 면» 설명) 앞 번호 순수옹벽이 이 옹벽의 띠로 바뀔 수 있었다.
+                        //   ①도면의 XML 면을 지금 모양 그대로 굳히고 ②옛 판 파일은 이름을 바꿔 두고 묵은 파일을 치운 뒤 ③<b>새 이름의 파일</b>에 쓴다
+                        try { string fz0 = GradingBuilder.FreezeAllXmlBacked(tr); if (fz0.Length > 0) sb.Append($"    (굳힘: {fz0})\n"); }
+                        catch (System.Exception fx) { sb.Append($"    (굳힘 실패: {fx.GetType().Name} {fx.Message})\n"); }
+                        try { string td = GradingBuilder.TidyXml(db, tr); if (td.Length > 0) sb.Append($"    ({td})\n"); }
+                        catch (System.Exception tx) { sb.Append($"    (XML 원본 정리 실패: {tx.GetType().Name} {tx.Message})\n"); }
+                        // ★[검토 1012 2차 낮음 2] 폴더를 못 만들면(권한 · 디스크) 까닭을 그대로 적는다 — «짓기 · 되읽기 중 예외»로 뭉개지 않게(이 길을 건너뛰는 것은 종전과 같다)
+                        string xml;
+                        try { xml = GradingBuilder.NewXmlPath(db, "순수옹벽"); }
+                        catch (System.Exception px) { throw new SkipAttempt($"XML 원본을 둘 폴더를 못 만들었다({px.GetType().Name}: {px.Message})"); }
                         WallDaylight.WriteLandXmlTin(xml, "PUREWALL", safe, 1e-7, out int np, out int nf, out int nd);
                         if (nd > 0) throw new SkipAttempt($"넓이 0이라 뺀 면 {nd}개 — 면이 맞물리지 않을 수 있다");
-                        try { ArchiveDump(xml); } catch { }                // ★[검토 0928 · 중간 5] 덮어써 잃지 않게
+                        // ★[검토 0928 · 중간 5] 진단용 사본 — 관문에 걸린 시도의 원본은 곧 치워지므로(XmlStore.Tidy) 종전처럼 로그 폴더의 진단이력에 최근 20개를 남긴다
+                        try { ArchiveDump(xml, System.IO.Path.Combine(System.IO.Path.GetDirectoryName(DiagLog.FilePath) ?? ".", "DHWALLDL_순수옹벽.xml")); } catch { }
                         pid = TinSurface.CreateFromLandXML(db, _pureName, xml, "PUREWALL");
                         if (pid.IsNull) throw new System.InvalidOperationException("CreateFromLandXML이 빈 ObjectId를 돌려줬다");
                         tin = (TinSurface)tr.GetObject(pid, OpenMode.ForWrite);
@@ -433,7 +444,9 @@ public static class WallDaylightBuilder
                         xmlFaces = nf; xmlPts = np;
                         nBExpect = 0;
                         offNote = $"{cn} · 다듬기 판정 {cs.Tier}({cs.TierText}) · LandXML 점 {np} · 면 {nf}";
-                        sb.Append($"    (초록 선으로 직접 자름: {offNote} · {System.IO.Path.GetFileName(xml)})\n");
+                        // ★자가검증(검토 1012 2차 중간 3) — 새 면이 넘긴 경로 그대로를 무는가. 어긋나면 이 실행에서는 XML 원본을 지우지 않는다(짓기는 계속한다 — 모양과 무관)
+                        string refChk; try { refChk = GradingBuilder.XmlRefCheck(tin, xml); } catch (System.Exception rx) { refChk = "확인 실패 " + rx.GetType().Name; }
+                        sb.Append($"    (초록 선으로 직접 자름: {offNote} · {System.IO.Path.GetFileName(xml)} · 원본 경로 {(refChk.Length == 0 ? "확인" : "⚠" + refChk + " — 이 실행에서는 XML 원본을 지우지 않는다")})\n");
                     }
                     else
                     {
@@ -524,7 +537,14 @@ public static class WallDaylightBuilder
                         try { dumpNote = " · 삼각형을 " + System.IO.Path.GetFileName(DumpReadback(tag, ring, holes, vis)) + "에 남겼다"; } catch (System.Exception de) { dumpNote = $" · (삼각형 못 남김 {de.GetType().Name})"; }
                         throw new GateFail((mode == 2 ? "Civil이 넘긴 삼각형을 그대로 안 받았다 — " : "Civil이 경계를 띠대로 안 받았다 — ") + s0 + dumpNote);
                     }
-                    if (mode == 2) lastCs = cs;
+                    if (mode == 2)
+                    {
+                        lastCs = cs;
+                        // ★★★[v103.1.5] 관문을 지난 삼각형 그대로 <b>굳힌다</b>(스냅샷) — 굳힌 면의 재작성은 스냅샷에서 시작해 원본 XML 없이도 그대로다
+                        //   (스냅샷 재작성은 원본을 다시 읽는다 — 그래서 원본을 새 이름으로 쓰고 다시는 안 쓴다 · 1012 실측)
+                        string fz = GradingBuilder.FreezeXmlBacked(tin);
+                        s0 += fz.Length == 0 ? " · 굳힘(스냅샷 — 재작성은 원본 없이도 그대로)" : $" · ⚠굳히지 못했다({fz})";
+                    }
                     return s0;
                 }
                 catch
@@ -915,16 +935,20 @@ public static class WallDaylightBuilder
     /// <summary>[v101.0] 옹벽 합성(DHWALLCOMP)도 같은 보관을 쓴다.</summary>
     internal static void ArchiveDumpPublic(string dump) => ArchiveDump(dump);
 
-    private static void ArchiveDump(string dump)
+    private static void ArchiveDump(string dump) => ArchiveDump(dump, dump);
+
+    /// <summary><paramref name="dump"/>를 <paramref name="like"/>의 폴더 · 이름 줄기로 보관한다 —
+    /// ★[v103.1.5] 실행마다 이름이 다른 파일(XML 원본)을 한 줄기로 묶어 최근 20개만 남기려고.</summary>
+    private static void ArchiveDump(string dump, string like)
     {
         try
         {
-            string dir = System.IO.Path.GetDirectoryName(dump) ?? ".";
+            string dir = System.IO.Path.GetDirectoryName(like) ?? ".";
             string hist = System.IO.Path.Combine(dir, "진단이력");
             System.IO.Directory.CreateDirectory(hist);
-            string stem = System.IO.Path.GetFileNameWithoutExtension(dump);
+            string stem = System.IO.Path.GetFileNameWithoutExtension(like);
             // ★[검토 0928 v100.4 · 낮음 9] 원래 확장자를 지킨다(순수옹벽 xml이 .txt로 보관되던 것)
-            string ext = System.IO.Path.GetExtension(dump);
+            string ext = System.IO.Path.GetExtension(like);
             if (string.IsNullOrEmpty(ext)) ext = ".txt";
             string dst = System.IO.Path.Combine(hist, $"{stem}_{System.DateTime.Now:yyyyMMdd_HHmmss}{ext}");
             if (!System.IO.File.Exists(dst)) System.IO.File.Copy(dump, dst);

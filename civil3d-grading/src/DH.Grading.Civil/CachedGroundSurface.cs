@@ -28,6 +28,20 @@ public sealed class CachedGroundSurface : IGroundSurface
     /// <summary>표면의 XY 평면 경계(최소거리 비교 시 후보 삼각형 bbox 필터용).</summary>
     public (double MinX, double MinY, double MaxX, double MaxY) XYBounds => (_minX, _minY, _maxX, _maxY);
 
+    /// <summary>★[v103.1.4 · JACK 1008 «재생성이 좀 오래 걸리는데 줄일 방법 없어?»] <b>표면 지문</b> — 보이는 삼각형 전부의 꼭짓점 좌표(비트 그대로)로 만든 값.
+    /// 삼각형 차례 · 삼각형 안 꼭짓점 차례가 달라도 같다(더해서 섞는다). 점 하나의 높이만 바뀌어도 달라진다 —
+    /// «지난번 정지면을 만들 때와 같은 원지반인가»를 가리는 데 쓴다(같으면 되돌리기에서 정지면을 다시 안 만든다).</summary>
+    public ulong Signature { get; }
+    static ulong Mix(ulong h) { unchecked { h ^= h >> 33; h *= 0xff51afd7ed558ccdUL; h ^= h >> 33; h *= 0xc4ceb9fe1a85ec53UL; h ^= h >> 33; return h; } }
+    static ulong VertexHash(double x, double y, double z)
+    {
+        unchecked
+        {
+            return Mix((ulong)BitConverter.DoubleToInt64Bits(x) * 3UL + Mix((ulong)BitConverter.DoubleToInt64Bits(y)) * 5UL
+                       + Mix((ulong)BitConverter.DoubleToInt64Bits(z)) * 7UL);
+        }
+    }
+
     public CachedGroundSurface(TinSurface surface)
     {
         // ★[검토 0901] 삼각형 목록은 <b>네이티브 메모리</b>라 GC 압박을 안 준다 —
@@ -44,6 +58,7 @@ public sealed class CachedGroundSurface : IGroundSurface
         double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
         double minZ = double.MaxValue, maxZ = double.MinValue;
         int k = 0;
+        ulong sig = 0;
         foreach (var t in tris)
         {
             try
@@ -52,6 +67,7 @@ public sealed class CachedGroundSurface : IGroundSurface
                 _ax[k] = p1.X; _ay[k] = p1.Y; _az[k] = p1.Z;
                 _bx[k] = p2.X; _by[k] = p2.Y; _bz[k] = p2.Z;
                 _cx[k] = p3.X; _cy[k] = p3.Y; _cz[k] = p3.Z;
+                unchecked { sig += Mix(VertexHash(p1.X, p1.Y, p1.Z) + VertexHash(p2.X, p2.Y, p2.Z) + VertexHash(p3.X, p3.Y, p3.Z)); }
                 double tMinX = Math.Min(p1.X, Math.Min(p2.X, p3.X));
                 double tMaxX = Math.Max(p1.X, Math.Max(p2.X, p3.X));
                 double tMinY = Math.Min(p1.Y, Math.Min(p2.Y, p3.Y));
@@ -67,6 +83,7 @@ public sealed class CachedGroundSurface : IGroundSurface
             finally { t.Dispose(); }
         }
         _count = k;
+        Signature = unchecked(sig + (ulong)k);
         _minX = minX; _minY = minY; _minZ = minZ; _maxZ = maxZ;
         _maxX = maxX; _maxY = maxY;
 

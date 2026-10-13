@@ -25,7 +25,7 @@ public static class GradingSettings
     /// <b>같은 번호를 단 빌드가 여러 개</b>가 되어, 어느 것이 깔렸는지 물으면 답할 수가 없었다.</para>
     /// <para><c>x.0</c> = 화면·명령이 바뀌어 <b>사용자가 다르게 일하게</b> 되는 판 ·
     /// <c>x.y</c> = 같은 화면에서 결함을 고친 판.</para></summary>
-    public const string Version = "v103.1.2 (2026-10-06)";
+    public const string Version = "v103.1.6 (2026-10-13)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -226,8 +226,19 @@ public static class GradingSettings
 
     /// <summary>★★★[v103.1 · JACK 1002 «부분 변환한 곳은 반대로 돌리면 그 모양으로»] <b>되돌릴 옹벽 명세</b> — 사면 변환 · 전체구간 옹벽 변환 · 전체 해제가
     /// 고른 선이 덮은 목록 옹벽 번호를 DoGrade에 한 번 넘긴다. DoGrade는 합성을 풀 때 <b>같은 트랜잭션에서</b> 그 옹벽만 지우고 목록에서 뺀다(나머지 옹벽은 정지면을 다시 지은 뒤 다시 합성).</summary>
-    public sealed record WallRerunInfo(string Doc, int[] CoveredNos, string Why);
+    public sealed record WallRerunInfo(string Doc, int[] CoveredNos, string Why)
+    {
+        /// <summary>★[v103.1.4 · JACK 1008 «재생성이 좀 오래 걸리는데» → A] <b>되돌리기만</b>이면 정지면을 다시 안 만들어도 되는지 DoGrade가 따져 보라는 표시(사면 변환이 켠다).
+        /// DoGrade는 구간 · 제원 · 계획선 · 원지반이 지난 재생성 때와 <b>전부 같을 때만</b> 건너뛴다 — 하나라도 다르면 종전처럼 다시 만든다.</summary>
+        public bool RevertOnly { get; init; }
+    }
     public static WallRerunInfo? WallRerunSpec;
+
+    /// <summary>★[v103.1.4] 마지막 DoGrade가 <b>정지면을 다시 안 만들고</b> 끝났나(되돌리기만) — 사면 변환이 보고 노리선 자동 갱신을 건너뛴다(모양이 안 바뀌었다). 들머리에서 먼저 비운다.</summary>
+    public static bool LastRegenSkipped;
+    /// <summary>★[v103.1.4] 이어 태운 합성(DHWALLCOMP)이 끝나면 <b>토량을 다시 재라</b>는 표시 — 정지면을 다시 안 만들고 남은 옹벽만 다시 합성할 때는
+    /// 옹벽을 다시 짓지 않아(«다시 지은 옹벽 수»가 0) 종전 조건으로는 토량이 안 나온다. DHWALLCOMP가 꺼내 비운다.</summary>
+    public static bool AutoCompWantVolume;
 
     /// <summary>★[v103.1] 되돌릴 옹벽 명세를 <b>꺼내면서 비운다</b> · 도면이 다르면 <c>null</c>.</summary>
     public static WallRerunInfo? TakeWallRerunSpec(string docName)

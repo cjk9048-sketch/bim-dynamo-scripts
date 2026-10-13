@@ -607,7 +607,10 @@ internal static class ZoneEditCommon
                         if (pts == null || pts.Count < 2 || wallPieces.Contains(pts)) { outE.Add((isS, bench, sg, pts!)); continue; }
                         if (zs == null || zs.Count == 0) { pieceState[pts] = new ZonePiece.State(bS, bW, -1, false); outE.Add((isS, bench, sg, pts)); continue; }
                         int benchL = bench;
-                        var pcs = ZonePiece.Split(pts, (x, y) => ZonePiece.StateAt(zs, x, y, benchL, bS, bW, boundary!, cumB!), out int dr);
+                        // ★[v103.1.3 · JACK 1007 «되돌린 자리에서 여전히 잘려 있는데 이게 정상이야?»] 구배 · 소단 · 종류가 같으면 안 끊는다 — 기본값으로 되돌린 구간처럼
+                        //   규칙 기록만 다른 자리에서 끊으면 원래 한 줄이던 선을 한 번에 못 고른다(현장 1007: 성토 5줄 → 14조각). 종류 잣대는 고를 때 쓰는 것과 같다(WallGateSlope)
+                        var pcs = ZonePiece.Split(pts, (x, y) => ZonePiece.StateAt(zs, x, y, benchL, bS, bW, boundary!, cumB!), out int dr,
+                            same: (s1, s2) => ZonePiece.SameForPick(s1, s2, benchL, bS, bW, GradingSettings.WallGateSlope));
                         zDropped += dr; zCuts += System.Math.Max(0, pcs.Count - 1);
                         foreach (var (pp, st) in pcs) { outE.Add((isS, bench, sg, pp)); pieceState[pp] = st; }
                     }
@@ -992,7 +995,7 @@ internal static class ZoneEditCommon
                         kindSel = ZonePiece.Classify(st, pk.bench, bS, bW, GradingSettings.WallGateSlope);
                         nowTxt = $" · 지금 {(st.Slope <= GradingSettings.WallGateSlope ? "<수직=옹벽>" : $"1:{st.Slope:0.##}")}"
                                + $"·소단 {st.BenchW:0.##}m";
-                        stTxt = $"1:{st.Slope:0.###}·소단 {st.BenchW:0.##}m(기본 1:{bS:0.###}·{bW:0.##}m) · 값을 정한 규칙 {(st.RuleFrom < 0 ? "없음" : $"{st.RuleFrom + 1}단부터{(st.RuleActs ? "" : "(앞 값과 같음)")}")}";
+                        stTxt = $"1:{st.Slope:0.###}·소단 {st.BenchW:0.##}m(기본 1:{bS:0.###}·{bW:0.##}m) · 값을 정한 규칙(조각 첫 점) {(st.RuleFrom < 0 ? "없음" : $"{st.RuleFrom + 1}단부터{(st.RuleActs ? "" : "(앞 값과 같음)")}")}";
                     }
                 }
                 bool wallPiece = wallOfKey.TryGetValue(key, out var wSel);
@@ -1185,6 +1188,25 @@ internal static class ZoneEditCommon
                     //   화면에 <b>두꺼운 빨강</b>으로 보여 줄 선이다(JACK: <i>"구간 선정 시 두꺼운 빨간 선이 보여야 해"</i>).
                     //   ★[v102.2 · 재검토 낮음 3] 뜨기·울타리 법선·바깥쪽은 Core에서(하네스 S146이 <b>같은 함수</b>로 잰다)
                     var segA = WallInPoly.SegmentPoints(rulA, cumA, arcA.T0, arcA.T1);
+                    // ★[v103.1.3 · 검토 1007 낮음 6] 고른 구간의 끝이 <b>같은 선의 옹벽 끝과 맞닿으면</b>(1cm 안) 폴리곤을 그리기 전에 알리고 멈춘다.
+                    //   맞닿은 옹벽은 짓기 직전 판정(WallList.Conflict — 폴리곤 거리 1cm 안 = 멈춤 · JACK 0930 ①)이 어차피 막는데, 그 판정은 시점 · 종점을 다 찍은 뒤에 나온다.
+                    //   v103.1.3부터 옹벽 옆 조각의 끝이 옹벽 끝과 정확히 같아(종전엔 5cm 떨어져 있었다) 조각 끝까지 고르면 늘 여기에 걸린다. 보류 옹벽은 그 판정처럼 뺀다
+                    if (segA.Count >= 2)
+                    {
+                        static double D2(Point3 p, Point3 q) => (p.X - q.X) * (p.X - q.X) + (p.Y - q.Y) * (p.Y - q.Y);
+                        foreach (var w in listWalls)
+                        {
+                            if (w.Up != pick.Value.up || w.Bench != pick.Value.bench || w.Hold.Length > 0 || w.Seg == null || w.Seg.Count < 2) continue;
+                            double dT = System.Math.Sqrt(System.Math.Min(System.Math.Min(D2(segA[0], w.Seg[0]), D2(segA[0], w.Seg[^1])),
+                                                                         System.Math.Min(D2(segA[^1], w.Seg[0]), D2(segA[^1], w.Seg[^1]))));
+                            if (dT > 0.01) continue;
+                            ed.WriteMessage($"\n[{cmdLabel}] 고른 구간의 끝이 옹벽 {w.No}의 끝과 맞닿습니다(거리 {dT * 1000:0.#}mm) — 맞닿은 옹벽은 아직 이어 짓지 못합니다."
+                                          + " 옹벽 끝에서 띄워 구간을 다시 지정하세요. 아무것도 안 바꿨습니다.");
+                            Log($"■ {cmdLabel} — 고른 구간 끝이 옹벽 {w.No}({w.Side} {w.Bench + 1}단) 끝과 맞닿음({dT * 1000:F1}mm) → 폴리곤을 그리기 전에 멈춤(안 바꿈)");
+                            GradingSettings.SetWallPolyManual(null, ""); GradingSettings.WallZonePick = null;
+                            return;
+                        }
+                    }
                     // ★★★[JACK 0917] 구간선의 <b>바깥쪽 법선</b>을 양 끝에서 재 넘긴다 —
                     //   그 반대쪽(노선 안쪽 · ㄷ자 안뜰)으로는 못 그리게 하는 울타리다.
                     //   <c>OutwardAt</c>이 반시계 링의 <b>바깥</b>을 주므로 그 차이가 곧 법선이다.
@@ -1229,6 +1251,7 @@ internal static class ZoneEditCommon
             // ── 적용: 기존 구간 + 이번 규칙 하나 ──
             var newCut = new System.Collections.Generic.List<SlopeZone>();
             var newFill = new System.Collections.Generic.List<SlopeZone>();
+            SlopeZone? nzFresh = null;
             if (!clearAll)
             {
                 foreach (var (up, src, target) in new[]
@@ -1262,6 +1285,7 @@ internal static class ZoneEditCommon
                     nz.Rules.Add((pick.Value.bench, askN!.Value, askW!.Value));
                     nz.Normalize();   // ★[검토 0824 사소-14] FirstBench 전제를 지킨다(규칙이 늘어도 안전)
                     target.Add(nz);
+                    nzFresh = nz;     // ★[v103.1.3] 방금 넣은 구간 — 아래 구간 정리(DropNoOps)가 «전부터 있던 구간»과 다르게 본다
                     // ★★★[JACK 0820] **단높이는 구간이 아니라 방향 전체에 쌓는다.**
                     //   구배·소단폭은 클릭한 선의 호길이 범위 안에만 적용되지만(위 Flatten),
                     //   단높이는 그러면 안 된다 — 둘레의 일부만 단높이가 다르면 같은 링에 표고가 둘이 되어
@@ -1286,6 +1310,29 @@ internal static class ZoneEditCommon
                     // ★[JACK 0824] 뒤 규칙에 덮여 아무 일도 안 하는 구간은 뺀다 —
                     //   안 빼면 변환할 때마다 쌓여 번들이 커지고 로그를 읽을 수 없다(실측: 4개 중 3개가 죽어 있었다).
                     SlopeZone.Compact(target, boundary, cumB);
+                }
+            }
+            // ★★★[v103.1.3 · JACK 1007 «되돌린 자리에서 여전히 잘려 있는데 이게 정상이야?» → «화면 · 기록 둘 다 고침»]
+            //   사면 변환이면 <b>아무 일도 안 하는 구간</b>(규칙이 전부 기본값 · 앞선 구간과 안 겹침)을 기록에서 뺀다 — 옹벽을 기본값 그대로 사면으로 되돌리거나
+            //   구배를 바꾼 사면을 기본값으로 돌리면 «그 단부터 1:1.5» 규칙이 남아, 나중에 정지옵션 기본 구배를 바꿔도 그 자리만 옛 값으로 남았다(되돌림이 아니라 고정).
+            //   기본값은 <b>재생성이 읽는 값</b>(정지옵션)으로 견준다 — 번들 값과 다르면 빼도 모양이 안 바뀌는 쪽은 이쪽이다. 옹벽 변환에서는 안 한다(방금 넣은 옹벽 구간을 건드리지 않게).
+            //   ★[검토 1007 중간 1] 방금 넣은 구간(nzFresh)은 앞선 구간과 1µm 넘게 겹칠 때만 남긴다(맞닿기만 한 것은 빼면 넣기 전 목록 그대로) ·
+            //     전부터 있던 구간은 맞닿기만 해도 남긴다(모서리에서 맞닿은 기본값 구간을 빼면 그 바깥 부채꼴이 앞 구간 값으로 바뀐다 — Models.cs DropNoOps)
+            if (!clearAll && !wallMode && boundary != null && cumB != null)
+            {
+                var pNow = GradingSettings.ToParams();
+                foreach (var (upD, listD) in new[] { (true, newCut), (false, newFill) })
+                {
+                    var notesD = new System.Collections.Generic.List<string>();
+                    var freshD = pick != null && pick.Value.up == upD ? nzFresh : null;
+                    bool hadFresh = freshD != null && listD.Contains(freshD);
+                    int nd = SlopeZone.DropNoOps(listD, BaseSlopeOf(pNow, upD), pNow.BenchWidthOf(upD), boundary, cumB, notesD, freshD);
+                    if (nd > 0)
+                    {
+                        bool freshGone = hadFresh && !listD.Contains(freshD!);
+                        Log($"   구간 정리 — {(upD ? "절토" : "성토")}의 기본값 구간 {nd}개를 기록에서 뺐다({(freshGone ? "방금 넣은 구간 포함 — " : "")}뺀 구간은 아무 일도 안 하던 것 · 그 자리는 정지옵션 기본값을 따라간다"
+                          + $" · 기본 1:{BaseSlopeOf(pNow, upD):0.###}·소단 {pNow.BenchWidthOf(upD):0.##}m): {string.Join(" · ", notesD)}");
+                    }
                 }
             }
 
@@ -1493,8 +1540,11 @@ internal static class ZoneEditCommon
             GradingSettings.LastAddNo = 0; GradingSettings.LastAddNote = ""; GradingSettings.LastAddBlockedNo = 0;
             if (wallMode && drawPart)
                 GradingSettings.WallAddSpec = new GradingSettings.WallAddInfo(pick!.Value.up, pick.Value.bench, askH!.Value, askW!.Value, doc.Name);
+            // ★[v103.1.4 · JACK 1008 «재생성이 좀 오래 걸리는데» → A] 사면 변환이 옹벽을 되돌릴 때는 «되돌리기만»인지 DoGrade가 따져 보게 한다 —
+            //   넣은 값이 기본값이라 구간 기록이 안 바뀌었으면(v103.1.3 구간 정리) 정지면을 다시 만들어도 똑같다. 같은지는 DoGrade가 견준다(여기서 짐작하지 않는다)
             if (covered.Count > 0)
-                GradingSettings.WallRerunSpec = new GradingSettings.WallRerunInfo(doc.Name, covered.Select(w => w.No).ToArray(), wallMode ? "전체구간 옹벽 변환이 덮음" : "사면 변환이 덮음");
+                GradingSettings.WallRerunSpec = new GradingSettings.WallRerunInfo(doc.Name, covered.Select(w => w.No).ToArray(), wallMode ? "전체구간 옹벽 변환이 덮음" : "사면 변환이 덮음")
+                { RevertOnly = !wallMode && !clearAll };
             CreateGradingCommand.DoGrade(doc, planId, groundId, GradeMode.RerunLast);
             GradingSettings.WallAddSpec = null;   // 들머리에서 일찍 빠졌어도 다음 실행으로 새지 않게
             GradingSettings.WallRerunSpec = null;
@@ -1544,7 +1594,10 @@ internal static class ZoneEditCommon
             //   노리선이 생기면 그것도 놀랄 일이다. "쓰던 사람은 계속 맞고, 안 쓰던 사람은 그대로".
             //   ★명령으로 태운다 — 여기는 이미 명령 문맥이지만, 노리선은 제 트랜잭션·잠금을 쓰므로
             //   같은 흐름 안에서 직접 부르면 정지면 재생성이 쥔 것과 부딪힐 수 있다.
-            if (HasNoriLines(db))
+            // ★[v103.1.4] 정지면을 다시 안 만들었으면(되돌리기만) 사면 · 소단이 그대로라 노리선도 그대로다 — 다시 그리지 않는다
+            if (GradingSettings.LastRegenSkipped)
+                Log($"■ {cmdLabel} — 정지면을 다시 안 만들어 노리선 갱신도 건너뜀");
+            else if (HasNoriLines(db))
             {
                 ed.WriteMessage($"\n[{cmdLabel}] 노리선을 새 형상에 맞춰 다시 그립니다…");
                 Log($"■ {cmdLabel} — 노리선이 있어 자동 갱신(DHNORI)");
