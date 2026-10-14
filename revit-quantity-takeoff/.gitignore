@@ -6,3 +6,12 @@ __pycache__/
 # 생성된 산출서 출력물 (예시 파일은 추적 유지하려면 별도 관리)
 *.xlsx
 ~$*.xlsx
+
+# 현장(고객) 값이 든 것 — 공개 저장소에 올리지 않는다(JACK 2026-10-14: "애드인 소스만 푸시").
+# 송악3 의 치수 · 레벨 · 부재 번호가 든 시험 코드와 미리보기 도구는 PC 에만 두고,
+# 설치할 때마다 %APPDATA%\DH.Takeoff\backup\…_src\src_tools_snapshot.tgz 로 묶어 둔다.
+# (6월에 올린 시험 파일은 그대로 추적된다 — 아래 규칙은 새 파일에만 걸린다.)
+samples/songak3_geometry.json
+tools/
+src/DH.Takeoff.Core.Tests/*.cs
+src/DH.Takeoff.Core.Tests/TestResults/

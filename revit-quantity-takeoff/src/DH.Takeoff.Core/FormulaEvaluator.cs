@@ -5,14 +5,25 @@ namespace DH.Takeoff.Core;
 /// <summary>
 /// 산출식(VBA 호환) 수치 평가기 — 재귀하강 파서.
 /// 지원: + - * / ( ) ^(거듭제곱) 단항 ± SQRT(...) PI().  '×' 는 '*' 로 정규화.
-/// 우선순위(Python/Excel 동치): () > 함수 > ^(우결합) > 단항± > * / > + -.
+/// 우선순위(Python 과 같다): () > 함수 > ^(우결합) > 단항± > * / > + -.
 /// 단, 거듭제곱은 단항보다 강하게 결합: -2^2 = -(2^2) = -4, 2^-2 = 2^(-2), 2^3^2 = 2^(3^2).
+/// ★ Excel 과는 두 군데가 다르다: Excel 은 -2^2 = 4, 2^3^2 = 64 로 계산한다.
+///   분해기가 만드는 식에는 그런 꼴(앞에 붙은 −와 ^, 연달은 ^)이 없지만, 사람이 넣은 식을 엑셀로 내보낼 때는 조심할 것.
 /// 토큰([L1] 등)은 호출 전에 숫자로 치환되어 있어야 한다(<see cref="TakeoffEngine"/> 담당).
 /// </summary>
 public sealed class FormulaEvaluator
 {
     private readonly string _s;
     private int _i;
+    private int _depth;
+
+    /// <summary>괄호·부호·거듭제곱이 이보다 깊게 겹친 식은 받지 않는다(끝없이 파고들다 프로그램이 죽지 않게).</summary>
+    public const int MaxDepth = 200;
+
+    private void Enter()
+    {
+        if (++_depth > MaxDepth) throw new FormatException("식이 너무 깊게 겹쳐 있음");
+    }
 
     private FormulaEvaluator(string s) => _s = s;
 
@@ -29,14 +40,19 @@ public sealed class FormulaEvaluator
     // expr = term (('+'|'-') term)*
     private double ParseExpr()
     {
-        double v = ParseTerm();
-        while (true)
+        Enter();
+        try
         {
-            char c = Peek();
-            if (c == '+') { _i++; v += ParseTerm(); }
-            else if (c == '-') { _i++; v -= ParseTerm(); }
-            else return v;
+            double v = ParseTerm();
+            while (true)
+            {
+                char c = Peek();
+                if (c == '+') { _i++; v += ParseTerm(); }
+                else if (c == '-') { _i++; v -= ParseTerm(); }
+                else return v;
+            }
         }
+        finally { _depth--; }
     }
 
     // term = factor (('*'|'/') factor)*
@@ -55,10 +71,15 @@ public sealed class FormulaEvaluator
     // factor = ('+'|'-') factor | power      (단항: 거듭제곱보다 약하게 결합)
     private double ParseFactor()
     {
-        char c = Peek();
-        if (c == '-') { _i++; return -ParseFactor(); }
-        if (c == '+') { _i++; return ParseFactor(); }
-        return ParsePower();
+        Enter();
+        try
+        {
+            char c = Peek();
+            if (c == '-') { _i++; return -ParseFactor(); }
+            if (c == '+') { _i++; return ParseFactor(); }
+            return ParsePower();
+        }
+        finally { _depth--; }
     }
 
     // power = primary ('^' factor)?          (base는 단항 불포함, 지수는 factor → 우결합·지수 단항 허용)

@@ -19,13 +19,13 @@ public sealed class ResolveOverlapsCommand : IExternalCommand
         try
         {
             string summary = OverlapResolver.Resolve(doc);
-            TaskDialog.Show("DH 수량산출 — 겹침 공제", summary);
+            Dialogs.Show("DH 수량산출 — 겹침 공제", summary);
             return Result.Succeeded;
         }
         catch (Exception ex)
         {
             message = ex.Message;
-            TaskDialog.Show("DH 수량산출 — 오류", "겹침 공제 중 오류:\n" + ex.Message);
+            Dialogs.Show("DH 수량산출 — 오류", "겹침 공제 중 오류:\n" + ex.Message);
             return Result.Failed;
         }
     }

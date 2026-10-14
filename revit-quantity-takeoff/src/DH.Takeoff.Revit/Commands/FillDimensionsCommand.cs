@@ -23,7 +23,7 @@ public sealed class FillDimensionsCommand : IExternalCommand
             ICollection<ElementId> targets = sel.Count > 0 ? sel : DimensionExtractor.CollectApplicable(doc);
             if (targets.Count == 0)
             {
-                TaskDialog.Show("DH 수량산출 — 치수 자동입력", "대상 구조부재가 없습니다.");
+                Dialogs.Show("DH 수량산출 — 치수 자동입력", "대상 구조부재가 없습니다.");
                 return Result.Cancelled;
             }
 
@@ -34,7 +34,7 @@ public sealed class FillDimensionsCommand : IExternalCommand
             {
                 // 비정형 순환 없음 → 곧바로 겹침 공제 자동 실행
                 string ded = OverlapResolver.Resolve(doc);
-                TaskDialog.Show("DH 수량산출 — 치수 자동입력 + 겹침 공제 완료",
+                Dialogs.Show("DH 수량산출 — 치수 자동입력 + 겹침 공제 완료",
                     $"{filled}개 부재에 L1·W1·H를 자동 입력했습니다 (단위 m).\n\n{ded}");
                 return Result.Succeeded;
             }
@@ -42,6 +42,7 @@ public sealed class FillDimensionsCommand : IExternalCommand
             // 비정형은 사용자에게 선택지 제공
             var td = new TaskDialog("DH 수량산출 — 치수 자동입력")
             {
+                TitleAutoPrefix = false,
                 MainInstruction = $"반듯한 부재 {filled}개를 자동 입력했어요.",
                 MainContent = $"비정형(자동값이 부정확할 수 있는) 부재가 {irregular.Count}개 있어요. 어떻게 할까요?\n" +
                               "(검토를 마치면 겹침 공제가 자동 실행됩니다.)",
@@ -60,12 +61,12 @@ public sealed class FillDimensionsCommand : IExternalCommand
                 case TaskDialogResult.CommandLink2:
                     int f2 = DimensionExtractor.Fill(doc, irregular);
                     string ded2 = OverlapResolver.Resolve(doc);
-                    TaskDialog.Show("DH 수량산출 — 치수 입력 + 겹침 공제 완료",
+                    Dialogs.Show("DH 수량산출 — 치수 입력 + 겹침 공제 완료",
                         $"비정형 {f2}개도 경계상자로 채웠어요(부정확할 수 있어 속성창 확인 권장).\n\n{ded2}");
                     break;
                 case TaskDialogResult.CommandLink3:
                     string ded3 = OverlapResolver.Resolve(doc);
-                    TaskDialog.Show("DH 수량산출 — 겹침 공제 완료", ded3);
+                    Dialogs.Show("DH 수량산출 — 겹침 공제 완료", ded3);
                     break;
                 // 취소: 공제 실행 안 함
             }
@@ -74,7 +75,7 @@ public sealed class FillDimensionsCommand : IExternalCommand
         catch (Exception ex)
         {
             message = ex.Message;
-            TaskDialog.Show("DH 수량산출 — 오류", "치수 자동입력 중 오류:\n" + ex.Message);
+            Dialogs.Show("DH 수량산출 — 오류", "치수 자동입력 중 오류:\n" + ex.Message);
             return Result.Failed;
         }
     }

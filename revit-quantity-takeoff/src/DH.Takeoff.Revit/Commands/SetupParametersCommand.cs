@@ -22,13 +22,13 @@ public sealed class SetupParametersCommand : IExternalCommand
         try
         {
             string summary = SharedParameterManager.EnsureParameters(doc);
-            TaskDialog.Show("DH 수량산출 — 매개변수 세팅", summary);
+            Dialogs.Show("DH 수량산출 — 매개변수 세팅", summary);
             return Result.Succeeded;
         }
         catch (Exception ex)
         {
             message = ex.Message;
-            TaskDialog.Show("DH 수량산출 — 오류", "매개변수 생성 중 오류:\n" + ex.Message);
+            Dialogs.Show("DH 수량산출 — 오류", "매개변수 생성 중 오류:\n" + ex.Message);
             return Result.Failed;
         }
     }
