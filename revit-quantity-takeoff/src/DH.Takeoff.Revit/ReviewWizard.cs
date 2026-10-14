@@ -88,11 +88,17 @@ public sealed class ReviewWizard : Window
                 Members = new List<ElementId> { o.Id },
                 Category = el.Category?.Name ?? "(분류없음)",
                 Subtitle = $"{o.Category} · {o.TypeName} · Id {o.Id.Value}",
-                Reason = o.Result.Reason,
+                // '다시 계산 필요'를 남긴 부재(결합으로 체적이 바뀌었는데 식을 새로 만들지 못함 — 「위치·부위 정하기」에 이어서 돈 산출식만 이렇게 넘긴다):
+                // 까닭을 앞에 적는다 — 넣어 둔 식이 ±1% 안이라 초록으로 보여도 그대로 맞는 식이 아닐 수 있다.
+                Reason = o.StaleLeft
+                    ? "결합으로 체적이 바뀐 부재입니다 — 넣어 둔 식이 깎인 만큼을 아직 세고 있을 수 있습니다. 식을 확인해 다시 넣어 주세요. (" + o.Result.Reason + ")"
+                    : o.Result.Reason,
                 AutoExpr = made,
                 // 추천식을 식 칸에 미리 넣는다. 모델과 다른 식은 빨갛게 보이고, 그대로 저장하려 하면 한 번 더 묻는다
                 // (창을 그냥 닫으면 모델과 맞는 식만 적힌다). 추천식이 없으면 전에 적혀 있던 숫자 식을 넣어 고쳐 쓰게 한다.
-                Expr = made.Length > 0 ? made : existingUsable ? o.Existing : "",
+                // 다만 '다시 계산 필요'를 남긴 부재는 넣어 둔 식을 식 칸에 미리 넣지 않는다(아래 쪽지로만 보인다): 미리 넣어 두면 창을 그냥 닫기만 해도
+                // 그 식이 '모델과 맞는 식'으로 적혀 표시가 사라진다 — 사람이 직접 넣어야 확인한 것이다.
+                Expr = made.Length > 0 ? made : existingUsable && !o.StaleLeft ? o.Existing : "",
                 ModelVolume = o.Bim, // 판정(DH_판정)이 쓰는 것과 같은 BIM 물량과 맞춰 본다
             };
             // 식 칸에 넣지 않은 '지금 칸에 적힌 글자'가 있으면 보여 준다(안 보이는 채로 덮어쓰지 않게).

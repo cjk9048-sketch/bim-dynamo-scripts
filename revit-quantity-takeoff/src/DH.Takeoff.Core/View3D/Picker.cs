@@ -25,6 +25,30 @@ public static class Picker
         return best >= 0 ? (best, bestT) : (-1, 0);
     }
 
+    /// <summary>
+    /// 시선이 닿는 겉면 전부 — 가까운 것부터(거리가 같으면 차례순). 겹쳐 그려져 맨 앞 것만 보이는 것들을 차례로 고를 때 쓴다.
+    /// 겉면마다 한 번만 나온다(그 겉면에서 가장 가까이 닿은 자리의 거리).
+    /// </summary>
+    public static List<(int index, double distance)> PickAll(IReadOnlyList<MeshData> meshes, Func<int, bool> shown, Vec3 origin, Vec3 direction)
+    {
+        var dir = direction.Unit();
+        var hits = new List<(int index, double distance)>();
+        for (int m = 0; m < meshes.Count; m++)
+        {
+            var mesh = meshes[m];
+            if (mesh.T.Length == 0 || !shown(m) || !HitsBox(mesh.Box, origin, dir)) continue;
+            double nearest = double.MaxValue;
+            for (int i = 0; i + 2 < mesh.T.Length; i += 3)
+            {
+                double t = HitTriangle(origin, dir, mesh.Vertex(mesh.T[i]), mesh.Vertex(mesh.T[i + 1]), mesh.Vertex(mesh.T[i + 2]));
+                if (t < nearest) nearest = t;
+            }
+            if (nearest < double.MaxValue) hits.Add((m, nearest));
+        }
+        hits.Sort((a, b) => a.distance != b.distance ? a.distance.CompareTo(b.distance) : a.index.CompareTo(b.index));
+        return hits;
+    }
+
     // 시선(양쪽으로 끝없는 직선 — 직교 그림에서는 화면 평면 앞뒤의 것이 다 보인다)이 상자를 지나는가.
     private static bool HitsBox(Box3 box, Vec3 o, Vec3 d)
     {

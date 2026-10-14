@@ -8,6 +8,19 @@ using DH.Takeoff.Core.View3D;
 
 namespace DH.Takeoff.Revit;
 
+/// <summary>부재 하나를 그리는 방식 — 층을 나눠 그릴 때(Model3DView 의 layered)만 쓴다.</summary>
+public enum MeshStyle
+{
+    /// <summary>면 + 모서리(「위치·부위 정하기」의 그리기).</summary>
+    Solid,
+    /// <summary>면 없이 모서리만 — 속이 다 비쳐 보이는 둘레 부재. 찍히지 않는다.</summary>
+    Ghost,
+    /// <summary>옅은 색 면(뒤가 비친다) + 제 색 모서리.</summary>
+    Tint,
+    /// <summary>맨 위 층에 불투명하게 — 다른 부재에 가려져 있어도 보이고, 찍을 때도 먼저 닿는다.</summary>
+    Top,
+}
+
 /// <summary>
 /// 3D 팝업의 그림 — 부재의 겉면(MeshData)을 직교 카메라로 그리고, 마우스로 돌리기·옮기기·확대와 찍기·끌어 고르기를 받는다.
 /// Revit API 를 쓰지 않는다(화면만 따로 그려 볼 수 있게 — tools/uipreview). 무엇이 보이고 무슨 색인지는 바깥(편집기)이 정한다.
@@ -18,6 +31,9 @@ namespace DH.Takeoff.Revit;
 ///  · 찍기: Core 의 Picker 가 시선으로 직접 센다(WPF 의 찍기 기능을 쓰지 않는다 — 화면 없이도 같은 답).
 ///  · 마우스: 왼쪽 = 찍기 / 끌면 네모로 고르기(왼→오 온전히 든 것 · 오→왼 걸친 것까지) · 굴림 = 확대(마우스 자리) ·
 ///           가운데 끌기 = 옮기기 · Shift + 가운데 끌기 또는 오른쪽 끌기 = 돌리기 · 가운데 두 번 누르기 = 화면 맞춤. (Revit 과 같은 손짓)
+///  · 층을 나눠 그리기(layered — 겹침 검사 창만 켠다. 켜지 않으면 위의 그리기 그대로다): 부재마다 그리는 방식(MeshStyle)을 받아
+///    그림을 넷으로 겹친다 — 바닥(면 + 모서리 · 둘레 부재의 모서리만) → 옅은 면(층을 통째로 옅게 섞는다: 층 안에서는 불투명하게 그려
+///    깊이가 맞고, 반투명 재료를 쓰지 않으니 그리는 차례 문제가 없다) → 맨 위(제 깊이 판정을 따로 가져 아래 층에 가려지지 않는다) → 고른 부재.
 /// </summary>
 public sealed class Model3DView : Grid
 {
@@ -25,6 +41,7 @@ public sealed class Model3DView : Grid
     private const double EdgePixels = 1.25;       // 모서리 띠의 폭(화면 픽셀)
     private const double PickEdgePixels = 3.0;    // 고른 부재의 테두리 폭(화면 픽셀)
     private const double EdgeLift = 0.003;        // 모서리 띠를 면에서 띄우는 높이(m)
+    private const double TintOpacity = 0.34;      // 옅은 면의 층을 섞는 세기(층을 나눠 그릴 때)
 
     private readonly IReadOnlyList<MeshData> _meshes;
     private readonly bool _dark;
@@ -34,6 +51,11 @@ public sealed class Model3DView : Grid
     private readonly Viewport3D _over = new() { IsHitTestVisible = false, ClipToBounds = true };
     private readonly Model3DGroup _bodies = new(), _picked = new();
     private readonly DirectionalLight _headlight = new(Color.FromRgb(112, 112, 112), new Vector3D(0, 0, -1));
+    private readonly bool _layered;                                   // 층을 나눠 그린다(겹침 검사 창)
+    private readonly Viewport3D? _tint, _top;                         // 옅은 면의 층 · 맨 위 층(층을 나눠 그릴 때만 있다)
+    private readonly Model3DGroup _tintBodies = new(), _topModels = new();
+    private readonly List<DirectionalLight> _layerHeadlights = new();
+    private readonly Dictionary<int, Material> _flat = new();         // 빛에 상관없이 그 색 그대로인 재료(색칠한 모서리)
     private readonly MeshGeometry3D?[] _body;
     private readonly GeometryModel3D?[] _bodyModel, _edgeModel;
     private readonly Dictionary<int, Material> _materials = new();
@@ -54,6 +76,15 @@ public sealed class Model3DView : Grid
 
     public OrbitCamera Camera { get; } = new();
 
+    /// <summary>끌고 있는 중인가(돌리기 · 옮기기 · 네모).</summary>
+    public bool Dragging => _drag is Drag.Band or Drag.Pan or Drag.Orbit;
+
+    /// <summary>단추가 눌려 있는가(끌기 시작 전의 누름 포함) — 이때의 Esc 는 누른 것을 그만두는 데 쓴다.</summary>
+    public bool Pressed => _drag != Drag.None;
+
+    /// <summary>마지막으로 찍은 자리(Clicked 를 알릴 때의 화면 좌표).</summary>
+    public Point ClickPoint { get; private set; }
+
     /// <summary>그 부재를 그릴 것인가(차례 = 넘겨준 겉면의 차례).</summary>
     public Func<int, bool> Shown { get; set; } = _ => true;
 
@@ -62,6 +93,15 @@ public sealed class Model3DView : Grid
 
     /// <summary>그 부재가 골라져 있는가.</summary>
     public Func<int, bool> Picked { get; set; } = _ => false;
+
+    /// <summary>그 부재를 그리는 방식(층을 나눠 그릴 때만 본다).</summary>
+    public Func<int, MeshStyle> StyleOf { get; set; } = _ => MeshStyle.Solid;
+
+    /// <summary>둘레 부재(MeshStyle.Ghost)의 모서리 색.</summary>
+    public (byte r, byte g, byte b) GhostEdge { get; set; }
+
+    /// <summary>왼쪽 단추로 끌어 네모로 고르기를 받는가(받지 않으면 끌어도 누른 자리를 찍은 것으로 친다).</summary>
+    public bool BandSelect { get; set; } = true;
 
     /// <summary>부재를 찍었다(차례, Ctrl). 빈 곳이면 −1.</summary>
     public event Action<int, bool>? Clicked;
@@ -75,10 +115,13 @@ public sealed class Model3DView : Grid
     /// <summary>마우스 처리에서 오류가 났다(끌던 것은 그만두었다) — 창에 알린다.</summary>
     public event Action<Exception>? Failed;
 
-    public Model3DView(IReadOnlyList<MeshData> meshes, bool dark)
+    /// <param name="layered">층을 나눠 그린다(StyleOf 를 본다). 주지 않으면 「위치·부위 정하기」의 그리기 그대로다.</param>
+    public Model3DView(IReadOnlyList<MeshData> meshes, bool dark, bool layered = false)
     {
         _meshes = meshes;
         _dark = dark;
+        _layered = layered;
+        GhostEdge = dark ? ((byte)0x5C, (byte)0x64, (byte)0x70) : ((byte)0xB3, (byte)0xBA, (byte)0xC6);
         Focusable = true;
         FocusVisualStyle = null;                      // 글쇠를 누르면 그림 둘레에 점선 네모가 생긴다 — 그리지 않는다
         ClipToBounds = true;
@@ -127,9 +170,33 @@ public sealed class Model3DView : Grid
 
         _layer.Children.Add(_band);
         Children.Add(_main);
+        if (layered)
+        {
+            _tint = Layer(_tintBodies, TintOpacity);
+            _top = Layer(_topModels, 1);
+            Children.Add(_tint);
+            Children.Add(_top);
+        }
         Children.Add(_over);
         Children.Add(_layer);
         Refresh();
+    }
+
+    // 층 하나: 같은 카메라 · 같은 빛으로, 제 깊이 판정을 따로 가진 그림(아래 층에 가려지지 않는다). opacity < 1 이면 층을 통째로 옅게 섞는다.
+    private Viewport3D Layer(Model3DGroup models, double opacity)
+    {
+        var head = new DirectionalLight(Color.FromRgb(112, 112, 112), new Vector3D(0, 0, -1));
+        _layerHeadlights.Add(head);
+        var lights = new Model3DGroup();
+        lights.Children.Add(new AmbientLight(Color.FromRgb(104, 104, 104)));
+        lights.Children.Add(head);
+        lights.Children.Add(new DirectionalLight(Color.FromRgb(76, 76, 76), new Vector3D(-0.35, 0.25, -1)));
+        var world = new Model3DGroup();
+        world.Children.Add(lights);
+        world.Children.Add(models);
+        var view = new Viewport3D { IsHitTestVisible = false, ClipToBounds = true, Camera = _eye, Opacity = opacity };
+        view.Children.Add(new ModelVisual3D { Content = world });
+        return view;
     }
 
     private static SolidColorBrush Brush(Color color)
@@ -162,6 +229,18 @@ public sealed class Model3DView : Grid
         return material;
     }
 
+    // 빛에 상관없이 그 색 그대로인 재료(색칠한 모서리): 검은 바탕에 스스로 빛나는 색을 얹는다 — 면의 방향에 따라 선의 색이 달라지지 않는다.
+    private Material FlatOf((byte r, byte g, byte b) c)
+    {
+        int key = (c.r << 16) | (c.g << 8) | c.b;
+        if (_flat.TryGetValue(key, out var material)) return material;
+        var group = new MaterialGroup();
+        group.Children.Add(new DiffuseMaterial(Brushes.Black));
+        group.Children.Add(new EmissiveMaterial(Brush(Color.FromRgb(c.r, c.g, c.b))));
+        group.Freeze();
+        return _flat[key] = group;
+    }
+
     // ── 그리기 ───────────────────────────────────────────────────────────────────
 
     /// <summary>보이는 것 · 색 · 고른 것이 바뀌었다: 그림을 다시 맞춘다.</summary>
@@ -169,6 +248,7 @@ public sealed class Model3DView : Grid
     {
         _bodies.Children.Clear();
         _picked.Children.Clear();
+        if (_layered) { RefreshLayers(); return; }
         for (int i = 0; i < _meshes.Count; i++)
         {
             var body = _bodyModel[i];
@@ -190,8 +270,46 @@ public sealed class Model3DView : Grid
         }
     }
 
+    // 층을 나눠 그릴 때: 부재마다 그리는 방식에 따라 제 층에 넣는다. 고른 부재의 덧그림은 쓰지 않는다(겹침 창에는 '고른 부재'가 없다).
+    private void RefreshLayers()
+    {
+        _tintBodies.Children.Clear();
+        _topModels.Children.Clear();
+        for (int i = 0; i < _meshes.Count; i++)
+        {
+            var body = _bodyModel[i];
+            if (body == null || !Shown(i)) continue;
+            var color = ColorOf(i);
+            if (i == _hover) color = Lighter(color);
+            var edge = _edgeModel[i] is { Geometry: not null } strip ? strip : null;
+            switch (StyleOf(i))
+            {
+                case MeshStyle.Ghost:
+                    if (edge != null) { edge.Material = edge.BackMaterial = FlatOf(GhostEdge); _bodies.Children.Add(edge); }
+                    break;
+                case MeshStyle.Tint:
+                    body.Material = body.BackMaterial = MaterialOf(color);
+                    _tintBodies.Children.Add(body);
+                    if (edge != null) { edge.Material = edge.BackMaterial = FlatOf(Darker(color)); _topModels.Children.Add(edge); }
+                    break;
+                case MeshStyle.Top:
+                    body.Material = body.BackMaterial = MaterialOf(color);
+                    _topModels.Children.Add(body);
+                    if (edge != null) { edge.Material = edge.BackMaterial = FlatOf(Darker(color)); _topModels.Children.Add(edge); }
+                    break;
+                default:
+                    body.Material = body.BackMaterial = MaterialOf(color);
+                    _bodies.Children.Add(body);
+                    if (edge != null) { edge.Material = edge.BackMaterial = _edgeMaterial; _bodies.Children.Add(edge); }
+                    break;
+            }
+        }
+    }
+
     private static (byte r, byte g, byte b) Lighter((byte r, byte g, byte b) c) =>
         ((byte)(c.r + (255 - c.r) * 0.38), (byte)(c.g + (255 - c.g) * 0.38), (byte)(c.b + (255 - c.b) * 0.38));
+
+    private static (byte r, byte g, byte b) Darker((byte r, byte g, byte b) c) => ((byte)(c.r * 0.62), (byte)(c.g * 0.62), (byte)(c.b * 0.62));
 
     // 카메라가 바뀌었다: WPF 카메라와 빛을 맞추고, 확대가 달라졌으면 모서리 띠를 다시 만든다.
     private void SyncCamera()
@@ -206,6 +324,7 @@ public sealed class Model3DView : Grid
         _eye.NearPlaneDistance = near;
         _eye.FarPlaneDistance = far;
         _headlight.Direction = new Vector3D(forward.X, forward.Y, forward.Z);
+        foreach (var head in _layerHeadlights) head.Direction = _headlight.Direction;
 
         double pixel = Camera.PixelSize;
         if (_edgePixelSize > 0 && Math.Abs(pixel - _edgePixelSize) <= _edgePixelSize * 0.12) return;
@@ -258,6 +377,15 @@ public sealed class Model3DView : Grid
         SyncCamera();
     }
 
+    /// <summary>그 상자가 화면 가운데에 넉넉히 보이게 한다. minWidth = 화면 가로가 이보다 좁아지지 않게(m) — 작은 것을 볼 때도 둘레가 보인다.</summary>
+    public void ZoomTo(Box3 box, double margin, double minWidth)
+    {
+        if (box.IsEmpty) return;
+        Camera.Fit(box, margin);
+        if (Camera.Width < minWidth) Camera.Width = minWidth;
+        SyncCamera();
+    }
+
     /// <summary>모델의 점(장면 좌표)이 화면의 어디에 그려지는가(시험에서 본다).</summary>
     public Point ScreenOf(Vec3 p)
     {
@@ -269,7 +397,27 @@ public sealed class Model3DView : Grid
     public int IndexAt(Point at)
     {
         var (origin, direction) = Camera.Ray(at.X, at.Y);
+        if (_layered)
+        {
+            // 맨 위 층의 것은 다른 것에 가려져 있어도 보이므로 먼저 닿는다. 모서리만 그린 둘레 부재는 찍히지 않는다.
+            int top = Picker.Pick(_meshes, i => _bodyModel[i] != null && Shown(i) && StyleOf(i) == MeshStyle.Top, origin, direction).index;
+            if (top >= 0) return top;
+            return Picker.Pick(_meshes, i => _bodyModel[i] != null && Shown(i) && StyleOf(i) is MeshStyle.Solid or MeshStyle.Tint, origin, direction).index;
+        }
         return Picker.Pick(_meshes, i => _bodyModel[i] != null && Shown(i), origin, direction).index;
+    }
+
+    /// <summary>
+    /// 화면의 그 자리에서 찍을 수 있는 것 전부 — 찍히는 차례대로(첫째 = IndexAt 의 답). 층을 나눠 그릴 때는 맨 위 층의 것이 먼저이고,
+    /// 층 안에서는 가까운 것부터다. 겹쳐 그려진 것들을 다시 눌러 차례로 고를 때 쓴다.
+    /// </summary>
+    public IReadOnlyList<int> IndicesAt(Point at)
+    {
+        var (origin, direction) = Camera.Ray(at.X, at.Y);
+        if (!_layered) return Picker.PickAll(_meshes, i => _bodyModel[i] != null && Shown(i), origin, direction).Select(h => h.index).ToList();
+        var hits = Picker.PickAll(_meshes, i => _bodyModel[i] != null && Shown(i) && StyleOf(i) == MeshStyle.Top, origin, direction).Select(h => h.index).ToList();
+        hits.AddRange(Picker.PickAll(_meshes, i => _bodyModel[i] != null && Shown(i) && StyleOf(i) is MeshStyle.Solid or MeshStyle.Tint, origin, direction).Select(h => h.index));
+        return hits;
     }
 
     // ── 마우스 ───────────────────────────────────────────────────────────────────
@@ -409,6 +557,7 @@ public sealed class Model3DView : Grid
                 SetHover(IndexAt(at));
                 return;
             case Drag.Pending:
+                if (!BandSelect) return;
                 if (Math.Abs(at.X - _down.X) <= DragPixels && Math.Abs(at.Y - _down.Y) <= DragPixels) return;
                 _drag = Drag.Band;
                 SetHover(-1);
@@ -444,7 +593,11 @@ public sealed class Model3DView : Grid
     // 끝난 끌기를 알린다: 움직이지 않았으면 찍기, 네모를 끌었으면 그 안의 부재들. 돌리기 · 옮기기는 끄는 동안 이미 되어 있다.
     private void Finish((Drag drag, Point down, bool ctrl) ended, Point at)
     {
-        if (ended.drag == Drag.Pending) Clicked?.Invoke(IndexAt(ended.down), ended.ctrl);
+        if (ended.drag == Drag.Pending)
+        {
+            ClickPoint = ended.down;
+            Clicked?.Invoke(IndexAt(ended.down), ended.ctrl);
+        }
         else if (ended.drag == Drag.Band)
         {
             // 왼쪽에서 오른쪽으로 끌면 온전히 든 것만, 오른쪽에서 왼쪽으로 끌면 걸친 것까지.

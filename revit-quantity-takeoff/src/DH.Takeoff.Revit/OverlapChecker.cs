@@ -3,6 +3,7 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using Autodesk.Revit.DB;
+using DH.Takeoff.Core.View3D;
 
 namespace DH.Takeoff.Revit;
 
@@ -16,6 +17,13 @@ public sealed class OverlapPair
     public double VolumeM3;            // 겹친 체적(m³)
     public string Status = "";         // 결합 결과("결합됨" / "결합 못 함: …"). 결합을 시도하지 않았으면 ""
     public double AfterM3 = double.NaN; // 결합한 뒤 다시 잰 겹침(m³). 재지 않았으면 NaN
+
+    // ── 그림용(겹침 검사 결과 창의 3D) — Find 에 withBlobs 를 준 때만 채운다. 쌍 · 체적 · 결합과는 상관없다 ──
+    // 덩어리는 쌍에 붙여 둔다: 찾은 뒤에 쌍의 차례가 체적순으로 바뀌므로(Sorted), 따로 쌓아 번호로 맞추면 다른 쌍의 덩어리가 그려진다.
+    public MeshBuilder? Blob;             // 겹친 덩어리의 겉면(모델 안쪽 좌표 · m — 그릴 때 Build 에 장면의 가운데를 넘긴다). 못 만들었으면 null
+    public double BlobAreaM2 = double.NaN; // 겹친 입체의 겉넓이(Revit 이 준 값) — 만든 세모의 넓이 합과 견준다
+    public bool BlobBoxed;                // 세모를 만들지 못해 경계상자로 대신했다
+    public string BlobNote = "";          // 덩어리를 만들다 걸린 것("" = 없음)
 }
 
 /// <summary>
@@ -108,8 +116,11 @@ public static class OverlapChecker
         catch { item.Created = -1; item.Demolished = int.MaxValue; }
     }
 
-    /// <summary>ids 가운데 결합 없이 겹친 쌍을 찾는다. 모델은 바꾸지 않는다. limit = 시간 한도(없으면 끝까지).</summary>
-    public static Found Find(Document doc, ICollection<ElementId> ids, TimeSpan? limit = null)
+    /// <summary>
+    /// ids 가운데 결합 없이 겹친 쌍을 찾는다. 모델은 바꾸지 않는다. limit = 시간 한도(없으면 끝까지).
+    /// withBlobs = 쌍마다 겹친 덩어리의 겉면도 만들어 둔다(결과 창의 3D 가 그린다). 주지 않으면 쌍 · 체적만 낸다 — 내는 값은 어느 쪽이든 같다.
+    /// </summary>
+    public static Found Find(Document doc, ICollection<ElementId> ids, TimeSpan? limit = null, bool withBlobs = false)
     {
         var found = new Found();
         var items = new List<Item>();
@@ -152,17 +163,20 @@ public static class OverlapChecker
                 try { if (JoinGeometryUtils.AreElementsJoined(doc, a.El, b.El)) continue; }
                 catch { }
 
-                double m3 = Intersection(a.Solids, b.Solids, out bool failed);
+                var pieces = withBlobs ? new List<Solid>() : null;
+                double m3 = Intersection(a.Solids, b.Solids, out bool failed, pieces);
                 if (m3 < MinOverlapM3)
                 {
                     if (failed) found.Unmeasured++;
                     continue;
                 }
                 var (win, lose) = Beats(a, b) ? (a, b) : (b, a);
-                found.Pairs.Add(new OverlapPair
+                var pair = new OverlapPair
                 {
                     Winner = win.El.Id, Loser = lose.El.Id, WinnerName = Name(doc, win.El), LoserName = Name(doc, lose.El), VolumeM3 = m3,
-                });
+                };
+                if (pieces != null) AttachBlob(pair, pieces);
+                found.Pairs.Add(pair);
             }
         }
         return Sorted(found);
@@ -182,25 +196,74 @@ public static class OverlapChecker
     // a 가 b 를 이긴다(겹친 자리를 가진다) = 우선순위가 높다, 같으면 Id 가 작다.
     private static bool Beats(Item a, Item b) => a.Prio != b.Prio ? a.Prio < b.Prio : a.El.Id.Value < b.El.Id.Value;
 
-    /// <summary>두 부재의 입체가 겹친 체적(m³). 일부라도 계산하지 못했으면 failed.</summary>
-    private static double Intersection(List<Solid> a, List<Solid> b, out bool failed)
+    /// <summary>
+    /// 두 부재의 입체가 겹친 체적(m³). 일부라도 계산하지 못했으면 failed.
+    /// pieces 를 주면 체적에 셈한 겹친 입체를 거기에 모아 준다(그림용) — 모으는 일은 체적 · failed 에 닿지 않는다.
+    /// </summary>
+    private static double Intersection(List<Solid> a, List<Solid> b, out bool failed, List<Solid>? pieces = null)
     {
         failed = false;
         double ft3 = 0;
         foreach (var sa in a)
             foreach (var sb in b)
             {
+                Solid? counted = null;
                 try
                 {
                     var x = BooleanOperationsUtils.ExecuteBooleanOperation(sa, sb, BooleanOperationsType.Intersect);
-                    if (x != null && x.Volume > 0) ft3 += x.Volume;
+                    if (x != null && x.Volume > 0) { ft3 += x.Volume; counted = x; }
                 }
                 catch { failed = true; } // 일부 입체 쌍은 Revit 이 겹침을 계산하지 못한다
+                if (counted != null) pieces?.Add(counted);
             }
         return ft3 * Ft3ToM3;
     }
 
-    private static string Name(Document doc, Element el)
+    // 겹친 입체를 그림용 숫자 배열로 옮겨 쌍에 붙인다 — 부재의 겉면과 같은 길(ZoneScene.AddSolid: 면마다 Revit 의 세모 · ft → m)로 만든다.
+    // 여기서 무엇이 틀어져도 쌍과 체적은 그대로다(덩어리만 없다 — 창이 그 까닭을 알린다).
+    private static void AttachBlob(OverlapPair pair, List<Solid> pieces)
+    {
+        try
+        {
+            var builder = new MeshBuilder();
+            var counters = new ZoneScene.Data();        // AddSolid 가 세는 칸(여기서는 쓰지 않는다)
+            double area = 0;
+            foreach (var piece in pieces)
+            {
+                ZoneScene.AddSolid(builder, piece, counters);
+                try { area += piece.SurfaceArea * FtToM * FtToM; } catch { area = double.NaN; }
+            }
+            pair.BlobAreaM2 = area;
+            if (builder.Triangles > 0)
+            {
+                pair.Blob = builder;
+                return;
+            }
+            // 세모를 하나도 만들지 못한 덩어리(아주 얇은 조각 등): 모서리 점으로 잰 경계상자로라도 보이고 찍히게 한다.
+            var box = Box3.Empty;
+            foreach (var piece in pieces)
+                foreach (Edge edge in piece.Edges)
+                {
+                    IList<XYZ> points;
+                    try { points = edge.Tessellate(); } catch { continue; }
+                    foreach (var p in points) box = box.With(ZoneScene.Meters(p));
+                }
+            if (!box.IsEmpty && box.Size.Length > 1e-6)
+            {
+                pair.Blob = ZoneScene.BoxBuilder(box);
+                pair.BlobBoxed = true;
+                pair.BlobNote = "세모를 만들지 못해 경계상자로 그림";
+            }
+            else pair.BlobNote = "세모도 경계상자도 만들지 못함";
+        }
+        catch (Exception ex)
+        {
+            pair.Blob = null;
+            pair.BlobNote = "덩어리를 만들지 못함: " + ex.Message;
+        }
+    }
+
+    internal static string Name(Document doc, Element el)
     {
         string type = (doc.GetElement(el.GetTypeId()) as ElementType)?.Name ?? el.Name;
         return $"{el.Category?.Name} {type} (Id {el.Id.Value})";

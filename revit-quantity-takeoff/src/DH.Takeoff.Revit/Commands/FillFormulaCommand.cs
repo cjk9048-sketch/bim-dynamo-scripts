@@ -34,7 +34,9 @@ public sealed class FillFormulaCommand : IExternalCommand
 
             SharedParameterManager.EnsureParameters(doc, FormulaAutoFill.AllParams);
             outcomes = FormulaAutoFill.Compute(doc, targets);
-            status = FormulaAutoFill.Write(doc, outcomes);
+            // '다시 계산 필요'인데(결합으로 체적이 바뀐 부재) 식을 새로 만들지 못한 부재는 적지 않고 표시를 남긴다 — 넣어 둔 식이 ±1% 안이어도
+            // '일치'로 덮지 않는다(JACK 2026-10-14: 버튼도 「위치·부위 정하기」에 이어서 도는 산출식과 같게). 그런 부재는 아래에서 예외로 띄운다.
+            status = FormulaAutoFill.Write(doc, FormulaAutoFill.KeepStaleMarks(doc, outcomes));
         }
         catch (Exception ex)
         {
@@ -54,10 +56,12 @@ public sealed class FillFormulaCommand : IExternalCommand
         try
         {
             var ok = outcomes.Where(o => o.Result.Ok).ToList();
-            var manual = outcomes.Where(o => o.ManualOk).ToList();
+            var manual = outcomes.Where(o => o.ManualOk && !o.StaleLeft).ToList();
             var noVolume = outcomes.Where(o => o.NoVolume).ToList();
             var notConcrete = outcomes.Where(o => o.NotConcrete).ToList();
-            var exceptions = outcomes.Where(o => !o.Result.Ok && !o.ManualOk && !o.NoVolume && !o.NotConcrete).ToList();
+            // 예외 = 식을 만들지 못했고 넣어 둔 식도 맞지 않는 부재 + '다시 계산 필요'를 남긴 부재(넣어 둔 식이 맞아 보여도 사람이 확인한다).
+            var exceptions = outcomes.Where(o => !o.Result.Ok && (!o.ManualOk || o.StaleLeft) && !o.NoVolume && !o.NotConcrete).ToList();
+            int staleLeft = outcomes.Count(o => o.StaleLeft);
             var skipped = outcomes.Where(o => o.Skipped.Length > 0).ToList();
             int written = ok.Count(o => o.Written);
             int notWritten = ok.Count(o => !o.Written && o.Skipped.Length == 0);
@@ -114,6 +118,8 @@ public sealed class FillFormulaCommand : IExternalCommand
             if (unchecked_ > 0) text.AppendLine($"  • Revit 체적 속성이 없어 입체 체적하고만 맞춰 본 것: {unchecked_}개");
             if (precise > 0) text.AppendLine($"  • 그중 긴 숫자 그대로 적은 식(둘째 자리로 줄이면 ±1%를 넘는 부재): {precise}개 (결과표 '숫자' 칸에 '정밀')");
             if (manual.Count > 0) text.AppendLine($"  • 사람이 넣어 둔 식이 모델 체적과 맞음(그대로 둠): {manual.Count}개");
+            if (staleLeft > 0)
+                text.AppendLine($"  • '다시 계산 필요'를 남김: {staleLeft}개(결합으로 체적이 바뀐 부재인데 식을 새로 만들지 못했습니다 — 넣어 둔 식을 확인해 주세요)");
             if (noVolume.Count > 0) text.AppendLine($"  • 입체도 체적도 없어 대상에서 뺌: {noVolume.Count}개");
             if (notConcrete.Count > 0)
             {

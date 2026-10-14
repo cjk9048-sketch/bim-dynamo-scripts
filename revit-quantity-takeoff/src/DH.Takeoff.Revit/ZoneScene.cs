@@ -129,11 +129,11 @@ public static class ZoneScene
         return data;
     }
 
-    private static Vec3 Meters(XYZ p) => new(p.X * FtToM, p.Y * FtToM, p.Z * FtToM);
+    internal static Vec3 Meters(XYZ p) => new(p.X * FtToM, p.Y * FtToM, p.Z * FtToM);
 
     // 입체 하나의 겉면: 면마다 Revit 이 주는 세모(Face.Triangulate — 구멍 · 굽은 면 포함)를 받고, 테두리는 모서리 선분으로 넣는다.
     // 세모를 받지 못한 평면 면은 테두리로 직접 세모를 만든다(Core 의 띠 나누기).
-    private static void AddSolid(MeshBuilder builder, Solid solid, Data data)
+    internal static void AddSolid(MeshBuilder builder, Solid solid, Data data)
     {
         foreach (Face face in solid.Faces)
         {
@@ -234,7 +234,7 @@ public static class ZoneScene
     }
 
     // 경계상자 하나를 여섯 면의 겉면으로.
-    private static MeshBuilder BoxBuilder(Box3 box)
+    internal static MeshBuilder BoxBuilder(Box3 box)
     {
         var builder = new MeshBuilder();
         Vec3 P(int k) => new((k & 1) == 0 ? box.Min.X : box.Max.X, (k & 2) == 0 ? box.Min.Y : box.Max.Y, (k & 4) == 0 ? box.Min.Z : box.Max.Z);

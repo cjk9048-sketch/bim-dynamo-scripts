@@ -390,6 +390,43 @@ public sealed class UiTheme
           </Setter>
         </Style>
 
+        <!-- 목록의 한 줄(누르면 그 줄을 본다): RowButton 과 같고, Tag = "on" 이면 지금 보고 있는 줄(강조색 바탕 + 왼쪽 띠) -->
+        <Style x:Key="RowPick" TargetType="Button">
+          <Setter Property="Foreground" Value="{StaticResource Text}"/>
+          <Setter Property="Focusable" Value="False"/>
+          <Setter Property="Cursor" Value="Hand"/>
+          <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+          <Setter Property="SnapsToDevicePixels" Value="True"/>
+          <Setter Property="Template">
+            <Setter.Value>
+              <ControlTemplate TargetType="Button">
+                <Border x:Name="b" Background="Transparent" BorderBrush="Transparent" BorderThickness="3,0,0,0" CornerRadius="6" Padding="5,0,6,0" MinHeight="28">
+                  <ContentPresenter VerticalAlignment="Center" HorizontalAlignment="Stretch" RecognizesAccessKey="False"/>
+                </Border>
+                <ControlTemplate.Triggers>
+                  <Trigger Property="IsMouseOver" Value="True">
+                    <Setter TargetName="b" Property="Background" Value="{StaticResource Hover}"/>
+                  </Trigger>
+                  <Trigger Property="IsPressed" Value="True">
+                    <Setter TargetName="b" Property="Background" Value="{StaticResource Press}"/>
+                  </Trigger>
+                  <Trigger Property="Tag" Value="on">
+                    <Setter TargetName="b" Property="Background" Value="{StaticResource AccentSoft}"/>
+                    <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                  </Trigger>
+                  <MultiTrigger>
+                    <MultiTrigger.Conditions>
+                      <Condition Property="Tag" Value="on"/>
+                      <Condition Property="IsMouseOver" Value="True"/>
+                    </MultiTrigger.Conditions>
+                    <Setter TargetName="b" Property="Background" Value="{StaticResource AccentSoftHover}"/>
+                  </MultiTrigger>
+                </ControlTemplate.Triggers>
+              </ControlTemplate>
+            </Setter.Value>
+          </Setter>
+        </Style>
+
         <!-- 글 적는 칸: 모서리가 둥글고, 적는 중이면 테두리가 강조색. 비어 있으면 Tag 의 글이 흐리게 보인다.
              안쪽 여백(Padding)은 TextBox 가 스스로 PART_ContentHost 에 넘기므로 틀에서는 주지 않는다(주면 두 배가 된다). -->
         <Style x:Key="Input" TargetType="TextBox">
