@@ -1,0 +1,1113 @@
+using Clipper2Lib;
+
+namespace DH.Takeoff.Core.Formwork;
+
+/// <summary>
+/// 거푸집 면 가르기(1단계) — 콘크리트 부재의 면을 하나씩 보고 거푸집을 대는 자리의 넓이를 낸다.
+/// 원리: 콘크리트 덩어리에 페인트를 칠한다고 보면, 윗면과 다른 콘크리트가 붙은 자리는 못 칠한다.
+///       칠해지는 옆면·밑면·구멍 둘레가 거푸집이다(JACK 2026-10-08).
+///  1) 맞닿은 자리: 면을 바깥으로 살짝(ε) 옮긴 평면으로 다른 입체들을 잘라, 그 면 바로 바깥에 콘크리트가 있는 자리를 뺀다.
+///     형상 결합이 안 돼 입체끼리 겹쳐 있어도 된다(다른 입체 속에 묻힌 자리도 같은 방법으로 빠진다).
+///  2) 포개진 자리: 두 부재의 면이 같은 평면·같은 방향으로 포개지면(겹친 부재에서 생긴다) 둘 다 '드러난 면'이 된다.
+///     그 자리는 우선순위가 높은 부재 하나만 센다.
+///  3) 방향: 윗면 / 위를 보는 경사면(30도보다 가파르면 센다) / 옆면 / 밑면 / 구멍 둘레.
+///  4) 밑면: 아래의 콘크리트 윗면들을 밑면에 비춰, 받치는 바닥이 있는 자리만 센다(받침 높이도 남긴다).
+///     버림·기초의 밑면은 땅 위다. 아래에 아무것도 없는 자리는 세지 않고 사람에게 묻는다.
+///  5) 안팎: 옆면 바로 바깥의 점이, 그 높이에서 '벽으로 둘러싸인 빈 곳'이면 안이다. 문이 있어도 벽 자리는 막힌 것으로 본다
+///     (그 높이의 평면 그림에 입체마다 '그 높이 이상인 부분의 그림자'를 쓴다 — 문·창 위의 인방이 문 자리를 덮는다).
+///     안이면 그 자리가 든 구역 상자의 이름을 붙인다(구역 상자로 조각을 자른다).
+///     부재를 꿰뚫은 구멍의 둘레 면과 문·창의 옆면은 안팎이 없는 '개구부'다. 턱 아래의 면은 턱 밖으로 나가서 본다.
+///  6) 높이 구간: 옆면을 '서 있는 바닥'에서 잰 높이로 잘라 나눈다.
+/// 계산하지 못한 면(곡면 등)은 추측하지 않고 표시해 둔다.
+/// </summary>
+public static class FormworkAnalyzer
+{
+    // 안팎을 볼 때 면에서 바깥으로 나가 보는 거리(m). 약 8cm 이되 mm 에 떨어지지 않는 값이다 —
+    // 도면 치수(mm)로 놓인 다른 면·구역 상자의 변 위에 표본 점이 정확히 얹히지 않게.
+    private const double Probe = 0.0837;
+    private const double Nudge = 0.00037;       // 표본 높이를 구간 가운데에서 이만큼 비킨다(문 윗선 같은 mm 높이를 피한다)
+    private const double CoplanarTol = 2e-4;    // 이 거리 안이면 같은 평면으로 본다(m)
+    private const double Tiny = 1e-6;           // 이보다 작은 조각(㎡)은 버린다
+
+    private sealed class FaceInfo
+    {
+        public required ShapeFace Face;
+        public Frame? Frame;                    // 곡면이면 null
+        public Paths64? Paths;                  // 면의 다각형(자기 틀 좌표). 읽지 못하면 null
+        public V3 Min, Max;
+    }
+
+    private sealed class Body
+    {
+        public required FormworkElement El;
+        public required int Index;
+        public required ShapeSolid Solid;
+        public V3 Min, Max;
+        public bool Planar;
+        public int Rank;
+        public List<FaceInfo> Faces = new();
+        public Paths64? Shadow;                              // 위에서 내려다본 그림자(전체)
+        public bool? Capped;                                 // 맨 위의 수평면이 그림자를 다 덮는가(→ 어느 높이에서나 '위쪽 그림자' = 그림자)
+        public Dictionary<long, Paths64> Ups = new();        // 높이(0.1mm) → 그 높이 이상인 부분의 그림자
+        public Dictionary<long, Paths64?> Reals = new();     // 높이(0.1mm) → 그 높이의 실제 단면(잇지 못하면 null)
+    }
+
+    /// <summary>높이 구간 하나에 걸친 입체들.</summary>
+    private sealed class LevelInfo
+    {
+        public List<Body> Spanning = new();     // 이 구간을 지나는 입체 전부
+        public List<Body> Loose = new();        // 그중 위로 갈수록 좁아지는 입체(높이마다 위쪽 그림자가 다르다)
+        public Paths64 Capped = new();          // 나머지 입체들의 그림자를 합친 것
+    }
+
+    private sealed class Context
+    {
+        public required List<Body> Bodies;
+        public required IReadOnlyList<FormworkZone> Zones;
+        public required FormworkOptions Options;
+        public List<double> Levels = new();                                     // 입체들의 아래·위 끝 높이(오름차순)
+        public Dictionary<int, LevelInfo> LevelInfos = new();
+        public Dictionary<(int level, long z), (Paths64 concrete, Paths64 filled)> Sections = new(); // (구간, 높이) → 평면 그림
+    }
+
+    public static List<ElementFormwork> Analyze(IReadOnlyList<FormworkElement> elements,
+                                                IReadOnlyList<FormworkZone>? zones = null, FormworkOptions? options = null)
+    {
+        var ctx = new Context { Bodies = new List<Body>(), Zones = zones ?? Array.Empty<FormworkZone>(), Options = options ?? new FormworkOptions() };
+        foreach (var el in elements)
+            for (int i = 0; i < el.Solids.Count; i++)
+            {
+                var body = MakeBody(el, i);
+                if (body != null) ctx.Bodies.Add(body);
+            }
+        ctx.Levels = ctx.Bodies.SelectMany(b => new[] { b.Min.Z, b.Max.Z }).Select(z => Math.Round(z, 4)).Distinct().OrderBy(z => z).ToList();
+
+        var results = new List<ElementFormwork>();
+        foreach (var el in elements)
+        {
+            if (!el.Target) continue; // 주변 콘크리트로만 쓰는 부재
+            var ef = new ElementFormwork { Element = el };
+            foreach (var body in ctx.Bodies.Where(b => ReferenceEquals(b.El, el)))
+            {
+                var holeEdges = HoleEdgeFaces(body);
+                for (int f = 0; f < body.Faces.Count; f++)
+                    ef.Faces.Add(AnalyzeFace(ctx, body, f, holeEdges.Contains(f)));
+            }
+            // 종류는 부재 전체를 본 뒤에 붙인다: 받쳐서 치는 밑면이 있는 슬래브(떠 있는 슬래브)의 가장자리는 벽 외측과 이어진다.
+            bool elevated = ef.Faces.Any(f => f.Patches.Any(p => p.Below == Below.Supported));
+            foreach (var face in ef.Faces)
+                foreach (var patch in face.Patches)
+                    Classify(ctx.Options.Rules, el, face.Class, patch, elevated);
+            results.Add(ef);
+        }
+        return results;
+    }
+
+    // 조각의 종류를 정한다: 사람이 대응표에서 고친 줄이 있으면 그것, 없으면 초안 규칙.
+    private static void Classify(FormworkRules? rules, FormworkElement el, FaceClass cls, FacePatch patch, bool elevated)
+    {
+        string? rule = rules?.Lookup(el.Type, FormworkTable.GroupOf(cls, patch));
+        if (patch.Below == Below.Floating)
+        {
+            // 아래가 빈 밑면: 사람이 정하기 전에는 세지 않고 물어본다.
+            if (rule == null) return;
+            patch.Decided = true;
+            if (rule == FormworkRules.NotCounted) patch.Note = "땅 위 — 대응표에서 세지 않기로 함";
+            else { patch.Counted = true; patch.Item = rule; patch.Note = "아래가 비었지만 대응표에서 세기로 함"; }
+            return;
+        }
+        if (!patch.Counted) return; // 윗면 · 버림과 기초의 밑면 · 틈은 대응표로 바꾸지 않는다
+        if (rule == FormworkRules.NotCounted)
+        {
+            patch.Counted = false;
+            patch.Decided = true;
+            patch.Note = "대응표에서 세지 않기로 함";
+            return;
+        }
+        patch.Item = rule ?? FormworkTable.ItemOf(el, cls, patch, elevated);
+    }
+
+    // ── 입체 준비 ──────────────────────────────────────────────────────────────────
+
+    private static Body? MakeBody(FormworkElement el, int index)
+    {
+        var solid = el.Solids[index];
+        var body = new Body
+        {
+            El = el, Index = index, Solid = solid,
+            Planar = solid.Faces.All(Section.IsPlanar),
+            Rank = el.Kind switch
+            {
+                MemberKind.Foundation => 0, MemberKind.Slab => 1, MemberKind.Column => 2,
+                MemberKind.Wall => 3, MemberKind.Beam => 4, _ => 5,
+            },
+        };
+        bool any = false;
+        double x0 = double.MaxValue, y0 = double.MaxValue, z0 = double.MaxValue, x1 = double.MinValue, y1 = double.MinValue, z1 = double.MinValue;
+        foreach (var face in solid.Faces)
+        {
+            var info = new FaceInfo { Face = face };
+            double fx0 = double.MaxValue, fy0 = double.MaxValue, fz0 = double.MaxValue, fx1 = double.MinValue, fy1 = double.MinValue, fz1 = double.MinValue;
+            foreach (var loop in face.Loops)
+                foreach (var p in loop.Pts)
+                {
+                    any = true;
+                    fx0 = Math.Min(fx0, p[0]); fy0 = Math.Min(fy0, p[1]); fz0 = Math.Min(fz0, p[2]);
+                    fx1 = Math.Max(fx1, p[0]); fy1 = Math.Max(fy1, p[1]); fz1 = Math.Max(fz1, p[2]);
+                }
+            info.Min = new V3(fx0, fy0, fz0);
+            info.Max = new V3(fx1, fy1, fz1);
+            x0 = Math.Min(x0, fx0); y0 = Math.Min(y0, fy0); z0 = Math.Min(z0, fz0);
+            x1 = Math.Max(x1, fx1); y1 = Math.Max(y1, fy1); z1 = Math.Max(z1, fz1);
+            info.Frame = Section.FrameOf(face);
+            info.Paths = info.Frame == null ? null : Section.FacePaths(face, info.Frame);
+            body.Faces.Add(info);
+        }
+        if (!any) return null;
+        body.Min = new V3(x0, y0, z0);
+        body.Max = new V3(x1, y1, z1);
+        return body;
+    }
+
+    // 포개진 자리의 주인: 급이 높은 부재(기초 > 슬래브 > 기둥 > 벽 > 보 > 그 밖), 같으면 먼저 만든 부재, 같은 부재면 앞 입체.
+    // 콘크리트의 겹침 우선순위(겹침 검사)와 같은 차례다.
+    private static bool Beats(Body a, Body b) =>
+        a.Rank != b.Rank ? a.Rank < b.Rank : a.El.Id != b.El.Id ? a.El.Id < b.El.Id : a.Index < b.Index;
+
+    private static bool Apart(V3 minA, V3 maxA, V3 minB, V3 maxB, double slack) =>
+        maxA.X < minB.X - slack || minA.X > maxB.X + slack ||
+        maxA.Y < minB.Y - slack || minA.Y > maxB.Y + slack ||
+        maxA.Z < minB.Z - slack || minA.Z > maxB.Z + slack;
+
+    // ── 면 하나 ────────────────────────────────────────────────────────────────────
+
+    private static FaceResult AnalyzeFace(Context ctx, Body body, int faceIndex, bool holeEdge)
+    {
+        var info = body.Faces[faceIndex];
+        var face = info.Face;
+        var o = ctx.Options;
+        var result = new FaceResult
+        {
+            ElementId = body.El.Id, Solid = body.Index, Face = faceIndex, Gross = face.Area,
+            ZMin = info.Min.Z, ZMax = info.Max.Z,
+            FaceId = body.Index < body.El.FaceIds.Count && faceIndex < body.El.FaceIds[body.Index].Count ? body.El.FaceIds[body.Index][faceIndex] : "",
+        };
+
+        var frame = info.Frame;
+        var paths = info.Paths;
+        if (frame == null || paths == null)
+        {
+            // 곡면: 넓이는 Revit 이 준 값 그대로, 맞닿음·안팎은 재지 못한다.
+            result.Class = FaceClass.Curved;
+            result.Net = face.Area;
+            result.Flag = "곡면 — 맞닿은 자리와 안팎을 재지 못함";
+            result.Patches.Add(new FacePatch { Area = face.Area, Counted = true, Side = "확인 필요", Note = result.Flag });
+            return result;
+        }
+
+        result.Polygon = Poly.Area(paths);
+        V3 n = frame.N;
+        result.SlopeDeg = Math.Acos(Math.Clamp(Math.Abs(n.Z), 0, 1)) * 180 / Math.PI;
+        result.UpFacing = n.Z > 0;
+        result.Class = holeEdge ? FaceClass.HoleEdge
+                     : result.SlopeDeg >= o.SideDegrees ? FaceClass.Side
+                     : n.Z > 0 ? (result.SlopeDeg > o.SlopeDegrees ? FaceClass.SlopeUp : FaceClass.Top)
+                     : (result.SlopeDeg < 0.5 ? FaceClass.Bottom : FaceClass.SlopeDown);
+
+        // 1) 맞닿은 자리: 면 바로 바깥(ε)에 다른 콘크리트가 있는 자리. 다른 입체 속에 묻힌 자리도 여기서 빠진다.
+        var outside = frame.Shift(o.Epsilon);
+        var cover = new Paths64();
+        var covers = new Dictionary<long, double>();
+        bool curvedNeighbour = false, brokenNeighbour = false;
+        foreach (var other in ctx.Bodies)
+        {
+            if (ReferenceEquals(other, body)) continue;
+            if (Apart(info.Min, info.Max, other.Min, other.Max, o.Epsilon + Section.Merge)) continue;
+            var cut = other.Planar ? Section.Cut(other.Solid, outside) : null;
+            if (cut == null)
+            {
+                // 곡면이 낀 이웃(또는 단면을 잇지 못한 이웃): 이 면과 마주 붙은 평평한 면만 본다.
+                // 그 이웃 속에 묻힌 자리는 놓칠 수 있으므로 면에 표시해 둔다.
+                cut = FacingFaces(other, frame, info, o.Epsilon);
+                curvedNeighbour |= !other.Planar;
+                brokenNeighbour |= other.Planar;
+            }
+            if (cut.Count == 0) continue;
+            var hit = Poly.Intersect(paths, cut);
+            double area = Poly.Area(hit);
+            if (area < Tiny) continue;
+            if (other.El.Id != body.El.Id) covers[other.El.Id] = covers.GetValueOrDefault(other.El.Id) + area;
+            cover = Poly.Union(cover, hit);
+        }
+        var net = cover.Count > 0 ? Poly.Difference(paths, cover) : paths;
+        result.Covered = Poly.Area(cover);
+        result.Covers = covers.Select(kv => new FaceCover { ElementId = kv.Key, Area = kv.Value }).OrderByDescending(c => c.Area).ToList();
+        if (curvedNeighbour) result.Flag = "곡면 부재가 곁에 있어 맞닿은 자리를 다 재지 못함";
+        else if (brokenNeighbour) result.Flag = "곁 부재의 단면을 잇지 못해 맞닿은 자리를 다 재지 못함";
+
+        // 2) 포개진 자리: 주인(우선순위가 높은 부재)의 면이 같은 평면·같은 방향으로 겹친 자리는 그쪽에서 센다.
+        //    '같은 평면'의 폭은 맞닿음을 볼 때와 같은 ε 이다. 두 면이 ε 넘게 어긋나면 안쪽 면이 위(1)에서 상대 입체에 묻혀 빠지고,
+        //    ε 안으로 어긋나면 어느 쪽도 묻히지 않으니 여기서 한쪽만 남긴다 — 폭이 서로 다르면 둘 다 세거나 둘 다 빠지는 틈이 생긴다.
+        var shared = new Paths64();
+        foreach (var other in ctx.Bodies)
+        {
+            if (ReferenceEquals(other, body) || !Beats(other, body)) continue;
+            if (Apart(info.Min, info.Max, other.Min, other.Max, o.Epsilon + Section.Merge)) continue;
+            foreach (var g in other.Faces)
+            {
+                if (g.Frame == null || g.Frame.N.Dot(n) < 1 - 1e-9) continue;                    // 같은 방향
+                if (Math.Abs(frame.Dist(g.Frame.O)) > o.Epsilon) continue;                       // 같은 평면(ε 안)
+                if (Apart(info.Min, info.Max, g.Min, g.Max, o.Epsilon + Section.Merge)) continue;
+                var same = Section.FacePaths(g.Face, frame);
+                if (same == null) continue;
+                var hit = Poly.Intersect(net, same);
+                if (Poly.Area(hit) >= Tiny) shared = Poly.Union(shared, hit);
+            }
+        }
+        if (shared.Count > 0) net = Poly.Difference(net, shared);
+        result.Shared = Poly.Area(shared);
+
+        // 3) 드러난 자리를 덩어리별로 나눠 센다. 실 같은 조각(비스듬히 닿은 이웃 곁에 남는 폭 몇 mm 의 띠)은
+        //    거푸집을 댈 자리가 아니라 맞닿은 자리의 가장자리다 — 맞닿은 쪽에 넣는다.
+        var parts = new List<Paths64>();
+        double slivers = 0;
+        foreach (var part in Components(net))
+        {
+            if (IsSliver(part)) slivers += Poly.Area(part);
+            else parts.Add(part);
+        }
+        result.Covered += slivers;
+        result.Net = parts.Sum(Poly.Area);
+
+        foreach (var part in parts)
+        {
+            double area = Poly.Area(part);
+            switch (result.Class)
+            {
+                case FaceClass.Top:
+                    result.Patches.Add(new FacePatch { Area = area, Counted = false, Note = "윗면" });
+                    break;
+                case FaceClass.Bottom:
+                case FaceClass.SlopeDown:
+                    result.Patches.AddRange(BottomPatches(ctx, body, info, frame, part));
+                    break;
+                case FaceClass.Side:
+                    result.Patches.AddRange(SidePatches(ctx, body, frame, part, bands: true, hole: false));
+                    break;
+                default: // 위를 보는 경사면 · 구멍 둘레
+                    result.Patches.AddRange(SidePatches(ctx, body, frame, part, bands: false, hole: result.Class == FaceClass.HoleEdge));
+                    break;
+            }
+        }
+        return result;
+    }
+
+    // 실 같은 조각인가: 넓이를 둘레로 나눈 폭이 4mm 보다 좁다(또는 넓이가 거의 없다).
+    private static bool IsSliver(Paths64 part)
+    {
+        double area = Poly.Area(part);
+        if (area < Tiny) return true;
+        double perimeter = 0;
+        foreach (var path in part)
+            for (int i = 0; i < path.Count; i++)
+            {
+                Point64 a = path[i], b = path[(i + 1) % path.Count];
+                perimeter += Math.Sqrt((double)(b.X - a.X) * (b.X - a.X) + (double)(b.Y - a.Y) * (b.Y - a.Y));
+            }
+        perimeter /= Poly.Scale;
+        return perimeter > 0 && 2 * area / perimeter < 0.004;
+    }
+
+    // 이웃 입체의 평평한 면 가운데, 이 면과 마주 붙은(같은 평면·반대 방향) 면들의 다각형(이 면의 좌표).
+    private static Paths64 FacingFaces(Body other, Frame frame, FaceInfo info, double eps)
+    {
+        var result = new Paths64();
+        foreach (var g in other.Faces)
+        {
+            if (g.Frame == null || g.Frame.N.Dot(frame.N) > -1 + 1e-9) continue;
+            if (Math.Abs(frame.Dist(g.Frame.O)) > eps + CoplanarTol) continue;
+            if (Apart(info.Min, info.Max, g.Min, g.Max, eps + CoplanarTol)) continue;
+            var paths = Section.FacePaths(g.Face, frame);
+            if (paths != null) result = Poly.Union(result, paths);
+        }
+        return result;
+    }
+
+    private static FacePatch Patch(Frame frame, Paths64 region, double area) => new()
+    {
+        Area = area,
+        Outline = region.Select(path => path.Select(p => { V3 q = frame.To3D(p.X / Poly.Scale, p.Y / Poly.Scale); return new[] { q.X, q.Y, q.Z }; }).ToList()).ToList(),
+        Triangles = Poly.Triangles(region).Select(t => { V3 q = frame.To3D(t.u, t.v); return new[] { q.X, q.Y, q.Z }; }).ToList(),
+    };
+
+    // ── 밑면: 아래에 공간이 있는가 ─────────────────────────────────────────────────
+
+    private static IEnumerable<FacePatch> BottomPatches(Context ctx, Body body, FaceInfo info, Frame frame, Paths64 part)
+    {
+        double total = Poly.Area(part);
+        // 버림·기초의 밑면은 아래에 무엇이 있든 땅(되메운 흙 포함) 위에 놓인다 — 거푸집이 없다.
+        if (body.El.Blinding || body.El.Kind == MemberKind.Foundation)
+        {
+            var ground = Patch(frame, part, total);
+            ground.Below = Below.Ground;
+            ground.Note = "땅 위(버림·기초의 밑면)";
+            yield return ground;
+            yield break;
+        }
+
+        // 아래에 있는 콘크리트 윗면들을 이 밑면에 수직으로 비춘다. 자리마다 가장 가까운 윗면이 받침이다(가려진 뒤쪽 바닥은 받침이 아니다).
+        // 밑면도 윗면도 평면이라 둘 사이의 틈(높이 차)은 자리에 따라 곧게 변한다 — 면 전체의 가운데 높이로 어림하지 않고
+        // 자리마다 잰다: 틈이 0 이하인 자리(그 윗면이 밑면보다 위에 있다 — 계단의 디딤판 등)는 받침이 아니다.
+        var (pu0, pv0, pu1, pv1) = Extent(part);
+        Paths64 Where((double a, double b, double c) f) => HalfPlane(f.a, f.b, f.c, pu0 - 1, pv0 - 1, pu1 + 1, pv1 + 1);
+        var held = new List<(Paths64 region, (double a, double b, double c) gap)>();
+        foreach (var other in ctx.Bodies)
+        {
+            if (other.Min.Z >= info.Max.Z - 1e-4 || other.Max.X < info.Min.X || other.Min.X > info.Max.X || other.Max.Y < info.Min.Y || other.Min.Y > info.Max.Y) continue;
+            foreach (var g in other.Faces)
+            {
+                if (ReferenceEquals(g, info) || g.Frame == null || g.Frame.N.Z <= 1e-6) continue;  // 위를 보는 평평한 면만
+                if (g.Min.Z >= info.Max.Z - 1e-4) continue;                                        // 통째로 이 밑면보다 위
+                if (g.Max.X < info.Min.X || g.Min.X > info.Max.X || g.Max.Y < info.Min.Y || g.Min.Y > info.Max.Y) continue;
+                var shadow = Section.ProjectVertically(g.Face, frame);
+                if (shadow == null) continue;
+                var gap = GapOver(frame, g.Frame);
+                // 이 윗면이 밑면보다 아래(0.1mm 넘게)인 자리만
+                var below = Poly.Intersect(Poly.Intersect(part, shadow), Where((gap.a, gap.b, gap.c - 1e-4)));
+                // 먼저 잡힌 윗면과 겹치면, 자리마다 더 가까운(틈이 작은) 쪽이 차지한다.
+                for (int i = 0; i < held.Count && Poly.Area(below) >= Tiny; i++)
+                {
+                    var overlap = Poly.Intersect(below, held[i].region);
+                    if (Poly.Area(overlap) < Tiny) continue;
+                    var old = held[i].gap;
+                    var mine = Poly.Intersect(overlap, Where((old.a - gap.a, old.b - gap.b, old.c - gap.c)));   // 새 윗면이 더 가까운 자리
+                    if (Poly.Area(mine) >= Tiny) held[i] = (Poly.Difference(held[i].region, mine), old);
+                    below = Poly.Difference(below, Poly.Difference(overlap, mine));
+                }
+                if (Poly.Area(below) >= Tiny) held.Add((below, gap));
+            }
+        }
+        var rest = part;
+        var byHeight = new SortedDictionary<long, Paths64>(); // 받침 높이(mm) → 자리
+        var gapRegion = new Paths64();
+        foreach (var (region, gap) in held)
+        {
+            if (Poly.Area(region) < Tiny) continue;
+            rest = Poly.Difference(rest, region);
+            // 틈이 MinGap 보다 좁은 자리는 거푸집을 댈 수 없다.
+            var open = Poly.Intersect(region, Where((gap.a, gap.b, gap.c - ctx.Options.MinGap)));
+            var tight = Poly.Difference(region, open);
+            if (Poly.Area(tight) >= Tiny) gapRegion = Poly.Union(gapRegion, tight);
+            if (Poly.Area(open) < Tiny) continue;
+            // 받침 높이: 그 자리에서 가장 큰 값(경사진 면이면 자리마다 다르다 — 동바리는 긴 쪽에 맞춘다).
+            long key = (long)Math.Round(MaxOver(open, gap) * 1000);
+            byHeight[key] = byHeight.TryGetValue(key, out var have) ? Poly.Union(have, open) : open;
+        }
+
+        foreach (var (key, region) in byHeight)
+        {
+            double area = Poly.Area(region);
+            if (area < Tiny) continue;
+            var patch = Patch(frame, region, area);
+            patch.Below = Below.Supported;
+            patch.Height = key / 1000.0;
+            patch.Counted = true;
+            yield return patch;
+        }
+        double gapArea = Poly.Area(gapRegion);
+        if (gapArea >= Tiny)
+        {
+            var patch = Patch(frame, gapRegion, gapArea);
+            patch.Below = Below.Gap;
+            patch.Note = "아래 콘크리트와의 틈이 너무 좁음(거푸집을 댈 수 없음) — 확인";
+            yield return patch;
+        }
+        double restArea = Poly.Area(rest);
+        if (restArea >= Tiny)
+        {
+            // 아래에 아무것도 없다: 땅 위에 놓인 바닥판이거나, 처마처럼 떠 있는 면이다 — 세지 않고 사람에게 묻는다.
+            var patch = Patch(frame, rest, restArea);
+            patch.Below = Below.Floating;
+            patch.Note = "아래에 다른 콘크리트가 없음 — 땅 위인지 떠 있는 면인지 확인";
+            yield return patch;
+        }
+    }
+
+    // ── 옆면: 안팎 · 구역 · 높이 구간 ─────────────────────────────────────────────
+
+    private static IEnumerable<FacePatch> SidePatches(Context ctx, Body body, Frame frame, Paths64 part, bool bands, bool hole)
+    {
+        var (u0, v0, u1, v1) = Extent(part);
+        double vz = frame.V.Z;                              // v 한 칸이 높이로 얼마인가(수직면이면 1)
+        double zLow = frame.O.Z + v0 * vz, zHigh = frame.O.Z + v1 * vz;
+        // 부재를 꿰뚫은 구멍의 둘레 면은 안팎이 없다 — 개구부다.
+        var (side, note) = hole ? (Opening, "") : SideOf(ctx, body, frame, part, zLow, zHigh);
+
+        // 안쪽이면 구역 상자로 자른다(긴 벽이 두 구역에 걸칠 수 있다). 남는 자리는 구역 이름 없는 '내측'.
+        var pieces = new List<(string side, Paths64 region)>();
+        if (side == "내측" && vz > 0.2)
+        {
+            var rest = part;
+            foreach (var zone in ctx.Zones)
+            {
+                if (rest.Count == 0) break;
+                var clip = ZoneOnFace(zone, frame, u0, u1);
+                if (clip.Count == 0) continue;
+                var hit = Poly.Intersect(rest, clip);
+                if (Poly.Area(hit) < Tiny) continue;
+                pieces.Add(($"내측({zone.Name})", hit));
+                rest = Poly.Difference(rest, hit);
+            }
+            if (Poly.Area(rest) >= Tiny) pieces.Add(("내측", rest));
+        }
+        else if (side == "내측")
+        {
+            // 누운 면(구멍의 위·아래 턱 등)은 구역 상자로 자르지 않고, 조각 안 한 점이 든 구역의 이름을 붙인다.
+            string zone = "";
+            foreach (var (u, v) in InteriorPoints(part, 1))
+                zone = ZoneAt(ctx, frame.To3D(u, v) + frame.N * Probe);
+            pieces.Add((zone.Length > 0 ? $"내측({zone})" : "내측", part));
+        }
+        else pieces.Add((side, part));
+
+        foreach (var (tag, region) in pieces)
+        {
+            if (!bands || ctx.Options.Bands.Count == 0 || vz < 0.2)
+            {
+                var whole = Patch(frame, region, Poly.Area(region));
+                whole.Counted = true; whole.Side = tag; whole.Note = note;
+                yield return whole;
+                continue;
+            }
+            // 서 있는 바닥: 조각의 아랫부분에서 바깥으로 조금 나간 자리 아래의 콘크리트 윗면. 없으면(또는 1m 넘게 아래면) 조각의 아래 끝.
+            var (ru0, rv0, ru1, rv1) = Extent(region);
+            double bottomZ = frame.O.Z + rv0 * vz, baseZ = bottomZ;
+            var low = InteriorPoints(region, 1, atFraction: 0.02);
+            if (low.Count > 0)
+            {
+                V3 p = frame.To3D(low[0].u, low[0].v) + frame.N * Probe;
+                if (TopBelow(ctx, p) is double z && bottomZ - z < 1.0) baseZ = z;
+            }
+            double vBase = rv0 - (bottomZ - baseZ) / vz;
+            var limits = ctx.Options.Bands;
+            for (int b = 0; b <= limits.Count; b++)
+            {
+                double lo = b == 0 ? rv0 - 1 : vBase + limits[b - 1] / vz;
+                double hi = b == limits.Count ? rv1 + 1 : vBase + limits[b] / vz;
+                if (hi <= rv0 || lo >= rv1) continue;
+                var piece = Poly.Intersect(region, Poly.Rect(ru0 - 1, Math.Max(lo, rv0 - 1), ru1 + 1, Math.Min(hi, rv1 + 1)));
+                double area = Poly.Area(piece);
+                if (area < Tiny) continue;
+                var patch = Patch(frame, piece, area);
+                patch.Counted = true; patch.Side = tag; patch.Band = b; patch.Note = note;
+                yield return patch;
+            }
+        }
+    }
+
+    /// <summary>표본 점 하나에서 본 것.</summary>
+    private enum Seen
+    {
+        Inside,     // 벽으로 둘러싸인 빈 곳
+        Outside,    // 둘러싸이지 않은 곳
+        Opening,    // 이 부재를 뚫은 자리(문·창) 안 — 위에 이 부재(인방)가 있고, 건너편에도 이 부재가 있다
+        Tunnel,     // 같은 모양인데 벽·슬래브·기둥·보가 아닌 부재다(암거 같은 통일 수 있다) — 사람에게 묻는다
+        Blocked,    // 바로 앞이 다른 콘크리트 속이다
+        Unclear,    // 이 점으로는 정하지 못한다(다른 부재의 턱 아래·문 자리 등)
+    }
+
+    /// <summary>
+    /// 면 조각이 안쪽을 보는지 바깥쪽을 보는지. 조각이 걸친 높이 구간마다 조각 안의 점에서 바깥으로 조금 나가,
+    /// 그 자리가 '벽으로 둘러싸인 빈 곳'인지 본다(<see cref="Look"/>). 한 구간이라도 둘러싸였으면 안이다.
+    /// 구간끼리 갈리면 확인하라고 적는다. 구역 이름은 부르는 쪽이 구역 상자로 잘라 붙인다.
+    /// </summary>
+    private static (string side, string note) SideOf(Context ctx, Body body, Frame frame, Paths64 part, double zLow, double zHigh)
+    {
+        var seen = new int[6];
+        if (frame.V.Z < 1e-6)
+        {
+            // 수평에 가까운 면: 높이가 하나뿐이다 — 가운데 한 점으로 본다.
+            foreach (var (u, v) in InteriorPoints(part, 1))
+                seen[(int)Look(ctx, body, frame.To3D(u, v), frame.N)]++;
+        }
+        else
+        {
+            for (int i = 0; i + 1 < ctx.Levels.Count; i++)
+            {
+                double a = Math.Max(ctx.Levels[i], zLow), b = Math.Min(ctx.Levels[i + 1], zHigh);
+                if (b - a < 1e-3) continue;                      // 이 구간에 걸치지 않는다
+                double z = (a + b) / 2 + Math.Min(Nudge, (b - a) / 4);
+                double fraction = (z - zLow) / (zHigh - zLow);
+                foreach (var (u, v) in InteriorPoints(part, 1, atFraction: Math.Clamp(fraction, 0.001, 0.999)))
+                    seen[(int)Look(ctx, body, frame.To3D(u, v), frame.N)]++;
+            }
+        }
+        if (seen[(int)Seen.Inside] > 0) return ("내측", seen[(int)Seen.Outside] > 0 ? "높이에 따라 안팎이 갈림 — 확인" : "");
+        if (seen[(int)Seen.Outside] > 0) return ("외측", "");
+        if (seen[(int)Seen.Opening] > 0) return (Opening, "");
+        if (seen[(int)Seen.Tunnel] > 0) return ("확인 필요", "부재 속을 지나는 빈 곳의 면 — 개구부인지 안쪽 면인지 확인");
+        if (seen[(int)Seen.Blocked] > 0) return ("확인 필요", "바로 앞(8cm 안)에 다른 콘크리트가 있음 — 틈인지 확인");
+        return ("확인 필요", "안팎을 재지 못함");
+    }
+
+    /// <summary>문·창처럼 부재를 뚫은 자리의 안쪽 면에 붙이는 이름(안팎이 없다).</summary>
+    public const string Opening = "개구부";
+
+    /// <summary>
+    /// 면 위의 한 점에서 바깥(법선 쪽)으로 조금 나간 자리를 본다.
+    ///  · 그 높이의 평면 그림(<see cref="SectionAt"/>)에서 콘크리트 밖이면: 바깥 윤곽 안인가(= 둘러싸였는가)로 안팎을 정한다.
+    ///  · 콘크리트 안으로 나오면 셋 중 하나다: 진짜 콘크리트 속 / 무언가의 아래(문·창 자리, 턱 아래) / 알 수 없음(곡면 부재).
+    ///    이 부재 자신의 아래라면 법선 쪽으로 더 걸어가 본다: 그 높이에서 이 부재의 실제 단면을 다시 만나면 문·창 자리(개구부),
+    ///    만나기 전에 이 부재의 그늘을 벗어나면 턱 아래였던 것이니 벗어난 자리에서 안팎을 정한다.
+    /// </summary>
+    private static Seen Look(Context ctx, Body body, V3 onFace, V3 normal)
+    {
+        V3 p = onFace + normal * Probe;
+        var section = SectionAt(ctx, p.Z, out var level);
+        if (section == null || level == null) return Seen.Unclear;      // 모델의 높이 범위 밖
+        var (concrete, filled) = section.Value;
+        var q = Poly.P(p.X, p.Y);
+        if (!Poly.Contains(concrete, q)) return Poly.Contains(filled, q) ? Seen.Inside : Seen.Outside;
+
+        bool underOwn = false;
+        foreach (var other in level.Spanning)
+        {
+            if (p.X < other.Min.X - 1e-6 || p.X > other.Max.X + 1e-6 || p.Y < other.Min.Y - 1e-6 || p.Y > other.Max.Y + 1e-6) continue;
+            if (!Poly.Contains(UpOf(other, p.Z), q)) continue;
+            var real = RealOf(other, p.Z);
+            if (real == null) return Seen.Unclear;                      // 곡면 부재(또는 단면을 잇지 못함) — 속인지 아래인지 모른다
+            if (Poly.Contains(real, q)) return Seen.Blocked;            // 콘크리트 속
+            if (ReferenceEquals(other, body)) underOwn = true;
+        }
+        if (!underOwn) return Seen.Unclear;                             // 다른 부재의 턱 아래·문 자리
+
+        // 이 부재 자신의 아래다. 법선의 수평 방향으로 걸어가며, 이 부재의 실제 단면과 그늘의 테두리를 건너는 자리마다 살핀다.
+        double dx = normal.X, dy = normal.Y, length = Math.Sqrt(dx * dx + dy * dy);
+        if (length < 1e-6) return Seen.Unclear;                         // 수평면 — 걸어갈 방향이 없다
+        dx /= length; dy /= length;
+        var ownUp = UpOf(body, p.Z);
+        var ownReal = RealOf(body, p.Z)!;
+        var stops = new List<double>();
+        Crossings(ownUp, q, dx, dy, stops);
+        Crossings(ownReal, q, dx, dy, stops);
+        stops.Sort();
+        const double step = 0.01 * Poly.Scale;                           // 그늘을 벗어난 뒤 1cm 더 나간 자리에서 본다
+        double from = 0;
+        for (int i = 0; i <= stops.Count; i++)
+        {
+            double to = i < stops.Count ? stops[i] : from + 2 * step;   // 마지막 건넘 뒤의 한 구간까지
+            if (to - from < 1) { from = Math.Max(from, to); continue; }  // 같은 자리(꼭짓점을 지나며 두 번 센 것)
+            double mid = (from + to) / 2;
+            var m = new Point64((long)Math.Round(q.X + dx * mid), (long)Math.Round(q.Y + dy * mid));
+            if (Poly.Contains(ownReal, m))
+                return body.El.Kind is MemberKind.Wall or MemberKind.Slab or MemberKind.Column or MemberKind.Beam ? Seen.Opening : Seen.Tunnel;
+            if (!Poly.Contains(ownUp, m))
+            {
+                double t = from + Math.Min(step, (to - from) / 2);
+                var beyond = new Point64((long)Math.Round(q.X + dx * t), (long)Math.Round(q.Y + dy * t));
+                if (Poly.Contains(concrete, beyond)) return Seen.Unclear;   // 벗어난 자리가 다른 부재의 그늘·속이다
+                return Poly.Contains(filled, beyond) ? Seen.Inside : Seen.Outside;
+            }
+            from = to;
+        }
+        return Seen.Unclear;
+    }
+
+    /// <summary>점 q 에서 (dx, dy) 쪽으로 쏜 선이 다각형의 변을 건너는 거리들(다각형 좌표 단위)을 into 에 더한다.</summary>
+    private static void Crossings(Paths64 paths, Point64 q, double dx, double dy, List<double> into)
+    {
+        foreach (var path in paths)
+            for (int i = 0; i < path.Count; i++)
+            {
+                Point64 a = path[i], b = path[(i + 1) % path.Count];
+                double ex = b.X - a.X, ey = b.Y - a.Y;
+                double det = dx * ey - dy * ex;
+                if (Math.Abs(det) < 1e-9 * (Math.Abs(ex) + Math.Abs(ey))) continue;   // 나란하다(또는 길이 0)
+                double ax = a.X - q.X, ay = a.Y - q.Y;
+                double t = (ax * ey - ay * ex) / det;      // 선 위의 거리
+                double s = (ax * dy - ay * dx) / det;      // 변 위의 자리(0~1)
+                if (t > 0 && s >= 0 && s <= 1) into.Add(t);
+            }
+    }
+
+    private static Paths64 ShadowOf(Body body) => body.Shadow ??= Section.Shadow(body.Solid);
+
+    /// <summary>
+    /// 맨 위의 수평면이 그림자를 다 덮는 입체인가(곧은 벽·슬래브, 문·창이 뚫린 벽, 위에 턱이 달린 벽).
+    /// 그런 입체는 어느 높이에서 올려다봐도 머리 위 그림자가 같다. 위로 갈수록 좁아지는 입체(기운 벽·헌치·계단·단이 진 기초·통)는 아니다.
+    /// 곡면이 낀 입체는 높이별로 가르지 못하므로 덮는 것으로 친다(그림자 전체를 쓴다).
+    /// </summary>
+    private static bool IsCapped(Body body)
+    {
+        if (body.Capped is bool known) return known;
+        bool capped = true;
+        if (body.Planar)
+        {
+            var top = new Paths64();
+            foreach (var f in body.Faces)
+            {
+                if (f.Frame == null || f.Paths == null || f.Frame.N.Z < 1 - 1e-9 || f.Min.Z < body.Max.Z - Section.Merge) continue;
+                top.AddRange(Flat(f, f.Paths));
+            }
+            double shadow = Poly.Area(ShadowOf(body));
+            double cap = top.Count > 0 ? Poly.Area(Clipper.Union(top, FillRule.NonZero)) : 0;
+            // 1cm² 안의 차이는 덮은 것으로 친다(이 판단은 계산을 줄이려는 것일 뿐이다 — 아니라고 봐도 결과는 같고 느려질 뿐).
+            capped = cap >= shadow - 1e-4;
+        }
+        body.Capped = capped;
+        return capped;
+    }
+
+    /// <summary>면 좌표의 다각형을 평면(x, y)에 눌러 놓는다. 위를 보는 면이면 도는 방향이 그대로다.</summary>
+    private static Paths64 Flat(FaceInfo f, Paths64 paths)
+    {
+        var result = new Paths64(paths.Count);
+        foreach (var path in paths)
+        {
+            var flat = new Path64(path.Count);
+            foreach (var p in path)
+            {
+                V3 at = f.Frame!.To3D(p.X / Poly.Scale, p.Y / Poly.Scale);
+                flat.Add(Poly.P(at.X, at.Y));
+            }
+            result.Add(flat);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// 입체에서 높이 z 이상인 부분의 그림자 — 높이 z 에서 올려다봤을 때 머리 위에 이 입체가 있는 자리.
+    /// 그 높이의 단면에, 그 위에 걸린 것(문·창의 인방, 턱)의 그늘을 더한 것이다. 아래쪽으로만 넓은 부분(기초의 내민 자리, 헌치의 발치)은 들지 않는다.
+    /// 위를 보는 면들에서 z 이상인 자리를 평면에 눌러 합치면 된다(어느 자리든 입체의 맨 위는 위를 보는 면이다).
+    /// </summary>
+    private static Paths64 UpOf(Body body, double z)
+    {
+        if (!body.Planar || IsCapped(body)) return ShadowOf(body);
+        long key = (long)Math.Round(z * 1e4);
+        if (body.Ups.TryGetValue(key, out var have)) return have;
+        var all = new Paths64();
+        foreach (var f in body.Faces)
+        {
+            if (f.Frame == null || f.Paths == null || f.Frame.N.Z <= 1e-6 || f.Max.Z < z) continue;   // 위를 보는 면, z 이상에 걸친 것만
+            var part = f.Paths;
+            if (f.Min.Z < z)
+            {
+                // 면에서 높이 z 이상인 자리: 틀의 U 는 수평이라 높이는 v 만 따른다 → v ≥ (z − O.Z) / V.Z
+                double vz = f.Frame.V.Z;
+                if (vz < 1e-9) continue;
+                var (u0, _, u1, v1) = Extent(part);
+                double v = (z - f.Frame.O.Z) / vz;
+                if (v1 <= v) continue;
+                part = Poly.Intersect(part, Poly.Rect(u0 - 1, v, u1 + 1, v1 + 1));
+            }
+            all.AddRange(Flat(f, part));
+        }
+        var made = all.Count > 0 ? Clipper.Union(all, FillRule.NonZero) : all;
+        body.Ups[key] = made;
+        return made;
+    }
+
+    /// <summary>입체를 높이 z 에서 수평으로 자른 실제 단면(평면 좌표). 곡면이 끼었거나 잇지 못하면 null.</summary>
+    private static Paths64? RealOf(Body body, double z)
+    {
+        if (!body.Planar) return null;
+        long key = (long)Math.Round(z * 1e4);
+        if (!body.Reals.TryGetValue(key, out var have))
+            body.Reals[key] = have = Section.Cut(body.Solid, Frame.Of(new V3(0, 0, z), new V3(0, 0, 1)));
+        return have;
+    }
+
+    /// <summary>
+    /// 높이 z 의 평면 그림: concrete = 그 높이를 지나는 입체마다 '그 높이 이상인 부분의 그림자'를 합친 것
+    /// (그 높이의 콘크리트 + 문·창 자리처럼 위가 막힌 자리 — 문 때문에 벽 고리가 끊기지 않는다),
+    /// filled = 그 바깥 윤곽 안을 다 채운 것(둘러싸인 빈 곳 포함).
+    /// 위로 갈수록 좁아지는 입체가 없는 구간에서는 높이에 따라 달라지지 않으므로 구간마다 한 번만 만든다.
+    /// </summary>
+    private static (Paths64 concrete, Paths64 filled)? SectionAt(Context ctx, double z, out LevelInfo? level)
+    {
+        level = null;
+        int index = ctx.Levels.BinarySearch(Math.Round(z, 4));
+        if (index < 0) index = ~index - 1;                       // z 바로 아래의 높이
+        if (index < 0 || index >= ctx.Levels.Count - 1) return null;
+        if (!ctx.LevelInfos.TryGetValue(index, out level))
+        {
+            level = new LevelInfo();
+            double mid = (ctx.Levels[index] + ctx.Levels[index + 1]) / 2;
+            // 그림자를 다 모아 한 번에 합친다(하나씩 합치면 부재가 많을 때 느리다).
+            var shadows = new Paths64();
+            foreach (var body in ctx.Bodies)
+            {
+                if (mid <= body.Min.Z || mid >= body.Max.Z) continue;
+                level.Spanning.Add(body);
+                if (!body.Planar || IsCapped(body)) shadows.AddRange(ShadowOf(body));
+                else level.Loose.Add(body);
+            }
+            level.Capped = shadows.Count > 0 ? Clipper.Union(shadows, FillRule.NonZero) : shadows;
+            ctx.LevelInfos[index] = level;
+        }
+        long zKey = level.Loose.Count == 0 ? long.MinValue : (long)Math.Round(z * 1e4);
+        if (ctx.Sections.TryGetValue((index, zKey), out var cached)) return cached;
+        var concrete = level.Capped;
+        if (level.Loose.Count > 0)
+        {
+            var all = new Paths64(level.Capped);
+            foreach (var body in level.Loose) all.AddRange(UpOf(body, z));
+            concrete = Clipper.Union(all, FillRule.NonZero);
+        }
+        // 바깥 윤곽(+ 방향 고리)만 모아 채우면, 그 안의 빈 곳(구멍)까지 덮인다.
+        var outers = new Paths64(concrete.Where(Clipper.IsPositive));
+        var filled = outers.Count > 0 ? Clipper.Union(outers, FillRule.NonZero) : new Paths64();
+        var made = (concrete, filled);
+        ctx.Sections[(index, zKey)] = made;
+        return made;
+    }
+
+    // ── 밑면 받침 계산의 도우미 ────────────────────────────────────────────────────
+
+    /// <summary>네모 [u0,u1]×[v0,v1] 안에서 a·u + b·v + c ≥ 0 인 자리(볼록 다각형). 없으면 빈 목록.</summary>
+    private static Paths64 HalfPlane(double a, double b, double c, double u0, double v0, double u1, double v1)
+    {
+        var corners = new (double u, double v)[] { (u0, v0), (u1, v0), (u1, v1), (u0, v1) };
+        var kept = new Path64(6);
+        for (int i = 0; i < 4; i++)
+        {
+            var p = corners[i];
+            var q = corners[(i + 1) % 4];
+            double fp = a * p.u + b * p.v + c, fq = a * q.u + b * q.v + c;
+            if (fp >= 0) kept.Add(Poly.P(p.u, p.v));
+            if ((fp >= 0) != (fq >= 0))
+            {
+                double t = fp / (fp - fq);
+                kept.Add(Poly.P(p.u + (q.u - p.u) * t, p.v + (q.v - p.v) * t));
+            }
+        }
+        var result = new Paths64();
+        if (kept.Count >= 3) result.Add(kept);
+        return result;
+    }
+
+    /// <summary>
+    /// 밑면(soffit 틀)의 자리 (u, v) 에서 그 아래 윗면(top 틀)까지의 높이 차 = a·u + b·v + c.
+    /// 두 면이 다 평면이라 곧은 식이다. 양수면 윗면이 아래에 있다.
+    /// </summary>
+    private static (double a, double b, double c) GapOver(Frame soffit, Frame top)
+    {
+        double At(double u, double v)
+        {
+            V3 p = soffit.To3D(u, v);
+            double z = top.O.Z - (top.N.X * (p.X - top.O.X) + top.N.Y * (p.Y - top.O.Y)) / top.N.Z;
+            return p.Z - z;
+        }
+        double c = At(0, 0);
+        return (At(1, 0) - c, At(0, 1) - c, c);
+    }
+
+    /// <summary>곧은 식 a·u + b·v + c 가 다각형 안에서 갖는 가장 큰 값(꼭짓점에서 난다).</summary>
+    private static double MaxOver(Paths64 paths, (double a, double b, double c) f)
+    {
+        double best = double.MinValue;
+        foreach (var path in paths)
+            foreach (var p in path)
+                best = Math.Max(best, f.a * p.X / Poly.Scale + f.b * p.Y / Poly.Scale + f.c);
+        return best;
+    }
+
+    private static string ZoneAt(Context ctx, V3 p)
+    {
+        foreach (var zone in ctx.Zones)
+        {
+            if (p.Z < zone.ZMin || p.Z > zone.ZMax || zone.Plan.Count < 3) continue;
+            var path = new Path64(zone.Plan.Select(c => Poly.P(c[0], c[1])));
+            if (Clipper.PointInPolygon(Poly.P(p.X, p.Y), path) != PointInPolygonResult.IsOutside) return zone.Name;
+        }
+        return "";
+    }
+
+    /// <summary>구역 상자가 이 면(을 바깥으로 조금 옮긴 자리)을 덮는 범위 — 면 좌표의 네모들.</summary>
+    private static Paths64 ZoneOnFace(FormworkZone zone, Frame frame, double u0, double u1)
+    {
+        var result = new Paths64();
+        if (zone.Plan.Count < 3) return result;
+        double vz = frame.V.Z;
+        // 면을 바깥으로 조금 옮긴 선(평면에서): L(u) = (O + N·Probe) + U·u. 이 선이 구역의 평면 다각형 안에 있는 u 구간을 찾는다.
+        double ox = frame.O.X + frame.N.X * Probe, oy = frame.O.Y + frame.N.Y * Probe, dx = frame.U.X, dy = frame.U.Y;
+        var crossings = new List<double>();
+        for (int i = 0; i < zone.Plan.Count; i++)
+        {
+            double[] a = zone.Plan[i], b = zone.Plan[(i + 1) % zone.Plan.Count];
+            double ex = b[0] - a[0], ey = b[1] - a[1];
+            double det = dx * ey - dy * ex;
+            if (Math.Abs(det) < 1e-12) continue;                  // 나란하다
+            double t = ((a[0] - ox) * ey - (a[1] - oy) * ex) / det;       // 선 위의 자리 u
+            double s = ((a[0] - ox) * dy - (a[1] - oy) * dx) / det;       // 변 위의 자리(0~1)
+            if (s >= 0 && s < 1) crossings.Add(t);
+        }
+        crossings.Sort();
+        double vLo = (zone.ZMin - frame.O.Z) / vz, vHi = (zone.ZMax - frame.O.Z) / vz;
+        for (int i = 0; i + 1 < crossings.Count; i += 2)
+        {
+            double a = Math.Max(crossings[i], u0 - 1), b = Math.Min(crossings[i + 1], u1 + 1);
+            if (b - a < 1e-6) continue;
+            result.AddRange(Poly.Rect(a, vLo, b, vHi));
+        }
+        return result.Count > 1 ? Clipper.Union(result, FillRule.NonZero) : result;
+    }
+
+    /// <summary>점에서 수직 아래로 쏜 선이 처음 닿는 콘크리트 윗면의 높이. 없으면 null.</summary>
+    private static double? TopBelow(Context ctx, V3 p)
+    {
+        double? best = null;
+        foreach (var body in ctx.Bodies)
+        {
+            if (p.X < body.Min.X - 1e-6 || p.X > body.Max.X + 1e-6 || p.Y < body.Min.Y - 1e-6 || p.Y > body.Max.Y + 1e-6) continue;
+            if (body.Min.Z > p.Z) continue;
+            foreach (var g in body.Faces)
+            {
+                if (g.Frame == null || g.Paths == null || g.Frame.N.Z <= 1e-6) continue;
+                if (p.X < g.Min.X - 1e-6 || p.X > g.Max.X + 1e-6 || p.Y < g.Min.Y - 1e-6 || p.Y > g.Max.Y + 1e-6) continue;
+                // 그 면의 평면에서 (x, y) 자리의 높이
+                double z = g.Frame.O.Z - (g.Frame.N.X * (p.X - g.Frame.O.X) + g.Frame.N.Y * (p.Y - g.Frame.O.Y)) / g.Frame.N.Z;
+                if (z >= p.Z - 1e-4 || (best != null && z <= best)) continue;
+                var (u, v) = g.Frame.To2D(new V3(p.X, p.Y, z));
+                if (Poly.Contains(g.Paths, Poly.P(u, v))) best = z;
+            }
+        }
+        return best;
+    }
+
+    // ── 구멍 둘레 면 ───────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 구멍 둘레 면: 부재를 '꿰뚫은' 구멍의 안쪽 면 — 같은 입체의 서로 다른 두 면에 난 구멍(안쪽 고리)을 잇고, 법선이 구멍 속을 보는 면.
+    /// 벽·슬래브를 뚫은 개구부(창, 바닥 구멍)의 안쪽 면들이 여기에 든다.
+    /// 들지 않는 것(보통 면으로 보고 방향·안팎으로 가른다):
+    ///  · 돋은 덩어리의 옆면 — 아랫단 윗면의 안쪽 고리와 모서리를 나누지만 법선이 고리 밖을 본다(단이 진 기초의 윗단).
+    ///  · 막힌 홈·피트·통의 속 — 꿰뚫지 않았다(통 모양으로 만든 수조의 안쪽 벽은 구멍 둘레가 아니라 안쪽 면이다).
+    ///  · 벽·슬래브가 아닌 부재를 길게 꿰뚫은 빈 곳 — 깊이가 구멍 크기보다 크면 암거 같은 통일 수 있다.
+    ///  · 바닥까지 내려온 문처럼 '홈'인 개구부 — 고리가 아니다. 안팎을 볼 때 개구부로 가려진다(<see cref="Look"/>).
+    /// </summary>
+    private static HashSet<int> HoleEdgeFaces(Body body)
+    {
+        var result = new HashSet<int>();
+        // 모서리(양 끝점) → 그 모서리를 가진 (면, 고리). 그 면의 안쪽 고리(구멍)인지도 같이 적는다.
+        var owners = new Dictionary<(long, long, long, long, long, long), List<(int face, int loop, bool inner, V3 mid)>>();
+        var loopsOf = new Dictionary<int, List<List<V3>?>>();
+        for (int f = 0; f < body.Faces.Count; f++)
+        {
+            var frame = body.Faces[f].Frame;
+            if (frame == null) continue;
+            var face = body.Faces[f].Face;
+            int outer = -1;
+            double largest = -1;
+            var loops = new List<List<V3>?>();
+            for (int l = 0; l < face.Loops.Count; l++)
+            {
+                var pts = Section.LoopPoints(face.Loops[l], frame.N);
+                loops.Add(pts);
+                if (pts == null) continue;
+                double area = Math.Abs(LoopArea(pts, frame));
+                if (area > largest) { largest = area; outer = l; }
+            }
+            loopsOf[f] = loops;
+            for (int l = 0; l < loops.Count; l++)
+            {
+                var pts = loops[l];
+                if (pts == null) continue;
+                for (int i = 0; i < pts.Count; i++)
+                {
+                    V3 a = pts[i], b = pts[(i + 1) % pts.Count];
+                    var key = EdgeKey(a, b);
+                    if (!owners.TryGetValue(key, out var list)) owners[key] = list = new List<(int, int, bool, V3)>();
+                    list.Add((f, l, l != outer, (a + b) * 0.5));
+                }
+            }
+        }
+
+        // 면 B 가 구멍 속을 보며 닿은 구멍들: (구멍이 난 면 A, 고리) → 그 구멍이 '얕은가'(깊이 ≤ 구멍의 큰 쪽 치수)
+        var touched = new Dictionary<int, Dictionary<int, bool>>();
+        foreach (var list in owners.Values)
+            foreach (var hole in list)
+            {
+                if (!hole.inner) continue;
+                var a = body.Faces[hole.face];
+                var loop = loopsOf[hole.face][hole.loop]!;
+                foreach (var side in list)
+                {
+                    if (side.inner || side.face == hole.face) continue;
+                    var b = body.Faces[side.face];
+                    if (b.Frame == null || !LooksInto(a.Frame!, loop, b.Frame.N, hole.mid)) continue;
+                    // 구멍의 깊이 = B 가 A 의 법선 쪽으로 뻗은 길이, 구멍의 크기 = 고리의 큰 쪽 치수
+                    double lo = double.MaxValue, hi = double.MinValue;
+                    foreach (var pts in loopsOf[side.face])
+                        if (pts != null)
+                            foreach (var p in pts) { double d = a.Frame!.Dist(p); lo = Math.Min(lo, d); hi = Math.Max(hi, d); }
+                    double u0 = double.MaxValue, v0 = double.MaxValue, u1 = double.MinValue, v1 = double.MinValue;
+                    foreach (var p in loop)
+                    {
+                        var (u, v) = a.Frame!.To2D(p);
+                        u0 = Math.Min(u0, u); u1 = Math.Max(u1, u); v0 = Math.Min(v0, v); v1 = Math.Max(v1, v);
+                    }
+                    bool shallow = hi - lo <= Math.Max(u1 - u0, v1 - v0) + 1e-6;
+                    if (!touched.TryGetValue(side.face, out var holes)) touched[side.face] = holes = new Dictionary<int, bool>();
+                    holes[hole.face] = holes.TryGetValue(hole.face, out bool was) ? was && shallow : shallow;
+                }
+            }
+        bool plate = body.El.Kind is MemberKind.Wall or MemberKind.Slab;
+        foreach (var (face, holes) in touched)
+            if (holes.Count >= 2 && (plate || holes.Values.All(shallow => shallow)))   // 두 면의 구멍을 잇는다 = 꿰뚫었다
+                result.Add(face);
+        return result;
+    }
+
+    /// <summary>면 A 의 고리(구멍)와 모서리를 나누는 면의 법선이 그 고리 속을 보는가(= 구멍의 안쪽 면인가, 돋은 덩어리의 옆면인가).</summary>
+    private static bool LooksInto(Frame a, List<V3> loop, V3 normal, V3 edgeMid)
+    {
+        double du = normal.Dot(a.U), dv = normal.Dot(a.V), length = Math.Sqrt(du * du + dv * dv);
+        if (length < 1e-6) return false;
+        var (mu, mv) = a.To2D(edgeMid);
+        const double step = 5e-4;   // 모서리 가운데에서 법선 쪽으로 0.5mm
+        var path = new Path64(loop.Count);
+        foreach (var p in loop)
+        {
+            var (u, v) = a.To2D(p);
+            path.Add(Poly.P(u, v));
+        }
+        return Clipper.PointInPolygon(Poly.P(mu + du / length * step, mv + dv / length * step), path) == PointInPolygonResult.IsInside;
+    }
+
+    private static double LoopArea(List<V3> pts, Frame frame)
+    {
+        double a = 0;
+        for (int i = 0; i < pts.Count; i++)
+        {
+            var (u1, v1) = frame.To2D(pts[i]);
+            var (u2, v2) = frame.To2D(pts[(i + 1) % pts.Count]);
+            a += u1 * v2 - u2 * v1;
+        }
+        return a / 2;
+    }
+
+    private static (long, long, long, long, long, long) EdgeKey(V3 a, V3 b)
+    {
+        static long R(double x) => (long)Math.Round(x / (Section.Merge * 2));
+        var ka = (R(a.X), R(a.Y), R(a.Z));
+        var kb = (R(b.X), R(b.Y), R(b.Z));
+        return ka.CompareTo(kb) <= 0 ? (ka.Item1, ka.Item2, ka.Item3, kb.Item1, kb.Item2, kb.Item3)
+                                     : (kb.Item1, kb.Item2, kb.Item3, ka.Item1, ka.Item2, ka.Item3);
+    }
+
+    // ── 스스로 하는 검산 ───────────────────────────────────────────────────────────
+
+    /// <summary>결과가 서로 맞는지 보는 검산의 요약.</summary>
+    public sealed class Audit
+    {
+        public int Faces;
+        public int PolygonMismatch;   // 고리로 계산한 넓이 ≠ Revit 이 준 면 넓이
+        public int SumMismatch;       // 맞닿음 + 포개짐 + 드러남 ≠ 면 넓이
+        public int PatchMismatch;     // 조각의 합 ≠ 드러남
+        public int Flagged;           // 재지 못했다고 표시된 면
+        /// <summary>맞닿은 넓이가 양쪽에서 다르게 나온 부재 쌍 — 입체가 겹쳐 있거나(결합 안 됨) 틈이 있다.</summary>
+        public List<(long a, long b, double fromA, double fromB)> Uneven = new();
+    }
+
+    public static Audit Check(IReadOnlyList<ElementFormwork> results)
+    {
+        var audit = new Audit();
+        var contact = new Dictionary<(long, long), double>();
+        var ids = new HashSet<long>(results.Select(r => r.Element.Id));
+        foreach (var r in results)
+            foreach (var f in r.Faces)
+            {
+                audit.Faces++;
+                if (f.Flag.Length > 0) audit.Flagged++;
+                if (f.Class == FaceClass.Curved) continue;
+                if (Math.Abs(f.Polygon - f.Gross) > 1e-4 + 1e-6 * f.Gross) audit.PolygonMismatch++;
+                if (Math.Abs(f.Covered + f.Shared + f.Net - f.Polygon) > 1e-4 + 1e-6 * f.Polygon) audit.SumMismatch++;
+                if (Math.Abs(f.Patches.Sum(p => p.Area) - f.Net) > 1e-4 + 1e-6 * f.Net) audit.PatchMismatch++;
+                foreach (var c in f.Covers)
+                    contact[(f.ElementId, c.ElementId)] = contact.GetValueOrDefault((f.ElementId, c.ElementId)) + c.Area;
+            }
+        foreach (var ((a, b), fromA) in contact)
+        {
+            if (a > b && contact.ContainsKey((b, a))) continue;      // 쌍마다 한 번만
+            if (!ids.Contains(b)) continue;                           // 상대가 결과에 없으면(주변 콘크리트) 견줄 수 없다
+            double fromB = contact.GetValueOrDefault((b, a));
+            if (Math.Abs(fromA - fromB) > 1e-3 + 1e-3 * Math.Max(fromA, fromB))
+                audit.Uneven.Add(a < b ? (a, b, fromA, fromB) : (b, a, fromB, fromA));
+        }
+        audit.Uneven = audit.Uneven.OrderByDescending(u => Math.Abs(u.fromA - u.fromB)).ToList();
+        return audit;
+    }
+
+    // ── 다각형 도우미 ──────────────────────────────────────────────────────────────
+
+    /// <summary>다각형을 떨어진 덩어리별로 나눈다(덩어리 = 바깥 고리 하나 + 그 안의 구멍들).</summary>
+    internal static List<Paths64> Components(Paths64 paths)
+    {
+        var list = new List<Paths64>();
+        if (paths.Count == 0) return list;
+        var clipper = new Clipper64();
+        clipper.AddSubject(paths);
+        var tree = new PolyTree64();
+        clipper.Execute(ClipType.Union, FillRule.NonZero, tree);
+        void Walk(PolyPath64 node)
+        {
+            foreach (PolyPath64 outer in node)
+            {
+                var part = new Paths64 { outer.Polygon! };
+                foreach (PolyPath64 hole in outer)
+                {
+                    part.Add(hole.Polygon!);
+                    Walk(hole); // 구멍 안의 섬은 따로 덩어리다
+                }
+                list.Add(part);
+            }
+        }
+        Walk(tree);
+        return list;
+    }
+
+    private static (double u0, double v0, double u1, double v1) Extent(Paths64 paths)
+    {
+        long u0 = long.MaxValue, v0 = long.MaxValue, u1 = long.MinValue, v1 = long.MinValue;
+        foreach (var path in paths)
+            foreach (var p in path)
+            {
+                u0 = Math.Min(u0, p.X); v0 = Math.Min(v0, p.Y);
+                u1 = Math.Max(u1, p.X); v1 = Math.Max(v1, p.Y);
+            }
+        return (u0 / Poly.Scale, v0 / Poly.Scale, u1 / Poly.Scale, v1 / Poly.Scale);
+    }
+
+    /// <summary>
+    /// 다각형 안의 점들. v 방향으로 고르게 나눈 줄(수직면이면 높이)마다, 그 줄이 다각형을 지나는 구간 중 가장 긴 것의 가운데를 잡는다.
+    /// atFraction 을 주면 그 높이(0 = 아래 끝, 1 = 위 끝)의 한 줄만 본다.
+    /// </summary>
+    internal static List<(double u, double v)> InteriorPoints(Paths64 paths, int count, double? atFraction = null)
+    {
+        var points = new List<(double, double)>();
+        var (u0, v0, u1, v1) = Extent(paths);
+        if (v1 - v0 < 1e-9 || u1 - u0 < 1e-9) return points;
+        var fractions = atFraction != null ? new[] { atFraction.Value }
+                      : Enumerable.Range(1, count).Select(i => i / (count + 1.0)).ToArray();
+        foreach (double fr in fractions)
+        {
+            double v = v0 + (v1 - v0) * fr;
+            long y = (long)Math.Round(v * Poly.Scale);
+            var xs = new List<double>();
+            foreach (var path in paths)
+                for (int i = 0; i < path.Count; i++)
+                {
+                    Point64 a = path[i], b = path[(i + 1) % path.Count];
+                    if ((a.Y > y) == (b.Y > y)) continue;
+                    xs.Add(a.X + (double)(y - a.Y) / (b.Y - a.Y) * (b.X - a.X));
+                }
+            xs.Sort();
+            double best = 0, mid = double.NaN;
+            for (int i = 0; i + 1 < xs.Count; i += 2)
+                if (xs[i + 1] - xs[i] > best) { best = xs[i + 1] - xs[i]; mid = (xs[i] + xs[i + 1]) / 2; }
+            if (!double.IsNaN(mid)) points.Add((mid / Poly.Scale, v));
+        }
+        return points;
+    }
+}

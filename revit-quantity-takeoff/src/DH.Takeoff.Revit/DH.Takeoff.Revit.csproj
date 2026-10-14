@@ -11,10 +11,13 @@
     <RootNamespace>DH.Takeoff.Revit</RootNamespace>
   </PropertyGroup>
 
-  <!-- Revit 2026 API: NuGet 빌드타임 참조(런타임 DLL 미복사). 실행은 Revit 2026 필요. -->
+  <!-- Revit 2026 API: NuGet 빌드타임 참조(런타임 DLL 미복사). 실행은 Revit 2026 필요.
+       판을 2026.3.0 으로 못 박는다(2026.* 로 두면 가장 새 판 2026.4.10 이 잡힌다): 쓰는 Revit 이 2026.3(26.3.0.0)이라
+       더 새 판으로 빌드하면 Revit 이 명령마다 'Assembly version conflict' 를 저널에 적고(2026-10-12 확인),
+       2026.4 에만 있는 API 를 모르고 쓰면 실행 중에 터진다. Revit 을 올려도 낮은 판으로 빌드한 DLL 은 그대로 돈다. -->
   <ItemGroup>
-    <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="2026.*" ExcludeAssets="runtime" />
-    <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="2026.*" ExcludeAssets="runtime" />
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="[2026.3.0]" ExcludeAssets="runtime" />
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="[2026.3.0]" ExcludeAssets="runtime" />
   </ItemGroup>
 
   <ItemGroup>

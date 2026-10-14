@@ -26,6 +26,10 @@ public static class SharedParameterManager
         ["DH_Zone"] = Guid.Parse("7a2b6c10-0000-4a00-9b00-000000000012"),
         ["DH_Part"] = Guid.Parse("7a2b6c10-0000-4a00-9b00-000000000013"),
         ["DH_Formula"] = Guid.Parse("7a2b6c10-0000-4a00-9b00-000000000014"), // 산출식(문자)
+        ["DH_BIM물량"] = Guid.Parse("7a2b6c10-0000-4a00-9b00-000000000015"),  // 모델 체적(m³, 숫자)
+        ["DH_수식물량"] = Guid.Parse("7a2b6c10-0000-4a00-9b00-000000000016"), // 산출식을 계산한 값(m³, 숫자)
+        ["DH_물량차"] = Guid.Parse("7a2b6c10-0000-4a00-9b00-000000000017"),   // 수식물량 − BIM물량(m³, 숫자)
+        ["DH_판정"] = Guid.Parse("7a2b6c10-0000-4a00-9b00-000000000018"),     // 일치 / 불일치 / 수식 없음(문자)
     };
 
     /// 치수(길이) 매개변수 — 내부 피트 저장, 내보낼 때 m로 변환.
@@ -44,11 +48,16 @@ public static class SharedParameterManager
     private static ForgeTypeId SpecOf(string name)
         // 분류는 문자, 그 외(치수 L1~W3·H, 횟수 ETC)는 '단위 없는 숫자'.
         // → 사용자가 입력한 값(미터 기준 숫자)이 그대로 CSV에 나가도록(단위 환산 혼선 제거).
-        => name.StartsWith("DH_") ? SpecTypeId.String.Text : SpecTypeId.Number;
+        => name.StartsWith("DH_") && !NumberKeys.Contains(name) ? SpecTypeId.String.Text : SpecTypeId.Number;
 
-    public static string EnsureParameters(Document doc)
+    /// DH_ 로 시작하지만 숫자인 칸(물량 검산).
+    private static readonly HashSet<string> NumberKeys = new() { "DH_BIM물량", "DH_수식물량", "DH_물량차" };
+
+    /// <param name="only">이 이름들만 만든다(없으면 전부).</param>
+    public static string EnsureParameters(Document doc, IReadOnlyCollection<string>? only = null)
     {
         var app = doc.Application;
+        string previousFile = app.SharedParametersFilename; // 사용자가 쓰던 공유 매개변수 파일 설정은 끝나고 되돌린다
 
         string spPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -58,28 +67,36 @@ public static class SharedParameterManager
         //   현재 스펙(숫자)으로 다시 정의되게 한다.
         File.WriteAllText(spPath, string.Empty);
 
-        app.SharedParametersFilename = spPath;
-        DefinitionFile defFile = app.OpenSharedParameterFile()
-            ?? throw new InvalidOperationException("공유 매개변수 파일을 열 수 없습니다: " + spPath);
-        DefinitionGroup group = defFile.Groups.get_Item("DH") ?? defFile.Groups.Create("DH");
-
-        var catSet = app.Create.NewCategorySet();
-        foreach (var bic in TargetCategories)
-        {
-            var c = Category.GetCategory(doc, bic);
-            if (c != null && c.AllowsBoundParameters) catSet.Insert(c);
-        }
-
         int created = 0;
-        using (var tx = new Transaction(doc, "DH 공유매개변수 생성"))
+        try
         {
+            app.SharedParametersFilename = spPath;
+            DefinitionFile defFile = app.OpenSharedParameterFile()
+                ?? throw new InvalidOperationException("공유 매개변수 파일을 열 수 없습니다: " + spPath);
+            DefinitionGroup group = defFile.Groups.get_Item("DH") ?? defFile.Groups.Create("DH");
+
+            var catSet = app.Create.NewCategorySet();
+            foreach (var bic in TargetCategories)
+            {
+                var c = Category.GetCategory(doc, bic);
+                if (c != null && c.AllowsBoundParameters) catSet.Insert(c);
+            }
+
+            using var tx = new Transaction(doc, "DH 공유매개변수 생성");
             tx.Start();
             foreach (var kv in Guids)
+            {
+                if (only != null && !only.Contains(kv.Key)) continue;
                 if (BindParam(doc, group, kv.Key, SpecOf(kv.Key), kv.Value, catSet)) created++;
+            }
             tx.Commit();
         }
+        finally
+        {
+            try { app.SharedParametersFilename = previousFile; } catch { }
+        }
 
-        return $"공유 매개변수 준비 완료.\n  • 신규 생성: {created}개 / 전체 {Guids.Count}개\n" +
+        return $"공유 매개변수 준비 완료.\n  • 신규 생성: {created}개 / 전체 {only?.Count ?? Guids.Count}개\n" +
                $"  • 대상: 기둥·보·벽·바닥·기초·일반모델\n  • 파일: {spPath}";
     }
 
