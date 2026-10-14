@@ -3,6 +3,7 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using Autodesk.Revit.Attributes;
@@ -20,11 +21,66 @@ namespace DH.Takeoff.Revit.Commands;
 ///    Revit 의 실행 취소 한 번으로 이 창에서 한 일이 모두 돌아간다. [처음 상태로 되돌리고 닫기]는 그룹을 되돌린다(RollBack).
 ///  · 그룹을 닫지 못하면 Revit 이 나중에 전부 되돌린다(문서) — 그래서 그룹을 연 뒤의 모든 길은 finally 에서 닫는다.
 ///  · 그룹이 Assimilate/Commit 으로 닫혔으면(모델에 남았으면) 무슨 일이 있어도 Result.Succeeded 를 돌려준다.
+///  · 산출식을 이어서(JACK 2026-10-14): 남은 부재가 0 이 되어 닫을 때만, 그룹을 닫은 뒤에, 필요한 부재만 —
+///    식이 없거나 틀려진 부재('다시 계산 필요' 포함)만 다시 적고 지금도 맞는 식은 건드리지 않는다(FormulaAutoFill.PlanRefresh).
+///    산출식 트랜잭션은 위치·부위의 그룹과 따로다(실행 취소 줄도 따로). 이 단계에서 무엇이든 커밋됐으면 Succeeded 를 돌려준다.
+///    이 단계의 오류는 여기서 잡는다 — 위치·부위에 넣은 값은 그대로 남는다.
 /// </summary>
 [Transaction(TransactionMode.Manual)]
 public sealed class AssignZoneCommand : IExternalCommand
 {
     private const string Title = "DH 수량산출 — 위치·부위";
+    private const int AskBeforeCompute = 150;    // 식을 새로 만들 부재가 이보다 많으면 시작하기 전에 묻는다(오래 걸릴 수 있다)
+
+    // 닫을 때 이어서 돈 산출식의 결과(알림 창과 일지에 쓴다).
+    private sealed class FormulaFollow
+    {
+        public FormulaAutoFill.Refreshed Plan = new();
+        public string Problem = "";       // 이어서 하지 못한 까닭("" = 없음)
+        public string Table = "";         // 결과표(쓰지 않았으면 "")
+
+        private IEnumerable<FormulaOutcome> All => Plan.All;
+        public int Total => Plan.All.Count;
+        public int Kept => All.Count(o => o.Kept);
+        public int CellsFixed => All.Count(o => o.Kept && o.Verdict.Length > 0 && o.NoWrite.Length == 0 && o.Skipped.Length == 0);
+        public int Drifted => All.Count(o => o.Kept && o.Drifted);
+        public List<FormulaOutcome> NotExportable => All.Where(o => o.Kept && o.NotExportable.Length > 0).ToList();
+        public int NewFormula => All.Count(o => !o.Kept && o.Written && o.Existing.Length == 0);
+        public int Replaced => All.Count(o => !o.Kept && o.Overwrote);
+        public int ReplacedStale => All.Count(o => !o.Kept && o.Overwrote && o.WasStale);
+        public int SameFormula => All.Count(o => !o.Kept && o.Result.Ok && o.Existing.Length > 0 && o.Existing == o.Result.Formula);
+
+        /// <summary>같은 식이 다시 나와 판정만 고쳐 적은 부재(결합에서 남는 쪽: '다시 계산 필요' → 같은 식 → '일치').</summary>
+        public int VerdictOnly => All.Count(o => !o.Kept && o.Written && o.Existing.Length > 0 && o.Existing == o.Result.Formula);
+
+        /// <summary>
+        /// 적으려 했지만 적히지 않은 부재: 식을 새로 만들었는데 식 칸에 붙지 않았거나(칸이 없다 · 읽기 전용), 적다가 오류가 났다.
+        /// 결과표에 까닭이 있다. (적지 않기로 한 부재 — 그룹 안 · 적을 것 없음 — 는 여기 들지 않는다.)
+        /// </summary>
+        public int NotWritten => All.Count(o => o.WriteError.Length > 0 || (o.Result.Ok && !o.Written && o.Skipped.Length == 0 && o.NoWrite.Length == 0));
+        public int WasStale => All.Count(o => o.WasStale);
+        public int StaleLeft => All.Count(o => o.StaleLeft);
+        public int NotTarget => All.Count(o => o.NoVolume || o.NotConcrete);
+        public int Skipped => All.Count(o => o.Skipped.Length > 0);
+        public int BadReadBack => All.Count(o => (o.Written && !o.ReadBackOk) || (o.Verdict.Length > 0 && !o.VerdictReadBack));
+
+        /// <summary>사람이 확인할 부재: 식을 만들지 못했고 넣어 둔 식도 맞지 않는 부재 + '다시 계산 필요'를 남긴 부재.</summary>
+        public List<FormulaOutcome> Exceptions =>
+            All.Where(o => !o.Kept && !o.Result.Ok && !o.NoVolume && !o.NotConcrete && (!o.ManualOk || o.StaleLeft)).ToList();
+
+        /// <summary>검토 창으로 넘길 수 있는 부재(적지 않기로 한 부재는 창에서도 저장할 수 없다).</summary>
+        public List<FormulaOutcome> Ask => Exceptions.Where(o => o.Skipped.Length == 0).ToList();
+
+        /// <summary>모델에 적은 것이 되돌려졌다(Write 를 불렀는데 커밋되지 않았다).</summary>
+        public bool RolledBack => Plan.Wrote && Plan.Status != TransactionStatus.Committed;
+
+        /// <summary>
+        /// 이번에 일어난 일이 있다(모델에 적었다 · 못 한 까닭이 있다 · 나중에 하기로 했다) — 그것만으로도 알림 창을 띄운다.
+        /// 사람이 확인할 부재만 남아 있는 것은 여기 들지 않는다: 그것만으로는 창을 띄우지 않고(볼 때마다 뜨지 않게),
+        /// 다른 까닭으로 창이 뜰 때 함께 적는다.
+        /// </summary>
+        public bool HasNews => Plan.Wrote || Plan.ParametersEnsured || Problem.Length > 0 || Plan.Declined;
+    }
 
     // 이번 창에서 모델에 적는 일과 그 일지.
     private sealed class Session
@@ -254,15 +310,151 @@ public sealed class AssignZoneCommand : IExternalCommand
 
         // ★ 이 아래에서 kept 가 참이면(모델에 남았으면) 무슨 일이 있어도 Succeeded 를 돌려준다.
         //   Failed/Cancelled 를 돌려주면 Revit 이 방금 모델에 적은 것까지 전부 되돌린다.
+
+        // 산출식을 이어서: 남은 부재가 0 이 되어 닫을 때만(FormulaCheck.FollowUp). 창이 알고 있는 값이 모델에 그대로 있을 때만 돈다 —
+        // 넣은 것이 모델에 남았거나(kept), 넣은 것이 없다. 넣었는데 남기지 못했으면 창의 '남은 0'이 모델과 달라 돌지 않는다.
+        FormulaFollow? follow = null;
+        try
+        {
+            bool modelMatchesEditor = kept || (!revert && session.Commits == 0);
+            if (editor != null && FormulaCheck.FollowUp(editor.Progress(), revert, crash.Length > 0, modelMatchesEditor))
+                follow = FollowWithFormulas(doc, session);
+            else if (editor != null)
+            {
+                var p = editor.Progress();
+                session.Note($"산출식 이어서 — 돌지 않음\t남은 {p.Remaining} · 끝 {p.Done} · 처음 상태로 {(revert ? "O" : "X")} · 창 오류 {(crash.Length > 0 ? "O" : "X")} · 모델에 남음 {(kept ? "O" : "X")} · 커밋 {session.Commits}");
+            }
+        }
+        catch (Exception ex)
+        {
+            session.Note("산출식 이어서 — 오류\t" + ex);
+            follow ??= new FormulaFollow();
+            follow.Problem = ex.Message;
+        }
+        bool formulasCommitted = follow?.Plan.MayHaveCommitted == true;
+        session.Note("돌려주는 값: " + (kept || formulasCommitted ? "Succeeded" : crash.Length > 0 || closeProblem.Length > 0 ? "Failed" : "Cancelled") +
+                     $"(위치·부위가 모델에 남음 {(kept ? "O" : "X")} · 산출식 단계에서 커밋했을 수 있음 {(formulasCommitted ? "O" : "X")})");
+
         string table = "", journal = "";
         try { (table, journal) = WriteLogs(doc, editor, session, kept, revert); }
         catch (Exception ex) { table = "(쓰지 못했습니다 — 결과표가 엑셀에 열려 있으면 닫아 주세요: " + ex.Message + ")"; }
-        try { Report(uidoc, editor, session, kept, revert, crash, closeProblem, paintProblem, checkView, legend, table, journal); }
+        try { Report(commandData, editor, session, kept, revert, crash, closeProblem, paintProblem, checkView, legend, table, journal, follow); }
         catch { /* 알림 창을 못 띄워도 결과는 바뀌지 않는다 */ }
 
-        if (kept) return Result.Succeeded;
+        // 산출식 단계에서 무엇이든 커밋됐으면(속성 칸 만들기 포함) Succeeded — 위치·부위를 이번에 넣지 않았어도.
+        if (kept || formulasCommitted) return Result.Succeeded;
         if (crash.Length > 0 || closeProblem.Length > 0) { message = crash.Length > 0 ? crash : closeProblem; return Result.Failed; }
         return Result.Cancelled;
+    }
+
+    // 산출식을 이어서 돌린다(필요한 부재만). 대상 = 모델의 대상 부재 전부(Revit 의 선택은 보지 않는다 — «다 끝났다»는 모델 전체의 일이다).
+    // 여기서 나는 오류는 받아 적는다: 위치·부위에 넣은 값은 이미 모델에 남아 있다.
+    private static FormulaFollow FollowWithFormulas(Document doc, Session session)
+    {
+        var follow = new FormulaFollow();
+        var cursor = Mouse.OverrideCursor;
+        try
+        {
+            try { Mouse.OverrideCursor = Cursors.Wait; } catch { }
+            follow.Plan = FormulaAutoFill.PlanRefresh(doc, DimensionExtractor.CollectApplicable(doc), count =>
+            {
+                if (count < AskBeforeCompute) return true;
+                // 식을 새로 만들 부재가 많다(식이 하나도 없는 큰 모델을 처음 닫을 때) — 오래 걸릴 수 있어 먼저 묻는다.
+                try { Mouse.OverrideCursor = cursor; } catch { }
+                var ask = Dialogs.New(Title);
+                ask.MainInstruction = $"부재 {count}개의 산출식을 지금 만들까요?";
+                ask.MainContent = "위치·부위가 모두 끝나 산출식을 이어서 만듭니다. 부재가 많아 시간이 걸릴 수 있습니다(끝날 때까지 Revit 이 멈춘 것처럼 보입니다).\n" +
+                                  "나중에 [산출식 자동입력] 버튼으로 해도 결과는 같습니다.";
+                ask.AllowCancellation = true;
+                ask.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "지금 만들기");
+                ask.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, "나중에 하기");
+                bool go = ask.Show() == TaskDialogResult.CommandLink1;
+                if (go) { try { Mouse.OverrideCursor = Cursors.Wait; } catch { } }
+                return go;
+            });
+            if (!follow.Plan.Declined) FormulaAutoFill.ApplyRefresh(doc, follow.Plan);
+        }
+        catch (Exception ex)
+        {
+            follow.Problem = ex.Message;
+            session.Note("산출식 이어서 — 오류\t" + ex);
+        }
+        finally
+        {
+            try { Mouse.OverrideCursor = cursor; } catch { }
+        }
+
+        // 결과표와 일지 줄을 적다 오류가 나도 follow(무엇을 커밋했는가)는 그대로 돌려준다 — 잃으면 명령이 Cancelled 를 돌려줘 방금 적은 식이 되돌려진다.
+        try { NoteFollow(doc, follow, session); }
+        catch (Exception ex) { session.Note("산출식 이어서 — 결과를 적다 오류: " + ex.Message); }
+        return follow;
+    }
+
+    // 이어서 돈 산출식의 결과표와 일지 줄.
+    private static void NoteFollow(Document doc, FormulaFollow follow, Session session)
+    {
+        var plan = follow.Plan;
+        // 결과표는 적은 것이나 사람이 확인할 것이 있을 때만 쓴다(닫을 때마다 사본이 쌓이지 않게).
+        if (plan.Wrote || follow.Exceptions.Count > 0)
+        {
+            try { follow.Table = FormulaAutoFill.WriteLog(doc, plan.All, plan.Wrote ? plan.Status : TransactionStatus.Committed); }
+            catch (Exception ex) { follow.Table = "(쓰지 못했습니다 — 결과표가 엑셀에 열려 있으면 닫아 주세요: " + ex.Message + ")"; }
+        }
+        session.Note($"산출식 이어서\t대상 {follow.Total} · 그대로 {follow.Kept}(검산 칸만 고침 {follow.CellsFixed} · 체적이 달라졌지만 ±1% 안 {follow.Drifted} · 산출근거에 못 싣는 식 {follow.NotExportable.Count})" +
+                     $" · 다시 만들기로 한 것 {plan.Recompute} → 새로 적음 {follow.NewFormula} · 바꿔 적음 {follow.Replaced} · 같은 식 {follow.SameFormula} · 예외 {follow.Exceptions.Count} · 대상 아님 {follow.NotTarget}" +
+                     $" · 다시 계산 필요였던 것 {follow.WasStale} → 식이 바뀐 것 {follow.ReplacedStale} · 표시를 남긴 것 {follow.StaleLeft}" +
+                     $" · 적을 부재 {plan.ToWrite.Count} · 적지 않음(그룹 등) {plan.NotEditable} · 칸 새로 만듦 {(plan.ParametersEnsured ? "O" : "X")}" +
+                     $" · 트랜잭션 {(plan.Wrote ? "O(" + plan.Status + ")" : "X")} · 되읽기 다름 {follow.BadReadBack} · 적지 못함 {follow.NotWritten} · 판정만 고침 {follow.VerdictOnly} · 나중에 하기로 함 {(plan.Declined ? "O" : "X")}" +
+                     $" · 계획 {plan.PlanMs} ms / 적기 {plan.WriteMs} ms" + (follow.Problem.Length > 0 ? " · 오류: " + follow.Problem : ""));
+    }
+
+    // 닫는 알림 창에 넣는 «산출식» 단락.
+    private static void AppendFormulaReport(StringBuilder text, FormulaFollow follow, bool placesKept)
+    {
+        var plan = follow.Plan;
+        text.AppendLine();
+        if (follow.Problem.Length > 0)
+        {
+            text.AppendLine("산출식을 이어서 하지 못했습니다: " + follow.Problem);
+            text.AppendLine(plan.MayHaveCommitted ? "  (일부는 모델에 적혔을 수 있습니다 — [산출식 자동입력] 버튼으로 다시 맞춰 주세요.)"
+                                                  : "  ([산출식 자동입력] 버튼으로 따로 실행해 주세요.)");
+            return;
+        }
+        if (plan.Declined)
+        {
+            text.AppendLine($"산출식은 나중에 하기로 했습니다(식을 새로 만들 부재 {plan.Recompute}개) — [산출식 자동입력] 버튼으로 실행해 주세요.");
+            return;
+        }
+        if (follow.RolledBack)
+        {
+            text.AppendLine($"★ 산출식이 모델에 저장되지 않았습니다(Revit 이 변경을 되돌림: {plan.Status}). [산출식 자동입력] 버튼으로 다시 실행해 주세요.");
+            return;
+        }
+        text.AppendLine("산출식(위치·부위가 모두 끝나 이어서 — 필요한 부재만):");
+        if (follow.NewFormula > 0) text.AppendLine($"  • 새로 적음: {follow.NewFormula}개(식이 없던 부재)");
+        if (follow.Replaced > 0)
+            text.AppendLine($"  • 바꿔 적음: {follow.Replaced}개(식이 지금 모델과 맞지 않던 부재 {follow.Replaced - follow.ReplacedStale} · 결합으로 '다시 계산 필요'였던 부재 {follow.ReplacedStale}) — 전의 식은 결과표에 있습니다");
+        if (follow.VerdictOnly > 0) text.AppendLine($"  • 판정만 고침: {follow.VerdictOnly}개(같은 식이 다시 나온 부재 — 결합에서 남는 쪽 등)");
+        if (follow.CellsFixed > 0) text.AppendLine($"  • 검산 칸만 고침: {follow.CellsFixed}개(식은 그대로)");
+        text.AppendLine($"  • 그대로 둠: {follow.Kept - follow.CellsFixed}개(지금도 맞는 식)");
+        if (follow.Drifted > 0)
+            text.AppendLine($"      - 그 가운데 {follow.Drifted}개는 식을 적은 뒤에 모델 체적이 달라졌습니다(±1% 안이라 '일치') — 새 치수로 맞추려면 [산출식 자동입력]");
+        var notExportable = follow.NotExportable;
+        if (notExportable.Count > 0)
+            text.AppendLine($"      - 그 가운데 {notExportable.Count}개는 산출근거 엑셀에 싣지 못하는 식입니다: " +
+                            string.Join(" / ", notExportable.GroupBy(o => o.NotExportable).Select(g => $"{g.Key} {g.Count()}개").Take(3)));
+        int exceptions = follow.Exceptions.Count;
+        if (exceptions - follow.StaleLeft > 0) text.AppendLine($"  • 직접 넣어야 함: {exceptions - follow.StaleLeft}개(식을 만들지 못한 부재)");
+        if (follow.StaleLeft > 0)
+            text.AppendLine($"  • '다시 계산 필요'를 남김: {follow.StaleLeft}개(결합한 부재인데 식을 새로 만들지 못했습니다 — 넣어 둔 식을 확인해 주세요)");
+        if (follow.NotWritten > 0) text.AppendLine($"  • ★ 적지 못함: {follow.NotWritten}개(식 칸이 없거나 읽기 전용 · 적다가 오류 — 결과표를 확인해 주세요)");
+        if (follow.Skipped > 0) text.AppendLine($"  • 적지 않음: {follow.Skipped}개(그룹 안의 부재 · 다른 사용자가 편집 중 — 위의 수와 겹칠 수 있습니다)");
+        if (follow.NotTarget > 0) text.AppendLine($"  • 대상 아님: {follow.NotTarget}개(콘크리트가 아니거나 체적이 없는 부재)");
+        if (follow.BadReadBack > 0) text.AppendLine($"  • ★ 적은 뒤 다시 읽은 값이 다른 부재: {follow.BadReadBack}개(결과표를 확인해 주세요)");
+        if (plan.Wrote)
+            text.AppendLine(placesKept ? "  산출식은 위치·부위와 따로 되돌아갑니다(Ctrl+Z 를 한 번 누르면 산출식, 한 번 더 누르면 위치·부위)."
+                                       : "  산출식은 Revit 의 실행 취소(Ctrl+Z)로 되돌릴 수 있습니다.");
+        if (follow.Table.Length > 0) text.AppendLine("  산출식 결과표: " + follow.Table);
     }
 
     // 그룹을 닫는다. keep = 모델에 남길 것이 있다 → 하나로 묶어 닫는다(Assimilate). 없거나 되돌리기로 했으면 RollBack.
@@ -357,11 +549,14 @@ public sealed class AssignZoneCommand : IExternalCommand
         return revert;
     }
 
-    private static void Report(UIDocument uidoc, PickEditor? editor, Session session, bool kept, bool revert, string crash, string closeProblem,
-                               string paintProblem, View3D? view, Dictionary<string, string> legend, string table, string journal)
+    private static void Report(ExternalCommandData commandData, PickEditor? editor, Session session, bool kept, bool revert, string crash, string closeProblem,
+                               string paintProblem, View3D? view, Dictionary<string, string> legend, string table, string journal, FormulaFollow? follow)
     {
-        // 보기만 하고 닫았으면(적은 것도 문제도 없다) 알림 창을 띄우지 않는다.
-        if (!kept && !revert && crash.Length == 0 && closeProblem.Length == 0) return;
+        var uidoc = commandData.Application.ActiveUIDocument;
+        // 보기만 하고 닫았으면(적은 것도 문제도 없고, 이어서 돈 산출식도 이번에 한 일이 없다) 알림 창을 띄우지 않는다.
+        if (!kept && !revert && crash.Length == 0 && closeProblem.Length == 0 && follow?.HasNews != true) return;
+        // 창이 뜰 때는 산출식 쪽에 남아 있는 것(사람이 확인할 부재)도 함께 적는다.
+        bool formulaNews = follow != null && (follow.HasNews || follow.Exceptions.Count > 0);
 
         var text = new StringBuilder();
         if (crash.Length > 0) text.AppendLine("★ 창에서 오류가 났습니다: " + crash).AppendLine();
@@ -380,12 +575,19 @@ public sealed class AssignZoneCommand : IExternalCommand
             if (editor.CountNoPlace > 0) text.AppendLine($"'{ZonePlan.NoPlaceLabel}'으로 정한 부재: {editor.CountNoPlace}개");
             text.AppendLine();
             text.AppendLine(closeProblem.Length == 0
-                ? "이 창에서 넣은 것은 Revit 의 실행 취소(Ctrl+Z) 한 번으로 모두 되돌릴 수 있습니다."
-                : "이 창에서 넣은 것은 Revit 의 실행 취소(Ctrl+Z)를 넣은 횟수만큼 눌러야 되돌아갑니다.");
+                ? "이 창에서 넣은 위치·부위는 Revit 의 실행 취소(Ctrl+Z) 한 번으로 모두 되돌릴 수 있습니다."
+                : "이 창에서 넣은 위치·부위는 Revit 의 실행 취소(Ctrl+Z)를 넣은 횟수만큼 눌러야 되돌아갑니다.");
             if (session.LegacyDump.Length > 0) text.AppendLine("전의 판이 저장한 목록의 원문: " + session.LegacyDump);
         }
         else if (revert) td.MainInstruction = "처음 상태로 되돌렸습니다 — 이 창에서 넣은 것은 모델에 남지 않았습니다";
-        else td.MainInstruction = "위치·부위가 모델에 남지 않았습니다";
+        else if (crash.Length > 0 || closeProblem.Length > 0) td.MainInstruction = "위치·부위가 모델에 남지 않았습니다";
+        else
+        {
+            // 이번에 넣은 것은 없다(모두 끝나 있는 모델을 열었다 닫았다) — 이어서 돈 산출식만 알린다.
+            td.MainInstruction = "위치·부위는 모두 끝나 있습니다";
+            text.AppendLine("이번에 넣거나 바꾼 위치·부위는 없습니다.");
+        }
+        if (follow != null && formulaNews) AppendFormulaReport(text, follow, kept);
         if (paintProblem.Length > 0) text.AppendLine().AppendLine(paintProblem);
         text.AppendLine();
         text.AppendLine("결과표: " + table);
@@ -394,8 +596,20 @@ public sealed class AssignZoneCommand : IExternalCommand
         if (view != null && kept)
             td.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, $"확인용 3D 뷰 열기 ('{ZoneAssigner.CheckViewName}')",
                 "콘크리트 부재를 위치별 색으로 칠해 둔 Revit 뷰입니다(팝업과 같은 색 차례 — 끝났는지는 팝업에서 봅니다).");
-        td.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, "닫기");
-        if (td.Show() == TaskDialogResult.CommandLink1 && view != null)
+        // 식을 만들지 못한 부재: 산출식 버튼과 같은 검토 창으로 하나씩 본다(모델에 적은 것이 되돌려졌으면 띄우지 않는다 — 버튼과 같은 조건).
+        var ask = follow != null && follow.Problem.Length == 0 && !follow.Plan.Declined && !follow.RolledBack ? follow.Ask : new List<FormulaOutcome>();
+        // 단추는 번호 차례로 놓인다: ① 확인용 뷰 ② 식 확인 ③ 닫기(맨 아래).
+        if (ask.Count > 0)
+            td.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, $"식을 확인할 부재 {ask.Count}개를 하나씩 띄워 확인·입력",
+                "식을 만들지 못했거나, 결합한 뒤 '다시 계산 필요'가 남은 부재입니다(추천식이 있으면 미리 넣어 둡니다).");
+        td.AddCommandLink(TaskDialogCommandLinkId.CommandLink3, "닫기");
+        var pressed = td.Show();
+        if (pressed == TaskDialogResult.CommandLink2 && ask.Count > 0)
+        {
+            try { ReviewWizard.LaunchNumeric(uidoc.Document, ask, commandData.Application.MainWindowHandle); }
+            catch (Exception ex) { Dialogs.Show(Title, "검토 창을 띄우지 못했습니다: " + ex.Message + "\n\n[산출식 자동입력] 버튼에서 다시 열 수 있습니다."); }
+        }
+        if (pressed == TaskDialogResult.CommandLink1 && view != null)
         {
             try { uidoc.ActiveView = view; }
             catch (Exception ex)

@@ -73,6 +73,11 @@ public sealed class CalcPlan
         };
 
     /// <summary>
+    /// 부재의 부위 이름: 넣어 둔 부위(앞뒤 빈칸은 뗀다)가 먼저, 없으면 종류로 붙인 이름. 산출서와 겹침 검사 창의 묶음 제목이 이 함수 하나를 쓴다.
+    /// </summary>
+    public static string PartName(string part, MemberKind kind, string type) => part.Trim().Length > 0 ? part.Trim() : KindName(kind, type);
+
+    /// <summary>
     /// 산출서에 적는 부위 이름 = 위치(구역) + 부위(참고 산출서의 '배관실 벽체'·'배수지 상부슬래브').
     /// 구역이 없는 부재는 부위만 — 다만 다른 부재에 구역이 있으면(zoned) '구역 미지정 벽체'처럼 드러나게 적는다.
     /// noZone = 위치를 앞에 붙이지 않는 부위(계단 · 받침 · 헌치 · 버림 콘크리트처럼 산출서에서 위치 없이 적는 것) — 부위만 적는다.
@@ -132,7 +137,7 @@ public sealed class CalcPlan
         var plan = new CalcPlan();
         var all = inputs.ToList();
         // 부위: 사용자가 넣은 것이 먼저, 없으면 카테고리로 붙인 이름.
-        static string KindNameOf(CalcInput x) => x.Part.Trim().Length > 0 ? x.Part.Trim() : KindName(x.Kind, x.Type);
+        static string KindNameOf(CalcInput x) => PartName(x.Part, x.Kind, x.Type);
         // 대상 부재가 쓰는 이름은 모두 목록에 든다(자동 이름 포함) — 목록에 없어 '뒤에 이름순'으로 밀리는 이름이 없다.
         var partList = PartCatalog.Build(parts, partsVersion, structure, all.Where(x => x.NotTarget.Length == 0).Select(KindNameOf));
         int ZoneAt(string zone)
