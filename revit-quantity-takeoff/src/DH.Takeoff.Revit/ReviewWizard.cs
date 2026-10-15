@@ -67,6 +67,20 @@ public sealed class ReviewWizard : Window
     /// </summary>
     public static void LaunchNumeric(Document doc, IList<FormulaOutcome> exceptions, nint ownerHandle)
     {
+        var items = NumericItems(doc, exceptions);
+        if (items.Count == 0) return;
+
+        _current?.Close();
+        _current = new ReviewWizard(doc, items, ownerHandle, true);
+        _current.Show();
+    }
+
+    /// <summary>
+    /// 예외 부재 모드의 검토 항목 — 같은 유형·같은 크기·같은 체적이면 한 번만 묻고 함께 적는다. 추천식이 있으면 식 칸에 미리 넣는다.
+    /// 수량산출 창의 [완료]가 띄우는 창(ExceptionReview)도 같은 항목을 쓴다.
+    /// </summary>
+    public static List<ReviewItem> NumericItems(Document doc, IList<FormulaOutcome> exceptions)
+    {
         // 같은 유형·같은 크기·같은 체적이면 한 번만 묻고 함께 적는다.
         var groups = new Dictionary<string, ReviewItem>();
         var items = new List<ReviewItem>();
@@ -108,11 +122,7 @@ public sealed class ReviewWizard : Window
         }
         foreach (var it in items.Where(it => it.Members.Count > 1))
             it.Note = (it.Note.Length > 0 ? it.Note + "\n" : "") + $"같은 모양 {it.Members.Count}개에 함께 적습니다.";
-        if (items.Count == 0) return;
-
-        _current?.Close();
-        _current = new ReviewWizard(doc, items, ownerHandle, true);
-        _current.Show();
+        return items;
     }
 
     private readonly bool _numeric; // 예외 부재 모드

@@ -35,10 +35,7 @@ public static class FormworkTable
     /// 산출근거(무근)와 거푸집(버림)이 같이 맞춰진다. 부위 이름의 '무근'과 부위 목록의 '무근' 표시는 보지 않는다(무근인 받침·계단은 버림이 아니다).
     /// </summary>
     public static bool LooksLikeBlinding(string type, string material, string part = "") =>
-        CalcPlan.WorkOf(type, material) == CalcPlan.Plain ||
-        BlindingWords.Any(w => part.Contains(w, StringComparison.OrdinalIgnoreCase));
-
-    private static readonly string[] BlindingWords = { "버림", "blinding", "lean concrete" };
+        CalcPlan.WorkOf(type, material) == CalcPlan.Plain || CalcPlan.IsLean("", "", part);   // 부위는 버림 낱말만(겹침 검사의 버림과 같은 낱말)
 
     /// <summary>면이 대응표의 어느 갈래에 드는가. 문·창의 안쪽 면도 '구멍 둘레'다.</summary>
     public static string GroupOf(FaceClass cls, FacePatch patch) =>
@@ -66,6 +63,32 @@ public static class FormworkTable
             _ => Ply3, // 기둥·기초·기타
         };
     }
+
+    /// <summary>부재 속성: 거푸집 넓이의 합(㎡).</summary>
+    public const string TotalParam = "DH_면적(거푸집)";
+
+    /// <summary>
+    /// 종류별 넓이를 적는 부재 속성의 이름 — K-water BIM 적용지침(수도 설계편)의 «내역적용수량» 이름(JACK 2026-10-15 미리보기 확인).
+    /// 속성 이름을 정하는 표(부속서 7 목록서)는 '0~7m' 의 물결을 ASCII '~'(U+007E)로 쓰는데, Revit 은 이름에 '~'를 받지 않는다
+    /// (\ { } [ ] | ; &lt; &gt; ? ` ~ 금지) — 그래서 부속서 9 정의서에 함께 쓰인 '∼'(U+223C)로 적는다. 글자 그대로 맞추는 쪽(수공 나비스웍스 애드인)이
+    /// 못 찾을 수 있어 수공 협의 항목이다(core R42 M-2). 대괄호는 지침의 전각 괄호(［］) 그대로.
+    /// 부속서 7 에 없는 이름도 둘이다(협의 항목): 합판 3회(표준품셈의 분류로 '복잡'이라 지음) · 유로폼 7m 초과(부속서 7 의 유로폼은 '7m이하' 하나).
+    /// 모르는 종류(대응표 파일에 사람이 적은 낯선 값)는 null — 합계에만 든다.
+    /// </summary>
+    public static string? GuidelineName(string item, int band) => item switch
+    {
+        Euro => band > 0 ? "유로폼［보통, 7m초과］" : "유로폼［보통, 7m이하］",
+        Ply3 => "합판거푸집［복잡, 0∼7m, 3회］",
+        Ply4 => "합판거푸집［보통, 0∼7m, 4회］",
+        Ply6 => "합판거푸집［간단, 0∼7m, 6회］",
+        _ => null,
+    };
+
+    /// <summary>종류별 넓이 속성의 이름 전부(속성 칸을 만들 때).</summary>
+    public static readonly string[] GuidelineNames =
+    {
+        "유로폼［보통, 7m이하］", "유로폼［보통, 7m초과］", "합판거푸집［복잡, 0∼7m, 3회］", "합판거푸집［보통, 0∼7m, 4회］", "합판거푸집［간단, 0∼7m, 6회］",
+    };
 
     /// <summary>높이 구간의 이름. bands = 경계(m). 예: [7] → "H=0~7m", "H=7m 초과".</summary>
     public static string BandName(int band, IReadOnlyList<double> bands)

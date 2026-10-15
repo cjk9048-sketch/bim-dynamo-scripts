@@ -60,6 +60,17 @@ public sealed class CalcPlan
 
     private static readonly string[] PlainWords = { "무근", "버림", "lean concrete", "plain concrete", "blinding" };
 
+    /// <summary>
+    /// 버림 콘크리트인가: 유형·재료·부위 이름에 '버림'(또는 lean concrete · blinding)이 있다. 겹침 검사가 버림을 늘 남기는 데 쓴다
+    /// (JACK 2026-10-14 — 지침 수도설계 부속서 9 의 버림 수량 «버림_B × 버림_H × L»: 위에 무엇이 있든 버림 층 전체를 센다).
+    /// '무근' 전체가 아니다: 무근 받침 · 턱 · 계단은 구조물 위에 나중에 치는 것이라 겹치면 구조물이 남아야 한다.
+    /// </summary>
+    public static bool IsLean(string type, string material, string part = "") =>
+        LeanWords.Any(w => type.Contains(w, StringComparison.OrdinalIgnoreCase) || material.Contains(w, StringComparison.OrdinalIgnoreCase) ||
+                           part.Contains(w, StringComparison.OrdinalIgnoreCase));
+
+    private static readonly string[] LeanWords = { "버림", "lean concrete", "blinding" };   // 거푸집의 버림 가르기(FormworkTable)도 이 낱말을 쓴다
+
     /// <summary>부재 종류의 이름. 유형 이름에 '버림'이 있으면 버림 콘크리트.</summary>
     public static string KindName(MemberKind kind, string type) =>
         type.Contains("버림", StringComparison.Ordinal) ? "버림 콘크리트" : kind switch

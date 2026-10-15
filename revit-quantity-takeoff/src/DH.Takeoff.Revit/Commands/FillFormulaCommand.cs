@@ -119,7 +119,12 @@ public sealed class FillFormulaCommand : IExternalCommand
             if (precise > 0) text.AppendLine($"  • 그중 긴 숫자 그대로 적은 식(둘째 자리로 줄이면 ±1%를 넘는 부재): {precise}개 (결과표 '숫자' 칸에 '정밀')");
             if (manual.Count > 0) text.AppendLine($"  • 사람이 넣어 둔 식이 모델 체적과 맞음(그대로 둠): {manual.Count}개");
             if (staleLeft > 0)
-                text.AppendLine($"  • '다시 계산 필요'를 남김: {staleLeft}개(결합으로 체적이 바뀐 부재인데 식을 새로 만들지 못했습니다 — 넣어 둔 식을 확인해 주세요)");
+            {
+                // 적을 수 없는 부재(그룹 안 등)는 아래 «적지 않음» 줄에도 세어진다 — 두 줄의 수가 겹친다고 밝힌다.
+                int staleSkipped = outcomes.Count(o => o.StaleLeft && o.Skipped.Length > 0);
+                text.AppendLine($"  • '다시 계산 필요'를 남김: {staleLeft}개(결합으로 체적이 바뀐 부재인데 식을 새로 만들지 못했습니다 — 넣어 둔 식을 확인해 주세요)" +
+                                (staleSkipped > 0 ? $" — 그 가운데 {staleSkipped}개는 아래 «적지 않음»에도 세었습니다" : ""));
+            }
             if (noVolume.Count > 0) text.AppendLine($"  • 입체도 체적도 없어 대상에서 뺌: {noVolume.Count}개");
             if (notConcrete.Count > 0)
             {

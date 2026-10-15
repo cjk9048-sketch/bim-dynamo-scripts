@@ -25,6 +25,11 @@ public sealed class ZonePart
     /// 이름('무근'·'버림')으로는 가를 수 없는 것들이라 부위마다 표시한다(꺼져 있으면 이름으로 가른다 — CalcPlan.WorkOf).
     /// </summary>
     [JsonPropertyName("plain")] public bool Plain { get; set; }
+    /// <summary>
+    /// 거푸집에서 '나중에 치는' 부위 — 받침 · PAD · 출입구 디딤판처럼 구조체를 다 친 뒤에 붙여 치는 것(JACK 2026-10-15):
+    /// 구조체에 맞닿은 면은 이 부위에서만 빼고, 구조체 쪽은 그 자리까지 거푸집으로 센다. null = 처음 값(묶음이 받침·PAD 이면 켬 — PartCatalog.IsLater).
+    /// </summary>
+    [JsonPropertyName("later")] public bool? Later { get; set; }
     /// <summary>지침 작업분류체계의 5 · 6 · 7번째 칸(공종 대·중·소분류) 코드 — 다음 단계에서 쓴다(지금은 담아 두기만).</summary>
     [JsonPropertyName("wbs5")] public string? Wbs5 { get; set; }
     [JsonPropertyName("wbs6")] public string? Wbs6 { get; set; }
@@ -34,7 +39,7 @@ public sealed class ZonePart
     /// <summary>사용자가 직접 넣은(또는 이름을 고친) 줄 — 구조물을 바꿔 대표 목록이 갈려도 남는다.</summary>
     [JsonPropertyName("user")] public bool User { get; set; }
 
-    public ZonePart Copy() => new() { Name = Name, NoZone = NoZone, Plain = Plain, Wbs5 = Wbs5, Wbs6 = Wbs6, Wbs7 = Wbs7, Group = Group, User = User };
+    public ZonePart Copy() => new() { Name = Name, NoZone = NoZone, Plain = Plain, Later = Later, Wbs5 = Wbs5, Wbs6 = Wbs6, Wbs7 = Wbs7, Group = Group, User = User };
 }
 
 /// <summary>저장된 자료가 이 판보다 새로운 판에서 만든 것일 때. 읽지도 덮어쓰지도 않는다.</summary>
@@ -53,13 +58,26 @@ public sealed class ZonePlanTooNewException : FormatException
 /// v3(10/13 오후): 구조물(structure) · 부위의 묶음(group) · 사용자가 넣은 줄(user)이 더해졌고, 부위 목록에 전의 기본 16개를 덧붙이지 않는다
 /// (대표 목록은 구조물마다 다르다 — PartCatalog). v2 는 그대로 읽고(ReadVersion = 2), 목록을 지을 때 옮긴다(PartCatalog.Build).
 /// 판을 올린 까닭: 전의 판(v2 까지만 아는 것)이 v3 을 열어 모르는 칸을 버리고 기본 16개를 다시 붙여 적지 않게 — 전의 판은 '더 새로운 판' 알림을 띄우고 열지 않는다.
+/// v4(10/15): 부위의 later('나중에 침') 칸을 더했다 — 목록의 꼴은 v3 그대로라 CurrentVersion(옮겨 읽기의 기준)은 3 이다.
+/// later 를 쓴 목록만 v4 로 적는다(LaterVersion): v3 만 아는 전의 판(R42)은 v4 를 '더 새로운 판'으로 보고 열지 않아, 그 표시를 버린 채 다시 적지 못한다.
+/// later 를 쓰지 않은 목록은 v3 그대로 적어, 전의 판으로 되돌려도 열린다(core · revit R43 검토).
 /// </summary>
 public sealed class ZonePlan
 {
+    /// <summary>목록의 꼴이 마지막으로 바뀐 판 — 저장된 판이 이보다 낮으면 옮겨 읽는다(PartCatalog.Build · 옛 글자 떠 두기).</summary>
     public const int CurrentVersion = 3;
 
-    /// <summary>이름으로 쓸 수 없는 글자: 팝업의 '위치 없음' 줄과 산출서의 '구역 미지정'과 헷갈린다.</summary>
-    public const string NoPlaceLabel = "위치 없음";
+    /// <summary>부위에 later 칸이 있는 목록을 적는 판. 이 판이 읽을 수 있는 가장 새로운 판이기도 하다.</summary>
+    public const int LaterVersion = 4;
+
+    /// <summary>
+    /// 어느 중분류에도 속하지 않는 것으로 정한 부재(Free)의 이름표 — 팝업의 [단독객체] 단추(JACK 2026-10-15: 전의 '위치 없음'을 이렇게 부른다).
+    /// 중분류 이름으로는 쓸 수 없다(산출서의 '구역 미지정'과 같이).
+    /// </summary>
+    public const string NoPlaceLabel = "단독객체";
+
+    /// <summary>전의 이름표 — 옛 목록에 이 이름이 들어 있어도 중분류로 살아나지 않게 계속 막는다(R42 core M-4).</summary>
+    public const string LegacyNoPlaceLabel = "위치 없음";
 
     [JsonPropertyName("v")] public int Version { get; set; } = CurrentVersion;
     [JsonPropertyName("places")] public List<ZonePlace> Places { get; set; } = new();
@@ -75,7 +93,7 @@ public sealed class ZonePlan
 
     [JsonPropertyName("about")] public string About { get; set; } = "DH Takeoff: lists of places and parts. Member values live in the element parameters DH_Zone / DH_Part.";
 
-    /// <summary>읽은 자료의 판(1 = 구역 네모 · 2 = 기본 16개 목록 · 3 = 지금). 지금보다 낮으면 다시 적기 전에 옛 글자를 따로 떠 둔다.</summary>
+    /// <summary>읽은 자료의 판(1 = 구역 네모 · 2 = 기본 16개 목록 · 3 = 지금의 꼴 · 4 = 지금의 꼴 + later 칸). CurrentVersion 보다 낮으면 다시 적기 전에 옛 글자를 따로 떠 둔다.</summary>
     [JsonIgnore] public int ReadVersion { get; private set; } = CurrentVersion;
 
     private static readonly JsonSerializerOptions Options = new()
@@ -85,7 +103,12 @@ public sealed class ZonePlan
         NumberHandling = JsonNumberHandling.Strict,
     };
 
-    public string ToJson() => JsonSerializer.Serialize(this, Options);
+    /// <summary>글자로 적는다 — 판은 later 칸을 쓴 목록이면 v4, 아니면 v3.</summary>
+    public string ToJson()
+    {
+        Version = Parts.Any(p => p.Later.HasValue) ? LaterVersion : CurrentVersion;
+        return JsonSerializer.Serialize(this, Options);
+    }
 
     /// <summary>
     /// 저장된 글자를 읽는다. 읽을 수 없으면 FormatException(까닭) — 부르는 쪽이 사용자에게 알리고, 덮어쓸지 정한다.
@@ -101,8 +124,8 @@ public sealed class ZonePlan
             using var doc = JsonDocument.Parse(json);
             if (doc.RootElement.ValueKind != JsonValueKind.Object) throw new FormatException("저장된 위치·부위 자료가 비어 있습니다.");
             version = doc.RootElement.TryGetProperty("v", out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out int n) ? n : 1;
-            if (version > CurrentVersion)
-                throw new ZonePlanTooNewException($"저장된 위치·부위 자료가 더 새로운 판(v{version})에서 만든 것입니다 — 이 판(v{CurrentVersion})으로는 읽지 않습니다.");
+            if (version > LaterVersion)
+                throw new ZonePlanTooNewException($"저장된 위치·부위 자료가 더 새로운 판(v{version})에서 만든 것입니다 — 이 판(v{LaterVersion})으로는 읽지 않습니다.");
             // v1: 구역 네모의 이름을 위치 목록으로 옮긴다(네모를 그린 차례 그대로).
             if (version < 2 && doc.RootElement.TryGetProperty("zones", out var zones) && zones.ValueKind == JsonValueKind.Array)
                 foreach (var zone in zones.EnumerateArray())
@@ -151,6 +174,7 @@ public sealed class ZonePlan
         return new string(chars).Trim();
     }
 
-    /// <summary>위치 이름으로 쓸 수 있는가(다듬은 이름을 넣는다): 비어 있지 않고, '위치 없음'·'구역 미지정'이 아니다.</summary>
-    public static bool IsUsableName(string name) => name.Length > 0 && name != NoPlaceLabel && name != CalcSheet.NoZoneName;
+    /// <summary>중분류(위치) 이름으로 쓸 수 있는가(다듬은 이름을 넣는다): 비어 있지 않고, '단독객체' · 전의 '위치 없음' · '구역 미지정'이 아니다.</summary>
+    public static bool IsUsableName(string name) =>
+        name.Length > 0 && name != NoPlaceLabel && name != LegacyNoPlaceLabel && name != CalcSheet.NoZoneName;
 }

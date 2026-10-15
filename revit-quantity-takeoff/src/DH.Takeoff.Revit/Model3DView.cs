@@ -43,9 +43,9 @@ public sealed class Model3DView : Grid
     private const double EdgeLift = 0.003;        // 모서리 띠를 면에서 띄우는 높이(m)
     private const double TintOpacity = 0.34;      // 옅은 면의 층을 섞는 세기(층을 나눠 그릴 때)
 
-    private readonly IReadOnlyList<MeshData> _meshes;
+    private List<MeshData> _meshes;               // 넘겨받은 겉면을 옮겨 둔 것(Replace 가 한 칸씩 · SetMeshes 가 통째로 바꾼다)
     private readonly bool _dark;
-    private readonly Box3 _scene;
+    private Box3 _scene;                          // 모든 겉면을 싼 상자(카메라의 앞뒤 면) — Replace 가 다시 센다
     private readonly OrthographicCamera _eye = new();
     private readonly Viewport3D _main = new() { IsHitTestVisible = false, ClipToBounds = true };
     private readonly Viewport3D _over = new() { IsHitTestVisible = false, ClipToBounds = true };
@@ -56,8 +56,8 @@ public sealed class Model3DView : Grid
     private readonly Model3DGroup _tintBodies = new(), _topModels = new();
     private readonly List<DirectionalLight> _layerHeadlights = new();
     private readonly Dictionary<int, Material> _flat = new();         // 빛에 상관없이 그 색 그대로인 재료(색칠한 모서리)
-    private readonly MeshGeometry3D?[] _body;
-    private readonly GeometryModel3D?[] _bodyModel, _edgeModel;
+    private MeshGeometry3D?[] _body;
+    private GeometryModel3D?[] _bodyModel, _edgeModel;
     private readonly Dictionary<int, Material> _materials = new();
     private readonly Dictionary<int, MeshGeometry3D?> _pickOutline = new();   // 고른 부재의 굵은 테두리(확대가 바뀌면 다시 만든다)
     private readonly Rectangle _band = new() { Visibility = Visibility.Collapsed, IsHitTestVisible = false, StrokeThickness = 1.2 };
@@ -118,7 +118,7 @@ public sealed class Model3DView : Grid
     /// <param name="layered">층을 나눠 그린다(StyleOf 를 본다). 주지 않으면 「위치·부위 정하기」의 그리기 그대로다.</param>
     public Model3DView(IReadOnlyList<MeshData> meshes, bool dark, bool layered = false)
     {
-        _meshes = meshes;
+        _meshes = meshes.ToList();
         _dark = dark;
         _layered = layered;
         GhostEdge = dark ? ((byte)0x5C, (byte)0x64, (byte)0x70) : ((byte)0xB3, (byte)0xBA, (byte)0xC6);
@@ -142,13 +142,7 @@ public sealed class Model3DView : Grid
         _body = new MeshGeometry3D?[meshes.Count];
         _bodyModel = new GeometryModel3D?[meshes.Count];
         _edgeModel = new GeometryModel3D?[meshes.Count];
-        for (int i = 0; i < meshes.Count; i++)
-        {
-            if (meshes[i].T.Length == 0) continue;
-            _body[i] = Geometry(meshes[i].P, meshes[i].T);
-            _bodyModel[i] = new GeometryModel3D { Geometry = _body[i] };
-            _edgeModel[i] = new GeometryModel3D { Material = _edgeMaterial, BackMaterial = _edgeMaterial };
-        }
+        for (int i = 0; i < meshes.Count; i++) Make(i);
 
         // 빛: 어느 쪽에서 봐도 면이 읽히게 — 둘레 빛 + 카메라가 보는 방향의 빛 + 위에서 비스듬히 오는 빛.
         var lights = new Model3DGroup();
@@ -180,6 +174,90 @@ public sealed class Model3DView : Grid
         Children.Add(_over);
         Children.Add(_layer);
         Refresh();
+    }
+
+    // 그 차례의 몸과 모서리를 _meshes[i] 로 만든다. 모서리 띠는 화면 1픽셀의 길이를 안 뒤에만(SyncCamera 가 처음 만든다).
+    private void Make(int i)
+    {
+        _body[i] = null;
+        _bodyModel[i] = _edgeModel[i] = null;
+        var mesh = _meshes[i];
+        if (mesh.T.Length == 0) return;
+        _body[i] = Geometry(mesh.P, mesh.T);
+        _bodyModel[i] = new GeometryModel3D { Geometry = _body[i] };
+        _edgeModel[i] = new GeometryModel3D { Material = _edgeMaterial, BackMaterial = _edgeMaterial };
+        if (_edgePixelSize <= 0) return;
+        var (p, t) = EdgeStrips.Build(mesh, _edgePixelSize * EdgePixels, EdgeLift);
+        _edgeModel[i]!.Geometry = t.Length > 0 ? Geometry(p, t) : null;
+    }
+
+    /// <summary>
+    /// 그 차례의 겉면을 바꿔 그린다(겹침 창에서 결합한 뒤 — 부재의 모양이 바뀌었다). 보는 자리 · 색 · 장면의 크기는 그대로다.
+    /// 마우스 밑에 있던 것이면 다음 움직임에서 다시 찾는다.
+    /// </summary>
+    public void Replace(int index, MeshData mesh)
+    {
+        if (index < 0 || index >= _meshes.Count) return;
+        var before = (_meshes[index], _body[index], _bodyModel[index], _edgeModel[index]);
+        try
+        {
+            _meshes[index] = mesh;
+            Make(index);
+        }
+        catch
+        {
+            // 새 겉면을 만들지 못했다: 옛 그림을 그대로 두고(그림과 찍기가 어긋나지 않게) 부르는 쪽에 알린다.
+            (_meshes[index], _body[index], _bodyModel[index], _edgeModel[index]) = before;
+            throw;
+        }
+        _pickOutline.Remove(index);
+        // 장면 상자를 다시 센다(상자로 대신 그렸던 부재가 이번에 제대로 읽혀 커질 수 있다 — 카메라의 앞뒤 면이 그것을 자르지 않게).
+        var scene = Box3.Empty;
+        foreach (var each in _meshes) scene = scene.With(each.Box);
+        _scene = scene;
+        SyncCamera();       // 앞뒤 면을 새 상자로(확대가 그대로면 모서리 띠는 다시 만들지 않는다)
+        Refresh();
+    }
+
+    /// <summary>
+    /// 그릴 겉면을 통째로 바꾼다(수량산출 창의 걸음을 넘길 때 — ① 부재 → ② 부재 + 거푸집 조각, JACK 2026-10-15 «3D 뷰 위치부분은 고정»).
+    /// 보는 자리(카메라)는 그대로다. Shown · ColorOf · Picked · StyleOf 는 새 차례로 불리므로 부르는 쪽이 먼저(또는 바로 뒤에) 갈아 끼운다.
+    /// 끌던 것 · 마우스 밑의 것 · 고른 부재의 테두리는 지운다.
+    /// </summary>
+    public void SetMeshes(IReadOnlyList<MeshData> meshes)
+    {
+        CancelDrag();
+        _meshes = meshes.ToList();
+        _body = new MeshGeometry3D?[_meshes.Count];
+        _bodyModel = new GeometryModel3D?[_meshes.Count];
+        _edgeModel = new GeometryModel3D?[_meshes.Count];
+        _pickOutline.Clear();
+        for (int i = 0; i < _meshes.Count; i++) Make(i);      // 모서리 띠는 지금 확대로 바로 만든다(처음 맞춘 뒤면)
+        var scene = Box3.Empty;
+        foreach (var each in _meshes) scene = scene.With(each.Box);
+        _scene = scene;
+        bool hovered = _hover >= 0;
+        _hover = -1;
+        if (_fitted) SyncCamera();                            // 앞뒤 면만 새 상자로(보는 자리 · 확대는 그대로)
+        Refresh();
+        if (hovered) Hovered?.Invoke(-1);
+    }
+
+    /// <summary>지금 그리는 겉면의 수.</summary>
+    public int MeshCount => _meshes.Count;
+
+    /// <summary>그 차례의 지금 겉면(Replace 로 바꾼 것까지).</summary>
+    public MeshData MeshAt(int index) => _meshes[index];
+
+    /// <summary>그 차례를 그리는 데 쓰고 있는 세모의 수(시험에서 본다 — Replace 가 그림까지 바꿨는가).</summary>
+    public int DrawnTriangles(int index) => index >= 0 && index < _body.Length && _body[index] is { } body ? body.TriangleIndices.Count / 3 : 0;
+
+    /// <summary>그 차례를 그리는 데 쓰고 있는 면의 범위(시험에서 본다 — 그리는 모양이 받은 겉면과 같은 자리인가). 그리지 않으면 빈 상자.</summary>
+    public Box3 DrawnBox(int index)
+    {
+        if (index < 0 || index >= _body.Length || _body[index] is not { } body || body.Bounds.IsEmpty) return Box3.Empty;
+        var b = body.Bounds;
+        return new Box3(new Vec3(b.X, b.Y, b.Z), new Vec3(b.X + b.SizeX, b.Y + b.SizeY, b.Z + b.SizeZ));
     }
 
     // 층 하나: 같은 카메라 · 같은 빛으로, 제 깊이 판정을 따로 가진 그림(아래 층에 가려지지 않는다). opacity < 1 이면 층을 통째로 옅게 섞는다.

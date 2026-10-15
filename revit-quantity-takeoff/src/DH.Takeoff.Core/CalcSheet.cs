@@ -182,31 +182,40 @@ public static class CalcSheet
     /// <summary>구역이 비어 있는 부재를 적는 이름.</summary>
     public const string NoZoneName = "구역 미지정";
 
-    private const int MarkColumn = 3;          // C: 부호
-    private const int ZoneColumn = 4;          // D: (구역)
-    private const int ColonColumn = 7;         // G: ":"
-    private const int FirstTokenColumn = 8;    // H: 식의 첫 토막
-    private const int TokensPerLine = 14;      // H~U
-    private const int EqualsColumn = 22;       // V: "=" 또는 "계"
-    private const int ResultColumn = 23;       // W: =ROUND(…,2)
-    private const int SumColumn = 26;          // Z: 부위의 계
-    private const int NoteColumn = 28;         // AB: 비고
+    internal const int MarkColumn = 3;          // C: 부호
+    internal const int ZoneColumn = 4;          // D: (구역)
+    private const int ColonColumn = 7;          // G: ":"
+    private const int FirstTokenColumn = 8;     // H: 식의 첫 토막
+    private const int TokensPerLine = 14;       // H~U
+    internal const int EqualsColumn = 22;       // V: "=" 또는 "계"
+    internal const int ResultColumn = 23;       // W: =ROUND(…,2)
+    internal const int SumColumn = 26;          // Z: 부위의 계
+    private const int NoteColumn = 28;          // AB: 비고
+
+    /// <summary>산출근거 칸 짜임의 열 너비(「산출근거」 · 「거푸집」 시트가 같이 쓴다).</summary>
+    internal static void Columns(XlsxSheet sheet)
+    {
+        sheet.Width(1, 4); sheet.Width(2, 2); sheet.Width(MarkColumn, 20); sheet.Width(ZoneColumn, 14);
+        sheet.Width(5, 2); sheet.Width(6, 2); sheet.Width(ColonColumn, 2);
+        for (int c = FirstTokenColumn; c < FirstTokenColumn + TokensPerLine; c++) sheet.Width(c, 7.5);
+        sheet.Width(EqualsColumn, 4); sheet.Width(ResultColumn, 11); sheet.Width(24, 2); sheet.Width(25, 2);
+        sheet.Width(SumColumn, 12); sheet.Width(27, 2); sheet.Width(NoteColumn, 44);
+    }
 
     /// <summary>
     /// rows = 산출근거에 실을 줄(공종·부위가 처음 나온 차례대로 묶는다). elements = 부재 전부(실은 것과 못 실은 것).
+    /// formwork = 거푸집 산출근거(있으면 「거푸집」 시트를 더하고 수량집계표에 종류별 합계를 더한다 — 수량산출 창의 [완료]).
     /// </summary>
-    public static XlsxBook Build(string title, IReadOnlyList<CalcRow> rows, IReadOnlyList<CalcElement> elements, string note = "")
+    public static XlsxBook Build(string title, IReadOnlyList<CalcRow> rows, IReadOnlyList<CalcElement> elements, string note = "",
+                                 Formwork.FormworkSheetData? formwork = null)
     {
         var book = new XlsxBook();
         var calc = book.Add(SheetName);
+        var form = formwork != null ? book.Add(Formwork.FormworkSheet.SheetName) : null;
         var summary = book.Add("수량집계표");
 
         // ── 산출근거 ──
-        calc.Width(1, 4); calc.Width(2, 2); calc.Width(MarkColumn, 20); calc.Width(ZoneColumn, 14);
-        calc.Width(5, 2); calc.Width(6, 2); calc.Width(ColonColumn, 2);
-        for (int c = FirstTokenColumn; c < FirstTokenColumn + TokensPerLine; c++) calc.Width(c, 7.5);
-        calc.Width(EqualsColumn, 4); calc.Width(ResultColumn, 11); calc.Width(24, 2); calc.Width(25, 2);
-        calc.Width(SumColumn, 12); calc.Width(27, 2); calc.Width(NoteColumn, 44);
+        Columns(calc);
 
         int r = 1;
         calc.Text(r++, 1, title + " — 수량 산출근거", XlsxStyle.Title);
@@ -252,7 +261,7 @@ public static class CalcSheet
         summary.Width(1, 18); summary.Width(2, 30); summary.Width(3, 6); summary.Width(4, 14); summary.Width(5, 14);
         summary.Width(6, 12); summary.Width(7, 10); summary.Width(8, 30);
         int s = 1;
-        summary.Text(s++, 1, title + " — 수량집계표(콘크리트)", XlsxStyle.Title);
+        summary.Text(s++, 1, title + (form != null ? " — 수량집계표(콘크리트 · 거푸집)" : " — 수량집계표(콘크리트)"), XlsxStyle.Title);
         summary.Text(s++, 1, "산출 수량 = 「산출근거」 시트의 부위별 '계' · BIM 물량 = Revit 체적의 합(둘째 자리) · 차이율 = (산출 − BIM) ÷ BIM", XlsxStyle.Gray);
         s++;
         string[] head = { "공종", "부위", "단위", "산출 수량", "BIM 물량", "차이", "차이율", "비고" };
@@ -288,6 +297,33 @@ public static class CalcSheet
             summary.Formula(s, 4, string.Join("+", grand.Select(g => "D" + g)), null, XlsxStyle.BoldNumber2);
             summary.Formula(s, 5, string.Join("+", grand.Select(g => "E" + g)), null, XlsxStyle.BoldNumber2);
             Difference(summary, s);
+            s += 2;
+        }
+
+        // ── 거푸집: 「거푸집」 시트의 종류별 합계를 가져오고, BIM 넓이(면을 잰 넓이)와 나란히 놓는다 ──
+        if (form != null && formwork != null)
+        {
+            var sections = Formwork.FormworkSheet.Write(form, title, formwork);
+            if (sections.Count > 0)
+            {
+                int first = s;
+                foreach (var (section, sumRef, bim, value) in sections)
+                {
+                    summary.Text(s, 1, "거푸집");
+                    summary.Text(s, 2, section);
+                    summary.Text(s, 3, "㎡", XlsxStyle.Center);
+                    summary.Formula(s, 4, sumRef, FormulaDecomposer.RoundQuantity(value), XlsxStyle.Number2);
+                    summary.Number(s, 5, FormulaDecomposer.RoundQuantity(bim), XlsxStyle.Number2);
+                    Difference(summary, s);
+                    s++;
+                }
+                int last = s - 1;
+                summary.Text(s, 2, "계", XlsxStyle.BoldCenter);
+                summary.Text(s, 3, "㎡", XlsxStyle.Center);
+                summary.Formula(s, 4, $"SUM(D{first}:D{last})", FormulaDecomposer.RoundQuantity(sections.Sum(x => FormulaDecomposer.RoundQuantity(x.value))), XlsxStyle.BoldNumber2);
+                summary.Formula(s, 5, $"SUM(E{first}:E{last})", FormulaDecomposer.RoundQuantity(sections.Sum(x => FormulaDecomposer.RoundQuantity(x.bim))), XlsxStyle.BoldNumber2);
+                Difference(summary, s);
+            }
         }
 
         // ── 부재 목록(추적용) · 미산출 부재 · 대상 아님 ──
@@ -310,34 +346,41 @@ public static class CalcSheet
     }
 
     /// <summary>산출근거 한 줄을 적고 다음에 쓸 행 번호를 돌려준다. value = 이 줄의 물량(둘째 자리).</summary>
-    private static int WriteRow(XlsxSheet sheet, int r, CalcRow row, out double value)
+    private static int WriteRow(XlsxSheet sheet, int r, CalcRow row, out double value) =>
+        // 위치를 붙이지 않는 부위는 구역이 없어도 '구역 미지정'이라 적지 않는다(참고 산출서의 '계단' · '밸브받침'처럼 위치 없이 적는 줄).
+        WriteLine(sheet, r, row.Mark, row.Zone.Length > 0 || !row.NoZonePart ? "(" + (row.Zone.Length > 0 ? row.Zone : NoZoneName) + ")" : "",
+                  row.Formula, row.Count, row.Note, out value);
+
+    /// <summary>
+    /// 줄 하나: 부호 · (괄호 글) : 식의 토막을 칸마다 = ROUND(…,2). 같은 식이 여럿이면 '× 개수'. 다음에 쓸 행 번호를 돌려준다.
+    /// 「산출근거」(콘크리트)와 「거푸집」 시트가 같이 쓴다.
+    /// </summary>
+    internal static int WriteLine(XlsxSheet sheet, int r, string mark, string tag, string formula, int count, string note, out double value)
     {
         value = 0;
-        sheet.Text(r, MarkColumn, row.Mark);
-        // 위치를 붙이지 않는 부위는 구역이 없어도 '구역 미지정'이라 적지 않는다(참고 산출서의 '계단' · '밸브받침'처럼 위치 없이 적는 줄).
-        if (row.Zone.Length > 0 || !row.NoZonePart)
-            sheet.Text(r, ZoneColumn, "(" + (row.Zone.Length > 0 ? row.Zone : NoZoneName) + ")");
+        sheet.Text(r, MarkColumn, mark);
+        if (tag.Length > 0) sheet.Text(r, ZoneColumn, tag);
         sheet.Text(r, ColonColumn, ":", XlsxStyle.Center);
-        if (row.Note.Length > 0) sheet.Text(r, NoteColumn, row.Note, XlsxStyle.Gray);
+        if (note.Length > 0) sheet.Text(r, NoteColumn, note, XlsxStyle.Gray);
 
         List<FormulaTokens.Token> tokens;
         double exprValue;
         try
         {
-            tokens = FormulaTokens.Split(row.Formula);
-            exprValue = FormulaEvaluator.Evaluate(row.Formula);
+            tokens = FormulaTokens.Split(formula);
+            exprValue = FormulaEvaluator.Evaluate(formula);
             if (tokens.Count == 0 || !double.IsFinite(exprValue)) throw new FormatException("빈 식");
         }
         catch (FormatException)
         {
             // 칸으로 나눌 수 없는 식: 글자 그대로 한 칸에 적고 값은 비운다(이런 줄은 호출하는 쪽이 미리 거르는 것이 원칙).
-            sheet.Text(r, FirstTokenColumn, row.Formula);
-            sheet.Text(r, NoteColumn, "식을 칸으로 나누지 못함" + (row.Note.Length > 0 ? " · " + row.Note : ""), XlsxStyle.Gray);
+            sheet.Text(r, FirstTokenColumn, formula);
+            sheet.Text(r, NoteColumn, "식을 칸으로 나누지 못함" + (note.Length > 0 ? " · " + note : ""), XlsxStyle.Gray);
             return r + 1;
         }
 
         // 같은 식인 부재가 여럿이면 '× 개수'를 붙인다. 식에 바깥 더하기·빼기가 있으면 괄호로 묶는다.
-        bool times = row.Count > 1;
+        bool times = count > 1;
         bool wrap = times && HasTopLevelSum(tokens);
 
         var expr = new StringBuilder();
@@ -384,14 +427,14 @@ public static class CalcSheet
         if (times)
         {
             Symbol("×", "*");
-            sheet.Number(line, col, row.Count, XlsxStyle.Count);
+            sheet.Number(line, col, count, XlsxStyle.Count);
             expr.Append(XlsxSheet.Ref(line, col));
             Next();
         }
 
         // 토막이 줄 끝에서 딱 끝나 다음 줄로 넘어가 있으면, '=' 는 마지막 토막이 있는 줄에 둔다.
         int lastLine = col == FirstTokenColumn && line > r ? line - 1 : line;
-        value = FormulaDecomposer.RoundQuantity(exprValue * row.Count);
+        value = FormulaDecomposer.RoundQuantity(exprValue * count);
         sheet.Text(lastLine, EqualsColumn, "=", XlsxStyle.Center);
         sheet.Formula(lastLine, ResultColumn, $"ROUND({expr},{FormulaDecomposer.QuantityDecimals})", value, XlsxStyle.Number2);
         return lastLine + 1;

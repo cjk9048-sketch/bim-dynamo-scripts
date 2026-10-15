@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -15,17 +15,22 @@ using DH.Takeoff.Core.View3D;
 namespace DH.Takeoff.Revit;
 
 /// <summary>
-/// 겹침 검사의 결과 창 — 글만 든 알림 창 대신, 숫자 칸 · 쌍 목록 · 다음 할 일 · 단추로 보여 준다
+/// 겹침 검사의 결과 창 — 글만 든 알림 창 대신, 숫자 칸 · 쌍 목록 · 단추로 보여 준다
 /// (JACK 2026-10-13: "메시지상자말고 팝업의 기능으로 … 좀 직관적이게").
 /// JACK 2026-10-14(Revit 에서 써 본 뒤): "겹침도 위치정하기처럼 팝업에서 겹쳐진 부위만 … 보여줬으면 좋겠어. 아닌 부분은 외곽선만 나오게 투명하게"
 ///  → 겹친 쌍이 있으면(찾은 뒤 · 결합한 뒤) 넓은 창: 왼쪽 = 쌍 목록(남는 쪽 → 잘리는 쪽의 묶음), 오른쪽 = 「위치·부위 정하기」와 같은 3D 그림.
-///    겹친 덩어리 = 빨강(다른 부재에 가려져도 보인다) · 그 두 부재 = 옅은 색(남는 쪽 파랑 / 잘리는 쪽 주황) · 나머지 부재 = 외곽선만.
-///    줄을 누르면 창은 그대로 있고 그림이 그 자리로 간다(전에는 창이 닫혔다). 그림의 덩어리 · 색칠된 부재를 눌러도 그 쌍으로 간다.
-///    결합은 지금처럼 찾은 쌍 전부를 한 번에(JACK: "보기만 먼저").
+///    줄을 누르면 창은 그대로 있고 그림이 그 자리로 간다. 그림의 덩어리 · 색칠된 부재를 눌러도 그 쌍으로 간다.
+/// JACK 2026-10-14(두 번째): "겹친 부재(노란색), 겹쳐진 부위(빨간색), 나머지는 투명" · "목록에서 눌렀을 때 그 객체만 수정되는 버튼" ·
+///    "기본 모드 … 우선순위로 · 사용자 모드 … 어느 쪽으로 삭제시킬지" · "아래 파란색으로 설명 있는 건 다 지워" · 목록과 3D 사이를 마우스로 끌어 폭 조절.
+///  → 전체 보기 = 겹친 부위만 빨강(부재는 모두 외곽선만) · 쌍을 고르면 그 두 부재(남는 쪽 주황 · 잘리는 쪽 초록 — 처음의 노랑을 JACK 이 1014 16시에 바꿈),
+///    그 쌍의 부위 = 빨강, 나머지 = 외곽선만. 고친 부위는 남는 쪽의 색(주황)이 된다.
+///    그림 위 띠에 [기본 | 사용자] + 고치기 단추: 기본 = 우선순위대로 · 사용자 = 어느 부재에서 겹친 만큼을 뺄지 고른다.
+///    고친 뒤에도 창은 그대로 — 그 줄은 결과 딱지, 부위는 초록, 그림은 고친 모양으로 다시 그린다.
+///    창 안에는 제목 · 숫자 · 목록 · 단추 · 짧은 이름표만 둔다(풀이는 풍선 글로).
 ///  · 겹침 없음(Clean) · 대상 없음(NoTargets)은 작은 창 그대로다.
 /// 상태와 규칙(묶음의 차례 · 초점 · 누가 무슨 색인지 · 찍으면 어느 쌍인지)은 Core 의 OverlapBoard 가 들고 있고, 여기서는 그리기와 전하기만 한다.
 /// Revit API 를 쓰지 않는다 — 화면만 따로 그려 그림 파일로 보고, 진짜 창에 마우스 신호를 넣어 눌러 볼 수 있게(tools/uipreview).
-/// 모델을 바꾸거나 부재를 고르는 일은 하지 않는다: 누른 것(Choice)만 돌려주고, 부르는 쪽(CheckOverlapCommand)이 창이 닫힌 뒤에 한다.
+/// 모델을 바꾸는 일은 부르는 쪽이 넣어 준 Model.Fix 로만 하고(창에서 고치기), 그 밖에는 누른 것(Choice)만 돌려준다 — 부르는 쪽(CheckOverlapCommand)이 창이 닫힌 뒤에 한다.
 /// </summary>
 public sealed class OverlapResultView
 {
@@ -39,11 +44,11 @@ public sealed class OverlapResultView
         public Mode Mode;
         public int Checked;                 // 검사한 부재 수
         public bool SelectionOnly;          // 선택한 부재만 검사했다
-        public bool CanCheckAll;            // [전체 다시 검사]를 둔다(선택한 부재만 검사했고, 이 창이 뜨기까지 모델을 바꾸지 않았다)
+        public bool CanCheckAll;            // [전체 다시 검사]를 둔다(선택한 부재만 검사했고, 결합한 뒤의 창이 아니다)
         public List<OverlapRow> Rows = new();
         public double TotalM3;              // 찾은 중복 체적
-        public int Joined, StillOverlap, Failed, NotNeeded;
-        public double RemainingM3;          // 결합 뒤 남은 중복 체적
+        public int Joined, StillOverlap, Failed, NotNeeded;   // 쌍 전부의 결합 결과를 센 수(창에서 고치면 Fixed 로 새로 받는다)
+        public double RemainingM3;          // 남은 중복 체적(아직 안 고친 쌍 포함)
         public List<string> Notes = new();  // 잴 수 없었던 쌍 · 함께 있지 않아 뺀 쌍 같은 덧붙임
         public string LogPath = "";         // 결과표 파일. 쓰지 못했으면 ""
         public string LogProblem = "";      // 결과표를 쓰지 못한 까닭
@@ -55,11 +60,38 @@ public sealed class OverlapResultView
         public IReadOnlyList<MeshData> Meshes = Array.Empty<MeshData>();    // 부재의 겉면(쌍의 WinnerIndex · LoserIndex 가 이 차례를 가리킨다)
         public IReadOnlyList<MeshData?> Blobs = Array.Empty<MeshData?>();   // 겹친 덩어리 — 쌍의 Key 번째(없으면 null)
         public string SceneProblem = "";    // 3D 를 만들지 못한 까닭("" = 만들었다)
+
+        /// <summary>창 안에서 쌍 하나를 고친다(쌍의 Key, 남는 쪽에서 뺄 것인가) — 부르는 쪽(명령)이 넣는다. null 이면 고치기 단추를 두지 않는다.</summary>
+        public Func<int, bool, Fixed>? Fix;
+
+        /// <summary>이미 결합됐는데 버림이 잘린 쌍의 수 — [우선순위대로 결합]이 함께 순서를 바꾼다(겹친 쌍이 없으면 작은 창의 단추로).</summary>
+        public int LeanToFix;
+
+        /// <summary>이미 결합됐는데 나중에 치는 부재(받침 · PAD · 디딤판)가 구조체를 깎은 쌍의 수 — 버림과 같이 순서를 바꾼다(JACK 2026-10-15 «나중 부재가 늘 잘림»).</summary>
+        public int LaterToFix;
+
+        /// <summary>이미 결합돼 두 덩이인 벽 · 기둥의 수 — [우선순위대로 결합]이 함께 나눈다(겹친 쌍이 없으면 작은 창의 단추로 · JACK 2026-10-15).</summary>
+        public int SplitToDo;
     }
 
-    // 3D 의 색: 남는 쪽 = 파랑 · 잘리는 쪽 = 주황 · 겹친 덩어리 = 빨강 · 결합으로 정리된 자리 = 초록.
-    private static readonly (byte r, byte g, byte b) WinnerColor = (66, 133, 244), LoserColor = (251, 140, 0), BlobColor = (226, 44, 44), DoneColor = (40, 167, 88);
-    private const double WideSide = 452;   // 넓은 창의 왼쪽(목록) 너비
+    /// <summary>창에서 쌍 하나를 고친 결과 — 부르는 쪽이 채운다.</summary>
+    public sealed class Fixed
+    {
+        public List<OverlapRow> Rows = new();               // 바뀐 줄: 고친 쌍 + 그 일로 겹침이 없어진 쌍
+        public Dictionary<int, MeshData> Meshes = new();    // 모양이 바뀐 부재의 새 겉면(그림의 차례 → 겉면)
+        public int Joined, StillOverlap, Failed, NotNeeded; // 쌍 전부를 다시 센 수
+        public double RemainingM3;
+        public bool Changed;                                // 이번 것으로 모델이 바뀌었다(결합이 커밋됐다)
+        public string Problem = "";                         // 알릴 것(못 고친 까닭 · 겹침이 남음). "" = 없음
+        public int SplitToDo = -1;                          // 남은 두 덩이 벽 · 기둥의 수(이 쌍에서 나누기를 해 본 부재를 뺀 것 · −1 = 그대로)
+    }
+
+    // 3D 의 색(JACK 2026-10-14 세 번째: "겹치는 부위는 빨간색, 첫번째 부재는 주황색, 두번째 부재는 녹색 … 고치고 나면 그 부위가 해당하는 부재 색상으로"):
+    // 겹친 부위 = 빨강 · 남는 쪽(앞) = 주황 · 잘리는 쪽(뒤) = 초록 · 고친 부위 = 남는 쪽의 색(주황 — 그 자리를 가진 부재) ·
+    // 이미 풀린 부위(앞선 결합으로 겹침이 없어짐 — 누구 것인지 모른다) = 회색.
+    private static readonly (byte r, byte g, byte b) WinnerColor = (251, 140, 0), LoserColor = (40, 167, 88), BlobColor = (226, 44, 44), LooseColor = (150, 156, 166);
+    private const double WideSide = 452;      // 넓은 창의 왼쪽(목록) 처음 너비 — 가르개로 바꾼다
+    private const double SideMin = 300, StageMin = 420, SplitterWidth = 12;
 
     // OverlapChecker.Joined / NotNeeded 와 같은 글자(그쪽은 Revit API 를 쓰는 파일이라 여기서 부르지 않고, 부르는 쪽이 넘긴다).
     private readonly string _joinedText, _notNeededText;
@@ -71,14 +103,23 @@ public sealed class OverlapResultView
     private readonly int _members;                           // 그림에서 부재의 수(그 뒤가 덩어리다)
     private readonly List<int> _blobKey = new();             // 그림의 덩어리 차례 → 쌍의 Key
     private readonly Dictionary<int, int> _blobAt = new();   // 쌍의 Key → 그림의 차례
-    private readonly List<MeshData> _drawn = new();          // 그림에 넘긴 겉면(부재 + 덩어리)
+    private readonly List<MeshData> _drawn = new();          // 그림에 넘긴 겉면(부재 + 덩어리 — 고친 부재는 새 겉면으로 바꿔 둔다)
     private readonly StackPanel _list = new() { Margin = new Thickness(4) };
+    private readonly Grid _header = new();                   // 목록 머리(칸 이름) — 결과 칸이 생기면 다시 짓는다
     private readonly Dictionary<int, Button> _rowOf = new();
     private readonly TextBlock _focusHead = new(), _focusSub = new(), _hover = new(), _message = new();
     private readonly Border _hoverPill = new(), _toast = new();
+    private readonly Border _headHost = new(), _buttonsHost = new(), _fixRow = new();
+    private readonly StackPanel _fixActions = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
     private Button? _previous, _next, _showAll, _inRevit;
+    private RadioButton? _basic, _user;
+    private ColumnDefinition? _sideColumn;
     private ScrollViewer? _listScroll;
     private Window? _window;
+    private int _preview = -1;                               // 고치기 단추에 마우스를 올린 동안: 겹친 만큼이 빠질 부재(그림의 차례) — 고친 뒤의 모습으로 칠한다
+    private bool _changedModel;                              // 이 창에서 고친 것이 모델에 걸렸다
+    private bool _busy;                                      // 고치는 중(Revit 이 결합하는 동안) — 누르기 · 글쇠 · 닫기를 막는다
+    private static bool s_userMode;                          // 고치기의 사용자 모드(Revit 을 끌 때까지 기억한다)
     private readonly Stopwatch _frameWatch = new();
     private int _dragFrames;
     private double _dragMs, _dragWorst;
@@ -97,13 +138,18 @@ public sealed class OverlapResultView
     /// <summary>창의 상태(초점 · 묶음) — 시험에서 본다.</summary>
     public OverlapBoard Board => _board;
 
-    /// <summary>이 창에서 한 일(일지에 옮겨 적는다): 누른 줄 · 찍은 덩어리 · 초점이 어디로 갔는지 · 그리는 데 걸린 시간.</summary>
+    /// <summary>이 창에서 한 일(일지에 옮겨 적는다): 누른 줄 · 찍은 덩어리 · 초점이 어디로 갔는지 · 고친 쌍 · 그리는 데 걸린 시간.</summary>
     public List<string> Trail { get; } = new();
 
-    // 시험에서 본다: 마우스 밑의 것을 적은 글 · 초점 띠의 글 · 그림 위의 알림(보이지 않으면 "").
+    // 시험에서 본다: 마우스 밑의 것을 적은 글 · 초점 띠의 글 · 그림 위의 알림(보이지 않으면 "") · 목록의 폭 · 고치기 줄이 보이는가.
     public string HoverText => _hoverPill.Visibility == Visibility.Visible ? _hover.Text : "";
     public string FocusText => string.Concat(_focusHead.Inlines.OfType<Run>().Select(run => run.Text)) + " | " + _focusSub.Text;
     public string MessageText => _toast.Visibility == Visibility.Visible ? _message.Text : "";
+    public double SideWidth => _sideColumn?.ActualWidth ?? 0;
+    public bool FixShown => _m.Fix != null && _fixRow.Visibility == Visibility.Visible;
+
+    /// <summary>고치기의 사용자 모드인가(시험에서 처음 상태를 맞춘다).</summary>
+    public static bool UserMode { get => s_userMode; set => s_userMode = value; }
 
     /// <summary>단추를 눌렀다(창을 닫을 때).</summary>
     public event Action? Done;
@@ -138,23 +184,12 @@ public sealed class OverlapResultView
             return;
         }
 
-        // ── 넓은 창: 머리(결과 + 숫자 칸) · 알림 · [왼쪽 목록 | 오른쪽 초점 띠 + 3D] · 다음 할 일 · 단추 ──
-        var head = new DockPanel { Margin = new Thickness(0, 0, 0, 12) };
-        var numbers = Tiles(compact: true)!;
-        DockPanel.SetDock(numbers, Dock.Right);
-        head.Children.Add(numbers);
-        head.Children.Add(Head(margin: false));
-        Top(dock, head);
+        // ── 넓은 창: 머리(결과 + 숫자 칸) · 알림 · [왼쪽 목록 | 가르개 | 오른쪽 초점 띠 + 3D] · 단추 ──
+        _headHost.Margin = new Thickness(0, 0, 0, 12);
+        Top(dock, _headHost);
         if (_m.SelectionOnly) Top(dock, SelectionBanner());
         if (_m.Notes.Count > 0) Top(dock, NotesBanner());
-        Bottom(dock, Buttons());
-        var next = NextStep();
-        if (next != null) Bottom(dock, next);
-
-        var side = BuildSide();
-        DockPanel.SetDock(side, Dock.Left);
-        var middle = new DockPanel { Margin = new Thickness(0, 0, 0, 12) };
-        middle.Children.Add(side);
+        Bottom(dock, _buttonsHost);
 
         // 그림에 넘길 겉면: 부재 전부, 그 뒤에 덩어리(그릴 수 있는 것만).
         _members = _m.Meshes.Count;
@@ -173,7 +208,7 @@ public sealed class OverlapResultView
             {
                 BandSelect = false,
                 Shown = i => i < _members || _board.LookOf(_blobKey[i - _members]) != BlobLook.Hidden,
-                StyleOf = i => i >= _members ? MeshStyle.Top : _board.RoleOf(i) == OverlapRole.None ? MeshStyle.Ghost : MeshStyle.Tint,
+                StyleOf = StyleOf,
                 ColorOf = ColorOf,
             };
             _view3d.Clicked += (index, _) => OnPicture(index);
@@ -184,10 +219,34 @@ public sealed class OverlapResultView
             };
             _view3d.Failed += ex => ShowMessage("3D 그림에서 오류가 났습니다(끌던 것은 그만두었습니다): " + ex.Message, true);
         }
-        middle.Children.Add(BuildRight());
+
+        var middle = new Grid { Margin = new Thickness(0, 0, 0, 12) };
+        var sideColumn = new ColumnDefinition { Width = new GridLength(WideSide), MinWidth = SideMin };
+        var stageColumn = new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = StageMin };
+        _sideColumn = sideColumn;
+        middle.ColumnDefinitions.Add(sideColumn);
+        middle.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(SplitterWidth) });
+        middle.ColumnDefinitions.Add(stageColumn);
+        var side = BuildSide();
+        var right = BuildRight();
+        Grid.SetColumn(right, 2);
+        middle.Children.Add(side);
+        AddSplitter(middle);
+        middle.Children.Add(right);
+        // 처음 자리를 잡으면 두 칸을 비율 폭으로 바꾼다 — 그 뒤로는 창을 줄이거나 늘려도 두 칸이 함께 줄고 늘어 그림이 창 밖으로 밀리지 않는다
+        // (목록을 고정 폭으로 두면, 가르개로 넓힌 채 창을 줄일 때 그림 칸이 가장 작은 폭을 지키느라 창 밖으로 밀린다 — 시험에서 봄).
+        bool starred = false;
+        middle.SizeChanged += (_, _) =>
+        {
+            if (starred || sideColumn.ActualWidth <= 0 || stageColumn.ActualWidth <= 0) return;
+            starred = true;
+            sideColumn.Width = new GridLength(sideColumn.ActualWidth, GridUnitType.Star);
+            stageColumn.Width = new GridLength(stageColumn.ActualWidth, GridUnitType.Star);
+        };
         dock.Children.Add(middle);
 
         root.PreviewKeyDown += OnKey;
+        RefreshChrome();
         RefreshList();
         RefreshFocus();
     }
@@ -197,24 +256,29 @@ public sealed class OverlapResultView
 
     private int Problems => _m.StillOverlap + _m.Failed;
 
-    // [전체 다시 검사]를 둘 것인가: 결합한 뒤의 창에는 두지 않는다 — 모델이 이미 바뀌었고, 부르는 쪽은 그 뒤로는 처음부터 다시 돌지 않는다.
+    // [우선순위대로 결합]이 거는 쌍(고치지 않았거나 · 못 했거나 · 겹침이 남은 쌍 — 여러 조각과 겹쳐 다시 검사할 쌍은 빼고).
+    private int Left => _board.Joinable;
+
+    // 결과가 하나라도 있다(결합한 뒤의 창이거나, 창에서 하나라도 고쳐 봤다).
+    private bool Touched => _m.Mode == Mode.Joined || _m.Joined + _m.NotNeeded + _m.StillOverlap + _m.Failed > 0;
+
+    // [전체 다시 검사]를 둘 것인가: 결합한 뒤의 창에는 두지 않는다 — 부르는 쪽은 그 뒤로는 처음부터 다시 돌지 않는다.
     private bool CanCheckAll => _m.CanCheckAll && _m.Mode != Mode.Joined;
 
     // ── 머리: 한눈에 보이는 결과 ──────────────────────────────────────────────────
 
+    // sub = 제목 밑의 한 줄(작은 창에만 — 넓은 창에는 두지 않는다).
     private UIElement Head(bool margin = true)
     {
         (string tone, string glyph, string title, string sub) = _m.Mode switch
         {
-            Mode.Found => ("Warn", UiTheme.IconWarn, $"겹친 부재 {_m.Rows.Count}쌍을 찾았습니다",
-                "형상 결합 없이 겹쳐 있어, 겹친 만큼을 두 번 세는 자리입니다."),
-            Mode.Joined when Problems == 0 => ("Good", UiTheme.IconCheck, "겹친 자리를 모두 정리했습니다",
-                "남은 중복 체적이 없습니다."),
-            Mode.Joined => ("Warn", UiTheme.IconWarn, $"{Problems}쌍은 직접 확인해 주세요",
-                "결합하지 못했거나, 결합한 뒤에도 겹침이 남은 쌍입니다. 그 부재들을 선택해 두었습니다."),
+            Mode.Found => ("Warn", UiTheme.IconWarn, $"겹친 부재 {_m.Rows.Count}쌍을 찾았습니다", ""),
+            Mode.Joined when Problems == 0 => ("Good", UiTheme.IconCheck, "겹친 자리를 모두 정리했습니다", ""),
+            Mode.Joined => ("Warn", UiTheme.IconWarn, $"{Problems}쌍은 직접 확인해 주세요", ""),
             Mode.Clean => ("Good", UiTheme.IconCheck, "겹친 부재가 없습니다",
                 _m.SelectionOnly ? "선택한 부재끼리는 두 번 세는 자리가 없습니다."
-                                 : "두 번 세는 자리가 없습니다. 이대로 [산출식 자동입력]을 실행해도 됩니다."),
+                : _m.LeanToFix + _m.LaterToFix + _m.SplitToDo > 0 ? "두 번 세는 자리가 없습니다."      // 결합 순서 바꾸기 · 두 덩이 나누기가 먼저다 — «바로 산출식»은 권하지 않는다
+                : "두 번 세는 자리가 없습니다. 이대로 [수량산출]을 하면 됩니다."),
             _ => ("Neutral", UiTheme.IconWarn, "검사할 콘크리트 부재가 없습니다",
                 _m.SelectionOnly ? "선택한 부재 가운데 콘크리트 부재가 없습니다. 선택을 풀고 다시 실행하면 모델 전체를 검사합니다."
                                  : "이 모델에서 콘크리트 부재를 찾지 못했습니다."),
@@ -227,13 +291,27 @@ public sealed class OverlapResultView
 
         var text = new StackPanel { Margin = new Thickness(12, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
         text.Children.Add(new TextBlock { Text = title, FontSize = 17, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
-        text.Children.Add(new TextBlock { Text = sub, Foreground = _ui["Sub"], TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 3, 0, 0), LineHeight = 19 });
+        if (sub.Length > 0)
+            text.Children.Add(new TextBlock { Text = sub, Foreground = _ui["Sub"], TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 3, 0, 0), LineHeight = 19 });
 
         var head = new DockPanel { Margin = new Thickness(0, 0, 0, margin ? 14 : 0) };
+        if (sub.Length == 0) badge.VerticalAlignment = VerticalAlignment.Center;
         DockPanel.SetDock(badge, Dock.Left);
         head.Children.Add(badge);
         head.Children.Add(text);
         return head;
+    }
+
+    // 넓은 창의 머리(결과 · 숫자 칸)와 아래 단추를 다시 짓는다(처음 · 창에서 고친 뒤 — 수가 바뀐다).
+    private void RefreshChrome()
+    {
+        var head = new DockPanel();
+        var numbers = Tiles(compact: true)!;
+        DockPanel.SetDock(numbers, Dock.Right);
+        head.Children.Add(numbers);
+        head.Children.Add(Head(margin: false));
+        _headHost.Child = head;
+        _buttonsHost.Child = Buttons();
     }
 
     // ── 숫자 칸 ───────────────────────────────────────────────────────────────────
@@ -246,7 +324,14 @@ public sealed class OverlapResultView
         {
             case Mode.Found:
                 tiles.Add(Tile("겹친 쌍", _m.Rows.Count.ToString(CultureInfo.InvariantCulture), "쌍", "WarnFg"));
-                tiles.Add(Tile("두 번 세는 체적", M3(_m.TotalM3), "m³", "WarnFg"));
+                if (Touched)
+                {
+                    // 창에서 고쳐 본 뒤: 정리된 쌍 · (확인할 쌍) · 남은 중복 체적.
+                    tiles.Add(Tile("정리됨", (_m.Joined + _m.NotNeeded).ToString(CultureInfo.InvariantCulture), "쌍", "GoodFg"));
+                    if (Problems > 0) tiles.Add(Tile("확인 필요", Problems.ToString(CultureInfo.InvariantCulture), "쌍", "WarnFg", "결합하지 못했거나 결합한 뒤에도 겹침이 남은 쌍"));
+                    tiles.Add(Tile("남은 중복 체적", M3(_m.RemainingM3), "m³", _m.RemainingM3 >= 0.005 ? "WarnFg" : "GoodFg", $"찾았을 때: {M3(_m.TotalM3)} m³"));
+                }
+                else tiles.Add(Tile("두 번 세는 체적", M3(_m.TotalM3), "m³", "WarnFg"));
                 tiles.Add(Tile(_m.SelectionOnly ? "검사한 부재(선택)" : "검사한 부재", _m.Checked.ToString(CultureInfo.InvariantCulture), "개", "Text"));
                 break;
             case Mode.Joined:
@@ -269,7 +354,7 @@ public sealed class OverlapResultView
             var line = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(16, 0, -4, 0) };
             foreach (var tile in tiles)
             {
-                tile.MinWidth = 124;
+                tile.MinWidth = 116;
                 tile.Padding = new Thickness(12, 6, 12, 7);
                 line.Children.Add(tile);
             }
@@ -319,63 +404,87 @@ public sealed class OverlapResultView
         }
         line.Children.Add(new TextBlock
         {
-            Text = $"Revit 에서 선택해 둔 부재 {_m.Checked}개만 검사했습니다 — 선택하지 않은 부재와의 겹침은 여기 없습니다." +
-                   (CanCheckAll ? (_wide ? "" : " 모델 전체를 보려면 아래의 [전체 다시 검사]를 누르세요.") : " 모델 전체를 보려면 선택을 풀고 다시 실행하세요."),
+            Text = _wide
+                ? $"선택한 부재 {_m.Checked}개만 검사했습니다"
+                : $"Revit 에서 선택해 둔 부재 {_m.Checked}개만 검사했습니다 — 선택하지 않은 부재와의 겹침은 여기 없습니다." +
+                  (CanCheckAll ? " 모델 전체를 보려면 아래의 [전체 다시 검사]를 누르세요." : " 모델 전체를 보려면 선택을 풀고 다시 실행하세요."),
             Foreground = _ui["AccentText"], TextWrapping = TextWrapping.Wrap, LineHeight = 19, VerticalAlignment = VerticalAlignment.Center,
         });
-        return new Border { Background = _ui["AccentSoft"], CornerRadius = new CornerRadius(8), Padding = new Thickness(12, 7, 8, 7), Margin = new Thickness(0, 0, 0, 12), Child = line };
+        var banner = new Border { Background = _ui["AccentSoft"], CornerRadius = new CornerRadius(8), Padding = new Thickness(12, 7, 8, 7), Margin = new Thickness(0, 0, 0, 12), Child = line };
+        if (_wide) _ui.Tip(banner, "선택하지 않은 부재와의 겹침은 여기 없습니다.");
+        return banner;
     }
 
     // ── 왼쪽: 쌍 목록(묶음) ───────────────────────────────────────────────────────
 
     private FrameworkElement BuildSide()
     {
-        bool joined = _m.Mode == Mode.Joined;
-        var title = new DockPanel { Margin = new Thickness(14, 10, 14, 8) };
-        var hint = new TextBlock { Text = joined ? "확인할 쌍이 먼저" : "겹친 체적이 큰 묶음부터", Foreground = _ui["Sub"], FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
-        DockPanel.SetDock(hint, Dock.Right);
-        title.Children.Add(hint);
-        title.Children.Add(new TextBlock { Text = $"겹친 자리 {_m.Rows.Count}쌍", FontWeight = FontWeights.SemiBold, FontSize = 14 });
-
-        var header = Columns(joined);
-        header.Margin = new Thickness(15, 0, 22, 6);
-        HeaderCell(header, 0, "겹친 체적", HorizontalAlignment.Right);
-        HeaderCell(header, 2, "남는 쪽 (통째로 셈)");
-        HeaderCell(header, 4, joined ? "잘린 쪽" : "잘리는 쪽");
-        if (joined) HeaderCell(header, 6, "결과");
-
+        var title = new TextBlock { Text = $"겹친 자리 {_m.Rows.Count}쌍", FontWeight = FontWeights.SemiBold, FontSize = 14, Margin = new Thickness(14, 10, 14, 8) };
+        _header.Margin = new Thickness(15, 0, 22, 6);
         var top = new StackPanel();
         top.Children.Add(title);
-        top.Children.Add(header);
+        top.Children.Add(_header);
         var topLine = new Border { BorderBrush = _ui["Line"], BorderThickness = new Thickness(0, 0, 0, 1), Child = top };
-
-        var foot = new TextBlock
-        {
-            Text = _m.SceneProblem.Length == 0
-                ? "줄을 누르면 그림이 그 자리로 갑니다. 묶음은 「남는 쪽의 부위 → 잘리는 쪽의 부위」 — 겹친 쌍은 부위와 상관없이 모두 여기 있습니다."
-                : "묶음은 「남는 쪽의 부위 → 잘리는 쪽의 부위」 — 겹친 쌍은 부위와 상관없이 모두 여기 있습니다.",
-            Foreground = _ui["Sub"], FontSize = 12, TextWrapping = TextWrapping.Wrap, LineHeight = 17, Margin = new Thickness(14, 7, 14, 9),
-        };
-        var footLine = new Border { BorderBrush = _ui["Line"], BorderThickness = new Thickness(0, 1, 0, 0), Child = foot };
 
         _listScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = _list };
         var inner = new DockPanel();
         DockPanel.SetDock(topLine, Dock.Top);
-        DockPanel.SetDock(footLine, Dock.Bottom);
         inner.Children.Add(topLine);
-        inner.Children.Add(footLine);
         inner.Children.Add(_listScroll);
         return new Border
         {
-            Width = WideSide, Background = _ui["Card"], BorderBrush = _ui["Line"], BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10),
-            Margin = new Thickness(0, 0, 12, 0), Child = inner,
+            Background = _ui["Card"], BorderBrush = _ui["Line"], BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10), Child = inner,
         };
     }
 
-    // 목록을 다시 짓는다(묶음을 접거나 폈을 때 · 처음).
+    // 목록과 그림 사이의 가르개(JACK 2026-10-14 "목록표랑 3D 뷰 상자 사이를 마우스로 창 크기 조절되게") — 끌면 목록의 폭이 바뀐다.
+    // 가르개 자체는 투명하고(마우스만 받는다) 가운데의 짧은 막대가 자리를 보여 준다. 둘 다 같은 칸(1)에 놓는다 — GridSplitter 는 제 부모 Grid 의 칸을 바꾼다.
+    private void AddSplitter(Grid grid)
+    {
+        var grip = new Border
+        {
+            Width = 4, Height = 44, CornerRadius = new CornerRadius(2), Background = _ui["Line"], IsHitTestVisible = false,
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+        };
+        var splitter = new GridSplitter
+        {
+            Width = SplitterWidth, HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Stretch,
+            ResizeDirection = GridResizeDirection.Columns, ResizeBehavior = GridResizeBehavior.PreviousAndNext,
+            Background = Brushes.Transparent, Cursor = Cursors.SizeWE, Focusable = false, ShowsPreview = false,
+        };
+        _ui.Mark(splitter, "끌어서 목록과 그림의 폭을 바꿉니다.", "splitter");
+        bool dragging = false;
+        void Paint() => grip.Background = dragging || splitter.IsMouseOver ? _ui["Accent"] : _ui["Line"];
+        splitter.MouseEnter += (_, _) => Paint();
+        splitter.MouseLeave += (_, _) => Paint();
+        splitter.DragStarted += (_, _) => { dragging = true; Paint(); };
+        splitter.DragCompleted += (_, _) =>
+        {
+            dragging = false;
+            Paint();
+            Note(string.Create(CultureInfo.InvariantCulture, $"폭 바꿈 → 목록 {SideWidth:0}"));
+        };
+        Grid.SetColumn(grip, 1);
+        Grid.SetColumn(splitter, 1);
+        grid.Children.Add(grip);
+        grid.Children.Add(splitter);
+    }
+
+    // 결과 칸을 둘 것인가: 결합한 뒤의 창이거나, 창에서 하나라도 고쳐 본 줄이 있다.
+    private bool ShowStatus => _m.Mode == Mode.Joined || _board.Ordered.Any(r => r.Status.Length > 0);
+
+    // 목록을 다시 짓는다(묶음을 접거나 폈을 때 · 고쳤을 때 · 처음).
     private void RefreshList()
     {
+        bool status = ShowStatus;
         bool joined = _m.Mode == Mode.Joined;
+        _header.Children.Clear();
+        SetColumns(_header, status);
+        HeaderCell(_header, 0, "겹친 체적", HorizontalAlignment.Right);
+        HeaderCell(_header, 2, "남는 쪽");
+        HeaderCell(_header, 4, joined ? "잘린 쪽" : "잘리는 쪽");
+        if (status) HeaderCell(_header, 6, "결과");
+
         _list.Children.Clear();
         _rowOf.Clear();
         int at = 0;
@@ -385,7 +494,7 @@ public sealed class OverlapResultView
             if (group.Collapsed) continue;
             foreach (var row in group.Rows)
             {
-                var button = PairRow(row, joined);
+                var button = PairRow(row, status);
                 _rowOf[row.Key] = button;
                 _list.Children.Add(button);
             }
@@ -426,10 +535,10 @@ public sealed class OverlapResultView
         return button;
     }
 
-    // 칸: 체적 · 틈 · 남는 쪽 · 화살표 · 잘리는 쪽 · 틈 · 결과(결합한 뒤에만)
-    private static Grid Columns(bool withStatus)
+    // 칸: 체적 · 틈 · 남는 쪽 · 화살표 · 잘리는 쪽 · 틈 · 결과(결과 칸을 둘 때만)
+    private static void SetColumns(Grid grid, bool withStatus)
     {
-        var grid = new Grid();
+        grid.ColumnDefinitions.Clear();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(72) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -437,7 +546,6 @@ public sealed class OverlapResultView
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(withStatus ? 8 : 0) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(withStatus ? 84 : 0) });
-        return grid;
     }
 
     private void HeaderCell(Grid grid, int column, string text, HorizontalAlignment align = HorizontalAlignment.Left)
@@ -447,10 +555,10 @@ public sealed class OverlapResultView
         grid.Children.Add(cell);
     }
 
-    private Button PairRow(OverlapRow row, bool joined)
+    private Button PairRow(OverlapRow row, bool withStatus)
     {
-        var grid = Columns(joined);
-        grid.Margin = new Thickness(0, 5, 0, 6);
+        var grid = new Grid { Margin = new Thickness(0, 5, 0, 6) };
+        SetColumns(grid, withStatus);
 
         var volume = new TextBlock { HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
         volume.Inlines.Add(new Run(row.VolumeM3.ToString("0.000", CultureInfo.InvariantCulture)) { FontWeight = FontWeights.SemiBold });
@@ -463,11 +571,10 @@ public sealed class OverlapResultView
         arrow.HorizontalAlignment = HorizontalAlignment.Center;
         Place(grid, 3, arrow);
         Place(grid, 4, Member(row.Loser));
-        if (joined) Place(grid, 6, StatusPill(row));
+        if (withStatus && row.Status.Length > 0) Place(grid, 6, StatusPill(row));
 
         var button = new Button { Style = _ui.StyleOf("RowPick"), Content = grid };
-        string tip = $"{row.Winner}  →  {row.Loser}\n겹친 체적 {row.VolumeM3.ToString("0.000", CultureInfo.InvariantCulture)} m³" +
-                     (_view3d != null ? "\n누르면 그림이 이 자리로 갑니다(창은 닫히지 않습니다)." : "");
+        string tip = $"{row.Winner}  →  {row.Loser}\n겹친 체적 {row.VolumeM3.ToString("0.000", CultureInfo.InvariantCulture)} m³";
         _ui.Mark(button, tip, "pair" + row.Key.ToString(CultureInfo.InvariantCulture));
         button.Click += (_, _) =>
         {
@@ -508,9 +615,12 @@ public sealed class OverlapResultView
             : row.Status.Length == 0 ? ("—", "Neutral")
             : row.Status.StartsWith(_joinedText + "(", StringComparison.Ordinal) ? ("확인 필요", "Warn") // 결합은 됐지만 다시 재지 못했다
             : ("겹침 남음", "Warn");
+        // 결합으로 두 덩이가 된 잘린 쪽을 나눴는가(JACK 2026-10-14): 나눴으면 «결합·나눔», 못 나눴으면 «못 나눔»(까닭은 풍선 글).
+        if (row.Status == _joinedText && row.Split.Length > 0)
+            (label, tone) = row.Split.StartsWith(OverlapRow.SplitFail, StringComparison.Ordinal) ? ("못 나눔", "Warn") : ("결합·나눔", "Good");
         var pill = _ui.Pill(new TextBlock { Text = label, FontSize = 12, Foreground = _ui[tone + "Fg"] }, tone + "Bg");
         pill.HorizontalAlignment = HorizontalAlignment.Left;
-        string detail = row.Status;
+        string detail = row.Status + (row.Split.Length > 0 ? "\n" + row.Split : "");
         if (!double.IsNaN(row.AfterM3) && row.AfterM3 >= OverlapShownM3)
             detail += $"\n결합한 뒤 남은 겹침: {row.AfterM3.ToString("0.000", CultureInfo.InvariantCulture)} m³";
         _ui.Tip(pill, detail);
@@ -518,10 +628,10 @@ public sealed class OverlapResultView
     }
 
     private const double OverlapShownM3 = 0.0005; // 0.000 으로 찍히는 값은 풍선 글에 적지 않는다
-    private const string IconCut = "";       // 오른쪽 화살표: 남는 쪽이 잘리는 쪽을 자른다
-    private const string IconOpen = "";      // 파일 열기
-    private const string IconRight = "";     // 접힌 묶음
-    private const string IconLeft = "";
+    private const string IconCut = "";       // 오른쪽 화살표: 남는 쪽이 잘리는 쪽을 자른다
+    private const string IconOpen = "";      // 파일 열기
+    private const string IconRight = "";     // 접힌 묶음
+    private const string IconLeft = "";
 
     // ── 오른쪽: 초점 띠 · 3D 그림 ─────────────────────────────────────────────────
 
@@ -529,7 +639,7 @@ public sealed class OverlapResultView
     {
         var right = new DockPanel();
 
-        // 초점 띠: 지금 무엇을 보고 있는지(전체 / 쌍 하나) + 옮겨 가기. 그림 바로 위 — 보고 있는 것이 가장 중요하다.
+        // 초점 띠: 지금 무엇을 보고 있는지(전체 / 쌍 하나) + 옮겨 가기 + (쌍을 골랐을 때) 고치기. 그림 바로 위 — 보고 있는 것이 가장 중요하다.
         _focusHead.VerticalAlignment = VerticalAlignment.Center;
         _focusHead.TextWrapping = TextWrapping.Wrap;      // 좁은 창에서는 두 줄로(보고 있는 쌍의 이름이 잘리지 않게)
         _focusSub.Foreground = _ui["Sub"];
@@ -568,10 +678,13 @@ public sealed class OverlapResultView
         DockPanel.SetDock(buttons, Dock.Right);
         bar.Children.Add(buttons);
         bar.Children.Add(texts);
+        var stack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        stack.Children.Add(bar);
+        if (_m.Fix != null) stack.Children.Add(BuildFixRow());
         var focus = new Border
         {
             Background = _ui["Card"], BorderBrush = _ui["Line"], BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10),
-            Padding = new Thickness(14, 8, 10, 8), Margin = new Thickness(0, 0, 0, 10), MinHeight = 54, Child = bar,
+            Padding = new Thickness(14, 8, 10, 8), Margin = new Thickness(0, 0, 0, 10), MinHeight = 54, Child = stack,
         };
         DockPanel.SetDock(focus, Dock.Top);
         right.Children.Add(focus);
@@ -579,7 +692,7 @@ public sealed class OverlapResultView
         var stage = new Grid();
         if (_view3d != null)
         {
-            // 색 풀이 · 마우스 쓰는 법은 그림 바로 아래의 띠에 둔다(그림 위에 얹으면 좁은 창에서 보는 방향 단추와 겹친다).
+            // 색 풀이는 그림 바로 아래의 띠에 둔다(그림 위에 얹으면 좁은 창에서 보는 방향 단추와 겹친다).
             var legend = BuildLegend();
             DockPanel.SetDock(legend, Dock.Bottom);
             right.Children.Add(legend);
@@ -599,7 +712,7 @@ public sealed class OverlapResultView
             why.Children.Add(new TextBlock { Text = "3D 그림을 보여 줄 수 없습니다", FontWeight = FontWeights.SemiBold, FontSize = 14, HorizontalAlignment = HorizontalAlignment.Center });
             why.Children.Add(new TextBlock
             {
-                Text = (_m.SceneProblem.Length > 0 ? _m.SceneProblem : "그릴 수 있는 부재의 형상이 없습니다.") + "\n목록 · 결과표 · 단추는 그대로 쓸 수 있습니다.",
+                Text = _m.SceneProblem.Length > 0 ? _m.SceneProblem : "그릴 수 있는 부재의 형상이 없습니다.",
                 Foreground = _ui["Sub"], TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, LineHeight = 19, Margin = new Thickness(0, 6, 0, 0),
             });
             stage.Children.Add(why);
@@ -616,6 +729,185 @@ public sealed class OverlapResultView
         stage.SizeChanged += (_, _) => stage.Clip = new RectangleGeometry(new Rect(0, 0, stage.ActualWidth, stage.ActualHeight), 9, 9);
         right.Children.Add(new Border { BorderBrush = _ui["Line"], BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10), MinHeight = 200, Child = stage });
         return right;
+    }
+
+    // 초점 띠의 둘째 줄: 고른 쌍만 고치기(JACK 2026-10-14). [기본 | 사용자] + 단추 — 기본 = 우선순위대로 · 사용자 = 어느 부재에서 겹친 만큼을 뺄지 고른다.
+    private UIElement BuildFixRow()
+    {
+        _basic = _ui.Segment("기본", "우선순위대로 고칩니다: " + _m.PriorityText, "fix.mode.basic");
+        _user = _ui.Segment("사용자", "겹친 만큼을 어느 부재에서 뺄지 고릅니다.", "fix.mode.user");
+        _basic.Focusable = _user.Focusable = false;
+        _basic.IsChecked = !s_userMode;
+        _user.IsChecked = s_userMode;
+        _basic.Checked += (_, _) => SetUserMode(false);
+        _user.Checked += (_, _) => SetUserMode(true);
+        var modes = _ui.Segments(_basic, _user);
+        modes.Margin = new Thickness(0, 0, 10, 0);
+        var line = new DockPanel();
+        DockPanel.SetDock(modes, Dock.Left);
+        line.Children.Add(modes);
+        line.Children.Add(_fixActions);
+        _fixRow.BorderBrush = _ui["Line"];
+        _fixRow.BorderThickness = new Thickness(0, 1, 0, 0);
+        _fixRow.Margin = new Thickness(0, 8, 0, 0);
+        _fixRow.Padding = new Thickness(0, 8, 0, 0);
+        _fixRow.Child = line;
+        _fixRow.Visibility = Visibility.Collapsed;
+        return _fixRow;
+    }
+
+    private void SetUserMode(bool on)
+    {
+        if (s_userMode == on) return;
+        s_userMode = on;
+        Note(on ? "고치기: 사용자 모드" : "고치기: 기본 모드");
+        RefreshFix();
+    }
+
+    // 고치기 줄을 지금의 초점에 맞춘다: 쌍을 골랐을 때만 보인다. 끝난 쌍이면 결과 딱지만, 아니면 모드에 맞는 단추.
+    private void RefreshFix()
+    {
+        if (_m.Fix == null) return;
+        SetPreview(-1);
+        _fixActions.Children.Clear();
+        var row = _board.Focused;
+        _fixRow.Visibility = row == null ? Visibility.Collapsed : Visibility.Visible;
+        if (row == null) return;
+        if (row.Fine || row.Blocked) { _fixActions.Children.Add(StatusPill(row)); return; }   // 끝난 쌍 · 이 창에서 고칠 수 없는 쌍(여러 조각과 겹침)
+        var (winner, loser) = ShortNames(row.Winner, row.Loser);
+        if (!s_userMode)
+            _fixActions.Children.Add(FixButton("이 쌍 고치기", $"{winner} 은 그대로 두고 {loser} 에서 겹친 만큼을 뺍니다(형상 결합 · 닫은 뒤 Ctrl+Z 한 번으로 되돌림).",
+                "fix.one", cutWinner: false, cut: row.LoserIndex, primary: true));
+        else
+        {
+            // 잘린 쪽을 나눈 쌍은 남는 쪽을 맞바꿀 수 없다 — 그 단추를 두지 않는다(눌러도 거절만 뜨는 단추 금지 · R37 revit R1).
+            if (!row.NoSwap)
+                _fixActions.Children.Add(FixButton(winner + " 에서 빼기", $"{loser} 은 그대로 두고 {winner} 에서 겹친 만큼을 뺍니다(우선순위와 반대).",
+                    "fix.cutWinner", cutWinner: true, cut: row.WinnerIndex));
+            _fixActions.Children.Add(FixButton(loser + " 에서 빼기", $"{winner} 은 그대로 두고 {loser} 에서 겹친 만큼을 뺍니다(우선순위대로).",
+                "fix.cutLoser", cutWinner: false, cut: row.LoserIndex));
+        }
+        if (row.Status.Length > 0)                        // 앞서 고쳐 봤지만 끝나지 않았다(못 함 · 겹침 남음)
+        {
+            var pill = StatusPill(row);
+            pill.Margin = new Thickness(4, 0, 0, 0);
+            _fixActions.Children.Add(pill);
+        }
+    }
+
+    // 단추에 적을 두 부재의 짧은 이름: 이름만, 둘이 같으면 Id 를 붙인다.
+    private static (string winner, string loser) ShortNames(string winner, string loser)
+    {
+        var (w, wid) = Split(winner);
+        var (l, lid) = Split(loser);
+        return w == l ? ($"{w} {wid}", $"{l} {lid}") : (w, l);
+    }
+
+    // cut = 이 단추로 겹친 만큼이 빠질 부재(그림의 차례) — 마우스를 올린 동안 고친 뒤의 모습(빠질 부재 초록 · 남을 부재와 그 부위 주황)으로 칠한다.
+    private Button FixButton(string text, string tip, string id, bool cutWinner, int cut, bool primary = false)
+    {
+        var label = new TextBlock { Text = text, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 260 };
+        var button = new Button
+        {
+            Style = _ui.StyleOf(primary ? "BtnPrimary" : "BtnSecondary"), Content = label,
+            MinHeight = 30, Padding = new Thickness(12, 0, 12, 1), Margin = new Thickness(0, 0, 6, 0), Focusable = false,
+        };
+        _ui.Mark(button, tip, id);
+        button.MouseEnter += (_, _) => SetPreview(cut);
+        button.MouseLeave += (_, _) => SetPreview(-1);
+        button.Click += (_, _) => DoFix(cutWinner);
+        return button;
+    }
+
+    private void SetPreview(int member)
+    {
+        if (_preview == member) return;
+        _preview = member;
+        _view3d?.Refresh();
+    }
+
+    /// <summary>고른 쌍을 고친다(고치기 단추와 같다) — cutWinner = 남는 쪽에서 겹친 만큼을 뺀다. 고칠 수 없으면(쌍을 안 골랐거나 끝난 쌍) 아무것도 하지 않는다.</summary>
+    public void FixFocused(bool cutWinner) => DoFix(cutWinner);
+
+    private void DoFix(bool cutWinner)
+    {
+        if (_busy || _m.Fix == null || _board.Focused is not { } row || row.Fine || row.Blocked) return;
+        Note($"고치기 {row.Key}\t{(s_userMode ? (cutWinner ? "사용자: 남는 쪽에서 빼기" : "사용자: 잘리는 쪽에서 빼기") : "기본")}");
+        var watch = Stopwatch.StartNew();
+        var cursor = Mouse.OverrideCursor;
+        Fixed result;
+        // Revit 이 결합하는 동안 창을 잠근다(「위치·부위 정하기」와 같은 꼴): 그사이 Revit 이 메시지를 돌려도 누르기 · 글쇠 · 닫기가 들어오지 않게.
+        _busy = true;
+        Root.IsHitTestVisible = false;
+        try
+        {
+            Mouse.OverrideCursor = Cursors.Wait;
+            result = _m.Fix(row.Key, cutWinner);
+        }
+        catch (Exception ex)
+        {
+            // 부르는 쪽은 결합 뒤의 오류를 안에서 받아 돌려준다 — 여기까지 샌 것이면 모델이 바뀌었는지 모른다: 바뀌었을 수 있다고 둔다.
+            _changedModel = true;
+            Note("고치기 오류\t" + ex);
+            ShowMessage("고치는 중 오류가 났습니다: " + ex.Message, true);
+            return;
+        }
+        finally
+        {
+            Mouse.OverrideCursor = cursor;
+            Root.IsHitTestVisible = true;
+            _busy = false;
+        }
+        _changedModel |= result.Changed;
+        try { Apply(result); }
+        catch (Exception ex)
+        {
+            // 모델은 이미 고쳐졌다(또는 바뀐 것이 없다) — 창에 옮기다 난 오류만 알린다.
+            Note("고친 결과를 창에 옮기다 오류\t" + ex);
+            ShowMessage("고친 결과를 그리다 오류가 났습니다" + (result.Changed ? "(결합은 모델에 들어갔습니다)" : "") + ": " + ex.Message, true);
+        }
+        Note($"고친 뒤 {row.Key}\t{_board.Row(row.Key)?.Status}\t바뀐 줄 {result.Rows.Count} · 겉면 {result.Meshes.Count}\t{watch.ElapsedMilliseconds} ms");
+    }
+
+    /// <summary>고치는 중인가(시험에서 본다).</summary>
+    public bool Busy => _busy;
+
+    // 고친 결과를 창에 옮긴다: 줄(제자리에서) · 고친 부재의 겉면 · 숫자 칸 · 단추 · 그림.
+    private void Apply(Fixed result)
+    {
+        int refused = 0;
+        foreach (var row in result.Rows)
+            if (!_board.Replace(row)) { refused++; Note($"줄을 바꾸지 못함 {row.Key}"); }
+        string drawProblem = "";
+        if (_view3d != null)
+            foreach (var (at, mesh) in result.Meshes)
+            {
+                if (at < 0 || at >= _members) continue;
+                try { _view3d.Replace(at, mesh); }
+                catch (Exception ex)
+                {
+                    Note($"겉면을 바꾸지 못함 {at}\t" + ex);
+                    drawProblem = ReferenceEquals(_view3d.MeshAt(at), mesh)
+                        ? "고친 부재를 다시 그리다 오류가 났습니다: " + ex.Message
+                        : "고친 부재를 새 모양으로 그리지 못했습니다(옛 모양으로 보입니다): " + ex.Message;
+                }
+                // 창의 목록은 그림이 실제로 가진 겉면에 맞춘다 — Replace 가 어디서 던졌든 확대할 상자가 그림과 같게.
+                _drawn[at] = _view3d.MeshAt(at);
+            }
+        _m.Joined = result.Joined;
+        _m.StillOverlap = result.StillOverlap;
+        _m.Failed = result.Failed;
+        _m.NotNeeded = result.NotNeeded;
+        _m.RemainingM3 = result.RemainingM3;
+        if (result.SplitToDo >= 0) _m.SplitToDo = result.SplitToDo;   // 단추의 «나누기 m개»(R38 core L-4)
+        RefreshChrome();
+        RefreshList();
+        RefreshFocus();
+        var problems = new List<string>();
+        if (result.Problem.Length > 0) problems.Add(result.Problem);
+        if (refused > 0) problems.Add($"목록의 {refused}줄에 고친 결과를 옮기지 못했습니다 — 창을 닫고 다시 실행해 확인해 주세요.");
+        if (drawProblem.Length > 0) problems.Add(drawProblem);
+        if (problems.Count > 0) ShowMessage(string.Join("\n", problems), true);
     }
 
     // 그림 위에 뜨는 딱지의 틀(처음에는 숨겨 둔다).
@@ -662,7 +954,7 @@ public sealed class OverlapResultView
         };
     }
 
-    // 그림 바로 아래의 띠: 색 풀이 · 마우스 쓰는 법. 좁으면 줄을 바꾼다.
+    // 그림 바로 아래의 띠: 색 풀이(짧은 이름표만 — 마우스 쓰는 법 · 풀이는 풍선 글로).
     private FrameworkElement BuildLegend()
     {
         var line = new WrapPanel { Margin = new Thickness(2, 0, 0, 0) };
@@ -679,59 +971,53 @@ public sealed class OverlapResultView
             item.Children.Add(new TextBlock { Text = text, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
             line.Children.Add(item);
         }
-        Item(BlobColor, _m.Mode == Mode.Joined ? "확인할 겹침" : "겹친 덩어리(가려져도 보임)");
-        if (_m.Mode == Mode.Joined) Item(DoneColor, "정리된 자리");
-        Item(WinnerColor, "남는 쪽(통째로 셈)");
-        Item(LoserColor, "잘리는 쪽(겹친 만큼 빠짐)");
-        var ghost = _view3d!.GhostEdge;
-        Item(ghost, "그 밖의 부재(외곽선만)", outline: true);
-        line.Children.Add(new TextBlock
-        {
-            Text = "돌리기 = 오른쪽 끌기 · 옮기기 = 가운데 끌기 · 확대 = 굴림", Foreground = _ui["Sub"], FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 2, 0, 2),
-        });
+        Item(BlobColor, "겹친 부위");
+        Item(WinnerColor, "남는 쪽");
+        Item(LoserColor, "잘리는 쪽");
+        Item(_view3d!.GhostEdge, "나머지", outline: true);
         var legend = new Border { Padding = new Thickness(2, 7, 2, 0), Child = line };
         _ui.Mark(legend,
-            "겹친 덩어리는 다른 부재에 가려져 있어도 보입니다.\n남는 쪽 = 겹친 자리를 통째로 세는 부재 · 잘리는 쪽 = 겹친 만큼 빠지는 부재.\n" +
-            "전체 보기에서는 한 번이라도 잘리는 쪽인 부재가 주황, 남는 쪽으로만 나오는 부재가 파랑입니다." +
-            (_m.Mode == Mode.Joined ? "\n결합한 뒤: 덩어리는 결합하기 전에 잰 모양입니다(초록 = 결합으로 정리된 자리)." : ""), "legend");
+            "겹친 부위는 다른 부재에 가려져 있어도 보입니다. 두 부재는 쌍을 고르면 칠합니다.\n" +
+            "고치면 그 부위가 남는 쪽의 색(주황)이 됩니다 · 회색 = 앞선 결합으로 이미 풀린 자리.\n" +
+            "돌리기 = 오른쪽 끌기 · 옮기기 = 가운데 끌기 · 확대 = 굴림" +
+            (_m.Mode == Mode.Joined ? "\n결합한 뒤: 겹친 부위는 결합하기 전에 잰 모양입니다." : ""), "legend");
         return legend;
     }
 
-    // 그 겉면의 색: 덩어리는 초점에 따라 진하게/옅게, 부재는 맡은 자리의 색(외곽선만인 부재의 색은 쓰이지 않는다).
+    // 그리는 방식: 덩어리는 맨 위(외곽선만으로 그릴 때는 둘레 부재처럼), 부재는 칠할 때만 옅은 면, 아니면 외곽선만.
+    private MeshStyle StyleOf(int index)
+    {
+        if (index >= _members) return _board.LookOf(_blobKey[index - _members]) == BlobLook.Faint ? MeshStyle.Ghost : MeshStyle.Top;
+        return _board.RoleOf(index) == OverlapRole.None ? MeshStyle.Ghost : MeshStyle.Tint;
+    }
+
+    // 그 겉면의 색: 덩어리 = 빨강(고친 자리 = 남는 쪽의 주황 · 이미 풀린 자리 = 회색), 부재 = 남는 쪽 주황 / 잘리는 쪽 초록.
+    // 고치기 단추에 마우스를 올린 동안은 고친 뒤의 모습: 빠질 부재(_preview) = 초록 · 남을 부재 = 주황 · 그 쌍의 덩어리 = 주황(남을 부재의 것이 된다).
+    // (외곽선만인 것의 색은 쓰이지 않는다.)
     private (byte r, byte g, byte b) ColorOf(int index)
     {
         if (index >= _members)
-            return _board.LookOf(_blobKey[index - _members]) switch
-            {
-                BlobLook.Pale => Pale(BlobColor),
-                BlobLook.Done => DoneColor,
-                BlobLook.DonePale => Pale(DoneColor),
-                _ => BlobColor,
-            };
-        return _board.RoleOf(index) == OverlapRole.Loser ? LoserColor : WinnerColor;
+        {
+            int key = _blobKey[index - _members];
+            if (_preview >= 0 && key == _board.Focus) return WinnerColor;
+            return _board.LookOf(key) switch { BlobLook.Done => WinnerColor, BlobLook.Gone => LooseColor, _ => BlobColor };
+        }
+        if (_preview >= 0) return index == _preview ? LoserColor : WinnerColor;
+        return _board.RoleOf(index) == OverlapRole.Winner ? WinnerColor : LoserColor;
     }
 
-    // 옅게: 밝은 바탕에서는 흰색을, 어두운 바탕에서는 바탕색을 섞는다.
-    private (byte r, byte g, byte b) Pale((byte r, byte g, byte b) c)
-    {
-        (double r, double g, double b) to = _ui.IsDark ? (0x2A, 0x2E, 0x35) : (255, 255, 255);
-        const double mix = 0.78;
-        return ((byte)Math.Round(c.r + (to.r - c.r) * mix), (byte)Math.Round(c.g + (to.g - c.g) * mix), (byte)Math.Round(c.b + (to.b - c.b) * mix));
-    }
-
-    // 마우스 밑의 것을 풀어 쓴 글.
+    // 마우스 밑의 것을 적은 글.
     private string Describe(int index)
     {
         if (index >= _members)
         {
             var row = _board.Row(_blobKey[index - _members]);
             if (row == null) return " ";
-            return $"겹친 덩어리 {row.VolumeM3.ToString("0.000", CultureInfo.InvariantCulture)} m³ — 남는 쪽 {Split(row.Winner).main} → 잘리는 쪽 {Split(row.Loser).main}" +
-                   (_board.Focus == row.Key ? "" : " · 누르면 이 쌍을 봅니다");
+            return $"겹친 부위 {row.VolumeM3.ToString("0.000", CultureInfo.InvariantCulture)} m³ — {Split(row.Winner).main} → {Split(row.Loser).main}";
         }
         string name = index < _m.MemberNames.Count ? _m.MemberNames[index] : "";
         int pairs = _board.PairsOf(index).Count;
-        return pairs > 1 ? $"{name} · 겹친 쌍 {pairs}개에 들어 있음(누를 때마다 큰 것부터 차례로)" : $"{name} · 누르면 이 부재가 든 쌍을 봅니다";
+        return pairs > 1 ? $"{name} · 겹친 쌍 {pairs}개" : name;
     }
 
     // ── 초점 ─────────────────────────────────────────────────────────────────────
@@ -739,11 +1025,15 @@ public sealed class OverlapResultView
     // 그림을 찍었다: 덩어리(맨 위에 그려지므로 먼저 닿는다)면 그 쌍, 색칠된 부재면 그 부재가 든 쌍.
     private void OnPicture(int index)
     {
-        if (index < 0 || _view3d == null) return;     // 빈 곳 · 외곽선만인 부재: 그대로 둔다(Esc · [전체 보기]로 돌아간다)
+        if (index < 0 || _view3d == null) return;     // 빈 곳 · 외곽선만인 것: 그대로 둔다(Esc · [전체 보기]로 돌아간다)
         int before = _board.Focus;
         if (index >= _members)
         {
-            var keys = _view3d.IndicesAt(_view3d.ClickPoint).Where(i => i >= _members).Select(i => _blobKey[i - _members]).ToList();
+            // 그 자리의 덩어리 전부(가까운 것부터). 외곽선만인 덩어리도 넣는다 — 쌍을 고르면 다른 덩어리는 외곽선만이 되지만,
+            // 같은 자리를 다시 누르면 그 아래에 겹친 덩어리로 돌아야 한다(세 부재가 한 자리에서 겹친 경우).
+            var (origin, direction) = _view3d.Camera.Ray(_view3d.ClickPoint.X, _view3d.ClickPoint.Y);
+            var keys = Picker.PickAll(_drawn, i => i >= _members && _board.LookOf(_blobKey[i - _members]) != BlobLook.Hidden, origin, direction)
+                .Select(hit => _blobKey[hit.index - _members]).ToList();
             _board.ClickBlobs(keys);
             Note($"덩어리 찍기 [{string.Join(",", keys)}] → {_board.Focus}");
         }
@@ -797,7 +1087,7 @@ public sealed class OverlapResultView
         var box = _board.ZoomBox(_board.Focus, i => i >= 0 && i < _members ? _drawn[i].Box : Box3.Empty,
                                  key => _blobAt.TryGetValue(key, out int at) ? _drawn[at].Box : Box3.Empty);
         if (box is { } target) _view3d.ZoomTo(target, OverlapBoard.ZoomMargin, OverlapBoard.ZoomWidth(target));
-        else ShowMessage("이 쌍은 그림에 보여 줄 형상이 없습니다(부재의 형상을 읽지 못했습니다). [Revit 에서 보기]로 확인해 주세요.", true);
+        else ShowMessage("이 쌍은 그림에 보여 줄 형상이 없습니다 — [Revit 에서 보기]로 확인해 주세요.", true);
     }
 
     private void Look(ViewPreset preset)
@@ -807,9 +1097,10 @@ public sealed class OverlapResultView
         Frame();
     }
 
-    // 초점이 바뀌었다: 그림 · 초점 띠 · 줄의 표시를 맞춘다.
+    // 초점이 바뀌었다: 그림 · 초점 띠 · 줄의 표시 · 고치기 줄을 맞춘다.
     private void RefreshFocus()
     {
+        _preview = -1;
         _view3d?.Refresh();
         MarkRows();
         HideMessage();
@@ -817,15 +1108,14 @@ public sealed class OverlapResultView
         _focusHead.Inlines.Clear();
         if (row == null)
         {
-            _focusHead.Inlines.Add(new Run(_m.Mode == Mode.Joined ? $"결합한 {_m.Rows.Count}쌍을 모두 보는 중" : $"겹친 자리 {_m.Rows.Count}곳을 모두 보는 중") { FontWeight = FontWeights.SemiBold, FontSize = 14 });
-            _focusSub.Text = _view3d != null
-                ? "목록의 줄이나 그림의 빨간 덩어리를 누르면 그 자리만 봅니다."
-                : "목록의 줄을 누르면 그 쌍을 고릅니다 — [Revit 에서 보기]로 두 부재를 볼 수 있습니다.";
+            _focusHead.Inlines.Add(new Run(_m.Mode == Mode.Joined ? $"결합한 {_m.Rows.Count}쌍 전체" : $"겹친 자리 {_m.Rows.Count}곳 전체") { FontWeight = FontWeights.SemiBold, FontSize = 14 });
+            _focusSub.Text = "";
         }
         else
         {
             var (winner, winnerId) = Split(row.Winner);
             var (loser, loserId) = Split(row.Loser);
+            // ■ = 그림의 색(남는 쪽 주황 · 잘리는 쪽 초록) — 이름과 그림의 부재를 잇는다.
             void Side(string label, (byte r, byte g, byte b) color, string name, string id)
             {
                 _focusHead.Inlines.Add(new Run("■ ") { Foreground = new SolidColorBrush(Color.FromRgb(color.r, color.g, color.b)), FontSize = 13 });
@@ -838,15 +1128,18 @@ public sealed class OverlapResultView
             Side("잘리는 쪽", LoserColor, loser, loserId);
             int at = _board.Ordered.ToList().FindIndex(r => r.Key == row.Key) + 1;
             string sub = $"겹친 체적 {row.VolumeM3.ToString("0.000", CultureInfo.InvariantCulture)} m³ · {row.WinnerPart} → {row.LoserPart} · {at} / {_board.Ordered.Count}";
-            if (_m.Mode == Mode.Joined && row.Status.Length > 0) sub += " · " + row.Status;
-            if (_view3d != null && !row.HasBlob) sub += " · 겹친 덩어리는 그리지 못했습니다(두 부재만 칠했습니다)";
+            if (_m.Fix == null && row.Status.Length > 0) sub += " · " + row.Status;    // 고치기 줄이 있으면 결과는 그 줄의 딱지로 보인다
+            if (row.Split.Length > 0) sub += " · " + row.Split;                         // 조각 n개 / 나누기 못 함: 까닭
+            if (_view3d != null && !row.HasBlob) sub += " · 겹친 부위 그림 없음";
             _focusSub.Text = sub;
         }
+        _focusSub.Visibility = _focusSub.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         if (_showAll != null) _showAll.IsEnabled = row != null;
         if (_inRevit != null) _inRevit.IsEnabled = row != null;
         bool many = _board.Ordered.Count > 1 || row == null;
         if (_previous != null) _previous.IsEnabled = many;
         if (_next != null) _next.IsEnabled = many;
+        RefreshFix();
     }
 
     private void MarkRows()
@@ -877,54 +1170,12 @@ public sealed class OverlapResultView
     // Esc: 끌던 것을 그만두고 → 초점이 있으면 전체 보기로 → 없으면 닫는다. (단추에 IsCancel 을 주지 않았다 — 주면 초점이 있어도 한 번에 닫힌다.)
     private void OnKey(object sender, KeyEventArgs e)
     {
+        if (_busy) { e.Handled = true; return; }      // 고치는 중에는 글쇠를 받지 않는다
         if (e.Handled || e.Key != Key.Escape) return;
         e.Handled = true;
         if (_view3d is { Pressed: true }) { _view3d.CancelDrag(); return; }
         if (_board.Focus >= 0) { Note("Esc → 전체 보기"); ShowAll(); return; }
         Finish(Choice.Close, -1);
-    }
-
-    // ── 다음 할 일 ────────────────────────────────────────────────────────────────
-
-    private UIElement? NextStep()
-    {
-        var lines = new List<(string head, string body)>();
-        switch (_m.Mode)
-        {
-            case Mode.Found:
-                lines.Add(("결합하면", "남는 쪽은 그대로 두고, 잘리는 쪽에서 겹친 만큼을 Revit '형상 결합'으로 잘라 냅니다. 쌍이 많으면 몇 분 걸릴 수 있습니다."));
-                lines.Add(("남는 순서", _m.PriorityText));
-                lines.Add(("되돌리기", "결합한 뒤 Ctrl+Z 한 번이면 전부 취소됩니다. 일부만 하려면 닫고, 부재를 선택한 뒤 다시 실행하세요."));
-                break;
-            case Mode.Joined when _m.Joined + _m.StillOverlap > 0: // 결합이 하나라도 걸려 모델이 바뀌었다
-                lines.Add(("다음 할 일", "[산출식 자동입력]을 다시 실행해 주세요. 결합한 부재의 모양과 체적이 바뀌었습니다."));
-                lines.Add(("판정", $"결합한 부재의 판정(DH_판정)은 '{_m.StaleVerdict}'로 바꿔 두었습니다."));
-                lines.Add(("되돌리기", "Ctrl+Z 한 번이면 결합 전으로 돌아갑니다."));
-                break;
-            default:
-                return null;
-        }
-
-        var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        for (int i = 0; i < lines.Count; i++)
-        {
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            var top = new Thickness(0, i == 0 ? 0 : _wide ? 3 : 5, 0, 0);
-            var head = new TextBlock { Text = lines[i].head, FontWeight = FontWeights.SemiBold, Foreground = _ui["AccentText"], Margin = new Thickness(0, top.Top, 14, 0) };
-            var body = new TextBlock { Text = lines[i].body, TextWrapping = TextWrapping.Wrap, LineHeight = 19, Margin = top };
-            Grid.SetRow(head, i);
-            Grid.SetRow(body, i);
-            Grid.SetColumn(body, 1);
-            grid.Children.Add(head);
-            grid.Children.Add(body);
-        }
-        return new Border
-        {
-            Background = _ui["AccentSoft"], CornerRadius = new CornerRadius(8), Padding = _wide ? new Thickness(14, 8, 14, 9) : new Thickness(14, 10, 14, 11),
-            Margin = new Thickness(0, 0, 0, 12), Child = grid,
-        };
     }
 
     // ── 아래 단추 ─────────────────────────────────────────────────────────────────
@@ -964,25 +1215,55 @@ public sealed class OverlapResultView
         switch (_m.Mode)
         {
             case Mode.Found:
-                Right(_ui.Button($"우선순위대로 결합 ({_m.Rows.Count}쌍)", "BtnPrimary",
-                    "겹친 쌍 전부에 Revit '형상 결합'을 걸어 우선순위가 낮은 쪽을 잘라 냅니다. 모델이 바뀝니다(되돌리기 한 번으로 취소).", "join"), Choice.Join);
+                // 아직 끝나지 않은 쌍만 건다(창에서 고친 쌍은 빼고) + 버림이 잘린 채 결합된 쌍의 순서도 바꾸고 · 결합돼 두 덩이인 벽 · 기둥도 나눈다.
+                // 할 것이 없으면 단추를 두지 않는다. 걸 쌍이 없고 나누기만 남았으면 이름표가 그것을 말한다.
+                if (Left + _m.LeanToFix + _m.LaterToFix + _m.SplitToDo > 0)
+                    Right(_ui.Button(JoinLabel(), "BtnPrimary", JoinTip(), "join"), Choice.Join);
                 Right(_ui.Button("겹친 부재 전부 선택", "BtnSecondary",
-                    "모델은 바꾸지 않습니다. 겹친 부재들이 Revit 에서 선택된 채로 창이 닫힙니다.", "selectAll"), Choice.SelectAll);
+                    "모델은 바꾸지 않습니다. 겹친 부재들이 Revit 에서 선택된 채로 창이 닫힙니다(창에서 고친 쌍은 빼고).", "selectAll"), Choice.SelectAll);
                 Right(_ui.Button("닫기", "BtnGhost", id: "close"), Choice.Close, isCancel: true);
                 break;
             case Mode.Joined when Problems > 0:
                 Right(_ui.Button($"확인할 부재 선택하고 닫기 ({Problems}쌍)", "BtnPrimary",
                     "결합하지 못했거나 겹침이 남은 부재들이 선택된 채로 창이 닫힙니다.", "selectProblems"), Choice.SelectProblems, isDefault: true);
-                Right(_ui.Button("닫기", "BtnGhost", id: "close"), Choice.Close, isCancel: true);
+                Right(_ui.Button("닫기", "BtnGhost", "닫기만 해도 확인할 부재는 선택해 둡니다.", "close"), Choice.Close, isCancel: true);
                 break;
             default:
-                Right(_ui.Button("닫기", "BtnPrimary", id: "close"), Choice.Close, isDefault: true, isCancel: true);
+                Right(_ui.Button("닫기", "BtnPrimary", _m.Mode == Mode.Joined ? $"결합한 부재의 판정(DH_판정)은 '{_m.StaleVerdict}'로 바꿔 두었습니다 — [수량산출]의 [완료]가 식을 다시 맞춥니다." : "", "close"),
+                    Choice.Close, isDefault: true, isCancel: true);
                 // 선택한 부재만 검사했는데 겹침이 없거나 대상이 없다: 전체를 다시 검사할 수 있게 한다.
                 if (CanCheckAll && !_wide)
                     Right(_ui.Button("전체 다시 검사", "BtnSecondary", "선택과 상관없이 모델의 콘크리트 부재를 모두 검사합니다(모델은 바꾸지 않습니다).", "checkAll"), Choice.CheckAll);
+                // 겹친 쌍은 없지만 순서가 거꾸로 결합된 쌍(버림이 잘림 · 나중 부재가 깎음) · 결합돼 두 덩이인 벽 · 기둥이 있다: 그것만 한다(단추 하나 — 둘 다면 둘 다).
+                if (_m.Mode == Mode.Clean && _m.LeanToFix + _m.LaterToFix + _m.SplitToDo > 0)
+                    Right(_ui.Button(JoinLabel(), "BtnSecondary", JoinTip(), "join"), Choice.Join);
                 break;
         }
         return bar;
+    }
+
+    // [우선순위대로 결합] · 작은 창 단추의 이름표 — 넓은 창과 작은 창이 같은 함수로 고른다(R38 core M-2 · L-3).
+    // 나누기는 새 부재를 만드는 큰 변경이라 그 수를 이름표에 보인다.
+    private string JoinLabel()
+    {
+        int pairs = _m.Mode == Mode.Found ? Left : 0, lean = _m.LeanToFix, later = _m.LaterToFix, order = lean + later, split = _m.SplitToDo;
+        if (pairs > 0) return split > 0 ? $"우선순위대로 결합 ({pairs + order}쌍 · 나누기 {split}개)" : $"우선순위대로 결합 ({pairs + order}쌍)";
+        // 순서 바꾸기의 이름: 버림만이면 «버림», 나중 부재만이면 «나중 부재», 둘 다면 그냥 «결합 순서».
+        string what = later == 0 ? "버림" : lean == 0 ? "나중 부재" : "";
+        if (order > 0 && split > 0) return $"{(what.Length > 0 ? what + " " : "결합 ")}순서 바꾸기 ({order}쌍) · 두 덩이 나누기 ({split}개)";
+        return order > 0 ? $"{(what.Length > 0 ? what + " " : "")}결합 순서 바꾸기 ({order}쌍)" : $"두 덩이 벽·기둥 나누기 ({split}개)";
+    }
+
+    private string JoinTip()
+    {
+        var lines = new List<string>();
+        if (_m.Mode == Mode.Found && Left > 0)
+            lines.Add("남은 쌍 전부에 Revit '형상 결합'을 걸어 우선순위가 낮은 쪽에서 겹친 만큼을 뺍니다.\n우선순위: " + _m.PriorityText);
+        if (_m.LeanToFix > 0) lines.Add($"버림이 잘린 채 결합된 쌍 {_m.LeanToFix}개: 버림이 남도록 자르는 순서를 바꿉니다.");
+        if (_m.LaterToFix > 0) lines.Add($"나중에 치는 부재(받침·PAD·디딤판)가 구조체를 깎은 채 결합된 쌍 {_m.LaterToFix}개: 구조체가 남도록 자르는 순서를 바꿉니다.");
+        if (_m.SplitToDo > 0) lines.Add($"결합돼 두 덩이인 벽·기둥 {_m.SplitToDo}개: 덩이마다 나눕니다(위치·부위는 그대로).");
+        lines.Add("모델이 바뀝니다(닫은 뒤 Ctrl+Z 한 번으로 되돌림).");
+        return string.Join("\n", lines);
     }
 
     private void Finish(Choice choice, int key)
@@ -1049,6 +1330,13 @@ public sealed class OverlapResultView
             };
         }
         Done += () => window.Close();
+        // 고치는 중에는 닫히지 않는다(제목 줄의 X · Alt+F4 — Revit 이 결합하는 동안 창이 사라지면 그 결과를 받을 곳이 없다).
+        window.Closing += (_, e) =>
+        {
+            if (!_busy) return;
+            e.Cancel = true;
+            Note("고치는 중 — 닫기를 막음");
+        };
         // 어두운 테마일 때 창 제목 줄도 어둡게(안 되는 윈도우에서는 그냥 둔다).
         if (_ui.IsDark)
             window.SourceInitialized += (_, _) =>
@@ -1075,9 +1363,9 @@ public sealed class OverlapResultView
             try
             {
                 Note("창의 오류\t" + e.Exception);
-                // 이 창은 모델을 바꾸지 않는다. 결합한 뒤의 창이면 결합은 이미 모델에 걸려 있다 — 그 사실을 그대로 적는다.
-                ShowMessage((_m.Mode == Mode.Joined ? "창에서 오류가 났습니다(결합은 이미 모델에 걸려 있습니다 — 이 오류로 달라지지 않습니다): "
-                                                    : "창에서 오류가 났습니다(모델은 바뀌지 않았습니다): ") + e.Exception.Message, true);
+                // 창 자체는 모델을 바꾸지 않는다. 결합한 뒤의 창이거나 이 창에서 고친 것이 있으면 그 결합은 이미 모델에 걸려 있다 — 그 사실을 그대로 적는다.
+                ShowMessage((_m.Mode == Mode.Joined || _changedModel ? "창에서 오류가 났습니다(건 결합은 모델에 그대로 있습니다 — 이 오류로 달라지지 않습니다): "
+                                                                     : "창에서 오류가 났습니다(모델은 바뀌지 않았습니다): ") + e.Exception.Message, true);
             }
             catch { }
             e.Handled = true;
@@ -1087,7 +1375,8 @@ public sealed class OverlapResultView
             Note($"창이 그려짐\t{shown.ElapsedMilliseconds} ms\t소프트웨어로만 그림 {(RenderOptions.ProcessRenderMode == System.Windows.Interop.RenderMode.SoftwareOnly ? "O" : "X")}" +
                  $"\t{(_wide ? (_view3d != null ? "목록 + 3D" : "목록만") : "작은 창")}\t그림 등급 {RenderCapability.Tier >> 16}" +
                  // 창과 그림의 크기(픽셀): «끄는 동안 평균 ms»는 그림의 넓이에 따라 달라진다 — 견줄 때 함께 본다.
-                 $"\t창 {window.ActualWidth:0}×{window.ActualHeight:0}" + (_view3d != null ? $" · 그림 {_view3d.ActualWidth:0}×{_view3d.ActualHeight:0} · 겉면 {_drawn.Count}(세모 {_drawn.Sum(mesh => mesh.Triangles)})" : ""));
+                 $"\t창 {window.ActualWidth:0}×{window.ActualHeight:0}" + (_view3d != null ? $" · 그림 {_view3d.ActualWidth:0}×{_view3d.ActualHeight:0} · 겉면 {_drawn.Count}(세모 {_drawn.Sum(mesh => mesh.Triangles)})" : "") +
+                 (_m.Fix != null ? "\t고치기 있음" : ""));
         EventHandler onFrame = OnFrame;
         if (_view3d != null) CompositionTarget.Rendering += onFrame;
         window.Dispatcher.UnhandledException += onError;

@@ -28,30 +28,42 @@ public static class FormworkSummary
     public const string Mixed = "섞임";
     public const string Ask = "확인 필요";
 
+    /// <summary>대응표의 줄에 드는 조각 하나와 그 줄의 열쇠(유형 × 면의 갈래).</summary>
+    public readonly record struct Keyed(ElementFormwork Result, FaceResult Face, FacePatch Patch, string Type, string Group);
+
+    /// <summary>
+    /// 대응표로 바꿀 수 있는 조각과 그 줄의 열쇠: 세는 조각 · 사람이 정한 조각 · 아래가 빈 밑면(윗면 · 버림과 기초의 밑면 · 틈은 뺀다).
+    /// 대응표의 줄(Rows)과 수량산출 창의 3D 조각 · 줄 강조가 이것 하나를 같이 쓴다 — 거르는 규칙이 한 곳에만 있어야
+    /// 표의 넓이와 3D 에 칠한 자리가 어긋나지 않는다(R42 core M-2). 어느 조각이 드는지는 대응표를 바꿔도 같다
+    /// (대응표는 세던 조각을 '세지 않음'으로 정하거나 아래가 빈 밑면을 세게 할 뿐이고, 둘 다 여기 든다).
+    /// </summary>
+    public static IEnumerable<Keyed> RowPatches(IReadOnlyList<ElementFormwork> results)
+    {
+        foreach (var r in results)
+            foreach (var f in r.Faces)
+                foreach (var p in f.Patches)
+                    if (p.Counted || p.Decided || p.Below == Below.Floating)
+                        yield return new Keyed(r, f, p, r.Element.Type, FormworkTable.GroupOf(f.Class, p));
+    }
+
     /// <summary>대응표의 줄들: 유형 × 면의 갈래마다 넓이와, 초안이 주는 종류, 사람이 고친 값.</summary>
     public static List<FormworkRow> Rows(IReadOnlyList<ElementFormwork> results, FormworkRules? rules)
     {
         var rows = new Dictionary<(string type, string group), (FormworkRow row, HashSet<string> drafts, HashSet<long> ids)>();
-        foreach (var r in results)
+        var elevated = new Dictionary<ElementFormwork, bool>();
+        foreach (var (r, f, p, type, group) in RowPatches(results))
         {
-            bool elevated = r.Faces.Any(f => f.Patches.Any(p => p.Below == Below.Supported));
-            foreach (var f in r.Faces)
-                foreach (var p in f.Patches)
-                {
-                    // 대응표로 바꿀 수 있는 조각만: 세는 조각, 사람이 정한 조각, 아래가 빈 밑면. (윗면·버림과 기초의 밑면·틈은 빼고)
-                    if (!p.Counted && !p.Decided && p.Below != Below.Floating) continue;
-                    string group = FormworkTable.GroupOf(f.Class, p);
-                    var key = (r.Element.Type, group);
-                    if (!rows.TryGetValue(key, out var entry))
-                    {
-                        entry = (new FormworkRow { Category = r.Element.Category, Type = r.Element.Type, Group = group,
-                                                   Rule = rules?.Lookup(r.Element.Type, group) ?? "" }, new HashSet<string>(), new HashSet<long>());
-                        rows[key] = entry;
-                    }
-                    entry.row.Area += p.Area;
-                    entry.ids.Add(r.Element.Id);
-                    entry.drafts.Add(p.Below == Below.Floating ? Ask : FormworkTable.ItemOf(r.Element, f.Class, p, elevated));
-                }
+            if (!elevated.TryGetValue(r, out bool raised)) elevated[r] = raised = r.Faces.Any(x => x.Patches.Any(q => q.Below == Below.Supported));
+            var key = (type, group);
+            if (!rows.TryGetValue(key, out var entry))
+            {
+                entry = (new FormworkRow { Category = r.Element.Category, Type = type, Group = group,
+                                           Rule = rules?.Lookup(type, group) ?? "" }, new HashSet<string>(), new HashSet<long>());
+                rows[key] = entry;
+            }
+            entry.row.Area += p.Area;
+            entry.ids.Add(r.Element.Id);
+            entry.drafts.Add(p.Below == Below.Floating ? Ask : FormworkTable.ItemOf(r.Element, f.Class, p, raised));
         }
         foreach (var (row, drafts, ids) in rows.Values)
         {

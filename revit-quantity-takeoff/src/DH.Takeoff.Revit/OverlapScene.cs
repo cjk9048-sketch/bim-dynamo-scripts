@@ -36,13 +36,30 @@ public static class OverlapScene
         public long ReadMs;
 
         private readonly Dictionary<long, int> _at = new();
+        private readonly Dictionary<int, List<long>> _slot = new();   // 칸 → 그 칸에 그리는 부재 전부(원래 부재 + 나눈 조각)
 
         /// <summary>그 부재의 그림에서의 차례(없으면 −1).</summary>
         public int IndexOf(ElementId id) => _at.TryGetValue(id.Value, out int at) ? at : -1;
 
+        /// <summary>그 칸에 그리는 부재 전부(원래 부재 + Alias 로 이은 조각).</summary>
+        public IReadOnlyList<ElementId> InSlot(int at) =>
+            _slot.TryGetValue(at, out var ids) ? ids.Select(v => new ElementId(v)).ToList() : Array.Empty<ElementId>();
+
+        /// <summary>
+        /// 나눈 조각을 원래 부재의 칸에 잇는다(창이 떠 있는 동안 — 그림에는 원래 부재의 칸 하나에 조각 전부를 한 겉면으로 그린다).
+        /// 이 칸을 가리키는 쌍의 줄은 그림에서 같은 부재로 칠해진다. 조각을 또 나누면 그 조각의 칸(= 원래 칸)에 잇는다 — 늘 평평하다.
+        /// </summary>
+        public void Alias(ElementId piece, int at)
+        {
+            if (at < 0 || !_slot.TryGetValue(at, out var ids)) return;
+            _at[piece.Value] = at;
+            if (!ids.Contains(piece.Value)) ids.Add(piece.Value);
+        }
+
         internal void Add(ElementId id, string name)
         {
             _at[id.Value] = Ids.Count;
+            _slot[Ids.Count] = new List<long> { id.Value };
             Ids.Add(id);
             Names.Add(name);
         }
@@ -86,40 +103,10 @@ public static class OverlapScene
         foreach (var id in ids)
         {
             var el = doc.GetElement(id)!;
-            var box = Box3.Empty;
-            try
-            {
-                var bb = el.get_BoundingBox(null);
-                if (bb != null) box = new Box3(ZoneScene.Meters(bb.Min), ZoneScene.Meters(bb.Max));
-            }
-            catch { }
-
-            MeshBuilder? builder = null;
-            try
-            {
-                var solids = SolidReader.Solids(el);
-                if (solids.Count > 0)
-                {
-                    builder = new MeshBuilder();
-                    foreach (var solid in solids) ZoneScene.AddSolid(builder, solid, counters);
-                }
-            }
-            catch
-            {
-                builder = null;
-                data.ReadErrors++;
-            }
-            // 세모를 하나도 못 만든 부재: 경계상자로라도 그린다. 경계상자도 없으면 그릴 수 없다.
-            if (builder == null || builder.Triangles == 0)
-            {
-                builder = null;
-                if (!box.IsEmpty && box.Size.Length > 1e-6)
-                {
-                    builder = ZoneScene.BoxBuilder(box);
-                    data.Boxed++;
-                }
-                else data.Undrawn++;
-            }
+            var (builder, box, how) = Member(el, counters);
+            if (how == Drawn.ReadError) data.ReadErrors++;
+            if (builder == null) data.Undrawn++;
+            else if (how != Drawn.Faces) data.Boxed++;
             data.Add(id, OverlapChecker.Name(doc, el));
             builders.Add(builder);
             boxes.Add(box);
@@ -200,6 +187,84 @@ public static class OverlapScene
         }
         data.ReadMs = watch.ElapsedMilliseconds;
         return data;
+    }
+
+    // 부재의 겉면을 어떻게 만들었나: 면의 세모로 · 세모를 못 만들어 경계상자로(또는 그것도 없음) · 형상을 읽다 오류(경계상자로, 또는 그것도 없음).
+    private enum Drawn { Faces, Boxed, ReadError }
+
+    // 부재 하나의 겉면 — Read 와 Remesh 가 같은 규칙으로 만든다(ZoneScene.Read 와 같은 규칙).
+    // builder = null 이면 그릴 수 없다(형상도 경계상자도 없음). box = 경계상자(모델 안쪽 좌표 · m, 없으면 빈 상자).
+    private static (MeshBuilder? builder, Box3 box, Drawn how) Member(Element el, ZoneScene.Data counters)
+    {
+        var box = Box3.Empty;
+        try
+        {
+            var bb = el.get_BoundingBox(null);
+            if (bb != null) box = new Box3(ZoneScene.Meters(bb.Min), ZoneScene.Meters(bb.Max));
+        }
+        catch { }
+
+        MeshBuilder? builder = null;
+        var how = Drawn.Faces;
+        try
+        {
+            var solids = SolidReader.Solids(el);
+            if (solids.Count > 0)
+            {
+                builder = new MeshBuilder();
+                foreach (var solid in solids) ZoneScene.AddSolid(builder, solid, counters);
+            }
+        }
+        catch
+        {
+            builder = null;
+            how = Drawn.ReadError;
+        }
+        // 세모를 하나도 못 만든 부재: 경계상자로라도 그린다. 경계상자도 없으면 그릴 수 없다.
+        if (builder == null || builder.Triangles == 0)
+        {
+            if (how == Drawn.Faces) how = Drawn.Boxed;
+            builder = !box.IsEmpty && box.Size.Length > 1e-6 ? ZoneScene.BoxBuilder(box) : null;
+        }
+        return (builder, box, how);
+    }
+
+    /// <summary>
+    /// 모양이 바뀐 부재(겹침 창에서 결합한 뒤)의 겉면을 다시 읽는다 — Read 와 같은 규칙 · 같은 장면의 가운데. 모델은 바꾸지 않는다.
+    /// 받은 부재가 든 칸을 **칸 전부로** 다시 그린다(나눈 조각 — Alias — 이 한 칸에 여럿이면 하나만 받아도 전부를 한 겉면으로: R35 core M1).
+    /// 돌려주는 것 = 그림의 차례 → 새 겉면(그림에 없는 부재 · 이제 그릴 수 없는 부재는 빈 겉면). data.Meshes 도 그것으로 바꾼다.
+    /// </summary>
+    public static Dictionary<int, MeshData> Remesh(Document doc, Data data, IEnumerable<ElementId> ids)
+    {
+        var changed = new Dictionary<int, MeshData>();
+        var counters = new ZoneScene.Data();
+        foreach (int slot in ids.Select(data.IndexOf).Where(at => at >= 0).Distinct())
+        {
+            var els = data.InSlot(slot).Select(doc.GetElement).Where(el => el != null).ToList();
+            MeshBuilder? builder;
+            if (els.Count == 1) builder = Member(els[0]!, counters).builder;
+            else
+            {
+                // 조각 전부의 면을 한 그릇에(Read 와 같은 규칙 — 면의 세모, 하나도 못 만들면 조각들을 싼 경계상자).
+                builder = new MeshBuilder();
+                var box = Box3.Empty;
+                foreach (var el in els)
+                {
+                    try
+                    {
+                        var bb = el!.get_BoundingBox(null);
+                        if (bb != null) box = box.With(new Box3(ZoneScene.Meters(bb.Min), ZoneScene.Meters(bb.Max)));
+                        foreach (var solid in SolidReader.Solids(el)) ZoneScene.AddSolid(builder, solid, counters);
+                    }
+                    catch { }
+                }
+                if (builder.Triangles == 0) builder = !box.IsEmpty && box.Size.Length > 1e-6 ? ZoneScene.BoxBuilder(box) : null;
+            }
+            var mesh = builder?.Build(data.Origin) ?? new MeshData();
+            data.Meshes[slot] = mesh;
+            changed[slot] = mesh;
+        }
+        return changed;
     }
 
     // inner 가 outer 를 가장 많이 벗어난 길이(m). 안에 있으면 0.

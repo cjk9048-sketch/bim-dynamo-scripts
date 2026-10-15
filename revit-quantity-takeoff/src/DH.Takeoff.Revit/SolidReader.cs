@@ -25,6 +25,17 @@ public static class SolidReader
         return solids;
     }
 
+    /// <summary>주어진 형상(예: FamilyInstance.GetOriginalGeometry)의 입체들 — Solids(el) 과 같은 거름(체적이 있는 것 · 중첩 인스턴스는 펼침).</summary>
+    public static List<Solid> Solids(GeometryElement geo)
+    {
+        var solids = new List<Solid>();
+        Collect(geo, solids);
+        return solids;
+    }
+
+    /// <summary>Solids(el) 과 같은 읽기 설정(Fine · 참조 없음) — 다른 형상을 같은 조건으로 읽을 때.</summary>
+    public static Options ReadOptions() => new() { ComputeReferences = false, IncludeNonVisibleObjects = false, DetailLevel = ViewDetailLevel.Fine };
+
     /// <summary>부재 두께(m) — 벽 두께, 바닥 두께. 그 외는 0(모름).</summary>
     public static double Thickness(Element el)
     {
