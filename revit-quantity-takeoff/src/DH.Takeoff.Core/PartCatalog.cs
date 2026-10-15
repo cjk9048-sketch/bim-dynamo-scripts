@@ -269,6 +269,14 @@ public static class PartCatalog
     /// <summary>대표 목록의 줄을 목록의 줄로(처음 표시 그대로).</summary>
     public static ZonePart ToPart(CatalogPart p) => new() { Name = p.Name, Group = p.Group, Plain = p.Plain, NoZone = p.NoZone };
 
+    /// <summary>
+    /// 거푸집에서 나중에 치는 부위인가: 사용자가 정한 값, 없으면 묶음이 받침·PAD 인 것(JACK 2026-10-15 — 출입구 디딤판 · 받침 · PAD · 환기구 · 관 보호공).
+    /// 턱 · 계단은 처음에는 구조체와 같이 본다(목록에서 부위마다 켤 수 있다).
+    /// </summary>
+    public static bool IsLater(ZonePart p) => p.Later ?? DefaultLater(p);
+
+    private static bool DefaultLater(ZonePart p) => (string.IsNullOrEmpty(p.Group) ? GroupOf(p.Name) : p.Group) == Small;
+
     /// <summary>새로 생기는 줄: 대표 목록(옛 이름 포함)에 있는 이름이면 그 표시와 묶음, 아니면 표시 없이 낱말로 짐작한 묶음.</summary>
     public static ZonePart NewRow(string name) => Find(name) is { } known ? ToPart(known) : new ZonePart { Name = name, Group = GroupOf(name) };
 
@@ -286,6 +294,7 @@ public static class PartCatalog
     public static bool IsCustomized(ZonePart p)
     {
         if (p.User || p.Wbs5 != null || p.Wbs6 != null || p.Wbs7 != null) return true;
+        if (p.Later is { } later && later != DefaultLater(p)) return true;
         return Find(p.Name) is not { } known || known.Plain != p.Plain || known.NoZone != p.NoZone || known.Group != p.Group;
     }
 

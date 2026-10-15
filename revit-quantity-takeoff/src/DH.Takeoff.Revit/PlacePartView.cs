@@ -13,48 +13,64 @@ using DH.Takeoff.Core.View3D;
 namespace DH.Takeoff.Revit;
 
 /// <summary>
-/// 「위치·부위 정하기」 팝업의 화면. JACK 2026-10-13(Revit 에서 써 본 뒤): "고른 부재가 가장 중요한데 … 3D 영역 위쪽에 보이고 ·
-/// 위치는 위치라기보다 현재 적용 상태인 거잖아? 그 안에 위치를 지정하는 기능이 같이 있으니깐 좀 헷갈려" → 세 가지를 갈라 놓았다.
+/// 「수량산출」 창의 화면(JACK 2026-10-15 «위치·부위 정하기 · 산출식 자동입력 · 산출근거 엑셀은 결국 수량산출 — 한 버튼 · 한 창»).
+/// 걸음 둘을 같은 창에서 간다 — 3D 그림은 그 자리 그대로이고(카메라도 그대로), 나머지만 바꿔 놓는다.
+///  ① 부위 · 중분류: 3D 에서 부재를 고르고 왼쪽 판에서 넣는다(넣는 즉시 모델의 속성에 적힌다).
+///  ② 거푸집면 설정: 대응표(유형 × 면 → 종류)를 고치면 3D 의 면 색과 합계가 바로 바뀐다(PlacePartView.Formwork.cs).
+/// ① 의 짜임(JACK 2026-10-13 · 10-15):
 ///  · 고른 부재 = 3D 그림 바로 위의 띠(몇 개 · 무슨 부재 · 지금 값 · 선택 풀기 · 값 지우기).
-///  · 넣기 = 왼쪽 판만: 구조물을 고르면 그 구조물의 위치 추천과 부위 대표 목록(PartCatalog)이 나오고, ① 위치 ② 부위 단추를 누르면
-///    고른 부재에 바로 들어간다(모델의 속성에 적힌다). 색 조각과 수는 여기 없다 — 고른 부재가 가진 값의 단추만 켜져 보인다.
-///  · 지금 적용 상태 = 3D 그림 바로 아래의 띠: 위치별 색 + 수 · 부위별 수. 누르면 그 값인 부재를 고르기만 한다.
+///  · 넣기 = 왼쪽 판만: 구조물 종류(대표 구조물) → 부위(그 구조물의 대표 목록 — PartCatalog) → 중분류 카테고리(전의 '위치').
+///    중분류는 입력칸 하나: 누르면 이미 만든 이름과 추천 이름이 펼쳐지고, 고르면 바로 들어간다 · 새 이름은 적고 [넣기].
+///    [단독객체] = 어느 중분류에도 속하지 않는 부재(전의 '위치 없음'). 색깔 목록은 3D 아래의 '지금 적용 상태'에만 둔다.
+///  · 지금 적용 상태 = 3D 그림 바로 아래의 띠: 중분류별 색 + 수 · 부위별 수. 누르면 그 값인 부재를 고르기만 한다.
 /// [목록 고치기]: 이름 · 차례 · 지우기(✕). 쓰는 부재가 있는 이름의 ✕ 는 그 줄에서 한 번 묻고, 지우면서 그 부재들의 그 칸도 비운다.
-/// '무근' · '위치 없이'(산출서를 적는 방식)는 [목록 고치기]를 켰을 때만 보인다.
-/// 색: 옅은 회색 = 아직 · 위치 색 = 끝 · 옅은 색 = 덜 끝남(하나만 넣었거나, 창 밖에서 들어온 값이라 확인 필요).
-/// 모양은 UiTheme 의 틀을 쓴다. 상태는 전부 Core 의 PickEditor 가 들고 있고, 여기서는 그리기와 전하기만 한다.
+/// '무근' · '중분류 생략'(산출서를 적는 방식)은 [목록 고치기]를 켰을 때만 보인다.
+/// 색: 옅은 회색 = 아직 · 중분류 색 = 끝 · 옅은 색 = 덜 끝남(하나만 넣었거나, 창 밖에서 들어온 값이라 확인 필요).
+/// 모양은 UiTheme 의 틀을 쓴다. 상태는 전부 Core(PickEditor · FormworkBoard)가 들고 있고, 여기서는 그리기와 전하기만 한다.
 /// Revit API 를 쓰지 않는다(tools/uipreview 로 그림을 보고, 진짜 창에 마우스 신호를 넣어 눌러 본다).
 /// </summary>
-public sealed class PlacePartView
+public sealed partial class PlacePartView
 {
     private const double SideWidth = 436, PartsMinHeight = 250;   // 부위 칸의 가장 작은 높이(머리 + 목록 대여섯 줄 + [추가] 줄)
 
     private readonly PickEditor _editor;
     private readonly IReadOnlyList<PickMember> _members;
+    private readonly IReadOnlyList<MeshData> _memberMeshes;      // ① 의 겉면(② 에서 돌아올 때 다시 쓴다)
     private readonly UiTheme _ui;
     private readonly Brush _text, _sub, _line, _warn;
     private readonly double _shift;                    // 레벨의 표고(화면에 보이는 값) − 모델 안쪽 높이
     private readonly Model3DView _view3d;
-    private readonly TextBlock _remain, _total, _pickedHead, _pickedHint, _hover, _message, _status, _sideHint, _counts, _countNotes;
-    private readonly Border _hoverPill, _toast;
+    private readonly TextBlock _remain, _total, _pickedHead, _pickedHint, _hover, _message, _status, _counts, _countNotes, _noPlaceLabel;
+    private readonly Border _hoverPill, _toast, _side, _top, _bottom;
+    private readonly FrameworkElement _progress, _placeSide, _pickedBand, _stateBand;
     private readonly ColumnDefinition _barDone = new(), _barRest = new();
-    private readonly WrapPanel _pickedValues = new(), _suggest = new(), _statusPlaces = new(), _statusParts = new(), _statusFlags = new();
+    private readonly WrapPanel _pickedValues = new(), _statusPlaces = new(), _statusParts = new(), _statusFlags = new();
     private readonly StackPanel _placeRows = new(), _partRows = new();
     private readonly ScrollViewer _placeScroll;
-    private readonly Button _undo, _confirm, _clear, _sameType, _unpick, _auto, _refill;
-    private readonly TextBox _newPlace, _newPart;
+    private readonly Button _undo, _confirm, _clear, _sameType, _unpick, _auto, _refill, _putPlace, _noPlace, _next, _back, _finish, _hide, _showAll;
+    private readonly TextBox _newPart;
+    private readonly ComboBox _place;
     private readonly ToggleButton _editPlaces, _editParts, _onlyRemaining;
     private readonly ComboBox _structure;
+    private readonly (Border pill, TextBlock text)[] _steps = new (Border, TextBlock)[3];
     private string _countsText = "", _pickedText = "";
     private (string kind, string name)? _asking;       // ✕ 를 눌러 지울지 묻고 있는 줄(쓰는 부재가 있는 이름)
-    private bool _keepAsking, _busy, _syncing;
+    private bool _keepAsking, _busy, _syncing, _nextArmed, _keepArmed;
+    private FrameworkElement? _partsBlock;             // 왼쪽 판의 부위 칸(중분류를 지울지 묻는 동안 그 높이를 붙잡는다)
+    private double _partsHold;                         // 묻는 동안 붙잡은 부위 칸의 높이(0 = 붙잡지 않음)
 
     public FrameworkElement Root { get; }
     public Brush Background => _ui["Bg"];
     public Model3DView View3D => _view3d;
 
+    /// <summary>지금 걸음: 0 = ① 부위 · 중분류 · 1 = ② 거푸집면 설정.</summary>
+    public int Step { get; private set; }
+
     /// <summary>[닫기] · [처음 상태로 되돌리고 닫기].</summary>
     public event Action? Close, RevertAll;
+
+    /// <summary>[다음 단계] — 부르는 쪽이 거푸집을 재어 ShowFormwork 로 넘긴다(남은 부재가 있으면 한 번 더 눌러야 온다).</summary>
+    public event Action? Next;
 
     /// <param name="meshes">부재의 겉면 — editor.Members 와 같은 차례.</param>
     /// <param name="notice">창 머리에 알릴 것(읽지 못한 부재 · 저장된 목록을 읽지 못함 등).</param>
@@ -62,6 +78,7 @@ public sealed class PlacePartView
     {
         _editor = editor;
         _members = editor.Members;
+        _memberMeshes = meshes;
         _ui = new UiTheme(dark);
         _text = _ui["Text"];
         _sub = _ui["Sub"];
@@ -81,21 +98,17 @@ public sealed class PlacePartView
         TextOptions.SetTextFormattingMode(root, TextFormattingMode.Display);
         Root = root;
 
-        // ── 머리: 제목 · 쓰는 법 …… 남은 부재(진행) ──
+        // ── 머리: 제목 · 걸음 …… 남은 부재(진행 — ① 에서만) ──
         _remain = new TextBlock { FontSize = 15, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
         _total = new TextBlock { FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = _ui["NeutralFg"] };
         var head = new DockPanel { Margin = new Thickness(2, 0, 0, 12) };
-        var progress = BuildProgress();
-        DockPanel.SetDock(progress, Dock.Right);
-        head.Children.Add(progress);
-        var title = new TextBlock { Text = "위치·부위 정하기", FontSize = 18, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 16, 0) };
+        _progress = BuildProgress();
+        DockPanel.SetDock(_progress, Dock.Right);
+        head.Children.Add(_progress);
+        var title = new TextBlock { Text = "수량산출", FontSize = 18, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 18, 0) };
         DockPanel.SetDock(title, Dock.Left);
         head.Children.Add(title);
-        head.Children.Add(new TextBlock
-        {
-            Text = "그림에서 부재를 고르고 → 왼쪽에서 위치와 부위를 누르면 바로 모델에 적힙니다. 회색 부재가 없을 때까지 하면 됩니다.",
-            Foreground = _sub, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 2, 16, 0),
-        });
+        head.Children.Add(BuildSteps());
         DockPanel.SetDock(head, Dock.Top);
         dock.Children.Add(head);
 
@@ -110,49 +123,71 @@ public sealed class PlacePartView
             dock.Children.Add(box);
         }
 
-        // ── 아래: 한 줄 알림 · 단추 ──
+        // ── 아래: 한 줄 알림 · 단추(걸음마다 바뀐다) ──
+        //   ① [되돌리기] [처음 상태로 되돌리고 닫기] [닫기] [다음 단계 →]
+        //   ② [← 이전 단계] ……………………… [처음 상태로 되돌리고 닫기] [닫기] [완료]
         var foot = new DockPanel { Margin = new Thickness(2, 12, 0, 0), LastChildFill = true };
-        var close = _ui.Button("닫기", "BtnPrimary", "넣은 값은 이미 모델에 적혀 있습니다. 창만 닫습니다.", "btn.close");
+        Button FootButton(Button button, double right = 8)
+        {
+            button.MinHeight = 34;
+            button.Margin = new Thickness(0, 0, right, 0);
+            return button;
+        }
+        _next = FootButton(_ui.Button("다음 단계  →", "BtnPrimary", "거푸집면 설정으로 넘어갑니다(넣은 값은 이미 모델에 적혀 있습니다).", "btn.nextStep"), 0);
+        _finish = FootButton(_ui.Button("완료", "BtnPrimary", "산출식을 채우고 거푸집 속성을 적은 뒤 산출근거 엑셀을 저장합니다.", "btn.finish", UiTheme.IconCheck), 0);
+        foreach (var primary in new[] { _next, _finish })
+        {
+            primary.MinWidth = 120;
+            primary.FontWeight = FontWeights.SemiBold;
+        }
+        var close = FootButton(_ui.Button("닫기", "BtnSecondary", "넣은 값은 이미 모델에 적혀 있습니다. 창만 닫습니다.", "btn.close"));
         close.MinWidth = 96;
-        close.MinHeight = 34;
-        close.FontWeight = FontWeights.SemiBold;
-        var revert = _ui.Button("처음 상태로 되돌리고 닫기", "BtnSecondary", "이 창을 연 뒤에 넣은 것을 모두 없던 일로 하고 닫습니다.", "btn.revert");
-        revert.MinHeight = 34;
-        revert.Margin = new Thickness(0, 0, 8, 0);
-        _undo = _ui.Button("되돌리기", "BtnSecondary", "방금 한 일을 되돌립니다(Ctrl+Z).", "btn.undo", UiTheme.IconUndo);
-        _undo.MinHeight = 34;
-        _undo.Margin = new Thickness(0, 0, 8, 0);
+        var revert = FootButton(_ui.Button("처음 상태로 되돌리고 닫기", "BtnSecondary", "이 창을 연 뒤에 넣거나 고친 것을 모두 없던 일로 하고 닫습니다.", "btn.revert"));
+        _undo = FootButton(_ui.Button("되돌리기", "BtnSecondary", "방금 한 일을 되돌립니다(Ctrl+Z).", "btn.undo", UiTheme.IconUndo));
+        _back = FootButton(_ui.Button("←  이전 단계", "BtnSecondary", "부위 · 중분류로 돌아갑니다(거푸집에서 고친 것은 그대로 남습니다).", "btn.prevStep"), 14);
         close.Click += (_, _) => Close?.Invoke();
         revert.Click += (_, _) => RevertAll?.Invoke();
         _undo.Click += (_, _) => Do(_editor.Undo);
-        DockPanel.SetDock(close, Dock.Right);
-        DockPanel.SetDock(revert, Dock.Right);
-        DockPanel.SetDock(_undo, Dock.Right);
-        foot.Children.Add(close);
-        foot.Children.Add(revert);
-        foot.Children.Add(_undo);
+        _next.Click += (_, _) => PressNext();
+        _back.Click += (_, _) =>
+        {
+            if (Busy) return;
+            ShowPlaces();
+            Back?.Invoke();
+        };
+        _finish.Click += (_, _) => { if (!Busy) Finish?.Invoke(); };
+        foreach (var button in new[] { _next, _finish, close, revert, _undo })
+        {
+            DockPanel.SetDock(button, Dock.Right);
+            foot.Children.Add(button);
+        }
+        DockPanel.SetDock(_back, Dock.Left);
+        foot.Children.Add(_back);
         _status = new TextBlock { Foreground = _sub, FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 0) };
         foot.Children.Add(_status);
         DockPanel.SetDock(foot, Dock.Bottom);
         dock.Children.Add(foot);
 
-        // ── 왼쪽: 고른 부재에 넣기(구조물 · ① 위치 · ② 부위) ──
-        _sideHint = new TextBlock { FontSize = 12, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
-        _structure = _ui.Combo("구조물을 고르면 그 구조물에서 자주 쓰는 위치(추천)와 부위(대표 목록)가 나옵니다. 부재에 넣은 값은 바뀌지 않습니다.", "combo.structure");
-        _newPlace = _ui.Input("새 위치 이름 (예: 수조부 · 배관실)", "새 위치 이름(예: 수조부 · 배관실 · 밸브실). 부재를 골라 둔 채로 적으면 바로 그 부재에 들어갑니다.", "input.newPlace");
+        // ── 왼쪽: 구조물 종류 · 부위 · 중분류 카테고리(② 에서는 거푸집 대응표로 바뀐다) ──
+        _structure = _ui.Combo("구조물을 고르면 그 구조물의 대표 부위와 중분류 추천이 나옵니다. 부재에 넣은 값은 바뀌지 않습니다.", "combo.structure");
+        _place = _ui.ComboEdit("이름을 적거나 목록에서 고르기", "고른 부재의 중분류(예: 수조부 · 배관실). 목록에서 고르면 바로 들어가고, 새 이름은 적은 뒤 [넣기](Enter).", "combo.place");
+        _putPlace = _ui.Button("넣기", "BtnSoft", "적은 이름을 고른 부재에 넣습니다(고른 부재가 없으면 목록에만 보탭니다).", "btn.putPlace", UiTheme.IconAdd);
+        _noPlaceLabel = new TextBlock { Text = ZonePlan.NoPlaceLabel, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
+        _noPlace = NoPlaceButton();
         _newPart = _ui.Input("새 부위 이름 (목록에 없는 것)", "목록에 없는 부위 이름(예: 도류벽 · 관받침). 부재를 골라 둔 채로 적으면 바로 그 부재에 들어갑니다.", "input.newPart");
-        _editPlaces = _ui.Toggle("목록 고치기", "위치의 이름을 바꾸거나 차례를 옮기거나 지웁니다(✕). 차례가 산출서와 색의 차례입니다.", "toggle.editPlaces", UiTheme.IconEdit);
-        _editParts = _ui.Toggle("목록 고치기", "부위의 이름 · 차례를 고치거나 지웁니다(✕). 산출서를 적는 방식('무근' · '위치 생략')도 여기서 고칩니다.", "toggle.editParts", UiTheme.IconEdit);
+        _editPlaces = _ui.Toggle("목록 고치기", "중분류의 이름을 바꾸거나 차례를 옮기거나 지웁니다(✕). 차례가 산출서와 색의 차례입니다.", "toggle.editPlaces", UiTheme.IconEdit);
+        _editParts = _ui.Toggle("목록 고치기", "부위의 이름 · 차례를 고치거나 지웁니다(✕). 산출서를 적는 방식('무근' · '중분류 생략')도 여기서 고칩니다.", "toggle.editParts", UiTheme.IconEdit);
         _auto = _ui.Button("자동 채우기", "BtnSoft", "고른 부재 가운데 부위가 빈 것에, 종류에 따른 이름(벽 → 벽체 · 기둥 → 기둥 · 바닥 → 슬래브 …)을 넣습니다.", "btn.auto");
         _refill = _ui.Button("대표 목록 다시 채우기", "BtnGhost", "지운 대표 부위를 다시 불러옵니다(지금 구조물의 대표 목록에서 빠진 이름만 더합니다).", "btn.refill");
-        _placeScroll = new ScrollViewer { Content = _placeRows, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
-        var side = new Border
+        _placeScroll = new ScrollViewer { Content = _placeRows, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, MaxHeight = 190 };
+        _placeSide = BuildSide();
+        _side = new Border
         {
             Width = SideWidth, Background = _ui["Card"], BorderBrush = _line, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10),
-            Margin = new Thickness(0, 0, 12, 0), Padding = new Thickness(16, 12, 6, 12), Child = BuildSide(),
+            Margin = new Thickness(0, 0, 12, 0), Padding = new Thickness(16, 12, 6, 12), Child = _placeSide,
         };
-        DockPanel.SetDock(side, Dock.Left);
-        dock.Children.Add(side);
+        DockPanel.SetDock(_side, Dock.Left);
+        dock.Children.Add(_side);
 
         // ── 오른쪽: 고른 부재(위) · 도구 줄 · 3D 그림 · 지금 적용 상태(아래) ──
         _view3d = new Model3DView(meshes, dark)
@@ -165,22 +200,28 @@ public sealed class PlacePartView
         _pickedHint = new TextBlock { Foreground = _sub, FontSize = 12.5, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
         _unpick = Small("선택 풀기", "고른 것을 모두 풉니다(Esc).", "btn.unpick");
         _sameType = Small("같은 유형 모두", "고른 부재와 종류·유형이 같은 부재를 모두 고릅니다(보이는 것 가운데).", "btn.sameType");
-        _clear = Small("값 지우기", "고른 부재의 위치와 부위를 지워 '아직'으로 되돌립니다.", "btn.clear");
+        _clear = Small("값 지우기", "고른 부재의 부위와 중분류를 지워 '아직'으로 되돌립니다.", "btn.clear");
         _confirm = Small("이 값 그대로 확인", "고른 부재에 들어 있는 값(창 밖에서 들어온 값 — 복사한 부재 · 속성 창에서 넣은 값)을 그대로 맞다고 확인합니다. 값을 새로 넣은 칸은 따로 확인하지 않아도 됩니다.", "btn.confirm", "BtnPrimary");
         _onlyRemaining = _ui.Toggle("남은 것만 보기", "끝난 부재를 숨기고 남은 부재만 봅니다 — 바깥부터 정해 가면 안쪽이 드러납니다.", "toggle.onlyRemaining");
         _counts = new TextBlock { Foreground = _sub, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0) };
         _countNotes = new TextBlock { Foreground = _sub, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0), LineHeight = 17, Visibility = Visibility.Collapsed };
 
+        _hide = Small("숨기기", "고른 부재를 잠깐 숨깁니다 — 지붕이나 외벽을 치우고 안쪽을 볼 때.", "btn.hide");
+        _showAll = Small("모두 보이기", "숨긴 부재를 다시 보이고 '남은 것만 보기'도 끕니다.", "btn.showAll");
+
+        // 그림 위 · 아래의 띠는 걸음마다 바꿔 끼운다(① 고른 부재 · 지금 적용 상태 ↔ ② 거푸집 합계 · 색 풀이). 그림과 도구 줄은 그대로다.
         var right = new DockPanel();
-        var picked = BuildPicked();
-        DockPanel.SetDock(picked, Dock.Top);
-        right.Children.Add(picked);
+        _pickedBand = BuildPicked();
+        _top = new Border { Child = _pickedBand };
+        DockPanel.SetDock(_top, Dock.Top);
+        right.Children.Add(_top);
         var tools = BuildTools();
         DockPanel.SetDock(tools, Dock.Top);
         right.Children.Add(tools);
-        var state = BuildState();
-        DockPanel.SetDock(state, Dock.Bottom);
-        right.Children.Add(state);
+        _stateBand = BuildState();
+        _bottom = new Border { Child = _stateBand };
+        DockPanel.SetDock(_bottom, Dock.Bottom);
+        right.Children.Add(_bottom);
 
         // 마우스 밑의 부재: 그림의 왼쪽 아래에 뜨는 딱지(그림을 가리지 않게 마우스는 받지 않는다).
         _hover = new TextBlock { FontSize = 12.5, TextTrimming = TextTrimming.CharacterEllipsis, Text = " " };
@@ -210,23 +251,26 @@ public sealed class PlacePartView
 
         _view3d.Clicked += (index, ctrl) =>
         {
+            if (Step == 1) { ClickFormwork(index); return; }
             if (index < 0) return;                       // 빈 곳을 찍으면 그대로 둔다(Esc · [선택 풀기]로 푼다)
             _editor.Click(_members[index].Id, ctrl);
             RefreshAll();
         };
         _view3d.Banded += (indices, ctrl) =>
         {
+            if (Step == 1) return;                       // ② 에서는 끌어 고르지 않는다(BandSelect 를 끈다 — 여기는 혹시 모를 때)
             _editor.Band(indices.Select(i => _members[i].Id), ctrl);
             RefreshAll();
         };
         _view3d.Hovered += index =>
         {
-            _hover.Text = index < 0 ? " " : Describe(_members[index]);
-            _hoverPill.Visibility = index < 0 ? Visibility.Collapsed : Visibility.Visible;
+            _hover.Text = index < 0 ? " " : Step == 1 ? DescribeFormwork(index) : Describe(_members[index]);
+            _hoverPill.Visibility = index < 0 || _hover.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
         };
         _view3d.Failed += ex => ShowMessage("3D 그림에서 오류가 났습니다(끌던 것은 그만두었습니다): " + ex.Message, true);
 
         root.PreviewKeyDown += OnKey;
+        ShowStep();
         RefreshAll();
     }
 
@@ -234,11 +278,94 @@ public sealed class PlacePartView
     private void OnKey(object sender, KeyEventArgs e)
     {
         if (e.Handled) return;
-        if (_busy) { e.Handled = true; return; }     // 모델에 적는 중에는 글자판도 받지 않는다
+        if (Busy) { e.Handled = true; return; }     // 모델에 적는 중에는 글자판도 받지 않는다
         if (e.OriginalSource is TextBox) return;     // 이름을 적는 중에는 글자판을 가로채지 않는다
         if (e.Key == Key.Escape && InOpenList(e.OriginalSource)) return;     // 펼친 목록(층 · 구조물)에서 Esc 는 그 목록을 닫는다 — 고른 부재는 그대로
+        if (Step == 1)
+        {
+            // ② : Esc = 고른 줄 풀기. 되돌리기는 없다(종류는 콤보에서 다시 고른다).
+            if (e.Key == Key.Escape) { _view3d.CancelDrag(); PickRow(null); e.Handled = true; }
+            return;
+        }
         if (e.Key == Key.Escape) { _view3d.CancelDrag(); _editor.ClearSelection(); RefreshAll(); e.Handled = true; }
         else if (e.Key == Key.Z && (Keyboard.Modifiers & ModifierKeys.Control) != 0) { Do(_editor.Undo); e.Handled = true; }
+    }
+
+    // ── 걸음 ─────────────────────────────────────────────────────────────────────
+
+    // 걸음 표시: ① 부위 · 중분류 › ② 거푸집면 설정 › 완료 — 지금 걸음만 강조색 딱지.
+    private FrameworkElement BuildSteps()
+    {
+        var line = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        string[] names = { "① 부위 · 중분류", "② 거푸집면 설정", "완료" };
+        for (int i = 0; i < names.Length; i++)
+        {
+            if (i > 0) line.Children.Add(new TextBlock { Text = "›", Foreground = _sub, FontSize = 14, Margin = new Thickness(7, 0, 7, 2), VerticalAlignment = VerticalAlignment.Center });
+            var text = new TextBlock { Text = names[i], FontSize = 12.5 };
+            var pill = _ui.Pill(text, "None");
+            _steps[i] = (pill, text);
+            line.Children.Add(pill);
+        }
+        return line;
+    }
+
+    // 걸음에 맞게 머리 · 아래 단추 · 도구 줄을 맞춘다(왼쪽 판과 그림 위아래 띠는 ShowFormwork · ShowPlaces 가 바꿔 끼운다).
+    private void ShowStep()
+    {
+        for (int i = 0; i < _steps.Length; i++)
+        {
+            bool on = i == Step;
+            _steps[i].pill.Background = _ui[on ? "AccentSoft" : "None"];
+            _steps[i].text.Foreground = on ? _ui["AccentText"] : _sub;
+            _steps[i].text.FontWeight = on ? FontWeights.SemiBold : FontWeights.Normal;
+        }
+        bool places = Step == 0;
+        Visibility Show(bool on) => on ? Visibility.Visible : Visibility.Collapsed;
+        _progress.Visibility = Show(places);
+        _next.Visibility = _undo.Visibility = Show(places);
+        _finish.Visibility = _back.Visibility = Show(!places);
+        // ② 에는 고른 부재가 없다: 숨기기 · 남은 것만 보기는 ① 에서만(① 에서 숨긴 부재는 ② 에서도 숨긴 채다). 종류 · 층은 둘 다.
+        _hide.Visibility = _showAll.Visibility = _onlyRemaining.Visibility = Show(places);
+        _view3d.BandSelect = places;
+        _nextArmed = false;
+    }
+
+    // [다음 단계]: 남은 부재가 있으면 한 번은 알리고 멈춘다(그래도 넘어가려면 한 번 더) — 거푸집은 부위와 상관없이 셀 수 있지만,
+    // 산출서의 제목이 '구역 미지정' · 자동 이름으로 나가므로 모르고 넘어가지 않게.
+    private void PressNext()
+    {
+        if (Busy) return;
+        int remaining = _editor.Progress().Remaining;
+        if (remaining > 0 && !_nextArmed)
+        {
+            _nextArmed = _keepArmed = true;
+            RefreshAll();
+            ShowMessage($"남은 부재가 {remaining}개 있습니다 — 그래도 넘어가려면 [다음 단계]를 한 번 더 누르세요.", true);
+            return;
+        }
+        _nextArmed = false;
+        Next?.Invoke();
+    }
+
+    /// <summary>
+    /// 모델을 읽는 긴 일(거푸집을 재는 것 등) 하나: 창을 잠그고 기다림 커서를 띄운다. 오류는 받아 그 글을 돌려준다("" = 됨).
+    /// 화면은 다시 맞추지 않는다(부르는 쪽이 이어서 걸음을 바꾼다).
+    /// </summary>
+    public string RunLocked(Action work)
+    {
+        if (_busy) return "다른 일을 하는 중입니다.";
+        _busy = true;
+        var before = Mouse.OverrideCursor;
+        Mouse.OverrideCursor = Cursors.Wait;
+        Root.IsHitTestVisible = false;
+        try { work(); return ""; }
+        catch (Exception ex) { return ex.Message; }
+        finally
+        {
+            Root.IsHitTestVisible = true;
+            Mouse.OverrideCursor = before;
+            _busy = false;
+        }
     }
 
     // 글쇠가 펼쳐져 있는 '고르는 칸'(이나 그 안의 줄)에서 왔는가.
@@ -263,7 +390,7 @@ public sealed class PlacePartView
         double minWidth = Math.Min(1180, area.Width), minHeight = Math.Min(800, area.Height);
         var window = new Window
         {
-            Title = "DH 수량산출 — 위치·부위 정하기",
+            Title = "DH 수량산출",
             Content = Root,
             Background = Background,
             Width = Math.Clamp(area.Width - 60, minWidth, 1500), Height = Math.Clamp(area.Height - 40, minHeight, 960),
@@ -356,25 +483,19 @@ public sealed class PlacePartView
 
     // ── 왼쪽 판 ──────────────────────────────────────────────────────────────────
 
+    // 왼쪽 판(① 걸음): 구조물 종류 → 부위(남는 자리 전부) → 중분류 카테고리(입력칸 · [넣기] · [단독객체]).
     private FrameworkElement BuildSide()
     {
         var grid = new Grid { Margin = new Thickness(0, 0, 10, 0) };
-        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });                       // 제목 · 구조물
-        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });                       // ① 위치(줄 수만큼 — 많으면 그 안에서 굴린다)
-        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star), MinHeight = PartsMinHeight });   // ② 부위(남는 자리 전부)
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });                       // 구조물 종류
+        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star), MinHeight = PartsMinHeight });   // 부위(남는 자리 전부)
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });                       // 중분류 카테고리(고치는 중이면 줄 수만큼 — 많으면 그 안에서 굴린다)
 
-        // 제목 · 구조물
+        // 구조물 종류
         var top = new StackPanel();
-        var name = new DockPanel();
-        var caption = new TextBlock { Text = "고른 부재에 넣기", FontSize = 14.5, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) };
-        DockPanel.SetDock(caption, Dock.Left);
-        name.Children.Add(caption);
-        name.Children.Add(_sideHint);
-        top.Children.Add(name);
-        var structure = new DockPanel { Margin = new Thickness(0, 10, 0, 0) };
-        var label = Caption("구조물");
-        DockPanel.SetDock(label, Dock.Left);
-        structure.Children.Add(label);
+        var caption = new TextBlock { Text = "구조물 종류", FontSize = 13.5, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 2, 0, 7) };
+        top.Children.Add(caption);
+        var structure = new DockPanel();
         foreach (var s in PartCatalog.Structures) _structure.Items.Add(s.Name);
         _structure.SelectedItem = _editor.Structure;
         _structure.SelectionChanged += (_, _) =>
@@ -393,36 +514,12 @@ public sealed class PlacePartView
         Grid.SetRow(top, 0);
         grid.Children.Add(top);
 
-        // ① 위치
-        var places = new DockPanel { Margin = new Thickness(0, 12, 0, 0) };
-        var rule1 = Rule();
-        DockPanel.SetDock(rule1, Dock.Top);
-        places.Children.Add(rule1);
-        var placeHead = HeadLine("① 위치", "구조물 안의 어느 칸인가", _editPlaces);
-        DockPanel.SetDock(placeHead, Dock.Top);
-        places.Children.Add(placeHead);
-        var addPlace = AddLine(_newPlace, "btn.addPlace", () =>
-        {
-            string text = _newPlace.Text;
-            // 부재를 골라 둔 채로 새 이름을 넣으면 바로 그 부재에 들어간다(이름을 적고 다시 단추를 누르는 한 걸음을 줄인다).
-            if (Do(() => _editor.Selection.Count > 0 ? _editor.SetPlace(text) : _editor.AddPlace(text))) _newPlace.Text = "";
-        });
-        DockPanel.SetDock(addPlace, Dock.Bottom);
-        places.Children.Add(addPlace);
-        _suggest.Margin = new Thickness(0, 4, 0, 0);
-        DockPanel.SetDock(_suggest, Dock.Bottom);
-        places.Children.Add(_suggest);
-        places.Children.Add(_placeScroll);
-        _editPlaces.Click += (_, _) => RefreshAll();
-        Grid.SetRow(places, 1);
-        grid.Children.Add(places);
-
-        // ② 부위
+        // 부위
         var parts = new DockPanel { Margin = new Thickness(0, 12, 0, 0) };
         var rule2 = Rule();
         DockPanel.SetDock(rule2, Dock.Top);
         parts.Children.Add(rule2);
-        var partHead = HeadLine("② 부위", "무슨 부분인가", _editParts, _auto);
+        var partHead = HeadLine("부위", "", _editParts, _auto);
         DockPanel.SetDock(partHead, Dock.Top);
         parts.Children.Add(partHead);
         var addPart = AddLine(_newPart, "btn.addPart", () =>
@@ -443,18 +540,106 @@ public sealed class PlacePartView
         _auto.Click += (_, _) => Do(_editor.FillAutoPart);
         parts.Children.Add(new ScrollViewer { Content = _partRows, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
         _editParts.Click += (_, _) => RefreshAll();
-        Grid.SetRow(parts, 2);
+        Grid.SetRow(parts, 1);
         grid.Children.Add(parts);
 
-        // 창이 낮아 판에 다 들어가지 않으면(작은 화면 · 큰 배율) 판 전체를 굴린다 — 아래쪽 [추가] 줄이 잘려 안 보이는 일이 없게.
-        // 판의 높이 = 보이는 높이와 «위의 두 칸(제목 · 위치) + 부위 칸의 가장 작은 높이» 가운데 큰 쪽. 위치 칸은 줄 수 · 추천 · 고치는 중에 따라
-        // 키가 달라지므로 그때마다 다시 잰다(정해 둔 한 값으로는 위치를 고치는 중에 부위 칸의 아래가 잘릴 수 있었다 — 검토 R26).
+        // 중분류 카테고리: [이름 칸 ▾][넣기] · [단독객체]. 고치는 중이면 그 위에 이름 · 차례 · 지우기 줄(색 = 3D 의 색).
+        var places = new StackPanel { Margin = new Thickness(0, 12, 0, 0) };
+        places.Children.Add(Rule());
+        places.Children.Add(HeadLine("중분류 카테고리", "", _editPlaces));
+        places.Children.Add(_placeScroll);
+        var put = new DockPanel { Margin = new Thickness(0, 2, 0, 0) };
+        _putPlace.Margin = new Thickness(6, 0, 0, 0);
+        _putPlace.Click += (_, _) => PutPlace(_place.Text);
+        DockPanel.SetDock(_putPlace, Dock.Right);
+        put.Children.Add(_putPlace);
+        put.Children.Add(_place);
+        places.Children.Add(put);
+        places.Children.Add(_noPlace);
+        WirePlaceBox();
+        _editPlaces.Click += (_, _) => RefreshAll();
+        Grid.SetRow(places, 2);
+        grid.Children.Add(places);
+
+        // 창이 낮아 판에 다 들어가지 않으면(작은 화면 · 큰 배율) 판 전체를 굴린다 — 아래쪽 줄이 잘려 안 보이는 일이 없게.
+        // 판의 높이 = 보이는 높이와 «구조물 종류 + 중분류 칸 + 부위 칸의 가장 작은 높이» 가운데 큰 쪽. 중분류 칸은 고치는 중에 따라
+        // 키가 달라지므로 그때마다 다시 잰다(정해 둔 한 값으로는 고치는 중에 부위 칸의 아래가 잘릴 수 있었다 — 검토 R26).
+        // 중분류를 지울지 묻는 동안에는 부위 칸의 높이를 붙잡는다: 중분류 칸은 판의 맨 아래라, 묻는 줄이 커지는 만큼 부위 칸이 줄면
+        // 묻는 줄이 ✕ 를 누른 자리에서 위로 밀려 뜬다(2026-10-15 시험이 60px 로 잼) — 붙잡으면 판이 아래로 늘어나 그 자리에 뜬다.
+        _partsBlock = parts;
         var scroller = new ScrollViewer { Content = grid, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Focusable = false };
-        void Fit() => grid.Height = Math.Max(scroller.ActualHeight, top.ActualHeight + places.ActualHeight + places.Margin.Top + PartsMinHeight);
+        void Fit() => grid.Height = Math.Max(scroller.ActualHeight, top.ActualHeight + parts.Margin.Top + places.ActualHeight + places.Margin.Top + Math.Max(PartsMinHeight, _partsHold));
         scroller.SizeChanged += (_, _) => Fit();
         top.SizeChanged += (_, _) => Fit();
         places.SizeChanged += (_, _) => Fit();
         return scroller;
+    }
+
+    // [단독객체]: 어느 중분류에도 속하지 않는 것으로 정하는 단추(아직 안 정한 것과 다르다) — 고른 부재가 모두 그렇게 정해져 있으면 켜져 보인다.
+    private Button NoPlaceButton()
+    {
+        var content = new DockPanel { LastChildFill = true };
+        var chip = Swatch(ZonePalette.NoPlace.r, ZonePalette.NoPlace.g, ZonePalette.NoPlace.b, 7);
+        DockPanel.SetDock(chip, Dock.Left);
+        content.Children.Add(chip);
+        content.Children.Add(_noPlaceLabel);
+        var button = new Button { Style = _ui.StyleOf("BtnPick"), Content = content, Tag = "", Margin = new Thickness(0, 6, 0, 2), HorizontalAlignment = HorizontalAlignment.Left, MinWidth = 132 };
+        _ui.Mark(button, "", "btn.noPlace");
+        button.Click += (_, _) => Do(_editor.SetNoPlace);
+        return button;
+    }
+
+    // 중분류 입력칸: 누르면 목록이 펼쳐진다(이미 만든 이름 · 추천 이름). 목록에서 고르면 바로 넣고, 적은 이름은 Enter · [넣기].
+    private void WirePlaceBox()
+    {
+        _place.MaxDropDownHeight = 300;
+        // Enter = 넣기. 펼친 목록에서 화살표로 고른 줄은 이미 글 칸에 들어 있다(적는 칸이 있는 고르는 칸) — 닫고 그 이름을 넣는다.
+        // 목록이 펼쳐져 있으면 WPF 의 고르는 칸이 Enter 를 먼저 '처리함'으로 가져가(고른 줄을 굳히고 닫는다) 보통으로 걸면 불리지 않는다
+        // (2026-10-15 진짜 신호 시험) — 처리된 것도 듣게 건다. 닫는 것은 그쪽이 이미 했다.
+        _place.AddHandler(Keyboard.PreviewKeyDownEvent, new KeyEventHandler((_, e) =>
+        {
+            if (e.Key != Key.Enter) return;
+            if (_place.IsDropDownOpen) _place.IsDropDownOpen = false;
+            e.Handled = true;
+            PutPlace(_place.Text);
+        }), handledEventsToo: true);
+        // 글 칸을 누르면 펼친다(꺾쇠를 누를 때는 그 단추가 스스로 펼치고 닫는다 — 여기서 또 펼치면 바로 닫힌다).
+        // WPF 의 고르는 칸은 글자판이 없을 때 글 칸을 누르면 그 누름을 '처리함'으로 막고 글자판만 가져간다 — 처리된 누름도 듣게 건다
+        // (보통으로 걸면 처리기가 아예 불리지 않는다: 2026-10-15 계측 — 창에는 누름이 왔는데 칸의 처리기는 0번).
+        // 펼친 채 글 칸을 다시 눌러도 닫지 않는다(StaysOpenOnEdit) — 적던 이름을 고치려고 누르는 것이다.
+        _place.StaysOpenOnEdit = true;
+        _place.AddHandler(Mouse.PreviewMouseDownEvent, new MouseButtonEventHandler((_, e) =>
+        {
+            if (e.ChangedButton != MouseButton.Left || Busy || _place.IsDropDownOpen || _place.Items.Count == 0) return;
+            if (_place.Template?.FindName("PART_EditableTextBox", _place) is not TextBox box || !Within(e.OriginalSource as DependencyObject, box)) return;
+            _place.IsDropDownOpen = true;
+        }), handledEventsToo: true);
+        // 닫혀 있는 칸 위에서 굴려도 고른 줄이 바뀌지 않고 판이 굴러간다(판을 굴리던 손이 칸 위를 지날 때).
+        _place.PreviewMouseWheel += (_, e) => PassWheel(_place, e);
+    }
+
+    private static bool Within(DependencyObject? node, DependencyObject ancestor)
+    {
+        for (var at = node; at != null; at = at is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(at) : LogicalTreeHelper.GetParent(at))
+            if (ReferenceEquals(at, ancestor)) return true;
+        return false;
+    }
+
+    // 중분류 넣기: 부재를 골라 두었거나 목록에 있는 이름이면 고른 부재에 넣는다(고른 것이 없으면 '먼저 고르세요'를 알린다).
+    // 고른 것이 없고 새 이름이면 목록에만 보탠다. 들어가면 칸을 비운다(안 되면 적은 이름을 그대로 둔다).
+    private void PutPlace(string text)
+    {
+        string name = ZonePlan.CleanName(text);
+        bool known = _editor.Places.Any(p => p.Name == name);
+        if (Do(() => _editor.Selection.Count > 0 || known ? _editor.SetPlace(name) : _editor.AddPlace(name))) SetPlaceText("");
+    }
+
+    private void SetPlaceText(string text)
+    {
+        _syncing = true;
+        _place.SelectedIndex = -1;
+        _place.Text = text;
+        _syncing = false;
     }
 
     // 그림 위의 도구 줄: 볼 종류 · 볼 층 · 숨기기 · 남은 것만.
@@ -491,12 +676,10 @@ public sealed class PlacePartView
         tools.Children.Add(Caption("층", 16));
         tools.Children.Add(floors);
 
-        var hide = Small("숨기기", "고른 부재를 잠깐 숨깁니다 — 지붕이나 외벽을 치우고 안쪽을 볼 때.", "btn.hide");
-        var show = Small("모두 보이기", "숨긴 부재를 다시 보입니다.", "btn.showAll");
-        hide.Click += (_, _) => { _editor.HideSelection(); RefreshAll(); };
-        show.Click += (_, _) => { _editor.ShowAll(); RefreshAll(); };
-        tools.Children.Add(hide);
-        tools.Children.Add(show);
+        _hide.Click += (_, _) => { _editor.HideSelection(); RefreshAll(); };
+        _showAll.Click += (_, _) => { _editor.ShowAll(); RefreshAll(); };
+        tools.Children.Add(_hide);
+        tools.Children.Add(_showAll);
         _onlyRemaining.IsChecked = _editor.OnlyRemaining;
         _onlyRemaining.Click += (_, _) => { _editor.SetOnlyRemaining(_onlyRemaining.IsChecked == true); RefreshAll(); };
         tools.Children.Add(_onlyRemaining);
@@ -554,7 +737,7 @@ public sealed class PlacePartView
         FrameworkElement Line(string name, WrapPanel chips, string tip)
         {
             var line = new DockPanel { Margin = new Thickness(0, 5, 0, 0) };
-            var label = new TextBlock { Text = name, Foreground = _sub, FontSize = 12, Width = 34, Margin = new Thickness(0, 4, 0, 0), VerticalAlignment = VerticalAlignment.Top };
+            var label = new TextBlock { Text = name, Foreground = _sub, FontSize = 12, Width = 46, Margin = new Thickness(0, 4, 0, 0), VerticalAlignment = VerticalAlignment.Top };
             _ui.Tip(label, tip);
             DockPanel.SetDock(label, Dock.Left);
             line.Children.Add(label);
@@ -562,9 +745,9 @@ public sealed class PlacePartView
             return line;
         }
         var lines = new StackPanel();
-        lines.Children.Add(Line("위치", _statusPlaces, "위치마다 그림의 색과 부재 수 — 딱지를 누르면 그 위치인 부재를 고릅니다."));
+        lines.Children.Add(Line("중분류", _statusPlaces, "중분류마다 그림의 색과 부재 수 — 딱지를 누르면 그 중분류인 부재를 고릅니다."));
         lines.Children.Add(Line("부위", _statusParts, "부위마다 부재 수 — 딱지를 누르면 그 부위인 부재를 고릅니다."));
-        // 위치 · 부위가 많으면 띠가 그림을 밀어내지 않게 세 줄쯤에서 굴린다.
+        // 중분류 · 부위가 많으면 띠가 그림을 밀어내지 않게 세 줄쯤에서 굴린다.
         box.Children.Add(new ScrollViewer { Content = lines, MaxHeight = 88, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Focusable = false });
 
         var foot = new DockPanel { Margin = new Thickness(0, 6, 0, 0) };
@@ -580,7 +763,7 @@ public sealed class PlacePartView
         }
         var first = ZonePalette.Of(0);
         var pale = ZonePalette.Pale(first);
-        Item(Swatch(first.r, first.g, first.b), "진한 색 = 위치·부위 다 넣음");
+        Item(Swatch(first.r, first.g, first.b), "진한 색 = 부위·중분류 다 넣음");
         Item(Swatch(pale.r, pale.g, pale.b), "옅은 색 = 하나만 넣었거나 확인 필요");
         Item(Swatch(ZonePalette.PartOnly.r, ZonePalette.PartOnly.g, ZonePalette.PartOnly.b), "부위만");
         Item(new Border
@@ -602,19 +785,17 @@ public sealed class PlacePartView
         bool any = picked.Count > 0;
         string StateOf(Func<PickMember, bool> has) => !any ? "" : picked.All(has) ? "on" : picked.Any(has) ? "some" : "";
 
-        _sideHint.Text = any ? $"고른 부재 {picked.Count}개에 들어갑니다" : "먼저 그림에서 부재를 고르세요";
-        _sideHint.Foreground = any ? _sub : _warn;
         _syncing = true;
         _structure.SelectedItem = _editor.Structure;
         _syncing = false;
 
-        // ① 위치
+        // 중분류 카테고리: 고치는 중이면 이름 · 차례 · 지우기 줄(색 = 3D 의 색). 입력칸의 목록 · [단독객체]는 늘 있다.
         _placeRows.Children.Clear();
         bool editPlaces = _editPlaces.IsChecked == true;
-        _placeScroll.MaxHeight = editPlaces ? 190 : 132;
+        _placeScroll.Visibility = editPlaces ? Visibility.Visible : Visibility.Collapsed;
         if (editPlaces)
         {
-            if (_editor.Places.Count == 0) _placeRows.Children.Add(Note("아직 위치가 없습니다. 아래 칸에 이름을 적어 넣거나 추천을 누르세요."));
+            if (_editor.Places.Count == 0) _placeRows.Children.Add(Note("아직 중분류가 없습니다. 아래 칸에 이름을 적어 넣으세요."));
             for (int i = 0; i < _editor.Places.Count; i++)
             {
                 string name = _editor.Places[i].Name;
@@ -625,51 +806,20 @@ public sealed class PlacePartView
                     text => Do(() => _editor.RenamePlace(name, text))));
             }
         }
-        else
-        {
-            var grid = new UniformGrid { Columns = 2, Opacity = any ? 1 : 0.6 };
-            for (int i = 0; i < _editor.Places.Count; i++)
-            {
-                string name = _editor.Places[i].Name;
-                var c = ZonePalette.Of(i);
-                grid.Children.Add(PickButton("row.place." + name, Swatch(c.r, c.g, c.b, 7), name, StateOf(m => m.Value.Zone == name),
-                    any ? $"고른 부재 {picked.Count}개의 위치를 '{name}'(으)로 넣습니다." : "먼저 그림에서 부재를 고르세요.",
-                    () => Do(() => _editor.SetPlace(name))));
-            }
-            // '위치 없음': 위치가 없는 것으로 정하는 단추(아직 안 정한 것과 다르다).
-            grid.Children.Add(PickButton("row.place.none", Swatch(ZonePalette.NoPlace.r, ZonePalette.NoPlace.g, ZonePalette.NoPlace.b, 7), ZonePlan.NoPlaceLabel, StateOf(m => m.Value.Free),
-                "어느 칸에도 속하지 않는 부재(구조물 전체에 걸친 버림 콘크리트 등)를 '위치가 없는 부재'로 정합니다 — 아직 안 정한 것과 다르고, 산출서 제목에 위치를 붙이지 않습니다.",
-                () => Do(_editor.SetNoPlace), muted: true));
-            _placeRows.Children.Add(grid);
-        }
-        // 추천: 구조물에서 자주 쓰는 위치 이름 가운데 아직 목록에 없는 것.
-        _suggest.Children.Clear();
-        var suggestions = _editor.SuggestedPlaces;
-        if (suggestions.Count > 0)
-        {
-            var label = new TextBlock { Text = "추천", Foreground = _sub, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 4) };
-            _ui.Tip(label, $"'{_editor.Structure}'에서 자주 쓰는 위치 이름입니다. 누르면 목록에 들어가고, 부재를 골라 둔 채면 바로 그 부재에 들어갑니다.");
-            _suggest.Children.Add(label);
-            foreach (string name in suggestions)
-            {
-                var chip = _ui.Button(name, "BtnChip", any ? $"'{name}'을(를) 목록에 넣고, 고른 부재 {picked.Count}개의 위치로 넣습니다." : $"'{name}'을(를) 위치 목록에 넣습니다.", "suggest.place." + name, UiTheme.IconAdd);
-                chip.MinHeight = 23;
-                chip.FontSize = 12;
-                chip.Padding = new Thickness(8, 0, 9, 1);
-                chip.Margin = new Thickness(0, 0, 5, 4);
-                chip.Focusable = false;
-                chip.Click += (_, _) => Do(() => _editor.Selection.Count > 0 ? _editor.SetPlace(name) : _editor.AddPlace(name));
-                _suggest.Children.Add(chip);
-            }
-        }
+        RefreshPlaceChoices();
+        _noPlace.Tag = StateOf(m => m.Value.Free);
+        _noPlace.Opacity = any ? 1 : 0.6;
+        _noPlaceLabel.Foreground = (string)_noPlace.Tag == "on" ? _ui["AccentText"] : _sub;
+        _ui.Tip(_noPlace, (any ? $"고른 부재 {picked.Count}개를 " : "고른 부재를 ") +
+                          "어느 중분류에도 속하지 않는 부재(구조물 전체에 걸친 버림 콘크리트 등)로 정합니다 — 아직 안 정한 것과 다르고, 산출서 제목에 중분류를 붙이지 않습니다.");
 
-        // ② 부위: 묶음마다 [묶음 이름 | 단추 두 줄]. 고치는 중이면 한 줄에 하나씩(이름 칸 · 무근 · 위치 생략 · 차례 · 지우기).
+        // 부위: 묶음마다 [묶음 이름 | 단추 두 줄]. 고치는 중이면 한 줄에 하나씩(이름 칸 · 무근 · 중분류 생략 · 차례 · 지우기).
         _partRows.Children.Clear();
         bool editParts = _editParts.IsChecked == true;
         _refill.Visibility = editParts ? Visibility.Visible : Visibility.Collapsed;
         _auto.Visibility = editParts ? Visibility.Collapsed : Visibility.Visible;
         if (editParts)
-            _partRows.Children.Add(Note("무근 = 산출서에서 '무근 콘크리트'로 집계 · 위치 생략 = 산출서 제목에 위치를 붙이지 않음(예: '배관실 계단'이 아니라 '계단'). 차례가 산출서에 적는 차례입니다."));
+            _partRows.Children.Add(Note("무근 = 산출서에서 '무근 콘크리트'로 집계 · 중분류 생략 = 산출서 제목에 중분류를 붙이지 않음(예: '배관실 계단'이 아니라 '계단'). 차례가 산출서에 적는 차례입니다."));
         foreach (var group in _editor.Parts.GroupBy(p => PartCatalog.GroupIndex(p.Group)).OrderBy(g => g.Key))
         {
             string label = PartCatalog.Groups[group.Key].Label;
@@ -683,12 +833,16 @@ public sealed class PlacePartView
                     var plain = _ui.Check("무근", part.Plain, "켜면 이 부위를 산출서의 '무근 콘크리트'에 적습니다. 꺼져 있어도 유형·재료·부위 이름에 '무근'·'버림'이 있으면 무근입니다.", "plain.part." + name);
                     plain.Margin = new Thickness(8, 0, 0, 0);
                     plain.Click += (_, _) => Do(() => _editor.SetPlain(name, plain.IsChecked == true));
-                    var noZone = _ui.Check("위치 생략", part.NoZone, "켜면 산출서 제목에 위치를 붙이지 않습니다 — '계단'·'밸브 받침'처럼. 끄면 '배관실 벽체'처럼 위치가 앞에 붙습니다.", "nozone.part." + name);
+                    var noZone = _ui.Check("중분류 생략", part.NoZone, "켜면 산출서 제목에 중분류를 붙이지 않습니다 — '계단'·'밸브 받침'처럼. 끄면 '배관실 벽체'처럼 중분류가 앞에 붙습니다.", "nozone.part." + name);
                     noZone.Margin = new Thickness(8, 0, 0, 0);
                     noZone.Click += (_, _) => Do(() => _editor.SetNoZone(name, noZone.IsChecked == true));
+                    var later = _ui.Check("나중에 침", PartCatalog.IsLater(part), "켜면 거푸집에서 벽·슬래브 같은 구조체에 맞닿은 면을 이 부위에서만 뺍니다 — 구조체 쪽은 그 자리까지 셉니다(받침·PAD·디딤판처럼 나중에 붙여 치는 것).", "later.part." + name);
+                    later.Margin = new Thickness(8, 0, 0, 0);
+                    later.Click += (_, _) => Do(() => _editor.SetLater(name, later.IsChecked == true));
                     var checks = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
                     checks.Children.Add(plain);
                     checks.Children.Add(noZone);
+                    checks.Children.Add(later);
                     _partRows.Children.Add(EditRow("part." + name, name, null, checks,
                         _editor.CanMovePart(name, -1), _editor.CanMovePart(name, 1), step => Do(() => _editor.MovePart(name, step)), () => AskDelete("part", name),
                         text => Do(() => _editor.RenamePart(name, text))));
@@ -727,6 +881,52 @@ public sealed class PlacePartView
         return button;
     }
 
+    // 중분류 입력칸의 목록: 이미 만든 이름(3D 의 색 · 부재 수) → 구조물의 추천 이름(아직 목록에 없는 것). 고르면 바로 넣는다(PutPlace).
+    // 펼쳐 있는 동안에는 다시 짓지 않는다(고르던 줄이 사라지지 않게). 적던 글은 그대로 둔다.
+    private void RefreshPlaceChoices()
+    {
+        if (_place.IsDropDownOpen) return;
+        string typed = _place.Text;
+        _syncing = true;
+        try
+        {
+            _place.Items.Clear();
+            for (int i = 0; i < _editor.Places.Count; i++)
+            {
+                string name = _editor.Places[i].Name;
+                var c = ZonePalette.Of(i);
+                _place.Items.Add(Choice("pick.place." + name, name, Swatch(c.r, c.g, c.b, 8), _editor.CountInPlace(name).ToString(CultureInfo.InvariantCulture)));
+            }
+            foreach (string name in _editor.SuggestedPlaces)
+            {
+                var plus = UiTheme.Icon(UiTheme.IconAdd, 10);
+                plus.Foreground = _sub;
+                plus.Margin = new Thickness(1, 1, 9, 0);
+                _place.Items.Add(Choice("suggest.place." + name, name, plus, "추천"));
+            }
+            _place.SelectedIndex = -1;
+            if (_place.Text != typed) _place.Text = typed;
+        }
+        finally { _syncing = false; }
+    }
+
+    // 목록의 한 줄: [색 또는 +] 이름 …… 부재 수 또는 '추천'. 마우스로 고르면 바로 넣는다(화살표로 고르면 글 칸에만 들어간다 — Enter 로 넣는다).
+    private ComboBoxItem Choice(string id, string name, FrameworkElement chip, string note)
+    {
+        var line = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(chip, Dock.Left);
+        line.Children.Add(chip);
+        var tail = new TextBlock { Text = note, Foreground = _sub, FontSize = 11.5, Margin = new Thickness(14, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+        DockPanel.SetDock(tail, Dock.Right);
+        line.Children.Add(tail);
+        line.Children.Add(new TextBlock { Text = name, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center });
+        var item = new ComboBoxItem { Content = line };
+        TextSearch.SetText(item, name);      // 고르면 글 칸에 이 이름이 들어간다
+        _ui.Mark(item, "", id);
+        item.PreviewMouseLeftButtonUp += (_, _) => _place.Dispatcher.BeginInvoke(() => PutPlace(name));
+        return item;
+    }
+
     // 목록을 고치는 줄: [색][이름 칸] [체크 칸들] [▲][▼][✕]. 이름을 고치고 Enter — 그 값인 부재를 모두 고쳐 적는다.
     private FrameworkElement EditRow(string id, string name, FrameworkElement? chip, FrameworkElement? checks,
                                      bool canUp, bool canDown, Action<int> move, Action remove, Action<string> rename)
@@ -755,9 +955,14 @@ public sealed class PlacePartView
         if (chip != null) { DockPanel.SetDock(chip, Dock.Left); line.Children.Add(chip); }
         DockPanel.SetDock(tools, Dock.Right);
         line.Children.Add(tools);
-        if (checks != null) { DockPanel.SetDock(checks, Dock.Right); line.Children.Add(checks); }
         line.Children.Add(box);
-        return new Border { Child = line, Padding = new Thickness(0, 1, 0, 1), MinHeight = 28 };
+        if (checks == null) return new Border { Child = line, Padding = new Thickness(0, 1, 0, 1), MinHeight = 28 };
+        // 표시 칸(무근 · 중분류 생략 · 나중에 침)은 이름 아래 줄에 둔다 — 한 줄에 다 넣으면 이름 칸에 두세 글자만 보인다(2026-10-15 미리보기 그림).
+        var rows = new StackPanel();
+        rows.Children.Add(line);
+        checks.Margin = new Thickness(0, 2, 0, 0);
+        rows.Children.Add(checks);
+        return new Border { Child = rows, Padding = new Thickness(0, 1, 0, 4), MinHeight = 28 };
     }
 
     private FrameworkElement EditTools(string id, bool canUp, bool canDown, Action<int> move, Action remove)
@@ -793,6 +998,7 @@ public sealed class PlacePartView
         }
         _asking = (kind, name);
         _keepAsking = true;
+        if (kind == "place" && _partsBlock != null) _partsHold = _partsBlock.ActualHeight;
         RefreshAll();
     }
 
@@ -800,7 +1006,7 @@ public sealed class PlacePartView
     private FrameworkElement AskRow(string kind, string name)
     {
         var users = kind == "place" ? _editor.UsersOfPlace(name) : _editor.UsersOfPart(name);
-        string what = kind == "place" ? "위치" : "부위";
+        string what = kind == "place" ? "중분류" : "부위";
         bool stuck = users.Locked == users.Total;
         string text = stuck
             ? $"'{name}' — 쓰는 부재 {users.Total}개가 모두 고칠 수 없는 부재라 지울 수 없습니다."
@@ -836,7 +1042,7 @@ public sealed class PlacePartView
 
     // ── 색 · 글 ──────────────────────────────────────────────────────────────────
 
-    /// <summary>부재의 색: 아직 = 옅은 회색 · 끝 = 위치 색('위치 없음'은 자주) · 덜 끝남 = 그 색을 옅게(위치가 없으면 크림색) · 고칠 수 없음 = 짙은 회색.</summary>
+    /// <summary>부재의 색: 아직 = 옅은 회색 · 끝 = 중분류 색('단독객체'는 자주) · 덜 끝남 = 그 색을 옅게(중분류가 없으면 크림색) · 고칠 수 없음 = 짙은 회색.</summary>
     public (byte r, byte g, byte b) ColorOf(PickMember m)
     {
         static (byte, byte, byte) Rgb((string name, byte r, byte g, byte b) c) => (c.r, c.g, c.b);
@@ -864,10 +1070,10 @@ public sealed class PlacePartView
             PickState.Done => "끝",
             PickState.Todo => "아직",
             PickState.Partial => "하나만 넣음",
-            PickState.Outside => (m.Value.ZoneOutside && m.Value.PartOutside ? "위치·부위" : m.Value.ZoneOutside ? "위치" : "부위") + "가 창 밖에서 들어온 값 — 확인 필요",
+            PickState.Outside => (m.Value.ZoneOutside && m.Value.PartOutside ? "중분류·부위" : m.Value.ZoneOutside ? "중분류" : "부위") + "가 창 밖에서 들어온 값 — 확인 필요",
             _ => "고칠 수 없음(" + m.Locked + ")",
         };
-        return $"{m.Category} {m.Type} · Id {m.Id} · 높이 {Signed(m.ZMin + _shift)} ~ {Signed(m.ZMax + _shift)} · 위치: {zone} · 부위: {part} · {state}";
+        return $"{m.Category} {m.Type} · Id {m.Id} · 높이 {Signed(m.ZMin + _shift)} ~ {Signed(m.ZMax + _shift)} · 중분류: {zone} · 부위: {part} · {state}";
     }
 
     private static string Signed(double v) => v.ToString("+0.00;-0.00;0.00", CultureInfo.InvariantCulture);
@@ -901,7 +1107,7 @@ public sealed class PlacePartView
         _pickedHead.Inlines.Add(new Run($"{picked.Count}개") { FontSize = 15.5, FontWeight = FontWeights.SemiBold });
         _pickedHead.Inlines.Add(new Run("     " + Join(kinds)));
 
-        // 지금 값: 위치 [수조부 2][안 넣음 1]   부위 [벽체 3]
+        // 지금 값: 중분류 [수조부 2][안 넣음 1]   부위 [벽체 3]
         void Values(string label, List<(string key, int n)> groups, bool first)
         {
             _pickedValues.Children.Add(new TextBlock { Text = label, Foreground = _sub, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(first ? 0 : 14, 0, 6, 0) });
@@ -917,11 +1123,11 @@ public sealed class PlacePartView
             }
             if (groups.Count > 4) _pickedValues.Children.Add(new TextBlock { Text = $"그 밖 {groups.Count - 4}가지", Foreground = _sub, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
         }
-        Values("위치", zones, true);
-        Values("부위", parts, false);
+        Values("부위", parts, true);
+        Values("중분류", zones, false);
         if (outside > 0)
             _pickedValues.Children.Add(new TextBlock { Text = $"창 밖에서 들어온 값 {outside}개 — 맞으면 [이 값 그대로 확인]", Foreground = _warn, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(14, 0, 0, 0) });
-        _pickedText = $"부재 {picked.Count}개 — {Join(kinds)}\n위치: {Join(zones)}   |   부위: {Join(parts)}" + (outside > 0 ? $"\n창 밖에서 들어온 값 {outside}개 — 맞으면 [이 값 그대로 확인]" : "");
+        _pickedText = $"부재 {picked.Count}개 — {Join(kinds)}\n부위: {Join(parts)}   |   중분류: {Join(zones)}" + (outside > 0 ? $"\n창 밖에서 들어온 값 {outside}개 — 맞으면 [이 값 그대로 확인]" : "");
     }
 
     private void RefreshProgress()
@@ -961,7 +1167,7 @@ public sealed class PlacePartView
         _status.Text = "넣는 즉시 모델에 적힙니다(창을 닫아도 남습니다)" + (_editor.Writes > 0 ? $" · 이 창에서 적은 횟수 {_editor.Writes}" : "") + (hidden > 0 ? $" · 숨긴 부재 {hidden}개" : "");
     }
 
-    // 지금 적용 상태: 위치별(그림의 색) · 부위별 부재 수. 딱지를 누르면 그 값인 부재를 고르기만 한다(넣지 않는다).
+    // 지금 적용 상태: 중분류별(그림의 색) · 부위별 부재 수. 딱지를 누르면 그 값인 부재를 고르기만 한다(넣지 않는다).
     private void RefreshState()
     {
         Button Chip(string id, FrameworkElement? swatch, string name, int count, string tip, Func<PickMember, bool> match, string what, string background = "BtnChip")
@@ -982,15 +1188,15 @@ public sealed class PlacePartView
             string name = _editor.Places[i].Name;
             var c = ZonePalette.Of(i);
             _statusPlaces.Children.Add(Chip("status.place." + name, Swatch(c.r, c.g, c.b, 6), name, _editor.CountInPlace(name),
-                $"위치가 '{name}'인 부재를 고릅니다(고르기만 합니다).", m => m.Value.Zone == name, $"위치 '{name}'"));
+                $"중분류가 '{name}'인 부재를 고릅니다(고르기만 합니다).", m => m.Value.Zone == name, $"중분류 '{name}'"));
         }
         int free = _editor.CountNoPlace;
         if (free > 0)
             _statusPlaces.Children.Add(Chip("status.place.none", Swatch(ZonePalette.NoPlace.r, ZonePalette.NoPlace.g, ZonePalette.NoPlace.b, 6), ZonePlan.NoPlaceLabel, free,
-                "'위치 없음'으로 정한 부재를 고릅니다.", m => m.Value.Free, $"'{ZonePlan.NoPlaceLabel}'"));
+                $"'{ZonePlan.NoPlaceLabel}'(으)로 정한 부재를 고릅니다.", m => m.Value.Free, $"'{ZonePlan.NoPlaceLabel}'"));
         int noPlace = _members.Count(m => m.Drawn && !m.Value.HasZone);
         _statusPlaces.Children.Add(Chip("status.place.todo", Swatch(ZonePalette.Todo.r, ZonePalette.Todo.g, ZonePalette.Todo.b, 6), "안 넣음", noPlace,
-            "위치를 아직 넣지 않은 부재를 고릅니다.", m => m.Drawn && !m.Value.HasZone, "위치를 안 넣은 부재"));
+            "중분류를 아직 넣지 않은 부재를 고릅니다.", m => m.Drawn && !m.Value.HasZone, "중분류를 안 넣은 부재"));
 
         _statusParts.Children.Clear();
         foreach (var part in _editor.Parts)
@@ -1024,9 +1230,21 @@ public sealed class PlacePartView
     /// <summary>편집 상태로 화면을 다시 맞춘다.</summary>
     public void RefreshAll()
     {
-        // 지울지 묻던 줄은 다른 일을 하면 접는다(✕ 를 누른 바로 그 한 번만 남긴다).
-        if (!_keepAsking) _asking = null;
+        // 지울지 묻던 줄 · [다음 단계]를 한 번 더 누르라는 알림은 다른 일을 하면 접는다(누른 바로 그 한 번만 남긴다).
+        if (!_keepAsking)
+        {
+            _asking = null;
+            _partsHold = 0;
+        }
         _keepAsking = false;
+        if (!_keepArmed) _nextArmed = false;
+        _keepArmed = false;
+        if (Step == 1)
+        {
+            RefreshFormwork();
+            _view3d.Refresh();
+            return;
+        }
         RefreshLists();
         RefreshPicked();
         RefreshProgress();
@@ -1039,7 +1257,7 @@ public sealed class PlacePartView
     // 모델에 적는 일 하나: 그동안 다시 눌리지 않게 막고(적는 중에 Revit 의 창이 뜨면 우리 창이 눌릴 수 있다), 끝나면 화면을 맞춘다.
     private bool Do(Func<bool> work)
     {
-        if (_busy) return false;
+        if (Busy) return false;
         _busy = true;
         var before = Mouse.OverrideCursor;
         Mouse.OverrideCursor = Cursors.Wait;
@@ -1059,8 +1277,15 @@ public sealed class PlacePartView
         return ok;
     }
 
-    /// <summary>모델에 적는 중인가(창을 닫으려 할 때 본다).</summary>
-    public bool Busy => _busy;
+    /// <summary>
+    /// 바깥(명령)이 긴 일을 하는 중이다 — [완료]처럼 RunLocked 사이사이에 작은 창(산출식 확인 · 저장 위치 · 물음)이 뜨는 일 전체.
+    /// 그 틈에 쌓여 있던 누르기가 [완료] · [다음 단계] · [이전 단계] · [닫기] · 되돌리기를 또 돌리지 않게 막는다(revit R42 중간 ①).
+    /// RunLocked 는 이 표시와 상관없이 돈다(그 일 안에서 부르는 것이므로).
+    /// </summary>
+    public bool Held { get; set; }
+
+    /// <summary>모델에 적는 중이거나 바깥이 긴 일을 하는 중인가(창을 닫으려 할 때 · 단추를 누를 때 본다).</summary>
+    public bool Busy => _busy || Held;
 
     private int IndexOf(long id)
     {
@@ -1071,10 +1296,20 @@ public sealed class PlacePartView
 
     // ── 시험에서 쓰는 길(화면에서 누르는 것과 같은 길) ───────────────────────────
 
-    /// <summary>위치 단추를 눌렀다.</summary>
+    /// <summary>중분류 목록에서 그 이름을 골랐다(고른 부재에 넣는다).</summary>
     public bool ClickPlace(string name) => Do(() => _editor.SetPlace(name));
-    /// <summary>'위치 없음' 단추를 눌렀다.</summary>
+    /// <summary>[단독객체]를 눌렀다.</summary>
     public bool ClickNoPlace() => Do(_editor.SetNoPlace);
+    /// <summary>중분류 칸에 이름을 적고 Enter(또는 [넣기]) — 고른 것이 없고 새 이름이면 목록에만 보탠다.</summary>
+    public void TypePlace(string text)
+    {
+        SetPlaceText(text);
+        PutPlace(_place.Text);
+    }
+    /// <summary>중분류 칸에 지금 적힌 글.</summary>
+    public string PlaceText => _place.Text;
+    /// <summary>중분류 칸을 펼치면 나오는 이름(이미 만든 것 → 추천 차례).</summary>
+    public IReadOnlyList<string> PlaceChoices => _place.Items.OfType<ComboBoxItem>().Select(i => TextSearch.GetText(i)).ToList();
     /// <summary>부위 단추를 눌렀다.</summary>
     public bool ClickPart(string name) => Do(() => _editor.SetPart(name));
     /// <summary>[되돌리기]를 눌렀다.</summary>

@@ -8,6 +8,8 @@ namespace DH.Takeoff.Core.Formwork;
 ///       칠해지는 옆면·밑면·구멍 둘레가 거푸집이다(JACK 2026-10-08).
 ///  1) 맞닿은 자리: 면을 바깥으로 살짝(ε) 옮긴 평면으로 다른 입체들을 잘라, 그 면 바로 바깥에 콘크리트가 있는 자리를 뺀다.
 ///     형상 결합이 안 돼 입체끼리 겹쳐 있어도 된다(다른 입체 속에 묻힌 자리도 같은 방법으로 빠진다).
+///     나중에 치는 부재(FormworkElement.Later — 받침 · PAD · 디딤판)는 구조체의 면을 잴 때 없는 것으로 본다: 구조체는 그 자리까지 거푸집이고,
+///     나중 부재만 구조체에 맞닿은 면을 뺀다(JACK 2026-10-15 — 실무는 구조체 전체를 센 뒤 붙여 치는 것만 공제).
 ///  2) 포개진 자리: 두 부재의 면이 같은 평면·같은 방향으로 포개지면(겹친 부재에서 생긴다) 둘 다 '드러난 면'이 된다.
 ///     그 자리는 우선순위가 높은 부재 하나만 센다.
 ///  3) 방향: 윗면 / 위를 보는 경사면(30도보다 가파르면 센다) / 옆면 / 밑면 / 구멍 둘레.
@@ -73,34 +75,71 @@ public static class FormworkAnalyzer
     public static List<ElementFormwork> Analyze(IReadOnlyList<FormworkElement> elements,
                                                 IReadOnlyList<FormworkZone>? zones = null, FormworkOptions? options = null)
     {
-        var ctx = new Context { Bodies = new List<Body>(), Zones = zones ?? Array.Empty<FormworkZone>(), Options = options ?? new FormworkOptions() };
+        var all = new Context { Bodies = new List<Body>(), Zones = zones ?? Array.Empty<FormworkZone>(), Options = options ?? new FormworkOptions() };
         foreach (var el in elements)
             for (int i = 0; i < el.Solids.Count; i++)
             {
                 var body = MakeBody(el, i);
-                if (body != null) ctx.Bodies.Add(body);
+                if (body != null) all.Bodies.Add(body);
             }
-        ctx.Levels = ctx.Bodies.SelectMany(b => new[] { b.Min.Z, b.Max.Z }).Select(z => Math.Round(z, 4)).Distinct().OrderBy(z => z).ToList();
+        all.Levels = LevelsOf(all.Bodies);
+        // 나중에 치는 부재(받침 · PAD · 디딤판 …)가 있으면 구조체의 면은 그것들을 뺀 콘크리트로 잰다 — 구조체를 칠 때는 아직 없다(JACK 2026-10-15).
+        // 입체(Body)는 같이 쓴다(높이마다의 그림자 · 단면은 그 입체만으로 정해지는 값). 높이 구간 · 평면 그림은 콘크리트가 다르므로 따로 둔다.
+        var early = all;
+        var laterBodies = all.Bodies.Where(b => b.El.Later).ToList();
+        if (laterBodies.Count > 0)
+        {
+            early = new Context { Bodies = all.Bodies.Where(b => !b.El.Later).ToList(), Zones = all.Zones, Options = all.Options };
+            early.Levels = LevelsOf(early.Bodies);
+        }
 
         var results = new List<ElementFormwork>();
         foreach (var el in elements)
         {
             if (!el.Target) continue; // 주변 콘크리트로만 쓰는 부재
+            var ctx = el.Later ? all : early;
             var ef = new ElementFormwork { Element = el };
             foreach (var body in ctx.Bodies.Where(b => ReferenceEquals(b.El, el)))
             {
                 var holeEdges = HoleEdgeFaces(body);
                 for (int f = 0; f < body.Faces.Count; f++)
-                    ef.Faces.Add(AnalyzeFace(ctx, body, f, holeEdges.Contains(f)));
+                    ef.Faces.Add(AnalyzeFace(ctx, body, f, holeEdges.Contains(f), ReferenceEquals(ctx, early) ? laterBodies : null));
             }
             // 종류는 부재 전체를 본 뒤에 붙인다: 받쳐서 치는 밑면이 있는 슬래브(떠 있는 슬래브)의 가장자리는 벽 외측과 이어진다.
             bool elevated = ef.Faces.Any(f => f.Patches.Any(p => p.Below == Below.Supported));
             foreach (var face in ef.Faces)
                 foreach (var patch in face.Patches)
+                {
+                    patch.Unruled = (patch.Counted, patch.Decided, patch.Item, patch.Note);
                     Classify(ctx.Options.Rules, el, face.Class, patch, elevated);
+                }
             results.Add(ef);
         }
         return results;
+    }
+
+    private static List<double> LevelsOf(List<Body> bodies) =>
+        bodies.SelectMany(b => new[] { b.Min.Z, b.Max.Z }).Select(z => Math.Round(z, 4)).Distinct().OrderBy(z => z).ToList();
+
+    /// <summary>
+    /// 대응표만 바꿔 다시 센다(수량산출 창의 거푸집면 설정에서 종류를 고를 때마다 — JACK 2026-10-15). 형상은 다시 재지 않는다:
+    /// 조각마다 Analyze 가 남긴 '대응표를 걸기 전의 값'으로 되돌린 뒤 대응표를 다시 건다 — 같은 입체로 Analyze 를 다시 부른 것과 같은 답이다
+    /// (대응표가 바꾸는 값은 세는가 · 정했는가 · 종류 · 까닭뿐이고, 받쳐서 치는 밑면이 있는가는 대응표와 상관없다).
+    /// Analyze 가 만들지 않은 조각(그 값이 없는 것)은 건드리지 않는다.
+    /// </summary>
+    public static void Reclassify(IReadOnlyList<ElementFormwork> results, FormworkOptions options)
+    {
+        foreach (var ef in results)
+        {
+            bool elevated = ef.Faces.Any(f => f.Patches.Any(p => p.Below == Below.Supported));
+            foreach (var face in ef.Faces)
+                foreach (var patch in face.Patches)
+                {
+                    if (patch.Unruled is not { } raw) continue;
+                    (patch.Counted, patch.Decided, patch.Item, patch.Note) = raw;
+                    Classify(options.Rules, ef.Element, face.Class, patch, elevated);
+                }
+        }
     }
 
     // 조각의 종류를 정한다: 사람이 대응표에서 고친 줄이 있으면 그것, 없으면 초안 규칙.
@@ -169,10 +208,12 @@ public static class FormworkAnalyzer
         return body;
     }
 
-    // 포개진 자리의 주인: 급이 높은 부재(기초 > 슬래브 > 기둥 > 벽 > 보 > 그 밖), 같으면 먼저 만든 부재, 같은 부재면 앞 입체.
-    // 콘크리트의 겹침 우선순위(겹침 검사)와 같은 차례다.
+    // 포개진 자리의 주인: 나중에 치는 부재가 아닌 쪽(구조체의 면은 나중 부재 없이 재므로 구조체가 이미 그 자리를 센다 — 나중 부재가 내줘야 두 번 안 센다),
+    // 그다음 급이 높은 부재(기초 > 슬래브 > 기둥 > 벽 > 보 > 그 밖), 같으면 먼저 만든 부재, 같은 부재면 앞 입체.
+    // 급의 차례는 콘크리트의 겹침 우선순위(겹침 검사)와 같다.
     private static bool Beats(Body a, Body b) =>
-        a.Rank != b.Rank ? a.Rank < b.Rank : a.El.Id != b.El.Id ? a.El.Id < b.El.Id : a.Index < b.Index;
+        a.El.Later != b.El.Later ? !a.El.Later
+        : a.Rank != b.Rank ? a.Rank < b.Rank : a.El.Id != b.El.Id ? a.El.Id < b.El.Id : a.Index < b.Index;
 
     private static bool Apart(V3 minA, V3 maxA, V3 minB, V3 maxB, double slack) =>
         maxA.X < minB.X - slack || minA.X > maxB.X + slack ||
@@ -181,7 +222,8 @@ public static class FormworkAnalyzer
 
     // ── 면 하나 ────────────────────────────────────────────────────────────────────
 
-    private static FaceResult AnalyzeFace(Context ctx, Body body, int faceIndex, bool holeEdge)
+    // later = 구조체의 면을 잴 때 나중에 치는 부재들(ctx 에는 없다) — 그것들이 맞닿은 넓이를 따로 재어 둔다(LaterCovered — 일지 · 검산).
+    private static FaceResult AnalyzeFace(Context ctx, Body body, int faceIndex, bool holeEdge, IReadOnlyList<Body>? later = null)
     {
         var info = body.Faces[faceIndex];
         var face = info.Face;
@@ -207,6 +249,7 @@ public static class FormworkAnalyzer
 
         result.Polygon = Poly.Area(paths);
         V3 n = frame.N;
+        result.Normal = new[] { n.X, n.Y, n.Z };
         result.SlopeDeg = Math.Acos(Math.Clamp(Math.Abs(n.Z), 0, 1)) * 180 / Math.PI;
         result.UpFacing = n.Z > 0;
         result.Class = holeEdge ? FaceClass.HoleEdge
@@ -241,6 +284,19 @@ public static class FormworkAnalyzer
         }
         var net = cover.Count > 0 ? Poly.Difference(paths, cover) : paths;
         result.Covered = Poly.Area(cover);
+        // 나중에 치는 부재가 맞닿았지만 구조체라서 거푸집으로 센 넓이(다른 콘크리트가 이미 덮은 자리는 빼고) — 어느 부재에 얼마를 돌려 셌는지 일지로 본다.
+        // 윗면은 어차피 거푸집이 아니라 재지 않는다(바닥판 윗면에 놓인 받침 자리가 '돌려 센 넓이'로 잡히지 않게).
+        if (later is { Count: > 0 } && result.Class != FaceClass.Top)
+        {
+            var laterCover = new Paths64();
+            foreach (var other in later)
+            {
+                if (Apart(info.Min, info.Max, other.Min, other.Max, o.Epsilon + Section.Merge)) continue;
+                var cut = (other.Planar ? Section.Cut(other.Solid, outside) : null) ?? FacingFaces(other, frame, info, o.Epsilon);
+                if (cut.Count > 0) laterCover = Poly.Union(laterCover, Poly.Intersect(paths, cut));
+            }
+            if (laterCover.Count > 0) result.LaterCovered = Poly.Area(cover.Count > 0 ? Poly.Difference(laterCover, cover) : laterCover);
+        }
         result.Covers = covers.Select(kv => new FaceCover { ElementId = kv.Key, Area = kv.Value }).OrderByDescending(c => c.Area).ToList();
         if (curvedNeighbour) result.Flag = "곡면 부재가 곁에 있어 맞닿은 자리를 다 재지 못함";
         else if (brokenNeighbour) result.Flag = "곁 부재의 단면을 잇지 못해 맞닿은 자리를 다 재지 못함";
@@ -1015,6 +1071,7 @@ public static class FormworkAnalyzer
         var audit = new Audit();
         var contact = new Dictionary<(long, long), double>();
         var ids = new HashSet<long>(results.Select(r => r.Element.Id));
+        var later = new HashSet<long>(results.Where(r => r.Element.Later).Select(r => r.Element.Id));
         foreach (var r in results)
             foreach (var f in r.Faces)
             {
@@ -1031,6 +1088,7 @@ public static class FormworkAnalyzer
         {
             if (a > b && contact.ContainsKey((b, a))) continue;      // 쌍마다 한 번만
             if (!ids.Contains(b)) continue;                           // 상대가 결과에 없으면(주변 콘크리트) 견줄 수 없다
+            if (later.Contains(a) != later.Contains(b)) continue;     // 구조체 ↔ 나중에 치는 부재: 구조체 쪽은 일부러 빼지 않았다
             double fromB = contact.GetValueOrDefault((b, a));
             if (Math.Abs(fromA - fromB) > 1e-3 + 1e-3 * Math.Max(fromA, fromB))
                 audit.Uneven.Add(a < b ? (a, b, fromA, fromB) : (b, a, fromB, fromA));

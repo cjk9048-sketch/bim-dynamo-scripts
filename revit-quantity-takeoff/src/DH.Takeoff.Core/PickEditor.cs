@@ -239,6 +239,9 @@ public sealed class PickEditor
     /// <summary>지금 3D 에 보이는 부재인가 — 보이는 부재만 찍을 수 있고, 값도 보이는 부재에만 들어간다.</summary>
     public bool IsShown(PickMember m) => Passes(m) && (!OnlyRemaining || m.Remaining);
 
+    /// <summary>보기 거름(종류 · 층 · 숨긴 부재)만 본 것 — '남은 것만 보기'는 빼고(수량산출 창의 거푸집면 설정이 쓴다: 다 넣은 부재도 거푸집은 있다).</summary>
+    public bool InView(PickMember m) => Passes(m);
+
     public void SetKind(KindFilter kind) { Kind = kind; Prune(); }
     public void SetFloor(int floor) { Floor = floor; Prune(); }
     public void SetOnlyRemaining(bool on) { OnlyRemaining = on; Prune(); }
@@ -251,9 +254,11 @@ public sealed class PickEditor
         Prune();
     }
 
+    /// <summary>[모두 보이기]: 숨긴 부재를 되돌리고 '남은 것만 보기'도 끈다(JACK 1015 — 끝난 부재까지 다 보여야 한다). 종류 · 층 거름은 그대로다.</summary>
     public void ShowAll()
     {
         Hidden.Clear();
+        OnlyRemaining = false;
         Message = "";
     }
 
@@ -404,13 +409,13 @@ public sealed class PickEditor
     public bool SetPlace(string name)
     {
         name = ZonePlan.CleanName(name);
-        if (!ZonePlan.IsUsableName(name)) { Message = name.Length == 0 ? "위치 이름이 비어 있습니다." : $"'{name}'은(는) 위치 이름으로 쓸 수 없습니다."; return false; }
+        if (!ZonePlan.IsUsableName(name)) { Message = name.Length == 0 ? "중분류 이름이 비어 있습니다." : $"'{name}'은(는) 중분류 이름으로 쓸 수 없습니다."; return false; }
         var targets = Targets();
         if (targets.Count == 0) return NothingPicked();
         Lists? before = null;
         if (!Places.Any(p => p.Name == name)) { before = Snapshot(); Places.Add(new ZonePlace { Name = name }); }
         // 넣은 칸(위치)만 확인된다: 그 부재의 부위가 창 밖에서 들어온 값이면 그것은 그대로 '확인 필요'로 남는다.
-        return Run($"위치 '{name}'", targets.Select(m => (m, m.Value with { Zone = name, Free = false, ZoneOk = true })).ToList(), before, onPicked: true);
+        return Run($"중분류 '{name}'", targets.Select(m => (m, m.Value with { Zone = name, Free = false, ZoneOk = true })).ToList(), before, onPicked: true);
     }
 
     /// <summary>고른 부재를 '위치 없음'으로 정한다(위치를 지우고, 정했다는 표시를 남긴다 — '아직'과 다르다).</summary>
@@ -611,11 +616,11 @@ public sealed class PickEditor
     public bool AddPlace(string name)
     {
         name = ZonePlan.CleanName(name);
-        if (!ZonePlan.IsUsableName(name)) { Message = name.Length == 0 ? "위치 이름이 비어 있습니다." : $"'{name}'은(는) 위치 이름으로 쓸 수 없습니다."; return false; }
+        if (!ZonePlan.IsUsableName(name)) { Message = name.Length == 0 ? "중분류 이름이 비어 있습니다." : $"'{name}'은(는) 중분류 이름으로 쓸 수 없습니다."; return false; }
         if (Places.Any(p => p.Name == name)) { Message = $"'{name}'은(는) 이미 목록에 있습니다."; return false; }
         var before = Snapshot();
         Places.Add(new ZonePlace { Name = name });
-        return ListOnly($"위치 '{name}' 추가", before);
+        return ListOnly($"중분류 '{name}' 추가", before);
     }
 
     /// <summary>
@@ -627,7 +632,7 @@ public sealed class PickEditor
         to = ZonePlan.CleanName(to);
         int at = Places.FindIndex(p => p.Name == from);
         if (at < 0) return false;
-        if (!ZonePlan.IsUsableName(to)) { Message = to.Length == 0 ? "위치 이름이 비어 있습니다." : $"'{to}'은(는) 위치 이름으로 쓸 수 없습니다."; return false; }
+        if (!ZonePlan.IsUsableName(to)) { Message = to.Length == 0 ? "중분류 이름이 비어 있습니다." : $"'{to}'은(는) 중분류 이름으로 쓸 수 없습니다."; return false; }
         if (to == from) return false;
         var users = Members.Where(m => m.Value.Zone == from).ToList();
         int stuck = users.Count(m => m.Locked.Length > 0);
@@ -637,7 +642,7 @@ public sealed class PickEditor
         else if (stuck == 0) Places[at].Name = to;
         else Places.Insert(at + 1, new ZonePlace { Name = to });
         // 이름만 바뀐다: 확인된 값은 확인된 채로, 창 밖에서 들어온 값은 '확인 필요'인 채로(이름을 바꿨다고 그 부재를 본 것은 아니다).
-        bool ok = Run(merge ? $"위치 '{from}' → '{to}'(합침)" : $"위치 '{from}' → '{to}'",
+        bool ok = Run(merge ? $"중분류 '{from}' → '{to}'(합침)" : $"중분류 '{from}' → '{to}'",
                       users.Select(m => (m, m.Value with { Zone = to, Free = false })).ToList(), before);
         if (!ok) return false;
         // 적지 못한 부재가 옛 이름으로 남았으면 Run 이 옛 줄을 목록에 되살려 두었다 — 수를 알린다.
@@ -653,7 +658,7 @@ public sealed class PickEditor
         if (at < 0 || to < 0 || to >= Places.Count) return false;
         var before = Snapshot();
         (Places[at], Places[to]) = (Places[to], Places[at]);
-        return ListOnly($"위치 '{name}' 차례", before);
+        return ListOnly($"중분류 '{name}' 차례", before);
     }
 
     /// <summary>
@@ -670,10 +675,10 @@ public sealed class PickEditor
         {
             var only = Snapshot();
             Places.RemoveAt(at);
-            return ListOnly($"위치 '{name}' 지움", only);
+            return ListOnly($"중분류 '{name}' 지움", only);
         }
-        if (!clear) { Message = $"'{name}'인 부재가 {users.Count}개 있어 지울 수 없습니다(그 부재들의 위치를 먼저 바꾸거나 지워 주세요)."; return false; }
-        return RemoveWithUsers("위치", name, users, m => m.Value with { Zone = "", Free = false, ZoneOk = false }, () => Places.RemoveAt(at),
+        if (!clear) { Message = $"'{name}'인 부재가 {users.Count}개 있어 지울 수 없습니다(그 부재들의 중분류를 먼저 바꾸거나 지워 주세요)."; return false; }
+        return RemoveWithUsers("중분류", name, users, m => m.Value with { Zone = "", Free = false, ZoneOk = false }, () => Places.RemoveAt(at),
                                () => Members.Count(m => m.Value.Zone == name));
     }
 
@@ -830,7 +835,7 @@ public sealed class PickEditor
         if (item == null || item.NoZone == noZone) return false;
         var before = Snapshot();
         item.NoZone = noZone;
-        return ListOnly($"부위 '{name}' — 위치 없이 {(noZone ? "켬" : "끔")}", before);
+        return ListOnly($"부위 '{name}' — 중분류 생략 {(noZone ? "켬" : "끔")}", before);
     }
 
     /// <summary>부위의 '무근 콘크리트' 표시를 바꾼다(산출서의 공종이 달라진다).</summary>
@@ -841,5 +846,17 @@ public sealed class PickEditor
         var before = Snapshot();
         item.Plain = plain;
         return ListOnly($"부위 '{name}' — 무근 {(plain ? "켬" : "끔")}", before);
+    }
+
+    /// <summary>부위의 '나중에 침' 표시를 바꾼다(거푸집: 구조체에 맞닿은 면을 이 부위에서만 빼고, 구조체 쪽은 다 센다).</summary>
+    public bool SetLater(string name, bool later)
+    {
+        var item = Parts.FirstOrDefault(p => p.Name == name);
+        if (item == null || PartCatalog.IsLater(item) == later) return false;
+        var before = Snapshot();
+        // 처음 값(묶음)과 같아지면 표시를 비운다 — 켰다 끈 목록이 later 칸을 쓴 목록(v4)으로 남아 전의 판에서 안 열리는 일이 없게(R43 core L-a · revit L2).
+        item.Later = null;
+        if (PartCatalog.IsLater(item) != later) item.Later = later;
+        return ListOnly($"부위 '{name}' — 나중에 침 {(later ? "켬" : "끔")}", before);
     }
 }

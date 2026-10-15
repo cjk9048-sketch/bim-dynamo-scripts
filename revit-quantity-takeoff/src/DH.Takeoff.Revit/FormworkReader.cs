@@ -30,10 +30,19 @@ public static class FormworkReader
         public int UnknownMaterial;                       // 재료를 알 수 없어 콘크리트로 본 대상 부재
         /// <summary>곡면을 세모로 나눈 것(색칠에만 쓴다): (부재 Id, 입체 차례, 면 차례) → 점 셋씩(m).</summary>
         public Dictionary<(long id, int solid, int face), List<double[]>> CurvedTriangles = new();
+        /// <summary>
+        /// 나중에 치는 부재가 Revit 결합에서 구조체를 자른 쌍(나중 부재 Id, 잘린 구조체 Id) — 구조체 입체에 그 부재 모양의 홈이 패여 있어,
+        /// 그 부재 없이 재면 홈의 둘레가 거푸집으로 더 세진다(core R43 M-1). 고치지는 않고 알린다(결합 순서를 바꿔 구조체가 자르게 하면 맞다).
+        /// </summary>
+        public List<(long later, long cut)> LaterCuts = new();
     }
 
     /// <param name="selection">선택한 부재(비어 있으면 전체가 결과 대상).</param>
-    public static Scene Read(Document doc, ICollection<ElementId> selection)
+    /// <param name="laterPart">
+    /// 부위 이름 → 나중에 치는 부위인가(받침 · PAD · 디딤판 — 부위 목록의 '나중에 침', JACK 2026-10-15). 부재의 부위 칸(DH_Part)으로 본다 —
+    /// 유형 이름으로 짐작하지 않는다. 없으면 모두 구조체(전과 같다).
+    /// </param>
+    public static Scene Read(Document doc, ICollection<ElementId> selection, Func<string, bool>? laterPart = null)
     {
         var scene = new Scene { Selected = selection.Count };
         foreach (var id in DimensionExtractor.CollectApplicable(doc))
@@ -51,6 +60,7 @@ public static class FormworkReader
             if (solids.Count == 0) { if (target) scene.NoSolid++; continue; }
 
             string type = (doc.GetElement(el.GetTypeId()) as ElementType)?.Name ?? el.Name;
+            string part = ZoneScene.Text(el, ZoneScene.PartParam).Trim();
             if (target)
             {
                 scene.Targets++;
@@ -67,13 +77,40 @@ public static class FormworkReader
                 Solids = solids,
                 Target = target,
                 // 버림(무근)인지의 초안: 유형·재료 이름에 '무근'·'버림'. 이름으로 모르는 유형은 대응표에서 사람이 정한다.
-                Blinding = FormworkTable.LooksLikeBlinding(type, material.Material, ZoneScene.Text(el, ZoneScene.PartParam).Trim()),
+                Blinding = FormworkTable.LooksLikeBlinding(type, material.Material, part),
+                Later = part.Length > 0 && laterPart != null && laterPart(part),
             });
         }
+
+        FindLaterCuts(doc, scene);
 
         // 안쪽 면에 '어느 공간의 안쪽인지' 이름을 붙이려면 공간의 모양(구역)이 있어야 한다. 10/13 부터 위치는 부재를 찍어서 정하므로
         // 공간의 모양이 없다 — Zones 를 비워 두고, 안쪽 면은 '내측'으로만 낸다(면이 바라보는 공간의 이름은 거푸집 다음 단계에서 다시 정한다).
         return scene;
+    }
+
+    // 나중에 치는 부재와 결합된 구조체 가운데, 나중 부재가 자르는 쪽(IsCuttingElementInJoin)인 쌍을 모은다. 읽기만 한다.
+    private static void FindLaterCuts(Document doc, Scene scene)
+    {
+        var known = new Dictionary<long, FormworkElement>();
+        foreach (var e in scene.Elements) known[e.Id] = e;
+        foreach (var later in scene.Elements.Where(e => e.Later))
+        {
+            var el = doc.GetElement(new ElementId(later.Id));
+            if (el == null) continue;
+            ICollection<ElementId> joined;
+            try { joined = JoinGeometryUtils.GetJoinedElements(doc, el); }
+            catch { continue; }
+            foreach (var id in joined)
+            {
+                if (!known.TryGetValue(id.Value, out var other) || other.Later) continue;
+                try
+                {
+                    if (doc.GetElement(id) is Element cut && JoinGeometryUtils.IsCuttingElementInJoin(doc, el, cut)) scene.LaterCuts.Add((later.Id, id.Value));
+                }
+                catch { }   // 결합 상태를 읽지 못하면 넘어간다(알림만 못 할 뿐 계산은 그대로)
+            }
+        }
     }
 
     /// <summary>
@@ -128,6 +165,23 @@ public static class FormworkReader
     }
 
     private static double[] Pt(XYZ p) => new[] { p.X * FtToM, p.Y * FtToM, p.Z * FtToM };
+
+    /// <summary>
+    /// 곡면 조각에 Revit 이 나눠 준 세모를 붙인다(색을 칠하려고 — Core 는 곡면의 세모를 만들지 못한다, R42 core M-3).
+    /// 세모를 얻지 못한 곡면 가운데 칠할 것(세는 것 · 확인할 것)의 수를 돌려준다.
+    /// </summary>
+    public static int AttachCurved(Scene scene, IReadOnlyList<ElementFormwork> results)
+    {
+        int missing = 0;
+        foreach (var face in results.SelectMany(r => r.Faces))
+        {
+            if (face.Class != FaceClass.Curved) continue;
+            if (scene.CurvedTriangles.TryGetValue((face.ElementId, face.Solid, face.Face), out var triangles) && triangles.Count >= 3)
+                foreach (var patch in face.Patches) patch.Triangles = triangles;
+            else if (face.Patches.Any(p => p.Counted || p.NeedsCheck)) missing++;   // 대응표에서 세지 않기로 한 곡면은 칠할 것이 없다
+        }
+        return missing;
+    }
 
     /// <summary>사람이 고친 대응표를 두는 파일(프로젝트마다 하나).</summary>
     public static string RulesPath(Document doc)

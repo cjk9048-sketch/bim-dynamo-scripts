@@ -80,7 +80,11 @@ public sealed class WizardView
 
     /// <param name="numeric">예외 부재 모드(식을 숫자로 저장, 치수 칸은 재는 데만 씀).</param>
     /// <param name="dark">어두운 테마.</param>
-    public WizardView(bool numeric, bool dark)
+    /// <param name="measure">
+    /// 치수 재기(Revit 3D 뷰에서 모서리를 찍어 재는 칸)를 보일 것인가. 수량산출 창 위에 모달로 뜰 때는 Revit 이 다른 일을 받지 않아 잴 수 없다 —
+    /// 치수 칸과 칸 이름 단추([L1] …)를 감춘다(눌러도 아무 일 없는 단추를 두지 않는다).
+    /// </param>
+    public WizardView(bool numeric, bool dark, bool measure = true)
     {
         _numeric = numeric;
         _res = BuildResources(dark ? Dark : Light);
@@ -187,6 +191,7 @@ public sealed class WizardView
         var vars = new UniformGrid { Columns = 8 };
         foreach (var v in new[] { "L1", "L2", "L3", "W1", "W2", "W3", "H", "ETC" })
             vars.Children.Add(Key(v, () => Insert($"[{v}]")));
+        if (!measure) vars.Visibility = Visibility.Collapsed;
         formula.Children.Add(vars);
         var ops = new UniformGrid { Columns = 10, Margin = new Thickness(0, 0, 0, 0) };
         foreach (var (label, text) in new[] { ("(", "("), (")", ")"), ("+", "+"), ("−", "-"), ("×", "*"), ("÷", "/"), ("^", "^"), (".", ".") })
@@ -241,7 +246,9 @@ public sealed class WizardView
         help.Margin = new Thickness(0, 8, 0, 0);
         _dimBody.Children.Add(help);
         dims.Children.Add(_dimBody);
-        stack.Children.Add(Card(dims));
+        var dimsCard = Card(dims);
+        if (!measure) dimsCard.Visibility = Visibility.Collapsed;
+        stack.Children.Add(dimsCard);
 
         // ── 아래 버튼 ──
         var foot = new Grid { Margin = new Thickness(16, 12, 16, 16) };

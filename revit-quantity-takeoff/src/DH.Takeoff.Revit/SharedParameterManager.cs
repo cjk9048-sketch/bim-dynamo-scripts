@@ -30,7 +30,17 @@ public static class SharedParameterManager
         ["DH_수식물량"] = Guid.Parse("7a2b6c10-0000-4a00-9b00-000000000016"), // 산출식을 계산한 값(m³, 숫자)
         ["DH_물량차"] = Guid.Parse("7a2b6c10-0000-4a00-9b00-000000000017"),   // 수식물량 − BIM물량(m³, 숫자)
         ["DH_판정"] = Guid.Parse("7a2b6c10-0000-4a00-9b00-000000000018"),     // 일치 / 불일치 / 수식 없음(문자)
+        // 거푸집(R42 — JACK 2026-10-15): 종류별 넓이(㎡, 숫자 — K-water 지침 내역적용수량 이름) + 합계. 이름은 FormworkTable 에 있다.
+        ["유로폼［보통, 7m이하］"] = Guid.Parse("7a2b6c10-0000-4a00-9b00-000000000019"),
+        ["유로폼［보통, 7m초과］"] = Guid.Parse("7a2b6c10-0000-4a00-9b00-000000000020"),
+        ["합판거푸집［복잡, 0∼7m, 3회］"] = Guid.Parse("7a2b6c10-0000-4a00-9b00-000000000021"),
+        ["합판거푸집［보통, 0∼7m, 4회］"] = Guid.Parse("7a2b6c10-0000-4a00-9b00-000000000022"),
+        ["합판거푸집［간단, 0∼7m, 6회］"] = Guid.Parse("7a2b6c10-0000-4a00-9b00-000000000023"),
+        ["DH_면적(거푸집)"] = Guid.Parse("7a2b6c10-0000-4a00-9b00-000000000024"),
     };
+
+    /// <summary>값이 없으면 속성 창에서 숨는 칸(그 부재에 없는 거푸집 종류는 비워 둔다 — Parameter.ClearValue 는 이런 칸에만 된다).</summary>
+    private static readonly HashSet<string> HideWhenEmpty = new(DH.Takeoff.Core.Formwork.FormworkTable.GuidelineNames);
 
     /// 치수(길이) 매개변수 — 내부 피트 저장, 내보낼 때 m로 변환.
     public static readonly string[] LengthKeys = { "L1", "L2", "L3", "W1", "W2", "W3", "H" };
@@ -50,8 +60,8 @@ public static class SharedParameterManager
         // → 사용자가 입력한 값(미터 기준 숫자)이 그대로 CSV에 나가도록(단위 환산 혼선 제거).
         => name.StartsWith("DH_") && !NumberKeys.Contains(name) ? SpecTypeId.String.Text : SpecTypeId.Number;
 
-    /// DH_ 로 시작하지만 숫자인 칸(물량 검산).
-    private static readonly HashSet<string> NumberKeys = new() { "DH_BIM물량", "DH_수식물량", "DH_물량차" };
+    /// DH_ 로 시작하지만 숫자인 칸(물량 검산 · 거푸집 넓이 합).
+    private static readonly HashSet<string> NumberKeys = new() { "DH_BIM물량", "DH_수식물량", "DH_물량차", "DH_면적(거푸집)" };
 
     /// <param name="only">이 이름들만 만든다(없으면 전부).</param>
     public static string EnsureParameters(Document doc, IReadOnlyCollection<string>? only = null)
@@ -103,8 +113,11 @@ public static class SharedParameterManager
     private static bool BindParam(Document doc, DefinitionGroup group, string name,
                                   ForgeTypeId spec, Guid guid, CategorySet cats)
     {
+        // Revit 이 이름에 받지 않는 글자가 있으면 만들지 않는다(만들다 예외가 나 다른 칸까지 못 만들지 않게 — 쓰는 쪽이 '칸 없음'으로 알린다).
+        // 거푸집 이름의 '0∼7m' 는 이 때문에 '~' 대신 '∼'(U+223C)다.
+        if (!NamingUtils.IsValidName(name)) return false;
         Definition def = group.Definitions.get_Item(name)
-            ?? group.Definitions.Create(new ExternalDefinitionCreationOptions(name, spec) { GUID = guid });
+            ?? group.Definitions.Create(new ExternalDefinitionCreationOptions(name, spec) { GUID = guid, HideWhenNoValue = HideWhenEmpty.Contains(name) });
 
         BindingMap map = doc.ParameterBindings;
         if (map.Contains(def)) return false; // 멱등 skip

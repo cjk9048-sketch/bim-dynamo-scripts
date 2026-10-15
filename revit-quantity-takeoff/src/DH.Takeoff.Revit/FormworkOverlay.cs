@@ -74,22 +74,11 @@ public sealed class FormworkOverlay : IDirectContext3DServer
         ("확인할 자리", "분홍"),
     };
 
-    private static (int r, int g, int b) BaseColor(string item) => item switch
-    {
-        FormworkTable.Euro => (37, 99, 235),
-        FormworkTable.Ply3 => (245, 124, 0),
-        FormworkTable.Ply4 => (46, 160, 67),
-        FormworkTable.Ply6 => (121, 85, 72),
-        _ => (120, 120, 120),
-    };
-
     // 안쪽을 보는 면은 같은 색을 흰색 쪽으로 반쯤 섞어 연하게, 유로폼의 둘째 높이 구간부터는 검은색 쪽으로 섞어 짙게.
+    // 색은 수량산출 창의 3D 와 같다(Core 의 FormworkPalette 하나를 같이 쓴다).
     private static int ColorOf(FacePatch patch)
     {
-        if (patch.NeedsCheck) return 0xE91E63;
-        var (r, g, b) = BaseColor(patch.Item);
-        if (patch.Item == FormworkTable.Euro && patch.Band > 0) (r, g, b) = (r * 55 / 100, g * 55 / 100, b * 55 / 100);
-        if (patch.Side.StartsWith("내측", StringComparison.Ordinal)) (r, g, b) = ((r + 255) / 2, (g + 255) / 2, (b + 255) / 2);
+        var (r, g, b) = FormworkPalette.Of(patch);
         return r << 16 | g << 8 | b;
     }
 

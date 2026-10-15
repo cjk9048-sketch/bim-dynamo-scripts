@@ -418,8 +418,12 @@ public static class FormulaAutoFill
     /// </summary>
     private static bool HoldIfStale(Document doc, FormulaOutcome o)
     {
-        if (o.Kept || o.Result.Ok || o.NoVolume || o.NotConcrete) return false;
+        if (o.Kept || o.NoVolume || o.NotConcrete) return false;
         var el = doc.GetElement(o.Id);
+        // 새 식을 만들었으면 보통은 적는다. 다만 식 칸에 적을 수 없는 부재(칸이 없다 · 읽기 전용)는 Write 가 식을 못 적은 채 판정만 옛 식으로
+        // 다시 적어 '일치'가 될 수 있다 — 그런 부재도 표시를 남긴다(2026-10-14 검토 R32 낮음).
+        bool formulaWritable = el != null && el.GetParameters(ParamName).Any(p => !p.IsReadOnly && p.StorageType == StorageType.String);
+        if (o.Result.Ok && formulaWritable) return false;
         if (o.VerdictBefore.Length == 0 && el != null)
         {
             try { o.VerdictBefore = ZoneScene.Text(el, VerdictParam); } catch { }
@@ -428,8 +432,10 @@ public static class FormulaAutoFill
         o.StaleLeft = true;
         o.Verdict = StaleVerdict;
         o.VerdictReadBack = true;
-        o.NoWrite = "'다시 계산 필요'를 남김(식을 새로 만들지 못함 — 사람이 확인)";
-        if (el != null) o.Skipped = WhyNotEditable(doc, el) ?? "";
+        o.NoWrite = o.Result.Ok ? "'다시 계산 필요'를 남김(새 식을 만들었지만 식 칸에 적을 수 없음)"
+                                : "'다시 계산 필요'를 남김(식을 새로 만들지 못함 — 사람이 확인)";
+        // 확인 창에 띄워도 저장할 수 없는 부재는 그 까닭을 적어 확인 창 목록에서 뺀다(그룹 안 · 다른 사용자가 편집 중 · 식 칸에 적을 수 없음).
+        if (el != null) o.Skipped = WhyNotEditable(doc, el) ?? (formulaWritable ? "" : "식 칸(DH_Formula)이 없거나 읽기 전용");
         return true;
     }
 

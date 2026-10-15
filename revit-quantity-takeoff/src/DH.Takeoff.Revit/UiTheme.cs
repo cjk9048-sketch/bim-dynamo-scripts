@@ -134,6 +134,14 @@ public sealed class UiTheme
         return combo;
     }
 
+    /// <summary>적거나 펼쳐서 고르는 칸(글 칸 + 목록). hint = 비어 있을 때 흐리게 보이는 안내 글. 적는 대로 이름을 채워 넣지 않는다(IsTextSearchEnabled 끔).</summary>
+    public ComboBox ComboEdit(string hint = "", string tip = "", string id = "")
+    {
+        var combo = new ComboBox { Style = StyleOf("ComboEdit"), Tag = hint };
+        Mark(combo, tip, id);
+        return combo;
+    }
+
     /// <summary>체크 칸.</summary>
     public CheckBox Check(string text, bool on, string tip = "", string id = "")
     {
@@ -604,6 +612,60 @@ public sealed class UiTheme
                   </Popup>
                 </Grid>
                 <ControlTemplate.Triggers>
+                  <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.45"/>
+                  </Trigger>
+                </ControlTemplate.Triggers>
+              </ControlTemplate>
+            </Setter.Value>
+          </Setter>
+        </Style>
+
+        <!-- 적거나 펼쳐서 고르는 칸(IsEditable): 글 칸 + 오른쪽 꺾쇠. 비어 있으면 Tag 의 안내 글이 흐리게 보인다 -->
+        <Style x:Key="ComboEdit" TargetType="ComboBox" BasedOn="{StaticResource Combo}">
+          <Setter Property="IsEditable" Value="True"/>
+          <Setter Property="IsTextSearchEnabled" Value="False"/>
+          <Setter Property="Template">
+            <Setter.Value>
+              <ControlTemplate TargetType="ComboBox">
+                <Grid>
+                  <ToggleButton x:Name="face" Style="{StaticResource ComboFace}" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"/>
+                  <TextBlock x:Name="hint" Text="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}" Foreground="{StaticResource Sub}" Opacity="0.8"
+                             Margin="11,0,30,1" VerticalAlignment="Center" IsHitTestVisible="False" Visibility="Collapsed" TextTrimming="CharacterEllipsis"/>
+                  <TextBox x:Name="PART_EditableTextBox" Margin="1,1,26,1" Padding="8,0,0,1" Background="Transparent" BorderThickness="0"
+                           Foreground="{TemplateBinding Foreground}" CaretBrush="{StaticResource Text}" SelectionBrush="{StaticResource Accent}"
+                           VerticalContentAlignment="Center" FocusVisualStyle="{x:Null}"
+                           IsReadOnly="{Binding IsReadOnly, RelativeSource={RelativeSource TemplatedParent}}">
+                    <TextBox.Template>
+                      <ControlTemplate TargetType="TextBox">
+                        <ScrollViewer x:Name="PART_ContentHost" Focusable="False" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Hidden"/>
+                      </ControlTemplate>
+                    </TextBox.Template>
+                  </TextBox>
+                  <Popup x:Name="PART_Popup" AllowsTransparency="True" Focusable="False" Placement="Bottom" HorizontalOffset="-8" PopupAnimation="Fade"
+                         IsOpen="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                    <Grid Margin="8,4,8,12" MinWidth="{TemplateBinding ActualWidth}" MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                      <Border Background="{StaticResource Card}" CornerRadius="8">
+                        <Border.Effect>
+                          <DropShadowEffect BlurRadius="12" ShadowDepth="3" Direction="270" Opacity="0.22"/>
+                        </Border.Effect>
+                      </Border>
+                      <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="8" Padding="4">
+                        <ScrollViewer>
+                          <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"/>
+                        </ScrollViewer>
+                      </Border>
+                    </Grid>
+                  </Popup>
+                </Grid>
+                <ControlTemplate.Triggers>
+                  <Trigger Property="Text" Value="">
+                    <Setter TargetName="hint" Property="Visibility" Value="Visible"/>
+                  </Trigger>
+                  <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                    <Setter TargetName="face" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                  </Trigger>
                   <Trigger Property="IsEnabled" Value="False">
                     <Setter Property="Opacity" Value="0.45"/>
                   </Trigger>

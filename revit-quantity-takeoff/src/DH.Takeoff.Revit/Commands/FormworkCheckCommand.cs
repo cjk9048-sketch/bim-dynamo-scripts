@@ -62,7 +62,7 @@ public sealed class FormworkCheckCommand : IExternalCommand
 
                     results = FormworkAnalyzer.Analyze(scene.Elements, scene.Zones, options);
                     audit = FormworkAnalyzer.Check(results);
-                    unpainted = AttachCurved(scene, results);
+                    unpainted = FormworkReader.AttachCurved(scene, results);
 
                     try { log = FormworkReader.WriteLog(doc, results, options); }
                     catch (Exception ex) { log = "(쓰지 못했습니다 — 결과표가 엑셀에 열려 있으면 닫아 주세요: " + ex.Message + ")"; }
@@ -121,20 +121,6 @@ public sealed class FormworkCheckCommand : IExternalCommand
         double total = results.Sum(r => r.Faces.Sum(f => f.CountedArea));
         int check = results.SelectMany(r => r.Faces).SelectMany(f => f.Patches).Count(p => p.NeedsCheck);
         return $"거푸집 {M2(total)} ㎡" + (check > 0 ? $" · 확인할 자리 {check}곳" : "");
-    }
-
-    // 곡면 조각에 Revit 이 나눠 준 세모를 붙인다(확인할 자리로 분홍을 칠하려고). 세모를 얻지 못한 곡면의 수를 돌려준다.
-    private static int AttachCurved(FormworkReader.Scene scene, IReadOnlyList<ElementFormwork> results)
-    {
-        int missing = 0;
-        foreach (var face in results.SelectMany(r => r.Faces))
-        {
-            if (face.Class != FaceClass.Curved) continue;
-            if (scene.CurvedTriangles.TryGetValue((face.ElementId, face.Solid, face.Face), out var triangles) && triangles.Count >= 3)
-                foreach (var patch in face.Patches) patch.Triangles = triangles;
-            else if (face.Patches.Any(p => p.Counted || p.NeedsCheck)) missing++;   // 대응표에서 세지 않기로 한 곡면은 칠할 것이 없다
-        }
-        return missing;
     }
 
     /// <summary>

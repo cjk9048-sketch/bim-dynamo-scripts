@@ -24,6 +24,13 @@ public sealed class FormworkElement
     /// 이름으로 짐작하지 않고 부르는 쪽(대응표)이 정해 준다: 유형 이름이 'SB_T100(기초)' 같은 모델이 있다.
     /// </summary>
     public bool Blinding { get; set; }
+
+    /// <summary>
+    /// 나중에 치는 부재인가 — 받침 · PAD · 출입구 디딤판처럼 구조체를 다 친 뒤에 붙여 치는 것(부위 목록의 '나중에 침', JACK 2026-10-15).
+    /// 구조체의 면은 이 부재가 없는 것처럼 센다(맞닿은 자리도 거푸집 · 안팎 · 밑면 받침도 이 부재 없이).
+    /// 이 부재의 면은 모든 콘크리트를 보고 센다 — 구조체에 맞닿은 면은 이 부재에서만 빠진다.
+    /// </summary>
+    public bool Later { get; set; }
 }
 
 /// <summary>구역 상자(스코프 박스) — 안쪽 면이 '어느 공간의 안쪽인지' 이름을 붙이는 데 쓴다.</summary>
@@ -80,6 +87,12 @@ public sealed class FacePatch
 
     /// <summary>사람에게 확인받을 조각인가(안팎이 갈림 · 아래가 빈 밑면 · 틈 · 재지 못함).</summary>
     public bool NeedsCheck => !Decided && (Side == "확인 필요" || Below is Below.Floating or Below.Gap || (Counted && Note.Length > 0));
+
+    /// <summary>
+    /// 대응표를 걸기 전의 값(Analyze 가 남긴다 — 세는가 · 정했는가 · 종류 · 까닭). 대응표만 바꿔 다시 셀 때(FormworkAnalyzer.Reclassify)
+    /// 이 값으로 되돌린 뒤 대응표를 다시 건다 — 대응표를 건 뒤의 값에서는 처음 값을 되살릴 수 없다(R42 core M-1).
+    /// </summary>
+    internal (bool Counted, bool Decided, string Item, string Note)? Unruled { get; set; }
 }
 
 /// <summary>면을 가린 이웃 부재 하나와 그 넓이.</summary>
@@ -101,7 +114,9 @@ public sealed class FaceResult
     public double Polygon { get; set; }         // 고리로 계산한 넓이(Gross 와 같아야 한다)
     public double Covered { get; set; }         // 다른 콘크리트가 맞닿은(또는 그 속에 묻힌) 넓이
     public double Shared { get; set; }          // 다른 부재의 면과 같은 평면·같은 방향으로 포개져, 그쪽에서 세는 넓이
+    public double LaterCovered { get; set; }    // 나중에 치는 부재가 맞닿았지만 구조체의 면이라 그 부재 없이 잰 넓이(드러난 자리에 들어 있다 — 일지 · 검산)
     public double Net { get; set; }             // 드러난 넓이(= Polygon − Covered − Shared)
+    public double[] Normal { get; set; } = Array.Empty<double>();   // 바깥을 보는 법선(x, y, z — 단위 길이). 곡면이면 비어 있다
     public double SlopeDeg { get; set; }        // 수평에서 기운 각도(0 = 수평, 90 = 수직)
     public bool UpFacing { get; set; }
     public double ZMin { get; set; }
