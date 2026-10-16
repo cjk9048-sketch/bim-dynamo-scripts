@@ -300,17 +300,18 @@ public static class CalcSheet
             s += 2;
         }
 
-        // ── 거푸집: 「거푸집」 시트의 종류별 합계를 가져오고, BIM 넓이(면을 잰 넓이)와 나란히 놓는다 ──
+        // ── 거푸집: 「거푸집」 시트의 종류별 «계»를 가져오고, BIM 넓이(면을 잰 넓이)와 나란히 놓는다 ──
+        // 줄 이름은 2D 「수량집계표(구체공)」 꼴 — 공종 «합판거푸집» · 규격 «합판 3회» / 공종 «유로폼»(R47).
         if (form != null && formwork != null)
         {
             var sections = Formwork.FormworkSheet.Write(form, title, formwork);
             if (sections.Count > 0)
             {
                 int first = s;
-                foreach (var (section, sumRef, bim, value) in sections)
+                foreach (var (work, spec, sumRef, bim, value) in sections)
                 {
-                    summary.Text(s, 1, "거푸집");
-                    summary.Text(s, 2, section);
+                    summary.Text(s, 1, work);
+                    if (spec.Length > 0) summary.Text(s, 2, spec);
                     summary.Text(s, 3, "㎡", XlsxStyle.Center);
                     summary.Formula(s, 4, sumRef, FormulaDecomposer.RoundQuantity(value), XlsxStyle.Number2);
                     summary.Number(s, 5, FormulaDecomposer.RoundQuantity(bim), XlsxStyle.Number2);

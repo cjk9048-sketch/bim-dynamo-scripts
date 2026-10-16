@@ -160,7 +160,10 @@ public sealed class CheckOverlapCommand : IExternalCommand
                     {
                         if (found.LeanSwitched > 0) model.Notes.Add($"버림이 남도록 결합 순서를 바꾼 쌍 {found.LeanSwitched}개");
                         if (found.LeanCut.Count > 0) model.Notes.Add($"버림 결합 순서를 바꾸지 못한 쌍 {found.LeanCut.Count}개(일지)");
-                        if (found.LaterSwitched > 0) model.Notes.Add($"구조체가 남도록 나중 부재의 결합 순서를 바꾼 쌍 {found.LaterSwitched}개");
+                        if (found.LaterSwitched > 0) model.Notes.Add($"구조체가 남도록 나중 부재의 결합 순서를 바꾼 쌍 {found.LaterSwitched}개" +
+                                                                     (found.LaterSwitchedParts.Length > 0 ? $"({found.LaterSwitchedParts})" : "") +
+                                                                     " — 나중에 침을 다시 꺼도 그대로(되돌리기는 Ctrl+Z)");
+                        if (found.FloorsGrown.Count > 0) model.Notes.Add($"결합 순서를 바꿔 두 덩이가 된 바닥 {found.FloorsGrown.Count}개 — 산출식 확인(일지)");
                         if (found.LaterCut.Count > 0) model.Notes.Add($"나중 부재의 결합 순서를 바꾸지 못한 쌍 {found.LaterCut.Count}개(일지)");
                         if (found.SplitDone > 0) model.Notes.Add($"두 덩이 벽·기둥 나눔 {found.SplitDone}개");
                         if (found.SplitFailed.Count > 0) model.Notes.Add($"못 나눈 두 덩이 벽·기둥 {found.SplitFailed.Count}개(일지)");
@@ -175,7 +178,8 @@ public sealed class CheckOverlapCommand : IExternalCommand
                         if (found.LaterCut.Count > 0)
                         {
                             model.LaterToFix = found.LaterCut.Count;
-                            model.Notes.Add($"나중 부재가 구조체를 깎은 채 결합된 쌍 {found.LaterCut.Count}개");
+                            // 무슨 부위의 결합이 바뀌는지 누르기 전에 보이게(R46 — 중간슬래브 · 트라프 · 헌치가 새로 나중 부재가 됨 · revit-verify R46 M2).
+                            model.Notes.Add($"나중 부재가 구조체를 깎은 채 결합된 쌍 {found.LaterCut.Count}개({LaterPartsOf(doc, found.LaterCut)})");
                         }
                         if (found.Unsplit.Count > 0)
                         {
@@ -221,14 +225,18 @@ public sealed class CheckOverlapCommand : IExternalCommand
                         int leanBefore = found.LeanCut.Count, laterBefore = found.LaterCut.Count;
                         var fixedLean = FixLean(doc, found, journal, session);
                         var fixedLater = FixLater(doc, found, journal, session);
+                        string laterParts = found.LaterSwitchedParts;
                         int splitBefore = found.Unsplit.Count;   // 순서를 바꿔 덩이가 는 것까지
                         var splitDone = SplitJoined(doc, found, journal, session);
                         // 묶음을 남기지 못했으면(드묾) 닫기가 이미 알렸다 — «바꿨습니다» 창을 또 띄우지 않는다(R36 revit N1).
                         if (!session.Close()) return Result.Succeeded;
                         var said = new List<string>();
                         if (leanBefore > 0) said.Add($"버림이 남도록 결합 순서를 바꿨습니다: {fixedLean}쌍 / {leanBefore}쌍");
-                        if (laterBefore > 0) said.Add($"구조체가 남도록 나중 부재의 결합 순서를 바꿨습니다: {fixedLater}쌍 / {laterBefore}쌍");
+                        if (laterBefore > 0) said.Add($"구조체가 남도록 나중 부재의 결합 순서를 바꿨습니다: {fixedLater}쌍 / {laterBefore}쌍" +
+                                                      (laterParts.Length > 0 ? $"({laterParts})" : "") +
+                                                      (fixedLater > 0 ? "\n부위 목록에서 «나중에 침»을 다시 꺼도 바꾼 결합은 그대로입니다 — 되돌리려면 지금 Ctrl+Z." : ""));
                         if (splitBefore > 0) said.Add($"두 덩이 벽·기둥을 나눴습니다: {splitDone}개 / {splitBefore}개");
+                        if (found.FloorsGrown.Count > 0) said.Add($"결합 순서를 바꿔 두 덩이가 된 바닥 {found.FloorsGrown.Count}개 — 산출식을 확인하세요(일지).");
                         if (found.LeanCut.Count + found.LaterCut.Count + found.SplitFailed.Count > 0) said.Add("못 한 것의 까닭은 일지(…_overlap_session.log)에 있습니다.");
                         if (fixedLean + fixedLater + splitDone > 0) said.Add("\nCtrl+Z 한 번으로 되돌릴 수 있습니다.");
                         try { Dialogs.Show(Title, string.Join("\n", said)); }
@@ -328,7 +336,8 @@ public sealed class CheckOverlapCommand : IExternalCommand
     {
         if (found.LaterCut.Count == 0) return 0;
         var watch = Stopwatch.StartNew();
-        var (left, switched, lines, grown) = OverlapChecker.FixLeanOrder(doc, found.LaterCut, "나중 부재 순서", "구조체");
+        found.LaterSwitchedParts = LaterPartsOf(doc, found.LaterCut);
+        var (left, switched, lines, grown) = OverlapChecker.FixLeanOrder(doc, found.LaterCut, "나중 부재 순서", "구조체", found.FloorsGrown);
         if (switched > 0) session.Committed = true;
         journal.Note($"나중 부재 결합 순서\t바꿈 {switched} · 못 바꿈 {left.Count} / {found.LaterCut.Count} · 덩이가 는 벽·기둥 {grown.Count}\t{watch.ElapsedMilliseconds} ms");
         foreach (string line in lines) journal.Raw("  " + line);
@@ -338,6 +347,14 @@ public sealed class CheckOverlapCommand : IExternalCommand
             if (!found.Unsplit.Any(u => u.Id == g.Id)) found.Unsplit.Add(g);
         return switched;
     }
+
+    // 나중 부재 결합 쌍의 부위별 수 — «중간슬래브 3 · 헌치 2 · 부위 없음 1»(많은 것부터).
+    private static string LaterPartsOf(Document doc, IEnumerable<(ElementId Keep, ElementId Later)> pairs) =>
+        string.Join(" · ", pairs
+            .Select(p => { try { return doc.GetElement(p.Later) is { } el ? ZoneScene.Text(el, ZoneScene.PartParam) : ""; } catch { return ""; } })
+            .Select(n => n.Length > 0 ? n : "부위 없음")
+            .GroupBy(n => n, StringComparer.Ordinal).OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal)
+            .Select(g => $"{g.Key} {g.Count()}"));
 
     // 이미 결합돼 여러 덩이인 벽 · 기둥(found.Unsplit)을 나눈다(바깥 묶음 안 — Ctrl+Z 한 번 · JACK 2026-10-15). 돌려주는 값 = 나눈 수.
     private static int SplitJoined(Document doc, OverlapChecker.Found found, Journal journal, JoinSession session)

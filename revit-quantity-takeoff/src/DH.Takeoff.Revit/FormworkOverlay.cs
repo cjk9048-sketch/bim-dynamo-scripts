@@ -70,7 +70,7 @@ public sealed class FormworkOverlay : IDirectContext3DServer
     /// <summary>범례: 뜻 → 색 이름. 요약 창에 적는다.</summary>
     public static readonly (string meaning, string colorName)[] Legend =
     {
-        (FormworkTable.Euro, "파랑(높은 구간은 남색)"), (FormworkTable.Ply3, "주황"), (FormworkTable.Ply4, "초록"), (FormworkTable.Ply6, "갈색"),
+        (FormworkTable.Euro, "파랑"), (FormworkTable.Ply3, "주황"), (FormworkTable.Ply4, "초록"), (FormworkTable.Ply6, "갈색"),
         ("확인할 자리", "분홍"),
     };
 

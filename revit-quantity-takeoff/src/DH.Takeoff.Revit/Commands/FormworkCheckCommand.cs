@@ -61,8 +61,10 @@ public sealed class FormworkCheckCommand : IExternalCommand
                     options.Rules = rules;
 
                     results = FormworkAnalyzer.Analyze(scene.Elements, scene.Zones, options);
-                    audit = FormworkAnalyzer.Check(results);
                     unpainted = FormworkReader.AttachCurved(scene, results);
+                    // 곡면 조각의 세모는 Analyze 뒤에 붙는다 — 뺀 판(R48)은 그 뒤에 다시 맞춘다(수량산출 창의 FormworkBoard 와 같게 · core-verify R48 L3).
+                    if (rules.DropCount > 0) FormworkAnalyzer.Reclassify(results, options);
+                    audit = FormworkAnalyzer.Check(results);
 
                     try { log = FormworkReader.WriteLog(doc, results, options); }
                     catch (Exception ex) { log = "(쓰지 못했습니다 — 결과표가 엑셀에 열려 있으면 닫아 주세요: " + ex.Message + ")"; }

@@ -5,10 +5,14 @@ namespace DH.Takeoff.Core.Formwork;
 /// <summary>
 /// 같은 평면에 맞닿은 옆면 조각을 부재를 넘어 한 장으로 잇는다(JACK 2026-10-15) — 참고 산출서는 외측 벽을 슬래브 두께까지 한 줄로 적는다
 /// («W1 (외측) : 21 × 5.3» = 우리 벽 20.5 × 5 + 옆 벽 끝면 0.5 × 5 + 지붕 슬래브 옆 21 × 0.3).
-///  · 옆면(FaceClass.Side)의 세는 조각 가운데 외측 · 내측만 잇는다(확인할 조각 · 개구부 · 밑면 · 경사면 · 곡면은 잇지 않는다).
-///  · 외측은 중분류와 상관없이, 내측은 부재의 중분류가 같을 때만(JACK: 바깥 면은 뒤의 방이 달라도 한 장).
+///  · 옆면(FaceClass.Side)의 세는 조각 가운데 외측 · 내측, 그리고 밑면 · 아래를 보는 경사면의 세는 조각을 잇는다(R45 — JACK 2026-10-16:
+///    밑면은 받침 높이마다 조각을 나눠 두어, 잇지 않으면 보 사이 한 칸이 여러 줄이었다). 확인할 조각 · 개구부 · 위를 보는 경사면 · 곡면은 잇지 않는다.
+///  · 옆면은 외측끼리 · 내측끼리 중분류와 상관없이(R47 — JACK 2026-10-16 «안쪽도 판 한 장» · 명장 2D 거푸집 줄에는 위치가 없다 — 전에는 내측은 같은 중분류만),
+///    밑면은 부재의 중분류 · 부위가 같을 때만(밑면은 방마다 — JACK).
 ///  · 같은 종류 · 같은 높이 구간끼리만. 종류만 다른 맞닿음은 잇지 않고 센다(KindSplits — 대응표에서 종류를 맞추면 이어진다).
-///  · 나중에 치는 부재(FormworkElement.Later)와 구조체의 면은 잇지도 세지도 않는다 — 따로 치는 것이다(core R43 L-3).
+///  · 나중에 치는 부재(FormworkElement.Later)의 면도 같은 평면 · 같은 종류면 구조체의 면과 잇는다(R46 — JACK 2026-10-16 «수량산출서대로»:
+///    참고 2D 는 덮개 슬래브 옆면을 아래 벽과 한 줄로 셈 — 높이 = 벽 + 덮개 두께). 전(R43 L-3)에는 따로 치는 것이라 잇지 않았다.
+///    종류가 달라 못 이은 자리는 한쪽이 나중 부재면 세지 않는다(디딤판 6회 ↔ 벽 유로폼처럼 따로 치는 것이 당연한 자리 — 전과 같다).
 ///  · '맞닿음' = 같은 방향 · 같은 평면(Epsilon 안)에서 한쪽을 Join(0.05 mm)만큼 부풀려 겹친 띠가 1 cm 길이를 넘는다(모서리 한 점만 닿은 것은 아니다).
 ///  · 이은 테두리 = 조각들의 합집합을 Join 만큼 부풀렸다 줄인 것(맞댄 이음매의 µm 틈을 닫는다). 그 넓이가 조각 넓이의 합과 다르면
 ///    (틈 · 겹침) 잇지 않는다(Refused) — 넓이는 늘 조각의 합 그대로다.
@@ -94,15 +98,27 @@ public static class FormworkMerge
         public required FacePatch Patch;
         public required V3 N;
         public required double D;          // 평면의 자리(N · 점)
+        public required bool Bottom;       // 밑면 · 아래를 보는 경사면(R45 — 보 사이 한 칸을 한 줄로)
         public required bool Outer;
         public required string Zone;
-        public required string Kind;       // 종류(유로폼이면 높이 구간까지) — 같은 절끼리만 잇는다
+        public required string Part;       // 부재의 부위(밑면은 같은 부위끼리 — 부위마다의 «계»가 옮겨 가지 않게)
+        public required string Group;      // 면의 갈래(밑면 / 아래가 빈 밑면 — 줄의 부위 제목이 섞이지 않게)
+        public required string Kind;       // 종류(유로폼 옆면이면 높이 구간까지 — acrossBands 면 종류만) — 같은 절끼리만 잇는다
         public V3 Min, Max;
         public int Parent;
     }
 
-    /// <param name="zoneOf">부재 Id → 중분류(내측을 이을 때 본다). 없으면 부재가 읽힌 때의 값(FormworkElement.Zone).</param>
-    public static Outcome Find(IReadOnlyList<ElementFormwork> results, FormworkOptions options, Func<long, string>? zoneOf = null)
+    /// <summary>맞닿았다고 보는 가장 작은 겹친 넓이(㎡) — 한쪽을 Join 만큼 부풀려 다른 쪽과 겹친 넓이가 이보다 커야 한다(맞댄 변 1 cm).</summary>
+    internal const double MinShared = Join * MinSharedEdge;
+
+    /// <param name="zoneOf">부재 Id → 중분류(밑면을 이을 때 · 내측의 «종류 달라 못 이음»을 셀 때 본다). 없으면 부재가 읽힌 때의 값(FormworkElement.Zone).</param>
+    /// <param name="acrossBands">
+    /// 유로폼 옆면의 높이 구간을 넘어서도 잇는다 — 거푸집 객체의 판(R45 — JACK 2026-10-16 «엑셀만 나누고 판은 한 장»). 엑셀 줄은 false(구간마다).
+    /// 같은 잣대에 종류 조건만 느슨하므로, false 로 이은 묶음은 늘 true 로 이은 묶음 하나 안에 든다(거절된 묶음만 빼고).
+    /// </param>
+    /// <param name="partOf">부재 Id → 부위(밑면을 이을 때 본다 — 같은 부위끼리). 없으면 부위를 보지 않는다.</param>
+    public static Outcome Find(IReadOnlyList<ElementFormwork> results, FormworkOptions options, Func<long, string>? zoneOf = null, bool acrossBands = false,
+                               Func<long, string>? partOf = null)
     {
         var outcome = new Outcome();
         double eps = options.Epsilon;
@@ -110,19 +126,23 @@ public static class FormworkMerge
         foreach (var r in results)
         {
             string zone = zoneOf?.Invoke(r.Element.Id) ?? r.Element.Zone;
+            string part = partOf?.Invoke(r.Element.Id) ?? "";
             foreach (var f in r.Faces)
             {
-                if (f.Class != FaceClass.Side || f.Normal.Length != 3) continue;
+                // 옆면과 밑면(R45 — 밑면은 받침 높이마다 조각을 나눠 두므로, 잇지 않으면 보 사이 한 칸이 여러 줄 · 여러 판이 된다 — JACK 2026-10-16).
+                bool bottom = f.Class is FaceClass.Bottom or FaceClass.SlopeDown;
+                if ((f.Class != FaceClass.Side && !bottom) || f.Normal.Length != 3) continue;
                 var n = new V3(f.Normal[0], f.Normal[1], f.Normal[2]).Unit();
                 foreach (var p in f.Patches)
                 {
                     if (!p.Counted || p.Item.Length == 0 || p.NeedsCheck || p.Outline.Count == 0 || p.Outline[0].Count < 3) continue;
-                    bool outer = p.Side == "외측", inner = p.Side.StartsWith("내측", StringComparison.Ordinal);
-                    if (!outer && !inner) continue;
+                    bool outer = !bottom && p.Side == "외측", inner = !bottom && p.Side.StartsWith("내측", StringComparison.Ordinal);
+                    if (!bottom && !outer && !inner) continue;
                     var c = new Cand
                     {
-                        Result = r, Face = f, Patch = p, N = n, D = n.Dot(V3.Of(p.Outline[0][0])), Outer = outer, Zone = zone,
-                        Kind = p.Item == FormworkTable.Euro ? $"{p.Item}#{p.Band}" : p.Item, Parent = cands.Count,
+                        Result = r, Face = f, Patch = p, N = n, D = n.Dot(V3.Of(p.Outline[0][0])), Bottom = bottom, Outer = outer, Zone = zone,
+                        Part = part, Group = FormworkTable.GroupOf(f.Class, p),
+                        Kind = p.Item == FormworkTable.Euro && !acrossBands ? $"{p.Item}#{p.Band}" : p.Item, Parent = cands.Count,
                     };
                     (c.Min, c.Max) = BoxOf(p);
                     cands.Add(c);
@@ -130,19 +150,23 @@ public static class FormworkMerge
             }
         }
 
-        // 맞닿은 쌍: 같은 방향 · 같은 평면 · 상자가 닿고 · 같은 쪽(외측끼리, 또는 같은 중분류의 내측끼리) · 둘 다 구조체이거나 둘 다 나중에 치는 부재.
+        // 맞닿은 쌍: 같은 방향 · 같은 평면 · 상자가 닿고 · 같은 갈래(옆면끼리 / 밑면끼리) · 같은 쪽(외측끼리 / 내측끼리 — 위치와 상관없이:
+        // R47 — 명장 2D 거푸집 줄에는 위치가 없다 · JACK «안쪽도 판 한 장») · 밑면은 같은 중분류 · 같은 부위끼리(방마다 순치수).
+        // 나중에 치는 부재도 잇는다(R46). 받침 높이는 보지 않는다(동바리 높이는 조각에 그대로 남는다).
         var splits = new List<(int, int)>();
         for (int i = 0; i < cands.Count; i++)
             for (int j = i + 1; j < cands.Count; j++)
             {
                 Cand a = cands[i], b = cands[j];
-                if (a.Outer != b.Outer || (!a.Outer && a.Zone != b.Zone)) continue;
-                if (a.Result.Element.Later != b.Result.Element.Later) continue;
+                if (a.Bottom != b.Bottom) continue;
+                if (a.Bottom ? a.Zone != b.Zone || a.Part != b.Part || a.Group != b.Group : a.Outer != b.Outer) continue;
                 if (a.N.Dot(b.N) < 1 - 1e-10 || Math.Abs(a.D - b.D) > eps) continue;
                 if (Apart(a, b, Join + 1e-6)) continue;
                 if (!Touch(a, b)) continue;
                 if (a.Kind == b.Kind) Unite(cands, i, j);
-                else if (a.Patch.Item != b.Patch.Item) splits.Add((i, j));   // 높이 구간만 다른 것은 알리지 않는다(일부러 나눈 것)
+                // 높이 구간만 다른 것 · 밑면 · 나중에 치는 부재가 낀 자리는 알리지 않는다. 내측은 중분류가 같은 자리만 센다(R47 전에 보던 자리만 —
+                // 중분류를 넘어 잇게 되면서 알림이 늘지 않게, core-verify R47 L1: 방이 다른 안쪽 면은 종류가 다른 것이 보통이다).
+                else if (!a.Bottom && a.Patch.Item != b.Patch.Item && a.Result.Element.Later == b.Result.Element.Later && (a.Outer || a.Zone == b.Zone)) splits.Add((i, j));
             }
         // 잇지 못한 자리: 이은 묶음끼리 한 번 센다 — 양쪽은 묶음에서 가장 넓은 조각의 유형 · 종류로 적는다.
         var leads = cands.GroupBy(c => Find(cands, c.Parent)).ToDictionary(g => g.Key, g => g.OrderByDescending(c => c.Patch.Area).ThenBy(c => c.Result.Element.Id).First());
@@ -209,11 +233,14 @@ public static class FormworkMerge
     }
 
     // 한쪽을 Join 만큼 부풀려 다른 쪽과 겹친 넓이가 (Join × 1 cm)보다 크면 맞닿았다.
-    private static bool Touch(Cand a, Cand b)
+    private static bool Touch(Cand a, Cand b) => Overlap(a.Patch, b.Patch, a.N) > MinShared;
+
+    /// <summary>같은 평면(법선 n)의 두 조각: a 를 Join 만큼 부풀려 b 와 겹친 넓이(㎡) — MinShared 보다 크면 맞닿았다(맞댄 변 1 cm 넘게).</summary>
+    internal static double Overlap(FacePatch a, FacePatch b, V3 n)
     {
-        var frame = Frame.Of(V3.Of(a.Patch.Outline[0][0]), a.N);
-        var grown = Clipper.InflatePaths(PathsOf(a.Patch, frame), Join * Poly.Scale, JoinType.Miter, EndType.Polygon);
-        return Poly.Area(Poly.Intersect(grown, PathsOf(b.Patch, frame))) > Join * MinSharedEdge;
+        var frame = Frame.Of(V3.Of(a.Outline[0][0]), n);
+        var grown = Clipper.InflatePaths(PathsOf(a, frame), Join * Poly.Scale, JoinType.Miter, EndType.Polygon);
+        return Poly.Area(Poly.Intersect(grown, PathsOf(b, frame)));
     }
 
     private static int Find(List<Cand> cands, int i)

@@ -58,10 +58,12 @@ public static class OverlapChecker
         // [우선순위대로 결합] 때 FixLeanOrder 가 자르는 순서를 바꾼다(JACK 2026-10-14 «결합할 때 함께 바꾸기»). 바꾸고 나면 못 바꾼 것만 남는다.
         public List<(ElementId Lean, ElementId Other)> LeanCut = new();
         public int LeanSwitched;  // FixLeanOrder 가 바꾼 쌍의 수
-        // 이미 결합됐는데 나중에 치는 부재(받침 · PAD · 디딤판 — 부위 목록의 '나중에 침')가 구조체를 자르는 쪽인 쌍(Keep = 남을 구조체 · Later = 잘릴 나중 부재) —
+        // 이미 결합됐는데 나중에 치는 부재(받침 · PAD · 디딤판 · 중간슬래브 · 트라프 · 헌치 — 부위 목록의 '나중에 침')가 구조체를 자르는 쪽인 쌍(Keep = 남을 구조체 · Later = 잘릴 나중 부재) —
         // «나중 부재는 늘 잘림»(JACK 2026-10-15)과 반대인 채 남아 있다. [우선순위대로 결합] 때 버림과 같은 길(FixLeanOrder)로 구조체가 자르게 바꾼다.
         public List<(ElementId Keep, ElementId Later)> LaterCut = new();
         public int LaterSwitched;
+        public string LaterSwitchedParts = "";   // 순서를 바꾸려던 나중 부재의 부위별 수(«중간슬래브 3 · 헌치 2» — 결합 뒤 창의 알림 · revit-verify R46 M2)
+        public List<ElementId> FloorsGrown = new();   // 결합 순서를 바꿔 덩이가 는 바닥(나누지 않음 — 산출식이 «직접 넣어야 함»이 될 수 있어 알린다 · revit-verify R46 L5)
         // 이미 결합돼(전에 건 결합 · Revit 이 저절로 건 결합) 결합 전보다 덩이가 많은 벽 · 구조 기둥 — Before = 결합 전 덩이 수 · Now = 지금 덩이 수.
         // [우선순위대로 결합] 때(겹친 쌍이 없으면 작은 창 단추) SplitJoined 가 덩이마다 나눈다(JACK 2026-10-15 «이미 결합된 두 덩이도 함께 나누기»). 나누고 나면 비운다.
         public List<(ElementId Id, int Before, int Now)> Unsplit = new();
@@ -79,7 +81,7 @@ public static class OverlapChecker
     /// 슬래브는 통째로 세고 벽·기둥·보는 슬래브에 닿는 면까지만 센다(참고 산출서의 배수지 벽체가 이 방식 — 벽 높이 = 내부 높이).
     /// 버림은 무엇으로 그렸든 맨 앞(JACK 2026-10-14 "버림은 늘 남기기" — 지침 수도설계 부속서 9 의 버림 수량 «버림_B × 버림_H × L»은
     /// 위에 무엇이 있든 버림 층 전체다): 버림을 일반 모델로 그려도 벽에 잘리지 않고, 기초 · 슬래브와 겹쳐도 버림이 남는다.
-    /// 나중에 치는 부위(부위 목록의 '나중에 침' — 받침 · PAD · 출입구 디딤판 …)는 무엇으로 그렸든 맨 뒤(JACK 2026-10-15 «나중 부재가 늘 잘림» —
+    /// 나중에 치는 부위(부위 목록의 '나중에 침' — 받침 · PAD · 출입구 디딤판 · 중간슬래브 · 트라프 · 헌치 …)는 무엇으로 그렸든 맨 뒤(JACK 2026-10-15 «나중 부재가 늘 잘림» —
     /// 구조체를 먼저 치고 붙여 치므로 겹친 자리는 구조체의 것이다 · 거푸집도 구조체 면이 온전해야 맞게 나온다). 버림과는 버림이 남는다.
     /// 숫자가 작을수록 우선. 같은 급이면 먼저 만든(Id 가 작은) 부재가 남는다.
     /// </summary>
@@ -103,7 +105,7 @@ public static class OverlapChecker
         };
     }
 
-    public const string PriorityText = "버림 > 기초 > 슬래브(바닥) > 기둥 > 벽 > 보 > 일반 모델 > 나중에 치는 부위(받침·PAD·디딤판 …) (같은 급이면 먼저 만든 부재)";
+    public const string PriorityText = "버림 > 기초 > 슬래브(바닥) > 기둥 > 벽 > 보 > 일반 모델 > 나중에 치는 부위(받침·PAD·디딤판·중간슬래브·트라프·헌치 …) (같은 급이면 먼저 만든 부재)";
 
     /// <summary>나중에 치는 부재의 급 — 어느 카테고리보다 뒤.</summary>
     public const int LaterPriority = 10;
@@ -728,11 +730,13 @@ public static class OverlapChecker
     /// <param name="title">묶음 · 트랜잭션 · 일지의 이름 — 나중에 치는 부재(Found.LaterCut — 쌍의 앞 = 남을 구조체, 뒤 = 잘릴 나중 부재)도 같은 길로 바꾼다.</param>
     /// <param name="keepName">일지에서 남는 쪽을 부르는 말.</param>
     public static (List<(ElementId Lean, ElementId Other)> left, int switched, List<string> lines, List<(ElementId Id, int Before, int Now)> grown)
-        FixLeanOrder(Document doc, IReadOnlyList<(ElementId Lean, ElementId Other)> pairs, string title = "버림 순서", string keepName = "버림")
+        FixLeanOrder(Document doc, IReadOnlyList<(ElementId Lean, ElementId Other)> pairs, string title = "버림 순서", string keepName = "버림",
+                     List<ElementId>? floorsGrown = null)
     {
         var left = new List<(ElementId, ElementId)>();
         var lines = new List<string>();
         var grown = new List<(ElementId, int, int)>();
+        var grownFloors = new List<ElementId>();             // 덩이가 는 바닥(묶음을 합친 뒤에만 부르는 쪽에 넘긴다)
         var done = new List<(ElementId, ElementId)>();      // 바꾼 쌍(묶음을 합치지 못하면 left 로 되돌린다)
         if (pairs.Count == 0) return (left, 0, lines, grown);
         using var group = new TransactionGroup(doc, "DH 겹침 결합 — " + title);
@@ -746,6 +750,7 @@ public static class OverlapChecker
             string? blocked = FormulaAutoFill.WhyNotEditable(doc, lean) ?? FormulaAutoFill.WhyNotEditable(doc, other);
             if (blocked != null) { lines.Add(head + "못 바꿈: " + blocked); left.Add(pair); continue; }
             int lumpsBefore = OverlapSplitter.LumpCount(other);
+            int floorBefore = OverlapSplitter.FloorLumpCount(other);
             using var tx = new Transaction(doc, "DH 겹침 결합 — " + title);
             var quiet = new QuietFailures();
             try
@@ -778,6 +783,13 @@ public static class OverlapChecker
                         grown.Add((other.Id, lumpsBefore, lumpsAfter));
                         lines.Add($"  덩이가 늘었음\tId {other.Id.Value}\t{lumpsBefore} → {lumpsAfter}개 — 두 덩이 나누기에 넘김");
                     }
+                    // 바닥(중간슬래브 등 — R46 의 나중 부재)은 나누지 않는다 — 덩이가 늘었으면 일지에만(산출식이 «직접 넣어야 함»이 될 수 있다).
+                    int floorAfter = floorBefore > 0 ? OverlapSplitter.FloorLumpCount(other) : -1;
+                    if (floorBefore > 0 && floorAfter > floorBefore)
+                    {
+                        lines.Add($"  바닥 덩이가 늘었음\tId {other.Id.Value}\t{floorBefore} → {floorAfter}개 — 나누지 않음(산출식이 «직접 넣어야 함»이 될 수 있음)");
+                        grownFloors.Add(other.Id);
+                    }
                 }
                 else { lines.Add(head + "Revit 이 되돌림" + (quiet.FirstError.Length > 0 ? $"({quiet.FirstError})" : "")); left.Add(pair); }
             }
@@ -803,10 +815,12 @@ public static class OverlapChecker
                 left.AddRange(done);
                 done.Clear();
                 grown.Clear();
+                grownFloors.Clear();   // 되돌려졌으면 바닥도 그대로다(revit-verify R46 L2)
                 lines.Add($"묶음을 합치지 못함 — 바꾼 {title}를 모두 되돌림\t" + why);
             }
         }
         else group.RollBack();
+        floorsGrown?.AddRange(grownFloors);
         return (left, done.Count, lines, grown);
     }
 

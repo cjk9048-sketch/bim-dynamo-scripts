@@ -52,6 +52,17 @@ public static class OverlapSplitter
     }
 
     /// <summary>
+    /// 바닥(슬래브)의 지금 덩이 수 — 나누기 대상은 아니고 일지에만 쓴다: 결합 순서를 바꿔 벽이 바닥을 자르면 바닥이 두 덩이가 될 수 있고,
+    /// 그러면 산출식이 상자로 안 풀려 «직접 넣어야 함»이 될 수 있다(revit-verify R46 L1). 바닥이 아니거나 읽지 못하면 −1.
+    /// </summary>
+    public static int FloorLumpCount(Element el)
+    {
+        if (el is not Floor) return -1;
+        try { return CountLumps(SolidReader.Solids(el)); }
+        catch { return -1; }
+    }
+
+    /// <summary>
     /// 결합 · 자르기 · 구멍 전의 덩이 수 — 이미 결합된 부재가 결합 때문에 여러 덩이인지 가를 때(JACK 2026-10-15 «이미 결합된 두 덩이도 나누기»).
     /// 벽 = 1(벽의 형상은 입체 하나 — 송악3 형상 덤프의 벽 25개 모두) · 구조 기둥 = GetOriginalGeometry(결합 · 자르기 전 모양)의 덩이 수
     /// (입체가 여럿인 패밀리면 그 수 — 그래서 몸 + 기둥머리는 늘지 않은 것으로 본다). 대상이 아니거나 읽지 못하면 −1.
@@ -157,6 +168,7 @@ public static class OverlapSplitter
         bool[] allowJoin = el is Wall w0 ? new[] { WallUtils.IsWallJoinAllowedAtEnd(w0, 0), WallUtils.IsWallJoinAllowedAtEnd(w0, 1) } : Array.Empty<bool>();
         int? workset = doc.IsWorkshared ? el.get_Parameter(BuiltInParameter.ELEM_PARTITION_PARAM)?.AsInteger() : null;
         var stamp = PlaceStamp.ValueOf(el);
+        string mark = FormworkReader.MarkOf(el);
 
         using var tx = new Transaction(doc, "DH 겹침 결합 — 나누기");
         var quiet = new OverlapChecker.QuietFailures();
@@ -191,6 +203,8 @@ public static class OverlapSplitter
                     }
                 if (workset is { } ws && copy.get_Parameter(BuiltInParameter.ELEM_PARTITION_PARAM) is { IsReadOnly: false } part) part.Set(ws);
                 PlaceStamp.Set(copy, stamp);
+                // 복사본의 «마크»를 원래 값으로 — Revit 은 복사할 때 마크를 바꿀 수 있다(나눈 조각도 도면 부호는 원래 부재의 것 · 엑셀 거푸집 줄의 부호 — R47 revit-verify L1).
+                if (copy.get_Parameter(BuiltInParameter.ALL_MODEL_MARK) is { IsReadOnly: false } markParam && FormworkReader.MarkOf(copy) != mark) markParam.Set(mark);
                 pieces.Add(copy);
             }
             // 원래 객체 = 가장 큰 덩이: 그 덩이의 끝으로 옮긴다(맨 아래면 위 끝만 · 가운데면 둘 다 · 맨 위면 아래 끝만).
@@ -384,7 +398,7 @@ public static class OverlapSplitter
                      .WherePasses(new ElementMulticategoryFilter(AroundCategories))
                      .WherePasses(new BoundingBoxIntersectsFilter(new Outline(bb.Min - pad, bb.Max + pad))))
         {
-            if (other.Id == el.Id) continue;
+            if (other.Id == el.Id || FormworkObjects.IsOurs(other)) continue;   // 거푸집 객체(R44)는 콘크리트가 아니다
             double v;
             try { v = SolidReader.Solids(other).Sum(s => s.Volume); }
             catch { continue; }

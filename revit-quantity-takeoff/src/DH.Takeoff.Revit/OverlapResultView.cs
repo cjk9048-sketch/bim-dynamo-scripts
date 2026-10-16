@@ -1260,7 +1260,7 @@ public sealed class OverlapResultView
         if (_m.Mode == Mode.Found && Left > 0)
             lines.Add("남은 쌍 전부에 Revit '형상 결합'을 걸어 우선순위가 낮은 쪽에서 겹친 만큼을 뺍니다.\n우선순위: " + _m.PriorityText);
         if (_m.LeanToFix > 0) lines.Add($"버림이 잘린 채 결합된 쌍 {_m.LeanToFix}개: 버림이 남도록 자르는 순서를 바꿉니다.");
-        if (_m.LaterToFix > 0) lines.Add($"나중에 치는 부재(받침·PAD·디딤판)가 구조체를 깎은 채 결합된 쌍 {_m.LaterToFix}개: 구조체가 남도록 자르는 순서를 바꿉니다.");
+        if (_m.LaterToFix > 0) lines.Add($"나중에 치는 부재가 구조체를 깎은 채 결합된 쌍 {_m.LaterToFix}개: 구조체가 남도록 자르는 순서를 바꿉니다.");
         if (_m.SplitToDo > 0) lines.Add($"결합돼 두 덩이인 벽·기둥 {_m.SplitToDo}개: 덩이마다 나눕니다(위치·부위는 그대로).");
         lines.Add("모델이 바뀝니다(닫은 뒤 Ctrl+Z 한 번으로 되돌림).");
         return string.Join("\n", lines);

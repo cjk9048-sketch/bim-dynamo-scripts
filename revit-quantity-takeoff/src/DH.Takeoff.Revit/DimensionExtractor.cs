@@ -12,7 +12,12 @@ public static class DimensionExtractor
 {
     private const double FtToM = 0.3048;
 
-    /// <summary>대상 카테고리의 모든 인스턴스.</summary>
+    /// <summary>
+    /// 대상 카테고리의 모든 인스턴스 — 거푸집 객체(R44 · FormworkObjects 가 만든 판)는 뺀다.
+    /// 판은 일반 모델이고 재료가 콘크리트가 아니라는 표시도 없어(ConcreteFilter 는 모르는 재료를 콘크리트로 둔다) 빼지 않으면
+    /// 콘크리트 부재로 읽힌다: 거푸집 면을 잴 때 판이 콘크리트 겉을 덮어 거푸집이 사라지고, 산출식 · 산출근거 · 겹침 검사 · 3D 에도 섞인다.
+    /// 모든 읽기(거푸집 · 위치·부위 · 산출식 · 산출근거 · 겹침 검사 · 형상 내보내기)가 이것으로 모은다.
+    /// </summary>
     public static ICollection<ElementId> CollectApplicable(Document doc)
     {
         var filter = new ElementMulticategoryFilter(new[]
@@ -21,8 +26,10 @@ public static class DimensionExtractor
             BuiltInCategory.OST_Walls, BuiltInCategory.OST_Floors,
             BuiltInCategory.OST_StructuralFoundation, BuiltInCategory.OST_GenericModel,
         });
-        return new FilteredElementCollector(doc).WhereElementIsNotElementType()
-            .WherePasses(filter).ToElementIds();
+        var collector = new FilteredElementCollector(doc).WhereElementIsNotElementType().WherePasses(filter);
+        var formwork = FormworkObjects.Find(doc);
+        if (formwork.Count > 0) collector = collector.Excluding(formwork);   // 빈 목록을 넘기면 Revit 이 예외를 낸다
+        return collector.ToElementIds();
     }
 
     /// <summary>대상을 '반듯함(simple)'과 '비정형(irregular)'으로 분류.</summary>

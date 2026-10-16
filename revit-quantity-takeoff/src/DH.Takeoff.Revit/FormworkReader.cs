@@ -74,6 +74,8 @@ public static class FormworkReader
                 Kind = CalcSheetExporter.KindOf(el),
                 Type = type,
                 Zone = ZoneAssigner.Current(el),
+                Part = part,            // ② 대응표의 부위 줄 · 부위의 처음 값(R47)
+                Mark = MarkOf(el),      // 엑셀 줄의 부호(R47)
                 Solids = solids,
                 Target = target,
                 // 버림(무근)인지의 초안: 유형·재료 이름에 '무근'·'버림'. 이름으로 모르는 유형은 대응표에서 사람이 정한다.
@@ -87,6 +89,16 @@ public static class FormworkReader
         // 안쪽 면에 '어느 공간의 안쪽인지' 이름을 붙이려면 공간의 모양(구역)이 있어야 한다. 10/13 부터 위치는 부재를 찍어서 정하므로
         // 공간의 모양이 없다 — Zones 를 비워 두고, 안쪽 면은 '내측'으로만 낸다(면이 바라보는 공간의 이름은 거푸집 다음 단계에서 다시 정한다).
         return scene;
+    }
+
+    /// <summary>
+    /// 부재의 «마크»(Revit Mark — 한국어 화면의 속성 이름은 «마크», ko-KR 리소스에서 확인) — 도면 부호(W1 · S1 …)를 넣는 칸. 비었으면 "".
+    /// 엑셀 거푸집 줄의 부호가 된다(비었으면 유형 이름 — R47).
+    /// </summary>
+    public static string MarkOf(Element el)
+    {
+        try { return el.get_Parameter(BuiltInParameter.ALL_MODEL_MARK)?.AsString()?.Trim() ?? ""; }
+        catch { return ""; }
     }
 
     // 나중에 치는 부재와 결합된 구조체 가운데, 나중 부재가 자르는 쪽(IsCuttingElementInJoin)인 쌍을 모은다. 읽기만 한다.

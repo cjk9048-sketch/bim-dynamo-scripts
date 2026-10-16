@@ -19,8 +19,11 @@ public sealed class FillDimensionsCommand : IExternalCommand
 
         try
         {
-            var sel = uidoc.Selection.GetElementIds();
-            ICollection<ElementId> targets = sel.Count > 0 ? sel : DimensionExtractor.CollectApplicable(doc);
+            // 고른 것 가운데 거푸집 객체(R44 — 콘크리트가 아니다)는 뺀다(판만 골랐으면 대상이 없다).
+            var picked = uidoc.Selection.GetElementIds();
+            ICollection<ElementId> targets = picked.Count > 0
+                ? picked.Where(id => !FormworkObjects.IsOurs(doc.GetElement(id))).ToList()
+                : DimensionExtractor.CollectApplicable(doc);
             if (targets.Count == 0)
             {
                 Dialogs.Show("DH 수량산출 — 치수 자동입력", "대상 구조부재가 없습니다.");
