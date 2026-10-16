@@ -31,9 +31,10 @@ public enum MeshStyle
 ///  · 찍기: Core 의 Picker 가 시선으로 직접 센다(WPF 의 찍기 기능을 쓰지 않는다 — 화면 없이도 같은 답).
 ///  · 마우스: 왼쪽 = 찍기 / 끌면 네모로 고르기(왼→오 온전히 든 것 · 오→왼 걸친 것까지) · 굴림 = 확대(마우스 자리) ·
 ///           가운데 끌기 = 옮기기 · Shift + 가운데 끌기 또는 오른쪽 끌기 = 돌리기 · 가운데 두 번 누르기 = 화면 맞춤. (Revit 과 같은 손짓)
-///  · 층을 나눠 그리기(layered — 겹침 검사 창만 켠다. 켜지 않으면 위의 그리기 그대로다): 부재마다 그리는 방식(MeshStyle)을 받아
+///  · 층을 나눠 그리기(layered — 겹침 검사 창 · 수량산출 창. 켜지 않으면 위의 그리기 그대로다): 부재마다 그리는 방식(MeshStyle)을 받아
 ///    그림을 넷으로 겹친다 — 바닥(면 + 모서리 · 둘레 부재의 모서리만) → 옅은 면(층을 통째로 옅게 섞는다: 층 안에서는 불투명하게 그려
 ///    깊이가 맞고, 반투명 재료를 쓰지 않으니 그리는 차례 문제가 없다) → 맨 위(제 깊이 판정을 따로 가져 아래 층에 가려지지 않는다) → 고른 부재.
+///    모두 Solid 면 층을 나누지 않은 그리기와 같은 그림이다(고른 부재의 덧그림까지 — R48: 수량산출 창의 ① 이 그대로 쓴다).
 /// </summary>
 public sealed class Model3DView : Grid
 {
@@ -96,6 +97,12 @@ public sealed class Model3DView : Grid
 
     /// <summary>그 부재를 그리는 방식(층을 나눠 그릴 때만 본다).</summary>
     public Func<int, MeshStyle> StyleOf { get; set; } = _ => MeshStyle.Solid;
+
+    /// <summary>
+    /// 그 부재를 찍을 수 있는가(보이는 것 가운데) — 찍히지 않는 것은 시선이 지나간다. 수량산출 창 ② 는 줄을 고른 동안 옅게 그린 부재를 끈다
+    /// (그 뒤의 옅은 판을 찍을 수 있게 — R48). 돌리기의 축은 이것과 상관없이 마우스 밑의 것으로 잡는다.
+    /// </summary>
+    public Func<int, bool> Pickable { get; set; } = _ => true;
 
     /// <summary>둘레 부재(MeshStyle.Ghost)의 모서리 색.</summary>
     public (byte r, byte g, byte b) GhostEdge { get; set; }
@@ -227,12 +234,26 @@ public sealed class Model3DView : Grid
     public void SetMeshes(IReadOnlyList<MeshData> meshes)
     {
         CancelDrag();
+        // 전에도 그리던 겉면(같은 MeshData)은 만든 면 · 모서리 띠를 다시 쓴다 — ② 에서 대응표를 고치거나 판을 빼면 겉면을 통째로 갈아 끼우는데
+        // 바뀐 판은 몇 장뿐이다(R48). 모서리 띠는 지금 확대로 만든 것이다(확대가 바뀌면 SyncCamera 가 모두 다시 만든다).
+        var made = new Dictionary<MeshData, (MeshGeometry3D body, Geometry3D? edge)>(ReferenceEqualityComparer.Instance);
+        for (int i = 0; i < _meshes.Count; i++)
+            if (_body[i] is { } was) made.TryAdd(_meshes[i], (was, _edgeModel[i]?.Geometry));
         _meshes = meshes.ToList();
         _body = new MeshGeometry3D?[_meshes.Count];
         _bodyModel = new GeometryModel3D?[_meshes.Count];
         _edgeModel = new GeometryModel3D?[_meshes.Count];
         _pickOutline.Clear();
-        for (int i = 0; i < _meshes.Count; i++) Make(i);      // 모서리 띠는 지금 확대로 바로 만든다(처음 맞춘 뒤면)
+        for (int i = 0; i < _meshes.Count; i++)
+        {
+            if (made.TryGetValue(_meshes[i], out var old))
+            {
+                _body[i] = old.body;
+                _bodyModel[i] = new GeometryModel3D { Geometry = old.body };
+                _edgeModel[i] = new GeometryModel3D { Material = _edgeMaterial, BackMaterial = _edgeMaterial, Geometry = old.edge };
+            }
+            else Make(i);                                     // 모서리 띠는 지금 확대로 바로 만든다(처음 맞춘 뒤면)
+        }
         var scene = Box3.Empty;
         foreach (var each in _meshes) scene = scene.With(each.Box);
         _scene = scene;
@@ -336,19 +357,25 @@ public sealed class Model3DView : Grid
             body.Material = body.BackMaterial = MaterialOf(color);
             _bodies.Children.Add(body);
             if (_edgeModel[i] is { Geometry: not null } edge) _bodies.Children.Add(edge);
-            if (!Picked(i)) continue;
-            _picked.Children.Add(new GeometryModel3D { Geometry = _body[i], Material = _pickFill, BackMaterial = _pickFill });
-            if (_edgePixelSize <= 0) continue;
-            if (!_pickOutline.TryGetValue(i, out var outline))
-            {
-                var (p, t) = EdgeStrips.Build(_meshes[i], _edgePixelSize * PickEdgePixels, EdgeLift * 2);
-                _pickOutline[i] = outline = t.Length > 0 ? Geometry(p, t) : null;
-            }
-            if (outline != null) _picked.Children.Add(new GeometryModel3D { Geometry = outline, Material = _pickEdge, BackMaterial = _pickEdge });
+            if (Picked(i)) AddPicked(i);
         }
     }
 
-    // 층을 나눠 그릴 때: 부재마다 그리는 방식에 따라 제 층에 넣는다. 고른 부재의 덧그림은 쓰지 않는다(겹침 창에는 '고른 부재'가 없다).
+    // 고른 부재의 덧그림: 흰 막 + 굵은 분홍 테두리(테두리는 확대가 바뀔 때까지 담아 둔다).
+    private void AddPicked(int i)
+    {
+        _picked.Children.Add(new GeometryModel3D { Geometry = _body[i], Material = _pickFill, BackMaterial = _pickFill });
+        if (_edgePixelSize <= 0) return;
+        if (!_pickOutline.TryGetValue(i, out var outline))
+        {
+            var (p, t) = EdgeStrips.Build(_meshes[i], _edgePixelSize * PickEdgePixels, EdgeLift * 2);
+            _pickOutline[i] = outline = t.Length > 0 ? Geometry(p, t) : null;
+        }
+        if (outline != null) _picked.Children.Add(new GeometryModel3D { Geometry = outline, Material = _pickEdge, BackMaterial = _pickEdge });
+    }
+
+    // 층을 나눠 그릴 때: 부재마다 그리는 방식에 따라 제 층에 넣고, 고른 것은 맨 위에 덧그린다(겹침 창은 고르는 것이 없어 Picked 가 늘 거짓 —
+    // 수량산출 창 ① 의 고른 부재 · ② 의 찍은 판).
     private void RefreshLayers()
     {
         _tintBodies.Children.Clear();
@@ -360,7 +387,9 @@ public sealed class Model3DView : Grid
             var color = ColorOf(i);
             if (i == _hover) color = Lighter(color);
             var edge = _edgeModel[i] is { Geometry: not null } strip ? strip : null;
-            switch (StyleOf(i))
+            var style = StyleOf(i);
+            if (style != MeshStyle.Ghost && Picked(i)) AddPicked(i);
+            switch (style)
             {
                 case MeshStyle.Ghost:
                     if (edge != null) { edge.Material = edge.BackMaterial = FlatOf(GhostEdge); _bodies.Children.Add(edge); }
@@ -478,11 +507,11 @@ public sealed class Model3DView : Grid
         if (_layered)
         {
             // 맨 위 층의 것은 다른 것에 가려져 있어도 보이므로 먼저 닿는다. 모서리만 그린 둘레 부재는 찍히지 않는다.
-            int top = Picker.Pick(_meshes, i => _bodyModel[i] != null && Shown(i) && StyleOf(i) == MeshStyle.Top, origin, direction).index;
+            int top = Picker.Pick(_meshes, i => _bodyModel[i] != null && Shown(i) && Pickable(i) && StyleOf(i) == MeshStyle.Top, origin, direction).index;
             if (top >= 0) return top;
-            return Picker.Pick(_meshes, i => _bodyModel[i] != null && Shown(i) && StyleOf(i) is MeshStyle.Solid or MeshStyle.Tint, origin, direction).index;
+            return Picker.Pick(_meshes, i => _bodyModel[i] != null && Shown(i) && Pickable(i) && StyleOf(i) is MeshStyle.Solid or MeshStyle.Tint, origin, direction).index;
         }
-        return Picker.Pick(_meshes, i => _bodyModel[i] != null && Shown(i), origin, direction).index;
+        return Picker.Pick(_meshes, i => _bodyModel[i] != null && Shown(i) && Pickable(i), origin, direction).index;
     }
 
     /// <summary>
@@ -492,9 +521,9 @@ public sealed class Model3DView : Grid
     public IReadOnlyList<int> IndicesAt(Point at)
     {
         var (origin, direction) = Camera.Ray(at.X, at.Y);
-        if (!_layered) return Picker.PickAll(_meshes, i => _bodyModel[i] != null && Shown(i), origin, direction).Select(h => h.index).ToList();
-        var hits = Picker.PickAll(_meshes, i => _bodyModel[i] != null && Shown(i) && StyleOf(i) == MeshStyle.Top, origin, direction).Select(h => h.index).ToList();
-        hits.AddRange(Picker.PickAll(_meshes, i => _bodyModel[i] != null && Shown(i) && StyleOf(i) is MeshStyle.Solid or MeshStyle.Tint, origin, direction).Select(h => h.index));
+        if (!_layered) return Picker.PickAll(_meshes, i => _bodyModel[i] != null && Shown(i) && Pickable(i), origin, direction).Select(h => h.index).ToList();
+        var hits = Picker.PickAll(_meshes, i => _bodyModel[i] != null && Shown(i) && Pickable(i) && StyleOf(i) == MeshStyle.Top, origin, direction).Select(h => h.index).ToList();
+        hits.AddRange(Picker.PickAll(_meshes, i => _bodyModel[i] != null && Shown(i) && Pickable(i) && StyleOf(i) is MeshStyle.Solid or MeshStyle.Tint, origin, direction).Select(h => h.index));
         return hits;
     }
 
@@ -710,9 +739,25 @@ public sealed class Model3DView : Grid
     private void SetHover(int index)
     {
         if (index == _hover) return;
+        int was = _hover;
         _hover = index;
         Cursor = index >= 0 ? Cursors.Hand : Cursors.Arrow;
-        Refresh();
+        // 마우스 밑이 바뀐 두 것의 색만 다시 칠한다 — 그림 전체를 다시 짓지 않게(② 는 부재 + 판이 수백 장이다 · R48).
+        Repaint(was);
+        Repaint(index);
         Hovered?.Invoke(index);
+    }
+
+    // 그 차례의 색만 지금 값(마우스 밑이면 밝게)으로 다시 칠한다. 그 차례가 어느 층에 들었는지 · 보이는지는 그대로다(그것은 Refresh 가 정한다).
+    private void Repaint(int i)
+    {
+        if (i < 0 || i >= _meshes.Count || _bodyModel[i] is not { } body) return;
+        var color = ColorOf(i);
+        if (i == _hover) color = Lighter(color);
+        if (!_layered) { body.Material = body.BackMaterial = MaterialOf(color); return; }
+        var style = StyleOf(i);
+        if (style == MeshStyle.Ghost) return;
+        body.Material = body.BackMaterial = MaterialOf(color);
+        if (style is MeshStyle.Tint or MeshStyle.Top && _edgeModel[i] is { Geometry: not null } edge) edge.Material = edge.BackMaterial = FlatOf(Darker(color));
     }
 }

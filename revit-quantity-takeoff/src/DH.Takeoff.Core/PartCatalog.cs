@@ -30,6 +30,15 @@ public static class PartCatalog
     /// <summary>모든 부위를 다 보는 구조물 이름(제목으로 구조물을 알아내지 못했을 때도 이것).</summary>
     public const string All = "전체";
 
+    /// <summary>대표 목록의 판 — 대표 목록에 이름을 새로 넣을 때 올리고 AddedIn 에 그 이름을 적는다(저장된 목록에 한 번 보태게 — R47).</summary>
+    public const int Revision = 1;
+
+    /// <summary>대표 목록에 새로 든 이름 → 든 판. 판 0 = R46 까지의 목록.</summary>
+    public static readonly IReadOnlyDictionary<string, int> AddedIn = new Dictionary<string, int>(StringComparer.Ordinal)
+    {
+        ["DRY AREA"] = 1,   // R47 — 명장 여과지 2D «DRY AREA»(거푸집 합판 3회)
+    };
+
     public const string Fill = "fill", Floor = "floor", Wall = "wall", Haunch = "haunch", Upper = "upper", Frame = "frame", Stair = "stair",
                         Curb = "curb", Small = "small", Etc = "etc";
 
@@ -89,6 +98,7 @@ public static class PartCatalog
         new("출입구 디딤판", Small, Plain: true, NoZone: true),  // 송악3 72행 '출입구디딤판'(무근) · 2.5 · 2.8 '출입구 발판'
         new("환기구", Small, Plain: true, NoZone: true),         // 송악3 58행(무근)
         // 그 밖
+        new("DRY AREA", Etc, NoZone: true),                      // 명장 여과지 2D «11) DRY AREA»(콘크리트) · «8) DRY AREA»(거푸집 합판 3회) — 벽 밖으로 튀어나온 작은 상자(R47)
         new("기타 구조물", Etc),                                 // Revit '일반 모델' 등의 자동 이름
     };
 
@@ -129,7 +139,7 @@ public static class PartCatalog
             new[] { "수조부", "배관실", "밸브실" }),
         new("정수지", new[] { "정수지" },
             With("구배 콘크리트", "단차부 채움", "호퍼", "기초", "트렌치", "바닥 헌치", "상부 헌치", "중간슬래브", "기둥", "보", "계단", "턱", "SILT STOP", "맨홀부",
-                 "개폐대 PAD", "기계 PAD", "밸브 받침", "관 받침", "관 보호공", "출입구 디딤판"),
+                 "개폐대 PAD", "기계 PAD", "밸브 받침", "관 받침", "관 보호공", "출입구 디딤판", "DRY AREA"),
             new[] { "정수지", "흡수정", "기계실", "유입유출배관실", "밸브실", "공동구연결부", "D.A" }),
         new("착수정·혼화지", new[] { "착수정", "혼화지" },
             With("트렌치", "개폐대 PAD", "밸브 받침"),
@@ -139,7 +149,7 @@ public static class PartCatalog
             new[] { "침전지", "유입부", "기계실", "계단실", "공동구연결부" }),
         new("여과지", new[] { "여과", "흡착" },
             With("트렌치", "월류벽(위어)", "바닥 헌치", "상부 헌치", "중간슬래브", "트라프", "기둥", "보", "계단", "옥외계단", "턱", "맨홀부",
-                 "개폐대 PAD", "기계 PAD", "밸브 받침", "관 받침", "기기 받침", "출입구 디딤판"),
+                 "개폐대 PAD", "기계 PAD", "밸브 받침", "관 받침", "기기 받침", "출입구 디딤판", "DRY AREA"),
             new[] { "여과지", "중앙배관실", "기계실", "정수거", "배출수거", "계단실", "공동구연결부", "D.A" }),
         new("오존접촉조", new[] { "오존접촉" },
             With("트렌치", "계단", "기계 PAD", "관 받침"),
@@ -155,7 +165,7 @@ public static class PartCatalog
             Array.Empty<string>()),
         new("펌프장·가압장", new[] { "가압장", "펌프장", "펌프동", "취수장" },
             With("기초", "트렌치", "바닥 헌치", "상부 헌치", "중간슬래브", "기둥", "보", "계단", "맨홀부",
-                 "개폐대 PAD", "기계 PAD", "밸브 받침", "관 받침", "관 보호공", "출입구 디딤판"),
+                 "개폐대 PAD", "기계 PAD", "밸브 받침", "관 받침", "관 보호공", "출입구 디딤판", "DRY AREA"),
             new[] { "흡수정", "펌프실", "기계실", "배관실", "D.A" }),
         new("탈수기동", new[] { "탈수" },
             With("트렌치", "중간슬래브", "계단", "개폐대 PAD", "관 받침", "출입구 디딤판"),
@@ -270,12 +280,36 @@ public static class PartCatalog
     public static ZonePart ToPart(CatalogPart p) => new() { Name = p.Name, Group = p.Group, Plain = p.Plain, NoZone = p.NoZone };
 
     /// <summary>
-    /// 거푸집에서 나중에 치는 부위인가: 사용자가 정한 값, 없으면 묶음이 받침·PAD 인 것(JACK 2026-10-15 — 출입구 디딤판 · 받침 · PAD · 환기구 · 관 보호공).
-    /// 턱 · 계단은 처음에는 구조체와 같이 본다(목록에서 부위마다 켤 수 있다).
+    /// 거푸집에서 나중에 치는 부위인가: 사용자가 정한 값, 없으면 처음 값 — 묶음이 받침·PAD 인 것(JACK 2026-10-15 — 출입구 디딤판 · 받침 · PAD · 환기구 · 관 보호공)과
+    /// 헌치 묶음 · 이름에 중간슬래브 · 트라프가 든 것(R46 — JACK 2026-10-16 «수량산출서대로»: 명장 여과지 2D 산출서는 벽을 슬래브 사이 높이 통째로 세고
+    /// 붙는 중간슬래브(MS) · 칸 안 경사벽(W17 · W21) · 헌치 자리를 빼지 않는다). 턱 · 계단 · 월류벽은 처음에는 구조체와 같이 본다(목록에서 부위마다 켤 수 있다).
     /// </summary>
     public static bool IsLater(ZonePart p) => p.Later ?? DefaultLater(p);
 
-    private static bool DefaultLater(ZonePart p) => (string.IsNullOrEmpty(p.Group) ? GroupOf(p.Name) : p.Group) == Small;
+    /// <summary>
+    /// 거푸집 종류의 처음 값(R47 — JACK 2026-10-16 «2D 의 작은 부속 모두 합판 3회»): 명장 여과지 2D 는 계단(방화벽) · 누수방지턱 · 맨홀턱 · DRY AREA 를
+    /// 합판 3회로 셈 → 계단 묶음 · 턱·맨홀 묶음 · 이름에 DRY AREA(드라이)가 든 부위 = 합판 3회. 받침류는 유형 이름 규칙(합판 6회) 그대로라 여기서 정하지 않는다.
+    /// 그 밖은 null(유형 대응표 · 초안대로). ② 대응표의 부위 줄에서 사람이 고르면 그 값이 앞선다.
+    /// </summary>
+    /// <param name="group">그 부위가 목록에서 든 묶음(PartGroup.Key — 사용자가 옮겼으면 옮긴 묶음). 없으면 이름으로 짐작한 묶음(GroupOf).</param>
+    public static string? FormworkDefault(string part, string? group = null)
+    {
+        if (string.IsNullOrWhiteSpace(part)) return null;
+        if ((string.IsNullOrEmpty(group) ? GroupOf(part) : group) is Stair or Curb) return Formwork.FormworkTable.Ply3;
+        if (IsDryArea(part)) return Formwork.FormworkTable.Ply3;
+        return null;
+    }
+
+    /// <summary>DRY AREA(벽 밖으로 튀어나온 작은 상자 — 2D «DRY AREA» · 위치 이름 «D.A»)인 부위 이름인가: «DRY AREA» · «드라이»가 든 이름.</summary>
+    public static bool IsDryArea(string part) =>
+        part.Contains("DRY AREA", StringComparison.OrdinalIgnoreCase) || part.Contains("드라이", StringComparison.Ordinal);
+
+    // 헌치는 묶음으로만 본다(«헌치부 벽체»처럼 헌치 낱말이 든 벽 부위는 켜지 않는다 — core-verify R46 L). 중간슬래브 · 트라프는 이름 낱말로
+    // («밸브실 중간슬래브» · «트라프 벽» 같은 사용자 이름도).
+    private static readonly string[] LaterWords = { "중간슬래브", "중간 슬래브", "중간스라브", "중간 스라브", "트라프" };
+
+    private static bool DefaultLater(ZonePart p) =>
+        (string.IsNullOrEmpty(p.Group) ? GroupOf(p.Name) : p.Group) is Small or Haunch || LaterWords.Any(w => p.Name.Contains(w, StringComparison.Ordinal));
 
     /// <summary>새로 생기는 줄: 대표 목록(옛 이름 포함)에 있는 이름이면 그 표시와 묶음, 아니면 표시 없이 낱말로 짐작한 묶음.</summary>
     public static ZonePart NewRow(string name) => Find(name) is { } known ? ToPart(known) : new ZonePart { Name = name, Group = GroupOf(name) };
@@ -366,12 +400,19 @@ public static class PartCatalog
     ///  · 저장된 목록이 없으면 구조물의 대표 목록.
     /// 그 뒤 부재가 쓰는 이름(used)을 보탠다(Absorb — 저장돼 있던 줄이 있으면 그 표시로).
     /// </summary>
-    public static List<ZonePart> Build(IEnumerable<ZonePart>? saved, int savedVersion, string? structure, IEnumerable<string> used)
+    /// <param name="savedCatalog">저장된 목록을 적은 때 대표 목록의 판(ZonePlan.Catalog). 그 뒤에 새로 든 대표 이름(AddedIn)은 v3 이상 목록에도
+    /// 제자리에 보탠다(R47 — revit-verify: «DRY AREA»가 저장된 목록에 안 들어와 JACK 이 직접 쳐야 했다). 모르면 Revision(보태지 않음).</param>
+    public static List<ZonePart> Build(IEnumerable<ZonePart>? saved, int savedVersion, string? structure, IEnumerable<string> used, int savedCatalog = Revision)
     {
         var stored = (saved ?? Enumerable.Empty<ZonePart>()).Select(p => p.Copy()).ToList();
         List<ZonePart> list;
         if (stored.Count == 0) list = PartsOf(structure);
-        else if (savedVersion >= 3) list = stored.Select(p => p.Copy()).ToList();
+        else if (savedVersion >= 3)
+        {
+            list = stored.Select(p => p.Copy()).ToList();
+            var fresh = PartsOf(structure).Select(p => p.Name).Where(n => AddedIn.TryGetValue(n, out int rev) && rev > savedCatalog).ToList();
+            if (fresh.Count > 0) Absorb(list, fresh, null);
+        }
         else
         {
             var preset = PartsOf(structure).Select(p => p.Name).ToList();

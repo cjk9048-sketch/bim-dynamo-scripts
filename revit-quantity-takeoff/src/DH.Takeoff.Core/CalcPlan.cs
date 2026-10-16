@@ -142,15 +142,16 @@ public sealed class CalcPlan
     /// </param>
     /// <param name="structure">구조물(저장된 목록이 없을 때 대표 목록을 정한다 — 없으면 '전체').</param>
     /// <param name="partsVersion">parts 를 저장한 판(ZonePlan.ReadVersion) — 2 이면 전의 기본 16개 목록이라 옮겨 읽는다.</param>
+    /// <param name="partsCatalog">parts 를 적은 때 대표 목록의 판(ZonePlan.Catalog — 3D 팝업과 같은 목록을 짓게).</param>
     public static CalcPlan Make(IEnumerable<CalcInput> inputs, IReadOnlyList<ZonePart>? parts = null, IReadOnlyList<string>? zoneOrder = null,
-                                string? structure = null, int partsVersion = ZonePlan.CurrentVersion)
+                                string? structure = null, int partsVersion = ZonePlan.CurrentVersion, int partsCatalog = PartCatalog.Revision)
     {
         var plan = new CalcPlan();
         var all = inputs.ToList();
         // 부위: 사용자가 넣은 것이 먼저, 없으면 카테고리로 붙인 이름.
         static string KindNameOf(CalcInput x) => PartName(x.Part, x.Kind, x.Type);
         // 대상 부재가 쓰는 이름은 모두 목록에 든다(자동 이름 포함) — 목록에 없어 '뒤에 이름순'으로 밀리는 이름이 없다.
-        var partList = PartCatalog.Build(parts, partsVersion, structure, all.Where(x => x.NotTarget.Length == 0).Select(KindNameOf));
+        var partList = PartCatalog.Build(parts, partsVersion, structure, all.Where(x => x.NotTarget.Length == 0).Select(KindNameOf), partsCatalog);
         int ZoneAt(string zone)
         {
             if (zoneOrder != null)

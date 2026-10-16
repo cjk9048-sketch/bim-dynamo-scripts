@@ -190,7 +190,8 @@ public sealed partial class PlacePartView
         dock.Children.Add(_side);
 
         // ── 오른쪽: 고른 부재(위) · 도구 줄 · 3D 그림 · 지금 적용 상태(아래) ──
-        _view3d = new Model3DView(meshes, dark)
+        // 층을 나눠 그린다(R48): ① 은 모두 Solid 라 전과 같은 그림이고, ② 는 줄을 고르면 그 줄의 판만 맨 위에 진하게 · 나머지는 옅게.
+        _view3d = new Model3DView(meshes, dark, layered: true)
         {
             Shown = i => _editor.IsShown(_members[i]),
             ColorOf = i => ColorOf(_members[i]),
@@ -556,7 +557,7 @@ public sealed partial class PlacePartView
         put.Children.Add(_place);
         places.Children.Add(put);
         places.Children.Add(_noPlace);
-        WirePlaceBox();
+        WirePlaceBox(put);
         _editPlaces.Click += (_, _) => RefreshAll();
         Grid.SetRow(places, 2);
         grid.Children.Add(places);
@@ -590,19 +591,27 @@ public sealed partial class PlacePartView
     }
 
     // 중분류 입력칸: 누르면 목록이 펼쳐진다(이미 만든 이름 · 추천 이름). 목록에서 고르면 바로 넣고, 적은 이름은 Enter · [넣기].
-    private void WirePlaceBox()
+    // holder = 칸을 담은 판(칸의 바깥 — Enter 를 칸보다 먼저 받는 자리).
+    private void WirePlaceBox(UIElement holder)
     {
         _place.MaxDropDownHeight = 300;
-        // Enter = 넣기. 펼친 목록에서 화살표로 고른 줄은 이미 글 칸에 들어 있다(적는 칸이 있는 고르는 칸) — 닫고 그 이름을 넣는다.
-        // 목록이 펼쳐져 있으면 WPF 의 고르는 칸이 Enter 를 먼저 '처리함'으로 가져가(고른 줄을 굳히고 닫는다) 보통으로 걸면 불리지 않는다
-        // (2026-10-15 진짜 신호 시험) — 처리된 것도 듣게 건다. 닫는 것은 그쪽이 이미 했다.
-        _place.AddHandler(Keyboard.PreviewKeyDownEvent, new KeyEventHandler((_, e) =>
+        // Enter = 칸에 보이는 이름을 넣는다(친 이름 · ↓ 로 짚어 칸에 들어온 이름). 칸을 담은 판에서 미리 받는다:
+        // 목록이 펼쳐진 채 마우스가 어느 줄 위에 있으면, 글을 치는 사이 WPF 가 그 줄을 짚는다(잰 값: 펼친 뒤 · 마우스를 옮긴 뒤에는 짚힌 줄 없음 →
+        // 친 뒤 «고른 줄 −1 · 짚힌 줄 있음»). 적는 칸이 있는 고르는 칸(ComboBox)은 Enter 를 미리보기 단계에서 스스로 먼저 받아 짚힌 줄을 굳히고
+        // (KeyDownHandler → CommitSelection) 칸의 글을 그 줄의 이름으로 바꾼다 — 그 뒤에 칸을 읽던 전의 처리기는 친 이름 대신 그 줄을 넣었다
+        // (JACK 2026-10-16 15시 «쳐 넣어도 Enter 치면 목록에 선택된 애로 들어가져» — 진짜 마우스 시험으로 재현: 칸에 보인 글 «마우스 아래 새 이름» → 들어간 것 «수조부»).
+        // 미리보기 신호는 바깥에서 안으로 내려오므로 판이 칸보다 먼저 받는다 — 여기서 처리함으로 막으면 칸의 굳히기는 돌지 않는다. 목록은 굳히지 않고 닫는다.
+        // 한글 입력기가 글자를 짜는 중의 Enter 는 Key.ImeProcessed 로 온다(revit-verify R48 계획 L2) — 그 Enter 로 짜던 글자가 칸에 들어가므로
+        // 다 들어간 뒤(BeginInvoke)에 칸을 읽는다. 빈 칸의 Enter(넣고 비운 뒤 한 번 더 오는 Enter 등)는 아무 일도 하지 않고 지나간다.
+        holder.AddHandler(Keyboard.PreviewKeyDownEvent, new KeyEventHandler((_, e) =>
         {
-            if (e.Key != Key.Enter) return;
+            bool composing = e.Key == Key.ImeProcessed && e.ImeProcessedKey == Key.Enter;
+            if ((e.Key != Key.Enter && !composing) || !Within(e.OriginalSource as DependencyObject, _place)) return;
             if (_place.IsDropDownOpen) _place.IsDropDownOpen = false;
             e.Handled = true;
-            PutPlace(_place.Text);
-        }), handledEventsToo: true);
+            if (composing) _place.Dispatcher.BeginInvoke(() => PutShownPlace(), System.Windows.Threading.DispatcherPriority.Input);
+            else PutShownPlace();
+        }));
         // 글 칸을 누르면 펼친다(꺾쇠를 누를 때는 그 단추가 스스로 펼치고 닫는다 — 여기서 또 펼치면 바로 닫힌다).
         // WPF 의 고르는 칸은 글자판이 없을 때 글 칸을 누르면 그 누름을 '처리함'으로 막고 글자판만 가져간다 — 처리된 누름도 듣게 건다
         // (보통으로 걸면 처리기가 아예 불리지 않는다: 2026-10-15 계측 — 창에는 누름이 왔는데 칸의 처리기는 0번).
@@ -616,6 +625,14 @@ public sealed partial class PlacePartView
         }), handledEventsToo: true);
         // 닫혀 있는 칸 위에서 굴려도 고른 줄이 바뀌지 않고 판이 굴러간다(판을 굴리던 손이 칸 위를 지날 때).
         _place.PreviewMouseWheel += (_, e) => PassWheel(_place, e);
+    }
+
+    // 중분류 칸에 지금 보이는 글(친 이름 · ↓ 로 짚어 칸에 들어온 이름)을 넣는다 — 빈 칸이면 아무 일도 하지 않는다.
+    private void PutShownPlace()
+    {
+        string shown = _place.Template?.FindName("PART_EditableTextBox", _place) is TextBox box ? box.Text : _place.Text;
+        if (string.IsNullOrWhiteSpace(shown)) return;
+        PutPlace(shown);
     }
 
     private static bool Within(DependencyObject? node, DependencyObject ancestor)
@@ -1283,6 +1300,9 @@ public sealed partial class PlacePartView
     /// RunLocked 는 이 표시와 상관없이 돈다(그 일 안에서 부르는 것이므로).
     /// </summary>
     public bool Held { get; set; }
+
+    /// <summary>일지에 한 줄 적는다(명령이 건다 — ② 의 판 빼기 · 되살리기 · 다시 그린 시간).</summary>
+    public Action<string>? Log { get; set; }
 
     /// <summary>모델에 적는 중이거나 바깥이 긴 일을 하는 중인가(창을 닫으려 할 때 · 단추를 누를 때 본다).</summary>
     public bool Busy => _busy || Held;

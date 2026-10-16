@@ -869,7 +869,7 @@ public static class FormulaDecomposer
         int n = plus.Count + minus.Count;
         string formula = n == 1
             ? $"{plus[0].Text}*{h}"
-            : "(" + string.Join("+", plus.Select(t => t.Text)) + string.Concat(minus.Select(t => "-" + t.Text)) + ")*" + h;
+            : "(" + string.Join("+", plus.Select(t => t.Text)) + Deductions(minus.Select(t => t.Text)) + ")*" + h;
         double exact = (plus.Sum(t => t.Exact) - minus.Sum(t => t.Exact)) * len;
         int nonRect = plus.Count(t => !t.IsRect) + minus.Count(t => !t.IsRect);
         string kind = n == 1 && nonRect == 0 ? "직육면체" : baseKind;
@@ -881,6 +881,58 @@ public static class FormulaDecomposer
             Minus = minus.Count,
             Off = plus.Sum(t => t.Off) + minus.Sum(t => t.Off) + OffGrid(len, eps),
         };
+    }
+
+    /// <summary>
+    /// 빼는 조각(개구부 · 구멍)들을 식 글자로: 같은 글자의 조각은 한 번만 적고 개수를 곱한다(JACK 2026-10-16 «같은 사이즈 공제는
+    /// (전체면적−(개구부1*3)) 처럼»): «-1*2.1-1*2.1-1*2.1-0.6*0.5» → «-(1*2.1*3)-0.6*0.5». 차례는 처음 나온 차례 그대로.
+    /// 조각 글자에 괄호 밖 더하기 · 빼기가 있으면 괄호로 싸서 곱한다(값이 바뀌지 않게). 거푸집 식(FormworkSheet.Shape)도 이것을 쓴다.
+    /// </summary>
+    internal static string Deductions(IEnumerable<string> terms)
+    {
+        // 같은 크기: 숫자만 곱한 조각은 곱하는 차례를 가리지 않는다(«1*2.1» = «2.1*1» — core-verify R48 L5 · JACK 의 말은 «같은 사이즈»). 적는 글은 처음 나온 것.
+        var groups = new List<(string key, string text, int count)>();
+        foreach (string t in terms)
+        {
+            string key = SizeKey(t);
+            int at = groups.FindIndex(g => g.key == key);
+            if (at >= 0) groups[at] = (key, groups[at].text, groups[at].count + 1);
+            else groups.Add((key, t, 1));
+        }
+        var sb = new System.Text.StringBuilder();
+        foreach (var (_, text, count) in groups)
+        {
+            if (count == 1) { sb.Append('-').Append(text); continue; }
+            string term = TopLevelSum(text) ? "(" + text + ")" : text;
+            sb.Append("-(").Append(term).Append('*').Append(count.ToString(CultureInfo.InvariantCulture)).Append(')');
+        }
+        return sb.ToString();
+    }
+
+    // 공제 조각의 크기 열쇠: 숫자만 곱한 조각(«1*2.1»)이면 인수를 값 차례로 늘어놓은 글, 아니면 글자 그대로.
+    private static string SizeKey(string text)
+    {
+        var factors = text.Split('*');
+        var values = new double[factors.Length];
+        for (int i = 0; i < factors.Length; i++)
+            if (factors[i].Length == 0 || !factors[i].All(c => char.IsAsciiDigit(c) || c == '.')
+                || !double.TryParse(factors[i], NumberStyles.Float, CultureInfo.InvariantCulture, out values[i]))
+                return text;
+        return string.Join("*", values.Order().Select(v => v.ToString("R", CultureInfo.InvariantCulture)));
+    }
+
+    // 식에 괄호 밖의 더하기 · 빼기가 있는가(첫 글자의 부호와 지수 표기 e-3 은 빼고).
+    private static bool TopLevelSum(string text)
+    {
+        int depth = 0;
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (c == '(') depth++;
+            else if (c == ')') depth--;
+            else if (depth == 0 && i > 0 && c is '+' or '-' && text[i - 1] is not ('e' or 'E')) return true;
+        }
+        return false;
     }
 
     // 조각 글자를 그대로 계산한 값(조각끼리 크기를 견줄 때 쓴다). 계산이 안 되면 반올림 전 값.

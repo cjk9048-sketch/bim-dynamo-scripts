@@ -176,7 +176,7 @@ public sealed class PickEditor
         // 부위는 PartCatalog.Build 가 짓는다 — 저장된 것(없으면 구조물의 대표 목록) + 부재가 쓰는 이름. 산출서(CalcPlan)도 같은 함수로 짓는다.
         Structure = PartCatalog.Resolve(plan.Structure, title);
         Places.AddRange(plan.Places.Select(p => new ZonePlace { Name = p.Name, Wbs4 = p.Wbs4 }));
-        Parts.AddRange(PartCatalog.Build(plan.Parts, plan.ReadVersion, Structure, UsedParts()));
+        Parts.AddRange(PartCatalog.Build(plan.Parts, plan.ReadVersion, Structure, UsedParts(), plan.Catalog));
         AbsorbNames(null);
         Floors = MakeFloors();
     }

@@ -41,6 +41,7 @@ public static class OverlapResolver
         {
             foreach (var el in new FilteredElementCollector(doc).OfCategory(cat).WhereElementIsNotElementType())
             {
+                if (FormworkObjects.IsOurs(el)) continue;   // 거푸집 객체(R44)는 콘크리트가 아니다
                 var s = DimensionExtractor.LargestSolid(el);
                 var bb = el.get_BoundingBox(null);
                 if (s == null || bb == null || s.Volume < 1e-9) continue;

@@ -99,6 +99,7 @@ public static class GeometryDumper
         var type = doc.GetElement(el.GetTypeId()) as ElementType;
         w.WriteString("family", type?.FamilyName ?? "");
         w.WriteString("type", type?.Name ?? "");
+        w.WriteString("mark", FormworkReader.MarkOf(el));   // «마크»(도면 부호 — 거푸집 엑셀 줄의 부호 · R47). 공유 · 프로젝트 칸(params)에는 들지 않는다
         if (el is FamilyInstance fi) w.WriteBoolean("inPlace", fi.Symbol?.Family?.IsInPlace ?? false);
 
         var vp = el.get_Parameter(BuiltInParameter.HOST_VOLUME_COMPUTED);

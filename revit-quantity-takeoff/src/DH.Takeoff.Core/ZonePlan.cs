@@ -84,6 +84,11 @@ public sealed class ZonePlan
     [JsonPropertyName("parts")] public List<ZonePart> Parts { get; set; } = new();
     /// <summary>구조물(PartCatalog.Structures 의 이름) — 부위의 대표 목록과 위치 추천을 정한다. 없으면 문서 제목으로 알아낸다(PartCatalog.Guess).</summary>
     [JsonPropertyName("structure")] public string? Structure { get; set; }
+    /// <summary>
+    /// 부위 목록을 적은 때 대표 목록의 판(PartCatalog.Revision — R47). 그 뒤 대표 목록에 새로 든 이름(PartCatalog.AddedIn)은 목록을 지을 때 한 번 보탠다
+    /// (사람이 지운 이름은 판이 올라간 뒤라 되살리지 않는다). 전의 판(R46)은 모르는 칸이라 읽고 버린다.
+    /// </summary>
+    [JsonPropertyName("catalog")] public int Catalog { get; set; }
     [JsonPropertyName("wbs1")] public string? Wbs1 { get; set; }
     [JsonPropertyName("wbs2")] public string? Wbs2 { get; set; }
     [JsonPropertyName("wbs3")] public string? Wbs3 { get; set; }
@@ -107,6 +112,7 @@ public sealed class ZonePlan
     public string ToJson()
     {
         Version = Parts.Any(p => p.Later.HasValue) ? LaterVersion : CurrentVersion;
+        if (Parts.Count > 0) Catalog = PartCatalog.Revision;   // 지금 대표 목록으로 지은 목록이다(새로 든 이름은 이미 보탰다)
         return JsonSerializer.Serialize(this, Options);
     }
 

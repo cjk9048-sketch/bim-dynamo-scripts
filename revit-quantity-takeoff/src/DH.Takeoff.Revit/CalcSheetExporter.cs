@@ -99,7 +99,7 @@ public static class CalcSheetExporter
             });
         }
         result.Plan = CalcPlan.Make(inputs, stored.Plan.Parts, stored.Plan.Places.Select(p => p.Name).ToList(),
-                                    PartCatalog.Resolve(stored.Plan.Structure, doc.Title), stored.Plan.ReadVersion);
+                                    PartCatalog.Resolve(stored.Plan.Structure, doc.Title), stored.Plan.ReadVersion, stored.Plan.Catalog);
         return result;
     }
 

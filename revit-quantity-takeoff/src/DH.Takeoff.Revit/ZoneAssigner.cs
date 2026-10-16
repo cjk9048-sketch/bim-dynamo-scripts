@@ -77,6 +77,20 @@ public static class ZoneAssigner
                 ogs.SetProjectionLineColor(new Color((byte)(color.Red / 2), (byte)(color.Green / 2), (byte)(color.Blue / 2)));
                 try { view.SetElementOverrides(id, ogs); } catch { /* 이 뷰에서 덮어쓸 수 없는 요소는 건너뛴다 */ }
             }
+            // 거푸집 객체(R44 — 콘크리트 겉을 12 mm 판으로 덮는다)는 이 뷰에서 숨긴다: 그대로면 판의 색이 구역 색을 가린다.
+            // 창을 닫을 때마다 칠하므로 [완료]가 새로 만든 판도 그때 숨는다.
+            try
+            {
+                var plates = FormworkObjects.Find(doc).Where(id => doc.GetElement(id) is { } el && !el.IsHidden(view) && el.CanBeHidden(view)).ToList();
+                if (plates.Count > 0) view.HideElements(plates);   // 빈 목록이면 Revit 이 예외를 낸다
+            }
+            catch { /* 숨기지 못해도 구역 색은 칠했다 */ }
+            try
+            {
+                // 판을 담는 하위 범주도 끈다 — 다음에 만드는 판도 이 뷰에서는 처음부터 안 보이게.
+                if (FormworkObjects.FindSubcategory(doc) is { } plateCategory && view.CanCategoryBeHidden(plateCategory.Id)) view.SetCategoryHidden(plateCategory.Id, true);
+            }
+            catch { }
             if (tx.Commit() != TransactionStatus.Committed)
             {
                 problem = "색을 입히지 못했습니다(Revit 이 변경을 되돌림).";

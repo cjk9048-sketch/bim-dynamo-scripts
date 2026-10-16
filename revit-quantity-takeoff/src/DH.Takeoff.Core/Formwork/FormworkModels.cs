@@ -8,6 +8,8 @@ public sealed class FormworkElement
     public MemberKind Kind { get; set; } = MemberKind.Other;
     public string Type { get; set; } = "";
     public string Zone { get; set; } = "";      // 부재의 구역(DH_Zone)
+    public string Part { get; set; } = "";      // 부재의 부위(DH_Part — 사람이 넣은 것 · 없으면 "") — 대응표의 부위 줄(R47)
+    public string Mark { get; set; } = "";      // 부재의 «마크»(Revit Mark — 도면 부호 W1 · S1 …) — 엑셀 줄의 부호(R47 · 없으면 유형 이름)
     public List<ShapeSolid> Solids { get; set; } = new();
 
     /// <summary>면마다의 Revit 참조 글자(입체 차례 · 면 차례). 없으면 비워 둔다 — 색칠·수정이 면을 다시 찾을 때 쓴다.</summary>
@@ -93,6 +95,30 @@ public sealed class FacePatch
     /// 이 값으로 되돌린 뒤 대응표를 다시 건다 — 대응표를 건 뒤의 값에서는 처음 값을 되살릴 수 없다(R42 core M-1).
     /// </summary>
     internal (bool Counted, bool Decided, string Item, string Note)? Unruled { get; set; }
+
+    /// <summary>
+    /// 같은 평면 · 같은 방향으로 맞닿은 벽의 바깥면 조각 — 바닥판(슬래브 · 기초) 옆면의 바깥 조각만(Analyze 가 형상만으로 찾아 둔다).
+    /// 사람이 그 (유형, 옆면) 줄을 고치지 않았으면 이 조각의 종류는 그 벽 조각의 종류를 따른다(JACK 2026-10-16 «벽과 같은 종류로 이어 한 장»).
+    /// </summary>
+    internal FacePatch? FlushWall { get; set; }
+
+    /// <summary>맞닿은 벽의 유형(② 3D 덩이의 열쇠 — 덩이 안의 색이 대응표를 어떻게 고쳐도 하나가 되게).</summary>
+    internal string FlushWallType { get; set; } = "";
+
+    /// <summary>
+    /// 사람이 ② 3D 에서 뺀 판에 든 조각이면 그 판의 대표 열쇠(대응표 파일의 «뺀 판:…» 줄 — R48 · JACK 2026-10-16 «찍어서 빼기 · 판 한 장»), 아니면 "".
+    /// 뺀 조각은 세지 않고(정한 것으로) 종류는 대응표대로 남긴다 — 맞닿은 바닥판 옆면이 이 벽 조각의 종류를 그대로 따르게.
+    /// </summary>
+    public string DropLead { get; internal set; } = "";
+
+    /// <summary>
+    /// 3D 에서 뺀 판이 아니었으면 세었을 조각인가 — 부재 속성(지침용 내역적용수량 — FormworkWriter)은 이것으로 센다: 판 빼기는 일반설계(엑셀 · 거푸집 객체)의
+    /// 결정이라 «그 부재에 해당하는 수식만» 담는 지침 쪽 속성에 섞지 않는다(JACK 2026-10-16 «BIM적용지침 · 일반설계 골라서 뽑기»).
+    /// </summary>
+    public bool CountedIgnoringDrop => Counted || (DropLead.Length > 0 && Item.Length > 0);
+
+    /// <summary>조각 안의 대표 점(한 번 재면 담아 둔다 — 뺀 판 열쇠가 쓴다 · PatchGeometry.Anchor).</summary>
+    internal (double x, double y, double z)? AnchorCache { get; set; }
 }
 
 /// <summary>면을 가린 이웃 부재 하나와 그 넓이.</summary>
@@ -150,12 +176,21 @@ public sealed class FormworkOptions
     /// </summary>
     public double Epsilon { get; set; } = 0.00137;
 
-    /// <summary>높이 구간의 경계(서 있는 바닥에서 잰 높이, m). 7 → 0~7m / 7m 초과.</summary>
-    public List<double> Bands { get; set; } = new() { 7.0 };
+    /// <summary>
+    /// 높이 구간의 경계(서 있는 바닥에서 잰 높이, m). 7 → 0~7m / 7m 초과. 기본은 나누지 않는다(R46 — JACK 2026-10-16 «7 m 구분 없애기»:
+    /// 명장 여과지 2D 산출서는 유로폼을 한 항목으로 셈 · 지침 부속서 7 의 유로폼 이름도 «7m이하» 하나). 경계를 주면 전처럼 나눈다.
+    /// </summary>
+    public List<double> Bands { get; set; } = new();
 
     /// <summary>밑면 아래의 콘크리트가 이보다 가까우면 거푸집을 댈 수 없는 틈이다(m).</summary>
     public double MinGap { get; set; } = 0.05;
 
     /// <summary>사람이 고친 대응표(유형 × 면 → 종류). 없으면 초안 규칙만 쓴다.</summary>
     public FormworkRules? Rules { get; set; }
+
+    /// <summary>
+    /// 부위 이름 → 거푸집 종류의 처음 값(R47 — 계단 · 턱·맨홀 · DRY AREA = 합판 3회, 그 밖은 null). 기본은 이름으로 묶음을 짐작한다
+    /// (PartCatalog.FormworkDefault). 수량산출 창은 ① 목록의 묶음을 아는 함수를 준다 — 사용자가 목록에서 묶음을 옮긴 부위도 그 묶음대로(core-verify R47 L2).
+    /// </summary>
+    public Func<string, string?> PartDefault { get; set; } = part => PartCatalog.FormworkDefault(part);
 }
