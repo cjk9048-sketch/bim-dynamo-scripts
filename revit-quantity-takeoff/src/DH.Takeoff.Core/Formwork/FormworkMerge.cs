@@ -136,6 +136,7 @@ public static class FormworkMerge
                 foreach (var p in f.Patches)
                 {
                     if (!p.Counted || p.Item.Length == 0 || p.NeedsCheck || p.Outline.Count == 0 || p.Outline[0].Count < 3) continue;
+                    if (!bottom && p.Vertical != null) continue;   // 수직면 덩어리의 조각은 아래에서 덩어리 그대로 잇는다(R49)
                     bool outer = !bottom && p.Side == "외측", inner = !bottom && p.Side.StartsWith("내측", StringComparison.Ordinal);
                     if (!bottom && !outer && !inner) continue;
                     var c = new Cand
@@ -177,25 +178,71 @@ public static class FormworkMerge
         foreach (var members in cands.GroupBy(c => Find(cands, c.Parent)).Select(g => g.ToList()).Where(g => g.Count >= 2))
         {
             var lead = members.OrderByDescending(c => c.Patch.Area).ThenBy(c => c.Result.Element.Id).First();
-            var frame = Frame.Of(V3.Of(lead.Patch.Outline[0][0]), lead.N);
-            var union = new Paths64();
-            foreach (var m in members) union = Poly.Union(union, PathsOf(m.Patch, frame));
-            var closed = Clipper.InflatePaths(Clipper.InflatePaths(union, Join * Poly.Scale, JoinType.Miter, EndType.Polygon), -Join * Poly.Scale, JoinType.Miter, EndType.Polygon);
-            closed = Poly.Normalize(closed);
-            double sum = members.Sum(m => m.Patch.Area);
-            int outers = closed.Count(path => Clipper.Area(path) > 0);
-            if (outers != 1 || Math.Abs(Poly.Area(closed) - sum) > 1e-4 + 1e-6 * sum) { outcome.Refused++; continue; }
+            var merged = TryJoin(members.Select(m => m.Patch).ToList(), lead.N, lead.Patch);
+            if (merged == null) { outcome.Refused++; continue; }
             var joined = new Joined { Lead = (lead.Result, lead.Face, lead.Patch), MixedZones = members.Select(m => m.Zone).Distinct().Count() > 1 };
             foreach (var m in members.OrderBy(m => m.Result.Element.Id)) joined.Members.Add((m.Result, m.Face, m.Patch));
-            joined.Merged.Area = sum;
-            joined.Merged.Item = lead.Patch.Item;
-            joined.Merged.Side = lead.Patch.Side;
-            joined.Merged.Band = lead.Patch.Band;
-            foreach (var path in closed)
-                joined.Merged.Outline.Add(path.Select(q => { var p = frame.To3D(q.X / Poly.Scale, q.Y / Poly.Scale); return new[] { p.X, p.Y, p.Z }; }).ToList());
+            Fill(joined.Merged, merged);
             outcome.Add(joined);
         }
+
+        // 수직면 덩어리(R49 — core-verify R49 계획 H2: 기하로 다시 묶지 않고 Analyze 가 묶은 덩어리 그대로 — 판 = 덩어리): 세는 조각끼리 한 장.
+        // 엑셀 줄(acrossBands = false)은 유로폼 높이 구간마다. 줄의 대표 = 다스리는 조각(M1 — 종류 · 부호 · 부위 제목이 다스리는 조각의 것).
+        foreach (var group in GroupsOf(results))
+        {
+            var n = new V3(group.Normal[0], group.Normal[1], group.Normal[2]).Unit();
+            var counted = group.Members.Where(m => m.Patch.Counted && m.Patch.Item.Length > 0 && m.Patch.Outline.Count > 0 && m.Patch.Outline[0].Count >= 3).ToList();
+            var parts = acrossBands ? new List<List<(ElementFormwork Result, FaceResult Face, FacePatch Patch)>> { counted }
+                                    : counted.GroupBy(m => m.Patch.Item == FormworkTable.Euro ? m.Patch.Band : 0).Select(g => g.ToList()).ToList();
+            foreach (var members in parts.Where(p => p.Count >= 2))
+            {
+                var lead = members.FirstOrDefault(m => ReferenceEquals(m.Patch, group.Governor.Patch));
+                if (lead.Patch == null) lead = members.OrderByDescending(m => m.Patch.Area).ThenBy(m => m.Result.Element.Id).First();
+                var merged = TryJoin(members.Select(m => m.Patch).ToList(), n, lead.Patch);
+                if (merged == null) { outcome.Refused++; continue; }
+                var zones = members.Select(m => zoneOf?.Invoke(m.Result.Element.Id) ?? m.Result.Element.Zone).Distinct().Count();
+                var joined = new Joined { Lead = lead, MixedZones = zones > 1 };
+                foreach (var m in members.OrderBy(m => m.Result.Element.Id)) joined.Members.Add(m);
+                Fill(joined.Merged, merged);
+                outcome.Add(joined);
+            }
+        }
         return outcome;
+    }
+
+    /// <summary>결과에 든 수직면 덩어리(차례 = 덩어리 번호).</summary>
+    internal static List<VerticalGroup> GroupsOf(IReadOnlyList<ElementFormwork> results) =>
+        results.SelectMany(r => r.Faces).SelectMany(f => f.Patches).Select(p => p.Vertical).OfType<VerticalGroup>()
+               .Distinct(ReferenceEqualityComparer.Instance).Cast<VerticalGroup>().OrderBy(g => g.Id).ToList();
+
+    private static void Fill(FacePatch target, FacePatch merged)
+    {
+        target.Area = merged.Area;
+        target.Item = merged.Item;
+        target.Side = merged.Side;
+        target.Band = merged.Band;
+        target.Outline.AddRange(merged.Outline);
+    }
+
+    /// <summary>
+    /// 같은 평면(법선 n)의 조각들을 한 장으로: 합친 테두리 = 합집합을 Join 만큼 부풀렸다 줄인 것(맞댄 이음매의 µm 틈을 닫는다). 바깥 고리가 하나이고
+    /// 그 넓이가 조각 넓이의 합과 같을 때만(틈 · 겹침이 없을 때) 합친 조각(넓이 = 합 · 종류 · 안팎 · 구간 = lead 의 것)을, 아니면 null.
+    /// 수직면 덩어리(Analyze — 묶어도 되는가)와 엑셀 줄 · 판(Find)이 같이 쓴다.
+    /// </summary>
+    internal static FacePatch? TryJoin(IReadOnlyList<FacePatch> patches, V3 n, FacePatch lead)
+    {
+        var frame = Frame.Of(V3.Of(lead.Outline[0][0]), n);
+        var union = new Paths64();
+        foreach (var p in patches) union = Poly.Union(union, PathsOf(p, frame));
+        var closed = Clipper.InflatePaths(Clipper.InflatePaths(union, Join * Poly.Scale, JoinType.Miter, EndType.Polygon), -Join * Poly.Scale, JoinType.Miter, EndType.Polygon);
+        closed = Poly.Normalize(closed);
+        double sum = patches.Sum(p => p.Area);
+        int outers = closed.Count(path => Clipper.Area(path) > 0);
+        if (outers != 1 || Math.Abs(Poly.Area(closed) - sum) > 1e-4 + 1e-6 * sum) return null;
+        var merged = new FacePatch { Counted = true, Area = sum, Item = lead.Item, Side = lead.Side, Band = lead.Band };
+        foreach (var path in closed)
+            merged.Outline.Add(path.Select(q => { var p = frame.To3D(q.X / Poly.Scale, q.Y / Poly.Scale); return new[] { p.X, p.Y, p.Z }; }).ToList());
+        return merged;
     }
 
     private static (V3 min, V3 max) BoxOf(FacePatch p)

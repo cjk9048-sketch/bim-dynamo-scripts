@@ -21,6 +21,8 @@ public sealed class CalcInput
     public double Bim { get; set; }              // 지금 모델 체적(m³)
     public string Verdict { get; set; } = "";    // DH_판정(속성에 적혀 있던 글자)
     public string NotTarget { get; set; } = "";  // 산출 대상에서 뺀 까닭(콘크리트 아님 등). "" 이면 대상이다
+    public string Mark { get; set; } = "";       // Revit «마크»(도면 부호 B1 · W1 …) — 산출근거 줄의 부호(R49 · 없으면 유형 이름)
+    public double Thickness { get; set; }        // 바닥 · 기초의 두께(m — Revit «두께» · 0 = 모름) — 부위 제목의 «(T=700)»(R49)
 }
 
 /// <summary>
@@ -160,7 +162,7 @@ public sealed class CalcPlan
             return int.MaxValue;
         }
         bool zoned = all.Any(x => x.NotTarget.Length == 0 && x.Zone.Trim().Length > 0); // 구역을 쓰는 모델인가
-        var listed = new List<(CalcElement el, int work, int kind, string kindName, bool noZone, double value)>();
+        var listed = new List<(CalcElement el, int work, int kind, string kindName, bool noZone, double value, CalcInput input, string spec, string pour, bool oneLine)>();
         foreach (var x in all)
         {
             string raw = x.Formula.Replace('×', '*').Trim();
@@ -190,34 +192,53 @@ public sealed class CalcPlan
             plan.Listed++;
             plan.ListedBim += x.Bim;
             if (zone.Length == 0 && !free) plan.NoZone++;      // 위치를 붙이지 않는 부위 · '구역 없음'으로 정한 부재는 '구역이 빈 부재'로 세지 않는다
-            // 차례: 무근 → 철근, 부위(부위 목록의 차례 — 목록에 없는 이름은 그 뒤에 이름순), 구역(네모를 그린 차례 — 없으면 이름순), 부호.
-            listed.Add((el, work == Plain ? 0 : 1, partAt >= 0 ? partAt : int.MaxValue, kindName, free, value));
+            // 레미콘 규격 · 타설(R49 — 부위 목록의 값, 없으면 처음 값: 채움 무근 25-18-15 · 그 밖 무근 25-21-15 · 철근 25-30-15 · 펌프차 붐타설).
+            var listedPart = partAt >= 0 ? partList[partAt] : null;
+            // 부위 칸의 규격은 그 부위의 공종(무근 칸 · 이름 — ① 칸의 흐린 처음 값과 같은 잣대) 부재에만 건다 — 철근 부위에 이름으로 섞여 든 무근 부재는
+            // 무근 처음 값(revit-verify R49 M3: 철근 규격이 무근 부재에 붙지 않게).
+            bool partPlain = listedPart != null && (listedPart.Plain || WorkOf("", "", kindName) == Plain);
+            string spec = ((work == Plain) == partPlain ? Clean(listedPart?.Spec) : null) ?? PartCatalog.DefaultSpec(kindName, work == Plain, listedPart?.Group);
+            string pour = Clean(listedPart?.Pour) ?? PartCatalog.DefaultPour;
+            bool oneLine = PartCatalog.OneLine(kindName, listedPart?.Group);
+            // 차례: 무근 → 철근, 규격 · 타설(절), 부위(부위 목록의 차례 — 목록에 없는 이름은 그 뒤에 이름순), 구역(네모를 그린 차례 — 없으면 이름순), 부호.
+            listed.Add((el, work == Plain ? 0 : 1, partAt >= 0 ? partAt : int.MaxValue, kindName, free, value, x, spec, pour, oneLine));
         }
 
         var natural = new NaturalComparer();
         var groups = listed
-            .GroupBy(t => (t.el.Work, t.el.Part, t.el.Zone, t.el.Type, t.el.Formula))
+            .GroupBy(t => (t.el.Work, t.spec, t.pour, t.el.Part, t.el.Zone, Shown: t.input.Mark.Trim().Length > 0 ? t.input.Mark.Trim() : t.el.Type, t.el.Formula))
             .OrderBy(g => g.First().work)
+            .ThenBy(g => g.Key.spec, natural).ThenBy(g => g.Key.spec, StringComparer.Ordinal)
+            .ThenBy(g => g.Key.pour, StringComparer.Ordinal)
             .ThenBy(g => g.First().kind)
             .ThenBy(g => g.First().kindName, natural).ThenBy(g => g.First().kindName, StringComparer.Ordinal)
             .ThenBy(g => g.Key.Zone.Length == 0 ? 1 : 0)            // 구역 없는 부재는 그 부위의 맨 뒤
             .ThenBy(g => ZoneAt(g.Key.Zone))
             .ThenBy(g => g.Key.Zone, natural).ThenBy(g => g.Key.Zone, StringComparer.Ordinal)
-            .ThenBy(g => g.Key.Type, natural).ThenBy(g => g.Key.Type, StringComparer.Ordinal)
+            .ThenBy(g => g.Key.Shown, natural).ThenBy(g => g.Key.Shown, StringComparer.Ordinal)
             .ThenBy(g => g.Min(t => t.el.Id));
         foreach (var g in groups)
         {
             var members = g.OrderBy(t => t.el.Id).ToList();
-            plan.Rows.Add(new CalcRow
+            var first = members[0];
+            var row = new CalcRow
             {
-                Work = g.Key.Work, Part = g.Key.Part, Mark = g.Key.Type, Zone = g.Key.Zone, Formula = g.Key.Formula,
-                NoZonePart = g.First().noZone,
+                Work = g.Key.Work, Part = g.Key.Part, Mark = first.el.Type, Zone = g.Key.Zone, Formula = g.Key.Formula,
+                NoZonePart = first.noZone,
                 Count = members.Count, Bim = members.Sum(t => t.el.Bim), Note = IdNote(members.Select(t => t.el.Id).ToList()),
-            });
+                PartName = first.kindName, Spec = g.Key.spec, Pour = g.Key.pour, Shown = g.Key.Shown,
+                Marked = first.input.Mark.Trim().Length > 0, OneLine = first.oneLine, NoSub = first.noZone,
+            };
+            foreach (var t in members)
+                if (t.input.Thickness > 0 && t.input.Kind is MemberKind.Slab or MemberKind.Foundation) row.Thickness.Add((t.input.Thickness, t.el.Bim));
+            plan.Rows.Add(row);
             plan.Quantity += FormulaDecomposer.RoundQuantity(members[0].value * members.Count);
         }
         return plan;
     }
+
+    // 부위 목록의 글 칸(규격 · 타설): 빈 글이면 null(처음 값).
+    private static string? Clean(string? text) => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
 
     // 식 글자에서 빈칸을 뺀다(같은 식이 빈칸 때문에 다른 줄로 갈리지 않게).
     // 계산할 수 있다고 확인된 식에만 쓴다 — 그런 식에는 숫자 사이에 빈칸이 없으므로 뜻이 바뀌지 않는다.

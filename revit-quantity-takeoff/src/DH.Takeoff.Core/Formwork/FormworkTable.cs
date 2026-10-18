@@ -51,6 +51,13 @@ public static class FormworkTable
     public static bool IsSmallPart(string type) => SmallParts.Any(w => type.Contains(w, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
+    /// 수직면 덩어리(R49)에 들지 않는 부재 — 2D 가 따로 적는 것: 버림(합판 6회) · 받침류(이름 — 받침 · PAD · 디딤판 · 환기구 · 부위 묶음 «받침·PAD»).
+    /// 덩어리 · 잇기 · 표가 이 잣대 하나를 쓴다(core-verify R49 계획 L1).
+    /// </summary>
+    public static bool StandsAlone(FormworkElement el) =>
+        el.Blinding || IsSmallPart(el.Type) || (el.Part.Length > 0 && PartCatalog.GroupOf(el.Part) == PartCatalog.Small);
+
+    /// <summary>
     /// 버림(무근)으로 볼 만한 이름인가 — 대응표의 '초안'을 만들 때만 쓴다(사람이 표에서 고친다).
     /// 유형·재료 이름에 '무근'·'버림' 이 든 것(전과 같다), 또는 부위 이름에 '버림' 이 든 것.
     /// 이름만으로 모르는 모델도 있다(송악3의 버림은 'SB_T100(기초)') — 그런 부재는 사용자가 부위(DH_Part)를 '버림 콘크리트'로 넣으면
@@ -67,7 +74,7 @@ public static class FormworkTable
         : cls == FaceClass.SlopeUp ? GroupSlope
         : GroupSide;
 
-    /// <param name="elevated">받쳐서 치는 밑면이 있는 부재인가(떠 있는 슬래브) — 그 가장자리는 벽 외측에 이어 유로폼으로 본다.</param>
+    /// <param name="elevated">받쳐서 치는 밑면이 있는 부재인가(떠 있는 슬래브) — R49 부터 쓰지 않는다(벽과 이어진 가장자리는 수직면 덩어리가 벽을 따르게 한다).</param>
     /// <returns>종류 — 버림의 안쪽 면은 <see cref="FormworkRules.NotCounted"/>(초안에서 세지 않음 — R48).</returns>
     public static string ItemOf(FormworkElement el, FaceClass cls, FacePatch patch, bool elevated = false)
     {
@@ -88,13 +95,11 @@ public static class FormworkTable
             return cls == FaceClass.Bottom ? Ply3
                  : (cls is FaceClass.SlopeUp or FaceClass.SlopeDown) && el.Type.Contains("헌치", StringComparison.Ordinal) ? Ply3
                  : Euro;
-        if (group == GroupSlope) return Ply3;
-        bool soffit = group == GroupBottom;
-        return el.Kind switch
-        {
-            MemberKind.Slab => soffit ? Ply3 : elevated ? Euro : Ply3,
-            _ => Ply3, // 보(옆면 · 밑면) · 기둥 · 기초 · 기타
-        };
+        // 그 밖(슬래브 · 보 · 기둥 · 기초 · 기타의 옆면 · 밑면 · 경사면)은 합판 3회. 슬래브 옆면도 3회(R49 — JACK 2026-10-16: 캐노피 · WALK WAY 처럼
+        // 떠 있는 슬래브 옆면은 3회 · 배수지 · 김포 2D) — 벽과 같은 평면으로 이어진 옆면(지붕 슬래브 바깥 · 하부슬래브 옆)은 수직면 덩어리로 벽의 종류를 따른다
+        // (전의 «받쳐서 치는 슬래브의 가장자리 = 유로폼»을 없앰 — elevated 는 이제 쓰지 않는다).
+        _ = elevated;
+        return Ply3;
     }
 
     /// <summary>부재 속성: 거푸집 넓이의 합(㎡).</summary>

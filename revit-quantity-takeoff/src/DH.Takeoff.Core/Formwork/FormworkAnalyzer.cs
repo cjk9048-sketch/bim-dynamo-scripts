@@ -126,110 +126,127 @@ public static class FormworkAnalyzer
             analyzed[el] = ef;
         }
         var results = elements.Where(e => e.Target).Select(e => analyzed[e]).ToList();
-        // 벽 바깥면에 같은 평면으로 붙은 바닥판 옆면을 찾아 둔다(형상만으로 — 대응표와 상관없다).
-        LinkFlushToWalls(results, all.Options);
-        // 종류는 부재 전체를 본 뒤에 붙인다: 받쳐서 치는 밑면이 있는 슬래브(떠 있는 슬래브)의 가장자리는 벽 외측과 이어진다.
+        // 수직면 덩어리를 묶어 둔다(형상만으로 — 대응표와 상관없다 · R49).
+        GroupVerticals(results, all.Options);
+        // 종류는 부재 전체를 본 뒤에 붙인다: 조각마다 대응표 → 덩어리는 다스리는 조각을 따름 → 3D 에서 뺀 판을 덮음.
         foreach (var ef in results)
-        {
-            bool elevated = ef.Faces.Any(f => f.Patches.Any(p => p.Below == Below.Supported));
             foreach (var face in ef.Faces)
                 foreach (var patch in face.Patches)
-                {
                     patch.Unruled = (patch.Counted, patch.Decided, patch.Item, patch.Note);
-                    Classify(all.Options, ef.Element, face, patch, elevated);
-                }
-        }
-        FollowWalls(results, all.Options);
+        ApplyRules(results, all.Options);
         return results;
     }
 
-    // 바닥판(슬래브 · 기초 — 버림 · 받침류 아님) 옆면의 바깥 조각 가운데, 같은 평면 · 같은 방향으로 벽의 바깥면 조각에
-    // 위아래로 맞닿은 것을 찾아 그 벽 조각을 적어 둔다(나중에 치는 부재도 — R46: 중간슬래브 · 트라프가 나중 부재가 되어도 2D 처럼 벽과 한 줄):
-    //  · 아래에 있는 벽(벽의 위 끝 = 이 조각의 아래 끝 — 상부슬래브 옆면은 그 슬래브를 받친 벽과 한 면: 참고 산출서 «벽 + 지붕 옆면» 한 줄 · 위에 얹힌 턱은 따로)을
-    //    먼저, 없으면 위에 얹힌 벽(하부슬래브 옆면).
-    //  · 그쪽 벽들과 맞댄 길이의 합이 이 조각 가로 길이의 절반을 넘을 때만(일부만 붙은 바닥판 옆면이 통째로 벽 종류가 되지 않게 — core-verify R45 L4).
-    //  · 그 가운데 가장 길게 맞댄 벽 조각(같으면 부재 Id 가 작은 것 — 차례에 따라 바뀌지 않게).
-    private static void LinkFlushToWalls(List<ElementFormwork> results, FormworkOptions options)
+    /// <summary>마지막으로 수직면 덩어리를 묶는 데 걸린 시간(ms) · 묶은 덩어리 수 · 합친 테두리가 한 고리가 아니라 묶지 않은 수 — 일지(core-verify R49 계획 L5).</summary>
+    public static (long ms, int groups, int refused) LastGrouping { get; private set; }
+
+    // 수직면 덩어리(R49 — JACK 2026-10-16 «객체와 관계없이 2개이상의 부위로 합쳐져서 수직면이 생긴곳은 무조건 하나의 덩어리»):
+    // 평면 수직면(옆면 · 구멍 둘레 — 법선이 수평)의 형상이 세는 조각 가운데 같은 방향 · 같은 평면(Epsilon)에 맞닿은(맞댄 변 1 cm 넘게) 것을
+    // 부재 종류 · 안팎 · 위치 · 부위 · 거푸집 종류와 상관없이 묶는다. 버림 · 받침류(StandsAlone — 2D 가 따로 적음)는 넣지 않는다.
+    // 합친 테두리가 한 고리가 아니면(틈 · 겹침) 묶지 않는다(core-verify R49 계획 H2 — 판 = 덩어리가 늘 되게).
+    // 다스리는 조각 = 벽 조각 가운데 가장 넓은 것 → 없으면 가장 넓은 조각(같으면 부재 Id 가 작은 것). 덩어리 조각의 괄호(외측 · 내측)는 다스리는 조각의 것으로(M2).
+    private static void GroupVerticals(List<ElementFormwork> results, FormworkOptions options)
     {
-        static bool Outer(FacePatch p) => p.Counted && p.Side == "외측" && p.Outline.Count > 0 && p.Outline[0].Count >= 3;
-        var walls = new List<(ElementFormwork R, FacePatch P, V3 N, double D, V3 Min, V3 Max)>();
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var cands = new List<(ElementFormwork R, FaceResult F, FacePatch P, V3 N, double D, V3 Min, V3 Max)>();
         foreach (var r in results)
         {
-            if (r.Element.Kind != MemberKind.Wall) continue;
+            if (FormworkTable.StandsAlone(r.Element)) continue;
             foreach (var f in r.Faces)
             {
-                if (f.Class != FaceClass.Side || f.Normal.Length != 3) continue;
+                if (f.Class is not (FaceClass.Side or FaceClass.HoleEdge) || f.Normal.Length != 3) continue;
                 var n = new V3(f.Normal[0], f.Normal[1], f.Normal[2]).Unit();
-                foreach (var p in f.Patches.Where(Outer))
+                if (Math.Abs(n.Z) > 0.01) continue;   // 수직면만(구멍의 위 · 아래 면은 아님)
+                foreach (var p in f.Patches)
                 {
+                    if (!p.Counted || p.Outline.Count == 0 || p.Outline[0].Count < 3) continue;   // 형상이 세는 조각(덮인 자리 · 틈 아님)
+                    // «확인할 자리»(안팎 확인 · 8 cm 안 콘크리트 · 높이에 따라 안팎이 갈림 …)는 넣지 않는다 — 틈이라 판을 못 댈 수도 있는 자리라 사람이 ② 에서 먼저
+                    // 본다(JACK 2026-10-19 «덩어리에서 빼기» · core-verify R49 설치 전 M1). 대응표를 걸기 전이라 NeedsCheck 는 형상의 까닭만 본다.
+                    if (p.NeedsCheck) continue;
                     var (min, max) = BoxOf(p);
-                    walls.Add((r, p, n, n.Dot(V3.Of(p.Outline[0][0])), min, max));
+                    cands.Add((r, f, p, n, n.Dot(V3.Of(p.Outline[0][0])), min, max));
                 }
             }
         }
-        if (walls.Count == 0) return;
-        foreach (var r in results)
+        // 같은 방향끼리(법선을 끊어서) 평면 자리 차례로 — 짝을 보는 반복을 평면 이웃으로 줄인다(L5).
+        var parent = Enumerable.Range(0, cands.Count).ToArray();
+        int Root(int i) { while (parent[i] != i) i = parent[i] = parent[parent[i]]; return i; }
+        foreach (var dir in Enumerable.Range(0, cands.Count).GroupBy(i => (Math.Round(cands[i].N.X, 4), Math.Round(cands[i].N.Y, 4), Math.Round(cands[i].N.Z, 4))))
         {
-            var el = r.Element;
-            if (el.Kind is not (MemberKind.Slab or MemberKind.Foundation) || el.Blinding || FormworkTable.IsSmallPart(el.Type)) continue;
-            foreach (var f in r.Faces)
-            {
-                if (f.Class != FaceClass.Side || f.Normal.Length != 3) continue;
-                var n = new V3(f.Normal[0], f.Normal[1], f.Normal[2]).Unit();
-                foreach (var p in f.Patches.Where(Outer))
+            var order = dir.OrderBy(i => cands[i].D).ToList();
+            for (int a = 0; a < order.Count; a++)
+                for (int b = a + 1; b < order.Count && cands[order[b]].D - cands[order[a]].D <= options.Epsilon; b++)
                 {
-                    double d = n.Dot(V3.Of(p.Outline[0][0]));
-                    var (min, max) = BoxOf(p);
-                    var frame = Frame.Of(V3.Of(p.Outline[0][0]), n);
-                    // 가로 범위는 가장 넓은 고리(바깥)로 잰다 — 고리 차례는 정해져 있지 않아 [0] 이 구멍일 수 있다(core-verify R45 L2).
-                    var outerRing = p.Outline.Where(ring => ring.Count >= 3).OrderByDescending(ring => Math.Abs(LoopArea(ring.Select(V3.Of).ToList(), frame))).First();
-                    double u0 = double.MaxValue, u1 = double.MinValue;
-                    foreach (var q in outerRing) { var (u, _) = frame.To2D(V3.Of(q)); u0 = Math.Min(u0, u); u1 = Math.Max(u1, u); }
-                    var touching = new List<(int Rank, double Length, long Id, ElementFormwork R, FacePatch P)>();
-                    foreach (var w in walls)
-                    {
-                        if (w.N.Dot(n) < 1 - 1e-10 || Math.Abs(w.D - d) > options.Epsilon) continue;
-                        if (Apart(min, max, w.Min, w.Max, Section.Merge + 1e-6)) continue;
-                        int rank = Math.Abs(w.Max.Z - min.Z) <= 0.002 ? 0 : Math.Abs(w.Min.Z - max.Z) <= 0.002 ? 1 : -1;   // 아래 벽 · 위 벽
-                        if (rank < 0) continue;
-                        double shared = FormworkMerge.Overlap(p, w.P, n);
-                        if (shared <= FormworkMerge.MinShared) continue;
-                        touching.Add((rank, shared / Section.Merge, w.R.Element.Id, w.R, w.P));   // 겹친 넓이 ÷ 잇기 폭 ≈ 맞댄 길이
-                    }
-                    foreach (int rank in new[] { 0, 1 })
-                    {
-                        var side = touching.Where(t => t.Rank == rank).ToList();
-                        if (side.Count == 0 || side.Sum(t => t.Length) <= 0.5 * (u1 - u0)) continue;
-                        var pick = side.OrderByDescending(t => t.Length).ThenBy(t => t.Id).First();
-                        p.FlushWall = pick.P;
-                        p.FlushWallType = pick.R.Element.Type;
-                        break;
-                    }
+                    var x = cands[order[a]];
+                    var y = cands[order[b]];
+                    if (x.N.Dot(y.N) < 1 - 1e-10) continue;
+                    if (Apart(x.Min, x.Max, y.Min, y.Max, Section.Merge + 1e-6)) continue;
+                    if (FormworkMerge.Overlap(x.P, y.P, x.N) <= FormworkMerge.MinShared) continue;
+                    int ra = Root(order[a]), rb = Root(order[b]);
+                    if (ra != rb) parent[Math.Max(ra, rb)] = Math.Min(ra, rb);
                 }
+        }
+        int id = 0, refused = 0;
+        foreach (var members in Enumerable.Range(0, cands.Count).GroupBy(Root).Select(g => g.Select(i => cands[i]).ToList()).Where(g => g.Count >= 2))
+        {
+            var gov = members.OrderBy(m => m.R.Element.Kind == MemberKind.Wall ? 0 : 1).ThenByDescending(m => m.P.Area).ThenBy(m => m.R.Element.Id).First();
+            if (FormworkMerge.TryJoin(members.Select(m => m.P).ToList(), gov.N, gov.P) == null) { refused++; continue; }
+            var group = new VerticalGroup { Id = ++id, Governor = (gov.R, gov.F, gov.P), Normal = new[] { gov.N.X, gov.N.Y, gov.N.Z } };
+            foreach (var m in members.OrderBy(m => m.R.Element.Id))
+            {
+                group.Members.Add((m.R, m.F, m.P));
+                m.P.Vertical = group;
+                // 조각의 안팎(Side)은 그대로 둔다 — 줄 · 판의 괄호는 다스리는 조각의 것(FormworkSheet 의 줄 대표 = 다스리는 조각)이라 한 장 = 한 괄호다.
+                // 덮어쓰면 «확인 필요»가 말없이 지워지고 개구부 · 구멍 둘레의 갈래가 바뀌어 되돌릴 수 없었다(core-verify R49 설치 전 M1 · L3).
             }
         }
+        LastGrouping = (watch.ElapsedMilliseconds, id, refused);
     }
 
-    // 벽 바깥면에 같은 평면으로 붙은 바닥판 옆면은 그 벽 조각의 종류를 따른다(JACK 2026-10-16 «벽과 같은 종류로 이어 한 장») —
-    // 사람이 정한 종류(부위 줄 · 유형 줄)가 없고 부위의 처음 값도 없을 때(DraftOf 의 사슬 그대로 — R47), 벽 조각이 세는 조각(또는 3D 에서 뺀 조각)일 때만.
-    // 벽 조각의 종류는 대응표까지 건 뒤의 것이다(그래서 Classify 다음에) — 벽이 부위로 정한 종류(DRY AREA = 합판 3회 등)면 그것을 따른다.
-    // 3D 에서 뺀 조각도 종류만은 따른다(세지는 않는다 — 되살리면 그 종류). 초안 사슬이 «세지 않음»이면 Classify 와 같이 다룬다(core-verify R48 계획 L2).
-    private static void FollowWalls(IReadOnlyList<ElementFormwork> results, FormworkOptions options)
+
+    // 대응표를 건다(Analyze · Reclassify 가 같은 길): 조각마다 사슬(사람 줄 > 부위 처음 값 > 초안) → 수직면 덩어리는 다스리는 조각의 값을 물려받음 →
+    // 3D 에서 뺀 판을 조각마다 덮음(core-verify R49 계획 H1 — 물려받는 값에 «뺀 판»이 섞이지 않게: 덩어리의 새 조각이 말없이 세지 않게 되는 일이 없다).
+    private static void ApplyRules(IReadOnlyList<ElementFormwork> results, FormworkOptions options)
     {
         foreach (var ef in results)
         {
             bool elevated = ef.Faces.Any(f => f.Patches.Any(p => p.Below == Below.Supported));
             foreach (var face in ef.Faces)
                 foreach (var patch in face.Patches)
-                {
-                    bool dropped = patch.DropLead.Length > 0;
-                    if (patch.FlushWall == null || (!patch.Counted && !dropped) || patch.Below == Below.Floating) continue;
-                    if (HumanRule(options.Rules, ef.Element, FormworkTable.GroupOf(face.Class, patch)) != null) continue;
-                    string draft = DraftOf(ef.Element, face.Class, patch, elevated, options);
-                    if (dropped) { if (draft != FormworkRules.NotCounted) patch.Item = draft; }
-                    else ApplyDraft(ef.Element, patch, draft);
-                }
+                    Rule(options, ef.Element, face.Class, patch, elevated);
         }
+        FollowGroups(results);
+        foreach (var ef in results)
+            foreach (var face in ef.Faces)
+                foreach (var patch in face.Patches)
+                    OverlayDrop(options, face, patch);
+    }
+
+    // 덩어리의 조각은 다스리는 조각의 값(세는가 · 정했는가 · 종류 · 까닭)을 그대로 받는다 — 제 사슬의 값은 Own 에 남긴다(바뀐 양 — M5).
+    private static void FollowGroups(IReadOnlyList<ElementFormwork> results)
+    {
+        foreach (var group in FormworkMerge.GroupsOf(results))
+        {
+            var gov = group.Governor.Patch;
+            foreach (var (_, _, patch) in group.Members)
+            {
+                patch.Own = (patch.Counted, patch.Item);
+                if (ReferenceEquals(patch, gov)) continue;
+                (patch.Counted, patch.Decided, patch.Item, patch.Note) = (gov.Counted, gov.Decided, gov.Item, gov.Note);
+            }
+        }
+    }
+
+    // 3D 에서 뺀 판(R48): 대응표를 걸기 전에 세던 조각 · 아래가 빈 밑면만 — 종류는 남기고 세지 않음(정한 것으로).
+    private static void OverlayDrop(FormworkOptions options, FaceResult face, FacePatch patch)
+    {
+        bool raw = (patch.Unruled?.Counted ?? patch.Counted) || patch.Below == Below.Floating;
+        string? lead = raw ? options.Rules?.DropOf(face, patch) : null;
+        if (lead == null) return;
+        patch.Counted = false;
+        patch.Decided = true;
+        patch.Note = DroppedNote;
+        patch.DropLead = lead;
     }
 
     /// <summary>
@@ -252,7 +269,7 @@ public static class FormworkAnalyzer
     {
         if (el.Blinding && FormworkTable.ItemOf(el, cls, patch, elevated) == FormworkRules.NotCounted) return FormworkRules.NotCounted;
         if (FormworkTable.PartDecides(el.Part, FormworkTable.GroupOf(cls, patch)) && options.PartDefault(el.Part) is { Length: > 0 } byPart) return byPart;
-        if (withWall && patch.FlushWall is { Item.Length: > 0 } wall && (wall.Counted || wall.DropLead.Length > 0)) return wall.Item;
+        _ = withWall;   // R49: 벽과 이어진 면은 수직면 덩어리가 다스리는 조각을 따르게 한다(전의 «맞닿은 벽 종류»는 덩어리로 바뀜)
         return FormworkTable.ItemOf(el, cls, patch, elevated);
     }
 
@@ -296,38 +313,23 @@ public static class FormworkAnalyzer
     {
         foreach (var ef in results)
         {
-            bool elevated = ef.Faces.Any(f => f.Patches.Any(p => p.Below == Below.Supported));
             foreach (var face in ef.Faces)
                 foreach (var patch in face.Patches)
                 {
                     if (patch.Unruled is not { } raw) continue;
                     (patch.Counted, patch.Decided, patch.Item, patch.Note) = raw;
                     patch.DropLead = "";
-                    Classify(options, ef.Element, face, patch, elevated);
                 }
         }
-        FollowWalls(results, options);
+        ApplyRules(results, options);
     }
 
-    // 조각의 종류를 정한다 — 차례(R47 · R48):
-    //   3D 에서 뺀 판(사람 — R48: 대응표가 무엇이든 세지 않는다) >
-    //   부위를 넣은 부재의 면: 부위 줄(사람) > 부위의 처음 값(계단 · 턱·맨홀 · DRY AREA = 합판 3회) > (맞닿은 벽 — FollowWalls) > 초안 규칙 /
-    //   그 밖(부위 없는 부재 · 구멍 둘레 · 아래가 빈 밑면): 유형 줄(사람) > (맞닿은 벽) > 초안 규칙.
+    // 조각의 종류를 정하는 차례(R47 · R48 · R49 — ApplyRules):
+    //   조각마다 — 부위를 넣은 부재의 면: 부위 줄(사람) > 부위의 처음 값(계단 · 턱·맨홀 · DRY AREA = 합판 3회) > 초안 규칙 /
+    //              그 밖(부위 없는 부재 · 구멍 둘레 · 아래가 빈 밑면): 유형 줄(사람) > 초안 규칙 →
+    //   수직면 덩어리의 조각은 다스리는 조각의 값 → 3D 에서 뺀 판(사람 — 대응표가 무엇이든 세지 않는다 · 종류는 남김).
     // 부위 줄 · 부위 처음 값은 구멍 둘레와 아래가 빈 밑면을 다스리지 않는다(FormworkTable.PartGoverns — 2D 의 «HOLE 주위»는 부위와 상관없이 합판 3회).
     // 아래가 빈 밑면(세는지 묻는 면)은 지금처럼 유형 줄로만 정한다.
-    private static void Classify(FormworkOptions options, FormworkElement el, FaceResult face, FacePatch patch, bool elevated)
-    {
-        // 뺀 판인지는 대응표를 걸기 전에 본다(아래가 빈 밑면 갈래보다 앞 — core-verify R48 계획 L1): 세던 조각 · 아래가 빈 밑면(유형 줄로 세게 하면 판에 든다)만.
-        string? lead = patch.Counted || patch.Below == Below.Floating ? options.Rules?.DropOf(face, patch) : null;
-        Rule(options, el, face.Class, patch, elevated);
-        if (lead == null) return;
-        // 종류는 대응표대로 남긴다 — 이 벽 조각에 맞닿은 바닥판 옆면이 벽의 종류를 그대로 따르게(DraftOf) · 되살리면 그 종류.
-        patch.Counted = false;
-        patch.Decided = true;
-        patch.Note = DroppedNote;
-        patch.DropLead = lead;
-    }
-
     private static void Rule(FormworkOptions options, FormworkElement el, FaceClass cls, FacePatch patch, bool elevated)
     {
         string group = FormworkTable.GroupOf(cls, patch);

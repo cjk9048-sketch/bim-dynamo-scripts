@@ -300,6 +300,42 @@ public static class PartCatalog
         return null;
     }
 
+    /// <summary>
+    /// 레미콘 규격 글을 다듬는다(R49 — revit-verify M5): 빈칸을 빼고 줄표 갈래(‐ ‑ ‒ – — − － ~)를 «-» 로. 숫자-숫자-숫자(소수 가능 — 25-30-15 · 25-24-12)가
+    /// 아니면 null(적지 않는다 — ① 칸은 빨갛게).
+    /// </summary>
+    public static string? NormalizeSpec(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        var sb = new System.Text.StringBuilder();
+        foreach (char c in text.Trim())
+        {
+            if (char.IsWhiteSpace(c)) continue;
+            sb.Append(c is '\u2010' or '\u2011' or '\u2012' or '\u2013' or '\u2014' or '\u2212' or '\uFF0D' or '~' ? '-' : c);
+        }
+        string s = sb.ToString();
+        return System.Text.RegularExpressions.Regex.IsMatch(s, @"^\d+(\.\d+)?-\d+(\.\d+)?-\d+(\.\d+)?$") ? s : null;
+    }
+
+    /// <summary>타설 방법의 처음 값(2D «레미콘타설 (…) : 펌프차 붐타설»).</summary>
+    public const string DefaultPour = "펌프차 붐타설";
+
+    /// <summary>
+    /// 레미콘 규격의 처음 값(R49 — 명장 2D: 버림 «무근 25-18-15» · 관보호공 · 받침 · 디딤판 · 턱 «무근 25-21-15» · 구조체 «철근 25-30-15»):
+    /// 무근이면 채움 묶음(버림 · 단차부 채움 …)은 25-18-15, 그 밖 무근은 25-21-15, 철근은 25-30-15.
+    /// </summary>
+    /// <param name="group">그 부위가 목록에서 든 묶음(없으면 이름으로 짐작).</param>
+    public static string DefaultSpec(string part, bool plain, string? group = null) =>
+        !plain ? "25-30-15" : (string.IsNullOrEmpty(group) ? GroupOf(part) : group) == Fill ? "25-18-15" : "25-21-15";
+
+    /// <summary>
+    /// 2D 산출근거가 부호 없이 부위 전체를 한 줄로 적는 부위인가(명장 2D: 보 · 기둥 · 계단 · 구조물턱 · 맨홀턱 · DRY AREA · 드레인피트 · 받침보 · 관보호공 ·
+    /// 밸브받침 · 출입구 발디딤판 · 누수방지턱 · 버림 — 부호(B1 · S1 · MS1 · W1 · H1)를 단 것은 바닥 · 상부 · 중간슬래브 · 벽체 · 헌치뿐).
+    /// 채움 · 보·기둥 · 계단 · 턱 · 받침 묶음과 그 밖(DRY AREA · 기타).
+    /// </summary>
+    public static bool OneLine(string part, string? group = null) =>
+        (string.IsNullOrEmpty(group) ? GroupOf(part) : group) is not (Floor or Wall or Haunch or Upper);
+
     /// <summary>DRY AREA(벽 밖으로 튀어나온 작은 상자 — 2D «DRY AREA» · 위치 이름 «D.A»)인 부위 이름인가: «DRY AREA» · «드라이»가 든 이름.</summary>
     public static bool IsDryArea(string part) =>
         part.Contains("DRY AREA", StringComparison.OrdinalIgnoreCase) || part.Contains("드라이", StringComparison.Ordinal);

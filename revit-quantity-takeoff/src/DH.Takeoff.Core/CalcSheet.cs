@@ -152,6 +152,16 @@ public sealed class CalcRow
     public int Count { get; set; } = 1;        // 이 식인 부재 수
     public double Bim { get; set; }            // 이 줄에 든 부재들의 BIM 체적 합(m³, 반올림 전)
     public string Note { get; set; } = "";     // 비고(부재 Id 등)
+
+    // ── R49: 2D 산출근거 꼴(절 = 공종 · 규격 · 타설 → 부위 제목 → 위치 작은 제목 → 줄) ──
+    public string PartName { get; set; } = ""; // 부위 이름(위치를 붙이지 않은 것 — 2D 부위 제목 «1) 바닥슬래브»)
+    public string Spec { get; set; } = "";     // 레미콘 규격(«25-30-15»)
+    public string Pour { get; set; } = "";     // 타설 방법(«펌프차 붐타설»)
+    public string Shown { get; set; } = "";    // 줄의 부호(마크 — 없으면 유형 이름)
+    public bool Marked { get; set; }           // 부재에 마크가 있다(부호 없이 한 줄로 적는 부위에서도 따로 부호 줄)
+    public bool OneLine { get; set; }          // 2D 가 부호 없이 부위 전체를 한 줄로 적는 부위(보 · 기둥 · 계단 · 턱 · 받침 …)
+    public bool NoSub { get; set; }            // 위치 작은 제목을 달지 않는 부위(«중분류 생략»)
+    public List<(double thickness, double bim)> Thickness { get; } = new();   // 이 줄 부재들의 두께(m)와 체적 — 바닥 · 기초만 · 모르면 없음
 }
 
 /// <summary>부재 하나의 기록 — 「부재 목록」과 「미산출 부재」 시트에 쓴다.</summary>
@@ -171,163 +181,116 @@ public sealed class CalcElement
 }
 
 /// <summary>
-/// 수량산출서의 산출근거를 엑셀로 짠다. 양식은 참고자료 「배수지 산근」을 따른다:
-/// ①공종 > ②부위 > ③줄 — 부호 (구역) : 숫자 × 숫자 … = ROUND(…,2), 부위마다 '계'.
+/// 수량산출서의 산출근거를 엑셀로 짠다 — 양식은 2D 수량산출서(명장 여과지 「3.0 구조물공.xlsx」)와 같게(R49 — JACK 2026-10-16
+/// «첨부한 수량산출서랑 시트모양과 색상 글씨체등 양식을 아예 똑같이»):
+///  · 시트 차례: 「수량집계표(구체공)」 → 「주요자재집계표(구체공) 」 → 「구체공산출근거」 → (우리 것) 「부재 목록」 · 「미산출 부재」 · 「대상 아님」.
+///  · 「구체공산출근거」: 콘크리트 절(«1. 레미콘타설 ( 무근 , 25 - 18 - 15 ) : 펌프차 붐타설» — 공종 · 규격 · 타설마다) → 거푸집 절(합판6회 → 3회 → 4회 → 유로폼)
+///    — 절 번호를 이어서. 부위 제목 «1) 바닥슬래브 (T=700)» · 위치가 둘 이상이면 «- 배관실» 작은 제목 · 줄 «부호 : 숫자 × 숫자 = ROUND(…,2)» ·
+///    보 · 기둥 · 계단 · 턱 · 받침처럼 2D 가 부호 없이 적는 부위는 한 줄 · 절 끝 «계» 하나(Sheet2D).
+///  · 수량집계표: 레미콘(무근/철근 · 규격) · 합판거푸집(합판 N회) · 유 로 폼 — 수량은 산출근거의 «계»를 가리킨다. BIM 물량 · 차이 · 차이율은 인쇄 밖(H · I · J).
 /// 숫자와 기호를 칸마다 따로 적고, 값은 그 칸들을 가리키는 엑셀 수식으로 둔다(칸의 숫자를 고치면 값이 따라 바뀐다).
 /// </summary>
 public static class CalcSheet
 {
-    public const string SheetName = "산출근거";
+    public const string SheetName = Sheet2D.SheetName;
+    public const string SummaryName = "수량집계표(구체공)";
+    public const string MaterialName = "주요자재집계표(구체공) ";   // 2D 시트 이름 그대로(끝에 빈칸)
 
     /// <summary>구역이 비어 있는 부재를 적는 이름.</summary>
     public const string NoZoneName = "구역 미지정";
 
-    internal const int MarkColumn = 3;          // C: 부호
-    internal const int ZoneColumn = 4;          // D: (구역)
-    private const int ColonColumn = 7;          // G: ":"
-    private const int FirstTokenColumn = 8;     // H: 식의 첫 토막
-    private const int TokensPerLine = 14;       // H~U
-    internal const int EqualsColumn = 22;       // V: "=" 또는 "계"
-    internal const int ResultColumn = 23;       // W: =ROUND(…,2)
-    internal const int SumColumn = 26;          // Z: 부위의 계
-    private const int NoteColumn = 28;          // AB: 비고
-
-    /// <summary>산출근거 칸 짜임의 열 너비(「산출근거」 · 「거푸집」 시트가 같이 쓴다).</summary>
-    internal static void Columns(XlsxSheet sheet)
-    {
-        sheet.Width(1, 4); sheet.Width(2, 2); sheet.Width(MarkColumn, 20); sheet.Width(ZoneColumn, 14);
-        sheet.Width(5, 2); sheet.Width(6, 2); sheet.Width(ColonColumn, 2);
-        for (int c = FirstTokenColumn; c < FirstTokenColumn + TokensPerLine; c++) sheet.Width(c, 7.5);
-        sheet.Width(EqualsColumn, 4); sheet.Width(ResultColumn, 11); sheet.Width(24, 2); sheet.Width(25, 2);
-        sheet.Width(SumColumn, 12); sheet.Width(27, 2); sheet.Width(NoteColumn, 44);
-    }
+    /// <summary>한 줄로 적는 부위의 줄 하나에 넣는 숫자의 한도(엑셀 수식 한 칸 8,192자 — 거푸집 시트와 같은 400개).</summary>
+    internal const int NumbersPerLine = 400;
 
     /// <summary>
-    /// rows = 산출근거에 실을 줄(공종·부위가 처음 나온 차례대로 묶는다). elements = 부재 전부(실은 것과 못 실은 것).
-    /// formwork = 거푸집 산출근거(있으면 「거푸집」 시트를 더하고 수량집계표에 종류별 합계를 더한다 — 수량산출 창의 [완료]).
+    /// rows = 산출근거에 실을 줄(CalcPlan.Make 의 차례 그대로 — 공종 · 규격 · 타설 · 부위 · 위치 · 부호). elements = 부재 전부(실은 것과 못 실은 것).
+    /// formwork = 거푸집 산출근거(있으면 같은 시트에 절 번호를 이어 적고 수량집계표에 종류별 줄을 더한다 — 수량산출 창의 [완료]).
     /// </summary>
     public static XlsxBook Build(string title, IReadOnlyList<CalcRow> rows, IReadOnlyList<CalcElement> elements, string note = "",
                                  Formwork.FormworkSheetData? formwork = null)
     {
-        var book = new XlsxBook();
+        var book = new XlsxBook { BaseStyle = Sheet2D.BookBase };
+        var summary = book.Add(SummaryName);
+        var material = book.Add(MaterialName);
         var calc = book.Add(SheetName);
-        var form = formwork != null ? book.Add(Formwork.FormworkSheet.SheetName) : null;
-        var summary = book.Add("수량집계표");
+        calc.Selected = true;
+        Sheet2D.Frame(calc);
 
-        // ── 산출근거 ──
-        Columns(calc);
-
-        int r = 1;
-        calc.Text(r++, 1, title + " — 수량 산출근거", XlsxStyle.Title);
-        calc.Text(r++, 1, "단위: 치수 m, 물량 ㎥ · 식은 Revit 부재 속성(DH_Formula)의 식을 숫자·기호 단위로 풀어 쓴 것 · 값 = ROUND(식, 2)" +
-                          (note.Length > 0 ? " · " + note : ""), XlsxStyle.Gray);
-        r++;
-
-        // 집계표에 실을 것: (공종, 부위, 산출근거의 '계' 칸, BIM 체적 합, 미리 계산한 값)
-        var totals = new List<(string work, string part, int sumRow, double bim, double value)>();
-        int workNo = 0;
-        foreach (var work in rows.GroupBy(x => x.Work))
+        var items = new List<Sheet2D.Item>();
+        var concrete = new List<(Sheet2D.Section section, bool plain, string spec, string pour, double bim)>();
+        var forms = new List<(Sheet2D.Section section, string work, string spec, double bim)>();
+        int no = 0;
+        foreach (var sec in rows.GroupBy(r => (r.Work, r.Spec, r.Pour)))
         {
-            workNo++;
-            calc.Text(r, 1, $"{workNo}. {work.Key}", XlsxStyle.Bold);
-            r += 2;
+            no++;
+            bool plain = sec.Key.Work == CalcPlan.Plain;
+            string spec = sec.Key.Spec.Length > 0 ? sec.Key.Spec : PartCatalog.DefaultSpec("", plain);
+            string pour = sec.Key.Pour.Length > 0 ? sec.Key.Pour : PartCatalog.DefaultPour;
+            var section = new Sheet2D.Section($" {no}. 레미콘타설", SpecPieces(plain, spec, pour), "㎥");
+            items.Add(section);
+            var parts = sec.GroupBy(r => r.PartName.Length > 0 ? r.PartName : r.Part).ToList();
+            // 부위 번호: 2D 의 무근 작은 부속 절(관보호공 · 받침 · 발디딤판 …)은 «ㅇ», 그 밖은 «1)» · «2)».
+            bool bullets = plain && parts.All(p => PartCatalog.GroupOf(p.Key) != PartCatalog.Fill);
             int partNo = 0;
-            foreach (var part in work.GroupBy(x => x.Part))
+            foreach (var part in parts)
             {
                 partNo++;
-                calc.Text(r, MarkColumn, $"{partNo})", XlsxStyle.Bold);
-                calc.Text(r, ZoneColumn, part.Key, XlsxStyle.Bold);
-                r++;
-                int first = r;
-                double partValue = 0;
-                foreach (var row in part)
+                items.Add(new Sheet2D.Part(bullets ? "ㅇ" : $"{partNo})", part.Key, ThicknessNotes(part.ToList())));
+                var zones = part.GroupBy(r => r.Zone).ToList();
+                bool subs = zones.Count >= 2 && !part.First().NoSub;
+                foreach (var zone in zones)
                 {
-                    r = WriteRow(calc, r, row, out double value);
-                    partValue += value;
+                    if (subs) items.Add(new Sheet2D.Sub(zone.Key.Length > 0 ? zone.Key : "위치 없음"));
+                    foreach (var r in zone.Where(r => !(r.OneLine && !r.Marked)))
+                        items.Add(new Sheet2D.Line(r.Shown.Length > 0 ? r.Shown : r.Mark, "", r.Formula, r.Count, r.Note));
+                    foreach (var (formula, lineNote) in OneLineFormulas(zone.Where(r => r.OneLine && !r.Marked).ToList()))
+                        items.Add(new Sheet2D.Line("", "", formula, 1, lineNote));
                 }
-                int last = r - 1;
-                calc.Text(r, EqualsColumn, "계", XlsxStyle.BoldCenter);
-                calc.Formula(r, SumColumn,
-                    $"SUM({XlsxSheet.Ref(first, ResultColumn)}:{XlsxSheet.Ref(last, ResultColumn)})",
-                    FormulaDecomposer.RoundQuantity(partValue), XlsxStyle.BoldNumber2);
-                totals.Add((work.Key, part.Key, r, part.Sum(x => x.Bim), partValue));
-                r += 2;
             }
-            r++;
-        }
-        if (rows.Count == 0) calc.Text(r, 1, "실을 식이 없습니다. 「산출식 자동입력」을 먼저 실행해 주세요.", XlsxStyle.Gray);
-
-        // ── 수량집계표: 산출근거의 '계'를 그대로 가져오고, BIM 체적과 나란히 놓는다 ──
-        summary.Width(1, 18); summary.Width(2, 30); summary.Width(3, 6); summary.Width(4, 14); summary.Width(5, 14);
-        summary.Width(6, 12); summary.Width(7, 10); summary.Width(8, 30);
-        int s = 1;
-        summary.Text(s++, 1, title + (form != null ? " — 수량집계표(콘크리트 · 거푸집)" : " — 수량집계표(콘크리트)"), XlsxStyle.Title);
-        summary.Text(s++, 1, "산출 수량 = 「산출근거」 시트의 부위별 '계' · BIM 물량 = Revit 체적의 합(둘째 자리) · 차이율 = (산출 − BIM) ÷ BIM", XlsxStyle.Gray);
-        s++;
-        string[] head = { "공종", "부위", "단위", "산출 수량", "BIM 물량", "차이", "차이율", "비고" };
-        for (int c = 0; c < head.Length; c++) summary.Text(s, c + 1, head[c], XlsxStyle.BoldCenter);
-        s++;
-        var grand = new List<int>(); // 공종별 '계' 줄
-        foreach (var work in totals.GroupBy(t => t.work))
-        {
-            int first = s;
-            foreach (var t in work)
-            {
-                summary.Text(s, 1, t.work);
-                summary.Text(s, 2, t.part);
-                summary.Text(s, 3, "㎥", XlsxStyle.Center);
-                summary.Formula(s, 4, calc.FullRef(t.sumRow, SumColumn), FormulaDecomposer.RoundQuantity(t.value), XlsxStyle.Number2);
-                summary.Number(s, 5, FormulaDecomposer.RoundQuantity(t.bim), XlsxStyle.Number2);
-                Difference(summary, s);
-                s++;
-            }
-            int last = s - 1;
-            summary.Text(s, 2, "계", XlsxStyle.BoldCenter);
-            summary.Text(s, 3, "㎥", XlsxStyle.Center);
-            summary.Formula(s, 4, $"SUM(D{first}:D{last})", FormulaDecomposer.RoundQuantity(work.Sum(t => FormulaDecomposer.RoundQuantity(t.value))), XlsxStyle.BoldNumber2);
-            summary.Formula(s, 5, $"SUM(E{first}:E{last})", FormulaDecomposer.RoundQuantity(work.Sum(t => FormulaDecomposer.RoundQuantity(t.bim))), XlsxStyle.BoldNumber2);
-            Difference(summary, s);
-            grand.Add(s);
-            s += 2;
-        }
-        if (grand.Count > 1)
-        {
-            summary.Text(s, 1, "합계", XlsxStyle.Bold);
-            summary.Text(s, 3, "㎥", XlsxStyle.Center);
-            summary.Formula(s, 4, string.Join("+", grand.Select(g => "D" + g)), null, XlsxStyle.BoldNumber2);
-            summary.Formula(s, 5, string.Join("+", grand.Select(g => "E" + g)), null, XlsxStyle.BoldNumber2);
-            Difference(summary, s);
-            s += 2;
+            items.Add(new Sheet2D.Total());
+            concrete.Add((section, plain, spec, pour, sec.Sum(r => r.Bim)));
         }
 
-        // ── 거푸집: 「거푸집」 시트의 종류별 «계»를 가져오고, BIM 넓이(면을 잰 넓이)와 나란히 놓는다 ──
-        // 줄 이름은 2D 「수량집계표(구체공)」 꼴 — 공종 «합판거푸집» · 규격 «합판 3회» / 공종 «유로폼»(R47).
-        if (form != null && formwork != null)
+        if (formwork != null)
         {
-            var sections = Formwork.FormworkSheet.Write(form, title, formwork);
-            if (sections.Count > 0)
+            foreach (var sec in formwork.Lines.GroupBy(l => l.Section))
             {
-                int first = s;
-                foreach (var (work, spec, sumRef, bim, value) in sections)
+                no++;
+                var head = formwork.Sections.FirstOrDefault(s => s.section == sec.Key);
+                var section = new Sheet2D.Section($" {no}. {SectionWord(sec.Key)}", SectionPieces(sec.Key), "㎡");
+                items.Add(section);
+                var parts = sec.GroupBy(l => l.Part).ToList();
+                int partNo = 0;
+                foreach (var part in parts)
                 {
-                    summary.Text(s, 1, work);
-                    if (spec.Length > 0) summary.Text(s, 2, spec);
-                    summary.Text(s, 3, "㎡", XlsxStyle.Center);
-                    summary.Formula(s, 4, sumRef, FormulaDecomposer.RoundQuantity(value), XlsxStyle.Number2);
-                    summary.Number(s, 5, FormulaDecomposer.RoundQuantity(bim), XlsxStyle.Number2);
-                    Difference(summary, s);
-                    s++;
+                    partNo++;
+                    items.Add(new Sheet2D.Part(parts.Count == 1 ? "ㅇ" : $"{partNo})", part.Key, Array.Empty<string>()));
+                    foreach (var sub in part.GroupBy(l => l.Sub))
+                    {
+                        if (sub.Key.Length > 0) items.Add(new Sheet2D.Sub(sub.Key));
+                        foreach (var line in sub)
+                            items.Add(new Sheet2D.Line(line.Mark, line.Tag.Length > 0 ? "(" + line.Tag + ")" : "", line.Formula, line.Count, FormworkNote(line)));
+                    }
                 }
-                int last = s - 1;
-                summary.Text(s, 2, "계", XlsxStyle.BoldCenter);
-                summary.Text(s, 3, "㎡", XlsxStyle.Center);
-                summary.Formula(s, 4, $"SUM(D{first}:D{last})", FormulaDecomposer.RoundQuantity(sections.Sum(x => FormulaDecomposer.RoundQuantity(x.value))), XlsxStyle.BoldNumber2);
-                summary.Formula(s, 5, $"SUM(E{first}:E{last})", FormulaDecomposer.RoundQuantity(sections.Sum(x => FormulaDecomposer.RoundQuantity(x.bim))), XlsxStyle.BoldNumber2);
-                Difference(summary, s);
+                items.Add(new Sheet2D.Total());
+                var (work, specName) = Formwork.FormworkSheet.SummaryName(head.item ?? sec.First().Item, head.band, formwork.Bands);
+                forms.Add((section, work, specName, head.bim));
             }
         }
+        if (items.Count == 0)
+            items.Add(new Sheet2D.Part("", rows.Count == 0 ? "실을 식이 없습니다. 「산출식 자동입력」을 먼저 실행해 주세요." : "", Array.Empty<string>()));
 
-        // ── 부재 목록(추적용) · 미산출 부재 · 대상 아님 ──
+        var written = Sheet2D.Write(calc, items);
+        if (note.Length > 0) calc.Text(1, Sheet2D.ColNote, note, Sheet2D.Note);   // 내보낸 때 · 경고(인쇄 밖)
+        var sums = new Dictionary<Sheet2D.Section, (int sumRow, double value)>(ReferenceEqualityComparer.Instance);
+        foreach (var (section, sumRow, value) in written.Sections) sums[section] = (sumRow, value);
+
+        // ── 수량집계표 · 주요자재집계표 ──
+        var concreteRows = concrete.Select(c => (c.plain, c.spec, c.pour, sums.TryGetValue(c.section, out var s) ? s : (0, 0), c.bim)).ToList();
+        WriteSummary(summary, calc, title, concreteRows, forms.Select(f => (f.work, f.spec, sums.TryGetValue(f.section, out var s) ? s : (0, 0), f.bim)).ToList());
+        WriteMaterial(material, calc, concreteRows);
+
+        // ── 부재 목록(추적용) · 미산출 부재 · 대상 아님 — 우리 시트(2D 에 없음 · 모양은 R48 까지 그대로) ──
         var listed = book.Add("부재 목록");
         WriteElements(listed, "산출근거에 실은 부재", elements.Where(e => e.Missing.Length == 0 && !e.Excluded).ToList(), "");
         var missing = elements.Where(e => e.Missing.Length > 0 && !e.Excluded).ToList();
@@ -339,119 +302,230 @@ public static class CalcSheet
         return book;
     }
 
-    // 차이(F) = 산출 − BIM, 차이율(G). BIM 이 0 이면 차이율은 비운다.
-    private static void Difference(XlsxSheet sheet, int row)
+    // 절 제목의 규격 조각(2D: C «(» · D «무근» · F «,» · G «25» · I «-» · J «18» · L «-» · M «15» · O «)» · P «:» · Q «펌프차 붐타설»).
+    private static List<(int col, string text)> SpecPieces(bool plain, string spec, string pour)
     {
-        sheet.Formula(row, 6, $"D{row}-E{row}", null, XlsxStyle.Number2);
-        sheet.Formula(row, 7, $"IF(E{row}=0,\"\",(D{row}-E{row})/E{row})", null, XlsxStyle.Percent);
+        var pieces = new List<(int, string)> { (3, "("), (4, plain ? "무근" : "철근"), (6, ",") };
+        var parts = spec.Split('-', StringSplitOptions.TrimEntries);
+        if (parts.Length == 3) pieces.AddRange(new[] { (7, parts[0]), (9, "-"), (10, parts[1]), (12, "-"), (13, parts[2]), (15, ")") });
+        else pieces.AddRange(new[] { (7, spec), (15, ")") });
+        pieces.Add((16, ":"));
+        pieces.Add((17, pour));
+        return pieces;
     }
 
-    /// <summary>산출근거 한 줄을 적고 다음에 쓸 행 번호를 돌려준다. value = 이 줄의 물량(둘째 자리).</summary>
-    private static int WriteRow(XlsxSheet sheet, int r, CalcRow row, out double value) =>
-        // 위치를 붙이지 않는 부위는 구역이 없어도 '구역 미지정'이라 적지 않는다(참고 산출서의 '계단' · '밸브받침'처럼 위치 없이 적는 줄).
-        WriteLine(sheet, r, row.Mark, row.Zone.Length > 0 || !row.NoZonePart ? "(" + (row.Zone.Length > 0 ? row.Zone : NoZoneName) + ")" : "",
-                  row.Formula, row.Count, row.Note, out value);
-
-    /// <summary>
-    /// 줄 하나: 부호 · (괄호 글) : 식의 토막을 칸마다 = ROUND(…,2). 같은 식이 여럿이면 '× 개수'. 다음에 쓸 행 번호를 돌려준다.
-    /// 「산출근거」(콘크리트)와 「거푸집」 시트가 같이 쓴다.
-    /// </summary>
-    internal static int WriteLine(XlsxSheet sheet, int r, string mark, string tag, string formula, int count, string note, out double value)
+    // 거푸집 절의 낱말(A 칸): «거푸집 (합판6회)» → «거푸집» · «유로폼  7m이하» → «유로폼».
+    private static string SectionWord(string section)
     {
-        value = 0;
-        sheet.Text(r, MarkColumn, mark);
-        if (tag.Length > 0) sheet.Text(r, ZoneColumn, tag);
-        sheet.Text(r, ColonColumn, ":", XlsxStyle.Center);
-        if (note.Length > 0) sheet.Text(r, NoteColumn, note, XlsxStyle.Gray);
-
-        List<FormulaTokens.Token> tokens;
-        double exprValue;
-        try
-        {
-            tokens = FormulaTokens.Split(formula);
-            exprValue = FormulaEvaluator.Evaluate(formula);
-            if (tokens.Count == 0 || !double.IsFinite(exprValue)) throw new FormatException("빈 식");
-        }
-        catch (FormatException)
-        {
-            // 칸으로 나눌 수 없는 식: 글자 그대로 한 칸에 적고 값은 비운다(이런 줄은 호출하는 쪽이 미리 거르는 것이 원칙).
-            sheet.Text(r, FirstTokenColumn, formula);
-            sheet.Text(r, NoteColumn, "식을 칸으로 나누지 못함" + (note.Length > 0 ? " · " + note : ""), XlsxStyle.Gray);
-            return r + 1;
-        }
-
-        // 같은 식인 부재가 여럿이면 '× 개수'를 붙인다. 식에 바깥 더하기·빼기가 있으면 괄호로 묶는다.
-        bool times = count > 1;
-        bool wrap = times && HasTopLevelSum(tokens);
-
-        var expr = new StringBuilder();
-        int col = FirstTokenColumn, line = r;
-        void Next()
-        {
-            col++;
-            if (col >= FirstTokenColumn + TokensPerLine) { col = FirstTokenColumn; line++; }
-        }
-        void Symbol(string shown, string inFormula)
-        {
-            sheet.Text(line, col, shown, XlsxStyle.Center);
-            expr.Append(inFormula);
-            Next();
-        }
-
-        if (wrap) Symbol("(", "(");
-        foreach (var t in tokens)
-        {
-            switch (t.Kind)
-            {
-                case FormulaTokens.Kind.Number:
-                    sheet.Number(line, col, t.Value);
-                    expr.Append(XlsxSheet.Ref(line, col));
-                    Next();
-                    break;
-                case FormulaTokens.Kind.Pi:
-                    sheet.Formula(line, col, "PI()", Math.PI);
-                    expr.Append(XlsxSheet.Ref(line, col));
-                    Next();
-                    break;
-                case FormulaTokens.Kind.Operator:
-                    Symbol(t.Text == "*" ? "×" : t.Text, t.Text);
-                    break;
-                case FormulaTokens.Kind.Function:
-                    Symbol(t.Text, t.Text);
-                    break;
-                default:
-                    Symbol(t.Text, t.Text);
-                    break;
-            }
-        }
-        if (wrap) Symbol(")", ")");
-        if (times)
-        {
-            Symbol("×", "*");
-            sheet.Number(line, col, count, XlsxStyle.Count);
-            expr.Append(XlsxSheet.Ref(line, col));
-            Next();
-        }
-
-        // 토막이 줄 끝에서 딱 끝나 다음 줄로 넘어가 있으면, '=' 는 마지막 토막이 있는 줄에 둔다.
-        int lastLine = col == FirstTokenColumn && line > r ? line - 1 : line;
-        value = FormulaDecomposer.RoundQuantity(exprValue * count);
-        sheet.Text(lastLine, EqualsColumn, "=", XlsxStyle.Center);
-        sheet.Formula(lastLine, ResultColumn, $"ROUND({expr},{FormulaDecomposer.QuantityDecimals})", value, XlsxStyle.Number2);
-        return lastLine + 1;
+        int open = section.IndexOf('(');
+        if (open > 0) return section[..open].Trim();
+        return section.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? section;
     }
 
-    // 괄호 밖(깊이 0)에 + 나 − 가 있는가.
-    private static bool HasTopLevelSum(List<FormulaTokens.Token> tokens)
+    // 거푸집 절의 조각(2D: C «(» · D «합판6회» · G «)»). 유로폼의 높이 구간은 D 에.
+    private static List<(int col, string text)> SectionPieces(string section)
+    {
+        int open = section.IndexOf('('), close = section.LastIndexOf(')');
+        if (open > 0 && close > open) return new() { (3, "("), (4, section[(open + 1)..close].Trim()), (7, ")") };
+        string rest = section[SectionWord(section).Length..].Trim();
+        return rest.Length > 0 ? new() { (4, rest) } : new();
+    }
+
+    // 부위 제목의 두께(2D «(T=700)» · 여럿이면 «(T=700) (T=300~400)»): 체적이 가장 많은 두께 먼저, 나머지는 하나면 그대로 · 여럿이면 범위.
+    private static List<string> ThicknessNotes(IReadOnlyList<CalcRow> rows)
+    {
+        var byMm = rows.SelectMany(r => r.Thickness)
+            .GroupBy(t => (int)Math.Round(t.thickness * 1000))
+            .Where(g => g.Key > 0)
+            .Select(g => (mm: g.Key, bim: g.Sum(t => t.bim)))
+            .OrderByDescending(g => g.bim).ThenBy(g => g.mm)
+            .ToList();
+        if (byMm.Count == 0) return new();
+        var notes = new List<string> { $"(T={byMm[0].mm})" };
+        var rest = byMm.Skip(1).Select(g => g.mm).OrderBy(mm => mm).ToList();
+        if (rest.Count == 1) notes.Add($"(T={rest[0]})");
+        else if (rest.Count > 1) notes.Add($"(T={rest[0]}~{rest[^1]})");
+        return notes;
+    }
+
+    // 부호 없이 한 줄로 적는 부위(R49 — 2D 보 · 기둥 · 계단 …): 줄마다 «식 × n» 을 « + »로 이어 한 식(숫자가 많으면 나눔). 비고 = 부재 수 · Id.
+    private static List<(string formula, string note)> OneLineFormulas(IReadOnlyList<CalcRow> rows)
+    {
+        var result = new List<(string, string)>();
+        if (rows.Count == 0) return result;
+        var terms = rows.Select(r =>
+        {
+            string f = r.Formula;
+            if (r.Count > 1) f = (TopLevelSum(f) ? "(" + f + ")" : f) + "*" + r.Count.ToString(CultureInfo.InvariantCulture);
+            return (term: f, row: r);
+        }).ToList();
+        var counts = terms.Select(t => NumbersIn(t.term)).ToList();
+        foreach (var chunk in Formwork.FormworkSheet.Chunks(counts, NumbersPerLine))
+        {
+            var picked = chunk.Select(i => terms[i]).ToList();
+            string formula = string.Join("+", picked.Select(t => TopLevelSum(t.term) && t.term.StartsWith('-') ? "(" + t.term + ")" : t.term));
+            int members = picked.Sum(t => t.row.Count);
+            string ids = string.Join(" / ", picked.Take(3).Select(t => t.row.Note)) + (picked.Count > 3 ? $" … 외 {picked.Count - 3}줄" : "");
+            result.Add((formula, $"부재 {members}개 · {ids}"));
+        }
+        return result;
+    }
+
+    private static int NumbersIn(string formula)
+    {
+        try { return FormulaTokens.Split(formula).Count(t => t.Kind is FormulaTokens.Kind.Number or FormulaTokens.Kind.Pi); }
+        catch (FormatException) { return formula.Length; }
+    }
+
+    // 식에 괄호 밖의 더하기 · 빼기가 있는가(첫 글자의 부호는 빼고).
+    private static bool TopLevelSum(string formula)
     {
         int depth = 0;
-        foreach (var t in tokens)
+        for (int i = 0; i < formula.Length; i++)
         {
-            if (t.Kind == FormulaTokens.Kind.Open) depth++;
-            else if (t.Kind == FormulaTokens.Kind.Close) depth--;
-            else if (depth == 0 && t.Kind == FormulaTokens.Kind.Operator && (t.Text == "+" || t.Text == "-")) return true;
+            char c = formula[i];
+            if (c == '(') depth++;
+            else if (c == ')') depth--;
+            else if (depth == 0 && i > 0 && (c == '+' || c == '-') && formula[i - 1] is not ('e' or 'E')) return true;
         }
         return false;
+    }
+
+    // 거푸집 줄의 비고(인쇄 밖): 안팎 확인 · 칸 수 · 둘레 면 수 · 넓이만 · 이은 면 · Id.
+    private static string FormworkNote(Formwork.FormworkLine line)
+    {
+        string cells = line.Cells > 1 ? $"칸 {line.Cells}개 · " + (line.AreaOnlyCells > 0 && line.AreaOnlyCells < line.Cells ? $"넓이만 적은 칸 {line.AreaOnlyCells}개 · " : "") : "";
+        string ring = line.Faces > 0 ? $"둘레 {line.Faces}면 · " : "";
+        return (line.Unsure ? "안팎 확인 필요 · " : "") + cells + ring + (line.AreaOnly ? "넓이(직각으로 꺾이지 않음) · " : "") + (line.Joined ? "이은 면 · " : "") +
+               "Id " + string.Join(", ", line.Ids.Take(6)) + (line.Ids.Count > 6 ? $" 외 {line.Ids.Count - 6}개" : "");
+    }
+
+    // ── 수량집계표(구체공) · 주요자재집계표(구체공) — 2D 꼴 ──
+
+    private static readonly XlsxCellStyle Cell = (Sheet2D.Text with { Align = XlsxAlign.Center }).Boxed();
+    private static readonly XlsxCellStyle Head = Cell with { Bold = true };
+    private static readonly XlsxCellStyle Amount = Cell with { Format = "#,##0.00" };
+    private static readonly XlsxCellStyle Side = Sheet2D.Text with { Align = XlsxAlign.Center };   // 인쇄 밖(BIM · 차이)
+
+    // 열 너비(2D 실측): 수량집계표 A 13.16 · B 23.33 · C 12.16 · D 16.33 · E 9 · F 22.66 · G 22.16 — 주요자재집계표는 B 20.66 · C 18.33(revit-verify M1).
+    private static readonly double[] SummaryWidths = { 13.1640625, 23.33203125, 12.1640625, 16.33203125, 9, 22.6640625, 22.1640625 };
+    private static readonly double[] MaterialWidths = { 13.1640625, 20.6640625, 18.33203125, 16.33203125, 9, 22.6640625, 22.1640625 };
+
+    private static void SummaryFrame(XlsxSheet sheet, string header, int scale, string chapter, double[] widths)
+    {
+        sheet.ShowZeros = false;
+        sheet.PageBreakPreview = true;
+        sheet.Freeze = (4, 3);
+        sheet.DefaultColWidth = 24.1640625;
+        for (int c = 1; c <= widths.Length; c++) sheet.Width(c, widths[c - 1]);
+        sheet.Page = new XlsxPage
+        {
+            Scale = scale, CenterHorizontally = true, Header = header,
+            Margins = (0.59055118110236227, 0.59055118110236227, 0.78740157480314965, 0.78740157480314965, 0.51181102362204722, 0.51181102362204722),
+        };
+        var bold = Sheet2D.Text with { Bold = true, Align = XlsxAlign.Left };
+        sheet.Height(1, 19.5);
+        sheet.Height(2, 19.5);
+        sheet.Height(3, 34.5);
+        sheet.Text(1, 1, chapter, bold);
+        sheet.Text(2, 1, "1)구체공", bold);
+        sheet.Text(3, 1, "공  종", Head);
+        sheet.Style(3, 2, Head);
+        sheet.Merge(3, 1, 3, 2);
+        sheet.Text(3, 3, "규  격", Head);
+        sheet.Style(3, 4, Head);
+        sheet.Merge(3, 3, 3, 4);
+        sheet.Text(3, 5, "단위", Head);
+        sheet.Text(3, 6, "수  량", Head);
+        sheet.Text(3, 7, "비고", Head);
+    }
+
+    // 한 줄(행 높이 21.95 · 사방 선): A:B 는 묶음 제목(따로 병합) · C:D 규격(나뉘면 C · D 따로).
+    private static void SummaryRow(XlsxSheet sheet, int r, string? c, string? d, bool mergeCD, string unit, string sumRef, double value)
+    {
+        sheet.Height(r, 21.95);
+        for (int col = 1; col <= 7; col++) sheet.Style(r, col, Cell);
+        if (c != null) sheet.Text(r, 3, c, Cell);
+        if (d != null) sheet.Text(r, 4, d, Cell);
+        if (mergeCD) sheet.Merge(r, 3, r, 4);
+        sheet.Text(r, 5, unit, Cell);
+        sheet.Formula(r, 6, sumRef, value, Amount);
+    }
+
+    private static void Group(XlsxSheet sheet, int first, int last, string title)
+    {
+        sheet.Text(first, 1, title, Cell with { Wrap = true });
+        sheet.Merge(first, 1, last, 2);
+    }
+
+    // 인쇄 밖의 우리 검산: H = BIM 물량 · I = 차이(산출 − BIM) · J = 차이율.
+    private static void Check(XlsxSheet sheet, int r, double bim)
+    {
+        sheet.Number(r, 8, FormulaDecomposer.RoundQuantity(bim), Side with { Format = "#,##0.00" });
+        sheet.Formula(r, 9, $"F{r}-H{r}", null, Side with { Format = "#,##0.00" });
+        sheet.Formula(r, 10, $"IF(H{r}=0,\"\",(F{r}-H{r})/H{r})", null, Side with { Format = "0.00%" });
+    }
+
+    private static void WriteSummary(XlsxSheet sheet, XlsxSheet calc, string title,
+        List<(bool plain, string spec, string pour, (int row, double value) sum, double bim)> concrete,
+        List<(string work, string spec, (int row, double value) sum, double bim)> forms)
+    {
+        SummaryFrame(sheet, "&C&\"돋움,굵게\"&16&U구조물공 수량 집계표 (&P)", 81, "구조물공", SummaryWidths);
+        sheet.Text(1, 8, title, Side);                                      // 모델 이름(인쇄 밖)
+        sheet.Text(3, 8, "BIM 물량", Side with { Bold = true });
+        sheet.Text(3, 9, "차이", Side with { Bold = true });
+        sheet.Text(3, 10, "차이율", Side with { Bold = true });
+        int r = 4;
+        r = WriteConcrete(sheet, calc, r, concrete, check: true);
+        // 거푸집: «합판거푸집» 묶음(합판 N회) · «유 로 폼» · 모르는 종류는 «거푸집».
+        foreach (var group in forms.GroupBy(f => f.work))
+        {
+            int first = r;
+            foreach (var f in group)
+            {
+                bool ply = group.Key == "합판거푸집";
+                SummaryRow(sheet, r, ply || f.spec.Length > 0 ? f.spec : null, null, true, "㎡", calc.FullRef(f.sum.row, Sheet2D.ColZ), f.sum.value);
+                Check(sheet, r, f.bim);
+                r++;
+            }
+            Group(sheet, first, r - 1, group.Key == FormworkEuro ? "유 로 폼" : group.Key);
+        }
+        sheet.PrintArea = (1, 1, Math.Max(r - 1, 3), 7);
+        sheet.PrintTitleRows = (1, 3);
+    }
+
+    private const string FormworkEuro = Formwork.FormworkTable.Euro;
+
+    private static void WriteMaterial(XlsxSheet sheet, XlsxSheet calc, List<(bool plain, string spec, string pour, (int row, double value) sum, double bim)> concrete)
+    {
+        SummaryFrame(sheet, "&C&\"돋움,굵게\"&16&U구 조 물 자 재 집 계 표", 90, "구조물공", MaterialWidths);
+        int r = WriteConcrete(sheet, calc, 4, concrete, check: false, title: "레 미 콘");
+        sheet.PrintArea = (1, 1, Math.Max(r - 1, 3), 7);
+        sheet.PrintTitleRows = (2, 3);
+    }
+
+    // 레미콘 줄: A:B «레 미 콘 타 설\n(펌프차붐 타설)»(타설 방법마다) · C 무근/철근(같으면 세로 병합) · D 규격 · E ㎥ · F 산출근거의 «계».
+    private static int WriteConcrete(XlsxSheet sheet, XlsxSheet calc, int r, List<(bool plain, string spec, string pour, (int row, double value) sum, double bim)> concrete,
+                                     bool check, string? title = null)
+    {
+        foreach (var pour in concrete.GroupBy(c => c.pour))
+        {
+            int first = r;
+            foreach (var work in pour.GroupBy(c => c.plain))
+            {
+                int workFirst = r;
+                foreach (var c in work)
+                {
+                    SummaryRow(sheet, r, r == workFirst ? (c.plain ? "무근" : "철근") : null, c.spec, false, "㎥", calc.FullRef(c.sum.row, Sheet2D.ColZ), c.sum.value);
+                    if (check) Check(sheet, r, c.bim);
+                    r++;
+                }
+                if (r - 1 > workFirst) sheet.Merge(workFirst, 3, r - 1, 3);
+            }
+            string label = title ?? (pour.Key == PartCatalog.DefaultPour ? "레 미 콘 타 설\n(펌프차붐 타설)" : $"레 미 콘 타 설\n({pour.Key})");
+            Group(sheet, first, r - 1, label);
+        }
+        return r;
     }
 
     // reason = 맨 오른쪽 '까닭' 칸의 머리글("" 이면 그 칸을 쓰지 않는다).

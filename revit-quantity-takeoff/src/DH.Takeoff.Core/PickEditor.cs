@@ -859,4 +859,25 @@ public sealed class PickEditor
         if (PartCatalog.IsLater(item) != later) item.Later = later;
         return ListOnly($"부위 '{name}' — 나중에 침 {(later ? "켬" : "끔")}", before);
     }
+
+    /// <summary>
+    /// 부위의 레미콘 규격 · 타설 방법을 바꾼다(R49 — 산출근거의 절 제목 «레미콘타설 ( 철근 , 25 - 30 - 15 ) : 펌프차 붐타설»).
+    /// 빈 글이나 처음 값과 같은 글이면 비운다(null — 처음 값 · 안 쓴 목록은 v5 로 적지 않게). 규격은 다듬어 적고(«25 – 30 – 15» → «25-30-15»),
+    /// 숫자-숫자-숫자가 아니면 규격은 그대로 두고 타설만 고친다(PartCatalog.NormalizeSpec — revit-verify M5 · core-verify R49 L10). 바뀌었으면 true.
+    /// </summary>
+    public bool SetSpec(string name, string? spec, string? pour)
+    {
+        var item = Parts.FirstOrDefault(p => p.Name == name);
+        if (item == null) return false;
+        bool plain = item.Plain || CalcPlan.WorkOf("", "", name) == CalcPlan.Plain;
+        string? tidy = PartCatalog.NormalizeSpec(spec);
+        bool bad = !string.IsNullOrWhiteSpace(spec) && tidy == null;
+        string? s = bad ? item.Spec : tidy == null || tidy == PartCatalog.DefaultSpec(name, plain, item.Group) ? null : tidy;
+        string? p = string.IsNullOrWhiteSpace(pour) || pour.Trim() == PartCatalog.DefaultPour ? null : pour.Trim();
+        if (item.Spec == s && item.Pour == p) return false;
+        var before = Snapshot();
+        item.Spec = s;
+        item.Pour = p;
+        return ListOnly($"부위 '{name}' — 레미콘 {s ?? "처음 값"} · {p ?? "처음 값"}", before);
+    }
 }

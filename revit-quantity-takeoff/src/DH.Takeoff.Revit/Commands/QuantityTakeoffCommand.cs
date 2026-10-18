@@ -381,7 +381,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
             text.AppendLine($"★ 전 판이 적은 «{FormworkTable.HighName}» 값을 «7m이하»로 옮기지 못한 부재 {stale.StaleLeft.Count}개(Id {string.Join(", ", stale.StaleLeft.Take(6))}{(stale.StaleLeft.Count > 6 ? " …" : "")})" +
                             " — 이제 7 m 구분이 없어 쓰지 않는 칸입니다. 그 부재를 편집할 수 있게 한 뒤 다시 [완료]");
         if (done.Sheet != null)
-            text.AppendLine($"거푸집 시트: {done.Sheet.Lines.Count}줄 · 종류 {done.Sheet.Sections.Count}가지 · 합계 {done.Sheet.Sections.Sum(s => s.bim).ToString("#,##0.00", CultureInfo.InvariantCulture)} ㎡");
+            text.AppendLine($"거푸집(「구체공산출근거」 시트): {done.Sheet.Lines.Count}줄 · 종류 {done.Sheet.Sections.Count}가지 · 합계 {done.Sheet.Sections.Sum(s => s.bim).ToString("#,##0.00", CultureInfo.InvariantCulture)} ㎡");
         if (done.Dropped > 0)
             text.AppendLine($"사람이 뺀 거푸집 판: {done.Dropped}장 · {done.DroppedArea.ToString("#,##0.00", CultureInfo.InvariantCulture)} ㎡ — 엑셀 · 거푸집 객체에는 넣지 않음 · 부재 속성(지침용) 합계에는 들어 있음");
         if (done.LostDrops > 0)
@@ -988,8 +988,10 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         // 부위의 거푸집 처음 값(R47 — 계단 · 턱·맨홀 · DRY AREA = 합판 3회)은 ① 목록의 묶음으로 본다(목록에서 묶음을 옮긴 부위도 그대로 — core-verify R47 L2).
         var groups = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var p in editor.Parts) groups.TryAdd(p.Name, p.Group);
-        var options = new FormworkOptions { Rules = rules, PartDefault = part => PartCatalog.FormworkDefault(part, groups.GetValueOrDefault(part)) };
+        // 7 m 넘는 벽이 있으면 유로폼을 0~7m / 7m 초과로(R49 — JACK 1016).
+        var options = new FormworkOptions { Rules = rules, PartDefault = part => PartCatalog.FormworkDefault(part, groups.GetValueOrDefault(part)), Bands = FormworkOptions.AutoBands(scene.Elements) };
         var results = FormworkAnalyzer.Analyze(scene.Elements, scene.Zones, options);
+        options.DropUnusedBands(results);   // 7 m 를 넘는 조각이 없으면 구간을 끈다(벽 높이는 기초에 묻힌 몫까지 재므로)
         int unpainted = FormworkReader.AttachCurved(scene, results);
         var (placeOf, partOrder) = Places(results, editor);
         var board = new FormworkBoard(results, options, data.Origin, placeOf, partOrder);
@@ -997,6 +999,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         // 엑셀 줄의 부호(«마크») · 부위 줄(R47): 마크를 넣은 부재 수와 보기 · 부위 줄 · 쓰이지 않는 부위 줄(부위 이름을 바꾼 뒤 남은 것 — core-verify R47 L5).
         var marked = results.Where(r => r.Element.Mark.Length > 0).ToList();
         var unusedParts = FormworkSummary.UnusedPartRules(results, rules);
+        var lumpChanges = FormworkSummary.LumpChanges(results);
         session.Note($"거푸집 부호·부위\t마크 있는 부재 {marked.Count}/{results.Count}" +
                      (marked.Count > 0 ? " (예 " + string.Join(", ", marked.Take(5).Select(r => $"{r.Element.Id}={r.Element.Mark}")) + ")" : "") +
                      $" · 부위 줄 {board.Rows.Count(r => r.Category == FormworkSummary.PartCategory)}(고친 것 {rules.All.Count(x => FormworkRules.PartOf(x.type) != null)})" +
@@ -1008,8 +1011,14 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
             (board.KindSplits > 0 ? "(" + string.Join(" · ", board.Merge.SplitSummary()) + ")" : "") + $" · 잇기 거절 {board.Merge.Refused}" +
             $" · 판 {board.Pieces.Count(p => p.Plate != null)}(시트 판 {board.Sheet.Plates.Count}) · 뺀 판 {board.DroppedCount}({board.DroppedArea.ToString("0.##", CultureInfo.InvariantCulture)} ㎡ · 파일 {rules.DropCount})" +
             $" · 모양이 바뀌어 다시 센 뺀 판 {board.LostDrops.Count} · 일부만 찾음 {board.DropCheck.Partial.Count} · 넓이 달라짐 {board.DropCheck.Resized.Count}" +
-            $" · 부위 줄에 가려진 유형 줄 {board.HiddenTypeRules.Count}" +
+            $" · 가려진 줄 {board.HiddenTypeRules.Count}" +
             (board.HiddenTypeRules.Count > 0 ? "(" + string.Join(", ", board.HiddenTypeRules.Take(6).Select(h => $"{h.type}·{h.group}={h.item}")) + ")" : "") +
+            $" · 높이 구간 {(options.Bands.Count > 0 ? string.Join(",", options.Bands) + " m(7 m 넘는 벽)" : "없음")}" +
+            $" · 수직면 덩어리 {FormworkAnalyzer.LastGrouping.groups}(한 고리 아니라 안 묶음 {FormworkAnalyzer.LastGrouping.refused} · {FormworkAnalyzer.LastGrouping.ms} ms)" +
+            $" · 덩어리로 값 바뀐 조각 {lumpChanges.Sum(c => c.count)}({lumpChanges.Sum(c => c.area).ToString("0.##", CultureInfo.InvariantCulture)} ㎡" +
+            (lumpChanges.Count > 0 ? ": " + string.Join(" · ", lumpChanges.Take(6).Select(c => FormattableString.Invariant($"{c.type} {c.from}→{c.to} {c.count}개 {c.area:0.##}"))) : "") + ")" +
+            $" · 덩어리에 든 확인할 자리 {FormworkSummary.LumpChecks(results).Count}(늘 0 — 확인할 자리는 덩어리에 넣지 않음)" +
+            $" · 둘레 한 줄 {board.Sheet.Rings.found}(값이 안 맞아 면마다 {board.Sheet.Rings.refused}) · (양측) 줄 {board.Sheet.Lines.Count(l => l.Tag == FormworkSheet.BothSidesTag)}" +
             $" · 판 지음 {board.RefreshMilliseconds} ms" +
             (rulesProblem.Length > 0 ? " · 대응표를 읽지 못함: " + rulesProblem : "") + $" · {watch.ElapsedMilliseconds} ms");
         // 나중에 치는 부재(부위 목록의 '나중에 침'): 어느 부재를 그렇게 봤는지 · 구조체에 얼마를 돌려 셌는지 · 결합에서 구조체를 깎은 곳 — 첫 실행에서 바로 가르게 Id 를 적는다.
