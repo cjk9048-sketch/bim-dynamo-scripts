@@ -36,6 +36,7 @@ public sealed partial class PlacePartView
     private string _fwTotalText = "";
     // 찍은 판(R48): 대표 조각으로 기억한다 — 대응표를 고치거나 판을 빼면 덩이를 다시 지어 차례가 바뀌지만 조각은 그대로다.
     private FacePatch? _fwPlate;
+    private IReadOnlyList<MeshData> _fwMemberMeshes = Array.Empty<MeshData>();   // ② 의 부재 겉면(덮인 모서리 선을 뺀 것 — R48b)
     private int _fwPickedIndex = -1;                                   // 찍은 판의 그림 차례(없으면 −1)
     private MeshStyle[] _fwStyle = Array.Empty<MeshStyle>();           // 차례마다 그리는 방식(고른 것이 바뀔 때 한 번 정해 둔다)
     private readonly TextBlock _fwPlateText = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, FontSize = 12.5 };
@@ -66,6 +67,10 @@ public sealed partial class PlacePartView
             _fwPicked = null;
             _fwPlate = null;
             BuildFormworkRows();
+            // ② 의 부재 겉면 = 덩이가 덮은 면의 모서리 선을 뺀 것(R48b — 판 뒤의 모서리가 비쳐 보이지 않게). 덮는 조각의 모임은 대응표를 바꿔도 같아 한 번만 짓는다.
+            var watch = Stopwatch.StartNew();
+            _fwMemberMeshes = _memberMeshes.Select((m, i) => board.WithoutCoveredEdges(m, _members[i].Id)).ToList();
+            Log?.Invoke($"② 부재 모서리\t덮인 선분 뺌: 선분 {_memberMeshes.Sum(m => m.Segments)} → {_fwMemberMeshes.Sum(m => m.Segments)} · {watch.ElapsedMilliseconds} ms");
         }
         Step = 1;
         _side.Child = _fwSide;
@@ -90,7 +95,7 @@ public sealed partial class PlacePartView
     {
         if (_board == null) return;
         var meshes = new List<MeshData>(_memberMeshes.Count + _board.Pieces.Count);
-        meshes.AddRange(_memberMeshes);
+        meshes.AddRange(_fwMemberMeshes.Count == _memberMeshes.Count ? _fwMemberMeshes : _memberMeshes);
         meshes.AddRange(_board.Pieces.Select(p => p.Mesh));
         UpdateFormworkLook();
         _view3d.SetMeshes(meshes);
@@ -594,8 +599,8 @@ public sealed partial class PlacePartView
         // 부위 줄에 가려진 옛 유형 줄(core-verify R48 설치 전 M1): 부위를 넣은 부재의 면은 부위 줄만 정한다 — 전에 고친 유형 줄이 표에 없고 걸리지도 않는다.
         var hidden = _board.HiddenTypeRules;
         if (hidden.Count > 0)
-            _fwWarnings.Children.Add(WarnChip($"부위 줄에 가려진 유형 줄 {hidden.Count}",
-                "전에 고친 유형 줄인데, 그 면이 모두 부위를 넣은 부재라 부위 줄이 종류를 정합니다(이 줄은 걸리지 않음 · 파일에는 남음). 필요하면 부위 줄에서 고르세요.\n"
+            _fwWarnings.Children.Add(WarnChip($"가려진 줄 {hidden.Count}",
+                "고친 줄인데 그 면이 다른 줄에서 정해집니다 — 부위를 넣은 부재의 면은 부위 줄, 벽과 한 평면으로 이어진 면(한 덩어리)은 벽 줄. 이 줄은 걸리지 않습니다(파일에는 남음).\n"
                 + string.Join("\n", hidden.Take(5).Select(h => $"  {h.type} · {h.group} → {h.item}")) + (hidden.Count > 5 ? "\n  …" : ""), "fw.warn.hidden"));
         _fwWarnings.Visibility = _fwWarnings.Children.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         _fwKinds.Children.Clear();

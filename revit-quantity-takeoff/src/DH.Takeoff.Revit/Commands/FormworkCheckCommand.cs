@@ -41,7 +41,7 @@ public sealed class FormworkCheckCommand : IExternalCommand
             }
 
             string rulesPath = FormworkReader.RulesPath(doc);
-            var options = new FormworkOptions();
+            var options = new FormworkOptions { Bands = FormworkOptions.AutoBands(scene.Elements) };   // 수량산출과 같은 높이 구간(R49)
             // 계산한 것. 처음 한 번과 대응표를 저장했을 때만 다시 계산한다(창을 그냥 닫으면 같은 결과를 다시 보여 준다).
             var rules = new FormworkRules();
             var results = new List<ElementFormwork>();
@@ -61,6 +61,7 @@ public sealed class FormworkCheckCommand : IExternalCommand
                     options.Rules = rules;
 
                     results = FormworkAnalyzer.Analyze(scene.Elements, scene.Zones, options);
+                    options.DropUnusedBands(results);
                     unpainted = FormworkReader.AttachCurved(scene, results);
                     // 곡면 조각의 세모는 Analyze 뒤에 붙는다 — 뺀 판(R48)은 그 뒤에 다시 맞춘다(수량산출 창의 FormworkBoard 와 같게 · core-verify R48 L3).
                     if (rules.DropCount > 0) FormworkAnalyzer.Reclassify(results, options);

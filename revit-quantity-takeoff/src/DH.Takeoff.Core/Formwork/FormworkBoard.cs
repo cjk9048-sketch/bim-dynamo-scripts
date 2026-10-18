@@ -255,6 +255,81 @@ public sealed class FormworkBoard
         return n;
     }
 
+    // 부재 Id → 그 부재의 덩이 조각(판 · 세지 않는 덩이 · 뺀 판 — 대응표 줄에 드는 조각 전부: 대응표를 바꿔도 같은 모임이다)과 그 면의 바깥 법선.
+    private Dictionary<long, List<(double nx, double ny, double nz, FacePatch patch)>>? _covering;
+
+    /// <summary>모서리 선분을 덮였는지 볼 간격(m) — 이보다 긴 선분은 나눠 보고 덮이지 않은 자리만 남긴다.</summary>
+    public const double EdgeProbeStep = 0.1;
+
+    /// <summary>
+    /// ② 의 부재 겉면(R48b — JACK 2026-10-16 «거푸집 뒤에 비쳐서 보여»): 덩이(면에서 4 mm 띄운 판 · 세지 않는 덩이 · 뺀 판)가 덮은 면 위의 모서리 선분을 뺀 것.
+    /// 부재 모서리 선은 면에서 3 mm 띄워 그리는데(Model3DView) 판과 1 mm 밖에 안 떨어져, 화면의 깊이 셈이 가르지 못해 판을 뚫고 점선처럼 비쳤다.
+    /// 그 자리의 경계는 판의 테두리 선이 보인다. 덩이가 없는 면(윗면 · 맞닿아 덮인 자리 · 버림 밑면 …)의 모서리 선은 그대로 둔다.
+    /// 선분의 면 법선(두 끝점)이 그 덩이 조각의 면 법선과 같고 그 자리가 조각 위(평면에서 5 mm · 테두리에서 5 mm 안)인 곳만 뺀다 — 긴 선분은
+    /// EdgeProbeStep 간격으로 나눠 덮이지 않은 동안만 남긴다. 곡면(법선 없음)의 선분은 그대로. 세모 · 꼭짓점은 같은 것을 함께 쓴다.
+    /// </summary>
+    /// <param name="mesh">부재의 겉면(장면 좌표 — 이 판의 origin 을 뺀 것).</param>
+    public MeshData WithoutCoveredEdges(MeshData mesh, long elementId)
+    {
+        _covering ??= CoveringIndex();
+        if (!_covering.TryGetValue(elementId, out var mine) || mesh.Segments == 0) return mesh;
+        var kept = new List<double>(mesh.E.Length);
+        var e = mesh.E;
+        bool removed = false;
+        for (int s = 0; s < mesh.Segments; s++)
+        {
+            int at = s * MeshData.SegmentStride;
+            var a = new Vec3(e[at], e[at + 1], e[at + 2]);
+            var b = new Vec3(e[at + 3], e[at + 4], e[at + 5]);
+            var na = new Vec3(e[at + 6], e[at + 7], e[at + 8]);
+            var nb = new Vec3(e[at + 9], e[at + 10], e[at + 11]);
+            // 평면의 테두리(두 끝점의 법선이 같다)만 본다.
+            var candidates = na.Length > 0.5 && na.Dot(nb) > 0.999
+                ? mine.Where(c => c.nx * na.X + c.ny * na.Y + c.nz * na.Z > 0.999).ToList()
+                : null;
+            if (candidates == null || candidates.Count == 0) { Keep(at, 0, 1); continue; }
+            double length = (b - a).Length;
+            int steps = Math.Clamp((int)Math.Ceiling(length / EdgeProbeStep), 1, 1000);
+            int runStart = -1;
+            for (int k = 0; k <= steps; k++)
+            {
+                bool covered = false;
+                if (k < steps)
+                {
+                    var mid = a + (b - a) * ((k + 0.5) / steps) + _origin;
+                    covered = candidates.Any(c => PatchGeometry.Contains(c.patch, mid.X, mid.Y, mid.Z, CoverTol));
+                }
+                if (k < steps && !covered) { if (runStart < 0) runStart = k; continue; }
+                if (runStart >= 0) { Keep(at, (double)runStart / steps, (double)k / steps); runStart = -1; }
+                if (k < steps) removed = true;
+            }
+        }
+        return removed ? new MeshData { P = mesh.P, T = mesh.T, E = kept.ToArray(), Box = mesh.Box, Skipped = mesh.Skipped, Twisted = mesh.Twisted } : mesh;
+
+        // 선분의 [from, to] 구간을 남긴다(법선은 그대로).
+        void Keep(int at, double from, double to)
+        {
+            for (int i = 0; i < 3; i++) kept.Add(e[at + i] + (e[at + 3 + i] - e[at + i]) * from);
+            for (int i = 0; i < 3; i++) kept.Add(e[at + i] + (e[at + 3 + i] - e[at + i]) * to);
+            for (int i = 6; i < 12; i++) kept.Add(e[at + i]);
+        }
+    }
+
+    // 덮였다고 보는 거리(m) — 평면에서 · 조각 테두리에서(부재 겉면의 세모와 거푸집 조각은 같은 형상에서 오지만 따로 다듬어진다).
+    private const double CoverTol = 0.005;
+
+    private Dictionary<long, List<(double nx, double ny, double nz, FacePatch patch)>> CoveringIndex()
+    {
+        var index = new Dictionary<long, List<(double, double, double, FacePatch)>>();
+        foreach (var k in FormworkSummary.RowPatches(Results))
+        {
+            if (k.Face.Normal.Length != 3 || k.Patch.Triangles.Count < 3) continue;
+            if (!index.TryGetValue(k.Result.Element.Id, out var list)) index[k.Result.Element.Id] = list = new List<(double, double, double, FacePatch)>();
+            list.Add((k.Face.Normal[0], k.Face.Normal[1], k.Face.Normal[2], k.Patch));
+        }
+        return index;
+    }
+
     /// <summary>그 조각이 든 덩이의 차례(없으면 −1) — 다시 센 뒤 고른 판을 다시 찾을 때.</summary>
     public int IndexOf(FacePatch patch)
     {
@@ -330,7 +405,7 @@ public sealed class FormworkBoard
         }
 
         var drops = new Dictionary<string, FormworkPiece>(StringComparer.Ordinal);
-        var chunks = new Dictionary<(ElementFormwork r, string type, string group, string side, int band, bool note, string flush), FormworkPiece>();
+        var chunks = new Dictionary<(ElementFormwork? r, string type, string group, string side, int band, bool note, int vertical), FormworkPiece>();
         foreach (var k in FormworkSummary.RowPatches(Results))
         {
             var p = k.Patch;
@@ -343,8 +418,9 @@ public sealed class FormworkBoard
             else
             {
                 // 까닭은 대응표를 걸기 전의 값으로 본다(대응표가 '세지 않음' 등으로 까닭을 덮어쓰기 때문).
+                // 수직면 덩어리의 조각(세지 않는 덩어리 — R49)은 덩어리마다 한 덩이(판 = 덩어리 · 색이 하나).
                 bool note = (p.Unruled?.Note ?? p.Note).Length > 0;
-                var key = (k.Result, k.Type, k.Group, p.Side, p.Band, note, p.FlushWallType);
+                var key = p.Vertical is { } g ? ((ElementFormwork?)null, "", "", "", p.Band, false, g.Id) : (k.Result, k.Type, k.Group, p.Side, p.Band, note, 0);   // 덩어리는 안팎과 상관없이 한 덩이(core-verify R49 L5)
                 if (!chunks.TryGetValue(key, out piece)) { chunks[key] = piece = new FormworkPiece(); pieces.Add(piece); }
             }
             piece.Add(k);

@@ -30,6 +30,13 @@ public sealed class ZonePart
     /// 구조체에 맞닿은 면은 이 부위에서만 빼고, 구조체 쪽은 그 자리까지 거푸집으로 센다. null = 처음 값(묶음이 받침·PAD 이면 켬 — PartCatalog.IsLater).
     /// </summary>
     [JsonPropertyName("later")] public bool? Later { get; set; }
+    /// <summary>
+    /// 레미콘 규격(«25-30-15» — 굵은골재 · 강도 · 슬럼프) — 산출근거의 절 제목 «레미콘타설 ( 철근 , 25 - 30 - 15 )»(R49 — JACK 2026-10-16 «2D 값 기본 + 부위마다 바꿈»).
+    /// null = 처음 값(PartCatalog.DefaultSpec — 채움 묶음 무근 25-18-15 · 그 밖 무근 25-21-15 · 철근 25-30-15).
+    /// </summary>
+    [JsonPropertyName("spec")] public string? Spec { get; set; }
+    /// <summary>타설 방법(«펌프차 붐타설») — 절 제목 끝. null = 처음 값(PartCatalog.DefaultPour).</summary>
+    [JsonPropertyName("pour")] public string? Pour { get; set; }
     /// <summary>지침 작업분류체계의 5 · 6 · 7번째 칸(공종 대·중·소분류) 코드 — 다음 단계에서 쓴다(지금은 담아 두기만).</summary>
     [JsonPropertyName("wbs5")] public string? Wbs5 { get; set; }
     [JsonPropertyName("wbs6")] public string? Wbs6 { get; set; }
@@ -39,7 +46,7 @@ public sealed class ZonePart
     /// <summary>사용자가 직접 넣은(또는 이름을 고친) 줄 — 구조물을 바꿔 대표 목록이 갈려도 남는다.</summary>
     [JsonPropertyName("user")] public bool User { get; set; }
 
-    public ZonePart Copy() => new() { Name = Name, NoZone = NoZone, Plain = Plain, Later = Later, Wbs5 = Wbs5, Wbs6 = Wbs6, Wbs7 = Wbs7, Group = Group, User = User };
+    public ZonePart Copy() => new() { Name = Name, NoZone = NoZone, Plain = Plain, Later = Later, Spec = Spec, Pour = Pour, Wbs5 = Wbs5, Wbs6 = Wbs6, Wbs7 = Wbs7, Group = Group, User = User };
 }
 
 /// <summary>저장된 자료가 이 판보다 새로운 판에서 만든 것일 때. 읽지도 덮어쓰지도 않는다.</summary>
@@ -61,14 +68,24 @@ public sealed class ZonePlanTooNewException : FormatException
 /// v4(10/15): 부위의 later('나중에 침') 칸을 더했다 — 목록의 꼴은 v3 그대로라 CurrentVersion(옮겨 읽기의 기준)은 3 이다.
 /// later 를 쓴 목록만 v4 로 적는다(LaterVersion): v3 만 아는 전의 판(R42)은 v4 를 '더 새로운 판'으로 보고 열지 않아, 그 표시를 버린 채 다시 적지 못한다.
 /// later 를 쓰지 않은 목록은 v3 그대로 적어, 전의 판으로 되돌려도 열린다(core · revit R43 검토).
+/// v5(10/16 — R49): 부위의 spec · pour(레미콘 규격 · 타설) 칸 — 같은 까닭으로 쓴 목록만 v5(SpecVersion).
 /// </summary>
 public sealed class ZonePlan
 {
     /// <summary>목록의 꼴이 마지막으로 바뀐 판 — 저장된 판이 이보다 낮으면 옮겨 읽는다(PartCatalog.Build · 옛 글자 떠 두기).</summary>
     public const int CurrentVersion = 3;
 
-    /// <summary>부위에 later 칸이 있는 목록을 적는 판. 이 판이 읽을 수 있는 가장 새로운 판이기도 하다.</summary>
+    /// <summary>부위에 later 칸이 있는 목록을 적는 판.</summary>
     public const int LaterVersion = 4;
+
+    /// <summary>
+    /// 부위에 spec · pour(레미콘 규격 · 타설 — R49) 칸이 있는 목록을 적는 판. 이 판이 읽을 수 있는 가장 새로운 판이기도 하다.
+    /// 쓴 목록만 v5 로 적는다(later 의 v4 와 같은 까닭 — 안 쓴 모델은 전의 판으로 되돌려도 열린다).
+    /// </summary>
+    public const int SpecVersion = 5;
+
+    /// <summary>이 판이 읽을 수 있는 가장 새로운 판.</summary>
+    public const int NewestVersion = SpecVersion;
 
     /// <summary>
     /// 어느 중분류에도 속하지 않는 것으로 정한 부재(Free)의 이름표 — 팝업의 [단독객체] 단추(JACK 2026-10-15: 전의 '위치 없음'을 이렇게 부른다).
@@ -111,7 +128,7 @@ public sealed class ZonePlan
     /// <summary>글자로 적는다 — 판은 later 칸을 쓴 목록이면 v4, 아니면 v3.</summary>
     public string ToJson()
     {
-        Version = Parts.Any(p => p.Later.HasValue) ? LaterVersion : CurrentVersion;
+        Version = Parts.Any(p => p.Spec != null || p.Pour != null) ? SpecVersion : Parts.Any(p => p.Later.HasValue) ? LaterVersion : CurrentVersion;
         if (Parts.Count > 0) Catalog = PartCatalog.Revision;   // 지금 대표 목록으로 지은 목록이다(새로 든 이름은 이미 보탰다)
         return JsonSerializer.Serialize(this, Options);
     }
@@ -130,8 +147,8 @@ public sealed class ZonePlan
             using var doc = JsonDocument.Parse(json);
             if (doc.RootElement.ValueKind != JsonValueKind.Object) throw new FormatException("저장된 위치·부위 자료가 비어 있습니다.");
             version = doc.RootElement.TryGetProperty("v", out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out int n) ? n : 1;
-            if (version > LaterVersion)
-                throw new ZonePlanTooNewException($"저장된 위치·부위 자료가 더 새로운 판(v{version})에서 만든 것입니다 — 이 판(v{LaterVersion})으로는 읽지 않습니다.");
+            if (version > NewestVersion)
+                throw new ZonePlanTooNewException($"저장된 위치·부위 자료가 더 새로운 판(v{version})에서 만든 것입니다 — 이 판(v{NewestVersion})으로는 읽지 않습니다.");
             // v1: 구역 네모의 이름을 위치 목록으로 옮긴다(네모를 그린 차례 그대로).
             if (version < 2 && doc.RootElement.TryGetProperty("zones", out var zones) && zones.ValueKind == JsonValueKind.Array)
                 foreach (var zone in zones.EnumerateArray())

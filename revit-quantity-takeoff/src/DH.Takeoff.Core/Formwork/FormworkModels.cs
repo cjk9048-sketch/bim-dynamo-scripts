@@ -97,13 +97,13 @@ public sealed class FacePatch
     internal (bool Counted, bool Decided, string Item, string Note)? Unruled { get; set; }
 
     /// <summary>
-    /// 같은 평면 · 같은 방향으로 맞닿은 벽의 바깥면 조각 — 바닥판(슬래브 · 기초) 옆면의 바깥 조각만(Analyze 가 형상만으로 찾아 둔다).
-    /// 사람이 그 (유형, 옆면) 줄을 고치지 않았으면 이 조각의 종류는 그 벽 조각의 종류를 따른다(JACK 2026-10-16 «벽과 같은 종류로 이어 한 장»).
+    /// 이 조각이 든 수직면 덩어리(R49 — JACK 2026-10-16 «객체와 관계없이 2개이상의 부위로 합쳐져서 수직면이 생긴곳은 무조건 하나의 덩어리»), 없으면 null.
+    /// Analyze 가 형상만으로 묶는다(대응표와 상관없음). 덩어리의 조각은 다스리는 조각의 값(세는가 · 정했는가 · 종류 · 까닭)을 물려받는다(R45 의 «벽을 따름»을 넓힌 것).
     /// </summary>
-    internal FacePatch? FlushWall { get; set; }
+    public VerticalGroup? Vertical { get; internal set; }
 
-    /// <summary>맞닿은 벽의 유형(② 3D 덩이의 열쇠 — 덩이 안의 색이 대응표를 어떻게 고쳐도 하나가 되게).</summary>
-    internal string FlushWallType { get; set; } = "";
+    /// <summary>덩어리를 따르기 전 이 조각 제 사슬의 종류 · 세는가(덩어리로 바뀐 양을 일지에 — core-verify R49 계획 M5).</summary>
+    internal (bool Counted, string Item)? Own { get; set; }
 
     /// <summary>
     /// 사람이 ② 3D 에서 뺀 판에 든 조각이면 그 판의 대표 열쇠(대응표 파일의 «뺀 판:…» 줄 — R48 · JACK 2026-10-16 «찍어서 빼기 · 판 한 장»), 아니면 "".
@@ -119,6 +119,33 @@ public sealed class FacePatch
 
     /// <summary>조각 안의 대표 점(한 번 재면 담아 둔다 — 뺀 판 열쇠가 쓴다 · PatchGeometry.Anchor).</summary>
     internal (double x, double y, double z)? AnchorCache { get; set; }
+
+    // 짧게 — 조각 ↔ 덩어리가 서로를 가리켜(R49) 속성을 따라 적는 도구(시험의 실패 글 등)가 끝없이 돌지 않게.
+    public override string ToString() =>
+        string.Create(System.Globalization.CultureInfo.InvariantCulture, $"조각 {Area:0.####}㎡ {Side} {Item}{(Counted ? "" : " 세지 않음")}{(Vertical != null ? $" 덩어리 {Vertical.Id}" : "")}");
+}
+
+/// <summary>
+/// 수직면 덩어리(R49): 같은 방향 · 같은 평면에 맞닿은 수직면(옆면 · 구멍 둘레) 조각들 — 부재 종류 · 안팎 · 위치 · 부위 · 거푸집 종류와 상관없이 한 장.
+/// 버림 · 받침류(2D 가 따로 적는 것 — FormworkTable.StandsAlone)는 들지 않는다. 합친 테두리가 한 고리가 아니면 묶지 않는다.
+/// </summary>
+public sealed class VerticalGroup
+{
+    public int Id { get; internal set; }
+
+    /// <summary>든 조각(부재 Id 차례).</summary>
+    public List<(ElementFormwork Result, FaceResult Face, FacePatch Patch)> Members { get; } = new();
+
+    /// <summary>다스리는 조각: 벽 조각 가운데 가장 넓은 것, 벽이 없으면 가장 넓은 조각(같으면 부재 Id 가 작은 것) — 덩어리의 종류 · ② 표의 줄 · 엑셀 줄의 부호를 정한다.</summary>
+    public (ElementFormwork Result, FaceResult Face, FacePatch Patch) Governor { get; internal set; }
+
+    /// <summary>면의 바깥 법선.</summary>
+    public double[] Normal { get; internal set; } = Array.Empty<double>();
+
+    /// <summary>덩어리의 넓이(㎡ — 조각의 합).</summary>
+    public double Area => Members.Sum(m => m.Patch.Area);
+
+    public override string ToString() => $"덩어리 {Id} · 조각 {Members.Count}";
 }
 
 /// <summary>면을 가린 이웃 부재 하나와 그 넓이.</summary>
@@ -181,6 +208,41 @@ public sealed class FormworkOptions
     /// 명장 여과지 2D 산출서는 유로폼을 한 항목으로 셈 · 지침 부속서 7 의 유로폼 이름도 «7m이하» 하나). 경계를 주면 전처럼 나눈다.
     /// </summary>
     public List<double> Bands { get; set; } = new();
+
+    /// <summary>자동 높이 구간의 경계(m) — 이보다 높은 벽이 있으면 유로폼을 «0~7m · 7m 초과»로 나눈다(R49).</summary>
+    public const double TallWall = 7.0;
+
+    /// <summary>
+    /// 높이 구간을 모델에서 정한다(R49 — JACK 2026-10-16 «7 m 넘는 벽이 있으면 유로폼 0~7 / 7 m 초과 자동 구분»: 김포 2D 꼴 · 없으면 명장 2D 처럼
+    /// 구분 없음). 대상 벽(Target) 가운데 높이(형상의 아래 ~ 위)가 7 m 를 넘는 것이 하나라도 있으면 [7], 아니면 빈 목록.
+    /// </summary>
+    public static List<double> AutoBands(IEnumerable<FormworkElement> elements)
+    {
+        foreach (var el in elements)
+        {
+            if (el.Kind != MemberKind.Wall || !el.Target) continue;
+            double lo = double.MaxValue, hi = double.MinValue;
+            foreach (var solid in el.Solids)
+                foreach (var face in solid.Faces)
+                    foreach (var loop in face.Loops)
+                        foreach (var p in loop.Pts)
+                            if (p.Length >= 3) { lo = Math.Min(lo, p[2]); hi = Math.Max(hi, p[2]); }
+            if (hi - lo > TallWall + 1e-6) return new List<double> { TallWall };
+        }
+        return new List<double>();
+    }
+
+    /// <summary>
+    /// 자동 구간을 켰는데 서 있는 바닥에서 7 m 를 넘는 조각이 하나도 없으면 끈다 — 벽 형상의 높이는 기초에 묻힌 몫까지 재지만 구간은 서 있는 바닥에서 잰다
+    /// (revit-verify R49 L4: 7.0 ~ 7.6 m 벽만 있는 모델의 유로폼 이름이 구간 꼴로 바뀌지 않게). Analyze 뒤에 부른다 — 넘는 조각이 없으면 나눈 결과와
+    /// 안 나눈 결과가 같다(조각이 모두 구간 0 · 자르는 자리가 조각 밖). 끄면 true.
+    /// </summary>
+    public bool DropUnusedBands(IReadOnlyList<ElementFormwork> results)
+    {
+        if (Bands.Count == 0 || results.Any(r => r.Faces.Any(f => f.Patches.Any(p => p.Band > 0)))) return false;
+        Bands.Clear();
+        return true;
+    }
 
     /// <summary>밑면 아래의 콘크리트가 이보다 가까우면 거푸집을 댈 수 없는 틈이다(m).</summary>
     public double MinGap { get; set; } = 0.05;

@@ -29,8 +29,14 @@ public sealed class FormworkLine
     public int AreaOnlyCells { get; set; }
 
     /// <summary>
+    /// 둘레가 닫힌 안쪽 면 한 줄(R49 — JACK 2026-10-16 «호퍼 · 피트를 (2.5 + 2) × 2 × 1.5 둘레 × 높이 한 줄로» · 2D «HOLE 주위 ( 1 ＋ 3.9 ) × 2 × 0.3»)이면
+    /// 둘레 하나의 면 수(3 이상), 보통 줄이면 0. 그 줄의 식은 «(a+b)*2*h» · «(a+b+c…)*h» 이고 Count 는 식이 같은 둘레 수다.
+    /// </summary>
+    public int Faces { get; set; }
+
+    /// <summary>
     /// 이 줄에 든 조각 — 거푸집 객체 하나가 조각 하나다(R44). 보통 줄은 Count 개(줄의 «× n» 하나하나), 슬래브 밑면 한 줄은 Count × Cells 개
-    /// (판은 칸마다 그대로 — R46).
+    /// (판은 칸마다 그대로 — R46), 둘레 한 줄은 Count × Faces 개(판은 면마다 — R49). «× n» 은 판 수가 아니다(core-verify R49 계획 M3 — 판 수는 이것).
     /// </summary>
     public List<FormworkUnit> Units { get; } = new();
 }
@@ -89,8 +95,11 @@ public sealed class FormworkSheetData
     /// <summary>높이 구간의 경계(지은 때의 FormworkOptions.Bands — 수량집계표의 유로폼 규격 칸).</summary>
     public IReadOnlyList<double> Bands { get; set; } = Array.Empty<double>();
 
-    /// <summary>줄의 조각 전부(만난 차례) — Σ 줄의 Count 와 같은 수.</summary>
+    /// <summary>줄의 조각 전부(만난 차례) — Σ 줄의 Units 와 같은 수.</summary>
     public List<FormworkUnit> Units { get; } = new();
+
+    /// <summary>둘레 한 줄로 적은 닫힌 둘레 수 · 고리는 닫혔는데 값이 넓이와 맞지 않아 면마다 적은 수(일지 — core-verify R49 계획 M6).</summary>
+    public (int found, int refused) Rings { get; set; }
 
     /// <summary>
     /// 거푸집 객체의 판(R45): 줄 조각을 높이 구간을 넘어 한 번 더 이은 것 — 같은 면이면 한 장(JACK 2026-10-16 «엑셀만 나누고 판은 한 장»).
@@ -113,7 +122,7 @@ public sealed class FormworkSheetData
 /// 부호는 부재의 «마크»(Revit Mark — 도면 부호 W1 · S1 …), 비었으면 유형 이름. 괄호는 외측 / 내측 / 경사면만(밑면 · 구멍 둘레는 괄호 없음) —
 /// 2D 거푸집 줄에는 위치(방)가 없어 중분류를 적지 않는다(중분류는 부재 속성 · 거푸집 객체에 그대로).
 /// 숫자와 기호는 칸마다 따로 적고 값은 엑셀 수식으로 둔다(콘크리트 「산출근거」 시트와 같은 칸 짜임 — CalcSheet.WriteLine).
-/// 조각이 직사각형(구멍도 직사각형)이 아니면 넓이만 적는다. 수량집계표에는 종류마다 «합판거푸집 | 합판 3회» · «유로폼» 꼴로 산출 · BIM · 차이를 더한다.
+/// 고리가 직각으로만 꺾이지 않으면(곡면 · 빗변) 넓이만 적는다. 둘레가 닫힌 안쪽 면은 «(a+b)*2*h» 한 줄 · 같은 식의 외측 · 내측은 «(양측)»(R49). 수량집계표에는 종류마다 «합판거푸집 | 합판 3회» · «유로폼» 꼴로 산출 · BIM · 차이를 더한다.
 /// </summary>
 public static class FormworkSheet
 {
@@ -299,18 +308,22 @@ public static class FormworkSheet
                 }
         }
 
+        // 둘레가 닫힌 안쪽 면(R49 — JACK «호퍼 · 피트를 둘레 × 높이 한 줄로»): 고리의 면들을 한 줄 «(a+b)*2*h» 로.
+        var rings = ClosedRings(entries, options, out int refusedRings);
+        data.Rings = (rings.Values.Distinct().Count(), refusedRings);
+
         // 줄: 열쇠가 같은 조각들이 한 줄(«× n»). 슬래브 밑면은 슬래브 하나(절 · 부위 제목 · 부호 · 대표 조각의 부재)의 칸들을 먼저 한 식으로 모은다 —
         // 칸이 하나뿐인 슬래브는 보통 줄과 같다. 식이 같은 슬래브끼리는 보통 줄처럼 «× n».
         var slabs = entries.Where(e => e.Slab != null).GroupBy(e => e.SlabKey).ToDictionary(g => g.Key, g => g.ToList());
-        var lines = new Dictionary<(string head, string formula, bool joined, int cells), (FormworkLine line, Entry first)>();
-        void Put(Entry first, string formula, bool areaOnly, bool joinedAny, int cells, int areaOnlyCells, IEnumerable<FormworkUnit> units)
+        var lines = new Dictionary<(string head, string formula, bool joined, int cells, int faces), (FormworkLine line, Entry first)>();
+        void Put(Entry first, string formula, bool areaOnly, bool joinedAny, int cells, int areaOnlyCells, IEnumerable<FormworkUnit> units, int faces = 0)
         {
-            var key = (first.LineHead, formula, joinedAny, cells);
+            var key = (first.LineHead, formula, joinedAny, cells, faces);
             if (!lines.TryGetValue(key, out var at))
                 lines[key] = at = (new FormworkLine
                 {
                     Section = first.Section, Item = first.Unit.Item, Part = first.Part, Sub = first.Sub, Mark = first.Mark, Tag = first.Tag, Unsure = first.Unsure,
-                    Formula = formula, AreaOnly = areaOnly, Count = 0, Joined = joinedAny, Cells = cells, AreaOnlyCells = areaOnlyCells,
+                    Formula = formula, AreaOnly = areaOnly, Count = 0, Joined = joinedAny, Cells = cells, AreaOnlyCells = areaOnlyCells, Faces = faces,
                 }, first);
             at.line.Count++;
             foreach (var u in units)
@@ -323,6 +336,12 @@ public static class FormworkSheet
         var gathered = new HashSet<string>(StringComparer.Ordinal);
         foreach (var e in entries)
         {
+            if (rings.TryGetValue(e, out var ring))
+            {
+                // 둘레의 처음 나온 면을 만났을 때 둘레 전부를 한 줄로(줄의 차례는 그 면의 것).
+                if (ReferenceEquals(ring.First, e)) Put(e, ring.Formula, false, ring.Faces.Any(f => f.Joined), 0, 0, ring.Faces.Select(f => f.Unit), ring.Faces.Count);
+                continue;
+            }
             if (e.Slab != null && slabs[e.SlabKey] is { Count: > 1 } cells)
             {
                 // 슬래브의 첫 칸을 만났을 때 그 슬래브의 칸 전부를 한 줄로(숫자가 아주 많으면 NumbersPerLine 마다 나눠 여러 줄).
@@ -341,6 +360,7 @@ public static class FormworkSheet
             }
             Put(e, e.Formula, e.AreaOnly, e.Joined, 0, 0, new[] { e.Unit });
         }
+        BothSides(lines);
         // 차례: 절 → 부위 제목(거푸집 차례 → 목록 → 이름) → 작은 제목(거푸집 차례 → 목록 → 이름 — 2D «HOLE 주위» 안도 «- 상부슬래브 → - 중간슬래브 → - 벽체»,
         // core-verify R47 설치 전 L1) → 부호(자연 차례) → 유형 → 면의 갈래 → 외측 · 내측 → 처음 나온 차례.
         foreach (var (line, _) in lines.Values.OrderBy(e => e.first.Item).ThenBy(e => e.first.Band).ThenBy(e => e.line.Section, StringComparer.Ordinal)
@@ -385,6 +405,202 @@ public static class FormworkSheet
 
         // 슬래브 밑면 한 줄의 열쇠: 줄의 머리 + 슬래브(대표 조각의 부재).
         public string SlabKey => LineHead + "\u001f" + (Slab?.ToString(CultureInfo.InvariantCulture) ?? "");
+    }
+
+    // 닫힌 둘레 하나: 면들(둘레 차례) · 처음 나온 면(줄의 차례) · 식.
+    private sealed class Ring
+    {
+        public required List<Entry> Faces;
+        public required Entry First;
+        public required string Formula;
+    }
+
+    /// <summary>둘레 한 줄의 괄호(2D «W14 (양측) : 13 × 5.46 × 16»): 같은 부호 · 같은 식의 외측 줄과 내측 줄을 한 줄로 적은 것.</summary>
+    public const string BothSidesTag = "양측";
+
+    // 닫힌 둘레(R49 — core-verify R49 계획 M6): 줄의 머리(절 · 부위 제목 · 작은 제목 · 부호 · 괄호 · 갈래)가 같고 아래 · 위 높이가 같은(1 mm) 네모 수직 조각들이
+    // 아래 변의 끝(1 mm)마다 꼭 둘씩 만나 닫힌 고리(셋 이상)를 이루고, 면이 모두 고리 안을 볼 때(바깥 법선이 고리 안쪽 — 호퍼 · 피트 · 구멍 둘레.
+    // 기둥 둘레 · 건물 바깥은 아님): 마주 보는 변이 같은 네 면이면 «(a+b)*2*h»(긴 변이 앞), 아니면 가장 긴 면부터 둘레 차례로 «(a+b+c…)*h».
+    // 식의 값이 넓이 합과 0.5% 안일 때만(아니면 면마다 — refused). 안쪽 면 = 괄호 «내측», 또는 구멍 둘레(괄호 없음) · 면마다 부재에 난 구멍의 면이 들어야
+    // 한다(벽만 둘러선 방의 안쪽은 2D 처럼 벽마다 — «W1 (내측) : 18 × 5»). 높이 구간을 켜도 쓴다 — 고리는 줄의 머리(절 = 종류 + 구간) · 아래 · 위 높이로
+    // 묶으므로 구간을 넘는 면은 저절로 고리가 되지 않는다(core-verify R49 설치 전 M2 — 7 m 자동 구분이 켜진 모델의 호퍼 · 피트도 한 줄).
+    // 안팎을 모르는 조각 · 넓이만 적는 조각 · 구멍이 있는 조각은 들지 않는다.
+    private static Dictionary<Entry, Ring> ClosedRings(List<Entry> entries, FormworkOptions options, out int refused)
+    {
+        refused = 0;
+        var found = new Dictionary<Entry, Ring>(ReferenceEqualityComparer.Instance);
+        var faces = new List<(Entry E, (double x, double y) A, (double x, double y) B, double Z0, double Z1)>();
+        foreach (var e in entries)
+        {
+            if (e.Slab != null || e.AreaOnly || e.Unsure || !(e.Tag == "내측" || (e.Tag.Length == 0 && e.Kind == 3))) continue;
+            // 부재에 난 구멍의 면(구멍 둘레)이 든 조각만 — 호퍼(슬래브 구멍 + 그 위 벽) · 피트 · 개구부. 벽만 둘러선 방의 안쪽은 2D 처럼 벽마다 적는다.
+            if (!e.Unit.Members.Any(m => m.Face.Class == FaceClass.HoleEdge)) continue;
+            var n = e.Unit.Normal;
+            if (n.Length != 3 || Math.Abs(n[2]) > 0.01) continue;
+            if (Upright(e.Unit.Shape) is { } r) faces.Add((e, r.a, r.b, r.z0, r.z1));
+        }
+        static (long, long) Key((double x, double y) p) => ((long)Math.Round(p.x * 1000), (long)Math.Round(p.y * 1000));
+        foreach (var level in faces.GroupBy(f => (f.E.LineHead, (long)Math.Round(f.Z0 * 1000), (long)Math.Round(f.Z1 * 1000))))
+        {
+            var list = level.ToList();
+            var ends = new Dictionary<(long, long), List<int>>();
+            for (int i = 0; i < list.Count; i++)
+                foreach (var p in new[] { Key(list[i].A), Key(list[i].B) })
+                {
+                    if (!ends.TryGetValue(p, out var at)) ends[p] = at = new List<int>();
+                    at.Add(i);
+                }
+            // 끝마다 꼭 두 조각인 면만 고리에 든다.
+            bool Good(int i) => Key(list[i].A) != Key(list[i].B) && ends[Key(list[i].A)].Count == 2 && ends[Key(list[i].B)].Count == 2;
+            int Other(int i, (long, long) p) => ends[p][0] == i ? ends[p][1] : ends[p][0];
+            var seen = new bool[list.Count];
+            foreach (int start in Enumerable.Range(0, list.Count).OrderBy(i => list[i].E.Seen))
+            {
+                if (seen[start] || !Good(start)) continue;
+                // 둘레를 따라 걷는다: 면 차례 · 꼭짓점 차례(v[k] → v[k+1] 이 면 k).
+                var loop = new List<int>();
+                var corners = new List<(double x, double y)>();
+                int cur = start;
+                var p0 = list[start].A;
+                var at = Key(p0);
+                bool closed = false;
+                while (true)
+                {
+                    if (!Good(cur) || loop.Contains(cur)) break;
+                    loop.Add(cur);
+                    var (a, b) = Key(list[cur].A) == at ? (list[cur].A, list[cur].B) : (list[cur].B, list[cur].A);
+                    corners.Add(a);
+                    at = Key(b);
+                    int next = Other(cur, at);
+                    if (next == start) { closed = true; break; }
+                    cur = next;
+                }
+                foreach (int i in loop) seen[i] = true;
+                if (!closed || loop.Count < 3) continue;
+                // 면이 모두 고리 안을 보는가: 고리가 도는 쪽(부호 넓이)의 안쪽 = 변의 왼쪽(반시계) · 오른쪽(시계).
+                double signed = 0;
+                for (int k = 0; k < corners.Count; k++)
+                {
+                    var (u, v) = (corners[k], corners[(k + 1) % corners.Count]);
+                    signed += u.x * v.y - v.x * u.y;
+                }
+                if (Math.Abs(signed) < 1e-9) continue;
+                bool inner = true;
+                for (int k = 0; k < loop.Count && inner; k++)
+                {
+                    var (u, v) = (corners[k], corners[(k + 1) % corners.Count]);
+                    var n = list[loop[k]].E.Unit.Normal;
+                    double left = -(v.y - u.y) * n[0] + (v.x - u.x) * n[1];
+                    inner = Math.Sign(signed) * left > 0;
+                }
+                if (!inner) continue;
+                var widths = Enumerable.Range(0, loop.Count).Select(k =>
+                {
+                    var (u, v) = (corners[k], corners[(k + 1) % corners.Count]);
+                    return Math.Sqrt((v.x - u.x) * (v.x - u.x) + (v.y - u.y) * (v.y - u.y));
+                }).ToList();
+                double h = list[start].Z1 - list[start].Z0;
+                string formula;
+                if (loop.Count == 4 && Num(widths[0]) == Num(widths[2]) && Num(widths[1]) == Num(widths[3]))
+                    formula = $"({Num(Math.Max(widths[0], widths[1]))}+{Num(Math.Min(widths[0], widths[1]))})*2*{Num(h)}";
+                else
+                {
+                    int longest = widths.IndexOf(widths.Max());
+                    formula = "(" + string.Join("+", Enumerable.Range(0, widths.Count).Select(k => Num(widths[(longest + k) % widths.Count]))) + $")*{Num(h)}";
+                }
+                double area = loop.Sum(i => list[i].E.Unit.Area);
+                double value;
+                try { value = FormulaEvaluator.Evaluate(formula); }
+                catch (FormatException) { refused++; continue; }
+                if (!double.IsFinite(value) || Math.Abs(value - area) > 0.005 * area + 1e-4) { refused++; continue; }
+                var members = loop.Select(i => list[i].E).ToList();
+                var ring = new Ring { Faces = members, First = members.MinBy(m => m.Seen)!, Formula = formula };
+                foreach (var m in members) found[m] = ring;
+            }
+        }
+        return found;
+    }
+
+    // 네모 수직 조각(고리 하나 · 꼭짓점 넷 · 아래 · 위 높이 둘 · 평면 자리 둘)의 아래 변 두 끝(평면)과 아래 · 위 높이. 아니면 null.
+    private static ((double x, double y) a, (double x, double y) b, double z0, double z1)? Upright(FacePatch shape)
+    {
+        if (shape.Outline.Count != 1) return null;
+        var ring = Clean(shape.Outline[0]);
+        if (ring.Count != 4) return null;
+        double z0 = ring.Min(p => p.Z), z1 = ring.Max(p => p.Z);
+        if (z1 - z0 < 1e-6) return null;
+        var spots = new List<(double x, double y)>();
+        foreach (var p in ring)
+        {
+            if (Math.Abs(p.Z - z0) > 1e-6 && Math.Abs(p.Z - z1) > 1e-6) return null;
+            if (!spots.Any(s => Math.Abs(s.x - p.X) <= 1e-6 && Math.Abs(s.y - p.Y) <= 1e-6)) spots.Add((p.X, p.Y));
+        }
+        return spots.Count == 2 ? (spots[0], spots[1], z0, z1) : null;
+    }
+
+    // (양측)(2D «W33 (양측) : 2.3 × 1.9 × 2» · «W14 (양측) : 13 × 5.46 × 16» — 한 벽의 두 면): 머리가 괄호 말고 같고(절 · 부위 제목 · 작은 제목 · 부호 ·
+    // 옆면 · 안팎 앎) 식이 같은 보통 줄(외측 · 내측)의 벽 조각 가운데 같은 부재(이은 묶음이면 같은 부재들)의 마주 보는 넓은 두 면 짝(두 면 사이 < 면 너비 —
+    // 끝면 짝은 아님) → «부호 (양측) : 식 × n» 한 줄.
+    // 짝이 없는 조각은 제 줄에 남는다(다른 벽의 바깥 면과 안쪽 면이 우연히 같은 식이어도 묶지 않는다). 줄의 조각(판)의 안팎은 그대로다.
+    private static void BothSides(Dictionary<(string head, string formula, bool joined, int cells, int faces), (FormworkLine line, Entry first)> lines)
+    {
+        static bool Opposite(double[] a, double[] b) => a.Length == 3 && b.Length == 3 && a[0] * b[0] + a[1] * b[1] + a[2] * b[2] < -0.999;
+        // 벽의 넓은 두 면인가(끝면 짝이 아님): 두 면 사이(벽 두께)가 면의 수평 너비보다 짧다.
+        static bool Broad(FormworkUnit x, FormworkUnit y)
+        {
+            var n = x.Normal;
+            var px = x.Shape.Outline.SelectMany(r => r).ToList();
+            var py = y.Shape.Outline.SelectMany(r => r).ToList();
+            if (px.Count == 0 || py.Count == 0) return false;
+            double gap = Math.Abs((px[0][0] - py[0][0]) * n[0] + (px[0][1] - py[0][1]) * n[1] + (px[0][2] - py[0][2]) * n[2]);
+            double width = px.Max(p => -n[1] * p[0] + n[0] * p[1]) - px.Min(p => -n[1] * p[0] + n[0] * p[1]);
+            return gap < width;
+        }
+        var plain = lines.Where(kv => kv.Value.first.Kind == 0 && kv.Key.cells == 0 && kv.Key.faces == 0 && !kv.Value.line.Unsure && kv.Value.line.Tag is "외측" or "내측").ToList();
+        foreach (var group in plain.GroupBy(kv => (kv.Value.line.Section, kv.Value.line.Part, kv.Value.line.Sub, kv.Value.line.Mark, kv.Key.formula, kv.Key.joined)))
+        {
+            // 벽 조각만(2D 의 «(양측)»은 벽 부호에만 — 기둥은 «0.5 × 4 × 5.4» 꼴이다).
+            var units = group.SelectMany(kv => kv.Value.line.Units).Where(u => u.Members.Any(m => m.Result.Element.Kind == MemberKind.Wall)).ToList();
+            var paired = new HashSet<FormworkUnit>(ReferenceEqualityComparer.Instance);
+            for (int i = 0; i < units.Count; i++)
+            {
+                if (paired.Contains(units[i])) continue;
+                for (int j = i + 1; j < units.Count; j++)
+                {
+                    var (x, y) = (units[i], units[j]);
+                    if (paired.Contains(y) || !x.Ids.SetEquals(y.Ids) || !Opposite(x.Normal, y.Normal) || !Broad(x, y)) continue;
+                    paired.Add(x);
+                    paired.Add(y);
+                    break;
+                }
+            }
+            if (paired.Count == 0) continue;
+            var lead = group.OrderBy(kv => kv.Value.first.Seen).First();
+            var model = lead.Value.line;
+            var both = new FormworkLine
+            {
+                Section = model.Section, Item = model.Item, Part = model.Part, Sub = model.Sub, Mark = model.Mark, Tag = BothSidesTag,
+                Formula = model.Formula, AreaOnly = model.AreaOnly, Count = 0, Joined = model.Joined,
+            };
+            foreach (var kv in group.OrderBy(kv => kv.Value.first.Seen))
+            {
+                var line = kv.Value.line;
+                foreach (var u in line.Units.Where(paired.Contains))
+                {
+                    both.Units.Add(u);
+                    both.Count++;
+                    both.Bim += u.Area;
+                    foreach (long id in u.Ids) both.Ids.Add(id);
+                }
+                line.Units.RemoveAll(paired.Contains);
+                if (line.Units.Count == 0) { lines.Remove(kv.Key); continue; }
+                line.Count = line.Units.Count;
+                line.Bim = line.Units.Sum(u => u.Area);
+                line.Ids.Clear();
+                foreach (var u in line.Units) foreach (long id in u.Ids) line.Ids.Add(id);
+            }
+            lines[(lead.Key.head + "\u001f" + BothSidesTag, lead.Key.formula, lead.Key.joined, 0, 0)] = (both, lead.Value.first);
+        }
     }
 
     // 슬래브 밑면 한 줄의 항: 칸 식마다 하나 — 같은 칸 식은 «식 × k»(바깥 더하기 · 빼기가 있으면 괄호). 차례 = 넓이(셋째 자리로 끊은 것) 큰 것부터,
@@ -479,7 +695,8 @@ public static class FormworkSheet
     private static string Num(double v) => Math.Round(v, 3).ToString("0.###", CultureInfo.InvariantCulture);
 
     /// <summary>
-    /// 조각을 «가로 × 높이 [+ 떨어진 조각 …] [− 구멍 …]» 숫자 식으로. 고리가 모두 직사각형이고, 길이를 mm(셋째 자리)로 끊은 식의 값이
+    /// 조각을 «가로 × 높이 [+ 떨어진 조각 …] [− 구멍 …]» 숫자 식으로. 고리가 모두 직각으로만 꺾이고(직사각형 · ㄱ자 · ㄷ자 — 꺾인 고리는 네모의 합이나
+    /// «바깥 네모 − 빈 곳» · R49), 길이를 mm(셋째 자리)로 끊은 식의 값이
     /// 조각 넓이와 0.5% 안일 때만 — 아니면 넓이만(셋째 자리) 적는다(areaOnly).
     /// 고리가 구멍인지 떨어진 조각인지는 도는 방향으로 가른다: 가장 큰 고리(바깥)의 법선에 비춘 부호 넓이가 같은 쪽이면 떨어진 조각(더한다),
     /// 거꾸로면 구멍(뺀다) — 조각의 테두리는 Clipper 의 결과(바깥 고리와 구멍이 서로 반대로 돈다)를 그 차례 그대로 3D 로 옮긴 것이다.
@@ -498,8 +715,11 @@ public static class FormworkSheet
         var holes = new List<string>();
         foreach (var ring in rings.OrderByDescending(r => ReferenceEquals(r, outer)))
         {
-            if (Rect(ring) is not { } r) return (areaText, true);
-            (Newell(ring).Dot(up) > 0 ? pieces : holes).Add($"{Num(r.a)}*{Num(r.b)}");
+            bool piece = Newell(ring).Dot(up) > 0;
+            if (Rect(ring) is { } r) (piece ? pieces : holes).Add($"{Num(r.a)}*{Num(r.b)}");
+            // 직각으로만 꺾인 고리(ㄱ자 · ㄷ자 — 수직면 덩어리에서 벽 + 아래 호퍼 안쪽처럼 · R49)는 네모의 합 «18*5+2.5*1.5» · 구멍이면 괄호로 싸서 뺀다.
+            else if (Rectilinear(ring, up, outer) is { } sum) (piece ? pieces : holes).Add(piece ? sum : "(" + sum + ")");
+            else return (areaText, true);
         }
         string formula = string.Join("+", pieces) + FormulaDecomposer.Deductions(holes);   // 같은 크기의 구멍은 «-(1*2.1*3)»(JACK 2026-10-16)
         double value;
@@ -508,6 +728,107 @@ public static class FormworkSheet
         if (!double.IsFinite(value) || Math.Abs(value - patch.Area) > 0.005 * patch.Area + 1e-4) return (areaText, true);
         return (formula, false);
     }
+
+    /// <summary>테두리 고리를 바깥 고리와 같은 쪽으로 도는 것(떨어진 조각)과 거꾸로 도는 것(구멍)으로 센다 — Shape 와 같은 가르기(판과 견주는 시험).</summary>
+    internal static (int pieces, int holes) Rings(FacePatch patch)
+    {
+        var rings = patch.Outline.Select(Clean).Where(r => r.Count >= 3).ToList();
+        if (rings.Count == 0) return (0, 0);
+        var up = Newell(rings.OrderByDescending(RingArea).First());
+        int pieces = rings.Count(r => Newell(r).Dot(up) > 0);
+        return (pieces, rings.Count - pieces);
+    }
+
+    /// <summary>고리 하나를 네모의 합으로 적을 때 네모 수의 한도 — 넘으면 넓이만(읽을 수 없는 식이 되지 않게).</summary>
+    internal const int MaxRectilinearTerms = 8;
+
+    // 변이 모두 서로 직각인 고리 하나(구멍 없는 다각형)를 네모로 적는다: 네모의 합(가로 띠 · 세로 띠) 또는 바깥 네모 − 빈 곳(«5*5-0.5*2.5» — 2D 의
+    // «전체 − 공제»). 항이 가장 적은 것 · 같으면 합(가로 띠 먼저). 기운 면(벽)은 «가로 × 세로»(수평인 변이 앞 — Rect 와 같다) · 수평인 면은 네모마다
+    // 긴 변이 앞. 같은 크기는 «a*b*n» · 빈 곳은 공제 묶기(FormulaDecomposer.Deductions). 직각이 아니거나 항이 너무 많으면 null.
+    private static string? Rectilinear(List<P3> ring, P3 up, List<P3> outer)
+    {
+        var n = Scale(up, 1 / up.Length);
+        var across = n.Cross(new P3(0, 0, 1));
+        bool level = across.Length <= 1e-6;
+        P3 u;
+        if (!level) u = Scale(across, 1 / across.Length);
+        else
+        {
+            var e = outer[1] - outer[0];
+            if (e.Length < 1e-9) return null;
+            u = Scale(e, 1 / e.Length);
+        }
+        var v = n.Cross(u);
+        // 판 위 좌표 · 0.2 mm 안의 값은 한 값으로(곧은 변의 두 끝이 µm 쯤 어긋난 실제 모델).
+        var xs = Snap(ring.Select(p => p.Dot(u)));
+        var ys = Snap(ring.Select(p => p.Dot(v)));
+        var pts = ring.Select(p => (x: xs[p.Dot(u)], y: ys[p.Dot(v)])).ToList();
+        for (int i = 0; i < pts.Count; i++)
+        {
+            var (a, b) = (pts[i], pts[(i + 1) % pts.Count]);
+            if (a.x != b.x && a.y != b.y) return null;
+        }
+        var swapped = pts.Select(p => (p.y, p.x)).ToList();
+        static List<(double w, double h)>? Back(List<(double w, double h)>? rs) => rs?.Select(r => (r.h, r.w)).ToList();
+        string Term((double w, double h) r) => level && r.h > r.w ? $"{Num(r.h)}*{Num(r.w)}" : $"{Num(r.w)}*{Num(r.h)}";
+        IEnumerable<string> Terms(List<(double w, double h)> rs) =>
+            rs.OrderByDescending(r => r.w * r.h).Select(Term).GroupBy(t => t).Select(g => g.Count() == 1 ? g.Key : $"{g.Key}*{g.Count()}");
+        var sums = new[] { Strips(pts, false), Back(Strips(swapped, false)) };
+        var gaps = new[] { Strips(pts, true), Back(Strips(swapped, true)) };
+        (int count, string text)? best = null;
+        foreach (var rs in sums)
+            if (rs is { Count: > 0 } && (best == null || rs.Count < best.Value.count)) best = (rs.Count, string.Join("+", Terms(rs)));
+        var box = (w: pts.Max(p => p.x) - pts.Min(p => p.x), h: pts.Max(p => p.y) - pts.Min(p => p.y));
+        foreach (var rs in gaps)
+            if (rs is { Count: > 0 } && (best == null || rs.Count + 1 < best.Value.count))
+                best = (rs.Count + 1, Term(box) + FormulaDecomposer.Deductions(rs.OrderByDescending(r => r.w * r.h).Select(Term)));
+        return best is { } found && found.count <= MaxRectilinearTerms ? found.text : null;
+    }
+
+    // 가로 띠로 자른 네모들(w = x 쪽 길이 · h = y 쪽 길이): 띠마다 짝수-홀수로 덮인 구간(gaps 면 바깥 네모 안의 빈 구간) → 위아래로 같은 구간이
+    // 이어지면 한 네모. 고리가 고르지 않으면(띠를 가로지르는 변이 홀수) null.
+    private static List<(double w, double h)>? Strips(List<(double x, double y)> pts, bool gaps)
+    {
+        var levels = pts.Select(p => p.y).Distinct().OrderBy(y => y).ToList();
+        double left = pts.Min(p => p.x), right = pts.Max(p => p.x);
+        var open = new Dictionary<(double x0, double x1), double>();   // 구간 → 시작한 y
+        var rects = new List<(double w, double h)>();
+        for (int k = 0; k + 1 < levels.Count; k++)
+        {
+            double y0 = levels[k], y1 = levels[k + 1], mid = (y0 + y1) / 2;
+            var cuts = new List<double>();
+            for (int i = 0; i < pts.Count; i++)
+            {
+                var (a, b) = (pts[i], pts[(i + 1) % pts.Count]);
+                if (a.x == b.x && Math.Min(a.y, b.y) < mid && Math.Max(a.y, b.y) > mid) cuts.Add(a.x);
+            }
+            if (cuts.Count % 2 != 0) return null;
+            cuts.Sort();
+            if (gaps) { cuts.Insert(0, left); cuts.Add(right); }
+            var spans = new HashSet<(double, double)>();
+            for (int i = 0; i + 1 < cuts.Count; i += 2) if (cuts[i + 1] > cuts[i]) spans.Add((cuts[i], cuts[i + 1]));
+            foreach (var key in open.Keys.ToList())
+                if (!spans.Contains(key)) { rects.Add((key.x1 - key.x0, y0 - open[key])); open.Remove(key); }
+            foreach (var span in spans) open.TryAdd(span, y0);
+        }
+        foreach (var (key, start) in open) rects.Add((key.x1 - key.x0, levels[^1] - start));
+        return rects;
+    }
+
+    // 값들을 0.2 mm 안끼리 묶어 묶음의 첫 값으로.
+    private static Dictionary<double, double> Snap(IEnumerable<double> values)
+    {
+        var map = new Dictionary<double, double>();
+        double? head = null;
+        foreach (double x in values.Distinct().OrderBy(x => x))
+        {
+            if (head is not { } h || x - h > 2e-4) head = x;   // 묶음의 첫 값과 견준다(이어 붙이며 밀리지 않게 — core-verify R49 L7)
+            map[x] = head!.Value;
+        }
+        return map;
+    }
+
+    private static P3 Scale(P3 a, double k) => new(a.X * k, a.Y * k, a.Z * k);
 
     private readonly record struct P3(double X, double Y, double Z)
     {
@@ -578,65 +899,4 @@ public static class FormworkSheet
         return l0 >= l1 ? (l0, l1) : (l1, l0);
     }
 
-    // ── 엑셀 ─────────────────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// «거푸집» 시트를 적고(2D 꼴 — 절 → 부위 제목(절에 하나면 «ㅇ», 여럿이면 «1)») → 작은 제목 «- 상부슬래브» → 줄 → 절 끝 «계» 하나),
-    /// 절마다 (수량집계표의 공종 · 규격, «계» 칸, BIM 넓이, 미리 계산한 값)을 돌려준다.
-    /// </summary>
-    internal static List<(string work, string spec, string sumRef, double bim, double value)> Write(XlsxSheet sheet, string title, FormworkSheetData data)
-    {
-        CalcSheet.Columns(sheet);
-        int r = 1;
-        sheet.Text(r++, 1, title + " — 거푸집 산출근거", XlsxStyle.Title);
-        sheet.Text(r++, 1, "단위: 치수 m, 넓이 ㎡ · 줄 = 부호 (외측/내측) : 가로 × 높이 [− 구멍] — 부호는 부재의 «마크»(비었으면 유형 이름) · 직사각형이 아닌 면은 넓이만 · 값 = ROUND(식, 2)", XlsxStyle.Gray);
-        r++;
-        var totals = new List<(string, string, string, double, double)>();
-        int no = 0;
-        foreach (var section in data.Lines.GroupBy(l => l.Section))
-        {
-            no++;
-            sheet.Text(r, 1, $"{no}. {section.Key}", XlsxStyle.Bold);
-            r += 2;
-            var parts = section.GroupBy(l => l.Part).ToList();
-            int partNo = 0, first = r;
-            double sectionValue = 0;
-            foreach (var part in parts)
-            {
-                partNo++;
-                sheet.Text(r, CalcSheet.MarkColumn, parts.Count == 1 ? "ㅇ" : $"{partNo})", XlsxStyle.Bold);
-                sheet.Text(r, CalcSheet.ZoneColumn, part.Key, XlsxStyle.Bold);
-                r++;
-                foreach (var sub in part.GroupBy(l => l.Sub))
-                {
-                    if (sub.Key.Length > 0)
-                    {
-                        sheet.Text(r, CalcSheet.MarkColumn, "-");
-                        sheet.Text(r, CalcSheet.ZoneColumn, sub.Key);
-                        r++;
-                    }
-                    foreach (var line in sub)
-                    {
-                        // 슬래브 밑면 한 줄은 칸 수 · 넓이만 적은 칸 수를 먼저(R46). 안팎을 모르는 조각은 괄호 없이 비고에(R47).
-                        string cells = line.Cells > 1 ? $"칸 {line.Cells}개 · " + (line.AreaOnlyCells > 0 && line.AreaOnlyCells < line.Cells ? $"넓이만 적은 칸 {line.AreaOnlyCells}개 · " : "") : "";
-                        string note = (line.Unsure ? "안팎 확인 필요 · " : "") + cells + (line.AreaOnly ? "넓이(직사각형 아님) · " : "") + (line.Joined ? "이은 면 · " : "") +
-                                      "Id " + string.Join(", ", line.Ids.Take(6)) + (line.Ids.Count > 6 ? $" 외 {line.Ids.Count - 6}개" : "");
-                        r = CalcSheet.WriteLine(sheet, r, line.Mark, line.Tag.Length > 0 ? "(" + line.Tag + ")" : "", line.Formula, line.Count, note, out double value);
-                        sectionValue += value;
-                    }
-                }
-            }
-            // 절 끝의 «계» 하나(2D — 수량집계표가 가리킨다). 제목 줄은 값 칸이 비어 SUM 에 들지 않는다.
-            int last = r - 1;
-            sheet.Text(r, CalcSheet.EqualsColumn, "계", XlsxStyle.BoldCenter);
-            sheet.Formula(r, CalcSheet.SumColumn, $"SUM({XlsxSheet.Ref(first, CalcSheet.ResultColumn)}:{XlsxSheet.Ref(last, CalcSheet.ResultColumn)})",
-                FormulaDecomposer.RoundQuantity(sectionValue), XlsxStyle.BoldNumber2);
-            var head = data.Sections.FirstOrDefault(s => s.section == section.Key);
-            var (work, spec) = SummaryName(head.item ?? section.First().Item, head.band, data.Bands);
-            totals.Add((work, spec, sheet.FullRef(r, CalcSheet.SumColumn), head.bim, FormulaDecomposer.RoundQuantity(sectionValue)));
-            r += 3;
-        }
-        if (data.Lines.Count == 0) sheet.Text(r, 1, "거푸집으로 셀 면이 없습니다.", XlsxStyle.Gray);
-        return totals;
-    }
 }

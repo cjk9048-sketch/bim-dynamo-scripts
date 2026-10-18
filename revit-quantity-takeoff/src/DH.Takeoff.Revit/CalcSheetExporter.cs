@@ -96,11 +96,21 @@ public static class CalcSheetExporter
                 Bim = bim,
                 Verdict = Text(el, FormulaAutoFill.VerdictParam),
                 NotTarget = notTarget,
+                // R49 — 2D 산출근거 꼴: 줄의 부호(마크 — 없으면 유형 이름) · 부위 제목의 «(T=700)»(바닥 · 기초판의 두께).
+                Mark = FormworkReader.MarkOf(el),
+                Thickness = ThicknessOf(el),
             });
         }
         result.Plan = CalcPlan.Make(inputs, stored.Plan.Parts, stored.Plan.Places.Select(p => p.Name).ToList(),
                                     PartCatalog.Resolve(stored.Plan.Structure, doc.Title), stored.Plan.ReadVersion, stored.Plan.Catalog);
         return result;
+    }
+
+    // 바닥 · 기초판(Floor — 구조 기초 판도 Floor)의 두께(m). 그 밖 · 못 읽으면 0(부위 제목에 두께를 적지 않는다).
+    private static double ThicknessOf(Element el)
+    {
+        try { return el is Floor ? SolidReader.Thickness(el) : 0; }
+        catch { return 0; }
     }
 
     // 주 옵션이 아닌 디자인 옵션에 든 부재면 그 옵션 이름, 아니면 null.

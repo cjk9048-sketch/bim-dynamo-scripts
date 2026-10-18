@@ -46,6 +46,16 @@ public sealed partial class PlacePartView
     private readonly ColumnDefinition _barDone = new(), _barRest = new();
     private readonly WrapPanel _pickedValues = new(), _statusPlaces = new(), _statusParts = new(), _statusFlags = new();
     private readonly StackPanel _placeRows = new(), _partRows = new();
+
+    // 목록 칸(이름 · 규격 · 타설)의 적다 만 글을 버리는 손잡이 — ✕ · [되돌리기]가 일하기 전에 부른다. 목록을 다시 지을 때 비우고 새 칸이 건다
+    // (다른 까닭으로 다시 그려질 때는 전처럼 칸을 떠날 때 적는다 — revit-verify R49 M1).
+    private readonly List<Action> _dropPending = new();
+
+    private void DropPending()
+    {
+        foreach (var drop in _dropPending) drop();
+        _dropPending.Clear();
+    }
     private readonly ScrollViewer _placeScroll;
     private readonly Button _undo, _confirm, _clear, _sameType, _unpick, _auto, _refill, _putPlace, _noPlace, _next, _back, _finish, _hide, _showAll;
     private readonly TextBox _newPart;
@@ -147,7 +157,9 @@ public sealed partial class PlacePartView
         _back = FootButton(_ui.Button("←  이전 단계", "BtnSecondary", "부위 · 중분류로 돌아갑니다(거푸집에서 고친 것은 그대로 남습니다).", "btn.prevStep"), 14);
         close.Click += (_, _) => Close?.Invoke();
         revert.Click += (_, _) => RevertAll?.Invoke();
-        _undo.Click += (_, _) => Do(_editor.Undo);
+        // 되돌리기는 글자판을 가져가지 않는다 — 가져가면 적다 만 목록 칸이 먼저 적히고, 되돌리기가 그것을 되돌린다(revit-verify R49 M1).
+        _undo.Focusable = false;
+        _undo.Click += (_, _) => { DropPending(); Do(_editor.Undo); };
         _next.Click += (_, _) => PressNext();
         _back.Click += (_, _) =>
         {
@@ -807,6 +819,7 @@ public sealed partial class PlacePartView
         _syncing = false;
 
         // 중분류 카테고리: 고치는 중이면 이름 · 차례 · 지우기 줄(색 = 3D 의 색). 입력칸의 목록 · [단독객체]는 늘 있다.
+        _dropPending.Clear();   // 다시 짓는 칸들(중분류 · 부위)이 새로 건다
         _placeRows.Children.Clear();
         bool editPlaces = _editPlaces.IsChecked == true;
         _placeScroll.Visibility = editPlaces ? Visibility.Visible : Visibility.Collapsed;
@@ -836,7 +849,7 @@ public sealed partial class PlacePartView
         _refill.Visibility = editParts ? Visibility.Visible : Visibility.Collapsed;
         _auto.Visibility = editParts ? Visibility.Collapsed : Visibility.Visible;
         if (editParts)
-            _partRows.Children.Add(Note("무근 = 산출서에서 '무근 콘크리트'로 집계 · 중분류 생략 = 산출서 제목에 중분류를 붙이지 않음(예: '배관실 계단'이 아니라 '계단'). 차례가 산출서에 적는 차례입니다."));
+            _partRows.Children.Add(Note("차례가 산출서에 적는 차례입니다."));
         foreach (var group in _editor.Parts.GroupBy(p => PartCatalog.GroupIndex(p.Group)).OrderBy(g => g.Key))
         {
             string label = PartCatalog.Groups[group.Key].Label;
@@ -850,7 +863,7 @@ public sealed partial class PlacePartView
                     var plain = _ui.Check("무근", part.Plain, "켜면 이 부위를 산출서의 '무근 콘크리트'에 적습니다. 꺼져 있어도 유형·재료·부위 이름에 '무근'·'버림'이 있으면 무근입니다.", "plain.part." + name);
                     plain.Margin = new Thickness(8, 0, 0, 0);
                     plain.Click += (_, _) => Do(() => _editor.SetPlain(name, plain.IsChecked == true));
-                    var noZone = _ui.Check("중분류 생략", part.NoZone, "켜면 산출서 제목에 중분류를 붙이지 않습니다 — '계단'·'밸브 받침'처럼. 끄면 '배관실 벽체'처럼 중분류가 앞에 붙습니다.", "nozone.part." + name);
+                    var noZone = _ui.Check("중분류 생략", part.NoZone, "켜면 산출서에서 이 부위 아래에 중분류 작은 제목(«- 배관실»)을 달지 않고 한데 적습니다 — '계단'·'밸브 받침'처럼. 끄면 중분류가 둘 이상일 때 작은 제목으로 나눕니다.", "nozone.part." + name);
                     noZone.Margin = new Thickness(8, 0, 0, 0);
                     noZone.Click += (_, _) => Do(() => _editor.SetNoZone(name, noZone.IsChecked == true));
                     var later = _ui.Check("나중에 침", PartCatalog.IsLater(part), "켜면 거푸집에서 벽·슬래브 같은 구조체에 맞닿은 면을 이 부위에서만 뺍니다 — 구조체 쪽은 그 자리까지 셉니다(받침·PAD·디딤판처럼 나중에 붙여 치는 것).", "later.part." + name);
@@ -860,7 +873,11 @@ public sealed partial class PlacePartView
                     checks.Children.Add(plain);
                     checks.Children.Add(noZone);
                     checks.Children.Add(later);
-                    _partRows.Children.Add(EditRow("part." + name, name, null, checks,
+                    // 셋째 줄(R49): 레미콘 규격 · 타설 — 비어 있으면 처음 값이 흐리게 보인다(2D 절 제목 «( 철근 , 25 - 30 - 15 ) : 펌프차 붐타설»).
+                    var marks = new StackPanel();
+                    marks.Children.Add(checks);
+                    marks.Children.Add(SpecLine(part));
+                    _partRows.Children.Add(EditRow("part." + name, name, null, marks,
                         _editor.CanMovePart(name, -1), _editor.CanMovePart(name, 1), step => Do(() => _editor.MovePart(name, step)), () => AskDelete("part", name),
                         text => Do(() => _editor.RenamePart(name, text))));
                 }
@@ -882,6 +899,65 @@ public sealed partial class PlacePartView
             line.Children.Add(buttons);
             _partRows.Children.Add(line);
         }
+    }
+
+    // 부위 목록 고치기의 셋째 줄: «규격 [25-30-15] 타설 [펌프차 붐타설]» — Enter 나 칸을 떠날 때 적는다(빈 칸 = 처음 값).
+    private FrameworkElement SpecLine(ZonePart part)
+    {
+        string name = part.Name;
+        bool plain = part.Plain || CalcPlan.WorkOf("", "", name) == CalcPlan.Plain;
+        var spec = _ui.Input(PartCatalog.DefaultSpec(name, plain, part.Group), "산출근거 절 제목의 레미콘 규격(굵은골재-강도-슬럼프). 비우면 처음 값(흐린 글).", "spec.part." + name);
+        var pour = _ui.Input(PartCatalog.DefaultPour, "절 제목 끝의 타설 방법. 비우면 처음 값(흐린 글).", "pour.part." + name);
+        spec.Text = part.Spec ?? "";
+        pour.Text = part.Pour ?? "";
+        spec.Width = 92;
+        pour.Width = 120;
+        spec.MinHeight = pour.MinHeight = 24;
+        bool sent = false;
+        // 규격이 숫자-숫자-숫자가 아니면 빨간 칸 · 적지 않음(revit-verify M5).
+        bool Bad() => spec.Text.Trim().Length > 0 && PartCatalog.NormalizeSpec(spec.Text) == null;
+        void Look()
+        {
+            bool bad = Bad();
+            spec.BorderBrush = bad ? _ui["BadFg"] : _ui["InputLine"];
+            spec.Background = bad ? _ui["BadBg"] : _ui["InputBg"];
+        }
+        spec.TextChanged += (_, _) => Look();
+        void Commit()
+        {
+            // 틀린 규격은 적지 않고(칸은 빨갛게 남음) 타설만 적는다(revit-verify R49 L2).
+            string? tidy = Bad() ? part.Spec : PartCatalog.NormalizeSpec(spec.Text);
+            if (sent || (tidy == part.Spec && (pour.Text.Trim().Length == 0 ? null : pour.Text.Trim()) == part.Pour)) return;
+            sent = true;   // 적으면 목록이 다시 그려져 이 칸이 사라진다(이름 칸과 같은 까닭 — 한 번만)
+            Do(() => _editor.SetSpec(name, tidy ?? "", pour.Text));
+        }
+        void Enter()
+        {
+            Commit();
+            // 빨간 테두리는 글을 치는 동안 칸의 초점 테두리에 가려진다 — Enter 에 짧은 알림(revit-verify R49 L1).
+            if (Bad()) ShowMessage("규격은 «25-30-15» 꼴(숫자-숫자-숫자)로 적습니다.", warn: true);
+        }
+        foreach (var box in new[] { spec, pour })
+        {
+            box.KeyDown += (_, e) =>
+            {
+                // 한글을 조합하는 중의 Enter 는 ImeProcessed 로 온다 — 조합이 끝난 뒤(글이 칸에 들어간 뒤) 적는다. 그사이 창이 닫혔으면 적지 않는다.
+                if (e.Key == Key.Enter) { Enter(); e.Handled = true; }
+                else if (e.Key == Key.ImeProcessed && e.ImeProcessedKey == Key.Enter)
+                {
+                    box.Dispatcher.BeginInvoke(new Action(() => { if (box.IsLoaded) Enter(); }), System.Windows.Threading.DispatcherPriority.Input);
+                    e.Handled = true;
+                }
+            };
+            box.LostFocus += (_, _) => Commit();
+        }
+        _dropPending.Add(() => sent = true);
+        var line = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8, 3, 0, 0) };
+        line.Children.Add(new TextBlock { Text = "규격", Foreground = _sub, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) });
+        line.Children.Add(spec);
+        line.Children.Add(new TextBlock { Text = "타설", Foreground = _sub, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 4, 0) });
+        line.Children.Add(pour);
+        return line;
     }
 
     // 고른 부재에 넣는 단추: [색] 이름 — 고른 부재가 모두 이 값이면 켜져 보이고(state = "on"), 일부만이면 테두리만("some").
@@ -961,6 +1037,7 @@ public sealed partial class PlacePartView
         }
         box.KeyDown += (_, e) => { if (e.Key == Key.Enter) { Commit(); e.Handled = true; } };
         box.LostFocus += (_, _) => Commit();
+        _dropPending.Add(() => sent = true);
         // ✕ 를 누르면 이 줄의 적다 만 이름은 버린다. 도구 단추는 글자판을 가져가지 않으므로, 버리지 않으면 줄이 '지울까요?'로 바뀌어
         // 이름 칸이 사라질 때 뒤늦게 이름 고치기가 모델에 적히고 묻던 줄까지 접힌다(2026-10-13 검토 R26 — 읽어서 찾음).
         var tools = EditTools(id, canUp, canDown, move, () =>
@@ -1007,6 +1084,8 @@ public sealed partial class PlacePartView
     // ✕: 쓰는 부재가 없으면 바로 지우고, 있으면 그 줄을 '지울까요?' 줄로 바꾼다(JACK 2026-10-13 — 아무 일도 안 일어나면 고장으로 보인다).
     private void AskDelete(string kind, string name)
     {
+        // 다른 줄의 적다 만 칸도 버린다 — 줄이 '지울까요?'로 바뀌며 그 칸이 사라질 때 뒤늦게 적히면 묻던 줄이 접힌다(revit-verify R49 M1).
+        DropPending();
         var users = kind == "place" ? _editor.UsersOfPlace(name) : _editor.UsersOfPart(name);
         if (users.Total == 0)
         {
