@@ -72,6 +72,8 @@ public sealed class InfraworksCommand
                 tr.Commit();
             }
             if (regions == null || regions.Count == 0) return;
+            // ★★★[v103.1.12 · JACK 1015 ②] 정지면_DH(옹벽 합성)를 내보낸다 — 빠진 옹벽이 있으면 먼저 합성하고, 그래도 빠졌으면 묻는다(기본 아니오 = 멈춤)
+            if (!CompositeGate.Ensure(doc, "infraworks 기초자료")) return;
 
             // 폴더 선택 — 원하는 위치에 내보낸다(JACK 0724).
             var dlg = new Microsoft.Win32.OpenFolderDialog { Title = "infraworks 기초자료 내보낼 폴더 선택" };

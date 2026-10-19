@@ -165,6 +165,102 @@ public static class WallTags
         return (s0, l0);
     }
 
+    /// <summary>★★[v103.1.14 · JACK 1014 ② «번호 그대로» · 계획 검토 중간 4] 번호 물려받기를 <b>합성 전에</b> 미리 잰다 — <paramref name="from"/> 옹벽 표면이 있고,
+    /// <paramref name="to"/> 번호 이름의 살아 있는 표면은 모두 <paramref name="to"/> 옹벽 것(이번 합성이 지울 것 — 표지가 없거나 표지 번호가 같다)이어야 한다.
+    /// 반환 = 못 하는 까닭(빈 값이면 된다). 못 하면 부른 쪽은 물려받지 않고 합성한다(같은 실패가 회마다 되풀이되지 않게).</summary>
+    public static string RenumberBlock(Transaction tr, int from, int to, ObjectId protect)
+    {
+        int mine = 0;
+        var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+        foreach (ObjectId sid in civilDoc.GetSurfaceIds())
+        {
+            if (sid == protect) continue;
+            if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s || !IsWallSurface(s.Name, out int nn)) continue;
+            var t = ReadSurface(tr, s);
+            if (nn == from) { if (t != null && t.Value.No != from) return $"'{s.Name}'의 표지가 옹벽 {t.Value.No}"; mine++; }
+            if (nn == to && t != null && t.Value.No != to) return $"'{s.Name}'(이름은 옹벽 {to})의 표지가 옹벽 {t.Value.No} — 지워지지 않아 이름이 겹친다";
+        }
+        return mine > 0 ? "" : $"옹벽 {from}의 표면을 못 찾았다";
+    }
+
+    /// <summary>★★[v103.1.14 · JACK 1014 ② «번호 그대로»] 번호 물려받기 — <paramref name="from"/> 옹벽 결과물이 <paramref name="to"/> 번호가 된다:
+    /// 표면 이름(<c>…옹벽{from}_DH…</c> → <c>…옹벽{to}_DH…</c>) · 표면 표지(<see cref="SurfKey"/> — 제자리에서 고친다 · <see cref="TagSurface"/>는 새 칸을 걸고 옛 칸을 떼기만 해 고아가 남는다) ·
+    /// 선 꼬리표(<see cref="Layers"/> 위 <see cref="AppName"/>). 구역은 저마다 적힌 그대로.
+    /// <para><paramref name="to"/> 옹벽 결과물은 <b>먼저</b> 지웠어야 한다 — 같은 트랜잭션에서 지운 표면의 이름은 다시 줄 수 있다(1019 화면 없는 Civil 실측 E1 · 살아 있는 표면과 같은 이름은 «The name may exist»).
+    /// 이름이 그대로 안 들어가면 예외 — 부른 쪽이 트랜잭션째 물린다.</para></summary>
+    public static (int Surfaces, int Lines) Renumber(Database db, Transaction tr, int from, int to, ObjectId protect)
+    {
+        int ns = 0, nl = 0;
+        var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+        var surfs = new List<ObjectId>();
+        foreach (ObjectId sid in civilDoc.GetSurfaceIds())
+            if (sid != protect && tr.GetObject(sid, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.Surface s && IsWallSurface(s.Name, out int nn) && nn == from) surfs.Add(sid);
+        foreach (var sid in surfs)
+        {
+            var s = (Autodesk.Civil.DatabaseServices.Surface)tr.GetObject(sid, OpenMode.ForWrite);
+            var m = WallName.Match(s.Name);
+            string want = $"{m.Groups[1].Value}옹벽{to}_DH{m.Groups[3].Value}";
+            s.Name = want;
+            if (s.Name != want) throw new System.InvalidOperationException($"표면 이름을 '{want}'로 못 바꿨다('{s.Name}')");
+            var t = ReadSurface(tr, s);
+            string reg = t?.Region ?? "";
+            bool done = false;
+            if (!s.ExtensionDictionary.IsNull && tr.GetObject(s.ExtensionDictionary, OpenMode.ForRead) is DBDictionary d && d.Contains(SurfKey)
+                && tr.GetObject(d.GetAt(SurfKey), OpenMode.ForWrite) is Xrecord xr)
+            {
+                xr.Data = new ResultBuffer(new TypedValue((int)DxfCode.Int32, to), new TypedValue((int)DxfCode.Text, reg));
+                done = true;
+            }
+            if (!done) TagSurface(tr, sid, to, reg);
+            var back = ReadSurface(tr, s);
+            if (back == null || back.Value.No != to) throw new System.InvalidOperationException($"'{want}' 표지를 옹벽 {to}로 못 고쳤다");
+            ns++;
+        }
+        var set = new HashSet<string>(Layers, System.StringComparer.OrdinalIgnoreCase);
+        var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+        foreach (ObjectId id in ms)
+        {
+            if (tr.GetObject(id, OpenMode.ForRead) is not AcadEntity e || !set.Contains(e.Layer)) continue;
+            var t = Read(e);
+            if (t == null || t.Value.No != from) continue;
+            Tag(db, tr, e, to, t.Value.Region);
+            nl++;
+        }
+        return (ns, nl);
+    }
+
+    /// <summary>★[v103.1.12] 옹벽 하나의 면(가상옹벽 · 순수옹벽 중 하나) 보이기·숨기기 — 바뀐 수.</summary>
+    public static int SetWallFaceVisible(Transaction tr, int no, bool pure, bool visible)
+    {
+        int n = 0;
+        var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+        foreach (ObjectId sid in civilDoc.GetSurfaceIds())
+        {
+            if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
+            var m = WallName.Match(s.Name ?? "");
+            if (!m.Success || m.Groups[1].Value != (pure ? "순수" : "가상") || !int.TryParse(m.Groups[2].Value, out int nn) || nn != no) continue;
+            try
+            {
+                if (((AcadEntity)s).Visible != visible) { ((AcadEntity)tr.GetObject(sid, OpenMode.ForWrite)).Visible = visible; n++; }
+            }
+            catch { }
+        }
+        return n;
+    }
+
+    /// <summary>★★[v103.1.12 · JACK 1015 ③ «합성 전 옹벽은 옹벽 면을 보이게(합성하면 정지면_DH만)»] 합성에 안 든 옹벽(미룸 · 보류)의 «옹벽 면»을 켠다.
+    /// 지금 정지면(P0)에서 지은 옹벽이면 순수옹벽 면(옹벽 변환 직후 보이던 그 면) · 정지면이 바뀌었으면 가상옹벽 면(원지반 · 폴리곤 · 단높이로 지어 정지면과 무관 —
+    /// 순수옹벽은 정지면 몫이라 낡았다 · 합성 때 다시 짓는다). 나머지 하나는 끈다. 반환 = 한 일(로그).</summary>
+    public static string ShowOutsideWall(Transaction tr, WallRec w, string p0)
+    {
+        // ★[코드 검토 낮음 2] 서 있던 단이 움직인 보류는 옛 자리 면이라 켜지 않는다(엉뚱한 자리에 보인다) — 둘 다 끈다(종전과 같다)
+        if (WallList.IsMovedHold(w.Hold)) { SetWallFaceVisible(tr, w.No, true, false); SetWallFaceVisible(tr, w.No, false, false); return $"{w.No}:움직인 보류라 숨김"; }
+        bool fresh = w.P0Handle.Length > 0 && w.P0Handle == p0;
+        int a = SetWallFaceVisible(tr, w.No, fresh, true);
+        SetWallFaceVisible(tr, w.No, !fresh, false);
+        return $"{w.No}:{(fresh ? "순수" : "가상")}{(a > 0 ? "켬" : "그대로")}";
+    }
+
     /// <summary>번호 붙은 옹벽 표면 보이기·숨기기 — 바뀐 수.</summary>
     public static int SetWallSurfacesVisible(Transaction tr, bool visible)
     {

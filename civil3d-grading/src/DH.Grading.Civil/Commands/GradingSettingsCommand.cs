@@ -143,9 +143,14 @@ public sealed class MiscSettingsCommand
 
     AfterCs:
 
+        // ★★★[v103.1.7 · JACK 1014 «현장확인 말고 로그로»] 자가점검 — 재작성 앞뒤의 지문(삼각형 · 점 · 표고)을 견줘 «굳은 면(…이전 · XML 면 · 소스가 지워진 면)이 그대로인가»를
+        //   기록에 한 줄로 남긴다(«이어서» 뒤 [저장]에서 Civil이 죽던 길 · 다시 연 도면에서 앞 구역 면이 말없이 바뀌던 길 — v103.1.6). Civil이 이 도중에 죽으면 진행 표지가 남아 다음 시작 때 알린다.
+        using var jobS = new SelfCheckLog.Job("정지옵션 저장(지표면 재작성)", doc.Name);
         // [JACK 0728] '결과지표면만 표시' 저장 즉시 반영 — 해제=숨겼던 지표면 전부 표시 / 체크=정지면_DH만(있을 때).
         try
         {
+            // ★[v103.1.7 · 확인 검토 낮음 3] 작업 앞 상태는 표시를 바꾸기 <b>전에</b> 잰다(숨김 · 보이기가 «구식»을 붙일 수 있다)
+            var issuesBefore = SelfCheck.IssuesNow(doc.Database);
             using var tr = doc.Database.TransactionManager.StartTransaction();
             if (!GradingSettings.ShowOnlyResultSurface)
             {
@@ -171,12 +176,14 @@ public sealed class MiscSettingsCommand
             // ★★[v32.7] <b>둘만이 아니라 전부.</b> 숨김은 도면의 <b>모든</b> 지표면에 붙으므로
             //   되살리는 것도 전부여야 한다(둘만 챙겼더니 나머지에 느낌표가 남았다).
             // ★[v103.1.5 · 검토 1012 중간 1] 한 일을 버리지 않는다 — 못 굳힌 XML 면이 있으면 로그와 명령줄에 남긴다(종전엔 반환 글을 아무도 안 받았다)
+            var printsBefore = SelfCheck.Prints(tr, doc.Database);   // ★[v103.1.7] 재작성 앞 지문(읽기만) · 작업 앞 문제는 위(issuesBefore — 검토 낮음 6)
             string rbNote = GradingBuilder.RebuildAllSurfaces(tr);
             // ★★★[v103.1.6 · 검토 1013 낮음 3] 스냅샷 재작성이 실패했는데 되찍기까지 실패했으면 <b>커밋하지 않는다</b> — 실패한 스냅샷 재작성을 커밋하면
             //   그다음 재작성에서 Civil이 죽는다(1013 실측 · 물리면 산다). 이 트랜잭션은 표시 바꾸기와 재작성뿐이라 물려도 잃는 것은 이번 표시 반영뿐이다.
-            bool snapDead = rbNote.IndexOf("되찍기도 실패", System.StringComparison.Ordinal) >= 0;
+            // ★★[v103.1.7 · 검토 1013 확인 낮음 6] 되찍은 면이 재작성 뒤 바뀌었어도 물린다(GradingBuilder.MustAbort) — 되찍기 → 재작성은 같은 모양이어야 한다
+            bool snapDead = GradingBuilder.MustAbort(rbNote);
             if (snapDead) tr.Abort(); else tr.Commit();
-            try { DiagLog.Append($"\n■ {System.DateTime.Now:HH:mm:ss} 정지옵션 저장 — {rbNote}{(snapDead ? "\n  ⚠되찍기까지 실패해 표시 반영 · 재작성을 되돌렸다(커밋 안 함)" : "")}\n"); } catch { }
+            try { DiagLog.Append($"\n■ {System.DateTime.Now:HH:mm:ss} 정지옵션 저장 — {rbNote}{(snapDead ? "\n  ⚠되찍기까지 실패했거나 되찍은 면이 바뀌어 표시 반영 · 재작성을 되돌렸다(커밋 안 함)" : "")}\n"); } catch { }
             if (rbNote.Contains("⚠못 다룸")) try { doc.Editor.WriteMessage("\n[기타 설정] 지표면 재작성 — " + rbNote.Substring(rbNote.IndexOf("⚠못 다룸", System.StringComparison.Ordinal))); } catch { }
             // ★[v103.1.6] 스냅샷을 못 다룬 면이 있으면(되찍지 못함 · 되찍은 뒤 바뀜 · 스냅샷 재작성 실패) 명령줄에도 한 줄 — 조용히 넘기지 않는다
             int snapBadAt = -1;
@@ -197,11 +204,36 @@ public sealed class MiscSettingsCommand
                 catch { }
             }
             // ★[검토 1012 2차 낮음 7] 옛 판(~v103.1.4)이 지은 옹벽 면을 <b>지금 모양 그대로</b> 굳혔으면 한 줄 알린다 — 옛 판에서 이미 바뀌어 버린 면이면 틀린 채 굳는다
-            if (rbNote.Contains("지금 굳힌 옛 면"))
+            //   ★[v103.1.7 · 검토 1013 확인 낮음 3] 물렸으면(커밋 안 함) 굳힌 것도 되돌아갔다 — 알리지 않는다
+            if (!snapDead && rbNote.Contains("지금 굳힌 옛 면"))
                 try { doc.Editor.WriteMessage("\n[기타 설정] 옛 판(v103.1.4 이하)이 지은 옹벽 면을 지금 모양 그대로 굳혔습니다 — 느낌표가 남을 수 있습니다(원본 파일이 없다는 뜻). 옹벽 변환 · 사면 변환을 한 번 하면 새로 지어집니다."); } catch { }
             doc.Editor.Regen();
+            // ★★★[v103.1.7] 자가점검 — 커밋(또는 물림) 뒤 <b>새 트랜잭션</b>에서 지문 · 상태를 다시 읽어 견준다(화면이 쓰는 값 — 트랜잭션 안의 값이 아니다)
+            try
+            {
+                Dictionary<string, (SelfCheck.Print P, bool Frozen)> printsAfter; string st; int sb;
+                using (var trA = doc.Database.TransactionManager.StartTransaction())
+                {
+                    printsAfter = SelfCheck.Prints(trA, doc.Database);
+                    (st, sb, _) = SelfCheck.StateVs(trA, doc.Database, issuesBefore);
+                    trA.Commit();
+                }
+                var (fz, other, same) = SelfCheck.Compare(printsBefore, printsAfter);
+                // ★[v103.1.7 · 검토 낮음 6] «표면단위 플래그 잔여 ⚠[…]»는 남의 면(원지반 등)까지 센 값이라 판정에 안 넣는다 — 우리 면은 StateVs가 본다(정지면 생성 끝과 같게)
+                string wb = SelfCheck.WarnBits(System.Text.RegularExpressions.Regex.Replace(rbNote, @"표면단위 플래그 잔여 \d+( ⚠\[[^\]]*\])?", "표면단위 플래그(판정에 안 넣음)"));
+                bool okS = !snapDead && fz.Count == 0 && sb == 0 && wb.Length == 0;
+                jobS.Done(okS, (snapDead ? "⚠재작성을 물렸다(커밋 안 함 — 도면은 [저장] 전 그대로) · " : "")
+                    + $"우리 지표면 {printsBefore.Count}개 — 지문 그대로 {same}"
+                    + (fz.Count > 0 ? $" · ⚠굳은 면이 바뀌었다: {string.Join(" · ", fz)}" : " · 굳은 면 바뀜 0")
+                    + (other.Count > 0 ? $" · 바뀐 면(그 소스가 바뀌었으면 맞다): {string.Join(" · ", other)}" : "")
+                    + " · " + st + (wb.Length > 0 ? " · " + wb : "")
+                    + " · 재작성: " + SelfCheck.NoFootnote(rbNote));
+                if (fz.Count > 0) SelfCheck.Warn(doc, "정지옵션 저장 뒤 굳은 지표면이 바뀌었습니다 — " + string.Join(" · ", fz));
+                SelfCheck.RecheckAtIdle(doc, "정지옵션 저장", sb, issuesBefore);
+            }
+            catch (System.Exception jx) { jobS.Done(false, $"자가점검 실패 — {jx.GetType().Name}: {jx.Message}"); }
         }
-        catch { }
+        catch (System.Exception ex) { jobS.Done(false, $"지표면 재작성 중 예외 — {ex.GetType().Name}: {ex.Message}"); }
 
         // ★[JACK 0910] 옹벽 형태가 이 창으로 옮겨 왔다 — 정지 창의 <b>예시 그림</b>이 그 값을 그린다.
         //   여기서 안 알리면 창은 <b>옛 옹벽 모양</b>을 계속 보여 준다(§78 "화면을 옮기면 사슬도 옮겨라").

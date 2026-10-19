@@ -603,10 +603,15 @@ public static partial class WallDaylight
         public List<ComposeStep> Steps = new();
         /// <summary>못 한 단계(옹벽 차례 · 0부터) · 까닭.</summary>
         public int FailIndex = -1;
+        /// <summary>★[v103.1.12 · 계획 3판 중간 3] 못 한 것이 옹벽 한 단계가 아니라 <b>끝의 높이 오차 합</b>이다(그때 <see cref="FailIndex"/>는 늘 마지막 옹벽 — 그 옹벽 탓이라는 뜻이 아니다).</summary>
+        public bool FailFinal;
         public string Fail = "";
         public int Tier = 3;
-        /// <summary>높이 오차 합 — 옹벽마다의 예산(폴리곤 안은 늘 합성 전 면 위에서 짓는다) 중 최대와, 손댄 구역이 겹친 바깥에서 합성 전 면과 <b>잰</b> 차이 중 큰 것.</summary>
+        /// <summary>높이 오차 합 — 옹벽마다의 예산(폴리곤 안은 늘 합성 전 면 위에서 짓는다) 중 최대와, 손댄 구역이 겹친 바깥에서 합성 전 면과 <b>잰</b> 차이,
+        /// ★[v103.1.13] 정지면 그대로인 면에서 Civil처럼 먼저 뒤집어 바뀐 높이(<see cref="Outside"/>) 중 큰 것.</summary>
         public double HeightBudget;
+        /// <summary>★★[v103.1.13] 넘길 면 전체의 «Civil이 고칠 면» — 정지면 그대로인 면끼리는 먼저 뒤집었다(<see cref="CivilSafeMesh.FixOutside"/>).</summary>
+        public CivilSafeMesh.OutsideFix Outside = new();
         /// <summary>손댄 구역이 겹친 바깥(모든 폴리곤 밖 · 다시 지은 삼각형 꼭짓점)에서 합성 전 면과 잰 높이 차 최대 — 겹치지 않으면 0.</summary>
         public double SharedDev;
         public double HeightLimit = 1e-2;
@@ -614,10 +619,12 @@ public static partial class WallDaylight
         public bool OverForced;
         public bool ZonesOverlap;
         public string TierText => Tier == 1 ? "정확" : Tier == 2 ? "⚠거의" : "⚠못 함";
-        public string Summary => string.Format(CultureInfo.InvariantCulture, "옹벽 {0}개 차례 합성 · 판정 {1}({2}) · 높이 오차 합 {3:F3}mm(옹벽마다의 최대{4}) · 한도 {5:F0}mm{6}",
+        public string Summary => string.Format(CultureInfo.InvariantCulture, "옹벽 {0}개 차례 합성 · 판정 {1}({2}) · 높이 오차 합 {3:F3}mm(옹벽마다의 최대{4}{7}) · 한도 {5:F0}mm{6}{8}",
             Steps.Count, Tier, TierText, HeightBudget * 1000,
             ZonesOverlap ? string.Format(CultureInfo.InvariantCulture, " · 손댄 구역이 겹친 바깥에서 합성 전 면과 잰 차 {0:F3}mm", SharedDev * 1000) : "",
-            HeightLimit * 1000, Fail.Length > 0 ? " · ⚠" + Fail : "");
+            HeightLimit * 1000, Fail.Length > 0 ? " · ⚠" + Fail : "",
+            Outside.Flipped > 0 ? string.Format(CultureInfo.InvariantCulture, " · 정지면 먼저 뒤집기 {0:F3}mm", Outside.MaxDz * 1000) : "",
+            Outside.Text.Length > 0 ? " · " + Outside.Text : "");
     }
 
     /// <summary>★★★[v103.0 · JACK 0930 «옹벽이 남아야» · 계획 검토 v103 H2] <b>여러 옹벽을 합성 전 면 위에 차례로</b> — P_k = BuildComposite(P_{k−1}, 옹벽 k).
@@ -756,13 +763,26 @@ public static partial class WallDaylight
             }
         }
         res.SharedDev = dev;
-        res.HeightBudget = Math.Max(maxB, dev);
+        // ④ ★★[v103.1.13 · 1016 13:42 현장] 넘길 면 전체에서 «Civil이 고칠 면»을 찾아, 정지면 그대로인 면끼리면 Civil과 같은 뒤집기를 먼저 한다(CivilSafeMesh.FixOutside 설명).
+        //    그날 정지면_DH(전체구간 절토 옹벽 앞면)에 있던 넓이 0 면 하나를 Civil이 가져오며 뒤집어 6.125mm가 바뀌었고, 옹벽 쪽 5.929mm와 더해 옹벽을 버렸다(약 90m 떨어진 자리).
+        //    뒤집어 바뀐 높이는 정지면 그대로인 면끼리라 옹벽 구역 오차와 같은 자리에서 겹치지 않는다 — 판의 오차는 둘 중 큰 것
+        //    ★[코드 검토 낮음 5] 옹벽 구역 면은 P0 면과 값이 같아도(다시 나눈 삼각형이 우연히 같은 꼭짓점 · 같은 차례) 정지면 그대로인 면으로 치지 않는다
+        var zoneSet = new HashSet<Tri>();
+        foreach (var s0 in res.Steps) if (s0.R.Zone != null) zoneSet.UnionWith(s0.R.Zone);
+        cur = CivilSafeMesh.FixOutside(cur, t => original.Contains(t) && !zoneSet.Contains(t), out var ofx);
+        res.Outside = ofx;
+        res.HeightBudget = Math.Max(Math.Max(maxB, dev), ofx.MaxDz);
         int tier = worst;
-        if (res.HeightBudget > lim)
+        // ★[코드 검토 중간 2] 정지면 먼저 뒤집기는 늘 기본 한도 1cm — «Civil이 반드시 합칠 쌍 곁» 허용(1.5cm · lim)은 그 쌍 곁에서만 쓴다
+        const double OutsideLimit = 1e-2;
+        if (dev > lim || ofx.MaxDz > OutsideLimit)
         {
-            res.Tier = 3; res.FailIndex = walls.Count - 1;
-            res.Fail = string.Format(CultureInfo.InvariantCulture, "손댄 구역이 겹친 바깥에서 합성 전 면과 {0:F1}mm 어긋난다(한도 {1:F0}mm) — 마지막 옹벽 {2}를 빼고 다시 지정하세요",
-                dev * 1000, lim * 1000, walls[^1].No);
+            res.Tier = 3; res.FailIndex = walls.Count - 1; res.FailFinal = true;
+            res.Fail = dev > lim
+                ? string.Format(CultureInfo.InvariantCulture, "손댄 구역이 겹친 바깥에서 합성 전 면과 {0:F1}mm 어긋난다(한도 {1:F0}mm) — 마지막 옹벽 {2}를 빼고 다시 지정하세요",
+                    dev * 1000, lim * 1000, walls[^1].No)
+                : string.Format(CultureInfo.InvariantCulture, "옹벽이 손 안 댄 정지면_DH 자리에 Civil이 가져오며 고치는 면이 있다 — 고치면 그 자리 높이가 {0:F1}mm 바뀐다 @{1}(한도 {2:F0}mm · 옹벽 탓이 아니다)",
+                    ofx.MaxDz * 1000, ofx.At, OutsideLimit * 1000);
             return res;
         }
         if (res.HeightBudget > 1e-3) tier = Math.Max(tier, 2);

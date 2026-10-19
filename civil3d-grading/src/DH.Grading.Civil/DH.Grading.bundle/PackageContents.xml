@@ -6,7 +6,7 @@
   Contents 폴더에 빌드 산출물(DH.Grading.Civil.dll, DH.Grading.Core.dll)과 뷰 LISP를 넣을 것.
 -->
 <ApplicationPackage SchemaVersion="1.0"
-                    AppVersion="93.8.0"
+                    AppVersion="103.1.14"
                     ProductType="Application"
                     Name="DH 정지(절성토)"
                     Description="계단식 정지 비탈면 자동 생성 (distance-field)">
@@ -40,6 +40,7 @@
         <Command Global="DHCONTOURBOX" Local="DHCONTOURBOX" />
         <Command Global="DHCONTOURWEB" Local="DHCONTOURWEB" />
         <Command Global="DHCROP" Local="DHCROP" />
+        <Command Global="DHSELFCHECK" Local="DHSELFCHECK" />
         <Command Global="DHEXCAV" Local="DHEXCAV" />
         <Command Global="DHEXCAVPANEL" Local="DHEXCAVPANEL" />
         <Command Global="DHEXCAVSLOPE" Local="DHEXCAVSLOPE" />
@@ -72,6 +73,10 @@
         <Command Global="DHVIEWG" Local="DHVIEWG" />
         <Command Global="DHVIEWP" Local="DHVIEWP" />
         <Command Global="DHXVIEW" Local="DHXVIEW" />
+        <!-- ★[JACK 0915 배포판] 코드의 [CommandMethod]를 전부 싣는다 —
+             자동 로드라 없어도 돌긴 하지만, 매니페스트가 실제와 어긋나 있으면
+             "이 명령이 있는지" 확인할 길이 도면 쪽에 남지 않는다. -->
+        <Command Global="DHWALLCOMP" Local="DHWALLCOMP" />
       </Commands>
     </ComponentEntry>
     <!-- [JACK 0731] 3D 뷰 전환 단축 LISP(v1~v4·vv1~vv3) — 애드인과 함께 항상 자동 로드(설치 안 돼 있으면 이걸로 대체).

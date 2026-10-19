@@ -37,3 +37,11 @@ DHWALLCOMP_진단.log
 # LandXML로 만드는 면의 원본(v103.1.5 — 도면마다 폴더 · 합성 하나가 수십 MB) · 옛 판 고정 이름 파일을 물린 것
 DH_XML/
 *.옛판.xml
+
+# 자가점검 기록(v103.1.7 — 실행마다 덧붙이는 현장 기록 · 화면 없는 Civil 시험은 «_화면없음»이 붙는다)
+DH_자가점검*.log
+DH_자가점검_보고*.txt
+DH_진행중*.txt
+DH_진행중*.txt.tmp
+DH_세션*.txt
+DH_세션*.txt.tmp

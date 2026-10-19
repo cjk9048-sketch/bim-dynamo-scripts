@@ -159,6 +159,13 @@ public static class GradingPalette
         catch { }
     }
 
+    /// <summary>★[v103.1.12] «옹벽 합성 미루기» 칸 · [옹벽 합성] · «대기 N»만 다시 맞춘다 — <see cref="Refresh"/>(SyncTo)는 치고 있던 숫자를 도면 값으로 되돌리므로 합성 끝에는 이것만.</summary>
+    internal static void RefreshComposite()
+    {
+        try { if (_ps != null && _ps.Visible) _panel?.RefreshComposite(); }
+        catch { }
+    }
+
     /// <summary>★[JACK 0910] <b>예시 그림만</b> 다시 그린다 — [기타 설정]에서 옹벽 형태를 바꿨을 때.
     ///
     /// <para><see cref="Refresh"/>를 쓰면 안 된다. 그것은 <c>SyncTo</c>라

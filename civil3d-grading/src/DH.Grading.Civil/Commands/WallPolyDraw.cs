@@ -53,10 +53,14 @@ internal static class WallPolyDraw
     /// <param name="nStart">구간 <b>첫 끝</b>에서의 바깥쪽 법선 — 이 반대쪽으로는 못 그린다.</param>
     /// <param name="nEnd">구간 <b>끝 끝</b>에서의 바깥쪽 법선.</param>
     /// <param name="outwardSide">★[v102.2] 바깥쪽이 구간 진행의 왼쪽 +1 · 오른쪽 −1 · 모름 0(<see cref="GradingGeometry.OutwardSideOfTravel"/>) — 폴리곤을 어느 쪽으로 두르나.</param>
+    /// <param name="fixA">★★[v103.1.14 · JACK 1019 «새 쪽 끝 한 점만 — 옛 옹벽 반대쪽 측선은 지은 그대로»] 이어 짓기 — 구간 끝 끝(end1 · 시점 쪽)의 측선 방향을 이것으로 고정(찍지 않음 · 맞닿은 뒤 옹벽이 지은 방향).
+    /// <paramref name="fixB"/>는 첫 끝(end0 · 종점 쪽 — 앞 옹벽). 고정한 방향이 데이라잇에 안 닿거나 조립이 찍은 방향대로 못 이으면(물러남) <b>null</b> — 지은 그대로를 못 지키면 짓지 않는다(계획 검토 중간 1).</param>
+    /// <param name="extNote">이어 짓기 안내(찍을 끝 프롬프트에 붙임 — 예: «옹벽 1에 이어 짓습니다»).</param>
     internal static List<Point3>? Run(Document doc, IReadOnlyList<Point3> dayRing,
                                       IReadOnlyList<Point3> seg,
                                       (double X, double Y) nStart, (double X, double Y) nEnd, int outwardSide,
-                                      out List<Point3>? wallChain, out List<bool>? isWall, out string log)
+                                      out List<Point3>? wallChain, out List<bool>? isWall, out string log,
+                                      (double X, double Y)? fixA = null, (double X, double Y)? fixB = null, string extNote = "")
     {
         log = ""; wallChain = null; isWall = null;
         Editor ed = doc.Editor;
@@ -149,6 +153,26 @@ internal static class WallPolyDraw
                 var from = step == 0 ? end1 : end0;
                 var nrm = step == 0 ? nEnd : nStart;      // ★그 끝의 바깥쪽 법선
                 string nm = step == 0 ? "시점" : "종점";
+                // ★★[v103.1.14 · JACK 1019] 이어 짓기 — 맞닿은 옹벽 쪽 끝은 찍지 않고 그 옹벽이 지은 측선 방향 그대로(찍었을 때와 같은 셈 — 데이라잇에 닿는 점 · 여유)
+                var fix = step == 0 ? fixA : fixB;
+                if (fix != null)
+                {
+                    double fl = System.Math.Sqrt(fix.Value.X * fix.Value.X + fix.Value.Y * fix.Value.Y);
+                    if (fl < 1e-12 || !GradingGeometry.RayRingHitOutward(dayRing, from.X, from.Y, fix.Value.X, fix.Value.Y, nrm.X, nrm.Y,
+                            out double kx, out double ky, out double krun, MinRun))
+                    {
+                        log = $"  ⚠이어 짓기 — {nm} 쪽(맞닿은 옹벽 쪽) 측선을 그 옹벽이 지은 방향 그대로 데이라잇까지 못 그었다(노선 안쪽을 향하거나 데이라잇에 안 닿음) — 지은 그대로를 못 지켜 짓지 않는다\n";
+                        return null;
+                    }
+                    double ux0 = fix.Value.X / fl, uy0 = fix.Value.Y / fl, mg0 = System.Math.Max(0, GradingSettings.WallPolygonMargin);
+                    var got0 = new Point3(kx + ux0 * mg0, ky + uy0 * mg0, z);
+                    if (step == 0) { pA = got0; dayA = new Point3(kx, ky, z); dirA = (ux0, uy0); }
+                    else { pB = got0; dayB = new Point3(kx, ky, z); dirB = (ux0, uy0); }
+                    sb.Append($"\n      {nm} — 맞닿은 옹벽 쪽 측선 그대로(찍지 않음) · 데이라잇 ({kx:F1},{ky:F1}) · 구간 끝에서 {krun:F1}m · 방향 ({ux0:F3},{uy0:F3})");
+                    if (Make(new List<Point3d> { from, new Point3d(kx, ky, z) }) == null)
+                        sb.Append(" · ⚠안내선을 못 그렸다(임시 그래픽 실패)");
+                    continue;
+                }
                 AcadPoly? guide = null;
                 PointMonitorEventHandler? mon = null;
                 try
@@ -181,8 +205,9 @@ internal static class WallPolyDraw
                     };
                     ed.PointMonitor += mon;
 
-                    var opt = new PromptPointOptions(
-                        $"\n[옹벽 폴리곤] {nm}을 찍으세요 — 데이라잇 안이어야 합니다 (Esc=취소): ")
+                    var opt = new PromptPointOptions(extNote.Length > 0
+                        ? $"\n[옹벽 폴리곤] {extNote} — 새 쪽 끝({nm})을 찍으세요 — 데이라잇 안이어야 합니다 (Esc=취소): "
+                        : $"\n[옹벽 폴리곤] {nm}을 찍으세요 — 데이라잇 안이어야 합니다 (Esc=취소): ")
                     { AllowNone = false, UseBasePoint = true, BasePoint = from };
                     var r = ed.GetPoint(opt);
                     if (r.Status != PromptStatus.OK)
@@ -263,6 +288,13 @@ internal static class WallPolyDraw
                    ?? new List<Point3>();
         if (ring.Count == 0) flag = new List<bool>();               // ★[코드 검토 낮음 10] 물러난 링도 못 쓰면 표도 비운다(«수직 −N» 안 찍게)
         sb.Append("\n      " + asmNote);
+        // ★★[v103.1.14 · 계획 검토 중간 1] 이어 짓기는 측선을 <b>방향 그대로</b> 이을 때만 — 물러난 길은 측선 끝을 테두리 꼭짓점으로 옮겨 맞닿은 옹벽 쪽 측선이 말없이 바뀐다
+        if ((fixA != null || fixB != null) && !usedRay)
+        {
+            log = sb.Append("\n  ⚠이어 짓기 — 측선을 방향 그대로 잇지 못했다(조립이 물러남) — 맞닿은 옹벽 쪽 측선을 지은 그대로 못 지켜 짓지 않는다\n").ToString();
+            try { ed.WriteMessage("\n[옹벽 폴리곤] ⚠측선을 찍은 방향(맞닿은 옹벽 쪽은 지은 방향) 그대로 잇지 못했습니다 — 새 쪽 끝을 다른 방향으로 찍어 보세요."); } catch { }
+            return null;
+        }
         if (!usedRay || asmNote.Contains("⚠"))
             try { ed.WriteMessage("\n[옹벽 폴리곤] " + System.Text.RegularExpressions.Regex.Replace(asmNote, "<[^>]+>", "")); } catch { }
         bool simple = ring.Count >= 3 && GradingGeometry.RingIsSimple(ring);

@@ -79,4 +79,65 @@ public static class WallListStore
         dict.Remove(RecName);
         return true;
     }
+
+    // ══ ★★★[v103.1.12 · JACK 1014 «합성 미루기 = 정지 창 옵션 · 기본 꺼짐» · 1015 «도면마다 기억»] 옵션 — 같은 사전의 XRecord DEFER(1 = 켬) ══
+    //   목록(WALLS)의 판을 안 바꾼다(옛 애드인이 이 도면을 열어도 목록을 읽는다 — 옛 애드인은 이 칸을 모른 채 늘 바로 합성한다)
+    private const string DeferName = "DEFER";
+
+    /// <summary>이 도면에서 «옹벽 합성 미루기»를 켰나 — 없거나 못 읽으면 꺼짐(기본).</summary>
+    public static bool ReadDefer(Database db, Transaction tr)
+    {
+        try
+        {
+            var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
+            if (!nod.Contains(DictName)) return false;
+            var dict = (DBDictionary)tr.GetObject(nod.GetAt(DictName), OpenMode.ForRead);
+            if (!dict.Contains(DeferName)) return false;
+            var xr = (Xrecord)tr.GetObject(dict.GetAt(DeferName), OpenMode.ForRead);
+            var a = xr.Data?.AsArray();
+            return a != null && a.Length > 0 && a[0].TypeCode == (short)DxfCode.Int32 && System.Convert.ToInt32(a[0].Value) == 1;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>옵션을 적는다(켬 = 1 · 끔 = 칸을 지운다 — 기본과 같은 도면은 흔적이 없다).</summary>
+    public static void WriteDefer(Database db, Transaction tr, bool on)
+    {
+        var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForWrite);
+        DBDictionary dict;
+        if (nod.Contains(DictName)) dict = (DBDictionary)tr.GetObject(nod.GetAt(DictName), OpenMode.ForWrite);
+        else
+        {
+            if (!on) return;
+            dict = new DBDictionary();
+            nod.SetAt(DictName, dict);
+            tr.AddNewlyCreatedDBObject(dict, true);
+        }
+        if (dict.Contains(DeferName))
+        {
+            // ★[코드 검토 낮음 8] 사전에서 빼기만 하면 주인 없는 기록이 남는다 — 지운다
+            var oid = dict.GetAt(DeferName);
+            dict.Remove(DeferName);
+            try { tr.GetObject(oid, OpenMode.ForWrite).Erase(); } catch { }
+        }
+        if (!on) return;
+        using var rb = new ResultBuffer(new TypedValue((int)DxfCode.Int32, 1));
+        var xr = new Xrecord { Data = rb };
+        dict.SetAt(DeferName, xr);
+        tr.AddNewlyCreatedDBObject(xr, true);
+    }
+
+    /// <summary>이 도면의 «옹벽 합성 미루기»(읽기 전용 트랜잭션 — 명령 밖에서도 부른다). 못 읽으면 꺼짐.</summary>
+    public static bool DeferOf(Database? db)
+    {
+        if (db == null) return false;
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            bool on = ReadDefer(db, tr);
+            tr.Commit();
+            return on;
+        }
+        catch { return false; }
+    }
 }

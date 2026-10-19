@@ -1614,7 +1614,16 @@ public static class GradingBuilder
                 using var tr = db.TransactionManager.StartTransaction();
                 var w = (Autodesk.Civil.DatabaseServices.Surface)tr.GetObject(sid, OpenMode.ForWrite);
                 // ★★★[v103.1.5] XML로 만든 면은 굳힌 채 재작성만(①·② 단계에서 한 번) — 스냅샷 재작성(③)은 안 한다(HandleXmlBacked 설명)
-                if (IsXmlBacked(w)) { if (!snapshot && HandleXmlBacked(w, xml)) n++; tr.Commit(); continue; }
+                // ★[v103.1.7 · 검토 낮음 3②] 굳힌 XML 면이 재작성 뒤 바뀌었으면(HandleXmlBacked = false) 커밋하지 않는다 — 손대기 전 모양으로 돌아간다
+                if (IsXmlBacked(w))
+                {
+                    if (snapshot) { tr.Commit(); continue; }
+                    int bad0 = xml.Bad.Count;
+                    bool done = HandleXmlBacked(w, xml);
+                    if (done) n++;
+                    if (done || xml.Bad.Count == bad0 || !xml.Bad[^1].Contains("굳힌 면이 바뀌었다")) tr.Commit();
+                    continue;
+                }
                 // ★[v32.16] 여기도 0807판과 같은 방식으로 되돌린다 — 한 곳만 다른 경로면 서로 덮는다.
                 // ★★★[v103.1.6] 붙여넣기 소스가 지워진 면(«이어서» 뒤의 …이전)은 스냅샷 재작성을 부르지 않는다(CanRebuildSnapshot 위 설명).
                 //   종전엔 여기서 예외로 끝나 트랜잭션이 물려 무사했다 — 결과는 같고(③에 안 센다), 건너뛴 면을 반환 글에 적는다.
@@ -1665,6 +1674,10 @@ public static class GradingBuilder
     static bool _snapCheckOffForTest;
     /// <summary>시험용 이음매 — 켜면 <see cref="RebuildGuarded"/>의 되찍기가 실패한 것으로 친다(«되찍지 못하면 재작성하지 않는다»를 출하 함수로 재려고). 평소엔 false.</summary>
     static bool _rebakeFailForTest;
+    /// <summary>★[v103.1.7] 시험용 이음매 — 켜면 <see cref="RebuildSnapshotSafe"/>가 실패 뒤에 하는 되찍기가 실패한 것으로 친다(«되찍기도 실패 → 물림» 길을 출하 함수로 재려고 — 검토 1013 확인 낮음 4). 평소엔 false.</summary>
+    static bool _rebakeAfterFailForTest;
+    /// <summary>★[v103.1.7] 시험용 이음매 — 켜면 <see cref="RebuildGuarded"/>가 되찍은 뒤 «삼각형 수가 바뀌었다»로 친다(바뀌면 물리는 길을 재려고). 평소엔 false.</summary>
+    static bool _rebakeChangedForTest;
 #pragma warning restore CS0649
 
     /// <summary>이 면의 스냅샷 재작성을 막는 까닭 — 0 = 없다(불러도 된다) · 1 = <b>붙여넣기 소스가 지워졌다</b> · 2 = 정의에 스냅샷 줄만 있다(위 설명).
@@ -1681,7 +1694,8 @@ public static class GradingBuilder
             for (int i = 0; i < oc.Count; i++)
             {
                 // 붙여넣기 줄은 형식으로 직접 읽는다(TryXmlFilesOf의 선례 · 검토 1013 낮음 6 — 반사 읽기가 빗맞으면 멀쩡한 면이 말없이 «지워짐»으로 간다)
-                if (oc[i] is not Autodesk.Civil.DatabaseServices.SurfaceOperationPasteSurface ps) continue;
+                using var op = oc[i];   // ★[v103.1.7 · 검토 1013 낮음 10] 래퍼는 버린다(1014 실측 — 버려도 정의 · 모양 그대로)
+                if (op is not Autodesk.Civil.DatabaseServices.SurfaceOperationPasteSurface ps) continue;
                 bool alive = false;
                 try { ObjectId sid = ps.SurfaceId; alive = !sid.IsNull && !sid.IsErased; } catch { }
                 if (!alive) dead++;
@@ -1706,14 +1720,19 @@ public static class GradingBuilder
     /// 그 밖의 면은 종전과 같은 <c>Rebuild()</c> 한 번이고, <c>Rebuild()</c>의 예외는 종전처럼 부른 쪽으로 간다.</para>
     /// <para>남의 면(이름에 _DH가 없다)은 되찍지 않는다 — 스냅샷 뒤에 밀린 변경이 있는 면이면 낡은 모양이 굳는다(검토 1013 낮음 4).
     /// 옛 판이 스냅샷 재작성을 부르던 면은 이름이 전부 우리 꼴이라 살리는 범위는 줄지 않는다.</para>
-    /// <para>★자가검증: 되찍기 전과 재작성 뒤의 삼각형 · 점 수가 다르면 ⚠(<see cref="SnapTally.Changed"/>).</para></summary>
+    /// <para>★자가검증: 되찍기 전과 재작성 뒤의 삼각형 · 점 수가 다르면 ⚠(<see cref="SnapTally.Changed"/>) — <b>false를 돌려준다</b>(v103.1.7 · 검토 1013 확인 낮음 6):
+    /// 자기 트랜잭션을 가진 쪽(StageOne)은 커밋하지 않아 손대기 전 모양으로 돌아가고, 한 트랜잭션에 몰아 부른 쪽은 반환 글의 ⚠를 보고 물린다(<see cref="MustAbort"/>).</para>
+    /// <para>★[v103.1.7 · 검토 1013 확인 낮음 7] 우리 면은 이름 꼴로 가른다(<see cref="SelfCheck.IsOurSurfaceName"/> — «현황_DHT»는 안 든다) ·
+    /// ★[낮음 5] 되찍은 사실은 재작성 <b>전에</b> 적는다(재작성이 던져도 글에 남는다).</para></summary>
     static bool RebuildGuarded(Autodesk.Civil.DatabaseServices.Surface w, SnapTally t)
     {
         string nm = "?"; bool gone = false;
         try
         {
             nm = w.Name ?? "?";
-            gone = nm.IndexOf("_DH", System.StringComparison.Ordinal) >= 0 && w.HasSnapshot && SnapBlock(w, out _) == 1;
+            // ★[v103.1.7 · 검토 열린 물음 3] 손으로 이름을 바꾼 사본(«정지면_DH 1차» 등)도 — 옛 판이 깨 놓은 면은 늘 정지면_DH… · 정지순수_DH…였다
+            bool ours = SelfCheck.IsOurSurfaceName(nm) || nm.StartsWith("정지면_DH", System.StringComparison.Ordinal) || nm.StartsWith("정지순수_DH", System.StringComparison.Ordinal);
+            gone = ours && w.HasSnapshot && SnapBlock(w, out _) == 1;
         }
         catch { }
         if (!gone) { w.Rebuild(); return true; }
@@ -1725,10 +1744,11 @@ public static class GradingBuilder
             w.CreateSnapshot();
         }
         catch (System.Exception ex) { t.RebakeBad.Add($"{nm}({ex.GetType().Name}: {ex.Message})"); return false; }
+        t.Rebaked.Add(nm);
         w.Rebuild();
         var c1 = XmlCounts(w);
-        if (c0 != c1) t.Changed.Add($"{nm}(삼각형 {c0.Tris}→{c1.Tris} · 점 {c0.Pts}→{c1.Pts})");
-        t.Rebaked.Add(nm);
+        if (_rebakeChangedForTest) c1 = (c1.Tris + 1, c1.Pts);
+        if (c0 != c1) { t.Changed.Add($"{nm}(삼각형 {c0.Tris}→{c1.Tris} · 점 {c0.Pts}→{c1.Pts})"); return false; }
         return true;
     }
 
@@ -1748,7 +1768,11 @@ public static class GradingBuilder
         {
             var c1 = XmlCounts(w);
             string fix;
-            try { w.CreateSnapshot(); fix = "지금 모양으로 되찍었다"; }
+            try
+            {
+                if (_rebakeAfterFailForTest) throw new System.InvalidOperationException("시험용 — 실패 뒤 되찍기 실패");
+                w.CreateSnapshot(); fix = "지금 모양으로 되찍었다";
+            }
             catch (System.Exception ex2) { fix = $"되찍기도 실패 {ex2.GetType().Name}: {ex2.Message} — 이 면을 다시 재작성하면 Civil이 멈출 수 있다"; }
             if (c0 != c1) fix += $" · ⚠실패한 스냅샷 재작성이 면을 바꿨다(삼각형 {c0.Tris}→{c1.Tris} · 점 {c0.Pts}→{c1.Pts})";
             note = $"{nm}({ex.GetType().Name}: {ex.Message} · {fix})";
@@ -1816,12 +1840,31 @@ public static class GradingBuilder
         {
             var oc = s.Operations;
             for (int i = 0; i < oc.Count; i++)
-                if (oc[i] is Autodesk.Civil.DatabaseServices.SurfaceOperationAddXmlFile x)
+            {
+                using var op = oc[i];   // ★[v103.1.7 · 검토 1013 낮음 10] 래퍼는 버린다
+                if (op is Autodesk.Civil.DatabaseServices.SurfaceOperationAddXmlFile x)
                 { string f = x.XmlFileName; if (!string.IsNullOrEmpty(f)) into.Add(f); }
+            }
             return true;
         }
         catch { return false; }
     }
+
+    /// <summary>★[v103.1.7] 이 면이 무는 XML 원본 파일들 — 정의를 못 읽으면 null(자가점검 · 저장 때 «물린 원본» 적기에 쓴다).</summary>
+    internal static List<string>? XmlFilesOf(Autodesk.Civil.DatabaseServices.Surface s)
+    {
+        var l = new List<string>();
+        return TryXmlFilesOf(s, l) ? l : null;
+    }
+
+    /// <summary>★★[v103.1.7 · 검토 1013 확인 낮음 4] 재작성 도우미가 남긴 글이 «부른 쪽이 트랜잭션을 물려야 한다»는 뜻인가 —
+    /// 스냅샷 재작성이 실패했는데 되찍기까지 실패했다(그대로 커밋하면 다음 재작성에서 Civil이 죽는다 — 1013 실측) ·
+    /// 되찍은 면이 재작성 뒤 바뀌었다(되찍기 → 재작성은 같은 모양이어야 한다 — 바뀌었으면 모르는 길이다 · 물리면 손대기 전 모양으로 돌아간다).</summary>
+    internal static bool MustAbort(string? note)
+        => !string.IsNullOrEmpty(note)
+        && (note.IndexOf("되찍기도 실패", System.StringComparison.Ordinal) >= 0
+            || note.IndexOf("⚠되찍은 면이 재작성 뒤 바뀌었다", System.StringComparison.Ordinal) >= 0
+            || note.IndexOf("굳힌 면이 바뀌었다", System.StringComparison.Ordinal) >= 0);   // ★[v103.1.7 · 검토 낮음 3②] XML 면(굳힘 → 재작성)도 같은 모양이어야 한다
 
     /// <summary>저장된 도면이면 그 전체 경로 · 이름 없는 새 도면(템플릿에서 막 만든 것)이면 빈 문자열 — XML 원본 폴더와 «마지막 저장 시각»의 기준.</summary>
     static string DwgPathOf(Database db)
@@ -1908,7 +1951,51 @@ public static class GradingBuilder
             string lg = XmlStore.RetireLegacy();
             return $"XML 원본 정리 건너뜀 — 정의를 못 읽은 면이 있다({string.Join(", ", unread)}) · 아무것도 안 지웠다 · «안 물림» 기록을 버렸다(처음부터 다시 센다)" + (lg.Length > 0 ? " · " + lg : "");
         }
-        return XmlStore.Tidy(DwgPathOf(db), used);
+        // ★★[v103.1.7 · JACK 1014 «1일»] <b>다른 열린 도면</b>이 무는 원본도 «물린 것»으로 센다 — 이름 없는 도면끼리 폴더를 함께 써서,
+        //   보관을 1일로 줄이면 옆에 열어 둔 저장 안 한 도면의 원본을 지울 수 있다. 다른 도면의 면을 못 읽었으면 이번엔 아무것도 지우지 않는다(XmlStore.TidyAll)
+        var usedAll = new List<string>(used); bool othersUnknown = false;
+        try
+        {
+            foreach (Autodesk.AutoCAD.ApplicationServices.Document d in Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager)
+            {
+                if (d.Database.UnmanagedObject == db.UnmanagedObject) continue;
+                usedAll.AddRange(XmlFilesInDb(d.Database, out bool okO));
+                if (!okO) othersUnknown = true;
+            }
+        }
+        catch { othersUnknown = true; }
+        string dwg = DwgPathOf(db);
+        string r = XmlStore.TidyAll(dwg, usedAll, othersUnknown);
+        // ★[v103.1.7] 이 도면이 남의 폴더(이름 없는 도면 폴더 · 옛 이름의 폴더)에 적어 둔 «물림»을 손본다 — 안 문 채로 저장했으면 놓는다
+        string rc = dwg.Length > 0 ? XmlStore.ReleaseClaims(dwg, used) : "";
+        // ★[v103.1.7 · 검토 낮음 8] 이름 있는 도면에서도 이름 없는 도면 폴더를 한 번 — 종전엔 이름 없는 도면에서만 치워, 앞으로 이름 있는 도면만 쓰면 그 폴더가 안 치워졌다(같은 규칙 · 열린 모든 도면이 무는 것은 둔다)
+        string ru = dwg.Length > 0 ? XmlStore.TidyAll("", usedAll, othersUnknown) : "";
+        return string.Join(" · ", new[] { r, rc, ru.Length > 0 ? "이름 없는 도면 폴더: " + ru : "" }.Where(x => x.Length > 0));
+    }
+
+    /// <summary>★[v103.1.7] 도면 하나의 면이 무는 XML 원본 전부(읽기만 · 열고닫기 트랜잭션) — 다른 열린 도면 · 저장 직후의 «물림» 적기에 쓴다.
+    /// <paramref name="ok"/> = 모든 면의 정의를 읽었나(못 읽었으면 부른 쪽이 늦게 지우는 쪽으로).</summary>
+    internal static List<string> XmlFilesInDb(Database db, out bool ok)
+    {
+        var l = new List<string>(); ok = true;
+        try
+        {
+            using var tr = db.TransactionManager.StartOpenCloseTransaction();
+            var cd = Autodesk.Civil.ApplicationServices.CivilDocument.GetCivilDocument(db);
+            foreach (ObjectId sid in cd.GetSurfaceIds())
+            {
+                try
+                {
+                    if (sid.IsNull || sid.IsErased) continue;
+                    if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
+                    if (!TryXmlFilesOf(s, l)) ok = false;
+                }
+                catch { ok = false; }
+            }
+            tr.Commit();
+        }
+        catch { ok = false; }
+        return l;
     }
 
     /// <summary>XML 면을 굳힌다 — 스냅샷이 없으면 <b>재작성 없이</b> 만든다(지금 삼각형 그대로 · «구식»이어도 된다 — 1012 실측). 빈 문자열 = 굳어 있다 · 그 밖 = 못 굳힌 까닭.</summary>
@@ -1994,7 +2081,8 @@ public static class GradingBuilder
         try { w.Rebuild(); t.Rebuilt++; }
         catch (System.Exception ex) { t.Bad.Add($"{nm}(Rebuild {ex.GetType().Name}: {ex.Message})"); return false; }
         var c1 = XmlCounts(w);
-        if (c0 != c1) t.Bad.Add($"{nm}(⚠재작성 뒤 삼각형 {c0.Tris}→{c1.Tris} · 점 {c0.Pts}→{c1.Pts} — 굳힌 면이 바뀌었다)");
+        // ★[v103.1.7 · 검토 낮음 3②] 바뀌었으면 false — 자기 트랜잭션을 가진 쪽(StageOne)은 커밋하지 않고 · 한데 몰아 부른 쪽은 글을 보고 물린다(MustAbort)
+        if (c0 != c1) { t.Bad.Add($"{nm}(⚠재작성 뒤 삼각형 {c0.Tris}→{c1.Tris} · 점 {c0.Pts}→{c1.Pts} — 굳힌 면이 바뀌었다)"); return false; }
         return true;
     }
 
@@ -2078,14 +2166,14 @@ public static class GradingBuilder
                 try
                 {
                     var oc = w.Operations;
-                    int nPaste = 0, idxSnap = -1;
+                    int nPaste = 0;
                     for (int k = 0; k < oc.Count; k++)
                     {
-                        string tn = oc[k].GetType().Name;
-                        if (tn.IndexOf("Paste", System.StringComparison.OrdinalIgnoreCase) >= 0) nPaste++;
-                        if (tn.IndexOf("Snapshot", System.StringComparison.OrdinalIgnoreCase) >= 0) idxSnap = k;
+                        using var op = oc[k];   // ★[v103.1.7 · 검토 1013 낮음 10] 래퍼는 버린다
+                        if (op.GetType().Name.IndexOf("Paste", System.StringComparison.OrdinalIgnoreCase) >= 0) nPaste++;
                     }
-                    ops = $"{oc.Count}줄(붙여넣기 {nPaste} · 스냅샷 {(idxSnap < 0 ? "없음" : $"{idxSnap + 1}번째")})";
+                    // ★[v103.1.7 · 검토 1013 낮음 7] 스냅샷 줄의 형식 이름은 기본형 SurfaceOperation이라(«Snapshot»이 든 형식이 없다 — 1013 실측) 이름으로 찾으면 늘 «없음»이었다 → HasSnapshot으로
+                    ops = $"{oc.Count}줄(붙여넣기 {nPaste} · 스냅샷 {(w.HasSnapshot ? "있음" : "없음")})";
                 }
                 catch (System.Exception oe) { ops = "읽기실패:" + oe.GetType().Name; }
 
@@ -2340,7 +2428,8 @@ public static class GradingBuilder
                         int r = RebuildSnapshotSafe(w, out string sn);
                         if (r > 0) snapOk++;
                         else if (r == 0) { snapSkip++; if (skipWhy.Length == 0) skipWhy = sn; }
-                        else { snapNo++; if (first.Length == 0) first = sn; }
+                        // ★[v103.1.7 · 검토 낮음 3①] 실패 글은 전부 남긴다(첫 까닭 하나만 남기면 같은 이름 면이 둘이거나 앞에서 다른 예외가 나면 «되찍기도 실패»가 글에서 빠져 MustAbort가 못 본다)
+                        else { snapNo++; if (first.Length == 0) first = sn; snapT.Bad.Add(sn); }
                     }
                     // ★★[v32.10] <b>여기서 또 짓지 않는다.</b> v32.5엔 트레일링 <c>Rebuild</c>가 있었는데,
                     //   그 근거(<c>구식=True</c>)는 <b>스냅샷이 정의 중간에 있을 때의 증상</b>이었다.
@@ -2375,14 +2464,14 @@ public static class GradingBuilder
                         try
                         {
                             var oc = w.Operations;
-                            int nPaste = 0, idxSnap = -1;
+                            int nPaste = 0;
                             for (int k = 0; k < oc.Count; k++)
                             {
-                                string tn = oc[k].GetType().Name;
-                                if (tn.IndexOf("Paste", System.StringComparison.OrdinalIgnoreCase) >= 0) nPaste++;
-                                if (tn.IndexOf("Snapshot", System.StringComparison.OrdinalIgnoreCase) >= 0) idxSnap = k;
+                                using var op = oc[k];   // ★[v103.1.7 · 검토 1013 낮음 10] 정의 줄 래퍼는 버린다(1014 화면 없는 Civil — 버려도 정의 · 모양 그대로)
+                                if (op.GetType().Name.IndexOf("Paste", System.StringComparison.OrdinalIgnoreCase) >= 0) nPaste++;
                             }
-                            ops = $"{oc.Count}줄(붙여넣기 {nPaste} · 스냅샷 {(idxSnap < 0 ? "없음" : $"{idxSnap + 1}번째")})";
+                            // ★[v103.1.7 · 검토 1013 낮음 7] 스냅샷 줄의 형식 이름은 기본형 SurfaceOperation이라(1013 실측) 이름으로 찾으면 늘 «없음»이었다 → HasSnapshot
+                            ops = $"{oc.Count}줄(붙여넣기 {nPaste} · 스냅샷 {(w.HasSnapshot ? "있음" : "없음")})";
                         }
                         catch (System.Exception oe) { ops = "읽기실패:" + oe.GetType().Name; }
 

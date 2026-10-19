@@ -295,6 +295,19 @@ public static class WallDaylightBuilder
                     {
                         string rb = GradingBuilder.RebuildSurfacesByBaseName(tr, pName);   // ★[재검토 낮음 1] 잴 면 그 이름 그대로(이름_N이어도)
                         note += (note.Length > 0 ? " · " : "") + $"'{pName}'가 낡아 다시 지었다({rb})";
+                        // ★★[v103.1.7 · 검토 1013 확인 낮음 4] 되찍기까지 실패했거나 되찍은 면이 바뀌었으면 그 면 위에 짓지 않는다(낡은 면으로 본다) —
+                        //   이 자리는 바깥 트랜잭션(정지면 생성 · 옹벽 다시 짓기)을 물릴 수 없어 알리기만 한다(자가점검 ⚠ · 명령줄). 아주 드문 길이다(합성 전 면의 붙여넣기 소스는 살아 있다)
+                        if (GradingBuilder.MustAbort(rb))
+                        {
+                            stale = true;
+                            string why = SelfCheck.WarnBits(rb);
+                            note += $" · ⚠그 재작성이 스냅샷을 못 다뤘다({why}) — 이 면 위의 데이라잇은 확인용으로만";
+                            var docW = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+                            SelfCheckLog.Line("옹벽 짓기 — 기준면 재작성", false, $"'{pName}' 재작성이 스냅샷을 못 다뤘다 — {why} · 바깥 트랜잭션은 물리지 못했다(이 면을 다시 재작성하기 전에 로그를 볼 것)",
+                                docW?.Name ?? "");
+                            // ★[v103.1.7 · 검토 낮음 4] 이 자리는 물리지 못했다 — 저장하면 멀쩡한 디스크 도면을 «다시 열면 말없이 바뀌는» 상태로 덮어쓴다
+                            SelfCheck.Warn(docW, $"'{pName}' 재작성이 스냅샷을 못 다뤘습니다 — 저장하지 말고 Ctrl+Z로 이 명령을 되돌린 뒤(남기려면 다른 이름으로 저장) 로그를 보여 주세요");
+                        }
                     }
                 }
                 catch (System.Exception rx) { note += (note.Length > 0 ? " · " : "") + $"'{pName}' 다시 짓기 실패({rx.GetType().Name})"; }
@@ -950,7 +963,10 @@ public static class WallDaylightBuilder
             // ★[검토 0928 v100.4 · 낮음 9] 원래 확장자를 지킨다(순수옹벽 xml이 .txt로 보관되던 것)
             string ext = System.IO.Path.GetExtension(like);
             if (string.IsNullOrEmpty(ext)) ext = ".txt";
-            string dst = System.IO.Path.Combine(hist, $"{stem}_{System.DateTime.Now:yyyyMMdd_HHmmss}{ext}");
+            string stamp = System.DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            string dst = System.IO.Path.Combine(hist, $"{stem}_{stamp}{ext}");
+            // ★[v103.1.7 · 검토 1012 낮음 9 — 미뤘던 것] 같은 초에 두 번 남기면 뒤 것이 사라졌다(먼저 것만 남김) — «_2» · «_3»을 붙여 둘 다 남긴다(정리 꼴 «_2*»에 그대로 든다)
+            for (int k = 2; System.IO.File.Exists(dst) && k < 100; k++) dst = System.IO.Path.Combine(hist, $"{stem}_{stamp}_{k}{ext}");
             if (!System.IO.File.Exists(dst)) System.IO.File.Copy(dump, dst);
             var files = new System.IO.DirectoryInfo(hist).GetFiles(stem + "_2*" + ext);   // 날짜로 시작하는 것만(_계획 파일과 안 섞이게)
             if (files.Length > 20)

@@ -43,6 +43,11 @@ internal sealed class GradingPanel : UserControl
     private readonly Button _pickPlan, _pickGround, _build;
     private readonly Button _toWall, _toSlope;
     private readonly TextBlock _planWhat, _groundWhat;
+    // ★★[v103.1.12 · JACK 1014 «합성 미루기 = 정지 창 옵션 · 기본 꺼짐» · 1015 «도면마다 기억»] 켜면 옹벽 변환은 옹벽만 짓고 합성은 [옹벽 합성] 한 번에
+    private readonly CheckBox _defer;
+    private readonly Button _compose;
+    private readonly TextBlock _compInfo;
+    private readonly Panel _compRow;
 
     /// <summary>★[JACK 0915] <b>합친 칸의 요약 한 줄</b> — 접었을 때 제목 옆에 뜬다.
     /// 종전의 <c>_targetBadge</c>(무엇을 골랐나)와 <c>_slopeBadge</c>(값이 맞나)를 합쳤다.
@@ -273,6 +278,24 @@ internal sealed class GradingPanel : UserControl
         // ★[v102.2 · JACK 0930 «옹벽합성 버튼은 없애고 노선 선정과정이 끝나면 자동으로 진행되게»] [옹벽 합성] 버튼 없앰 —
         //   옹벽 변환(부분 지정)이 옹벽을 끝까지 지으면 합성이 이어서 돈다(ZoneEditCommon). DHWALLCOMP 명령은 남는다(손으로 다시 합성 · 복구용)
         secFix.Children.Add(wRow);
+        // ★★★[v103.1.12 · JACK 1014 · 1015] «옹벽 합성 미루기» — 끔(기본) = 종전(변환마다 바로 합성) · 켬 = 옹벽만 짓고 합성은 [옹벽 합성] 한 번에
+        //   (내보내기 · 터파기 · «이어서» 직전에는 합성이 빠졌으면 먼저 합성한다). [옹벽 합성] · «대기 N»은 켬이거나 빠진 옹벽이 있을 때만 보인다(설명 글 없음 — JACK 1014)
+        _defer = new CheckBox
+        {
+            Content = "옹벽 합성 미루기",
+            Margin = new Thickness(0, 2, 0, 4),
+            ToolTip = "켜면 옹벽 변환은 옹벽만 짓고, 정지면_DH 합성은 [옹벽 합성]으로 한 번에 합니다.\n내보내기·터파기·이어서 전에는 빠진 옹벽을 먼저 합성합니다. 이 도면에만 적용됩니다.",
+        };
+        secFix.Children.Add(_defer);
+        var cRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6), Visibility = Visibility.Collapsed };
+        _compose = new Button { Content = "옹벽 합성", MinWidth = 104, Height = 30, Margin = new Thickness(0, 0, 8, 0), ToolTip = "모아 둔 옹벽을 정지면_DH에 한 번에 합성합니다(DHWALLCOMP)." };
+        _compose.Click += (_, __) => PickSession.Send(Doc, "DHWALLCOMP");
+        _compInfo = new TextBlock { VerticalAlignment = VerticalAlignment.Center, FontSize = 12, Foreground = DhBrand.Sub };
+        cRow.Children.Add(_compose); cRow.Children.Add(_compInfo);
+        _compRow = cRow;
+        secFix.Children.Add(cRow);
+        _defer.Checked += (_, __) => SetDefer(true);
+        _defer.Unchecked += (_, __) => SetDefer(false);
         secFix.Children.Add(new TextBlock
         {
             Text = "※ 정지면을 먼저 만들어야 고칠 사면이 생깁니다.",
@@ -621,12 +644,63 @@ internal sealed class GradingPanel : UserControl
             bool madeAny = hasPrev;
             _fixOk = !busy && madeAny;
             SyncEnabled();
+            RefreshComposite();   // ★[v103.1.12] 미루기 칸 · 대기 수도 같은 때에(도면 전환 · 명령 끝 · 찍기 상태)
         }
         catch (System.Exception ex)
         {
             // ★[검토 0909] <b>조용히 안 바뀌면 아무도 모른다.</b> 이 저장소 규칙 —
             //   자주 고치는 자리는 로그 한 줄(JACK: "단계마다 로그").
             try { DiagLog.Append("\n■ 정지창 상태 갱신 실패 — " + ex.Message + "\n"); } catch { }
+        }
+    }
+
+    /// <summary>★★[v103.1.12] «옹벽 합성 미루기»를 이 도면에 적는다(문서 잠금 · 자가점검 한 줄). 칸을 채우는 중(<see cref="_loading"/>)이면 안 적는다.</summary>
+    private void SetDefer(bool on)
+    {
+        if (_loading) return;
+        var doc = Doc;
+        if (doc == null) return;
+        string err = "";
+        try
+        {
+            using (doc.LockDocument())
+            using (var tr = doc.Database.TransactionManager.StartTransaction())
+            {
+                WallListStore.WriteDefer(doc.Database, tr, on);
+                tr.Commit();
+            }
+        }
+        catch (System.Exception ex) { err = ex.GetType().Name + ": " + ex.Message; }
+        bool now = WallListStore.DeferOf(doc.Database);
+        try { DiagLog.Append($"\n■ 옹벽 합성 미루기 {(on ? "켬" : "끔")}{(err.Length > 0 ? " ⚠못 적음 " + err : "")} · 도면에 적힌 값 {(now ? "켬" : "끔")}\n"); } catch { }
+        SelfCheckLog.Line("옹벽 합성 미루기", err.Length == 0 && now == on, $"{(on ? "켬" : "끔")}{(err.Length > 0 ? " ⚠못 적음 " + err : "")} · 도면에 적힌 값 {(now ? "켬" : "끔")}", doc.Name);
+        if (err.Length > 0) Say("옹벽 합성 미루기를 도면에 적지 못했습니다 — " + err);
+        RefreshComposite();
+    }
+
+    /// <summary>★★[v103.1.12] 미루기 칸 · [옹벽 합성] · «대기 N · 보류 M»을 이 도면 사실로 맞춘다(목록과 정지면_DH 표지를 읽는다 — Core <c>WallList.CompositeState</c>).</summary>
+    internal void RefreshComposite()
+    {
+        try
+        {
+            var doc = Doc;
+            bool on = doc != null && WallListStore.DeferOf(doc.Database);
+            DH.Grading.Core.WallList.CompState? st = null;
+            if (doc != null)
+                try { using var tr = doc.Database.TransactionManager.StartTransaction(); st = Commands.WallCompositeCommand.StateNow(doc.Database, tr, out _); tr.Commit(); } catch { }
+            _loading = true;
+            try { _defer.IsChecked = on; } finally { _loading = false; }
+            int wait = st?.Pending.Count ?? 0, held = st?.HeldMoved.Count + st?.HeldRetry.Count ?? 0;
+            bool show = on || (st != null && st.Missing.Count > 0);
+            _compRow.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+            _compInfo.Text = st == null ? "" : $"대기 {wait}" + (held > 0 ? $" · 보류 {held}" : "");
+            // ★[코드 검토 낮음 4] «그대로라 안 해 봄» 보류만 남아도 켠다 — 손으로 누른 [옹벽 합성]은 열쇠를 안 보고 다시 해 본다
+            _compose.IsEnabled = !PickSession.Busy && st != null && (st.Need || st.Stuck.Count > 0);
+            _defer.IsEnabled = !PickSession.Busy && doc != null;
+        }
+        catch (System.Exception ex)
+        {
+            try { DiagLog.Append("\n■ 정지창 합성 칸 갱신 실패 — " + ex.Message + "\n"); } catch { }
         }
     }
 

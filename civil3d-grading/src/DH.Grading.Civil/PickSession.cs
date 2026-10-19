@@ -424,6 +424,12 @@ public sealed class PickCommands
 
         // ③ 이어서/새로시작을 <b>지금</b> 다시 가린다.
         var plan = GradeStart.Decide(doc, planId, PickSession.AppendMode);
+        // ★★★[v103.1.12 · JACK 1015 ② · 계획 4판 H4] «이어서» 합성 관문 — DHGRADE와 같다(Decide 밖 · 합성했으면 Decide 다시)
+        if (!plan.Blocked && plan.Mode == Commands.GradeMode.Append)
+        {
+            if (!CompositeGate.Ensure(doc, "이어서", "빠진 옹벽은 정지면_DH이전에 안 들어가고 목록에서 지워집니다")) return;
+            plan = GradeStart.Decide(doc, planId, PickSession.AppendMode);
+        }
         if (plan.Blocked)
         {
             ed.WriteMessage("\n[계획부지 정지] " + plan.Note.Replace("\n", "\n  "));
@@ -465,7 +471,8 @@ public sealed class PickCommands
                 tr.Commit();
             }
             catch { }
-            if (made) PickSession.ClearAll(doc);
+            // ★[v103.1.9 · 계획 v103.1 3판 낮음 9] «움직일 옹벽» 확인창에서 아니오(아무것도 안 바뀜)면 정지면_DH가 있어도 고른 것을 안 걷는다 — 값을 고쳐 다시 누를 수 있게
+            if (made && !GradingSettings.LastGradeDeclined) PickSession.ClearAll(doc);
             else
             {
                 PickSession.DropMarks(doc);      // 띠만 걷고 고른 것은 남긴다

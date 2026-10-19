@@ -11,6 +11,10 @@ void Check(string name, bool ok, string detail = "")
 }
 // [v102.0] BLOCKTEST_LEGACY=1 — CivilSafeMesh 옛 길(v101: 여유 띠 쌍 무조건 합침 · 마지막 수단 없음)만 — 새 길과 견줄 때
 if (Environment.GetEnvironmentVariable("BLOCKTEST_LEGACY") == "1") CivilSafeMesh.LegacyOnly = true;
+// ★[v103.1.10 · 속도 P-E] BLOCKTEST_SPEC=0 — 옛 길을 미리 함께 돌리지 않고 종전처럼 차례대로(같은 결과인지 · 시간이 얼마나 줄었는지 견줄 때)
+if (Environment.GetEnvironmentVariable("BLOCKTEST_SPEC") == "0") CivilSafeMesh.Speculate = false;
+// ★[v103.1.11 · v103.1.10 코드 검토 낮음 4] 다듬기 계측(BLOCKTEST_DEBUG=1)을 찍을 때는 차례대로 — 앞 경우에서 남은 실(멈추라고 한 옛 길)의 줄이 다음 경우에 섞이지 않게
+if (Environment.GetEnvironmentVariable("BLOCKTEST_DEBUG") == "1") CivilSafeMesh.Speculate = false;
 // ★[v102.0] BLOCKTEST_ONLY=fill — 성토 옹벽 시험(S136 거울 · S141~S143)만 빠르게 돈다(전체는 4분 남짓)
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "fill")
 {
@@ -24,11 +28,19 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "zone")
 {
     ZoneCheck.Run(Check);
     GradeSameCheck.Run(Check);
+    WallPlaceCheck.Run(Check);
+    CompStateCheck.Run(Check);
+    OutsideFixCheck.Run(Check, Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "data"));
+    ExtendCheck.Run(Check);
     Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
     return fails == 0 ? 0 : 1;
 }
 ZoneCheck.Run(Check);
 GradeSameCheck.Run(Check);   // ★[v103.1.4] S154 — 다시 지어도 같은가(제원 · 구간 견주기)
+WallPlaceCheck.Run(Check);   // ★[v103.1.9] S157 — 옹벽 자리 재기 한 함수(미리 묻기 = 끝 확인)
+CompStateCheck.Run(Check);   // ★[v103.1.12] S158 — 합성 셈 · 보류 종류 · 미룬 옹벽 겹침 판정
+OutsideFixCheck.Run(Check, Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "data"));   // ★[v103.1.13] S159 — 넘길 면 전체의 «Civil이 고칠 면» · 먼저 뒤집기
+ExtendCheck.Run(Check);   // ★[v103.1.14] S160 — 맞닿은 옹벽 이어 짓기(판정 · 측선 방향 · 이은 폴리곤 · 겹침 · 목록 판 3 · 번호 물려받기)
 
 const double W = 0.46, H = 0.2, STEP = 5.0, HW = W / 2;
 const double D = 0.5, FS = D / 2; // 깊이·전면 돌출(벽 중심=링, JACK 0720 Z-파이팅 해소): 절토 +FS(안쪽), 성토 −FS
@@ -13260,8 +13272,9 @@ static Coordinate[] CloseXY(IReadOnlyList<Point3> r)
     Check("S149 목록 판 1(v103.0) 읽기 — 새 칸은 «모름»(빈 핸들 · 지은 값 −1 · 보류 없음)",
           d1 && h1b.VerifiedP0 == "" && w1b.Count == 1 && w1b[0].P0Handle == "" && w1b[0].SlopeW < 0 && w1b[0].FaceRun < 0 && w1b[0].Grid < 0 && w1b[0].Hold == "" && w1b[0].HeadZ == 105,
           why1 + (d1 ? $" · 머리 {w1b[0].HeadZ} · 지은 값 {w1b[0].SlopeW}/{w1b[0].FaceRun}/{w1b[0].Grid}" : ""));
-    var bad9 = new List<(char, object)>(e9); bad9[1] = ('I', 3);
-    Check("S149 목록 — 판 3(더 새 판)은 안 읽는다", !WallList.TryDecode(bad9, out _, out _, out string why9b) && why9b.Contains("판"), why9b);
+    // ★[v103.1.14] 판 3(이어 짓기 칸)이 생겼다 — «더 새 판»은 이 애드인 판 + 1
+    var bad9 = new List<(char, object)>(e9); bad9[1] = ('I', WallList.Version + 1);
+    Check($"S149 목록 — 판 {WallList.Version + 1}(더 새 판)은 안 읽는다", !WallList.TryDecode(bad9, out _, out _, out string why9b) && why9b.Contains("더 새 판"), why9b);
     var held = new WallRec { No = 5, State = 1, Up = true, Bench = 0, Seg = Ln9(0, 0, 50, 0), Poly = Sq9(0, -20, 50, 0), IsWall = new() { true, false, false, true }, Hold = "밑선이 움직였다" };
     var rH1 = WallList.Conflict(Sq9(10, -20, 30, 0), Ln9(10, 0, 30, 0), true, 0, new[] { held });
     Check("S149 판정 — 보류 옹벽과 같은 선이면 «바꿈»(겹침으로 안 막는다)", rH1.ReplaceNo == 5 && rH1.Stop == "", $"바꿀 {rH1.ReplaceNo} · {rH1.Stop}{rH1.Note}");
