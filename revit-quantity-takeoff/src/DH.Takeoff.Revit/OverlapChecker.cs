@@ -18,10 +18,14 @@ public sealed class OverlapPair
     public double VolumeM3;            // 겹친 체적(m³)
     public string Status = "";         // 결합 결과("결합됨" / "결합 못 함: …"). 결합을 시도하지 않았으면 ""
     public double AfterM3 = double.NaN; // 결합한 뒤 다시 잰 겹침(m³). 재지 않았으면 NaN
+    public bool Swallowed;             // 다시 재 보니 잘린 쪽(또는 그 조각)이 남는 쪽 안에 다 들어가 입체가 남지 않았다(같은 자리에 겹쳐 그린 부재일 수 있음 — JACK 2026-10-19)
 
     // ── 나누기(JACK 2026-10-14 — 결합으로 두 덩이가 된 벽 · 기둥) ──
     public string Split = "";             // "조각 n개" / "나누기 못 함: 까닭" / ""(대상 아님 · 안 함)
     public List<ElementId> Pieces = new(); // 잘린 쪽(Loser)을 나눈 조각 — 맨 앞 = Loser 자신(가장 큰 덩이를 맡음 · 나누지 않았으면 빈 목록)
+
+    /// <summary>처음 찾기 뒤 다시 찾기(Refresh — 창에서 고친 뒤 · [우선순위대로 결합] 뒤)에서 새로 나온 쌍(JACK 2026-10-19).</summary>
+    public bool New;
 
     // ── 그림용(겹침 검사 결과 창의 3D) — Find 에 withBlobs 를 준 때만 채운다. 쌍 · 체적 · 결합과는 상관없다 ──
     // 덩어리는 쌍에 붙여 둔다: 찾은 뒤에 쌍의 차례가 체적순으로 바뀌므로(Sorted), 따로 쌓아 번호로 맞추면 다른 쌍의 덩어리가 그려진다.
@@ -74,6 +78,9 @@ public static class OverlapChecker
         internal int ColumnLines, ColumnSkipped;                 // 기둥 줄의 수(한도까지만 적는다) · 한도 뒤로 적지 않은 기둥 수
         public int SplitDone;                                    // SplitJoined 가 나눈 부재 수
         public List<(ElementId Id, string Why)> SplitFailed = new(); // SplitJoined 가 못 나눈 부재와 까닭
+        // 이 실행에서 나눈 부재 → 조각(맨 앞 = 원래 부재 · Join 의 나누기와 SplitJoined 둘 다 적는다 — 묶음을 합치지 못해 되돌리면 지운다).
+        // 다시 찾기(Refresh)가 조각까지 보고, 원래 부재와 짝이던 쌍을 조각으로 옮기는 데 쓴다(R50 revit-verify ①②).
+        public Dictionary<long, List<ElementId>> Splits = new();
     }
 
     /// <summary>
@@ -472,8 +479,13 @@ public static class OverlapChecker
 
     // 그 쌍을 지금의 두 입체로 다시 잰 겹침(m³). 잴 수 없으면 NaN — 부재가 없음 · 입체를 하나도 못 읽음(빈 입체를 '겹침 0'으로 치지 않는다) ·
     // 일부라도 겹침을 계산하지 못함 · 읽다 오류. 잘린 쪽을 나눴으면 조각 전부와 잰다(R35 M4).
-    private static double Remeasure(Document doc, OverlapPair p)
+    // 다만 잘린 쪽(조각)의 입체가 없고 남는 쪽이 그것을 자르는 결합이 걸려 있으면, 결합이 다 깎아 낸 것이다 — 겹침 0 · swallowed
+    // (JACK 2026-10-19 첫 실행: 같은 자리에 겹쳐 그린 벽 둘을 고치니 «다시 재지 못함» — 미리보기도 «잘린 쪽 세모 0»).
+    private static double Remeasure(Document doc, OverlapPair p) => Remeasure(doc, p, out _);
+
+    private static double Remeasure(Document doc, OverlapPair p, out bool swallowed)
     {
+        swallowed = false;
         try
         {
             var win = doc.GetElement(p.Winner);
@@ -486,7 +498,12 @@ public static class OverlapChecker
                 var lose = doc.GetElement(id);
                 if (lose == null) return double.NaN;
                 var b = SolidReader.Solids(lose);
-                if (b.Count == 0) return double.NaN;
+                if (b.Count == 0)
+                {
+                    if (!JoinGeometryUtils.AreElementsJoined(doc, win, lose) || !JoinGeometryUtils.IsCuttingElementInJoin(doc, win, lose)) return double.NaN;
+                    swallowed = true;
+                    continue;
+                }
                 total += Intersection(a, b, out bool unmeasured);
                 if (unmeasured) return double.NaN;
             }
@@ -497,6 +514,203 @@ public static class OverlapChecker
 
     private static bool SameMembers(OverlapPair a, OverlapPair b) =>
         (a.Winner == b.Winner && a.Loser == b.Loser) || (a.Winner == b.Loser && a.Loser == b.Winner);
+
+    /// <summary>다시 찾기(Refresh)가 바꾼 것 — 찾은 쌍의 차례(= 겹침 창의 Key).</summary>
+    public sealed class RefreshReport
+    {
+        public List<int> Added = new();       // 새로 붙인 쌍(찾은 쌍 끝)
+        public List<int> Gone = new();        // 겹침이 없어져 «이미 풀림»(결합돼 있으면 «결합됨»)이 된 쌍
+        public List<int> Resized = new();     // 결합 안 된 쌍 가운데 체적이 바뀐 쌍(덩어리도 새 것)
+        public List<int> Reopened = new();    // «여러 조각과 겹침» · «이미 풀림»이던 쌍이 다시 겹쳐 «아직 안 함»이 된 쌍(덩어리도 새 것)
+        public List<int> Remeasured = new();  // 결합된 쌍을 지금 입체로 다시 재 결과가 바뀐 쌍
+        public List<int> Flipped = new();     // 겹침이 없어진 쌍 가운데 반대 순서로 결합돼 있어 남는 쪽 · 잘리는 쪽을 실제대로 맞바꾼 쌍(Gone 에도 듦)
+        public int Checked, Unmeasured;       // 다시 찾기에서 본 부재 · 잴 수 없었던 쌍
+        public long Ms;
+
+        /// <summary>줄을 다시 보내야 하는 쌍(새 쌍은 빼고).</summary>
+        public IEnumerable<int> Changed => Gone.Concat(Resized).Concat(Reopened).Concat(Remeasured).Distinct();
+
+        /// <summary>덩어리를 다시 만들어야 하는 쌍(새 쌍 포함).</summary>
+        public IEnumerable<int> Reblob => Added.Concat(Resized).Concat(Reopened).Distinct();
+
+        public string Line => string.Create(CultureInfo.InvariantCulture,
+            $"다시 찾기\t본 부재 {Checked} · 새로 {Added.Count} · 없어짐 {Gone.Count} · 체적 바뀜 {Resized.Count} · 다시 열림 {Reopened.Count} · 결합된 쌍 다시 잼 {Remeasured.Count} · 반대로 결합돼 맞바꿈 {Flipped.Count} · 잴 수 없음 {Unmeasured}\t{Ms} ms");
+    }
+
+    /// <summary>
+    /// 찾은 쌍을 지금 모델로 다시 맞춘다(JACK 2026-10-19 «하나를 결합하더라도 새로고침» — 결합 · 결합 순서 바꾸기 · 나누기가 다른 쌍의 겹침을 없애거나 새 겹침을 만든다).
+    /// 모델은 바꾸지 않는다. 검사한 부재(targets) · 쌍들의 부재 · 이 실행에서 나눈 조각(Found.Splits)으로 Find 를 다시 돌려 쌍마다 짝을 맞춘다(열쇠 = 순서 없는 두 Id):
+    ///  · 결합된 쌍(결합됨 · 겹침 남음 · 다시 재지 못함): 다시 찾기에 자기 열쇠가 나오면 결합이 풀린 것 — «아직 안 함»으로 다시 연다. 아니면 지금 입체로 다시 잰다
+    ///    (결합 고리 · 순서 바꾸기 뒤 다시 생긴 겹침 — 잴 수 없으면 그대로). 남는 쪽과 조각의 열쇠는 이 쌍의 몫이라 새 쌍으로 붙이지 않는다.
+    ///  · 결합 안 된 쌍: 같은 두 부재가 있으면 체적을 새 것으로(바뀌었을 때만 덩어리도 — 처음 찾기 때 자리 검증한 덩어리를 덮지 않게) · «여러 조각과 겹침» ·
+    ///    «이미 풀림»이던 쌍은 «아직 안 함»으로 다시 연다 · «결합 못 함»은 까닭 그대로.
+    ///    없으면(둘째 바퀴 — 다른 쌍이 제 열쇠를 다 가져간 뒤) 나눈 부재의 조각끼리 겹친 쌍 가운데 가장 큰 것으로 옮긴다(원래 부재와는 안 겹치고 조각과만 겹침 —
+    ///    «이미 풀림»으로 끝내지 않게). 그것도 없으면 Gone 으로 다시 재 없어졌으면 «이미 풀림» — 결합돼 있으면 «결합됨»(자르는 쪽이 반대면 남는 쪽 · 잘리는 쪽을
+    ///    실제대로 맞바꾼다) · 잴 수 없으면 그대로.
+    ///  · 남는 쪽 · 잘리는 쪽은 그 쌍의 것 그대로(사용자 모드로 맞바꾼 쌍이 우선순위 쪽으로 돌아가지 않게).
+    ///  · 짝이 없는 다시 찾기의 쌍 = 새 쌍(New) — 찾은 쌍 끝에 붙인다(차례 = 창의 Key 가 바뀌지 않게).
+    /// 덩어리는 다시 찾기 때 지금 두 부재의 상자로 자리 검증한다(OverlapScene.DropStrayBlob — 뒤에 결합해 상자가 줄어도 믿을 수 있게).
+    /// found 의 버림 · 나중 부재 결합 순서(LeanCut · LaterCut) · 두 덩이(Unsplit) · 검사한 부재 수는 바꾸지 않는다 — 사용자 모드로 일부러 뒤집은 결합을
+    /// [우선순위대로 결합]이 도로 뒤집지 않게(그 목록은 처음 찾기 때의 것 + 고치기가 맞춰 둔 것). 잴 수 없었던 쌍의 수는 큰 쪽으로 둔다.
+    /// </summary>
+    /// <param name="withBlobs">새 쌍 · 체적이 바뀐 쌍의 덩어리도 만든다(겹침 창의 3D).</param>
+    public static RefreshReport Refresh(Document doc, Found found, IEnumerable<ElementId> targets, bool withBlobs)
+    {
+        var watch = Stopwatch.StartNew();
+        var report = new RefreshReport();
+        // 같은 Id 는 한 번만 — Find 는 같은 Id 가 둘이면 그 부재를 자기와 겹친 쌍으로 낸다.
+        var ids = new List<ElementId>();
+        var seen = new HashSet<long>();
+        void Take(ElementId id)
+        {
+            if (id != ElementId.InvalidElementId && doc.GetElement(id) != null && seen.Add(id.Value)) ids.Add(id);
+        }
+        foreach (var id in targets) Take(id);
+        foreach (var p in found.Pairs)
+        {
+            Take(p.Winner);
+            Take(p.Loser);
+            foreach (var id in p.Pieces) Take(id);
+        }
+        foreach (var pieces in found.Splits.Values)
+            foreach (var id in pieces) Take(id);
+        var fresh = Find(doc, ids, withBlobs: withBlobs);
+        report.Checked = fresh.Checked;
+        report.Unmeasured = fresh.Unmeasured;
+        found.Unmeasured = Math.Max(found.Unmeasured, fresh.Unmeasured);
+        if (withBlobs)
+            foreach (var f in fresh.Pairs) OverlapScene.DropStrayBlob(doc, f);
+        var byKey = new Dictionary<(long, long), OverlapPair>();
+        foreach (var f in fresh.Pairs) byKey.TryAdd(KeyOf(f.Winner, f.Loser), f);
+        var used = new HashSet<(long, long)>();
+
+        // 첫 바퀴: 결합된 쌍 · 제 열쇠가 나온 쌍. 제 열쇠가 없는 결합 안 된 쌍은 둘째 바퀴로(다른 쌍이 제 열쇠를 먼저 가져가게 — 조각으로 옮길 때 빼앗지 않게).
+        var unmatched = new List<int>();
+        for (int k = 0; k < found.Pairs.Count; k++)
+        {
+            var p = found.Pairs[k];
+            var own = KeyOf(p.Winner, p.Loser);
+            bool joinedPair = p.Status == Joined || p.Status == StillOverlapText || p.Status == UnremeasuredText;
+            if (byKey.TryGetValue(own, out var match))
+            {
+                used.Add(own);
+                if (joinedPair || p.Status == MultiPieceText || p.Status == NotNeeded)
+                {
+                    Reopen(p, match);
+                    report.Reopened.Add(k);
+                }
+                else if (Math.Abs(match.VolumeM3 - p.VolumeM3) > 1e-6)
+                {
+                    p.VolumeM3 = match.VolumeM3;
+                    TakeBlob(p, match);
+                    report.Resized.Add(k);
+                }
+                continue;
+            }
+            if (!joinedPair) { unmatched.Add(k); continue; }
+            foreach (var piece in p.Pieces) used.Add(KeyOf(p.Winner, piece));
+            double now = Remeasure(doc, p, out bool swallowed);
+            if (double.IsNaN(now)) continue;                      // 잴 수 없으면 앞의 결과 그대로
+            p.Swallowed = swallowed;
+            string status = now < MinOverlapM3 ? Joined : StillOverlapText;
+            if (status == p.Status && Math.Abs(now - (double.IsNaN(p.AfterM3) ? 0 : p.AfterM3)) <= 1e-6) continue;
+            (p.Status, p.AfterM3) = (status, now);
+            report.Remeasured.Add(k);
+        }
+
+        // 둘째 바퀴: 제 열쇠가 없는 결합 안 된 쌍.
+        var family = Families(found.Splits);
+        foreach (int k in unmatched)
+        {
+            var p = found.Pairs[k];
+            if (MovedToPiece(p, fresh.Pairs, used, family) is { } moved)
+            {
+                used.Add(KeyOf(moved.Winner, moved.Loser));
+                bool winnerFirst = Related(family, p.Winner, moved.Winner);
+                (p.Winner, p.WinnerName) = winnerFirst ? (moved.Winner, moved.WinnerName) : (moved.Loser, moved.LoserName);
+                (p.Loser, p.LoserName) = winnerFirst ? (moved.Loser, moved.LoserName) : (moved.Winner, moved.WinnerName);
+                Reopen(p, moved);
+                report.Reopened.Add(k);
+                continue;
+            }
+            if (p.Status == NotNeeded) continue;
+            if (!Gone(doc, p, out double left)) continue;             // 아직 겹침 · 잴 수 없음: 그대로
+            var a = doc.GetElement(p.Winner);
+            var b = doc.GetElement(p.Loser);
+            bool joined = a != null && b != null && JoinedSafe(doc, a, b);
+            if (joined && !CutsSafe(doc, a!, b!))
+            {
+                // 우리 결합 없이 반대 순서로 결합돼 있다(Revit 이 저절로 · 앞서 손으로) — 그 자리를 가진 쪽이 남는 쪽이다.
+                (p.Winner, p.Loser, p.WinnerName, p.LoserName) = (p.Loser, p.Winner, p.LoserName, p.WinnerName);
+                report.Flipped.Add(k);
+            }
+            (p.Status, p.AfterM3) = (joined ? Joined : NotNeeded, left);
+            report.Gone.Add(k);
+        }
+
+        foreach (var f in fresh.Pairs)
+        {
+            if (!used.Add(KeyOf(f.Winner, f.Loser))) continue;
+            f.New = true;
+            report.Added.Add(found.Pairs.Count);
+            found.Pairs.Add(f);
+        }
+        report.Ms = watch.ElapsedMilliseconds;
+        return report;
+    }
+
+    // 결합 안 된 쌍으로 다시 연다: 다시 찾기의 체적 · 덩어리 · 아직 안 함.
+    private static void Reopen(OverlapPair p, OverlapPair from)
+    {
+        p.VolumeM3 = from.VolumeM3;
+        TakeBlob(p, from);
+        (p.Status, p.AfterM3) = ("", double.NaN);
+    }
+
+    private static void TakeBlob(OverlapPair p, OverlapPair from) =>
+        (p.Blob, p.BlobAreaM2, p.BlobBoxed, p.BlobNote) = (from.Blob, from.BlobAreaM2, from.BlobBoxed, from.BlobNote);
+
+    // 나눈 부재의 집안: 원래 부재와 그 조각(조각을 또 나눈 것까지)을 한 집안으로 — 부재 Id → 같은 집안의 Id 전부.
+    private static Dictionary<long, HashSet<long>> Families(Dictionary<long, List<ElementId>> splits)
+    {
+        var family = new Dictionary<long, HashSet<long>>();
+        foreach (var (root, pieces) in splits)
+        {
+            var merged = new HashSet<long> { root };
+            foreach (var id in pieces) merged.Add(id.Value);
+            foreach (long id in merged.ToList())
+                if (family.TryGetValue(id, out var other)) merged.UnionWith(other);
+            foreach (long id in merged) family[id] = merged;
+        }
+        return family;
+    }
+
+    // a 와 b 가 같은 부재이거나 같은 집안(나눈 조각)인가.
+    private static bool Related(Dictionary<long, HashSet<long>> family, ElementId a, ElementId b) =>
+        a == b || (family.TryGetValue(a.Value, out var members) && members.Contains(b.Value));
+
+    // 제 열쇠가 없는 쌍: 두 부재(또는 그 조각)끼리 겹친 다시 찾기의 쌍 가운데 아직 아무 쌍도 가져가지 않은 가장 큰 것. 나눈 부재가 없는 쌍이면 null.
+    private static OverlapPair? MovedToPiece(OverlapPair p, List<OverlapPair> fresh, HashSet<(long, long)> used, Dictionary<long, HashSet<long>> family)
+    {
+        if (!family.ContainsKey(p.Winner.Value) && !family.ContainsKey(p.Loser.Value)) return null;
+        OverlapPair? best = null;
+        foreach (var f in fresh)
+        {
+            if (used.Contains(KeyOf(f.Winner, f.Loser))) continue;
+            bool fits = (Related(family, p.Winner, f.Winner) && Related(family, p.Loser, f.Loser)) ||
+                        (Related(family, p.Winner, f.Loser) && Related(family, p.Loser, f.Winner));
+            if (fits && (best == null || f.VolumeM3 > best.VolumeM3)) best = f;
+        }
+        return best;
+    }
+
+    private static bool CutsSafe(Document doc, Element cutting, Element cut)
+    {
+        try { return JoinGeometryUtils.IsCuttingElementInJoin(doc, cutting, cut); }
+        catch { return true; }      // 모르면 정한 대로라고 본다(앞의 길과 같다)
+    }
+
+    private static (long, long) KeyOf(ElementId a, ElementId b) => a.Value < b.Value ? (a.Value, b.Value) : (b.Value, a.Value);
 
     // 두 부재의 경계상자가 맞닿거나 겹치는가(1 mm 여유) — 결합으로 잘린 뒤라 입체는 겹치지 않으므로 상자로 본다.
     private static bool BoxesMeet(Element a, Element b)
@@ -593,9 +807,9 @@ public static class OverlapChecker
     /// 앞선 결합으로 겹침이 이미 없어진 쌍은 걸지 않고, 자르는 순서를 정한 대로 만들지 못한 쌍은 결합까지 되돌린다.
     /// 결합한 두 부재의 판정(DH_판정)은 '다시 계산 필요'로 바꿔 둔다 — 체적이 바뀌어 전의 '일치'를 믿을 수 없다.
     /// 결합으로 잘린 쪽(벽 · 기둥)이 위아래 두 덩이 이상이 되면 덩이마다 한 객체로 나눈다(OverlapSplitter — JACK 2026-10-14 "고칠 때 저절로").
-    /// 나눴으면 all(찾은 쌍 전부)에서 원래 부재가 든 다른 쌍을 겹치는 조각으로 옮긴다(Remap).
+    /// 나눴으면 all(찾은 쌍 전부)에서 원래 부재가 든 다른 쌍을 겹치는 조각으로 옮긴다(Remap) · splits(Found.Splits)에 조각을 적는다.
     /// </summary>
-    public static JoinReport Join(Document doc, List<OverlapPair> pairs, IReadOnlyList<OverlapPair>? all = null)
+    public static JoinReport Join(Document doc, List<OverlapPair> pairs, IReadOnlyList<OverlapPair>? all = null, Dictionary<long, List<ElementId>>? splits = null)
     {
         var lines = new List<string>();
         var undo = new List<Action>();           // 묶음을 합치지 못하면 되돌릴 것(나누기 · 옮기기의 기록)
@@ -671,6 +885,13 @@ public static class OverlapChecker
                         p.Pieces = split.Pieces.Concat(pieces.Where(id => !split.Pieces.Contains(id))).ToList();
                         p.Split = $"조각 {p.Pieces.Count}개";
                         undo.Add(() => { p.Pieces = pieces; p.Split = note; });
+                        if (splits != null)
+                        {
+                            long orig = lose.Id.Value;
+                            bool had = splits.TryGetValue(orig, out var old);
+                            splits[orig] = split.Pieces.ToList();
+                            undo.Add(() => { if (had) splits[orig] = old!; else splits.Remove(orig); });
+                        }
                         lines.AddRange(split.Lines);
                         Remap(doc, p.Pieces, p, all ?? pairs, lines, undo);
                     }
@@ -713,7 +934,9 @@ public static class OverlapChecker
         foreach (var p in pairs)
         {
             if (p.Status != Joined) continue;
-            p.AfterM3 = Remeasure(doc, p);
+            p.AfterM3 = Remeasure(doc, p, out bool swallowed);
+            p.Swallowed = swallowed;
+            if (swallowed) lines.Add($"다 들어감\t잘린 쪽 {p.Loser.Value} 이 남는 쪽 {p.Winner.Value} 안에 다 들어가 입체가 남지 않음 — 같은 자리에 겹쳐 그린 부재일 수 있음");
             if (!(p.AfterM3 < MinOverlapM3)) p.Status = double.IsNaN(p.AfterM3) ? UnremeasuredText : StillOverlapText;
         }
         var report = Tally(pairs);
@@ -856,6 +1079,8 @@ public static class OverlapChecker
                 if (result.Split)
                 {
                     split.Add(id);
+                    found.Splits[id.Value] = result.Pieces.ToList();
+                    undo.Add(() => found.Splits.Remove(id.Value));
                     lines.AddRange(result.Lines);
                     // 쌍 옮기기는 따로 감싼다 — 오류가 나도 이 부재는 나뉜 채다(«나눔»으로만 센다 · 옮긴 만큼의 undo 는 남는다 · R38 core L-a).
                     try { Remap(doc, result.Pieces, null, found.Pairs, lines, undo); }
@@ -930,12 +1155,12 @@ public static class OverlapChecker
         string path = Path.Combine(dir, name + "_overlaps.tsv");
 
         // 남는쪽 = 우선순위상 통째로 세는 부재, 잘리는쪽 = 겹친 만큼 빠져야 하는 부재.
-        var sb = new StringBuilder("남는쪽Id\t남는쪽\t잘리는쪽Id\t잘리는쪽\t겹친체적(m3)\t결합결과\t결합뒤겹침(m3)\t나누기\n");
+        var sb = new StringBuilder("남는쪽Id\t남는쪽\t잘리는쪽Id\t잘리는쪽\t겹친체적(m3)\t결합결과\t결합뒤겹침(m3)\t나누기\t새로\n");
         foreach (var p in found.Pairs)
             sb.Append(CultureInfo.InvariantCulture,
-                $"{p.Winner.Value}\t{Cell(p.WinnerName)}\t{p.Loser.Value}\t{Cell(p.LoserName)}\t{p.VolumeM3:0.######}\t{Cell(p.Status)}\t" +
+                $"{p.Winner.Value}\t{Cell(p.WinnerName)}\t{p.Loser.Value}\t{Cell(p.LoserName)}\t{p.VolumeM3:0.######}\t{Cell(p.Status + (p.Status == Joined && p.Swallowed ? " · 잘린 쪽이 다 들어감(겹쳐 그린 부재?)" : ""))}\t" +
                 $"{(double.IsNaN(p.AfterM3) ? "" : p.AfterM3.ToString("0.######", CultureInfo.InvariantCulture))}\t" +
-                $"{Cell(p.Split)}{(p.Pieces.Count > 1 ? " [" + string.Join(",", p.Pieces.Select(id => id.Value)) + "]" : "")}\n");
+                $"{Cell(p.Split)}{(p.Pieces.Count > 1 ? " [" + string.Join(",", p.Pieces.Select(id => id.Value)) + "]" : "")}\t{(p.New ? "고친 뒤 새로 찾음" : "")}\n");
         sb.Append(CultureInfo.InvariantCulture,
             $"\n검사한 부재\t{found.Checked}\n겹친 쌍\t{found.Pairs.Count}\n겹친 체적 합(m3)\t{found.TotalM3:0.######}\n" +
             $"잴 수 없었던 쌍\t{found.Unmeasured}\n함께 있지 않아 뺀 쌍(디자인 옵션·공정)\t{found.NotCoexisting}\n끝까지 봤는가\t{(found.TimedOut ? "아니오(시간 한도)" : "예")}\n우선순위\t{PriorityText}\n");
