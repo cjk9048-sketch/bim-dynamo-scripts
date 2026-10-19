@@ -29,6 +29,7 @@ public static class OverlapScene
         public List<MeshData?> Blobs = new();                 // 겹친 덩어리 — 넘겨받은 쌍과 같은 차례(그리지 않으면 null)
         public Vec3 Origin = Vec3.Zero;                       // 장면의 가운데(m, 모델 안쪽 좌표) — 겉면의 좌표에서 이것을 뺐다
         public int Boxed, Undrawn, ReadErrors;                // 경계상자로 그린 부재 · 그리지 못한 부재 · 형상을 읽다 오류가 난 부재
+        public int CutAway;                                   // 결합으로 다 깎여 입체가 없어 그리지 않은 부재(경계상자로 되살리지 않는다 — R51c revit-verify ①)
         public int FacesFallback, FacesSkipped, FacesTwisted, Triangles, Segments;
         public int BlobsDrawn, BlobTriangles, BlobBoxed;      // 그린 덩어리 · 그 세모 · 경계상자로 대신한 덩어리
         public int BlobMissing, BlobOutside, BlobAreaOff;     // 만들지 못한 덩어리 · 두 부재가 겹친 자리를 벗어나 그리지 않은 덩어리 · 넓이가 다른 덩어리
@@ -105,7 +106,8 @@ public static class OverlapScene
             var el = doc.GetElement(id)!;
             var (builder, box, how) = Member(el, counters);
             if (how == Drawn.ReadError) data.ReadErrors++;
-            if (builder == null) data.Undrawn++;
+            if (how == Drawn.CutAway) data.CutAway++;
+            else if (builder == null) data.Undrawn++;
             else if (how != Drawn.Faces) data.Boxed++;
             data.Add(id, OverlapChecker.Name(doc, el));
             builders.Add(builder);
@@ -132,65 +134,122 @@ public static class OverlapScene
 
         for (int k = 0; k < pairs.Count; k++)
         {
-            var pair = pairs[k];
-            string head = string.Create(CultureInfo.InvariantCulture, $"쌍 {k}\t{pair.Winner.Value}\t{pair.Loser.Value}\t{pair.VolumeM3:0.######} m3\t");
-            if (pair.Blob == null)
-            {
-                data.Blobs.Add(null);
-                data.BlobMissing++;
-                data.BlobLines.Add(head + "덩어리 없음" + (pair.BlobNote.Length > 0 ? "(" + pair.BlobNote + ")" : ""));
-                continue;
-            }
-            var blob = pair.Blob.Build(data.Origin);
-            if (blob.Triangles == 0)
-            {
-                data.Blobs.Add(null);
-                data.BlobMissing++;
-                data.BlobLines.Add(head + "덩어리 없음(세모 0)");
-                continue;
-            }
-            string checks = "";
-            if (verify)
-            {
-                int w = data.IndexOf(pair.Winner), l = data.IndexOf(pair.Loser);
-                var allowed = w >= 0 && l >= 0 ? OverlapBoard.Intersect(boxes[w], boxes[l]) : Box3.Empty;
-                if (w < 0 || l < 0 || boxes[w].IsEmpty || boxes[l].IsEmpty) checks = "\t자리 검증 못 함(부재의 경계상자 없음)";
-                else
-                {
-                    var world = new Box3(blob.Box.Min + data.Origin, blob.Box.Max + data.Origin);
-                    double off = allowed.IsEmpty ? double.PositiveInfinity : Outside(world, allowed);
-                    if (off > BoxSlackM)
-                    {
-                        // 이 쌍의 덩어리가 아니다 — 그리지 않는다(엉뚱한 자리에 빨간 덩어리가 뜨는 것보다 없는 편이 낫다).
-                        pair.Blob = null;
-                        pair.BlobNote = string.Create(CultureInfo.InvariantCulture, $"두 부재가 겹친 자리를 {(double.IsInfinity(off) ? "완전히" : off.ToString("0.###") + " m")} 벗어나 그리지 않음");
-                        data.Blobs.Add(null);
-                        data.BlobOutside++;
-                        data.BlobLines.Add(head + pair.BlobNote);
-                        continue;
-                    }
-                    checks = string.Create(CultureInfo.InvariantCulture, $"\t자리 O(벗어남 {off:0.####} m)");
-                }
-            }
-            if (!pair.BlobBoxed && double.IsFinite(pair.BlobAreaM2) && pair.BlobAreaM2 > 0)
-            {
-                double area = TriangleArea(blob);
-                bool same = Math.Abs(area - pair.BlobAreaM2) <= AreaTolerance * pair.BlobAreaM2;
-                if (!same) data.BlobAreaOff++;
-                checks += string.Create(CultureInfo.InvariantCulture, $"\t넓이 {(same ? "O" : "X")}(세모 {area:0.####} / Revit {pair.BlobAreaM2:0.####} m2)");
-            }
-            data.Blobs.Add(blob);
-            data.BlobsDrawn++;
-            data.BlobTriangles += blob.Triangles;
-            if (pair.BlobBoxed) data.BlobBoxed++;
-            data.BlobLines.Add(head + (pair.BlobBoxed ? "경계상자로 그림" : $"세모 {blob.Triangles}") + checks);
+            int w = data.IndexOf(pairs[k].Winner), l = data.IndexOf(pairs[k].Loser);
+            data.Blobs.Add(Blob(data, pairs[k], k, verify ? (w >= 0 ? boxes[w] : Box3.Empty, l >= 0 ? boxes[l] : Box3.Empty) : null));
         }
         data.ReadMs = watch.ElapsedMilliseconds;
         return data;
     }
 
-    // 부재의 겉면을 어떻게 만들었나: 면의 세모로 · 세모를 못 만들어 경계상자로(또는 그것도 없음) · 형상을 읽다 오류(경계상자로, 또는 그것도 없음).
-    private enum Drawn { Faces, Boxed, ReadError }
+    /// <summary>
+    /// 다시 찾기(OverlapChecker.Refresh) 뒤: 그 쌍의 덩어리를 새로 굳혀 data.Blobs 의 k 번째에 둔다(k = 찾은 쌍의 차례 — 끝에 붙인 새 쌍이면 늘린다).
+    /// Read 와 같은 규칙 · 같은 자가검증(두 부재가 겹친 자리는 지금 부재의 상자로 — 지금 모양으로 잰 덩어리다). 돌려주는 값 = 그 덩어리(그리지 않으면 null).
+    /// </summary>
+    public static MeshData? Reblob(Document doc, Data data, OverlapPair pair, int k)
+    {
+        while (data.Blobs.Count <= k) data.Blobs.Add(null);
+        var blob = Blob(data, pair, k, (BoxOf(doc, pair.Winner), BoxOf(doc, pair.Loser)));
+        data.Blobs[k] = blob;
+        return blob;
+    }
+
+    /// <summary>
+    /// 다시 찾기(OverlapChecker.Refresh)의 덩어리를 지금 두 부재의 상자로 자리 검증한다 — Read 의 자리 검증과 같은 잣대. 벗어나면 쌍에서 뗀다
+    /// (R50 revit-verify ⑤: [우선순위대로 결합] 뒤에는 결합 전 덩어리라 자리 검증 없이 다시 읽는다 — 다시 찾을 때 걸러 두면 엉뚱한 자리의 덩어리가 그려지지 않는다).
+    /// 상자를 읽지 못하면 그대로 둔다.
+    /// </summary>
+    public static void DropStrayBlob(Document doc, OverlapPair pair)
+    {
+        if (pair.Blob == null) return;
+        var winner = BoxOf(doc, pair.Winner);
+        var loser = BoxOf(doc, pair.Loser);
+        if (winner.IsEmpty || loser.IsEmpty) return;
+        var world = pair.Blob.Build(Vec3.Zero);
+        if (world.Triangles == 0) return;
+        var allowed = OverlapBoard.Intersect(winner, loser);
+        double off = allowed.IsEmpty ? double.PositiveInfinity : Outside(world.Box, allowed);
+        if (off <= BoxSlackM) return;
+        pair.Blob = null;
+        pair.BlobNote = string.Create(CultureInfo.InvariantCulture, $"두 부재가 겹친 자리를 {(double.IsInfinity(off) ? "완전히" : off.ToString("0.###") + " m")} 벗어나 그리지 않음");
+    }
+
+    // 부재의 경계상자(모델 안쪽 좌표 · m). 없거나 읽지 못하면 빈 상자.
+    private static Box3 BoxOf(Document doc, ElementId id)
+    {
+        try { return doc.GetElement(id)?.get_BoundingBox(null) is { } bb ? new Box3(ZoneScene.Meters(bb.Min), ZoneScene.Meters(bb.Max)) : Box3.Empty; }
+        catch { return Box3.Empty; }
+    }
+
+    // 쌍 하나의 덩어리를 장면의 가운데로 굳힌다(일지 줄 · 수를 data 에 남긴다). boxes = 자리 검증에 쓸 두 부재의 상자(null = 보지 않음).
+    // 자리를 벗어난 덩어리는 쌍에서도 떼어 둔다(뒤에 다시 읽을 때도 그리지 않게).
+    private static MeshData? Blob(Data data, OverlapPair pair, int k, (Box3 winner, Box3 loser)? boxes)
+    {
+        string head = string.Create(CultureInfo.InvariantCulture, $"쌍 {k}\t{pair.Winner.Value}\t{pair.Loser.Value}\t{pair.VolumeM3:0.######} m3\t");
+        if (pair.Blob == null)
+        {
+            data.BlobMissing++;
+            data.BlobLines.Add(head + "덩어리 없음" + (pair.BlobNote.Length > 0 ? "(" + pair.BlobNote + ")" : ""));
+            return null;
+        }
+        var blob = pair.Blob.Build(data.Origin);
+        if (blob.Triangles == 0)
+        {
+            data.BlobMissing++;
+            data.BlobLines.Add(head + "덩어리 없음(세모 0)");
+            return null;
+        }
+        string checks = "";
+        if (boxes is { } pairBoxes)
+        {
+            var (winnerBox, loserBox) = pairBoxes;
+            if (winnerBox.IsEmpty || loserBox.IsEmpty) checks = "\t자리 검증 못 함(부재의 경계상자 없음)";
+            else
+            {
+                var allowed = OverlapBoard.Intersect(winnerBox, loserBox);
+                var world = new Box3(blob.Box.Min + data.Origin, blob.Box.Max + data.Origin);
+                double off = allowed.IsEmpty ? double.PositiveInfinity : Outside(world, allowed);
+                if (off > BoxSlackM)
+                {
+                    // 이 쌍의 덩어리가 아니다 — 그리지 않는다(엉뚱한 자리에 빨간 덩어리가 뜨는 것보다 없는 편이 낫다).
+                    pair.Blob = null;
+                    pair.BlobNote = string.Create(CultureInfo.InvariantCulture, $"두 부재가 겹친 자리를 {(double.IsInfinity(off) ? "완전히" : off.ToString("0.###") + " m")} 벗어나 그리지 않음");
+                    data.BlobOutside++;
+                    data.BlobLines.Add(head + pair.BlobNote);
+                    return null;
+                }
+                checks = string.Create(CultureInfo.InvariantCulture, $"\t자리 O(벗어남 {off:0.####} m)");
+            }
+        }
+        if (!pair.BlobBoxed && double.IsFinite(pair.BlobAreaM2) && pair.BlobAreaM2 > 0)
+        {
+            double area = TriangleArea(blob);
+            bool same = Math.Abs(area - pair.BlobAreaM2) <= AreaTolerance * pair.BlobAreaM2;
+            if (!same) data.BlobAreaOff++;
+            checks += string.Create(CultureInfo.InvariantCulture, $"\t넓이 {(same ? "O" : "X")}(세모 {area:0.####} / Revit {pair.BlobAreaM2:0.####} m2)");
+        }
+        data.BlobsDrawn++;
+        data.BlobTriangles += blob.Triangles;
+        if (pair.BlobBoxed) data.BlobBoxed++;
+        data.BlobLines.Add(head + (pair.BlobBoxed ? "경계상자로 그림" : $"세모 {blob.Triangles}") + checks);
+        return blob;
+    }
+
+    // 부재의 겉면을 어떻게 만들었나: 면의 세모로 · 세모를 못 만들어 경계상자로(또는 그것도 없음) · 형상을 읽다 오류(경계상자로, 또는 그것도 없음) ·
+    // 결합으로 다 깎여 입체가 없음(그리지 않음).
+    private enum Drawn { Faces, Boxed, ReadError, CutAway }
+
+    // 입체가 없는 부재가 결합으로 다 깎였는가: 이것을 자르는 결합이 하나라도 있다. 그런 부재를 경계상자로 그리면 다 깎인 벽이 원래 모양 그대로
+    // «유령»으로 보인다(같은 자리에 겹쳐 그린 벽을 고친 뒤 — JACK 2026-10-19 · R51c revit-verify ①). 결합을 읽지 못하면 아니라고 친다(상자로 그림).
+    private static bool CutAway(Element el)
+    {
+        try
+        {
+            var doc = el.Document;
+            return JoinGeometryUtils.GetJoinedElements(doc, el)
+                .Any(id => doc.GetElement(id) is { } other && JoinGeometryUtils.IsCuttingElementInJoin(doc, other, el));
+        }
+        catch { return false; }
+    }
 
     // 부재 하나의 겉면 — Read 와 Remesh 가 같은 규칙으로 만든다(ZoneScene.Read 와 같은 규칙).
     // builder = null 이면 그릴 수 없다(형상도 경계상자도 없음). box = 경계상자(모델 안쪽 좌표 · m, 없으면 빈 상자).
@@ -214,6 +273,7 @@ public static class OverlapScene
                 builder = new MeshBuilder();
                 foreach (var solid in solids) ZoneScene.AddSolid(builder, solid, counters);
             }
+            else if (CutAway(el)) return (null, box, Drawn.CutAway);
         }
         catch
         {
@@ -248,23 +308,70 @@ public static class OverlapScene
                 // 조각 전부의 면을 한 그릇에(Read 와 같은 규칙 — 면의 세모, 하나도 못 만들면 조각들을 싼 경계상자).
                 builder = new MeshBuilder();
                 var box = Box3.Empty;
+                bool allCutAway = true;                   // 조각 전부가 결합으로 다 깎였다(입체 없음) — 상자로 되살리지 않는다
                 foreach (var el in els)
                 {
                     try
                     {
                         var bb = el!.get_BoundingBox(null);
                         if (bb != null) box = box.With(new Box3(ZoneScene.Meters(bb.Min), ZoneScene.Meters(bb.Max)));
-                        foreach (var solid in SolidReader.Solids(el)) ZoneScene.AddSolid(builder, solid, counters);
+                        var solids = SolidReader.Solids(el);
+                        if (solids.Count > 0 || !CutAway(el)) allCutAway = false;
+                        foreach (var solid in solids) ZoneScene.AddSolid(builder, solid, counters);
                     }
-                    catch { }
+                    catch { allCutAway = false; }
                 }
-                if (builder.Triangles == 0) builder = !box.IsEmpty && box.Size.Length > 1e-6 ? ZoneScene.BoxBuilder(box) : null;
+                if (builder.Triangles == 0) builder = allCutAway ? null : !box.IsEmpty && box.Size.Length > 1e-6 ? ZoneScene.BoxBuilder(box) : null;
             }
             var mesh = builder?.Build(data.Origin) ?? new MeshData();
             data.Meshes[slot] = mesh;
             changed[slot] = mesh;
         }
         return changed;
+    }
+
+    /// <summary>
+    /// 고치기 미리보기(JACK 2026-10-19 «갖다 대면 변환 후의 모습»): 그 쌍을 결합하면 잘릴 부재의 모양 = 잘릴 부재(cut)에서 남을 부재(keep)의
+    /// 입체를 뺀 것(Revit 불리언 빼기 — 결합이 하는 일과 같다 · 결합처럼 쌍의 두 부재만). 그 칸의 다른 조각은 그대로 함께 그린다(Remesh 처럼 칸 전부로). 모델은 바꾸지 않는다.
+    /// 돌려주는 것 = 그 칸의 새 겉면(장면의 가운데로 굳힘 · 다 잘려 나가면 세모 0) · 칸 · 못 만들었으면 겉면 null 과 까닭(부르는 쪽이 대신 그린다).
+    /// 빼기가 하나라도 실패하면 반쯤 잘린 모양을 보이지 않고 null 이다.
+    /// </summary>
+    public static (MeshData? mesh, int slot, string why) CutPreview(Document doc, Data data, ElementId cut, ElementId keep)
+    {
+        int slot = data.IndexOf(cut);
+        if (slot < 0) return (null, -1, "잘릴 부재가 그림에 없음");
+        if (doc.GetElement(keep) is not { } keepEl) return (null, slot, "남을 부재를 찾을 수 없음");
+        // 이미 결합된 쌍(«결합됐지만 겹침이 남음» 같은 줄): 두 부재의 지금 모양은 결합이 깎은 뒤라 «잘릴 것 − 남을 것»이 고친 결과와 다르다 —
+        // 기본은 Join 이 아무것도 바꾸지 않고, 순서를 뒤집으면 결합 전 모양으로 깎인다(그 모양은 API 로 얻을 수 없음 · R51 revit-verify ①).
+        if (doc.GetElement(cut) is { } cutEl && JoinGeometryUtils.AreElementsJoined(doc, cutEl, keepEl))
+            return (null, slot, "이미 결합된 쌍 — 결합 전 모양을 몰라 미리 그리지 않음");
+        var keepSolids = SolidReader.Solids(keepEl);
+        if (keepSolids.Count == 0) return (null, slot, "남을 부재의 입체 없음");
+        var counters = new ZoneScene.Data();
+        var builder = new MeshBuilder();
+        foreach (var el in data.InSlot(slot).Select(doc.GetElement))
+        {
+            if (el == null) continue;
+            var solids = SolidReader.Solids(el);
+            if (el.Id != cut)
+            {
+                foreach (var solid in solids) ZoneScene.AddSolid(builder, solid, counters);
+                continue;
+            }
+            if (solids.Count == 0) return (null, slot, $"잘릴 부재 {el.Id.Value} 의 입체 없음");
+            foreach (var solid in solids)
+            {
+                var rest = solid;
+                foreach (var k in keepSolids)
+                {
+                    try { rest = BooleanOperationsUtils.ExecuteBooleanOperation(rest, k, BooleanOperationsType.Difference); }
+                    catch (Exception ex) { return (null, slot, $"빼기 실패({el.Id.Value}): {ex.Message}"); }
+                    if (rest == null) return (null, slot, $"빼기 결과 없음({el.Id.Value})");
+                }
+                if (rest.Volume > 1e-9) ZoneScene.AddSolid(builder, rest, counters);
+            }
+        }
+        return (builder.Build(data.Origin), slot, "");
     }
 
     // inner 가 outer 를 가장 많이 벗어난 길이(m). 안에 있으면 0.

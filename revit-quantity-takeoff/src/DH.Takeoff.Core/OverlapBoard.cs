@@ -63,6 +63,11 @@ public sealed record OverlapRow
     /// (눌러도 거절만 뜨는 단추를 두지 않게 — R37 revit R1). 부르는 쪽이 정한다.
     /// </summary>
     public bool NoSwap { get; init; }
+
+    /// <summary>
+    /// 창에서 고친 뒤 다시 찾아 새로 나온 쌍(JACK 2026-10-19 «하나를 결합하더라도 새로고침») — 목록에 «새로» 딱지. 부르는 쪽이 정한다.
+    /// </summary>
+    public bool New { get; init; }
 }
 
 /// <summary>목록의 묶음 하나: 남는 쪽의 부위 → 잘리는 쪽의 부위. 제목일 뿐이다 — 묶음 때문에 빠지는 쌍은 없다.</summary>
@@ -98,6 +103,9 @@ public sealed class OverlapGroup
         int at = _rows.FindIndex(r => r.Key == row.Key);
         if (at >= 0) _rows[at] = row;
     }
+
+    // 새로 나온 줄을 맨 위에 넣는다(OverlapBoard.Add).
+    internal void Insert(OverlapRow row) => _rows.Insert(0, row);
 }
 
 /// <summary>그림에서 부재가 맡은 자리(화면은 둘 다 같은 색으로 칠한다 — 어느 쪽인지는 이름과 차례에 쓴다).</summary>
@@ -119,6 +127,7 @@ public enum BlobLook { Hidden, Strong, Done, Faint, Gone }
 ///    결합한 뒤에는 확인할 쌍이 든 묶음이 먼저, 묶음 안에서도 확인할 쌍이 먼저. 차례는 처음 만들 때 한 번 정한다 — 창에서 고쳐도 줄이 움직이지 않는다.
 ///  · 초점이 없으면(전체 보기) 부재는 하나도 칠하지 않는다(외곽선만). 덩어리는 모두 그린다: 빨강, 고쳐서 정리된 쌍(Fine)은 초록.
 ///  · 초점이 있으면 그 쌍의 두 부재만 칠하고 그 쌍의 덩어리만 빨강(초록)으로 그린다. 다른 쌍의 덩어리는 외곽선만(찍히지 않는다).
+///  · 창에서 고친 뒤 다시 찾아 새로 나온 쌍(JACK 2026-10-19)은 Add 로 붙인다: 제 묶음 맨 위 · 그 묶음이 없으면 새 묶음을 목록 맨 위 — 있던 줄은 움직이지 않는다.
 /// </summary>
 public sealed class OverlapBoard
 {
@@ -135,6 +144,7 @@ public sealed class OverlapBoard
     public static double ZoomWidth(Box3 box) => Math.Max(ZoomMinWidth, (box.IsEmpty ? 0 : box.Size.Length) + 2 * ZoomPad);
 
     private readonly Dictionary<int, OverlapRow> _byKey = new();
+    private readonly List<OverlapGroup> _groups;
     private readonly Dictionary<int, OverlapGroup> _groupOf = new();
     private readonly List<OverlapRow> _ordered = new();
     private readonly Dictionary<int, List<int>> _ofMember = new();    // 부재(그림의 차례) → 그 부재가 든 쌍의 Key(체적이 큰 것부터)
@@ -142,7 +152,7 @@ public sealed class OverlapBoard
     /// <summary>결합한 뒤의 결과를 보고 있다.</summary>
     public bool Joined { get; }
 
-    public IReadOnlyList<OverlapGroup> Groups { get; }
+    public IReadOnlyList<OverlapGroup> Groups => _groups;
 
     /// <summary>목록에 놓이는 차례 그대로의 쌍(묶음의 차례 → 묶음 안의 차례).</summary>
     public IReadOnlyList<OverlapRow> Ordered => _ordered;
@@ -178,7 +188,7 @@ public sealed class OverlapBoard
             .ThenBy(g => g.WinnerPart, StringComparer.Ordinal)
             .ThenBy(g => g.LoserPart, StringComparer.Ordinal)
             .ToList();
-        Groups = groups;
+        _groups = groups;
         foreach (var group in groups)
             foreach (var row in group.Rows)
             {
@@ -206,21 +216,78 @@ public sealed class OverlapBoard
     public OverlapGroup? GroupOf(int key) => _groupOf.TryGetValue(key, out var group) ? group : null;
 
     /// <summary>
-    /// 창에서 쌍을 고친 뒤: 같은 Key 의 줄을 제자리에서 바꾼다 — 묶음 · 목록의 차례 · 부재별 쌍의 차례 그대로(고쳐도 줄이 움직이지 않게).
+    /// 창에서 쌍을 고친 뒤: 같은 Key 의 줄을 제자리에서 바꾼다 — 묶음 · 목록의 차례 그대로(고쳐도 줄이 움직이지 않게).
     /// 남는 쪽과 잘리는 쪽이 맞바뀐 줄(사용자 모드)도 받는다 — 그 줄은 옛 묶음에 그대로 남는다.
-    /// 받지 않는 것(false · 아무것도 바꾸지 않음): 모르는 Key · 두 부재가 다른 줄(그림의 차례가 맞바뀐 것 말고는 같아야 한다 — 부재별 쌍의 목록이 어긋난다).
+    /// 부재가 바뀐 줄(고친 뒤 다시 찾기가 나눈 조각으로 옮긴 쌍 — 조각이 제 칸으로 그려지는 결합한 뒤 창)도 받는다: 부재별 쌍의 목록에서 옛 부재의 것을 빼고
+    /// 새 부재의 목록에 체적 차례 자리로 넣는다(core-verify R50 설치 전 A). 체적만 바뀐 줄도 두 부재의 목록에서 자리를 다시 잡는다(같은 검토 C).
+    /// 두 부재 · 체적이 그대로면 부재별 목록의 자리도 그대로다. 받지 않는 것(false · 아무것도 바꾸지 않음): 모르는 Key.
     /// </summary>
     public bool Replace(OverlapRow row)
     {
         if (!_byKey.TryGetValue(row.Key, out var old)) return false;
-        bool same = (row.WinnerIndex == old.WinnerIndex && row.LoserIndex == old.LoserIndex) ||
-                    (row.WinnerIndex == old.LoserIndex && row.LoserIndex == old.WinnerIndex);
-        if (!same) return false;
+        var before = new[] { old.WinnerIndex, old.LoserIndex }.Where(m => m >= 0).Distinct().OrderBy(m => m).ToList();
+        var after = new[] { row.WinnerIndex, row.LoserIndex }.Where(m => m >= 0).Distinct().OrderBy(m => m).ToList();
         _byKey[row.Key] = row;
         int at = _ordered.FindIndex(r => r.Key == row.Key);
         if (at >= 0) _ordered[at] = row;
         _groupOf[row.Key].Swap(row);
+        if (before.SequenceEqual(after) && old.VolumeM3 == row.VolumeM3) return true;
+        foreach (int member in before)
+            if (_ofMember.TryGetValue(member, out var keys))
+            {
+                keys.Remove(row.Key);
+                if (keys.Count == 0) _ofMember.Remove(member);
+            }
+        foreach (int member in after) PlaceInMember(member, row);
         return true;
+    }
+
+    // 부재별 쌍의 목록에 체적 차례 자리로 넣는다(체적이 큰 것부터 · 같으면 Key — 처음 만들 때와 같은 잣대).
+    private void PlaceInMember(int member, OverlapRow row)
+    {
+        if (!_ofMember.TryGetValue(member, out var keys)) _ofMember[member] = keys = new List<int>();
+        int at = keys.FindIndex(k => _byKey[k].VolumeM3 < row.VolumeM3 || (_byKey[k].VolumeM3 == row.VolumeM3 && k > row.Key));
+        keys.Insert(at < 0 ? keys.Count : at, row.Key);
+    }
+
+    /// <summary>
+    /// 창에서 고친 뒤 다시 찾아 새로 나온 쌍을 붙인다(JACK 2026-10-19 — 제 묶음 맨 위 · 그 묶음이 없으면 새 묶음을 목록 맨 위).
+    /// 있던 줄 · 묶음은 제자리 그대로다. 초점은 그대로 · 붙인 묶음은 편다. 부재별 쌍의 목록에는 체적 차례 자리에 넣는다.
+    /// 받지 않는 것(false · 아무것도 바꾸지 않음): 이미 있는 Key.
+    /// </summary>
+    public bool Add(OverlapRow row)
+    {
+        if (!_byKey.TryAdd(row.Key, row)) return false;
+        var group = _groups.FirstOrDefault(g => g.WinnerPart == row.WinnerPart && g.LoserPart == row.LoserPart);
+        if (group == null)
+        {
+            group = new OverlapGroup(row.WinnerPart, row.LoserPart, new List<OverlapRow>(), Joined);
+            _groups.Insert(0, group);
+        }
+        group.Insert(row);
+        group.Collapsed = false;
+        _groupOf[row.Key] = group;
+        _ordered.Clear();
+        foreach (var g in _groups) _ordered.AddRange(g.Rows);
+        foreach (int member in new[] { row.WinnerIndex, row.LoserIndex }.Where(m => m >= 0).Distinct()) PlaceInMember(member, row);
+        return true;
+    }
+
+    /// <summary>
+    /// 여러 쌍을 한 번에 붙인다 — 맨 위에 끼우므로 묶음은 합이 작은 것부터 · 묶음 안은 작은 줄부터 Add 한다(큰 묶음 · 큰 줄이 위 — 새 묶음이 여럿이어도
+    /// 처음 만들 때의 차례와 같은 잣대 · core-verify R50 낮음 6). 돌려주는 값 = 붙인 수(이미 있는 Key 는 건너뜀).
+    /// </summary>
+    public int AddRange(IEnumerable<OverlapRow> rows)
+    {
+        int added = 0;
+        var groups = rows.GroupBy(r => (r.WinnerPart, r.LoserPart))
+            .OrderBy(g => g.Sum(r => r.VolumeM3))
+            .ThenByDescending(g => g.Key.WinnerPart, StringComparer.Ordinal)
+            .ThenByDescending(g => g.Key.LoserPart, StringComparer.Ordinal);
+        foreach (var group in groups)
+            foreach (var row in group.OrderBy(r => r.VolumeM3).ThenByDescending(r => r.Key))
+                if (Add(row)) added++;
+        return added;
     }
 
     // ── 초점 ─────────────────────────────────────────────────────────────────────

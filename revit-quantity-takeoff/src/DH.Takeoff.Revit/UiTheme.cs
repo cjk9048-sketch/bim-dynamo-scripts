@@ -435,6 +435,37 @@ public sealed class UiTheme
           </Setter>
         </Style>
 
+        <!-- 목록 줄 안의 부재 이름(누르면 그 부재만 본다): 바탕 없이 있다가 마우스를 올리면 카드 바탕 + 옅은 테두리.
+             Tag = "on" 이면 지금 그 부재만 보는 중 — 카드 바탕 + 그 부재의 색 테두리(BorderBrush 로 받는다). 테두리 + 안쪽 여백 = 6(부르는 쪽이 왼쪽 -6 으로 글자 자리를 맞춘다). -->
+        <Style x:Key="CellPick" TargetType="Button">
+          <Setter Property="Foreground" Value="{StaticResource Text}"/>
+          <Setter Property="Focusable" Value="False"/>
+          <Setter Property="Cursor" Value="Hand"/>
+          <Setter Property="BorderBrush" Value="Transparent"/>
+          <Setter Property="HorizontalAlignment" Value="Left"/>
+          <Setter Property="VerticalAlignment" Value="Center"/>
+          <Setter Property="SnapsToDevicePixels" Value="True"/>
+          <Setter Property="Template">
+            <Setter.Value>
+              <ControlTemplate TargetType="Button">
+                <Border x:Name="b" Background="Transparent" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1.5" CornerRadius="5" Padding="4.5,1,6,2">
+                  <ContentPresenter VerticalAlignment="Center" HorizontalAlignment="Left" RecognizesAccessKey="False"/>
+                </Border>
+                <ControlTemplate.Triggers>
+                  <Trigger Property="IsMouseOver" Value="True">
+                    <Setter TargetName="b" Property="Background" Value="{StaticResource Card}"/>
+                    <Setter TargetName="b" Property="BorderBrush" Value="{StaticResource InputLine}"/>
+                  </Trigger>
+                  <Trigger Property="Tag" Value="on">
+                    <Setter TargetName="b" Property="Background" Value="{StaticResource Card}"/>
+                    <Setter TargetName="b" Property="BorderBrush" Value="{Binding BorderBrush, RelativeSource={RelativeSource TemplatedParent}}"/>
+                  </Trigger>
+                </ControlTemplate.Triggers>
+              </ControlTemplate>
+            </Setter.Value>
+          </Setter>
+        </Style>
+
         <!-- 글 적는 칸: 모서리가 둥글고, 적는 중이면 테두리가 강조색. 비어 있으면 Tag 의 글이 흐리게 보인다.
              안쪽 여백(Padding)은 TextBox 가 스스로 PART_ContentHost 에 넘기므로 틀에서는 주지 않는다(주면 두 배가 된다). -->
         <Style x:Key="Input" TargetType="TextBox">
