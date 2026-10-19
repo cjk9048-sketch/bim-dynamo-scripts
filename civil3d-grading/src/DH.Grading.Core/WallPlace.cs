@@ -258,4 +258,223 @@ public static class WallPlace
         else { res.Add((hi, L)); res.Add((0, lo)); }
         return res;
     }
+
+    /// <summary>옹벽 하나의 자리 재기 결과 — 그 옹벽 · 재기(<see cref="Place"/>) · 쓴 자 종류(0 단 링 · 1 계획선 — 판 1 옹벽은 계획선으로 물러날 수 있다).</summary>
+    public readonly record struct WallCheck(WallRec Wall, Place Place, int RulerKind);
+
+    /// <summary>★★★[v103.1.9 · JACK 1002 Q1 «옹벽이 서 있던 단이 움직이면 재생성 <b>전에</b> 묻고 진행 — 아니오면 아무것도 안 바뀜»]
+    /// 옹벽마다 자리 재기 — 정지면을 다시 지으면 쓸 경계 · 제원 · 구간으로 단 링을 다시 짓고(<see cref="BenchRings"/> — 방향마다 한 번 · 그 방향 옹벽이 있을 때만) 저장한 안쪽 변 · 머리를 대 본다(<see cref="Check"/>).
+    /// <para>정지면 생성 <b>끝</b>(재생성 뒤 확인 — v103.1 · 움직였으면 보류)과 재생성 <b>전</b>의 묻기(v103.1.9)가 <b>같은 함수</b>를 쓴다 — 같은 입력이면 같은 답(묻고 «예» 했는데 끝에서 다른 답이 나오지 않게).</para>
+    /// <para>판 1 옹벽(자 종류 칸이 없어 단 링으로 읽힘 · <c>SlopeW &lt; 0</c>)이 단 링에서 움직였으면 계획선으로 한 번 더 대 본다(v103.1 코드 검토 낮음 7) — 그때 쓴 자 종류를 돌려준다(목록에 쓰는 것은 부르는 쪽).
+    /// 옹벽을 고치지 않는다(읽기만).</para></summary>
+    public static List<WallCheck> CheckAll(IEnumerable<WallRec> walls, IReadOnlyList<Point3> boundary, GradingParams p,
+        IReadOnlyList<SlopeZone> cutZones, IReadOnlyList<SlopeZone> fillZones)
+    {
+        var rings = new Dictionary<bool, Dictionary<int, List<Point3>>>();
+        Dictionary<int, List<Point3>> R(bool up)
+        {
+            if (!rings.TryGetValue(up, out var r)) { r = BenchRings(boundary, p, up, up ? cutZones : fillZones); rings[up] = r; }
+            return r;
+        }
+        var res = new List<WallCheck>();
+        foreach (var w in walls)
+        {
+            int rk = w.RulerKind;
+            var ruler = rk == 1 ? boundary : (R(w.Up).TryGetValue(w.Bench, out var rr) ? rr : null);
+            var chk = Check(w.Seg, w.HeadZ, w.Up, ruler);
+            if (chk.Moved && w.SlopeW < 0 && rk == 0)
+            {
+                var chk2 = Check(w.Seg, w.HeadZ, w.Up, boundary);
+                if (!chk2.Moved) { chk = chk2; rk = 1; }
+            }
+            res.Add(new WallCheck(w, chk, rk));
+        }
+        return res;
+    }
+
+    /// <summary>★[v103.1.9 · 계획 검토 중간 1] 재생성 전에 잴 옹벽 — 이 구역 목록(머리 계획선이 빈 값이거나 이 계획선) · 넣은 옹벽(State 1) · 보류 아님(빈 값 또는 «다시 짓기 실패» 보류 —
+    /// DHWALLCOMP가 다시 시도하는 것) · 이번에 덮여 되돌릴 옹벽 아님. 미리 재기 · 끝 가르기 · 하네스가 같은 함수를 쓴다(세는 옹벽이 어긋나면 헛 ⚠).</summary>
+    public static List<WallRec> Candidates(WallListHead head, IEnumerable<WallRec> walls, string region, ICollection<int>? coveredNos, string rebuildFailTag)
+    {
+        var res = new List<WallRec>();
+        if (!(head.PlanHandle.Length == 0 || head.PlanHandle == region)) return res;
+        foreach (var w in walls)
+            // ★[v103.1.12] «합성 실패» 보류도 대상 — 자리는 그대로이고 다음 합성이 다시 해 본다(«다시 짓기 실패»와 같은 부류 · WallList.IsRetryHold)
+            if (w.State == 1 && (w.Hold.Length == 0 || w.Hold.StartsWith(rebuildFailTag, StringComparison.Ordinal) || WallList.IsRetryHold(w.Hold)) && (coveredNos == null || !coveredNos.Contains(w.No)))
+                res.Add(w);
+        return res;
+    }
+
+    /// <summary>★[v103.1.14] 이어 짓기 판정의 갈래 — 없음(종전 길) · 멈춤(까닭 · 아무것도 안 바뀜) · 이어 짓기.</summary>
+    public enum ExtendKind { None, Stop, Extend }
+
+    /// <summary>★[v103.1.14] 이어 짓기 판정 결과. 앞 = 새 구간 첫 끝(T0)에 끝이 맞닿은 옹벽 · 뒤 = 새 구간 끝 끝(T1)에 첫 끝이 맞닿은 옹벽.</summary>
+    public sealed class Extend
+    {
+        public ExtendKind Kind;
+        public string Why = "";
+        /// <summary>맞닿은 옹벽 — 앞 · 뒤 차례(1~2개).</summary>
+        public List<int> Nos = new();
+        public WallRec? Front, Back;
+        /// <summary>합성이 되면 이은 옹벽이 물려받을 번호 — 맞닿은 옹벽마다 (물려받을 번호가 있으면 그것 · 없으면 제 번호) 중 작은 것.</summary>
+        public int KeepNo;
+        /// <summary>이은 구간(이 자 위).</summary>
+        public double T0, T1;
+        /// <summary>지킬 측선 방향 — FixA = 이은 구간 끝 끝(end1 · «시점» 쪽)에서 뒤 옹벽의 측선 · FixB = 첫 끝(end0 · «종점» 쪽)에서 앞 옹벽의 측선. null이면 그 끝은 찍는다(맞닿은 옹벽이 없는 끝).</summary>
+        public (double X, double Y)? FixA, FixB;
+        /// <summary>★[계획 검토 낮음 8] 이은 옹벽을 지을 앞면 구배 · 앞면 최소 너비 · 원지반 재는 간격 — 맞닿은 옹벽이 지은 값(옛 옹벽 몫 앞면이 말없이 바뀌지 않게). 음수 = 모름(지금 설정값).</summary>
+        public double SlopeW = -1, FaceRun = -1, Grid = -1;
+        public string Note = "";
+    }
+
+    /// <summary>★[v103.1.14] 고를 때 알림용 — 고른 구간 앞(첫 끝) · 뒤(끝 끝)에 맞닿은 옹벽(<see cref="ExtendPlan"/>과 같은 후보 · 같은 맞닿음 · 멈춤 판정은 안 함).
+    /// ZoneEditCommon이 단높이 · 소단 기본값을 그 옹벽 값으로 띄우는 데만 쓴다 — 이어 짓기 여부는 늘 <see cref="ExtendPlan"/>이 정한다.</summary>
+    public static (WallRec? Front, WallRec? Back) Touching(IReadOnlyList<Point3> ruler, double[] cum, double t0, double t1, bool up, int bench, IEnumerable<WallRec> walls, double touchTol = 0.01)
+    {
+        if (ruler == null || ruler.Count < 3 || cum == null || cum.Length < 2) return (null, null);
+        var ws = walls as IReadOnlyCollection<WallRec> ?? walls.ToList();
+        var seg = WallInPoly.SegmentPoints(ruler, cum, t0, t1);
+        if (seg.Count < 2) return (null, null);
+        static double D(Point3 a, Point3 b) => Math.Sqrt((a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y));
+        var away = WallList.GoingAway(ws);
+        WallRec? f = null, b = null;
+        foreach (var w in ws)
+        {
+            // ★[코드 검토 낮음] 보류 옹벽(움직임 · 다시 해 볼 보류 모두)은 알림에서 뺀다 — 이어 짓지 못한다(Enter 뒤 판정이 까닭을 알린다)
+            if (w.State != 1 || w.Up != up || w.Bench != bench || away.Contains(w.No) || w.Hold.Length > 0 || w.Seg == null || w.Seg.Count < 2) continue;
+            if (f == null && D(seg[0], w.Seg[^1]) <= touchTol) f = w;
+            if (b == null && D(seg[^1], w.Seg[0]) <= touchTol) b = w;
+        }
+        return (f, b);
+    }
+
+    /// <summary>★★★[v103.1.14 · JACK 1014 ② «새 구간이 기존 구간 옹벽 끝에 맞닿으면 단높이·소단이 같을 때만 그 옹벽을 늘려 한 옹벽으로(번호 그대로 · 양쪽 다 닿으면 셋을 하나로 · 다르면 멈춤+까닭)» ·
+    /// 1019 «새 쪽 끝 한 점만 · 머리는 이어진 전체로»] 고른 구간 [<paramref name="t0"/>, <paramref name="t1"/>](<paramref name="ruler"/> 위)이 같은 선 옹벽 끝에 맞닿았나 · 이어 지을 수 있나.
+    /// <para>후보 = 같은 방향 · 같은 단 · 넣음(State 1) · 미룬 옹벽이 바꿀 옛 옹벽(<see cref="WallList.GoingAway"/>) 아님 · 움직인 보류 아님(저장한 안쪽 변이 지금 자리가 아니다 — 종전처럼 판정에서 뺀다).
+    /// 맞닿음 = 새 안쪽 변(<see cref="WallInPoly.SegmentPoints"/>) 끝 점과 옹벽 안쪽 변 끝 점이 <paramref name="touchTol"/> 안.</para>
+    /// <para>멈춤: «다시 짓기 실패» · «합성 실패» 보류 · 단높이나 소단이 다름(1e-6) · 옹벽 안쪽 변이 이 자에서 벗어남(<see cref="Check"/>) · 같은 옹벽이 앞뒤(한 바퀴) · 앞(뒤)에 둘 · 이은 길이가 안 맞음(2cm) · 이으면 한 바퀴.
+    /// 맞닿은 옹벽 쪽 측선 방향을 못 되살리거나(지은 그대로를 못 지킨다) 두 옹벽의 앞면 값이 달라도 멈춘다 · 미룬 옹벽이 바꿀 옛 옹벽에만 맞닿아도 멈춘다(폴리곤 그리기 전에).
+    /// ZoneEditCommon(고를 때 · Enter 뒤) · BuildWallAdd(같은 입력으로 다시 — 화면과 같은 답인지) · 하네스 S160이 같은 함수를 쓴다.</para></summary>
+    public static Extend ExtendPlan(IReadOnlyList<Point3> ruler, double[] cum, double t0, double t1, bool up, int bench,
+        IEnumerable<WallRec> walls, double askH, double askT, double touchTol = 0.01)
+    {
+        var res = new Extend { T0 = t0, T1 = t1 };
+        Extend Stop(string why) { res.Kind = ExtendKind.Stop; res.Why = why; return res; }
+        if (ruler == null || ruler.Count < 3 || cum == null || cum.Length < 2) return res;
+        double tot = cum[^1];
+        var ws = walls as IReadOnlyCollection<WallRec> ?? walls.ToList();
+        var seg = WallInPoly.SegmentPoints(ruler, cum, t0, t1);
+        if (seg.Count < 2) return res;
+        static double D(Point3 a, Point3 b) => Math.Sqrt((a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y));
+        var e0 = seg[0]; var e1 = seg[^1];
+        var away = WallList.GoingAway(ws);
+        WallRec? front = null, back = null, awayF = null, awayB = null;
+        foreach (var w in ws)
+        {
+            if (w.State != 1 || w.Up != up || w.Bench != bench || WallList.IsMovedHold(w.Hold) || w.Seg == null || w.Seg.Count < 2) continue;
+            bool f = D(e0, w.Seg[^1]) <= touchTol, b = D(e1, w.Seg[0]) <= touchTol;
+            // ★[계획 검토 낮음 10] 미룬 옹벽이 바꿀 옛 옹벽은 이어 짓지 않는다 — 그 끝에 이을 옹벽이 따로 없으면 아래에서 멈춘다(종전처럼 폴리곤을 그리기 전에)
+            if (away.Contains(w.No)) { if (f) awayF ??= w; if (b) awayB ??= w; continue; }
+            if (f) { if (front != null) return Stop($"새 구간 첫 끝에 옹벽 {front.No} · {w.No}이 함께 맞닿는다 — 이어 짓지 않고 멈춘다"); front = w; }
+            if (b) { if (back != null) return Stop($"새 구간 끝 끝에 옹벽 {back.No} · {w.No}이 함께 맞닿는다 — 이어 짓지 않고 멈춘다"); back = w; }
+            // (첫 끝끼리 · 끝 끝끼리 같은 것은 맞닿음이 아니다 — 옹벽 위를 덮는 구간(같은 선 바꿈 · 1002)이 그렇다 · 겹침 판정이 맡는다)
+        }
+        foreach (var (aw, has) in new[] { (awayF, front != null), (awayB, back != null) })
+            if (aw != null && !has)
+                return Stop($"옹벽 {aw.No} 끝에 맞닿는데 그 옹벽은 미룬 옹벽이 바꿀 옹벽이다(합성이 되면 지워진다) — [옹벽 합성]을 먼저 하거나 옹벽 끝에서 띄워 구간을 다시 지정하세요");
+        if (front == null && back == null) return res;
+        if (front != null && ReferenceEquals(front, back)) return Stop($"새 구간의 두 끝이 다 옹벽 {front.No}에 맞닿는다 — 이어 지으면 한 바퀴다(한 바퀴 옹벽은 전체구간 옹벽 변환으로)");
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        var spans = new Dictionary<WallRec, (double T0, double T1)>();
+        foreach (var w in new[] { front, back })
+        {
+            if (w == null) continue;
+            if (WallList.IsRetryHold(w.Hold))
+                return Stop($"옹벽 {w.No}은 보류({(w.Hold.Length > 60 ? w.Hold.Substring(0, 60) + "…" : w.Hold)})라 이어 짓지 못한다 — [옹벽 합성]으로 넣거나 사면 변환으로 되돌린 뒤 다시 하세요");
+            if (Math.Abs(w.H - askH) > 1e-6 || Math.Abs(w.T - askT) > 1e-6)
+                return Stop(string.Format(ci, "옹벽 {0}은 단높이 {1:0.##}m · 소단 {2:0.##}m, 이번 값은 단높이 {3:0.##}m · 소단 {4:0.##}m — 같을 때만 이어 짓는다(값을 맞추거나 옹벽 끝에서 띄워 구간을 다시 지정하세요)", w.No, w.H, w.T, askH, askT));
+            var pl = Check(w.Seg, w.HeadZ, up, ruler);
+            if (pl.Moved) return Stop($"옹벽 {w.No}이 이 선(자)에서 벗어났다({pl.Why}) — 이어 짓지 않고 멈춘다");
+            spans[w] = (pl.T0, pl.T1);
+        }
+        double mT0 = front != null ? spans[front].T0 : t0, mT1 = back != null ? spans[back].T1 : t1;
+        double sNew = GradingGeometry.SpanOf(t0, t1, tot), sM = GradingGeometry.SpanOf(mT0, mT1, tot);
+        double sSum = sNew + (front != null ? GradingGeometry.SpanOf(spans[front].T0, spans[front].T1, tot) : 0) + (back != null ? GradingGeometry.SpanOf(spans[back].T0, spans[back].T1, tot) : 0);
+        if (sSum >= tot - 0.02) return Stop(string.Format(ci, "이으면 {0:F1}m로 한 바퀴(둘레 {1:F1}m)다 — 한 바퀴 옹벽은 전체구간 옹벽 변환으로", sSum, tot));
+        if (Math.Abs(sM - sSum) > 0.02) return Stop(string.Format(ci, "이은 구간 길이 {0:F2}m가 옹벽 · 새 구간 길이 합 {1:F2}m와 안 맞는다 — 이어 짓지 않고 멈춘다", sM, sSum));
+        res.Kind = ExtendKind.Extend; res.Front = front; res.Back = back; res.T0 = mT0; res.T1 = mT1;
+        if (front != null) res.Nos.Add(front.No);
+        if (back != null) res.Nos.Add(back.No);
+        // ★[계획 검토 낮음 6] 물려받을 번호는 <b>미룬</b> 이어 짓기 옹벽의 것만 — 합성에 든 옹벽의 KeepNo는 이미 물려받았거나 못 받은 지난 값이다
+        res.KeepNo = new[] { front, back }.Where(w => w != null).Select(w => w!.KeepNo > 0 && WallList.IsDeferred(w) ? w.KeepNo : w.No).Min();
+        // ★[계획 검토 중간 1 · JACK 1019 «옛 옹벽 반대쪽 측선은 지은 그대로»] 방향을 못 되살리면 찍기로 물러나지 않고 멈춘다(모양이 바뀌는데 번호만 그대로가 된다)
+        if (front != null)
+        {
+            var sd = WallInPoly.SideDirs(front.Poly, front.IsWall, front.Seg, out string why);
+            if (sd == null) return Fail($"옹벽 {front.No} 쪽 측선을 지은 그대로 되살리지 못했다({why})");
+            res.FixB = sd.Value.AtEnd0;
+        }
+        if (back != null)
+        {
+            var sd = WallInPoly.SideDirs(back.Poly, back.IsWall, back.Seg, out string why);
+            if (sd == null) return Fail($"옹벽 {back.No} 쪽 측선을 지은 그대로 되살리지 못했다({why})");
+            res.FixA = sd.Value.AtEnd1;
+        }
+        // ★[계획 검토 낮음 8] 앞면 구배 · 최소 너비 · 간격 — 맞닿은 옹벽이 지은 값(판 1 옹벽은 음수 = 모름). 두 옹벽이 서로 다르면 멈춘다
+        {
+            var known = new[] { front, back }.Where(w => w != null && w.SlopeW >= 0 && w.FaceRun >= 0 && w.Grid > 0).ToList();
+            if (known.Count == 2 && (Math.Abs(known[0]!.SlopeW - known[1]!.SlopeW) > 1e-9 || Math.Abs(known[0]!.FaceRun - known[1]!.FaceRun) > 1e-9 || Math.Abs(known[0]!.Grid - known[1]!.Grid) > 1e-9))
+                return Fail(string.Format(ci, "옹벽 {0} · {1}을 지은 앞면 값이 다르다(앞면 구배 1:{2:0.###} · {3:0.###} · 최소 너비 {4:0.###} · {5:0.###}m · 간격 {6:0.##} · {7:0.##}m)",
+                    known[0]!.No, known[1]!.No, known[0]!.SlopeW, known[1]!.SlopeW, known[0]!.FaceRun, known[1]!.FaceRun, known[0]!.Grid, known[1]!.Grid));
+            if (known.Count > 0) { res.SlopeW = known[0]!.SlopeW; res.FaceRun = known[0]!.FaceRun; res.Grid = known[0]!.Grid; }
+        }
+        res.Note = string.Format(ci, "옹벽 {0}에 이어 짓는다 — 구간 [{1:F2}..{2:F2}] → [{3:F2}..{4:F2}] {5:F1}m · 번호 {6} 그대로 · 찍을 끝 {7}개",
+            string.Join(" · ", res.Nos), t0, t1, mT0, mT1, sM, res.KeepNo, (res.FixA == null ? 1 : 0) + (res.FixB == null ? 1 : 0))
+            + (res.SlopeW >= 0 ? string.Format(ci, " · 앞면은 옹벽 {0}을 지은 값(1:{1:0.###} · {2:0.###}m · 간격 {3:0.##}m)", res.Nos[0], res.SlopeW, res.FaceRun, res.Grid) : "");
+        return res;
+        Extend Fail(string why)
+        {
+            var r = new Extend { Kind = ExtendKind.Stop, Why = why + " — 이어 짓지 않고 멈춘다", T0 = t0, T1 = t1 };
+            return r;
+        }
+    }
+
+    /// <summary>끝 확인에서 옹벽 하나를 어떻게 다루나.</summary>
+    public enum EndKind
+    {
+        /// <summary>그대로 — 다시 합성한다.</summary>
+        Keep,
+        /// <summary>보류였는데 단이 제자리로 돌아왔다 — 보류를 풀고 다시 합성한다.</summary>
+        Back,
+        /// <summary>재생성 전에 묻고 «예»를 받았고 끝에서도 움직였다 — 지운다(목록 · 결과물).</summary>
+        Remove,
+        /// <summary>전부터 보류였고 아직 움직여 있다 — 보류 그대로(⚠ 아님 · 이번 작업 탓이 아니다).</summary>
+        StillHeld,
+        /// <summary>묻지 않았는데 움직였다(미리 잰 것과 다르다 · 미리 못 쟀다) — 보류 + ⚠.</summary>
+        Unexpected,
+        /// <summary>미리 «움직인다»고 묻고 «예»를 받았는데 끝에서는 그대로다 — 안 지운다 · ⚠(미리 잰 것과 다르다).</summary>
+        AskedButStayed,
+    }
+
+    /// <summary>★[v103.1.9 · 계획 검토 중간 1 · 2] 끝 확인 가르기 — 재생성 뒤 자리 재기(<see cref="CheckAll"/> — 넣은 옹벽 전부)를 미리 잰 대상(<paramref name="preCand"/>) ·
+    /// «예»를 받은 번호(<paramref name="preYes"/>)와 견준다. 미리 재지 않았으면(<paramref name="preCand"/> = null) 움직인 옹벽은 전부 «묻지 않았는데 움직임»(전부터 보류였던 것은 그대로 보류).
+    /// <para>견주는 것은 <b>미리 잰 대상 가운데</b> 이번에 움직인 것 — 전부터 보류였던 옹벽(대상이 아님)은 미리 · 끝 어느 쪽에도 안 센다(검토 중간 1: 그것을 세면 첫 «예» 다음부터 매번 헛 ⚠).</para></summary>
+    public static List<(WallCheck C, EndKind Kind)> SortEnd(IReadOnlyList<WallCheck> end, ICollection<int>? preCand, ICollection<int>? preYes, string rebuildFailTag)
+    {
+        var res = new List<(WallCheck, EndKind)>();
+        foreach (var c in end)
+        {
+            var w = c.Wall;
+            bool heldBefore = w.Hold.Length > 0 && !w.Hold.StartsWith(rebuildFailTag, StringComparison.Ordinal) && !WallList.IsRetryHold(w.Hold);
+            bool cand = preCand != null ? preCand.Contains(w.No) : !heldBefore;
+            bool yes = preYes != null && preYes.Contains(w.No);
+            EndKind k;
+            if (!c.Place.Moved) k = yes ? EndKind.AskedButStayed : heldBefore ? EndKind.Back : EndKind.Keep;
+            else if (yes) k = EndKind.Remove;
+            else if (heldBefore && !cand) k = EndKind.StillHeld;
+            else k = EndKind.Unexpected;
+            res.Add((c, k));
+        }
+        return res;
+    }
 }

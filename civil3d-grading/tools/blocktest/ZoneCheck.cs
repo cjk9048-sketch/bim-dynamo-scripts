@@ -331,21 +331,169 @@ static class ZoneCheck
             var openR = loopR.Take(30).ToList();                                       // 곧은 변 위 열린 선(모서리 없음)
             var pcTR = WallPlace.SplitAtWalls(openR, new List<(int, IReadOnlyList<Point3>)> { (4, WallInPoly.SegmentPoints(ringR, cR, cR[29] - 0.3, cR[29] + 10)) });
             check("S153 옹벽 조각 — 끝만 0.3m 겹친 옹벽은 안 끊는다(겹친 길이 0.5m 이하 · 열린 선)", pcTR.Count == 1 && pcTR[0].WallNo == 0, $"{pcTR.Count}조각");
-            // ※알려진 한계(v100대부터 · 이번 판에서 안 고침 — v103.2 계획): 옹벽이 자의 <b>모서리를 돌면</b> 안쪽 변(SegmentPoints — 1m 간격 표본 · 자의 꼭짓점을 안 담는다)이
-            //   모서리를 현으로 질러가, 그 곁의 클릭선이 옹벽 곁 띠 밖에 놓여 주황 조각에서 빠진다. 통과/실패가 아니라 <b>잰 값</b>만 남긴다
+            // ★★[v103.1.8 · 종전 «알려진 한계»(v100대부터 · S153 실측 27.1cm · 주황 조각 8.486m)] 옹벽이 자의 <b>모서리를 돌면</b> 안쪽 변(SegmentPoints)이 모서리를 현으로 질러가던 것 —
+            //   이제 표본 현에서 1mm 넘게 떨어진 꼭짓점을 넣는다. 안쪽 변이 모서리를 지나고(0 안) · 주황 조각 합 = 옹벽 길이 9.3m(1µm 안) · 곧은 구간의 점은 종전과 비트 그대로
             {
                 var segCorner = WallInPoly.SegmentPoints(ring1, c1, tot1 - 9, 0.3);    // 링 첫 점(모서리)을 넘는 9.3m
                 var pcC = WallPlace.SplitAtWalls(loop, new List<(int, IReadOnlyList<Point3>)> { (3, segCorner) });
-                double sag = 0;
+                double sag = double.MaxValue;
                 for (int i = 0; i + 1 < segCorner.Count; i++)
                 {
                     var p = segCorner[i]; var q = segCorner[i + 1];
                     double ex = q.X - p.X, ey = q.Y - p.Y, l2 = ex * ex + ey * ey;
                     double u = l2 < 1e-18 ? 0 : ((ring1[0].X - p.X) * ex + (ring1[0].Y - p.Y) * ey) / l2; u = u < 0 ? 0 : (u > 1 ? 1 : u);
                     double d = Math.Sqrt((ring1[0].X - p.X - ex * u) * (ring1[0].X - p.X - ex * u) + (ring1[0].Y - p.Y - ey * u) * (ring1[0].Y - p.Y - ey * u));
-                    if (i == 0 || d < sag) sag = d;
+                    if (d < sag) sag = d;
                 }
-                Console.WriteLine($"      ※알려진 한계 — 모서리를 도는 옹벽 9.3m: 주황 조각 합 {pcC.Where(p => p.WallNo == 3).Sum(p => Len(p.Pts)):F3}m({string.Join(" · ", pcC.Select(p => $"{(p.WallNo > 0 ? "옹벽" : "사면")} {Len(p.Pts):F3}"))}) · 안쪽 변이 모서리에서 {sag * 100:F1}cm 떨어져 질러간다");
+                double orange = pcC.Where(p => p.WallNo == 3).Sum(p => Len(p.Pts));
+                check("S153 모서리를 도는 옹벽 9.3m — 안쪽 변이 모서리 꼭짓점을 지난다(1µm 안 · 종전 27.1cm 질러감)", sag < 1e-6, $"{sag * 100:F4}cm");
+                check("S153 모서리를 도는 옹벽 9.3m — 주황 조각 합 = 옹벽 길이(1µm 안 · 종전 8.486m)", Math.Abs(orange - 9.3) < 1e-6 && Math.Abs(Len(segCorner) - 9.3) < 1e-6,
+                      $"{orange:F7}m · 안쪽 변 {Len(segCorner):F7}m · {string.Join(" · ", pcC.Select(p => $"{(p.WallNo > 0 ? "옹벽" : "사면")} {Len(p.Pts):F3}"))}");
+                // 곧은 구간 — 종전 함수(1m 표본만)와 점이 비트 그대로(꺾인 꼭짓점이 없으면 하나도 안 넣는다)
+                static List<Point3> OldSeg(IReadOnlyList<Point3> r, double[] cm, double a0, double a1)
+                {
+                    double rT = cm[^1], sp = a1 >= a0 ? a1 - a0 : rT - a0 + a1; int ns = Math.Max(2, (int)Math.Ceiling(sp / 1.0));
+                    var l = new List<Point3>(); for (int i = 0; i <= ns; i++) { double t = a0 + sp * i / ns; l.Add(GradingGeometry.PointAtParam(r, cm, ((t % rT) + rT) % rT)); } return l;
+                }
+                static bool SameBits(List<Point3> x, List<Point3> y) => x.Count == y.Count && x.Zip(y).All(t => t.First.X.Equals(t.Second.X) && t.First.Y.Equals(t.Second.Y) && t.First.Z.Equals(t.Second.Z));
+                int sameN = 0, cases = 0; var miss = new List<string>();
+                foreach (var (a0, a1) in new[] { (T0, T1), (L0, L1 - 0.5), (cR[5] + 0.25, cR[25] - 0.4), (1.0, 7.5), (T0 + 0.123, T0 + 4.567) })
+                {
+                    cases++;
+                    var nowS = WallInPoly.SegmentPoints(ring1, c1, a0, a1); var oldS = OldSeg(ring1, c1, a0, a1);
+                    // 그 구간 안에 1mm 넘게 꺾인 꼭짓점이 있으면 «달라야 맞다» — 없을 때만 비트로 견준다
+                    bool turns = nowS.Count != oldS.Count;
+                    if (!turns && SameBits(nowS, oldS)) sameN++;
+                    else if (turns) { sameN++; miss.Add($"[{a0:F2}..{a1:F2}] 꺾인 꼭짓점 {nowS.Count - oldS.Count}개 넣음(표본은 그대로: {oldS.All(p => nowS.Contains(p))})"); }
+                    else miss.Add($"[{a0:F2}..{a1:F2}] ⚠점 수 같은데 비트가 다르다");
+                }
+                check("S153 곧은 구간은 종전과 점이 비트 그대로 · 꺾인 꼭짓점을 넣은 구간도 종전 표본은 다 남는다", sameN == cases && miss.All(s => !s.Contains("⚠") && !s.Contains("False")), string.Join(" · ", miss));
+                // ★[v103.1.9 · v103.1.8 검토 낮음 1-1] 모서리에 붙은 꼭짓점 둘(계획선 수직 단차 = XY 같고 Z만 다름 · 0.05mm 짧은 변) — 둘 다 넣으면 같은 XY 점 · 아주 짧은 변이 생긴다(손 폴리곤 거절)
+                //   → 바로 앞 점과 XY 1mm 안인 꼭짓점은 뺀다(앞 것 = 꼭짓점 번호가 작은 것을 남긴다) · 표본은 다 남는다 · 안쪽 변은 여전히 모서리를 지난다
+                {
+                    static (double MinStep, double Sag, int AtCorner, double KeptZ) Probe(List<Point3> r, double a0, double a1, double cx, double cy)
+                    {
+                        var cm = GradingGeometry.CumLen2D(r);
+                        var sp = WallInPoly.SegmentPoints(r, cm, a0, a1);
+                        double minStep = double.MaxValue, sag = double.MaxValue; int at = 0; double kz = double.NaN;
+                        for (int i = 0; i + 1 < sp.Count; i++)
+                        {
+                            double ex = sp[i + 1].X - sp[i].X, ey = sp[i + 1].Y - sp[i].Y, l2 = ex * ex + ey * ey;
+                            minStep = Math.Min(minStep, Math.Sqrt(l2));
+                            double u = l2 < 1e-18 ? 0 : ((cx - sp[i].X) * ex + (cy - sp[i].Y) * ey) / l2; u = u < 0 ? 0 : (u > 1 ? 1 : u);
+                            sag = Math.Min(sag, Math.Sqrt((cx - sp[i].X - ex * u) * (cx - sp[i].X - ex * u) + (cy - sp[i].Y - ey * u) * (cy - sp[i].Y - ey * u)));
+                        }
+                        foreach (var q in sp) if (Math.Abs(q.X - cx) < 1e-3 && Math.Abs(q.Y - cy) < 1e-3) { at++; if (double.IsNaN(kz)) kz = q.Z; }
+                        return (minStep, sag, at, kz);
+                    }
+                    // 네모 자 20m × 20m · (20,0) 모서리에 수직 단차(10 → 12m) · 되돌아오는 단차는 (0,20)
+                    var stepR = new List<Point3> { new(0, 0, 10), new(20, 0, 10), new(20, 0, 12), new(20, 20, 12), new(0, 20, 12), new(0, 20, 10) };
+                    var s1 = Probe(stepR, 15.3, 24.6, 20, 0);
+                    check("S153 모서리 단차(XY 같은 두 꼭짓점) — 같은 XY 점이 하나만 · 이웃 점 간격 1mm 넘게 · 안쪽 변이 모서리를 지난다 · 남긴 점 = 앞 꼭짓점(Z 10)",
+                          s1.AtCorner == 1 && s1.MinStep > 1e-3 && s1.Sag < 1e-6 && s1.KeptZ == 10, $"모서리 점 {s1.AtCorner}개 · 가장 짧은 간격 {s1.MinStep * 1000:F3}mm · 질러감 {s1.Sag * 1000:F4}mm · Z {s1.KeptZ}");
+                    // 0.05mm 짧은 변으로 깎인 모서리((20,0) → (20, 0.00005))
+                    var shortR = new List<Point3> { new(0, 0, 10), new(20, 0, 10), new(20, 0.00005, 10), new(20, 20, 10), new(0, 20, 10) };
+                    var s2 = Probe(shortR, 15.3, 24.6, 20, 0);
+                    check("S153 모서리 0.05mm 짧은 변 — 모서리 곁 점이 하나만 · 이웃 점 간격 1mm 넘게 · 안쪽 변이 모서리를 지난다",
+                          s2.AtCorner == 1 && s2.MinStep > 1e-3 && s2.Sag < 1e-4, $"모서리 곁 점 {s2.AtCorner}개 · 가장 짧은 간격 {s2.MinStep * 1000:F3}mm · 질러감 {s2.Sag * 1000:F4}mm");
+                    // 이음매에 걸친 단차(첫 점과 끝 점이 XY 같고 Z만 다름) — CumLen2D가 끝 점을 «닫는 점»으로 읽어 꼭짓점이 하나다. 구간이 이음매를 넘어도 같은 XY 점 하나 · 간격 1mm 넘게
+                    var seamR = new List<Point3> { new(20, 0, 12), new(20, 20, 12), new(0, 20, 12), new(0, 20, 10), new(0, 0, 10), new(20, 0, 10) };
+                    var cmS = GradingGeometry.CumLen2D(seamR);
+                    var s3 = Probe(seamR, cmS[^1] - 4.7, 4.6, 20, 0);
+                    check("S153 이음매 위 모서리 단차(끝 점 = 닫는 점) — 구간이 이음매를 넘어도 같은 XY 점 하나 · 이웃 점 간격 1mm 넘게 · 안쪽 변이 모서리를 지난다", s3.AtCorner == 1 && s3.MinStep > 1e-3 && s3.Sag < 1e-6,
+                          $"모서리 점 {s3.AtCorner}개 · 가장 짧은 간격 {s3.MinStep * 1000:F3}mm · 질러감 {s3.Sag * 1000:F4}mm");
+                }
+            }
+            // ── ★[v103.1.8 · v103.1.1 검토 중간 2 «다른 단 자로 잰 구간을 역변환하면 윗단 끝에 옛 값 쐐기» — 크기 미계측] 먼저 잰다 ──
+            //   1단 자(링)로 잰 구간 «1단부터 1:1.0»(2단도 딸려 1:1.0)에서 2단 조각을 되돌린다(2단 자로 잰 «2단부터 1:1.5»).
+            //   2단 사면 띠 안에서 옛 구간은 걸리는데 새 구간은 안 걸리는 자리 = 쐐기. 고칠 길(옛 구간과 같은 1단 자로 조각을 잰다)과 나란히 잰다
+            {
+                var Rn = WallPlace.BenchRings(bd, pp, true, null);
+                if (Rn.TryGetValue(2, out var ring2) && ring2 != null && ring2.Count >= 3)
+                {
+                    var c2 = GradingGeometry.CumLen2D(ring2); double tot2 = c2[^1];
+                    var report = new List<string>();
+                    double xE = ring1.Max(q => q.X), yMid = (ring1.Max(q => q.Y) + ring1.Min(q => q.Y)) / 2;
+                    foreach (var (tagW, pa, pb) in new[] {
+                        ("북쪽 변 가운데", (20.0, yN), (40.0, yN)), ("북쪽 변 · 서쪽 모서리 곁", (0.7, yN), (30.0, yN)), ("북쪽 변 · 동쪽 모서리 곁", (30.0, yN), (59.3, yN)),
+                        ("동북 모서리를 넘음", (40.0, yN), (xE, yMid)) })
+                    {
+                        double ta = GradingGeometry.ParamAt(ring1, c1, pa.Item1, pa.Item2), tb = GradingGeometry.ParamAt(ring1, c1, pb.Item1, pb.Item2);
+                        var (o0, o1) = Sp(ta, tb) <= Sp(tb, ta) ? (ta, tb) : (tb, ta);
+                        var zOld = new SlopeZone { T0 = o0, T1 = o1, Ref = ring1 }; zOld.Rules.Add((1, 1.0, bW)); zOld.Normalize();
+                        bool On(double t) { var p = GradingGeometry.PointAtParam(ring2, c2, ((t % tot2) + tot2) % tot2); return Math.Abs(ZonePiece.StateAt(new List<SlopeZone> { zOld }, p.X, p.Y, 2, bS, bW, bd, bc).Slope - 1.0) < 1e-9; }
+                        // 2단 클릭선(2단 링) 위에서 옛 구간이 값을 낸 토막 = 고르는 조각 — 끝은 0.02m 표본 뒤 반으로 나눠 0.1µm까지(클릭선 끊기가 하는 것처럼)
+                        double s0 = double.NaN, s1 = double.NaN, bestLen = 0;
+                        { double runA = double.NaN; bool prev = On(0); if (prev) runA = 0;
+                          for (double t = 0.02; t <= tot2 + 0.02; t += 0.02) { bool cur = On(t); if (cur && !prev) runA = t; if (!cur && prev && !double.IsNaN(runA) && t - runA > bestLen) { bestLen = t - runA; s0 = runA; s1 = t; } prev = cur; } }
+                        if (double.IsNaN(s0)) { report.Add($"{tagW}: 조각 없음"); continue; }
+                        double Edge(double offT, double onT) { for (int it = 0; it < 40; it++) { double mid = (offT + onT) / 2; if (On(mid)) onT = mid; else offT = mid; } return onT; }
+                        double e0 = Edge(s0 - 0.02, s0), e1 = Edge(s1, s1 - 0.02);
+                        var best = new List<Point3>();
+                        for (int i = 0; i <= 400; i++) { double t = e0 + (e1 - e0) * i / 400; best.Add(GradingGeometry.PointAtParam(ring2, c2, ((t % tot2) + tot2) % tot2)); }
+                        var ivNow = GradingGeometry.PickInterval(best, ring2, c2);
+                        var ivFix = GradingGeometry.PickInterval(best, ring1, c1);
+                        if (ivNow == null || ivFix == null) { report.Add($"{tagW}: 못 잼"); continue; }
+                        var zNow = new SlopeZone { T0 = ivNow.Value.T0, T1 = ivNow.Value.T1, Ref = ring2 }; zNow.Rules.Add((2, bS, bW)); zNow.Normalize();
+                        var zFix = new SlopeZone { T0 = ivFix.Value.T0, T1 = ivFix.Value.T1, Ref = ring1 }; zFix.Rules.Add((2, bS, bW)); zFix.Normalize();
+                        // 2단 사면 띠(2단 링에서 바깥으로 0~6m — 1:1.0 · 단높이 5m · 소단 1m)를 0.1m × 0.25m로 훑는다
+                        int wNow = 0, wFix = 0, inOld = 0, overNow = 0, overFix = 0;
+                        for (double t = 0; t < tot2; t += 0.1)
+                            for (double s = 0.125; s < 6.0; s += 0.25)
+                            {
+                                var p = GradingGeometry.OutwardAt(ring2, c2, t, s);
+                                bool o = zOld.ContainsAt(p.X, p.Y, bd, bc), n = zNow.ContainsAt(p.X, p.Y, bd, bc), f = zFix.ContainsAt(p.X, p.Y, bd, bc);
+                                if (o) inOld++;
+                                if (o && !n) wNow++;
+                                if (o && !f) wFix++;
+                                if (!o && n) overNow++;
+                                if (!o && f) overFix++;
+                            }
+                        report.Add($"{tagW}: 2단 띠에서 옛 구간 칸 {inOld} — 쐐기(옛 값이 남음) 지금 {wNow}칸({wNow * 0.025:F2}㎡) · 고칠 길 {wFix}칸 / 넘침(새 값이 옛 구간 밖) 지금 {overNow} · 고칠 길 {overFix}");
+                    }
+                    Console.WriteLine("      ※S5 쐐기 계측 — " + string.Join(" | ", report));
+                }
+                // ㄱ자 부지(오목한 모서리)와 둥근 볼록 모서리에서도 — 1단 자로 잰 구간이 오목한 모서리를 넘는다
+                foreach (var (tagB, bdX, miter, pa, pb) in new[] {
+                    ("ㄱ자 · 오목 모서리를 넘음", new List<Point3> { new(0, 0, 100), new(60, 0, 100), new(60, 20, 100), new(30, 20, 100), new(30, 40, 100), new(0, 40, 100) }, true, (45.0, 22.0), (32.0, 30.0)),
+                    ("네모 · 둥근 모서리를 넘음", bd, false, (40.0, 41.0), (61.0, 20.0)) })
+                {
+                    var ppX = new GradingParams
+                    {
+                        CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1,
+                        CutSlope = 1.5, FillSlope = 1.5, CellSize = 1.0, MaxBenches = 8, MaxRise = 30,
+                        VertexSpacing = 2.0, MinSlope = 0.05, MinFaceRun = 0.005, MiterConvex = miter, MiterLimit = 2.0,
+                    };
+                    var bcX = GradingGeometry.CumLen2D(bdX);
+                    var RX = WallPlace.BenchRings(bdX, ppX, true, null);
+                    if (!RX.TryGetValue(1, out var r1) || !RX.TryGetValue(2, out var r2) || r1 == null || r2 == null) { Console.WriteLine($"      ※S5 {tagB}: 링 없음"); continue; }
+                    var k1 = GradingGeometry.CumLen2D(r1); var k2 = GradingGeometry.CumLen2D(r2); double T2 = k2[^1], T1x = k1[^1];
+                    double SpX(double a, double b) => b >= a ? b - a : T1x - a + b;
+                    double ta = GradingGeometry.ParamAt(r1, k1, pa.Item1, pa.Item2), tb = GradingGeometry.ParamAt(r1, k1, pb.Item1, pb.Item2);
+                    var (o0, o1) = SpX(ta, tb) <= SpX(tb, ta) ? (ta, tb) : (tb, ta);
+                    var zO = new SlopeZone { T0 = o0, T1 = o1, Ref = r1 }; zO.Rules.Add((1, 1.0, bW)); zO.Normalize();
+                    bool OnX(double t) { var p = GradingGeometry.PointAtParam(r2, k2, ((t % T2) + T2) % T2); return Math.Abs(ZonePiece.StateAt(new List<SlopeZone> { zO }, p.X, p.Y, 2, bS, bW, bdX, bcX).Slope - 1.0) < 1e-9; }
+                    double s0 = double.NaN, s1 = double.NaN, bl = 0;
+                    { double ra = double.NaN; bool prev = OnX(0); if (prev) ra = 0;
+                      for (double t = 0.02; t <= T2 + 0.02; t += 0.02) { bool cur = OnX(t); if (cur && !prev) ra = t; if (!cur && prev && !double.IsNaN(ra) && t - ra > bl) { bl = t - ra; s0 = ra; s1 = t; } prev = cur; } }
+                    if (double.IsNaN(s0)) { Console.WriteLine($"      ※S5 {tagB}: 조각 없음"); continue; }
+                    double EdgeX(double offT, double onT) { for (int it = 0; it < 40; it++) { double mid = (offT + onT) / 2; if (OnX(mid)) onT = mid; else offT = mid; } return onT; }
+                    double e0 = EdgeX(s0 - 0.02, s0), e1 = EdgeX(s1, s1 - 0.02);
+                    var bestX = new List<Point3>(); for (int i = 0; i <= 400; i++) { double t = e0 + (e1 - e0) * i / 400; bestX.Add(GradingGeometry.PointAtParam(r2, k2, ((t % T2) + T2) % T2)); }
+                    var ivN = GradingGeometry.PickInterval(bestX, r2, k2); var ivF = GradingGeometry.PickInterval(bestX, r1, k1);
+                    if (ivN == null || ivF == null) { Console.WriteLine($"      ※S5 {tagB}: 못 잼"); continue; }
+                    var zN = new SlopeZone { T0 = ivN.Value.T0, T1 = ivN.Value.T1, Ref = r2 }; zN.Rules.Add((2, bS, bW)); zN.Normalize();
+                    var zF = new SlopeZone { T0 = ivF.Value.T0, T1 = ivF.Value.T1, Ref = r1 }; zF.Rules.Add((2, bS, bW)); zF.Normalize();
+                    int inO = 0, wN = 0, wF = 0, oN = 0, oF = 0;
+                    for (double t = 0; t < T2; t += 0.1)
+                        for (double s = 0.125; s < 6.0; s += 0.25)
+                        {
+                            var p = GradingGeometry.OutwardAt(r2, k2, t, s);
+                            bool o = zO.ContainsAt(p.X, p.Y, bdX, bcX), n = zN.ContainsAt(p.X, p.Y, bdX, bcX), f = zF.ContainsAt(p.X, p.Y, bdX, bcX);
+                            if (o) inO++; if (o && !n) wN++; if (o && !f) wF++; if (!o && n) oN++; if (!o && f) oF++;
+                        }
+                    Console.WriteLine($"      ※S5 쐐기 계측 — {tagB}: 조각 {e1 - e0:F2}m · 2단 띠에서 옛 구간 칸 {inO} — 쐐기 지금 {wN}칸({wN * 0.025:F2}㎡) · 고칠 길 {wF}칸 / 넘침 지금 {oN} · 고칠 길 {oF}");
+                }
             }
             // 예각 모서리에서 끝나는 옹벽 — 선이 모서리를 돌아 옹벽 곁(5cm 띠)을 옆으로 빠져나간다(검토 1007 낮음 5). 조각은 그래도 모서리(옹벽 끝점)에서 끝나야 한다
             var sharp = new List<Point3> { new(0, 0, 100), new(10, 0, 100), new(5, 2, 100), new(0, 6, 100) };   // (10,0)에서 158° 꺾임

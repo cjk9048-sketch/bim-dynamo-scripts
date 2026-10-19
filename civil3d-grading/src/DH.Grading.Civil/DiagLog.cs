@@ -10,6 +10,14 @@ public static class DiagLog
 
     private static string Resolve()
     {
+        // ★[v103.1.9] 시험 칸 — 화면 없는 Civil 시험이 정지면 생성을 통째로 돌릴 때 진단 로그 · XML 원본 · 자가점검 기록 · 덤프를 저장소(JACK 현장 로그 자리) 대신
+        //   시험 폴더에 쓰게 한다(이 경로에서 갈라지는 것 전부 — XmlStore · SelfCheckLog · 교선 로그 · 옹벽 덤프 · M0Dump는 개발 PC로 안 본다). 환경 변수가 없으면(평소) 종전 그대로
+        try
+        {
+            string? o = System.Environment.GetEnvironmentVariable("DH_GRADING_LOG_DIR");
+            if (!string.IsNullOrWhiteSpace(o)) { System.IO.Directory.CreateDirectory(o); return System.IO.Path.Combine(o, "DHGRADE_진단.log"); }
+        }
+        catch { }
         const string devDir = @"C:\Users\user\Desktop\AI\civil3d-grading";
         try { if (System.IO.Directory.Exists(devDir)) return System.IO.Path.Combine(devDir, "DHGRADE_진단.log"); }
         catch { }

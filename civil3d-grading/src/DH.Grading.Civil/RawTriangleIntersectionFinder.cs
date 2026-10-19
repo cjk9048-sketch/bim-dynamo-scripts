@@ -278,6 +278,13 @@ public static class RawTriangleIntersectionFinder
         {
             foreach (var b in tree.Query(a.Poly.EnvelopeInternal))
             {
+                // ★★[v103.1.9 · JACK 1008 «재생성이 좀 오래 걸리는데» → 속도 P-D] 높이 겹침 · 평행 판정을 <b>겹침 다각형보다 먼저</b> 본다.
+                //   둘 다 두 삼각형의 꼭짓점 높이 · 평면만 보므로 겹침 다각형과 상관없다 — 여기서 거르는 쌍은 종전에도 겹침을 만든 뒤 아래 같은 판정에서 버려져
+                //   교선에 아무것도 안 넣던 쌍이다(면 조각 수집 CollectSignedParts는 꺼져 있다 — 그 자루를 쓰는 곳은 아래 if (false) 안뿐). 그래서 교선 조각은 종전과 같고
+                //   달라지는 것은 진단의 «교차예외» 수뿐이다(버릴 쌍의 겹침 실패를 더는 안 센다). 현장 1012: 원세그 704 · 669개를 내려고 2단계 10.1초 · 33.8GB를 썼다
+                if (a.MinZ > b.MaxZ + 1e-6 || a.MaxZ < b.MinZ - 1e-6) continue; // 높이 안 겹침 → 교선 없음
+                double dA = a.Plane.A - b.Plane.A, dB = a.Plane.B - b.Plane.B, dC = a.Plane.C - b.Plane.C;
+                if (Math.Abs(dA) < 1e-12 && Math.Abs(dB) < 1e-12) continue; // 완전 평행 → 교선 부정(스킵)
                 Geometry overlap;
                 try { overlap = a.Poly.Intersection(b.Poly); }
                 catch
@@ -291,7 +298,6 @@ public static class RawTriangleIntersectionFinder
                 }
                 if (overlap.IsEmpty) continue; // Area 필터 없음(옹벽 누락 방지)
 
-                double dA = a.Plane.A - b.Plane.A, dB = a.Plane.B - b.Plane.B, dC = a.Plane.C - b.Plane.C;
                 // [중요] 면 조각 수집은 Z-겹침 필터 '앞'에서 — 성토/절토가 두꺼운 구역(가상면과 원지반 높이가
                 // 안 겹침)도 영역에는 포함돼야 한다. 필터 뒤에 두면 그 구역 조각이 통째로 빠져 합집합 외곽선이
                 // 디테일을 잃고 직선으로 질러감(성토 경계 부정확·각진 잘림의 원인 — 정합검증으로 확정).
@@ -302,9 +308,8 @@ public static class RawTriangleIntersectionFinder
                 //   자루는 함수가 끝날 때까지 아무것도 놓아주지 않으므로, 쌍이 많을수록 그대로 쌓인다.
                 //   → <b>안 만든다.</b> 자루 선언은 남긴다(아래 죽은 블록이 참조한다 — 늘 비어 있다).
                 //   ※그 방식을 되살릴 일이 생기면 이 줄을 되살리면 된다.
+                //   ★[v103.1.9] 그 자루를 되살리면 위의 높이 · 평행 판정을 이 줄 뒤로 도로 옮겨야 한다(두꺼운 구역의 조각도 담아야 하므로).
                 // CollectSignedParts(overlap, dA, dB, dC, posParts, negParts);
-                if (a.MinZ > b.MaxZ + 1e-6 || a.MaxZ < b.MinZ - 1e-6) continue; // 높이 안 겹침 → '교선'만 없음(조각은 위에서 수집)
-                if (Math.Abs(dA) < 1e-12 && Math.Abs(dB) < 1e-12) continue; // 완전 평행 → 교선 부정(스킵)
 
                 // [수치 안정화] 예전 방식(평면차 직선을 ±1000m로 늘려 overlap에 클립)은 두 면이 거의 접선(완만↔완만)일 때
                 // 1/dA·1/dB가 폭주해 직선이 엉뚱한 곳에 놓임 → 그 구간 교선 통째 누락(끊김)·오배치(접힘)의 원인.

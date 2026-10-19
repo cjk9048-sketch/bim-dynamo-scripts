@@ -362,6 +362,16 @@ public sealed class ExcavCommand
         //   소스에 그 줄이 없었다 — 나중에 수량이 이상할 때 <b>가릴 근거가 없다</b>.
         log.AppendLine($"■ 터파기 기준면 = <b>{(planBase ? "계획지표면" : "원지반")}</b>"
                      + $" · 구배 1:{useSlope:0.##} · 구조물 {recs.Count}개");
+        // ★★★[v103.1.12 · JACK 1015 ② · 계획 4판 H5] 계획면 기준이면 정지면_DH(옹벽 합성)를 판다 — <b>실제로 쓸 기준면</b>(가시설 길은 그 기록의 기준면 · 기준면 통일 물음 뒤)이
+        //   정해진 이 자리에서 관문을 본다(DHEXCAV · 터파기 창 · 가시설 세 길이 모두 여기를 지난다). 아직 아무것도 저장하지 않았다 — «아니오»면 그대로 멈춘다
+        if (planBase && !CompositeGate.Ensure(doc, "터파기"))
+        {
+            log.AppendLine("■ 합성 관문 — 옹벽이 빠진 정지면_DH라 멈춤(아니오) · 이번 터파기는 안 만들었다(터파기 기록 · 지표면 그대로 — 가시설 길은 구간만 먼저 저장됐다)");
+            LastLog = log.ToString();
+            try { DiagLog.Append("\n" + LastLog + "\n"); } catch { }
+            return false;
+        }
+        if (!planBase) log.AppendLine("■ (원지반 기준이라 합성 관문을 안 봄 — [보기] 전체면은 지금 정지면_DH를 붙인다)");
         ObjectId planBaseId = ObjectId.Null;
         if (planBase)
         {

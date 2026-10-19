@@ -43,6 +43,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.MapPalette))]                // DHCONTOURBOX(지도 도킹바가 넘긴 범위로 지표면 가져오기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.NgiiCommand))]               // DHNGII(수치지도 DXF → 원지반)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.CropGroundCommand))]         // DHCROP(원지형 자르기)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SelfCheckCommand))]          // DHSELFCHECK(자가점검 — 읽기만 · v103.1.7)
 
 namespace DH.Grading.Civil;
 
@@ -84,6 +85,56 @@ public sealed class RibbonApp : IExtensionApplication
         //   명령을 하나도 안 돌린 도면에서 손으로 «재작성»을 눌러도 틀린 모양이 되지 않게, 첫 명령이 아니라 여기서 한다(파일 이름만 바꾼다 — 도면은 안 건드린다).
         //   (잰 것은 화면 없는 Civil의 API Rebuild — 파일이 없으면 «파일 없음»으로 끝나고 삼각형은 남는다. 화면의 «재작성» 버튼이 같은 길인지는 못 쟀다)
         AcadApp.Idle += OnIdleRetireXml;
+
+        // ★★★[v103.1.7 · JACK 1014 «최대한 현장확인말고 로그로 확인할수있게 해줘»] 자가점검 세션 — 지난 세션이 정상 종료됐나 · 끝나지 않은 작업(그 도중에 Civil이 죽었다)이 있나를
+        //   DH_자가점검.log 첫 줄로 · 어느 빌드가 도는지(DLL 지문)도. 시작 도중이 아니라 첫 Idle에(위 다른 일들과 같은 까닭)
+        AcadApp.Idle += OnIdleSelfCheck;
+        // ★[v103.1.7 · 검토 열린 물음 2] 끝내기 들머리에서도 세션 끝을 적는다(Terminate가 안 불리는 끝내기가 있어도 «비정상 종료»로 잘못 알리지 않게) · 끝내기를 무르면 지운다
+        try
+        {
+            AcadApp.BeginQuit += (_, _) => { try { SelfCheckLog.SessionEnd(); } catch { } };
+            AcadApp.QuitAborted += (_, _) => { try { SelfCheckLog.SessionReopen(); } catch { } };
+        }
+        catch { }
+    }
+
+    /// <summary>시작 직후 한 번 — 자가점검 세션을 열고 · 도면이 없어진 XML 원본 폴더를 치운다.</summary>
+    private void OnIdleSelfCheck(object? sender, System.EventArgs e)
+    {
+        AcadApp.Idle -= OnIdleSelfCheck;
+        try
+        {
+            var (ok, text) = SelfCheckLog.SessionStart(SelfCheck.BuildStamp());
+            SelfCheckLog.Line("Civil 시작", ok, text);
+            if (!ok) SelfCheck.Warn(AcadApp.DocumentManager.MdiActiveDocument, text);
+        }
+        catch { }
+        // ★[v103.1.7 · 검토 중간 4] 도면이 없어진 원본 폴더 치우기는 <b>뒤 실에서</b> — 네트워크 경로를 묻다 시작이 멈춘 듯 보이지 않게(XmlStore는 Autodesk 형을 안 쓴다).
+        //   지금 열린 도면(.dwg를 두 번 눌러 켰다 · 옮긴 뒤 열었다)이 무는 폴더는 건너뛴다 — 그 목록은 여기(주 실)에서 미리 모은다
+        try
+        {
+            var openDirs = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+            bool allRead = true;
+            foreach (Document d0 in AcadApp.DocumentManager)
+            {
+                var fl = GradingBuilder.XmlFilesInDb(d0.Database, out bool okD);
+                if (!okD) allRead = false;
+                foreach (string f in fl)
+                    try { string? dd = System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(f)); if (!string.IsNullOrEmpty(dd)) openDirs.Add(dd); } catch { }
+            }
+            // ★[v103.1.7 · 확인 검토 낮음 6] 열린 도면 중 정의를 다 못 읽은 것이 있으면 이번 시작에는 치우지 않는다(그 도면이 무는 폴더가 목록에서 빠질 수 있다)
+            if (!allRead) { SelfCheckLog.Line("XML 원본 정리(시작)", '–', "건너뜀 — 열린 도면 중 면의 정의를 다 못 읽은 것이 있다(다음 시작 때 다시)"); return; }
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                try
+                {
+                    string sw = XmlStore.SweepOrphansSkipping(openDirs);
+                    if (sw.Length > 0) { SelfCheckLog.Line("XML 원본 정리(시작)", !sw.Contains('⚠'), sw); DiagLog.Append($"\n■ {System.DateTime.Now:HH:mm:ss} 시작 — {sw}\n"); }
+                }
+                catch { }
+            });
+        }
+        catch { }
     }
 
     /// <summary>시작 직후 한 번 — 옛 판의 고정 이름 XML 원본을 «.옛판.xml»로.</summary>
@@ -129,6 +180,38 @@ public sealed class RibbonApp : IExtensionApplication
             };
         }
         catch { }
+        // ★★[v103.1.7 · JACK 1014] 자가점검 — 우리 긴 명령마다 진행 표지(Civil이 그 도중에 죽으면 남는다) · 끝/취소/실패와 걸린 시간 한 줄
+        try
+        {
+            d.CommandWillStart += (_, e4) => SelfCheckCmd.Start(d, e4.GlobalCommandName);
+            d.CommandEnded += (_, e4) => SelfCheckCmd.Stop(d, e4.GlobalCommandName, '–', "끝");
+            d.CommandCancelled += (_, e4) => SelfCheckCmd.Stop(d, e4.GlobalCommandName, '–', "취소");
+            d.CommandFailed += (_, e4) => SelfCheckCmd.Stop(d, e4.GlobalCommandName, '⚠', "실패(예외로 끝남)");
+        }
+        catch { }
+        // ★★[v103.1.7 · 검토 1012 중간 2 · JACK 1014] 저장 직후 — 그 도면이 <b>제 폴더 밖</b>의 XML 원본(이름 없이 만들고 저장 · 다른 이름으로 저장)을 물면 그 폴더에 적어 둔다(1일 정리가 안 지우게)
+        try
+        {
+            d.Database.SaveComplete += (_, e5) =>
+            {
+                try
+                {
+                    // ★[v103.1.7 · 검토 낮음 11] 자동 저장(.sv$) · 다른 꼴로 내보내기는 먼저 거른다 — 면의 정의를 훑기 전에
+                    string fn = e5.FileName ?? "";
+                    if (!fn.EndsWith(".dwg", System.StringComparison.OrdinalIgnoreCase)) return;
+                    var files = GradingBuilder.XmlFilesInDb(d.Database, out bool readAll);
+                    // ①제 폴더: 지금 무는 원본의 «안 물림» 기록을 지운다(되돌리기 뒤 저장 — 검토 낮음 8) ②남의 폴더: 무는 것을 적는다(적는 것은 지키는 쪽 — 못 읽은 면이 있어도 읽힌 것은 적는다)
+                    //   ③이 도면이 남의 폴더에 적어 둔 «물림» 손보기는 <b>모든 면을 읽었을 때만</b>(못 읽은 면이 무는 파일을 «안 문다»로 보면 놓아 버린다)
+                    string ms = XmlStore.MarkSaved(fn, files);
+                    string cl = files.Count > 0 ? XmlStore.ClaimSaved(fn, files) : "";
+                    string rc = readAll ? XmlStore.ReleaseClaims(fn, files) : "";
+                    string all = string.Join(" · ", new[] { ms, cl, rc }.Where(x => x.Length > 0));
+                    if (all.Length > 0) { SelfCheckLog.Line("도면 저장 — XML 원본", !all.Contains('⚠'), all, fn); DiagLog.Append($"\n■ {System.DateTime.Now:HH:mm:ss} 저장 — {all}\n"); }
+                }
+                catch { }
+            };
+        }
+        catch { }
     }
 
     /// <summary>WSCURRENT 후 Idle 재확인 잔여 횟수 — 리본 재구성이 첫 Idle보다 늦게 끝나
@@ -166,7 +249,8 @@ public sealed class RibbonApp : IExtensionApplication
         catch { }
     }
 
-    public void Terminate() { }
+    // ★[v103.1.7] 정상 종료 — 자가점검 세션에 끝을 적는다(다음 시작이 «정상 종료됐다»로 읽는다)
+    public void Terminate() { try { SelfCheckLog.SessionEnd(); } catch { } }
 
     private void OnIdleBuild(object? sender, EventArgs e)
     {

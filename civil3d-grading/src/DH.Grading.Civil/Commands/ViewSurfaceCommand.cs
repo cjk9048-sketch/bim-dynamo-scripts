@@ -200,6 +200,15 @@ public sealed class ViewSurfaceCommand
                 GradingBuilder.SetSurfaceVisible(tr, nm, keeps.Contains(nm));
             // ★[v103.0] 번호 붙은 옹벽 표면(가상옹벽{n}_DH · 순수옹벽{n}_DH)은 어느 보기에서도 끈다 — 목록(OurSurfaces)에 없으면 «원지반만»에서 원지반처럼 켜진다
             try { WallTags.SetWallSurfacesVisible(tr, false); } catch { }
+            // ★[v103.1.12 · JACK 1015 ③ «합성 전 옹벽은 옹벽 면을 보이게(합성하면 정지면_DH만)»] «전부» · «계획» 보기에서 정지면_DH 합성에 안 든 옹벽(미룸 · 다시 해 볼 보류)은
+            //   옹벽 면을 켠다(움직인 보류는 안 켬 — WallTags.ShowOutsideWall) · 터파기 세 길도 끝에 이 «전부» 보기를 건다
+            if (kw != "G" && kw != "E")
+                try
+                {
+                    var stV = WallCompositeCommand.StateNow(db, tr, out _, out string p0V, out _, out var wsV);
+                    if (stV != null) foreach (var w in wsV.Where(x => x.State == 1 && stV.Missing.Contains(x.No))) WallTags.ShowOutsideWall(tr, w, p0V);
+                }
+                catch { }
 
             SetLayers(db, tr, lines);
             tr.Commit();

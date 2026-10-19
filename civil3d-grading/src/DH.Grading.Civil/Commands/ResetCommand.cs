@@ -72,6 +72,8 @@ public sealed class ResetCommand
             return;
         }
 
+        // ★★★[v103.1.7 · JACK 1014 «현장확인 말고 로그로»] 자가점검 — 무엇을 지웠고 무엇이 남았나를 판정 한 줄로
+        using var job = new SelfCheckLog.Job("초기화", doc.Name);
         try
         {
             // ★[JACK 0901 "초기화 누르면 서버지표면으로 가져온 자료도 다 초기화되게"]
@@ -93,9 +95,21 @@ public sealed class ResetCommand
             try { DiagLog.Append($"\n■ DHRESET(초기화)\n  {msg}"
                                + (left.Length > 0 ? $"\n  ⚠남은 것 — {left}" : "\n  남은 것 없음")
                                + "\n"); } catch { }
+            string ourLeft = "";
+            try
+            {
+                using var trJ = db.TransactionManager.StartTransaction();
+                var (stJ, _, nJ) = SelfCheck.SurfaceState(trJ, db);
+                if (nJ > 0) ourLeft = stJ;
+                trJ.Commit();
+            }
+            catch { }
+            job.Done(left.Length == 0 && ourLeft.Length == 0, msg + (left.Length > 0 ? $" · ⚠남은 것 — {left}" : " · 남은 것 없음")
+                + (ourLeft.Length > 0 ? $" · ⚠우리 지표면이 남았다 — {ourLeft}" : ""));
         }
         catch (System.Exception ex)
         {
+            job.Done(false, $"초기화 중 오류 — {ex.GetType().Name}: {ex.Message}");
             ed.WriteMessage("\n[초기화 오류] " + ex.Message);
             AcadApp.ShowAlertDialog("초기화 중 오류:\n" + ex.Message);
         }
@@ -167,6 +181,7 @@ public sealed class ResetCommand
             // ③ 저장된 번들 삭제 + 숨겼던 지표면 다시 표시.
             bundleCleared = GradingBundleStore.Clear(db, tr);
             if (WallListStore.Clear(db, tr)) bundleCleared = true;   // ★[v103.0] 옹벽 목록(번호도 1부터)
+            try { WallListStore.WriteDefer(db, tr, false); } catch { }   // ★[v103.1.12] «옹벽 합성 미루기»도 기본(꺼짐)으로
             // ★[JACK 0824] 터파기 기록도 지운다 — 지표면만 지우고 기록을 남기면
             //   다음 실행이 옛 구조물을 되살려 "지웠는데 다시 생긴다"가 된다.
             if (ExcavBundleStore.Clear(db, tr)) bundleCleared = true;   // 보고에 같이 싣는다
@@ -189,7 +204,7 @@ public sealed class ResetCommand
         GradingSettings.LastGroundHandle = "";
         GradingSettings.ClearLastWall(false);
         GradingSettings.WallAddSpec = null; GradingSettings.LastAddNo = 0; GradingSettings.LastAddNote = ""; GradingSettings.LastAddBlockedNo = 0; GradingSettings.WallRerunSpec = null; GradingSettings.AutoCompDoc = ""; GradingSettings.AutoCompNo = 0;
-        GradingSettings.AutoCompWantVolume = false; GradingSettings.LastRegenSkipped = false;   // ★[v103.1.4] 줄 세운 합성이 안 돌았어도 표시가 다음 합성으로 새지 않게
+        GradingSettings.ClearWantVolume(doc.Name); GradingSettings.LastRegenSkipped = false;   // ★[v103.1.4] 줄 세운 합성이 안 돌았어도 표시가 다음 합성으로 새지 않게 · ★[v103.1.7 · 검토 낮음 9] 그 도면 것만
         return (surfs, ents, bundleCleared);
     }
 

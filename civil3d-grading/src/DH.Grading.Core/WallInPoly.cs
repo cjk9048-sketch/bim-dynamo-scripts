@@ -701,8 +701,59 @@ public static class WallInPoly
         return GradingGeometry.RingIsSimple(rO) && GradingGeometry.RingAreaNts(rO) >= 1.0 ? rO : null;
     }
 
+    /// <summary>★★[v103.1.14 · JACK 1019 «새 쪽 끝 한 점만 — 옛 옹벽 반대쪽 측선은 지은 그대로»] 지은 손 폴리곤에서 두 측선의 <b>방향</b>을 되살린다(이어 짓기가 옛 옹벽 쪽 끝을 안 찍고 쓴다).
+    /// <para><see cref="AssembleManual"/>의 꼴만 받는다 — 안쪽 변(옹벽 · 첫 점 = 안쪽 변 첫 점) → 측선 A(옹벽 · 끝 cA) → 두른 선(수직 · <b>한 덩어리</b>) → 측선 B(옹벽 · 처음 cB → 안쪽 변 첫 점).
+    /// cA = 수직 덩어리 바로 앞 점 · cB = 바로 뒤 점(두른 선의 끝 점이 측선 모서리와 겹치면 <c>Add</c>가 하나로 합치고 옹벽 표를 단다 — 어느 쪽이든 같은 자리).
+    /// 측선 위 점이 그 곧은 선에서 1mm 넘게 벗어나면(다른 꼴로 지은 폴리곤) 못 한다. 물러난 길(종전 모서리)로 지은 폴리곤도 측선은 곧은 선이라 같은 꼴이다.</para></summary>
+    /// <returns>(AtEnd1 = 안쪽 변 끝 점에서 cA로 · AtEnd0 = 안쪽 변 첫 점에서 cB로 — 단위 길이) · 못 하면 null(<paramref name="why"/>).</returns>
+    public static ((double X, double Y) AtEnd1, (double X, double Y) AtEnd0)? SideDirs(IReadOnlyList<Point3> poly, IReadOnlyList<bool> isWall, IReadOnlyList<Point3> seg, out string why)
+    {
+        why = "";
+        if (poly == null || isWall == null || poly.Count < 4 || isWall.Count != poly.Count) { why = "폴리곤 · 옹벽 표가 없거나 수가 다르다"; return null; }
+        if (seg == null || seg.Count < 2) { why = "안쪽 변이 없다"; return null; }
+        int n = poly.Count;
+        int runs = 0, f0 = -1, f1 = -1;
+        for (int i = 0; i < n; i++)
+        {
+            if (isWall[i]) continue;
+            if (isWall[(i - 1 + n) % n]) { runs++; f0 = i; }
+            if (isWall[(i + 1) % n]) f1 = i;
+        }
+        if (runs != 1) { why = $"수직(두른 선) 덩어리가 {runs}개"; return null; }
+        static double D(Point3 a, Point3 b) => Math.Sqrt((a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y));
+        var e0 = seg[0]; var e1 = seg[seg.Count - 1];
+        // ★[코드 검토 열린 질문 — 계획선을 자로 쓴 옹벽] 폴리곤은 옹벽 변환이 구역에 저장된 경계로 · 안쪽 변(Seg)은 정지면 생성이 다시 읽은 경계로 뜬다 — µm 차이로 못 하지 않게 1mm
+        if (D(poly[0], e0) > 1e-3) { why = $"폴리곤 첫 점이 안쪽 변 첫 점이 아니다({D(poly[0], e0) * 1000:F3}mm)"; return null; }
+        int iE1 = -1;
+        for (int i = 1; i < f0; i++) if (D(poly[i], e1) <= 1e-3) { iE1 = i; break; }
+        if (iE1 < 0) { why = "폴리곤에서 안쪽 변 끝 점을 못 찾았다"; return null; }
+        var cA = poly[(f0 - 1 + n) % n]; var cB = poly[(f1 + 1) % n];
+        double lA = D(cA, e1), lB = D(cB, e0);
+        if (lA < 1e-6 || lB < 1e-6) { why = $"측선 길이가 0(시점 {lA:F6}m · 종점 {lB:F6}m)"; return null; }
+        // 측선 위 점이 곧은 선 위인가(1mm) — 선분 a→b에 대한 거리
+        static double Off(Point3 q, Point3 a, Point3 b)
+        {
+            double ex = b.X - a.X, ey = b.Y - a.Y, l2 = ex * ex + ey * ey;
+            double u = l2 < 1e-18 ? 0 : ((q.X - a.X) * ex + (q.Y - a.Y) * ey) / l2;
+            u = u < 0 ? 0 : (u > 1 ? 1 : u);
+            double dx = q.X - a.X - ex * u, dy = q.Y - a.Y - ey * u;
+            return Math.Sqrt(dx * dx + dy * dy);
+        }
+        for (int i = iE1; i <= f0 - 1; i++)
+            if (Off(poly[i], e1, cA) > 1e-3) { why = $"측선 A의 점 {i}이 곧은 선에서 {Off(poly[i], e1, cA) * 1000:F1}mm 벗어났다"; return null; }
+        for (int i = f1 + 1; i <= n; i++)
+        {
+            var q = poly[i % n];
+            if (Off(q, cB, e0) > 1e-3) { why = $"측선 B의 점 {i % n}이 곧은 선에서 {Off(q, cB, e0) * 1000:F1}mm 벗어났다"; return null; }
+        }
+        return (((cA.X - e1.X) / lA, (cA.Y - e1.Y) / lA), ((cB.X - e0.X) / lB, (cB.Y - e0.Y) / lB));
+    }
+
     /// <summary>★[v102.2 · 재검토 낮음 3 «검사 입력이 출하 입력이 아님»] 고른 구간 [t0, t1]을 자(고리) 위에서 1m 안팎 간격 점으로 뜬다(T가 느는 쪽 · 한 바퀴 넘김 대응).
-    /// ZoneEditCommon이 손 폴리곤의 안쪽 변으로 쓰고, 하네스 S146이 <b>같은 함수</b>로 뜬다.</summary>
+    /// ZoneEditCommon이 손 폴리곤의 안쪽 변으로 쓰고, 하네스 S146이 <b>같은 함수</b>로 뜬다.
+    /// <para>★★[v103.1.8 · v103.1.3에서 미룬 «옹벽이 자의 모서리를 돌면 안쪽 변이 모서리를 질러간다»(v100대부터 · S153 실측 27.1cm)] 1m 표본만 뜨면 표본 사이에 낀 <b>자의 꺾인 꼭짓점</b>을 건너뛰어,
+    /// 안쪽 변이 모서리를 현으로 질러갔다(옹벽 기하 · 주황 조각 · 겹침 판정이 다 그 현을 썼다). 이제 <b>표본 현에서 1mm 넘게 떨어진 꼭짓점</b>은 그 자리에 넣는다(꼭짓점 좌표 그대로).
+    /// 곧은 변의 나란한 점 · 1mm 안의 꺾임은 안 넣는다 — 그런 구간(현장 옹벽은 지금까지 모두 한 변 위)의 점은 <b>종전과 비트 그대로</b>다.</para></summary>
     public static List<Point3> SegmentPoints(IReadOnlyList<Point3> ruler, double[] cum, double t0, double t1)
     {
         double rTot = cum[cum.Length - 1];
@@ -714,7 +765,45 @@ public static class WallInPoly
             double t = t0 + span * i / nSeg;
             seg.Add(GradingGeometry.PointAtParam(ruler, cum, ((t % rTot) + rTot) % rTot));
         }
-        return seg;
+        // 표본 사이에 낀 꺾인 꼭짓점(현에서 1mm 넘게) — (t0에서 잰 거리, 꼭짓점 번호, 꼭짓점)
+        var add = new List<(double Rel, int K, Point3 P)>();
+        int m = Math.Min(cum.Length - 1, ruler.Count);     // 닫는 점 반복을 뺀 꼭짓점 수(HeadZ와 같은 셈)
+        if (rTot > 1e-12 && span > 1e-9)
+            for (int k = 0; k < m; k++)
+            {
+                double rel = ((cum[k] - t0) % rTot + rTot) % rTot;
+                if (!(rel > 1e-9 && rel < span - 1e-9)) continue;
+                int j = (int)Math.Floor(rel / span * nSeg);
+                if (j < 0) j = 0; if (j >= nSeg) j = nSeg - 1;
+                if (Math.Abs(rel - span * j / nSeg) < 1e-6 || Math.Abs(rel - span * (j + 1) / nSeg) < 1e-6) continue;   // 표본이 이미 그 꼭짓점에 있다
+                var a = seg[j]; var b = seg[j + 1]; var v = ruler[k];
+                double ex = b.X - a.X, ey = b.Y - a.Y, l2 = ex * ex + ey * ey;
+                double u = l2 < 1e-18 ? 0 : ((v.X - a.X) * ex + (v.Y - a.Y) * ey) / l2;
+                u = u < 0 ? 0 : (u > 1 ? 1 : u);
+                double dx = v.X - a.X - ex * u, dy = v.Y - a.Y - ey * u;
+                if (dx * dx + dy * dy > 1e-6) add.Add((rel, k, v));   // 1mm²
+            }
+        if (add.Count == 0) return seg;
+        // 표본과 꼭짓점을 자 위 거리 차례로 섞는다 — ★[v103.1.9] 거리가 같으면(수직 단차 — XY 같은 두 꼭짓점) 꼭짓점 번호 차례(List.Sort는 같은 값의 차례를 안 지킨다 · 아래 1mm 빼기가 앞 것을 남긴다)
+        add.Sort((x, y) => x.Rel != y.Rel ? x.Rel.CompareTo(y.Rel) : x.K.CompareTo(y.K));
+        var outL = new List<Point3>(seg.Count + add.Count);
+        // ★[v103.1.9 · v103.1.8 검토 낮음 1-1] 넣는 꼭짓점이 바로 앞 점과 XY 1mm 안이면 뺀다 — 계획선의 수직 단차(XY 같고 Z만 다른 두 점 · BoundaryReader가 일부러 남김)나
+        //   0.1mm 안 짧은 변이 모서리에 있으면 두 점이 다 들어가 같은 XY 점 · 아주 짧은 변이 생겼다(손 폴리곤이 RingIsSimple에 거절돼 계산한 띠로 물러날 수 있었다).
+        //   표본은 안 뺀다 — 넣는 꼭짓점은 현에서 1mm 넘게 떨어진 것뿐이라 늘 양쪽 표본에서도 1mm 넘게 떨어져 있다(겹치는 짝은 꼭짓점끼리뿐)
+        void PutVertex(Point3 v)
+        {
+            if (outL.Count > 0) { var l = outL[^1]; double dx = v.X - l.X, dy = v.Y - l.Y; if (dx * dx + dy * dy <= 1e-6) return; }
+            outL.Add(v);
+        }
+        int q = 0;
+        for (int i = 0; i <= nSeg; i++)
+        {
+            double ri = span * i / nSeg;
+            while (q < add.Count && add[q].Rel < ri) PutVertex(add[q++].P);
+            outL.Add(seg[i]);
+        }
+        while (q < add.Count) PutVertex(add[q++].P);
+        return outL;
     }
 
     /// <summary>★[v102.2 · 재검토 낮음 3] 자 위 <paramref name="t"/> 자리의 <b>울타리 법선</b>(바깥쪽 · 길이 1) — WallPolyDraw가 «노선 안쪽으로는 못 그린다»에 쓴다.

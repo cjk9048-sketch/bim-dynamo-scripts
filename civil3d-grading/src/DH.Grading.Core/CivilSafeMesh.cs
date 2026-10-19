@@ -59,6 +59,8 @@ public static class CivilSafeMesh
 
     /// <summary>★[v102.1] 하네스 전용 — 참이면 «Civil이 반드시 합칠 쌍» 허용을 끈다(0930 그날과 같은 판정 — 음성 시험). 출하 경로는 거짓.</summary>
     internal static bool ForcedAllowOff;
+    /// <summary>★[v103.1.10 · 속도 P-E] 참이면 옛 길을 새 길과 함께(다른 실에서) 미리 돌린다(출하 경로) — 하네스가 꺼서(BLOCKTEST_SPEC=0) 차례대로 돈 결과 · 시간과 견준다.</summary>
+    internal static bool Speculate = true;
     /// <summary>★[v102.1] 하네스 전용 — NaN이 아니면 <see cref="MakeZone"/>의 허용 위 끝(wallCap)을 이 값으로(음성: 위 끝 &lt; 최종 옹벽 높이면 판정 3). 출하 경로는 NaN.</summary>
     internal static double DebugWallCap = double.NaN;
     /// <summary>★[v102.1] 하네스 전용 — NaN이 아니면 «반드시 합친 쌍 곁» 거리를 이 값으로(음성: 곁을 0으로 두면 넘은 오차가 전부 «그 밖»이라 허용 안 됨). 출하 경로는 NaN.</summary>
@@ -115,6 +117,8 @@ public static class CivilSafeMesh
         /// <summary>★[v102.0 · 계획 검토 r4 낮음 2] 정확 기준(점수 1)을 넘긴 손질의 자리 — 하네스가 «1mm 넘는 오차는 이 자리 곁에만»을 따로 잰다.</summary>
         public List<(double X, double Y, double Score)> BigOps = new();
         public Report Clone() { var r = (Report)MemberwiseClone(); r.BigOps = new List<(double X, double Y, double Score)>(BigOps); r.ForcedSpotsW = new List<(double X, double Y)>(ForcedSpotsW); return r; }
+        /// <summary>★[v103.1.10 · 속도 P-E] 길마다 걸린 시간(ms · −1 = 안 돎) · 옛 길을 새 길과 함께 미리 돌렸나 · 다듬기 전체(기다린 시간).</summary>
+        public long MsNew = -1, MsOld = -1, MsAll = -1; public bool OldEarly;
         /// <summary>Civil이 고칠 면 — 가장 낮은 높이 &lt; 1e-4이고 가장 긴 변이 안쪽이며 들로네가 아닌 면(계획 검토 0928 · 중간 4: 73면 중 71~73면 일치).
         /// 이런 면 곁에서 Civil은 대각선을 뒤집고, 그러다 면이나 점을 통째로 빠뜨린 적이 있다(17:32 45mm · 돌린 13:33 460mm).</summary>
         public int CivilRisk; public string CivilRiskAt = "";
@@ -154,6 +158,10 @@ public static class CivilSafeMesh
                      + (Math.Abs(AreaSum - AreaUnion) > 1e-9 + 1e-9 * AreaSum ? $" · ⚠면 겹침 {AreaSum - AreaUnion:E2}㎡" : "")
                      + (OverlayExc > 0 ? $" · ⚠겹침 계산 예외 {OverlayExc}" : "")
                      + (Tier2Why.Length > 0 ? $" · 거의인 까닭: {Tier2Why}" : "")
+                     // ★[v103.1.10 · 속도 P-E] 길마다 시간 — 옛 길을 함께 미리 돌렸으면 «모두»가 두 길의 합보다 짧아야 한다(현장 로그로 본다)
+                     + (MsNew >= 0 ? string.Format(ci, " · 다듬기 시간 새 길 {0}ms{1}", MsNew,
+                                                   MsOld >= 0 ? string.Format(ci, " · 옛 길 {0}ms{1} · 모두 {2}ms", MsOld, OldEarly ? "(함께 미리)" : "(차례로)", MsAll)
+                                                              : OldEarly ? "(미리 돌린 옛 길은 안 씀)" : "") : "")   // ★[v103.1.11 · 검토 낮음 3] 면 없음 · 옛 길이 이미 끝난 경우에도 맞는 말로
                      + (Fail.Length > 0 ? $" · ⚠{Fail}" : "");
             }
         }
@@ -207,9 +215,46 @@ public static class CivilSafeMesh
     static (List<WallDaylight.Tri>? Res, Report Rep) Run(Func<Work> make, double wallTol2, double wallCap, double wallTol2Raw)
     {
         if (LegacyOnly) return RunPath(make(), margin: false, lastResort: false, wallTol2, double.NaN, wallTol2Raw);
-        var (resN, repN) = RunPath(make(), margin: true, lastResort: true, wallTol2, wallCap, wallTol2Raw);
-        if (repN.Tier == 1 || repN.FacesIn == 0) return (resN, repN);
-        var (resO, repO) = RunPath(make(), margin: false, lastResort: false, wallTol2, double.NaN, wallTol2Raw);
+        var swAll = System.Diagnostics.Stopwatch.StartNew();
+        // ★★[v103.1.10 · JACK 1008 «재생성이 좀 오래 걸리는데» → 속도 P-E] 옛 길(v101)을 새 길과 <b>함께</b>(다른 실에서) 미리 돌린다.
+        //   종전엔 새 길이 끝난 뒤 판정 1이 아니면 그때 옛 길을 돌려 두 시간이 더해졌다(현장 1007 성토 옹벽 다듬기 15초).
+        //   이제 새 길이 판정 1이면 미리 돌던 옛 길에 멈추라고 하고(단계 사이에서 멈춘다 · 결과는 버린다 — 종전엔 아예 안 돌았다) · 아니면 기다려 <b>종전과 같은 셈 · 같은 고르기</b>로 견준다.
+        //   두 길은 따로 만든 Work를 쓰고 함께 쓰는 것은 읽기만 하는 입력 · 설정값뿐이다(정적 상태 없음). 하네스가 계측 줄(DebugLog)을 켠 판은 종전처럼 차례대로(두 길의 줄이 안 섞이게)
+        System.Threading.CancellationTokenSource? cts = null;
+        System.Threading.Tasks.Task<(List<WallDaylight.Tri>? Res, Report Rep, long Ms)>? oldT = null;
+        if (Speculate && DebugLog == null)
+        {
+            cts = new System.Threading.CancellationTokenSource();
+            var tok = cts.Token;
+            oldT = System.Threading.Tasks.Task.Run(() =>
+            {
+                // ★[v103.1.11 · v103.1.10 코드 검토 낮음 2] 시작하기 전에 이미 멈추라고 했으면(새 길이 빨리 끝남) 입력 옮기기(make)도 안 한다
+                if (tok.IsCancellationRequested) return ((List<WallDaylight.Tri>?)null, new Report { Fail = "멈춤(시작 전)" }, -1L);
+                var swO = System.Diagnostics.Stopwatch.StartNew();
+                var (r, p) = RunPath(make(), margin: false, lastResort: false, wallTol2, double.NaN, wallTol2Raw, tok);
+                return (r, p, swO.ElapsedMilliseconds);
+            });
+        }
+        List<WallDaylight.Tri>? resN; Report repN;
+        // ★[v103.1.11 · v103.1.10 코드 검토 낮음 1] 새 길이 예외로 빠져도 미리 돌던 옛 길을 멈춘다(종전엔 이때 옛 길이 아예 안 돌았다)
+        try { (resN, repN) = RunPath(make(), margin: true, lastResort: true, wallTol2, wallCap, wallTol2Raw); }
+        catch { cts?.Cancel(); throw; }
+        long msN = swAll.ElapsedMilliseconds;
+        if (repN.Tier == 1 || repN.FacesIn == 0)
+        {
+            cts?.Cancel();   // 미리 돌던 옛 길은 단계 사이에서 멈춘다 — 결과는 안 쓴다(종전과 같은 결과)
+            repN.MsNew = msN; repN.MsOld = -1; repN.MsAll = swAll.ElapsedMilliseconds; repN.OldEarly = oldT != null;
+            return (resN, repN);
+        }
+        List<WallDaylight.Tri>? resO; Report repO; long msO;
+        if (oldT != null) (resO, repO, msO) = oldT.GetAwaiter().GetResult();
+        else
+        {
+            var swO = System.Diagnostics.Stopwatch.StartNew();
+            (resO, repO) = RunPath(make(), margin: false, lastResort: false, wallTol2, double.NaN, wallTol2Raw);
+            msO = swO.ElapsedMilliseconds;
+        }
+        long msAll = swAll.ElapsedMilliseconds;
         // ★[재검토 2] 둘 다 판정 3(못 함)이면 아무것도 안 짓는다 — 새 길(출하 길)의 실패 까닭을 그대로 알린다
         if (!(repN.Tier == 3 && repO.Tier == 3) && Better(Key(repO), Key(repN)))
         {
@@ -217,15 +262,19 @@ public static class CivilSafeMesh
             repO.NewPathWhy = string.Format(CultureInfo.InvariantCulture, "새 길 판정 {0}{6}·위험 면 {1}·높이 {2:F2}mm가 옛 길 판정 {3}·위험 면 {4}·높이 {5:F2}mm보다 나빠 옛 길로 지었다",
                 repN.Tier, Key(repN).Risky, Key(repN).Err * 1e3, repO.Tier, Key(repO).Risky, Key(repO).Err * 1e3, repN.OverForced ? "(허용)" : "");
             DebugLog?.Invoke(repO.NewPathWhy);
+            repO.MsNew = msN; repO.MsOld = msO; repO.MsAll = msAll; repO.OldEarly = oldT != null;
             return (resO, repO);
         }
+        repN.MsNew = msN; repN.MsOld = msO; repN.MsAll = msAll; repN.OldEarly = oldT != null;
         return (resN, repN);
     }
 
     /// <summary>한 길 — 쌍 합치기 → 납작한 면 → 잼 → (마지막 수단이면 · 위험한 면이 남았으면) 마지막 수단 → 다시 잼.
     /// <para>★[v102.0 · 계획 4판 §2] 마지막 수단은 판정 1 조건(Civil이 고칠 면 0 · 뒤집기 흉내 ≤ 0.2mm)을 못 채운 판에서만 돈다.
     /// 돌린 뒤 판정이 더 나쁘면 <b>돌리기 전 결과</b>(스냅숏)를 쓴다 — 판정이 같으면 돌린 것을 쓴다.</para></summary>
-    static (List<WallDaylight.Tri>? Res, Report Rep) RunPath(Work w, bool margin, bool lastResort, double wallTol2, double wallCap, double wallTol2Raw)
+    /// <param name="ct">★[v103.1.10 · 속도 P-E] 미리 돌리는 옛 길을 멈추게 하는 표지 — 새 길이 판정 1이면 켜진다. 단계 사이에서만 보고 멈춘다(그때 결과는 버려진다 — 부르는 쪽이 안 쓴다).</param>
+    static (List<WallDaylight.Tri>? Res, Report Rep) RunPath(Work w, bool margin, bool lastResort, double wallTol2, double wallCap, double wallTol2Raw,
+        System.Threading.CancellationToken ct = default)
     {
         var rep = new Report { WallTol2 = wallTol2, WallCap = wallCap, WallTol2Raw = wallTol2Raw, ZoneMode = w.IsZone, NewPath = margin };
         rep.PtsIn = w.PtsAlive(); rep.FacesIn = w.FacesAlive();
@@ -234,10 +283,13 @@ public static class CivilSafeMesh
         w.LrCap = margin && w.IsZone && !double.IsNaN(wallCap) && wallTol2Raw > 0 ? Math.Max(ZTol2, wallCap) : ZTol2;
         w.LrBudget = wallTol2;
         DebugLog?.Invoke($"[계측] {(margin ? "새 길" : "옛 길")} 시작 — {w.DebugWallMax()}");
+        if (ct.IsCancellationRequested) { rep.Fail = "멈춤(새 길이 판정 1 — 미리 돌린 옛 길은 안 쓴다)"; return (null, rep); }
         w.ResolvePairs(rep);
         DebugLog?.Invoke($"[계측] 쌍 합친 뒤 — {w.DebugWallMax()}");
+        if (ct.IsCancellationRequested) { rep.Fail = "멈춤(새 길이 판정 1 — 미리 돌린 옛 길은 안 쓴다)"; return (null, rep); }
         w.FoldFlat(rep);
         DebugLog?.Invoke($"[계측] 납작한 면 뒤 — {w.DebugWallMax()}");
+        if (ct.IsCancellationRequested) { rep.Fail = "멈춤(새 길이 판정 1 — 미리 돌린 옛 길은 안 쓴다)"; return (null, rep); }
         int e0 = w.OverlayExc;
         w.Measure(rep);
         rep.OverlayExc = w.OverlayExc;
@@ -1308,5 +1360,153 @@ public static class CivilSafeMesh
         }
         catch { d.Exceptions++; d.SymArea = double.PositiveInfinity; d.Hausdorff = double.PositiveInfinity; }
         return d;
+    }
+
+    // ══════════════════════════════ 넘길 면 전체의 «Civil이 고칠 면» ══════════════════════════════
+
+    /// <summary>★★[v103.1.13] <see cref="FixOutside"/>의 결과 — 찾은 «Civil이 고칠 면» · 먼저 뒤집은 쌍 · 못 뒤집은 것(까닭별) · 높이 변화 최대와 자리.</summary>
+    public sealed class OutsideFix
+    {
+        /// <summary>뒤집기 전에 찾은 «Civil이 고칠 면» 수(면 — 넘길 면 전체 · 옹벽 구역 면 포함).</summary>
+        public int Found;
+        /// <summary>먼저 뒤집은 수(쌍 — 고칠 면과 긴 변 건너 면 · 두 면 다 <c>mayFlip</c>이거나 이 함수가 만든 면 · 볼록).</summary>
+        public int Flipped;
+        /// <summary>끝에 남은 «Civil이 고칠 면»과 그 까닭 — 옹벽 구역 면이 낌(다듬기 결과는 안 건드린다) · 긴 변 건너 면이 하나가 아님(둘 넘음 · 변을 못 찾음) ·
+        /// 볼록이 아님(뒤집으면 면이 겹친다) · 판이 모자람(사슬이 판 수보다 김). 되읽기 관문이 지킨다.</summary>
+        public int Left, LeftZone, LeftEdge, LeftShape, LeftRound;
+        /// <summary>뒤집어 바뀐 높이 최대(정지면 그대로였던 모양에서) — 두 대각선이 만나는 자리(넓이 0 면이면 그 꼭짓점의 세운 턱).
+        /// ★[코드 검토 중간 1] 이 함수가 만든 면을 다시 뒤집으면(사슬) 그 면이 이미 바뀐 값을 더한 위 한계 · 그 자리.</summary>
+        public double MaxDz;
+        public string At = "", LeftAt = "";
+        public string Text => Found == 0 && Left == 0 ? "" : string.Format(CultureInfo.InvariantCulture,
+            "넘길 면 중 Civil이 고칠 면 {0}개 → 정지면 그대로인 면끼리 먼저 뒤집음 {1}쌍(높이 변화 최대 {2:F3}mm{3}){4}",
+            Found, Flipped, MaxDz * 1000, Flipped > 0 ? " @" + At : "",
+            Left > 0 ? $" · ⚠남은 Civil이 고칠 면 {Left}(옹벽 구역 면 낌 {LeftZone} · 긴 변 건너 면이 하나가 아님 {LeftEdge} · 볼록 아님 {LeftShape} · 판 모자람 {LeftRound}) @{LeftAt}" : "");
+    }
+
+    /// <summary>★★[v103.1.13 · 1016 13:42 현장 «⚠옹벽 1(성토)를 정지면_DH에 못 넣었다 — Civil이 넘긴 합성을 그대로 안 받았다»]
+    /// 옹벽 합성은 정지면_DH 삼각형을 <b>통째로</b> LandXML로 다시 넘기는데, 다듬기(<see cref="MakeZone"/>)는 옹벽이 손댄 구역 안만 본다.
+    /// 손 안 댄 정지면에 «Civil이 고칠 면»(가장 낮은 높이 &lt; <see cref="CivilMerge"/> · 긴 변이 안쪽 · 긴 변 들로네 아님 — <c>IsRisky</c>의 그 식)이 있으면
+    /// Civil이 가져오며 그 긴 변을 뒤집는다. 그날: 전체구간 절토 옹벽(1:0.01) 앞면 위 끝의 <b>넓이 0 면</b>(꼭짓점이 긴 변 위 · 세운 턱 6.125mm) 하나를 뒤집어
+    /// 292,027면 중 2면이 바뀌고 그 자리 높이가 6.125mm 달라졌다 → 옹벽 쪽 오차 5.929mm와 더해 한도 10mm를 넘어 옹벽을 버렸다(옹벽과 약 90m 떨어진 자리).
+    /// <para>화면 없는 Civil 실측(1016 · 그 합성 XML): 그대로 = 같은 두 면이 바뀜 · 그 면만 우리가 먼저 뒤집은 것 = 292,027/292,027 그대로 ·
+    /// 그 자리 둘레 794면 판에서 꼭짓점을 긴 변에서 비켜 가며 = 이웃 면 외접원 안(비킴 ≤10nm)이면 뒤집고 밖(≥100nm)이면 둠 ·
+    /// 네 면 판 36가지(긴 변 1cm~10m × 비킴 5nm~1µm · 모두 외접원 안) = 전부 뒤집음. 이 판정을 그 합성 전체에 돌리면 걸리는 면이 그 하나뿐이다.</para>
+    /// <para>→ 넘기기 전에 같은 판정으로 찾아 <b>Civil과 같은 뒤집기</b>(긴 변을 지우고 맞은 꼭짓점 둘을 잇는다)를 먼저 한다 — 넘긴 면 = Civil이 받을 면.
+    /// <b>두 면이 다 <paramref name="mayFlip"/>(정지면 그대로인 면)이거나 이 함수가 앞에서 만든 면(사슬 — 긴 변 하나 위에 꼭짓점이 여럿)일 때만</b> — 옹벽 구역 면이 끼면 건드리지 않고 센다(되읽기 관문이 지킨다).
+    /// 뒤집어 바뀐 높이는 따로 잰다(정지면 그대로인 면끼리라 옹벽 구역 오차와 같은 자리에서 겹치지 않는다 — 부르는 쪽이 둘 중 큰 것을 판의 오차로 친다).
+    /// 차례는 그대로다 — 바뀐 두 면만 제자리에서 바꾼다. 고칠 면이 없으면 받은 목록을 그대로 돌려준다(List면 같은 것).</para></summary>
+    public static List<WallDaylight.Tri> FixOutside(IReadOnlyList<WallDaylight.Tri> all, Func<WallDaylight.Tri, bool> mayFlip, out OutsideFix rep)
+    {
+        var r = new OutsideFix(); rep = r;
+        // WriteLandXmlTin이 «넓이 0»으로 버리는 문턱(|2A| < 1e-14) — 이런 면은 외접원 판정을 볼 것 없이 뒤집는다(안 뒤집으면 쓰기가 버려 합성이 멈춘다)
+        const double TinyCross = 1e-14;
+        static double Cr(Point3 a, Point3 b, Point3 c) => (b.X - a.X) * (c.Y - a.Y) - (b.Y - a.Y) * (c.X - a.X);
+        static double D(Point3 a, Point3 b) => Math.Sqrt((b.X - a.X) * (b.X - a.X) + (b.Y - a.Y) * (b.Y - a.Y));
+        static ((double, double), (double, double)) EK(Point3 a, Point3 b)
+        { var ka = (a.X, a.Y); var kb = (b.X, b.Y); return ka.CompareTo(kb) <= 0 ? (ka, kb) : (kb, ka); }
+        // 반시계 (a,b,c)에 대해 d가 외접원 안이면 > 0 — d 기준 국소 좌표(LongEdgeNonDelaunay와 같은 식)
+        static double InCircle(Point3 a, Point3 b, Point3 c, Point3 d)
+        {
+            double ax = a.X - d.X, ay = a.Y - d.Y, bx = b.X - d.X, by = b.Y - d.Y, cx = c.X - d.X, cy = c.Y - d.Y;
+            return (ax * ax + ay * ay) * (bx * cy - cx * by) - (bx * bx + by * by) * (ax * cy - cx * ay) + (cx * cx + cy * cy) * (ax * by - bx * ay);
+        }
+        // 면의 가장 긴 변 (u,v)와 맞은 꼭짓점 o
+        static (Point3 U, Point3 V, Point3 O) LongEdge(WallDaylight.Tri t)
+        {
+            double ab = D(t.A, t.B), bc = D(t.B, t.C), ca = D(t.C, t.A);
+            return ab >= bc && ab >= ca ? (t.A, t.B, t.C) : bc >= ca ? (t.B, t.C, t.A) : (t.C, t.A, t.B);
+        }
+        static bool Flat(WallDaylight.Tri t)
+        {
+            var (u, v, _) = LongEdge(t); double l = D(u, v);
+            return l > 0 && Math.Abs(Cr(t.A, t.B, t.C)) / l < CivilMerge;
+        }
+
+        var cur = all as List<WallDaylight.Tri> ?? new List<WallDaylight.Tri>(all);
+        bool copied = !ReferenceEquals(cur, all);
+        static string AtS(double x, double y) => string.Format(CultureInfo.InvariantCulture, "({0:F4},{1:F4})", x, y);
+        static bool Same(Point3 a, Point3 b) => a.X == b.X && a.Y == b.Y;
+        // ★[코드 검토 중간 1] 이 함수가 만든 면 → 그 면 안에서 정지면 그대로였던 모양과 달라진 높이의 위 한계.
+        //   긴 변 하나 위에 꼭짓점이 둘 넘게 있으면(사슬) 첫 뒤집기가 만든 면이 다음 고칠 면의 긴 변 건너 면이 된다 — mayFlip에 없어도 뒤집어야 Civil이 받을 모양이 된다.
+        //   다시 뒤집은 면의 값 = 이번 높이 변화 + 두 면이 이미 바뀐 값 중 큰 것(점마다 |새 − 지금| + |지금 − 처음| — 위 한계)
+        var mine = new Dictionary<WallDaylight.Tri, double>();
+        bool Ok(WallDaylight.Tri t) => mine.ContainsKey(t) || mayFlip(t);
+        // 한 판 — 납작한 면을 찾고 긴 변 건너 면을 한 번 훑어 모은 뒤 판정한다.
+        //   mode 0 = 세기만(Found) · 1 = 뒤집기(뒤집은 면은 그 판에서 다시 안 본다 — 사슬이면 다음 판) · 2 = 끝에 남은 «Civil이 고칠 면» 세기(Left · 까닭)
+        int Pass(int mode)
+        {
+            var flat = new List<int>();
+            for (int i = 0; i < cur.Count; i++) if (Flat(cur[i])) flat.Add(i);
+            if (flat.Count == 0) return 0;
+            var want = new Dictionary<((double, double), (double, double)), List<int>>();
+            foreach (int i in flat) { var (u, v, _) = LongEdge(cur[i]); want[EK(u, v)] = new List<int>(2); }
+            for (int j = 0; j < cur.Count; j++)
+            {
+                var t = cur[j];
+                if (want.TryGetValue(EK(t.A, t.B), out var l1)) l1.Add(j);
+                if (want.TryGetValue(EK(t.B, t.C), out var l2)) l2.Add(j);
+                if (want.TryGetValue(EK(t.C, t.A), out var l3)) l3.Add(j);
+            }
+            void Leave(Point3 o, int why)
+            {
+                r.Left++;
+                if (why == 0) r.LeftZone++; else if (why == 1) r.LeftEdge++; else if (why == 2) r.LeftShape++; else r.LeftRound++;
+                if (r.LeftAt.Length < 120) r.LeftAt += (r.LeftAt.Length > 0 ? " " : "") + AtS(o.X, o.Y);
+            }
+            var touched = new HashSet<int>();
+            int n = 0;
+            foreach (int i in flat)
+            {
+                if (touched.Contains(i)) continue;
+                var t1 = cur[i];
+                var (u, v, o) = LongEdge(t1);
+                var nb = want[EK(u, v)].Where(j => j != i).ToList();
+                // 긴 변이 테두리(건너 면 없음)면 Civil이 고칠 면이 아니다(LongEdgeNonDelaunay도 거짓). 둘 넘게 걸리면(겹친 면) 못 뒤집음으로 센다
+                if (nb.Count != 1) { if (mode == 2 && nb.Count > 1) Leave(o, 1); continue; }
+                int g = nb[0];
+                if (touched.Contains(g)) continue;
+                var t2 = cur[g];
+                // T2 차례(감은 방향 그대로)에서 긴 변의 방향 s→e · 셋째 x — 새 면 (s,o,x) · (o,e,x)는 T2와 같은 방향으로 감긴다
+                Point3[] p2 = { t2.A, t2.B, t2.C };
+                int q = 0;
+                for (; q < 3; q++)
+                {
+                    var s0 = p2[q]; var e0 = p2[(q + 1) % 3];
+                    if ((Same(s0, u) && Same(e0, v)) || (Same(s0, v) && Same(e0, u))) break;
+                }
+                if (q == 3) { if (mode == 2) Leave(o, 1); continue; }
+                Point3 s = p2[q], e = p2[(q + 1) % 3], x = p2[(q + 2) % 3];
+                double c1 = Cr(t1.A, t1.B, t1.C);
+                bool civ = Math.Abs(c1) < TinyCross || InCircle(t1.A, t1.B, t1.C, x) * Math.Sign(c1) > 0;
+                if (!civ) continue;
+                if (mode == 0) { n++; continue; }
+                bool zoneHit = !(Ok(t1) && Ok(t2));
+                double c2 = Cr(s, e, x), n1 = Cr(s, o, x), n2 = Cr(o, e, x);
+                bool convex = Math.Sign(n1) == Math.Sign(c2) && Math.Sign(n2) == Math.Sign(c2) && Math.Abs(n1) >= TinyCross && Math.Abs(n2) >= TinyCross;
+                if (mode == 2) { Leave(o, zoneHit ? 0 : !convex ? 2 : 3); continue; }
+                if (zoneHit || !convex) continue;
+                // 높이 변화 — 두 대각선(o–x · s–e)이 만나는 자리에서 새 면과 옛 면의 높이 차(사각형 안 차이는 거기서 가장 크다 · 넓이 0 면이면 o 자리의 세운 턱)
+                double d3 = Cr(s, e, o), d4 = Cr(s, e, x), d1 = Cr(o, x, s), d2 = Cr(o, x, e);
+                double tt = d3 / (d3 - d4), ss = d1 / (d1 - d2);
+                double dz = Math.Abs(o.Z + tt * (x.Z - o.Z) - (s.Z + ss * (e.Z - s.Z)));
+                double acc = dz + Math.Max(mine.TryGetValue(t1, out double a1) ? a1 : 0, mine.TryGetValue(t2, out double a2) ? a2 : 0);
+                if (!copied) { cur = new List<WallDaylight.Tri>(cur); copied = true; }
+                var nG = new WallDaylight.Tri(s, o, x); var nI = new WallDaylight.Tri(o, e, x);
+                cur[g] = nG; cur[i] = nI;
+                mine.Remove(t1); mine.Remove(t2); mine[nG] = acc; mine[nI] = acc;
+                touched.Add(i); touched.Add(g);
+                n++; r.Flipped++;
+                if (acc >= r.MaxDz) { r.MaxDz = acc; r.At = AtS(o.X + tt * (x.X - o.X), o.Y + tt * (x.Y - o.Y)); }
+            }
+            return n;
+        }
+        r.Found = Pass(0);
+        if (r.Found == 0) return cur;
+        // 한 판에 한 사슬에서 하나씩 뒤집힌다(뒤집은 면은 그 판에서 다시 안 본다) — 사슬 길이만큼 판이 돈다 · 뒤집은 게 없으면 바로 멈춘다
+        for (int round = 0; round < 16; round++)
+            if (Pass(1) == 0) break;
+        Pass(2);
+        return cur;
     }
 }
