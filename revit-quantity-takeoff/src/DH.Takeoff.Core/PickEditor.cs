@@ -44,8 +44,15 @@ public sealed record PickValue(string Zone, string Part, bool Free, bool ZoneOk,
     /// <summary>부위 칸에 창 밖에서 들어온 값이 있다.</summary>
     public bool PartOutside => Part.Length > 0 && !PartOk;
 
-    /// <summary>값이 있는 칸은 모두 확인된 것인가(값이 없으면 참).</summary>
-    public bool Confirmed => !ZoneOutside && !PartOutside;
+    /// <summary>
+    /// 확인한 뒤 부재의 모양(부피 · 크기 · 자리)이 바뀌었다(JACK 2026-10-19 «설계 변경으로 크기나 부피가 바뀌면 다시 설정할 수 있게»).
+    /// 넣어 둔 값과 확인(ZoneOk · PartOk · Free)은 그대로 두고 이것만 따로 세운다 — '확인 필요'로 보이고, 다시 확인하거나 고쳐 넣으면 풀린다.
+    /// 모델에서 읽을 때만 참일 수 있다(창이 넣는 값은 늘 거짓 — 되돌리기만 앞의 참을 다시 적어 '확인 필요'를 되살린다).
+    /// </summary>
+    public bool Changed { get; init; }
+
+    /// <summary>값이 있는 칸은 모두 확인된 것인가(값이 없으면 참). 모양이 바뀌었으면 거짓.</summary>
+    public bool Confirmed => !ZoneOutside && !PartOutside && !(Changed && !IsEmpty);
 }
 
 /// <summary>
@@ -124,7 +131,10 @@ public sealed class PickEditor
     private readonly Dictionary<long, PickMember> _byId = new();
     private readonly List<UndoStep> _undo = new();
     private readonly string? _wbs1, _wbs2, _wbs3;
-    private bool _applied;                 // 방금 값을 넣었다 — 다음에 찍거나 끌면 앞의 선택을 푼다
+    // 사람이 정한 결합(R54 — 모델 검증이 적는다 · 이 창은 열 때 떠 둔 것을 그대로 되적기만). 이 창이 떠 있는 동안 다른 길이 이것을 고치면 덮어쓴다 —
+    // 지금은 이 창이 모달이고 모델 검증(CheckOverlapCommand)만 적어서 생기지 않는다(core-verify R54 설치 전 L4). 그런 길이 생기면 적을 때 다시 읽을 것.
+    private readonly List<JoinException>? _exceptions;
+    private bool _applied;                // 방금 값을 넣었다 — 다음에 찍거나 끌면 앞의 선택을 푼다
     private long _cursor;                  // [다음 남은 부재]가 마지막으로 고른 부재
 
     private sealed record Lists(List<ZonePlace> Places, List<ZonePart> Parts, string Structure);
@@ -168,6 +178,7 @@ public sealed class PickEditor
         _writer = writer;
         _reread = reread;
         (_wbs1, _wbs2, _wbs3) = (plan.Wbs1, plan.Wbs2, plan.Wbs3);
+        _exceptions = plan.Exceptions?.Select(e => e.Copy()).ToList();
         Members = members;
         Levels = levels.OrderBy(l => l.Z).ToList();
         foreach (var m in members) _byId[m.Id] = m;
@@ -467,13 +478,14 @@ public sealed class PickEditor
         return Run("자동 이름으로 부위 채우기", wants, before, onPicked: true);
     }
 
-    /// <summary>고른 부재 가운데 창 밖에서 들어온 값(확인 필요)을 지금 값 그대로 확인한다.</summary>
+    /// <summary>고른 부재 가운데 확인 필요(창 밖에서 들어온 값 · 모양이 바뀐 부재)를 지금 값 그대로 확인한다.</summary>
     public bool Confirm()
     {
         var targets = Targets();
         if (targets.Count == 0) return NothingPicked();
-        var wants = targets.Where(m => m.State == PickState.Outside).Select(m => (m, m.Value with { ZoneOk = m.Value.HasZone, PartOk = m.Value.HasPart })).ToList();
-        if (wants.Count == 0) { Message = "고른 부재 가운데 확인할 값(창 밖에서 들어온 값)이 없습니다."; return false; }
+        var wants = targets.Where(m => m.State == PickState.Outside)
+            .Select(m => (m, m.Value with { ZoneOk = m.Value.HasZone, PartOk = m.Value.HasPart, Changed = false })).ToList();
+        if (wants.Count == 0) { Message = "고른 부재 가운데 확인할 값(창 밖에서 들어온 값 · 모양이 바뀐 부재)이 없습니다."; return false; }
         return Run("지금 값 그대로 확인", wants, null, onPicked: true);
     }
 
@@ -513,6 +525,9 @@ public sealed class PickEditor
     private bool Run(string label, List<(PickMember m, PickValue target)> wants, Lists? listsBefore, bool undoing = false, bool onPicked = false)
     {
         int lockedBefore = wants.Count(w => w.m.Locked.Length > 0);
+        // 고른 부재에 넣는 값(위치 · 부위 · 확인 · 지우기 — onPicked)은 '모양 바뀜'을 지운다: 바뀐 부재에 같은 값을 다시 넣어도 적어서(지금 모양으로
+        // 기록) 확인 필요가 풀리게. 목록을 고치는 일(이름 바꾸기 등)은 부재를 본 것이 아니라 바뀜을 그대로 둔다. 되돌리기는 앞의 값을 그대로 적는다.
+        if (!undoing && onPicked) wants = wants.Select(w => (w.m, w.target with { Changed = false })).ToList();
         var writes = wants.Where(w => w.m.Locked.Length == 0 && w.target != w.m.Value).Select(w => new MemberWrite(w.m, w.target)).ToList();
         if (writes.Count == 0 && listsBefore == null)
         {
@@ -607,6 +622,7 @@ public sealed class PickEditor
         Places = Places.Select(p => new ZonePlace { Name = p.Name, Wbs4 = p.Wbs4 }).ToList(),
         Parts = Parts.Select(p => p.Copy()).ToList(),
         Structure = Structure,
+        Exceptions = _exceptions?.Select(e => e.Copy()).ToList(),
         Wbs1 = _wbs1, Wbs2 = _wbs2, Wbs3 = _wbs3,
     };
 
@@ -858,6 +874,25 @@ public sealed class PickEditor
         item.Later = null;
         if (PartCatalog.IsLater(item) != later) item.Later = later;
         return ListOnly($"부위 '{name}' — 나중에 침 {(later ? "켬" : "끔")}", before);
+    }
+
+    /// <summary>
+    /// 부위의 겹친 자리 순위를 바꾼다(R54 — 겹친 자리 주인표: 숫자가 작은 쪽이 겹친 자리를 가진다). null 이거나 그 줄의 처음 값(DeductRank.BaseOf)과 같으면
+    /// 비운다(안 쓴 목록이 v6 으로 남아 전의 판에서 안 열리는 일이 없게 — SetLater 꼴). 버림 줄은 늘 1 이라 바꾸지 않는다(core-verify R54 계획 L4).
+    /// 바뀌었으면 true.
+    /// </summary>
+    public bool SetRank(string name, int? rank)
+    {
+        var item = Parts.FirstOrDefault(p => p.Name == name);
+        if (item == null || DeductRank.IsLeanPart(item)) return false;
+        if (rank is { } r && !DeductRank.IsValid(r)) return false;
+        int baseRank = DeductRank.BaseOf(item);
+        int want = rank ?? baseRank;
+        int? store = want == baseRank ? null : want;
+        if (item.Rank == store) return false;
+        var before = Snapshot();
+        item.Rank = store;
+        return ListOnly($"부위 '{name}' — 겹친 자리 {DeductRank.Label(want)}", before);
     }
 
     /// <summary>

@@ -68,6 +68,18 @@ public sealed record OverlapRow
     /// 창에서 고친 뒤 다시 찾아 새로 나온 쌍(JACK 2026-10-19 «하나를 결합하더라도 새로고침») — 목록에 «새로» 딱지. 부르는 쪽이 정한다.
     /// </summary>
     public bool New { get; init; }
+
+    /// <summary>
+    /// 보이기만 하는 줄(R54 결합 방향의 «사람이 정함» · 같은 순위의 «참고»): 수 · 일괄 고치기 · 확인할 수에 넣지 않는다(줄 하나씩은 고칠 수 있다).
+    /// 딱지 글은 Note. 부르는 쪽이 정한다.
+    /// </summary>
+    public bool Optional { get; init; }
+
+    /// <summary>줄에 붙는 짧은 글(R54 결합 방향: «사람이 정함» · «참고» · «안 잼(시간 한도)» · «못 바꿈: 까닭»). "" = 없음.</summary>
+    public string Note { get; init; } = "";
+
+    /// <summary>체적을 재지 못했다(R54 결합 방향 — 시험 바꾸기를 못 함). VolumeM3 는 0 으로 두고 «—»로 보인다.</summary>
+    public bool Unmeasured { get; init; }
 }
 
 /// <summary>목록의 묶음 하나: 남는 쪽의 부위 → 잘리는 쪽의 부위. 제목일 뿐이다 — 묶음 때문에 빠지는 쌍은 없다.</summary>
@@ -81,8 +93,12 @@ public sealed class OverlapGroup
     public IReadOnlyList<OverlapRow> Rows => _rows;
     public double TotalM3 => _rows.Sum(r => r.VolumeM3);
 
-    /// <summary>확인할 쌍의 수(결합한 뒤에만 센다 — 창에서 고치면 그때그때 줄어든다).</summary>
-    public int Problems => _joined ? _rows.Count(r => !r.Fine) : 0;
+    /// <summary>묶음 머리에 적는 수 · 체적 — 보이기만 하는 줄(R54 사람이 정함 · 참고)은 빼고.</summary>
+    public int Counted => _rows.Count(r => !r.Optional);
+    public double CountedM3 => _rows.Where(r => !r.Optional).Sum(r => r.VolumeM3);
+
+    /// <summary>확인할 쌍의 수(결합한 뒤에만 센다 — 창에서 고치면 그때그때 줄어든다 · 보이기만 하는 줄은 빼고).</summary>
+    public int Problems => _joined ? _rows.Count(r => !r.Fine && !r.Optional) : 0;
 
     /// <summary>접어 두었다(줄이 보이지 않는다).</summary>
     public bool Collapsed { get; set; }
@@ -160,11 +176,14 @@ public sealed class OverlapBoard
     /// <summary>확인할 쌍의 수(결합한 뒤에만 센다 — 창에서 고치면 그때그때 줄어든다).</summary>
     public int Problems => Joined ? Unfinished : 0;
 
-    /// <summary>아직 끝나지 않은 쌍의 수(Fine 이 아닌 쌍 — 찾은 뒤의 창이든 결합한 뒤의 창이든).</summary>
-    public int Unfinished => _byKey.Values.Count(r => !r.Fine);
+    /// <summary>아직 끝나지 않은 쌍의 수(Fine 이 아닌 쌍 — 찾은 뒤의 창이든 결합한 뒤의 창이든 · 보이기만 하는 줄은 빼고).</summary>
+    public int Unfinished => _byKey.Values.Count(r => !r.Fine && !r.Optional);
 
-    /// <summary>[우선순위대로 결합]이 거는 쌍의 수 = 끝나지 않았고 이 창에서 고칠 수 있는 쌍(Blocked — 여러 조각과 겹친 쌍 — 은 빼고).</summary>
-    public int Joinable => _byKey.Values.Count(r => !r.Fine && !r.Blocked);
+    /// <summary>[모두 기준대로]가 거는 쌍의 수 = 끝나지 않았고 이 창에서 고칠 수 있는 쌍(Blocked — 여러 조각과 겹친 쌍 · Revit 이 바꾸기를 거절한 쌍 — 과 보이기만 하는 줄은 빼고).</summary>
+    public int Joinable => _byKey.Values.Count(r => !r.Fine && !r.Blocked && !r.Optional);
+
+    /// <summary>항목 띠 · 머리에 적는 수: 보이기만 하는 줄을 뺀 줄 수.</summary>
+    public int Counted => _byKey.Values.Count(r => !r.Optional);
 
     /// <summary>초점인 쌍의 Key. 없으면(전체 보기) −1.</summary>
     public int Focus { get; private set; } = -1;
@@ -178,7 +197,7 @@ public sealed class OverlapBoard
         foreach (var row in all)
             if (!_byKey.TryAdd(row.Key, row)) throw new ArgumentException($"쌍의 번호가 겹칩니다: {row.Key}", nameof(rows));
 
-        bool Problem(OverlapRow r) => joined && !r.Fine;
+        bool Problem(OverlapRow r) => joined && !r.Fine && !r.Optional;
         var groups = all
             .GroupBy(r => (r.WinnerPart, r.LoserPart))
             .Select(g => new OverlapGroup(g.Key.WinnerPart, g.Key.LoserPart,

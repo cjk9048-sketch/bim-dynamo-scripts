@@ -23,6 +23,7 @@ public sealed class CalcInput
     public string NotTarget { get; set; } = "";  // 산출 대상에서 뺀 까닭(콘크리트 아님 등). "" 이면 대상이다
     public string Mark { get; set; } = "";       // Revit «마크»(도면 부호 B1 · W1 …) — 산출근거 줄의 부호(R49 · 없으면 유형 이름)
     public double Thickness { get; set; }        // 바닥 · 기초의 두께(m — Revit «두께» · 0 = 모름) — 부위 제목의 «(T=700)»(R49)
+    public bool ShapeChanged { get; set; }       // 위치·부위를 확인한 뒤 모양이 바뀌었는데 아직 확인하지 않았다 — «부재 목록»에 남긴다(R52b)
 }
 
 /// <summary>
@@ -36,6 +37,8 @@ public sealed class CalcPlan
 {
     public const string Reinforced = "철근 콘크리트";
     public const string Plain = "무근 콘크리트";
+    /// <summary>«부재 목록»의 판정 곁에 붙이는 글 — 위치·부위를 확인한 뒤 모양이 바뀌었는데 확인하지 않고 [완료]한 부재(R52b).</summary>
+    public const string ShapeChangedNote = "모양 바뀜(미확인)";
 
     public List<CalcRow> Rows { get; } = new();
     public List<CalcElement> Elements { get; } = new();
@@ -184,7 +187,8 @@ public sealed class CalcPlan
                 Id = x.Id, Category = x.Category, Type = x.Type, Zone = zone, Work = work, Part = PartOf(zone, kindName, zoned && !x.ZoneFree, noZone),
                 // 실은 식은 빈칸을 뺀 글자로 적는다(같은 식끼리 한 줄로 묶이게). 못 실은 식은 속성의 글자 그대로 둔다.
                 Formula = why.Length == 0 ? Squeeze(raw) : raw,
-                Bim = x.Bim, Verdict = x.Verdict, Missing = why, Excluded = excluded,
+                Bim = x.Bim, Verdict = x.ShapeChanged ? (x.Verdict.Length > 0 ? x.Verdict + " · " : "") + ShapeChangedNote : x.Verdict,
+                Missing = why, Excluded = excluded,
             };
             plan.Elements.Add(el);
             if (excluded) { plan.Excluded++; continue; }   // 대상에서 뺀 부재 — 「대상 아님」 시트에만 남는다

@@ -10,6 +10,7 @@ namespace DH.Takeoff.Core.Formwork;
 ///     형상 결합이 안 돼 입체끼리 겹쳐 있어도 된다(다른 입체 속에 묻힌 자리도 같은 방법으로 빠진다).
 ///     나중에 치는 부재(FormworkElement.Later — 받침 · PAD · 디딤판)는 구조체의 면을 잴 때 없는 것으로 본다: 구조체는 그 자리까지 거푸집이고,
 ///     나중 부재만 구조체에 맞닿은 면을 뺀다(JACK 2026-10-15 — 실무는 구조체 전체를 센 뒤 붙여 치는 것만 공제).
+///     단 그 구조체가 겹친 자리 순위로 이기는 나중 부재만 없는 것으로 본다(R54 — GivesWay: 보를 이기는 중간슬래브는 보를 잴 때 있다).
 ///  2) 포개진 자리: 두 부재의 면이 같은 평면·같은 방향으로 포개지면(겹친 부재에서 생긴다) 둘 다 '드러난 면'이 된다.
 ///     그 자리는 우선순위가 높은 부재 하나만 센다.
 ///  3) 방향: 윗면 / 위를 보는 경사면(30도보다 가파르면 센다) / 옆면 / 밑면 / 구멍 둘레.
@@ -67,7 +68,7 @@ public static class FormworkAnalyzer
         public required List<Body> Bodies;
         public required IReadOnlyList<FormworkZone> Zones;
         public required FormworkOptions Options;
-        public required List<WallFloor> Floors;                                 // 벽 옆면 조각마다 쓴 '서 있는 바닥'(구조체 · 나중 부재가 같이 쓴다)
+        public required List<WallFloor> Floors;                                 // 옆면 조각마다 쓴 '서 있는 바닥'(R53a 부터 벽 · 슬래브 · 기초 — 구조체 · 나중 부재가 같이 쓴다)
         public List<double> Levels = new();                                     // 입체들의 아래·위 끝 높이(오름차순)
         public Dictionary<int, LevelInfo> LevelInfos = new();
         public Dictionary<(int level, long z), (Paths64 concrete, Paths64 filled)> Sections = new(); // (구간, 높이) → 평면 그림
@@ -83,9 +84,23 @@ public static class FormworkAnalyzer
         public required double Floor;        // 이 조각이 쓴 바닥 높이
     }
 
+    /// <summary>
+    /// 자동 높이 구간(options.Bands = FormworkOptions.AutoBands)으로 잰다: 7 m 를 넘는 유로폼 조각이 없으면 구간을 끄고, 구간에서 잘린 조각(9 m 합판 기둥 등)이
+    /// 있었으면 구간 없이 한 번 더 잰다 — ② · 판 · 엑셀 · 부재 속성이 모두 «구간 없음» 하나로 맞게(revit-verify R53a M: 끄기만 하면 ② 에서 그 조각을 유로폼으로
+    /// 바꿨을 때 속성은 «7m 초과» · 엑셀은 구간 없음으로 어긋난다).
+    /// </summary>
+    public static List<ElementFormwork> AnalyzeAutoBands(IReadOnlyList<FormworkElement> elements, IReadOnlyList<FormworkZone>? zones, FormworkOptions options)
+    {
+        var results = Analyze(elements, zones, options);
+        bool cut = results.Any(r => r.Faces.Any(f => f.Patches.Any(p => p.Band > 0)));
+        if (options.DropUnusedBands(results) && cut) results = Analyze(elements, zones, options);
+        return results;
+    }
+
     public static List<ElementFormwork> Analyze(IReadOnlyList<FormworkElement> elements,
                                                 IReadOnlyList<FormworkZone>? zones = null, FormworkOptions? options = null)
     {
+        var analyzeWatch = System.Diagnostics.Stopwatch.StartNew();
         var all = new Context { Bodies = new List<Body>(), Zones = zones ?? Array.Empty<FormworkZone>(), Options = options ?? new FormworkOptions(), Floors = new List<WallFloor>() };
         foreach (var el in elements)
             for (int i = 0; i < el.Solids.Count; i++)
@@ -95,37 +110,53 @@ public static class FormworkAnalyzer
             }
         all.Levels = LevelsOf(all.Bodies);
         // 나중에 치는 부재(받침 · PAD · 디딤판 …)가 있으면 구조체의 면은 그것들을 뺀 콘크리트로 잰다 — 구조체를 칠 때는 아직 없다(JACK 2026-10-15).
-        // 입체(Body)는 같이 쓴다(높이마다의 그림자 · 단면은 그 입체만으로 정해지는 값). 높이 구간 · 평면 그림은 콘크리트가 다르므로 따로 둔다.
-        var early = all;
-        var laterBodies = all.Bodies.Where(b => b.El.Later).ToList();
-        if (laterBodies.Count > 0)
+        // 뺄 것은 그 구조체가 겹친 자리 순위로 이기는 나중 부재뿐이다(R54 · GivesWay — 보를 이기는 중간슬래브는 보를 잴 때 있다). 빼는 묶음이 같은 구조체끼리
+        // 문맥 하나를 같이 쓴다(대개 묶음은 두셋 — 벽 · 슬래브는 다 빼고, 보는 헌치 · 받침만, 채움은 받침만).
+        // 입체(Body)는 같이 쓴다(높이마다의 그림자 · 단면은 그 입체만으로 정해지는 값). 높이 구간 · 평면 그림은 콘크리트가 다르므로 문맥마다 따로 둔다.
+        var laterEls = elements.Where(e => e.Later).Distinct(ReferenceEqualityComparer.Instance).Cast<FormworkElement>().ToList();
+        var contexts = new Dictionary<string, (Context ctx, List<Body>? gone)>(StringComparer.Ordinal);
+        (Context ctx, List<Body>? gone) ContextOf(FormworkElement el)
         {
-            early = new Context { Bodies = all.Bodies.Where(b => !b.El.Later).ToList(), Zones = all.Zones, Options = all.Options, Floors = all.Floors };
-            early.Levels = LevelsOf(early.Bodies);
+            if (el.Later || laterEls.Count == 0) return (all, null);
+            var key = new System.Text.StringBuilder();
+            for (int i = 0; i < laterEls.Count; i++) key.Append(GivesWay(laterEls[i], el) ? '1' : '0');
+            string k = key.ToString();
+            if (contexts.TryGetValue(k, out var made)) return made;
+            var goneEls = new HashSet<FormworkElement>(laterEls.Where((l, i) => k[i] == '1'), ReferenceEqualityComparer.Instance);
+            if (goneEls.Count == 0) made = (all, null);
+            else
+            {
+                var ctx = new Context { Bodies = all.Bodies.Where(b => !goneEls.Contains(b.El)).ToList(), Zones = all.Zones, Options = all.Options, Floors = all.Floors };
+                ctx.Levels = LevelsOf(ctx.Bodies);
+                made = (ctx, all.Bodies.Where(b => goneEls.Contains(b.El)).ToList());
+            }
+            contexts[k] = made;
+            return made;
         }
 
-        // 벽을 먼저 아래부터 잰다: 바닥을 찾지 못한 옆면은 바로 아래 같은 평면의 벽 조각이 쓴 바닥을 물려받는다(R45 — 층마다 나눈 벽 · 벽 위 슬래브 옆면).
+        // 모든 부재를 아래부터 잰다: 바닥을 찾지 못한 옆면은 바로 아래 같은 평면의 옆면 조각이 쓴 바닥을 물려받는다(R45 — 층마다 나눈 벽 · 벽 위 슬래브 옆면 ·
+        // R53a 녹촌 «이어진 옆면의 아래 끝부터»: 하부슬래브 옆면을 먼저 재어 그 위 벽 · 지붕 옆이 하부슬래브 밑부터 재지게 — core-verify R53 계획 H1).
         // 결과의 차례는 받은 부재의 차례 그대로다(엑셀 줄의 '처음 나온 차례'가 바뀌지 않게).
         var analyzed = new Dictionary<FormworkElement, ElementFormwork>(ReferenceEqualityComparer.Instance);
         var order = elements.Where(e => e.Target)                     // 주변 콘크리트로만 쓰는 부재는 재지 않는다
             .Select((e, i) => (e, i))
-            .OrderBy(x => x.e.Kind == MemberKind.Wall ? 0 : 1)
-            .ThenBy(x => x.e.Kind == MemberKind.Wall ? all.Bodies.Where(b => ReferenceEquals(b.El, x.e)).Select(b => b.Min.Z).DefaultIfEmpty(0).Min() : 0)
+            .OrderBy(x => all.Bodies.Where(b => ReferenceEquals(b.El, x.e)).Select(b => b.Min.Z).DefaultIfEmpty(0).Min())
             .ThenBy(x => x.i)
             .Select(x => x.e);
         foreach (var el in order)
         {
-            var ctx = el.Later ? all : early;
+            var (ctx, gone) = ContextOf(el);
             var ef = new ElementFormwork { Element = el };
             foreach (var body in ctx.Bodies.Where(b => ReferenceEquals(b.El, el)))
             {
                 var holeEdges = HoleEdgeFaces(body);
                 for (int f = 0; f < body.Faces.Count; f++)
-                    ef.Faces.Add(AnalyzeFace(ctx, body, f, holeEdges.Contains(f), ReferenceEquals(ctx, early) ? laterBodies : null));
+                    ef.Faces.Add(AnalyzeFace(ctx, body, f, holeEdges.Contains(f), gone));
             }
             analyzed[el] = ef;
         }
         var results = elements.Where(e => e.Target).Select(e => analyzed[e]).ToList();
+        LastContexts = (1 + contexts.Values.Count(c => !ReferenceEquals(c.ctx, all)), analyzeWatch.ElapsedMilliseconds);
         // 수직면 덩어리를 묶어 둔다(형상만으로 — 대응표와 상관없다 · R49).
         GroupVerticals(results, all.Options);
         // 종류는 부재 전체를 본 뒤에 붙인다: 조각마다 대응표 → 덩어리는 다스리는 조각을 따름 → 3D 에서 뺀 판을 덮음.
@@ -137,8 +168,24 @@ public static class FormworkAnalyzer
         return results;
     }
 
+    /// <summary>
+    /// 나중에 치는 부재 later 가 구조체 structure 를 잴 때 빠지는가(R54 · core-verify 계획 H1): structure 가 겹친 자리 순위로 later 를 이기면(DeductRank.Beats —
+    /// 순위 → 카테고리 차례 → Id) 빠진다 — 구조체를 다 친 뒤에 붙여 치는 것. later 가 이기면(중간슬래브 > 보) 구조체를 잴 때 있다.
+    /// 순위를 모르면(0) 전과 같이 늘 빠진다. 거푸집 홈 알림(Revit FormworkReader.FindLaterCuts) · 검산(Check)도 이것으로 가른다.
+    /// </summary>
+    public static bool GivesWay(FormworkElement later, FormworkElement structure)
+    {
+        if (!later.Later || structure.Later) return false;
+        if (later.Rank == 0 || structure.Rank == 0) return true;
+        // 같은 순위면 «나중에 침»이 진다(DeductRank.Beats 둘째 열쇠) — 순위만으로 정해져 만든 차례(Id)에 흔들리지 않는다(core-verify R54 설치 전 중간 1).
+        return DeductRank.Beats(structure.Rank, false, DeductRank.KindOrder(structure.Kind), structure.Id, later.Rank, true, DeductRank.KindOrder(later.Kind), later.Id);
+    }
+
     /// <summary>마지막으로 수직면 덩어리를 묶는 데 걸린 시간(ms) · 묶은 덩어리 수 · 합친 테두리가 한 고리가 아니라 묶지 않은 수 — 일지(core-verify R49 계획 L5).</summary>
     public static (long ms, int groups, int refused) LastGrouping { get; private set; }
+
+    /// <summary>마지막으로 잴 때 지은 문맥 수(R54 — 구조체마다 «그 구조체가 이기는 나중 부재만» 뺀 콘크리트 · 모든 콘크리트 문맥 포함) · 잰 시간(ms) — 일지(core-verify 설치 전 L5).</summary>
+    public static (int contexts, long ms) LastContexts { get; private set; }
 
     // 수직면 덩어리(R49 — JACK 2026-10-16 «객체와 관계없이 2개이상의 부위로 합쳐져서 수직면이 생긴곳은 무조건 하나의 덩어리»):
     // 평면 수직면(옆면 · 구멍 둘레 — 법선이 수평)의 형상이 세는 조각 가운데 같은 방향 · 같은 평면(Epsilon)에 맞닿은(맞댄 변 1 cm 넘게) 것을
@@ -152,6 +199,9 @@ public static class FormworkAnalyzer
         foreach (var r in results)
         {
             if (FormworkTable.StandsAlone(r.Element)) continue;
+            // 턱(방지턱 · 건축연결부 벽 — 부위 묶음 «턱·맨홀»)은 덩어리에 넣지 않는다: 아래 벽과 한 평면이어도 녹촌 2D 는 턱을 따로 합판 3회로 센다
+            // («13) 건축연결부 벽체 · 15) 상부스라브 방지턱» — R53a). 잇기 · 표(StandsAlone)는 그대로(core-verify R53 계획 M1 덧붙임).
+            if (r.Element.Part.Length > 0 && options.PartGroup(r.Element.Part) == PartCatalog.Curb) continue;
             foreach (var f in r.Faces)
             {
                 if (f.Class is not (FaceClass.Side or FaceClass.HoleEdge) || f.Normal.Length != 3) continue;
@@ -213,7 +263,7 @@ public static class FormworkAnalyzer
             bool elevated = ef.Faces.Any(f => f.Patches.Any(p => p.Below == Below.Supported));
             foreach (var face in ef.Faces)
                 foreach (var patch in face.Patches)
-                    Rule(options, ef.Element, face.Class, patch, elevated);
+                    Rule(options, ef.Element, face, patch, elevated);
         }
         FollowGroups(results);
         foreach (var ef in results)
@@ -265,13 +315,27 @@ public static class FormworkAnalyzer
     /// 초안 규칙(버림의 안쪽 면은 «세지 않음» — R48). 버림의 안쪽 면은 부위 처음 값보다도 앞(core-verify R48 L6 — 버림에 계단 · DRY AREA 같은 부위를 넣어도
     /// 땅을 파고 치는 안쪽 면은 세지 않는다 · ② 표의 사람 줄은 이 사슬보다 앞이라 고르면 센다).
     /// </summary>
-    internal static string DraftOf(FormworkElement el, FaceClass cls, FacePatch patch, bool elevated, FormworkOptions options, bool withWall = true)
+    /// <remarks>
+    /// R53a(녹촌 — core-verify R53 계획 M1): 아래를 보는 평평한 면(밑면 · 구멍의 윗면)은 부위 처음 값보다 앞서 합판 4회(수평) — 부위 처음 값은 옆면 ·
+    /// 경사면에만 걸린다(계단 · 턱의 «합판 3회», 채움 · 받침의 «합판 6회»가 그 부재의 밑면까지 덮지 않게). 받침류(유형 이름)는 어느 면이든 6회 그대로.
+    /// </remarks>
+    internal static string DraftOf(FormworkElement el, FaceResult face, FacePatch patch, bool elevated, FormworkOptions options, bool withWall = true)
     {
-        if (el.Blinding && FormworkTable.ItemOf(el, cls, patch, elevated) == FormworkRules.NotCounted) return FormworkRules.NotCounted;
+        var cls = face.Class;
+        bool downFlat = DownFlat(face);
+        if (el.Blinding && FormworkTable.ItemOf(el, cls, patch, elevated, downFlat) == FormworkRules.NotCounted) return FormworkRules.NotCounted;
+        if (!el.Blinding && !FormworkTable.IsSmallPart(el.Type) && downFlat) return FormworkTable.Ply4;
         if (FormworkTable.PartDecides(el.Part, FormworkTable.GroupOf(cls, patch)) && options.PartDefault(el.Part) is { Length: > 0 } byPart) return byPart;
         _ = withWall;   // R49: 벽과 이어진 면은 수직면 덩어리가 다스리는 조각을 따르게 한다(전의 «맞닿은 벽 종류»는 덩어리로 바뀜)
-        return FormworkTable.ItemOf(el, cls, patch, elevated);
+        return FormworkTable.ItemOf(el, cls, patch, elevated, downFlat);
     }
+
+    /// <summary>
+    /// 아래를 보는 평평한 면인가(녹촌 «수 평 면» — 합판 4회): 밑면(Bottom — 수평에서 0.5° 안 · AnalyzeFace 와 같은 잣대), 또는 구멍 둘레 가운데 아래를 보는
+    /// 수평인 면(문 · 창의 머리 · 벽 HOLE 의 윗면). 경사면(SlopeDown — 헌치)은 아니다(녹촌 «수 직 면 (3회)»).
+    /// </summary>
+    internal static bool DownFlat(FaceResult face) =>
+        face.Class == FaceClass.Bottom || (face.Class == FaceClass.HoleEdge && !face.UpFacing && face.SlopeDeg < 0.5);
 
     /// <summary>사람이 ② 3D 에서 뺀 판의 조각에 적는 까닭(R48).</summary>
     public const string DroppedNote = "3D 에서 뺀 판";
@@ -330,9 +394,9 @@ public static class FormworkAnalyzer
     //   수직면 덩어리의 조각은 다스리는 조각의 값 → 3D 에서 뺀 판(사람 — 대응표가 무엇이든 세지 않는다 · 종류는 남김).
     // 부위 줄 · 부위 처음 값은 구멍 둘레와 아래가 빈 밑면을 다스리지 않는다(FormworkTable.PartGoverns — 2D 의 «HOLE 주위»는 부위와 상관없이 합판 3회).
     // 아래가 빈 밑면(세는지 묻는 면)은 지금처럼 유형 줄로만 정한다.
-    private static void Rule(FormworkOptions options, FormworkElement el, FaceClass cls, FacePatch patch, bool elevated)
+    private static void Rule(FormworkOptions options, FormworkElement el, FaceResult face, FacePatch patch, bool elevated)
     {
-        string group = FormworkTable.GroupOf(cls, patch);
+        string group = FormworkTable.GroupOf(face.Class, patch);
         if (patch.Below == Below.Floating)
         {
             // 아래가 빈 밑면: 사람이 정하기 전에는 세지 않고 물어본다.
@@ -353,7 +417,7 @@ public static class FormworkAnalyzer
             return;
         }
         if (rule != null) { patch.Item = rule; return; }
-        ApplyDraft(el, patch, DraftOf(el, cls, patch, elevated, options, withWall: false));
+        ApplyDraft(el, patch, DraftOf(el, face, patch, elevated, options, withWall: false));
     }
 
     // ── 입체 준비 ──────────────────────────────────────────────────────────────────
@@ -592,7 +656,14 @@ public static class FormworkAnalyzer
     {
         double total = Poly.Area(part);
         // 버림·기초의 밑면은 아래에 무엇이 있든 땅(되메운 흙 포함) 위에 놓인다 — 거푸집이 없다.
-        if (body.El.Blinding || body.El.Kind == MemberKind.Foundation)
+        // 다만 «구조 기초» 카테고리로 그렸어도 넣은 부위가 채움 · 바닥(하부슬래브류)이 아니면(헌치 · 캐노피 · 위 슬래브 …) 기초가 아니다 — 다른 부재처럼
+        // 아래 받침을 재어 받침 있는 자리만 세고, 받침 없는 자리는 예전처럼 땅으로 둔다(R53a — 녹촌 상부 헌치 300x300 · 캐노피가 «구조 기초»라 경사면 ≈79 ㎡ ·
+        // 밑면이 빠졌다 · revit-verify R53 계획 ④: 기초 슬래브로 그린 하부슬래브가 «확인» 덩어리나 거짓 밑면 거푸집이 되지 않게). 부위가 없으면 지금처럼 카테고리로.
+        bool foundationLike = false;
+        if (!body.El.Blinding && body.El.Kind == MemberKind.Foundation && body.El.Part.Length > 0 &&
+            ctx.Options.PartGroup(body.El.Part) is not (PartCatalog.Fill or PartCatalog.Floor))
+            foundationLike = true;
+        if (body.El.Blinding || (body.El.Kind == MemberKind.Foundation && !foundationLike))
         {
             var ground = Patch(frame, part, total);
             ground.Below = Below.Ground;
@@ -669,7 +740,15 @@ public static class FormworkAnalyzer
             yield return patch;
         }
         double restArea = Poly.Area(rest);
-        if (restArea >= Tiny)
+        if (restArea >= Tiny && foundationLike)
+        {
+            // 기초 카테고리로 그린 부재의 받침 없는 자리: 예전처럼 땅으로(세지 않음 · 묻지 않음 — revit-verify R53 계획 ④).
+            var ground = Patch(frame, rest, restArea);
+            ground.Below = Below.Ground;
+            ground.Note = "땅 위(기초 카테고리 — 아래 받침 없음)";
+            yield return ground;
+        }
+        else if (restArea >= Tiny)
         {
             // 아래에 아무것도 없다: 땅 위에 놓인 바닥판이거나, 처마처럼 떠 있는 면이다 — 세지 않고 사람에게 묻는다.
             var patch = Patch(frame, rest, restArea);
@@ -726,8 +805,8 @@ public static class FormworkAnalyzer
                 continue;
             }
             // 서 있는 바닥: 조각의 아랫부분에서 바깥으로 조금 나간 자리 아래의 콘크리트 윗면. 없으면(또는 1m 넘게 아래면) —
-            // 바로 아래에 같은 평면으로 맞닿은 벽 조각이 있으면 그 조각이 쓴 바닥(R45 — JACK 2026-10-16: 벽 위 슬래브 옆면이 자기 밑에서 재여 «0~7m»였다 ·
-            // 층마다 나눈 윗벽도 한 벽처럼), 그것도 없으면 조각의 아래 끝.
+            // 바로 아래에 같은 평면으로 맞닿은 옆면 조각이 있으면 그 조각이 쓴 바닥(R45 — JACK 2026-10-16: 벽 위 슬래브 옆면이 자기 밑에서 재여 «0~7m»였다 ·
+            // 층마다 나눈 윗벽도 한 벽처럼 · R53a 녹촌: 하부슬래브 옆면 위의 바깥 벽은 하부슬래브 밑부터), 그것도 없으면 조각의 아래 끝.
             var (ru0, rv0, ru1, rv1) = Extent(region);
             double bottomZ = frame.O.Z + rv0 * vz, baseZ = bottomZ;
             bool floor = false;
@@ -738,9 +817,9 @@ public static class FormworkAnalyzer
                 if (TopBelow(ctx, p) is double z && bottomZ - z < 1.0) { baseZ = z; floor = true; }
             }
             if (!floor && FloorBelow(ctx, body, frame, ru0, ru1, bottomZ) is double below) baseZ = below;
-            // 벽 조각은 자기가 쓴 바닥을 남긴다(바로 위에 얹힌 옆면이 물려받게). 나중 벽은 남기지 않는다 — LinkFlushToWalls 는 나중 벽도
-            // 따를 벽으로 보지만(R46) 이것은 높이 구간을 켰을 때만 쓰는 바닥이다(기본은 구간이 없어 여기에 오지 않는다 — core-verify R46 L2).
-            if (body.El.Kind == MemberKind.Wall && !body.El.Later && region.Count > 0)
+            // 옆면 조각은 자기가 쓴 바닥을 남긴다(바로 위에 얹힌 옆면이 물려받게 — R53a 부터 벽만이 아니라 슬래브 · 기초 옆면도: 하부슬래브 옆면 위의 벽).
+            // 나중 부재와 따로 적는 것(버림 · 받침류 — StandsAlone)은 남기지 않는다 — 버림 옆면 위의 하부슬래브가 버림 밑부터 재이지 않게(녹촌: 버림은 따로 6회).
+            if (!body.El.Later && !FormworkTable.StandsAlone(body.El) && region.Count > 0)
                 ctx.Floors.Add(new WallFloor
                 {
                     ElementId = body.El.Id, N = frame.N, Top = frame.O.Z + rv1 * vz, Floor = baseZ,
@@ -1272,8 +1351,8 @@ public static class FormworkAnalyzer
     {
         var audit = new Audit();
         var contact = new Dictionary<(long, long), double>();
-        var ids = new HashSet<long>(results.Select(r => r.Element.Id));
-        var later = new HashSet<long>(results.Where(r => r.Element.Later).Select(r => r.Element.Id));
+        var byId = new Dictionary<long, FormworkElement>();
+        foreach (var r in results) byId.TryAdd(r.Element.Id, r.Element);
         foreach (var r in results)
             foreach (var f in r.Faces)
             {
@@ -1289,8 +1368,10 @@ public static class FormworkAnalyzer
         foreach (var ((a, b), fromA) in contact)
         {
             if (a > b && contact.ContainsKey((b, a))) continue;      // 쌍마다 한 번만
-            if (!ids.Contains(b)) continue;                           // 상대가 결과에 없으면(주변 콘크리트) 견줄 수 없다
-            if (later.Contains(a) != later.Contains(b)) continue;     // 구조체 ↔ 나중에 치는 부재: 구조체 쪽은 일부러 빼지 않았다
+            if (!byId.TryGetValue(b, out var eb)) continue;            // 상대가 결과에 없으면(주변 콘크리트) 견줄 수 없다
+            var ea = byId[a];
+            // 구조체 ↔ 그 구조체를 잴 때 빠진 나중 부재: 구조체 쪽은 일부러 빼지 않았다(R54 — 구조체를 이기는 나중 부재는 양쪽에서 재므로 견준다).
+            if (GivesWay(ea, eb) || GivesWay(eb, ea)) continue;
             double fromB = contact.GetValueOrDefault((b, a));
             if (Math.Abs(fromA - fromB) > 1e-3 + 1e-3 * Math.Max(fromA, fromB))
                 audit.Uneven.Add(a < b ? (a, b, fromA, fromB) : (b, a, fromB, fromA));
@@ -1328,9 +1409,10 @@ public static class FormworkAnalyzer
     }
 
     /// <summary>
-    /// 이 옆면 조각(u 범위 u0~u1 · 아래 끝 bottomZ)의 바로 아래에 같은 평면 · 같은 방향으로 맞닿은 벽 조각(먼저 잰 것 — Context.Floors)이 있으면
-    /// 그 조각이 쓴 바닥 높이. 맞닿음: 벽 조각의 위 끝이 bottomZ 와 2 mm 안 · 가로(u)로 1 cm 넘게 겹침. 여럿이면 가장 길게 겹친 것, 같으면 부재 Id 가 작은 것
-    /// (core-verify R45 M2 — 차례에 따라 바뀌지 않게). 벽은 아래부터 재므로 층마다 나눈 벽은 아랫벽의 바닥을 물려받는다.
+    /// 이 옆면 조각(u 범위 u0~u1 · 아래 끝 bottomZ)의 바로 아래에 같은 평면 · 같은 방향으로 맞닿은 옆면 조각(먼저 잰 것 — Context.Floors · R53a 부터
+    /// 벽만이 아니라 슬래브 · 기초 옆면도)이 있으면 그 조각이 쓴 바닥 높이. 맞닿음: 아래 조각의 위 끝이 bottomZ 와 2 mm 안 · 가로(u)로 1 cm 넘게 겹침.
+    /// 여럿이면 가장 길게 겹친 것, 같으면 부재 Id 가 작은 것(core-verify R45 M2 — 차례에 따라 바뀌지 않게). 부재를 아래부터 재므로 층마다 나눈 벽은
+    /// 아랫벽의, 하부슬래브 옆면 위의 바깥 벽은 하부슬래브 옆면의 바닥을 물려받는다(녹촌 «이어진 옆면의 아래 끝부터»).
     /// </summary>
     private static double? FloorBelow(Context ctx, Body body, Frame frame, double u0, double u1, double bottomZ)
     {

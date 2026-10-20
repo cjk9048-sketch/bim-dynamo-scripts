@@ -105,7 +105,7 @@ public static class FormworkSummary
             if (!elevated.TryGetValue(src.Result, out bool raised)) elevated[src.Result] = raised = src.Result.Faces.Any(x => x.Patches.Any(q => q.Below == Below.Supported));
             entry.row.Area += p.Area;
             entry.ids.Add(r.Element.Id);
-            entry.drafts.Add(src.Patch.Below == Below.Floating ? Ask : FormworkAnalyzer.DraftOf(src.Result.Element, src.Face.Class, src.Patch, raised, options));
+            entry.drafts.Add(src.Patch.Below == Below.Floating ? Ask : FormworkAnalyzer.DraftOf(src.Result.Element, src.Face, src.Patch, raised, options));
         }
         foreach (var (row, drafts, ids, _) in rows.Values)
         {

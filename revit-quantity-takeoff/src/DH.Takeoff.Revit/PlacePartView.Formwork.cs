@@ -61,7 +61,7 @@ public sealed partial class PlacePartView
         _board = board;
         _fwSide ??= BuildFormworkSide();
         _fwTop ??= BuildFormworkTop();
-        _fwBottom ??= BuildFormworkBottom();
+        if (fresh || _fwBottom == null) _fwBottom = BuildFormworkBottom();   // 색 풀이는 판마다(① 에서 고쳐 다시 지은 판은 높이 구간이 켜지거나 꺼질 수 있다 — revit-verify R53a L1)
         if (fresh)
         {
             _fwPicked = null;

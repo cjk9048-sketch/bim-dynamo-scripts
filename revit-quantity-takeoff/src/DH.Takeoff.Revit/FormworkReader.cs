@@ -42,7 +42,11 @@ public static class FormworkReader
     /// 부위 이름 → 나중에 치는 부위인가(받침 · PAD · 디딤판 — 부위 목록의 '나중에 침', JACK 2026-10-15). 부재의 부위 칸(DH_Part)으로 본다 —
     /// 유형 이름으로 짐작하지 않는다. 없으면 모두 구조체(전과 같다).
     /// </param>
-    public static Scene Read(Document doc, ICollection<ElementId> selection, Func<string, bool>? laterPart = null)
+    /// <param name="ranks">
+    /// 겹친 자리 순위표(R54 — DeductRank): 구조체를 잴 때 어느 나중 부재를 뺄지(FormworkAnalyzer.GivesWay)와 거푸집 홈 알림(LaterCuts)이 쓴다.
+    /// 없으면 순위 0(전과 같이 나중 부재는 늘 뺀다).
+    /// </param>
+    public static Scene Read(Document doc, ICollection<ElementId> selection, Func<string, bool>? laterPart = null, DeductRank.Table? ranks = null)
     {
         var scene = new Scene { Selected = selection.Count };
         foreach (var id in DimensionExtractor.CollectApplicable(doc))
@@ -67,11 +71,13 @@ public static class FormworkReader
                 if (material.Kind == ConcreteFilter.Kind.Unknown) scene.UnknownMaterial++;
                 ReadCurved(el, solids, scene);
             }
+            var kind = CalcSheetExporter.KindOf(el);
             scene.Elements.Add(new FormworkElement
             {
                 Id = id.Value,
                 Category = el.Category?.Name ?? "",
-                Kind = CalcSheetExporter.KindOf(el),
+                Kind = kind,
+                Rank = ranks?.RankOf(part, kind, CalcPlan.IsLean(type, material.Material, part)) ?? 0,
                 Type = type,
                 Zone = ZoneAssigner.Current(el),
                 Part = part,            // ② 대응표의 부위 줄 · 부위의 처음 값(R47)
@@ -102,6 +108,8 @@ public static class FormworkReader
     }
 
     // 나중에 치는 부재와 결합된 구조체 가운데, 나중 부재가 자르는 쪽(IsCuttingElementInJoin)인 쌍을 모은다. 읽기만 한다.
+    // R54(core-verify 계획 H1): 그 구조체를 잴 때 나중 부재를 빼는 쌍(GivesWay — 구조체가 순위로 이김)만 — 나중 부재가 순위로 이기는 쌍(헌치 > 채움 ·
+    // 중간슬래브 > 보)은 구조체를 잴 때 나중 부재가 있으므로 홈이 거푸집으로 세이지 않는다(«결합 방향 반대»와 같은 뜻).
     private static void FindLaterCuts(Document doc, Scene scene)
     {
         var known = new Dictionary<long, FormworkElement>();
@@ -115,7 +123,7 @@ public static class FormworkReader
             catch { continue; }
             foreach (var id in joined)
             {
-                if (!known.TryGetValue(id.Value, out var other) || other.Later) continue;
+                if (!known.TryGetValue(id.Value, out var other) || !FormworkAnalyzer.GivesWay(later, other)) continue;
                 try
                 {
                     if (doc.GetElement(id) is Element cut && JoinGeometryUtils.IsCuttingElementInJoin(doc, el, cut)) scene.LaterCuts.Add((later.Id, id.Value));

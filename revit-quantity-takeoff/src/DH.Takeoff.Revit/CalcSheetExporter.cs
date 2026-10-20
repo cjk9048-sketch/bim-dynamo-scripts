@@ -82,6 +82,7 @@ public static class CalcSheetExporter
                 if (material.Kind == ConcreteFilter.Kind.Unknown) result.UnknownMaterial.Add((type, material.Material));
             }
 
+            var stamp = PlaceStamp.ValueOf(el);
             inputs.Add(new CalcInput
             {
                 Id = id.Value,
@@ -91,7 +92,8 @@ public static class CalcSheetExporter
                 Material = material.Material,
                 Zone = ZoneAssigner.Current(el),
                 Part = ZoneScene.Text(el, ZoneScene.PartParam),
-                ZoneFree = PlaceStamp.ValueOf(el).Free,
+                ZoneFree = stamp.Free,
+                ShapeChanged = stamp.Changed,     // 위치·부위를 확인한 뒤 모양이 바뀌었는데 확인하지 않았다 — «부재 목록»에 남긴다(R52b)
                 Formula = formula,
                 Bim = bim,
                 Verdict = Text(el, FormulaAutoFill.VerdictParam),

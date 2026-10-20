@@ -1,6 +1,8 @@
+using System.Globalization;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.ExtensibleStorage;
 using DH.Takeoff.Core;
+using DH.Takeoff.Core.View3D;
 
 namespace DH.Takeoff.Revit;
 
@@ -15,6 +17,9 @@ namespace DH.Takeoff.Revit;
 /// '위치 없음'은 속성으로는 '아직 안 넣음'과 구별할 수 없어(둘 다 빈칸) 여기에 적는다.
 /// 읽기는 트랜잭션 없이, 쓰기는 부르는 쪽의 트랜잭션 안에서 한다.
 /// 스키마는 한 번 모델에 쓰이면 칸을 바꿀 수 없다(같은 GUID 로 다른 모양을 만들 수 없다) — 나중에 더 담을 것을 위해 빈 글자 칸(Extra)을 하나 둔다.
+/// Extra 에는 확인한 때의 모양을 적는다(R52b — JACK 2026-10-19 «설계 변경으로 크기나 부피가 바뀌면 다시 설정할 수 있게»):
+/// `geo1:v=체적 m³;b=x0,y0,z0,x1,y1,z1`(둘레 상자 m). 읽을 때 지금 모양과 견줘 바뀌었으면 PickValue.Changed — 값과 확인은 그대로 두고 '확인 필요'.
+/// 우리 도구(겹침 검사의 결합 · 결합 순서 바꾸기 · 나누기)가 바꾼 모양은 바뀜이 아니다 — 그 트랜잭션 안에서 다시 계산 뒤 · 커밋 앞에 Reshape 로 고쳐 적는다.
 /// </summary>
 public static class PlaceStamp
 {
@@ -50,7 +55,7 @@ public static class PlaceStamp
     {
         string zone = ZoneAssigner.Current(el);
         string part = ZoneScene.Text(el, ZoneScene.PartParam).Trim();
-        bool zoneOk = false, partOk = false, free = false;
+        bool zoneOk = false, partOk = false, free = false, changed = false;
         try
         {
             var schema = Schema.Lookup(SchemaId);
@@ -63,24 +68,30 @@ public static class PlaceStamp
                     zoneOk = entity.Get<bool>(ZoneOkField) && (entity.Get<string>(ZoneField) ?? "") == zone;
                     partOk = entity.Get<bool>(PartOkField) && (entity.Get<string>(PartField) ?? "") == part;
                     free = zoneOk && entity.Get<bool>(FreeField);
+                    // 확인한 칸이 있을 때만 모양을 본다(지킬 확인이 없으면 바뀜도 뜻이 없다). 모양 기록이 없는 옛 기록은 모름 — 바뀜이 아니다.
+                    if (zoneOk || partOk) changed = Differs(entity.Get<string>(ExtraField) ?? "", el);
                 }
             }
         }
-        catch { zoneOk = partOk = free = false; }
-        return PickValue.Of(zone, part, free, zoneOk, partOk);
+        catch { zoneOk = partOk = free = changed = false; }
+        return PickValue.Of(zone, part, free, zoneOk, partOk) with { Changed = changed };
     }
 
     /// <summary>
     /// 기록을 값에 맞춘다(트랜잭션 안에서, 속성을 적은 뒤에). 확인된 칸이 하나도 없으면 기록을 뗀다 — 값을 지워 '아직'으로 되돌릴 때 등.
+    /// 모양 기록은 지금 모양으로 적는다. 다만 value.Changed 면(목록 일 · 되돌리기 · 나누기가 '바뀐' 부재의 기록을 조각에 옮길 때) «바뀜» 표시를 적는다 —
+    /// 늘 바뀜으로 읽혀 '확인 필요'가 넘어간다(사람이 넣거나 확인할 때만 풀린다 — R52b core-verify 높음 1 · 중간 3). 이 트랜잭션에서 모양이 바뀌는
+    /// 길(나누기)은 다시 계산 뒤에 Reshape 로 고쳐 적는다.
     /// </summary>
     public static void Set(Element el, PickValue value)
     {
+        var existing = Schema.Lookup(SchemaId);
         if (!value.ZoneOk && !value.PartOk)
         {
-            var existing = Schema.Lookup(SchemaId);
             if (existing != null) el.DeleteEntity(existing);
             return;
         }
+        string geo = value.Changed ? GeoTag + Dirty : Measure(el);
         var entity = new Entity(GetSchema());
         entity.Set(UidField, el.UniqueId ?? "");
         entity.Set(ZoneField, value.Zone);
@@ -88,7 +99,89 @@ public static class PlaceStamp
         entity.Set(FreeField, value.Free);
         entity.Set(ZoneOkField, value.ZoneOk);
         entity.Set(PartOkField, value.PartOk);
-        entity.Set(ExtraField, "");
+        entity.Set(ExtraField, geo);
         el.SetEntity(entity);
+    }
+
+    /// <summary>
+    /// 모양 기록만 지금 모양으로 고친다 — 우리 도구가 모양을 바꾼 트랜잭션 안에서, 다시 계산(Regenerate) 뒤 · 커밋 앞에 부른다
+    /// (그 도구를 부르기 전에 이 부재가 바뀌지 않았던 때만 — 부르는 쪽이 ValueOf(..).Changed 로 미리 떠 둔다). 기록이 이 부재의 것이 아니거나
+    /// 확인한 칸이 없으면 아무것도 하지 않는다. 던지지 않는다(못 고치면 다음에 '모양 바뀜'으로 보일 뿐이다).
+    /// </summary>
+    public static void Reshape(Element el)
+    {
+        try
+        {
+            var schema = Schema.Lookup(SchemaId);
+            var entity = schema == null ? null : el.GetEntity(schema);
+            if (entity == null || !entity.IsValid()) return;
+            if ((entity.Get<string>(UidField) ?? "") != (el.UniqueId ?? "")) return;
+            if (!entity.Get<bool>(ZoneOkField) && !entity.Get<bool>(PartOkField)) return;
+            string geo = Measure(el);
+            if (geo.Length == 0) return;
+            entity.Set(ExtraField, geo);
+            el.SetEntity(entity);
+        }
+        catch { }
+    }
+
+    // ── 모양 기록 ─────────────────────────────────────────────────────────────────
+
+    private const string GeoTag = "geo1:";
+    private const string Dirty = "dirty";      // «바뀜» 표시 — 모양을 재지 않고 늘 바뀜으로 읽힌다
+    private const double VolumeRel = 0.01, VolumeAbsM3 = 1e-4, BoxTolM = 0.01;   // 체적 1%(그리고 0.0001 m³ — 다 깎인 부재 · 작은 헌치) · 상자 1 cm
+    private const double Ft3ToM3 = 0.3048 * 0.3048 * 0.3048;
+
+    // 지금 모양: 체적(산출식이 쓰는 값 — Revit 속성의 체적, 없으면 입체의 체적)과 둘레 상자. 재지 못하면 "".
+    private static string Measure(Element el)
+    {
+        try
+        {
+            var bb = el.get_BoundingBox(null);
+            if (bb == null) return "";
+            double declared = (el.get_Parameter(BuiltInParameter.HOST_VOLUME_COMPUTED)?.AsDouble() ?? 0) * Ft3ToM3;
+            double v = declared > 0 ? declared : SolidReader.Solids(el).Sum(s => s.Volume) * Ft3ToM3;
+            Vec3 lo = ZoneScene.Meters(bb.Min), hi = ZoneScene.Meters(bb.Max);
+            return string.Create(CultureInfo.InvariantCulture,
+                $"{GeoTag}v={v:0.######};b={lo.X:0.####},{lo.Y:0.####},{lo.Z:0.####},{hi.X:0.####},{hi.Y:0.####},{hi.Z:0.####}");
+        }
+        catch { return ""; }
+    }
+
+    // 기록한 모양과 지금 모양이 다른가: 체적이 1%(그리고 0.0001 m³) 넘게 · 상자 꼭짓점 좌표 하나라도 1 cm 넘게. 기록을 읽지 못하면 다르지 않다(모름).
+    private static bool Differs(string stored, Element el)
+    {
+        if (stored == GeoTag + Dirty) return true;
+        if (!TryParse(stored, out double v0, out double[] b0)) return false;
+        if (!TryParse(Measure(el), out double v1, out double[] b1)) return false;
+        if (Math.Abs(v1 - v0) > Math.Max(VolumeRel * Math.Max(v0, v1), VolumeAbsM3)) return true;
+        for (int i = 0; i < 6; i++) if (Math.Abs(b1[i] - b0[i]) > BoxTolM) return true;
+        return false;
+    }
+
+    private static bool TryParse(string text, out double volume, out double[] box)
+    {
+        volume = 0;
+        box = Array.Empty<double>();
+        if (!text.StartsWith(GeoTag, StringComparison.Ordinal)) return false;
+        double v = double.NaN;
+        double[]? b = null;
+        foreach (var piece in text[GeoTag.Length..].Split(';'))
+        {
+            if (piece.StartsWith("v=", StringComparison.Ordinal))
+                double.TryParse(piece[2..], NumberStyles.Float, CultureInfo.InvariantCulture, out v);
+            else if (piece.StartsWith("b=", StringComparison.Ordinal))
+            {
+                var parts = piece[2..].Split(',');
+                if (parts.Length != 6) return false;
+                b = new double[6];
+                for (int i = 0; i < 6; i++)
+                    if (!double.TryParse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture, out b[i])) return false;
+            }
+        }
+        if (double.IsNaN(v) || b == null) return false;
+        volume = v;
+        box = b;
+        return true;
     }
 }

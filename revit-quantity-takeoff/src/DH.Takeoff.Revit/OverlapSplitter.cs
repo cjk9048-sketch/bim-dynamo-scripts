@@ -310,6 +310,9 @@ public static class OverlapSplitter
                 return Fail(result, "나눈 조각이 맞지 않음 — " + bad);
             }
             foreach (var piece in pieces) FormulaAutoFill.MarkVerdictStale(piece);
+            // 모양 기록(R52b): 나누기 전에 위치·부위 확인이 모양과 맞았으면 조각마다(원래 부재 포함) 나눈 뒤 모양으로 고쳐 적는다 — 위의 다시 계산 · 스스로 검사 뒤.
+            // 맞지 않았으면(이미 설계가 바뀐 부재) 조각도 그 바뀜을 그대로 지닌다(Set 이 «바뀜» 표시를 적었다).
+            if (!stamp.Changed) foreach (var piece in pieces) PlaceStamp.Reshape(piece);
             var status = tx.Commit();
             if (status != TransactionStatus.Committed)
                 return Fail(result, "Revit 이 되돌림" + (quiet.FirstError.Length > 0 ? $"({quiet.FirstError})" : ""));

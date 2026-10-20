@@ -31,12 +31,17 @@ public sealed class ZonePart
     /// </summary>
     [JsonPropertyName("later")] public bool? Later { get; set; }
     /// <summary>
-    /// 레미콘 규격(«25-30-15» — 굵은골재 · 강도 · 슬럼프) — 산출근거의 절 제목 «레미콘타설 ( 철근 , 25 - 30 - 15 )»(R49 — JACK 2026-10-16 «2D 값 기본 + 부위마다 바꿈»).
-    /// null = 처음 값(PartCatalog.DefaultSpec — 채움 묶음 무근 25-18-15 · 그 밖 무근 25-21-15 · 철근 25-30-15).
+    /// 레미콘 규격(«25-30-150» — 굵은골재 · 강도 · 슬럼프 mm) — 산출근거의 절 제목 «레미콘타설 ( 철근 , 25 - 30 - 150 )»(R49 — JACK 2026-10-16 «2D 값 기본 + 부위마다 바꿈» ·
+    /// R53a 녹촌 꼴 슬럼프 mm). null = 처음 값(PartCatalog.DefaultSpec — 채움 묶음 무근 25-18-150 · 그 밖 무근 25-21-150 · 철근 25-30-150).
     /// </summary>
     [JsonPropertyName("spec")] public string? Spec { get; set; }
     /// <summary>타설 방법(«펌프차 붐타설») — 절 제목 끝. null = 처음 값(PartCatalog.DefaultPour).</summary>
     [JsonPropertyName("pour")] public string? Pour { get; set; }
+    /// <summary>
+    /// 겹친 자리 순위(1~10 — R54 겹친 자리 주인표 · DeductRank): 두 부재가 겹친 자리는 숫자가 작은 쪽이 가진다. null = 처음 값(DeductRank.DefaultOf —
+    /// 묶음과 이름). 버림 줄은 늘 1.
+    /// </summary>
+    [JsonPropertyName("rank")] public int? Rank { get; set; }
     /// <summary>지침 작업분류체계의 5 · 6 · 7번째 칸(공종 대·중·소분류) 코드 — 다음 단계에서 쓴다(지금은 담아 두기만).</summary>
     [JsonPropertyName("wbs5")] public string? Wbs5 { get; set; }
     [JsonPropertyName("wbs6")] public string? Wbs6 { get; set; }
@@ -46,7 +51,19 @@ public sealed class ZonePart
     /// <summary>사용자가 직접 넣은(또는 이름을 고친) 줄 — 구조물을 바꿔 대표 목록이 갈려도 남는다.</summary>
     [JsonPropertyName("user")] public bool User { get; set; }
 
-    public ZonePart Copy() => new() { Name = Name, NoZone = NoZone, Plain = Plain, Later = Later, Spec = Spec, Pour = Pour, Wbs5 = Wbs5, Wbs6 = Wbs6, Wbs7 = Wbs7, Group = Group, User = User };
+    public ZonePart Copy() => new() { Name = Name, NoZone = NoZone, Plain = Plain, Later = Later, Spec = Spec, Pour = Pour, Rank = Rank, Wbs5 = Wbs5, Wbs6 = Wbs6, Wbs7 = Wbs7, Group = Group, User = User };
+}
+
+/// <summary>
+/// 사람이 기준(겹친 자리 순위)과 다르게 정한 결합 한 쌍(R54 — 모델 검증 창의 사용자 모드로 맞바꿔 결합한 쌍 · revit-verify 계획 H3): 다음 검사부터
+/// «결합 방향 반대»로 걸지 않고 «사람이 정함»으로 따로 보인다. Keep = 겹친 자리를 가지는(자르는) 부재 · Cut = 잘리는 부재(둘 다 UniqueId).
+/// </summary>
+public sealed class JoinException
+{
+    [JsonPropertyName("keep")] public string Keep { get; set; } = "";
+    [JsonPropertyName("cut")] public string Cut { get; set; } = "";
+
+    public JoinException Copy() => new() { Keep = Keep, Cut = Cut };
 }
 
 /// <summary>저장된 자료가 이 판보다 새로운 판에서 만든 것일 때. 읽지도 덮어쓰지도 않는다.</summary>
@@ -69,6 +86,7 @@ public sealed class ZonePlanTooNewException : FormatException
 /// later 를 쓴 목록만 v4 로 적는다(LaterVersion): v3 만 아는 전의 판(R42)은 v4 를 '더 새로운 판'으로 보고 열지 않아, 그 표시를 버린 채 다시 적지 못한다.
 /// later 를 쓰지 않은 목록은 v3 그대로 적어, 전의 판으로 되돌려도 열린다(core · revit R43 검토).
 /// v5(10/16 — R49): 부위의 spec · pour(레미콘 규격 · 타설) 칸 — 같은 까닭으로 쓴 목록만 v5(SpecVersion).
+/// v6(10/20 — R54): 부위의 rank(겹친 자리 순위) 칸과 사람이 정한 결합(exceptions) — 같은 까닭으로 쓴 목록만 v6(RankVersion).
 /// </summary>
 public sealed class ZonePlan
 {
@@ -79,13 +97,19 @@ public sealed class ZonePlan
     public const int LaterVersion = 4;
 
     /// <summary>
-    /// 부위에 spec · pour(레미콘 규격 · 타설 — R49) 칸이 있는 목록을 적는 판. 이 판이 읽을 수 있는 가장 새로운 판이기도 하다.
+    /// 부위에 spec · pour(레미콘 규격 · 타설 — R49) 칸이 있는 목록을 적는 판.
     /// 쓴 목록만 v5 로 적는다(later 의 v4 와 같은 까닭 — 안 쓴 모델은 전의 판으로 되돌려도 열린다).
     /// </summary>
     public const int SpecVersion = 5;
 
+    /// <summary>
+    /// 부위에 rank(겹친 자리 순위 — R54) 칸이 있거나 사람이 정한 결합(exceptions)이 있는 목록을 적는 판. 이 판이 읽을 수 있는 가장 새로운 판이기도 하다.
+    /// 쓴 목록만 v6 로 적는다(v4 · v5 와 같은 까닭).
+    /// </summary>
+    public const int RankVersion = 6;
+
     /// <summary>이 판이 읽을 수 있는 가장 새로운 판.</summary>
-    public const int NewestVersion = SpecVersion;
+    public const int NewestVersion = RankVersion;
 
     /// <summary>
     /// 어느 중분류에도 속하지 않는 것으로 정한 부재(Free)의 이름표 — 팝업의 [단독객체] 단추(JACK 2026-10-15: 전의 '위치 없음'을 이렇게 부른다).
@@ -106,6 +130,8 @@ public sealed class ZonePlan
     /// (사람이 지운 이름은 판이 올라간 뒤라 되살리지 않는다). 전의 판(R46)은 모르는 칸이라 읽고 버린다.
     /// </summary>
     [JsonPropertyName("catalog")] public int Catalog { get; set; }
+    /// <summary>사람이 기준과 다르게 정한 결합(R54 — 모델 검증). 없으면 null(적지 않는다).</summary>
+    [JsonPropertyName("exceptions")] public List<JoinException>? Exceptions { get; set; }
     [JsonPropertyName("wbs1")] public string? Wbs1 { get; set; }
     [JsonPropertyName("wbs2")] public string? Wbs2 { get; set; }
     [JsonPropertyName("wbs3")] public string? Wbs3 { get; set; }
@@ -125,10 +151,15 @@ public sealed class ZonePlan
         NumberHandling = JsonNumberHandling.Strict,
     };
 
-    /// <summary>글자로 적는다 — 판은 later 칸을 쓴 목록이면 v4, 아니면 v3.</summary>
+    /// <summary>글자로 적는다 — 판은 쓴 칸 가운데 가장 새로운 것(rank · exceptions v6 · spec · pour v5 · later v4), 아무것도 안 썼으면 v3.</summary>
     public string ToJson()
     {
-        Version = Parts.Any(p => p.Spec != null || p.Pour != null) ? SpecVersion : Parts.Any(p => p.Later.HasValue) ? LaterVersion : CurrentVersion;
+        if (Exceptions is { Count: 0 }) Exceptions = null;
+        // «나중에 침» · 묶음을 바꾼 뒤 처음 값과 같아진 순위는 비운다 — 쓸모없이 v6 으로 남지 않게(core-verify R54 설치 전 L3 · 순위는 그대로).
+        foreach (var p in Parts)
+            if (p.Rank is { } rank && rank == DeductRank.BaseOf(p)) p.Rank = null;
+        Version = Parts.Any(p => p.Rank.HasValue) || Exceptions != null ? RankVersion
+                : Parts.Any(p => p.Spec != null || p.Pour != null) ? SpecVersion : Parts.Any(p => p.Later.HasValue) ? LaterVersion : CurrentVersion;
         if (Parts.Count > 0) Catalog = PartCatalog.Revision;   // 지금 대표 목록으로 지은 목록이다(새로 든 이름은 이미 보탰다)
         return JsonSerializer.Serialize(this, Options);
     }
@@ -182,9 +213,18 @@ public sealed class ZonePlan
         {
             if (p == null) continue;
             p.Name = CleanName(p.Name);
+            if (p.Rank is { } rank && !DeductRank.IsValid(rank)) p.Rank = null;   // 범위 밖 순위(0 · 11 · 음수)는 버린다 — 처음 값으로 읽힌다
             if (p.Name.Length > 0 && !parts.Any(q => q.Name == p.Name)) parts.Add(p);
         }
         plan.Parts = parts;
+        // 사람이 정한 결합: 빈 칸 · 제 자신 · 같은 쌍이 또 나온 줄은 버린다.
+        var exceptions = new List<JoinException>();
+        foreach (var e in plan.Exceptions ?? new List<JoinException>())
+        {
+            if (e == null || string.IsNullOrWhiteSpace(e.Keep) || string.IsNullOrWhiteSpace(e.Cut) || e.Keep == e.Cut) continue;
+            if (!exceptions.Any(q => (q.Keep == e.Keep && q.Cut == e.Cut) || (q.Keep == e.Cut && q.Cut == e.Keep))) exceptions.Add(e);
+        }
+        plan.Exceptions = exceptions.Count > 0 ? exceptions : null;
         return plan;
     }
 

@@ -292,11 +292,21 @@ public static class PartCatalog
     /// 그 밖은 null(유형 대응표 · 초안대로). ② 대응표의 부위 줄에서 사람이 고르면 그 값이 앞선다.
     /// </summary>
     /// <param name="group">그 부위가 목록에서 든 묶음(PartGroup.Key — 사용자가 옮겼으면 옮긴 묶음). 없으면 이름으로 짐작한 묶음(GroupOf).</param>
+    /// <remarks>
+    /// R53a(JACK 2026-10-19 «모든 양식은 녹촌 기준»): 녹촌 2D 는 채움(버림 · 기초 · 단차부 채움 · 호퍼)의 옆면을 «3. 합판거푸집 (6회, 수직면)»,
+    /// 받침류를 합판 6회(기계기초산근)로 셈 → 채움 · 받침 묶음 = 합판 6회. 이 값은 부위가 다스리는 면 가운데 **옆면 · 경사면에만** 걸린다 —
+    /// 아래를 보는 평평한 면(슬래브 · 보 · 계단 밑면)은 부위와 상관없이 합판 4회(수평)가 앞선다(FormworkAnalyzer.DraftOf · core-verify R53 계획 M1).
+    /// 바닥 묶음의 «기초»(구조 기초의 자동 이름 · 기계기초 · 출입구 기초 …)도 6회 — 부위가 빈 기초 옆면(FormworkTable.ItemOf)과 같게
+    /// (core-verify R53a M: 자동 이름을 넣으면 6회가 3회로 바뀌던 것). 바닥슬래브 · PIT 등 그 밖의 바닥 묶음은 null(합판 3회 · 벽과 같은 평면이면 덩어리).
+    /// </remarks>
     public static string? FormworkDefault(string part, string? group = null)
     {
         if (string.IsNullOrWhiteSpace(part)) return null;
-        if ((string.IsNullOrEmpty(group) ? GroupOf(part) : group) is Stair or Curb) return Formwork.FormworkTable.Ply3;
+        string g = string.IsNullOrEmpty(group) ? GroupOf(part) : group;
+        if (g is Stair or Curb) return Formwork.FormworkTable.Ply3;
         if (IsDryArea(part)) return Formwork.FormworkTable.Ply3;
+        if (g is Fill or Small) return Formwork.FormworkTable.Ply6;
+        if (g == Floor && part.Contains("기초", StringComparison.Ordinal)) return Formwork.FormworkTable.Ply6;
         return null;
     }
 
@@ -322,11 +332,12 @@ public static class PartCatalog
 
     /// <summary>
     /// 레미콘 규격의 처음 값(R49 — 명장 2D: 버림 «무근 25-18-15» · 관보호공 · 받침 · 디딤판 · 턱 «무근 25-21-15» · 구조체 «철근 25-30-15»):
-    /// 무근이면 채움 묶음(버림 · 단차부 채움 …)은 25-18-15, 그 밖 무근은 25-21-15, 철근은 25-30-15.
+    /// 무근이면 채움 묶음(버림 · 단차부 채움 …)은 25-18, 그 밖 무근은 25-21, 철근은 25-30. 슬럼프는 녹촌 2D 대로 mm(«25-30-150» — R53a · JACK 2026-10-19
+    /// «모든 양식은 녹촌 기준»). ① 에서 사람이 넣은 규격(«25-30-15» 등)은 그대로 쓴다.
     /// </summary>
     /// <param name="group">그 부위가 목록에서 든 묶음(없으면 이름으로 짐작).</param>
     public static string DefaultSpec(string part, bool plain, string? group = null) =>
-        !plain ? "25-30-15" : (string.IsNullOrEmpty(group) ? GroupOf(part) : group) == Fill ? "25-18-15" : "25-21-15";
+        !plain ? "25-30-150" : (string.IsNullOrEmpty(group) ? GroupOf(part) : group) == Fill ? "25-18-150" : "25-21-150";
 
     /// <summary>
     /// 2D 산출근거가 부호 없이 부위 전체를 한 줄로 적는 부위인가(명장 2D: 보 · 기둥 · 계단 · 구조물턱 · 맨홀턱 · DRY AREA · 드레인피트 · 받침보 · 관보호공 ·
@@ -347,6 +358,12 @@ public static class PartCatalog
     private static bool DefaultLater(ZonePart p) =>
         (string.IsNullOrEmpty(p.Group) ? GroupOf(p.Name) : p.Group) is Small or Haunch || LaterWords.Any(w => p.Name.Contains(w, StringComparison.Ordinal));
 
+    /// <summary>«나중에 침»의 처음 값(사람이 켜고 끄기 전) — 겹친 자리 순위가 «사람이 처음 값과 다르게 켠 나중 부위»를 가르는 데 쓴다(DeductRank.Of).</summary>
+    internal static bool DefaultLaterOf(ZonePart p) => DefaultLater(p);
+
+    /// <summary>겹친 자리 순위(R54 — 겹친 자리 주인표 · DeductRank.Of): 숫자가 작을수록 겹친 자리를 가진다.</summary>
+    public static int RankOf(ZonePart p) => DeductRank.Of(p);
+
     /// <summary>새로 생기는 줄: 대표 목록(옛 이름 포함)에 있는 이름이면 그 표시와 묶음, 아니면 표시 없이 낱말로 짐작한 묶음.</summary>
     public static ZonePart NewRow(string name) => Find(name) is { } known ? ToPart(known) : new ZonePart { Name = name, Group = GroupOf(name) };
 
@@ -360,11 +377,12 @@ public static class PartCatalog
     /// <summary>그 구조물에서 자주 쓰는 위치 이름.</summary>
     public static IReadOnlyList<string> PlacesOf(string? structure) => (FindStructure(structure) ?? Structures[^1]).Places;
 
-    /// <summary>사용자가 손댄 줄인가: 직접 넣은 이름이거나, 표시 · 묶음 · 지침 코드가 대표 목록의 처음 값과 다르다. 구조물을 바꿔도 이런 줄은 남긴다.</summary>
+    /// <summary>사용자가 손댄 줄인가: 직접 넣은 이름이거나, 표시 · 묶음 · 지침 코드 · 겹친 자리 순위가 대표 목록의 처음 값과 다르다. 구조물을 바꿔도 이런 줄은 남긴다.</summary>
     public static bool IsCustomized(ZonePart p)
     {
         if (p.User || p.Wbs5 != null || p.Wbs6 != null || p.Wbs7 != null) return true;
         if (p.Later is { } later && later != DefaultLater(p)) return true;
+        if (p.Rank is { } rank && rank != DeductRank.BaseOf(p)) return true;    // 겹친 자리 순위를 바꾼 줄(R54 — core-verify 계획 M1)
         return Find(p.Name) is not { } known || known.Plain != p.Plain || known.NoZone != p.NoZone || known.Group != p.Group;
     }
 

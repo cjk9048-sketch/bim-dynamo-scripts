@@ -75,8 +75,9 @@ public static class FormworkTable
         : GroupSide;
 
     /// <param name="elevated">받쳐서 치는 밑면이 있는 부재인가(떠 있는 슬래브) — R49 부터 쓰지 않는다(벽과 이어진 가장자리는 수직면 덩어리가 벽을 따르게 한다).</param>
+    /// <param name="downFlat">아래를 보는 평평한 면인가(밑면 · 구멍의 윗면 — FormworkAnalyzer.DownFlat). 녹촌 = 합판 4회(수평).</param>
     /// <returns>종류 — 버림의 안쪽 면은 <see cref="FormworkRules.NotCounted"/>(초안에서 세지 않음 — R48).</returns>
-    public static string ItemOf(FormworkElement el, FaceClass cls, FacePatch patch, bool elevated = false)
+    public static string ItemOf(FormworkElement el, FaceClass cls, FacePatch patch, bool elevated = false, bool downFlat = false)
     {
         // 버림(무근): 바깥 둘레는 합판 6회, 안쪽 면(내측 · 구멍 둘레 — 호퍼 · 피트 둘레)은 세지 않음 — 땅을 파고 치는 자리라 거푸집을 대지 않는다
         // (R48 — JACK 2026-10-16 «버림을 칠 때 호퍼 자리를 미리 거푸집으로 막고 치지 않잖아»).
@@ -86,18 +87,20 @@ public static class FormworkTable
         // 받침류는 어느 면이든 합판 6회.
         if (IsSmallPart(el.Type))
             return Ply6;
-        // 구멍 둘레(문·창의 안쪽 면 포함)는 합판 3회. 벽은 옆면과 경사면(위 · 아래를 보는 경사면 — 명장 2D 의 경사벽 W17 · W20 · W21)이 유로폼(R46),
-        // 벽의 수평 밑면(바닥까지 내려온 문의 머리 · 빈 곳 위의 벽 — 2D 의 «HOLE 주위»)과 이름에 '헌치'가 든 벽의 경사면은 합판 3회(core-verify R46 M1).
-        // 그 밖의 위를 보는 경사면(헌치)은 합판 3회.
+        // 아래를 보는 평평한 면(슬래브 · 보 밑면 · 벽 구멍의 윗면 · 빈 곳 위의 벽 밑면)은 합판 4회(수평) — 녹촌 2D «4. 합판거푸집 A. 수 평 면 (4회)»의
+        // 천정면 · «배관실 벽체 HOLE 면»(R53a — JACK 2026-10-19 «모든 양식은 녹촌 기준». 전(R46 · 명장 2D)에는 합판 3회).
+        if (downFlat || cls == FaceClass.Bottom) return Ply4;
+        // 구멍 둘레의 옆면(문·창의 안쪽 면 포함)은 합판 3회(녹촌 «벽체 개구부» · «슬래브 개구부» — 수직면 3회). 벽은 옆면과 경사면(위 · 아래를 보는 경사면 —
+        // 명장 2D 의 경사벽 W17 · W20 · W21)이 유로폼(R46), 이름에 '헌치'가 든 벽의 경사면은 합판 3회(core-verify R46 M1).
         string group = GroupOf(cls, patch);
         if (group == GroupHole) return Ply3;
         if (el.Kind == MemberKind.Wall)
-            return cls == FaceClass.Bottom ? Ply3
-                 : (cls is FaceClass.SlopeUp or FaceClass.SlopeDown) && el.Type.Contains("헌치", StringComparison.Ordinal) ? Ply3
-                 : Euro;
-        // 그 밖(슬래브 · 보 · 기둥 · 기초 · 기타의 옆면 · 밑면 · 경사면)은 합판 3회. 슬래브 옆면도 3회(R49 — JACK 2026-10-16: 캐노피 · WALK WAY 처럼
-        // 떠 있는 슬래브 옆면은 3회 · 배수지 · 김포 2D) — 벽과 같은 평면으로 이어진 옆면(지붕 슬래브 바깥 · 하부슬래브 옆)은 수직면 덩어리로 벽의 종류를 따른다
-        // (전의 «받쳐서 치는 슬래브의 가장자리 = 유로폼»을 없앰 — elevated 는 이제 쓰지 않는다).
+            return (cls is FaceClass.SlopeUp or FaceClass.SlopeDown) && el.Type.Contains("헌치", StringComparison.Ordinal) ? Ply3 : Euro;
+        // 기초(부위를 넣지 않은 부재)의 옆면은 합판 6회(녹촌 «3. 합판거푸집 (6회, 수직면)» · 기초 콘크리트부). 부위가 있으면 부위가 정한다 — 채움 묶음은
+        // 부위 처음 값이 6회, 그 밖(«구조 기초»로 그린 헌치 · 캐노피 …)은 다른 부재처럼 3회.
+        if (el.Kind == MemberKind.Foundation && el.Part.Length == 0 && cls == FaceClass.Side) return Ply6;
+        // 그 밖(슬래브 · 보 · 기둥 · 기타의 옆면 · 경사면 · 헌치)은 합판 3회(녹촌 «B. 수 직 면 (3회)»). 슬래브 옆면도 3회(R49 — 캐노피 · WALK WAY 처럼
+        // 떠 있는 슬래브 옆면) — 벽과 같은 평면으로 이어진 옆면(지붕 슬래브 바깥 · 하부슬래브 옆)은 수직면 덩어리로 벽의 종류를 따른다(elevated 는 쓰지 않는다).
         _ = elevated;
         return Ply3;
     }

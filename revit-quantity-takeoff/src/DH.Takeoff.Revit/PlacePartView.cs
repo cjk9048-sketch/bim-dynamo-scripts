@@ -866,13 +866,17 @@ public sealed partial class PlacePartView
                     var noZone = _ui.Check("중분류 생략", part.NoZone, "켜면 산출서에서 이 부위 아래에 중분류 작은 제목(«- 배관실»)을 달지 않고 한데 적습니다 — '계단'·'밸브 받침'처럼. 끄면 중분류가 둘 이상일 때 작은 제목으로 나눕니다.", "nozone.part." + name);
                     noZone.Margin = new Thickness(8, 0, 0, 0);
                     noZone.Click += (_, _) => Do(() => _editor.SetNoZone(name, noZone.IsChecked == true));
-                    var later = _ui.Check("나중에 침", PartCatalog.IsLater(part), "켜면 거푸집에서 벽·슬래브 같은 구조체에 맞닿은 면을 이 부위에서만 뺍니다 — 구조체 쪽은 그 자리까지 셉니다(받침·PAD·디딤판처럼 나중에 붙여 치는 것).", "later.part." + name);
+                    var later = _ui.Check("나중에 침", PartCatalog.IsLater(part), "거푸집: 켜면 벽·슬래브 같은 구조체에 맞닿은 면을 이 부위에서만 뺍니다 — 구조체 쪽은 그 자리까지 셉니다(받침·PAD·디딤판처럼 나중에 붙여 치는 것). 겹친 콘크리트를 어느 쪽에서 뺄지는 «겹친 자리»가 정합니다.", "later.part." + name);
                     later.Margin = new Thickness(8, 0, 0, 0);
                     later.Click += (_, _) => Do(() => _editor.SetLater(name, later.IsChecked == true));
-                    var checks = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                    // 좁은 판에서는 «겹친 자리»가 다음 줄로 넘어간다(잘리지 않게 — R54).
+                    var checks = new WrapPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
                     checks.Children.Add(plain);
                     checks.Children.Add(noZone);
                     checks.Children.Add(later);
+                    var rank = RankChoice(part);
+                    rank.Margin = new Thickness(8, 3, 0, 0);
+                    checks.Children.Add(rank);
                     // 셋째 줄(R49): 레미콘 규격 · 타설 — 비어 있으면 처음 값이 흐리게 보인다(2D 절 제목 «( 철근 , 25 - 30 - 15 ) : 펌프차 붐타설»).
                     var marks = new StackPanel();
                     marks.Children.Add(checks);
@@ -899,6 +903,37 @@ public sealed partial class PlacePartView
             line.Children.Add(buttons);
             _partRows.Children.Add(line);
         }
+    }
+
+    // 부위 목록 고치기의 «겹친 자리»(R54 — 겹친 자리 주인표): 다른 부재와 겹친 자리를 누가 가지는지(숫자가 작은 쪽). 버림 줄은 늘 1 이라 막아 둔다.
+    private FrameworkElement RankChoice(ZonePart part)
+    {
+        string name = part.Name;
+        int now = PartCatalog.RankOf(part), first = DeductRank.BaseOf(part);
+        var combo = _ui.Combo($"다른 부재와 겹친 자리를 누가 가지는지 — 숫자가 작은 쪽이 가지고 큰 쪽에서 뺍니다(모델 검증 · 겹침 결합 · 거푸집이 이 순위를 씁니다). 처음 값: {DeductRank.Label(first)}.",
+                              "rank.part." + name);
+        foreach (var row in DeductRank.Rows) combo.Items.Add(DeductRank.Label(row.Rank));
+        combo.SelectedIndex = now - 1;
+        combo.Width = 136;          // 가장 긴 «9 붙여 치는 것»이 다 보이게
+        combo.MinHeight = 24;
+        combo.IsEnabled = !DeductRank.IsLeanPart(part);
+        // 닫혀 있는 칸 위에서 굴려도 바뀌지 않게(바뀔 때마다 모델에 목록을 적는다 — 구조물 칸과 같다).
+        combo.PreviewMouseWheel += (_, e) => { if (!combo.IsDropDownOpen) e.Handled = true; };
+        combo.SelectionChanged += (_, _) =>
+        {
+            int want = combo.SelectedIndex + 1;
+            if (combo.SelectedIndex < 0 || want == now) return;
+            _rankChanged = true;        // 열 때 한 빠른 검사의 기준이 달라졌다 — 딱지에 알린다(revit-verify R54 설치 전 M3)
+            Do(() => _editor.SetRank(name, want));
+        };
+        var line = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+        line.Children.Add(new TextBlock
+        {
+            Text = "겹친 자리", FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0),
+            Foreground = now != first ? _ui["AccentText"] : _sub,      // 처음 값과 다르면 눈에 띄게
+        });
+        line.Children.Add(combo);
+        return line;
     }
 
     // 부위 목록 고치기의 셋째 줄: «규격 [25-30-15] 타설 [펌프차 붐타설]» — Enter 나 칸을 떠날 때 적는다(빈 칸 = 처음 값).
@@ -1166,7 +1201,9 @@ public sealed partial class PlacePartView
             PickState.Done => "끝",
             PickState.Todo => "아직",
             PickState.Partial => "하나만 넣음",
-            PickState.Outside => (m.Value.ZoneOutside && m.Value.PartOutside ? "중분류·부위" : m.Value.ZoneOutside ? "중분류" : "부위") + "가 창 밖에서 들어온 값 — 확인 필요",
+            PickState.Outside when m.Value.Changed && !m.Value.ZoneOutside && !m.Value.PartOutside => "넣은 뒤 모양이 바뀜(부피·크기·자리) — 확인 필요",
+            PickState.Outside => (m.Value.ZoneOutside && m.Value.PartOutside ? "중분류·부위" : m.Value.ZoneOutside ? "중분류" : "부위") + "가 창 밖에서 들어온 값 — 확인 필요" +
+                                 (m.Value.Changed ? " · 모양도 바뀜" : ""),
             _ => "고칠 수 없음(" + m.Locked + ")",
         };
         return $"{m.Category} {m.Type} · Id {m.Id} · 높이 {Signed(m.ZMin + _shift)} ~ {Signed(m.ZMax + _shift)} · 중분류: {zone} · 부위: {part} · {state}";
@@ -1308,11 +1345,33 @@ public sealed partial class PlacePartView
         _statusFlags.Children.Clear();
         var p = _editor.Progress();
         if (p.Outside > 0)
-            _statusFlags.Children.Add(Chip("status.outside", null, "확인 필요", p.Outside, "창 밖에서 들어온 값(복사한 부재 · 속성 창에서 넣은 값)이 있는 부재를 고릅니다.", m => m.State == PickState.Outside, "확인이 필요한 부재"));
+        {
+            int changed = _editor.Members.Count(m => m.State == PickState.Outside && m.Value.Changed);
+            _statusFlags.Children.Add(Chip("status.outside", null, "확인 필요", p.Outside,
+                "창 밖에서 들어온 값(복사한 부재 · 속성 창에서 넣은 값)이 있거나, 넣은 뒤 모양(부피·크기·자리)이 바뀐 부재를 고릅니다." +
+                (changed > 0 ? $"\n모양이 바뀐 부재 {changed}개 — 값이 맞으면 [확인], 아니면 고쳐 넣으세요." : ""),
+                m => m.State == PickState.Outside, "확인이 필요한 부재"));
+        }
         if (p.Locked > 0)
             _statusFlags.Children.Add(Chip("status.locked", Swatch(ZonePalette.Locked.r, ZonePalette.Locked.g, ZonePalette.Locked.b, 6), "고칠 수 없음", p.Locked,
                 "고칠 수 없는 부재(그룹 안 · 다른 사용자 · 속성 칸 없음)를 고릅니다.", m => m.State == PickState.Locked, "고칠 수 없는 부재"));
+        // 열 때 한 빠른 모델 검증(R54): 상태만 보이는 딱지(누르는 단추가 아님 — 고치는 곳은 리본의 [모델 검증] · 상태와 단추 따로 JACK 1013).
+        // 이 창에서 «겹친 자리»를 바꿨으면 기준이 달라졌다는 것을 덧붙인다(엑셀 메모는 [완료] 때 지금 순위로 다시 검사한다).
+        string check = !_rankChanged ? ModelCheck
+                     : (ModelCheck.Length > 0 ? ModelCheck + " · " : "모델 검증: ") + "겹친 자리를 바꿈 — [모델 검증]으로 다시 확인";
+        if (check.Length > 0)
+        {
+            var text = new TextBlock { Text = check, FontSize = 12, Foreground = _warn, VerticalAlignment = VerticalAlignment.Center };
+            var pill = _ui.Pill(text, "WarnBg");
+            pill.Margin = new Thickness(0, 0, 5, 4);
+            _ui.Mark(pill, "이 창을 열 때 빠르게 검사한 결과입니다 — 겹친 콘크리트 · 기준과 반대로 결합된 쌍은 산출식에 그대로 들어갑니다. 리본의 [모델 검증]으로 고친 뒤 다시 [수량산출]을 하면 맞는 수량입니다.", "status.modelCheck");
+            _statusFlags.Children.Add(pill);
+        }
     }
+
+    /// <summary>열 때 한 빠른 모델 검증의 글(R54 — 부르는 쪽이 넣는다 · "" = 걸린 것 없음). 위 띠에 상태 딱지로 보인다.</summary>
+    public string ModelCheck { get; set; } = "";
+    private bool _rankChanged;      // 이 창에서 «겹친 자리»를 바꿨다
 
     /// <summary>그림 위에 알림을 띄운다("" = 지움). warn = 문제를 알리는 글(색을 달리한다).</summary>
     public void ShowMessage(string text, bool warn = false)

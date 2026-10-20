@@ -88,25 +88,25 @@ public sealed class FillFormulaCommand : IExternalCommand
                 {
                     text.AppendLine($"⚠ 겹친 부재 {overlap.Pairs.Count}쌍{(overlap.TimedOut ? " 이상" : "")} — 중복 체적 " +
                         $"{overlap.TotalM3.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)} m³ 을 두 번 세고 있습니다.");
-                    text.AppendLine("   [겹침 검사] 버튼으로 확인·결합한 뒤 이 버튼을 다시 눌러 주세요.");
+                    text.AppendLine("   [모델 검증] 버튼으로 확인·결합한 뒤 이 버튼을 다시 눌러 주세요.");
                     text.AppendLine();
                 }
                 else if (overlap.TimedOut)
                 {
-                    text.AppendLine("겹침 검사를 끝까지 하지 못했습니다(15초 한도). [겹침 검사] 버튼으로 따로 확인해 주세요.");
+                    text.AppendLine("겹침 검사를 끝까지 하지 못했습니다(15초 한도). [모델 검증] 버튼으로 따로 확인해 주세요.");
                     text.AppendLine();
                 }
                 else if (overlap.Unmeasured > 0)
                 {
                     // 겹친 쌍은 못 찾았지만, 겹쳤을 수 있는데 잴 수 없었던 쌍이 있다 — '겹침 없음'이라고 할 수 없다.
-                    text.AppendLine($"겹쳤는지 잴 수 없었던 부재 쌍이 {overlap.Unmeasured}개 있습니다. [겹침 검사] 버튼으로 따로 확인해 주세요.");
+                    text.AppendLine($"겹쳤는지 잴 수 없었던 부재 쌍이 {overlap.Unmeasured}개 있습니다. [모델 검증] 버튼으로 따로 확인해 주세요.");
                     text.AppendLine();
                 }
             }
             catch (Exception ex)
             {
                 // 겹침 검사가 안 돼도 식 기록 결과는 그대로 보여 준다. 다만 '겹침 없음'과 섞이지 않게 못 했다고 적는다.
-                text.AppendLine("겹친 부재가 있는지 확인하지 못했습니다(" + ex.Message + "). [겹침 검사] 버튼으로 따로 확인해 주세요.");
+                text.AppendLine("겹친 부재가 있는지 확인하지 못했습니다(" + ex.Message + "). [모델 검증] 버튼으로 따로 확인해 주세요.");
                 text.AppendLine();
             }
             text.AppendLine($"대상 {outcomes.Count}개 중 {ok.Count}개는 식의 물량이 모델 체적과 맞습니다(±1% 이내).");

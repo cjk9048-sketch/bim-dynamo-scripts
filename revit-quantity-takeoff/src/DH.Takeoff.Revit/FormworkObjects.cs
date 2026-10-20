@@ -63,6 +63,8 @@ public static class FormworkObjects
         public int MissingParams;                 // 칸이 없어(또는 읽기 전용이라) 다 적지 못한 판 수
         public string MaterialProblem = "";       // 재료를 만들지 못한 까닭("" = 없음 — 있으면 판은 범주 색)
         public string SubcategoryProblem = "";    // 하위 범주 «DH 거푸집 객체»를 만들지 못한 까닭("" = 없음)
+        public string TypeProblem = "";           // 유형 «거푸집»을 만들지 못한 까닭("" = 없음 — 있으면 판은 유형 없이)
+        public int Untyped;                       // 유형을 붙이지 못한 판 수
         public int RoomBoundingOff;               // 방 경계 칸을 끈 판 수(매개변수로 정하는 판만)
         public int Misplaced = -1;                // 되읽기: 경계상자가 원 부재의 경계상자(+13 mm)와 닿지 않는 판 수(-1 = 재지 않음)
         public string ReadBackProblem = "";       // 되읽다 난 오류("" = 없음 — 판은 모델에 남았다)
@@ -150,6 +152,11 @@ public static class FormworkObjects
             var style = ElementId.InvalidElementId;
             try { style = Subcategory(doc); }
             catch (Exception ex) { outcome.SubcategoryProblem = ex.Message; }   // 없으면 일반 모델 그대로(뷰에서 따로 끌 수 없을 뿐)
+            // 유형 «거푸집»(JACK 2026-10-20 «일반 모델에서 거푸집이라는 이름으로 선택될 수 있게»): 판마다 붙여, 판을 오른쪽 단추로 눌러 «모든 인스턴스 선택» ·
+            // 프로젝트 탐색기 «일반 모델 › DH 거푸집 › 거푸집»으로 한 번에 고른다. 못 만들면 판은 유형 없이(전과 같이) 만든다.
+            var type = ElementId.InvalidElementId;
+            try { type = TypeFor(doc, category); }
+            catch (Exception ex) { outcome.TypeProblem = ex.Message; }
             foreach (var unit in units)
             {
                 using var sub = new SubTransaction(doc);
@@ -159,6 +166,12 @@ public static class FormworkObjects
                     var ds = DirectShape.CreateElement(doc, category);
                     ds.ApplicationId = AppId;
                     ds.ApplicationDataId = string.Join(",", unit.Ids);
+                    // 유형은 한 번만 붙일 수 있다(RevitAPI SetTypeId) — 판은 [완료] 때마다 새로 지으므로 늘 새 판에 붙인다.
+                    if (type != ElementId.InvalidElementId)
+                    {
+                        try { ds.SetTypeId(type); }
+                        catch { outcome.Untyped++; }
+                    }
                     // 판 테두리(Core) — 그대로 못 쓴 까닭은 까닭별로 센다(첫 실행에서 무엇 때문인지 바로 가르게 — core-verify R44 M2).
                     var plan = FormworkPlate.PlanOf(unit);
                     if (plan.Why.Length > 0)
@@ -254,6 +267,21 @@ public static class FormworkObjects
         }
         outcome.Ms = watch.ElapsedMilliseconds;
         return outcome;
+    }
+
+    /// <summary>판에 붙이는 유형의 이름 · 그 패밀리 이름(프로젝트 탐색기 «일반 모델 › DH 거푸집 › 거푸집» · 속성 창 «DH 거푸집 : 거푸집»).</summary>
+    public const string TypeName = "거푸집", FamilyName = "DH 거푸집";
+
+    // 유형 «거푸집»(일반 모델 DirectShapeType) — 있으면 그것, 없으면 만든다(패밀리 이름을 바꿀 수 있으면 «DH 거푸집»). 트랜잭션 안에서 부른다.
+    private static ElementId TypeFor(Document doc, ElementId category)
+    {
+        var found = new FilteredElementCollector(doc).OfClass(typeof(DirectShapeType)).Cast<DirectShapeType>()
+            .FirstOrDefault(t => t.Name == TypeName && t.Category?.Id == category);
+        if (found != null) return found.Id;
+        var made = DirectShapeType.Create(doc, TypeName, category);
+        try { if (made.CanChangeFamilyName()) made.SetFamilyName(FamilyName); }
+        catch { /* 패밀리 이름은 없어도 된다(«Direct Shape» 그대로) */ }
+        return made.Id;
     }
 
     public sealed class Removal

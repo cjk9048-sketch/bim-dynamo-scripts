@@ -60,8 +60,8 @@ public sealed class FormworkCheckCommand : IExternalCommand
                     catch (Exception ex) { rules = new FormworkRules(); rulesProblem = "대응표 파일을 읽지 못해 초안 규칙만 썼습니다: " + ex.Message; }
                     options.Rules = rules;
 
-                    results = FormworkAnalyzer.Analyze(scene.Elements, scene.Zones, options);
-                    options.DropUnusedBands(results);
+                    options.Bands = FormworkOptions.AutoBands(scene.Elements);   // 다시 잴 때마다 처음부터(지난번에 끈 구간이 남지 않게)
+                    results = FormworkAnalyzer.AnalyzeAutoBands(scene.Elements, scene.Zones, options);
                     unpainted = FormworkReader.AttachCurved(scene, results);
                     // 곡면 조각의 세모는 Analyze 뒤에 붙는다 — 뺀 판(R48)은 그 뒤에 다시 맞춘다(수량산출 창의 FormworkBoard 와 같게 · core-verify R48 L3).
                     if (rules.DropCount > 0) FormworkAnalyzer.Reclassify(results, options);
@@ -232,7 +232,7 @@ public sealed class FormworkCheckCommand : IExternalCommand
 
         // 참고: 겹친 부재, 구역, 대응표
         if (audit.Uneven.Count > 0)
-            more.AppendLine($"형상 결합 없이 겹친 부재 {audit.Uneven.Count}쌍이 있습니다 — 거푸집은 포개진 자리를 한 번만 세었습니다(콘크리트 물량은 [겹침 검사]로 확인).");
+            more.AppendLine($"형상 결합 없이 겹친 부재 {audit.Uneven.Count}쌍이 있습니다 — 거푸집은 포개진 자리를 한 번만 세었습니다(콘크리트 물량은 [모델 검증]로 확인).");
         if (scene.Zones.Count == 0)
             more.AppendLine("안쪽 면은 '내측'으로만 나옵니다 — 면이 바라보는 공간의 이름(내측(배수지) 등)은 아직 붙이지 않습니다(위치를 부재마다 찍어서 정하게 바꾸면서 공간의 모양이 없어졌습니다).");
         else
