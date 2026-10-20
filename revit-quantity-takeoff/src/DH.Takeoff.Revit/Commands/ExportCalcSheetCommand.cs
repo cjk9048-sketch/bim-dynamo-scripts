@@ -83,7 +83,7 @@ public sealed class ExportCalcSheetCommand : IExternalCommand
 
             // 겹친 부재(형상 결합 없이 겹쳐 두 번 세는 자리)가 있으면 산출근거에도 겹친 만큼이 두 번 들어간다.
             // 식과 판정으로는 드러나지 않으므로 여기서 한 번 더 재서 알린다(모델은 바꾸지 않는다).
-            const string separately = "[겹침 검사] 버튼으로 따로 확인해 주세요.";
+            const string separately = "[모델 검증] 버튼으로 따로 확인해 주세요.";
             try
             {
                 var listed = plan.Elements.Where(e => e.Missing.Length == 0).Select(e => new ElementId(e.Id)).ToList();
@@ -91,7 +91,7 @@ public sealed class ExportCalcSheetCommand : IExternalCommand
                 if (overlap.Pairs.Count > 0)
                 {
                     overlapWarning = $"겹친 부재 {overlap.Pairs.Count}쌍{(overlap.TimedOut ? " 이상" : "")}(중복 체적 {M3(overlap.TotalM3)} m³)을 두 번 세고 있음";
-                    overlapAdvice = "[겹침 검사]로 확인·결합하고 [산출식 자동입력]을 다시 한 뒤 내보내야 맞는 수량입니다.";
+                    overlapAdvice = "[모델 검증]로 확인·결합하고 [산출식 자동입력]을 다시 한 뒤 내보내야 맞는 수량입니다.";
                 }
                 else if (overlap.TimedOut)
                 {

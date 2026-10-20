@@ -11,9 +11,9 @@ using DH.Takeoff.Core.View3D;
 namespace DH.Takeoff.Revit.Commands;
 
 /// <summary>
-/// "겹침 검사" 버튼 — 선택 부재(없으면 전체) 가운데 콘크리트 부재끼리 결합 없이 겹쳐 두 번 세는 자리를 찾아 보여 주고,
-/// 원하면 우선순위대로(슬래브 우선) 형상 결합을 걸어 Revit 이 한쪽을 잘라 내게 한다.
-/// 수량(산출식 자동입력)을 뽑기 전에 돌린다.
+/// "모델 검증" 버튼(R54 — 전의 «겹침 검사» · JACK 2026-10-20 «수량산출 전에 모델을 검증 · 겹침 기능을 모델 검증으로 바꾸고 그 안에 검증과 겹침») —
+/// 선택 부재(없으면 전체) 가운데 콘크리트 부재끼리 ① 결합 없이 겹쳐 두 번 세는 자리 ② 이미 결합됐는데 겹친 자리 순위(DeductRank)가 낮은 쪽이 높은 쪽을
+/// 자르는 결합(결합 방향 — 이번 헌치가 보를 자른 경우)을 찾아 보여 주고, 원하면 기준대로 결합하거나 자르는 순서를 바꾼다. 수량을 뽑기 전에 돌린다.
 /// 결과 창(OverlapResultView)은 겹친 쌍의 목록과 3D 그림을 함께 보여 준다(JACK 2026-10-14) — 그림에 넘길 것은 OverlapScene 이 읽는다.
 /// 3D 를 읽지 못해도 창은 뜬다(목록만). 한 일은 일지(…_overlap_session.log)에 남긴다.
 /// JACK 2026-10-14(두 번째): 창 안에서 쌍 하나만 고친다 — 기본 = 우선순위대로 · 사용자 = 어느 부재에서 뺄지 고름(FixOne).
@@ -22,7 +22,10 @@ namespace DH.Takeoff.Revit.Commands;
 [Transaction(TransactionMode.Manual)]
 public sealed class CheckOverlapCommand : IExternalCommand
 {
-    private const string Title = "DH 수량산출 — 겹침 검사";
+    private const string Title = "DH 수량산출 — 모델 검증";
+
+    /// <summary>창의 결합 방향 시험 바꾸기의 시간 한도(revit-verify R54 계획 B — 넘으면 남은 쌍은 «안 잼»으로 목록에 두고 고치기는 된다).</summary>
+    private static readonly TimeSpan ReversedLimit = TimeSpan.FromSeconds(60);
     private const int BlobLinesInJournal = 200;     // 일지에 적는 덩어리 줄의 한도(쌍이 아주 많은 모델)
 
     public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
@@ -53,7 +56,7 @@ public sealed class CheckOverlapCommand : IExternalCommand
         {
             // 묶음 안에 결합이 이미 커밋됐다: 오류로 끝내면 Revit 이 그것까지 되돌린다 — 알리고 Succeeded 로 끝낸다.
             journal.Note("오류(밖으로 샘 — 결합은 남김)\t" + ex);
-            try { Dialogs.Show("DH 수량산출 — 오류", "겹침 검사 중 오류:\n" + ex.Message + "\n\n" + KeptNote); } catch { }
+            try { Dialogs.Show("DH 수량산출 — 오류", "모델 검증 중 오류:\n" + ex.Message + "\n\n" + KeptNote); } catch { }
             result = Result.Succeeded;
             return result;
         }
@@ -100,11 +103,12 @@ public sealed class CheckOverlapCommand : IExternalCommand
                 found = OverlapChecker.Find(doc, targets, withBlobs: true, withUnsplit: true);
                 journal.Note(string.Create(CultureInfo.InvariantCulture,
                     $"찾기\t쌍 {found.Pairs.Count} · 체적 합 {found.TotalM3:0.######} m3 · 검사한 부재 {found.Checked} · 잴 수 없었던 쌍 {found.Unmeasured} · 함께 있지 않아 뺀 쌍 {found.NotCoexisting}" +
-                    $" · 버림이 잘린 채 결합된 쌍 {found.LeanCut.Count} · 나중 부재가 구조체를 깎은 채 결합된 쌍 {found.LaterCut.Count} · 결합돼 두 덩이인 벽·기둥 {found.Unsplit.Count}\t{watch.ElapsedMilliseconds} ms"));
-                foreach (var (lean, other) in found.LeanCut) journal.Raw($"  버림이 잘림\t버림 {lean.Value} ← {other.Value}");
-                foreach (var (keep, later) in found.LaterCut) journal.Raw($"  나중 부재가 깎음\t구조체 {keep.Value} ← {later.Value}");
+                    $" · 결합돼 두 덩이인 벽·기둥 {found.Unsplit.Count}\t{watch.ElapsedMilliseconds} ms"));
+                journal.Raw("  기준\t" + OverlapChecker.PriorityText);
                 foreach (var (id, before, now) in found.Unsplit) journal.Raw($"  두 덩이\tId {id.Value}\t덩이 {now}(결합 전 {before})");
                 foreach (string line in found.UnsplitLines) journal.Raw("  " + line);
+                // 결합 방향(B): 따로 한 바퀴 · 시험 바꾸기로 옮겨질 부피를 잰다(묶음이 열려 있을 때만 — 읽기 전용이면 «안 잼»).
+                FindReversed(doc, targets, found, session, journal);
                 try { log = OverlapChecker.WriteLog(doc, found); }
                 catch (Exception ex) { logProblem = ex.Message; }
             }
@@ -113,7 +117,7 @@ public sealed class CheckOverlapCommand : IExternalCommand
                 // 찾기는 모델을 바꾸지 않는다. 다만 [전체 다시 검사]로 다시 돈 것이면 앞의 창에서 고친 결합이 묶음 안에 있다 — 그때는 Succeeded.
                 message = ex.Message;
                 journal.Note("오류(찾기)\t" + ex);
-                Dialogs.Show("DH 수량산출 — 오류", "겹침 검사 중 오류:\n" + ex.Message + (session.Committed ? "\n\n앞서 창에서 " + KeptNote : ""));
+                Dialogs.Show("DH 수량산출 — 오류", "모델 검증 중 오류:\n" + ex.Message + (session.Committed ? "\n\n앞서 창에서 " + KeptNote : ""));
                 return session.Committed ? Result.Succeeded : Result.Failed;
             }
 
@@ -140,13 +144,24 @@ public sealed class CheckOverlapCommand : IExternalCommand
                         Joined = tally.Joined, StillOverlap = tally.StillOverlap, Failed = tally.Failed, NotNeeded = tally.NotNeeded, RemainingM3 = tally.RemainingM3,
                     };
                     for (int i = 0; i < found.Pairs.Count; i++) model.Rows.Add(RowOf(doc, found, i, scene));
-                    // 창 안에서 고치기: 묶음이 열려 있을 때만(못 열었으면 단추를 두지 않는다 — [우선순위대로 결합]은 그대로 된다).
+                    for (int i = 0; i < found.Reversed.Count; i++) model.Reversed.Add(ReversedRowOf(found, i, scene));
+                    model.Touching = found.Touching;
+                    model.RankChanged = RankChanged(doc);
+                    // 창 안에서 고치기: 묶음이 열려 있을 때만(못 열었으면 단추를 두지 않는다 — [모두 기준대로]는 그대로 된다).
                     if (session.Open && mode is OverlapResultView.Mode.Found or OverlapResultView.Mode.Joined)
+                    {
                         model.Fix = (key, cutWinner) =>
                         {
                             attempts++;
                             return FixOne(doc, found, scene, key, cutWinner, journal, session, targets);
                         };
+                        model.FixReversed = (key, cutKeep) =>
+                        {
+                            attempts++;
+                            return cutKeep ? KeepReversedAsHuman(doc, found, scene, key, journal, session)
+                                           : FixReversedOne(doc, found, scene, key, journal, session, targets);
+                        };
+                    }
                     // 고치기 단추에 마우스를 올린 동안 고친 뒤의 모양(JACK 2026-10-19 «갖다 대면 변환 후의 모습») — 모델은 바꾸지 않는다.
                     if (model.Fix != null && scene != null)
                         model.Preview = (key, cutWinner) => PreviewCut(doc, found, scene, key, cutWinner, journal);
@@ -165,15 +180,15 @@ public sealed class CheckOverlapCommand : IExternalCommand
                     // 결합으로 잘린 쪽이 다 깎여 남지 않은 쌍(같은 자리에 겹쳐 그린 부재일 수 있음 — JACK 2026-10-19 첫 실행).
                     int swallowed = found.Pairs.Count(p => p.Swallowed && p.Status == OverlapChecker.Joined);
                     if (swallowed > 0) model.Notes.Add($"잘린 쪽이 남는 쪽 안에 다 들어가 남지 않은 쌍 {swallowed}개 — 같은 자리에 겹쳐 그린 부재인지 확인(결과표)");
+                    // 결합 방향: 보이기만 하는 줄(사람이 정함 · 참고) · 닿기만 한 결합 · 재지 못한 쌍은 수만 알린다.
+                    int human = found.Reversed.Count(r => r.Human), same = found.Reversed.Count(r => r.SameRank && !r.Human);
+                    if (human > 0) model.Notes.Add($"사람이 정한 결합 {human}쌍은 기준과 달라도 그대로 둠(결합 방향 목록의 «사람이 정함»)");
+                    if (same > 0) model.Notes.Add($"같은 순위끼리 카테고리 차례만 반대인 결합 {same}쌍(참고)");
+                    if (found.ReversedUnmeasured > 0) model.Notes.Add($"바뀔 체적을 재지 못한 결합 방향 {found.ReversedUnmeasured}쌍(일지)");
                     if (mode == OverlapResultView.Mode.Joined)
                     {
-                        if (found.LeanSwitched > 0) model.Notes.Add($"버림이 남도록 결합 순서를 바꾼 쌍 {found.LeanSwitched}개");
-                        if (found.LeanCut.Count > 0) model.Notes.Add($"버림 결합 순서를 바꾸지 못한 쌍 {found.LeanCut.Count}개(일지)");
-                        if (found.LaterSwitched > 0) model.Notes.Add($"구조체가 남도록 나중 부재의 결합 순서를 바꾼 쌍 {found.LaterSwitched}개" +
-                                                                     (found.LaterSwitchedParts.Length > 0 ? $"({found.LaterSwitchedParts})" : "") +
-                                                                     " — 나중에 침을 다시 꺼도 그대로(되돌리기는 Ctrl+Z)");
+                        if (found.ReversedSwitched > 0) model.Notes.Add($"기준대로 결합 순서를 바꾼 쌍 {found.ReversedSwitched}개 — 되돌리기는 Ctrl+Z");
                         if (found.FloorsGrown.Count > 0) model.Notes.Add($"결합 순서를 바꿔 두 덩이가 된 바닥 {found.FloorsGrown.Count}개 — 산출식 확인(일지)");
-                        if (found.LaterCut.Count > 0) model.Notes.Add($"나중 부재의 결합 순서를 바꾸지 못한 쌍 {found.LaterCut.Count}개(일지)");
                         if (found.SplitDone > 0) model.Notes.Add($"두 덩이 벽·기둥 나눔 {found.SplitDone}개");
                         if (found.SplitFailed.Count > 0) model.Notes.Add($"못 나눈 두 덩이 벽·기둥 {found.SplitFailed.Count}개(일지)");
                         if (freshJoined > 0) model.Notes.Add($"다시 찾아 나온 겹침 {freshJoined}쌍도 결합({freshRounds}번 다시 찾음)");
@@ -181,17 +196,6 @@ public sealed class CheckOverlapCommand : IExternalCommand
                     }
                     else
                     {
-                        if (found.LeanCut.Count > 0)
-                        {
-                            model.LeanToFix = found.LeanCut.Count;
-                            model.Notes.Add($"버림이 잘린 채 결합된 쌍 {found.LeanCut.Count}개");
-                        }
-                        if (found.LaterCut.Count > 0)
-                        {
-                            model.LaterToFix = found.LaterCut.Count;
-                            // 무슨 부위의 결합이 바뀌는지 누르기 전에 보이게(R46 — 중간슬래브 · 트라프 · 헌치가 새로 나중 부재가 됨 · revit-verify R46 M2).
-                            model.Notes.Add($"나중 부재가 구조체를 깎은 채 결합된 쌍 {found.LaterCut.Count}개({LaterPartsOf(doc, found.LaterCut)})");
-                        }
                         if (found.Unsplit.Count > 0)
                         {
                             model.SplitToDo = found.Unsplit.Count;
@@ -222,26 +226,25 @@ public sealed class CheckOverlapCommand : IExternalCommand
                         found.SplitDone = 0;           // 두 덩이 나누기도 함께 되돌려졌다(R38 core L-6)
                         found.Splits.Clear();          // 나눈 조각도 모델에서 없어졌다
                         found.SplitFailed.Clear();
+                        foreach (var r in found.Reversed) (r.Status, r.Human) = ("", r.HumanAtFind);   // 결합 방향 바꾸기 · 사람이 정함 기록도 되돌려졌다(R54)
+                        found.ReversedSwitched = 0;
                     }
                     if (attempts == 0 && kept) return;
                     try { log = OverlapChecker.WriteLog(doc, found); logProblem = ""; }
                     catch (Exception ex) { log = ""; logProblem = ex.Message; journal.Note("결과표 다시 쓰기 못 함\t" + ex.Message); }
                 }
 
-                if (found.Pairs.Count == 0)
+                // 작은 창: 고칠 항목이 하나도 없을 때만(revit-verify R54 계획 H1 — 결합 방향만 걸린 모델이 작은 창으로 빠지지 않게 · 보이기만 하는 줄은 알림으로).
+                if (found.Pairs.Count == 0 && !found.ReversedToFix.Any())
                 {
                     var clean = Popup(owner, dark, Model(OverlapResultView.Mode.Clean, null, ""), journal);
                     if (clean.Result == OverlapResultView.Choice.CheckAll) { everything = true; continue; }
-                    if (clean.Result == OverlapResultView.Choice.Join && (found.LeanCut.Count > 0 || found.LaterCut.Count > 0 || found.Unsplit.Count > 0))
+                    if (clean.Result == OverlapResultView.Choice.Join && found.Unsplit.Count > 0)
                     {
-                        // 겹친 쌍은 없고, 버림이 잘린 · 나중 부재가 구조체를 깎은 채 결합된 쌍 · 결합돼 두 덩이인 벽 · 기둥만 있다: 작은 창의 단추(순서 바꾸기 · 나누기).
-                        int leanBefore = found.LeanCut.Count, laterBefore = found.LaterCut.Count;
-                        var fixedLean = FixLean(doc, found, journal, session);
-                        var fixedLater = FixLater(doc, found, journal, session);
-                        string laterParts = found.LaterSwitchedParts;
-                        int splitBefore = found.Unsplit.Count;   // 순서를 바꿔 덩이가 는 것까지
+                        // 겹친 쌍 · 결합 방향은 없고, 결합돼 두 덩이인 벽 · 기둥만 있다: 작은 창의 단추(나누기).
+                        int splitBefore = found.Unsplit.Count;
                         var splitDone = SplitJoined(doc, found, journal, session);
-                        // 순서 바꾸기 · 나누기로 새 겹침이 생길 수 있다(되살아난 버림이 결합 안 된 벽과 겹침 등) — 다시 찾아 이어서 결합(JACK 2026-10-19 · revit-verify R50 설치 전 ①).
+                        // 나누기로 새 겹침이 생길 수 있다 — 다시 찾아 이어서 결합(JACK 2026-10-19 · revit-verify R50 설치 전 ①).
                         (freshJoined, freshRounds, freshLeft) = JoinFresh(doc, found, targets, journal, session);
                         // 묶음을 남기지 못했으면(드묾) 닫기가 이미 알렸다 — «바꿨습니다» 창을 또 띄우지 않는다(R36 revit N1).
                         if (!session.Close()) return Result.Succeeded;
@@ -249,16 +252,11 @@ public sealed class CheckOverlapCommand : IExternalCommand
                             try { OverlapChecker.WriteLog(doc, found); }
                             catch (Exception ex) { journal.Note("결과표 쓰기 못 함\t" + ex.Message); }
                         var said = new List<string>();
-                        if (leanBefore > 0) said.Add($"버림이 남도록 결합 순서를 바꿨습니다: {fixedLean}쌍 / {leanBefore}쌍");
-                        if (laterBefore > 0) said.Add($"구조체가 남도록 나중 부재의 결합 순서를 바꿨습니다: {fixedLater}쌍 / {laterBefore}쌍" +
-                                                      (laterParts.Length > 0 ? $"({laterParts})" : "") +
-                                                      (fixedLater > 0 ? "\n부위 목록에서 «나중에 침»을 다시 꺼도 바꾼 결합은 그대로입니다 — 되돌리려면 지금 Ctrl+Z." : ""));
                         if (splitBefore > 0) said.Add($"두 덩이 벽·기둥을 나눴습니다: {splitDone}개 / {splitBefore}개");
-                        if (found.FloorsGrown.Count > 0) said.Add($"결합 순서를 바꿔 두 덩이가 된 바닥 {found.FloorsGrown.Count}개 — 산출식을 확인하세요(일지).");
-                        if (freshJoined > 0) said.Add($"그 뒤 다시 찾아 나온 겹침 {freshJoined}쌍도 우선순위대로 결합했습니다.");
-                        if (freshLeft > 0) said.Add($"새 겹침 {freshLeft}쌍이 남았습니다 — 겹침 검사를 다시 실행해 확인하세요.");
-                        if (found.LeanCut.Count + found.LaterCut.Count + found.SplitFailed.Count > 0) said.Add("못 한 것의 까닭은 일지(…_overlap_session.log)에 있습니다.");
-                        if (fixedLean + fixedLater + splitDone + freshJoined > 0) said.Add("\nCtrl+Z 한 번으로 되돌릴 수 있습니다.");
+                        if (freshJoined > 0) said.Add($"그 뒤 다시 찾아 나온 겹침 {freshJoined}쌍도 기준대로 결합했습니다.");
+                        if (freshLeft > 0) said.Add($"새 겹침 {freshLeft}쌍이 남았습니다 — 모델 검증을 다시 실행해 확인하세요.");
+                        if (found.SplitFailed.Count > 0) said.Add("못 한 것의 까닭은 일지(…_overlap_session.log)에 있습니다.");
+                        if (splitDone + freshJoined > 0) said.Add("\nCtrl+Z 한 번으로 되돌릴 수 있습니다.");
                         try { Dialogs.Show(Title, string.Join("\n", said)); }
                         catch { }
                         // 못 나눈 부재는 선택해 둔다(어디인지 보이게).
@@ -267,7 +265,7 @@ public sealed class CheckOverlapCommand : IExternalCommand
                     return Result.Succeeded;
                 }
 
-                var (scene, sceneProblem) = ReadScene(doc, found.Pairs, verify: true, journal);
+                var (scene, sceneProblem) = ReadScene(doc, found, verify: true, journal);
                 var asked = Popup(owner, dark, Model(OverlapResultView.Mode.Found, scene, sceneProblem), journal);
                 if (asked.Result == OverlapResultView.Choice.CheckAll) { everything = true; continue; }   // 묶음은 열린 채로 다시 돈다(결과표는 다시 찾을 때 새로 쓴다)
                 if (asked.Result != OverlapResultView.Choice.Join)
@@ -278,12 +276,11 @@ public sealed class CheckOverlapCommand : IExternalCommand
                         var left = found.Pairs.Where(p => !Fine(p)).ToList();   // 창에서 고친 쌍은 빼고(다 고쳤으면 전부)
                         Select(uidoc, left.Count > 0 ? left : found.Pairs, zoom: false);
                     }
-                    else if (asked.Result == OverlapResultView.Choice.Pair && asked.PickedKey >= 0 && asked.PickedKey < found.Pairs.Count)
-                        Select(uidoc, new[] { found.Pairs[asked.PickedKey] }, zoom: true);
+                    else if (asked.Result == OverlapResultView.Choice.Pair) SelectPicked(uidoc, found, asked);
                     return Result.Succeeded;
                 }
 
-                // [우선순위대로 결합]: 아직 안 끝난 쌍만(창에서 이미 고친 쌍은 빼고).
+                // [모두 기준대로]: 아직 안 끝난 쌍만(창에서 이미 고친 쌍은 빼고) + 결합 방향(사람이 정함 · 참고 · 이미 바꾼 줄은 빼고).
                 var pending = found.Pairs.Where(p => !Fine(p)).ToList();
                 var joining = Stopwatch.StartNew();
                 var report = OverlapChecker.Join(doc, pending, found.Pairs, found.Splits);
@@ -292,8 +289,7 @@ public sealed class CheckOverlapCommand : IExternalCommand
                     $"결합\t쌍 {pending.Count}(창에서 먼저 끝낸 쌍 {found.Pairs.Count - pending.Count}) · 결합 {report.Joined} · 겹침 남음 {report.StillOverlap} · 못 함 {report.Failed} · 필요 없음 {report.NotNeeded} · 남은 체적 {report.RemainingM3:0.######} m3" +
                     $" · 나눔 {pending.Count(p => p.Pieces.Count > 1)} · 못 나눔 {pending.Count(p => p.Split.StartsWith(OverlapChecker.SplitFailText, StringComparison.Ordinal))}\t{joining.ElapsedMilliseconds} ms"));
                 foreach (string line in report.Lines) journal.Raw("  " + line);
-                FixLean(doc, found, journal, session);       // 이미 결합됐는데 버림이 잘린 쌍도 함께(JACK 2026-10-14)
-                FixLater(doc, found, journal, session);      // 이미 결합됐는데 나중 부재가 구조체를 깎은 쌍도 함께(JACK 2026-10-15)
+                FixReversed(doc, found, found.ReversedToFix.Where(r => !r.Refused).ToList(), journal, session);   // 기준과 반대로 결합된 쌍도 함께(JACK 2026-10-14 «결합할 때 함께 바꾸기» · R54)
                 SplitJoined(doc, found, journal, session);   // 이미 결합돼 두 덩이인 벽 · 기둥도 함께(JACK 2026-10-15)
                 (freshJoined, freshRounds, freshLeft) = JoinFresh(doc, found, targets, journal, session);   // 그 일들로 새로 생긴 겹침도(JACK 2026-10-19)
                 var tally = OverlapChecker.Tally(found.Pairs);
@@ -304,16 +300,16 @@ public sealed class CheckOverlapCommand : IExternalCommand
                 catch (Exception ex) { log = ""; logProblem = ex.Message; }
 
                 // 결합으로 부재의 모양이 바뀌었다 — 그림을 다시 읽는다. 덩어리는 결합하기 전에 잰 것 그대로다(정리된 자리 · 확인할 자리를 보여 준다).
-                var (after, afterProblem) = ReadScene(doc, found.Pairs, verify: false, journal);
+                var (after, afterProblem) = ReadScene(doc, found, verify: false, journal);
                 attempts = 0;                      // 결합 뒤 창에서 고친 것만 센다(결과표는 방금 썼다)
                 var shown = Popup(owner, dark, Model(OverlapResultView.Mode.Joined, after, afterProblem), journal);
                 Settle();
-                if (shown.Result == OverlapResultView.Choice.Pair && shown.PickedKey >= 0 && shown.PickedKey < found.Pairs.Count)
-                    Select(uidoc, new[] { found.Pairs[shown.PickedKey] }, zoom: true);
+                if (shown.Result == OverlapResultView.Choice.Pair) SelectPicked(uidoc, found, shown);
                 else
                 {
-                    // 결합하지 못했거나 겹침이 남은 부재(결합 뒤 창에서 더 고친 쌍은 빼고) · 못 나눈 두 덩이 벽 · 기둥은 선택해 둔다(화면에서 바로 볼 수 있게).
+                    // 결합하지 못했거나 겹침이 남은 부재(결합 뒤 창에서 더 고친 쌍은 빼고) · 못 바꾼 결합 방향 · 못 나눈 두 덩이 벽 · 기둥은 선택해 둔다(화면에서 바로 볼 수 있게).
                     var failed = found.Pairs.Where(p => !Fine(p)).SelectMany(p => new[] { p.Winner, p.Loser })
+                        .Concat(found.Reversed.Where(r => r.Counts && r.Status != ReversedJoin.Switched).SelectMany(r => new[] { r.Keep, r.Cutter }))
                         .Concat(found.SplitFailed.Select(f => f.Id)).ToList();
                     if (failed.Count > 0) SelectIds(uidoc, failed);
                 }
@@ -323,7 +319,7 @@ public sealed class CheckOverlapCommand : IExternalCommand
                 journal.Note("오류(결과)\t" + ex);
                 try
                 {
-                    Dialogs.Show("DH 수량산출 — 오류", "겹침 검사 결과를 처리하는 중 오류가 났습니다:\n" + ex.Message +
+                    Dialogs.Show("DH 수량산출 — 오류", "모델 검증 결과를 처리하는 중 오류가 났습니다:\n" + ex.Message +
                         (session.Committed ? "\n\n" + KeptNote + (joinSummary.Length > 0 ? "\n" + joinSummary : "")
                          : joinSummary.Length > 0 ? "\n\n결합은 하나도 걸리지 않았습니다(모델은 그대로입니다): " + joinSummary : "") +
                         (log.Length > 0 ? "\n\n결과표: " + log : ""));
@@ -334,42 +330,267 @@ public sealed class CheckOverlapCommand : IExternalCommand
         }
     }
 
-    // 이미 결합됐는데 버림이 잘린 쌍(found.LeanCut)의 자르는 순서를 바꾼다(바깥 묶음 안 — Ctrl+Z 한 번). 남는 것 = 못 바꾼 쌍. 돌려주는 값 = 바꾼 수.
-    // 바꾼 뒤 덩이가 는 벽 · 기둥은 found.Unsplit 에 넣는다(뒤의 SplitJoined 가 함께 나눈다 — 이미 있으면 찾기 때의 것을 둔다).
-    private static int FixLean(Document doc, OverlapChecker.Found found, Journal journal, JoinSession session)
+    // 결합 방향(B — R54)을 찾고 잰다: 사람이 정한 결합(ZonePlan.Exceptions)을 읽어 넘기고, 시험 바꾸기는 묶음이 열려 있을 때만(읽기 전용이면 «안 잼»).
+    // 일지: 찾은 수 · 닿기만 해서 뺀 수 · 재지 못한 수 · 걸린 시간 + 쌍마다 한 줄.
+    private static void FindReversed(Document doc, List<ElementId> targets, OverlapChecker.Found found, JoinSession session, Journal journal)
     {
-        if (found.LeanCut.Count == 0) return 0;
-        var watch = Stopwatch.StartNew();
-        var (left, switched, lines, grown) = OverlapChecker.FixLeanOrder(doc, found.LeanCut);
-        if (switched > 0) session.Committed = true;
-        journal.Note($"버림 결합 순서\t바꿈 {switched} · 못 바꿈 {left.Count} / {found.LeanCut.Count} · 덩이가 는 벽·기둥 {grown.Count}\t{watch.ElapsedMilliseconds} ms");
-        foreach (string line in lines) journal.Raw("  " + line);
-        found.LeanCut = left;
-        found.LeanSwitched += switched;
-        foreach (var g in grown)
-            if (!found.Unsplit.Any(u => u.Id == g.Id)) found.Unsplit.Add(g);
-        return switched;
+        try
+        {
+            var exceptions = ZonePlanStore.Read(doc).Plan.Exceptions;
+            OverlapChecker.FindReversed(doc, targets, found, exceptions, measure: session.Open, limit: ReversedLimit);
+            journal.Note(string.Create(CultureInfo.InvariantCulture,
+                $"결합 방향\t기준과 반대 {found.Reversed.Count(r => r.Counts)} · 사람이 정함 {found.Reversed.Count(r => r.Human)} · 참고(같은 순위) {found.Reversed.Count(r => r.SameRank && !r.Human)}" +
+                $" · 바꿔도 같아 뺌 {found.Touching} · 못 잼 {found.ReversedUnmeasured} · 못 바꿈 {found.Reversed.Count(r => r.Refused)}" +
+                $" · 옮겨질 체적 합 {found.Reversed.Where(r => r.Counts && !double.IsNaN(r.MovedM3)).Sum(r => r.MovedM3):0.######} m3\t{found.ReversedMs} ms"));
+            foreach (string line in found.ReversedLines) journal.Raw("  " + line);
+        }
+        catch (Exception ex)
+        {
+            // 찾지 못해도 겹침 검사는 그대로 한다(결합 방향만 빠진다 — 알린다).
+            found.Reversed.Clear();
+            journal.Note("오류(결합 방향 찾기)\t" + ex);
+        }
     }
 
-    // 이미 결합됐는데 나중에 치는 부재가 구조체를 자르는 쌍(found.LaterCut — 앞 = 구조체 · 뒤 = 나중 부재)을 구조체가 자르게 바꾼다(JACK 2026-10-15 «나중 부재가 늘 잘림»).
-    // 버림과 같은 길(FixLeanOrder — 쌍의 앞이 자르게)이다. 바꾼 뒤 덩이가 는 벽 · 기둥은 found.Unsplit 에 넣는다.
-    private static int FixLater(Document doc, OverlapChecker.Found found, Journal journal, JoinSession session)
+    // 결합 방향 쌍들을 기준대로 바꾼다(바깥 묶음 안 — Ctrl+Z 한 번): 기준대로 남을 쪽(Keep)이 자르게(FixLeanOrder — 쌍의 앞이 자르게).
+    // 바꾼 쌍은 Status = Switched · 못 바꾼 쌍은 «못 바꿈(일지)». 바꾼 뒤 덩이가 는 벽 · 기둥은 found.Unsplit 에 넣는다(뒤의 SplitJoined 가 함께 나눈다).
+    // 사람이 정한 쌍을 바꿨으면 그 기록을 지운다(revit-verify R54 계획 H3). 돌려주는 값 = 바꾼 수 · 덩이가 는 부재.
+    private static (int switched, List<(ElementId Id, int Before, int Now)> grown) FixReversed(Document doc, OverlapChecker.Found found, List<ReversedJoin> pairs,
+                                                                                             Journal journal, JoinSession session)
     {
-        if (found.LaterCut.Count == 0) return 0;
+        if (pairs.Count == 0) return (0, new List<(ElementId, int, int)>());
         var watch = Stopwatch.StartNew();
-        found.LaterSwitchedParts = LaterPartsOf(doc, found.LaterCut);
-        var (left, switched, lines, grown) = OverlapChecker.FixLeanOrder(doc, found.LaterCut, "나중 부재 순서", "구조체", found.FloorsGrown);
+        var (left, switched, lines, grown) = OverlapChecker.FixLeanOrder(doc, pairs.Select(r => (r.Keep, r.Cutter)).ToList(), "결합 방향", "기준", found.FloorsGrown);
         if (switched > 0) session.Committed = true;
-        journal.Note($"나중 부재 결합 순서\t바꿈 {switched} · 못 바꿈 {left.Count} / {found.LaterCut.Count} · 덩이가 는 벽·기둥 {grown.Count}\t{watch.ElapsedMilliseconds} ms");
+        // 쌍마다 지금 모델에서 정말 기준대로 잘리는지 다시 본다(revit-verify R54 설치 전 M1 — FixLeanOrder 의 «결합이 풀려 있음» 길은 left 에도 바꾼 수에도 들지 않는다).
+        // 아니면 Refused(창의 단추 없음 · «Failed» · [모두 기준대로]에서 빠짐) + 까닭.
+        var stuck = new HashSet<(long, long)>(left.Select(p => (p.Lean.Value, p.Other.Value)));
+        var forgotten = new List<ReversedJoin>();
+        int confirmed = 0;
+        foreach (var r in pairs)
+        {
+            string why = "";
+            try
+            {
+                if (doc.GetElement(r.Keep) is not Element keep || doc.GetElement(r.Cutter) is not Element cutter) why = "부재를 찾을 수 없음";
+                else if (!JoinGeometryUtils.AreElementsJoined(doc, keep, cutter)) why = "결합이 풀려 있음";
+                else if (!JoinGeometryUtils.IsCuttingElementInJoin(doc, keep, cutter)) why = stuck.Contains((r.Keep.Value, r.Cutter.Value)) ? "Revit 이 자르는 순서를 바꾸지 못하게 함(일지)" : "자르는 순서가 그대로임";
+            }
+            catch (Exception ex) { why = "결합 상태를 읽지 못함: " + ex.Message; }
+            if (why.Length > 0)
+            {
+                r.Refused = true;
+                r.Note = "못 바꿈: " + why;
+                r.Status = r.Note;
+                continue;
+            }
+            confirmed++;
+            r.Status = ReversedJoin.Switched;
+            if (r.Human) forgotten.Add(r);
+        }
+        if (confirmed != switched) journal.Note($"자가검사\t결합 방향: FixLeanOrder 가 바꾼 수 {switched} · 다시 보니 기준대로 {confirmed}");
+        found.ReversedSwitched += confirmed;
+        journal.Note($"결합 방향 바꾸기\t바꿈 {switched} · 못 바꿈 {left.Count} / {pairs.Count} · 덩이가 는 벽·기둥 {grown.Count}\t{watch.ElapsedMilliseconds} ms");
         foreach (string line in lines) journal.Raw("  " + line);
-        found.LaterCut = left;
-        found.LaterSwitched += switched;
         foreach (var g in grown)
             if (!found.Unsplit.Any(u => u.Id == g.Id)) found.Unsplit.Add(g);
-        return switched;
+        if (forgotten.Count > 0) ForgetHuman(doc, forgotten, journal, session);
+        return (switched, grown);
     }
 
-    /// <summary>[우선순위대로 결합] 뒤 새 겹침을 이어서 결합하는 번 수의 한도(JACK 2026-10-19 «새 겹침도 이어서 결합» — 최대 5번).</summary>
+    // 창에서 결합 방향 줄 하나를 기준대로 바꾼다(revit-verify R54 계획 H2): FixLeanOrder(그 쌍) → 덩이가 는 부재만 나누기 → 다시 찾기(되살아난 부재가 셋째 부재와
+    // 새로 겹치는 R50 경우) → 두 부재의 겉면 다시 읽기 · 바뀐 줄을 창에 돌려준다(FixOne 꼴).
+    private static OverlapResultView.Fixed FixReversedOne(Document doc, OverlapChecker.Found found, OverlapScene.Data? scene, int key, Journal journal, JoinSession session,
+                                                         List<ElementId> targets)
+    {
+        var result = new OverlapResultView.Fixed();
+        if (key < 0 || key >= found.Reversed.Count) { result.Problem = "그 쌍을 찾을 수 없습니다."; return result; }
+        if (!session.Open) { result.Problem = "되돌리기 묶음이 닫혀 있어 고칠 수 없습니다."; return result; }
+        var r = found.Reversed[key];
+        if (r.Status == ReversedJoin.Switched) { result.Problem = "이미 기준대로 바꿨습니다."; return result; }
+        var watch = Stopwatch.StartNew();
+        int unsplitBefore = found.Unsplit.Count;
+        var (switched, grown) = FixReversed(doc, found, new List<ReversedJoin> { r }, journal, session);
+        result.Changed = switched > 0;
+        if (r.Status != ReversedJoin.Switched) result.Problem = r.Note.Length > 0 ? r.Note : "Revit 이 자르는 순서를 바꾸지 못했습니다(까닭은 일지).";
+        var remesh = new List<ElementId> { r.Keep, r.Cutter };
+        try
+        {
+            if (result.Changed)
+            {
+                // 덩이가 는 부재만 나눈다(다른 두 덩이 벽 · 기둥은 [모두 기준대로] 때 — 이 줄과 상관없는 부재를 말없이 나누지 않게).
+                if (grown.Count > 0)
+                {
+                    var others = found.Unsplit.Where(u => !grown.Any(g => g.Id == u.Id)).ToList();
+                    found.Unsplit.RemoveAll(u => !grown.Any(g => g.Id == u.Id));
+                    SplitJoined(doc, found, journal, session);
+                    found.Unsplit.AddRange(others);
+                    foreach (var g in grown)
+                    {
+                        if (!found.Splits.TryGetValue(g.Id.Value, out var pieces)) continue;
+                        remesh.AddRange(pieces);
+                        // 나눈 조각은 그림에서 원래 부재의 칸 하나에 함께 그린다(FixOne 과 같다 — revit-verify R54 설치 전 L6).
+                        if (scene != null && pieces.Count > 1 && scene.IndexOf(pieces[0]) is int at && at >= 0)
+                            foreach (var piece in pieces.Skip(1)) scene.Alias(piece, at);
+                    }
+                }
+                result.SplitToDo = found.Unsplit.Count;
+                // 다시 찾는다 — 바꾼 순서로 되살아난 부재가 결합 안 된 셋째 부재와 새로 겹칠 수 있다(R50).
+                var rep = OverlapChecker.Refresh(doc, found, targets, withBlobs: scene != null);
+                journal.Note($"{rep.Line}\t(결합 방향 {key} 뒤)");
+                if (scene != null)
+                {
+                    foreach (int k in rep.Reblob)
+                        try { result.Blobs[k] = OverlapScene.Reblob(doc, scene, found.Pairs[k], k); }
+                        catch (Exception ex) { journal.Note($"오류(덩어리 다시 만들기 {k})\t" + ex); }
+                    while (scene.Blobs.Count < found.Pairs.Count) scene.Blobs.Add(null);
+                }
+                foreach (int k in rep.Added) result.Added.Add(RowOf(doc, found, k, scene));
+                foreach (int k in rep.Changed) result.Rows.Add(RowOf(doc, found, k, scene));
+                result.Gone = rep.Gone.Count;
+                foreach (int k in rep.Added.Concat(rep.Changed)) remesh.AddRange(new[] { found.Pairs[k].Winner, found.Pairs[k].Loser });
+                if (scene != null)
+                    foreach (var (at, mesh) in OverlapScene.Remesh(doc, scene, remesh)) result.Meshes[at] = mesh;
+            }
+            result.ReversedRows.Add(ReversedRowOf(found, key, scene));
+        }
+        catch (Exception ex)
+        {
+            journal.Note($"오류(결합 방향 바꾼 뒤 정리 {key})\t" + ex);
+            result.Problem = (result.Changed ? "결합 순서는 바뀌었지만 " : "") + "창에 옮기다 오류가 났습니다: " + ex.Message;
+            if (result.ReversedRows.Count == 0) result.ReversedRows.Add(ReversedRowOf(found, key, scene));
+        }
+        var tally = OverlapChecker.Tally(found.Pairs);
+        (result.Joined, result.StillOverlap, result.Failed, result.NotNeeded, result.RemainingM3) = (tally.Joined, tally.StillOverlap, tally.Failed, tally.NotNeeded, tally.RemainingM3);
+        journal.Note($"결합 방향 고치기\t{key}\t{r.Cutter.Value} → {r.Keep.Value} 이 자르게\t{(result.Changed ? "커밋" : "바뀐 것 없음")}\t나누기 {Math.Max(0, unsplitBefore - found.Unsplit.Count)}\t{watch.ElapsedMilliseconds} ms");
+        return result;
+    }
+
+    // 결합 방향 목록의 한 줄(found.Reversed 의 i 번째): Winner = 기준대로 남을 쪽(지금 잘림) · Loser = 지금 자르는 쪽 · 체적 = 바꾸면 옮겨질 체적.
+    private static OverlapRow ReversedRowOf(OverlapChecker.Found found, int i, OverlapScene.Data? scene)
+    {
+        var r = found.Reversed[i];
+        bool unmeasured = double.IsNaN(r.MovedM3);
+        string note = r.Human ? OverlapResultView.HumanNote : r.SameRank ? "참고(같은 순위)" : r.Note;
+        return new OverlapRow
+        {
+            Key = i, VolumeM3 = unmeasured ? 0 : Math.Abs(r.MovedM3), Unmeasured = unmeasured,
+            Winner = r.KeepName, Loser = r.CutterName,
+            WinnerPart = r.KeepPart.Length > 0 ? r.KeepPart : "부위 없음", LoserPart = r.CutterPart.Length > 0 ? r.CutterPart : "부위 없음",
+            WinnerIndex = scene?.IndexOf(r.Keep) ?? -1, LoserIndex = scene?.IndexOf(r.Cutter) ?? -1,
+            Status = r.Status, Fine = r.Status == ReversedJoin.Switched, Blocked = r.Refused, NoSwap = true,
+            Optional = !r.Counts, Note = r.Human || r.SameRank ? note + (r.Note.Length > 0 ? " · " + r.Note : "") : r.Note,
+        };
+    }
+
+    // 이 모델에서 처음 값과 다르게 정한 «겹친 자리» 순위(부위 · 순위 · 처음 순위) — 창의 [기준표].
+    private static List<(string part, int rank, int first)> RankChanged(Document doc)
+    {
+        try
+        {
+            return ZonePlanStore.Read(doc).Plan.Parts
+                .Select(p => (p.Name, rank: PartCatalog.RankOf(p), first: DeductRank.BaseOf(p)))
+                .Where(x => x.rank != x.first).Select(x => (x.Name, x.rank, x.first)).ToList();
+        }
+        catch { return new List<(string, int, int)>(); }
+    }
+
+    // [Revit 에서 보기]: 겹친 쌍이면 그 두 부재 · 결합 방향 줄이면 그 두 부재.
+    private static void SelectPicked(UIDocument uidoc, OverlapChecker.Found found, OverlapResultView view)
+    {
+        int key = view.PickedKey;
+        if (view.PickedReversed)
+        {
+            if (key >= 0 && key < found.Reversed.Count) SelectIds(uidoc, new[] { found.Reversed[key].Keep, found.Reversed[key].Cutter }, zoom: true);
+        }
+        else if (key >= 0 && key < found.Pairs.Count) Select(uidoc, new[] { found.Pairs[key] }, zoom: true);
+    }
+
+    // 사람이 정한 결합을 적는다(revit-verify R54 계획 H3 — 겹침 창 사용자 모드로 남는 쪽을 맞바꿔 결합한 쌍): 다음 검사부터 «결합 방향 반대»로 걸지 않고 «사람이 정함».
+    // 묶음 안의 트랜잭션 하나(Ctrl+Z 로 결합과 함께 되돌아간다). 목록을 못 읽었거나(더 새 판 · 깨짐) 남이 편집 중이면 적지 않고 일지에만.
+    private static bool RecordHuman(Document doc, Element keep, Element cut, Journal journal, JoinSession session) =>
+        EditExceptions(doc, journal, session, "사람이 정한 결합 적기", list =>
+        {
+            list.RemoveAll(e => (e.Keep == keep.UniqueId && e.Cut == cut.UniqueId) || (e.Keep == cut.UniqueId && e.Cut == keep.UniqueId));
+            list.Add(new JoinException { Keep = keep.UniqueId, Cut = cut.UniqueId });
+            return $"{keep.Id.Value} 이 {cut.Id.Value} 을 자름";
+        });
+
+    // 결합 방향에서 사람이 정한 쌍을 기준대로 바꿨다 — 그 기록을 지운다.
+    private static bool ForgetHuman(Document doc, List<ReversedJoin> pairs, Journal journal, JoinSession session) =>
+        EditExceptions(doc, journal, session, "사람이 정한 결합 지우기", list =>
+        {
+            int before = list.Count;
+            foreach (var r in pairs)
+            {
+                string a = doc.GetElement(r.Keep)?.UniqueId ?? "", b = doc.GetElement(r.Cutter)?.UniqueId ?? "";
+                list.RemoveAll(e => (e.Keep == a && e.Cut == b) || (e.Keep == b && e.Cut == a));
+            }
+            return $"{before - list.Count}줄 지움";
+        });
+
+    // 돌려주는 값 = 모델에 적었다(커밋됨).
+    private static bool EditExceptions(Document doc, Journal journal, JoinSession session, string what, Func<List<JoinException>, string> edit)
+    {
+        if (!session.Open) { journal.Note($"{what}\t묶음이 닫혀 있어 못 함"); return false; }
+        var stored = ZonePlanStore.Read(doc);
+        if (stored.Problem.Length > 0 || stored.TooNew) { journal.Note($"{what}\t목록을 읽지 못해 못 함({stored.Problem})"); return false; }
+        // 옛 판(v1 · v2) 목록은 여기서 덮어쓰지 않는다 — [수량산출]이 옛 글자를 떠 두고 옮겨 적는 길을 건너뛰게 된다(revit-verify R54 설치 전 L1).
+        if (stored.Exists && stored.Plan.ReadVersion < ZonePlan.CurrentVersion) { journal.Note($"{what}\t옛 판(v{stored.Plan.ReadVersion}) 목록이라 적지 않음 — [수량산출]을 한 번 열었다 닫은 뒤 다시"); return false; }
+        string locked = ZonePlanStore.WhyLocked(doc);
+        if (locked.Length > 0) { journal.Note($"{what}\t{locked}"); return false; }
+        var plan = stored.Plan;
+        var list = plan.Exceptions ?? new List<JoinException>();
+        string said = edit(list);
+        plan.Exceptions = list;
+        using var tx = new Transaction(doc, "DH 모델 검증 — " + what);
+        try
+        {
+            tx.Start();
+            // 오류는 창을 띄우지 않고 이 트랜잭션만 되돌린다(묶음이 강제 모달이라 — revit-verify R54 설치 전 L3).
+            var options = tx.GetFailureHandlingOptions();
+            options.SetFailuresPreprocessor(new OverlapChecker.QuietFailures());
+            options.SetClearAfterRollback(true);
+            tx.SetFailureHandlingOptions(options);
+            ZonePlanStore.Write(doc, plan);
+            var status = tx.Commit();
+            if (status == TransactionStatus.Committed) session.Committed = true;
+            journal.Note($"{what}\t{said}\t{status}");
+            return status == TransactionStatus.Committed;
+        }
+        catch (Exception ex)
+        {
+            try { if (tx.HasStarted() && !tx.HasEnded()) tx.RollBack(); } catch { }
+            journal.Note($"{what}\t오류\t" + ex.Message);
+            return false;
+        }
+    }
+
+    // 창의 사용자 모드 «남을 쪽에서 빼기»(JACK 2026-10-20 «겹침 기능처럼 사용자 모드도»): 모양은 바꾸지 않고 지금 결합(기준과 반대)을 사람이 정한 것으로 기억한다 —
+    // 다음 검사부터 «결합 방향 반대»로 걸지 않고 «사람이 정함»(수 · [모두 기준대로] · [수량산출] 알림에서 빠짐). 묶음 안의 트랜잭션 하나(닫은 뒤 Ctrl+Z 로 되돌림).
+    private static OverlapResultView.Fixed KeepReversedAsHuman(Document doc, OverlapChecker.Found found, OverlapScene.Data? scene, int key, Journal journal, JoinSession session)
+    {
+        var result = new OverlapResultView.Fixed();
+        if (key < 0 || key >= found.Reversed.Count) { result.Problem = "그 쌍을 찾을 수 없습니다."; return result; }
+        var r = found.Reversed[key];
+        if (r.Human) { result.Problem = "이미 사람이 정한 결합입니다."; return result; }
+        if (doc.GetElement(r.Cutter) is not Element cutter || doc.GetElement(r.Keep) is not Element keep) { result.Problem = "부재를 찾을 수 없습니다."; return result; }
+        // 지금도 그 순서인지 다시 본다(창을 연 뒤 Revit 밖에서 바뀌었을 수 없지만, 창에서 다른 쌍을 고치다 결합이 풀렸을 수는 있다).
+        bool still;
+        try { still = JoinGeometryUtils.AreElementsJoined(doc, cutter, keep) && JoinGeometryUtils.IsCuttingElementInJoin(doc, cutter, keep); }
+        catch { still = false; }
+        if (!still) { result.Problem = "지금은 그 순서로 결합돼 있지 않습니다 — 모델 검증을 다시 실행해 주세요."; return result; }
+        result.Changed = RecordHuman(doc, cutter, keep, journal, session);
+        if (result.Changed) r.Human = true;
+        else result.Problem = "사람이 정한 결합으로 적지 못했습니다(옛 판 목록이면 [수량산출]을 한 번 열었다 닫은 뒤 다시 · 까닭은 일지).";
+        result.ReversedRows.Add(ReversedRowOf(found, key, scene));
+        var tally = OverlapChecker.Tally(found.Pairs);
+        (result.Joined, result.StillOverlap, result.Failed, result.NotNeeded, result.RemainingM3) = (tally.Joined, tally.StillOverlap, tally.Failed, tally.NotNeeded, tally.RemainingM3);
+        journal.Note($"결합 방향 고치기\t{key}\t사용자: 그대로 두고 사람이 정함({r.Cutter.Value} 이 {r.Keep.Value} 을 자름)\t{(result.Changed ? "적음" : "못 적음")}");
+        return result;
+    }
+
+    /// <summary>[모두 기준대로] 뒤 새 겹침을 이어서 결합하는 번 수의 한도(JACK 2026-10-19 «새 겹침도 이어서 결합» — 최대 5번).</summary>
     private const int RefreshRounds = 5;
 
     // [우선순위대로 결합] 뒤(바깥 묶음 안 — Ctrl+Z 한 번): 다시 찾아 새로 나온 · 다시 열린 쌍(아직 안 함 "")을 우선순위대로 결합하고 또 찾는다 —
@@ -397,14 +618,6 @@ public sealed class CheckOverlapCommand : IExternalCommand
         }
         return (joined, rounds, found.Pairs.Count(p => p.Status.Length == 0));
     }
-
-    // 나중 부재 결합 쌍의 부위별 수 — «중간슬래브 3 · 헌치 2 · 부위 없음 1»(많은 것부터).
-    private static string LaterPartsOf(Document doc, IEnumerable<(ElementId Keep, ElementId Later)> pairs) =>
-        string.Join(" · ", pairs
-            .Select(p => { try { return doc.GetElement(p.Later) is { } el ? ZoneScene.Text(el, ZoneScene.PartParam) : ""; } catch { return ""; } })
-            .Select(n => n.Length > 0 ? n : "부위 없음")
-            .GroupBy(n => n, StringComparer.Ordinal).OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal)
-            .Select(g => $"{g.Key} {g.Count()}"));
 
     // 이미 결합돼 여러 덩이인 벽 · 기둥(found.Unsplit)을 나눈다(바깥 묶음 안 — Ctrl+Z 한 번 · JACK 2026-10-15). 돌려주는 값 = 나눈 수.
     private static int SplitJoined(Document doc, OverlapChecker.Found found, Journal journal, JoinSession session)
@@ -481,7 +694,7 @@ public sealed class CheckOverlapCommand : IExternalCommand
         // 아래 조각하고만 결합되고 '결합됨'으로 보인다(R36 revit H1). 겹침 검사를 다시 해야 한다.
         if (p.Status == OverlapChecker.MultiPieceText) { result.Problem = p.Status; return result; }
         // 잘린 쪽을 나눈 쌍은 남는 쪽을 맞바꾸지 않는다 — 결합 순서는 조각마다 따로라 아래 조각 하나만 바뀐다.
-        if (cutWinner && p.Pieces.Count > 1) { result.Problem = "나눈 부재가 든 쌍은 남는 쪽을 바꿀 수 없습니다 — 겹침 검사를 다시 실행해 주세요"; return result; }
+        if (cutWinner && p.Pieces.Count > 1) { result.Problem = "나눈 부재가 든 쌍은 남는 쪽을 바꿀 수 없습니다 — 모델 검증을 다시 실행해 주세요"; return result; }
         var watch = Stopwatch.StartNew();
         // 기본(맞바꾸지 않음)은 앞서 나눈 조각을 넘긴다 — 다시 잴 때 조각 전부와 잰다.
         var job = cutWinner
@@ -537,6 +750,8 @@ public sealed class CheckOverlapCommand : IExternalCommand
             {
                 (p.Winner, p.Loser) = (p.Loser, p.Winner);
                 (p.WinnerName, p.LoserName) = (p.LoserName, p.WinnerName);
+                // 사람이 기준과 반대로 정한 결합 — 다음 검사부터 «결합 방향 반대»로 걸지 않게 적어 둔다(revit-verify R54 계획 H3).
+                if (doc.GetElement(p.Winner) is Element keep && doc.GetElement(p.Loser) is Element cut) RecordHuman(doc, keep, cut, journal, session);
             }
             if (!committed) result.Problem = job.Status;
             else if (p.Status != OverlapChecker.Joined)
@@ -648,11 +863,12 @@ public sealed class CheckOverlapCommand : IExternalCommand
     }
 
     // 3D 에 보여 줄 것을 읽는다. 읽지 못해도 창은 뜬다(목록만) — 까닭을 돌려준다.
-    private static (OverlapScene.Data? scene, string problem) ReadScene(Document doc, List<OverlapPair> pairs, bool verify, Journal journal)
+    private static (OverlapScene.Data? scene, string problem) ReadScene(Document doc, OverlapChecker.Found found, bool verify, Journal journal)
     {
+        var pairs = found.Pairs;
         try
         {
-            var scene = OverlapScene.Read(doc, pairs, verify);
+            var scene = OverlapScene.Read(doc, pairs, verify, found.Reversed.SelectMany(r => new[] { r.Keep, r.Cutter }));
             journal.Note(string.Create(CultureInfo.InvariantCulture,
                 $"장면 읽기({(verify ? "찾은 뒤" : "결합한 뒤")})\t부재 {scene.Ids.Count} · 세모 {scene.Triangles} · 모서리 {scene.Segments} · 읽기 {scene.ReadMs} ms" +
                 $" · 가운데 ({scene.Origin.X:0}, {scene.Origin.Y:0}, {scene.Origin.Z:0}) · 상자로 그림 {scene.Boxed} · 못 그림 {scene.Undrawn} · 결합으로 다 깎여 안 그림 {scene.CutAway} · 읽기 오류 {scene.ReadErrors}" +
@@ -782,7 +998,7 @@ public sealed class CheckOverlapCommand : IExternalCommand
                 }
                 catch (Exception ex) { _journal.Note("오류(묶음 커밋)\t" + ex); }
             _journal.Note("★ 묶음을 닫지 못함 — 결합이 모델에 남지 않았을 수 있음");
-            try { Dialogs.Show("DH 수량산출 — 오류", "★ 창에서 건 결합을 모델에 남기지 못했습니다(Revit 이 되돌립니다). 겹침 검사를 다시 실행해 확인해 주세요."); }
+            try { Dialogs.Show("DH 수량산출 — 오류", "★ 창에서 건 결합을 모델에 남기지 못했습니다(Revit 이 되돌립니다). 모델 검증을 다시 실행해 확인해 주세요."); }
             catch { }
             return _kept = false;
         }

@@ -96,6 +96,8 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         public int Commits { get; private set; }     // 그룹 안에서 커밋된 트랜잭션 수(속성 칸 만들기 · 색 입히기 포함)
         public string LegacyDump { get; private set; } = "";
         public int LaterCuts { get; set; }           // ② 를 마지막으로 잴 때 나중에 치는 부재가 결합에서 구조체를 깎은 곳의 수(알림 창 — revit-verify R46 M1)
+        public string ModelCheck { get; set; } = ""; // [수량산출] 시작의 빠른 모델 검증 글(R54 — ① 위 띠의 칩 · ④ 엑셀 메모 · "" = 걸린 것 없음)
+        public string ModelCheckRanks { get; set; } = ""; // 그 검사를 한 때의 «겹친 자리» 순위(부위:순위 — ① 에서 바뀌면 ④ 전에 다시 검사)
 
         public Session(Document doc, ZoneScene.Data data)
         {
@@ -255,7 +257,8 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         var session = new Session(doc, data);
         session.Note($"열기\t{doc.Title}\t부재 {data.Members.Count} · 세모 {data.Triangles} · 모서리 {data.Segments} · 읽기 {data.ReadMs} ms" +
                      $" · 상자로 그림 {data.Boxed} · 못 그림 {data.Undrawn} · 읽기 오류 {data.ReadErrors} · 띠 나누기로 만든 면 {data.FacesFallback} · 못 만든 면 {data.FacesSkipped} · 엇갈린 면 {data.FacesTwisted}" +
-                     $" · 레벨 {data.Levels.Count} · 작업공유 {(doc.IsWorkshared ? "O" : "X")} · 그림 등급 {RenderCapability.Tier >> 16}");
+                     $" · 레벨 {data.Levels.Count} · 작업공유 {(doc.IsWorkshared ? "O" : "X")} · 그림 등급 {RenderCapability.Tier >> 16}" +
+                     $" · 넣은 뒤 모양 바뀜 {data.Members.Count(m => m.Value.Changed && !m.Value.IsEmpty)}");
 
         // 창이 떠 있는 동안 여는 그룹: 이 문서를 지금 고칠 수 없으면(읽기 전용 등) 3D 를 띄우기 전에 여기서 드러난다.
         var group = new TransactionGroup(doc, "DH 수량산출");
@@ -286,6 +289,9 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
                          $"\t중분류 {editor.Places.Count} · 부위 {editor.Parts.Count}\t저장된 판 v{data.Stored.Plan.ReadVersion}{(data.Stored.Exists ? "" : "(저장된 것 없음)")}");
             // Revit 에서 부재를 골라 놓고 눌렀으면 팝업에서도 그 부재를 골라 둔다.
             editor.Select(uidoc.Selection.GetElementIds().Select(id => id.Value));
+            // ① 을 열기 전에 한 번 빠르게 모델 검증(최대 15 초 남짓 · 알림만 — R54).
+            session.ModelCheck = QuickModelCheck(doc, session);
+            session.ModelCheckRanks = RankSignature(editor);
             (revert, completion) = ShowWindow(commandData.Application.MainWindowHandle, doc, editor, data, session, Notices(data));
 
             if (!revert && session.Commits > 0)
@@ -362,7 +368,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         var plan = done.Plan;
         var text = new StringBuilder();
         if (closeProblem.Length > 0) text.AppendLine(closeProblem).AppendLine();
-        if (done.Overlap.Length > 0) text.AppendLine("⚠ " + done.Overlap + " — [겹침 검사]로 결합한 뒤 다시 [수량산출]을 하면 맞는 수량입니다.").AppendLine();
+        if (done.Overlap.Length > 0) text.AppendLine("⚠ " + done.Overlap + " — [모델 검증]으로 고친 뒤 다시 [수량산출]을 하면 맞는 수량입니다.").AppendLine();
         if (plan != null)
         {
             text.AppendLine($"산출근거에 실은 부재 {plan.Listed}개 — {plan.Rows.Count}줄 · 산출 수량 합 {FormulaDecomposer.RoundQuantity(plan.Quantity).ToString("#,##0.00", CultureInfo.InvariantCulture)} m³" +
@@ -486,6 +492,21 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         // 이 창에서 이미 지은 판(앞의 [완료])으로 시작한다 — 이번 [완료]가 판을 짓기 전에 멈춰도 [닫기] 알림에 판이 나오게(revit-verify R44b L-a).
         var done = new Completion { Objects = plates.Built };
         session.Note("완료\t시작");
+        // 넣은 뒤 모양이 바뀌었는데 확인하지 않은 부재(R52b — JACK 2026-10-19 인터뷰 «알리고 진행»): 묻고, 계속하면 지금 값으로 만든다(엑셀 «부재 목록»에 남는다).
+        // 고칠 수 없는 부재 · 그려지지 않은 부재도 센다 — 확인할 수는 없어도 산출서에는 실린다(R52b core-verify 중간 4).
+        int changed = editor.Members.Count(m => m.Value.Changed && !m.Value.IsEmpty);
+        if (changed > 0)
+        {
+            int locked = editor.Members.Count(m => m.Value.Changed && !m.Value.IsEmpty && m.Locked.Length > 0);
+            var go = MessageBox.Show(window,
+                $"넣은 뒤 모양(부피·크기·자리)이 바뀐 부재 {changed}개의 위치·부위를 확인하지 않았습니다" +
+                (locked > 0 ? $"(그 가운데 고칠 수 없는 부재 {locked}개)" : "") + ".\n" +
+                "지금 값으로 산출서를 만들까요?\n(만들면 엑셀 «부재 목록»의 판정에 «" + CalcPlan.ShapeChangedNote + "»을 남깁니다. " +
+                "[아니요]는 멈춥니다 — [← 이전 단계]로 ① 에 가서 «확인 필요»를 고르면 그 부재들이 나옵니다.)",
+                Title, MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
+            session.Note($"완료\t모양 바뀜 미확인 {changed}\t{(go == MessageBoxResult.Yes ? "계속" : "돌아감")}");
+            if (go != MessageBoxResult.Yes) return done;
+        }
         FormulaFollow? follow = null;
         string problem = view.RunLocked(() => follow = FollowWithFormulas(doc, session, count => AskCompute(window, count)));
         done.Formulas = follow ?? new FormulaFollow { Problem = problem };
@@ -550,7 +571,16 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         problem = view.RunLocked(() =>
         {
             read = CalcSheetExporter.Collect(doc, DimensionExtractor.CollectApplicable(doc));
-            done.Overlap = OverlapNote(doc, read.Plan);
+            // [수량산출] 시작의 빠른 모델 검증(R54). ① 에서 «겹친 자리»를 바꿨으면 기준이 달라졌으므로 지금 순위로 다시 한다(revit-verify R54 설치 전 M3 —
+            // ① 은 바꾼 목록을 바로 모델에 적어 둔다). 바꾸지 않았으면 다시 재지 않는다(① · ② 는 모양을 안 바꾼다).
+            string ranksNow = RankSignature(editor);
+            if (ranksNow != session.ModelCheckRanks)
+            {
+                session.Note("모델 검증(빠른)\t① 에서 겹친 자리를 바꿈 — 지금 순위로 다시 검사");
+                session.ModelCheck = QuickModelCheck(doc, session);
+                session.ModelCheckRanks = ranksNow;
+            }
+            done.Overlap = session.ModelCheck;
         });
         if (read == null)
         {
@@ -671,7 +701,8 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
                $" · 되읽기 판 {o.ReadBack} · 칸 다름 {o.ReadBackDiffers} · 자리 어긋남 {o.Misplaced} · 방 경계 끔 {o.RoomBoundingOff}" +
                (o.ReadBackProblem.Length > 0 ? " · 되읽기 오류: " + o.ReadBackProblem : "") +
                (o.MaterialProblem.Length > 0 ? " · 재료 못 만듦: " + o.MaterialProblem : "") +
-               (o.SubcategoryProblem.Length > 0 ? " · 하위 범주 못 만듦: " + o.SubcategoryProblem : "") + $" · {o.Ms} ms";
+               (o.SubcategoryProblem.Length > 0 ? " · 하위 범주 못 만듦: " + o.SubcategoryProblem : "") +
+               (o.TypeProblem.Length > 0 ? " · 유형 «거푸집» 못 만듦: " + o.TypeProblem : "") + (o.Untyped > 0 ? $" · 유형을 못 붙인 판 {o.Untyped}" : "") + $" · {o.Ms} ms";
     }
 
     // 그 파일을 지금 쓸 수 있는가("" = 쓸 수 있음, 아니면 까닭) — 엑셀에 열려 있는 파일 · 쓸 수 없는 폴더를 창을 닫기 전에 가린다.
@@ -768,20 +799,38 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         finally { Mouse.OverrideCursor = cursor; }
     }
 
-    // 겹친 부재(형상 결합 없이 겹쳐 두 번 세는 자리)가 있으면 산출근거에도 두 번 들어간다 — 엑셀의 머리 글에 알린다(15초 한도 · 모델은 바꾸지 않는다).
-    private static string OverlapNote(Document doc, CalcPlan plan)
+    // 부위 목록의 «겹친 자리» 순위를 한 줄로(부위:순위 — 빠른 검사를 다시 할지 가른다).
+    private static string RankSignature(PickEditor editor) =>
+        string.Join("|", editor.Parts.Select(p => p.Name + ":" + PartCatalog.RankOf(p).ToString(CultureInfo.InvariantCulture)));
+
+    // [수량산출] 시작의 빠른 모델 검증(R54 — 인터뷰 «먼저 빠르게 검사 · 알림만» · revit-verify 계획 H4): 겹침(15 초 한도) + 결합 방향(트랜잭션 없이 닿기만 한
+    // 결합을 거른 수). 모델은 바꾸지 않는다. 걸려도 계속한다 — ① 위 띠의 칩과 ④ 엑셀 «내보냄» 메모가 같은 글을 쓴다(① · ② 는 모양을 안 바꾼다 — 다시 재지 않음).
+    // 결합 방향을 Revit 의 결합으로 못 가르는 쌍(잘린 쪽이 벽 · 바닥)은 «최대»로 센다. 돌려주는 값 = «모델 검증: 겹침 n쌍 · 결합 방향 m쌍»("" = 걸린 것 없음).
+    private static string QuickModelCheck(Document doc, Session session)
     {
+        var watch = Stopwatch.StartNew();
         try
         {
-            var listed = plan.Elements.Where(e => e.Missing.Length == 0).Select(e => new ElementId(e.Id)).ToList();
-            var overlap = OverlapChecker.Find(doc, listed, TimeSpan.FromSeconds(15));
-            if (overlap.Pairs.Count > 0)
-                return $"겹친 부재 {overlap.Pairs.Count}쌍{(overlap.TimedOut ? " 이상" : "")}(중복 체적 {FormulaDecomposer.RoundQuantity(overlap.TotalM3).ToString("#,##0.00", CultureInfo.InvariantCulture)} m³)을 두 번 세고 있음";
-            if (overlap.TimedOut) return "겹친 부재가 있는지 끝까지 확인하지 못함(15초 한도)";
-            if (overlap.Unmeasured > 0) return $"겹쳤는지 잴 수 없었던 부재 쌍이 {overlap.Unmeasured}개 있음";
-            return "";
+            var targets = DimensionExtractor.CollectApplicable(doc)
+                .Where(id => doc.GetElement(id) is Element el && ConcreteFilter.Classify(doc, el).Kind != ConcreteFilter.Kind.NotConcrete).ToList();
+            var found = OverlapChecker.Find(doc, targets, TimeSpan.FromSeconds(15));
+            long findMs = watch.ElapsedMilliseconds;
+            var (sure, most) = OverlapChecker.QuickReversed(doc, targets, found);
+            var parts = new List<string>();
+            if (found.Pairs.Count > 0)
+                parts.Add($"겹침 {found.Pairs.Count}쌍{(found.TimedOut ? " 이상" : "")}(중복 {FormulaDecomposer.RoundQuantity(found.TotalM3).ToString("#,##0.00", CultureInfo.InvariantCulture)} m³)");
+            else if (found.TimedOut) parts.Add("겹침은 끝까지 못 봄(15초)");
+            if (most > 0) parts.Add(most > sure ? $"결합 방향 {sure}쌍(최대 {most}쌍)" : $"결합 방향 {sure}쌍");
+            session.Note($"모델 검증(빠른)\t대상 {targets.Count} · 겹침 {found.Pairs.Count}{(found.TimedOut ? "(시간 한도)" : "")} · 결합 방향 {sure}~{most} · 닿기만 해서 뺌 {found.Touching}" +
+                         $" · 사람이 정함 {found.Reversed.Count(r => r.Human)} · 참고 {found.Reversed.Count(r => r.SameRank && !r.Human)}\t찾기 {findMs} ms · 모두 {watch.ElapsedMilliseconds} ms");
+            foreach (var r in found.Reversed.Where(r => r.Counts).Take(30)) session.Note("  " + OverlapChecker.ReversedLine(r));
+            return parts.Count > 0 ? "모델 검증: " + string.Join(" · ", parts) : "";
         }
-        catch (Exception ex) { return "겹친 부재가 있는지 확인하지 못함(" + ex.Message + ")"; }
+        catch (Exception ex)
+        {
+            session.Note("모델 검증(빠른)\t오류\t" + ex);
+            return "모델 검증을 하지 못함(" + ex.Message + ")";
+        }
     }
 
     // 산출식을 돌린다(필요한 부재만). 대상 = 모델의 대상 부재 전부(Revit 의 선택은 보지 않는다 — 산출은 모델 전체의 일이다).
@@ -964,8 +1013,8 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
 
     // 나중에 치는 부재(중간슬래브 · 트라프 · 헌치 · 받침 …)가 결합에서 구조체를 깎은 곳의 알림 — ② 위 띠와 [완료] 알림 창이 같이 쓴다.
     private static string LaterCutsNote(int count) =>
-        $"나중에 치는 부재가 구조체를 깎은 결합 {count}곳 — 그 자리 벽이 끊기고 홈 둘레만큼 더 셀 수 있습니다. [겹침 검사]에서 결합 순서를 바꾸면" +
-        "([우선순위대로 결합] 또는 «나중 부재 결합 순서 바꾸기») 구조체가 자르게 바뀝니다(그 뒤 다시 [수량산출]).";
+        $"나중에 치는 부재가 구조체를 깎은 결합 {count}곳 — 그 자리 벽이 끊기고 홈 둘레만큼 더 셀 수 있습니다. [모델 검증]의 «결합 방향»에서" +
+        "([기준대로 바꾸기] 또는 [모두 기준대로]) 구조체가 자르게 바뀝니다(그 뒤 다시 [수량산출]).";
 
     // ② 의 상태를 짓는다: 모델의 콘크리트 전부(산출식 · 거푸집 면 확인과 같은 거르기)를 재고, 대응표를 건다.
     // 대응표: 앞서 ② 에서 고친 것이 있으면 그것(이 창의 메모리 — 파일 저장에 실패했어도 고친 종류가 사라지지 않게, revit R42 L2), 없으면 파일.
@@ -976,7 +1025,8 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
     {
         var watch = Stopwatch.StartNew();
         var later = editor.Parts.Where(PartCatalog.IsLater).Select(p => p.Name).ToHashSet(StringComparer.Ordinal);
-        var scene = FormworkReader.Read(doc, Array.Empty<ElementId>(), later.Contains);
+        // 겹친 자리 순위도 ① 의 지금 목록으로(R54 — revit-verify 계획 M3: 순위 출처 하나 · 수량산출은 ① 의 메모리 값).
+        var scene = FormworkReader.Read(doc, Array.Empty<ElementId>(), later.Contains, new DeductRank.Table(editor.Parts));
         string rulesProblem = "";
         FormworkRules rules;
         if (current != null) rules = FormworkRules.Parse(current.ToText());     // 사본 — 옛 판과 같은 표를 나눠 쓰지 않게
@@ -988,10 +1038,14 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         // 부위의 거푸집 처음 값(R47 — 계단 · 턱·맨홀 · DRY AREA = 합판 3회)은 ① 목록의 묶음으로 본다(목록에서 묶음을 옮긴 부위도 그대로 — core-verify R47 L2).
         var groups = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var p in editor.Parts) groups.TryAdd(p.Name, p.Group);
-        // 7 m 넘는 벽이 있으면 유로폼을 0~7m / 7m 초과로(R49 — JACK 1016).
-        var options = new FormworkOptions { Rules = rules, PartDefault = part => PartCatalog.FormworkDefault(part, groups.GetValueOrDefault(part)), Bands = FormworkOptions.AutoBands(scene.Elements) };
-        var results = FormworkAnalyzer.Analyze(scene.Elements, scene.Zones, options);
-        options.DropUnusedBands(results);   // 7 m 를 넘는 조각이 없으면 구간을 끈다(벽 높이는 기초에 묻힌 몫까지 재므로)
+        // 7 m 넘는 유로폼 면이 있으면 0~7m / 7m 초과로(R49 — JACK 1016 · R53a 녹촌: 높이는 이어진 옆면의 아래 끝부터 — 하부슬래브 옆면 위의 벽은 그 밑부터).
+        var options = new FormworkOptions
+        {
+            Rules = rules, PartDefault = part => PartCatalog.FormworkDefault(part, groups.GetValueOrDefault(part)), Bands = FormworkOptions.AutoBands(scene.Elements),
+            // ① 목록의 묶음(사용자가 옮긴 것까지) — 기초 카테고리의 밑면 · 턱 덩어리 빼기가 쓴다(R53a).
+            PartGroup = part => groups.TryGetValue(part, out var g) && g.Length > 0 ? g : PartCatalog.GroupOf(part),
+        };
+        var results = FormworkAnalyzer.AnalyzeAutoBands(scene.Elements, scene.Zones, options);   // 7 m 를 넘는 유로폼 조각이 없으면 구간 없이
         int unpainted = FormworkReader.AttachCurved(scene, results);
         var (placeOf, partOrder) = Places(results, editor);
         var board = new FormworkBoard(results, options, data.Origin, placeOf, partOrder);
@@ -1013,8 +1067,9 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
             $" · 모양이 바뀌어 다시 센 뺀 판 {board.LostDrops.Count} · 일부만 찾음 {board.DropCheck.Partial.Count} · 넓이 달라짐 {board.DropCheck.Resized.Count}" +
             $" · 가려진 줄 {board.HiddenTypeRules.Count}" +
             (board.HiddenTypeRules.Count > 0 ? "(" + string.Join(", ", board.HiddenTypeRules.Take(6).Select(h => $"{h.type}·{h.group}={h.item}")) + ")" : "") +
-            $" · 높이 구간 {(options.Bands.Count > 0 ? string.Join(",", options.Bands) + " m(7 m 넘는 벽)" : "없음")}" +
+            $" · 높이 구간 {(options.Bands.Count > 0 ? string.Join(",", options.Bands) + " m(이어진 옆면이 7 m 넘는 유로폼 있음)" : "없음")}" +
             $" · 수직면 덩어리 {FormworkAnalyzer.LastGrouping.groups}(한 고리 아니라 안 묶음 {FormworkAnalyzer.LastGrouping.refused} · {FormworkAnalyzer.LastGrouping.ms} ms)" +
+            $" · 순위 문맥 {FormworkAnalyzer.LastContexts.contexts}(마지막 재기 {FormworkAnalyzer.LastContexts.ms} ms — R54)" +
             $" · 덩어리로 값 바뀐 조각 {lumpChanges.Sum(c => c.count)}({lumpChanges.Sum(c => c.area).ToString("0.##", CultureInfo.InvariantCulture)} ㎡" +
             (lumpChanges.Count > 0 ? ": " + string.Join(" · ", lumpChanges.Take(6).Select(c => FormattableString.Invariant($"{c.type} {c.from}→{c.to} {c.count}개 {c.area:0.##}"))) : "") + ")" +
             $" · 덩어리에 든 확인할 자리 {FormworkSummary.LumpChecks(results).Count}(늘 0 — 확인할 자리는 덩어리에 넣지 않음)" +
@@ -1051,7 +1106,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
     {
         bool dark = false;
         try { dark = UIThemeManager.CurrentTheme == UITheme.Dark; } catch { }
-        var view = new PlacePartView(editor, data.Meshes, dark, notice) { Log = session.Note };
+        var view = new PlacePartView(editor, data.Meshes, dark, notice) { Log = session.Note, ModelCheck = session.ModelCheck };
         var window = view.BuildWindow();
         new WindowInteropHelper(window).Owner = owner;
         bool revert = false;
@@ -1256,7 +1311,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         sb.Append(kept ? "모델에 남음\n" : revert ? "처음 상태로 되돌림 — 위의 값은 모델에 남지 않았다\n" : "모델에 남지 않음 — 위의 값은 창을 닫을 때 화면의 값이다\n");
         sb.Append("구조물\t" + editor.Structure + "\n");
         sb.Append("위치 목록\t" + string.Join(" · ", editor.Places.Select(p => p.Name)) + "\n");
-        sb.Append("부위 목록\t" + string.Join(" · ", editor.Parts.Select(p => p.Name + (p.NoZone ? "(위치 없이)" : "") + (p.Plain ? "(무근)" : "") + (PartCatalog.IsLater(p) ? "(나중에 침)" : ""))) + "\n");
+        sb.Append("부위 목록\t" + string.Join(" · ", editor.Parts.Select(p => p.Name + (p.NoZone ? "(위치 없이)" : "") + (p.Plain ? "(무근)" : "") + (PartCatalog.IsLater(p) ? "(나중에 침)" : "") + $"[겹친 자리 {PartCatalog.RankOf(p)}]")) + "\n");
         File.WriteAllText(table, sb.ToString(), new UTF8Encoding(true));
         try
         {

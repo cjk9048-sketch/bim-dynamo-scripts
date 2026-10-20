@@ -26,11 +26,12 @@ public sealed class RibbonApp : IExternalApplication
         // 전의 네 버튼(산출식 자동입력 · 위치·부위 정하기 · 거푸집 면 확인 · 산출근거 엑셀)은 리본에서 뺐다 — 명령의 코드는 그대로 둔다
         // (겹침 검사 · 수량산출이 그 안의 것을 쓴다). 6월 판의 버튼 셋(매개변수 세팅 · 치수 자동입력 · 산출·내보내기)도 리본에 없다.
 
+        // R54(JACK 2026-10-20): «겹침 검사» → «모델 검증»(같은 자리 · 명령 이름 DH_Overlap 은 그대로 — 사용자가 단축키 · 빠른 실행에 넣어 둔 것이 남게).
         var overlap = new PushButtonData(
-            "DH_Overlap", "겹침\n검사", asm, typeof(CheckOverlapCommand).FullName)
+            "DH_Overlap", "모델\n검증", asm, typeof(CheckOverlapCommand).FullName)
         {
-            ToolTip = "[1] 선택 부재(없으면 전체)의 콘크리트 부재끼리 형상 결합 없이 겹쳐 두 번 세는 자리를 찾아 보여 주고, " +
-                      "원하면 우선순위대로(슬래브 우선) 형상 결합. 수량산출 전에 실행",
+            ToolTip = "[1] 수량산출 전에 실행 — 선택 부재(없으면 전체)의 콘크리트 부재끼리 겹쳐 두 번 세는 자리와 " +
+                      "겹친 자리 순위(기준표)와 반대로 결합된 쌍을 찾아 보여 주고, 원하면 기준대로 결합 · 순서를 바꿉니다.",
             LargeImage = LoadIcon("Setup32.png"),
             Image = LoadIcon("Setup16.png"),
         };

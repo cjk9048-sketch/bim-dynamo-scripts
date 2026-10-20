@@ -33,6 +33,13 @@ public sealed class FormworkElement
     /// 이 부재의 면은 모든 콘크리트를 보고 센다 — 구조체에 맞닿은 면은 이 부재에서만 빠진다.
     /// </summary>
     public bool Later { get; set; }
+
+    /// <summary>
+    /// 겹친 자리 순위(DeductRank — R54). 구조체의 면에서 어느 나중 부재를 뺄지 정한다: 구조체 X 를 잴 때 **X 가 이기는**(순위가 낮은) 나중 부재만 없는 것으로
+    /// 보고, X 를 이기는 나중 부재(중간슬래브 6 > 보 7 · 헌치 8 > 채움 9)는 X 보다 먼저 있던 콘크리트로 본다 — 결합도 그쪽이 X 를 자르므로 X 에 홈이 없다
+    /// (core-verify R54 계획 H1). 0 = 모름(전과 같이 나중 부재는 늘 뺀다).
+    /// </summary>
+    public int Rank { get; set; }
 }
 
 /// <summary>구역 상자(스코프 박스) — 안쪽 면이 '어느 공간의 안쪽인지' 이름을 붙이는 데 쓴다.</summary>
@@ -213,33 +220,22 @@ public sealed class FormworkOptions
     public const double TallWall = 7.0;
 
     /// <summary>
-    /// 높이 구간을 모델에서 정한다(R49 — JACK 2026-10-16 «7 m 넘는 벽이 있으면 유로폼 0~7 / 7 m 초과 자동 구분»: 김포 2D 꼴 · 없으면 명장 2D 처럼
-    /// 구분 없음). 대상 벽(Target) 가운데 높이(형상의 아래 ~ 위)가 7 m 를 넘는 것이 하나라도 있으면 [7], 아니면 빈 목록.
+    /// 높이 구간을 모델에서 정한다(R49 — JACK 2026-10-16 «7 m 넘는 벽이 있으면 유로폼 0~7 / 7 m 초과 자동 구분»: 김포 · 녹촌 2D 꼴 · 없으면 명장 2D 처럼
+    /// 구분 없음). 대상 벽(Target)이 하나라도 있으면 늘 [7] 로 재고, 7 m 넘는 조각이 없으면 DropUnusedBands 가 끈다(R53a — core-verify R53 계획 H2:
+    /// 벽 하나의 높이로 미리 끄면 벽 하나는 7 m 아래여도 하부슬래브 옆면과 이어져 7 m 를 넘는 녹촌 꼴이 구간 없이 나간다). 벽이 없으면 빈 목록.
     /// </summary>
-    public static List<double> AutoBands(IEnumerable<FormworkElement> elements)
-    {
-        foreach (var el in elements)
-        {
-            if (el.Kind != MemberKind.Wall || !el.Target) continue;
-            double lo = double.MaxValue, hi = double.MinValue;
-            foreach (var solid in el.Solids)
-                foreach (var face in solid.Faces)
-                    foreach (var loop in face.Loops)
-                        foreach (var p in loop.Pts)
-                            if (p.Length >= 3) { lo = Math.Min(lo, p[2]); hi = Math.Max(hi, p[2]); }
-            if (hi - lo > TallWall + 1e-6) return new List<double> { TallWall };
-        }
-        return new List<double>();
-    }
+    public static List<double> AutoBands(IEnumerable<FormworkElement> elements) =>
+        elements.Any(el => el.Kind == MemberKind.Wall && el.Target) ? new List<double> { TallWall } : new List<double>();
 
     /// <summary>
-    /// 자동 구간을 켰는데 서 있는 바닥에서 7 m 를 넘는 조각이 하나도 없으면 끈다 — 벽 형상의 높이는 기초에 묻힌 몫까지 재지만 구간은 서 있는 바닥에서 잰다
-    /// (revit-verify R49 L4: 7.0 ~ 7.6 m 벽만 있는 모델의 유로폼 이름이 구간 꼴로 바뀌지 않게). Analyze 뒤에 부른다 — 넘는 조각이 없으면 나눈 결과와
-    /// 안 나눈 결과가 같다(조각이 모두 구간 0 · 자르는 자리가 조각 밖). 끄면 true.
+    /// 자동 구간을 켰는데 7 m 를 넘는 «세는 유로폼» 조각이 하나도 없으면 끈다 — 벽 형상의 높이는 기초에 묻힌 몫까지 재지만 구간은 기준에서 잰다
+    /// (revit-verify R49 L4: 7.0 ~ 7.6 m 벽만 있는 모델의 유로폼 이름이 구간 꼴로 바뀌지 않게). 유로폼만 본다(R53a — revit-verify M: 벽이 있으면 늘 [7] 로
+    /// 재므로 9 m 합판 기둥 하나로 «H=0~7m» 만 붙지 않게). Analyze 뒤에 부른다. 끄면 true — 그때 구간으로 잘린 조각(합판 면)이 있었으면 결과를 구간 없이
+    /// 다시 재야 한다(FormworkAnalyzer.AnalyzeAutoBands).
     /// </summary>
     public bool DropUnusedBands(IReadOnlyList<ElementFormwork> results)
     {
-        if (Bands.Count == 0 || results.Any(r => r.Faces.Any(f => f.Patches.Any(p => p.Band > 0)))) return false;
+        if (Bands.Count == 0 || results.Any(r => r.Faces.Any(f => f.Patches.Any(p => p.Counted && p.Item == FormworkTable.Euro && p.Band > 0)))) return false;
         Bands.Clear();
         return true;
     }
@@ -255,4 +251,10 @@ public sealed class FormworkOptions
     /// (PartCatalog.FormworkDefault). 수량산출 창은 ① 목록의 묶음을 아는 함수를 준다 — 사용자가 목록에서 묶음을 옮긴 부위도 그 묶음대로(core-verify R47 L2).
     /// </summary>
     public Func<string, string?> PartDefault { get; set; } = part => PartCatalog.FormworkDefault(part);
+
+    /// <summary>
+    /// 부위 이름 → 그 부위가 목록에서 든 묶음(PartCatalog.Fill · Floor · Curb …). 기본은 이름으로 짐작(PartCatalog.GroupOf) — 수량산출 창은 ① 목록의 묶음을 준다.
+    /// 기초 카테고리 부재의 밑면을 땅으로 볼지(R53a — 채움 · 바닥 묶음만) · 턱을 수직면 덩어리에서 뺄지(R53a)에 쓴다.
+    /// </summary>
+    public Func<string, string> PartGroup { get; set; } = part => PartCatalog.GroupOf(part);
 }

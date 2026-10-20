@@ -78,7 +78,8 @@ public static class OverlapScene
     /// 덩어리가 두 부재의 겹친 자리 안에 있는지 본다 — 찾은 직후(결합 전)에만 볼 수 있다: 결합하면 잘린 부재의 상자가 줄어, 결합 전에 잰 덩어리가 그 밖에 놓인다.
     /// 틀린 덩어리는 쌍에서도 떼어 둔다(결합 뒤에 다시 읽을 때도 그리지 않게).
     /// </param>
-    public static Data Read(Document doc, IReadOnlyList<OverlapPair> pairs, bool verify)
+    /// <param name="extra">그림에 꼭 넣을 부재(R54 결합 방향 쌍의 두 부재 — 거르기의 답과 상관없이).</param>
+    public static Data Read(Document doc, IReadOnlyList<OverlapPair> pairs, bool verify, IEnumerable<ElementId>? extra = null)
     {
         var watch = Stopwatch.StartNew();
         var data = new Data();
@@ -97,6 +98,8 @@ public static class OverlapScene
         foreach (var pair in pairs)
             foreach (var id in new[] { pair.Winner, pair.Loser })
                 if (doc.GetElement(id) != null && seen.Add(id.Value)) ids.Add(id);
+        foreach (var id in extra ?? Enumerable.Empty<ElementId>())
+            if (doc.GetElement(id) != null && seen.Add(id.Value)) ids.Add(id);
 
         var builders = new List<MeshBuilder?>();
         var boxes = new List<Box3>();              // 부재의 경계상자(모델 안쪽 좌표 · m) — 덩어리의 자가검증에 쓴다

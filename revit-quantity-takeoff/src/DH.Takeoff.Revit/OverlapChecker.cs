@@ -36,6 +36,41 @@ public sealed class OverlapPair
 }
 
 /// <summary>
+/// 결합 방향이 기준(겹친 자리 순위 — DeductRank)과 반대인 결합 한 쌍(R54 모델 검증 B): 이미 결합돼 겹치지는 않지만, 겹친 자리가 순위가 높은 쪽(Keep)에서
+/// 빠져 있다(순위가 낮은 Cutter 가 Keep 을 자름 — 이번 헌치가 보를 자른 경우). 기준대로 바꾸면 Keep 이 그 자리를 얻고 Cutter 에서 빠진다.
+/// </summary>
+public sealed class ReversedJoin
+{
+    public ElementId Keep = ElementId.InvalidElementId;     // 기준대로면 남을 부재(지금은 잘림)
+    public ElementId Cutter = ElementId.InvalidElementId;   // 지금 자르는 부재(기준대로면 잘릴 쪽)
+    public string KeepName = "", CutterName = "", KeepPart = "", CutterPart = "";
+    public int KeepRank, CutterRank;
+    /// <summary>
+    /// 순위도 «나중에 침»도 같고 카테고리 차례만 반대인 쌍 — 기준표가 말하지 않으므로 «참고»(수 · 일괄 · 알림에서 뺌 — core-verify R54 계획 M3).
+    /// 같은 순위라도 한쪽만 «나중에 침»이면 나중 부재가 지는 것이 기준이다(참고 아님).
+    /// </summary>
+    public bool SameRank;
+    /// <summary>사람이 일부러 정한 결합(모델 검증 창의 사용자 모드로 맞바꿔 결합한 쌍 — ZonePlan.Exceptions · revit-verify 계획 H3). 수 · 일괄 · 알림에서 뺀다.</summary>
+    public bool Human;
+    /// <summary>찾았을 때의 Human(창의 사용자 모드로 적은 기록이 묶음째 되돌려지면 이것으로 돌린다).</summary>
+    public bool HumanAtFind;
+    /// <summary>기준대로 바꾸면 Keep 이 얻는 체적(m³ — 시험 바꾸기로 잰 것 · NaN = 재지 않음).</summary>
+    public double MovedM3 = double.NaN;
+    /// <summary>그때 Cutter 가 잃는 체적(m³ — 일지 · 두 값이 다르면 셋째 부재가 끼었다).</summary>
+    public double CutterLossM3 = double.NaN;
+    /// <summary>재지 못한 까닭 · Revit 이 바꾸기를 거절한 까닭("" = 없음).</summary>
+    public string Note = "";
+    /// <summary>시험에서 Revit 이 바꾸기를 거절했다(그룹 · 남이 가진 부재 · 구조 결합 규칙 — 고치기 단추를 두지 않는다).</summary>
+    public bool Refused;
+    /// <summary>"" = 아직 · Switched = 기준대로 바꿈 · 그 밖 = 못 바꾼 까닭.</summary>
+    public string Status = "";
+    public const string Switched = "기준대로 바꿈";
+
+    /// <summary>목록 · 일괄 · 알림에 드는 줄인가(사람이 정한 쌍 · 같은 순위 «참고»는 빼고).</summary>
+    public bool Counts => !Human && !SameRank;
+}
+
+/// <summary>
 /// 겹침 검사 — 수량을 뽑기 전에, 부재끼리(벽과 벽, 벽과 바닥·상부 슬래브 등) 겹쳐서 두 번 세는 자리를 찾는다.
 /// Revit 에서 '형상 결합'이 된 쌍은 Revit 이 한쪽을 잘라 주므로 겹치지 않는다. 결합 없이 겹쳐만 있는 쌍은
 /// 양쪽 체적에 겹친 부분이 다 들어 있고, 식도 판정도 각자 자기 체적과는 맞으므로 판정으로는 드러나지 않는다.
@@ -58,16 +93,19 @@ public static class OverlapChecker
         public int NotCoexisting; // 자리는 겹치지만 함께 있지 않아 뺀 쌍(디자인 옵션이 다르거나 공정이 겹치지 않음)
         public bool TimedOut;     // 시간 한도 때문에 끝까지 보지 못했다
         public double TotalM3 => Pairs.Sum(p => p.VolumeM3);
-        // 이미 결합됐는데 버림이 잘리는 쪽인 쌍(전에 건 결합 · Revit 이 저절로 건 결합) — «버림은 늘 남기기»와 반대인 채 남아 있다.
-        // [우선순위대로 결합] 때 FixLeanOrder 가 자르는 순서를 바꾼다(JACK 2026-10-14 «결합할 때 함께 바꾸기»). 바꾸고 나면 못 바꾼 것만 남는다.
-        public List<(ElementId Lean, ElementId Other)> LeanCut = new();
-        public int LeanSwitched;  // FixLeanOrder 가 바꾼 쌍의 수
-        // 이미 결합됐는데 나중에 치는 부재(받침 · PAD · 디딤판 · 중간슬래브 · 트라프 · 헌치 — 부위 목록의 '나중에 침')가 구조체를 자르는 쪽인 쌍(Keep = 남을 구조체 · Later = 잘릴 나중 부재) —
-        // «나중 부재는 늘 잘림»(JACK 2026-10-15)과 반대인 채 남아 있다. [우선순위대로 결합] 때 버림과 같은 길(FixLeanOrder)로 구조체가 자르게 바꾼다.
-        public List<(ElementId Keep, ElementId Later)> LaterCut = new();
-        public int LaterSwitched;
-        public string LaterSwitchedParts = "";   // 순서를 바꾸려던 나중 부재의 부위별 수(«중간슬래브 3 · 헌치 2» — 결합 뒤 창의 알림 · revit-verify R46 M2)
+        // 결합 방향(B — R54 · JACK 2026-10-20 «보는 그대로 뽑고 헌치에서 제함»): 이미 결합됐는데 순위가 낮은 쪽이 높은 쪽을 자르는 쌍 — 겹친 자리가 기준과
+        // 반대 부재에서 빠져 있다. 전의 «버림이 잘림»(LeanCut) · «나중 부재가 깎음»(LaterCut)도 이 안에 든다. FindReversed 가 찾고, 시험 바꾸기로 옮겨질 부피를 잰다.
+        // [모두 기준대로] · 줄의 [기준대로 바꾸기] 때 FixLeanOrder 가 순서를 바꾼다(JACK 2026-10-14 «결합할 때 함께 바꾸기»). 바꾸고 나면 Status 가 Switched.
+        public List<ReversedJoin> Reversed = new();
+        public int ReversedSwitched;     // 바꾼 쌍의 수(이 실행)
+        public int Touching;             // 반대로 결합됐지만 바꿔도 두 부재 체적이 같은(닿기만 한) 쌍 — 목록에 넣지 않고 수만(눌러도 아무 일 없는 줄 금지)
+        public int ReversedUnmeasured;   // 옮겨질 부피를 재지 못한 쌍(시간 한도 · 읽기 전용 · 시험 오류) — 목록에는 남는다(고치기는 된다)
+        public long ReversedMs;          // 결합 방향을 찾고 잰 시간
+        public List<string> ReversedLines = new();   // 일지 줄(쌍마다 «자르는 쪽 → 잘리는 쪽 · 순위 · 옮겨질 부피»)
         public List<ElementId> FloorsGrown = new();   // 결합 순서를 바꿔 덩이가 는 바닥(나누지 않음 — 산출식이 «직접 넣어야 함»이 될 수 있어 알린다 · revit-verify R46 L5)
+
+        /// <summary>목록 · 일괄 · 알림에 넣는 결합 방향 줄(사람이 정한 쌍 · 같은 순위의 «참고» 줄 · 이미 바꾼 줄은 빼고).</summary>
+        public IEnumerable<ReversedJoin> ReversedToFix => Reversed.Where(r => r.Counts && r.Status.Length == 0);
         // 이미 결합돼(전에 건 결합 · Revit 이 저절로 건 결합) 결합 전보다 덩이가 많은 벽 · 구조 기둥 — Before = 결합 전 덩이 수 · Now = 지금 덩이 수.
         // [우선순위대로 결합] 때(겹친 쌍이 없으면 작은 창 단추) SplitJoined 가 덩이마다 나눈다(JACK 2026-10-15 «이미 결합된 두 덩이도 함께 나누기»). 나누고 나면 비운다.
         public List<(ElementId Id, int Before, int Now)> Unsplit = new();
@@ -84,42 +122,37 @@ public static class OverlapChecker
     }
 
     /// <summary>
-    /// 겹친 자리의 주인(JACK 2026-10-07 "슬래브 우선"): 버림 > 기초 > 슬래브(바닥) > 기둥 > 벽 > 보 > 일반 모델.
-    /// 슬래브는 통째로 세고 벽·기둥·보는 슬래브에 닿는 면까지만 센다(참고 산출서의 배수지 벽체가 이 방식 — 벽 높이 = 내부 높이).
-    /// 버림은 무엇으로 그렸든 맨 앞(JACK 2026-10-14 "버림은 늘 남기기" — 지침 수도설계 부속서 9 의 버림 수량 «버림_B × 버림_H × L»은
-    /// 위에 무엇이 있든 버림 층 전체다): 버림을 일반 모델로 그려도 벽에 잘리지 않고, 기초 · 슬래브와 겹쳐도 버림이 남는다.
-    /// 나중에 치는 부위(부위 목록의 '나중에 침' — 받침 · PAD · 출입구 디딤판 · 중간슬래브 · 트라프 · 헌치 …)는 무엇으로 그렸든 맨 뒤(JACK 2026-10-15 «나중 부재가 늘 잘림» —
-    /// 구조체를 먼저 치고 붙여 치므로 겹친 자리는 구조체의 것이다 · 거푸집도 구조체 면이 온전해야 맞게 나온다). 버림과는 버림이 남는다.
-    /// 숫자가 작을수록 우선. 같은 급이면 먼저 만든(Id 가 작은) 부재가 남는다.
+    /// 겹친 자리의 주인 = 겹친 자리 주인표(R54 — DeductRank · JACK 2026-10-20 «기준은 시공 순서 · 보는 그대로 뽑고 헌치에서 제함»): 부위 목록의 «겹친 자리»
+    /// 순위가 높은(숫자가 작은) 부재가 남고, 같은 순위면 카테고리 차례(기초 › 바닥 › 기둥 › 벽 › 보 › 그 밖) → 먼저 만든(Id 가 작은) 부재.
+    /// 버림은 무엇으로 그렸든 1(JACK 2026-10-14 «버림은 늘 남기기» — 지침 수도설계 부속서 9 «버림_B × 버림_H × L»). 부위가 빈 부재는 카테고리로
+    /// (기초 · 바닥 2 · 기둥 4 · 벽 5 · 보 7 · 그 밖 9 — 옛 카테고리 차례와 같은 차례). 전의 «나중에 침은 늘 짐»(R46)은 순위표가 대신한다 —
+    /// «나중에 침»은 거푸집 뜻으로만 남는다(FormworkAnalyzer.GivesWay).
     /// </summary>
-    /// <param name="laterPart">부위 이름 → 나중에 치는 부위인가(LaterParts). 없으면 나중 부재를 따로 보지 않는다.</param>
-    public static int Priority(Document doc, Element el, Func<string, bool>? laterPart = null)
+    public static int RankOf(Document doc, Element el, DeductRank.Table table)
     {
-        if (IsLean(doc, el)) return -1;
-        if (laterPart != null && IsLater(el, laterPart)) return LaterPriority;
-        BuiltInCategory cat;
-        try { cat = el.Category?.BuiltInCategory ?? BuiltInCategory.INVALID; }
-        catch { cat = BuiltInCategory.INVALID; }
-        return cat switch
-        {
-            BuiltInCategory.OST_StructuralFoundation => 0,
-            BuiltInCategory.OST_Floors => 1,
-            BuiltInCategory.OST_StructuralColumns => 2,
-            BuiltInCategory.OST_Walls => 3,
-            BuiltInCategory.OST_StructuralFraming => 4,
-            BuiltInCategory.OST_GenericModel => 5,
-            _ => 9,
-        };
+        if (IsLean(doc, el)) return DeductRank.Lean;
+        string part;
+        try { part = ZoneScene.Text(el, ZoneScene.PartParam); }
+        catch { part = ""; }
+        return table.RankOf(part, CalcSheetExporter.KindOf(el), lean: false);
     }
 
-    public const string PriorityText = "버림 > 기초 > 슬래브(바닥) > 기둥 > 벽 > 보 > 일반 모델 > 나중에 치는 부위(받침·PAD·디딤판·중간슬래브·트라프·헌치 …) (같은 급이면 먼저 만든 부재)";
+    /// <summary>같은 순위일 때의 카테고리 차례(DeductRank.KindOrder).</summary>
+    public static int KindOrderOf(Element el) => DeductRank.KindOrder(CalcSheetExporter.KindOf(el));
 
-    /// <summary>나중에 치는 부재의 급 — 어느 카테고리보다 뒤.</summary>
-    public const int LaterPriority = 10;
+    /// <summary>모델에 저장된 부위 목록으로 지은 순위표(읽지 못하면 대표 목록의 처음 값).</summary>
+    public static DeductRank.Table RankTable(Document doc)
+    {
+        try { return new DeductRank.Table(ZonePlanStore.Read(doc).Plan.Parts); }
+        catch { return new DeductRank.Table(null); }
+    }
+
+    /// <summary>창 · 일지 · 결과표에 쓰는 기준 한 줄(순위표에서 만든다 — core-verify R54 계획 L2).</summary>
+    public static string PriorityText => DeductRank.Summary;
 
     /// <summary>
-    /// 부위 이름 → 나중에 치는 부위인가: 모델에 저장된 부위 목록의 '나중에 침'(없는 이름 · 저장된 목록이 없거나 읽지 못하면 대표 목록의 처음 값 — 받침·PAD 묶음).
-    /// 수량산출 창의 거푸집(① 의 목록)과 같은 규칙이다(PartCatalog.IsLater).
+    /// 부위 이름 → 나중에 치는 부위인가(거푸집 뜻 — R54 부터 겹친 자리 주인은 순위표가 정한다): 모델에 저장된 부위 목록의 '나중에 침'(없는 이름 · 저장된 목록이
+    /// 없거나 읽지 못하면 대표 목록의 처음 값 — 받침·PAD 묶음). 수량산출 창의 거푸집(① 의 목록)과 같은 규칙이다(PartCatalog.IsLater).
     /// </summary>
     public static Func<string, bool> LaterParts(Document doc)
     {
@@ -162,7 +195,8 @@ public static class OverlapChecker
         public required Element El;
         public required List<Solid> Solids;
         public required XYZ Min, Max;
-        public int Prio;
+        public int Rank, Order;                             // 겹친 자리 순위 · 같은 순위일 때의 카테고리 차례(DeductRank)
+        public bool Later;                                  // 부위 목록의 «나중에 침» — 같은 순위면 진다(DeductRank.Beats 둘째 열쇠)
         public long Option = -1, OptionSet = -1;            // 디자인 옵션과 그 세트(주 모델이면 -1)
         public int Created = -1, Demolished = int.MaxValue; // 만든 공정·철거한 공정의 차례(없으면 처음부터·끝까지)
     }
@@ -207,7 +241,8 @@ public static class OverlapChecker
     {
         var found = new Found();
         var items = new List<Item>();
-        var laterPart = LaterParts(doc);                // 나중에 치는 부위(맨 뒤 급) — 저장된 부위 목록으로 한 번 정한다
+        var table = RankTable(doc);                     // 겹친 자리 순위 — 저장된 부위 목록으로 한 번 정한다
+        var laterPart = LaterParts(doc);                // «나중에 침» — 같은 순위에서 진다
         var phaseOrder = new Dictionary<long, int>(); // 공정 Id → 차례
         try
         {
@@ -224,7 +259,7 @@ public static class OverlapChecker
             try { solids = SolidReader.Solids(el); bb = el.get_BoundingBox(null); }
             catch { continue; }
             if (solids.Count == 0 || bb == null) continue;
-            var item = new Item { El = el, Solids = solids, Min = bb.Min, Max = bb.Max, Prio = Priority(doc, el, laterPart) };
+            var item = new Item { El = el, Solids = solids, Min = bb.Min, Max = bb.Max, Rank = RankOf(doc, el, table), Order = KindOrderOf(el), Later = IsLater(el, laterPart) };
             ReadExistence(item, phaseOrder);
             items.Add(item);
         }
@@ -243,29 +278,12 @@ public static class OverlapChecker
                 if (limit != null && watch.Elapsed > limit) { found.TimedOut = true; return Sorted(found); }
                 if (!CanCoexist(a, b)) { found.NotCoexisting++; continue; } // 디자인 옵션·공정이 달라 함께 있지 않는 쌍
 
-                // 이미 형상 결합된 쌍은 Revit 이 한쪽을 잘라 놓았다 — 겹치지 않는다.
-                // 다만 버림이 낀 쌍에서 버림이 잘리는 쪽이면(옛 순서) 적어 둔다 — 창이 알린다(R35 core M2).
-                // 그 판정은 따로 감싼다 — 거기서 오류가 나도 결합된 쌍은 늘 건너뛴다(R36 revit L7).
+                // 이미 형상 결합된 쌍은 Revit 이 한쪽을 잘라 놓았다 — 겹치지 않는다. 자르는 방향이 기준과 반대인지는 따로 한 바퀴(FindReversed — 닿기만 한
+                // 결합은 상자 여유 때문에 이 순회에 들지 않고 · 시간 한도도 따로다 — revit-verify R54 계획 M2). 판정 오류가 나도 결합된 쌍은 늘 건너뛴다(R36 revit L7).
                 bool joinedAlready = false;
                 try { joinedAlready = JoinGeometryUtils.AreElementsJoined(doc, a.El, b.El); }
                 catch { }
-                if (joinedAlready)
-                {
-                    if ((a.Prio == -1) != (b.Prio == -1))
-                    {
-                        var (lean, other) = a.Prio == -1 ? (a, b) : (b, a);
-                        try { if (!JoinGeometryUtils.IsCuttingElementInJoin(doc, lean.El, other.El)) found.LeanCut.Add((lean.El.Id, other.El.Id)); }
-                        catch { }
-                    }
-                    // 나중에 치는 부재가 구조체를 자르는 쪽이면(옛 순서 · 카테고리 순서로 건 결합) 적어 둔다 — «나중 부재는 늘 잘림»(JACK 2026-10-15).
-                    else if ((a.Prio == LaterPriority) != (b.Prio == LaterPriority))
-                    {
-                        var (later, keep) = a.Prio == LaterPriority ? (a, b) : (b, a);
-                        try { if (JoinGeometryUtils.IsCuttingElementInJoin(doc, later.El, keep.El)) found.LaterCut.Add((keep.El.Id, later.El.Id)); }
-                        catch { }
-                    }
-                    continue;
-                }
+                if (joinedAlready) continue;
 
                 var pieces = withBlobs ? new List<Solid>() : null;
                 double m3 = Intersection(a.Solids, b.Solids, out bool failed, pieces);
@@ -293,6 +311,310 @@ public static class OverlapChecker
     }
 
     private const int ColumnLinesInJournal = 100;   // 일지에 적는 기둥 줄의 한도(기둥이 아주 많은 모델)
+
+    /// <summary>
+    /// 결합 방향(B — R54 · revit-verify 계획 M2): 대상 부재마다 결합된 상대(GetJoinedElements — 쌍은 한 번)를 보고, 순위가 낮은 쪽이 높은 쪽을 자르면 found.Reversed 에 넣는다.
+    /// 상대는 모델의 대상(CollectApplicable) 가운데 콘크리트로 분류되지 않은 것을 뺀 것 — 선택 실행이어도 선택 밖 상대는 본다(NoteUnsplit 과 같은 까닭).
+    /// 순위도 카테고리 차례도 같은 쌍은 기준이 말하지 않으므로 보지 않는다 · 순위만 같은 쌍은 «참고»(SameRank). 사람이 정한 결합(exceptions)은 Human.
+    /// measure = 시험 바꾸기로 옮겨질 부피를 잰다(MeasureReversed — 트랜잭션을 열고 되돌린다). 재지 않으면(빠른 검사) 수만 센다.
+    /// 「형상 잘라내기」(SolidSolidCut)는 GetJoinedElements 에 나오지 않아 대상이 아니다. 모델은 바꾸지 않는다.
+    /// </summary>
+    public static void FindReversed(Document doc, IEnumerable<ElementId> targets, Found found, IReadOnlyList<JoinException>? exceptions,
+                                    bool measure, TimeSpan? limit = null)
+    {
+        var watch = Stopwatch.StartNew();
+        found.Reversed.Clear();
+        found.Touching = found.ReversedUnmeasured = 0;
+        found.ReversedLines.Clear();
+        var table = RankTable(doc);
+        var applicable = new HashSet<long>(DimensionExtractor.CollectApplicable(doc).Select(id => id.Value));
+        var concrete = new Dictionary<long, bool>();
+        bool Concrete(Element el)
+        {
+            if (!concrete.TryGetValue(el.Id.Value, out bool yes))
+            {
+                try { yes = ConcreteFilter.Classify(doc, el).Kind != ConcreteFilter.Kind.NotConcrete; }
+                catch { yes = false; }
+                concrete[el.Id.Value] = yes;
+            }
+            return yes;
+        }
+        var laterPart = LaterParts(doc);
+        var ranks = new Dictionary<long, (int rank, bool later, int order)>();
+        (int rank, bool later, int order) Ranked(Element el)
+        {
+            if (!ranks.TryGetValue(el.Id.Value, out var r)) ranks[el.Id.Value] = r = (RankOf(doc, el, table), IsLater(el, laterPart), KindOrderOf(el));
+            return r;
+        }
+        var human = new HashSet<(string, string)>((exceptions ?? Array.Empty<JoinException>()).Select(e => (e.Keep, e.Cut)));
+        var seen = new HashSet<(long, long)>();
+        foreach (var id in targets)
+        {
+            var el = doc.GetElement(id);
+            if (el == null) continue;
+            ICollection<ElementId> joined;
+            try { joined = JoinGeometryUtils.GetJoinedElements(doc, el); }
+            catch { continue; }
+            foreach (var oid in joined)
+            {
+                if (!seen.Add(KeyOf(id, oid)) || !applicable.Contains(oid.Value)) continue;
+                var other = doc.GetElement(oid);
+                if (other == null || !Concrete(other)) continue;
+                var (ra, la, oa) = Ranked(el);
+                var (rb, lb, ob) = Ranked(other);
+                bool decided = DeductRank.Decided(ra, la, rb, lb);              // 순위 · «나중에 침»으로 갈림(같은 순위면 나중 부재가 진다)
+                if (!decided && oa == ob) continue;                              // 기준이 말하지 않는 쌍(카테고리까지 같음 — Id 로만 갈린다)
+                var (keep, cutter) = DeductRank.Beats(ra, la, oa, id.Value, rb, lb, ob, oid.Value) ? (el, other) : (other, el);
+                bool fine;
+                try { fine = JoinGeometryUtils.IsCuttingElementInJoin(doc, keep, cutter); }
+                catch { continue; }                                               // 결합 상태를 읽지 못하면 넘어간다
+                if (fine) continue;
+                var (rk, rc) = keep.Id == el.Id ? (ra, rb) : (rb, ra);
+                string ku = SafeUid(keep), cu = SafeUid(cutter);
+                found.Reversed.Add(new ReversedJoin
+                {
+                    Keep = keep.Id, Cutter = cutter.Id, KeepName = Name(doc, keep), CutterName = Name(doc, cutter),
+                    KeepPart = PartText(keep), CutterPart = PartText(cutter), KeepRank = rk, CutterRank = rc,
+                    SameRank = !decided, Human =ku.Length > 0 && cu.Length > 0 && human.Contains((cu, ku)), HumanAtFind = ku.Length > 0 && cu.Length > 0 && human.Contains((cu, ku)),
+                });
+            }
+        }
+        if (measure) MeasureReversed(doc, found, limit);
+        found.ReversedMs = watch.ElapsedMilliseconds;
+        foreach (var r in found.Reversed) found.ReversedLines.Add(ReversedLine(r));
+    }
+
+    private static readonly TimeSpan QuickLimit = TimeSpan.FromSeconds(5);   // 빠른 검사의 잘리기 전 모양 교차 한도
+
+    /// <summary>
+    /// [수량산출] 시작의 빠른 결합 방향 검사(revit-verify R54 계획 H4 — 알림 수 = 창 수가 되게, 트랜잭션 없이): FindReversed(재지 않음) 뒤
+    /// 닿기만 한 결합을 거른다 — ① Revit 경고 «결합됐지만 안 닿음»(JoiningDisjoint · JoiningDisjointWarn)에 든 쌍 ② 지금 잘린 쪽이 패밀리 인스턴스(보 · 기둥)면
+    /// 잘리기 전 모양(GetOriginalGeometry)과 자르는 쪽 입체가 겹치지 않는 쌍. 그래도 못 가르는 쌍(잘린 쪽이 벽 · 바닥 — 잘리기 전 모양을 못 읽음)은 «최대»로 센다.
+    /// 돌려주는 값 = (겹침이 확실한 수, 최대 수). 사람이 정한 쌍 · 참고 줄은 세지 않는다. 모델은 바꾸지 않는다.
+    /// </summary>
+    public static (int sure, int most) QuickReversed(Document doc, IEnumerable<ElementId> targets, Found found)
+    {
+        IReadOnlyList<JoinException>? exceptions = null;
+        try { exceptions = ZonePlanStore.Read(doc).Plan.Exceptions; } catch { }
+        FindReversed(doc, targets, found, exceptions, measure: false);
+        var disjoint = new HashSet<(long, long)>();
+        try
+        {
+            var ids = new[] { BuiltInFailures.JoinElementsFailures.JoiningDisjoint, BuiltInFailures.JoinElementsFailures.JoiningDisjointWarn };
+            foreach (var warning in doc.GetWarnings())
+            {
+                if (!ids.Contains(warning.GetFailureDefinitionId())) continue;
+                var failing = warning.GetFailingElements().ToList();
+                for (int i = 0; i < failing.Count; i++)
+                    for (int j = i + 1; j < failing.Count; j++) disjoint.Add(KeyOf(failing[i], failing[j]));
+            }
+        }
+        catch { disjoint.Clear(); }
+        int sure = 0, most = 0;
+        var watch = Stopwatch.StartNew();
+        foreach (var r in found.Reversed.Where(r => r.Counts).ToList())
+        {
+            if (disjoint.Contains(KeyOf(r.Keep, r.Cutter))) { found.Reversed.Remove(r); found.Touching++; continue; }
+            // 교차는 5 초까지만(revit-verify R54 설치 전 L4 — [수량산출] 시작이 더 늦지 않게) · 넘으면 남은 쌍은 «최대»로 센다.
+            if (watch.Elapsed > QuickLimit) { most++; continue; }
+            switch (OriginalOverlaps(doc, r))
+            {
+                case true: sure++; most++; break;
+                case false: found.Reversed.Remove(r); found.Touching++; break;
+                default: most++; break;
+            }
+        }
+        return (sure, most);
+    }
+
+    // 지금 잘린 쪽(Keep)이 패밀리 인스턴스면 잘리기 전 모양과 자르는 쪽 입체가 겹치는가(true · false). 가를 수 없으면 null(벽 · 바닥 · 읽지 못함 — «최대»로 센다).
+    // 잘리기 전 모양은 패밀리(심벌) 좌표다 — 인스턴스의 변환을 건다(RevitAPI.xml 2026 GetOriginalGeometry · revit-verify R54 설치 전 M2). 그 자리가 맞는지는
+    // «지금 상자 ⊆ 잘리기 전 상자 + 여유»로 본다(결합 · 자르기는 빼기만 하므로 늘 참이다 — 늘림 등으로 거짓이면 모름).
+    private static bool? OriginalOverlaps(Document doc, ReversedJoin r)
+    {
+        try
+        {
+            if (doc.GetElement(r.Keep) is not FamilyInstance keep || doc.GetElement(r.Cutter) is not Element cutter) return null;
+            var geometry = keep.GetOriginalGeometry(SolidReader.ReadOptions());
+            if (geometry == null) return null;
+            var now = keep.get_BoundingBox(null);
+            if (now == null) return null;
+            var original = SolidReader.Solids(geometry.GetTransformed(keep.GetTransform()));
+            if (original.Count == 0) return null;
+            XYZ? lo = null, hi = null;
+            foreach (var solid in original)
+            {
+                var b = solid.GetBoundingBox();
+                foreach (var corner in new[] { b.Min, b.Max, new XYZ(b.Min.X, b.Min.Y, b.Max.Z), new XYZ(b.Max.X, b.Max.Y, b.Min.Z),
+                                               new XYZ(b.Min.X, b.Max.Y, b.Min.Z), new XYZ(b.Max.X, b.Min.Y, b.Max.Z), new XYZ(b.Min.X, b.Max.Y, b.Max.Z), new XYZ(b.Max.X, b.Min.Y, b.Min.Z) })
+                {
+                    var p = b.Transform.OfPoint(corner);
+                    lo = lo == null ? p : new XYZ(Math.Min(lo.X, p.X), Math.Min(lo.Y, p.Y), Math.Min(lo.Z, p.Z));
+                    hi = hi == null ? p : new XYZ(Math.Max(hi.X, p.X), Math.Max(hi.Y, p.Y), Math.Max(hi.Z, p.Z));
+                }
+            }
+            const double slack = 0.01 / FtToM;   // 1 cm
+            if (lo == null || hi == null || now.Min.X < lo.X - slack || now.Min.Y < lo.Y - slack || now.Min.Z < lo.Z - slack ||
+                now.Max.X > hi.X + slack || now.Max.Y > hi.Y + slack || now.Max.Z > hi.Z + slack) return null;
+            double m3 = Intersection(original, SolidReader.Solids(cutter), out bool failed);
+            if (failed) return null;
+            return m3 >= MinOverlapM3;
+        }
+        catch { return null; }
+    }
+
+    private static string SafeUid(Element el)
+    {
+        try { return el.UniqueId ?? ""; } catch { return ""; }
+    }
+
+    private static string PartText(Element el)
+    {
+        try { return ZoneScene.Text(el, ZoneScene.PartParam).Trim(); } catch { return ""; }
+    }
+
+    /// <summary>일지 한 줄 — «결합 방향 · 자르는 쪽 → 잘리는 쪽 · 순위 · 옮겨질 부피».</summary>
+    public static string ReversedLine(ReversedJoin r) =>
+        $"결합 방향\t{r.Cutter.Value.ToString(CultureInfo.InvariantCulture)}({(r.CutterPart.Length > 0 ? r.CutterPart : "부위 없음")} · {DeductRank.Label(r.CutterRank)}) 이 자름 → " +
+        $"{r.Keep.Value.ToString(CultureInfo.InvariantCulture)}({(r.KeepPart.Length > 0 ? r.KeepPart : "부위 없음")} · {DeductRank.Label(r.KeepRank)})\t" +
+        $"옮겨질 {(double.IsNaN(r.MovedM3) ? "-" : r.MovedM3.ToString("0.######", CultureInfo.InvariantCulture))} m3 · 자르는 쪽 변화 {(double.IsNaN(r.CutterLossM3) ? "-" : r.CutterLossM3.ToString("0.######", CultureInfo.InvariantCulture))} m3" +
+        (r.SameRank ? "\t참고(같은 순위)" : "") + (r.Human ? "\t사람이 정함" : "") + (r.Note.Length > 0 ? "\t" + r.Note : "") + (r.Status.Length > 0 ? "\t" + r.Status : "");
+
+    /// <summary>
+    /// 결합 방향 쌍마다 기준대로 바꾸면 옮겨질 부피를 잰다(revit-verify R54 계획 M1): 시험 트랜잭션에서 SwitchJoinOrder → Regenerate → 두 부재의 입체 체적(SolidReader —
+    /// 볼륨 매개변수 아님) → RollBack. 바꿀 수 없는 부재(그룹 · 남이 가진 부재 · 활성 아닌 디자인 옵션 — WhyNotEditable)는 시험 없이 «못 바꿈».
+    /// 서로 부재를 나누지 않는 쌍끼리 한 시험에 묶어 Regenerate 한 번(체적 변화가 그 쌍의 것이게). 바꾼 뒤 정말 기준대로 잘리는지 다시 본다(오류는 Commit 때만
+    /// 처리되고 RollBack 은 QuietFailures 를 부르지 않는다). 시험 안에서는 판정 · 모양 기록을 건드리지 않는다(롤백 — 남는 것 없음).
+    /// 옮겨질 부피가 0(1e-4 m³ 미만 — 닿기만 한 결합)이면 목록에서 빼고 수만 센다(Touching — 눌러도 아무 일 없는 줄 금지). 시간 한도를 넘으면 남은 쌍은 «안 잼».
+    /// 문서를 고칠 수 없으면(읽기 전용 — 트랜잭션을 열 수 없음) 하나도 재지 않는다.
+    /// </summary>
+    public static void MeasureReversed(Document doc, Found found, TimeSpan? limit)
+    {
+        var watch = Stopwatch.StartNew();
+        var todo = new List<ReversedJoin>();
+        foreach (var r in found.Reversed)
+        {
+            if (!double.IsNaN(r.MovedM3) || r.Status.Length > 0) continue;
+            var keep = doc.GetElement(r.Keep);
+            var cutter = doc.GetElement(r.Cutter);
+            if (keep == null || cutter == null) { r.Note = "부재를 찾을 수 없음"; r.Refused = true; continue; }
+            string? blocked = FormulaAutoFill.WhyNotEditable(doc, keep) ?? FormulaAutoFill.WhyNotEditable(doc, cutter);
+            if (blocked != null) { r.Note = "못 바꿈: " + blocked; r.Refused = true; continue; }
+            todo.Add(r);
+        }
+        if (doc.IsReadOnly)
+        {
+            foreach (var r in todo) r.Note = "안 잼(읽기 전용 문서)";
+            found.ReversedUnmeasured += todo.Count;
+            return;
+        }
+        // 서로 부재를 나누지 않는 쌍끼리 묶는다(먼저 온 묶음에 넣을 수 있으면 넣는다).
+        var batches = new List<(List<ReversedJoin> pairs, HashSet<long> ids)>();
+        foreach (var r in todo)
+        {
+            var slot = batches.FirstOrDefault(b => !b.ids.Contains(r.Keep.Value) && !b.ids.Contains(r.Cutter.Value));
+            if (slot.pairs == null) { slot = (new List<ReversedJoin>(), new HashSet<long>()); batches.Add(slot); }
+            slot.pairs.Add(r);
+            slot.ids.Add(r.Keep.Value);
+            slot.ids.Add(r.Cutter.Value);
+        }
+        bool Late() => limit != null && watch.Elapsed > limit;
+        void Unmeasured(IEnumerable<ReversedJoin> pairs)
+        {
+            foreach (var r in pairs) (r.MovedM3, r.CutterLossM3, r.Note) = (double.NaN, double.NaN, "안 잼(시간 한도)");
+            found.ReversedUnmeasured += pairs.Count();
+        }
+        // 한 시험 트랜잭션: 쌍들을 바꾸고 Regenerate 한 번 · 두 부재 체적 · RollBack.
+        void Trial(List<ReversedJoin> pairs)
+        {
+            var before = new Dictionary<long, double>();
+            foreach (var r in pairs)
+            {
+                before[r.Keep.Value] = VolumeM3(doc.GetElement(r.Keep));
+                before[r.Cutter.Value] = VolumeM3(doc.GetElement(r.Cutter));
+            }
+            using var tx = new Transaction(doc, "DH 모델 검증 — 결합 방향 시험");
+            try
+            {
+                if (tx.Start() != TransactionStatus.Started) throw new InvalidOperationException("시험 트랜잭션을 열 수 없음");
+                var options = tx.GetFailureHandlingOptions();
+                options.SetFailuresPreprocessor(new QuietFailures());
+                options.SetClearAfterRollback(true);
+                tx.SetFailureHandlingOptions(options);
+                var tried = new List<ReversedJoin>();
+                foreach (var r in pairs)
+                {
+                    try
+                    {
+                        var keep = doc.GetElement(r.Keep);
+                        var cutter = doc.GetElement(r.Cutter);
+                        if (!JoinGeometryUtils.IsCuttingElementInJoin(doc, keep, cutter)) JoinGeometryUtils.SwitchJoinOrder(doc, keep, cutter);
+                        tried.Add(r);
+                    }
+                    catch (Exception ex)
+                    {
+                        r.Refused = true;
+                        r.Note = "못 바꿈: " + (ex is Autodesk.Revit.Exceptions.ApplicationException ? "Revit 이 이 두 부재의 자르는 순서를 바꾸지 못하게 함 (" + ex.Message + ")" : ex.Message);
+                    }
+                }
+                doc.Regenerate();
+                foreach (var r in tried)
+                {
+                    var keep = doc.GetElement(r.Keep);
+                    var cutter = doc.GetElement(r.Cutter);
+                    bool switched = keep != null && cutter != null && JoinGeometryUtils.AreElementsJoined(doc, keep, cutter)
+                                    && JoinGeometryUtils.IsCuttingElementInJoin(doc, keep, cutter);
+                    if (!switched) { r.Refused = true; r.Note = "못 바꿈: 자르는 순서를 바꾸지 못함"; continue; }
+                    double keepAfter = VolumeM3(keep), cutterAfter = VolumeM3(cutter);
+                    if (double.IsNaN(keepAfter) || double.IsNaN(cutterAfter) || double.IsNaN(before[r.Keep.Value]) || double.IsNaN(before[r.Cutter.Value]))
+                    {
+                        r.Note = "안 잼(입체를 읽지 못함)";
+                        found.ReversedUnmeasured++;
+                        continue;
+                    }
+                    r.MovedM3 = keepAfter - before[r.Keep.Value];
+                    r.CutterLossM3 = before[r.Cutter.Value] - cutterAfter;
+                }
+            }
+            catch (Exception ex)
+            {
+                foreach (var r in pairs.Where(r => double.IsNaN(r.MovedM3) && !r.Refused)) r.Note = "안 잼(시험 오류: " + ex.Message + ")";
+                found.ReversedUnmeasured += pairs.Count(r => double.IsNaN(r.MovedM3) && !r.Refused);
+            }
+            finally
+            {
+                try { if (tx.HasStarted() && !tx.HasEnded()) tx.RollBack(); } catch { }
+            }
+        }
+        static bool Touches(ReversedJoin r) => !double.IsNaN(r.MovedM3) && Math.Abs(r.MovedM3) < MinOverlapM3 && Math.Abs(r.CutterLossM3) < MinOverlapM3;
+        foreach (var (pairs, _) in batches)
+        {
+            if (Late()) Unmeasured(pairs);
+            else Trial(pairs);
+        }
+        // 묶어서 잰 쌍 가운데 바꿔도 같게 나온 것은 홀로 한 번 더 잰다 — 같은 이웃(모서리 기둥 · 슬래브)을 나눠 가진 다른 쌍의 바꾸기가 그 쌍의 체적을
+        // 바꿔 «닿기만 함»으로 잘못 빠지지 않게(revit-verify R54 설치 전 L5). 시간이 없으면 빼지 않고 «안 잼»으로 남긴다.
+        foreach (var r in batches.Where(b => b.pairs.Count > 1).SelectMany(b => b.pairs).Where(Touches).ToList())
+        {
+            if (Late()) { Unmeasured(new[] { r }); continue; }
+            (r.MovedM3, r.CutterLossM3) = (double.NaN, double.NaN);
+            Trial(new List<ReversedJoin> { r });
+        }
+        // 닿기만 한 결합(바꿔도 두 부재 체적이 같음)은 목록에서 뺀다.
+        int before0 = found.Reversed.Count;
+        found.Reversed.RemoveAll(Touches);
+        found.Touching += before0 - found.Reversed.Count;
+        // 많이 옮겨지는 것부터(재지 못한 것은 뒤 — 쌍의 차례 = 창의 열쇠라 찾은 뒤 한 번만 정한다).
+        found.Reversed = found.Reversed.OrderByDescending(r => double.IsNaN(r.MovedM3) ? -1 : Math.Abs(r.MovedM3)).ThenBy(r => r.Keep.Value).ThenBy(r => r.Cutter.Value).ToList();
+    }
+
+    // 부재 입체 체적의 합(m³). 부재가 없거나 입체를 읽지 못하면 NaN.
+    private static double VolumeM3(Element? el)
+    {
+        if (el == null) return double.NaN;
+        try { return SolidReader.Solids(el).Sum(s => s.Volume) * Ft3ToM3; }
+        catch { return double.NaN; }
+    }
 
     /// <summary>
     /// 이미 결합돼(전에 건 결합 · Revit 이 저절로 건 결합) 결합 전보다 덩이가 많은 벽 · 구조 기둥이면 found.Unsplit 에 적는다(JACK 2026-10-15).
@@ -350,8 +672,8 @@ public static class OverlapChecker
         Math.Min(a.Max.Y, b.Max.Y) - Math.Max(a.Min.Y, b.Min.Y) > BoxSlackFt &&
         Math.Min(a.Max.Z, b.Max.Z) - Math.Max(a.Min.Z, b.Min.Z) > BoxSlackFt;
 
-    // a 가 b 를 이긴다(겹친 자리를 가진다) = 우선순위가 높다, 같으면 Id 가 작다.
-    private static bool Beats(Item a, Item b) => a.Prio != b.Prio ? a.Prio < b.Prio : a.El.Id.Value < b.El.Id.Value;
+    // a 가 b 를 이긴다(겹친 자리를 가진다) = 순위가 높다 → 같으면 «나중에 침»이 아닌 쪽 → 카테고리 차례 → Id 가 작다(DeductRank.Beats).
+    private static bool Beats(Item a, Item b) => DeductRank.Beats(a.Rank, a.Later, a.Order, a.El.Id.Value, b.Rank, b.Later, b.Order, b.El.Id.Value);
 
     /// <summary>
     /// 두 부재의 입체가 겹친 체적(m³). 일부라도 계산하지 못했으면 failed.
@@ -442,7 +764,7 @@ public static class OverlapChecker
     public const string NotNeeded = "결합 필요 없음(앞선 결합으로 겹침이 없어짐)";
     public const string StillOverlapText = "결합됐지만 겹침이 남음";
     public const string UnremeasuredText = "결합됨(다시 재지 못함)";
-    public const string MultiPieceText = "결합 못 함: 나눈 부재의 여러 조각과 겹침 — 겹침 검사를 다시 실행해 주세요";
+    public const string MultiPieceText = "결합 못 함: 나눈 부재의 여러 조각과 겹침 — 모델 검증을 다시 실행해 주세요";
     public const string SplitFailText = OverlapRow.SplitFail + ": ";
 
     /// <summary>
@@ -832,6 +1154,8 @@ public static class OverlapChecker
 
                 // 잘리는 쪽(벽 · 기둥)의 덩이 수를 결합하기 전에 센다 — 결합으로 늘었을 때만 나눈다(R36 core M-3 · revit L5).
                 int lumpsBefore = OverlapSplitter.LumpCount(lose);
+                // 모양 기록(R52b): 결합 전에 위치·부위 확인이 지금 모양과 맞았으면, 결합 뒤 모양으로 고쳐 적는다 — 우리 결합은 «설계 변경»이 아니다.
+                bool winSame = !PlaceStamp.ValueOf(win).Changed, loseSame = !PlaceStamp.ValueOf(lose).Changed;
 
                 using var tx = new Transaction(doc, "DH 겹침 결합");
                 var quiet = new QuietFailures();
@@ -860,6 +1184,8 @@ public static class OverlapChecker
                     // 결합하면 체적이 바뀐다 — 전에 적힌 '일치'가 그대로 남지 않게 판정을 바꿔 둔다(판정이 적힌 부재만).
                     FormulaAutoFill.MarkVerdictStale(win);
                     FormulaAutoFill.MarkVerdictStale(lose);
+                    if (winSame) PlaceStamp.Reshape(win);
+                    if (loseSame) PlaceStamp.Reshape(lose);
                     var status = tx.Commit();
                     anyCommitted |= status == TransactionStatus.Committed;
                     p.Status = status == TransactionStatus.Committed ? Joined
@@ -974,6 +1300,8 @@ public static class OverlapChecker
             if (blocked != null) { lines.Add(head + "못 바꿈: " + blocked); left.Add(pair); continue; }
             int lumpsBefore = OverlapSplitter.LumpCount(other);
             int floorBefore = OverlapSplitter.FloorLumpCount(other);
+            // 모양 기록(R52b): 순서를 바꾸면 두 부재의 모양이 다 바뀐다 — 바꾸기 전에 확인이 지금 모양과 맞았으면 바꾼 뒤 모양으로 고쳐 적는다.
+            bool leanSame = !PlaceStamp.ValueOf(lean).Changed, otherSame = !PlaceStamp.ValueOf(other).Changed;
             using var tx = new Transaction(doc, "DH 겹침 결합 — " + title);
             var quiet = new QuietFailures();
             try
@@ -995,6 +1323,8 @@ public static class OverlapChecker
                 }
                 FormulaAutoFill.MarkVerdictStale(lean);
                 FormulaAutoFill.MarkVerdictStale(other);
+                if (leanSame) PlaceStamp.Reshape(lean);
+                if (otherSame) PlaceStamp.Reshape(other);
                 var status = tx.Commit();
                 if (status == TransactionStatus.Committed)
                 {
@@ -1161,8 +1491,19 @@ public static class OverlapChecker
                 $"{p.Winner.Value}\t{Cell(p.WinnerName)}\t{p.Loser.Value}\t{Cell(p.LoserName)}\t{p.VolumeM3:0.######}\t{Cell(p.Status + (p.Status == Joined && p.Swallowed ? " · 잘린 쪽이 다 들어감(겹쳐 그린 부재?)" : ""))}\t" +
                 $"{(double.IsNaN(p.AfterM3) ? "" : p.AfterM3.ToString("0.######", CultureInfo.InvariantCulture))}\t" +
                 $"{Cell(p.Split)}{(p.Pieces.Count > 1 ? " [" + string.Join(",", p.Pieces.Select(id => id.Value)) + "]" : "")}\t{(p.New ? "고친 뒤 새로 찾음" : "")}\n");
+        // 결합 방향(R54): 남을 쪽 = 기준대로면 남는 부재(지금 잘림) · 잘릴 쪽 = 지금 자르는 부재.
+        if (found.Reversed.Count > 0)
+        {
+            sb.Append("\n결합 방향\n남을쪽Id\t남을쪽\t남을쪽 순위\t잘릴쪽Id\t잘릴쪽(지금 자름)\t잘릴쪽 순위\t바뀔체적(m3)\t결과\t표시\n");
+            foreach (var r in found.Reversed)
+                sb.Append(CultureInfo.InvariantCulture,
+                    $"{r.Keep.Value}\t{Cell(r.KeepName)}\t{DeductRank.Label(r.KeepRank)}\t{r.Cutter.Value}\t{Cell(r.CutterName)}\t{DeductRank.Label(r.CutterRank)}\t" +
+                    $"{(double.IsNaN(r.MovedM3) ? "" : r.MovedM3.ToString("0.######", CultureInfo.InvariantCulture))}\t{Cell(r.Status)}\t" +
+                    $"{Cell(string.Join(" · ", new[] { r.Human ? "사람이 정함" : "", r.SameRank ? "참고(같은 순위)" : "", r.Note }.Where(t => t.Length > 0)))}\n");
+        }
         sb.Append(CultureInfo.InvariantCulture,
             $"\n검사한 부재\t{found.Checked}\n겹친 쌍\t{found.Pairs.Count}\n겹친 체적 합(m3)\t{found.TotalM3:0.######}\n" +
+            $"결합 방향(기준과 반대)\t{found.Reversed.Count(r => r.Counts)}\n바꿔도 같아 뺀 반대 결합\t{found.Touching}\n" +
             $"잴 수 없었던 쌍\t{found.Unmeasured}\n함께 있지 않아 뺀 쌍(디자인 옵션·공정)\t{found.NotCoexisting}\n끝까지 봤는가\t{(found.TimedOut ? "아니오(시간 한도)" : "예")}\n우선순위\t{PriorityText}\n");
         File.WriteAllText(path, sb.ToString(), new UTF8Encoding(true));
         try
