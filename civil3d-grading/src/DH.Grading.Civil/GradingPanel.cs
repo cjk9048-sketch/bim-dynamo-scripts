@@ -29,6 +29,7 @@ internal sealed class GradingPanel : UserControl
     private const string G = "정지창";
 
     private readonly TextBox _cutH, _cutW, _cutS, _fillH, _fillW, _fillS, _tInt, _tW;
+    private readonly TextBox _blend;   // ★[v103.1.15] 구배 전이(m) — 사면 구간 끝 전이 띠 길이
     private readonly RadioButton _shapeMiter, _shapeRound;
     private readonly CheckBox _terrace;
     // ★[JACK 0910] 옹벽 형태 콤보는 <b>[기타 설정]</b>으로 옮겼다 — 이 창에는 없다.
@@ -48,6 +49,26 @@ internal sealed class GradingPanel : UserControl
     private readonly Button _compose;
     private readonly TextBlock _compInfo;
     private readonly Panel _compRow;
+    // ★★★[v103.3 · JACK 1021 «옹벽형태를 계획부지생성 도킹바에 넣고 … 뒷채움거리와 사면경사로 터파기 지표면»] 옹벽 묶음 —
+    //   형식 콤보(기타 설정에서 옮김 · 레지스트리 그대로) + «뒷채움 터파기» 켬 · 뒤 · 앞 · 기초 · 경사(도면 기록 WALLEXCAV)
+    private readonly ComboBox _cutWall, _fillWall, _exSlope;
+    private readonly CheckBox _exOn;
+    private readonly TextBox _exBack, _exFront, _exFoot;
+    /// <summary>★[v103.3.1 · JACK 1021] 터파기 법면 소단 — 켬 · 높이(m) · 폭(m).</summary>
+    private readonly CheckBox _exBenchOn;
+    private readonly TextBox _exBenchH, _exBenchW;
+    /// <summary>★[v103.3.1 · JACK 1021] 뒷채움 터파기 예시 그림 — 칸을 고치면 바로 다시 그린다(<see cref="RedrawExcav"/>).</summary>
+    private readonly Canvas _canvasExcav;
+    /// <summary>그 그림틀 — 높이를 사면 그림에 맞춘다.</summary>
+    private readonly Viewbox _excavBox;
+    /// <summary>★[v103.3.1] 안쪽 칸(사면 설정 · 기타 설정 · 사면형상 · 산지 대소단 · 옹벽)이 접혔을 때 제목 옆 요약(<see cref="SyncSubBadges"/>).</summary>
+    private readonly TextBlock _slopeBadge, _etcBadge, _shapeBadge, _terrBadge, _wallBadge;
+    /// <summary>칸을 치다 멈추면 그때 한 번 적는다 — 글자마다 도면을 고치면 되돌리기 목록이 칸 글자로 찬다.</summary>
+    private readonly System.Windows.Threading.DispatcherTimer _exTimer;
+    /// <summary>적을 도면 — 치는 사이 도면을 바꾸면 앞 도면에 먼저 적고 넘어간다(<see cref="SyncTo"/>).</summary>
+    private AcDoc? _exDoc;
+    /// <summary>그 도면에 적혀 있는 값 — 같으면 안 적는다.</summary>
+    private DH.Grading.Core.WallExcav.Settings _exStored = DH.Grading.Core.WallExcav.Settings.Default;
 
     /// <summary>★[JACK 0915] <b>합친 칸의 요약 한 줄</b> — 접었을 때 제목 옆에 뜬다.
     /// 종전의 <c>_targetBadge</c>(무엇을 골랐나)와 <c>_slopeBadge</c>(값이 맞나)를 합쳤다.
@@ -151,10 +172,16 @@ internal sealed class GradingPanel : UserControl
         // ── ① 절토성토 옵션 (절토/성토 + 산지 대소단) ─────────────────────
         //   ★[JACK 0910] <b>둘을 한 칸으로 합쳤다.</b> 대소단은 절성토 사면의 <b>변형</b>이지
         //   따로 정하는 물건이 아니다 — 켜면 그 값이 두 예시 그림에 바로 나타난다.
-        // ★위 칸과 <b>같은 상자</b>다 — 이름만 남기고 합쳤다(JACK 0915).
-        //   아래 코드는 손대지 않는다: 담는 자리가 같으면 내용은 <b>쓰던 그대로</b> 들어간다.
-        var secSlope = secTarget;
-        secSlope.Children.Add(SubHead("사면을 어떻게 계단으로 세울지"));
+        // ★★[v103.3.1 · JACK 1021 «배치는 사면 설정에 절토 성토내용을 넣고 접기 펼치기 기능을 넣고 기타 설정이라고 만들어서
+        //   그안에 사면형상, 산지 대소단 옹벽을 접기 펼치기로 넣어줘»] 큰 칸 안의 칸 둘 — «사면 설정»(절토 · 성토) · «기타 설정»(사면형상 · 산지 대소단 · 옹벽 — 각각 접기).
+        //   [계획부지생성하기]는 그대로 큰 칸 끝(값을 다 정한 뒤 — JACK 0910). 접힌 칸은 제목 옆에 요약 한 줄(<see cref="SyncSubBadges"/>).
+        //   종전 중간 제목 «사면을 어떻게 계단으로 세울지» · «사면형상» · «산지 대소단» · «옹벽»은 칸 제목이 대신한다.
+        // ★★[v103.3.3 · JACK 1021 «사면설정과 기타설정이 엇갈리게 펼쳐지게 · 처음은 사면설정이 열려 있고 기타설정을 누르면 사면설정은 접힘 ·
+        //   다시 사면설정을 누르면 기타설정이 접힘 · 처음 팝업이 열릴 때는 사면설정이 열려 있을 것»] 둘을 한 아코디언 묶음으로 · 창을 만들 때마다 첫 값으로(기억을 지운다)
+        const string SetGroup = "정지:설정";
+        GradingDialog.ForgetOpen("정지:사면설정", "정지:기타설정");
+        var secSlope = GradingDialog.AddCollapsible(secTarget, "사면 설정", out _slopeBadge,
+            "절토 · 성토 사면을 어떻게 계단으로 세울지", open: true, key: "정지:사면설정", group: SetGroup, level: 2);
         // ══ ★★★[JACK 0910] <b>예시는 이 칸 안에, 두 장 다.</b> ═══════════════
         //
         //   <para>JACK: <i>"예시 이미지는 절토/성토안에 넣어줘. 그림을 작게하더라도
@@ -195,33 +222,107 @@ internal sealed class GradingPanel : UserControl
         Trio(colFill, GradingSettings.FillBenchHeight, GradingSettings.FillBenchWidth,
              GradingForm.SlopeShown(GradingSettings.FillSlope), out _fillH, out _fillW, out _fillS);
 
-        // ★사면형상은 <b>두 칸 아래 온 폭</b>에 둔다 — 한쪽 칸에 넣으면 절토에만 붙는 값처럼 보인다.
-        //   ★[JACK 0910] 제목 글씨를 <b>절토·성토·산지 대소단과 같게</b> 맞춘다(중간 제목).
-        secSlope.Children.Add(SubHead("사면형상"));
-        _shapeMiter = GradingDialog.AddRadioPair(secSlope, "", "직각", GradingSettings.MiterConvex,
+        var secEtc = GradingDialog.AddCollapsible(secTarget, "기타 설정", out _etcBadge,
+            "사면형상 · 산지 대소단 · 옹벽", open: false, key: "정지:기타설정", group: SetGroup, level: 2);
+        // ★사면형상은 절토 · 성토 둘 다에 붙는 값 — 한쪽 칸에 넣으면 절토에만 붙는 값처럼 보인다(그래서 따로 칸).
+        var secShape = GradingDialog.AddCollapsible(secEtc, "사면형상", out _shapeBadge,
+            "볼록한 모서리를 직각으로 세울지 둥글릴지", open: false, key: "정지:사면형상", level: 3);
+        _shapeMiter = GradingDialog.AddRadioPair(secShape, "", "직각", GradingSettings.MiterConvex,
                                                  out _shapeRound, "라운드",
             "볼록한 모서리를 직각으로 세울지 둥글릴지 — 옹벽 장수가 크게 달라집니다.",
             out Panel shapeRow);
         // 제목을 위로 뺐으니 왼쪽 이름칸(150px)은 자리를 안 차지하게 한다.
         if (shapeRow.Children.Count > 0 && shapeRow.Children[0] is TextBlock shapeLab) shapeLab.Width = 0;
 
-        // ── ② 산지 대소단 — ★[JACK 0910] 같은 칸 안으로 들어왔다 ──────────
-        //   제목만 <b>작은 머리글</b>로 남긴다(칸을 또 나누면 접기가 두 겹이 된다).
-        var terraceHead = SubHead("산지 대소단");
-        terraceHead.ToolTip = "산지전용허가법 — 일정 높이마다 넓은 소단을 둡니다";
-        secSlope.Children.Add(terraceHead);
+        // ── 산지 대소단 — ★[v103.3.1] 기타 설정 안의 칸(종전 중간 제목의 풍선 글은 칸 제목 풍선으로)
+        var secTerr = GradingDialog.AddCollapsible(secEtc, "산지 대소단", out _terrBadge,
+            "산지전용허가법 — 일정 높이마다 넓은 소단을 둡니다", open: false, key: "정지:산지대소단", level: 3);
         _terrace = new CheckBox
         {
             Content = "계단식 산지(대소단) 적용",
             IsChecked = GradingSettings.MountainTerrace,
             Margin = new Thickness(0, 0, 0, 8),
         };
-        secSlope.Children.Add(_terrace);
+        secTerr.Children.Add(_terrace);
         // ★값 두 칸도 <b>가로로</b> — 위 절성토 줄과 같은 모양이라야 눈이 안 헷갈린다.
         var tRow = new WrapPanel { Margin = new Thickness(2, 0, 0, 6) };
         _tInt = Cell(tRow, "대소단 간격(m)", GradingSettings.TerraceInterval);
         _tW = Cell(tRow, "대소단 폭(m)", GradingSettings.TerraceWidth);
-        secSlope.Children.Add(tRow);
+        secTerr.Children.Add(tRow);
+
+        // ── 옹벽 — ★★★[v103.3 · JACK 1021] 형식(기타 설정에서 옮김) + «뒷채움 터파기» ────────────
+        //   형식은 3D 모양만 정한다(InfraWorks · 노리선 · 예시 그림) — 레지스트리 그대로(사용자 전역).
+        //   터파기는 형식과 따로 켠다(JACK 1021) — 켜면 모든 옹벽 · 종단 · 횡단을 그릴 때 `옹벽터파기_DH`를 짓는다. 이 도면에만(WALLEXCAV).
+        //   설명은 풍선 글 + ★[v103.3.1 · JACK 1021 «사면설정처럼 연동되는 설명»] 예시 그림(칸을 고치면 바로 다시 그린다).
+        var secWall = GradingDialog.AddCollapsible(secEtc, "옹벽", out _wallBadge,
+            "옹벽 형식 · 뒷채움 터파기", open: true, key: "정지:옹벽", level: 3);
+        _cutWall = GradingDialog.AddStyleRow(secWall, "절토 옹벽 형식", GradingSettings.CutWallStyle, out _);
+        _fillWall = GradingDialog.AddStyleRow(secWall, "성토 옹벽 형식", GradingSettings.FillWallStyle, out _);
+        _cutWall.ToolTip = _fillWall.ToolTip = "3D 옹벽(InfraWorks)·노리선·예시 그림의 옹벽 모양입니다. 정지면 형상과 터파기는 이 값과 무관합니다.";
+        _cutWall.SelectionChanged += (_, __) => StyleChanged(cut: true);
+        _fillWall.SelectionChanged += (_, __) => StyleChanged(cut: false);
+        var exDef = DH.Grading.Core.WallExcav.Settings.Default;
+        _exOn = new CheckBox
+        {
+            Content = "뒷채움 터파기",
+            IsChecked = exDef.On,
+            Margin = new Thickness(0, 2, 0, 6),
+            ToolTip = "켜면 종단·횡단을 그릴 때 옹벽 앞면마다 기초 밑 바닥과 경사 법면으로 터파기면(옹벽터파기_DH · 숨김)을 만들어\n"
+                    + "종단·횡단에 보이고 횡단 수량의 터파기·되메우기에 넣습니다. 모든 옹벽 형식에 적용 · 이 도면에만 적용됩니다.",
+        };
+        secWall.Children.Add(_exOn);
+        secWall.Children.Add(new Border
+        {
+            BorderBrush = DhBrand.Line, BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6), Background = DhBrand.Card, Padding = new Thickness(4),
+            Margin = new Thickness(0, 0, 0, 6),
+            Child = _excavBox = ExcavDiagram.Wrap(out _canvasExcav),
+        });
+        // ★[v103.3.3 · JACK 1021 «뒷채움 터파기 그림을 사면설정의 그림과 같은 높이사이즈로 키울 것»] 사면 그림이 실제로 그려진 높이를 그대로 따른다(창 폭이 바뀌어도)
+        if (_canvasCut.Parent is FrameworkElement slopeBox)
+            slopeBox.SizeChanged += (_, e) => { if (e.NewSize.Height > 1) _excavBox.Height = e.NewSize.Height; };
+        var exRow = new WrapPanel { Margin = new Thickness(2, 0, 0, 6) };
+        _exBack = Cell(exRow, "뒤(m)", exDef.Back);
+        _exFront = Cell(exRow, "앞(m)", exDef.Front);
+        _exFoot = Cell(exRow, "기초(m)", exDef.Foot);
+        ((FrameworkElement)_exBack.Parent).ToolTip = "옹벽 앞면에서 흙 쪽으로 터파기 바닥 끝까지(기초 뒷굽 + 여유). 첫 값 2.0m";
+        ((FrameworkElement)_exFront.Parent).ToolTip = "옹벽 앞면에서 앞쪽으로 터파기 바닥 끝까지(앞굽 + 여유). 첫 값 0.6m";
+        ((FrameworkElement)_exFoot.Parent).ToolTip = "벽 밑에서 터파기 바닥까지(기초 깊이). 첫 값 1.0m — KDS 11 80 05 최소";
+        var slopeCell = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 6, 4) };
+        slopeCell.Children.Add(new TextBlock { Text = "경사", FontSize = 11, Foreground = DhBrand.Sub, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) });
+        _exSlope = new ComboBox { Width = 140, Height = 26, VerticalContentAlignment = VerticalAlignment.Center };
+        slopeCell.Children.Add(_exSlope);
+        slopeCell.ToolTip = "터파기 법면 기울기.";
+        exRow.Children.Add(slopeCell);
+        secWall.Children.Add(exRow);
+        // ★[v103.3.1 · JACK 1021 «터파기선의 소단과 소단나누는 높이 기준이 없어» → «켬/끔 + 두 칸»] 소단 켬 · 높이 · 폭(종전 고정 «5m 넘으면 3m마다 1m»)
+        var bRowEx = new WrapPanel { Margin = new Thickness(2, 0, 0, 6) };
+        _exBenchOn = new CheckBox
+        {
+            Content = "소단",
+            IsChecked = exDef.BenchOn,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 10, 4),
+            ToolTip = "켜면 터파기 바닥에서 높이마다 법면에 소단을 둡니다(깊이가 높이보다 얕으면 생기지 않습니다).",
+        };
+        bRowEx.Children.Add(_exBenchOn);
+        _exBenchH = Cell(bRowEx, "높이(m)", exDef.BenchH);
+        _exBenchW = Cell(bRowEx, "폭(m)", exDef.BenchW);
+        ((FrameworkElement)_exBenchH.Parent).ToolTip = "터파기 바닥에서 이 높이마다 소단. 첫 값 3m";
+        ((FrameworkElement)_exBenchW.Parent).ToolTip = "소단 폭. 첫 값 1m";
+        secWall.Children.Add(bRowEx);
+        FillSlopeItems(exDef.Slope);
+        _exTimer = new System.Windows.Threading.DispatcherTimer { Interval = System.TimeSpan.FromMilliseconds(700) };
+        // ★[설치 전 검토 중간 3] 타이머 안의 예외는 받는 곳이 없어 AutoCAD 치명 오류가 된다 — 통째로 감싼다
+        _exTimer.Tick += (_, __) => { _exTimer.Stop(); try { SaveExcav(null); } catch (System.Exception ex) { try { DiagLog.Append("\n■ 옹벽 터파기 설정 적기 실패 — " + ex.Message + "\n"); } catch { } } };
+        foreach (var b in new[] { _exBack, _exFront, _exFoot, _exBenchH, _exBenchW })
+            b.TextChanged += (_, __) => { RedrawExcav(); if (_loading) return; if (ExcavFromUi(out var _ok)) { _exDoc ??= Doc; _exTimer.Stop(); _exTimer.Start(); } };
+        _exOn.Checked += (_, __) => { SyncExcavLock(); RedrawExcav(); if (!_loading) { _exDoc ??= Doc; SaveExcav("on"); } };
+        _exOn.Unchecked += (_, __) => { SyncExcavLock(); RedrawExcav(); if (!_loading) { _exDoc ??= Doc; SaveExcav("on"); } };
+        _exBenchOn.Checked += (_, __) => { SyncExcavLock(); RedrawExcav(); if (!_loading) { _exDoc ??= Doc; SaveExcav("bench"); } };
+        _exBenchOn.Unchecked += (_, __) => { SyncExcavLock(); RedrawExcav(); if (!_loading) { _exDoc ??= Doc; SaveExcav("bench"); } };
+        _exSlope.SelectionChanged += (_, __) => { RedrawExcav(); if (!_loading) { _exDoc ??= Doc; SaveExcav("slope"); } };
+        SyncExcavLock();
 
         // ══ ★★★[JACK 0910] <b>만들기는 값을 다 정한 뒤에</b> ═══════════════
         //
@@ -245,7 +346,7 @@ internal sealed class GradingPanel : UserControl
         };
         try { if (DhBrand.Skin != null) _build.Style = (Style)DhBrand.Skin["DhPrimary"]; } catch { }
         _build.Click += (_, __) => { if (Apply()) PickSession.Send(Doc, PickCommands.CmdBuild); };
-        secSlope.Children.Add(_build);
+        secTarget.Children.Add(_build);   // ★[v103.3.1] 안쪽 칸을 접어도 단추는 큰 칸 끝에 남는다
 
         // ── 5. 사면 수정 ──────────────────────────────────────────────────
         //   ★★★[계획 8단계 · JACK 지시 3 "도킹창안에 사면수정 기능을 넣어서 … UI에서 사면수정버튼은 없애고"]
@@ -287,6 +388,11 @@ internal sealed class GradingPanel : UserControl
             ToolTip = "켜면 옹벽 변환은 옹벽만 짓고, 정지면_DH 합성은 [옹벽 합성]으로 한 번에 합니다.\n내보내기·터파기·이어서 전에는 빠진 옹벽을 먼저 합성합니다. 이 도면에만 적용됩니다.",
         };
         secFix.Children.Add(_defer);
+        // ★★★[v103.1.15 · JACK 1020 «고른 구간 안쪽 · 양끝 10m · 정지 창에서 바꿀 수 있게»] 구배 전이(m) — 설명은 풍선 글만(JACK 1014 «설명 적게»)
+        var bRow = new WrapPanel { Margin = new Thickness(2, 0, 0, 4) };
+        _blend = Cell(bRow, "구배 전이(m)", GradingSettings.ZoneBlendLength);
+        bRow.ToolTip = "사면 변환으로 구배·소단을 바꾼 구간의 양끝 안쪽에서 사면이 서서히 바뀌는 길이입니다.\n0이면 끊어서 바뀝니다(경계가 깨질 수 있음). 바꾼 값은 다음 재생성부터 들어갑니다.";
+        secFix.Children.Add(bRow);
         var cRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6), Visibility = Visibility.Collapsed };
         _compose = new Button { Content = "옹벽 합성", MinWidth = 104, Height = 30, Margin = new Thickness(0, 0, 8, 0), ToolTip = "모아 둔 옹벽을 정지면_DH에 한 번에 합성합니다(DHWALLCOMP)." };
         _compose.Click += (_, __) => PickSession.Send(Doc, "DHWALLCOMP");
@@ -316,7 +422,7 @@ internal sealed class GradingPanel : UserControl
         //   ★칸을 벗어날 때(LostFocus)는 <b>이 저장소가 이미 버린 길</b>이다 —
         //   지층 창에서 JACK 0831: <i>"XY 좌표를 쳐서 바꿀 때도 바로바로 안 바뀌고
         //   꼭 어딘가 다른 곳을 눌러 줘야 한다."</i> 되밟지 않는다.
-        foreach (var b in new[] { _cutH, _cutW, _cutS, _fillH, _fillW, _fillS, _tInt, _tW })
+        foreach (var b in new[] { _cutH, _cutW, _cutS, _fillH, _fillW, _fillS, _tInt, _tW, _blend })
             b.TextChanged += (_, __) => { PushValues(); Redraw(); };
         _shapeMiter.Checked += (_, __) => { PushValues(); Redraw(); };
         _shapeRound.Checked += (_, __) => { PushValues(); Redraw(); };
@@ -329,9 +435,8 @@ internal sealed class GradingPanel : UserControl
         _terrace.Checked += (_, __) => { SyncTerrace(); PushValues(); Redraw(); };
         _terrace.Unchecked += (_, __) => { SyncTerrace(); PushValues(); Redraw(); };
         SyncTerrace();
-        // ★[JACK 0910] 옹벽 형태는 <b>[기타 설정]</b>으로 갔다 — 이 창에 콤보가 없다.
-        //   예시 그림은 그래도 그 값을 따른다(<see cref="Draw"/>가 <c>GradingSettings</c>를 직접 읽는다).
-        //   기타 설정에서 저장하면 <c>GradingPalette.RedrawExample</c>이 여기 그림을 다시 그린다.
+        // ★[v103.3 · JACK 1021] 옹벽 형태가 <b>이 창으로 돌아왔다</b>(0910엔 [기타 설정]으로 갔었다) — 고르는 즉시
+        //   GradingSettings · 레지스트리에 넣고 예시 그림을 다시 그린다(<see cref="StyleChanged"/>). 그림은 여전히 <c>GradingSettings</c>를 읽는다.
 
         // ══ 배치 ★★★[UI검토 0909 · P1] ═════════════════════════════════
         //
@@ -382,19 +487,28 @@ internal sealed class GradingPanel : UserControl
         //   해지만 있고 <c>Loaded</c>가 없으면, 한 번 접었다 편 뒤로 <b>영영 안 갱신</b>된다 —
         //   도면엔 빨간 띠가 뜨는데 창은 "○ 미선택"에 [지표면 생성]이 회색인 채로 남는다.
         //   ★두 번 붙지 않게 <b>떼고 붙인다</b>(이벤트는 중복 구독이 된다).
-        void Wire() { try { PickSession.Changed -= RefreshPicks; PickSession.Changed += RefreshPicks; } catch { } }
+        void Wire()
+        {
+            try { PickSession.Changed -= RefreshPicks; PickSession.Changed += RefreshPicks; } catch { }
+            try { AcadApp.DocumentManager.DocumentToBeDestroyed -= OnDocClosing; AcadApp.DocumentManager.DocumentToBeDestroyed += OnDocClosing; } catch { }
+        }
         Loaded += (_, __) => { Wire(); RefreshPicks(); };
         // ★★[검토 0910 · 보통4] <b>폭은 짐작하지 말고 잰다.</b>
         //   <c>PaletteSet.Size</c>는 <b>장치 픽셀</b>인데 WPF 배치는 <b>DIP</b>다 —
         //   글자 배율 125%인 화면이면 780px가 624dip가 되어, 780으로 넓힌 이유(그림 글자가 읽히는 것)가
         //   <b>그 화면에서만 조용히 무너진다</b>. 한 줄 재어 로그에 남기면 다음에 헤매지 않는다.
         SizeChanged += (_, __) => LogWidthOnce();
-        Unloaded += (_, __) => { try { PickSession.Changed -= RefreshPicks; } catch { } };
+        Unloaded += (_, __) =>
+        {
+            try { PickSession.Changed -= RefreshPicks; } catch { }
+            try { AcadApp.DocumentManager.DocumentToBeDestroyed -= OnDocClosing; } catch { }
+        };
         Wire();
         RefreshPicks();
         _miterAtSync = GradingSettings.MiterConvex;
         PushValues();   // ★칸 색·단추 켜짐을 처음부터 맞춰 둔다
         Redraw();
+        FillExcav(Doc);
     }
 
     // ── 도면 따라가기 ─────────────────────────────────────────────────────
@@ -414,6 +528,8 @@ internal sealed class GradingPanel : UserControl
         //   "안 하고 지나가는 것"이 아니라 <b>한 일을 지우는 것</b>이라 반드시 말해야 한다.
         //   ★막지는 않는다. 도면이 바뀌면 그 도면 값을 보여 주는 것이 맞기 때문이다.
         bool dirty = Dirty();
+        // ★[v103.3] 치다 만 터파기 값은 <b>앞 도면에 먼저 적는다</b> — 그 도면에서 친 값이다(지우면 한 일을 말없이 버린다)
+        if (_exTimer.IsEnabled) { _exTimer.Stop(); try { SaveExcav(null); } catch { } }
 
         try { GradingSettings.SyncToDocument(doc); } catch { }
         _loading = true;
@@ -427,9 +543,12 @@ internal sealed class GradingPanel : UserControl
             _fillS.Text = N(GradingForm.SlopeShown(GradingSettings.FillSlope));
             _tInt.Text = N(GradingSettings.TerraceInterval);
             _tW.Text = N(GradingSettings.TerraceWidth);
+            _blend.Text = N(GradingSettings.ZoneBlendLength);
             _shapeMiter.IsChecked = GradingSettings.MiterConvex;
             _shapeRound.IsChecked = !GradingSettings.MiterConvex;
             _terrace.IsChecked = GradingSettings.MountainTerrace;
+            _cutWall.SelectedIndex = (int)GradingSettings.CutWallStyle;
+            _fillWall.SelectedIndex = (int)GradingSettings.FillWallStyle;
         }
         catch { }
         finally { _loading = false; }
@@ -445,6 +564,7 @@ internal sealed class GradingPanel : UserControl
         _miterAtSync = GradingSettings.MiterConvex;
         PushValues();   // ★도면 값으로 갈아 끼운 뒤 칸 색·단추도 다시 맞춘다
         Redraw();
+        FillExcav(doc);
         RefreshPicks();
         // ★[검토 0910] [값 저장]이 없어졌으므로 문구도 고친다 — 없는 단추를 가리키면 안 된다.
         if (dirty) Say("이 도면 값으로 맞췄습니다 — 치고 있던 숫자는 이 도면 값으로 바뀌었습니다.");
@@ -466,9 +586,10 @@ internal sealed class GradingPanel : UserControl
             if (_fillS.Text != N(GradingForm.SlopeShown(GradingSettings.FillSlope))) return true;
             if (_tInt.Text != N(GradingSettings.TerraceInterval)) return true;
             if (_tW.Text != N(GradingSettings.TerraceWidth)) return true;
+            if (_blend.Text != N(GradingSettings.ZoneBlendLength)) return true;
             if ((_shapeMiter.IsChecked == true) != GradingSettings.MiterConvex) return true;
             if ((_terrace.IsChecked == true) != GradingSettings.MountainTerrace) return true;
-            // 옹벽 형태는 이 창에 없다 — [기타 설정]이 가진다.
+            // 옹벽 형태는 고르는 즉시 저장된다(<see cref="StyleChanged"/>) · 터파기 칸은 도면을 바꾸기 전에 앞 도면에 적는다 — 둘 다 여기서 안 본다.
         }
         catch { }
         return false;
@@ -498,7 +619,8 @@ internal sealed class GradingPanel : UserControl
             bool okFS = Gate(_fillS, 0, GradingForm.SlopeMax, out double fs);
             bool okTI = Gate(_tInt, 1, 200, out double ti);
             bool okTW = Gate(_tW, 0, 120, out double tw);
-            _valOk = okCH && okCW && okCS && okFH && okFW && okFS && okTI && okTW;
+            bool okBL = Gate(_blend, 0, 100, out double bl);   // ★[v103.1.15] 구배 전이(m) — GradingParams.Validate와 같은 범위
+            _valOk = okCH && okCW && okCS && okFH && okFW && okFS && okTI && okTW && okBL;
 
             if (_valOk)
             {
@@ -516,6 +638,7 @@ internal sealed class GradingPanel : UserControl
                 GradingSettings.FillSlope = fs;
                 GradingSettings.TerraceInterval = ti;
                 GradingSettings.TerraceWidth = tw;
+                GradingSettings.ZoneBlendLength = bl;
                 GradingSettings.MountainTerrace = _terrace.IsChecked == true;
                 GradingSettings.MiterConvex = _shapeMiter.IsChecked == true;
                 // ★레지스트리(다음 세션 기본값)는 <b>여기서 안 쓴다</b> — 그것은 사람이
@@ -645,6 +768,9 @@ internal sealed class GradingPanel : UserControl
             _fixOk = !busy && madeAny;
             SyncEnabled();
             RefreshComposite();   // ★[v103.1.12] 미루기 칸 · 대기 수도 같은 때에(도면 전환 · 명령 끝 · 찍기 상태)
+            // ★[v103.3] 도면의 터파기 기록이 화면과 다르면(DHRESET · 되돌리기 · 다른 길로 바뀜) 화면을 도면 값으로 — 치는 중(타이머)이면 그대로
+            if (!_exTimer.IsEnabled && WallListStore.ExcavOf(doc?.Database, out _) != _exStored) FillExcav(doc);
+            else SyncExcavLock();
         }
         catch (System.Exception ex)
         {
@@ -704,6 +830,161 @@ internal sealed class GradingPanel : UserControl
         }
     }
 
+    // ══ ★★★[v103.3] 옹벽 묶음 ══════════════════════════════════════════════
+
+    /// <summary>옹벽 형식을 고르면 곧바로 설정 · 레지스트리 · 그림(기타 설정 [저장]이 하던 일 — 그 창에서는 뺐다).
+    /// <c>SaveUserPrefInt</c>를 쓴다 — <c>SaveUserPrefs</c>는 MiterConvex를 함께 써 남의 값이 새어 나간다(검토 0908).</summary>
+    private void StyleChanged(bool cut)
+    {
+        if (_loading) return;
+        try
+        {
+            var cb = cut ? _cutWall : _fillWall;
+            var st = (WallStyle)System.Math.Max(0, cb.SelectedIndex);
+            if (cut) { GradingSettings.CutWallStyle = st; GradingSettings.SaveUserPrefInt("CutWallStyle", (int)st); }
+            else { GradingSettings.FillWallStyle = st; GradingSettings.SaveUserPrefInt("FillWallStyle", (int)st); }
+            Redraw();
+        }
+        catch (System.Exception ex) { try { DiagLog.Append("\n■ 옹벽 형식 저장 실패 — " + ex.Message + "\n"); } catch { } }
+    }
+
+    /// <summary>경사 콤보 목록 — 대표 경사 다섯 + 기록에 목록 밖 값이 있으면 그 값 한 줄(«1:n(목록 밖)» — 말없이 목록 값으로 바꾸지 않는다).</summary>
+    private void FillSlopeItems(double n)
+    {
+        bool was = _loading; _loading = true;
+        try
+        {
+            _exSlope.Items.Clear();
+            foreach (var s in DH.Grading.Core.WallExcav.SlopeNames) _exSlope.Items.Add(s);
+            int i = DH.Grading.Core.WallExcav.SlopeIndex(n);
+            if (i < 0) { _exSlope.Items.Add($"1:{N(n)}(목록 밖)"); i = _exSlope.Items.Count - 1; }
+            _exSlope.SelectedIndex = i;
+            _exSlope.Tag = n;   // 목록 밖 줄의 값
+        }
+        finally { _loading = was; }
+    }
+
+    /// <summary>꺼지면 칸 · 콤보를 잠근다(«안 쓰는 칸은 잠근다» — UI검토 0909). 도면이 없으면 스위치도 잠근다.</summary>
+    private void SyncExcavLock()
+    {
+        bool on = _exOn.IsChecked == true;
+        _exBack.IsEnabled = _exFront.IsEnabled = _exFoot.IsEnabled = _exSlope.IsEnabled = _exBenchOn.IsEnabled = on;
+        _exBenchH.IsEnabled = _exBenchW.IsEnabled = on && _exBenchOn.IsChecked == true;
+        _exOn.IsEnabled = Doc != null;
+    }
+
+    /// <summary>화면 값 → 설정. 칸이 틀리면 그 칸을 물들이고 거짓(적지 않는다).</summary>
+    private bool ExcavFromUi(out DH.Grading.Core.WallExcav.Settings s)
+    {
+        s = DH.Grading.Core.WallExcav.Settings.Default;
+        bool okB = Gate(_exBack, 0, DH.Grading.Core.WallExcav.Settings.BackMax, out double back);
+        bool okF = Gate(_exFront, 0, DH.Grading.Core.WallExcav.Settings.FrontMax, out double front);
+        bool okD = Gate(_exFoot, 0, DH.Grading.Core.WallExcav.Settings.FootMax, out double foot);
+        bool okBH = Gate(_exBenchH, DH.Grading.Core.WallExcav.Settings.BenchHMin, DH.Grading.Core.WallExcav.Settings.BenchHMax, out double bh);
+        bool okBW = Gate(_exBenchW, 0, DH.Grading.Core.WallExcav.Settings.BenchWMax, out double bw);
+        int i = _exSlope.SelectedIndex;
+        double n = i >= 0 && i < DH.Grading.Core.WallExcav.Slopes.Length ? DH.Grading.Core.WallExcav.Slopes[i]
+                 : _exSlope.Tag is double t ? t : DH.Grading.Core.WallExcav.Settings.Default.Slope;
+        if (!(okB && okF && okD && okBH && okBW)) return false;
+        s = new DH.Grading.Core.WallExcav.Settings(_exOn.IsChecked == true, back, front, foot, n, _exBenchOn.IsChecked == true, bh, bw);
+        if (s.Valid(out string why)) return true;
+        // ★[설치 전 검토 중간 2] 칸 하나하나는 맞아도 함께 틀린 것(뒤 + 앞 &lt; 1cm)은 두 칸을 물들인다
+        foreach (var b in new[] { _exBack, _exFront }) { b.Foreground = DhBrand.Warn; b.BorderBrush = DhBrand.Warn; b.BorderThickness = new Thickness(2); b.ToolTip = why; }
+        return false;
+    }
+
+    /// <summary>★[설치 전 검토 중간 3] 치던 도면이 닫히면 — 닫히는 도면에는 적지 않는다(저장 물음이 이미 끝났다) · 적지 못한 것을 알린다.</summary>
+    private void OnDocClosing(object? sender, Autodesk.AutoCAD.ApplicationServices.DocumentCollectionEventArgs e)
+    {
+        try
+        {
+            if (e.Document == null) return;
+            bool pending = _exTimer.IsEnabled && (_exDoc ?? Doc) == e.Document;
+            if (pending) _exTimer.Stop();
+            if (_exDoc == e.Document) _exDoc = null;
+            if (pending) DiagLog.Append($"\n■ 옹벽 터파기 — 닫는 도면({e.Document.Name})이라 치던 칸 값을 적지 않았다\n");
+        }
+        catch { }
+    }
+
+    static bool DocAlive(AcDoc doc)
+    {
+        try { foreach (AcDoc d in AcadApp.DocumentManager) if (d == doc) return true; } catch { }
+        return false;
+    }
+
+    /// <summary>화면 값을 그 도면에 적는다(바뀐 것만 · 문서 잠금 · 로그 한 줄 · 명령창 한 줄).
+    /// <para>★[설치 전 검토 중간 2] 칸 하나가 틀린 채 켬/끔 · 경사를 바꾸면 <b>그 값만</b> 적고(나머지는 도면에 있던 값) 칸 값은 안 적었다고 말한 뒤 화면을 도면 값으로 맞춘다 —
+    /// 종전엔 말없이 아무것도 안 적어 화면은 «꺼짐», 도면은 «켬»이 될 수 있었다.</para></summary>
+    /// <param name="changed">«on» · «slope» = 그 하나를 바꿨다 · null = 칸(타이머 · 도면 바꿈).</param>
+    private void SaveExcav(string? changed)
+    {
+        _exTimer.Stop();                    // ★[재검토 낮음 4] 치던 칸도 이번에 함께 적는다 — 남은 틱이 나중에 다른 도면에 적지 않게
+        var doc = _exDoc ?? Doc;
+        _exDoc = null;
+        if (doc == null || !DocAlive(doc)) return;
+        bool partial = false;
+        if (!ExcavFromUi(out var s))
+        {
+            if (changed == "on") s = _exStored with { On = _exOn.IsChecked == true };
+            else if (changed == "bench") s = _exStored with { BenchOn = _exBenchOn.IsChecked == true };
+            else if (changed == "slope")
+            {
+                int i = _exSlope.SelectedIndex;
+                double n = i >= 0 && i < DH.Grading.Core.WallExcav.Slopes.Length ? DH.Grading.Core.WallExcav.Slopes[i] : _exStored.Slope;
+                s = _exStored with { Slope = n };
+            }
+            else { Say($"옹벽 터파기 — 칸 값이 틀려 도면({System.IO.Path.GetFileName(doc.Name)})에 적지 않았습니다(빨간 칸을 고치세요)."); return; }
+            partial = true;
+        }
+        if (s == _exStored) { if (partial) FillExcav(doc); return; }
+        string err = "";
+        try
+        {
+            using (doc.LockDocument())
+            using (var tr = doc.Database.TransactionManager.StartTransaction())
+            {
+                WallListStore.WriteExcav(doc.Database, tr, s);
+                tr.Commit();
+            }
+        }
+        catch (System.Exception ex) { err = ex.GetType().Name + ": " + ex.Message; }
+        var now = WallListStore.ExcavOf(doc.Database, out string why);
+        bool ok = err.Length == 0 && now == s;
+        if (ok) _exStored = s;
+        try { DiagLog.Append($"\n■ 옹벽 터파기 설정 {s.Text}{(err.Length > 0 ? " ⚠못 적음 " + err : "")} · 도면에 적힌 값 {now.Text}{(why.Length > 0 ? " ⚠" + why : "")}\n"); } catch { }
+        SelfCheckLog.Line("옹벽 터파기 설정", ok, $"{s.Text} · 도면에 적힌 값 {now.Text}{(err.Length > 0 ? " ⚠못 적음 " + err : "")}", doc.Name);
+        string dn = System.IO.Path.GetFileName(doc.Name);
+        Say(ok ? $"옹벽 터파기 {s.Text}({dn}) — 종단·횡단을 다시 그리면 반영됩니다."
+                 + (partial ? " ⚠틀린 칸 값은 적지 않고 도면 값으로 되돌렸습니다." : "")
+               : $"옹벽 터파기 설정을 도면({dn})에 적지 못했습니다 — " + (err.Length > 0 ? err : "되읽은 값이 다릅니다"));
+        if (partial && doc == Doc) FillExcav(doc);
+    }
+
+    /// <summary>그 도면 기록으로 칸을 채운다(못 읽으면 첫 값 + 명령창 ⚠ — 말없이 첫 값으로 덮지 않는다).</summary>
+    private void FillExcav(AcDoc? doc)
+    {
+        var s = WallListStore.ExcavOf(doc?.Database, out string why);
+        _exStored = s;
+        _loading = true;
+        try
+        {
+            _exOn.IsChecked = s.On;
+            _exBack.Text = N(s.Back);
+            _exFront.Text = N(s.Front);
+            _exFoot.Text = N(s.Foot);
+            _exBenchOn.IsChecked = s.BenchOn;
+            _exBenchH.Text = N(s.BenchH);
+            _exBenchW.Text = N(s.BenchW);
+        }
+        finally { _loading = false; }
+        FillSlopeItems(s.Slope);
+        foreach (var b in new[] { _exBack, _exFront, _exFoot, _exBenchH, _exBenchW }) Gate(b, 0, 1e9, out _);   // 색만 되돌린다
+        SyncExcavLock();
+        RedrawExcav();
+        if (why.Length > 0) Say("⚠옹벽 터파기 기록을 못 읽어 첫 값으로 보입니다 — " + why);
+    }
+
     /// <summary>★[JACK 0910] 화면 칸이 없어졌으므로 <b>명령창에만</b> 적는다.
     /// <para>강조 표시(<c>&lt;b&gt;</c>)는 이 저장소 관례대로 <b>벗겨서</b> 보낸다 —
     /// 명령창은 서식을 안 그려서 태그가 글자 그대로 보인다.</para></summary>
@@ -754,6 +1035,54 @@ internal sealed class GradingPanel : UserControl
         // ★[JACK 0910] 둘 다 그린다 — 한쪽 값을 고치면 그쪽 그림만 바뀌는 것이 눈에 보인다.
         Draw(_canvasCut, _cutH, _cutW, _cutS, GradingSettings.CutWallStyle, cut: true);
         Draw(_canvasFill, _fillH, _fillW, _fillS, GradingSettings.FillWallStyle, cut: false);
+        RedrawExcav();   // ★[v103.3.3 · JACK 1021] 터파기 그림의 단높이 · 소단폭이 절토 칸을 따른다 — 요약 줄도 여기서
+    }
+
+    /// <summary>★[v103.3.1 · JACK 1021 «사면설정처럼 연동되는 설명»] 뒷채움 터파기 예시 — 칸 값(틀리면 첫 값)으로 다시 그린다 · 꺼짐이면 옅게.</summary>
+    private void RedrawExcav()
+    {
+        if (_canvasExcav == null || _exSlope == null) return;
+        try
+        {
+            var d = DH.Grading.Core.WallExcav.Settings.Default;
+            int i = _exSlope.SelectedIndex;
+            double n = i >= 0 && i < DH.Grading.Core.WallExcav.Slopes.Length ? DH.Grading.Core.WallExcav.Slopes[i] : _exSlope.Tag is double t ? t : d.Slope;
+            ExcavDiagram.Draw(_canvasExcav, new ExcavDiagram.Spec(
+                On: _exOn.IsChecked == true,
+                Back: P(_exBack, d.Back, 0, DH.Grading.Core.WallExcav.Settings.BackMax, allowZero: true),
+                Front: P(_exFront, d.Front, 0, DH.Grading.Core.WallExcav.Settings.FrontMax, allowZero: true),
+                Foot: P(_exFoot, d.Foot, 0, DH.Grading.Core.WallExcav.Settings.FootMax, allowZero: true),
+                Slope: n,
+                BenchOn: _exBenchOn.IsChecked == true,
+                BenchH: P(_exBenchH, d.BenchH, DH.Grading.Core.WallExcav.Settings.BenchHMin, DH.Grading.Core.WallExcav.Settings.BenchHMax),
+                BenchW: P(_exBenchW, d.BenchW, 0, DH.Grading.Core.WallExcav.Settings.BenchWMax, allowZero: true),
+                // ★[v103.3.3 · JACK 1021 «한 3단정도를 예시로 · 단높이는 위에 사면설정의 절토단높이와 연동»] 단 사이 소단폭도 절토 칸을 따른다(내 판단 — 같은 칸 묶음)
+                StepH: P(_cutH, 5, 0.5, 20),
+                StepW: P(_cutW, 1, 0, 10, allowZero: true)));
+        }
+        catch { }
+        SyncSubBadges();
+    }
+
+    /// <summary>★[v103.3.1] 접힌 안쪽 칸의 요약 한 줄 — 펼치면 숨는다(<see cref="GradingDialog.AddCollapsible(Panel, string, out TextBlock, string?, bool, bool, string?, string?, int)"/>).</summary>
+    private void SyncSubBadges()
+    {
+        try
+        {
+            if (_slopeBadge != null) _slopeBadge.Text = $"절토 1:{_cutS?.Text} · 성토 1:{_fillS?.Text}";
+            string shape = _shapeMiter?.IsChecked == true ? "직각" : "라운드";
+            string terr = _terrace?.IsChecked == true ? $"간격 {_tInt?.Text}m · 폭 {_tW?.Text}m" : "끔";
+            string ex = _exOn?.IsChecked == true
+                ? $"터파기 뒤 {_exBack?.Text} · 앞 {_exFront?.Text} · 기초 {_exFoot?.Text} · {_exSlope?.SelectedItem} · "
+                  + (_exBenchOn?.IsChecked == true ? $"소단 {_exBenchH?.Text}m마다 {_exBenchW?.Text}m" : "소단 없음")
+                : "터파기 끔";
+            string ws = $"{_cutWall?.SelectedItem} / {_fillWall?.SelectedItem}";
+            if (_shapeBadge != null) _shapeBadge.Text = shape;
+            if (_terrBadge != null) _terrBadge.Text = terr;
+            if (_wallBadge != null) _wallBadge.Text = $"{ws} · {ex}";
+            if (_etcBadge != null) _etcBadge.Text = $"{shape} · 대소단 {(_terrace?.IsChecked == true ? "켬" : "끔")} · {(_exOn?.IsChecked == true ? "터파기 켬" : "터파기 끔")}";
+        }
+        catch { }
     }
 
     /// <summary>★[JACK 0910] 옹벽 형태를 <b>콤보가 아니라 저장된 값</b>에서 받는다 —
@@ -860,8 +1189,10 @@ internal sealed class GradingPanel : UserControl
             //   <para>★그래도 한 줄에 안 들어가면 <c>WrapPanel</c>이 <b>아래로 접어 내린다</b> —
             //   잘려서 안 보이는 것보다 낫다(0910 주석이 이미 그렇게 정해 뒀다).
             //   한 줄인지 두 줄인지는 <b>창 실측</b> 로그가 그 자리에서 적는다.</para>
-            Width = 60,
-            Padding = new Thickness(3, 0, 3, 0),
+            //   <para>★★[v103.3.3 · JACK 1021 «각 매개변수값을 받는 상자가 너무 크다 · 어차피 소수점을 포함한 0.0 텍스트 길이니깐 최대한 타이트하게»]
+            //   폭 60 → <b>40</b> · 패딩 3 → 2 — 글자 자리 34px(맑은 고딕 12px 숫자 약 6.7px · 점 약 3px → «0.005»까지 들어간다).</para>
+            Width = 40,
+            Padding = new Thickness(2, 0, 2, 0),
             Height = 26,
             VerticalContentAlignment = VerticalAlignment.Center,
             HorizontalContentAlignment = HorizontalAlignment.Center,

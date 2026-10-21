@@ -27,7 +27,7 @@ internal static class M0Dump
     internal static string? _rootForTest;
     internal static bool _failForTest;
 
-    static bool IsDevPc()
+    internal static bool IsDevPc()
     {
         if (_rootForTest != null) return true;
         try { return string.Equals(System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(DiagLog.FilePath))?.TrimEnd('\\'), DevDir, System.StringComparison.OrdinalIgnoreCase); }

@@ -131,8 +131,13 @@ public static class GradingBundleStore
     ///
     /// <para>★★[JACK 0915] <b>v12 = 구간마다 「부분 지정인가」</b>.
     /// 이 한 칸이 없어서, 도면을 다시 열고 돌리면 <b>부분 지정이던 구간이 전체로</b> 되살아났다.
-    /// 옛 번들(v11 이하)에는 이 칸이 없으므로 <b>전체</b>로 읽는다 — 그것이 <b>종전 동작</b>이다.</para></summary>
-    public const int Version = 12;
+    /// 옛 번들(v11 이하)에는 이 칸이 없으므로 <b>전체</b>로 읽는다 — 그것이 <b>종전 동작</b>이다.</para>
+    ///
+    /// <para>★★★[v103.1.15 · JACK 1020] <b>v13 = params 끝(단높이 규칙 뒤)에 사면 구간 끝 전이 띠 길이</b>(<c>ZoneBlendLength</c>).
+    /// 노리선 · 인프라웍스 · 클릭선 · 터파기가 번들 제원으로 링을 다시 뜨므로, 이 값이 없으면 면과 다른 기하가 나온다.
+    /// 옛 번들(v12 이하)은 <b>−1(모름)</b>로 읽고 그대로 다시 쓴다 — 기하는 띠 없음(옛 면과 같은 기하), 세션 설정으로 되살릴 때만 기본값(재검토 중간 4:
+    /// 0으로 읽으면 여러 구역 도면에서 다시 짓지 않은 옛 구역이 0으로 굳어 다음 열기에 세션 값을 0으로 만든다).</para></summary>
+    public const int Version = 13;
 
     /// <summary>[v4] 구역 전체 저장 — 헤더(서명·버전·구역수) 뒤에 구역 본문을 차례로.</summary>
     public static void SaveAll(Database db, Transaction tr, IReadOnlyList<GradingBundle> regions)
@@ -238,7 +243,7 @@ public static class GradingBundleStore
     private static GradingBundle ReadRegion(TypedValue[] arr, ref int i, bool withGroundHandle, bool withZoneTo,
                                             bool splitBench, bool withRules, bool withClip, bool withRuns,
                                             bool withSteps = false, bool withZoneRef = false,
-                                            bool withPartial = false)
+                                            bool withPartial = false, bool withBlend = false)
     {
         var b = new GradingBundle { PlanHandle = Str(arr, ref i), VertexCount = I32(arr, ref i) };
         b.CentroidX = Dbl(arr, ref i); b.CentroidY = Dbl(arr, ref i);
@@ -246,7 +251,7 @@ public static class GradingBundleStore
         b.BboxMaxX = Dbl(arr, ref i); b.BboxMaxY = Dbl(arr, ref i);
         b.Perimeter = Dbl(arr, ref i); b.Diagonal = Dbl(arr, ref i);
         b.Boundary = ReadPoints(arr, ref i) ?? new List<Point3>();
-        b.Params = ReadParams(arr, ref i, splitBench, withSteps);
+        b.Params = ReadParams(arr, ref i, splitBench, withSteps, withBlend);
         b.CutHasSlope = I32(arr, ref i) != 0;
         b.FillHasSlope = I32(arr, ref i) != 0;
         b.CutFinalRing = ReadPoints(arr, ref i);
@@ -306,7 +311,9 @@ public static class GradingBundleStore
                                      splitBench: ver >= 6, withRules: ver >= 7, withClip: ver >= 8, withSteps: ver >= 10,
                                      withZoneRef: ver >= 11, withRuns: ver >= 9,
                                      // ★[v12 · JACK 0915] 옛 번들엔 칸이 없다 → 전체로 읽는다(종전 동작)
-                                     withPartial: ver >= 12));
+                                     withPartial: ver >= 12,
+                                     // ★[v13 · v103.1.15] params 끝의 사면 구간 끝 전이 띠 길이
+                                     withBlend: ver >= 13));
                 return l;
             }
             if (ver == 3)   // 하위호환 — 기존 도면(v3 단일 구역)도 그대로 사용
@@ -460,11 +467,12 @@ public static class GradingBundleStore
             foreach (var r in list) { I(r.FromBench); D(r.H); }
         }
         Steps(p.CutBenchSteps); Steps(p.FillBenchSteps);
+        D(p.ZoneBlendLength);   // ★[v13 · v103.1.15] 사면 구간 끝 전이 띠 길이(−1 = 옛 번들에서 온 «모름» 그대로)
     }
 
     /// <summary>splitBench=true(v6)는 단높이·소단폭이 절토/성토 4필드, false(v5 이하)는 공용 2필드 —
     /// 옛 번들은 절토=성토=그 값으로 채운다(그때는 실제로 공용이었으므로 의미가 정확히 보존됨).</summary>
-    private static GradingParams ReadParams(TypedValue[] arr, ref int i, bool splitBench, bool withSteps = false)
+    private static GradingParams ReadParams(TypedValue[] arr, ref int i, bool splitBench, bool withSteps = false, bool withBlend = false)
     {
         double cutBenchH, fillBenchH, cutBenchW, fillBenchW;
         if (splitBench)
@@ -496,6 +504,8 @@ public static class GradingBundleStore
             int nf = I32(arr, ref i);
             for (int k = 0; k < nf; k++) { int fb = I32(arr, ref i); double h = Dbl(arr, ref i); fillSteps.Add((fb, h)); }
         }
+        // ★[v13 · v103.1.15] 사면 구간 끝 전이 띠 — 옛 번들은 −1(모름: 띠 없음으로 짓고 세션은 기본값)
+        double blend = withBlend ? Dbl(arr, ref i) : -1;
         return new GradingParams
         {
             CutBenchHeight = cutBenchH, FillBenchHeight = fillBenchH,
@@ -506,6 +516,7 @@ public static class GradingBundleStore
             MountainTerrace = mountainTerrace, TerraceInterval = terraceInterval, TerraceWidth = terraceWidth,
             MaxRise = maxRise,
             CutBenchSteps = cutSteps, FillBenchSteps = fillSteps,
+            ZoneBlendLength = blend,
         };
     }
 

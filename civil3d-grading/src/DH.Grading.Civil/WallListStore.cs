@@ -140,4 +140,80 @@ public static class WallListStore
         }
         catch { return false; }
     }
+
+    // ══ ★★★[v103.3 · JACK 1021] «뒷채움 터파기» 설정 — 같은 사전의 XRecord WALLEXCAV(형식은 Core WallExcav.Encode) ══
+    //   종단 · 횡단 때만 쓰는 값이라 번들에 안 넣는다(번들은 계획부지 생성 때만 저장되고 판을 올리면 옛 애드인이 번들을 거부한다).
+    //   첫 값과 같으면 기록을 지운다 — 기본 도면은 흔적이 없다(«합성 미루기»와 같은 법).
+    private const string ExcavName = "WALLEXCAV";
+
+    /// <summary>이 도면의 터파기 설정 — 없으면 첫 값(참) · 못 읽으면 첫 값 + 까닭(거짓).</summary>
+    public static bool ReadExcav(Database db, Transaction tr, out WallExcav.Settings s, out string why)
+    {
+        s = WallExcav.Settings.Default; why = "";
+        try
+        {
+            var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
+            if (!nod.Contains(DictName)) return true;
+            var dict = (DBDictionary)tr.GetObject(nod.GetAt(DictName), OpenMode.ForRead);
+            if (!dict.Contains(ExcavName)) return true;
+            var xr = (Xrecord)tr.GetObject(dict.GetAt(ExcavName), OpenMode.ForRead);
+            var vals = new List<(char, object)>();
+            foreach (TypedValue tv in xr.Data?.AsArray() ?? System.Array.Empty<TypedValue>())
+            {
+                switch (tv.TypeCode)
+                {
+                    case (short)DxfCode.Int32: vals.Add(('I', System.Convert.ToInt32(tv.Value))); break;
+                    case (short)DxfCode.Real: vals.Add(('D', System.Convert.ToDouble(tv.Value))); break;
+                    default: why = $"옹벽 터파기 기록에 모르는 값 종류 {tv.TypeCode}"; return false;
+                }
+            }
+            return WallExcav.TryDecode(vals, out s, out why);
+        }
+        catch (System.Exception ex) { why = $"옹벽 터파기 기록을 못 읽었다 {ex.GetType().Name}: {ex.Message}"; s = WallExcav.Settings.Default; return false; }
+    }
+
+    /// <summary>터파기 설정을 적는다(첫 값이면 기록을 지운다).</summary>
+    public static void WriteExcav(Database db, Transaction tr, WallExcav.Settings s)
+    {
+        var enc = WallExcav.Encode(s);
+        var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForWrite);
+        DBDictionary dict;
+        if (nod.Contains(DictName)) dict = (DBDictionary)tr.GetObject(nod.GetAt(DictName), OpenMode.ForWrite);
+        else
+        {
+            if (enc == null) return;
+            dict = new DBDictionary();
+            nod.SetAt(DictName, dict);
+            tr.AddNewlyCreatedDBObject(dict, true);
+        }
+        if (dict.Contains(ExcavName))
+        {
+            var oid = dict.GetAt(ExcavName);
+            dict.Remove(ExcavName);
+            try { tr.GetObject(oid, OpenMode.ForWrite).Erase(); } catch { }
+        }
+        if (enc == null) return;
+        var vals = new List<TypedValue>();
+        foreach (var (k, v) in enc)
+            vals.Add(k == 'I' ? new TypedValue((int)DxfCode.Int32, (int)v) : new TypedValue((int)DxfCode.Real, (double)v));
+        using var rb = new ResultBuffer(vals.ToArray());
+        var xr = new Xrecord { Data = rb };
+        dict.SetAt(ExcavName, xr);
+        tr.AddNewlyCreatedDBObject(xr, true);
+    }
+
+    /// <summary>이 도면의 터파기 설정(읽기 전용 트랜잭션 — 명령 밖에서도 부른다). 못 읽으면 첫 값 + 까닭.</summary>
+    public static WallExcav.Settings ExcavOf(Database? db, out string why)
+    {
+        why = "";
+        if (db == null) return WallExcav.Settings.Default;
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            ReadExcav(db, tr, out var s, out why);
+            tr.Commit();
+            return s;
+        }
+        catch (System.Exception ex) { why = ex.GetType().Name + ": " + ex.Message; return WallExcav.Settings.Default; }
+    }
 }

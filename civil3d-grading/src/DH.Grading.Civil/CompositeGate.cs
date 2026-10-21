@@ -18,6 +18,13 @@ internal static class CompositeGate
     /// <summary>★[4판 재검토 H4 b] 마지막으로 «예»(빠진 채로 계속)를 받은 도면 · 번호 — «이어서»가 이 번호만 목록에서 지운다(묻지 않았으면 없음).</summary>
     static (string Doc, System.Collections.Generic.HashSet<int> Nos)? _lastYes;
 
+    /// <summary>★[v103.2] 꺼내지 않고 본다 — «이어서» 들머리가 굳을 옹벽 수를 셀 때(꺼내는 것은 3단계).</summary>
+    internal static System.Collections.Generic.HashSet<int> PeekYes(string docName)
+    {
+        var y = _lastYes;
+        return y != null && string.Equals(y.Value.Doc, docName, System.StringComparison.OrdinalIgnoreCase) ? new(y.Value.Nos) : new();
+    }
+
     /// <summary>«이어서»가 꺼내 쓴다(꺼내면 비운다) — 이 도면에서 «예»를 받은 빠진 옹벽 번호 · 없으면 빈 집합.</summary>
     internal static System.Collections.Generic.HashSet<int> TakeYes(string docName)
     {

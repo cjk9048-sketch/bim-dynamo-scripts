@@ -23,6 +23,30 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "fill")
     return fails == 0 ? 0 : 1;
 }
 
+// ★[v103.2] BLOCKTEST_ONLY=pure — 옹벽이 든 순수면(S162 뚜껑 · 고르기 · 목록 판 4 · S163 걷기)만(개발 중 부분 시험)
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "pure")
+{
+    PureWallsCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
+// ★[v103.3] BLOCKTEST_ONLY=excav — 옹벽 뒷채움 터파기(S164 앞면 선 · 재기 · 띠 · S166 설정 · 목록 판 5 · S167 아래 껍질)만(개발 중 부분 시험)
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "excav")
+{
+    ExcavCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
+// ★[v103.1.15] BLOCKTEST_ONLY=blend — 사면 구간 끝 전이 띠(S161)만(개발 중 부분 시험)
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "blend")
+{
+    ZoneBlendCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
 // ★[v103.1.1] BLOCKTEST_ONLY=zone — 클릭선 조각 시험(S153)만 빠르게 돈다(개발 중 부분 시험)
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "zone")
 {
@@ -32,6 +56,7 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "zone")
     CompStateCheck.Run(Check);
     OutsideFixCheck.Run(Check, Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "data"));
     ExtendCheck.Run(Check);
+    ZoneBlendCheck.Run(Check);
     Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
     return fails == 0 ? 0 : 1;
 }
@@ -41,6 +66,9 @@ WallPlaceCheck.Run(Check);   // ★[v103.1.9] S157 — 옹벽 자리 재기 한 
 CompStateCheck.Run(Check);   // ★[v103.1.12] S158 — 합성 셈 · 보류 종류 · 미룬 옹벽 겹침 판정
 OutsideFixCheck.Run(Check, Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "data"));   // ★[v103.1.13] S159 — 넘길 면 전체의 «Civil이 고칠 면» · 먼저 뒤집기
 ExtendCheck.Run(Check);   // ★[v103.1.14] S160 — 맞닿은 옹벽 이어 짓기(판정 · 측선 방향 · 이은 폴리곤 · 겹침 · 목록 판 3 · 번호 물려받기)
+ZoneBlendCheck.Run(Check);   // ★[v103.1.15] S161 — 사면 구간 끝 전이 띠(이음 0 · 링 · 거리 · 띠 밖 그대로 · 옹벽 판정 · 맞닿음 · 옛 번들 · 시간)
+PureWallsCheck.Run(Check);   // ★[v103.2] S162 · S163 — 옹벽이 든 순수면(뚜껑 · 고르기 · 목록 판 4 · 걷기)
+ExcavCheck.Run(Check);   // ★[v103.3] S164 · S166 · S167 — 옹벽 뒷채움 터파기(앞면 선 · 재기 · 띠 · 설정 · 목록 판 5 · 아래 껍질)
 
 const double W = 0.46, H = 0.2, STEP = 5.0, HW = W / 2;
 const double D = 0.5, FS = D / 2; // 깊이·전면 돌출(벽 중심=링, JACK 0720 Z-파이팅 해소): 절토 +FS(안쪽), 성토 −FS

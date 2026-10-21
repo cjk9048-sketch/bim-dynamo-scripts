@@ -45,6 +45,10 @@ public sealed class WallRec
     public int ReplaceNo2;
     /// <summary>★[v103.1.14 · 판 3 · JACK 1014 ② «번호 그대로»] 합성이 되면 물려받을 번호(이어 지은 옛 옹벽 번호) · 0이면 없음. 물려받으면 0으로 돌아간다.</summary>
     public int KeepNo;
+    /// <summary>★★[v103.2 · 판 4 · 계획 2-2] 이 칸을 넣은 합성의 일회용 번호 — 정지면_DH 합성 표지의 넷째 값과 같으면 아래 <see cref="Cap"/>이 지금 최종면의 뚜껑이다. 빈 값 = 모름(옛 판 합성 · 아직 안 넣음).</summary>
+    public string CompNonce = "";
+    /// <summary>★★[v103.2 · 판 4] 합성이 남긴 뚜껑(옹벽 뒤에 되살아난 원지반 — 종단 · 횡단의 «옹벽이 든 순수면»에서 뺀다). null = 없음.</summary>
+    public PureWithWalls.Cap? Cap;
 
     public string Side => Up ? "절토" : "성토";
     public static string WallSurfaceName(int no) => $"가상옹벽{no}_DH";
@@ -58,18 +62,42 @@ public sealed class WallListHead
     public int NextNo = 1;
     /// <summary>★[v103.1 · 판 2 · 검토 v103.1 높음 3] 끝까지 성공한 마지막 정지면 생성이 만든 정지면_DH 핸들 — 지금 P0가 이것과 다르면 확인 안 된 면이라 더하기 · 합성이 멈춘다. 빈 값 = 모름.</summary>
     public string VerifiedP0 = "";
+    /// <summary>★★[v103.2 · 판 4 · 계획 2-7 · 4판 검토 중간 1] <b>굳은 옹벽</b> — «이어서»로 앞 구역 면(정지순수_DH이전)에 굳은 옹벽. 머리에 두어 목록을 읽고 다시 쓰는 모든 자리가 지킨다.
+    /// «새로» · DHRESET이 지운다.</summary>
+    public List<FrozenWall> Frozen = new();
+}
+
+/// <summary>★★[v103.2 · 판 4] 굳은 옹벽 한 칸 — 종단 측점 가리기 · 걷기에 쓴다(번호 · 구역 계획선 · 폴리곤 · 방향 · 앞면 구배 · 앞면 최소 너비 · 단높이 · 순수면에 반영됐나).</summary>
+public sealed class FrozenWall
+{
+    public int No;
+    public string PlanHandle = "";
+    public bool Up;
+    public double H, SlopeW = -1, FaceRun = -1;
+    /// <summary>순수면(정지순수_DH이전)에 반영됐나 — «반영 없이 이어서»로 굳은 것은 거짓(가리지도 걷지도 않고 ⚠).</summary>
+    public bool Reflected;
+    public List<Point3> Poly = new();
+    /// <summary>★★[v103.3 · 판 5 · 계획 v103.3 2-2] 옹벽 터파기가 앞면 선을 다시 짓는 재료 — 점마다 옹벽인가 · 소단 · 머리 높이.
+    /// 빈 <see cref="IsWall"/> = 판 4 굳은 칸(옛 기록 — 옹벽선을 몰라 터파기에서 빠지고 ⚠).</summary>
+    public List<bool> IsWall = new();
+    public double T, HeadZ;
+    public bool HasLine => IsWall.Count == Poly.Count && Poly.Count >= 3;
 }
 
 public static class WallList
 {
     public const string Sign = "DH_WALLS";
-    public const int Version = 3;
+    public const int Version = 5;
 
     /// <summary>(종류, 값) — 'S' 글 · 'I' 정수 · 'D' 실수. Civil이 DxfCode.Text · Int32 · Real로 옮긴다.
-    /// <para>★[v103.1.14] 판 3 칸(ReplaceNo2 · KeepNo)은 <b>이어 짓기가 걸려 있을 때만</b> 쓴다 — 둘 다 0인 목록은 판 2 그대로(바이트까지 같음 · 옛 판 애드인도 읽는다).</para></summary>
+    /// <para>★[v103.1.14] 판 3 칸(ReplaceNo2 · KeepNo)은 <b>이어 짓기가 걸려 있을 때만</b> 쓴다 — 둘 다 0인 목록은 판 2 그대로(바이트까지 같음 · 옛 판 애드인도 읽는다).</para>
+    /// <para>★[v103.2] 판 4 칸(CompNonce · Cap · 굳은 옹벽)은 <b>v103.2 합성이 한 번이라도 넣은 칸이 있거나 굳은 칸이 있을 때만</b> 쓴다(4판 검토 낮음 2 — Cap 유무가 아니라 CompNonce로 가른다).</para></summary>
     public static List<(char Kind, object Value)> Encode(WallListHead head, IReadOnlyList<WallRec> walls)
     {
-        int ver = walls.Any(w => w.ReplaceNo2 != 0 || w.KeepNo != 0) ? 3 : 2;
+        // ★[v103.3] 판 5 = 옹벽선을 가진 굳은 칸이 있을 때만(없으면 판 4 바이트 그대로 — v103.2 애드인도 읽는다)
+        int ver = head.Frozen.Any(f => f.IsWall.Count > 0) ? 5
+                : walls.Any(w => !string.IsNullOrEmpty(w.CompNonce)) || head.Frozen.Count > 0 ? 4
+                : walls.Any(w => w.ReplaceNo2 != 0 || w.KeepNo != 0) ? 3 : 2;
         var v = new List<(char, object)>
         {
             ('S', Sign), ('I', ver), ('S', head.PlanHandle ?? ""), ('S', head.GroundHandle ?? ""), ('I', head.NextNo), ('S', head.VerifiedP0 ?? ""), ('I', walls.Count),
@@ -86,6 +114,31 @@ public static class WallList
             // 판 2
             v.Add(('S', w.P0Handle ?? "")); v.Add(('D', w.SlopeW)); v.Add(('D', w.FaceRun)); v.Add(('D', w.Grid)); v.Add(('I', w.RulerKind)); v.Add(('S', w.Hold ?? ""));
             if (ver >= 3) { v.Add(('I', w.ReplaceNo2)); v.Add(('I', w.KeepNo)); }
+            if (ver >= 4)
+            {
+                v.Add(('S', w.CompNonce ?? ""));
+                if (w.Cap == null) v.Add(('I', -1));
+                else
+                {
+                    v.Add(('I', w.Cap.Count)); v.Add(('D', w.Cap.Area)); v.Add(('S', w.Cap.Hash.ToString(CultureInfo.InvariantCulture)));
+                    v.Add(('I', w.Cap.Edges.Count));
+                    foreach (var (x1, y1, x2, y2) in w.Cap.Edges) { v.Add(('D', x1)); v.Add(('D', y1)); v.Add(('D', x2)); v.Add(('D', y2)); }
+                }
+            }
+        }
+        if (ver >= 4)
+        {
+            v.Add(('I', head.Frozen.Count));
+            foreach (var f in head.Frozen)
+            {
+                v.Add(('I', f.No)); v.Add(('S', f.PlanHandle ?? "")); v.Add(('I', f.Up ? 1 : 0)); v.Add(('D', f.H)); v.Add(('D', f.SlopeW)); v.Add(('D', f.FaceRun)); v.Add(('I', f.Reflected ? 1 : 0));
+                Pts(f.Poly);
+                if (ver >= 5)
+                {
+                    v.Add(('I', f.IsWall.Count)); foreach (var b in f.IsWall) v.Add(('I', b ? 1 : 0));
+                    v.Add(('D', f.T)); v.Add(('D', f.HeadZ));
+                }
+            }
         }
         return v;
     }
@@ -117,7 +170,35 @@ public static class WallList
                 for (int q = 0; q < nf; q++) w.IsWall.Add(I() != 0);
                 if (ver >= 2) { w.P0Handle = S(); w.SlopeW = D(); w.FaceRun = D(); w.Grid = D(); w.RulerKind = I(); w.Hold = S(); }
                 if (ver >= 3) { w.ReplaceNo2 = I(); w.KeepNo = I(); }
+                if (ver >= 4)
+                {
+                    w.CompNonce = S();
+                    int cn = I();
+                    if (cn >= 0)
+                    {
+                        var cap = new PureWithWalls.Cap { Count = cn, Area = D() };
+                        if (!long.TryParse(S(), NumberStyles.Integer, CultureInfo.InvariantCulture, out cap.Hash)) throw new FormatException("뚜껑 해시");
+                        int ne = I(); if (ne < 0 || ne > 10_000_000) throw new FormatException($"뚜껑 변 수 {ne}");
+                        for (int q = 0; q < ne; q++) cap.Edges.Add((D(), D(), D(), D()));
+                        w.Cap = cap;
+                    }
+                }
                 walls.Add(w);
+            }
+            if (ver >= 4)
+            {
+                int nf2 = I(); if (nf2 < 0 || nf2 > 10_000) throw new FormatException($"굳은 옹벽 수 {nf2}");
+                for (int q = 0; q < nf2; q++)
+                {
+                    var f = new FrozenWall { No = I(), PlanHandle = S(), Up = I() != 0, H = D(), SlopeW = D(), FaceRun = D(), Reflected = I() != 0, Poly = Pts() };
+                    if (ver >= 5)
+                    {
+                        int nw2 = I(); if (nw2 < 0 || nw2 > 1_000_000) throw new FormatException($"굳은 옹벽 표 수 {nw2}");
+                        for (int b = 0; b < nw2; b++) f.IsWall.Add(I() != 0);
+                        f.T = D(); f.HeadZ = D();
+                    }
+                    head.Frozen.Add(f);
+                }
             }
             if (i != v.Count) { why = $"옹벽 목록 끝에 값 {v.Count - i}개가 남았다"; return false; }
             return true;

@@ -2097,17 +2097,20 @@ public static partial class WallDaylight
     /// <para><see cref="Build"/>와 <see cref="KeepBand"/>가 <b>같은 코드</b>를 쓴다.</para></summary>
     /// <param name="level">높이차 D = 옹벽 − 상대면이 이 값이 되는 선을 긋는다. 데이라잇은 +ZeroD 한 벌,
     /// 남길 띠는 <b>+ZeroD와 −ZeroD 두 벌</b>(포개진 평평한 자리를 따로 떼려고 — JACK 0918 «자글자글»).</param>
+    /// <param name="useW">★[v103.3.1 · 옹벽 터파기 아래 껍질] 참인 W 삼각형만(null = 다) — 결과에 못 드는 삼각형의 교선을 안 긋는다.</param>
+    /// <param name="useG">같은 뜻 — 상대면 쪽.</param>
     private static ZeroSet ZeroLines(TriSet W, TriSet G, GeometryFactory gfF, double ox, double oy,
-        Func<double, double, bool>? dropSegAt, double level = ZeroD)
+        Func<double, double, bool>? dropSegAt, double level = ZeroD, bool[]? useW = null, bool[]? useG = null)
     {
         var z = new ZeroSet();
         var segs = z.Segs;
         for (int i = 0; i < W.N; i++)
         {
-            if (!W.Ok[i]) continue;
+            if (!W.Ok[i] || (useW != null && !useW[i])) continue;
             Polygon? pa = null;
             foreach (int j in G.Tree.Query(W.Env(i)))
             {
+                if (useG != null && !useG[j]) continue;
                 z.Pairs++;
                 // 높이가 안 겹치면 그 겹침 안에서 D의 부호가 하나다 — 0선이 없다
                 // D의 범위가 level을 안 품으면 그 겹침 안에 level 선이 없다(종전 «0을 안 품으면»보다 정확 — ZeroD 틈까지 맞춘다)

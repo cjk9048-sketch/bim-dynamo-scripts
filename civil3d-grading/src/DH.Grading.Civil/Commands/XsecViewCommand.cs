@@ -159,6 +159,9 @@ public sealed class XsecViewCommand
         }
         log.AppendLine($"  노선 '{alignName}' · 측점 {made.Count}개 · 벽 자리 {spans.Count}곳" +
                        $" · 측점명 간격 {ProfileCommand.LastStationInterval:0.#}m(종단과 같아야 한다)");
+        // ★★★[v103.2 · 계획 2-4] 면 — 종단이 쓴 면을 따른다(정지면이 바뀌었으면 지우기 · 자리 묻기 전에 멈춘다)
+        var surfsA = SectionCommand.FindSurfacesForAlignment(db, cdoc, alignId, ed, log, "횡단도");
+        if (surfsA == null) { Flush(log); return false; }
 
         // ── ③ 놓을 자리.
         // ★★[JACK 0826] 배치는 <b>도면 설정</b>에서 고른다 — 여기서 묻지 않는다.
@@ -195,7 +198,7 @@ public sealed class XsecViewCommand
         //   좌우 폭은 사용자가 정한 대로 <b>온전히</b> 쓴다 — 지형이 잘리면 안 된다.
         double wl = System.Math.Max(1.0, GradingSettings.XsecLeft);
         double wr = System.Math.Max(1.0, GradingSettings.XsecRight);
-        var surfs = SectionCommand.FindSurfaces(db, cdoc);
+        var surfs = surfsA;
         // ★[검토] 지표면 <b>ID → 종류</b> 표를 만들어 넘긴다 — 이름은 사용자가 지은 것이라 못 믿는다.
         var kindOf = new System.Collections.Generic.Dictionary<ObjectId, string>();
         foreach (var sp in surfs) if (!kindOf.ContainsKey(sp.SurfId)) kindOf[sp.SurfId] = sp.Label;
@@ -3960,7 +3963,7 @@ public sealed class XsecViewCommand
                             //     그 <b>ObjectId로 맞춘다.</b> 이름은 사용자가 지은 것이라 믿을 수 없다.
                             string kind = kindOf.TryGetValue(sec.SourceId, out var kk) ? kk : "";
                             // 이름으로 고른다 — 터파기를 먼저 봐야 한다('터파기면_DH'가 '정지'를 안 품지만 순서를 못 박아 둔다).
-                            if (kind == "터파기") { if (!stExcav.IsNull) { sec.StyleId = stExcav; nE++; } }
+                            if (kind == "터파기" || kind == WallExcavBuilder.Label) { if (!stExcav.IsNull) { sec.StyleId = stExcav; nE++; } }   // ★[v103.3] 옹벽 터파기도 같은 마젠타
                             else if (kind == "원지반") { if (!stGround.IsNull) { sec.StyleId = stGround; nG++; } }
                             else if (kind == "정지면") { if (!stPlan.IsNull) { sec.StyleId = stPlan; nP++; } }
                             else if (kind == "지층")
@@ -4027,7 +4030,8 @@ public sealed class XsecViewCommand
         DH.Grading.Core.QtyLedger led = null,
         double deepLimit = 5.0,
         DH.Grading.Core.CrossSectionArea.ExcavBase basis
-            = DH.Grading.Core.CrossSectionArea.ExcavBase.Lower)
+            = DH.Grading.Core.CrossSectionArea.ExcavBase.Lower,
+        CachedGroundSurface csWx = null)
     {
         // 절단선의 좌우 끝을 구한다 — 종단도·횡단도가 쓰는 것과 <b>같은 함수</b>다.
         if (!SectionCommand.TryCut(al, station, wl, wr, out var cut))
@@ -4080,7 +4084,7 @@ public sealed class XsecViewCommand
         // ★★[JACK 0831 · 검토 LOW-9] <b>지층·지하수위 가장자리도 훑는다.</b>
         //   종전엔 원지반·계획·터파기 셋만 봤다 — 지층면이 끝나는 자리가 표본 사이에 있으면
         //   그 칸(0.1m × 깊이)이 통째로 빠진다. 지층은 층마다 있으니 <b>층 수만큼</b> 빠진다.
-        var edgeSurfs = new System.Collections.Generic.List<CachedGroundSurface> { csG, csP, csE, csW };
+        var edgeSurfs = new System.Collections.Generic.List<CachedGroundSurface> { csG, csP, csE, csW, csWx };   // ★[v103.3 · 재검토 중간 8] 옹벽 터파기 가장자리도
         if (strata != null) foreach (var (_, cs2) in strata) edgeSurfs.Add(cs2);
         foreach (var cs in edgeSurfs)
         {
@@ -4129,6 +4133,38 @@ public sealed class XsecViewCommand
         }
 
         double[] gy = Read(csG), py2 = Read(csP), ey = Read(csE);
+        // ★★★[v103.3 · 계획 2-6 · 재검토 중간 3] <b>옹벽 뒷채움 터파기를 합친다</b> — 같은 흙을 두 번 안 센다.
+        //   · 기준 «원지반»(Lower) — 두 터파기의 위끝이 같다(Lower(G, P)) → <c>E = Lower(구조물, 옹벽)</c> 하나로 지금 길 그대로.
+        //   · 기준 «계획면» + 이 측점에 구조물 터파기가 없다 — 옹벽만 → <c>E = 옹벽</c> · 위끝은 Lower(G, P)(옹벽은 뒤 흙보다 먼저 선다).
+        //   · 기준 «계획면» + 둘 다 — 구조물은 그대로 · 옹벽은 구조물 바닥 <b>아래로 더 판 몫</b>만 따로 더한다(깊이는 그 자리 지표에서 — <c>SplitByDepthBase</c>).
+        double[] ewx = Read(csWx);
+        double[] wxTop2 = null, wxBase2 = null, wxBot2 = null;
+        var basisE = basis;
+        int noPlanS = 0;
+        if (ey != null && py2 != null)
+            for (int i = 0; i < n; i++) if (!double.IsNaN(ey[i]) && double.IsNaN(py2[i]) && gy != null && !double.IsNaN(gy[i])) noPlanS++;
+        if (ewx != null)
+        {
+            bool anyS = ey != null && ey.Any(v => !double.IsNaN(v));
+            if (basis == DH.Grading.Core.CrossSectionArea.ExcavBase.Lower || !anyS)
+            {
+                ey = DH.Grading.Core.CrossSectionArea.Lower(anyS ? ey : null, ewx);
+                basisE = DH.Grading.Core.CrossSectionArea.ExcavBase.Lower;
+            }
+            else
+            {
+                var topS = DH.Grading.Core.CrossSectionArea.SurfaceFor(gy, py2, basis);
+                var T = DH.Grading.Core.CrossSectionArea.SurfaceFor(gy, py2, DH.Grading.Core.CrossSectionArea.ExcavBase.Lower);
+                wxTop2 = new double[n]; wxBase2 = new double[n]; wxBot2 = ewx;
+                for (int i = 0; i < n; i++)
+                {
+                    bool hs = !double.IsNaN(ey[i]);
+                    wxTop2[i] = hs ? System.Math.Min(T[i], ey[i]) : T[i];
+                    wxBase2[i] = hs ? topS[i] : T[i];
+                }
+            }
+            dbg?.Append($" | 옹벽 터파기 {(wxTop2 == null ? "합침(낮은 쪽)" : "구조물 바닥 아래 몫만 따로")}");
+        }
 
         // ★★★[JACK 0831] 지층별 수량 — <b>바로 위에서 만든 그 배열</b>로 잰다.
         if (led != null)
@@ -4161,8 +4197,16 @@ public sealed class XsecViewCommand
                     //   오늘만 세 번째인 "주석이 코드보다 앞선" 자리다.
                     //   ★★★[JACK 0909] <b>기준면을 여기까지 흘린다.</b> 0908 검토 치명 2 —
                     //   이 계산과 굴착 형상이 <b>서로 모르는 채로</b> 각자 min을 다시 구하고 있었다.
-                    led, xs, gy, xs, py2, xs, ey, bands, xs, wz, deepLimit, xs, basis);
+                    led, xs, gy, xs, py2, xs, ey, bands, xs, wz, deepLimit, xs, basisE);
                 dbg?.Append(" | 지층 " + note);
+                if (wxTop2 != null)
+                {
+                    // ★[v103.3] 계획면 기준 + 둘 다 — 옹벽 몫(구조물 바닥 아래)만 같은 칸에 더한다 · 절토는 안 담는다
+                    string note2 = DH.Grading.Core.StrataQuantity.Accumulate(
+                        led, xs, gy, xs, py2, xs, wxBot2, bands, xs, wz, deepLimit, xs, basis,
+                        excTop: wxTop2, excBase: wxBase2, excOnly: true);
+                    dbg?.Append(" | 옹벽 터파기 몫 " + note2);
+                }
             }
             catch (System.Exception exS) { dbg?.Append(" | ⚠지층 수량 실패 — " + exS.Message); }
         }
@@ -4182,7 +4226,18 @@ public sealed class XsecViewCommand
             Rng("원지반", gy); Rng("계획", py2); Rng("터파기", ey);
         }
 
-        var qq = DH.Grading.Core.XsecQuantity.Compute(xs, gy, xs, py2, xs, ey, basis);
+        var qq = DH.Grading.Core.XsecQuantity.Compute(xs, gy, xs, py2, xs, ey, basisE);
+        if (ewx != null)
+        {
+            // ★[v103.3 · 재검토 중간 8] «계획면 없는 칸»은 구조물 터파기 몫만 센다 — 옹벽 터파기는 정지면 발자국 밖(옹벽 뒤 원지반)에서 원지반 기준이 정상
+            qq = qq with { NoPlanCells = noPlanS };
+            if (wxTop2 != null)
+            {
+                var s2 = DH.Grading.Core.CrossSectionArea.SplitByDepthBase(xs, wxTop2, wxBot2, wxBase2, DH.Grading.Core.XsecQuantity.DeepLimit);
+                double Add(double a, double b) => double.IsNaN(a) ? b : double.IsNaN(b) ? a : a + b;
+                qq = qq with { ExcShallow = Add(qq.ExcShallow, s2.Shallow), ExcDeep = Add(qq.ExcDeep, s2.Deep), Backfill = Add(qq.Backfill, Add(s2.Shallow, s2.Deep)), MissE = false };
+            }
+        }
         if (dbg != null)
         // ★[JACK 0827 "토적표 정확도 향상"] <b>어느 구간을 쟀는지</b> 남긴다 —
         //   BO로 잡은 영역과 맞대 보려면 우리가 센 자리를 알아야 한다.
@@ -4301,6 +4356,7 @@ public sealed class XsecViewCommand
         double sumCut = 0, sumFill = 0, sumExc = 0;
         int nNoPlan = 0;
         int nNoG = 0, nNoP = 0, nNoE = 0;
+        int nWx = 0;   // ★[v103.3] 옹벽 터파기를 읽은 측점 수
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
@@ -4314,7 +4370,7 @@ public sealed class XsecViewCommand
 
             // ★[검토] 지표면 캐시를 <b>한 번만</b> 만들어 모든 측점이 나눠 쓴다 —
             //   측점마다 다시 만들면 삼각형을 수십 번 읽는다.
-            CachedGroundSurface csG = null, csP = null, csE = null, csW = null;
+            CachedGroundSurface csG = null, csP = null, csE = null, csW = null, csWx = null;
             var strataCs = new List<(int Ord, DH.Grading.Core.RockClass Rock, CachedGroundSurface Cs, string Nm, string How)>();
             int nTri = 0;
             foreach (var sp in surfs)
@@ -4327,6 +4383,7 @@ public sealed class XsecViewCommand
                     if (sp.Label == "원지반") csG = cs;
                     else if (sp.Label == "정지면") csP = cs;
                     else if (sp.Label == "터파기") csE = cs;
+                    else if (sp.Label == WallExcavBuilder.Label) csWx = cs;   // ★[v103.3] 옹벽 뒷채움 터파기 — 따로 받는다(csE를 덮지 않는다)
                     // ★★★[JACK 0831] 지층·지하수위 캐시를 <b>버리지 않는다</b> —
                     //   종전엔 여섯 장을 만들어 놓고 바로 버렸다(검토 지적).
                     else if (sp.Label == "지층")
@@ -4425,7 +4482,8 @@ public sealed class XsecViewCommand
                     var led = new DH.Grading.Core.QtyLedger();
                     var q = QtyAt(tr, al0, s.St, wl, wr, csG, csP, csE, dbg,
                                   strata, csW, led, DH.Grading.Core.QuantityTable.DeepLimitM,
-                                  qtyBasis);
+                                  qtyBasis, csWx);
+                    if (csWx != null && dbg != null && dbg.ToString().Contains("옹벽 터파기")) nWx++;
                     // ★★★[JACK 0831 · 검토 HIGH-1] <b>성토·되메우기를 원장에 넣는다.</b>
                     //   표가 이제 원장만 읽는데 <c>StrataQuantity.Accumulate</c>는
                     //   <b>절토·터파기만</b> 담는다 — 성토와 되메우기를 넣는 코드가 아예 없었다.
@@ -4498,6 +4556,7 @@ public sealed class XsecViewCommand
                       + (nNoG > 0 ? $" · ⚠원지반이 없던 측점 {nNoG}개" : "")
                       + (nNoP > 0 ? $" · ⚠계획면이 없던 측점 {nNoP}개(부지 밖이면 정상)" : "")
                       + (nNoE > 0 ? $" · 터파기가 없던 측점 {nNoE}개" : "")
+                      + (nWx > 0 ? $" · 옹벽 터파기를 읽은 측점 {nWx}개" : "")
                       + (nNoPlan > 0 ? $" · ⚠계획면이 터파기를 못 덮은 측점 {nNoPlan}개" : "")
                       + (nThrow > 0 ? $" · ⚠<b>쟰다가 터진 측점 {nThrow}개</b>(첫 사례: {firstThrow})" : "")
                       + (nMismatch > 0

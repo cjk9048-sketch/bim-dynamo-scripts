@@ -45,8 +45,12 @@ public static class StrataQuantity
         double[] wx, double[] wy,
         double deepLimit = 5.0,
         double[] axis = null,
-        CrossSectionArea.ExcavBase basis = CrossSectionArea.ExcavBase.Lower)
+        CrossSectionArea.ExcavBase basis = CrossSectionArea.ExcavBase.Lower,
+        double[]? excTop = null, double[]? excBase = null, bool excOnly = false)
     {
+        // ★★[v103.3 · 계획 v103.3 2-6 · 재검토 중간 3] <paramref name="excTop"/> · <paramref name="excBase"/>(<paramref name="ex"/>와 같은 가로축) —
+        //   터파기 칸의 위끝 · 깊이 기준선을 따로 준다(기준면 «계획면» + 옹벽 터파기: 구조물 바닥 아래로 더 판 몫만 · 깊이는 그 자리 지표에서).
+        //   <paramref name="excOnly"/>면 절토 칸은 안 담는다(같은 측점의 두 번째 부름 — 절토는 첫 부름이 담았다). 셋 다 안 주면 종전 그대로.
         if (led == null || gx == null || gy == null || gx.Length < 2) return "원지반이 없어 못 쟀다";
 
         // ── ① 가로축.
@@ -203,11 +207,20 @@ public static class StrataQuantity
         //   층·물·깊이를 같은 산수로 겹치게 만들어 두었으므로 나머지는 따라온다.
         double[] deepLine = new double[x.Length];
         for (int i = 0; i < x.Length; i++) deepLine[i] = surf[i] - deepLimit;
+        // ★[v103.3] 터파기 칸의 위끝 · 깊이 기준선을 따로 준 부름(위 주석) — 없으면 종전 그대로(surf · deepLine)
+        double[] excSurf = surf;
+        if (excTop != null && ex != null)
+        {
+            excSurf = XsecQuantity.Resample(ex, excTop, x);
+            var bl = excBase != null ? XsecQuantity.Resample(ex, excBase, x) : excSurf;
+            deepLine = new double[x.Length];
+            for (int i = 0; i < x.Length; i++) deepLine[i] = bl[i] - deepLimit;
+        }
 
         int nCell = 0;
 
         // ── ④ 절토 — 원지반과 계획면 사이. <b>암종으로만</b> 가른다(깊이·물은 터파기에만 쓴다).
-        if (P != null)
+        if (P != null && !excOnly)
         {
             foreach (var (rock, bTop, bBot) in bands)
             {
@@ -223,7 +236,7 @@ public static class StrataQuantity
                 foreach (DepthClass d in new[] { DepthClass.Le, DepthClass.Gt })
                 {
                     // 깊이 띠: 이하 = 지표~5m선, 초과 = 5m선~아주 깊이
-                    double[] dTop = d == DepthClass.Le ? surf : deepLine;
+                    double[] dTop = d == DepthClass.Le ? excSurf : deepLine;
                     double[] dBot = d == DepthClass.Le ? deepLine : Fill(x.Length, -1e6);
 
                     foreach (WaterClass w in new[] { WaterClass.Land, WaterClass.Water })
@@ -233,7 +246,7 @@ public static class StrataQuantity
                         double[] wBot = W == null ? Fill(x.Length, -1e6) : (w == WaterClass.Land ? W : Fill(x.Length, -1e6));
 
                         // 네 겹을 <b>같은 산수</b>로 겹친다 — 띠마다 다른 코드를 쓰지 않는다.
-                        double[] top = Min3(surf, bTop, dTop, wTop);
+                        double[] top = Min3(excSurf, bTop, dTop, wTop);
                         double[] bot = Max3(E, bBot, dBot, wBot);
                         double a = CrossSectionArea.Above(x, top, bot);
                         if (a > 0) { led.Add(QtyKey.OfExc(rock, d, w), a); nCell++; }

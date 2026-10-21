@@ -57,6 +57,8 @@ public sealed class ViewSurfaceCommand
         var l = new System.Collections.Generic.List<string>
         {
             Plan, Plan + "이전", PurePlan, PurePlan + "이전", AllName, ExcavAllName,
+            PureWithWallsBuilder.Name, PureWithWallsBuilder.TempName, CreateGradingCommand.StashBase,   // ★[v103.2] 옹벽면 · «이어서»가 비켜 둔 면 — 목록 밖이면 «원지반만»에서 원지반처럼 켜진다
+            WallExcavBuilder.Name, WallExcavBuilder.TempName, WallExcavBuilder.PieceName,   // ★[v103.3] 옹벽 뒷채움 터파기면 · 임시 · 조각
             Excav, ExcavCommand.BaseName, "가상절토_DH", "가상성토_DH", "_DH토량임시",
             // ★[v101.1 · JACK 0929 «계획지표면이어야해»] 옹벽 쪽 재료·보관 면 — 계획지표면은 정지면_DH 하나(옹벽 합성 포함)다.
             //   목록에 없으면 «원지반만» 보기에서 원지반처럼 켜진다

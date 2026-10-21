@@ -388,25 +388,29 @@ public sealed class GradingDialog : Window
     /// 그 카테고리는 열리고 다른 카테고리는 닫히게"</i>. <c>null</c>이면 각자 따로 접힌다.</param>
     internal static StackPanel AddCollapsible(Panel parent, string title, string? tip = null,
                                               bool first = false, bool open = true,
-                                              string? key = null, string? group = null)
-        => AddCollapsible(parent, title, out _, tip, first, open, key, group);
+                                              string? key = null, string? group = null, int level = 1)
+        => AddCollapsible(parent, title, out _, tip, first, open, key, group, level);
 
     /// <summary>★[검토 M-1] <b>접었을 때 보여 줄 요약칸</b>까지 돌려주는 판.
     ///
     /// <para>접으면 그 안의 것이 통째로 사라진다 — <c>1. 대상</c>처럼 <b>무엇을 골랐는지</b>가
     /// 든 칸에서는 그것이 곧 <b>상태를 못 보게 되는 것</b>이다.
     /// 그래서 접힌 동안만 제목 옆에 한 줄 요약을 띄운다. 펼치면 진짜 줄들이 보이므로 요약은 숨는다.</para></summary>
+    /// <param name="level">★[v103.3.1 · JACK 1021 «사면 설정 · 기타 설정 … 접기 펼치기»] 칸 안의 칸 — 1 = 큰 칸(지금 모양) ·
+    /// 2 = 그 안의 칸(중간 제목 글씨 · 짙은 글자) · 3 = 또 그 안(2와 같은 글씨 · 왼쪽 12px 들임).</param>
     internal static StackPanel AddCollapsible(Panel parent, string title, out TextBlock badge,
                                               string? tip = null, bool first = false,
-                                              bool open = true, string? key = null, string? group = null)
+                                              bool open = true, string? key = null, string? group = null, int level = 1)
     {
         string k = key ?? title;
         bool on = SectionOpen.TryGetValue(k, out bool remembered) ? remembered : open;
+        bool sub = level >= 2;
+        double indent = level >= 3 ? 12 : 0;
 
         var arrow = new TextBlock
         {
             Text = on ? "▾" : "▸",
-            FontSize = 11,
+            FontSize = sub ? 10 : 11,
             Foreground = DhBrand.Brand,
             Width = 14,
             VerticalAlignment = VerticalAlignment.Center,
@@ -414,9 +418,9 @@ public sealed class GradingDialog : Window
         var label = new TextBlock
         {
             Text = title,
-            FontSize = 13,                       // ★AddSection과 같은 값 — 다르면 두 화면이 달라 보인다
+            FontSize = sub ? 12 : 13,            // ★AddSection과 같은 값 — 다르면 두 화면이 달라 보인다 · 안쪽 칸은 중간 제목(SubHead)과 같은 12
             FontWeight = FontWeights.Bold,
-            Foreground = DhBrand.Brand,
+            Foreground = sub ? DhBrand.Ink : DhBrand.Brand,
             VerticalAlignment = VerticalAlignment.Center,
         };
         // 접혀 있을 때만 보이는 요약 — 부르는 쪽이 글자를 채운다(안 채우면 빈칸이라 안 보인다).
@@ -441,21 +445,22 @@ public sealed class GradingDialog : Window
         {
             Child = headRow,
             Background = Brushes.Transparent,
-            Padding = new Thickness(0, 3, 0, 3),
-            Margin = new Thickness(0, first ? 0 : 14, 0, 5),
+            Padding = new Thickness(0, sub ? 2 : 3, 0, sub ? 2 : 3),
+            Margin = new Thickness(indent, first ? 0 : sub ? 8 : 14, 0, sub ? 3 : 5),
             Cursor = System.Windows.Input.Cursors.Hand,
             ToolTip = tip == null ? "누르면 접거나 펼칩니다." : tip + "\n(제목을 누르면 접거나 펼칩니다)",
         };
 
+        double gapOpen = sub ? 8 : 11;
         var line = new Border
         {
             Height = 1,
             Background = DhBrand.Line,
-            Margin = new Thickness(0, 0, 0, 11),
+            Margin = new Thickness(indent, 0, 0, gapOpen),
             ToolTip = tip,
         };
 
-        var body = new StackPanel { Visibility = on ? Visibility.Visible : Visibility.Collapsed };
+        var body = new StackPanel { Visibility = on ? Visibility.Visible : Visibility.Collapsed, Margin = new Thickness(indent, 0, 0, 0) };
 
         // ★한 자리에서만 모양을 바꾼다 — 누를 때와 <b>남이 닫을 때</b>가 같은 길을 타야
         //   화살표·요약·여백이 어긋나지 않는다.
@@ -465,7 +470,7 @@ public sealed class GradingDialog : Window
             arrow.Text = now ? "▾" : "▸";
             sum.Visibility = now ? Visibility.Collapsed : Visibility.Visible;
             // ★접었을 때 밑줄만 남으면 <b>빈 줄이 떠 있는 것</b>처럼 보인다 — 아래 여백을 줄인다.
-            line.Margin = new Thickness(0, 0, 0, now ? 11 : 2);
+            line.Margin = new Thickness(indent, 0, 0, now ? gapOpen : 2);
             SectionOpen[k] = now;
         }
 
@@ -491,7 +496,7 @@ public sealed class GradingDialog : Window
         head.MouseEnter += (_, __) => head.Background = DhBrand.BrandDim;
         head.MouseLeave += (_, __) => head.Background = Brushes.Transparent;
 
-        if (!on) line.Margin = new Thickness(0, 0, 0, 2);
+        if (!on) line.Margin = new Thickness(indent, 0, 0, 2);
 
         parent.Children.Add(head);
         parent.Children.Add(line);
@@ -501,6 +506,12 @@ public sealed class GradingDialog : Window
 
     /// <summary>접은 칸 기억 — 창을 다시 만들어도 유지된다(AutoCAD가 도는 동안).</summary>
     private static readonly System.Collections.Generic.Dictionary<string, bool> SectionOpen = new();
+
+    /// <summary>★[v103.3.3 · JACK 1021 «처음 팝업이 열릴때는 사면설정이 열려있을것»] 그 칸의 접은 기억을 지운다 — 다음에 만들 때 <c>open</c> 첫 값을 따른다.</summary>
+    internal static void ForgetOpen(params string[] keys)
+    {
+        foreach (var k in keys) SectionOpen.Remove(k);
+    }
 
     /// <summary>아코디언 묶음 — 묶음 이름 → (칸 키 → 그 칸을 닫는 손잡이).
     /// <para>같은 키로 다시 등록되면 갈아 끼운다. 안 그러면 창을 다시 만들 때

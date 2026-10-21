@@ -32,6 +32,8 @@ public sealed class ResetCommand
     {
         var l = new System.Collections.Generic.List<string>
         { "정지면_DH", "정지면_DH이전", SectionCommand.PurePadSurfaceBase, SectionCommand.PurePadSurfaceBase + "이전",
+          PureWithWallsBuilder.Name, PureWithWallsBuilder.TempName, CreateGradingCommand.StashBase,   // ★[v103.2] 옹벽면(종단 · 횡단용) · «이어서»가 비켜 둔 면
+          WallExcavBuilder.Name, WallExcavBuilder.TempName, WallExcavBuilder.PieceName,   // ★[v103.3] 옹벽 뒷채움 터파기면 · 임시 · 조각
           "가상절토_DH", "가상성토_DH", "_DH토량임시",
           // ★[JACK 0824] 터파기 산출물도 함께 — 안 지우면 "초기화했는데 터파기가 남아 있다"가 된다.
           ExcavCommand.SurfName, ExcavCommand.BaseName,
@@ -182,6 +184,7 @@ public sealed class ResetCommand
             bundleCleared = GradingBundleStore.Clear(db, tr);
             if (WallListStore.Clear(db, tr)) bundleCleared = true;   // ★[v103.0] 옹벽 목록(번호도 1부터)
             try { WallListStore.WriteDefer(db, tr, false); } catch { }   // ★[v103.1.12] «옹벽 합성 미루기»도 기본(꺼짐)으로
+            try { WallListStore.WriteExcav(db, tr, DH.Grading.Core.WallExcav.Settings.Default); } catch { }   // ★[v103.3] «뒷채움 터파기»도 첫 값으로(기록 지움)
             // ★[JACK 0824] 터파기 기록도 지운다 — 지표면만 지우고 기록을 남기면
             //   다음 실행이 옛 구조물을 되살려 "지웠는데 다시 생긴다"가 된다.
             if (ExcavBundleStore.Clear(db, tr)) bundleCleared = true;   // 보고에 같이 싣는다

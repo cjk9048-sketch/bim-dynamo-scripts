@@ -111,6 +111,52 @@ public static class CrossSectionArea
         return SplitCore(x, top, bot, limit);
     }
 
+    /// <summary>★★[v103.3 · 계획 v103.3 2-6 · 재검토 중간 3] <b>깊이를 위끝과 다른 기준선에서 잰다</b> — 옹벽 터파기가 구조물 터파기 바닥 아래로 더 판 몫은
+    /// 그 구간의 위(<paramref name="top"/> = 구조물 바닥)가 아니라 그 자리 지표(<paramref name="baseLine"/>)에서 깊이를 잰다.
+    /// <para>깊은 몫 = [<paramref name="bot"/>, min(<paramref name="top"/>, base − limit)] · 얕은 몫 = 전체 − 깊은 몫. 그 위끝이 바뀌는 자리(top = base − limit)와
+    /// 깊은 몫이 0이 되는 자리(base − limit = bot)를 축에 넣는다(<see cref="SplitByDepth"/>와 같은 법). <paramref name="baseLine"/>이 <paramref name="top"/>과 같으면 <see cref="SplitByDepth"/>와 같다.</para></summary>
+    public static (double Shallow, double Deep) SplitByDepthBase(double[] x, double[] top, double[] bot, double[] baseLine, double limit)
+    {
+        if (x == null || top == null || bot == null || baseLine == null || !(limit > 0)) return (0, 0);
+        int n = System.Math.Min(x.Length, System.Math.Min(top.Length, System.Math.Min(bot.Length, baseLine.Length)));
+        if (n < 2) return (0, 0);
+        var add = new System.Collections.Generic.List<double>();
+        for (int i = 0; i < n - 1; i++)
+        {
+            foreach (var (a, b) in new[]
+            {
+                (baseLine[i] - limit - bot[i], baseLine[i + 1] - limit - bot[i + 1]),          // 깊은 몫이 0이 되는 자리
+                (baseLine[i] - limit - top[i], baseLine[i + 1] - limit - top[i + 1]),          // min이 바뀌는 자리
+            })
+            {
+                if (double.IsNaN(a) || double.IsNaN(b)) continue;
+                if ((a > 0 && b < 0) || (a < 0 && b > 0)) add.Add(x[i] + (x[i + 1] - x[i]) * (a / (a - b)));
+            }
+        }
+        double[] xx = x, tt = top, bb = bot, ll = baseLine;
+        if (add.Count > 0)
+        {
+            var nx = new System.Collections.Generic.List<double>(n + add.Count);
+            for (int i = 0; i < n; i++) nx.Add(x[i]);
+            nx.AddRange(add);
+            nx.Sort();
+            xx = nx.ToArray();
+            tt = XsecQuantity.Resample(x, top, xx);
+            bb = XsecQuantity.Resample(x, bot, xx);
+            ll = XsecQuantity.Resample(x, baseLine, xx);
+        }
+        var cap = new double[xx.Length];
+        for (int i = 0; i < xx.Length; i++)
+            cap[i] = double.IsNaN(tt[i]) || double.IsNaN(ll[i]) ? double.NaN : System.Math.Min(tt[i], ll[i] - limit);
+        double all = Above(xx, tt, bb);
+        double deep = Above(xx, cap, bb);
+        if (double.IsNaN(all)) return (double.NaN, double.NaN);
+        if (double.IsNaN(deep)) deep = 0;
+        double shallow = all - deep;
+        if (shallow < 0) shallow = 0;
+        return (shallow, deep);
+    }
+
     /// <summary>가르기 본체 — 경계점이 이미 x축에 들어 있다고 보고 잰다.</summary>
     private static (double Shallow, double Deep) SplitCore(double[] x, double[] top, double[] bot, double limit)
     {
