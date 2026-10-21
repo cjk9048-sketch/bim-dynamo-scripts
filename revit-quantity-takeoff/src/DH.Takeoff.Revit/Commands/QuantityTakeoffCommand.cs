@@ -258,7 +258,16 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         session.Note($"열기\t{doc.Title}\t부재 {data.Members.Count} · 세모 {data.Triangles} · 모서리 {data.Segments} · 읽기 {data.ReadMs} ms" +
                      $" · 상자로 그림 {data.Boxed} · 못 그림 {data.Undrawn} · 읽기 오류 {data.ReadErrors} · 띠 나누기로 만든 면 {data.FacesFallback} · 못 만든 면 {data.FacesSkipped} · 엇갈린 면 {data.FacesTwisted}" +
                      $" · 레벨 {data.Levels.Count} · 작업공유 {(doc.IsWorkshared ? "O" : "X")} · 그림 등급 {RenderCapability.Tier >> 16}" +
-                     $" · 넣은 뒤 모양 바뀜 {data.Members.Count(m => m.Value.Changed && !m.Value.IsEmpty)}");
+                     $" · 넣은 뒤 모양 바뀜 {data.Members.Count(m => m.Value.Changed && !m.Value.IsEmpty)}" +
+                     (data.BoxedIds.Count > 0 ? $" · 상자로 그린 부재 Id {string.Join(",", data.BoxedIds.Take(12))}" : "") +
+                     (data.UndrawnIds.Count > 0 ? $" · 못 그린 부재 Id {string.Join(",", data.UndrawnIds.Take(12))}" : ""));
+        // 구멍 내는 보이드(입체 없이 다른 부재를 자름)는 대상에서 뺀다(JACK 2026-10-21) — 뺀 것을 일지에만.
+        try
+        {
+            var voids = DimensionExtractor.TargetVoids(doc);
+            if (voids.Count > 0) session.Note($"보이드 빼임 {voids.Count} (Id {string.Join(",", voids.Take(12))}{(voids.Count > 12 ? " …" : "")})");
+        }
+        catch (Exception ex) { session.Note("보이드 찾기 오류\t" + ex.Message); }
 
         // 창이 떠 있는 동안 여는 그룹: 이 문서를 지금 고칠 수 없으면(읽기 전용 등) 3D 를 띄우기 전에 여기서 드러난다.
         var group = new TransactionGroup(doc, "DH 수량산출");
@@ -412,7 +421,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         if (done.Objects is { Committed: true } plates && done.Objects.Blocked.Length == 0)
         {
             text.AppendLine($"거푸집 객체: 판 {plates.Created}개(일반 모델 · 12 mm)" + (plates.Deleted > 0 ? $" · 전 판 {plates.Deleted}개 지움" : "") +
-                            (plates.Failed.Count > 0 ? $" · ★ 못 만든 판 {plates.Failed.Count}개(일지)" : "") + " — 납품 전에 리본 [거푸집 객체 지우기]");
+                            (plates.Failed.Count > 0 ? $" · ★ 못 만든 판 {plates.Failed.Count}개(일지)" : "") + " — 납품 전에 리본 [거푸집 › 거푸집 삭제]");
             if (plates.Suspicious > 0 || plates.ReadBackProblem.Length > 0)
                 text.AppendLine($"  ★ 다시 읽어 보니 걸리는 판 {plates.Suspicious}개(칸을 다 못 적음 {plates.MissingParams} · 칸 값이 다름 {plates.ReadBackDiffers} · 자리 어긋남 {Math.Max(0, plates.Misplaced)})" +
                                 (plates.ReadBackProblem.Length > 0 ? " · 되읽기 오류: " + plates.ReadBackProblem : "") + " — 일지");
@@ -438,8 +447,10 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
 
         var td = Dialogs.New(Title);
         td.AllowCancellation = true;
-        td.MainInstruction = done.Saved ? "수량산출 — 완료(산출근거 엑셀 저장)" : "수량산출 — 완료(엑셀은 저장하지 못함)";
-        td.MainContent = text.ToString();
+        td.MainInstruction = done.Saved ? "수량산출 — 완료(엑셀 저장)" : "수량산출 — 완료(엑셀은 저장하지 못함)";
+        // 본문은 핵심 두세 줄 + 걸리는 것(★ · ⚠)만, 나머지(내역 · 파일 경로 · 되돌리기 안내)는 «자세히»(JACK 2026-10-21 «내용이 너무 많아 가독성이 떨어져 짧게 요약»).
+        td.MainContent = Summary(done, text.ToString());
+        td.ExpandedContent = text.ToString();
         if (done.Saved) td.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "엑셀 파일 열기");
         if (view != null)
             td.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, $"확인용 3D 뷰 열기 ('{ZoneAssigner.CheckViewName}')", "콘크리트 부재를 중분류별 색으로 칠해 둔 Revit 뷰입니다(거푸집 객체는 숨김).");
@@ -465,6 +476,51 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         }
     }
 
+    // 완료 알림의 본문(JACK 2026-10-21 고름 «핵심 두세 줄 + 자세히 펼치기»): 콘크리트 · 거푸집 합 / 부재 · 줄 · 판 / 새 이름 · 바꾼 식(0 인 것은 뺀다) +
+    // 자세한 글에서 걸리는 줄(★ · ⚠ — 줄 가운데의 ★ 는 그 줄의 이름표 + ★ 뒤) + 입체 없는 대상 아님 부재(Id · 카테고리 · 유형 — JACK 고름 «완료 팝업에만 한 줄»).
+    private static string Summary(Completion done, string detail)
+    {
+        static string N(double v) => v.ToString("#,##0.00", CultureInfo.InvariantCulture);
+        var lines = new List<string>();
+        var plan = done.Plan;
+        double formwork = done.Sheet?.Sections.Sum(s => s.bim) ?? done.Formwork?.Total ?? 0;
+        if (plan != null) lines.Add($"콘크리트 {N(FormulaDecomposer.RoundQuantity(plan.Quantity))} m³" + (formwork > 0 ? $" · 거푸집 {N(formwork)} ㎡" : ""));
+        var counts = new List<string>();
+        if (plan != null) counts.Add($"부재 {plan.Listed}개 · 산출근거 {plan.Rows.Count}줄");
+        if (done.Objects is { Committed: true } plates) counts.Add($"거푸집 판 {plates.Created}장");
+        if (counts.Count > 0) lines.Add(string.Join(" · ", counts));
+        var changes = new List<string>();
+        if (done.Names is { } names && names.Fresh + names.Copies + names.Duplicates + names.Prefixed is int renamed && renamed > 0) changes.Add($"새 부재 이름 {renamed}");
+        if (done.Formulas.NewFormula > 0) changes.Add($"산출식 새로 적음 {done.Formulas.NewFormula}");
+        if (done.Formulas.Replaced > 0) changes.Add($"산출식 바꿔 적음 {done.Formulas.Replaced}");
+        if (done.VoidsWiped.Count > 0) changes.Add($"보이드 값 지움 {done.VoidsWiped.Count}");
+        if (changes.Count > 0) lines.Add(string.Join(" · ", changes));
+        // 입체가 없어 대상에서 뺀 부재(보이드는 처음부터 빠져 여기에 없다).
+        var solidless = done.Formulas.Plan.All.Where(o => o.NoVolume && !o.NotConcrete).ToList();
+        if (solidless.Count > 0)
+            lines.Add($"대상 아님 {solidless.Count}개 · 입체 없음 (" + string.Join(", ", solidless.Take(3).Select(o => $"{o.Id.Value} {o.Category} {o.TypeName}".Trim())) +
+                      (solidless.Count > 3 ? $" 외 {solidless.Count - 3}" : "") + ")");
+        // 걸리는 것: 자세한 글의 ★ · ⚠ 줄.
+        var problems = new List<string>();
+        foreach (string raw in detail.Split('\n'))
+        {
+            string line = raw.Trim();
+            if (line.StartsWith('★') || line.StartsWith('⚠')) problems.Add(line);
+            else if (line.IndexOf('★') is int at && at > 0)
+            {
+                int colon = line.IndexOf(':');
+                string label = colon > 0 && colon < at ? line[..colon].Trim() + ": " : "";
+                problems.Add(label + line[at..].Trim());
+            }
+        }
+        if (problems.Count > 0)
+        {
+            lines.Add("");
+            lines.AddRange(problems.Distinct());
+        }
+        return string.Join("\n", lines);
+    }
+
     // [완료]의 결과(창을 닫은 뒤 알림 창과 일지에 쓴다).
     private sealed class Completion
     {
@@ -476,6 +532,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         public FormworkObjects.Outcome? Objects;  // 거푸집 객체(R44)
         public string ObjectsProblem = "";         // 거푸집 객체를 만들지 못한 까닭("" = 없음)
         public MemberNamer.Outcome? Names;         // 부재 이름(R53b)
+        public List<long> VoidsWiped = new();      // 전에 적은 값을 지운 보이드(JACK 2026-10-21)
         public string NamesProblem = "";           // 부재 이름을 다 붙이지 못한 까닭("" = 없음)
         public CalcPlan? Plan;
         public XlsxBook? Book;              // 지은 엑셀(쓰기는 창을 닫아 그룹이 모델에 남은 뒤에 — revit R42 A1)
@@ -510,6 +567,9 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         session.Note("완료\t시작");
         // 넣은 뒤 모양이 바뀌었는데 확인하지 않은 부재(R52b — JACK 2026-10-19 인터뷰 «알리고 진행»): 묻고, 계속하면 지금 값으로 만든다(엑셀 «부재 목록»에 남는다).
         // 고칠 수 없는 부재 · 그려지지 않은 부재도 센다 — 확인할 수는 없어도 산출서에는 실린다(R52b core-verify 중간 4).
+        // ②-0 보이드(JACK 2026-10-21 «구멍 내는 보이드는 처음부터 빼기 · 이미 적힌 값도 지워줘»): 대상에서 빠진 보이드에 전에 적은 값을 지운다(창의 그룹 안 — Ctrl+Z 한 줄).
+        string voidProblem = view.RunLocked(() => done.VoidsWiped = WipeVoids(doc, session));
+        if (voidProblem.Length > 0) session.Note("완료\t보이드 값 지우기 오류\t" + voidProblem);
         int changed = editor.Members.Count(m => m.Value.Changed && !m.Value.IsEmpty);
         if (changed > 0)
         {
@@ -736,6 +796,34 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
                (o.MaterialProblem.Length > 0 ? " · 재료 못 만듦: " + o.MaterialProblem : "") +
                (o.SubcategoryProblem.Length > 0 ? " · 하위 범주 못 만듦: " + o.SubcategoryProblem : "") +
                (o.TypeProblem.Length > 0 ? " · 유형 «거푸집» 못 만듦: " + o.TypeProblem : "") + (o.Untyped > 0 ? $" · 유형을 못 붙인 판 {o.Untyped}" : "") + $" · {o.Ms} ms";
+    }
+
+    // 대상에서 빠진 보이드에 이 애드인이 전에 적은 값(칸 · 숨은 기록)을 지운다 — 값이 있고 고칠 수 있는 보이드만 · 트랜잭션 하나. 지운 보이드 Id 를 돌려준다.
+    private static List<long> WipeVoids(Document doc, Session session)
+    {
+        var wiped = new List<long>();
+        var voids = DimensionExtractor.TargetVoids(doc);
+        if (voids.Count == 0) return wiped;
+        var dirty = voids.Select(id => doc.GetElement(new ElementId(id))).OfType<Element>()
+            .Where(el => FormulaAutoFill.WhyNotEditable(doc, el) == null && MemberNamer.HasValues(el)).ToList();
+        if (dirty.Count == 0) return wiped;
+        TransactionStatus status;
+        using (var tx = new Transaction(doc, "DH 보이드 값 지움"))
+        {
+            tx.Start();
+            // 오류는 창을 띄우지 않고 이 트랜잭션만 되돌린다(«요소 삭제»를 눌러 보이드가 지워지지 않게 — 설치 전 검토 높음).
+            var options = tx.GetFailureHandlingOptions();
+            options.SetFailuresPreprocessor(new OverlapChecker.QuietFailures());
+            options.SetClearAfterRollback(true);
+            tx.SetFailureHandlingOptions(options);
+            foreach (var el in dirty)
+                if (MemberNamer.Wipe(el)) wiped.Add(el.Id.Value);
+            status = tx.Commit();
+        }
+        if (status == TransactionStatus.Committed) session.Committed();
+        else wiped.Clear();
+        session.Note($"완료\t보이드 값 지움 {wiped.Count} (Id {string.Join(",", wiped.Take(12))}) · 보이드 {voids.Count} · {status}");
+        return wiped;
     }
 
     // 그 파일을 지금 쓸 수 있는가("" = 쓸 수 있음, 아니면 까닭) — 엑셀에 열려 있는 파일 · 쓸 수 없는 폴더를 창을 닫기 전에 가린다.
@@ -1004,8 +1092,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
             notices.Add("전의 방식(구역 네모)으로 저장한 자료가 있어 이름만 위치 목록으로 옮겼습니다. 목록을 고치면 네모는 지워집니다(지우기 전에 원문을 로그 폴더에 떠 둡니다).");
         else if (data.Stored.Exists && data.Stored.Plan.ReadVersion < ZonePlan.CurrentVersion && data.Stored.Plan.Parts.Count > 0)
             notices.Add("전의 판이 저장한 부위 목록을 구조물의 대표 목록으로 옮겼습니다(직접 넣은 이름과 고친 표시는 그대로 · 바꿔 둔 차례는 묶음의 차례로 다시 놓였습니다).");
-        if (data.Boxed > 0) notices.Add($"형상을 세모로 만들지 못한 부재 {data.Boxed}개는 경계상자로 그렸습니다(찍어서 값을 넣을 수 있습니다).");
-        if (data.Undrawn > 0) notices.Add($"형상도 경계상자도 없는 부재 {data.Undrawn}개는 그림에 나오지 않습니다(그 부재의 부위·중분류는 건드리지 않습니다).");
+        // 상자로 그린 부재 · 못 그린 부재는 3D 그림의 일이라 알리지 않는다(JACK 2026-10-21 «큰 오류처럼 보임» — 일지 «열기» 줄에 Id).
         if (data.FacesSkipped > 0) notices.Add($"세모로 만들지 못한 면이 {data.FacesSkipped}개 있어 그 자리는 비어 보입니다(부재는 다른 면으로 찍을 수 있습니다).");
         return string.Join("\n", notices);
     }
@@ -1286,7 +1373,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         // [완료]에서 엑셀 저장을 그만두고 닫았어도 판은 만들어져 남았다(JACK 2026-10-16 «저장 취소해도 만들기») — 여기에도 적는다.
         if (kept && done?.Objects is { Committed: true } plates)
             text.AppendLine().AppendLine($"거푸집 객체: 판 {plates.Created}개(일반 모델 · 12 mm — 엑셀은 저장하지 않았습니다)" +
-                                         (plates.Failed.Count > 0 ? $" · ★ 못 만든 판 {plates.Failed.Count}개(일지)" : "") + " — 납품 전에 리본 [거푸집 객체 지우기]");
+                                         (plates.Failed.Count > 0 ? $" · ★ 못 만든 판 {plates.Failed.Count}개(일지)" : "") + " — 납품 전에 리본 [거푸집 › 거푸집 삭제]");
         else if (kept && done != null && done.ObjectsProblem.Length > 0)
             text.AppendLine().AppendLine("★ 거푸집 객체를 만들지 못했습니다: " + done.ObjectsProblem);
         if (paintProblem.Length > 0) text.AppendLine().AppendLine(paintProblem);

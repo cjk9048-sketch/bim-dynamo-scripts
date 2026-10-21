@@ -36,8 +36,11 @@ public sealed class OverlapResultView
 {
     public enum Mode { Found, Joined, Clean, NoTargets }
 
-    /// <summary>창에서 누른 것. Pair = [Revit 에서 보기](그 두 부재를 보러 간다) · CheckAll = [전체 다시 검사].</summary>
-    public enum Choice { Close, Join, SelectAll, SelectProblems, Pair, CheckAll }
+    /// <summary>
+    /// 창에서 누른 것. Pair = [Revit 에서 보기](그 두 부재를 보러 간다) · CheckAll = [전체 다시 검사] · Join = 지금 단계의 [모두 기준대로](Shown 이 단계) ·
+    /// Next = [다음 단계](이 창에서 겹침오류를 고쳐 모델이 바뀌었다 — 부르는 쪽이 작성오류를 다시 찾아 ② 로 연다 · R54c).
+    /// </summary>
+    public enum Choice { Close, Join, SelectAll, SelectProblems, Pair, CheckAll, Next }
 
     public sealed class Model
     {
@@ -97,6 +100,41 @@ public sealed class OverlapResultView
 
         /// <summary>이 모델에서 처음 값과 다르게 정한 «겹친 자리» 순위(부위 · 순위 · 처음 순위) — [기준표]에 보인다.</summary>
         public List<(string part, int rank, int first)> RankChanged = new();
+
+        // ── 단계(R54c — JACK 2026-10-21 «탭보다 단계대로 · 겹침오류가 반영된 작성오류») ──
+        /// <summary>처음 보일 단계(① 겹침오류 · ② 작성오류). 겹침오류가 없으면 ② 로 연다.</summary>
+        public Item Start = Item.Pairs;
+
+        /// <summary>판마다 «결합한 뒤»인가(그 단계의 [모두 기준대로]를 했다 — 다시 찾은 작성오류가 «Pending»으로 보이지 않게). null = Mode 를 따름.</summary>
+        public bool? PairsJoined, ReversedJoined;
+
+        /// <summary>창을 열 때 그림 위에 한 줄(다시 찾은 작성오류 등 · "" = 없음) · OpeningWarn = 경고 색(다시 찾지 못함 등).</summary>
+        public string Opening = "";
+        public bool OpeningWarn;
+
+        /// <summary>② 에서만 보이는 알림(사람이 정한 결합 · 참고 줄 · 재지 못한 작성오류 — ① 에는 다시 찾을 옛 목록의 수라 보이지 않는다).</summary>
+        public List<string> ReversedNotes = new();
+
+        /// <summary>
+        /// 작성오류 목록이 지금 모델의 것이 아니거나 재지 않은 것이다(겹침오류가 있어 처음에는 재지 않고 찾았다 — 계획 검토 L8): [다음 단계]가 늘 다시 찾게(Next).
+        /// </summary>
+        public bool ReversedStale;
+
+        /// <summary>작성오류를 다시 찾지 못했다(목록이 빈 것은 «없음»이 아니다 — ② 머리가 경고 · 설치 전 검토 낮음 6).</summary>
+        public bool RefindFailed;
+
+        /// <summary>앞의 창(같은 실행)에서 모델이 이미 바뀌었다 — 오류 알림이 «모델은 그대로»라고 하지 않게(계획 검토 L6).</summary>
+        public bool ChangedBefore;
+
+        /// <summary>앞의 창에서 고치기를 불러 본 겹침오류(Key) — 다시 연 창에서도 «손댐»(잠금이 되살아나지 않게 · 계획 검토).</summary>
+        public HashSet<int> TriedPairs = new();
+
+        // ── 되돌리기(백스페이스 — JACK 2026-10-21 «해당 목록만 초기화») ──
+        /// <summary>고른 겹침오류 줄을 고치기 전으로(줄의 Key) — 부르는 쪽이 넣는다. null 이면 백스페이스를 듣지 않는다.</summary>
+        public Func<int, Fixed>? Revert;
+
+        /// <summary>고른 작성오류 줄을 고치기 전으로(기준대로 바꾼 줄 = 순서를 되돌림 · 사람이 정함 = 그 기록을 지움).</summary>
+        public Func<int, Fixed>? RevertReversed;
     }
 
     /// <summary>창에서 쌍 하나를 고친 결과 — 부르는 쪽이 채운다.</summary>
@@ -114,9 +152,10 @@ public sealed class OverlapResultView
         public Dictionary<int, MeshData?> Blobs = new();    // 덩어리가 바뀐 쌍(Key → 새 덩어리 · null = 그리지 않음) — 새 쌍 · 체적이 바뀐 쌍
         public int Gone;                                    // 이번 다시 찾기로 겹침이 없어진 다른 쌍의 수(알림 글)
         public List<OverlapRow> ReversedRows = new();       // 바뀐 결합 방향 줄(R54 — Key = 결합 방향 목록 차례)
+        public string Said = "";                            // 잘 됐을 때 알릴 한 줄("" = 없음 — 되돌리기)
     }
 
-    /// <summary>목록이 보여 주는 검사 항목(R54 모델 검증 — 항목 띠). 화면 이름은 «겹침오류» · «작성오류»(JACK 2026-10-20).</summary>
+    /// <summary>목록이 보여 주는 검사 항목 = 단계(R54c — ① 겹침오류 → ② 작성오류). 화면 이름은 «겹침오류» · «작성오류»(JACK 2026-10-20).</summary>
     public enum Item { Pairs, Reversed }
 
     // 3D 의 색(JACK 2026-10-14 세 번째: "겹치는 부위는 빨간색, 첫번째 부재는 주황색, 두번째 부재는 녹색 … 고치고 나면 그 부위가 해당하는 부재 색상으로"):
@@ -134,7 +173,8 @@ public sealed class OverlapResultView
     private readonly OverlapBoard _pairs, _reversed;         // 항목마다 판 하나(겹침 · 결합 방향 — core-verify R54 계획 L1)
     private OverlapBoard _board;                             // 지금 목록이 보여 주는 판(항목 띠로 바꾼다 — 그림의 부재 색도 이것을 따른다)
     private Item _item;
-    private readonly Dictionary<Item, RadioButton> _itemButtons = new();
+    private readonly Dictionary<Item, (Border chip, TextBlock text)> _steps = new();   // 단계 표시(누를 수 없다 — R54c)
+    private bool _pairsChanged;                              // 이 창에서 겹침오류를 고쳐 모델이 바뀌었다 — [다음 단계]가 작성오류를 다시 찾게 한다
     private FrameworkElement? _modes;                        // 고치기 줄의 [기본 | 사용자](결합 방향 줄에는 두지 않는다)
     private StackPanel? _legendBlob;                         // 색 풀이의 «겹친 부위»(결합 방향에는 덩어리가 없어 숨긴다)
     private TextBlock? _legendWinner, _legendLoser;          // 색 풀이의 두 부재 이름표(항목마다 목록 칸 이름과 같게)
@@ -148,7 +188,7 @@ public sealed class OverlapResultView
     private readonly Dictionary<int, Button> _rowOf = new();
     private readonly TextBlock _focusHead = new(), _focusSub = new(), _hover = new(), _message = new();
     private readonly Border _hoverPill = new(), _toast = new();
-    private readonly Border _headHost = new(), _buttonsHost = new(), _fixRow = new();
+    private readonly Border _headHost = new(), _buttonsHost = new(), _fixRow = new(), _notesHost = new();
     private readonly StackPanel _fixActions = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
     private Button? _previous, _next, _showAll, _inRevit;
     private RadioButton? _basic, _user;
@@ -160,6 +200,12 @@ public sealed class OverlapResultView
     private readonly Dictionary<(int key, bool cutWinner), (MeshData? mesh, int at)> _cutShapes = new();   // 받아 둔 미리보기 모양(고치면 비운다)
     private bool _reversedPreview;                           // 작성오류 고치기 단추에 마우스를 올린 동안(→ 글쇠도): 두 부재를 바꾼 뒤의 모양으로 그린다
     private readonly Dictionary<int, Dictionary<int, MeshData>> _reversedShapes = new();   // 받아 둔 작성오류 미리보기 모양(줄의 Key → 칸 → 겉면 · 고치면 비운다)
+    // 마우스가 올라가 있는 고치기 단추와 그 단추가 지시하는 모습(JACK 2026-10-21 «좌우 방향키로 바꿔 보더라도 마우스가 단추 위면 무조건 그 단추의 뷰») —
+    // 방향키 ← → 보다 앞선다. 고치기 줄을 다시 지으면(줄을 옮김 · 고침) 비우고, 새 단추가 마우스 밑에 오면 다시 잡는다(RefreshFix).
+    private Button? _hoverButton;
+    private Action? _hoverView;
+    private bool _enterArmed = true;                         // 엔터가 고치기를 부른 뒤에는 글쇠를 뗄 때까지 받지 않는다
+    private bool? _keyView;                                  // 고른 줄에서 방향키로 본 모습(→ = 고친 뒤 · ← = 지금 · null = 아직) — 엔터가 그 모습대로 고친다(JACK 2026-10-21 «단축키처럼»)
     private int _solo = -1;                                  // 목록에서 부재 이름을 눌렀다: 그 부재만 칠한다(그림의 차례 — JACK 2026-10-19) · 초점이 바뀌면 풀린다
     private readonly List<(int key, int member, bool winner, Button cell)> _cells = new();   // 목록의 부재 이름 칸(누를 수 있는 것만)
     private bool _changedModel;                              // 이 창에서 고친 것이 모델에 걸렸다
@@ -215,10 +261,12 @@ public sealed class OverlapResultView
         _ui = new UiTheme(dark);
         _joinedText = joinedText;
         _notNeededText = notNeededText;
-        _pairs = new OverlapBoard(model.Rows, model.Mode == Mode.Joined);
-        _reversed = new OverlapBoard(model.Reversed, model.Mode == Mode.Joined);
-        // 처음 보이는 항목: 겹친 쌍이 있으면 겹침, 없으면 결합 방향.
-        _item = model.Rows.Count > 0 || model.Reversed.Count == 0 ? Item.Pairs : Item.Reversed;
+        _triedPairs.UnionWith(model.TriedPairs);
+        _changedModel = model.ChangedBefore;
+        _pairs = new OverlapBoard(model.Rows, model.PairsJoined ?? model.Mode == Mode.Joined);
+        _reversed = new OverlapBoard(model.Reversed, model.ReversedJoined ?? model.Mode == Mode.Joined);
+        // 처음 단계: 부르는 쪽이 정한 것(겹침오류가 없으면 ②). 작성오류만 걸린 모델도 ② 다.
+        _item = model.Rows.Count == 0 ? Item.Reversed : model.Start;
         _board = _item == Item.Pairs ? _pairs : _reversed;
         // 넓은 창: 어느 항목이든 줄이 있으면(revit-verify R54 계획 H1 — 결합 방향만 걸린 모델이 작은 창으로 빠지지 않게).
         _wide = (model.Rows.Count > 0 || model.Reversed.Count > 0) && model.Mode is Mode.Found or Mode.Joined;
@@ -239,7 +287,7 @@ public sealed class OverlapResultView
             var tiles = Tiles(compact: false);
             if (tiles != null) Top(dock, tiles);
             if (_m.SelectionOnly && _m.Mode == Mode.Clean) Top(dock, SelectionBanner());
-            if (_m.Notes.Count > 0) Top(dock, NotesBanner());
+            if (_m.Notes.Count + _m.ReversedNotes.Count > 0) Top(dock, NotesBanner());
             dock.Children.Add(new Border());
             return;
         }
@@ -248,7 +296,7 @@ public sealed class OverlapResultView
         _headHost.Margin = new Thickness(0, 0, 0, 12);
         Top(dock, _headHost);
         if (_m.SelectionOnly) Top(dock, SelectionBanner());
-        if (_m.Notes.Count > 0) Top(dock, NotesBanner());
+        Top(dock, _notesHost);                            // 알림 띠는 단계마다 다시 짓는다(RefreshChrome — ② 의 알림은 ② 에서만)
         Bottom(dock, _buttonsHost);
 
         // 그림에 넘길 겉면: 부재 전부, 그 뒤에 덩어리(그릴 수 있는 것만).
@@ -306,10 +354,12 @@ public sealed class OverlapResultView
         dock.Children.Add(middle);
 
         root.PreviewKeyDown += OnKey;
+        root.PreviewKeyUp += (_, e) => { if (e.Key == Key.Enter) _enterArmed = true; };   // 엔터는 뗀 뒤에 다시 받는다(계획 검토 중간 2)
         root.PreviewMouseLeftButtonDown += OnPressAnything;
         RefreshChrome();
         RefreshList();
         RefreshFocus();
+        if (_m.Opening.Length > 0) ShowMessage(_m.Opening, _m.OpeningWarn);
     }
 
     private static void Top(DockPanel dock, UIElement child) { DockPanel.SetDock(child, Dock.Top); dock.Children.Add(child); }
@@ -318,7 +368,9 @@ public sealed class OverlapResultView
     // 확인할 쌍: 결합 못 함 · 겹침이 남음. 결합한 뒤의 창은 결합하지 않은 쌍(다시 찾아 나온 새 쌍 · 다시 연 쌍)도 — 보드의 «끝나지 않은 쌍»과 같다
     // (core-verify R50 높음: 그것을 빼면 새 겹침이 남았는데 «모두 정리»가 뜬다).
     // 결합 방향은 결합한 뒤의 창에서 못 바꾼 줄을 더한다(R54).
-    private int Problems => _m.Mode == Mode.Joined ? _pairs.Problems + _reversed.Problems : _m.StillOverlap + _m.Failed;
+    // 단계마다 결합한 뒤의 판만 센다(R54c — PairsJoined · ReversedJoined). 결합하기 전의 겹침오류는 창에서 고쳐 본 결과(못 함 · 겹침 남음)를 센다.
+    private int Problems => PairsProblems + _reversed.Problems;
+    private int PairsProblems => _pairs.Joined ? _pairs.Problems : _m.StillOverlap + _m.Failed;
 
     // 쌍의 수는 보드에서 읽는다(고친 뒤 다시 찾아 붙인 줄까지 — core-verify R50 낮음 8).
     private int Pairs => _pairs.Ordered.Count;
@@ -335,7 +387,7 @@ public sealed class OverlapResultView
     private double ReversedM3 => _reversed.Ordered.Where(r => !r.Optional && !r.Unmeasured).Sum(r => r.VolumeM3);
 
     // 결과가 하나라도 있다(결합한 뒤의 창이거나, 창에서 하나라도 고쳐 봤다).
-    private bool Touched => _m.Mode == Mode.Joined || _m.Joined + _m.NotNeeded + _m.StillOverlap + _m.Failed > 0;
+    private bool Touched => _pairs.Joined || _m.Joined + _m.NotNeeded + _m.StillOverlap + _m.Failed > 0;
 
     // [전체 다시 검사]를 둘 것인가: 결합한 뒤의 창에는 두지 않는다 — 부르는 쪽은 그 뒤로는 처음부터 다시 돌지 않는다.
     private bool CanCheckAll => _m.CanCheckAll && _m.Mode != Mode.Joined;
@@ -347,11 +399,14 @@ public sealed class OverlapResultView
     {
         (string tone, string glyph, string title, string sub) = _m.Mode switch
         {
-            Mode.Found => ("Warn", UiTheme.IconWarn,
-                Pairs > 0 && ReversedCount > 0 ? $"겹침오류 {Pairs}쌍 · 작성오류 {ReversedCount}쌍을 찾았습니다"
-                : Pairs > 0 ? $"겹침오류 {Pairs}쌍을 찾았습니다" : $"작성오류 {ReversedCount}쌍을 찾았습니다", ""),
-            Mode.Joined when Problems == 0 => ("Good", UiTheme.IconCheck, "모두 기준대로 정리했습니다", ""),
-            Mode.Joined => ("Warn", UiTheme.IconWarn, $"{Problems}쌍은 직접 확인해 주세요", ""),
+            // 넓은 창은 지금 단계의 결과(R54c): ① 겹침오류 · ② 작성오류 — 결합하기 전(찾음) · 결합한 뒤(정리 · 확인할 것).
+            Mode.Found or Mode.Joined when _item == Item.Pairs => _pairs.Joined
+                ? PairsProblems == 0 ? ("Good", UiTheme.IconCheck, "겹침오류를 모두 기준대로 정리했습니다", "") : ("Warn", UiTheme.IconWarn, $"겹침오류 {PairsProblems}쌍은 직접 확인해 주세요", "")
+                : ("Warn", UiTheme.IconWarn, $"겹침오류 {Pairs}쌍을 찾았습니다", ""),
+            Mode.Found or Mode.Joined when _m.RefindFailed && !_reversed.Joined => ("Warn", UiTheme.IconWarn, "작성오류를 다시 찾지 못했습니다", ""),
+            Mode.Found or Mode.Joined => _reversed.Joined
+                ? _reversed.Problems == 0 ? ("Good", UiTheme.IconCheck, "작성오류를 모두 기준대로 바꿨습니다", "") : ("Warn", UiTheme.IconWarn, $"작성오류 {_reversed.Problems}쌍은 직접 확인해 주세요", "")
+                : ReversedCount > 0 ? ("Warn", UiTheme.IconWarn, $"작성오류 {ReversedCount}쌍을 찾았습니다", "") : ("Good", UiTheme.IconCheck, "작성오류가 없습니다", ""),
             Mode.Clean => ("Good", UiTheme.IconCheck, "모델 검증 통과",
                 _m.SelectionOnly ? "선택한 부재끼리는 겹친 자리도 기준과 반대인 결합도 없습니다."
                 : _m.SplitToDo > 0 ? "겹친 자리도 기준과 반대인 결합도 없습니다."      // 두 덩이 나누기가 먼저다 — «바로 산출식»은 권하지 않는다
@@ -388,6 +443,7 @@ public sealed class OverlapResultView
         head.Children.Add(numbers);
         head.Children.Add(Head(margin: false));
         _headHost.Child = head;
+        _notesHost.Child = NotesBanner();
         _buttonsHost.Child = Buttons();
     }
 
@@ -397,10 +453,15 @@ public sealed class OverlapResultView
     private FrameworkElement? Tiles(bool compact)
     {
         var tiles = new List<Border>();
-        switch (_m.Mode)
+        // 넓은 창은 지금 단계의 칸만(R54c): ① 은 결합하기 전 꼴(Found) · 결합한 뒤 꼴(Joined)을 판으로 가른다 · ② 도.
+        var mode = _m.Mode is Mode.Found or Mode.Joined
+            ? _item == Item.Pairs ? (_pairs.Joined ? Mode.Joined : Mode.Found) : (_reversed.Joined ? Mode.Joined : Mode.Found)
+            : _m.Mode;
+        bool pairsStep = _item == Item.Pairs, reversedStep = _item == Item.Reversed;
+        switch (mode)
         {
             case Mode.Found:
-                if (Pairs > 0 || ReversedCount == 0)
+                if (pairsStep)
                 {
                     tiles.Add(Tile("겹침오류", Pairs.ToString(CultureInfo.InvariantCulture), "쌍", "WarnFg", "결합 없이 겹쳐 두 번 세는 쌍"));
                     if (Touched)
@@ -413,13 +474,13 @@ public sealed class OverlapResultView
                     else tiles.Add(Tile("두 번 세는 체적", M3(_m.TotalM3), "m³", "WarnFg"));
                 }
                 // 작성오류(R54 결합 방향): 남은 줄 수 · 바꾸면 옮겨질 체적의 합.
-                if (ReversedCount > 0)
+                if (reversedStep)
                     tiles.Add(Tile("작성오류", ReversedLeft.ToString(CultureInfo.InvariantCulture), "쌍", ReversedLeft > 0 ? "WarnFg" : "GoodFg",
                         $"기준과 반대로 결합된 쌍 {ReversedCount}개 · 바꾸면 옮겨질 체적 {M3(ReversedM3)} m³(잰 것만)"));
                 tiles.Add(Tile(_m.SelectionOnly ? "검사한 부재(선택)" : "검사한 부재", _m.Checked.ToString(CultureInfo.InvariantCulture), "개", "Text"));
                 break;
             case Mode.Joined:
-                if (Pairs > 0 || ReversedCount == 0)
+                if (pairsStep)
                 {
                     tiles.Add(Tile("결합", (_m.Joined + _m.NotNeeded).ToString(CultureInfo.InvariantCulture), "쌍", "GoodFg",
                         _m.NotNeeded > 0 ? $"이 가운데 {_m.NotNeeded}쌍은 앞선 결합으로 겹침이 이미 없어져 따로 걸지 않았습니다." : ""));
@@ -430,7 +491,7 @@ public sealed class OverlapResultView
                     tiles.Add(Tile("남은 중복 체적", M3(_m.RemainingM3), "m³", _m.RemainingM3 >= 0.005 ? "WarnFg" : "GoodFg",
                         $"결합하기 전: {M3(_m.TotalM3)} m³"));
                 }
-                if (ReversedCount > 0)
+                if (reversedStep)
                 {
                     int switched = _reversed.Ordered.Count(r => r.Fine && !r.Optional);
                     tiles.Add(Tile("작성오류 고침", switched.ToString(CultureInfo.InvariantCulture), "쌍", switched == ReversedCount ? "GoodFg" : "WarnFg",
@@ -481,7 +542,9 @@ public sealed class OverlapResultView
     private UIElement NotesBanner()
     {
         var stack = new StackPanel();
-        foreach (string note in _m.Notes)
+        var notes = _m.Notes.Concat(!_wide || _item == Item.Reversed ? _m.ReversedNotes : Enumerable.Empty<string>()).ToList();
+        if (notes.Count == 0) return new Border();
+        foreach (string note in notes)
             stack.Children.Add(new TextBlock { Text = note, Foreground = _ui["WarnFg"], TextWrapping = TextWrapping.Wrap, LineHeight = 19 });
         return new Border { Background = _ui["WarnBg"], CornerRadius = new CornerRadius(8), Padding = new Thickness(12, 8, 12, 9), Margin = new Thickness(0, 0, 0, 12), Child = stack };
     }
@@ -515,7 +578,8 @@ public sealed class OverlapResultView
 
     private FrameworkElement BuildSide()
     {
-        // 항목 띠(R54 모델 검증): [겹침오류 n] [작성오류 n] — 0 이면 흐리게 · 누르면 그 목록 · 오른쪽 [기준표]. 수 · 잠금은 RefreshItems 가 적는다.
+        // 단계 표시(R54c — JACK 2026-10-21 «탭으로 분리하는 것보다 단계대로»): «① 겹침오류 n › ② 작성오류 m» — 누를 수 없다(넘어가기는 아래 [다음 단계] ·
+        // [이전 단계]) · 지금 단계 강조 · 오른쪽 [기준표]. 수 · 잠금은 RefreshItems 가 적는다.
         var bar = new DockPanel { Margin = new Thickness(10, 9, 10, 8) };
         var table = _ui.Button("기준표", "BtnGhost", "겹친 자리를 누가 가지는지(겹친 자리 순위)의 기준 — 바꾸는 곳은 [수량산출] ① 부위 목록의 «겹친 자리»입니다.", "rankTable");
         table.MinHeight = 28;
@@ -524,20 +588,18 @@ public sealed class OverlapResultView
         table.Click += (_, _) => { Note("기준표"); ShowRankTable(); };
         DockPanel.SetDock(table, Dock.Right);
         bar.Children.Add(table);
-        var pairs = _ui.Segment("", PairsItemTip, "item.pairs");
-        var reversed = _ui.Segment("", ReversedItemTip, "item.reversed");
-        _itemButtons[Item.Pairs] = pairs;
-        _itemButtons[Item.Reversed] = reversed;
-        foreach (var (item, button) in _itemButtons)
+        var strip = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center };
+        foreach (var item in new[] { Item.Pairs, Item.Reversed })
         {
-            button.Focusable = false;
-            button.IsChecked = item == _item;
-            var captured = item;
-            button.Checked += (_, _) => ShowItem(captured);
+            var text = new TextBlock { FontSize = 13, VerticalAlignment = VerticalAlignment.Center };
+            var chip = new Border { CornerRadius = new CornerRadius(14), Padding = new Thickness(11, 4, 12, 5), Child = text };
+            _ui.Mark(chip, item == Item.Pairs ? PairsItemTip : ReversedItemTip, item == Item.Pairs ? "step.pairs" : "step.reversed");
+            _steps[item] = (chip, text);
+            if (item == Item.Reversed)
+                strip.Children.Add(new TextBlock { Text = "›", Foreground = _ui["Sub"], FontSize = 15, Margin = new Thickness(6, 0, 6, 1), VerticalAlignment = VerticalAlignment.Center });
+            strip.Children.Add(chip);
         }
-        var segments = _ui.Segments(pairs, reversed);
-        segments.HorizontalAlignment = HorizontalAlignment.Left;
-        bar.Children.Add(segments);
+        bar.Children.Add(strip);
         _header.Margin = new Thickness(15, 0, 22, 6);
         var top = new StackPanel();
         top.Children.Add(bar);
@@ -589,7 +651,7 @@ public sealed class OverlapResultView
     }
 
     // 결과 칸을 둘 것인가: 결합한 뒤의 창이거나, 창에서 하나라도 고쳐 본 줄 · 고친 뒤 새로 나온 줄이 있다.
-    private bool ShowStatus => _m.Mode == Mode.Joined || _board.Ordered.Any(r => r.Status.Length > 0 || r.New || r.Note.Length > 0);
+    private bool ShowStatus => _board.Joined || _board.Ordered.Any(r => r.Status.Length > 0 || r.New || r.Note.Length > 0);
 
     private const string PairsItemTip = "겹침오류: 결합 없이 겹쳐 두 번 세는 자리 — 고르면 결합해서 순위가 낮은 쪽에서 뺍니다.";
     private const string ReversedItemTip = "작성오류: 이미 결합됐는데 순위가 낮은 쪽이 높은 쪽을 자르는 쌍 — 겹친 자리가 기준과 반대 부재에서 빠져 있습니다.";
@@ -605,46 +667,80 @@ public sealed class OverlapResultView
     /// <summary>작성오류 항목이 잠겨 있다(겹침오류에 아직 고치지 않은 쌍이 남음) — 시험에서 본다.</summary>
     public bool ReversedLockedNow => ReversedLocked;
 
-    // 항목 띠의 수: 겹침오류 · 작성오류(사람이 정함 · 참고는 빼고). 0 이면 흐리게(눌러도 빈 목록이 아니라 «없음» 한 줄). 작성오류가 잠겼으면 누를 수 없고 풍선 글이 까닭.
+    /// <summary>이 창(과 앞의 창)에서 고치기를 불러 본 겹침오류 — 부르는 쪽이 다음 창에 넘긴다.</summary>
+    public IReadOnlyCollection<int> TriedPairs => _triedPairs;
+
+    // 단계 표시의 글: «① 겹침오류 n» · «② 작성오류 m»(사람이 정함 · 참고는 빼고). ② 의 수는 ② 에서만 — ① 에서는 넘어갈 때 다시 찾는다(겹침오류를 고친 결과로).
+    // ① 을 지나 ② 에 있으면 ① 에 ✓ · 지금 단계는 강조. 작성오류가 잠겼으면 ② 의 풍선 글이 까닭(넘어가는 단추도 꺼진다 — StepButtons).
     private void RefreshItems()
     {
         bool locked = ReversedLocked;
-        foreach (var (item, button) in _itemButtons)
+        foreach (var (item, (chip, text)) in _steps)
         {
-            int n = item == Item.Pairs ? Pairs : ReversedCount;
-            bool shut = item == Item.Reversed && locked;
-            button.Content = (item == Item.Pairs ? "겹침오류 " : "작성오류 ") + n.ToString(CultureInfo.InvariantCulture);
-            button.IsEnabled = !shut;
-            button.Opacity = shut ? 0.45 : n > 0 || item == _item ? 1 : 0.55;
-            if (item == Item.Reversed) _ui.Tip(button, shut ? $"겹침오류를 먼저 고쳐 주세요 — 아직 고치지 않은 쌍 {PairsUntried}개" : ReversedItemTip);
+            bool now = item == _item;
+            text.Text = item == Item.Pairs
+                ? "① 겹침오류 " + Pairs.ToString(CultureInfo.InvariantCulture) + (_item == Item.Reversed ? "  ✓" : "")
+                : "② 작성오류" + (_item == Item.Reversed ? " " + ReversedCount.ToString(CultureInfo.InvariantCulture) : "");
+            text.Foreground = now ? _ui["AccentText"] : _ui["Sub"];
+            text.FontWeight = now ? FontWeights.SemiBold : FontWeights.Normal;
+            chip.Background = now ? _ui["AccentSoft"] : Brushes.Transparent;
+            if (item == Item.Reversed) _ui.Tip(chip, locked ? $"겹침오류를 먼저 고쳐 주세요 — 아직 고치지 않은 쌍 {PairsUntried}개" : ReversedItemTip);
         }
     }
 
-    /// <summary>목록이 보여 주는 항목을 바꾼다(항목 띠를 누른 것과 같다) — 그림의 부재 색 · 초점 띠 · 고치기 줄도 그 항목의 판을 따른다. 작성오류가 잠겼으면 그대로 둔다.</summary>
+    /// <summary>단계 표시의 글(시험에서 본다): «① 겹침오류 12 | ② 작성오류».</summary>
+    public string StepsText => string.Join(" | ", _steps.Values.Select(s => s.text.Text));
+
+    /// <summary>
+    /// 단계를 바꾼다(창 안에서 — [다음 단계]가 다시 찾을 것이 없을 때 · [이전 단계]) — 그림의 부재 색 · 초점 띠 · 고치기 줄 · 머리 · 숫자 칸 · 아래 단추도 그 단계의 것.
+    /// 작성오류가 잠겼으면 그대로 둔다.
+    /// </summary>
     public void ShowItem(Item item)
     {
         if (_item == item && ReferenceEquals(_board, item == Item.Pairs ? _pairs : _reversed)) return;
         if (item == Item.Reversed && ReversedLocked)
         {
-            Note($"항목 작성오류 — 잠김(겹침오류 남음 {PairsUntried})");
-            if (_itemButtons.TryGetValue(_item, out var shown) && shown.IsChecked != true) shown.IsChecked = true;   // 띠가 보고 있는 항목을 가리키게
+            Note($"단계 작성오류 — 잠김(겹침오류 남음 {PairsUntried})");
             RefreshItems();
             return;
         }
         _item = item;
         _board = item == Item.Pairs ? _pairs : _reversed;
-        if (_itemButtons.TryGetValue(item, out var button) && button.IsChecked != true) button.IsChecked = true;
-        Note($"항목 {(item == Item.Pairs ? "겹침오류" : "작성오류")}");
+        _stepChanged.Restart();
+        Note($"단계 {(item == Item.Pairs ? "① 겹침오류" : "② 작성오류")}");
+        RefreshChrome();
         RefreshList();
         RefreshFocus();
         Frame();
+    }
+
+    // 단계를 바꾼 직후(두 번 누름의 사이) — 그 자리에 새로 놓인 아래 단추가 두 번째 누름을 받지 않게(계획 검토 높음 1: [다음 단계]를 두 번 누르면 ② 의 [모두 기준대로]).
+    private readonly Stopwatch _stepChanged = new();
+    private bool StepJustChanged => _stepChanged.IsRunning && _stepChanged.ElapsedMilliseconds < Math.Max(300, GetDoubleClickTime());
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDoubleClickTime();
+
+    // [다음 단계: 작성오류](R54c — JACK 2026-10-21 «겹침오류를 수행하고 작성오류 · 겹침오류가 반영된 작성오류»): 잠겼으면 아무것도 안 함(단추가 꺼져 있다).
+    // 이 창에서 겹침오류를 고쳐 모델이 바뀌었으면 창을 닫는다(Next) — 부르는 쪽이 지금 모델로 작성오류를 다시 찾아 ② 로 연다. 안 바뀌었으면 목록이 이미 지금 모델의 것이라 창 안에서.
+    private void GoNext()
+    {
+        if (_busy || ReversedLocked || _item == Item.Reversed) return;
+        if (StepJustChanged) return;
+        if ((_pairsChanged || _m.ReversedStale) && _m.Fix != null)
+        {
+            Note($"다음 단계 — 작성오류를 다시 찾음({(_pairsChanged ? "겹침오류를 고침" : "처음 목록은 재지 않음")})");
+            Finish(Choice.Next, -1);
+            return;
+        }
+        ShowItem(Item.Reversed);
     }
 
     // 목록을 다시 짓는다(묶음을 접거나 폈을 때 · 고쳤을 때 · 항목을 바꿨을 때 · 처음).
     private void RefreshList()
     {
         bool status = ShowStatus;
-        bool joined = _m.Mode == Mode.Joined;
+        bool joined = _pairs.Joined;
         RefreshItems();
         if (_legendWinner != null && _legendLoser != null && _legendBlob != null)
         {
@@ -778,7 +874,7 @@ public sealed class OverlapResultView
         }
         else if (withStatus && row.Status.Length > 0) Place(grid, 6, StatusPill(row));
         else if (withStatus && row.New) Place(grid, 6, NewPill());
-        else if (withStatus && _m.Mode == Mode.Joined) Place(grid, 6, PendingPill());   // 결합한 뒤 창에서 다시 연 쌍(core-verify R50 설치 전 B)
+        else if (withStatus && _pairs.Joined) Place(grid, 6, PendingPill());   // 결합한 뒤 창에서 다시 연 쌍(core-verify R50 설치 전 B)
 
         var button = new Button { Style = _ui.StyleOf("RowPick"), Content = grid };
         string tip = _item == Item.Pairs
@@ -871,7 +967,7 @@ public sealed class OverlapResultView
             : row.Blocked || row.Status.StartsWith("못 바꿈", StringComparison.Ordinal) ? ("Failed", "Bad")
             : row.Optional ? (row.Note.StartsWith(HumanNote, StringComparison.Ordinal) ? "Manual" : "Info", "Neutral")
             : row.Unmeasured ? ("Unmeasured", "Neutral")
-            : _m.Mode == Mode.Joined ? ("Pending", "Warn")
+            : _reversed.Joined ? ("Pending", "Warn")
             : ("", "");
         if (label.Length == 0) return null;
         var pill = _ui.Pill(new TextBlock { Text = label, FontSize = 12, Foreground = _ui[tone + "Fg"], TextTrimming = TextTrimming.CharacterEllipsis }, tone + "Bg");
@@ -1056,7 +1152,20 @@ public sealed class OverlapResultView
         if (_m.Fix == null && _m.FixReversed == null) return;
         SetPreview(-1);
         SetReversedPreview(false);
+        _hoverButton = null;                              // 옛 단추는 치운다 — 마우스 밑에 새 단추가 오면 배치 뒤에 다시 잡는다(아래 Synchronize)
+        _hoverView = null;
+        _keyView = null;                                  // 방향키로 본 모습은 그 줄 · 그 단추들의 것이다(줄을 옮기거나 고치면 다시 골라야 엔터가 고친다)
+        _hoverTimer?.Stop();
+        _fixBuilt.Restart();
+        try { _fixBuiltAt = Mouse.GetPosition(Root); } catch { _fixBuiltAt = new Point(double.NaN, double.NaN); }
         _fixActions.Children.Clear();
+        // 마우스를 움직이지 않으면 WPF 는 새로 놓인 단추에 «올라감»을 알리지 않는다 — 배치가 끝난 뒤 한 번 맞춰 본다(↑ ↓ 로 줄을 옮겨도
+        // 마우스가 단추 자리에 있으면 그 줄의 단추가 지시하는 모습 — JACK 2026-10-21 «무조건»).
+        Root.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
+        {
+            try { if (!_busy && _window is { IsActive: true }) Mouse.Synchronize(); }
+            catch { }
+        }));
         var row = _board.Focused;
         bool can = _item == Item.Pairs ? _m.Fix != null : _m.FixReversed != null;
         _fixRow.Visibility = row == null || !can ? Visibility.Collapsed : Visibility.Visible;
@@ -1123,10 +1232,73 @@ public sealed class OverlapResultView
             MinHeight = 30, Padding = new Thickness(12, 0, 12, 1), Margin = new Thickness(0, 0, 6, 0), Focusable = false,
         };
         _ui.Mark(button, tip, id);
-        button.MouseEnter += (_, _) => SetPreview(cut, cutWinner);
-        button.MouseLeave += (_, _) => SetPreview(-1);
+        button.MouseEnter += (_, _) => HoverEnter(button, () => SetPreview(cut, cutWinner));
+        button.MouseLeave += (_, _) => HoverLeave(button, () => SetPreview(-1));
         button.Click += (_, _) => DoFix(cutWinner);
         return button;
+    }
+
+    // 고치기 단추에 마우스가 올라갔다 · 떠났다(겹침오류 · 작성오류 단추가 같이 쓴다). 떠날 때는 지금 잡고 있는 단추일 때만 끈다 — 고치기 줄을 다시 지어
+    // 새 단추가 먼저 마우스를 받은 뒤 치운 옛 단추의 «떠남»이 늦게 와도 새 단추의 모습을 끄지 않게.
+    // 고치기 줄을 다시 지은 직후(↑ ↓ 로 줄을 옮김 — 마우스는 그대로)의 «올라감»은 잠깐 뒤에 그린다: 글쇠를 누르고 있으면 줄마다 Revit 을 부르지 않게(계획 검토 L9).
+    private void HoverEnter(Button button, Action view)
+    {
+        _hoverButton = button;
+        _hoverView = view;
+        _hoverDrawn = null;
+        if (_fixBuilt.IsRunning && _fixBuilt.ElapsedMilliseconds < HoverSettleMs && SameSpot(Mouse.GetPosition(Root), _fixBuiltAt))
+        {
+            _hoverTimer ??= NewHoverTimer();
+            _hoverTimer.Stop();
+            _hoverTimer.Tag = button;
+            _hoverTimer.Start();
+            return;
+        }
+        ShowHover();
+    }
+
+    // 잡은 단추의 모습을 그린다(고치는 중이면 그리지 못한다 — 그때는 그려진 단추로 치지 않는다).
+    private void ShowHover()
+    {
+        if (_hoverView == null) return;
+        _hoverView();
+        _hoverDrawn = _busy ? null : _hoverButton;
+    }
+
+    private Button? _hoverDrawn;                             // 그 모습이 지금 그림에 그려진 단추(엔터가 누를 수 있는 단추 — 설치 전 검토 낮음 4)
+
+    // 떠날 때는 방향키로 본 모습으로 돌아간다(그림 = 엔터가 고칠 모습 — 계획 검토 중간 3) · 방향키로 고르지 않았으면 지금 모습.
+    private void HoverLeave(Button button, Action off)
+    {
+        if (!ReferenceEquals(_hoverButton, button)) return;
+        _hoverButton = null;
+        _hoverView = null;
+        _hoverDrawn = null;
+        _hoverTimer?.Stop();
+        off();
+        if (_keyView is true && _board.Focused is { Fine: false, Blocked: false } row)
+        {
+            if (_item == Item.Reversed) SetReversedPreview(true);
+            else SetPreview(row.LoserIndex);
+        }
+    }
+
+    private const int HoverSettleMs = 150;
+    private readonly Stopwatch _fixBuilt = new();           // 고치기 줄을 다시 지은 때부터
+    private Point _fixBuiltAt;                               // 그때의 마우스 자리(그 뒤 움직이지 않았으면 줄을 옮겨 단추가 마우스 밑에 온 것)
+
+    private static bool SameSpot(Point a, Point b) => Math.Abs(a.X - b.X) < 1 && Math.Abs(a.Y - b.Y) < 1;
+    private System.Windows.Threading.DispatcherTimer? _hoverTimer;
+
+    private System.Windows.Threading.DispatcherTimer NewHoverTimer()
+    {
+        var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(HoverSettleMs) };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            if (!_busy && _window is { IsVisible: true } && ReferenceEquals(_hoverButton, timer.Tag)) ShowHover();
+        };
+        return timer;
     }
 
     // 고치기 단추에 마우스를 올렸다(member = 잘릴 부재 · −1 = 뗐다): 고친 뒤의 모습(JACK 2026-10-19 «갖다 대면 변환 후의 모습 · 한쪽으로 아예 들어간»).
@@ -1243,8 +1415,8 @@ public sealed class OverlapResultView
             MinHeight = 30, Padding = new Thickness(12, 0, 12, 1), Margin = new Thickness(0, 0, 6, 0), Focusable = false,
         };
         _ui.Mark(button, tip, id);
-        button.MouseEnter += (_, _) => SetReversedPreview(!cutKeep);
-        button.MouseLeave += (_, _) => SetReversedPreview(false);
+        button.MouseEnter += (_, _) => HoverEnter(button, () => SetReversedPreview(!cutKeep));
+        button.MouseLeave += (_, _) => HoverLeave(button, () => SetReversedPreview(false));
         button.Click += (_, _) => DoFixReversed(cutKeep);
         return button;
     }
@@ -1257,8 +1429,9 @@ public sealed class OverlapResultView
         Run(() => _m.FixReversed(row.Key, cutKeep), row.Key, _reversed);
     }
 
-    // 창을 잠그고 부르는 쪽의 고치기를 부른 뒤 결과를 옮긴다(겹침 · 결합 방향이 같이 쓴다).
-    private void Run(Func<Fixed> fix, int key, OverlapBoard board)
+    // 창을 잠그고 부르는 쪽의 고치기를 부른 뒤 결과를 옮긴다(결합 방향 고치기 · 되돌리기가 같이 쓴다).
+    // beforeApply = 옮기기 전에 창의 상태를 맞춘다(되돌린 겹침오류를 «손대지 않음»으로) · lockedBefore = Apply 의 것.
+    private void Run(Func<Fixed> fix, int key, OverlapBoard board, Action<Fixed>? beforeApply = null, bool? lockedBefore = null)
     {
         var watch = Stopwatch.StartNew();
         var cursor = Mouse.OverrideCursor;
@@ -1284,13 +1457,44 @@ public sealed class OverlapResultView
             _busy = false;
         }
         _changedModel |= result.Changed;
-        try { Apply(result); }
+        try
+        {
+            beforeApply?.Invoke(result);
+            Apply(result, lockedBefore);
+        }
         catch (Exception ex)
         {
             Note("고친 결과를 창에 옮기다 오류\t" + ex);
             ShowMessage("고친 결과를 그리다 오류가 났습니다" + (result.Changed ? "(모델은 바뀌었습니다)" : "") + ": " + ex.Message, true);
         }
         Note($"고친 뒤 {key}\t{board.Row(key)?.Status}\t바뀐 줄 {result.Rows.Count + result.ReversedRows.Count} · 겉면 {result.Meshes.Count}\t{watch.ElapsedMilliseconds} ms");
+    }
+
+    // 백스페이스(JACK 2026-10-21 «해당 목록만 초기화» · 고름 «고른 줄의 고친 것만 되돌리기»): 고른 줄을 고치기 전으로 — 부르는 쪽이 한다
+    // (겹침오류 = 결합을 풂 · 작성오류 = 자르는 순서를 되돌림 · 사람이 정함 = 그 기록을 지움). 고친 것이 없는 줄은 한 줄 알림만.
+    // 되돌린 겹침오류는 다시 «손대지 않음»이다(작성오류 단계가 다시 잠긴다 — 고친 뒤 [다음 단계]).
+    private void Revert()
+    {
+        if (!_wide || _busy || _board.Focused is not { } row) return;
+        bool pairs = _item == Item.Pairs;
+        var revert = pairs ? _m.Revert : _m.RevertReversed;
+        if (revert == null) return;
+        bool done = pairs ? row.Status.Length > 0 && !row.Gone && !row.Blocked : row.Fine || row.Note.StartsWith(HumanNote, StringComparison.Ordinal);
+        if (!done)
+        {
+            Note($"백스페이스 {row.Key}\t되돌릴 것 없음");
+            ShowMessage("되돌릴 것 없음 — 아직 고치지 않은 줄");
+            return;
+        }
+        Note($"백스페이스 {row.Key}\t되돌리기({(pairs ? "겹침오류" : "작성오류")})");
+        SetPreview(-1);                                   // 미리보기로 바꿔 둔 겉면을 먼저 돌린다
+        SetReversedPreview(false);
+        Run(() => revert(row.Key), row.Key, _board, result =>
+        {
+            if (!pairs) return;
+            _pairsChanged |= result.Changed;              // 모델이 바뀌었다 — [다음 단계]가 작성오류를 다시 찾게(줄의 결과와 상관없이 · 설치 전 검토)
+            if (result.Rows.Any(r => r.Key == row.Key && r.Status.Length == 0)) _triedPairs.Remove(row.Key);
+        }, ReversedLocked);
     }
 
     private void DoFix(bool cutWinner)
@@ -1316,7 +1520,9 @@ public sealed class OverlapResultView
             // 부르는 쪽은 결합 뒤의 오류를 안에서 받아 돌려준다 — 여기까지 샌 것이면 모델이 바뀌었는지 모른다: 바뀌었을 수 있다고 둔다.
             _changedModel = true;
             Note("고치기 오류\t" + ex);
+            _pairsChanged = true;                         // 바뀌었는지 모른다 — [다음 단계]가 다시 찾게(계획 검토 L3)
             RefreshItems();                               // 불러 본 쌍이라 작성오류의 잠금이 풀렸을 수 있다
+            RefreshChrome();                              // [다음 단계] 단추도(잠금이 풀리면 켠다 — R54c)
             ShowMessage("고치는 중 오류가 났습니다: " + ex.Message, true);
             return;
         }
@@ -1327,6 +1533,7 @@ public sealed class OverlapResultView
             _busy = false;
         }
         _changedModel |= result.Changed;
+        _pairsChanged |= result.Changed;
         try { Apply(result, lockedBefore); }
         catch (Exception ex)
         {
@@ -1426,7 +1633,6 @@ public sealed class OverlapResultView
         {
             _item = Item.Pairs;
             _board = _pairs;
-            if (_itemButtons.TryGetValue(Item.Pairs, out var pairsButton)) pairsButton.IsChecked = true;
             if (fresh.Count > 0) _pairs.SetFocus(fresh[0].Key);   // 새 겹침오류를 바로 보이게(설치 전 검토 낮음 4)
             Note($"항목 겹침오류 — 새 겹침오류 {PairsUntried}쌍(작성오류 잠김) → {_pairs.Focus}");
         }
@@ -1441,10 +1647,11 @@ public sealed class OverlapResultView
         if (drawProblem.Length > 0) problems.Add(drawProblem);
         // 다시 찾기로 달라진 것(JACK 2026-10-19 «새로 생긴 겹침 n쌍 · 없어진 겹침 m쌍» — 0 인 쪽은 뺀다).
         var news = new List<string>();
+        if (result.Said.Length > 0) news.Add(result.Said);
         if (added > 0) news.Add($"새로 생긴 겹침 {added}쌍");
         if (result.Gone > 0) news.Add($"없어진 겹침 {result.Gone}쌍");
-        if (backToPairs) news.Add("겹침오류를 먼저 고친 뒤 작성오류로 돌아갑니다");
-        else if (wasLocked && !lockedNow && ReversedLeft > 0) news.Add($"겹침오류를 다 고쳤습니다 — 작성오류 {ReversedLeft}쌍을 볼 수 있습니다");
+        if (backToPairs) news.Add("새 겹침오류가 생겨 ① 로 돌아왔습니다 — 고친 뒤 [다음 단계]");
+        else if (wasLocked && !lockedNow && _item == Item.Pairs) news.Add("겹침오류를 다 고쳤습니다 — [다음 단계]로 작성오류");
         string said = string.Join(" · ", news);
         if (problems.Count > 0) ShowMessage(string.Join("\n", (said.Length > 0 ? new[] { said } : Array.Empty<string>()).Concat(problems)), true);
         else if (said.Length > 0) ShowMessage(said);
@@ -1519,9 +1726,9 @@ public sealed class OverlapResultView
         var legend = new Border { Padding = new Thickness(2, 7, 2, 0), Child = line };
         _ui.Mark(legend,
             "겹친 부위는 다른 부재에 가려져 있어도 보입니다. 두 부재는 쌍을 고르면 칠합니다 · 목록의 부재 이름을 누르면 그 부재만 칠합니다.\n" +
-            "고치면(결합됨) 겹친 부위가 남는 쪽 안으로 들어간 모양이 됩니다 · 고치기 단추에 마우스를 올리면(→ 글쇠, ← = 지금) 그 모양이 미리 보입니다 · 회색 = 앞선 결합으로 이미 풀린 자리.\n" +
+            "고치면(결합됨) 겹친 부위가 남는 쪽 안으로 들어간 모양이 됩니다 · 고치기 단추에 마우스를 올리면(→ 글쇠, ← = 지금) 그 모양이 미리 보입니다 · 엔터 = 본 모양대로 고치기 · 백스페이스 = 고른 줄 되돌리기 · 회색 = 앞선 결합으로 이미 풀린 자리.\n" +
             "돌리기 = 오른쪽 끌기 · 옮기기 = 가운데 끌기 · 확대 = 굴림" +
-            (_m.Mode == Mode.Joined ? "\n결합한 뒤: 겹친 부위는 결합하기 전에 잰 모양입니다(다시 찾아 나온 쌍은 그때 잰 모양)." : ""), "legend");
+            (_pairs.Joined ? "\n결합한 뒤: 겹친 부위는 결합하기 전에 잰 모양입니다(다시 찾아 나온 쌍은 그때 잰 모양)." : ""), "legend");
         return legend;
     }
 
@@ -1707,7 +1914,7 @@ public sealed class OverlapResultView
         if (row == null)
         {
             string all = _item == Item.Reversed ? $"작성오류 {ReversedCount}쌍 전체"
-                       : _m.Mode == Mode.Joined ? $"결합한 뒤 {Pairs}쌍 전체" : $"겹침오류 {Pairs}쌍 전체";
+                       : _pairs.Joined ? $"결합한 뒤 {Pairs}쌍 전체" : $"겹침오류 {Pairs}쌍 전체";
             _focusHead.Inlines.Add(new Run(all) { FontWeight = FontWeights.SemiBold, FontSize = 14 });
             _focusSub.Text = "";
         }
@@ -1796,6 +2003,19 @@ public sealed class OverlapResultView
             Arrow(e.Key);
             return;
         }
+        if (e.Key is Key.Enter && _wide)
+        {
+            e.Handled = true;                             // 목록 단추에 글쇠 초점이 있어도 그 단추를 다시 누르지 않게
+            if (e.IsRepeat || !_enterArmed) return;       // 누르고 있으면 되풀이하지 않는다 — 고친 뒤 새 줄 · 새 단추를 보지도 않고 고치지 않게
+            Enter();
+            return;
+        }
+        if (e.Key is Key.Back && _wide)
+        {
+            e.Handled = true;
+            if (!e.IsRepeat) Revert();                    // 누르고 있어도 한 줄만
+            return;
+        }
         if (e.Key != Key.Escape) return;
         e.Handled = true;
         if (_view3d is { Pressed: true }) { _view3d.CancelDrag(); return; }
@@ -1814,10 +2034,62 @@ public sealed class OverlapResultView
             Step(key == Key.Down ? +1 : -1);
             return;
         }
+        // 마우스가 고치기 단추 위면 그 단추가 지시하는 모습 그대로(JACK 2026-10-21 «무조건 버튼에서 지시하는 뷰»).
+        if (_hoverView != null)
+        {
+            Note($"글쇠 {(key == Key.Right ? "→" : "←")} {row.Key}\t단추 위 마우스 — 단추의 모습 그대로");
+            _hoverTimer?.Stop();
+            ShowHover();
+            return;
+        }
         bool after = key == Key.Right && !row.Fine && !row.Blocked;
         Note($"글쇠 {(key == Key.Right ? "→" : "←")} {row.Key}\t{(after ? "고친 뒤" : "지금")}");
+        _keyView = after;
         if (_item == Item.Reversed) SetReversedPreview(after);
         else SetPreview(after ? row.LoserIndex : -1);
+    }
+
+    // 엔터(JACK 2026-10-21 «좌우 방향키로 바뀌는 뷰를 확인한 상태에서 엔터를 치면 그 뷰대로 수정 — 단축키처럼»): 지금 그림이 보여 주는 모습의 고치기 단추를 누른다.
+    //  · 마우스가 고치기 단추 위면 그 단추(그 단추의 모습이 보이고 있다).
+    //  · → 로 본 고친 뒤 = 그 모습을 그리는 단추: 겹침오류 [이 쌍 고치기] · [잘리는 쪽에서 빼기] / 작성오류 [기준대로 바꾸기] · [잘릴 쪽에서 빼기].
+    //  · ← 로 본 지금 = 지금 모습을 남기는 단추가 있을 때만: 작성오류 사용자 모드의 [남을 쪽에서 빼기](지금 결합 그대로 · 사람이 정함). 겹침오류에는 없다.
+    //  · 방향키로 아직 고르지 않았으면 아무것도 하지 않는다(실수로 눌러 고치지 않게) · 끝난 줄 · 고칠 수 없는 줄도.
+    // 아무것도 하지 않을 때는 그림 위에 한 줄(JACK 2026-10-21 «엔터를 눌러도 작동이 안 돼» — 마지막 글쇠가 ← 였다: 일지).
+    private void Enter()
+    {
+        if (!_wide || _board.Focused is not { } row) return;
+        if (row.Fine || row.Blocked)
+        {
+            Note($"엔터 {row.Key}\t{(row.Fine ? "끝난 줄" : "고칠 수 없는 줄")}이라 그대로");
+            ShowMessage(row.Fine ? "이미 고친 줄 — 되돌리기 = 백스페이스" : "이 창에서 고칠 수 없는 줄");
+            return;
+        }
+        if (_hoverButton is { IsEnabled: true } hovered)
+        {
+            if (!ReferenceEquals(_hoverDrawn, hovered))
+            {
+                // 그 단추의 모습이 아직 그림에 없다(줄을 옮긴 직후 · 고치는 중에 올라감) — 이번 엔터는 그리기만(본 적 없는 모습으로 고치지 않게).
+                Note($"엔터 {row.Key}\t마우스 밑 단추 — 모습을 먼저 그림");
+                _hoverTimer?.Stop();
+                ShowHover();
+                return;
+            }
+            Note($"엔터 {row.Key}\t마우스 밑 단추");
+            _enterArmed = false;
+            hovered.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, hovered));
+            return;
+        }
+        const string LookFirst = "→ 로 고친 뒤 모습을 보고 엔터";
+        if (_keyView is not bool after) { Note($"엔터 {row.Key}\t방향키로 본 모습이 없어 그대로"); ShowMessage(LookFirst); return; }
+        if (_item == Item.Reversed)
+        {
+            if (after) { Note($"엔터 {row.Key}\t→ 본 모습대로(기준대로)"); _enterArmed = false; DoFixReversed(false); }
+            else if (s_userMode && !(row.Optional && row.Note.StartsWith(HumanNote, StringComparison.Ordinal))) { Note($"엔터 {row.Key}\t← 본 모습대로(지금 그대로 · 사람이 정함)"); _enterArmed = false; DoFixReversed(true); }
+            else { Note($"엔터 {row.Key}\t← 지금 모습을 남기는 단추가 없어 그대로"); ShowMessage("← 는 지금 모습 · " + LookFirst); }
+            return;
+        }
+        if (after) { Note($"엔터 {row.Key}\t→ 본 모습대로"); _enterArmed = false; DoFix(false); }
+        else { Note($"엔터 {row.Key}\t← 지금 모습은 고칠 것이 없어 그대로"); ShowMessage("← 는 지금 모습 · " + LookFirst); }
     }
 
     // ── 아래 단추 ─────────────────────────────────────────────────────────────────
@@ -1848,12 +2120,17 @@ public sealed class OverlapResultView
             button.Margin = new Thickness(8, 0, 0, 0);
             button.IsDefault = isDefault && !_wide;
             button.IsCancel = isCancel && !_wide;
-            button.Click += (_, _) => Finish(choice, -1);
+            button.Click += (_, _) => { if (!StepJustChanged) Finish(choice, -1); };
             DockPanel.SetDock(button, Dock.Right);
             bar.Children.Add(button);
         }
 
         // DockPanel 은 오른쪽에 붙이는 순서대로 바깥에서 안으로 놓는다 — 가장 오른쪽 단추를 먼저 넣는다.
+        if (_wide && _m.Mode is Mode.Found or Mode.Joined)
+        {
+            StepButtons(bar, Right);
+            return bar;
+        }
         switch (_m.Mode)
         {
             case Mode.Found:
@@ -1885,12 +2162,59 @@ public sealed class OverlapResultView
         return bar;
     }
 
+    // 넓은 창의 아래 단추(R54c — 단계마다):
+    //  ① [닫기] · [겹친 부재 전부 선택](결합하기 전) · [확인할 부재 선택하고 닫기](결합한 뒤 확인할 것) · [모두 기준대로 (겹침오류 n쌍 · 나누기 m개)] · [다음 단계: 작성오류 →]
+    //     (겹침오류에 손대지 않은 쌍이 남으면 꺼지고 풍선 글 — 잠금은 R54b 그대로).
+    //  ② [닫기] · [확인할 부재 선택하고 닫기] · [← 이전 단계: 겹침오류](창 안에서) · [모두 기준대로 (작성오류 n쌍)].
+    // [모두 기준대로]는 그 단계 것만 한다(JACK 고름 «겹침오류만 → 작성오류 단계로» — 부르는 쪽이 Shown 으로 가른다). 결합한 뒤 ① 에서는 새로 나온 쌍이 있을 때만 둔다.
+    private void StepButtons(DockPanel bar, Action<Button, Choice, bool, bool> right)
+    {
+        bool pairsStep = _item == Item.Pairs;
+        if (pairsStep)
+        {
+            bool locked = ReversedLocked;
+            bool joinable = (_pairs.Joined ? Pending > 0 : Left > 0) || _m.SplitToDo > 0;
+            var next = _ui.Button("다음 단계: 작성오류  →", joinable || locked ? "BtnSecondary" : "BtnPrimary", "", "step.next");
+            _ui.Tip(next, locked ? $"겹침오류를 먼저 고쳐 주세요 — 아직 고치지 않은 쌍 {PairsUntried}개"
+                                 : _pairsChanged ? "고친 모델로 작성오류를 다시 찾아 ② 로 갑니다." : "② 작성오류로 갑니다.");
+            next.IsEnabled = !locked;
+            next.Margin = new Thickness(8, 0, 0, 0);
+            next.Click += (_, _) => GoNext();
+            DockPanel.SetDock(next, Dock.Right);
+            bar.Children.Add(next);
+            if (joinable) right(_ui.Button(JoinLabel(), "BtnPrimary", JoinTip(), "join"), Choice.Join, false, false);
+        }
+        else
+        {
+            // 맨 오른쪽 = [이전 단계](① 의 [다음 단계] 자리 — 두 번 눌러도 ② 의 [모두 기준대로]가 눌리지 않게 · 계획 검토 높음 1).
+            if (Pairs > 0)
+            {
+                var back = _ui.Button("←  이전 단계: 겹침오류", "BtnSecondary", "① 겹침오류 목록으로 돌아갑니다(고친 결과는 그대로).", "step.back");
+                back.Margin = new Thickness(8, 0, 0, 0);
+                back.Click += (_, _) => { if (!_busy && !StepJustChanged) ShowItem(Item.Pairs); };
+                DockPanel.SetDock(back, Dock.Right);
+                bar.Children.Add(back);
+            }
+            if (ReversedLeft > 0) right(_ui.Button(JoinLabel(), "BtnPrimary", JoinTip(), "join"), Choice.Join, false, false);
+        }
+        if (_m.Mode == Mode.Joined && Problems > 0)
+            right(_ui.Button($"확인할 부재 선택하고 닫기 ({Problems}쌍)", "BtnSecondary", "결합하지 못했거나 겹침이 남은 부재 · 못 바꾼 작성오류의 부재들이 선택된 채로 창이 닫힙니다.", "selectProblems"),
+                  Choice.SelectProblems, false, false);
+        else if (pairsStep && !_pairs.Joined && Pairs > 0)
+            right(_ui.Button("겹친 부재 전부 선택", "BtnSecondary",
+                "모델은 바꾸지 않습니다. 겹친 부재들이 Revit 에서 선택된 채로 창이 닫힙니다(창에서 고친 쌍은 빼고).", "selectAll"), Choice.SelectAll, false, false);
+        right(_ui.Button("닫기", "BtnGhost", _m.Mode == Mode.Joined ? $"결합한 부재의 판정(DH_판정)은 '{_m.StaleVerdict}'로 바꿔 두었습니다 — [수량산출]의 [완료]가 식을 다시 맞춥니다." : "", "close"),
+              Choice.Close, false, true);
+    }
+
     // [모두 기준대로] · 작은 창 단추의 이름표 — 넓은 창과 작은 창이 같은 함수로 고른다(R38 core M-2 · L-3).
-    // 겹침 결합과 결합 방향 바꾸기는 한 단추(R54 — JACK 2026-10-14 «결합할 때 함께 바꾸기» · revit-verify 계획 H3) · 단추 글에 두 수.
-    // 나누기는 새 부재를 만드는 큰 변경이라 그 수를 이름표에 보인다.
+    // 단계마다 그 단계 것만(R54c): ① 겹침오류 + 두 덩이 나누기 · ② 작성오류. 나누기는 새 부재를 만드는 큰 변경이라 그 수를 이름표에 보인다.
     private string JoinLabel()
     {
-        int pairs = _m.Mode == Mode.Found ? Left : 0, order = _m.Mode == Mode.Found ? ReversedLeft : 0, split = _m.SplitToDo;
+        bool wide = _wide && _m.Mode is Mode.Found or Mode.Joined;
+        // 결합한 뒤 ① 의 두 번째 일괄은 새로 나온 쌍만 건다(못 함 · 겹침 남음은 다시 걸지 않는다 — 부르는 쪽과 같게).
+        int pairs = wide && _item == Item.Pairs ? (_pairs.Joined ? Pending : Left) : 0, order = wide && _item == Item.Reversed ? ReversedLeft : 0;
+        int split = !wide || _item == Item.Pairs ? _m.SplitToDo : 0;
         var what = new List<string>();
         if (pairs > 0) what.Add($"겹침오류 {pairs}쌍");
         if (order > 0) what.Add($"작성오류 {order}쌍");
@@ -1902,10 +2226,11 @@ public sealed class OverlapResultView
     private string JoinTip()
     {
         var lines = new List<string>();
-        if (_m.Mode == Mode.Found && Left > 0)
-            lines.Add("겹침오류 전부에 Revit '형상 결합'을 걸어 순위가 낮은 쪽에서 겹친 만큼을 뺍니다.\n기준: " + _m.PriorityText);
-        if (_m.Mode == Mode.Found && ReversedLeft > 0) lines.Add($"작성오류 {ReversedLeft}쌍(기준과 반대로 결합됨): 겹침오류 다음에 순위가 높은 쪽이 남도록 자르는 순서를 바꿉니다.");
-        if (_m.SplitToDo > 0) lines.Add($"결합돼 두 덩이인 벽·기둥 {_m.SplitToDo}개: 덩이마다 나눕니다(위치·부위는 그대로).");
+        bool wide = _wide && _m.Mode is Mode.Found or Mode.Joined;
+        if (wide && _item == Item.Pairs && Left > 0)
+            lines.Add("겹침오류 전부에 Revit '형상 결합'을 걸어 순위가 낮은 쪽에서 겹친 만큼을 뺍니다 — 끝나면 고친 모델로 작성오류를 다시 찾아 ② 로 갑니다.\n기준: " + _m.PriorityText);
+        if (wide && _item == Item.Reversed && ReversedLeft > 0) lines.Add($"작성오류 {ReversedLeft}쌍(기준과 반대로 결합됨): 순위가 높은 쪽이 남도록 자르는 순서를 바꿉니다.");
+        if (_m.SplitToDo > 0 && (!wide || _item == Item.Pairs)) lines.Add($"결합돼 두 덩이인 벽·기둥 {_m.SplitToDo}개: 덩이마다 나눕니다(위치·부위는 그대로).");
         lines.Add("모델이 바뀝니다(닫은 뒤 Ctrl+Z 한 번으로 되돌림).");
         return string.Join("\n", lines);
     }
@@ -2050,6 +2375,7 @@ public sealed class OverlapResultView
                 WindowStartupLocation = WindowStartupLocation.CenterOwner, ShowInTaskbar = false,
             };
             window.PreviewKeyDown += OnKey;
+            window.PreviewKeyUp += (_, e) => { if (e.Key == Key.Enter) _enterArmed = true; };   // 3D 가 없는 창은 글쇠 초점이 창에 있다(설치 전 검토 낮음 3)
             // 글자판을 그림에 준다: 창을 열자마자 Esc 가 듣는다.
             window.ContentRendered += (_, _) => { if (_view3d is { IsKeyboardFocusWithin: false }) _view3d.Focus(); };
         }
@@ -2064,6 +2390,7 @@ public sealed class OverlapResultView
             };
         }
         Done += () => window.Close();
+        window.Closed += (_, _) => _hoverTimer?.Stop();   // 닫힌 뒤 옛 창의 미리보기를 부르지 않게(설치 전 검토 낮음 5)
         // 고치는 중에는 닫히지 않는다(제목 줄의 X · Alt+F4 — Revit 이 결합하는 동안 창이 사라지면 그 결과를 받을 곳이 없다).
         window.Closing += (_, e) =>
         {

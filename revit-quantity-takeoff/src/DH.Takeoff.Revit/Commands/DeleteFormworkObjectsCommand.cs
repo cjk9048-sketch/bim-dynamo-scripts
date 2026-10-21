@@ -14,7 +14,7 @@ namespace DH.Takeoff.Revit.Commands;
 [Transaction(TransactionMode.Manual)]
 public sealed class DeleteFormworkObjectsCommand : IExternalCommand
 {
-    private const string Title = "DH 거푸집 객체 지우기";
+    private const string Title = "DH 거푸집 삭제";
 
     public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
     {

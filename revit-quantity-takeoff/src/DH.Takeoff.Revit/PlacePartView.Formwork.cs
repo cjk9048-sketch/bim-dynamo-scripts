@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents; // Run
 using System.Windows.Input;
+using System.Windows.Markup; // XamlReader
 using System.Windows.Media;
 using DH.Takeoff.Core;
 using DH.Takeoff.Core.Formwork;
@@ -31,7 +32,11 @@ public sealed partial class PlacePartView
     private readonly WrapPanel _fwKinds = new() { Margin = new Thickness(0, 5, 0, 0), MinHeight = 22 };
     // 경고 딱지(그림에 없는 틈 · 종류가 달라 못 이은 면): 합계 줄 끝에 이으면 좁은 창에서 «…»로 잘려 안 보인다 — 따로 줄바꿈되게 둔다(revit R43 R4).
     private readonly WrapPanel _fwWarnings = new() { Visibility = Visibility.Collapsed };
-    private readonly Dictionary<(string type, string group), (Border row, ComboBox combo, TextBlock area)> _fwRowViews = new();
+    private readonly Dictionary<(string type, string group), (Border row, ComboBox combo, TextBlock area, Border swatch, TextBlock tag, Button reset)> _fwRowViews = new();
+    private readonly StackPanel _fwKindBar = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 5, 0, 0) };   // 찍은 판의 줄 종류 단추(JACK 2026-10-21 «3D 에서 찍어서»)
+    private readonly Dictionary<string, Button> _fwKindButtons = new();
+    private Button? _fwKindAuto;
+    private readonly TextBlock _fwKindScope = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis };
     private (string type, string group)? _fwPicked;
     private string _fwTotalText = "";
     // 찍은 판(R48): 대표 조각으로 기억한다 — 대응표를 고치거나 판을 빼면 덩이를 다시 지어 차례가 바뀌지만 조각은 그대로다.
@@ -81,8 +86,10 @@ public sealed partial class PlacePartView
         _view3d.ColorOf = FormworkColor;
         _view3d.Picked = FormworkPicked;
         _view3d.StyleOf = FormworkStyle;
-        // 줄 · 판을 고른 동안 옅게 그린 부재는 찍히지 않는다 — 그 뒤의 옅은 판을 찍어 바로 옮겨 고를 수 있게(부재를 찍어도 ② 에서는 할 일이 없다).
-        _view3d.Pickable = i => i >= MemberCount || FormworkStyle(i) != MeshStyle.Tint;
+        // 줄 · 판을 고른 동안 윤곽선만 그린 부재는 찍히지 않는다 — 그 뒤의 판을 찍어 바로 옮겨 고를 수 있게(부재를 찍어도 ② 에서는 할 일이 없다).
+        // 윤곽선만 그린 판은 찍힌다(GhostPickable — JACK 2026-10-21 «고른 줄만 색 · 나머지는 투명에 윤곽선만»이어도 판을 눌러 옮겨 고르게).
+        _view3d.Pickable = i => i >= MemberCount || FormworkStyle(i) == MeshStyle.Solid;
+        _view3d.GhostPickable = true;
         SetFormworkMeshes();
         ShowStep();
         RefreshAll();
@@ -113,6 +120,7 @@ public sealed partial class PlacePartView
         _view3d.Picked = i => _editor.Selection.Contains(_members[i].Id);
         _view3d.StyleOf = _ => MeshStyle.Solid;
         _view3d.Pickable = _ => true;
+        _view3d.GhostPickable = false;
         _view3d.SetMeshes(_memberMeshes);
         ShowStep();
         RefreshAll();
@@ -148,9 +156,9 @@ public sealed partial class PlacePartView
     private bool FormworkPicked(int index) =>
         index < MemberCount ? _fwFocus is long focus && _members[index].Id == focus : index == _fwPickedIndex;
 
-    // 그리는 방식(R48 — JACK 2026-10-16 «고른 줄만 진하게, 나머지 흐리게»): 고른 것이 없으면 모두 보통(면 + 모서리).
-    // 줄이나 판을 고르면 부재는 옅게(뒤가 비친다) · 그 줄의 판(줄에 든 조각이 하나라도 있는 판 — 이은 판은 통째로)과 찍은 판은 맨 위에 제 색 ·
-    // 다른 거푸집은 옅게.
+    // 그리는 방식(R48 — JACK 2026-10-16 «고른 줄만 진하게, 나머지 흐리게» · 2026-10-21 «목록을 누르면 그 자리만 색 · 나머지는 색 없는 투명에 윤곽선만»):
+    // 고른 것이 없으면 모두 보통(면 + 모서리). 줄이나 판을 고르면 그 줄의 판(줄에 든 조각이 하나라도 있는 판 — 이은 판은 통째로)과 찍은 판은 맨 위에 제 색 ·
+    // 부재와 다른 거푸집은 면 없이 윤곽선만(Ghost).
     private MeshStyle FormworkStyle(int index) => index < _fwStyle.Length ? _fwStyle[index] : MeshStyle.Solid;
 
     // 고른 줄 · 찍은 판으로 그림 차례마다의 모습을 정해 둔다(그리기 · 찍기가 차례마다 묻는다 — 마우스가 움직일 때마다 줄을 다시 세지 않게).
@@ -165,7 +173,7 @@ public sealed partial class PlacePartView
         {
             var inRow = _fwPicked is { } key ? _board.PiecesOf(key.type, key.group).ToHashSet() : new HashSet<int>();
             for (int i = 0; i < count; i++)
-                styles[i] = i >= MemberCount && (inRow.Contains(i - MemberCount) || i == _fwPickedIndex) ? MeshStyle.Top : MeshStyle.Tint;
+                styles[i] = i >= MemberCount && (inRow.Contains(i - MemberCount) || i == _fwPickedIndex) ? MeshStyle.Top : MeshStyle.Ghost;
         }
         _fwStyle = styles;
     }
@@ -201,13 +209,24 @@ public sealed partial class PlacePartView
         if (_fwPicked is { } key && _fwRowViews.TryGetValue(key, out var view)) view.row.BringIntoView();
     }
 
-    // 표에서 줄을 골랐다(또는 Esc 로 풀었다): 찍은 판은 푼다.
+    // 표에서 줄을 골랐다(또는 Esc 로 풀었다): 찍은 판은 푼다. 줄을 고르면 그 줄의 판이 다 보이게 화면을 맞춘다(JACK 2026-10-21 «포커싱도»).
     private void PickRow((string type, string group)? key)
     {
         _fwPicked = key;
         _fwPlate = null;
         RefreshAll();
+        if (key is { } row && _board != null)
+        {
+            var box = Box3.Empty;
+            foreach (int piece in _board.PiecesOf(row.type, row.group))
+                if (MemberCount + piece is int at && FormworkShown(at)) box = box.With(_board.Pieces[piece].Mesh.Box);
+            if (!box.IsEmpty) _view3d.ZoomTo(box, margin: RowZoomMargin, minWidth: RowZoomMinWidth);
+        }
     }
+
+    // 줄의 판들이 화면을 채우게: 둘레 여백은 조금만(Fit 의 margin 은 한쪽 비율 — 1.2 면 상자의 3.4 배로 멀어진다) · 작은 판 하나여도 둘레가 보이게 4 m 아래로는 좁히지 않는다.
+    private const double RowZoomMargin = 0.15;
+    private const double RowZoomMinWidth = 4;
 
     /// <summary>마우스 밑의 것(② ): 판이면 엑셀 줄 한 줄(절 · 부위 · 부호 · 식 · 넓이), 부재면 거푸집이 없는 면.</summary>
     private string DescribeFormwork(int index)
@@ -295,7 +314,7 @@ public sealed partial class PlacePartView
         var dock = new DockPanel { Margin = new Thickness(0, 0, 10, 0) };
         var head = new TextBlock { Text = "거푸집 대응표", FontSize = 13.5, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 2, 0, 8) };
         _ui.Tip(head, "거푸집 종류를 고릅니다. 부위를 넣은 부재의 면은 맨 위 '부위' 줄에서, 그 밖(부위가 없는 부재 · 구멍 둘레 · 아래가 빈 밑면)은 유형 줄에서 정합니다 — " +
-                      "한 면은 한 줄에만 있습니다. '초안대로'는 프로그램 규칙을 따릅니다. 줄을 누르면 그 면이 든 판이 3D 에 진하게 보입니다.");
+                      "한 면은 한 줄에만 있습니다. '자동' = 프로그램 규칙 · '직접' = 고른 종류(↺ 로 자동). 줄을 누르면 그 줄의 판만 3D 에 보입니다 · 3D 에서 판을 찍어 바꿀 수도 있습니다.");
         DockPanel.SetDock(head, Dock.Top);
         dock.Children.Add(head);
         var columns = RowGrid();
@@ -317,8 +336,9 @@ public sealed partial class PlacePartView
     {
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(86) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(176) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(78) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(150) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(56) });   // 꼬리표 «자동» · «직접 ↺»(JACK 2026-10-21)
         return grid;
     }
 
@@ -361,32 +381,51 @@ public sealed partial class PlacePartView
             };
             var area = new TextBlock { Text = M2(row.Area), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) };
             var combo = KindCombo(row, blinding.Contains(key));
+            // 닫힌 칸 왼쪽의 색 네모(3D 의 그 종류 색 — 칸 위에 얹는다 · 누름은 칸이 받는다).
+            var swatch = new Border { Width = 10, Height = 10, CornerRadius = new CornerRadius(2), Margin = new Thickness(9, 0, 0, 0), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false };
+            var kindCell = new Grid();
+            kindCell.Children.Add(combo);
+            kindCell.Children.Add(swatch);
+            var tag = new TextBlock { FontSize = 11.5, Foreground = _sub, VerticalAlignment = VerticalAlignment.Center };
+            var reset = _ui.Button("↺", "BtnGhost", "자동으로 — 프로그램 규칙의 종류로 돌립니다.", $"fw.reset.{row.Type}.{row.Group}");
+            reset.Focusable = false;
+            reset.MinHeight = 22;
+            reset.Padding = new Thickness(5, 0, 5, 1);
+            reset.Margin = new Thickness(2, 0, 0, 0);
+            reset.Click += (_, _) => ChangeRule(key, "");
+            var tagCell = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+            tagCell.Children.Add(tag);
+            tagCell.Children.Add(reset);
+            _ui.Mark(tag, "", $"fw.tag.{row.Type}.{row.Group}");
             Grid.SetColumn(area, 1);
-            Grid.SetColumn(combo, 2);
+            Grid.SetColumn(kindCell, 2);
+            Grid.SetColumn(tagCell, 3);
             grid.Children.Add(group);
             grid.Children.Add(area);
-            grid.Children.Add(combo);
+            grid.Children.Add(kindCell);
+            grid.Children.Add(tagCell);
             var line = new Border { Child = grid, CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 3, 4, 3), Margin = new Thickness(0, 1, 0, 1), Background = Brushes.Transparent, Cursor = Cursors.Hand };
             _ui.Mark(line, "", $"fw.row.{row.Type}.{row.Group}");
-            line.MouseLeftButtonUp += (_, e) => { if (!Within(e.OriginalSource as DependencyObject, combo)) PickRow(key); };
+            line.MouseLeftButtonUp += (_, e) => { if (!Within(e.OriginalSource as DependencyObject, combo) && !Within(e.OriginalSource as DependencyObject, reset)) PickRow(key); };
             _fwRows.Children.Add(line);
-            _fwRowViews[key] = (line, combo, area);
+            _fwRowViews[key] = (line, combo, area, swatch, tag, reset);
         }
     }
 
-    // 종류 칸: [초안대로 · (초안의 종류)] · 유로폼 · 합판 3회 · 합판 4회 · 합판 6회 · 세지 않음. 높이 구간으로 자르지 않는 면(위를 보는 경사면 · 구멍 둘레)에는
-    // 유로폼을 두지 않는다(R42 core 낮음). 파일에 적힌 낯선 값도 그대로 보인다.
+    // 종류 칸(JACK 2026-10-21 «처음 보는 사람도 알기 쉽게» · 고름 «자동/직접 표시» · «선택 필요처럼 간결하게»): [자동(규칙의 종류)] · 유로폼 · 합판 3회 · 합판 4회 · 합판 6회 · 세지 않음.
+    // 닫힌 칸은 종류만(자동이면 규칙의 종류 · 정할 것이면 «⚠ 선택 필요») — 펼치면 첫 줄이 «자동(…)» · 칸 옆 꼬리표가 자동 / 직접 ↺.
+    // 높이 구간으로 자르지 않는 면(위를 보는 경사면 · 구멍 둘레)에는 유로폼을 두지 않는다(R42 core 낮음). 파일에 적힌 낯선 값도 그대로 보인다.
     private ComboBox KindCombo(FormworkRow row, bool blinding)
     {
         string tip = FormworkRules.PartOf(row.Type) != null
             ? "이 부위의 모든 면(구멍 둘레 · 아래가 빈 밑면 빼고)에 적용됩니다."
             : "이 유형의 이 면에 적용됩니다(부위를 넣은 부재의 면은 부위 줄에서 정합니다).";
-        if (blinding) tip += " 버림의 안쪽 면(호퍼 · 피트 둘레)은 초안에서 세지 않습니다 — 종류를 고르면 다시 셉니다.";
+        if (blinding) tip += " 버림의 안쪽 면(호퍼 · 피트 둘레)은 자동으로는 세지 않습니다 — 종류를 고르면 다시 셉니다.";
         var combo = _ui.Combo(tip, $"fw.kind.{row.Type}.{row.Group}");
         combo.MinHeight = 26;
         combo.FontSize = 12.5;
-        combo.Padding = new Thickness(9, 0, 26, 1);
-        combo.Items.Add(KindItem("", "초안대로 · " + row.Draft));
+        combo.Padding = new Thickness(25, 0, 26, 1);
+        combo.Items.Add(AutoItem(row));
         bool banded = row.Group is not (FormworkTable.GroupSlope or FormworkTable.GroupHole);
         foreach (string item in FormworkTable.Items)
             if (banded || item != FormworkTable.Euro) combo.Items.Add(KindItem(item, item));
@@ -403,6 +442,66 @@ public sealed partial class PlacePartView
         combo.PreviewMouseWheel += (_, e) => PassWheel(combo, e);
         combo.DropDownClosed += (_, _) => _view3d.Focus();
         return combo;
+    }
+
+    /// <summary>종류 칸의 자동 줄 글감: 닫힌 칸 = Closed(종류만) · 펼친 목록 = Open(«자동(…)»).</summary>
+    public sealed record KindAuto(string Closed, string Open)
+    {
+        public override string ToString() => Closed;
+    }
+
+    // 자동 줄의 글 틀: 목록 안(ComboBoxItem 안)이면 Open, 닫힌 칸이면 Closed — 닫힌 칸은 고른 줄의 글감과 틀을 그대로 쓰고 ComboBoxItem 조상이 없다.
+    // 펼침 · 닫힘 알림으로 글을 바꾸지 않는다(닫힘 알림은 목록이 서서히 사라진 뒤에야 오고, 고른 줄의 글을 바꾸면 닫힌 칸도 바로 따라 바뀐다 — 하네스 1021).
+    private DataTemplate? _autoTemplate;
+    private DataTemplate AutoTemplate() => _autoTemplate ??= (DataTemplate)XamlReader.Parse(
+        "<DataTemplate xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">" +
+        "<TextBlock x:Name=\"t\" Text=\"{Binding Closed}\"/>" +
+        "<DataTemplate.Triggers>" +
+        "<DataTrigger Binding=\"{Binding IsEnabled, RelativeSource={RelativeSource AncestorType=ComboBoxItem}, FallbackValue=False}\" Value=\"True\">" +
+        "<Setter TargetName=\"t\" Property=\"Text\" Value=\"{Binding Open}\"/>" +
+        "</DataTrigger>" +
+        "</DataTemplate.Triggers>" +
+        "</DataTemplate>");
+
+    private ComboBoxItem AutoItem(FormworkRow row) =>
+        new() { Content = new KindAuto(ClosedDraft(row.Draft), OpenDraft(row.Draft)), Tag = "", ContentTemplate = AutoTemplate() };
+
+    // 규칙의 종류가 바뀌었으면(판을 빼거나 붙은 벽이 바뀜 — R47 · R48) 자동 줄의 글감을 갈아 끼운다(고른 줄이면 닫힌 칸도 따라 바뀐다).
+    private static void SyncAuto(ComboBox combo, FormworkRow row)
+    {
+        if (combo.Items.Count == 0 || combo.Items[0] is not ComboBoxItem { Tag: "" } auto) return;
+        var now = new KindAuto(ClosedDraft(row.Draft), OpenDraft(row.Draft));
+        if (!Equals(auto.Content, now)) auto.Content = now;
+    }
+
+    // 자동 줄의 글: 닫힌 칸 = 규칙의 종류(정할 것 «⚠ 선택 필요» · 여러 종류 · 뺀 판) · 펼친 목록 = «자동(…)».
+    private static string ClosedDraft(string draft) => draft switch
+    {
+        FormworkSummary.Ask => "⚠ 선택 필요",
+        FormworkSummary.Mixed => "여러 종류",
+        _ => draft,
+    };
+
+    private static string OpenDraft(string draft) => "자동(" + draft switch
+    {
+        FormworkSummary.Ask => "선택 필요",
+        FormworkSummary.Mixed => "여러 종류",
+        _ => draft,
+    } + ")";
+
+    private FormworkRow? RowOf((string type, string group) key) => _board?.Rows.FirstOrDefault(r => r.Type == key.type && r.Group == key.group);
+
+    // 줄의 색 네모: 지금 걸린 종류의 3D 색(정할 것 = 분홍 · 뺀 판 = 회갈색 · 여러 종류 = 없음).
+    private static (byte r, byte g, byte b)? SwatchOf(FormworkRow row)
+    {
+        string kind = row.Rule.Length > 0 ? row.Rule : row.Draft;
+        return kind switch
+        {
+            FormworkSummary.Ask => FormworkPalette.Check,
+            FormworkSummary.Dropped => FormworkPalette.Dropped,
+            FormworkSummary.Mixed => null,
+            _ => FormworkPalette.Base(kind),
+        };
     }
 
     private static ComboBoxItem KindItem(string value, string label) => new() { Content = label, Tag = value };
@@ -434,9 +533,9 @@ public sealed partial class PlacePartView
         var watch = Stopwatch.StartNew();
         SetFormworkMeshes();
         RefreshAll();
-        Log?.Invoke($"거푸집 대응표\t{key.type} · {key.group} → {(choice.Length > 0 ? choice : "초안대로")} · 판 {_board.Pieces.Count(p => p.Plate != null)} · 거푸집 {M2(_board.Total)} ㎡" +
+        Log?.Invoke($"거푸집 대응표\t{key.type} · {key.group} → {(choice.Length > 0 ? choice : "자동")} · 판 {_board.Pieces.Count(p => p.Plate != null)} · 거푸집 {M2(_board.Total)} ㎡" +
                     $" · 판 다시 지음 {_board.RefreshMilliseconds} ms · 그림 {watch.ElapsedMilliseconds} ms");
-        string name = choice.Length > 0 ? choice : "초안대로";
+        string name = choice.Length > 0 ? choice : "자동";
         string row = FormworkRules.PartOf(key.type) is { } part ? $"부위 {part}" : $"{key.type} · {key.group}";
         if (problem.Length > 0)
             ShowMessage($"{row} → {name} — 대응표 파일에 적지 못했습니다(이 창에서는 바꾼 값으로 셉니다): {problem}", true);
@@ -483,10 +582,35 @@ public sealed partial class PlacePartView
         bar.Children.Add(_fwPlateButton);
         _ui.Mark(_fwPlateText, "", "fw.plate");
         bar.Children.Add(_fwPlateText);
+        // 둘째 줄: 그 판의 줄(대응표와 같은 범위 — 유형 × 면 · 부위 줄이면 그 부위 전체)의 종류 단추 · 자동으로(↺) · 범위(JACK 2026-10-21 «3D 에서 찍어서 하는 기능도»).
+        foreach (string item in FormworkTable.Items.Where(i => i != FormworkRules.NotCounted))
+        {
+            var kind = _ui.Button(item, "BtnSecondary", "", "btn.fw.kind." + item);
+            kind.Focusable = false;
+            kind.MinHeight = 26;
+            kind.Padding = new Thickness(9, 0, 9, 1);
+            kind.Margin = new Thickness(0, 0, 4, 0);
+            string choice = item;
+            kind.Click += (_, _) => { if (PickedPlateRow() is { } key) ChangeRule(key, choice); };
+            _fwKindButtons[item] = kind;
+            _fwKindBar.Children.Add(kind);
+        }
+        _fwKindAuto = _ui.Button("↺ 자동", "BtnGhost", "자동으로 — 프로그램 규칙의 종류로 돌립니다.", "btn.fw.kind.auto");
+        _fwKindAuto.Focusable = false;
+        _fwKindAuto.MinHeight = 26;
+        _fwKindAuto.Padding = new Thickness(8, 0, 8, 1);
+        _fwKindAuto.Click += (_, _) => { if (PickedPlateRow() is { } key) ChangeRule(key, ""); };
+        _fwKindBar.Children.Add(_fwKindAuto);
+        _fwKindScope.Foreground = _sub;
+        _ui.Mark(_fwKindScope, "", "fw.kind.scope");
+        _fwKindBar.Children.Add(_fwKindScope);
+        var plateLines = new StackPanel();
+        plateLines.Children.Add(bar);
+        plateLines.Children.Add(_fwKindBar);
         _fwPlateBar = new Border
         {
             Background = _ui["AccentSoft"], CornerRadius = new CornerRadius(6), Padding = new Thickness(10, 4, 4, 4), Margin = new Thickness(0, 6, 0, 0),
-            Child = bar, Visibility = Visibility.Collapsed,
+            Child = plateLines, Visibility = Visibility.Collapsed,
         };
         texts.Children.Add(_fwPlateBar);
         return new Border
@@ -544,13 +668,16 @@ public sealed partial class PlacePartView
                 bool ask = row.Draft == FormworkSummary.Ask && row.Rule.Length == 0;   // 아직 정하지 않은 '아래가 빈 밑면'
                 view.row.Background = picked ? _ui["AccentSoft"] : ask ? _ui["WarnBg"] : Brushes.Transparent;
                 view.area.Text = M2(row.Area);
-                if (view.combo.Items.Count > 0 && view.combo.Items[0] is ComboBoxItem { Tag: "" } draft && !Equals(draft.Content, "초안대로 · " + row.Draft))
-                {
-                    draft.Content = "초안대로 · " + row.Draft;
-                    // 닫힌 칸은 고른 때의 글을 보인다 — 골라 둔 것이 초안이면 다시 골라 새 글이 보이게(_syncing 이라 종류는 바뀌지 않는다).
-                    if (ReferenceEquals(view.combo.SelectedItem, draft)) { view.combo.SelectedItem = null; view.combo.SelectedItem = draft; }
-                }
+                SyncAuto(view.combo, row);
                 SelectKind(view.combo, row.Rule);
+                // 색 네모 · 꼬리표: 자동(회색) · 직접 + ↺ · 정할 것 · 뺀 판은 꼬리표 없음(고를 것이 없다 — 판을 되살리면 그 종류).
+                var c = SwatchOf(row);
+                view.swatch.Visibility = c == null ? Visibility.Hidden : Visibility.Visible;
+                if (c is { } rgb) view.swatch.Background = new SolidColorBrush(Color.FromRgb(rgb.r, rgb.g, rgb.b));
+                bool direct = row.Rule.Length > 0;
+                view.tag.Text = direct ? "직접" : row.Draft is FormworkSummary.Ask or FormworkSummary.Dropped ? "" : "자동";
+                view.tag.Foreground = direct ? _ui["AccentText"] : _sub;
+                view.reset.Visibility = direct ? Visibility.Visible : Visibility.Collapsed;
             }
         }
         finally { _syncing = false; }
@@ -622,7 +749,7 @@ public sealed partial class PlacePartView
         }
         _fwTotalText = $"거푸집 {M2(_board.Total)} ㎡ · 확인할 자리 {checks}곳" + (gaps > 0 ? $" · 그림에 없는 틈 {gaps}곳" : "") + (splits > 0 ? $" · 종류가 달라 못 이은 면 {splits}곳" : "") +
                        (dropped > 0 ? $" · 뺀 판 {dropped}장" : "") + (lost > 0 ? $" · 모양이 바뀌어 다시 센 뺀 판 {lost}장" : "") + "\n" + string.Join(" · ", parts);
-        _status.Text = (_board.Rules.Count > 0 ? $"대응표에서 고친 줄 {_board.Rules.Count}" : "대응표: 초안 그대로") + (dropped > 0 ? $" · 뺀 판 {dropped}장" : "") + " · 고칠 때마다 파일에 적힙니다";
+        _status.Text = (_board.Rules.Count > 0 ? $"대응표: 직접 고른 줄 {_board.Rules.Count}" : "대응표: 모두 자동") + (dropped > 0 ? $" · 뺀 판 {dropped}장" : "") + " · 고칠 때마다 파일에 적힙니다";
 
         // 찍은 판의 띠: 엑셀 줄 한 줄 + 판이면 [이 판 빼기], 뺀 판이면 [되살리기](판이 아닌 덩이 — 세지 않음 · 아직 정하지 않은 밑면 — 는 단추 없이 글만).
         if (_fwPlateBar != null && _fwPlateButton != null)
@@ -636,8 +763,33 @@ public sealed partial class PlacePartView
                 _fwPlateButton.Content = piece.Dropped ? "되살리기" : "이 판 빼기";
                 _fwPlateButton.Visibility = piece.Dropped || piece.Plate != null ? Visibility.Visible : Visibility.Collapsed;
             }
+            // 둘째 줄: 그 판의 줄 종류(지금 걸린 종류 = 진한 단추) · 직접 고른 줄이면 ↺ · 범위. 뺀 판 · 줄이 없는 덩이는 숨긴다.
+            var key = piece != null && !piece.Dropped ? _board.RowOf(piece) : null;
+            var row = key is { } k ? RowOf(k) : null;
+            _fwKindBar.Visibility = row == null ? Visibility.Collapsed : Visibility.Visible;
+            if (row != null)
+            {
+                string now = row.Rule.Length > 0 ? row.Rule : row.Draft;
+                bool banded = row.Group is not (FormworkTable.GroupSlope or FormworkTable.GroupHole);
+                foreach (var (item, button) in _fwKindButtons)
+                {
+                    button.Visibility = banded || item != FormworkTable.Euro ? Visibility.Visible : Visibility.Collapsed;
+                    button.Style = _ui.StyleOf(item == now ? "BtnPrimary" : "BtnSecondary");
+                    _ui.Tip(button, $"{ScopeText(row)} → {item}");
+                }
+                if (_fwKindAuto != null) _fwKindAuto.Visibility = row.Rule.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+                _fwKindScope.Text = (row.Rule.Length > 0 ? "직접" : "자동") + " · 함께 바뀜: " + ScopeText(row);
+            }
         }
     }
+
+    // 종류 단추가 바꾸는 범위(대응표의 그 줄): 부위 줄 = 그 부위 전체 · 유형 줄 = 그 유형의 그 면.
+    private static string ScopeText(FormworkRow row) =>
+        FormworkRules.PartOf(row.Type) is { } part ? $"부위 {part} 전체" : $"{row.Type} 의 {row.Group}";
+
+    // 찍은 판이 든 대응표 줄(뺀 판 · 줄이 없는 덩이면 null).
+    private (string type, string group)? PickedPlateRow() =>
+        _board != null && _fwPickedIndex >= 0 && PieceAt(_fwPickedIndex) is { Dropped: false } piece ? _board.RowOf(piece) : null;
 
     private static string M2(double v) => v.ToString("#,##0.00", CultureInfo.InvariantCulture);
 
@@ -681,4 +833,8 @@ public sealed partial class PlacePartView
     public bool PressPlateButton() => ToggleDrop();
     /// <summary>찍은 판의 띠 단추(진짜 마우스로 누를 때 자리를 잰다).</summary>
     public Button? PlateButton => _fwPlateButton;
+    /// <summary>찍은 판의 줄 종류 단추(종류 이름 · «자동»은 ↺) — 보이지 않으면 null.</summary>
+    public Button? PlateKindButton(string item) =>
+        _fwKindBar.Visibility != Visibility.Visible ? null : item.Length == 0 ? (_fwKindAuto is { Visibility: Visibility.Visible } a ? a : null)
+        : _fwKindButtons.TryGetValue(item, out var b) && b.Visibility == Visibility.Visible ? b : null;
 }

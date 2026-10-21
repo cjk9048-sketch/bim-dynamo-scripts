@@ -17,8 +17,20 @@ public static class DimensionExtractor
     /// 판은 일반 모델이고 재료가 콘크리트가 아니라는 표시도 없어(ConcreteFilter 는 모르는 재료를 콘크리트로 둔다) 빼지 않으면
     /// 콘크리트 부재로 읽힌다: 거푸집 면을 잴 때 판이 콘크리트 겉을 덮어 거푸집이 사라지고, 산출식 · 산출근거 · 겹침 검사 · 3D 에도 섞인다.
     /// 모든 읽기(거푸집 · 위치·부위 · 산출식 · 산출근거 · 겹침 검사 · 형상 내보내기)가 이것으로 모은다.
+    /// 입체 없이 다른 부재를 자르는 보이드도 뺀다(CuttingVoids — JACK 2026-10-21).
     /// </summary>
     public static ICollection<ElementId> CollectApplicable(Document doc)
+    {
+        var ids = CollectAll(doc);
+        var voids = CuttingVoids(doc, ids);
+        return voids.Count == 0 ? ids : ids.Where(id => !voids.Contains(id.Value)).ToList();
+    }
+
+    /// <summary>대상 범주 안의 보이드(CollectApplicable 이 뺀 것) — [수량산출]이 전에 적어 둔 값을 지울 때 · 일지.</summary>
+    public static HashSet<long> TargetVoids(Document doc) => CuttingVoids(doc, CollectAll(doc));
+
+    // 대상 범주의 모든 인스턴스(거푸집 객체는 빼고 · 보이드는 그대로).
+    private static ICollection<ElementId> CollectAll(Document doc)
     {
         var filter = new ElementMulticategoryFilter(new[]
         {
@@ -30,6 +42,30 @@ public static class DimensionExtractor
         var formwork = FormworkObjects.Find(doc);
         if (formwork.Count > 0) collector = collector.Excluding(formwork);   // 빈 목록을 넘기면 Revit 이 예외를 낸다
         return collector.ToElementIds();
+    }
+
+    /// <summary>
+    /// 입체 없이 다른 부재를 자르는 보이드(구멍 내는 패밀리 — JACK 2026-10-21 «구멍 내는 보이드는 처음부터 빼기»): 대상 모으기(CollectApplicable)에서 빼므로
+    /// 3D 그림 · 부위·중분류 · 부재 이름 · 산출식 · 거푸집 · 모델 검증에 모두 나오지 않는다. 가르기 = 다른 부재를 실제로 자른다(보이드 패밀리의 자르기
+    /// InstanceVoidCutUtils · «형상 잘라내기» SolidSolidCutUtils) + 체적 있는 입체가 없다(입체도 가진 패밀리는 그대로 대상).
+    /// </summary>
+    private static HashSet<long> CuttingVoids(Document doc, ICollection<ElementId> within)
+    {
+        var voids = new HashSet<long>();
+        if (within.Count == 0) return voids;
+        foreach (var fi in new FilteredElementCollector(doc, within).OfClass(typeof(FamilyInstance)).Cast<FamilyInstance>())
+        {
+            try
+            {
+                bool cuts = (InstanceVoidCutUtils.IsVoidInstanceCuttingElement(fi) && InstanceVoidCutUtils.GetElementsBeingCut(fi).Count > 0)
+                            || (SolidSolidCutUtils.IsElementFromAppropriateContext(fi) && SolidSolidCutUtils.GetSolidsBeingCut(fi).Count > 0);
+                if (!cuts) continue;
+                if (SolidReader.Solids(fi).Any(s => s.Volume > 1e-9)) continue;   // 입체가 있으면 보이드만의 부재가 아니다
+                voids.Add(fi.Id.Value);
+            }
+            catch { /* 읽지 못하면 빼지 않는다(전과 같이 대상) */ }
+        }
+        return voids;
     }
 
     /// <summary>대상을 '반듯함(simple)'과 '비정형(irregular)'으로 분류.</summary>

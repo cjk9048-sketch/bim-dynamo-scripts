@@ -233,6 +233,84 @@ public static class MemberNamer
 
     private const string PieceTag = "piece";
 
+    /// <summary>이름 기록을 뗀다(트랜잭션 안 — 대상에서 빠진 보이드). 뗀 것이 있으면 참. 던지지 않는다.</summary>
+    public static bool Forget(Element el)
+    {
+        try
+        {
+            var schema = Schema.Lookup(SchemaId);
+            if (schema == null || el.GetEntity(schema) is not { } entity || !entity.IsValid()) return false;
+            el.DeleteEntity(schema);
+            return true;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// 대상에서 빠진 보이드(DimensionExtractor.TargetVoids — JACK 2026-10-21 «이미 적힌 값도 지워줘»)에 이 애드인이 전에 적어 둔 것을 지운다:
+    /// 공유 매개변수 칸(위치 · 부위 · 부재 이름 · 산출식 · 검산 · 거푸집 넓이 — SharedParameterManager 의 칸 중 거푸집 판 칸만 빼고)과 숨은 기록(위치·부위 확인 · 이름 주인).
+    /// 부르는 쪽 트랜잭션 안. 지운 칸이 있는 부재 수를 돌려준다(값이 없는 부재는 건드리지 않는다 — 부르는 쪽이 HasValues 로 미리 거른다).
+    /// 부재 이름의 번호는 비워 둔다(다른 부재 번호를 당기지 않는다 — «한 번 붙이면 그대로»).
+    /// </summary>
+    public static bool Wipe(Element el)
+    {
+        bool any = false;
+        foreach (var p in OurParameters(el))
+        {
+            if (p.IsReadOnly || !p.HasValue) continue;
+            try
+            {
+                if (p.StorageType == StorageType.String)
+                {
+                    if (string.IsNullOrEmpty(p.AsString())) continue;
+                    p.Set("");
+                    any = true;
+                }
+                else if (p.StorageType == StorageType.Double)
+                {
+                    try { p.ClearValue(); any = true; }   // 값이 없으면 숨는 칸(거푸집 넓이)
+                    catch { if (p.AsDouble() != 0) { p.Set(0.0); any = true; } }
+                }
+            }
+            catch { }
+        }
+        any |= PlaceStamp.Forget(el);
+        any |= Forget(el);
+        return any;
+    }
+
+    /// <summary>지울 것이 있는가(칸 값 · 숨은 기록) — 트랜잭션을 열기 전에 거른다.</summary>
+    public static bool HasValues(Element el)
+    {
+        foreach (var p in OurParameters(el))
+        {
+            if (!p.HasValue) continue;
+            if (p.StorageType == StorageType.String ? !string.IsNullOrEmpty(p.AsString()) : p.StorageType == StorageType.Double && p.AsDouble() != 0) return true;
+        }
+        try
+        {
+            foreach (var schema in Schema.ListSchemas().Where(s => s.GUID == SchemaId || s.SchemaName == "DHTakeoffPlaceStamp"))
+                if (el.GetEntity(schema) is { } e && e.IsValid()) return true;
+        }
+        catch { }
+        return false;
+    }
+
+    // 이 애드인이 콘크리트 부재에 적는 칸(거푸집 판의 칸은 판에만 묶여 뺀다). 이름이 아니라 공유 매개변수 GUID 로 찾는다 —
+    // L1 · W1 · H 같은 이름은 보이드 패밀리가 제 치수로 가질 수 있다(설치 전 검토 높음 — 이름으로 찾으면 구멍 크기를 0 으로 만든다).
+    private static readonly Guid[] OurGuids = SharedParameterManager.Guids.Where(kv => !FormworkObjects.Params.Contains(kv.Key)).Select(kv => kv.Value).ToArray();
+
+    private static IEnumerable<Parameter> OurParameters(Element el)
+    {
+        foreach (var guid in OurGuids)
+        {
+            Parameter? p;
+            try { p = el.get_Parameter(guid); }
+            catch { p = null; }
+            if (p != null) yield return p;
+        }
+    }
+
     private static Schema GetSchema()
     {
         var schema = Schema.Lookup(SchemaId);

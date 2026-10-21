@@ -103,6 +103,19 @@ public static class PlaceStamp
         el.SetEntity(entity);
     }
 
+    /// <summary>기록을 뗀다(트랜잭션 안 — 대상에서 빠진 보이드에 전에 적은 것을 지울 때). 뗀 것이 있으면 참. 던지지 않는다.</summary>
+    public static bool Forget(Element el)
+    {
+        try
+        {
+            var schema = Schema.Lookup(SchemaId);
+            if (schema == null || el.GetEntity(schema) is not { } entity || !entity.IsValid()) return false;
+            el.DeleteEntity(schema);
+            return true;
+        }
+        catch { return false; }
+    }
+
     /// <summary>
     /// 모양 기록만 지금 모양으로 고친다 — 우리 도구가 모양을 바꾼 트랜잭션 안에서, 다시 계산(Regenerate) 뒤 · 커밋 앞에 부른다
     /// (그 도구를 부르기 전에 이 부재가 바뀌지 않았던 때만 — 부르는 쪽이 ValueOf(..).Changed 로 미리 떠 둔다). 기록이 이 부재의 것이 아니거나

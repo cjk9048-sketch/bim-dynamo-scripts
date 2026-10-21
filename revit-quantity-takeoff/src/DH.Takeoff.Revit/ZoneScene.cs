@@ -27,6 +27,7 @@ public static class ZoneScene
         public string LevelNotice = "";                       // 층으로 걸러 볼 수 없는 까닭("" = 볼 수 있음)
         public int Boxed;                                     // 세모를 만들지 못해 경계상자로 그린 부재
         public int Undrawn;                                   // 형상도 경계상자도 없어 그리지 못한 부재(찍을 수 없다)
+        public List<long> BoxedIds = new(), UndrawnIds = new();   // 그 부재들(일지 — 창에는 알리지 않는다: JACK 2026-10-21 «3D 그림의 일이라 큰 오류처럼 보임»)
         public int ReadErrors;                                // 형상을 읽다 오류가 난 부재
         public int FacesFallback;                             // Revit 이 세모를 주지 않아 우리 띠 나누기로 만든 면
         public int FacesSkipped;                              // 세모로 만들지 못한 면
@@ -84,8 +85,13 @@ public static class ZoneScene
                 {
                     builder = BoxBuilder(box);
                     data.Boxed++;
+                    data.BoxedIds.Add(id.Value);
                 }
-                else data.Undrawn++;
+                else
+                {
+                    data.Undrawn++;
+                    data.UndrawnIds.Add(id.Value);
+                }
             }
 
             string type = (doc.GetElement(el.GetTypeId()) as ElementType)?.Name ?? el.Name;
