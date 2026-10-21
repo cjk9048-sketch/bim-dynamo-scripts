@@ -101,6 +101,7 @@ public static class CalcSheetExporter
                 // R49 — 2D 산출근거 꼴: 줄의 부호(마크 — 없으면 유형 이름) · 부위 제목의 «(T=700)»(바닥 · 기초판의 두께).
                 Mark = FormworkReader.MarkOf(el),
                 Thickness = ThicknessOf(el),
+                Name = Text(el, MemberNames.Param).Trim(),   // R53b — 부재 이름(있으면 줄의 부호 · «부재 목록»)
             });
         }
         result.Plan = CalcPlan.Make(inputs, stored.Plan.Parts, stored.Plan.Places.Select(p => p.Name).ToList(),
@@ -116,7 +117,7 @@ public static class CalcSheetExporter
     }
 
     // 주 옵션이 아닌 디자인 옵션에 든 부재면 그 옵션 이름, 아니면 null.
-    private static string? AlternateOption(Element el)
+    internal static string? AlternateOption(Element el)
     {
         try
         {
@@ -149,7 +150,7 @@ public static class CalcSheetExporter
         };
     }
 
-    private static string Text(Element el, string name) =>
+    internal static string Text(Element el, string name) =>
         el.GetParameters(name)
             .Where(p => p.StorageType == StorageType.String)
             .Select(p => p.AsString())

@@ -299,6 +299,17 @@ public static class OverlapScene
     /// </summary>
     public static Dictionary<int, MeshData> Remesh(Document doc, Data data, IEnumerable<ElementId> ids)
     {
+        var changed = MeshesNow(doc, data, ids);
+        foreach (var (slot, mesh) in changed) data.Meshes[slot] = mesh;
+        return changed;
+    }
+
+    /// <summary>
+    /// 그 부재들의 지금 겉면(그림의 칸 → 겉면 — 나눈 조각은 원래 칸에 함께). 장면 자료는 바꾸지 않는다 — 작성오류 미리보기(R54)가 시험 트랜잭션 안에서
+    /// 바꾼 뒤 모양을 읽고 되돌리는 데 쓴다(되돌린 뒤 장면이 바뀐 모양을 들고 있지 않게).
+    /// </summary>
+    public static Dictionary<int, MeshData> MeshesNow(Document doc, Data data, IEnumerable<ElementId> ids)
+    {
         var changed = new Dictionary<int, MeshData>();
         var counters = new ZoneScene.Data();
         foreach (int slot in ids.Select(data.IndexOf).Where(at => at >= 0).Distinct())
@@ -326,9 +337,7 @@ public static class OverlapScene
                 }
                 if (builder.Triangles == 0) builder = allCutAway ? null : !box.IsEmpty && box.Size.Length > 1e-6 ? ZoneScene.BoxBuilder(box) : null;
             }
-            var mesh = builder?.Build(data.Origin) ?? new MeshData();
-            data.Meshes[slot] = mesh;
-            changed[slot] = mesh;
+            changed[slot] = builder?.Build(data.Origin) ?? new MeshData();
         }
         return changed;
     }

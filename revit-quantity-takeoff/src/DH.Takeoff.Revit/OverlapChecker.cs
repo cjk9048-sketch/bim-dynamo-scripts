@@ -533,7 +533,7 @@ public static class OverlapChecker
                 before[r.Keep.Value] = VolumeM3(doc.GetElement(r.Keep));
                 before[r.Cutter.Value] = VolumeM3(doc.GetElement(r.Cutter));
             }
-            using var tx = new Transaction(doc, "DH 모델 검증 — 결합 방향 시험");
+            using var tx = new Transaction(doc, "DH 모델 검증 — 작성오류 시험");
             try
             {
                 if (tx.Start() != TransactionStatus.Started) throw new InvalidOperationException("시험 트랜잭션을 열 수 없음");
@@ -1494,7 +1494,7 @@ public static class OverlapChecker
         // 결합 방향(R54): 남을 쪽 = 기준대로면 남는 부재(지금 잘림) · 잘릴 쪽 = 지금 자르는 부재.
         if (found.Reversed.Count > 0)
         {
-            sb.Append("\n결합 방향\n남을쪽Id\t남을쪽\t남을쪽 순위\t잘릴쪽Id\t잘릴쪽(지금 자름)\t잘릴쪽 순위\t바뀔체적(m3)\t결과\t표시\n");
+            sb.Append("\n작성오류(기준과 반대로 결합됨)\n남을쪽Id\t남을쪽\t남을쪽 순위\t잘릴쪽Id\t잘릴쪽(지금 자름)\t잘릴쪽 순위\t바뀔체적(m3)\t결과\t표시\n");
             foreach (var r in found.Reversed)
                 sb.Append(CultureInfo.InvariantCulture,
                     $"{r.Keep.Value}\t{Cell(r.KeepName)}\t{DeductRank.Label(r.KeepRank)}\t{r.Cutter.Value}\t{Cell(r.CutterName)}\t{DeductRank.Label(r.CutterRank)}\t" +
@@ -1502,8 +1502,8 @@ public static class OverlapChecker
                     $"{Cell(string.Join(" · ", new[] { r.Human ? "사람이 정함" : "", r.SameRank ? "참고(같은 순위)" : "", r.Note }.Where(t => t.Length > 0)))}\n");
         }
         sb.Append(CultureInfo.InvariantCulture,
-            $"\n검사한 부재\t{found.Checked}\n겹친 쌍\t{found.Pairs.Count}\n겹친 체적 합(m3)\t{found.TotalM3:0.######}\n" +
-            $"결합 방향(기준과 반대)\t{found.Reversed.Count(r => r.Counts)}\n바꿔도 같아 뺀 반대 결합\t{found.Touching}\n" +
+            $"\n검사한 부재\t{found.Checked}\n겹침오류(겹친 쌍)\t{found.Pairs.Count}\n겹친 체적 합(m3)\t{found.TotalM3:0.######}\n" +
+            $"작성오류(기준과 반대로 결합됨)\t{found.Reversed.Count(r => r.Counts)}\n바꿔도 같아 뺀 반대 결합\t{found.Touching}\n" +
             $"잴 수 없었던 쌍\t{found.Unmeasured}\n함께 있지 않아 뺀 쌍(디자인 옵션·공정)\t{found.NotCoexisting}\n끝까지 봤는가\t{(found.TimedOut ? "아니오(시간 한도)" : "예")}\n우선순위\t{PriorityText}\n");
         File.WriteAllText(path, sb.ToString(), new UTF8Encoding(true));
         try

@@ -24,6 +24,7 @@ public sealed class CalcInput
     public string Mark { get; set; } = "";       // Revit «마크»(도면 부호 B1 · W1 …) — 산출근거 줄의 부호(R49 · 없으면 유형 이름)
     public double Thickness { get; set; }        // 바닥 · 기초의 두께(m — Revit «두께» · 0 = 모름) — 부위 제목의 «(T=700)»(R49)
     public bool ShapeChanged { get; set; }       // 위치·부위를 확인한 뒤 모양이 바뀌었는데 아직 확인하지 않았다 — «부재 목록»에 남긴다(R52b)
+    public string Name { get; set; } = "";       // 부재 이름(DH_부재명 — SB01 · WA01 …, R53b) — 있으면 줄의 부호가 이것(마크 · 유형 이름 대신)
 }
 
 /// <summary>
@@ -165,7 +166,7 @@ public sealed class CalcPlan
             return int.MaxValue;
         }
         bool zoned = all.Any(x => x.NotTarget.Length == 0 && x.Zone.Trim().Length > 0); // 구역을 쓰는 모델인가
-        var listed = new List<(CalcElement el, int work, int kind, string kindName, bool noZone, double value, CalcInput input, string spec, string pour, bool oneLine)>();
+        var listed = new List<(CalcElement el, int work, int kind, string kindName, bool noZone, double value, CalcInput input, string spec, string pour, bool oneLine, string name)>();
         foreach (var x in all)
         {
             string raw = x.Formula.Replace('×', '*').Trim();
@@ -182,9 +183,10 @@ public sealed class CalcPlan
             bool excluded = x.NotTarget.Length > 0;
             double value = 0;
             string why = excluded ? x.NotTarget : WhyMissing(raw, x.Bim, out value);
+            string name = x.Name.Trim();
             var el = new CalcElement
             {
-                Id = x.Id, Category = x.Category, Type = x.Type, Zone = zone, Work = work, Part = PartOf(zone, kindName, zoned && !x.ZoneFree, noZone),
+                Id = x.Id, Name = name, Category = x.Category, Type = x.Type, Zone = zone, Work = work, Part = PartOf(zone, kindName, zoned && !x.ZoneFree, noZone),
                 // 실은 식은 빈칸을 뺀 글자로 적는다(같은 식끼리 한 줄로 묶이게). 못 실은 식은 속성의 글자 그대로 둔다.
                 Formula = why.Length == 0 ? Squeeze(raw) : raw,
                 Bim = x.Bim, Verdict = x.ShapeChanged ? (x.Verdict.Length > 0 ? x.Verdict + " · " : "") + ShapeChangedNote : x.Verdict,
@@ -205,34 +207,40 @@ public sealed class CalcPlan
             string pour = Clean(listedPart?.Pour) ?? PartCatalog.DefaultPour;
             bool oneLine = PartCatalog.OneLine(kindName, listedPart?.Group);
             // 차례: 무근 → 철근, 규격 · 타설(절), 부위(부위 목록의 차례 — 목록에 없는 이름은 그 뒤에 이름순), 구역(네모를 그린 차례 — 없으면 이름순), 부호.
-            listed.Add((el, work == Plain ? 0 : 1, partAt >= 0 ? partAt : int.MaxValue, kindName, free, value, x, spec, pour, oneLine));
+            listed.Add((el, work == Plain ? 0 : 1, partAt >= 0 ? partAt : int.MaxValue, kindName, free, value, x, spec, pour, oneLine, name));
         }
 
+        // 줄의 부호(R53b): 이름(DH_부재명)이 있는 부재는 마크 · 유형 대신 이름 — 이름 있는 부재끼리는 식이 같으면 유형이 달라도 한 줄(«WA03, WA04 : 식 × 2»).
+        // 이름이 없는 부재(적을 수 없던 부재 · 이름을 붙이기 전의 내보내기)는 전처럼 마크(없으면 유형 이름)로 가른다.
         var natural = new NaturalComparer();
         var groups = listed
-            .GroupBy(t => (t.el.Work, t.spec, t.pour, t.el.Part, t.el.Zone, Shown: t.input.Mark.Trim().Length > 0 ? t.input.Mark.Trim() : t.el.Type, t.el.Formula))
-            .OrderBy(g => g.First().work)
-            .ThenBy(g => g.Key.spec, natural).ThenBy(g => g.Key.spec, StringComparer.Ordinal)
-            .ThenBy(g => g.Key.pour, StringComparer.Ordinal)
-            .ThenBy(g => g.First().kind)
-            .ThenBy(g => g.First().kindName, natural).ThenBy(g => g.First().kindName, StringComparer.Ordinal)
-            .ThenBy(g => g.Key.Zone.Length == 0 ? 1 : 0)            // 구역 없는 부재는 그 부위의 맨 뒤
-            .ThenBy(g => ZoneAt(g.Key.Zone))
-            .ThenBy(g => g.Key.Zone, natural).ThenBy(g => g.Key.Zone, StringComparer.Ordinal)
-            .ThenBy(g => g.Key.Shown, natural).ThenBy(g => g.Key.Shown, StringComparer.Ordinal)
-            .ThenBy(g => g.Min(t => t.el.Id));
-        foreach (var g in groups)
+            .GroupBy(t => (t.el.Work, t.spec, t.pour, t.el.Part, t.el.Zone, Shown: t.name.Length > 0 ? NamedKey : t.input.Mark.Trim().Length > 0 ? t.input.Mark.Trim() : t.el.Type, t.el.Formula))
+            .Select(g => (g, shown: g.Key.Shown == NamedKey ? MemberNames.Compact(g.Select(t => t.name)) : g.Key.Shown))
+            .OrderBy(x => x.g.First().work)
+            .ThenBy(x => x.g.Key.spec, natural).ThenBy(x => x.g.Key.spec, StringComparer.Ordinal)
+            .ThenBy(x => x.g.Key.pour, StringComparer.Ordinal)
+            .ThenBy(x => x.g.First().kind)
+            .ThenBy(x => x.g.First().kindName, natural).ThenBy(x => x.g.First().kindName, StringComparer.Ordinal)
+            .ThenBy(x => x.g.Key.Zone.Length == 0 ? 1 : 0)            // 구역 없는 부재는 그 부위의 맨 뒤
+            .ThenBy(x => ZoneAt(x.g.Key.Zone))
+            .ThenBy(x => x.g.Key.Zone, natural).ThenBy(x => x.g.Key.Zone, StringComparer.Ordinal)
+            .ThenBy(x => x.shown, natural).ThenBy(x => x.shown, StringComparer.Ordinal)
+            .ThenBy(x => x.g.Min(t => t.el.Id));
+        foreach (var (g, shown) in groups)
         {
             var members = g.OrderBy(t => t.el.Id).ToList();
             var first = members[0];
+            bool named = g.Key.Shown == NamedKey;
             var row = new CalcRow
             {
                 Work = g.Key.Work, Part = g.Key.Part, Mark = first.el.Type, Zone = g.Key.Zone, Formula = g.Key.Formula,
                 NoZonePart = first.noZone,
                 Count = members.Count, Bim = members.Sum(t => t.el.Bim), Note = IdNote(members.Select(t => t.el.Id).ToList()),
-                PartName = first.kindName, Spec = g.Key.spec, Pour = g.Key.pour, Shown = g.Key.Shown,
-                Marked = first.input.Mark.Trim().Length > 0, OneLine = first.oneLine, NoSub = first.noZone,
+                PartName = first.kindName, Spec = g.Key.spec, Pour = g.Key.pour, Shown = shown,
+                // 이름 있는 줄은 «마크 있는 줄»이 아니다 — 한 줄로 적는 부위(보 · 기둥 …)의 이름은 그 한 줄에 모아 적는다(CalcSheet).
+                Marked = !named && first.input.Mark.Trim().Length > 0, OneLine = first.oneLine, NoSub = first.noZone,
             };
+            if (named) row.Names.AddRange(members.Select(t => t.name));
             foreach (var t in members)
                 if (t.input.Thickness > 0 && t.input.Kind is MemberKind.Slab or MemberKind.Foundation) row.Thickness.Add((t.input.Thickness, t.el.Bim));
             plan.Rows.Add(row);
@@ -240,6 +248,9 @@ public sealed class CalcPlan
         }
         return plan;
     }
+
+    // 이름 있는 부재의 묶음 열쇠(부호 칸 — 줄에 쓰지 않는 글자라 마크 · 유형 이름과 부딪히지 않는다).
+    private const string NamedKey = "\u0001이름";
 
     // 부위 목록의 글 칸(규격 · 타설): 빈 글이면 null(처음 값).
     private static string? Clean(string? text) => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
