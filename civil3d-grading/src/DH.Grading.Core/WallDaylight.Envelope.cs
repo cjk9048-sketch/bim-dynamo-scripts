@@ -330,7 +330,7 @@ public static partial class WallDaylight
         if (EnvelopeKeepRaw) R.Raw = new List<Tri>(raw);
         if (raw.Count > 0)
         {
-            R.Tris = CivilSafeMesh.MakeZone(raw, Array.Empty<Point3>(), out var cr, wallTol2: 1e-2 - rest, wallCap: CivilSafeMesh.ForcedCap - rest);
+            R.Tris = CivilSafeMesh.MakeZone(raw, Array.Empty<Point3>(), out var cr, wallTol2: 1e-2 - rest, wallCap: CivilSafeMesh.ForcedCap - rest, flatH: CivilSafeMesh.ThinFlat);
             R.Clean = cr;
             R.HeightBudget = rest + cr.WallDz;
             // ⑥-b ★[v103.3.2 · 1021 17:06 현장] 테두리의 납작한 면을 뺀다(<see cref="DropBorderFlats"/> — Civil이 말없이 버려 되읽기가 어긋났다)
@@ -353,12 +353,16 @@ public static partial class WallDaylight
             foreach (var t in R.Tris)
                 foreach (var (a, b) in new[] { (t.A, t.B), (t.B, t.C), (t.C, t.A) })
                     if (cnt[EK(a, b)] == 1) { bv.TryAdd((a.X, a.Y), a); bv.TryAdd((b.X, b.Y), b); }
+            // ★[v104 · V34 패널식 계측] 조각 테두리 판정 거리 = max(1 mm, 1e-5 + 다듬기가 옮긴 가장 먼 거리) — 도랑 자르기 · 틈(2 mm)으로 조각 테두리가 기준면 아래에 길게 생기고,
+            //   그 곁 가는 셀을 다듬기가 접으면 결과 테두리가 조각 테두리에서 0.3 mm 안쪽으로 물러난다(현장 도면 실측 332µm) — 1e-5로는 테두리 점으로 못 알아봐
+            //   «데이라잇 테두리가 기준면과 600mm»(도랑 바닥)로 판정 3이 났다. 1 mm 안 진짜 데이라잇 점을 안 재는 몫은 무시할 만하다.
+            double rimTol = Math.Max(1e-3, 1e-5 + Math.Max(R.Clean?.MoveMax ?? 0, R.Clean?.LrMoveMax ?? 0));
             foreach (var q in bv.Values)
             {
                 double x = q.X - ox, y = q.Y - oy;
                 var cpt = gf.CreatePoint(new Coordinate(x, y));
                 bool onRim = false;
-                for (int k = 0; k < n && !onRim; k++) if (rimDist[k] != null && rimDist[k]!.Distance(cpt) < 1e-5) onRim = true;
+                for (int k = 0; k < n && !onRim; k++) if (rimDist[k] != null && rimDist[k]!.Distance(cpt) < rimTol) onRim = true;
                 if (onRim) continue;
                 bool hs = S.TryZNear(x, y, 1e-5, out double zs2), hg = G.TryZNear(x, y, 1e-5, out double zg2);
                 if (!hs && !hg) continue;

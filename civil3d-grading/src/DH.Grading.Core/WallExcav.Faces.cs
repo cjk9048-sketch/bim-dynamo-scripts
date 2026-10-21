@@ -28,6 +28,15 @@ public static partial class WallExcav
         public string Src = "";
         /// <summary>그 줄에서 잰 벽 높이 최대(흙 쪽 − 앞쪽) — 로그 · «보통 거리» 셈.</summary>
         public double WallHMax;
+        /// <summary>★[v104] 점마다(Pts와 같은 차례) — 벽 밑(앞 땅 · toe) · 보이는 벽 높이 h · 앞 기울기 rf · 뒤 기울기 rb(흙 쪽으로 오르는 +).</summary>
+        public List<double> Toe = new(), H = new(), Rf = new(), Rb = new();
+        /// <summary>★[v104] 절토 옹벽인가(앞면 선의 up — 부르는 쪽이 넣는다) · 그 앞면 선의 앞면 구배(정지면 벽 앞면 1:n — 쐐기 공제 · 패널식 깎기면 · <see cref="Measure"/>가 넣는다).</summary>
+        public bool Up = true;
+        public double SlopeW = 0.01;
+        /// <summary>★[v104 B] 부르는 쪽이 넣는다 — 옹벽 묶음 이름 · 단 번호 · 그 옹벽의 맨 위 단인가(배면사면 대상).</summary>
+        public string Group = "";
+        public int Step;
+        public bool Top;
     }
 
     /// <summary>재기 셈 — 까닭별 길이(m).</summary>
@@ -243,23 +252,24 @@ public static partial class WallExcav
         //   앞쪽만 쓰면 벽 앞이 가파른 자리(앞면 위에 놓인 선 · 벼랑 위 벽)에서 너무 많이 빼 진짜 벽을 «반대»로 갈랐다(시험 «앞면 위»).
         //   뒤 기울기가 steep을 넘으면(뒤 표본이 앞면 위 — 기록보다 높은 벽) 빼지 않는다.
         //   ★[재검토 낮음 2] 벽 밑 = 선 자리의 땅(앞 5 cm를 앞 기울기로 5 cm 늘인 값) — 어긋남 판정과 바닥(벽 밑 − 기초)이 같은 값을 쓴다.
-        (int K, double Z, double H) Judge(double s)
+        // ★[v104 · 계획_v104.md 5.1 · 2판 검토 중간 6] 앞 기울기 rf · 뒤 기울기 rb도 돌려준다(단면 고르기 — 보강토 근입 · 경사 배면 ⚠)
+        (int K, double Z, double H, double Rf, double Rb) Judge(double s)
         {
             var p = At(s);
             var f5 = surf(p.X - p.Nx * 0.05, p.Y - p.Ny * 0.05);
             var f15 = surf(p.X - p.Nx * 0.15, p.Y - p.Ny * 0.15);
             var bk = surf(p.X + p.Nx * back, p.Y + p.Ny * back);
             var bk2 = surf(p.X + p.Nx * (back + 0.10), p.Y + p.Ny * (back + 0.10));
-            if (f5 == null || f15 == null || bk == null || bk2 == null) return (2, double.NaN, double.NaN);
+            if (f5 == null || f15 == null || bk == null || bk2 == null) return (2, double.NaN, double.NaN, 0, 0);
             double rf = (f5.Value - f15.Value) / 0.10, rb = (bk2.Value - bk.Value) / 0.10;   // 흙 쪽으로 가며 오르는 기울기
             double rise = Math.Abs(rb) < steep ? rb : 0;
             double h = bk.Value - f5.Value - rise * (back + 0.05);
-            if (h < -0.1) return (3, f5.Value, h);
-            if (h < 0.1) return (1, f5.Value, h);
-            if (Math.Abs(rf) > steep) return (5, f5.Value, h);            // 앞면 위에 얹힌 선 — 늘인 벽 밑을 믿을 수 없다
+            if (h < -0.1) return (3, f5.Value, h, rf, rb);
+            if (h < 0.1) return (1, f5.Value, h, rf, rb);
+            if (Math.Abs(rf) > steep) return (5, f5.Value, h, rf, rb);            // 앞면 위에 얹힌 선 — 늘인 벽 밑을 믿을 수 없다
             double toe = f5.Value + rf * 0.05;
-            if (!double.IsNaN(p.Rec) && toe < p.Rec - 0.05) return (4, toe, h);
-            return (0, toe, h);
+            if (!double.IsNaN(p.Rec) && toe < p.Rec - 0.05) return (4, toe, h, rf, rb);
+            return (0, toe, h, rf, rb);
         }
         // 표본 자리 — 0.5 m 간격 + 꺾임점
         var ss = new SortedSet<double>();
@@ -303,7 +313,7 @@ public static partial class WallExcav
             double s1 = j + 1 < sl.Count ? Edge(sl[j], sl[j + 1]) : sl[j];
             if (s1 - s0 > 0.05)
             {
-                var b = new Bottom { Soil = f.Soil, Src = f.Src };
+                var b = new Bottom { Soil = f.Soil, Src = f.Src, SlopeW = f.SlopeW };
                 var pts = new List<double> { s0 };
                 for (int q = j0; q <= j; q++) if (sl[q] > s0 + 1e-6 && sl[q] < s1 - 1e-6) pts.Add(sl[q]);
                 pts.Add(s1);
@@ -314,6 +324,7 @@ public static partial class WallExcav
                     double z = jj.K == 0 ? jj.Z : double.NaN;
                     if (double.IsNaN(z)) continue;                    // 끝을 좁히다 판정이 흔들린 점 — 뺀다(남은 점으로 잇는다)
                     b.Pts.Add(new Point3(p.X, p.Y, z - foot));
+                    b.Toe.Add(z); b.H.Add(jj.H); b.Rf.Add(jj.Rf); b.Rb.Add(jj.Rb);
                     b.WallHMax = Math.Max(b.WallHMax, jj.H);
                 }
                 if (b.Pts.Count >= 2) res.Add(b);

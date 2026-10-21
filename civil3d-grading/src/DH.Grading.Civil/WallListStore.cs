@@ -152,30 +152,57 @@ public static class WallListStore
         s = WallExcav.Settings.Default; why = "";
         try
         {
-            var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
-            if (!nod.Contains(DictName)) return true;
-            var dict = (DBDictionary)tr.GetObject(nod.GetAt(DictName), OpenMode.ForRead);
-            if (!dict.Contains(ExcavName)) return true;
-            var xr = (Xrecord)tr.GetObject(dict.GetAt(ExcavName), OpenMode.ForRead);
-            var vals = new List<(char, object)>();
-            foreach (TypedValue tv in xr.Data?.AsArray() ?? System.Array.Empty<TypedValue>())
-            {
-                switch (tv.TypeCode)
-                {
-                    case (short)DxfCode.Int32: vals.Add(('I', System.Convert.ToInt32(tv.Value))); break;
-                    case (short)DxfCode.Real: vals.Add(('D', System.Convert.ToDouble(tv.Value))); break;
-                    default: why = $"옹벽 터파기 기록에 모르는 값 종류 {tv.TypeCode}"; return false;
-                }
-            }
+            if (!ReadVals(db, tr, ExcavName, out var vals, out why)) return false;
             return WallExcav.TryDecode(vals, out s, out why);
         }
         catch (System.Exception ex) { why = $"옹벽 터파기 기록을 못 읽었다 {ex.GetType().Name}: {ex.Message}"; s = WallExcav.Settings.Default; return false; }
     }
 
     /// <summary>터파기 설정을 적는다(첫 값이면 기록을 지운다).</summary>
-    public static void WriteExcav(Database db, Transaction tr, WallExcav.Settings s)
+    public static void WriteExcav(Database db, Transaction tr, WallExcav.Settings s) => WriteVals(db, tr, ExcavName, WallExcav.Encode(s));
+
+    /// <summary>사전 XRecord를 [I · D] 값 목록으로 — 기록이 없으면 null(참) · 모르는 값 종류면 거짓.</summary>
+    static bool ReadVals(Database db, Transaction tr, string name, out List<(char K, object V)>? vals, out string why)
     {
-        var enc = WallExcav.Encode(s);
+        vals = null; why = "";
+        var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
+        if (!nod.Contains(DictName)) return true;
+        var dict = (DBDictionary)tr.GetObject(nod.GetAt(DictName), OpenMode.ForRead);
+        if (!dict.Contains(name)) return true;
+        var xr = (Xrecord)tr.GetObject(dict.GetAt(name), OpenMode.ForRead);
+        vals = ValsOf(xr.Data, out why);
+        return vals != null;
+    }
+
+    /// <summary>[I · D] 값 목록 — 모르는 값 종류면 null + 까닭.</summary>
+    internal static List<(char K, object V)>? ValsOf(ResultBuffer? rb, out string why)
+    {
+        why = "";
+        var vals = new List<(char K, object V)>();
+        foreach (TypedValue tv in rb?.AsArray() ?? System.Array.Empty<TypedValue>())
+        {
+            switch (tv.TypeCode)
+            {
+                case (short)DxfCode.Int32: vals.Add(('I', System.Convert.ToInt32(tv.Value))); break;
+                case (short)DxfCode.Real: vals.Add(('D', System.Convert.ToDouble(tv.Value))); break;
+                default: why = $"기록에 모르는 값 종류 {tv.TypeCode}"; return null;
+            }
+        }
+        return vals;
+    }
+
+    /// <summary>[I · D] 값 목록 → ResultBuffer.</summary>
+    internal static ResultBuffer BufferOf(IEnumerable<(char K, object V)> enc)
+    {
+        var vals = new List<TypedValue>();
+        foreach (var (k, v) in enc)
+            vals.Add(k == 'I' ? new TypedValue((int)DxfCode.Int32, (int)v) : new TypedValue((int)DxfCode.Real, (double)v));
+        return new ResultBuffer(vals.ToArray());
+    }
+
+    /// <summary>사전 XRecord를 적는다 — <paramref name="enc"/>가 null이면 기록을 지운다(첫 값 = 흔적 없음).</summary>
+    static void WriteVals(Database db, Transaction tr, string name, List<(char K, object V)>? enc)
+    {
         var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForWrite);
         DBDictionary dict;
         if (nod.Contains(DictName)) dict = (DBDictionary)tr.GetObject(nod.GetAt(DictName), OpenMode.ForWrite);
@@ -186,20 +213,51 @@ public static class WallListStore
             nod.SetAt(DictName, dict);
             tr.AddNewlyCreatedDBObject(dict, true);
         }
-        if (dict.Contains(ExcavName))
+        if (dict.Contains(name))
         {
-            var oid = dict.GetAt(ExcavName);
-            dict.Remove(ExcavName);
+            var oid = dict.GetAt(name);
+            dict.Remove(name);
             try { tr.GetObject(oid, OpenMode.ForWrite).Erase(); } catch { }
         }
         if (enc == null) return;
-        var vals = new List<TypedValue>();
-        foreach (var (k, v) in enc)
-            vals.Add(k == 'I' ? new TypedValue((int)DxfCode.Int32, (int)v) : new TypedValue((int)DxfCode.Real, (double)v));
-        using var rb = new ResultBuffer(vals.ToArray());
+        using var rb = BufferOf(enc);
         var xr = new Xrecord { Data = rb };
-        dict.SetAt(ExcavName, xr);
+        dict.SetAt(name, xr);
         tr.AddNewlyCreatedDBObject(xr, true);
+    }
+
+    // ══ ★★★[v104 · 계획_v104.md 4 · JACK 1021 «옹벽 형태별 일반단면도 · 매개변수로 단면 모양 조종»] 형식별 높이 표 — XRecord WALLSEC_<형식 번호>
+    //   현장마다 토질부 값이 달라 도면에 둔다(메모 «모델 파일이 기록») · 첫 표와 같으면 기록 없음 · 형식 번호는 enum 값(고정).
+    static string SecName(WallSection.Kind k) => "WALLSEC_" + ((int)k).ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>이 도면의 형식 표 — 없으면 첫 표(참) · 못 읽으면 첫 표 + 까닭(거짓).</summary>
+    public static bool ReadSection(Database db, Transaction tr, WallSection.Kind k, out WallSection.Table t, out string why)
+    {
+        t = WallSection.DefaultTable(k); why = "";
+        try
+        {
+            if (!ReadVals(db, tr, SecName(k), out var vals, out why)) return false;
+            return WallSection.TryDecode(k, vals, out t, out why);
+        }
+        catch (System.Exception ex) { why = $"{k} 표 기록을 못 읽었다 {ex.GetType().Name}: {ex.Message}"; t = WallSection.DefaultTable(k); return false; }
+    }
+
+    /// <summary>형식 표를 적는다(첫 표와 같으면 기록을 지운다).</summary>
+    public static void WriteSection(Database db, Transaction tr, WallSection.Table t) => WriteVals(db, tr, SecName(t.Kind), WallSection.Encode(t));
+
+    /// <summary>이 도면의 형식 표(읽기 전용 트랜잭션). 못 읽으면 첫 표 + 까닭.</summary>
+    public static WallSection.Table SectionOf(Database? db, WallSection.Kind k, out string why)
+    {
+        why = "";
+        if (db == null) return WallSection.DefaultTable(k);
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            ReadSection(db, tr, k, out var t, out why);
+            tr.Commit();
+            return t;
+        }
+        catch (System.Exception ex) { why = ex.GetType().Name + ": " + ex.Message; return WallSection.DefaultTable(k); }
     }
 
     /// <summary>이 도면의 터파기 설정(읽기 전용 트랜잭션 — 명령 밖에서도 부른다). 못 읽으면 첫 값 + 까닭.</summary>

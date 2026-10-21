@@ -175,7 +175,8 @@ public sealed class SectionCommand
             PureWithWallsBuilder.RecordOnAlignment(trR, alignId, _wf ?? new PureWithWallsBuilder.Result { Kind = PureWithWallsBuilder.Kind.NoWalls }, padPick.SurfId);
             PureWithWallsBuilder.Tidy(trR, db, padPick.SurfId);
             WallExcavBuilder.RecordOnAlignment(trR, alignId, _wx ?? new WallExcavBuilder.Result { State = WallExcavBuilder.State.Off });
-            WallExcavBuilder.Tidy(trR, _wx != null && _wx.State == WallExcavBuilder.State.Built ? _wx.SurfaceId : ObjectId.Null);
+            WallExcavBuilder.Tidy(trR, _wx != null && _wx.State == WallExcavBuilder.State.Built ? _wx.SurfaceId : ObjectId.Null,
+                                  _wx != null && _wx.BackState == WallExcavBuilder.State.Built ? _wx.BackId : ObjectId.Null);
             trR.Commit();
         }
         catch { }

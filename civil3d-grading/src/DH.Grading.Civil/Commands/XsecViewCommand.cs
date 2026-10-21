@@ -2026,7 +2026,8 @@ public sealed class XsecViewCommand
                         var miss = new DBText
                         {
                             TextString = "※ 미포함 — 흙막이(가시설) 면적 · 성토에서 구조물 부피 공제"
-                                       + " · 되메우기에서 구조물 부피 공제",
+                                       + " · 되메우기에서 옹벽 밖 구조물 부피 공제"
+                                       + (string.IsNullOrEmpty(qty.Foot) ? "" : "  ※ " + qty.Foot),
                             Height = nh0,
                             LayerId = layE,
                             ColorIndex = 256,
@@ -3964,6 +3965,7 @@ public sealed class XsecViewCommand
                             string kind = kindOf.TryGetValue(sec.SourceId, out var kk) ? kk : "";
                             // 이름으로 고른다 — 터파기를 먼저 봐야 한다('터파기면_DH'가 '정지'를 안 품지만 순서를 못 박아 둔다).
                             if (kind == "터파기" || kind == WallExcavBuilder.Label) { if (!stExcav.IsNull) { sec.StyleId = stExcav; nE++; } }   // ★[v103.3] 옹벽 터파기도 같은 마젠타
+                            else if (kind == WallBackBuilder.Label) { if (!stPlan.IsNull) { sec.StyleId = stPlan; nP++; } }   // ★[v104 B] 배면사면 — 정지면 색
                             else if (kind == "원지반") { if (!stGround.IsNull) { sec.StyleId = stGround; nG++; } }
                             else if (kind == "정지면") { if (!stPlan.IsNull) { sec.StyleId = stPlan; nP++; } }
                             else if (kind == "지층")
@@ -4031,7 +4033,11 @@ public sealed class XsecViewCommand
         double deepLimit = 5.0,
         DH.Grading.Core.CrossSectionArea.ExcavBase basis
             = DH.Grading.Core.CrossSectionArea.ExcavBase.Lower,
-        CachedGroundSurface csWx = null)
+        CachedGroundSurface csWx = null,
+        DH.Grading.Core.WallExcav.SecRecord secRec = null,
+        double[] secOut = null,
+        DH.Grading.Core.WallExcav.BackRecord backRec = null,
+        double[] backOut = null)
     {
         // 절단선의 좌우 끝을 구한다 — 종단도·횡단도가 쓰는 것과 <b>같은 함수</b>다.
         if (!SectionCommand.TryCut(al, station, wl, wr, out var cut))
@@ -4119,6 +4125,31 @@ public sealed class XsecViewCommand
                 }
             }
         }
+        // ★[v104 B · 배면 검토 낮음 12] 배면 구역 Ω의 가장자리도 이분법으로 넣는다 — 표본 사이에 걸리면 그 칸(절토 · 터파기 칸이 서로 다른 끝을 봄)이 칸 하나 몫 어긋났다(0826 «가장자리 오차»와 같은 종류)
+        if (backRec != null && csWx != null)
+        {
+            bool InB(double xx)
+            {
+                double tt = (xx + wl) / (wl + wr), px0 = lx + (rx - lx) * tt, py0 = ly + (ry - ly) * tt;
+                if (!csWx.TryGetElevation(px0, py0, out double ez)) return false;
+                double pz = csP != null && csP.TryGetElevation(px0, py0, out double pz0) ? pz0 : double.NaN;
+                double gz = csG != null && csG.TryGetElevation(px0, py0, out double gz0) ? gz0 : double.NaN;
+                DH.Grading.Core.WallExcav.BackAt(backRec, px0, py0, pz, gz, ez, out bool ins, out _);
+                return ins;
+            }
+            bool prev = InB(xs[0]);
+            for (int k = 0; k + 1 < n; k++)
+            {
+                bool cur = InB(xs[k + 1]);
+                if (cur != prev)
+                {
+                    double lo2 = xs[k], hi2 = xs[k + 1];
+                    for (int it = 0; it < 14; it++) { double mid = (lo2 + hi2) / 2.0; if (InB(mid) == prev) lo2 = mid; else hi2 = mid; }
+                    edges.Add(lo2); edges.Add(hi2);
+                }
+                prev = cur;
+            }
+        }
         if (edges.Count > 0)
         {
             var merged = new System.Collections.Generic.List<double>(xs);
@@ -4138,6 +4169,40 @@ public sealed class XsecViewCommand
         //   · 기준 «계획면» + 이 측점에 구조물 터파기가 없다 — 옹벽만 → <c>E = 옹벽</c> · 위끝은 Lower(G, P)(옹벽은 뒤 흙보다 먼저 선다).
         //   · 기준 «계획면» + 둘 다 — 구조물은 그대로 · 옹벽은 구조물 바닥 <b>아래로 더 판 몫</b>만 따로 더한다(깊이는 그 자리 지표에서 — <c>SplitByDepthBase</c>).
         double[] ewx = Read(csWx);
+        // ★★★[v104 B · 계획_v104_B.md 2 · JACK 1021 «되메우기 = 터파기선 ~ 배면사면 · 그 위 원지반은 절토»] <b>계획면을 배면사면으로 낮춘다</b> — 한 곳만 바꾼다.
+        //   Ω 안(옹벽 터파기 안 · 절토 옹벽 흙 쪽 · 정지면 = 원지반)이고 B &lt; 계획면이면 py2 = B → 절토 = G − B(지층 원장도 같은 칸) · 터파기 위끝 = B · 되메우기 = B ~ E − 구조물.
+        //   총 깎은 양 = (G − B) + (B − E) = G − E(겹침 없음) · 계획면 기준 길 · 구조물 공제 지표도 같은 배열을 본다.
+        //   ※[설치 전 검토 낮음 7 — 안 받음] 절단선에 정지면이 없는 측점(옹벽 끝 너머 · 터파기만 있음)도 배면을 적용한다 — 빼면 바로 앞 측점은 되메우기가 배면까지인데
+        //     이 측점만 원지반까지라 수량이 끊긴다(V33 16.8m). 총 깎은 양(G − E)은 어느 쪽이든 같고 «배면 위 원지반은 절토»(JACK 1021)를 같은 법으로 따른다.
+        if (backRec != null && ewx != null)
+        {
+            var p0 = py2;
+            var pNew = new double[n];
+            double extra = 0, prevExtra = 0; int nIn = 0, nFlat = 0;
+            for (int i = 0; i < n; i++)
+            {
+                double pv = p0 != null ? p0[i] : double.NaN, gv = gy != null ? gy[i] : double.NaN;
+                pNew[i] = pv;
+                double tt = (xs[i] + wl) / (wl + wr);
+                double bz = DH.Grading.Core.WallExcav.BackAt(backRec, lx + (rx - lx) * tt, ly + (ry - ly) * tt, pv, gv, ewx[i], out bool ins, out bool fh);
+                double cutHere = 0;
+                if (ins)
+                {
+                    nIn++; if (fh) nFlat++;
+                    double top0 = double.IsNaN(pv) ? gv : double.IsNaN(gv) ? pv : System.Math.Min(pv, gv);
+                    cutHere = System.Math.Max(0, top0 - bz);
+                    pNew[i] = bz;
+                }
+                if (i > 0) extra += (cutHere + prevExtra) / 2 * (xs[i] - xs[i - 1]);
+                prevExtra = cutHere;
+            }
+            if (nIn > 0)
+            {
+                py2 = pNew;
+                if (backOut != null && backOut.Length >= 2) { backOut[0] = extra; backOut[1] = nFlat; }
+                dbg?.Append($" | 옹벽 배면사면(1:{backRec.N:0.##}) {nIn}점 · 그 위 원지반 {extra:F2}㎡ → 절토{(nFlat > 0 ? $" · ⚠평탄 없이 벽에 닿는 점 {nFlat}" : "")}");
+            }
+        }
         double[] wxTop2 = null, wxBase2 = null, wxBot2 = null;
         var basisE = basis;
         int noPlanS = 0;
@@ -4237,6 +4302,27 @@ public sealed class XsecViewCommand
                 double Add(double a, double b) => double.IsNaN(a) ? b : double.IsNaN(b) ? a : a + b;
                 qq = qq with { ExcShallow = Add(qq.ExcShallow, s2.Shallow), ExcDeep = Add(qq.ExcDeep, s2.Deep), Backfill = Add(qq.Backfill, Add(s2.Shallow, s2.Deep)), MissE = false };
             }
+            // ★★★[v104 · 계획_v104.md 6 · JACK 1021 «되메우기 = 터파기 − 구조물»] <b>옹벽 몸체를 되메우기에서 뺀다</b> — 기둥법(2판 · 검토 높음 2).
+            //   터파기면 기록(DH_WALLSEC)의 단면 줄로 절단선 점마다 세로 기둥을 세워, 그 칸 터파기 바닥 ~ 지표(되메우기를 세는 바로 그 띠) 안의
+            //   구조물 + 빈 공간(단면 앞면 ~ 정지면 앞면 쐐기)을 잰다. 보강토체 · 배수층 · 조약돌 뒤채움은 되메우기에 남기고 넓이만 적는다(검토 중간 9).
+            //   «계획면 + 구조물 터파기 함께»면 옹벽 몫 띠(wxBot2 ~ wxTop2)만 — 구조물 터파기의 되메우기는 손대지 않는다.
+            if (secRec != null && !double.IsNaN(qq.Backfill))
+            {
+                double[] lo = wxTop2 != null ? wxBot2 : ey;
+                double[] hi = wxTop2 != null ? wxTop2 : DH.Grading.Core.CrossSectionArea.SurfaceFor(gy, py2, basisE);
+                if (lo != null && hi != null && lo.Length == n && hi.Length == n)
+                {
+                    var cs = DH.Grading.Core.WallExcav.Integrate(secRec, lx, ly, rx, ry, wl, wr, xs, lo, hi);
+                    if (cs.Lines > 0)
+                    {
+                        double take = System.Math.Min(qq.Backfill, cs.Struct + cs.Air);
+                        qq = qq with { Backfill = qq.Backfill - take };
+                        if (secOut != null && secOut.Length >= 4) { secOut[0] = cs.Struct; secOut[1] = cs.Air; secOut[2] = cs.Reinf; secOut[3] = take; }
+                        dbg?.Append($" | 옹벽 단면 {cs.Text} → 되메우기에서 {take:F2}㎡ 뺌" + (take < cs.Struct + cs.Air - 1e-6 ? " ⚠되메우기보다 커 0에서 멈춤" : ""));
+                    }
+                }
+                else dbg?.Append(" | ⚠옹벽 단면 공제 못 함(터파기 바닥 · 지표 배열 없음)");
+            }
         }
         if (dbg != null)
         // ★[JACK 0827 "토적표 정확도 향상"] <b>어느 구간을 쟀는지</b> 남긴다 —
@@ -4292,7 +4378,9 @@ public sealed class XsecViewCommand
         string Warn,
         /// <summary>★[JACK 0909] <b>이 수량을 어느 기준면으로 냈는가.</b>
         /// 그리는 쪽이 알아야 표에 그 사실을 밝힐 수 있다(계획면 기준이면 성토와 되메우기가 겹친다).</summary>
-        DH.Grading.Core.CrossSectionArea.ExcavBase Basis);
+        DH.Grading.Core.CrossSectionArea.ExcavBase Basis,
+        /// <summary>★[v104 · 계획 6 · 검토 중간 9] 표 아래 «미포함» 줄에 덧붙일 말(보강토체 등 — 되메우기에 듦). 없으면 빈 문자열.</summary>
+        string Foot = "");
 
     /// <summary>측점 이름 → 그 측점의 수량. 표를 그릴 때 이 표를 찾아 값을 채운다.
     /// <para>★★★[JACK 0831] <b>표 얼개도 여기서 나온다</b> — 어느 한 측점에서라도 나온 조합을
@@ -4313,6 +4401,7 @@ public sealed class XsecViewCommand
         //   그리는 쪽까지 넘겨야 한다. 안쪽 블록에 두면 <c>Done()</c>에서 안 보인다.
         var qtyBasis = DH.Grading.Core.CrossSectionArea.ExcavBase.Lower;
         int nOldVer = 0;          // ★옛 방식(층 하단)으로 만들어진 지층면 수
+        string wallFoot = "";     // ★[v104] 보강토체 등 — 표 아래 한 줄
         QtyResult Done()
         {
             // ★합집합 — <b>실제로 값이 나온</b> 열쇠만 모은다(JACK 인터뷰 확정).
@@ -4349,7 +4438,7 @@ public sealed class XsecViewCommand
             if (nMismatch > 0)
                 warn.Append($"\n  ⚠측점 {nMismatch}개에서 지층별 합이 전체와 다릅니다"
                           + " — 지층면이 부지를 다 못 덮었습니다.");
-            return new QtyResult(map, ledgers, spec, warn.ToString(), qtyBasis);
+            return new QtyResult(map, ledgers, spec, warn.ToString(), qtyBasis, wallFoot);
         }
         if (sl == null || sl.Count == 0) return Done();
         int nOk = 0, nNo = 0, nThrow = 0; string firstThrow = null;
@@ -4357,6 +4446,14 @@ public sealed class XsecViewCommand
         int nNoPlan = 0;
         int nNoG = 0, nNoP = 0, nNoE = 0;
         int nWx = 0;   // ★[v103.3] 옹벽 터파기를 읽은 측점 수
+        // ★★[v104 · 계획 6] 옹벽 단면 공제 — 측점마다 (측점 · 구조물 · 빈 공간 · 보강토체 등 · 뺀 넓이)
+        var wsec = new System.Collections.Generic.List<(double St, double Struct, double Air, double Reinf, double Take)>();
+        DH.Grading.Core.WallExcav.SecRecord secRec = null;
+        string secWhy = "";
+        DH.Grading.Core.WallExcav.BackRecord backRec = null;   // ★[v104 B]
+        var wback = new System.Collections.Generic.List<(double St, double Extra)>();
+        var exSt = WallListStore.ExcavOf(db, out _);   // ★[v104 설치 전 검토 높음 1] 배면 기록은 지금 설정이 켬 · 같은 경사일 때만 쓴다
+        bool csWxSeen = false;
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
@@ -4383,7 +4480,18 @@ public sealed class XsecViewCommand
                     if (sp.Label == "원지반") csG = cs;
                     else if (sp.Label == "정지면") csP = cs;
                     else if (sp.Label == "터파기") csE = cs;
-                    else if (sp.Label == WallExcavBuilder.Label) csWx = cs;   // ★[v103.3] 옹벽 뒷채움 터파기 — 따로 받는다(csE를 덮지 않는다)
+                    else if (sp.Label == WallExcavBuilder.Label)
+                    {
+                        csWx = cs; csWxSeen = true;   // ★[v103.3] 옹벽 뒷채움 터파기 — 따로 받는다(csE를 덮지 않는다)
+                        secRec = WallExcavBuilder.ReadSecRecord(tr, ts, out secWhy);   // ★[v104] 단면 기록(구조물 공제)
+                        backRec = WallBackBuilder.ReadRecord(tr, ts, out _);             // ★[v104 B] 배면 기록(없으면 배면 없이 — 대상 없음 · 데이라잇 없음)
+                        if (backRec != null && !(exSt.On && exSt.BackOn)) backRec = null;   // ★[검토 높음 1] 끔 — 남은 기록(같은 면을 쓰는 다른 선형 몫)은 안 쓴다
+                        else if (backRec != null && System.Math.Abs(backRec.N - exSt.BackSlope) > 1e-9)
+                        {
+                            log?.AppendLine($"  ⚠옹벽 배면 기록(1:{backRec.N:0.##})이 지금 설정(1:{exSt.BackSlope:0.##})과 달라 배면 없이 잰다 — [종단도]를 다시 그리세요");
+                            backRec = null;
+                        }
+                    }
                     // ★★★[JACK 0831] 지층·지하수위 캐시를 <b>버리지 않는다</b> —
                     //   종전엔 여섯 장을 만들어 놓고 바로 버렸다(검토 지적).
                     else if (sp.Label == "지층")
@@ -4480,9 +4588,13 @@ public sealed class XsecViewCommand
                     var dbg = new System.Text.StringBuilder();
                     // ★측점마다 <b>새 원장</b>이다 — 돌려 쓰면 값이 겹쳐 쌓인다.
                     var led = new DH.Grading.Core.QtyLedger();
+                    var secOut = new double[4] { double.NaN, 0, 0, 0 };
+                    var backOut = new double[2] { double.NaN, 0 };
                     var q = QtyAt(tr, al0, s.St, wl, wr, csG, csP, csE, dbg,
                                   strata, csW, led, DH.Grading.Core.QuantityTable.DeepLimitM,
-                                  qtyBasis, csWx);
+                                  qtyBasis, csWx, secRec, secOut, backRec, backOut);
+                    if (!double.IsNaN(backOut[0])) wback.Add((s.St, backOut[0]));
+                    if (!double.IsNaN(secOut[0])) wsec.Add((s.St, secOut[0], secOut[1], secOut[2], secOut[3]));
                     if (csWx != null && dbg != null && dbg.ToString().Contains("옹벽 터파기")) nWx++;
                     // ★★★[JACK 0831 · 검토 HIGH-1] <b>성토·되메우기를 원장에 넣는다.</b>
                     //   표가 이제 원장만 읽는데 <c>StrataQuantity.Accumulate</c>는
@@ -4565,6 +4677,29 @@ public sealed class XsecViewCommand
                          : " · 지층합 = 전체 (대조 통과)")
                       + $" · 합계 절토 {sumCut:F1}㎡ · 성토 {sumFill:F1}㎡ · 터파기 {sumExc:F1}㎡"
                       + "  ※단면 면적이다(체적은 측점 간격을 곱해야 한다)");
+        // ★★[v104 · 계획 6 · 검토 중간 9] 옹벽 단면 공제 요약 · 보강토체 등은 평균단면법 부피(표 아래 한 줄)
+        if (csWxSeen && secRec == null)
+            log?.AppendLine($"  ⚠옹벽 단면 공제 안 함 — {secWhy}");
+        else if (wsec.Count > 0)
+        {
+            var ws = wsec.OrderBy(w => w.St).ToList();
+            double vol = 0;
+            for (int i = 0; i + 1 < ws.Count; i++) vol += (ws[i].Reinf + ws[i + 1].Reinf) / 2 * (ws[i + 1].St - ws[i].St);
+            log?.AppendLine($"  옹벽 단면 공제 — 측점 {ws.Count}개 · 구조물 합 {ws.Sum(w => w.Struct):F2}㎡ · 빈 공간 합 {ws.Sum(w => w.Air):F2}㎡"
+                          + $" · 되메우기에서 뺀 합 {ws.Sum(w => w.Take):F2}㎡"
+                          + (ws.Sum(w => w.Reinf) > 0 ? $" · 보강토체 등 합 {ws.Sum(w => w.Reinf):F2}㎡(약 {vol:F1}㎥ · 되메우기에 듦)" : "")
+                          + $" · 기록 {secRec?.Lines.Count ?? 0}줄");
+            if (vol > 0.05) wallFoot = $"보강토 옹벽의 보강토체 · 배수층(선별 뒤채움)은 되메우기에 들어 있다 — 약 {vol:F1}㎥";
+        }
+        // ★★[v104 B] 배면사면 위 원지반(절토에 든 몫) — 평균단면법 부피 · 표 아래 한 줄
+        if (wback.Count > 0)
+        {
+            var wb = wback.OrderBy(w => w.St).ToList();
+            double volB = 0;
+            for (int i = 0; i + 1 < wb.Count; i++) volB += (wb[i].Extra + wb[i + 1].Extra) / 2 * (wb[i + 1].St - wb[i].St);
+            log?.AppendLine($"  옹벽 배면사면(1:{backRec?.N:0.##}) — 측점 {wb.Count}개 · 그 위 원지반 합 {wb.Sum(w => w.Extra):F2}㎡(약 {volB:F1}㎥ · 절토에 듦 · 되메우기는 배면사면까지)");
+            if (volB > 0.05) wallFoot = (wallFoot.Length > 0 ? wallFoot + " · " : "") + $"옹벽 배면사면(1:{backRec?.N:0.##}) 위 원지반은 절토에 들어 있다 — 약 {volB:F1}㎥";
+        }
         return Done();
     }
 
