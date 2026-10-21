@@ -49,14 +49,19 @@ public sealed class WallCompositeCommand
     /// <param name="baseHandle">합성 전 면(<see cref="BaseName"/>)의 핸들 — 풀기·다시 합성이 «이 합성의 합성 전 면인가»를 본다(코드 검토 v101.1 · 중간 1).
     /// 핸들은 도면을 닫았다 열어도 같다(ObjectId는 아니다).</param>
     /// <param name="nos">★[v103.0] 든 옹벽 번호(«1,2,4») — 셋째 값. 없으면 v102 표지(옮길 한 벌 합성).</param>
-    static void MarkComposite(Transaction tr, Autodesk.AutoCAD.DatabaseServices.DBObject o, string info, string baseHandle, string nos = "")
+    /// <param name="nonce">★★[v103.2 · 계획 4판] 이 합성의 일회용 번호 — 넷째 값(번호가 있을 때만). 옹벽 칸의 <see cref="WallRec.CompNonce"/>가 이것과 같으면 그 칸의 뚜껑이 지금 최종면의 것이다.</param>
+    static void MarkComposite(Transaction tr, Autodesk.AutoCAD.DatabaseServices.DBObject o, string info, string baseHandle, string nos = "", string nonce = "")
     {
         if (!o.IsWriteEnabled) o.UpgradeOpen();
         if (o.ExtensionDictionary.IsNull) o.CreateExtensionDictionary();
         var d = (DBDictionary)tr.GetObject(o.ExtensionDictionary, OpenMode.ForWrite);
         if (d.Contains(TagKey)) throw new System.InvalidOperationException("새로 지은 면에 합성 표지가 벌써 있다");
         var rb = new ResultBuffer(new TypedValue((int)DxfCode.Text, info), new TypedValue((int)DxfCode.Text, baseHandle));
-        if (!string.IsNullOrEmpty(nos)) rb.Add(new TypedValue((int)DxfCode.Text, nos));
+        if (!string.IsNullOrEmpty(nos))
+        {
+            rb.Add(new TypedValue((int)DxfCode.Text, nos));
+            if (!string.IsNullOrEmpty(nonce)) rb.Add(new TypedValue((int)DxfCode.Text, nonce));
+        }
         var xr = new Xrecord { Data = rb };
         d.SetAt(TagKey, xr);
         tr.AddNewlyCreatedDBObject(xr, true);
@@ -101,6 +106,19 @@ public sealed class WallCompositeCommand
             if (tr.GetObject(d.GetAt(TagKey), OpenMode.ForRead) is not Xrecord xr || xr.Data == null) return "";
             var a = xr.Data.AsArray();
             return a.Length >= 2 && a[1].Value is string h ? h : "";
+        }
+        catch { return ""; }
+    }
+    /// <summary>★★[v103.2] 합성 표지의 일회용 번호(넷째 값) — 표지가 없거나 v103.2 전 합성이면 빈 문자열.</summary>
+    internal static string CompositeNonce(Transaction tr, Autodesk.AutoCAD.DatabaseServices.DBObject o)
+    {
+        try
+        {
+            if (o.ExtensionDictionary.IsNull) return "";
+            if (tr.GetObject(o.ExtensionDictionary, OpenMode.ForRead) is not DBDictionary d || !d.Contains(TagKey)) return "";
+            if (tr.GetObject(d.GetAt(TagKey), OpenMode.ForRead) is not Xrecord xr || xr.Data == null) return "";
+            var a = xr.Data.AsArray();
+            return a.Length >= 4 && a[3].Value is string n ? n : "";
         }
         catch { return ""; }
     }
@@ -239,7 +257,12 @@ public sealed class WallCompositeCommand
         _quiet = false;
         try { if (docJ != null) RunInner(docJ); }
         catch (System.Exception ex) { job.Done(false, $"예외 — {ex.GetType().Name}: {ex.Message}"); throw; }
-        finally { EventViewerMute.End(evPrev); _job = null; _issuesBefore = null; }
+        finally
+        {
+            EventViewerMute.End(evPrev); _job = null; _issuesBefore = null;
+            // ★[v103.2 · 계획 2-6] 그려 둔 종단 · 횡단이 옛 면 기준이면 한 줄 — 관문이 부른 합성(RunFor)은 곧 종단을 그리므로 안 알린다
+            if (docJ != null) PureWithWallsBuilder.NotifyStale(docJ);
+        }
     }
 
     /// <summary>★★★[v103.1.12 · 계획 4판 2-5 · 낮음 4] 관문이 부르는 합성 — 명령(Run)과 같은 껍데기(이벤트 뷰어 끄기 · 자가점검 작업 · 앞 상태)로 같은 RunInner를 돌린다.
@@ -254,7 +277,12 @@ public sealed class WallCompositeCommand
         _lastSummary = "";
         try { if (doc != null) RunInner(doc); }
         catch (System.Exception ex) { job.Done(false, $"예외 — {ex.GetType().Name}: {ex.Message}"); return (false, $"예외 — {ex.GetType().Name}: {ex.Message}"); }
-        finally { EventViewerMute.End(evPrev); _job = null; _issuesBefore = null; _quiet = false; }
+        finally
+        {
+            EventViewerMute.End(evPrev); _job = null; _issuesBefore = null; _quiet = false;
+            // ★[v103.2 · 코드 검토 낮음 5] 종단을 곧 그리는 관문(종단도 · 종단/횡단) · 정지면 생성이 끝에서 알리는 «이어서»가 아니면 여기서 «옛 면 기준» 한 줄(InfraWorks · 터파기 앞 합성)
+            if (doc != null && caller != "종단도" && caller != "종단/횡단" && caller != "이어서") PureWithWallsBuilder.NotifyStale(doc);
+        }
         return (_lastOk, _lastSummary);
     }
 
@@ -1047,7 +1075,9 @@ public sealed class WallCompositeCommand
             ? string.Format(System.Globalization.CultureInfo.InvariantCulture, " · ⚠높이 오차 합 {0:F1}mm(1cm 넘음 · 옹벽 {1}) · 옹벽 높이 {2:F1}mm @{3}(Civil이 반드시 합칠 쌍 곁)",
                 forcedStep.R.HeightBudget * 1000, forcedNo, forcedStep.R.Clean!.WallDz * 1000, forcedStep.R.Clean.WallAt) : "";
         try { cTin.Description = $"DH 옹벽 합성 — 옹벽 {useOk.Count}개({nos}) {System.DateTime.Now:yyyy-MM-dd HH:mm} · {GradingSettings.Version} · 판정 {res.Tier}({res.TierText}){overNote}"; } catch { }
-        try { MarkComposite(tr, cTin, $"{System.DateTime.Now:yyyy-MM-dd HH:mm:ss} · {GradingSettings.Version} · 판정 {res.Tier}{overNote}", pTin.ObjectId.Handle.ToString(), nos); }
+        // ★★[v103.2 · 계획 4판] 이 합성의 일회용 번호 — 표지 넷째 값 + 넣은 칸마다 같은 값(⑨) · 종단 · 횡단의 옹벽면이 «이 합성의 뚜껑»인지 가른다
+        string nonce = System.Guid.NewGuid().ToString("N").Substring(0, 12);
+        try { MarkComposite(tr, cTin, $"{System.DateTime.Now:yyyy-MM-dd HH:mm:ss} · {GradingSettings.Version} · 판정 {res.Tier}{overNote}", pTin.ObjectId.Handle.ToString(), nos, nonce); }
         catch (System.Exception mx) { log.AppendLine("합성 표지 못 붙임: " + mx); throw new SwapFailed($"합성 표지를 못 붙였다({mx.GetType().Name})"); }
         int oldN = 0;
         try { var (o, _) = Candidates(civilDoc, tr, OldCompName, groundId); oldN = o.Count; if (oldN > 0) GradingBuilder.EraseSurfacesByBaseName(tr, OldCompName, groundId); } catch { }
@@ -1062,6 +1092,10 @@ public sealed class WallCompositeCommand
             // ★[v103.1.12 · 4판 낮음 5] 빈 값이면 «미룬 옹벽»(합성에 든 적 없음)으로 읽힌다 — 단계가 없을 때도 고정 표지
             w.LastNote = st != null ? $"판정 {st.R.Tier}({st.R.TierText})" : "판정 ?";
             w.Stamp = System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+            // ★★[v103.2 · 계획 2-2 · 4판] 뚜껑 · 일회용 번호 — 물려받기(⑨-b) 전 번호 M 칸에 적는다(물려받기가 칸째 K로 옮긴다 · 4판 검토 물음 1 확인)
+            w.CompNonce = nonce;
+            w.Cap = st?.R.CapTris != null ? DH.Grading.Core.PureWithWalls.CapOf(st.R.CapTris) : null;
+            if (w.Cap != null) log.AppendLine($"⑨ 뚜껑 — 옹벽 {w.No}: {w.Cap.Count}면 · 테두리 변 {w.Cap.Edges.Count} · {w.Cap.Area:F3}㎡ · 번호 {nonce}");
         }
         string repNote = "";
         foreach (int rno in replaced)
@@ -1124,6 +1158,8 @@ public sealed class WallCompositeCommand
             vis = $"정지면_DH 켬 {a} · 숨김 합성 전 {b} · 옹벽 표면 {c}";
         }
         try { GradingBuilder.SetSurfaceVisible(tr, SectionCommand.PurePadSurfaceBase, false); } catch { }
+        try { GradingBuilder.SetSurfaceVisible(tr, PureWithWallsBuilder.Name, false); } catch { }   // ★[v103.2] 옹벽면도 순수면 — 늘 숨김
+        try { GradingBuilder.SetSurfaceVisible(tr, WallExcavBuilder.Name, false); } catch { }       // ★[v103.3] 옹벽 터파기면도 늘 숨김
         // ★[v103.1.12 · JACK 1015 ③ · 4판 중간 7] 합성에 안 든 «넣음» 옹벽(보류 · 미룸)은 가상옹벽 면을 다시 켠다 — 정지면_DH에도 없고 제 면도 숨으면 아무 데도 안 보인다
         try
         {

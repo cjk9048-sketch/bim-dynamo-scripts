@@ -56,7 +56,15 @@ public static class StationCommand
     [CommandMethod("DHSTATIONDEL", CommandFlags.Modal)]
     public static void RunDelete() => Run(frontBack: false, del: true);
 
+    /// <summary>★[v103.2 · 4판 검토 중간 3] 측점을 찍을 때마다 종단을 다시 그린다 — 정지면 ⚠는 이 명령 동안 한 번만.</summary>
     private static void Run(bool frontBack, bool del = false)
+    {
+        ProfileCommand.WarnOnce = true;
+        try { RunLoop(frontBack, del); }
+        finally { ProfileCommand.WarnOnce = false; }
+    }
+
+    private static void RunLoop(bool frontBack, bool del)
     {
         var doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
@@ -333,6 +341,7 @@ public static class StationCommand
             //   → 종단도와 <b>똑같이</b> 번들에서 복원한 선(데이라잇·소단·사면)과의 교차로 잡는다.
             //     자가 하나가 되어야 두 화면이 같은 말을 한다.
             int nEdge = 0, nDl = 0, nWall = 0, nExc = 0;
+            string wfWarn = "";
             try
             {
                 var regions = GradingBundleStore.TryLoadAll(alignId.Database, tr, out _);
@@ -391,8 +400,15 @@ public static class StationCommand
                         }
                     }
                     var dm = StationMarks.FromLines(al, dl, "데이라잇", null, slog);
-                    try { DiagLog.Append("\n" + slog.ToString()); } catch { }
                     list.AddRange(dm); nDl = dm.Count;
+
+                    // ★★★[v103.2 · 계획 2-5] 옹벽 폴리곤 안 — 종단과 같은 자(번들 재료를 가리고 종단이 쓴 면을 걷는다)
+                    try { WallFaceMarks.ApplyFromRecord(tr, alignId.Database, al, list, vbars, null, slog, out wfWarn); }
+                    catch (System.Exception ex) { slog.AppendLine("  ⚠옹벽 폴리곤 안 측점 실패 — " + ex.Message); }
+                    nDl = list.Count(m => m.Why == "데이라잇");
+                    nWall = list.Count(m => m.Why.StartsWith("옹벽", System.StringComparison.Ordinal));
+                    nEdge = list.Count(m => m.Why == "사면·소단");
+                    try { DiagLog.Append("\n" + slog.ToString()); } catch { }
 
                     // ★[JACK 0825] 터파기 — 종전엔 여기까지 오지 않았다.
                     //   측점 수집기가 정지 번들만 읽는데 터파기는 별도 칸(EXCAV)에 살아서 아무도 안 열었다.
@@ -410,6 +426,7 @@ public static class StationCommand
             }
             note = $"꺾임 {nPi} · 사면·소단 {nEdge} · 옹벽 {nWall} · 데이라잇 {nDl}"
                  + (nExc > 0 ? $" · 터파기 {nExc}" : "")
+                 + (wfWarn.Length > 0 ? " · " + wfWarn : "")
                  + (nEdge + nDl + nWall == 0 ? " (번들이 없어 정지 경계는 못 잡음 — [부지정지]를 먼저)" : "");
         }
         catch { }

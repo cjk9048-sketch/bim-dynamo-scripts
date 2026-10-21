@@ -85,13 +85,100 @@ public sealed class ProfileCommand
         GradingSettings.SyncToDocument(doc);
         Editor ed = doc.Editor;
         Database db = doc.Database;
-        try { Body(db, ed); }
+        try
+        {
+            // ★★★[v103.2 · 계획 4판 · 4판 검토 높음] 합성 관문 → 옹벽면 — Body 밖(조용한 다시 그리기는 관문을 안 거친다).
+            //   관문: 빠진 옹벽이 있으면 먼저 합성하고(옹벽 하나에 약 20초) 그래도 빠지면 묻는다 — «아니오» = 아무것도 안 그린다 · «예» = 그리고 빠진 옹벽을 ⚠로 선형에 적는다
+            if (!CompositeGate.Ensure(doc, "종단도")) { ed.WriteMessage("\n[종단도] 그리지 않았습니다(아무것도 안 바뀜)."); return; }
+            BusyPopup.Show(BusyText);   // ★[v103.3.1 · JACK 1021] 묻는 자리마다 Pause · 끝나면 finally에서 닫는다
+            CurrentWallFace = PrepareWallFace(doc, interactive: true);
+            if (CurrentWallFace == null) { ed.WriteMessage("\n[종단도] 취소했습니다(아무것도 안 바뀜)."); return; }
+            CurrentExcav = PrepareExcav(doc, CurrentWallFace, "종단도");
+            Body(db, ed);
+        }
         catch (System.Exception ex)
         {
+            BusyPopup.Close();
             ed.WriteMessage("\n[종단도 오류] " + ex.Message);
             AcadApp.ShowAlertDialog("종단도 생성 중 오류:\n" + ex.Message);
             try { DiagLog.Append($"\n■ DHPROFILE 예외 — {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}\n"); } catch { }
         }
+        finally { CurrentWallFace = null; CurrentExcav = null; BusyPopup.Close(); }
+    }
+
+    /// <summary>★[v103.3.1 · JACK 1021] 종단을 짓는 동안 뜨는 작은 창의 글.</summary>
+    internal const string BusyText = "종단 구성 중입니다.";
+
+    /// <summary>★★★[v103.3 · 계획 v103.3 2-4] 이번 종단의 옹벽 뒷채움 터파기면 — Run · Rebuild가 정하고 Body가 목록 끝에 붙이고 선형에 적는다(명령 한 번 동안만).</summary>
+    internal static WallExcavBuilder.Result? CurrentExcav { get; private set; }
+
+    /// <summary>옹벽 터파기면을 짓거나 되쓴다(<see cref="WallExcavBuilder.Ensure"/>) — 꺼짐이면 아무것도 안 한다. 로그 · 명령줄 · 자가점검 한 줄.</summary>
+    internal static WallExcavBuilder.Result PrepareExcav(Document doc, PureWithWallsBuilder.Result? wf, string who)
+    {
+        var db = doc.Database;
+        var log = new System.Text.StringBuilder();
+        ObjectId g = ObjectId.Null;
+        try { foreach (var sp in SectionCommand.FindSurfaces(db, CivilApp.CivilApplication.ActiveDocument)) if (sp.Label == "원지반") { g = sp.SurfId; break; } } catch { }
+        var r = WallExcavBuilder.Ensure(db, g, wf, log);
+        try { DiagLog.Append($"\n■ 종단 — 옹벽 터파기({who})\n{log}"); } catch { }
+        if (r.State != WallExcavBuilder.State.Off)
+        {
+            try { Say(doc.Editor, $"\n[{who}] 옹벽 터파기 — {r.StatusText}"); } catch { }
+            try { SelfCheckLog.Line("종단 — 옹벽 터파기", !r.HasWarn, r.StatusText, doc.Name); } catch { }
+        }
+        return r;
+    }
+
+    /// <summary>★★★[v103.2 · 계획 2-3 · 2-4] 이번 종단이 «정지면»으로 쓸 면 · 옹벽(측점 가리기 · 걷기) — Run · Rebuild가 정하고 Body · 검토선이 읽는다(명령 한 번 동안만).</summary>
+    internal static PureWithWallsBuilder.Result? CurrentWallFace { get; private set; }
+
+    /// <summary>한 명령 안에서 여러 번 다시 그릴 때(DHSTATION) 정지면 알림을 같은 글이면 한 번만 — 켠 쪽이 끈다.</summary>
+    internal static bool WarnOnce
+    {
+        get => _warnOnce;
+        set { _warnOnce = value; _said.Clear(); }
+    }
+    static bool _warnOnce;
+    static readonly System.Collections.Generic.HashSet<string> _said = new();
+    static void Say(Editor ed, string msg)
+    {
+        if (_warnOnce && !_said.Add(msg)) return;
+        ed.WriteMessage(msg);
+    }
+
+    /// <summary>옹벽면을 짓거나 되쓴다(<see cref="PureWithWallsBuilder.Ensure"/>). <paramref name="interactive"/>면 옛 판 안내에서 [취소 / 반영 없이 그리기]를 묻는다(취소 = null).</summary>
+    static PureWithWallsBuilder.Result? PrepareWallFace(Document doc, bool interactive)
+    {
+        var db = doc.Database; var ed = doc.Editor;
+        var log = new System.Text.StringBuilder();
+        var cdoc = CivilApp.CivilApplication.ActiveDocument;
+        ObjectId g = ObjectId.Null;
+        try { foreach (var sp in SectionCommand.FindSurfaces(db, cdoc)) if (sp.Label == "원지반") { g = sp.SurfId; break; } } catch { }
+        var r = PureWithWallsBuilder.Ensure(db, g, log);
+        try { DiagLog.Append($"\n■ 종단 — 옹벽면({(interactive ? "종단도" : "다시 그리기")})\n{log}"); } catch { }
+        try { Say(ed, $"\n[종단도] 정지면 — {r.StatusText}"); } catch { }
+        if (r.Kind == PureWithWallsBuilder.Kind.NotReflected && r.Why.Contains("옛 판") && interactive && !SelfCheckLog.Headless)
+        {
+            var kw = new PromptKeywordOptions($"\n{r.Why}\n어떻게 할까요? ");
+            kw.Keywords.Add("취소", "C", "취소(C)");
+            kw.Keywords.Add("반영없이그리기", "N", "반영없이그리기(N)");
+            kw.Keywords.Default = "취소";
+            kw.AllowNone = true;
+            BusyPopup.Pause();
+            var kr = ed.GetKeywords(kw);
+            if (kr.Status != PromptStatus.OK && kr.Status != PromptStatus.None) return null;
+            if (kr.Status == PromptStatus.None || kr.StringResult == "취소") return null;
+            BusyPopup.Show(BusyText);
+        }
+        else if (r.Kind == PureWithWallsBuilder.Kind.NotReflected && interactive && !SelfCheckLog.Headless && r.Missing.Length == 0)
+        {
+            BusyPopup.Pause();
+            try { AcadApp.ShowAlertDialog("종단 · 횡단 — 옹벽이 반영 안 된 면으로 그립니다.\n\n" + r.Why); } catch { }
+            BusyPopup.Show(BusyText);
+        }
+        // ★[코드 검토 중간 2 · 3] 반영은 됐어도 빠진 옹벽 · 짓다 나온 ⚠가 있으면 ⚠(StatusText가 옹벽면일 때 둘 다 싣는다)
+        try { SelfCheckLog.Line("종단 — 정지면", !r.HasWarn, r.StatusText + (r.Kind != PureWithWallsBuilder.Kind.WallFace && r.Missing.Length > 0 ? $" · 빠진 옹벽 {string.Join(",", r.Missing)}" : ""), doc.Name); } catch { }
+        return r;
     }
 
     /// <summary>★★[v32.29 · JACK 0813] <b>이미 만든 종단도를 그 자리에 다시 그린다</b> — 도면설정이 부른다.
@@ -147,9 +234,18 @@ public sealed class ProfileCommand
             }
             started = true;     // ★여기서부터는 부술 수 있다 — 실패해도 복구가 필요하다
             ed.WriteMessage($"\n[도면 설정] 종단도를 그 자리에 다시 그립니다(노선 {pts.Count}점 재사용)...");
+            BusyPopup.Show(BusyText);   // ★[v103.3.1] 다시 그리기도 같은 창 — 아래 finally가 닫는다
+            // ★[v103.2 · 4판 검토 중간 3] 조용한 다시 그리기 — 관문 없이 옹벽면만(빠진 옹벽은 ⚠ 한 줄)
+            var wfPrev = CurrentWallFace;
+            var wxPrev = CurrentExcav;
+            CurrentWallFace = PrepareWallFace(doc, interactive: false);
+            if (CurrentWallFace != null && CurrentWallFace.Missing.Length > 0)
+                Say(ed, $"\n[도면 설정] ⚠옹벽 {string.Join(",", CurrentWallFace.Missing)}이(가) 정지면_DH에 없어 종단 · 횡단에 안 들어갑니다(정지 창 [옹벽 합성] 뒤 종단을 다시 그리세요).");
+            CurrentExcav = PrepareExcav(doc, CurrentWallFace, "도면 설정");   // ★[v103.3] 다시 그리기도 옹벽 터파기를 짓거나 되쓴다
             // ★[검토 반영] <see cref="Body"/>가 <b>중간에 포기했는지</b>를 그대로 넘긴다 —
             //   종전엔 무조건 참이라 부른 쪽이 성공과 실패를 구분할 수 없었다.
-            return Body(db, ed, pts, viewPt);
+            try { return Body(db, ed, pts, viewPt); }
+            finally { CurrentWallFace = wfPrev; CurrentExcav = wxPrev; }
         }
         catch (System.Exception ex)
         {
@@ -157,7 +253,7 @@ public sealed class ProfileCommand
             try { DiagLog.Append($"\n■ 종단도 재생성 예외 — {ex}\n"); } catch { }
             return false;
         }
-        finally { QuietRebuild = wasQuiet; }
+        finally { QuietRebuild = wasQuiet; BusyPopup.Close(); }
     }
 
     /// <summary>도면에 남아 있는 노선(노란 선)과 <b>종단도를 놓았던 자리</b>를 읽는다.
@@ -273,6 +369,20 @@ public sealed class ProfileCommand
                                       "먼저 [서버지표면]으로 원지반을 만들거나 [부지정지]를 실행하세요.");
             return false;
         }
+        // ★★★[v103.2 · 계획 2-4] 옹벽이 든 면이 있으면 그것이 «정지면»이다(종단 · 단면검토선 · 횡단 · 수량이 모두 이 목록을 본다)
+        var wf = CurrentWallFace;
+        if (wf != null && wf.Kind == PureWithWallsBuilder.Kind.WallFace && !wf.SurfaceId.IsNull)
+        {
+            var pick = new SectionCommand.SurfPick(wf.SurfaceId, wf.SurfaceName, SectionCommand.ProfPadName, "정지면");
+            int ip = surfs.FindIndex(sp => sp.Label == "정지면");
+            if (ip >= 0) surfs[ip] = pick;
+            else surfs.Insert(System.Math.Min(1, surfs.Count), pick);
+        }
+        if (wf != null) log.AppendLine("정지면 상태: " + wf.StatusText + (wf.Kind != PureWithWallsBuilder.Kind.WallFace && wf.Missing.Length > 0 ? $" · 빠진 옹벽 {string.Join(",", wf.Missing)}" : ""));
+        // ★★★[v103.3 · 계획 2-5] 옹벽 뒷채움 터파기면 — 목록 <b>맨 뒤</b>(밴드 순서 안 흔듦) · 종단선 · 단면검토선 표본 · 횡단 수량이 모두 이 목록을 본다
+        var wx = CurrentExcav;
+        WallExcavBuilder.AppendPick(surfs, wx);
+        if (wx != null) log.AppendLine("옹벽 터파기: " + wx.StatusText);
         log.AppendLine("대상 지표면: " + string.Join(" · ", surfs.ConvertAll(s => s.Label + "=" + s.SurfName)));
 
         // ── ② 이전 종단도 정리 여부 ──────────────────────────────────────────
@@ -323,6 +433,7 @@ public sealed class ProfileCommand
             kw.Keywords.Add("남겨두고추가", "N", "남겨두고추가(N)");
             kw.Keywords.Default = "지우고새로";
             kw.AllowNone = true;
+            BusyPopup.Pause();
             var kr = ed.GetKeywords(kw);
             if (kr.Status != PromptStatus.OK && kr.Status != PromptStatus.None) return false;
             if (kr.Status == PromptStatus.None || kr.StringResult == "지우고새로")
@@ -345,8 +456,10 @@ public sealed class ProfileCommand
         }
         else
         {
+            BusyPopup.Pause();
             routeId = DrawRoute(db, ed, out nPts, out routeLen);
             if (routeId.IsNull) { LoseCarry(); return false; }        // 취소
+            BusyPopup.Show(BusyText);
         }
         if (routeLen < 1.0)
         {
@@ -397,6 +510,21 @@ public sealed class ProfileCommand
             return false;
         }
         log.AppendLine($"선형 '{alignName}' 생성");
+        // ★★[v103.2 · 계획 2-4] 선형에 «쓴 면»을 적는다 — 횡단 · 검토선은 이 면을 따르고(면 도장이 지금과 같을 때), 정지면이 바뀌면 «옛 면 기준» 알림이 이것과 견준다
+        try
+        {
+            using var trR = db.TransactionManager.StartTransaction();
+            var padPick = surfs.Find(sp => sp.Label == "정지면");
+            PureWithWallsBuilder.RecordOnAlignment(trR, alignId, wf ?? new PureWithWallsBuilder.Result { Kind = PureWithWallsBuilder.Kind.NoWalls }, padPick.SurfId);
+            string tidy = PureWithWallsBuilder.Tidy(trR, db, padPick.SurfId);   // 다시 그리기가 옛 선형을 지운 뒤라 옛 옹벽면을 여기서 치운다
+            if (tidy.Length > 0) log.AppendLine("  " + tidy);
+            // ★[v103.3 · 계획 2-4] 옹벽 터파기 — 꺼짐이어도 적는다(횡단이 «끈 뒤 종단 안 그림»을 가린다)
+            WallExcavBuilder.RecordOnAlignment(trR, alignId, wx ?? new WallExcavBuilder.Result { State = WallExcavBuilder.State.Off, Stamp = WallExcavBuilder.CurrentHead(db, ObjectId.Null, out _) });
+            string tidyX = WallExcavBuilder.Tidy(trR, wx != null && wx.State == WallExcavBuilder.State.Built ? wx.SurfaceId : ObjectId.Null);
+            if (tidyX.Length > 0) log.AppendLine("  " + tidyX);
+            trR.Commit();
+        }
+        catch (System.Exception ex) { log.AppendLine("  ⚠선형에 쓴 면을 못 적었다 — " + ex.Message); }
 
         // ★★[v32.35] 건져 둔 수동 측점을 새 선형에 다시 심는다 — 위 ②의 설명 참조.
         //   <b>선형이 만들어진 직후</b>여야 한다: 아래 <see cref="BuildSampleLines"/>가 이 목록을 읽어
@@ -541,7 +669,8 @@ public sealed class ProfileCommand
                 // ★[JACK 0824] 터파기 종단선만 **마젠타** 스타일로.
                 // 지층은 <b>번호마다</b> 제 색 스타일을 쓴다(이름 <c>DH_지층_3_풍화암</c> → 3번 색).
                 ObjectId stThis = s.Label == "지층" ? StrataStyleOf(StrataOrdOf(s.SurfName)) : ObjectId.Null;
-                var styleFor = s.Label == "터파기" && !excStyle.IsNull ? excStyle
+                bool excLike = s.Label == "터파기" || s.Label == WallExcavBuilder.Label;   // ★[v103.3] 옹벽 터파기도 같은 마젠타 · 같은 레이어
+                var styleFor = excLike && !excStyle.IsNull ? excStyle
                              : s.Label == "지층" && !stThis.IsNull ? stThis
                              : s.Label == "지하수위" && !stWater.IsNull ? stWater
                              : profStyle;
@@ -549,7 +678,7 @@ public sealed class ProfileCommand
                 //   만든 뒤 <c>Entity.LayerId</c>로 옮기는 것은 안 먹었다 — Civil 객체는 생성 시 받은 레이어를 쥔다.
                 //   종단은 선형 레이어(CR-GRND=원지반, 초록)에 만들어지므로 터파기도 초록이 됐다.
                 var layerFor = alignLayer;
-                if (s.Label == "터파기")
+                if (excLike)
                 {
                     var lx = SectionCommand.EnsureLayerStandalone(db, SectionCommand.ExcavProfileLayer, SectionCommand.ExcavAci);
                     if (!lx.IsNull) layerFor = lx;
@@ -603,6 +732,8 @@ public sealed class ProfileCommand
                     pidExcav = pid;                              // ★[JACK 0825] 가시설 막대의 아래끝
                     SectionCommand.PaintExcavProfile(db, pid);   // ★[JACK 0825] 객체 색을 직접 마젠타로
                 }
+                else if (s.Label == WallExcavBuilder.Label)
+                    SectionCommand.PaintExcavProfile(db, pid);   // ★[v103.3] 옹벽 터파기 — 색만(가시설 막대의 아래끝은 구조물 터파기 몫 그대로)
                 nProf++;
             }
             catch (System.Exception ex)
@@ -657,6 +788,7 @@ public sealed class ProfileCommand
         if (rebuild) placeAt = presetViewPt;
         else
         {
+            BusyPopup.Pause();
             var pvPt = ed.GetPoint("\n[종단도] 종단면도를 놓을 위치 클릭 (Esc=종단만 만들고 끝): ");
             if (pvPt.Status != PromptStatus.OK)
             {
@@ -665,6 +797,7 @@ public sealed class ProfileCommand
                 return true;    // 종단·측점은 만들어졌다 — 도곽만 건너뛴 것이라 성공이다
             }
             placeAt = pvPt.Value.TransformBy(ed.CurrentUserCoordinateSystem);
+            BusyPopup.Show(BusyText);
         }
         // 다음 '다시 그리기'가 이 자리를 찾을 수 있게 노선에 적어 둔다.
         SaveViewPoint(db, routeId, placeAt, log);
@@ -1142,6 +1275,7 @@ public sealed class ProfileCommand
         catch (System.Exception ex)
         {
             log.AppendLine("⚠종단면도 실패 — " + ex.Message);
+            BusyPopup.Close();
             AcadApp.ShowAlertDialog("종단면도를 만들지 못했습니다.\n" + ex.Message +
                                     "\n\n선형과 종단은 만들어졌으니 Civil3D 기본 기능으로도 배치할 수 있습니다.");
         }
@@ -1798,6 +1932,15 @@ public sealed class ProfileCommand
                     else log.AppendLine("  번들이 없어 사면·소단 복원 생략(도면에 그려진 선만 쓴다)");
                 }
                 catch (System.Exception ex) { log.AppendLine("  사면·소단 복원 실패 — " + ex.Message); }
+
+                // ★★★[v103.2 · 계획 2-5] 옹벽 폴리곤 안 — 번들 재료를 가리고 지금 그리는 «정지면»을 걸어서 벽 · 끊김 · 꺾임을 낸다
+                //   (번들 복원 뒤 · 터파기 · 벽 자리 정리 · 수동 앞 — «데이라잇(최종면)»은 벽 자리 정리가 벽 두께 안이면 벽 자리로 묶는다)
+                try
+                {
+                    var padPick = surfs.Find(sp => sp.Label == "정지면");
+                    WallFaceMarks.Apply(tr, db, al, CurrentWallFace?.Walls, padPick.SurfId, marks, vbars, wspans, log);
+                }
+                catch (System.Exception ex) { log.AppendLine("  ⚠옹벽 폴리곤 안 측점 실패 — " + ex.Message); }
 
                 // ★[JACK 0825] 터파기 — 정지 번들과 <b>다른 칸</b>(EXCAV)이라 따로 연다.
                 //   가시설(수직 굴착)은 상단·바닥을 가운데 한 자리로 접는다 — 측점 명령과 같은 자.
@@ -2942,6 +3085,7 @@ public sealed class ProfileCommand
         catch { }
         // [JACK 0807 명령창 정리] 화면엔 요약만 — 자세한 내용은 로그 파일.
         ed.WriteMessage($"\n[종단도] {headline}\n  자세한 내용: {DiagLog.FilePath}");
+        BusyPopup.Close();   // ★[v103.3.1] 끝 — 완료 창 전에 닫는다(맨 위 창이 완료 창을 가리지 않게)
         if (!quiet) AcadApp.ShowAlertDialog("종단도 생성 완료\n\n" + headline);
     }
     /// <summary>★[v32.45] 방금 만든 단면검토선 — <b>꾸미기는 축척이 정해진 뒤</b>라야 하므로 여기 담아 둔다.

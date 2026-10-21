@@ -63,13 +63,32 @@ public sealed class SectionCommand
         if (doc == null) return;
         GradingSettings.SyncToDocument(doc);   // [도면 전환 0803] 도면이 바뀌었으면 그 도면 기준으로 설정·기억 재정렬
         Editor ed = doc.Editor;
-        try { RunCore(doc, ed, doc.Database); }
+        try
+        {
+            // ★★[v103.2 · 계획 4판] 종단을 새로 그리는 길 — 합성 관문 → 옹벽면(DHPROFILE과 같게)
+            if (!CompositeGate.Ensure(doc, "종단/횡단")) { ed.WriteMessage("\n[종단/횡단] 그리지 않았습니다(아무것도 안 바뀜)."); return; }
+            _wf = PureWithWallsBuilder.Ensure(doc.Database, GroundOf(doc.Database), _wfLog = new System.Text.StringBuilder());
+            try { DiagLog.Append("\n■ 종단/횡단 — 옹벽면\n" + _wfLog); } catch { }
+            ed.WriteMessage("\n[종단/횡단] 정지면 — " + _wf.StatusText);
+            _wx = ProfileCommand.PrepareExcav(doc, _wf, "종단/횡단");   // ★[v103.3] 옹벽 뒷채움 터파기(꺼짐이면 아무것도 안 함)
+            RunCore(doc, ed, doc.Database);
+        }
         catch (System.Exception ex)
         {
             ed.WriteMessage("\n[종단/횡단 오류] " + ex.Message);
             AcadApp.ShowAlertDialog("종단·횡단 생성 중 오류:\n" + ex.Message);
             try { DiagLog.Append($"\n■ DHSECTION 오류 — {ex}\n"); } catch { }
         }
+        finally { _wf = null; _wx = null; }
+    }
+
+    static PureWithWallsBuilder.Result? _wf;
+    static WallExcavBuilder.Result? _wx;
+    static System.Text.StringBuilder _wfLog = new();
+    static ObjectId GroundOf(Database db)
+    {
+        try { foreach (var sp in FindSurfaces(db, CivilApp.CivilApplication.ActiveDocument)) if (sp.Label == "원지반") return sp.SurfId; } catch { }
+        return ObjectId.Null;
     }
 
     private static void RunCore(Document doc, Editor ed, Database db)
@@ -78,6 +97,14 @@ public sealed class SectionCommand
 
         // ── ① 대상 지표면(원지반·정지면) ─────────────────────────────────────
         var surfs = FindSurfaces(db, cdoc);
+        // ★★[v103.2] 옹벽이 든 면이 있으면 그것이 «정지면»
+        if (_wf != null && _wf.Kind == PureWithWallsBuilder.Kind.WallFace && !_wf.SurfaceId.IsNull)
+        {
+            int ip = surfs.FindIndex(sp => sp.Label == "정지면");
+            var pick = new SurfPick(_wf.SurfaceId, _wf.SurfaceName, ProfPadName, "정지면");
+            if (ip >= 0) surfs[ip] = pick; else surfs.Insert(System.Math.Min(1, surfs.Count), pick);
+        }
+        WallExcavBuilder.AppendPick(surfs, _wx);   // ★[v103.3] 맨 뒤
         if (surfs.Count == 0)
         {
             Refuse(ed, "종단·횡단을 만들 지표면이 없습니다.\n\n" +
@@ -140,6 +167,18 @@ public sealed class SectionCommand
             return;
         }
         ed.WriteMessage($"\n[종단/횡단] 선형 '{alignName}' 생성 (길이 {lineLen:F1}m · 점 {nv}개)");
+        // ★★[v103.2 · 계획 2-4] 선형에 «쓴 면»
+        try
+        {
+            using var trR = db.TransactionManager.StartTransaction();
+            var padPick = surfs.Find(sp => sp.Label == "정지면");
+            PureWithWallsBuilder.RecordOnAlignment(trR, alignId, _wf ?? new PureWithWallsBuilder.Result { Kind = PureWithWallsBuilder.Kind.NoWalls }, padPick.SurfId);
+            PureWithWallsBuilder.Tidy(trR, db, padPick.SurfId);
+            WallExcavBuilder.RecordOnAlignment(trR, alignId, _wx ?? new WallExcavBuilder.Result { State = WallExcavBuilder.State.Off });
+            WallExcavBuilder.Tidy(trR, _wx != null && _wx.State == WallExcavBuilder.State.Built ? _wx.SurfaceId : ObjectId.Null);
+            trR.Commit();
+        }
+        catch { }
 
         // ── ④ 종단 2개(원지반·정지면) ────────────────────────────────────────
         ObjectId profStyle = PickStyle(db, cdoc.Styles.ProfileStyles, "기본", "Standard", "Basic");
@@ -157,8 +196,9 @@ public sealed class SectionCommand
         {
             try
             {
-                // ★[JACK 0824] 터파기 종단선만 **마젠타** 스타일로.
-                var styleFor = s.Label == "터파기" && !excStyle.IsNull ? excStyle
+                // ★[JACK 0824] 터파기 종단선만 **마젠타** 스타일로. ★[v103.3] 옹벽 터파기도 같게
+                bool excLike = s.Label == "터파기" || s.Label == WallExcavBuilder.Label;
+                var styleFor = excLike && !excStyle.IsNull ? excStyle
                              : s.Label == "지층" && !stS.IsNull ? stS
                              : s.Label == "지하수위" && !stW.IsNull ? stW
                              : profStyle;
@@ -166,7 +206,7 @@ public sealed class SectionCommand
                 //   스타일로 숨기면 도구공간에 빈 종단이 쌓이고, 밴드가 그것을 물 수도 있다.
                 if (!s.Show) continue;
                 var pid0 = CivilDb.Profile.CreateFromSurface(s.ProfileName, alignId, s.SurfId, layerId, styleFor, profLabels);
-                if (s.Label == "터파기") PaintExcavProfile(db, pid0);   // ★[JACK 0825] 스타일만으론 안 된다(ByLayer가 이긴다)
+                if (excLike) PaintExcavProfile(db, pid0);   // ★[JACK 0825] 스타일만으론 안 된다(ByLayer가 이긴다)
                 else if (s.Label == "지층") PaintStrataProfile(db, pid0, false);
                 else if (s.Label == "지하수위") PaintStrataProfile(db, pid0, true);
                 nProf++;
@@ -761,6 +801,8 @@ public sealed class SectionCommand
             //   "우리 산출물이 아닌 것 중 삼각형이 가장 많은 것"을 원지반으로 삼는데,
             //   이 면은 원지반을 통째로 품고 있어 <b>거의 언제나 그 싸움을 이긴다</b>.
             if (IsBase(nm, ViewSurfaceCommand.ExcavAllName)) continue;
+            // ★★[v103.3 · 재검토 중간 6] 옹벽 터파기면은 <b>이름으로 안 줍는다</b> — 종단은 Ensure 결과를, 횡단은 선형 기록을 붙인다(끈 뒤 남은 면이 그려지지 않게)
+            if (WallExcavBuilder.IsAnyOurs(nm)) continue;
             // ★[v32.2] 순수 정지면이 있으면 그것이 종단·횡단의 정지면이다(위 설명).
             if (IsBase(nm, PurePadSurfaceBase)) { pure = sid; pureNm = nm; continue; }
             // 정지면_DH(또는 정지면_DH_N) — 가장 마지막 것을 쓴다.
@@ -855,6 +897,64 @@ public sealed class SectionCommand
                 list.Add(new SurfPick(water, waterNm, waterNm, "지하수위", StrataDraw.ShowOf(water)));
         }
         catch { }
+    }
+
+    /// <summary>★★★[v103.2 · 계획 2-4] <b>이 선형이 쓴 «정지면»으로 고른다</b> — 횡단뷰 · 검토선(종단의 측점 · 벽 자리를 그대로 쓰므로 면도 종단을 따른다).
+    /// <para>선형에 적힌 면 도장(앞 두 칸 — 정지면_DH · 합성 번호)이 지금과 <b>같고</b> 적힌 표면이 살아 있으면 그 표면을 «정지면»으로(반영 상태가 ⚠이면 같은 ⚠를 한 줄 되풀이 — 막지 않는다).
+    /// 도장이 <b>다르면</b>(정지면이 그 뒤 바뀌었다) · 적힌 표면이 <b>죽었으면</b> null(그리지 않고 «종단을 먼저 다시 그리세요»).
+    /// 적힌 것이 <b>없는</b> 선형(옛 도면 · 사용자가 만든 선형)은 종전대로 고르되, 최종면에 옹벽이 있으면 ⚠ 한 줄(재검토 높음 1 — 횡단을 가두지 않는다).</para></summary>
+    internal static System.Collections.Generic.List<SurfPick>? FindSurfacesForAlignment(Database db, CivilApp.CivilDocument cdoc, ObjectId alignId,
+                                                                                    Editor ed, System.Text.StringBuilder log, string who)
+    {
+        var surfs = FindSurfaces(db, cdoc);
+        ObjectId g = ObjectId.Null;
+        foreach (var sp in surfs) if (sp.Label == "원지반") { g = sp.SurfId; break; }
+        string now = PureWithWallsBuilder.CurrentStamp(db, g);
+        void Say(string m) { try { ed.WriteMessage($"\n[{who}] " + m); } catch { } log?.AppendLine("  " + m); }
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var al = tr.GetObject(alignId, OpenMode.ForRead);
+            var rec = PureWithWallsBuilder.ReadAlign(tr, al);
+            if (rec == null)
+            {
+                var walls = PureWithWallsBuilder.CurrentWalls(db, tr, g, out _);
+                if (walls.Count > 0) Say($"⚠이 노선은 옹벽 반영 전에 그린 종단입니다 — 옹벽 {string.Join(",", walls.Select(w => w.No))}이(가) 횡단에 안 나옵니다([종단도]를 다시 그리면 옹벽이 든 면으로 그립니다).");
+                tr.Commit();
+                // ★[v103.3] 옹벽 터파기 — 기록 없는 선형은 가두지 않는다(켬이면 ⚠ 한 줄 · 재검토 중간 6)
+                return WallExcavBuilder.ForAlignment(db, alignId, g, surfs, Say) ? surfs : null;
+            }
+            var r = rec.Value;
+            // ★[코드 검토 낮음 4] 빈 도장도 견준다 — 정지면_DH가 없을 때 그린 종단(빈 도장) 뒤에 정지 · 합성을 했으면 «바뀜»
+            if (PureWithWallsBuilder.StampHead(r.Stamp) != PureWithWallsBuilder.StampHead(now))
+            {
+                Say("정지면이 바뀌었습니다(옹벽 · 사면 변환 · 재생성) — [종단도]를 먼저 다시 그리세요. 횡단은 종단의 측점 · 벽 자리를 그대로 쓰므로 지금 그리면 둘이 어긋납니다.");
+                tr.Commit(); return null;
+            }
+            if (r.Handle.Length > 0)
+            {
+                ObjectId sid = ObjectId.Null;
+                try { sid = db.GetObjectId(false, new Handle(System.Convert.ToInt64(r.Handle, 16)), 0); } catch { }
+                string nm = "";
+                bool alive = !sid.IsNull && !sid.IsErased && tr.GetObject(sid, OpenMode.ForRead) is CivilDb.Surface s1 && (nm = s1.Name ?? "") != null;
+                if (!alive) { Say("종단이 쓴 면이 없습니다 — [종단도]를 다시 그리세요."); tr.Commit(); return null; }
+                int ip = surfs.FindIndex(sp => sp.Label == "정지면");
+                var pick = new SurfPick(sid, nm, ProfPadName, "정지면");
+                if (ip >= 0) surfs[ip] = pick; else surfs.Insert(System.Math.Min(1, surfs.Count), pick);
+            }
+            if (r.Kind == PureWithWallsBuilder.Kind.NotReflected) Say("⚠종단이 옹벽이 반영 안 된 면으로 그려졌습니다 — " + r.Why + (r.Missing.Length > 0 ? $"(빠진 옹벽 {r.Missing})" : ""));
+            else
+            {
+                // ★[코드 검토 중간 2 · 3] 반영은 됐어도 — 관문 «예»로 빠진 옹벽 · 옹벽면을 지을 때 나온 ⚠를 종단과 같이 되풀이
+                if (r.Missing.Length > 0) Say($"⚠옹벽 {r.Missing}은(는) 정지면_DH에 없어 종단 · 횡단에 안 들어갔습니다(정지 창 [옹벽 합성] 뒤 [종단도]를 다시 그리세요).");
+                if (r.Kind == PureWithWallsBuilder.Kind.WallFace && r.Why.Length > 0) Say("⚠종단이 쓴 옹벽면 — " + r.Why);
+            }
+            tr.Commit();
+        }
+        catch (System.Exception ex) { log?.AppendLine("  ⚠종단이 쓴 면을 못 읽어 종전대로 고른다 — " + ex.Message); }
+        // ★★★[v103.3 · 계획 2-4] 옹벽 터파기 — 선형 기록(DH_PROFEXCAV)을 따른다 · 켬/끔 · 설정 · 정지면이 바뀌었으면 «종단 먼저»
+        if (!WallExcavBuilder.ForAlignment(db, alignId, g, surfs, Say)) return null;
+        return surfs;
     }
 
     /// <summary>이름이 baseName 또는 baseName_숫자 인가.</summary>
@@ -1160,7 +1260,7 @@ public sealed class SectionCommand
     internal static void Refuse(Editor ed, string msg)
     {
         ed.WriteMessage("\n[종단/횡단] " + msg.Replace("\n", " "));
-        if (!ProfileCommand.QuietRebuild) AcadApp.ShowAlertDialog(msg);
+        if (!ProfileCommand.QuietRebuild) { BusyPopup.Close(); AcadApp.ShowAlertDialog(msg); }   // ★[v103.3.1] 막는 창 앞에서 «구성 중» 창을 닫는다
     }
 
     private static void Done(Editor ed, string msg)

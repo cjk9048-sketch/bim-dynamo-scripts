@@ -33,6 +33,16 @@ public sealed class VirtualSlope
     /// 정의되는 전환 띠: Crest=높은 플래토 직선, Toe=낮은 플래토 직선(둘 다 densify됨).
     /// 절/성토 무관하게 경계에서만 유도되므로 up 양방향 Build 결과가 동일 — 한 번만 소비할 것.</summary>
     public List<(List<Point3> Crest, List<Point3> Toe)> TransitionFaces { get; } = new();
+
+    /// <summary>★[v103.1.15] 사면 구간 끝 전이 띠 수(구간 끝 × 섞은 단이 하나라도 있는 것).</summary>
+    public int BlendBands { get; set; }
+    /// <summary>★[v103.1.15] 링에 남은 이음(다이브 · &gt;<see cref="BreaklinePrep.RingSegMaxM"/>) — 옹벽 단 탓(섞지 않는 단의 계단 · 알던 것) /
+    /// 그 밖(띠가 있어야 할 자리 · 있으면 안 됨). 자가점검이 «그 밖»을 ⚠로 올린다.</summary>
+    public int JumpsWall { get; set; }
+    public int JumpsOther { get; set; }
+    public (double X, double Y)? JumpOtherAt { get; set; }
+    /// <summary>★[v103.1.15] 띠가 옹벽 판정 한도 가까이 가파른 자리(늘려도 모자람) — 자가점검 ⚠.</summary>
+    public List<string> BlendWarnings { get; } = new();
 }
 
 /// <summary>
@@ -299,6 +309,15 @@ public static class GradingGeometry
                                (z.Ref != null ? $" · 자=링({z.Ref.Count}점)" : " · 자=계획"));
             }
         }
+        // ★★★[v103.1.15 · JACK 1020 «사면조건이 바뀐 부분의 경계가 엄청 깨져»] 사면 구간 끝 전이 띠(구간 안쪽 · 양끝 L) —
+        //   원래 값(ResolveAt · 클릭선 · 옹벽 판정)은 그대로 두고 링 거리만 섞는다(ZoneBlend). 띠가 없으면 아래 길은 종전과 비트 같다.
+        ZoneBlend? blend = null;
+        if (zlist != null && zlist.Count > 0 && cumB != null)
+        {
+            blend = new ZoneBlend(zlist, shape, cumB, p, slope, benchH, benchW, up, profile);
+            blend.Describe(dbg);
+        }
+        int bandRuns = 0, tailCuts = 0, joinCross = 0, joinMeet = 0, joinEnv = 0;
 
         // 이 점을 덮는 구간들의 비트마스크 — 0이면 어느 구간도 안 덮는다(= 전역 프로파일).
         //   ★★[JACK 0910 · 날개벽] 여기에 <b>단마다 벌어지는 폭</b>을 태워 봤다가 <b>되돌렸다</b>.
@@ -309,12 +328,19 @@ public static class GradingGeometry
         //     → 쓸 만한 길은 <b>구간을 단마다 하나씩, 벌어진 폭으로 쪼개 넣는 것</b>이다.
         //       그러면 모든 소비자가 <b>평범한 구간</b>으로 읽어 저절로 같아지고, 서명도 안 바뀐다.
         //       (거리는 여전히 벽/사면 둘뿐이라 버퍼도 안 는다.)
+        // ★[v103.1.15] 구간마다 자 위 매개도 함께 남긴다(전이 띠가 그대로 쓴다 — 같은 투영을 두 번 하지 않게).
+        //   ContainsAt(flare 0) = Contains(RulerParamAt) — 같은 셈이라 소속은 종전과 비트 같다.
+        double[]? tauBuf = null;
         long MaskAt(double x, double y)
         {
             if (zlist == null || cumB == null) return 0;
+            tauBuf ??= new double[zlist.Count];
             long m = 0;
             for (int i = 0; i < zlist.Count; i++)
-                if (zlist[i].ContainsAt(x, y, shape, cumB)) m |= 1L << i;
+            {
+                tauBuf[i] = zlist[i].RulerParamAt(x, y, shape, cumB);
+                if (zlist[i].Contains(tauBuf[i])) m |= 1L << i;
+            }
             return m;
         }
         // 그 조합의 합성 규칙으로 만든 프로파일(캐시) — 합성은 "나중 구간이 자기 시작단부터 대체".
@@ -363,8 +389,9 @@ public static class GradingGeometry
         //   전부 코너 한 파라미터로 몰려 <b>여러 조각이 같은 키</b>를 갖는다 → 불안정 정렬이 순서를 뒤섞어
         //   자기교차하는 링이 나온다. 같은 세대의 큰 링(w)을 축으로 쓰면 키가 균등하게 퍼진다.
         void CollectRuns(List<Point3> ring, IReadOnlyList<Point3> keyPoly, double[] keyCum,
-                         double[] masks, double want, List<(double key, List<Point3> pts, double dist)> outRuns)
+                         double[] masks, double want, List<(double key, List<Point3> pts, double dist)> outRuns, bool midKey = false)
         {
+            int firstNew = outRuns.Count;
             int n = ring.Count;
             if (n >= 2 && Math.Abs(ring[0].X - ring[n - 1].X) < 1e-9 && Math.Abs(ring[0].Y - ring[n - 1].Y) < 1e-9) n--;
             if (n < 2) return;
@@ -372,7 +399,7 @@ public static class GradingGeometry
             // ★[JACK 0824] 유지 판정은 **점**으로 한다(구간마다 자가 다르다). tv는 조립 순서용 정렬키일 뿐이다.
             for (int i = 0; i < n; i++) { tv[i] = ParamAt(keyPoly, keyCum, ring[i].X, ring[i].Y); kv[i] = Math.Abs(masks[i] - want) <= 1e-9; }
             int start = System.Array.IndexOf(kv, false);
-            if (start < 0) { outRuns.Add((tv[0], ring.GetRange(0, n), want)); return; } // 전부 유지
+            if (start < 0) { outRuns.Add((tv[0], ring.GetRange(0, n), want)); return; } // 전부 유지(고리 하나 — 열쇠가 차례를 안 가른다)
             List<Point3>? cur = null; double curKey = 0;
             for (int s = 1; s <= n; s++)
             {
@@ -381,6 +408,17 @@ public static class GradingGeometry
                 else if (cur != null) { if (cur.Count >= 2) outRuns.Add((curKey, cur, want)); cur = null; }
             }
             if (cur != null && cur.Count >= 2) outRuns.Add((curKey, cur, want));
+            // ★[v103.1.15 · 오목부] 띠가 있으면 열쇠 = 첫 변 가운데의 w 위 매개 — run이 오목 꼭짓점의 뾰족점(두 변에서 같은 거리 · 중심축 위)에서
+            //   시작하면 첫 점의 투영이 두 변 사이에서 애매해 띠 토막과 차례가 뒤집혔다(1020 ㄱ자 [92.4,151.5] 판 링 3 · 4: 53m 이음).
+            //   이 링에 띠 점이 없으면 종전 열쇠 그대로(비트 같음 — 옹벽 단 계단만 있는 링 포함).
+            if (midKey)
+                for (int r = firstNew; r < outRuns.Count; r++)
+                {
+                    var rp = outRuns[r];
+                    if (rp.pts.Count < 2) continue;
+                    var m0 = new Point3((rp.pts[0].X + rp.pts[1].X) * 0.5, (rp.pts[0].Y + rp.pts[1].Y) * 0.5, 0);
+                    outRuns[r] = (ParamAt(keyPoly, keyCum, m0.X, m0.Y), rp.pts, rp.dist);
+                }
         }
 
         for (int e = 0; e < profile.Edges.Count; e++)
@@ -396,21 +434,34 @@ public static class GradingGeometry
                 //   종전엔 전역 링 w에서만 조합을 모아, 다른 거리 링에만 나타나는 조합의 점은
                 //   어느 run에도 안 담겨 그 각도 구간이 통째로 빠졌다(현으로 가로질러짐).
                 //   링 모양을 정하는 것은 결국 거리 하나뿐이므로 거리로 묶으면 구멍이 안 생긴다.
-                double DistOf(double x2, double y2)
+                // ★[v103.1.15] 띠 점(실제 값 거리 ≠ 원래 값 거리)이면 NaN — 어느 버퍼 run에도 안 든다(민 토막이 그 자리를 채운다).
+                //   버퍼 점과 w 점이 <b>같은 함수</b>로 갈린다(검토 1020 — 둘이 갈라지면 §79의 «기하와 규칙이 갈라짐»).
+                double DistOf(double x2, double y2, out double eff)
                 {
-                    var pf1 = ProfOf(MaskAt(x2, y2));
-                    return e < pf1.Edges.Count ? pf1.Edges[e].dist : dist;
+                    eff = double.NaN;
+                    DistOfCount++;
+                    long mk = MaskAt(x2, y2);
+                    var pf1 = ProfOf(mk);
+                    double dn = e < pf1.Edges.Count ? pf1.Edges[e].dist : dist;
+                    if (blend == null) return dn;
+                    double de = blend.DistAt(x2, y2, e, dn, mk, tauBuf);
+                    if (Math.Abs(de - dn) <= 1e-9) return dn;
+                    eff = de;
+                    return double.NaN;
                 }
                 var mw = new double[w.Count];
+                var effW = new double[w.Count];
                 var mset = new List<double>();
+                bool anyBand = false;
                 for (int q1 = 0; q1 < w.Count; q1++)
                 {
-                    mw[q1] = DistOf(w[q1].X, w[q1].Y);
+                    mw[q1] = DistOf(w[q1].X, w[q1].Y, out effW[q1]);
+                    if (double.IsNaN(mw[q1])) { anyBand = true; continue; }
                     bool seen = false;
                     foreach (var d0 in mset) if (Math.Abs(d0 - mw[q1]) <= 1e-9) { seen = true; break; }
                     if (!seen) mset.Add(mw[q1]);
                 }
-                bool anyDiff = false;
+                bool anyDiff = anyBand;
                 foreach (var dm0 in mset) if (Math.Abs(dm0 - dist) > 1e-9) { anyDiff = true; break; }
                 if (anyDiff)
                 {
@@ -430,7 +481,8 @@ public static class GradingGeometry
                             rmDist = new double[rm.Count];
                             for (int q2 = 0; q2 < rm.Count; q2++)
                             {
-                                rmDist[q2] = DistOf(rm[q2].X, rm[q2].Y);
+                                rmDist[q2] = DistOf(rm[q2].X, rm[q2].Y, out _);
+                                if (double.IsNaN(rmDist[q2])) continue;   // ★[v103.1.15] 띠 점 — 민 토막이 채운다
                                 // 이 링에만 나타나는 거리는 mset에 없다 — 뒤에서 처리하도록 담아 둔다.
                                 bool seen2 = false;
                                 foreach (var d1 in mset) if (Math.Abs(d1 - rmDist[q2]) <= 1e-9) { seen2 = true; break; }
@@ -438,9 +490,17 @@ public static class GradingGeometry
                             }
                         }
                         if (rm == null || rmDist == null) continue;
-                        CollectRuns(rm, w, cumW, rmDist, dm, runs2);
+                        CollectRuns(rm, w, cumW, rmDist, dm, runs2, midKey: anyBand);   // ★[설치 전 검토 2 · 중간 2] 이 링에 띠가 있을 때만(옹벽 단 계단만 있는 링은 종전 열쇠)
                         if (mset.Count > 32) break;   // 백스톱 — 실제로는 두셋이다
                     }
+                    // ★★★[v103.1.15] 띠 — w에서 띠 점이 이어진 토막을 «제 법선으로» 민다(같은 join의 버퍼라 마이터 다리는 곧게 · 부채꼴은 부채꼴로).
+                    var bandTan = new Dictionary<List<Point3>, ((double X, double Y)? S, (double X, double Y)? E)>(ReferenceEqualityComparer.Instance);
+                    var bandSrc = new Dictionary<List<Point3>, (Point3 S, Point3 E)>(ReferenceEqualityComparer.Instance);   // ★[오목부] 띠 run 두 끝의 밀기 전 w 점(띠 쪽) — 끝 조각이 묶인 꼭짓점을 찾는다
+                    long tBR = System.Diagnostics.Stopwatch.GetTimestamp();
+                    if (anyBand)
+                        bandRuns += AddBandRuns(w, mw, effW, dist, dens, cumW, runs2, ref tailCuts,
+                                                (x3, y3) => { BandEvalCount++; double nd = DistOf(x3, y3, out double ed); return double.IsNaN(nd) ? (true, ed) : (false, nd); }, bandTan, blend!, bandSrc);
+                    BandRunTicks += System.Diagnostics.Stopwatch.GetTimestamp() - tBR;
                     if (runs2.Count > 0)
                     {
                         runs2.Sort((a, bb) => a.key.CompareTo(bb.key));
@@ -478,8 +538,307 @@ public static class GradingGeometry
                         //   즉 전이 구간의 점은 <b>버퍼를 새로 안 떠도</b> 정확히 놓을 수 있다.
                         //   ⓑ볼록 코너의 부채꼴은 <b>전부 한 둘레 자리로 투영</b>되므로 창이 꼭짓점을 물면
                         //   비켜 가야 한다(안 그러면 그 자리만 다시 계단이 된다).</para>
-                        var asm2 = new List<Point3>();
-                        foreach (var r in runs2) asm2.AddRange(r.pts);
+                        // ★★★[v103.1.15] 위 «아직 고치지 않았다»를 <b>사면끼리의 구간 끝</b>에서 고쳤다 — 고칠 자리는 정말 <c>DistOf</c>였고(띠 점은 NaN),
+                        //   거리가 연속이 되는 띠는 버퍼를 늘리지 않고 <b>w를 제 법선으로 밀어</b> 놓는다(AddBandRuns). 옹벽 단의 계단은 그대로다.
+                        //   이을 때 띠 자리 이음만 손본다(JoinBandRuns — 엇갈림은 자르고 · 오목 꼭짓점 곁 빈 자리는 두 변 직선의 교점으로).
+                        // ★[v103.1.15 · JACK 1020 «오목부도 해결해»] 남은 이음의 참 모양(ⓕ) — 거리 dA · dB를 쓰는 부지 테두리 토막만 각자 그 거리로 띄운 링의 합.
+                        //   부지 테두리 점의 거리 = 그 점 자신의 DistOf(버퍼 점과 같은 함수 — 띠 점 NaN은 어느 토막에도 안 든다) · 바뀌는 자리는 반씩 좁혀 0.3mm로.
+                        //   이 링에서 처음 필요할 때 한 번 잰다(남은 이음이 없으면 안 부른다 — 종전 링과 비트 같다).
+                        List<(Point3 P, double D, bool Vtx)>? bSamp = null;
+                        //   ★영역은 «법선 띄우기» 그대로 직접 짓는다 — 토막의 변마다 바깥 법선 사각형 + 볼록 꼭짓점 부채꼴(NTS와 같은 각 나눔 — 사분원 12칸)
+                        //     또는 마이터(한도 안) · 오목 꼭짓점은 사각형끼리 겹친다 · 끝은 평평(사면은 법선으로만 나간다). 링(NTS 버퍼)이 그 경계 위에 그대로 있다.
+                        //     NTS 버퍼를 쓰면 — 양쪽 버퍼는 부지 폭보다 큰 거리에서 안쪽 몫이 반대편 밖으로 삐져나왔고(1020 135° ㄱ자 판: 걸은 길이 209m) ·
+                        //     한 면 버퍼는 거리가 변보다 길면 오목 꼭짓점에서 틀렸고(테두리 22점) · 잘라 내도 유클리드 거리(원)와 법선 띄우기가 오목 곁에서 달라
+                        //     조각 영역이 상대 run 머리를 덮었다 · 둥근 마개는 띠 시작 자리에 큰 원을 만들었다(1020 ㄱ자 [96.5,163.9] 판).
+                        //     아주 날카로운 볼록 모서리(마이터 한도 넘음)는 NTS의 깎은 마이터와 조금 달라 못 맞출 수 있다 — 그때는 손대지 않는다(«그 밖» ⚠로 남음).
+                        //   ★한쪽이 띠 run이면 그 끝의 «끝 조각» — 끝에서 1m 안쪽 점이 묶인 부지 꼭짓점(곁 1cm 두 변) 또는 변(앞뒤 5m)을 그 자리 실제 값 거리로 띄운다.
+                        //     띠 끝이 부채꼴 위면 그 꼭짓점의 값 하나라(모든 부채꼴 점이 그 꼭짓점으로 투영) 그 원(마이터면 마이터)이 띠의 참 이어짐이다(1020 ㄷ자 판 홈 가운데선 20곳).
+                        //     민 부채꼴은 현이 버퍼와 Δ·(1/cos 3.75° − 1) 어긋나 맞추는 허용치를 그만큼 넓힌다.
+                        //   ★[설치 전 검토 2 · 중간 3] 이음 곁 테두리만 — 토막을 이음 끝 a · b에서 반경 rad 안의 테두리로 자른다(큰 부지 꼭짓점 3000개면 영역 하나 1.5초).
+                        //     rad = 걷는 길이 한도 + 2·거리 + 10m — 그 밖 테두리의 법선 띄우기(마이터 2배까지)는 걷는 길에 닿지 않는다.
+                        //   돌려주는 MinD = 두 쪽 거리 중 작은 것(띠면 그 띠의 가장 작은 실제 값) — 이은 길 점이 부지에서 그보다 가까우면 거절한다(좁은 팔을 뚫은 사각형의 가짜 혹).
+                        (List<List<Point3>>? Rings, double Tol, double MinD) EnvelopeOf(double dA, Point3 probeA, double dB, Point3 probeB, Point3 ea, Point3 eb, double walkMax)
+                        {
+                            List<List<Point3>>? res = null;
+                            double tolX = 5e-3, minD = double.MaxValue;
+                            try
+                            {
+                                var pc = basePoly.ExteriorRing.Coordinates;   // 닫힌 링
+                                double sa = 0;
+                                for (int i = 0; i + 1 < pc.Length; i++) sa += pc[i].X * pc[i + 1].Y - pc[i + 1].X * pc[i].Y;
+                                bool ccwP = sa > 0;                           // 반시계면 바깥 = 진행의 오른쪽
+                                double quantum = Math.PI / 2 / bp.QuadrantSegments;
+                                // 볼록 꼭짓점 V(앞뒤 변 바깥 법선 q1 · q2)의 부채꼴 · 마이터(거리 R) — 오목이면 null
+                                Geometry? JoinPoly(double vx, double vy, (double X, double Y) q1, (double X, double Y) q2, double R)
+                                {
+                                    if ((q1.X == 0 && q1.Y == 0) || (q2.X == 0 && q2.Y == 0)) return null;
+                                    double cr = q1.X * q2.Y - q1.Y * q2.X, dt = q1.X * q2.X + q1.Y * q2.Y;
+                                    bool convex = ccwP ? cr > 1e-12 : cr < -1e-12;
+                                    if (!convex) return null;
+                                    var jc = new List<Coordinate> { new Coordinate(vx, vy), new Coordinate(vx + q1.X * R, vy + q1.Y * R) };
+                                    if (bp.JoinStyle == JoinStyle.Mitre)
+                                    {
+                                        double ratio = 1.0 / Math.Sqrt(Math.Max((1 + dt) / 2, 1e-12));
+                                        if (ratio <= bp.MitreLimit)
+                                        {
+                                            double f = R / (1 + dt);
+                                            jc.Add(new Coordinate(vx + (q1.X + q2.X) * f, vy + (q1.Y + q2.Y) * f));
+                                        }
+                                    }
+                                    else
+                                    {
+                                        // NTS AddDirectedFillet — 시작각 · 끝각 사이를 nSegs = ⌊각/(π/2/12) + 0.5⌋ 칸으로 고르게
+                                        double a0 = Math.Atan2(q1.Y, q1.X), a1 = Math.Atan2(q2.Y, q2.X);
+                                        double da = a1 - a0;
+                                        while (da > Math.PI) da -= 2 * Math.PI;
+                                        while (da < -Math.PI) da += 2 * Math.PI;
+                                        int nSegs = (int)(Math.Abs(da) / quantum + 0.5);
+                                        for (int k2 = 1; k2 < nSegs; k2++)
+                                        {
+                                            double an = a0 + da * k2 / nSegs;
+                                            jc.Add(new Coordinate(vx + R * Math.Cos(an), vy + R * Math.Sin(an)));
+                                        }
+                                    }
+                                    jc.Add(new Coordinate(vx + q2.X * R, vy + q2.Y * R));
+                                    jc.Add(new Coordinate(vx, vy));
+                                    return gf.CreatePolygon(jc.ToArray());
+                                }
+                                (double X, double Y) NrmOf(double ax, double ay, double bx, double by)
+                                {
+                                    double dx = bx - ax, dy = by - ay, l = Math.Sqrt(dx * dx + dy * dy);
+                                    if (l < 1e-12) return (0, 0);
+                                    return ccwP ? (dy / l, -dx / l) : (-dy / l, dx / l);
+                                }
+                                // 법선 띄우기 영역 — 토막(부지 차례)의 변마다 바깥 법선 사각형 + 볼록 꼭짓점 부채꼴 · 마이터(거리 R)
+                                Geometry OuterOf(Geometry lines, double R)
+                                {
+                                    var polys = new List<Geometry>();
+                                    for (int gi = 0; gi < lines.NumGeometries; gi++)
+                                    {
+                                        var cs0 = lines.GetGeometryN(gi).Coordinates;
+                                        bool closed = cs0.Length > 2 && cs0[0].Equals2D(cs0[^1]);
+                                        int nn = closed ? cs0.Length - 1 : cs0.Length;
+                                        (double X, double Y) Nrm(int i)
+                                        {
+                                            var a0 = cs0[i % nn]; var a1 = cs0[(i + 1) % nn];
+                                            double dx = a1.X - a0.X, dy = a1.Y - a0.Y, l = Math.Sqrt(dx * dx + dy * dy);
+                                            if (l < 1e-12) return (0, 0);
+                                            return ccwP ? (dy / l, -dx / l) : (-dy / l, dx / l);
+                                        }
+                                        int segs = closed ? nn : nn - 1;
+                                        for (int i = 0; i < segs; i++)
+                                        {
+                                            var a0 = cs0[i % nn]; var a1 = cs0[(i + 1) % nn]; var q = Nrm(i);
+                                            if (q.X == 0 && q.Y == 0) continue;
+                                            polys.Add(gf.CreatePolygon(new[] { new Coordinate(a0.X, a0.Y), new Coordinate(a1.X, a1.Y),
+                                                new Coordinate(a1.X + q.X * R, a1.Y + q.Y * R), new Coordinate(a0.X + q.X * R, a0.Y + q.Y * R), new Coordinate(a0.X, a0.Y) }));
+                                        }
+                                        for (int i = closed ? 0 : 1; i < (closed ? nn : nn - 1); i++)
+                                        {
+                                            var V = cs0[i % nn];
+                                            var jp = JoinPoly(V.X, V.Y, Nrm((i - 1 + nn) % nn), Nrm(i), R);
+                                            if (jp != null) polys.Add(jp);
+                                        }
+                                    }
+                                    return NetTopologySuite.Operation.Union.CascadedPolygonUnion.Union(polys);
+                                }
+                                if (bSamp == null)
+                                {
+                                    var bs0 = new List<(Point3, double, bool)>();    // ★[검토 2 · 낮음 6] 다 채운 뒤에 넣는다(도중 예외면 덜 찬 표본을 다음 이음이 쓰지 않게)
+                                    for (int i = 0; i + 1 < pc.Length; i++)
+                                    {
+                                        double ex = pc[i + 1].X - pc[i].X, ey = pc[i + 1].Y - pc[i].Y;
+                                        int ns = Math.Max(1, (int)Math.Ceiling(Math.Sqrt(ex * ex + ey * ey) / 1.0));
+                                        for (int s = 0; s < ns; s++)
+                                        {
+                                            double tq = (double)s / ns;
+                                            double qx = pc[i].X + ex * tq, qy = pc[i].Y + ey * tq;
+                                            bs0.Add((new Point3(qx, qy, 0), DistOf(qx, qy, out _), s == 0));
+                                        }
+                                    }
+                                    bSamp = bs0;
+                                }
+                                LineString? PieceLine(List<Coordinate> cs) => cs.Count >= 2 ? gf.CreateLineString(cs.ToArray()) : null;
+                                double radC = 0;    // 아래 RegionOf가 정한다
+                                bool Near(Point3 q) => Math.Min((q.X - ea.X) * (q.X - ea.X) + (q.Y - ea.Y) * (q.Y - ea.Y), (q.X - eb.X) * (q.X - eb.X) + (q.Y - eb.Y) * (q.Y - eb.Y)) <= radC * radC;
+                                Geometry? PiecesOf(double want)
+                                {
+                                    bool In(double d) => !double.IsNaN(d) && Math.Abs(d - want) <= 1e-9;
+                                    int n = bSamp!.Count;
+                                    bool InS(int i) => In(bSamp[i].D) && Near(bSamp[i].P);
+                                    int start = -1;
+                                    for (int i = 0; i < n; i++) if (!InS(i)) { start = i; break; }
+                                    if (start < 0)                    // 테두리 전체가 이 거리 — 닫힌 링 하나
+                                    {
+                                        var all = new List<Coordinate>();
+                                        foreach (var c in pc) all.Add(new Coordinate(c.X, c.Y));
+                                        return PieceLine(all);
+                                    }
+                                    // 바뀌는 자리(p 안 → q 밖 또는 반대) — 반씩 좁혀 in 쪽 끝점(반경 밖으로 잘린 자리는 그 표본 그대로 — 멀어서 걷는 길에 안 닿는다)
+                                    Coordinate Edge(Point3 pIn, Point3 qOut)
+                                    {
+                                        double lo = 0, hi = 1;
+                                        if (!Near(qOut)) return new Coordinate(pIn.X, pIn.Y);
+                                        for (int it = 0; it < 12; it++)
+                                        {
+                                            double mid = (lo + hi) * 0.5;
+                                            double mx = pIn.X + (qOut.X - pIn.X) * mid, my = pIn.Y + (qOut.Y - pIn.Y) * mid;
+                                            if (In(DistOf(mx, my, out _))) lo = mid; else hi = mid;
+                                        }
+                                        return new Coordinate(pIn.X + (qOut.X - pIn.X) * lo, pIn.Y + (qOut.Y - pIn.Y) * lo);
+                                    }
+                                    var lines = new List<LineString>();
+                                    List<Coordinate>? cur = null;
+                                    for (int s = 1; s <= n; s++)
+                                    {
+                                        int i = (start + s) % n, ip = (start + s - 1) % n;
+                                        var (pt, d, vtx) = bSamp[i];
+                                        if (InS(i))
+                                        {
+                                            if (cur == null) { cur = new List<Coordinate> { Edge(pt, bSamp[ip].P) }; }
+                                            if (vtx) cur.Add(new Coordinate(pt.X, pt.Y));
+                                        }
+                                        else if (cur != null)
+                                        {
+                                            cur.Add(Edge(bSamp[ip].P, pt));
+                                            var ls = PieceLine(cur); if (ls != null) lines.Add(ls);
+                                            cur = null;
+                                        }
+                                    }
+                                    if (cur != null) { var ls = PieceLine(cur); if (ls != null) lines.Add(ls); }
+                                    return lines.Count == 0 ? null : gf.CreateMultiLineString(lines.ToArray());
+                                }
+                                // 띠 영역 — probe(밀기 전 w 점)가 묶인 부지 테두리 점에서 앞뒤로 띠(실제 값 ≠ 원래 값)가 이어진 데까지(0.5m마다 · 끝은 반씩 좁혀)
+                                //   그 점들을 각자 실제 값 거리로 법선 띄우기 — 변마다 사다리꼴 · 볼록 꼭짓점은 그 자리 거리로 부채꼴 · 마이터.
+                                //   민 띠 run 점 = 부지 점 + 법선 × 그 점의 실제 값이라 이 영역의 경계 위에 있다(부채꼴만 현이 Δ·0.2% 어긋남 — 허용치를 넓힌다).
+                                int nSegP = pc.Length - 1;
+                                double[]? cumP = null;
+                                (double X, double Y) AtP(double t)
+                                {
+                                    double tot = cumP![nSegP];
+                                    t = ((t % tot) + tot) % tot;
+                                    int lo = 0, hi = nSegP;
+                                    while (lo + 1 < hi) { int md = (lo + hi) / 2; if (cumP[md] <= t) lo = md; else hi = md; }
+                                    double sl0 = cumP[lo + 1] - cumP[lo], u0 = sl0 < 1e-12 ? 0 : (t - cumP[lo]) / sl0;
+                                    return (pc[lo].X + (pc[lo + 1].X - pc[lo].X) * u0, pc[lo].Y + (pc[lo + 1].Y - pc[lo].Y) * u0);
+                                }
+                                bool BandAtP(double t, out double d)
+                                {
+                                    var q = AtP(t);
+                                    double dn = DistOf(q.X, q.Y, out double ef);
+                                    d = double.IsNaN(dn) ? ef : dn;
+                                    return double.IsNaN(dn) && !double.IsNaN(ef);
+                                }
+                                List<(double X, double Y, double D)>? BandPortionOf(Point3 probe)
+                                {
+                                    if (cumP == null)
+                                    {
+                                        cumP = new double[nSegP + 1];
+                                        for (int i = 0; i < nSegP; i++) cumP[i + 1] = cumP[i] + Math.Sqrt((pc[i + 1].X - pc[i].X) * (pc[i + 1].X - pc[i].X) + (pc[i + 1].Y - pc[i].Y) * (pc[i + 1].Y - pc[i].Y));
+                                    }
+                                    double tot = cumP[nSegP];
+                                    if (!(tot > 1e-9)) return null;
+                                    int bi = -1; double bd = double.MaxValue, bu = 0;
+                                    for (int i = 0; i < nSegP; i++)
+                                    {
+                                        double ex = pc[i + 1].X - pc[i].X, ey = pc[i + 1].Y - pc[i].Y, l2 = ex * ex + ey * ey;
+                                        double u = l2 < 1e-18 ? 0 : Math.Clamp(((probe.X - pc[i].X) * ex + (probe.Y - pc[i].Y) * ey) / l2, 0, 1);
+                                        double dx = pc[i].X + ex * u - probe.X, dy = pc[i].Y + ey * u - probe.Y, dd = dx * dx + dy * dy;
+                                        if (dd < bd) { bd = dd; bi = i; bu = u; }
+                                    }
+                                    if (bi < 0) return null;
+                                    double tf = cumP[bi] + bu * (cumP[bi + 1] - cumP[bi]);
+                                    if (!BandAtP(tf, out _))
+                                    {
+                                        if (BandAtP(tf + 0.01, out _)) tf += 0.01;
+                                        else if (BandAtP(tf - 0.01, out _)) tf -= 0.01;
+                                        else return null;
+                                    }
+                                    const double stp = 0.5;
+                                    double maxLen = Math.Min(tot - 1e-6, 400);
+                                    double Edge2(double tin, double tout)
+                                    {
+                                        for (int it = 0; it < 12; it++) { double mid = (tin + tout) * 0.5; if (BandAtP(mid, out _)) tin = mid; else tout = mid; }
+                                        return tin;
+                                    }
+                                    double tb = tf, te = tf;
+                                    while (tf - tb < maxLen) { if (!BandAtP(tb - stp, out _)) { tb = Edge2(tb, tb - stp); break; } tb -= stp; }
+                                    while (te - tf < maxLen && te - tb < maxLen) { if (!BandAtP(te + stp, out _)) { te = Edge2(te, te + stp); break; } te += stp; }
+                                    var ts = new List<double>();
+                                    for (double t = tb; t < te; t += stp) ts.Add(t);
+                                    ts.Add(te);
+                                    for (int i = 0; i < nSegP; i++)
+                                        for (double t = cumP[i] + Math.Floor((tb - cumP[i]) / tot) * tot; t <= te + 1e-9; t += tot)
+                                            if (t > tb + 1e-9 && t < te - 1e-9) ts.Add(t);
+                                    ts.Sort();
+                                    var res0 = new List<(double X, double Y, double D)>();
+                                    foreach (var t in ts)
+                                    {
+                                        var q = AtP(t);
+                                        BandAtP(t, out double d);
+                                        if (double.IsNaN(d)) continue;
+                                        if (res0.Count > 0 && Math.Abs(res0[^1].X - q.X) < 1e-9 && Math.Abs(res0[^1].Y - q.Y) < 1e-9) continue;
+                                        res0.Add((q.X, q.Y, d));
+                                    }
+                                    return res0.Count >= 2 ? res0 : null;
+                                }
+                                Geometry? BandOuter(List<(double X, double Y, double D)> pl)
+                                {
+                                    var polys = new List<Geometry>();
+                                    for (int i = 0; i + 1 < pl.Count; i++)
+                                    {
+                                        var q = NrmOf(pl[i].X, pl[i].Y, pl[i + 1].X, pl[i + 1].Y);
+                                        if (q.X == 0 && q.Y == 0) continue;
+                                        polys.Add(gf.CreatePolygon(new[] { new Coordinate(pl[i].X, pl[i].Y), new Coordinate(pl[i + 1].X, pl[i + 1].Y),
+                                            new Coordinate(pl[i + 1].X + q.X * pl[i + 1].D, pl[i + 1].Y + q.Y * pl[i + 1].D),
+                                            new Coordinate(pl[i].X + q.X * pl[i].D, pl[i].Y + q.Y * pl[i].D), new Coordinate(pl[i].X, pl[i].Y) }));
+                                    }
+                                    for (int i = 1; i + 1 < pl.Count; i++)
+                                    {
+                                        var jp = JoinPoly(pl[i].X, pl[i].Y, NrmOf(pl[i - 1].X, pl[i - 1].Y, pl[i].X, pl[i].Y), NrmOf(pl[i].X, pl[i].Y, pl[i + 1].X, pl[i + 1].Y), pl[i].D);
+                                        if (jp != null) polys.Add(jp);
+                                    }
+                                    return polys.Count == 0 ? null : NetTopologySuite.Operation.Union.CascadedPolygonUnion.Union(polys);
+                                }
+                                Geometry? RegionOf(double d0, Point3 probe)
+                                {
+                                    if (!double.IsNaN(d0))
+                                    {
+                                        radC = walkMax + 2 * Math.Max(double.IsNaN(dA) ? 0 : dA, double.IsNaN(dB) ? 0 : dB) + 10;
+                                        var g0 = PiecesOf(d0);
+                                        if (g0 != null && d0 > 1e-9) minD = Math.Min(minD, d0);
+                                        return g0 == null || !(d0 > 1e-9) ? null : OuterOf(g0, d0);
+                                    }
+                                    var pl = BandPortionOf(probe);
+                                    JoinDebug?.Invoke($"      띠 영역 — 탐침({probe.X:F2},{probe.Y:F2}) · {(pl == null ? "없음" : $"{pl.Count}점 ({pl[0].X:F2},{pl[0].Y:F2}) {pl[0].D:F2} → ({pl[^1].X:F2},{pl[^1].Y:F2}) {pl[^1].D:F2}")}");
+                                    if (pl == null) return null;
+                                    double dmx = 0;
+                                    foreach (var q in pl) { dmx = Math.Max(dmx, Math.Abs(q.D - dist)); minD = Math.Min(minD, q.D); }
+                                    tolX = Math.Max(tolX, 5e-3 + 0.004 * dmx);
+                                    return BandOuter(pl);
+                                }
+                                var rA = RegionOf(dA, probeA); var rB = RegionOf(dB, probeB);
+                                if (rA != null && rB != null)
+                                {
+                                    var un = rA.Union(rB);
+                                    res = new List<List<Point3>>();
+                                    for (int gi = 0; gi < un.NumGeometries; gi++)
+                                        if (un.GetGeometryN(gi) is Polygon pgU)
+                                        {
+                                            var rr = new List<Point3>();
+                                            foreach (var c in pgU.ExteriorRing.Coordinates) rr.Add(new Point3(c.X, c.Y, 0));
+                                            res.Add(rr);
+                                        }
+                                }
+                            }
+                            catch (Exception ex) { dbg.AppendLine($"  ⚠테두리 따라 잇기 — 모서리 {e} 테두리 링 실패 {ex.GetType().Name}"); res = null; }
+                            return (res, tolX, minD);
+                        }
+                        var asm2 = blend != null && blend.Active
+                                 ? JoinBandRuns(runs2, bandTan, blend, e, dist, dens, ref joinCross, ref joinMeet, EnvelopeOf, ref joinEnv, bandSrc,
+                                                q => basePoly.Contains(gf.CreatePoint(new Coordinate(q.X, q.Y))) ? -1 : basePoly.Distance(gf.CreatePoint(new Coordinate(q.X, q.Y))))
+                                 : new List<Point3>();
+                        if (blend == null || !blend.Active) foreach (var r in runs2) asm2.AddRange(r.pts);
 
                         // ★★★[JACK 0911] <b>이음매 선을 <u>링 밖에</u> 따로 넣는다 — 그것이 날개벽 등고선이다.</b>
                         //
@@ -516,6 +875,22 @@ public static class GradingGeometry
                         }
                         if (asm2.Count >= 3) w = asm2;
                     }
+                }
+            }
+            // ★[v103.1.15 · 검토 1020 낮음 5 · 재검토 중간 3] 남은 이음(다이브)을 <b>자리마다</b> 원인으로 가른다 — 옹벽 단 탓(섞지 않는 단의 계단 · 알던 것) / 그 밖(띠가 있어야 할 자리).
+            if (blend != null)
+            {
+                int nW = w.Count;
+                bool dupW = nW >= 2 && Math.Abs(w[0].X - w[nW - 1].X) < 1e-9 && Math.Abs(w[0].Y - w[nW - 1].Y) < 1e-9;
+                int mW = dupW ? nW - 1 : nW;
+                for (int si = 0; si < mW; si++)
+                {
+                    var a = w[si]; var b2 = w[(si + 1) % mW];
+                    double sl = Math.Sqrt((b2.X - a.X) * (b2.X - a.X) + (b2.Y - a.Y) * (b2.Y - a.Y));
+                    if (sl <= BreaklinePrep.RingSegMaxM) continue;
+                    double mx = (a.X + b2.X) * 0.5, my = (a.Y + b2.Y) * 0.5;
+                    if (blend.JumpIsWall(mx, my, e, dist)) result.JumpsWall++;
+                    else { result.JumpsOther++; result.JumpOtherAt ??= (mx, my); }
                 }
             }
             double zOff = zdir * rise;
@@ -582,6 +957,7 @@ public static class GradingGeometry
             //   전이 영역을 따로 두고 그 안의 기존 면을 걷어내는 일이다(자문 §9·§18). 아직 안 했다.</para>
             foreach (var (paR, pbR, dA, dB) in (p.SeamLines ? seamXY : new List<(Point3, Point3, double, double)>()))
             {
+                if (double.IsNaN(dA) || double.IsNaN(dB)) continue;   // ★[설치 전 검토 낮음 8] 민 토막(띠)과의 이음 — 이음매 선을 안 그린다
                 double lo = Math.Min(dA, dB);
                 var pa2 = new Point3(paR.X, paR.Y, BoundaryZAt(shape, paR.X, paR.Y) + zOff);
                 var pb2 = new Point3(pbR.X, pbR.Y, BoundaryZAt(shape, pbR.X, pbR.Y) + zOff);
@@ -663,6 +1039,8 @@ public static class GradingGeometry
                         {
                             var pt2 = ProfOf(mt);
                             if (eIdx < pt2.Edges.Count) localDist = pt2.Edges[eIdx].dist;
+                            // ★[v103.1.15] 전이 띠 안이면 실제 값 거리로(링이 그 거리에 놓였다)
+                            if (blend != null) localDist = blend.DistAt(trackX, trackY, eIdx, localDist, mt, tauBuf);
                         }
                     }
                     double maxJump = (localDist - prevDist) * 3.5 + 0.5; // 코너 정점의 링당 이동 상한(마이터 배율 여유)
@@ -702,6 +1080,40 @@ public static class GradingGeometry
 
         if (ringN > 0)
             dbg.AppendLine($"  링 {ringN}개 요약 — 점 {ringLo}~{ringHi}개 · Z {ringZLo:F2}~{ringZHi:F2}m · 완화 평균 {(double)ringRelax / ringN:F1}점");
+        // ★[v103.1.15] 전이 띠 요약 — 자가검증 한 줄(«그 밖» 이음은 0이어야 한다)
+        if (blend != null)
+        {
+            foreach (var be in blend.Ends)
+            {
+                if (be.Any) result.BlendBands++;
+                if (be.Warn) result.BlendWarnings.Add($"구간 [{zlist![be.Zone].T0:F1}..{zlist[be.Zone].T1:F1}] 끝 {(be.AtT0 ? "T0" : "T1")} — 띠가 옹벽 판정 한도 가까이 가파르다(가장 가파른 면 1:{be.Steepest:0.##} · {be.SteepBench + 1}단)");
+            }
+            // ★[v103.1.15 · 오목부 무작위 시험 1020] 띠가 있는 정지면에서 링이 스스로 엇갈리면 ⚠ — 오목 꼭짓점 곁에 구간 2~3개가 겹치거나
+            //   좁은 홈(폭 ≈ 2 × 거리) 양쪽 벽의 구간 값이 다른 드문 판에서 남는다(무작위 180판 중 2판). «그 밖» 이음처럼 조용히 넘어가지 않게.
+            if (blend.Active)
+            {
+                int twisted = 0; (double X, double Y)? twAt = null;
+                foreach (var rk in result.Rings)
+                {
+                    var csT = new List<Coordinate>();
+                    foreach (var q in rk) if (csT.Count == 0 || Math.Abs(csT[^1].X - q.X) > 1e-9 || Math.Abs(csT[^1].Y - q.Y) > 1e-9) csT.Add(new Coordinate(q.X, q.Y));
+                    if (csT.Count < 4) continue;
+                    if (!csT[0].Equals2D(csT[^1])) csT.Add(csT[0].Copy());
+                    try
+                    {
+                        var op = new NetTopologySuite.Operation.Valid.IsSimpleOp(gf.CreateLineString(csT.ToArray()));
+                        if (!op.IsSimple()) { twisted++; var c = op.NonSimpleLocation; if (c != null) twAt ??= (c.X, c.Y); }
+                    }
+                    catch { }
+                }
+                if (twisted > 0) result.BlendWarnings.Add($"링 {twisted}개가 스스로 엇갈린다" + (twAt is { } tw ? $" @({tw.X:F2},{tw.Y:F2})" : "") + " — 오목 꼭짓점 곁 구간 겹침 · 좁은 홈");
+            }
+            if (result.BlendBands > 0 || result.JumpsWall + result.JumpsOther > 0)
+                dbg.AppendLine($"  전이 띠 {result.BlendBands}개 · 민 토막 {bandRuns} · 제비꼬리 자름 {tailCuts} · 이음 고침(엇갈림 자름 {joinCross} · 교점 {joinMeet} · 테두리 따라 {joinEnv})" +
+                               $" · 남은 이음 — 옹벽 단 탓 {result.JumpsWall} · 그 밖 {result.JumpsOther}" +
+                               (result.JumpOtherAt is { } ja ? $" @({ja.X:F2},{ja.Y:F2}) ⚠" : "") +
+                               (result.BlendWarnings.Count > 0 ? " · ⚠" + string.Join(" · ", result.BlendWarnings) : ""));
+        }
         // ★★[JACK 0911] <b>이음매 선 요약 — 자가검증 한 줄.</b>
         //   링이 끊긴 자리마다 이음매 선이 하나씩 있어야 한다. 수가 다르면 그 자체가 신호다.
         if (result.SeamLines.Count > 0)
@@ -724,6 +1136,758 @@ public static class GradingGeometry
                      + $" · 이음매선 {result.SeamLines.Count} · HasSlope={result.HasSlope}");
         LastDiag = dbg.ToString();
         return result;
+    }
+
+    /// <summary>★★★[v103.1.15 · 계획 3판 §2 · 검토 1020 높음 1] <b>띠 토막을 «제 법선으로» 민다.</b>
+    /// <para>w(이 세대 전역 링 — 같은 join · MitreLimit의 버퍼 · densify)에서 띠 점(<paramref name="mw"/>가 NaN)이 이어진 토막마다,
+    /// 점을 Δ = (실제 값 거리 − <paramref name="dist"/>)만큼 민다. 변 위의 점은 그 변의 바깥 법선으로, 꺾인 꼭짓점은 두 민 변의 교점
+    /// (w_i + Δ·(n₁+n₂)/(1+n₁·n₂) — 버퍼가 같은 거리에서 내는 마이터 · 오목 교점과 같은 점, 라운드 부채꼴은 현 다각형을 민 것)으로.</para>
+    /// <para>계획점에서 방사로 뻗으면(1판) 직각 모서리 마이터 다리에서 버퍼는 직선인데 단면은 원이 되어 띠 끝이 9~12m 벌어졌다(검토 반례).</para>
+    /// <para>★띠 두 끝은 <b>정확한 자리</b>를 찾아 넣는다(띠 · 띠 밖이 바뀌는 자리를 변 위에서 반씩 좁혀 — 1020 S161: 점 사이를 곧게 이으면
+    /// 꺾이는 자리를 질러 짧은 구간 가운데서 1.7m 어긋났다) · 토막 안은 가운데 점이 현에서 2mm 넘게 벗어나거나 현이 dens보다 길면 나눈다.
+    /// 토막 안 제비꼬리(오목 꼭짓점에서 바깥으로 · 볼록 꼭짓점에서 안으로 밀 때)는 토막 안에서만 자른다.
+    /// 열쇠 = 토막 첫 점의 w 위 매개(w 차례 그대로). 돌려주는 값 = 넣은 토막 수.</para></summary>
+    private static int AddBandRuns(List<Point3> w, double[] mw, double[] effW, double dist, double dens, double[] cumW,
+                                   List<(double key, List<Point3> pts, double dist)> runs2, ref int tailCuts,
+                                   Func<double, double, (bool Band, double D)> eval,
+                                   Dictionary<List<Point3>, ((double X, double Y)? S, (double X, double Y)? E)> tangents, ZoneBlend blend,
+                                   Dictionary<List<Point3>, (Point3 S, Point3 E)>? sources = null)
+    {
+        int n = w.Count;
+        bool dup = n >= 2 && Math.Abs(w[0].X - w[n - 1].X) < 1e-9 && Math.Abs(w[0].Y - w[n - 1].Y) < 1e-9;
+        int m = dup ? n - 1 : n;
+        if (m < 3) return 0;
+        var flag = new bool[m];
+        int cnt = 0;
+        for (int i = 0; i < m; i++) { flag[i] = double.IsNaN(mw[i]) && !double.IsNaN(effW[i]); if (flag[i]) cnt++; }
+        if (cnt == 0) return 0;
+        bool ccw = SignedArea(w) >= 0;                 // 반시계면 바깥 = 진행의 오른쪽(OutwardAt과 같은 규칙)
+        (double X, double Y) Nrm(int i)
+        {
+            var a = w[i]; var b = w[(i + 1) % m];
+            double dx = b.X - a.X, dy = b.Y - a.Y, l = Math.Sqrt(dx * dx + dy * dy);
+            if (l < 1e-12) return (0, 0);
+            return ccw ? (dy / l, -dx / l) : (-dy / l, dx / l);
+        }
+        Point3 PushVertex(int i)
+        {
+            var n1 = Nrm((i - 1 + m) % m); var n2 = Nrm(i);
+            if (n1.X == 0 && n1.Y == 0) n1 = n2;
+            if (n2.X == 0 && n2.Y == 0) n2 = n1;
+            double dlt = effW[i] - dist;
+            double dot = n1.X * n2.X + n1.Y * n2.Y;
+            double ox, oy;
+            if (dot > 1 - 1e-12) { ox = n1.X; oy = n1.Y; }                                // 곧은 점
+            else if (dot > -0.9) { double f = 1.0 / (1 + dot); ox = (n1.X + n2.X) * f; oy = (n1.Y + n2.Y) * f; }   // 두 민 변의 교점
+            else { ox = n1.X; oy = n1.Y; }                                                 // 거의 되돌아가는 가시 — 드묾 · 한 변 법선으로
+            return new Point3(w[i].X + ox * dlt, w[i].Y + oy * dlt, 0);
+        }
+        // 변 i(w_i → w_i+1) 위 s 자리 — 그 자리에서 재고 변의 법선으로 민다
+        (Point3 P, bool Band) OnSeg(int i, double s)
+        {
+            var a = w[i]; var b = w[(i + 1) % m];
+            double x = a.X + (b.X - a.X) * s, y = a.Y + (b.Y - a.Y) * s;
+            var (bd, d) = eval(x, y);
+            var nn = Nrm(i);
+            return (new Point3(x + nn.X * (d - dist), y + nn.Y * (d - dist), 0), bd);
+        }
+        // 변 i 위 s 자리를 이미 아는 거리 d로 민다(w 꼭짓점은 주 고리에서 잰 실제 값 거리가 있다 — 다시 재지 않는다 · 1020 S161 계측: 변마다 두 끝을 다시 재 셈 8천 번)
+        Point3 PushKnown(int i, double s, double d)
+        {
+            var a = w[i]; var b = w[(i + 1) % m];
+            double x = a.X + (b.X - a.X) * s, y = a.Y + (b.Y - a.Y) * s;
+            var nn = Nrm(i);
+            return new Point3(x + nn.X * (d - dist), y + nn.Y * (d - dist), 0);
+        }
+        static double Dd(Point3 a, Point3 b) => Math.Sqrt((b.X - a.X) * (b.X - a.X) + (b.Y - a.Y) * (b.Y - a.Y));
+        (double X, double Y) Dir(int i)
+        {
+            var a = w[i]; var b = w[(i + 1) % m];
+            double dx = b.X - a.X, dy = b.Y - a.Y, l = Math.Sqrt(dx * dx + dy * dy);
+            return l < 1e-12 ? (0, 0) : (dx / l, dy / l);
+        }
+        // 변마다 실제 값 거리의 기울기(띠 안 두 끝이 다 띠인 변) — 앞뒤 변과 기울기가 같으면 그 변 안은 곧다(거리가 자 위 매개에 비례) → 가운데를 안 잰다.
+        //   ★1020 S161 계측: 가운데 재기가 민 토막 셈의 대부분이었다(구간 16개 판 1.6만 번). 꺾임(띠 시작 · 끝 · 다른 구간 경계)이 든 변만 잰다.
+        var slope = new double[m];
+        for (int i = 0; i < m; i++)
+        {
+            int j = (i + 1) % m;
+            double len = Dd(w[i], w[j]);
+            slope[i] = flag[i] && flag[j] && len > 1e-9 ? (effW[j] - effW[i]) / len : double.NaN;
+        }
+        bool Straight(int i)
+        {
+            // 띠인 이웃 변(한쪽이 띠 밖이면 남은 쪽)과 기울기가 같으면 곧다 — 꺾임이 이 변 안에 있으면 변 전체 기울기가 이웃과 달라 걸린다.
+            //   ★1020 S161 계측: 두 이웃을 다 요구하니 토막 양 끝 변(한 이웃이 띠 밖)이 전부 «안 곧음»으로 깊이 나눠 셈의 대부분을 썼다
+            double g = slope[i], gp = slope[(i - 1 + m) % m], gn = slope[(i + 1) % m];
+            if (double.IsNaN(g) || (double.IsNaN(gp) && double.IsNaN(gn))) return false;
+            double tol = 1e-9 + 1e-6 * Math.Abs(g);
+            return (double.IsNaN(gp) || Math.Abs(g - gp) <= tol) && (double.IsNaN(gn) || Math.Abs(g - gn) <= tol);
+        }
+        // 변 i의 [s0, s1] 사이를 채운다(끝점은 안 넣음) — 가운데가 현에서 0.5mm 넘게 벗어나면 재며 나누고, 아니면 곧게 나눈다
+        void Fill(int i, double s0, Point3 p0, double s1, Point3 p1, List<Point3> outp, int depth)
+        {
+            double ch = Dd(p0, p1);
+            if (ch < 1e-6) return;
+            if (depth < 14 && !(depth == 0 && s0 == 0 && s1 == 1 && Straight(i)))
+            {
+                double sm = (s0 + s1) * 0.5;
+                var (pm, _) = OnSeg(i, sm);
+                double lx = p1.X - p0.X, ly = p1.Y - p0.Y;
+                double dev = Math.Abs((pm.X - p0.X) * ly - (pm.Y - p0.Y) * lx) / ch;
+                // 꺾임 하나면 가운데 벗어남의 약 2배가 최대 어긋남 — 0.5mm로 재면 곧게 나눈 점은 1mm 안
+                if (dev > 5e-4)
+                {
+                    Fill(i, s0, p0, sm, pm, outp, depth + 1);
+                    outp.Add(pm);
+                    Fill(i, sm, pm, s1, p1, outp, depth + 1);
+                    return;
+                }
+            }
+            int sub = (int)Math.Floor(ch / dens);
+            for (int k = 1; k <= sub; k++)
+            {
+                double t = (double)k / (sub + 1);
+                outp.Add(new Point3(p0.X + (p1.X - p0.X) * t, p0.Y + (p1.Y - p0.Y) * t, 0));
+            }
+        }
+        // 변 i에서 띠 · 띠 밖이 바뀌는 자리(s) — 먼저 자 위 매개로 곧게 나눈 후보를 앞뒤 2번 셈으로 확인하고(대개 여기서 끝),
+        //   안 맞으면 반씩 좁힌다(14번 · 변 1m면 0.06mm) — 1020 S161 계측: 반씩 좁히기가 민 토막 셈의 대부분이었다
+        var cand = new List<double>();
+        bool lastAtTh = false;   // 직전 Boundary가 띠 문턱(u=0 · 1 · 구간 끝)에서 찾았나 — 아니면 자 위 매개가 튄 자리(오목 꼭짓점에서 w가 먼저 끊김)
+        double Boundary(int i, bool bandAtEnd)
+        {
+            lastAtTh = false;
+            var a = w[i]; var b = w[(i + 1) % m];
+            blend.SegThresholds(a.X, a.Y, b.X, b.Y, cand);
+            // 후보 ±2mm(변 길이 기준) 안에서 바뀌면 그 안에서만 8번 좁힌다(자 위 매개가 변 위에서 꼭 곧지는 않다 — 자가 꺾인 링이면)
+            double len = Math.Max(Dd(a, b), 1e-9), win = 2e-3 / len;
+            foreach (double sc in cand)
+            {
+                double s0 = Math.Max(0, sc - win), s1 = Math.Min(1, sc + win);
+                bool f0 = OnSeg(i, s0).Band, f1 = OnSeg(i, s1).Band;
+                if (f0 == f1) continue;
+                // bandAtEnd: s0 쪽이 띠 밖 · s1 쪽이 띠여야 / 아니면 반대
+                if ((f1 == bandAtEnd) == (f0 != bandAtEnd))
+                {
+                    double l2 = s0, h2 = s1;
+                    for (int it = 0; it < 8; it++)
+                    {
+                        double mid = (l2 + h2) * 0.5;
+                        if (OnSeg(i, mid).Band == f1) h2 = mid; else l2 = mid;
+                    }
+                    lastAtTh = true;
+                    return f1 == bandAtEnd ? (bandAtEnd ? h2 : l2) : (bandAtEnd ? l2 : h2);
+                }
+            }
+            BoundaryFallback++;
+            double lo = 0, hi = 1;
+            for (int it = 0; it < 14; it++)
+            {
+                double mid = (lo + hi) * 0.5;
+                bool bd = OnSeg(i, mid).Band;
+                if (bd == bandAtEnd) hi = mid; else lo = mid;
+            }
+            return bandAtEnd ? hi : lo;
+        }
+        int made = 0, cuts = 0, tailCutsBack = 0;
+        void Emit(int i0, int len, bool whole)
+        {
+            RunCount++;
+            var pts = new List<Point3>();
+            double key = cumW[i0];
+            int ip = (i0 - 1 + m) % m;
+            int il = (i0 + len - 1) % m;
+            // 시작 경계 — 변 ip 위(띠 밖 → 띠)
+            bool thS = false, thE = false;
+            // ★[v103.1.15 · 오목부] 띠가 w의 오목 뾰족점에서 시작 · 끝나면(자 위 매개가 튀는 자리 — 문턱이 아니다) 그 뾰족점은 띠 쪽 변의 법선으로만 민다.
+            //   종전엔 띠 밖 변의 법선으로 밀어 첫 점이 옆으로 튀고(1020 ㄱ자 직각 [119.9,150.5] 링 7: 5.3m) 고리가 생겨 잘린 뒤 이음이 남았다.
+            bool jumpS = false, jumpE = false;
+            // ★[v103.1.15 · 무작위 시험 1020] 토막을 «변 조각 + 꼭짓점 점»으로 모아, 변 조각에서 앞 꼭짓점 점보다 뒤 · 다음 꼭짓점 점보다 앞(변 방향 위치)인 점은 버린다.
+            //   띠를 안쪽으로 밀 때 볼록 꼭짓점(바깥으로 밀 때 오목 꼭짓점)에서는 변 끝을 민 점이 두 민 변의 교점 뒤에 놓여 링이 한 직선 위에서 되짚었다
+            //   (CutLoops는 엇갈림만 자른다 — 직사각 라운드 [279.7,71.4] 판 링 11개 «안 단순»). 민 점의 변 방향 위치 = w 점의 위치(법선은 변에 수직)라 자르기가 정확하다.
+            var items = new List<(bool Vtx, int Edge, List<Point3> P)>();
+            if (!whole)
+            {
+                double sb = Boundary(ip, bandAtEnd: true);
+                thS = lastAtTh;
+                jumpS = !thS && sb >= 1 - 1e-4;
+                if (!jumpS)
+                {
+                    var pb = OnSeg(ip, sb).P;
+                    var pe = PushKnown(ip, 1, effW[i0]);
+                    var ch = new List<Point3> { pb };
+                    Fill(ip, sb, pb, 1, pe, ch, 0);
+                    ch.Add(pe);
+                    items.Add((false, ip, ch));
+                }
+                key = cumW[ip] + (cumW[ip + 1] - cumW[ip]) * sb;
+            }
+            double seEnd = double.NaN;
+            if (!whole)
+            {
+                seEnd = Boundary(il, bandAtEnd: false);
+                thE = lastAtTh;
+                jumpE = !thE && seEnd <= 1e-4 && len >= 2;
+            }
+            for (int k = 0; k < len; k++)
+            {
+                int i = (i0 + k) % m;
+                Point3 vq;
+                if (k == 0 && jumpS) vq = PushKnown(i, 0, effW[i]);                            // 뾰족점 = 띠 쪽 변(i)의 법선
+                else if (k == len - 1 && jumpE) vq = PushKnown((i - 1 + m) % m, 1, effW[i]);  // 뾰족점 = 띠 쪽 변(i−1)의 법선
+                else vq = PushVertex(i);
+                items.Add((true, -1, new List<Point3> { vq }));
+                bool last = k == len - 1;
+                int inx = (i + 1) % m;
+                if (last && whole) { var q0 = PushKnown(i, 0, effW[i]); var q1 = PushKnown(i, 1, effW[inx]); var cw = new List<Point3> { q0 }; Fill(i, 0, q0, 1, q1, cw, 0); items.Add((false, i, cw)); continue; }
+                if (last) break;
+                var a0 = PushKnown(i, 0, effW[i]); var a1 = PushKnown(i, 1, effW[inx]);
+                var ce = new List<Point3> { a0 };
+                Fill(i, 0, a0, 1, a1, ce, 0);
+                ce.Add(a1);
+                items.Add((false, i, ce));
+            }
+            // 끝 경계 — 변 il 위(띠 → 띠 밖) · 뾰족점에서 끝나면(jumpE) 위에서 이미 끝냈다
+            if (!whole && !jumpE)
+            {
+                double se = seEnd;
+                var p0 = PushKnown(il, 0, effW[il]);
+                var pz = OnSeg(il, se).P;
+                var cz = new List<Point3> { p0 };
+                Fill(il, 0, p0, se, pz, cz, 0);
+                cz.Add(pz);
+                items.Add((false, il, cz));
+            }
+            // 변 조각 자르기 — 앞 꼭짓점 점보다 뒤 · 다음 꼭짓점 점보다 앞인 점(변 방향 위치)
+            for (int c = 0; c < items.Count; c++)
+            {
+                if (items[c].Vtx) continue;
+                var (ux, uy) = Dir(items[c].Edge);
+                if (ux == 0 && uy == 0) continue;
+                int cp = whole ? (c - 1 + items.Count) % items.Count : c - 1;
+                int cn = whole ? (c + 1) % items.Count : c + 1;
+                var lst = items[c].P;
+                if (cp >= 0 && cp < items.Count && items[cp].Vtx)
+                {
+                    double px = items[cp].P[0].X * ux + items[cp].P[0].Y * uy;
+                    tailCutsBack += lst.RemoveAll(q => q.X * ux + q.Y * uy < px - 1e-9);
+                }
+                if (cn >= 0 && cn < items.Count && items[cn].Vtx)
+                {
+                    double px = items[cn].P[0].X * ux + items[cn].P[0].Y * uy;
+                    tailCutsBack += lst.RemoveAll(q => q.X * ux + q.Y * uy > px + 1e-9);
+                }
+            }
+            foreach (var it in items) pts.AddRange(it.P);
+            // 같은 자리 겹친 점(곧은 꼭짓점의 변 법선 점 = 꼭짓점 점) 빼기
+            var clean = new List<Point3>(pts.Count);
+            foreach (var q in pts) if (clean.Count == 0 || Dd(clean[^1], q) > 1e-9) clean.Add(q);
+            cuts += CutLoops(clean);
+            clean = Densify(clean, dens);
+            if (clean.Count >= 1)
+            {
+                runs2.Add((key, clean, double.NaN)); made++;
+                // ★토막 두 끝의 진행 방향 — 띠가 문턱(u=0 · 1 · 구간 끝)에서 끝났으면 그 자리 w의 방향(링은 경계를 따라 꺾여 간다 ·
+                //   1020 S161 ㄱ자 라운드 판: 띠의 비스듬한 마지막 변을 늘이면 엉뚱한 데서 만났다).
+                //   w가 먼저 끊겨 끝났으면(오목 꼭짓점에서 자 위 매개가 튐) 띠는 아직 이어지는 중이라 토막 끝 변 방향(null) — 같은 판 라운드에서
+                //   w 방향으로 늘였더니 모서리를 질러가 이웃 링과 건넜다(링 7 · 8 @(86.0,73.5)).
+                if (!whole) tangents[clean] = (thS ? Dir(ip) : null, thE ? Dir(il) : null);
+                // 밀기 전 w 점(띠 쪽) — 뾰족점에서 시작 · 끝나면 그 다음 · 앞 꼭짓점(뾰족점은 두 꼭짓점에서 같은 거리라 애매) · 민 점은 바깥 띠가 가운데선을 넘어 엉뚱한 꼭짓점에 가깝다(1020 ㄱ자 [193.9,264] 1:3 판)
+                if (sources != null) sources[clean] = (w[jumpS && len >= 2 ? (i0 + 1) % m : i0], w[jumpE ? (il - 1 + m) % m : il]);
+            }
+        }
+        if (cnt == m) Emit(0, m, whole: true);         // 고리 전체가 띠(드묾) — 한 토막
+        else
+            for (int i0 = 0; i0 < m; i0++)
+            {
+                if (!flag[i0] || flag[(i0 - 1 + m) % m]) continue;
+                int len = 0;
+                while (len < m && flag[(i0 + len) % m]) len++;
+                Emit(i0, len, whole: false);
+            }
+        tailCuts += cuts;
+        return made;
+    }
+
+    /// <summary>열린 꺾은선에서 이웃 아닌 두 변이 엇갈리면 그 사이를 잘라 교차점으로 잇는다(제비꼬리) — 자른 수.</summary>
+    private static int CutLoops(List<Point3> pts)
+    {
+        int cuts = 0;
+        for (int guard = 0; guard < 64; guard++)
+        {
+            bool cut = false;
+            for (int i = 0; i + 1 < pts.Count && !cut; i++)
+                for (int j = pts.Count - 2; j > i + 1 && !cut; j--)
+                {
+                    if (!SegCross(pts[i], pts[i + 1], pts[j], pts[j + 1], out double px, out double py)) continue;
+                    pts.RemoveRange(i + 1, j - i);
+                    pts.Insert(i + 1, new Point3(px, py, 0));
+                    cuts++; cut = true;
+                }
+            if (!cut) break;
+        }
+        return cuts;
+    }
+
+    /// <summary>두 선분이 속에서(끝점 아닌 자리에서) 엇갈리나 · 교차점.</summary>
+    private static bool SegCross(Point3 a, Point3 b, Point3 c, Point3 d, out double px, out double py)
+    {
+        px = py = 0;
+        double rx = b.X - a.X, ry = b.Y - a.Y, sx = d.X - c.X, sy = d.Y - c.Y;
+        double den = rx * sy - ry * sx;
+        if (Math.Abs(den) < 1e-15) return false;
+        double t = ((c.X - a.X) * sy - (c.Y - a.Y) * sx) / den;
+        double u = ((c.X - a.X) * ry - (c.Y - a.Y) * rx) / den;
+        if (t <= 1e-9 || t >= 1 - 1e-9 || u <= 1e-9 || u >= 1 - 1e-9) return false;
+        px = a.X + rx * t; py = a.Y + ry * t;
+        return true;
+    }
+
+    /// <summary>점 p에서 선분 a–b까지 거리.</summary>
+    private static double DistToSeg(Point3 p, Point3 a, Point3 b)
+    {
+        double sx = b.X - a.X, sy = b.Y - a.Y, l2 = sx * sx + sy * sy;
+        double u = l2 < 1e-18 ? 0 : Math.Clamp(((p.X - a.X) * sx + (p.Y - a.Y) * sy) / l2, 0, 1);
+        double dx = a.X + sx * u - p.X, dy = a.Y + sy * u - p.Y;
+        return Math.Sqrt(dx * dx + dy * dy);
+    }
+
+    /// <summary>반직선 o + t·d(t &gt; 0)가 선분 a–b와 만나나 · 만난 자리(t · 점).</summary>
+    private static bool RayHit(Point3 o, double dx, double dy, Point3 a, Point3 b, out double t, out Point3 hit)
+    {
+        t = 0; hit = o;
+        double sx = b.X - a.X, sy = b.Y - a.Y;
+        double den = dx * sy - dy * sx;
+        if (Math.Abs(den) < 1e-15) return false;
+        double tt = ((a.X - o.X) * sy - (a.Y - o.Y) * sx) / den;
+        double u = ((a.X - o.X) * dy - (a.Y - o.Y) * dx) / den;
+        // 선분 끝 1mm는 허용 — 띠 끝점이 상대 run 머리에 0.01mm 차로 얹히면 놓쳤다(1020 S161 ㄱ자 판)
+        double tolU = 1e-3 / Math.Max(Math.Sqrt(sx * sx + sy * sy), 1e-9);
+        if (tt <= 1e-9 || u < -tolU || u > 1 + tolU) return false;
+        u = Math.Clamp(u, 0, 1);
+        t = tt; hit = new Point3(a.X + sx * u, a.Y + sy * u, 0);
+        return true;
+    }
+
+    /// <summary>★[v103.1.15 · 오목부] 이음 a = A 끝 → b = B 머리를 <paramref name="env"/>(두 거리 테두리 링의 합 — 닫힌 링들)을 따라 잇는다.
+    /// ①a가 테두리 위(5mm)면 a에서 A가 가던 쪽으로 테두리를 걸어 B 위(5mm)에 닿는 첫 꼭짓점까지 A에 붙이고 B는 그 앞을 자른다(B가 덮여 넘친 쪽).
+    /// ②아니면(a가 덮임 — A가 넘침) b에서 B가 오던 쪽으로 거슬러 걸어 A 위에 닿는 첫 꼭짓점에서 A를 자르고 걸은 길을 B 앞에 붙인다.
+    /// 걸은 길이가 틈의 3배 + dens×20을 넘거나 못 닿으면 손대지 않는다(false — «그 밖» 이음으로 남아 ⚠).</summary>
+    /// <summary>ⓕ 걷는 길이 한도 — 틈의 3배 + dens×20, 다만 틈 + 60m까지(★[설치 전 검토 2 · 낮음 5] 차례가 어긋난 50m 틈에서 상대 run을 170m까지 잘라 내지 않게).</summary>
+    private static double WalkMax(double gap, double dens) => Math.Min(3 * gap + 20 * dens, gap + 60);
+
+    /// <summary>run 끝에서 1m 안쪽 점(끝점이 두 꼭짓점의 가운데선 위면 어느 꼭짓점에 묶였는지 애매하다 — 띠 끝 조각을 정할 때).</summary>
+    private static Point3 Inward(List<Point3> run, bool fromEnd)
+    {
+        static double Dd(Point3 p, Point3 q) => Math.Sqrt((q.X - p.X) * (q.X - p.X) + (q.Y - p.Y) * (q.Y - p.Y));
+        double acc = 0;
+        if (fromEnd)
+        {
+            for (int q = run.Count - 1; q > 0; q--) { acc += Dd(run[q], run[q - 1]); if (acc >= 1.0) return run[q - 1]; }
+            return run[0];
+        }
+        for (int q = 0; q + 1 < run.Count; q++) { acc += Dd(run[q], run[q + 1]); if (acc >= 1.0) return run[q + 1]; }
+        return run[^1];
+    }
+
+    private static bool SpliceAlongEnvelope(List<Point3> A, List<Point3> B, List<List<Point3>> env, double gap, double dens, double tol, out string why)
+    {
+        why = ""; string reason = "";
+        double maxWalk = WalkMax(gap, dens);
+        static double Dd(Point3 p, Point3 q) => Math.Sqrt((q.X - p.X) * (q.X - p.X) + (q.Y - p.Y) * (q.Y - p.Y));
+        bool Locate(Point3 q, out List<Point3> U, out int si)
+        {
+            U = env[0]; si = -1; double best = tol;
+            foreach (var r in env)
+                for (int i = 0; i + 1 < r.Count; i++)
+                {
+                    double d = DistToSeg(q, r[i], r[i + 1]);
+                    if (d <= best) { best = d; U = r; si = i; }
+                }
+            return si >= 0;
+        }
+        // 상대 run 위(5mm)에 닿는 첫 변 — fromEnd면 끝에서부터(A) · 아니면 머리에서부터(B) · 그 run의 앞 maxWalk 안만
+        int HitOn(Point3 v, List<Point3> run, bool fromEnd)
+        {
+            double acc = 0;
+            if (fromEnd)
+            {
+                for (int i = run.Count - 2; i >= 0 && acc <= maxWalk; i--)
+                {
+                    if (DistToSeg(v, run[i], run[i + 1]) <= tol) return i;
+                    acc += Dd(run[i], run[i + 1]);
+                }
+            }
+            else
+            {
+                for (int j = 0; j + 1 < run.Count && acc <= maxWalk; j++)
+                {
+                    if (DistToSeg(v, run[j], run[j + 1]) <= tol) return j;
+                    acc += Dd(run[j], run[j + 1]);
+                }
+            }
+            return -1;
+        }
+        // 테두리를 걷는다 — start(테두리 위 점)에서 (dx,dy) 쪽으로 · 닿으면 걸은 꼭짓점들(닿은 꼭짓점 포함)과 닿은 변 번호
+        bool Walk(Point3 start, List<Point3> U, int si, double dx, double dy, List<Point3> other, bool otherFromEnd,
+                  List<Point3> path, out int hit)
+        {
+            // ★[설치 전 검토 2 · 낮음 4] 방향이 애매하면(끝이 테두리 꼭짓점 · 평평한 끝과 수직) 내적 부호가 오차로 갈린다 — 정한 쪽이 못 닿으면 반대쪽도 걷는다
+            if (Walk1(start, U, si, dx, dy, other, otherFromEnd, path, out hit, false)) return true;
+            path.Clear();
+            return Walk1(start, U, si, dx, dy, other, otherFromEnd, path, out hit, true);
+        }
+        bool Walk1(Point3 start, List<Point3> U, int si, double dx, double dy, List<Point3> other, bool otherFromEnd,
+                   List<Point3> path, out int hit, bool flip)
+        {
+            hit = -1;
+            int m = U.Count - 1;                       // 닫힌 링(마지막 = 처음)
+            if (m < 3) { reason = "테두리 링이 너무 짧음"; return false; }
+            double fx = U[si + 1].X - U[si].X, fy = U[si + 1].Y - U[si].Y;
+            int dir = fx * dx + fy * dy >= 0 ? 1 : -1;
+            if (flip) dir = -dir;
+            int idx = dir > 0 ? (si + 1) % m : si;
+            var prev = start; double walked = 0;
+            for (int step = 0; step < m; step++)
+            {
+                var v = U[idx];
+                walked += Dd(prev, v);
+                if (walked > maxWalk) { reason = $"걸은 길이 {walked:F1}m > {maxWalk:F1}m"; if (JoinDebug != null) { var sbw = new System.Text.StringBuilder("      걸은 길:"); for (int q = 0; q < path.Count; q += Math.Max(1, path.Count / 12)) sbw.Append($" ({path[q].X:F2},{path[q].Y:F2})"); var sbu = new System.Text.StringBuilder(); if (U.Count <= 80) foreach (var uq in U) sbu.Append($" ({uq.X:F2},{uq.Y:F2})"); JoinDebug(sbw.ToString() + $" · 테두리 {U.Count}점 · dir {dir} · a({start.X:F2},{start.Y:F2}) · 상대 머리 ({other[0].X:F2},{other[0].Y:F2}) 끝 ({other[^1].X:F2},{other[^1].Y:F2}) · 테두리:{sbu}"); } return false; }
+                if (Dd(v, start) > 1e-6)
+                {
+                    path.Add(v);
+                    int h = HitOn(v, other, otherFromEnd);
+                    if (h >= 0) { hit = h; return true; }
+                }
+                prev = v;
+                idx = dir > 0 ? (idx + 1) % m : (idx - 1 + m) % m;
+            }
+            return false;
+        }
+        if (A.Count < 2 || B.Count < 2 || env.Count == 0) return false;
+        var a = A[^1]; var b = B[0];
+        var path = new List<Point3>();
+        if (JoinDebug != null)
+        {
+            double MinTo(Point3 q) { double m = double.MaxValue; foreach (var r in env) for (int i = 0; i + 1 < r.Count; i++) m = Math.Min(m, DistToSeg(q, r[i], r[i + 1])); return m; }
+            JoinDebug($"      테두리 링 {env.Count}개({string.Join("/", env.Select(r => r.Count))}점) · a({a.X:F2},{a.Y:F2})까지 {MinTo(a):F3} · b({b.X:F2},{b.Y:F2})까지 {MinTo(b):F3} · 허용 {tol:F3}");
+        }
+        if (Locate(a, out var Ua, out int sa))
+        {
+            if (!Walk(a, Ua, sa, a.X - A[^2].X, a.Y - A[^2].Y, B, false, path, out int jb)) { why = "a에서 못 닿음 " + reason; return false; }
+            var seg = new List<Point3> { a }; seg.AddRange(path);
+            var dsg = Densify(seg, dens);
+            for (int q = 1; q < dsg.Count; q++) A.Add(dsg[q]);
+            B.RemoveRange(0, jb + 1);                       // 닿은 꼭짓점은 B의 변 jb 위 — B는 그 변 끝부터
+            while (B.Count > 0 && Dd(B[0], A[^1]) <= 1e-6) B.RemoveAt(0);
+            return true;
+        }
+        if (Locate(b, out var Ub, out int sb))
+        {
+            if (!Walk(b, Ub, sb, b.X - B[1].X, b.Y - B[1].Y, A, true, path, out int ia)) { why = "b에서 못 닿음 " + reason; return false; }
+            // path = b에서 거슬러 걸은 꼭짓점들(마지막이 A 위) → 뒤집어 A 끝 다음에 · b는 B 머리 그대로
+            path.Reverse();
+            A.RemoveRange(ia + 1, A.Count - ia - 1);
+            var seg = new List<Point3>(path) { b };
+            var dsg = Densify(seg, dens);
+            for (int q = 0; q < dsg.Count - 1; q++)
+                if (A.Count == 0 || Dd(A[^1], dsg[q]) > 1e-6) A.Add(dsg[q]);
+            return true;
+        }
+        why = "a · b 둘 다 테두리 밖";
+        return false;
+    }
+
+    /// <summary>[하네스 전용 계측] 띠 셈 횟수 · 시간(ms) — 민 토막 · 띠 판정(DistOf).</summary>
+    internal static long BandEvalCount, BandRunTicks, DistOfCount, BoundaryFallback, RunCount;
+
+    /// <summary>[하네스 전용 계측] 이음 고침이 본 이음을 한 줄씩 — 출하 DLL 밖에서 못 건드리게 internal(InternalsVisibleTo blocktest).</summary>
+    internal static Action<string>? JoinDebug;
+
+    /// <summary>★★★[v103.1.15 · 계획 3판 §2-5 · 재검토 1020 높음] <b>정렬한 run을 잇되 띠 탓 이음만 손본다.</b>
+    /// <para>틈이 dens×1.5보다 크고 «옹벽 단 탓» 계단이 아니면(<see cref="ZoneBlend.JumpIsWall"/> — 옹벽 단 계단이 없는 링은 전부) —
+    /// ⓐ앞 run 끝 변들과 다음 run 첫 변들(각 10개 안)이 엇갈리면 그 교차점에서 둘 다 자른다
+    /// ⓑ다음 run 첫 변을 뒤로 늘인 반직선이 앞 run 끝 변들에 닿으면 앞 run을 거기서 자른다(앞 run이 넘쳐 나감)
+    /// ⓒ앞 run 끝 변을 앞으로 늘인 반직선이 다음 run 첫 변들에 닿으면 다음 run을 거기서 자른다(다음 run이 넘쳐 들어옴)
+    /// ⓓ두 반직선이 만나면(틈의 4배 안) 그 교점을 넣는다 · ⓔ아니면 곧게(남으면 «그 밖» 이음으로 세어 ⚠).
+    /// 오목 꼭짓점 곁에서 거리 D 버퍼에 점이 없는 τ 범위(꼭짓점에서 D·cot(θ/2))가 ⓑ · ⓒ의 자리다 — 포락선은 «한쪽 다리가 다른 쪽 선에서 멈추는» 꼴
+    /// (재검토 반례 (−10,10)→(−20,10)→(−20,20) · S161 ㄱ자 판 실측: 앞 run이 넘쳐 나가 ⓓ로는 못 잡았다).
+    /// 옹벽 단 탓 이음은 종전처럼 손대지 않는다.</para></summary>
+    private static List<Point3> JoinBandRuns(List<(double key, List<Point3> pts, double dist)> runs,
+                                             Dictionary<List<Point3>, ((double X, double Y)? S, (double X, double Y)? E)> tangents,
+                                             ZoneBlend blend, int edge, double dist,
+                                             double dens, ref int joinCross, ref int joinMeet,
+                                             Func<double, Point3, double, Point3, Point3, Point3, double, (List<List<Point3>>? Rings, double Tol, double MinD)>? envelope, ref int joinEnv,
+                                             Dictionary<List<Point3>, (Point3 S, Point3 E)>? sources = null,
+                                             Func<Point3, double>? planDist = null)
+    {
+        int R = runs.Count;
+        var parts = new List<List<Point3>>(R);
+        var tanS = new (double X, double Y)?[R]; var tanE = new (double X, double Y)?[R];
+        for (int k = 0; k < R; k++)
+        {
+            parts.Add(new List<Point3>(runs[k].pts));
+            if (tangents.TryGetValue(runs[k].pts, out var tg)) { tanS[k] = tg.S; tanE[k] = tg.E; }
+        }
+        bool wallRing = blend.RingHasWallStep(edge);
+        if (JoinDebug != null)
+            for (int k = 0; k < R; k++)
+                JoinDebug($"  run {edge}:{k} 열쇠 {runs[k].key:F3} · 거리 {runs[k].dist:F2} · {runs[k].pts.Count}점 ({runs[k].pts[0].X:F2},{runs[k].pts[0].Y:F2}) → ({runs[k].pts[^1].X:F2},{runs[k].pts[^1].Y:F2})");
+        static double Dd(Point3 a, Point3 b) => Math.Sqrt((b.X - a.X) * (b.X - a.X) + (b.Y - a.Y) * (b.Y - a.Y));
+        // ⓕ로 이은 자리(토막 끝 · 머리) — 마무리 꼬임 고침이 그 곁(window 안)만 띠처럼 본다(1020 씨앗 11 #40: 이은 자리에서 꼬임 4)
+        //   ★[설치 전 검토 2 · 중간 1] 옹벽 단 탓으로 건너뛴 이음의 두 끝은 «보호» — 마무리 꼬임 고침이 그 고리를 자르지 않는다
+        var touchedEnd = new bool[R]; var touchedStart = new bool[R];
+        var protEnd = new bool[R]; var protStart = new bool[R];
+        if (R >= 2)
+        {
+            for (int k = 0; k < R; k++)
+            {
+                var A = parts[k]; var B = parts[(k + 1) % R];
+                // ★[설치 전 검토 중간 2] 점이 둘 안 되는 토막은 손대지 않는다(아래 변 찾기가 B[1] · A[^2]를 읽는다 — 앞 이음 고침이 토막을 한 점으로 줄였을 수 있다)
+                if (A.Count < 2 || B.Count < 2) continue;
+                var a = A[^1]; var b = B[0];
+                double gap = Dd(a, b);
+                if (gap <= dens * 1.5) continue;
+                JoinDebug?.Invoke($"이음 {edge}:{k} A {A.Count}점 끝({a.X:F3},{a.Y:F3}) B {B.Count}점 머리({b.X:F3},{b.Y:F3}) 틈 {gap:F2} · 띠 A {tanE[k] != null} B {tanS[(k + 1) % R] != null}");
+                if (wallRing && blend.JumpIsWall((a.X + b.X) * 0.5, (a.Y + b.Y) * 0.5, edge, dist)) { protEnd[k] = true; protStart[(k + 1) % R] = true; continue; }   // 옹벽 단 탓 — 종전대로
+                // ⓐ 엇갈림 — 이음에 가장 가까운 것부터 · 찾는 범위 = 이음에서 틈의 4배(적어도 dens×10) 안의 변
+                //   ★[1020 S161 ㄱ자 판] 종전 «변 10개» 창은 교점이 10.0m 떨어진 자리(첫 10변이 9.8m)를 0.24m 차로 놓쳤다
+                bool done = false;
+                double win = Math.Max(4 * gap, 10 * dens);
+                int ia0 = A.Count - 2;
+                for (double acc = 0; ia0 > 0 && acc + Dd(A[ia0 - 1], A[ia0]) <= win; ia0--) acc += Dd(A[ia0 - 1], A[ia0]);
+                int jb1 = 0;
+                for (double acc = 0; jb1 + 1 < B.Count - 1 && acc + Dd(B[jb1 + 1], B[jb1 + 2]) <= win; jb1++) acc += Dd(B[jb1 + 1], B[jb1 + 2]);
+                ia0 = Math.Max(0, ia0); jb1 = Math.Max(0, Math.Min(jb1, B.Count - 2));
+                // ⓞ 한 끝이 상대 run의 선 위(1mm 안)에 얹힘 — 그 자리에서 자른다(되짚어 가는 겹침 · 1020 S161 ㄱ자 판: 띠 끝이 바깥 링 위에 닿았는데
+                //   바깥 run은 그 앞 오목 교점부터 시작해 3.75m를 되짚었다)
+                for (int jb = 0; jb <= jb1 && jb + 1 < B.Count && !done; jb++)
+                    if (DistToSeg(a, B[jb], B[jb + 1]) <= 1e-3) { B.RemoveRange(0, jb + 1); joinCross++; done = true; }
+                for (int ia = A.Count - 2; ia >= ia0 && ia + 1 < A.Count && !done; ia--)
+                    if (DistToSeg(b, A[ia], A[ia + 1]) <= 1e-3) { A.RemoveRange(ia + 1, A.Count - ia - 1); joinCross++; done = true; }
+                if (done) continue;
+                for (int ia = A.Count - 2; ia >= ia0 && !done; ia--)
+                    for (int jb = 0; jb <= jb1 && jb + 1 < B.Count && !done; jb++)
+                    {
+                        if (!SegCross(A[ia], A[ia + 1], B[jb], B[jb + 1], out double px, out double py)) continue;
+                        A.RemoveRange(ia + 1, A.Count - ia - 1);
+                        A.Add(new Point3(px, py, 0));
+                        B.RemoveRange(0, jb + 1);
+                        joinCross++; done = true;
+                    }
+                if (done) continue;
+                // ⓑ · ⓒ — 넘친 쪽을 자른다(덧붙는 길이가 짧은 쪽)
+                double bestAdd = double.MaxValue; int how = 0, segIdx = -1; Point3 hitP = a;
+                // 늘이는 방향 — 민 토막이면 그 끝의 w 방향, 버퍼 run이면 끝 변 방향
+                var tb = tanS[(k + 1) % R]; var ta = tanE[k];
+                if (B.Count >= 2)
+                {
+                    double dx = tb != null ? -tb.Value.X : B[0].X - B[1].X, dy = tb != null ? -tb.Value.Y : B[0].Y - B[1].Y;
+                    for (int ia = A.Count - 2; ia >= ia0 && ia >= 0; ia--)
+                        if (RayHit(B[0], dx, dy, A[ia], A[ia + 1], out _, out var h))
+                        { double add = Dd(h, B[0]); if (add < bestAdd && add <= 4 * gap) { bestAdd = add; how = 2; segIdx = ia; hitP = h; } break; }
+                }
+                if (A.Count >= 2)
+                {
+                    double dx = ta != null ? ta.Value.X : A[^1].X - A[^2].X, dy = ta != null ? ta.Value.Y : A[^1].Y - A[^2].Y;
+                    for (int jb = 0; jb <= jb1 && jb + 1 < B.Count; jb++)
+                        if (RayHit(A[^1], dx, dy, B[jb], B[jb + 1], out _, out var h))
+                        { double add = Dd(A[^1], h); if (add < bestAdd && add <= 4 * gap) { bestAdd = add; how = 3; segIdx = jb; hitP = h; } break; }
+                }
+                if (how == 2)
+                {
+                    A.RemoveRange(segIdx + 1, A.Count - segIdx - 1);
+                    var seg = Densify(new List<Point3> { hitP, B[0] }, dens);
+                    for (int q = 0; q < seg.Count - 1; q++) A.Add(seg[q]);
+                    joinMeet++; continue;
+                }
+                if (how == 3)
+                {
+                    B.RemoveRange(0, segIdx + 1);
+                    var seg = Densify(new List<Point3> { A[^1], hitP }, dens);
+                    for (int q = seg.Count - 1; q >= 1; q--) B.Insert(0, seg[q]);
+                    joinMeet++; continue;
+                }
+                // ⓓ 두 반직선의 교점
+                if (A.Count >= 2 && B.Count >= 2)
+                {
+                    var a0 = A[^2]; var b1 = B[1];
+                    double dax = ta != null ? ta.Value.X : a.X - a0.X, day = ta != null ? ta.Value.Y : a.Y - a0.Y;
+                    double dbx = tb != null ? tb.Value.X : b1.X - b.X, dby = tb != null ? tb.Value.Y : b1.Y - b.Y;
+                    double la = Math.Sqrt(dax * dax + day * day), lb = Math.Sqrt(dbx * dbx + dby * dby);
+                    double den = dax * dby - day * dbx;
+                    if (la > 1e-9 && lb > 1e-9 && Math.Abs(den) > 1e-12 * la * lb)
+                    {
+                        // a + t·da = b − s·db
+                        double rx = b.X - a.X, ry = b.Y - a.Y;
+                        double t = (rx * dby - ry * dbx) / den;
+                        double s = (dax * ry - day * rx) / den;
+                        if (t > 0 && s > 0 && t * la <= 4 * gap && s * lb <= 4 * gap)
+                        {
+                            var X = new Point3(a.X + dax * t, a.Y + day * t, 0);
+                            var seg1 = Densify(new List<Point3> { a, X }, dens);
+                            for (int q = 1; q < seg1.Count; q++) A.Add(seg1[q]);
+                            var seg2 = Densify(new List<Point3> { X, b }, dens);
+                            for (int q = seg2.Count - 2; q >= 1; q--) B.Insert(0, seg2[q]);
+                            joinMeet++; continue;
+                        }
+                    }
+                }
+                // ⓔ 같은 직선 위 이음(틈이 앞 run 끝 방향이나 다음 run 머리 방향과 0.5° 안) — 그 직선이 곧 링이다 · 촘촘히 채운다
+                {
+                    double gx = (b.X - a.X) / gap, gy = (b.Y - a.Y) / gap;
+                    bool Along((double X, double Y)? t0, double fx, double fy)
+                    {
+                        double tx = t0?.X ?? fx, ty = t0?.Y ?? fy, tl = Math.Sqrt(tx * tx + ty * ty);
+                        if (tl < 1e-12) return false;
+                        tx /= tl; ty /= tl;
+                        return tx * gx + ty * gy > 0 && Math.Abs(tx * gy - ty * gx) < Math.Sin(0.5 * Math.PI / 180);
+                    }
+                    bool alongA = Along(ta, A.Count >= 2 ? a.X - A[^2].X : 0, A.Count >= 2 ? a.Y - A[^2].Y : 0);
+                    bool alongB = Along(tb, B.Count >= 2 ? B[1].X - b.X : 0, B.Count >= 2 ? B[1].Y - b.Y : 0);
+                    if (alongA || alongB)
+                    {
+                        var seg = Densify(new List<Point3> { a, b }, dens);
+                        for (int q = 1; q < seg.Count - 1; q++) A.Add(seg[q]);
+                        joinMeet++; continue;
+                    }
+                }
+                // ⓕ ★[v103.1.15 · JACK 1020 «오목부도 해결해»] 테두리 따라 잇기 — 위 ⓐ~ⓔ가 다 못 이은 두 버퍼 run(거리 dA ≠ dB)의 이음.
+                //   오목 꼭짓점 앞 바깥 단은 «가장 가까운 부지 점»이 대각선(중심축)에서 이 구간 ↔ 바깥으로 갑자기 바뀌어 두 run이 거기서 멈춘다(띠 τ 범위에 링 점이 없다).
+                //   참 모양 = <b>그 거리를 쓰는 부지 테두리만 따로 띄운 링들의 합</b>의 바깥 테두리(envelope) — 바깥 run이 중심축을 넘어 이어지다 안쪽 run과 만나 골짜기로 꺾인다.
+                //   그 테두리를 따라 a → 만나는 자리까지 잇고 넘친 쪽을 자른다. 버퍼 run은 같은 join · 같은 버퍼 셈이라 테두리 위(5mm 안)에 그대로 있다.
+                // ★[설치 전 검토 2 · 열린 질문 2] 옹벽 단 끝 곁(넓은 창 — 오목 곁 옹벽 이음은 끝에서 멀리 투영된다)이면 ⓕ를 안 쓴다(옹벽 계단에 방사선 점을 채우면 0910 가짜 옹벽 재발)
+                if (envelope != null && wallRing && blend.NearWallEnd((a.X + b.X) * 0.5, (a.Y + b.Y) * 0.5, edge, dist))
+                { protEnd[k] = true; protStart[(k + 1) % R] = true; JoinDebug?.Invoke($"  ⓕ✗ {edge}:{k} 옹벽 단 끝 곁 — 안 씀"); continue; }
+                if (envelope != null)
+                {
+                    double dA = runs[k].dist, dB = runs[(k + 1) % R].dist;
+                    if (double.IsNaN(dA) || double.IsNaN(dB) || Math.Abs(dA - dB) > 1e-9)
+                    {
+                        var srcA = sources != null && sources.TryGetValue(runs[k].pts, out var sa0) ? sa0.E : Inward(A, true);
+                        var srcB = sources != null && sources.TryGetValue(runs[(k + 1) % R].pts, out var sb0) ? sb0.S : Inward(B, false);
+                        double walkMax = WalkMax(gap, dens);
+                        var (env, tolE, minDE) = envelope(dA, srcA, dB, srcB, a, b, walkMax);
+                        if (env == null) JoinDebug?.Invoke($"  ⓕ✗ {edge}:{k} 테두리 링 없음");
+                        else
+                        {
+                            // 이은 길 점이 부지에서 그 거리보다 가까우면(좁은 팔을 뚫은 사각형의 가짜 혹) 거절 — 고치기 전 A · B로 되돌린다
+                            var A0 = new List<Point3>(A); var B0 = new List<Point3>(B);
+                            bool ok = SpliceAlongEnvelope(A, B, env, gap, dens, tolE, out string whyF);
+                            if (ok && planDist != null && minDE < double.MaxValue)
+                            {
+                                // 둥근 부채꼴은 현 가운데가 반지름의 cos(3.75°)까지 들어온다(사분원 12칸 — R 55m면 16cm) · 큰 침범(좁은 팔을 뚫은 혹)만 거른다
+                                double lim = minDE * Math.Cos(Math.PI / 48) - Math.Max(0.05, 10 * tolE);
+                                // 이은 길은 늘 A 끝에 붙는다(① A + 길 · ② A를 자르고 + 길) — A가 처음 달라진 자리부터 본다
+                                int qa = 0;
+                                while (qa < A.Count && qa < A0.Count && A[qa].X == A0[qa].X && A[qa].Y == A0[qa].Y) qa++;
+                                for (int q = qa; q < A.Count && ok; q++) if (planDist(A[q]) < lim) { ok = false; whyF = $"이은 길이 부지에 {planDist(A[q]):F2}m(< {lim:F2})"; }
+                                if (!ok) { A.Clear(); A.AddRange(A0); B.Clear(); B.AddRange(B0); }
+                            }
+                            if (ok) { joinEnv++; touchedEnd[k] = true; touchedStart[(k + 1) % R] = true; JoinDebug?.Invoke($"  ⓕ 테두리 따라 이음 {edge}:{k} · 거리 {dA:F2} ↔ {dB:F2}"); }
+                            else JoinDebug?.Invoke($"  ⓕ✗ {edge}:{k} 거리 {dA:F2} ↔ {dB:F2} · {whyF}");
+                        }
+                    }
+                    else JoinDebug?.Invoke($"  ⓕ✗ {edge}:{k} 거리 {dA:F2} ↔ {dB:F2} · 같은 거리");
+                }
+            }
+        }
+        var outp = new List<Point3>();
+        var fromBand = new List<bool>();
+        var prot = new List<bool>();
+        double winC = Math.Max(30.0, 20 * dens);
+        for (int k = 0; k < R; k++)
+        {
+            var pk = parts[k];
+            bool isBand = double.IsNaN(runs[k].dist);
+            // ⓕ로 이은 토막은 통째로 띠처럼 본다 — 이은 자리 곁 30m로 좁히면 그 밖으로 걸친 고리를 놓쳤다(1020 씨앗 11 #40 꼬임 1) ·
+            //   옹벽 단 이음 끝은 아래 «보호»가 따로 지킨다(설치 전 검토 2 · 중간 1)
+            bool tk = touchedEnd[k] || touchedStart[k];
+            for (int q = 0; q < pk.Count; q++)
+            {
+                outp.Add(pk[q]);
+                fromBand.Add(isBand || tk);
+                prot.Add((q == pk.Count - 1 && protEnd[k]) || (q == 0 && protStart[k]));
+            }
+        }
+        int cleaned = CleanBandRing(outp, fromBand, prot, winC);
+        if (cleaned > 0) JoinDebug?.Invoke($"  링 {edge} 작은 꼬임 고침 {cleaned}");
+        return outp;
+    }
+
+    /// <summary>★[v103.1.15 · 무작위 시험 1020] 이은 링의 작은 꼬임 고치기 — 띠 토막 점이 든 자리만.
+    /// <para>①한 직선 위에서 되짚는 뾰족점(앞뒤 변이 2° 안에서 거꾸로)을 뺀다 ②둘레 <paramref name="window"/> 안에서 엇갈리는 두 변이 있으면 그 사이 고리를 잘라 교차점으로 잇는다.</para>
+    /// <para>민 띠 토막은 «전역 링(w)»을 크게 밀어 만든다 — 둥근 모서리(현 다각형)와 곧은 변이 만나는 꼭짓점은 |Δ|·tan(3.75°/2)만큼 변을 따라 밀려
+    /// (직사각 라운드 판: Δ −29.6m → 0.97m) 띠가 그보다 짧은 변에서 끝나면 띠 끝이 이웃 버퍼 run과 겹쳐 되짚었다(링이 «안 단순»).
+    /// 띠 점이 없는 꼬임 · 큰 고리는 손대지 않는다(옹벽 단 계단 · 종전 기하 그대로).</para></summary>
+    private static int CleanBandRing(List<Point3> r, List<bool> band, List<bool> prot, double window)
+    {
+        static double Dd(Point3 p, Point3 q) => Math.Sqrt((q.X - p.X) * (q.X - p.X) + (q.Y - p.Y) * (q.Y - p.Y));
+        if (!band.Contains(true)) return 0;
+        // ★[설치 전 검토 2 · 낮음 7] 잘라 낼 고리가 링 둘레의 절반보다 작을 때만(작은 링에서 큰 쪽을 자르지 않게)
+        double perim = 0;
+        for (int i = 0; i < r.Count; i++) perim += Dd(r[i], r[(i + 1) % r.Count]);
+        window = Math.Min(window, 0.5 * perim);
+        int fixes = 0;
+        double sinTol = Math.Sin(2.0 * Math.PI / 180);
+        for (int guard = 0; guard < 400; guard++)
+        {
+            int n = r.Count;
+            if (n < 4) break;
+            bool changed = false;
+            // ① 되짚는 뾰족점
+            for (int j = 0; j < n && !changed; j++)
+            {
+                int a = (j - 1 + n) % n, c = (j + 1) % n;
+                if (!(band[a] || band[j] || band[c])) continue;
+                if (prot[a] || prot[j] || prot[c]) continue;                  // 옹벽 단 이음 끝 — 손대지 않는다
+                double ux = r[j].X - r[a].X, uy = r[j].Y - r[a].Y, vx = r[c].X - r[j].X, vy = r[c].Y - r[j].Y;
+                double lu = Math.Sqrt(ux * ux + uy * uy), lv = Math.Sqrt(vx * vx + vy * vy);
+                bool spike = lu < 1e-9 || lv < 1e-9;
+                if (!spike)
+                {
+                    double dot = ux * vx + uy * vy, cr = ux * vy - uy * vx;
+                    spike = dot < 0 && Math.Abs(cr) <= sinTol * lu * lv;
+                }
+                if (spike) { r.RemoveAt(j); band.RemoveAt(j); prot.RemoveAt(j); changed = true; fixes++; }
+            }
+            if (changed) continue;
+            // ② 둘레 window 안 엇갈림 — 띠 점이 든 고리만
+            for (int i = 0; i < n && !changed; i++)
+            {
+                int i1 = (i + 1) % n;
+                double acc = 0;
+                for (int s = 2; s < n - 1 && !changed; s++)
+                {
+                    int j = (i + s) % n, j1 = (j + 1) % n;
+                    acc += Dd(r[(i + s - 1) % n], r[j]);
+                    if (acc > window) break;
+                    if (!SegCross(r[i], r[i1], r[j], r[j1], out double px, out double py)) continue;
+                    bool inv = false, pr = false;
+                    for (int q = 0; q <= s + 1; q++) { inv |= band[(i + q) % n]; pr |= prot[(i + q) % n]; }
+                    if (!inv || pr) continue;                                       // 띠 점이 없거나 옹벽 단 이음 끝이 든 고리는 손대지 않는다
+                    // 점 i+1 .. j(s개)를 빼고 교차점을 i 다음에
+                    int start = i + 1, cnt = s;
+                    var X = new Point3(px, py, 0);
+                    if (start + cnt <= n)              // 안 넘어감(start = n이면 아래 — 넘어감 쪽)
+                    {
+                        r.RemoveRange(start, cnt); band.RemoveRange(start, cnt); prot.RemoveRange(start, cnt);
+                        r.Insert(start, X); band.Insert(start, true); prot.Insert(start, false);
+                    }
+                    else
+                    {
+                        int k1 = n - start, k2 = cnt - k1;
+                        r.RemoveRange(start, k1); band.RemoveRange(start, k1); prot.RemoveRange(start, k1);
+                        r.RemoveRange(0, k2); band.RemoveRange(0, k2); prot.RemoveRange(0, k2);
+                        r.Add(X); band.Add(true); prot.Add(false);
+                    }
+                    changed = true; fixes++;
+                }
+            }
+            if (!changed) break;
+        }
+        return fixes;
     }
 
     // ── NTS 유틸 ──

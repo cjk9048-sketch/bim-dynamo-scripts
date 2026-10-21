@@ -40,6 +40,9 @@ public static class SampleLineCommand
         ObjectId alignId = PickAlignment(db, ed, out string alignName);
         if (alignId.IsNull) return;
         log.AppendLine($"노선 '{alignName}'");
+        // ★★★[v103.2 · 계획 2-4] 면 — 종단이 쓴 면을 따른다(정지면이 바뀌었으면 그룹을 만들기 전에 멈춘다)
+        var surfsA = SectionCommand.FindSurfacesForAlignment(db, CivilApp.CivilApplication.ActiveDocument, alignId, ed, log, "단면검토선");
+        if (surfsA == null) return;
 
         // ── ① 측점 목록을 만든다(정체인 ∪ 꺾임점 ∪ 구배변화점 ∪ 수동)
         double interval = System.Math.Max(0.5, GradingSettings.XsecInterval);
@@ -102,8 +105,7 @@ public static class SampleLineCommand
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
-            var cdoc = CivilApp.CivilApplication.ActiveDocument;
-            var surfs = SectionCommand.FindSurfaces(db, cdoc);
+            var surfs = surfsA;
             var g = (CivilDb.SampleLineGroup)tr.GetObject(groupId, OpenMode.ForWrite);
             groupName = g.Name;
             foreach (CivilDb.SectionSource src in g.GetSectionSources())

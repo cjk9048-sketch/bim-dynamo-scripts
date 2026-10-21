@@ -1084,6 +1084,10 @@ public static class StationMarks
         }
         catch (Exception ex) { log?.AppendLine("   종단 옹벽 막대 실패 — " + ex.Message); }
 
+        // ★★★[v103.2 · 계획 2-5] 옹벽 폴리곤 안 — 번들 막대를 걷어 내고 종단이 쓴 면을 걸어 세운다(측점 수집과 같은 자)
+        try { WallFaceMarks.ApplyFromRecord(tr, db, al, new List<Mark>(), bars, null, log, out _); }
+        catch (Exception ex) { log?.AppendLine("   종단 옹벽 막대(최종면) 실패 — " + ex.Message); }
+
         // ② 가시설 — 터파기 번들. 수직 굴착만 막대가 된다(경사 터파기는 법면이라 막대가 아니다).
         try { FromExcavation(al, db, tr, null, log, bars); }
         catch (Exception ex) { log?.AppendLine("   종단 가시설 막대 실패 — " + ex.Message); }

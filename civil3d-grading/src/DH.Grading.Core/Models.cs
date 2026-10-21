@@ -213,6 +213,14 @@ public sealed class SlopeZone
         return ContainsFlared(t, flare, total);
     }
 
+    /// <summary>★[v103.1.15] 이 점의 <b>자 위 호길이</b> — <see cref="ContainsAt"/>과 같은 자 · 같은 셈(전이 띠가 쓴다).</summary>
+    public double RulerParamAt(double x, double y, IReadOnlyList<Point3> planB, double[] planCum)
+        => RefCum != null ? ParamOnRef(x, y) : GradingGeometry.ParamAt(planB, planCum, x, y);
+
+    /// <summary>★[v103.1.15] 이 구간의 자(<see cref="Ref"/> 또는 계획)와 그 누적 길이.</summary>
+    public (IReadOnlyList<Point3> Poly, double[] Cum) Ruler(IReadOnlyList<Point3> planB, double[] planCum)
+        => RefCum != null ? (_ref!, RefCum) : (planB, planCum);
+
     /// <summary>구간을 양쪽으로 <paramref name="flare"/>만큼 넓혀서 판정한다(랩 대응).
     /// <para>넓힌 폭이 둘레를 넘으면 <b>고리 전체</b>다 — 그때는 언제나 참.</para></summary>
     public bool ContainsFlared(double t, double flare, double total)
@@ -501,7 +509,7 @@ public sealed class SlopeZone
     }
 
     /// <summary>두 구간이 <b>같은 자</b>로 잰 것인가 — 둘 다 자가 없거나(계획 폴리곤), 자의 점이 전부 같다(1µm 안). 같은 자면 T0 · T1을 숫자로 바로 견줄 수 있다.</summary>
-    private static bool SameRuler(SlopeZone a, SlopeZone b)
+    internal static bool SameRuler(SlopeZone a, SlopeZone b)   // ★[v103.1.15] 전이 띠(ZoneBlend)도 쓴다
     {
         var ra = a.Ref; var rb = b.Ref;
         if (ra == null || rb == null) return ra == null && rb == null;
@@ -936,6 +944,13 @@ public sealed class GradingParams
     /// <summary>대소단(큰 평탄) 폭 (m, 기본 15).</summary>
     public double TerraceWidth { get; init; } = 15.0;
 
+    /// <summary>★★★[v103.1.15 · JACK 1020 «사면조건이 바뀐 부분의 경계가 엄청 깨져» · 결정 «고른 구간 안쪽 · 양끝 10m»]
+    /// <b>사면 구간 끝 전이 띠의 길이</b>(m) — 구배 · 소단만 다른 구간의 양끝 안쪽에서 링 거리를 서서히 섞는다(<c>ZoneBlend</c>).
+    /// <para>0이면 띠 없음(종전 — 링이 구간 끝에서 끊긴다). <b>−1 = 모름</b>(v12 이하 번들) — 기하는 0과 같고,
+    /// 세션 설정으로 되살릴 때만 기본값(10m)으로 바꾼다(다시 짓지 않은 옛 구역이 0으로 굳지 않게).</para>
+    /// <para>클래스 기본은 0 — 하네스 · 터파기 · 옛 번들은 종전 그대로. 새 도면의 10m는 <c>GradingSettings</c>가 준다.</para></summary>
+    public double ZoneBlendLength { get; init; }
+
     public void Validate()
     {
         if (CutBenchHeight <= 0) throw new ArgumentException("절토 단높이(CutBenchHeight)는 0보다 커야 합니다.");
@@ -953,5 +968,7 @@ public sealed class GradingParams
             if (TerraceInterval <= 0) throw new ArgumentException("대소단 수직 간격(TerraceInterval)은 0보다 커야 합니다.");
             if (TerraceWidth < 0) throw new ArgumentException("대소단 폭(TerraceWidth)은 0 이상이어야 합니다.");
         }
+        if (!(ZoneBlendLength == -1 || (ZoneBlendLength >= 0 && ZoneBlendLength <= 100)))
+            throw new ArgumentException("구배 전이 길이(ZoneBlendLength)는 0~100m(또는 옛 번들의 −1)여야 합니다.");
     }
 }

@@ -60,14 +60,19 @@ public static partial class WallDaylight
         /// <summary>그 조각들에서 고른 면 − 정지면의 최대(조각 안 점 · 뒤집은 셈에선 부호도 거울) — 1cm 안이면 옹벽이 사실상 안 드러난다(넓이만 보면 정지면과 원지반이
         /// mm로 어긋난 부스러기가 넓이를 채워 관문을 빠져나간다 — 하네스 S142 음성).</summary>
         public double NonPlanMaxDz;
+        /// <summary>★★[v103.2 · 계획 2-2] <b>뚜껑</b> — 폴리곤 안에서 규칙이 원지반(G)을 고른 조각에 무게중심이 든 다듬은 Zone 삼각형(세계 좌표 · Zone과 같은 객체 값).
+        /// 종단 · 횡단의 «옹벽이 든 순수면»은 최종면에서 이것을 뺀다(옹벽 뒤에 되살아난 원지반 — 계획선은 옹벽이 원지반과 만나는 자리에서 끝난다).
+        /// 삼각형 · 판정 · 높이 예산은 안 바꾼다(읽기만 한다). 판정 3이면 null.</summary>
+        public List<Tri>? CapTris;
         public string TierText => Tier == 1 ? "정확" : Tier == 2 ? "⚠거의" : "⚠못 함";
 
-        /// <summary>★[v102.0 · 성토] 뒤집은 셈의 결과를 되뒤집는다 — <b>z를 가진 필드는 여기 전부</b>(Zone · Untouched).
+        /// <summary>★[v102.0 · 성토] 뒤집은 셈의 결과를 되뒤집는다 — <b>z를 가진 필드는 여기 전부</b>(Zone · Untouched · CapTris).
         /// 나머지는 수·넓이·XY 상자·|차|(높이가 든 글 EdgeAt·ZOneAt은 셈 안에서 되뒤집어 적었다).</summary>
         internal void NegateZ()
         {
             if (Zone != null) Zone = NegZ(Zone, "zone");
             Untouched = NegZ(Untouched, "untouched");
+            if (CapTris != null) CapTris = NegZ(CapTris, "cap");
         }
         public string Summary => string.Format(CultureInfo.InvariantCulture,
             "판정 {0}({1}) · 정지면 {2}면 중 손댐 {3}(Civil이 고칠 면 곁 {4}) · 고정 점 {5} · 미리 맞춤(정지면 꼭짓점) {6}(최대 {7:F1}µm · 비틈 {8:F3}mm · 거절 {37})"
@@ -388,6 +393,7 @@ public static partial class WallDaylight
         var prepU = PreparedGeometryFactory.Prepare(U);
         var pz = new Polygonizer(); pz.Add(noded);
         var raw = new List<Tri>();
+        var capPieces = new List<Geometry>();                            // ★[v103.2] 원지반(G)을 고른 조각(지역 좌표) — 뚜껑
         var outsideZ = new Dictionary<(double, double), double>();       // 폴리곤 밖 조각(= 정지면)에 닿는 꼭짓점 → 정지면 높이
         double Rule(double x, double y, out bool ok)
         {
@@ -404,6 +410,7 @@ public static partial class WallDaylight
             bool inPoly = prepPoly.Contains(ip);
             // 고를 면
             TriSet src; int tIdx;
+            bool capPiece = false;    // ★[v103.2] 뚜껑 조각 — G를 골랐고 정지면과 0.1mm 넘게 다르다(동점에서 부동소수로 G가 골린 정지 밖 원지반 조각은 뚜껑이 아니다 — 1020 m0: 183㎡)
             int tp = P.At(ip.X, ip.Y);
             if (tp < 0) { R.UnknownPieces++; R.UnknownArea += f.Area; continue; }
             if (!inPoly) { src = P; tIdx = tp; R.PiecesPlan++; }
@@ -416,7 +423,7 @@ public static partial class WallDaylight
                 double m = Math.Min(zw, zg);
                 if (zp >= m) { src = P; tIdx = tp; }
                 else if (zw <= zg) { src = W; tIdx = tw; R.NonPlanArea += f.Area; R.NonPlanMaxDz = Math.Max(R.NonPlanMaxDz, m - zp); }
-                else { src = G; tIdx = tg; R.NonPlanArea += f.Area; R.NonPlanMaxDz = Math.Max(R.NonPlanMaxDz, m - zp); }   // m − 정지면 > 0(고른 면이 정지면 위)
+                else { src = G; tIdx = tg; R.NonPlanArea += f.Area; R.NonPlanMaxDz = Math.Max(R.NonPlanMaxDz, m - zp); capPiece = m - zp > 1e-4; }   // m − 정지면 > 0(고른 면이 정지면 위)
             }
             Geometry trs;
             try { trs = NetTopologySuite.Triangulate.Polygon.ConstrainedDelaunayTriangulator.Triangulate(f); }
@@ -432,6 +439,7 @@ public static partial class WallDaylight
             }
             if (Math.Abs(fa - f.Area) > 1e-9 + 1e-9 * f.Area) { R.AreaMis++; continue; }
             raw.AddRange(local);
+            if (capPiece) capPieces.Add(f);
             if (!inPoly) foreach (var t in local) foreach (var q in new[] { t.A, t.B, t.C }) outsideZ.TryAdd((q.X, q.Y), q.Z);
             // 규칙 대조 — 안 점 + 꼭짓점마다 안쪽으로 25% 들어간 점(조각 안인 것만)
             if (inPoly)
@@ -512,6 +520,21 @@ public static partial class WallDaylight
         double rest = R.PreSnapDz + R.RuleMax + R.ZOneMax + DebugRestAdd;
         R.Zone = CivilSafeMesh.MakeZone(raw, fixedW.Values, out var cr, wallTol2: 1e-2 - rest, wallCap: CivilSafeMesh.ForcedCap - rest);
         R.Clean = cr;
+        // ⑦-a ★[v103.2 · 계획 2-2] 뚜껑 — 다듬은 Zone 삼각형 가운데 무게중심이 G를 고른 조각 안인 것(다듬기가 조각 경계를 넘긴 양은 m4가 잰다)
+        if (R.Zone != null)
+        {
+            R.CapTris = new List<Tri>();
+            if (capPieces.Count > 0)
+            {
+                var capU = NetTopologySuite.Operation.Union.CascadedPolygonUnion.Union(capPieces);
+                var capLoc = new NetTopologySuite.Algorithm.Locate.IndexedPointInAreaLocator(capU);
+                foreach (var t in R.Zone)
+                {
+                    var cc = new Coordinate((t.A.X + t.B.X + t.C.X) / 3 - ox, (t.A.Y + t.B.Y + t.C.Y) / 3 - oy);
+                    if (capLoc.Locate(cc) == Location.Interior) R.CapTris.Add(t);
+                }
+            }
+        }
         R.HeightLimit = cr.OverForced ? CivilSafeMesh.ForcedCap : 1e-2;
         R.MsClean = sw.ElapsedMilliseconds;
         // ⑦-b ★[검토 0929 v101 · 낮음 7] 이음매 — 손댄 삼각형과 안 댄 삼각형이 나누는 변은 합성에 <b>비트 그대로</b> 한 번 있어야 한다
@@ -571,7 +594,7 @@ public static partial class WallDaylight
         if (R.Fail.Length > 0) { tier = 3; why.Add(R.Fail); }
         R.Tier = tier;
         if (why.Count > 0) R.Fail = string.Join(" · ", why);
-        if (tier == 3) R.Zone = null;
+        if (tier == 3) { R.Zone = null; R.CapTris = null; }
         return R;
     }
 

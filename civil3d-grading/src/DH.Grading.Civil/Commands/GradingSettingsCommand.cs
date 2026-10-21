@@ -26,7 +26,7 @@ public sealed class GradingSettingsCommand
             doc.Editor.WriteMessage(
                 // ★[JACK 0910] [값 저장]은 없어졌다 — 친 값은 바로 반영되고, 만들기는 그 칸 안에 있다.
                 "\n[정지 설정] 오른쪽 <계획부지 정지> 창에서 값을 고치면 바로 반영됩니다 — [계획부지생성하기]로 만드세요."
-              + "\n  · 좌표계·표시 옵션과 옹벽 형태는 리본 [기타] → [기타 설정](DHMISCSET)으로 옮겼습니다.");
+              + "\n  · 좌표계·표시 옵션은 리본 [기타] → [기타 설정](DHMISCSET)에 있습니다. 옹벽 형태는 이 창의 «옹벽» 묶음에 있습니다.");
         }
         catch { }
     }
@@ -60,8 +60,7 @@ public sealed class MiscSettingsCommand
         var dlg = new MiscSettingsDialog();
         AcadApp.ShowModalWindow(dlg); // [저장] 시 GradingSettings에 반영됨
         // ★이 화면은 정지 <b>제원</b>(단높이·소단·구배)을 안 건드리므로 도킹창 값을 되채울 것이 없다.
-        //   ★[JACK 0910] 단, <b>옹벽 형태</b>가 이리로 왔다 — 그것은 값 칸이 아니라
-        //     정지 창의 <b>예시 그림</b>에 나타나므로, 맨 아래에서 그림만 다시 그리게 한다.
+        //   ★[v103.3] 옹벽 형태는 도킹바로 옮겼다 — 맨 아래 그림 다시 그리기는 해롭지 않아 둔다.
         if (dlg.DialogResult != true) return;
 
         // [JACK 0731 — 좌표계 연동] 사용자가 좌표계를 **실제로 바꿨을 때만** 도면 좌표계에 반영(MAPCSASSIGN 상당)
@@ -173,6 +172,8 @@ public sealed class MiscSettingsCommand
             //   → <b>양쪽 다</b> 재작성한다. 끄든 켜든 가시성을 건드렸으면 반드시 뒤따라야 한다.
             GradingBuilder.SetSurfaceVisible(tr, SectionCommand.PurePadSurfaceBase, false);          // 순수면은 늘 숨김
             GradingBuilder.SetSurfaceVisible(tr, SectionCommand.PurePadSurfaceBase + "이전", false);
+            GradingBuilder.SetSurfaceVisible(tr, PureWithWallsBuilder.Name, false);                  // ★[v103.2] 옹벽면도 순수면이다 — 늘 숨김
+            GradingBuilder.SetSurfaceVisible(tr, WallExcavBuilder.Name, false);                      // ★[v103.3] 옹벽 터파기면도 늘 숨김
             // ★★[v32.7] <b>둘만이 아니라 전부.</b> 숨김은 도면의 <b>모든</b> 지표면에 붙으므로
             //   되살리는 것도 전부여야 한다(둘만 챙겼더니 나머지에 느낌표가 남았다).
             // ★[v103.1.5 · 검토 1012 중간 1] 한 일을 버리지 않는다 — 못 굳힌 XML 면이 있으면 로그와 명령줄에 남긴다(종전엔 반환 글을 아무도 안 받았다)
@@ -235,8 +236,7 @@ public sealed class MiscSettingsCommand
         }
         catch (System.Exception ex) { jobS.Done(false, $"지표면 재작성 중 예외 — {ex.GetType().Name}: {ex.Message}"); }
 
-        // ★[JACK 0910] 옹벽 형태가 이 창으로 옮겨 왔다 — 정지 창의 <b>예시 그림</b>이 그 값을 그린다.
-        //   여기서 안 알리면 창은 <b>옛 옹벽 모양</b>을 계속 보여 준다(§78 "화면을 옮기면 사슬도 옮겨라").
+        // ★[v103.3] 옹벽 형태는 도킹바로 옮겼다(그 콤보가 그림을 바로 다시 그린다) — 이 줄은 해롭지 않아 둔다.
         //   ★<c>Refresh</c>가 아니라 <c>RedrawExample</c>이다 — 고치다 만 숫자를 지우지 않기 위해서다.
         try { GradingPalette.RedrawExample(); } catch { }
     }

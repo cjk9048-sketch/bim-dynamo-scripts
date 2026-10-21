@@ -25,7 +25,7 @@ public static class GradingSettings
     /// <b>같은 번호를 단 빌드가 여러 개</b>가 되어, 어느 것이 깔렸는지 물으면 답할 수가 없었다.</para>
     /// <para><c>x.0</c> = 화면·명령이 바뀌어 <b>사용자가 다르게 일하게</b> 되는 판 ·
     /// <c>x.y</c> = 같은 화면에서 결함을 고친 판.</para></summary>
-    public const string Version = "v103.1.14 (2026-10-19)";
+    public const string Version = "v103.3.3 (2026-10-21)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -92,6 +92,10 @@ public static class GradingSettings
     public static bool MountainTerrace = false;     // 계단식 산지 적용(산지전용허가법) — 수직 누적 15m마다 대소단
     public static double TerraceInterval = 15.0;    // 대소단 수직 간격 (m) — 법정 15m
     public static double TerraceWidth = 15.0;       // 대소단 폭 (m) — 법정 15m
+    /// <summary>★★★[v103.1.15 · JACK 1020 «고른 구간 안쪽 · 양끝 10m · 정지 창에서 바꿈»] 사면 구간 끝 전이 띠 길이(m) — 구배 · 소단을 바꾼 구간의 양끝 안쪽에서
+    /// 링이 서서히 바뀐다(<c>GradingParams.ZoneBlendLength</c> · Core <c>ZoneBlend</c>). 0이면 끊어서 바뀜(종전 — 경계가 깨질 수 있다). 번들 v13에 도면마다 남는다.</summary>
+    public const double ZoneBlendDefault = 10.0;
+    public static double ZoneBlendLength = ZoneBlendDefault;
 
     // ★★★[검토 0911] <b>계획폴리곤 안쪽을 평탄화하지 않는다</b>(가상 계획폴리곤 합성용 · 화면엔 안 낸다).
     //   <para><c>GradingParams.NoPlatform</c>으로 넘어간다. 종전엔 이 필드가 <b>아예 없어서</b>
@@ -783,6 +787,9 @@ public static class GradingSettings
         MountainTerrace = p.MountainTerrace;
         TerraceInterval = p.TerraceInterval;
         TerraceWidth = p.TerraceWidth;
+        // ★[v103.1.15 · 계획 3판 §3 · 재검토 중간 4] 옛 번들(v12 이하)은 −1(모름) — 앞 도면 값을 물려받지 않게 기본값(10m)으로.
+        //   그 도면의 옛 구역은 번들의 −1로 다시 떠(띠 없음 = 옛 면과 같은 기하), 다음 재생성부터 이 값으로 고쳐진다.
+        ZoneBlendLength = p.ZoneBlendLength >= 0 ? p.ZoneBlendLength : ZoneBlendDefault;
     }
 
     /// <summary>[재시작 보존 0805] 사면형상(직각/라운드)의 레지스트리 키 — HKCU라 사용자별·설치 무관.
@@ -889,6 +896,7 @@ public static class GradingSettings
         TerraceInterval = TerraceInterval,
         TerraceWidth = TerraceWidth,
         NoPlatform = NoPlatform,        // ★[검토 0911] 안 실으면 <b>여기서 조용히 떨어진다</b>(S113이 지킨다)
+        ZoneBlendLength = ZoneBlendLength,   // ★[v103.1.15] 사면 구간 끝 전이 띠
         // ★[JACK 0820] 단높이 변경 규칙 — 목록은 **복사해서** 넘긴다. 참조를 넘기면 재생성 때
         //   Params와 Settings가 같은 목록을 가리켜, 한쪽을 지우면 다른 쪽도 조용히 비어 버린다.
         CutBenchSteps = new System.Collections.Generic.List<(int, double)>(CutBenchSteps),
