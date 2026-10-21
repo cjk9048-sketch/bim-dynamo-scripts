@@ -165,6 +165,9 @@ public sealed class CheckOverlapCommand : IExternalCommand
                     // 고치기 단추에 마우스를 올린 동안 고친 뒤의 모양(JACK 2026-10-19 «갖다 대면 변환 후의 모습») — 모델은 바꾸지 않는다.
                     if (model.Fix != null && scene != null)
                         model.Preview = (key, cutWinner) => PreviewCut(doc, found, scene, key, cutWinner, journal);
+                    // 작성오류도(JACK 2026-10-20) — 시험으로 자르는 순서를 바꿔 읽고 되돌린다.
+                    if (model.FixReversed != null && scene != null)
+                        model.PreviewReversed = key => PreviewReversed(doc, found, scene, key, journal);
                     if (scene != null)
                     {
                         model.MemberNames = scene.Names;
@@ -182,9 +185,9 @@ public sealed class CheckOverlapCommand : IExternalCommand
                     if (swallowed > 0) model.Notes.Add($"잘린 쪽이 남는 쪽 안에 다 들어가 남지 않은 쌍 {swallowed}개 — 같은 자리에 겹쳐 그린 부재인지 확인(결과표)");
                     // 결합 방향: 보이기만 하는 줄(사람이 정함 · 참고) · 닿기만 한 결합 · 재지 못한 쌍은 수만 알린다.
                     int human = found.Reversed.Count(r => r.Human), same = found.Reversed.Count(r => r.SameRank && !r.Human);
-                    if (human > 0) model.Notes.Add($"사람이 정한 결합 {human}쌍은 기준과 달라도 그대로 둠(결합 방향 목록의 «사람이 정함»)");
-                    if (same > 0) model.Notes.Add($"같은 순위끼리 카테고리 차례만 반대인 결합 {same}쌍(참고)");
-                    if (found.ReversedUnmeasured > 0) model.Notes.Add($"바뀔 체적을 재지 못한 결합 방향 {found.ReversedUnmeasured}쌍(일지)");
+                    if (human > 0) model.Notes.Add($"사람이 정한 결합 {human}쌍은 기준과 달라도 그대로 둠(작성오류 목록의 «Manual»)");
+                    if (same > 0) model.Notes.Add($"같은 순위끼리 카테고리 차례만 반대인 결합 {same}쌍(작성오류 목록의 «Info»)");
+                    if (found.ReversedUnmeasured > 0) model.Notes.Add($"바뀔 체적을 재지 못한 작성오류 {found.ReversedUnmeasured}쌍(일지)");
                     if (mode == OverlapResultView.Mode.Joined)
                     {
                         if (found.ReversedSwitched > 0) model.Notes.Add($"기준대로 결합 순서를 바꾼 쌍 {found.ReversedSwitched}개 — 되돌리기는 Ctrl+Z");
@@ -674,6 +677,52 @@ public sealed class CheckOverlapCommand : IExternalCommand
             journal.Note($"미리보기 오류 {key}\t" + ex);
             return (null, -1);
         }
+    }
+
+    // 작성오류 미리보기(JACK 2026-10-20 «기준대로 바꾸기 · 사용자 모드 두 단추에 마우스를 올리면 결합 후로»): 시험 트랜잭션에서 자르는 순서를 바꾸고
+    // Regenerate → 두 부재 칸의 겉면을 읽고(MeshesNow — 장면 자료는 바꾸지 않는다) → 되돌린다(MeasureReversed 의 시험과 같은 꼴 · 바깥 묶음 안에 남는 것 없음).
+    // 못 하면 빈 사전(창이 한 줄 알린다). 일지에 한 줄(걸린 시간 · 칸 · 세모 · 못 한 까닭).
+    private static Dictionary<int, MeshData> PreviewReversed(Document doc, OverlapChecker.Found found, OverlapScene.Data scene, int key, Journal journal)
+    {
+        var shapes = new Dictionary<int, MeshData>();
+        if (key < 0 || key >= found.Reversed.Count) return shapes;
+        var r = found.Reversed[key];
+        var watch = Stopwatch.StartNew();
+        string got;
+        using var tx = new Transaction(doc, "DH 모델 검증 — 작성오류 미리보기");
+        try
+        {
+            if (doc.GetElement(r.Keep) is not Element keep || doc.GetElement(r.Cutter) is not Element cutter) got = "부재를 찾을 수 없음";
+            // 고치기(FixLeanOrder)가 거절할 부재는 바꾼 모양을 보이지 않는다(설치 전 검토 낮음 3 — «미리 보였는데 눌러 보니 못 바꿈» 막기).
+            else if ((FormulaAutoFill.WhyNotEditable(doc, keep) ?? FormulaAutoFill.WhyNotEditable(doc, cutter)) is { } blocked) got = "못 바꿈: " + blocked;
+            else if (tx.Start() != TransactionStatus.Started) got = "시험 트랜잭션을 열 수 없음";
+            else
+            {
+                var options = tx.GetFailureHandlingOptions();
+                options.SetFailuresPreprocessor(new OverlapChecker.QuietFailures());
+                options.SetClearAfterRollback(true);
+                tx.SetFailureHandlingOptions(options);
+                if (!JoinGeometryUtils.IsCuttingElementInJoin(doc, keep, cutter)) JoinGeometryUtils.SwitchJoinOrder(doc, keep, cutter);
+                doc.Regenerate();
+                if (!JoinGeometryUtils.AreElementsJoined(doc, keep, cutter) || !JoinGeometryUtils.IsCuttingElementInJoin(doc, keep, cutter)) got = "자르는 순서를 바꾸지 못함";
+                else
+                {
+                    foreach (var (at, mesh) in OverlapScene.MeshesNow(doc, scene, new[] { r.Keep, r.Cutter })) shapes[at] = mesh;
+                    got = $"칸 {shapes.Count} · 세모 {shapes.Values.Sum(m => m.Triangles)}";
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            shapes.Clear();
+            got = "오류: " + ex.Message;
+        }
+        finally
+        {
+            try { if (tx.HasStarted() && !tx.HasEnded()) tx.RollBack(); } catch { }
+        }
+        journal.Note($"작성오류 미리보기 {key}\t{r.Cutter.Value} → {r.Keep.Value} 이 자르게\t{got}\t{watch.ElapsedMilliseconds} ms");
+        return shapes;
     }
 
     /// <summary>

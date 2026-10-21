@@ -203,6 +203,7 @@ public static class OverlapSplitter
                     }
                 if (workset is { } ws && copy.get_Parameter(BuiltInParameter.ELEM_PARTITION_PARAM) is { IsReadOnly: false } part) part.Set(ws);
                 PlaceStamp.Set(copy, stamp);
+                MemberNamer.MarkPiece(copy, el);   // 부재 이름(R53b): 다음 [완료]에서 조각은 새 번호 · 원래 부재를 남긴다(사람이 복사한 부재와 가름)
                 // 복사본의 «마크»를 원래 값으로 — Revit 은 복사할 때 마크를 바꿀 수 있다(나눈 조각도 도면 부호는 원래 부재의 것 · 엑셀 거푸집 줄의 부호 — R47 revit-verify L1).
                 if (copy.get_Parameter(BuiltInParameter.ALL_MODEL_MARK) is { IsReadOnly: false } markParam && FormworkReader.MarkOf(copy) != mark) markParam.Set(mark);
                 pieces.Add(copy);

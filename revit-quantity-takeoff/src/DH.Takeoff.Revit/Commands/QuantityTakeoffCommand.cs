@@ -377,6 +377,20 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         if (done.Review != null)
             text.AppendLine($"산출식 확인 창: {done.Review.Items}건(부재 {done.Review.Elements}개) 가운데 식을 넣은 것 {done.Review.Saved}건" +
                             (done.Review.Failed.Count > 0 ? $" · 적지 못한 것 {done.Review.Failed.Count}건" : ""));
+        if (done.Names is { } names)
+        {
+            int renamed = names.Fresh + names.Copies + names.Duplicates + names.Prefixed;
+            var why = new List<string>();
+            if (names.Fresh > 0) why.Add($"새 부재 {names.Fresh}");
+            if (names.Copies > 0) why.Add($"복사본 · 나눈 조각 {names.Copies}");
+            if (names.Duplicates > 0) why.Add($"같은 이름이 있던 부재 {names.Duplicates}");
+            if (names.Prefixed > 0) why.Add($"부위가 바뀌어 앞 글자를 바꾼 부재 {names.Prefixed}");
+            text.AppendLine($"부재 이름({MemberNames.Param}): 새로 붙임 {renamed}개" + (why.Count > 0 ? "(" + string.Join(" · ", why) + ")" : "") + $" · 그대로 {names.Kept}개" +
+                            (names.Locked > 0 ? $" · ★ 고칠 수 없어 그대로 둔 부재 {names.Locked}개(그룹 안 · 다른 사용자가 편집 중 — 이름이 없으면 엑셀에 유형 이름)" : "") +
+                            (names.Failed.Count > 0 ? $" · ★ 적지 못한 부재 {names.Failed.Count}개(일지)" : "") +
+                            (names.NoParam > 0 ? $" · ★ 이름 칸이 없는 부재 {names.NoParam}개(같은 이름의 다른 칸이 있거나 칸을 만들지 못함 — 엑셀에 유형 이름)" : ""));
+        }
+        if (done.NamesProblem.Length > 0) text.AppendLine("★ 부재 이름을 다 붙이지 못했습니다: " + done.NamesProblem + " — 엑셀의 이름 없는 줄은 유형 이름입니다.");
         if (done.Formwork is { Committed: true } fw && done.FormworkProblem.Length == 0)
             text.AppendLine($"거푸집 속성: 부재 {fw.Elements}개에 종류별 넓이(지침 내역적용수량 이름) · 합계 {fw.Total.ToString("#,##0.00", CultureInfo.InvariantCulture)} ㎡" +
                             (fw.Failed.Count > 0 ? $" · 적지 못한 부재 {fw.Failed.Count}개({fw.Failed[0]})" : "") +
@@ -461,6 +475,8 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         public FormworkSheetData? Sheet;
         public FormworkObjects.Outcome? Objects;  // 거푸집 객체(R44)
         public string ObjectsProblem = "";         // 거푸집 객체를 만들지 못한 까닭("" = 없음)
+        public MemberNamer.Outcome? Names;         // 부재 이름(R53b)
+        public string NamesProblem = "";           // 부재 이름을 다 붙이지 못한 까닭("" = 없음)
         public CalcPlan? Plan;
         public XlsxBook? Book;              // 지은 엑셀(쓰기는 창을 닫아 그룹이 모델에 남은 뒤에 — revit R42 A1)
         public string ExcelTarget = "";     // 고른 저장 위치("" = 고르지 않았다)
@@ -537,6 +553,23 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
             session.Note($"완료\t산출식 확인 창: 항목 {done.Review.Items}(부재 {done.Review.Elements}) · 적음 {done.Review.Saved} · 커밋 {done.Review.Commits} · 못 적음 {done.Review.Failed.Count}");
         }
 
+        // ②-1 부재 이름(R53b — SB01 · WA01 …): 산출식 다음, 거푸집 시트 · 엑셀 전에(두 시트 줄의 부호가 이름이다). 못 붙여도 엑셀은 이어서 만든다
+        // (이름 없는 부재는 전처럼 마크 · 유형 이름 — 알림 창에 까닭). 바뀐 부재만 적는다 — 다시 [완료]해도 그대로인 이름은 건드리지 않는다.
+        MemberNamer.Outcome? named = null;
+        problem = view.RunLocked(() => named = MemberNamer.Assign(doc, editor));
+        done.Names = named;
+        done.NamesProblem = problem.Length > 0 ? problem : named?.Problem ?? "";
+        if (named?.ParametersEnsured == true || problem.Length > 0) session.Committed();   // 오류로 끝났어도 칸 만들기는 커밋됐을 수 있다
+        if (named?.Committed == true) session.Committed();
+        session.Note(named != null ? MemberNamer.Note(named) : "완료\t부재 이름\t오류: " + problem);
+        // 이름 단계가 오류로 끝났으면 거푸집 줄도 모델에 남은 이름(앞선 [완료]의 것)으로 — 콘크리트 줄은 모델에서 읽는다(두 시트가 같은 이름 · revit-verify R53b L).
+        var names = named?.Names;
+        if (names == null)
+        {
+            try { names = MemberNamer.ReadNames(doc, editor.Members.Select(m => m.Id)); }
+            catch (Exception ex) { session.Note("완료\t부재 이름 다시 읽기 오류\t" + ex.Message); }
+        }
+
         // ③ 거푸집 속성(② 에서 잰 것 — [완료]는 ② 에만 있어 늘 있다). 적지 못해도 엑셀은 이어서 만든다(알림 창에 까닭을 적는다).
         if (view.Board is { } board)
         {
@@ -559,7 +592,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
                              $") · 못 옮김 {written.StaleLeft.Count}" +
                              (written.StaleLeft.Count > 0 ? "(Id " + string.Join(",", written.StaleLeft.Take(12)) + (written.StaleLeft.Count > 12 ? " …" : "") + ")" : "") +
                              (problem.Length > 0 ? " · 오류: " + problem : ""));
-            try { done.Sheet = SheetData(board, editor); }
+            try { done.Sheet = SheetData(board, editor, names); }
             catch (Exception ex) { session.Note("완료\t거푸집 시트를 짓지 못함\t" + ex); done.FormworkProblem += (done.FormworkProblem.Length > 0 ? " · " : "") + "거푸집 시트를 짓지 못함: " + ex.Message; }
 
             // 거푸집 객체(R44): 시트를 짓지 못했으면 만들지 않는다(판은 엑셀 줄과 같은 단위다). 못 만들어도 엑셀은 이어서 만든다(알림 창에 까닭).
@@ -761,10 +794,11 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
 
     // 거푸집 시트에 실을 것: 부위 · 중분류는 창이 알고 있는 지금 값(부위가 비었으면 산출서가 붙이는 자동 이름), 같은 거푸집 차례 안의 부위 차례는 「부위」 목록의 차례.
     // 중분류는 줄에 적지 않는다(R47 — 2D 거푸집 줄에는 위치가 없다) · 밑면 잇기와 거푸집 객체의 중분류 칸에만 쓴다.
-    private static FormworkSheetData SheetData(FormworkBoard board, PickEditor editor)
+    // names = [완료]가 붙이고 되읽은 부재 이름(R53b — 줄의 부호 · null 이면 전처럼 마크 · 유형 이름).
+    private static FormworkSheetData SheetData(FormworkBoard board, PickEditor editor, IReadOnlyDictionary<long, string>? names = null)
     {
         var (placeOf, partOrder) = Places(board.Results, editor);
-        return FormworkSheet.Build(board.Results, board.Options, placeOf, partOrder);
+        return FormworkSheet.Build(board.Results, board.Options, placeOf, partOrder, names == null ? null : id => names.GetValueOrDefault(id, ""));
     }
 
     // 거푸집 시트 · ② 의 판(R48 — 3D 의 판이 엑셀 줄과 같은 한 장이게 같은 함수를 쓴다): 부재 Id → (부위 — 비었으면 산출서의 자동 이름, 중분류)는
@@ -805,7 +839,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
 
     // [수량산출] 시작의 빠른 모델 검증(R54 — 인터뷰 «먼저 빠르게 검사 · 알림만» · revit-verify 계획 H4): 겹침(15 초 한도) + 결합 방향(트랜잭션 없이 닿기만 한
     // 결합을 거른 수). 모델은 바꾸지 않는다. 걸려도 계속한다 — ① 위 띠의 칩과 ④ 엑셀 «내보냄» 메모가 같은 글을 쓴다(① · ② 는 모양을 안 바꾼다 — 다시 재지 않음).
-    // 결합 방향을 Revit 의 결합으로 못 가르는 쌍(잘린 쪽이 벽 · 바닥)은 «최대»로 센다. 돌려주는 값 = «모델 검증: 겹침 n쌍 · 결합 방향 m쌍»("" = 걸린 것 없음).
+    // 결합 방향을 Revit 의 결합으로 못 가르는 쌍(잘린 쪽이 벽 · 바닥)은 «최대»로 센다. 돌려주는 값 = «모델 검증: 겹침오류 n쌍 · 작성오류 m쌍»("" = 걸린 것 없음).
     private static string QuickModelCheck(Document doc, Session session)
     {
         var watch = Stopwatch.StartNew();
@@ -818,9 +852,9 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
             var (sure, most) = OverlapChecker.QuickReversed(doc, targets, found);
             var parts = new List<string>();
             if (found.Pairs.Count > 0)
-                parts.Add($"겹침 {found.Pairs.Count}쌍{(found.TimedOut ? " 이상" : "")}(중복 {FormulaDecomposer.RoundQuantity(found.TotalM3).ToString("#,##0.00", CultureInfo.InvariantCulture)} m³)");
-            else if (found.TimedOut) parts.Add("겹침은 끝까지 못 봄(15초)");
-            if (most > 0) parts.Add(most > sure ? $"결합 방향 {sure}쌍(최대 {most}쌍)" : $"결합 방향 {sure}쌍");
+                parts.Add($"겹침오류 {found.Pairs.Count}쌍{(found.TimedOut ? " 이상" : "")}(중복 {FormulaDecomposer.RoundQuantity(found.TotalM3).ToString("#,##0.00", CultureInfo.InvariantCulture)} m³)");
+            else if (found.TimedOut) parts.Add("겹침오류는 끝까지 못 봄(15초)");
+            if (most > 0) parts.Add(most > sure ? $"작성오류 {sure}쌍(최대 {most}쌍)" : $"작성오류 {sure}쌍");
             session.Note($"모델 검증(빠른)\t대상 {targets.Count} · 겹침 {found.Pairs.Count}{(found.TimedOut ? "(시간 한도)" : "")} · 결합 방향 {sure}~{most} · 닿기만 해서 뺌 {found.Touching}" +
                          $" · 사람이 정함 {found.Reversed.Count(r => r.Human)} · 참고 {found.Reversed.Count(r => r.SameRank && !r.Human)}\t찾기 {findMs} ms · 모두 {watch.ElapsedMilliseconds} ms");
             foreach (var r in found.Reversed.Where(r => r.Counts).Take(30)) session.Note("  " + OverlapChecker.ReversedLine(r));
@@ -1013,7 +1047,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
 
     // 나중에 치는 부재(중간슬래브 · 트라프 · 헌치 · 받침 …)가 결합에서 구조체를 깎은 곳의 알림 — ② 위 띠와 [완료] 알림 창이 같이 쓴다.
     private static string LaterCutsNote(int count) =>
-        $"나중에 치는 부재가 구조체를 깎은 결합 {count}곳 — 그 자리 벽이 끊기고 홈 둘레만큼 더 셀 수 있습니다. [모델 검증]의 «결합 방향»에서" +
+        $"나중에 치는 부재가 구조체를 깎은 결합 {count}곳 — 그 자리 벽이 끊기고 홈 둘레만큼 더 셀 수 있습니다. [모델 검증]의 «작성오류»에서" +
         "([기준대로 바꾸기] 또는 [모두 기준대로]) 구조체가 자르게 바뀝니다(그 뒤 다시 [수량산출]).";
 
     // ② 의 상태를 짓는다: 모델의 콘크리트 전부(산출식 · 거푸집 면 확인과 같은 거르기)를 재고, 대응표를 건다.

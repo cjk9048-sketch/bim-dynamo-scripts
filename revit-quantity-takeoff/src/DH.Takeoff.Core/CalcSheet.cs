@@ -162,12 +162,14 @@ public sealed class CalcRow
     public bool OneLine { get; set; }          // 2D 가 부호 없이 부위 전체를 한 줄로 적는 부위(보 · 기둥 · 계단 · 턱 · 받침 …)
     public bool NoSub { get; set; }            // 위치 작은 제목을 달지 않는 부위(«중분류 생략»)
     public List<(double thickness, double bim)> Thickness { get; } = new();   // 이 줄 부재들의 두께(m)와 체적 — 바닥 · 기초만 · 모르면 없음
+    public List<string> Names { get; } = new();   // 이 줄 부재들의 이름(DH_부재명 — R53b · 이름으로 묶인 줄만, 아니면 비어 있다) — Shown 은 이것을 줄인 글
 }
 
 /// <summary>부재 하나의 기록 — 「부재 목록」과 「미산출 부재」 시트에 쓴다.</summary>
 public sealed class CalcElement
 {
     public long Id { get; set; }
+    public string Name { get; set; } = "";     // 부재 이름(DH_부재명 — R53b · "" = 없음)
     public string Category { get; set; } = "";
     public string Type { get; set; } = "";
     public string Zone { get; set; } = "";
@@ -243,8 +245,8 @@ public static class CalcSheet
                     if (subs) items.Add(new Sheet2D.Sub(zone.Key.Length > 0 ? zone.Key : "위치 없음"));
                     foreach (var r in zone.Where(r => !(r.OneLine && !r.Marked)))
                         items.Add(new Sheet2D.Line(r.Shown.Length > 0 ? r.Shown : r.Mark, "", r.Formula, r.Count, r.Note));
-                    foreach (var (formula, lineNote) in OneLineFormulas(zone.Where(r => r.OneLine && !r.Marked).ToList()))
-                        items.Add(new Sheet2D.Line("", "", formula, 1, lineNote));
+                    foreach (var (formula, lineNote, names) in OneLineFormulas(zone.Where(r => r.OneLine && !r.Marked).ToList()))
+                        items.Add(new Sheet2D.Line(names, "", formula, 1, lineNote));
                 }
             }
             items.Add(new Sheet2D.Total());
@@ -349,9 +351,11 @@ public static class CalcSheet
     }
 
     // 부호 없이 한 줄로 적는 부위(R49 — 2D 보 · 기둥 · 계단 …): 줄마다 «식 × n» 을 « + »로 이어 한 식(숫자가 많으면 나눔). 비고 = 부재 수 · Id.
-    private static List<(string formula, string note)> OneLineFormulas(IReadOnlyList<CalcRow> rows)
+    // 이름(R53b)이 있는 부재면 그 한 줄의 부호 = 든 부재의 이름(«B01~B12 : …» — 이름 없는 줄이 섞이면 그 줄의 마크 · 유형 이름을 괄호에 넣어 덧붙임 ·
+    // 이름과 헷갈리지 않게 — core-verify R53b L2) · 없으면 "".
+    private static List<(string formula, string note, string names)> OneLineFormulas(IReadOnlyList<CalcRow> rows)
     {
-        var result = new List<(string, string)>();
+        var result = new List<(string, string, string)>();
         if (rows.Count == 0) return result;
         var terms = rows.Select(r =>
         {
@@ -366,7 +370,10 @@ public static class CalcSheet
             string formula = string.Join("+", picked.Select(t => TopLevelSum(t.term) && t.term.StartsWith('-') ? "(" + t.term + ")" : t.term));
             int members = picked.Sum(t => t.row.Count);
             string ids = string.Join(" / ", picked.Take(3).Select(t => t.row.Note)) + (picked.Count > 3 ? $" … 외 {picked.Count - 3}줄" : "");
-            result.Add((formula, $"부재 {members}개 · {ids}"));
+            string names = "";
+            if (picked.Any(t => t.row.Names.Count > 0))
+                names = MemberNames.Compact(picked.SelectMany(t => t.row.Names.Count > 0 ? t.row.Names : new List<string> { "(" + (t.row.Shown.Length > 0 ? t.row.Shown : t.row.Mark) + ")" }));
+            result.Add((formula, $"부재 {members}개 · {ids}", names));
         }
         return result;
     }
@@ -532,24 +539,25 @@ public static class CalcSheet
     private static void WriteElements(XlsxSheet sheet, string title, List<CalcElement> list, string reason)
     {
         bool missing = reason.Length > 0;
-        double[] widths = { 10, 12, 26, 14, 16, 26, 60, 12, 10, 40 };
+        double[] widths = { 10, 10, 12, 26, 14, 16, 26, 60, 12, 10, 40 };
         for (int c = 0; c < widths.Length; c++) sheet.Width(c + 1, widths[c]);
         sheet.Text(1, 1, $"{title} — {list.Count}개", XlsxStyle.Title);
-        string[] head = { "Id", "카테고리", "유형", "구역", "공종", "부위", "식(DH_Formula)", "BIM 물량", "판정", reason };
+        string[] head = { "Id", "부재명", "카테고리", "유형", "구역", "공종", "부위", "식(DH_Formula)", "BIM 물량", "판정", reason };
         for (int c = 0; c < head.Length; c++) if (head[c].Length > 0) sheet.Text(3, c + 1, head[c], XlsxStyle.BoldCenter);
         int r = 4;
         foreach (var e in list)
         {
             sheet.Number(r, 1, e.Id);
-            sheet.Text(r, 2, e.Category);
-            sheet.Text(r, 3, e.Type);
-            sheet.Text(r, 4, e.Zone);
-            sheet.Text(r, 5, e.Work);
-            sheet.Text(r, 6, e.Part);
-            sheet.Text(r, 7, e.Formula);
-            sheet.Number(r, 8, FormulaDecomposer.RoundQuantity(e.Bim), XlsxStyle.Number2);
-            sheet.Text(r, 9, e.Verdict);
-            if (missing) sheet.Text(r, 10, e.Missing);
+            sheet.Text(r, 2, e.Name);
+            sheet.Text(r, 3, e.Category);
+            sheet.Text(r, 4, e.Type);
+            sheet.Text(r, 5, e.Zone);
+            sheet.Text(r, 6, e.Work);
+            sheet.Text(r, 7, e.Part);
+            sheet.Text(r, 8, e.Formula);
+            sheet.Number(r, 9, FormulaDecomposer.RoundQuantity(e.Bim), XlsxStyle.Number2);
+            sheet.Text(r, 10, e.Verdict);
+            if (missing) sheet.Text(r, 11, e.Missing);
             r++;
         }
     }

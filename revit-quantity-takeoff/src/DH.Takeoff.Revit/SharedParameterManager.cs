@@ -1,5 +1,6 @@
 using System.IO;
 using Autodesk.Revit.DB;
+using DH.Takeoff.Core;
 
 namespace DH.Takeoff.Revit;
 
@@ -47,6 +48,8 @@ public static class SharedParameterManager
         [FormworkObjects.MembersParam] = Guid.Parse("7a2b6c10-0000-4a00-9b00-000000000031"),   // 원 부재 Id(글)
         // …32 · …33 은 쓰지 않는다: R45 의 판 구간 넓이 칸(DH_거푸집_넓이_7m이하 / _7m초과 — 숫자)에 주었다가 7 m 구분을 끄면서 걷어냈다(R46 · 설치 전).
         // 다른 칸에 다시 주지 말 것(어느 PC 의 공유 매개변수 파일에 숫자 꼴로 남아 있을 수 있다 — revit-verify R46 L5).
+        // 부재 이름(R53b — SB01 · WA01 …, 글): [수량산출]의 [완료]가 붙인다. 속성 창의 «식별 정보»(마크 곁).
+        [MemberNames.Param] = Guid.Parse("7a2b6c10-0000-4a00-9b00-000000000034"),
     };
 
     /// <summary>
@@ -65,6 +68,7 @@ public static class SharedParameterManager
         [FormworkObjects.FormulaParam] = "이 판의 식 — 엑셀 «거푸집» 시트 줄의 × n 가운데 하나 · 슬래브 밑면은 그 슬래브 줄의 한 칸",
         [FormworkObjects.AreaParam] = "모델에서 잰 넓이(㎡) — 수량집계표의 BIM 칸과 같은 값 · 산출식의 값과는 반올림만큼 다를 수 있음",
         [FormworkObjects.MembersParam] = "이 판이 덮는 콘크리트 부재 Id",
+        [MemberNames.Param] = "수량산출 부재 이름(SB01 · WA01 …) — [수량산출]의 [완료]가 붙입니다 · 고쳐 쓴 이름은 그대로 둡니다 · 산출근거 엑셀의 줄 앞 이름",
     };
 
     /// 치수(길이) 매개변수 — 내부 피트 저장, 내보낼 때 m로 변환.
@@ -164,6 +168,6 @@ public static class SharedParameterManager
         if (map.Contains(def)) return false; // 멱등 skip
 
         var binding = doc.Application.Create.NewInstanceBinding(cats);
-        return map.Insert(def, binding, GroupTypeId.Geometry);
+        return map.Insert(def, binding, name == MemberNames.Param ? GroupTypeId.IdentityData : GroupTypeId.Geometry);
     }
 }

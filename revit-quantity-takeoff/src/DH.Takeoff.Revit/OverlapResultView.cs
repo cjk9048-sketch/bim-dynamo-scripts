@@ -86,6 +86,12 @@ public sealed class OverlapResultView
         /// </summary>
         public Func<int, bool, Fixed>? FixReversed;
 
+        /// <summary>
+        /// 작성오류 미리보기: 그 줄을 기준대로 바꾸면 두 부재가 될 겉면(그림의 차례 → 겉면 · 줄의 Key) — 부르는 쪽이 시험으로 바꿔 읽고 되돌린다.
+        /// 못 만들면 빈 사전. 모델은 바꾸지 않는다.
+        /// </summary>
+        public Func<int, Dictionary<int, MeshData>>? PreviewReversed;
+
         /// <summary>반대로 결합됐지만 바꿔도 두 부재 체적이 같아(닿기만 함) 목록에 넣지 않은 쌍의 수.</summary>
         public int Touching;
 
@@ -110,7 +116,7 @@ public sealed class OverlapResultView
         public List<OverlapRow> ReversedRows = new();       // 바뀐 결합 방향 줄(R54 — Key = 결합 방향 목록 차례)
     }
 
-    /// <summary>목록이 보여 주는 검사 항목(R54 모델 검증 — 항목 띠).</summary>
+    /// <summary>목록이 보여 주는 검사 항목(R54 모델 검증 — 항목 띠). 화면 이름은 «겹침오류» · «작성오류»(JACK 2026-10-20).</summary>
     public enum Item { Pairs, Reversed }
 
     // 3D 의 색(JACK 2026-10-14 세 번째: "겹치는 부위는 빨간색, 첫번째 부재는 주황색, 두번째 부재는 녹색 … 고치고 나면 그 부위가 해당하는 부재 색상으로"):
@@ -150,8 +156,10 @@ public sealed class OverlapResultView
     private ScrollViewer? _listScroll;
     private Window? _window;
     private int _preview = -1;                               // 고치기 단추에 마우스를 올린 동안: 겹친 만큼이 빠질 부재(그림의 차례) — 고친 뒤의 모습으로 그린다
-    private int _shaped = -1;                                // 그동안 겉면을 고친 뒤의 모양으로 잠깐 바꿔 둔 부재(그림의 차례) — 떼면 _drawn 의 것으로 돌린다
+    private readonly List<int> _shaped = new();              // 그동안 겉면을 고친 뒤의 모양으로 잠깐 바꿔 둔 부재(그림의 차례 — 작성오류는 둘) — 떼면 _drawn 의 것으로 돌린다
     private readonly Dictionary<(int key, bool cutWinner), (MeshData? mesh, int at)> _cutShapes = new();   // 받아 둔 미리보기 모양(고치면 비운다)
+    private bool _reversedPreview;                           // 작성오류 고치기 단추에 마우스를 올린 동안(→ 글쇠도): 두 부재를 바꾼 뒤의 모양으로 그린다
+    private readonly Dictionary<int, Dictionary<int, MeshData>> _reversedShapes = new();   // 받아 둔 작성오류 미리보기 모양(줄의 Key → 칸 → 겉면 · 고치면 비운다)
     private int _solo = -1;                                  // 목록에서 부재 이름을 눌렀다: 그 부재만 칠한다(그림의 차례 — JACK 2026-10-19) · 초점이 바뀌면 풀린다
     private readonly List<(int key, int member, bool winner, Button cell)> _cells = new();   // 목록의 부재 이름 칸(누를 수 있는 것만)
     private bool _changedModel;                              // 이 창에서 고친 것이 모델에 걸렸다
@@ -340,8 +348,8 @@ public sealed class OverlapResultView
         (string tone, string glyph, string title, string sub) = _m.Mode switch
         {
             Mode.Found => ("Warn", UiTheme.IconWarn,
-                Pairs > 0 && ReversedCount > 0 ? $"겹친 부재 {Pairs}쌍 · 결합 방향 {ReversedCount}쌍을 찾았습니다"
-                : Pairs > 0 ? $"겹친 부재 {Pairs}쌍을 찾았습니다" : $"결합 방향이 기준과 반대인 {ReversedCount}쌍을 찾았습니다", ""),
+                Pairs > 0 && ReversedCount > 0 ? $"겹침오류 {Pairs}쌍 · 작성오류 {ReversedCount}쌍을 찾았습니다"
+                : Pairs > 0 ? $"겹침오류 {Pairs}쌍을 찾았습니다" : $"작성오류 {ReversedCount}쌍을 찾았습니다", ""),
             Mode.Joined when Problems == 0 => ("Good", UiTheme.IconCheck, "모두 기준대로 정리했습니다", ""),
             Mode.Joined => ("Warn", UiTheme.IconWarn, $"{Problems}쌍은 직접 확인해 주세요", ""),
             Mode.Clean => ("Good", UiTheme.IconCheck, "모델 검증 통과",
@@ -394,7 +402,7 @@ public sealed class OverlapResultView
             case Mode.Found:
                 if (Pairs > 0 || ReversedCount == 0)
                 {
-                    tiles.Add(Tile("겹친 쌍", Pairs.ToString(CultureInfo.InvariantCulture), "쌍", "WarnFg"));
+                    tiles.Add(Tile("겹침오류", Pairs.ToString(CultureInfo.InvariantCulture), "쌍", "WarnFg", "결합 없이 겹쳐 두 번 세는 쌍"));
                     if (Touched)
                     {
                         // 창에서 고쳐 본 뒤: 정리된 쌍 · (확인할 쌍) · 남은 중복 체적.
@@ -404,9 +412,9 @@ public sealed class OverlapResultView
                     }
                     else tiles.Add(Tile("두 번 세는 체적", M3(_m.TotalM3), "m³", "WarnFg"));
                 }
-                // 결합 방향(R54): 남은 줄 수 · 바꾸면 옮겨질 체적의 합.
+                // 작성오류(R54 결합 방향): 남은 줄 수 · 바꾸면 옮겨질 체적의 합.
                 if (ReversedCount > 0)
-                    tiles.Add(Tile("결합 방향", ReversedLeft.ToString(CultureInfo.InvariantCulture), "쌍", ReversedLeft > 0 ? "WarnFg" : "GoodFg",
+                    tiles.Add(Tile("작성오류", ReversedLeft.ToString(CultureInfo.InvariantCulture), "쌍", ReversedLeft > 0 ? "WarnFg" : "GoodFg",
                         $"기준과 반대로 결합된 쌍 {ReversedCount}개 · 바꾸면 옮겨질 체적 {M3(ReversedM3)} m³(잰 것만)"));
                 tiles.Add(Tile(_m.SelectionOnly ? "검사한 부재(선택)" : "검사한 부재", _m.Checked.ToString(CultureInfo.InvariantCulture), "개", "Text"));
                 break;
@@ -425,14 +433,14 @@ public sealed class OverlapResultView
                 if (ReversedCount > 0)
                 {
                     int switched = _reversed.Ordered.Count(r => r.Fine && !r.Optional);
-                    tiles.Add(Tile("결합 방향 바꿈", switched.ToString(CultureInfo.InvariantCulture), "쌍", switched == ReversedCount ? "GoodFg" : "WarnFg",
-                        $"기준과 반대로 결합된 쌍 {ReversedCount}개 가운데"));
+                    tiles.Add(Tile("작성오류 고침", switched.ToString(CultureInfo.InvariantCulture), "쌍", switched == ReversedCount ? "GoodFg" : "WarnFg",
+                        $"작성오류(기준과 반대로 결합된 쌍) {ReversedCount}개 가운데 기준대로 바꾼 쌍"));
                 }
                 break;
             case Mode.Clean:
                 tiles.Add(Tile(_m.SelectionOnly ? "검사한 부재(선택)" : "검사한 부재", _m.Checked.ToString(CultureInfo.InvariantCulture), "개", "Text"));
-                tiles.Add(Tile("겹친 쌍", "0", "쌍", "GoodFg"));
-                tiles.Add(Tile("결합 방향", "0", "쌍", "GoodFg", "기준과 반대로 결합된 쌍"));
+                tiles.Add(Tile("겹침오류", "0", "쌍", "GoodFg", "결합 없이 겹쳐 두 번 세는 쌍"));
+                tiles.Add(Tile("작성오류", "0", "쌍", "GoodFg", "기준과 반대로 결합된 쌍"));
                 break;
             default:
                 return null;
@@ -507,7 +515,7 @@ public sealed class OverlapResultView
 
     private FrameworkElement BuildSide()
     {
-        // 항목 띠(R54 모델 검증): [겹침 n] [결합 방향 n] — 0 이면 흐리게 · 누르면 그 목록 · 오른쪽 [기준표]. 수는 RefreshItems 가 적는다.
+        // 항목 띠(R54 모델 검증): [겹침오류 n] [작성오류 n] — 0 이면 흐리게 · 누르면 그 목록 · 오른쪽 [기준표]. 수 · 잠금은 RefreshItems 가 적는다.
         var bar = new DockPanel { Margin = new Thickness(10, 9, 10, 8) };
         var table = _ui.Button("기준표", "BtnGhost", "겹친 자리를 누가 가지는지(겹친 자리 순위)의 기준 — 바꾸는 곳은 [수량산출] ① 부위 목록의 «겹친 자리»입니다.", "rankTable");
         table.MinHeight = 28;
@@ -516,8 +524,8 @@ public sealed class OverlapResultView
         table.Click += (_, _) => { Note("기준표"); ShowRankTable(); };
         DockPanel.SetDock(table, Dock.Right);
         bar.Children.Add(table);
-        var pairs = _ui.Segment("", "결합 없이 겹쳐 두 번 세는 자리 — 고르면 결합해서 순위가 낮은 쪽에서 뺍니다.", "item.pairs");
-        var reversed = _ui.Segment("", "이미 결합됐는데 순위가 낮은 쪽이 높은 쪽을 자르는 쌍 — 겹친 자리가 기준과 반대 부재에서 빠져 있습니다.", "item.reversed");
+        var pairs = _ui.Segment("", PairsItemTip, "item.pairs");
+        var reversed = _ui.Segment("", ReversedItemTip, "item.reversed");
         _itemButtons[Item.Pairs] = pairs;
         _itemButtons[Item.Reversed] = reversed;
         foreach (var (item, button) in _itemButtons)
@@ -583,25 +591,50 @@ public sealed class OverlapResultView
     // 결과 칸을 둘 것인가: 결합한 뒤의 창이거나, 창에서 하나라도 고쳐 본 줄 · 고친 뒤 새로 나온 줄이 있다.
     private bool ShowStatus => _m.Mode == Mode.Joined || _board.Ordered.Any(r => r.Status.Length > 0 || r.New || r.Note.Length > 0);
 
-    // 항목 띠의 수: 겹침 · 결합 방향(사람이 정함 · 참고는 빼고). 0 이면 흐리게(눌러도 빈 목록이 아니라 «없음» 한 줄).
+    private const string PairsItemTip = "겹침오류: 결합 없이 겹쳐 두 번 세는 자리 — 고르면 결합해서 순위가 낮은 쪽에서 뺍니다.";
+    private const string ReversedItemTip = "작성오류: 이미 결합됐는데 순위가 낮은 쪽이 높은 쪽을 자르는 쌍 — 겹친 자리가 기준과 반대 부재에서 빠져 있습니다.";
+
+    // 작성오류는 겹침오류를 다 고친 뒤에 연다(JACK 2026-10-20 «겹침오류를 해결해야만 작성오류로» · 고름 «고칠 수 있는 건 다 고치면 열림»):
+    // 아직 손대지 않은 겹침오류(이 창에서 고칠 수 있는데 결과가 없는 쌍)가 남으면 잠근다. 고쳐 봤지만 못 한 쌍(Failed · Overlap) · 이 창에서 고칠 수 없는 쌍
+    // (Blocked) · 보이기만 하는 줄은 막지 않는다(막다른 길 없음). 창에서 고칠 수 없으면(묶음을 못 열어 고치기 단추가 없음) 잠그지 않는다 — 보기만 한다.
+    // 이 창에서 고치기를 불러 본 쌍도 «손댐»이다 — 부르는 쪽이 결과 글을 못 적고 던진 쌍이 작성오류를 끝내 잠그지 않게(설치 전 검토 낮음 1).
+    private int PairsUntried => _pairs.Ordered.Count(r => !r.Fine && !r.Blocked && !r.Optional && r.Status.Length == 0 && !_triedPairs.Contains(r.Key));
+    private readonly HashSet<int> _triedPairs = new();
+    private bool ReversedLocked => _m.Fix != null && PairsUntried > 0;
+
+    /// <summary>작성오류 항목이 잠겨 있다(겹침오류에 아직 고치지 않은 쌍이 남음) — 시험에서 본다.</summary>
+    public bool ReversedLockedNow => ReversedLocked;
+
+    // 항목 띠의 수: 겹침오류 · 작성오류(사람이 정함 · 참고는 빼고). 0 이면 흐리게(눌러도 빈 목록이 아니라 «없음» 한 줄). 작성오류가 잠겼으면 누를 수 없고 풍선 글이 까닭.
     private void RefreshItems()
     {
+        bool locked = ReversedLocked;
         foreach (var (item, button) in _itemButtons)
         {
             int n = item == Item.Pairs ? Pairs : ReversedCount;
-            button.Content = (item == Item.Pairs ? "겹침 " : "결합 방향 ") + n.ToString(CultureInfo.InvariantCulture);
-            button.Opacity = n > 0 || item == _item ? 1 : 0.55;
+            bool shut = item == Item.Reversed && locked;
+            button.Content = (item == Item.Pairs ? "겹침오류 " : "작성오류 ") + n.ToString(CultureInfo.InvariantCulture);
+            button.IsEnabled = !shut;
+            button.Opacity = shut ? 0.45 : n > 0 || item == _item ? 1 : 0.55;
+            if (item == Item.Reversed) _ui.Tip(button, shut ? $"겹침오류를 먼저 고쳐 주세요 — 아직 고치지 않은 쌍 {PairsUntried}개" : ReversedItemTip);
         }
     }
 
-    /// <summary>목록이 보여 주는 항목을 바꾼다(항목 띠를 누른 것과 같다) — 그림의 부재 색 · 초점 띠 · 고치기 줄도 그 항목의 판을 따른다.</summary>
+    /// <summary>목록이 보여 주는 항목을 바꾼다(항목 띠를 누른 것과 같다) — 그림의 부재 색 · 초점 띠 · 고치기 줄도 그 항목의 판을 따른다. 작성오류가 잠겼으면 그대로 둔다.</summary>
     public void ShowItem(Item item)
     {
         if (_item == item && ReferenceEquals(_board, item == Item.Pairs ? _pairs : _reversed)) return;
+        if (item == Item.Reversed && ReversedLocked)
+        {
+            Note($"항목 작성오류 — 잠김(겹침오류 남음 {PairsUntried})");
+            if (_itemButtons.TryGetValue(_item, out var shown) && shown.IsChecked != true) shown.IsChecked = true;   // 띠가 보고 있는 항목을 가리키게
+            RefreshItems();
+            return;
+        }
         _item = item;
         _board = item == Item.Pairs ? _pairs : _reversed;
         if (_itemButtons.TryGetValue(item, out var button) && button.IsChecked != true) button.IsChecked = true;
-        Note($"항목 {(item == Item.Pairs ? "겹침" : "결합 방향")}");
+        Note($"항목 {(item == Item.Pairs ? "겹침오류" : "작성오류")}");
         RefreshList();
         RefreshFocus();
         Frame();
@@ -642,7 +675,7 @@ public sealed class OverlapResultView
             _cells.Clear();
             _list.Children.Add(new TextBlock
             {
-                Text = _item == Item.Pairs ? "겹친 자리가 없습니다." : "기준과 반대인 결합이 없습니다.", Foreground = _ui["Sub"], Margin = new Thickness(12, 10, 12, 10),
+                Text = _item == Item.Pairs ? "겹침오류가 없습니다." : "작성오류가 없습니다.", Foreground = _ui["Sub"], Margin = new Thickness(12, 10, 12, 10),
             });
             return;
         }
@@ -911,13 +944,13 @@ public sealed class OverlapResultView
             button.Click += (_, _) => act();
             return button;
         }
-        _previous = Small("이전", "목록의 앞 쌍으로 갑니다.", "focus.previous", () => Step(-1), icon: IconLeft);
-        _next = Small("다음", "목록의 다음 쌍으로 갑니다.", "focus.next", () => Step(+1), icon: IconRight);
+        _previous = Small("이전", "목록의 앞 쌍으로 갑니다(↑).", "focus.previous", () => Step(-1), icon: IconLeft);
+        _next = Small("다음", "목록의 다음 쌍으로 갑니다(↓).", "focus.next", () => Step(+1), icon: IconRight);
         _showAll = Small("전체 보기", "겹친 자리를 모두 봅니다(Esc).", "focus.all", () => { Note("전체 보기"); ShowAll(); });
         _inRevit = Small("Revit 에서 보기", "이 창을 닫고, 지금 보고 있는 쌍의 두 부재를 Revit 에서 선택해 화면에 맞춥니다.", "focus.inRevit", () =>
         {
             if (_board.Focus < 0) return;
-            Note($"Revit 에서 보기 {(_item == Item.Reversed ? "결합 방향 " : "")}{_board.Focus}");
+            Note($"Revit 에서 보기 {(_item == Item.Reversed ? "작성오류 " : "")}{_board.Focus}");
             PickedReversed = _item == Item.Reversed;
             Finish(Choice.Pair, _board.Focus);
         });
@@ -1022,6 +1055,7 @@ public sealed class OverlapResultView
     {
         if (_m.Fix == null && _m.FixReversed == null) return;
         SetPreview(-1);
+        SetReversedPreview(false);
         _fixActions.Children.Clear();
         var row = _board.Focused;
         bool can = _item == Item.Pairs ? _m.Fix != null : _m.FixReversed != null;
@@ -1115,39 +1149,83 @@ public sealed class OverlapResultView
                 string got = shape.mesh == null ? "못 받음" : shape.at != member ? $"다른 칸({shape.at} ≠ {member})" : $"세모 {shape.mesh.Triangles}";
                 Note($"미리보기 {row.Key}\t{(cutWinner ? "남는 쪽에서 빼기" : "잘리는 쪽에서 빼기")}\t{got}\t{watch.ElapsedMilliseconds} ms");
             }
-            if (shape.mesh != null && shape.at == member)
-            {
-                _shaped = member;
-                try { _view3d.Replace(member, shape.mesh); }
-                catch (Exception ex)
-                {
-                    _shaped = -1;
-                    Note($"미리보기 모양을 그리지 못함 {member}\t" + ex);
-                }
-            }
+            if (shape.mesh != null && shape.at == member) Shape(member, shape.mesh);
         }
         _view3d?.Refresh();
     }
 
-    // 미리보기로 바꿔 둔 겉면을 그림이 실제로 가진 것(_drawn)으로 돌린다. 돌리지 못하면 _shaped 를 남겨 다음에 다시 돌린다 —
+    // 작성오류 고치기 단추에 마우스를 올렸다(on) · 뗐다(JACK 2026-10-20 «기준대로 바꾸기와 사용자 모드의 두 단추에 마우스를 올리면 미리보기가 결합 후로»):
+    // 두 부재를 부르는 쪽이 시험으로 자르는 순서를 바꿔 읽은 겉면으로 잠깐 바꿔 그린다(색은 그대로 — 겹침과 같다). 받은 모양은 고칠 때까지 다시 쓴다.
+    // [남을 쪽에서 빼기](지금 결합 그대로)는 바꾼 뒤가 지금 모양이라 끄기만 한다(ReversedButton). 못 받으면 그림 위에 한 줄 알린다.
+    private void SetReversedPreview(bool on)
+    {
+        if (_reversedPreview == on || (_busy && on)) return;
+        if (on) EndSolo("고치기 단추에 마우스");
+        EndShape();
+        _reversedPreview = on;
+        if (on && _view3d != null && _m.PreviewReversed != null && _item == Item.Reversed && _reversed.Focused is { } row)
+        {
+            if (!_reversedShapes.TryGetValue(row.Key, out var shapes))
+            {
+                // 부르는 동안(시험 트랜잭션이 열려 있다)은 고치기 · 닫기 · 글쇠 · 다른 미리보기를 막는다(설치 전 검토 미결 질문 — Revit 이 그사이 메시지를 돌릴 때).
+                // 창을 누를 수 없게 하지는 않는다(그러면 마우스가 단추를 떠난 것으로 쳐 미리보기가 꺼진다). 돌아와서 그사이 떼었거나 다른 줄로 갔으면 그리지 않는다.
+                var watch = Stopwatch.StartNew();
+                _busy = true;
+                try { shapes = _m.PreviewReversed(row.Key); }
+                catch (Exception ex) { Note("작성오류 미리보기 오류\t" + ex); shapes = new Dictionary<int, MeshData>(); }
+                finally { _busy = false; }
+                _reversedShapes[row.Key] = shapes;
+                Note($"작성오류 미리보기 {row.Key}\t{(shapes.Count == 0 ? "못 받음" : $"칸 {shapes.Count} · 세모 {shapes.Values.Sum(m => m.Triangles)}")}\t{watch.ElapsedMilliseconds} ms");
+                if (!_reversedPreview || _item != Item.Reversed || _reversed.Focused?.Key != row.Key) { _view3d?.Refresh(); return; }
+            }
+            foreach (var (at, mesh) in shapes)
+                if (at >= 0 && at < _members) Shape(at, mesh);
+            if (shapes.Count == 0)
+            {
+                ShowMessage(PreviewFailText, true);
+                _previewFailShown = true;
+            }
+        }
+        else if (!on && _previewFailShown) HideMessage();  // 떼면 «못 그림» 알림도 내린다(설치 전 검토 낮음 2)
+        if (!on) _previewFailShown = false;
+        _view3d?.Refresh();
+    }
+
+    private const string PreviewFailText = "바꾼 뒤의 모양을 미리 그리지 못했습니다(까닭은 일지).";
+    private bool _previewFailShown;                       // 그림 위 알림이 작성오류 미리보기의 «못 그림»이다
+
+    // 그 칸을 미리보기 겉면으로 잠깐 바꾼다(EndShape 가 돌린다).
+    private void Shape(int at, MeshData mesh)
+    {
+        if (!_shaped.Contains(at)) _shaped.Add(at);
+        try { _view3d?.Replace(at, mesh); }
+        catch (Exception ex)
+        {
+            _shaped.Remove(at);
+            Note($"미리보기 모양을 그리지 못함 {at}\t" + ex);
+        }
+    }
+
+    // 미리보기로 바꿔 둔 겉면을 그림이 실제로 가진 것(_drawn)으로 돌린다. 돌리지 못한 칸은 _shaped 에 남겨 다음에 다시 돌린다 —
     // 그동안 Apply 는 그 칸의 _drawn 을 그림에서 읽지 않는다(미리보기 겉면이 _drawn 에 굳지 않게 · R51 revit-verify ③).
     private void EndShape()
     {
-        if (_shaped < 0) return;
-        int at = _shaped;
-        try
+        foreach (int at in _shaped.ToList())
         {
-            _view3d?.Replace(at, _drawn[at]);
-            _shaped = -1;
+            try
+            {
+                _view3d?.Replace(at, _drawn[at]);
+                _shaped.Remove(at);
+            }
+            catch (Exception ex) { Note($"미리보기 모양을 돌리지 못함 {at}\t" + ex); }
         }
-        catch (Exception ex) { Note($"미리보기 모양을 돌리지 못함 {at}\t" + ex); }
     }
 
     // 덩어리를 그리는가: 덩어리가 있는 쌍 — 미리보기로 잘릴 부재의 모양을 바꿔 둔 동안 그 쌍의 덩어리는 숨긴다(겹친 부위가 남을 부재 안으로 들어간 모습).
     // 결합된 쌍(고친 쌍 · 결합한 뒤의 창의 결합됨)의 덩어리도 그리지 않는다 — 두 부재의 겉면은 결합 뒤 모양이라, 덩어리를 덮으면 고친 뒤에도
     // 겹친 덩어리가 그대로 있는 것처럼 보인다(JACK 2026-10-19 «결합됨으로 되면 수정된 상태로 보여야 되는데 계속 그대로»). 이미 풀린 자리(회색)는 그린다.
     private bool BlobShown(int key) =>
-        _item == Item.Pairs && _pairs.LookOf(key) != BlobLook.Hidden && _pairs.Row(key) is not { Fine: true, Gone: false } && !(_shaped >= 0 && key == _pairs.Focus);
+        _item == Item.Pairs && _pairs.LookOf(key) != BlobLook.Hidden && _pairs.Row(key) is not { Fine: true, Gone: false } && !(_shaped.Count > 0 && key == _pairs.Focus);
 
     /// <summary>고른 쌍을 고친다(고치기 단추와 같다) — cutWinner = 남는 쪽에서 겹친 만큼을 뺀다. 고칠 수 없으면(쌍을 안 골랐거나 끝난 쌍) 아무것도 하지 않는다.</summary>
     public void FixFocused(bool cutWinner) => DoFix(cutWinner);
@@ -1155,7 +1233,8 @@ public sealed class OverlapResultView
     /// <summary>고른 결합 방향 줄을 고친다(그 단추와 같다) — cutKeep = 남을 쪽에서 뺀다(지금 결합 그대로를 «사람이 정함»으로). 고칠 수 없으면 아무것도 하지 않는다.</summary>
     public void FixFocusedReversed(bool cutKeep = false) => DoFixReversed(cutKeep);
 
-    // 결합 방향 고치기 단추(기본 · 사용자 모드 — 겹침의 FixButton 과 같은 꼴 · 미리보기는 없다).
+    // 작성오류 고치기 단추(기본 · 사용자 모드 — 겹침의 FixButton 과 같은 꼴). 마우스를 올린 동안 고친 뒤의 모습: 기준대로(자르는 순서를 바꿈)면 바꾼 뒤 모양 ·
+    // 남을 쪽에서 빼기(지금 결합 그대로)면 지금 모양 그대로(SetReversedPreview).
     private Button ReversedButton(string text, string tip, string id, bool cutKeep, bool primary = false)
     {
         var button = new Button
@@ -1164,6 +1243,8 @@ public sealed class OverlapResultView
             MinHeight = 30, Padding = new Thickness(12, 0, 12, 1), Margin = new Thickness(0, 0, 6, 0), Focusable = false,
         };
         _ui.Mark(button, tip, id);
+        button.MouseEnter += (_, _) => SetReversedPreview(!cutKeep);
+        button.MouseLeave += (_, _) => SetReversedPreview(false);
         button.Click += (_, _) => DoFixReversed(cutKeep);
         return button;
     }
@@ -1171,7 +1252,8 @@ public sealed class OverlapResultView
     private void DoFixReversed(bool cutKeep)
     {
         if (_busy || _m.FixReversed == null || _item != Item.Reversed || _board.Focused is not { } row || row.Fine || row.Blocked) return;
-        Note($"결합 방향 고치기 {row.Key}\t{(cutKeep ? "사용자: 남을 쪽에서 빼기(그대로 · 사람이 정함)" : s_userMode ? "사용자: 잘릴 쪽에서 빼기(기준대로)" : "기본")}");
+        Note($"작성오류 고치기 {row.Key}\t{(cutKeep ? "사용자: 남을 쪽에서 빼기(그대로 · 사람이 정함)" : s_userMode ? "사용자: 잘릴 쪽에서 빼기(기준대로)" : "기본")}");
+        SetReversedPreview(false);                        // 미리보기로 바꿔 둔 겉면을 먼저 돌린다(고친 결과의 겉면이 그 위에 온다)
         Run(() => _m.FixReversed(row.Key, cutKeep), row.Key, _reversed);
     }
 
@@ -1215,6 +1297,8 @@ public sealed class OverlapResultView
     {
         if (_busy || _m.Fix == null || _item != Item.Pairs || _board.Focused is not { } row || row.Fine || row.Blocked) return;
         Note($"고치기 {row.Key}\t{(s_userMode ? (cutWinner ? "사용자: 남는 쪽에서 빼기" : "사용자: 잘리는 쪽에서 빼기") : "기본")}");
+        bool lockedBefore = ReversedLocked;
+        _triedPairs.Add(row.Key);
         SetPreview(-1);                                   // 미리보기로 바꿔 둔 겉면을 먼저 돌린다(고친 결과의 겉면이 그 위에 온다)
         var watch = Stopwatch.StartNew();
         var cursor = Mouse.OverrideCursor;
@@ -1232,6 +1316,7 @@ public sealed class OverlapResultView
             // 부르는 쪽은 결합 뒤의 오류를 안에서 받아 돌려준다 — 여기까지 샌 것이면 모델이 바뀌었는지 모른다: 바뀌었을 수 있다고 둔다.
             _changedModel = true;
             Note("고치기 오류\t" + ex);
+            RefreshItems();                               // 불러 본 쌍이라 작성오류의 잠금이 풀렸을 수 있다
             ShowMessage("고치는 중 오류가 났습니다: " + ex.Message, true);
             return;
         }
@@ -1242,7 +1327,7 @@ public sealed class OverlapResultView
             _busy = false;
         }
         _changedModel |= result.Changed;
-        try { Apply(result); }
+        try { Apply(result, lockedBefore); }
         catch (Exception ex)
         {
             // 모델은 이미 고쳐졌다(또는 바뀐 것이 없다) — 창에 옮기다 난 오류만 알린다.
@@ -1256,17 +1341,20 @@ public sealed class OverlapResultView
     public bool Busy => _busy;
 
     // 고친 결과를 창에 옮긴다: 줄(제자리에서) · 다시 찾아 새로 나온 줄(제 묶음 맨 위) · 고친 부재의 겉면 · 바뀐 덩어리 · 숫자 칸 · 단추 · 그림 · 알림.
-    private void Apply(Fixed result)
+    // lockedBefore = 고치기 전 작성오류의 잠금(겹침 고치기는 부르기 전에 그 쌍을 «손댐»에 넣으므로 그 앞에서 잰 것을 넘긴다).
+    private void Apply(Fixed result, bool? lockedBefore = null)
     {
         // 새 줄 먼저(목록에 없는 번호만 · 같은 번호가 두 번 오면 앞의 것) — 같은 번호가 바뀐 줄에도 오면 그다음의 Replace 가 받는다(core-verify R50 중간 2).
         _cutShapes.Clear();                               // 모델이 바뀌었을 수 있다 — 받아 둔 미리보기 모양은 다시 받는다
+        _reversedShapes.Clear();
+        bool wasLocked = lockedBefore ?? ReversedLocked;
         var fresh = result.Added.Where(r => _pairs.Row(r.Key) == null).GroupBy(r => r.Key).Select(g => g.First()).ToList();
         int added = _pairs.AddRange(fresh);
         int refused = 0;
         foreach (var row in result.Rows)
             if (!_pairs.Replace(row)) { refused++; Note($"줄을 바꾸지 못함 {row.Key}"); }
         foreach (var row in result.ReversedRows)
-            if (!_reversed.Replace(row)) { refused++; Note($"결합 방향 줄을 바꾸지 못함 {row.Key}"); }
+            if (!_reversed.Replace(row)) { refused++; Note($"작성오류 줄을 바꾸지 못함 {row.Key}"); }
         string drawProblem = "";
         if (_view3d != null)
         {
@@ -1283,7 +1371,7 @@ public sealed class OverlapResultView
                 }
                 // 창의 목록은 그림이 실제로 가진 겉면에 맞춘다 — Replace 가 어디서 던졌든 확대할 상자가 그림과 같게.
                 // 다만 미리보기 겉면이 아직 그림에 남은 칸(돌리기 실패)은 받은 겉면으로 — 다음 EndShape 가 그것으로 돌린다.
-                _drawn[at] = at == _shaped ? mesh : _view3d.MeshAt(at);
+                _drawn[at] = _shaped.Contains(at) ? mesh : _view3d.MeshAt(at);
             }
             // 덩어리: 그림에 있던 쌍은 제자리에서 바꾸고(null = 빈 겉면 — 그 줄은 덩어리 없음이라 그리지 않는다), 없던 쌍은 끝에 붙여 한 번에 다시 넘긴다
             // (SetMeshes 는 있던 겉면을 다시 만들지 않는다). 붙인 차례는 _blobKey · _blobAt 와 늘 같다 — 그림이 실패해도 그대로 둔다(Shown 이 그 차례로 본다).
@@ -1332,10 +1420,21 @@ public sealed class OverlapResultView
         _m.NotNeeded = result.NotNeeded;
         _m.RemainingM3 = result.RemainingM3;
         if (result.SplitToDo >= 0) _m.SplitToDo = result.SplitToDo;   // 단추의 «나누기 m개»(R38 core L-4)
+        // 작성오류의 잠금(JACK 2026-10-20 «겹침오류를 해결해야만 작성오류로»): 작성오류를 고치다 새 겹침오류가 나왔으면 겹침오류로 돌아간다.
+        bool lockedNow = ReversedLocked, backToPairs = _item == Item.Reversed && lockedNow;
+        if (backToPairs)
+        {
+            _item = Item.Pairs;
+            _board = _pairs;
+            if (_itemButtons.TryGetValue(Item.Pairs, out var pairsButton)) pairsButton.IsChecked = true;
+            if (fresh.Count > 0) _pairs.SetFocus(fresh[0].Key);   // 새 겹침오류를 바로 보이게(설치 전 검토 낮음 4)
+            Note($"항목 겹침오류 — 새 겹침오류 {PairsUntried}쌍(작성오류 잠김) → {_pairs.Focus}");
+        }
         RefreshChrome();
         RefreshList();
         RefreshFocus();
-        if (added > 0) BringRowIntoView();                // 보던 줄 위에 새 줄이 끼면 밀려 내려간다(core-verify R50 낮음 7)
+        if (added > 0 || backToPairs) BringRowIntoView(); // 보던 줄 위에 새 줄이 끼면 밀려 내려간다(core-verify R50 낮음 7)
+        if (backToPairs) Frame();
         var problems = new List<string>();
         if (result.Problem.Length > 0) problems.Add(result.Problem);
         if (refused > 0) problems.Add($"목록의 {refused}줄에 고친 결과를 옮기지 못했습니다 — 창을 닫고 다시 실행해 확인해 주세요.");
@@ -1344,6 +1443,8 @@ public sealed class OverlapResultView
         var news = new List<string>();
         if (added > 0) news.Add($"새로 생긴 겹침 {added}쌍");
         if (result.Gone > 0) news.Add($"없어진 겹침 {result.Gone}쌍");
+        if (backToPairs) news.Add("겹침오류를 먼저 고친 뒤 작성오류로 돌아갑니다");
+        else if (wasLocked && !lockedNow && ReversedLeft > 0) news.Add($"겹침오류를 다 고쳤습니다 — 작성오류 {ReversedLeft}쌍을 볼 수 있습니다");
         string said = string.Join(" · ", news);
         if (problems.Count > 0) ShowMessage(string.Join("\n", (said.Length > 0 ? new[] { said } : Array.Empty<string>()).Concat(problems)), true);
         else if (said.Length > 0) ShowMessage(said);
@@ -1418,7 +1519,7 @@ public sealed class OverlapResultView
         var legend = new Border { Padding = new Thickness(2, 7, 2, 0), Child = line };
         _ui.Mark(legend,
             "겹친 부위는 다른 부재에 가려져 있어도 보입니다. 두 부재는 쌍을 고르면 칠합니다 · 목록의 부재 이름을 누르면 그 부재만 칠합니다.\n" +
-            "고치면(결합됨) 겹친 부위가 남는 쪽 안으로 들어간 모양이 됩니다 · 고치기 단추에 마우스를 올리면 그 모양이 미리 보입니다 · 회색 = 앞선 결합으로 이미 풀린 자리.\n" +
+            "고치면(결합됨) 겹친 부위가 남는 쪽 안으로 들어간 모양이 됩니다 · 고치기 단추에 마우스를 올리면(→ 글쇠, ← = 지금) 그 모양이 미리 보입니다 · 회색 = 앞선 결합으로 이미 풀린 자리.\n" +
             "돌리기 = 오른쪽 끌기 · 옮기기 = 가운데 끌기 · 확대 = 굴림" +
             (_m.Mode == Mode.Joined ? "\n결합한 뒤: 겹친 부위는 결합하기 전에 잰 모양입니다(다시 찾아 나온 쌍은 그때 잰 모양)." : ""), "legend");
         return legend;
@@ -1596,6 +1697,7 @@ public sealed class OverlapResultView
     {
         EndShape();
         _preview = -1;
+        _reversedPreview = false;
         _solo = -1;
         _view3d?.Refresh();
         MarkRows();
@@ -1604,8 +1706,8 @@ public sealed class OverlapResultView
         _focusHead.Inlines.Clear();
         if (row == null)
         {
-            string all = _item == Item.Reversed ? $"결합 방향 {ReversedCount}쌍 전체"
-                       : _m.Mode == Mode.Joined ? $"결합한 뒤 {Pairs}쌍 전체" : $"겹친 자리 {Pairs}곳 전체";
+            string all = _item == Item.Reversed ? $"작성오류 {ReversedCount}쌍 전체"
+                       : _m.Mode == Mode.Joined ? $"결합한 뒤 {Pairs}쌍 전체" : $"겹침오류 {Pairs}쌍 전체";
             _focusHead.Inlines.Add(new Run(all) { FontWeight = FontWeights.SemiBold, FontSize = 14 });
             _focusSub.Text = "";
         }
@@ -1668,9 +1770,14 @@ public sealed class OverlapResultView
         _message.Text = text;
         _message.Foreground = warn ? _ui["WarnFg"] : _ui["Text"];
         _toast.Visibility = Visibility.Visible;
+        _previewFailShown = false;
     }
 
-    private void HideMessage() => _toast.Visibility = Visibility.Collapsed;
+    private void HideMessage()
+    {
+        _toast.Visibility = Visibility.Collapsed;
+        _previewFailShown = false;
+    }
 
     private void Note(string what)
     {
@@ -1678,14 +1785,39 @@ public sealed class OverlapResultView
     }
 
     // Esc: 끌던 것을 그만두고 → 초점이 있으면 전체 보기로 → 없으면 닫는다. (단추에 IsCancel 을 주지 않았다 — 주면 초점이 있어도 한 번에 닫힌다.)
+    // 방향키: Arrow(목록을 굴리거나 단추 사이를 옮겨 다니지 않게 창이 먼저 받는다).
     private void OnKey(object sender, KeyEventArgs e)
     {
         if (_busy) { e.Handled = true; return; }      // 고치는 중에는 글쇠를 받지 않는다
-        if (e.Handled || e.Key != Key.Escape) return;
+        if (e.Handled) return;
+        if (e.Key is Key.Up or Key.Down or Key.Left or Key.Right)
+        {
+            e.Handled = true;
+            Arrow(e.Key);
+            return;
+        }
+        if (e.Key != Key.Escape) return;
         e.Handled = true;
         if (_view3d is { Pressed: true }) { _view3d.CancelDrag(); return; }
         if (_board.Focus >= 0) { Note("Esc → 전체 보기"); ShowAll(); return; }
         Finish(Choice.Close, -1);
+    }
+
+    // 방향키(JACK 2026-10-20 «위아래로 목록이 움직이고 · 좌우는 그 오류 줄의 객체의 전후 · 목록이 안 눌려 있으면 아무 행동 안 되게 — 키보드로만 조작»):
+    // ↑ ↓ = 앞 · 다음 줄([이전] · [다음]과 같다) · → = 고친 뒤 모습(기본 모드의 고치기 단추에 마우스를 올린 것과 같다) · ← = 지금 모습.
+    // 고른 줄이 없으면 아무것도 하지 않는다. 끝난 줄 · 이 창에서 고칠 수 없는 줄은 → 도 지금 모습이다(고친 뒤가 따로 없다).
+    private void Arrow(Key key)
+    {
+        if (!_wide || _board.Focused is not { } row) return;
+        if (key is Key.Up or Key.Down)
+        {
+            Step(key == Key.Down ? +1 : -1);
+            return;
+        }
+        bool after = key == Key.Right && !row.Fine && !row.Blocked;
+        Note($"글쇠 {(key == Key.Right ? "→" : "←")} {row.Key}\t{(after ? "고친 뒤" : "지금")}");
+        if (_item == Item.Reversed) SetReversedPreview(after);
+        else SetPreview(after ? row.LoserIndex : -1);
     }
 
     // ── 아래 단추 ─────────────────────────────────────────────────────────────────
@@ -1760,8 +1892,8 @@ public sealed class OverlapResultView
     {
         int pairs = _m.Mode == Mode.Found ? Left : 0, order = _m.Mode == Mode.Found ? ReversedLeft : 0, split = _m.SplitToDo;
         var what = new List<string>();
-        if (pairs > 0) what.Add($"겹침 {pairs}쌍");
-        if (order > 0) what.Add($"결합 방향 {order}쌍");
+        if (pairs > 0) what.Add($"겹침오류 {pairs}쌍");
+        if (order > 0) what.Add($"작성오류 {order}쌍");
         if (what.Count == 0) return $"두 덩이 벽·기둥 나누기 ({split}개)";
         if (split > 0) what.Add($"나누기 {split}개");
         return $"모두 기준대로 ({string.Join(" · ", what)})";
@@ -1771,8 +1903,8 @@ public sealed class OverlapResultView
     {
         var lines = new List<string>();
         if (_m.Mode == Mode.Found && Left > 0)
-            lines.Add("겹친 쌍 전부에 Revit '형상 결합'을 걸어 순위가 낮은 쪽에서 겹친 만큼을 뺍니다.\n기준: " + _m.PriorityText);
-        if (_m.Mode == Mode.Found && ReversedLeft > 0) lines.Add($"기준과 반대로 결합된 쌍 {ReversedLeft}개: 순위가 높은 쪽이 남도록 자르는 순서를 바꿉니다.");
+            lines.Add("겹침오류 전부에 Revit '형상 결합'을 걸어 순위가 낮은 쪽에서 겹친 만큼을 뺍니다.\n기준: " + _m.PriorityText);
+        if (_m.Mode == Mode.Found && ReversedLeft > 0) lines.Add($"작성오류 {ReversedLeft}쌍(기준과 반대로 결합됨): 겹침오류 다음에 순위가 높은 쪽이 남도록 자르는 순서를 바꿉니다.");
         if (_m.SplitToDo > 0) lines.Add($"결합돼 두 덩이인 벽·기둥 {_m.SplitToDo}개: 덩이마다 나눕니다(위치·부위는 그대로).");
         lines.Add("모델이 바뀝니다(닫은 뒤 Ctrl+Z 한 번으로 되돌림).");
         return string.Join("\n", lines);
@@ -1869,6 +2001,7 @@ public sealed class OverlapResultView
 
     private void Finish(Choice choice, int key)
     {
+        if (_busy) return;                                // Revit 을 부르는 중(고치기 · 미리보기)에는 닫지 않는다
         Result = choice;
         PickedKey = key;
         Done?.Invoke();

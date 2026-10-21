@@ -249,9 +249,11 @@ public static class FormworkSheet
     /// 슬래브 하나가 한 줄 — 보 · 벽이 가른 칸들의 식을 « + »로 더한다). 판은 칸마다 그대로다.
     /// 줄의 열쇠 = 절 · 부위 제목 · 작은 제목 · 부호 · 괄호 · 면의 숨은 갈래 · 안팎 모름 · 식(R47 — 중분류는 열쇠에 없다: 방이 달라도 같은 식이면 «× n»).
     /// 차례 = 절 → 부위 제목(PartRank → 목록) → 작은 제목(PartRank → 목록) → 부호(자연 차례) → 유형 → 면의 갈래 → 외측 · 내측 → 처음 나온 차례.
+    /// nameOf = 부재 Id → 부재 이름(DH_부재명 — R53b · "" = 없음 · null = 이름을 쓰지 않음): 이름이 있는 부재의 조각은 부호가 이름이다 — 줄의 열쇠에서는
+    /// 이름 있는 조각끼리 한 부호로 묶고(식이 같으면 유형이 달라도 «× n»), 줄의 부호 = 그 줄에 든 부재 이름(«WA03, WA04 (외측) : …» — MemberNames.Compact).
     /// </summary>
     public static FormworkSheetData Build(IReadOnlyList<ElementFormwork> results, FormworkOptions options,
-        Func<long, (string part, string zone)> placeOf, Func<string, int> partOrder)
+        Func<long, (string part, string zone)> placeOf, Func<string, int> partOrder, Func<long, string>? nameOf = null)
     {
         var merge = FormworkMerge.Find(results, options, id => placeOf(id).zone, partOf: id => placeOf(id).part);
         var data = new FormworkSheetData { Bands = options.Bands.ToList(), Merge = merge };
@@ -283,16 +285,22 @@ public static class FormworkSheet
                         : group == FormworkTable.GroupSide && p.Side.StartsWith("내측", StringComparison.Ordinal) ? "내측"
                         : "";
                     bool unsure = p.Side == "확인 필요";
-                    string mark = r.Element.Mark.Trim().Length > 0 ? r.Element.Mark.Trim() : r.Element.Type;
+                    var members = joined != null ? joined.Members.ToList() : new List<(ElementFormwork, FaceResult, FacePatch)> { (r, f, p) };
+                    // 부호: 이름이 있으면 든 부재 가운데 이 줄의 부위(대표 조각 부재의 부위)인 부재의 이름(R53b — 열쇠는 이름 있는 조각끼리 하나 ·
+                    // 하부슬래브 옆면 + 벽 덩어리가 벽체 줄에 «SB01, WA01» 로 섞이지 않게 — core-verify R53b M2), 없으면 마크 · 유형 이름(R47).
+                    // 판의 이름(unit.Mark)은 판이 덮는 부재 모두.
+                    string named = NamesOf(members.Select(m => m.Item1.Element.Id).Where(id => placeOf(id).part == partName), nameOf);
+                    string covered = NamesOf(members.Select(m => m.Item1.Element.Id), nameOf);
+                    string mark = named.Length > 0 ? NamedKey : r.Element.Mark.Trim().Length > 0 ? r.Element.Mark.Trim() : r.Element.Type;
                     string unitZone = joined is { MixedZones: true } ? "" : zone;
                     var (formula, areaOnly) = Shape(joined?.Merged ?? p);
                     // 줄의 조각 하나 = 거푸집 객체 하나(R44). 줄을 짓는 값을 그대로 담는다.
                     var unit = new FormworkUnit
                     {
-                        Section = section, Item = p.Item, Band = band, Part = part, Sub = sub, Zone = unitZone, Side = p.Side, Mark = mark, Tag = tag,
+                        Section = section, Item = p.Item, Band = band, Part = part, Sub = sub, Zone = unitZone, Side = p.Side, Mark = covered.Length > 0 ? covered : mark, Tag = tag,
                         Formula = formula, AreaOnly = areaOnly, Area = joined?.Merged.Area ?? p.Area, Joined = joined != null,
                         Shape = joined?.Merged ?? p, Normal = f.Normal,
-                        Members = joined != null ? joined.Members.ToList() : new List<(ElementFormwork, FaceResult, FacePatch)> { (r, f, p) },
+                        Members = members,
                     };
                     foreach (var m in unit.Members) unit.Ids.Add(m.Result.Element.Id);
                     data.Units.Add(unit);
@@ -361,6 +369,14 @@ public static class FormworkSheet
             Put(e, e.Formula, e.AreaOnly, e.Joined, 0, 0, new[] { e.Unit });
         }
         BothSides(lines);
+        // 이름으로 묶인 줄의 부호 = 그 줄에 든 부재 가운데 줄의 부위인 부재의 이름(R53b · 구멍 둘레는 작은 제목의 부위) — 차례(부호의 자연 차례)도 이 글로.
+        foreach (var (line, _) in lines.Values)
+            if (line.Mark == NamedKey)
+            {
+                string own = line.Part == HoleTitle ? line.Sub : line.Part;
+                string names = NamesOf(line.Ids.Where(id => placeOf(id).part == own), nameOf);
+                line.Mark = names.Length > 0 ? names : NamesOf(line.Ids, nameOf);
+            }
         // 차례: 절 → 부위 제목(거푸집 차례 → 목록 → 이름) → 작은 제목(거푸집 차례 → 목록 → 이름 — 2D «HOLE 주위» 안도 «- 상부슬래브 → - 중간슬래브 → - 벽체»,
         // core-verify R47 설치 전 L1) → 부호(자연 차례) → 유형 → 면의 갈래 → 외측 · 내측 → 처음 나온 차례.
         foreach (var (line, _) in lines.Values.OrderBy(e => e.first.Item).ThenBy(e => e.first.Band).ThenBy(e => e.line.Section, StringComparer.Ordinal)
@@ -390,6 +406,13 @@ public static class FormworkSheet
         foreach (var (group, units) in plates) data.Plates.Add(units.Count == 1 ? units[0] : Combine(group, units, options));
         return data;
     }
+
+    // 이름 있는 조각의 부호 열쇠(줄에 쓰지 않는 글자 — 마크 · 유형 이름과 부딪히지 않는다).
+    private const string NamedKey = "\u0001이름";
+
+    // 부재들의 이름 글(MemberNames.Compact — 이름 없는 부재는 빼고) · 이름을 쓰지 않거나 하나도 없으면 "".
+    private static string NamesOf(IEnumerable<long> ids, Func<long, string>? nameOf) =>
+        nameOf == null ? "" : MemberNames.Compact(ids.Select(id => nameOf(id) ?? ""));
 
     // 줄을 짓기 전의 줄 조각 하나와 그 줄의 열쇠 · 차례.
     private sealed class Entry
