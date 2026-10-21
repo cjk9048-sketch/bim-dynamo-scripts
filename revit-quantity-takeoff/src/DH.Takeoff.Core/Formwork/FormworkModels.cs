@@ -122,7 +122,20 @@ public sealed class FacePatch
     /// 3D 에서 뺀 판이 아니었으면 세었을 조각인가 — 부재 속성(지침용 내역적용수량 — FormworkWriter)은 이것으로 센다: 판 빼기는 일반설계(엑셀 · 거푸집 객체)의
     /// 결정이라 «그 부재에 해당하는 수식만» 담는 지침 쪽 속성에 섞지 않는다(JACK 2026-10-16 «BIM적용지침 · 일반설계 골라서 뽑기»).
     /// </summary>
-    public bool CountedIgnoringDrop => Counted || (DropLead.Length > 0 && Item.Length > 0);
+    public bool CountedIgnoringDrop => MoveLead.Length > 0 ? BeforeMove.Length > 0 : Counted || (DropLead.Length > 0 && Item.Length > 0);
+
+    /// <summary>
+    /// 사람이 ② 에서 다른 줄로 옮긴 판(R55b — JACK 2026-10-21 «지운 객체를 수동으로 넣기» · 고름 «다른 줄로 옮기기»)의 조각이면 옮긴 줄(대응표 줄의 열쇠)과
+    /// 그 판의 대표 열쇠, 아니면 null · "". 옮긴 조각은 그 줄에 들고 그 줄의 종류로 센다(엑셀 · 거푸집 객체 · ② 합계) — FormworkAnalyzer.ApplyMoves.
+    /// </summary>
+    public (string type, string group)? MovedTo { get; internal set; }
+    public string MoveLead { get; internal set; } = "";
+
+    /// <summary>옮기기 전 종류 — 부재 속성(지침용)은 이것으로 센다(R48 원칙 — 판 지우기 · 옮기기는 일반설계의 결정 · 계획 검토 M5). 옮긴 조각이 아니면 "".</summary>
+    public string BeforeMove { get; internal set; } = "";
+
+    /// <summary>부재 속성(지침용 내역적용수량)에 쓰는 종류 — 옮긴 조각이면 옮기기 전 종류.</summary>
+    public string GuidelineItem => MoveLead.Length > 0 ? BeforeMove : Item;
 
     /// <summary>조각 안의 대표 점(한 번 재면 담아 둔다 — 뺀 판 열쇠가 쓴다 · PatchGeometry.Anchor).</summary>
     internal (double x, double y, double z)? AnchorCache { get; set; }
@@ -133,8 +146,8 @@ public sealed class FacePatch
 }
 
 /// <summary>
-/// 수직면 덩어리(R49): 같은 방향 · 같은 평면에 맞닿은 수직면(옆면 · 구멍 둘레) 조각들 — 부재 종류 · 안팎 · 위치 · 부위 · 거푸집 종류와 상관없이 한 장.
-/// 버림 · 받침류(2D 가 따로 적는 것 — FormworkTable.StandsAlone)는 들지 않는다. 합친 테두리가 한 고리가 아니면 묶지 않는다.
+/// 수직면 덩어리(R49): 같은 방향 · 같은 평면에 맞닿은 수직면(옆면 · 구멍 둘레) 조각들 — 안팎 · 위치 · 거푸집 종류와 상관없이 한 장.
+/// 벽과 슬래브만 든다(R55 — FormworkAnalyzer.InLump: 보 · 기둥 · 헌치 · 기초 · PIT · 트렌치 · 호퍼 · 턱 · 버림 · 받침류는 제 줄). 합친 테두리가 한 고리가 아니면 묶지 않는다.
 /// </summary>
 public sealed class VerticalGroup
 {

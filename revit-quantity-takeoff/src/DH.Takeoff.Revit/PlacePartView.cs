@@ -159,7 +159,13 @@ public sealed partial class PlacePartView
         revert.Click += (_, _) => RevertAll?.Invoke();
         // 되돌리기는 글자판을 가져가지 않는다 — 가져가면 적다 만 목록 칸이 먼저 적히고, 되돌리기가 그것을 되돌린다(revit-verify R49 M1).
         _undo.Focusable = false;
-        _undo.Click += (_, _) => { DropPending(); Do(_editor.Undo); };
+        _undo.Click += (_, _) =>
+        {
+            // ② 에서는 ② 에서 한 일(판 지우기 · 옮기기 · 종류 바꾸기 — R55b) · ① 에서는 모델에 넣은 것.
+            if (Step == 1) { FormworkUndo(); return; }
+            DropPending();
+            Do(_editor.Undo);
+        };
         _next.Click += (_, _) => PressNext();
         _back.Click += (_, _) =>
         {
@@ -296,8 +302,11 @@ public sealed partial class PlacePartView
         if (e.Key == Key.Escape && InOpenList(e.OriginalSource)) return;     // 펼친 목록(층 · 구조물)에서 Esc 는 그 목록을 닫는다 — 고른 부재는 그대로
         if (Step == 1)
         {
-            // ② : Esc = 고른 줄 풀기. 되돌리기는 없다(종류는 콤보에서 다시 고른다).
-            if (e.Key == Key.Escape) { _view3d.CancelDrag(); PickRow(null); e.Handled = true; }
+            // ② : Esc = 옮길 줄 고르기 취소 → 고른 줄 풀기 · Del = 찍은 판 지우기 · Ctrl+Z = ② 에서 한 일 되돌리기(R55b — JACK 2026-10-21 «지우기(Del 키도) · 되돌리기»).
+            // ① 의 모델 되돌리기로 흘러가지 않게 이 갈래에서 끝낸다(계획 검토 L4).
+            if (e.Key == Key.Escape) { _view3d.CancelDrag(); if (!CancelMovePick()) PickRow(null); e.Handled = true; }
+            else if (e.Key == Key.Delete) { DeletePicked(); e.Handled = true; }
+            else if (e.Key == Key.Z && (Keyboard.Modifiers & ModifierKeys.Control) != 0) { if (!CancelMovePick()) FormworkUndo(); e.Handled = true; }
             return;
         }
         if (e.Key == Key.Escape) { _view3d.CancelDrag(); _editor.ClearSelection(); RefreshAll(); e.Handled = true; }
@@ -335,7 +344,7 @@ public sealed partial class PlacePartView
         bool places = Step == 0;
         Visibility Show(bool on) => on ? Visibility.Visible : Visibility.Collapsed;
         _progress.Visibility = Show(places);
-        _next.Visibility = _undo.Visibility = Show(places);
+        _next.Visibility = Show(places);   // [되돌리기]는 두 걸음 다(② 는 ② 에서 한 일 — R55b)
         _finish.Visibility = _back.Visibility = Show(!places);
         // ② 에는 고른 부재가 없다: 숨기기 · 남은 것만 보기는 ① 에서만(① 에서 숨긴 부재는 ② 에서도 숨긴 채다). 종류 · 층은 둘 다.
         _hide.Visibility = _showAll.Visibility = _onlyRemaining.Visibility = Show(places);

@@ -104,6 +104,7 @@ public static class FormworkMerge
         public required string Part;       // 부재의 부위(밑면은 같은 부위끼리 — 부위마다의 «계»가 옮겨 가지 않게)
         public required string Group;      // 면의 갈래(밑면 / 아래가 빈 밑면 — 줄의 부위 제목이 섞이지 않게)
         public required string Kind;       // 종류(유로폼 옆면이면 높이 구간까지 — acrossBands 면 종류만) — 같은 절끼리만 잇는다
+        public required string Move;       // 옮긴 판의 대표 열쇠(R55b — 같은 옮긴 판끼리만 잇는다 · 계획 검토 M3). 아니면 ""
         public V3 Min, Max;
         public int Parent;
     }
@@ -143,7 +144,7 @@ public static class FormworkMerge
                     {
                         Result = r, Face = f, Patch = p, N = n, D = n.Dot(V3.Of(p.Outline[0][0])), Bottom = bottom, Outer = outer, Zone = zone,
                         Part = part, Group = FormworkTable.GroupOf(f.Class, p),
-                        Kind = p.Item == FormworkTable.Euro && !acrossBands ? $"{p.Item}#{p.Band}" : p.Item, Parent = cands.Count,
+                        Kind = p.Item == FormworkTable.Euro && !acrossBands ? $"{p.Item}#{p.Band}" : p.Item, Move = p.MoveLead, Parent = cands.Count,
                     };
                     (c.Min, c.Max) = BoxOf(p);
                     cands.Add(c);
@@ -159,7 +160,7 @@ public static class FormworkMerge
             for (int j = i + 1; j < cands.Count; j++)
             {
                 Cand a = cands[i], b = cands[j];
-                if (a.Bottom != b.Bottom) continue;
+                if (a.Bottom != b.Bottom || a.Move != b.Move) continue;
                 if (a.Bottom ? a.Zone != b.Zone || a.Part != b.Part || a.Group != b.Group : a.Outer != b.Outer) continue;
                 if (a.N.Dot(b.N) < 1 - 1e-10 || Math.Abs(a.D - b.D) > eps) continue;
                 if (Apart(a, b, Join + 1e-6)) continue;
@@ -192,8 +193,8 @@ public static class FormworkMerge
         {
             var n = new V3(group.Normal[0], group.Normal[1], group.Normal[2]).Unit();
             var counted = group.Members.Where(m => m.Patch.Counted && m.Patch.Item.Length > 0 && m.Patch.Outline.Count > 0 && m.Patch.Outline[0].Count >= 3).ToList();
-            var parts = acrossBands ? new List<List<(ElementFormwork Result, FaceResult Face, FacePatch Patch)>> { counted }
-                                    : counted.GroupBy(m => m.Patch.Item == FormworkTable.Euro ? m.Patch.Band : 0).Select(g => g.ToList()).ToList();
+            // 옮긴 판의 조각은 같은 옮긴 판끼리만(R55b — 계획 검토 M3: 덩어리 잇기가 옮긴 조각과 안 옮긴 조각을 한 판으로 잇지 않게).
+            var parts = counted.GroupBy(m => (acrossBands || m.Patch.Item != FormworkTable.Euro ? 0 : m.Patch.Band, m.Patch.MoveLead)).Select(g => g.ToList()).ToList();
             foreach (var members in parts.Where(p => p.Count >= 2))
             {
                 var lead = members.FirstOrDefault(m => ReferenceEquals(m.Patch, group.Governor.Patch));

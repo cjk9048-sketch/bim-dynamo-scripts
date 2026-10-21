@@ -20,7 +20,7 @@ namespace DH.Takeoff.Revit;
 ///  · 왼쪽 판 = 대응표(부위 줄 · 유형 × 면 → 종류): 줄을 누르면 그 줄의 면이 든 판이 맨 위에 제 색으로, 부재와 다른 거푸집은 옅게 보이고
 ///    (R48 — «고른 줄만 진하게, 나머지 흐리게»), 종류를 바꾸면 대응표만 다시 걸어(형상은 다시 재지 않는다) 3D 의 판 · 색과 합계가 바로 바뀐다.
 ///    대응표는 바꿀 때마다 파일에 적는다(SaveRules).
-///  · 그림 위 = 거푸집 합계 · 종류별 넓이 · 확인할 자리 수 · 찍은 판의 띠([이 판 빼기] · [되살리기] — R48), 그림 아래 = 색 풀이.
+///  · 그림 위 = 거푸집 합계 · 종류별 넓이 · 확인할 자리 수 · 찍은 판의 띠([지우기] · [되살리기] — R48 · [옮기기] · [원래 줄로] — R55b), 그림 아래 = 색 풀이.
 ///  · 3D 에서 판을 찍으면 흰 막 + 분홍 테두리로 덮고 그 판을 정한 줄을 고른다. 종류 · 층 거름은 ① 과 같이 쓴다(① 에서 숨긴 부재는 숨긴 채다).
 /// </summary>
 public sealed partial class PlacePartView
@@ -205,6 +205,7 @@ public sealed partial class PlacePartView
         var piece = PieceAt(index);
         _fwPlate = piece.Lead;
         _fwPicked = _board.RowOf(piece);
+        _fwMoveLead = null;                       // 다른 판을 찍으면 옮길 줄 고르기는 그만둔다(R55b)
         RefreshAll();
         if (_fwPicked is { } key && _fwRowViews.TryGetValue(key, out var view)) view.row.BringIntoView();
     }
@@ -212,6 +213,8 @@ public sealed partial class PlacePartView
     // 표에서 줄을 골랐다(또는 Esc 로 풀었다): 찍은 판은 푼다. 줄을 고르면 그 줄의 판이 다 보이게 화면을 맞춘다(JACK 2026-10-21 «포커싱도»).
     private void PickRow((string type, string group)? key)
     {
+        // 옮길 줄을 고르는 중이면(R55b [옮기기]) 누른 줄로 옮긴다 — 줄을 고르지 않는다.
+        if (key is { } target && _fwMoveLead != null) { MoveTo(target); return; }
         _fwPicked = key;
         _fwPlate = null;
         RefreshAll();
@@ -241,20 +244,22 @@ public sealed partial class PlacePartView
     }
 
     // 덩이를 한 줄로(마우스 밑 딱지 · 찍은 판의 띠): 판 = «{절} · {부위}{ - 작은 제목} · {부호} ({괄호}) : {식} · {넓이} ㎡ · 부재 n»(엑셀 줄과 같은 말 — R48) ·
-    // 뺀 판 = «뺀 판 · {종류} · {넓이} ㎡ · 부재 n» · 판이 아닌 덩이(세지 않음 · 아직 정하지 않은 아래가 빈 밑면) = 유형 · 면 · 종류 · 넓이 · 까닭.
+    // 지운 판 = «지운 판 · {종류} · {넓이} ㎡ · 부재 n» · 옮긴 판 = «옮김 → {줄} · » + 판의 글(R55b) · 판이 아닌 덩이(세지 않음 · 아직 정하지 않은 아래가 빈 밑면) = 유형 · 면 · 종류 · 넓이 · 까닭.
     private string PieceText(FormworkPiece piece)
     {
         int members = piece.Members.Select(m => m.Result.Element.Id).Distinct().Count();
         var lead = piece.Lead;
         if (piece.Dropped)
-            return $"뺀 판 · {(lead.Item.Length > 0 ? lead.Item + " · " : "")}{M2(piece.Area)} ㎡ · 부재 {members}";
+            return $"지운 판 · {(lead.Item.Length > 0 ? lead.Item + " · " : "")}{M2(piece.Area)} ㎡ · 부재 {members}" + (lead.Note == FormworkAnalyzer.OrphanNote ? " · " + lead.Note : "");
+        string moved = lead.MovedTo is { } to ? $"옮김 → {RowLabel(to)} · " : "";
         if (piece.Plate is { } plate)
         {
             string title = plate.Part + (plate.Sub.Length > 0 ? " - " + plate.Sub : "");
             string tag = plate.Tag.Length > 0 ? $" ({plate.Tag})" : "";
             string check = lead.NeedsCheck ? " · 확인 필요" + (lead.Note.Length > 0 ? ": " + lead.Note : "") : "";
-            return $"{plate.Section} · {title} · {plate.Mark}{tag} : {plate.Formula.Replace('*', '×')} · {M2(plate.Area)} ㎡ · 부재 {members}{check}";
+            return $"{moved}{plate.Section} · {title} · {plate.Mark}{tag} : {plate.Formula.Replace('*', '×')} · {M2(plate.Area)} ㎡ · 부재 {members}{check}";
         }
+        if (moved.Length > 0) return $"{moved}{KindText(lead)} · {M2(piece.Area)} ㎡ · 부재 {members}" + (lead.Note.Length > 0 ? " · " + lead.Note : "");
         var el = piece.Result.Element;
         string side = piece.Side.Length > 0 ? $"({piece.Side})" : "";
         string mark = el.Mark.Length > 0 ? $" {el.Mark}" : "";
@@ -263,45 +268,148 @@ public sealed partial class PlacePartView
                (lead.Note.Length > 0 ? " · " + lead.Note : "");
     }
 
-    // [이 판 빼기] · [되살리기](R48 — JACK 2026-10-16 «찍어서 빼기 · 판 한 장»): 대응표 파일에 적고(SaveRules) 덩이 · 줄 · 합계를 다시 센 뒤
-    // 겉면을 갈아 끼운다(보는 자리는 그대로). 찍은 판은 대표 조각으로 다시 찾아 그대로 고른 채 둔다(뺀 뒤에는 회갈색 판 + [되살리기]).
-    private bool ToggleDrop()
+    // ── 판 지우기 · 되살리기 · 옮기기 · 되돌리기(R48 · R55b — JACK 2026-10-21 «찍었을 때 지우기(Del 키도) · 되돌리기 · 지운 판을 수동으로 넣기» ·
+    //    고름 «다른 줄로 옮기기» · «한 일 차례로 여러 번») ──
+    // 판 하나의 상태 = 셈 ⇄ 지움 ⇄ 옮김(줄): 셈 → [지우기]/Del → 지움 · 지움 → [되살리기] → 셈 · 지움 → [옮기기] + 줄 → 옮김 ·
+    // 옮김 → [지우기]/Del → 지움(기록은 그대로) · 옮김 → [원래 줄로] → 셈. 대응표 파일에 적고(SaveRules) 덩이 · 줄 · 합계를 다시 센 뒤 겉면을 갈아 끼운다
+    // (보는 자리는 그대로 · 찍은 판은 대표 조각으로 다시 찾아 그대로 고른 채). 한 일은 되돌리기 목록에 «그 판의 전 상태»로 남긴다(계획 검토 H3).
+
+    // ② 에서 한 일(마지막이 끝) — 이름 한 줄 · 되돌리는 일(돌려주는 값 = 다시 셌다). 창을 닫으면 없어진다.
+    private readonly List<(string what, Func<bool> undo)> _fwUndo = new();
+    private string? _fwMoveLead;                 // 옮길 줄을 고르는 중인 판의 대표 열쇠(null = 아님)
+    private Button? _fwMoveButton;               // [옮기기](지운 판) · [원래 줄로](옮긴 판)
+
+    private FormworkPiece? PickedPlatePiece() => _board != null && _fwPlate is { } lead && _board.IndexOf(lead) is int at && at >= 0 ? _board.Pieces[at] : null;
+
+    // [지우기] · [되살리기](띠의 첫 단추): 세는 판 · 옮긴 판이면 지우기, 지운 판이면 되살리기.
+    private bool PlateAction()
     {
-        if (_board == null || Busy || _fwPlate is not { } lead) return false;
-        int at = _board.IndexOf(lead);
-        if (at < 0) return false;
+        if (PickedPlatePiece() is not { } piece) return false;
+        return piece.Dropped ? ChangePlate(piece, "되살리기", b => b.Restore(piece)) : DeletePiece(piece);
+    }
+
+    // Del · [지우기]: 세는 판 → 지움 · 옮긴 판 → 지움(옮긴 줄만 지운다 — 기록은 그대로) · 지운 판은 그대로(알림).
+    private bool DeletePicked()
+    {
+        if (_board == null || Busy) return false;
+        if (PickedPlatePiece() is not { } piece) { ShowMessage("지울 판을 3D 에서 먼저 찍어 주세요."); return false; }
+        if (piece.Dropped) { ShowMessage("이미 지운 판입니다 — [되살리기] · [옮기기]"); return false; }
+        return DeletePiece(piece);
+    }
+
+    private bool DeletePiece(FormworkPiece piece)
+    {
+        if (piece.Moved) return ChangePlate(piece, "지우기", b => b.SetMove(piece.MoveLead, null));
+        if (piece.Plate == null) { ShowMessage("세지 않는 면이라 지울 판이 없습니다."); return false; }
+        string dropped = "";
+        return ChangePlate(piece, "지우기", b => b.Drop(piece, out dropped), () => dropped);
+    }
+
+    // [옮기기](지운 판 — 줄 고르기를 시작) · [원래 줄로](옮긴 판 — 셈).
+    private bool MoveAction()
+    {
+        if (_board == null || Busy || PickedPlatePiece() is not { } piece) return false;
+        if (piece.Moved) return ChangePlate(piece, "원래 줄로", b => b.Restore(piece));
+        if (!piece.Dropped) return false;
+        _fwMoveLead = piece.DropLead;
+        Log?.Invoke($"거푸집 판 옮길 줄 고르기\t{PieceText(piece)}");
+        RefreshAll();
+        ShowMessage("옮길 줄을 표에서 누르세요 · Esc = 취소");
+        return true;
+    }
+
+    // 옮길 줄 고르기를 그만둔다(고르는 중이었으면 true).
+    private bool CancelMovePick()
+    {
+        if (_fwMoveLead == null) return false;
+        _fwMoveLead = null;
+        RefreshAll();
+        ShowMessage("옮기기를 그만뒀습니다.");
+        return true;
+    }
+
+    // 고른 줄로 옮긴다(표의 줄을 누름 — PickRow 가 부른다). 안 되는 줄이면 까닭만 알리고 계속 고른다.
+    private void MoveTo((string type, string group) key)
+    {
+        if (_board == null || _fwMoveLead is not { } lead) return;
+        int at = _board.IndexOfDrop(lead);
+        if (at < 0) { _fwMoveLead = null; RefreshAll(); return; }
         var piece = _board.Pieces[at];
-        bool restoring = piece.Dropped;
+        string why = _board.WhyNotMoveTo(piece, key);
+        if (why.Length > 0) { ShowMessage($"그 줄로는 옮길 수 없습니다({why}) — 다른 줄 · Esc = 취소", true); return; }
+        _fwMoveLead = null;
+        if (ChangePlate(piece, "옮기기 → " + RowLabel(key), b => b.SetMove(lead, key))) _fwPicked = key;
+        RefreshAll();
+    }
+
+    // 판의 상태를 바꾸고(act) · 되돌리기 목록에 그 판의 전 상태를 남기고 · 파일에 적고 · 다시 그린다. 바뀌지 않았으면 알리고 false.
+    /// <param name="leadAfter">세는 판을 지울 때 적은 대표 열쇠(Board.Drop 이 돌려줌 — 설치 전 검토 L2). 없으면 판의 대표 열쇠.</param>
+    private bool ChangePlate(FormworkPiece piece, string what, Func<FormworkBoard, bool> act, Func<string>? leadAfter = null)
+    {
+        if (_board == null || Busy || _fwPlate is not { } anchor) return false;
+        string leadBefore = FormworkBoard.LeadOf(piece);
+        var before = leadBefore.Length > 0 ? _board.StateOf(leadBefore) : null;
         double area = piece.Area;
         var ids = piece.Members.Select(m => m.Result.Element.Id).Distinct().ToList();
         string text = PieceText(piece);
-        if (!(restoring ? _board.Restore(piece) : _board.Drop(piece)))
+        if (!act(_board))
         {
-            // 열쇠가 판에 맞지 않아 빠지지 않았다(revit-verify R48 설치 전 L4) — 되돌려져 있으니 알리고 일지에만 남긴다.
-            if (!restoring)
-            {
-                Log?.Invoke($"거푸집 판 뺄 수 없음\t{text} · 부재 Id {string.Join(",", ids.Take(8))}");
-                ShowMessage("이 판은 뺄 수 없었습니다(판의 모양으로 자리를 찾지 못함) — 일지를 보내 주세요.", true);
-            }
+            // 열쇠가 판에 맞지 않아 바뀌지 않았다(revit-verify R48 설치 전 L4) — 되돌려져 있으니 알리고 일지에만 남긴다.
+            Log?.Invoke($"거푸집 판 {what} 못 함\t{text} · 부재 Id {string.Join(",", ids.Take(8))}");
+            ShowMessage($"바꾸지 못했습니다({what} — 판의 모양으로 자리를 찾지 못함) · 일지를 보내 주세요.", true);
             return false;
         }
+        // 대표 열쇠: 지운 뒤에야 생긴다(셈 → 지움) — Board.Drop 이 적은 열쇠.
+        string lead = leadBefore.Length > 0 ? leadBefore : leadAfter?.Invoke() ?? "";
+        if (lead.Length > 0) _fwUndo.Add((what, () => { _board.SetState(lead, before); return true; }));
+        FinishChange($"거푸집 판 {what}\t{text} · 부재 Id {string.Join(",", ids.Take(8))}{(ids.Count > 8 ? " …" : "")}",
+            $"{what} · {M2(area)} ㎡ · 거푸집 {M2(_board.Total)} ㎡", what);
+        return true;
+    }
+
+    // 다시 센 뒤: 고른 줄 = 찍은 판의 줄 · 겉면 갈아 끼우기 · 파일에 적기 · 일지 · 알림.
+    private void FinishChange(string log, string said, string what)
+    {
+        if (_board == null) return;
         string problem = SaveRules?.Invoke() ?? "";
         var watch = Stopwatch.StartNew();
         // 새 줄을 먼저 정한 뒤 그린다 — 첫 그림부터 새 줄로(revit-verify R48 설치 전 L2). 시간은 다 그린 뒤까지 잰다.
-        int now = _board.IndexOf(lead);
-        _fwPicked = now >= 0 ? _board.RowOf(_board.Pieces[now]) : null;
+        if (_fwPlate is { } anchor && _board.IndexOf(anchor) is int now && now >= 0) _fwPicked = _board.RowOf(_board.Pieces[now]);
         SetFormworkMeshes();
         RefreshAll();
-        Log?.Invoke(FormattableString.Invariant(
-            $"거푸집 판 {(restoring ? "되살림" : "뺌")}\t{text} · 부재 Id {string.Join(",", ids.Take(8))}{(ids.Count > 8 ? " …" : "")}") +
-            $" · 뺀 판 {_board.DroppedCount}장({M2(_board.DroppedArea)} ㎡) · 모양이 바뀌어 다시 센 뺀 판 {_board.LostDrops.Count}" +
-            $" · 일부만 찾음 {_board.DropCheck.Partial.Count} · 넓이 달라짐 {_board.DropCheck.Resized.Count} · 거푸집 {M2(_board.Total)} ㎡" +
-            $" · 판 다시 지음 {_board.RefreshMilliseconds} ms · 그림 {watch.ElapsedMilliseconds} ms");
-        if (problem.Length > 0)
-            ShowMessage($"{(restoring ? "되살렸지만" : "뺐지만")} 대응표 파일에 적지 못했습니다(이 창에서는 바꾼 대로 셉니다): {problem}", true);
-        else ShowMessage($"{(restoring ? "되살렸습니다" : "판을 뺐습니다")} · {M2(area)} ㎡ · 거푸집 {M2(_board.Total)} ㎡");
+        Log?.Invoke(log + $" · 지운 판 {_board.DroppedCount}장({M2(_board.DroppedArea)} ㎡) · 옮긴 판 {_board.MovedCount}장({M2(_board.MovedArea)} ㎡)" +
+                    $" · 옮길 줄이 없어진 판 {_board.OrphanCount} · 모양이 바뀌어 다시 센 판 {_board.LostDrops.Count}" +
+                    $" · 일부만 찾음 {_board.DropCheck.Partial.Count} · 넓이 달라짐 {_board.DropCheck.Resized.Count} · 거푸집 {M2(_board.Total)} ㎡" +
+                    $" · 되돌릴 일 {_fwUndo.Count} · 판 다시 지음 {_board.RefreshMilliseconds} ms · 그림 {watch.ElapsedMilliseconds} ms");
+        if (problem.Length > 0) ShowMessage($"{what} — 대응표 파일에 적지 못했습니다(이 창에서는 바꾼 대로 셉니다): {problem}", true);
+        else ShowMessage(said);
+    }
+
+    // [되돌리기] · Ctrl+Z(② — R55b): ② 에서 한 일을 마지막부터 하나씩(그 판의 전 상태 · 그 줄의 전 값을 다시 쓴다).
+    private bool FormworkUndo()
+    {
+        if (_board == null || Busy) return false;
+        if (_fwUndo.Count == 0) { ShowMessage("되돌릴 것이 없습니다."); return false; }
+        var (what, undo) = _fwUndo[^1];
+        _fwUndo.RemoveAt(_fwUndo.Count - 1);
+        bool ok;
+        try { ok = undo(); }
+        catch (Exception ex)
+        {
+            // 되돌리지 못했다 — 항목은 남긴다(계획 검토 L4).
+            _fwUndo.Add((what, undo));
+            Log?.Invoke($"② 되돌리기 오류\t{what}\t{ex}");
+            ShowMessage($"되돌리지 못했습니다({what}): {ex.Message}", true);
+            return false;
+        }
+        if (!ok) { _fwUndo.Add((what, undo)); ShowMessage($"되돌리지 못했습니다({what}).", true); return false; }
+        FinishChange($"② 되돌리기\t{what}", $"되돌림 — {what} · 거푸집 {M2(_board.Total)} ㎡", "되돌리기");
         return true;
     }
+
+    // 줄의 짧은 이름(알림 · 띠): 부위 줄 = «부위 이름» · 유형 줄 = «유형 · 면».
+    private static string RowLabel((string type, string group) key) =>
+        FormworkRules.PartOf(key.type) is { } part ? $"부위 {part}" : $"{key.type} · {key.group}";
 
     private string KindText(FacePatch patch) =>
         patch.Counted ? $"{patch.Item} {(patch.Item == FormworkTable.Euro && _board != null ? FormworkTable.BandName(patch.Band, _board.Options.Bands) : "")}".TrimEnd()
@@ -479,6 +587,7 @@ public sealed partial class PlacePartView
     {
         FormworkSummary.Ask => "⚠ 선택 필요",
         FormworkSummary.Mixed => "여러 종류",
+        FormworkSummary.Dropped => "지운 판",
         _ => draft,
     };
 
@@ -486,6 +595,7 @@ public sealed partial class PlacePartView
     {
         FormworkSummary.Ask => "선택 필요",
         FormworkSummary.Mixed => "여러 종류",
+        FormworkSummary.Dropped => "지운 판",
         _ => draft,
     } + ")";
 
@@ -522,10 +632,14 @@ public sealed partial class PlacePartView
 
     // 종류를 바꿨다: 대응표만 다시 걸고(형상은 그대로) 파일에 적은 뒤 화면을 맞춘다. 그 줄이 골라진다(3D 에서 바뀐 면이 보이게).
     // 판이 이어지거나 끊길 수 있어(종류가 같아야 잇는다) 겉면을 갈아 끼운다(R48 — 보는 자리 · 찍은 판은 그대로).
-    private bool ChangeRule((string type, string group) key, string choice)
+    private bool ChangeRule((string type, string group) key, string choice, bool record = true)
     {
         if (_board == null || Busy) return false;
+        string before = _board.RuleOf(key.type, key.group);
         if (!_board.SetRule(key.type, key.group, choice)) return false;
+        // 되돌리기 목록(R55b): 그 줄의 전 값 — 되돌릴 때는 다시 적지 않는다(record = false).
+        // 그새 같은 값이 되어 있으면(바뀐 것 없음) 되돌린 것으로 본다 — 목록에 끝없이 남지 않게.
+        if (record) _fwUndo.Add(($"{RowLabel(key)} → {(choice.Length > 0 ? choice : "자동")}", () => { ChangeRule(key, before, record: false); return true; }));
         string problem = SaveRules?.Invoke() ?? "";
         _fwPicked = key;
         // 찍어 둔 판이 바꾼 줄의 판이 아니면 푼다 — 흰 막 · 띠가 다른 줄의 판에 남지 않게(revit-verify R48 설치 전 L3).
@@ -536,7 +650,7 @@ public sealed partial class PlacePartView
         Log?.Invoke($"거푸집 대응표\t{key.type} · {key.group} → {(choice.Length > 0 ? choice : "자동")} · 판 {_board.Pieces.Count(p => p.Plate != null)} · 거푸집 {M2(_board.Total)} ㎡" +
                     $" · 판 다시 지음 {_board.RefreshMilliseconds} ms · 그림 {watch.ElapsedMilliseconds} ms");
         string name = choice.Length > 0 ? choice : "자동";
-        string row = FormworkRules.PartOf(key.type) is { } part ? $"부위 {part}" : $"{key.type} · {key.group}";
+        string row = RowLabel(key);
         if (problem.Length > 0)
             ShowMessage($"{row} → {name} — 대응표 파일에 적지 못했습니다(이 창에서는 바꾼 값으로 셉니다): {problem}", true);
         else ShowMessage($"{row} → {name} · 거푸집 {M2(_board.Total)} ㎡");
@@ -548,8 +662,10 @@ public sealed partial class PlacePartView
     {
         if (_board == null || Busy) return false;
         var leads = _board.LostDrops.ToList();
+        var states = leads.Select(l => (l, _board.StateOf(l))).ToList();
         int n = _board.ForgetLostDrops();
         if (n == 0) return false;
+        _fwUndo.Add(($"찾지 못한 판 기록 지우기 {n}장", () => { _board.SetStates(states); return true; }));
         string problem = SaveRules?.Invoke() ?? "";
         var watch = Stopwatch.StartNew();
         SetFormworkMeshes();
@@ -572,14 +688,21 @@ public sealed partial class PlacePartView
         _ui.Mark(_fwWarnings, "", "fw.warnings");
         texts.Children.Add(_fwWarnings);
         texts.Children.Add(_fwKinds);
-        _fwPlateButton = _ui.Button("이 판 빼기", "BtnSoft", "찍은 판을 거푸집에서 뺍니다 — 엑셀 · 거푸집 객체에 넣지 않습니다(회갈색으로 남아 [되살리기]로 되살립니다).", "btn.fw.drop");
-        _fwPlateButton.Margin = new Thickness(10, 0, 0, 0);
+        _fwPlateButton = _ui.Button("지우기", "BtnSoft", "찍은 판을 지웁니다(Del) — 합계 · 엑셀 · 거푸집 객체에 넣지 않습니다(회갈색 · [되살리기] · [옮기기]).", "btn.fw.drop");
+        _fwPlateButton.Margin = new Thickness(6, 0, 0, 0);
         // 눌러도 글자판을 가져가지 않는다 — 가져가면 다음 Enter · Space 가 말없이 [되살리기]를 누른다(revit-verify R48 설치 전 L1).
         _fwPlateButton.Focusable = false;
-        _fwPlateButton.Click += (_, _) => ToggleDrop();
+        _fwPlateButton.Click += (_, _) => PlateAction();
+        // [옮기기](지운 판 — 표에서 줄을 누르면 그 줄 · 그 종류로 셈) · [원래 줄로](옮긴 판) — R55b(JACK 2026-10-21 고름 «다른 줄로 옮기기»).
+        _fwMoveButton = _ui.Button("옮기기", "BtnSoft", "지운 판을 표의 다른 줄로 옮겨 그 줄 · 그 종류로 셉니다 — 누른 뒤 표에서 줄을 누르세요(Esc = 취소).", "btn.fw.move");
+        _fwMoveButton.Margin = new Thickness(6, 0, 0, 0);
+        _fwMoveButton.Focusable = false;
+        _fwMoveButton.Click += (_, _) => MoveAction();
         var bar = new DockPanel();
         DockPanel.SetDock(_fwPlateButton, Dock.Right);
         bar.Children.Add(_fwPlateButton);
+        DockPanel.SetDock(_fwMoveButton, Dock.Right);
+        bar.Children.Add(_fwMoveButton);
         _ui.Mark(_fwPlateText, "", "fw.plate");
         bar.Children.Add(_fwPlateText);
         // 둘째 줄: 그 판의 줄(대응표와 같은 범위 — 유형 × 면 · 부위 줄이면 그 부위 전체)의 종류 단추 · 자동으로(↺) · 범위(JACK 2026-10-21 «3D 에서 찍어서 하는 기능도»).
@@ -626,7 +749,7 @@ public sealed partial class PlacePartView
         var box = new DockPanel { Margin = new Thickness(2, 10, 2, 0) };
         var hint = new TextBlock
         {
-            Text = "굴림 = 확대 · 가운데 단추 끌기 = 옮기기 · 오른쪽 단추 끌기 = 돌리기 · 판을 찍으면 그 줄 · 빼기",
+            Text = "굴림 = 확대 · 가운데 단추 끌기 = 옮기기 · 오른쪽 단추 끌기 = 돌리기 · 판을 찍으면 그 줄 · Del = 지우기 · Ctrl+Z = 되돌리기",
             Foreground = _sub, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0), Opacity = 0.9, TextTrimming = TextTrimming.CharacterEllipsis,
         };
         DockPanel.SetDock(hint, Dock.Right);
@@ -646,7 +769,7 @@ public sealed partial class PlacePartView
         Item(FormworkPalette.Base(FormworkTable.Ply4), FormworkTable.Ply4);
         Item(FormworkPalette.Base(FormworkTable.Ply6), FormworkTable.Ply6);
         Item(FormworkPalette.Check, "확인할 자리");
-        Item(FormworkPalette.Dropped, "뺀 판");
+        Item(FormworkPalette.Dropped, "지운 판");
         legend.Children.Add(new TextBlock { Text = "연한 색 = 안쪽 면 · 흰 막 = 찍은 판", Foreground = _sub, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 0, 2) });
         box.Children.Add(legend);
         return box;
@@ -658,6 +781,8 @@ public sealed partial class PlacePartView
     {
         if (_board == null) return;
         UpdateFormworkLook();
+        // 옮길 줄 고르기는 그 지운 판을 찍고 있을 때만(판이 풀리거나 판을 다시 지어 바뀌면 그만둔다 — 줄을 눌러도 아무 일 없는 상태가 남지 않게 · 설치 전 검토 L1).
+        if (_fwMoveLead != null && !(PickedPlatePiece() is { Dropped: true } movePiece && movePiece.DropLead == _fwMoveLead)) _fwMoveLead = null;
         _syncing = true;
         try
         {
@@ -697,18 +822,25 @@ public sealed partial class PlacePartView
             _fwWarnings.Children.Add(WarnChip($"종류가 달라 못 이은 면 {splits}곳",
                 "벽과 슬래브 옆처럼 같은 평면에 맞닿았지만 대응표의 종류가 달라 엑셀에서 한 줄로 잇지 못한 자리입니다. 종류를 맞추면 한 줄이 됩니다.\n"
                 + string.Join("\n", _board.Merge.SplitSummary(5).Select(s => "  " + s)), "fw.warn.splits"));   // 풍선 글은 굴리지 않는다 — 앞 다섯 가지만(전부는 일지)
-        // 사람이 뺀 판(R48): 합계 · 엑셀 · 거푸집 객체에서 빠진 것을 잊지 않게 · 모양이 바뀌어 다시 센 뺀 판(core · revit 계획 검토 M2).
-        int dropped = _board.DroppedCount, lost = _board.LostDrops.Count;
+        // 사람이 지운 판(R48 — 1021 «지우기»): 합계 · 엑셀 · 거푸집 객체에서 빠진 것을 잊지 않게 · 옮긴 판(R55b) · 옮길 줄이 없어진 판 · 모양이 바뀌어 다시 센 판.
+        int dropped = _board.DroppedCount, lost = _board.LostDrops.Count, moved = _board.MovedCount, orphans = _board.OrphanCount;
         if (dropped > 0)
-            _fwWarnings.Children.Add(WarnChip($"뺀 판 {dropped}장 · {M2(_board.DroppedArea)} ㎡",
-                "3D 에서 뺀 판입니다 — 합계 · 엑셀 · 거푸집 객체에 넣지 않습니다(부재 속성(지침용) 합계에는 들어 있습니다). 회갈색 판을 찍고 [되살리기]로 되살립니다.", "fw.warn.dropped"));
+            _fwWarnings.Children.Add(WarnChip($"지운 판 {dropped}장 · {M2(_board.DroppedArea)} ㎡",
+                "3D 에서 지운 판입니다 — 합계 · 엑셀 · 거푸집 객체에 넣지 않습니다(부재 속성(지침용) 합계에는 들어 있습니다). 회갈색 판을 찍고 [되살리기] · [옮기기].", "fw.warn.dropped"));
+        if (moved > 0)
+            _fwWarnings.Children.Add(WarnChip($"옮긴 판 {moved}장 · {M2(_board.MovedArea)} ㎡",
+                "다른 줄로 옮긴 판입니다 — 그 줄 · 그 종류로 셉니다(엑셀 · 거푸집 객체도). 부재 속성(지침용)은 옮기기 전 종류 그대로. 판을 찍고 [원래 줄로] · [지우기].\n"
+                + string.Join("\n", _board.Rules.Moves.Take(5).Select(m => "  → " + RowLabel(m.to))) + (moved > 5 ? "\n  …" : ""), "fw.warn.moved"));
+        if (orphans > 0)
+            _fwWarnings.Children.Add(WarnChip($"옮길 줄이 없어진 판 {orphans}장",
+                "옮긴 줄이 표에서 없어져(① 에서 부위 이름을 바꿈 · 줄이 가려짐) 지운 판으로 돌아갔습니다. 회갈색 판을 찍고 다시 [옮기기].", "fw.warn.orphan"));
         if (lost > 0)
         {
             // 기록을 지울 단추를 곁에 둔다(revit-verify R48 설치 전 M1 — 다시 찍어 빼도 옛 기록이 남아 경고가 영영 뜬다).
             var line = new StackPanel { Orientation = Orientation.Horizontal };
-            line.Children.Add(WarnChip($"모양이 바뀌어 다시 센 뺀 판 {lost}장",
-                "전에 뺀 판의 자리를 이번 모양에서 찾지 못해 그 자리를 다시 셉니다(부재를 지웠거나 · 나중에 침 · 결합으로 면이 크게 바뀐 때). 필요하면 다시 찍어 빼세요.", "fw.warn.lost"));
-            var forget = _ui.Button("기록 지우기", "BtnGhost", "찾지 못한 뺀 판의 기록을 대응표 파일에서 지웁니다(그 자리는 이미 다시 세고 있어 합계는 그대로입니다).", "btn.fw.forgetLost");
+            line.Children.Add(WarnChip($"모양이 바뀌어 다시 센 판 {lost}장",
+                "전에 지우거나 옮긴 판의 자리를 이번 모양에서 찾지 못해 그 자리를 다시 셉니다(부재를 지웠거나 · 나중에 침 · 결합으로 면이 크게 바뀐 때). 필요하면 다시 찍어 지우세요.", "fw.warn.lost"));
+            var forget = _ui.Button("기록 지우기", "BtnGhost", "찾지 못한 판의 기록을 대응표 파일에서 지웁니다(그 자리는 이미 다시 세고 있어 합계는 그대로입니다).", "btn.fw.forgetLost");
             forget.Focusable = false;
             forget.Margin = new Thickness(0, 4, 6, 0);
             forget.VerticalAlignment = VerticalAlignment.Center;
@@ -719,10 +851,10 @@ public sealed partial class PlacePartView
         // 찾았지만 모양이 바뀐 뺀 판(core-verify R48 설치 전 M3): 일부 조각만 찾음 · 빠진 넓이가 뺄 때와 5% 넘게 다름.
         var check = _board.DropCheck;
         if (check.Changed > 0)
-            _fwWarnings.Children.Add(WarnChip($"모양이 바뀐 뺀 판 {check.Changed}장",
+            _fwWarnings.Children.Add(WarnChip($"모양이 바뀐 판 {check.Changed}장",
                 (check.Partial.Count > 0 ? $"일부 조각만 찾은 판 {check.Partial.Count}장 — 찾은 조각만 빠지고 나머지는 다시 셉니다.\n" : "") +
                 (check.Resized.Count > 0 ? $"빠진 넓이가 뺄 때와 다른 판 {check.Resized.Count}장 — 이웃 부재가 바뀌어 판이 커지거나 줄었습니다.\n" : "") +
-                "회갈색 판을 찍어 넓이를 보고, 다르면 [되살리기] 뒤 다시 빼세요.", "fw.warn.changed"));
+                "판을 찍어 넓이를 보고, 다르면 [되살리기] 뒤 다시 지우세요.", "fw.warn.changed"));
         // 부위 줄에 가려진 옛 유형 줄(core-verify R48 설치 전 M1): 부위를 넣은 부재의 면은 부위 줄만 정한다 — 전에 고친 유형 줄이 표에 없고 걸리지도 않는다.
         var hidden = _board.HiddenTypeRules;
         if (hidden.Count > 0)
@@ -748,11 +880,17 @@ public sealed partial class PlacePartView
             parts.Add($"{name} {M2(t.Area)}");
         }
         _fwTotalText = $"거푸집 {M2(_board.Total)} ㎡ · 확인할 자리 {checks}곳" + (gaps > 0 ? $" · 그림에 없는 틈 {gaps}곳" : "") + (splits > 0 ? $" · 종류가 달라 못 이은 면 {splits}곳" : "") +
-                       (dropped > 0 ? $" · 뺀 판 {dropped}장" : "") + (lost > 0 ? $" · 모양이 바뀌어 다시 센 뺀 판 {lost}장" : "") + "\n" + string.Join(" · ", parts);
-        _status.Text = (_board.Rules.Count > 0 ? $"대응표: 직접 고른 줄 {_board.Rules.Count}" : "대응표: 모두 자동") + (dropped > 0 ? $" · 뺀 판 {dropped}장" : "") + " · 고칠 때마다 파일에 적힙니다";
+                       (dropped > 0 ? $" · 지운 판 {dropped}장" : "") + (moved > 0 ? $" · 옮긴 판 {moved}장" : "") + (orphans > 0 ? $" · 옮길 줄이 없어진 판 {orphans}장" : "") +
+                       (lost > 0 ? $" · 모양이 바뀌어 다시 센 판 {lost}장" : "") + "\n" + string.Join(" · ", parts);
+        _status.Text = _fwMoveLead != null ? "옮길 줄을 표에서 누르세요 · Esc = 취소"
+            : (_board.Rules.Count > 0 ? $"대응표: 직접 고른 줄 {_board.Rules.Count}" : "대응표: 모두 자동") + (dropped > 0 ? $" · 지운 판 {dropped}장" : "") + (moved > 0 ? $" · 옮긴 판 {moved}장" : "") + " · 고칠 때마다 파일에 적힙니다";
+        // [되돌리기](② 에서 한 일 — R55b): 할 것이 없으면 꺼짐 · 풍선 글 = 되돌릴 일.
+        _undo.IsEnabled = _fwUndo.Count > 0;
+        _ui.Tip(_undo, _fwUndo.Count > 0 ? $"되돌리기(Ctrl+Z): {_fwUndo[^1].what}" : "되돌릴 것이 없습니다.");
 
-        // 찍은 판의 띠: 엑셀 줄 한 줄 + 판이면 [이 판 빼기], 뺀 판이면 [되살리기](판이 아닌 덩이 — 세지 않음 · 아직 정하지 않은 밑면 — 는 단추 없이 글만).
-        if (_fwPlateBar != null && _fwPlateButton != null)
+        // 찍은 판의 띠: 엑셀 줄 한 줄 + 세는 판 [지우기] · 지운 판 [옮기기] [되살리기] · 옮긴 판 [원래 줄로] [지우기](R55b)
+        // (판이 아닌 덩이 — 세지 않음 · 아직 정하지 않은 밑면 — 는 단추 없이 글만).
+        if (_fwPlateBar != null && _fwPlateButton != null && _fwMoveButton != null)
         {
             var piece = _fwPickedIndex >= 0 ? PieceAt(_fwPickedIndex) : null;
             _fwPlateBar.Visibility = piece == null ? Visibility.Collapsed : Visibility.Visible;
@@ -760,8 +898,11 @@ public sealed partial class PlacePartView
             {
                 _fwPlateText.Text = PieceText(piece);
                 _fwPlateText.ToolTip = _fwPlateText.Text;
-                _fwPlateButton.Content = piece.Dropped ? "되살리기" : "이 판 빼기";
-                _fwPlateButton.Visibility = piece.Dropped || piece.Plate != null ? Visibility.Visible : Visibility.Collapsed;
+                _fwPlateButton.Content = piece.Dropped ? "되살리기" : "지우기";
+                _fwPlateButton.Visibility = piece.Dropped || piece.Moved || piece.Plate != null ? Visibility.Visible : Visibility.Collapsed;
+                _fwMoveButton.Content = piece.Moved ? "원래 줄로" : _fwMoveLead != null ? "줄 고르는 중…" : "옮기기";
+                _fwMoveButton.Visibility = piece.Dropped || piece.Moved ? Visibility.Visible : Visibility.Collapsed;
+                _fwMoveButton.Style = _ui.StyleOf(_fwMoveLead != null && piece.Dropped ? "BtnPrimary" : "BtnSoft");
             }
             // 둘째 줄: 그 판의 줄 종류(지금 걸린 종류 = 진한 단추) · 직접 고른 줄이면 ↺ · 범위. 뺀 판 · 줄이 없는 덩이는 숨긴다.
             var key = piece != null && !piece.Dropped ? _board.RowOf(piece) : null;
@@ -829,8 +970,16 @@ public sealed partial class PlacePartView
     /// <summary>찍은 판의 띠 글 · 단추 글(띠가 없으면 "").</summary>
     public string PlateBarText => _fwPlateBar is { Visibility: Visibility.Visible } ? _fwPlateText.Text : "";
     public string PlateButtonText => _fwPlateBar is { Visibility: Visibility.Visible } && _fwPlateButton is { Visibility: Visibility.Visible } b ? b.Content as string ?? "" : "";
-    /// <summary>찍은 판의 띠 단추([이 판 빼기] · [되살리기])를 눌렀다(화면의 단추와 같은 길).</summary>
-    public bool PressPlateButton() => ToggleDrop();
+    /// <summary>찍은 판의 띠 단추([지우기] · [되살리기])를 눌렀다(화면의 단추와 같은 길).</summary>
+    public bool PressPlateButton() => PlateAction();
+    /// <summary>찍은 판의 [옮기기] · [원래 줄로] 단추(보이지 않으면 null).</summary>
+    public Button? MoveButton => _fwPlateBar is { Visibility: Visibility.Visible } && _fwMoveButton is { Visibility: Visibility.Visible } b ? b : null;
+    /// <summary>옮길 줄을 고르는 중인가.</summary>
+    public bool MovePicking => _fwMoveLead != null;
+    /// <summary>② 에서 되돌릴 수 있는 일의 수.</summary>
+    public int FormworkUndoCount => _fwUndo.Count;
+    /// <summary>[되돌리기] 단추(① · ② 같이 씀).</summary>
+    public Button UndoButton => _undo;
     /// <summary>찍은 판의 띠 단추(진짜 마우스로 누를 때 자리를 잰다).</summary>
     public Button? PlateButton => _fwPlateButton;
     /// <summary>찍은 판의 줄 종류 단추(종류 이름 · «자동»은 ↺) — 보이지 않으면 null.</summary>

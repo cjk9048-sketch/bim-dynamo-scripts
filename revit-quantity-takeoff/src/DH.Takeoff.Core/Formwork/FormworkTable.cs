@@ -174,22 +174,73 @@ public sealed class FormworkRules
     public IEnumerable<(string lead, IReadOnlyList<DropRecord> records)> Drops =>
         _drops.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => (kv.Key, (IReadOnlyList<DropRecord>)kv.Value));
 
-    /// <summary>판을 뺀다: 대표 열쇠(판에서 가장 넓은 조각의 열쇠 글) + 판에 든 조각마다의 열쇠. 같은 대표 열쇠가 있으면 갈아 끼운다.</summary>
+    /// <summary>판을 뺀다: 대표 열쇠(판에서 가장 넓은 조각의 열쇠 글) + 판에 든 조각마다의 열쇠. 같은 대표 열쇠가 있으면 갈아 끼운다(옮긴 줄은 지운다 — 지운 판).</summary>
     public void Drop(string lead, IEnumerable<DropRecord> records)
     {
         var list = records.Distinct().ToList();
         string key = Cell(lead).Trim();
         if (key.Length == 0 || list.Count == 0) return;
         _drops[key] = list;
+        _moves.Remove(key);
         _dropIndex = null;
     }
 
-    /// <summary>뺀 판을 되살린다. 있었으면 true.</summary>
+    /// <summary>뺀 판을 되살린다(옮긴 판이면 옮긴 줄도 지운다 — 셈). 있었으면 true.</summary>
     public bool Restore(string lead)
     {
-        if (!_drops.Remove(Cell(lead).Trim())) return false;
+        string key = Cell(lead).Trim();
+        _moves.Remove(key);
+        if (!_drops.Remove(key)) return false;
         _dropIndex = null;
         return true;
+    }
+
+    /// <summary>
+    /// 옮긴 판 줄의 열쇠 머리(R55b — JACK 2026-10-21 «지운 객체를 사용자가 수동으로 넣을 수 있게» · 고름 «다른 줄로 옮기기»): 유형 칸에 «옮긴 판:대표 열쇠»,
+    /// 면 · 종류 칸에 옮긴 줄의 유형 · 면. 지운 판 줄(조각 열쇠)은 그대로 두고 이 줄만 더한다 — 전 판(R54 까지)은 모르는 유형 줄로 담았다가 그대로 다시 쓴다
+    /// (그 판에서는 지운 판으로 보인다 · 계획 검토 M6).
+    /// </summary>
+    public const string MovePrefix = "옮긴 판:";
+
+    // 옮긴 판: 대표 열쇠 → 옮긴 줄(대응표 줄의 열쇠). 지운 판 기록이 있는 열쇠만 뜻이 있다.
+    private readonly Dictionary<string, (string type, string group)> _moves = new(StringComparer.Ordinal);
+
+    /// <summary>그 판을 옮긴 줄(없으면 null — 지운 판이거나 기록이 없음).</summary>
+    public (string type, string group)? MoveOf(string lead)
+    {
+        string key = Cell(lead).Trim();
+        return _drops.ContainsKey(key) && _moves.TryGetValue(key, out var to) ? to : null;
+    }
+
+    /// <summary>지운 판을 그 줄로 옮긴다(null = 옮긴 줄을 지워 지운 판으로). 지운 판 기록이 없으면 false.</summary>
+    public bool SetMove(string lead, (string type, string group)? to)
+    {
+        string key = Cell(lead).Trim();
+        if (!_drops.ContainsKey(key)) return false;
+        if (to is { } row) _moves[key] = (Cell(row.type), Cell(row.group));   // 대응표 줄 열쇠와 같은 규칙(Set · Lookup — 빈칸을 자르지 않는다 · 설치 전 검토 L5)
+        else _moves.Remove(key);
+        return true;
+    }
+
+    /// <summary>옮긴 판마다 대표 열쇠와 옮긴 줄(대표 열쇠의 글자 차례).</summary>
+    public IEnumerable<(string lead, (string type, string group) to)> Moves =>
+        _moves.Where(kv => _drops.ContainsKey(kv.Key)).OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => (kv.Key, kv.Value));
+
+    /// <summary>판 하나의 상태(되돌리기 — R55b): 지운 판 기록 · 옮긴 줄. null = 기록 없음(셈).</summary>
+    public sealed record PlateState(IReadOnlyList<DropRecord> Records, (string type, string group)? MovedTo);
+
+    public PlateState? StateOf(string lead)
+    {
+        string key = Cell(lead).Trim();
+        return _drops.TryGetValue(key, out var list) ? new PlateState(list.ToList(), MoveOf(key)) : null;
+    }
+
+    /// <summary>판 하나를 그 상태로 다시 쓴다(null = 셈 — 기록을 지움).</summary>
+    public void SetState(string lead, PlateState? state)
+    {
+        if (state == null) { Restore(lead); return; }
+        Drop(lead, state.Records);
+        if (state.MovedTo is { } to) SetMove(lead, to);
     }
 
     /// <summary>
@@ -268,6 +319,13 @@ public sealed class FormworkRules
                 if (DropRecord.Parse(cells[1].Trim()) is { } record) rules.AddDrop(cells[0][DropPrefix.Length..], record);
                 continue;
             }
+            if (cells[0].StartsWith(MovePrefix, StringComparison.Ordinal))
+            {
+                // 옮긴 판(R55b) — 지운 판 줄보다 앞에 와도 된다(MoveOf 는 지운 판 기록이 있을 때만 뜻이 있다).
+                string lead = Cell(cells[0][MovePrefix.Length..]).Trim();
+                if (lead.Length > 0 && cells[1].Trim().Length > 0) rules._moves[lead] = (Cell(cells[1]), Cell(cells[2]));
+                continue;
+            }
             rules.Set(cells[0], cells[1], cells[2]);
         }
         return rules;
@@ -286,12 +344,15 @@ public sealed class FormworkRules
     {
         var sb = new StringBuilder("# 거푸집 대응표에서 고친 줄(초안과 다른 것만). 탭으로 나눈 세 칸.\n");
         if (_drops.Count > 0) sb.Append("# «뺀 판:» 줄 = ② 3D 에서 뺀 판의 조각(부재 Id|법선 x|y|z|평면 자리|조각 안의 점 x|y|z|넓이).\n");
+        if (Moves.Any()) sb.Append("# «옮긴 판:» 줄 = 지운 판을 옮긴 대응표 줄(유형 · 면).\n");
         sb.Append("유형\t면\t종류\n");
         foreach (var (type, group, item) in All)
             sb.Append(type).Append('\t').Append(group).Append('\t').Append(item).Append('\n');
         foreach (var (lead, records) in Drops)
             foreach (var record in records)
                 sb.Append(DropPrefix).Append(lead).Append('\t').Append(record.Text).Append('\t').Append(NotCounted).Append('\n');
+        foreach (var (lead, to) in Moves)
+            sb.Append(MovePrefix).Append(lead).Append('\t').Append(to.type).Append('\t').Append(to.group).Append('\n');
         return sb.ToString();
     }
 

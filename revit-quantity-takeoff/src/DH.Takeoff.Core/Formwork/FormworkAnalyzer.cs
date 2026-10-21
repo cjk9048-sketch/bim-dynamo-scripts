@@ -187,9 +187,32 @@ public static class FormworkAnalyzer
     /// <summary>마지막으로 잴 때 지은 문맥 수(R54 — 구조체마다 «그 구조체가 이기는 나중 부재만» 뺀 콘크리트 · 모든 콘크리트 문맥 포함) · 잰 시간(ms) — 일지(core-verify 설치 전 L5).</summary>
     public static (int contexts, long ms) LastContexts { get; private set; }
 
-    // 수직면 덩어리(R49 — JACK 2026-10-16 «객체와 관계없이 2개이상의 부위로 합쳐져서 수직면이 생긴곳은 무조건 하나의 덩어리»):
+    /// <summary>
+    /// 수직면 덩어리에 드는 부재인가(R55 — JACK 2026-10-21: 개구부 자리의 보 옆면 · 외벽과 한 평면인 드레인 PIT 벽이 벽 덩어리에 들어가 벽 줄 · 유로폼이 됨 →
+    /// 고름 «슬래브 가장자리만»): 벽과 슬래브(바닥 · 중간 · 상부)만. 부위를 넣었으면 부위로(벽 묶음 · 슬래브 낱말이 든 바닥 · 위 슬래브 묶음 · 위 슬래브 묶음의 «지붕»),
+    /// 아니면 부재 종류(벽 · 바닥 · 유형 이름이 슬래브인 구조 기초 — 기초 슬래브)로. 목록에 없고 묶음도 모르는 부위 이름(사람이 지은 이름 — «그 밖»)도 부재 종류로.
+    /// </summary>
+    internal static bool InLump(FormworkElement el, FormworkOptions options)
+    {
+        if (el.Part.Length == 0) return ByKind(el);
+        string group = options.PartGroup(el.Part);
+        if (group == PartCatalog.Etc && PartCatalog.Find(el.Part) == null) return ByKind(el);
+        return group == PartCatalog.Wall
+            || ((group is PartCatalog.Floor or PartCatalog.Upper) && SlabWord(el.Part))
+            || (group == PartCatalog.Upper && el.Part.Contains("지붕", StringComparison.Ordinal));
+
+        // 부위가 없을 때: 벽 · 바닥 · 기초 슬래브(구조 기초 카테고리에 든 바닥판 — 유형 이름으로 가른다: PIT · 독립기초는 들지 않는다 · 설계 검토 L5).
+        static bool ByKind(FormworkElement el) =>
+            el.Kind is MemberKind.Wall or MemberKind.Slab
+            || (el.Kind == MemberKind.Foundation && (SlabWord(el.Type) || el.Type.StartsWith("SB", StringComparison.OrdinalIgnoreCase)));
+
+        static bool SlabWord(string name) =>
+            name.Contains("슬래브", StringComparison.Ordinal) || name.Contains("스라브", StringComparison.Ordinal) || name.Contains("슬라브", StringComparison.Ordinal);
+    }
+
+    // 수직면 덩어리(R49 — JACK 2026-10-16 «객체와 관계없이 2개이상의 부위로 합쳐져서 수직면이 생긴곳은 무조건 하나의 덩어리» · R55 — 벽과 슬래브만, InLump):
     // 평면 수직면(옆면 · 구멍 둘레 — 법선이 수평)의 형상이 세는 조각 가운데 같은 방향 · 같은 평면(Epsilon)에 맞닿은(맞댄 변 1 cm 넘게) 것을
-    // 부재 종류 · 안팎 · 위치 · 부위 · 거푸집 종류와 상관없이 묶는다. 버림 · 받침류(StandsAlone — 2D 가 따로 적음)는 넣지 않는다.
+    // 안팎 · 위치 · 거푸집 종류와 상관없이 묶는다. 버림 · 받침류(StandsAlone — 2D 가 따로 적음)는 넣지 않는다.
     // 합친 테두리가 한 고리가 아니면(틈 · 겹침) 묶지 않는다(core-verify R49 계획 H2 — 판 = 덩어리가 늘 되게).
     // 다스리는 조각 = 벽 조각 가운데 가장 넓은 것 → 없으면 가장 넓은 조각(같으면 부재 Id 가 작은 것). 덩어리 조각의 괄호(외측 · 내측)는 다스리는 조각의 것으로(M2).
     private static void GroupVerticals(List<ElementFormwork> results, FormworkOptions options)
@@ -199,9 +222,9 @@ public static class FormworkAnalyzer
         foreach (var r in results)
         {
             if (FormworkTable.StandsAlone(r.Element)) continue;
-            // 턱(방지턱 · 건축연결부 벽 — 부위 묶음 «턱·맨홀»)은 덩어리에 넣지 않는다: 아래 벽과 한 평면이어도 녹촌 2D 는 턱을 따로 합판 3회로 센다
-            // («13) 건축연결부 벽체 · 15) 상부스라브 방지턱» — R53a). 잇기 · 표(StandsAlone)는 그대로(core-verify R53 계획 M1 덧붙임).
-            if (r.Element.Part.Length > 0 && options.PartGroup(r.Element.Part) == PartCatalog.Curb) continue;
+            // 벽과 슬래브만 덩어리에 든다(R55 — JACK 2026-10-21 고름 «슬래브 가장자리만»): 턱(R53a)에 더해 보 · 기둥 · 헌치 · 기초 · 드레인 PIT · 트렌치 · 호퍼 ·
+            // 계단 · 그 밖은 같은 평면이어도 제 줄 · 제 종류(녹촌 2D 도 «배관실 보» · «배수 PIT» · «HOPPER 단차부»를 따로 적는다).
+            if (!InLump(r.Element, options)) continue;
             foreach (var f in r.Faces)
             {
                 if (f.Class is not (FaceClass.Side or FaceClass.HoleEdge) || f.Normal.Length != 3) continue;
@@ -270,6 +293,77 @@ public static class FormworkAnalyzer
             foreach (var face in ef.Faces)
                 foreach (var patch in face.Patches)
                     OverlayDrop(options, face, patch);
+        ApplyMoves(results, options);
+    }
+
+    /// <summary>옮긴 판의 조각에 적는 까닭 — 옮긴 줄이 없어져(부위 이름이 바뀜 · 줄이 가려짐) 지운 판으로 돌아간 것(R55b — 계획 검토 M4).</summary>
+    public const string OrphanNote = "옮길 줄이 없어짐 — 지운 판";
+
+    // 옮긴 판(R55b — 계획 검토 H1 · M2 · M4): 옮기지 않은 조각을 다 정한 뒤 두 번째 단계로 종류를 준다 —
+    // 옮긴 줄의 사람 값 > 그 줄의 원래 조각(옮기지 않은 조각)의 최종 종류 가운데 같은 면 방향(아래를 보는 평평한 면 / 그 밖)에서 넓이가 가장 큰 것 >
+    // 그 줄 전체에서 넓이가 가장 큰 것. 사람 값이 «세지 않음»이면 세지 않는다(옮김은 남는다). 그 줄에 원래 조각이 하나도 없으면 지운 판으로(경고).
+    private static void ApplyMoves(IReadOnlyList<ElementFormwork> results, FormworkOptions options)
+    {
+        var moved = new List<(FaceResult face, FacePatch patch)>();
+        foreach (var ef in results)
+            foreach (var face in ef.Faces)
+                foreach (var patch in face.Patches)
+                    if (patch.MovedTo != null) moved.Add((face, patch));
+        if (moved.Count == 0) return;
+        // 줄마다 원래 조각의 최종 종류별 넓이(면 방향마다 · 줄 전체) — 세는 조각만.
+        var byDir = new Dictionary<((string, string) row, bool down), Dictionary<string, double>>();
+        var byRow = new Dictionary<(string, string), Dictionary<string, double>>();
+        var present = new HashSet<(string, string)>();
+        foreach (var k in FormworkSummary.RowPatches(results))
+        {
+            // 원래 조각 = 옮기지도 지우지도 않은 조각 — 줄의 판이 모두 지워졌으면 그 줄은 없는 줄로 본다(설치 전 검토 M1 — 말없이 세지 않게 되지 않고 경고).
+            if (k.Patch.MovedTo != null || k.Patch.DropLead.Length > 0) continue;
+            var row = FormworkSummary.RowOf(k);
+            present.Add(row);
+            if (!k.Patch.Counted || k.Patch.Item.Length == 0) continue;
+            bool down = DownFlat(k.Face);
+            Add(byDir, (row, down), k.Patch.Item, k.Patch.Area);
+            Add(byRow, row, k.Patch.Item, k.Patch.Area);
+        }
+        foreach (var (face, patch) in moved)
+        {
+            var to = patch.MovedTo!.Value;
+            if (!present.Contains(to))
+            {
+                // 옮긴 줄이 없다 — 지운 판으로(세지 않음 · 대표 열쇠는 DropLead 로 · 판의 덩이도 지운 판).
+                patch.Counted = false;
+                patch.Note = OrphanNote;
+                patch.DropLead = patch.MoveLead;
+                patch.MovedTo = null;
+                patch.MoveLead = "";
+                patch.BeforeMove = "";
+                continue;
+            }
+            string? human = options.Rules?.Lookup(to.type, to.group);
+            string? item = human is { Length: > 0 } ? human
+                : Most(byDir.GetValueOrDefault((to, DownFlat(face)))) ?? Most(byRow.GetValueOrDefault(to));
+            if (item == null || item == FormworkRules.NotCounted)
+            {
+                // 그 줄이 세지 않는 줄이다(사람이 «세지 않음» · 원래 조각이 모두 세지 않음) — 옮김은 남기고 세지 않는다.
+                patch.Counted = false;
+                patch.Note = "옮긴 줄이 세지 않음";
+                continue;
+            }
+            patch.Counted = true;
+            patch.Item = item;
+            patch.Note = "";
+        }
+
+        static void Add<TKey>(Dictionary<TKey, Dictionary<string, double>> map, TKey key, string item, double area) where TKey : notnull
+        {
+            if (!map.TryGetValue(key, out var kinds)) map[key] = kinds = new Dictionary<string, double>(StringComparer.Ordinal);
+            kinds[item] = kinds.GetValueOrDefault(item) + area;
+        }
+
+        // 넓이가 가장 큰 종류(같으면 대응표 종류 차례).
+        static string? Most(Dictionary<string, double>? kinds) =>
+            kinds == null || kinds.Count == 0 ? null
+            : kinds.OrderByDescending(kv => kv.Value).ThenBy(kv => Array.IndexOf(FormworkTable.Items, kv.Key) is int i && i >= 0 ? i : int.MaxValue).First().Key;
     }
 
     // 덩어리의 조각은 다스리는 조각의 값(세는가 · 정했는가 · 종류 · 까닭)을 그대로 받는다 — 제 사슬의 값은 Own 에 남긴다(바뀐 양 — M5).
@@ -293,6 +387,15 @@ public static class FormworkAnalyzer
         bool raw = (patch.Unruled?.Counted ?? patch.Counted) || patch.Below == Below.Floating;
         string? lead = raw ? options.Rules?.DropOf(face, patch) : null;
         if (lead == null) return;
+        if (options.Rules!.MoveOf(lead) is { } to)
+        {
+            // 옮긴 판(R55b): 종류 · 세는가는 ApplyMoves 가 준다(옮기지 않은 조각을 다 정한 뒤 — 계획 검토 H1).
+            patch.MovedTo = to;
+            patch.MoveLead = lead;
+            patch.BeforeMove = patch.Item;
+            patch.Decided = true;
+            return;
+        }
         patch.Counted = false;
         patch.Decided = true;
         patch.Note = DroppedNote;
@@ -383,6 +486,7 @@ public static class FormworkAnalyzer
                     if (patch.Unruled is not { } raw) continue;
                     (patch.Counted, patch.Decided, patch.Item, patch.Note) = raw;
                     patch.DropLead = "";
+                    (patch.MovedTo, patch.MoveLead, patch.BeforeMove) = (null, "", "");   // 옮긴 판도 대응표를 다시 걸 때 다시 정한다(계획 검토 M1)
                 }
         }
         ApplyRules(results, options);
