@@ -59,6 +59,10 @@ public sealed class FormworkPiece
 
     public bool Dropped => DropLead.Length > 0;
 
+    /// <summary>옮긴 판(R55b)이면 그 대표 열쇠(판의 조각은 모두 같은 옮긴 판 — 같은 옮긴 판끼리만 잇는다), 아니면 "".</summary>
+    public string MoveLead => Members.Count > 0 ? Members[0].Patch.MoveLead : "";
+    public bool Moved => MoveLead.Length > 0;
+
     /// <summary>바깥으로 조금 띄운 세모 + 테두리(장면 좌표 — 부재의 겉면과 같은 원점을 뺐다). 이은 판의 테두리는 합친 테두리 하나다.</summary>
     public MeshData Mesh { get; internal set; } = new();
 
@@ -176,6 +180,14 @@ public sealed class FormworkBoard
     public int DroppedCount => Pieces.Count(p => p.Dropped);
     public double DroppedArea => Pieces.Where(p => p.Dropped).Sum(p => p.Area);
 
+    /// <summary>옮긴 판(R55b)의 수(서로 다른 대표 열쇠 — 판이 엑셀 줄로 갈려도 한 장 · 계획 검토 M3)와 넓이(옮긴 조각의 합).</summary>
+    public int MovedCount => MovedPatches.Select(p => p.MoveLead).Distinct(StringComparer.Ordinal).Count();
+    public double MovedArea => MovedPatches.Where(p => p.Counted).Sum(p => p.Area);
+    private IEnumerable<FacePatch> MovedPatches => Results.SelectMany(r => r.Faces).SelectMany(f => f.Patches).Where(p => p.MoveLead.Length > 0);
+
+    /// <summary>옮긴 줄이 없어져(부위 이름이 바뀜 · 줄이 가려짐) 지운 판으로 돌아간 판의 수(R55b — 계획 검토 M4).</summary>
+    public int OrphanCount => Rules.Moves.Count(m => Pieces.Any(p => p.DropLead == m.lead));
+
     /// <summary>그 줄의 지금 값("" = 초안대로).</summary>
     public string RuleOf(string type, string group) => Rules.Lookup(type, group) ?? "";
 
@@ -199,10 +211,12 @@ public sealed class FormworkBoard
         // 넘긴 것이 이 대응표 자신이어도 지우기 전에 떠 둔다(core-verify R48 L4 — 비우는 반복이 먼저 돌면 다 사라진다).
         var items = rules.All.ToList();
         var drops = rules.Drops.Select(d => (d.lead, records: d.records.ToList())).ToList();
+        var moves = rules.Moves.ToList();
         foreach (var (type, group, _) in Rules.All.ToList()) Rules.Set(type, group, "");
         foreach (var (type, group, item) in items) Rules.Set(type, group, item);
         foreach (var (lead, _) in Rules.Drops.ToList()) Rules.Restore(lead);
         foreach (var (lead, records) in drops) Rules.Drop(lead, records);
+        foreach (var (lead, to) in moves) Rules.SetMove(lead, to);
         FormworkAnalyzer.Reclassify(Results, Options);
         Refresh();
     }
@@ -212,16 +226,23 @@ public sealed class FormworkBoard
     /// 판이 아닌 덩이(세지 않는 덩이 · 아직 정하지 않은 아래가 빈 밑면)와 이미 뺀 판은 false. 열쇠가 판의 어느 조각에도 맞지 않으면(빠지지 않음)
     /// 적은 것을 되돌리고 false(revit-verify R48 설치 전 L4 — «뺐습니다» 알림만 뜨고 판은 그대로 세는 일이 없게). 파일에 적는 것은 부르는 쪽이 한다(Rules).
     /// </summary>
-    public bool Drop(FormworkPiece piece)
+    public bool Drop(FormworkPiece piece) => Drop(piece, out _);
+
+    /// <param name="lead">적은 대표 열쇠(되돌리기가 쓴다 — 찍은 조각에서 다시 구하면 옛 기록 · 일부만 찾은 판과 어긋날 수 있다 · 설치 전 검토 L2).</param>
+    public bool Drop(FormworkPiece piece, out string lead)
     {
-        if (piece.Dropped || piece.Plate == null || piece.Members.Count == 0) return false;
+        lead = "";
+        // 옮긴 판은 SetMove(null)로 지운다 — 여기서 새로 적으면 판의 일부 조각 기록만 남아 나머지가 말없이 원래 줄로 돌아간다(R55b 계획 검토 H3).
+        if (piece.Dropped || piece.Moved || piece.Plate == null || piece.Members.Count == 0) return false;
         var records = piece.Members.Select(m => DropRecord.Of(m.Face, m.Patch)).ToList();
-        string lead = records[piece.LeadIndex].Text;
-        Rules.Drop(lead, records);
+        string key = records[piece.LeadIndex].Text;
+        lead = key;
+        Rules.Drop(key, records);
         FormworkAnalyzer.Reclassify(Results, Options);
-        if (!piece.Patches.Any(p => p.DropLead == lead))
+        if (!piece.Patches.Any(p => p.DropLead == key))
         {
-            Rules.Restore(lead);
+            lead = "";
+            Rules.Restore(key);
             FormworkAnalyzer.Reclassify(Results, Options);
             Refresh();
             return false;
@@ -230,8 +251,53 @@ public sealed class FormworkBoard
         return true;
     }
 
-    /// <summary>뺀 판을 되살린다. 되살렸으면 true.</summary>
-    public bool Restore(FormworkPiece piece) => piece.Dropped && Restore(piece.DropLead);
+    /// <summary>뺀 판 · 옮긴 판을 되살린다(원래 줄로 셈). 되살렸으면 true.</summary>
+    public bool Restore(FormworkPiece piece) => (piece.Dropped ? piece.DropLead : piece.MoveLead) is { Length: > 0 } lead && Restore(lead);
+
+    /// <summary>
+    /// 판의 대표 열쇠(지운 판 · 옮긴 판 — 세는 판은 ""). 되돌리기 · 띠가 쓴다.
+    /// </summary>
+    public static string LeadOf(FormworkPiece piece) => piece.Dropped ? piece.DropLead : piece.MoveLead;
+
+    /// <summary>
+    /// 지운 판을 그 줄로 옮긴다 · 옮긴 판을 다른 줄로 옮긴다 · to = null 이면 옮긴 판을 지운 판으로(R55b — JACK 2026-10-21 고름 «다른 줄로 옮기기»).
+    /// 대응표 파일에 적는 것은 부르는 쪽이 한다(Rules). 바뀌었으면 true(그 판이 지금 결과에서 그 상태가 됐는지 다시 본다 — 아니면 되돌리고 false).
+    /// </summary>
+    public bool SetMove(string lead, (string type, string group)? to)
+    {
+        var before = Rules.StateOf(lead);
+        if (before == null || before.MovedTo == to) return false;
+        if (!Rules.SetMove(lead, to)) return false;
+        FormworkAnalyzer.Reclassify(Results, Options);
+        var patches = Results.SelectMany(r => r.Faces).SelectMany(f => f.Patches);
+        bool done = to == null ? patches.Any(p => p.DropLead == lead) : patches.Any(p => p.MoveLead == lead);
+        if (!done)
+        {
+            Rules.SetState(lead, before);
+            FormworkAnalyzer.Reclassify(Results, Options);
+        }
+        Refresh();
+        return done;
+    }
+
+    /// <summary>판 하나의 지금 상태(되돌리기 — R55b · null = 셈).</summary>
+    public FormworkRules.PlateState? StateOf(string lead) => Rules.StateOf(lead);
+
+    /// <summary>판 하나를 그 상태로 다시 쓰고 다시 센다(되돌리기 — 계획 검토 H3: 반대 동작이 아니라 전 상태를 다시 쓴다).</summary>
+    public void SetState(string lead, FormworkRules.PlateState? state)
+    {
+        Rules.SetState(lead, state);
+        FormworkAnalyzer.Reclassify(Results, Options);
+        Refresh();
+    }
+
+    /// <summary>여러 판을 그 상태로 다시 쓰고 한 번 다시 센다([기록 지우기]의 되돌리기).</summary>
+    public void SetStates(IEnumerable<(string lead, FormworkRules.PlateState? state)> states)
+    {
+        foreach (var (lead, state) in states) Rules.SetState(lead, state);
+        FormworkAnalyzer.Reclassify(Results, Options);
+        Refresh();
+    }
 
     /// <summary>그 대표 열쇠의 뺀 판을 되살린다(모양이 바뀌어 찾지 못한 판도). 되살렸으면 true.</summary>
     public bool Restore(string lead)
@@ -370,6 +436,24 @@ public sealed class FormworkBoard
     /// </summary>
     public (string type, string group)? RowOf(FormworkPiece piece) => piece.Dropped ? null : FormworkSummary.RowOf(piece.LeadMember);
 
+    /// <summary>그 판의 원래 줄(옮기기 전 — 지운 판 · 옮긴 판도 · R55b: 옮길 줄 고르기에서 제 줄은 고를 수 없다). 조각이 없으면 null.</summary>
+    public (string type, string group)? OriginRowOf(FormworkPiece piece) =>
+        piece.Members.Count == 0 ? null : FormworkSummary.RowOf(piece.LeadMember, ignoreMove: true);
+
+    /// <summary>
+    /// 그 줄로 판을 옮길 수 있는가(R55b — 계획 검토 H2 · M4): 표에 있는 줄 · 원래 조각이 있는 줄(초안이 «지운 판»이 아님) · «확인 필요»만인 줄이 아님 ·
+    /// 그 판의 원래 줄이 아님. 안 되면 까닭(되면 "").
+    /// </summary>
+    public string WhyNotMoveTo(FormworkPiece piece, (string type, string group) row)
+    {
+        var target = Rows.FirstOrDefault(r => (r.Type, r.Group) == row);
+        if (target == null) return "표에 없는 줄";
+        if (OriginRowOf(piece) == row) return "그 판의 원래 줄";
+        if (target.Draft == FormworkSummary.Dropped) return "판이 모두 지워진 줄";
+        if (target.Draft == FormworkSummary.Ask && target.Rule.Length == 0) return "아직 정하지 않은 줄(선택 필요)";
+        return "";
+    }
+
     private void Refresh()
     {
         var watch = Stopwatch.StartNew();
@@ -405,7 +489,7 @@ public sealed class FormworkBoard
         }
 
         var drops = new Dictionary<string, FormworkPiece>(StringComparer.Ordinal);
-        var chunks = new Dictionary<(ElementFormwork? r, string type, string group, string side, int band, bool note, int vertical), FormworkPiece>();
+        var chunks = new Dictionary<(ElementFormwork? r, string type, string group, string side, int band, bool note, int vertical, string move), FormworkPiece>();
         foreach (var k in FormworkSummary.RowPatches(Results))
         {
             var p = k.Patch;
@@ -420,7 +504,7 @@ public sealed class FormworkBoard
                 // 까닭은 대응표를 걸기 전의 값으로 본다(대응표가 '세지 않음' 등으로 까닭을 덮어쓰기 때문).
                 // 수직면 덩어리의 조각(세지 않는 덩어리 — R49)은 덩어리마다 한 덩이(판 = 덩어리 · 색이 하나).
                 bool note = (p.Unruled?.Note ?? p.Note).Length > 0;
-                var key = p.Vertical is { } g ? ((ElementFormwork?)null, "", "", "", p.Band, false, g.Id) : (k.Result, k.Type, k.Group, p.Side, p.Band, note, 0);   // 덩어리는 안팎과 상관없이 한 덩이(core-verify R49 L5)
+                var key = p.Vertical is { } g ? ((ElementFormwork?)null, "", "", "", p.Band, false, g.Id, p.MoveLead) : (k.Result, k.Type, k.Group, p.Side, p.Band, note, 0, p.MoveLead);   // 옮긴 조각은 따로(설치 전 검토 L6)   // 덩어리는 안팎과 상관없이 한 덩이(core-verify R49 L5)
                 if (!chunks.TryGetValue(key, out piece)) { chunks[key] = piece = new FormworkPiece(); pieces.Add(piece); }
             }
             piece.Add(k);

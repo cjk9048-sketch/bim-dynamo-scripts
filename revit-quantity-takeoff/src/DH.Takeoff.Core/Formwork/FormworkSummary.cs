@@ -42,8 +42,13 @@ public static class FormworkSummary
     /// 그 밖(부위 없는 부재 · 구멍 둘레 · 아래가 빈 밑면)은 유형 × 면의 갈래 줄. 한 조각은 꼭 한 줄에 들고, 그 줄에서 사람이 고른 값만 그 조각에 걸린다
     /// (FormworkAnalyzer.HumanRule) — 대응표와 상관없이 정해진다.
     /// </summary>
-    public static (string type, string group) RowOf(Keyed k)
+    public static (string type, string group) RowOf(Keyed k) => RowOf(k, ignoreMove: false);
+
+    /// <param name="ignoreMove">옮긴 판(R55b)의 조각도 옮기기 전 줄로 — 표의 줄 · 머리를 지을 때(계획 검토 H2) · 가려진 줄을 셀 때(L3).</param>
+    internal static (string type, string group) RowOf(Keyed k, bool ignoreMove)
     {
+        // 옮긴 판의 조각은 옮긴 줄(R55b — JACK 2026-10-21 «다른 줄로 옮기기»).
+        if (!ignoreMove && k.Patch.MovedTo is { } to) return to;
         // 수직면 덩어리의 조각은 다스리는 조각의 줄(R49 — 덩어리 = 한 장 = 한 종류: 그 줄을 바꾸면 덩어리 전체가 바뀐다 · core-verify R49 계획 M4).
         if (k.Patch.Vertical is { } g && !ReferenceEquals(g.Governor.Patch, k.Patch)) k = Governor(g);
         return FormworkTable.PartDecides(k.Result.Element.Part, k.Group) ? (FormworkRules.PartKey(k.Result.Element.Part), FormworkTable.GroupAll) : (k.Type, k.Group);
@@ -86,10 +91,12 @@ public static class FormworkSummary
         var rules = options.Rules;
         var rows = new Dictionary<(string type, string group), (FormworkRow row, HashSet<string> drafts, HashSet<long> ids, bool part)>();
         var elevated = new Dictionary<ElementFormwork, bool>();
+        var moved = new List<Keyed>();
         foreach (var k in RowPatches(results))
         {
             var (r, f, p, type, group) = k;
-            var key = RowOf(k);
+            // 줄 · 머리는 옮기기 전 줄로 짓는다(옮긴 판의 조각이 머리를 정하거나 · 원래 줄이 사라지지 않게 — 계획 검토 H2). 옮긴 조각은 아래에서 넓이 · 부재만 더한다.
+            var key = RowOf(k, ignoreMove: true);
             // 줄의 머리(분류 · 사람 값)와 초안은 줄을 정한 조각의 것 — 수직면 덩어리의 조각이면 다스리는 조각(R49 — core-verify R49 계획 M4).
             var src = p.Vertical is { } vg ? Governor(vg) : k;
             if (!rows.TryGetValue(key, out var entry))
@@ -102,11 +109,19 @@ public static class FormworkSummary
                 }, new HashSet<string>(), new HashSet<long>(), part);
             }
             if (p.DropLead.Length > 0) continue;
+            if (p.MovedTo != null) { moved.Add(k); continue; }
             if (!elevated.TryGetValue(src.Result, out bool raised)) elevated[src.Result] = raised = src.Result.Faces.Any(x => x.Patches.Any(q => q.Below == Below.Supported));
             entry.row.Area += p.Area;
             entry.ids.Add(r.Element.Id);
             entry.drafts.Add(src.Patch.Below == Below.Floating ? Ask : FormworkAnalyzer.DraftOf(src.Result.Element, src.Face, src.Patch, raised, options));
         }
+        // 옮긴 판의 조각(R55b): 옮긴 줄의 넓이 · 부재 수에만 든다(그 줄이 있을 때만 — 없으면 ApplyMoves 가 지운 판으로 돌렸다).
+        foreach (var k in moved)
+            if (rows.TryGetValue(RowOf(k), out var entry))
+            {
+                entry.row.Area += k.Patch.Area;
+                entry.ids.Add(k.Result.Element.Id);
+            }
         foreach (var (row, drafts, ids, _) in rows.Values)
         {
             row.Draft = drafts.Count == 0 ? Dropped : drafts.Count == 1 ? drafts.First() : Mixed;
@@ -138,14 +153,14 @@ public static class FormworkSummary
     {
         if (rules == null || rules.DropCount == 0) return DropCheck.None;
         var check = new DropCheck(new List<string>(), new List<string>(), new List<string>());
-        // 판(대표 열쇠)마다 지금 빠진 조각(DropLead 가 그 열쇠인 조각).
+        // 판(대표 열쇠)마다 지금 빠진 조각(DropLead 가 그 열쇠인 조각 · 옮긴 판이면 MoveLead — R55b 계획 검토 M1).
         var mine = new Dictionary<string, List<(FaceResult face, FacePatch patch)>>(StringComparer.Ordinal);
         foreach (var r in results)
             foreach (var f in r.Faces)
                 foreach (var p in f.Patches)
-                    if (p.DropLead.Length > 0)
+                    if ((p.DropLead.Length > 0 ? p.DropLead : p.MoveLead) is { Length: > 0 } lead)
                     {
-                        if (!mine.TryGetValue(p.DropLead, out var list)) mine[p.DropLead] = list = new List<(FaceResult, FacePatch)>();
+                        if (!mine.TryGetValue(lead, out var list)) mine[lead] = list = new List<(FaceResult, FacePatch)>();
                         list.Add((f, p));
                     }
         foreach (var (lead, records) in rules.Drops)
@@ -172,7 +187,7 @@ public static class FormworkSummary
             foreach (var f in r.Faces)
                 foreach (var p in f.Patches)
                 {
-                    if (p.Own is not { } own || p.Vertical == null || p.DropLead.Length > 0) continue;   // 3D 에서 뺀 판은 덩어리 탓이 아니다(revit-verify R49 L3)
+                    if (p.Own is not { } own || p.Vertical == null || p.DropLead.Length > 0 || p.MoveLead.Length > 0) continue;   // 3D 에서 뺀 · 옮긴 판은 덩어리 탓이 아니다(revit-verify R49 L3 · R55b L3)
                     string from = Value(own.Counted, own.Item), to = Value(p.Counted, p.Item);
                     if (from == to) continue;
                     var key = (r.Element.Type, from, to);
@@ -209,7 +224,7 @@ public static class FormworkSummary
         var faceKeys = new HashSet<(string, string)>();
         foreach (var k in RowPatches(results))
         {
-            rowKeys.Add(RowOf(k));
+            rowKeys.Add(RowOf(k, ignoreMove: true));   // 옮긴 판의 원래 줄도 표에 있다(R55b L3)
             // 그 조각의 유형 줄 · (부위를 넣은 면이면) 부위 줄 — 제 면이 있는 줄.
             faceKeys.Add((k.Type, k.Group));
             if (FormworkTable.PartDecides(k.Result.Element.Part, k.Group)) faceKeys.Add((FormworkRules.PartKey(k.Result.Element.Part), FormworkTable.GroupAll));

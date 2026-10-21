@@ -259,13 +259,24 @@ public static class FormworkSheet
         var data = new FormworkSheetData { Bands = options.Bands.ToList(), Merge = merge };
         var sections = new Dictionary<string, (double bim, string item, int band)>();
         var entries = new List<Entry>();
+        // 옮긴 판(R55b)의 부위 제목: 옮긴 줄이 부위 줄이면 그 부위 · 유형 줄이면 그 유형 부재들(옮기지 않은 조각)의 부위 가운데 넓이가 가장 큰 것(계획 검토 L1).
+        Dictionary<string, string>? typeParts = null;
+        string MovedPart((string type, string group) to, string own)
+        {
+            if (FormworkRules.PartOf(to.type) is { } named) return named;
+            typeParts ??= results.SelectMany(x => x.Faces.SelectMany(f => f.Patches).Where(q => q.Counted && q.MovedTo == null).Select(q => (x.Element.Type, part: placeOf(x.Element.Id).part, q.Area)))
+                .GroupBy(x => x.Type, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.GroupBy(x => x.part, StringComparer.Ordinal).OrderByDescending(h => h.Sum(x => x.Area)).First().Key, StringComparer.Ordinal);
+            return typeParts.TryGetValue(to.type, out var part) ? part : own;
+        }
         foreach (var r in results)
         {
-            var (partName, zone) = placeOf(r.Element.Id);
+            var (ownPart, zone) = placeOf(r.Element.Id);
             foreach (var f in r.Faces)
                 foreach (var p in f.Patches)
                 {
                     if (!p.Counted || p.Item.Length == 0) continue;
+                    string partName = p.MovedTo is { } movedTo ? MovedPart(movedTo, ownPart) : ownPart;
                     int band = p.Item == FormworkTable.Euro ? p.Band : 0;
                     string section = SectionName(p.Item, band, options.Bands);
                     // 절의 BIM 넓이는 조각마다 더한다(이은 줄에 든 조각도 — 줄은 하나라도 넓이는 조각의 합이다).
@@ -289,7 +300,8 @@ public static class FormworkSheet
                     // 부호: 이름이 있으면 든 부재 가운데 이 줄의 부위(대표 조각 부재의 부위)인 부재의 이름(R53b — 열쇠는 이름 있는 조각끼리 하나 ·
                     // 하부슬래브 옆면 + 벽 덩어리가 벽체 줄에 «SB01, WA01» 로 섞이지 않게 — core-verify R53b M2), 없으면 마크 · 유형 이름(R47).
                     // 판의 이름(unit.Mark)은 판이 덮는 부재 모두.
-                    string named = NamesOf(members.Select(m => m.Item1.Element.Id).Where(id => placeOf(id).part == partName), nameOf);
+                    // 옮긴 판은 제 부재의 이름(부위를 거르지 않는다 — R55b L1).
+                    string named = NamesOf(members.Select(m => m.Item1.Element.Id).Where(id => p.MovedTo != null || placeOf(id).part == partName), nameOf);
                     string covered = NamesOf(members.Select(m => m.Item1.Element.Id), nameOf);
                     string mark = named.Length > 0 ? NamedKey : r.Element.Mark.Trim().Length > 0 ? r.Element.Mark.Trim() : r.Element.Type;
                     string unitZone = joined is { MixedZones: true } ? "" : zone;

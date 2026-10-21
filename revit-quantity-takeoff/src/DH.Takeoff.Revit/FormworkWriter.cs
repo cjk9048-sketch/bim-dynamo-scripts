@@ -44,7 +44,9 @@ public static class FormworkWriter
             {
                 if (!p.CountedIgnoringDrop) continue;
                 total += p.Area;
-                if (FormworkTable.GuidelineName(p.Item, p.Item == FormworkTable.Euro ? p.Band : 0) is { } name) map[name] = map.GetValueOrDefault(name) + p.Area;
+                // 옮긴 판(R55b)은 옮기기 전 종류로(GuidelineItem — 지운 판과 같은 원칙: 일반설계의 결정은 지침 속성에 섞지 않는다).
+                string item = p.GuidelineItem;
+                if (FormworkTable.GuidelineName(item, item == FormworkTable.Euro ? p.Band : 0) is { } name) map[name] = map.GetValueOrDefault(name) + p.Area;
             }
             map[FormworkTable.TotalParam] = total;
             values[r.Element.Id] = map;
