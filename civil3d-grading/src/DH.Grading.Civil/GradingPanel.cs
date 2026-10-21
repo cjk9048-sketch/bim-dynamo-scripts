@@ -51,9 +51,12 @@ internal sealed class GradingPanel : UserControl
     private readonly Panel _compRow;
     // ★★★[v103.3 · JACK 1021 «옹벽형태를 계획부지생성 도킹바에 넣고 … 뒷채움거리와 사면경사로 터파기 지표면»] 옹벽 묶음 —
     //   형식 콤보(기타 설정에서 옮김 · 레지스트리 그대로) + «뒷채움 터파기» 켬 · 뒤 · 앞 · 기초 · 경사(도면 기록 WALLEXCAV)
-    private readonly ComboBox _cutWall, _fillWall, _exSlope;
+    private readonly ComboBox _cutWall, _fillWall, _exSlope, _exCutKind, _exFillKind;
     private readonly CheckBox _exOn;
-    private readonly TextBox _exBack, _exFront, _exFoot;
+    private readonly TextBox _exMargin, _exTLean, _exELean, _exBackSlope;
+    private readonly CheckBox _exBackOn;
+    /// <summary>★[v104] 형식 표 읽은 것(그림용) — 도면 · 기록이 바뀌면 비운다.</summary>
+    private readonly Dictionary<DH.Grading.Core.WallSection.Kind, DH.Grading.Core.WallSection.Table> _secCache = new();
     /// <summary>★[v103.3.1 · JACK 1021] 터파기 법면 소단 — 켬 · 높이(m) · 폭(m).</summary>
     private readonly CheckBox _exBenchOn;
     private readonly TextBox _exBenchH, _exBenchW;
@@ -256,19 +259,29 @@ internal sealed class GradingPanel : UserControl
         //   설명은 풍선 글 + ★[v103.3.1 · JACK 1021 «사면설정처럼 연동되는 설명»] 예시 그림(칸을 고치면 바로 다시 그린다).
         var secWall = GradingDialog.AddCollapsible(secEtc, "옹벽", out _wallBadge,
             "옹벽 형식 · 뒷채움 터파기", open: true, key: "정지:옹벽", level: 3);
-        _cutWall = GradingDialog.AddStyleRow(secWall, "절토 옹벽 형식", GradingSettings.CutWallStyle, out _);
-        _fillWall = GradingDialog.AddStyleRow(secWall, "성토 옹벽 형식", GradingSettings.FillWallStyle, out _);
-        _cutWall.ToolTip = _fillWall.ToolTip = "3D 옹벽(InfraWorks)·노리선·예시 그림의 옹벽 모양입니다. 정지면 형상과 터파기는 이 값과 무관합니다.";
+        // ★★[v104 2판 · 검토 중간 8] 3D 모양(InfraWorks)과 단면 형식(수량 · 터파기)을 가른다 — 3D 모양은 종전 그대로(레지스트리 · InfraWorks · 노리선이 읽는다) 이름만 바꿈.
+        _cutWall = GradingDialog.AddStyleRow(secWall, "절토 3D 모양", GradingSettings.CutWallStyle, out _);
+        _fillWall = GradingDialog.AddStyleRow(secWall, "성토 3D 모양", GradingSettings.FillWallStyle, out _);
+        _cutWall.ToolTip = _fillWall.ToolTip = "InfraWorks 3D 옹벽 · 노리선 · 사면 예시 그림의 옹벽 모양입니다.\n터파기 · 수량은 아래 «단면 형식»을 따릅니다(둘이 달라도 됩니다).";
         _cutWall.SelectionChanged += (_, __) => StyleChanged(cut: true);
         _fillWall.SelectionChanged += (_, __) => StyleChanged(cut: false);
         var exDef = DH.Grading.Core.WallExcav.Settings.Default;
+        // ★★★[v104 · JACK 1021 «옹벽 형태별 일반단면도 · 매개변수로 단면 모양 조종 → 그 값으로 여유폭 · 구배 터파기»] 단면 형식(이 도면 · WALLEXCAV 판 3) + [단면 표…]
+        var kRow = new WrapPanel { Margin = new Thickness(2, 0, 0, 6) };
+        _exCutKind = KindCell(kRow, "절토 단면", exDef.CutKind);
+        _exFillKind = KindCell(kRow, "성토 단면", exDef.FillKind);
+        var secBtn = new Button { Content = "단면 표…", Height = 26, Padding = new Thickness(10, 0, 10, 0), Margin = new Thickness(0, 0, 0, 4),
+                                  ToolTip = "형식별 일반단면도와 높이 구간 표 — 토질부 단면 값을 넣는 곳(이 도면에만)." };
+        secBtn.Click += (_, __) => OpenSectionTable();
+        kRow.Children.Add(secBtn);
+        secWall.Children.Add(kRow);
         _exOn = new CheckBox
         {
             Content = "뒷채움 터파기",
             IsChecked = exDef.On,
             Margin = new Thickness(0, 2, 0, 6),
-            ToolTip = "켜면 종단·횡단을 그릴 때 옹벽 앞면마다 기초 밑 바닥과 경사 법면으로 터파기면(옹벽터파기_DH · 숨김)을 만들어\n"
-                    + "종단·횡단에 보이고 횡단 수량의 터파기·되메우기에 넣습니다. 모든 옹벽 형식에 적용 · 이 도면에만 적용됩니다.",
+            ToolTip = "켜면 종단·횡단을 그릴 때 옹벽 앞면마다 단면 형식의 바닥(+ 여유폭)과 경사 법면으로 터파기면(옹벽터파기_DH · 숨김)을 만들어\n"
+                    + "종단·횡단에 보이고 횡단 수량의 터파기 · 되메우기(옹벽 몸체는 뺌)에 넣습니다. 이 도면에만 적용됩니다.",
         };
         secWall.Children.Add(_exOn);
         secWall.Children.Add(new Border
@@ -282,12 +295,8 @@ internal sealed class GradingPanel : UserControl
         if (_canvasCut.Parent is FrameworkElement slopeBox)
             slopeBox.SizeChanged += (_, e) => { if (e.NewSize.Height > 1) _excavBox.Height = e.NewSize.Height; };
         var exRow = new WrapPanel { Margin = new Thickness(2, 0, 0, 6) };
-        _exBack = Cell(exRow, "뒤(m)", exDef.Back);
-        _exFront = Cell(exRow, "앞(m)", exDef.Front);
-        _exFoot = Cell(exRow, "기초(m)", exDef.Foot);
-        ((FrameworkElement)_exBack.Parent).ToolTip = "옹벽 앞면에서 흙 쪽으로 터파기 바닥 끝까지(기초 뒷굽 + 여유). 첫 값 2.0m";
-        ((FrameworkElement)_exFront.Parent).ToolTip = "옹벽 앞면에서 앞쪽으로 터파기 바닥 끝까지(앞굽 + 여유). 첫 값 0.6m";
-        ((FrameworkElement)_exFoot.Parent).ToolTip = "벽 밑에서 터파기 바닥까지(기초 깊이). 첫 값 1.0m — KDS 11 80 05 최소";
+        _exMargin = Cell(exRow, "여유폭(m)", exDef.Margin);
+        ((FrameworkElement)_exMargin.Parent).ToolTip = "단면(기초 · 버림) 앞뒤 끝에서 터파기 바닥 끝까지의 작업 여유. 첫 값 0.5m — 국도건설공사 설계실무요령\n패널식은 앞쪽만(기초부만 판다).";
         var slopeCell = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 6, 4) };
         slopeCell.Children.Add(new TextBlock { Text = "경사", FontSize = 11, Foreground = DhBrand.Sub, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) });
         _exSlope = new ComboBox { Width = 140, Height = 26, VerticalContentAlignment = VerticalAlignment.Center };
@@ -311,17 +320,41 @@ internal sealed class GradingPanel : UserControl
         ((FrameworkElement)_exBenchH.Parent).ToolTip = "터파기 바닥에서 이 높이마다 소단. 첫 값 3m";
         ((FrameworkElement)_exBenchW.Parent).ToolTip = "소단 폭. 첫 값 1m";
         secWall.Children.Add(bRowEx);
+        var lRow = new WrapPanel { Margin = new Thickness(2, 0, 0, 6) };
+        _exTLean = Cell(lRow, "버림 두께(m)", exDef.TLean);
+        _exELean = Cell(lRow, "버림 돌출(m)", exDef.ELean);
+        ((FrameworkElement)_exTLean.Parent).ToolTip = "기초 아래 버림 콘크리트 두께. 첫 값 0.1m";
+        ((FrameworkElement)_exELean.Parent).ToolTip = "버림이 기초 앞뒤로 나오는 폭. 첫 값 0.1m";
+        secWall.Children.Add(lRow);
+        // ★[v104 B · JACK 1021 «지정경사로 내려오다가 옹벽끝높이와 일치하는 부분에서 평탄화 · 경사는 매개변수 · 기본 1.5»] 배면사면 켬 · 경사
+        var bkRow = new WrapPanel { Margin = new Thickness(2, 0, 0, 6) };
+        _exBackOn = new CheckBox
+        {
+            Content = "배면사면",
+            IsChecked = exDef.BackOn,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 10, 4),
+            ToolTip = "절토 옹벽(맨 위 단) 뒤 되메우기 윗면 — 터파기 끝에서 이 경사로 내려오다 옹벽 꼭대기 높이에서 평탄(숨긴 면 옹벽배면_DH).\n그 위 원지반은 절토 · 아래는 되메우기로 셉니다.",
+        };
+        bkRow.Children.Add(_exBackOn);
+        _exBackSlope = Cell(bkRow, "경사 1:", exDef.BackSlope);
+        ((FrameworkElement)_exBackSlope.Parent).ToolTip = "배면사면 경사(1:n). 첫 값 1:1.5";
+        secWall.Children.Add(bkRow);
         FillSlopeItems(exDef.Slope);
         _exTimer = new System.Windows.Threading.DispatcherTimer { Interval = System.TimeSpan.FromMilliseconds(700) };
         // ★[설치 전 검토 중간 3] 타이머 안의 예외는 받는 곳이 없어 AutoCAD 치명 오류가 된다 — 통째로 감싼다
         _exTimer.Tick += (_, __) => { _exTimer.Stop(); try { SaveExcav(null); } catch (System.Exception ex) { try { DiagLog.Append("\n■ 옹벽 터파기 설정 적기 실패 — " + ex.Message + "\n"); } catch { } } };
-        foreach (var b in new[] { _exBack, _exFront, _exFoot, _exBenchH, _exBenchW })
+        foreach (var b in new[] { _exMargin, _exTLean, _exELean, _exBenchH, _exBenchW, _exBackSlope })
             b.TextChanged += (_, __) => { RedrawExcav(); if (_loading) return; if (ExcavFromUi(out var _ok)) { _exDoc ??= Doc; _exTimer.Stop(); _exTimer.Start(); } };
         _exOn.Checked += (_, __) => { SyncExcavLock(); RedrawExcav(); if (!_loading) { _exDoc ??= Doc; SaveExcav("on"); } };
         _exOn.Unchecked += (_, __) => { SyncExcavLock(); RedrawExcav(); if (!_loading) { _exDoc ??= Doc; SaveExcav("on"); } };
         _exBenchOn.Checked += (_, __) => { SyncExcavLock(); RedrawExcav(); if (!_loading) { _exDoc ??= Doc; SaveExcav("bench"); } };
         _exBenchOn.Unchecked += (_, __) => { SyncExcavLock(); RedrawExcav(); if (!_loading) { _exDoc ??= Doc; SaveExcav("bench"); } };
+        _exBackOn.Checked += (_, __) => { SyncExcavLock(); RedrawExcav(); if (!_loading) { _exDoc ??= Doc; SaveExcav("back"); } };
+        _exBackOn.Unchecked += (_, __) => { SyncExcavLock(); RedrawExcav(); if (!_loading) { _exDoc ??= Doc; SaveExcav("back"); } };
         _exSlope.SelectionChanged += (_, __) => { RedrawExcav(); if (!_loading) { _exDoc ??= Doc; SaveExcav("slope"); } };
+        _exCutKind.SelectionChanged += (_, __) => { RedrawExcav(); if (!_loading) { _exDoc ??= Doc; SaveExcav("kind"); } };
+        _exFillKind.SelectionChanged += (_, __) => { RedrawExcav(); if (!_loading) { _exDoc ??= Doc; SaveExcav("kind"); } };
         SyncExcavLock();
 
         // ══ ★★★[JACK 0910] <b>만들기는 값을 다 정한 뒤에</b> ═══════════════
@@ -868,29 +901,30 @@ internal sealed class GradingPanel : UserControl
     private void SyncExcavLock()
     {
         bool on = _exOn.IsChecked == true;
-        _exBack.IsEnabled = _exFront.IsEnabled = _exFoot.IsEnabled = _exSlope.IsEnabled = _exBenchOn.IsEnabled = on;
+        _exMargin.IsEnabled = _exTLean.IsEnabled = _exELean.IsEnabled = _exSlope.IsEnabled = _exBenchOn.IsEnabled = on;
         _exBenchH.IsEnabled = _exBenchW.IsEnabled = on && _exBenchOn.IsChecked == true;
-        _exOn.IsEnabled = Doc != null;
+        _exBackOn.IsEnabled = on;
+        _exBackSlope.IsEnabled = on && _exBackOn.IsChecked == true;
+        _exOn.IsEnabled = _exCutKind.IsEnabled = _exFillKind.IsEnabled = Doc != null;   // 형식 · 표는 꺼져 있어도 고를 수 있다(그림 · 표 창)
     }
 
     /// <summary>화면 값 → 설정. 칸이 틀리면 그 칸을 물들이고 거짓(적지 않는다).</summary>
     private bool ExcavFromUi(out DH.Grading.Core.WallExcav.Settings s)
     {
         s = DH.Grading.Core.WallExcav.Settings.Default;
-        bool okB = Gate(_exBack, 0, DH.Grading.Core.WallExcav.Settings.BackMax, out double back);
-        bool okF = Gate(_exFront, 0, DH.Grading.Core.WallExcav.Settings.FrontMax, out double front);
-        bool okD = Gate(_exFoot, 0, DH.Grading.Core.WallExcav.Settings.FootMax, out double foot);
+        bool okM = Gate(_exMargin, 0, DH.Grading.Core.WallExcav.Settings.MarginMax, out double margin);
+        bool okT = Gate(_exTLean, 0, DH.Grading.Core.WallExcav.Settings.LeanMax, out double tl);
+        bool okE = Gate(_exELean, 0, DH.Grading.Core.WallExcav.Settings.LeanMax, out double el);
+        bool okK = Gate(_exBackSlope, 0.05, DH.Grading.Core.WallExcav.Settings.SlopeMax, out double bks);
         bool okBH = Gate(_exBenchH, DH.Grading.Core.WallExcav.Settings.BenchHMin, DH.Grading.Core.WallExcav.Settings.BenchHMax, out double bh);
         bool okBW = Gate(_exBenchW, 0, DH.Grading.Core.WallExcav.Settings.BenchWMax, out double bw);
         int i = _exSlope.SelectedIndex;
         double n = i >= 0 && i < DH.Grading.Core.WallExcav.Slopes.Length ? DH.Grading.Core.WallExcav.Slopes[i]
                  : _exSlope.Tag is double t ? t : DH.Grading.Core.WallExcav.Settings.Default.Slope;
-        if (!(okB && okF && okD && okBH && okBW)) return false;
-        s = new DH.Grading.Core.WallExcav.Settings(_exOn.IsChecked == true, back, front, foot, n, _exBenchOn.IsChecked == true, bh, bw);
-        if (s.Valid(out string why)) return true;
-        // ★[설치 전 검토 중간 2] 칸 하나하나는 맞아도 함께 틀린 것(뒤 + 앞 &lt; 1cm)은 두 칸을 물들인다
-        foreach (var b in new[] { _exBack, _exFront }) { b.Foreground = DhBrand.Warn; b.BorderBrush = DhBrand.Warn; b.BorderThickness = new Thickness(2); b.ToolTip = why; }
-        return false;
+        if (!(okM && okT && okE && okBH && okBW && okK)) return false;
+        s = new DH.Grading.Core.WallExcav.Settings(_exOn.IsChecked == true, margin, n, _exBenchOn.IsChecked == true, bh, bw, tl, el, KindOf(_exCutKind), KindOf(_exFillKind),
+                                                   _exBackOn.IsChecked == true, bks);
+        return s.Valid(out _);
     }
 
     /// <summary>★[설치 전 검토 중간 3] 치던 도면이 닫히면 — 닫히는 도면에는 적지 않는다(저장 물음이 이미 끝났다) · 적지 못한 것을 알린다.</summary>
@@ -916,7 +950,7 @@ internal sealed class GradingPanel : UserControl
     /// <summary>화면 값을 그 도면에 적는다(바뀐 것만 · 문서 잠금 · 로그 한 줄 · 명령창 한 줄).
     /// <para>★[설치 전 검토 중간 2] 칸 하나가 틀린 채 켬/끔 · 경사를 바꾸면 <b>그 값만</b> 적고(나머지는 도면에 있던 값) 칸 값은 안 적었다고 말한 뒤 화면을 도면 값으로 맞춘다 —
     /// 종전엔 말없이 아무것도 안 적어 화면은 «꺼짐», 도면은 «켬»이 될 수 있었다.</para></summary>
-    /// <param name="changed">«on» · «slope» = 그 하나를 바꿨다 · null = 칸(타이머 · 도면 바꿈).</param>
+    /// <param name="changed">«on» · «bench» · «slope» · «kind» · «back» = 그 하나를 바꿨다 · null = 칸(타이머 · 도면 바꿈).</param>
     private void SaveExcav(string? changed)
     {
         _exTimer.Stop();                    // ★[재검토 낮음 4] 치던 칸도 이번에 함께 적는다 — 남은 틱이 나중에 다른 도면에 적지 않게
@@ -928,6 +962,8 @@ internal sealed class GradingPanel : UserControl
         {
             if (changed == "on") s = _exStored with { On = _exOn.IsChecked == true };
             else if (changed == "bench") s = _exStored with { BenchOn = _exBenchOn.IsChecked == true };
+            else if (changed == "kind") s = _exStored with { CutKind = KindOf(_exCutKind), FillKind = KindOf(_exFillKind) };
+            else if (changed == "back") s = _exStored with { BackOn = _exBackOn.IsChecked == true };
             else if (changed == "slope")
             {
                 int i = _exSlope.SelectedIndex;
@@ -970,16 +1006,21 @@ internal sealed class GradingPanel : UserControl
         try
         {
             _exOn.IsChecked = s.On;
-            _exBack.Text = N(s.Back);
-            _exFront.Text = N(s.Front);
-            _exFoot.Text = N(s.Foot);
+            _exMargin.Text = N(s.Margin);
+            _exTLean.Text = N(s.TLean);
+            _exELean.Text = N(s.ELean);
+            _exCutKind.SelectedIndex = KindIndex(s.CutKind);
+            _exFillKind.SelectedIndex = KindIndex(s.FillKind);
+            _exBackOn.IsChecked = s.BackOn;
+            _exBackSlope.Text = N(s.BackSlope);
+            _secCache.Clear();
             _exBenchOn.IsChecked = s.BenchOn;
             _exBenchH.Text = N(s.BenchH);
             _exBenchW.Text = N(s.BenchW);
         }
         finally { _loading = false; }
         FillSlopeItems(s.Slope);
-        foreach (var b in new[] { _exBack, _exFront, _exFoot, _exBenchH, _exBenchW }) Gate(b, 0, 1e9, out _);   // 색만 되돌린다
+        foreach (var b in new[] { _exMargin, _exTLean, _exELean, _exBenchH, _exBenchW, _exBackSlope }) Gate(b, 0, 1e9, out _);   // 색만 되돌린다
         SyncExcavLock();
         RedrawExcav();
         if (why.Length > 0) Say("⚠옹벽 터파기 기록을 못 읽어 첫 값으로 보입니다 — " + why);
@@ -1049,14 +1090,17 @@ internal sealed class GradingPanel : UserControl
             double n = i >= 0 && i < DH.Grading.Core.WallExcav.Slopes.Length ? DH.Grading.Core.WallExcav.Slopes[i] : _exSlope.Tag is double t ? t : d.Slope;
             ExcavDiagram.Draw(_canvasExcav, new ExcavDiagram.Spec(
                 On: _exOn.IsChecked == true,
-                Back: P(_exBack, d.Back, 0, DH.Grading.Core.WallExcav.Settings.BackMax, allowZero: true),
-                Front: P(_exFront, d.Front, 0, DH.Grading.Core.WallExcav.Settings.FrontMax, allowZero: true),
-                Foot: P(_exFoot, d.Foot, 0, DH.Grading.Core.WallExcav.Settings.FootMax, allowZero: true),
+                Table: SecTable(KindOf(_exCutKind)),
+                Common: new DH.Grading.Core.WallSection.Common(P(_exTLean, d.TLean, 0, DH.Grading.Core.WallExcav.Settings.LeanMax, allowZero: true),
+                                                               P(_exELean, d.ELean, 0, DH.Grading.Core.WallExcav.Settings.LeanMax, allowZero: true), 0.02, 0.01),
+                Margin: P(_exMargin, d.Margin, 0, DH.Grading.Core.WallExcav.Settings.MarginMax, allowZero: true),
                 Slope: n,
                 BenchOn: _exBenchOn.IsChecked == true,
                 BenchH: P(_exBenchH, d.BenchH, DH.Grading.Core.WallExcav.Settings.BenchHMin, DH.Grading.Core.WallExcav.Settings.BenchHMax),
                 BenchW: P(_exBenchW, d.BenchW, 0, DH.Grading.Core.WallExcav.Settings.BenchWMax, allowZero: true),
                 // ★[v103.3.3 · JACK 1021 «한 3단정도를 예시로 · 단높이는 위에 사면설정의 절토단높이와 연동»] 단 사이 소단폭도 절토 칸을 따른다(내 판단 — 같은 칸 묶음)
+                BackOn: _exBackOn?.IsChecked == true,
+                BackSlope: _exBackSlope == null ? d.BackSlope : P(_exBackSlope, d.BackSlope, 0.05, DH.Grading.Core.WallExcav.Settings.SlopeMax),
                 StepH: P(_cutH, 5, 0.5, 20),
                 StepW: P(_cutW, 1, 0, 10, allowZero: true)));
         }
@@ -1073,8 +1117,9 @@ internal sealed class GradingPanel : UserControl
             string shape = _shapeMiter?.IsChecked == true ? "직각" : "라운드";
             string terr = _terrace?.IsChecked == true ? $"간격 {_tInt?.Text}m · 폭 {_tW?.Text}m" : "끔";
             string ex = _exOn?.IsChecked == true
-                ? $"터파기 뒤 {_exBack?.Text} · 앞 {_exFront?.Text} · 기초 {_exFoot?.Text} · {_exSlope?.SelectedItem} · "
+                ? $"터파기 {(_exCutKind != null ? _exCutKind.SelectedItem : "")}/{(_exFillKind != null ? _exFillKind.SelectedItem : "")} · 여유 {_exMargin?.Text}m · {_exSlope?.SelectedItem} · "
                   + (_exBenchOn?.IsChecked == true ? $"소단 {_exBenchH?.Text}m마다 {_exBenchW?.Text}m" : "소단 없음")
+                  + (_exBackOn?.IsChecked == true ? $" · 배면 1:{_exBackSlope?.Text}" : " · 배면 없음")
                 : "터파기 끔";
             string ws = $"{_cutWall?.SelectedItem} / {_fillWall?.SelectedItem}";
             if (_shapeBadge != null) _shapeBadge.Text = shape;
@@ -1160,6 +1205,79 @@ internal sealed class GradingPanel : UserControl
         tbS = Cell(row, "구배 1:", s);
         parent.Children.Add(row);
         return row;   // ★한 줄에 들어갔는지 <b>재려고</b> 돌려준다(창 폭의 근거가 이 줄이다)
+    }
+
+    // ── ★★★[v104] 단면 형식 ─────────────────────────────────────────────
+    /// <summary>단면 형식 콤보 칸 — 목록 = Core 형식 목록(차례 = 번호) · 공공 표 없는 형식은 ⚠.</summary>
+    private static ComboBox KindCell(Panel parent, string label, DH.Grading.Core.WallSection.Kind value)
+    {
+        var cell = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 8, 4) };
+        cell.Children.Add(new TextBlock { Text = label, FontSize = 11, Foreground = DhBrand.Sub, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) });
+        var cb = new ComboBox { Width = 92, Height = 26, VerticalContentAlignment = VerticalAlignment.Center };
+        foreach (var k in DH.Grading.Core.WallSection.Kinds) cb.Items.Add(k.Name + (k.PublicTable ? "" : " ⚠"));
+        cb.SelectedIndex = KindIndex(value);
+        cb.ToolTip = "터파기 바닥 · 폭과 횡단 수량(옹벽 몸체 공제)이 쓰는 옹벽 단면 형식 — 높이마다 표의 단면을 씁니다.\n⚠ = 공공 표가 없는 형식(지반팀 값 필요).";
+        cell.Children.Add(cb);
+        parent.Children.Add(cell);
+        return cb;
+    }
+
+    private static int KindIndex(DH.Grading.Core.WallSection.Kind k)
+    {
+        for (int i = 0; i < DH.Grading.Core.WallSection.Kinds.Count; i++) if (DH.Grading.Core.WallSection.Kinds[i].Id == k) return i;
+        return 0;
+    }
+
+    private static DH.Grading.Core.WallSection.Kind KindOf(ComboBox cb)
+        => DH.Grading.Core.WallSection.Kinds[System.Math.Clamp(cb.SelectedIndex, 0, DH.Grading.Core.WallSection.Kinds.Count - 1)].Id;
+
+    /// <summary>그 형식의 도면 표(그림용 · 읽은 것은 기억) — 못 읽으면 첫 표.</summary>
+    private DH.Grading.Core.WallSection.Table SecTable(DH.Grading.Core.WallSection.Kind k)
+    {
+        if (!_secCache.TryGetValue(k, out var t)) _secCache[k] = t = WallListStore.SectionOf(Doc?.Database, k, out _);
+        return t;
+    }
+
+    /// <summary>[단면 표…] — 표 창(절토 단면 형식부터) · 저장은 그 도면에(문서 잠금 · 되읽어 견줌 · 로그 · 자가점검).</summary>
+    private void OpenSectionTable()
+    {
+        var doc = Doc;
+        if (doc == null) { Say("도면이 없어 단면 표를 열 수 없습니다."); return; }
+        try
+        {
+            var d = DH.Grading.Core.WallExcav.Settings.Default;
+            var common = new DH.Grading.Core.WallSection.Common(P(_exTLean, d.TLean, 0, DH.Grading.Core.WallExcav.Settings.LeanMax, allowZero: true),
+                                                                P(_exELean, d.ELean, 0, DH.Grading.Core.WallExcav.Settings.LeanMax, allowZero: true), 0.02, 0.01);
+            int si = _exSlope.SelectedIndex;
+            double n = si >= 0 && si < DH.Grading.Core.WallExcav.Slopes.Length ? DH.Grading.Core.WallExcav.Slopes[si] : _exSlope.Tag is double t0 ? t0 : d.Slope;
+            DH.Grading.Core.WallSection.Table Load(DH.Grading.Core.WallSection.Kind k) => WallListStore.SectionOf(doc.Database, k, out _);
+            string Save(IReadOnlyList<DH.Grading.Core.WallSection.Table> list)
+            {
+                if (!DocAlive(doc)) return "도면이 닫혔습니다";
+                string err = "";
+                try
+                {
+                    using (doc.LockDocument())
+                    using (var tr = doc.Database.TransactionManager.StartTransaction())
+                    {
+                        foreach (var t in list) WallListStore.WriteSection(doc.Database, tr, t);
+                        tr.Commit();
+                    }
+                }
+                catch (System.Exception ex) { err = ex.GetType().Name + ": " + ex.Message; }
+                var bad = list.Where(t => WallListStore.SectionOf(doc.Database, t.Kind, out _).Print != t.Print).Select(t => t.Kind.ToString()).ToList();
+                if (err.Length == 0 && bad.Count > 0) err = "되읽은 표가 다릅니다(" + string.Join(",", bad) + ")";
+                string names = string.Join(", ", list.Select(t => t.Kind));
+                try { DiagLog.Append($"\n■ 옹벽 단면 표 저장 {names}{(err.Length > 0 ? " ⚠" + err : "")}\n"); } catch { }
+                SelfCheckLog.Line("옹벽 단면 표", err.Length == 0, $"{names} · {string.Join(" / ", list.Select(t => $"{t.Kind} {t.Rows.Count}줄"))}{(err.Length > 0 ? " ⚠" + err : "")}", doc.Name);
+                _secCache.Clear();
+                return err;
+            }
+            var win = new WallSectionWindow(KindOf(_exCutKind), cut: true, Load, Save, common, P(_exMargin, d.Margin, 0, DH.Grading.Core.WallExcav.Settings.MarginMax, allowZero: true), n);
+            AcadApp.ShowModalWindow(win);
+            if (win.Saved) { _secCache.Clear(); RedrawExcav(); Say("옹벽 단면 표를 저장했습니다 — 종단·횡단을 다시 그리면 반영됩니다."); }
+        }
+        catch (System.Exception ex) { Say("단면 표 창을 못 열었습니다 — " + ex.Message); try { DiagLog.Append("\n■ 단면 표 창 실패 — " + ex + "\n"); } catch { } }
     }
 
     private static TextBox Cell(Panel parent, string label, double value)

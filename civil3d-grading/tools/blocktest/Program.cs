@@ -35,6 +35,9 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "pure")
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "excav")
 {
     ExcavCheck.Run(Check);
+    WallSectionCheck.Run(Check);   // ★[v104] S168 — 옹벽 형식별 일반단면
+    WallSecExcavCheck.Run(Check);   // ★[v104] S169 — 단면 → 터파기 띠 · 면 기록 · 구조물 공제
+    WallBackCheck.Run(Check);   // ★[v104 B] S170 — 배면사면
     Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
     return fails == 0 ? 0 : 1;
 }
@@ -69,6 +72,9 @@ ExtendCheck.Run(Check);   // ★[v103.1.14] S160 — 맞닿은 옹벽 이어 짓
 ZoneBlendCheck.Run(Check);   // ★[v103.1.15] S161 — 사면 구간 끝 전이 띠(이음 0 · 링 · 거리 · 띠 밖 그대로 · 옹벽 판정 · 맞닿음 · 옛 번들 · 시간)
 PureWallsCheck.Run(Check);   // ★[v103.2] S162 · S163 — 옹벽이 든 순수면(뚜껑 · 고르기 · 목록 판 4 · 걷기)
 ExcavCheck.Run(Check);   // ★[v103.3] S164 · S166 · S167 — 옹벽 뒷채움 터파기(앞면 선 · 재기 · 띠 · 설정 · 목록 판 5 · 아래 껍질)
+WallSectionCheck.Run(Check);   // ★[v104] S168 — 옹벽 형식별 일반단면(첫 표 · 단면 넓이 · 표 고르기 · 터파기 범위 · 기록)
+WallSecExcavCheck.Run(Check);   // ★[v104] S169 — 단면 → 터파기 띠(구간 · 꺾임 · 도랑) · 면 기록 · 구조물 공제(기둥법) · 표 지문
+WallBackCheck.Run(Check);   // ★[v104 B] S170 — 배면사면(해석 높이 · 구역 · 기록 · 그림용 면)
 
 const double W = 0.46, H = 0.2, STEP = 5.0, HW = W / 2;
 const double D = 0.5, FS = D / 2; // 깊이·전면 돌출(벽 중심=링, JACK 0720 Z-파이팅 해소): 절토 +FS(안쪽), 성토 −FS

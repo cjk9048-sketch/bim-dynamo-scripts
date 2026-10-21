@@ -398,31 +398,49 @@ static class ExcavCheck
         Console.WriteLine("\n== S166 옹벽 터파기 — 설정 기록 · 목록 판 5 ==");
         {
             var d = WallExcav.Settings.Default;
-            check("S166 첫 값 — 꺼짐 · 뒤 2.0 · 앞 0.6 · 기초 1.0 · 1:1.2 · 기록 없음(null)", !d.On && d.Back == 2.0 && d.Front == 0.6 && d.Foot == 1.0 && d.Slope == 1.2 && WallExcav.Encode(d) == null, d.Text);
-            var s = new WallExcav.Settings(true, 3.5, 0.4, 1.2, 0.3);
+            // ★★[v104 · 판 3] 첫 값 — 꺼짐 · 여유 0.5 · 1:1.2 · 소단 켬 3/1 · 버림 0.1/0.1 · 절토 역T형 · 성토 보강토 · 기록 없음
+            check("S166 첫 값 — 꺼짐 · 여유 0.5 · 1:1.2 · 버림 0.1/0.1 · 역T형/보강토 · 기록 없음(null) · 판 3",
+                !d.On && d.Margin == 0.5 && d.Slope == 1.2 && d.TLean == 0.1 && d.ELean == 0.1 && d.CutKind == WallSection.Kind.역T형 && d.FillKind == WallSection.Kind.보강토
+                && WallExcav.Encode(d) == null && WallExcav.Settings.Version == 4 && d.BackOn && d.BackSlope == 1.5, d.Text);
+            var s = d with { On = true, Margin = 0.3, Slope = 1.0, TLean = 0.15, ELean = 0.05, CutKind = WallSection.Kind.패널식, FillKind = WallSection.Kind.L형 };
             var enc = WallExcav.Encode(s);
             bool ok = WallExcav.TryDecode(enc, out var back, out string why);
-            check("S166 설정 왕복", ok && back == s && why == "", why);
+            check("S166 설정 왕복(판 3 · 형식 둘 · 버림 둘)", ok && back == s && why == "", why);
             check("S166 머리에 켬/끔 — 켬과 끔이 다르다", s.Head != (s with { On = false }).Head, s.Head);
+            check("S166 머리에 여유 · 버림 · 형식 — 다르면 다르다",
+                s.Head != (s with { Margin = 0.4 }).Head && s.Head != (s with { TLean = 0.2 }).Head && s.Head != (s with { ELean = 0.2 }).Head
+                && s.Head != (s with { CutKind = WallSection.Kind.역T형 }).Head && s.Head != (s with { FillKind = WallSection.Kind.보강토 }).Head, s.Head);
             var bad = new List<(char, object)>(enc!); bad[0] = ('I', 9);
             check("S166 모르는 판은 첫 값 + 까닭", !WallExcav.TryDecode(bad, out var b2, out string w2) && b2 == WallExcav.Settings.Default && w2.Contains("판"), w2);
             var bad2 = new List<(char, object)>(enc!); bad2[2] = ('D', 99.0);
-            check("S166 범위 밖 값은 첫 값 + 까닭", !WallExcav.TryDecode(bad2, out var b3, out string w3) && b3 == WallExcav.Settings.Default && w3.Contains("뒤 거리"), w3);
-            check("S166 뒤 + 앞 < 1cm 은 틀림", !(new WallExcav.Settings(true, 0, 0, 1, 1.2)).Valid(out _), "");
+            check("S166 범위 밖 값(여유 99)은 첫 값 + 까닭", !WallExcav.TryDecode(bad2, out var b3, out string w3) && b3 == WallExcav.Settings.Default && w3.Contains("여유폭"), w3);
+            var bad3 = new List<(char, object)>(enc!); bad3[9] = ('I', 77);
+            check("S166 모르는 형식 번호는 첫 값 + 까닭", !WallExcav.TryDecode(bad3, out var b4, out string w4) && b4 == WallExcav.Settings.Default && w4.Contains("형식"), w4);
             check("S166 경사 목록 다섯 · 1:1.2가 둘째", WallExcav.Slopes.Length == 5 && WallExcav.SlopeIndex(1.2) == 1 && WallExcav.SlopeIndex(0.7) == -1, "");
-            // ★[v103.3.1 · JACK 1021 «켬/끔 + 두 칸»] 소단 — 첫 값 켬 · 3 m · 1 m · 판 2 왕복 · 판 1(v103.3.0) 기록은 소단 첫 값으로 · 머리에 소단 · 범위
-            check("S166 소단 첫 값 — 켬 · 높이 3 · 폭 1 · 판 2", d.BenchOn && d.BenchH == 3.0 && d.BenchW == 1.0 && WallExcav.Settings.Version == 2, d.BenchText);
-            var sb = new WallExcav.Settings(true, 1.0, 0.6, 1.0, 1.0, false, 2.5, 0.5);
-            bool okB = WallExcav.TryDecode(WallExcav.Encode(sb), out var sbb, out string wb);
-            check("S166 소단 왕복(끔 · 2.5 · 0.5)", okB && sbb == sb && wb == "", wb);
-            var v1 = new List<(char, object)> { ('I', 1), ('I', 1), ('D', 1.0), ('D', 0.6), ('D', 1.0), ('D', 1.0) };
-            bool okV1 = WallExcav.TryDecode(v1, out var s1, out string w1);
-            check("S166 판 1 기록(소단 칸 없음) — 읽음 · 소단은 첫 값", okV1 && s1.On && s1.Back == 1.0 && s1.Slope == 1.0 && s1.BenchOn && s1.BenchH == 3.0 && s1.BenchW == 1.0, w1);
+            check("S166 소단 첫 값 — 켬 · 높이 3 · 폭 1", d.BenchOn && d.BenchH == 3.0 && d.BenchW == 1.0, d.BenchText);
             check("S166 머리에 소단 — 켬/끔 · 높이 · 폭이 다르면 다르다",
                 s.Head != (s with { BenchOn = false }).Head && s.Head != (s with { BenchH = 2.0 }).Head && s.Head != (s with { BenchW = 0.5 }).Head, s.Head);
-            check("S166 소단 높이 0.5 m 미만 · 폭 10 m 넘음은 틀림", !(s with { BenchH = 0.2 }).Valid(out _) && !(s with { BenchW = 11 }).Valid(out _), "");
-            var bad9 = new List<(char, object)>(WallExcav.Encode(sb)!); bad9.RemoveAt(8);
-            check("S166 판 2인데 칸이 모자라면 첫 값 + 까닭", !WallExcav.TryDecode(bad9, out var b9, out string w9) && b9 == WallExcav.Settings.Default && w9.Contains("판 2"), w9);
+            check("S166 소단 높이 0.5 m 미만 · 폭 10 m 넘음 · 버림 1 m 넘음은 틀림",
+                !(s with { BenchH = 0.2 }).Valid(out _) && !(s with { BenchW = 11 }).Valid(out _) && !(s with { TLean = 1.5 }).Valid(out _), "");
+            // 판 1(v103.3.0) · 판 2(v103.3.1~3) — 켬 · 경사 · 소단만 옮기고 나머지는 첫 값(뒤 · 앞 · 기초는 단면 + 여유로 바뀜)
+            var v1 = new List<(char, object)> { ('I', 1), ('I', 1), ('D', 1.0), ('D', 0.6), ('D', 1.0), ('D', 1.0) };
+            bool okV1 = WallExcav.TryDecode(v1, out var s1, out string w1);
+            check("S166 판 1 기록 — 읽음 · 켬 · 경사만 · 나머지 첫 값", okV1 && s1.On && s1.Slope == 1.0 && s1.BenchOn && s1.BenchH == 3.0 && s1.Margin == d.Margin && s1.CutKind == d.CutKind, w1);
+            var v2 = new List<(char, object)> { ('I', 2), ('I', 1), ('D', 2.0), ('D', 0.6), ('D', 1.0), ('D', 1.8), ('I', 0), ('D', 2.5), ('D', 0.5) };
+            bool okV2 = WallExcav.TryDecode(v2, out var s2v, out string w2v);
+            check("S166 판 2 기록 — 켬 · 경사 · 소단(끔 · 2.5 · 0.5) 옮김", okV2 && s2v.On && s2v.Slope == 1.8 && !s2v.BenchOn && s2v.BenchH == 2.5 && s2v.BenchW == 0.5 && s2v.TLean == d.TLean, w2v);
+            var v2b = new List<(char, object)>(v2); v2b.RemoveAt(8);
+            check("S166 판 2인데 칸이 모자라면 첫 값 + 까닭", !WallExcav.TryDecode(v2b, out var b9, out string w9) && b9 == WallExcav.Settings.Default && w9.Contains("판 2"), w9);
+            var v4b = new List<(char, object)>(enc!); v4b.RemoveAt(12);
+            check("S166 판 4인데 칸이 모자라면 첫 값 + 까닭", !WallExcav.TryDecode(v4b, out var b10, out string w10) && b10 == WallExcav.Settings.Default && w10.Contains("판 4"), w10);
+            // ★[v104 B] 판 3 기록(배면 칸 없음)은 배면 첫 값 · 배면 왕복 · 배면 머리는 터파기 머리와 따로
+            var v3 = new List<(char, object)>(enc!); v3[0] = ('I', 3); v3.RemoveAt(12); v3.RemoveAt(11);
+            bool okV3 = WallExcav.TryDecode(v3, out var s3v, out string w3v);
+            check("S166 판 3 기록 — 읽음 · 배면은 첫 값(켬 · 1.5)", okV3 && s3v == s with { BackOn = true, BackSlope = 1.5 }, w3v);
+            var sb4 = s with { BackOn = false, BackSlope = 1.8 };
+            check("S166 배면 왕복(끔 · 1.8) · 터파기 머리는 배면과 무관 · 배면 머리는 다르다",
+                WallExcav.TryDecode(WallExcav.Encode(sb4), out var sb4b, out _) && sb4b == sb4 && sb4.Head == s.Head && sb4.BackHead != s.BackHead, sb4.BackHead);
+            check("S166 배면 경사 0 · 6은 틀림", !(s with { BackSlope = 0 }).Valid(out _) && !(s with { BackSlope = 6 }).Valid(out _), "");
 
             // 목록 판 5 — 옹벽선을 가진 굳은 칸이 있으면 판 5 · 없으면 판 4 바이트 그대로
             var h4 = new WallListHead { PlanHandle = "1A0" };

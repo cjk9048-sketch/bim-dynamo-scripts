@@ -1,22 +1,25 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using DH.Grading.Core;
 
 namespace DH.Grading.Civil;
 
 /// <summary>★★[v103.3.1 · JACK 1021 «뒷채움 터파기도 사면설정처럼 팝업안에 연동되는 설명도 만들어줘»] <b>옹벽 뒷채움 터파기 예시 그림</b>.
 /// <para>사면 예시(<see cref="SlopeDiagram"/>)와 같은 법 — 값만 받아 420×240 논리 자리에 그리고 <c>Viewbox</c>가 줄인다.
-/// 칸(뒤 · 앞 · 기초 · 경사 · 소단)을 고치면 그 자리에서 다시 그린다. 꺼짐이면 옅게.</para>
+/// 칸(여유 · 경사 · 소단 · 버림 · 형식)을 고치면 그 자리에서 다시 그린다. 꺼짐이면 옅게.</para>
 /// <para>★[v103.3.3 · JACK 1021 «한 3단정도를 예시로 · 단높이는 위에 사면설정의 절토단높이와 연동»] 절토 옹벽 <b>세 단</b>의 단면 —
-/// 단높이 · 단 사이 소단폭은 «사면 설정» 절토 칸을 따른다. 터파기선은 엔진과 같은 법으로 정한다:
-/// 단마다 «바닥(벽 밑 − 기초 · 앞면에서 앞 · 뒤) + 1:n 법면(소단)» 조각을 세우고, 가장 낮은 조각이 최종면(땅)보다 낮은 자리만 판다(아래 껍질).
-/// 그래서 위 단 옹벽은 아래 단 되메우기 위에 선다(현장 결과와 같은 꼴).</para></summary>
+/// 단높이 · 단 사이 소단폭은 «사면 설정» 절토 칸을 따른다.</para>
+/// <para>★★[v104 · JACK 1021 «옹벽 형식별 일반단면 → 여유폭 · 구배로 터파기»] 옹벽은 <b>고른 절토 단면 형식</b>의 단면(<see cref="WallSection"/> — 엔진과 같은 단면)을 단마다 세운다.
+/// 터파기선은 엔진과 같은 법: 단마다 «바닥(단면 앞 끝 − 여유 ~ 뒤 끝 + 여유 · 단면 바닥) + 1:n 법면(소단)» 조각 · 도랑(패널식)은 앞쪽만 · 거의 수직 ·
+/// 가장 낮은 조각이 최종면(땅)보다 낮은 자리만 판다(아래 껍질). 그래서 위 단 옹벽은 아래 단 되메우기 위에 선다(현장 결과와 같은 꼴).</para></summary>
 internal static class ExcavDiagram
 {
     internal const double W0 = 420, H0 = 240;
 
-    internal readonly record struct Spec(bool On, double Back, double Front, double Foot, double Slope, bool BenchOn = true, double BenchH = 3.0, double BenchW = 1.0,
-                                         double StepH = 5.0, double StepW = 1.0);
+    internal readonly record struct Spec(bool On, WallSection.Table Table, WallSection.Common Common, double Margin, double Slope,
+                                         bool BenchOn = true, double BenchH = 3.0, double BenchW = 1.0, double StepH = 5.0, double StepW = 1.0,
+                                         bool BackOn = true, double BackSlope = 1.5);
 
     /// <summary>예시 단 수.</summary>
     const int Steps = 3;
@@ -37,43 +40,55 @@ internal static class ExcavDiagram
 
     internal static void Draw(Canvas c, in Spec spec)
     {
-        if (c == null) return;
+        if (c == null || spec.Table == null || spec.Table.Rows.Count == 0) return;
         c.Children.Clear();
         c.Opacity = spec.On ? 1.0 : 0.4;
         static double Ok(double v, double dflt, double lo, double hi) => double.IsNaN(v) || double.IsInfinity(v) ? dflt : System.Math.Clamp(v, lo, hi);
-        double B = Ok(spec.Back, 2.0, 0, 20), F = Ok(spec.Front, 0.6, 0, 10), D = Ok(spec.Foot, 1.0, 0, 5), n = Ok(spec.Slope, 1.2, 0.05, 5);
+        double mg = Ok(spec.Margin, 0.5, 0, 5), n = Ok(spec.Slope, 1.2, 0.05, 5);
         double H = Ok(spec.StepH, 5.0, 0.5, 20), Wb = Ok(spec.StepW, 1.0, 0, 10);
         bool bOn = spec.BenchOn;
         double BH = Ok(spec.BenchH, 3.0, 0.5, 20), BW = Ok(spec.BenchW, 1.0, 0, 10);
-        double tw = System.Math.Clamp(0.08 * H, 0.25, 0.6);           // 그림의 벽 두께(m)
+        var sh = WallSection.Build(spec.Table, H, spec.Common, cut: true);
+        bool trench = sh.Trench;
+        double face = H * System.Math.Max(0, spec.Common.GradeFace);    // 정지면 앞면 너비(1:0.01)
 
         var profile = new SolidColorBrush(Color.FromRgb(0x33, 0x66, 0x33));   // 정지면(짙은 초록) — 사면 그림과 같은 색
         var dim = new SolidColorBrush(Color.FromRgb(0x99, 0x99, 0x99));
         var txt = new SolidColorBrush(Color.FromRgb(0x44, 0x44, 0x44));
         var mag = new SolidColorBrush(Color.FromRgb(0xC0, 0x1C, 0xC0));       // 터파기선(종단 · 횡단의 마젠타)
-        var wall = new SolidColorBrush(Color.FromRgb(0x50, 0x50, 0x50));
+        var edge = new SolidColorBrush(Color.FromRgb(0x50, 0x50, 0x50));
 
-        // 장면(m · 위가 +) — 1단 앞면 x = 0 · 흙은 +x · 계획면 y = 0 · k단 앞면 x_k = (k−1)(벽 두께 + 소단폭) · 맨 위 = 원지반 y = 3H
+        // 장면(m · 위가 +) — 1단 앞면(앞 땅) x = 0 · 흙은 +x · 계획면 y = 0 · k단 앞면 x_k = k(앞면 너비 + 소단폭)(구간 옹벽과 같은 셈) · 맨 위 = 원지반 y = 3H
         var xs = new double[Steps];
-        for (int k = 0; k < Steps; k++) xs[k] = k * (tw + Wb);
+        for (int k = 0; k < Steps; k++) xs[k] = k * (face + Wb);
         double yTopG = Steps * H;
-        double Lz(double x)                                            // 최종면(땅) — 계획면 · 단마다 소단 · 맨 위 원지반
+        // ★[v104 B] 맨 위 단 뒤 원지반은 1:3으로 오른다(자연 사면 — 배면사면이 보이게)
+        const double gUp = 1.0 / 3.0;
+        double xTopBack = xs[^1] + face;
+        double Lz(double x)                                            // 최종면(땅) — 계획면 · 단마다 앞면(1:0.01) · 소단 · 맨 위 뒤 원지반(1:3)
         {
-            if (x < xs[0]) return 0;
-            for (int k = Steps - 1; k >= 0; k--) if (x >= xs[k]) return (k + 1) * H;
-            return 0;
+            double z = 0;
+            for (int k = 0; k < Steps; k++)
+            {
+                if (x <= xs[k]) break;
+                z = x >= xs[k] + face ? (k + 1) * H : k * H + (x - xs[k]) / System.Math.Max(1e-9, face) * H;
+            }
+            if (x > xTopBack) z = yTopG + (x - xTopBack) * gUp;
+            return z;
         }
-        // 법면 — 바닥 끝에서 1:n · 소단(켜면 BH마다 BW) · 엔진과 같은 규칙
+        // 법면 — 바닥 끝에서 1:n · 소단(켜면 BH마다 BW) · 엔진과 같은 규칙(도랑도 앞쪽은 같은 법면 · 뒤는 앞면 선에서 끝)
         List<(double X, double Y)> Path(double x0, double y0, double dir, double yTop)
         {
+            double nn = n;
+            bool bb = bOn;
             var pts = new List<(double X, double Y)> { (x0, y0) };
             double x = x0, y = y0;
             while (y < yTop - 1e-9)
             {
-                double up = bOn ? System.Math.Min(BH, yTop - y) : yTop - y;
-                x += dir * up * n; y += up;
+                double up = bb ? System.Math.Min(BH, yTop - y) : yTop - y;
+                x += dir * up * nn; y += up;
                 pts.Add((x, y));
-                if (bOn && y < yTop - 1e-9 && BW > 0) { x += dir * BW; pts.Add((x, y)); }
+                if (bb && y < yTop - 1e-9 && BW > 0) { x += dir * BW; pts.Add((x, y)); }
             }
             return pts;
         }
@@ -88,30 +103,45 @@ internal static class ExcavDiagram
             }
             return double.PositiveInfinity;
         }
-        double yHi = yTopG + 2;
+        // 바닥 — 단면 앞 끝 − 여유 ~ 뒤 끝 + 여유(도랑은 앞면 선에서 끝 · 뒤 여유 0 · 뒤 법면 없음 — 깎기면이 뒷벽)
+        double bx0 = sh.XFront - mg, bx1 = trench ? 0 : sh.XBack + mg;
+        double yHi = yTopG + 60;                                     // 법면은 맨 위 뒤 원지반(1:3으로 오름)을 넘을 때까지
         var zb = new double[Steps];
         var back = new List<(double X, double Y)>[Steps];
         var front = new List<(double X, double Y)>[Steps];
         for (int k = 0; k < Steps; k++)
         {
-            zb[k] = k * H - D;
-            back[k] = Path(xs[k] + B, zb[k], +1, yHi);
-            var fp = Path(xs[k] - F, zb[k], -1, yHi); fp.Reverse();   // x가 커지게
+            zb[k] = k * H + sh.ZBottom;
+            back[k] = Path(xs[k] + bx1, zb[k], +1, yHi);
+            var fp = Path(xs[k] + bx0, zb[k], -1, yHi); fp.Reverse();   // x가 커지게
             front[k] = fp;
         }
         double Wk(int k, double x)
         {
-            if (x >= xs[k] - F - 1e-12 && x <= xs[k] + B + 1e-12) return zb[k];
-            return x > xs[k] + B ? PathZ(back[k], x) : PathZ(front[k], x);
+            if (x >= xs[k] + bx0 - 1e-12 && x <= xs[k] + bx1 + 1e-12) return zb[k];
+            if (x > xs[k] + bx1) return trench ? double.PositiveInfinity : PathZ(back[k], x);
+            return PathZ(front[k], x);
         }
         double MinW(double x) { double m = double.PositiveInfinity; for (int k = 0; k < Steps; k++) m = System.Math.Min(m, Wk(k, x)); return m; }
 
-        // 범위 — 1단 앞 데이라잇 · 단마다 뒤 법면이 맨 위 땅에 닿는 자리 중 가장 먼 곳(소단폭이 넓으면 위 단 터파기가 더 뒤로 간다)
-        var f1 = Path(-F, -D, -1, 0);
+        // 범위 — 1단 앞 데이라잇 · 단마다 뒤 법면이 맨 위 땅에 닿는 자리 중 가장 먼 곳 · 단면 조각
+        var f1 = Path(bx0, sh.ZBottom, -1, 0);
         double xFd = f1[^1].X;
-        double xD = double.NegativeInfinity;
-        for (int k = 0; k < Steps; k++) xD = System.Math.Max(xD, Path(xs[k] + B, zb[k], +1, yTopG)[^1].X);
-        double xL = xFd - 2.2, xR = System.Math.Max(xD, xs[^1] + tw + 1.0) + 1.6, yT = yTopG + 1.0, yB = -D - 0.9;
+        // 맨 위 단 뒤 데이라잇 — 맨 위 단 뒤에서 가장 낮은 조각이 땅 위로 나오는 첫 자리(촘촘히 걸어서)
+        double xD = xTopBack + 0.5;
+        {
+            bool below = false;
+            for (double x = xTopBack; x < xTopBack + 200; x += 0.02)
+            {
+                bool b0 = MinW(x) < Lz(x) - 1e-9;
+                if (b0) below = true;
+                else if (below) { xD = x; break; }
+            }
+        }
+        double xPartR = sh.Parts.SelectMany(p => p.Ring).Max(q => q.X) + xs[^1];
+        double xL = System.Math.Min(xFd, bx0) - 2.2, xR = System.Math.Max(xD, System.Math.Max(xPartR, xs[^1] + face) + 1.0) + 1.6;
+        double yT = Lz(xR) + 1.0, yB = sh.ZBottom - 0.9;
+        if (xR - xL < 1.2 * (yT - yB)) xR = xL + 1.2 * (yT - yB);      // 도랑처럼 판 자리가 좁아도 그림이 너무 가늘지 않게
         double mL = 14, mR = 14, mT = 22, mB = 34;
         double s = System.Math.Min((W0 - mL - mR) / (xR - xL), (H0 - mT - mB) / (yT - yB));
         double ox = mL + ((W0 - mL - mR) - (xR - xL) * s) / 2;
@@ -134,9 +164,9 @@ internal static class ExcavDiagram
             pl.Points = pc;
             c.Children.Add(pl);
         }
-        void Poly(Brush fill, Brush? stroke, IEnumerable<(double X, double Y)> p)
+        void Poly(Brush fill, Brush? stroke, IEnumerable<(double X, double Y)> p, double th = 1.2)
         {
-            var pg = new System.Windows.Shapes.Polygon { Fill = fill, Stroke = stroke, StrokeThickness = stroke == null ? 0 : 1.2 };
+            var pg = new System.Windows.Shapes.Polygon { Fill = fill, Stroke = stroke, StrokeThickness = stroke == null ? 0 : th };
             var pc = new PointCollection();
             foreach (var q in p) pc.Add(new Point(PX(q.X), PY(q.Y)));
             pg.Points = pc;
@@ -145,7 +175,7 @@ internal static class ExcavDiagram
         void T(double px, double py, string str, double size = 10, Brush? b = null)
         {
             var tb = new TextBlock { Text = str, FontSize = size, Foreground = b ?? txt };
-            Canvas.SetLeft(tb, System.Math.Clamp(px, 2, System.Math.Max(2, W0 - 2 - TW(str, size)))); Canvas.SetTop(tb, py);   // 그림 밖으로 안 잘리게
+            Canvas.SetLeft(tb, System.Math.Clamp(px, 2, System.Math.Max(2, W0 - 2 - TW(str, size)))); Canvas.SetTop(tb, System.Math.Clamp(py, 0, H0 - 14));   // 그림 밖으로 안 잘리게
             c.Children.Add(tb);
         }
         static double TW(string str, double size = 10)
@@ -168,9 +198,9 @@ internal static class ExcavDiagram
         if (cur != null) runs.Add(cur);
 
         // 흙(땅 아래 · 계단)
-        var soil = new List<(double X, double Y)> { (xL, 0), (xs[0], 0) };
-        for (int k = 0; k < Steps; k++) { soil.Add((xs[k], (k + 1) * H)); if (k + 1 < Steps) soil.Add((xs[k + 1], (k + 1) * H)); }
-        soil.Add((xR, yTopG)); soil.Add((xR, yB)); soil.Add((xL, yB));
+        var soil = new List<(double X, double Y)> { (xL, 0) };
+        for (int k = 0; k < Steps; k++) { soil.Add((xs[k], k * H)); soil.Add((xs[k] + face, (k + 1) * H)); }
+        soil.Add((xR, Lz(xR))); soil.Add((xR, yB)); soil.Add((xL, yB));
         Poly(new SolidColorBrush(Color.FromArgb(0x55, 0xC8, 0xA9, 0x6E)), null, soil);
         // 판 자리(되메우기) — 터파기선과 땅 사이
         var fillBrush = new SolidColorBrush(Color.FromArgb(0xE0, 0xFB, 0xF7, 0xEE));
@@ -181,72 +211,99 @@ internal static class ExcavDiagram
             for (int i = r.Count - 1; i >= 0; i--) pg.Add((r[i].X, r[i].G));
             Poly(fillBrush, null, pg);
         }
-        // 옹벽 — 단마다 기초판 + 벽체(위 단은 아래 단 되메우기 위에 선다)
-        var concrete = new SolidColorBrush(Color.FromArgb(0x90, 0xD8, 0xD8, 0xD8));
-        double ts = System.Math.Min(0.5, System.Math.Max(0.2, D * 0.5));
+        // 옹벽 — 단마다 같은 단면(비구조물 먼저 · 구조물이 위에)
         for (int k = 0; k < Steps; k++)
         {
-            double z0 = k * H, fx0 = xs[k] - System.Math.Min(F, 0.5) * 0.8, fx1 = xs[k] + System.Math.Max(tw + 0.3, B * 0.75);
-            if (D > 0.05) Poly(concrete, wall, new[] { (fx0, z0 - D), (fx1, z0 - D), (fx1, z0 - D + ts), (fx0, z0 - D + ts) });
-            double sb = System.Math.Min(z0, z0 - D + ts);
-            Poly(concrete, wall, new[] { (xs[k], sb), (xs[k] + tw, sb), (xs[k] + tw, (k + 1) * H), (xs[k], (k + 1) * H) });
+            double dx = xs[k], dz = k * H;
+            foreach (var p in sh.Parts.Where(p => !p.Structure)) Poly(WallSectionDiagram.FillOf(p.Material), null, p.Ring.Select(q => (q.X + dx, q.Z + dz)));
+            foreach (var p in sh.Parts.Where(p => p.Structure)) Poly(WallSectionDiagram.FillOf(p.Material), edge, p.Ring.Select(q => (q.X + dx, q.Z + dz)), 1.0);
         }
-        // 최종면(초록) — 계획면 · 단 사이 소단 · 원지반
-        L(xL, 0, xs[0], 0, profile, 2.4);
-        for (int k = 0; k + 1 < Steps; k++) if (xs[k + 1] - (xs[k] + tw) > 1e-6) L(xs[k] + tw, (k + 1) * H, xs[k + 1], (k + 1) * H, profile, 2.4);
-        L(xs[^1] + tw, yTopG, xR, yTopG, profile, 2.4);
+        // 최종면(초록) — 계획면 · 단마다 앞면 · 소단 · 원지반
+        var gl = new List<(double X, double Y)> { (xL, 0) };
+        for (int k = 0; k < Steps; k++) { gl.Add((xs[k], k * H)); gl.Add((xs[k] + face, (k + 1) * H)); }
+        gl.Add((xR, Lz(xR)));
+        PolyLine(profile, 2.4, false, gl);
         // 터파기선(마젠타 파선)
         foreach (var r in runs) PolyLine(mag, 1.8, true, r.Select(q => (q.X, q.E)).ToList());
+        // ★[v104 B · JACK 1021] 배면사면 — 맨 위 단 뒤 데이라잇에서 1:nB로 내려오다 옹벽 꼭대기 높이에서 평탄 · 그 위 원지반 = 절토(옅은 주황)
+        if (spec.BackOn && !trench)   // 도랑(패널식)은 벽 뒤 터파기가 없어 배면사면도 없다
+        {
+            double nB = Ok(spec.BackSlope, 1.5, 0.05, 5), zDl = Lz(xD);
+            double B(double x) => System.Math.Max(MinW(x), System.Math.Min(Lz(x), System.Math.Max(yTopG, zDl - (xD - x) / nB)));   // 터파기선 아래로는 안 내려간다
+            var bl = new List<(double X, double Y)>();
+            var cutPg = new List<(double X, double Y)>();
+            for (double x = xTopBack; x <= xD + 1e-9; x += 0.02) bl.Add((x, B(x)));
+            bl.Add((xD, zDl));
+            foreach (var q in bl) cutPg.Add(q);
+            for (int i = bl.Count - 1; i >= 0; i--) cutPg.Add((bl[i].X, Lz(bl[i].X)));
+            Poly(new SolidColorBrush(Color.FromArgb(0x70, 0xF2, 0xC0, 0x8A)), null, cutPg);
+            var bkBrush = new SolidColorBrush(Color.FromRgb(0x2E, 0x8B, 0x57));
+            PolyLine(bkBrush, 1.8, true, bl);
+            // 경사 글자 — 경사 마디 가운데 · 평탄 끝
+            double xFlatEnd = xD - (zDl - yTopG) * nB;
+            if (xFlatEnd > xTopBack + 0.3) T(PX((xTopBack + xFlatEnd) / 2) - 12, PY(yTopG) - 15, "평탄", 10, bkBrush);
+            double xm = (System.Math.Max(xTopBack, xFlatEnd) + xD) / 2;
+            T(PX(xm) + 4, PY(B(xm)) - 16, $"배면 1:{nB:0.##}", 10, bkBrush);
+        }
 
-        // 치수 — 1단의 앞 · 뒤(바닥 아래) · 기초(앞 데이라잇 왼쪽) · 단높이(맨 위 단 왼쪽)
-        double yd = -D - 0.45;
+        // 치수 — 1단 바닥(앞 여유 · 단면 · 뒤 여유) · 단높이
+        double yd = sh.ZBottom - 0.45;
         void HDim(double xa, double xb, string label, bool outLeft)
         {
+            if (xb - xa < 1e-6) return;
             L(xa, yd, xb, yd, dim, 1.1); L(xa, yd - 0.15, xa, yd + 0.15, dim, 1.1); L(xb, yd - 0.15, xb, yd + 0.15, dim, 1.1);
             double w = TW(label), span = PX(xb) - PX(xa);
             double px = w + 4 <= span ? (PX(xa) + PX(xb)) / 2 - w / 2 : outLeft ? PX(xa) - w - 3 : PX(xb) + 3;
             T(px, PY(yd) + 3, label, 10);
         }
-        HDim(-F, 0, $"앞 {F:0.##}m", outLeft: true);
-        HDim(0, B, $"뒤 {B:0.##}m", outLeft: false);
-        if (D > 1e-6)
+        if (mg > 1e-6)
         {
-            double xv = xFd - 0.45;
-            string lab = $"기초 {D:0.##}m";
-            L(xv, 0, xv, -D, dim, 1.1); L(xv - 0.15, 0, xv + 0.15, 0, dim, 1.1); L(xv - 0.15, -D, xv + 0.15, -D, dim, 1.1);
-            T(PX(xv) - TW(lab) - 4, (PY(0) + PY(-D)) / 2 - 7, lab, 10);
+            HDim(bx0, sh.XFront, $"여유 {mg:0.##}m", outLeft: true);
+            if (!trench) HDim(sh.XBack, bx1, $"여유 {mg:0.##}m", outLeft: false);
         }
         {
             // 단높이 — 맨 위 단 앞면 왼쪽(«사면 설정» 절토 단높이와 같은 값)
-            double xh = xs[^1] - System.Math.Max(0.35, 0.15 * H);
+            double xh = xs[^1] + System.Math.Min(sh.XFront, 0) - System.Math.Max(0.35, 0.15 * H);
             double z0 = (Steps - 1) * H, z1 = Steps * H;
             string lab = $"단높이 {H:0.##}m";
             L(xh, z0, xh, z1, dim, 1.1); L(xh - 0.15, z0, xh + 0.15, z0, dim, 1.1); L(xh - 0.15, z1, xh + 0.15, z1, dim, 1.1);
             T(PX(xh) - TW(lab) - 4, (PY(z0) + PY(z1)) / 2 - 7, lab, 10);
         }
-        // 경사 — 1단 뒤 법면 첫 마디 가운데의 바깥(오른쪽 아래) · 그 자리가 실제 터파기선일 때
-        double mx = (back[0][0].X + back[0][1].X) / 2, my = (back[0][0].Y + back[0][1].Y) / 2;
-        T(PX(mx) + 10, PY(my) + 2, $"터파기선 1:{n:0.##}", 11, mag);
-        // 소단 — 1단 뒤 법면 첫 소단이 땅 아래(실제 터파기선)일 때 그 아래에
-        if (bOn && back[0].Count >= 4 && back[0][1].Y < Lz(back[0][1].X) - 1e-9)
+        // 경사 — 1단 뒤 법면 첫 마디 가운데의 바깥(오른쪽 아래) · 도랑은 «기초부만»
+        if (!trench)
         {
-            var q = back[0][1];
-            T(PX(q.X) + 6, PY(q.Y) + 4, $"소단 {BW:0.##}m · {BH:0.##}m마다", 10, mag);
+            double mx = (back[0][0].X + back[0][1].X) / 2, my = (back[0][0].Y + back[0][1].Y) / 2;
+            double sx = PX(mx) + 10, sy = PY(my) + 2;
+            T(sx, sy, $"터파기선 1:{n:0.##}", 11, mag);
+            if (bOn && back[0].Count >= 4 && back[0][1].Y < Lz(back[0][1].X) - 1e-9)
+            {
+                var q = back[0][1];
+                string lb = $"소단 {BW:0.##}m · {BH:0.##}m마다";
+                double bx = PX(q.X) + 6, by = PY(q.Y) + 4;
+                // 경사 글자와 겹치면 소단 위로 올린다
+                if (System.Math.Abs(by - sy) < 15 && bx < sx + TW($"터파기선 1:{n:0.##}", 11) && sx < bx + TW(lb)) by = System.Math.Min(by, sy) - 16;
+                T(bx, by, lb, 10, mag);
+            }
         }
+        else T(PX(bx0) - 4, PY(sh.ZBottom) + 16, "기초부만 판다", 10, mag);
 
-        // 이름 — 되메우기는 가장 넓은 판 자리 가운데
+        // 이름
+        var info = WallSection.Of(spec.Table.Kind);
         T(PX(xL) + 2, PY(0) - 16, "계획면", 10);
-        T(PX(xR) - 40, PY(yTopG) - 16, "원지반", 10);
-        T(PX(xs[^1] + tw) + 4, PY(yTopG) + 4, "옹벽", 10);
-        // 되메우기 — 맨 위 단 뒤에서 가장 두꺼운 자리(기초판 · 벽과 안 겹치게) · 없으면 가장 긴 판 자리 가운데
-        var behind = runs.SelectMany(r => r).Where(q => q.X > xs[^1] + tw + 0.3).OrderByDescending(q => q.G - q.E).FirstOrDefault();
-        if (behind.G - behind.E > 1e-6) T(PX(behind.X) + 4, PY((behind.E + behind.G) / 2) - 6, "되메우기", 10);
+        T(PX(xR) - 40, PY(Lz(xR)) - 16, "원지반", 10);
+        T(4, 2, info.Name + (info.PublicTable ? "" : " ⚠공공 표 없음") + (sh.Over ? " ⚠표 밖" : ""), 11,
+          info.PublicTable && !sh.Over ? txt : new SolidColorBrush(Color.FromRgb(0xB0, 0x30, 0x28)));
+        // 되메우기 — 맨 위 단 뒤에서 가장 두꺼운 자리(단면과 안 겹치게) · 없으면 가장 긴 판 자리 가운데
+        double xBackPart = xs[^1] + sh.Parts.SelectMany(p => p.Ring).Max(q => q.X);
+        var behind = runs.SelectMany(r => r).Where(q => q.X > xBackPart + 0.3).OrderByDescending(q => q.G - q.E).FirstOrDefault();
+        if (trench) { }                                                  // 도랑은 판 자리가 좁아 이름을 안 단다(«기초부만 판다»가 대신)
+        else if (behind.G - behind.E > 1e-6) T(PX(behind.X) + 4, PY((behind.E + behind.G) / 2) - 6, "되메우기", 10);
         else if (runs.Count > 0)
         {
             var big = runs.OrderByDescending(r => r.Count).First();
             var mid = big[big.Count * 2 / 3];
             T(PX(mid.X) - 22, PY((mid.E + mid.G) / 2) - 6, "되메우기", 10);
         }
-        if (!spec.On) T(W0 / 2 - 30, 4, "꺼짐 — 옹벽면까지만", 11);
+        if (!spec.On) T(W0 / 2 - 30, 18, "꺼짐 — 옹벽면까지만", 11);
     }
 }

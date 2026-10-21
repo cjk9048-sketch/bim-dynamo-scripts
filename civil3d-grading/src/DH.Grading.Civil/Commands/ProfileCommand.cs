@@ -520,7 +520,8 @@ public sealed class ProfileCommand
             if (tidy.Length > 0) log.AppendLine("  " + tidy);
             // ★[v103.3 · 계획 2-4] 옹벽 터파기 — 꺼짐이어도 적는다(횡단이 «끈 뒤 종단 안 그림»을 가린다)
             WallExcavBuilder.RecordOnAlignment(trR, alignId, wx ?? new WallExcavBuilder.Result { State = WallExcavBuilder.State.Off, Stamp = WallExcavBuilder.CurrentHead(db, ObjectId.Null, out _) });
-            string tidyX = WallExcavBuilder.Tidy(trR, wx != null && wx.State == WallExcavBuilder.State.Built ? wx.SurfaceId : ObjectId.Null);
+            string tidyX = WallExcavBuilder.Tidy(trR, wx != null && wx.State == WallExcavBuilder.State.Built ? wx.SurfaceId : ObjectId.Null,
+                                                 wx != null && wx.BackState == WallExcavBuilder.State.Built ? wx.BackId : ObjectId.Null);
             if (tidyX.Length > 0) log.AppendLine("  " + tidyX);
             trR.Commit();
         }

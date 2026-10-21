@@ -187,7 +187,21 @@ public static class CivilSafeMesh
     /// 뺀 몫을 넘긴다. 그래야 새 길·옛 길·마지막 수단 가운데 <b>합성 예산을 지키는 쪽</b>을 고른다(판정이 같다고 오차 큰 쪽을 골라 합성이 판정 3이 되지 않게).</param>
     /// <param name="wallCap">★★[v102.1 · JACK 0930 ③] 허용 위 끝 — 넘은 옹벽 높이 오차가 전부 Civil이 반드시 합칠 쌍 곁이면 판정 2의 한도를 이만큼까지(NaN = 허용 없음).
     /// [예산, <see cref="ForcedCap"/>]으로 막고, 예산(<paramref name="wallTol2"/>)이 0 이하면 허용하지 않는다(나머지가 예산을 다 먹은 판 — 계획 검토 M2).</param>
-    public static List<WallDaylight.Tri>? MakeZone(IReadOnlyList<WallDaylight.Tri> tris, IEnumerable<Point3> fixedPts, out Report rep, double wallTol2 = ZTol2, double wallCap = double.NaN)
+    /// <param name="flatH">★[v104 · V34 역L형 1:0.5] 납작한 면으로 접는 높이 — 0이면 종전(<see cref="Gap"/> 105µm). 옹벽 터파기면은 <see cref="ThinFlat"/>(125µm)를 넘긴다:
+    /// 높이 107µm · 짧은 변 326µm 바늘을 Civil이 이웃과 뒤집어 받아(0.085㎡ 구멍) 되읽기 관문에서 못 지었다. 합성 · 정지면 쪽은 종전 그대로.</param>
+    public static List<WallDaylight.Tri>? MakeZone(IReadOnlyList<WallDaylight.Tri> tris, IEnumerable<Point3> fixedPts, out Report rep, double wallTol2 = ZTol2, double wallCap = double.NaN, double flatH = 0)
+    {
+        double flatWas = flatHCur;
+        flatHCur = flatH;
+        try { return MakeZoneCore(tris, fixedPts, out rep, wallTol2, wallCap); }
+        finally { flatHCur = flatWas; }
+    }
+
+    /// <summary>옹벽 터파기면이 쓰는 «납작한 면» 높이 — Civil이 긴 변을 뒤집는 문턱(122µm) 곁(<see cref="ThinH"/>와 같은 값).</summary>
+    public const double ThinFlat = 1.25e-4;
+    [ThreadStatic] static double flatHCur;
+
+    static List<WallDaylight.Tri>? MakeZoneCore(IReadOnlyList<WallDaylight.Tri> tris, IEnumerable<Point3> fixedPts, out Report rep, double wallTol2, double wallCap)
     {
         rep = new Report();
         if (tris == null || tris.Count == 0) { rep.Fail = "삼각형이 없다"; return null; }
@@ -226,13 +240,19 @@ public static class CivilSafeMesh
         {
             cts = new System.Threading.CancellationTokenSource();
             var tok = cts.Token;
+            double fh = flatHCur;   // ★[v104 설치 전 검토 중간 2] 납작한 면 높이는 실마다 따로(ThreadStatic) — 옛 길 실에도 넘긴다(안 넘기면 옛 길만 105µm로 다듬어 107µm 바늘이 남았다)
             oldT = System.Threading.Tasks.Task.Run(() =>
             {
                 // ★[v103.1.11 · v103.1.10 코드 검토 낮음 2] 시작하기 전에 이미 멈추라고 했으면(새 길이 빨리 끝남) 입력 옮기기(make)도 안 한다
                 if (tok.IsCancellationRequested) return ((List<WallDaylight.Tri>?)null, new Report { Fail = "멈춤(시작 전)" }, -1L);
-                var swO = System.Diagnostics.Stopwatch.StartNew();
-                var (r, p) = RunPath(make(), margin: false, lastResort: false, wallTol2, double.NaN, wallTol2Raw, tok);
-                return (r, p, swO.ElapsedMilliseconds);
+                flatHCur = fh;
+                try
+                {
+                    var swO = System.Diagnostics.Stopwatch.StartNew();
+                    var (r, p) = RunPath(make(), margin: false, lastResort: false, wallTol2, double.NaN, wallTol2Raw, tok);
+                    return (r, p, swO.ElapsedMilliseconds);
+                }
+                finally { flatHCur = 0; }
             });
         }
         List<WallDaylight.Tri>? resN; Report repN;
@@ -751,7 +771,7 @@ public static class CivilSafeMesh
                     // 가장 짧은 변
                     int su = -1, sv = -1; double sl = double.PositiveInfinity;
                     for (int e = 0; e < 3; e++) { int u = f[e], v = f[(e + 1) % 3]; double l = Len(u, v); if (l < sl) { sl = l; su = u; sv = v; } }
-                    bool flat = Low(f) < Gap;
+                    bool flat = Low(f) < Math.Max(Gap, flatHCur);
                     bool tiny = zone && sl < ShortFold;                  // ★[v101.0] 구역 모드: 0.25mm 안 짧은 변(ShortFold 설명)
                     if (!flat && !tiny) continue;
                     if (sl <= FoldLen)
