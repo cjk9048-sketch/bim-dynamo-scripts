@@ -104,6 +104,12 @@ public sealed class Model3DView : Grid
     /// </summary>
     public Func<int, bool> Pickable { get; set; } = _ => true;
 
+    /// <summary>
+    /// 모서리만 그린 것(MeshStyle.Ghost)도 찍히게 한다 — 맨 위 층 · 면이 있는 것 다음에(Pickable 이 허락한 것만). ② 거푸집: 줄을 고르면 나머지 판은
+    /// 윤곽선만이지만 눌러 바로 옮겨 고를 수 있게(JACK 2026-10-21). 처음 값 = 찍히지 않음(겹침 창의 둘레 부재).
+    /// </summary>
+    public bool GhostPickable { get; set; }
+
     /// <summary>둘레 부재(MeshStyle.Ghost)의 모서리 색.</summary>
     public (byte r, byte g, byte b) GhostEdge { get; set; }
 
@@ -509,7 +515,9 @@ public sealed class Model3DView : Grid
             // 맨 위 층의 것은 다른 것에 가려져 있어도 보이므로 먼저 닿는다. 모서리만 그린 둘레 부재는 찍히지 않는다.
             int top = Picker.Pick(_meshes, i => _bodyModel[i] != null && Shown(i) && Pickable(i) && StyleOf(i) == MeshStyle.Top, origin, direction).index;
             if (top >= 0) return top;
-            return Picker.Pick(_meshes, i => _bodyModel[i] != null && Shown(i) && Pickable(i) && StyleOf(i) is MeshStyle.Solid or MeshStyle.Tint, origin, direction).index;
+            int body = Picker.Pick(_meshes, i => _bodyModel[i] != null && Shown(i) && Pickable(i) && StyleOf(i) is MeshStyle.Solid or MeshStyle.Tint, origin, direction).index;
+            if (body >= 0 || !GhostPickable) return body;
+            return Picker.Pick(_meshes, i => _bodyModel[i] != null && Shown(i) && Pickable(i) && StyleOf(i) == MeshStyle.Ghost, origin, direction).index;
         }
         return Picker.Pick(_meshes, i => _bodyModel[i] != null && Shown(i) && Pickable(i), origin, direction).index;
     }
@@ -524,6 +532,8 @@ public sealed class Model3DView : Grid
         if (!_layered) return Picker.PickAll(_meshes, i => _bodyModel[i] != null && Shown(i) && Pickable(i), origin, direction).Select(h => h.index).ToList();
         var hits = Picker.PickAll(_meshes, i => _bodyModel[i] != null && Shown(i) && Pickable(i) && StyleOf(i) == MeshStyle.Top, origin, direction).Select(h => h.index).ToList();
         hits.AddRange(Picker.PickAll(_meshes, i => _bodyModel[i] != null && Shown(i) && Pickable(i) && StyleOf(i) is MeshStyle.Solid or MeshStyle.Tint, origin, direction).Select(h => h.index));
+        if (GhostPickable)
+            hits.AddRange(Picker.PickAll(_meshes, i => _bodyModel[i] != null && Shown(i) && Pickable(i) && StyleOf(i) == MeshStyle.Ghost, origin, direction).Select(h => h.index));
         return hits;
     }
 

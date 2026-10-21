@@ -79,6 +79,10 @@ public static class FormworkObjects
     public static List<ElementId> Find(Document doc) =>
         new FilteredElementCollector(doc).OfClass(typeof(DirectShape)).Cast<DirectShape>().Where(IsOurs).Select(d => d.Id).ToList();
 
+    /// <summary>모델에 거푸집 객체가 하나라도 있는가(처음 하나에서 멈춘다 — 리본 단추의 «누를 수 있는가»가 자주 묻는다).</summary>
+    public static bool Exists(Document doc) =>
+        new FilteredElementCollector(doc).OfClass(typeof(DirectShape)).Cast<DirectShape>().Any(IsOurs);
+
     /// <summary>이 애드인이 만든 거푸집 객체인가.</summary>
     public static bool IsOurs(Element? el) => el is DirectShape ds && ds.ApplicationId == AppId;
 
