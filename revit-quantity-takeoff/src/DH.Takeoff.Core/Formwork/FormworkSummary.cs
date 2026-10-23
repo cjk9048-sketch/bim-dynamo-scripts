@@ -34,6 +34,9 @@ public static class FormworkSummary
     /// <summary>줄의 조각이 모두 3D 에서 뺀 판일 때의 초안(R48 — 넓이 0 · 줄은 남는다).</summary>
     public const string Dropped = "뺀 판";
 
+    /// <summary>줄의 남은 조각이 모두 Revit 판 종류로 정한 것일 때의 초안(R57 P3 — 넓이 0 · 줄은 남는다).</summary>
+    public const string PlateKinds = "판 종류";
+
     /// <summary>대응표의 줄에 드는 조각 하나와 그 조각의 유형 × 면의 갈래(유형 줄의 열쇠 — 드는 줄은 RowOf).</summary>
     public readonly record struct Keyed(ElementFormwork Result, FaceResult Face, FacePatch Patch, string Type, string Group);
 
@@ -49,14 +52,9 @@ public static class FormworkSummary
     {
         // 옮긴 판의 조각은 옮긴 줄(R55b — JACK 2026-10-21 «다른 줄로 옮기기»).
         if (!ignoreMove && k.Patch.MovedTo is { } to) return to;
-        // 수직면 덩어리의 조각은 다스리는 조각의 줄(R49 — 덩어리 = 한 장 = 한 종류: 그 줄을 바꾸면 덩어리 전체가 바뀐다 · core-verify R49 계획 M4).
-        if (k.Patch.Vertical is { } g && !ReferenceEquals(g.Governor.Patch, k.Patch)) k = Governor(g);
+        // 수직면 덩어리의 조각도 제 부재의 줄(R57 — JACK 2026-10-23 «면의 주인 = 그 부재»: 덩어리는 종류만 따라간다 · 전(R49)에는 다스리는 조각의 줄).
         return FormworkTable.PartDecides(k.Result.Element.Part, k.Group) ? (FormworkRules.PartKey(k.Result.Element.Part), FormworkTable.GroupAll) : (k.Type, k.Group);
     }
-
-    /// <summary>덩어리의 다스리는 조각(줄 열쇠).</summary>
-    internal static Keyed Governor(VerticalGroup g) =>
-        new(g.Governor.Result, g.Governor.Face, g.Governor.Patch, g.Governor.Result.Element.Type, FormworkTable.GroupOf(g.Governor.Face.Class, g.Governor.Patch));
 
     /// <summary>
     /// 대응표로 바꿀 수 있는 조각과 그 줄의 열쇠: 세는 조각 · 사람이 정한 조각 · 아래가 빈 밑면(윗면 · 버림과 기초의 밑면 · 틈은 뺀다).
@@ -92,13 +90,14 @@ public static class FormworkSummary
         var rows = new Dictionary<(string type, string group), (FormworkRow row, HashSet<string> drafts, HashSet<long> ids, bool part)>();
         var elevated = new Dictionary<ElementFormwork, bool>();
         var moved = new List<Keyed>();
+        var plateKinds = new HashSet<(string, string)>();
         foreach (var k in RowPatches(results))
         {
             var (r, f, p, type, group) = k;
             // 줄 · 머리는 옮기기 전 줄로 짓는다(옮긴 판의 조각이 머리를 정하거나 · 원래 줄이 사라지지 않게 — 계획 검토 H2). 옮긴 조각은 아래에서 넓이 · 부재만 더한다.
             var key = RowOf(k, ignoreMove: true);
-            // 줄의 머리(분류 · 사람 값)와 초안은 줄을 정한 조각의 것 — 수직면 덩어리의 조각이면 다스리는 조각(R49 — core-verify R49 계획 M4).
-            var src = p.Vertical is { } vg ? Governor(vg) : k;
+            // 줄의 머리(분류 · 사람 값)와 초안은 그 조각의 것(R57 — 덩어리의 조각도 제 줄 · 전(R49)에는 다스리는 조각).
+            var src = k;
             if (!rows.TryGetValue(key, out var entry))
             {
                 bool part = FormworkTable.PartDecides(src.Result.Element.Part, src.Group);
@@ -109,22 +108,33 @@ public static class FormworkSummary
                 }, new HashSet<string>(), new HashSet<long>(), part);
             }
             if (p.DropLead.Length > 0) continue;
+            // 판 종류 조각(R57 P3)은 줄의 넓이 · 부재 · 초안에 들지 않는다 — 그 줄의 종류를 바꿔도 이 조각은 판의 종류(줄 단추가 일부만 듣지 않게 · 계획 검토 L8).
+            if (p.KindLead.Length > 0) { plateKinds.Add(key); continue; }
             if (p.MovedTo != null) { moved.Add(k); continue; }
             if (!elevated.TryGetValue(src.Result, out bool raised)) elevated[src.Result] = raised = src.Result.Faces.Any(x => x.Patches.Any(q => q.Below == Below.Supported));
             entry.row.Area += p.Area;
             entry.ids.Add(r.Element.Id);
-            entry.drafts.Add(src.Patch.Below == Below.Floating ? Ask : FormworkAnalyzer.DraftOf(src.Result.Element, src.Face, src.Patch, raised, options));
+            // 초안 = 그 줄을 «자동»으로 둘 때 조각이 받는 종류: 덩어리에서 종류를 따라가는 조각은 따라갈 종류(R57 — FollowGroups 가 적은 값 · 화면의 «자동»과 3D 색이 같게).
+            // 다스리는 조각이 같은 줄이면 그 줄을 «자동»으로 둘 때 다스리는 조각도 자동 값이 된다 — 다스리는 조각의 초안을 따른다(다시 검토 중간).
+            string? follow = p.Follow;
+            if (follow != null && p.Vertical is { } vg && RowOf(new Keyed(vg.Governor.Result, vg.Governor.Face, vg.Governor.Patch, vg.Governor.Result.Element.Type,
+                    FormworkTable.GroupOf(vg.Governor.Face.Class, vg.Governor.Patch)), ignoreMove: true) == key)
+                follow = FormworkAnalyzer.DraftOf(vg.Governor.Result.Element, vg.Governor.Face, vg.Governor.Patch,
+                    vg.Governor.Result.Faces.Any(x => x.Patches.Any(q => q.Below == Below.Supported)), options);
+            entry.drafts.Add(src.Patch.Below == Below.Floating ? FormworkAnalyzer.FloatingDraft(src.Result.Element, options) ?? Ask
+                : follow ?? FormworkAnalyzer.DraftOf(src.Result.Element, src.Face, src.Patch, raised, options));
         }
         // 옮긴 판의 조각(R55b): 옮긴 줄의 넓이 · 부재 수에만 든다(그 줄이 있을 때만 — 없으면 ApplyMoves 가 지운 판으로 돌렸다).
         foreach (var k in moved)
-            if (rows.TryGetValue(RowOf(k), out var entry))
+            if (k.Patch.KindLead.Length == 0 && rows.TryGetValue(RowOf(k), out var entry))
             {
                 entry.row.Area += k.Patch.Area;
                 entry.ids.Add(k.Result.Element.Id);
             }
         foreach (var (row, drafts, ids, _) in rows.Values)
         {
-            row.Draft = drafts.Count == 0 ? Dropped : drafts.Count == 1 ? drafts.First() : Mixed;
+            // 조각이 모두 판 종류면 «판 종류»(지운 판뿐인 줄과 가른다 — 그 줄로 옮기기도 된다 · 다시 검토 낮음 4).
+            row.Draft = drafts.Count == 0 ? (plateKinds.Contains((row.Type, row.Group)) ? PlateKinds : Dropped) : drafts.Count == 1 ? drafts.First() : Mixed;
             row.Elements = ids.Count;
         }
         return rows.Values.Where(v => v.part).Select(v => v.row)
@@ -176,6 +186,31 @@ public static class FormworkSummary
     }
 
     /// <summary>
+    /// 판 종류 기록(R57 P3)을 지금 모양에서 다시 찾은 결과(계획 검토 L9 — CheckDrops 와 같은 잣대): 대표 열쇠마다 Lost(조각 열쇠 하나도 지금 조각에 맞지 않음 —
+    /// 그 판은 원래 종류로 센다) · Partial(일부 조각 열쇠만 맞음 — 맞은 조각만 그 종류). 나중 기록에 가려진 조각도 «맞음»으로 센다(가려진 것은 잃은 것이 아니다).
+    /// </summary>
+    public static DropCheck CheckKinds(IReadOnlyList<ElementFormwork> results, FormworkRules? rules)
+    {
+        if (rules == null || rules.KindCount == 0) return DropCheck.None;
+        var check = new DropCheck(new List<string>(), new List<string>(), new List<string>());
+        var byElement = new Dictionary<long, List<(FaceResult face, FacePatch patch)>>();
+        foreach (var r in results)
+            foreach (var f in r.Faces)
+                foreach (var p in f.Patches)
+                {
+                    if (!byElement.TryGetValue(f.ElementId, out var list)) byElement[f.ElementId] = list = new List<(FaceResult, FacePatch)>();
+                    list.Add((f, p));
+                }
+        foreach (var kind in rules.Kinds)
+        {
+            int found = kind.Records.Count(record => byElement.TryGetValue(record.Element, out var list) && list.Any(x => record.Matches(x.face, x.patch)));
+            if (found == 0) check.Lost.Add(kind.Lead);
+            else if (found < kind.Records.Count) check.Partial.Add(kind.Lead);
+        }
+        return check;
+    }
+
+    /// <summary>
     /// 수직면 덩어리를 따라 값이 바뀐 조각(R49 — 계획 M5): (부재 유형 · 제 사슬의 값 → 덩어리의 값)마다 조각 수 · 넓이(넓은 차례). 값 = 종류,
     /// 세지 않으면 «안 셈». 덩어리를 묶은 수와 함께 일지 · 미리보기에 — JACK 이 «덩어리 때문에 얼마가 바뀌었나»를 본다.
     /// </summary>
@@ -212,8 +247,8 @@ public static class FormworkSummary
     public static List<string> LostDrops(IReadOnlyList<ElementFormwork> results, FormworkRules? rules) => CheckDrops(results, rules).Lost;
 
     /// <summary>
-    /// 가려진 줄(R48 · R49 — core-verify M1 · R49 계획 M4): 대응표의 유형 줄 · 부위 줄 가운데 제 면이 있는데 ② 표에 줄이 생기지 않는 것 —
-    /// 그 면이 모두 부위를 넣은 부재의 면이거나(부위 줄만 정한다 — R48) 다른 부재가 다스리는 수직면 덩어리에 들어(덩어리는 다스리는 조각의 줄 — R49).
+    /// 가려진 줄(R48 — core-verify M1): 대응표의 유형 줄 가운데 제 면이 있는데 ② 표에 줄이 생기지 않는 것 —
+    /// 그 면이 모두 부위를 넣은 부재의 면이다(부위 줄만 정한다 — R48 · R57 부터 수직면 덩어리는 줄을 바꾸지 않는다).
     /// 파일에는 남아 부위를 지우거나 모양이 바뀌면 다시 걸린다. 제 면이 아예 없는 줄(유형을 지움)은 들지 않는다. ② 경고 딱지 · 일지에 보인다.
     /// </summary>
     public static List<(string type, string group, string item)> HiddenTypeRules(IReadOnlyList<ElementFormwork> results, FormworkRules? rules)
@@ -229,7 +264,7 @@ public static class FormworkSummary
             faceKeys.Add((k.Type, k.Group));
             if (FormworkTable.PartDecides(k.Result.Element.Part, k.Group)) faceKeys.Add((FormworkRules.PartKey(k.Result.Element.Part), FormworkTable.GroupAll));
         }
-        // 유형 줄 · 부위 줄 가운데 제 면이 있는데 표에 줄이 없는 것 — 부위 줄에 가려졌거나(R48) 수직면 덩어리가 다른 줄을 따라서(R49 — core-verify R49 계획 M4).
+        // 유형 줄 · 부위 줄 가운데 제 면이 있는데 표에 줄이 없는 것 — 부위 줄에 가려졌다(R48).
         foreach (var (type, group, item) in rules.All)
             if (faceKeys.Contains((type, group)) && !rowKeys.Contains((type, group)))
                 hidden.Add((type, group, item));

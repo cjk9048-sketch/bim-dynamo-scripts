@@ -35,6 +35,9 @@ public static class FormworkReader
         /// 그 부재 없이 재면 홈의 둘레가 거푸집으로 더 세진다(core R43 M-1). 고치지는 않고 알린다(결합 순서를 바꿔 구조체가 자르게 하면 맞다).
         /// </summary>
         public List<(long later, long cut)> LaterCuts = new();
+        /// <summary>Revit 계단 한 줄씩(R56c-1 — 일지) · 둘레 콘크리트로 넣은 콘크리트 계단 수.</summary>
+        public List<string> StairLines = new();
+        public int StairContexts;
     }
 
     /// <param name="selection">선택한 부재(비어 있으면 전체가 결과 대상).</param>
@@ -87,6 +90,20 @@ public static class FormworkReader
                 // 버림(무근)인지의 초안: 유형·재료 이름에 '무근'·'버림'. 이름으로 모르는 유형은 대응표에서 사람이 정한다.
                 Blinding = FormworkTable.LooksLikeBlinding(type, material.Material, part),
                 Later = part.Length > 0 && laterPart != null && laterPart(part),
+            });
+        }
+
+        // R56c-1(JACK 2026-10-22 «중간슬래브의 계단이 붙는 세로면은 거푸집이 필요 없다» · 고름 «계단 재질이 콘크리트면 수량산출에»): 콘크리트 Revit 계단은
+        // 이번 판에서 둘레 콘크리트로만 넣는다(Target = false — 셈 대상 아님 · 맞닿은 면 · 덮인 면을 가리는 데). 부재로 세는 일은 첫 실행 일지 뒤(R56c-2).
+        foreach (var stair in StairReader.Read(doc))
+        {
+            scene.StairLines.Add(stair.Line);
+            if (!stair.Concrete || stair.Solids.Count == 0) continue;
+            scene.StairContexts++;
+            scene.Elements.Add(new FormworkElement
+            {
+                Id = stair.Element.Id.Value, Category = stair.Element.Category?.Name ?? "계단", Kind = MemberKind.Other, Type = stair.Type,
+                Solids = stair.Solids, Target = false, Stair = true,
             });
         }
 

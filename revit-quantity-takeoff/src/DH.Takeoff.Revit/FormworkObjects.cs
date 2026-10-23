@@ -68,6 +68,9 @@ public static class FormworkObjects
         public int RoomBoundingOff;               // 방 경계 칸을 끈 판 수(매개변수로 정하는 판만)
         public int Misplaced = -1;                // 되읽기: 경계상자가 원 부재의 경계상자(+13 mm)와 닿지 않는 판 수(-1 = 재지 않음)
         public string ReadBackProblem = "";       // 되읽다 난 오류("" = 없음 — 판은 모델에 남았다)
+        public int Missing = -1;                  // 마지막 [완료]가 지은 판 가운데 Revit 에서 지워져 없던 판(R57 P3 — 이번에 다시 만듦 · -1 = 모름: 목록 없음 · 기록 없는 판이 섞임)
+        public int Unstamped;                     // 처음 값 기록을 붙이지 못한 판(그 판은 종류를 바꿔도 읽지 않는다)
+        public string ListProblem = "";           // 판 목록을 적지 못한 까닭("" = 적음)
 
         /// <summary>되읽기에서 걸린 판이 있다(칸을 다 못 적음 · 다시 읽은 칸이 다름 · 자리가 어긋남 · 되읽기 오류) — 알림 창에 한 줄.</summary>
         public int Suspicious => MissingParams + ReadBackDiffers + Math.Max(0, Misplaced);
@@ -116,6 +119,20 @@ public static class FormworkObjects
             outcome.Ms = watch.ElapsedMilliseconds;
             return outcome;
         }
+
+        // Revit 에서 지운 판(R57 P3 — JACK «다시 만들고 알림»): 마지막 [완료]의 판 목록에 있는데 지금 없는 판. 기록 없는 판(P3 전)이 섞여 있으면 모른다(계획 검토 L7).
+        try
+        {
+            var listed = FormworkPlateStore.ReadList(doc);
+            if (listed != null && FormworkPlateStore.AllRecorded(doc))
+            {
+                var present = FormworkPlateStore.PlateUids(doc);
+                // 판이 있는데 목록의 판이 하나도 없으면 오래된 목록(목록 요소가 잠겨 지난번에 못 적음)이다 — 모름(P3 다시 검토 낮음 3).
+                bool stale = present.Count > 0 && listed.Count > 0 && !listed.Any(present.Contains);
+                outcome.Missing = stale ? -1 : listed.Count(u => !present.Contains(u));
+            }
+        }
+        catch { outcome.Missing = -1; }
 
         SharedParameterManager.EnsureParameters(doc, Params);
         outcome.ParametersEnsured = true;
@@ -214,6 +231,9 @@ public static class FormworkObjects
                     }
                     catch { }
                     if (!Write(ds, unit)) outcome.MissingParams++;
+                    // 처음 값 기록(R57 P3 — 종류 칸을 고치면 다음 [수량산출]이 그 판 한 장만 받아들인다). 못 붙이면 그 판은 읽지 않을 뿐이다.
+                    try { FormworkPlateStore.Stamp(ds, unit); }
+                    catch { outcome.Unstamped++; }
                     if (sub.Commit() != TransactionStatus.Committed)
                     {
                         outcome.Failed.Add(Describe(unit) + " — 되돌려짐");
@@ -234,6 +254,14 @@ public static class FormworkObjects
                     try { if (sub.HasStarted() && !sub.HasEnded()) sub.RollBack(); } catch { }
                     outcome.Failed.Add(Describe(unit) + " — " + ex.Message);
                 }
+            }
+            // 판 목록(R57 P3): 이번에 지은 판의 UniqueId — 다음 [수량산출] · [완료]가 Revit 에서 지운 판을 센다.
+            // 판 목록 요소를 고칠 수 없으면 적지 않는다(남이 가짐 — 커밋에서 판 짓기 전체가 되돌려지지 않게 · P3 검토 열린 질문).
+            if (FormworkPlateStore.WhyListLocked(doc) is { } listLocked) outcome.ListProblem = listLocked;
+            else
+            {
+                try { FormworkPlateStore.WriteList(doc, made.Select(m => doc.GetElement(m.id)?.UniqueId ?? "").Where(u => u.Length > 0)); }
+                catch (Exception ex) { outcome.ListProblem = ex.Message; }
             }
             if (made.Count > 0) (outcome.Schedule, outcome.ScheduleId) = EnsureSchedule(doc);   // 판이 없으면 빈 표를 새로 만들지 않는다
             else if (FindSchedule(doc) is { } kept) (outcome.Schedule, outcome.ScheduleId) = ("있음", kept.Id);
@@ -322,6 +350,21 @@ public static class FormworkObjects
         tx.SetFailureHandlingOptions(tx.GetFailureHandlingOptions().SetFailuresPreprocessor(quiet).SetClearAfterRollback(true));
         tx.Start();
         doc.Delete(deletable);
+        // 판 목록도 맞춘다(R57 P3 — 다음 열기 · [완료]에 애드인이 지운 판을 «Revit 에서 지운 판»으로 세지 않게 · 계획 검토 L7 · P3 검토 낮음 2):
+        // 다 지웠으면 목록을 지우고, 일부만 지웠으면 남은 판으로 다시 적는다. 목록 요소를 고칠 수 없으면 그대로 둔다(알림이 하나 더 뜰 뿐).
+        if (FormworkPlateStore.WhyListLocked(doc) == null)
+        {
+            try
+            {
+                if (deletable.Count == ids.Count) FormworkPlateStore.ClearList(doc);
+                else
+                {
+                    var gone = deletable.ToHashSet();
+                    FormworkPlateStore.WriteList(doc, ids.Where(i => !gone.Contains(i)).Select(i => doc.GetElement(i)?.UniqueId ?? "").Where(u => u.Length > 0));
+                }
+            }
+            catch { /* 목록이 어긋나면 알림이 하나 더 뜰 뿐이다 */ }
+        }
         removal.Status = tx.Commit();
         if (removal.Committed) removal.Deleted = deletable.Count;
         else removal.Error = quiet.FirstError;

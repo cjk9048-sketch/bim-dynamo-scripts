@@ -8,6 +8,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using DH.Takeoff.Core;
+using DH.Takeoff.Core.Formwork;
 using DH.Takeoff.Core.View3D;
 
 namespace DH.Takeoff.Revit;
@@ -57,12 +58,12 @@ public sealed partial class PlacePartView
         _dropPending.Clear();
     }
     private readonly ScrollViewer _placeScroll;
-    private readonly Button _undo, _confirm, _clear, _sameType, _unpick, _auto, _refill, _putPlace, _noPlace, _next, _back, _finish, _hide, _showAll;
+    private readonly Button _undo, _confirm, _clear, _sameType, _unpick, _auto, _refill, _putPlace, _noPlace, _next, _back, _finish, _review, _hide, _showAll;
     private readonly TextBox _newPart;
     private readonly ComboBox _place;
     private readonly ToggleButton _editPlaces, _editParts, _onlyRemaining;
     private readonly ComboBox _structure;
-    private readonly (Border pill, TextBlock text)[] _steps = new (Border, TextBlock)[3];
+    private readonly (Border pill, TextBlock text)[] _steps = new (Border, TextBlock)[4];
     private string _countsText = "", _pickedText = "";
     private (string kind, string name)? _asking;       // ✕ 를 눌러 지울지 묻고 있는 줄(쓰는 부재가 있는 이름)
     private bool _keepAsking, _busy, _syncing, _nextArmed, _keepArmed;
@@ -144,8 +145,10 @@ public sealed partial class PlacePartView
             return button;
         }
         _next = FootButton(_ui.Button("다음 단계  →", "BtnPrimary", "거푸집면 설정으로 넘어갑니다(넣은 값은 이미 모델에 적혀 있습니다).", "btn.nextStep"), 0);
-        _finish = FootButton(_ui.Button("완료", "BtnPrimary", "산출식을 채우고 거푸집 속성을 적은 뒤 산출근거 엑셀을 저장합니다.", "btn.finish", UiTheme.IconCheck), 0);
-        foreach (var primary in new[] { _next, _finish })
+        _finish = FootButton(_ui.Button("완료", "BtnPrimary", "거푸집 객체를 만들고 산출근거 엑셀을 저장합니다.", "btn.finish", UiTheme.IconCheck), 0);
+        // ② → ③ 산출서 확인(R59): 산출식 · 부재 이름 · 거푸집 속성을 모델에 적고(창의 그룹 안) 엑셀과 같은 산출근거를 본다.
+        _review = FootButton(_ui.Button("다음 단계  →", "BtnPrimary", "산출식 · 부재 이름 · 거푸집 속성을 모델에 적고 산출근거를 봅니다(이 창을 연 뒤 한 것은 «처음 상태로»로 되돌릴 수 있습니다).", "btn.review"), 0);
+        foreach (var primary in new[] { _next, _finish, _review })
         {
             primary.MinWidth = 120;
             primary.FontWeight = FontWeights.SemiBold;
@@ -161,7 +164,8 @@ public sealed partial class PlacePartView
         _undo.Focusable = false;
         _undo.Click += (_, _) =>
         {
-            // ② 에서는 ② 에서 한 일(판 지우기 · 옮기기 · 종류 바꾸기 — R55b) · ① 에서는 모델에 넣은 것.
+            // ② 에서는 ② 에서 한 일(판 지우기 · 옮기기 · 종류 바꾸기 — R55b) · ① 에서는 모델에 넣은 것 · ③ 에서는 없음(보기만 — 계획 검토 H1).
+            if (Step == 2) return;
             if (Step == 1) { FormworkUndo(); return; }
             DropPending();
             Do(_editor.Undo);
@@ -170,11 +174,14 @@ public sealed partial class PlacePartView
         _back.Click += (_, _) =>
         {
             if (Busy) return;
+            // ③ → ② (계획 검토 H1) · ② → ①.
+            if (Step == 2 && _board != null) { ShowFormwork(_board); ReviewBack?.Invoke(); return; }
             ShowPlaces();
             Back?.Invoke();
         };
         _finish.Click += (_, _) => { if (!Busy) Finish?.Invoke(); };
-        foreach (var button in new[] { _next, _finish, close, revert, _undo })
+        _review.Click += (_, _) => { if (!Busy) Review?.Invoke(); };
+        foreach (var button in new[] { _next, _finish, _review, close, revert, _undo })
         {
             DockPanel.SetDock(button, Dock.Right);
             foot.Children.Add(button);
@@ -270,6 +277,7 @@ public sealed partial class PlacePartView
 
         _view3d.Clicked += (index, ctrl) =>
         {
+            if (Step == 2) { ClickReview(index); return; }
             if (Step == 1) { ClickFormwork(index); return; }
             if (index < 0) return;                       // 빈 곳을 찍으면 그대로 둔다(Esc · [선택 풀기]로 푼다)
             _editor.Click(_members[index].Id, ctrl);
@@ -277,13 +285,13 @@ public sealed partial class PlacePartView
         };
         _view3d.Banded += (indices, ctrl) =>
         {
-            if (Step == 1) return;                       // ② 에서는 끌어 고르지 않는다(BandSelect 를 끈다 — 여기는 혹시 모를 때)
+            if (Step != 0) return;                       // ② · ③ 에서는 끌어 고르지 않는다(BandSelect 를 끈다 — 여기는 혹시 모를 때)
             _editor.Band(indices.Select(i => _members[i].Id), ctrl);
             RefreshAll();
         };
         _view3d.Hovered += index =>
         {
-            _hover.Text = index < 0 ? " " : Step == 1 ? DescribeFormwork(index) : Describe(_members[index]);
+            _hover.Text = index < 0 ? " " : Step == 2 ? DescribeReview(index) : Step == 1 ? DescribeFormwork(index) : Describe(_members[index]);
             _hoverPill.Visibility = index < 0 || _hover.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
         };
         _view3d.Failed += ex => ShowMessage("3D 그림에서 오류가 났습니다(끌던 것은 그만두었습니다): " + ex.Message, true);
@@ -300,6 +308,13 @@ public sealed partial class PlacePartView
         if (Busy) { e.Handled = true; return; }     // 모델에 적는 중에는 글자판도 받지 않는다
         if (e.OriginalSource is TextBox) return;     // 이름을 적는 중에는 글자판을 가로채지 않는다
         if (e.Key == Key.Escape && InOpenList(e.OriginalSource)) return;     // 펼친 목록(층 · 구조물)에서 Esc 는 그 목록을 닫는다 — 고른 부재는 그대로
+        if (Step == 2)
+        {
+            // ③ : 보기만 — Esc = 고른 줄 풀기 · Del · Ctrl+Z 는 아무것도 하지 않는다(① 의 모델 되돌리기로 흘러가지 않게 — 계획 검토 H1).
+            if (e.Key == Key.Escape) { _view3d.CancelDrag(); PickReview(-1); e.Handled = true; }
+            else if (e.Key == Key.Delete || (e.Key == Key.Z && (Keyboard.Modifiers & ModifierKeys.Control) != 0)) e.Handled = true;
+            return;
+        }
         if (Step == 1)
         {
             // ② : Esc = 옮길 줄 고르기 취소 → 고른 줄 풀기 · Del = 찍은 판 지우기 · Ctrl+Z = ② 에서 한 일 되돌리기(R55b — JACK 2026-10-21 «지우기(Del 키도) · 되돌리기»).
@@ -315,11 +330,11 @@ public sealed partial class PlacePartView
 
     // ── 걸음 ─────────────────────────────────────────────────────────────────────
 
-    // 걸음 표시: ① 부위 · 중분류 › ② 거푸집면 설정 › 완료 — 지금 걸음만 강조색 딱지.
+    // 걸음 표시: ① 부위 · 중분류 › ② 거푸집면 설정 › ③ 산출서 확인 › 완료 — 지금 걸음만 강조색 딱지.
     private FrameworkElement BuildSteps()
     {
         var line = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        string[] names = { "① 부위 · 중분류", "② 거푸집면 설정", "완료" };
+        string[] names = { "① 부위 · 중분류", "② 거푸집면 설정", "③ 산출서 확인", "완료" };
         for (int i = 0; i < names.Length; i++)
         {
             if (i > 0) line.Children.Add(new TextBlock { Text = "›", Foreground = _sub, FontSize = 14, Margin = new Thickness(7, 0, 7, 2), VerticalAlignment = VerticalAlignment.Center });
@@ -344,8 +359,11 @@ public sealed partial class PlacePartView
         bool places = Step == 0;
         Visibility Show(bool on) => on ? Visibility.Visible : Visibility.Collapsed;
         _progress.Visibility = Show(places);
-        _next.Visibility = Show(places);   // [되돌리기]는 두 걸음 다(② 는 ② 에서 한 일 — R55b)
-        _finish.Visibility = _back.Visibility = Show(!places);
+        _next.Visibility = Show(places);
+        _review.Visibility = Show(Step == 1);              // ② → ③ (R59)
+        _finish.Visibility = Show(Step == 2);              // [완료]는 ③ 에만
+        _back.Visibility = Show(!places);
+        _undo.Visibility = Show(Step != 2);                // [되돌리기]는 ① · ② (② 는 ② 에서 한 일 — R55b) · ③ 은 보기만
         // ② 에는 고른 부재가 없다: 숨기기 · 남은 것만 보기는 ① 에서만(① 에서 숨긴 부재는 ② 에서도 숨긴 채다). 종류 · 층은 둘 다.
         _hide.Visibility = _showAll.Visibility = _onlyRemaining.Visibility = Show(places);
         _view3d.BandSelect = places;
@@ -904,8 +922,12 @@ public sealed partial class PlacePartView
             foreach (var part in group)
             {
                 string name = part.Name;
-                buttons.Children.Add(PickButton("row.part." + name, null, name, StateOf(m => m.Value.Part == name),
-                    any ? $"고른 부재 {picked.Count}개의 부위를 '{name}'(으)로 넣습니다." : "먼저 그림에서 부재를 고르세요.",
+                // 유형 이름이 다른 부위 묶음을 가리키는 부재(R57 P4 — 경고만): 단추에 ⚠ · 풍선 글에 부재.
+                var odd = _editor.Members.Where(m => m.Value.Part == name && FormworkPartCheck.NameMismatch(m.Type, name, part.Group) != null).ToList();
+                string tip = any ? $"고른 부재 {picked.Count}개의 부위를 '{name}'(으)로 넣습니다." : "먼저 그림에서 부재를 고르세요.";
+                if (odd.Count > 0)
+                    tip += $"\n⚠ 유형 이름이 다른 부위를 가리키는 부재 {odd.Count}개 — " + string.Join(", ", odd.Take(4).Select(m => $"«{m.Type}» Id {m.Id}")) + (odd.Count > 4 ? " …" : "");
+                buttons.Children.Add(PickButton("row.part." + name, null, odd.Count > 0 ? name + " ⚠" : name, StateOf(m => m.Value.Part == name), tip,
                     () => Do(() => _editor.SetPart(name))));
             }
             Grid.SetColumn(buttons, 1);
@@ -1403,6 +1425,12 @@ public sealed partial class PlacePartView
         _keepAsking = false;
         if (!_keepArmed) _nextArmed = false;
         _keepArmed = false;
+        if (Step == 2)
+        {
+            RefreshReview();
+            _view3d.Refresh();
+            return;
+        }
         if (Step == 1)
         {
             RefreshFormwork();

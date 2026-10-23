@@ -12,10 +12,9 @@ namespace DH.Takeoff.Revit.Commands;
 /// <summary>
 /// "거푸집 면 확인" 버튼(1단계) — 콘크리트 부재의 면을 갈라 거푸집을 대는 자리의 넓이를 종류별로 내고, 3D 뷰에 색으로 보여 준다.
 /// 선택한 부재(없으면 전체)가 대상이고, 맞닿음·안팎 판단에는 모델의 콘크리트 전부를 쓴다.
-/// 종류는 '유형 × 면' 대응표로 정한다(초안은 프로그램, 고친 줄은 프로젝트마다 파일로 저장).
-/// 모델은 바꾸지 않는다 — 식을 속성에 적는 것은 2단계다(JACK 2026-10-08).
-/// 트랜잭션 방식은 Manual 이고 트랜잭션을 열지 않는다(Revit SDK 의 DirectContext3D 예제와 같다 — 읽기 전용 방식에서
-/// 화면 갱신(UpdateAllOpenViews)이 되는지는 문서에 없다).
+/// 종류는 '유형 × 면' 대응표로 정한다(초안은 프로그램, 고친 줄은 모델 안 — FormworkRulesStore · R57 P2).
+/// 모델에 적는 것은 [대응표 고치기]의 저장(트랜잭션 하나)뿐이다 — 식을 속성에 적는 것은 2단계다(JACK 2026-10-08).
+/// 색은 DirectContext3D 로 그린다(트랜잭션 없음 — Revit SDK 의 DirectContext3D 예제와 같다).
 /// </summary>
 [Transaction(TransactionMode.Manual)]
 public sealed class FormworkCheckCommand : IExternalCommand
@@ -27,6 +26,7 @@ public sealed class FormworkCheckCommand : IExternalCommand
         var uidoc = commandData.Application.ActiveUIDocument;
         if (uidoc?.Document == null) { message = "열린 Revit 문서가 없습니다."; return Result.Failed; }
         var doc = uidoc.Document;
+        bool wrote = false;     // 대응표를 모델에 적었다
 
         try
         {
@@ -56,15 +56,38 @@ public sealed class FormworkCheckCommand : IExternalCommand
                 {
                     compute = false;
                     rulesProblem = "";
-                    try { rules = FormworkRules.Load(rulesPath); }
-                    catch (Exception ex) { rules = new FormworkRules(); rulesProblem = "대응표 파일을 읽지 못해 초안 규칙만 썼습니다: " + ex.Message; }
+                    // 대응표는 모델 안만 읽는다(R57 P2 — [수량산출]과 같은 수량 · PC 마다 같은 수량 · P2 검토 중간 2). 이 PC 에 옛 파일만 있으면
+                    // 알리기만 한다 — 모델로 옮기기는 [수량산출]이 묻는다.
+                    var stored = FormworkRulesStore.Read(doc);
+                    rules = stored.Rules;
+                    rulesProblem = FormworkRulesStore.Notice(doc, stored);
+                    if (!stored.Exists && stored.Problem.Length == 0)
+                    {
+                        try
+                        {
+                            var old = FormworkRules.Load(rulesPath);
+                            if (old.Count > 0 || old.DropCount > 0 || old.MoveCount > 0)
+                                rulesProblem = $"이 PC 에 옛 거푸집 대응표 파일이 있습니다(고친 줄 {old.Count} · 지운 판 {old.DropCount}) — [수량산출]을 열면 모델로 옮길지 묻습니다(지금은 빈 대응표로 셉니다).";
+                        }
+                        catch { /* 옛 파일을 못 읽으면 알릴 것도 없다 */ }
+                    }
+                    // Revit 판에서 바꾼 종류(R57 P3)는 [수량산출]이 열 때 받아들인다 — 여기서는 받아들이지 않고 알린다(두 창의 종류가 다를 수 있음 · 계획 검토 «빠진 것»).
+                    try
+                    {
+                        // [수량산출]의 받아들이기와 같은 판정(FormworkPlateIntake.Apply — 띄어쓰기만 다르면 바뀐 것이 아님 · P3 검토 낮음 1).
+                        int changed = FormworkPlateStore.Scan(doc).Count(s => s.Recorded && !s.Copy && s.KindNow.Trim() != s.KindStored.Trim()
+                            && FormworkPlateIntake.KindOf(s.KindNow) is { } k && k != (FormworkPlateIntake.KindOf(s.KindStored) ?? s.KindStored.Trim()));
+                        if (changed > 0)
+                            rulesProblem = (rulesProblem.Length > 0 ? rulesProblem + "\n" : "") + $"Revit 에서 종류를 바꾼 판 {changed}장 — [수량산출]을 열면 받아들입니다(여기서는 아직 반영 안 됨).";
+                    }
+                    catch { /* 판을 못 읽으면 알릴 것도 없다 */ }
                     options.Rules = rules;
 
                     options.Bands = FormworkOptions.AutoBands(scene.Elements);   // 다시 잴 때마다 처음부터(지난번에 끈 구간이 남지 않게)
                     results = FormworkAnalyzer.AnalyzeAutoBands(scene.Elements, scene.Zones, options);
                     unpainted = FormworkReader.AttachCurved(scene, results);
                     // 곡면 조각의 세모는 Analyze 뒤에 붙는다 — 뺀 판(R48)은 그 뒤에 다시 맞춘다(수량산출 창의 FormworkBoard 와 같게 · core-verify R48 L3).
-                    if (rules.DropCount > 0) FormworkAnalyzer.Reclassify(results, options);
+                    if (rules.DropCount > 0 || rules.KindCount > 0) FormworkAnalyzer.Reclassify(results, options);   // 판 종류도(R57 P3)
                     audit = FormworkAnalyzer.Check(results);
 
                     try { log = FormworkReader.WriteLog(doc, results, options); }
@@ -100,7 +123,8 @@ public sealed class FormworkCheckCommand : IExternalCommand
 
                 if (choice == TaskDialogResult.CommandLink1)
                 {
-                    compute = EditTable(commandData.Application.MainWindowHandle, results, rules, rulesPath);
+                    compute = EditTable(commandData.Application.MainWindowHandle, doc, results, rules);
+                    wrote |= compute;
                     continue;
                 }
                 if (choice == TaskDialogResult.CommandLink2 && check.Count > 0) uidoc.Selection.SetElementIds(check);
@@ -113,7 +137,8 @@ public sealed class FormworkCheckCommand : IExternalCommand
         {
             message = ex.Message;
             Dialogs.Show("DH 수량산출 — 오류", "거푸집 면 확인 중 오류:\n" + ex.Message);
-            return Result.Failed;
+            // 대응표를 모델에 적은 뒤면 Succeeded — Failed 면 Revit 이 이 명령에서 커밋한 대응표까지 되돌린다(P2 검토 중간 1 · 메모 «명령 Failed = 커밋도 롤백»).
+            return wrote ? Result.Succeeded : Result.Failed;
         }
     }
 
@@ -247,7 +272,7 @@ public sealed class FormworkCheckCommand : IExternalCommand
     }
 
     /// <summary>대응표 창을 띄운다. 저장했으면 true.</summary>
-    private static bool EditTable(nint owner, IReadOnlyList<ElementFormwork> results, FormworkRules rules, string path)
+    private static bool EditTable(nint owner, Document doc, IReadOnlyList<ElementFormwork> results, FormworkRules rules)
     {
         bool dark = false;
         try { dark = UIThemeManager.CurrentTheme == UITheme.Dark; } catch { }
@@ -273,16 +298,14 @@ public sealed class FormworkCheckCommand : IExternalCommand
             var edited = FormworkRules.Parse(rules.ToText());
             foreach (var line in view.Lines)
                 edited.Set(line.Row.Type, line.Row.Group, line.Choice == FormworkTableView.Keep ? "" : line.Choice);
-            try
+            // 모델 안에 적는다(R57 P2 — 트랜잭션 하나).
+            string problem = FormworkRulesStore.Save(doc, edited);
+            if (problem.Length == 0)
             {
-                edited.Save(path);
                 saved = true;
                 window.Close();
             }
-            catch (Exception ex)
-            {
-                MessageBox.Show(window, "대응표를 저장하지 못했습니다:\n" + ex.Message + "\n\n" + path, "DH 수량산출", MessageBoxButton.OK, MessageBoxImage.Warning);
-            }
+            else MessageBox.Show(window, "대응표를 모델에 적지 못했습니다:\n" + problem, "DH 수량산출", MessageBoxButton.OK, MessageBoxImage.Warning);
         };
         window.ShowDialog();
         return saved;

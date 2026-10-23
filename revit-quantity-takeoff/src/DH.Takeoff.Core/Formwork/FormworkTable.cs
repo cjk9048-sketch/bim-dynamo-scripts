@@ -205,6 +205,9 @@ public sealed class FormworkRules
     // 옮긴 판: 대표 열쇠 → 옮긴 줄(대응표 줄의 열쇠). 지운 판 기록이 있는 열쇠만 뜻이 있다.
     private readonly Dictionary<string, (string type, string group)> _moves = new(StringComparer.Ordinal);
 
+    /// <summary>옮긴 판 기록 수(R57 P2 — 옛 PC 파일을 모델로 옮길 때 묻는 글 · 일지).</summary>
+    public int MoveCount => _moves.Count;
+
     /// <summary>그 판을 옮긴 줄(없으면 null — 지운 판이거나 기록이 없음).</summary>
     public (string type, string group)? MoveOf(string lead)
     {
@@ -225,6 +228,114 @@ public sealed class FormworkRules
     /// <summary>옮긴 판마다 대표 열쇠와 옮긴 줄(대표 열쇠의 글자 차례).</summary>
     public IEnumerable<(string lead, (string type, string group) to)> Moves =>
         _moves.Where(kv => _drops.ContainsKey(kv.Key)).OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => (kv.Key, kv.Value));
+
+    /// <summary>
+    /// 판 종류 줄의 열쇠 머리(R57 P3 — JACK 2026-10-23 «Revit 판의 종류를 고치면 그 판 한 장만»): 유형 칸에 «판 종류:대표 열쇠», 면 칸에 조각 열쇠, 종류 칸에 종류 —
+    /// 판에 든 조각마다 한 줄. 전 판(R58 까지)은 모르는 유형 줄로 담는다(그래서 판 종류가 있으면 모델 기록의 판 번호를 올려 전 판이 덮어쓰지 않게 — 계획 검토 M6).
+    /// </summary>
+    public const string KindPrefix = "판 종류:";
+
+    /// <summary>판 종류 기록 하나: 대표 열쇠 · 종류 · 조각 열쇠들.</summary>
+    public sealed record KindEntry(string Lead, string Item, IReadOnlyList<DropRecord> Records);
+
+    // 판 종류: 넣은 차례 — 한 조각에 둘 이상 맞으면 나중 것이 이긴다(계획 검토 H1 · 같은 열쇠를 다시 적으면 맨 뒤로).
+    private readonly List<KindEntry> _kinds = new();
+    private Dictionary<long, List<(DropRecord record, int entry)>>? _kindIndex;
+
+    /// <summary>판 종류 기록 수.</summary>
+    public int KindCount => _kinds.Count;
+
+    /// <summary>판 종류 기록들(넣은 차례).</summary>
+    public IReadOnlyList<KindEntry> Kinds => _kinds;
+
+    /// <summary>판 한 장의 종류를 정한다(같은 대표 열쇠가 있으면 갈아 끼워 맨 뒤로 — 나중 것이 이긴다). 종류는 «세지 않음»이 아닌 대응표 종류.</summary>
+    public void SetKind(string lead, string item, IEnumerable<DropRecord> records)
+    {
+        string key = Cell(lead).Trim(), value = Cell(item).Trim();
+        var list = records.Distinct().ToList();
+        if (key.Length == 0 || value.Length == 0 || list.Count == 0) return;
+        int at = _kinds.FindIndex(k => k.Lead == key);
+        if (at >= 0)
+        {
+            // 같은 열쇠의 기록에 이 판 밖의 조각이 있으면(한 기록이 다시 짓기 뒤 판 둘로 갈림) 그 나머지는 제 열쇠로 그 자리에 남긴다 —
+            // 다른 판의 종류가 말없이 사라지지 않게(P3 다시 검토 낮음 1).
+            var rest = _kinds[at].Records.Where(r => !list.Contains(r)).ToList();
+            if (rest.Count > 0) _kinds[at] = new KindEntry(rest[0].Text, _kinds[at].Item, rest);
+            else _kinds.RemoveAt(at);
+        }
+        _kinds.Add(new KindEntry(key, value, list));
+        _kindIndex = null;
+    }
+
+    /// <summary>
+    /// 판 종류 기록에서 그 조각 열쇠들만 뺀다(Revit 에서 판 하나를 원래 종류로 되돌림 — 같은 기록의 다른 판은 그대로 · 다시 검토 낮음 1). 기록이 비면 지운다. 바뀌었으면 true.
+    /// </summary>
+    public bool RemoveKindRecords(string lead, IEnumerable<DropRecord> records)
+    {
+        string key = Cell(lead).Trim();
+        int at = _kinds.FindIndex(k => k.Lead == key);
+        if (at < 0) return false;
+        var gone = records.ToHashSet();
+        var left = _kinds[at].Records.Where(r => !gone.Contains(r)).ToList();
+        if (left.Count == _kinds[at].Records.Count) return false;
+        if (left.Count == 0) _kinds.RemoveAt(at);
+        else _kinds[at] = _kinds[at] with { Records = left };
+        _kindIndex = null;
+        return true;
+    }
+
+    /// <summary>판 종류를 지운다(원래 종류로). 있었으면 true.</summary>
+    public bool ClearKind(string lead)
+    {
+        string key = Cell(lead).Trim();
+        if (_kinds.RemoveAll(k => k.Lead == key) == 0) return false;
+        _kindIndex = null;
+        return true;
+    }
+
+    /// <summary>판 종류 하나의 상태(되돌리기 — 계획 검토 M4: 차례까지 되살린다).</summary>
+    public sealed record KindState(string Item, IReadOnlyList<DropRecord> Records, int Order);
+
+    public KindState? KindStateOf(string lead)
+    {
+        string key = Cell(lead).Trim();
+        int at = _kinds.FindIndex(k => k.Lead == key);
+        return at < 0 ? null : new KindState(_kinds[at].Item, _kinds[at].Records.ToList(), at);
+    }
+
+    /// <summary>판 종류 하나를 그 상태로 다시 쓴다(null = 지움 · 있으면 그 차례에).</summary>
+    public void SetKindState(string lead, KindState? state)
+    {
+        string key = Cell(lead).Trim();
+        _kinds.RemoveAll(k => k.Lead == key);
+        if (state != null && key.Length > 0 && state.Records.Count > 0)
+            _kinds.Insert(Math.Clamp(state.Order, 0, _kinds.Count), new KindEntry(key, Cell(state.Item).Trim(), state.Records.ToList()));
+        _kindIndex = null;
+    }
+
+    /// <summary>그 조각에 맞는 판 종류(나중 것 · 없으면 null).</summary>
+    public (string lead, string item)? KindOf(FaceResult face, FacePatch patch)
+    {
+        if (_kinds.Count == 0) return null;
+        _kindIndex ??= IndexKinds();
+        if (!_kindIndex.TryGetValue(face.ElementId, out var list)) return null;
+        int best = -1;
+        foreach (var (record, entry) in list)
+            if (entry > best && record.Matches(face, patch)) best = entry;
+        return best < 0 ? null : (_kinds[best].Lead, _kinds[best].Item);
+    }
+
+    private Dictionary<long, List<(DropRecord record, int entry)>> IndexKinds()
+    {
+        var index = new Dictionary<long, List<(DropRecord, int)>>();
+        for (int i = 0; i < _kinds.Count; i++)
+            foreach (var record in _kinds[i].Records)
+            {
+                if (!index.TryGetValue(record.Element, out var list)) index[record.Element] = list = new List<(DropRecord, int)>();
+                list.Add((record, i));
+            }
+        return index;
+    }
 
     /// <summary>판 하나의 상태(되돌리기 — R55b): 지운 판 기록 · 옮긴 줄. null = 기록 없음(셈).</summary>
     public sealed record PlateState(IReadOnlyList<DropRecord> Records, (string type, string group)? MovedTo);
@@ -251,9 +362,15 @@ public sealed class FormworkRules
         if (_drops.Count == 0) return null;
         _dropIndex ??= IndexDrops();
         if (!_dropIndex.TryGetValue(face.ElementId, out var list)) return null;
+        // 여럿이 맞으면 옮기지 않은 지운 판이 이긴다(지운 판이 이기는 원칙 — Revit 에서 «세지 않음»으로 바꾼 옮긴 판 · P3 다시 검토 낮음 2) · 그다음 글자 차례.
+        string? moved = null;
         foreach (var (record, lead) in list)
-            if (record.Matches(face, patch)) return lead;
-        return null;
+            if (record.Matches(face, patch))
+            {
+                if (!_moves.ContainsKey(lead)) return lead;
+                moved ??= lead;
+            }
+        return moved;
     }
 
     private Dictionary<long, List<(DropRecord record, string lead)>> IndexDrops()
@@ -319,6 +436,16 @@ public sealed class FormworkRules
                 if (DropRecord.Parse(cells[1].Trim()) is { } record) rules.AddDrop(cells[0][DropPrefix.Length..], record);
                 continue;
             }
+            if (cells[0].StartsWith(KindPrefix, StringComparison.Ordinal))
+            {
+                // 판 종류(R57 P3) — 같은 대표 열쇠의 줄은 처음 나온 자리의 차례로 모은다(나중 것이 이기는 차례 · 모르는 꼴의 열쇠는 버림).
+                string lead = Cell(cells[0][KindPrefix.Length..]).Trim(), item = Cell(cells[2]).Trim();
+                if (lead.Length == 0 || item.Length == 0 || DropRecord.Parse(cells[1].Trim()) is not { } record) continue;
+                int at = rules._kinds.FindIndex(k => k.Lead == lead);
+                if (at < 0) rules._kinds.Add(new KindEntry(lead, item, new List<DropRecord> { record }));
+                else if (!rules._kinds[at].Records.Contains(record)) ((List<DropRecord>)rules._kinds[at].Records).Add(record);
+                continue;
+            }
             if (cells[0].StartsWith(MovePrefix, StringComparison.Ordinal))
             {
                 // 옮긴 판(R55b) — 지운 판 줄보다 앞에 와도 된다(MoveOf 는 지운 판 기록이 있을 때만 뜻이 있다).
@@ -329,6 +456,41 @@ public sealed class FormworkRules
             rules.Set(cells[0], cells[1], cells[2]);
         }
         return rules;
+    }
+
+    /// <summary>
+    /// 여러 벌의 기록을 하나로(R57 P2 — 작업공유 모델에서 두 사람이 따로 기록 요소를 만들었을 때 · 계획 검토 M4 «가장 늦은 것 하나가 아니라 열쇠별로 합침»):
+    /// 앞(먼저 만든 것)부터 차례로 — 같은 열쇠는 나중 것이 이기고 값이 달랐던 열쇠 수를 conflicts 로 센다. 뺀 판은 조각 열쇠를 모은다.
+    /// </summary>
+    public static FormworkRules Merge(IEnumerable<FormworkRules> copies, out int conflicts)
+    {
+        var merged = new FormworkRules();
+        conflicts = 0;
+        foreach (var copy in copies)
+        {
+            foreach (var (type, group, item) in copy.All)
+            {
+                if (merged.Lookup(type, group) is { } had && had != item) conflicts++;
+                merged.Set(type, group, item);
+            }
+            foreach (var (lead, records) in copy.Drops)
+            {
+                if (merged._drops.TryGetValue(lead, out var had) && !had.SequenceEqual(records)) conflicts++;
+                foreach (var record in records) merged.AddDrop(lead, record);
+            }
+            foreach (var (lead, to) in copy._moves)
+            {
+                if (merged._moves.TryGetValue(lead, out var had) && had != to) conflicts++;
+                merged._moves[lead] = to;
+            }
+            // 판 종류: 차례대로 — 나중 벌의 것이 맨 뒤(이긴다).
+            foreach (var kind in copy._kinds)
+            {
+                if (merged._kinds.FirstOrDefault(k => k.Lead == kind.Lead) is { } had && (had.Item != kind.Item || !had.Records.SequenceEqual(kind.Records))) conflicts++;
+                merged.SetKind(kind.Lead, kind.Item, kind.Records);
+            }
+        }
+        return merged;
     }
 
     private void AddDrop(string lead, DropRecord record)
@@ -345,6 +507,7 @@ public sealed class FormworkRules
         var sb = new StringBuilder("# 거푸집 대응표에서 고친 줄(초안과 다른 것만). 탭으로 나눈 세 칸.\n");
         if (_drops.Count > 0) sb.Append("# «뺀 판:» 줄 = ② 3D 에서 뺀 판의 조각(부재 Id|법선 x|y|z|평면 자리|조각 안의 점 x|y|z|넓이).\n");
         if (Moves.Any()) sb.Append("# «옮긴 판:» 줄 = 지운 판을 옮긴 대응표 줄(유형 · 면).\n");
+        if (_kinds.Count > 0) sb.Append("# «판 종류:» 줄 = Revit 판의 종류 칸에서 고친 판의 조각(나중 줄이 이긴다).\n");
         sb.Append("유형\t면\t종류\n");
         foreach (var (type, group, item) in All)
             sb.Append(type).Append('\t').Append(group).Append('\t').Append(item).Append('\n');
@@ -353,6 +516,9 @@ public sealed class FormworkRules
                 sb.Append(DropPrefix).Append(lead).Append('\t').Append(record.Text).Append('\t').Append(NotCounted).Append('\n');
         foreach (var (lead, to) in Moves)
             sb.Append(MovePrefix).Append(lead).Append('\t').Append(to.type).Append('\t').Append(to.group).Append('\n');
+        foreach (var kind in _kinds)
+            foreach (var record in kind.Records)
+                sb.Append(KindPrefix).Append(kind.Lead).Append('\t').Append(record.Text).Append('\t').Append(kind.Item).Append('\n');
         return sb.ToString();
     }
 

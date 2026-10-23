@@ -40,6 +40,12 @@ public sealed class FormworkElement
     /// (core-verify R54 계획 H1). 0 = 모름(전과 같이 나중 부재는 늘 뺀다).
     /// </summary>
     public int Rank { get; set; }
+
+    /// <summary>
+    /// Revit 계단인가(R56c-1 — 둘레 콘크리트). 계단 밑은 문 · 창 자리가 아니라 빈 곳이다 — 그 높이의 콘크리트 그림은 머리 위 그늘이 아니라 실제 단면으로 넣는다
+    /// (그늘로 넣으면 계단 밑 벽 · 기둥 옆면이 «안팎을 재지 못함»이 된다 — 설치 전 검토 M2).
+    /// </summary>
+    public bool Stair { get; set; }
 }
 
 /// <summary>구역 상자(스코프 박스) — 안쪽 면이 '어느 공간의 안쪽인지' 이름을 붙이는 데 쓴다.</summary>
@@ -105,12 +111,18 @@ public sealed class FacePatch
 
     /// <summary>
     /// 이 조각이 든 수직면 덩어리(R49 — JACK 2026-10-16 «객체와 관계없이 2개이상의 부위로 합쳐져서 수직면이 생긴곳은 무조건 하나의 덩어리»), 없으면 null.
-    /// Analyze 가 형상만으로 묶는다(대응표와 상관없음). 덩어리의 조각은 다스리는 조각의 값(세는가 · 정했는가 · 종류 · 까닭)을 물려받는다(R45 의 «벽을 따름»을 넓힌 것).
+    /// Analyze 가 형상만으로 묶는다(대응표와 상관없음). 덩어리의 조각은 다스리는 조각의 종류만 따라간다(R57 — 줄 · 세는가는 제 것 · 제 줄의 사람 값이 앞섬).
     /// </summary>
     public VerticalGroup? Vertical { get; internal set; }
 
     /// <summary>덩어리를 따르기 전 이 조각 제 사슬의 종류 · 세는가(덩어리로 바뀐 양을 일지에 — core-verify R49 계획 M5).</summary>
     internal (bool Counted, string Item)? Own { get; set; }
+
+    /// <summary>
+    /// 그 줄이 «자동»이면 이 조각이 따라갈 종류(R57 — 덩어리의 다스리는 조각의 종류 · 사람 값과 상관없이 · 따라갈 것이 없으면 null). ② 표의 초안이 이 값을 쓴다
+    /// (실제 따라간 종류와 같은 때에 적은 값 — 지운 판 · 옮긴 판을 걸기 전 · 설치 전 검토 M4).
+    /// </summary>
+    internal string? Follow { get; set; }
 
     /// <summary>
     /// 사람이 ② 3D 에서 뺀 판에 든 조각이면 그 판의 대표 열쇠(대응표 파일의 «뺀 판:…» 줄 — R48 · JACK 2026-10-16 «찍어서 빼기 · 판 한 장»), 아니면 "".
@@ -133,6 +145,15 @@ public sealed class FacePatch
 
     /// <summary>옮기기 전 종류 — 부재 속성(지침용)은 이것으로 센다(R48 원칙 — 판 지우기 · 옮기기는 일반설계의 결정 · 계획 검토 M5). 옮긴 조각이 아니면 "".</summary>
     public string BeforeMove { get; internal set; } = "";
+
+    /// <summary>
+    /// Revit 판의 종류 칸을 고쳐 정한 조각이면 그 판 종류 기록의 대표 열쇠(R57 P3 — JACK 2026-10-23 «그 판 한 장만» · FormworkRules.KindOf), 아니면 "".
+    /// 대응표 줄 · 덩어리 따라감보다 앞서고 지운 판보다 뒤다(FormworkAnalyzer.OverlayKind). 판 잇기는 같은 KindLead 끼리만(계획 검토 H1).
+    /// </summary>
+    public string KindLead { get; internal set; } = "";
+
+    /// <summary>판 종류를 걸기 전의 종류(세던 조각이면 그 종류 · 아니면 "") — Revit 판 기록의 Base(되돌린 것인지 가른다). 판 종류가 없으면 "".</summary>
+    public string KindBase { get; internal set; } = "";
 
     /// <summary>부재 속성(지침용 내역적용수량)에 쓰는 종류 — 옮긴 조각이면 옮기기 전 종류.</summary>
     public string GuidelineItem => MoveLead.Length > 0 ? BeforeMove : Item;

@@ -241,6 +241,7 @@ public sealed class CalcPlan
                 Marked = !named && first.input.Mark.Trim().Length > 0, OneLine = first.oneLine, NoSub = first.noZone,
             };
             if (named) row.Names.AddRange(members.Select(t => t.name));
+            row.Ids.AddRange(members.Select(t => t.el.Id));
             foreach (var t in members)
                 if (t.input.Thickness > 0 && t.input.Kind is MemberKind.Slab or MemberKind.Foundation) row.Thickness.Add((t.input.Thickness, t.el.Bim));
             plan.Rows.Add(row);

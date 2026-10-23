@@ -63,6 +63,8 @@ public sealed class Model3DView : Grid
     private readonly Dictionary<int, MeshGeometry3D?> _pickOutline = new();   // 고른 부재의 굵은 테두리(확대가 바뀌면 다시 만든다)
     private readonly Rectangle _band = new() { Visibility = Visibility.Collapsed, IsHitTestVisible = false, StrokeThickness = 1.2 };
     private readonly Canvas _layer = new() { IsHitTestVisible = false };
+    private readonly Canvas _labels = new() { IsHitTestVisible = false };             // 3D 자리에 띄운 글 딱지(③ 길이 숫자 — R60)
+    private readonly List<(Vec3 at, Border view)> _labelViews = new();
     private readonly Material _edgeMaterial, _pickFill, _pickEdge;
     private double _edgePixelSize = -1;           // 모서리 띠를 만든 때의 화면 1픽셀 길이(m)
     private bool _fitted;
@@ -185,8 +187,49 @@ public sealed class Model3DView : Grid
             Children.Add(_top);
         }
         Children.Add(_over);
+        Children.Add(_labels);
         Children.Add(_layer);
         Refresh();
+    }
+
+    /// <summary>3D 자리(장면 좌표)에 글 딱지를 띄운다 — 보는 자리를 바꾸면 따라 움직인다. 빈 목록 = 지움(③ 길이 숫자 — R60).</summary>
+    public void SetLabels(IReadOnlyList<(Vec3 at, string text)> labels)
+    {
+        _labels.Children.Clear();
+        _labelViews.Clear();
+        var back = new SolidColorBrush(_dark ? Color.FromArgb(0xE6, 0x26, 0x2A, 0x31) : Color.FromArgb(0xF0, 0xFF, 0xFF, 0xFF));
+        var line = new SolidColorBrush(_dark ? Color.FromRgb(0x5C, 0x64, 0x70) : Color.FromRgb(0x8A, 0x94, 0xA3));
+        var text = new SolidColorBrush(_dark ? Color.FromRgb(0xE8, 0xEA, 0xED) : Color.FromRgb(0x1F, 0x23, 0x28));
+        back.Freeze();
+        line.Freeze();
+        text.Freeze();
+        foreach (var (at, words) in labels)
+        {
+            var view = new Border
+            {
+                Background = back, BorderBrush = line, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(3), Padding = new Thickness(4, 0, 4, 1),
+                Child = new TextBlock { Text = words, FontSize = 11, Foreground = text },
+            };
+            _labels.Children.Add(view);
+            _labelViews.Add((at, view));
+        }
+        PlaceLabels();
+    }
+
+    /// <summary>시험용: 띄운 딱지의 글과 화면 자리(가운데).</summary>
+    public IReadOnlyList<(string text, Point at)> Labels =>
+        _labelViews.Select(l => (((TextBlock)l.view.Child).Text, new Point(Canvas.GetLeft(l.view) + l.view.DesiredSize.Width / 2, Canvas.GetTop(l.view) + l.view.DesiredSize.Height / 2))).ToList();
+
+    // 딱지를 지금 카메라로 화면에 놓는다(가운데가 그 자리).
+    private void PlaceLabels()
+    {
+        foreach (var (at, view) in _labelViews)
+        {
+            view.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            var p = ScreenOf(at);
+            Canvas.SetLeft(view, p.X - view.DesiredSize.Width / 2);
+            Canvas.SetTop(view, p.Y - view.DesiredSize.Height / 2);
+        }
     }
 
     // 그 차례의 몸과 모서리를 _meshes[i] 로 만든다. 모서리 띠는 화면 1픽셀의 길이를 안 뒤에만(SyncCamera 가 처음 만든다).
@@ -267,7 +310,10 @@ public sealed class Model3DView : Grid
         _hover = -1;
         if (_fitted) SyncCamera();                            // 앞뒤 면만 새 상자로(보는 자리 · 확대는 그대로)
         Refresh();
-        if (hovered) Hovered?.Invoke(-1);
+        // 마우스가 그림 위에 있으면 새 겉면에서 다시 찾는다 — 줄을 골라 겉면을 갈아 끼워도 마우스 밑 글이 사라지지 않게(JACK 2026-10-23 줄 몫 덧그림).
+        int again = hovered && IsMouseOver && _drag == Drag.None ? IndexAt(Mouse.GetPosition(this)) : -1;
+        if (again >= 0) SetHover(again);
+        else if (hovered) Hovered?.Invoke(-1);
     }
 
     /// <summary>지금 그리는 겉면의 수.</summary>
@@ -438,6 +484,7 @@ public sealed class Model3DView : Grid
         _eye.FarPlaneDistance = far;
         _headlight.Direction = new Vector3D(forward.X, forward.Y, forward.Z);
         foreach (var head in _layerHeadlights) head.Direction = _headlight.Direction;
+        PlaceLabels();   // 돌리기 · 옮기기에도 따라간다(아래 확대 되돌아가기 앞 — 계획 검토 M3)
 
         double pixel = Camera.PixelSize;
         if (_edgePixelSize > 0 && Math.Abs(pixel - _edgePixelSize) <= _edgePixelSize * 0.12) return;

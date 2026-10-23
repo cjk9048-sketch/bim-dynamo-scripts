@@ -222,9 +222,15 @@ public static class PartCatalog
     /// 우리말 이름은 갈래가 맨 뒤에 온다('HOPPER부 단차 벽체'는 벽 · '바닥 턱'은 턱 · '계단실 바닥슬래브'는 바닥) — 이름에서 가장 뒤에서 끝나는 낱말을 따른다
     /// (같은 자리에서 끝나면 긴 낱말). 괄호 안의 덧붙인 말은 빼고 본다('헌치 (바닥)'은 헌치).
     /// </summary>
-    public static string GroupOf(string name)
+    public static string GroupOf(string name) => Find(name)?.Group ?? GuessGroup(name) ?? Etc;
+
+    /// <summary>
+    /// 이름의 낱말로 짐작한 묶음(GroupOf 의 짐작 — 맞는 낱말이 없으면 null). 대표 목록 이름이어도 낱말로 본다(«슬래브»는 위 슬래브 낱말).
+    /// 유형 이름과 부위가 안 맞는 부재를 찾는 데 쓴다(R57 P4 — FormworkPartCheck).
+    /// </summary>
+    /// <param name="bareOnly">괄호 밖 낱말만 본다(유형 이름 «SB_T100(기초)»의 괄호는 덧붙인 말 — 송악3 의 버림).</param>
+    public static string? GuessGroup(string name, bool bareOnly = false)
     {
-        if (Find(name) is { } known) return known.Group;
         var bare = new System.Text.StringBuilder();
         int depth = 0;
         foreach (char c in name)
@@ -233,7 +239,7 @@ public static class PartCatalog
             else if (c is ')' or '）') depth = Math.Max(0, depth - 1);
             else if (depth == 0) bare.Append(c);
         }
-        return Match(bare.ToString().Trim()) ?? Match(name.Trim()) ?? Etc;
+        return Match(bare.ToString().Trim()) ?? (bareOnly ? null : Match(name.Trim()));
 
         static string? Match(string text)
         {

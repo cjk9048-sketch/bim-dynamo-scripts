@@ -35,7 +35,13 @@ public sealed class FormworkLine
     public int Faces { get; set; }
 
     /// <summary>
-    /// 이 줄에 든 조각 — 거푸집 객체 하나가 조각 하나다(R44). 보통 줄은 Count 개(줄의 «× n» 하나하나), 슬래브 밑면 한 줄은 Count × Cells 개
+    /// 공통 수로 묶은 줄(R60 — JACK 2026-10-23 «트렌치처럼 그냥 한 번에» · 녹촌 2D «{(a ＋ b) × 2 ＋ c × 2} × 높이»)이면 묶인 원래 줄 수(2 이상), 보통 줄이면 0.
+    /// 항이 둘 이상이면 식은 «(a1*n1+a2+…)*b» 이고 Count 는 1, 항이 하나면(식이 같고 부호만 갈렸던 줄) «a*b» 에 Count = n 이다 — 판 수는 Units(원래 줄의 «× n» 을 다 더한 것).
+    /// </summary>
+    public int Terms { get; set; }
+
+    /// <summary>
+    /// 이 줄에 든 조각 — 거푸집 객체 하나가 조각 하나다(R44). 보통 줄은 Count 개(줄의 «× n» 하나하나 — 공통 수로 묶은 줄은 항의 n 합), 슬래브 밑면 한 줄은 Count × Cells 개
     /// (판은 칸마다 그대로 — R46), 둘레 한 줄은 Count × Faces 개(판은 면마다 — R49). «× n» 은 판 수가 아니다(core-verify R49 계획 M3 — 판 수는 이것).
     /// </summary>
     public List<FormworkUnit> Units { get; } = new();
@@ -69,6 +75,9 @@ public sealed class FormworkUnit
 
     /// <summary>든 조각(이은 묶음이면 둘 이상).</summary>
     public IReadOnlyList<(ElementFormwork Result, FaceResult Face, FacePatch Patch)> Members { get; init; } = Array.Empty<(ElementFormwork, FaceResult, FacePatch)>();
+
+    /// <summary>줄의 부위 제목 · 부호 · 괄호를 준 조각(이은 묶음의 대표 — 벽 · 구멍을 이어 가는 부재 · R57). 3D 에서 판을 찍으면 이 조각의 줄을 고른다(설치 전 검토 M3).</summary>
+    public FacePatch? Lead { get; init; }
 
     public SortedSet<long> Ids { get; } = new();
 
@@ -312,7 +321,7 @@ public static class FormworkSheet
                         Section = section, Item = p.Item, Band = band, Part = part, Sub = sub, Zone = unitZone, Side = p.Side, Mark = covered.Length > 0 ? covered : mark, Tag = tag,
                         Formula = formula, AreaOnly = areaOnly, Area = joined?.Merged.Area ?? p.Area, Joined = joined != null,
                         Shape = joined?.Merged ?? p, Normal = f.Normal,
-                        Members = members,
+                        Members = members, Lead = joined?.Lead.Patch ?? p,
                     };
                     foreach (var m in unit.Members) unit.Ids.Add(m.Result.Element.Id);
                     data.Units.Add(unit);
@@ -336,6 +345,7 @@ public static class FormworkSheet
         // 칸이 하나뿐인 슬래브는 보통 줄과 같다. 식이 같은 슬래브끼리는 보통 줄처럼 «× n».
         var slabs = entries.Where(e => e.Slab != null).GroupBy(e => e.SlabKey).ToDictionary(g => g.Key, g => g.ToList());
         var lines = new Dictionary<(string head, string formula, bool joined, int cells, int faces), (FormworkLine line, Entry first)>();
+        var slabLines = new HashSet<FormworkLine>(ReferenceEqualityComparer.Instance);   // 슬래브 밑면 조각이 든 줄(공통 수로 묶지 않는다 — R60 설치 전 검토)
         void Put(Entry first, string formula, bool areaOnly, bool joinedAny, int cells, int areaOnlyCells, IEnumerable<FormworkUnit> units, int faces = 0)
         {
             var key = (first.LineHead, formula, joinedAny, cells, faces);
@@ -346,6 +356,7 @@ public static class FormworkSheet
                     Formula = formula, AreaOnly = areaOnly, Count = 0, Joined = joinedAny, Cells = cells, AreaOnlyCells = areaOnlyCells, Faces = faces,
                 }, first);
             at.line.Count++;
+            if (first.Slab != null) slabLines.Add(at.line);
             foreach (var u in units)
             {
                 at.line.Bim += u.Area;
@@ -381,6 +392,7 @@ public static class FormworkSheet
             Put(e, e.Formula, e.AreaOnly, e.Joined, 0, 0, new[] { e.Unit });
         }
         BothSides(lines);
+        var namedLines = new HashSet<FormworkLine>(lines.Values.Where(v => v.line.Mark == NamedKey).Select(v => v.line), ReferenceEqualityComparer.Instance);
         // 이름으로 묶인 줄의 부호 = 그 줄에 든 부재 가운데 줄의 부위인 부재의 이름(R53b · 구멍 둘레는 작은 제목의 부위) — 차례(부호의 자연 차례)도 이 글로.
         foreach (var (line, _) in lines.Values)
             if (line.Mark == NamedKey)
@@ -391,12 +403,13 @@ public static class FormworkSheet
             }
         // 차례: 절 → 부위 제목(거푸집 차례 → 목록 → 이름) → 작은 제목(거푸집 차례 → 목록 → 이름 — 2D «HOLE 주위» 안도 «- 상부슬래브 → - 중간슬래브 → - 벽체»,
         // core-verify R47 설치 전 L1) → 부호(자연 차례) → 유형 → 면의 갈래 → 외측 · 내측 → 처음 나온 차례.
-        foreach (var (line, _) in lines.Values.OrderBy(e => e.first.Item).ThenBy(e => e.first.Band).ThenBy(e => e.line.Section, StringComparer.Ordinal)
+        var ordered = lines.Values.OrderBy(e => e.first.Item).ThenBy(e => e.first.Band).ThenBy(e => e.line.Section, StringComparer.Ordinal)
                      .ThenBy(e => e.first.PartRank).ThenBy(e => e.first.PartOrder).ThenBy(e => e.line.Part, StringComparer.Ordinal)
                      .ThenBy(e => e.first.SubRank).ThenBy(e => e.first.SubOrder).ThenBy(e => e.line.Sub, StringComparer.Ordinal)
                      .ThenBy(e => e.line.Mark, MarkComparer.Instance).ThenBy(e => e.first.Type, StringComparer.Ordinal)
-                     .ThenBy(e => e.first.Kind).ThenBy(e => e.first.Side).ThenBy(e => e.line.Unsure).ThenBy(e => e.first.Seen))
-            data.Lines.Add(line);
+                     .ThenBy(e => e.first.Kind).ThenBy(e => e.first.Side).ThenBy(e => e.line.Unsure).ThenBy(e => e.first.Seen).ToList();
+        // 공통 수로 묶기(R60): 차례를 정한 뒤 — 묶은 줄은 그 무리의 첫 줄 자리(계획 검토 L8).
+        data.Lines.AddRange(CommonFactor(ordered, namedLines, slabLines, nameOf, placeOf));
         foreach (var (name, s) in sections.OrderBy(kv => ItemOrder(kv.Value.item)).ThenBy(kv => kv.Value.band).ThenBy(kv => kv.Key, StringComparer.Ordinal))
             data.Sections.Add((name, s.item, s.band, s.bim));
 
@@ -417,6 +430,108 @@ public static class FormworkSheet
         }
         foreach (var (group, units) in plates) data.Plates.Add(units.Count == 1 ? units[0] : Combine(group, units, options));
         return data;
+    }
+
+    /// <summary>
+    /// 공통 수로 묶기(R60 — JACK 2026-10-23 «같은 부위 · 같은 마지막 수면 모두»): 같은 절 · 부위 제목 · 작은 제목 · 괄호 · 면 갈래에서 식이 «a × b»(두 수의 곱)인 줄 가운데
+    /// b 가 같은 줄을 «(a1 × n1 ＋ a2 × n2 ＋ …) × b» 한 줄로 — 2D 처럼 길이를 더하고 높이(폭)를 한 번 곱한다. 같은 a 는 한 항(n 을 더함 — 계획 검토 L5).
+    /// 그대로 두는 줄: 슬래브 밑면 조각(칸 하나짜리도 — 슬래브 하나 = 한 줄 · 계획 검토 M2) · 둘레 한 줄 · 넓이만 · 안팎 확인 필요 · 식에 ＋ · − · 괄호가 든 줄.
+    /// 판(Units)은 그대로다 — 거푸집 객체 · ③ 의 3D 연결 · 부재 속성은 바뀌지 않는다. 엑셀 값은 줄마다 한 번 반올림(묶기 전보다 0.01 단위로 다를 수 있다).
+    /// 숫자가 NumbersPerLine 을 넘으면 나눠 여러 줄. 항이 하나뿐이면(같은 식인데 부호만 갈렸던 줄) «a × b × n» 꼴 그대로 Count = n.
+    /// </summary>
+    private static List<FormworkLine> CommonFactor(List<(FormworkLine line, Entry first)> ordered, HashSet<FormworkLine> named, HashSet<FormworkLine> slabLines,
+                                                   Func<long, string>? nameOf, Func<long, (string part, string zone)> placeOf)
+    {
+        // 슬래브 밑면은 줄의 첫 조각만이 아니라 든 조각 하나라도(이름 열쇠로 보 밑면과 한 줄이 된 칸 하나짜리 슬래브 — 설치 전 검토 낮음).
+        string? KeyOf(FormworkLine line, Entry first)
+        {
+            if (line.Cells != 0 || line.Faces != 0 || line.AreaOnly || line.Unsure || first.Slab != null || slabLines.Contains(line)) return null;
+            if (Product(line.Formula) is not { } ab) return null;
+            return string.Join("\u001f", line.Section, line.Part, line.Sub, line.Tag, first.Kind.ToString(CultureInfo.InvariantCulture), ab.b);
+        }
+        var groups = new Dictionary<string, List<FormworkLine>>(StringComparer.Ordinal);
+        var keys = new List<string?>();
+        foreach (var (line, first) in ordered)
+        {
+            string? key = KeyOf(line, first);
+            keys.Add(key);
+            if (key == null) continue;
+            if (!groups.TryGetValue(key, out var list)) groups[key] = list = new List<FormworkLine>();
+            list.Add(line);
+        }
+        var result = new List<FormworkLine>();
+        var done = new HashSet<string>(StringComparer.Ordinal);
+        for (int i = 0; i < ordered.Count; i++)
+        {
+            var line = ordered[i].line;
+            if (keys[i] is not { } key || groups[key].Count < 2) { result.Add(line); continue; }
+            if (!done.Add(key)) continue;
+            var group = groups[key];
+            string b = Product(group[0].Formula)!.Value.b;
+            // 항: a 마다(처음 나온 차례) — n = 그 a 인 줄들의 «× n» 합.
+            var terms = new List<(string a, int n, List<FormworkLine> lines)>();
+            foreach (var l in group)
+            {
+                string a = Product(l.Formula)!.Value.a;
+                int at = terms.FindIndex(t => t.a == a);
+                if (at < 0) terms.Add((a, l.Count, new List<FormworkLine> { l }));
+                else { var t = terms[at]; t.lines.Add(l); terms[at] = (t.a, t.n + l.Count, t.lines); }
+            }
+            var counts = terms.Select(t => t.n == 1 ? 1 : 2).ToList();
+            foreach (var chunk in Chunks(counts, NumbersPerLine - 1))
+            {
+                var picked = chunk.Select(k => terms[k]).ToList();
+                var lines = picked.SelectMany(t => t.lines).ToList();
+                if (lines.Count == 1) { result.Add(lines[0]); continue; }   // 나눈 끝 묶음에 줄 하나만 남으면 그 줄 그대로(Terms 0 — 설치 전 검토 낮음)
+                bool single = picked.Count == 1;
+                var merged = new FormworkLine
+                {
+                    Section = line.Section, Item = line.Item, Part = line.Part, Sub = line.Sub, Tag = line.Tag, Unsure = false,
+                    Formula = single ? $"{picked[0].a}*{b}" : "(" + string.Join("+", picked.Select(t => t.n == 1 ? t.a : $"{t.a}*{t.n.ToString(CultureInfo.InvariantCulture)}")) + ")*" + b,
+                    Count = single ? picked[0].n : 1, Joined = lines.Any(l => l.Joined), Terms = lines.Count,
+                    Mark = MergedMark(lines, named, nameOf, placeOf),
+                };
+                foreach (var l in lines)
+                {
+                    merged.Bim += l.Bim;
+                    foreach (long id in l.Ids) merged.Ids.Add(id);
+                    merged.Units.AddRange(l.Units);
+                }
+                result.Add(merged);
+            }
+        }
+        return result;
+    }
+
+    // 식이 두 수의 곱 «a*b» 인가 — 그 두 수의 글(아니면 null). ③ 길이 숫자(FormworkLabels)도 이 잣대.
+    internal static (string a, string b)? Product(string formula)
+    {
+        try
+        {
+            var t = FormulaTokens.Split(formula);
+            return t.Count == 3 && t[0].Kind == FormulaTokens.Kind.Number && t[1].Kind == FormulaTokens.Kind.Operator && t[1].Text == "*" && t[2].Kind == FormulaTokens.Kind.Number
+                ? (t[0].Text, t[2].Text) : null;
+        }
+        catch (FormatException) { return null; }
+    }
+
+    // 묶은 줄의 부호: 이름이 있는 줄의 부재 이름(줄의 부위인 부재 — 이름 줄과 같은 잣대) + 이름 없는 줄의 부호를 괄호로(CalcSheet 의 한 줄 부위와 같은 꼴 — 계획 검토 L4).
+    // 부호들은 이름 줄처럼 자연 차례 · 넷 이상 이어지면 «처음~끝» · 길면 «외 n개»(MemberNames.Compact — 부호 칸이 식과 겹치지 않게).
+    private static string MergedMark(List<FormworkLine> lines, HashSet<FormworkLine> named, Func<long, string>? nameOf, Func<long, (string part, string zone)> placeOf)
+    {
+        var first = lines[0];
+        string own = first.Part == HoleTitle ? first.Sub : first.Part;
+        // 이름 줄마다 그 줄의 잣대(줄의 부위인 부재의 이름 · 없으면 든 부재 모두 — 이름 줄의 부호와 같이)로 모아 한 번에 줄인다(설치 전 검토 낮음).
+        var all = new List<string>();
+        if (nameOf != null)
+            foreach (var l in lines.Where(named.Contains))
+            {
+                var mine = l.Ids.Where(id => placeOf(id).part == own).Select(id => nameOf(id) ?? "").Where(n => n.Trim().Length > 0).ToList();
+                all.AddRange(mine.Count > 0 ? mine : l.Ids.Select(id => nameOf(id) ?? ""));
+            }
+        string names = MemberNames.Compact(all);
+        string plain = MemberNames.Compact(lines.Where(l => !named.Contains(l)).Select(l => l.Mark));
+        return names.Length == 0 ? plain : plain.Length == 0 ? names : $"{names} ({plain})";
     }
 
     // 이름 있는 조각의 부호 열쇠(줄에 쓰지 않는 글자 — 마크 · 유형 이름과 부딪히지 않는다).
@@ -464,18 +579,26 @@ public static class FormworkSheet
     {
         refused = 0;
         var found = new Dictionary<Entry, Ring>(ReferenceEqualityComparer.Instance);
-        var faces = new List<(Entry E, (double x, double y) A, (double x, double y) B, double Z0, double Z1)>();
+        var faces = new List<(Entry E, (double x, double y) A, (double x, double y) B, double Z0, double Z1, long Owner)>();
         foreach (var e in entries)
         {
             if (e.Slab != null || e.AreaOnly || e.Unsure || !(e.Tag == "내측" || (e.Tag.Length == 0 && e.Kind == 3))) continue;
-            // 부재에 난 구멍의 면(구멍 둘레)이 든 조각만 — 호퍼(슬래브 구멍 + 그 위 벽) · 피트 · 개구부. 벽만 둘러선 방의 안쪽은 2D 처럼 벽마다 적는다.
-            if (!e.Unit.Members.Any(m => m.Face.Class == FaceClass.HoleEdge)) continue;
+            // 부재에 난 구멍의 면(구멍 둘레)이 든 조각 — 호퍼(슬래브 구멍 + 그 위 벽) · 피트 · 개구부. 벽만 둘러선 방의 안쪽은 2D 처럼 벽마다 적는다.
+            // R57(계획 검토 M2): 한 부재의 막힌 속(바닥 있는 PIT · 호퍼 — 안쪽 면이 구멍 둘레가 아닌 «내측»)도 — 그 부재의 조각끼리만 고리를 찾는다(Owner = 부재 Id ·
+            // 구멍 둘레가 든 조각은 0 — 둘이 서로의 고리를 끊지 않게). 전에는 슬래브 구멍 둘레와 이어져야(R56b) PIT 가 한 줄이었다.
+            long owner = 0;
+            if (!e.Unit.Members.Any(m => m.Face.Class == FaceClass.HoleEdge))
+            {
+                var ids = e.Unit.Members.Select(m => m.Result.Element.Id).Distinct().ToList();
+                if (ids.Count != 1 || e.Tag != "내측") continue;
+                owner = ids[0];
+            }
             var n = e.Unit.Normal;
             if (n.Length != 3 || Math.Abs(n[2]) > 0.01) continue;
-            if (Upright(e.Unit.Shape) is { } r) faces.Add((e, r.a, r.b, r.z0, r.z1));
+            if (Upright(e.Unit.Shape) is { } r) faces.Add((e, r.a, r.b, r.z0, r.z1, owner));
         }
         static (long, long) Key((double x, double y) p) => ((long)Math.Round(p.x * 1000), (long)Math.Round(p.y * 1000));
-        foreach (var level in faces.GroupBy(f => (f.E.LineHead, (long)Math.Round(f.Z0 * 1000), (long)Math.Round(f.Z1 * 1000))))
+        foreach (var level in faces.GroupBy(f => (f.E.LineHead, (long)Math.Round(f.Z0 * 1000), (long)Math.Round(f.Z1 * 1000), f.Owner)))
         {
             var list = level.ToList();
             var ends = new Dictionary<(long, long), List<int>>();
@@ -717,7 +840,7 @@ public static class FormworkSheet
             Zone = units.Select(u => u.Zone).Distinct().Count() == 1 ? lead.Zone : "",
             Side = lead.Side, Mark = lead.Mark, Tag = lead.Tag, Formula = formula, AreaOnly = units.Any(u => u.AreaOnly),
             Area = units.Sum(u => u.Area), Joined = true, Shape = group.Merged, Normal = lead.Normal,
-            Members = units.SelectMany(u => u.Members).ToList(),
+            Members = units.SelectMany(u => u.Members).ToList(), Lead = group.Lead.Patch,
             ByBand = bands.Select(g => (g.Key, g.Sum(u => u.Area))).ToList(),
             Parts = units,
         };

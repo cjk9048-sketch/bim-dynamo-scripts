@@ -181,8 +181,8 @@ public static class FormworkAnalyzer
         return DeductRank.Beats(structure.Rank, false, DeductRank.KindOrder(structure.Kind), structure.Id, later.Rank, true, DeductRank.KindOrder(later.Kind), later.Id);
     }
 
-    /// <summary>마지막으로 수직면 덩어리를 묶는 데 걸린 시간(ms) · 묶은 덩어리 수 · 합친 테두리가 한 고리가 아니라 묶지 않은 수 — 일지(core-verify R49 계획 L5).</summary>
-    public static (long ms, int groups, int refused) LastGrouping { get; private set; }
+    /// <summary>마지막으로 수직면 덩어리를 묶는 데 걸린 시간(ms) · 묶은 덩어리 수 — 일지(core-verify R49 계획 L5).</summary>
+    public static (long ms, int groups) LastGrouping { get; private set; }
 
     /// <summary>마지막으로 잴 때 지은 문맥 수(R54 — 구조체마다 «그 구조체가 이기는 나중 부재만» 뺀 콘크리트 · 모든 콘크리트 문맥 포함) · 잰 시간(ms) — 일지(core-verify 설치 전 L5).</summary>
     public static (int contexts, long ms) LastContexts { get; private set; }
@@ -210,21 +210,22 @@ public static class FormworkAnalyzer
             name.Contains("슬래브", StringComparison.Ordinal) || name.Contains("스라브", StringComparison.Ordinal) || name.Contains("슬라브", StringComparison.Ordinal);
     }
 
-    // 수직면 덩어리(R49 — JACK 2026-10-16 «객체와 관계없이 2개이상의 부위로 합쳐져서 수직면이 생긴곳은 무조건 하나의 덩어리» · R55 — 벽과 슬래브만, InLump):
+    // 수직면 덩어리(R49 — JACK 2026-10-16 «2개이상의 부위로 합쳐져서 수직면이 생긴곳은 무조건 하나의 덩어리» · R55 — 벽과 슬래브만, InLump):
     // 평면 수직면(옆면 · 구멍 둘레 — 법선이 수평)의 형상이 세는 조각 가운데 같은 방향 · 같은 평면(Epsilon)에 맞닿은(맞댄 변 1 cm 넘게) 것을
     // 안팎 · 위치 · 거푸집 종류와 상관없이 묶는다. 버림 · 받침류(StandsAlone — 2D 가 따로 적음)는 넣지 않는다.
-    // 합친 테두리가 한 고리가 아니면(틈 · 겹침) 묶지 않는다(core-verify R49 계획 H2 — 판 = 덩어리가 늘 되게).
-    // 다스리는 조각 = 벽 조각 가운데 가장 넓은 것 → 없으면 가장 넓은 조각(같으면 부재 Id 가 작은 것). 덩어리 조각의 괄호(외측 · 내측)는 다스리는 조각의 것으로(M2).
+    // R57(JACK 2026-10-23 «면의 주인 = 늘 그 면을 가진 부재»): 덩어리는 **종류만** 따라가게 한다(FollowGroups) — 줄 · 판 · 세는가는 조각 제 것.
+    // 그래서 «판 = 덩어리»를 위한 «합친 테두리가 한 고리» 거절(core-verify R49 계획 H2)은 걷었고(R57 계획 검토 L1), 닫힌 둘레(R56b — 구멍 둘레 + PIT 안쪽
+    // 한 판 · 주인 = 안쪽 부재)도 걷었다 — 다른 부재를 잇고 주인을 바꾸는 일이 특수사항(트렌치 거푸집이 PIT 줄로 …)의 뿌리였다.
+    // 다스리는 조각(종류를 주는 조각) = 벽 조각 가운데 가장 넓은 것 → 없으면 가장 넓은 조각(같으면 부재 Id 가 작은 것).
     private static void GroupVerticals(List<ElementFormwork> results, FormworkOptions options)
     {
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var cands = new List<(ElementFormwork R, FaceResult F, FacePatch P, V3 N, double D, V3 Min, V3 Max)>();
         foreach (var r in results)
         {
-            if (FormworkTable.StandsAlone(r.Element)) continue;
             // 벽과 슬래브만 덩어리에 든다(R55 — JACK 2026-10-21 고름 «슬래브 가장자리만»): 턱(R53a)에 더해 보 · 기둥 · 헌치 · 기초 · 드레인 PIT · 트렌치 · 호퍼 ·
-            // 계단 · 그 밖은 같은 평면이어도 제 줄 · 제 종류(녹촌 2D 도 «배관실 보» · «배수 PIT» · «HOPPER 단차부»를 따로 적는다).
-            if (!InLump(r.Element, options)) continue;
+            // 계단 · 그 밖은 같은 평면이어도 제 종류(녹촌 2D 도 «배관실 보» · «배수 PIT» · «HOPPER 단차부»를 따로 적는다).
+            if (FormworkTable.StandsAlone(r.Element) || !InLump(r.Element, options)) continue;
             foreach (var f in r.Faces)
             {
                 if (f.Class is not (FaceClass.Side or FaceClass.HoleEdge) || f.Normal.Length != 3) continue;
@@ -259,23 +260,19 @@ public static class FormworkAnalyzer
                     if (ra != rb) parent[Math.Max(ra, rb)] = Math.Min(ra, rb);
                 }
         }
-        int id = 0, refused = 0;
+        int id = 0;
         foreach (var members in Enumerable.Range(0, cands.Count).GroupBy(Root).Select(g => g.Select(i => cands[i]).ToList()).Where(g => g.Count >= 2))
         {
             var gov = members.OrderBy(m => m.R.Element.Kind == MemberKind.Wall ? 0 : 1).ThenByDescending(m => m.P.Area).ThenBy(m => m.R.Element.Id).First();
-            if (FormworkMerge.TryJoin(members.Select(m => m.P).ToList(), gov.N, gov.P) == null) { refused++; continue; }
             var group = new VerticalGroup { Id = ++id, Governor = (gov.R, gov.F, gov.P), Normal = new[] { gov.N.X, gov.N.Y, gov.N.Z } };
             foreach (var m in members.OrderBy(m => m.R.Element.Id))
             {
                 group.Members.Add((m.R, m.F, m.P));
                 m.P.Vertical = group;
-                // 조각의 안팎(Side)은 그대로 둔다 — 줄 · 판의 괄호는 다스리는 조각의 것(FormworkSheet 의 줄 대표 = 다스리는 조각)이라 한 장 = 한 괄호다.
-                // 덮어쓰면 «확인 필요»가 말없이 지워지고 개구부 · 구멍 둘레의 갈래가 바뀌어 되돌릴 수 없었다(core-verify R49 설치 전 M1 · L3).
             }
         }
-        LastGrouping = (watch.ElapsedMilliseconds, id, refused);
+        LastGrouping = (watch.ElapsedMilliseconds, id);
     }
-
 
     // 대응표를 건다(Analyze · Reclassify 가 같은 길): 조각마다 사슬(사람 줄 > 부위 처음 값 > 초안) → 수직면 덩어리는 다스리는 조각의 값을 물려받음 →
     // 3D 에서 뺀 판을 조각마다 덮음(core-verify R49 계획 H1 — 물려받는 값에 «뺀 판»이 섞이지 않게: 덩어리의 새 조각이 말없이 세지 않게 되는 일이 없다).
@@ -288,12 +285,33 @@ public static class FormworkAnalyzer
                 foreach (var patch in face.Patches)
                     Rule(options, ef.Element, face, patch, elevated);
         }
-        FollowGroups(results);
+        FollowGroups(results, options);
         foreach (var ef in results)
             foreach (var face in ef.Faces)
                 foreach (var patch in face.Patches)
+                {
+                    OverlayKind(options, face, patch);
                     OverlayDrop(options, face, patch);
+                }
         ApplyMoves(results, options);
+    }
+
+    /// <summary>Revit 판 종류로 정한 조각의 까닭(R57 P3).</summary>
+    public const string PlateKindNote = "Revit 판에서 정함";
+
+    // Revit 판의 종류 칸(R57 P3 — JACK 2026-10-23 «그 판 한 장만»): 형상이 세는 조각 · 아래가 빈 밑면이 판 종류 기록에 맞으면 그 종류로 센다 —
+    // 대응표 줄 · 덩어리 따라감보다 앞(Rule · FollowGroups 뒤) · 지운 판보다 뒤(OverlayDrop 이 덮는다) · 옮긴 판은 줄만 옮기고 종류는 그대로(ApplyMoves).
+    private static void OverlayKind(FormworkOptions options, FaceResult face, FacePatch patch)
+    {
+        if (options.Rules is not { KindCount: > 0 } rules) return;
+        bool raw = (patch.Unruled?.Counted ?? patch.Counted) || patch.Below == Below.Floating;
+        if (!raw || rules.KindOf(face, patch) is not { } kind) return;
+        patch.KindBase = patch.Counted ? patch.Item : "";
+        patch.KindLead = kind.lead;
+        patch.Counted = true;
+        patch.Decided = true;
+        patch.Item = kind.item;
+        patch.Note = PlateKindNote;
     }
 
     /// <summary>옮긴 판의 조각에 적는 까닭 — 옮긴 줄이 없어져(부위 이름이 바뀜 · 줄이 가려짐) 지운 판으로 돌아간 것(R55b — 계획 검토 M4).</summary>
@@ -320,10 +338,13 @@ public static class FormworkAnalyzer
             if (k.Patch.MovedTo != null || k.Patch.DropLead.Length > 0) continue;
             var row = FormworkSummary.RowOf(k);
             present.Add(row);
-            if (!k.Patch.Counted || k.Patch.Item.Length == 0) continue;
+            // 판 종류 조각(R57 P3)은 판 종류를 걸기 전 종류(KindBase)로 다수결에 든다 — 판 하나의 종류가 옮긴 다른 판에 번지지 않고(계획 검토 M3),
+            // 판 종류만 남은 줄로 옮긴 판도 그 줄 본래 종류로 센다(P3 검토 중간 3). 걸기 전에 세지 않던 조각(KindBase "")은 넣지 않는다.
+            string item = k.Patch.KindLead.Length > 0 ? k.Patch.KindBase : k.Patch.Item;
+            if (!k.Patch.Counted || item.Length == 0) continue;
             bool down = DownFlat(k.Face);
-            Add(byDir, (row, down), k.Patch.Item, k.Patch.Area);
-            Add(byRow, row, k.Patch.Item, k.Patch.Area);
+            Add(byDir, (row, down), item, k.Patch.Area);
+            Add(byRow, row, item, k.Patch.Area);
         }
         foreach (var (face, patch) in moved)
         {
@@ -337,6 +358,13 @@ public static class FormworkAnalyzer
                 patch.MovedTo = null;
                 patch.MoveLead = "";
                 patch.BeforeMove = "";
+                continue;
+            }
+            if (patch.KindLead.Length > 0)
+            {
+                // 판 종류가 든 판(R57 P3): 줄만 옮기고 종류는 판의 것 · 옮긴 줄이 «세지 않음»이어도 센다(판 > 줄 — 다시 검토 낮음 5).
+                patch.Counted = true;
+                patch.Note = PlateKindNote;
                 continue;
             }
             string? human = options.Rules?.Lookup(to.type, to.group);
@@ -366,17 +394,23 @@ public static class FormworkAnalyzer
             : kinds.OrderByDescending(kv => kv.Value).ThenBy(kv => Array.IndexOf(FormworkTable.Items, kv.Key) is int i && i >= 0 ? i : int.MaxValue).First().Key;
     }
 
-    // 덩어리의 조각은 다스리는 조각의 값(세는가 · 정했는가 · 종류 · 까닭)을 그대로 받는다 — 제 사슬의 값은 Own 에 남긴다(바뀐 양 — M5).
-    private static void FollowGroups(IReadOnlyList<ElementFormwork> results)
+    // 덩어리의 조각은 다스리는 조각의 **종류만** 받는다(R57 — JACK 2026-10-23 «면의 주인 = 그 부재» · 계획 검토 H1): 세는가 · 정했는가 · 까닭은 제 사슬 그대로,
+    // 그 조각의 제 줄(FormworkSummary.RowOf — 이제 늘 제 부재의 줄)에 사람 값이 있으면 사람 값이 앞선다(② 에서 슬래브 줄을 고르면 그 슬래브 가장자리도 바뀐다 —
+    // 눌러도 아무 일 없는 단추가 없게). 다스리는 조각이 세지 않으면 따라갈 종류가 없다. 제 사슬의 값은 Own 에 남긴다(바뀐 양 — M5).
+    private static void FollowGroups(IReadOnlyList<ElementFormwork> results, FormworkOptions options)
     {
         foreach (var group in FormworkMerge.GroupsOf(results))
         {
             var gov = group.Governor.Patch;
-            foreach (var (_, _, patch) in group.Members)
+            foreach (var (r, f, patch) in group.Members)
             {
                 patch.Own = (patch.Counted, patch.Item);
-                if (ReferenceEquals(patch, gov)) continue;
-                (patch.Counted, patch.Decided, patch.Item, patch.Note) = (gov.Counted, gov.Decided, gov.Item, gov.Note);
+                // 따라갈 종류: 형상이 세는 조각(대응표를 걸기 전)이고 다스리는 조각이 셀 때 — 그 줄을 «자동»으로 두면 받을 값(② 초안).
+                bool follows = !ReferenceEquals(patch, gov) && (patch.Unruled?.Counted ?? patch.Counted) && gov.Counted && gov.Item.Length > 0;
+                patch.Follow = follows ? gov.Item : null;
+                if (!follows || !patch.Counted) continue;
+                if (HumanRule(options.Rules, r.Element, FormworkTable.GroupOf(f.Class, patch)) != null) continue;
+                patch.Item = gov.Item;
             }
         }
     }
@@ -487,6 +521,7 @@ public static class FormworkAnalyzer
                     (patch.Counted, patch.Decided, patch.Item, patch.Note) = raw;
                     patch.DropLead = "";
                     (patch.MovedTo, patch.MoveLead, patch.BeforeMove) = (null, "", "");   // 옮긴 판도 대응표를 다시 걸 때 다시 정한다(계획 검토 M1)
+                    (patch.KindLead, patch.KindBase) = ("", "");                          // 판 종류도(R57 P3)
                 }
         }
         ApplyRules(results, options);
@@ -503,12 +538,20 @@ public static class FormworkAnalyzer
         string group = FormworkTable.GroupOf(face.Class, patch);
         if (patch.Below == Below.Floating)
         {
-            // 아래가 빈 밑면: 사람이 정하기 전에는 세지 않고 물어본다.
+            // 아래가 빈 밑면: 유형 줄의 사람 값 > 부위가 정하는 값(R57 — FloatingDraft) > 세지 않고 물어본다.
             string? typeRule = options.Rules?.Lookup(el.Type, group);
-            if (typeRule == null) return;
+            if (typeRule != null)
+            {
+                patch.Decided = true;
+                if (typeRule == FormworkRules.NotCounted) patch.Note = "땅 위 — 대응표에서 세지 않기로 함";
+                else { patch.Counted = true; patch.Item = typeRule; patch.Note = "아래가 비었지만 대응표에서 세기로 함"; }
+                return;
+            }
+            string? byPart = FloatingDraft(el, options);
+            if (byPart == null) return;
             patch.Decided = true;
-            if (typeRule == FormworkRules.NotCounted) patch.Note = "땅 위 — 대응표에서 세지 않기로 함";
-            else { patch.Counted = true; patch.Item = typeRule; patch.Note = "아래가 비었지만 대응표에서 세기로 함"; }
+            if (byPart == FormworkRules.NotCounted) patch.Note = "땅 위 — 바닥 · 채움 부위의 밑면";
+            else { patch.Counted = true; patch.Item = byPart; patch.Note = ""; }
             return;
         }
         if (!patch.Counted) return; // 윗면 · 버림과 기초의 밑면 · 틈은 대응표로 바꾸지 않는다
@@ -767,6 +810,10 @@ public static class FormworkAnalyzer
         if (!body.El.Blinding && body.El.Kind == MemberKind.Foundation && body.El.Part.Length > 0 &&
             ctx.Options.PartGroup(body.El.Part) is not (PartCatalog.Fill or PartCatalog.Floor))
             foundationLike = true;
+        // 받침류(디딤판 · 받침 · PAD · 환기구 — 부위 또는 유형 이름)의 밑면은 아래에 받침(콘크리트)이 있는 자리를 세지 않는다(R57 — JACK 2026-10-23 «디딤판 · 밑은
+        // 채움»: 지붕 위 디딤판 둘은 0.6 m 아래 상부슬래브를 받침으로 보고 합판 4회로 셌다 — 구조체 위에 놓거나 밑을 채워 친다).
+        // 받침이 없는 자리는 «아래가 빈 밑면»으로 묻는다(기초 카테고리여도 — 땅 위 디딤판인지 떠 있는 것인지 모른다 · 말없이 빼지 않는다: R57 계획 다시 검토 M3).
+        bool small = !body.El.Blinding && SmallPart(body.El, ctx.Options);
         if (body.El.Blinding || (body.El.Kind == MemberKind.Foundation && !foundationLike))
         {
             var ground = Patch(frame, part, total);
@@ -833,6 +880,7 @@ public static class FormworkAnalyzer
             patch.Below = Below.Supported;
             patch.Height = key / 1000.0;
             patch.Counted = true;
+            if (small) (patch.Below, patch.Counted, patch.Note) = (Below.Ground, false, SmallBottomNote);
             yield return patch;
         }
         double gapArea = Poly.Area(gapRegion);
@@ -841,12 +889,14 @@ public static class FormworkAnalyzer
             var patch = Patch(frame, gapRegion, gapArea);
             patch.Below = Below.Gap;
             patch.Note = "아래 콘크리트와의 틈이 너무 좁음(거푸집을 댈 수 없음) — 확인";
+            if (small) (patch.Below, patch.Note) = (Below.Ground, SmallBottomNote);
             yield return patch;
         }
         double restArea = Poly.Area(rest);
-        if (restArea >= Tiny && foundationLike)
+        if (restArea >= Tiny && foundationLike && !small && ctx.Options.PartGroup(body.El.Part) != PartCatalog.Upper)
         {
-            // 기초 카테고리로 그린 부재의 받침 없는 자리: 예전처럼 땅으로(세지 않음 · 묻지 않음 — revit-verify R53 계획 ④).
+            // 기초 카테고리로 그린 부재의 받침 없는 자리: 예전처럼 땅으로(세지 않음 · 묻지 않음 — revit-verify R53 계획 ④). 위 묶음 부위(캐노피 · 위 슬래브 …)는
+            // 아래 «떠 있음»으로(R57 — JACK 2026-10-23: «출입구 기초»로 그린 공중의 캐노피 밑면이 «땅 위»로 빠졌다 → Rule 이 부위로 합판 4회).
             var ground = Patch(frame, rest, restArea);
             ground.Below = Below.Ground;
             ground.Note = "땅 위(기초 카테고리 — 아래 받침 없음)";
@@ -854,12 +904,36 @@ public static class FormworkAnalyzer
         }
         else if (restArea >= Tiny)
         {
-            // 아래에 아무것도 없다: 땅 위에 놓인 바닥판이거나, 처마처럼 떠 있는 면이다 — 세지 않고 사람에게 묻는다.
+            // 아래에 아무것도 없다: 땅 위에 놓인 바닥판이거나, 처마처럼 떠 있는 면이다 — 부위가 정하면 그대로(FloatingDraft — 위 묶음 = 합판 4회 · 바닥 · 채움 = 땅),
+            // 아니면 세지 않고 사람에게 묻는다(Rule).
             var patch = Patch(frame, rest, restArea);
             patch.Below = Below.Floating;
             patch.Note = "아래에 다른 콘크리트가 없음 — 땅 위인지 떠 있는 면인지 확인";
             yield return patch;
         }
+    }
+
+    /// <summary>받침류 밑면의 받침 있는 자리에 적는 까닭(R57).</summary>
+    public const string SmallBottomNote = "받침류 밑면 — 놓거나 밑을 채워 침";
+
+    /// <summary>받침류(디딤판 · 받침 · PAD · 환기구)인가 — 부위 묶음 «받침·PAD» 또는 유형 이름(FormworkTable.StandsAlone 과 같은 잣대 · 묶음은 ① 목록의 것).</summary>
+    internal static bool SmallPart(FormworkElement el, FormworkOptions options) =>
+        FormworkTable.IsSmallPart(el.Type) || (el.Part.Length > 0 && options.PartGroup(el.Part) == PartCatalog.Small);
+
+    /// <summary>
+    /// 아래가 빈 밑면을 부위로 정하는 값(R57 — 규칙은 애드인에 고정 · JACK 2026-10-23): 위 묶음 부위(캐노피 · 상부 · 중간슬래브 · 지붕 …)는 떠 있는 부재라
+    /// 합판 4회(녹촌 «수평면 4회» — 공중 캐노피), 바닥 · 채움 묶음 부위(바닥슬래브 · 기초 · 구배 …)는 땅 위라 세지 않음. 그 밖(부위 없음 · 받침류 · 벽 …)은 null —
+    /// 지금처럼 묻는다(② 유형 줄 «아래가 빈 밑면»). ② 유형 줄의 사람 값이 늘 앞선다(Rule).
+    /// </summary>
+    internal static string? FloatingDraft(FormworkElement el, FormworkOptions options)
+    {
+        if (el.Part.Length == 0 || SmallPart(el, options)) return null;
+        return options.PartGroup(el.Part) switch
+        {
+            PartCatalog.Upper => FormworkTable.Ply4,
+            PartCatalog.Floor or PartCatalog.Fill => FormworkRules.NotCounted,
+            _ => null,
+        };
     }
 
     // ── 옆면: 안팎 · 구역 · 높이 구간 ─────────────────────────────────────────────
@@ -1124,6 +1198,8 @@ public static class FormworkAnalyzer
     private static Paths64 UpOf(Body body, double z)
     {
         if (!body.Planar || IsCapped(body)) return ShadowOf(body);
+        // 계단 밑은 빈 곳 — 실제 단면(R56c-1 · 설치 전 검토 M2). 단면을 잇지 못하면 아래의 «z 이상인 부분의 그림자»로(전체 그림자보다 좁다 — 다시 검토 L3).
+        if (body.El.Stair && RealOf(body, z) is { } real) return real;
         long key = (long)Math.Round(z * 1e4);
         if (body.Ups.TryGetValue(key, out var have)) return have;
         var all = new Paths64();

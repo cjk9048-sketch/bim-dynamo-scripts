@@ -22,7 +22,7 @@ namespace DH.Takeoff.Revit.Commands;
 /// ② 는 [다음 단계]에서 모델의 콘크리트를 재어(FormworkReader · FormworkAnalyzer) 대응표 + 3D 로 보여 준다(PlacePartView.Formwork.cs).
 ///  · 넣을 때마다 트랜잭션 하나를 커밋한다. 창이 떠 있는 동안 트랜잭션 그룹을 열어 두고, 닫을 때 하나로 묶는다(Assimilate) —
 ///    Revit 의 실행 취소 한 번으로 이 창에서 한 일(부위·중분류 · [완료]의 산출식 · 거푸집 속성)이 모두 돌아간다.
-///    [처음 상태로 되돌리고 닫기]는 그룹을 되돌리고(RollBack), 트랜잭션 밖인 거푸집 대응표 파일도 열 때로 되돌린다.
+///    [처음 상태로 되돌리고 닫기]는 그룹을 되돌리고(RollBack), 거푸집 대응표도 그 안(모델 · R57 P2)이라 함께 돌아간다.
 ///  · 그룹을 닫지 못하면 Revit 이 나중에 전부 되돌린다(문서) — 그래서 그룹을 연 뒤의 모든 길은 finally 에서 닫는다.
 ///  · 그룹이 Assimilate/Commit 으로 닫혔으면(모델에 남았으면) 무슨 일이 있어도 Result.Succeeded 를 돌려준다.
 ///  · [완료](Complete): 산출식은 필요한 부재만(식이 없거나 틀려진 부재 · '다시 계산 필요' — FormulaAutoFill.PlanRefresh) · 못 만든 부재는
@@ -426,6 +426,8 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         {
             text.AppendLine($"거푸집 객체: 판 {plates.Created}개(일반 모델 · 12 mm)" + (plates.Deleted > 0 ? $" · 전 판 {plates.Deleted}개 지움" : "") +
                             (plates.Failed.Count > 0 ? $" · ★ 못 만든 판 {plates.Failed.Count}개(일지)" : "") + " — 납품 전에 리본 [거푸집 › 거푸집 삭제]");
+            if (FormworkHiddenNote(uidoc, plates.Created) is { Length: > 0 } hidden) text.AppendLine("⚠ " + hidden);
+            if (PlatesNote(plates) is { Length: > 0 } platesNote) text.AppendLine(platesNote);
             if (plates.Suspicious > 0 || plates.ReadBackProblem.Length > 0)
                 text.AppendLine($"  ★ 다시 읽어 보니 걸리는 판 {plates.Suspicious}개(칸을 다 못 적음 {plates.MissingParams} · 칸 값이 다름 {plates.ReadBackDiffers} · 자리 어긋남 {Math.Max(0, plates.Misplaced)})" +
                                 (plates.ReadBackProblem.Length > 0 ? " · 되읽기 오류: " + plates.ReadBackProblem : "") + " — 일지");
@@ -478,6 +480,35 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
             try { uidoc.ActiveView = schedule; }
             catch (Exception ex) { Dialogs.Show(Title, $"일람표를 열지 못했습니다: {ex.Message}\n\n프로젝트 탐색기의 일람표에서 '{FormworkObjects.ScheduleName}'을 열어 주세요."); }
         }
+    }
+
+    // 지금 뷰에서 거푸집 객체가 꺼져 있으면 한 줄(R56a — JACK 2026-10-22 «거푸집 삭제 뒤 다시 [수량산출] → 거푸집 생성이 안 돼»: 일지로는 만들어져
+    // 모델에 남았는데 보이지 않았다 — 확인용 3D 뷰는 거푸집 객체를 숨기고 · [거푸집 끄기]를 한 뷰는 새 판도 꺼진 채다). 읽지 못하면 "".
+    private static string FormworkHiddenNote(UIDocument uidoc, int plates)
+    {
+        if (plates <= 0) return "";
+        try
+        {
+            var doc = uidoc.Document;
+            var view = uidoc.ActiveView;
+            if (view == null || view.IsTemplate || view is ViewSchedule) return "";
+            // 까닭마다 푸는 길이 다르다(계획 검토 L1): 임시 숨기기/격리 · 일반 모델 범주 · 하위 범주(뷰 템플릿이 정하면 템플릿에서) · 판을 낱개로 숨김.
+            var sub = FormworkObjects.FindSubcategory(doc);
+            var parent = Category.GetCategory(doc, BuiltInCategory.OST_GenericModel);
+            bool template = view.ViewTemplateId != ElementId.InvalidElementId;
+            var first = FormworkObjects.Find(doc).FirstOrDefault();
+            string where = $"거푸집 판 {plates}장 — 지금 뷰 «{view.Name}»에서 ";
+            if (first != null && view.IsTemporaryHideIsolateActive() && !view.IsElementVisibleInTemporaryViewMode(TemporaryViewMode.TemporaryHideIsolate, first))
+                return where + "임시 숨기기/격리로 안 보임 · 뷰 아래 [임시 숨기기/격리 재설정]";
+            if (parent != null && view.GetCategoryHidden(parent.Id))
+                return where + "«일반 모델» 범주가 꺼져 있음 · 보이기/그래픽에서 켜기" + (template ? "(뷰 템플릿이 정함)" : "");
+            if (sub != null && view.GetCategoryHidden(sub.Id))
+                return where + (template ? "꺼져 있음 · 뷰 템플릿이 정함(템플릿에서 «DH 거푸집 객체» 켜기)" : "꺼져 있음 · 리본 [거푸집 › 거푸집 켜기]");
+            if (first != null && doc.GetElement(first) is Element plate && plate.IsHidden(view))
+                return where + "판이 숨겨져 있음 · 리본 [거푸집 › 거푸집 켜기]";
+            return "";
+        }
+        catch { return ""; }
     }
 
     // 완료 알림의 본문(JACK 2026-10-21 고름 «핵심 두세 줄 + 자세히 펼치기»): 콘크리트 · 거푸집 합 / 부재 · 줄 · 판 / 새 이름 · 바꾼 식(0 인 것은 뺀다) +
@@ -544,6 +575,16 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         public string ObjectsProblem = "";         // 거푸집 객체를 만들지 못한 까닭("" = 없음)
         public MemberNamer.Outcome? Names;         // 부재 이름(R53b)
         public List<long> VoidsWiped = new();      // 전에 적은 값을 지운 보이드(JACK 2026-10-21)
+        public string VoidProblem = "";            // 보이드 값을 지우다 난 오류("" = 없음)
+        public CalcSheetExporter.Collected? Read;  // ③ 에 들어갈 때 모은 산출근거(R59 — [완료]가 그대로 엑셀로)
+        public bool Prepared;                      // ③ 에 들어갈 때의 일이 끝까지 돌았다(산출근거를 모음)
+
+        /// <summary>
+        /// ③ 에 들어갈 때의 단계가 모두 됐다(R59 계획 검토 M5): 산출식 · 이름 · 거푸집 속성(트랜잭션) · 보이드 · 시트 · 산출근거. 이것만 다시 쓴다 — 아니면 [다음 단계]가
+        /// 다시 돈다(실패한 단계를 다시 시도). 부재별 막힘(그룹 안 · 남이 가진 부재 — 다시 돌아도 같음)은 보지 않는다(설치 전 검토 중간 — ③ 위 띠에 알림).
+        /// </summary>
+        public bool Clean => Prepared && Formulas.Problem.Length == 0 && !Formulas.Plan.Declined && !Formulas.RolledBack
+                             && NamesProblem.Length == 0 && FormworkProblem.Length == 0 && VoidProblem.Length == 0 && Sheet != null && Plan != null;
         public string NamesProblem = "";           // 부재 이름을 다 붙이지 못한 까닭("" = 없음)
         public CalcPlan? Plan;
         public XlsxBook? Book;              // 지은 엑셀(쓰기는 창을 닫아 그룹이 모델에 남은 뒤에 — revit R42 A1)
@@ -573,16 +614,14 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
     //     모델은 되돌아가는데 엑셀만 그 값으로 남는 일이 없게(revit R42 A1 · SaveExcel). 그만두면 창에 머문다 — 채운 식 · 속성은 그대로이고,
     //     다시 [완료]를 누르면 필요한 것만 다시 본다.
     // 모델에 적는 것은 모두 창이 떠 있는 동안의 트랜잭션 그룹 안에서 적는다(창을 닫을 때 하나로 묶인다 — Ctrl+Z 한 번).
-    private static Completion Complete(Window window, PlacePartView view, PickEditor editor, Document doc, Session session, bool dark, Plates plates)
+    private static bool Prepare(Window window, PlacePartView view, PickEditor editor, Document doc, Session session, bool dark, Completion done)
     {
-        // 이 창에서 이미 지은 판(앞의 [완료])으로 시작한다 — 이번 [완료]가 판을 짓기 전에 멈춰도 [닫기] 알림에 판이 나오게(revit-verify R44b L-a).
-        var done = new Completion { Objects = plates.Built };
-        session.Note("완료\t시작");
+        session.Note("③ 산출서 확인\t들어가기 시작");
         // 넣은 뒤 모양이 바뀌었는데 확인하지 않은 부재(R52b — JACK 2026-10-19 인터뷰 «알리고 진행»): 묻고, 계속하면 지금 값으로 만든다(엑셀 «부재 목록»에 남는다).
         // 고칠 수 없는 부재 · 그려지지 않은 부재도 센다 — 확인할 수는 없어도 산출서에는 실린다(R52b core-verify 중간 4).
         // ②-0 보이드(JACK 2026-10-21 «구멍 내는 보이드는 처음부터 빼기 · 이미 적힌 값도 지워줘»): 대상에서 빠진 보이드에 전에 적은 값을 지운다(창의 그룹 안 — Ctrl+Z 한 줄).
-        string voidProblem = view.RunLocked(() => done.VoidsWiped = WipeVoids(doc, session));
-        if (voidProblem.Length > 0) session.Note("완료\t보이드 값 지우기 오류\t" + voidProblem);
+        done.VoidProblem = view.RunLocked(() => done.VoidsWiped = WipeVoids(doc, session));
+        if (done.VoidProblem.Length > 0) session.Note("완료\t보이드 값 지우기 오류\t" + done.VoidProblem);
         int changed = editor.Members.Count(m => m.Value.Changed && !m.Value.IsEmpty);
         if (changed > 0)
         {
@@ -594,7 +633,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
                 "[아니요]는 멈춥니다 — [← 이전 단계]로 ① 에 가서 «확인 필요»를 고르면 그 부재들이 나옵니다.)",
                 Title, MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
             session.Note($"완료\t모양 바뀜 미확인 {changed}\t{(go == MessageBoxResult.Yes ? "계속" : "돌아감")}");
-            if (go != MessageBoxResult.Yes) return done;
+            if (go != MessageBoxResult.Yes) return false;
         }
         FormulaFollow? follow = null;
         string problem = view.RunLocked(() => follow = FollowWithFormulas(doc, session, count => AskCompute(window, count)));
@@ -603,18 +642,18 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         if (done.Formulas.Plan.MayHaveCommitted) session.Committed();
         if (done.Formulas.Problem.Length > 0)
         {
-            view.ShowMessage("산출식을 채우지 못했습니다(엑셀은 저장하지 않았습니다): " + done.Formulas.Problem, true);
-            return done;
+            view.ShowMessage("산출식을 채우지 못했습니다(③ 으로 넘어가지 않았습니다): " + done.Formulas.Problem, true);
+            return false;
         }
         if (done.Formulas.Plan.Declined)
         {
-            view.ShowMessage("산출식을 지금 만들지 않기로 해 엑셀은 저장하지 않았습니다.", true);
-            return done;
+            view.ShowMessage("산출식을 지금 만들지 않기로 해 ③ 으로 넘어가지 않았습니다.", true);
+            return false;
         }
         if (done.Formulas.RolledBack)
         {
-            view.ShowMessage($"산출식이 모델에 저장되지 않았습니다(Revit 이 변경을 되돌림: {done.Formulas.Plan.Status}) — 엑셀은 저장하지 않았습니다.", true);
-            return done;
+            view.ShowMessage($"산출식이 모델에 저장되지 않았습니다(Revit 이 변경을 되돌림: {done.Formulas.Plan.Status}) — ③ 으로 넘어가지 않았습니다.", true);
+            return false;
         }
 
         // ② 식을 못 만든 부재: 하나씩 띄운다(창의 3D 에서 그 부재를 보여 준다).
@@ -668,9 +707,6 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
                              (problem.Length > 0 ? " · 오류: " + problem : ""));
             try { done.Sheet = SheetData(board, editor, names); }
             catch (Exception ex) { session.Note("완료\t거푸집 시트를 짓지 못함\t" + ex); done.FormworkProblem += (done.FormworkProblem.Length > 0 ? " · " : "") + "거푸집 시트를 짓지 못함: " + ex.Message; }
-
-            // 거푸집 객체(R44): 시트를 짓지 못했으면 만들지 않는다(판은 엑셀 줄과 같은 단위다). 못 만들어도 엑셀은 이어서 만든다(알림 창에 까닭).
-            if (done.Sheet is { } sheet) BuildPlates(doc, view, session, board, sheet, plates, done);
         }
 
         // ④ 산출근거 엑셀.
@@ -692,13 +728,27 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         if (read == null)
         {
             view.ShowMessage("산출근거를 모으지 못했습니다: " + problem, true);
-            return done;
+            return false;
         }
-        var plan = done.Plan = read.Plan;
+        done.Plan = read.Plan;
+        done.Read = read;
+        done.Prepared = true;
+        session.Note($"③ 산출서 확인\t들어감\t콘크리트 줄 {read.Plan.Rows.Count} · 실은 부재 {read.Plan.Listed} · 싣지 못한 부재 {read.Plan.Missing} · 거푸집 줄 {done.Sheet?.Lines.Count ?? 0}");
+        return true;
+    }
+
+    // [완료](③ — R59): Prepare 가 모은 것으로 거푸집 객체(저장 창보다 먼저 — JACK 2026-10-16 «저장 취소해도 만들기») → 엑셀 저장 위치 → 쓸 수 있는지 →
+    // 엑셀을 지어 둔다(파일은 창을 닫아 그룹이 모델에 남은 뒤에 쓴다 — revit R42 A1). 그만두면 ③ 에 머문다.
+    private static void Finish(Window window, PlacePartView view, Document doc, Session session, Plates plates, Completion done)
+    {
+        session.Note("완료\t시작");
+        // 거푸집 객체(R44): 시트를 짓지 못했으면 만들지 않는다(판은 엑셀 줄과 같은 단위다). 못 만들어도 엑셀은 이어서 만든다(알림 창에 까닭).
+        if (view.Board is { } board && done.Sheet is { } sheet) BuildPlates(doc, view, session, board, sheet, plates, done);
+        if (done.Read is not { } read || done.Plan is not { } plan) return;
         if (plan.Rows.Count == 0)
         {
             view.ShowMessage("산출근거에 실을 식이 하나도 없습니다 — 엑셀은 저장하지 않았습니다.", true);
-            return done;
+            return;
         }
         string name = SafeName(doc.Title);
         string initDir = !string.IsNullOrEmpty(doc.PathName) && Directory.Exists(Path.GetDirectoryName(doc.PathName))
@@ -717,14 +767,14 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         {
             session.Note("완료\t엑셀 저장을 그만둠");
             view.ShowMessage("엑셀을 저장하지 않았습니다 — [완료]를 다시 누르면 저장 위치를 다시 묻습니다(채운 산출식은 그대로입니다).", true);
-            return done;
+            return;
         }
         string busy = Writable(dlg.FileName);
         if (busy.Length > 0)
         {
             session.Note("완료\t그 파일을 쓸 수 없음\t" + busy);
             view.ShowMessage("그 파일에 쓸 수 없습니다(같은 파일이 엑셀에 열려 있으면 닫고 다시 [완료]를 눌러 주세요): " + busy, true);
-            return done;
+            return;
         }
         string note = $"{DateTime.Now:yyyy-MM-dd HH:mm} 내보냄" +
                       (done.Overlap.Length > 0 ? " · ⚠ " + done.Overlap : "") +
@@ -736,7 +786,6 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         done.Book = CalcSheet.Build(doc.Title, plan.Rows, plan.Elements, note, done.Sheet);
         done.ExcelTarget = dlg.FileName;
         session.Note($"완료\t엑셀 지음(창을 닫고 그룹이 남으면 씀)\t{dlg.FileName}\t줄 {plan.Rows.Count} · 실은 부재 {plan.Listed} · 싣지 못한 부재 {plan.Missing}");
-        return done;
     }
 
     // 이 창에서 지은 거푸집 객체 — [완료]를 다시 눌러도(엑셀 저장을 그만둔 뒤 등) 같은 판을 통째로 다시 짓지 않게 한다(큰 모델은 오래 걸린다).
@@ -792,7 +841,9 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
     private static string ObjectsNote(FormworkObjects.Outcome? o, string problem, FormworkSheetData sheet)
     {
         var slabLines = sheet.Lines.Where(l => l.Cells > 1).ToList();
-        string head = $"완료\t거푸집 객체\t시트 줄 {sheet.Lines.Count}(× n 합 {sheet.Lines.Sum(l => l.Count)} · 슬래브 밑면 한 줄 {slabLines.Count}(칸 {slabLines.Sum(l => l.Units.Count)}))" +
+        var merged = sheet.Lines.Where(l => l.Terms > 1).ToList();   // 공통 수로 묶은 줄(R60)
+        string head = $"완료\t거푸집 객체\t시트 줄 {sheet.Lines.Count}(× n 합 {sheet.Lines.Sum(l => l.Count)} · 슬래브 밑면 한 줄 {slabLines.Count}(칸 {slabLines.Sum(l => l.Units.Count)})" +
+                      $" · 묶은 줄 {merged.Count}(원래 줄 {merged.Sum(l => l.Terms)}))" +
                       $" · 줄 조각 {sheet.Units.Count}(줄에 든 조각 {sheet.Lines.Sum(l => l.Units.Count)}) · 판 {sheet.Plates.Count}" +
                       (sheet.Plates.Count != sheet.Units.Count ? $"(구간을 넘어 이은 판 {sheet.Plates.Count(p => p.Parts.Count > 1)})" : "") +
                       (o != null && o.Parts != o.Units ? $" · 판에 든 줄 조각 {o.Parts}" : "") +
@@ -807,6 +858,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
                $" · 칸 못 적음 {o.MissingParams} · 일람표 {o.Schedule} · {o.Status}" + (o.Error.Length > 0 ? "(" + o.Error + ")" : "") +
                $" · 되읽기 판 {o.ReadBack} · 칸 다름 {o.ReadBackDiffers} · 자리 어긋남 {o.Misplaced} · 방 경계 끔 {o.RoomBoundingOff}" +
                (o.ReadBackProblem.Length > 0 ? " · 되읽기 오류: " + o.ReadBackProblem : "") +
+               $" · Revit 에서 지운 판 {(o.Missing < 0 ? "모름" : o.Missing.ToString(CultureInfo.InvariantCulture))} · 기록 못 붙임 {o.Unstamped}" + (o.ListProblem.Length > 0 ? " · 판 목록 못 적음: " + o.ListProblem : "") +
                (o.MaterialProblem.Length > 0 ? " · 재료 못 만듦: " + o.MaterialProblem : "") +
                (o.SubcategoryProblem.Length > 0 ? " · 하위 범주 못 만듦: " + o.SubcategoryProblem : "") +
                (o.TypeProblem.Length > 0 ? " · 유형 «거푸집» 못 만듦: " + o.TypeProblem : "") + (o.Untyped > 0 ? $" · 유형을 못 붙인 판 {o.Untyped}" : "") + $" · {o.Ms} ms";
@@ -1023,18 +1075,18 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         if (follow.Problem.Length > 0)
         {
             text.AppendLine("산출식을 이어서 하지 못했습니다: " + follow.Problem);
-            text.AppendLine(plan.MayHaveCommitted ? "  (일부는 모델에 적혔을 수 있습니다 — [수량산출]의 [완료]를 다시 눌러 맞춰 주세요.)"
-                                                  : "  ([수량산출]의 [완료]를 다시 눌러 주세요.)");
+            text.AppendLine(plan.MayHaveCommitted ? "  (일부는 모델에 적혔을 수 있습니다 — [수량산출] ② 의 [다음 단계]를 다시 눌러 맞춰 주세요.)"
+                                                  : "  ([수량산출] ② 의 [다음 단계]를 다시 눌러 주세요.)");
             return;
         }
         if (plan.Declined)
         {
-            text.AppendLine($"산출식은 나중에 하기로 했습니다(식을 새로 만들 부재 {plan.Recompute}개) — [수량산출]의 [완료]를 다시 눌러 주세요.");
+            text.AppendLine($"산출식은 나중에 하기로 했습니다(식을 새로 만들 부재 {plan.Recompute}개) — [수량산출] ② 의 [다음 단계]를 다시 눌러 주세요.");
             return;
         }
         if (follow.RolledBack)
         {
-            text.AppendLine($"★ 산출식이 모델에 저장되지 않았습니다(Revit 이 변경을 되돌림: {plan.Status}). [수량산출]의 [완료]를 다시 눌러 주세요.");
+            text.AppendLine($"★ 산출식이 모델에 저장되지 않았습니다(Revit 이 변경을 되돌림: {plan.Status}). [수량산출] ② 의 [다음 단계]를 다시 눌러 주세요.");
             return;
         }
         text.AppendLine("산출식(필요한 부재만):");
@@ -1111,39 +1163,113 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         return string.Join("\n", notices);
     }
 
-    // 거푸집 대응표 파일(트랜잭션 밖 — 그룹을 되돌려도 돌아가지 않는다): 창을 열 때의 글을 떠 두고, [처음 상태로 되돌리고 닫기]에서 되돌린다.
-    private sealed class RulesFile
+    // 거푸집 대응표(R57 P2 — 모델 안 · FormworkRulesStore): 모델에 기록이 있으면 그것 · 없고 이 PC 에 옛 파일(R57 전 — %APPDATA%\DH.Takeoff\map\{문서 제목}_거푸집표.tsv)이
+    // 있으면 한 번 묻고 모델로 옮긴다(계획 검토 M5 — 문서 이름이 같은 다른 모델의 파일일 수 있어 고친 줄 · 지운 판 수를 보이고 묻는다). 옮기면 바로 모델에 적는다(그룹 안).
+    // 옛 파일은 지우지 않는다. «아니요»도 빈 대응표를 모델에 적어 그 결정을 남긴다(열 때마다 다시 묻지 않게 — P2 검토 중간 2).
+    // 옮기지 못하면 빈 대응표로 센다(창의 대응표 = 모델의 대응표 — 다른 PC 에서 같은 수량이 나오게).
+    // 돌려주는 값 = 처음 대응표 · 알릴 것 · 옛 파일을 이 창에서 모델로 옮겼는가.
+    private static (FormworkRules rules, string notice, bool migrated) LoadRules(Document doc, Session session)
     {
-        public required string Path;
-        public bool Existed;
-        public string? Before;          // 열 때의 글(읽지 못했으면 null — 그때는 되돌리지 않는다)
-        public bool Saved;              // 이 창에서 한 번이라도 적었다
-
-        public static RulesFile Snapshot(string path)
+        var stored = FormworkRulesStore.Read(doc);
+        string notice = FormworkRulesStore.Notice(doc, stored);
+        if (stored.Exists || stored.Problem.Length > 0)
         {
-            var file = new RulesFile { Path = path };
-            try
-            {
-                file.Existed = File.Exists(path);
-                file.Before = file.Existed ? File.ReadAllText(path, Encoding.UTF8) : "";
-            }
-            catch { file.Before = null; }
-            return file;
+            session.Note($"대응표 읽음\t모델 · 기록 {stored.Copies}벌 · 합칠 때 다른 값 {stored.Conflicts} · 고친 줄 {stored.Rules.Count} · 뺀 판 {stored.Rules.DropCount} · 옮긴 판 {stored.Rules.MoveCount}" +
+                         (notice.Length > 0 ? " · " + notice.Replace('\n', ' ') : ""));
+            return (stored.Rules, notice, false);
         }
+        string path = FormworkReader.RulesPath(doc);
+        FormworkRules old;
+        try { old = FormworkRules.Load(path); }
+        catch (Exception ex) { session.Note("옛 대응표 파일 읽지 못함\t" + ex.Message); return (new FormworkRules(), notice, false); }
+        if (old.Count == 0 && old.DropCount == 0 && old.MoveCount == 0) return (new FormworkRules(), notice, false);
+        var answer = MessageBox.Show(
+            $"이 PC 에 «{doc.Title}» 이름의 거푸집 대응표 기록이 있습니다(고친 줄 {old.Count} · 지운 판 {old.DropCount} · 옮긴 판 {old.MoveCount}).\n" +
+            "이제부터 대응표는 모델 안에 적습니다. 이 기록을 이 모델로 옮길까요?",
+            Title, MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.Yes);
+        bool move = answer == MessageBoxResult.Yes;
+        var start = move ? old : new FormworkRules();
+        string problem = FormworkRulesStore.Save(doc, start);
+        if (problem.Length == 0) session.Committed();
+        session.Note($"옛 대응표 파일 {(move ? "→ 모델" : "옮기지 않음 — 빈 대응표를 모델에 적음")}\t고친 줄 {old.Count} · 뺀 판 {old.DropCount} · 옮긴 판 {old.MoveCount}" +
+                     (problem.Length > 0 ? " · 모델에 적지 못함: " + problem : " · 적음"));
+        if (problem.Length > 0)
+            return (new FormworkRules(), (notice.Length > 0 ? notice + "\n" : "") + $"옛 대응표를 모델에 {(move ? "옮기지" : "적지")} 못해 빈 대응표로 셉니다: " + problem, false);
+        return (start, notice, move);
+    }
 
-        /// <summary>열 때로 되돌린다("" = 됨 · 할 것이 없음, 아니면 까닭).</summary>
-        public string Restore()
+    // Revit 판의 종류 칸을 받아들인다(R57 P3 — JACK 2026-10-23 «그 판 한 장만»): 창을 열 때 한 번 · 그룹 안 트랜잭션 하나(대응표 + 받아들인 판의 기록 —
+    // «처음 상태로»가 함께 되돌림). 대응표를 적을 수 없으면(남이 가짐 · 못 읽음 · 더 새 판) 받아들이지 않고 알린다. 돌려주는 값 = 받아들인 뒤 대응표 · 알릴 것 · 적었는가.
+    private static (FormworkRules rules, string notice, bool took) TakePlateKinds(Document doc, FormworkRules rules, Session session)
+    {
+        List<FormworkPlateIntake.Seen> seen;
+        try { seen = FormworkPlateStore.Scan(doc); }
+        catch (Exception ex) { session.Note("판 종류 읽기 오류\t" + ex.Message); return (rules, "", false); }
+        if (seen.Count == 0) return (rules, "", false);
+        var copy = FormworkRules.Parse(rules.ToText());
+        var o = FormworkPlateIntake.Apply(seen, copy);
+        foreach (string line in o.Log) session.Note("판 종류\t" + line);
+        var notes = new List<string>();
+        bool took = false;
+        string problem = "";
+        if (o.Taken.Count > 0)
         {
-            if (!Saved) return "";
-            if (Before == null) return "열 때의 대응표 파일을 읽지 못해 되돌리지 않았습니다";
-            try
+            problem = FormworkRulesStore.Save(doc, copy, d => FormworkPlateStore.MarkTaken(d, o.Taken));
+            if (problem.Length == 0)
             {
-                if (Existed) File.WriteAllText(Path, Before, new UTF8Encoding(true));
-                else if (File.Exists(Path)) File.Delete(Path);
-                return "";
+                session.Committed();
+                rules = copy;
+                took = true;
+                notes.Add($"Revit 판 {o.Taken.Count}장의 종류를 받아들였습니다");
             }
-            catch (Exception ex) { return ex.Message; }
+            else notes.Add($"Revit 에서 종류를 바꾼 판 {o.Taken.Count}장을 받아들이지 못했습니다: {problem}");
         }
+        if (o.Locked > 0) notes.Add($"다른 사용자가 가진 판 {o.Locked}장의 종류는 받아들이지 못했습니다");
+        if (o.Unknown.Count > 0) notes.Add($"판 종류 칸의 모르는 값 {o.Unknown.Count}장(«{o.Unknown[0].text}»{(o.Unknown.Count > 1 ? " …" : "")}) — 쓰지 않음");
+        if (o.Copies > 0) notes.Add($"복사한 판 {o.Copies}장은 쓰지 않습니다([완료] 때 지워짐)");
+        if (o.Empty > 0) notes.Add($"판 기록이 비어 종류를 받아들이지 못한 판 {o.Empty}장([완료] 한 번 뒤부터)");
+        if (o.ValuesChanged > 0) notes.Add($"판 {o.ValuesChanged}장의 다른 칸(넓이 · 식 …)은 고쳐도 쓰지 않습니다([완료] 때 다시 적힘)");
+        if (o.Unrecorded > 0) notes.Add($"[완료] 전에 만든 판 {o.Unrecorded}장 — 종류를 바꿔도 읽지 않음([완료] 한 번 뒤부터)");
+        int missing = -1;
+        if (o.Unrecorded == 0 && FormworkPlateStore.ReadList(doc) is { } listed)
+        {
+            var present = FormworkPlateStore.PlateUids(doc);
+            // 판이 있는데 목록의 판이 하나도 없으면 오래된 목록 — 모름(P3 다시 검토 낮음 3).
+            bool stale = present.Count > 0 && listed.Count > 0 && !listed.Any(present.Contains);
+            missing = stale ? -1 : listed.Count(u => !present.Contains(u));
+            if (missing > 0) notes.Add($"Revit 에서 지운 판 {missing}장 — [완료] 때 다시 만듭니다");
+        }
+        session.Note($"판 종류 받아들이기\t판 {seen.Count} · 받아들임 {o.Taken.Count}" + (problem.Length > 0 ? "(못 적음: " + problem + ")" : "") +
+                     $" · 기록 없음 {o.Unrecorded} · 복사본 {o.Copies} · 남이 가짐 {o.Locked} · 모르는 값 {o.Unknown.Count} · 다른 칸 바뀜 {o.ValuesChanged} · 지운 판 {(missing < 0 ? "모름" : missing.ToString(CultureInfo.InvariantCulture))}");
+        return (rules, string.Join("\n", notes), took);
+    }
+
+    // ③ 에 보일 것(R59): 엑셀과 같은 항목(콘크리트 줄 · 거푸집 줄 — 이름으로 묶인 시트) · 미산출 부재(이름 · 유형 · 까닭) · ② 위 띠의 알림 한 줄.
+    private static PlacePartView.ReviewData ReviewOf(Completion done, string boardNotice)
+    {
+        var items = CalcSheet.Items(done.Plan?.Rows ?? new List<CalcRow>(), done.Sheet);
+        var missing = (done.Plan?.Elements ?? new List<CalcElement>()).Where(e => !e.Excluded && e.Missing.Length > 0).OrderBy(e => e.Id)
+            .Select(e => (e.Id, $"{(e.Name.Length > 0 ? e.Name + " · " : "")}{e.Type} · Id {e.Id}", e.Missing)).ToList();
+        var notes = new List<string>();
+        if (done.Overlap.Length > 0) notes.Add(done.Overlap);
+        if (done.Plan is { Rows.Count: 0 }) notes.Add("산출근거에 실을 콘크리트 식이 없습니다 — [완료]는 엑셀을 저장하지 않습니다");
+        if (done.FormworkProblem.Length > 0) notes.Add("거푸집 속성: " + done.FormworkProblem);
+        if (done.NamesProblem.Length > 0) notes.Add("부재 이름: " + done.NamesProblem);
+        int formworkFailed = done.Formwork?.Failed.Count ?? 0, reviewFailed = done.Review?.Failed.Count ?? 0;
+        if (formworkFailed + reviewFailed > 0)
+            notes.Add($"모델에 적지 못한 부재 — 거푸집 속성 {formworkFailed} · 식 {reviewFailed}(그룹 안 · 다른 사용자가 가진 부재 등 — 일지)");
+        if (boardNotice.Length > 0) notes.Add(boardNotice);
+        return new PlacePartView.ReviewData(items, missing, string.Join("\n", notes));
+    }
+
+    // [완료] 알림의 판 기록 줄(R57 P3): Revit 에서 지운 판을 다시 만듦(JACK «다시 만들고 알림») · 처음 값 기록을 못 붙인 판.
+    private static string PlatesNote(FormworkObjects.Outcome plates)
+    {
+        var lines = new List<string>();
+        if (plates.Missing > 0) lines.Add($"Revit 에서 지운 판 {plates.Missing}장 — 이번 [완료]가 다시 지었습니다(② 에서 지운 판은 빼고) · 빼려면 ② 에서 지우거나 판의 종류를 «세지 않음»으로");
+        if (plates.Unstamped > 0 || plates.ListProblem.Length > 0)
+            lines.Add($"  ★ 처음 값 기록을 못 붙인 판 {plates.Unstamped}개" + (plates.ListProblem.Length > 0 ? " · 판 목록을 못 적음: " + plates.ListProblem : "") + " — 그 판은 종류를 바꿔도 읽지 않습니다(일지)");
+        return string.Join("\n", lines);
     }
 
     // 나중에 치는 부재(중간슬래브 · 트라프 · 헌치 · 받침 …)가 결합에서 구조체를 깎은 곳의 알림 — ② 위 띠와 [완료] 알림 창이 같이 쓴다.
@@ -1152,24 +1278,19 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         "([기준대로 바꾸기] 또는 [모두 기준대로]) 구조체가 자르게 바뀝니다(그 뒤 다시 [수량산출]).";
 
     // ② 의 상태를 짓는다: 모델의 콘크리트 전부(산출식 · 거푸집 면 확인과 같은 거르기)를 재고, 대응표를 건다.
-    // 대응표: 앞서 ② 에서 고친 것이 있으면 그것(이 창의 메모리 — 파일 저장에 실패했어도 고친 종류가 사라지지 않게, revit R42 L2), 없으면 파일.
+    // 대응표: 앞서 ② 에서 고친 것이 있으면 그것(이 창의 메모리 — 모델에 적지 못했어도 고친 종류가 사라지지 않게, revit R42 L2), 없으면 파일.
     // 곡면은 Revit 이 나눠 준 세모를 붙인다(Core 는 곡면의 세모를 만들지 못한다). notice = 창에 알릴 것("" = 없음).
     // 나중에 치는 부재(받침 · PAD · 디딤판 — 부위 목록의 '나중에 침')는 ① 의 지금 목록으로 정한다: ① 에서 표시를 바꾸면 목록이 모델에 적혀
     // editor.Writes 가 늘고, [다음 단계]에서 다시 잰다.
-    private static FormworkBoard BuildBoard(Document doc, ZoneScene.Data data, string rulesPath, FormworkRules? current, Session session, PickEditor editor, out string notice)
+    private static FormworkBoard BuildBoard(Document doc, ZoneScene.Data data, FormworkRules initial, string initialProblem, FormworkRules? current, Session session, PickEditor editor, out string notice)
     {
         var watch = Stopwatch.StartNew();
         var later = editor.Parts.Where(PartCatalog.IsLater).Select(p => p.Name).ToHashSet(StringComparer.Ordinal);
         // 겹친 자리 순위도 ① 의 지금 목록으로(R54 — revit-verify 계획 M3: 순위 출처 하나 · 수량산출은 ① 의 메모리 값).
         var scene = FormworkReader.Read(doc, Array.Empty<ElementId>(), later.Contains, new DeductRank.Table(editor.Parts));
-        string rulesProblem = "";
-        FormworkRules rules;
-        if (current != null) rules = FormworkRules.Parse(current.ToText());     // 사본 — 옛 판과 같은 표를 나눠 쓰지 않게
-        else
-        {
-            try { rules = FormworkRules.Load(rulesPath); }
-            catch (Exception ex) { rules = new FormworkRules(); rulesProblem = ex.Message; }
-        }
+        // 대응표: 앞서 ② 에서 고친 것(이 창의 메모리) · 없으면 창을 열 때 읽은 모델의 대응표(R57 P2). 사본 — 옛 판과 같은 표를 나눠 쓰지 않게.
+        string rulesProblem = current != null ? "" : initialProblem;
+        var rules = FormworkRules.Parse((current ?? initial).ToText());
         // 부위의 거푸집 처음 값(R47 — 계단 · 턱·맨홀 · DRY AREA = 합판 3회)은 ① 목록의 묶음으로 본다(목록에서 묶음을 옮긴 부위도 그대로 — core-verify R47 L2).
         var groups = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var p in editor.Parts) groups.TryAdd(p.Name, p.Group);
@@ -1203,7 +1324,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
             $" · 가려진 줄 {board.HiddenTypeRules.Count}" +
             (board.HiddenTypeRules.Count > 0 ? "(" + string.Join(", ", board.HiddenTypeRules.Take(6).Select(h => $"{h.type}·{h.group}={h.item}")) + ")" : "") +
             $" · 높이 구간 {(options.Bands.Count > 0 ? string.Join(",", options.Bands) + " m(이어진 옆면이 7 m 넘는 유로폼 있음)" : "없음")}" +
-            $" · 수직면 덩어리 {FormworkAnalyzer.LastGrouping.groups}(한 고리 아니라 안 묶음 {FormworkAnalyzer.LastGrouping.refused} · {FormworkAnalyzer.LastGrouping.ms} ms)" +
+            $" · 수직면 덩어리 {FormworkAnalyzer.LastGrouping.groups}(종류만 따라감 — R57 · {FormworkAnalyzer.LastGrouping.ms} ms)" +
             $" · 순위 문맥 {FormworkAnalyzer.LastContexts.contexts}(마지막 재기 {FormworkAnalyzer.LastContexts.ms} ms — R54)" +
             $" · 덩어리로 값 바뀐 조각 {lumpChanges.Sum(c => c.count)}({lumpChanges.Sum(c => c.area).ToString("0.##", CultureInfo.InvariantCulture)} ㎡" +
             (lumpChanges.Count > 0 ? ": " + string.Join(" · ", lumpChanges.Take(6).Select(c => FormattableString.Invariant($"{c.type} {c.from}→{c.to} {c.count}개 {c.area:0.##}"))) : "") + ")" +
@@ -1221,8 +1342,20 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
                 string.Join(" · ", returned.Take(12).Select(x => FormattableString.Invariant($"{x.id} {x.area:0.####}"))) +
                 $") · 결합에서 구조체를 깎은 곳 {scene.LaterCuts.Count}(" + string.Join(" · ", scene.LaterCuts.Take(12).Select(c => $"{c.later}→{c.cut}")) + ")");
         }
+        // Revit 계단(R56c-1): 둘레 콘크리트로 넣은 수 + 계단마다 한 줄(런 · 참 · 재료 · 형상 출처 · 체적 — 계단을 부재로 세기(R56c-2) 전에 첫 실행 값을 본다).
+        if (scene.StairLines.Count > 0)
+        {
+            session.Note($"계단(둘레 콘크리트)\t계단 {scene.StairLines.Count} · 콘크리트로 넣음 {scene.StairContexts}");
+            foreach (string line in scene.StairLines) session.Note("  계단\t" + line);
+        }
+        // «부위와 모양이 안 맞음»(R57 P4 — 경고만 · 셈은 그대로): 유형 이름이 다른 부위 묶음을 가리킴 · 받침류인데 밑면이 바닥판 위 1 m 넘게 떠 있음.
+        var odd = FormworkPartCheck.Check(results, part => groups.TryGetValue(part, out var g) && g.Length > 0 ? g : null);
+        foreach (var f in odd) session.Note($"부위 경고\t{f.Id}\t{f.Type}\t{f.Part}\t{f.Text}");
+        var oddIds = odd.Select(f => f.Id).Distinct().ToList();
         var notes = new List<string>();
-        if (rulesProblem.Length > 0) notes.Add("대응표 파일을 읽지 못해 초안 규칙으로 셉니다: " + rulesProblem);
+        if (rulesProblem.Length > 0) notes.Add(rulesProblem);
+        if (oddIds.Count > 0)
+            notes.Add($"부위와 모양이 안 맞는 부재 {oddIds.Count} — Id {string.Join(", ", oddIds.Take(4))}{(oddIds.Count > 4 ? " …" : "")}(① 부위 확인)");
         // 나중 부재가 구조체를 깎은 결합: 구조체 면에 홈이 남아 벽이 전체 높이가 되지 않는다 — 할 일을 적는다(revit-verify R46 M1).
         session.LaterCuts = scene.LaterCuts.Count;
         if (scene.LaterCuts.Count > 0) notes.Add(LaterCutsNote(scene.LaterCuts.Count));
@@ -1246,25 +1379,84 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         new WindowInteropHelper(window).Owner = owner;
         bool revert = false;
         Completion? completion = null;
-        var rules = RulesFile.Snapshot(FormworkReader.RulesPath(doc));
+        var (initialRules, initialProblem, rulesMigrated) = LoadRules(doc, session);
+        // Revit 판의 종류 칸(R57 P3) — 대응표를 읽은 뒤 그 위에 받아들인다.
+        var (takenRules, plateNote, platesTaken) = TakePlateKinds(doc, initialRules, session);
+        initialRules = takenRules;
+        if (plateNote.Length > 0) initialProblem = initialProblem.Length > 0 ? initialProblem + "\n" + plateNote : plateNote;
+        bool rulesSaved = false;
+        // 모델에 적힌 대응표의 글(마지막으로 적었거나 읽은 것) · 적지 못한 까닭: 창의 대응표가 모델과 다른 채로는 [완료]를 하지 않는다
+        // (부재 속성 · 판 · 엑셀이 모델에 없는 대응표로 나가 다른 PC 에서 다른 수량이 되지 않게 — P2 검토 중간 3).
+        string rulesInModel = initialRules.ToText();
+        string rulesUnsaved = "";
         var plates = new Plates();
+        string boardNotice = "";      // ② 위 띠의 알림(③ 에도 한 줄 — R59 계획 §4 · ② 를 지을 때 정함)
+        // ③ 산출서 확인(R59): ③ 에 들어갈 때 산출식 · 이름 · 거푸집 속성을 모델에 적고(Prepare) 그 결과로 산근을 보인다. 표시(보드 · ① 에서 적은 횟수 ·
+        // 대응표 글)가 같고 완전히 된 Prepare 면 다시 돌지 않는다(계획 검토 M5). prepareWrote = 이 창에서 Prepare 가 모델에 무언가 적었다(닫기 확인 — M3).
+        (FormworkBoard? board, int writes, string rules) PrepKey() => (view.Board, editor.Writes, view.Board?.Rules.ToText() ?? "");
+        (FormworkBoard? board, int writes, string rules)? preparedKey = null;
+        bool prepareWrote = false, closingChecked = false;
+        bool Fresh() => completion is { Clean: true } && preparedKey is { } key && ReferenceEquals(key.board, view.Board) && key.writes == editor.Writes && key.rules == (view.Board?.Rules.ToText() ?? "");
         view.Close += () => window.Close();
+        view.Review += () =>
+        {
+            // 차례: Busy → 대응표를 모델에 적지 못함 → 처리 중 표시(계획 검토 M4 — 확인 창 · 물음이 도는 틈에 쌓인 누르기가 또 돌지 않게).
+            if (view.Busy || view.Board is not { } now) return;
+            if (rulesUnsaved.Length > 0 && now.Rules.ToText() == rulesInModel) rulesUnsaved = "";   // 되돌려 모델과 같아졌다
+            if (rulesUnsaved.Length > 0)
+            {
+                session.Note("③ 산출서 확인\t막음 — 대응표를 모델에 적지 못함\t" + rulesUnsaved);
+                view.ShowMessage("거푸집 대응표를 모델에 적지 못해 넘어갈 수 없습니다(고친 것을 되돌리거나 다시 고쳐 적어 주세요): " + rulesUnsaved, true);
+                return;
+            }
+            if (Fresh() && completion is { } same)
+            {
+                session.Note("③ 산출서 확인\t바뀐 것 없음 — 앞서 모은 산근 그대로");
+                view.ShowReview(ReviewOf(same, boardNotice));
+                return;
+            }
+            var watch = Stopwatch.StartNew();
+            var done = new Completion { Objects = plates.Built };
+            int commitsBefore = session.Commits;
+            bool ok = false;
+            view.Held = true;
+            try { ok = Prepare(window, view, editor, doc, session, dark, done); }
+            finally
+            {
+                view.Held = false;
+                // 예외가 나도 적은 것은 기록한다(닫기 확인 — 설치 전 검토 낮음).
+                if (session.Commits > commitsBefore) prepareWrote = true;
+                completion = done;
+                preparedKey = PrepKey();
+            }
+            session.Note($"③ 산출서 확인\t{(ok ? "들어감" : "멈춤")} · 완전히 됨 {(done.Clean ? "O" : "X")} · {watch.ElapsedMilliseconds} ms");
+            if (ok) view.ShowReview(ReviewOf(done, boardNotice));
+        };
+        view.ReviewBack += () => session.Note("걸음\t③ → ② 거푸집면 설정");
         view.Finish += () =>
         {
-            if (view.Busy) return;
-            // [완료] 전체를 '처리 중'으로 묶는다: 그 안의 작은 창(산출식 확인 · 저장 위치 · 물음)이 도는 틈에 쌓여 있던 누르기가
-            // [완료] · [다음 단계] · [이전 단계] · [닫기] · 되돌리기를 또 돌리지 않게(revit R42 중간 ① — 창의 Busy 가 이 표시까지 본다).
+            if (view.Busy || completion is not { Prepared: true } done) return;
+            // ② · ① 에서 바뀐 뒤 그대로 [완료]로 오는 길은 없지만(③ 은 [다음 단계]로만 온다) 한 번 더 본다(계획 검토 H1).
+            if (!(preparedKey is { } key && ReferenceEquals(key.board, view.Board) && key.writes == editor.Writes && key.rules == (view.Board?.Rules.ToText() ?? "")))
+            {
+                view.ShowMessage("② 에서 바뀐 것이 있습니다 — [← 이전 단계] 뒤 [다음 단계]를 다시 눌러 주세요.", true);
+                return;
+            }
+            // [완료] 전체를 '처리 중'으로 묶는다: 그 안의 작은 창(저장 위치 · 물음)이 도는 틈에 쌓여 있던 누르기가 또 돌지 않게(revit R42 중간 ①).
             view.Held = true;
-            try { completion = Complete(window, view, editor, doc, session, dark, plates); }
+            try { Finish(window, view, doc, session, plates, done); }
             finally { view.Held = false; }
-            if (completion.Ready) window.Close();
+            if (done.Ready) window.Close();
         };
         view.RevertAll += () =>
         {
             if (view.Busy) return;
-            if (session.Commits == 0 && !rules.Saved) { view.ShowMessage("이 창에서 모델에 적거나 고친 것이 없어 되돌릴 것이 없습니다."); return; }
+            if (session.Commits == 0 && !rulesSaved && !rulesMigrated && !platesTaken && !prepareWrote) { view.ShowMessage("이 창에서 모델에 적거나 고친 것이 없어 되돌릴 것이 없습니다."); return; }
             var answer = MessageBox.Show(window,
-                $"이 창을 연 뒤에 넣거나 고친 것을 모두 없던 일로 하고 닫을까요?\n(모델에 적은 것 {editor.Writes}번" + (rules.Saved ? " · 거푸집 대응표에서 고친 것" : "") +
+                $"이 창을 연 뒤에 넣거나 고친 것을 모두 없던 일로 하고 닫을까요?\n(모델에 적은 것 {editor.Writes}번" +
+                (rulesSaved ? " · 거푸집 대응표에서 고친 것" : rulesMigrated ? " · 옛 대응표를 모델로 옮긴 것" : "") +
+                (platesTaken ? " · Revit 판에서 받아들인 종류" : "") +
+                (prepareWrote ? " · ③ 에 들어가며 적은 산출식 · 부재 이름 · 거푸집 속성" : "") +
                 (plates.Built is { Committed: true } built ? $" · [완료]에서 만든 거푸집 객체 {built.Created}개" : "") + "이 모두 되돌려집니다.)",
                 Title, MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
             if (answer != MessageBoxResult.Yes) return;
@@ -1273,7 +1465,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         };
 
         // ② 거푸집면 설정: [다음 단계]를 누를 때 모델의 콘크리트 전부를 잰다. ① 에서 부위를 바꾸면(버림 콘크리트 등) 거푸집이 달라질 수 있어,
-        // 그 사이 모델에 적은 것이 있으면 다시 잰다(대응표는 파일에서 다시 읽는다 — ② 에서 고친 것은 이미 파일에 있다).
+        // 그 사이 모델에 적은 것이 있으면 다시 잰다(대응표는 창의 메모리 것 — ② 에서 고친 것은 모델에도 적혀 있다).
         FormworkBoard? board = null;
         int boardAt = -1;
         view.Next += () =>
@@ -1282,7 +1474,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
             {
                 FormworkBoard? made = null;
                 string note = "";
-                string problem = view.RunLocked(() => made = BuildBoard(doc, data, rules.Path, board?.Rules, session, editor, out note));
+                string problem = view.RunLocked(() => made = BuildBoard(doc, data, initialRules, initialProblem, board?.Rules, session, editor, out note));
                 if (made == null)
                 {
                     session.Note("거푸집\t재지 못함\t" + problem);
@@ -1291,6 +1483,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
                 }
                 board = made;
                 boardAt = editor.Writes;
+                boardNotice = note;
                 view.ShowFormwork(board);
                 if (note.Length > 0) view.ShowMessage(note, true);
             }
@@ -1298,25 +1491,43 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
             session.Note("걸음\t② 거푸집면 설정");
         };
         view.Back += () => session.Note("걸음\t① 부위 · 중분류");
+        // 대응표를 고칠 때마다 모델에 적는다(R57 P2 — 트랜잭션 하나 · 이 창의 그룹 안: [처음 상태로 되돌리고 닫기]는 그룹째 되돌려 대응표도 돌아간다).
         view.SaveRules = () =>
         {
             var now = view.Board?.Rules;
             if (now == null) return "";
-            try
+            string text = now.ToText();
+            string problem = FormworkRulesStore.Save(doc, now);
+            if (problem.Length == 0)
             {
-                now.Save(rules.Path);
-                rules.Saved = true;
-                session.Note($"대응표 적음\t고친 줄 {now.Count} · 뺀 판 {now.DropCount}\t{rules.Path}");
-                return "";
+                rulesSaved = true;
+                rulesInModel = text;
+                rulesUnsaved = "";
+                session.Committed();
+                session.Note($"대응표 적음\t고친 줄 {now.Count} · 뺀 판 {now.DropCount} · 옮긴 판 {now.MoveCount}\t모델");
             }
-            catch (Exception ex)
+            else
             {
-                session.Note("대응표 적지 못함\t" + ex.Message);
-                return ex.Message;
+                rulesUnsaved = text == rulesInModel ? "" : problem;   // 되돌려 모델과 같아졌으면 막을 것이 없다
+                session.Note("대응표 적지 못함\t" + problem + (rulesUnsaved.Length > 0 ? "\t[완료] 막음" : "\t모델과 같음"));
             }
+            return problem;
         };
-        // 모델에 적는 중(트랜잭션이 열려 있다)에는 창을 닫지 못한다.
-        window.Closing += (_, e) => { if (view.Busy) e.Cancel = true; };
+        // 모델에 적는 중(트랜잭션이 열려 있다)에는 창을 닫지 못한다. ③ 에 들어가며 모델에 적은 뒤 ② · ① 에서 바뀌었는데 그대로 닫으면 한 번 묻는다
+        // (산출식 · 이름 · 거푸집 속성이 옛 값 — 계획 검토 M3 · 다시 검토 낮음 1 · 2: [닫기] · 창 X 모두 · [완료] · [처음 상태로]는 묻지 않음).
+        window.Closing += (_, e) =>
+        {
+            if (view.Busy) { e.Cancel = true; return; }
+            bool current = completion is { Prepared: true } && preparedKey is { } k && ReferenceEquals(k.board, view.Board) && k.writes == editor.Writes && k.rules == (view.Board?.Rules.ToText() ?? "");
+            if (revert || closingChecked || completion?.Ready == true || !prepareWrote || current) return;
+            var answer = MessageBox.Show(window,
+                "③ 에 들어간 뒤 바뀐 것이 있어 산출식 · 부재 이름 · 거푸집 속성이 지금 값과 다릅니다(엑셀 · 거푸집 객체는 만들지 않았습니다).\n" +
+                "그래도 닫을까요? ([아니요] 뒤 [다음 단계]를 다시 누르면 반영됩니다.)",
+                Title, MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
+            session.Note("창 닫기\t③ 뒤 바뀐 채 닫기 물음\t" + (answer == MessageBoxResult.Yes ? "닫음" : "머묾"));
+            if (answer != MessageBoxResult.Yes) { e.Cancel = true; return; }
+            closingChecked = true;
+        };
         // 창이 떠 있는 동안 처리기에서 새는 오류: 그냥 두면 ShowDialog 밖으로 튀어 창이 닫힌다 — 창에 적고 머문다.
         System.Windows.Threading.DispatcherUnhandledExceptionEventHandler onError = (_, e) =>
         {
@@ -1336,12 +1547,8 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         window.ContentRendered += (_, _) => session.Note($"창이 그려짐\t{shown.ElapsedMilliseconds} ms\t소프트웨어로만 그림 {(RenderOptions.ProcessRenderMode == RenderMode.SoftwareOnly ? "O" : "X")}");
         try { window.ShowDialog(); }
         finally { window.Dispatcher.UnhandledException -= onError; }
-        if (revert)
-        {
-            string restored = rules.Restore();
-            if (rules.Saved) session.Note("대응표 되돌림\t" + (restored.Length == 0 ? "됨" : restored));
-        }
-        session.Note($"창 닫힘\t적은 횟수 {editor.Writes}\t처음 상태로 {(revert ? "O" : "X")}\t걸음 {view.Step + 1}\t대응표 고침 {(rules.Saved ? "O" : "X")}\t완료 {(completion?.Saved == true ? "O" : "X")}");
+        if (revert && rulesSaved) session.Note("대응표 되돌림\t그룹과 함께(모델 안 — R57 P2)");
+        session.Note($"창 닫힘\t적은 횟수 {editor.Writes}\t처음 상태로 {(revert ? "O" : "X")}\t걸음 {view.Step + 1}\t대응표 고침 {(rulesSaved ? "O" : "X")}\t완료 {(completion?.Saved == true ? "O" : "X")}");
         return (revert, completion);
     }
 
@@ -1386,8 +1593,12 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         if (follow != null && formulaNews) AppendFormulaReport(text, follow, kept);
         // [완료]에서 엑셀 저장을 그만두고 닫았어도 판은 만들어져 남았다(JACK 2026-10-16 «저장 취소해도 만들기») — 여기에도 적는다.
         if (kept && done?.Objects is { Committed: true } plates)
+        {
             text.AppendLine().AppendLine($"거푸집 객체: 판 {plates.Created}개(일반 모델 · 12 mm — 엑셀은 저장하지 않았습니다)" +
                                          (plates.Failed.Count > 0 ? $" · ★ 못 만든 판 {plates.Failed.Count}개(일지)" : "") + " — 납품 전에 리본 [거푸집 › 거푸집 삭제]");
+            if (FormworkHiddenNote(uidoc, plates.Created) is { Length: > 0 } hidden) text.AppendLine("⚠ " + hidden);
+            if (PlatesNote(plates) is { Length: > 0 } platesNote) text.AppendLine(platesNote);
+        }
         else if (kept && done != null && done.ObjectsProblem.Length > 0)
             text.AppendLine().AppendLine("★ 거푸집 객체를 만들지 못했습니다: " + done.ObjectsProblem);
         if (paintProblem.Length > 0) text.AppendLine().AppendLine(paintProblem);
@@ -1405,10 +1616,10 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
             brief.Add($"부재 {p.Total}개 — 끝 {p.Done}" + (p.Todo > 0 ? $" · 아직 {p.Todo}" : "") + (p.Partial > 0 ? $" · 하나만 {p.Partial}" : ""));
         }
         else if (!revert && crash.Length == 0 && closeProblem.Length == 0) brief.Add("이번에 바꾼 부위·중분류 없음");
-        if (follow != null && formulaNews)
+        if (follow != null && formulaNews && kept && !revert)
         {
-            if (follow.Problem.Length > 0) brief.Add("★ 산출식을 이어서 하지 못했습니다 — [완료]를 다시");
-            else if (follow.Plan.Declined) brief.Add("산출식은 나중에 — [완료]를 다시");
+            if (follow.Problem.Length > 0) brief.Add("★ 산출식을 이어서 하지 못했습니다 — ② 의 [다음 단계]를 다시");
+            else if (follow.Plan.Declined) brief.Add("산출식은 나중에 — ② 의 [다음 단계]를 다시");
             else if (!follow.RolledBack)
             {
                 var formulas = new List<string>();
@@ -1419,6 +1630,8 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
             }
         }
         if (kept && done?.Objects is { Committed: true } made) brief.Add($"거푸집 판 {made.Created}장 · 엑셀 저장 안 함");
+        // ③ 에 들어가 산출식 · 이름 · 거푸집 속성은 적었지만 [완료]를 하지 않고 닫음(R59 계획 검토 L6).
+        else if (kept && done is { Prepared: true, Ready: false }) brief.Add("③ 에서 산출식 · 부재 이름 · 거푸집 속성을 적음 · 엑셀 · 거푸집 판은 만들지 않음([완료]에서)");
         var flags = Flags(text.ToString()).Where(f => !brief.Contains(f)).ToList();
         if (flags.Count > 0)
         {

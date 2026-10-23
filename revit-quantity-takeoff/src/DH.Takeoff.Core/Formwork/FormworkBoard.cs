@@ -63,6 +63,9 @@ public sealed class FormworkPiece
     public string MoveLead => Members.Count > 0 ? Members[0].Patch.MoveLead : "";
     public bool Moved => MoveLead.Length > 0;
 
+    /// <summary>Revit 판 종류로 정한 판이면 그 판 종류 기록의 대표 열쇠(R57 P3 — 판의 조각은 모두 같은 열쇠: 잇기가 같은 KindLead 끼리만), 아니면 "".</summary>
+    public string KindLead => Members.Count > 0 ? Members[0].Patch.KindLead : "";
+
     /// <summary>바깥으로 조금 띄운 세모 + 테두리(장면 좌표 — 부재의 겉면과 같은 원점을 뺐다). 이은 판의 테두리는 합친 테두리 하나다.</summary>
     public MeshData Mesh { get; internal set; } = new();
 
@@ -121,6 +124,9 @@ public sealed class FormworkBoard
     public long RefreshMilliseconds { get; private set; }
 
     private readonly Vec3 _origin;
+
+    /// <summary>장면의 원점(m) — 판 테두리(모델 좌표)를 3D 장면에 놓을 때 뺀다(R60 ③ 길이 숫자).</summary>
+    public Vec3 Origin => _origin;
     private readonly Func<long, (string part, string zone)> _placeOf;
     private readonly Func<string, int> _partOrder;
     // 덩이의 겉면은 든 조각이 같으면 다시 쓴다(대응표를 고칠 때 바뀐 판만 다시 짓게).
@@ -152,7 +158,7 @@ public sealed class FormworkBoard
                 foreach (var p in f.Patches)
                     _serial.TryAdd(p, _serial.Count);
         // 뺀 판은 곡면의 세모를 붙인 뒤에 다시 맞춘다(Analyze 때는 곡면에 세모가 없어 그 조각을 알아보지 못한다).
-        if (Rules.DropCount > 0) FormworkAnalyzer.Reclassify(results, options);
+        if (Rules.DropCount > 0 || Rules.KindCount > 0) FormworkAnalyzer.Reclassify(results, options);   // 판 종류도(R57 P3 — 계획 검토 M2)
         Refresh();
     }
 
@@ -212,11 +218,14 @@ public sealed class FormworkBoard
         var items = rules.All.ToList();
         var drops = rules.Drops.Select(d => (d.lead, records: d.records.ToList())).ToList();
         var moves = rules.Moves.ToList();
+        var kinds = rules.Kinds.ToList();
         foreach (var (type, group, _) in Rules.All.ToList()) Rules.Set(type, group, "");
         foreach (var (type, group, item) in items) Rules.Set(type, group, item);
         foreach (var (lead, _) in Rules.Drops.ToList()) Rules.Restore(lead);
         foreach (var (lead, records) in drops) Rules.Drop(lead, records);
         foreach (var (lead, to) in moves) Rules.SetMove(lead, to);
+        foreach (var kind in Rules.Kinds.ToList()) Rules.ClearKind(kind.Lead);
+        foreach (var kind in kinds) Rules.SetKind(kind.Lead, kind.Item, kind.Records);
         FormworkAnalyzer.Reclassify(Results, Options);
         Refresh();
     }
@@ -278,6 +287,44 @@ public sealed class FormworkBoard
         }
         Refresh();
         return done;
+    }
+
+    /// <summary>판 종류 기록을 지금 모양에서 다시 찾은 결과(FormworkSummary.CheckKinds — 하나도 못 찾음 · 일부만 찾음).</summary>
+    public FormworkSummary.DropCheck KindCheck { get; private set; } = FormworkSummary.DropCheck.None;
+
+    /// <summary>Revit 판 종류로 센 판(지운 판 아님)의 수(서로 다른 판 종류 기록)와 넓이.</summary>
+    public int PlateKindCount => KindPatches.Select(p => p.KindLead).Distinct(StringComparer.Ordinal).Count();
+    public double PlateKindArea => KindPatches.Where(p => p.Counted).Sum(p => p.Area);
+    private IEnumerable<FacePatch> KindPatches => Results.SelectMany(r => r.Faces).SelectMany(f => f.Patches).Where(p => p.KindLead.Length > 0 && p.DropLead.Length == 0);
+
+    /// <summary>판 종류 하나의 지금 상태(되돌리기 — 계획 검토 M4 · null = 없음).</summary>
+    public FormworkRules.KindState? KindStateOf(string lead) => Rules.KindStateOf(lead);
+
+    /// <summary>판 종류 하나를 그 상태로 다시 쓰고 다시 센다(되돌리기 — 차례까지).</summary>
+    public void SetKindState(string lead, FormworkRules.KindState? state)
+    {
+        Rules.SetKindState(lead, state);
+        FormworkAnalyzer.Reclassify(Results, Options);
+        Refresh();
+    }
+
+    /// <summary>판 종류를 걷는다([원래 종류로] — 그 판을 정한 판 종류 기록 하나). 걷었으면 true.</summary>
+    public bool ClearKind(FormworkPiece piece)
+    {
+        if (piece.KindLead is not { Length: > 0 } lead || !Rules.ClearKind(lead)) return false;
+        FormworkAnalyzer.Reclassify(Results, Options);
+        Refresh();
+        return true;
+    }
+
+    /// <summary>모양이 바뀌어 하나도 찾지 못한 판 종류 기록을 지운다(합계는 그대로 — 그 자리는 이미 원래 종류로 센다). 지운 수.</summary>
+    public int ForgetLostKinds()
+    {
+        int n = KindCheck.Lost.ToList().Count(lead => Rules.ClearKind(lead));
+        if (n == 0) return 0;
+        FormworkAnalyzer.Reclassify(Results, Options);
+        Refresh();
+        return n;
     }
 
     /// <summary>판 하나의 지금 상태(되돌리기 — R55b · null = 셈).</summary>
@@ -422,19 +469,37 @@ public sealed class FormworkBoard
             if (InRow(Pieces[i], type, group)) yield return i;
     }
 
+    /// <summary>
+    /// 그 줄에 든 덩이마다 그 줄 몫(InRow · AreaIn 과 같은 잣대): whole = 덩이의 조각이 모두 그 줄 · 아니면 그 줄 조각만(JACK 2026-10-23 «상부슬래브를 찍었는데 벽체도 같이» —
+    /// 벽 + 슬래브 옆을 이은 판은 그 줄 몫만 덧그린다 · 산출서 줄의 PiecesOfLine 과 같은 꼴).
+    /// </summary>
+    public List<(int piece, bool whole, List<FacePatch> patches)> PiecesOfRow(string type, string group)
+    {
+        var found = new List<(int, bool, List<FacePatch>)>();
+        for (int i = 0; i < Pieces.Count; i++)
+        {
+            var piece = Pieces[i];
+            if (piece.Dropped) continue;
+            var mine = piece.Members.Where(m => m.Patch.KindLead.Length == 0 && FormworkSummary.RowOf(m) == (type, group)).Select(m => m.Patch).ToList();
+            if (mine.Count > 0) found.Add((i, mine.Count == piece.Members.Count, mine));
+        }
+        return found;
+    }
+
     /// <summary>그 덩이가 그 줄에 드는가(PiecesOf 와 같은 잣대 — 화면이 덩이마다 묻는다).</summary>
     public bool InRow(FormworkPiece piece, string type, string group) =>
-        !piece.Dropped && piece.Members.Any(m => FormworkSummary.RowOf(m) == (type, group));
+        !piece.Dropped && piece.Members.Any(m => m.Patch.KindLead.Length == 0 && FormworkSummary.RowOf(m) == (type, group));   // 판 종류 조각은 줄 밖(R57 P3 — 계획 검토 L8)
 
     /// <summary>그 덩이에서 그 줄에 든 조각의 넓이(㎡) — 줄마다 합하면 ② 표의 넓이다.</summary>
     public double AreaIn(FormworkPiece piece, string type, string group) =>
-        piece.Dropped ? 0 : piece.Members.Where(m => FormworkSummary.RowOf(m) == (type, group)).Sum(m => m.Patch.Area);
+        piece.Dropped ? 0 : piece.Members.Where(m => m.Patch.KindLead.Length == 0 && FormworkSummary.RowOf(m) == (type, group)).Sum(m => m.Patch.Area);
 
     /// <summary>
     /// 그 덩이를 정한 줄(revit-verify R47 M1 — 3D 에서 덩이를 누르면 ② 표에서 이 줄을 고른다): 대표 조각이 드는 줄(부위를 넣은 부재의 면이면 부위 줄,
     /// 아니면 유형 줄 — R48). 뺀 판은 null(띠에 [되살리기]만).
     /// </summary>
-    public (string type, string group)? RowOf(FormworkPiece piece) => piece.Dropped ? null : FormworkSummary.RowOf(piece.LeadMember);
+    public (string type, string group)? RowOf(FormworkPiece piece) =>
+        piece.Dropped || piece.KindLead.Length > 0 ? null : FormworkSummary.RowOf(piece.LeadMember);   // 판 종류 판은 줄이 정하지 않는다(R57 P3)
 
     /// <summary>그 판의 원래 줄(옮기기 전 — 지운 판 · 옮긴 판도 · R55b: 옮길 줄 고르기에서 제 줄은 고를 수 없다). 조각이 없으면 null.</summary>
     public (string type, string group)? OriginRowOf(FormworkPiece piece) =>
@@ -461,6 +526,7 @@ public sealed class FormworkBoard
         Totals = FormworkSummary.Totals(Results, Options);
         Sheet = FormworkSheet.Build(Results, Options, _placeOf, _partOrder);
         DropCheck = FormworkSummary.CheckDrops(Results, Rules);
+        KindCheck = FormworkSummary.CheckKinds(Results, Rules);
         HiddenTypeRules = FormworkSummary.HiddenTypeRules(Results, Rules);
         Pieces = BuildPieces();
         RefreshMilliseconds = watch.ElapsedMilliseconds;
@@ -483,13 +549,15 @@ public sealed class FormworkBoard
             foreach (var m in plate.Members)
                 if (keyedOf.TryGetValue(m.Patch, out var k) && placed.Add(m.Patch)) piece.Add(k);
             if (piece.Members.Count == 0) continue;
-            piece.LeadIndex = Largest(piece);
+            // 대표 = 엑셀 줄의 대표 조각(벽 · 구멍을 이어 가는 부재 — 판을 찍으면 그 줄을 고른다 · R57 설치 전 검토 M3) · 없으면 가장 넓은 조각.
+            int lead = plate.Lead is { } lp ? piece.Members.FindIndex(m => ReferenceEquals(m.Patch, lp)) : -1;
+            piece.LeadIndex = lead >= 0 ? lead : Largest(piece);
             piece.Mesh = MeshFor("plate", piece, meshes, plate.Joined ? plate.Shape : null, plate.Normal);
             pieces.Add(piece);
         }
 
         var drops = new Dictionary<string, FormworkPiece>(StringComparer.Ordinal);
-        var chunks = new Dictionary<(ElementFormwork? r, string type, string group, string side, int band, bool note, int vertical, string move), FormworkPiece>();
+        var chunks = new Dictionary<(ElementFormwork r, string type, string group, string side, int band, bool note, string move), FormworkPiece>();
         foreach (var k in FormworkSummary.RowPatches(Results))
         {
             var p = k.Patch;
@@ -502,9 +570,9 @@ public sealed class FormworkBoard
             else
             {
                 // 까닭은 대응표를 걸기 전의 값으로 본다(대응표가 '세지 않음' 등으로 까닭을 덮어쓰기 때문).
-                // 수직면 덩어리의 조각(세지 않는 덩어리 — R49)은 덩어리마다 한 덩이(판 = 덩어리 · 색이 하나).
+                // 수직면 덩어리의 조각도 제 부재마다(R57 — 전(R49)에는 덩어리마다 한 덩이). 옮긴 조각은 따로(설치 전 검토 L6).
                 bool note = (p.Unruled?.Note ?? p.Note).Length > 0;
-                var key = p.Vertical is { } g ? ((ElementFormwork?)null, "", "", "", p.Band, false, g.Id, p.MoveLead) : (k.Result, k.Type, k.Group, p.Side, p.Band, note, 0, p.MoveLead);   // 옮긴 조각은 따로(설치 전 검토 L6)   // 덩어리는 안팎과 상관없이 한 덩이(core-verify R49 L5)
+                var key = (k.Result, k.Type, k.Group, p.Side, p.Band, note, p.MoveLead + "|" + p.KindLead);   // 판 종류도 따로(R57 P3)
                 if (!chunks.TryGetValue(key, out piece)) { chunks[key] = piece = new FormworkPiece(); pieces.Add(piece); }
             }
             piece.Add(k);
@@ -569,6 +637,48 @@ public sealed class FormworkBoard
             AddOutline(builder, outline.Outline, plane);
         return builder.Build(origin);
     }
+
+    // ── 산출서 줄(R57 P1b — JACK 2026-10-23 «수량을 산출한 뒤 산출서를 띄우고 줄을 골라 거푸집을 보면 옳게 뽑힌 수량인지 판단 가능») ──
+
+    private (FormworkSheetData sheet, Dictionary<FacePatch, FormworkLine> map)? _lines;
+
+    /// <summary>그 조각이 든 산출서 줄(세지 않는 조각 · 지운 판이면 null). 시트를 다시 지으면 새 줄로 찾는다.</summary>
+    public FormworkLine? LineOf(FacePatch patch)
+    {
+        if (_lines is not { } lines || !ReferenceEquals(lines.sheet, Sheet))
+        {
+            var map = new Dictionary<FacePatch, FormworkLine>(ReferenceEqualityComparer.Instance);
+            foreach (var line in Sheet.Lines)
+                foreach (var p in PatchesOf(line))
+                    map.TryAdd(p, line);
+            _lines = lines = (Sheet, map);
+        }
+        return lines.map.TryGetValue(patch, out var found) ? found : null;
+    }
+
+    /// <summary>산출서 한 줄에 든 조각(줄 조각들의 조각).</summary>
+    public static IEnumerable<FacePatch> PatchesOf(FormworkLine line) => line.Units.SelectMany(u => u.Members).Select(m => m.Patch);
+
+    /// <summary>
+    /// 그 줄의 조각이 든 덩이(차례)와 그 덩이에서 줄에 든 조각 — 덩이가 줄의 조각만으로 이뤄졌으면 Whole(판이 높이 구간으로 두 줄에 걸치면 그 줄 몫만 — 화면은
+    /// 그 몫만 진하게 덧그린다 · PatchMesh).
+    /// </summary>
+    public List<(int piece, bool whole, List<FacePatch> patches)> PiecesOfLine(FormworkLine line)
+    {
+        var mine = PatchesOf(line).ToHashSet(ReferenceEqualityComparer.Instance);
+        var found = new List<(int, bool, List<FacePatch>)>();
+        for (int i = 0; i < Pieces.Count; i++)
+        {
+            var piece = Pieces[i];
+            if (piece.Dropped) continue;
+            var inLine = piece.Patches.Where(p => mine.Contains(p)).ToList();
+            if (inLine.Count > 0) found.Add((i, inLine.Count == piece.Patches.Count, inLine));
+        }
+        return found;
+    }
+
+    /// <summary>조각들만의 겉면(덩이와 같은 모양 · 같은 띄움 — 산출서 줄의 몫을 덧그릴 때).</summary>
+    public MeshData PatchMesh(IEnumerable<FacePatch> patches) => MeshOf(patches, _origin);
 
     private static void AddOutline(MeshBuilder builder, List<List<double[]>> rings, Vec3 up)
     {
