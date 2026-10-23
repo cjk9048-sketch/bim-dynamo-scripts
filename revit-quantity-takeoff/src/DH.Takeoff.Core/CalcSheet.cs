@@ -163,6 +163,7 @@ public sealed class CalcRow
     public bool NoSub { get; set; }            // 위치 작은 제목을 달지 않는 부위(«중분류 생략»)
     public List<(double thickness, double bim)> Thickness { get; } = new();   // 이 줄 부재들의 두께(m)와 체적 — 바닥 · 기초만 · 모르면 없음
     public List<string> Names { get; } = new();   // 이 줄 부재들의 이름(DH_부재명 — R53b · 이름으로 묶인 줄만, 아니면 비어 있다) — Shown 은 이것을 줄인 글
+    public List<long> Ids { get; } = new();        // 이 줄 부재들의 Id(R59 — 수량산출 창 ③ 에서 줄을 누르면 그 부재를 3D 에)
 }
 
 /// <summary>부재 하나의 기록 — 「부재 목록」과 「미산출 부재」 시트에 쓴다.</summary>
@@ -218,67 +219,8 @@ public static class CalcSheet
         calc.Selected = true;
         Sheet2D.Frame(calc);
 
-        var items = new List<Sheet2D.Item>();
-        var concrete = new List<(Sheet2D.Section section, bool plain, string spec, string pour, double bim)>();
-        var forms = new List<(Sheet2D.Section section, string work, string spec, double bim)>();
-        int no = 0;
-        foreach (var sec in rows.GroupBy(r => (r.Work, r.Spec, r.Pour)))
-        {
-            no++;
-            bool plain = sec.Key.Work == CalcPlan.Plain;
-            string spec = sec.Key.Spec.Length > 0 ? sec.Key.Spec : PartCatalog.DefaultSpec("", plain);
-            string pour = sec.Key.Pour.Length > 0 ? sec.Key.Pour : PartCatalog.DefaultPour;
-            var section = new Sheet2D.Section($" {no}. 레미콘타설", SpecPieces(plain, spec, pour), "㎥");
-            items.Add(section);
-            var parts = sec.GroupBy(r => r.PartName.Length > 0 ? r.PartName : r.Part).ToList();
-            // 부위 번호: 2D 의 무근 작은 부속 절(관보호공 · 받침 · 발디딤판 …)은 «ㅇ», 그 밖은 «1)» · «2)».
-            bool bullets = plain && parts.All(p => PartCatalog.GroupOf(p.Key) != PartCatalog.Fill);
-            int partNo = 0;
-            foreach (var part in parts)
-            {
-                partNo++;
-                items.Add(new Sheet2D.Part(bullets ? "ㅇ" : $"{partNo})", part.Key, ThicknessNotes(part.ToList())));
-                var zones = part.GroupBy(r => r.Zone).ToList();
-                bool subs = zones.Count >= 2 && !part.First().NoSub;
-                foreach (var zone in zones)
-                {
-                    if (subs) items.Add(new Sheet2D.Sub(zone.Key.Length > 0 ? zone.Key : "위치 없음"));
-                    foreach (var r in zone.Where(r => !(r.OneLine && !r.Marked)))
-                        items.Add(new Sheet2D.Line(r.Shown.Length > 0 ? r.Shown : r.Mark, "", r.Formula, r.Count, r.Note));
-                    foreach (var (formula, lineNote, names) in OneLineFormulas(zone.Where(r => r.OneLine && !r.Marked).ToList()))
-                        items.Add(new Sheet2D.Line(names, "", formula, 1, lineNote));
-                }
-            }
-            items.Add(new Sheet2D.Total());
-            concrete.Add((section, plain, spec, pour, sec.Sum(r => r.Bim)));
-        }
-
-        if (formwork != null)
-        {
-            foreach (var sec in formwork.Lines.GroupBy(l => l.Section))
-            {
-                no++;
-                var head = formwork.Sections.FirstOrDefault(s => s.section == sec.Key);
-                var section = new Sheet2D.Section($" {no}. {SectionWord(sec.Key)}", SectionPieces(sec.Key), "㎡");
-                items.Add(section);
-                var parts = sec.GroupBy(l => l.Part).ToList();
-                int partNo = 0;
-                foreach (var part in parts)
-                {
-                    partNo++;
-                    items.Add(new Sheet2D.Part(parts.Count == 1 ? "ㅇ" : $"{partNo})", part.Key, Array.Empty<string>()));
-                    foreach (var sub in part.GroupBy(l => l.Sub))
-                    {
-                        if (sub.Key.Length > 0) items.Add(new Sheet2D.Sub(sub.Key));
-                        foreach (var line in sub)
-                            items.Add(new Sheet2D.Line(line.Mark, line.Tag.Length > 0 ? "(" + line.Tag + ")" : "", line.Formula, line.Count, FormworkNote(line)));
-                    }
-                }
-                items.Add(new Sheet2D.Total());
-                var (work, specName) = Formwork.FormworkSheet.SummaryName(head.item ?? sec.First().Item, head.band, formwork.Bands);
-                forms.Add((section, work, specName, head.bim));
-            }
-        }
+        var infos = Compose(rows, formwork, out var concrete, out var forms);
+        var items = infos.Select(i => i.Item).ToList();
         if (items.Count == 0)
             items.Add(new Sheet2D.Part("", rows.Count == 0 ? "실을 식이 없습니다. 「산출식 자동입력」을 먼저 실행해 주세요." : "", Array.Empty<string>()));
 
@@ -350,12 +292,89 @@ public static class CalcSheet
         return notes;
     }
 
+    /// <summary>
+    /// «구체공산출근거» 시트의 항목(절 · 부위 · 작은 제목 · 줄 · 계 — 쓰는 차례)과 줄마다 그 근거: 콘크리트 줄 = 든 부재 Id(한 줄로 적는 부위는 이은 줄들의 Id 합) ·
+    /// 거푸집 줄 = 그 FormworkLine(R59 — 수량산출 창 ③ 이 엑셀과 같은 줄을 보이고 3D 에 잇는다). Build 가 이것으로 시트를 쓴다(엑셀은 한 칸도 같다).
+    /// </summary>
+    public sealed record ItemInfo(Sheet2D.Item Item, IReadOnlyList<long> Ids, Formwork.FormworkLine? Line);
+
+    /// <summary>시트의 항목들(빈 시트 자리표시 줄은 넣지 않는다 — Build 가 넣는다).</summary>
+    public static List<ItemInfo> Items(IReadOnlyList<CalcRow> rows, Formwork.FormworkSheetData? formwork = null) => Compose(rows, formwork, out _, out _);
+
+    private static List<ItemInfo> Compose(IReadOnlyList<CalcRow> rows, Formwork.FormworkSheetData? formwork,
+        out List<(Sheet2D.Section section, bool plain, string spec, string pour, double bim)> concrete,
+        out List<(Sheet2D.Section section, string work, string spec, double bim)> forms)
+    {
+        var items = new List<ItemInfo>();
+        concrete = new List<(Sheet2D.Section section, bool plain, string spec, string pour, double bim)>();
+        forms = new List<(Sheet2D.Section section, string work, string spec, double bim)>();
+        int no = 0;
+        foreach (var sec in rows.GroupBy(r => (r.Work, r.Spec, r.Pour)))
+        {
+            no++;
+            bool plain = sec.Key.Work == CalcPlan.Plain;
+            string spec = sec.Key.Spec.Length > 0 ? sec.Key.Spec : PartCatalog.DefaultSpec("", plain);
+            string pour = sec.Key.Pour.Length > 0 ? sec.Key.Pour : PartCatalog.DefaultPour;
+            var section = new Sheet2D.Section($" {no}. 레미콘타설", SpecPieces(plain, spec, pour), "㎥");
+            items.Add(new(section, Array.Empty<long>(), null));
+            var parts = sec.GroupBy(r => r.PartName.Length > 0 ? r.PartName : r.Part).ToList();
+            // 부위 번호: 2D 의 무근 작은 부속 절(관보호공 · 받침 · 발디딤판 …)은 «ㅇ», 그 밖은 «1)» · «2)».
+            bool bullets = plain && parts.All(p => PartCatalog.GroupOf(p.Key) != PartCatalog.Fill);
+            int partNo = 0;
+            foreach (var part in parts)
+            {
+                partNo++;
+                items.Add(new(new Sheet2D.Part(bullets ? "ㅇ" : $"{partNo})", part.Key, ThicknessNotes(part.ToList())), Array.Empty<long>(), null));
+                var zones = part.GroupBy(r => r.Zone).ToList();
+                bool subs = zones.Count >= 2 && !part.First().NoSub;
+                foreach (var zone in zones)
+                {
+                    if (subs) items.Add(new(new Sheet2D.Sub(zone.Key.Length > 0 ? zone.Key : "위치 없음"), Array.Empty<long>(), null));
+                    foreach (var r in zone.Where(r => !(r.OneLine && !r.Marked)))
+                        items.Add(new(new Sheet2D.Line(r.Shown.Length > 0 ? r.Shown : r.Mark, "", r.Formula, r.Count, r.Note), r.Ids, null));
+                    foreach (var (formula, lineNote, names, ids) in OneLineFormulas(zone.Where(r => r.OneLine && !r.Marked).ToList()))
+                        items.Add(new(new Sheet2D.Line(names, "", formula, 1, lineNote), ids, null));
+                }
+            }
+            items.Add(new(new Sheet2D.Total(), Array.Empty<long>(), null));
+            concrete.Add((section, plain, spec, pour, sec.Sum(r => r.Bim)));
+        }
+
+        if (formwork != null)
+        {
+            foreach (var sec in formwork.Lines.GroupBy(l => l.Section))
+            {
+                no++;
+                var head = formwork.Sections.FirstOrDefault(s => s.section == sec.Key);
+                var section = new Sheet2D.Section($" {no}. {SectionWord(sec.Key)}", SectionPieces(sec.Key), "㎡");
+                items.Add(new(section, Array.Empty<long>(), null));
+                var parts = sec.GroupBy(l => l.Part).ToList();
+                int partNo = 0;
+                foreach (var part in parts)
+                {
+                    partNo++;
+                    items.Add(new(new Sheet2D.Part(parts.Count == 1 ? "ㅇ" : $"{partNo})", part.Key, Array.Empty<string>()), Array.Empty<long>(), null));
+                    foreach (var sub in part.GroupBy(l => l.Sub))
+                    {
+                        if (sub.Key.Length > 0) items.Add(new(new Sheet2D.Sub(sub.Key), Array.Empty<long>(), null));
+                        foreach (var line in sub)
+                            items.Add(new(new Sheet2D.Line(line.Mark, line.Tag.Length > 0 ? "(" + line.Tag + ")" : "", line.Formula, line.Count, FormworkNote(line)), Array.Empty<long>(), line));
+                    }
+                }
+                items.Add(new(new Sheet2D.Total(), Array.Empty<long>(), null));
+                var (work, specName) = Formwork.FormworkSheet.SummaryName(head.item ?? sec.First().Item, head.band, formwork.Bands);
+                forms.Add((section, work, specName, head.bim));
+            }
+        }
+        return items;
+    }
+
     // 부호 없이 한 줄로 적는 부위(R49 — 2D 보 · 기둥 · 계단 …): 줄마다 «식 × n» 을 « + »로 이어 한 식(숫자가 많으면 나눔). 비고 = 부재 수 · Id.
     // 이름(R53b)이 있는 부재면 그 한 줄의 부호 = 든 부재의 이름(«B01~B12 : …» — 이름 없는 줄이 섞이면 그 줄의 마크 · 유형 이름을 괄호에 넣어 덧붙임 ·
     // 이름과 헷갈리지 않게 — core-verify R53b L2) · 없으면 "".
-    private static List<(string formula, string note, string names)> OneLineFormulas(IReadOnlyList<CalcRow> rows)
+    private static List<(string formula, string note, string names, IReadOnlyList<long> ids)> OneLineFormulas(IReadOnlyList<CalcRow> rows)
     {
-        var result = new List<(string, string, string)>();
+        var result = new List<(string, string, string, IReadOnlyList<long>)>();
         if (rows.Count == 0) return result;
         var terms = rows.Select(r =>
         {
@@ -373,7 +392,7 @@ public static class CalcSheet
             string names = "";
             if (picked.Any(t => t.row.Names.Count > 0))
                 names = MemberNames.Compact(picked.SelectMany(t => t.row.Names.Count > 0 ? t.row.Names : new List<string> { "(" + (t.row.Shown.Length > 0 ? t.row.Shown : t.row.Mark) + ")" }));
-            result.Add((formula, $"부재 {members}개 · {ids}", names));
+            result.Add((formula, $"부재 {members}개 · {ids}", names, picked.SelectMany(t => t.row.Ids).ToList()));
         }
         return result;
     }
@@ -403,7 +422,8 @@ public static class CalcSheet
     {
         string cells = line.Cells > 1 ? $"칸 {line.Cells}개 · " + (line.AreaOnlyCells > 0 && line.AreaOnlyCells < line.Cells ? $"넓이만 적은 칸 {line.AreaOnlyCells}개 · " : "") : "";
         string ring = line.Faces > 0 ? $"둘레 {line.Faces}면 · " : "";
-        return (line.Unsure ? "안팎 확인 필요 · " : "") + cells + ring + (line.AreaOnly ? "넓이(직각으로 꺾이지 않음) · " : "") + (line.Joined ? "이은 면 · " : "") +
+        string terms = line.Terms > 1 ? $"줄 {line.Terms}개 합침 · " : "";
+        return (line.Unsure ? "안팎 확인 필요 · " : "") + cells + ring + terms + (line.AreaOnly ? "넓이(직각으로 꺾이지 않음) · " : "") + (line.Joined ? "이은 면 · " : "") +
                "Id " + string.Join(", ", line.Ids.Take(6)) + (line.Ids.Count > 6 ? $" 외 {line.Ids.Count - 6}개" : "");
     }
 

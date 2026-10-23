@@ -12,7 +12,7 @@ namespace DH.Takeoff.Core;
 ///  · 줄: C 부호 · D «:» · 토막은 E~U(부호 없는 줄은 D~U) — 숫자는 두 칸 병합 · 기호 한 칸 · 넘치면 다음 행으로 · V «=» · W =ROUND(…,2).
 ///  · 쪽: 55행까지 첫 쪽 · 그 뒤 52행마다 손 나눔 · 쪽 끝 행은 A~Z 아래 선 · 새 쪽 첫 행 A 에 그 절 제목 · 여러 행짜리 줄과 제목은 쪽에 갈리지 않게 빈 행으로 민다.
 /// </summary>
-internal static class Sheet2D
+public static class Sheet2D
 {
     public const int ColA = 1, ColC = 3, ColD = 4, ColE = 5, ColU = 21, ColV = 22, ColW = 23, ColX = 24, ColY = 25, ColZ = 26, ColNote = 27;
     public const int FirstPageEnd = 55, PageRows = 52;
@@ -59,6 +59,13 @@ internal static class Sheet2D
     /// 산출 줄: 부호(없으면 "" — 토막이 D 부터) · 괄호(«(외측)» — 부호 뒤) · 식 · 개수(× n) · 비고(AA — 인쇄 밖).
     /// </summary>
     public sealed record Line(string Mark, string Tag, string Formula, int Count, string Note) : Item;
+
+    /// <summary>줄의 값(엑셀 «=ROUND(식, 2)»와 같은 셈 — 식 × 개수를 둘째 자리로 · 못 읽는 식은 0). 수량산출 창 ③ 의 화면도 이것(R59).</summary>
+    public static double LineValue(Line line)
+    {
+        try { return FormulaDecomposer.RoundQuantity(FormulaEvaluator.Evaluate(line.Formula) * line.Count); }
+        catch (FormatException) { return 0; }
+    }
 
     /// <summary>절 끝 «계».</summary>
     public sealed record Total : Item;
@@ -387,9 +394,7 @@ internal static class Sheet2D
             }
         }
         int last = r + layout.Rows - 1;
-        double value;
-        try { value = FormulaDecomposer.RoundQuantity(FormulaEvaluator.Evaluate(line.Formula) * line.Count); }
-        catch (FormatException) { value = 0; }
+        double value = LineValue(line);
         sheet.Text(last, ColV, "=", Spread);
         // 값 칸은 W:Y 병합 — 숫자는 옆 칸으로 넘쳐 보이지 않아(넘김 가운데로는 «###») 천 단위 값이 들어갈 폭을 만든다(2D 도 W:X 를 합친 줄이 있다).
         sheet.Formula(last, ColW, $"ROUND({expr},{FormulaDecomposer.QuantityDecimals})", value, ResultCell);

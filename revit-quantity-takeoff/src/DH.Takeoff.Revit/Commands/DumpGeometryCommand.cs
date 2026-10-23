@@ -18,7 +18,8 @@ public sealed class DumpGeometryCommand : IExternalCommand
 
         try
         {
-            var all = DimensionExtractor.CollectApplicable(doc);
+            // Revit 계단도(R56c-1 — 계단을 부재로 세기 전에 실제 계단 형상을 받아 Revit 없이 다시 재 본다).
+            var all = DimensionExtractor.CollectApplicable(doc).Concat(StairReader.Read(doc).Select(s => s.Element.Id)).Distinct().ToList();
             var selected = uidoc.Selection.GetElementIds();
             ICollection<ElementId> ids = selected.Count > 0
                 ? all.Where(id => selected.Contains(id)).ToList()

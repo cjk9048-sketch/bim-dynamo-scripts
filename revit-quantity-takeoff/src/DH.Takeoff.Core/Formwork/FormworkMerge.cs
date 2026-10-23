@@ -80,6 +80,8 @@ public static class FormworkMerge
 
         internal void Add(Joined joined)
         {
+            // 한 조각은 한 묶음에만(설치 전 검토 H1 — 덮어쓰면 앞 묶음의 줄이 엑셀에서 말없이 빠진다): 이미 든 조각이 있으면 넣지 않고 센다(조각은 제 줄로).
+            if (joined.Members.Any(m => _of.ContainsKey(m.Patch))) { Refused++; return; }
             Groups.Add(joined);
             foreach (var m in joined.Members) _of[m.Patch] = joined;
         }
@@ -103,8 +105,8 @@ public static class FormworkMerge
         public required string Zone;
         public required string Part;       // 부재의 부위(밑면은 같은 부위끼리 — 부위마다의 «계»가 옮겨 가지 않게)
         public required string Group;      // 면의 갈래(밑면 / 아래가 빈 밑면 — 줄의 부위 제목이 섞이지 않게)
-        public required string Kind;       // 종류(유로폼 옆면이면 높이 구간까지 — acrossBands 면 종류만) — 같은 절끼리만 잇는다
-        public required string Move;       // 옮긴 판의 대표 열쇠(R55b — 같은 옮긴 판끼리만 잇는다 · 계획 검토 M3). 아니면 ""
+        public required string Kind;       // 종류(유로폼 옆면이면 높이 구간까지 — 보통 잇기는 acrossBands 면 종류만 · 구멍 고리는 늘 구간까지) — 같은 절끼리만 잇는다
+        public required string Move;       // 잇기 열쇠: 옮긴 판의 대표 열쇠(R55b — 같은 옮긴 판끼리만 · 계획 검토 M3) + 판 종류의 대표 열쇠(R57 P3 — 같은 판 종류끼리만 · 계획 검토 H1). 둘 다 없으면 "|"
         public V3 Min, Max;
         public int Parent;
     }
@@ -123,6 +125,8 @@ public static class FormworkMerge
     {
         var outcome = new Outcome();
         double eps = options.Epsilon;
+        // 구멍 둘레 + 그 구멍을 이어 가는 안쪽 부재(R57)를 먼저 잇는다 — 그 조각은 아래 보통 잇기 · 덩어리 잇기에 넣지 않는다.
+        var claimed = Rings(results, options, zoneOf, outcome);
         var cands = new List<Cand>();
         foreach (var r in results)
         {
@@ -137,14 +141,15 @@ public static class FormworkMerge
                 foreach (var p in f.Patches)
                 {
                     if (!p.Counted || p.Item.Length == 0 || p.NeedsCheck || p.Outline.Count == 0 || p.Outline[0].Count < 3) continue;
-                    if (!bottom && p.Vertical != null) continue;   // 수직면 덩어리의 조각은 아래에서 덩어리 그대로 잇는다(R49)
+                    if (!bottom && p.Vertical != null) continue;   // 수직면 덩어리(벽 · 슬래브)의 조각은 아래에서 덩어리 그대로 잇는다(R49)
+                    if (claimed.Contains(p)) continue;
                     bool outer = !bottom && p.Side == "외측", inner = !bottom && p.Side.StartsWith("내측", StringComparison.Ordinal);
                     if (!bottom && !outer && !inner) continue;
                     var c = new Cand
                     {
                         Result = r, Face = f, Patch = p, N = n, D = n.Dot(V3.Of(p.Outline[0][0])), Bottom = bottom, Outer = outer, Zone = zone,
                         Part = part, Group = FormworkTable.GroupOf(f.Class, p),
-                        Kind = p.Item == FormworkTable.Euro && !acrossBands ? $"{p.Item}#{p.Band}" : p.Item, Move = p.MoveLead, Parent = cands.Count,
+                        Kind = p.Item == FormworkTable.Euro && !acrossBands ? $"{p.Item}#{p.Band}" : p.Item, Move = p.MoveLead + "|" + p.KindLead, Parent = cands.Count,
                     };
                     (c.Min, c.Max) = BoxOf(p);
                     cands.Add(c);
@@ -153,7 +158,8 @@ public static class FormworkMerge
         }
 
         // 맞닿은 쌍: 같은 방향 · 같은 평면 · 상자가 닿고 · 같은 갈래(옆면끼리 / 밑면끼리) · 같은 쪽(외측끼리 / 내측끼리 — 위치와 상관없이:
-        // R47 — 명장 2D 거푸집 줄에는 위치가 없다 · JACK «안쪽도 판 한 장») · 밑면은 같은 중분류 · 같은 부위끼리(방마다 순치수).
+        // R47 — 명장 2D 거푸집 줄에는 위치가 없다 · JACK «안쪽도 판 한 장») · 같은 부위끼리(밑면 R45 · 옆면 R57 — JACK 2026-10-23 «면의 주인 = 그 부재»:
+        // 전에는 옆면을 부위와 상관없이 이어 트렌치 · PIT 안쪽 면처럼 같은 종류 · 같은 평면이면 가장 넓은 조각의 부위 한 줄 · 한 판이 됐다) · 밑면은 같은 중분류도(방마다 순치수).
         // 나중에 치는 부재도 잇는다(R46). 받침 높이는 보지 않는다(동바리 높이는 조각에 그대로 남는다).
         var splits = new List<(int, int)>();
         for (int i = 0; i < cands.Count; i++)
@@ -161,7 +167,7 @@ public static class FormworkMerge
             {
                 Cand a = cands[i], b = cands[j];
                 if (a.Bottom != b.Bottom || a.Move != b.Move) continue;
-                if (a.Bottom ? a.Zone != b.Zone || a.Part != b.Part || a.Group != b.Group : a.Outer != b.Outer) continue;
+                if (a.Part != b.Part || (a.Bottom ? a.Zone != b.Zone || a.Group != b.Group : a.Outer != b.Outer)) continue;
                 if (a.N.Dot(b.N) < 1 - 1e-10 || Math.Abs(a.D - b.D) > eps) continue;
                 if (Apart(a, b, Join + 1e-6)) continue;
                 if (!Touch(a, b)) continue;
@@ -187,17 +193,24 @@ public static class FormworkMerge
             outcome.Add(joined);
         }
 
-        // 수직면 덩어리(R49 — core-verify R49 계획 H2: 기하로 다시 묶지 않고 Analyze 가 묶은 덩어리 그대로 — 판 = 덩어리): 세는 조각끼리 한 장.
-        // 엑셀 줄(acrossBands = false)은 유로폼 높이 구간마다. 줄의 대표 = 다스리는 조각(M1 — 종류 · 부호 · 부위 제목이 다스리는 조각의 것).
+        // 수직면 덩어리(R49 — 벽 · 슬래브만 · R55): 엑셀 줄 · 판은 한 장(JACK 2026-10-23 «한 줄로 하되 두 개를 합치는 식이 아니라 하나의 벽처럼 — 실제로 거푸집을
+        // 놓을 땐 하나로 봄»: 외벽 «29.6 × 9.5» — 기하로 다시 묶지 않고 Analyze 가 묶은 덩어리 그대로). 줄의 대표 = 다스리는 조각(부위 제목 · 부호 · 괄호 — 벽).
+        // ② 표의 줄 · 부재 속성은 조각 제 것(R57 — FormworkSummary.RowOf). 같은 종류끼리만 한 장 — 제 줄의 사람 값으로 종류가 다른 조각(R57 계획 검토 H1)은 따로이고
+        // «종류가 달라 못 이은 면»으로 알린다(나중에 치는 부재가 낀 자리는 알리지 않음 — 위와 같은 잣대). 엑셀 줄(acrossBands = false)은 유로폼 높이 구간마다.
         foreach (var group in GroupsOf(results))
         {
             var n = new V3(group.Normal[0], group.Normal[1], group.Normal[2]).Unit();
-            var counted = group.Members.Where(m => m.Patch.Counted && m.Patch.Item.Length > 0 && m.Patch.Outline.Count > 0 && m.Patch.Outline[0].Count >= 3).ToList();
-            // 옮긴 판의 조각은 같은 옮긴 판끼리만(R55b — 계획 검토 M3: 덩어리 잇기가 옮긴 조각과 안 옮긴 조각을 한 판으로 잇지 않게).
-            var parts = counted.GroupBy(m => (acrossBands || m.Patch.Item != FormworkTable.Euro ? 0 : m.Patch.Band, m.Patch.MoveLead)).Select(g => g.ToList()).ToList();
+            var counted = group.Members.Where(m => m.Patch.Counted && m.Patch.Item.Length > 0 && m.Patch.Outline.Count > 0 && m.Patch.Outline[0].Count >= 3 && !claimed.Contains(m.Patch)).ToList();
+            // 옮긴 판의 조각은 같은 옮긴 판끼리만(R55b — 계획 검토 M3).
+            var parts = counted.GroupBy(m => (m.Patch.Item, acrossBands || m.Patch.Item != FormworkTable.Euro ? 0 : m.Patch.Band, m.Patch.MoveLead, m.Patch.KindLead)).Select(g => g.ToList()).ToList();
+            var gov = group.Governor.Patch;
+            var main = parts.FirstOrDefault(p => p.Any(m => ReferenceEquals(m.Patch, gov))) ?? parts.OrderByDescending(p => p.Sum(m => m.Patch.Area)).FirstOrDefault();
+            foreach (var other in parts.Where(p => !ReferenceEquals(p, main) && main != null && p[0].Patch.Item != main[0].Patch.Item
+                                                   && p[0].Result.Element.Later == main[0].Result.Element.Later))
+                outcome.Splits.Add((main![0].Result.Element.Type, main[0].Patch.Item, other[0].Result.Element.Type, other[0].Patch.Item));
             foreach (var members in parts.Where(p => p.Count >= 2))
             {
-                var lead = members.FirstOrDefault(m => ReferenceEquals(m.Patch, group.Governor.Patch));
+                var lead = members.FirstOrDefault(m => ReferenceEquals(m.Patch, gov));
                 if (lead.Patch == null) lead = members.OrderByDescending(m => m.Patch.Area).ThenBy(m => m.Result.Element.Id).First();
                 var merged = TryJoin(members.Select(m => m.Patch).ToList(), n, lead.Patch);
                 if (merged == null) { outcome.Refused++; continue; }
@@ -209,6 +222,137 @@ public static class FormworkMerge
             }
         }
         return outcome;
+    }
+
+    /// <summary>
+    /// 구멍 둘레를 이어 갈 수 있는 부재(덩어리 밖): 보 · 기둥(기둥·보 묶음)이 아닌 것 — 2D 는 보로 둘러싼 슬래브 개구부를 «상부스라브 개구부»로 따로 적는다
+    /// (R56 계획 검토 H2). PIT · 호퍼 · 트렌치 · 맨홀 · 턱 · 그 밖.
+    /// </summary>
+    internal static bool RingContinuer(FormworkElement el, FormworkOptions options) =>
+        el.Kind is not (MemberKind.Beam or MemberKind.Column)
+        && !(el.Part.Length > 0 && options.PartGroup(el.Part) == PartCatalog.Frame);
+
+    // 구멍 둘레 + 그 구멍을 이어 가는 안쪽 부재(R57 — JACK 2026-10-23 «하나의 벽처럼 한 줄 · 실제로 거푸집을 놓을 땐 하나로 봄»: 녹촌 «배수 PIT 부» 한 줄):
+    // 덩어리에 드는 부재(벽 · 슬래브)의 꿰뚫은 구멍 둘레(덩어리 밖 — 다른 부재와 같은 평면이 아닌 것)가 이루는 고리마다, 옆(같은 평면의 둘레 조각)마다
+    // 같은 평면으로 맞닿아 이어 가는 덩어리 밖 부재(RingContinuer)를 찾아 — 모든 옆을 이어 가는(고리를 닫는) 부재 가운데 넓이가 가장 큰 하나만 —
+    // 옆마다 «둘레 + 그 부재의 조각»을 한 장으로 잇는다(줄 제목 · 부호 · 괄호 = 그 부재 · 엑셀은 둘레 한 줄 «(a+b)*2*h» — ClosedRings).
+    // 다른 부재(트렌치 바닥처럼 둘째로 이어 가는 것)는 제 줄 그대로. 옆마다 종류가 같고 한 고리로 합쳐질 때만(전부 아니면 없음) — 종류가 다르면
+    // «종류가 달라 못 이은 면». 엑셀 줄 · 판만 바뀐다 — ② 표의 줄 · 종류 · 부재 속성은 조각 제 것(R57 — R56b 처럼 주인을 바꾸지 않는다).
+    private static HashSet<FacePatch> Rings(IReadOnlyList<ElementFormwork> results, FormworkOptions options, Func<long, string>? zoneOf, Outcome outcome)
+    {
+        var claimed = new HashSet<FacePatch>(ReferenceEqualityComparer.Instance);
+        var rims = new List<Cand>();
+        var locked = new List<bool>();   // 다른 부재와 같은 평면(벽 덩어리 · 겹친 슬래브)인 둘레 — 그 구멍은 덩어리 잇기가 맡는다(설치 전 검토 M2)
+        var outside = new List<Cand>();
+        foreach (var r in results)
+        {
+            if (FormworkTable.StandsAlone(r.Element)) continue;
+            bool lump = FormworkAnalyzer.InLump(r.Element, options);
+            if (!lump && !RingContinuer(r.Element, options)) continue;
+            foreach (var f in r.Faces)
+            {
+                if (f.Normal.Length != 3 || Math.Abs(f.Normal[2]) > 0.01) continue;
+                if (lump ? f.Class != FaceClass.HoleEdge : f.Class is not (FaceClass.Side or FaceClass.HoleEdge)) continue;
+                var n = new V3(f.Normal[0], f.Normal[1], f.Normal[2]).Unit();
+                foreach (var p in f.Patches)
+                {
+                    if (!p.Counted || p.Item.Length == 0 || p.NeedsCheck || p.Outline.Count == 0 || p.Outline[0].Count < 3) continue;
+                    // 종류 열쇠는 엑셀 줄 · 판 모두 높이 구간까지(엑셀이 거절한 고리를 판만 잇지 않게 — 엑셀 줄 조각이 늘 판 하나 안에 들게 · 설치 전 검토 L5).
+                    var c = new Cand
+                    {
+                        Result = r, Face = f, Patch = p, N = n, D = n.Dot(V3.Of(p.Outline[0][0])), Bottom = false, Outer = false, Zone = "", Part = "", Group = "",
+                        Kind = p.Item == FormworkTable.Euro ? $"{p.Item}#{p.Band}" : p.Item, Move = p.MoveLead + "|" + p.KindLead, Parent = 0,
+                    };
+                    (c.Min, c.Max) = BoxOf(p);
+                    if (lump)
+                    {
+                        rims.Add(c);
+                        locked.Add(p.Vertical is { } g && g.Members.Any(m => !ReferenceEquals(m.Result, r)));
+                    }
+                    else outside.Add(c);
+                }
+            }
+        }
+        if (rims.Count == 0 || outside.Count == 0) return claimed;
+        // 구멍을 보는 차례 · 이어 가는 조각의 차례를 부재 Id 로 고정한다(두 구멍에 걸친 부재를 어느 구멍이 가져가는지가 Revit 이 넘긴 차례에 달리지 않게 — 다시 검토 L).
+        var order = Enumerable.Range(0, rims.Count).OrderBy(i => rims[i].Result.Element.Id).ToList();
+        (rims, locked) = (order.Select(i => rims[i]).ToList(), order.Select(i => locked[i]).ToList());
+        outside = outside.OrderBy(c => c.Result.Element.Id).ToList();
+        bool Touching(Cand a, Cand b) =>
+            a.N.Dot(b.N) >= 1 - 1e-10 && Math.Abs(a.D - b.D) <= options.Epsilon && !Apart(a, b, Join + 1e-6) && Touch(a, b);
+        // 구멍(같은 부재에서 모서리를 나눈 둘레 조각 · 같은 면 · 같은 평면으로 맞닿음)과 그 옆(같은 면 · 같은 평면).
+        var keys = rims.Select(c => c.Patch.Outline.SelectMany(l => l).Select(Key).ToHashSet()).ToList();
+        var hole = Enumerable.Range(0, rims.Count).ToArray();
+        var side = Enumerable.Range(0, rims.Count).ToArray();
+        for (int a = 0; a < rims.Count; a++)
+            for (int b = a + 1; b < rims.Count; b++)
+            {
+                if (!ReferenceEquals(rims[a].Result, rims[b].Result)) continue;
+                if (ReferenceEquals(rims[a].Face, rims[b].Face) || Touching(rims[a], rims[b])) { Union(hole, a, b); Union(side, a, b); }
+                else if (keys[a].Count(k => keys[b].Contains(k)) >= 2) Union(hole, a, b);
+            }
+        foreach (var members in Enumerable.Range(0, rims.Count).GroupBy(i => Root(hole, i)).Select(g => g.ToList()))
+        {
+            // 옆 하나라도 다른 부재의 덩어리에 든 구멍은 잇지 않는다(남은 옆만으로 고리가 되지 않게 — 전부 아니면 없음 · 설치 전 검토 M2).
+            if (members.Any(i => locked[i])) continue;
+            var sides = members.GroupBy(i => Root(side, i)).Select(g => g.Select(i => rims[i]).ToList()).ToList();
+            if (sides.Count < 3) continue;   // 고리는 옆이 셋 이상
+            // 이어 가는 부재마다 옆마다의 맞닿은 조각 — 이미 다른 고리가 가져간 조각은 아니다(한 조각은 한 묶음에만 — 설치 전 검토 H1).
+            var by = new Dictionary<ElementFormwork, List<Cand>[]>(ReferenceEqualityComparer.Instance);
+            for (int s = 0; s < sides.Count; s++)
+                foreach (var o in outside)
+                    if (!claimed.Contains(o.Patch) && sides[s].Any(rim => Touching(o, rim)))
+                    {
+                        if (!by.TryGetValue(o.Result, out var lists)) by[o.Result] = lists = Enumerable.Range(0, sides.Count).Select(_ => new List<Cand>()).ToArray();
+                        lists[s].Add(o);
+                    }
+            var pick = by.Where(kv => kv.Value.All(l => l.Count > 0))
+                         .OrderByDescending(kv => kv.Value.Sum(l => l.Sum(c => c.Patch.Area))).ThenBy(kv => kv.Key.Element.Id).Select(kv => kv.Value).FirstOrDefault();
+            if (pick == null) continue;
+            // 같은 조각이 두 옆에 들면(ㄷ자로 꺾인 면 등) 이 고리는 잇지 않는다 · 옮긴 판은 같은 옮긴 판끼리만(R55b — 설치 전 검토 L6).
+            var used = pick.SelectMany(l => l).Select(c => c.Patch).ToList();
+            if (used.Distinct(ReferenceEqualityComparer.Instance).Count() != used.Count) continue;
+            if (sides.SelectMany(l => l).Concat(pick.SelectMany(l => l)).Select(c => c.Move).Distinct().Count() > 1) continue;
+            var joins = new List<(List<Cand> members, Cand lead, FacePatch merged)>();
+            bool ok = true;
+            for (int s = 0; s < sides.Count && ok; s++)
+            {
+                var all = sides[s].Concat(pick[s]).ToList();
+                var lead = pick[s].OrderByDescending(c => c.Patch.Area).ThenBy(c => c.Result.Element.Id).First();
+                if (all.Select(c => c.Kind).Distinct().Count() > 1)
+                {
+                    // 종류가 다르면 알린다(높이 구간만 다른 것 · 나중에 치는 부재가 낀 것은 아니다 — 보통 잇기와 같은 잣대 · 설치 전 검토 L5).
+                    var rim = sides[s][0];
+                    var other = all.FirstOrDefault(c => c.Patch.Item != rim.Patch.Item);
+                    if (other != null && other.Result.Element.Later == rim.Result.Element.Later)
+                        outcome.Splits.Add((rim.Result.Element.Type, rim.Patch.Item, other.Result.Element.Type, other.Patch.Item));
+                    ok = false;
+                    break;
+                }
+                var merged = TryJoin(all.Select(c => c.Patch).ToList(), lead.N, lead.Patch);
+                if (merged == null) { outcome.Refused++; ok = false; break; }
+                joins.Add((all, lead, merged));
+            }
+            if (!ok) continue;
+            foreach (var (all, lead, merged) in joins)
+            {
+                var zones = all.Select(c => zoneOf?.Invoke(c.Result.Element.Id) ?? c.Result.Element.Zone).Distinct().Count();
+                var joined = new Joined { Lead = (lead.Result, lead.Face, lead.Patch), MixedZones = zones > 1 };
+                foreach (var c in all.OrderBy(c => c.Result.Element.Id)) joined.Members.Add((c.Result, c.Face, c.Patch));
+                Fill(joined.Merged, merged);
+                outcome.Add(joined);
+                foreach (var c in all) claimed.Add(c.Patch);
+            }
+        }
+        return claimed;
+
+        static (long, long, long) Key(double[] p) => ((long)Math.Round(p[0] * 1000), (long)Math.Round(p[1] * 1000), (long)Math.Round(p[2] * 1000));
+        static int Root(int[] parent, int i) { while (parent[i] != i) i = parent[i] = parent[parent[i]]; return i; }
+        static void Union(int[] parent, int a, int b)
+        {
+            int ra = Root(parent, a), rb = Root(parent, b);
+            if (ra != rb) parent[Math.Max(ra, rb)] = Math.Min(ra, rb);
+        }
     }
 
     /// <summary>결과에 든 수직면 덩어리(차례 = 덩어리 번호).</summary>
