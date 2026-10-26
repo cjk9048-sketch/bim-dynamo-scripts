@@ -125,7 +125,7 @@ public static partial class WallExcav
         /// <summary>배면 높이(Ω 밖이면 NaN) · <paramref name="flat"/> = 벽 곁 0.5 m 안인데 꼭대기보다 1 cm 넘게 높음(평탄 없이 벽에 닿음 ⚠ — 3D BackAt과 같은 뜻).</summary>
         public double B(double a, out bool inside, out bool flat) => B(a, out inside, out flat, out _);
 
-        /// <param name="code">이긴 항 — 0 밖 · 1 터파기선 · 2 닿은 뒤 평탄 · 3 평탄 · 4 직선(꺾임 찾기용).</param>
+        /// <param name="code">이긴 항 — 0 밖 · 1 터파기선 · 2 닿은 배면의 평탄 · 3 평탄 · 4 직선(꺾임 찾기용 · ★v105.3.1 닿은 배면에는 3 · 4가 없다).</param>
         internal double B(double a, out bool inside, out bool flat, out int code)
         {
             inside = false; flat = false; code = 0;
@@ -139,7 +139,8 @@ public static partial class WallExcav
                 if (!double.IsNaN(g) && !double.IsNaN(sv) && Math.Abs(sv - g) > 0.01) return double.NaN;
                 double l = Lz(a);
                 double s = Math.Abs(a - bk.Day), d = bk.LDay - s * bk.K;
-                bool after = !double.IsNaN(bk.Contact) && s > Math.Abs(bk.Contact - bk.Day) + 1e-12;
+                // ★★[v105.3.1 · JACK 1026 «이미 만났으면 그 후엔 뒷채움 사면으로 복제되서 올라가면 되는데 어긋남»] 닿았으면 닿기 앞(데이라잇 ~ 닿은 자리)도 터파기선 — 직선 쐐기 없음(3D Touched와 같은 뜻)
+                bool after = !double.IsNaN(bk.Contact);
                 double top = after ? bk.T : Math.Max(bk.T, d);
                 double b = Math.Max(e, Math.Min(l, top));
                 if (!(b < l - 1e-9)) return double.NaN;

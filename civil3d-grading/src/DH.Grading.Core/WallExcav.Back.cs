@@ -6,7 +6,7 @@ namespace DH.Grading.Core;
 /// <summary>★★★[v104 B · 계획_v104_B.md 2판 · JACK 1021 «터파기 끝에서 지정 경사로 내려오다 옹벽 꼭대기 높이에서 평탄 · 경사 첫 값 1.5 · 절토 옹벽만»]
 /// <b>옹벽 뒷채움 배면사면</b> — 절토 옹벽 뒤 되메우기 윗면.
 /// <para>B(p) = max(E, min(L, max(T, D))) — T = 절토 옹벽 줄 꼭대기에서 정한 평탄 높이(<see cref="TopAt"/> · ★v105.1 — 가까운 벽 꼭대기 · 낮은 평탄이 경계까지) ·
-/// D = 데이라잇(터파기 법면이 땅에 닿는 선)마다 1:n 원뿔의 <b>위 덮개</b> max_q(z(q) − |p − q|/n)(연속 · 기울기 ≤ 1/n) · L = Lower(정지면, 원지반) ·
+/// D = 데이라잇(터파기 법면이 땅에 닿는 선)마다 1:n 원뿔의 <b>위 덮개</b> max_q(z(q) − |p − q|/n)(연속 · 기울기 ≤ 1/n · ★v105.3.1 — 벽 쪽 직선이 뒷채움사면에 닿는 q는 뺌 · <see cref="EnsureKept"/>) · L = Lower(정지면, 원지반) ·
 /// E = 옹벽 터파기면(그 아래로는 안 내려간다 — 배면 경사가 터파기 경사보다 가파를 때).</para>
 /// <para>구역 Ω = 터파기 안(E &lt; L) ∩ 가장 가까운 절토 줄의 흙 쪽 ∩ <b>정지면 = 원지반</b>(벽 뒤가 자연 땅 — 설계 사면이 있으면 그 면이 되메우기 윗면이라 안 건드림 · 내 판단) ∩ B &lt; L
 /// ∩ ★[v105.1] 배면 후보 가면 C(<see cref="BackMask"/> — 그림과 수량이 같은 가면을 본다).</para>
@@ -39,7 +39,12 @@ public static partial class WallExcav
         public List<List<Point3>> Daylight = new();
         /// <summary>★[v105.1] 없으면(또는 빈 가면) Ω가 비어 배면 없음 — 대체 가면 없음(계획 검토 높음 2).</summary>
         public BackMask? Mask;
-        internal double[]? DlBox;          // 데이라잇 변마다 상자(가지치기)
+        /// <summary>★★[v105.3.1] 닿지 않은 데이라잇 토막(<see cref="EnsureKept"/> — 배면 직선은 이것들의 원뿔 위 덮개).</summary>
+        internal List<List<Point3>>? Kept;
+        internal double[]? KeptBox;        // Kept 변마다 상자(가지치기)
+        internal double DayLen, DayTouchLen;   // 데이라잇 길이 · 그중 닿은 길이(기록 줄)
+        internal int DayAmbig, DayFoot;        // 안쪽 법선 — 양쪽에 E가 있던 변 · 어느 쪽도 없어 벽 발 쪽으로 정한 변(기록 줄)
+        internal bool HasDaySeg;
         internal double[]? TopSeg;         // ★[v104.1] 줄 선분마다 (ax · ay · az · bx · by · bz · 흙 쪽 · 줄 번호) — 칸 SegW개
         internal double[]? SegBox;         // ★[v105.1] 줄 선분마다 상자(x0 · y0 · x1 · y1)
         internal int[]? WallSeg;           // ★[v105.1] 줄마다 첫 선분 번호(TopSeg 안 · 줄 차례대로 · 끝 = 다음 줄 첫 번호)
@@ -49,8 +54,9 @@ public static partial class WallExcav
 
     /// <summary>2 = 원뿔 덮개 · 늘임 칸 없음(v104 B 2판) · 3 = 평탄 높이 T가 끊기지 않는 식(v104.1) ·
     /// 4 = 평탄 높이 = 가까운 벽 꼭대기 · 낮은 평탄이 후보 구역 안에서 1:n으로 이어짐 + 후보 가면(v105.1 — 뜻이 바뀌어 옛 기록은 «[종단도] 먼저») ·
-    /// ★5 = 꼴은 4와 같고 뜻이 바뀜 — 직선이 뒷채움사면에 닿으면 끝까지 그 사면(v105.2 · <see cref="Touched"/>) · 옛 그림 면이 같은 도장으로 되쓰이지 않게 판을 올린다.</summary>
-    public const int BackRecordVersion = 5;
+    /// ★5 = 꼴은 4와 같고 뜻이 바뀜 — 직선이 뒷채움사면에 닿으면 끝까지 그 사면(v105.2 · <see cref="Touched"/>) · 옛 그림 면이 같은 도장으로 되쓰이지 않게 판을 올린다 ·
+    /// ★6 = 꼴은 5와 같고 뜻이 바뀜 — 닿음은 데이라잇 점마다 한 번 · 닿은 점의 직선은 안 씀 → 닿은 자리는 데이라잇부터 뒷채움사면(v105.3.1 · JACK 1026 · <see cref="EnsureKept"/>).</summary>
+    public const int BackRecordVersion = 6;
 
     /// <summary>기록 값 — [I 판 · D n · I 줄 수 · (I 흙 쪽 · I 점 수 · (D x · D y · D T)*)* · I 데이라잇 수 · (I 점 수 · (D x · D y · D z)*)*
     /// · D X0 · D Y0 · D H · I Nx · I Ny · I 구간 수 · (I J · I I0 · I 길이)*].</summary>
@@ -87,7 +93,7 @@ public static partial class WallExcav
             int ver = I();
             if (ver != BackRecordVersion) { why = $"배면 기록 판 {ver}(이 판은 {BackRecordVersion}만 읽는다)"; return false; }
             r.N = D();
-            if (!(r.N > 0)) { why = $"배면 기록 경사 {r.N}"; return false; }
+            if (!(r.N > 0 && r.N <= Settings.SlopeMax)) { why = $"배면 기록 경사 {r.N}"; return false; }   // ★[v105.3.1 검토 낮음 6] 무한 · 범위 밖 경사 거절
             int nw = I();
             for (int k = 0; k < nw; k++)
             {
@@ -114,6 +120,9 @@ public static partial class WallExcav
             if (nr > 0 && !(m.H > 0)) { why = $"배면 가면 간격 {m.H}"; r = new BackRecord(); return false; }
             r.Mask = nr > 0 ? m : null;
             if (i != vals.Count) { why = $"배면 기록 — 남는 칸 {vals.Count - i}"; r = new BackRecord(); return false; }
+            // ★[v105.3.1 검토 낮음 6] 벽 꼭대기 · 데이라잇 좌표가 유한해야(닿음 걷기 끝 높이 · 원뿔)
+            if (r.Walls.Any(w => w.Pts.Any(p => !double.IsFinite(p.X) || !double.IsFinite(p.Y) || !double.IsFinite(p.Z))) || r.Daylight.Any(d => d.Any(p => !double.IsFinite(p.X) || !double.IsFinite(p.Y) || !double.IsFinite(p.Z))))
+            { why = "배면 기록 — 유한하지 않은 좌표"; r = new BackRecord(); return false; }
             return true;
         }
         catch (Exception ex) { why = $"배면 기록을 못 읽었다({i}째 칸 · {ex.GetType().Name}: {ex.Message})"; r = new BackRecord(); return false; }
@@ -170,21 +179,143 @@ public static partial class WallExcav
     /// 걸음 2 cm · 두 기울기 차 ≤ 1.5라 깊이 2.5 cm 넘는 닿음은 늘 잡고 1 cm 안은 늘 안 잡는다(그 사이는 걸음 자리에 달림 — 그림 · 수량은 같은 걸음이라 같은 답).</para></summary>
     const double TouchStep = 0.02, TouchTol = 0.01;
 
-    /// <summary>★★★[v105.2 · 계획_v105_2.md 2판 §2 · JACK 1023 «뒷채움사면을 다시 절토하면서 들어갈 것 같으면 직선으로 오다가 만나는 선부터는 같은 사면으로(소단 있어도 그대로)» · 인터뷰 «끝까지 뒷채움사면»]
-    /// 이긴 데이라잇 자리 q*(높이 <paramref name="qz"/>)에서 p까지 곧은 배면 직선이 그 앞에서 뒷채움사면 아래로 들어갔나.
-    /// <para>q*에서 p까지 곧은 선 위 모든 점에서 q*가 이긴다(삼각 부등식 — 원뿔 덮개의 별 모양) → 그 선의 높이 = qz − s/n(곧다).
-    /// <see cref="TouchStep"/>마다 걸어 D(s) &lt; E(s) − <see cref="TouchTol"/>인 자리가 하나라도 있으면 참(E가 없는 자리는 건너뜀).
-    /// 걸음 자리는 길이에서만 나와 그림 · 수량이 같은 E 함수(같은 옹벽터파기 면 · 같은 캐시)면 같은 답이다.</para></summary>
-    static bool Touched(BackRecord r, double qx, double qy, double qz, double x, double y, Func<double, double, double?> excAt)
+    /// <summary>★★[v105.3.1] 데이라잇 표본 간격(m) — 표본마다 «닿음»을 한 번 재고, 닿음이 바뀌는 자리는 변 위 이분법(0.1 mm 안).</summary>
+    const double KeepStep = 0.1;
+
+    /// <summary>★★★[v105.3.1 · JACK 1023 «뒷채움사면을 다시 절토하면서 들어갈 것 같으면 … 만나는 선부터는 같은 사면으로» · JACK 1026 종단 스샷 «이미 배면사면과 뒷채움 사면이 만났으면 그 후엔 뒷채움 사면으로 복제되서 올라가면 되는데 어긋남»]
+    /// 데이라잇 점 q마다 <b>한 번</b> — q에서 데이라잇에 직각인 터파기 쪽(법면이 흘러내리는 쪽 · 그 변의 안쪽 법선)으로 곧은 배면 직선(qz − s/n)을 <see cref="TouchStep"/>마다 걸어,
+    /// 그 줄이 처음 만나는 벽(앞면 선 · 그 자리 꼭대기 T)에 닿기 전 · T보다 <see cref="TouchTol"/> 넘게 내려가기 전에 뒷채움사면 아래로 <see cref="TouchTol"/> 넘게 들어가면 q는 «닿음» — 그 q의 직선(원뿔)은 안 쓴다.
+    /// 배면 직선 = <b>닿지 않은 데이라잇 토막</b>의 원뿔 위 덮개(<see cref="BackRecord.Kept"/>) → 닿은 자리는 데이라잇부터 뒷채움사면(소단 포함) · 평탄.
+    /// 2D 횡단(단면 축으로 데이라잇에서 처음 만나는 벽까지 걷기 — 늘임이 양쪽에 같아 같은 답 · 닿으면 그 구간 전부 터파기선)과 같은 뜻.
+    /// <para>걷는 쪽을 «가장 가까운 벽 발»로 하면 ㄷ자 현장에서 데이라잇 끝이 옆 날개 벽 쪽(비스듬)으로 걸어 소단을 비켜 갔다(V50 — 1 m 띠가 12 cm 높아짐) → 데이라잇 직각.</para>
+    /// <para>v105.2 · v105.3.1 첫 고침은 점 p마다 이긴 자리 q*에서 p까지(그 너머까지) 걸었다 — 이웃한 두 p가 다른 q*(곧은 데이라잇 · 벽 끝 둥근 데이라잇)를 보면
+    /// 한쪽만 닿아 배면에 계단(화면 없는 Civil V49 · JACK 사본 벽 끝 6곳 · 최대 37 cm · 설치 전 검토 중간 1 · 2 · 5 — 꼭대기 높이가 소단을 지나는 자리 · 같은 줄 위 점끼리 다른 답 · 벽 너머 걷기).
+    /// 점마다 한 번이면 정해진 원뿔 묶음의 위 덮개라 끊기지 않는다 — 닿은 자리와 안 닿은 자리 사이는 안 닿은 쪽 원뿔이 1:n으로 내려와 뒷채움사면에 묻히는 데서 끝난다.
+    /// 걷기는 처음 만나는 벽까지만(벽 너머 안 감) · 걸음 수 ≤ min(벽까지 거리, n·(qz − T))/<see cref="TouchStep"/>.</para>
+    /// <para>처음 BackAt 때 그 <paramref name="excAt"/>로 한 번 짓고 기록에 둔다(그림 · 수량이 같은 옹벽터파기 면 · 같은 캐시를 넘긴다 — 다른 면으로 같은 기록을 부르지 말 것).</para></summary>
+    static void EnsureKept(BackRecord r, Func<double, double, double?> excAt)
     {
-        double dx = x - qx, dy = y - qy, len = Math.Sqrt(dx * dx + dy * dy);
-        for (int k = 1; k * TouchStep < len; k++)
+        if (r.Kept != null) return;
+        lock (r)
         {
-            double s = k * TouchStep;
-            var e = excAt(qx + dx * s / len, qy + dy * s / len);
-            if (e != null && qz - s / r.N < e.Value - TouchTol) return true;
+            if (r.Kept != null) return;
+            if (!(r.N > 0) || !double.IsFinite(r.N)) { r.KeptBox = Array.Empty<double>(); r.HasDaySeg = false; r.Kept = new List<List<Point3>>(); return; }
+            // 가장 가까운 벽 앞면 선의 발(꼭대기 Z) — 걷는 줄이 벽을 안 만날 때의 끝 높이 · 안쪽을 못 정한 변의 방향
+            (double X, double Y, double Z) Foot(double qx, double qy)
+            {
+                double best = double.MaxValue, fx = qx, fy = qy, fz = double.NaN;
+                foreach (var w in r.Walls)
+                    for (int i = 0; i + 1 < w.Pts.Count; i++)
+                    {
+                        var a = w.Pts[i]; var b = w.Pts[i + 1];
+                        double ex = b.X - a.X, ey = b.Y - a.Y, L2 = ex * ex + ey * ey;
+                        double t = L2 < 1e-24 ? 0 : Math.Max(0, Math.Min(1, ((qx - a.X) * ex + (qy - a.Y) * ey) / L2));
+                        double px = a.X + ex * t, py = a.Y + ey * t, d2 = (px - qx) * (px - qx) + (py - qy) * (py - qy);
+                        if (d2 < best) { best = d2; fx = px; fy = py; fz = a.Z + (b.Z - a.Z) * t; }
+                    }
+                return (fx, fy, fz);
+            }
+            // q에서 (ux, uy)로 걷기 — 2D 횡단과 같은 끝: 그 줄이 <b>처음 만나는 벽</b>(앞면 선 · 그 자리 꼭대기 T)까지 · 직선이 T − TouchTol 아래로 가면 그만 ·
+            //   벽을 안 만나면 가장 가까운 벽 꼭대기를 T로(직선이 그 아래로 가면 그만 — 걸음 수 유한)
+            bool Touch(Point3 q, double ux, double uy)
+            {
+                if (!double.IsFinite(q.Z)) return false;
+                double sW = double.PositiveInfinity, zW = double.NaN;
+                foreach (var w in r.Walls)
+                    for (int i = 0; i + 1 < w.Pts.Count; i++)
+                    {
+                        var a = w.Pts[i]; var b = w.Pts[i + 1];
+                        double ex = b.X - a.X, ey = b.Y - a.Y, den = ux * ey - uy * ex;
+                        if (Math.Abs(den) < 1e-12) continue;
+                        double wx = a.X - q.X, wy = a.Y - q.Y;
+                        double s = (wx * ey - wy * ex) / den, v = (wx * uy - wy * ux) / den;
+                        if (s > 1e-9 && v >= 0 && v <= 1 && s < sW) { sW = s; zW = a.Z + (b.Z - a.Z) * v; }
+                    }
+                double fz = double.IsFinite(sW) ? zW : Foot(q.X, q.Y).Z;
+                if (!double.IsFinite(fz)) return false;
+                // ★[v105.3.1 검토 낮음 6] 걸음 길이 상한 1 km(벽을 안 만나고 꼭대기 값이 엉뚱해도 데이라잇 표본마다 5만 걸음 안)
+                int kMax = (int)Math.Ceiling(Math.Min(Math.Min(sW, r.N * Math.Max(0, q.Z - fz + TouchTol)), 1000) / TouchStep) + 1;
+                for (int k = 1; k <= kMax && k * TouchStep <= sW; k++)
+                {
+                    double s = k * TouchStep, d = q.Z - s / r.N;
+                    if (d < fz - TouchTol) return false;   // 직선이 평탄 아래 — 그 뒤는 어느 쪽이든 평탄
+                    var e = excAt(q.X + ux * s, q.Y + uy * s);
+                    if (e != null && d < e.Value - TouchTol) return true;
+                }
+                return false;
+            }
+            // 변의 안쪽(터파기 쪽) 법선 — 데이라잇은 터파기면 테두리라 한쪽에만 E가 있다(±0.2 m · 없으면 ±1 m) · 양쪽이면 낮은 쪽 · 어느 쪽도 없으면 가장 가까운 벽 발 쪽
+            int nAmbig = 0, nFoot = 0;
+            (double X, double Y) Inward(Point3 a, Point3 b)
+            {
+                double ex = b.X - a.X, ey = b.Y - a.Y, l = Math.Sqrt(ex * ex + ey * ey);
+                double nx = -ey / l, ny = ex / l, mx = (a.X + b.X) / 2, my = (a.Y + b.Y) / 2;
+                foreach (double h in new[] { 0.2, 1.0 })
+                {
+                    var ep = excAt(mx + nx * h, my + ny * h); var em = excAt(mx - nx * h, my - ny * h);
+                    if (ep != null && em == null) return (nx, ny);
+                    if (em != null && ep == null) return (-nx, -ny);
+                    if (ep != null && em != null) { nAmbig++; return ep.Value <= em.Value ? (nx, ny) : (-nx, -ny); }   // ★[검토 낮음 4] 좁은 둑 · 홈 — 세어 기록 줄에
+                }
+                nFoot++;
+                var f = Foot(mx, my);
+                return (f.X - mx) * nx + (f.Y - my) * ny >= 0 ? (nx, ny) : (-nx, -ny);
+            }
+            var kept = new List<List<Point3>>();
+            double lenAll = 0, lenTouch = 0;
+            foreach (var dl in r.Daylight)
+            {
+                if (dl.Count < 2) continue;
+                List<Point3>? cur = null;
+                bool fPrev = false, started = false;
+                for (int i = 0; i + 1 < dl.Count; i++)
+                {
+                    var a = dl[i]; var b = dl[i + 1];
+                    double segL = Math.Sqrt((b.X - a.X) * (b.X - a.X) + (b.Y - a.Y) * (b.Y - a.Y));
+                    if (segL < 1e-9) continue;
+                    Point3 At(double t) => new(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t, a.Z + (b.Z - a.Z) * t);
+                    var (ux, uy) = Inward(a, b);
+                    bool Tc(double t) => Touch(At(t), ux, uy);
+                    lenAll += segL;
+                    // 변마다 제 법선으로 — 꺾인 꼭짓점에서는 앞 변 · 뒤 변 답이 다를 수 있다(그 꼭짓점에서 토막이 갈림)
+                    bool f0 = Tc(0);
+                    if (!started) { started = true; fPrev = f0; if (!f0) cur = new List<Point3> { a }; }
+                    else if (f0 != fPrev)
+                    {
+                        if (fPrev) cur = new List<Point3> { a };
+                        else { if (cur!.Count >= 2) kept.Add(cur); cur = null; }
+                        fPrev = f0;
+                    }
+                    int m = Math.Max(1, (int)Math.Ceiling(segL / KeepStep));
+                    double tPrev = 0;
+                    for (int k = 1; k <= m; k++)
+                    {
+                        double t = (double)k / m;
+                        bool f = Tc(t);
+                        if (f != fPrev)
+                        {
+                            // 바뀌는 자리 — 이분법(안 닿은 쪽 끝을 남긴다)
+                            double lo = tPrev, hi = t;
+                            for (int it = 0; it < 12 && (hi - lo) * segL > 1e-4; it++) { double mid = (lo + hi) / 2; if (Tc(mid) == fPrev) lo = mid; else hi = mid; }
+                            if (fPrev) { lenTouch += (hi - tPrev) * segL; cur = new List<Point3> { At(hi) }; }
+                            else { cur!.Add(At(lo)); if (cur.Count >= 2) kept.Add(cur); cur = null; lenTouch += (t - lo) * segL; }
+                        }
+                        else if (f) lenTouch += (t - tPrev) * segL;
+                        fPrev = f; tPrev = t;
+                    }
+                    if (!fPrev) cur!.Add(b);
+                }
+                if (cur != null && cur.Count >= 2) kept.Add(cur);
+            }
+            var box = new List<double>();
+            foreach (var dl in kept)
+                for (int i = 0; i + 1 < dl.Count; i++)
+                    box.AddRange(new[] { Math.Min(dl[i].X, dl[i + 1].X), Math.Min(dl[i].Y, dl[i + 1].Y), Math.Max(dl[i].X, dl[i + 1].X), Math.Max(dl[i].Y, dl[i + 1].Y), Math.Max(dl[i].Z, dl[i + 1].Z) });
+            r.KeptBox = box.ToArray();
+            r.DayLen = lenAll; r.DayTouchLen = lenTouch; r.DayAmbig = nAmbig; r.DayFoot = nFoot;
+            r.HasDaySeg = r.Daylight.Any(d => d.Count >= 2);
+            r.Kept = kept;
         }
-        return false;
     }
 
     /// <summary>★[v105.1] 터파기 안 자연 땅 — L 있음 · E &lt; L · 정지면 ≈ 원지반(1 cm). 후보 가면 C의 뜻(평탄 격자가 이어지는 길) — 소단 · 길 · 벽 앞(정지면 ≠ 원지반)과 터파기 밖에서 끊긴다.</summary>
@@ -227,30 +358,22 @@ public static partial class WallExcav
         if (!PreOmega(r, x, y, P, G, E, out double L, out double bestD)) return double.NaN;
         double T = TopAt(r, x, y);
         if (double.IsNaN(T)) return double.NaN;   // ★[v105.1 · 계획 검토 중간 2] 가면 밖(그 칸 네 마디에 C가 없음) — 그림 · 수량이 같은 Ω를 본다
-        // 데이라잇 원뿔 위 덮개(상자로 가지치기 — 그 변이 줄 수 있는 가장 큰 값이 지금 값보다 작으면 건너뜀) · ★[v105.2] 이긴 자리 q*도
-        PrepareBack(r);
-        double Dz = double.NegativeInfinity, qx = 0, qy = 0, qz = 0;
+        // ★★★[v105.3.1] 배면 직선 = 닿지 않은 데이라잇 토막의 원뿔 위 덮개(상자로 가지치기 — 그 변이 줄 수 있는 가장 큰 값이 지금 값보다 작으면 건너뜀) ·
+        //   다 닿았으면(−∞) 직선 없음 → 뒷채움사면 · 평탄 max(E, min(L, T))(JACK 1023 «닿으면 그 사면» · 1026 «데이라잇부터»)
+        EnsureKept(r, excAt);
+        if (!r.HasDaySeg) return double.NaN;
+        double Dz = double.NegativeInfinity;
         int bi = 0;
-        foreach (var dl in r.Daylight)
+        var bx = r.KeptBox!;
+        foreach (var dl in r.Kept!)
             for (int i = 0; i + 1 < dl.Count; i++, bi++)
             {
-                var bx = r.DlBox!;
                 double dx = Math.Max(0, Math.Max(bx[bi * 5] - x, x - bx[bi * 5 + 2])), dy = Math.Max(0, Math.Max(bx[bi * 5 + 1] - y, y - bx[bi * 5 + 3]));
                 if (bx[bi * 5 + 4] - Math.Sqrt(dx * dx + dy * dy) / r.N <= Dz) continue;
-                double v = ConeSeg(dl[i], dl[i + 1], x, y, r.N, out double t);
-                if (v > Dz)
-                {
-                    Dz = v;
-                    var a = dl[i]; var b = dl[i + 1];
-                    qx = a.X + (b.X - a.X) * t; qy = a.Y + (b.Y - a.Y) * t; qz = a.Z + (b.Z - a.Z) * t;
-                }
+                double v = ConeSeg(dl[i], dl[i + 1], x, y, r.N, out _);
+                if (v > Dz) Dz = v;
             }
-        if (double.IsNegativeInfinity(Dz)) return double.NaN;
-        // ★★★[v105.2 · 계획_v105_2.md 2판 §2] 직선이 앞에서 뒷채움사면 아래로 들어갔으면(닿음) 직선을 버리고 뒷채움사면 · 평탄 — max(E, min(L, T)).
-        //   D ≤ max(T, E)면 닿기 앞 · 뒤 식이 같아(D ≤ T: max(T, D) = T · T &lt; D ≤ E: 둘 다 E) 걷지 않는다 — 걷는 것은 직선 띠뿐
-        //   ★[설치 전 검토 중간 1] T ≥ L이어도 두 식이 같다(둘 다 max(E, L)) — 걷지 않는다
-        double X = Dz > Math.Max(T, E) && T < L && Touched(r, qx, qy, qz, x, y, excAt) ? T : Math.Max(T, Dz);
-        double B = Math.Max(E, Math.Min(L, X));
+        double B = Math.Max(E, Math.Min(L, Math.Max(T, Dz)));
         if (!(B < L - 1e-6)) return double.NaN;
         inside = true;
         flatHit = bestD < 0.5 && B > T + 0.01;
@@ -389,16 +512,6 @@ public static partial class WallExcav
         r.SegBox = bx.ToArray();
         r.WallSeg = wsg;
         r.TopSeg = l.ToArray();
-    }
-
-    static void PrepareBack(BackRecord r)
-    {
-        if (r.DlBox != null) return;
-        var l = new List<double>();
-        foreach (var dl in r.Daylight)
-            for (int i = 0; i + 1 < dl.Count; i++)
-                l.AddRange(new[] { Math.Min(dl[i].X, dl[i + 1].X), Math.Min(dl[i].Y, dl[i + 1].Y), Math.Max(dl[i].X, dl[i + 1].X), Math.Max(dl[i].Y, dl[i + 1].Y), Math.Max(dl[i].Z, dl[i + 1].Z) });
-        r.DlBox = l.ToArray();
     }
 
     // ───────────────────────── ★[v105.1] 후보 가면 · 평탄 격자 ─────────────────────────
@@ -1183,8 +1296,10 @@ public static partial class WallExcav
                 if (rc.Chord) nChord++;
                 if (rc.Star) nStar++;
             }
-        note = string.Format(CultureInfo.InvariantCulture, "격자 {0:F2}m {1}×{2} · 안 {3}점 · 경계점 {4}(모서리 붙임 {5} · 버림 {6}) · 꺾임점 {7}(변 {8} · 현 {9} · 별 {10}) · 잘게 칸 {11}(가운데 점 {12}) · 세모 {13}{14}{15}",
-            h, nx, ny, nIn, nEdge, nSnap, nDrop, nKink, nKinkEdge, nChord, nStar, nFine, nMid, res.Count, nFanFail > 0 ? $" · ⚠못 나눈 칸 {nFanFail}" : "", flatHits > 0 ? $" · ⚠평탄 없이 벽에 닿는 점 {flatHits}" : "");
+        note = string.Format(CultureInfo.InvariantCulture, "격자 {0:F2}m {1}×{2} · 안 {3}점 · 경계점 {4}(모서리 붙임 {5} · 버림 {6}) · 꺾임점 {7}(변 {8} · 현 {9} · 별 {10}) · 잘게 칸 {11}(가운데 점 {12}) · 세모 {13}{14}{15}{16}",
+            h, nx, ny, nIn, nEdge, nSnap, nDrop, nKink, nKinkEdge, nChord, nStar, nFine, nMid, res.Count, nFanFail > 0 ? $" · ⚠못 나눈 칸 {nFanFail}" : "", flatHits > 0 ? $" · ⚠평탄 없이 벽에 닿는 점 {flatHits}" : "",
+            r.Kept != null ? string.Format(CultureInfo.InvariantCulture, " · 데이라잇 {0:F1}m 중 뒷채움사면에 닿음 {1:F1}m(그 직선 안 씀){2}", r.DayLen, r.DayTouchLen,
+                r.DayAmbig + r.DayFoot > 0 ? $"(터파기 쪽을 양쪽 E로 고른 변 {r.DayAmbig} · 벽 발 쪽으로 정한 변 {r.DayFoot})" : "") : "");
         return res;
     }
 }

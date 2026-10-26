@@ -133,9 +133,24 @@ static class Xsec2DCheck
         double eb = sh4.XBack + Margin + 3.6 + 1 + 3.6 + 1 + 2.1 * 1.2;
         double sC = (107 - (zfb + 6 - 0.01)) * 1.5;           // 위 소단(zfb + 6)에서 1 cm 넘게 아래로 가는 자리
         double s55 = 5.5, bAt = X8b.B(eb - s55, out bool iAt, out _), eAt = X8b.E(eb - s55), dAt = 107 - s55 / 1.5;
-        check("S173 ⑧b 배면 — 위 소단에 닿음(손셈 자리) · 그 뒤 직선이 터파기선 위로 나와도 터파기선을 따름(v105.2 «끝까지»)",
-            bkb != null && Math.Abs(rise - 8.1) < 1e-9 && !double.IsNaN(bkb.Contact) && Math.Abs(Math.Abs(bkb.Contact - eb) - sC) < 1e-5 && iAt && dAt > eAt + 0.05 && Math.Abs(bAt - Math.Max(eAt, 103)) < 1e-9,
-            bkb == null ? $"배면 {X8b.Backs.Count}" : $"닿음 {Math.Abs(bkb.Contact - eb):F4}/{sC:F4} · s 5.5: B {bAt:F4} · E {eAt:F4} · D {dAt:F4}");
+        // ★★[v105.3.1 · JACK 1026 «이미 만났으면 그 후엔 뒷채움 사면으로 복제되서 올라가면 되는데 어긋남»] 닿기 앞(s 1 · 2 — 직선이 법면 위 쐐기)도 터파기선
+        double b1 = X8b.B(eb - 1, out bool i1, out _), e1b = X8b.E(eb - 1), b2 = X8b.B(eb - 2, out bool i2, out _), e2b = X8b.E(eb - 2);
+        check("S173 ⑧b 배면 — 위 소단에 닿음(손셈 자리) · 닿기 앞(s 1 · 2 — 직선 쐐기 없음)도 · 그 뒤 직선이 터파기선 위로 나와도 터파기선을 따름(v105.3.1)",
+            bkb != null && Math.Abs(rise - 8.1) < 1e-9 && !double.IsNaN(bkb.Contact) && Math.Abs(Math.Abs(bkb.Contact - eb) - sC) < 1e-5 && iAt && dAt > eAt + 0.05 && Math.Abs(bAt - Math.Max(eAt, 103)) < 1e-9
+            && i1 && i2 && Math.Abs(b1 - e1b) < 1e-9 && Math.Abs(b2 - e2b) < 1e-9 && 107 - 1 / 1.5 > e1b + 0.1 && 107 - 2 / 1.5 > e2b + 0.1,
+            bkb == null ? $"배면 {X8b.Backs.Count}" : $"닿음 {Math.Abs(bkb.Contact - eb):F4}/{sC:F4} · s 1: B {b1:F4}/E {e1b:F4}/직선 {107 - 1 / 1.5:F4} · s 2: B {b2:F4}/E {e2b:F4} · s 5.5: B {bAt:F4} · E {eAt:F4} · D {dAt:F4}");
+        // (b2) ★★[v105.3.1 · 설치 전 검토 중간 3] 벽 꼭대기가 위 소단(바닥 + 6) 바로 위 · 아래(높이 5.95 · 5.85) — 위면 직선이 소단 전에 평탄 − 1 cm 아래로(안 닿음 · s 1 = 직선) ·
+        //   아래면 소단에 닿음(s 1 = 터파기선) — 걷기 끝(평탄)이 실제로 답을 가른다(3D S170 ⑩과 같은 뜻)
+        WallExcav.Xs2D X8T(double hT) => WallExcav.Excav2D(Rec(Line(0, +1, 100, hT)), 5, -30, 5, 30, 30, 30, G8, G8, G8, spB, 1.5, MinSin);
+        var XTa = X8T(5.95); var XTb = X8T(5.85);
+        var bTa = XTa.Backs.Count == 1 ? XTa.Backs[0] : null; var bTb = XTb.Backs.Count == 1 ? XTb.Backs[0] : null;
+        double S1(WallExcav.Xs2D X, WallExcav.Back2D bk, out double e1, out bool ins) { double a = bk.Day + Math.Sign(bk.Wall - bk.Day); e1 = X.E(a); return X.B(a, out ins, out _); }
+        double vTa = bTa == null ? double.NaN : S1(XTa, bTa, out double eTa, out bool iTa) , vTb = bTb == null ? double.NaN : S1(XTb, bTb, out double eTb, out bool iTb);
+        double gapA = bTa == null ? double.NaN : bTa.T - (XTa.Profs[0].Zf + 6), gapB = bTb == null ? double.NaN : bTb.T - (XTb.Profs[0].Zf + 6);
+        check("S173 ⑧b2 배면 — 꼭대기가 위 소단보다 5 cm 위 = 안 닿음 · s 1 직선 / 5 cm 아래 = 닿음 · s 1 터파기선",
+            bTa != null && bTb != null && Math.Abs(gapA - 0.05) < 1e-6 && Math.Abs(gapB + 0.05) < 1e-6 && double.IsNaN(bTa.Contact) && !double.IsNaN(bTb.Contact)
+            && Math.Abs(vTa - (bTa.LDay - bTa.K)) < 1e-9 && Math.Abs(vTb - XTb.E(bTb.Day + Math.Sign(bTb.Wall - bTb.Day))) < 1e-9 && vTa > XTa.E(bTa.Day + Math.Sign(bTa.Wall - bTa.Day)) + 0.1,
+            bTa == null || bTb == null ? $"배면 {XTa.Backs.Count} · {XTb.Backs.Count}" : $"꼭대기 − 소단 {gapA:F4} · {gapB:F4} · 닿음 {bTa.Contact} · {bTb.Contact:F4} · s 1: {vTa:F4}(직선 {bTa.LDay - bTa.K:F4}) · {vTb:F4}");
         // (c) 설계 사면(정지면_DH ≠ 원지반 2 cm — 그린 계획면은 같아도) — 배면 없음 · (d) 쌓인 단 — 데이라잇 쪽 첫 벽 = 맨 위 단 · T = 맨 위 단 꼭대기
         Func<double, double> P8 = a => a > 3 && a < 6 ? G8(a) - 0.02 : G8(a);
         var X8c = WallExcav.Excav2D(r8, 5, -30, 5, 30, 30, 30, G8, G8, P8, sp, 1.5, MinSin);
