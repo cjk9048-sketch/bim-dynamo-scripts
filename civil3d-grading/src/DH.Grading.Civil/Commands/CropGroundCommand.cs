@@ -28,7 +28,7 @@ public sealed class CropGroundCommand
     /// <summary>범위 밖 원본(등고선·표고점)을 <b>옮겨 두는</b> 레이어 — 지우지 않고 끈다.
     /// <para>지표면 정의가 이 선들을 물고 있어서, 지우면 도구공간 <b>등고선에 느낌표</b>가 뜬다.
     /// 옮겨 두면 정의는 그대로 살아 있고 화면·출력에서만 빠진다.</para></summary>
-    private const string CutAwayLayer = "DH-원지반자료(범위밖)";
+    internal const string CutAwayLayer = "DH-원지반자료(범위밖)";
 
     [CommandMethod("DHCROP")]
     public void Run()

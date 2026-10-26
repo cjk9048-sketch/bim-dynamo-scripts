@@ -42,7 +42,9 @@ internal static class ExcavDiagram
     {
         if (c == null || spec.Table == null || spec.Table.Rows.Count == 0) return;
         c.Children.Clear();
-        c.Opacity = spec.On ? 1.0 : 0.4;
+        // ★[v105 · JACK 1022 «뒷채움 터파기 사용 유무와 관계없이 기본적으로 … 그 아래 설정들에 따라 달라졌음»] 옅게 하지 않는다 — 꺼짐이면 옹벽 · 땅만 그린다(아래 on 갈래)
+        c.Opacity = 1.0;
+        bool on = spec.On;
         static double Ok(double v, double dflt, double lo, double hi) => double.IsNaN(v) || double.IsInfinity(v) ? dflt : System.Math.Clamp(v, lo, hi);
         double mg = Ok(spec.Margin, 0.5, 0, 5), n = Ok(spec.Slope, 1.2, 0.05, 5);
         double H = Ok(spec.StepH, 5.0, 0.5, 20), Wb = Ok(spec.StepW, 1.0, 0, 10);
@@ -57,15 +59,19 @@ internal static class ExcavDiagram
         var txt = new SolidColorBrush(Color.FromRgb(0x44, 0x44, 0x44));
         var mag = new SolidColorBrush(Color.FromRgb(0xC0, 0x1C, 0xC0));       // 터파기선(종단 · 횡단의 마젠타)
         var edge = new SolidColorBrush(Color.FromRgb(0x50, 0x50, 0x50));
+        var warns = new List<string>();                                     // ⚠ 글 — 형식 이름 밑에 줄마다(그림 안은 선과 겹친다)
 
         // 장면(m · 위가 +) — 1단 앞면(앞 땅) x = 0 · 흙은 +x · 계획면 y = 0 · k단 앞면 x_k = k(앞면 너비 + 소단폭)(구간 옹벽과 같은 셈) · 맨 위 = 원지반 y = 3H
         var xs = new double[Steps];
         for (int k = 0; k < Steps; k++) xs[k] = k * (face + Wb);
         double yTopG = Steps * H;
         // ★[v104 B] 맨 위 단 뒤 원지반은 1:3으로 오른다(자연 사면 — 배면사면이 보이게)
+        // ★[v104.0.1 · JACK 1022 «그림이 너무 과하게 나온다»] 단높이의 반만 오르고 평평 — 끝없이 오르면 1:1.8 + 소단(평균 약 1:2.1) 터파기선이
+        //   벽 뒤 124 m · 꼭대기 위 41 m에서야 땅에 닿아(그림 코드를 옮겨 잼) 벽 15 m가 점이 됐다
         const double gUp = 1.0 / 3.0;
+        double gRise = 0.5 * H;
         double xTopBack = xs[^1] + face;
-        double Lz(double x)                                            // 최종면(땅) — 계획면 · 단마다 앞면(1:0.01) · 소단 · 맨 위 뒤 원지반(1:3)
+        double Lz(double x)                                            // 최종면(땅) — 계획면 · 단마다 앞면(1:0.01) · 소단 · 맨 위 뒤 원지반(1:3으로 단높이 반 · 그 뒤 평평)
         {
             double z = 0;
             for (int k = 0; k < Steps; k++)
@@ -73,7 +79,7 @@ internal static class ExcavDiagram
                 if (x <= xs[k]) break;
                 z = x >= xs[k] + face ? (k + 1) * H : k * H + (x - xs[k]) / System.Math.Max(1e-9, face) * H;
             }
-            if (x > xTopBack) z = yTopG + (x - xTopBack) * gUp;
+            if (x > xTopBack) z = yTopG + System.Math.Min(gRise, (x - xTopBack) * gUp);
             return z;
         }
         // 법면 — 바닥 끝에서 1:n · 소단(켜면 BH마다 BW) · 엔진과 같은 규칙(도랑도 앞쪽은 같은 법면 · 뒤는 앞면 선에서 끝)
@@ -139,8 +145,10 @@ internal static class ExcavDiagram
             }
         }
         double xPartR = sh.Parts.SelectMany(p => p.Ring).Max(q => q.X) + xs[^1];
-        double xL = System.Math.Min(xFd, bx0) - 2.2, xR = System.Math.Max(xD, System.Math.Max(xPartR, xs[^1] + face) + 1.0) + 1.6;
-        double yT = Lz(xR) + 1.0, yB = sh.ZBottom - 0.9;
+        double xL = on ? System.Math.Min(xFd, bx0) - 2.2 : System.Math.Min(sh.XFront, 0) - 2.2,
+               xR = on ? System.Math.Max(xD, System.Math.Max(xPartR, xs[^1] + face) + 1.0) + 1.6 : System.Math.Max(xPartR, xs[^1] + face) + 3.0;
+        double zLow = System.Math.Min(sh.ZBottom, sh.Parts.SelectMany(p => p.Ring).Min(q => q.Z));   // ★[v105] 활동방지벽이 바닥 밑으로 나온다
+        double yT = Lz(xR) + 1.0, yB = zLow - 0.9;
         if (xR - xL < 1.2 * (yT - yB)) xR = xL + 1.2 * (yT - yB);      // 도랑처럼 판 자리가 좁아도 그림이 너무 가늘지 않게
         double mL = 14, mR = 14, mT = 22, mB = 34;
         double s = System.Math.Min((W0 - mL - mR) / (xR - xL), (H0 - mT - mB) / (yT - yB));
@@ -204,7 +212,7 @@ internal static class ExcavDiagram
         Poly(new SolidColorBrush(Color.FromArgb(0x55, 0xC8, 0xA9, 0x6E)), null, soil);
         // 판 자리(되메우기) — 터파기선과 땅 사이
         var fillBrush = new SolidColorBrush(Color.FromArgb(0xE0, 0xFB, 0xF7, 0xEE));
-        foreach (var r in runs)
+        if (on) foreach (var r in runs)
         {
             var pg = new List<(double X, double Y)>();
             foreach (var q in r) pg.Add((q.X, q.E));
@@ -224,9 +232,9 @@ internal static class ExcavDiagram
         gl.Add((xR, Lz(xR)));
         PolyLine(profile, 2.4, false, gl);
         // 터파기선(마젠타 파선)
-        foreach (var r in runs) PolyLine(mag, 1.8, true, r.Select(q => (q.X, q.E)).ToList());
+        if (on) foreach (var r in runs) PolyLine(mag, 1.8, true, r.Select(q => (q.X, q.E)).ToList());
         // ★[v104 B · JACK 1021] 배면사면 — 맨 위 단 뒤 데이라잇에서 1:nB로 내려오다 옹벽 꼭대기 높이에서 평탄 · 그 위 원지반 = 절토(옅은 주황)
-        if (spec.BackOn && !trench)   // 도랑(패널식)은 벽 뒤 터파기가 없어 배면사면도 없다
+        if (on && spec.BackOn && !trench)   // 도랑(패널식)은 벽 뒤 터파기가 없어 배면사면도 없다
         {
             double nB = Ok(spec.BackSlope, 1.5, 0.05, 5), zDl = Lz(xD);
             double B(double x) => System.Math.Max(MinW(x), System.Math.Min(Lz(x), System.Math.Max(yTopG, zDl - (xD - x) / nB)));   // 터파기선 아래로는 안 내려간다
@@ -239,11 +247,27 @@ internal static class ExcavDiagram
             Poly(new SolidColorBrush(Color.FromArgb(0x70, 0xF2, 0xC0, 0x8A)), null, cutPg);
             var bkBrush = new SolidColorBrush(Color.FromRgb(0x2E, 0x8B, 0x57));
             PolyLine(bkBrush, 1.8, true, bl);
-            // 경사 글자 — 경사 마디 가운데 · 평탄 끝
-            double xFlatEnd = xD - (zDl - yTopG) * nB;
-            if (xFlatEnd > xTopBack + 0.3) T(PX((xTopBack + xFlatEnd) / 2) - 12, PY(yTopG) - 15, "평탄", 10, bkBrush);
-            double xm = (System.Math.Max(xTopBack, xFlatEnd) + xD) / 2;
-            T(PX(xm) + 4, PY(B(xm)) - 16, $"배면 1:{nB:0.##}", 10, bkBrush);
+            // 평탄 끝 = 배면이 꼭대기 높이를 처음 넘는 자리(재서 — 터파기선이 먼저 오르면 거기서 끝난다)
+            double xFlatEnd = xD;
+            foreach (var q in bl) if (q.Y > yTopG + 1e-6) { xFlatEnd = q.X; break; }
+            if (xFlatEnd > xTopBack + 0.3) T(PX(xTopBack) + 8, PY(yTopG) + 3, "평탄", 10, bkBrush);   // 선 아래 벽 쪽(위는 땅선 · 절토 칸 · 오른쪽은 1:nB 글자)
+            // ★[v104.0.1 · JACK 1022 «배면사면이 이상해»] 1:nB 글자는 1:nB가 제 모양으로 보이는 가장 긴 마디(터파기선 · 꼭대기 위 · 땅 아래)에만 —
+            //   배면이 터파기보다 가파르면(1:1.5 · 터파기 1:1.8) 배면은 터파기선 위에 얹혀 1:nB 마디가 없다 → 종전엔 «배면 1:1.5»가 터파기선을 가리켰다
+            double runA = 0, runB = 0, curA = double.NaN;
+            foreach (var q in bl)
+            {
+                bool own = q.Y > System.Math.Max(MinW(q.X), yTopG) + 1e-3 && q.Y < Lz(q.X) - 1e-3;
+                if (own && double.IsNaN(curA)) curA = q.X;
+                if (!own && !double.IsNaN(curA)) { if (q.X - curA > runB - runA) { runA = curA; runB = q.X; } curA = double.NaN; }
+            }
+            if (!double.IsNaN(curA) && xD - curA > runB - runA) { runA = curA; runB = xD; }
+            // 글자는 선 아래(위는 땅선 · «원지반» 글자와 겹친다)
+            if (runB - runA > 0.3)
+            {
+                string lb = $"배면 1:{nB:0.##}";
+                T(PX(runA) - TW(lb) - 2, PY(yTopG) + 3, lb, 10, bkBrush);
+            }
+            else warns.Add($"⚠배면 = 터파기선(1:{nB:0.##}가 더 가파름)");
         }
 
         // 치수 — 1단 바닥(앞 여유 · 단면 · 뒤 여유) · 단높이
@@ -256,7 +280,7 @@ internal static class ExcavDiagram
             double px = w + 4 <= span ? (PX(xa) + PX(xb)) / 2 - w / 2 : outLeft ? PX(xa) - w - 3 : PX(xb) + 3;
             T(px, PY(yd) + 3, label, 10);
         }
-        if (mg > 1e-6)
+        if (on && mg > 1e-6)
         {
             HDim(bx0, sh.XFront, $"여유 {mg:0.##}m", outLeft: true);
             if (!trench) HDim(sh.XBack, bx1, $"여유 {mg:0.##}m", outLeft: false);
@@ -270,9 +294,12 @@ internal static class ExcavDiagram
             T(PX(xh) - TW(lab) - 4, (PY(z0) + PY(z1)) / 2 - 7, lab, 10);
         }
         // 경사 — 1단 뒤 법면 첫 마디 가운데의 바깥(오른쪽 아래) · 도랑은 «기초부만»
-        if (!trench)
+        if (!on) { }
+        else if (!trench)
         {
-            double mx = (back[0][0].X + back[0][1].X) / 2, my = (back[0][0].Y + back[0][1].Y) / 2;
+            // 첫 마디 가운데 — 소단이 없으면 첫 마디가 맨 위까지 가므로 1단 높이 안(맨 위 + 60 m 가운데면 그림 밖 오른쪽 위로 밀렸다)
+            double my = System.Math.Min((back[0][0].Y + back[0][1].Y) / 2, back[0][0].Y + 0.5 * H);
+            double mx = back[0][0].X + (my - back[0][0].Y) * n;
             double sx = PX(mx) + 10, sy = PY(my) + 2;
             T(sx, sy, $"터파기선 1:{n:0.##}", 11, mag);
             if (bOn && back[0].Count >= 4 && back[0][1].Y < Lz(back[0][1].X) - 1e-9)
@@ -291,12 +318,13 @@ internal static class ExcavDiagram
         var info = WallSection.Of(spec.Table.Kind);
         T(PX(xL) + 2, PY(0) - 16, "계획면", 10);
         T(PX(xR) - 40, PY(Lz(xR)) - 16, "원지반", 10);
-        T(4, 2, info.Name + (info.PublicTable ? "" : " ⚠공공 표 없음") + (sh.Over ? " ⚠표 밖" : ""), 11,
+        string condS = WallSection.CondShort(spec.Table.Kind, spec.Table.Cond);
+        T(4, 2, info.Name + (condS.Length > 0 ? " · " + condS : "") + (info.PublicTable ? "" : " ⚠공공 표 없음") + (sh.Over ? " ⚠표 밖" : ""), 11,
           info.PublicTable && !sh.Over ? txt : new SolidColorBrush(Color.FromRgb(0xB0, 0x30, 0x28)));
         // 되메우기 — 맨 위 단 뒤에서 가장 두꺼운 자리(단면과 안 겹치게) · 없으면 가장 긴 판 자리 가운데
         double xBackPart = xs[^1] + sh.Parts.SelectMany(p => p.Ring).Max(q => q.X);
         var behind = runs.SelectMany(r => r).Where(q => q.X > xBackPart + 0.3).OrderByDescending(q => q.G - q.E).FirstOrDefault();
-        if (trench) { }                                                  // 도랑은 판 자리가 좁아 이름을 안 단다(«기초부만 판다»가 대신)
+        if (trench || !on) { }                                           // 도랑은 판 자리가 좁아 이름을 안 단다(«기초부만 판다»가 대신) · 꺼짐이면 판 자리 없음
         else if (behind.G - behind.E > 1e-6) T(PX(behind.X) + 4, PY((behind.E + behind.G) / 2) - 6, "되메우기", 10);
         else if (runs.Count > 0)
         {
@@ -304,6 +332,10 @@ internal static class ExcavDiagram
             var mid = big[big.Count * 2 / 3];
             T(PX(mid.X) - 22, PY((mid.E + mid.G) / 2) - 6, "되메우기", 10);
         }
-        if (!spec.On) T(W0 / 2 - 30, 18, "꺼짐 — 옹벽면까지만", 11);
+        // ★[v104.0.1 · JACK 1022 «옹벽 모양이 소단 밖으로 튀어나와»] 위 단 단면 앞 끝이 단 사이 소단보다 길면 아래 단 벽 앞 허공으로 나온다 — 모양은 그대로 두고 ⚠
+        double toeOut = -sh.XFront - Wb;
+        if (Steps > 1 && toeOut > 1e-6) warns.Add($"⚠앞굽 {-sh.XFront:0.##}m > 소단 {Wb:0.##}m");
+        for (int i = 0; i < warns.Count; i++) T(4, 18 + 14 * i, warns[i], 10, new SolidColorBrush(Color.FromRgb(0xB0, 0x30, 0x28)));
+        // ★[v105] «꺼짐» 글은 없앤다 — 꺼짐이면 터파기선이 안 보이는 것으로 충분(JACK 1022 «설정에 따라 달라지게»)
     }
 }

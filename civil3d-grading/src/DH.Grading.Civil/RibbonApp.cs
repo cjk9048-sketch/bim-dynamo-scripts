@@ -554,6 +554,13 @@ public sealed class RibbonApp : IExtensionApplication
             // ★★★[JACK 0901 "원지반 가져오기 스플릿 버튼 만들고 그 안에 수치지도 DXF, 서버 지표면 넣어 줘"]
             //   원지반을 얻는 길이 둘이 됐다 — 나란히 두면 <b>어느 것을 눌러야 하나</b>가 된다.
             //   하나로 묶고 화살표로 고르게 한다.
+            // ★★[v105.1.3 · JACK 1023 «원지반 가져오기 스플릿 단추 안에 맨 마지막에 원지반 삭제»] [초기화]가 원지반을 남기게 되면서(v105.1.2) 버리는 길을 여기에
+            var btnGroundOff = MakeButton(
+                "원지반\n삭제", "DHGROUNDOFF ", "[원지반 가져오기]로 만든 '원지반'과 그 등고선·표고점을 지웁니다", "원지반삭제");
+            btnGroundOff.ToolTip = MakeTip("원지반 삭제 (DHGROUNDOFF)",
+                "[원지반 가져오기]로 만든 <b>'원지반' 지표면</b>과 그 재료(등고선·계곡선·표고점)를 지웁니다.\n" +
+                "· 직접 고른 다른 지표면은 지우지 않습니다.\n" +
+                "· 원지반으로 만든 정지·터파기 결과가 있으면 <b>같이 지웁니다</b>([초기화]와 같음) — 지우기 전에 물어봅니다.", null);
             var splitGround = new RibbonSplitButton
             {
                 Text = "원지반\n가져오기",
@@ -571,10 +578,12 @@ public sealed class RibbonApp : IExtensionApplication
                     "**수치지도 DXF** — 브이월드에서 내려받은 파일로 만듭니다(사내망 없어도 됨).\n" +
                     "**서버 지표면** — 지도에서 범위를 골라 사내 서버에서 받습니다(VPN 필요).\n\n" +
                     "둘 다 결과는 같은 '원지반' 지표면입니다 — 이후 공정은 똑같습니다.\n" +
+                    "**원지반 삭제** — 가져온 원지반과 등고선·표고점을 지웁니다.\n" +
                     "아래 화살표를 눌러 고릅니다.", null),
             };
             splitGround.Items.Add(btnNgii);
             splitGround.Items.Add(btnContour);
+            splitGround.Items.Add(btnGroundOff);
             splitGround.Current = btnNgii;
 
             var pExport = new RibbonPanelSource { Title = "내보내기" };
@@ -1135,6 +1144,20 @@ public sealed class RibbonApp : IExtensionApplication
                         var mo = P(0xd0, 0x5a, 0x5a);
                         dc.DrawEllipse(null, mo, new Point(16, 16), 11.0, 11.0);
                         dc.DrawLine(mo, new Point(7, 25), new Point(25, 7));
+                        break;
+
+                    case "원지반삭제": // [원지반] 언덕 + 빨간 빗금 — 지운다([지도끄기]와 같은 빗금)
+                        var gOff = P(0x8d, 0x6e, 0x48);
+                        var hillOff = new StreamGeometry();
+                        using (var g = hillOff.Open())
+                        {
+                            g.BeginFigure(new Point(3, 27), false, false);
+                            g.QuadraticBezierTo(new Point(11, 8), new Point(19, 20), true, false);
+                            g.QuadraticBezierTo(new Point(24, 27), new Point(29, 22), true, false);
+                        }
+                        hillOff.Freeze();
+                        dc.DrawGeometry(null, gOff, hillOff);
+                        dc.DrawLine(P(0xd0, 0x5a, 0x5a), new Point(7, 25), new Point(25, 7));
                         break;
 
                     case "초기화": // 되돌리는 화살표 — <b>열린 고리 + 화살촉</b>

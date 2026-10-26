@@ -85,7 +85,7 @@ public sealed class SectionCommand
     static PureWithWallsBuilder.Result? _wf;
     static WallExcavBuilder.Result? _wx;
     static System.Text.StringBuilder _wfLog = new();
-    static ObjectId GroundOf(Database db)
+    internal static ObjectId GroundOf(Database db)
     {
         try { foreach (var sp in FindSurfaces(db, CivilApp.CivilApplication.ActiveDocument)) if (sp.Label == "원지반") return sp.SurfId; } catch { }
         return ObjectId.Null;

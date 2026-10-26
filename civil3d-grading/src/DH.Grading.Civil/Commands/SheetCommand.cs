@@ -4219,6 +4219,9 @@ public static class SheetCommand
                         string.Join(" · ", hit.Select(kv => $"{kv.Key} {kv.Value}개")));
                 else log?.AppendLine("  종단도 객체 정리: 지울 것이 없었다");
             }
+            // ★[v104.1] 옹벽 단면(종단 · 횡단) — CALS 레이어라 레이어로 안 지운다(손 그림 보호) · 표식(XData)이 있는 것만 · 종단을 다시 그리면 횡단 뷰도 Civil이 지우니 둘 다
+            int nWs = WallSectionDraw.EraseTagged(db, tr, null, null);
+            if (nWs > 0) { total += nWs; log?.AppendLine($"  종단도 객체 정리: 옹벽 단면 {nWs}개(표식)"); }
             tr.Commit();
         }
         catch (System.Exception ex) { log?.AppendLine("  종단도 객체 정리 실패 — " + Brief(ex)); }

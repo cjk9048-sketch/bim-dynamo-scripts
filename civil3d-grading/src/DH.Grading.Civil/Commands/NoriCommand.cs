@@ -95,10 +95,10 @@ public sealed class NoriCommand
                     //   구배를 넘겨받아 옹벽 자리는 빼고 사면 자리만 그린다 — 바로 아래 0804 주석이 그 얘기다.
                     //   그러니 여기서 미리 자르면 안 된다. <b>세는 것은 생성기에 맡기고, 우리는 적기만 한다.</b>
                     double slopeN = up ? bundle.Params.CutSlope : bundle.Params.FillSlope;
-                    WallStyle style = up ? GradingSettings.CutWallStyle : GradingSettings.FillWallStyle;
-                    bool wallDefault = style != WallStyle.없음_사면 && slopeN <= GradingSettings.WallGateSlope + 1e-9;
+                    // ★[v105 · JACK 1022 «3D 모양 콤보는 없애고»] «없음(사면만)»이 사라졌다 — 경사가 옹벽 게이트 이하면 기본 옹벽
+                    bool wallDefault = slopeN <= GradingSettings.WallGateSlope + 1e-9;
                     if (wallDefault)
-                        detail += $"\n{rTag}{label}: 기본 옹벽({style}) — 사면으로 바꾼 구간만 노리선";
+                        detail += $"\n{rTag}{label}: 기본 옹벽 — 사면으로 바꾼 구간만 노리선";
 
                     int slN = 0, blN = 0, tN = 0;
                     foreach (var finalRing in ringList)

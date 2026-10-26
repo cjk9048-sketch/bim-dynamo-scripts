@@ -46,6 +46,9 @@ internal static class GradeFlags { public const bool StripPasteOps = false; }
 
 public sealed class CreateGradingCommand
 {
+    /// <summary>★[v105.1.1] 정지면 생성 · 옹벽/사면 변환 · 옹벽 합성 동안 로딩 창 글.</summary>
+    internal const string BusyText = "지표면 생성 중입니다.";
+
     [CommandMethod("DHGRADE")]
     public void Run()
     {
@@ -166,6 +169,8 @@ public sealed class CreateGradingCommand
     /// (기존 정지면은 '정지면_DH이전'으로 이름 변경·숨김 보존), RerunLast=마지막 구역만 다시(DHWALL·설정 변경).</summary>
     internal static void DoGrade(Document doc, ObjectId planPolyId, ObjectId groundId, GradeMode mode = GradeMode.Fresh)
     {
+        // ★[v105.1.1 · JACK 1023 «종단처럼 지표면 생성 · 변환에도 로딩 팝업»] 부르는 길(명령 · 도킹창 · 옹벽/사면 변환)과 상관없이 여기서 — 묻는 창이 뜨면 저절로 숨는다 · 완료 창 앞에서 닫는다
+        using var busy = BusyPopup.Scope(BusyText);
         // ★[v103.1.9 · 계획 검토 낮음 5] «아니오로 멈췄다» 표시는 <b>맨 먼저</b> 비운다 — 아래 자가점검 준비가 터져도 부르는 쪽(창의 «다시»)이 지난 값을 읽지 않게
         GradingSettings.LastGradeDeclined = false;
         _preCand = null; _preYes = null; _preWarn = "";
@@ -714,7 +719,7 @@ public sealed class CreateGradingCommand
             tail = (deferOn ? $"남은 옹벽 {n}개 — 합성 미룸(합성 미루기 켬 · 옹벽 면만 보임) · " : "남은 옹벽 없음 · ") + vol.Replace("\n", " · ");
             try { ed.WriteMessage($"\n[DHGRADE] 옹벽 {nos}을 사면으로 되돌렸습니다 — 구간 · 제원 · 원지반이 그대로라 정지면은 다시 만들지 않았습니다  [DH.Grading {GradingSettings.Version}]\n  {vol.Replace("\n", " · ")}"); } catch { }
             try { ed.Regen(); } catch { }
-            if (!SelfCheckLog.Headless) try { AcadApp.ShowAlertDialog($"옹벽 {nos}을 사면으로 되돌렸습니다.\n(구간 · 제원 · 원지반이 그대로라 정지면은 다시 만들지 않았습니다)\n\n{vol}"); } catch { }
+            if (!SelfCheckLog.Headless) try { BusyPopup.Close(); AcadApp.ShowAlertDialog($"옹벽 {nos}을 사면으로 되돌렸습니다.\n(구간 · 제원 · 원지반이 그대로라 정지면은 다시 만들지 않았습니다)\n\n{vol}"); } catch { }
         }
         if (!SelfCheckLog.Headless) try { GradingPalette.Refresh(); } catch { }
         // 로그는 새 판으로 연다(폴리곤만 길과 같게) — 안 열면 사면 변환이 남긴 줄(AppendCarry)이 다음 정지면 생성의 로그 머리에 붙어 그 실행 것처럼 보인다(검토 1012 낮음)
@@ -4041,7 +4046,7 @@ public sealed class CreateGradingCommand
                     bundleMsg
                 : msg;
             if (SelfCheckLog.Headless) { try { ed.WriteMessage("\n[알림창 — 화면 없음] " + popup.Replace("\n", " · ")); } catch { } }
-            else AcadApp.ShowAlertDialog(popup);
+            else { BusyPopup.Close(); AcadApp.ShowAlertDialog(popup); }   // ★[v105.1.1] 완료 창 전에 로딩 창을 닫는다(종단과 같게)
         }
         catch (System.Exception ex)
         {
@@ -4049,6 +4054,7 @@ public sealed class CreateGradingCommand
             TryRestoreBase(db, baseRestoreHandle);
             _job?.Done(false, $"정지면 생성 중 예외 — {ex.GetType().Name}: {ex.Message}");   // ★[v103.1.7] 자가점검
             ed.WriteMessage("\n[DHGRADE 오류] " + ex.Message);
+            BusyPopup.Close();
             AcadApp.ShowAlertDialog("가상 지표면 생성 중 오류:\n" + ex.Message);
             try
             {

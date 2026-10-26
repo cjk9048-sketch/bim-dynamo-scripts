@@ -2854,12 +2854,86 @@ public sealed class ProfileCommand
 
         int nWall = 0, nShore = 0, nMiss = 0, wiped = 0;
         int nProfile = 0, nLine = 0;
+        int nSec = 0, nSecSkip = 0, nRepl = 0, nLab = 0, nSlope = 0;
+        string secWhy = "";
+        var dash = WallSectionDraw.Prepare(db);   // 선종류 싣기는 트랜잭션 밖에서
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
             if (tr.GetObject(pvId, OpenMode.ForRead) is not CivilDb.ProfileView pv ||
                 tr.GetObject(alignId, OpenMode.ForRead) is not CivilDb.Alignment al)
             { tr.Commit(); return "종단 막대: 종단뷰나 선형을 못 찾았다"; }
+            // ★★★[v104.1 · 계획_v104_1.md 2.4 · JACK 1022 «하늘색 선 말고 단면을 직접»] 옹벽 단면 — 이 뷰 것(표식 «PROF» · 뷰 핸들)을 지우고 다시
+            var secStations = new System.Collections.Generic.List<(double St, double Tol, bool Used)>();
+            double secA = pv.StationStart, secB = pv.StationEnd;
+            // ★[v104.1 설치 전 검토 중간 3] 단면이 틀어져도 막대는 살린다 — 따로 잡고, 실패하면 짝짓기를 비워 막대를 다 그린다
+            try
+            {
+                var msW = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+                WallSectionDraw.EraseTagged(db, tr, WallSectionDraw.KindProf, pvId.Handle.ToString());
+                var rec = WallSectionDraw.RecordFor(db, tr, al, out secWhy);
+                double stA = pv.StationStart, stB = pv.StationEnd;
+                if (rec != null && stB > stA)
+                {
+                    // 선형을 1 m 간격 꺾은선으로(교점 측점 = 그 변의 측점 + 비율 × 변 길이 — 곡선이라도 1 m 현이라 측점 차는 무시할 만하다)
+                    var stv = new System.Collections.Generic.List<double>();
+                    var path = new System.Collections.Generic.List<(double X, double Y)>();
+                    for (double s = stA; ; s += 1.0)
+                    {
+                        double sc0 = System.Math.Min(s, stB), px = 0, py = 0;
+                        try { al.PointLocation(sc0, 0, ref px, ref py); stv.Add(sc0); path.Add((px, py)); } catch { }
+                        if (sc0 >= stB) break;
+                    }
+                    var cuts = DH.Grading.Core.WallExcav.CutSections(rec, path, WallSectionDraw.MinSin, out nSecSkip);
+                    var map = WallSectionDraw.Affine(stA, stB, pv.ElevationMin, pv.ElevationMax,
+                        (s, z) => { double x = 0, y = 0; return pv.FindXYAtStationAndElevation(s, z, ref x, ref y) ? new Point2d(x, y) : (Point2d?)null; });
+                    var slo = map != null ? WallSectionDraw.SlopeSources(db, tr, al) : null;   // ★[v105.1 · JACK 1023] 기울기 라벨 재료
+                    if (map != null && (cuts.Count > 0 || slo != null))
+                    {
+                        var L = WallSectionDraw.ProfLayers(db, tr, dash);
+                        var kst = ImportGisCommand.EnsureKoreanTextStyle(db, tr);
+                        double dwgScale = 0;
+                        try { if (db.Cannoscale is AnnotationScale asc && System.Math.Abs(asc.PaperUnits - 1000.0) < 1e-6) dwgScale = asc.DrawingUnits; } catch { }
+                        var ext = ((Entity)pv).GeometricExtents;
+                        double txtH = dwgScale > 0 ? WallSectionDraw.LabelMm / 1000.0 * dwgScale : System.Math.Max(0.2, (ext.MaxPoint.Y - ext.MinPoint.Y) * 0.015);
+                        // ★[v105.1 · JACK 1023 «단이 많으면 라벨은 중간에 하나만»] 단 묶음마다 형식별 가운데 단만 인출
+                        var sts = cuts.Select(c => { int sg = System.Math.Clamp(c.Seg, 0, stv.Count - 2); return stv[sg] + c.SegT * (stv[sg + 1] - stv[sg]); }).ToList();
+                        var pick = WallSectionDraw.PickLabels(cuts, sts);
+                        for (int ci = 0; ci < cuts.Count; ci++)
+                        {
+                            var c = cuts[ci]; double st = sts[ci];
+                            WallSectionDraw.DrawOne(db, tr, msW, c, st, map, txtH, System.Math.Max(0, pick[ci]), L, kst, WallSectionDraw.KindProf, pvId.Handle.ToString(), pick[ci] >= 0);
+                            nSec++; if (pick[ci] >= 0) nLab++;
+                            secStations.Add((st, System.Math.Max(1.0, (c.Shape.XBack - c.Shape.XFront) * c.Stretch), false));
+                        }
+                        // ★[v105.1 · JACK 1023 «배면사면 · 뒷채움 사면 기울기 라벨 누락»] 선형을 따라 0.1 m마다 터파기면 · 배면 높이 → 경사 구간에 «1:n»
+                        if (slo != null)
+                        {
+                            int ns = System.Math.Max(3, (int)System.Math.Ceiling((stB - stA) / 0.1) + 1);
+                            double[] aa = new double[ns], ee = new double[ns], bb = new double[ns], ge = new double[ns], gb = new double[ns];
+                            for (int i = 0; i < ns; i++)
+                            {
+                                aa[i] = stA + (stB - stA) * i / (ns - 1);
+                                double px = 0, py = 0;
+                                bool okP = false; try { al.PointLocation(aa[i], 0, ref px, ref py); okP = true; } catch { }
+                                ee[i] = okP && slo.Exc != null && slo.Exc.TryGetElevation(px, py, out double ze) ? ze : double.NaN;
+                                bb[i] = okP && slo.Back != null && slo.Back.TryGetElevation(px, py, out double zb) ? zb : double.NaN;
+                                ge[i] = double.IsNaN(ee[i]) ? double.NaN : WallSectionDraw.Grad(slo.Exc, px, py);
+                                gb[i] = double.IsNaN(bb[i]) ? double.NaN : WallSectionDraw.Grad(slo.Back, px, py);
+                            }
+                            nSlope = WallSectionDraw.DrawSlopeLabels(db, tr, msW, aa, ee, bb, ge, gb, map, txtH, slo, L, kst, WallSectionDraw.KindProf, pvId.Handle.ToString());
+                        }
+                    }
+                    else if (map == null && cuts.Count > 0) secWhy = "종단뷰 좌표를 못 잼";
+                }
+            }
+            catch (System.Exception exS)
+            {
+                // 반쯤 그린 단면은 걷고 막대로 돌아간다(단면과 막대가 겹치지 않게)
+                try { WallSectionDraw.EraseTagged(db, tr, WallSectionDraw.KindProf, pvId.Handle.ToString()); } catch { }
+                secStations.Clear(); nSec = 0; nLab = 0; nSlope = 0;
+                secWhy = "⚠단면을 못 그림(막대로 그림) — " + exS.Message;
+            }
 
             // ★★[JACK 0826] <b>이미 보정된 목록을 쓴다.</b> 새로 계산하면 중심 보정을 잃는다.
             //   측점 수집이 안 돌았을 때만 물러서서 새로 계산한다.
@@ -2917,6 +2991,19 @@ public sealed class ProfileCommand
             foreach (var b in bars)
             {
                 bool shore = b.Kind != null && b.Kind.Contains("가시설");
+                // ★[v104.1 · 계획 2.4 · 검토 중간 8] 옹벽 막대 — 측점이 가장 가까운 단면(허용 max(1 m, 단면 폭/sinθ))과 1:1로 짝지으면 막대 대신 단면 · 짝 없으면 막대 그대로
+                // ★[v104.1 설치 전 검토 낮음 8] 이 뷰 측점 범위 안 막대만 짝짓는다(장 경계에서 이 장 단면이 다음 장 막대를 가져가지 않게)
+                if (!shore && secStations.Count > 0 && b.Station >= secA - 1e-6 && b.Station <= secB + 1e-6)
+                {
+                    int bestI = -1; double bestD = double.MaxValue;
+                    for (int si = 0; si < secStations.Count; si++)
+                    {
+                        if (secStations[si].Used) continue;
+                        double dd = System.Math.Abs(secStations[si].St - b.Station);
+                        if (dd <= secStations[si].Tol && dd < bestD) { bestD = dd; bestI = si; }
+                    }
+                    if (bestI >= 0) { secStations[bestI] = (secStations[bestI].St, secStations[bestI].Tol, true); nRepl++; continue; }
+                }
                 double zTop, zBot;
                 if (shore)
                 {
@@ -3005,7 +3092,11 @@ public sealed class ProfileCommand
         }
         catch (System.Exception ex) { return "종단 막대 실패 — " + ex.Message; }
 
-        return $"종단 막대 — 옹벽 {nWall}개(시안) · 가시설 {nShore}개(마젠타)" +
+        log?.AppendLine($"     옹벽 단면 {nSec}개(CALS CR-STRU-NEWC · 인출 CR-LEAL · CR-LEAT) · 인출 {nLab}(단 묶음마다 하나) · 기울기 글 {nSlope} · 막대 대신 {nRepl}" + (nSecSkip > 0 ? $" · 노선과 거의 나란해 뺀 것 {nSecSkip}" : "") + (secWhy.Length > 0 ? $" · {secWhy}" : ""));
+        return (nSec > 0 ? $"옹벽 단면 {nSec}개(막대 대신 {nRepl})" + (nSecSkip > 0 ? $" · 노선과 거의 나란해 뺀 단면 {nSecSkip}" : "") + " · "
+                         : WallSectionDraw.IsOff(secWhy) ? "옹벽 단면은 [옹벽 터파기]를 켜면 넣습니다 · "
+                         : secWhy.Length > 0 ? $"⚠옹벽 단면 — {secWhy} · " : "") +
+               $"종단 막대 — 옹벽 {nWall}개(시안) · 가시설 {nShore}개(마젠타)" +
                (nWall + nShore > 0 ? $" · 폭 {BarWidth}m 고정(최대 벽 15m × 구배 0.01)" : "") +
                (wiped > 0 ? $" · 옛것 {wiped}개 지움" : "") +
                (nMiss > 0 ? $" · 못 세운 것 {nMiss}개(종단뷰 표고 범위 밖이거나 높이 0)" : "") +

@@ -47,7 +47,9 @@ internal static class SlopeDiagram
         /// <summary>옹벽 형태 — 수직일 때만 쓴다.</summary>
         WallStyle Style,
         /// <summary>수직으로 볼 구배 문턱(<c>GradingSettings.WallGateSlope</c>).</summary>
-        double WallGate);
+        double WallGate,
+        /// <summary>★[v105 · JACK 1022 «3D 모양 콤보는 없애고»] 옹벽 이름(단면 형식 이름) — 없으면 모양 이름.</summary>
+        string? WallName = null);
 
     /// <summary>★<b>화면 크기에 맞춰 늘어나는 그림틀</b>을 만든다.
     /// <para>안쪽 <see cref="Canvas"/>는 언제나 420×300이다 — 그리는 계산이 그 자리를 쓰기 때문이다.
@@ -276,8 +278,8 @@ internal static class SlopeDiagram
                     }
                 }
             }
-            string wallName = style == WallStyle.보강토 ? "보강토 옹벽"
-                : style == WallStyle.역T형 ? "역T형 옹벽(1단)" : "앵커판넬 옹벽";
+            string wallName = spec.WallName ?? (style == WallStyle.보강토 ? "보강토 옹벽"
+                : style == WallStyle.역T형 ? "역T형 옹벽(1단)" : "앵커판넬 옹벽");
             T(System.Math.Min(x0 + rp + 18, cw - 150), cut ? Y(1) + 10 : Y(1) - 24, wallName, 11);
         }
 

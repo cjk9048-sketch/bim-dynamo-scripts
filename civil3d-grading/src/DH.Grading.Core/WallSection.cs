@@ -14,30 +14,137 @@ public static class WallSection
     /// <summary>형식 — ★[2판 · 재검토] 번호가 도면 기록에 들어가므로 <b>값을 고정</b>한다(새 형식은 뒤에 새 번호로).</summary>
     public enum Kind { 역T형 = 0, L형 = 1, 역L형 = 2, 중력식 = 3, 반중력식 = 4, 부벽식 = 5, 보강토 = 6, 패널식 = 7, 찰쌓기 = 8, 메쌓기 = 9 }
 
-    /// <summary>형식 하나의 설명 — 이름 · 칸(첫 칸은 늘 H) · 칸 뜻 · 출처 · 공공 표가 있나 · 쓰는 높이 범위 글.</summary>
-    public sealed record Info(Kind Id, string Name, string[] Cols, string[] ColNames, string Source, bool PublicTable, string Range, string Note);
+    /// <summary>형식 하나의 설명 — 이름 · 칸(첫 칸은 늘 H) · 칸 뜻 · 출처 · 공공 표가 있나 · 쓰는 높이 범위 글 · 고르는 목록에서 숨기나.</summary>
+    public sealed record Info(Kind Id, string Name, string[] Cols, string[] ColNames, string Source, bool PublicTable, string Range, string Note, bool Hidden = false);
 
-    /// <summary>높이 표 — 줄마다 칸(Cols와 같은 차례) · H 오름차순.</summary>
+    /// <summary>높이 표 — 줄마다 칸(Cols와 같은 차례) · H 오름차순 · ★[v105] 벽 뒤 조건(그 조건의 표준도 표에서 왔다).</summary>
     public sealed class Table
     {
         public Kind Kind;
         public List<double[]> Rows = new();
-        public Table Clone() => new() { Kind = Kind, Rows = Rows.Select(r => (double[])r.Clone()).ToList() };
-        /// <summary>표 지문(도장에 넣는다 — 표를 고치면 터파기를 다시 짓는다).</summary>
+        /// <summary>★[v105 · 계획_v105.md 2.2 · JACK 1022 «도면마다 하나 고름»] 벽 뒤 조건 — 첫 값 = 평평 · 지진 고려.</summary>
+        public Cond Cond = Cond.Default;
+        public Table Clone() => new() { Kind = Kind, Cond = Cond, Rows = Rows.Select(r => (double[])r.Clone()).ToList() };
+        /// <summary>표 지문(도장에 넣는다 — 표나 조건을 고치면 터파기를 다시 짓는다).</summary>
         public string Print
         {
             get
             {
                 var sb = new System.Text.StringBuilder(Kind.ToString());
+                sb.Append(";C").Append(Cond.Key);
                 foreach (var r in Rows) { sb.Append(';'); sb.Append(string.Join(",", r.Select(v => v.ToString("R", CultureInfo.InvariantCulture)))); }
                 return sb.ToString();
             }
         }
     }
 
+    /// <summary>★★[v105 · 계획_v105.md 2.2] 벽 뒤 조건 — 2008 표준도 일람표의 칸.
+    /// <para><see cref="Back"/> 0 평평 · 1 비탈 1:1.8 · 2 비탈 1:1.5 · <see cref="Fill"/> 쌓인 높이(성토고) 0 ¼H · 1 ½H · 2 1.0H · 3 2.0H · 4 ∞(평평이면 0) ·
+    /// <see cref="Seismic"/> 지진 고려(중력식은 구분 없음 — 늘 참) · <see cref="FrontN"/> 앞면 경사(중력식만 0.02 · 0.10 · 0.20 · 0.30 · 그 밖 0.02).</para></summary>
+    public sealed record Cond(int Back = 0, int Fill = 0, bool Seismic = true, double FrontN = 0.02)
+    {
+        public static readonly Cond Default = new();
+        public string Key => string.Format(CultureInfo.InvariantCulture, "{0},{1},{2},{3}", Back, Fill, Seismic ? 1 : 0, FrontN);
+    }
+
+    public static readonly string[] BackNames = { "평평", "1:1.8 비탈", "1:1.5 비탈" };
+    public static readonly string[] FillNames = { "¼H", "½H", "1.0H", "2.0H", "∞" };
+    public static readonly double[] FrontNs = { 0.02, 0.10, 0.20, 0.30 };
+
+    /// <summary>조건을 고르는 형식인가(표준도에 조건별 표가 있는 형식).</summary>
+    public static bool HasCond(Kind k) => k is Kind.역T형 or Kind.L형 or Kind.반중력식 or Kind.중력식;
+
+    /// <summary>비탈일 때 고를 수 있는 쌓인 높이 — 역T · L = ¼H ~ 2.0H(미고려면 ∞ 더) · 반중력 = 1.0H · 2.0H(· ∞) · 중력 = 0.5H · 1.0H · ∞.</summary>
+    public static int[] FillChoices(Kind k, bool seismic) => k switch
+    {
+        Kind.역T형 or Kind.L형 => seismic ? new[] { 0, 1, 2, 3 } : new[] { 0, 1, 2, 3, 4 },
+        Kind.반중력식 => seismic ? new[] { 2, 3 } : new[] { 2, 3, 4 },
+        Kind.중력식 => new[] { 1, 2, 4 },
+        _ => System.Array.Empty<int>(),
+    };
+
+    /// <summary>조건을 그 형식이 가진 칸으로 맞춘다 — 없는 쌓인 높이는 그보다 큰 가장 작은 칸(안전 쪽) · 없으면 가장 큰 칸 · 조건 없는 형식은 첫 값.</summary>
+    public static Cond Normalize(Kind k, Cond c)
+    {
+        if (!HasCond(k) || c == null) return Cond.Default;
+        int back = Math.Clamp(c.Back, 0, 2);
+        bool seis = k == Kind.중력식 || c.Seismic;
+        double fn = k == Kind.중력식 ? FrontNs.OrderBy(v => Math.Abs(v - c.FrontN)).First() : 0.02;
+        int fill = 0;
+        if (back > 0)
+        {
+            var ch = FillChoices(k, seis);
+            fill = ch.Where(v => v >= c.Fill).DefaultIfEmpty(ch.Max()).Min();
+        }
+        return new Cond(back, fill, seis, fn);
+    }
+
+    /// <summary>조건 글 — «벽 뒤 평평 · 지진 고려» · «벽 뒤 1:1.5 비탈 · 쌓인 높이 2.0H · 지진 미고려» · 중력식은 «앞면 1:0.10 · …».</summary>
+    public static string CondText(Kind k, Cond c)
+    {
+        if (!HasCond(k)) return "";
+        c = Normalize(k, c);
+        var l = new List<string>();
+        if (k == Kind.중력식) l.Add(string.Format(CultureInfo.InvariantCulture, "앞면 1:{0:0.00}", c.FrontN));
+        l.Add("벽 뒤 " + BackNames[c.Back]);
+        if (c.Back > 0) l.Add("쌓인 높이 " + (k == Kind.중력식 && c.Fill == 1 ? "0.5H" : FillNames[c.Fill]));
+        if (k != Kind.중력식) l.Add(c.Seismic ? "지진 고려" : "지진 미고려");
+        return string.Join(" · ", l);
+    }
+
+    /// <summary>짧은 조건 글(그림 머리) — «평평» · «1:1.5 · 2.0H · 미고려».</summary>
+    public static string CondShort(Kind k, Cond c)
+    {
+        if (!HasCond(k)) return "";
+        c = Normalize(k, c);
+        string s = c.Back == 0 ? "평평" : (c.Back == 1 ? "1:1.8" : "1:1.5") + " · " + (k == Kind.중력식 && c.Fill == 1 ? "0.5H" : FillNames[c.Fill]);
+        if (k == Kind.중력식) s = string.Format(CultureInfo.InvariantCulture, "앞면 1:{0:0.00} · ", c.FrontN) + s;
+        else if (!c.Seismic) s += " · 지진 미고려";
+        return s;
+    }
+
+    /// <summary>그 조건의 표가 쓴 표준도 도면 — «T-51 ~ T-88 중 11장»(조건 없는 형식은 빈 글).</summary>
+    public static string StdDrawings(Kind k, Cond c)
+    {
+        c = Normalize(k, c);
+        var d = StdNumbers(k, c);
+        if (d.Count == 0) return k == Kind.중력식 ? (c.Back == 0 ? "G-1" : "G-2~G-7") : "";
+        string p = k == Kind.역T형 ? "T-" : k == Kind.L형 ? "L-" : "M-";
+        return d.Count == 1 ? p + d[0] : $"{p}{d.Min()} ~ {p}{d.Max()} 중 {d.Count}장";
+    }
+
+    static List<int> StdNumbers(Kind k, Cond c)
+    {
+        var res = new List<int>();
+        if (k is not (Kind.역T형 or Kind.L형 or Kind.반중력식)) return res;
+        var (_, idx, col) = StdIndex(k, c);
+        for (int i = 0; i < idx.GetLength(0); i++) { int dn = idx[i, col]; if (dn > 0 && !res.Contains(dn)) res.Add(dn); }
+        return res;
+    }
+
+    /// <summary>표준도 자료 · 일람표 · 칸 번호(정규화된 조건).</summary>
+    static (int[][] Dw, int[,] Idx, int Col) StdIndex(Kind k, Cond c)
+    {
+        bool m = k == Kind.반중력식;
+        int[][] dw = k == Kind.역T형 ? WallStandard2008.T : k == Kind.L형 ? WallStandard2008.L : WallStandard2008.M;
+        int[,] idx = k == Kind.역T형 ? (c.Seismic ? WallStandard2008.TS : WallStandard2008.TN)
+                   : k == Kind.L형 ? (c.Seismic ? WallStandard2008.LS : WallStandard2008.LN)
+                   : (c.Seismic ? WallStandard2008.MS : WallStandard2008.MN);
+        int col;
+        if (c.Back == 0) col = 0;
+        else if (!m) col = c.Seismic ? (c.Back == 1 ? 1 : 5) + c.Fill : (c.Back == 1 ? 1 : 6) + c.Fill;
+        else col = c.Seismic ? (c.Back == 1 ? 1 : 3) + (c.Fill - 2) : (c.Back == 1 ? 1 : 4) + (c.Fill - 2);
+        return (dw, idx, col);
+    }
+
     // ── 형식 설명 ────────────────────────────────────────────────────────────
-    static readonly string[] CantCols = { "H", "t_top", "t_bot", "B1", "B2", "t_f", "t_f2", "Df" };
-    static readonly string[] CantNames = { "높이(근입 포함)", "벽 위 두께", "벽 아래 두께", "앞굽", "뒷굽", "저판 두께(벽 아래)", "저판 두께(끝)", "근입" };
+    // ★[v105 · 계획_v105.md 2.1] 활동방지벽(키) 세 칸을 근입 앞에 — 2008 표준도 비탈 단면 대부분에 있다(0이면 없음)
+    static readonly string[] CantCols = { "H", "t_top", "t_bot", "B1", "B2", "t_f", "t_f2", "key_x", "key_w", "key_d", "Df" };
+    static readonly string[] CantNames = { "높이(근입 포함)", "벽 위 두께", "벽 아래 두께", "앞굽", "뒷굽", "저판 두께(벽 아래)", "저판 두께(끝)",
+                                           "활동방지벽 위치(저판 앞 끝에서)", "활동방지벽 폭", "활동방지벽 깊이(저판 밑에서)", "근입" };
+    // ★[v105] 중력식 — 앞면 경사(표준도 G-1 · 1:0.02 ~ 0.30)를 줄 값으로 · 비탈 단면의 키(밑 폭 · 깊이 · 뒷면 60°)
+    static readonly string[] GravCols = { "H", "b_top", "B", "n1", "key_x", "key_w", "key_d", "Df" };
+    static readonly string[] GravNames = { "높이(근입 포함)", "윗폭", "밑폭", "앞면 경사 1:n", "활동방지벽 위치(앞 끝에서)", "활동방지벽 밑 폭", "활동방지벽 깊이(밑면에서)", "근입" };
     // ★[v104 2판 재검토] 부벽식 — 부벽 간격 · 두께(부벽은 단면에 «평균» 조각으로 — 넓이 × 두께/간격)
     static readonly string[] CfCols = { "H", "t_top", "t_bot", "B1", "B2", "t_f", "t_f2", "s_cf", "t_cf", "Df" };
     static readonly string[] CfNames = { "높이(근입 포함)", "벽 위 두께", "벽 아래 두께", "앞굽", "뒷굽", "저판 두께(벽 아래)", "저판 두께(끝)", "부벽 간격", "부벽 두께", "근입" };
@@ -47,80 +154,79 @@ public static class WallSection
 
     public static readonly IReadOnlyList<Info> Kinds = new Info[]
     {
-        new(Kind.역T형, "역T형", CantCols, CantNames, "도로옹벽 표준도 2008 T-1~T-11(배면 수평)", true, "3.0~8.0 m", "캔틸레버 RC · 앞면 1:0.02"),
-        new(Kind.L형, "L형", CantCols, CantNames, "도로옹벽 표준도 2008 L-1~L-11(배면 수평)", true, "3.0~8.0 m", "앞굽 없음(용지 경계)"),
-        new(Kind.역L형, "역L형", CantCols, CantNames, "공공 표 없음 — 역T형 표를 앞굽에 몰아준 꼴(제안)", false, "2~8 m(LH 절토부)", "뒷굽 없음 · 지반팀 값 필요"),
-        new(Kind.중력식, "중력식", new[] { "H", "b_top", "B", "Df" }, new[] { "높이(근입 포함)", "윗폭", "밑폭", "근입" },
-            "도로옹벽 표준도 2008 G-1(전면 1:0.02 · 배면 수평)", true, "1.5~4.0 m", "무근 콘크리트 · 저판 없음"),
-        new(Kind.반중력식, "반중력식", CantCols, CantNames, "도로옹벽 표준도 2008 M-1~M-5", true, "2.0~4.0 m", "두꺼운 저판 + 얇은 벽"),
-        new(Kind.부벽식, "부벽식", CfCols, CfNames, "공공 표 없음 — 역T형 규칙(B = 0.6H + 0.2 · 두께 H/10)을 늘린 것 · 부벽 간격 H/3 · 두께 0.3(제안)", false, "8 m 이상", "부벽 사이 단면 + 부벽 평균(두께/간격) · 지반팀 값 필요"),
+        new(Kind.역T형, "역T형", CantCols, CantNames, "도로옹벽 표준도 2008(국토해양부) T-1~T-165", true, "3.0~8.0 m", "캔틸레버 RC · 앞면 1:0.02"),
+        new(Kind.L형, "L형", CantCols, CantNames, "도로옹벽 표준도 2008(국토해양부) L-1~L-133", true, "3.0~8.0 m", "앞굽 없음(용지 경계)"),
+        // ★[v104.0.1 · JACK 1022 «공공 표 없는 애들은 나중에 추가하는 거로 하고 뺄까?»] 역L형 · 부벽식은 목록에서 숨긴다 — 저판 · 부벽이 터파기 폭과 구조물 공제를 크게 바꾸는데 근거 값이 없다.
+        //   형식은 그대로 둔다(번호 고정 · 이미 고른 도면은 그 형식으로 계속 지음 · 목록에 «숨김»으로 보임) — 자료가 오면 Hidden만 끈다
+        new(Kind.역L형, "역L형", CantCols, CantNames, "공공 표 없음 — 역T형 표를 앞굽에 몰아준 꼴(제안)", false, "2~8 m(LH 절토부)", "뒷굽 없음 · 지반팀 값 필요", Hidden: true),
+        new(Kind.중력식, "중력식", GravCols, GravNames,
+            "도로옹벽 표준도 2008(국토해양부) G-1~G-7(= 2003 CAD)", true, "1.5~4.0 m", "무근 콘크리트 · 저판 없음"),
+        new(Kind.반중력식, "반중력식", CantCols, CantNames, "도로옹벽 표준도 2008(국토해양부) M-1~M-36(= 2003 CAD)", true, "2.0~4.0 m", "두꺼운 저판 + 얇은 벽"),
+        new(Kind.부벽식, "부벽식", CfCols, CfNames, "공공 표 없음 — 역T형 규칙(B = 0.6H + 0.2 · 두께 H/10)을 늘린 것 · 부벽 간격 H/3 · 두께 0.3(제안)", false, "8 m 이상", "부벽 사이 단면 + 부벽 평균(두께/간격) · 지반팀 값 필요", Hidden: true),
         new(Kind.보강토, "보강토", new[] { "H", "L", "D_blk", "Sv", "batter", "pad_t", "pad_e", "w_drain", "Df" },
             new[] { "높이(근입 포함)", "보강재 길이", "블록 깊이", "보강재 수직간격", "전면 기울기 1:n", "기초패드 두께", "기초패드 여유", "배수층 폭", "근입" },
             "KDS 11 80 10 — L ≥ max(0.7H, 2.5) · Df ≥ max(0.6, H/20) · 패드 ≥ 0.15 · 여유 ≥ 0.075 · 배수층 ≥ 0.3", true, "제한 없음(산지 5 m 이상 다단)", "블록 전면 · 블록 깊이는 제품별(제안 0.4)"),
-        new(Kind.패널식, "패널식", new[] { "H", "panel_t", "b_ft", "t_ft", "gap", "Df" },
+        // ★[v104.0.1 · JACK 1022 «앵커식이 없네» · «찰쌓기 메쌓기는 결국 석축»] 화면 이름만 바꾼다(형식 번호 · 재료 이름은 그대로)
+        new(Kind.패널식, "앵커식(패널)", new[] { "H", "panel_t", "b_ft", "t_ft", "gap", "Df" },
             new[] { "높이(근입 포함)", "패널 두께", "기초 폭", "기초 두께", "패널 뒤 되메움", "근입" },
             "전용 KDS 없음 — 업체 · 해외(Caltrans) 범위의 대표값(제안)", false, "절토부", "프리캐스트 패널 + 네일/앵커 · 기초부만 터파기 · 지반팀 값 필요"),
-        new(Kind.찰쌓기, "찰쌓기", StoneCols, StoneNames,
+        new(Kind.찰쌓기, "석축(찰쌓기)", StoneCols, StoneNames,
             "KDS 11 80 25 · 건설공사 표준품셈 2009 7-1 돌쌓기 표(대표값 = 범위 가운데)", true, "안정해석 생략 한계 3.0 m", "콘크리트 뒤채움(구조물) + 배수층"),
-        new(Kind.메쌓기, "메쌓기", StoneCols, StoneNames,
+        new(Kind.메쌓기, "석축(메쌓기)", StoneCols, StoneNames,
             "KDS 11 80 25 · 건설공사 표준품셈 2009 7-1 돌쌓기 표(대표값 = 범위 가운데)", true, "안정해석 생략 한계 1.5 m", "모르타르 없음 · 조약돌 뒤채움이 배수층(배수층 폭 0)"),
     };
 
     public static Info Of(Kind k) => Kinds.First(i => i.Id == k);
 
+    /// <summary>고르는 목록(콤보 · 단면 표 창)에 보이는 형식 — 숨긴 형식 빼고 같은 차례.</summary>
+    public static readonly IReadOnlyList<Info> Listed = Kinds.Where(i => !i.Hidden).ToList();
+
     // ── 첫 표(공공 자료) ─────────────────────────────────────────────────────
-    /// <summary>형식의 첫 표 — 공공 자료 그대로 · 표가 없는 형식은 [제안] 규칙으로 채운다.</summary>
-    public static Table DefaultTable(Kind k)
+    /// <summary>형식의 첫 표 — 벽 뒤 평평 · 지진 고려(<see cref="Cond.Default"/>).</summary>
+    public static Table DefaultTable(Kind k) => DefaultTable(k, Cond.Default);
+
+    /// <summary>형식 · 조건의 표준 표 — 공공 자료 그대로 · 표가 없는 형식은 [제안] 규칙으로 채운다.
+    /// ★[v105] 역T · L · 반중력 · 중력은 2008 표준도 일람표의 그 조건 칸(<see cref="WallStandard2008"/>) — 표준도에 없는 높이(L형 비탈 7 m 넘음 등)는 줄이 없다(그 위는 «표 밖» ⚠).</summary>
+    public static Table DefaultTable(Kind k, Cond c)
     {
-        var t = new Table { Kind = k };
+        c = Normalize(k, c);
+        var t = new Table { Kind = k, Cond = c };
         void Add(params double[] r) => t.Rows.Add(r);
         switch (k)
         {
-            case Kind.역T형:
-                // [표준도] T-1~T-11 — H · t_top · t_bot · B1 · B2 · t_f · t_f2 · Df (B = B1 + t_bot + B2)
-                Add(3.0, 0.30, 0.40, 0.30, 1.30, 0.40, 0.40, 1.0);
-                Add(3.5, 0.30, 0.40, 0.35, 1.55, 0.40, 0.40, 1.0);
-                Add(4.0, 0.30, 0.40, 0.40, 1.80, 0.40, 0.40, 1.0);
-                Add(4.5, 0.30, 0.45, 0.45, 2.00, 0.45, 0.45, 1.0);
-                Add(5.0, 0.30, 0.50, 0.50, 2.20, 0.50, 0.50, 1.0);
-                Add(5.5, 0.30, 0.55, 0.55, 2.40, 0.55, 0.55, 1.0);
-                Add(6.0, 0.30, 0.60, 0.60, 2.60, 0.60, 0.60, 1.0);
-                Add(6.5, 0.30, 0.65, 0.65, 2.80, 0.65, 0.65, 1.0);
-                Add(7.0, 0.30, 0.70, 0.70, 3.00, 0.70, 0.60, 1.0);
-                Add(7.5, 0.30, 0.75, 0.75, 3.20, 0.75, 0.65, 1.0);
-                Add(8.0, 0.30, 0.90, 0.80, 3.30, 0.90, 0.70, 1.0);
+            case Kind.역T형: case Kind.L형: case Kind.반중력식:
+            {
+                // [표준도 2008] 일람표 칸 → 도면 → H · t_top · t_bot · B1 · B2 · t_f · t_f2 · key_x · key_w · key_d · Df(mm → m)
+                var (dw, idx, col) = StdIndex(k, c);
+                for (int i = 0; i < idx.GetLength(0); i++)
+                {
+                    int dn = idx[i, col];
+                    if (dn > 0) Add(dw[dn].Select(v => v / 1000.0).ToArray());
+                }
                 break;
-            case Kind.L형:
-                // [표준도] L-1~L-11 — 앞굽 0 (L-5 총폭 표기 3.1은 부분치수 합 3.2로 — 도면 오기로 봄)
-                Add(3.0, 0.30, 0.40, 0, 1.60, 0.40, 0.40, 1.0);
-                Add(3.5, 0.30, 0.40, 0, 1.90, 0.40, 0.40, 1.0);
-                Add(4.0, 0.30, 0.40, 0, 2.20, 0.40, 0.40, 1.0);
-                Add(4.5, 0.30, 0.45, 0, 2.45, 0.45, 0.45, 1.0);
-                Add(5.0, 0.30, 0.50, 0, 2.70, 0.50, 0.50, 1.0);
-                Add(5.5, 0.30, 0.55, 0, 2.95, 0.55, 0.55, 1.0);
-                Add(6.0, 0.30, 0.60, 0, 3.20, 0.60, 0.40, 1.0);
-                Add(6.5, 0.30, 0.65, 0, 3.45, 0.65, 0.45, 1.0);
-                Add(7.0, 0.30, 0.70, 0, 3.70, 0.70, 0.50, 1.0);
-                Add(7.5, 0.30, 0.75, 0, 4.25, 0.75, 0.50, 1.0);
-                Add(8.0, 0.30, 0.90, 0, 4.70, 0.90, 0.60, 1.0);
-                break;
+            }
             case Kind.역L형:
-                // [제안] 역T형 표의 저판폭 B를 앞굽에 몰아준 꼴(뒷굽 0)
-                foreach (var r in DefaultTable(Kind.역T형).Rows) Add(r[0], r[1], r[2], r[3] + r[4], 0, r[5], r[6], r[7]);
+                // [제안] 역T형 첫 표의 저판폭 B를 앞굽에 몰아준 꼴(뒷굽 0 · 키 없음)
+                foreach (var r in DefaultTable(Kind.역T형).Rows) Add(r[0], r[1], r[2], r[3] + r[4], 0, r[5], r[6], 0, 0, 0, r[10]);
                 break;
             case Kind.중력식:
-                // [표준도] G-1 전면경사 1:0.02 줄 — H · b_top · B · Df
-                Add(1.5, 0.40, 1.20, 1.0); Add(2.0, 0.40, 1.60, 1.0); Add(2.5, 0.40, 1.80, 1.0);
-                Add(3.0, 0.40, 2.20, 1.0); Add(3.5, 0.40, 2.40, 1.0); Add(4.0, 0.40, 2.80, 1.0);
+            {
+                // [표준도 2008 = 2003 CAD] G-1(평평 · 앞면 경사별) · G-2 ~ G-7(비탈 · 앞면 경사 × 뒤 경사 × 쌓인 높이 → 밑폭 · 키 위치) — 윗폭 0.4 · 근입 1.0 ·
+                //   키 = 밑 폭 0.3 · 깊이 0.3(밑면에서) · 뒷면 60°
+                int a = Array.IndexOf(FrontNs, c.FrontN);
+                if (a < 0) a = 0;
+                for (int hi = 0; hi < 6; hi++)
+                {
+                    double h = 1.5 + 0.5 * hi;
+                    if (c.Back == 0) Add(h, 0.40, WallStandard2008.G1[a, hi] / 1000.0, c.FrontN, 0, 0, 0, 1.0);
+                    else
+                    {
+                        int fi = c.Fill == 1 ? 0 : c.Fill == 2 ? 1 : 2;
+                        Add(h, 0.40, WallStandard2008.GB[a, c.Back - 1, fi, hi] / 1000.0, c.FrontN, WallStandard2008.GK[a, c.Back - 1, fi, hi] / 1000.0, 0.30, 0.30, 1.0);
+                    }
+                }
                 break;
-            case Kind.반중력식:
-                // [표준도] M-1~M-5 — t_f = H/5 · B1 = H/10 · 벽 위 0.3
-                Add(2.0, 0.30, 0.50, 0.20, 1.10, 0.40, 0.40, 1.0);
-                Add(2.5, 0.30, 0.55, 0.25, 1.20, 0.50, 0.50, 1.0);
-                Add(3.0, 0.30, 0.65, 0.30, 1.25, 0.60, 0.60, 1.0);
-                Add(3.5, 0.30, 0.75, 0.35, 1.50, 0.70, 0.70, 1.0);
-                Add(4.0, 0.30, 0.80, 0.40, 1.60, 0.80, 0.80, 1.0);
-                break;
+            }
             case Kind.부벽식:
                 // [제안] 역T형 규칙을 늘린 것 — B = 0.6H + 0.2 · t_bot = B1 = t_f = H/10 · t_f2 = 0.8 t_f · 8.5 ~ 12 m · 부벽 간격 H/3(0.1 m 내림) · 두께 0.3
                 for (double h = 8.5; h <= 12.0 + 1e-9; h += 0.5)
@@ -179,6 +285,19 @@ public static class WallSection
             if (i > 0 && !(r[0] > t.Rows[i - 1][0])) { why = $"{i + 1}째 줄 H가 앞 줄보다 크지 않다"; return false; }
             double df = Col(t.Kind, r, "Df");
             if (!(r[0] > df)) { why = $"{i + 1}째 줄 H {r[0]}가 근입 {df}보다 크지 않다"; return false; }
+            // ★[v105] 활동방지벽 — 폭이 있으면 깊이도 있고 저판 안에 든다
+            double kw = Col(t.Kind, r, "key_w");
+            if (!double.IsNaN(kw) && kw > 1e-9)
+            {
+                double kx = Col(t.Kind, r, "key_x"), kd = Col(t.Kind, r, "key_d");
+                double B = t.Kind == Kind.중력식 ? Col(t.Kind, r, "B") : Col(t.Kind, r, "B1") + Col(t.Kind, r, "t_bot") + Col(t.Kind, r, "B2");
+                if (!(kd > 1e-9)) { why = $"{i + 1}째 줄 활동방지벽 폭이 있는데 깊이가 0"; return false; }
+                // 중력식 키는 뒷면 60° — 위 폭 = 밑 폭 + 깊이/tan60(계획 검토 낮음 12)
+                double kTop = t.Kind == Kind.중력식 ? kw + kd / Math.Tan(Math.PI / 3) : kw;
+                if (kx + kTop > B + 1e-9) { why = $"{i + 1}째 줄 활동방지벽(위치 {kx} + 폭 {kTop:0.###})이 저판 {B} 밖"; return false; }
+            }
+            double n1 = Col(t.Kind, r, "n1");
+            if (!double.IsNaN(n1) && n1 > 1.0) { why = $"{i + 1}째 줄 앞면 경사 1:{n1}가 1:1보다 눕다"; return false; }
         }
         return true;
     }
@@ -256,6 +375,7 @@ public static class WallSection
     {
         var s = new Shape { HTotal = hTot };
         double V(string col) => Col(k, row, col);
+        double V0(string col) { double v = Col(k, row, col); return double.IsNaN(v) ? 0 : Math.Max(0, v); }   // ★[v105] 없는 칸(부벽식의 키 등) = 0
         double df = double.IsNaN(dfUse) ? V("Df") : dfUse; s.Df = df;
         double zTop = hTot - df;                                      // 벽 꼭대기(앞 땅 기준)
         double nf = Math.Max(0, c.FrontBatter);
@@ -278,6 +398,11 @@ public static class WallSection
                 Ring("콘크리트", true, (xs0, zft), (xs0 + tBot, zft), (xTopF + tTop, zTop), (xTopF, zTop));
                 // 버림
                 Ring("버림", true, (xToe - el, zb - tl), (xHeel + el, zb - tl), (xHeel + el, zb), (xToe - el, zb));
+                // ★[v105 · 계획_v105.md 2.5] 활동방지벽 — 저판 밑 직사각형(저판 앞 끝에서 key_x · 폭 key_w · 깊이 key_d) · 버림과 겹친 몫은 공제에서 합집합(두 번 안 뺌) ·
+                //   터파기 바닥(버림 밑)보다 깊이 나온다(표준도 «활동방지턱 터파기는 연직 굴착» — 수량은 Integrate가 따로 잰다)
+                double kx = V0("key_x"), kw = V0("key_w"), kd = V0("key_d");
+                if (kw > 1e-9 && kd > 1e-9)
+                    Ring("활동방지벽", true, (xToe + kx, zb), (xToe + kx + kw, zb), (xToe + kx + kw, zb - kd), (xToe + kx, zb - kd));
                 // ★[v104 2판 재검토] 부벽 — 벽 뒷면 · 뒷굽 끝 · 벽 꼭대기 뒤를 잇는 세모를 «평균»(두께/간격)으로
                 if (k == Kind.부벽식)
                 {
@@ -291,10 +416,16 @@ public static class WallSection
             case Kind.중력식:
             {
                 double bTop = V("b_top"), B = V("B");
-                double zb = -df, x0 = nf * zb, xTopF = nf * zTop;
+                // ★[v105] 앞면 경사는 줄 값(표준도 G-1 · 1:0.02 ~ 0.30) — 없으면(옛 표) 공통 칸
+                double n1 = V("n1"); n1 = double.IsNaN(n1) ? nf : Math.Max(0, n1);
+                double zb = -df, x0 = n1 * zb, xTopF = n1 * zTop;
                 Ring("콘크리트", true, (x0, zb), (x0 + B, zb), (xTopF + bTop, zTop), (xTopF, zTop));
                 Ring("버림", true, (x0 - el, zb - tl), (x0 + B + el, zb - tl), (x0 + B + el, zb), (x0 - el, zb));
-                s.XFront = x0 - el; s.XBack = x0 + B + el; s.ZBottom = zb - tl; s.FaceBatter = nf;
+                // ★[v105] 비탈 단면 키 — 앞면 수직 · 밑 폭 key_w · 깊이 key_d(밑면에서) · 뒷면 60°(표준도 G-2 ~ G-7 일반도)
+                double kx = V0("key_x"), kw = V0("key_w"), kd = V0("key_d");
+                if (kw > 1e-9 && kd > 1e-9)
+                    Ring("활동방지벽", true, (x0 + kx, zb), (x0 + kx + kw + kd / Math.Tan(Math.PI / 3), zb), (x0 + kx + kw, zb - kd), (x0 + kx, zb - kd));
+                s.XFront = x0 - el; s.XBack = x0 + B + el; s.ZBottom = zb - tl; s.FaceBatter = n1;
                 break;
             }
             case Kind.보강토:
@@ -374,41 +505,94 @@ public static class WallSection
     }
 
     // ── 도면 기록(표) ───────────────────────────────────────────────────────
-    /// <summary>표 기록 판.</summary>
-    public const int TableVersion = 1;
+    /// <summary>표 기록 판 — ★[v105] 2 = 조건 + 손으로 고쳤나(고치지 않았으면 줄 값을 안 적고 읽을 때 표준 표 — 자료를 고치면 따라온다).</summary>
+    public const int TableVersion = 2;
 
-    /// <summary>표 기록 값 — [I 판 · I 형식 · I 칸 수 · I 줄 수 · D…]. 첫 표와 같으면 null(기록을 지운다).</summary>
+    /// <summary>손으로 고친 표인가 — 그 조건의 표준 표와 다르면.</summary>
+    public static bool IsCustom(Table t)
+    {
+        var c = Normalize(t.Kind, t.Cond);
+        var d = DefaultTable(t.Kind, c);
+        return t.Rows.Count != d.Rows.Count || t.Rows.Zip(d.Rows).Any(z => z.First.Length != z.Second.Length || z.First.Zip(z.Second).Any(v => v.First.ToString("R", CultureInfo.InvariantCulture) != v.Second.ToString("R", CultureInfo.InvariantCulture)));
+    }
+
+    /// <summary>표 기록 값(판 2) — [I 2 · I 형식 · I 뒤 · I 쌓인 높이 · I 지진 · D 앞면 경사 · I 고침 · (I 칸 수 · I 줄 수 · D…)?]. 조건이 첫 값이고 고치지 않았으면 null(기록을 지운다).</summary>
     public static List<(char K, object V)>? Encode(Table t)
     {
-        if (t.Print == DefaultTable(t.Kind).Print) return null;
-        int nc = Of(t.Kind).Cols.Length;
-        var l = new List<(char, object)> { ('I', TableVersion), ('I', (int)t.Kind), ('I', nc), ('I', t.Rows.Count) };
-        foreach (var r in t.Rows) foreach (var v in r) l.Add(('D', v));
+        var c = Normalize(t.Kind, t.Cond);
+        bool custom = IsCustom(t);
+        if (!custom && c == Cond.Default) return null;
+        var l = new List<(char, object)> { ('I', TableVersion), ('I', (int)t.Kind), ('I', c.Back), ('I', c.Fill), ('I', c.Seismic ? 1 : 0), ('D', c.FrontN), ('I', custom ? 1 : 0) };
+        if (custom)
+        {
+            int nc = Of(t.Kind).Cols.Length;
+            l.Add(('I', nc)); l.Add(('I', t.Rows.Count));
+            foreach (var r in t.Rows) foreach (var v in r) l.Add(('D', v));
+        }
         return l;
     }
 
-    /// <summary>기록을 읽는다 — 없으면 첫 표(참) · 못 읽거나 틀리면 첫 표 + 까닭(거짓).</summary>
+    /// <summary>기록을 읽는다 — 없으면 첫 표(참) · 못 읽거나 틀리면 첫 표 + 까닭(거짓).
+    /// ★[v105] 판 1(v104 — 손으로 고친 표만 있었다)은 새 칸으로 옮긴다(키 0 · 중력식 앞면 1:0.02 · 조건 첫 값 · 참).</summary>
     public static bool TryDecode(Kind k, IReadOnlyList<(char K, object V)>? vals, out Table t, out string why)
     {
         t = DefaultTable(k); why = "";
         if (vals == null || vals.Count == 0) return true;
         try
         {
-            if (vals.Count < 4 || vals[0].K != 'I' || (int)vals[0].V != TableVersion) { why = $"{k} 표 기록 판이 다르다"; return false; }
+            if (vals.Count < 2 || vals[0].K != 'I' || vals[1].K != 'I') { why = $"{k} 표 기록 꼴이 다르다"; return false; }
+            int ver = (int)vals[0].V;
             if ((int)vals[1].V != (int)k) { why = $"{k} 표 기록의 형식이 다르다({vals[1].V})"; return false; }
-            int nc = (int)vals[2].V, nr = (int)vals[3].V;
-            if (nc != Of(k).Cols.Length || nr < 1 || vals.Count != 4 + nc * nr) { why = $"{k} 표 기록 꼴이 다르다(칸 {nc} · 줄 {nr} · 값 {vals.Count - 4})"; return false; }
-            var r = new Table { Kind = k };
-            for (int i = 0; i < nr; i++)
+            Table? r = null;
+            if (ver == 1)
             {
-                var row = new double[nc];
-                for (int j = 0; j < nc; j++) { var e = vals[4 + i * nc + j]; if (e.K != 'D') { why = $"{k} 표 기록 {i + 1}째 줄 값 형이 다르다"; return false; } row[j] = (double)e.V; }
-                r.Rows.Add(row);
+                if (vals.Count < 4) { why = $"{k} 표 기록(판 1) 꼴이 다르다"; return false; }
+                int nc = (int)vals[2].V, nr = (int)vals[3].V;
+                if (nr < 1 || vals.Count != 4 + nc * nr) { why = $"{k} 표 기록(판 1) 꼴이 다르다(칸 {nc} · 줄 {nr} · 값 {vals.Count - 4})"; return false; }
+                r = new Table { Kind = k, Cond = Cond.Default };
+                for (int i = 0; i < nr; i++)
+                {
+                    var row = new double[nc];
+                    for (int j = 0; j < nc; j++) { var e = vals[4 + i * nc + j]; if (e.K != 'D') { why = $"{k} 표 기록 {i + 1}째 줄 값 형이 다르다"; return false; } row[j] = (double)e.V; }
+                    r.Rows.Add(MigrateV1(k, row));
+                }
+                if (r.Rows.Any(x => x.Length != Of(k).Cols.Length)) { why = $"{k} 표 기록(판 1) 칸 {nc}개를 새 칸으로 못 옮김"; return false; }
+                // 옮김은 실패가 아니다 — why는 비워 둔다(부르는 쪽이 비지 않은 why를 «첫 표로 셈» ⚠로 적는다)
             }
+            else if (ver == TableVersion)
+            {
+                if (vals.Count < 7) { why = $"{k} 표 기록 꼴이 다르다"; return false; }
+                var c = Normalize(k, new Cond((int)vals[2].V, (int)vals[3].V, (int)vals[4].V != 0, (double)vals[5].V));
+                bool custom = (int)vals[6].V != 0;
+                if (!custom) { if (vals.Count != 7) { why = $"{k} 표 기록 — 남는 칸"; return false; } t = DefaultTable(k, c); return true; }
+                if (vals.Count < 9) { why = $"{k} 표 기록 꼴이 다르다"; return false; }
+                int nc = (int)vals[7].V, nr = (int)vals[8].V;
+                if (nc != Of(k).Cols.Length || nr < 1 || vals.Count != 9 + nc * nr) { why = $"{k} 표 기록 꼴이 다르다(칸 {nc} · 줄 {nr} · 값 {vals.Count - 9})"; return false; }
+                r = new Table { Kind = k, Cond = c };
+                for (int i = 0; i < nr; i++)
+                {
+                    var row = new double[nc];
+                    for (int j = 0; j < nc; j++) { var e = vals[9 + i * nc + j]; if (e.K != 'D') { why = $"{k} 표 기록 {i + 1}째 줄 값 형이 다르다"; return false; } row[j] = (double)e.V; }
+                    r.Rows.Add(row);
+                }
+            }
+            else { why = $"{k} 표 기록 판 {ver}(이 판은 1 · {TableVersion}만 읽는다)"; return false; }
             if (!Valid(r, out string bad)) { why = $"{k} 표 기록 값이 틀리다 — {bad}"; return false; }
             t = r;
             return true;
         }
         catch (Exception ex) { why = $"{k} 표 기록을 못 읽었다 {ex.GetType().Name}"; t = DefaultTable(k); return false; }
+    }
+
+    /// <summary>판 1(v104) 줄 → 새 칸 — 캔틸레버 8칸 → 키 0 셋을 근입 앞에 · 중력식 4칸 → 앞면 0.02 · 키 0 · 그 밖 그대로.</summary>
+    static double[] MigrateV1(Kind k, double[] row)
+    {
+        int now = Of(k).Cols.Length;
+        if (row.Length == now) return row;
+        if (k is Kind.역T형 or Kind.L형 or Kind.역L형 or Kind.반중력식 && row.Length == 8)
+            return new[] { row[0], row[1], row[2], row[3], row[4], row[5], row[6], 0, 0, 0, row[7] };
+        if (k == Kind.중력식 && row.Length == 4)
+            return new[] { row[0], row[1], row[2], 0.02, 0, 0, 0, row[3] };
+        return row;
     }
 }

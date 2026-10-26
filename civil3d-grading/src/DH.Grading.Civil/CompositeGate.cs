@@ -73,7 +73,10 @@ internal static class CompositeGate
             else
             {
                 try { ed.WriteMessage($"\n[{caller}] 정지면_DH에 빠진 옹벽 {st.Missing.Count}개 — 먼저 합성합니다(옹벽 하나에 약 20초)…"); } catch { }
-                var (ok, sum) = Commands.WallCompositeCommand.RunFor(doc, caller);
+                (bool ok, string sum) = (false, "");
+                // ★[v105.1.1 · JACK 1023] 합성 동안 로딩 창(종단이 띄운 창이 있으면 그 창을 그대로 쓴다)
+                using (BusyPopup.Scope(Commands.CreateGradingCommand.BusyText))
+                    (ok, sum) = Commands.WallCompositeCommand.RunFor(doc, caller);
                 ran = (ok ? "합성 됨 — " : "합성 못 함 — ") + SelfCheckLog.Clean(sum);
                 // ★[4판 재검토 새 높음 1] 그 합성이 옹벽을 버렸거나(대기) 뺐으면(면이 없어진 넣음) 목록에서 사라져 «빠짐»에 안 잡힌다 — 그래도 묻는다(명령줄 한 줄로 묻히지 않게)
                 lost = Commands.WallCompositeCommand.LastLost;

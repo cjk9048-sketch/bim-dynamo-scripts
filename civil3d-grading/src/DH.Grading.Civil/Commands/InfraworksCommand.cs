@@ -11,7 +11,7 @@ namespace DH.Grading.Civil.Commands;
 /// "infraworks 기초자료"(DHINFRA) — 정지 결과를 InfraWorks 기초자료로 **폴더 선택** 후 내보낸다(JACK 0724).
 /// **있는 객체만** 내보낸다(빈 파일 안 만듦 — 헷갈림 방지):
 ///   · 지형.xml           — 정지면_DH TinSurface LandXML
-///   · 옹벽3D.dwg         — 옹벽 3D(보강토/앵커판넬/역T) — 옹벽이 있을 때만
+///   · 옹벽3D.dwg         — 옹벽 3D(★[v105] 단면 덩어리 — 터파기 · 수량과 같은 단면) — 옹벽이 있을 때만
 ///   · 계획면.shp         — 계획폴리곤
 ///   · 소단_절토/성토.shp — 소단 띠(있을 때만)
 ///   · 사면_절토/성토.shp — 사면 띠(사면 모드·있을 때만)
@@ -257,9 +257,12 @@ public sealed class InfraworksCommand
                 if (!hasSlope || ringList == null || ringList.Count == 0) { log.AppendLine($"{rPre}{label}: 사면/경계 없음 — 생략"); continue; }
 
                 double slopeN = up ? bundle.Params.CutSlope : bundle.Params.FillSlope;
-                WallStyle style = up ? GradingSettings.CutWallStyle : GradingSettings.FillWallStyle;
+                // ★★★[v105 · 계획_v105.md 4.3 · JACK 1022 «3D 모양 콤보는 없애고 단면 형상으로 옹벽을 만들어 인프라웍스 내보내기에»]
+                //   옛 블록 · 앵커판넬 · 역T 생성은 타지 않는다(style = 없음 — 아래 갈래가 모두 건너뜀 · 코드는 되돌리기 쉽게 남김) ·
+                //   옹벽 3D는 ②에서 단면 덩어리(WallSolidDwg)로 · 사면 띠의 옹벽 판정은 경사 ≤ 게이트만으로.
+                WallStyle style = WallStyle.없음_사면;
                 bool wallOk = slopeN <= GradingSettings.WallGateSlope + 1e-9;   // 옹벽 게이트(그 위는 사면 취급)
-                bool wallMode = style != WallStyle.없음_사면 && wallOk;
+                bool wallMode = wallOk;
 
                 // [§75 0728] 사면→옹벽 부분 전환 구간(번들 v3+) — 링 재계산·사면/소단 띠·옹벽 3D에 반영.
                 var zones = up ? bundle.CutWallZones : bundle.FillWallZones;
@@ -587,10 +590,6 @@ public sealed class InfraworksCommand
                         log.AppendLine($"{rPre}보강토_{label}{zTag}: 블록 {blocks.Count}·캡 {capsB.Count} (제외 {blkDropped})");
                     }
                 }
-                else if (zoneMode && style == WallStyle.없음_사면)
-                    // ★[v103.3] 옹벽 형태가 도킹바로 옮겨 갔다(0910엔 [기타 설정]) — 안내도 같이 옮긴다.
-                    //   §78이 적은 그대로: <b>없는 창을 가리키는 안내는 막다른 길</b>이다.
-                    log.AppendLine($"{rPre}{label}: 옹벽 구간은 있으나 옹벽 형태가 '없음' — 옹벽3D 생략(계획부지 정지 창 «옹벽» 묶음에서 형태 선택)");
                 else if (!zoneMode && !wallOk)
                     log.AppendLine($"{rPre}{label}: 옹벽 없음(사면)");
             }
@@ -608,76 +607,46 @@ public sealed class InfraworksCommand
                 else log.AppendLine($"{key}.shp: 생략(0개)");
             }
 
-            // ── ② 옹벽3D.dwg — 옹벽 객체가 있을 때만(없으면 파일 안 만듦, JACK 0724) ──
+            // ── ② 옹벽3D.dwg — ★★★[v105 · 계획_v105.md 4 · JACK 1022 «단면 형상으로 옹벽을 만들고 인프라웍스 내보내기에 활용» · «터파기와 같은 단면» · «내보내기 파일에만»]
+            //   종단에 든 옹벽(읽기만 — 도면을 안 바꾼다) → 터파기와 같은 바닥 줄 · 같은 단면 → 구조물 조각마다 솔리드(WallSolidDwg). 옹벽이 없으면 파일 안 만듦(JACK 0724).
             prog.Stage("옹벽 3D");
-            var allPanels = panelSets.SelectMany(s => s.Panels).ToList();
-            var allConcrete = concreteSets.SelectMany(s => s.Panels).ToList();
-            // ★[JACK 0819] 코너유닛/필러만 있고 판넬이 0장인 경우(통짜 스윕 매스)에도 내보내야 한다 —
-            //   종전 조건은 판넬을 안 만들면 **DWG 자체를 건너뛰어** 벽이 통째로 사라진다.
-            if (wallSets.Count > 0 || allPanels.Count > 0 || allConcrete.Count > 0 || teeAll.Count > 0
-                || cornerUnitAll.Count > 0 || quoinAll.Count > 0 || massAll.Count > 0)
             {
-                string dwgPath = System.IO.Path.Combine(folder, GradingSettings.InfraWallDwg);
-                try
+                var secNotes = new System.Collections.Generic.List<string>();
+                ObjectId gid3 = SectionCommand.GroundOf(db);
+                System.Collections.Generic.List<DH.Grading.Core.WallExcav.SecLine>? secLines = null;
+                DH.Grading.Core.WallExcav.Settings exSt = DH.Grading.Core.WallExcav.Settings.Default;
+                string facesTxt = "";
+                try { secLines = WallExcavBuilder.SectionLinesForExport(db, gid3, secNotes, out exSt, out facesTxt); }
+                catch (System.Exception sex) { secNotes.Add("단면 줄을 못 세움 — " + sex.Message); }
+                if (secLines != null && secLines.Count > 0)
                 {
-                    var (nb, nc, np, na, ncp, nt) = WallDwg.Export(dwgPath, wallSets, allPanels, allConcrete,
-                        GradingSettings.WallBlockW, GradingSettings.WallBlockD, GradingSettings.WallBlockH,
-                        GradingSettings.WallCapD, GradingSettings.WallCapT, quoinAll, teeAll, wallLineAll, cornerUnitAll, massAll);
-                    // ★[JACK 0807 결정] 깨진솔리드 전수검사(6초)를 줄일지는 **몇 번 더 세어 보고** 정한다.
-                    //   그러려면 0일 때도 찍혀야 한다 — 종전엔 0이면 아예 안 찍혀서 '0이 몇 번 연속인지'를
-                    //   셀 수가 없었다. 세려고 만든 계수기가 셀 수 없으면 그건 계수기가 아니다.
-                    log.AppendLine($"옹벽3D.dwg: 보강토 {nb}블록+{nc}캡 · 앵커판넬 {np}패널+{na}앵커 · 역T {nt}세그" +
-                        $" · 깨진솔리드 {WallDwg.LastDropped}개 제외" +
-                        (WallDwg.LastDropDetail.Length > 0 ? $"[{WallDwg.LastDropDetail}]" : "(전수검사)") +
-                        // [0805] 판 만들기 실패는 종전에 조용히 삼켜져 'Generate 수 ≠ DWG 수'가 안 보였다.
-                        (WallPanelDwg.nFail > 0
-                            ? $" · ⚠판 만들기 실패 {WallPanelDwg.nFail}장(앵커·정착판도 함께 생략) — 첫 사유: {WallPanelDwg.firstFail}"
-                            : ""));
-                    if (WallPanelDwg.nMass > 0 || massAll.Count > 0)
-                        log.AppendLine($"  ★옹벽 매스 {WallPanelDwg.nMass}/{massAll.Count}개(줄 하나 = 솔리드 하나 · 단면 여러 장을 한 번에 통과)" +
-                                       $" · 솔리드 {WallPanelDwg.massSolid}/{WallPanelDwg.nMass}개" +
-                                       (WallPanelDwg.massWound > 0 ? $" · 면 감기 되돌림 {WallPanelDwg.massWound}개(옹벽선 도는 방향이 반대인 줄)" : "") +
-                                       (WallPanelDwg.massDetail.Length > 0 ? $" · {WallPanelDwg.massDetail}" : "") +
-                                       (WallPanelDwg.massFail > 0
-                                            ? $" · ⚠실패 {WallPanelDwg.massFail}개 — 사유: {WallPanelDwg.massFirstFail ?? "(안 남음)"}" : ""));
-                    if (faceAll.Count > 0)
-                        log.AppendLine($"  ★표면 마감 {faceAll.Count}판(몸통 없이 무늬·도넛·앵커·정착판만 — 매스가 곧 판넬)");
-                    if (WallPanelDwg.nCornerUnit > 0 || cornerUnitAll.Count > 0)
-                        log.AppendLine($"  코너 전용 판넬 {WallPanelDwg.nCornerUnit}/{cornerUnitAll.Count}개(각진부 마감 — 양옆 판넬이 물러난 자리를 감싼다)");
-                    if (teeAll.Count > 0 && WallTeeDwg.LastDiag.Length > 0)
-                        log.AppendLine("  역T 상세: " + WallTeeDwg.LastDiag);
-                    // ★[JACK 0807 '내보내기가 너무너무 오래 걸린다 · 무늬 때문인거야?'] 종전 시계는 '옹벽 3D 14.1s'까지만
-                    //   알려줘 그 안에서 무엇이 시간을 먹는지 못 갈랐다. 구간·부속별로 갈라 적는다.
-                    if (WallDwg.LastTiming.Length > 0) log.AppendLine("  옹벽3D 시간: " + WallDwg.LastTiming);
-                    // ── [옹벽 자가진단 0805] 로그 이 블록만 보면 정상/이상이 갈린다(JACK 요청) ──
-                    if (WallPanelDwg.nFail > 0)
-                        wallWarn.Add($"판 만들기 실패 {WallPanelDwg.nFail}장(앵커·정착판도 함께 생략) — 첫 사유: {WallPanelDwg.firstFail}");
-                    // ★[JACK 0820] '마감만' 판(Overlay)은 **몸통을 안 만드는 것이 정상**이다 — 매스가 곧 판넬이다.
-                    //   빼지 않으면 정상 동작이 매번 '⚠이상 2건'으로 찍혀 **진짜 이상이 그 속에 묻힌다**.
-                    //   (실측: '생성 236 ≠ 저장 0' · '앵커 188 > 판넬 0' 둘 다 오탐이었다.)
-                    int bodyGen = panelGenTotal - WallPanelDwg.nOverlay;
-                    if (bodyGen != np)
-                        wallWarn.Add($"생성 {bodyGen}장 ≠ 저장 {np}장 (차이 {bodyGen - np}장 — 압출 실패 또는 깨진 솔리드)");
-                    if (na > np + WallPanelDwg.nOverlay)
-                        wallWarn.Add($"앵커 {na}개 > 판넬 {np + WallPanelDwg.nOverlay}장 — 판넬 없는 자리에 앵커봉만 남음");
-                    // [0805 JACK '이상한 객체가 떠있음'] 패널 무리에서 멀리 떨어진 객체를 종류·좌표로 지목.
-                    if (WallPanelDwg.strayN > 0)
-                        wallWarn.Add($"패널 경계상자 밖 객체 {WallPanelDwg.strayN}개 — 첫 사례: {WallPanelDwg.strayFirst}");
-                    // [0805 '모델링 작업 오류 115094'] 부속(무늬·도넛·앵커·정착판)은 전부 catch에 삼켜져
-                    //   AutoCAD가 명령창에 오류를 쏟아도 로그엔 안 남았다 — 어느 단계인지 여기서 밝힌다.
-                    string subDiag = WallPanelDwg.SubDiag();
-                    if (subDiag.Length > 0) wallWarn.Add(subDiag);
-                    // [0805-2] 기울어진 링 위 판넬 생략은 '정상 완료'가 아니다 — 옹벽에 구멍이 남는다.
-                    foreach (var s in wallSkipNotes) wallWarn.Add(s);
-                    log.AppendLine("■ 옹벽 자가진단");
-                    log.AppendLine($"  앵커판넬 생성 {panelGenTotal} → 저장 {np} · 앵커 {na} · 보강토 {nb}블록");
-                    if (wallWarn.Count == 0) log.AppendLine("  ✔ 이상 없음");
-                    else { log.AppendLine($"  ⚠ 이상 {wallWarn.Count}건:"); foreach (var w in wallWarn) log.AppendLine("    · " + w); }
-                    made.Add("옹벽3D.dwg");
+                    string dwgPath = System.IO.Path.Combine(folder, GradingSettings.InfraWallDwg);
+                    try
+                    {
+                        var ws = WallSolidDwg.Export(dwgPath, secLines);
+                        string kinds = string.Join(" · ", secLines.GroupBy(l => (l.Up, l.Kind)).Select(g => $"{(g.Key.Up ? "절토" : "성토")} {DH.Grading.Core.WallSection.Of(g.Key.Kind).Name} {g.Count()}줄"));
+                        log.AppendLine($"옹벽3D.dwg: 단면 덩어리 — {kinds} · {ws.Text}");
+                        log.AppendLine($"  {facesTxt}");
+                        if (ws.Saved) made.Add("옹벽3D.dwg");
+                        else wallWarn.Add("옹벽 3D를 하나도 못 만들어 옹벽3D.dwg를 쓰지 않았습니다");
+                        if (ws.Fails > 0 || ws.CornerFails > 0) wallWarn.Add($"옹벽 3D 일부 못 만듦 — {ws.Text}");
+                        if (ws.Meshes > 0) wallWarn.Add($"솔리드로 못 바꾼 조각 {ws.Meshes}개(메시로 남김 — 표시엔 지장 없음)");
+                    }
+                    catch (System.Exception dex) { log.AppendLine($"옹벽3D.dwg: 저장 실패 — {dex.Message} (파일 열려 있으면 닫고 재실행)"); }
                 }
-                catch (System.Exception dex) { log.AppendLine($"옹벽3D.dwg: 저장 실패 — {dex.Message} (파일 열려 있으면 닫고 재실행)"); }
+                else log.AppendLine("옹벽3D.dwg: 생략(옹벽 없음" + (facesTxt.Length > 0 ? " · " + facesTxt : "") + ")");
+                // ★[설치 전 검토 낮음] 이번에 3D를 안 썼는데 폴더에 옛 옹벽3D.dwg가 남아 있으면 — InfraWorks가 없는 옹벽을 가져올 수 있다(지우지는 않고 알린다)
+                if (!made.Contains("옹벽3D.dwg") && System.IO.File.Exists(System.IO.Path.Combine(folder, GradingSettings.InfraWallDwg)))
+                    wallWarn.Add($"폴더에 예전 {GradingSettings.InfraWallDwg}가 남아 있습니다 — 이번 내보내기와 맞지 않으니 지우세요");
+                // ★[계획 검토 중간 3] 터파기 켬인데 종단이 지은 터파기면이 지금 설정 · 표와 다르면 — 3D(지금 단면)와 수량(지난 종단 단면)이 어긋날 수 있다(모르면 안 띄운다)
+                if (exSt.On && secLines != null && secLines.Count > 0 && WallExcavBuilder.HasCurrentSurface(db, gid3) == false)
+                    wallWarn.Add("옹벽 터파기면이 지금 단면 표 · 설정과 다릅니다 — [종단도]를 다시 그리면 수량 단면과 3D가 같아집니다");
+                foreach (var nt in secNotes.Distinct().Take(12)) log.AppendLine("  · " + nt);
+                if (secNotes.Count > 12) log.AppendLine($"  · … 외 {secNotes.Count - 12}건");
+                log.AppendLine("■ 옹벽 자가진단");
+                if (wallWarn.Count == 0) log.AppendLine("  ✔ 이상 없음");
+                else { log.AppendLine($"  ⚠ 이상 {wallWarn.Count}건:"); foreach (var w in wallWarn) log.AppendLine("    · " + w); }
             }
-            else log.AppendLine("옹벽3D.dwg: 생략(옹벽 객체 없음)");
 
             // ── ③ 지형.xml + 위성용 경계상자 ──
             prog.Stage("지형 XML");
@@ -735,6 +704,8 @@ public sealed class InfraworksCommand
             string list = made.Count > 0 ? string.Join(" · ", made) : "(내보낸 파일 없음 — 정지면/객체 확인)";
             AcadApp.ShowAlertDialog("infraworks 기초자료 내보내기 완료\n\n저장 위치: " + folder +
                                     "\n\n내보낸 파일:\n" + list +
+                                    // ★[v105 · 계획 검토 중간 3] 옹벽 3D가 빠지거나 수량 단면과 어긋날 수 있으면 팝업에도
+                                    (wallWarn.Count > 0 ? "\n\n⚠ 옹벽 3D:\n" + string.Join("\n", wallWarn.Select(w => "· " + w)) : "") +
                                     "\n\n걸린 시간: " + ExportProgress.Human(prog.TotalSeconds));
             // ★[JACK 0807 '내보내기하면 글씨가 엄청나게 생긴다'] 명령창에는 **요약만** 낸다.
             //   종전엔 진단 로그 전문(수십 줄 × 한 줄 수천 자)을 그대로 쏟아 명령창이 도배됐다.
