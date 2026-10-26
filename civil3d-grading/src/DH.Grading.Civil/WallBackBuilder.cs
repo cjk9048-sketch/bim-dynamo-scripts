@@ -129,7 +129,8 @@ internal static class WallBackBuilder
             //   켬으로 그린 다른 선형의 수량이 말없이 배면 없이 나왔다. 수량은 «지금 설정이 켬 · 같은 경사»일 때만 이 기록을 쓴다(CollectQty · ForAlignment).
             //   켬일 때는 늘 이 면 · 이 경사의 답(기록 · 대상 없음 · 데이라잇 없음 · 못 지음 = 기록 없음)으로 맞춘다 — 경사와 무관한 판정이라 같은 면을 쓰는 선형끼리 어긋나지 않는다.
             if (!st.On || !st.BackOn) { R.BackState = WallExcavBuilder.State.Off; return; }
-            string stamp = R.Stamp + "|B" + st.BackHead;
+            // ★[v104.1 설치 전 검토 높음 1] 기록 판(평탄 높이 식)을 도장에 — 없으면 v104.0.0 그림 면(끊긴 T)이 도장이 같아 그대로 되쓰여 그림과 수량이 어긋났다
+            string stamp = R.Stamp + "|B" + st.BackHead + "|T" + WallExcav.BackRecordVersion;
             R.BackStamp = stamp;
             var rec = WallExcavBuilder.ReadSecRecord(tr, exTin, out string rw);
             if (rec == null) { DropRecord(tr, exTin); R.BackState = WallExcavBuilder.State.Failed; R.BackWhy = "터파기면 단면 기록을 못 읽었다 — " + rw; log.AppendLine("  옹벽 배면 — ⚠" + R.BackWhy); return; }
@@ -145,6 +146,16 @@ internal static class WallBackBuilder
             var day = WallExcav.DaylightOf(exTris, L, walls);
             if (day.Count == 0) { DropRecord(tr, exTin); R.BackState = WallExcavBuilder.State.Off; log.AppendLine($"  옹벽 배면 — 데이라잇 없음(절토 줄 {walls.Count} · 뒤 터파기가 땅에 안 닿음) — 배면 = 땅"); return; }
             var br = new WallExcav.BackRecord { N = st.BackSlope, Walls = walls, Daylight = day };
+            // ★[v105.1 · 계획_v105_1.md 2 · 8] 후보 가면 C — 여기서 한 번(정지면_DH · 원지반 · 터파기면 세모) → 기록에 적어 수량도 같은 가면 · 같은 평탄 격자
+            var swM = System.Diagnostics.Stopwatch.StartNew();
+            if (!WallExcav.BuildBackMask(br, P, G, exTris, WallExcav.MaskStep, out string maskNote))
+            {
+                DropRecord(tr, exTin); R.BackState = WallExcavBuilder.State.Failed; R.BackWhy = "배면 후보 가면을 못 지었다 — " + maskNote;
+                log.AppendLine("  옹벽 배면 — ⚠" + R.BackWhy);
+                return;
+            }
+            if (br.Mask == null || br.Mask.Runs.Count == 0) { DropRecord(tr, exTin); R.BackState = WallExcavBuilder.State.Off; log.AppendLine($"  옹벽 배면 — 대상 없음(후보 구역 빔 · {maskNote})"); return; }
+            maskNote += $" · {swM.ElapsedMilliseconds}ms";
             // ★[검토 높음 4] 수량용 기록은 터파기면에 — 그림 면이 못 지어져도 수량은 배면을 따른다
             WriteRecIfChanged(tr, exTin, WallExcav.EncodeBack(br));
             R.BackRec = true;
@@ -156,10 +167,12 @@ internal static class WallBackBuilder
             if (!same.Id.IsNull)
             {
                 R.BackState = WallExcavBuilder.State.Built; R.BackId = same.Id; R.BackName = same.Name; R.BackReused = true;
-                log.AppendLine($"  옹벽 배면 — 기록 다시 씀 · 그림 면 되씀 {same.Name}");
+                log.AppendLine($"  옹벽 배면 — 기록 다시 씀({maskNote}) · 그림 면 되씀 {same.Name}");
                 return;
             }
+            var swS = System.Diagnostics.Stopwatch.StartNew();
             var tris = WallExcav.BackSurface(br, P, G, E, Grid, out string note, out int flatHits);
+            note = $"{maskNote} · {note} · {swS.ElapsedMilliseconds}ms";
             if (flatHits > 0) R.BackWhy = (R.BackWhy.Length > 0 ? R.BackWhy + " · " : "") + $"평탄 없이 경사로 벽에 닿는 자리(격자 {flatHits}점) — 벽 바로 뒤 땅이 꼭대기보다 높다";
             if (tris.Count == 0 && note.StartsWith(WallExcav.BackTooBig))
             {

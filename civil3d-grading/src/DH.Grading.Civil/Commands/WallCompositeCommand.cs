@@ -255,6 +255,8 @@ public sealed class WallCompositeCommand
         _job = job;
         _issuesBefore = SelfCheck.IssuesNow(docJ?.Database);   // ★[v103.1.7 · 검토 낮음 6] 작업 앞 상태(새로 생긴 문제만 ⚠로)
         _quiet = false;
+        // ★[v105.1.1 · JACK 1023] 로딩 창 — 옹벽 변환이 이어 태운 합성 · [옹벽 합성] 단추 모두(관문 합성 RunFor는 관문이 띄운다 · 종단이 띄운 창이면 그 창을 쓴다)
+        using var busy = BusyPopup.Scope(CreateGradingCommand.BusyText);
         try { if (docJ != null) RunInner(docJ); }
         catch (System.Exception ex) { job.Done(false, $"예외 — {ex.GetType().Name}: {ex.Message}"); throw; }
         finally
@@ -460,13 +462,14 @@ public sealed class WallCompositeCommand
                              : _lastOk ? "빠진 옹벽은 옹벽 변환에서 다시 지정하세요."
                              : _rejectedNo > 0 ? "버린 옹벽은 합성으로 돌아오지 않습니다 — 옹벽 변환을 다시 하세요."
                              : "다시 하려면 옹벽 변환을 다시 하거나 명령줄에 DHWALLCOMP를 치세요.";
+                BusyPopup.Close();   // ★[v105.1.1] 마지막 알림 앞에서 로딩 창을 닫는다
                 AcadApp.ShowAlertDialog(head0 + "\n\n" + System.Text.RegularExpressions.Regex.Replace(summary, "<[^>]+>", "") + "\n\n" + tail0 + " 자세한 것은 " + LogName);
             }
             catch { }
         // ★[v103.1.7 · 검토 1012 재검토 낮음 5 — 미뤘던 것] 토량을 미뤄 둔 길(정지면을 다시 안 만든 되돌리기 · 합성 전 토량을 생략한 재생성)은 팝업에 토량이 안 떴다 →
         //   그 토량이 나오는 이 자리에서 팝업으로도(팝업은 성패 + 토량 — JACK 0720)
         else if (canAlert && wantVol && _lastOk && volAfter.Length > 0)
-            try { AcadApp.ShowAlertDialog("옹벽 합성 완료\n\n" + volAfter + "\n\n(옹벽 합성 뒤 — 이번 변환의 토량입니다)"); } catch { }
+            try { BusyPopup.Close(); AcadApp.ShowAlertDialog("옹벽 합성 완료\n\n" + volAfter + "\n\n(옹벽 합성 뒤 — 이번 변환의 토량입니다)"); } catch { }
         _lastSummary = summary;
         log.AppendLine("■ " + summary);
         // ★★★[v103.1.7 · JACK 1014] 자가점검 판정 한 줄 — 합성이 됐나 · 빠진 옹벽 · 우리 지표면의 구식 표시(커밋 뒤 새 트랜잭션) · 다음 Idle에 한 번 더

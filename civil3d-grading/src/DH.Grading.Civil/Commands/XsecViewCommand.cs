@@ -752,7 +752,7 @@ public sealed class XsecViewCommand
         DrawQtyTables(db, viewIds, bandPaperMm, sc, tableRight, TableGapMm * sc, qty, fold, log, qty.Basis);
         // ★[JACK 0826] 선 색·눈금은 <b>숨기기 전</b>에 — 숨긴 뒤에도 되지만 로그 차례가 헷갈린다.
         X9("수량표 끝 — 단면 스타일");
-        ApplySectionStyles(db, cdoc, slIds, kindOf, log);
+        ApplySectionStyles(db, cdoc, slIds, kindOf, log, qty.X2 != null && qty.X2.Count > 0);   // ★[v105.3] 2D를 그리면 3D 옹벽 터파기 · 배면 단면은 숨김(표본은 켬 — 뷰 높이 범위)
         X9("지층 이름");
         // ★★★[JACK 0908 "층 지시선과 문자가 왼쪽 밖으로 넘어가 · 도곽 쓰는 영역을 넘어가서 작성되고 있어"]
         //   <b>칸의 왼쪽 한계를 알려 준다.</b>
@@ -767,6 +767,8 @@ public sealed class XsecViewCommand
                 leftLim[viewIds[i].Id] = cellAt[i].X + padM2;
         }
         DrawStrataNames(db, viewIds, kindOf, alignId, wl, wr, scale, leftLim, log);   // ★[JACK 0828] 지층·지하수위 이름
+        X9("옹벽 단면");
+        string wsec = DrawWallSections(db, viewIds, alignId, wl, wr, scale, log, qty.X2);   // ★★★[v104.1 · JACK 1022] 옹벽 단면 넣기 · ★[v105.3] 2D 터파기선 · 배면
         X9("밴드 묶기");
         BindBandSections(db, viewIds, kindOf, scale, annoScale, log);
         X9("측점 밴드");
@@ -783,6 +785,7 @@ public sealed class XsecViewCommand
         //   로그 파일은 사람이 열어 봐야 알고, 표는 숫자가 차 있어 멀쩡해 보인다.
         ed.WriteMessage((string.IsNullOrEmpty(qty.Warn) ? "" : qty.Warn) +
                         $"\n[횡단도] 횡단면도 {nView}장 · 검토선 {slIds.Count}개" +
+                        (wsec.Length > 0 ? "\n  · " + wsec : "") +
                         $"\n  자세한 내용: {DiagLog.FilePath}");
         X9("끝 — 로그를 쓴다");
         Flush(log);
@@ -834,6 +837,115 @@ public sealed class XsecViewCommand
     /// 글씨는 닻에서 <b>지시선+글씨폭</b>만큼 옆으로, 겹치면 <b>세로로도</b> 밀려 난다 —
     /// 그 자리는 뷰 밖일 수 있다. 그래서 밀어낸 <b>뒤에</b> 가로·세로를 다시 재고,
     /// 자리가 없으면 방향을 돌리거나(오른쪽) 덩어리째 내리고, 그래도 모자라면 <b>말한다</b>.</para></summary>
+    /// <summary>★★★[v104.1 · 계획_v104_1.md 2.3 · JACK 1022 «종단이든 횡단이든 옹벽 모양을 하늘색 선으로만 표시해 놨잖아 — 이젠 단면을 직접 도면에 삽입해줘»]
+    /// 뷰마다 표본선(왼끝 → 오른끝)과 터파기 단면 기록 줄이 만나는 자리에 <b>수량과 같은 단면</b> + 형식 이름 인출(<see cref="WallSectionDraw"/>).
+    /// 기록이 없으면(터파기 꺼짐 · 못 지음) 그리지 않고 한 줄로 말한다. 명령창 한 줄을 돌려준다.</summary>
+    private static string DrawWallSections(Database db, System.Collections.Generic.List<(ObjectId Id, double St, string Name)> views,
+                                           ObjectId alignId, double wl, double wr, double scale, System.Text.StringBuilder log,
+                                           System.Collections.Generic.Dictionary<string, DH.Grading.Core.WallExcav.Xs2D> x2map = null)
+    {
+        if (views == null || views.Count == 0) return "";
+        int nSec = 0, nEnt = 0, nSkip = 0, nOut = 0, nMap = 0, nLab = 0, nSlope = 0, n2d = 0, n2dEnt = 0, n2dMiss = 0;
+        var dash = WallSectionDraw.Prepare(db);
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            if (tr.GetObject(alignId, OpenMode.ForRead) is not CivilDb.Alignment al) { tr.Commit(); return ""; }
+            var rec = WallSectionDraw.RecordFor(db, tr, al, out string why);
+            if (rec == null)
+            {
+                tr.Commit();
+                log?.AppendLine($"  옹벽 단면 — 안 그림({why})");
+                return WallSectionDraw.IsOff(why) ? "옹벽 단면은 [옹벽 터파기]를 켜고 [종단도]를 그리면 넣습니다" : $"⚠옹벽 단면 못 넣음 — {why}";
+            }
+            var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+            var L = WallSectionDraw.XsecLayers(db, tr, dash);
+            var kst = ImportGisCommand.EnsureKoreanTextStyle(db, tr);
+            double txtH = WallSectionDraw.LabelMm / 1000.0 * scale;
+            var slo = WallSectionDraw.SlopeSources(db, tr, al);   // ★[v105.1 · JACK 1023] 기울기 라벨 재료(터파기면 · 배면 그림 면)
+            var exSt2 = WallListStore.ExcavOf(db, out _);
+            foreach (var (vid, _, vName) in views)
+            {
+                try
+                {
+                    if (tr.GetObject(vid, OpenMode.ForRead) is not CivilDb.SectionView sv) continue;
+                    if (tr.GetObject(sv.SampleLineId, OpenMode.ForRead) is not CivilDb.SampleLine ln) continue;
+                    if (!SectionCommand.TryCut(al, ln.Station, wl, wr, out var cut)) continue;
+                    var cuts = DH.Grading.Core.WallExcav.CutSections(rec, cut.Left.X, cut.Left.Y, cut.Right.X, cut.Right.Y, WallSectionDraw.MinSin, out int sk);
+                    nSkip += sk;
+                    DH.Grading.Core.WallExcav.Xs2D x2 = null;
+                    x2map?.TryGetValue(vName, out x2);
+                    if (x2map != null && x2 == null) n2dMiss++;   // ★[설치 전 검토 낮음 6] 3D 선은 숨겼는데 이 뷰는 2D가 없다(측점 자르기 실패 등) — 알린다
+                    if (cuts.Count == 0 && slo == null && x2 == null) continue;
+                    var map = WallSectionDraw.Affine(-wl, wr, sv.ElevationMin, sv.ElevationMax,   // 오프셋 범위 = 표본선 −wl ~ +wr
+                        (o, z) => { double x = 0, y = 0; return sv.FindXYAtOffsetAndElevation(o, z, ref x, ref y) ? new Point2d(x, y) : (Point2d?)null; });
+                    if (map == null) { if (cuts.Count > 0) nMap++; continue; }
+                    // ★[v105.1 · JACK 1023 «단이 많으면 라벨은 중간에 하나만»] 뷰 안 단면을 단 묶음으로 — 형식마다 가운데 단만 인출
+                    var inV = new System.Collections.Generic.List<DH.Grading.Core.WallExcav.CutSec>(); var offs = new System.Collections.Generic.List<double>();
+                    foreach (var c in cuts)
+                    {
+                        double off = -wl + c.Dist;
+                        if (off < -wl - 1e-6 || off > wr + 1e-6) { nOut++; continue; }
+                        inV.Add(c); offs.Add(off);
+                    }
+                    var pick = WallSectionDraw.PickLabels(inV, offs);
+                    for (int ci = 0; ci < inV.Count; ci++)
+                    {
+                        nEnt += WallSectionDraw.DrawOne(db, tr, ms, inV[ci], offs[ci], map, txtH, System.Math.Max(0, pick[ci]), L, kst, WallSectionDraw.KindXsec, vid.Handle.ToString(), pick[ci] >= 0);
+                        nSec++; if (pick[ci] >= 0) nLab++;
+                    }
+                    // ★★★[v105.3 · JACK 1026 «가로지르는 벽만 (노란 선)»] 2D 터파기선 · 배면 — 수량이 지은 그 객체(같은 꺾임점) · 기울기 라벨도 2D에서
+                    if (x2 != null)
+                    {
+                        n2d++;
+                        n2dEnt += WallSectionDraw.DrawXs2D(db, tr, ms, x2, map, WallSectionDraw.KindXsec, vid.Handle.ToString());
+                        int ns2 = System.Math.Max(3, (int)System.Math.Ceiling((wl + wr) / 0.1) + 1);
+                        double[] a2 = new double[ns2], e2 = new double[ns2], b2 = new double[ns2], g2e = new double[ns2], g2b = new double[ns2];
+                        for (int i = 0; i < ns2; i++)
+                        {
+                            double a = -wl + (wl + wr) * i / (ns2 - 1.0);
+                            a2[i] = a;
+                            e2[i] = x2.E(a);
+                            b2[i] = x2.B(a, out bool ib, out _); if (!ib) b2[i] = double.NaN;
+                            g2e[i] = double.IsNaN(e2[i]) ? double.NaN : x2.EGrad(a);
+                            g2b[i] = double.IsNaN(b2[i]) ? double.NaN : x2.BGrad(a);
+                        }
+                        // ★[설치 전 검토 낮음 7] 숫자 = 선을 지은 경사(max(설정, 최소) — 같은 값이어야 «1:n 근처» 판정이 맞다)
+                        var s2 = new WallSectionDraw.SlopeSrc { NExc = WallExcavBuilder.SpecOf(exSt2).N, NBack = exSt2.BackSlope, BenchOn = exSt2.BenchOn, BenchW = exSt2.BenchW, UseExc = true, UseBack = x2.Backs.Count > 0 };
+                        nSlope += WallSectionDraw.DrawSlopeLabels(db, tr, ms, a2, e2, b2, g2e, g2b, map, txtH, s2, L, kst, WallSectionDraw.KindXsec, vid.Handle.ToString());
+                    }
+                    // ★[v105.1 · JACK 1023 «배면사면 · 뒷채움 사면 기울기 라벨 누락»] 표본선을 따라 0.1 m마다 터파기면 · 배면 높이 → 경사 구간에 «1:n»
+                    else if (slo != null)
+                    {
+                        int ns = System.Math.Max(3, (int)System.Math.Ceiling((wl + wr) / 0.1) + 1);
+                        double[] aa = new double[ns], ee = new double[ns], bb = new double[ns], ge = new double[ns], gb = new double[ns];
+                        for (int i = 0; i < ns; i++)
+                        {
+                            double t = (double)i / (ns - 1);
+                            double px = cut.Left.X + (cut.Right.X - cut.Left.X) * t, py = cut.Left.Y + (cut.Right.Y - cut.Left.Y) * t;
+                            aa[i] = -wl + (wl + wr) * t;
+                            ee[i] = slo.Exc != null && slo.Exc.TryGetElevation(px, py, out double ze) ? ze : double.NaN;
+                            bb[i] = slo.Back != null && slo.Back.TryGetElevation(px, py, out double zb) ? zb : double.NaN;
+                            ge[i] = double.IsNaN(ee[i]) ? double.NaN : WallSectionDraw.Grad(slo.Exc, px, py);
+                            gb[i] = double.IsNaN(bb[i]) ? double.NaN : WallSectionDraw.Grad(slo.Back, px, py);
+                        }
+                        nSlope += WallSectionDraw.DrawSlopeLabels(db, tr, ms, aa, ee, bb, ge, gb, map, txtH, slo, L, kst, WallSectionDraw.KindXsec, vid.Handle.ToString());
+                    }
+                }
+                catch (System.Exception exV) { log?.AppendLine("  옹벽 단면 — 뷰 하나 실패: " + exV.Message); }
+            }
+            tr.Commit();
+        }
+        catch (System.Exception ex) { log?.AppendLine("  옹벽 단면 실패 — " + ex.Message); return "⚠옹벽 단면 못 넣음 — " + ex.Message; }
+        string s = $"옹벽 단면 {nSec}개(CALS CC-GSTR-NEWC · NEWD · LEAN · 인출 CC-LEAL · CC-LEAT) · 인출 {nLab}(단 묶음마다 하나) · 기울기 글 {nSlope}"
+                 + (n2d > 0 ? $" · 2D 터파기 · 배면 선 {n2dEnt}줄(뷰 {n2d} · 가로지르는 벽만)" : "")
+                 + (n2dMiss > 0 ? $" · ⚠2D 터파기선 없는 뷰 {n2dMiss}(그 측점 수량을 못 쟀다 — 로그 수량 줄)" : "")
+                 + (nSkip > 0 ? $" · 벽과 거의 나란해 뺀 것 {nSkip}" : "")
+                 + (nOut > 0 ? $" · 뷰 밖 {nOut}" : "") + (nMap > 0 ? $" · ⚠뷰 좌표를 못 잰 뷰 {nMap}" : "");
+        log?.AppendLine($"  {s} · 개체 {nEnt}");
+        return nSec + nSkip + nOut + nMap + nSlope + n2dEnt > 0 ? s : "";
+    }
+
     private static int DrawStrataNames(Database db,
         System.Collections.Generic.List<(ObjectId Id, double St, string Name)> views,
         System.Collections.Generic.Dictionary<ObjectId, string> kindOf,
@@ -3781,7 +3893,7 @@ public sealed class XsecViewCommand
     private static int ApplySectionStyles(Database db, CivilApp.CivilDocument cdoc,
                                           List<(ObjectId Id, string Name, double St, double Mother, int Ord)> sl,
                                           System.Collections.Generic.Dictionary<ObjectId, string> kindOf,
-                                          System.Text.StringBuilder log)
+                                          System.Text.StringBuilder log, bool hideWall3d = false)
     {
         if (sl == null || sl.Count == 0) return 0;
 
@@ -3851,7 +3963,7 @@ public sealed class XsecViewCommand
         }
 
         // ── 스타일 셋 — 이미 있으면 색만 다시 맞춘다(도면에 스타일이 쌓이지 않게).
-        ObjectId Ensure(string nm, short aci, string lt, double ltScale = 1.0)
+        ObjectId Ensure(string nm, short aci, string lt, double ltScale = 1.0, bool visible = true)
         {
             try
             {
@@ -3880,7 +3992,7 @@ public sealed class XsecViewCommand
                             if (ds == null) continue;
                             ds.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(
                                 Autodesk.AutoCAD.Colors.ColorMethod.ByAci, aci);
-                            ds.Visible = ty == CivilDb.Styles.SectionDisplayStyleSectionType.Segments;
+                            ds.Visible = visible && ty == CivilDb.Styles.SectionDisplayStyleSectionType.Segments;
                             if (lt != null)
                             {
                                 try { ds.Linetype = lt; } catch { }
@@ -3905,6 +4017,9 @@ public sealed class XsecViewCommand
         //   옛 판이 심어 둔 <c>DASHED</c>가 그대로 남는다.
         var stExcav  = Ensure("DH_횡단면_터파기", SectionCommand.ExcavAci, "Continuous");   // 6 = 마젠타, 실선
         var stWater  = Ensure("DH_횡단면_지하수위", 5, dashWater, ltsW);   // 5 = 파랑(JACK 지시)
+        // ★[v105.3 · 계획 검토 중간 3] 3D 옹벽 터파기 · 배면 단면 — 2D 선을 우리가 그리므로 Civil 선은 숨긴다(표본은 켬 — 뷰 높이 범위가 기초 바닥 · 터파기 바닥까지 잡히게)
+        var stHidden = hideWall3d ? Ensure("DH_횡단면_숨김", 6, "Continuous", 1.0, false) : ObjectId.Null;
+        int nHid = 0;
 
         // ★★★[JACK 0831 "각 지층별로 색상을 줘"] <b>층마다 스타일을 따로 만든다.</b>
         //   0828에는 지층을 전부 혼탁(8)으로 뒀다 — 여러 줄이 진한 색이면 그것만 보이는 도면이 될까 봐였다.
@@ -3964,7 +4079,8 @@ public sealed class XsecViewCommand
                             //     그 <b>ObjectId로 맞춘다.</b> 이름은 사용자가 지은 것이라 믿을 수 없다.
                             string kind = kindOf.TryGetValue(sec.SourceId, out var kk) ? kk : "";
                             // 이름으로 고른다 — 터파기를 먼저 봐야 한다('터파기면_DH'가 '정지'를 안 품지만 순서를 못 박아 둔다).
-                            if (kind == "터파기" || kind == WallExcavBuilder.Label) { if (!stExcav.IsNull) { sec.StyleId = stExcav; nE++; } }   // ★[v103.3] 옹벽 터파기도 같은 마젠타
+                            if (!stHidden.IsNull && (kind == WallExcavBuilder.Label || kind == WallBackBuilder.Label)) { sec.StyleId = stHidden; nHid++; }
+                            else if (kind == "터파기" || kind == WallExcavBuilder.Label) { if (!stExcav.IsNull) { sec.StyleId = stExcav; nE++; } }   // ★[v103.3] 옹벽 터파기도 같은 마젠타
                             else if (kind == WallBackBuilder.Label) { if (!stPlan.IsNull) { sec.StyleId = stPlan; nP++; } }   // ★[v104 B] 배면사면 — 정지면 색
                             else if (kind == "원지반") { if (!stGround.IsNull) { sec.StyleId = stGround; nG++; } }
                             else if (kind == "정지면") { if (!stPlan.IsNull) { sec.StyleId = stPlan; nP++; } }
@@ -3988,6 +4104,7 @@ public sealed class XsecViewCommand
         catch (System.Exception ex) { log?.AppendLine("  단면 선 색 적용 실패 — " + ex.Message); }
 
         log?.AppendLine($"  단면 선 — 원지반 {nG}개(초록) · 계획 {nP}개(흰색) · 터파기 {nE}개(마젠타"
+                      + (nHid > 0 ? $" · 3D 옹벽 터파기 · 배면 {nHid}개 숨김(2D 선을 그림)" : "")
                       + "·실선)"
                       + (nS > 0 ? $" · <b>지층 {nS}개</b>({stStrataBy.Count}가지 색·{dashStrata ?? "점선 없음"}·무늬배율 {ltsS:0.###})" : "")
                       + (nW > 0 ? $" · <b>지하수위 {nW}개</b>(파랑·{dashWater ?? "점선 없음"}·무늬배율 {ltsW:0.###})" : "")
@@ -4023,6 +4140,27 @@ public sealed class XsecViewCommand
     /// 그래서 <c>axis</c> 인자로 <b>이 배열을 그대로</b> 넘긴다 — 그것까지 해야 축이 같아진다.</para>
     /// <para>★그리고 <b>축이 같아도 합이 저절로 맞지는 않는다</b> — 지층면이 부지를 못 덮으면
     /// 그 칸이 조용히 빠진다. 그래서 <c>CollectQty</c>가 <b>측점마다 합을 견준다</b>.</para></remarks>
+    /// <summary>★★★[v105.3 · 계획_v105_3.md 2 · 4 · 5] 횡단 2D 터파기 재료 — 한 도면에 한 번(CollectQty).</summary>
+    internal sealed class X2Ctx
+    {
+        public DH.Grading.Core.WallExcav.SecRecord Rec;
+        public CachedGroundSurface G, P, S;
+        public DH.Grading.Core.WallExcav.SlopeSpec Sp;
+        public double? BackN;
+    }
+
+    /// <summary>★[v105.3] 한 절단선(왼끝 → 오른끝 · 축 −wl ~ wr)의 2D 터파기 · 배면 — 축 a를 그 자리 평면 점으로 바꿔 세 면을 읽는다(그림 · 수량이 이 하나).</summary>
+    internal static DH.Grading.Core.WallExcav.Xs2D Xs2DAt(X2Ctx c, double lx, double ly, double rx, double ry, double wl, double wr)
+    {
+        double Z(CachedGroundSurface cs, double a)
+        {
+            if (cs == null) return double.NaN;
+            double t = (a + wl) / (wl + wr);
+            return cs.TryGetElevation(lx + (rx - lx) * t, ly + (ry - ly) * t, out double z) ? z : double.NaN;
+        }
+        return DH.Grading.Core.WallExcav.Excav2D(c.Rec, lx, ly, rx, ry, wl, wr, a => Z(c.G, a), a => Z(c.P, a), a => Z(c.S, a), c.Sp, c.BackN, WallSectionDraw.MinSin);
+    }
+
     private static DH.Grading.Core.XsecQty QtyAt(Transaction tr, CivilDb.Alignment al, double station,
         double wl, double wr,
         CachedGroundSurface csG, CachedGroundSurface csP, CachedGroundSurface csE,
@@ -4037,13 +4175,23 @@ public sealed class XsecViewCommand
         DH.Grading.Core.WallExcav.SecRecord secRec = null,
         double[] secOut = null,
         DH.Grading.Core.WallExcav.BackRecord backRec = null,
-        double[] backOut = null)
+        double[] backOut = null,
+        X2Ctx x2ctx = null,
+        System.Action<DH.Grading.Core.WallExcav.Xs2D> x2sink = null)
     {
         // 절단선의 좌우 끝을 구한다 — 종단도·횡단도가 쓰는 것과 <b>같은 함수</b>다.
         if (!SectionCommand.TryCut(al, station, wl, wr, out var cut))
         {
             dbg?.Append(" ⚠절단선을 못 구했다");
             return new DH.Grading.Core.XsecQty(double.NaN, double.NaN, double.NaN, double.NaN, double.NaN);
+        }
+        // ★★★[v105.3 · 계획_v105_3.md · JACK 1026 «가로지르는 벽만 (노란 선)»] 옹벽 터파기 · 배면 · 구조물 공제를 <b>이 횡단에 그린 벽만으로</b>(2D) —
+        //   3D 터파기면(csWx)은 안 읽는다(종단 · 3D용). 같은 객체를 그림(DrawWallSections)이 받는다(x2sink) — 그림 꼭짓점 = 수량 꺾임점.
+        DH.Grading.Core.WallExcav.Xs2D x2 = null;
+        if (x2ctx != null)
+        {
+            x2 = Xs2DAt(x2ctx, cut.Left.X, cut.Left.Y, cut.Right.X, cut.Right.Y, wl, wr);
+            x2sink?.Invoke(x2);
         }
 
         int n = (int)System.Math.Max(2, System.Math.Round((wl + wr) / SampleStepM) + 1);
@@ -4076,6 +4224,14 @@ public sealed class XsecViewCommand
             }
             return okN >= 2 ? z : null;   // ★두 점도 못 얻으면 "못 쟀다"
         }
+        // ★[v105.3] 축 함수(2D 터파기선)를 표본 축에서 — 두 점도 없으면 null(Read와 같은 뜻)
+        double[] Eval(System.Func<double, double> f)
+        {
+            var z = new double[n];
+            int okN = 0;
+            for (int i2 = 0; i2 < n; i2++) { z[i2] = f(xs[i2]); if (!double.IsNaN(z[i2])) okN++; }
+            return okN >= 2 ? z : null;
+        }
 
         // ★★★[JACK 0826 "BO로 재니 2.253인데 왜 절토가 2.11이야?"]
         //   <b>원인: 지표면 가장자리를 0.25m 단위로만 알았다.</b>
@@ -4090,7 +4246,7 @@ public sealed class XsecViewCommand
         // ★★[JACK 0831 · 검토 LOW-9] <b>지층·지하수위 가장자리도 훑는다.</b>
         //   종전엔 원지반·계획·터파기 셋만 봤다 — 지층면이 끝나는 자리가 표본 사이에 있으면
         //   그 칸(0.1m × 깊이)이 통째로 빠진다. 지층은 층마다 있으니 <b>층 수만큼</b> 빠진다.
-        var edgeSurfs = new System.Collections.Generic.List<CachedGroundSurface> { csG, csP, csE, csW, csWx };   // ★[v103.3 · 재검토 중간 8] 옹벽 터파기 가장자리도
+        var edgeSurfs = new System.Collections.Generic.List<CachedGroundSurface> { csG, csP, csE, csW, x2 == null ? csWx : null };   // ★[v103.3 · 재검토 중간 8] 옹벽 터파기 가장자리도 · ★[v105.3] 2D면 그 꺾임점(아래)
         if (strata != null) foreach (var (_, cs2) in strata) edgeSurfs.Add(cs2);
         foreach (var cs in edgeSurfs)
         {
@@ -4126,7 +4282,11 @@ public sealed class XsecViewCommand
             }
         }
         // ★[v104 B · 배면 검토 낮음 12] 배면 구역 Ω의 가장자리도 이분법으로 넣는다 — 표본 사이에 걸리면 그 칸(절토 · 터파기 칸이 서로 다른 끝을 봄)이 칸 하나 몫 어긋났다(0826 «가장자리 오차»와 같은 종류)
-        if (backRec != null && csWx != null)
+        // ★[v105.2 · 계획_v105_2.md 2판 §2] 배면 닿음 걷기용 옹벽 터파기면 함수 — 그림(WallBackBuilder)과 같은 면 · 같은 CachedGroundSurface라 같은 답
+        // ★[v105.3] 2D — 꺾임점(바닥 끝 · 소단 모서리 · 데이라잇 · 두 벽이 바뀌는 자리 · 도랑 수직 양쪽 · 배면 끝 · 닿음 · 평탄 시작 · 자연 땅 끝)을 표본 축에
+        if (x2 != null) foreach (double b in x2.Breaks) if (b > -wl && b < wr) edges.Add(b);
+        System.Func<double, double, double?>? wxAt = csWx == null ? null : (qx, qy) => csWx.TryGetElevation(qx, qy, out double qz) ? qz : (double?)null;
+        if (x2 == null && backRec != null && csWx != null)
         {
             bool InB(double xx)
             {
@@ -4134,7 +4294,7 @@ public sealed class XsecViewCommand
                 if (!csWx.TryGetElevation(px0, py0, out double ez)) return false;
                 double pz = csP != null && csP.TryGetElevation(px0, py0, out double pz0) ? pz0 : double.NaN;
                 double gz = csG != null && csG.TryGetElevation(px0, py0, out double gz0) ? gz0 : double.NaN;
-                DH.Grading.Core.WallExcav.BackAt(backRec, px0, py0, pz, gz, ez, out bool ins, out _);
+                DH.Grading.Core.WallExcav.BackAt(backRec, px0, py0, pz, gz, ez, wxAt!, out bool ins, out _);
                 return ins;
             }
             bool prev = InB(xs[0]);
@@ -4149,6 +4309,24 @@ public sealed class XsecViewCommand
                 }
                 prev = cur;
             }
+        }
+        // ★★[v105 · 계획 검토 높음 1] 활동방지벽 자리 — 키 앞 · 뒤 끝 양쪽(0.1 mm)을 표본 축에 넣는다(아래에서 그 칸의 터파기 바닥을 키 밑까지 내린다)
+        //   ★[v105.3] 키 자리는 축(−wl ~ wr) 값으로 — 2D는 그린 벽 단면의 키 링에서(계획 검토 낮음 13 · 나란한 벽 키는 안 셈)
+        var keyCorners = new System.Collections.Generic.List<double>();
+        System.Collections.Generic.List<(double Lo, double Hi)> keySpans = null;
+        if (x2 != null) keySpans = x2.KeySpans(keyCorners);
+        else if (secRec != null && csWx != null)
+        {
+            var kc0 = new System.Collections.Generic.List<double>();
+            keySpans = DH.Grading.Core.WallExcav.KeySpans(secRec, lx, ly, rx, ry, kc0).Select(k => (k.Lo - wl, k.Hi - wl)).ToList();
+            keyCorners.AddRange(kc0.Select(k => k - wl));
+        }
+        if (keySpans != null)
+        {
+            foreach (var (ka, kb) in keySpans)
+                foreach (double xe in new[] { ka - 1e-4, ka + 1e-4, kb - 1e-4, kb + 1e-4 })
+                    if (xe > -wl && xe < wr) edges.Add(xe);
+            foreach (double xe in keyCorners) if (xe > -wl && xe < wr) edges.Add(xe);   // 중력식 키 기운 밑면의 모서리
         }
         if (edges.Count > 0)
         {
@@ -4168,13 +4346,32 @@ public sealed class XsecViewCommand
         //   · 기준 «원지반»(Lower) — 두 터파기의 위끝이 같다(Lower(G, P)) → <c>E = Lower(구조물, 옹벽)</c> 하나로 지금 길 그대로.
         //   · 기준 «계획면» + 이 측점에 구조물 터파기가 없다 — 옹벽만 → <c>E = 옹벽</c> · 위끝은 Lower(G, P)(옹벽은 뒤 흙보다 먼저 선다).
         //   · 기준 «계획면» + 둘 다 — 구조물은 그대로 · 옹벽은 구조물 바닥 <b>아래로 더 판 몫</b>만 따로 더한다(깊이는 그 자리 지표에서 — <c>SplitByDepthBase</c>).
-        double[] ewx = Read(csWx);
+        double[] ewx = x2 != null ? Eval(x2.E) : Read(csWx);
+        // ★★[v105 · 계획 검토 높음 1 · 표준도 «활동방지턱 터파기는 연직 굴착»] 키 자리 칸은 옹벽 터파기 바닥을 키 밑까지 내린다 —
+        //   전체 터파기 · 지층별 원장 · 5 m 구분이 이 한 배열을 같이 쓰고, 키는 구조물이라 공제(Integrate)가 되메우기에서 그대로 뺀다(키 = 파서 콘크리트로 채움)
+        if (keySpans != null && keySpans.Count > 0 && ewx != null)
+        {
+            int nKey = 0; double kMax = 0;
+            for (int i = 0; i < n; i++)
+            {
+                if (double.IsNaN(ewx[i])) continue;
+                double off = xs[i];
+                if (!keySpans.Any(s => off >= s.Lo - 1e-3 && off <= s.Hi + 1e-3)) continue;
+                double tk = (xs[i] + wl) / (wl + wr);
+                double kb = x2 != null ? x2.KeyBottomAt(xs[i]) : DH.Grading.Core.WallExcav.KeyBottomAt(secRec, lx + (rx - lx) * tk, ly + (ry - ly) * tk);
+                if (!double.IsNaN(kb) && kb < ewx[i]) { kMax = System.Math.Max(kMax, ewx[i] - kb); ewx[i] = kb; nKey++; }
+            }
+            if (nKey > 0) dbg?.Append($" | 활동방지벽 {keySpans.Count}곳 · 바닥 낮춘 점 {nKey}(최대 {kMax:F2}m)");
+        }
         // ★★★[v104 B · 계획_v104_B.md 2 · JACK 1021 «되메우기 = 터파기선 ~ 배면사면 · 그 위 원지반은 절토»] <b>계획면을 배면사면으로 낮춘다</b> — 한 곳만 바꾼다.
         //   Ω 안(옹벽 터파기 안 · 절토 옹벽 흙 쪽 · 정지면 = 원지반)이고 B &lt; 계획면이면 py2 = B → 절토 = G − B(지층 원장도 같은 칸) · 터파기 위끝 = B · 되메우기 = B ~ E − 구조물.
         //   총 깎은 양 = (G − B) + (B − E) = G − E(겹침 없음) · 계획면 기준 길 · 구조물 공제 지표도 같은 배열을 본다.
         //   ※[설치 전 검토 낮음 7 — 안 받음] 절단선에 정지면이 없는 측점(옹벽 끝 너머 · 터파기만 있음)도 배면을 적용한다 — 빼면 바로 앞 측점은 되메우기가 배면까지인데
         //     이 측점만 원지반까지라 수량이 끊긴다(V33 16.8m). 총 깎은 양(G − E)은 어느 쪽이든 같고 «배면 위 원지반은 절토»(JACK 1021)를 같은 법으로 따른다.
-        if (backRec != null && ewx != null)
+        // ★[v105.3] 2D면 그 배면(그린 벽 · 같은 규칙 v105.2 · 관문 = 지금 설정 켬 · 경사 — 3D 기록 유무와 따로 · 계획 검토 중간 4)
+        bool backOn = x2 != null ? x2.Backs.Count > 0 && ewx != null : backRec != null && ewx != null && wxAt != null;
+        double backN = x2 != null ? (x2ctx?.BackN ?? double.NaN) : (backRec?.N ?? double.NaN);
+        if (backOn)
         {
             var p0 = py2;
             var pNew = new double[n];
@@ -4184,7 +4381,9 @@ public sealed class XsecViewCommand
                 double pv = p0 != null ? p0[i] : double.NaN, gv = gy != null ? gy[i] : double.NaN;
                 pNew[i] = pv;
                 double tt = (xs[i] + wl) / (wl + wr);
-                double bz = DH.Grading.Core.WallExcav.BackAt(backRec, lx + (rx - lx) * tt, ly + (ry - ly) * tt, pv, gv, ewx[i], out bool ins, out bool fh);
+                bool ins, fh;
+                double bz = x2 != null ? x2.B(xs[i], out ins, out fh)
+                                       : DH.Grading.Core.WallExcav.BackAt(backRec, lx + (rx - lx) * tt, ly + (ry - ly) * tt, pv, gv, ewx[i], wxAt, out ins, out fh);
                 double cutHere = 0;
                 if (ins)
                 {
@@ -4200,7 +4399,7 @@ public sealed class XsecViewCommand
             {
                 py2 = pNew;
                 if (backOut != null && backOut.Length >= 2) { backOut[0] = extra; backOut[1] = nFlat; }
-                dbg?.Append($" | 옹벽 배면사면(1:{backRec.N:0.##}) {nIn}점 · 그 위 원지반 {extra:F2}㎡ → 절토{(nFlat > 0 ? $" · ⚠평탄 없이 벽에 닿는 점 {nFlat}" : "")}");
+                dbg?.Append($" | 옹벽 배면사면(1:{backN:0.##}{(x2 != null ? " · 2D" : "")}) {nIn}점 · 그 위 원지반 {extra:F2}㎡ → 절토{(nFlat > 0 ? $" · ⚠평탄 없이 벽에 닿는 점 {nFlat}" : "")}");
             }
         }
         double[] wxTop2 = null, wxBase2 = null, wxBot2 = null;
@@ -4306,13 +4505,13 @@ public sealed class XsecViewCommand
             //   터파기면 기록(DH_WALLSEC)의 단면 줄로 절단선 점마다 세로 기둥을 세워, 그 칸 터파기 바닥 ~ 지표(되메우기를 세는 바로 그 띠) 안의
             //   구조물 + 빈 공간(단면 앞면 ~ 정지면 앞면 쐐기)을 잰다. 보강토체 · 배수층 · 조약돌 뒤채움은 되메우기에 남기고 넓이만 적는다(검토 중간 9).
             //   «계획면 + 구조물 터파기 함께»면 옹벽 몫 띠(wxBot2 ~ wxTop2)만 — 구조물 터파기의 되메우기는 손대지 않는다.
-            if (secRec != null && !double.IsNaN(qq.Backfill))
+            if ((x2 != null || secRec != null) && !double.IsNaN(qq.Backfill))
             {
                 double[] lo = wxTop2 != null ? wxBot2 : ey;
                 double[] hi = wxTop2 != null ? wxTop2 : DH.Grading.Core.CrossSectionArea.SurfaceFor(gy, py2, basisE);
                 if (lo != null && hi != null && lo.Length == n && hi.Length == n)
                 {
-                    var cs = DH.Grading.Core.WallExcav.Integrate(secRec, lx, ly, rx, ry, wl, wr, xs, lo, hi);
+                    var cs = x2 != null ? x2.Integrate(xs, lo, hi) : DH.Grading.Core.WallExcav.Integrate(secRec, lx, ly, rx, ry, wl, wr, xs, lo, hi);
                     if (cs.Lines > 0)
                     {
                         double take = System.Math.Min(qq.Backfill, cs.Struct + cs.Air);
@@ -4380,7 +4579,9 @@ public sealed class XsecViewCommand
         /// 그리는 쪽이 알아야 표에 그 사실을 밝힐 수 있다(계획면 기준이면 성토와 되메우기가 겹친다).</summary>
         DH.Grading.Core.CrossSectionArea.ExcavBase Basis,
         /// <summary>★[v104 · 계획 6 · 검토 중간 9] 표 아래 «미포함» 줄에 덧붙일 말(보강토체 등 — 되메우기에 듦). 없으면 빈 문자열.</summary>
-        string Foot = "");
+        string Foot = "",
+        /// <summary>★[v105.3] 측점 이름 → 그 측점 2D 터파기 · 배면(수량이 지은 그 객체 — 그림이 그대로 쓴다). 2D가 아니면 null.</summary>
+        System.Collections.Generic.Dictionary<string, DH.Grading.Core.WallExcav.Xs2D> X2 = null);
 
     /// <summary>측점 이름 → 그 측점의 수량. 표를 그릴 때 이 표를 찾아 값을 채운다.
     /// <para>★★★[JACK 0831] <b>표 얼개도 여기서 나온다</b> — 어느 한 측점에서라도 나온 조합을
@@ -4402,6 +4603,8 @@ public sealed class XsecViewCommand
         var qtyBasis = DH.Grading.Core.CrossSectionArea.ExcavBase.Lower;
         int nOldVer = 0;          // ★옛 방식(층 하단)으로 만들어진 지층면 수
         string wallFoot = "";     // ★[v104] 보강토체 등 — 표 아래 한 줄
+        var x2map = new System.Collections.Generic.Dictionary<string, DH.Grading.Core.WallExcav.Xs2D>();   // ★[v105.3]
+        double uncutLen = 0; int uncutSegs = 0;
         QtyResult Done()
         {
             // ★합집합 — <b>실제로 값이 나온</b> 열쇠만 모은다(JACK 인터뷰 확정).
@@ -4438,7 +4641,10 @@ public sealed class XsecViewCommand
             if (nMismatch > 0)
                 warn.Append($"\n  ⚠측점 {nMismatch}개에서 지층별 합이 전체와 다릅니다"
                           + " — 지층면이 부지를 다 못 덮었습니다.");
-            return new QtyResult(map, ledgers, spec, warn.ToString(), qtyBasis, wallFoot);
+            if (uncutLen > 1.0)
+                warn.Append($"\n  ⚠이 노선 횡단과 거의 나란해(15° 안) 횡단 · 수량에서 빠진 옹벽 앞면 {uncutLen:F0} m(변 {uncutSegs}개)"
+                          + " — 그 벽은 그 벽을 가로지르는 노선으로 따로 세세요(2D 실무 방식).");
+            return new QtyResult(map, ledgers, spec, warn.ToString(), qtyBasis, wallFoot, x2map.Count > 0 ? x2map : null);
         }
         if (sl == null || sl.Count == 0) return Done();
         int nOk = 0, nNo = 0, nThrow = 0; string firstThrow = null;
@@ -4518,6 +4724,26 @@ public sealed class XsecViewCommand
             strataCs.Sort((a, b) => a.Ord.CompareTo(b.Ord));     // 위에서 아래 차례
             var strata = new List<(DH.Grading.Core.RockClass Rock, CachedGroundSurface Cs)>();
             foreach (var t in strataCs) strata.Add((t.Rock, t.Cs));
+            // ★★★[v105.3 · 계획_v105_3.md 2 · 4 · 계획 검토 높음 2 · 중간 4] 횡단 2D 터파기 재료 — 단면 기록 · 원지반 · 계획면(그린 흰 선 · 수량 상한) ·
+            //   정지면_DH(자연 땅 판정 — 3D 배면 가면과 같은 면) · 지금 설정(경사 · 소단 · 배면 켬 · 경사 — «[종단도] 먼저» 관문이 설정 = 지은 면을 보장)
+            X2Ctx x2ctx = null;
+            if (secRec != null && exSt.On)
+            {
+                CachedGroundSurface csS = null;
+                try
+                {
+                    var gPick = surfs.Find(x => x.Label == "원지반");
+                    var (sIds, _) = WallCompositeCommand.Candidates(CivilApp.CivilApplication.ActiveDocument, tr, WallCompositeCommand.PlanName, gPick.SurfId);
+                    if (sIds.Count > 0 && tr.GetObject(sIds[0], OpenMode.ForRead) is CivilDb.TinSurface sT) csS = new CachedGroundSurface(sT);
+                }
+                catch { }
+                if (csS == null) log?.AppendLine("  ⚠정지면_DH를 못 찾아 배면 자연 땅 판정을 계획면으로 한다(벽 뒤 패드 높이 자리에서 배면이 빠질 수 있다)");
+                x2ctx = new X2Ctx { Rec = secRec, G = csG, P = csP, S = csS ?? csP, Sp = WallExcavBuilder.SpecOf(exSt), BackN = exSt.BackOn ? exSt.BackSlope : (double?)null };
+                log?.AppendLine($"  옹벽 터파기 — 횡단은 2D(가로지르는 벽만 · sinθ ≥ {WallSectionDraw.MinSin}) · 1:{x2ctx.Sp.N:0.##}{(exSt.BenchOn ? $" · 소단 {exSt.BenchH:0.##}m마다 {exSt.BenchW:0.##}m" : "")}"
+                              + (x2ctx.BackN is double bn ? $" · 배면 1:{bn:0.##}" : " · 배면 끔") + " · 3D 터파기면은 종단 · 3D용");
+            }
+            var cutLines = new System.Collections.Generic.List<(double Ax, double Ay, double Bx, double By)>();
+            double stLo = double.MaxValue, stHi = double.MinValue;
             log?.AppendLine($"  지표면 캐시 {nTri}장 — 절단선 표고를 예외 없이 읽는다"
                           + (strataCs.Count > 0 ? $" · 지층 {strataCs.Count}장" : " · 지층 없음")
                           + (csW != null ? " · 지하수위 있음" : " · 지하수위 없음"));
@@ -4592,7 +4818,10 @@ public sealed class XsecViewCommand
                     var backOut = new double[2] { double.NaN, 0 };
                     var q = QtyAt(tr, al0, s.St, wl, wr, csG, csP, csE, dbg,
                                   strata, csW, led, DH.Grading.Core.QuantityTable.DeepLimitM,
-                                  qtyBasis, csWx, secRec, secOut, backRec, backOut);
+                                  qtyBasis, csWx, secRec, secOut, backRec, backOut,
+                                  x2ctx, x2ctx == null ? null : x => x2map[s.Name] = x);
+                    if (x2ctx != null && SectionCommand.TryCut(al0, s.St, wl, wr, out var cutU))
+                    { cutLines.Add((cutU.Left.X, cutU.Left.Y, cutU.Right.X, cutU.Right.Y)); stLo = System.Math.Min(stLo, s.St); stHi = System.Math.Max(stHi, s.St); }
                     if (!double.IsNaN(backOut[0])) wback.Add((s.St, backOut[0]));
                     if (!double.IsNaN(secOut[0])) wsec.Add((s.St, secOut[0], secOut[1], secOut[2], secOut[3]));
                     if (csWx != null && dbg != null && dbg.ToString().Contains("옹벽 터파기")) nWx++;
@@ -4658,6 +4887,21 @@ public sealed class XsecViewCommand
                 //   종전엔 <c>catch { }</c>였다 — <c>QtyAt</c>이 던지면 <c>nOk</c>도 <c>nNo</c>도 안 늘고
                 //   지도에도 안 들어가 <b>표는 –인데 로그엔 자취가 없었다</b>.
                 catch (System.Exception exQ) { nThrow++; firstThrow ??= $"{s.Name} — {exQ.Message}"; }
+            }
+            // ★[v105.3 · 계획 검토 중간 7] 횡단 띠(첫 ~ 끝 측점 · −wl ~ wr) 안 앞면 선 중 어느 횡단에서도 sinθ ≥ 하한으로 안 잘린 것 — 이 노선 수량에서 빠진 벽
+            if (x2ctx != null && cutLines.Count > 0)
+            {
+                try
+                {
+                    uncutLen = DH.Grading.Core.WallExcav.UncutLength(secRec, cutLines, WallSectionDraw.MinSin, (mx, my) =>
+                    {
+                        double sto = 0, offo = 0;
+                        try { al0.StationOffset(mx, my, ref sto, ref offo); } catch { return false; }
+                        return sto >= stLo - 1e-6 && sto <= stHi + 1e-6 && offo >= -wl && offo <= wr;
+                    }, out uncutSegs);
+                    if (uncutLen > 1.0) log?.AppendLine($"  ⚠횡단과 거의 나란해 빠진 옹벽 앞면 {uncutLen:F1} m(변 {uncutSegs}개) — 그 벽을 가로지르는 노선으로 따로");
+                }
+                catch (System.Exception exU) { log?.AppendLine("  빠진 벽 재기 실패 — " + exU.Message); }
             }
             tr.Commit();
         }
@@ -4755,6 +4999,8 @@ public sealed class XsecViewCommand
                 }
                 catch { }
             }
+            // ★[v104.1] 옹벽 단면 — CALS 레이어라 레이어로 지우지 않는다(손 그림이 있을 수 있다) · 표식(XData «XSEC»)이 있는 것만
+            n += WallSectionDraw.EraseTagged(db, tr, WallSectionDraw.KindXsec, null);
             tr.Commit();
         }
         catch (System.Exception ex) { log?.AppendLine("  옛 횡단 지우기 실패 — " + ex.Message); }

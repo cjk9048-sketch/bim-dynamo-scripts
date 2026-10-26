@@ -1623,6 +1623,8 @@ internal static class ZoneEditCommon
                   //   종전 메시지엔 단높이가 없어, 값이 안 들어간 건지 들어갔는데 안 먹는 건지 못 갈랐다.
                   + $" · 단높이 {askH:0.##}m";
             ed.WriteMessage($"\n[{cmdLabel}] {what} 적용 — 정지면 재생성 중…");
+            // ★[v105.1.1 · JACK 1023] 로딩 창 — 묻기가 다 끝난 여기서부터(아래 정지면 생성도 같은 창을 쓴다 · 묻는 창이 뜨면 저절로 숨는다)
+            using var busy = BusyPopup.Scope(CreateGradingCommand.BusyText);
             // ★[JACK 0820] 단높이 규칙이 실제로 쌓혔는지 · 재생성이 그 값을 받는지 숫자로 남긴다.
             static string StepsTxt(System.Collections.Generic.IReadOnlyList<(int FromBench, double H)> l)
                 => l.Count == 0 ? "없음" : string.Join(" ", l.Select(r => $"{r.FromBench + 1}단~{r.H:0.##}m"));
@@ -1727,7 +1729,7 @@ internal static class ZoneEditCommon
                     {
                         GradingSettings.AutoCompDoc = ""; GradingSettings.AutoCompNo = 0;
                         ed.WriteMessage($"\n[{cmdLabel}] ⚠합성을 못 태웠다({sx.GetType().Name}) — 명령줄에 DHWALLCOMP를 치세요");
-                        try { AcadApp.ShowAlertDialog($"옹벽 합성을 이어서 태우지 못했습니다({sx.GetType().Name}).\n명령줄에 DHWALLCOMP를 치면 다시 합성합니다(옹벽 {addNo}는 «대기»로 남아 있습니다)."); } catch { }
+                        try { BusyPopup.Close(); AcadApp.ShowAlertDialog($"옹벽 합성을 이어서 태우지 못했습니다({sx.GetType().Name}).\n명령줄에 DHWALLCOMP를 치면 다시 합성합니다(옹벽 {addNo}는 «대기»로 남아 있습니다)."); } catch { }
                     }
                 }
                 else
@@ -1743,7 +1745,7 @@ internal static class ZoneEditCommon
                     string alert = blkNo > 0
                         ? $"옹벽 {blkNo}는 지었지만 정지면_DH에 합성하지 않았습니다(지난 옹벽과 정지면_DH는 그대로).\n\n{why0}\n\n옹벽 {blkNo}는 합성에 안 든 «대기»로 남았다가, 다음에 옹벽 변환이 옹벽을 짓거나 사면 변환·계획부지 생성이 정지면을 다시 지으면 치워집니다 — 까닭을 고친 뒤 옹벽 변환을 다시 하세요."
                         : "옹벽을 더하지 않았습니다(지난 옹벽과 정지면_DH는 그대로).\n\n" + why0;
-                    try { AcadApp.ShowAlertDialog(alert); } catch { }
+                    try { BusyPopup.Close(); AcadApp.ShowAlertDialog(alert); } catch { }
                 }
             }
 

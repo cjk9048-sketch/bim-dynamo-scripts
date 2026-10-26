@@ -38,6 +38,25 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "excav")
     WallSectionCheck.Run(Check);   // ★[v104] S168 — 옹벽 형식별 일반단면
     WallSecExcavCheck.Run(Check);   // ★[v104] S169 — 단면 → 터파기 띠 · 면 기록 · 구조물 공제
     WallBackCheck.Run(Check);   // ★[v104 B] S170 — 배면사면
+    WallCutCheck.Run(Check);   // ★[v104.1] S171 — 자른 자리 옹벽 단면
+    WallStandardCheck.Run(Check);   // ★[v105] S172 — 2008 표준도 조건별 표 · 활동방지벽
+    Xsec2DCheck.Run(Check);   // ★[v105.3] S173 — 횡단 2D 터파기선(가로지르는 벽만)
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
+// ★[v105.3] BLOCKTEST_ONLY=xsec2d — 횡단 2D 터파기선 · 배면 · 공제 · 3D 원뿔 낮추기(S173)만(개발 중 부분 시험)
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "xsec2d")
+{
+    Xsec2DCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
+// ★[v105.2] BLOCKTEST_ONLY=back — 배면사면(S170)만(개발 중 부분 시험)
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "back")
+{
+    WallBackCheck.Run(Check);
     Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
     return fails == 0 ? 0 : 1;
 }
@@ -75,6 +94,9 @@ ExcavCheck.Run(Check);   // ★[v103.3] S164 · S166 · S167 — 옹벽 뒷채�
 WallSectionCheck.Run(Check);   // ★[v104] S168 — 옹벽 형식별 일반단면(첫 표 · 단면 넓이 · 표 고르기 · 터파기 범위 · 기록)
 WallSecExcavCheck.Run(Check);   // ★[v104] S169 — 단면 → 터파기 띠(구간 · 꺾임 · 도랑) · 면 기록 · 구조물 공제(기둥법) · 표 지문
 WallBackCheck.Run(Check);   // ★[v104 B] S170 — 배면사면(해석 높이 · 구역 · 기록 · 그림용 면)
+WallCutCheck.Run(Check);   // ★[v104.1] S171 — 자른 자리 옹벽 단면(종단 · 횡단 그림 · 각도대로 늘임)
+WallStandardCheck.Run(Check);   // ★[v105] S172 — 2008 표준도 조건별 표 · 활동방지벽
+Xsec2DCheck.Run(Check);   // ★[v105.3] S173 — 횡단 2D 터파기선(가로지르는 벽만) · 배면 · 공제 · 3D 원뿔 낮추기
 
 const double W = 0.46, H = 0.2, STEP = 5.0, HW = W / 2;
 const double D = 0.5, FS = D / 2; // 깊이·전면 돌출(벽 중심=링, JACK 0720 Z-파이팅 해소): 절토 +FS(안쪽), 성토 −FS

@@ -34,6 +34,7 @@ public sealed class ResetCommand
         { "정지면_DH", "정지면_DH이전", SectionCommand.PurePadSurfaceBase, SectionCommand.PurePadSurfaceBase + "이전",
           PureWithWallsBuilder.Name, PureWithWallsBuilder.TempName, CreateGradingCommand.StashBase,   // ★[v103.2] 옹벽면(종단 · 횡단용) · «이어서»가 비켜 둔 면
           WallExcavBuilder.Name, WallExcavBuilder.TempName, WallExcavBuilder.PieceName,   // ★[v103.3] 옹벽 뒷채움 터파기면 · 임시 · 조각
+          WallBackBuilder.Name, WallBackBuilder.TempName,   // ★[v105.1.2 · JACK 1023 스샷] 옹벽 배면사면(v104.0)이 빠져 초기화 뒤에 남았다
           "가상절토_DH", "가상성토_DH", "_DH토량임시",
           // ★[JACK 0824] 터파기 산출물도 함께 — 안 지우면 "초기화했는데 터파기가 남아 있다"가 된다.
           ExcavCommand.SurfName, ExcavCommand.BaseName,
@@ -61,9 +62,9 @@ public sealed class ResetCommand
         // 되돌릴 수 없는(정지 산출물 삭제) 작업이라 확인부터 — Ctrl+Z 대체가 목적이므로 명확히 알린다.
         var answer = System.Windows.MessageBox.Show(
             "DH가 만든 것을 모두 지웁니다.\n\n" +
-            "· 정지·터파기 지표면, 사면선·소단선·노리선·옹벽선 등\n" +
-            "· 서버에서 가져온 등고선·지적도·지번, 그리고 '원지반'\n\n" +
-            "계획폴리곤(직접 그린 것)은 남깁니다.\n\n" +
+            "· 정지·터파기·옹벽 지표면, 사면선·소단선·노리선·옹벽선 등\n" +
+            "· 서버에서 가져온 지적도·지번\n\n" +
+            "직접 그린 것과 '원지반'(등고선·표고점 포함)은 남깁니다.\n\n" +
             "계속할까요?",
             "DH 정지 — 초기화",
             System.Windows.MessageBoxButton.YesNo,
@@ -81,7 +82,9 @@ public sealed class ResetCommand
             // ★[JACK 0901 "초기화 누르면 서버지표면으로 가져온 자료도 다 초기화되게"]
             //   예전에는 등고선·지적도·원지반을 남겼다 — 원지반으로 다시 정지하면 되니까.
             //   지금은 <b>지도에서 다시 받는 것이 몇 초</b>라 남길 이유가 없어졌다.
-            var (surfs, ents, bundleCleared) = ResetCore(doc, includeImported: true);
+            // ★★[v105.1.2 · JACK 1023 «초기화하면 사용자가 직접 그린 거 외에 최초 처음 원지반은 지우지 말아줘»] 원지반과 그 재료(등고선 · 표고점 · 범위 밖 자료)는 남긴다 —
+            //   재료 선을 지우면 원지반 정의에 느낌표가 뜬다(CropGroundCommand.CutAwayLayer 설명 · JACK 0902). 지적도 · 지번은 종전처럼 지운다(0901).
+            var (surfs, ents, bundleCleared) = ResetCore(doc, includeImported: true, keepGround: true);
             ed.Regen();
             string msg = $"초기화 완료 — 지표면 {surfs}개 · 객체 {ents}개 삭제" +
                          (bundleCleared ? " · 정지 기록 제거" : "");
@@ -90,10 +93,11 @@ public sealed class ResetCommand
             //   (다른 것이 물고 있으면 그렇다) <c>catch { }</c>가 삼켜 "완료"만 남는다 —
             //   이 저장소가 여러 번 데인 그 모양이다(§60 "0을 만들어 놓고 완료라고 하기").
             string left = Survivors(doc);
-            ed.WriteMessage("\n[초기화] " + msg + " · 계획폴리곤만 남음"
+            ed.WriteMessage("\n[초기화] " + msg + " · 직접 그린 것과 원지반만 남음"
                           + (left.Length > 0 ? "\n  ⚠남은 것 — " + left : ""));
             AcadApp.ShowAlertDialog("초기화 완료\n\n" + msg +
-                "\n\n계획폴리곤만 남았습니다.\n[서버 지표면]부터 다시 시작하세요.");
+                "\n\n직접 그린 것과 원지반만 남았습니다.\n[지표면 생성]부터 다시 시작하세요."
+                + (left.Length > 0 ? "\n\n⚠남은 것 — " + left : ""));
             try { DiagLog.Append($"\n■ DHRESET(초기화)\n  {msg}"
                                + (left.Length > 0 ? $"\n  ⚠남은 것 — {left}" : "\n  남은 것 없음")
                                + "\n"); } catch { }
@@ -123,8 +127,9 @@ public sealed class ResetCommand
     ///    지우지 않고 남겨 둔 것은 나중에 "가져온 것은 두고 정지만 되돌리기"가 필요할 때를 위해서다.
     ///  · includeImported=true (좌표계 변경 시): 가져온 데이터와 '원지반'까지 **전부** 지운다
     ///    — 좌표계가 바뀌면 이전 좌표계로 받은 자료라 더는 맞지 않기 때문(사용자가 직접 그린 계획폴리곤은 보존).
+    ///  · keepGround=true([초기화] — JACK 1023): 가져온 것 중 '원지반'과 그 재료(등고선 · 표고점 · 범위 밖 자료)는 남긴다. 좌표계 변경은 거짓(전부 지움).
     /// 반환=(지운 지표면 수, 지운 객체 수, 번들 제거 여부).</summary>
-    internal static (int surfs, int ents, bool bundleCleared) ResetCore(Document doc, bool includeImported)
+    internal static (int surfs, int ents, bool bundleCleared) ResetCore(Document doc, bool includeImported, bool keepGround = false)
     {
         Database db = doc.Database;
         int ents = 0, surfs = 0; bool bundleCleared = false;
@@ -162,7 +167,7 @@ public sealed class ResetCommand
             ents += EraseSectionObjects(db, tr);
 
             // ① DH- 레이어 객체 삭제(모델공간). 레이어 자체는 남겨 다음 생성에 재사용.
-            ents += EraseEntitiesOnDhLayers(db, tr, includeImported);
+            ents += EraseEntitiesOnDhLayers(db, tr, includeImported, keepGround);
 
             // ② 지표면 삭제(이름/이름_N). 좌표계 변경 시에는 가져온 '원지반'까지 포함.
             foreach (var baseName in SurfaceBaseNames)
@@ -173,7 +178,20 @@ public sealed class ResetCommand
             }
             // ★[v103.0] 번호 붙은 옹벽 표면(가상옹벽{n}_DH · 순수옹벽{n}_DH)과 v102 한 벌 — 이름 목록에 없어 따로
             try { var erW = WallTags.Erase(db, tr, (n, r) => true, true, ObjectId.Null); surfs += erW.Surfaces + erW.LegacySurfaces; ents += erW.Lines + erW.LegacyLines; } catch { }
-            if (includeImported)
+            // ★★[v105.1.2 · JACK 1023 스샷 — 옹벽배면_DH가 남음] 목록은 새 기능이 생길 때마다 빠진다(v104.0 배면) — 이름 규칙(«…_DH» · «…_DH이전» · «…_DH합성전»)으로
+            //   남은 우리 면을 한 번 더 걷는다. 자가점검이 «우리 면»으로 세는 규칙과 같은 함수(«현황_DHT» 같은 남의 면은 안 건드린다) · 여기서 걸린 이름은 목록에 넣을 것(로그)
+            try
+            {
+                var civ = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+                var stray = new System.Collections.Generic.List<(ObjectId Id, string Name)>();
+                foreach (ObjectId sid in civ.GetSurfaceIds())
+                    try { if (tr.GetObject(sid, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.Surface s && SelfCheck.IsOurSurfaceName(s.Name)) stray.Add((sid, s.Name)); } catch { }
+                foreach (var (sid, nm) in stray)
+                    try { tr.GetObject(sid, OpenMode.ForWrite).Erase(); surfs++; } catch { }
+                if (stray.Count > 0) DiagLog.Append($"\n■ 초기화 — 목록 밖 우리 지표면 {stray.Count}개를 이름 규칙으로 지움: {string.Join(" · ", stray.Select(x => x.Name))}\n");
+            }
+            catch { }
+            if (includeImported && !keepGround)
             {
                 var before = CountSurfaces(tr, ImportGisCommand.GroundSurfaceName);
                 GradingBuilder.EraseSurfacesByBaseName(tr, ImportGisCommand.GroundSurfaceName);
@@ -266,6 +284,17 @@ public sealed class ResetCommand
                 n += EraseEach(tr, Safe(() => al.GetProfileViewIds()));       // 종단도
                 n += EraseEach(tr, Safe(() => al.GetProfileIds()));           // 종단
                 try { (tr.GetObject(aid, OpenMode.ForWrite) as DBObject)?.Erase(); n++; } catch { }
+            }
+            // ★[v105.1.2 · 1023 화면 없는 Civil 실측] 선형을 지워도 Civil이 라벨 묶음 일곱 중 «종단 선형 꺾임점» 묶음(AlignmentVerticalGeometryPointLabelGroup)은 안 지웠다 —
+            //   주인(우리 선형)이 지워진 라벨 묶음을 걷는다(보이지는 않지만 도면에 남는다)
+            if (aligns.Count > 0)
+            {
+                var ours = new System.Collections.Generic.HashSet<ObjectId>(aligns);
+                var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+                var orphans = new System.Collections.Generic.List<ObjectId>();
+                foreach (ObjectId id in ms)
+                    try { if (tr.GetObject(id, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.LabelBase lb && ours.Contains(lb.FeatureId)) orphans.Add(id); } catch { }
+                n += EraseEach(tr, new ObjectIdCollection(orphans.ToArray()));
             }
         }
         catch { }
@@ -368,6 +397,37 @@ public sealed class ResetCommand
         return string.Join(" · ", parts);
     }
 
+    /// <summary>★[v105.1.3 · JACK 1023 «원지반 삭제»] '원지반'으로 만든 우리 결과가 있나 — 우리 지표면(지울 목록 · 이름 규칙) · 우리 선형(종단 · 횡단).
+    /// 정지면은 원지반을 붙여넣어 만든다 — 원지반만 지우면 붙여넣기 원본이 없는 면이 남아 다음 재작성에서 Civil이 죽을 수 있다(1013 실측 메모). 있으면 이름 몇 개를 돌려준다.</summary>
+    internal static string ResultsOnGround(Database db)
+    {
+        var found = new System.Collections.Generic.List<string>();
+        try
+        {
+            var civ = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+            using var tr = db.TransactionManager.StartTransaction();
+            foreach (ObjectId sid in civ.GetSurfaceIds())
+                try
+                {
+                    if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
+                    string nm = s.Name ?? "";
+                    bool listed = System.Array.Exists(SurfaceBaseNames, b => nm == b || (nm.StartsWith(b + "_") && int.TryParse(nm.Substring(b.Length + 1), out _)));
+                    if (listed || SelfCheck.IsOurSurfaceName(nm)) found.Add(nm);
+                }
+                catch { }
+            foreach (ObjectId aid in civ.GetAlignmentIds())
+                try
+                {
+                    if (tr.GetObject(aid, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.Alignment al &&
+                        al.Name.StartsWith(SectionCommand.AlignBase, System.StringComparison.OrdinalIgnoreCase)) found.Add(al.Name);
+                }
+                catch { }
+            tr.Commit();
+        }
+        catch { }
+        return found.Count == 0 ? "" : string.Join(" · ", found.Take(4)) + (found.Count > 4 ? $" 외 {found.Count - 4}개" : "");
+    }
+
     /// <summary>도면에 우리 기능으로 가져온 등고선·지적도가 있는가(좌표계 변경 경고 판단용).</summary>
     internal static bool HasImportedGis(Database db)
     {
@@ -395,12 +455,18 @@ public sealed class ResetCommand
         catch { return false; }
     }
 
-    /// <summary>모델공간에서 "DH-"로 시작하는 객체 삭제. includeImported=false면 가져온 데이터 레이어는 남긴다.</summary>
-    private static int EraseEntitiesOnDhLayers(Database db, Transaction tr, bool includeImported)
+    /// <summary>모델공간에서 "DH-"로 시작하는 객체 삭제. includeImported=false면 가져온 데이터 레이어는 남긴다.
+    /// keepGround면 원지반의 재료(등고선 · 계곡선 · 표고점 · 자르기로 옮겨 둔 범위 밖 자료)는 남긴다 — 원지반 정의가 이 선들을 물고 있다.</summary>
+    private static int EraseEntitiesOnDhLayers(Database db, Transaction tr, bool includeImported, bool keepGround)
     {
         var keep = includeImported
             ? new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase)
             : new System.Collections.Generic.HashSet<string>(ImportGisCommand.ImportLayers, System.StringComparer.OrdinalIgnoreCase);
+        if (keepGround)
+        {
+            keep.UnionWith(ImportGisCommand.GroundImportLayers);
+            keep.Add(CropGroundCommand.CutAwayLayer);
+        }
         var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
         var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
         var victims = new System.Collections.Generic.List<ObjectId>();

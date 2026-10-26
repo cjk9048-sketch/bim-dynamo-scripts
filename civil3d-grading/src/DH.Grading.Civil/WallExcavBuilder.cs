@@ -97,6 +97,21 @@ internal static class WallExcavBuilder
         return HeadOf(s, tp, ph, nonce, groundId.IsNull ? "" : groundId.Handle.ToString());
     }
 
+    /// <summary>★[v105 · 계획 검토 중간 3] 지금 설정 · 표 · 정지면과 같은 도장 머리의 터파기면이 도면에 있나(종단이 지어 둔 것 — 수량 단면 = 지금 단면) · 모르면 null(원지반 없음 · 못 읽음 — ⚠를 띄우지 않는다).</summary>
+    internal static bool? HasCurrentSurface(Database db, ObjectId groundId)
+    {
+        if (groundId.IsNull) return null;
+        try
+        {
+            string head = CurrentHead(db, groundId, out _);
+            using var tr = db.TransactionManager.StartTransaction();
+            bool ok = Existing(tr).Any(e => !e.Id.IsErased && StampHead(e.Stamp) == head);
+            tr.Commit();
+            return ok;
+        }
+        catch { return null; }
+    }
+
     // ══ ★★[v104 · 계획 6] 단면 기록 DH_WALLSEC — 터파기면에 붙인다(횡단 수량의 구조물 공제가 읽는다 · 도장과 함께 바뀐다) ══
     const string SecKey = "DH_WALLSEC";
 
@@ -315,7 +330,8 @@ internal static class WallExcavBuilder
             // ★[v104 B] 배면 — 기록이 없거나(옛 기록) 지을 때 배면 설정이 지금과 다르면 «종단 먼저»
             var res0 = new Result { State = State.Built, SurfaceId = sid, SurfaceName = nm };
             // ★[v104 설치 전 검토 높음 1] 머리를 «끔이면 끔 하나로» 맞춰 견주고, 다르면 상태와 상관없이 멈춘다(종전엔 못 지음 → 끔으로 바꾸면 통과해 옛 기록으로 쟀다)
-            static string BackNorm(string h) => h.StartsWith("False") ? "False" : h;
+            // ★[v104.1 설치 전 검토 낮음 10] 배면 머리는 «1|n» · «0|n» 꼴 — 종전엔 «False»만 끔으로 봐서 끔 상태에서 경사만 바꿔도 · 배면 칸 없는 옛 기록이어도 «종단 먼저»로 막았다
+            static string BackNorm(string h) => h.StartsWith("False") || h.StartsWith("0|") ? "off" : h;
             if (BackNorm(recB?.Head ?? "False") != BackNorm(s.BackHead)) { say("옹벽 배면사면 설정이 바뀌었습니다 — [종단도]를 먼저 다시 그리세요."); return false; }
             // ★[검토 높음 1] 수량 기록은 터파기면 하나에 붙는다 — 같은 면을 쓰는 다른 선형이 다른 경사로 그려 덮었으면 멈춘다
             if (s.BackOn)
@@ -325,6 +341,13 @@ internal static class WallExcavBuilder
                 {
                     try { xb = WallBackBuilder.ReadRecord(tr4, tr4.GetObject(sid, OpenMode.ForRead), out bw); } catch { }
                     tr4.Commit();
+                }
+                // ★[v104.1 · 재검토 낮음 · 설치 전 검토 중간 2] 배면 기록 판 3(평탄 높이 식이 바뀜) — 기록이 있는데 못 읽으면(옛 판 · 깨짐) 상태와 상관없이 멈춘다
+                //   (못 지음 · 땅과 같음 상태에도 기록은 남는다 — 종전엔 «지음»만 봐서 수량이 말없이 배면 없이 나왔다) · 기록이 아예 없으면 아래 상태가 말한다
+                if (xb == null && bw != "배면 기록 없음")
+                {
+                    say($"옹벽 배면 기록을 이 판에서 못 씁니다({bw}) — [종단도]를 먼저 다시 그리세요.");
+                    return false;
                 }
                 if (xb != null && System.Math.Abs(xb.N - s.BackSlope) > 1e-9)
                 {
@@ -376,6 +399,155 @@ internal static class WallExcavBuilder
         public System.Collections.Generic.List<Point3> Outer = new();
         public string ClipNote = "";
         public string Note = "";
+        /// <summary>★[v105.3] 참 원뿔로 낮춘 꼭짓점 수 · 가장 크게 낮춘 높이(벽 끝 절벽 고침).</summary>
+        public int Low;
+        public double LowMax;
+    }
+
+    /// <summary>★★[v105 · 계획_v105.md 4.1 · JACK 1022 «3D는 터파기와 같은 단면»] 앞면 선 → 바닥 줄 — 구간 · 굳은 옹벽(<paramref name="walls"/> = 종단 정지면에 든 것) · 번들 옹벽.
+    /// 터파기(<see cref="EnsureCore"/>)와 3D 내보내기(<see cref="WallSolidDwg"/>)가 같이 쓴다. 벽 높이 · 벽 밑은 <paramref name="mAt"/>(끊김 없는 정지면_DH)에서 잰다.</summary>
+    internal static (System.Collections.Generic.List<WallExcav.Bottom> Bottoms, System.Collections.Generic.Dictionary<WallExcav.Bottom, double> BenchBelow, int Faces,
+                     System.Collections.Generic.List<GradingBundle>? Bundles)
+        CollectBottoms(Database db, Transaction tr, System.Collections.Generic.IEnumerable<PureWithWallsBuilder.ReflWall>? walls, System.Func<double, double, double?> mAt,
+                       System.Collections.Generic.List<string> notes, WallExcav.MeasureNote mn, StringBuilder fp, System.Collections.Generic.List<string> stepLog)
+    {
+        var bottoms = new System.Collections.Generic.List<WallExcav.Bottom>();
+        var benchBelow = new System.Collections.Generic.Dictionary<WallExcav.Bottom, double>();
+        int nFaces = 0;
+        double gsMin = GradingSettings.MinSlope, gsRun = GradingSettings.MinFaceRun;
+        foreach (var w in walls ?? System.Linq.Enumerable.Empty<PureWithWallsBuilder.ReflWall>())
+        {
+            string src = (w.Frozen ? "굳은 옹벽 " : "옹벽 ") + w.No;
+            if (w.IsWall.Count != w.Poly.Count || w.Poly.Count < 3)
+            {
+                notes.Add(w.Frozen ? $"옛 굳은 옹벽 {w.No} — 옹벽선 기록이 없어 터파기에서 빠짐(앞 구역을 다시 생성하면 들어감)" : $"{src} — 옹벽선 표가 없어 빠짐");
+                continue;
+            }
+            double slopeW = w.SlopeW >= 0 ? w.SlopeW : gsMin, faceRun = w.FaceRun >= 0 ? w.FaceRun : gsRun;
+            // ★★[설치 전 검토 높음 1] 단 수는 벽 짓기와 같은 셈(폴리곤 안 최종면 최고 · 최저로 BenchCount)으로 묶는다 — «벽이 안 보일 때까지»로 세면
+            //   비탈진 땅을 단으로 잡아 가짜 단이 이어질 수 있었다. 한 단 더(N+1)는 재기만 해서 벽이 1 m 넘게 보이면 ⚠(넣지 않는다).
+            int nB = WallExcav.ZoneBenches(w.Poly, w.Up, w.HeadZ, w.H, mAt, System.Math.Max(1.0, GradingSettings.VertexSpacing));
+            if (nB <= 0) { notes.Add($"{src} — 폴리곤 안 최종면을 못 재 단 수를 모른다(1단만)"); nB = 1; }
+            int kFound = 0;
+            for (int k = 1; k <= nB + 1; k++)
+            {
+                var faces = WallExcav.ZoneFaces(w.Poly, w.IsWall, w.Up, w.HeadZ, k, w.H, w.T, slopeW, faceRun, src, out string fn, fromBench: k);
+                // ★[재검토 낮음 3] 2단부터도 «못 뽑았다 · 흙 쪽을 못 가렸다»는 알린다(빠진 단이 말없이 사라지지 않게) — 폴리곤 밖은 좁은 자리라 1단만
+                if (fn.Length > 0 && k <= nB && (k == 1 || !fn.Contains("앞면 선 없음"))) notes.Add(fn);
+                if (k == nB + 1)
+                {
+                    var mx = new WallExcav.MeasureNote();
+                    double keptX = 0;
+                    foreach (var f in faces) { WallExcav.Measure(f, mAt, 0, mx); keptX = mx.Kept; }
+                    if (keptX > 1.0) notes.Add($"{src} — {nB}단 너머에도 벽이 {keptX:F1}m 보인다(단 수가 모자람 — 그 단은 터파기에 안 넣었다)");
+                    break;
+                }
+                double keptBefore = mn.Kept;
+                foreach (var f in faces)
+                {
+                    nFaces++;
+                    fp.Append(f.Src).Append(f.Soil).Append(';');
+                    foreach (var q in f.Pts) fp.Append(q.X.ToString("R", System.Globalization.CultureInfo.InvariantCulture)).Append(',').Append(q.Y.ToString("R", System.Globalization.CultureInfo.InvariantCulture)).Append(';');
+                    foreach (var b0 in WallExcav.Measure(f, mAt, 0, mn))
+                    {
+                        b0.Up = w.Up; b0.Group = src; b0.Step = k;
+                        // ★[v104 계획 5.7] 아래에 단이 있는 단 — 그 사이 소단 폭(위 단 앞 터파기가 넘으면 ⚠)
+                        if (w.Up ? k >= 2 : k < nB) benchBelow[b0] = w.T;
+                        bottoms.Add(b0);
+                    }
+                }
+                if (mn.Kept - keptBefore > 1e-6) kFound = k;
+            }
+            stepLog.Add($"{src} {(w.Up ? "절토" : "성토")} {kFound}단(셈 {nB}단)");
+            // ★[v104 B] 맨 위 단(찾은 가장 위 단) — 배면사면 대상(절토만)
+            if (w.Up) foreach (var bb in bottoms) if (bb.Group == src && bb.Step == kFound) bb.Top = true;
+        }
+        var bundles = GradingBundleStore.TryLoadAll(db, tr, out string bwhy);
+        if (bundles != null)
+        {
+            int zi = 0;
+            foreach (var b in bundles)
+            {
+                zi++;
+                foreach (var (runs, up) in new[] { (b.CutWallRuns, true), (b.FillWallRuns, false) })
+                {
+                    if (runs == null) continue;
+                    int ri = 0;
+                    foreach (var r in runs)
+                    {
+                        ri++;
+                        string src = $"구역{zi} {(up ? "절토" : "성토")} 옹벽선{ri}({r.Bench + 1}단)";
+                        var f = WallExcav.RunFace(r, b.Params.MinSlope, b.Params.MinFaceRun, src, out string why);
+                        if (f == null) { notes.Add(why); continue; }
+                        nFaces++;
+                        fp.Append(f.Src).Append(f.Soil).Append(';');
+                        foreach (var q in f.Pts) fp.Append(q.X.ToString("R", System.Globalization.CultureInfo.InvariantCulture)).Append(',').Append(q.Y.ToString("R", System.Globalization.CultureInfo.InvariantCulture)).Append(';');
+                        foreach (var b0 in WallExcav.Measure(f, mAt, 0, mn))
+                        {
+                            b0.Up = up; b0.Group = $"구역{zi}"; b0.Step = r.Bench;
+                            if (up && r.Bench >= 1) benchBelow[b0] = b.Params.CutBenchWidth;
+                            bottoms.Add(b0);
+                        }
+                    }
+                }
+            }
+        }
+        else if (bwhy.Length > 0) notes.Add("번들을 못 읽어 번들 옹벽은 빠짐 — " + bwhy);
+        // ★[v104 B] 번들 — 구역마다 절토 런 중 가장 높은 단이 맨 위
+        foreach (var g in bottoms.Where(x => x.Up && x.Group.StartsWith("구역")).GroupBy(x => x.Group))
+        {
+            int top = g.Max(x => x.Step);
+            foreach (var bb in g) if (bb.Step == top) bb.Top = true;
+        }
+        return (bottoms, benchBelow, nFaces, bundles);
+    }
+
+    /// <summary>★★[v105 · 계획 4.1] 바닥 줄마다 형식 표 → 단면(<see cref="WallExcav.Sectionize"/>) — 터파기 · 3D가 같이 쓴다. 못 세운 줄 · 앞굽 ⚠는 <paramref name="notes"/>에.</summary>
+    internal static System.Collections.Generic.List<(WallExcav.Bottom B, WallExcav.SecLine S)> SectionizeAll(System.Collections.Generic.List<WallExcav.Bottom> bottoms,
+        System.Collections.Generic.Dictionary<WallExcav.Bottom, double> benchBelow, WallSection.Table tCut, WallSection.Table tFill, WallExcav.Settings st,
+        System.Collections.Generic.List<string> notes, WallExcav.SecNote secNote)
+    {
+        var secs = new System.Collections.Generic.List<(WallExcav.Bottom B, WallExcav.SecLine S)>();
+        foreach (var b in bottoms)
+        {
+            var sl = WallExcav.Sectionize(b, b.Up ? tCut : tFill, st.Common(b.SlopeW), st.Margin, secNote, out string sw0);
+            if (sl == null) { notes.Add($"{b.Src} 단면을 못 세움 — {sw0}"); continue; }
+            secs.Add((b, sl));
+            if (benchBelow.TryGetValue(b, out double bw) && sl.FrontMax > bw + 1e-6)
+            {
+                notes.Add($"{b.Src} — 앞 터파기 폭 {sl.FrontMax:F2}m가 아래 단 소단 폭 {bw:F2}m를 넘음(아래 단 벽 위까지 판다 · 터파기는 하나로 합쳐짐)");
+                // ★[v104.0.1 · JACK 1022 «옹벽 모양이 소단 밖으로 튀어나와»] 단면(저판) 자체가 소단보다 길면 위 단 저판이 아래 단 벽 앞 허공으로 나온다 — 모양은 그대로 · ⚠만
+                double toe = sl.Pts.Count == 0 ? 0 : sl.Pts.Max(p => -p.Shape.XFront);
+                if (toe > bw + 1e-6) notes.Add($"{b.Src} — ⚠앞굽 {toe:F2}m가 아래 단 소단 {bw:F2}m보다 길다(위 단 저판이 아래 단 벽 앞으로 나온다 — 소단을 넓히거나 형식을 바꿀 것)");
+            }
+        }
+        return secs;
+    }
+
+    /// <summary>★[v105 · 계획 4.1] 3D 내보내기용 — 도면을 바꾸지 않고(읽기만) 지금 단면 줄을 세운다: 정지면_DH · 종단에 든 옹벽(<see cref="PureWithWallsBuilder.CurrentWalls"/>) · 번들 옹벽 · 이 도면 단면 표.
+    /// 터파기가 꺼져 있어도 쓴다(설정 기록의 단면 형식 · 표 · 버림 칸). 수량 단면과 같은지는 부르는 쪽이 <see cref="HasCurrentSurface"/>로 본다.</summary>
+    internal static System.Collections.Generic.List<WallExcav.SecLine>? SectionLinesForExport(Database db, ObjectId groundId, System.Collections.Generic.List<string> notes, out WallExcav.Settings st, out string facesTxt)
+    {
+        st = WallListStore.ExcavOf(db, out string swhy);
+        facesTxt = "";
+        if (swhy.Length > 0) notes.Add("옹벽 터파기 설정 기록 — " + swhy);
+        var (tCut, tFill) = TablesOf(db, st, notes);
+        var civ = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+        using var tr = db.TransactionManager.StartTransaction();
+        var (planIds, planNms) = Commands.WallCompositeCommand.Candidates(civ, tr, Commands.WallCompositeCommand.PlanName, groundId);
+        if (planIds.Count != 1) { notes.Add($"정지면_DH를 하나로 못 잡았다({(planIds.Count == 0 ? "없음" : string.Join(",", planNms))}) — 옹벽 3D 없음"); tr.Commit(); return null; }
+        var sC = new CachedGroundSurface((TinSurface)tr.GetObject(planIds[0], OpenMode.ForRead));
+        System.Func<double, double, double?> mAt = (x, y) => sC.TryGetElevation(x, y, out double z) ? z : (double?)null;
+        var walls = PureWithWallsBuilder.CurrentWalls(db, tr, groundId, out _);
+        var mn = new WallExcav.MeasureNote();
+        var stepLog = new System.Collections.Generic.List<string>();
+        var (bottoms, benchBelow, nFaces, bundles) = CollectBottoms(db, tr, walls, mAt, notes, mn, new StringBuilder(), stepLog);
+        var secNote = new WallExcav.SecNote();
+        var secs = SectionizeAll(bottoms, benchBelow, tCut, tFill, st, notes, secNote);
+        if (secNote.Warn) notes.Add("단면 — " + secNote.Text);
+        facesTxt = $"앞면 선 {nFaces}줄({string.Join(" · ", stepLog)}{(bundles != null ? $" · 번들 구역 {bundles.Count}" : "")}) · 바닥 줄 {bottoms.Count} · 단면 줄 {secs.Count}";
+        tr.Commit();
+        return secs.Select(x => x.S).ToList();
     }
 
     private static Result EnsureCore(Database db, ObjectId groundId, PureWithWallsBuilder.Result? pure, StringBuilder log)
@@ -424,97 +596,11 @@ internal static class WallExcavBuilder
             //     벽 위 원지반(뚜껑) · 성토 옹벽 앞 원지반이 빠져 흙 쪽 표본이 전부 «면을 못 읽음»이었다. 옹벽면은 정지면_DH 삼각형을 그대로 골라 낸 것이라 값이 같다.
             long t0 = sw.ElapsedMilliseconds;
             System.Func<double, double, double?> mAt = (x, y) => sC.TryGetElevation(x, y, out double z) ? z : (double?)null;
-            var bottoms = new System.Collections.Generic.List<WallExcav.Bottom>();
-            var benchBelow = new System.Collections.Generic.Dictionary<WallExcav.Bottom, double>();
             var mn = new WallExcav.MeasureNote();
             var fp = new StringBuilder();       // 앞면 지문
-            int nFaces = 0;
             var stepLog = new System.Collections.Generic.List<string>();
-            double gsMin = GradingSettings.MinSlope, gsRun = GradingSettings.MinFaceRun;
-            foreach (var w in pure?.Walls ?? new System.Collections.Generic.List<PureWithWallsBuilder.ReflWall>())
-            {
-                string src = (w.Frozen ? "굳은 옹벽 " : "옹벽 ") + w.No;
-                if (w.IsWall.Count != w.Poly.Count || w.Poly.Count < 3)
-                {
-                    notes.Add(w.Frozen ? $"옛 굳은 옹벽 {w.No} — 옹벽선 기록이 없어 터파기에서 빠짐(앞 구역을 다시 생성하면 들어감)" : $"{src} — 옹벽선 표가 없어 빠짐");
-                    continue;
-                }
-                double slopeW = w.SlopeW >= 0 ? w.SlopeW : gsMin, faceRun = w.FaceRun >= 0 ? w.FaceRun : gsRun;
-                // ★★[설치 전 검토 높음 1] 단 수는 벽 짓기와 같은 셈(폴리곤 안 최종면 최고 · 최저로 BenchCount)으로 묶는다 — «벽이 안 보일 때까지»로 세면
-                //   비탈진 땅을 단으로 잡아 가짜 단이 이어질 수 있었다. 한 단 더(N+1)는 재기만 해서 벽이 1 m 넘게 보이면 ⚠(넣지 않는다).
-                int nB = WallExcav.ZoneBenches(w.Poly, w.Up, w.HeadZ, w.H, mAt, System.Math.Max(1.0, GradingSettings.VertexSpacing));
-                if (nB <= 0) { notes.Add($"{src} — 폴리곤 안 최종면을 못 재 단 수를 모른다(1단만)"); nB = 1; }
-                int kFound = 0;
-                for (int k = 1; k <= nB + 1; k++)
-                {
-                    var faces = WallExcav.ZoneFaces(w.Poly, w.IsWall, w.Up, w.HeadZ, k, w.H, w.T, slopeW, faceRun, src, out string fn, fromBench: k);
-                    // ★[재검토 낮음 3] 2단부터도 «못 뽑았다 · 흙 쪽을 못 가렸다»는 알린다(빠진 단이 말없이 사라지지 않게) — 폴리곤 밖은 좁은 자리라 1단만
-                    if (fn.Length > 0 && k <= nB && (k == 1 || !fn.Contains("앞면 선 없음"))) notes.Add(fn);
-                    if (k == nB + 1)
-                    {
-                        var mx = new WallExcav.MeasureNote();
-                        double keptX = 0;
-                        foreach (var f in faces) { WallExcav.Measure(f, mAt, 0, mx); keptX = mx.Kept; }
-                        if (keptX > 1.0) notes.Add($"{src} — {nB}단 너머에도 벽이 {keptX:F1}m 보인다(단 수가 모자람 — 그 단은 터파기에 안 넣었다)");
-                        break;
-                    }
-                    double keptBefore = mn.Kept;
-                    foreach (var f in faces)
-                    {
-                        nFaces++;
-                        fp.Append(f.Src).Append(f.Soil).Append(';');
-                        foreach (var q in f.Pts) fp.Append(q.X.ToString("R", System.Globalization.CultureInfo.InvariantCulture)).Append(',').Append(q.Y.ToString("R", System.Globalization.CultureInfo.InvariantCulture)).Append(';');
-                        foreach (var b0 in WallExcav.Measure(f, mAt, 0, mn))
-                        {
-                            b0.Up = w.Up; b0.Group = src; b0.Step = k;
-                            // ★[v104 계획 5.7] 아래에 단이 있는 단 — 그 사이 소단 폭(위 단 앞 터파기가 넘으면 ⚠)
-                            if (w.Up ? k >= 2 : k < nB) benchBelow[b0] = w.T;
-                            bottoms.Add(b0);
-                        }
-                    }
-                    if (mn.Kept - keptBefore > 1e-6) kFound = k;
-                }
-                stepLog.Add($"{src} {(w.Up ? "절토" : "성토")} {kFound}단(셈 {nB}단)");
-                // ★[v104 B] 맨 위 단(찾은 가장 위 단) — 배면사면 대상(절토만)
-                if (w.Up) foreach (var bb in bottoms) if (bb.Group == src && bb.Step == kFound) bb.Top = true;
-            }
-            var bundles = GradingBundleStore.TryLoadAll(db, tr, out string bwhy);
-            if (bundles != null)
-            {
-                int zi = 0;
-                foreach (var b in bundles)
-                {
-                    zi++;
-                    foreach (var (runs, up) in new[] { (b.CutWallRuns, true), (b.FillWallRuns, false) })
-                    {
-                        if (runs == null) continue;
-                        int ri = 0;
-                        foreach (var r in runs)
-                        {
-                            ri++;
-                            string src = $"구역{zi} {(up ? "절토" : "성토")} 옹벽선{ri}({r.Bench + 1}단)";
-                            var f = WallExcav.RunFace(r, b.Params.MinSlope, b.Params.MinFaceRun, src, out string why);
-                            if (f == null) { notes.Add(why); continue; }
-                            nFaces++;
-                            fp.Append(f.Src).Append(f.Soil).Append(';');
-                            foreach (var q in f.Pts) fp.Append(q.X.ToString("R", System.Globalization.CultureInfo.InvariantCulture)).Append(',').Append(q.Y.ToString("R", System.Globalization.CultureInfo.InvariantCulture)).Append(';');
-                            foreach (var b0 in WallExcav.Measure(f, mAt, 0, mn))
-                            {
-                                b0.Up = up; b0.Group = $"구역{zi}"; b0.Step = r.Bench;
-                                if (up && r.Bench >= 1) benchBelow[b0] = b.Params.CutBenchWidth;
-                                bottoms.Add(b0);
-                            }
-                        }
-                    }
-                }
-            }
-            else if (bwhy.Length > 0) notes.Add("번들을 못 읽어 번들 옹벽은 빠짐 — " + bwhy);
-            // ★[v104 B] 번들 — 구역마다 절토 런 중 가장 높은 단이 맨 위
-            foreach (var g in bottoms.Where(x => x.Up && x.Group.StartsWith("구역")).GroupBy(x => x.Group))
-            {
-                int top = g.Max(x => x.Step);
-                foreach (var bb in g) if (bb.Step == top) bb.Top = true;
-            }
+            // ★[v105 · 계획 4.1] 3D 내보내기(WallSolidDwg)와 같은 함수 — 터파기와 3D가 같은 바닥 줄 · 같은 단면
+            var (bottoms, benchBelow, nFaces, bundles) = CollectBottoms(db, tr, pure?.Walls, mAt, notes, mn, fp, stepLog);
             long tFaces = sw.ElapsedMilliseconds - t0;
             if (mn.Warn) notes.Add("앞면 재기 — " + mn.Text);
             R.Faces = nFaces;
@@ -523,7 +609,7 @@ internal static class WallExcavBuilder
             string fpHash;
             using (var sha = System.Security.Cryptography.SHA256.Create())
                 fpHash = System.Convert.ToHexString(sha.ComputeHash(Encoding.UTF8.GetBytes(fp.ToString()))).Substring(0, 16);
-            R.Stamp = head + "#" + fpHash + "#v2";
+            R.Stamp = head + "#" + fpHash + "#v4";   // ★[v105] 3 = 단면 기록 판 3(표 칸 · 조건) · ★[v105.3] 4 = 조각 원뿔 낮추기(옛 절벽 면을 되쓰지 않게)
             string facesTxt = $"앞면 선 {nFaces}줄({string.Join(" · ", stepLog)}{(bundles != null ? $" · 번들 구역 {bundles.Count}" : "")}) · {mn.Text} · 바닥 줄 {bottoms.Count}";
             if (bottoms.Count == 0)
             {
@@ -555,15 +641,7 @@ internal static class WallExcavBuilder
             // ★★★[v104 · 계획_v104.md 5.2 · 5.3 · JACK 1021 «옹벽 형식별 일반단면 → 여유폭 · 구배로 터파기»] 바닥 줄 점마다 형식 표 → 단면 →
             //   바닥 높이(앞 땅 + 단면 바닥) · 같은 표 줄 구간 · 구간마다 폭(뒤 끝 + 여유 · −앞 끝 + 여유 · 패널식은 앞면 선 앞 도랑)
             var secNote = new WallExcav.SecNote();
-            var secs = new System.Collections.Generic.List<(WallExcav.Bottom B, WallExcav.SecLine S)>();
-            foreach (var b in bottoms)
-            {
-                var sl = WallExcav.Sectionize(b, b.Up ? tCut : tFill, st.Common(b.SlopeW), st.Margin, secNote, out string sw0);
-                if (sl == null) { notes.Add($"{b.Src} 단면을 못 세움 — {sw0}"); continue; }
-                secs.Add((b, sl));
-                if (benchBelow.TryGetValue(b, out double bw) && sl.FrontMax > bw + 1e-6)
-                    notes.Add($"{b.Src} — 앞 터파기 폭 {sl.FrontMax:F2}m가 아래 단 소단 폭 {bw:F2}m를 넘음(아래 단 벽 위까지 판다 · 터파기는 하나로 합쳐짐)");
-            }
+            var secs = SectionizeAll(bottoms, benchBelow, tCut, tFill, st, notes, secNote);
             if (secNote.Warn) notes.Add("단면 — " + secNote.Text);
             string secTxt = "단면 " + string.Join(" · ", secs.GroupBy(x => (x.S.Up, x.S.Kind)).Select(g =>
                 $"{(g.Key.Up ? "절토" : "성토")} {g.Key.Kind} {g.Count()}줄·구간 {g.Sum(x => x.S.Runs.Count)}"
@@ -630,6 +708,35 @@ internal static class WallExcavBuilder
                         if (lost > 0) { pw.Note = $"조각 삼각형을 읽다 {lost}개 버림"; return false; }
                         var kept = WallExcav.DropOutside(tris, outer, out int dropped);
                         if (dropped > 0) pw.Note = $"껍질 메움 삼각형 {dropped}개 버림";
+                        // ★★[v105.3 · 계획_v105_3.md 6 · 1023 V47 덤프] 벽 끝 절벽 — 띠 밖 꼭짓점을 참 원뿔(띠 둘레마다 바닥 + 법면 오름의 최솟값)으로 낮춘다.
+                        //   Build는 바닥 높이가 길이 따라 바뀌는 띠를 «가장 가까운 바닥 + 오름»으로 올려, 더 먼 낮은 바닥에서 오르는 법면보다 최대 4.9 m 높았다(덜 판 것 · 만나는 줄에서 절벽).
+                        var kept0 = kept;
+                        kept = WallExcav.ConeLower(kept, pw.Ring, SpecOf(st), out int nLow, out double dLow);
+                        pw.Low = nLow; pw.LowMax = dLow;
+                        // ★[계획 검토 중간 8] 낮춘 뒤 바깥 링이 아직 기준면 위인가 — 아니면 예산 두 배(위와 같은 길)
+                        var zLow = new System.Collections.Generic.Dictionary<(double, double), double>();
+                        foreach (var t3 in kept) { zLow[(t3.A.X, t3.A.Y)] = t3.A.Z; zLow[(t3.B.X, t3.B.Y)] = t3.B.Z; zLow[(t3.C.X, t3.C.Y)] = t3.C.Z; }
+                        double Zl(Point3 q) => zLow.TryGetValue((q.X, q.Y), out double zq) ? zq : q.Z;
+                        bool above2 = true;
+                        for (int i = 0; i < outer.Count && above2; i++)
+                        {
+                            var a = outer[i]; var c = outer[(i + 1) % outer.Count];
+                            double za = Zl(a), zc = Zl(c);
+                            foreach (var (x, y, z) in new[] { (a.X, a.Y, za), ((a.X + c.X) / 2, (a.Y + c.Y) / 2, (za + zc) / 2) })
+                            { var lz = L(x, y); if (lz != null && lz.Value >= z) { above2 = false; break; } }
+                        }
+                        if (!above2)
+                        {
+                            // ★[설치 전 검토 낮음 4] 더 못 늘리면(예산 60 · 마지막 시도) 조각을 버리지 않고 낮추기 전 면을 쓴다(v105.2와 같은 면 · 벽 끝 절벽은 남음)
+                            if (pw.Rise >= 60 || attempt == 3)
+                            {
+                                pw.Note = (pw.Note.Length > 0 ? pw.Note + "·" : "") + "원뿔 낮추기 안 함(낮춘 바깥 링이 기준면 아래)";
+                                pw.Low = 0; pw.LowMax = 0;
+                                pw.Raw = kept0; pw.Outer = outer;
+                                return true;
+                            }
+                            pw.Rise = System.Math.Min(60, pw.Rise * 2); pw.Grown = true; continue;
+                        }
                         pw.Raw = kept; pw.Outer = outer;
                         return true;
                     }
@@ -791,7 +898,7 @@ internal static class WallExcavBuilder
             tr.Commit();
             long tImp = sw.ElapsedMilliseconds - t3;
             log.AppendLine($"  옹벽 터파기 — 지었다 {nm} · {st.Text} · {facesTxt} · {secTxt} · 단면 기록 {rec.Lines.Count}줄 {rec.Lines.Sum(l => l.Pts.Count)}점 · 조각 {good.Count}/{works.Count}"
-                         + $"({string.Join(" ", good.Select(w => $"{w.Bottom.Src}:깊이{w.DepthMax:F1}m{(w.Benches ? "·소단" : "")}·예산{w.Rise:F0}{(w.Note.Length > 0 ? "·" + w.Note : "")}{(w.ClipNote.Length > 0 ? "·" + w.ClipNote : "")}"))})"
+                         + $"({string.Join(" ", good.Select(w => $"{w.Bottom.Src}:깊이{w.DepthMax:F1}m{(w.Benches ? "·소단" : "")}·예산{w.Rise:F0}{(w.Low > 0 ? $"·원뿔 낮춤 {w.Low}점(최대 {w.LowMax:F2}m)" : "")}{(w.Note.Length > 0 ? "·" + w.Note : "")}{(w.ClipNote.Length > 0 ? "·" + w.ClipNote : "")}"))})"
                          + $" · 아래 껍질 {env.Summary}" + (ofx.Flipped > 0 ? $" · Civil이 고칠 면 먼저 뒤집음 {ofx.Flipped}" : "")
                          + $" · 되읽기 {back} · {(frz.Length == 0 ? "굳힘" : "⚠굳힘 실패 " + frz)} · 옛 면 지움 {erased}(선형이 쓰는 것 {keptOld} 남김)"
                          + $" · {sw.ElapsedMilliseconds}ms(앞면 {tFaces} · 조각 {tPieces} · 껍질 {tEnv} · 가져오기 {tImp}) · 도장 {R.Stamp}"
@@ -862,6 +969,11 @@ internal static class WallExcavBuilder
             return R;
         }
     }
+
+    /// <summary>★[v105.3] 터파기 법면 제원(Core) — 조각 <see cref="Params"/>와 같은 꼴(경사 = max(설정, 최소) · 소단 끄면 한 장).
+    /// 3D 원뿔 낮추기 · 횡단 2D 터파기선이 같이 쓴다.</summary>
+    internal static WallExcav.SlopeSpec SpecOf(WallExcav.Settings st)
+        => new(System.Math.Max(st.Slope, GradingSettings.MinSlope), st.BenchOn, st.BenchH, st.BenchOn ? st.BenchW : 0.0);
 
     /// <summary>터파기 제원 — 경사 n · 소단을 두면 <paramref name="benchH"/>마다 <paramref name="benchW"/> 소단(★[v103.3.1 · JACK 1021] 도킹바 «소단» 켬 · 높이 · 폭 — 종전 고정 «5 m 넘으면 3 m마다 1 m»)
     /// · 아니면 한 장의 법면(DHEXCAV와 같은 꼴).</summary>

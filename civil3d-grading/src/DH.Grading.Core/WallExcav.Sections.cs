@@ -58,7 +58,7 @@ public static partial class WallExcav
         {
             Over > 0 ? string.Format(CultureInfo.InvariantCulture, "표 밖(마지막 줄보다 높음 · 최고 h {0:F1}m) {1:F1}m — 개별 설계 필요 @{2}", OverHMax, Over, OverAt) : "",
             Below > 0 ? string.Format(CultureInfo.InvariantCulture, "첫 줄보다 낮은 벽 {0:F1}m — 표 첫 줄 단면으로 셈(부풀 수 있음) @{1}", Below, BelowAt) : "",
-            SlopedBack > 0 ? string.Format(CultureInfo.InvariantCulture, "경사 배면(1:3보다 가파름) {0:F1}m — 경사 배면 표가 필요 @{1}", SlopedBack, BackAt) : "",
+            SlopedBack > 0 ? string.Format(CultureInfo.InvariantCulture, "배면이 고른 벽 뒤 조건보다 가파름 {0:F1}m — [단면 표]에서 벽 뒤 조건을 바꿀 것 @{1}", SlopedBack, BackAt) : "",
             SlopedFront > 0 ? string.Format(CultureInfo.InvariantCulture, "앞 땅 경사(1:3보다 가파름) {0:F1}m — 근입 검토 @{1}", SlopedFront, FrontAt) : "",
             Wedge > 0 ? string.Format(CultureInfo.InvariantCulture, "단면 앞면이 정지면보다 누움 {0:F1}m — 그 쐐기는 실제로는 더 깎는 자리(수량은 빈 공간으로 뺌) @{1}", Wedge, WedgeAt) : "",
         }.Where(s => s.Length > 0));
@@ -106,7 +106,9 @@ public static partial class WallExcav
             note.Len += w;
             if (p.Shape.Over) { note.Over += w; note.OverHMax = Math.Max(note.OverHMax, p.H); if (note.OverAt.Length == 0) note.OverAt = At(p); }
             if (p.Shape.Below) { note.Below += w; if (note.BelowAt.Length == 0) note.BelowAt = At(p); }
-            if (IsConcrete(t.Kind) && p.Rb > 1.0 / 3 + 1e-9) { note.SlopedBack += w; if (note.BackAt.Length == 0) note.BackAt = At(p); }
+            // ★[v105 · 계획 검토 중간 2] 고른 벽 뒤 조건보다 가파른 배면만 ⚠ — 평평은 1:3 · 1:1.8 · 1:1.5 비탈은 그 경사(+ 0.02 여유)
+            double rbMax = t.Cond.Back == 0 ? 1.0 / 3 : (t.Cond.Back == 1 ? 1 / 1.8 : 1 / 1.5) + 0.02;
+            if (IsConcrete(t.Kind) && p.Rb > rbMax + 1e-9) { note.SlopedBack += w; if (note.BackAt.Length == 0) note.BackAt = At(p); }
             if (IsConcrete(t.Kind) && p.Rf > 1.0 / 3 + 1e-9) { note.SlopedFront += w; if (note.FrontAt.Length == 0) note.FrontAt = At(p); }
             if (!p.Shape.Trench && p.Shape.FaceBatter - b.SlopeW > 0.03) { note.Wedge += w; if (note.WedgeAt.Length == 0) note.WedgeAt = At(p); }
         }
@@ -431,7 +433,7 @@ public static partial class WallExcav
         public List<RecLine> Lines = new();
     }
 
-    public const int RecordVersion = 2;   // 2 = 맨 위 단 칸(v104 B)
+    public const int RecordVersion = 3;   // 2 = 맨 위 단 칸(v104 B) · ★[v105] 3 = 표 스냅숏에 조건 · 칸 수가 바뀜(키 · 중력 앞면)
 
     /// <summary>단면 줄들로 기록을 만든다(쓴 형식의 표만 스냅숏).</summary>
     public static SecRecord RecordOf(IEnumerable<SecLine> lines, double margin, WallSection.Common c, Func<WallSection.Kind, WallSection.Table> table)
@@ -445,14 +447,15 @@ public static partial class WallExcav
         return r;
     }
 
-    /// <summary>기록 값(판 2) — [I 판 · D 여유 · D 버림 두께 · D 버림 돌출 · D 콘크리트 앞면 · I 표 수 · (I 형식 · I 칸 · I 줄 · D…)* · I 줄 수 · (I 형식 · I 흙 쪽 · I 절토 · I 맨 위 단 · D 앞면 구배 · I 점 수 · (D x · D y · D 앞 땅 · D H · D 근입 · I 표 줄)*)*].</summary>
+    /// <summary>기록 값(판 3) — [I 판 · D 여유 · D 버림 두께 · D 버림 돌출 · D 콘크리트 앞면 · I 표 수 · (I 형식 · I 뒤 · I 쌓인 높이 · I 지진 · D 앞면 경사 · I 칸 · I 줄 · D…)* · I 줄 수 · (I 형식 · I 흙 쪽 · I 절토 · I 맨 위 단 · D 앞면 구배 · I 점 수 · (D x · D y · D 앞 땅 · D H · D 근입 · I 표 줄)*)*].</summary>
     public static List<(char K, object V)> EncodeRecord(SecRecord r)
     {
         var l = new List<(char, object)> { ('I', RecordVersion), ('D', r.Margin), ('D', r.Common.TLean), ('D', r.Common.ELean), ('D', r.Common.FrontBatter), ('I', r.Tables.Count) };
         foreach (var t in r.Tables.Values)
         {
             int nc = WallSection.Of(t.Kind).Cols.Length;
-            l.Add(('I', (int)t.Kind)); l.Add(('I', nc)); l.Add(('I', t.Rows.Count));
+            l.Add(('I', (int)t.Kind)); l.Add(('I', t.Cond.Back)); l.Add(('I', t.Cond.Fill)); l.Add(('I', t.Cond.Seismic ? 1 : 0)); l.Add(('D', t.Cond.FrontN));
+            l.Add(('I', nc)); l.Add(('I', t.Rows.Count));
             foreach (var row in t.Rows) foreach (var v in row) l.Add(('D', v));
         }
         l.Add(('I', r.Lines.Count));
@@ -484,9 +487,10 @@ public static partial class WallExcav
             {
                 var kind = (WallSection.Kind)I();
                 if (!Enum.IsDefined(typeof(WallSection.Kind), kind)) { why = $"단면 기록 — 모르는 형식 {(int)kind}"; return false; }
+                int cb = I(), cf = I(), cs = I(); double cn = D();
                 int nc = I(), nr = I();
                 if (nc != WallSection.Of(kind).Cols.Length || nr < 1) { why = $"단면 기록 — {kind} 표 꼴(칸 {nc} · 줄 {nr})"; return false; }
-                var t = new WallSection.Table { Kind = kind };
+                var t = new WallSection.Table { Kind = kind, Cond = WallSection.Normalize(kind, new WallSection.Cond(cb, cf, cs != 0, cn)) };
                 for (int a = 0; a < nr; a++) { var row = new double[nc]; for (int c = 0; c < nc; c++) row[c] = D(); t.Rows.Add(row); }
                 if (!WallSection.Valid(t, out string bad)) { why = $"단면 기록 — {kind} 표 값 {bad}"; return false; }
                 r.Tables[kind] = t;
@@ -539,11 +543,12 @@ public static partial class WallExcav
     /// <summary>★계획 6 — 절단선 위 점 (px, py)의 세로 기둥: 기록 줄마다 가장 가까운 앞면 선 자리(선분 안으로 떨어지는 것 모두 · 바깥 꺾임은 Mitre — 두 변 직선 거리 중 큰 쪽 ·
     /// 선 끝 너머는 안 본다)의 부호 있는 거리 d(흙 쪽 +)로 단면 x = d 세로선이 지나는 조각들의 z 구간을 모은다(여러 줄 · 여러 변은 합집합 — 두 번 안 뺀다).</summary>
     /// <param name="frac">몫이 1보다 작은 구조물(부벽 평균) — (구간 · 몫) · 겹치면 큰 몫. null이면 안 모은다.</param>
+    /// <param name="key">★[v105] 활동방지벽 구간만 따로(바닥 밑 몫을 재려고) · null이면 안 모은다.</param>
     public static void ColumnAt(SecRecord rec, double px, double py, List<(double Lo, double Hi)> st, List<(double Lo, double Hi)> air, List<(double Lo, double Hi)> rf,
-                                List<(double Lo, double Hi, double F)>? frac = null)
+                                List<(double Lo, double Hi, double F)>? frac = null, List<(double Lo, double Hi)>? key = null)
     {
         Prepare(rec);
-        st.Clear(); air.Clear(); rf.Clear(); frac?.Clear();
+        st.Clear(); air.Clear(); rf.Clear(); frac?.Clear(); key?.Clear();
         foreach (var ln in rec.Lines)
         {
             if (px < ln.X0 || px > ln.X1 || py < ln.Y0 || py > ln.Y1) continue;
@@ -557,7 +562,7 @@ public static partial class WallExcav
                 if (t < 0 || t > 1) continue;
                 double d = (ex * (py - a.Y) - ey * (px - a.X)) / Math.Sqrt(L2) * ln.Soil;
                 int near = t < 0.5 ? i : i + 1;
-                Add(ln, near, d, a.Toe + (b.Toe - a.Toe) * t, st, air, rf, frac);
+                Add(ln, near, d, a.Toe + (b.Toe - a.Toe) * t, st, air, rf, frac, key);
             }
             for (int i = 1; i + 1 < n; i++)
             {
@@ -570,10 +575,11 @@ public static partial class WallExcav
                 double d1 = (e1x * (py - p0.Y) - e1y * (px - p0.X)) / Math.Sqrt(l1) * ln.Soil;
                 double d2 = (e2x * (py - v.Y) - e2y * (px - v.X)) / Math.Sqrt(l2) * ln.Soil;
                 if (Math.Sign(d1) != Math.Sign(d2)) continue;
-                Add(ln, i, Math.Abs(d1) >= Math.Abs(d2) ? d1 : d2, v.Toe, st, air, rf, frac);
+                Add(ln, i, Math.Abs(d1) >= Math.Abs(d2) ? d1 : d2, v.Toe, st, air, rf, frac, key);
             }
         }
         Merge(st);
+        if (key != null) Merge(key);
         Merge(air); Subtract(air, st);
         Merge(rf); Subtract(rf, st); Subtract(rf, air);
         if (frac != null && frac.Count > 1)
@@ -589,8 +595,116 @@ public static partial class WallExcav
         }
     }
 
+    /// <summary>★★[v104.1 · 계획_v104_1.md 2.2 · JACK 1022 «종단 · 횡단에 옹벽 단면을 직접 넣어줘» · 2차 «각도대로 늘여서 맞춤»] 자른 자리 단면 하나.
+    /// <para><see cref="Dist"/> = 자르는 선분 시작에서 교점까지 · <see cref="Sign"/> = 흙 쪽이 자르는 선 방향이면 +1 · <see cref="Stretch"/> = 1/sinθ(θ = 자르는 선과 앞면 변의 사잇각) ·
+    /// 링 점 (X, Z) → 자르는 선 위 거리 Dist + Sign·X·Stretch · 높이 Toe + Z.</para></summary>
+    /// <param name="Seg">자르는 꺾은선의 몇째 변인가 · <c>SegT</c> = 그 변 위 비율(종단은 이것으로 측점을 정확히 낸다).</param>
+    public sealed record CutSec(double Dist, int Sign, double Stretch, double SinT, double Toe, WallSection.Shape Shape, WallSection.Kind Kind, bool Up, int Line, int Seg, double SegT);
+
+    /// <summary>★[v104.1] 자르는 선분 a → b(횡단 표본선)와 기록 줄이 만나는 자리마다 — <see cref="CutSections(SecRecord, IReadOnlyList{ValueTuple{double, double}}, double, out int)"/>.</summary>
+    public static List<CutSec> CutSections(SecRecord rec, double ax, double ay, double bx, double by, double minSin, out int skipped)
+        => CutSections(rec, new[] { (ax, ay), (bx, by) }, minSin, out skipped);
+
+    /// <summary>★[v104.1] 자르는 꺾은선(횡단 = 표본선 두 점 · 종단 = 선형을 잘게 편 것)과 기록 줄(앞면 선)이 만나는 자리마다 <b>수량과 같은 단면</b>
+    /// (<see cref="ColumnAt"/>처럼 가까운 끝점의 단면 · 앞 땅만 보간 — 검토 중간 4).
+    /// sinθ &lt; <paramref name="minSin"/>(벽과 거의 나란함)은 안 돌려주고 <paramref name="skipped"/>로 센다.
+    /// 같은 줄에서 꺾은선 거리 1 mm 안 교점(꼭짓점 통과)은 하나 — 그릴 수 있는 쪽을 남긴다. 거리순.</summary>
+    public static List<CutSec> CutSections(SecRecord rec, IReadOnlyList<(double X, double Y)> path, double minSin, out int skipped)
+    {
+        Prepare(rec);
+        skipped = 0;
+        var res = new List<CutSec>();
+        if (path.Count < 2) return res;
+        var cum = new double[path.Count];
+        for (int k = 1; k < path.Count; k++) cum[k] = cum[k - 1] + Math.Sqrt(Sq(path[k].X - path[k - 1].X) + Sq(path[k].Y - path[k - 1].Y));
+        var hits = new List<(double Dist, bool Skip, CutSec? C)>();
+        for (int li = 0; li < rec.Lines.Count; li++)
+        {
+            var ln = rec.Lines[li];
+            var pts = ln.Pts;
+            hits.Clear();
+            for (int k = 0; k + 1 < path.Count; k++)
+            {
+                double ax = path[k].X, ay = path[k].Y;
+                double ux = path[k + 1].X - ax, uy = path[k + 1].Y - ay, uL = Math.Sqrt(ux * ux + uy * uy);
+                if (uL < 1e-9) continue;
+                for (int i = 0; i + 1 < pts.Count; i++)
+                {
+                    var p = pts[i]; var q = pts[i + 1];
+                    double ex = q.X - p.X, ey = q.Y - p.Y, eL = Math.Sqrt(ex * ex + ey * ey);
+                    if (eL < 1e-9) continue;
+                    double den = ux * ey - uy * ex;                               // cross(u, e)
+                    double sinT = Math.Abs(den) / (uL * eL);
+                    if (sinT < 1e-9) continue;                                     // 나란함 — 안 만난다(겹침은 셈 밖)
+                    double wx = p.X - ax, wy = p.Y - ay;
+                    double u = (wx * ey - wy * ex) / den, t = (wx * uy - wy * ux) / den;
+                    if (u < -1e-12 || u > 1 + 1e-12 || t < -1e-12 || t > 1 + 1e-12) continue;
+                    u = Math.Clamp(u, 0, 1); t = Math.Clamp(t, 0, 1);
+                    double dist = cum[k] + u * uL;
+                    if (sinT < minSin) { hits.Add((dist, true, null)); continue; }
+                    double nx = -ey / eL * ln.Soil, ny = ex / eL * ln.Soil;        // 흙 쪽 법선(SignedDist와 같은 정의)
+                    int sg = nx * ux + ny * uy >= 0 ? +1 : -1;
+                    int near = t < 0.5 ? i : i + 1;
+                    hits.Add((dist, false, new CutSec(dist, sg, 1.0 / sinT, sinT, p.Toe + (q.Toe - p.Toe) * t, ln.Shapes![near], ln.Kind, ln.Up, li, k, u)));
+                }
+            }
+            hits.Sort((a, b) => a.Dist.CompareTo(b.Dist));
+            for (int h = 0; h < hits.Count;)
+            {
+                int e2 = h + 1;
+                while (e2 < hits.Count && hits[e2].Dist - hits[h].Dist < 1e-3) e2++;   // 한 자리(꼭짓점 통과)
+                var draw = hits.Skip(h).Take(e2 - h).FirstOrDefault(x => !x.Skip);
+                if (draw.C != null) res.Add(draw.C); else skipped++;
+                h = e2;
+            }
+        }
+        res.Sort((a, b) => a.Dist.CompareTo(b.Dist));
+        return res;
+    }
+
+    /// <summary>★★[v105 · 계획 검토 높음 1] 자르는 선분 a → b 위 활동방지벽 자리 — a에서 잰 거리 구간(넓은 쪽으로 정렬 · 겹치면 합침).
+    /// 횡단 수량이 이 끝을 표본 축에 넣고(양쪽 0.1 mm) 그 칸들의 터파기 바닥을 키 밑까지 내린다(<see cref="KeyBottomAt"/>) — 전체 · 지층별 · 5 m 구분이 한 배열로 같이 맞는다.</summary>
+    public static List<(double Lo, double Hi)> KeySpans(SecRecord rec, double ax, double ay, double bx, double by) => KeySpans(rec, ax, ay, bx, by, null);
+
+    /// <param name="corners">★[설치 전 검토 낮음] 키 링 꼭짓점 자리(중력식 사다리꼴의 밑 모서리 등 — 표본 축에 넣으면 기운 밑면을 따라간다) · null이면 안 모은다.</param>
+    public static List<(double Lo, double Hi)> KeySpans(SecRecord rec, double ax, double ay, double bx, double by, List<double>? corners)
+    {
+        var res = new List<(double Lo, double Hi)>();
+        double L = Math.Sqrt(Sq(bx - ax) + Sq(by - ay));
+        bool In(double d) { double t = L < 1e-12 ? 0 : d / L; return !double.IsNaN(KeyBottomAt(rec, ax + (bx - ax) * t, ay + (by - ay) * t)); }
+        // 끝을 ColumnAt과 같은 판정(점마다 그 자리의 단면)으로 다듬는다 — 자른 자리 단면(가까운 끝점)과 줄이 다르면 0.1 m 안팎 어긋났다
+        double Refine(double d, bool lowEnd)
+        {
+            double a = d - 0.3, b = d + 0.3;
+            bool ia = In(a), ib = In(b);
+            if (ia == ib) return d;
+            for (int it = 0; it < 30; it++) { double m = (a + b) / 2; if (In(m) == ia) a = m; else b = m; }
+            return (a + b) / 2;
+        }
+        foreach (var c in CutSections(rec, ax, ay, bx, by, 1e-3, out _))
+        {
+            var key = c.Shape.Parts.FirstOrDefault(p => p.Material == "활동방지벽");
+            if (key == null) continue;
+            double x0 = key.Ring.Min(q => q.X), x1 = key.Ring.Max(q => q.X);
+            double d0 = c.Dist + c.Sign * x0 * c.Stretch, d1 = c.Dist + c.Sign * x1 * c.Stretch;
+            double lo = Math.Min(d0, d1), hi = Math.Max(d0, d1);
+            res.Add((Refine(lo, true), Refine(hi, false)));
+            if (corners != null) foreach (var q in key.Ring) corners.Add(c.Dist + c.Sign * q.X * c.Stretch);
+        }
+        Merge(res);
+        return res;
+    }
+
+    /// <summary>★[v105] 점 (px, py)의 세로 기둥에서 활동방지벽 밑(가장 낮은 z) — 없으면 NaN(<see cref="ColumnAt"/>과 같은 단면 · 같은 법).</summary>
+    public static double KeyBottomAt(SecRecord rec, double px, double py)
+    {
+        var st = new List<(double Lo, double Hi)>(); var air = new List<(double Lo, double Hi)>(); var rf = new List<(double Lo, double Hi)>(); var key = new List<(double Lo, double Hi)>();
+        ColumnAt(rec, px, py, st, air, rf, null, key);
+        return key.Count == 0 ? double.NaN : key.Min(k => k.Lo);
+    }
+
     static void Add(RecLine ln, int idx, double d, double toe, List<(double, double)> st, List<(double, double)> air, List<(double, double)> rf,
-                    List<(double Lo, double Hi, double F)>? frac)
+                    List<(double Lo, double Hi, double F)>? frac, List<(double Lo, double Hi)>? key = null)
     {
         var sh = ln.Shapes![idx];
         foreach (var part in sh.Parts)
@@ -605,6 +719,7 @@ public static partial class WallExcav
             }
             var target = part.Structure ? st : rf;
             CrossZ(part.Ring, d, toe, target);
+            if (key != null && part.Material == "활동방지벽") CrossZ(part.Ring, d, toe, key);
         }
         double fb = sh.FaceBatter, sw = Math.Max(0, ln.SlopeW), zTop = sh.HTotal - sh.Df;
         if (!sh.Trench && d > 0 && fb > sw + 1e-9)
