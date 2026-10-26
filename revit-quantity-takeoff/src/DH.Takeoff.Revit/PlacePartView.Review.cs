@@ -15,7 +15,15 @@ namespace DH.Takeoff.Revit;
 public sealed partial class PlacePartView
 {
     /// <summary>③ 에 보일 것: 엑셀 항목(줄마다 부재 Id · 거푸집 줄) · 미산출 부재(Id · 이름 · 까닭) · ② 위 띠의 알림(짧게).</summary>
-    public sealed record ReviewData(IReadOnlyList<CalcSheet.ItemInfo> Items, IReadOnlyList<(long id, string label, string why)> Missing, string Notice);
+    /// <param name="Formulas">부재 Id → 산출근거에 실린 그 부재의 식(CalcPlan 이 정리한 글 — ③ 콘크리트 숫자의 문지기 · R61b). 없으면 콘크리트 숫자를 띄우지 않는다.</param>
+    public sealed record ReviewData(IReadOnlyList<CalcSheet.ItemInfo> Items, IReadOnlyList<(long id, string label, string why)> Missing, string Notice,
+                                    IReadOnlyDictionary<long, string>? Formulas = null);
+
+    /// <summary>
+    /// ③ 콘크리트 줄의 3D 숫자(R61b — JACK 2026-10-26 «정확하게»): 부재 Id → 분해기가 다시 풀며 기억한 항마다의 도형(Explain). 명령이 넣는다(Revit 의 입체를 읽는다).
+    /// 다시 푼 식이 산출근거의 식과 글자까지 같을 때만 그 도형을 쓰고, 다르면(손으로 고친 식 · 옛 판 · 모델이 바뀜) 부재 가운데에 그 식 한 줄.
+    /// </summary>
+    public Func<long, FormulaGeometry?>? ConcreteGeometry { get; set; }
 
     /// <summary>[다음 단계 →](② → ③ — 부르는 쪽이 산출식 · 이름 · 거푸집 속성을 적고 ShowReview 를 부른다).</summary>
     public event Action? Review;
@@ -40,6 +48,7 @@ public sealed partial class PlacePartView
     {
         if (_board == null) return;
         _rv = data;
+        _rvConcrete.Clear();   // 모델이 바뀌었을 수 있다 — 부재 도형은 ③ 에 들어올 때마다 다시 푼다
         ClearPicks();
         Step = 2;
         _rvSide ??= BuildReviewSide();
@@ -48,7 +57,7 @@ public sealed partial class PlacePartView
         _side.Child = _rvSide;
         _top.Child = _rvTop;
         // 색 풀이는 ② 와 같고 마우스 안내만 ③ 의 것(③ 은 보기만 — Del · Ctrl+Z 없음).
-        _bottom.Child = BuildFormworkBottom("굴림 = 확대 · 가운데 단추 끌기 = 옮기기 · 오른쪽 단추 끌기 = 돌리기 · 줄을 누르면 그 부재 · 면 · 판을 찍으면 그 줄 · Esc = 풀기");
+        _bottom.Child = BuildReviewBottom();
         _view3d.Shown = ReviewShown;
         _view3d.ColorOf = ReviewColor;
         _view3d.Picked = _ => false;
@@ -74,19 +83,31 @@ public sealed partial class PlacePartView
         _rvPicked = -1;
         _rvLabels.Clear();
         _rvLabeled = null;
+        _rvConcreteShown = null;
+        ShowReviewFormula();
+        CancelFollow();
         _view3d.SetLabels(Array.Empty<(Vec3, string)>());
-        if (_message.Text == LabelsCapped) ShowMessage("");
+        _view3d.SetGuides(Array.Empty<(IReadOnlyList<Vec3>, bool, int)>());
+        if (_message.Text == LabelsCapped || _message.Text == ConcreteCapped) ShowMessage("");
     }
 
     // ③ 에서 고른 거푸집 줄의 판마다 길이 숫자(R60 — JACK «수식의 길이에 해당하는 부분이 3D 객체에 텍스트로»): 지금 보이는 판(종류 · 층 거름 · 숨긴 부재 —
     // 설치 전 검토 중간)만 · 넓은 판부터 MaxLabelPlates 장까지. 거름이 바뀌면(RefreshReview) 다시 고른다 · 판마다 숫자는 한 번만 센다.
     private const int MaxLabelPlates = 60;
     private static readonly string LabelsCapped = $"길이 숫자는 넓은 판 {MaxLabelPlates}장만";
-    private readonly Dictionary<FormworkUnit, List<(Vec3, string)>> _rvLabels = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<FormworkUnit, List<(Vec3, string, Vec3, Vec3)>> _rvLabels = new(ReferenceEqualityComparer.Instance);
     private List<FormworkUnit>? _rvLabeled;                 // 지금 숫자를 띄운 판(같으면 다시 놓지 않는다)
 
     private void ShowLengths()
     {
+        if (_rvMembers.Count > 0 && _rv?.Formulas != null && ConcreteGeometry != null) { ShowConcreteLengths(_rv.Formulas); return; }
+        if (_rvConcreteShown != null)
+        {
+            // 콘크리트 줄에서 거푸집 줄로: 점선을 걷고 거푸집 숫자를 새로 놓는다.
+            _rvConcreteShown = null;
+            _rvLabeled = null;
+            _view3d.SetGuides(Array.Empty<(IReadOnlyList<Vec3>, bool, int)>());
+        }
         int visible = 0;
         try
         {
@@ -99,10 +120,10 @@ public sealed partial class PlacePartView
                 units = seen.Take(MaxLabelPlates).ToList();
             }
             if (_rvLabeled != null && _rvLabeled.SequenceEqual(units, ReferenceEqualityComparer.Instance)) return;
-            var labels = new List<(Vec3, string)>();
+            var labels = new List<(Vec3, string, Vec3, Vec3)>();
             foreach (var u in units)
             {
-                if (!_rvLabels.TryGetValue(u, out var own)) _rvLabels[u] = own = FormworkLabels.Of(u, _board!.Origin);
+                if (!_rvLabels.TryGetValue(u, out var own)) _rvLabels[u] = own = FormworkLabels.Spots(u, _board!.Origin);
                 labels.AddRange(own);
             }
             _rvLabeled = units;
@@ -117,7 +138,7 @@ public sealed partial class PlacePartView
             return;
         }
         if (visible > MaxLabelPlates) ShowMessage(LabelsCapped);
-        else if (_message.Text == LabelsCapped) ShowMessage("");   // 지난 줄의 알림만 거둔다
+        else if (_message.Text == LabelsCapped || _message.Text == ConcreteCapped) ShowMessage("");   // 지난 줄의 알림만 거둔다
     }
 
     private FrameworkElement BuildReviewSide()
@@ -135,6 +156,8 @@ public sealed partial class PlacePartView
     {
         var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         texts.Children.Add(_rvTotal);
+        _rvIssues = new WrapPanel { Visibility = Visibility.Collapsed };     // 모델의 문제 딱지(R63b)
+        texts.Children.Add(_rvIssues);
         _rvNotice.Foreground = _warn;
         texts.Children.Add(_rvNotice);
         return new Border
@@ -202,6 +225,7 @@ public sealed partial class PlacePartView
         if (_rv.Missing.Count > 0) _rvTotal.Inlines.Add(new Run($"      미산출 {_rv.Missing.Count}개") { Foreground = _warn, FontSize = 12.5 });
         _rvNotice.Text = string.Join("\n", _rv.Notice.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(n => "⚠ " + n));
         _rvNotice.Visibility = _rvNotice.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        RenderReviewIssues();
     }
 
     // 절 제목의 칸 조각을 한 줄 글로(엑셀은 칸마다 — «( 철근 , 25 - 30 - 150 ) : 펌프차 붐타설» → «(철근, 25-30-150) : 펌프차 붐타설»).
@@ -286,6 +310,7 @@ public sealed partial class PlacePartView
     {
         if (_board == null || _rv == null || Busy) return;
         _rvPicked = at >= 0 && at < _rvViews.Count ? at : -1;
+        _rvConcreteAgain = true;   // 고를 때마다 다시 놓는다 — 지난번 시간이 넘어 미룬 부재도 이번에 푼다(R61b 설치 전 검토 중간)
         _rvFormLine = null;
         _rvMembers.Clear();
         if (_rvPicked >= 0)
@@ -298,7 +323,8 @@ public sealed partial class PlacePartView
         SetFormworkMeshes();
         RefreshAll();
         ShowLengths();
-        if (_rvPicked < 0) return;
+        ShowReviewFormula();
+        if (_rvPicked < 0) { CancelFollow(); return; }
         _rvViews[_rvPicked].view.BringIntoView();
         var box = Box3.Empty;
         if (_rvMembers.Count > 0)
@@ -315,6 +341,8 @@ public sealed partial class PlacePartView
         }
         if (!box.IsEmpty) _view3d.ZoomTo(box, margin: RowZoomMargin, minWidth: RowZoomMinWidth);
         else ShowMessage("그 줄의 부재 · 면이 지금 3D 에 보이지 않습니다(종류 · 층 거름 · 숨긴 부재 · 그리지 못한 부재).");
+        // Revit 에서도(R61a): 콘크리트 줄 · 미산출 = 그 부재 · 거푸집 줄 = 그 줄 면의 부재.
+        FollowLater(_rvMembers.Count > 0 ? _rvMembers.ToList() : _rvFormLine != null ? OwnersOf(_board.PiecesOfLine(_rvFormLine)) : new List<long>(), box);
     }
 
     // 3D 에서 찍었다: 판 = 그 판의 거푸집 줄(③ 의 시트 — 이름으로 묶인 엑셀 줄) · 부재 = 그 부재가 든 콘크리트 줄 · 빈 곳 = 그대로.

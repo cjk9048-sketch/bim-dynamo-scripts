@@ -21,6 +21,12 @@ public sealed class DeleteFormworkObjectsCommand : IExternalCommand
         var uidoc = commandData.Application.ActiveUIDocument;
         if (uidoc?.Document == null) { message = "열린 Revit 문서가 없습니다."; return Result.Failed; }
         var doc = uidoc.Document;
+        // 「수량산출」 창이 떠 있는 동안에는 하지 않는다(R62 — JACK 2026-10-26 «먼저 팝업을 닫으라고 알림»: 같은 자료를 두 곳에서 고치지 않게).
+        if (TakeoffSession.Current != null)
+        {
+            Dialogs.Show("DH 수량산출", "먼저 「수량산출」 창을 닫아 주세요(같은 자료를 고칩니다).");
+            return Result.Cancelled;
+        }
         bool readOnly = false;
         try { readOnly = doc.IsReadOnly; } catch { }
         if (readOnly)

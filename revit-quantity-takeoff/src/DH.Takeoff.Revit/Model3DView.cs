@@ -63,8 +63,17 @@ public sealed class Model3DView : Grid
     private readonly Dictionary<int, MeshGeometry3D?> _pickOutline = new();   // 고른 부재의 굵은 테두리(확대가 바뀌면 다시 만든다)
     private readonly Rectangle _band = new() { Visibility = Visibility.Collapsed, IsHitTestVisible = false, StrokeThickness = 1.2 };
     private readonly Canvas _layer = new() { IsHitTestVisible = false };
-    private readonly Canvas _labels = new() { IsHitTestVisible = false };             // 3D 자리에 띄운 글 딱지(③ 길이 숫자 — R60)
-    private readonly List<(Vec3 at, Border view)> _labelViews = new();
+    private readonly Canvas _labels = new();                                            // 3D 자리에 띄운 글 딱지(③ 길이 숫자 — R60 · 딱지만 눌린다 — R61c)
+    private readonly List<(Vec3 at, Border view, Vec3 from, Vec3 to)> _labelViews = new();
+    private int _pickedLabel = -1;                                                      // 마우스를 올린 숫자(R61c — 그 상자 · 그 선을 주황으로)
+    private System.Windows.Shapes.Path? _pickedLine;
+    private string? _markedText;                                                        // 식 띠에서 마우스를 올린 숫자(R63 — 같은 글의 딱지 전부 · 그 선들을 주황으로)
+    private System.Windows.Shapes.Path? _markedLines;
+    private Brush? _labelBack, _labelLine, _labelText, _pickBack, _pickLine;
+    // 3D 자리의 점선(③ 콘크리트 숫자 — R61b): 더하는 도형 · 빼는 도형(빨강) · 잰 선. 갈래마다 길 하나(소프트웨어로만 그리는 Revit 에서 가볍게 — 계획 검토 L15).
+    private readonly Canvas _guideLayer = new() { IsHitTestVisible = false };
+    private readonly System.Windows.Shapes.Path[] _guidePaths = new System.Windows.Shapes.Path[3];
+    private List<(IReadOnlyList<Vec3> points, bool closed, int kind)> _guides = new();
     private readonly Material _edgeMaterial, _pickFill, _pickEdge;
     private double _edgePixelSize = -1;           // 모서리 띠를 만든 때의 화면 1픽셀 길이(m)
     private bool _fitted;
@@ -187,43 +196,210 @@ public sealed class Model3DView : Grid
             Children.Add(_top);
         }
         Children.Add(_over);
+        Children.Add(_guideLayer);
         Children.Add(_labels);
         Children.Add(_layer);
         Refresh();
     }
 
     /// <summary>3D 자리(장면 좌표)에 글 딱지를 띄운다 — 보는 자리를 바꾸면 따라 움직인다. 빈 목록 = 지움(③ 길이 숫자 — R60).</summary>
-    public void SetLabels(IReadOnlyList<(Vec3 at, string text)> labels)
+    public void SetLabels(IReadOnlyList<(Vec3 at, string text)> labels) => SetLabels(labels.Select(l => (l.at, l.text, l.at, l.at)).ToList());
+
+    /// <summary>
+    /// 글 딱지 + 그 숫자가 재는 선분(from → to · 같으면 선 없음). 딱지에 마우스를 올리면 그 상자와 그 선이 주황 · 내리면 풂
+    /// (R61c — JACK 2026-10-26 «치수 누르면 어느 치수인지 해당 선이 색이 바뀌게 · 누른 치수 네모도» → «누르는 게 아니고 마우스를 갖다 대면»).
+    /// 누르기는 딱지가 받지 않는다 — 그 밑의 부재 · 판 찍기로 간다.
+    /// </summary>
+    public void SetLabels(IReadOnlyList<(Vec3 at, string text, Vec3 from, Vec3 to)> labels)
     {
         _labels.Children.Clear();
         _labelViews.Clear();
-        var back = new SolidColorBrush(_dark ? Color.FromArgb(0xE6, 0x26, 0x2A, 0x31) : Color.FromArgb(0xF0, 0xFF, 0xFF, 0xFF));
-        var line = new SolidColorBrush(_dark ? Color.FromRgb(0x5C, 0x64, 0x70) : Color.FromRgb(0x8A, 0x94, 0xA3));
-        var text = new SolidColorBrush(_dark ? Color.FromRgb(0xE8, 0xEA, 0xED) : Color.FromRgb(0x1F, 0x23, 0x28));
-        back.Freeze();
-        line.Freeze();
-        text.Freeze();
-        foreach (var (at, words) in labels)
+        if (_pickedLabel >= 0) LabelHovered?.Invoke(null);   // 올려 둔 숫자가 사라진다 — 식의 칠도 푼다
+        _pickedLabel = -1;
+        _markedText = null;
+        if (_labelBack == null)
         {
+            Brush Frozen(Color c) { var b = new SolidColorBrush(c); b.Freeze(); return b; }
+            _labelBack = Frozen(_dark ? Color.FromArgb(0xE6, 0x26, 0x2A, 0x31) : Color.FromArgb(0xF0, 0xFF, 0xFF, 0xFF));
+            _labelLine = Frozen(_dark ? Color.FromRgb(0x5C, 0x64, 0x70) : Color.FromRgb(0x8A, 0x94, 0xA3));
+            _labelText = Frozen(_dark ? Color.FromRgb(0xE8, 0xEA, 0xED) : Color.FromRgb(0x1F, 0x23, 0x28));
+            _pickBack = Frozen(Color.FromRgb(0xF2, 0x8C, 0x28));     // 주황 — 더함 파랑 · 뺌 빨강 점선과 헷갈리지 않게
+            _pickLine = Frozen(Color.FromRgb(0xB8, 0x5C, 0x0A));
+        }
+        foreach (var (at, words, from, to) in labels)
+        {
+            int index = _labelViews.Count;
             var view = new Border
             {
-                Background = back, BorderBrush = line, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(3), Padding = new Thickness(4, 0, 4, 1),
-                Child = new TextBlock { Text = words, FontSize = 11, Foreground = text },
+                Background = _labelBack, BorderBrush = _labelLine, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(3), Padding = new Thickness(4, 0, 4, 1),
+                Child = new TextBlock { Text = words, FontSize = 11, Foreground = _labelText },
             };
+            // 마우스를 올린 동안만 고른다(끄는 중에는 바꾸지 않는다 — 돌리다 지나가는 숫자마다 깜빡이지 않게).
+            view.MouseEnter += (_, _) => { if (_drag == Drag.None) PickLabel(index); };
+            view.MouseLeave += (_, _) => { if (_pickedLabel == index) PickLabel(-1); };
             _labels.Children.Add(view);
-            _labelViews.Add((at, view));
+            _labelViews.Add((at, view, from, to));
         }
         PlaceLabels();
+    }
+
+    /// <summary>마우스를 올린 숫자의 글(내리면 null) — ③ 아래 식에서 그 숫자를 칠한다(R61c).</summary>
+    public event Action<string?>? LabelHovered;
+
+    // 숫자 하나를 고른다(−1 = 풂): 그 상자는 주황 바탕 · 흰 글, 그 숫자가 재는 선은 주황 실선.
+    private void PickLabel(int index)
+    {
+        bool changed = _pickedLabel != index;
+        _pickedLabel = index;
+        Restyle();
+        PlaceLabels();
+        if (changed) LabelHovered?.Invoke(index >= 0 && _labelViews[index].view.Child is TextBlock tb ? tb.Text : null);
+    }
+
+    /// <summary>
+    /// ③ 아래 식 띠의 숫자에 마우스를 올렸다(내리면 null): 같은 숫자의 딱지 전부와 그 숫자들이 재는 선을 주황으로
+    /// (R63 — JACK 2026-10-26 «수식창에서 해당 숫자에 마우스를 올렸을 때 해당 치수들이 뷰에서도 바뀌게» · R61c 의 거꾸로). 각도 딱지는 «°» 를 떼고 견준다.
+    /// </summary>
+    public void MarkLabels(string? text)
+    {
+        if (text == _markedText) return;
+        _markedText = text;
+        Restyle();
+        PlaceLabels();
+    }
+
+    private bool MarkedByText(int i) => _markedText != null && _labelViews[i].view.Child is TextBlock t && t.Text.TrimEnd('°') == _markedText;
+
+    // 딱지 색: 마우스를 올린 것(R61c) · 식 띠에서 가리킨 숫자(R63)는 주황 바탕 · 흰 글.
+    private void Restyle()
+    {
+        for (int i = 0; i < _labelViews.Count; i++)
+        {
+            var (_, view, _, _) = _labelViews[i];
+            bool picked = i == _pickedLabel || MarkedByText(i);
+            view.Background = picked ? _pickBack : _labelBack;
+            view.BorderBrush = picked ? _pickLine : _labelLine;
+            if (view.Child is TextBlock t)
+            {
+                t.Foreground = picked ? Brushes.White : _labelText;
+                t.FontWeight = picked ? FontWeights.SemiBold : FontWeights.Normal;
+            }
+            Panel.SetZIndex(view, picked ? 1 : 0);
+        }
+    }
+
+    /// <summary>시험용: 식 띠에서 가리킨 숫자로 칠한 딱지 · 그 선의 수.</summary>
+    public IReadOnlyList<int> MarkedLabels => Enumerable.Range(0, _labelViews.Count).Where(MarkedByText).ToList();
+    public int MarkedLineCount => _markedLines?.Data is GeometryGroup g ? g.Children.Count : 0;
+    public IReadOnlyList<double> LabelSegmentLengths => _labelViews.Select(l => (l.to - l.from).Length).ToList();
+
+    /// <summary>시험용: 마우스를 올린 숫자(−1 = 없음) · 그 딱지 · 강조한 선이 화면에 있는가.</summary>
+    public int PickedLabel => _pickedLabel;
+    public Border? LabelView(int index) => index >= 0 && index < _labelViews.Count ? _labelViews[index].view : null;
+    public bool PickedLineShown => _pickedLine?.Data != null;
+
+    /// <summary>
+    /// 3D 자리(장면 좌표)의 점선들(③ 콘크리트 숫자 — R61b): kind 0 = 더하는 도형(파랑) · 1 = 빼는 도형(빨강 — JACK «공제는 빨간 점선») · 2 = 잰 선(회색).
+    /// 딱지처럼 보는 자리가 바뀌면 다시 놓는다 · 빈 목록 = 지움.
+    /// </summary>
+    public void SetGuides(IReadOnlyList<(IReadOnlyList<Vec3> points, bool closed, int kind)> guides)
+    {
+        _guides = guides.Where(g => g.points.Count >= 2 && g.kind is >= 0 and <= 2).ToList();
+        if (_guidePaths[0] == null)
+        {
+            var colors = _dark
+                ? new[] { Color.FromRgb(0x6F, 0xA8, 0xFF), Color.FromRgb(0xFF, 0x6B, 0x6B), Color.FromRgb(0xA0, 0xA8, 0xB4) }
+                : new[] { Color.FromRgb(0x1F, 0x5F, 0xD0), Color.FromRgb(0xD0, 0x30, 0x30), Color.FromRgb(0x6E, 0x78, 0x86) };
+            for (int k = 0; k < 3; k++)
+            {
+                var brush = new SolidColorBrush(colors[k]);
+                brush.Freeze();
+                _guidePaths[k] = new System.Windows.Shapes.Path
+                {
+                    Stroke = brush, StrokeThickness = k == 2 ? 1.1 : 1.6, StrokeDashArray = k == 2 ? new DoubleCollection { 2, 3 } : new DoubleCollection { 5, 3 },
+                    IsHitTestVisible = false,
+                };
+                _guideLayer.Children.Add(_guidePaths[k]);
+            }
+        }
+        PlaceGuides();
+    }
+
+    /// <summary>시험용: 점선 수(갈래마다).</summary>
+    public int GuideCount(int kind) => _guides.Count(g => g.kind == kind);
+
+    // 점선을 지금 카메라로 화면에 놓는다(갈래마다 StreamGeometry 하나).
+    private void PlaceGuides()
+    {
+        if (_guidePaths[0] == null) return;
+        for (int k = 0; k < 3; k++)
+        {
+            var geometry = new StreamGeometry();
+            using (var ctx = geometry.Open())
+                foreach (var (points, closed, kind) in _guides)
+                {
+                    if (kind != k) continue;
+                    ctx.BeginFigure(ScreenOf(points[0]), false, closed);
+                    ctx.PolyLineTo(points.Skip(1).Select(ScreenOf).ToList(), true, false);
+                }
+            geometry.Freeze();
+            _guidePaths[k].Data = geometry;
+        }
+    }
+
+    // 누른 숫자가 재는 선(주황 실선 — 점선 위). 선분이 없는 딱지(가운데 식 · 각도)는 상자만 바뀐다.
+    private void PlacePickedLine()
+    {
+        if (_pickedLine == null)
+        {
+            _pickedLine = new System.Windows.Shapes.Path { Stroke = _pickBack ?? Brushes.Orange, StrokeThickness = 3.2, IsHitTestVisible = false, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round };
+            _guideLayer.Children.Add(_pickedLine);
+        }
+        PlaceMarkedLines();
+        if (_pickedLabel < 0 || _pickedLabel >= _labelViews.Count || (_labelViews[_pickedLabel].to - _labelViews[_pickedLabel].from).Length < 1e-9)
+        {
+            _pickedLine.Data = null;
+            return;
+        }
+        var (_, _, from, to) = _labelViews[_pickedLabel];
+        var line = new LineGeometry(ScreenOf(from), ScreenOf(to));
+        line.Freeze();
+        _pickedLine.Data = line;
+    }
+
+    // 식 띠에서 가리킨 숫자들이 재는 선(R63 — 마우스를 올린 숫자의 선과 같은 주황 실선).
+    private void PlaceMarkedLines()
+    {
+        if (_markedLines == null)
+        {
+            if (_markedText == null) return;
+            _markedLines = new System.Windows.Shapes.Path { Stroke = _pickBack ?? Brushes.Orange, StrokeThickness = 3.2, IsHitTestVisible = false, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round };
+            _guideLayer.Children.Add(_markedLines);
+        }
+        var group = new GeometryGroup();
+        for (int i = 0; i < _labelViews.Count; i++)
+        {
+            var (_, _, from, to) = _labelViews[i];
+            if (!MarkedByText(i) || (to - from).Length < 1e-9) continue;
+            group.Children.Add(new LineGeometry(ScreenOf(from), ScreenOf(to)));
+        }
+        group.Freeze();
+        _markedLines.Data = group.Children.Count > 0 ? group : null;
     }
 
     /// <summary>시험용: 띄운 딱지의 글과 화면 자리(가운데).</summary>
     public IReadOnlyList<(string text, Point at)> Labels =>
         _labelViews.Select(l => (((TextBlock)l.view.Child).Text, new Point(Canvas.GetLeft(l.view) + l.view.DesiredSize.Width / 2, Canvas.GetTop(l.view) + l.view.DesiredSize.Height / 2))).ToList();
 
-    // 딱지를 지금 카메라로 화면에 놓는다(가운데가 그 자리).
+    /// <summary>시험용: 강조한 선의 화면 끝점(없으면 null).</summary>
+    public (Point a, Point b)? PickedLine => _pickedLine?.Data is LineGeometry g ? (g.StartPoint, g.EndPoint) : null;
+
+    // 딱지 · 점선을 지금 카메라로 화면에 놓는다(딱지는 가운데가 그 자리).
     private void PlaceLabels()
     {
-        foreach (var (at, view) in _labelViews)
+        PlaceGuides();
+        PlacePickedLine();
+        foreach (var (at, view, _, _) in _labelViews)
         {
             view.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
             var p = ScreenOf(at);

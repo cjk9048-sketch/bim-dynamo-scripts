@@ -210,7 +210,7 @@ public sealed class FormworkOverlay : IDirectContext3DServer
 
     // 부재의 경계상자가 단면 상자와 겹치는가. 경계상자의 여덟 모서리를 단면 상자의 좌표로 옮겨 그 범위가 겹치는지 본다
     // (돌려 놓은 상자에서는 조금 넉넉하게 '겹친다'고 본다). 경계상자를 모르면 겹치지 않는 것으로 친다(칠한다).
-    private static bool Touches(Element element, BoundingBoxXYZ box)
+    internal static bool Touches(Element element, BoundingBoxXYZ box)
     {
         var own = element.get_BoundingBox(null);
         if (own == null) return false;

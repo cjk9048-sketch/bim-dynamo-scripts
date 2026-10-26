@@ -180,7 +180,7 @@ public sealed partial class PlacePartView
     private (byte r, byte g, byte b) FormworkColor(int index)
     {
         var grey = (ZonePalette.Todo.r, ZonePalette.Todo.g, ZonePalette.Todo.b);
-        if (index < MemberCount) return grey;
+        if (index < MemberCount) return _rvMembers.Contains(_members[index].Id) ? ConcreteColor : grey;   // 문제 딱지로 고른 부재(R63b — ② 도 ③ 처럼 청록)
         if (index >= OverlayStart)
         {
             // 덧그린 몫은 그 줄의 색(높이 구간이 다른 줄이면 밑 판의 대표와 색이 다르다 — P1b 검토 L1).
@@ -211,10 +211,11 @@ public sealed partial class PlacePartView
         _fwPickedIndex = _board != null && _fwPlate != null && _board.IndexOf(_fwPlate) is int at && at >= 0 ? MemberCount + at : -1;
         if (_fwPickedIndex < 0) _fwPlate = null;
         var styles = new MeshStyle[count];
-        if (Step == 2 && _rvMembers.Count > 0)
+        if (_rvMembers.Count > 0)
         {
-            // ③ 콘크리트 줄 · 미산출 부재(R59): 그 부재만 진하게 · 나머지 부재는 윤곽선 · 판은 숨김(ReviewShown).
+            // ③ 콘크리트 줄 · 미산출 부재(R59) · 문제 딱지(R63b — ② 도): 그 부재만 진하게 · 나머지 부재는 윤곽선 · 판은 숨김(③ ReviewShown) · 윤곽선(②).
             for (int i = 0; i < MemberCount; i++) styles[i] = _rvMembers.Contains(_members[i].Id) ? MeshStyle.Top : MeshStyle.Ghost;
+            for (int i = MemberCount; i < count; i++) styles[i] = MeshStyle.Ghost;
         }
         else if (_board != null && ((Step == 2 ? _rvFormLine != null : _fwPicked != null) || _fwPickedIndex >= 0))
         {
@@ -228,6 +229,7 @@ public sealed partial class PlacePartView
     }
 
     private long? _fwFocus;     // [완료]의 산출식 확인 창이 보여 주는 부재(② 에서 — 흰 막으로 덮는다)
+    private int _changedCycle;  // «모양이 바뀐 판» 딱지를 누를 때마다 다음 판(R63b)
 
     /// <summary>
     /// 그 부재를 고른 채 그림 가운데에 보인다(산출식 확인 창이 부재를 하나씩 띄울 때). 0 = 풀기.
@@ -258,9 +260,11 @@ public sealed partial class PlacePartView
         var piece = PieceAt(index);
         _fwPlate = piece.Lead;
         _fwMoveLead = null;                       // 다른 판을 찍으면 옮길 줄 고르기는 그만둔다(R55b)
+        _rvMembers.Clear();                       // 문제 딱지로 고른 부재는 푼다(R63b)
         _fwPicked = _board.RowOf(piece);
         RefreshAll();
         if (_fwPicked is { } key && _fwRowViews.TryGetValue(key, out var view)) view.row.BringIntoView();
+        FollowPiece(piece);   // Revit 에서도 그 판의 부재(R61a)
     }
 
     // 표에서 줄을 골랐다(또는 Esc 로 풀었다): 찍은 판은 푼다. 줄을 고르면 그 줄의 판이 다 보이게 화면을 맞춘다(JACK 2026-10-21 «포커싱도»).
@@ -270,7 +274,9 @@ public sealed partial class PlacePartView
         if (key is { } target && _fwMoveLead != null) { MoveTo(target); return; }
         _fwPicked = key;
         _fwPlate = null;
+        _rvMembers.Clear();                       // 문제 딱지로 고른 부재는 푼다(R63b — Esc 도 이 길)
         RefreshAll();
+        if (key == null) CancelFollow();   // Esc 로 풀었다 — 기다리던 따라가기도 버린다(R61a 설치 전 검토 L1)
         if (key is { } && _board != null)
         {
             // 그 줄 몫만(통째로 그 줄인 판 + 덧그린 몫 — 이은 외벽 판 전체로 멀어지지 않게 · JACK 2026-10-23).
@@ -280,6 +286,8 @@ public sealed partial class PlacePartView
             for (int i = 0; i < _fwOverlay.Count; i++)
                 if (FormworkShown(OverlayStart + i)) box = box.With(_fwOverlay[i].mesh.Box);
             if (!box.IsEmpty) _view3d.ZoomTo(box, margin: RowZoomMargin, minWidth: RowZoomMinWidth);
+            // Revit 에서도 그 줄 몫의 부재(R61a — 거름으로 숨긴 판의 부재도 · 상자는 보이는 몫). 옮기기 갈래는 위에서 돌아갔다.
+            FollowLater(OwnersOf(_board.PiecesOfRow(key.Value.type, key.Value.group)), box);
         }
     }
 
@@ -912,6 +920,7 @@ public sealed partial class PlacePartView
         // 경고 딱지: 대응표 줄이 없어 3D 에 칠하지 않는 틈(아래 콘크리트와 너무 가까운 밑면 — 세지 않음 · core R42 M-3) ·
         // 엑셀에서 한 줄로 잇지 못한 자리(같은 평면에 맞닿았는데 대응표의 종류가 다르다 — JACK 2026-10-15: 잇지 않고 알린다). 종류를 바꿀 때마다 다시 센다.
         _fwWarnings.Children.Clear();
+        foreach (var issue in _issues) _fwWarnings.Children.Add(IssueChip(issue, new Thickness(0, 4, 6, 0)));   // 모델의 문제(R63b) — 누르면 그 부재
         if (gaps > 0)
             _fwWarnings.Children.Add(WarnChip($"그림에 없는 틈 {gaps}곳",
                 "틈 = 아래 콘크리트와 너무 가까워 거푸집을 댈 수 없는 밑면입니다(세지 않음 · 대응표 줄이 없어 3D 에 칠하지 않습니다).", "fw.warn.gaps"));
@@ -952,8 +961,13 @@ public sealed partial class PlacePartView
         // 찾았지만 모양이 바뀐 뺀 판(core-verify R48 설치 전 M3): 일부 조각만 찾음 · 빠진 넓이가 뺄 때와 5% 넘게 다름.
         var check = _board.DropCheck;
         int kindPartial = _board.KindCheck.Partial.Count;
-        if (check.Changed + kindPartial > 0)
-            _fwWarnings.Children.Add(WarnChip($"모양이 바뀐 판 {check.Changed + kindPartial}장",
+        var changedLeads = check.Partial.Concat(check.Resized).Distinct().ToList();
+        if (changedLeads.Count > 0)
+            _fwWarnings.Children.Add(WarnButton($"⚠ 모양이 바뀐 판 {check.Changed + kindPartial}",
+                "전에 지운 판인데 모델이 바뀌어 넓이가 달라졌습니다. 누르면 그 판(여럿이면 차례로) — 다르면 [되살리기] 뒤 다시 지우세요.",
+                "fw.warn.changed", () => PickDropped(changedLeads[_changedCycle++ % changedLeads.Count]), new Thickness(0, 4, 6, 0)));
+        else if (kindPartial > 0)
+            _fwWarnings.Children.Add(WarnChip($"모양이 바뀐 판 {kindPartial}장",
                 (check.Partial.Count > 0 ? $"일부 조각만 찾은 판 {check.Partial.Count}장 — 찾은 조각만 빠지고 나머지는 다시 셉니다.\n" : "") +
                 (kindPartial > 0 ? $"일부 조각만 찾은 Revit 판 종류 {kindPartial}장 — 찾은 조각만 그 종류이고 나머지는 줄의 종류입니다.\n" : "") +
                 (check.Resized.Count > 0 ? $"빠진 넓이가 뺄 때와 다른 판 {check.Resized.Count}장 — 이웃 부재가 바뀌어 판이 커지거나 줄었습니다.\n" : "") +
@@ -1094,9 +1108,11 @@ public sealed partial class PlacePartView
         var piece = _board.Pieces[at];
         _fwPlate = piece.Lead;
         _fwMoveLead = null;
+        _rvMembers.Clear();
         RefreshAll();
         // 보기 거르기(종류 · 층 · 숨긴 부재)로 빠진 판이면 화면은 그대로 둔다 — 안 보이는 판으로 맞추지 않는다(설치 전 검토 L2 · PickRow 와 같이).
         if (!piece.Mesh.Box.IsEmpty && FormworkShown(MemberCount + at)) _view3d.ZoomTo(piece.Mesh.Box, margin: RowZoomMargin, minWidth: RowZoomMinWidth);
+        FollowPiece(piece);   // R61a
         if (_fwDropLines.TryGetValue(lead, out var line)) line.BringIntoView();
     }
 

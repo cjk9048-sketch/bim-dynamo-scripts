@@ -77,8 +77,8 @@ public sealed partial class PlacePartView
     /// <summary>지금 걸음: 0 = ① 부위 · 중분류 · 1 = ② 거푸집면 설정.</summary>
     public int Step { get; private set; }
 
-    /// <summary>[닫기] · [처음 상태로 되돌리고 닫기].</summary>
-    public event Action? Close, RevertAll;
+    /// <summary>[닫기]. (R62 — [처음 상태로 되돌리고 닫기]는 없앴다: 창에서 한 일은 누를 때마다 Revit 실행 취소 목록의 한 줄 — JACK 2026-10-26.)</summary>
+    public event Action? Close;
 
     /// <summary>[다음 단계] — 부르는 쪽이 거푸집을 재어 ShowFormwork 로 넘긴다(남은 부재가 있으면 한 번 더 눌러야 온다).</summary>
     public event Action? Next;
@@ -98,6 +98,7 @@ public sealed partial class PlacePartView
         _shift = editor.Levels.Count > 0 ? editor.Levels[0].Shown - editor.Levels[0].Z : 0;
 
         var dock = new DockPanel { Margin = new Thickness(18, 14, 18, 14) };
+        _dock = dock;
         var root = new Border
         {
             Background = _ui["Bg"], Resources = _ui.Resources, Child = dock, UseLayoutRounding = true, SnapsToDevicePixels = true,
@@ -135,8 +136,8 @@ public sealed partial class PlacePartView
         }
 
         // ── 아래: 한 줄 알림 · 단추(걸음마다 바뀐다) ──
-        //   ① [되돌리기] [처음 상태로 되돌리고 닫기] [닫기] [다음 단계 →]
-        //   ② [← 이전 단계] ……………………… [처음 상태로 되돌리고 닫기] [닫기] [완료]
+        //   ① [되돌리기] [닫기] [다음 단계 →]
+        //   ② [← 이전 단계] ……………………… [닫기] [완료]
         var foot = new DockPanel { Margin = new Thickness(2, 12, 0, 0), LastChildFill = true };
         Button FootButton(Button button, double right = 8)
         {
@@ -146,8 +147,8 @@ public sealed partial class PlacePartView
         }
         _next = FootButton(_ui.Button("다음 단계  →", "BtnPrimary", "거푸집면 설정으로 넘어갑니다(넣은 값은 이미 모델에 적혀 있습니다).", "btn.nextStep"), 0);
         _finish = FootButton(_ui.Button("완료", "BtnPrimary", "거푸집 객체를 만들고 산출근거 엑셀을 저장합니다.", "btn.finish", UiTheme.IconCheck), 0);
-        // ② → ③ 산출서 확인(R59): 산출식 · 부재 이름 · 거푸집 속성을 모델에 적고(창의 그룹 안) 엑셀과 같은 산출근거를 본다.
-        _review = FootButton(_ui.Button("다음 단계  →", "BtnPrimary", "산출식 · 부재 이름 · 거푸집 속성을 모델에 적고 산출근거를 봅니다(이 창을 연 뒤 한 것은 «처음 상태로»로 되돌릴 수 있습니다).", "btn.review"), 0);
+        // ② → ③ 산출서 확인(R59): 산출식 · 부재 이름 · 거푸집 속성을 모델에 적고(Revit 실행 취소 한 줄 «DH 산출서 준비» — R62) 엑셀과 같은 산출근거를 본다.
+        _review = FootButton(_ui.Button("다음 단계  →", "BtnPrimary", "산출식 · 부재 이름 · 거푸집 속성을 모델에 적고 산출근거를 봅니다(Revit 실행 취소로 되돌릴 수 있습니다).", "btn.review"), 0);
         foreach (var primary in new[] { _next, _finish, _review })
         {
             primary.MinWidth = 120;
@@ -155,11 +156,9 @@ public sealed partial class PlacePartView
         }
         var close = FootButton(_ui.Button("닫기", "BtnSecondary", "넣은 값은 이미 모델에 적혀 있습니다. 창만 닫습니다.", "btn.close"));
         close.MinWidth = 96;
-        var revert = FootButton(_ui.Button("처음 상태로 되돌리고 닫기", "BtnSecondary", "이 창을 연 뒤에 넣거나 고친 것을 모두 없던 일로 하고 닫습니다.", "btn.revert"));
         _undo = FootButton(_ui.Button("되돌리기", "BtnSecondary", "방금 한 일을 되돌립니다(Ctrl+Z).", "btn.undo", UiTheme.IconUndo));
         _back = FootButton(_ui.Button("←  이전 단계", "BtnSecondary", "부위 · 중분류로 돌아갑니다(거푸집에서 고친 것은 그대로 남습니다).", "btn.prevStep"), 14);
         close.Click += (_, _) => Close?.Invoke();
-        revert.Click += (_, _) => RevertAll?.Invoke();
         // 되돌리기는 글자판을 가져가지 않는다 — 가져가면 적다 만 목록 칸이 먼저 적히고, 되돌리기가 그것을 되돌린다(revit-verify R49 M1).
         _undo.Focusable = false;
         _undo.Click += (_, _) =>
@@ -181,7 +180,7 @@ public sealed partial class PlacePartView
         };
         _finish.Click += (_, _) => { if (!Busy) Finish?.Invoke(); };
         _review.Click += (_, _) => { if (!Busy) Review?.Invoke(); };
-        foreach (var button in new[] { _next, _finish, _review, close, revert, _undo })
+        foreach (var button in new[] { _next, _finish, _review, close, _undo })
         {
             DockPanel.SetDock(button, Dock.Right);
             foot.Children.Add(button);
@@ -192,6 +191,9 @@ public sealed partial class PlacePartView
         foot.Children.Add(_status);
         DockPanel.SetDock(foot, Dock.Bottom);
         dock.Children.Add(foot);
+        _noticeBar = BuildNoticeBar();
+        DockPanel.SetDock(_noticeBar, Dock.Top);
+        dock.Children.Add(_noticeBar);
 
         // ── 왼쪽: 구조물 종류 · 부위 · 중분류 카테고리(② 에서는 거푸집 대응표로 바뀐다) ──
         _structure = _ui.Combo("구조물을 고르면 그 구조물의 대표 부위와 중분류 추천이 나옵니다. 부재에 넣은 값은 바뀌지 않습니다.", "combo.structure");
@@ -427,7 +429,8 @@ public sealed partial class PlacePartView
     public Window BuildWindow()
     {
         var area = SystemParameters.WorkArea;
-        double minWidth = Math.Min(1180, area.Width), minHeight = Math.Min(800, area.Height);
+        // 최소 크기는 줄여 쓸 수 있게(R62 — 창을 띄운 채 Revit 도 쓰므로 · 처음 크기는 그대로 크게 — JACK 2026-10-26 «지금처럼 크게 + 기억»).
+        double minWidth = Math.Min(900, area.Width), minHeight = Math.Min(620, area.Height);
         var window = new Window
         {
             Title = "DH 수량산출",
@@ -565,7 +568,7 @@ public sealed partial class PlacePartView
         var addPart = AddLine(_newPart, "btn.addPart", () =>
         {
             string text = _newPart.Text;
-            if (Do(() => _editor.Selection.Count > 0 ? _editor.SetPart(text) : _editor.AddPart(text))) _newPart.Text = "";
+            Do(() => _editor.Selection.Count > 0 ? _editor.SetPart(text) : _editor.AddPart(text), ok => { if (ok) _newPart.Text = ""; });
         });
         DockPanel.SetDock(addPart, Dock.Bottom);
         parts.Children.Add(addPart);
@@ -687,7 +690,7 @@ public sealed partial class PlacePartView
     {
         string name = ZonePlan.CleanName(text);
         bool known = _editor.Places.Any(p => p.Name == name);
-        if (Do(() => _editor.Selection.Count > 0 || known ? _editor.SetPlace(name) : _editor.AddPlace(name))) SetPlaceText("");
+        Do(() => _editor.Selection.Count > 0 || known ? _editor.SetPlace(name) : _editor.AddPlace(name), ok => { if (ok) SetPlaceText(""); });
     }
 
     private void SetPlaceText(string text)
@@ -1386,21 +1389,21 @@ public sealed partial class PlacePartView
         if (p.Locked > 0)
             _statusFlags.Children.Add(Chip("status.locked", Swatch(ZonePalette.Locked.r, ZonePalette.Locked.g, ZonePalette.Locked.b, 6), "고칠 수 없음", p.Locked,
                 "고칠 수 없는 부재(그룹 안 · 다른 사용자 · 속성 칸 없음)를 고릅니다.", m => m.State == PickState.Locked, "고칠 수 없는 부재"));
-        // 열 때 한 빠른 모델 검증(R54): 상태만 보이는 딱지(누르는 단추가 아님 — 고치는 곳은 리본의 [모델 검증] · 상태와 단추 따로 JACK 1013).
-        // 이 창에서 «겹친 자리»를 바꿨으면 기준이 달라졌다는 것을 덧붙인다(엑셀 메모는 [완료] 때 지금 순위로 다시 검사한다).
-        string check = !_rankChanged ? ModelCheck
-                     : (ModelCheck.Length > 0 ? ModelCheck + " · " : "모델 검증: ") + "겹친 자리를 바꿈 — [모델 검증]으로 다시 확인";
-        if (check.Length > 0)
+        // 모델의 문제(R63b — 열 때 빠른 모델 검증 · ② 에서 본 것): 짧은 딱지 · 누르면 그 부재를 고른다(고치는 곳은 리본의 [모델 검증] · ① 의 부위).
+        foreach (var issue in _issues) _statusFlags.Children.Add(IssueChip(issue, new Thickness(0, 0, 5, 4)));
+        // 검사를 못 했거나 끝까지 못 본 것 · 이 창에서 «겹친 자리»를 바꿈(기준이 달라짐 — 엑셀 메모는 [완료] 때 지금 순위로 다시 검사한다): 보이기만 하는 딱지.
+        void NotePill(string say, string tip, string id)
         {
-            var text = new TextBlock { Text = check, FontSize = 12, Foreground = _warn, VerticalAlignment = VerticalAlignment.Center };
-            var pill = _ui.Pill(text, "WarnBg");
+            var pill = _ui.Pill(new TextBlock { Text = say, FontSize = 12, Foreground = _warn, VerticalAlignment = VerticalAlignment.Center }, "WarnBg");
             pill.Margin = new Thickness(0, 0, 5, 4);
-            _ui.Mark(pill, "이 창을 열 때 빠르게 검사한 결과입니다 — 겹친 콘크리트 · 기준과 반대로 결합된 쌍은 산출식에 그대로 들어갑니다. 리본의 [모델 검증]으로 고친 뒤 다시 [수량산출]을 하면 맞는 수량입니다.", "status.modelCheck");
+            _ui.Mark(pill, tip, id);
             _statusFlags.Children.Add(pill);
         }
+        if (ModelCheck.Length > 0) NotePill(ModelCheck, "이 창을 열 때 한 빠른 모델 검증 — 리본의 [모델 검증]으로 확인하세요.", "status.modelCheck");
+        if (_rankChanged) NotePill("겹친 자리 바꿈", "이 창에서 «겹친 자리»를 바꿨습니다 — 리본의 [모델 검증]으로 다시 확인하세요.", "status.rankChanged");
     }
 
-    /// <summary>열 때 한 빠른 모델 검증의 글(R54 — 부르는 쪽이 넣는다 · "" = 걸린 것 없음). 위 띠에 상태 딱지로 보인다.</summary>
+    /// <summary>열 때 한 빠른 모델 검증에서 딱지(Issues)로 못 보인 글(검사 오류 · 끝까지 못 봄 — R63b · "" = 없음). 위 띠에 상태 딱지로 보인다.</summary>
     public string ModelCheck { get; set; } = "";
     private bool _rankChanged;      // 이 창에서 «겹친 자리»를 바꿨다
 
@@ -1446,27 +1449,39 @@ public sealed partial class PlacePartView
         _view3d.Refresh();
     }
 
-    // 모델에 적는 일 하나: 그동안 다시 눌리지 않게 막고(적는 중에 Revit 의 창이 뜨면 우리 창이 눌릴 수 있다), 끝나면 화면을 맞춘다.
-    private bool Do(Func<bool> work)
+    /// <summary>
+    /// 창에서 모델을 건드리는 일을 돌리는 길(R62): 기본은 그 자리에서 · 명령은 Revit 이 손이 빌 때 도는 길(ExternalEvent)을 넣는다.
+    /// ① 의 일 하나하나가 Revit 실행 취소 목록의 한 줄(«DH 부위·중분류»).
+    /// </summary>
+    public IApiRunner Runner { get; set; } = DefaultRunner();
+
+    /// <summary>새 창의 처음 길(시험이 «나중에 도는 길»로 바꾼다 — 출하 길을 타게 · R62 계획 검토 M2).</summary>
+    public static Func<IApiRunner> DefaultRunner { get; set; } = () => ImmediateRunner.Instance;
+
+    private const string EditUndo = "DH 부위·중분류";
+
+    // 모델에 적는 일 하나: 넣을 때 바로 창을 잠그고(그동안 다시 눌리지 않게 — 적는 중에 Revit 의 창이 뜨면 우리 창이 눌릴 수 있다), 끝나면 풀고 화면을 맞춘다.
+    // 바로 돌면 그 결과를, 나중에 돌면(Revit 이 다른 작업 중) true(넣음)를 돌려준다 — 결과에 따른 일은 then 에서.
+    private bool Do(Func<bool> work, Action<bool>? then = null)
     {
         if (Busy) return false;
+        if (Stale) { ShowMessage(StaleSay, true); return false; }
         _busy = true;
-        var before = Mouse.OverrideCursor;
-        Mouse.OverrideCursor = Cursors.Wait;
-        Root.IsHitTestVisible = false;      // 3D 그림 · 목록 · 단추가 모두 눌리지 않는다(창의 X 는 닫기 처리기가 막는다)
-        bool ok = false;
-        string failure = "";
-        try { ok = work(); }
-        catch (Exception ex) { failure = ex.Message; }
-        finally
+        Lock(true);                         // 3D 그림 · 목록 · 단추가 모두 눌리지 않는다(위 띠의 [취소]만 — 창의 X 는 닫기 처리기가 막는다)
+        Root.Cursor = Cursors.Wait;         // 창 안만 — 기다리는 동안 Revit 쪽 마우스는 그대로(계획 검토)
+        bool ok = false, finished = false;
+        Runner.Run(EditUndo, () => ok = work(), error =>
         {
-            Root.IsHitTestVisible = true;
-            Mouse.OverrideCursor = before;
+            Lock(false);
+            Root.Cursor = null;
             _busy = false;
-        }
-        RefreshAll();
-        if (failure.Length > 0) ShowMessage("오류가 났습니다: " + failure, true);
-        return ok;
+            finished = true;
+            RefreshAll();
+            if (error is OperationCanceledException) ShowMessage("넣지 않았습니다(취소).");
+            else if (error != null) ShowMessage("오류가 났습니다: " + error.Message, true);
+            then?.Invoke(ok && error == null);
+        });
+        return finished ? ok : true;
     }
 
     /// <summary>
@@ -1491,10 +1506,20 @@ public sealed partial class PlacePartView
 
     // ── 시험에서 쓰는 길(화면에서 누르는 것과 같은 길) ───────────────────────────
 
+    // 넣고(Do — 출하 길 그대로) 그 일이 끝날 때까지 디스패처를 돌린 뒤 결과(R62 — 나중에 도는 길에서도 시험이 결과를 보게).
+    private bool DoAndWait(Func<bool> work)
+    {
+        bool? result = null;
+        if (!Do(work, ok => result = ok)) return false;
+        for (int i = 0; result == null && i < 1000; i++)
+            System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+        return result == true;
+    }
+
     /// <summary>중분류 목록에서 그 이름을 골랐다(고른 부재에 넣는다).</summary>
-    public bool ClickPlace(string name) => Do(() => _editor.SetPlace(name));
+    public bool ClickPlace(string name) => DoAndWait(() => _editor.SetPlace(name));
     /// <summary>[단독객체]를 눌렀다.</summary>
-    public bool ClickNoPlace() => Do(_editor.SetNoPlace);
+    public bool ClickNoPlace() => DoAndWait(_editor.SetNoPlace);
     /// <summary>중분류 칸에 이름을 적고 Enter(또는 [넣기]) — 고른 것이 없고 새 이름이면 목록에만 보탠다.</summary>
     public void TypePlace(string text)
     {
@@ -1506,9 +1531,9 @@ public sealed partial class PlacePartView
     /// <summary>중분류 칸을 펼치면 나오는 이름(이미 만든 것 → 추천 차례).</summary>
     public IReadOnlyList<string> PlaceChoices => _place.Items.OfType<ComboBoxItem>().Select(i => TextSearch.GetText(i)).ToList();
     /// <summary>부위 단추를 눌렀다.</summary>
-    public bool ClickPart(string name) => Do(() => _editor.SetPart(name));
+    public bool ClickPart(string name) => DoAndWait(() => _editor.SetPart(name));
     /// <summary>[되돌리기]를 눌렀다.</summary>
-    public bool ClickUndo() => Do(_editor.Undo);
+    public bool ClickUndo() => DoAndWait(_editor.Undo);
     public string RemainText => _remain.Text;
     public string CountsText => _countsText;
     public string PickedText => _pickedText;

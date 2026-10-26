@@ -14,9 +14,15 @@ public static class FormworkLabels
     public const double Tolerance = 0.006;
 
     /// <summary>판 하나의 숫자들(자리 · 글).</summary>
-    public static List<(Vec3 at, string text)> Of(FormworkUnit unit, Vec3 origin)
+    public static List<(Vec3 at, string text)> Of(FormworkUnit unit, Vec3 origin) => Spots(unit, origin).Select(s => (s.at, s.text)).ToList();
+
+    /// <summary>
+    /// 판 하나의 숫자들과 그 숫자가 재는 선분(장면 좌표 — 3D 에서 숫자를 누르면 그 선을 강조한다 · R61c JACK 2026-10-26).
+    /// 판 가운데의 식 딱지는 선분이 없다(from = to = at).
+    /// </summary>
+    public static List<(Vec3 at, string text, Vec3 from, Vec3 to)> Spots(FormworkUnit unit, Vec3 origin)
     {
-        var labels = new List<(Vec3, string)>();
+        var labels = new List<(Vec3, string, Vec3, Vec3)>();
         var regions = FormworkPlate.PlanOf(unit).Regions;
         if (Product(unit.Formula) is { } ab && regions != null)
         {
@@ -31,8 +37,8 @@ public static class FormworkLabels
                                   .OrderBy(e => Math.Min((e.a - fa.Item1).Length, (e.b - fa.Item1).Length)).Select(e => ((Vec3, Vec3)?)e).FirstOrDefault();
                 if (second is { } fb)
                 {
-                    labels.Add(((fa.Item1 + fa.Item2) * 0.5 - origin, ab.textA));
-                    labels.Add(((fb.Item1 + fb.Item2) * 0.5 - origin, ab.textB));
+                    labels.Add(((fa.Item1 + fa.Item2) * 0.5 - origin, ab.textA, fa.Item1 - origin, fa.Item2 - origin));
+                    labels.Add(((fb.Item1 + fb.Item2) * 0.5 - origin, ab.textB, fb.Item1 - origin, fb.Item2 - origin));
                     return labels;
                 }
             }
@@ -42,7 +48,7 @@ public static class FormworkLabels
         if (points.Count == 0 || unit.Formula.Length == 0) return labels;
         var box = Box3.Empty;
         foreach (var p in points) box = box.With(V(p));
-        labels.Add((box.Center - origin, Pretty(unit.Formula)));
+        labels.Add((box.Center - origin, Pretty(unit.Formula), box.Center - origin, box.Center - origin));
         return labels;
     }
 

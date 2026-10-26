@@ -61,7 +61,7 @@ public sealed class DecompResult
 /// 만든 식은 반드시 모델 체적과 검산하고, 어긋나면 Ok=false 로 돌려 사람이 보게 한다.
 /// 못 쪼개는 모양(원뿔·돔 등)은 추측하지 않고 사유와 함께 예외로 넘긴다.
 /// </summary>
-public static class FormulaDecomposer
+public static partial class FormulaDecomposer
 {
     private const int MaxFrames = 6;
     private const int MaxHeightTerms = 24;         // 이보다 긴 식은 사람이 검산할 수 없다
@@ -77,6 +77,7 @@ public static class FormulaDecomposer
     private sealed record Term(string Text, double Exact, bool IsRect, bool Sliver = false)
     {
         public int Off { get; init; }
+        public TermGeo? Geo { get; init; }       // 기록할 때만(Explain — R61b): 이 항의 도형 · 숫자 자리
     }
 
     // 치수가 mm 에 떨어지면 0, 아니면 1. 좌표의 잔 흔들림(eps 안)은 떨어진 것으로 본다.
@@ -100,6 +101,8 @@ public static class FormulaDecomposer
         public bool TextOk { get; init; }        // 그 값이 이 입체의 체적과 같다고 볼 수 있는가(둘째 자리에서 같거나 ±1% 이내)
         public bool Close { get; init; }         // 그 값이 체적에 바짝 붙는가(도면 치수 그대로 적힌 식) — 고를 때 먼저 본다
         public bool Precise { get; init; }       // 산출서 자릿수로는 ±1% 에 못 들어, 긴 숫자 그대로(정밀하게) 적은 식
+        public List<(TermRole role, string text, TermGeo geo)>? Shapes { get; init; }   // 기록할 때만(R61b): 항마다의 도형(적힌 차례)
+        public Basis? Frame { get; init; }       // 기록할 때만: 도형의 좌표틀
     }
 
     /// <param name="solids">부재의 입체들.</param>
@@ -111,22 +114,34 @@ public static class FormulaDecomposer
     /// 부재만 긴 숫자 그대로(정밀하게) 적는다. false: 처음부터 정밀하게만 적는다.
     /// </param>
     public static DecompResult Decompose(IReadOnlyList<ShapeSolid> solids, double precision = 1e-7, double thickness = 0,
-        bool sheetNumbers = true)
+        bool sheetNumbers = true) => Run(solids, precision, thickness, sheetNumbers, null);
+
+    // kept = 기록할 때(Explain — R61b) 돌려준 쪽 판의 입체마다 후보와 Localized 가 뺀 꼭짓점(두 번 돌면 돌려준 쪽 것만 — 계획 검토 L17).
+    private static DecompResult Run(IReadOnlyList<ShapeSolid> solids, double precision, double thickness, bool sheetNumbers,
+        List<(Candidate c, double[] o)>? kept)
     {
         double vol = solids.Sum(s => s.Volume);
         if (solids.Count == 0) return Fail("입체가 없음", vol);
         if (!solids.All(WellFormed)) return Fail("형상 자료가 온전하지 않음", vol);
 
-        var first = DecomposeAll(solids, precision, thickness, sheetNumbers, vol, out bool onlyTextFailed);
+        var firstParts = kept != null ? new List<(Candidate c, double[] o)>() : null;
+        var first = DecomposeAll(solids, precision, thickness, sheetNumbers, vol, out bool onlyTextFailed, firstParts);
         // 모양은 맞는데 산출서 자릿수로 적은 식의 합계가 ±1% 에 못 드는 경우(입체마다는 들었어도 더하면 넘을 수 있다):
         // 전부 정밀하게 적어 다시 본다. 그래도 안 되면 처음 식을 든 채 예외다.
-        if (!sheetNumbers || !onlyTextFailed) return first;
-        var second = DecomposeAll(solids, precision, thickness, false, vol, out _);
-        return second.Ok ? second : first;
+        if (!sheetNumbers || !onlyTextFailed)
+        {
+            if (firstParts != null) kept!.AddRange(firstParts);
+            return first;
+        }
+        var secondParts = kept != null ? new List<(Candidate c, double[] o)>() : null;
+        var second = DecomposeAll(solids, precision, thickness, false, vol, out _, secondParts);
+        var (result, parts) = second.Ok ? (second, secondParts) : (first, firstParts);
+        if (parts != null) kept!.AddRange(parts);
+        return result;
     }
 
     private static DecompResult DecomposeAll(IReadOnlyList<ShapeSolid> solids, double precision, double thickness, bool sheet,
-        double vol, out bool onlyTextFailed)
+        double vol, out bool onlyTextFailed, List<(Candidate c, double[] o)>? keep = null)
     {
         onlyTextFailed = false;
         double eps = Math.Max(1e-6, 10 * precision);
@@ -135,9 +150,10 @@ public static class FormulaDecomposer
         for (int i = 0; i < solids.Count; i++)
         {
             var s = solids[i];
-            var c = DecomposeSolid(Localized(s), eps, precision, thickness, sheet, out string reason);
+            var c = DecomposeSolid(Localized(s, out double[] offset), eps, precision, thickness, sheet, out string reason);
             if (c == null) return Fail(reason, vol);
             parts.Add(c);
+            keep?.Add((c, offset));
             // 모양을 제대로 읽었는지는 입체마다 따로 본다(여럿을 더한 합계만 보면 한 입체의 어긋남이 묻힌다).
             string which = solids.Count > 1 ? $"(입체 {i + 1})" : "";
             if (!c.ShapeOk && shapeFail.Length == 0) shapeFail = $"검산 불일치{which}: 식 {N(c.Exact)} / 모델 {N(s.Volume)}";
@@ -271,8 +287,9 @@ public static class FormulaDecomposer
     /// 입체를 자기 꼭짓점 하나를 원점으로 옮긴 사본. 모델이 원점에서 멀리 있어도(큰 좌표끼리 빼다가)
     /// 자릿수를 잃지 않게 하고, 같은 모양이면 어디에 놓여 있든 같은 식이 나오게 한다.
     /// </summary>
-    private static ShapeSolid Localized(ShapeSolid s)
+    private static ShapeSolid Localized(ShapeSolid s, out double[] offset)
     {
+        offset = new double[3];
         double[]? o = null;
         foreach (var f in s.Faces)
         {
@@ -285,6 +302,7 @@ public static class FormulaDecomposer
         }
         o ??= s.Faces.Select(f => f.Origin).FirstOrDefault(p => p != null);
         if (o == null) return s;
+        offset = o;   // 기록할 때 도형을 모델 좌표로 돌려놓는 데 쓴다(R61b)
         double[] Mv(double[] p) => new[] { p[0] - o[0], p[1] - o[1], p[2] - o[2] };
         return new ShapeSolid
         {
@@ -443,10 +461,12 @@ public static class FormulaDecomposer
                 holeFine.Insert(0, outerLoop.Derived);
             }
 
-            foreach (var (outer, holesTurned, rank) in Frames(outerPoly, holePolys, eps))
-                foreach (var c0 in Options(outer, outerLoop.Derived, holesTurned, holeFine, curvePlus, curveMinus, len, eps, rank, notes))
+            // 기록할 때(R61b): 후보가 뚜껑의 좌표틀을 지닌다 — 원 · 호 항은 처음부터 이 틀 · 다각형 항은 Options 가 돌림을 되돌려 이 틀로(계획 검토 H4).
+            Basis? frame = _record ? CapFrame(n, Dot(cap.Origin!, n)) : null;
+            foreach (var (outer, holesTurned, rank, back) in Frames(outerPoly, holePolys, eps))
+                foreach (var c0 in Options(outer, outerLoop.Derived, holesTurned, holeFine, curvePlus, curveMinus, len, eps, rank, notes, back))
                 {
-                    var c = Scored(c0, s.Volume, shapeTol);
+                    var c = Scored(frame != null ? c0 with { Frame = frame } : c0, s.Volume, shapeTol);
                     if (c != null && (best == null || Better(c, best, thickness, eps))) best = c;
                 }
         }
@@ -573,6 +593,7 @@ public static class FormulaDecomposer
                     if (notes.Work > MaxHeightWork) { notes.TooLong = true; return best; }
                     var c0 = HeightFieldIn(Rotate(tops, a), Rotate(bots, a), eps, notes, vertical);
                     if (c0 == null || Math.Abs(c0.Exact - s.Volume) > tol) continue;
+                    if (_record) c0 = Unrotated(c0, a, u, v, n);   // R61b: 돌린 평면 틀 → 이 축의 틀
                     var c = Scored(c0, s.Volume, tol);
                     if (c == null) continue;
                     // 적히는 글자의 물량도 모델과 맞는(±1%) 식만 뽑는다.
@@ -699,13 +720,14 @@ public static class FormulaDecomposer
         // 같은 조각은 (조각)*개수로 묶고, 큰 것부터 적는다. 괄호는 /2*4 를 /(2*4)로 읽지 않게 하려는 것.
         // 크기는 '적힌 글자의 값'으로 견준다(같으면 글자순) — 좌표의 잔 흔들림이나 모델이 놓인 방향에 좌우되지 않게.
         var groups = terms.GroupBy(t => t.Text)
-            .Select(g => (text: g.Count() > 1 ? $"({g.Key})*{g.Count()}" : g.Key, exact: g.Sum(t => t.Exact)))
+            .Select(g => (text: g.Count() > 1 ? $"({g.Key})*{g.Count()}" : g.Key, exact: g.Sum(t => t.Exact), members: g.ToList()))
             .OrderByDescending(g => Shown(g.text, g.exact)).ThenBy(g => g.text, StringComparer.Ordinal).ToList();
         if (groups.Count > MaxHeightTerms) { notes.TooLong = true; return null; }
         return new Candidate(string.Join("+", groups.Select(g => g.text)), groups.Sum(g => g.exact),
             vertical ? "넓이×평균높이" : "넓이×평균두께(옆에서 봄)", groups.Count, 0, 0, 0)
         {
             Off = terms.Sum(t => t.Off),
+            Shapes = _record ? HeightShapes(groups.Select(g => (g.text, g.members))) : null,
         };
     }
 
@@ -745,6 +767,8 @@ public static class FormulaDecomposer
             terms.Add(new Term($"{plan}*{F(h)}", (w0 + w1) / 2 * dy * h, true, sliver)
             {
                 Off = OffGrid(wide, eps) + OffGrid(dy, eps) + OffGrid(h, eps) + (narrowPrinted ? OffGrid(narrow, eps) : 0),
+                Geo = _record ? FlatCellGeo(c, Math.Abs(w0 - w1) <= eps ? F(w0) : null, Math.Abs(w0 - w1) <= eps ? null : F(wide),
+                                            narrowPrinted ? F(narrow) : null, F(dy), F(h)) : null,
             });
             return true;
         }
@@ -783,6 +807,7 @@ public static class FormulaDecomposer
             terms.Add(new Term($"{Pair(w, dy)}{Times(hs, 1, eps)}", w * dy * hs.Average(), true, Zero(w) || Zero(dy) || TinyHeight(hs, eps))
             {
                 Off = OffGrid(w, eps) + OffGrid(dy, eps) + OffHeights(hs),
+                Geo = _record ? CellPolyGeo(c, new[] { new P2(xl0, c.Y0), new P2(xl0 + w, c.Y0), new P2(xl1 + w, c.Y1), new P2(xl1, c.Y1) }, F(w), F(dy), eps) : null,
             });
         }
 
@@ -793,6 +818,7 @@ public static class FormulaDecomposer
             terms.Add(new Term($"{Pair(w, dy)}{Times(hs, 2, eps)}", w * dy / 2 * hs.Average(), false, Zero(w) || Zero(dy) || TinyHeight(hs, eps))
             {
                 Off = OffGrid(w, eps) + OffGrid(dy, eps) + OffHeights(hs),
+                Geo = _record ? CellPolyGeo(c, new[] { baseA, baseB, apex }, F(w), F(dy), eps) : null,
             });
         }
     }
@@ -831,25 +857,32 @@ public static class FormulaDecomposer
     // ================= 단면 × 길이 (떡가래) =================
 
     // --- 한 좌표틀에서 나올 수 있는 식들 ---
+    // back = 이 좌표틀(Frames 가 돌린 틀)의 점 → 뚜껑 틀(기록할 때 다각형 항의 도형을 옮긴다 — R61b · 원 · 호 항은 처음부터 뚜껑 틀).
     private static IEnumerable<Candidate> Options(List<P2> outer, bool outerFine, List<List<P2>> holes, List<bool> holeFine,
-        List<Term> curvePlus, List<Term> curveMinus, double len, double eps, int rank, Notes notes)
+        List<Term> curvePlus, List<Term> curveMinus, double len, double eps, int rank, Notes notes, Func<P2, P2> back)
     {
         var holeTerms = new List<Term>(curveMinus);
         for (int i = 0; i < holes.Count; i++)
         {
             var ht = Fewer(Slabs(holes[i], false, eps, holeFine[i]), Slabs(holes[i], true, eps, holeFine[i]));
             if (ht == null) yield break;
-            holeTerms.AddRange(ht);
+            holeTerms.AddRange(_record ? MapTerms(ht, back) : ht);
         }
 
         // 바깥 고리가 온전한 원이면 다각형 조각은 없다.
         var add = outer.Count >= 3 ? Fewer(Slabs(outer, false, eps, outerFine), Slabs(outer, true, eps, outerFine)) : new List<Term>();
+        if (add != null && _record) add = MapTerms(add, back);
         if (add != null && Build(add.Concat(curvePlus).ToList(), holeTerms, len, eps, rank, "네모 합", notes) is Candidate sum)
             yield return sum;
 
         if (outer.Count >= 3 && Rectilinear(outer, eps))
         {
             var (box, cuts) = Complement(outer, eps, outerFine);
+            if (_record)
+            {
+                if (box.Geo != null) box = box with { Geo = MapGeo(box.Geo, back) };
+                cuts = MapTerms(cuts, back);
+            }
             if (cuts.Count > 0 &&
                 Build(new List<Term> { box }.Concat(curvePlus).ToList(), cuts.Concat(holeTerms).ToList(), len, eps, rank, "큰 네모에서 빼기", notes) is Candidate cut)
                 yield return cut;
@@ -880,6 +913,7 @@ public static class FormulaDecomposer
         {
             Minus = minus.Count,
             Off = plus.Sum(t => t.Off) + minus.Sum(t => t.Off) + OffGrid(len, eps),
+            Shapes = _record ? PrismShapes(plus, minus, h, len) : null,
         };
     }
 
@@ -1006,21 +1040,22 @@ public static class FormulaDecomposer
                 // 옆변이 기울었으면 평행사변형(밑변*높이) — 값은 같지만 네모는 아니다.
                 bool upright = Math.Abs(q.XL0 - q.XL1) <= eps;
                 var t = swap ? RectTerm(h, w0, fine, eps) : RectTerm(w0, h, fine, eps);
+                if (_record) t = t with { Geo = SlabGeo(q, swap, upright ? "rect" : "para", null, null, T(h), T(w0)) };
                 terms.Add(upright ? t : t with { IsRect = false });
             }
             else if (narrow <= eps)
                 terms.Add(new Term($"{T(wide)}*{T(h)}/2", exact, false, Zero(wide) || Zero(h))
-                    { Off = OffGrid(wide, eps) + OffGrid(h, eps) });
+                    { Off = OffGrid(wide, eps) + OffGrid(h, eps), Geo = _record ? SlabGeo(q, swap, "tri", T(wide), null, T(h), null) : null });
             else if (T(wide) == T(narrow))
             {
                 // 찍으면 두 변이 같은 사다리꼴(한 변이 아주 조금 기운 네모)은 네모로 적는다. 값은 사다리꼴 그대로 검산한다.
                 string text = swap ? $"{T(h)}*{T(wide)}" : $"{T(wide)}*{T(h)}";
                 terms.Add(new Term(text, exact, true, Zero(wide) || Zero(h))
-                    { Off = OffGrid(wide, eps) + OffGrid(h, eps) });
+                    { Off = OffGrid(wide, eps) + OffGrid(h, eps), Geo = _record ? SlabGeo(q, swap, "near-rect", T(wide), null, T(h), null) : null });
             }
             else
                 terms.Add(new Term($"({T(wide)}+{T(narrow)})/2*{T(h)}", exact, false, Zero(narrow) || Zero(h))
-                    { Off = OffGrid(wide, eps) + OffGrid(narrow, eps) + OffGrid(h, eps) });
+                    { Off = OffGrid(wide, eps) + OffGrid(narrow, eps) + OffGrid(h, eps), Geo = _record ? SlabGeo(q, swap, "trap", T(wide), T(narrow), T(h), null) : null });
         }
         return terms;
     }
@@ -1065,20 +1100,27 @@ public static class FormulaDecomposer
                     else rects.Add(new[] { x0, x1, y0, y1 });
                 }
             }
-            var terms = rects.Select(r => swap ? RectTerm(r[3] - r[2], r[1] - r[0], fine, eps) : RectTerm(r[1] - r[0], r[3] - r[2], fine, eps)).ToList();
+            var terms = rects.Select(r =>
+            {
+                var t = swap ? RectTerm(r[3] - r[2], r[1] - r[0], fine, eps) : RectTerm(r[1] - r[0], r[3] - r[2], fine, eps);
+                return _record ? t with { Geo = RectGeo(r[0], r[1], r[2], r[3], swap, D(r[1] - r[0], fine, eps), D(r[3] - r[2], fine, eps)) } : t;
+            }).ToList();
             if (best == null || terms.Count < best.Count) best = terms;
         }
-        return (RectTerm(bx1 - bx0, by1 - by0, fine, eps), best!);
+        var whole = RectTerm(bx1 - bx0, by1 - by0, fine, eps);
+        if (_record) whole = whole with { Geo = RectGeo(bx0, bx1, by0, by1, false, D(bx1 - bx0, fine, eps), D(by1 - by0, fine, eps)) };
+        return (whole, best!);
     }
 
     // --- 변 방향마다 좌표틀 하나(긴 변부터). 바깥 다각형이 없으면(원) 구멍의 변 방향을 쓴다 ---
     // rank = 그 방향의 차례(0 = 변 길이 합이 가장 큰 방향). 가장 긴 가로변과 세로변이 비기면 두 방향을 다 내놓는다.
-    private static IEnumerable<(List<P2> outer, List<List<P2>> holes, int rank)> Frames(List<P2> outer, List<List<P2>> holes, double eps)
+    // back = 그 틀의 점 → 들어온 틀(뚜껑 틀) — 기록할 때 다각형 항의 도형을 되돌린다(R61b).
+    private static IEnumerable<(List<P2> outer, List<List<P2>> holes, int rank, Func<P2, P2> back)> Frames(List<P2> outer, List<List<P2>> holes, double eps)
     {
         var guide = outer.Count >= 3 ? new List<List<P2>> { outer } : holes;
         if (guide.Count == 0)
         {
-            yield return (outer, holes, 0); // 다각형이 하나도 없다(원·고리 모양) — 돌릴 것이 없다
+            yield return (outer, holes, 0, static p => p); // 다각형이 하나도 없다(원·고리 모양) — 돌릴 것이 없다
             yield break;
         }
 
@@ -1103,12 +1145,13 @@ public static class FormulaDecomposer
             double c = Math.Cos(ang), s = Math.Sin(ang);
             List<P2> Turn(List<P2> l) => l.Select(q => new P2(q.X * c + q.Y * s, -q.X * s + q.Y * c)).ToList();
             List<P2> Quarter(List<P2> l) => l.Select(q => new P2(q.Y, -q.X)).ToList();
+            P2 Unturn(P2 q) => new(q.X * c - q.Y * s, q.X * s + q.Y * c);   // Turn 의 반대
             var o = Turn(outer);
             var h = holes.Select(Turn).ToList();
             // 가장 긴 변이 가로(X)로 눕게 — 식이 '긴 변*짧은 변' 순서로 나온다.
             int lies = LongestEdgeLies(o.Count >= 3 ? o : h[0], eps);
-            if (lies >= 0) yield return (Quarter(o), h.Select(Quarter).ToList(), rank); // 세로로 긴 모양(또는 비김): 돌려서 눕힌다
-            if (lies <= 0) yield return (o, h, rank);
+            if (lies >= 0) yield return (Quarter(o), h.Select(Quarter).ToList(), rank, q => Unturn(new P2(-q.Y, q.X))); // 세로로 긴 모양(또는 비김): 돌려서 눕힌다
+            if (lies <= 0) yield return (o, h, rank, Unturn);
             rank++;
         }
     }
@@ -1310,7 +1353,7 @@ public static class FormulaDecomposer
                 // (작은 구멍일수록 같은 흔들림에 각이 더 크게 바뀐다).
                 if (Math.Abs(turn - 2 * Math.PI) > es.Sum(e => AngleTol(e.R, eps))) return null;
                 double r = es[0].R;
-                cl.Plus.Add(new Term($"PI()*{F(r)}^2", Math.PI * r * r, false, Zero(r)) { Off = OffGrid(r, eps) });
+                cl.Plus.Add(new Term($"PI()*{F(r)}^2", Math.PI * r * r, false, Zero(r)) { Off = OffGrid(r, eps), Geo = _record ? CircleGeo(es[0].C, r, F(r)) : null });
                 cl.Area = Math.PI * r * r;
                 cl.Perimeter = 2 * Math.PI * r;
                 loops.Add(cl);
@@ -1337,9 +1380,13 @@ public static class FormulaDecomposer
             {
                 var big = info[0].r > info[1].r ? info[0] : info[1];
                 var small = info[0].r > info[1].r ? info[1] : info[0];
+                var (bigArc, smallArc) = info[0].r > info[1].r ? (arcs[0], arcs[1]) : (arcs[1], arcs[0]);
                 string factor = AngleFactor(big.theta, big.r, eps); // 두 부채꼴에 같은 각도 글자를 쓴다
-                cl.Plus.Add(new Term($"PI()*{F(big.r)}^2{factor}", big.r * big.r * big.theta / 2, false, Zero(big.r)) { Off = OffGrid(big.r, eps) });
-                cl.Minus.Add(new Term($"PI()*{F(small.r)}^2{factor}", small.r * small.r * big.theta / 2, false, Zero(small.r)) { Off = OffGrid(small.r, eps) });
+                string? angle = _record ? AngleText(big.theta, big.r, eps) : null;
+                cl.Plus.Add(new Term($"PI()*{F(big.r)}^2{factor}", big.r * big.r * big.theta / 2, false, Zero(big.r))
+                    { Off = OffGrid(big.r, eps), Geo = _record ? SectorGeo(bigArc, big.r, F(big.r), angle) : null });
+                cl.Minus.Add(new Term($"PI()*{F(small.r)}^2{factor}", small.r * small.r * big.theta / 2, false, Zero(small.r))
+                    { Off = OffGrid(small.r, eps), Geo = _record ? SectorGeo(smallArc, small.r, F(small.r), null) : null });   // 각도 숫자는 큰 부채꼴에만(식에 한 번)
                 cl.Area = (big.r * big.r - small.r * small.r) * big.theta / 2;
                 cl.Perimeter = (big.r + small.r) * big.theta + 2 * (big.r - small.r);
                 loops.Add(cl);
@@ -1353,7 +1400,8 @@ public static class FormulaDecomposer
                 if (apex.Count == 1 && Dist(apex[0], arcs[0].C) <= eps)
                 {
                     var x = info[0];
-                    cl.Plus.Add(new Term(SectorText(x.r, x.theta, eps), x.r * x.r * x.theta / 2, false, Zero(x.r)) { Off = OffGrid(x.r, eps) });
+                    cl.Plus.Add(new Term(SectorText(x.r, x.theta, eps), x.r * x.r * x.theta / 2, false, Zero(x.r))
+                        { Off = OffGrid(x.r, eps), Geo = _record ? SectorGeo(arcs[0], x.r, F(x.r), AngleText(x.theta, x.r, eps)) : null });
                     cl.Area = x.r * x.r * x.theta / 2;
                     cl.Perimeter = x.r * x.theta + 2 * x.r;
                     loops.Add(cl);
@@ -1376,8 +1424,10 @@ public static class FormulaDecomposer
             cl.Derived = arcs.Count > 0;
             cl.Area = Math.Abs(total);
             cl.Perimeter = chordLen;
-            foreach (var x in info)
+            for (int ai = 0; ai < info.Count; ai++)
             {
+                var x = info[ai];
+                var arc = arcs[ai];   // 기록할 때 도형(R61b)
                 // 고리가 반시계면 안쪽이 왼쪽이다. 호가 현의 오른쪽으로 볼록하면 다각형 밖으로 나간 것 = 더한다.
                 bool adds = ccw ? x.cross < 0 : x.cross > 0;
                 double tolA = AngleTol(x.r, eps);
@@ -1385,16 +1435,18 @@ public static class FormulaDecomposer
                 bool quarter = Math.Abs(x.theta - Math.PI / 2) <= tolA || Math.Abs(x.theta - 3 * Math.PI / 2) <= tolA;
                 bool major = x.theta > Math.PI + tolA;
                 (adds ? cl.Plus : cl.Minus).Add(
-                    new Term(SectorText(x.r, x.theta, eps), x.r * x.r * x.theta / 2, false, Zero(x.r)) { Off = OffGrid(x.r, eps) });
+                    new Term(SectorText(x.r, x.theta, eps), x.r * x.r * x.theta / 2, false, Zero(x.r))
+                        { Off = OffGrid(x.r, eps), Geo = _record ? SectorGeo(arc, x.r, F(x.r), AngleText(x.theta, x.r, eps)) : null });
                 if (!half)
                 {
                     // 활꼴 = 부채꼴 − 삼각형(반원보다 크면 + 삼각형). 반원이면 삼각형이 없다.
                     // 삼각형 = 현 × (중심에서 현까지 거리) ÷ 2. 둘 다 계산으로 나온 길이라 여섯째 자리까지 적는다.
                     double apothem = x.r * Math.Abs(Math.Cos(x.theta / 2));
                     var tri = quarter
-                        ? new Term($"{F(x.r)}*{F(x.r)}/2", x.r * x.r / 2, false, Zero(x.r)) { Off = OffGrid(x.r, eps) }
+                        ? new Term($"{F(x.r)}*{F(x.r)}/2", x.r * x.r / 2, false, Zero(x.r))
+                            { Off = OffGrid(x.r, eps), Geo = _record ? ArcTriangleGeo(arc, F(x.r), F(x.r), true) : null }
                         : new Term($"{G(x.c)}*{G(apothem)}/2", Math.Abs(x.r * x.r * Math.Sin(x.theta) / 2), false,
-                            Z(x.c, true) || Z(apothem, true)) { Off = OffGrid(x.c, eps) + OffGrid(apothem, eps) };
+                            Z(x.c, true) || Z(apothem, true)) { Off = OffGrid(x.c, eps) + OffGrid(apothem, eps), Geo = _record ? ArcTriangleGeo(arc, G(x.c), G(apothem), false) : null };
                     ((adds == major) ? cl.Plus : cl.Minus).Add(tri);
                 }
                 cl.Perimeter += x.r * x.theta;
