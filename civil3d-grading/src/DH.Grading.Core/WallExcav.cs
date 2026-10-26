@@ -16,12 +16,15 @@ public static partial class WallExcav
     /// <item>단면 형식 절토 = 역T형 · 성토 = 보강토 — 단지 정지에서 흔한 짝(제안 · JACK께 알림).</item>
     /// <item>경사 1:1.2 — 산업안전보건기준 규칙 별표 11 «그 밖의 흙».</item>
     /// <item>소단 켬 · 높이 3 m · 폭 1 m(v103.3.1 · JACK «켬/끔 + 두 칸»).</item>
-    /// <item>★[v104 B · JACK 1021 «경사는 매개변수로 받되 기본값은 1.5»] 배면사면 켬 · 1:1.5 — 터파기를 켜면 같이(따로 끌 수 있게).</item>
+    /// <item>★[v104 B · JACK 1021 «경사는 매개변수로 받되 기본값은 1.5»] 배면사면 경사 1:1.5.</item>
+    /// <item>★★[v105.3.1 · JACK 1026 «배면사면을 만들지않고 원지반을 그대로 살리는 원상복구 옵션단추 · 디폴트는 원상복구»] <b>원상복구</b>(BackOn = 거짓) —
+    /// 벽 뒤 되메우기는 원지반 높이까지 · 배면사면 면 · 선 없음. 기록이 있는 도면은 적힌 고름 그대로(이미 배면사면으로 그린 도면은 말없이 안 바뀐다) ·
+    /// 배면 칸이 없던 옛 기록(판 1 ~ 3 — 배면 기능 전)도 원상복구로 읽는다(그때 그린 꼴 그대로).</item>
     /// </list></summary>
     public sealed record Settings(bool On, double Margin, double Slope, bool BenchOn, double BenchH, double BenchW, double TLean, double ELean,
-                                  WallSection.Kind CutKind, WallSection.Kind FillKind, bool BackOn = true, double BackSlope = 1.5)
+                                  WallSection.Kind CutKind, WallSection.Kind FillKind, bool BackOn = false, double BackSlope = 1.5)
     {
-        public static readonly Settings Default = new(false, 0.5, 1.2, true, 3.0, 1.0, 0.10, 0.10, WallSection.Kind.역T형, WallSection.Kind.보강토, true, 1.5);
+        public static readonly Settings Default = new(false, 0.5, 1.2, true, 3.0, 1.0, 0.10, 0.10, WallSection.Kind.역T형, WallSection.Kind.보강토, false, 1.5);
 
         /// <summary>도면 기록의 판 — 4 = 배면사면(v104 B) · 3 = 단면 형식(v104) · 1 · 2(뒤 · 앞 · 기초 시절)는 켬 · 경사 · 소단만 옮긴다(앞 · 뒤 · 기초는 단면으로 바뀜).</summary>
         public const int Version = 4;
@@ -52,7 +55,7 @@ public static partial class WallExcav
             ? string.Format(CultureInfo.InvariantCulture, "켬 · 절토 {0} · 성토 {1} · 여유 {2}m · 1:{3} · {4} · {5}", WallSection.Of(CutKind).Name, WallSection.Of(FillKind).Name, Margin, Slope, BenchText, BackText)
             : "꺼짐";
 
-        public string BackText => BackOn ? string.Format(CultureInfo.InvariantCulture, "배면 1:{0}", BackSlope) : "배면 없음";
+        public string BackText => BackOn ? string.Format(CultureInfo.InvariantCulture, "배면 1:{0}", BackSlope) : "원상복구";
 
         /// <summary>★[v104 B] 배면사면 면 도장에 붙는 설정 글 — 터파기면 머리(<see cref="Head"/>)와 따로(배면 경사만 바꾸면 터파기면은 되쓴다).</summary>
         public string BackHead => string.Format(CultureInfo.InvariantCulture, "{0}|{1:R}", BackOn ? 1 : 0, BackSlope);
@@ -114,7 +117,7 @@ public static partial class WallExcav
                 if (vals.Count < need) { why = $"옹벽 터파기 기록 판 {ver} 꼴이 다르다(칸 {vals.Count})"; return false; }
                 char[] want = { 'I', 'I', 'D', 'D', 'I', 'D', 'D', 'D', 'D', 'I', 'I', 'I', 'D' };
                 for (int i = 0; i < need; i++) if (vals[i].K != want[i]) { why = $"옹벽 터파기 기록 판 {ver} {i + 1}째 칸 형이 다르다"; return false; }
-                // 판 3(배면 칸 없음)은 배면 첫 값
+                // 판 3(배면 칸 없음)은 배면 첫 값(★v105.3.1 원상복구)
                 r = new Settings((int)vals[1].V != 0, (double)vals[2].V, (double)vals[3].V, (int)vals[4].V != 0, (double)vals[5].V, (double)vals[6].V,
                                  (double)vals[7].V, (double)vals[8].V, (WallSection.Kind)(int)vals[9].V, (WallSection.Kind)(int)vals[10].V,
                                  ver == 3 ? d.BackOn : (int)vals[11].V != 0, ver == 3 ? d.BackSlope : (double)vals[12].V);

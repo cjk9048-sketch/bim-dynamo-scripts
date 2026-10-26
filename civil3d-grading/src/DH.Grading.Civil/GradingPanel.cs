@@ -54,7 +54,8 @@ internal sealed class GradingPanel : UserControl
     private readonly ComboBox _exSlope, _exCutKind, _exFillKind;
     private readonly CheckBox _exOn;
     private readonly TextBox _exMargin, _exTLean, _exELean, _exBackSlope;
-    private readonly CheckBox _exBackOn;
+    /// <summary>★[v105.3.1 · JACK 1026 «원상복구 옵션단추 · 디폴트는 원상복구»] 벽 뒤 되메우기 윗면 — 원상복구(원지반까지) · 배면사면(1:n) 중 하나.</summary>
+    private readonly RadioButton _exBackOn, _exRestore;
     /// <summary>★[v104] 형식 표 읽은 것(그림용) — 도면 · 기록이 바뀌면 비운다.</summary>
     private readonly Dictionary<DH.Grading.Core.WallSection.Kind, DH.Grading.Core.WallSection.Table> _secCache = new();
     /// <summary>★[v103.3.1 · JACK 1021] 터파기 법면 소단 — 켬 · 높이(m) · 폭(m).</summary>
@@ -329,16 +330,28 @@ internal sealed class GradingPanel : UserControl
         ((FrameworkElement)_exTLean.Parent).ToolTip = "기초 아래 버림 콘크리트 두께. 첫 값 0.1m";
         ((FrameworkElement)_exELean.Parent).ToolTip = "버림이 기초 앞뒤로 나오는 폭. 첫 값 0.1m";
         secWall.Children.Add(lRow);
-        // ★[v104 B · JACK 1021 «지정경사로 내려오다가 옹벽끝높이와 일치하는 부분에서 평탄화 · 경사는 매개변수 · 기본 1.5»] 배면사면 켬 · 경사
+        // ★[v104 B · JACK 1021 «지정경사로 내려오다가 옹벽끝높이와 일치하는 부분에서 평탄화 · 경사는 매개변수 · 기본 1.5»] 배면사면 · 경사
+        // ★★[v105.3.1 · JACK 1026 «배면사면을 만들지않고 원지반을 그대로 살리는 원상복구 옵션단추 · 디폴트는 원상복구»] 둘 중 하나 — 원상복구(첫 값) · 배면사면
         var bkRow = new WrapPanel { Margin = new Thickness(2, 0, 0, 6) };
-        _exBackOn = new CheckBox
+        _exRestore = new RadioButton
+        {
+            Content = "원상복구",
+            GroupName = "DH_exBack",
+            IsChecked = !exDef.BackOn,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 12, 4),
+            ToolTip = "절토 옹벽 뒤 되메우기를 원지반 높이까지 — 배면사면을 만들지 않고 원지반을 그대로 살립니다(첫 값).",
+        };
+        _exBackOn = new RadioButton
         {
             Content = "배면사면",
+            GroupName = "DH_exBack",
             IsChecked = exDef.BackOn,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 10, 4),
             ToolTip = "절토 옹벽(맨 위 단) 뒤 되메우기 윗면 — 터파기 끝에서 이 경사로 내려오다 옹벽 꼭대기 높이에서 평탄(숨긴 면 옹벽배면_DH).\n그 위 원지반은 절토 · 아래는 되메우기로 셉니다.",
         };
+        bkRow.Children.Add(_exRestore);
         bkRow.Children.Add(_exBackOn);
         _exBackSlope = Cell(bkRow, "경사 1:", exDef.BackSlope);
         ((FrameworkElement)_exBackSlope.Parent).ToolTip = "배면사면 경사(1:n). 첫 값 1:1.5";
@@ -888,7 +901,7 @@ internal sealed class GradingPanel : UserControl
         bool on = _exOn.IsChecked == true;
         _exMargin.IsEnabled = _exTLean.IsEnabled = _exELean.IsEnabled = _exSlope.IsEnabled = _exBenchOn.IsEnabled = on;
         _exBenchH.IsEnabled = _exBenchW.IsEnabled = on && _exBenchOn.IsChecked == true;
-        _exBackOn.IsEnabled = on;
+        _exBackOn.IsEnabled = _exRestore.IsEnabled = on;
         _exBackSlope.IsEnabled = on && _exBackOn.IsChecked == true;
         _exOn.IsEnabled = _exCutKind.IsEnabled = _exFillKind.IsEnabled = Doc != null;   // 형식 · 표는 꺼져 있어도 고를 수 있다(그림 · 표 창)
     }
@@ -997,6 +1010,7 @@ internal sealed class GradingPanel : UserControl
             _exCutKind.SelectedIndex = KindIndex(_exCutKind, s.CutKind);
             _exFillKind.SelectedIndex = KindIndex(_exFillKind, s.FillKind);
             _exBackOn.IsChecked = s.BackOn;
+            _exRestore.IsChecked = !s.BackOn;   // 라디오는 거짓을 넣어도 짝이 켜지지 않는다 — 둘 다 넣는다
             _exBackSlope.Text = N(s.BackSlope);
             _secCache.Clear();
             _exBenchOn.IsChecked = s.BenchOn;
@@ -1106,7 +1120,7 @@ internal sealed class GradingPanel : UserControl
             string ex = _exOn?.IsChecked == true
                 ? $"터파기 여유 {_exMargin?.Text}m · {_exSlope?.SelectedItem} · "
                   + (_exBenchOn?.IsChecked == true ? $"소단 {_exBenchH?.Text}m마다 {_exBenchW?.Text}m" : "소단 없음")
-                  + (_exBackOn?.IsChecked == true ? $" · 배면 1:{_exBackSlope?.Text}" : " · 배면 없음")
+                  + (_exBackOn?.IsChecked == true ? $" · 배면 1:{_exBackSlope?.Text}" : " · 원상복구")
                 : "터파기 끔";
             string ws = $"{_exCutKind?.SelectedItem} / {_exFillKind?.SelectedItem}";
             if (_shapeBadge != null) _shapeBadge.Text = shape;

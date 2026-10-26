@@ -399,9 +399,10 @@ static class ExcavCheck
         {
             var d = WallExcav.Settings.Default;
             // ★★[v104 · 판 3] 첫 값 — 꺼짐 · 여유 0.5 · 1:1.2 · 소단 켬 3/1 · 버림 0.1/0.1 · 절토 역T형 · 성토 보강토 · 기록 없음
-            check("S166 첫 값 — 꺼짐 · 여유 0.5 · 1:1.2 · 버림 0.1/0.1 · 역T형/보강토 · 기록 없음(null) · 판 3",
+            // ★[v105.3.1 · JACK 1026 «디폴트는 원상복구»] 배면 첫 값 = 원상복구(BackOn 거짓) · 경사 칸 1.5
+            check("S166 첫 값 — 꺼짐 · 여유 0.5 · 1:1.2 · 버림 0.1/0.1 · 역T형/보강토 · 기록 없음(null) · 판 4 · 원상복구",
                 !d.On && d.Margin == 0.5 && d.Slope == 1.2 && d.TLean == 0.1 && d.ELean == 0.1 && d.CutKind == WallSection.Kind.역T형 && d.FillKind == WallSection.Kind.보강토
-                && WallExcav.Encode(d) == null && WallExcav.Settings.Version == 4 && d.BackOn && d.BackSlope == 1.5, d.Text);
+                && WallExcav.Encode(d) == null && WallExcav.Settings.Version == 4 && !d.BackOn && d.BackSlope == 1.5 && d.BackText == "원상복구", d.Text + " · " + d.BackText);
             var s = d with { On = true, Margin = 0.3, Slope = 1.0, TLean = 0.15, ELean = 0.05, CutKind = WallSection.Kind.패널식, FillKind = WallSection.Kind.L형 };
             var enc = WallExcav.Encode(s);
             bool ok = WallExcav.TryDecode(enc, out var back, out string why);
@@ -436,7 +437,10 @@ static class ExcavCheck
             // ★[v104 B] 판 3 기록(배면 칸 없음)은 배면 첫 값 · 배면 왕복 · 배면 머리는 터파기 머리와 따로
             var v3 = new List<(char, object)>(enc!); v3[0] = ('I', 3); v3.RemoveAt(12); v3.RemoveAt(11);
             bool okV3 = WallExcav.TryDecode(v3, out var s3v, out string w3v);
-            check("S166 판 3 기록 — 읽음 · 배면은 첫 값(켬 · 1.5)", okV3 && s3v == s with { BackOn = true, BackSlope = 1.5 }, w3v);
+            check("S166 판 3 기록 — 읽음 · 배면은 첫 값(원상복구 · 1.5 — 배면 기능 전 도면은 그린 꼴 그대로)", okV3 && s3v == s with { BackOn = false, BackSlope = 1.5 }, w3v);
+            // ★[v105.3.1] 배면사면으로 적힌 판 4 기록은 첫 값이 바뀌어도 그대로 배면사면(이미 그린 도면이 말없이 안 바뀐다)
+            var sOn = s with { BackOn = true, BackSlope = 1.5 };
+            check("S166 판 4 «배면사면» 기록 — 첫 값(원상복구)과 달라 기록이 남고 그대로 읽힘", WallExcav.Encode(sOn) != null && WallExcav.TryDecode(WallExcav.Encode(sOn), out var sOnB, out _) && sOnB == sOn && sOnB.BackOn, sOn.BackText);
             var sb4 = s with { BackOn = false, BackSlope = 1.8 };
             check("S166 배면 왕복(끔 · 1.8) · 터파기 머리는 배면과 무관 · 배면 머리는 다르다",
                 WallExcav.TryDecode(WallExcav.Encode(sb4), out var sb4b, out _) && sb4b == sb4 && sb4.Head == s.Head && sb4.BackHead != s.BackHead, sb4.BackHead);
