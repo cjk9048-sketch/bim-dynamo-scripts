@@ -66,6 +66,7 @@ public sealed class UiTheme
         xaml.Append(ButtonStyle("BtnGhost", "None", "Hover", "Press", "Text", "None"));
         xaml.Append(ButtonStyle("BtnSeg", "None", "Card", "Press", "Text", "None", radius: 5));
         xaml.Append(ButtonStyle("BtnChip", "NeutralBg", "AccentSoft", "AccentSoftHover", "NeutralFg", "None", radius: 10));
+        xaml.Append(ButtonStyle("BtnWarnChip", "WarnBg", "AccentSoft", "AccentSoftHover", "WarnFg", "None", radius: 10));   // 누르는 경고 딱지(R63b)
         xaml.Append(ButtonStyle("BtnDanger", "BadBg", "BadHover", "BadHover", "BadFg", "BadFg"));
         xaml.Append(Styles);
         xaml.Append("</ResourceDictionary>");

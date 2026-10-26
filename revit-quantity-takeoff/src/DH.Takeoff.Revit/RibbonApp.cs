@@ -80,11 +80,18 @@ public sealed class RibbonApp : IExternalApplication
         formwork.AddPushButton(erase);
         formwork.Enabled = false;
         s_formwork = formwork;
-        app.ViewActivated += (_, e) => { s_active = e.Document; RefreshFormwork(e.Document); };
+        app.ViewActivated += (_, e) => { s_active = e.Document; RefreshFormwork(e.Document); TakeoffSession.Current?.ViewActivated(e.Document); };
         app.ControlledApplication.DocumentChanged += (_, e) =>
         {
             if (e.GetAddedElementIds().Count + e.GetDeletedElementIds().Count > 0) RefreshFormwork(e.GetDocument());
+            TakeoffSession.Current?.DocumentChanged(e);
         };
+        // 띄운 채 쓰는 「수량산출」 창(R62): 그 문서 · Revit 을 닫으면 강제로 닫는다(일지만 — 계획 검토 M4).
+        app.ControlledApplication.DocumentClosing += (_, e) =>
+        {
+            try { if (TakeoffSession.Current is { } open && open.Doc.Equals(e.Document)) open.ForceClose("문서를 닫음"); } catch { }
+        };
+        app.ApplicationClosing += (_, _) => { try { TakeoffSession.Current?.ForceClose("Revit 을 닫음"); } catch { } };
         // 닫힌 것이 보던 모델일 때만 끈다(다른 모델의 뷰가 먼저 켜졌으면 그 모델의 것 그대로 — 설치 전 검토).
         app.ControlledApplication.DocumentClosed += (_, _) =>
         {

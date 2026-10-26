@@ -209,7 +209,7 @@ public static class FormulaAutoFill
                 o.HasSolid = solids.Count > 0;
                 if (declared <= 0) o.Bim = solids.Sum(s => s.Volume);
 
-                var r = FormulaDecomposer.Decompose(solids, thickness: SolidReader.Thickness(el));
+                var r = FormulaDecomposer.Decompose(solids, thickness: SolidReader.Thickness(el));   // ③ 숫자(Explain)도 같은 입력 — 아래 Explain
                 // 입체에서 잰 체적과 별개로, Revit이 속성에 적어 둔 체적과도 맞아야 한다(입체를 더 읽거나 덜 읽은 경우를 잡는다).
                 if (r.Ok && declared > 0 && !FormulaDecomposer.Matches(r.Value, declared))
                     r = new DecompResult
@@ -521,4 +521,16 @@ public static class FormulaAutoFill
 
     // 표의 한 칸: 탭·줄바꿈이 들어가면 줄이 깨지므로 빈칸으로 바꾼다.
     private static string Cell(string s) => s.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
+
+    /// <summary>
+    /// ③ 콘크리트 줄의 길이 숫자(R61b): 부재를 산출식 채우기와 같은 입력(SolidReader.Read · Thickness · 기본 정밀도 · 산출서 자릿수)으로 다시 풀며
+    /// 항마다의 도형을 기억한다. 식 글자는 Decompose 와 같다 — 부르는 쪽이 산출근거의 식과 견준다. 입체가 없으면 null.
+    /// </summary>
+    public static FormulaGeometry? Explain(Element el)
+    {
+        var solids = SolidReader.Read(el);
+        if (solids.Count == 0) return null;
+        FormulaDecomposer.Explain(solids, out var geo, thickness: SolidReader.Thickness(el));
+        return geo;
+    }
 }
