@@ -74,12 +74,35 @@ public static class GradingPolygons
         Strips(IReadOnlyList<IReadOnlyList<Point3>> rings,
         IReadOnlyList<Point3> finalRing, IReadOnlyList<Point3> boundary,
         IReadOnlyList<(Geometry Poly, int FromBench, int ToBench)>? wallCuts = null,
-        IReadOnlyList<IReadOnlyList<Point3>>? extraHoles = null)
+        IReadOnlyList<IReadOnlyList<Point3>>? extraHoles = null,
+        Geometry? extraMask = null)
+        => Strips(rings, finalRing, boundary, out _, wallCuts, extraHoles, extraMask);
+
+    /// <summary>위 띠 만들기 +
+    /// ★[v106 · 계획 2판 2.6] <paramref name="extraMask"/>(옹벽 변환이 실제로 바꾼 자리 — <see cref="ChangedMask"/>)를 띠 자리에서 빼고 뺀 넓이를 돌려준다.</summary>
+    public static List<(List<IReadOnlyList<Point3>> Rings, double Area, string Kind, int Level, double Elev)>
+        Strips(IReadOnlyList<IReadOnlyList<Point3>> rings,
+        IReadOnlyList<Point3> finalRing, IReadOnlyList<Point3> boundary, out double maskArea,
+        IReadOnlyList<(Geometry Poly, int FromBench, int ToBench)>? wallCuts = null,
+        IReadOnlyList<IReadOnlyList<Point3>>? extraHoles = null,
+        Geometry? extraMask = null)
     {
+        maskArea = 0;
         var outp = new List<(List<IReadOnlyList<Point3>>, double, string, int, double)>();
         var donut = Donut(finalRing, boundary);
         if (donut == null || rings == null || rings.Count < 2) return outp;
         var gf = NtsSupport.Factory();
+        // ★[v106 · JACK 1027 «변환기능도 반영» · 계획 2판 2.6] 옹벽 변환이 실제로 바꾼 자리(사면 · 소단이 옹벽 · 뚜껑으로 바뀐 곳)는 띠에서 뺀다
+        if (extraMask != null && !extraMask.IsEmpty)
+        {
+            try
+            {
+                double a = donut.Intersection(extraMask).Area;
+                if (a > 0) { donut = donut.Difference(extraMask); maskArea = a; }   // ★[검토 낮음 L3] 뺀 뒤에만 적는다(빼기가 터지면 0)
+            }
+            catch { }
+            if (donut.IsEmpty) return outp;
+        }
         // [다중 구역 0804] 뒤 구역이 덮어쓴 영역은 이 구역의 띠에서 뺀다 —
         //   빼지 않으면 앞 구역이 만들어질 당시의 사면이 최종 지표면과 무관하게 그대로 남아 겹쳐 보인다.
         if (extraHoles != null)
@@ -121,6 +144,31 @@ public static class GradingPolygons
                 outp.Add((f.Rings, f.Area, kind, level, elev));
         }
         return outp;
+    }
+
+    /// <summary>★★[v106 · 계획 2판 2.6 · 검토 중간 3] <b>옹벽 변환이 실제로 바꾼 자리</b> — 최종면 삼각형 중 무게중심이 <paramref name="area"/>(옹벽 폴리곤 + 1 m) 안이고
+    /// 그 높이(삼각형 평면)가 합성 전 면과 <paramref name="tol"/> 넘게 다른(합성 전 면이 없는 자리 포함) 것의 합집합.
+    /// <para>합성은 교선을 변으로 넣어 짓기 때문에(<see cref="WallDaylight"/> 합성 ③) 바뀐 · 안 바뀐 자리 경계가 삼각형 변과 겹친다 — 손으로 그린 폴리곤보다 정확하다(폴리곤과 데이라잇 사이 남은 사면을 안 지운다).</para></summary>
+    public static Geometry? ChangedMask(IEnumerable<WallDaylight.Tri> finalTris, Func<double, double, double?> preZ, Geometry area, double tol, out int nChanged)
+    {
+        nChanged = 0;
+        var gf = NtsSupport.Factory();
+        var prep = NetTopologySuite.Geometries.Prepared.PreparedGeometryFactory.Prepare(area);
+        var polys = new List<Geometry>();
+        foreach (var t in finalTris)
+        {
+            double cx = (t.A.X + t.B.X + t.C.X) / 3, cy = (t.A.Y + t.B.Y + t.C.Y) / 3, cz = (t.A.Z + t.B.Z + t.C.Z) / 3;
+            if (!prep.Contains(gf.CreatePoint(new Coordinate(cx, cy)))) continue;
+            var zp = preZ(cx, cy);
+            if (zp.HasValue && Math.Abs(cz - zp.Value) <= tol) continue;
+            var pg = gf.CreatePolygon(new[] { new Coordinate(t.A.X, t.A.Y), new Coordinate(t.B.X, t.B.Y), new Coordinate(t.C.X, t.C.Y), new Coordinate(t.A.X, t.A.Y) });
+            if (!pg.IsValid || pg.Area <= 0) continue;
+            polys.Add(pg);
+            nChanged++;
+        }
+        if (polys.Count == 0) return null;
+        try { return NetTopologySuite.Operation.Union.CascadedPolygonUnion.Union(polys); }
+        catch { return gf.BuildGeometry(polys).Buffer(0); }
     }
 
     /// <summary>[§75] 옹벽 구간 필터용 쐐기 폴리곤 — 각 구간(경계 호길이 [T0..T1])에 대해

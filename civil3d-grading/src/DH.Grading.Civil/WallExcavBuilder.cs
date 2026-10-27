@@ -526,10 +526,12 @@ internal static class WallExcavBuilder
 
     /// <summary>★[v105 · 계획 4.1] 3D 내보내기용 — 도면을 바꾸지 않고(읽기만) 지금 단면 줄을 세운다: 정지면_DH · 종단에 든 옹벽(<see cref="PureWithWallsBuilder.CurrentWalls"/>) · 번들 옹벽 · 이 도면 단면 표.
     /// 터파기가 꺼져 있어도 쓴다(설정 기록의 단면 형식 · 표 · 버림 칸). 수량 단면과 같은지는 부르는 쪽이 <see cref="HasCurrentSurface"/>로 본다.</summary>
-    internal static System.Collections.Generic.List<WallExcav.SecLine>? SectionLinesForExport(Database db, ObjectId groundId, System.Collections.Generic.List<string> notes, out WallExcav.Settings st, out string facesTxt)
+    /// <param name="cover">★[v106 · 계획 2판 2.3] 지형 벽면 자가점검(정지면_DH가 3D 앞면보다 1 cm 넘게 앞인 표본 — 전단 뒤) · 단면 줄을 못 세우면 빈 셈.</param>
+    internal static System.Collections.Generic.List<WallExcav.SecLine>? SectionLinesForExport(Database db, ObjectId groundId, System.Collections.Generic.List<string> notes, out WallExcav.Settings st, out string facesTxt, out WallSweep.CoverNote cover)
     {
         st = WallListStore.ExcavOf(db, out string swhy);
         facesTxt = "";
+        cover = new WallSweep.CoverNote();
         if (swhy.Length > 0) notes.Add("옹벽 터파기 설정 기록 — " + swhy);
         var (tCut, tFill) = TablesOf(db, st, notes);
         var civ = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
@@ -546,6 +548,9 @@ internal static class WallExcavBuilder
         var secs = SectionizeAll(bottoms, benchBelow, tCut, tFill, st, notes, secNote);
         if (secNote.Warn) notes.Add("단면 — " + secNote.Text);
         facesTxt = $"앞면 선 {nFaces}줄({string.Join(" · ", stepLog)}{(bundles != null ? $" · 번들 구역 {bundles.Count}" : "")}) · 바닥 줄 {bottoms.Count} · 단면 줄 {secs.Count}";
+        // ★[v106 · 계획 2판 2.3] 지형 벽면 자가점검 — 3D 앞면(전단 뒤)이 정지면_DH 벽면보다 앞에 서는가(InfraWorks에서 지형이 무늬를 안 가리나)
+        try { foreach (var (_, sl) in secs) WallSweep.CoverCheck(sl, mAt, cover); }
+        catch (System.Exception cex) { notes.Add("지형 벽면 자가점검을 못 함 — " + cex.Message); }   // ★[검토 낮음 L4] 자가점검 탓에 3D를 잃지 않게
         tr.Commit();
         return secs.Select(x => x.S).ToList();
     }

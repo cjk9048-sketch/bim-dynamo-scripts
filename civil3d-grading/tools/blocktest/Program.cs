@@ -45,6 +45,14 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "excav")
     return fails == 0 ? 0 : 1;
 }
 
+// ★[v106] BLOCKTEST_ONLY=sweep — 옹벽 3D 스윕 계획 · 보이는 면 무늬 · 지형 덮기(S174)만(개발 중 부분 시험)
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "sweep")
+{
+    WallSweepCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
 // ★[v105.3] BLOCKTEST_ONLY=xsec2d — 횡단 2D 터파기선 · 배면 · 공제 · 3D 원뿔 낮추기(S173)만(개발 중 부분 시험)
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "xsec2d")
 {
@@ -97,6 +105,7 @@ WallBackCheck.Run(Check);   // ★[v104 B] S170 — 배면사면(해석 높이 �
 WallCutCheck.Run(Check);   // ★[v104.1] S171 — 자른 자리 옹벽 단면(종단 · 횡단 그림 · 각도대로 늘임)
 WallStandardCheck.Run(Check);   // ★[v105] S172 — 2008 표준도 조건별 표 · 활동방지벽
 Xsec2DCheck.Run(Check);   // ★[v105.3] S173 — 횡단 2D 터파기선(가로지르는 벽만) · 배면 · 공제 · 3D 원뿔 낮추기
+WallSweepCheck.Run(Check);   // ★[v106] S174 — 옹벽 3D 스윕 계획 · 보이는 면 무늬 · 지형 덮기
 
 const double W = 0.46, H = 0.2, STEP = 5.0, HW = W / 2;
 const double D = 0.5, FS = D / 2; // 깊이·전면 돌출(벽 중심=링, JACK 0720 Z-파이팅 해소): 절토 +FS(안쪽), 성토 −FS
