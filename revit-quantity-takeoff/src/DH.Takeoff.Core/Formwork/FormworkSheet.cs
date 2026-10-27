@@ -908,6 +908,8 @@ public static class FormworkSheet
             if (Rect(ring) is { } r) (piece ? pieces : holes).Add($"{Num(r.a)}*{Num(r.b)}");
             // 직각으로만 꺾인 고리(ㄱ자 · ㄷ자 — 수직면 덩어리에서 벽 + 아래 호퍼 안쪽처럼 · R49)는 네모의 합 «18*5+2.5*1.5» · 구멍이면 괄호로 싸서 뺀다.
             else if (Rectilinear(ring, up, outer) is { } sum) (piece ? pieces : holes).Add(piece ? sum : "(" + sum + ")");
+            // 비스듬한 변이 든 고리(사다리꼴 · 삼각형 · 귀퉁이를 자른 네모 — R65b)는 2D 꼴 «(a+b)*0.5*h» · «a*h*0.5» · «전체 − 귀퉁이».
+            else if (Sloped(ring, up, outer) is { } slope) (piece ? pieces : holes).Add(piece ? slope : "(" + slope + ")");
             else return (areaText, true);
         }
         string formula = string.Join("+", pieces) + FormulaDecomposer.Deductions(holes);   // 같은 크기의 구멍은 «-(1*2.1*3)»(JACK 2026-10-16)
@@ -972,6 +974,129 @@ public static class FormworkSheet
             if (rs is { Count: > 0 } && (best == null || rs.Count + 1 < best.Value.count))
                 best = (rs.Count + 1, Term(box) + FormulaDecomposer.Deductions(rs.OrderByDescending(r => r.w * r.h).Select(Term)));
         return best is { } found && found.count <= MaxRectilinearTerms ? found.text : null;
+    }
+
+    // 비스듬한 변이 든 고리 하나(R65b — JACK 2026-10-27 «뜬금없이 치수가 하나인 애들도 있어» · 녹촌 2D «(a ＋ b) × 0.5 × h» ·
+    // «… − c × d × 0.5»): 꼭짓점 높이마다 가로 띠로 잘라 띠 안의 구간을 사다리꼴 «(a+b)*0.5*h»(짧은 변 먼저) · 삼각형 «a*h*0.5» · 평행사변형 «a*h» ·
+    // 네모(위아래로 이어 붙임)로 — 띠의 합 또는 바깥 네모 − 빈 곳(귀퉁이 삼각형). 두 방향(가로 띠 · 세로 띠)을 보고 항이 적은 것 → 숫자가 적은 것 → 합.
+    // 직각으로만 꺾인 고리는 Rectilinear 가 맡는다(여기는 비스듬한 변이 있을 때만). 항이 너무 많거나 띠를 짓지 못하면 null(넓이만).
+    private static string? Sloped(List<P3> ring, P3 up, List<P3> outer)
+    {
+        var n = Scale(up, 1 / up.Length);
+        var across = n.Cross(new P3(0, 0, 1));
+        bool level = across.Length <= 1e-6;
+        // 틀의 가로(u): 기운 면은 수평선 하나 · 수평인 면은 고리의 변 방향 가운데 길이 합이 긴 것부터 셋(첫 변이 비스듬한 귀퉁이여도 틀이 돌지 않게 —
+        // R65b 설치 전 검토 중간 2).
+        var dirs = new List<P3>();
+        if (!level) dirs.Add(Scale(across, 1 / across.Length));
+        else
+        {
+            var byLength = new List<(P3 d, double len)>();
+            for (int i = 0; i < outer.Count; i++)
+            {
+                var e = outer[(i + 1) % outer.Count] - outer[i];
+                double len = e.Length;
+                if (len < 1e-9) continue;
+                var d = Scale(e, 1 / len);
+                int k = byLength.FindIndex(x => Math.Abs(x.d.Dot(d)) > 0.9999);
+                if (k < 0) byLength.Add((d, len));
+                else byLength[k] = (byLength[k].d, byLength[k].len + len);
+            }
+            dirs.AddRange(byLength.OrderByDescending(x => x.len).Take(3).Select(x => x.d));
+        }
+        (int terms, int numbers, int gaps, string text)? best = null;
+        foreach (var u in dirs)
+        {
+            var v = n.Cross(u);
+            var xs = Snap(ring.Select(p => p.Dot(u)));
+            var ys = Snap(ring.Select(p => p.Dot(v)));
+            var pts = ring.Select(p => (x: xs[p.Dot(u)], y: ys[p.Dot(v)])).ToList();
+            int slanted = 0;
+            for (int i = 0; i < pts.Count; i++)
+            {
+                var (a, b) = (pts[i], pts[(i + 1) % pts.Count]);
+                if (a.x != b.x && a.y != b.y) slanted++;
+            }
+            if (slanted == 0) continue;
+            // 비스듬한 변이 많으면(잘게 나눈 원 · 곡선 — 2D 는 π r²) 넓이만(설치 전 검토 열린 질문 — 관 슬리브 구멍).
+            if (slanted > MaxSlantedEdges) return null;
+            // 네모의 글: 가로(u 쪽) × 세로(v 쪽) · 수평인 면은 긴 변이 앞(Rectilinear 와 같다).
+            string RectText(double wu, double hv) => level && hv > wu ? $"{Num(hv)}*{Num(wu)}" : $"{Num(wu)}*{Num(hv)}";
+            var swappedPts = pts.Select(p => (p.y, p.x)).ToList();
+            var box = (w: pts.Max(p => p.x) - pts.Min(p => p.x), h: pts.Max(p => p.y) - pts.Min(p => p.y));
+            foreach (bool swapped in new[] { false, true })
+                foreach (bool gaps in new[] { false, true })
+                {
+                    var bands = Bands(swapped ? swappedPts : pts, gaps, (w, h) => swapped ? RectText(h, w) : RectText(w, h));
+                    if (bands == null || (bands.Count == 0 && !gaps)) continue;   // 빈 곳이 모두 mm 찌꺼기면 바깥 네모 하나
+                    // 큰 조각 먼저(Rectilinear · 2D 와 같은 차례 — 검토 낮음 1) · 같은 크기는 «× n».
+                    var grouped = bands.OrderByDescending(TermValue).GroupBy(t => t).Select(g => g.Count() == 1 ? g.Key : $"{g.Key}*{g.Count()}").ToList();
+                    string text = gaps ? RectText(box.w, box.h) + FormulaDecomposer.Deductions(grouped) : string.Join("+", grouped);
+                    var score = (terms: grouped.Count + (gaps ? 1 : 0), numbers: FormworkLabels.NumberPattern.Matches(text).Count, gaps: gaps ? 1 : 0);
+                    if (score.terms > MaxRectilinearTerms) continue;
+                    if (best == null || (score.terms, score.numbers, score.gaps).CompareTo((best.Value.terms, best.Value.numbers, best.Value.gaps)) < 0)
+                        best = (score.terms, score.numbers, score.gaps, text);
+                }
+        }
+        return best?.text;
+    }
+
+    /// <summary>비스듬한 변이 이보다 많은 고리는 넓이만(잘게 나눈 원 · 곡선 — R65b).</summary>
+    internal const int MaxSlantedEdges = 6;
+
+    private static double TermValue(string term)
+    {
+        try { return FormulaEvaluator.Evaluate(term); }
+        catch (FormatException) { return 0; }
+    }
+
+    // 꼭짓점 높이마다 가로 띠로 자른 구간의 식(Sloped): 띠를 가로지르는 변의 띠 아래 · 위 x 를 짝지어 구간마다 사다리꼴 · 삼각형 · 평행사변형 · 네모(네모는 같은 구간이
+    // 위로 이어지면 한 네모 — rect(가로, 세로) 글). gaps 면 바깥 네모 안의 빈 구간. 띠를 가로지르는 변이 홀수거나 항이 너무 많으면 null.
+    // 모양은 적히는 수(셋째 자리)로 가른다(검토 중간 3 — 0.3 mm 기운 벽이 «(4+4)*0.5*3» · 0.3 mm 띠가 «4*0*0.5» 로 적히지 않게): 두 변이 1 mm 안으로 곧고
+    // 적힌 폭이 같으면 네모 · 적힌 높이나 폭이 0 이면 뺌 · 적힌 짧은 폭이 0 이면 삼각형 · 적힌 두 폭이 같으면 평행사변형(네모처럼 «가로 × 세로»).
+    private static List<string>? Bands(List<(double x, double y)> pts, bool gaps, Func<double, double, string> rect)
+    {
+        const double eps = 2e-4, lean = 1e-3;
+        var levels = pts.Select(p => p.y).Distinct().OrderBy(y => y).ToList();
+        double left = pts.Min(p => p.x), right = pts.Max(p => p.x);
+        var open = new Dictionary<(double x0, double x1), double>();   // 네모 구간 → 시작한 y
+        var terms = new List<string>();
+        for (int k = 0; k + 1 < levels.Count; k++)
+        {
+            double y0 = levels[k], y1 = levels[k + 1], h = y1 - y0;
+            string hText = Num(h);
+            var cuts = new List<(double b, double t)>();
+            for (int i = 0; i < pts.Count; i++)
+            {
+                var (a, c) = (pts[i], pts[(i + 1) % pts.Count]);
+                if (a.y == c.y || Math.Min(a.y, c.y) > y0 || Math.Max(a.y, c.y) < y1) continue;
+                double At(double y) => a.x + (c.x - a.x) * (y - a.y) / (c.y - a.y);
+                cuts.Add((At(y0), At(y1)));
+            }
+            if (cuts.Count % 2 != 0) return null;
+            cuts = cuts.OrderBy(c => c.b + c.t).ToList();
+            if (gaps) { cuts.Insert(0, (left, left)); cuts.Add((right, right)); }
+            var spans = new HashSet<(double, double)>();
+            for (int i = 0; i + 1 < cuts.Count; i += 2)
+            {
+                var (l, r) = (cuts[i], cuts[i + 1]);
+                double wb = r.b - l.b, wt = r.t - l.t;
+                if (wb <= eps && wt <= eps) continue;
+                string lo = Num(Math.Min(wb, wt)), hi = Num(Math.Max(wb, wt));
+                if (Math.Abs(l.b - l.t) < lean && Math.Abs(r.b - r.t) < lean && lo == hi) { spans.Add((l.b, r.b)); continue; }   // 곧게 선 두 변 = 네모
+                // 모델의 mm 찌꺼기(«0.001*0.001*0.5»)와 적히면 0 인 것은 식에 넣지 않는다 — 식 전체는 Shape 가 조각 넓이와 0.5% 로 다시 견준다.
+                if ((wb + wt) * 0.5 * h < 1e-5 || hText == "0" || hi == "0") continue;
+                if (lo == hi) terms.Add(rect(wb, h));                       // 평행사변형(밑변 × 높이)
+                else if (lo == "0") terms.Add($"{hi}*{hText}*0.5");          // 삼각형
+                else terms.Add($"({lo}+{hi})*0.5*{hText}");                 // 사다리꼴(짧은 변 먼저)
+            }
+            foreach (var key in open.Keys.ToList())
+                if (!spans.Contains(key)) { terms.Add(rect(key.x1 - key.x0, y0 - open[key])); open.Remove(key); }
+            foreach (var span in spans) open.TryAdd(span, y0);
+            if (terms.Count > 2 * MaxRectilinearTerms) return null;        // 더 볼 것 없이(검토 낮음 4)
+        }
+        foreach (var (key, start) in open) terms.Add(rect(key.x1 - key.x0, levels[^1] - start));
+        return terms;
     }
 
     // 가로 띠로 자른 네모들(w = x 쪽 길이 · h = y 쪽 길이): 띠마다 짝수-홀수로 덮인 구간(gaps 면 바깥 네모 안의 빈 구간) → 위아래로 같은 구간이

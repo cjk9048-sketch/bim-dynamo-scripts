@@ -30,8 +30,12 @@ public sealed partial class PlacePartView
         _rvConcreteAgain = false;
         _rvLabeled = null;
         var labels = new List<(Vec3, string, Vec3, Vec3)>();
+        var tokens = new List<int>();   // 딱지마다 고른 줄 식의 숫자 차례(R65b — 모르면 −1 → 같은 글로)
         var guides = new List<(IReadOnlyList<Vec3>, bool, int)>();
-        int exact = 0, center = 0, late = 0, points = 0;
+        int exact = 0, center = 0, late = 0, points = 0, linked = 0;
+        // 고른 줄에서 부재 식의 첫 숫자 차례(R65b — JACK 2026-10-27 «0.1 에 갖다 대면 모든 0.1 이 아니라 그 수식이 쓰인 부분의 0.1 만»).
+        var starts = _rv != null && _rvPicked >= 0 && _rvPicked < _rvViews.Count && _rvViews[_rvPicked].item is int pickedItem && pickedItem >= 0 && pickedItem < _rv.Items.Count
+            ? _rv.Items[pickedItem].Starts : null;
         bool capped = shown.Count > MaxConcreteMembers;
         long slowest = 0, slowestId = 0;
         var watch = Stopwatch.StartNew();
@@ -62,6 +66,12 @@ public sealed partial class PlacePartView
                     // 숫자 · 점선 한도를 넘는 부재는 넣지 않는다(숫자 없이 점선만 남지 않게).
                     if (labels.Count + l.Count > MaxConcreteLabels || points + more > MaxGuidePoints) { capped = true; continue; }
                     labels.AddRange(l);
+                    // 그 부재 식의 몇째 숫자(ConcreteLabels.Tokens) + 줄 식에서 그 부재 식이 시작하는 차례 = 줄 식의 그 숫자 하나.
+                    var own = ConcreteLabels.Tokens(geo);
+                    int start = 0;
+                    bool startKnown = starts != null && starts.TryGetValue(id, out start);
+                    foreach (int t in own) tokens.Add(startKnown && t >= 0 ? start + t : -1);
+                    linked += startKnown ? own.Count(t => t >= 0) : 0;
                     guides.AddRange(g);
                     points += more;
                     exact++;
@@ -70,6 +80,7 @@ public sealed partial class PlacePartView
                 {
                     var middle = _memberMeshes[IndexOf(id)].Box.Center;
                     labels.Add((middle, Short(FormworkLabels.Pretty(formula)), middle, middle));
+                    tokens.Add(-1);
                     center++;
                 }
             }
@@ -83,10 +94,10 @@ public sealed partial class PlacePartView
             return;
         }
         finally { Mouse.OverrideCursor = cursor; }
-        _rvLabelTokens = null;      // 콘크리트 숫자는 식의 숫자에 잇지 않았다 — 같은 글로(R63d)
+        _rvLabelTokens = tokens.Take(MaxConcreteLabels).ToList();   // 이은 숫자는 그 하나 · 못 이은 것(−1)은 같은 글로(R63d 그대로)
         _view3d.SetLabels(labels.Take(MaxConcreteLabels).ToList());
         _view3d.SetGuides(guides);
-        Log?.Invoke($"③ 콘크리트 숫자\t부재 {shown.Count}(보임) · 정확 {exact} · 가운데 식 {center} · 시간 넘음 {late} · 숫자 {labels.Count} · 점선 {guides.Count}(점 {points})" +
+        Log?.Invoke($"③ 콘크리트 숫자\t부재 {shown.Count}(보임) · 정확 {exact} · 가운데 식 {center} · 시간 넘음 {late} · 숫자 {labels.Count}(식 숫자에 이음 {linked}) · 점선 {guides.Count}(점 {points})" +
                     $" · {watch.ElapsedMilliseconds} ms · 가장 오래 {slowest} ms(Id {slowestId})");
         if (capped) ShowMessage(ConcreteCapped);
         else if (_message.Text == ConcreteCapped || _message.Text == LabelsCapped) ShowMessage("");

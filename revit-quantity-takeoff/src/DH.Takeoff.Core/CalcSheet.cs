@@ -297,7 +297,11 @@ public static class CalcSheet
     /// «구체공산출근거» 시트의 항목(절 · 부위 · 작은 제목 · 줄 · 계 — 쓰는 차례)과 줄마다 그 근거: 콘크리트 줄 = 든 부재 Id(한 줄로 적는 부위는 이은 줄들의 Id 합) ·
     /// 거푸집 줄 = 그 FormworkLine(R59 — 수량산출 창 ③ 이 엑셀과 같은 줄을 보이고 3D 에 잇는다). Build 가 이것으로 시트를 쓴다(엑셀은 한 칸도 같다).
     /// </summary>
-    public sealed record ItemInfo(Sheet2D.Item Item, IReadOnlyList<long> Ids, Formwork.FormworkLine? Line);
+    /// <remarks>
+    /// Starts(R65b — 콘크리트 줄): 부재 Id → 줄 식에서 그 부재 식의 첫 숫자 차례(Formwork.FormworkLabels.NumberPattern). 부호마다 한 줄이면 0 · 한 줄로 적는 부위(보 · 계단 …)는
+    /// 앞 항들의 숫자 수 — ③ 이 3D 딱지(그 부재 식의 몇째 숫자 — ConcreteLabels.Tokens)를 줄 식의 그 숫자 하나에 잇는다.
+    /// </remarks>
+    public sealed record ItemInfo(Sheet2D.Item Item, IReadOnlyList<long> Ids, Formwork.FormworkLine? Line, IReadOnlyDictionary<long, int>? Starts = null);
 
     /// <summary>시트의 항목들(빈 시트 자리표시 줄은 넣지 않는다 — Build 가 넣는다).</summary>
     public static List<ItemInfo> Items(IReadOnlyList<CalcRow> rows, Formwork.FormworkSheetData? formwork = null) => Compose(rows, formwork, out _, out _);
@@ -348,7 +352,7 @@ public static class CalcSheet
                         classBim[code] += zone.Sum(r => r.Bim);
                         items.Add(new(new Sheet2D.Sub((zone.Key.Length > 0 ? zone.Key : "위치 없음") + " : " + Sheet2D.ClassName(code)), Array.Empty<long>(), null));
                     }
-                    foreach (var (line, ids) in lines) items.Add(new(line with { Group = group }, ids, null));
+                    foreach (var (line, ids, starts) in lines) items.Add(new(line with { Group = group }, ids, null, starts));
                 }
             }
             items.Add(new(new Sheet2D.Total(Classes: true), Array.Empty<long>(), null));
@@ -384,23 +388,27 @@ public static class CalcSheet
         return items;
     }
 
-    // 위치 하나의 산출 줄(부호 줄 → 한 줄로 적는 부위의 줄) · 줄마다 든 부재 Id.
-    private static List<(Sheet2D.Line line, IReadOnlyList<long> ids)> ZoneLines(IEnumerable<CalcRow> zone)
+    // 위치 하나의 산출 줄(부호 줄 → 한 줄로 적는 부위의 줄) · 줄마다 든 부재 Id · 부재 식의 첫 숫자 차례(ItemInfo.Starts).
+    private static List<(Sheet2D.Line line, IReadOnlyList<long> ids, IReadOnlyDictionary<long, int> starts)> ZoneLines(IEnumerable<CalcRow> zone)
     {
-        var lines = new List<(Sheet2D.Line, IReadOnlyList<long>)>();
+        var lines = new List<(Sheet2D.Line, IReadOnlyList<long>, IReadOnlyDictionary<long, int>)>();
         foreach (var r in zone.Where(r => !(r.OneLine && !r.Marked)))
-            lines.Add((new Sheet2D.Line(r.Shown.Length > 0 ? r.Shown : r.Mark, "", r.Formula, r.Count, r.Note), r.Ids));
-        foreach (var (formula, lineNote, names, ids) in OneLineFormulas(zone.Where(r => r.OneLine && !r.Marked).ToList()))
-            lines.Add((new Sheet2D.Line(names, "", formula, 1, lineNote), ids));
+        {
+            var starts = new Dictionary<long, int>();
+            foreach (long id in r.Ids) starts.TryAdd(id, 0);
+            lines.Add((new Sheet2D.Line(r.Shown.Length > 0 ? r.Shown : r.Mark, "", r.Formula, r.Count, r.Note), r.Ids, starts));
+        }
+        foreach (var (formula, lineNote, names, ids, starts) in OneLineFormulas(zone.Where(r => r.OneLine && !r.Marked).ToList()))
+            lines.Add((new Sheet2D.Line(names, "", formula, 1, lineNote), ids, starts));
         return lines;
     }
 
     // 부호 없이 한 줄로 적는 부위(R49 — 2D 보 · 기둥 · 계단 …): 줄마다 «식 × n» 을 « + »로 이어 한 식(숫자가 많으면 나눔). 비고 = 부재 수 · Id.
     // 이름(R53b)이 있는 부재면 그 한 줄의 부호 = 든 부재의 이름(«B01~B12 : …» — 이름 없는 줄이 섞이면 그 줄의 마크 · 유형 이름을 괄호에 넣어 덧붙임 ·
     // 이름과 헷갈리지 않게 — core-verify R53b L2) · 없으면 "".
-    private static List<(string formula, string note, string names, IReadOnlyList<long> ids)> OneLineFormulas(IReadOnlyList<CalcRow> rows)
+    private static List<(string formula, string note, string names, IReadOnlyList<long> ids, IReadOnlyDictionary<long, int> starts)> OneLineFormulas(IReadOnlyList<CalcRow> rows)
     {
-        var result = new List<(string, string, string, IReadOnlyList<long>)>();
+        var result = new List<(string, string, string, IReadOnlyList<long>, IReadOnlyDictionary<long, int>)>();
         if (rows.Count == 0) return result;
         var terms = rows.Select(r =>
         {
@@ -418,7 +426,15 @@ public static class CalcSheet
             string names = "";
             if (picked.Any(t => t.row.Names.Count > 0))
                 names = MemberNames.Compact(picked.SelectMany(t => t.row.Names.Count > 0 ? t.row.Names : new List<string> { "(" + (t.row.Shown.Length > 0 ? t.row.Shown : t.row.Mark) + ")" }));
-            result.Add((formula, $"부재 {members}개 · {ids}", names, picked.SelectMany(t => t.row.Ids).ToList()));
+            // 부재 식의 첫 숫자 차례 = 앞 항들의 숫자 수(괄호 · «+» 는 숫자가 아니다 · 항 끝의 «*개수» 는 그 부재 식 뒤).
+            var starts = new Dictionary<long, int>();
+            int at = 0;
+            foreach (var t in picked)
+            {
+                foreach (long id in t.row.Ids) starts.TryAdd(id, at);
+                at += Formwork.FormworkLabels.NumberPattern.Matches(t.term).Count;
+            }
+            result.Add((formula, $"부재 {members}개 · {ids}", names, picked.SelectMany(t => t.row.Ids).ToList(), starts));
         }
         return result;
     }
