@@ -1,0 +1,14 @@
+{
+  "name": "dh-grading-web3d",
+  "private": true,
+  "description": "DH.Grading [3D 보기] viewer — bundled into one IIFE (dist/viewer.js) and embedded in the Civil DLL.",
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "check": "node tools/build.mjs --check"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "mp4-muxer": "5.2.2",
+    "three": "0.186.1"
+  }
+}

@@ -18,6 +18,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.WallCompositeCommand))]       // DHWALLCOMP(옹벽 합성 — 합성지표면_DH = max(정지면, min(옹벽, 원지반)), §89)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SlopeReleaseCommand))]        // DHSLOPE(사면 변환 — 옹벽선 선택해 그 단부터 사면 복귀)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.InfraworksCommand))]          // DHINFRA(INFRAWORKS SHP 내보내기)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.Web3DCommand))]               // DH3D(3D 보기 — Civil 안 3D 창 · v107)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ViewSurfaceCommand))]         // DHVIEW(지표면 보기 전환)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ExcavCommand))]              // DHEXCAV(터파기 지표면 — 지하구조물)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ResetCommand))]               // DHRESET(초기화 — 정지면 생성 전으로)
@@ -587,8 +588,9 @@ public sealed class RibbonApp : IExtensionApplication
             splitGround.Current = btnNgii;
 
             var pExport = new RibbonPanelSource { Title = "내보내기" };
+            // ★★★[v107 · JACK 1027 «인프라웍스 내보내기기능을 3D 웹뷰 기능으로 업그레이드»] INFRA WORKS → 3D 보기(InfraWorks 파일은 3D 창 [저장] 안에서)
             var btnInfra = MakeButton(
-                "INFRA\nWORKS", "DHINFRA ", "InfraWorks 기초자료 내보내기 — 폴더 선택 후 지형·옹벽3D·SHP·위성GeoTIFF·토공량을 내보냄(있는 것만). DHGRADE 후 사용", "infra");
+                "3D\n보기", "DH3D ", "3D 보기 — 정지 결과(지형 · 위성 · 옹벽 무늬 · 사면 · 소단 · 토공량)를 Civil 안 3D 창으로. 창 [저장]에서 3D 파일 · InfraWorks 파일. DHGRADE 후 사용", "3d");
 
             // ★★★[JACK 0901 "수치지도를 불러 버리면 계획지역보다 너무 클 수 있어서"]
             //   도엽 한 장이 2×3km인데 현장은 200m다 — 삼각형 수만 개가 계산을 매번 따라다닌다.
@@ -1202,6 +1204,26 @@ public sealed class RibbonApp : IExtensionApplication
                         break;
 
                     // ── 내보내기 ─────────────────────────────────────────────
+                    case "3d": // ★[v107] 3D 보기 — 등각 상자(파랑 = 보기) + 윗면 비탈(초록 = 정지)
+                        var c3 = P(0x4a, 0x90, 0xe2);
+                        var top3 = new StreamGeometry();
+                        using (var g = top3.Open())
+                        {
+                            g.BeginFigure(new Point(16, 4), false, true);
+                            g.LineTo(new Point(27, 10), true, true);
+                            g.LineTo(new Point(16, 16), true, true);
+                            g.LineTo(new Point(5, 10), true, true);
+                        }
+                        top3.Freeze();
+                        dc.DrawGeometry(null, c3, top3);
+                        dc.DrawLine(c3, new Point(5, 10), new Point(5, 22));
+                        dc.DrawLine(c3, new Point(27, 10), new Point(27, 22));
+                        dc.DrawLine(c3, new Point(16, 16), new Point(16, 28));
+                        dc.DrawLine(c3, new Point(5, 22), new Point(16, 28));
+                        dc.DrawLine(c3, new Point(27, 22), new Point(16, 28));
+                        dc.DrawLine(P(0x5c, 0xa8, 0x4a), new Point(9, 10), new Point(17, 6));
+                        break;
+
                     default: // infra: 상자 + 내보내기 화살표(파랑)
                         var bl = P(0x4a, 0x90, 0xe2);
                         dc.DrawRectangle(null, bl, new Rect(5, 13, 13, 14));

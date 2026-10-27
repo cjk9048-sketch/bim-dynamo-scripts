@@ -359,6 +359,8 @@ public static class WallSection
         public double FaceX0, FaceN;
         /// <summary>벽 꼭대기 높이(앞 땅 기준) = 보이는 높이.</summary>
         public double ZTop => HTotal - Df;
+        /// <summary>★[v106.0.1 · 검토 낮음 3] 얕은 복사 + 조각 목록만 새로(칸이 늘어도 빠지지 않게).</summary>
+        public Shape Clone() { var c = (Shape)MemberwiseClone(); c.Parts = new List<Part>(Parts); return c; }
         public double StructArea => Parts.Where(p => p.Structure).Sum(p => p.Fraction * Math.Abs(Area(p.Ring)));
     }
 

@@ -310,7 +310,7 @@ internal static class SelfCheckCmd
     /// <summary>표지를 세우는 명령 — 도면을 바꾸거나 오래 걸리는 것만(찍기 · 창 열기 같은 잔명령은 뺀다 — 기록이 잡음으로 덮이지 않게).</summary>
     static readonly HashSet<string> Tracked = new(System.StringComparer.OrdinalIgnoreCase)
     {
-        "DHGRADE", "DHWALL", "DHSLOPE", "DHWALLCOMP", "DHRESET", "DHMISCSET", "DHNORI", "DHINFRA",
+        "DHGRADE", "DHWALL", "DHSLOPE", "DHWALLCOMP", "DHRESET", "DHMISCSET", "DHNORI", "DHINFRA", "DH3D",
         "DHPROFILE", "DHSECTION", "DHXVIEW", "DHSAMPLE", "DHSHEET", "DHSHEETSET",
         "DHSTATION", "DHSTATIONFB", "DHSTATIONDEL",
         "DHEXCAV", "DHEXCAVWALL", "DHEXCAVSLOPE", "DHEXCAVWALLCLEAR",
