@@ -134,29 +134,19 @@ internal static class WallSolidDwg
         return st;
     }
 
-    /// <summary>정거장들을 잇는 덩어리 — 조각마다 메시 → 솔리드. 링 점은 <see cref="WallSweep.World"/>(전단 · 꼭대기 올림)로.</summary>
+    /// <summary>정거장들을 잇는 덩어리 — 조각마다 메시 → 솔리드. 링 점은 <see cref="WallSweep.World"/>(전단 · 꼭대기 올림)로.
+    /// ★[v107] 링 점은 Core <see cref="WallMesh.LoftRings"/> 하나를 [3D 보기]와 함께 쓴다(같은 점) — 면은 여기서 사각 그대로(ACIS 변환이 지금과 같게 · 계획 검토 중간 4).</summary>
     static void Loft(Transaction tr, BlockTableRecord ms, List<WallSweep.Sta> run, Func<string, ObjectId> layer, Stats st, bool lift)
     {
-        var parts0 = WallSweep.Solids(run[0].Shape);
-        for (int pi = 0; pi < parts0.Count; pi++)
+        var rings = WallMesh.LoftRings(run, lift);
+        for (int pi = 0; pi < rings.Count; pi++)
         {
-            string mat = parts0[pi].Material;
-            int m = parts0[pi].Ring.Count;
+            var (mat, m, V) = rings[pi];
             // 원점 = 첫 정거장(앞 땅) — 원점 근처에서 짓고 옮긴다
             double ox = run[0].X, oy = run[0].Y, oz = run[0].Toe;
+            if (V == null) { st.Fails++; if (st.FirstFail.Length == 0) st.FirstFail = $"{mat} 링 꼴이 정거장마다 다름"; continue; }
             var verts = new Point3dCollection();
-            bool ok = true;
-            foreach (var s in run)
-            {
-                var ps = WallSweep.Solids(s.Shape);
-                if (pi >= ps.Count || ps[pi].Ring.Count != m) { ok = false; break; }
-                foreach (var q in ps[pi].Ring)
-                {
-                    var w = WallSweep.World(s, q.X, q.Z, lift);
-                    verts.Add(new Point3d(w.X - ox, w.Y - oy, w.Z - oz));
-                }
-            }
-            if (!ok) { st.Fails++; if (st.FirstFail.Length == 0) st.FirstFail = $"{mat} 링 꼴이 정거장마다 다름"; continue; }
+            foreach (var w in V) verts.Add(new Point3d(w.X - ox, w.Y - oy, w.Z - oz));
             var faces = new List<int[]>();
             int ns = run.Count;
             for (int k = 0; k + 1 < ns; k++)

@@ -8,6 +8,10 @@ DHGRADE_교선덤프_*.csv
 tools/setup/bundle.zip
 tools/setup/bin/
 tools/setup/obj/
+web3d/node_modules/
+web3d/out/
+# [v107.1] 3D 웹 공유 기본 설정(NAS 주소 · 계정 · 비밀번호) — 설치 폴더에만 · 공개 저장소에 절대 안 올림
+**/share3d*.json
 src/DH.Grading.Civil/Resources/*.bak
 src/DH.Grading.Civil/Resources/DHT_백업_*.dwt
 

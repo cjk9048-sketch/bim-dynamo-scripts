@@ -319,6 +319,181 @@ public static class VWorldImagery
         return null;
     }
 
+    // ── ★★[v107 · 계획_v107.md 2 · 검토 높음 1 · 중간 10] [3D 보기] 위성 그림(JPEG) ──
+    //   InfraWorks용(Export · ExportBasemap)은 그대로 두고 따로 — 4장씩 동시에 받고 · 첫 장을 짧게 시험하고 · 연달아 못 받으면 멈추고 · 같은 범위는 PC에 둔 것을 쓴다.
+    private static readonly HttpClient HttpQuick = new() { Timeout = System.TimeSpan.FromSeconds(8) };
+
+    /// <summary>[3D 보기] 위성 — TM 범위(도면 좌표)를 목표 m/px로 받아 도면 좌표 격자 JPEG로. 줌은 해상도에 맞춰 자동 · 타일 · 픽셀 · 한 변 한도를 넘으면 해상도를 2배씩 낮춤.
+    /// 돌려줌: JPEG(없으면 null) · 실제 m/px · 픽셀 W · H · 왼쪽 위(minE, maxN) · 안내. 그림 범위 = [minE, minE + W·res] × [maxN − H·res, maxN](검토 높음 1 — 요청 범위가 아니라 돌려받은 크기로).</summary>
+    public static (byte[]? Jpeg, double Res, int W, int H, double MinE, double MaxN, string Msg) Texture(
+        double minE, double minN, double maxE, double maxN, double targetRes,
+        double lon0Deg, double falseNorthing, string cacheDir,
+        long maxPixels = 16_000_000, int maxSide = 8192, int maxTiles = 800, int quality = 88)
+    {
+        if (!(maxE > minE) || !(maxN > minN)) return (null, 0, 0, 0, 0, 0, "범위 없음");
+        var c = new[]
+        {
+            TmToLonLat(minE, minN, lon0Deg, falseNorthing), TmToLonLat(maxE, minN, lon0Deg, falseNorthing),
+            TmToLonLat(minE, maxN, lon0Deg, falseNorthing), TmToLonLat(maxE, maxN, lon0Deg, falseNorthing),
+        };
+        double west = double.MaxValue, east = double.MinValue, south = double.MaxValue, north = double.MinValue;
+        foreach (var (lon, lat) in c)
+        { west = System.Math.Min(west, lon); east = System.Math.Max(east, lon); south = System.Math.Min(south, lat); north = System.Math.Max(north, lat); }
+        double cosLat = System.Math.Max(0.1, System.Math.Cos((south + north) / 2 * System.Math.PI / 180.0));
+        double res = System.Math.Max(0.1, targetRes);
+        int z = MaxZoom, xmin = 0, ymin = 0, xmax = 0, ymax = 0, cols = 0, rows = 0, outW = 0, outH = 0;
+        bool fit = false;
+        for (int attempt = 0; attempt < 12; attempt++)
+        {
+            z = (int)System.Math.Round(System.Math.Log(2.0 * OriginShift * cosLat / (TileSize * res), 2));
+            z = System.Math.Clamp(z, 8, MaxZoom);
+            (xmin, ymin) = LonLatToTile(west, north, z);
+            (xmax, ymax) = LonLatToTile(east, south, z);
+            cols = xmax - xmin + 1; rows = ymax - ymin + 1;
+            outW = (int)System.Math.Ceiling((maxE - minE) / res);
+            outH = (int)System.Math.Ceiling((maxN - minN) / res);
+            if (cols > 0 && rows > 0 && outW >= 2 && outH >= 2 && (long)cols * rows <= maxTiles
+                && (long)outW * outH <= maxPixels && outW <= maxSide && outH <= maxSide) { fit = true; break; }
+            res *= 2.0;
+        }
+        if (!fit) return (null, 0, 0, 0, 0, 0, "범위가 너무 넓어 위성 생략");
+
+        // 캐시 — 범위 · 해상도 · 원점이 같으면 그대로
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        string key = string.Format(ci, "{0:F1}_{1:F1}_{2:F1}_{3:F1}_{4:0.###}_{5}_{6}_{7}", minE, minN, maxE, maxN, res, lon0Deg, falseNorthing, quality);
+        string hash = System.Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(key)))[..16];
+        string jpg = System.IO.Path.Combine(cacheDir, hash + ".jpg");
+        string meta = System.IO.Path.Combine(cacheDir, hash + ".txt");
+        try
+        {
+            if (System.IO.File.Exists(jpg) && System.IO.File.Exists(meta))
+            {
+                var m = System.IO.File.ReadAllText(meta).Split(' ');
+                if (m.Length == 3)
+                    return (System.IO.File.ReadAllBytes(jpg), res, int.Parse(m[0], ci), int.Parse(m[1], ci), minE, maxN, $"캐시 · z{z} · {res:0.##} m/px · {m[0]}×{m[1]}");
+            }
+        }
+        catch { }
+
+        // 첫 장 시험(짧게) — 인터넷이 조용히 막힌 자리에서 수십 초 멈추지 않게
+        if (Fetch(z, ymin, xmin, quick: true) == null && Fetch(z, ymax, xmax, quick: true) == null)
+            return (null, 0, 0, 0, 0, 0, "위성 첫 타일을 못 받음(인터넷 · 차단 확인)");
+
+        // 4장씩 동시에 받고(바이트만) · 연달아 8장 못 받으면 멈춤 · 풀기(WPF 그림)는 이 스레드에서 차례로
+        var raw = new System.Collections.Concurrent.ConcurrentDictionary<(int, int), byte[]>();
+        int fails = 0, run = 0;
+        using var cts = new System.Threading.CancellationTokenSource();
+        var list = new List<(int x, int y)>();
+        for (int ty = ymin; ty <= ymax; ty++) for (int tx = xmin; tx <= xmax; tx++) list.Add((tx, ty));
+        try
+        {
+            System.Threading.Tasks.Parallel.ForEach(list, new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = cts.Token }, t =>
+            {
+                var b = Fetch(z, t.y, t.x, quick: false);
+                if (b == null)
+                {
+                    System.Threading.Interlocked.Increment(ref fails);
+                    if (System.Threading.Interlocked.Increment(ref run) >= 8) cts.Cancel();
+                    return;
+                }
+                System.Threading.Interlocked.Exchange(ref run, 0);
+                raw[(t.x, t.y)] = b;
+            });
+        }
+        catch (System.OperationCanceledException) { }
+        if (cts.IsCancellationRequested) return (null, 0, 0, 0, 0, 0, $"위성 타일이 연달아 안 와 멈춤(받음 {raw.Count}/{list.Count})");
+        var tiles = new Dictionary<(int, int), byte[]>();
+        foreach (var kv in raw) { var px = Decode(kv.Value); if (px != null) tiles[kv.Key] = px; }
+        int ok = tiles.Count;
+        if (ok == 0) return (null, 0, 0, 0, 0, 0, "위성 타일을 하나도 못 받음");
+
+        // 도면 좌표 격자로(최근접 · 32 px 격자 보간 — ReprojectToTm과 같은 법) → JPEG
+        double mpp = 2.0 * OriginShift / (TileSize * System.Math.Pow(2, z));
+        double x0 = -OriginShift + xmin * TileSize * mpp, y0 = OriginShift - ymin * TileSize * mpp;
+        const int G = 32;
+        int gx = outW / G + 2, gy = outH / G + 2;
+        var fx = new double[gy, gx]; var fy = new double[gy, gx];
+        for (int j = 0; j < gy; j++)
+            for (int i = 0; i < gx; i++)
+            {
+                var (lon, lat) = TmToLonLat(minE + (i * (double)G + 0.5) * res, maxN - (j * (double)G + 0.5) * res, lon0Deg, falseNorthing);
+                double mx = lon / 180.0 * OriginShift;
+                double my = System.Math.Log(System.Math.Tan((90.0 + lat) * System.Math.PI / 360.0)) / System.Math.PI * OriginShift;
+                fx[j, i] = (mx - x0) / mpp; fy[j, i] = (y0 - my) / mpp;
+            }
+        var rgb = new byte[(long)outW * outH * 3];
+        System.Threading.Tasks.Parallel.For(0, outH, py =>
+        {
+            int j0 = py / G; double tv = (py % G) / (double)G;
+            for (int px = 0; px < outW; px++)
+            {
+                int i0 = px / G; double tu = (px % G) / (double)G;
+                double sx = (fx[j0, i0] * (1 - tu) + fx[j0, i0 + 1] * tu) * (1 - tv) + (fx[j0 + 1, i0] * (1 - tu) + fx[j0 + 1, i0 + 1] * tu) * tv;
+                double sy = (fy[j0, i0] * (1 - tu) + fy[j0, i0 + 1] * tu) * (1 - tv) + (fy[j0 + 1, i0] * (1 - tu) + fy[j0 + 1, i0 + 1] * tu) * tv;
+                int ix = (int)(sx + 0.5), iy = (int)(sy + 0.5);
+                if (ix < 0 || iy < 0) continue;
+                if (!tiles.TryGetValue((xmin + ix / TileSize, ymin + iy / TileSize), out var tb)) continue;
+                int s = ((iy % TileSize) * TileSize + ix % TileSize) * 4;
+                long d = ((long)py * outW + px) * 3;
+                rgb[d] = tb[s + 2]; rgb[d + 1] = tb[s + 1]; rgb[d + 2] = tb[s];
+            }
+        });
+        var src = BitmapSource.Create(outW, outH, 96, 96, PixelFormats.Rgb24, null, rgb, outW * 3);
+        var enc = new JpegBitmapEncoder { QualityLevel = quality };
+        enc.Frames.Add(BitmapFrame.Create(src));
+        byte[] bytes;
+        using (var ms = new System.IO.MemoryStream()) { enc.Save(ms); bytes = ms.ToArray(); }
+        // ★[설치 전 검토 중간] 다 받았을 때만 캐시 — 빠진 타일(검은 조각)을 캐시에 두면 다음부터 늘 그대로 나온다 · 최근 20장만 둔다
+        if (ok == list.Count)
+            try
+            {
+                System.IO.Directory.CreateDirectory(cacheDir);
+                System.IO.File.WriteAllBytes(jpg, bytes);
+                System.IO.File.WriteAllText(meta, string.Format(ci, "{0} {1} {2:0.###}", outW, outH, res));
+                foreach (var old in new System.IO.DirectoryInfo(cacheDir).GetFiles("*.jpg").OrderByDescending(f => f.LastWriteTimeUtc).Skip(20))
+                    try { old.Delete(); System.IO.File.Delete(System.IO.Path.ChangeExtension(old.FullName, ".txt")); } catch { }
+            }
+            catch { }
+        return (bytes, res, outW, outH, minE, maxN, $"z{z} · 타일 {ok}/{list.Count}{(fails > 0 ? $"(못 받음 {fails})" : "")} · {res:0.##} m/px · {outW}×{outH}");
+    }
+
+    /// <summary>타일 한 장의 JPEG 바이트(없거나 못 받으면 null — 아무 스레드에서나). quick이면 3초 한 번 · 아니면 8초 두 번.</summary>
+    private static byte[]? Fetch(int z, int y, int x, bool quick)
+    {
+        string url = $"http://api.vworld.kr/req/wmts/1.0.0/{ApiKey}/{Layer}/{z}/{y}/{x}.jpeg";
+        for (int attempt = 0; attempt < (quick ? 1 : 2); attempt++)
+        {
+            try
+            {
+                using var cts = new System.Threading.CancellationTokenSource(System.TimeSpan.FromSeconds(quick ? 3 : 8));
+                byte[] bytes = HttpQuick.GetByteArrayAsync(url, cts.Token).GetAwaiter().GetResult();
+                return bytes.Length < 500 ? null : bytes;   // 없는 타일은 작은 XML 예외로 옴
+            }
+            catch { if (!quick) System.Threading.Thread.Sleep(200); }
+        }
+        return null;
+    }
+
+    /// <summary>JPEG → BGRA 256×256(부르는 스레드에서 — WPF 그림 객체).</summary>
+    private static byte[]? Decode(byte[] jpeg)
+    {
+        try
+        {
+            var bi = new BitmapImage();
+            bi.BeginInit();
+            bi.CacheOption = BitmapCacheOption.OnLoad;
+            bi.StreamSource = new System.IO.MemoryStream(jpeg);
+            bi.EndInit();
+            bi.Freeze();
+            var cv = new FormatConvertedBitmap(bi, PixelFormats.Bgra32, null, 0);
+            if (cv.PixelWidth != TileSize || cv.PixelHeight != TileSize) return null;
+            var px = new byte[TileSize * TileSize * 4];
+            cv.CopyPixels(px, TileSize * 4, 0);
+            return px;
+        }
+        catch { return null; }
+    }
+
     // ── 좌표 변환 ─────────────────────────────────────────────────────────────
     // 경위도 → 웹메르카토르 XYZ 타일 인덱스(열 x, 행 y).
     private static (int x, int y) LonLatToTile(double lon, double lat, int z)

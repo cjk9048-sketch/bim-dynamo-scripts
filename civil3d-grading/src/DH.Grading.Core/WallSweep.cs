@@ -48,8 +48,8 @@ public static class WallSweep
     /// <summary>그 단면의 앞면 맞춤 전단 b = max(0, 보이는 앞면 기울기 − 정지면 벽 기울기). 정지면 벽 기울기를 모르면(음수) 0.</summary>
     public static double LeanOf(WallSection.Shape sh, double slopeW) => slopeW < 0 ? 0 : Math.Max(0, sh.FaceN - slopeW);
 
-    /// <summary>스윕 계획. <paramref name="lean"/> 거짓이면 전단 없음(v105와 같은 결과 — 회귀 견줌).</summary>
-    public static Plan Make(WallExcav.SecLine ln, bool lean = true)
+    /// <summary>스윕 계획. <paramref name="lean"/> 거짓이면 전단 없음 · <paramref name="keepTop"/> 거짓이면 표 줄 바뀌는 가운데 정거장이 v105 그대로(앞 땅 평균 + 제 높이 — 회귀 견줌).</summary>
+    public static Plan Make(WallExcav.SecLine ln, bool lean = true, bool keepTop = true)
     {
         var plan = new Plan();
         var P = ln.Pts;
@@ -113,11 +113,17 @@ public static class WallSweep
             else
             {
                 // 표 줄이 바뀐다 — 가운데에서 끊는다: 앞 단면으로 가운데까지 · 뒤 단면으로 가운데부터
+                //   ★★[v106 · JACK 1027 스샷 «옹벽 끝부분이 뾰족하게 튀어나오는 오류»] 가운데 정거장의 <b>꼭대기는 두 점 꼭대기의 평균</b>(직선)에 맞춘다 —
+                //     v105는 앞 땅 평균 + 제 단면 높이라 앞 땅이 기울면 꼭대기가 ±(h_b − h_a)/2(현장 사본 최대 33 cm 계단) 어긋나 덩어리 끝마다 쐐기가 솟았다.
+                //     꼭대기만 맞추면(앞 땅을 옮기면) 높이 차가 큰 자리(사본 4 m)에서 몸통 바닥이 땅 위로 뜬다 → 앞 땅은 평균 그대로 두고 <b>꼭대기 꼭짓점만 앞면 기울기 따라 옮긴다</b>(<see cref="AtHeight"/>)
                 double mx = (a.X + b.X) / 2, my = (a.Y + b.Y) / 2, mt = (a.Toe + b.Toe) / 2;
+                double hMid = (a.Shape.ZTop + b.Shape.ZTop) / 2;           // 평균 꼭대기 − 평균 앞 땅 = 평균 높이(검토 낮음 4)
+                var sa = keepTop ? AtHeight(a.Shape, hMid) : a.Shape;
+                var sb = keepTop ? AtHeight(b.Shape, hMid) : b.Shape;
                 if (run.Count == 0) run.Add(new Sta(a.X, a.Y, a.Toe, nx[k], ny[k], a.Shape, 1.0, Ln(a.Shape), k));
-                run.Add(new Sta(mx, my, mt, nx[k], ny[k], a.Shape, 1.0, Ln(a.Shape), k));
+                run.Add(new Sta(mx, my, mt, nx[k], ny[k], sa, 1.0, Ln(a.Shape), k));
                 Flush();
-                run.Add(new Sta(mx, my, mt, nx[k], ny[k], b.Shape, 1.0, Ln(b.Shape), k));
+                run.Add(new Sta(mx, my, mt, nx[k], ny[k], sb, 1.0, Ln(b.Shape), k));
                 run.Add(new Sta(b.X, b.Y, b.Toe, nx[k], ny[k], b.Shape, 1.0, Ln(b.Shape), k + 1));
             }
             lastK = k;
@@ -131,6 +137,21 @@ public static class WallSweep
             if (Math.Abs(ang) * 180 / Math.PI >= StraightDeg * 0.25) plan.Corners.Add(new Corner(P[0], nx[lastK], ny[lastK], nx[firstK], ny[firstK], ang, Ln(P[0].Shape)));
         }
         return plan;
+    }
+
+    /// <summary>★[v106.0.1 · JACK 1027 «뾰족하게 튀어나오는 오류» · 검토 낮음 1] 단면을 보이는 높이 <paramref name="h"/>로 — <b>꼭대기 꼭짓점만</b>(z = 지금 높이) 앞면 기울기를 따라 옮긴다:
+    /// (x, h0) → (x + FaceN·(h − h0), h). 꼭대기 꼭짓점은 모든 형식에서 x = c + FaceN·z 선(벽체 · 블록 · 패널 · 돌 · 뒤채움 · 배수층) 위라 그 줄로 높이 h에 다시 세운 단면과 같다
+    /// (기초 · 묻힌 몫은 그대로 — 비례로 늘이면 기초 윗면이 땅 위인 표에서 기초까지 늘었다). 같은 높이 · 1 cm 안 높이는 그대로. 3D 표 줄 가운데 정거장만 쓴다(수량 · 터파기와 무관).</summary>
+    public static WallSection.Shape AtHeight(WallSection.Shape sh, double h)
+    {
+        double h0 = sh.ZTop;
+        if (!(h0 > 0.01) || !(h > 0.01) || Math.Abs(h - h0) < 1e-9) return sh;
+        double dx = sh.FaceN * (h - h0);
+        (double X, double Z) M((double X, double Z) q) => q.Z >= h0 - 1e-9 ? (q.X + dx, h) : q;
+        var c = sh.Clone();
+        c.Parts = sh.Parts.Select(p => p with { Ring = p.Ring.Select(M).ToList() }).ToList();
+        c.HTotal = h + sh.Df;
+        return c;
     }
 
     /// <summary>단면 높이 z(앞 땅 기준)에서 구조물 가장 앞 x(공기 쪽 끝) — 그 높이를 가로지르는 링 변들 중 최소 x. 없으면 NaN.</summary>

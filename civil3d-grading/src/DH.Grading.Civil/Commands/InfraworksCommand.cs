@@ -58,7 +58,7 @@ public sealed class InfraworksCommand
     /// <item>자가점검(양쪽 · 0.5 m 격자 · 지금 합성 옹벽 자리): 바뀌었는데 안 뺀 넓이 · 안 바뀌었는데 뺀 넓이.</item>
     /// </list></summary>
     static NetTopologySuite.Geometries.Geometry? WallChangeMask(Database db, System.Collections.Generic.List<GradingBundle> regions, ObjectId groundId,
-        System.Text.StringBuilder log, System.Collections.Generic.List<string> warn)
+        System.Text.StringBuilder log, System.Collections.Generic.List<string> warn, bool web = false)
     {
         var civ = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
         var gf = NtsSupport.Factory();
@@ -84,6 +84,8 @@ public sealed class InfraworksCommand
             var inComp = walls.Where(w => nos != null && nonce.Length > 0 && nos.Contains(w.No) && w.CompNonce == nonce && w.Cap != null).ToList();
             int notIn = walls.Count - inComp.Count;
             if (notIn > 0) txt.Add($"합성 안 된 옹벽 {notIn}개(지형 · 3D · SHP 모두 없음 — [옹벽 합성] 뒤 다시 내보내면 들어감)");
+            // ★[v107 · 계획 검토 중간 2] [3D 보기]는 합성하지 않는다(읽기만) — 빠진 옹벽은 ⚠로 알린다
+            if (web && notIn > 0) warn.Add($"합성 안 된 옹벽 {notIn}개는 3D에 없습니다 — [옹벽 합성] 뒤 [새로고침]");
             var polys = inComp.Select(w => Poly(w.Poly)).Where(g => g != null && !g.IsEmpty).Cast<NetTopologySuite.Geometries.Geometry>().ToList();
             if (inComp.Count > 0 && polys.Count == 0) warn.Add($"합성 옹벽 {inComp.Count}개의 폴리곤을 못 읽어 사면 · 소단 SHP에서 안 뺐습니다");   // ★[검토 낮음 L2]
             if (polys.Count > 0)
@@ -179,9 +181,24 @@ public sealed class InfraworksCommand
     {
         Document doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
+        RunCore(doc, null);
+    }
+
+    /// <summary>★★★[v107 · 계획_v107.md 2 · JACK 1027 «인프라웍스 내보내기기능을 3D 웹뷰 기능으로 업그레이드»] 수집은 한 벌 — <paramref name="web"/>이 없으면 DHINFRA(InfraWorks 파일) ·
+    /// 있으면 [3D 보기](파일 안 씀 · 도면 안 바꿈: 옹벽 합성 · 좌표계 지정을 안 하고 ⚠만 — 계획 검토 중간 2). 쓰는 자리마다 갈래만 있고 규칙은 같다.</summary>
+    internal static string? RunCore(Document doc, Web3DCollect? web)
+    {
+        bool files = web == null;
+        string title = files ? "infraworks 기초자료" : "3D 보기";
+        // ★[v107 · 계획 1.6 «도면은 안 바꾼다»] [3D 보기] 단계마다 도면 바뀜(DBMOD)을 적는다 — 바뀐 단계를 로그 한 줄로 가른다
+        var modTrail = new System.Collections.Generic.List<string>();
+        void Mod(string at) { if (web == null) return; try { modTrail.Add($"{at} {AcadApp.GetSystemVariable("DBMOD")}"); } catch { } }
+        Mod("시작");
         GradingSettings.SyncToDocument(doc);   // [도면 전환 0803] 도면이 바뀌었으면 그 도면 기준으로 설정·기억 재정렬
+        Mod("설정");
         Editor ed = doc.Editor;
         Database db = doc.Database;
+        string? webPath = null;
 
         try
         {
@@ -189,43 +206,56 @@ public sealed class InfraworksCommand
             string note;
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
-                regions = NoriCommand.PassGates(db, tr, ed, "infraworks 기초자료", out note);
+                regions = NoriCommand.PassGates(db, tr, ed, title, out note);
                 tr.Commit();
             }
-            if (regions == null || regions.Count == 0) return;
+            if (regions == null || regions.Count == 0) return null;
+            Mod("관문");
             // ★★★[v103.1.12 · JACK 1015 ②] 정지면_DH(옹벽 합성)를 내보낸다 — 빠진 옹벽이 있으면 먼저 합성하고, 그래도 빠졌으면 묻는다(기본 아니오 = 멈춤)
-            if (!CompositeGate.Ensure(doc, "infraworks 기초자료")) return;
+            //   ★[v107] [3D 보기]는 합성하지 않는다(읽기만 · 새로고침마다 묻지 않게) — 빠진 옹벽은 WallChangeMask가 ⚠
+            if (files && !CompositeGate.Ensure(doc, title)) return null;
 
-            // 폴더 선택 — 원하는 위치에 내보낸다(JACK 0724).
-            string folder;
-            if (SelfCheckLog.Headless && FolderForTest != null) folder = FolderForTest;   // ★[v106 시험 칸]
+            // 폴더 선택 — 원하는 위치에 내보낸다(JACK 0724). [3D 보기]는 폴더가 없다.
+            string folder = "";
+            if (!files) { }
+            else if (SelfCheckLog.Headless && FolderForTest != null) folder = FolderForTest;   // ★[v106 시험 칸]
             else
             {
                 var dlg = new Microsoft.Win32.OpenFolderDialog { Title = "infraworks 기초자료 내보낼 폴더 선택" };
                 if (!string.IsNullOrEmpty(GradingSettings.ExportFolder) && System.IO.Directory.Exists(GradingSettings.ExportFolder))
                     dlg.InitialDirectory = GradingSettings.ExportFolder;
-                if (dlg.ShowDialog() != true) { ed.WriteMessage("\n[infraworks 기초자료] 폴더 선택 취소"); return; }
+                if (dlg.ShowDialog() != true) { ed.WriteMessage("\n[infraworks 기초자료] 폴더 선택 취소"); return null; }
                 folder = dlg.FolderName;
                 GradingSettings.ExportFolder = folder;
             }
 
             // 좌표계 자동 — 도면 좌표계(MAPCSASSIGN) 우선, 없으면 설정값으로 도면 지정.
+            //   ★[v107] [3D 보기]는 읽기만 — 도면에 좌표계를 넣지 않고 설정값도 안 바꾼다(위성 자리에만 쓴다)
             string csNote;
+            int epsg = GradingSettings.ExportEpsg;
             {
                 string csCode = KoreaCs.Read(db);
                 int? det = KoreaCs.ResolveEpsgFromCode(csCode);
-                if (det.HasValue) { GradingSettings.ExportEpsg = det.Value; csNote = $"좌표계: 도면 '{csCode}' 감지 → EPSG:{det.Value} 자동 적용"; }
+                if (!files) { if (det.HasValue) epsg = det.Value; csNote = det.HasValue ? $"좌표계: 도면 '{csCode}' → EPSG:{epsg}" : $"좌표계: 도면 '{csCode}' 자동인식 밖 · 미지정 — 설정값 EPSG:{epsg}(도면은 안 바꿈)"; }
+                else if (det.HasValue) { GradingSettings.ExportEpsg = det.Value; csNote = $"좌표계: 도면 '{csCode}' 감지 → EPSG:{det.Value} 자동 적용"; }
                 else if (string.IsNullOrEmpty(csCode)) { var (ok, an) = KoreaCs.AssignIfMissing(db, GradingSettings.ExportEpsg); csNote = "좌표계: 도면 미지정 → " + an + (ok ? "" : " · 설정값으로 계속"); }
                 else csNote = $"좌표계: 도면 '{csCode}'는 자동인식 밖 — 설정값(EPSG:{GradingSettings.ExportEpsg}) 사용";
+                if (files) epsg = GradingSettings.ExportEpsg;
             }
 
-            string? wkt = ShapefileWriter.WktForEpsg(GradingSettings.ExportEpsg);
-            var belt = ShapefileWriter.Belt(GradingSettings.ExportEpsg);
+            string? wkt = ShapefileWriter.WktForEpsg(epsg);
+            var belt = ShapefileWriter.Belt(epsg);
             int beltCm = belt?.cm ?? 127; double beltFn = belt?.fn ?? 600000;
             var log = new System.Text.StringBuilder();
             var made = new System.Collections.Generic.List<string>();   // 실제로 내보낸 파일(있는 것만)
             log.AppendLine(csNote);
-            log.AppendLine($"폴더: {folder} · 좌표계 EPSG:{GradingSettings.ExportEpsg}({belt?.name ?? "미지원→중부기본"}){(wkt == null ? " · WKT 없음(.prj 생략)" : "")}");
+            log.AppendLine(files ? $"폴더: {folder} · 좌표계 EPSG:{epsg}({belt?.name ?? "미지원→중부기본"}){(wkt == null ? " · WKT 없음(.prj 생략)" : "")}"
+                                 : $"3D 보기 · 좌표계 EPSG:{epsg}({belt?.name ?? "미지원→중부기본"})");
+            if (web != null)
+            {
+                web.Epsg = epsg; web.BeltCm = beltCm; web.BeltFn = beltFn;
+                web.Dwg = System.IO.Path.GetFileName(doc.Name); web.DwgKey = doc.Name;
+            }
             var ng = new NullGround();
 
             // 원지반 샘플러(옹벽 패널·블록 배치 + 토공량용) — 도면 TIN 중 우리 산출물 제외 최다 삼각형 표면.
@@ -257,6 +287,17 @@ public sealed class InfraworksCommand
             }
             catch { groundSampler = null; }
             log.AppendLine(groundSampler != null ? $"원지반: '{groundName}'" : "원지반: 미발견 — 옹벽 객체·토공량 일부 생략");
+            if (web != null)
+            {
+                // ★[v107 · 계획 검토 중간 7] 토공량 · 절성토 색 = 이 원지반(삼각형 최다) · 옹벽 변환 자리 · 단면 = GroundOf(이름 «원지반» 먼저) — 다르면 3D에 ⚠
+                web.Ground = groundSampler; web.GroundName = groundName;
+                try
+                {
+                    var gOf = SectionCommand.GroundOf(db);
+                    if (!gOf.IsNull) { using var trN = db.TransactionManager.StartTransaction(); if (trN.GetObject(gOf, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.TinSurface gs) web.GroundOfName = gs.Name ?? ""; trN.Commit(); }
+                }
+                catch { }
+            }
 
             // [진단 0804 — 다중 구역 발자국 정본 판별] 번들이 v8이어야 '실제 주입 클립링'이 들어 있고,
             //   그걸 뒤 구역 발자국(옹벽 제외·계획면 차감)의 정본으로 쓴다. v7 이하 옛 번들이면 순수교선 폴백이라
@@ -278,8 +319,10 @@ public sealed class InfraworksCommand
             // ★★[v106 · JACK 1027 «변환기능도 반영» · 계획 2판 2.6] 옹벽 변환이 실제로 바꾼 자리 — 사면 · 소단 띠에서 뺀다
             var shpWarn = new System.Collections.Generic.List<string>();
             NetTopologySuite.Geometries.Geometry? wallMask = null;
-            try { wallMask = WallChangeMask(db, regions, SectionCommand.GroundOf(db), log, shpWarn); }
+            try { wallMask = WallChangeMask(db, regions, SectionCommand.GroundOf(db), log, shpWarn, web != null); }
             catch (System.Exception mex) { shpWarn.Add("옹벽 변환 자리를 못 재어 SHP에 반영 못 함 — " + mex.Message); }
+            if (web != null) web.WallMask = wallMask;
+            Mod("원지반 · 옹벽 변환 자리");
             double maskCut = 0;
 
             var polyFieldsPlain = new[] { new ShpField("KIND", 'C', 20, 0), new ShpField("AREA", 'N', 18, 2) };
@@ -291,7 +334,7 @@ public sealed class InfraworksCommand
 
             // [JACK 0805] 내보내기는 부지 규모에 따라 수십 초~수 분이 걸린다 — 그동안 멈춘 것처럼 보이지 않게
             //   상태막대에 지금 단계를 띄우고, 끝나면 단계별 소요시간을 로그·완료 팝업에 남긴다.
-            using var prog = new ExportProgress(6);
+            using var prog = new ExportProgress(files ? 6 : 7);
 
             // ── ① 계획면.shp — [다중 구역] 구역별 계획폴리곤. [0804 — JACK] 뒤 구역 사면이 침범한 만큼 뺀다 —
             //   침범 부분은 최종 지표면에서 더 이상 계획고 평면이 아니므로 그대로 내보내면 지표면과 안 맞는다.
@@ -313,7 +356,8 @@ public sealed class InfraworksCommand
                 }
                 if (feats.Count > 0)
                 {
-                    ShapefileWriter.WritePolygons(System.IO.Path.Combine(folder, "계획면"), feats, polyFieldsPlain, wkt);
+                    if (files) ShapefileWriter.WritePolygons(System.IO.Path.Combine(folder, "계획면"), feats, polyFieldsPlain, wkt);
+                    web?.Plan.AddRange(feats.Select(f => f.Item1));
                     log.AppendLine($"계획면.shp: {feats.Count}개" + (cutTotal > 0.5 ? $" (침범 제외 계 {cutTotal:F0}㎡)" : ""));
                     made.Add("계획면.shp");
                 }
@@ -731,6 +775,7 @@ public sealed class InfraworksCommand
             }
             }
 
+            Mod("계획면 · 띠");
             // [다중 구역] 누적된 사면/소단 띠 SHP 일괄 저장 — 있는 것만(0개면 파일 안 만듦, JACK 0724).
             prog.Stage("사면·소단 SHP");
             if (wallMask != null) log.AppendLine($"사면 · 소단 띠에서 옹벽 변환 자리 {maskCut:F1}㎡ 뺌");
@@ -739,7 +784,8 @@ public sealed class InfraworksCommand
             {
                 if (stripFeats.TryGetValue(key, out var feats) && feats.Count > 0)
                 {
-                    ShapefileWriter.WritePolygons(System.IO.Path.Combine(folder, key), feats, stripFields, wkt);
+                    if (files) ShapefileWriter.WritePolygons(System.IO.Path.Combine(folder, key), feats, stripFields, wkt);
+                    if (web != null) web.Strips[key] = feats.Select(f => f.Item1).ToList();
                     log.AppendLine($"{key}.shp: {feats.Count}개"); made.Add($"{key}.shp");
                 }
                 else log.AppendLine($"{key}.shp: 생략(0개)");
@@ -757,7 +803,17 @@ public sealed class InfraworksCommand
                 var cover = new WallSweep.CoverNote();
                 try { secLines = WallExcavBuilder.SectionLinesForExport(db, gid3, secNotes, out exSt, out facesTxt, out cover); }
                 catch (System.Exception sex) { secNotes.Add("단면 줄을 못 세움 — " + sex.Message); }
-                if (secLines != null && secLines.Count > 0)
+                if (web != null && secLines != null && secLines.Count > 0)
+                {
+                    // ★[v107] [3D 보기] — 같은 단면 줄을 넘긴다(메시는 Web3DBuilder · WallScene가 DWG와 같은 차례로 짓는다)
+                    web.Lines = secLines;
+                    string kinds = string.Join(" · ", secLines.GroupBy(l => (l.Up, l.Kind)).Select(g => $"{(g.Key.Up ? "절토" : "성토")} {DH.Grading.Core.WallSection.Of(g.Key.Kind).Name} {g.Count()}줄"));
+                    log.AppendLine($"옹벽 3D: 단면 덩어리 — {kinds}");
+                    log.AppendLine($"  {facesTxt}");
+                    log.AppendLine($"  지형 벽면 자가점검 — 표본 {cover.Measured}(못 잼 {cover.Unknown}) · 지형이 3D 앞면보다 1 cm 넘게 앞 {cover.Ahead}" + (cover.Ahead > 0 ? $"(최대 {cover.Max * 100:F1} cm @{cover.MaxAt})" : ""));
+                    if (cover.Ahead > 0) wallWarn.Add($"지형 벽면이 3D 앞면보다 1 cm 넘게 앞인 표본 {cover.Ahead}/{cover.Measured}(최대 {cover.Max * 100:F1} cm) — 지형이 무늬를 가릴 수 있음");
+                }
+                else if (secLines != null && secLines.Count > 0)
                 {
                     string dwgPath = System.IO.Path.Combine(folder, GradingSettings.InfraWallDwg);
                     try
@@ -785,7 +841,7 @@ public sealed class InfraworksCommand
                 }
                 else log.AppendLine("옹벽3D.dwg: 생략(옹벽 없음" + (facesTxt.Length > 0 ? " · " + facesTxt : "") + ")");
                 // ★[설치 전 검토 낮음] 이번에 3D를 안 썼는데 폴더에 옛 옹벽3D.dwg가 남아 있으면 — InfraWorks가 없는 옹벽을 가져올 수 있다(지우지는 않고 알린다)
-                if (!made.Contains("옹벽3D.dwg") && System.IO.File.Exists(System.IO.Path.Combine(folder, GradingSettings.InfraWallDwg)))
+                if (files && !made.Contains("옹벽3D.dwg") && System.IO.File.Exists(System.IO.Path.Combine(folder, GradingSettings.InfraWallDwg)))
                     wallWarn.Add($"폴더에 예전 {GradingSettings.InfraWallDwg}가 남아 있습니다 — 이번 내보내기와 맞지 않으니 지우세요");
                 // ★[계획 검토 중간 3] 터파기 켬인데 종단이 지은 터파기면이 지금 설정 · 표와 다르면 — 3D(지금 단면)와 수량(지난 종단 단면)이 어긋날 수 있다(모르면 안 띄운다)
                 if (exSt.On && secLines != null && secLines.Count > 0 && WallExcavBuilder.HasCurrentSurface(db, gid3) == false)
@@ -797,6 +853,7 @@ public sealed class InfraworksCommand
                 else { log.AppendLine($"  이상 {wallWarn.Count}건:"); foreach (var w in wallWarn) log.AppendLine("    ⚠ " + w); }   // ★[검토 중간 M3] 한 줄마다 ⚠ — 명령창 요약이 건수를 바로 센다
             }
 
+            Mod("단면 줄");
             // ── ③ 지형.xml + 위성용 경계상자 ──
             prog.Stage("지형 XML");
             double sMinE = 0, sMinN = 0, sMaxE = 0, sMaxN = 0; bool haveExtent = false;
@@ -809,6 +866,7 @@ public sealed class InfraworksCommand
                 foreach (ObjectId sid in civilDocS.GetSurfaceIds())
                     if (trS.GetObject(sid, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.TinSurface ts && ts.Name == "정지면_DH") { gsurf = ts; break; }
                 if (gsurf == null) log.AppendLine("지형.xml: '정지면_DH' 없어 생략 — 먼저 정지면 생성 필요");
+                else if (web != null) web.TerrainId = gsurf.ObjectId;   // ★[v107] [3D 보기] — 같은 면을 Web3DBuilder가 읽는다(LandXmlExport.ReadMesh)
                 else
                 {
                     int ntri = LandXmlExport.ExportSurface(gsurf, xmlPath, "정지면_DH", beltCm);
@@ -821,7 +879,8 @@ public sealed class InfraworksCommand
 
             // ── ④ 위성.tif (GeoTIFF) ──
             prog.Stage("위성영상");
-            if (SelfCheckLog.Headless && SkipSatelliteForTest) log.AppendLine("위성.tif: 시험 — 건너뜀");
+            if (!files) { }   // ★[v107] [3D 보기]는 Web3DBuilder가 따로 받는다(자세히 + 바탕 · 캐시)
+            else if (SelfCheckLog.Headless && SkipSatelliteForTest) log.AppendLine("위성.tif: 시험 — 건너뜀");
             else if (haveExtent)
             {
                 try
@@ -839,16 +898,35 @@ public sealed class InfraworksCommand
             // ── ⑤ 토공량.csv — 절토/성토/순토량 상세(하나만) ──
             try
             {
-                string vmsg = WriteVolumeCsv(db, groundName, regions, folder);
+                string vmsg = WriteVolumeCsv(db, groundName, regions, folder, web);
                 log.AppendLine(vmsg);
-                if (System.IO.File.Exists(System.IO.Path.Combine(folder, "토공량.csv"))) made.Add("토공량.csv");
+                if (files && System.IO.File.Exists(System.IO.Path.Combine(folder, "토공량.csv"))) made.Add("토공량.csv");
             }
             catch (System.Exception cex) { log.AppendLine("토공량.csv: 실패 — " + cex.Message); }
+
+            // ★★[v107] [3D 보기] — 모은 것으로 장면 · 페이지(파일 안 씀)
+            if (web != null)
+            {
+                Mod("지형 · 토공량");
+                prog.Stage("3D 장면");
+                web.Warn.AddRange(wallWarn);
+                webPath = Web3DBuilder.Build(db, web, log, SelfCheckLog.Headless && SkipSatelliteForTest);
+                Mod("장면");
+                log.AppendLine("도면 바뀜(DBMOD) 단계별: " + string.Join(" · ", modTrail));
+            }
 
             // [JACK 0805] 단계별 소요시간 — 어디서 오래 걸리는지 로그만 보고 알 수 있게.
             string timeMsg = prog.Report();
             log.AppendLine(timeMsg);
             prog.Dispose();   // 팝업 전에 진행막대를 내린다(막대가 뜬 채 대화상자가 나오면 어색하다)
+
+            if (web != null)
+            {
+                int nw = web.Warn.Distinct().Count();
+                ed.WriteMessage("\n3D 보기 완료" + note + $"\n  {timeMsg}" + (nw == 0 ? "\n  ⚠ 없음" : $"\n  ⚠ {nw}건 — 첫 건: {Short(web.Warn[0])}") + $"\n  자세한 내용: {DiagLog.FilePath}");
+                try { DiagLog.Append("\n■ DH3D(3D 보기)\n  " + log.ToString().TrimEnd().Replace("\n", "\n  ") + "\n"); } catch { }
+                return webPath;
+            }
 
             // 팝업 — 저장 위치 + 실제로 내보낸 파일 목록(있는 것만) + 걸린 시간.
             string list = made.Count > 0 ? string.Join(" · ", made) : "(내보낸 파일 없음 — 정지면/객체 확인)";
@@ -881,17 +959,19 @@ public sealed class InfraworksCommand
         }
         catch (System.Exception ex)
         {
-            ed.WriteMessage("\n[DHINFRA 오류] " + ex.Message);
-            if (!SelfCheckLog.Headless) AcadApp.ShowAlertDialog("infraworks 기초자료 내보내기 중 오류:\n" + ex.Message);
-            try { DiagLog.Append("\n■ DHINFRA 오류 — " + ex); } catch { }
+            string cmd = files ? "DHINFRA" : "DH3D";
+            ed.WriteMessage($"\n[{cmd} 오류] " + ex.Message);
+            if (!SelfCheckLog.Headless) AcadApp.ShowAlertDialog(title + (files ? " 내보내기" : "") + " 중 오류:\n" + ex.Message);
+            try { DiagLog.Append($"\n■ {cmd} 오류 — " + ex); } catch { }
         }
+        return webPath;
     }
 
     /// <summary>토공량 상세 CSV — 원지반=기준, 정지면_DH=비교로 임시 체적표면을 만들어 절토/성토량을 읽고 지운다.
     /// 부호 규약: 정지면이 원지반보다 낮으면 절토, 높으면 성토. 순토량=성토−절토(양수=부족/반입, 음수=여유/반출).
     /// [다중 구역 0729] 정지면_DH가 구역 누적 결과라 절/성토량은 자동으로 '전체 누적'. 면적·파라미터는 구역별 표기.</summary>
     private static string WriteVolumeCsv(Database db, string groundName,
-        System.Collections.Generic.IReadOnlyList<GradingBundle> regions, string folder)
+        System.Collections.Generic.IReadOnlyList<GradingBundle> regions, string folder, Web3DCollect? web = null)
     {
         ObjectId groundId = ObjectId.Null, designId = ObjectId.Null;
         using (Transaction tr = db.TransactionManager.StartTransaction())
@@ -908,6 +988,24 @@ public sealed class InfraworksCommand
         if (groundId.IsNull || designId.IsNull) return "토공량.csv: 생략(원지반/정지면 표면 없음)";
 
         double cut, fill;
+        if (web != null)
+        {
+            // ★[v107 · 설치 전 검토 중간] [3D 보기]는 도면을 안 바꾼다 — 임시 체적면은 트랜잭션을 되돌려도(Abort) 도면이 «바뀜»이 된다(화면 없는 Civil 실측 DBMOD 0 → 1).
+            //   → 두 면의 보이는 세모로 직접 셈(Core TinVolume — 체적면과 같은 정의 · 근사 없음 · 읽기만)
+            try
+            {
+                BusyPopup.Show("3D 보기 — 토공량 계산 중");
+                using Transaction trW = db.TransactionManager.StartTransaction();
+                var dTin =(Autodesk.Civil.DatabaseServices.TinSurface)trW.GetObject(designId, OpenMode.ForRead);
+                var gTin = (Autodesk.Civil.DatabaseServices.TinSurface)trW.GetObject(groundId, OpenMode.ForRead);
+                var vr = TinVolume.Compute(new CachedGroundSurface(dTin).AllTriangles().Select(t => (t.A, t.B, t.C)).ToList(),
+                                           new CachedGroundSurface(gTin).AllTriangles().Select(t => (t.A, t.B, t.C)).ToList());
+                trW.Commit();
+                cut = vr.Cut; fill = vr.Fill;
+            }
+            catch (System.Exception ex) { return "토공량: 계산 실패 — " + ex.Message; }
+        }
+        else
         try
         {
             using (Transaction tr = db.TransactionManager.StartTransaction())
@@ -933,6 +1031,12 @@ public sealed class InfraworksCommand
         double planArea = 0;
         foreach (var rg in regions) planArea += Area2D(rg.Boundary);
         var ci = System.Globalization.CultureInfo.InvariantCulture;
+        if (web != null)
+        {
+            // ★[v107] [3D 보기] — 같은 셈 · 파일은 안 쓴다(토공량 칸)
+            web.Cut = cut; web.Fill = fill; web.PlanArea = planArea;
+            return string.Create(ci, $"토공량: 절토 {cut:F2}㎥ · 성토 {fill:F2}㎥ · 순 {System.Math.Abs(net):F2}㎥({netWord}) — 두 면 세모로 직접 셈(도면 안 바꿈)");
+        }
         var sb = new System.Text.StringBuilder();
         sb.AppendLine("DH 정지 토공량 산출" + (regions.Count > 1 ? $" (구역 {regions.Count}개 누적)" : ""));
         sb.AppendLine("구분,값,단위,비고");

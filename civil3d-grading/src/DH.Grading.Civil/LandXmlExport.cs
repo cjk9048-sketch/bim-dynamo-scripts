@@ -15,6 +15,18 @@ public static class LandXmlExport
     /// centralMeridian=좌표계 중앙자오선 경도(서부125·중부127·동부129·동해131) — CoordinateSystem desc에 반영.</summary>
     public static int ExportSurface(TinSurface tin, string path, string surfaceName, int centralMeridian = 127)
     {
+        var (pts, faces) = ReadMesh(tin);
+        string xml = BuildXml(pts, faces, surfaceName, centralMeridian);
+        System.IO.File.WriteAllText(path, xml, new UTF8Encoding(false));
+        // ★InfraWorks 지형 캐시 삭제 → Refresh 시 새 xml로 지형을 다시 구움(안 지우면 옛 캐시라 안 바뀜/사라짐).
+        foreach (var ext in new[] { ".aecc.pnt", ".aecc.tri" })
+            try { System.IO.File.Delete(path + ext); } catch { }
+        return faces.Count;
+    }
+
+    /// <summary>보이는 삼각형 → 점(mm로 합침) · 면(1부터). ★[v107] [3D 보기]도 이것을 쓴다 — 지형.xml과 같은 점 · 면.</summary>
+    public static (List<(double x, double y, double z)> Pts, List<(int a, int b, int c)> Faces) ReadMesh(TinSurface tin)
+    {
         var pts = new List<(double x, double y, double z)>();
         var faces = new List<(int a, int b, int c)>();
         var index = new Dictionary<(long, long, long), int>();
@@ -31,13 +43,7 @@ public static class LandXmlExport
             catch { }
             finally { t.Dispose(); }
         }
-
-        string xml = BuildXml(pts, faces, surfaceName, centralMeridian);
-        System.IO.File.WriteAllText(path, xml, new UTF8Encoding(false));
-        // ★InfraWorks 지형 캐시 삭제 → Refresh 시 새 xml로 지형을 다시 구움(안 지우면 옛 캐시라 안 바뀜/사라짐).
-        foreach (var ext in new[] { ".aecc.pnt", ".aecc.tri" })
-            try { System.IO.File.Delete(path + ext); } catch { }
-        return faces.Count;
+        return (pts, faces);
     }
 
     private static long Q(double v) => (long)System.Math.Round(v * 1000.0);   // mm 양자화(정점 중복 제거)

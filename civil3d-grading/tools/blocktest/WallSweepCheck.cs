@@ -98,7 +98,7 @@ static class WallSweepCheck
     static string SameAsOld(WallExcav.SecLine ln)
     {
         var (oR, oC) = OldPlan(ln);
-        var p = WallSweep.Make(ln, lean: false);
+        var p = WallSweep.Make(ln, lean: false, keepTop: false);
         if (oR.Count != p.Runs.Count) return $"덩어리 {p.Runs.Count}/{oR.Count}";
         if (oC.Count != p.Corners.Count) return $"모서리 {p.Corners.Count}/{oC.Count}";
         for (int r = 0; r < oR.Count; r++)
@@ -135,8 +135,65 @@ static class WallSweepCheck
         foreach (var (nm, ln) in new[] { ("곧은", straight), ("곡선", arc), ("직각", bend), ("표 줄 바뀜", rows), ("닫힌 네모", loop) })
         {
             string d = SameAsOld(ln);
-            var pl = WallSweep.Make(ln, lean: false);
+            var pl = WallSweep.Make(ln, lean: false, keepTop: false);
             check($"S174 ① 스윕 계획 = v105 그대로 — {nm}", d.Length == 0, d.Length == 0 ? $"덩어리 {pl.Runs.Count} · 모서리 {pl.Corners.Count}" : d);
+        }
+
+        // ①b ★[JACK 1027 스샷 «옹벽 끝부분이 뾰족하게 튀어나오는 오류»] 표 줄이 바뀌는 가운데 정거장 — 꼭대기 · 앞 땅이 두 점 사이 직선 위(쐐기 없음) · 땅 위 몫만 늘여 앞면 기울기 그대로 · 바닥 안 뜸
+        {
+            // 앞 땅 100 → 100.5(기움) · 높이 3 → 6.6(표 줄 여러 번 바뀜) — 꼭대기 직선 103 + 0.35x · 앞 땅 100 + 0.05x
+            var plR = WallSweep.Make(rows);
+            double worstTop = 0, worstToe = 0, worstFace = 0; int mids = 0;
+            foreach (var r in plR.Runs)
+                foreach (var st in r)
+                {
+                    worstTop = Math.Max(worstTop, Math.Abs(st.Toe + st.Shape.ZTop - (103 + 0.35 * st.X)));
+                    worstToe = Math.Max(worstToe, Math.Abs(st.Toe - (100 + 0.05 * st.X)));
+                    // 앞면 꼭대기 앞 모서리 = FaceX0 + FaceN·높이(늘인 단면도 앞면 기울기 그대로)
+                    double ztop = st.Shape.ZTop - 1e-6;
+                    worstFace = Math.Max(worstFace, Math.Abs(WallSweep.FrontAt(st.Shape, ztop) - (st.Shape.FaceX0 + st.Shape.FaceN * ztop)));
+                    if (Math.Abs(st.X % 2.0 - 1.0) < 1e-9) mids++;
+                }
+            check("S174 ①b 표 줄 바뀌는 가운데 정거장 — 꼭대기 · 앞 땅이 직선 위(1 µm) · 앞면 기울기 그대로(1 µm) · 가운데 정거장 있음",
+                worstTop < 1e-6 && worstToe < 1e-6 && worstFace < 1e-6 && mids > 0, $"꼭대기 {worstTop:E1} · 앞 땅 {worstToe:E1} · 앞면 {worstFace:E1} · 가운데 정거장 {mids}");
+            // v105 그대로면(keepTop 끔) 같은 줄에서 꼭대기가 어긋난다 — 시험이 고침을 실제로 잰다
+            double oldWorst = WallSweep.Make(rows, keepTop: false).Runs.SelectMany(r => r).Max(st => Math.Abs(st.Toe + st.Shape.ZTop - (103 + 0.35 * st.X)));
+            check("S174 ①b v105 규칙이면 가운데 정거장 꼭대기가 어긋남(> 1 cm — 스샷 쐐기의 원인)", oldWorst > 0.01, $"v105 최대 {oldWorst * 100:F1} cm");
+            // 높이가 튀는 점(4 → 8 → 4 m · 앞 땅 같음) — 가운데 정거장 바닥(앞 땅)은 그대로 · 꼭대기는 두 점 평균
+            var jump = Line(T, 1, new[] { (0.0, 0.0, 100.0, 4.0), (2.0, 0.0, 100.0, 4.0), (4.0, 0.0, 100.0, 8.0), (6.0, 0.0, 100.0, 4.0), (8.0, 0.0, 100.0, 4.0) });
+            var plJ = WallSweep.Make(jump);
+            double jBad = 0;
+            foreach (var st in plJ.Runs.SelectMany(r => r))
+            {
+                double want = 104;                                                                  // 높이 4 m 점
+                if (Math.Abs(st.X - 3) < 1e-9 || Math.Abs(st.X - 5) < 1e-9) want = 106;          // 가운데 = (4 + 8) / 2
+                else if (Math.Abs(st.X - 4) < 1e-9) want = 108;
+                jBad = Math.Max(jBad, Math.Abs(st.Toe - 100) + Math.Abs(st.Toe + st.Shape.ZTop - want));
+            }
+            check("S174 ①b 높이가 튀는 점 — 가운데 정거장 앞 땅 그대로(바닥 안 뜸) · 꼭대기 = 두 점 평균", jBad < 1e-6, $"최대 어긋남 {jBad:E1}");
+            // ★[v106.0.1 · 검토 낮음 5] 형식마다 — AtHeight(높이 h0 단면, h) = 같은 줄로 높이 h에 다시 세운 단면(꼭짓점마다 1e-9) · 기초는 그대로
+            int atBad = 0, atN = 0; string atFirst = "";
+            foreach (var (k, cut) in new[] { (T, true), (WallSection.Kind.중력식, true), (WallSection.Kind.보강토, false), (WallSection.Kind.패널식, true), (WallSection.Kind.찰쌓기, true), (WallSection.Kind.메쌓기, false), (WallSection.Kind.L형, true) })
+            {
+                var t = WallSection.DefaultTable(k);
+                foreach (double h0 in new[] { 1.2, 2.5, 4.0, 6.0 })
+                    foreach (double h in new[] { 0.5, 1.9, 3.3, 7.4 })
+                    {
+                        var sh0 = WallSection.Build(t, h0, C, cut);
+                        var row = WallSection.Lookup(t, h0, out _, out _, out _, out double df0);
+                        var want = WallSection.BuildRow(k, row, h + sh0.Df, C, cut, sh0.Df);
+                        var got = WallSweep.AtHeight(sh0, h);
+                        atN++;
+                        bool ok = got.Parts.Count == want.Parts.Count && Math.Abs(got.ZTop - h) < 1e-12;
+                        for (int pi = 0; ok && pi < got.Parts.Count; pi++)
+                        {
+                            var ra = got.Parts[pi].Ring; var rb = want.Parts[pi].Ring;
+                            ok = ra.Count == rb.Count && ra.Zip(rb).All(z => Math.Abs(z.First.X - z.Second.X) < 1e-9 && Math.Abs(z.First.Z - z.Second.Z) < 1e-9);
+                        }
+                        if (!ok) { atBad++; if (atFirst.Length == 0) atFirst = $"{k} h0 {h0} → {h}"; }
+                    }
+            }
+            check("S174 ①b 형식마다 꼭대기 옮긴 단면 = 그 줄로 다시 세운 단면(역T · 중력 · 보강토 · 패널 · 찰쌓기 · 메쌓기 · L — 꼭짓점 1e-9)", atBad == 0, $"{atN - atBad}/{atN}{(atFirst.Length > 0 ? " · 첫 틀림 " + atFirst : "")}");
         }
 
         // ② 곧은 벽 · 평평한 땅 · 자연석 — 모든 조각이 보이는 칸 안 · 덮은 비율 · 결정성 · 틀 직교
