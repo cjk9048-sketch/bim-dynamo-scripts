@@ -130,6 +130,9 @@ public sealed class ZonePlan
     /// (사람이 지운 이름은 판이 올라간 뒤라 되살리지 않는다). 전의 판(R46)은 모르는 칸이라 읽고 버린다.
     /// </summary>
     [JsonPropertyName("catalog")] public int Catalog { get; set; }
+
+    /// <summary>읽을 때 «나중에 침»을 지금 처음 값으로 옮긴 부위 이름(R65 — PartCatalog.MigrateLater · 일지). 적지 않는다.</summary>
+    [JsonIgnore] public List<string> MigratedLater { get; private set; } = new();
     /// <summary>사람이 기준과 다르게 정한 결합(R54 — 모델 검증). 없으면 null(적지 않는다).</summary>
     [JsonPropertyName("exceptions")] public List<JoinException>? Exceptions { get; set; }
     [JsonPropertyName("wbs1")] public string? Wbs1 { get; set; }
@@ -217,6 +220,8 @@ public sealed class ZonePlan
             if (p.Name.Length > 0 && !parts.Any(q => q.Name == p.Name)) parts.Add(p);
         }
         plan.Parts = parts;
+        // «나중에 침» 처음 값이 바뀐 판(R65 — 헌치 · 중간슬래브 함께 침): 옛 판으로 적은 목록을 옮겨 읽는다(일지 — MigratedLater).
+        plan.MigratedLater = PartCatalog.MigrateLater(plan.Parts, plan.Catalog);
         // 사람이 정한 결합: 빈 칸 · 제 자신 · 같은 쌍이 또 나온 줄은 버린다.
         var exceptions = new List<JoinException>();
         foreach (var e in plan.Exceptions ?? new List<JoinException>())

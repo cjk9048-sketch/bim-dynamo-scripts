@@ -75,6 +75,7 @@ public sealed partial class PlacePartView
     private void ClearPicks()
     {
         _fwPicked = null;
+        _fwPickedSub = null;
         _fwPlate = null;
         _fwFocus = null;
         _fwMoveLead = null;
@@ -121,12 +122,16 @@ public sealed partial class PlacePartView
             }
             if (_rvLabeled != null && _rvLabeled.SequenceEqual(units, ReferenceEqualityComparer.Instance)) return;
             var labels = new List<(Vec3, string, Vec3, Vec3)>();
+            var tokens = new List<int>();
             foreach (var u in units)
             {
                 if (!_rvLabels.TryGetValue(u, out var own)) _rvLabels[u] = own = FormworkLabels.Spots(u, _board!.Origin);
                 labels.AddRange(own);
+                // 딱지마다 식의 그 숫자(R63d — 판의 항으로 · 모르면 −1).
+                tokens.AddRange(_rvFormLine != null ? FormworkLabels.SpotTokens(_rvFormLine, u, own.Select(s => s.Item2).ToList()) : Enumerable.Repeat(-1, own.Count));
             }
             _rvLabeled = units;
+            _rvLabelTokens = tokens;
             _view3d.SetLabels(labels);
         }
         catch (Exception ex)

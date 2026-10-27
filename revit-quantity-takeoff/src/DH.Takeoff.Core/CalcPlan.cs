@@ -4,7 +4,8 @@ using System.Text;
 namespace DH.Takeoff.Core;
 
 /// <summary>부재 종류 — 산출근거의 부위 이름과 차례를 정한다(차례 = 이 순서).</summary>
-public enum MemberKind { Foundation, Slab, Wall, Column, Beam, Other }
+/// <remarks>Stair = Revit 계단(R65 — 콘크리트 계단을 부재로 센다 · 맨 끝에 둔다: 값의 차례가 바뀌지 않게).</remarks>
+public enum MemberKind { Foundation, Slab, Wall, Column, Beam, Other, Stair }
 
 /// <summary>내보낼 부재 하나 — Revit 에서 읽은 그대로.</summary>
 public sealed class CalcInput
@@ -86,6 +87,7 @@ public sealed class CalcPlan
             MemberKind.Wall => "벽체",
             MemberKind.Column => "기둥",
             MemberKind.Beam => "보",
+            MemberKind.Stair => "계단",
             _ => "기타 구조물",
         };
 

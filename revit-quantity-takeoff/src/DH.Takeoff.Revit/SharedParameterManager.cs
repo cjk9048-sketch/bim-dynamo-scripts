@@ -82,6 +82,7 @@ public static class SharedParameterManager
         BuiltInCategory.OST_Floors,
         BuiltInCategory.OST_StructuralFoundation,
         BuiltInCategory.OST_GenericModel,
+        BuiltInCategory.OST_Stairs,   // R65 — 콘크리트 계단을 부재로 센다(옛 바인딩에는 BindParam 이 더한다)
     };
 
     /// <summary>DH 칸(거푸집 종류별 넓이 등)을 묶는 범주 — 값이 남은 부재를 찾을 때 먼저 거르는 데 쓴다.</summary>
@@ -149,7 +150,7 @@ public static class SharedParameterManager
         }
 
         return $"공유 매개변수 준비 완료.\n  • 신규 생성: {created}개 / 전체 {only?.Count ?? Guids.Count}개\n" +
-               $"  • 대상: 기둥·보·벽·바닥·기초·일반모델\n  • 파일: {spPath}";
+               $"  • 대상: 기둥·보·벽·바닥·기초·일반모델·계단\n  • 파일: {spPath}";
     }
 
     private static bool BindParam(Document doc, DefinitionGroup group, string name,
@@ -165,9 +166,38 @@ public static class SharedParameterManager
             });
 
         BindingMap map = doc.ParameterBindings;
-        if (map.Contains(def)) return false; // 멱등 skip
+        var groupId = name == MemberNames.Param ? GroupTypeId.IdentityData : GroupTypeId.Geometry;
+        if (map.Contains(def))
+        {
+            // 이미 묶인 칸: 지금 대상 범주가 빠진 옛 바인딩(R65 전 — 계단 없음)이면 지금 범주 ∪ 빠진 범주로 다시 묶는다 · 빠진 것이 없으면 그대로(멱등 —
+            // critic R65 M9 · 거푸집 객체 칸은 cats 가 일반 모델뿐이라 그대로). 바인딩은 GUID 로 찾고 범주는 Id 로 견준다(설치 전 검토 열린 질문 — 외부 정의 ·
+            // 범주 객체의 같음에 기대지 않게).
+            var (key, old) = BindingOf(map, def, guid, doc);
+            if (old == null) return false;
+            var have = new HashSet<long>(old.Categories.Cast<Category>().Select(c => c.Id.Value));
+            var missing = cats.Cast<Category>().Where(c => !have.Contains(c.Id.Value)).ToList();
+            if (missing.Count == 0) return false;
+            var union = doc.Application.Create.NewCategorySet();
+            foreach (Category c in old.Categories) union.Insert(c);
+            foreach (var c in missing) union.Insert(c);
+            return map.ReInsert(key, doc.Application.Create.NewInstanceBinding(union), groupId);
+        }
 
         var binding = doc.Application.Create.NewInstanceBinding(cats);
-        return map.Insert(def, binding, name == MemberNames.Param ? GroupTypeId.IdentityData : GroupTypeId.Geometry);
+        return map.Insert(def, binding, groupId);
+    }
+
+    // 묶인 칸의 바인딩(R65): 외부 정의로 먼저 · 안 되면 문서의 정의를 돌며 같은 GUID 의 공유 매개변수로. 인스턴스 바인딩이 아니면 null.
+    private static (Definition key, InstanceBinding? binding) BindingOf(BindingMap map, Definition def, Guid guid, Document doc)
+    {
+        try { if (map.get_Item(def) is InstanceBinding direct) return (def, direct); }
+        catch { }
+        var it = map.ForwardIterator();
+        while (it.MoveNext())
+        {
+            if (it.Key is not InternalDefinition inner || it.Current is not InstanceBinding b) continue;
+            if (doc.GetElement(inner.Id) is SharedParameterElement shared && shared.GuidValue == guid) return (inner, b);
+        }
+        return (def, null);
     }
 }

@@ -19,6 +19,14 @@ public static class ConcreteFilter
 
     public static Info Classify(Document doc, Element el)
     {
+        // Revit 계단(R65): 런 · 참 · 지지재 · 계단의 재료를 함께 본다(StairReader.Judge — 모으기와 같은 판정 · critic R65 H2).
+        if (el is Autodesk.Revit.DB.Architecture.Stairs stairs)
+        {
+            var (concrete, mixed, material) = StairReader.Judge(doc, stairs);
+            return !concrete ? new(Kind.NotConcrete, material, "계단 재료가 콘크리트가 아님")
+                 : mixed ? new(Kind.NotConcrete, material, "섞인 계단(콘크리트 + 다른 재료) — 거푸집의 둘레 콘크리트로만")
+                 : new(Kind.Concrete, material, "");
+        }
         // 커튼월(유리벽)은 벽 자체에 재료가 없다(패널·멀리언이 따로 있는 부재다) — 콘크리트가 아니다.
         if (el is Wall w)
         {

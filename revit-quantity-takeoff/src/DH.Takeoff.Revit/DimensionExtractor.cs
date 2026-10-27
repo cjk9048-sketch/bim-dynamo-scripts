@@ -29,19 +29,27 @@ public static class DimensionExtractor
     /// <summary>대상 범주 안의 보이드(CollectApplicable 이 뺀 것) — [수량산출]이 전에 적어 둔 값을 지울 때 · 일지.</summary>
     public static HashSet<long> TargetVoids(Document doc) => CuttingVoids(doc, CollectAll(doc));
 
-    // 대상 범주의 모든 인스턴스(거푸집 객체는 빼고 · 보이드는 그대로).
+    /// <summary>계단을 뺀 대상 범주(계단은 StairReader.CountableIds 가 따로 가린다 — R65).</summary>
+    internal static readonly BuiltInCategory[] MemberCategories =
+    {
+        BuiltInCategory.OST_StructuralColumns, BuiltInCategory.OST_StructuralFraming,
+        BuiltInCategory.OST_Walls, BuiltInCategory.OST_Floors,
+        BuiltInCategory.OST_StructuralFoundation, BuiltInCategory.OST_GenericModel,
+    };
+
+    // 대상 범주의 모든 인스턴스(거푸집 객체는 빼고 · 보이드는 그대로) + 셈 대상 Revit 계단(R65 — StairReader.CountableIds: 콘크리트 · 안 섞임 · 입체 있음).
     private static ICollection<ElementId> CollectAll(Document doc)
     {
-        var filter = new ElementMulticategoryFilter(new[]
-        {
-            BuiltInCategory.OST_StructuralColumns, BuiltInCategory.OST_StructuralFraming,
-            BuiltInCategory.OST_Walls, BuiltInCategory.OST_Floors,
-            BuiltInCategory.OST_StructuralFoundation, BuiltInCategory.OST_GenericModel,
-        });
+        var filter = new ElementMulticategoryFilter(MemberCategories);
         var collector = new FilteredElementCollector(doc).WhereElementIsNotElementType().WherePasses(filter);
         var formwork = FormworkObjects.Find(doc);
         if (formwork.Count > 0) collector = collector.Excluding(formwork);   // 빈 목록을 넘기면 Revit 이 예외를 낸다
-        return collector.ToElementIds();
+        var ids = collector.ToElementIds();
+        var stairs = StairReader.CountableIds(doc);
+        if (stairs.Count == 0) return ids;
+        var all = ids.ToList();
+        all.AddRange(stairs);
+        return all;
     }
 
     /// <summary>

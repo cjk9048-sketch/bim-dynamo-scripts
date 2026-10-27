@@ -15,9 +15,13 @@ public sealed partial class PlacePartView
     private Border? _rvFormulaBar;
     private TextBlock? _rvFormulaText;
     private (string head, string formula, string tail)? _rvFormula;
-    private string? _rvFormulaMark;          // 지금 칠한 숫자
-    private readonly List<Run> _rvFormulaNumbers = new();     // 식의 숫자 글(칠할 때 다시 짓지 않는다 — 마우스 밑의 글을 바꾸면 들고 남이 되풀이된다)
-    private string? _rvFormulaHover;         // 식 띠에서 마우스를 올린 숫자(R63)
+    private readonly HashSet<int> _rvFormulaMarks = new();   // 지금 칠한 숫자(식 띠의 숫자 차례)
+    // 3D 숫자 딱지 → 식의 숫자 차례(R63d — 판의 항으로 이은 것 · −1 = 모름 → 같은 글로). null = 잇지 않은 딱지(콘크리트 줄).
+    private List<int>? _rvLabelTokens;
+    // 식의 숫자 상자(칠할 때 다시 짓지 않는다 — 마우스 밑의 것을 바꾸면 들고 남이 되풀이된다). 3D 치수처럼 테두리 상자 — 상자 전체가 마우스를 받는다
+    // (R63c — JACK 2026-10-26 «수식 부분도 치수처럼 박스로 · 1 같이 얇은 건 마우스 올리기가 너무 힘들어»).
+    private readonly List<(Border box, TextBlock text)> _rvFormulaNumbers = new();
+    private int _rvFormulaHover = -1;        // 식 띠에서 마우스를 올린 숫자의 차례(R63)
     private static readonly Regex Number = new(@"\d+(?:\.\d+)?", RegexOptions.CultureInvariant);
 
     // ③ 의 아래: 식 띠(줄을 골랐을 때만) + ② 와 같은 색 풀이 · 마우스 안내.
@@ -35,7 +39,7 @@ public sealed partial class PlacePartView
         stack.Children.Add(BuildFormworkBottom("굴림 = 확대 · 가운데 단추 끌기 = 옮기기 · 오른쪽 단추 끌기 = 돌리기 · 줄을 누르면 그 부재 · 면 · 판을 찍으면 그 줄 · Esc = 풀기"));
         if (!_rvFormulaHooked)
         {
-            _view3d.LabelHovered += text => { if (Step == 2) MarkReviewFormula(text); };
+            _view3d.LabelHovered += label => { if (Step == 2) MarkFormulaFromLabel(label); };
             _rvFormulaHooked = true;
         }
         return stack;
@@ -47,8 +51,8 @@ public sealed partial class PlacePartView
     private void ShowReviewFormula()
     {
         _rvFormula = null;
-        _rvFormulaMark = null;
-        HoverFormulaNumber(null);
+        _rvFormulaMarks.Clear();
+        HoverFormulaNumber(-1);
         if (_rv != null && _rvPicked >= 0 && _rvPicked < _rvViews.Count && _rvViews[_rvPicked].item is int item && item >= 0
             && _rv.Items[item].Item is Sheet2D.Line line)
         {
@@ -59,24 +63,54 @@ public sealed partial class PlacePartView
         RenderReviewFormula();
     }
 
-    // 3D 숫자에 마우스를 올렸다(내리면 null): 식에서 같은 숫자(낱말 단위 — 15.6 의 5.6 은 아님)를 칠한다. 각도는 «°» 를 떼고 · 식 딱지(숫자 하나가 아님)는 칠하지 않는다.
-    private void MarkReviewFormula(string? text)
+    // 그 딱지가 이어진 식의 숫자 차례(−1 = 모름).
+    private int TokenOfLabel(int label) => _rvLabelTokens != null && label >= 0 && label < _rvLabelTokens.Count ? _rvLabelTokens[label] : -1;
+
+    // 3D 숫자에 마우스를 올렸다(−1 = 내림): 식에서 그 숫자(R63d — 판의 항으로 이은 그 자리 하나). 잇지 못한 딱지는 같은 숫자(낱말 단위 — 15.6 의 5.6 은 아님 ·
+    // 각도는 «°» 를 떼고 · 식 딱지(숫자 하나가 아님)는 칠하지 않는다).
+    private void MarkFormulaFromLabel(int label)
     {
-        string? mark = text?.TrimEnd('°');
-        if (mark != null && !Number.IsMatch(mark) || mark != null && Number.Match(mark).Value != mark) mark = null;
-        if (mark == _rvFormulaMark) return;
-        _rvFormulaMark = mark;
+        var marks = new HashSet<int>();
+        if (label >= 0)
+        {
+            int token = TokenOfLabel(label);
+            if (token >= 0) marks.Add(token);
+            else if (_view3d.LabelText(label)?.TrimEnd('°') is { } text)
+                for (int t = 0; t < _rvFormulaNumbers.Count; t++)
+                    if (_rvFormulaNumbers[t].text.Text == text) marks.Add(t);
+        }
+        SetFormulaMarks(marks);
+    }
+
+    private void SetFormulaMarks(HashSet<int> marks)
+    {
+        if (marks.SetEquals(_rvFormulaMarks)) return;
+        _rvFormulaMarks.Clear();
+        _rvFormulaMarks.UnionWith(marks);
         PaintFormulaMarks();
     }
 
-    // 식 띠의 숫자에 마우스를 올렸다(내리면 null — R63 JACK 2026-10-26 «수식창에서 해당 숫자에 마우스를 올렸을 때 해당 치수들이 뷰에서도 바뀌게»):
-    // 식에서 같은 숫자 · 3D 에서 같은 숫자의 상자와 선을 주황으로.
-    private void HoverFormulaNumber(string? value)
+    // 식 띠의 숫자에 마우스를 올렸다(−1 = 내림 — R63 JACK 2026-10-26 «수식창에서 해당 숫자에 마우스를 올렸을 때 해당 치수들이 뷰에서도 바뀌게» ·
+    // R63d «숫자가 1 이면 같은 건 전부 다 떠 · 그 1 마다 위치가 있을 텐데»): 식에서 그 숫자 하나 · 3D 에서 그 숫자로 이은 딱지와 선을 주황으로
+    // (잇지 못한 딱지는 같은 글이면 함께 — 콘크리트 줄 · 판 가운데 식 딱지).
+    private void HoverFormulaNumber(int token)
     {
-        if (value == _rvFormulaHover) return;
-        _rvFormulaHover = value;
-        MarkReviewFormula(value);
-        _view3d.MarkLabels(value);
+        if (token == _rvFormulaHover) return;
+        _rvFormulaHover = token;
+        SetFormulaMarks(token >= 0 ? new HashSet<int> { token } : new HashSet<int>());
+        _view3d.MarkLabels(token >= 0 && token < _rvFormulaNumbers.Count ? LabelsOfToken(token) : null);
+    }
+
+    private List<int> LabelsOfToken(int token)
+    {
+        string value = _rvFormulaNumbers[token].text.Text;
+        var hits = new List<int>();
+        for (int i = 0; i < _view3d.LabelCount; i++)
+        {
+            int mapped = TokenOfLabel(i);
+            if (mapped >= 0 ? mapped == token : _view3d.LabelText(i)?.TrimEnd('°') == value) hits.Add(i);
+        }
+        return hits;
     }
 
     private void RenderReviewFormula()
@@ -91,12 +125,18 @@ public sealed partial class PlacePartView
         foreach (Match m in Number.Matches(f.formula))
         {
             if (m.Index > at) _rvFormulaText.Inlines.Add(new Run(f.formula[at..m.Index]));
-            var run = new Run(m.Value);
             string value = m.Value;
-            run.MouseEnter += (_, _) => HoverFormulaNumber(value);
-            run.MouseLeave += (_, _) => { if (_rvFormulaHover == value) HoverFormulaNumber(null); };
-            _rvFormulaText.Inlines.Add(run);
-            _rvFormulaNumbers.Add(run);
+            var text = new TextBlock { Text = value, FontSize = 13, TextAlignment = TextAlignment.Center };
+            var box = new Border
+            {
+                Child = text, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(3), Padding = new Thickness(5, 0, 5, 1),
+                Margin = new Thickness(1, 1, 1, 1), MinWidth = 20, Cursor = System.Windows.Input.Cursors.Hand,
+            };
+            int token = _rvFormulaNumbers.Count;      // 식 띠의 숫자 차례 = 줄 식의 숫자 차례(« × n » 은 맨 끝)
+            box.MouseEnter += (_, _) => HoverFormulaNumber(token);
+            box.MouseLeave += (_, _) => { if (_rvFormulaHover == token) HoverFormulaNumber(-1); };
+            _rvFormulaText.Inlines.Add(new InlineUIContainer(box) { BaselineAlignment = BaselineAlignment.Center });
+            _rvFormulaNumbers.Add((box, text));
             at = m.Index + m.Length;
         }
         if (at < f.formula.Length) _rvFormulaText.Inlines.Add(new Run(f.formula[at..]));
@@ -107,17 +147,19 @@ public sealed partial class PlacePartView
     // 칠한 숫자만 바꾼다(글은 그대로).
     private void PaintFormulaMarks()
     {
-        foreach (var run in _rvFormulaNumbers)
+        for (int t = 0; t < _rvFormulaNumbers.Count; t++)
         {
-            bool marked = _rvFormulaMark != null && run.Text == _rvFormulaMark;
-            run.Background = marked ? MarkBack : null;
-            run.Foreground = marked ? Brushes.White : _text;
-            run.FontWeight = marked ? FontWeights.SemiBold : FontWeights.Normal;
+            var (box, text) = _rvFormulaNumbers[t];
+            bool marked = _rvFormulaMarks.Contains(t);
+            box.Background = marked ? MarkBack : _ui["Card"];
+            box.BorderBrush = marked ? MarkLine : _ui["InputLine"];
+            text.Foreground = marked ? Brushes.White : _text;
+            text.FontWeight = marked ? FontWeights.SemiBold : FontWeights.Normal;
         }
     }
 
     // 3D 에서 마우스를 올린 숫자 상자와 같은 주황(Model3DView).
-    private static readonly Brush MarkBack = Frozen(Color.FromRgb(0xF2, 0x8C, 0x28));
+    private static readonly Brush MarkBack = Frozen(Color.FromRgb(0xF2, 0x8C, 0x28)), MarkLine = Frozen(Color.FromRgb(0xB8, 0x5C, 0x0A));
 
     private static Brush Frozen(Color c)
     {
@@ -126,12 +168,18 @@ public sealed partial class PlacePartView
         return b;
     }
 
-    /// <summary>시험용: ③ 아래 식 띠의 글 · 칠한 숫자들.</summary>
+    /// <summary>시험용: ③ 아래 식 띠의 글(숫자 상자의 글 포함) · 칠한 숫자들.</summary>
     public string ReviewFormulaText => _rvFormulaBar?.Visibility == Visibility.Visible && _rvFormulaText != null
-        ? string.Concat(_rvFormulaText.Inlines.OfType<Run>().Select(r => r.Text)) : "";
-    public IReadOnlyList<string> ReviewFormulaMarks => _rvFormulaText == null ? Array.Empty<string>()
-        : _rvFormulaText.Inlines.OfType<Run>().Where(r => r.Background == MarkBack).Select(r => r.Text).ToList();
-    /// <summary>시험용: 식 띠의 숫자 글(마우스를 올릴 자리를 찾는다).</summary>
-    public IReadOnlyList<Run> ReviewFormulaNumbers => _rvFormulaNumbers;
-    public TextBlock? ReviewFormulaBlock => _rvFormulaText;
+        ? string.Concat(_rvFormulaText.Inlines.Select(i => i switch
+        {
+            Run r => r.Text,
+            InlineUIContainer { Child: Border { Child: TextBlock t } } => t.Text,
+            _ => "",
+        })) : "";
+    public IReadOnlyList<string> ReviewFormulaMarks => _rvFormulaNumbers.Where(n => n.box.Background == MarkBack).Select(n => n.text.Text).ToList();
+    /// <summary>시험용: 칠한 숫자의 차례 · 3D 딱지마다 이은 식의 숫자 차례(null = 잇지 않음).</summary>
+    public IReadOnlyList<int> ReviewFormulaMarkIndices => Enumerable.Range(0, _rvFormulaNumbers.Count).Where(t => _rvFormulaNumbers[t].box.Background == MarkBack).ToList();
+    public IReadOnlyList<int>? ReviewLabelTokens => _rvLabelTokens;
+    /// <summary>시험용: 식 띠의 숫자 상자(마우스를 올릴 자리) · 그 글.</summary>
+    public IReadOnlyList<(Border box, TextBlock text)> ReviewFormulaNumbers => _rvFormulaNumbers;
 }

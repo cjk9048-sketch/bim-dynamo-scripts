@@ -114,7 +114,7 @@ public static class DeductRank
         _ => Attached,
     };
 
-    /// <summary>같은 순위일 때의 차례(옛 겹침 우선순위의 카테고리 차례 — 작을수록 앞): 기초 › 바닥 › 기둥 › 벽 › 보 › 그 밖.</summary>
+    /// <summary>같은 순위일 때의 차례(옛 겹침 우선순위의 카테고리 차례 — 작을수록 앞): 기초 › 바닥 › 기둥 › 벽 › 보 › 그 밖 › 계단(R65).</summary>
     public static int KindOrder(MemberKind kind) => kind switch
     {
         MemberKind.Foundation => 0,
@@ -122,6 +122,7 @@ public static class DeductRank
         MemberKind.Column => 2,
         MemberKind.Wall => 3,
         MemberKind.Beam => 4,
+        MemberKind.Stair => 6,
         _ => 5,
     };
 

@@ -67,7 +67,7 @@ public sealed class Model3DView : Grid
     private readonly List<(Vec3 at, Border view, Vec3 from, Vec3 to)> _labelViews = new();
     private int _pickedLabel = -1;                                                      // 마우스를 올린 숫자(R61c — 그 상자 · 그 선을 주황으로)
     private System.Windows.Shapes.Path? _pickedLine;
-    private string? _markedText;                                                        // 식 띠에서 마우스를 올린 숫자(R63 — 같은 글의 딱지 전부 · 그 선들을 주황으로)
+    private readonly HashSet<int> _marked = new();                                      // 식 띠에서 가리킨 숫자의 딱지들(R63 · R63d — 그 상자 · 그 선을 주황으로)
     private System.Windows.Shapes.Path? _markedLines;
     private Brush? _labelBack, _labelLine, _labelText, _pickBack, _pickLine;
     // 3D 자리의 점선(③ 콘크리트 숫자 — R61b): 더하는 도형 · 빼는 도형(빨강) · 잰 선. 갈래마다 길 하나(소프트웨어로만 그리는 Revit 에서 가볍게 — 계획 검토 L15).
@@ -214,9 +214,9 @@ public sealed class Model3DView : Grid
     {
         _labels.Children.Clear();
         _labelViews.Clear();
-        if (_pickedLabel >= 0) LabelHovered?.Invoke(null);   // 올려 둔 숫자가 사라진다 — 식의 칠도 푼다
+        if (_pickedLabel >= 0) LabelHovered?.Invoke(-1);     // 올려 둔 숫자가 사라진다 — 식의 칠도 푼다
         _pickedLabel = -1;
-        _markedText = null;
+        _marked.Clear();
         if (_labelBack == null)
         {
             Brush Frozen(Color c) { var b = new SolidColorBrush(c); b.Freeze(); return b; }
@@ -243,8 +243,12 @@ public sealed class Model3DView : Grid
         PlaceLabels();
     }
 
-    /// <summary>마우스를 올린 숫자의 글(내리면 null) — ③ 아래 식에서 그 숫자를 칠한다(R61c).</summary>
-    public event Action<string?>? LabelHovered;
+    /// <summary>마우스를 올린 숫자 딱지의 차례(내리면 −1) — ③ 아래 식에서 그 숫자를 칠한다(R61c · R63d 차례로).</summary>
+    public event Action<int>? LabelHovered;
+
+    /// <summary>딱지 수 · 그 딱지의 글(없으면 null).</summary>
+    public int LabelCount => _labelViews.Count;
+    public string? LabelText(int index) => index >= 0 && index < _labelViews.Count && _labelViews[index].view.Child is TextBlock t ? t.Text : null;
 
     // 숫자 하나를 고른다(−1 = 풂): 그 상자는 주황 바탕 · 흰 글, 그 숫자가 재는 선은 주황 실선.
     private void PickLabel(int index)
@@ -253,22 +257,25 @@ public sealed class Model3DView : Grid
         _pickedLabel = index;
         Restyle();
         PlaceLabels();
-        if (changed) LabelHovered?.Invoke(index >= 0 && _labelViews[index].view.Child is TextBlock tb ? tb.Text : null);
+        if (changed) LabelHovered?.Invoke(index);
     }
 
     /// <summary>
-    /// ③ 아래 식 띠의 숫자에 마우스를 올렸다(내리면 null): 같은 숫자의 딱지 전부와 그 숫자들이 재는 선을 주황으로
-    /// (R63 — JACK 2026-10-26 «수식창에서 해당 숫자에 마우스를 올렸을 때 해당 치수들이 뷰에서도 바뀌게» · R61c 의 거꾸로). 각도 딱지는 «°» 를 떼고 견준다.
+    /// ③ 아래 식 띠의 숫자에 마우스를 올렸다(내리면 null): 그 숫자의 딱지들과 그 숫자들이 재는 선을 주황으로
+    /// (R63 — JACK 2026-10-26 «수식창에서 해당 숫자에 마우스를 올렸을 때 해당 치수들이 뷰에서도 바뀌게» · R61c 의 거꾸로 ·
+    /// R63d «그 1 마다 위치가 있을 텐데» — 어느 딱지인지는 부르는 쪽이 판의 항으로 고른다).
     /// </summary>
-    public void MarkLabels(string? text)
+    public void MarkLabels(IReadOnlyCollection<int>? indices)
     {
-        if (text == _markedText) return;
-        _markedText = text;
+        var next = indices?.Where(i => i >= 0 && i < _labelViews.Count).ToHashSet() ?? new HashSet<int>();
+        if (next.SetEquals(_marked)) return;
+        _marked.Clear();
+        _marked.UnionWith(next);
         Restyle();
         PlaceLabels();
     }
 
-    private bool MarkedByText(int i) => _markedText != null && _labelViews[i].view.Child is TextBlock t && t.Text.TrimEnd('°') == _markedText;
+    private bool MarkedByText(int i) => _marked.Contains(i);
 
     // 딱지 색: 마우스를 올린 것(R61c) · 식 띠에서 가리킨 숫자(R63)는 주황 바탕 · 흰 글.
     private void Restyle()
@@ -372,7 +379,7 @@ public sealed class Model3DView : Grid
     {
         if (_markedLines == null)
         {
-            if (_markedText == null) return;
+            if (_marked.Count == 0) return;
             _markedLines = new System.Windows.Shapes.Path { Stroke = _pickBack ?? Brushes.Orange, StrokeThickness = 3.2, IsHitTestVisible = false, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round };
             _guideLayer.Children.Add(_markedLines);
         }

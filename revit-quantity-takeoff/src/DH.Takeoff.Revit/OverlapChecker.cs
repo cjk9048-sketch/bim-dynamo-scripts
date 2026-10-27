@@ -119,6 +119,9 @@ public static class OverlapChecker
         // 이 실행에서 나눈 부재 → 조각(맨 앞 = 원래 부재 · Join 의 나누기와 SplitJoined 둘 다 적는다 — 묶음을 합치지 못해 되돌리면 지운다).
         // 다시 찾기(Refresh)가 조각까지 보고, 원래 부재와 짝이던 쌍을 조각으로 옮기는 데 쓴다(R50 revit-verify ①②).
         public Dictionary<long, List<ElementId>> Splits = new();
+        // 계단과 겹친 자리(R65 — 계단은 형상 결합이 되지 않는다 · 겹친 체적은 늘 계단 식에서 뺀다 — StairReader.Overlap · critic R65 M4): 고치기 · 결합 · 나누기 ·
+        // 결합 방향 목록에 넣지 않고 일지에만(계단 — 겹친 부재 — 체적).
+        public List<(ElementId Stair, ElementId Other, double M3)> StairOverlaps = new();
     }
 
     /// <summary>
@@ -290,6 +293,13 @@ public static class OverlapChecker
                 if (m3 < MinOverlapM3)
                 {
                     if (failed) found.Unmeasured++;
+                    continue;
+                }
+                if (a.El is Autodesk.Revit.DB.Architecture.Stairs || b.El is Autodesk.Revit.DB.Architecture.Stairs)
+                {
+                    // 계단 쌍: 결합할 수 없다 — 계단 식이 겹친 체적을 뺀다(StairReader.Formula). 목록 · 일괄 고치기 · 딱지 수에 넣지 않는다.
+                    var (stair, other) = a.El is Autodesk.Revit.DB.Architecture.Stairs ? (a, b) : (b, a);
+                    found.StairOverlaps.Add((stair.El.Id, other.El.Id, m3));
                     continue;
                 }
                 var (win, lose) = Beats(a, b) ? (a, b) : (b, a);
@@ -679,7 +689,7 @@ public static class OverlapChecker
     /// 두 부재의 입체가 겹친 체적(m³). 일부라도 계산하지 못했으면 failed.
     /// pieces 를 주면 체적에 셈한 겹친 입체를 거기에 모아 준다(그림용) — 모으는 일은 체적 · failed 에 닿지 않는다.
     /// </summary>
-    private static double Intersection(List<Solid> a, List<Solid> b, out bool failed, List<Solid>? pieces = null)
+    internal static double Intersection(List<Solid> a, List<Solid> b, out bool failed, List<Solid>? pieces = null)
     {
         failed = false;
         double ft3 = 0;
@@ -898,6 +908,7 @@ public static class OverlapChecker
             foreach (var id in pieces) Take(id);
         var fresh = Find(doc, ids, withBlobs: withBlobs);
         report.Checked = fresh.Checked;
+        found.StairOverlaps = fresh.StairOverlaps;   // 계단 겹침 일지도 고친 모델로(R65 — 설치 전 검토 낮음)
         report.Unmeasured = fresh.Unmeasured;
         found.Unmeasured = Math.Max(found.Unmeasured, fresh.Unmeasured);
         if (withBlobs)
@@ -1500,6 +1511,13 @@ public static class OverlapChecker
                     $"{r.Keep.Value}\t{Cell(r.KeepName)}\t{DeductRank.Label(r.KeepRank)}\t{r.Cutter.Value}\t{Cell(r.CutterName)}\t{DeductRank.Label(r.CutterRank)}\t" +
                     $"{(double.IsNaN(r.MovedM3) ? "" : r.MovedM3.ToString("0.######", CultureInfo.InvariantCulture))}\t{Cell(r.Status)}\t" +
                     $"{Cell(string.Join(" · ", new[] { r.Human ? "사람이 정함" : "", r.SameRank ? "참고(같은 순위)" : "", r.Note }.Where(t => t.Length > 0)))}\n");
+        }
+        // 계단 겹침(R65): 결합할 수 없어 계단 식에서 뺀다(StairReader.Overlap) — 쌍 목록에 넣지 않는다.
+        if (found.StairOverlaps.Count > 0)
+        {
+            sb.Append("\n계단 겹침(계단 식에서 뺌)\n계단Id\t겹친 부재Id\t겹친체적(m3)\n");
+            foreach (var (stair, other, m3) in found.StairOverlaps)
+                sb.Append(CultureInfo.InvariantCulture, $"{stair.Value}\t{other.Value}\t{m3:0.######}\n");
         }
         sb.Append(CultureInfo.InvariantCulture,
             $"\n검사한 부재\t{found.Checked}\n겹침오류(겹친 쌍)\t{found.Pairs.Count}\n겹친 체적 합(m3)\t{found.TotalM3:0.######}\n" +
