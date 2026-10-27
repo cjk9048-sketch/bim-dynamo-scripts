@@ -21,8 +21,10 @@ public static class FormworkRulesStore
     /// 기록의 판 번호. 더 새 판이 적은 기록은 읽기만 하고 덮어쓰지 않는다(ZonePlanStore 의 TooNew 와 같은 잣대 — P2 검토 낮음).
     /// 2 = 판 종류(«판 종류:» 줄 — R57 P3)가 든 기록: 판 종류를 모르는 R58 이 그 줄을 버리고 덮지 않게(계획 검토 M6). 판 종류가 없으면 1 로 적는다.
     /// 3 = 아래 줄 값(«면|아래 줄» — R64)이 든 기록: 아래 줄을 모르는 R63 까지가 읽기만 하게.
+    /// 4 = 모드 · 판 자리 · 판 쪼갬(R66)이 든 기록: 자동 모드를 모르는 R65 까지가 기록을 걸어 덮어쓰지 않게.
+    /// 5 = «겹침»(R67 — 판마다 접합부 무시 / 공제)이 든 기록: R66 이 그 줄을 모르는 줄로 담아 덮어쓰지 않게.
     /// </summary>
-    public const int CurrentVersion = 3;
+    public const int CurrentVersion = 5;
 
     private static Schema GetSchema()
     {
@@ -105,7 +107,7 @@ public static class FormworkRulesStore
         var entity = new Entity(schema);
         entity.Set(Field, rules.ToText());
         entity.Set(SavedAtField, DateTime.UtcNow.ToString("o"));
-        entity.Set(VersionField, rules.SubCount > 0 ? 3 : rules.KindCount > 0 ? 2 : 1);
+        entity.Set(VersionField, rules.JointCount > 0 ? 5 : rules.ModeSet || rules.PlaceCount > 0 || rules.SplitCount > 0 ? 4 : rules.SubCount > 0 ? 3 : rules.KindCount > 0 ? 2 : 1);
         holder.SetEntity(entity);
     }
 

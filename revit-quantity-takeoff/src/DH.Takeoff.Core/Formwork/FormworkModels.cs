@@ -174,6 +174,13 @@ public sealed class FacePatch
     /// <summary>판 종류를 걸기 전의 종류(세던 조각이면 그 종류 · 아니면 "") — Revit 판 기록의 Base(되돌린 것인지 가른다). 판 종류가 없으면 "".</summary>
     public string KindBase { get; internal set; } = "";
 
+    /// <summary>판 자리 기록(R66 — 엑셀 부위 줄 · 중분류를 판마다)에 맞는 조각이면 그 대표 열쇠와 자리(빈 값 = 그대로), 아니면 "" · null. 엑셀 줄 · Revit 판의 자리만 바꾼다.</summary>
+    public string PlaceLead { get; internal set; } = "";
+    public (string Part, string Zone)? Place { get; internal set; }
+
+    /// <summary>판 쪼갬 기록(R66 — 부재마다 나누기)에 맞는 조각이면 그 대표 열쇠, 아니면 "". 같은 부재의 조각끼리만 잇는다(FormworkMerge).</summary>
+    public string SplitLead { get; internal set; } = "";
+
     /// <summary>부재 속성(지침용 내역적용수량)에 쓰는 종류 — 옮긴 조각이면 옮기기 전 종류.</summary>
     public string GuidelineItem => MoveLead.Length > 0 ? BeforeMove : Item;
 
@@ -240,6 +247,18 @@ public sealed class FaceResult
     public double ZMax { get; set; }
     public string Flag { get; set; } = "";      // 재지 못한 까닭·주의할 점
     public List<FaceCover> Covers { get; set; } = new();   // 가린 이웃별 넓이(이웃끼리 겹치면 합이 Covered 보다 클 수 있다)
+
+    /// <summary>맞닿았지만 공제하지 않은 이웃별 넓이(R67 — 접합부 규칙 · 판마다 «겹침» 기록이 «무시»). 면은 그 자리까지 거푸집이다.</summary>
+    public List<FaceCover> Ignored { get; set; } = new();
+
+    /// <summary>평면 자리(바깥 법선 · 면 위의 점 — R67 «겹침» 기록의 면 열쇠). 곡면이면 0.</summary>
+    public double PlaneD { get; set; }
+
+    /// <summary>결합이 깎아 면에서 빠진 자리 가운데 그대로 공제한 이웃별 넓이(R67 — 벽을 꿰뚫은 보의 구멍 · 모서리 홈 · 네모가 아닌 면만 잰다).</summary>
+    public List<FaceCover> Cut { get; set; } = new();
+
+    /// <summary>깎인 자리를 «무시»로 되살려 면에 더한 넓이(R67 — Polygon + Restored = Covered + Shared + Net).</summary>
+    public double Restored { get; set; }
     public List<FacePatch> Patches { get; set; } = new();
 
     public double CountedArea => Patches.Where(p => p.Counted).Sum(p => p.Area);
@@ -300,8 +319,14 @@ public sealed class FormworkOptions
     /// <summary>밑면 아래의 콘크리트가 이보다 가까우면 거푸집을 댈 수 없는 틈이다(m).</summary>
     public double MinGap { get; set; } = 0.05;
 
-    /// <summary>사람이 고친 대응표(유형 × 면 → 종류). 없으면 초안 규칙만 쓴다.</summary>
+    /// <summary>사람이 고친 대응표(유형 × 면 → 종류) · 판 기록 · 모드. 없으면 초안 규칙만 쓴다. 분석은 <see cref="ActiveRules"/> 를 쓴다.</summary>
     public FormworkRules? Rules { get; set; }
+
+    /// <summary>
+    /// 분석이 거는 기록(R66 — JACK 2026-10-27 «자동 모드는 지금처럼 기준에 의해»): 사용자 모드면 Rules, 자동 모드면 없음(규칙의 종류만 — 기록은 Rules 에 남는다).
+    /// 사람 값 · 판 기록을 읽는 자리는 모두 이것을 쓴다(Analyzer · Summary.Rows · Board 의 기록 검사).
+    /// </summary>
+    public FormworkRules? ActiveRules => Rules is { UserMode: true } rules ? rules : null;
 
     /// <summary>
     /// 부위 이름 → 거푸집 종류의 처음 값(R47 — 계단 · 턱·맨홀 · DRY AREA = 합판 3회, 그 밖은 null). 기본은 이름으로 묶음을 짐작한다

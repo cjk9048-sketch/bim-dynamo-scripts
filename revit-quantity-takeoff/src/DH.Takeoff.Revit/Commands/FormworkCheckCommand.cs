@@ -87,7 +87,8 @@ public sealed class FormworkCheckCommand : IExternalCommand
                     results = FormworkAnalyzer.AnalyzeAutoBands(scene.Elements, scene.Zones, options);
                     unpainted = FormworkReader.AttachCurved(scene, results);
                     // 곡면 조각의 세모는 Analyze 뒤에 붙는다 — 뺀 판(R48)은 그 뒤에 다시 맞춘다(수량산출 창의 FormworkBoard 와 같게 · core-verify R48 L3).
-                    if (rules.DropCount > 0 || rules.KindCount > 0) FormworkAnalyzer.Reclassify(results, options);   // 판 종류도(R57 P3)
+                    if (options.ActiveRules is { } active && (active.DropCount > 0 || active.KindCount > 0 || active.PlaceCount > 0 || active.SplitCount > 0))
+                        FormworkAnalyzer.Reclassify(results, options);   // 판 종류도(R57 P3) · 판 자리 · 쪼갬도 · 자동 모드는 걸지 않음(R66 — 설치 전 검토 L7)
                     audit = FormworkAnalyzer.Check(results, options);
 
                     try { log = FormworkReader.WriteLog(doc, results, options); }

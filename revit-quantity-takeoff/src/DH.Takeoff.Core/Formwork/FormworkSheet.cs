@@ -51,6 +51,12 @@ public sealed class FormworkLine
     /// 둘레 한 줄 = 그 면의 너비 항 · 공통 수로 묶은 줄 = 그 a 의 항. 없으면 모른다(같은 글로 잇는다).
     /// </summary>
     public Dictionary<FormworkUnit, int> TermOf { get; } = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
+    /// 판 → 줄 식에서 그 판 식의 첫 숫자 차례(FormworkLabels.NumberPattern — R66a: 복잡한 판 식(전체 − 구멍 …)의 숫자 하나하나를 줄 식의 그 숫자에).
+    /// 판 식이 줄 식에 글 그대로 든 줄만(보통 줄 · × n 줄 = 0 · 칸 한 줄 = 앞 칸들의 숫자 수) · 없으면 모른다(−1 — 둘레 · 공통 수 · 양측 줄은 TermOf 길).
+    /// </summary>
+    public Dictionary<FormworkUnit, int> StartOf { get; } = new(ReferenceEqualityComparer.Instance);
 }
 
 /// <summary>
@@ -301,11 +307,14 @@ public static class FormworkSheet
                     // 이은 묶음은 대표 조각(가장 넓은 것)을 만났을 때 한 줄로 적고, 나머지 조각은 줄을 따로 내지 않는다.
                     var joined = merge.GroupOf(p);
                     if (joined != null && !ReferenceEquals(joined.Lead.Patch, p)) continue;
+                    // 판 자리(R66 — JACK 고름 «엑셀의 부위 줄 + 중분류»): 판의 조각에 맞는 기록이 있으면 그 부위 · 중분류(빈 값은 그대로 · 대표 조각 먼저).
+                    var placed = p.Place ?? joined?.Members.Select(m => m.Patch.Place).FirstOrDefault(x => x != null);
+                    string unitPart = placed is { Part.Length: > 0 } byPart ? byPart.Part : partName;
                     string group = FormworkTable.GroupOf(f.Class, p);
                     // 부위 제목은 부위 이름만(2D). 구멍 둘레는 «HOLE 주위» 하나에 모으고, 그 아래 작은 제목이 구멍이 난 부재의 부위다.
                     bool hole = group == FormworkTable.GroupHole;
-                    string part = hole ? HoleTitle : partName;
-                    string sub = hole ? partName : "";
+                    string part = hole ? HoleTitle : unitPart;
+                    string sub = hole ? unitPart : "";
                     // 괄호: 옆면은 외측 / 내측(«내측(구역)»도 «내측»), 위를 보는 경사면은 «경사면», 밑면 · 구멍 둘레는 없음. 안팎을 모르면 괄호 없이 비고에.
                     string tag = group == FormworkTable.GroupSlope ? "경사면"
                         : group == FormworkTable.GroupSide && p.Side == "외측" ? "외측"
@@ -317,10 +326,10 @@ public static class FormworkSheet
                     // 하부슬래브 옆면 + 벽 덩어리가 벽체 줄에 «SB01, WA01» 로 섞이지 않게 — core-verify R53b M2), 없으면 마크 · 유형 이름(R47).
                     // 판의 이름(unit.Mark)은 판이 덮는 부재 모두.
                     // 옮긴 판은 제 부재의 이름(부위를 거르지 않는다 — R55b L1).
-                    string named = NamesOf(members.Select(m => m.Item1.Element.Id).Where(id => p.MovedTo != null || placeOf(id).part == partName), nameOf);
+                    string named = NamesOf(members.Select(m => m.Item1.Element.Id).Where(id => p.MovedTo != null || placed != null || placeOf(id).part == partName), nameOf);
                     string covered = NamesOf(members.Select(m => m.Item1.Element.Id), nameOf);
                     string mark = named.Length > 0 ? NamedKey : r.Element.Mark.Trim().Length > 0 ? r.Element.Mark.Trim() : r.Element.Type;
-                    string unitZone = joined is { MixedZones: true } ? "" : zone;
+                    string unitZone = placed is { Zone.Length: > 0 } byZone ? byZone.Zone : joined is { MixedZones: true } ? "" : zone;
                     var (formula, areaOnly) = Shape(joined?.Merged ?? p);
                     // 줄의 조각 하나 = 거푸집 객체 하나(R44). 줄을 짓는 값을 그대로 담는다.
                     var unit = new FormworkUnit
@@ -354,7 +363,7 @@ public static class FormworkSheet
         var lines = new Dictionary<(string head, string formula, bool joined, int cells, int faces), (FormworkLine line, Entry first)>();
         var slabLines = new HashSet<FormworkLine>(ReferenceEqualityComparer.Instance);   // 슬래브 밑면 조각이 든 줄(공통 수로 묶지 않는다 — R60 설치 전 검토)
         void Put(Entry first, string formula, bool areaOnly, bool joinedAny, int cells, int areaOnlyCells, IEnumerable<FormworkUnit> units, int faces = 0,
-                 Func<FormworkUnit, int>? termOf = null)
+                 Func<FormworkUnit, int>? termOf = null, Func<FormworkUnit, int>? startOf = null)
         {
             var key = (first.LineHead, formula, joinedAny, cells, faces);
             if (!lines.TryGetValue(key, out var at))
@@ -371,6 +380,7 @@ public static class FormworkSheet
                 foreach (long id in u.Ids) at.line.Ids.Add(id);
                 at.line.Units.Add(u);
                 at.line.TermOf[u] = termOf?.Invoke(u) ?? 0;
+                at.line.StartOf[u] = startOf?.Invoke(u) ?? (u.Formula == formula ? 0 : -1);
             }
         }
         var gathered = new HashSet<string>(StringComparer.Ordinal);
@@ -395,15 +405,18 @@ public static class FormworkSheet
                         var inLine = chunk.SelectMany(t => t.cells).ToList();
                         // 칸마다 식의 항(R63d): 앞 칸들의 항 수만큼 밀린 자리(칸 하나의 식이 «a*b+c*d» 면 항이 둘).
                         var cellTerm = new Dictionary<FormworkUnit, int>(ReferenceEqualityComparer.Instance);
-                        int offset = 0;
+                        var cellStart = new Dictionary<FormworkUnit, int>(ReferenceEqualityComparer.Instance);   // 칸 식의 첫 숫자 차례(R66a — «(칸식)*k» 도 칸식이 앞)
+                        int offset = 0, numbersBefore = 0;
                         foreach (var t in chunk)
                         {
-                            foreach (var c in t.cells) cellTerm[c.Unit] = offset;
+                            foreach (var c in t.cells) { cellTerm[c.Unit] = offset; cellStart[c.Unit] = c.Unit.Formula.Length > 0 && t.term.Contains(c.Unit.Formula, StringComparison.Ordinal) ? numbersBefore : -1; }
                             offset += FormworkLabels.Monomials(t.term)?.Count ?? 1;
+                            numbersBefore += FormworkLabels.NumberPattern.Matches(t.term).Count;
                         }
                         if (inLine.Count == 1) Put(inLine[0], inLine[0].Formula, inLine[0].AreaOnly, inLine[0].Joined, 0, 0, new[] { inLine[0].Unit });
                         else Put(e, string.Join("+", chunk.Select(t => t.term)), inLine.All(c => c.AreaOnly), inLine.Any(c => c.Joined),
-                                 inLine.Count, inLine.Count(c => c.AreaOnly), inLine.Select(c => c.Unit), termOf: u => cellTerm.GetValueOrDefault(u));
+                                 inLine.Count, inLine.Count(c => c.AreaOnly), inLine.Select(c => c.Unit), termOf: u => cellTerm.GetValueOrDefault(u),
+                                 startOf: u => cellStart.GetValueOrDefault(u, -1));
                     }
                 }
                 continue;
@@ -776,6 +789,7 @@ public static class FormworkSheet
                 foreach (var u in line.Units.Where(paired.Contains))
                 {
                     both.TermOf[u] = 0;
+                    both.StartOf[u] = u.Formula == both.Formula ? 0 : -1;
                     both.Units.Add(u);
                     both.Count++;
                     both.Bim += u.Area;
@@ -894,31 +908,136 @@ public static class FormworkSheet
     /// </summary>
     public static (string formula, bool areaOnly) Shape(FacePatch patch)
     {
+        var (formula, areaOnly, _) = ShapeDetail(patch);
+        return (formula, areaOnly);
+    }
+
+    /// <summary>판 식의 숫자 하나 · 그 숫자가 재는 선분(모델 좌표 m) · 식에서 그 숫자의 차례(NumberPattern — 모르면 −1) — R66a.</summary>
+    public sealed record ShapeLabel(string Text, double[] A, double[] B, int Token);
+
+    /// <summary>
+    /// Shape 와 같은 식(글자 그대로)과 숫자마다의 자리(R66a — JACK 2026-10-27 «거푸집은 수식이 통으로 나와»: 구멍을 뺀 벽처럼 식이 복잡한 판은 3D 가운데에
+    /// 식 한 덩이 · 식 띠 숫자가 판의 제 자리에 안 이어짐): 네모 = 가로 숫자는 아랫변 · 세로 숫자는 왼변 · 구멍(빼는 네모)은 그 구멍의 변 · 사다리꼴 = 나란한 두 변 +
+    /// 사이 선 · 삼각형 = 밑변 + 높이 선 · 같은 크기로 묶인 조각(«a*b*n» · «-(a*b*n)»)은 n 개 모두 그 묶음의 숫자. 숫자의 차례는 식을 곱셈 덩이로 펼쳐(Monomials)
+    /// 조각의 숫자 글이 든 덩이에서 고른다. 넓이만이면 숫자 없음.
+    /// </summary>
+    public static (string formula, bool areaOnly, List<ShapeLabel> labels) ShapeDetail(FacePatch patch)
+    {
         string areaText = Num(patch.Area);
-        if (patch.Outline.Count == 0) return (areaText, true);
+        var none = new List<ShapeLabel>();
+        if (patch.Outline.Count == 0) return (areaText, true, none);
         var rings = patch.Outline.Select(Clean).Where(r => r.Count >= 3).ToList();
-        if (rings.Count == 0) return (areaText, true);
+        if (rings.Count == 0) return (areaText, true, none);
         var outer = rings.OrderByDescending(RingArea).First();
         var up = Newell(outer);
         var pieces = new List<string>();
         var holes = new List<string>();
+        var parts = new List<Piece3>();   // 조각마다 숫자 · 선분(모델 좌표)
         foreach (var ring in rings.OrderByDescending(r => ReferenceEquals(r, outer)))
         {
             bool piece = Newell(ring).Dot(up) > 0;
-            if (Rect(ring) is { } r) (piece ? pieces : holes).Add($"{Num(r.a)}*{Num(r.b)}");
+            if (Rect(ring) is { } r)
+            {
+                (piece ? pieces : holes).Add($"{Num(r.a)}*{Num(r.b)}");
+                if (RectPiece(ring, r.a, r.b) is { } rp) parts.Add(rp);
+            }
             // 직각으로만 꺾인 고리(ㄱ자 · ㄷ자 — 수직면 덩어리에서 벽 + 아래 호퍼 안쪽처럼 · R49)는 네모의 합 «18*5+2.5*1.5» · 구멍이면 괄호로 싸서 뺀다.
-            else if (Rectilinear(ring, up, outer) is { } sum) (piece ? pieces : holes).Add(piece ? sum : "(" + sum + ")");
+            else if (Rectilinear(ring, up, outer, parts) is { } sum) (piece ? pieces : holes).Add(piece ? sum : "(" + sum + ")");
             // 비스듬한 변이 든 고리(사다리꼴 · 삼각형 · 귀퉁이를 자른 네모 — R65b)는 2D 꼴 «(a+b)*0.5*h» · «a*h*0.5» · «전체 − 귀퉁이».
-            else if (Sloped(ring, up, outer) is { } slope) (piece ? pieces : holes).Add(piece ? slope : "(" + slope + ")");
-            else return (areaText, true);
+            else if (Sloped(ring, up, outer, parts) is { } slope) (piece ? pieces : holes).Add(piece ? slope : "(" + slope + ")");
+            else return (areaText, true, none);
         }
         string formula = string.Join("+", pieces) + FormulaDecomposer.Deductions(holes);   // 같은 크기의 구멍은 «-(1*2.1*3)»(JACK 2026-10-16)
         double value;
         try { value = FormulaEvaluator.Evaluate(formula); }
-        catch (FormatException) { return (areaText, true); }
-        if (!double.IsFinite(value) || Math.Abs(value - patch.Area) > 0.005 * patch.Area + 1e-4) return (areaText, true);
-        return (formula, false);
+        catch (FormatException) { return (areaText, true, none); }
+        if (!double.IsFinite(value) || Math.Abs(value - patch.Area) > 0.005 * patch.Area + 1e-4) return (areaText, true, none);
+        return (formula, false, LabelsOf(formula, parts));
     }
+
+    // 식 한 조각의 숫자들(모델 좌표 선분) · 사다리꼴(펼치면 덩이 둘 — [짧은 변, 0.5, h] · [긴 변, 0.5, h])인가.
+    private sealed record Piece3(List<(string text, double[] a, double[] b)> Labels, bool Trapezoid = false);
+
+    // 조각마다 숫자를 식의 차례에 잇는다(R66a): 식을 곱셈 덩이로 펼쳐 조각의 숫자 글이 모두 든 덩이(안 쓴 것 먼저 · 같은 크기 묶음은 함께 씀)를 고르고
+    // 그 덩이 안에서 글이 같은 숫자로. 사다리꼴은 이웃한 두 덩이. 못 찾으면 −1.
+    private static List<ShapeLabel> LabelsOf(string formula, List<Piece3> parts)
+    {
+        var result = new List<ShapeLabel>();
+        var monos = FormworkLabels.Monomials(formula);
+        var numbers = FormworkLabels.NumberPattern.Matches(formula).Select(m => m.Value).ToList();
+        var used = new bool[monos?.Count ?? 0];
+        List<string> Texts(List<int> m) => m.Select(i => numbers[i]).ToList();
+        static bool Holds(List<string> big, IEnumerable<string> small)
+        {
+            var left = big.ToList();
+            foreach (var s in small) { int at = left.IndexOf(s); if (at < 0) return false; left.RemoveAt(at); }
+            return true;
+        }
+        foreach (var part in parts)
+        {
+            var tokens = Enumerable.Repeat(-1, part.Labels.Count).ToList();
+            if (monos != null)
+            {
+                if (part.Trapezoid && part.Labels.Count == 3)
+                {
+                    // [짧은 변, 0.5, h] · [긴 변, 0.5, h]
+                    string lo = part.Labels[0].text, hi = part.Labels[1].text, h = part.Labels[2].text;
+                    int k = Pick(i => i + 1 < monos.Count && Holds(Texts(monos[i]), new[] { lo, "0.5", h }) && Holds(Texts(monos[i + 1]), new[] { hi, "0.5", h }));
+                    if (k >= 0)
+                    {
+                        used[k] = used[k + 1] = true;
+                        tokens[0] = monos[k].First(i => numbers[i] == lo);
+                        tokens[1] = monos[k + 1].First(i => numbers[i] == hi);
+                        tokens[2] = monos[k].First(i => numbers[i] == h && i != tokens[0]);
+                    }
+                }
+                else
+                {
+                    int k = Pick(i => Holds(Texts(monos[i]), part.Labels.Select(l => l.text)));
+                    if (k >= 0)
+                    {
+                        used[k] = true;
+                        var taken = new HashSet<int>();
+                        for (int j = 0; j < part.Labels.Count; j++)
+                        {
+                            int hit = monos[k].FirstOrDefault(i => numbers[i] == part.Labels[j].text && !taken.Contains(i), -1);
+                            if (hit >= 0) taken.Add(hit);
+                            tokens[j] = hit;
+                        }
+                    }
+                }
+            }
+            for (int j = 0; j < part.Labels.Count; j++) result.Add(new ShapeLabel(part.Labels[j].text, part.Labels[j].a, part.Labels[j].b, tokens[j]));
+        }
+        return result;
+
+        // 조건에 맞는 덩이: 안 쓴 것 먼저 · 없으면 쓴 것(같은 크기 묶음 «a*b*n» 을 n 조각이 함께).
+        int Pick(Func<int, bool> fits)
+        {
+            int again = -1;
+            for (int i = 0; i < used.Length; i++)
+                if (fits(i)) { if (!used[i]) return i; if (again < 0) again = i; }
+            return again;
+        }
+    }
+
+    // 네모 고리의 숫자 자리: 가로 a = 그 길이의 변 가운데 낮은 것 · 세로 b = 그 변에 이어진 길이 b 인 변.
+    private static Piece3? RectPiece(List<P3> ring, double a, double b)
+    {
+        var edges = Enumerable.Range(0, ring.Count).Select(i => (p: ring[i], q: ring[(i + 1) % ring.Count])).ToList();
+        var first = edges.Where(e => Math.Abs((e.q - e.p).Length - a) < 1e-6).OrderBy(e => Math.Min(e.p.Z, e.q.Z)).ThenBy(e => e.p.X + e.q.X).Select(e => ((P3, P3)?)e).FirstOrDefault();
+        if (first is not { } fa) return null;
+        var second = edges.Where(e => Math.Abs((e.q - e.p).Length - b) < 1e-6 && !e.Equals(fa) && ((e.p - fa.Item1).Length < 1e-9 || (e.p - fa.Item2).Length < 1e-9 || (e.q - fa.Item1).Length < 1e-9 || (e.q - fa.Item2).Length < 1e-9))
+                          .Select(e => ((P3, P3)?)e).FirstOrDefault();
+        if (second is not { } fb) return null;
+        return new Piece3(new() { (Num(a), Arr(fa.Item1), Arr(fa.Item2)), (Num(b), Arr(fb.Item1), Arr(fb.Item2)) });
+    }
+
+    private static double[] Arr(P3 p) => new[] { p.X, p.Y, p.Z };
+
+    // 판 좌표(u, v — 면 위 · c = 면의 n 거리)의 점을 모델 좌표로.
+    private static double[] At(P3 u, P3 v, P3 n, double c, double x, double y) =>
+        new[] { u.X * x + v.X * y + n.X * c, u.Y * x + v.Y * y + n.Y * c, u.Z * x + v.Z * y + n.Z * c };
 
     /// <summary>테두리 고리를 바깥 고리와 같은 쪽으로 도는 것(떨어진 조각)과 거꾸로 도는 것(구멍)으로 센다 — Shape 와 같은 가르기(판과 견주는 시험).</summary>
     internal static (int pieces, int holes) Rings(FacePatch patch)
@@ -936,7 +1055,7 @@ public static class FormworkSheet
     // 변이 모두 서로 직각인 고리 하나(구멍 없는 다각형)를 네모로 적는다: 네모의 합(가로 띠 · 세로 띠) 또는 바깥 네모 − 빈 곳(«5*5-0.5*2.5» — 2D 의
     // «전체 − 공제»). 항이 가장 적은 것 · 같으면 합(가로 띠 먼저). 기운 면(벽)은 «가로 × 세로»(수평인 변이 앞 — Rect 와 같다) · 수평인 면은 네모마다
     // 긴 변이 앞. 같은 크기는 «a*b*n» · 빈 곳은 공제 묶기(FormulaDecomposer.Deductions). 직각이 아니거나 항이 너무 많으면 null.
-    private static string? Rectilinear(List<P3> ring, P3 up, List<P3> outer)
+    private static string? Rectilinear(List<P3> ring, P3 up, List<P3> outer, List<Piece3>? parts = null)
     {
         var n = Scale(up, 1 / up.Length);
         var across = n.Cross(new P3(0, 0, 1));
@@ -960,27 +1079,38 @@ public static class FormworkSheet
             if (a.x != b.x && a.y != b.y) return null;
         }
         var swapped = pts.Select(p => (p.y, p.x)).ToList();
-        static List<(double w, double h)>? Back(List<(double w, double h)>? rs) => rs?.Select(r => (r.h, r.w)).ToList();
-        string Term((double w, double h) r) => level && r.h > r.w ? $"{Num(r.h)}*{Num(r.w)}" : $"{Num(r.w)}*{Num(r.h)}";
-        IEnumerable<string> Terms(List<(double w, double h)> rs) =>
+        // 세로 띠(바꾼 틀)의 네모를 원래 틀로: 가로 ↔ 세로 · 놓인 자리도.
+        static List<(double w, double h, double x0, double y0)>? Back(List<(double w, double h, double x0, double y0)>? rs) => rs?.Select(r => (r.h, r.w, r.y0, r.x0)).ToList();
+        string Term((double w, double h, double x0, double y0) r) => level && r.h > r.w ? $"{Num(r.h)}*{Num(r.w)}" : $"{Num(r.w)}*{Num(r.h)}";
+        IEnumerable<string> Terms(List<(double w, double h, double x0, double y0)> rs) =>
             rs.OrderByDescending(r => r.w * r.h).Select(Term).GroupBy(t => t).Select(g => g.Count() == 1 ? g.Key : $"{g.Key}*{g.Count()}");
         var sums = new[] { Strips(pts, false), Back(Strips(swapped, false)) };
         var gaps = new[] { Strips(pts, true), Back(Strips(swapped, true)) };
-        (int count, string text)? best = null;
+        (int count, string text, List<(double w, double h, double x0, double y0)> rects)? best = null;
         foreach (var rs in sums)
-            if (rs is { Count: > 0 } && (best == null || rs.Count < best.Value.count)) best = (rs.Count, string.Join("+", Terms(rs)));
-        var box = (w: pts.Max(p => p.x) - pts.Min(p => p.x), h: pts.Max(p => p.y) - pts.Min(p => p.y));
+            if (rs is { Count: > 0 } && (best == null || rs.Count < best.Value.count)) best = (rs.Count, string.Join("+", Terms(rs)), rs);
+        double minX = pts.Min(p => p.x), minY = pts.Min(p => p.y);
+        var box = (w: pts.Max(p => p.x) - minX, h: pts.Max(p => p.y) - minY, x0: minX, y0: minY);
         foreach (var rs in gaps)
             if (rs is { Count: > 0 } && (best == null || rs.Count + 1 < best.Value.count))
-                best = (rs.Count + 1, Term(box) + FormulaDecomposer.Deductions(rs.OrderByDescending(r => r.w * r.h).Select(Term)));
-        return best is { } found && found.count <= MaxRectilinearTerms ? found.text : null;
+                best = (rs.Count + 1, Term(box) + FormulaDecomposer.Deductions(rs.OrderByDescending(r => r.w * r.h).Select(Term)), rs.Prepend(box).ToList());
+        if (best is not { } found || found.count > MaxRectilinearTerms) return null;
+        // 네모마다 가로 숫자는 아랫변 · 세로 숫자는 왼변(R66a).
+        double c = ring[0].Dot(n);
+        foreach (var r in found.rects)
+            parts?.Add(new Piece3(new()
+            {
+                (Num(r.w), At(u, v, n, c, r.x0, r.y0), At(u, v, n, c, r.x0 + r.w, r.y0)),
+                (Num(r.h), At(u, v, n, c, r.x0, r.y0), At(u, v, n, c, r.x0, r.y0 + r.h)),
+            }));
+        return found.text;
     }
 
     // 비스듬한 변이 든 고리 하나(R65b — JACK 2026-10-27 «뜬금없이 치수가 하나인 애들도 있어» · 녹촌 2D «(a ＋ b) × 0.5 × h» ·
     // «… − c × d × 0.5»): 꼭짓점 높이마다 가로 띠로 잘라 띠 안의 구간을 사다리꼴 «(a+b)*0.5*h»(짧은 변 먼저) · 삼각형 «a*h*0.5» · 평행사변형 «a*h» ·
     // 네모(위아래로 이어 붙임)로 — 띠의 합 또는 바깥 네모 − 빈 곳(귀퉁이 삼각형). 두 방향(가로 띠 · 세로 띠)을 보고 항이 적은 것 → 숫자가 적은 것 → 합.
     // 직각으로만 꺾인 고리는 Rectilinear 가 맡는다(여기는 비스듬한 변이 있을 때만). 항이 너무 많거나 띠를 짓지 못하면 null(넓이만).
-    private static string? Sloped(List<P3> ring, P3 up, List<P3> outer)
+    private static string? Sloped(List<P3> ring, P3 up, List<P3> outer, List<Piece3>? parts = null)
     {
         var n = Scale(up, 1 / up.Length);
         var across = n.Cross(new P3(0, 0, 1));
@@ -1005,9 +1135,11 @@ public static class FormworkSheet
             dirs.AddRange(byLength.OrderByDescending(x => x.len).Take(3).Select(x => x.d));
         }
         (int terms, int numbers, int gaps, string text)? best = null;
+        List<Piece3>? bestParts = null;
         foreach (var u in dirs)
         {
             var v = n.Cross(u);
+            double c = ring[0].Dot(n);
             var xs = Snap(ring.Select(p => p.Dot(u)));
             var ys = Snap(ring.Select(p => p.Dot(v)));
             var pts = ring.Select(p => (x: xs[p.Dot(u)], y: ys[p.Dot(v)])).ToList();
@@ -1023,21 +1155,34 @@ public static class FormworkSheet
             // 네모의 글: 가로(u 쪽) × 세로(v 쪽) · 수평인 면은 긴 변이 앞(Rectilinear 와 같다).
             string RectText(double wu, double hv) => level && hv > wu ? $"{Num(hv)}*{Num(wu)}" : $"{Num(wu)}*{Num(hv)}";
             var swappedPts = pts.Select(p => (p.y, p.x)).ToList();
-            var box = (w: pts.Max(p => p.x) - pts.Min(p => p.x), h: pts.Max(p => p.y) - pts.Min(p => p.y));
+            double minX = pts.Min(p => p.x), minY = pts.Min(p => p.y);
+            var box = (w: pts.Max(p => p.x) - minX, h: pts.Max(p => p.y) - minY);
             foreach (bool swapped in new[] { false, true })
                 foreach (bool gaps in new[] { false, true })
                 {
                     var bands = Bands(swapped ? swappedPts : pts, gaps, (w, h) => swapped ? RectText(h, w) : RectText(w, h));
                     if (bands == null || (bands.Count == 0 && !gaps)) continue;   // 빈 곳이 모두 mm 찌꺼기면 바깥 네모 하나
                     // 큰 조각 먼저(Rectilinear · 2D 와 같은 차례 — 검토 낮음 1) · 같은 크기는 «× n».
-                    var grouped = bands.OrderByDescending(TermValue).GroupBy(t => t).Select(g => g.Count() == 1 ? g.Key : $"{g.Key}*{g.Count()}").ToList();
+                    var grouped = bands.Select(b => b.text).OrderByDescending(TermValue).GroupBy(t => t).Select(g => g.Count() == 1 ? g.Key : $"{g.Key}*{g.Count()}").ToList();
                     string text = gaps ? RectText(box.w, box.h) + FormulaDecomposer.Deductions(grouped) : string.Join("+", grouped);
                     var score = (terms: grouped.Count + (gaps ? 1 : 0), numbers: FormworkLabels.NumberPattern.Matches(text).Count, gaps: gaps ? 1 : 0);
                     if (score.terms > MaxRectilinearTerms) continue;
                     if (best == null || (score.terms, score.numbers, score.gaps).CompareTo((best.Value.terms, best.Value.numbers, best.Value.gaps)) < 0)
+                    {
                         best = (score.terms, score.numbers, score.gaps, text);
+                        // 숫자 자리(R66a): 띠 좌표(바꾼 틀이면 x ↔ y)를 모델 좌표로 · 바깥 네모는 아랫변 · 왼변.
+                        double[] P(double x, double y) => swapped ? At(u, v, n, c, y, x) : At(u, v, n, c, x, y);
+                        bestParts = bands.Select(b => new Piece3(b.labels.Select(l => (l.text, P(l.x0, l.y0), P(l.x1, l.y1))).ToList(), b.trapezoid)).ToList();
+                        if (gaps)
+                            bestParts.Insert(0, new Piece3(new()
+                            {
+                                (Num(box.w), At(u, v, n, c, minX, minY), At(u, v, n, c, minX + box.w, minY)),
+                                (Num(box.h), At(u, v, n, c, minX, minY), At(u, v, n, c, minX, minY + box.h)),
+                            }));
+                    }
                 }
         }
+        if (best != null && bestParts != null) parts?.AddRange(bestParts);
         return best?.text;
     }
 
@@ -1054,13 +1199,18 @@ public static class FormworkSheet
     // 위로 이어지면 한 네모 — rect(가로, 세로) 글). gaps 면 바깥 네모 안의 빈 구간. 띠를 가로지르는 변이 홀수거나 항이 너무 많으면 null.
     // 모양은 적히는 수(셋째 자리)로 가른다(검토 중간 3 — 0.3 mm 기운 벽이 «(4+4)*0.5*3» · 0.3 mm 띠가 «4*0*0.5» 로 적히지 않게): 두 변이 1 mm 안으로 곧고
     // 적힌 폭이 같으면 네모 · 적힌 높이나 폭이 0 이면 뺌 · 적힌 짧은 폭이 0 이면 삼각형 · 적힌 두 폭이 같으면 평행사변형(네모처럼 «가로 × 세로»).
-    private static List<string>? Bands(List<(double x, double y)> pts, bool gaps, Func<double, double, string> rect)
+    // R66a: 항마다 숫자의 자리(띠 좌표 선분)와 사다리꼴인가를 함께 돌려준다 — 네모 = 가로는 아랫변 · 세로는 왼변 · 평행사변형 = 밑변 + 가운데 높이 선 ·
+    // 삼각형 = 밑변 + 꼭짓점에서 내린 높이 선 · 사다리꼴 = 짧은 변 · 긴 변 + 짧은 변 가운데에서 내린 높이 선.
+    private static List<(string text, List<(string text, double x0, double y0, double x1, double y1)> labels, bool trapezoid)>? Bands(
+        List<(double x, double y)> pts, bool gaps, Func<double, double, string> rect)
     {
         const double eps = 2e-4, lean = 1e-3;
         var levels = pts.Select(p => p.y).Distinct().OrderBy(y => y).ToList();
         double left = pts.Min(p => p.x), right = pts.Max(p => p.x);
         var open = new Dictionary<(double x0, double x1), double>();   // 네모 구간 → 시작한 y
-        var terms = new List<string>();
+        var terms = new List<(string text, List<(string text, double x0, double y0, double x1, double y1)> labels, bool trapezoid)>();
+        (string, List<(string, double, double, double, double)>, bool) Rect(double x0, double y0, double w, double hh) =>
+            (rect(w, hh), new() { (Num(w), x0, y0, x0 + w, y0), (Num(hh), x0, y0, x0, y0 + hh) }, false);
         for (int k = 0; k + 1 < levels.Count; k++)
         {
             double y0 = levels[k], y1 = levels[k + 1], h = y1 - y0;
@@ -1086,27 +1236,34 @@ public static class FormworkSheet
                 if (Math.Abs(l.b - l.t) < lean && Math.Abs(r.b - r.t) < lean && lo == hi) { spans.Add((l.b, r.b)); continue; }   // 곧게 선 두 변 = 네모
                 // 모델의 mm 찌꺼기(«0.001*0.001*0.5»)와 적히면 0 인 것은 식에 넣지 않는다 — 식 전체는 Shape 가 조각 넓이와 0.5% 로 다시 견준다.
                 if ((wb + wt) * 0.5 * h < 1e-5 || hText == "0" || hi == "0") continue;
-                if (lo == hi) terms.Add(rect(wb, h));                       // 평행사변형(밑변 × 높이)
-                else if (lo == "0") terms.Add($"{hi}*{hText}*0.5");          // 삼각형
-                else terms.Add($"({lo}+{hi})*0.5*{hText}");                 // 사다리꼴(짧은 변 먼저)
+                bool bottomWide = wb >= wt;
+                var (wideA, wideB, wideY) = bottomWide ? (l.b, r.b, y0) : (l.t, r.t, y1);
+                var (narrowA, narrowB, narrowY) = bottomWide ? (l.t, r.t, y1) : (l.b, r.b, y0);
+                double mid = (narrowA + narrowB) / 2;
+                if (lo == hi)                                                // 평행사변형(밑변 × 높이)
+                    terms.Add((rect(wb, h), new() { (Num(wb), l.b, y0, r.b, y0), (hText, (l.b + r.b + l.t + r.t) / 4, y0, (l.b + r.b + l.t + r.t) / 4, y1) }, false));
+                else if (lo == "0")                                          // 삼각형
+                    terms.Add(($"{hi}*{hText}*0.5", new() { (hi, wideA, wideY, wideB, wideY), (hText, mid, narrowY, mid, wideY) }, false));
+                else                                                         // 사다리꼴(짧은 변 먼저)
+                    terms.Add(($"({lo}+{hi})*0.5*{hText}", new() { (lo, narrowA, narrowY, narrowB, narrowY), (hi, wideA, wideY, wideB, wideY), (hText, mid, narrowY, mid, wideY) }, true));
             }
             foreach (var key in open.Keys.ToList())
-                if (!spans.Contains(key)) { terms.Add(rect(key.x1 - key.x0, y0 - open[key])); open.Remove(key); }
+                if (!spans.Contains(key)) { terms.Add(Rect(key.x0, open[key], key.x1 - key.x0, y0 - open[key])); open.Remove(key); }
             foreach (var span in spans) open.TryAdd(span, y0);
             if (terms.Count > 2 * MaxRectilinearTerms) return null;        // 더 볼 것 없이(검토 낮음 4)
         }
-        foreach (var (key, start) in open) terms.Add(rect(key.x1 - key.x0, levels[^1] - start));
+        foreach (var (key, start) in open) terms.Add(Rect(key.x0, start, key.x1 - key.x0, levels[^1] - start));
         return terms;
     }
 
     // 가로 띠로 자른 네모들(w = x 쪽 길이 · h = y 쪽 길이): 띠마다 짝수-홀수로 덮인 구간(gaps 면 바깥 네모 안의 빈 구간) → 위아래로 같은 구간이
     // 이어지면 한 네모. 고리가 고르지 않으면(띠를 가로지르는 변이 홀수) null.
-    private static List<(double w, double h)>? Strips(List<(double x, double y)> pts, bool gaps)
+    private static List<(double w, double h, double x0, double y0)>? Strips(List<(double x, double y)> pts, bool gaps)
     {
         var levels = pts.Select(p => p.y).Distinct().OrderBy(y => y).ToList();
         double left = pts.Min(p => p.x), right = pts.Max(p => p.x);
         var open = new Dictionary<(double x0, double x1), double>();   // 구간 → 시작한 y
-        var rects = new List<(double w, double h)>();
+        var rects = new List<(double w, double h, double x0, double y0)>();   // 네모(가로 · 세로 · 왼쪽 아래 자리 — R66a 숫자 자리)
         for (int k = 0; k + 1 < levels.Count; k++)
         {
             double y0 = levels[k], y1 = levels[k + 1], mid = (y0 + y1) / 2;
@@ -1122,10 +1279,10 @@ public static class FormworkSheet
             var spans = new HashSet<(double, double)>();
             for (int i = 0; i + 1 < cuts.Count; i += 2) if (cuts[i + 1] > cuts[i]) spans.Add((cuts[i], cuts[i + 1]));
             foreach (var key in open.Keys.ToList())
-                if (!spans.Contains(key)) { rects.Add((key.x1 - key.x0, y0 - open[key])); open.Remove(key); }
+                if (!spans.Contains(key)) { rects.Add((key.x1 - key.x0, y0 - open[key], key.x0, open[key])); open.Remove(key); }
             foreach (var span in spans) open.TryAdd(span, y0);
         }
-        foreach (var (key, start) in open) rects.Add((key.x1 - key.x0, levels[^1] - start));
+        foreach (var (key, start) in open) rects.Add((key.x1 - key.x0, levels[^1] - start, key.x0, start));
         return rects;
     }
 

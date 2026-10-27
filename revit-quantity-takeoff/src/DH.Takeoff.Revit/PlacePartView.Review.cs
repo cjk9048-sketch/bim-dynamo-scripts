@@ -76,9 +76,9 @@ public sealed partial class PlacePartView
     {
         _fwPicked = null;
         _fwPickedSub = null;
-        _fwPlate = null;
+        _fwSel.Clear();
+        _fwPlaceOpen = false;
         _fwFocus = null;
-        _fwMoveLead = null;
         _rvFormLine = null;
         _rvMembers.Clear();
         _rvPicked = -1;
