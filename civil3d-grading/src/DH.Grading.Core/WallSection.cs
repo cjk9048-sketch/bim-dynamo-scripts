@@ -355,6 +355,10 @@ public static class WallSection
         public bool Over, Below;
         /// <summary>단면 앞면 기울기(1:n) — 앞 땅(x 0, z 0)에서 꼭대기 앞 모서리로(쐐기 공제 · 기울기 차이 ⚠에 쓴다).</summary>
         public double FaceBatter;
+        /// <summary>★[v106 · 계획_v106.md 2.2] <b>보이는 부재 앞면</b> x(z) = FaceX0 + FaceN·z(z = 0 ~ 꼭대기) — 3D 무늬를 붙이는 면(벽체 · 블록 · 패널 · 돌 앞면). 수량 · 터파기는 안 쓴다.</summary>
+        public double FaceX0, FaceN;
+        /// <summary>벽 꼭대기 높이(앞 땅 기준) = 보이는 높이.</summary>
+        public double ZTop => HTotal - Df;
         public double StructArea => Parts.Where(p => p.Structure).Sum(p => p.Fraction * Math.Abs(Area(p.Ring)));
     }
 
@@ -411,6 +415,7 @@ public static class WallSection
                         RingF("부벽(평균)", Math.Min(1, tc / sc), (xs0 + tBot, zft), (xHeel, zb + tf2), (xTopF + tTop, zTop));
                 }
                 s.XFront = xToe - el; s.XBack = xHeel + el; s.ZBottom = zb - tl; s.FaceBatter = nf;
+                s.FaceX0 = 0; s.FaceN = nf;
                 break;
             }
             case Kind.중력식:
@@ -426,6 +431,7 @@ public static class WallSection
                 if (kw > 1e-9 && kd > 1e-9)
                     Ring("활동방지벽", true, (x0 + kx, zb), (x0 + kx + kw + kd / Math.Tan(Math.PI / 3), zb), (x0 + kx + kw, zb - kd), (x0 + kx, zb - kd));
                 s.XFront = x0 - el; s.XBack = x0 + B + el; s.ZBottom = zb - tl; s.FaceBatter = n1;
+                s.FaceX0 = 0; s.FaceN = n1;
                 break;
             }
             case Kind.보강토:
@@ -440,6 +446,7 @@ public static class WallSection
                 Ring("배수층", false, (x0 + dB, zb), (x0 + dB + wdd, zb), (xT + dB + wdd, zTop), (xT + dB, zTop));
                 if (L > dB + wdd + 1e-9) Ring("보강토체", false, (x0 + dB + wdd, zb), (x0 + L, zb), (xT + L, zTop), (xT + dB + wdd, zTop));
                 s.XFront = x0 - pe; s.XBack = x0 + Math.Max(L, dB + pe); s.ZBottom = zb - pt; s.FaceBatter = nb;
+                s.FaceX0 = 0; s.FaceN = nb;
                 break;
             }
             case Kind.패널식:
@@ -461,6 +468,7 @@ public static class WallSection
                 s.XBack = Math.Min(xf0 + bf + el, ng * (zb - tl));         // 깎기면(아래로 늘인 것) 앞에서 끝
                 s.ZBottom = zb - tl; s.Trench = true;
                 s.FaceBatter = ng;                                        // 정지면 앞면 = 깎기면 — 쐐기 없음
+                s.FaceX0 = -gap - pt; s.FaceN = ng;                       // 보이는 면 = 패널 앞면(깎기면과 나란히 gap + 두께 앞)
                 break;
             }
             case Kind.찰쌓기: case Kind.메쌓기:
@@ -479,6 +487,7 @@ public static class WallSection
                 // ★[v104 2판 재검토] 기초 밑 버림(다른 형식과 같은 공통 칸)
                 Ring("버림", true, (xf0 - el, zb - tl), (xf0 + bf + el, zb - tl), (xf0 + bf + el, zb), (xf0 - el, zb));
                 s.XFront = xf0 - el; s.XBack = Math.Max(xf0 + bf + el, x0 + ts + tbB + wd); s.ZBottom = zb - tl; s.FaceBatter = n;
+                s.FaceX0 = 0; s.FaceN = n;
                 break;
             }
         }

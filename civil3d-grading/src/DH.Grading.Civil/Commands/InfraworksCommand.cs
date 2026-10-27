@@ -11,9 +11,9 @@ namespace DH.Grading.Civil.Commands;
 /// "infraworks 기초자료"(DHINFRA) — 정지 결과를 InfraWorks 기초자료로 **폴더 선택** 후 내보낸다(JACK 0724).
 /// **있는 객체만** 내보낸다(빈 파일 안 만듦 — 헷갈림 방지):
 ///   · 지형.xml           — 정지면_DH TinSurface LandXML
-///   · 옹벽3D.dwg         — 옹벽 3D(★[v105] 단면 덩어리 — 터파기 · 수량과 같은 단면) — 옹벽이 있을 때만
+///   · 옹벽3D.dwg         — 옹벽 3D(★[v105] 단면 덩어리 — 터파기 · 수량과 같은 단면 · ★[v106] 보이는 면 무늬(자연석 · 블록 · 패널+앵커 · 석축) · 앞면 맞춤 전단) — 옹벽이 있을 때만
 ///   · 계획면.shp         — 계획폴리곤
-///   · 소단_절토/성토.shp — 소단 띠(있을 때만)
+///   · 소단_절토/성토.shp — 소단 띠(있을 때만 · ★[v106] 옹벽 변환이 실제로 바꾼 자리는 뺌)
 ///   · 사면_절토/성토.shp — 사면 띠(사면 모드·있을 때만)
 ///   · 위성.tif           — 브이월드 위성영상 GeoTIFF(도면 TM 벨트 EPSG로 재투영 내장, 무손실)
 ///   · 토공량.csv         — 절토/성토/순토량 상세(하나만)
@@ -49,9 +49,130 @@ public sealed class InfraworksCommand
         return outp;
     }
 
+    /// <summary>★★[v106 · 계획_v106.md 2판 2.6 · JACK 1027 «변환기능도 반영» · 검토 중간 3 · 재검토 중간 ② ③] <b>옹벽 변환이 실제로 바꾼 자리</b> — 사면 · 소단 SHP 띠에서 뺄 것.
+    /// <list type="bullet">
+    /// <item>지금 합성에 든 옹벽(<see cref="PureWithWallsBuilder.CurrentWalls"/>와 같은 판정 — 3D와 같은 목록): 정지면_DH 삼각형 중 옹벽 폴리곤(+1 m) 안이고 합성 전 면(<see cref="WallCompositeCommand.BaseName"/> — <b>이 합성의 것</b>: 합성 표지의 합성 전 핸들과 같을 때만)과
+    /// 1 cm 넘게 다른 것(<see cref="GradingPolygons.ChangedMask"/>). 합성 전 면이 없거나 이 합성 것이 아니면 손으로 그린 폴리곤으로 넓게 빼고 ⚠.</item>
+    /// <item>굳은 옹벽(«이어서» — 합성 전 면이 없어 잴 수 없다): 폴리곤 − 그 구역 뒤 구역 발자국. 구역을 못 찾으면 안 빼고 ⚠.</item>
+    /// <item>합성 표지가 없는 정지면(합성 미루기 · 풀린 합성)의 옹벽은 지형에도 3D에도 없다 — 안 빼고 안내만(⚠ 아님).</item>
+    /// <item>자가점검(양쪽 · 0.5 m 격자 · 지금 합성 옹벽 자리): 바뀌었는데 안 뺀 넓이 · 안 바뀌었는데 뺀 넓이.</item>
+    /// </list></summary>
+    static NetTopologySuite.Geometries.Geometry? WallChangeMask(Database db, System.Collections.Generic.List<GradingBundle> regions, ObjectId groundId,
+        System.Text.StringBuilder log, System.Collections.Generic.List<string> warn)
+    {
+        var civ = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+        var gf = NtsSupport.Factory();
+        using var tr = db.TransactionManager.StartTransaction();
+        if (!WallListStore.TryLoad(db, tr, out var head, out var walls, out string lwhy))
+        {
+            if (lwhy.Length > 0) warn.Add("옹벽 목록을 못 읽어 사면 · 소단 SHP에 옹벽 변환을 반영 못 함 — " + lwhy);
+            log.AppendLine("SHP 옹벽 변환 반영: 옹벽 목록 없음" + (lwhy.Length > 0 ? " — ⚠" + lwhy : ""));
+            tr.Commit(); return null;
+        }
+        if (walls.Count == 0 && head.Frozen.Count == 0) { log.AppendLine("SHP 옹벽 변환 반영: 옹벽 변환 없음"); tr.Commit(); return null; }
+        var parts = new System.Collections.Generic.List<NetTopologySuite.Geometries.Geometry>();
+        var txt = new System.Collections.Generic.List<string>();
+        NetTopologySuite.Geometries.Geometry? Poly(System.Collections.Generic.IReadOnlyList<Point3>? p) => p == null || p.Count < 3 ? null : NtsSupport.ToCleanGeometry(p, gf);
+        // 1) 지금 합성에 든 옹벽
+        var (planIds, planNms) = WallCompositeCommand.Candidates(civ, tr, WallCompositeCommand.PlanName, groundId);
+        if (planIds.Count == 1)
+        {
+            var plan = (Autodesk.Civil.DatabaseServices.TinSurface)tr.GetObject(planIds[0], OpenMode.ForRead);
+            bool comp = WallCompositeCommand.IsComposite(tr, plan);
+            int[]? nos = comp ? WallCompositeCommand.CompositeWallNos(tr, plan) : null;
+            string nonce = comp ? WallCompositeCommand.CompositeNonce(tr, plan) : "";
+            var inComp = walls.Where(w => nos != null && nonce.Length > 0 && nos.Contains(w.No) && w.CompNonce == nonce && w.Cap != null).ToList();
+            int notIn = walls.Count - inComp.Count;
+            if (notIn > 0) txt.Add($"합성 안 된 옹벽 {notIn}개(지형 · 3D · SHP 모두 없음 — [옹벽 합성] 뒤 다시 내보내면 들어감)");
+            var polys = inComp.Select(w => Poly(w.Poly)).Where(g => g != null && !g.IsEmpty).Cast<NetTopologySuite.Geometries.Geometry>().ToList();
+            if (inComp.Count > 0 && polys.Count == 0) warn.Add($"합성 옹벽 {inComp.Count}개의 폴리곤을 못 읽어 사면 · 소단 SHP에서 안 뺐습니다");   // ★[검토 낮음 L2]
+            if (polys.Count > 0)
+            {
+                var area = NetTopologySuite.Operation.Union.CascadedPolygonUnion.Union(polys.Select(g => g.Buffer(1.0)).ToList());
+                string bh = WallCompositeCommand.CompositeBaseHandle(tr, plan);
+                var (preIds, _) = WallCompositeCommand.Candidates(civ, tr, WallCompositeCommand.BaseName, groundId);
+                var preId = preIds.FirstOrDefault(id => id.Handle.ToString() == bh);
+                if (!preId.IsNull && bh.Length > 0)
+                {
+                    var fC = new CachedGroundSurface(plan);
+                    var pC = new CachedGroundSurface((Autodesk.Civil.DatabaseServices.TinSurface)tr.GetObject(preId, OpenMode.ForRead));
+                    var env = area.EnvelopeInternal;
+                    double? PreZ(double x, double y) => pC.TryGetElevation(x, y, out double z) ? z : null;
+                    var mask = GradingPolygons.ChangedMask(fC.TrianglesIn(env.MinX, env.MinY, env.MaxX, env.MaxY), PreZ, area, 0.01, out int nTri);
+                    // 자가점검 — 0.5 m 격자 · 옹벽 자리(+1 m) 안: 바뀜(1 cm 넘게 다름 · 합성 전 면 없음) vs 뺀 자리
+                    var mPrep = mask == null ? null : NetTopologySuite.Geometries.Prepared.PreparedGeometryFactory.Prepare(mask);
+                    // ★[검토 낮음 L1] 옹벽 자리(+1 m) 조각마다 그 상자만 · 칸은 0.5 m(조각 상자 칸이 100만을 넘으면 키움 — 옹벽이 멀리 떨어져도 표본이 폭증하지 않게)
+                    double missed = 0, extra = 0;
+                    for (int gi = 0; gi < area.NumGeometries; gi++)
+                    {
+                        var ag = area.GetGeometryN(gi);
+                        var ae = ag.EnvelopeInternal;
+                        double step = System.Math.Max(0.5, System.Math.Sqrt(ae.Width * ae.Height / 1e6));
+                        var aPrep = NetTopologySuite.Geometries.Prepared.PreparedGeometryFactory.Prepare(ag);
+                        for (double x = ae.MinX + step / 2; x < ae.MaxX; x += step)
+                            for (double y = ae.MinY + step / 2; y < ae.MaxY; y += step)
+                            {
+                                var pt = gf.CreatePoint(new NetTopologySuite.Geometries.Coordinate(x, y));
+                                if (!aPrep.Contains(pt) || !fC.TryGetElevation(x, y, out double zf)) continue;
+                                var zp = PreZ(x, y);
+                                bool changed = !zp.HasValue || System.Math.Abs(zf - zp.Value) > 0.01;
+                                bool inMask = mPrep != null && mPrep.Contains(pt);
+                                if (changed && !inMask) missed += step * step;
+                                if (!changed && inMask) extra += step * step;
+                            }
+                    }
+                    if (mask != null) parts.Add(mask);
+                    txt.Add($"합성 옹벽 {inComp.Count}개 — 바뀐 자리 {mask?.Area ?? 0:F1}㎡(최종면 삼각형 {nTri}) · 자가점검 바뀌었는데 안 뺀 {missed:F1}㎡ · 안 바뀌었는데 뺀 {extra:F1}㎡");
+                    if (missed > 1.0 || extra > 1.0)
+                        warn.Add($"사면 · 소단 SHP 옹벽 변환 자가점검 — 바뀌었는데 안 뺀 {missed:F1}㎡ · 안 바뀌었는데 뺀 {extra:F1}㎡");
+                    // ★[검토 낮음 L7 · 계획 2판] 합성 옹벽이 있는데 바뀐 자리가 없다 — 옹벽이 지형에 안 들었거나 합성 전 면이 같다
+                    if (mask == null || mask.Area < 0.1)
+                        warn.Add($"합성 옹벽 {inComp.Count}개가 있는데 정지면_DH에서 바뀐 자리를 못 찾았습니다(사면 · 소단 SHP에서 안 뺌)");
+                }
+                else
+                {
+                    var hand = NetTopologySuite.Operation.Union.CascadedPolygonUnion.Union(polys);
+                    if (hand != null && !hand.IsEmpty) parts.Add(hand);
+                    txt.Add($"합성 옹벽 {inComp.Count}개 — 합성 전 면이 {(preIds.Count == 0 ? "없어" : "이 합성 것이 아니어서")} 손으로 그린 폴리곤 {hand?.Area ?? 0:F1}㎡로 뺌");
+                    warn.Add($"사면 · 소단 SHP — 합성 전 면({WallCompositeCommand.BaseName})이 {(preIds.Count == 0 ? "없어" : "이 합성 것이 아니어서")} 옹벽 폴리곤 전체를 뺐습니다(폴리곤과 데이라잇 사이 남은 사면까지 빠졌을 수 있음)");
+                }
+            }
+        }
+        else txt.Add(planIds.Count == 0 ? "정지면_DH 없음" : $"정지면_DH를 하나로 못 잡음({string.Join(",", planNms)})");
+        // 2) 굳은 옹벽(«이어서») — 폴리곤 − 그 구역 뒤 구역 발자국
+        int frozenN = 0; double frozenA = 0; var lost = new System.Collections.Generic.List<int>();
+        foreach (var f in head.Frozen.Where(f => f.Reflected))
+        {
+            var g = Poly(f.Poly);
+            if (g == null || g.IsEmpty) continue;
+            int ri = regions.FindIndex(b => b != null && b.PlanHandle == f.PlanHandle);
+            if (ri < 0) { lost.Add(f.No); continue; }
+            foreach (var r in GradingBundle.LaterFootprints(regions, ri))
+            {
+                var h = NtsSupport.ToCleanGeometry(r, gf);
+                if (h == null || h.IsEmpty) continue;
+                try { g = g.Difference(h); } catch { }
+                if (g.IsEmpty) break;
+            }
+            if (g.IsEmpty) continue;
+            parts.Add(g); frozenN++; frozenA += g.Area;
+        }
+        if (frozenN > 0) txt.Add($"굳은 옹벽 {frozenN}개 — 폴리곤 − 뒤 구역 {frozenA:F1}㎡");
+        if (lost.Count > 0) warn.Add($"굳은 옹벽 {string.Join(",", lost)}의 구역을 못 찾아 사면 · 소단 SHP에서 안 뺐습니다");
+        tr.Commit();
+        log.AppendLine("SHP 옹벽 변환 반영: " + (txt.Count > 0 ? string.Join(" · ", txt) : "뺄 자리 없음"));
+        if (parts.Count == 0) return null;
+        try { return NetTopologySuite.Operation.Union.CascadedPolygonUnion.Union(parts); }
+        catch { return gf.BuildGeometry(parts).Buffer(0); }
+    }
+
     /// <summary>명령창 한 줄이 길어지지 않게 자른다 — 진단 한 줄이 수천 자까지 자라기 때문(JACK 0807).</summary>
     private static string Short(string s, int max = 160)
         => s == null ? "" : (s.Length <= max ? s : s.Substring(0, max) + " …(로그 참조)");
+
+    /// <summary>★[v106 시험 칸] 화면 없는 Civil에서만 — 폴더 고르는 창 대신 이 폴더 · 위성 내려받기 건너뜀(인터넷 없이) · 끝 알림 창 없음.</summary>
+    internal static string? FolderForTest;
+    internal static bool SkipSatelliteForTest;
 
     [CommandMethod("DHINFRA")]
     public void Run()
@@ -76,12 +197,17 @@ public sealed class InfraworksCommand
             if (!CompositeGate.Ensure(doc, "infraworks 기초자료")) return;
 
             // 폴더 선택 — 원하는 위치에 내보낸다(JACK 0724).
-            var dlg = new Microsoft.Win32.OpenFolderDialog { Title = "infraworks 기초자료 내보낼 폴더 선택" };
-            if (!string.IsNullOrEmpty(GradingSettings.ExportFolder) && System.IO.Directory.Exists(GradingSettings.ExportFolder))
-                dlg.InitialDirectory = GradingSettings.ExportFolder;
-            if (dlg.ShowDialog() != true) { ed.WriteMessage("\n[infraworks 기초자료] 폴더 선택 취소"); return; }
-            string folder = dlg.FolderName;
-            GradingSettings.ExportFolder = folder;
+            string folder;
+            if (SelfCheckLog.Headless && FolderForTest != null) folder = FolderForTest;   // ★[v106 시험 칸]
+            else
+            {
+                var dlg = new Microsoft.Win32.OpenFolderDialog { Title = "infraworks 기초자료 내보낼 폴더 선택" };
+                if (!string.IsNullOrEmpty(GradingSettings.ExportFolder) && System.IO.Directory.Exists(GradingSettings.ExportFolder))
+                    dlg.InitialDirectory = GradingSettings.ExportFolder;
+                if (dlg.ShowDialog() != true) { ed.WriteMessage("\n[infraworks 기초자료] 폴더 선택 취소"); return; }
+                folder = dlg.FolderName;
+                GradingSettings.ExportFolder = folder;
+            }
 
             // 좌표계 자동 — 도면 좌표계(MAPCSASSIGN) 우선, 없으면 설정값으로 도면 지정.
             string csNote;
@@ -148,6 +274,13 @@ public sealed class InfraworksCommand
                         ? " — 발자국 정본 사용"
                         : " — ⚠ 옛 번들(순수교선 폴백) 섞임: 다중 구역 발자국이 실제 면 범위와 어긋날 수 있음 → 해당 구역 정지 재실행 권장"));
             }
+
+            // ★★[v106 · JACK 1027 «변환기능도 반영» · 계획 2판 2.6] 옹벽 변환이 실제로 바꾼 자리 — 사면 · 소단 띠에서 뺀다
+            var shpWarn = new System.Collections.Generic.List<string>();
+            NetTopologySuite.Geometries.Geometry? wallMask = null;
+            try { wallMask = WallChangeMask(db, regions, SectionCommand.GroundOf(db), log, shpWarn); }
+            catch (System.Exception mex) { shpWarn.Add("옹벽 변환 자리를 못 재어 SHP에 반영 못 함 — " + mex.Message); }
+            double maskCut = 0;
 
             var polyFieldsPlain = new[] { new ShpField("KIND", 'C', 20, 0), new ShpField("AREA", 'N', 18, 2) };
             var stripFields = new[]
@@ -340,7 +473,10 @@ public sealed class InfraworksCommand
                 var strips = new System.Collections.Generic.List<(System.Collections.Generic.List<System.Collections.Generic.IReadOnlyList<Point3>> Rings, double Area, string Kind, int Level, double Elev)>();
                 foreach (var finalRing in ringList)
                     if (finalRing != null && finalRing.Count >= 3)
-                        strips.AddRange(GradingPolygons.Strips(vs.Rings, finalRing, bundle.Boundary, wallCuts, later));
+                    {
+                        strips.AddRange(GradingPolygons.Strips(vs.Rings, finalRing, bundle.Boundary, out double mA, wallCuts, later, wallMask));
+                        maskCut += mA;
+                    }
 
                 foreach (string kind in new[] { "소단", "사면" })
                 {
@@ -597,6 +733,8 @@ public sealed class InfraworksCommand
 
             // [다중 구역] 누적된 사면/소단 띠 SHP 일괄 저장 — 있는 것만(0개면 파일 안 만듦, JACK 0724).
             prog.Stage("사면·소단 SHP");
+            if (wallMask != null) log.AppendLine($"사면 · 소단 띠에서 옹벽 변환 자리 {maskCut:F1}㎡ 뺌");
+            wallWarn.AddRange(shpWarn);
             foreach (string key in new[] { "소단_절토", "사면_절토", "소단_성토", "사면_성토" })
             {
                 if (stripFeats.TryGetValue(key, out var feats) && feats.Count > 0)
@@ -616,7 +754,8 @@ public sealed class InfraworksCommand
                 System.Collections.Generic.List<DH.Grading.Core.WallExcav.SecLine>? secLines = null;
                 DH.Grading.Core.WallExcav.Settings exSt = DH.Grading.Core.WallExcav.Settings.Default;
                 string facesTxt = "";
-                try { secLines = WallExcavBuilder.SectionLinesForExport(db, gid3, secNotes, out exSt, out facesTxt); }
+                var cover = new WallSweep.CoverNote();
+                try { secLines = WallExcavBuilder.SectionLinesForExport(db, gid3, secNotes, out exSt, out facesTxt, out cover); }
                 catch (System.Exception sex) { secNotes.Add("단면 줄을 못 세움 — " + sex.Message); }
                 if (secLines != null && secLines.Count > 0)
                 {
@@ -626,11 +765,21 @@ public sealed class InfraworksCommand
                         var ws = WallSolidDwg.Export(dwgPath, secLines);
                         string kinds = string.Join(" · ", secLines.GroupBy(l => (l.Up, l.Kind)).Select(g => $"{(g.Key.Up ? "절토" : "성토")} {DH.Grading.Core.WallSection.Of(g.Key.Kind).Name} {g.Count()}줄"));
                         log.AppendLine($"옹벽3D.dwg: 단면 덩어리 — {kinds} · {ws.Text}");
+                        // ★★[v106 · JACK 1027 «밖으로 보이는 표면만 콘크리트는 무늬나 보강토는 보강토모양»] 보이는 면 무늬
+                        log.AppendLine($"  {ws.PatternText}");
                         log.AppendLine($"  {facesTxt}");
+                        // ★[v106 · 계획 2판 2.3] 앞면 맞춤 전단 · 지형 벽면 자가점검
+                        log.AppendLine($"  앞면 맞춤(단면 앞면이 정지면 벽보다 누운 몫) 최대 {ws.LeanMax * 100:F1} cm" + (ws.LeanMax > 0 ? $" @{ws.LeanAt}" : "")
+                            + $" · 지형 벽면 자가점검 — 표본 {cover.Measured}(못 잼 {cover.Unknown}) · 지형이 3D 앞면보다 1 cm 넘게 앞 {cover.Ahead}" + (cover.Ahead > 0 ? $"(최대 {cover.Max * 100:F1} cm @{cover.MaxAt})" : ""));
                         if (ws.Saved) made.Add("옹벽3D.dwg");
                         else wallWarn.Add("옹벽 3D를 하나도 못 만들어 옹벽3D.dwg를 쓰지 않았습니다");
                         if (ws.Fails > 0 || ws.CornerFails > 0) wallWarn.Add($"옹벽 3D 일부 못 만듦 — {ws.Text}");
                         if (ws.Meshes > 0) wallWarn.Add($"솔리드로 못 바꾼 조각 {ws.Meshes}개(메시로 남김 — 표시엔 지장 없음)");
+                        if (ws.Saved && ws.Pieces > 50000) wallWarn.Add($"옹벽 무늬 조각 {ws.Pieces:N0}개 — InfraWorks가 무거울 수 있음(옹벽3D.dwg {new System.IO.FileInfo(dwgPath).Length / 1048576.0:F0} MB)");   // ★[검토 낮음 L8]
+                        if (ws.PatLineFails > 0) wallWarn.Add($"무늬를 못 깐 옹벽 줄 {ws.PatLineFails}개(그 줄은 몸통 색만) — {ws.PatLineFirst}");   // ★[검토 중간 M2]
+                        if (ws.PieceFails + ws.PatClipFail > 0) wallWarn.Add($"옹벽 무늬 조각 일부 못 만듦 {ws.PieceFails + ws.PatClipFail}개(그 자리는 무늬 없이 몸통 색) — {ws.PieceFirst}");
+                        if (ws.LeanOver > 0) wallWarn.Add($"단면 앞면이 정지면 벽보다 누운 자리(최대 {ws.LeanMax:F2} m · {ws.LeanAt}) — 3D 앞면을 정지면 벽 기울기에 맞춰 세웠습니다(옹벽 변환 앞면 구배를 단면과 맞추면 단면 그대로 나옵니다)");
+                        if (cover.Ahead > 0) wallWarn.Add($"지형 벽면이 3D 앞면보다 1 cm 넘게 앞인 표본 {cover.Ahead}/{cover.Measured}(최대 {cover.Max * 100:F1} cm) — InfraWorks에서 지형이 무늬를 가릴 수 있음");
                     }
                     catch (System.Exception dex) { log.AppendLine($"옹벽3D.dwg: 저장 실패 — {dex.Message} (파일 열려 있으면 닫고 재실행)"); }
                 }
@@ -643,9 +792,9 @@ public sealed class InfraworksCommand
                     wallWarn.Add("옹벽 터파기면이 지금 단면 표 · 설정과 다릅니다 — [종단도]를 다시 그리면 수량 단면과 3D가 같아집니다");
                 foreach (var nt in secNotes.Distinct().Take(12)) log.AppendLine("  · " + nt);
                 if (secNotes.Count > 12) log.AppendLine($"  · … 외 {secNotes.Count - 12}건");
-                log.AppendLine("■ 옹벽 자가진단");
+                log.AppendLine("■ 옹벽 3D · SHP 자가진단");
                 if (wallWarn.Count == 0) log.AppendLine("  ✔ 이상 없음");
-                else { log.AppendLine($"  ⚠ 이상 {wallWarn.Count}건:"); foreach (var w in wallWarn) log.AppendLine("    · " + w); }
+                else { log.AppendLine($"  이상 {wallWarn.Count}건:"); foreach (var w in wallWarn) log.AppendLine("    ⚠ " + w); }   // ★[검토 중간 M3] 한 줄마다 ⚠ — 명령창 요약이 건수를 바로 센다
             }
 
             // ── ③ 지형.xml + 위성용 경계상자 ──
@@ -672,7 +821,8 @@ public sealed class InfraworksCommand
 
             // ── ④ 위성.tif (GeoTIFF) ──
             prog.Stage("위성영상");
-            if (haveExtent)
+            if (SelfCheckLog.Headless && SkipSatelliteForTest) log.AppendLine("위성.tif: 시험 — 건너뜀");
+            else if (haveExtent)
             {
                 try
                 {
@@ -702,10 +852,11 @@ public sealed class InfraworksCommand
 
             // 팝업 — 저장 위치 + 실제로 내보낸 파일 목록(있는 것만) + 걸린 시간.
             string list = made.Count > 0 ? string.Join(" · ", made) : "(내보낸 파일 없음 — 정지면/객체 확인)";
+            if (!SelfCheckLog.Headless)   // 화면 없는 Civil은 창을 못 띄운다(띄우면 죽는다 — CompositeGate와 같은 법)
             AcadApp.ShowAlertDialog("infraworks 기초자료 내보내기 완료\n\n저장 위치: " + folder +
                                     "\n\n내보낸 파일:\n" + list +
                                     // ★[v105 · 계획 검토 중간 3] 옹벽 3D가 빠지거나 수량 단면과 어긋날 수 있으면 팝업에도
-                                    (wallWarn.Count > 0 ? "\n\n⚠ 옹벽 3D:\n" + string.Join("\n", wallWarn.Select(w => "· " + w)) : "") +
+                                    (wallWarn.Count > 0 ? "\n\n⚠ 옹벽 3D · SHP:\n" + string.Join("\n", wallWarn.Select(w => "· " + w)) : "") +
                                     "\n\n걸린 시간: " + ExportProgress.Human(prog.TotalSeconds));
             // ★[JACK 0807 '내보내기하면 글씨가 엄청나게 생긴다'] 명령창에는 **요약만** 낸다.
             //   종전엔 진단 로그 전문(수십 줄 × 한 줄 수천 자)을 그대로 쏟아 명령창이 도배됐다.
@@ -731,7 +882,8 @@ public sealed class InfraworksCommand
         catch (System.Exception ex)
         {
             ed.WriteMessage("\n[DHINFRA 오류] " + ex.Message);
-            AcadApp.ShowAlertDialog("infraworks 기초자료 내보내기 중 오류:\n" + ex.Message);
+            if (!SelfCheckLog.Headless) AcadApp.ShowAlertDialog("infraworks 기초자료 내보내기 중 오류:\n" + ex.Message);
+            try { DiagLog.Append("\n■ DHINFRA 오류 — " + ex); } catch { }
         }
     }
 

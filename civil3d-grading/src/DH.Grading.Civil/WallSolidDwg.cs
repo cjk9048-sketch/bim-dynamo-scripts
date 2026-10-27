@@ -7,22 +7,19 @@ namespace DH.Grading.Civil;
 
 /// <summary>★★★[v105 · 계획_v105.md 4 · JACK 1022 «3D 모양 콤보는 없애고 단면 형상을 이용해서 옹벽을 만들고 해당 객체를 인프라웍스 내보내기에 활용» ·
 /// «터파기와 같은 단면» · «내보내기 파일에만»] <b>옹벽 단면 덩어리(옹벽3D.dwg)</b>.
-/// <para>단면 줄(<see cref="WallExcav.SecLine"/> — 터파기 · 수량과 같은 바닥 줄 · 점마다 같은 표 줄 단면)에서 구조물 조각마다 솔리드를 세운다:
-/// 점 i의 링 (X, Z) → 월드 (P_i + n·(X − 앞 내밀기), 앞 땅_i + Z) · n = 그 변의 흙 쪽 법선.</para>
+/// <para>★★★[v106 · 계획_v106.md 2판 · JACK 1027 «지금 옹벽 단면으로 스윕 · 밖으로 보이는 표면만 콘크리트는 무늬 · 보강토는 보강토 모양»]
+/// 정거장 · 덩어리 · 모서리 메움은 Core <see cref="WallSweep"/>가 정하고(하네스 S174), 여기서는 짓기만 한다 —
+/// 몸통 · 모서리 메움 · 무늬가 모두 <see cref="WallSweep.World"/> 하나(앞면 맞춤 전단 · 꼭대기 1 cm 올림)를 거친다(재검토 중간 ①).
+/// 보이는 면 무늬는 <see cref="WallFacePattern"/>의 조각을 면 판 틀로 옮겨 솔리드로(직사각형 = 상자 · 그 밖 = 리전 돌출).</para>
 /// <list type="bullet">
 /// <item>곧은 자리(꺾임 1° 미만) · 같은 표 줄 · 같은 링 꼴이면 여러 점을 한 덩어리로(링을 차례로 잇는 메시 → 솔리드).</item>
 /// <item>표 줄이 바뀌는 변: 가운데에서 끊고 앞 단면으로 끝 · 뒤 단면으로 시작(계단 — <see cref="WallExcav.ColumnAt"/>의 t &lt; 0.5 규칙과 같은 자리 · 계획 검토 중간 4).</item>
-/// <item>꺾인 점: 변마다 따로 세우고, 벌어지는 쪽(바깥 모서리)만 그 점 단면의 반쪽(흙 쪽 X ≥ 0 또는 앞쪽 X ≤ 0)을 세로축으로 돌려 메운다(안쪽은 겹칠 뿐 — 계획 검토 중간 5: 꺾인 점 법선으로 비틀면 안쪽 모서리에서 면이 꼬인다).</item>
+/// <item>꺾인 점: 변마다 따로 세우고, 그 점 단면(전단 뒤)의 반쪽(흙 쪽 x' ≥ 0 · 앞쪽 x' ≤ 0)을 세로축으로 돌려 메운다.</item>
 /// <item>몫이 1보다 작은 조각(부벽 평균)과 비구조물(보강토체 · 배수층 · 조약돌 · 패널 뒤 되메움)은 안 만든다.</item>
 /// <item>만들기: 원점 근처 메시 → 도면에 올린 뒤 솔리드로(<see cref="WallPanelDwg"/>의 교훈 — 올리기 전에는 변환이 안 된다 · 면 감기는 부피 부호로 맞춘다) → 제자리로 옮김(대좌표 ACIS 오류 피함). 솔리드가 안 되면 메시로 남기고 센다.</item>
 /// </list></summary>
 internal static class WallSolidDwg
 {
-    /// <summary>앞면을 공기 쪽으로 내미는 거리(m) — 지형의 옹벽 면과 겹쳐 깜빡이지 않게(3D 모양만 · 수량과 무관).</summary>
-    const double FrontOut = 0.02;
-    /// <summary>한 덩어리로 잇는 꺾임 한계(도).</summary>
-    const double StraightDeg = 1.0;
-
     internal sealed class Stats
     {
         public int Lines, Solids, Meshes, Fails, Corners, CornerFails;
@@ -31,9 +28,22 @@ internal static class WallSolidDwg
         /// <summary>파일을 썼나(아무것도 못 만들면 안 쓴다 — JACK 0724 «빈 파일 안 만듦»).</summary>
         public bool Saved;
         public readonly Dictionary<string, int> ByLayer = new();
+        /// <summary>★[v106] 무늬 — 지은 조각 · 못 지은 조각(첫 까닭) · 무늬 셈(깐 · 그대로 · 잘림 · 나눔 · 버림 · 땅속 · 앵커 뺌 · 자르기 실패) · 판 비틀림 · 옮긴 조각 벗어남 최대.</summary>
+        public int Pieces, PieceFails, PatItems, PatWhole, PatCut, PatSplit, PatDropped, PatLow, PatAnchorSkipped, PatClipFail;
+        public string PieceFirst = "";
+        /// <summary>★[검토 중간 M2] 무늬를 통째로 못 깐 줄(그 줄은 몸통 색만) · 줄 이름.</summary>
+        public int PatLineFails; public string PatLineFirst = "";
+        public double PatTwistMax, PatDevMax;
+        /// <summary>★[v106 · 계획 2판 2.3] 앞면 맞춤 전단 b·h 최대 · 그 자리 · <see cref="WallSweep.LeanWarn"/>(0.30 m) 넘는 정거장 수(팝업 ⚠ — 그 아래는 로그 글만).</summary>
+        public double LeanMax; public string LeanAt = ""; public int LeanOver;
+        public long MsBody, MsPattern;
         public string Text => $"단면 줄 {Lines} · 솔리드 {Solids} · 메시 {Meshes}(솔리드 변환 안 됨{(ConvFirst.Length > 0 ? " — " + ConvFirst : "")}) · 모서리 메움 {Corners}"
                               + (CornerFails > 0 ? $"(⚠못 함 {CornerFails} — {CornerFirst})" : "") + (Fails > 0 ? $" · ⚠실패 {Fails} — 첫 사유: {FirstFail}" : "")
                               + (ByLayer.Count > 0 ? " · " + string.Join(" · ", ByLayer.OrderBy(k => k.Key).Select(k => $"{k.Key} {k.Value}")) : "");
+        public string PatternText => $"무늬 조각 {Pieces}(깐 {PatItems} · 그대로 {PatWhole} · 잘림 {PatCut} · 판 경계로 나눔 {PatSplit} · 작아서 버림 {PatDropped} · 땅속 버림 {PatLow} · 앵커 머리 뺌 {PatAnchorSkipped})"
+                                     + (PieceFails + PatClipFail > 0 ? $" · ⚠못 지음 {PieceFails} · 자르기 실패 {PatClipFail}{(PieceFirst.Length > 0 ? " — " + PieceFirst : "")}" : "")
+                                     + (PatLineFails > 0 ? $" · ⚠무늬 못 깐 줄 {PatLineFails}({PatLineFirst})" : "")
+                                     + $" · 판 비틀림 최대 {PatTwistMax * 100:F1} cm · 옮긴 조각 벗어남 최대 {PatDevMax * 100:F1} cm · 몸통 {MsBody / 1000.0:F1}초 · 무늬 {MsPattern / 1000.0:F1}초";
     }
 
     /// <summary>레이어 이름 · 색 — 재료마다.</summary>
@@ -51,8 +61,9 @@ internal static class WallSolidDwg
         _ => ("옹벽_" + mat.Replace(" ", ""), 7),
     };
 
-    /// <summary>단면 줄들을 새 DWG로 저장한다(구조물 조각 → 솔리드). 줄이 없으면 파일을 안 만든다(부르는 쪽이 거른다).</summary>
-    internal static Stats Export(string path, IReadOnlyList<WallExcav.SecLine> lines)
+    /// <summary>단면 줄들을 새 DWG로 저장한다(구조물 조각 → 솔리드 · <paramref name="pattern"/>이면 보이는 면 무늬). 줄이 없으면 파일을 안 만든다(부르는 쪽이 거른다).
+    /// <paramref name="lean"/> · <paramref name="pattern"/> · <paramref name="lift"/> 모두 거짓이면 v105와 같은 덩어리(회귀 견줌 — 화면 없는 Civil V52).</summary>
+    internal static Stats Export(string path, IReadOnlyList<WallExcav.SecLine> lines, bool pattern = true, bool lean = true, bool lift = true)
     {
         var st = new Stats();
         using var db = new Database(true, true);
@@ -65,27 +76,55 @@ internal static class WallSolidDwg
             {
                 var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
                 var layers = new Dictionary<string, ObjectId>();
-                ObjectId Layer(string mat)
+                ObjectId Layer(string nm, Color col)
                 {
-                    var (nm, col) = LayerOf(mat);
                     if (layers.TryGetValue(nm, out var id)) return id;
                     var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
                     if (lt.Has(nm)) id = lt[nm];
                     else
                     {
                         lt.UpgradeOpen();
-                        var rec = new LayerTableRecord { Name = nm, Color = Color.FromColorIndex(ColorMethod.ByAci, col) };
+                        var rec = new LayerTableRecord { Name = nm, Color = col };
                         id = lt.Add(rec); tr.AddNewlyCreatedDBObject(rec, true);
                     }
                     layers[nm] = id;
                     return id;
                 }
+                ObjectId MatLayer(string mat) { var (nm, c) = LayerOf(mat); return Layer(nm, Color.FromColorIndex(ColorMethod.ByAci, c)); }
+                ObjectId PatLayer(string nm) { var (r, g, b) = WallFacePattern.ColorOf(nm); return Layer(nm, Color.FromRgb(r, g, b)); }
+                var sw = System.Diagnostics.Stopwatch.StartNew();
                 foreach (var ln in lines)
                 {
                     if (ln?.Pts == null || ln.Pts.Count < 2) continue;
                     st.Lines++;
-                    try { Populate(tr, ms, ln, Layer, st); }
-                    catch (System.Exception ex) { st.Fails++; if (st.FirstFail.Length == 0) st.FirstFail = $"{ln.Src}: {ex.Message}"; }
+                    WallSweep.Plan plan;
+                    try
+                    {
+                        sw.Restart();
+                        plan = WallSweep.Make(ln, lean);
+                        var (lm, la, lo) = WallSweep.LeanReport(plan, ln.Src);
+                        st.LeanOver += lo;
+                        if (lm > st.LeanMax) { st.LeanMax = lm; st.LeanAt = la; }
+                        foreach (var run in plan.Runs) Loft(tr, ms, run, MatLayer, st, lift);
+                        foreach (var c in plan.Corners) Corner(tr, ms, c, MatLayer, st, lift);
+                        st.MsBody += sw.ElapsedMilliseconds;
+                    }
+                    catch (System.Exception ex) { st.Fails++; if (st.FirstFail.Length == 0) st.FirstFail = $"{ln.Src}: {ex.Message}"; continue; }
+                    // ★[v106] 보이는 면 무늬 — 형식마다(콘크리트 자연석 · 보강토 블록 · 앵커식 패널 + 앵커 머리 · 석축 돌)
+                    var spec = WallFacePattern.SpecOf(ln.Kind);
+                    if (!pattern || spec == null) continue;
+                    sw.Restart();
+                    try
+                    {
+                        var lay = WallFacePattern.Lay(plan, spec);
+                        st.PatItems += lay.Items; st.PatWhole += lay.Whole; st.PatCut += lay.Cut; st.PatSplit += lay.Split; st.PatDropped += lay.Dropped;
+                        st.PatLow += lay.Low; st.PatAnchorSkipped += lay.AnchorSkipped; st.PatClipFail += lay.ClipFail;
+                        st.PatTwistMax = Math.Max(st.PatTwistMax, lay.TwistMax); st.PatDevMax = Math.Max(st.PatDevMax, lay.DevMax);
+                        if (lay.FirstFail.Length > 0 && st.PieceFirst.Length == 0) st.PieceFirst = "자르기: " + lay.FirstFail;
+                        foreach (var pc in lay.Pieces) Piece(tr, ms, lay.Sheets[pc.Sheet], pc, PatLayer(pc.Layer), st);
+                    }
+                    catch (System.Exception ex) { st.PatLineFails++; if (st.PatLineFirst.Length == 0) st.PatLineFirst = $"{ln.Src}: {ex.Message}"; }
+                    st.MsPattern += sw.ElapsedMilliseconds;
                 }
                 tr.Commit();
             }
@@ -95,110 +134,10 @@ internal static class WallSolidDwg
         return st;
     }
 
-    /// <summary>조각 링 — 구조물 · 온 몫만(재료 · 링).</summary>
-    static List<WallSection.Part> Solids(WallSection.Shape sh) => sh.Parts.Where(p => p.Structure && p.Fraction >= 1 - 1e-12 && p.Ring.Count >= 3).ToList();
-
-    /// <summary>두 단면을 한 덩어리로 이을 수 있나 — 같은 표 줄 · 조각 수 · 재료 · 꼭짓점 수가 같다.</summary>
-    static bool Same(WallExcav.SecPoint a, WallExcav.SecPoint b)
+    /// <summary>정거장들을 잇는 덩어리 — 조각마다 메시 → 솔리드. 링 점은 <see cref="WallSweep.World"/>(전단 · 꼭대기 올림)로.</summary>
+    static void Loft(Transaction tr, BlockTableRecord ms, List<WallSweep.Sta> run, Func<string, ObjectId> layer, Stats st, bool lift)
     {
-        if (a.Row != b.Row) return false;
-        var pa = Solids(a.Shape); var pb = Solids(b.Shape);
-        if (pa.Count != pb.Count) return false;
-        for (int i = 0; i < pa.Count; i++) if (pa[i].Material != pb[i].Material || pa[i].Ring.Count != pb[i].Ring.Count) return false;
-        return true;
-    }
-
-    /// <summary>한 정거장 — 자리(x, y) · 앞 땅 · 흙 쪽 법선 · 단면.</summary>
-    readonly record struct Sta(double X, double Y, double Toe, double Nx, double Ny, WallSection.Shape Shape, double Scale = 1.0);
-
-    /// <summary>단면의 흙 쪽 · 앞쪽 가장 먼 폭(앞 내밀기 반영) — 꺾인 점에서 단면이 서로 넘어가는지 가른다.</summary>
-    static double Reach(WallSection.Shape sh) => Solids(sh).SelectMany(p => p.Ring).Select(q => Math.Abs(q.X - FrontOut)).DefaultIfEmpty(0).Max();
-
-    static void Populate(Transaction tr, BlockTableRecord ms, WallExcav.SecLine ln, Func<string, ObjectId> layer, Stats st)
-    {
-        var P = ln.Pts;
-        int n = P.Count;
-        // 변마다 흙 쪽 법선(왼 법선 × Soil — ColumnAt의 부호 있는 거리와 같은 정의)
-        var nx = new double[n - 1]; var ny = new double[n - 1]; var len = new double[n - 1];
-        for (int k = 0; k + 1 < n; k++)
-        {
-            double ex = P[k + 1].X - P[k].X, ey = P[k + 1].Y - P[k].Y, L = Math.Sqrt(ex * ex + ey * ey);
-            len[k] = L;
-            if (L < 1e-9) { nx[k] = double.NaN; continue; }
-            nx[k] = -ey / L * ln.Soil; ny[k] = ex / L * ln.Soil;
-        }
-        // 덩어리 — 정거장 목록을 모았다가 끊을 때 내보낸다
-        var run = new List<Sta>();
-        void Flush()
-        {
-            if (run.Count >= 2) Loft(tr, ms, run, layer, st);
-            run.Clear();
-        }
-        // ★[설치 전 검토 낮음 · 중간] 꺾인 점: 15° 넘거나 단면 폭 × 각이 이웃 변 길이의 반을 넘으면(이어 붙이면 안쪽 점이 서로 넘어가 면이 꼬인다) 끊고 모서리 메움 ·
-        //   그 밖(완만한 곡선)은 이어 붙이되 그 점의 법선을 두 변의 이등분으로 · 폭은 1/cos(반각)(평행 오프셋 — 곡선마다 덩어리가 수천 개로 쪼개지지 않게)
-        bool IsCorner(int k0, int k1, WallSection.Shape sh, out double ang)
-        {
-            double cr = nx[k0] * ny[k1] - ny[k0] * nx[k1], dt = nx[k0] * nx[k1] + ny[k0] * ny[k1];
-            ang = Math.Atan2(cr, dt);
-            double a = Math.Abs(ang);
-            if (a * 180 / Math.PI < StraightDeg * 0.25) return false;
-            return a * 180 / Math.PI >= 15.0 || Reach(sh) * a >= 0.5 * Math.Min(len[k0], len[k1]);
-        }
-        int lastK = -1, firstK = -1;
-        for (int k = 0; k + 1 < n; k++)
-        {
-            if (double.IsNaN(nx[k])) continue;
-            if (firstK < 0) firstK = k;
-            var a = P[k]; var b = P[k + 1];
-            if (lastK >= 0)
-            {
-                if (IsCorner(lastK, k, a.Shape, out double ang))
-                {
-                    Flush();
-                    Corner(tr, ms, a, nx[lastK], ny[lastK], nx[k], ny[k], ang, layer, st);
-                }
-                else if (run.Count > 0 && Math.Abs(run[^1].X - a.X) < 1e-9 && Math.Abs(run[^1].Y - a.Y) < 1e-9)
-                {
-                    // 이어 붙임 — 그 점 정거장의 법선을 이등분으로 · 폭 늘임
-                    double bx = nx[lastK] + nx[k], by = ny[lastK] + ny[k], bl = Math.Sqrt(bx * bx + by * by);
-                    if (bl > 1e-9)
-                    {
-                        double half = Math.Abs(ang) / 2;
-                        run[^1] = run[^1] with { Nx = bx / bl, Ny = by / bl, Scale = Math.Min(1.1, 1 / Math.Cos(half)) };
-                    }
-                }
-            }
-            if (Same(a, b))
-            {
-                if (run.Count == 0) run.Add(new Sta(a.X, a.Y, a.Toe, nx[k], ny[k], a.Shape));
-                run.Add(new Sta(b.X, b.Y, b.Toe, nx[k], ny[k], b.Shape));
-            }
-            else
-            {
-                // 표 줄이 바뀐다 — 가운데에서 끊는다: 앞 단면으로 가운데까지 · 뒤 단면으로 가운데부터
-                double mx = (a.X + b.X) / 2, my = (a.Y + b.Y) / 2, mt = (a.Toe + b.Toe) / 2;
-                if (run.Count == 0) run.Add(new Sta(a.X, a.Y, a.Toe, nx[k], ny[k], a.Shape));
-                run.Add(new Sta(mx, my, mt, nx[k], ny[k], a.Shape));
-                Flush();
-                run.Add(new Sta(mx, my, mt, nx[k], ny[k], b.Shape));
-                run.Add(new Sta(b.X, b.Y, b.Toe, nx[k], ny[k], b.Shape));
-            }
-            lastK = k;
-        }
-        Flush();
-        // ★[설치 전 검토 낮음] 닫힌 고리(한 바퀴 옹벽 — 첫 점 = 끝 점) 이음매도 꺾인 점이면 메운다
-        if (firstK >= 0 && lastK > firstK && Math.Abs(P[0].X - P[n - 1].X) < 1e-6 && Math.Abs(P[0].Y - P[n - 1].Y) < 1e-6)
-        {
-            double cr = nx[lastK] * ny[firstK] - ny[lastK] * nx[firstK], dt = nx[lastK] * nx[firstK] + ny[lastK] * ny[firstK];
-            double ang = Math.Atan2(cr, dt);
-            if (Math.Abs(ang) * 180 / Math.PI >= StraightDeg * 0.25) Corner(tr, ms, P[0], nx[lastK], ny[lastK], nx[firstK], ny[firstK], ang, layer, st);
-        }
-    }
-
-    /// <summary>정거장들을 잇는 덩어리 — 조각마다 메시 → 솔리드.</summary>
-    static void Loft(Transaction tr, BlockTableRecord ms, List<Sta> run, Func<string, ObjectId> layer, Stats st)
-    {
-        var parts0 = Solids(run[0].Shape);
+        var parts0 = WallSweep.Solids(run[0].Shape);
         for (int pi = 0; pi < parts0.Count; pi++)
         {
             string mat = parts0[pi].Material;
@@ -209,12 +148,12 @@ internal static class WallSolidDwg
             bool ok = true;
             foreach (var s in run)
             {
-                var ps = Solids(s.Shape);
+                var ps = WallSweep.Solids(s.Shape);
                 if (pi >= ps.Count || ps[pi].Ring.Count != m) { ok = false; break; }
                 foreach (var q in ps[pi].Ring)
                 {
-                    double x = (q.X - FrontOut) * s.Scale;
-                    verts.Add(new Point3d(s.X + s.Nx * x - ox, s.Y + s.Ny * x - oy, s.Toe + q.Z - oz));
+                    var w = WallSweep.World(s, q.X, q.Z, lift);
+                    verts.Add(new Point3d(w.X - ox, w.Y - oy, w.Z - oz));
                 }
             }
             if (!ok) { st.Fails++; if (st.FirstFail.Length == 0) st.FirstFail = $"{mat} 링 꼴이 정거장마다 다름"; continue; }
@@ -232,20 +171,20 @@ internal static class WallSolidDwg
         }
     }
 
-    /// <summary>바깥 모서리 메움 — 꺾인 점 단면의 벌어지는 쪽 반을 세로축(그 점 · 앞 땅)으로 돌린다.</summary>
-    static void Corner(Transaction tr, BlockTableRecord ms, WallExcav.SecPoint p, double n1x, double n1y, double n2x, double n2y, double ang,
-                       Func<string, ObjectId> layer, Stats st)
+    /// <summary>바깥 모서리 메움 — 꺾인 점 단면을 <b>먼저 전단 · 꼭대기 올림</b>(덩어리 끝 링과 같은 식)한 뒤 x' = 0(앞면 선 축)에서 반으로 잘라 세로축으로 돌린다.
+    /// <para>★[재검토 중간 ①] 순서가 «전단 먼저»여야 한다 — 먼저 자르고 전단하면 자른 선이 기울어 반쪽이 회전축을 넘는다. 회전 0°에서 앞 덩어리 끝 링 · ang에서 뒤 덩어리 시작 링과 같다.</para></summary>
+    static void Corner(Transaction tr, BlockTableRecord ms, WallSweep.Corner c, Func<string, ObjectId> layer, Stats st, bool lift)
     {
-        // 법선이 왼쪽으로 돌면(ang > 0) 흙 쪽이 바깥인지 앞쪽이 바깥인지: 법선 n1 → n2가 ang만큼 돈다 —
-        //   흙 쪽(X > 0) 점은 n 방향을 따라 돌므로 벌어지고(틈), 앞쪽(X < 0) 점은 반대로 모인다(겹침). 돌리는 쪽 = X ≥ 0 반 · 각 = ang(부호 그대로).
-        //   ※ang의 부호와 무관하게 «n1에서 n2로 도는» 회전이 흙 쪽 반의 틈을 메운다 — 앞쪽 반은 반대 꺾임에서 같은 식으로 틈이 된다:
-        //     앞쪽 점 x < 0의 자리는 −|x|·n 이라 n이 돌면 반대편으로 쓸린다 → 앞쪽 반은 n1 → n2 회전으로 겹침 쪽을 지나간다(이미 덮인 자리) — 그래서
-        //     앞쪽 반의 틈은 «ang 반대 꺾임»에서 생기며, 그때는 역시 n1 → n2 회전이 그 틈을 쓴다. 두 반을 다 돌리면 한쪽은 겹침만 더한다 — 둘 다 돌린다(겹침은 해가 없다).
-        foreach (var part in Solids(p.Shape))
+        var p = c.P;
+        // 법선 n1 → n2로 ang만큼 돈다 — 흙 쪽(x' > 0) 반은 벌어지는 꺾임에서, 앞쪽(x' < 0) 반은 반대 꺾임에서 틈을 메운다. 둘 다 돌린다(겹침은 해가 없다 — v105 그대로).
+        foreach (var part in WallSweep.Solids(p.Shape))
         {
+            // 덩어리와 같은 식 — 꺾인 점 정거장(폭 늘임 1 · 법선 n1)의 월드 점에서 앞 땅 · 점 자리를 뺀 값이 n1·x'
+            var sta = new WallSweep.Sta(0, 0, 0, 1, 0, p.Shape, 1.0, c.Lean, -1);
+            var ring = part.Ring.Select(q => { var w = WallSweep.World(sta, q.X, q.Z, lift); return (X: w.X, Z: w.Z); }).ToList();
             foreach (bool soilSide in new[] { true, false })
             {
-                var half = ClipHalf(part.Ring, soilSide);
+                var half = ClipHalf(ring, soilSide);
                 if (half.Count < 3 || Math.Abs(WallSection.Area(half)) < 1e-6) continue;
                 // ★[설치 전 검토 중간 1] 실패해도 리전 · 솔리드를 이 스레드에서 치운다(ACIS 객체가 GC 스레드에서 지워지면 AutoCAD가 나중에 죽을 수 있다)
                 Solid3d? sol = null;
@@ -254,7 +193,7 @@ internal static class WallSolidDwg
                 {
                     // 원점 근처 — 축 = (0,0)–Z · 링 평면 = n1 방향과 Z가 이루는 평면
                     var pts = new Point3dCollection();
-                    foreach (var q in half) pts.Add(new Point3d(n1x * (q.X - FrontOut), n1y * (q.X - FrontOut), q.Z));
+                    foreach (var q in half) pts.Add(new Point3d(c.N1x * q.X, c.N1y * q.X, q.Z));
                     using var pl = new Polyline3d(Poly3dType.SimplePoly, pts, true);
                     using var curves = new DBObjectCollection { pl };
                     regs = Region.CreateFromCurves(curves);
@@ -262,7 +201,7 @@ internal static class WallSolidDwg
                     var reg = (Region)regs[0];
                     sol = new Solid3d();
                     // 회전 방향 — n1 → n2(ang > 0이면 +Z 둘레 반시계)
-                    sol.CreateRevolvedSolid(reg, Point3d.Origin, ang >= 0 ? Vector3d.ZAxis : -Vector3d.ZAxis, Math.Abs(ang), 0, new RevolveOptions());
+                    sol.CreateRevolvedSolid(reg, Point3d.Origin, c.Ang >= 0 ? Vector3d.ZAxis : -Vector3d.ZAxis, Math.Abs(c.Ang), 0, new RevolveOptions());
                     sol.TransformBy(Matrix3d.Displacement(new Vector3d(p.X, p.Y, p.Toe)));
                     double vol = 0; try { vol = sol.MassProperties.Volume; } catch { }
                     if (!(vol > 1e-9)) continue;                                   // finally가 치운다
@@ -282,10 +221,10 @@ internal static class WallSolidDwg
         }
     }
 
-    /// <summary>볼록 링을 X ≥ FrontOut(흙 쪽 · 앞 내밀기 반영) 또는 그 앞쪽 반으로 자른다(회전축 = 내민 앞면 선).</summary>
+    /// <summary>링(전단 뒤 x')을 x' ≥ 0(흙 쪽) 또는 x' ≤ 0(앞쪽) 반으로 자른다(회전축 = 내민 앞면 선 x' = 0).</summary>
     static List<(double X, double Z)> ClipHalf(IReadOnlyList<(double X, double Z)> r, bool soil)
     {
-        double cut = FrontOut;   // 링 X에서 FrontOut을 빼 그리므로 축은 X = FrontOut 자리
+        const double cut = 0;
         var o = new List<(double X, double Z)>();
         bool In((double X, double Z) q) => soil ? q.X >= cut - 1e-12 : q.X <= cut + 1e-12;
         for (int i = 0; i < r.Count; i++)
@@ -304,6 +243,49 @@ internal static class WallSolidDwg
         foreach (var q in o) if (res.Count == 0 || Math.Abs(res[^1].X - q.X) > 1e-9 || Math.Abs(res[^1].Z - q.Z) > 1e-9) res.Add(q);
         while (res.Count > 1 && Math.Abs(res[0].X - res[^1].X) <= 1e-9 && Math.Abs(res[0].Z - res[^1].Z) <= 1e-9) res.RemoveAt(res.Count - 1);
         return res;
+    }
+
+    /// <summary>★[v106] 무늬 조각 하나 — 판 틀 좌표(u, v · w = 공기 쪽)에서 원점 근처로 짓고(직사각형 = 상자 · 그 밖 = 3D 폴리선 → 리전 → w 방향 돌출) 틀 행렬로 옮긴다.
+    /// 두께 = 묻힘(몸통 속) + 겉 내밀기 — w ∈ [−묻힘, +내밀기].</summary>
+    static void Piece(Transaction tr, BlockTableRecord ms, WallFacePattern.Sheet sh, WallFacePattern.Piece pc, ObjectId lay, Stats st)
+    {
+        double t = pc.Relief + pc.Embed;
+        var frame = Matrix3d.AlignCoordinateSystem(Point3d.Origin, Vector3d.XAxis, Vector3d.YAxis, Vector3d.ZAxis,
+            new Point3d(sh.O.X, sh.O.Y, sh.O.Z), new Vector3d(sh.U.X, sh.U.Y, sh.U.Z), new Vector3d(sh.V.X, sh.V.Y, sh.V.Z), new Vector3d(sh.W.X, sh.W.Y, sh.W.Z));
+        Solid3d? sol = null;
+        DBObjectCollection? regs = null;
+        try
+        {
+            if (pc.Rect)
+            {
+                double u0 = pc.Poly.Min(q => q.U), u1 = pc.Poly.Max(q => q.U), v0 = pc.Poly.Min(q => q.V), v1 = pc.Poly.Max(q => q.V);
+                sol = new Solid3d();
+                sol.CreateBox(u1 - u0, v1 - v0, t);
+                sol.TransformBy(Matrix3d.Displacement(new Vector3d((u0 + u1) / 2, (v0 + v1) / 2, (pc.Relief - pc.Embed) / 2)));
+            }
+            else
+            {
+                var pts = new Point3dCollection();
+                foreach (var (u, v) in pc.Poly) pts.Add(new Point3d(u, v, -pc.Embed));
+                using var pl = new Polyline3d(Poly3dType.SimplePoly, pts, true);
+                using var curves = new DBObjectCollection { pl };
+                regs = Region.CreateFromCurves(curves);
+                if (regs.Count == 0) throw new InvalidOperationException("조각 리전 0");
+                sol = new Solid3d();
+                sol.CreateExtrudedSolid((Region)regs[0], new Vector3d(0, 0, t), new SweepOptions());
+            }
+            sol.TransformBy(frame);
+            sol.LayerId = lay;
+            ms.AppendEntity(sol); tr.AddNewlyCreatedDBObject(sol, true);
+            sol = null;                                                            // 도면 것 — 치우지 않는다
+            st.Pieces++;
+        }
+        catch (System.Exception ex) { st.PieceFails++; if (st.PieceFirst.Length == 0) st.PieceFirst = $"{pc.Layer}: {ex.Message}"; }
+        finally
+        {
+            sol?.Dispose();
+            if (regs != null) { foreach (DBObject o in regs) o.Dispose(); regs.Dispose(); }
+        }
     }
 
     static void Count(Stats st, string layerName) => st.ByLayer[layerName] = st.ByLayer.TryGetValue(layerName, out int c) ? c + 1 : 1;
