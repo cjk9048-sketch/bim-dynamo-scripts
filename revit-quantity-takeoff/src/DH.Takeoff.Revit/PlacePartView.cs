@@ -280,14 +280,15 @@ public sealed partial class PlacePartView
         _view3d.Clicked += (index, ctrl) =>
         {
             if (Step == 2) { ClickReview(index); return; }
-            if (Step == 1) { ClickFormwork(index); return; }
+            if (Step == 1) { ClickFormwork(index, ctrl); return; }
             if (index < 0) return;                       // 빈 곳을 찍으면 그대로 둔다(Esc · [선택 풀기]로 푼다)
             _editor.Click(_members[index].Id, ctrl);
             RefreshAll();
         };
         _view3d.Banded += (indices, ctrl) =>
         {
-            if (Step != 0) return;                       // ② · ③ 에서는 끌어 고르지 않는다(BandSelect 를 끈다 — 여기는 혹시 모를 때)
+            if (Step == 1) { BandFormwork(indices, ctrl); return; }   // ② 판 여러 장(R66)
+            if (Step != 0) return;                       // ③ 에서는 끌어 고르지 않는다(BandSelect 를 끈다 — 여기는 혹시 모를 때)
             _editor.Band(indices.Select(i => _members[i].Id), ctrl);
             RefreshAll();
         };
@@ -321,9 +322,9 @@ public sealed partial class PlacePartView
         {
             // ② : Esc = 옮길 줄 고르기 취소 → 고른 줄 풀기 · Del = 찍은 판 지우기 · Ctrl+Z = ② 에서 한 일 되돌리기(R55b — JACK 2026-10-21 «지우기(Del 키도) · 되돌리기»).
             // ① 의 모델 되돌리기로 흘러가지 않게 이 갈래에서 끝낸다(계획 검토 L4).
-            if (e.Key == Key.Escape) { _view3d.CancelDrag(); if (!CancelMovePick()) PickRow(null); e.Handled = true; }
-            else if (e.Key == Key.Delete) { DeletePicked(); e.Handled = true; }
-            else if (e.Key == Key.Z && (Keyboard.Modifiers & ModifierKeys.Control) != 0) { if (!CancelMovePick()) FormworkUndo(); e.Handled = true; }
+            if (e.Key == Key.Escape) { _view3d.CancelDrag(); if (!ClosePlaceBar()) PickRow(null); e.Handled = true; }
+            else if (e.Key == Key.Delete) { DropSelected(); e.Handled = true; }
+            else if (e.Key == Key.Z && (Keyboard.Modifiers & ModifierKeys.Control) != 0) { FormworkUndo(); e.Handled = true; }
             return;
         }
         if (e.Key == Key.Escape) { _view3d.CancelDrag(); _editor.ClearSelection(); RefreshAll(); e.Handled = true; }
@@ -368,7 +369,7 @@ public sealed partial class PlacePartView
         _undo.Visibility = Show(Step != 2);                // [되돌리기]는 ① · ② (② 는 ② 에서 한 일 — R55b) · ③ 은 보기만
         // ② 에는 고른 부재가 없다: 숨기기 · 남은 것만 보기는 ① 에서만(① 에서 숨긴 부재는 ② 에서도 숨긴 채다). 종류 · 층은 둘 다.
         _hide.Visibility = _showAll.Visibility = _onlyRemaining.Visibility = Show(places);
-        _view3d.BandSelect = places;
+        _view3d.BandSelect = places || Step == 1;   // ② 도 끌어 판 여러 장(R66)
         _nextArmed = false;
     }
 

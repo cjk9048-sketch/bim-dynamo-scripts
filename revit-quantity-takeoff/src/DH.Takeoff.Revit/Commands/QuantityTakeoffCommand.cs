@@ -1245,6 +1245,9 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         var notes = new List<string>();
         bool took = false;
         string problem = "";
+        // 자동 모드에서 Revit 판의 종류를 받아들이면 사용자 모드로 바꾸고 알린다(R66 — 계획 검토 H3: 받아들인 종류가 말없이 걸리지 않게 되지 않게).
+        bool toUser = o.Taken.Count > 0 && !rules.UserMode;   // 받아들이기 전 모드(받아들인 기록만으로 짐작한 사용자 모드가 아니라)
+        if (toUser) copy.UserMode = true;
         if (o.Taken.Count > 0)
         {
             problem = FormworkRulesStore.Save(doc, copy, d => FormworkPlateStore.MarkTaken(d, o.Taken));
@@ -1253,7 +1256,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
                 session.Committed();
                 rules = copy;
                 took = true;
-                notes.Add($"Revit 판 {o.Taken.Count}장의 종류를 받아들였습니다");
+                notes.Add($"Revit 판 {o.Taken.Count}장의 종류를 받아들였습니다" + (toUser ? " — 거푸집 사용자 모드로 바꿨습니다" : ""));
             }
             else notes.Add($"Revit 에서 종류를 바꾼 판 {o.Taken.Count}장을 받아들이지 못했습니다: {problem}");
         }
@@ -1342,7 +1345,17 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         var results = FormworkAnalyzer.AnalyzeAutoBands(scene.Elements, scene.Zones, options);   // 7 m 를 넘는 유로폼 조각이 없으면 구간 없이
         int unpainted = FormworkReader.AttachCurved(scene, results);
         var (placeOf, partOrder) = Places(results, editor);
-        var board = new FormworkBoard(results, options, data.Origin, placeOf, partOrder);
+        var board = new FormworkBoard(results, options, data.Origin, placeOf, partOrder)
+        {
+            // 판마다 «겹침»(R67)을 바꾸면 형상부터 다시 잰다 — 같은 장면(읽은 값 · Revit API 없음 — 창 처리기에서 불러도 된다) · 높이 구간도 처음부터.
+            Remeasure = o =>
+            {
+                o.Bands = FormworkOptions.AutoBands(scene.Elements);
+                var again = FormworkAnalyzer.AnalyzeAutoBands(scene.Elements, scene.Zones, o);
+                FormworkReader.AttachCurved(scene, again);
+                return again;
+            },
+        };
         var audit = FormworkAnalyzer.Check(results, options);
         // 엑셀 줄의 부호(«마크») · 부위 줄(R47): 마크를 넣은 부재 수와 보기 · 부위 줄 · 쓰이지 않는 부위 줄(부위 이름을 바꾼 뒤 남은 것 — core-verify R47 L5).
         var marked = results.Where(r => r.Element.Mark.Length > 0).ToList();
@@ -1636,7 +1649,8 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
                     rulesInModel = text;
                     rulesUnsaved = "";
                     session.Committed();
-                    session.Note($"대응표 적음\t고친 줄 {now.Count} · 뺀 판 {now.DropCount} · 옮긴 판 {now.MoveCount}\t모델");
+                    session.Note($"대응표 적음\t모드 {(now.UserMode ? "사용자" : "자동")} · 고친 줄 {now.Count} · 뺀 판 {now.DropCount} · 옮긴 판 {now.MoveCount}" +
+                                 $" · 판 종류 {now.KindCount} · 판 자리 {now.PlaceCount} · 판 쪼갬 {now.SplitCount} · 겹침 {now.JointCount}\t모델");
                 }
                 else
                 {

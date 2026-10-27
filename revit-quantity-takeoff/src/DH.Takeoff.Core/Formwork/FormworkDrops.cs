@@ -79,6 +79,42 @@ public readonly record struct DropRecord(long Element, double Nx, double Ny, dou
     }
 }
 
+/// <summary>
+/// 판마다 «겹침» 기록 하나(R67 — JACK 2026-10-27 «거푸집 객체를 누르고 겹침 무시 · 공제할 때와 안 할 때를 단추로»): 면 열쇠(부재 Id · 바깥 법선 · 평면 자리) +
+/// 그 면을 덮은 이웃 부재 Id + 무시(공제 안 함) / 공제. 면 열쇠는 평면이라 공제를 풀어 판 모양이 바뀌어도 그대로 맞는다(조각 열쇠 DropRecord 와 다르다).
+/// 맞추기 = 같은 부재 · 법선이 같음 · 평면 거리 5 mm 안.
+/// </summary>
+public readonly record struct JointRecord(long Element, double Nx, double Ny, double Nz, double D, long Other, bool Ignore)
+{
+    private const double PlaneTol = 0.005;
+    private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+
+    /// <summary>그 면(부재 · 법선 · 평면 자리)의 그 이웃에 대한 기록인가.</summary>
+    public bool Matches(long element, double nx, double ny, double nz, double d, long other) =>
+        element == Element && other == Other && nx * Nx + ny * Ny + nz * Nz >= 1 - 1e-6 && Math.Abs(d - D) <= PlaneTol;
+
+    /// <summary>같은 면 · 같은 이웃인가(값은 보지 않음).</summary>
+    public bool SameKey(JointRecord o) => Matches(o.Element, o.Nx, o.Ny, o.Nz, o.D, o.Other);
+
+    /// <summary>면 열쇠의 글(대응표 파일 — 부재 Id|법선 x|y|z|평면 자리).</summary>
+    public string FaceText => string.Join("|", Element.ToString(Inv), Nx.ToString("0.######", Inv), Ny.ToString("0.######", Inv), Nz.ToString("0.######", Inv), D.ToString("0.####", Inv));
+
+    /// <summary>면 열쇠의 글 + 이웃 Id 를 읽는다(모르는 꼴이면 null).</summary>
+    public static JointRecord? Parse(string face, string other, bool ignore)
+    {
+        var cells = face.Split('|');
+        if (cells.Length != 5 || !long.TryParse(cells[0], NumberStyles.Integer, Inv, out long element) || !long.TryParse(other.Trim(), NumberStyles.Integer, Inv, out long o)) return null;
+        var v = new double[4];
+        for (int i = 0; i < 4; i++)
+            if (!double.TryParse(cells[i + 1], NumberStyles.Float, Inv, out v[i]) || !double.IsFinite(v[i])) return null;
+        return new JointRecord(element, v[0], v[1], v[2], v[3], o, ignore);
+    }
+
+    /// <summary>그 면 결과의 그 이웃에 대한 기록(평면 면만 — 곡면이면 null).</summary>
+    public static JointRecord? Of(FaceResult face, long other, bool ignore) =>
+        face.Normal.Length != 3 ? null : new JointRecord(face.ElementId, face.Normal[0], face.Normal[1], face.Normal[2], face.PlaneD, other, ignore);
+}
+
 /// <summary>조각의 모양 셈(뺀 판 열쇠가 쓴다).</summary>
 internal static class PatchGeometry
 {

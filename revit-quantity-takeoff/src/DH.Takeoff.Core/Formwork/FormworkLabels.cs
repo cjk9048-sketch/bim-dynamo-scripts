@@ -29,6 +29,8 @@ public static class FormworkLabels
         var regions = FormworkPlate.PlanOf(unit).Regions;
         if (regions != null && SlopedSpots(unit.Formula, regions.SelectMany(r => r.Outer.Select((p, i) => (a: V(p), b: V(r.Outer[(i + 1) % r.Outer.Count])))).ToList(), origin) is { } sloped)
             return sloped;
+        if (Product(unit.Formula) is null && Detail(unit) is { Count: > 0 } detail)
+            return detail.Select(d => ((V(d.A) + V(d.B)) * 0.5 - origin, d.Text, V(d.A) - origin, V(d.B) - origin)).ToList();
         if (Product(unit.Formula) is { } ab && regions != null)
         {
             var edges = regions.SelectMany(r => r.Outer.Select((p, i) => (a: V(p), b: V(r.Outer[(i + 1) % r.Outer.Count])))).ToList();
@@ -48,13 +50,29 @@ public static class FormworkLabels
                 }
             }
         }
-        // 판 가운데: 테두리(없으면 세모)의 점들을 싼 상자의 가운데.
+        // a × b 인데 변을 못 찾은 판도 식 조각의 자리로(R66a).
+        if (Detail(unit) is { Count: > 0 } any)
+            return any.Select(d => ((V(d.A) + V(d.B)) * 0.5 - origin, d.Text, V(d.A) - origin, V(d.B) - origin)).ToList();
+        // 판 가운데: 테두리(없으면 세모)의 점들을 싼 상자의 가운데(넓이만인 판 — R66a 부터).
         var points = unit.Shape.Outline.SelectMany(r => r).Concat(unit.Shape.Outline.Count == 0 ? unit.Shape.Triangles : Enumerable.Empty<double[]>()).Where(p => p.Length == 3).ToList();
         if (points.Count == 0 || unit.Formula.Length == 0) return labels;
         var box = Box3.Empty;
         foreach (var p in points) box = box.With(V(p));
         labels.Add((box.Center - origin, Pretty(unit.Formula), box.Center - origin, box.Center - origin));
         return labels;
+    }
+
+    // 판 식 조각의 숫자 자리(R66a — FormworkSheet.ShapeDetail · 판마다 한 번 · 판 식이 판 모양에서 다시 지은 식과 글자까지 같을 때만).
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<FormworkUnit, List<FormworkSheet.ShapeLabel>> Details = new();
+
+    internal static List<FormworkSheet.ShapeLabel>? Detail(FormworkUnit unit)
+    {
+        if (unit.AreaOnly || unit.Formula.Length == 0) return null;
+        if (Details.TryGetValue(unit, out var known)) return known.Count > 0 ? known : null;
+        var (formula, areaOnly, labels) = FormworkSheet.ShapeDetail(unit.Shape);
+        var made = !areaOnly && formula == unit.Formula ? labels : new List<FormworkSheet.ShapeLabel>();
+        Details.AddOrUpdate(unit, made);
+        return made.Count > 0 ? made : null;
     }
 
     private static readonly Regex TrapezoidText = new(@"^\((\d+(?:\.\d+)?)\+(\d+(?:\.\d+)?)\)\*0\.5\*(\d+(?:\.\d+)?)$", RegexOptions.CultureInvariant);
@@ -175,6 +193,17 @@ public static class FormworkLabels
     public static int[] SpotTokens(FormworkLine line, FormworkUnit unit, IReadOnlyList<string> spotTexts)
     {
         var result = Enumerable.Repeat(-1, spotTexts.Count).ToArray();
+        // R66a: 판 식 조각의 자리로 놓은 숫자(복잡한 판 식) — 줄 식에서 판 식이 시작하는 차례 + 판 식 안의 차례.
+        // 줄 식에서 판 식의 자리를 모르면(StartOf −1 — 둘레 · 공통 수 줄) 아래 TermOf 길로(설치 전 검토 L8).
+        if (Detail(unit) is { } detail && detail.Count == spotTexts.Count && detail.Select(d => d.Text).SequenceEqual(spotTexts)
+            && (Product(unit.Formula) is null || spotTexts.Count != 2) && TrapezoidText.Match(unit.Formula) is { Success: false } && TriangleText.Match(unit.Formula) is { Success: false }
+            && line.StartOf.TryGetValue(unit, out int start) && start >= 0)
+        {
+            var lineNumbers = NumberPattern.Matches(line.Formula).Select(m => m.Value).ToList();
+            for (int i = 0; i < detail.Count; i++)
+                if (detail[i].Token >= 0 && start + detail[i].Token < lineNumbers.Count && lineNumbers[start + detail[i].Token] == spotTexts[i]) result[i] = start + detail[i].Token;
+            return result;
+        }
         if (!line.TermOf.TryGetValue(unit, out int k) || Monomials(line.Formula) is not { } monos || k < 0 || k >= monos.Count) return result;
         var mono = monos[k];
         var numbers = NumberPattern.Matches(line.Formula).Select(m => m.Value).ToList();

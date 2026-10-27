@@ -96,12 +96,12 @@ public sealed class FormworkPiece
 /// 엑셀 거푸집 시트에 실을 것(Sheet — 3D 의 판과 같은 것). 종류를 고치거나 판을 빼면 대응표만 다시 건다(FormworkAnalyzer.Reclassify — 형상은 다시 재지 않는다).
 /// 화면(WPF)과 파일 저장은 부르는 쪽이 한다.
 /// </summary>
-public sealed class FormworkBoard
+public sealed partial class FormworkBoard
 {
     /// <summary>덩이를 면에서 바깥으로 띄우는 거리(m) — 부재의 겉면과 같은 깊이에서 깜박이지 않게(Revit 덧그림과 같은 4mm).</summary>
     public const double Lift = 0.004;
 
-    public IReadOnlyList<ElementFormwork> Results { get; }
+    public IReadOnlyList<ElementFormwork> Results { get; private set; }
     public FormworkOptions Options { get; }
     public FormworkRules Rules { get; }
     public IReadOnlyList<FormworkPiece> Pieces { get; private set; } = Array.Empty<FormworkPiece>();
@@ -146,6 +146,7 @@ public sealed class FormworkBoard
         Results = results;
         Options = options;
         Rules = options.Rules ??= new FormworkRules();
+        _measuredJoints = MeasureKey();   // 받은 결과는 지금 «겹침» 기록으로 잰 것(R67)
         _origin = origin;
         var elements = new Dictionary<long, FormworkElement>();
         foreach (var r in results) elements.TryAdd(r.Element.Id, r.Element);
@@ -158,7 +159,8 @@ public sealed class FormworkBoard
                 foreach (var p in f.Patches)
                     _serial.TryAdd(p, _serial.Count);
         // 뺀 판은 곡면의 세모를 붙인 뒤에 다시 맞춘다(Analyze 때는 곡면에 세모가 없어 그 조각을 알아보지 못한다).
-        if (Rules.DropCount > 0 || Rules.KindCount > 0) FormworkAnalyzer.Reclassify(results, options);   // 판 종류도(R57 P3 — 계획 검토 M2)
+        if (options.ActiveRules is { } active && (active.DropCount > 0 || active.KindCount > 0 || active.PlaceCount > 0 || active.SplitCount > 0))
+            FormworkAnalyzer.Reclassify(results, options);   // 판 종류도(R57 P3 — 계획 검토 M2) · 판 자리 · 쪼갬도(R66)
         Refresh();
     }
 
@@ -206,10 +208,11 @@ public sealed class FormworkBoard
         string next = (choice ?? "").Trim();
         // 줄에서 고르면 그 줄의 판 전부 — 아래 줄 값도 지운다(R64). 줄 값이 같아도 아래 줄 값이 있으면 지운다(«자동» · ↺ 가 듣게 — critic R64 M2).
         var subs = Rules.SubsOf(type, group);
-        if (RuleOf(type, group) == next && subs.Count == 0) return false;
+        if (RuleOf(type, group) == next && subs.Count == 0 && Rules.UserMode) return false;
+        ModeSwitched = EnsureUser();
         Rules.Set(type, group, next);
         foreach (var (sub, _) in subs) Rules.Set(type, FormworkRules.SubGroup(group, sub), "");
-        FormworkAnalyzer.Reclassify(Results, Options);
+        Reclassify();
         Refresh();
         return true;
     }
@@ -224,9 +227,10 @@ public sealed class FormworkBoard
     public bool SetSubRule(string type, string group, string sub, string choice)
     {
         string next = (choice ?? "").Trim();
-        if (sub.Length == 0 || SubRuleOf(type, group, sub) == next) return false;
+        if (sub.Length == 0 || (SubRuleOf(type, group, sub) == next && Rules.UserMode)) return false;
+        ModeSwitched = EnsureUser();
         Rules.Set(type, FormworkRules.SubGroup(group, sub), next);
-        FormworkAnalyzer.Reclassify(Results, Options);
+        Reclassify();
         Refresh();
         return true;
     }
@@ -242,7 +246,7 @@ public sealed class FormworkBoard
         Rules.Set(type, group, state.rule);
         foreach (var (sub, _) in now.subs) Rules.Set(type, FormworkRules.SubGroup(group, sub), "");
         foreach (var (sub, item) in state.subs) Rules.Set(type, FormworkRules.SubGroup(group, sub), item);
-        FormworkAnalyzer.Reclassify(Results, Options);
+        Reclassify();
         Refresh();
         return true;
     }
@@ -250,19 +254,9 @@ public sealed class FormworkBoard
     /// <summary>대응표 전체(뺀 판까지)를 갈아 끼운다(창을 연 때로 되돌릴 때). 다시 센다.</summary>
     public void ReplaceRules(FormworkRules rules)
     {
-        // 넘긴 것이 이 대응표 자신이어도 지우기 전에 떠 둔다(core-verify R48 L4 — 비우는 반복이 먼저 돌면 다 사라진다).
-        var items = rules.All.ToList();
-        var drops = rules.Drops.Select(d => (d.lead, records: d.records.ToList())).ToList();
-        var moves = rules.Moves.ToList();
-        var kinds = rules.Kinds.ToList();
-        foreach (var (type, group, _) in Rules.All.ToList()) Rules.Set(type, group, "");
-        foreach (var (type, group, item) in items) Rules.Set(type, group, item);
-        foreach (var (lead, _) in Rules.Drops.ToList()) Rules.Restore(lead);
-        foreach (var (lead, records) in drops) Rules.Drop(lead, records);
-        foreach (var (lead, to) in moves) Rules.SetMove(lead, to);
-        foreach (var kind in Rules.Kinds.ToList()) Rules.ClearKind(kind.Lead);
-        foreach (var kind in kinds) Rules.SetKind(kind.Lead, kind.Item, kind.Records);
-        FormworkAnalyzer.Reclassify(Results, Options);
+        // 넘긴 것이 이 대응표 자신이어도 된다(CopyFrom 이 먼저 떠 둔다 — core-verify R48 L4) · 판 자리 · 쪼갬 · 모드까지(R66).
+        Rules.CopyFrom(rules);
+        Reclassify();
         Refresh();
     }
 
@@ -282,14 +276,14 @@ public sealed class FormworkBoard
         var records = piece.Members.Select(m => DropRecord.Of(m.Face, m.Patch)).ToList();
         string key = records[piece.LeadIndex].Text;
         lead = key;
+        string before = Snapshot();
+        ModeSwitched = EnsureUser();
         Rules.Drop(key, records);
-        FormworkAnalyzer.Reclassify(Results, Options);
-        if (!piece.Patches.Any(p => p.DropLead == key))
+        Reclassify();
+        if (!Results.SelectMany(r => r.Faces).SelectMany(f => f.Patches).Any(p => p.DropLead == key))   // 지금 결과로(다시 쟀으면 판의 조각은 옛것 — R67 최종 검토 높음 2)
         {
             lead = "";
-            Rules.Restore(key);
-            FormworkAnalyzer.Reclassify(Results, Options);
-            Refresh();
+            RestoreSnapshot(before);   // 기록 · 모드 모두 처음 그대로(«정한 적 없음»도 — 설치 전 검토 L2)
             return false;
         }
         Refresh();
@@ -313,13 +307,13 @@ public sealed class FormworkBoard
         var before = Rules.StateOf(lead);
         if (before == null || before.MovedTo == to) return false;
         if (!Rules.SetMove(lead, to)) return false;
-        FormworkAnalyzer.Reclassify(Results, Options);
+        Reclassify();
         var patches = Results.SelectMany(r => r.Faces).SelectMany(f => f.Patches);
         bool done = to == null ? patches.Any(p => p.DropLead == lead) : patches.Any(p => p.MoveLead == lead);
         if (!done)
         {
             Rules.SetState(lead, before);
-            FormworkAnalyzer.Reclassify(Results, Options);
+            Reclassify();
         }
         Refresh();
         return done;
@@ -340,7 +334,7 @@ public sealed class FormworkBoard
     public void SetKindState(string lead, FormworkRules.KindState? state)
     {
         Rules.SetKindState(lead, state);
-        FormworkAnalyzer.Reclassify(Results, Options);
+        Reclassify();
         Refresh();
     }
 
@@ -348,7 +342,7 @@ public sealed class FormworkBoard
     public bool ClearKind(FormworkPiece piece)
     {
         if (piece.KindLead is not { Length: > 0 } lead || !Rules.ClearKind(lead)) return false;
-        FormworkAnalyzer.Reclassify(Results, Options);
+        Reclassify();
         Refresh();
         return true;
     }
@@ -358,7 +352,7 @@ public sealed class FormworkBoard
     {
         int n = KindCheck.Lost.ToList().Count(lead => Rules.ClearKind(lead));
         if (n == 0) return 0;
-        FormworkAnalyzer.Reclassify(Results, Options);
+        Reclassify();
         Refresh();
         return n;
     }
@@ -370,7 +364,7 @@ public sealed class FormworkBoard
     public void SetState(string lead, FormworkRules.PlateState? state)
     {
         Rules.SetState(lead, state);
-        FormworkAnalyzer.Reclassify(Results, Options);
+        Reclassify();
         Refresh();
     }
 
@@ -378,7 +372,7 @@ public sealed class FormworkBoard
     public void SetStates(IEnumerable<(string lead, FormworkRules.PlateState? state)> states)
     {
         foreach (var (lead, state) in states) Rules.SetState(lead, state);
-        FormworkAnalyzer.Reclassify(Results, Options);
+        Reclassify();
         Refresh();
     }
 
@@ -386,7 +380,7 @@ public sealed class FormworkBoard
     public bool Restore(string lead)
     {
         if (!Rules.Restore(lead)) return false;
-        FormworkAnalyzer.Reclassify(Results, Options);
+        Reclassify();
         Refresh();
         return true;
     }
@@ -399,7 +393,7 @@ public sealed class FormworkBoard
     {
         int n = LostDrops.ToList().Count(lead => Rules.Restore(lead));
         if (n == 0) return 0;
-        FormworkAnalyzer.Reclassify(Results, Options);
+        Reclassify();
         Refresh();
         return n;
     }
@@ -570,9 +564,10 @@ public sealed class FormworkBoard
         Rows = FormworkSummary.Rows(Results, Options);
         Totals = FormworkSummary.Totals(Results, Options);
         Sheet = FormworkSheet.Build(Results, Options, _placeOf, _partOrder);
-        DropCheck = FormworkSummary.CheckDrops(Results, Rules);
-        KindCheck = FormworkSummary.CheckKinds(Results, Rules);
-        HiddenTypeRules = FormworkSummary.HiddenTypeRules(Results, Rules);
+        // 자동 모드(R66)는 기록을 걸지 않으니 찾지 못한 기록 · 가려진 줄도 없다.
+        DropCheck = FormworkSummary.CheckDrops(Results, Options.ActiveRules);
+        KindCheck = FormworkSummary.CheckKinds(Results, Options.ActiveRules);
+        HiddenTypeRules = FormworkSummary.HiddenTypeRules(Results, Options.ActiveRules);
         Pieces = BuildPieces();
         RefreshMilliseconds = watch.ElapsedMilliseconds;
     }

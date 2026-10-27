@@ -149,7 +149,7 @@ public static class FormworkMerge
                     {
                         Result = r, Face = f, Patch = p, N = n, D = n.Dot(V3.Of(p.Outline[0][0])), Bottom = bottom, Outer = outer, Zone = zone,
                         Part = part, Group = FormworkTable.GroupOf(f.Class, p),
-                        Kind = p.Item == FormworkTable.Euro && !acrossBands ? $"{p.Item}#{p.Band}" : p.Item, Move = p.MoveLead + "|" + p.KindLead, Parent = cands.Count,
+                        Kind = p.Item == FormworkTable.Euro && !acrossBands ? $"{p.Item}#{p.Band}" : p.Item, Move = MoveKey(r, p), Parent = cands.Count,
                     };
                     (c.Min, c.Max) = BoxOf(p);
                     cands.Add(c);
@@ -202,7 +202,7 @@ public static class FormworkMerge
             var n = new V3(group.Normal[0], group.Normal[1], group.Normal[2]).Unit();
             var counted = group.Members.Where(m => m.Patch.Counted && m.Patch.Item.Length > 0 && m.Patch.Outline.Count > 0 && m.Patch.Outline[0].Count >= 3 && !claimed.Contains(m.Patch)).ToList();
             // 옮긴 판의 조각은 같은 옮긴 판끼리만(R55b — 계획 검토 M3).
-            var parts = counted.GroupBy(m => (m.Patch.Item, acrossBands || m.Patch.Item != FormworkTable.Euro ? 0 : m.Patch.Band, m.Patch.MoveLead, m.Patch.KindLead)).Select(g => g.ToList()).ToList();
+            var parts = counted.GroupBy(m => (m.Patch.Item, acrossBands || m.Patch.Item != FormworkTable.Euro ? 0 : m.Patch.Band, MoveKey(m.Result, m.Patch))).Select(g => g.ToList()).ToList();
             var gov = group.Governor.Patch;
             var main = parts.FirstOrDefault(p => p.Any(m => ReferenceEquals(m.Patch, gov))) ?? parts.OrderByDescending(p => p.Sum(m => m.Patch.Area)).FirstOrDefault();
             foreach (var other in parts.Where(p => !ReferenceEquals(p, main) && main != null && p[0].Patch.Item != main[0].Patch.Item
@@ -261,7 +261,7 @@ public static class FormworkMerge
                     var c = new Cand
                     {
                         Result = r, Face = f, Patch = p, N = n, D = n.Dot(V3.Of(p.Outline[0][0])), Bottom = false, Outer = false, Zone = "", Part = "", Group = "",
-                        Kind = p.Item == FormworkTable.Euro ? $"{p.Item}#{p.Band}" : p.Item, Move = p.MoveLead + "|" + p.KindLead, Parent = 0,
+                        Kind = p.Item == FormworkTable.Euro ? $"{p.Item}#{p.Band}" : p.Item, Move = MoveKey(r, p), Parent = 0,
                     };
                     (c.Min, c.Max) = BoxOf(p);
                     if (lump)
@@ -354,6 +354,10 @@ public static class FormworkMerge
             if (ra != rb) parent[Math.Max(ra, rb)] = Math.Min(ra, rb);
         }
     }
+
+    // 잇기 열쇠: 옮긴 판 · 판 종류의 대표 열쇠(같은 판끼리만 — R55b · R57 P3) + 판 쪼갬(R66 — 같은 기록 · 같은 부재의 조각끼리만).
+    internal static string MoveKey(ElementFormwork r, FacePatch p) =>
+        p.MoveLead + "|" + p.KindLead + (p.SplitLead.Length > 0 ? "|" + p.SplitLead + "#" + r.Element.Id.ToString(System.Globalization.CultureInfo.InvariantCulture) : "");
 
     /// <summary>결과에 든 수직면 덩어리(차례 = 덩어리 번호).</summary>
     internal static List<VerticalGroup> GroupsOf(IReadOnlyList<ElementFormwork> results) =>

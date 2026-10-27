@@ -197,6 +197,35 @@ public static class FormworkAnalyzer
         || (!ReferenceEquals(other, structure) && !structure.Later && IsStair(other, options) && !IsStair(structure, options) && WallLike(structure, options));
 
     /// <summary>
+    /// 접합부 규칙(R67 — JACK 2026-10-27 고름 · 녹촌 2D: 벽 = 둘레 × 높이 − 문 · 보 = 길이를 이어서 · 계단 식에 헌치 공제 없음): 이웃이 면의 일부만 덮을 때
+    /// (맞닿은 넓이가 면의 98 % 미만 — 보 끝면 · 꿰뚫은 구멍 옆면 · 벽에 붙은 계단 옆처럼 통째로 덮인 면은 늘 공제) 공제하지 않는 경우:
+    ///  A 보 · 기둥이 벽 같은 부재 · 보 · 기둥의 옆면을 덮은 자리(헌치는 아님) · B 헌치가 계단의 면을 덮은 자리.
+    /// 판마다 «겹침» 기록(FormworkRules.JointOf — 사용자 모드)이 이보다 앞선다.
+    /// </summary>
+    internal static bool JointRule(FormworkElement structure, FormworkElement other, FaceClass cls, double contact, double face, FormworkOptions options)
+    {
+        if (face > 0 && contact >= face * JointWhole) return false;
+        if (IsHaunch(structure, options) || IsHaunch(other, options)) return IsStair(structure, options) && IsHaunch(other, options);
+        return cls == FaceClass.Side && FrameLike(other, options) && (FrameLike(structure, options) || WallLike(structure, options));
+    }
+
+    /// <summary>면을 «통째로» 덮었다고 보는 맞닿은 넓이의 몫(R67 — 그 이상이면 접합부가 아니라 맞붙은 면).</summary>
+    public const double JointWhole = 0.98;
+
+    /// <summary>보 · 기둥인가(R67): 부위를 넣었으면 부위 묶음 «기둥·보»(목록에 없는 이름이면 부재 종류) · 없으면 부재 종류(보 · 기둥).</summary>
+    internal static bool FrameLike(FormworkElement el, FormworkOptions options)
+    {
+        if (el.Part.Length == 0) return el.Kind is MemberKind.Beam or MemberKind.Column;
+        string group = options.PartGroup(el.Part);
+        if (group == PartCatalog.Etc && PartCatalog.Find(el.Part) == null) return el.Kind is MemberKind.Beam or MemberKind.Column;
+        return group == PartCatalog.Frame;
+    }
+
+    /// <summary>헌치인가(R67): 부위 묶음 «헌치» 또는 유형 이름에 «헌치».</summary>
+    internal static bool IsHaunch(FormworkElement el, FormworkOptions options) =>
+        (el.Part.Length > 0 && options.PartGroup(el.Part) == PartCatalog.Haunch) || el.Type.Contains("헌치", StringComparison.Ordinal);
+
+    /// <summary>
     /// 계단인가: Revit 계단(둘레 콘크리트 — R56c-1) 또는 부위 묶음이 «계단»인 부재(바닥 · 일반 모델로 그린 계단). 벽 카테고리 부재는 부위로 계단이 되지 않는다
     /// («계단실» 같은 이름이 묶음 짐작으로 계단이 되어 맞닿은 벽끼리 서로 빼고 재는 일이 없게 — R64 설치 전 검토 중간).
     /// </summary>
@@ -464,8 +493,17 @@ public static class FormworkAnalyzer
                 {
                     OverlayKind(options, face, patch);
                     OverlayDrop(options, face, patch);
+                    OverlayPlate(options, face, patch);
                 }
         ApplyMoves(results, options);
+    }
+
+    // 판 자리 · 판 쪼갬(R66): 맞는 기록의 대표 열쇠 · 자리를 조각에 적는다 — 종류 · 세는가는 그대로(엑셀 줄의 자리 · 판 잇기만 바꾼다 · 계획 검토 M2).
+    private static void OverlayPlate(FormworkOptions options, FaceResult face, FacePatch patch)
+    {
+        if (options.ActiveRules is not { } rules || (rules.PlaceCount == 0 && rules.SplitCount == 0)) return;
+        if (rules.PlaceOf(face, patch) is { } place) (patch.PlaceLead, patch.Place) = (place.Lead, (place.Part, place.Zone));
+        if (rules.SplitOf(face, patch) is { } split) patch.SplitLead = split;
     }
 
     /// <summary>Revit 판 종류로 정한 조각의 까닭(R57 P3).</summary>
@@ -475,7 +513,7 @@ public static class FormworkAnalyzer
     // 대응표 줄 · 덩어리 따라감보다 앞(Rule · FollowGroups 뒤) · 지운 판보다 뒤(OverlayDrop 이 덮는다) · 옮긴 판은 줄만 옮기고 종류는 그대로(ApplyMoves).
     private static void OverlayKind(FormworkOptions options, FaceResult face, FacePatch patch)
     {
-        if (options.Rules is not { KindCount: > 0 } rules) return;
+        if (options.ActiveRules is not { KindCount: > 0 } rules) return;
         bool raw = (patch.Unruled?.Counted ?? patch.Counted) || patch.Below == Below.Floating;
         if (!raw || rules.KindOf(face, patch) is not { } kind) return;
         patch.KindBase = patch.Counted ? patch.Item : "";
@@ -539,7 +577,7 @@ public static class FormworkAnalyzer
                 patch.Note = PlateKindNote;
                 continue;
             }
-            string? human = options.Rules?.Lookup(to.type, to.group);
+            string? human = options.ActiveRules?.Lookup(to.type, to.group);
             string? item = human is { Length: > 0 } ? human
                 : Most(byDir.GetValueOrDefault((to, DownFlat(face)))) ?? Most(byRow.GetValueOrDefault(to));
             if (item == null || item == FormworkRules.NotCounted)
@@ -581,7 +619,7 @@ public static class FormworkAnalyzer
                 bool follows = !ReferenceEquals(patch, gov) && (patch.Unruled?.Counted ?? patch.Counted) && gov.Counted && gov.Item.Length > 0;
                 patch.Follow = follows ? gov.Item : null;
                 if (!follows || !patch.Counted) continue;
-                if (HumanRule(options.Rules, r.Element, FormworkTable.GroupOf(f.Class, patch), patch.Sub) != null) continue;
+                if (HumanRule(options.ActiveRules, r.Element, FormworkTable.GroupOf(f.Class, patch), patch.Sub) != null) continue;
                 patch.Item = gov.Item;
             }
         }
@@ -591,9 +629,9 @@ public static class FormworkAnalyzer
     private static void OverlayDrop(FormworkOptions options, FaceResult face, FacePatch patch)
     {
         bool raw = (patch.Unruled?.Counted ?? patch.Counted) || patch.Below == Below.Floating;
-        string? lead = raw ? options.Rules?.DropOf(face, patch) : null;
+        string? lead = raw ? options.ActiveRules?.DropOf(face, patch) : null;
         if (lead == null) return;
-        if (options.Rules!.MoveOf(lead) is { } to)
+        if (options.ActiveRules!.MoveOf(lead) is { } to)
         {
             // 옮긴 판(R55b): 종류 · 세는가는 ApplyMoves 가 준다(옮기지 않은 조각을 다 정한 뒤 — 계획 검토 H1).
             patch.MovedTo = to;
@@ -704,6 +742,7 @@ public static class FormworkAnalyzer
                     patch.DropLead = "";
                     (patch.MovedTo, patch.MoveLead, patch.BeforeMove) = (null, "", "");   // 옮긴 판도 대응표를 다시 걸 때 다시 정한다(계획 검토 M1)
                     (patch.KindLead, patch.KindBase) = ("", "");                          // 판 종류도(R57 P3)
+                    (patch.PlaceLead, patch.Place, patch.SplitLead) = ("", null, "");     // 판 자리 · 판 쪼갬도(R66)
                 }
         }
         ApplyRules(results, options);
@@ -721,7 +760,7 @@ public static class FormworkAnalyzer
         if (patch.Below == Below.Floating)
         {
             // 아래가 빈 밑면: 유형 줄의 사람 값 > 부위가 정하는 값(R57 — FloatingDraft) > 세지 않고 물어본다.
-            string? typeRule = options.Rules?.LookupSub(el.Type, group, patch.Sub) ?? options.Rules?.Lookup(el.Type, group);   // 아래 줄 > 줄(R64)
+            string? typeRule = options.ActiveRules?.LookupSub(el.Type, group, patch.Sub) ?? options.ActiveRules?.Lookup(el.Type, group);   // 아래 줄 > 줄(R64)
             if (typeRule != null)
             {
                 patch.Decided = true;
@@ -737,7 +776,7 @@ public static class FormworkAnalyzer
             return;
         }
         if (!patch.Counted) return; // 윗면 · 버림과 기초의 밑면 · 틈은 대응표로 바꾸지 않는다
-        string? rule = HumanRule(options.Rules, el, group, patch.Sub);
+        string? rule = HumanRule(options.ActiveRules, el, group, patch.Sub);
         if (rule == FormworkRules.NotCounted)
         {
             patch.Counted = false;
@@ -833,6 +872,7 @@ public static class FormworkAnalyzer
         result.Polygon = Poly.Area(paths);
         V3 n = frame.N;
         result.Normal = new[] { n.X, n.Y, n.Z };
+        result.PlaneD = n.Dot(frame.O);
         result.SlopeDeg = Math.Acos(Math.Clamp(Math.Abs(n.Z), 0, 1)) * 180 / Math.PI;
         result.UpFacing = n.Z > 0;
         result.Class = holeEdge ? FaceClass.HoleEdge
@@ -844,11 +884,24 @@ public static class FormworkAnalyzer
         var outside = frame.Shift(o.Epsilon);
         var cover = new Paths64();
         var covers = new Dictionary<long, double>();
+        var ignored = new Dictionary<long, double>();   // 맞닿았지만 공제하지 않은 이웃(R67 — 접합부 규칙 · «겹침» 기록)
         bool curvedNeighbour = false, brokenNeighbour = false;
         // 벽을 계단 없이 재도(R64) 아래를 보는 면은 계단이 그대로 덮는다 — 계단 참 · 계단 위에 얹힌 벽의 밑면이 동바리 밑면 · «확인 필요»가 되지 않게
         // (R64 설치 전 검토 높음: 계단은 벽 다음에 치는데 계단 위의 벽은 계단이 받친다).
         bool down = result.Class is FaceClass.Bottom or FaceClass.SlopeDown;
         var neighbours = down && later is { Count: > 0 } ? ctx.Bodies.Concat(later.Where(b => !b.El.Later && IsStair(b.El, o))) : ctx.Bodies;
+        // 접합부(R67 — JACK 2026-10-27 «보 단면 공제 · 겹침 무시»): 이웃마다 맞닿은 자리(면 바깥 ε) + 결합이 깎아 면에서 빠진 자리(면 안 ε 평면의 이웃 단면 가운데
+        // 면을 싼 네모 안 · 면에 없는 곳 — 벽을 꿰뚫은 보의 구멍 · 모서리 홈)를 잰다. 판마다 «겹침» 기록(사용자 모드) > 규칙(JointRule)이 «무시»면 둘 다 거푸집으로
+        // 되살리고(맞닿은 자리는 덮개에 넣지 않고 · 깎인 자리는 면에 더함) FaceResult.Ignored 에 남긴다. 공제면 깎인 자리는 FaceResult.Cut 에(칸 · 일지).
+        var (bu0, bv0, bu1, bv1) = Extent(paths);
+        var box = Poly.Rect(bu0, bv0, bu1, bv1);
+        // 네모가 아닌 면(구멍 · 홈)만 깎인 자리를 본다 · 누운 면은 보지 않는다(수평 면의 u 는 세계 X 라 평면에서 돌아간 판의 «싼 네모»가 면보다 커 가짜 깎인 자리가 생긴다 —
+        // 최종 검토 중간 2 · 접합부 규칙은 옆면 · 계단 면).
+        bool notched = Math.Abs(frame.V.Z) > 0.2 && Poly.Area(box) - result.Polygon > Tiny;
+        var inside = notched ? frame.Shift(-o.Epsilon) : null;
+        var near = new List<(Paths64 outCut, Paths64 hit, bool ignore)>();
+        var cutIns = new Dictionary<long, double>();
+        var fills = new Paths64();
         foreach (var other in neighbours)
         {
             if (ReferenceEquals(other, body)) continue;
@@ -862,13 +915,46 @@ public static class FormworkAnalyzer
                 curvedNeighbour |= !other.Planar;
                 brokenNeighbour |= other.Planar;
             }
-            if (cut.Count == 0) continue;
-            var hit = Poly.Intersect(paths, cut);
-            double area = Poly.Area(hit);
-            if (area < Tiny) continue;
-            if (other.El.Id != body.El.Id) covers[other.El.Id] = covers.GetValueOrDefault(other.El.Id) + area;
-            cover = Poly.Union(cover, hit);
+            var contactHit = cut.Count > 0 ? Poly.Intersect(paths, cut) : new Paths64();
+            double contact = Poly.Area(contactHit);
+            Paths64? cutIn = null;
+            // 깎인 자리 = 이웃이 면의 평면을 지나는 자리(면 안 ε 과 면 바깥 ε 단면 둘 다 — 벽을 꿰뚫은 보 · 모서리에 걸친 보)만: 면 평면 안에서 나란히 놓인 부재
+            // (L 자 벽의 빈 귀퉁이 위를 따라가는 보 · 벽 면과 같은 평면의 기둥)는 깎은 것이 아니라 제 면을 따로 센다(최종 검토 중간 1 — 두 번 세지 않게).
+            if (inside != null && other.Planar && other.El.Id != body.El.Id && cut.Count > 0 && Section.Cut(other.Solid, inside) is { Count: > 0 } innerCut)
+            {
+                cutIn = Poly.Intersect(Poly.Difference(Poly.Intersect(innerCut, box), paths), cut);
+                if (Poly.Area(cutIn) < Tiny) cutIn = null;
+            }
+            if (contact < Tiny && cutIn == null) continue;
+            bool ignore = other.El.Id != body.El.Id && result.Class != FaceClass.Top
+                && (o.ActiveRules?.JointOf(body.El.Id, n.X, n.Y, n.Z, result.PlaneD, other.El.Id) ?? JointRule(body.El, other.El, result.Class, contact, result.Polygon, o));
+            double cutArea = cutIn != null ? Poly.Area(cutIn) : 0;
+            if (ignore)
+            {
+                ignored[other.El.Id] = ignored.GetValueOrDefault(other.El.Id) + contact + cutArea;
+                if (cutIn != null) fills = Poly.Union(fills, cutIn);
+            }
+            else
+            {
+                if (other.El.Id != body.El.Id && contact >= Tiny) covers[other.El.Id] = covers.GetValueOrDefault(other.El.Id) + contact;
+                if (cutIn != null) cutIns[other.El.Id] = cutIns.GetValueOrDefault(other.El.Id) + cutArea;
+            }
+            if (cut.Count > 0) near.Add((cut, contactHit, ignore));
         }
+        // 되살린 자리를 면에 더한 뒤 무시하지 않은 이웃이 맞닿은 자리를 뺀다(되살린 자리 바깥에 다른 콘크리트가 있으면 그것은 그대로 공제).
+        if (fills.Count > 0)
+        {
+            fills = Poly.Difference(fills, paths);
+            result.Restored = Poly.Area(fills);
+            paths = Poly.Union(paths, fills);
+        }
+        foreach (var (outCut, contactHit, ignore) in near)
+        {
+            if (ignore) continue;
+            var hit = fills.Count > 0 ? Poly.Intersect(paths, outCut) : contactHit;
+            if (Poly.Area(hit) >= Tiny) cover = Poly.Union(cover, hit);
+        }
+        result.Cut = cutIns.Select(kv => new FaceCover { ElementId = kv.Key, Area = kv.Value }).OrderByDescending(c => c.Area).ToList();
         var net = cover.Count > 0 ? Poly.Difference(paths, cover) : paths;
         result.Covered = Poly.Area(cover);
         // 나중에 치는 부재가 맞닿았지만 구조체라서 거푸집으로 센 넓이(다른 콘크리트가 이미 덮은 자리는 빼고) — 어느 부재에 얼마를 돌려 셌는지 일지로 본다.
@@ -895,6 +981,7 @@ public static class FormworkAnalyzer
             }
         }
         result.Covers = covers.Select(kv => new FaceCover { ElementId = kv.Key, Area = kv.Value }).OrderByDescending(c => c.Area).ToList();
+        result.Ignored = ignored.Select(kv => new FaceCover { ElementId = kv.Key, Area = kv.Value }).OrderByDescending(c => c.Area).ToList();
         if (curvedNeighbour) result.Flag = "곡면 부재가 곁에 있어 맞닿은 자리를 다 재지 못함";
         else if (brokenNeighbour) result.Flag = "곁 부재의 단면을 잇지 못해 맞닿은 자리를 다 재지 못함";
 
@@ -1733,6 +1820,7 @@ public static class FormworkAnalyzer
         var opts = options ?? new FormworkOptions();
         var audit = new Audit();
         var contact = new Dictionary<(long, long), double>();
+        var ignoredPairs = new HashSet<(long, long)>();   // 한쪽이 공제하지 않은 짝(R67 — 접합부)은 견주지 않는다
         var byId = new Dictionary<long, FormworkElement>();
         foreach (var r in results) byId.TryAdd(r.Element.Id, r.Element);
         foreach (var r in results)
@@ -1742,10 +1830,11 @@ public static class FormworkAnalyzer
                 if (f.Flag.Length > 0) audit.Flagged++;
                 if (f.Class == FaceClass.Curved) continue;
                 if (Math.Abs(f.Polygon - f.Gross) > 1e-4 + 1e-6 * f.Gross) audit.PolygonMismatch++;
-                if (Math.Abs(f.Covered + f.Shared + f.Net - f.Polygon) > 1e-4 + 1e-6 * f.Polygon) audit.SumMismatch++;
+                if (Math.Abs(f.Covered + f.Shared + f.Net - f.Polygon - f.Restored) > 1e-4 + 1e-6 * f.Polygon) audit.SumMismatch++;   // 되살린 자리(R67)는 면에 더해졌다
                 if (Math.Abs(f.Patches.Sum(p => p.Area) - f.Net) > 1e-4 + 1e-6 * f.Net) audit.PatchMismatch++;
                 foreach (var c in f.Covers)
                     contact[(f.ElementId, c.ElementId)] = contact.GetValueOrDefault((f.ElementId, c.ElementId)) + c.Area;
+                foreach (var c in f.Ignored) ignoredPairs.Add((Math.Min(f.ElementId, c.ElementId), Math.Max(f.ElementId, c.ElementId)));
             }
         foreach (var ((a, b), fromA) in contact)
         {
@@ -1755,6 +1844,7 @@ public static class FormworkAnalyzer
             // 구조체 ↔ 그 구조체를 잴 때 빠진 나중 부재: 구조체 쪽은 일부러 빼지 않았다(R54 — 구조체를 이기는 나중 부재는 양쪽에서 재므로 견준다).
             // 벽 ↔ 계단(R64)도 같다 — 벽은 계단 없이 잰다.
             if (Absent(ea, eb, opts) || Absent(eb, ea, opts)) continue;
+            if (ignoredPairs.Contains((Math.Min(a, b), Math.Max(a, b)))) continue;
             double fromB = contact.GetValueOrDefault((b, a));
             if (Math.Abs(fromA - fromB) > 1e-3 + 1e-3 * Math.Max(fromA, fromB))
                 audit.Uneven.Add(a < b ? (a, b, fromA, fromB) : (b, a, fromB, fromA));

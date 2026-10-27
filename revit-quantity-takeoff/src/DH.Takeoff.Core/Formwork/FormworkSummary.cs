@@ -102,7 +102,7 @@ public static class FormworkSummary
     /// </summary>
     public static List<FormworkRow> Rows(IReadOnlyList<ElementFormwork> results, FormworkOptions options)
     {
-        var rules = options.Rules;
+        var rules = options.ActiveRules;   // 자동 모드는 사람 값 없이(R66)
         var rows = new Dictionary<(string type, string group), (FormworkRow row, HashSet<string> drafts, HashSet<long> ids, bool part)>();
         var subs = new Dictionary<(string type, string group), Dictionary<string, (FormworkSubRow sub, HashSet<string> drafts, HashSet<long> ids)>>();
         var elevated = new Dictionary<ElementFormwork, bool>();
