@@ -943,8 +943,8 @@ public static partial class FormulaDecomposer
         return sb.ToString();
     }
 
-    // 공제 조각의 크기 열쇠: 숫자만 곱한 조각(«1*2.1»)이면 인수를 값 차례로 늘어놓은 글, 아니면 글자 그대로.
-    private static string SizeKey(string text)
+    // 공제 조각의 크기 열쇠: 숫자만 곱한 조각(«1*2.1»)이면 인수를 값 차례로 늘어놓은 글, 아니면 글자 그대로. ConcreteLabels.Tokens 도 이 열쇠로 묶음을 안다(R65c).
+    internal static string SizeKey(string text)
     {
         var factors = text.Split('*');
         var values = new double[factors.Length];

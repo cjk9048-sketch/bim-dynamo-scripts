@@ -16,12 +16,13 @@ public sealed partial class PlacePartView
     private TextBlock? _rvFormulaText;
     private (string head, string formula, string tail)? _rvFormula;
     private readonly HashSet<int> _rvFormulaMarks = new();   // 지금 칠한 숫자(식 띠의 숫자 차례)
-    // 3D 숫자 딱지 → 식의 숫자 차례(R63d — 판의 항으로 이은 것 · −1 = 모름 → 같은 글로). null = 잇지 않은 딱지(콘크리트 줄).
+    // 3D 숫자 딱지 → 식의 숫자 차례(R63d 거푸집 판의 항 · R65b 콘크리트 부재 식의 숫자 + 줄에서 그 식이 시작하는 차례 · −1 = 모름 → 같은 글로). null = 잇지 않은 딱지.
     private List<int>? _rvLabelTokens;
     // 식의 숫자 상자(칠할 때 다시 짓지 않는다 — 마우스 밑의 것을 바꾸면 들고 남이 되풀이된다). 3D 치수처럼 테두리 상자 — 상자 전체가 마우스를 받는다
     // (R63c — JACK 2026-10-26 «수식 부분도 치수처럼 박스로 · 1 같이 얇은 건 마우스 올리기가 너무 힘들어»).
     private readonly List<(Border box, TextBlock text)> _rvFormulaNumbers = new();
     private int _rvFormulaHover = -1;        // 식 띠에서 마우스를 올린 숫자의 차례(R63)
+    private int _rvFormulaCount = -1;        // 식 띠 끝 « × n »(같은 줄 개수)의 차례 — 치수가 아니라 3D 와 잇지 않는다(R65c) · 없으면 −1
     private static readonly Regex Number = new(@"\d+(?:\.\d+)?", RegexOptions.CultureInvariant);
 
     // ③ 의 아래: 식 띠(줄을 골랐을 때만) + ② 와 같은 색 풀이 · 마우스 안내.
@@ -51,6 +52,7 @@ public sealed partial class PlacePartView
     private void ShowReviewFormula()
     {
         _rvFormula = null;
+        _rvFormulaCount = -1;
         _rvFormulaMarks.Clear();
         HoverFormulaNumber(-1);
         if (_rv != null && _rvPicked >= 0 && _rvPicked < _rvViews.Count && _rvViews[_rvPicked].item is int item && item >= 0
@@ -59,28 +61,25 @@ public sealed partial class PlacePartView
             string head = line.Mark.Length > 0 ? line.Mark + (line.Tag.Length > 0 ? " " + line.Tag : "") + " : " : "";
             string formula = FormworkLabels.Pretty(line.Formula) + (line.Count > 1 ? $" × {line.Count}" : "");
             _rvFormula = (head, formula, $" = {M2(Sheet2D.LineValue(line))}");
+            _rvFormulaCount = line.Count > 1 ? FormworkLabels.NumberPattern.Matches(line.Formula).Count : -1;
         }
         RenderReviewFormula();
     }
 
-    // 그 딱지가 이어진 식의 숫자 차례(−1 = 모름).
-    private int TokenOfLabel(int label) => _rvLabelTokens != null && label >= 0 && label < _rvLabelTokens.Count ? _rvLabelTokens[label] : -1;
-
-    // 3D 숫자에 마우스를 올렸다(−1 = 내림): 식에서 그 숫자(R63d — 판의 항으로 이은 그 자리 하나). 잇지 못한 딱지는 같은 숫자(낱말 단위 — 15.6 의 5.6 은 아님 ·
-    // 각도는 «°» 를 떼고 · 식 딱지(숫자 하나가 아님)는 칠하지 않는다).
+    // 3D 숫자에 마우스를 올렸다(−1 = 내림): 식에서 그 숫자(R63d — 판의 항으로 이은 그 자리 하나). 잇지 못한 딱지는 같은 숫자 가운데 다른 딱지가 잇지 않은 것만
+    // (R65c — FormworkLabels.TokensMarkedBy · 낱말 단위 — 15.6 의 5.6 은 아님 · 각도는 «°» 를 떼고 · 식 딱지(숫자 하나가 아님)와 « × n » 은 칠하지 않는다).
     private void MarkFormulaFromLabel(int label)
     {
         var marks = new HashSet<int>();
         if (label >= 0)
         {
-            int token = TokenOfLabel(label);
-            if (token >= 0) marks.Add(token);
-            else if (_view3d.LabelText(label)?.TrimEnd('°') is { } text)
-                for (int t = 0; t < _rvFormulaNumbers.Count; t++)
-                    if (_rvFormulaNumbers[t].text.Text == text) marks.Add(t);
+            var tokenTexts = _rvFormulaNumbers.Select((n, t) => t == _rvFormulaCount ? "" : n.text.Text).ToList();
+            marks.UnionWith(FormworkLabels.TokensMarkedBy(_rvLabelTokens, LabelTexts(), label, tokenTexts));
         }
         SetFormulaMarks(marks);
     }
+
+    private List<string?> LabelTexts() => Enumerable.Range(0, _view3d.LabelCount).Select(i => _view3d.LabelText(i)).ToList();
 
     private void SetFormulaMarks(HashSet<int> marks)
     {
@@ -92,7 +91,7 @@ public sealed partial class PlacePartView
 
     // 식 띠의 숫자에 마우스를 올렸다(−1 = 내림 — R63 JACK 2026-10-26 «수식창에서 해당 숫자에 마우스를 올렸을 때 해당 치수들이 뷰에서도 바뀌게» ·
     // R63d «숫자가 1 이면 같은 건 전부 다 떠 · 그 1 마다 위치가 있을 텐데»): 식에서 그 숫자 하나 · 3D 에서 그 숫자로 이은 딱지와 선을 주황으로
-    // (잇지 못한 딱지는 같은 글이면 함께 — 콘크리트 줄 · 판 가운데 식 딱지).
+    // (그 숫자에 이은 딱지가 없을 때만 같은 글의 못 이은 딱지 — R65c LabelsOfToken).
     private void HoverFormulaNumber(int token)
     {
         if (token == _rvFormulaHover) return;
@@ -101,17 +100,10 @@ public sealed partial class PlacePartView
         _view3d.MarkLabels(token >= 0 && token < _rvFormulaNumbers.Count ? LabelsOfToken(token) : null);
     }
 
-    private List<int> LabelsOfToken(int token)
-    {
-        string value = _rvFormulaNumbers[token].text.Text;
-        var hits = new List<int>();
-        for (int i = 0; i < _view3d.LabelCount; i++)
-        {
-            int mapped = TokenOfLabel(i);
-            if (mapped >= 0 ? mapped == token : _view3d.LabelText(i)?.TrimEnd('°') == value) hits.Add(i);
-        }
-        return hits;
-    }
+    // 식 숫자 token 에 칠할 3D 딱지(R65c — FormworkLabels.LabelsLitBy): 그 숫자에 이은 딱지만 · 이은 딱지가 없을 때만 같은 글의 못 이은 딱지 · « × n » 은 없음
+    // (JACK 2026-10-27 «a × b 구간의 b 에 대면 그 b 만이어야 하는데 다르게 잡혀»).
+    private List<int> LabelsOfToken(int token) =>
+        token == _rvFormulaCount ? new List<int>() : FormworkLabels.LabelsLitBy(_rvLabelTokens, LabelTexts(), token, _rvFormulaNumbers[token].text.Text);
 
     private void RenderReviewFormula()
     {

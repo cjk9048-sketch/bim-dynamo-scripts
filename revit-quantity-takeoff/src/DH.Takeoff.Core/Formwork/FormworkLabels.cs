@@ -7,7 +7,9 @@ namespace DH.Takeoff.Core.Formwork;
 /// <summary>
 /// ③ 산출서 확인의 3D 길이 숫자(R60 — JACK 2026-10-23 «해당 수식의 길이에 해당하는 부분이 3D 객체에 텍스트로 투영해서 보고 싶어» · 인터뷰 «판의 변에 길이 숫자»):
 /// 판 식이 «a × b» 이면 다듬은 테두리(FormworkPlate.PlanOf)에서 길이가 a 인 변 · b 인 변(서로 꺾인 변)을 찾아 그 변 가운데에 «a» · «b».
-/// 못 찾으면(식이 복잡함 · 넓이만 · 사다리꼴 · 이은 판의 꺾인 테두리) 판 가운데에 그 판의 식 한 줄. 자리는 장면 좌표(모델 − 원점 — 3D 의 겉면과 같은 잣대).
+/// 못 찾으면(식이 복잡함 · 넓이만 · 이은 판의 꺾인 테두리) 판 가운데에 그 판의 식 한 줄. 자리는 장면 좌표(모델 − 원점 — 3D 의 겉면과 같은 잣대).
+/// R65b: 사다리꼴 «(a+b)*0.5*h» 는 나란한 두 변에 a · b · 두 변 사이 선에 h · 삼각형 «w*h*0.5» 는 밑변에 w · 꼭짓점에서 밑변까지 선에 h ·
+/// 평행사변형 «a*b»(b 가 꺾인 변이 아니라 나란한 변 사이 거리)도 그 선에.
 /// </summary>
 public static class FormworkLabels
 {
@@ -25,6 +27,8 @@ public static class FormworkLabels
     {
         var labels = new List<(Vec3, string, Vec3, Vec3)>();
         var regions = FormworkPlate.PlanOf(unit).Regions;
+        if (regions != null && SlopedSpots(unit.Formula, regions.SelectMany(r => r.Outer.Select((p, i) => (a: V(p), b: V(r.Outer[(i + 1) % r.Outer.Count])))).ToList(), origin) is { } sloped)
+            return sloped;
         if (Product(unit.Formula) is { } ab && regions != null)
         {
             var edges = regions.SelectMany(r => r.Outer.Select((p, i) => (a: V(p), b: V(r.Outer[(i + 1) % r.Outer.Count])))).ToList();
@@ -51,6 +55,64 @@ public static class FormworkLabels
         foreach (var p in points) box = box.With(V(p));
         labels.Add((box.Center - origin, Pretty(unit.Formula), box.Center - origin, box.Center - origin));
         return labels;
+    }
+
+    private static readonly Regex TrapezoidText = new(@"^\((\d+(?:\.\d+)?)\+(\d+(?:\.\d+)?)\)\*0\.5\*(\d+(?:\.\d+)?)$", RegexOptions.CultureInvariant);
+    private static readonly Regex TriangleText = new(@"^(\d+(?:\.\d+)?)\*(\d+(?:\.\d+)?)\*0\.5$", RegexOptions.CultureInvariant);
+
+    // 비스듬한 판의 숫자(R65b — FormworkSheet.Sloped 의 한 항 식): 사다리꼴 · 삼각형 · 평행사변형. 변을 못 찾으면 null(부르는 쪽이 다른 길로).
+    private static List<(Vec3 at, string text, Vec3 from, Vec3 to)>? SlopedSpots(string formula, List<(Vec3 a, Vec3 b)> edges, Vec3 origin)
+    {
+        static double Len((Vec3 a, Vec3 b) e) => (e.b - e.a).Length;
+        // 점 p 에서 선(e)으로 내린 발.
+        static Vec3 Foot(Vec3 p, (Vec3 a, Vec3 b) e)
+        {
+            var d = (e.b - e.a).Unit();
+            return e.a + d * (p - e.a).Dot(d);
+        }
+        (Vec3, string, Vec3, Vec3) On((Vec3 a, Vec3 b) e, string text) => ((e.a + e.b) * 0.5 - origin, text, e.a - origin, e.b - origin);
+        (Vec3, string, Vec3, Vec3) Across(Vec3 p, Vec3 q, string text) => ((p + q) * 0.5 - origin, text, p - origin, q - origin);
+        // 길이가 len 인 변 · 나란한 변(거리 h)의 짝: 아래 · 앞 변부터.
+        ((Vec3 a, Vec3 b) first, (Vec3 a, Vec3 b) second)? Parallel(double a, double b, double h)
+        {
+            foreach (var e1 in edges.Where(e => Math.Abs(Len(e) - a) <= Tolerance).OrderBy(e => Mid(e).Z).ThenBy(e => Mid(e).X).ThenBy(e => Mid(e).Y))
+                foreach (var e2 in edges.Where(e => !e.Equals(e1) && (b < 0 || Math.Abs(Len(e) - b) <= Tolerance)))
+                {
+                    if (Math.Abs((e1.b - e1.a).Unit().Dot((e2.b - e2.a).Unit())) < 0.999) continue;
+                    if (Math.Abs((Foot(Mid(e1), e2) - Mid(e1)).Length - h) > Tolerance) continue;
+                    return (e1, e2);
+                }
+            return null;
+        }
+        if (TrapezoidText.Match(formula) is { Success: true } t)
+        {
+            string ta = t.Groups[1].Value, tb = t.Groups[2].Value, th = t.Groups[3].Value;
+            if (Parallel(Parse(ta), Parse(tb), Parse(th)) is not { } pair) return null;
+            // 높이 선: 짧은 변의 가운데에서 긴 변으로.
+            var m = Mid(pair.first);
+            return new() { On(pair.first, ta), On(pair.second, tb), Across(m, Foot(m, pair.second), th) };
+        }
+        if (TriangleText.Match(formula) is { Success: true } w)
+        {
+            string tw = w.Groups[1].Value, th = w.Groups[2].Value;
+            double hh = Parse(th);
+            foreach (var e in edges.Where(e => Math.Abs(Len(e) - Parse(tw)) <= Tolerance).OrderBy(e => Mid(e).Z).ThenBy(e => Mid(e).X).ThenBy(e => Mid(e).Y))
+            {
+                var apex = edges.Select(x => x.a).Where(p => (p - e.a).Length > Tolerance && (p - e.b).Length > Tolerance)
+                                .Select(p => (Vec3?)p).FirstOrDefault(p => Math.Abs((Foot(p!.Value, e) - p.Value).Length - hh) <= Tolerance);
+                if (apex is { } top) return new() { On(e, tw), Across(top, Foot(top, e), th) };
+            }
+            return null;
+        }
+        // 평행사변형 «a*b»: 길이 a 인 변과 나란한 변 사이 거리가 b(꺾인 변의 길이가 b 가 아님 — 직각 판은 Spots 의 a × b 길이 그대로).
+        if (Product(formula) is { } ab && !edges.Any(e => Math.Abs(Len(e) - ab.b) <= Tolerance) && Parallel(ab.a, -1, ab.b) is { } pg)
+        {
+            var m = Mid(pg.first);
+            return new() { On(pg.first, ab.textA), Across(m, Foot(m, pg.second), ab.textB) };
+        }
+        return null;
+
+        static double Parse(string s) => double.Parse(s, CultureInfo.InvariantCulture);
     }
 
     /// <summary>식의 숫자(식 글의 차례 — ③ 아래 식 띠 · 숫자 딱지 잇기가 같은 셈).</summary>
@@ -122,8 +184,50 @@ public static class FormworkLabels
             if (numbers[a] == spotTexts[0]) result[0] = a;
             if (numbers[b] == spotTexts[1]) result[1] = b;
         }
+        else if (spotTexts.Count == 3 && mono.Count >= 3 && k + 1 < monos.Count && monos[k + 1].Count >= 3)
+        {
+            // 사다리꼴 «(a+b)*0.5*h»(R65b — 설치 전 검토 중간 4): 펼치면 [a, 0.5, h] · [b, 0.5, h] — a = 이 항의 첫 수 · b = 다음 항의 첫 수 · h = 이 항의 셋째 수.
+            int a = mono[0], b = monos[k + 1][0], h = mono[2];
+            if (numbers[a] == spotTexts[0]) result[0] = a;
+            if (numbers[b] == spotTexts[1]) result[1] = b;
+            if (numbers[h] == spotTexts[2]) result[2] = h;
+        }
         else if (spotTexts.Count == 1 && mono.Count == 1 && numbers[mono[0]] == spotTexts[0]) result[0] = mono[0];
         return result;
+    }
+
+    /// <summary>
+    /// 식 숫자 token(글 tokenText)에 마우스를 올렸을 때 칠할 3D 딱지(R65c — JACK 2026-10-27 «같은 숫자인데 다 잡힌 것도 아니고 안 잡힌 것도 있어»): 그 숫자에 이은 딱지만 ·
+    /// 그 숫자에 이은 딱지가 하나도 없을 때만 못 이은(−1) 같은 글의 딱지. 못 이은 딱지가 이미 다른 딱지가 이은 숫자를 따라 켜지지 않는다.
+    /// labelTokens 가 없으면(잇지 않은 판) 같은 글이면 모두(전과 같음). 딱지 글의 «°» 는 뗀다.
+    /// </summary>
+    public static List<int> LabelsLitBy(IReadOnlyList<int>? labelTokens, IReadOnlyList<string?> labelTexts, int token, string tokenText)
+    {
+        var hits = new List<int>();
+        if (labelTokens != null)
+            for (int i = 0; i < labelTexts.Count; i++)
+                if (i < labelTokens.Count && labelTokens[i] == token) hits.Add(i);
+        if (hits.Count > 0) return hits;
+        for (int i = 0; i < labelTexts.Count; i++)
+            if ((labelTokens == null || i >= labelTokens.Count || labelTokens[i] < 0) && labelTexts[i]?.TrimEnd('°') == tokenText) hits.Add(i);
+        return hits;
+    }
+
+    /// <summary>
+    /// 3D 딱지 label 에 마우스를 올렸을 때 칠할 식 숫자(R65c): 이은 숫자 하나 · 못 이은 딱지는 같은 글 가운데 이은 딱지가 없는 숫자만(다른 딱지 몫의 숫자는 칠하지 않는다).
+    /// labelTokens 가 없으면 같은 글이면 모두(전과 같음).
+    /// </summary>
+    public static List<int> TokensMarkedBy(IReadOnlyList<int>? labelTokens, IReadOnlyList<string?> labelTexts, int label, IReadOnlyList<string> tokenTexts)
+    {
+        var marks = new List<int>();
+        if (label < 0 || label >= labelTexts.Count) return marks;
+        if (labelTokens != null && label < labelTokens.Count && labelTokens[label] >= 0) { marks.Add(labelTokens[label]); return marks; }
+        string? text = labelTexts[label]?.TrimEnd('°');
+        if (text == null) return marks;
+        var owned = labelTokens == null ? new HashSet<int>() : labelTokens.Where(t => t >= 0).ToHashSet();
+        for (int t = 0; t < tokenTexts.Count; t++)
+            if (tokenTexts[t] == text && !owned.Contains(t)) marks.Add(t);
+        return marks;
     }
 
     /// <summary>식을 화면 글로: «*» → « × » · «+» → « ＋ » · «-» → « − »(2D 꼴 — 계획 검토 L10).</summary>
