@@ -230,7 +230,8 @@ public static class CalcSheet
         foreach (var (section, sumRow, value) in written.Sections) sums[section] = (sumRow, value);
 
         // ── 수량집계표 · 주요자재집계표 ──
-        var concreteRows = concrete.Select(c => (c.plain, c.spec, c.pour, sums.TryGetValue(c.section, out var s) ? s : (0, 0), c.bim)).ToList();
+        var concreteRows = concrete.Select(c => new ConcreteSum(c.plain, c.spec, c.pour, sums.TryGetValue(c.section, out var s) ? s : (0, 0), c.bim,
+            written.Classes.Where(k => ReferenceEquals(k.section, c.section)).Select(k => (k.code, k.row, k.value, c.classBim[k.code])).ToList())).ToList();
         WriteSummary(summary, calc, title, concreteRows, forms.Select(f => (f.work, f.spec, sums.TryGetValue(f.section, out var s) ? s : (0, 0), f.bim)).ToList());
         WriteMaterial(material, calc, concreteRows);
 
@@ -302,11 +303,11 @@ public static class CalcSheet
     public static List<ItemInfo> Items(IReadOnlyList<CalcRow> rows, Formwork.FormworkSheetData? formwork = null) => Compose(rows, formwork, out _, out _);
 
     private static List<ItemInfo> Compose(IReadOnlyList<CalcRow> rows, Formwork.FormworkSheetData? formwork,
-        out List<(Sheet2D.Section section, bool plain, string spec, string pour, double bim)> concrete,
+        out List<(Sheet2D.Section section, bool plain, string spec, string pour, double bim, double[] classBim)> concrete,
         out List<(Sheet2D.Section section, string work, string spec, double bim)> forms)
     {
         var items = new List<ItemInfo>();
-        concrete = new List<(Sheet2D.Section section, bool plain, string spec, string pour, double bim)>();
+        concrete = new List<(Sheet2D.Section section, bool plain, string spec, string pour, double bim, double[] classBim)>();
         forms = new List<(Sheet2D.Section section, string work, string spec, double bim)>();
         int no = 0;
         foreach (var sec in rows.GroupBy(r => (r.Work, r.Spec, r.Pour)))
@@ -320,24 +321,38 @@ public static class CalcSheet
             var parts = sec.GroupBy(r => r.PartName.Length > 0 ? r.PartName : r.Part).ToList();
             // 부위 번호: 2D 의 무근 작은 부속 절(관보호공 · 받침 · 발디딤판 …)은 «ㅇ», 그 밖은 «1)» · «2)».
             bool bullets = plain && parts.All(p => PartCatalog.GroupOf(p.Key) != PartCatalog.Fill);
-            int partNo = 0;
+            int partNo = 0, group = 0;
+            var classBim = new double[4];   // 규모 구분마다 BIM 체적(코드 1 ~ 3 — 수량집계표 검산)
             foreach (var part in parts)
             {
                 partNo++;
-                items.Add(new(new Sheet2D.Part(bullets ? "ㅇ" : $"{partNo})", part.Key, ThicknessNotes(part.ToList())), Array.Empty<long>(), null));
                 var zones = part.GroupBy(r => r.Zone).ToList();
                 bool subs = zones.Count >= 2 && !part.First().NoSub;
-                foreach (var zone in zones)
+                // 줄을 먼저 지어 규모 묶음(R65 — JACK 2026-10-27 고름 «위치 + 부위 묶음마다»: 위치 작은 제목이 보이면 위치마다 · 아니면 부위 하나)의 값을 잰다.
+                var built = zones.Select(zone => (zone, lines: ZoneLines(zone))).ToList();
+                int partCode = Sheet2D.ClassOf(built.Sum(b => b.lines.Sum(l => Sheet2D.LineValue(l.line))));
+                var notes = ThicknessNotes(part.ToList());
+                if (!subs) notes.Add(": " + Sheet2D.ClassName(partCode));
+                items.Add(new(new Sheet2D.Part(bullets ? "ㅇ" : $"{partNo})", part.Key, notes), Array.Empty<long>(), null));
+                if (!subs)
                 {
-                    if (subs) items.Add(new(new Sheet2D.Sub(zone.Key.Length > 0 ? zone.Key : "위치 없음"), Array.Empty<long>(), null));
-                    foreach (var r in zone.Where(r => !(r.OneLine && !r.Marked)))
-                        items.Add(new(new Sheet2D.Line(r.Shown.Length > 0 ? r.Shown : r.Mark, "", r.Formula, r.Count, r.Note), r.Ids, null));
-                    foreach (var (formula, lineNote, names, ids) in OneLineFormulas(zone.Where(r => r.OneLine && !r.Marked).ToList()))
-                        items.Add(new(new Sheet2D.Line(names, "", formula, 1, lineNote), ids, null));
+                    group++;
+                    classBim[partCode] += part.Sum(r => r.Bim);
+                }
+                foreach (var (zone, lines) in built)
+                {
+                    if (subs)
+                    {
+                        group++;
+                        int code = Sheet2D.ClassOf(lines.Sum(l => Sheet2D.LineValue(l.line)));
+                        classBim[code] += zone.Sum(r => r.Bim);
+                        items.Add(new(new Sheet2D.Sub((zone.Key.Length > 0 ? zone.Key : "위치 없음") + " : " + Sheet2D.ClassName(code)), Array.Empty<long>(), null));
+                    }
+                    foreach (var (line, ids) in lines) items.Add(new(line with { Group = group }, ids, null));
                 }
             }
-            items.Add(new(new Sheet2D.Total(), Array.Empty<long>(), null));
-            concrete.Add((section, plain, spec, pour, sec.Sum(r => r.Bim)));
+            items.Add(new(new Sheet2D.Total(Classes: true), Array.Empty<long>(), null));
+            concrete.Add((section, plain, spec, pour, sec.Sum(r => r.Bim), classBim));
         }
 
         if (formwork != null)
@@ -367,6 +382,17 @@ public static class CalcSheet
             }
         }
         return items;
+    }
+
+    // 위치 하나의 산출 줄(부호 줄 → 한 줄로 적는 부위의 줄) · 줄마다 든 부재 Id.
+    private static List<(Sheet2D.Line line, IReadOnlyList<long> ids)> ZoneLines(IEnumerable<CalcRow> zone)
+    {
+        var lines = new List<(Sheet2D.Line, IReadOnlyList<long>)>();
+        foreach (var r in zone.Where(r => !(r.OneLine && !r.Marked)))
+            lines.Add((new Sheet2D.Line(r.Shown.Length > 0 ? r.Shown : r.Mark, "", r.Formula, r.Count, r.Note), r.Ids));
+        foreach (var (formula, lineNote, names, ids) in OneLineFormulas(zone.Where(r => r.OneLine && !r.Marked).ToList()))
+            lines.Add((new Sheet2D.Line(names, "", formula, 1, lineNote), ids));
+        return lines;
     }
 
     // 부호 없이 한 줄로 적는 부위(R49 — 2D 보 · 기둥 · 계단 …): 줄마다 «식 × n» 을 « + »로 이어 한 식(숫자가 많으면 나눔). 비고 = 부재 수 · Id.
@@ -435,7 +461,8 @@ public static class CalcSheet
     private static readonly XlsxCellStyle Side = Sheet2D.Text with { Align = XlsxAlign.Center };   // 인쇄 밖(BIM · 차이)
 
     // 열 너비(2D 실측): 수량집계표 A 13.16 · B 23.33 · C 12.16 · D 16.33 · E 9 · F 22.66 · G 22.16 — 주요자재집계표는 B 20.66 · C 18.33(revit-verify M1).
-    private static readonly double[] SummaryWidths = { 13.1640625, 23.33203125, 12.1640625, 16.33203125, 9, 22.6640625, 22.1640625 };
+    // R65: 수량집계표 C 는 «철근,100㎥~200㎥»(2D B 칸 글)가 들게 17.66 으로 넓힘.
+    private static readonly double[] SummaryWidths = { 13.1640625, 23.33203125, 17.6640625, 16.33203125, 9, 22.6640625, 22.1640625 };
     private static readonly double[] MaterialWidths = { 13.1640625, 20.6640625, 18.33203125, 16.33203125, 9, 22.6640625, 22.1640625 };
 
     private static void SummaryFrame(XlsxSheet sheet, string header, int scale, string chapter, double[] widths)
@@ -493,8 +520,7 @@ public static class CalcSheet
         sheet.Formula(r, 10, $"IF(H{r}=0,\"\",(F{r}-H{r})/H{r})", null, Side with { Format = "0.00%" });
     }
 
-    private static void WriteSummary(XlsxSheet sheet, XlsxSheet calc, string title,
-        List<(bool plain, string spec, string pour, (int row, double value) sum, double bim)> concrete,
+    private static void WriteSummary(XlsxSheet sheet, XlsxSheet calc, string title, List<ConcreteSum> concrete,
         List<(string work, string spec, (int row, double value) sum, double bim)> forms)
     {
         SummaryFrame(sheet, "&C&\"돋움,굵게\"&16&U구조물공 수량 집계표 (&P)", 81, "구조물공", SummaryWidths);
@@ -503,7 +529,7 @@ public static class CalcSheet
         sheet.Text(3, 9, "차이", Side with { Bold = true });
         sheet.Text(3, 10, "차이율", Side with { Bold = true });
         int r = 4;
-        r = WriteConcrete(sheet, calc, r, concrete, check: true);
+        r = WriteConcrete(sheet, calc, r, concrete, check: true, classes: true);
         // 거푸집: «합판거푸집» 묶음(합판 N회) · «유 로 폼» · 모르는 종류는 «거푸집».
         foreach (var group in forms.GroupBy(f => f.work))
         {
@@ -523,7 +549,10 @@ public static class CalcSheet
 
     private const string FormworkEuro = Formwork.FormworkTable.Euro;
 
-    private static void WriteMaterial(XlsxSheet sheet, XlsxSheet calc, List<(bool plain, string spec, string pour, (int row, double value) sum, double bim)> concrete)
+    // 콘크리트 절 하나의 집계(수량집계표 · 자재집계표): 무근 · 규격 · 타설 · 계 칸 · BIM · 규모 구분 줄(코드 · 행 · 값 · BIM — R65).
+    private sealed record ConcreteSum(bool plain, string spec, string pour, (int row, double value) sum, double bim, List<(int code, int row, double value, double bim)> classes);
+
+    private static void WriteMaterial(XlsxSheet sheet, XlsxSheet calc, List<ConcreteSum> concrete)
     {
         SummaryFrame(sheet, "&C&\"돋움,굵게\"&16&U구 조 물 자 재 집 계 표", 90, "구조물공", MaterialWidths);
         int r = WriteConcrete(sheet, calc, 4, concrete, check: false, title: "레 미 콘");
@@ -532,8 +561,8 @@ public static class CalcSheet
     }
 
     // 레미콘 줄: A:B «레 미 콘 타 설\n(펌프차붐 타설)»(타설 방법마다) · C 무근/철근(같으면 세로 병합) · D 규격 · E ㎥ · F 산출근거의 «계».
-    private static int WriteConcrete(XlsxSheet sheet, XlsxSheet calc, int r, List<(bool plain, string spec, string pour, (int row, double value) sum, double bim)> concrete,
-                                     bool check, string? title = null)
+    // classes(R65 — 수량집계표): 절마다 규모 구분 줄(0 이 아닌 것 — 2D «철근,100㎥ 이하») + «철근,계» · C 는 줄마다(병합 없음). 자재집계표는 계만.
+    private static int WriteConcrete(XlsxSheet sheet, XlsxSheet calc, int r, List<ConcreteSum> concrete, bool check, string? title = null, bool classes = false)
     {
         foreach (var pour in concrete.GroupBy(c => c.pour))
         {
@@ -541,13 +570,27 @@ public static class CalcSheet
             foreach (var work in pour.GroupBy(c => c.plain))
             {
                 int workFirst = r;
+                string name = work.Key ? "무근" : "철근";
                 foreach (var c in work)
                 {
-                    SummaryRow(sheet, r, r == workFirst ? (c.plain ? "무근" : "철근") : null, c.spec, false, "㎥", calc.FullRef(c.sum.row, Sheet2D.ColZ), c.sum.value);
+                    if (classes)
+                    {
+                        foreach (var k in c.classes.Where(k => Math.Abs(k.value) > 1e-9))
+                        {
+                            SummaryRow(sheet, r, name + "," + Sheet2D.ClassName(k.code), c.spec, false, "㎥", calc.FullRef(k.row, Sheet2D.ColZ), k.value);
+                            if (check) Check(sheet, r, k.bim);
+                            r++;
+                        }
+                        SummaryRow(sheet, r, name + ",계", c.spec, false, "㎥", calc.FullRef(c.sum.row, Sheet2D.ColZ), c.sum.value);
+                        if (check) Check(sheet, r, c.bim);
+                        r++;
+                        continue;
+                    }
+                    SummaryRow(sheet, r, r == workFirst ? name : null, c.spec, false, "㎥", calc.FullRef(c.sum.row, Sheet2D.ColZ), c.sum.value);
                     if (check) Check(sheet, r, c.bim);
                     r++;
                 }
-                if (r - 1 > workFirst) sheet.Merge(workFirst, 3, r - 1, 3);
+                if (!classes && r - 1 > workFirst) sheet.Merge(workFirst, 3, r - 1, 3);
             }
             string label = title ?? (pour.Key == PartCatalog.DefaultPour ? "레 미 콘 타 설\n(펌프차붐 타설)" : $"레 미 콘 타 설\n({pour.Key})");
             Group(sheet, first, r - 1, label);

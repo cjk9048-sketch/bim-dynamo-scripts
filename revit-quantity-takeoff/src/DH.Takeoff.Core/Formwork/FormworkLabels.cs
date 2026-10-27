@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 using DH.Takeoff.Core.View3D;
 
 namespace DH.Takeoff.Core.Formwork;
@@ -50,6 +51,79 @@ public static class FormworkLabels
         foreach (var p in points) box = box.With(V(p));
         labels.Add((box.Center - origin, Pretty(unit.Formula), box.Center - origin, box.Center - origin));
         return labels;
+    }
+
+    /// <summary>식의 숫자(식 글의 차례 — ③ 아래 식 띠 · 숫자 딱지 잇기가 같은 셈).</summary>
+    public static readonly Regex NumberPattern = new(@"\d+(?:\.\d+)?", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// 식을 풀어 쓴 항들(R63d): 항마다 든 숫자의 차례(식 글의 숫자 차례 — 0부터). «(1+1)*2*1» → [0,2,3] · [1,2,3] · «(a*3+b)*c» → [a,3,c] · [b,c].
+    /// 더하기 · 빼기는 항을 가르고 곱하기 · 나누기 · 괄호는 곱한다. 못 읽는 글(높이 구간 이름 · 너무 많이 풀림)이면 null.
+    /// </summary>
+    public static List<List<int>>? Monomials(string formula)
+    {
+        int at = 0, number = 0;
+        bool ok = true;
+        void Skip() { while (at < formula.Length && formula[at] == ' ') at++; }
+        bool At(params char[] cs) { Skip(); return at < formula.Length && cs.Contains(formula[at]); }
+        List<List<int>> Expr()
+        {
+            var terms = Term();
+            while (ok && At('+', '-')) { at++; terms.AddRange(Term()); }
+            return terms;
+        }
+        List<List<int>> Term()
+        {
+            var result = Factor();
+            while (ok && At('*', '/'))
+            {
+                at++;
+                var next = Factor();
+                result = result.SelectMany(a => next.Select(b => a.Concat(b).ToList())).ToList();
+                if (result.Count > 2000) ok = false;
+            }
+            return result;
+        }
+        List<List<int>> Factor()
+        {
+            if (At('('))
+            {
+                at++;
+                var inner = Expr();
+                if (At(')')) at++;
+                else ok = false;
+                return inner;
+            }
+            Skip();
+            var m = NumberPattern.Match(formula, at);
+            if (!m.Success || m.Index != at) { ok = false; return new List<List<int>> { new() }; }
+            at += m.Length;
+            return new List<List<int>> { new() { number++ } };
+        }
+        var all = Expr();
+        Skip();
+        return ok && at == formula.Length && number == NumberPattern.Matches(formula).Count ? all : null;
+    }
+
+    /// <summary>
+    /// 판의 숫자 딱지(Spots 의 차례)마다 줄의 식에서 그 숫자의 차례(식 글의 숫자 — 0부터 · 모르면 −1 — R63d JACK 2026-10-26 «숫자가 1 이면 같은 건 전부 다 떠 ·
+    /// 그 1 마다 위치가 있을 텐데»). 줄을 지을 때 적어 둔 판의 항(FormworkLine.TermOf)으로 고른다: 항의 첫 숫자 = 판의 첫 수(a) · 판의 둘째 수(b) = 둘레 · 공통 수로 묶은 줄은
+    /// 항의 끝 숫자(«(a+b)*2*h» · «(a1*n1+a2)*b»), 그 밖은 항의 둘째 숫자(«a*b» · «a*b*n» 칸). 판 가운데 식 딱지는 숫자 하나인 항일 때 그 숫자. 글이 맞지 않으면 −1.
+    /// </summary>
+    public static int[] SpotTokens(FormworkLine line, FormworkUnit unit, IReadOnlyList<string> spotTexts)
+    {
+        var result = Enumerable.Repeat(-1, spotTexts.Count).ToArray();
+        if (!line.TermOf.TryGetValue(unit, out int k) || Monomials(line.Formula) is not { } monos || k < 0 || k >= monos.Count) return result;
+        var mono = monos[k];
+        var numbers = NumberPattern.Matches(line.Formula).Select(m => m.Value).ToList();
+        if (spotTexts.Count == 2 && mono.Count >= 2)
+        {
+            int a = mono[0], b = line.Faces > 0 || line.Terms > 0 ? mono[^1] : mono[1];
+            if (numbers[a] == spotTexts[0]) result[0] = a;
+            if (numbers[b] == spotTexts[1]) result[1] = b;
+        }
+        else if (spotTexts.Count == 1 && mono.Count == 1 && numbers[mono[0]] == spotTexts[0]) result[0] = mono[0];
+        return result;
     }
 
     /// <summary>식을 화면 글로: «*» → « × » · «+» → « ＋ » · «-» → « − »(2D 꼴 — 계획 검토 L10).</summary>

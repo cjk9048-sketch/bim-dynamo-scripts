@@ -31,7 +31,7 @@ public static class PartCatalog
     public const string All = "전체";
 
     /// <summary>대표 목록의 판 — 대표 목록에 이름을 새로 넣을 때 올리고 AddedIn 에 그 이름을 적는다(저장된 목록에 한 번 보태게 — R47).</summary>
-    public const int Revision = 1;
+    public const int Revision = 2;   // 2 = R65 «나중에 침» 처음 값에서 헌치 · 중간슬래브를 뺌(저장된 목록은 ZonePlan.FromJson 이 옮겨 읽는다 — MigrateLater)
 
     /// <summary>대표 목록에 새로 든 이름 → 든 판. 판 0 = R46 까지의 목록.</summary>
     public static readonly IReadOnlyDictionary<string, int> AddedIn = new Dictionary<string, int>(StringComparer.Ordinal)
@@ -287,8 +287,8 @@ public static class PartCatalog
 
     /// <summary>
     /// 거푸집에서 나중에 치는 부위인가: 사용자가 정한 값, 없으면 처음 값 — 묶음이 받침·PAD 인 것(JACK 2026-10-15 — 출입구 디딤판 · 받침 · PAD · 환기구 · 관 보호공)과
-    /// 헌치 묶음 · 이름에 중간슬래브 · 트라프가 든 것(R46 — JACK 2026-10-16 «수량산출서대로»: 명장 여과지 2D 산출서는 벽을 슬래브 사이 높이 통째로 세고
-    /// 붙는 중간슬래브(MS) · 칸 안 경사벽(W17 · W21) · 헌치 자리를 빼지 않는다). 턱 · 계단 · 월류벽은 처음에는 구조체와 같이 본다(목록에서 부위마다 켤 수 있다).
+    /// 이름에 트라프가 든 것. 헌치 · 중간슬래브는 R65 부터 구조체와 함께 친다(JACK 2026-10-27 «녹촌 2D 처럼» — 전(R46)에는 명장 2D 대로 나중에 침).
+    /// 턱 · 계단 · 월류벽도 처음에는 구조체와 같이 본다(목록에서 부위마다 켤 수 있다).
     /// </summary>
     public static bool IsLater(ZonePart p) => p.Later ?? DefaultLater(p);
 
@@ -342,8 +342,8 @@ public static class PartCatalog
     /// «모든 양식은 녹촌 기준»). ① 에서 사람이 넣은 규격(«25-30-15» 등)은 그대로 쓴다.
     /// </summary>
     /// <param name="group">그 부위가 목록에서 든 묶음(없으면 이름으로 짐작).</param>
-    public static string DefaultSpec(string part, bool plain, string? group = null) =>
-        !plain ? "25-30-150" : (string.IsNullOrEmpty(group) ? GroupOf(part) : group) == Fill ? "25-18-150" : "25-21-150";
+    /// <remarks>R65(JACK 2026-10-27 «집계 양식» — 녹촌 2D 는 무근 모두 «25-18-150»): 무근은 묶음과 상관없이 25-18-150(전: 채움만 25-18 · 그 밖 25-21).</remarks>
+    public static string DefaultSpec(string part, bool plain, string? group = null) => !plain ? "25-30-150" : "25-18-150";
 
     /// <summary>
     /// 2D 산출근거가 부호 없이 부위 전체를 한 줄로 적는 부위인가(명장 2D: 보 · 기둥 · 계단 · 구조물턱 · 맨홀턱 · DRY AREA · 드레인피트 · 받침보 · 관보호공 ·
@@ -359,10 +359,38 @@ public static class PartCatalog
 
     // 헌치는 묶음으로만 본다(«헌치부 벽체»처럼 헌치 낱말이 든 벽 부위는 켜지 않는다 — core-verify R46 L). 중간슬래브 · 트라프는 이름 낱말로
     // («밸브실 중간슬래브» · «트라프 벽» 같은 사용자 이름도).
-    private static readonly string[] LaterWords = { "중간슬래브", "중간 슬래브", "중간스라브", "중간 스라브", "트라프" };
+    // R65(JACK 2026-10-27 «녹촌 2D 처럼 헌치 · 중간슬래브 자리 빼기»): 헌치 · 중간슬래브는 벽 · 슬래브와 함께 친다 — 처음 값에서 뺐다(녹촌 2D 는 벽 안쪽 면 높이에서 바닥 헌치 · 상부 헌치 자리를 뺀다).
+    // 트라프는 그대로(정하지 않음).
+    private static readonly string[] LaterWords = { "트라프" };
+    private static readonly string[] LegacyLaterWords = { "중간슬래브", "중간 슬래브", "중간스라브", "중간 스라브", "트라프" };
 
     private static bool DefaultLater(ZonePart p) =>
-        (string.IsNullOrEmpty(p.Group) ? GroupOf(p.Name) : p.Group) is Small or Haunch || LaterWords.Any(w => p.Name.Contains(w, StringComparison.Ordinal));
+        (string.IsNullOrEmpty(p.Group) ? GroupOf(p.Name) : p.Group) is Small || LaterWords.Any(w => p.Name.Contains(w, StringComparison.Ordinal));
+
+    // 대표 목록 판 1 까지(R46 ~ R64)의 처음 값 — 옮겨 읽기(MigrateLater)만 쓴다.
+    private static bool LegacyDefaultLater(ZonePart p) =>
+        (string.IsNullOrEmpty(p.Group) ? GroupOf(p.Name) : p.Group) is Small or Haunch || LegacyLaterWords.Any(w => p.Name.Contains(w, StringComparison.Ordinal));
+
+    /// <summary>
+    /// 저장된 목록의 «나중에 침»을 지금 처음 값으로 옮긴다(R65 — 판 1 이하로 적은 목록만): 옛 처음 값이 켬 · 새 처음 값이 끔인 부위(헌치 · 중간슬래브)에 적힌 true 는
+    /// 지움(새 처음 값 = 함께 침) · 새 처음 값과 같은 값도 지움(처음 값을 따르게). 옮긴 부위 이름(일지)을 돌려준다. 판 번호는 적을 때 올린다(ZonePlan.ToJson — critic R65 낮음).
+    /// </summary>
+    public static List<string> MigrateLater(IEnumerable<ZonePart> parts, int savedCatalog)
+    {
+        var moved = new List<string>();
+        if (savedCatalog >= 2) return moved;
+        foreach (var p in parts)
+        {
+            if (p.Later is not { } stored) continue;
+            bool now = DefaultLater(p);
+            if ((stored && LegacyDefaultLater(p) && !now) || stored == now)
+            {
+                p.Later = null;
+                moved.Add(p.Name);
+            }
+        }
+        return moved;
+    }
 
     /// <summary>«나중에 침»의 처음 값(사람이 켜고 끄기 전) — 겹친 자리 순위가 «사람이 처음 값과 다르게 켠 나중 부위»를 가르는 데 쓴다(DeductRank.Of).</summary>
     internal static bool DefaultLaterOf(ZonePart p) => DefaultLater(p);

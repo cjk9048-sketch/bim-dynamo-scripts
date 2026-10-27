@@ -204,8 +204,44 @@ public sealed class FormworkBoard
     public bool SetRule(string type, string group, string choice)
     {
         string next = (choice ?? "").Trim();
-        if (RuleOf(type, group) == next) return false;
+        // 줄에서 고르면 그 줄의 판 전부 — 아래 줄 값도 지운다(R64). 줄 값이 같아도 아래 줄 값이 있으면 지운다(«자동» · ↺ 가 듣게 — critic R64 M2).
+        var subs = Rules.SubsOf(type, group);
+        if (RuleOf(type, group) == next && subs.Count == 0) return false;
         Rules.Set(type, group, next);
+        foreach (var (sub, _) in subs) Rules.Set(type, FormworkRules.SubGroup(group, sub), "");
+        FormworkAnalyzer.Reclassify(Results, Options);
+        Refresh();
+        return true;
+    }
+
+    /// <summary>그 줄의 그 아래 줄 값("" = 줄 값을 따름 — R64).</summary>
+    public string SubRuleOf(string type, string group, string sub) => Rules.LookupSub(type, group, sub) ?? "";
+
+    /// <summary>
+    /// 아래 줄 하나의 종류를 바꾼다(R64 — choice "" = 줄 값 · 없으면 자동). 그 아래 줄만 적고 줄 값은 그대로 둔다(나머지 아래 줄 · 옮겨 온 판 · 새로 생긴 아래 줄의 기본값 —
+    /// critic R64 H1). 바뀌었으면 true.
+    /// </summary>
+    public bool SetSubRule(string type, string group, string sub, string choice)
+    {
+        string next = (choice ?? "").Trim();
+        if (sub.Length == 0 || SubRuleOf(type, group, sub) == next) return false;
+        Rules.Set(type, FormworkRules.SubGroup(group, sub), next);
+        FormworkAnalyzer.Reclassify(Results, Options);
+        Refresh();
+        return true;
+    }
+
+    /// <summary>줄 하나의 값 전부(줄 값 + 아래 줄 값 — 되돌리기 스냅숏 · R64).</summary>
+    public (string rule, List<(string sub, string item)> subs) RowRulesOf(string type, string group) => (RuleOf(type, group), Rules.SubsOf(type, group));
+
+    /// <summary>줄 하나의 값 전부를 그 스냅숏으로 다시 쓴다(되돌리기). 바뀌었으면 true.</summary>
+    public bool SetRowRules(string type, string group, (string rule, List<(string sub, string item)> subs) state)
+    {
+        var now = RowRulesOf(type, group);
+        if (now.rule == state.rule && now.subs.SequenceEqual(state.subs)) return false;
+        Rules.Set(type, group, state.rule);
+        foreach (var (sub, _) in now.subs) Rules.Set(type, FormworkRules.SubGroup(group, sub), "");
+        foreach (var (sub, item) in state.subs) Rules.Set(type, FormworkRules.SubGroup(group, sub), item);
         FormworkAnalyzer.Reclassify(Results, Options);
         Refresh();
         return true;
@@ -473,26 +509,35 @@ public sealed class FormworkBoard
     /// 그 줄에 든 덩이마다 그 줄 몫(InRow · AreaIn 과 같은 잣대): whole = 덩이의 조각이 모두 그 줄 · 아니면 그 줄 조각만(JACK 2026-10-23 «상부슬래브를 찍었는데 벽체도 같이» —
     /// 벽 + 슬래브 옆을 이은 판은 그 줄 몫만 덧그린다 · 산출서 줄의 PiecesOfLine 과 같은 꼴).
     /// </summary>
-    public List<(int piece, bool whole, List<FacePatch> patches)> PiecesOfRow(string type, string group)
+    /// <param name="sub">아래 줄(R64 — null = 줄 전부): 그 아래 줄 열쇠인 조각만(옮겨 온 판은 아래 줄에 들지 않는다 — critic R64 M5).</param>
+    public List<(int piece, bool whole, List<FacePatch> patches)> PiecesOfRow(string type, string group, string? sub = null)
     {
         var found = new List<(int, bool, List<FacePatch>)>();
         for (int i = 0; i < Pieces.Count; i++)
         {
             var piece = Pieces[i];
             if (piece.Dropped) continue;
-            var mine = piece.Members.Where(m => m.Patch.KindLead.Length == 0 && FormworkSummary.RowOf(m) == (type, group)).Select(m => m.Patch).ToList();
+            var mine = piece.Members.Where(m => InRowMember(m, type, group, sub)).Select(m => m.Patch).ToList();
             if (mine.Count > 0) found.Add((i, mine.Count == piece.Members.Count, mine));
         }
         return found;
     }
 
-    /// <summary>그 덩이가 그 줄에 드는가(PiecesOf 와 같은 잣대 — 화면이 덩이마다 묻는다).</summary>
-    public bool InRow(FormworkPiece piece, string type, string group) =>
-        !piece.Dropped && piece.Members.Any(m => m.Patch.KindLead.Length == 0 && FormworkSummary.RowOf(m) == (type, group));   // 판 종류 조각은 줄 밖(R57 P3 — 계획 검토 L8)
+    // 조각이 그 줄(· 아래 줄)에 드는가 — PiecesOfRow · InRow · AreaIn 의 한 잣대.
+    private static bool InRowMember(FormworkSummary.Keyed m, string type, string group, string? sub) =>
+        m.Patch.KindLead.Length == 0 && FormworkSummary.RowOf(m) == (type, group) && (sub == null || (m.Patch.MovedTo == null && m.Patch.Sub == sub));
 
-    /// <summary>그 덩이에서 그 줄에 든 조각의 넓이(㎡) — 줄마다 합하면 ② 표의 넓이다.</summary>
-    public double AreaIn(FormworkPiece piece, string type, string group) =>
-        piece.Dropped ? 0 : piece.Members.Where(m => m.Patch.KindLead.Length == 0 && FormworkSummary.RowOf(m) == (type, group)).Sum(m => m.Patch.Area);
+    /// <summary>그 덩이가 그 줄(· 아래 줄)에 드는가(PiecesOf 와 같은 잣대 — 화면이 덩이마다 묻는다).</summary>
+    public bool InRow(FormworkPiece piece, string type, string group, string? sub = null) =>
+        !piece.Dropped && piece.Members.Any(m => InRowMember(m, type, group, sub));   // 판 종류 조각은 줄 밖(R57 P3 — 계획 검토 L8)
+
+    /// <summary>그 덩이에서 그 줄(· 아래 줄)에 든 조각의 넓이(㎡) — 줄마다 합하면 ② 표의 넓이다.</summary>
+    public double AreaIn(FormworkPiece piece, string type, string group, string? sub = null) =>
+        piece.Dropped ? 0 : piece.Members.Where(m => InRowMember(m, type, group, sub)).Sum(m => m.Patch.Area);
+
+    /// <summary>그 덩이의 대표 조각의 아래 줄 열쇠(R64 — 3D 에서 판을 찍으면 표에서 그 아래 줄을 고른다 · 뺀 판 · 판 종류 판 · 옮긴 판은 null).</summary>
+    public string? SubOf(FormworkPiece piece) =>
+        piece.Dropped || piece.KindLead.Length > 0 || piece.LeadMember.Patch.MovedTo != null ? null : piece.LeadMember.Patch.Sub;
 
     /// <summary>
     /// 그 덩이를 정한 줄(revit-verify R47 M1 — 3D 에서 덩이를 누르면 ② 표에서 이 줄을 고른다): 대표 조각이 드는 줄(부위를 넣은 부재의 면이면 부위 줄,

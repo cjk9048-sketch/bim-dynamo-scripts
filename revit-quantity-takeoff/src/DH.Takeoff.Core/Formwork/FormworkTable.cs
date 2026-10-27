@@ -404,6 +404,30 @@ public sealed class FormworkRules
 
     public int Count => _items.Count;
 
+    /// <summary>
+    /// 아래 줄(R64 — «여러 종류» 줄을 종류별로)의 면 칸: «면|아래 줄 열쇠»(FacePatch.Sub). 파일 꼴(세 칸)은 그대로라 전 판은 모르는 줄로 담아 둔다
+    /// (모델 기록의 판 번호를 올려 전 판이 덮어쓰지 않게 — FormworkRulesStore).
+    /// </summary>
+    public const string SubMark = "|";
+
+    public static string SubGroup(string group, string sub) => group + SubMark + sub;
+
+    public static bool IsSub(string group) => group.Contains(SubMark, StringComparison.Ordinal);
+
+    /// <summary>그 줄의 그 아래 줄에서 사람이 고른 종류(없으면 null — 줄 값이 걸린다).</summary>
+    public string? LookupSub(string type, string group, string sub) => sub.Length == 0 ? null : Lookup(type, SubGroup(group, sub));
+
+    /// <summary>아래 줄 값의 수.</summary>
+    public int SubCount => _items.Keys.Count(k => IsSub(k.group));
+
+    /// <summary>그 줄의 아래 줄 값들(열쇠 글자 차례).</summary>
+    public List<(string sub, string item)> SubsOf(string type, string group)
+    {
+        string t = Cell(type), head = Cell(group) + SubMark;
+        return _items.Where(kv => kv.Key.type == t && kv.Key.group.StartsWith(head, StringComparison.Ordinal))
+                     .Select(kv => (kv.Key.group[head.Length..], kv.Value)).OrderBy(x => x.Item1, StringComparer.Ordinal).ToList();
+    }
+
     public IEnumerable<(string type, string group, string item)> All =>
         _items.OrderBy(kv => kv.Key.type, StringComparer.Ordinal).ThenBy(kv => kv.Key.group, StringComparer.Ordinal)
               .Select(kv => (kv.Key.type, kv.Key.group, kv.Value));

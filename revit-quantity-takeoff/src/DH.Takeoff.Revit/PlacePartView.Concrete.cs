@@ -83,6 +83,7 @@ public sealed partial class PlacePartView
             return;
         }
         finally { Mouse.OverrideCursor = cursor; }
+        _rvLabelTokens = null;      // 콘크리트 숫자는 식의 숫자에 잇지 않았다 — 같은 글로(R63d)
         _view3d.SetLabels(labels.Take(MaxConcreteLabels).ToList());
         _view3d.SetGuides(guides);
         Log?.Invoke($"③ 콘크리트 숫자\t부재 {shown.Count}(보임) · 정확 {exact} · 가운데 식 {center} · 시간 넘음 {late} · 숫자 {labels.Count} · 점선 {guides.Count}(점 {points})" +

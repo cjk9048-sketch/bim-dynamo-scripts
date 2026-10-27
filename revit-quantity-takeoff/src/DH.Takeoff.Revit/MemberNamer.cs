@@ -61,9 +61,9 @@ public static class MemberNamer
             if (CalcSheetExporter.AlternateOption(el) != null) { outcome.Alternates++; continue; }
             targets.Add((m, el));
         }
-        if (targets.Count > 0 && !targets.Any(t => t.el.GetParameters(MemberNames.Param).Count > 0))
+        if (targets.Any(t => t.el.GetParameters(MemberNames.Param).Count == 0))
         {
-            // 칸이 아직 없다(이 모델에서 처음) — 만든다(자체 트랜잭션 · 그룹 안).
+            // 칸이 없는 부재가 있다(이 모델에서 처음 · R65 계단처럼 옛 바인딩에 없던 범주) — 만든다(자체 트랜잭션 · 그룹 안 · 있는 칸은 범주만 더함).
             SharedParameterManager.EnsureParameters(doc, new[] { MemberNames.Param });
             outcome.ParametersEnsured = true;
             // 칸을 묶은 뒤의 부재로 다시 받는다(앞서 받은 부재 객체가 새 칸을 못 볼 수 있다 — revit-verify R53b 열린 질문).

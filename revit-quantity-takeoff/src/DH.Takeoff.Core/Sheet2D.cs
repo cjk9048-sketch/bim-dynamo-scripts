@@ -15,6 +15,9 @@ namespace DH.Takeoff.Core;
 public static class Sheet2D
 {
     public const int ColA = 1, ColC = 3, ColD = 4, ColE = 5, ColU = 21, ColV = 22, ColW = 23, ColX = 24, ColY = 25, ColZ = 26, ColNote = 27;
+
+    /// <summary>콘크리트 규모 구분 코드 칸(AB — 녹촌 2D 와 같은 열 · 인쇄 밖 · R65).</summary>
+    public const int ColCode = 28;
     public const int FirstPageEnd = 55, PageRows = 52;
     public const string SheetName = "구체공산출근거";
 
@@ -56,9 +59,10 @@ public static class Sheet2D
     public sealed record Sub(string Name) : Item;
 
     /// <summary>
-    /// 산출 줄: 부호(없으면 "" — 토막이 D 부터) · 괄호(«(외측)» — 부호 뒤) · 식 · 개수(× n) · 비고(AA — 인쇄 밖).
+    /// 산출 줄: 부호(없으면 "" — 토막이 D 부터) · 괄호(«(외측)» — 부호 뒤) · 식 · 개수(× n) · 비고(AA — 인쇄 밖) ·
+    /// 규모 묶음(R65 — 콘크리트 100㎥ 구분: 같은 번호의 줄들이 한 묶음(위치 + 부위) · 0 = 묶음 없음).
     /// </summary>
-    public sealed record Line(string Mark, string Tag, string Formula, int Count, string Note) : Item;
+    public sealed record Line(string Mark, string Tag, string Formula, int Count, string Note, int Group = 0) : Item;
 
     /// <summary>줄의 값(엑셀 «=ROUND(식, 2)»와 같은 셈 — 식 × 개수를 둘째 자리로 · 못 읽는 식은 0). 수량산출 창 ③ 의 화면도 이것(R59).</summary>
     public static double LineValue(Line line)
@@ -67,11 +71,27 @@ public static class Sheet2D
         catch (FormatException) { return 0; }
     }
 
-    /// <summary>절 끝 «계».</summary>
-    public sealed record Total : Item;
+    /// <summary>절 끝 «계». Classes = 계 위에 콘크리트 규모 구분 세 줄(R65 — 녹촌 2D «100㎥ 이하 · 100㎥~200㎥ · 200㎥ 이상» = SUMIF).</summary>
+    public sealed record Total(bool Classes = false) : Item;
 
-    /// <summary>쓴 결과: 절마다 «계» 칸(Z)과 미리 계산한 값.</summary>
-    public sealed record Written(List<(Section section, int sumRow, double value)> Sections, int LastRow);
+    /// <summary>쓴 결과: 절마다 «계» 칸(Z)과 미리 계산한 값 · 규모 구분 줄(코드 · 행 · 값 — R65).</summary>
+    public sealed record Written(List<(Section section, int sumRow, double value)> Sections, int LastRow, List<(Section section, int code, int row, double value)> Classes);
+
+    /// <summary>
+    /// 콘크리트 규모 구분(R65 — JACK 2026-10-27 «집계 양식» · 녹촌 2D AB 칸 코드): 1 = 200㎥ 이상 · 2 = 100㎥~200㎥ · 3 = 100㎥ 이하.
+    /// 묶음(위치 + 부위) 값을 둘째 자리로 맞춘 뒤 가른다(100.00 = 이하 · 200.00 = 이상 — 2D 의 «&gt;100 · &lt;200» 은 딱 그 값에서 비므로 이름대로 고침).
+    /// </summary>
+    public static int ClassOf(double value)
+    {
+        double v = FormulaDecomposer.RoundQuantity(value);
+        return v >= 200 ? 1 : v > 100 ? 2 : 3;
+    }
+
+    /// <summary>규모 구분 이름(제목 « : 100㎥ 이하» · 구분 줄 · 수량집계표 «철근,200㎥ 이상»).</summary>
+    public static string ClassName(int code) => code switch { 1 => "200㎥ 이상", 2 => "100㎥~200㎥", _ => "100㎥ 이하" };
+
+    // 구분 줄의 차례(2D: 이하 → 100~200 → 이상).
+    internal static readonly int[] ClassOrder = { 3, 2, 1 };
 
     /// <summary>시트의 틀(열 너비 · 열 모양 · 머리 · 인쇄 설정 · 탭 색)을 2D 대로 놓는다.</summary>
     public static void Frame(XlsxSheet sheet)
@@ -114,10 +134,12 @@ public static class Sheet2D
     public static Written Write(XlsxSheet sheet, IReadOnlyList<Item> items)
     {
         var result = new List<(Section, int, double)>();
+        var classes = new List<(Section, int, int, double)>();
         int r = 4;
         Section? section = null;
         int sectionFirst = r;
         double sectionValue = 0;
+        var grouped = new List<(int group, int row, double value)>();   // 절의 규모 묶음 줄(R65)
         var pageTitles = new SortedDictionary<int, string?>();   // 쪽 첫 행 → 그때의 절 제목(null = 절 사이)
         bool closed = false;
 
@@ -134,6 +156,7 @@ public static class Sheet2D
                     foreach (var (col, text) in s.Pieces) PutPiece(sheet, r, col, text);
                     sectionFirst = r;
                     sectionValue = 0;
+                    grouped.Clear();
                     r += 2;
                     break;
                 case Part p:
@@ -159,21 +182,29 @@ public static class Sheet2D
                     {
                         var layout = Layout(line);
                         r = KeepTogether(r, layout.Rows);
-                        sectionValue += WriteLine(sheet, r, line, layout);
+                        double lineValue = WriteLine(sheet, r, line, layout);
+                        sectionValue += lineValue;
+                        if (line.Group > 0) grouped.Add((line.Group, r + layout.Rows - 1, lineValue));
                         r += layout.Rows + 1;
                         break;
                     }
-                case Total:
+                case Total total:
                     {
-                        r = KeepTogether(r, 1);
+                        // 계의 SUM 범위는 마지막 산출 줄 아래 빈 행까지 — 구분 줄은 범위 밖(critic R65 H3).
                         int last = r - 1;
+                        string unit = section?.Unit ?? "㎥";
+                        if (total.Classes && grouped.Count > 0 && section != null)
+                        {
+                            r = KeepTogether(r, ClassOrder.Length + 1);
+                            WriteClasses(sheet, ref r, section, grouped, unit, classes);
+                        }
+                        else r = KeepTogether(r, 1);
                         // «계» 행은 V ~ Z 아래 가는 선(2D — revit-verify R49 M2).
                         sheet.Text(r, ColV, "계", Spread with { BorderBottom = true });
                         sheet.Text(r, ColW, " ", Result with { BorderBottom = true });
                         sheet.Style(r, ColX, Text with { BorderBottom = true });
                         sheet.Style(r, ColY, ColumnY with { BorderBottom = true });
                         double value = FormulaDecomposer.RoundQuantity(sectionValue);
-                        string unit = section?.Unit ?? "㎥";
                         sheet.Formula(r, ColZ, $"SUM({XlsxSheet.Ref(sectionFirst, ColW)}:{XlsxSheet.Ref(last, ColX)})", value,
                             ColumnZ with { Align = XlsxAlign.Center, Format = $"#,##0.00\"{unit}\"", BorderBottom = true });
                         if (section != null) result.Add((section, r, value));
@@ -207,7 +238,33 @@ public static class Sheet2D
             next = end + 1;
         }
         sheet.PrintArea = (1, ColA, PageEnds(lastRow).Last(), ColZ);
-        return new Written(result, lastRow);
+        return new Written(result, lastRow, classes);
+    }
+
+    // 규모 구분(R65): 줄마다 AB 에 그 묶음의 코드(묶음 값 합으로 고르는 엑셀 수식 — 숫자를 고치면 따라 바뀐다) · 계 위에 «100㎥ 이하 · 100㎥~200㎥ · 200㎥ 이상»
+    // 세 줄(U 이름 · Z = SUMIF(AB, 코드, W) — 2D 처럼 늘 셋).
+    private static void WriteClasses(XlsxSheet sheet, ref int r, Section section, List<(int group, int row, double value)> grouped, string unit,
+                                     List<(Section, int, int, double)> classes)
+    {
+        var codeOf = new Dictionary<int, int>();
+        foreach (var g in grouped.GroupBy(l => l.group))
+        {
+            int code = ClassOf(g.Sum(l => l.value));
+            codeOf[g.Key] = code;
+            string sum = $"ROUND(SUM({XlsxSheet.Ref(g.Min(l => l.row), ColW)}:{XlsxSheet.Ref(g.Max(l => l.row), ColW)}),{FormulaDecomposer.QuantityDecimals})";
+            foreach (var l in g) sheet.Formula(l.row, ColCode, $"IF({sum}>=200,1,IF({sum}>100,2,3))", code, Note);
+        }
+        int first = grouped.Min(l => l.row), end = grouped.Max(l => l.row);
+        string codes = $"{XlsxSheet.Ref(first, ColCode)}:{XlsxSheet.Ref(end, ColCode)}", values = $"{XlsxSheet.Ref(first, ColW)}:{XlsxSheet.Ref(end, ColW)}";
+        foreach (int code in ClassOrder)
+        {
+            double value = FormulaDecomposer.RoundQuantity(grouped.Where(l => codeOf[l.group] == code).Sum(l => l.value));
+            sheet.Text(r, ColU, ClassName(code), Text);
+            sheet.Formula(r, ColZ, $"SUMIF({codes},{code},{values})", value, ColumnZ with { Align = XlsxAlign.Center, Format = $"#,##0.00\"{unit}\"" });
+            sheet.Number(r, ColCode, code, Note);
+            classes.Add((section, code, r, value));
+            r++;
+        }
     }
 
     // 쪽 끝 행들: 55 → 107 → 159 … (마지막 쪽은 내용 끝을 넘는 첫 쪽 끝).

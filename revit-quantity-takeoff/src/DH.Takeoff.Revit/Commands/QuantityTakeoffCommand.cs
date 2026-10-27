@@ -334,7 +334,9 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         {
             editor = new PickEditor(data.Members, data.Levels, data.Stored.Plan, session.Write, () => ZoneScene.Reread(doc, data.Members), doc.Title);
             session.Note($"목록\t구조물 {editor.Structure}({(PartCatalog.FindStructure(data.Stored.Plan.Structure) != null ? "저장된 것" : "제목으로 알아냄")})" +
-                         $"\t중분류 {editor.Places.Count} · 부위 {editor.Parts.Count}\t저장된 판 v{data.Stored.Plan.ReadVersion}{(data.Stored.Exists ? "" : "(저장된 것 없음)")}");
+                         $"\t중분류 {editor.Places.Count} · 부위 {editor.Parts.Count}\t저장된 판 v{data.Stored.Plan.ReadVersion}{(data.Stored.Exists ? "" : "(저장된 것 없음)")}" +
+                         $"\t대표 목록 판 {data.Stored.Plan.Catalog}→{PartCatalog.Revision} · «나중에 침» 옮겨 읽음 {data.Stored.Plan.MigratedLater.Count}" +
+                         (data.Stored.Plan.MigratedLater.Count > 0 ? "(" + string.Join(", ", data.Stored.Plan.MigratedLater.Take(12)) + ")" : "") + "(R65 — 헌치 · 중간슬래브 함께 침)");
             // Revit 에서 부재를 골라 놓고 눌렀으면 팝업에서도 그 부재를 골라 둔다.
             editor.Select(selectedBefore.Select(id => id.Value));
             // ① 을 열기 전에 한 번 빠르게 모델 검증(최대 15 초 남짓 · 알림만 — R54).
@@ -1021,7 +1023,9 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
             else if (found.TimedOut) parts.Add("겹침오류는 끝까지 못 봄(15초)");
             if (most > 0) parts.Add(most > sure ? $"작성오류 {sure}쌍(최대 {most}쌍)" : $"작성오류 {sure}쌍");
             session.Note($"모델 검증(빠른)\t대상 {targets.Count} · 겹침 {found.Pairs.Count}{(found.TimedOut ? "(시간 한도)" : "")} · 결합 방향 {sure}~{most} · 닿기만 해서 뺌 {found.Touching}" +
-                         $" · 사람이 정함 {found.Reversed.Count(r => r.Human)} · 참고 {found.Reversed.Count(r => r.SameRank && !r.Human)}\t찾기 {findMs} ms · 모두 {watch.ElapsedMilliseconds} ms");
+                         $" · 사람이 정함 {found.Reversed.Count(r => r.Human)} · 참고 {found.Reversed.Count(r => r.SameRank && !r.Human)}" +
+                         $" · 계단 겹침 {found.StairOverlaps.Count}(계단 식에서 뺌 — R65{(found.StairOverlaps.Count > 0 ? ": " + string.Join(" · ", found.StairOverlaps.Take(8).Select(s => FormattableString.Invariant($"{s.Stair.Value}×{s.Other.Value} {s.M3:0.####}"))) : "")})" +
+                         $"\t찾기 {findMs} ms · 모두 {watch.ElapsedMilliseconds} ms");
             foreach (var r in found.Reversed.Where(r => r.Counts).Take(30)) session.Note("  " + OverlapChecker.ReversedLine(r));
             // 창의 딱지(R63b): 겹침 · 결합 순서 — 누르면 그 부재.
             var issues = new List<PlacePartView.Issue>();
@@ -1339,7 +1343,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         int unpainted = FormworkReader.AttachCurved(scene, results);
         var (placeOf, partOrder) = Places(results, editor);
         var board = new FormworkBoard(results, options, data.Origin, placeOf, partOrder);
-        var audit = FormworkAnalyzer.Check(results);
+        var audit = FormworkAnalyzer.Check(results, options);
         // 엑셀 줄의 부호(«마크») · 부위 줄(R47): 마크를 넣은 부재 수와 보기 · 부위 줄 · 쓰이지 않는 부위 줄(부위 이름을 바꾼 뒤 남은 것 — core-verify R47 L5).
         var marked = results.Where(r => r.Element.Mark.Length > 0).ToList();
         var unusedParts = FormworkSummary.UnusedPartRules(results, rules);
@@ -1360,6 +1364,8 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
             $" · 높이 구간 {(options.Bands.Count > 0 ? string.Join(",", options.Bands) + " m(이어진 옆면이 7 m 넘는 유로폼 있음)" : "없음")}" +
             $" · 수직면 덩어리 {FormworkAnalyzer.LastGrouping.groups}(종류만 따라감 — R57 · {FormworkAnalyzer.LastGrouping.ms} ms)" +
             $" · 순위 문맥 {FormworkAnalyzer.LastContexts.contexts}(마지막 재기 {FormworkAnalyzer.LastContexts.ms} ms — R54)" +
+            $" · 낮은 벽 {FormworkAnalyzer.LastLowWalls.Count}(1.2 m 미만 — R65" +
+            (FormworkAnalyzer.LastLowWalls.Count > 0 ? ": " + string.Join(" · ", FormworkAnalyzer.LastLowWalls.Take(12).Select(w => FormattableString.Invariant($"{w.id} {w.part} {w.height:0.###}m{(w.tallBeside != 0 ? $" 곁 {w.tallBeside}" : "")}"))) : "") + ")" +
             $" · 덩어리로 값 바뀐 조각 {lumpChanges.Sum(c => c.count)}({lumpChanges.Sum(c => c.area).ToString("0.##", CultureInfo.InvariantCulture)} ㎡" +
             (lumpChanges.Count > 0 ? ": " + string.Join(" · ", lumpChanges.Take(6).Select(c => FormattableString.Invariant($"{c.type} {c.from}→{c.to} {c.count}개 {c.area:0.##}"))) : "") + ")" +
             $" · 덩어리에 든 확인할 자리 {FormworkSummary.LumpChecks(results).Count}(늘 0 — 확인할 자리는 덩어리에 넣지 않음)" +
@@ -1379,9 +1385,16 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         // Revit 계단(R56c-1): 둘레 콘크리트로 넣은 수 + 계단마다 한 줄(런 · 참 · 재료 · 형상 출처 · 체적 — 계단을 부재로 세기(R56c-2) 전에 첫 실행 값을 본다).
         if (scene.StairLines.Count > 0)
         {
-            session.Note($"계단(둘레 콘크리트)\t계단 {scene.StairLines.Count} · 콘크리트로 넣음 {scene.StairContexts}");
+            session.Note($"계단\t계단 {scene.StairLines.Count} · 콘크리트로 넣음 {scene.StairContexts} · 셈 대상 {scene.StairTargets}(R65) · 챌면으로 안 센 조각 {FormworkAnalyzer.LastRisers}");
             foreach (string line in scene.StairLines) session.Note("  계단\t" + line);
+            // 계단 식(R65 — StairReader.Formula): 런 · 참 식과 입체 · 겹침 · 식 · 런마다 식 / 입체(산출식을 지은 계단만).
+            foreach (var e in scene.Elements.Where(e => e.Stair && e.Target))
+                if (StairReader.LastFormula.TryGetValue(e.Id, out var f)) session.Note($"  계단 식\t{e.Id}\t{f}");
         }
+        // R64(JACK 2026-10-26 «벽은 다 셈 · 중간슬래브는 뺌»): 벽은 계단 없이 잰다 — 계단이 맞닿은 벽 면을 거푸집으로 돌려 센 넓이(벽마다).
+        var stairReturned = results.Select(r => (id: r.Element.Id, area: r.Faces.Sum(f => f.StairCovered))).Where(x => x.area > 1e-6).OrderByDescending(x => x.area).ToList();
+        if (stairReturned.Count > 0) session.Note(FormattableString.Invariant($"계단 자리\t벽으로 돌려 센 넓이 {stairReturned.Sum(x => x.area):0.####} ㎡(") +
+                     string.Join(" · ", stairReturned.Take(12).Select(x => FormattableString.Invariant($"{x.id} {x.area:0.####}"))) + ")");
         // «부위와 모양이 안 맞음»(R57 P4 — 경고만 · 셈은 그대로): 유형 이름이 다른 부위 묶음을 가리킴 · 받침류인데 밑면이 바닥판 위 1 m 넘게 떠 있음.
         var odd = FormworkPartCheck.Check(results, part => groups.TryGetValue(part, out var g) && g.Length > 0 ? g : null);
         foreach (var f in odd) session.Note($"부위 경고\t{f.Id}\t{f.Type}\t{f.Part}\t{f.Text}");

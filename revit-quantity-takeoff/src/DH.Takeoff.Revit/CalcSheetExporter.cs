@@ -146,6 +146,7 @@ public static class CalcSheetExporter
             BuiltInCategory.OST_Walls => MemberKind.Wall,
             BuiltInCategory.OST_StructuralColumns => MemberKind.Column,
             BuiltInCategory.OST_StructuralFraming => MemberKind.Beam,
+            BuiltInCategory.OST_Stairs => MemberKind.Stair,   // R65 — 콘크리트 계단(StairReader.Countable)
             _ => MemberKind.Other,
         };
     }

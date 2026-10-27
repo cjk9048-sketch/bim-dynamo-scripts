@@ -80,9 +80,10 @@ public static class FormulaAutoFill
     private static double DeclaredVolume(Element el) =>
         (el.get_Parameter(BuiltInParameter.HOST_VOLUME_COMPUTED)?.AsDouble() ?? 0) * Ft3ToM3;
 
-    /// <summary>BIM 물량(m³) — Revit이 속성에 적어 둔 체적, 없으면 입체에서 잰 체적.</summary>
+    /// <summary>BIM 물량(m³) — Revit이 속성에 적어 둔 체적, 없으면 입체에서 잰 체적. 계단은 입체 − 겹친 체적(R65 — StairReader.NetVolume).</summary>
     public static double BimVolume(Element el)
     {
+        if (el is Autodesk.Revit.DB.Architecture.Stairs stairs) return StairReader.NetVolume(stairs);
         double declared = DeclaredVolume(el);
         return declared > 0 ? declared : SolidReader.Read(el).Sum(s => s.Volume);
     }
@@ -199,6 +200,16 @@ public static class FormulaAutoFill
                 {
                     o.NotConcrete = true;
                     o.Result = new DecompResult { Ok = false, Reason = "콘크리트가 아님(" + material.Why + ")" };
+                    list.Add(o);
+                    continue;
+                }
+                if (el is Autodesk.Revit.DB.Architecture.Stairs stairs)
+                {
+                    // 계단(R65): 런 · 참 식(녹촌 2D 꼴) − 겹친 체적 · BIM 물량 = 입체 − 겹친 체적(StairReader.Formula).
+                    var (sr, net, count) = StairReader.Formula(doc, stairs);
+                    o.Bim = net;
+                    o.HasSolid = count > 0;
+                    o.Result = sr;
                     list.Add(o);
                     continue;
                 }
@@ -528,6 +539,7 @@ public static class FormulaAutoFill
     /// </summary>
     public static FormulaGeometry? Explain(Element el)
     {
+        if (el is Autodesk.Revit.DB.Architecture.Stairs) return null;   // 계단 식은 분해기가 아니라 런 · 참 식(R65 — StairReader.Formula) — 숫자 도형 없음
         var solids = SolidReader.Read(el);
         if (solids.Count == 0) return null;
         FormulaDecomposer.Explain(solids, out var geo, thickness: SolidReader.Thickness(el));

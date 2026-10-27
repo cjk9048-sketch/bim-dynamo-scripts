@@ -45,6 +45,12 @@ public sealed class FormworkLine
     /// (판은 칸마다 그대로 — R46), 둘레 한 줄은 Count × Faces 개(판은 면마다 — R49). «× n» 은 판 수가 아니다(core-verify R49 계획 M3 — 판 수는 이것).
     /// </summary>
     public List<FormworkUnit> Units { get; } = new();
+
+    /// <summary>
+    /// 판 → 식을 풀어 쓴 항의 차례(FormworkLabels.Monomials — R63d: ③ 식 띠의 숫자 하나하나를 그 판의 그 변에 잇는다). 보통 줄 0 · 칸 한 줄 = 그 칸의 항 ·
+    /// 둘레 한 줄 = 그 면의 너비 항 · 공통 수로 묶은 줄 = 그 a 의 항. 없으면 모른다(같은 글로 잇는다).
+    /// </summary>
+    public Dictionary<FormworkUnit, int> TermOf { get; } = new(ReferenceEqualityComparer.Instance);
 }
 
 /// <summary>
@@ -162,7 +168,8 @@ public static class FormworkSheet
     };
 
     // 절의 차례(2D: 합판6회 → 합판3회 → 유로폼 · 합판4회는 3회 다음). 대응표에서 고르는 차례(FormworkTable.Items)와 따로 둔다(core-verify R47 L3).
-    private static readonly string[] SheetOrder = { FormworkTable.Ply6, FormworkTable.Ply3, FormworkTable.Ply4, FormworkTable.Euro };
+    // 절 차례 = 녹촌 2D «3. 합판거푸집(6회, 수직면) → 4. 합판거푸집 A. 수평면(4회) · B. 수직면(3회) → 5. 유로폼»(R65 — JACK 2026-10-27 «집계 양식»).
+    private static readonly string[] SheetOrder = { FormworkTable.Ply6, FormworkTable.Ply4, FormworkTable.Ply3, FormworkTable.Euro };
 
     private static int ItemOrder(string item)
     {
@@ -346,7 +353,8 @@ public static class FormworkSheet
         var slabs = entries.Where(e => e.Slab != null).GroupBy(e => e.SlabKey).ToDictionary(g => g.Key, g => g.ToList());
         var lines = new Dictionary<(string head, string formula, bool joined, int cells, int faces), (FormworkLine line, Entry first)>();
         var slabLines = new HashSet<FormworkLine>(ReferenceEqualityComparer.Instance);   // 슬래브 밑면 조각이 든 줄(공통 수로 묶지 않는다 — R60 설치 전 검토)
-        void Put(Entry first, string formula, bool areaOnly, bool joinedAny, int cells, int areaOnlyCells, IEnumerable<FormworkUnit> units, int faces = 0)
+        void Put(Entry first, string formula, bool areaOnly, bool joinedAny, int cells, int areaOnlyCells, IEnumerable<FormworkUnit> units, int faces = 0,
+                 Func<FormworkUnit, int>? termOf = null)
         {
             var key = (first.LineHead, formula, joinedAny, cells, faces);
             if (!lines.TryGetValue(key, out var at))
@@ -362,6 +370,7 @@ public static class FormworkSheet
                 at.line.Bim += u.Area;
                 foreach (long id in u.Ids) at.line.Ids.Add(id);
                 at.line.Units.Add(u);
+                at.line.TermOf[u] = termOf?.Invoke(u) ?? 0;
             }
         }
         var gathered = new HashSet<string>(StringComparer.Ordinal);
@@ -370,7 +379,9 @@ public static class FormworkSheet
             if (rings.TryGetValue(e, out var ring))
             {
                 // 둘레의 처음 나온 면을 만났을 때 둘레 전부를 한 줄로(줄의 차례는 그 면의 것).
-                if (ReferenceEquals(ring.First, e)) Put(e, ring.Formula, false, ring.Faces.Any(f => f.Joined), 0, 0, ring.Faces.Select(f => f.Unit), ring.Faces.Count);
+                if (ReferenceEquals(ring.First, e))
+                    Put(e, ring.Formula, false, ring.Faces.Any(f => f.Joined), 0, 0, ring.Faces.Select(f => f.Unit), ring.Faces.Count,
+                        u => ring.Terms[ring.Faces.FindIndex(f => ReferenceEquals(f.Unit, u))]);
                 continue;
             }
             if (e.Slab != null && slabs[e.SlabKey] is { Count: > 1 } cells)
@@ -382,9 +393,17 @@ public static class FormworkSheet
                     foreach (var chunk in Chunks(terms.Select(t => NumbersIn(t.term)).ToList(), NumbersPerLine).Select(at => at.Select(i => terms[i]).ToList()))
                     {
                         var inLine = chunk.SelectMany(t => t.cells).ToList();
+                        // 칸마다 식의 항(R63d): 앞 칸들의 항 수만큼 밀린 자리(칸 하나의 식이 «a*b+c*d» 면 항이 둘).
+                        var cellTerm = new Dictionary<FormworkUnit, int>(ReferenceEqualityComparer.Instance);
+                        int offset = 0;
+                        foreach (var t in chunk)
+                        {
+                            foreach (var c in t.cells) cellTerm[c.Unit] = offset;
+                            offset += FormworkLabels.Monomials(t.term)?.Count ?? 1;
+                        }
                         if (inLine.Count == 1) Put(inLine[0], inLine[0].Formula, inLine[0].AreaOnly, inLine[0].Joined, 0, 0, new[] { inLine[0].Unit });
                         else Put(e, string.Join("+", chunk.Select(t => t.term)), inLine.All(c => c.AreaOnly), inLine.Any(c => c.Joined),
-                                 inLine.Count, inLine.Count(c => c.AreaOnly), inLine.Select(c => c.Unit));
+                                 inLine.Count, inLine.Count(c => c.AreaOnly), inLine.Select(c => c.Unit), termOf: u => cellTerm.GetValueOrDefault(u));
                     }
                 }
                 continue;
@@ -497,6 +516,10 @@ public static class FormworkSheet
                     foreach (long id in l.Ids) merged.Ids.Add(id);
                     merged.Units.AddRange(l.Units);
                 }
+                // 판의 항(R63d): «(a1*n1+a2+…)*b» 의 k 째 항 = k 째 a 의 줄들의 판 · 항 하나(«a*b» × n)면 모두 0.
+                for (int k = 0; k < picked.Count; k++)
+                    foreach (var l in picked[k].lines)
+                        foreach (var u in l.Units) merged.TermOf[u] = single ? 0 : k;
                 result.Add(merged);
             }
         }
@@ -563,6 +586,7 @@ public static class FormworkSheet
         public required List<Entry> Faces;
         public required Entry First;
         public required string Formula;
+        public required List<int> Terms;     // 면마다 식의 너비 항(R63d — «(a+b)*2*h» 는 마주 보는 면이 한 항 · «(a+b+c…)*h» 는 가장 긴 면부터)
     }
 
     /// <summary>둘레 한 줄의 괄호(2D «W14 (양측) : 13 × 5.46 × 16»): 같은 부호 · 같은 식의 외측 줄과 내측 줄을 한 줄로 적은 것.</summary>
@@ -659,12 +683,18 @@ public static class FormworkSheet
                 }).ToList();
                 double h = list[start].Z1 - list[start].Z0;
                 string formula;
+                List<int> terms;
                 if (loop.Count == 4 && Num(widths[0]) == Num(widths[2]) && Num(widths[1]) == Num(widths[3]))
+                {
                     formula = $"({Num(Math.Max(widths[0], widths[1]))}+{Num(Math.Min(widths[0], widths[1]))})*2*{Num(h)}";
+                    bool evenFirst = widths[0] >= widths[1];       // 긴 변(같으면 0 번 면)이 앞 항
+                    terms = Enumerable.Range(0, 4).Select(k => (k % 2 == 0) == evenFirst ? 0 : 1).ToList();
+                }
                 else
                 {
                     int longest = widths.IndexOf(widths.Max());
                     formula = "(" + string.Join("+", Enumerable.Range(0, widths.Count).Select(k => Num(widths[(longest + k) % widths.Count]))) + $")*{Num(h)}";
+                    terms = Enumerable.Range(0, widths.Count).Select(k => (k - longest + widths.Count) % widths.Count).ToList();
                 }
                 double area = loop.Sum(i => list[i].E.Unit.Area);
                 double value;
@@ -672,7 +702,7 @@ public static class FormworkSheet
                 catch (FormatException) { refused++; continue; }
                 if (!double.IsFinite(value) || Math.Abs(value - area) > 0.005 * area + 1e-4) { refused++; continue; }
                 var members = loop.Select(i => list[i].E).ToList();
-                var ring = new Ring { Faces = members, First = members.MinBy(m => m.Seen)!, Formula = formula };
+                var ring = new Ring { Faces = members, First = members.MinBy(m => m.Seen)!, Formula = formula, Terms = terms };
                 foreach (var m in members) found[m] = ring;
             }
         }
@@ -745,6 +775,7 @@ public static class FormworkSheet
                 var line = kv.Value.line;
                 foreach (var u in line.Units.Where(paired.Contains))
                 {
+                    both.TermOf[u] = 0;
                     both.Units.Add(u);
                     both.Count++;
                     both.Bim += u.Area;

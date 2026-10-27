@@ -10,6 +10,22 @@ public sealed class FormworkRow
     public int Elements { get; set; }          // 부재 수
     public string Draft { get; set; } = "";    // 초안 규칙이 주는 종류(여러 가지면 '섞임', 아래가 빈 밑면이면 '확인 필요', 조각이 모두 3D 에서 뺀 판이면 '뺀 판')
     public string Rule { get; set; } = "";     // 사람이 고친 값("" = 초안대로)
+
+    /// <summary>
+    /// 아래 줄(R64 — JACK 2026-10-26 «여러 종류는 풀어서 종류별로»): 아래 줄 열쇠(FacePatch.Sub)가 둘 이상이거나 아래 줄 값이 있을 때만(아니면 비움).
+    /// 어느 아래 줄이 있는가는 대응표와 상관없다(줄의 조각 전부 — 지운 · 판 종류 · 옮긴 조각도) · 넓이 · 부재 · 초안은 줄과 같이 그 조각들을 뺀다(옮겨 온 판은 줄에만 — M5).
+    /// </summary>
+    public List<FormworkSubRow> Subs { get; } = new();
+}
+
+/// <summary>대응표 줄의 아래 줄 하나(R64).</summary>
+public sealed class FormworkSubRow
+{
+    public string Key { get; set; } = "";      // FacePatch.Sub
+    public double Area { get; set; }
+    public int Elements { get; set; }
+    public string Draft { get; set; } = "";    // 줄과 같은 뜻(섞임 · 확인 필요 · 뺀 판 · 판 종류)
+    public string Rule { get; set; } = "";     // 아래 줄 값("" = 줄 값 · 없으면 자동)
 }
 
 /// <summary>종류별 합계의 한 줄.</summary>
@@ -88,6 +104,7 @@ public static class FormworkSummary
     {
         var rules = options.Rules;
         var rows = new Dictionary<(string type, string group), (FormworkRow row, HashSet<string> drafts, HashSet<long> ids, bool part)>();
+        var subs = new Dictionary<(string type, string group), Dictionary<string, (FormworkSubRow sub, HashSet<string> drafts, HashSet<long> ids)>>();
         var elevated = new Dictionary<ElementFormwork, bool>();
         var moved = new List<Keyed>();
         var plateKinds = new HashSet<(string, string)>();
@@ -107,6 +124,9 @@ public static class FormworkSummary
                     Rule = (part ? rules?.LookupPart(src.Result.Element.Part) : rules?.Lookup(src.Type, src.Group)) ?? "",
                 }, new HashSet<string>(), new HashSet<long>(), part);
             }
+            // 아래 줄(R64): 어느 아래 줄이 있는가는 줄의 조각 전부로(지운 · 판 종류 · 옮긴 조각도 — 대응표와 상관없이 보드 동안 같게).
+            if (!subs.TryGetValue(key, out var subOf)) subs[key] = subOf = new Dictionary<string, (FormworkSubRow, HashSet<string>, HashSet<long>)>(StringComparer.Ordinal);
+            if (!subOf.TryGetValue(p.Sub, out var subEntry)) subOf[p.Sub] = subEntry = (new FormworkSubRow { Key = p.Sub }, new HashSet<string>(), new HashSet<long>());
             if (p.DropLead.Length > 0) continue;
             // 판 종류 조각(R57 P3)은 줄의 넓이 · 부재 · 초안에 들지 않는다 — 그 줄의 종류를 바꿔도 이 조각은 판의 종류(줄 단추가 일부만 듣지 않게 · 계획 검토 L8).
             if (p.KindLead.Length > 0) { plateKinds.Add(key); continue; }
@@ -121,8 +141,12 @@ public static class FormworkSummary
                     FormworkTable.GroupOf(vg.Governor.Face.Class, vg.Governor.Patch)), ignoreMove: true) == key)
                 follow = FormworkAnalyzer.DraftOf(vg.Governor.Result.Element, vg.Governor.Face, vg.Governor.Patch,
                     vg.Governor.Result.Faces.Any(x => x.Patches.Any(q => q.Below == Below.Supported)), options);
-            entry.drafts.Add(src.Patch.Below == Below.Floating ? FormworkAnalyzer.FloatingDraft(src.Result.Element, options) ?? Ask
-                : follow ?? FormworkAnalyzer.DraftOf(src.Result.Element, src.Face, src.Patch, raised, options));
+            string draft = src.Patch.Below == Below.Floating ? FormworkAnalyzer.FloatingDraft(src.Result.Element, options, src.Face) ?? Ask
+                : follow ?? FormworkAnalyzer.DraftOf(src.Result.Element, src.Face, src.Patch, raised, options);
+            entry.drafts.Add(draft);
+            subEntry.sub.Area += p.Area;
+            subEntry.ids.Add(r.Element.Id);
+            subEntry.drafts.Add(draft);
         }
         // 옮긴 판의 조각(R55b): 옮긴 줄의 넓이 · 부재 수에만 든다(그 줄이 있을 때만 — 없으면 ApplyMoves 가 지운 판으로 돌렸다).
         foreach (var k in moved)
@@ -136,6 +160,17 @@ public static class FormworkSummary
             // 조각이 모두 판 종류면 «판 종류»(지운 판뿐인 줄과 가른다 — 그 줄로 옮기기도 된다 · 다시 검토 낮음 4).
             row.Draft = drafts.Count == 0 ? (plateKinds.Contains((row.Type, row.Group)) ? PlateKinds : Dropped) : drafts.Count == 1 ? drafts.First() : Mixed;
             row.Elements = ids.Count;
+            // 아래 줄(R64): 열쇠가 둘 이상이거나 아래 줄 값이 있을 때 — 덩어리 먼저 · 그다음 넓은 차례.
+            var subValues = rules?.SubsOf(row.Type, row.Group) ?? new List<(string sub, string item)>();
+            if (subs.TryGetValue((row.Type, row.Group), out var subOf) && (subOf.Count >= 2 || subValues.Count > 0))
+                foreach (var (sub, subDrafts, subIds) in subOf.Values
+                             .OrderBy(s => s.sub.Key.StartsWith("덩어리", StringComparison.Ordinal) ? 0 : 1).ThenByDescending(s => s.sub.Area).ThenBy(s => s.sub.Key, StringComparer.Ordinal))
+                {
+                    sub.Draft = subDrafts.Count == 0 ? (plateKinds.Contains((row.Type, row.Group)) ? PlateKinds : Dropped) : subDrafts.Count == 1 ? subDrafts.First() : Mixed;
+                    sub.Elements = subIds.Count;
+                    sub.Rule = rules?.LookupSub(row.Type, row.Group, sub.Key) ?? "";
+                    row.Subs.Add(sub);
+                }
         }
         return rows.Values.Where(v => v.part).Select(v => v.row)
             .OrderBy(x => FormworkSheet.PartRank(FormworkRules.PartOf(x.Type)!)).ThenBy(x => x.Type, StringComparer.Ordinal)
@@ -257,17 +292,30 @@ public static class FormworkSummary
         if (rules == null || rules.Count == 0) return hidden;
         var rowKeys = new HashSet<(string, string)>();
         var faceKeys = new HashSet<(string, string)>();
+        var subKeys = new HashSet<(string, string, string)>();
         foreach (var k in RowPatches(results))
         {
-            rowKeys.Add(RowOf(k, ignoreMove: true));   // 옮긴 판의 원래 줄도 표에 있다(R55b L3)
+            var row = RowOf(k, ignoreMove: true);
+            rowKeys.Add(row);   // 옮긴 판의 원래 줄도 표에 있다(R55b L3)
+            subKeys.Add((row.type, row.group, k.Patch.Sub));
             // 그 조각의 유형 줄 · (부위를 넣은 면이면) 부위 줄 — 제 면이 있는 줄.
             faceKeys.Add((k.Type, k.Group));
             if (FormworkTable.PartDecides(k.Result.Element.Part, k.Group)) faceKeys.Add((FormworkRules.PartKey(k.Result.Element.Part), FormworkTable.GroupAll));
         }
         // 유형 줄 · 부위 줄 가운데 제 면이 있는데 표에 줄이 없는 것 — 부위 줄에 가려졌다(R48).
         foreach (var (type, group, item) in rules.All)
+        {
+            if (FormworkRules.IsSub(group))
+            {
+                // 아래 줄 값(R64)인데 그 줄은 있고 그 아래 줄의 조각이 없다 — ① 에서 부위 묶음을 바꿨거나 모양이 바뀜(걸리지 않음).
+                int at = group.IndexOf(FormworkRules.SubMark, StringComparison.Ordinal);
+                string head = group[..at], sub = group[(at + FormworkRules.SubMark.Length)..];
+                if (rowKeys.Contains((type, head)) && !subKeys.Contains((type, head, sub))) hidden.Add((type, group, item));
+                continue;
+            }
             if (faceKeys.Contains((type, group)) && !rowKeys.Contains((type, group)))
                 hidden.Add((type, group, item));
+        }
         return hidden;
     }
 

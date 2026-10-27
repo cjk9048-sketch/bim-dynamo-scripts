@@ -37,6 +37,10 @@ public sealed partial class PlacePartView
     // 경고 딱지(그림에 없는 틈 · 종류가 달라 못 이은 면): 합계 줄 끝에 이으면 좁은 창에서 «…»로 잘려 안 보인다 — 따로 줄바꿈되게 둔다(revit R43 R4).
     private readonly WrapPanel _fwWarnings = new() { Visibility = Visibility.Collapsed };
     private readonly Dictionary<(string type, string group), (Border row, ComboBox combo, TextBlock area, Border swatch, TextBlock tag, Button reset)> _fwRowViews = new();
+    // 아래 줄(R64 — JACK 2026-10-26 «여러 종류는 풀어서 종류별로» · 고름 «종류별 아래 줄로 풀기»): 줄 밑 «└» 줄 · 아래 줄을 보이는 줄(보드를 지을 때 정함 — 보드 동안 그대로 · critic R64 M3).
+    private readonly Dictionary<(string type, string group, string sub), (Border row, ComboBox combo, TextBlock area, Border swatch, TextBlock tag, Button reset)> _fwSubViews = new();
+    private readonly HashSet<(string type, string group)> _fwSubRows = new();
+    private string? _fwPickedSub;      // 고른 줄의 아래 줄(null = 줄 전부)
     private readonly StackPanel _fwKindBar = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 5, 0, 0) };   // 찍은 판의 줄 종류 단추(JACK 2026-10-21 «3D 에서 찍어서»)
     private readonly Dictionary<string, Button> _fwKindButtons = new();
     private Button? _fwKindAuto;
@@ -81,6 +85,7 @@ public sealed partial class PlacePartView
         if (fresh)
         {
             _fwPicked = null;
+            _fwPickedSub = null;
             _fwPlate = null;
             BuildFormworkRows();
             // ② 의 부재 겉면 = 덩이가 덮은 면의 모서리 선을 뺀 것(R48b — 판 뒤의 모서리가 비쳐 보이지 않게). 덮는 조각의 모임은 대응표를 바꿔도 같아 한 번만 짓는다.
@@ -122,7 +127,7 @@ public sealed partial class PlacePartView
         _fwLineWhole.Clear();
         _fwOverlayFor = OverlayKey();
         var parts = Step == 2 ? (_rvFormLine != null ? _board.PiecesOfLine(_rvFormLine) : new List<(int piece, bool whole, List<FacePatch> patches)>())
-            : _fwPicked is { } row ? _board.PiecesOfRow(row.type, row.group)
+            : _fwPicked is { } row ? _board.PiecesOfRow(row.type, row.group, _fwPickedSub)
             : new List<(int piece, bool whole, List<FacePatch> patches)>();
         foreach (var (piece, whole, patches) in parts)
         {
@@ -244,6 +249,7 @@ public sealed partial class PlacePartView
             if (id > 0)
             {
                 _fwPicked = null;
+                _fwPickedSub = null;
                 _fwPlate = null;
             }
         }
@@ -262,17 +268,23 @@ public sealed partial class PlacePartView
         _fwMoveLead = null;                       // 다른 판을 찍으면 옮길 줄 고르기는 그만둔다(R55b)
         _rvMembers.Clear();                       // 문제 딱지로 고른 부재는 푼다(R63b)
         _fwPicked = _board.RowOf(piece);
+        _fwPickedSub = _fwPicked is { } shown && _fwSubRows.Contains(shown) ? _board.SubOf(piece) : null;   // 아래 줄을 보이는 줄이면 그 아래 줄(R64)
         RefreshAll();
-        if (_fwPicked is { } key && _fwRowViews.TryGetValue(key, out var view)) view.row.BringIntoView();
+        if (_fwPicked is { } key)
+        {
+            if (_fwPickedSub is { } sub && _fwSubViews.TryGetValue((key.type, key.group, sub), out var subView)) subView.row.BringIntoView();
+            else if (_fwRowViews.TryGetValue(key, out var view)) view.row.BringIntoView();
+        }
         FollowPiece(piece);   // Revit 에서도 그 판의 부재(R61a)
     }
 
     // 표에서 줄을 골랐다(또는 Esc 로 풀었다): 찍은 판은 푼다. 줄을 고르면 그 줄의 판이 다 보이게 화면을 맞춘다(JACK 2026-10-21 «포커싱도»).
-    private void PickRow((string type, string group)? key)
+    private void PickRow((string type, string group)? key, string? sub = null)
     {
-        // 옮길 줄을 고르는 중이면(R55b [옮기기]) 누른 줄로 옮긴다 — 줄을 고르지 않는다.
+        // 옮길 줄을 고르는 중이면(R55b [옮기기]) 누른 줄로 옮긴다 — 줄을 고르지 않는다(아래 줄을 눌러도 그 줄로 — critic R64 M4).
         if (key is { } target && _fwMoveLead != null) { MoveTo(target); return; }
         _fwPicked = key;
+        _fwPickedSub = key == null ? null : sub;
         _fwPlate = null;
         _rvMembers.Clear();                       // 문제 딱지로 고른 부재는 푼다(R63b — Esc 도 이 길)
         RefreshAll();
@@ -287,7 +299,7 @@ public sealed partial class PlacePartView
                 if (FormworkShown(OverlayStart + i)) box = box.With(_fwOverlay[i].mesh.Box);
             if (!box.IsEmpty) _view3d.ZoomTo(box, margin: RowZoomMargin, minWidth: RowZoomMinWidth);
             // Revit 에서도 그 줄 몫의 부재(R61a — 거름으로 숨긴 판의 부재도 · 상자는 보이는 몫). 옮기기 갈래는 위에서 돌아갔다.
-            FollowLater(OwnersOf(_board.PiecesOfRow(key.Value.type, key.Value.group)), box);
+            FollowLater(OwnersOf(_board.PiecesOfRow(key.Value.type, key.Value.group, _fwPickedSub)), box);
         }
     }
 
@@ -404,7 +416,7 @@ public sealed partial class PlacePartView
         string why = _board.WhyNotMoveTo(piece, key);
         if (why.Length > 0) { ShowMessage($"그 줄로는 옮길 수 없습니다({why}) — 다른 줄 · Esc = 취소", true); return; }
         _fwMoveLead = null;
-        if (ChangePlate(piece, "옮기기 → " + RowLabel(key), b => b.SetMove(lead, key))) _fwPicked = key;
+        if (ChangePlate(piece, "옮기기 → " + RowLabel(key), b => b.SetMove(lead, key))) { _fwPicked = key; _fwPickedSub = null; }
         RefreshAll();
     }
 
@@ -441,7 +453,11 @@ public sealed partial class PlacePartView
         var watch = Stopwatch.StartNew();
         // 새 줄을 먼저 정한 뒤 그린다 — 첫 그림부터 새 줄로(revit-verify R48 설치 전 L2). 시간은 다 그린 뒤까지 잰다.
         // 지운 판은 줄이 없다 — 고르던 줄은 그대로 둔다(R56a — JACK 2026-10-22 «지우면 선택한 객체만 보이고 다 사라진다»: 줄이 풀려 찍은 판만 진하게 남았다).
-        if (_fwPlate is { } anchor && _board.IndexOf(anchor) is int now && now >= 0 && _board.RowOf(_board.Pieces[now]) is { } row) _fwPicked = row;
+        if (_fwPlate is { } anchor && _board.IndexOf(anchor) is int now && now >= 0 && _board.RowOf(_board.Pieces[now]) is { } row)
+        {
+            if (_fwPicked != row) _fwPickedSub = null;
+            _fwPicked = row;
+        }
         SetFormworkMeshes();
         RefreshAll();
         Log?.Invoke(log + $" · 지운 판 {_board.DroppedCount}장({M2(_board.DroppedArea)} ㎡) · 옮긴 판 {_board.MovedCount}장({M2(_board.MovedArea)} ㎡)" +
@@ -507,7 +523,7 @@ public sealed partial class PlacePartView
 
 
     // 덧그림을 짓는 기준(② 대응표 줄의 열쇠 · ③ 거푸집 줄) — RefreshFormwork · RefreshReview 가 바뀐 것을 보고 겉면을 갈아 끼운다.
-    private object? OverlayKey() => Step == 2 ? _rvFormLine : _fwPicked is { } row ? row : null;
+    private object? OverlayKey() => Step == 2 ? _rvFormLine : _fwPicked is { } row ? (row, _fwPickedSub) : null;
 
 
     /// <summary>시험용: 덧그린 줄 몫 수 · 통째로 고른 줄인 덩이.</summary>
@@ -530,6 +546,8 @@ public sealed partial class PlacePartView
     {
         _fwRows.Children.Clear();
         _fwRowViews.Clear();
+        _fwSubViews.Clear();
+        _fwSubRows.Clear();
         _fwDropKey = null;                        // 지운 판 묶음도 새 판으로 다시 짓는다(RefreshDroppedRows — 새 판에 지운 판이 없어도 옛 줄을 지운다 · 설치 전 검토 M1)
         if (_board == null) return;
         if (_board.Rows.Count == 0)
@@ -592,8 +610,113 @@ public sealed partial class PlacePartView
             line.MouseLeftButtonUp += (_, e) => { if (!Within(e.OriginalSource as DependencyObject, combo) && !Within(e.OriginalSource as DependencyObject, reset)) PickRow(key); };
             _fwRows.Children.Add(line);
             _fwRowViews[key] = (line, combo, area, swatch, tag, reset);
+            // 아래 줄(R64): 지금 «여러 종류»이거나 아래 줄 값이 있는 줄만 — 보드 동안 그대로.
+            if ((row.Subs.Count >= 2 && row.Draft == FormworkSummary.Mixed) || row.Subs.Any(s => s.Rule.Length > 0))   // 아래 줄 값이 있으면 늘(말없이 걸리지 않게 — 설치 전 검토 낮음)
+            {
+                _fwSubRows.Add(key);
+                foreach (var sub in row.Subs) AddSubLine(row, sub);
+            }
         }
     }
+
+    // 아래 줄 한 줄: «└ 벽과 한 덩어리» · 넓이 · 종류 칸(첫 줄 = 줄 값이 있으면 «줄 따름(…)», 없으면 «자동(…)») · 꼬리표 · ↺.
+    private void AddSubLine(FormworkRow row, FormworkSubRow sub)
+    {
+        var key = (row.Type, row.Group);
+        string subKey = sub.Key;
+        var grid = RowGrid();
+        var name = new TextBlock { Text = "└ " + SubLabel(row, sub), VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, Foreground = _sub, Margin = new Thickness(4, 0, 0, 0) };
+        _ui.Tip(name, SubTip(row, sub));
+        var area = new TextBlock { Text = M2(sub.Area), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0), Foreground = _sub };
+        var combo = _ui.Combo($"{ScopeText(row)} 가운데 «{SubLabel(row, sub)}» 판에만 적용됩니다.", $"fw.kind.{row.Type}.{row.Group}.{subKey}");
+        combo.MinHeight = 24;
+        combo.FontSize = 12;
+        combo.Padding = new Thickness(25, 0, 26, 1);
+        combo.Items.Add(new ComboBoxItem { Content = SubAuto(row, sub), Tag = "", ContentTemplate = AutoTemplate() });
+        bool banded = row.Group is not (FormworkTable.GroupSlope or FormworkTable.GroupHole);
+        foreach (string item in FormworkTable.Items)
+            if (banded || item != FormworkTable.Euro) combo.Items.Add(KindItem(item, item));
+        if (sub.Rule.Length > 0 && !combo.Items.OfType<ComboBoxItem>().Any(i => (string)i.Tag == sub.Rule)) combo.Items.Add(KindItem(sub.Rule, sub.Rule));
+        SelectKind(combo, sub.Rule);
+        combo.SelectionChanged += (_, _) =>
+        {
+            if (_syncing || combo.SelectedItem is not ComboBoxItem { Tag: string choice }) return;
+            combo.Dispatcher.BeginInvoke(() => ChangeSubRule(key, subKey, choice));
+        };
+        combo.PreviewMouseWheel += (_, e) => PassWheel(combo, e);
+        combo.DropDownClosed += (_, _) => _view3d.Focus();
+        var swatch = new Border { Width = 10, Height = 10, CornerRadius = new CornerRadius(2), Margin = new Thickness(9, 0, 0, 0), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false };
+        var kindCell = new Grid();
+        kindCell.Children.Add(combo);
+        kindCell.Children.Add(swatch);
+        var tag = new TextBlock { FontSize = 11.5, Foreground = _sub, VerticalAlignment = VerticalAlignment.Center };
+        var reset = _ui.Button("↺", "BtnGhost", "이 아래 줄을 줄 값(없으면 자동)으로 돌립니다.", $"fw.reset.{row.Type}.{row.Group}.{subKey}");
+        reset.Focusable = false;
+        reset.MinHeight = 22;
+        reset.Padding = new Thickness(5, 0, 5, 1);
+        reset.Margin = new Thickness(2, 0, 0, 0);
+        reset.Click += (_, _) => ChangeSubRule(key, subKey, "");
+        var tagCell = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+        tagCell.Children.Add(tag);
+        tagCell.Children.Add(reset);
+        Grid.SetColumn(area, 1);
+        Grid.SetColumn(kindCell, 2);
+        Grid.SetColumn(tagCell, 3);
+        grid.Children.Add(name);
+        grid.Children.Add(area);
+        grid.Children.Add(kindCell);
+        grid.Children.Add(tagCell);
+        var line = new Border { Child = grid, CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 1, 4, 1), Margin = new Thickness(0, 0, 0, 1), Background = Brushes.Transparent, Cursor = Cursors.Hand };
+        _ui.Mark(line, "", $"fw.sub.{row.Type}.{row.Group}.{subKey}");
+        line.MouseLeftButtonUp += (_, e) => { if (!Within(e.OriginalSource as DependencyObject, combo) && !Within(e.OriginalSource as DependencyObject, reset)) PickRow(key, subKey); };
+        _fwRows.Children.Add(line);
+        _fwSubViews[(row.Type, row.Group, subKey)] = (line, combo, area, swatch, tag, reset);
+    }
+
+    // 아래 줄 이름표(좁은 칸 — 짧게 · 풀이는 풍선 글): 덩어리 → «벽 덩어리» · «슬래브 덩어리» · 나머지가 하나면 «나머지», 여럿이면 «그 밖(자동 종류)».
+    private static string SubLabel(FormworkRow row, FormworkSubRow sub)
+    {
+        if (sub.Key == FormworkAnalyzer.LumpWall) return "벽 덩어리";
+        if (sub.Key == FormworkAnalyzer.LumpSlab) return "슬래브 덩어리";
+        return row.Subs.Count(s => s.Key is not (FormworkAnalyzer.LumpWall or FormworkAnalyzer.LumpSlab)) == 1 ? "나머지" : $"그 밖({ClosedDraft(sub.Key)})";
+    }
+
+    private static string SubTip(FormworkRow row, FormworkSubRow sub) =>
+        sub.Key == FormworkAnalyzer.LumpWall ? "벽과 한 평면으로 이어져 한 덩어리가 된 판 — 자동이면 벽의 종류를 따릅니다."
+        : sub.Key == FormworkAnalyzer.LumpSlab ? "슬래브와 한 평면으로 이어져 한 덩어리가 된 판 — 자동이면 슬래브의 종류를 따릅니다."
+        : $"이 줄의 나머지 판 — 자동이면 {ClosedDraft(sub.Key)}.";
+
+    // 아래 줄의 첫 칸: 줄 값이 있으면 그 값을 따른다(«줄 따름(…)» — critic R64 M3), 없으면 그 아래 줄의 자동 종류.
+    private static KindAuto SubAuto(FormworkRow row, FormworkSubRow sub) =>
+        row.Rule.Length > 0 ? new KindAuto(row.Rule, $"줄 따름({row.Rule})") : new KindAuto(ClosedDraft(sub.Draft), OpenDraft(sub.Draft));
+
+    // 아래 줄의 종류를 바꿨다(R64): 그 아래 줄만 적는다(줄 값 그대로 — critic R64 H1). 되돌리기 = 그 줄의 값 전부(줄 + 아래 줄) 스냅숏.
+    private bool ChangeSubRule((string type, string group) key, string sub, string choice)
+    {
+        if (_board == null || Busy) return false;
+        var before = _board.RowRulesOf(key.type, key.group);
+        if (!_board.SetSubRule(key.type, key.group, sub, choice)) return false;
+        var label = RowOf(key) is { } r && r.Subs.FirstOrDefault(s => s.Key == sub) is { } s ? SubLabel(r, s) : sub;
+        string name = choice.Length > 0 ? choice : "줄 값 · 자동";
+        _fwUndo.Add(($"{RowLabel(key)} · {label} → {name}", () => { _board.SetRowRules(key.type, key.group, before); return true; }));
+        string problem = SaveRules?.Invoke() ?? "";
+        _fwPicked = key;
+        _fwPickedSub = sub;
+        if (_fwPlate is { } plate && (_board.IndexOf(plate) is var at && (at < 0 || !_board.InRow(_board.Pieces[at], key.type, key.group, sub)))) _fwPlate = null;
+        var watch = Stopwatch.StartNew();
+        SetFormworkMeshes();
+        RefreshAll();
+        Log?.Invoke($"거푸집 대응표\t{key.type} · {key.group} · {sub} → {name} · 판 {_board.Pieces.Count(p => p.Plate != null)} · 거푸집 {M2(_board.Total)} ㎡" +
+                    $" · 판 다시 지음 {_board.RefreshMilliseconds} ms · 그림 {watch.ElapsedMilliseconds} ms");
+        if (problem.Length > 0)
+            ShowMessage($"{RowLabel(key)} · {label} → {name} — 대응표를 모델에 적지 못했습니다(이 창에서는 바꾼 값으로 셉니다): {problem}", true);
+        else ShowMessage($"{RowLabel(key)} · {label} → {name} · 거푸집 {M2(_board.Total)} ㎡");
+        return true;
+    }
+
+    // 찍은 판이 든 아래 줄(그 줄이 아래 줄을 보일 때만 — 판 띠의 종류 단추가 그 아래 줄을 바꾼다 · critic R64 M4).
+    private string? PickedPlateSub((string type, string group) key) =>
+        _board != null && _fwSubRows.Contains(key) && _fwPickedIndex >= 0 && PieceAt(_fwPickedIndex) is { Dropped: false } piece ? _board.SubOf(piece) : null;
 
     // 종류 칸(JACK 2026-10-21 «처음 보는 사람도 알기 쉽게» · 고름 «자동/직접 표시» · «선택 필요처럼 간결하게»): [자동(규칙의 종류)] · 유로폼 · 합판 3회 · 합판 4회 · 합판 6회 · 세지 않음.
     // 닫힌 칸은 종류만(자동이면 규칙의 종류 · 정할 것이면 «⚠ 선택 필요») — 펼치면 첫 줄이 «자동(…)» · 칸 옆 꼬리표가 자동 / 직접 ↺.
@@ -710,13 +833,13 @@ public sealed partial class PlacePartView
     private bool ChangeRule((string type, string group) key, string choice, bool record = true)
     {
         if (_board == null || Busy) return false;
-        string before = _board.RuleOf(key.type, key.group);
+        var before = _board.RowRulesOf(key.type, key.group);
         if (!_board.SetRule(key.type, key.group, choice)) return false;
-        // 되돌리기 목록(R55b): 그 줄의 전 값 — 되돌릴 때는 다시 적지 않는다(record = false).
-        // 그새 같은 값이 되어 있으면(바뀐 것 없음) 되돌린 것으로 본다 — 목록에 끝없이 남지 않게.
-        if (record) _fwUndo.Add(($"{RowLabel(key)} → {(choice.Length > 0 ? choice : "자동")}", () => { ChangeRule(key, before, record: false); return true; }));
+        // 되돌리기 목록(R55b): 그 줄의 전 값 — 아래 줄 값까지(R64 — 줄에서 고르면 아래 줄 값을 지우므로 스냅숏으로 되살린다).
+        if (record) _fwUndo.Add(($"{RowLabel(key)} → {(choice.Length > 0 ? choice : "자동")}", () => { _board.SetRowRules(key.type, key.group, before); return true; }));
         string problem = SaveRules?.Invoke() ?? "";
         _fwPicked = key;
+        _fwPickedSub = null;
         // 찍어 둔 판이 바꾼 줄의 판이 아니면 푼다 — 흰 막 · 띠가 다른 줄의 판에 남지 않게(revit-verify R48 설치 전 L3).
         if (_fwPlate is { } plate && (_board.IndexOf(plate) is var at && (at < 0 || !_board.InRow(_board.Pieces[at], key.type, key.group)))) _fwPlate = null;
         var watch = Stopwatch.StartNew();
@@ -816,7 +939,12 @@ public sealed partial class PlacePartView
             kind.Padding = new Thickness(9, 0, 9, 1);
             kind.Margin = new Thickness(0, 0, 4, 0);
             string choice = item;
-            kind.Click += (_, _) => { if (PickedPlateRow() is { } key) ChangeRule(key, choice); };
+            kind.Click += (_, _) =>
+            {
+                if (PickedPlateRow() is not { } key) return;
+                if (PickedPlateSub(key) is { } sub) ChangeSubRule(key, sub, choice);   // 아래 줄을 보이는 줄이면 그 아래 줄만(R64)
+                else ChangeRule(key, choice);
+            };
             _fwKindButtons[item] = kind;
             _fwKindBar.Children.Add(kind);
         }
@@ -824,7 +952,12 @@ public sealed partial class PlacePartView
         _fwKindAuto.Focusable = false;
         _fwKindAuto.MinHeight = 26;
         _fwKindAuto.Padding = new Thickness(8, 0, 8, 1);
-        _fwKindAuto.Click += (_, _) => { if (PickedPlateRow() is { } key) ChangeRule(key, ""); };
+        _fwKindAuto.Click += (_, _) =>
+        {
+            if (PickedPlateRow() is not { } key) return;
+            if (PickedPlateSub(key) is { } sub) ChangeSubRule(key, sub, "");
+            else ChangeRule(key, "");
+        };
         _fwKindBar.Children.Add(_fwKindAuto);
         _fwKindScope.Foreground = _sub;
         _ui.Mark(_fwKindScope, "", "fw.kind.scope");
@@ -894,7 +1027,7 @@ public sealed partial class PlacePartView
             foreach (var row in _board.Rows)
             {
                 if (!_fwRowViews.TryGetValue((row.Type, row.Group), out var view)) continue;
-                bool picked = _fwPicked == (row.Type, row.Group);
+                bool picked = _fwPicked == (row.Type, row.Group) && _fwPickedSub == null;
                 bool ask = row.Draft == FormworkSummary.Ask && row.Rule.Length == 0;   // 아직 정하지 않은 '아래가 빈 밑면'
                 view.row.Background = picked ? _ui["AccentSoft"] : ask ? _ui["WarnBg"] : Brushes.Transparent;
                 view.area.Text = M2(row.Area);
@@ -908,6 +1041,37 @@ public sealed partial class PlacePartView
                 view.tag.Text = direct ? "직접" : row.Draft is FormworkSummary.Ask or FormworkSummary.Dropped or FormworkSummary.PlateKinds ? "" : "자동";
                 view.tag.Foreground = direct ? _ui["AccentText"] : _sub;
                 view.reset.Visibility = direct ? Visibility.Visible : Visibility.Collapsed;
+                // 아래 줄(R64): 아래 줄 값이 있으면 부모도 «직접» + ↺(누르면 줄 · 아래 줄 값을 모두 자동으로 — 꼬리표 칸이 좁아 짧은 글).
+                bool subRules = row.Subs.Any(s => s.Rule.Length > 0);
+                if (subRules && !direct)
+                {
+                    view.tag.Text = "직접";
+                    view.tag.Foreground = _ui["AccentText"];
+                    view.reset.Visibility = Visibility.Visible;
+                }
+                _ui.Tip(view.reset, subRules ? "자동으로 — 이 줄과 아래 줄에서 고른 종류를 모두 프로그램 규칙으로 돌립니다." : "자동으로 — 프로그램 규칙의 종류로 돌립니다.");
+                foreach (var sub in row.Subs)
+                {
+                    if (!_fwSubViews.TryGetValue((row.Type, row.Group, sub.Key), out var sv)) continue;
+                    sv.row.Background = _fwPicked == (row.Type, row.Group) && _fwPickedSub == sub.Key ? _ui["AccentSoft"] : Brushes.Transparent;
+                    sv.area.Text = M2(sub.Area);
+                    if (sv.combo.Items.Count > 0 && sv.combo.Items[0] is ComboBoxItem { Tag: "" } auto && !Equals(auto.Content, SubAuto(row, sub))) auto.Content = SubAuto(row, sub);
+                    SelectKind(sv.combo, sub.Rule);
+                    string subKind = sub.Rule.Length > 0 ? sub.Rule : row.Rule.Length > 0 ? row.Rule : sub.Draft;
+                    (byte r, byte g, byte b)? sc = subKind switch
+                    {
+                        FormworkSummary.Ask => FormworkPalette.Check,
+                        FormworkSummary.Dropped => FormworkPalette.Dropped,
+                        FormworkSummary.Mixed or FormworkSummary.PlateKinds => null,
+                        _ => FormworkPalette.Base(subKind),
+                    };
+                    sv.swatch.Visibility = sc == null ? Visibility.Hidden : Visibility.Visible;
+                    if (sc is { } srgb) sv.swatch.Background = new SolidColorBrush(Color.FromRgb(srgb.r, srgb.g, srgb.b));
+                    bool subDirect = sub.Rule.Length > 0;
+                    sv.tag.Text = subDirect ? "직접" : row.Rule.Length > 0 ? "줄" : "자동";
+                    sv.tag.Foreground = subDirect ? _ui["AccentText"] : _sub;
+                    sv.reset.Visibility = subDirect ? Visibility.Visible : Visibility.Collapsed;
+                }
             }
         }
         finally { _syncing = false; }
@@ -1028,7 +1192,9 @@ public sealed partial class PlacePartView
             _fwKindBar.Visibility = row == null ? Visibility.Collapsed : Visibility.Visible;
             if (row != null)
             {
-                string now = row.Rule.Length > 0 ? row.Rule : row.Draft;
+                // 아래 줄을 보이는 줄이면 그 판의 아래 줄(R64): 지금 걸린 종류 = 아래 줄 값 > 줄 값 > 그 아래 줄의 자동.
+                var subRow = PickedPlateSub((row.Type, row.Group)) is { } subKey ? row.Subs.FirstOrDefault(s => s.Key == subKey) : null;
+                string now = subRow is { Rule.Length: > 0 } ? subRow.Rule : row.Rule.Length > 0 ? row.Rule : subRow?.Draft ?? row.Draft;
                 bool banded = row.Group is not (FormworkTable.GroupSlope or FormworkTable.GroupHole);
                 foreach (var (item, button) in _fwKindButtons)
                 {
@@ -1036,8 +1202,9 @@ public sealed partial class PlacePartView
                     button.Style = _ui.StyleOf(item == now ? "BtnPrimary" : "BtnSecondary");
                     _ui.Tip(button, $"{ScopeText(row)} → {item}");
                 }
-                if (_fwKindAuto != null) _fwKindAuto.Visibility = row.Rule.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
-                _fwKindScope.Text = (row.Rule.Length > 0 ? "직접" : "자동") + " · 함께 바뀜: " + ScopeText(row);
+                bool direct = subRow != null ? subRow.Rule.Length > 0 : row.Rule.Length > 0;
+                if (_fwKindAuto != null) _fwKindAuto.Visibility = direct ? Visibility.Visible : Visibility.Collapsed;
+                _fwKindScope.Text = (direct ? "직접" : subRow != null && row.Rule.Length > 0 ? "줄" : "자동") + " · 함께 바뀜: " + ScopeText(row) + (subRow != null ? " · " + SubLabel(row, subRow) : "");
             }
         }
     }
@@ -1148,6 +1315,10 @@ public sealed partial class PlacePartView
     public void PickTableRow(string type, string group) => PickRow((type, group));
     /// <summary>지금 고른 줄.</summary>
     public (string type, string group)? PickedRow => _fwPicked;
+    /// <summary>시험용(R64): 고른 아래 줄(null = 줄 전부) · 아래 줄의 종류를 고름(화면의 칸과 같은 길) · 아래 줄을 누름.</summary>
+    public string? PickedSub => _fwPickedSub;
+    public bool ChooseSubKind(string type, string group, string sub, string choice) => ChangeSubRule((type, group), sub, choice);
+    public void PickTableSub(string type, string group, string sub) => PickRow((type, group), sub);
     /// <summary>그림 위 띠의 글(합계 · 종류별).</summary>
     public string FormworkTotalText => _fwTotalText;
     /// <summary>그 덩이의 3D 색(시험에서 본다).</summary>

@@ -46,6 +46,18 @@ public sealed class FormworkElement
     /// (그늘로 넣으면 계단 밑 벽 · 기둥 옆면이 «안팎을 재지 못함»이 된다 — 설치 전 검토 M2).
     /// </summary>
     public bool Stair { get; set; }
+
+    /// <summary>
+    /// 낮은 벽인가(R65 — FormworkAnalyzer.Analyze 가 잴 때마다 정한다): 벽 같은 부재의 위아래로 이어진 더미 높이가 1.2 m 미만 — 옆면 · 경사면 · 구멍 둘레가
+    /// 합판 3회(밑면은 4회 그대로). 같은 평면으로 이어진 수직면 덩어리가 1.2 m 이상인 조각(호퍼 벽 안쪽 + 슬래브 구멍 둘레 등)은 덩어리를 따른다.
+    /// </summary>
+    public bool LowWall { get; internal set; }
+
+    /// <summary>
+    /// 계단 챌면의 (높이 · 폭)(m — 런마다 · R65 — Revit 계단을 셀 때 StairReader 가 넣는다). 이 크기(±1 cm)인 계단의 세로 조각은 세지 않는다
+    /// (녹촌 2D 처럼 챌면 거푸집 없음 — 참 앞면처럼 키 큰 면은 센다 · critic R65 M7).
+    /// </summary>
+    public List<(double height, double width)> Risers { get; set; } = new();
 }
 
 /// <summary>구역 상자(스코프 박스) — 안쪽 면이 '어느 공간의 안쪽인지' 이름을 붙이는 데 쓴다.</summary>
@@ -115,6 +127,13 @@ public sealed class FacePatch
     /// </summary>
     public VerticalGroup? Vertical { get; internal set; }
 
+    /// <summary>
+    /// ② 표의 아래 줄 열쇠(R64 — JACK 2026-10-26 «여러 종류는 풀어서 종류별로 정할 수 있게» · 고름 «종류별 아래 줄로 풀기»): 대응표 · 다른 줄의 사람 값과 상관없이
+    /// 형상 · 부위만으로 정한다 — 수직면 덩어리의 따름 조각으로 다스리는 조각이 다른 줄이면 «덩어리:벽» · «덩어리:슬래브», 아래가 빈 밑면은 부위가 정하는 값(없으면 «확인 필요»),
+    /// 그 밖은 대응표 없이 받을 자동 종류(같은 줄의 다스리는 조각을 따르면 그 조각의 것). Analyze 가 한 번 정하고 Reclassify 는 건드리지 않는다.
+    /// </summary>
+    public string Sub { get; internal set; } = "";
+
     /// <summary>덩어리를 따르기 전 이 조각 제 사슬의 종류 · 세는가(덩어리로 바뀐 양을 일지에 — core-verify R49 계획 M5).</summary>
     internal (bool Counted, string Item)? Own { get; set; }
 
@@ -183,6 +202,9 @@ public sealed class VerticalGroup
     /// <summary>면의 바깥 법선.</summary>
     public double[] Normal { get; internal set; } = Array.Empty<double>();
 
+    /// <summary>든 조각을 합친 높이(m — 맨 아래 끝 ~ 맨 위 끝 · R65): 1.2 m 이상이면 낮은 벽의 조각도 덩어리를 따른다(FormworkAnalyzer.DraftOf).</summary>
+    public double Height { get; internal set; }
+
     /// <summary>덩어리의 넓이(㎡ — 조각의 합).</summary>
     public double Area => Members.Sum(m => m.Patch.Area);
 
@@ -208,6 +230,7 @@ public sealed class FaceResult
     public double Polygon { get; set; }         // 고리로 계산한 넓이(Gross 와 같아야 한다)
     public double Covered { get; set; }         // 다른 콘크리트가 맞닿은(또는 그 속에 묻힌) 넓이
     public double Shared { get; set; }          // 다른 부재의 면과 같은 평면·같은 방향으로 포개져, 그쪽에서 세는 넓이
+    public double StairCovered { get; set; }    // 계단이 맞닿았지만 벽이라 계단 없이 잰 넓이(R64 — 드러난 자리에 들어 있다 · 일지)
     public double LaterCovered { get; set; }    // 나중에 치는 부재가 맞닿았지만 구조체의 면이라 그 부재 없이 잰 넓이(드러난 자리에 들어 있다 — 일지 · 검산)
     public double Net { get; set; }             // 드러난 넓이(= Polygon − Covered − Shared)
     public double[] Normal { get; set; } = Array.Empty<double>();   // 바깥을 보는 법선(x, y, z — 단위 길이). 곡면이면 비어 있다

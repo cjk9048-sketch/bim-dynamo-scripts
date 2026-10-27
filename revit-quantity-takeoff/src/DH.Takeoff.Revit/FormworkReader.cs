@@ -38,6 +38,7 @@ public static class FormworkReader
         /// <summary>Revit 계단 한 줄씩(R56c-1 — 일지) · 둘레 콘크리트로 넣은 콘크리트 계단 수.</summary>
         public List<string> StairLines = new();
         public int StairContexts;
+        public int StairTargets;                          // 셈 대상으로 넣은 Revit 계단(R65 — 콘크리트 · 안 섞임 · 입체 있음)
     }
 
     /// <param name="selection">선택한 부재(비어 있으면 전체가 결과 대상).</param>
@@ -52,10 +53,12 @@ public static class FormworkReader
     public static Scene Read(Document doc, ICollection<ElementId> selection, Func<string, bool>? laterPart = null, DeductRank.Table? ranks = null)
     {
         var scene = new Scene { Selected = selection.Count };
-        foreach (var id in DimensionExtractor.CollectApplicable(doc))
+        var applicable = DimensionExtractor.CollectApplicable(doc);
+        foreach (var id in applicable)
         {
             var el = doc.GetElement(id);
             if (el == null) continue;
+            if (el is Autodesk.Revit.DB.Architecture.Stairs) continue;   // 계단은 아래(StairReader) 한 곳에서만 넣는다(R65 — critic R65 H1 · 두 번 들지 않게)
             bool target = selection.Count == 0 || selection.Contains(id);
             // 대상은 산출식 자동입력과 같다: 콘크리트 부재(무슨 재료인지 알 수 없는 부재는 빼지 않는다).
             var material = ConcreteFilter.Classify(doc, el);
@@ -93,17 +96,39 @@ public static class FormworkReader
             });
         }
 
-        // R56c-1(JACK 2026-10-22 «중간슬래브의 계단이 붙는 세로면은 거푸집이 필요 없다» · 고름 «계단 재질이 콘크리트면 수량산출에»): 콘크리트 Revit 계단은
-        // 이번 판에서 둘레 콘크리트로만 넣는다(Target = false — 셈 대상 아님 · 맞닿은 면 · 덮인 면을 가리는 데). 부재로 세는 일은 첫 실행 일지 뒤(R56c-2).
+        // Revit 계단: 셈 대상(R65 — 모으기와 같은 판정 · 콘크리트 · 안 섞임 · 입체 있음 — StairReader.CountableIds)은 부재로 센다(부위 · 위치 · 순위 · 챌면) ·
+        // 섞인 콘크리트 계단은 전(R56c-1)처럼 둘레 콘크리트로만(Target = false — 맞닿은 면 · 덮인 면을 가리는 데).
+        var countable = new HashSet<long>(applicable.Select(i => i.Value));
         foreach (var stair in StairReader.Read(doc))
         {
             scene.StairLines.Add(stair.Line);
             if (!stair.Concrete || stair.Solids.Count == 0) continue;
             scene.StairContexts++;
+            var id = stair.Element.Id;
+            if (!countable.Contains(id.Value))
+            {
+                scene.Elements.Add(new FormworkElement
+                {
+                    Id = id.Value, Category = stair.Element.Category?.Name ?? "계단", Kind = MemberKind.Stair, Type = stair.Type,
+                    Solids = stair.Solids, Target = false, Stair = true,
+                });
+                continue;
+            }
+            bool target = selection.Count == 0 || selection.Contains(id);
+            string part = ZoneScene.Text(stair.Element, ZoneScene.PartParam).Trim();
+            if (target)
+            {
+                scene.Targets++;
+                scene.StairTargets++;
+                ReadCurved(stair.Element, stair.Solids, scene);
+            }
             scene.Elements.Add(new FormworkElement
             {
-                Id = stair.Element.Id.Value, Category = stair.Element.Category?.Name ?? "계단", Kind = MemberKind.Other, Type = stair.Type,
-                Solids = stair.Solids, Target = false, Stair = true,
+                Id = id.Value, Category = stair.Element.Category?.Name ?? "계단", Kind = MemberKind.Stair, Type = stair.Type,
+                Rank = ranks?.RankOf(part, MemberKind.Stair, false) ?? 0,
+                Zone = ZoneAssigner.Current(stair.Element), Part = part, Mark = MarkOf(stair.Element),
+                Solids = stair.Solids, Target = target, Stair = true, Risers = stair.Risers,
+                Later = part.Length > 0 && laterPart != null && laterPart(part),
             });
         }
 
@@ -131,7 +156,9 @@ public static class FormworkReader
     {
         var known = new Dictionary<long, FormworkElement>();
         foreach (var e in scene.Elements) known[e.Id] = e;
-        foreach (var later in scene.Elements.Where(e => e.Later))
+        // 계단(R64)도: 벽을 계단 없이 재므로 계단이 결합으로 벽을 깎았으면 홈 둘레가 세진다 — 알림에 넣는다(설치 전 검토 중간). 부위 묶음은 목록의 처음 값으로.
+        var plain = new FormworkOptions();
+        foreach (var later in scene.Elements.Where(e => e.Later || FormworkAnalyzer.IsStair(e, plain)))
         {
             var el = doc.GetElement(new ElementId(later.Id));
             if (el == null) continue;
@@ -140,7 +167,7 @@ public static class FormworkReader
             catch { continue; }
             foreach (var id in joined)
             {
-                if (!known.TryGetValue(id.Value, out var other) || !FormworkAnalyzer.GivesWay(later, other)) continue;
+                if (!known.TryGetValue(id.Value, out var other) || !FormworkAnalyzer.Absent(later, other, plain)) continue;
                 try
                 {
                     if (doc.GetElement(id) is Element cut && JoinGeometryUtils.IsCuttingElementInJoin(doc, el, cut)) scene.LaterCuts.Add((later.Id, id.Value));

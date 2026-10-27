@@ -241,7 +241,7 @@ public sealed class PickEditor
             KindFilter.Floors => m.Kind is MemberKind.Foundation or MemberKind.Slab,
             KindFilter.Walls => m.Kind == MemberKind.Wall,
             KindFilter.Frames => m.Kind is MemberKind.Column or MemberKind.Beam,
-            KindFilter.Others => m.Kind == MemberKind.Other,
+            KindFilter.Others => m.Kind is MemberKind.Other or MemberKind.Stair,   // Revit 계단(R65)도 «그 밖»
             _ => true,
         };
         return m.Drawn && kind && !Hidden.Contains(m.Id) && (Floor < 0 || Floor >= Floors.Count || InBand(m, Floors[Floor]));
