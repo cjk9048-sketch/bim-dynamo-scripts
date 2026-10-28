@@ -1382,6 +1382,15 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
             $" · 덩어리로 값 바뀐 조각 {lumpChanges.Sum(c => c.count)}({lumpChanges.Sum(c => c.area).ToString("0.##", CultureInfo.InvariantCulture)} ㎡" +
             (lumpChanges.Count > 0 ? ": " + string.Join(" · ", lumpChanges.Take(6).Select(c => FormattableString.Invariant($"{c.type} {c.from}→{c.to} {c.count}개 {c.area:0.##}"))) : "") + ")" +
             $" · 덩어리에 든 확인할 자리 {FormworkSummary.LumpChecks(results).Count}(늘 0 — 확인할 자리는 덩어리에 넣지 않음)" +
+            // R68: 덩어리에 들되 제 종류(낮은 벽 · 슬래브 구멍 둘레 · 끼인 슬래브 옆) · 판 모양 검사 · 종류를 정한 판이 나뉨.
+            $" · 제 종류 조각 {FormworkAnalyzer.LastOwnKind.Count}({FormworkAnalyzer.LastOwnKind.Sum(o => o.area).ToString("0.##", CultureInfo.InvariantCulture)} ㎡" +
+            (FormworkAnalyzer.LastOwnKind.Count > 0 ? ": " + string.Join(" · ", FormworkAnalyzer.LastOwnKind.GroupBy(o => o.why).Select(g => FormattableString.Invariant($"{g.Key} {g.Count()}개 {g.Sum(o => o.area):0.##}"))) : "") + ")" +
+            $" · 판 모양 검사 {board.Sheet.CheckMs} ms(" + string.Join(" · ", board.Sheet.Checks.SelectMany(kv => kv.Value).GroupBy(f => f.Test)
+                .Select(g => $"{FormworkShapeCheck.NameOf(g.Key)} {g.Count()}")) + $" · 보지 못한 판 {board.Sheet.CheckFailed}) · 종류 정한 판 나뉨 {board.SplitKinds.Count}" +
+            // R69: 안쪽 벽 면의 슬래브 띠(가름 · 애매 — 부재 Id) · 모델 수정사항.
+            $" · 슬래브 띠 {FormworkAnalyzer.LastSlabBands.Count}(가름 {FormworkAnalyzer.LastSlabBands.Count(b => b.Cut)} · 애매 {FormworkAnalyzer.LastSlabBands.Count(b => !b.Cut)}" +
+            (FormworkAnalyzer.LastSlabBands.Count > 0 ? ": " + string.Join(" · ", FormworkAnalyzer.LastSlabBands.OrderBy(b => b.Cut).Take(12).Select(b => FormattableString.Invariant($"{b.ElementId} {b.ZBottom:0.###}~{b.ZTop:0.###} {(b.Cut ? "가름" : "애매")}{(b.Top ? " 위끝" : "")} 양옆 {b.BySides} 방 {b.ByRoom} 덮음 {b.Cover:0.##}{(b.Why.Length > 0 ? " " + b.Why : "")}"))) : "") + ")" +
+            $" · 모델 수정사항 {board.Sheet.ModelChecks.Count}(" + string.Join(" · ", board.Sheet.ModelChecks.GroupBy(i => i.Key).Select(g => $"{FormworkModelCheck.NameOf(g.Key)} {g.Count()}")) + ")" +
             $" · 둘레 한 줄 {board.Sheet.Rings.found}(값이 안 맞아 면마다 {board.Sheet.Rings.refused}) · (양측) 줄 {board.Sheet.Lines.Count(l => l.Tag == FormworkSheet.BothSidesTag)}" +
             $" · 판 지음 {board.RefreshMilliseconds} ms" +
             (rulesProblem.Length > 0 ? " · 대응표를 읽지 못함: " + rulesProblem : "") + $" · {watch.ElapsedMilliseconds} ms");
@@ -1398,7 +1407,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         // Revit 계단(R56c-1): 둘레 콘크리트로 넣은 수 + 계단마다 한 줄(런 · 참 · 재료 · 형상 출처 · 체적 — 계단을 부재로 세기(R56c-2) 전에 첫 실행 값을 본다).
         if (scene.StairLines.Count > 0)
         {
-            session.Note($"계단\t계단 {scene.StairLines.Count} · 콘크리트로 넣음 {scene.StairContexts} · 셈 대상 {scene.StairTargets}(R65) · 챌면으로 안 센 조각 {FormworkAnalyzer.LastRisers}");
+            session.Note($"계단\t계단 {scene.StairLines.Count} · 콘크리트로 넣음 {scene.StairContexts} · 셈 대상 {scene.StairTargets}(R65) · 챌면 조각 {FormworkAnalyzer.LastRisers}(R70 셈)");
             foreach (string line in scene.StairLines) session.Note("  계단\t" + line);
             // 계단 식(R65 — StairReader.Formula): 런 · 참 식과 입체 · 겹침 · 식 · 런마다 식 / 입체(산출식을 지은 계단만).
             foreach (var e in scene.Elements.Where(e => e.Stair && e.Target))
@@ -1423,6 +1432,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
             issues.Add(new PlacePartView.Issue("parts", "부위 확인", oddIds.Count, oddIds,
                 "부위가 모양과 맞지 않아 거푸집 · 산출서 줄이 틀릴 수 있습니다 — ① 에서 부위를 고치세요.\n" +
                 string.Join("\n", odd.GroupBy(f => f.Id).Take(5).Select(g => $"{g.Key} {g.First().Type}: {string.Join(" · ", g.Select(f => f.Text))}")) + (oddIds.Count > 5 ? "\n…" : "")));
+        // 거푸집으로 본 모델 수정사항(R69)은 창이 지금 시트에서 딱지를 짓는다(R70 — 판 종류를 바꾸면 따라 바뀜 · PlacePartView.AllIssues).
         var notes = new List<string>();
         if (rulesProblem.Length > 0) notes.Add(rulesProblem);
         if (audit.PolygonMismatch + audit.SumMismatch + audit.PatchMismatch > 0) notes.Add("검산이 맞지 않는 면이 있습니다 — 일지를 보내 주세요.");

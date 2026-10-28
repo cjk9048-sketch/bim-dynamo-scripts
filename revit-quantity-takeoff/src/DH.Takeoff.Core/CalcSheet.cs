@@ -244,7 +244,62 @@ public static class CalcSheet
         var excluded = elements.Where(e => e.Excluded).ToList();
         if (excluded.Count > 0)
             WriteElements(book.Add("대상 아님"), "산출 대상에서 뺀 부재(까닭은 오른쪽 끝 칸)", excluded, "뺀 까닭");
+        // ── 검증(R68 — 거푸집 판 모양 검사) ──
+        if (formwork != null) WriteChecks(book.Add("검증"), formwork);
         return book;
+    }
+
+    // 거푸집 판 모양 검사(R68 — JACK 2026-10-28 «기하 모양을 검증하는 시스템» · 고름 «엑셀 «검증» 시트»): 걸린 판의 검사마다 한 줄 — 판 = 거푸집 객체 한 장
+    // (높이 구간을 넘어 한 장 · 그 판의 부위 · 부호 · 식). 경고 먼저 · 검사 차례 · 넓은 판 먼저. 걸린 판이 없으면 그 한 줄.
+    private static void WriteChecks(XlsxSheet sheet, Formwork.FormworkSheetData formwork)
+    {
+        double[] widths = { 6, 6, 12, 12, 16, 16, 44, 10, 30, 30 };
+        for (int c = 0; c < widths.Length; c++) sheet.Width(c + 1, widths[c]);
+        var found = formwork.Checks
+            .SelectMany(kv => kv.Value.Select(f => (plate: kv.Key, finding: f)))
+            .OrderBy(x => Formwork.FormworkShapeCheck.IsInfo(x.finding.Test) ? 1 : 0).ThenBy(x => x.finding.Test).ThenByDescending(x => x.plate.Area)
+            .ToList();
+        int warn = formwork.Checks.Count(kv => kv.Value.Any(f => !Formwork.FormworkShapeCheck.IsInfo(f.Test)));
+        int info = formwork.Checks.Count(kv => kv.Value.All(f => Formwork.FormworkShapeCheck.IsInfo(f.Test)));
+        sheet.Text(1, 1, $"거푸집 판 모양 검사 — 경고 {warn}장 · 정보 {info}장(판 {formwork.Plates.Count}장 가운데)", XlsxStyle.Title);
+        string[] head = { "번호", "수준", "검사", "종류", "부위", "부호", "식", "넓이(㎡)", "까닭", "부재 Id" };
+        for (int c = 0; c < head.Length; c++) sheet.Text(3, c + 1, head[c], XlsxStyle.BoldCenter);
+        int r = 4;
+        if (found.Count == 0) sheet.Text(r++, 1, "걸린 판 없음");
+        foreach (var (plate, finding) in found)
+        {
+            sheet.Number(r, 1, r - 3);
+            sheet.Text(r, 2, Formwork.FormworkShapeCheck.IsInfo(finding.Test) ? "정보" : "경고");
+            sheet.Text(r, 3, Formwork.FormworkShapeCheck.NameOf(finding.Test));
+            sheet.Text(r, 4, plate.Item);
+            sheet.Text(r, 5, plate.Part);
+            sheet.Text(r, 6, plate.Mark);
+            sheet.Text(r, 7, plate.Formula);
+            sheet.Number(r, 8, FormulaDecomposer.RoundQuantity(plate.Area), XlsxStyle.Number2);
+            sheet.Text(r, 9, finding.Text);
+            sheet.Text(r, 10, string.Join(", ", plate.Ids.OrderBy(id => id)));
+            r++;
+        }
+
+        // 모델 수정사항(R69 — JACK «모델검증단계에서 거푸집수량을 고려해서 수정사항으로 · 2D 산출서 기준으로 볼것»): 갈래 · 수준 · 까닭 · 2D 기준 · 영향 넓이 · 부재.
+        var model = formwork.ModelChecks;
+        int top = r + 2;
+        sheet.Text(top, 1, $"모델 수정사항 — 경고 {model.Count(i => i.Warn)} · 정보 {model.Count(i => !i.Warn)}", XlsxStyle.Title);
+        string[] modelHead = { "번호", "수준", "항목", "", "", "", "까닭", "넓이(㎡)", "2D 기준", "부재 Id" };
+        for (int c = 0; c < modelHead.Length; c++) if (modelHead[c].Length > 0) sheet.Text(top + 2, c + 1, modelHead[c], XlsxStyle.BoldCenter);
+        r = top + 3;
+        if (model.Count == 0) sheet.Text(r, 1, "수정사항 없음");
+        foreach (var item in model)
+        {
+            sheet.Number(r, 1, r - top - 2);
+            sheet.Text(r, 2, item.Warn ? "경고" : "정보");
+            sheet.Text(r, 3, Formwork.FormworkModelCheck.NameOf(item.Key));
+            sheet.Text(r, 7, item.Text);
+            sheet.Number(r, 8, FormulaDecomposer.RoundQuantity(item.Area), XlsxStyle.Number2);
+            sheet.Text(r, 9, item.TwoD);
+            sheet.Text(r, 10, string.Join(", ", item.Members));
+            r++;
+        }
     }
 
     // 절 제목의 규격 조각(2D: C «(» · D «무근» · F «,» · G «25» · I «-» · J «18» · L «-» · M «15» · O «)» · P «:» · Q «펌프차 붐타설»).

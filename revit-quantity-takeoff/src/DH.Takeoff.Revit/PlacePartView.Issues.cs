@@ -10,11 +10,27 @@ namespace DH.Takeoff.Revit;
 // 그림 위에 띄우던 긴 알림(② 를 지을 때)과 ③ 위의 긴 글을 대신한다.
 public sealed partial class PlacePartView
 {
-    /// <summary>문제 하나: 딱지 이름 · 수(쌍 · 개) · 그 부재들 · 풍선 글.</summary>
-    public sealed record Issue(string Key, string Name, int Count, IReadOnlyList<long> Members, string Tip);
+    /// <summary>문제 하나: 딱지 이름 · 수(쌍 · 개) · 그 부재들 · 풍선 글 · 정보(ⓘ — 고치지 않아도 셈은 맞음 · R69).</summary>
+    public sealed record Issue(string Key, string Name, int Count, IReadOnlyList<long> Members, string Tip, bool Info = false);
+
+    /// <summary>
+    /// 거푸집으로 본 모델 수정사항(R69 — JACK 2026-10-28 «모델검증단계에서 거푸집수량을 고려해서 수정사항으로 · 2D 산출서 기준으로 볼것») → 갈래마다 딱지 하나:
+    /// 수 = 항목 수 · 부재 = 항목들의 부재 · 풍선 글 = 2D 기준 한 줄 + 항목 다섯까지. 갈래의 항목이 모두 정보(애드인이 층마다 갈라 셈)면 ⓘ.
+    /// </summary>
+    public static List<Issue> ModelIssues(IEnumerable<DH.Takeoff.Core.Formwork.FormworkModelCheck.Item> items) =>
+        items.GroupBy(i => i.Key).Select(g =>
+        {
+            var list = g.ToList();
+            return new Issue(g.Key, DH.Takeoff.Core.Formwork.FormworkModelCheck.NameOf(g.Key), list.Count, list.SelectMany(i => i.Members).Distinct().ToList(),
+                list[0].TwoD + "\n" + string.Join("\n", list.Take(5).Select(i => (i.Warn ? "⚠ " : "ⓘ ") + i.Text)) + (list.Count > 5 ? "\n…" : ""),
+                Info: list.All(i => !i.Warn));
+        }).ToList();
 
     private IReadOnlyList<Issue> _issues = Array.Empty<Issue>();
     private WrapPanel? _rvIssues;
+
+    // 지금 보일 딱지(R70 — critic R69 M6): 명령이 넣은 것 + 지금 판에서 본 모델 수정사항. 판 종류를 바꾸면 판 모양 검사가 바뀌니 그릴 때마다 지금 시트에서 짓는다.
+    private List<Issue> AllIssues() => _board == null ? _issues.ToList() : _issues.Concat(ModelIssues(_board.Sheet.ModelChecks)).ToList();
 
     /// <summary>모델의 문제(명령이 넣는다 — 열 때 빠른 모델 검증 · ② 를 지은 뒤 거푸집에서 본 것). 넣으면 지금 걸음의 딱지를 다시 그린다.</summary>
     public IReadOnlyList<Issue> Issues
@@ -42,14 +58,14 @@ public sealed partial class PlacePartView
     }
 
     private Button IssueChip(Issue issue, Thickness margin) =>
-        WarnButton($"⚠ {issue.Name} {issue.Count}", issue.Tip, "issue." + issue.Key, () => ShowIssue(issue), margin);
+        WarnButton($"{(issue.Info ? "ⓘ" : "⚠")} {issue.Name} {issue.Count}", issue.Tip, "issue." + issue.Key, () => ShowIssue(issue), margin);
 
     // ③ 위의 딱지(줄을 다시 짓지 않고 딱지만).
     private void RenderReviewIssues()
     {
         if (_rvIssues == null) return;
         _rvIssues.Children.Clear();
-        foreach (var issue in _issues) _rvIssues.Children.Add(IssueChip(issue, new Thickness(0, 4, 6, 0)));
+        foreach (var issue in AllIssues()) _rvIssues.Children.Add(IssueChip(issue, new Thickness(0, 4, 6, 0)));
         _rvIssues.Visibility = _rvIssues.Children.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -80,6 +96,6 @@ public sealed partial class PlacePartView
     /// <summary>시험용: 지금 그 딱지를 누른다(화면의 단추와 같은 길).</summary>
     public void ClickIssue(string key)
     {
-        if (_issues.FirstOrDefault(i => i.Key == key) is { } issue) ShowIssue(issue);
+        if (AllIssues().FirstOrDefault(i => i.Key == key) is { } issue) ShowIssue(issue);
     }
 }

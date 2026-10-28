@@ -24,6 +24,9 @@ public sealed partial class PlacePartView
 
     private enum SelectMode { Replace, Add, Toggle }
 
+    // 고른 판의 모양 검사 한 줄(R68 — 판 띠 둘째 줄 · 걸린 것이 없으면 숨김).
+    private readonly TextBlock _fwPlateCheck = new() { FontSize = 12, Margin = new Thickness(0, 1, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis, Visibility = Visibility.Collapsed };
+
     // 판 목록(R66).
     private readonly StackPanel _fwPlateRows = new();
     private readonly List<(Border row, FormworkBoard.PlateLine line)> _fwLineViews = new();
@@ -170,10 +173,12 @@ public sealed partial class PlacePartView
         var text = new TextBlock { Text = line.Text, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
         // 꼬리표: 직접(판마다 정한 판이 든 줄) · 줄 규칙(사용자 모드의 옛 대응표 줄이 정한 판이 든 줄).
         bool direct = pieces.Any(FormworkBoard.Direct), ruled = !direct && pieces.Any(_board!.RowRuled);
+        // 판 모양 검사에 걸린(경고) 판이 든 줄은 ⚠(R68 — 풍선 글에 걸림).
+        var warned = pieces.SelectMany(p => _board!.FindingsOf(p)).Where(f => !FormworkShapeCheck.IsInfo(f.Test)).ToList();
         var tag = new TextBlock
         {
-            Text = direct ? "직접" : ruled ? "줄 규칙" : "", FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0),
-            Foreground = direct ? _ui["AccentText"] : _sub,
+            Text = (warned.Count > 0 ? "⚠ " : "") + (direct ? "직접" : ruled ? "줄 규칙" : ""), FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0),
+            Foreground = warned.Count > 0 ? _warn : direct ? _ui["AccentText"] : _sub,
         };
         var value = new TextBlock { Text = M2(line.Value), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
         Grid.SetColumn(text, 1);
@@ -185,7 +190,8 @@ public sealed partial class PlacePartView
         grid.Children.Add(value);
         int members = pieces.SelectMany(p => p.Members).Select(m => m.Result.Element.Id).Distinct().Count();
         var row = new Border { Child = grid, CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 3, 4, 3), Margin = new Thickness(0, 1, 0, 1), Background = Brushes.Transparent, Cursor = Cursors.Hand };
-        _ui.Mark(row, $"{line.Text} · 판 {pieces.Count}장 · 부재 {members}", "fw.line." + at);
+        _ui.Mark(row, $"{line.Text} · 판 {pieces.Count}장 · 부재 {members}" +
+                      string.Concat(warned.Select(f => $"\n⚠ {FormworkShapeCheck.NameOf(f.Test)} {f.Text}").Distinct().Take(4)), "fw.line." + at);
         row.MouseLeftButtonUp += (_, _) => PickLine(at, (Keyboard.Modifiers & ModifierKeys.Control) != 0);
         _fwPlateRows.Children.Add(row);
         _fwLineViews.Add((row, line));
@@ -354,8 +360,11 @@ public sealed partial class PlacePartView
         joints.Children.Add(_fwJoints);
         _fwJointBar = joints;
 
+        _fwPlateCheck.Foreground = _warn;
+        _ui.Mark(_fwPlateCheck, "", "fw.plate.check");
         var lines = new StackPanel();
         lines.Children.Add(head);
+        lines.Children.Add(_fwPlateCheck);
         lines.Children.Add(actions);
         lines.Children.Add(joints);
         lines.Children.Add(place);
@@ -371,10 +380,11 @@ public sealed partial class PlacePartView
         if (_fwPlateBar == null || _board == null) return;
         var pieces = SelectedPieceList();
         _fwPlateBar.Visibility = pieces.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
-        if (pieces.Count == 0) { _fwPlaceOpen = false; return; }
+        if (pieces.Count == 0) { _fwPlaceOpen = false; ShowPlateChecks(pieces); return; }
         int members = pieces.SelectMany(p => p.Members).Select(m => m.Result.Element.Id).Distinct().Count();
         _fwPlateText.Text = pieces.Count == 1 ? PieceText(pieces[0]) : $"판 {pieces.Count}장 · {M2(pieces.Sum(p => p.Area))} ㎡ · 부재 {members}";
         _fwPlateText.ToolTip = _fwPlateText.Text;
+        ShowPlateChecks(pieces);
         bool anyDirect = pieces.Any(FormworkBoard.Direct), anyRuled = pieces.Any(_board.RowRuled);
         _fwPlateState.Text = !_board.UserMode ? "자동 모드" : anyDirect ? "직접" : anyRuled ? "줄 규칙" : "자동";
         _fwPlateState.Foreground = _board.UserMode && anyDirect ? _ui["AccentText"] : _sub;
@@ -404,6 +414,33 @@ public sealed partial class PlacePartView
         if (_fwPlaceBar != null) _fwPlaceBar.Visibility = _fwPlaceOpen ? Visibility.Visible : Visibility.Collapsed;
         RefreshJointChips(pieces);
     }
+
+    // 고른 판의 모양 검사(R68): 판 띠 둘째 줄(한 장 = 걸림 글 · 여러 장 = 검사마다 장 수) + 3D 에 걸린 자리 빨간 실선(홈 · 띠는 그 자리, 그 밖은 판 테두리).
+    // ② 에서만 3D 선을 건다(③ 은 콘크리트 · 거푸집 숫자의 점선을 쓴다).
+    private void ShowPlateChecks(List<FormworkPiece> pieces)
+    {
+        if (_board == null) return;
+        var found = pieces.Select(p => (piece: p, list: _board.FindingsOf(p))).Where(x => x.list.Count > 0).ToList();
+        string Mark(FormworkShapeCheck.Test t) => FormworkShapeCheck.IsInfo(t) ? "ⓘ" : "⚠";
+        _fwPlateCheck.Text = found.Count == 0 ? ""
+            : pieces.Count == 1 ? string.Join(" · ", found[0].list.Select(f => $"{Mark(f.Test)} {FormworkShapeCheck.NameOf(f.Test)} {f.Text}"))
+            : string.Join(" · ", found.SelectMany(x => x.list.Select(f => f.Test).Distinct()).GroupBy(t => t).OrderBy(g => g.Key)
+                                     .Select(g => $"{Mark(g.Key)} {FormworkShapeCheck.NameOf(g.Key)} {g.Count()}장"));
+        _fwPlateCheck.ToolTip = found.Count == 0 ? null : string.Join("\n", found.SelectMany(x => x.list.Select(f => $"{PieceText(x.piece)} — {FormworkShapeCheck.NameOf(f.Test)} {f.Text}")).Take(12));
+        _fwPlateCheck.Visibility = found.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        if (Step != 1) return;
+        var origin = _board.Origin;
+        var guides = found.SelectMany(x => x.list).Where(f => !FormworkShapeCheck.IsInfo(f.Test))
+            .SelectMany(f => f.Rings).Where(r => r.Count >= 2)
+            .Select(r => ((IReadOnlyList<Vec3>)r.Select(q => new Vec3(q[0], q[1], q[2]) - origin).ToList(), true, 3)).ToList();
+        _view3d.SetGuides(guides);
+    }
+
+    /// <summary>시험용: 판 띠의 모양 검사 줄(숨겼으면 "").</summary>
+    public string PlateCheckText => _fwPlateCheck.Visibility == Visibility.Visible ? _fwPlateCheck.Text : "";
+
+    /// <summary>시험용: 판 목록을 다시 짓는다(같은 시트에 걸림을 넣어 본 뒤 — 화면에서는 시트가 바뀔 때마다 다시 짓는다).</summary>
+    public void RebuildPlateList() => BuildPlateList();
 
     // «겹침» 칸(R67): 이름 · 넓이 · 공제 / 무시 / 일부 무시 — 다시 잴 수 없거나 겹친 부재가 없으면 줄을 숨긴다.
     private void RefreshJointChips(List<FormworkPiece> pieces)

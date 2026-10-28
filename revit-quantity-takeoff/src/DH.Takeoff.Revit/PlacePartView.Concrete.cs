@@ -100,7 +100,7 @@ public sealed partial class PlacePartView
         Log?.Invoke($"③ 콘크리트 숫자\t부재 {shown.Count}(보임) · 정확 {exact} · 가운데 식 {center} · 시간 넘음 {late} · 숫자 {labels.Count}(식 숫자에 이음 {linked}) · 점선 {guides.Count}(점 {points})" +
                     $" · {watch.ElapsedMilliseconds} ms · 가장 오래 {slowest} ms(Id {slowestId})");
         if (capped) ShowMessage(ConcreteCapped);
-        else if (_message.Text == ConcreteCapped || _message.Text == LabelsCapped) ShowMessage("");
+        else if (_message.Text == ConcreteCapped) ShowMessage("");
     }
 
     private static double Volume(Box3 b)

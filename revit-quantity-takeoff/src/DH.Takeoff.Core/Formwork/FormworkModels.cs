@@ -144,6 +144,18 @@ public sealed class FacePatch
     internal string? Follow { get; set; }
 
     /// <summary>
+    /// 덩어리에 들되 다스리는 조각을 따르지 않고 제 종류를 갖는 조각(R68 — 위아래로만 이웃인 낮은 벽 · 슬래브 구멍 둘레 · 위아래 조각 사이에 낀 슬래브 안쪽 옆 —
+    /// 녹촌 2D 의 방지턱 · 개구부 3회). 형상만 본다(FormworkAnalyzer.GroupVerticals).
+    /// </summary>
+    internal bool KeepsKind { get; set; }
+
+    /// <summary>R69: 안쪽 벽 면을 슬래브 높이에서 가른 조각 가운데 슬래브 띠의 구멍 옆(개구부 · 합판 3회 · 덩어리에서도 제 종류 · 바닥을 물려주지 않음).</summary>
+    internal bool SlabBand { get; set; }
+
+    /// <summary>R69: 슬래브 높이에서 가른 면의 조각(아래 · 띠 · 위) — 전에 그 면에 건 기록이 넓이가 달라졌으면 «모양이 바뀐 판»(critic R69 M4).</summary>
+    internal bool SlabCut { get; set; }
+
+    /// <summary>
     /// 사람이 ② 3D 에서 뺀 판에 든 조각이면 그 판의 대표 열쇠(대응표 파일의 «뺀 판:…» 줄 — R48 · JACK 2026-10-16 «찍어서 빼기 · 판 한 장»), 아니면 "".
     /// 뺀 조각은 세지 않고(정한 것으로) 종류는 대응표대로 남긴다 — 맞닿은 바닥판 옆면이 이 벽 조각의 종류를 그대로 따르게.
     /// </summary>
@@ -269,6 +281,9 @@ public sealed class ElementFormwork
 {
     public FormworkElement Element { get; set; } = new();
     public List<FaceResult> Faces { get; set; } = new();
+
+    /// <summary>이 부재의 안쪽 벽 면이 지나는 슬래브 띠(R69 — 갈랐나 · 애매한가 · 모델 검증 «층 통째 벽» · «같은 방 다르게»).</summary>
+    public List<FormworkAnalyzer.SlabBand> SlabBands { get; set; } = new();
 }
 
 /// <summary>거푸집 면 가르기의 설정.</summary>

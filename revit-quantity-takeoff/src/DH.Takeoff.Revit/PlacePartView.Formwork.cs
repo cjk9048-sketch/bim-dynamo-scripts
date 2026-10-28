@@ -155,6 +155,7 @@ public sealed partial class PlacePartView
         _view3d.Pickable = _ => true;
         _view3d.GhostPickable = false;
         _view3d.SetMeshes(_memberMeshes);
+        _view3d.SetGuides(Array.Empty<(IReadOnlyList<Vec3>, bool, int)>());   // ② 의 판 모양 검사 빨간 선이 ① 에 남지 않게(R68 설치 전 검토 중간)
         ShowStep();
         RefreshAll();
         ShowMessage("");
@@ -914,7 +915,7 @@ public sealed partial class PlacePartView
         // 경고 딱지: 대응표 줄이 없어 3D 에 칠하지 않는 틈(아래 콘크리트와 너무 가까운 밑면 — 세지 않음 · core R42 M-3) ·
         // 엑셀에서 한 줄로 잇지 못한 자리(같은 평면에 맞닿았는데 대응표의 종류가 다르다 — JACK 2026-10-15: 잇지 않고 알린다). 종류를 바꿀 때마다 다시 센다.
         _fwWarnings.Children.Clear();
-        foreach (var issue in _issues) _fwWarnings.Children.Add(IssueChip(issue, new Thickness(0, 4, 6, 0)));   // 모델의 문제(R63b) — 누르면 그 부재
+        foreach (var issue in AllIssues()) _fwWarnings.Children.Add(IssueChip(issue, new Thickness(0, 4, 6, 0)));   // 모델의 문제(R63b) — 누르면 그 부재
         if (gaps > 0)
             _fwWarnings.Children.Add(WarnChip($"그림에 없는 틈 {gaps}곳",
                 "틈 = 아래 콘크리트와 너무 가까워 거푸집을 댈 수 없는 밑면입니다(세지 않음 · 대응표 줄이 없어 3D 에 칠하지 않습니다).", "fw.warn.gaps"));
@@ -958,7 +959,8 @@ public sealed partial class PlacePartView
         }
         // 찾았지만 모양이 바뀐 뺀 판(core-verify R48 설치 전 M3): 일부 조각만 찾음 · 빠진 넓이가 뺄 때와 5% 넘게 다름.
         var check = _board.DropCheck;
-        int kindPartial = _board.KindCheck.Partial.Count;
+        // 판 종류를 정한 판이 지금 둘 이상으로 나뉨(R68) · 층마다 갈려 넓이가 바뀜(R70)도 — 한 기록은 한 번.
+        int kindPartial = _board.KindCheck.Partial.Union(_board.SplitKinds, StringComparer.Ordinal).Union(_board.KindCheck.Resized, StringComparer.Ordinal).Count();
         var changedLeads = check.Partial.Concat(check.Resized).Distinct().ToList();
         if (changedLeads.Count > 0)
             _fwWarnings.Children.Add(WarnButton($"⚠ 모양이 바뀐 판 {check.Changed + kindPartial}",
@@ -967,7 +969,9 @@ public sealed partial class PlacePartView
         else if (kindPartial > 0)
             _fwWarnings.Children.Add(WarnChip($"모양이 바뀐 판 {kindPartial}장",
                 (check.Partial.Count > 0 ? $"일부 조각만 찾은 판 {check.Partial.Count}장 — 찾은 조각만 빠지고 나머지는 다시 셉니다.\n" : "") +
-                (kindPartial > 0 ? $"일부 조각만 찾은 판 종류 {kindPartial}장 — 찾은 조각만 그 종류이고 나머지는 규칙의 종류입니다.\n" : "") +
+                (_board.KindCheck.Partial.Count > 0 ? $"일부 조각만 찾은 판 종류 {_board.KindCheck.Partial.Count}장 — 찾은 조각만 그 종류이고 나머지는 규칙의 종류입니다.\n" : "") +
+                (_board.SplitKinds.Count > 0 ? $"종류를 정한 판이 둘 이상으로 나뉨 {_board.SplitKinds.Count}장 — 판을 나누는 규칙이 바뀌었습니다(정한 종류가 나뉜 판 모두에 그대로).\n" : "") +
+                (_board.KindCheck.Resized.Count > 0 ? $"종류를 정한 판이 층마다 갈림 {_board.KindCheck.Resized.Count}장 — 정한 종류는 한 층 조각에만 남습니다.\n" : "") +
                 (check.Resized.Count > 0 ? $"빠진 넓이가 뺄 때와 다른 판 {check.Resized.Count}장 — 이웃 부재가 바뀌어 판이 커지거나 줄었습니다.\n" : "") +
                 "판을 골라 넓이를 보고, 다르면 [↺ 자동으로] 뒤 다시 정하세요.", "fw.warn.changed"));
         // 부위 줄에 가려진 옛 유형 줄(core-verify R48 설치 전 M1): 부위를 넣은 부재의 면은 부위 줄만 정한다 — 전에 고친 유형 줄이 표에 없고 걸리지도 않는다.
@@ -976,6 +980,27 @@ public sealed partial class PlacePartView
             _fwWarnings.Children.Add(WarnChip($"가려진 줄 {hidden.Count}",
                 "고친 줄인데 그 면이 다른 줄에서 정해집니다 — 부위를 넣은 부재의 면은 부위 줄, 벽과 한 평면으로 이어진 면(한 덩어리)은 벽 줄. 이 줄은 걸리지 않습니다(기록에는 남음).\n"
                 + string.Join("\n", hidden.Take(5).Select(h => $"  {h.type} · {h.group} → {h.item}")) + (hidden.Count > 5 ? "\n  …" : ""), "fw.warn.hidden"));
+        // 판 모양 검사(R68 — JACK 2026-10-28 «이런 거푸집이 있을수있어? · 기하 모양을 검증하는 시스템» · 고름 «② 판 목록 ⚠ + 3D 빨강»): 검사마다 «⚠ 이름 수» —
+        // 누르면 그 판들을 고르고 화면을 맞춘다(고른 판의 걸린 자리는 3D 에 빨간 실선). 섞임은 정보(ⓘ — 외벽 덩어리처럼 2D 와 같은 경우가 많다).
+        foreach (var test in Enum.GetValues<FormworkShapeCheck.Test>())
+        {
+            var hit = _board.PiecesWith(test);
+            if (hit.Count == 0) continue;
+            string name = FormworkShapeCheck.NameOf(test);
+            string tip = ShapeTip(test) + "\n" + string.Join("\n", hit.Take(6).Select(i => "  " + PieceText(_board.Pieces[i]) + " — " +
+                string.Join(" · ", _board.FindingsOf(_board.Pieces[i]).Where(f => f.Test == test).Select(f => f.Text)))) + (hit.Count > 6 ? "\n  …" : "");
+            if (FormworkShapeCheck.IsInfo(test))
+            {
+                var chip = _ui.Button($"ⓘ {name} {hit.Count}", "BtnGhost", tip, "fw.check." + test);
+                chip.Focusable = false;
+                chip.MinHeight = 23;
+                chip.Padding = new Thickness(8, 0, 9, 1);
+                chip.Margin = new Thickness(0, 4, 6, 0);
+                chip.Click += (_, _) => SelectPieces(hit, SelectMode.Replace, zoom: true);
+                _fwWarnings.Children.Add(chip);
+            }
+            else _fwWarnings.Children.Add(WarnButton($"⚠ {name} {hit.Count}", tip, "fw.check." + test, () => SelectPieces(hit, SelectMode.Replace, zoom: true), new Thickness(0, 4, 6, 0)));
+        }
         _fwWarnings.Visibility = _fwWarnings.Children.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         _fwKinds.Children.Clear();
         var parts = new List<string>();
@@ -1088,6 +1113,16 @@ public sealed partial class PlacePartView
         FormworkRules.PartOf(row.Type) is { } part ? $"부위 {part} 전체" : $"{row.Type} 의 {row.Group}";
 
     private static string M2(double v) => v.ToString("#,##0.00", CultureInfo.InvariantCulture);
+
+    // 판 모양 검사의 풀이(풍선 글 — R68).
+    private static string ShapeTip(FormworkShapeCheck.Test test) => test switch
+    {
+        FormworkShapeCheck.Test.Notch => "폭 0.5 m 보다 좁고 깊은 홈 · 틈이 난 판 — 다른 부재가 판을 가로지른 자리일 수 있습니다. 누르면 그 판.",
+        FormworkShapeCheck.Test.Thin => "폭 5 cm 미만 띠가 붙은 판 — 거푸집을 대기 어려운 모양입니다. 누르면 그 판.",
+        FormworkShapeCheck.Test.Small => "0.05 ㎡ 미만 — 이웃 콘크리트가 덮고 남은 부스러기 판입니다. 누르면 그 판.",
+        FormworkShapeCheck.Test.Mixed => "부위가 둘 이상이거나 벽을 따라 종류를 받은 조각이 든 판 — 외벽(슬래브 옆 + 벽)처럼 2D 와 같은 경우가 많아 정보로만 보입니다.",
+        _ => "식이 가로 × 세로 꼴로 나오지 않거나(넓이만) 네모에서 반 넘게 빈 판(떨어진 조각이 한 판 등). 누르면 그 판.",
+    };
 
     // 경고 딱지 하나: 짧은 이름표 + 풀이는 풍선 글(창 안 설명은 최소로 — JACK 1014).
     private FrameworkElement WarnChip(string text, string tip, string id)

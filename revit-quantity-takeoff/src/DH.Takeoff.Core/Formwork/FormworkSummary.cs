@@ -222,7 +222,8 @@ public static class FormworkSummary
 
     /// <summary>
     /// 판 종류 기록(R57 P3)을 지금 모양에서 다시 찾은 결과(계획 검토 L9 — CheckDrops 와 같은 잣대): 대표 열쇠마다 Lost(조각 열쇠 하나도 지금 조각에 맞지 않음 —
-    /// 그 판은 원래 종류로 센다) · Partial(일부 조각 열쇠만 맞음 — 맞은 조각만 그 종류). 나중 기록에 가려진 조각도 «맞음»으로 센다(가려진 것은 잃은 것이 아니다).
+    /// 그 판은 원래 종류로 센다) · Partial(일부 조각 열쇠만 맞음 — 맞은 조각만 그 종류) · Resized(R70 — 다 맞았지만 맞은 조각이 슬래브 높이에서 갈린 안쪽 면 조각이고
+    /// 넓이가 적힌 넓이의 95 ~ 105% 밖: 층마다 가른 뒤 옛 통판에 건 종류가 한 층 조각에만 남음 — critic R69 M4). 나중 기록에 가려진 조각도 «맞음»으로 센다.
     /// </summary>
     public static DropCheck CheckKinds(IReadOnlyList<ElementFormwork> results, FormworkRules? rules)
     {
@@ -238,9 +239,12 @@ public static class FormworkSummary
                 }
         foreach (var kind in rules.Kinds)
         {
-            int found = kind.Records.Count(record => byElement.TryGetValue(record.Element, out var list) && list.Any(x => record.Matches(x.face, x.patch)));
+            var hits = kind.Records.Select(record => (record, hit: byElement.TryGetValue(record.Element, out var list)
+                                                         ? list.FirstOrDefault(x => record.Matches(x.face, x.patch)).patch : null)).ToList();
+            int found = hits.Count(h => h.hit != null);
             if (found == 0) check.Lost.Add(kind.Lead);
             else if (found < kind.Records.Count) check.Partial.Add(kind.Lead);
+            else if (hits.Any(h => h.hit!.SlabCut && h.record.Area > 0 && Math.Abs(h.hit.Area / h.record.Area - 1) > 0.05)) check.Resized.Add(kind.Lead);
         }
         return check;
     }
