@@ -3,7 +3,9 @@
 ; Installer UI strings are ASCII to compile without a UTF-8 BOM; the add-in UI itself is Korean.
 
 #define AppName "DH Takeoff for Revit 2026"
-#define AppVersion "0.34.0"
+; Version 0.NN.0 = add-in release RNN (0.67.0 = R67, 2026-10-27: formwork plates first, auto/user mode, joint rules).
+; 0.67.1 = R67a, 2026-10-28: 3D length numbers on every plate of a line (no 60-plate cap), overlapping numbers hidden per view.
+#define AppVersion "0.67.1"
 #define Publisher "DHEC Water and Sewage"
 #define RevitVer "2026"
 #define SrcDir "..\src\DH.Takeoff.Revit\bin\Release\net8.0-windows"
@@ -18,13 +20,18 @@ DefaultDirName={#AddinsRoot}\DH.Takeoff
 DisableDirPage=yes
 DisableProgramGroupPage=yes
 PrivilegesRequired=admin
-ArchitecturesInstallIn64BitMode=x64
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=Output
 OutputBaseFilename=DH.Takeoff.Setup.{#RevitVer}-{#AppVersion}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayName={#AppName}
+; Revit holds the DLLs while running - ask to close it instead of failing on locked files.
+CloseApplications=yes
+RestartApplications=no
+VersionInfoVersion={#AppVersion}
 
 [Files]
 ; Add-in DLLs -> Addins\2026\DH.Takeoff\

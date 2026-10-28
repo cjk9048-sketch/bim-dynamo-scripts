@@ -202,11 +202,17 @@ public static class FormworkMerge
             var n = new V3(group.Normal[0], group.Normal[1], group.Normal[2]).Unit();
             var counted = group.Members.Where(m => m.Patch.Counted && m.Patch.Item.Length > 0 && m.Patch.Outline.Count > 0 && m.Patch.Outline[0].Count >= 3 && !claimed.Contains(m.Patch)).ToList();
             // 옮긴 판의 조각은 같은 옮긴 판끼리만(R55b — 계획 검토 M3).
-            var parts = counted.GroupBy(m => (m.Patch.Item, acrossBands || m.Patch.Item != FormworkTable.Euro ? 0 : m.Patch.Band, MoveKey(m.Result, m.Patch))).Select(g => g.ToList()).ToList();
+            // 같은 종류 · 구간 · 잇기 열쇠끼리, 그 안에서 서로 이어진 조각끼리(R68 — 제 종류를 갖는 조각이 사이에 끼면 같은 종류라도 떨어진 조각은 따로:
+            // 계단실 벽의 1층 · 2층 유로폼이 중간슬래브 옆 3회로 떨어짐 = 슬래브 높이에서 나뉨).
+            var parts = counted.GroupBy(m => (m.Patch.Item, acrossBands || m.Patch.Item != FormworkTable.Euro ? 0 : m.Patch.Band, MoveKey(m.Result, m.Patch)))
+                               .SelectMany(g => Connected(g.ToList(), n)).ToList();
             var gov = group.Governor.Patch;
-            var main = parts.FirstOrDefault(p => p.Any(m => ReferenceEquals(m.Patch, gov))) ?? parts.OrderByDescending(p => p.Sum(m => m.Patch.Area)).FirstOrDefault();
+            // 견줄 묶음: 다스리는 조각이 든 것 → 없으면(다스리는 조각을 세지 않음 · 고리가 가져감) 제 종류 아닌 조각이 든 것부터 넓은 것(설치 전 검토 낮음).
+            var main = parts.FirstOrDefault(p => p.Any(m => ReferenceEquals(m.Patch, gov)))
+                       ?? parts.OrderBy(p => p.All(m => m.Patch.KeepsKind) ? 1 : 0).ThenByDescending(p => p.Sum(m => m.Patch.Area)).FirstOrDefault();
+            // 종류가 달라 못 이은 면: 사람 값으로 다른 것만 — 제 종류를 갖는 조각(R68 규칙)과 다른 것은 알리지 않는다.
             foreach (var other in parts.Where(p => !ReferenceEquals(p, main) && main != null && p[0].Patch.Item != main[0].Patch.Item
-                                                   && p[0].Result.Element.Later == main[0].Result.Element.Later))
+                                                   && p[0].Result.Element.Later == main[0].Result.Element.Later && p.Any(m => !m.Patch.KeepsKind)))
                 outcome.Splits.Add((main![0].Result.Element.Type, main[0].Patch.Item, other[0].Result.Element.Type, other[0].Patch.Item));
             foreach (var members in parts.Where(p => p.Count >= 2))
             {
@@ -353,6 +359,27 @@ public static class FormworkMerge
             int ra = Root(parent, a), rb = Root(parent, b);
             if (ra != rb) parent[Math.Max(ra, rb)] = Math.Min(ra, rb);
         }
+    }
+
+    // 같은 평면 조각들을 맞닿음(맞댄 변 1 cm 넘게)으로 이어진 무리로 나눈다(R68 — 덩어리 안 같은 종류끼리). 무리 차례 = 첫 조각 차례.
+    private static List<List<(ElementFormwork Result, FaceResult Face, FacePatch Patch)>> Connected(List<(ElementFormwork Result, FaceResult Face, FacePatch Patch)> members, V3 n)
+    {
+        if (members.Count < 2) return new() { members };
+        var parent = Enumerable.Range(0, members.Count).ToArray();
+        int Root(int i) { while (parent[i] != i) i = parent[i] = parent[parent[i]]; return i; }
+        var boxes = members.Select(m => BoxOf(m.Patch)).ToList();   // 상자로 먼저 거른다(설치 전 검토 낮음 — 큰 외벽 덩어리)
+        const double slack = Join + 1e-6;
+        for (int a = 0; a < members.Count; a++)
+            for (int b = a + 1; b < members.Count; b++)
+            {
+                if (Root(a) == Root(b)) continue;
+                var (p, q) = (boxes[a], boxes[b]);
+                if (p.max.X < q.min.X - slack || p.min.X > q.max.X + slack || p.max.Y < q.min.Y - slack || p.min.Y > q.max.Y + slack
+                    || p.max.Z < q.min.Z - slack || p.min.Z > q.max.Z + slack) continue;
+                if (Overlap(members[a].Patch, members[b].Patch, n) <= MinShared) continue;
+                parent[Math.Max(Root(a), Root(b))] = Math.Min(Root(a), Root(b));
+            }
+        return Enumerable.Range(0, members.Count).GroupBy(Root).Select(g => g.Select(i => members[i]).ToList()).ToList();
     }
 
     // 잇기 열쇠: 옮긴 판 · 판 종류의 대표 열쇠(같은 판끼리만 — R55b · R57 P3) + 판 쪼갬(R66 — 같은 기록 · 같은 부재의 조각끼리만).

@@ -1391,7 +1391,7 @@ public sealed partial class PlacePartView
             _statusFlags.Children.Add(Chip("status.locked", Swatch(ZonePalette.Locked.r, ZonePalette.Locked.g, ZonePalette.Locked.b, 6), "고칠 수 없음", p.Locked,
                 "고칠 수 없는 부재(그룹 안 · 다른 사용자 · 속성 칸 없음)를 고릅니다.", m => m.State == PickState.Locked, "고칠 수 없는 부재"));
         // 모델의 문제(R63b — 열 때 빠른 모델 검증 · ② 에서 본 것): 짧은 딱지 · 누르면 그 부재를 고른다(고치는 곳은 리본의 [모델 검증] · ① 의 부위).
-        foreach (var issue in _issues) _statusFlags.Children.Add(IssueChip(issue, new Thickness(0, 0, 5, 4)));
+        foreach (var issue in AllIssues()) _statusFlags.Children.Add(IssueChip(issue, new Thickness(0, 0, 5, 4)));
         // 검사를 못 했거나 끝까지 못 본 것 · 이 창에서 «겹친 자리»를 바꿈(기준이 달라짐 — 엑셀 메모는 [완료] 때 지금 순위로 다시 검사한다): 보이기만 하는 딱지.
         void NotePill(string say, string tip, string id)
         {

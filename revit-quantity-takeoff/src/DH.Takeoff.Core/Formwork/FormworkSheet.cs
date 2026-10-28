@@ -133,6 +133,18 @@ public sealed class FormworkSheetData
     /// 넘긴다(R48 — 전에는 ② 가 부재가 읽힌 때의 중분류로 따로 찾았다).
     /// </summary>
     public FormworkMerge.Outcome Merge { get; set; } = new();
+
+    /// <summary>판 모양 검사(R68 — FormworkShapeCheck · 걸린 판만 · 판 = Plates 의 것).</summary>
+    public Dictionary<FormworkUnit, List<FormworkShapeCheck.Finding>> Checks { get; set; } = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>판 모양 검사에 걸린 시간(ms — 일지).</summary>
+    public long CheckMs { get; set; }
+
+    /// <summary>판 모양 검사가 보지 못한 판의 수(다각형 연산 예외 — 일지).</summary>
+    public int CheckFailed { get; set; }
+
+    /// <summary>거푸집으로 본 모델 수정사항(R69 — FormworkModelCheck).</summary>
+    public List<FormworkModelCheck.Item> ModelChecks { get; set; } = new();
 }
 
 /// <summary>
@@ -450,7 +462,7 @@ public static class FormworkSheet
         if (options.Bands.Count == 0)
         {
             data.Plates.AddRange(data.Units);
-            return data;
+            return WithChecks(data, results, options, placeOf);
         }
         var across = FormworkMerge.Find(results, options, id => placeOf(id).zone, acrossBands: true, partOf: id => placeOf(id).part);
         var plates = new Dictionary<FormworkMerge.Joined, List<FormworkUnit>>();
@@ -461,6 +473,18 @@ public static class FormworkSheet
             list.Add(unit);
         }
         foreach (var (group, units) in plates) data.Plates.Add(units.Count == 1 ? units[0] : Combine(group, units, options));
+        return WithChecks(data, results, options, placeOf);
+    }
+
+    // 판 모양 검사(R68)를 판에 건다 — 걸린 판 · 잰 시간(일지).
+    // R69: 거푸집으로 본 모델 수정사항(FormworkModelCheck — 판 모양 검사의 경고도 부재로).
+    private static FormworkSheetData WithChecks(FormworkSheetData data, IReadOnlyList<ElementFormwork> results, FormworkOptions options, Func<long, (string part, string zone)> placeOf)
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        data.Checks = FormworkShapeCheck.All(data.Plates, id => placeOf(id).part, out int failed);
+        data.CheckFailed = failed;
+        data.ModelChecks = FormworkModelCheck.Of(results, options, data.Checks);
+        data.CheckMs = watch.ElapsedMilliseconds;
         return data;
     }
 

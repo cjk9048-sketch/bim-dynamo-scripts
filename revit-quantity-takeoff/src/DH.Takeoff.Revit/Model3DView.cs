@@ -72,7 +72,7 @@ public sealed class Model3DView : Grid
     private Brush? _labelBack, _labelLine, _labelText, _pickBack, _pickLine;
     // 3D 자리의 점선(③ 콘크리트 숫자 — R61b): 더하는 도형 · 빼는 도형(빨강) · 잰 선. 갈래마다 길 하나(소프트웨어로만 그리는 Revit 에서 가볍게 — 계획 검토 L15).
     private readonly Canvas _guideLayer = new() { IsHitTestVisible = false };
-    private readonly System.Windows.Shapes.Path[] _guidePaths = new System.Windows.Shapes.Path[3];
+    private readonly System.Windows.Shapes.Path[] _guidePaths = new System.Windows.Shapes.Path[4];
     private List<(IReadOnlyList<Vec3> points, bool closed, int kind)> _guides = new();
     private readonly Material _edgeMaterial, _pickFill, _pickEdge;
     private double _edgePixelSize = -1;           // 모서리 띠를 만든 때의 화면 1픽셀 길이(m)
@@ -306,24 +306,26 @@ public sealed class Model3DView : Grid
     public bool PickedLineShown => _pickedLine?.Data != null;
 
     /// <summary>
-    /// 3D 자리(장면 좌표)의 점선들(③ 콘크리트 숫자 — R61b): kind 0 = 더하는 도형(파랑) · 1 = 빼는 도형(빨강 — JACK «공제는 빨간 점선») · 2 = 잰 선(회색).
+    /// 3D 자리(장면 좌표)의 점선들(③ 콘크리트 숫자 — R61b): kind 0 = 더하는 도형(파랑) · 1 = 빼는 도형(빨강 — JACK «공제는 빨간 점선») · 2 = 잰 선(회색) ·
+    /// 3 = 판 모양 검사에 걸린 자리(빨간 실선 · 굵게 — R68 ② 고른 판).
     /// 딱지처럼 보는 자리가 바뀌면 다시 놓는다 · 빈 목록 = 지움.
     /// </summary>
     public void SetGuides(IReadOnlyList<(IReadOnlyList<Vec3> points, bool closed, int kind)> guides)
     {
-        _guides = guides.Where(g => g.points.Count >= 2 && g.kind is >= 0 and <= 2).ToList();
+        _guides = guides.Where(g => g.points.Count >= 2 && g.kind is >= 0 and <= 3).ToList();
         if (_guidePaths[0] == null)
         {
             var colors = _dark
-                ? new[] { Color.FromRgb(0x6F, 0xA8, 0xFF), Color.FromRgb(0xFF, 0x6B, 0x6B), Color.FromRgb(0xA0, 0xA8, 0xB4) }
-                : new[] { Color.FromRgb(0x1F, 0x5F, 0xD0), Color.FromRgb(0xD0, 0x30, 0x30), Color.FromRgb(0x6E, 0x78, 0x86) };
-            for (int k = 0; k < 3; k++)
+                ? new[] { Color.FromRgb(0x6F, 0xA8, 0xFF), Color.FromRgb(0xFF, 0x6B, 0x6B), Color.FromRgb(0xA0, 0xA8, 0xB4), Color.FromRgb(0xFF, 0x4D, 0x4D) }
+                : new[] { Color.FromRgb(0x1F, 0x5F, 0xD0), Color.FromRgb(0xD0, 0x30, 0x30), Color.FromRgb(0x6E, 0x78, 0x86), Color.FromRgb(0xE0, 0x1E, 0x1E) };
+            for (int k = 0; k < 4; k++)
             {
                 var brush = new SolidColorBrush(colors[k]);
                 brush.Freeze();
                 _guidePaths[k] = new System.Windows.Shapes.Path
                 {
-                    Stroke = brush, StrokeThickness = k == 2 ? 1.1 : 1.6, StrokeDashArray = k == 2 ? new DoubleCollection { 2, 3 } : new DoubleCollection { 5, 3 },
+                    Stroke = brush, StrokeThickness = k switch { 2 => 1.1, 3 => 2.4, _ => 1.6 },
+                    StrokeDashArray = k switch { 2 => new DoubleCollection { 2, 3 }, 3 => null, _ => new DoubleCollection { 5, 3 } },
                     IsHitTestVisible = false,
                 };
                 _guideLayer.Children.Add(_guidePaths[k]);
@@ -339,7 +341,7 @@ public sealed class Model3DView : Grid
     private void PlaceGuides()
     {
         if (_guidePaths[0] == null) return;
-        for (int k = 0; k < 3; k++)
+        for (int k = 0; k < 4; k++)
         {
             var geometry = new StreamGeometry();
             using (var ctx = geometry.Open())
@@ -401,19 +403,40 @@ public sealed class Model3DView : Grid
     /// <summary>시험용: 강조한 선의 화면 끝점(없으면 null).</summary>
     public (Point a, Point b)? PickedLine => _pickedLine?.Data is LineGeometry g ? (g.StartPoint, g.EndPoint) : null;
 
-    // 딱지 · 점선을 지금 카메라로 화면에 놓는다(딱지는 가운데가 그 자리).
+    // 딱지 · 점선을 지금 카메라로 화면에 놓는다(딱지는 가운데가 그 자리). 화면 밖 · 앞 딱지와 겹치는 딱지는 숨긴다(1028 — LabelLayout:
+    // 줄의 판에 모두 숫자를 짓고 보는 자리마다 고른다 · 고른 · 식에서 가리킨 딱지는 늘 보임).
     private void PlaceLabels()
     {
         PlaceGuides();
         PlacePickedLine();
+        var boxes = new List<(double x, double y, double w, double h)>(_labelViews.Count);
         foreach (var (at, view, _, _) in _labelViews)
         {
-            view.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            view.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));   // 고른 딱지는 굵은 글 — 크기가 바뀐다(바뀌지 않았으면 WPF 가 다시 재지 않는다)
             var p = ScreenOf(at);
-            Canvas.SetLeft(view, p.X - view.DesiredSize.Width / 2);
-            Canvas.SetTop(view, p.Y - view.DesiredSize.Height / 2);
+            boxes.Add((p.X - view.DesiredSize.Width / 2, p.Y - view.DesiredSize.Height / 2, view.DesiredSize.Width, view.DesiredSize.Height));
+        }
+        var forced = new HashSet<int>(_marked);
+        if (_pickedLabel >= 0) forced.Add(_pickedLabel);
+        var shown = LabelLayout.Visible(boxes, forced, Camera.ViewW, Camera.ViewH);
+        for (int i = 0; i < _labelViews.Count; i++)
+        {
+            var view = _labelViews[i].view;
+            Canvas.SetLeft(view, boxes[i].x);   // 숨긴 딱지도 자리는 맞춰 둔다(다시 보일 때 · 시험이 자리를 본다)
+            Canvas.SetTop(view, boxes[i].y);
+            // Hidden(Collapsed 아님): 접은 딱지는 WPF 가 크기를 0 으로 재 — 다음 배치에서 점이 되어 겹침 판정 · 가운데 자리가 틀어진다.
+            view.Visibility = shown[i] ? Visibility.Visible : Visibility.Hidden;
         }
     }
+
+    /// <summary>카메라 값(Camera)을 바꾼 뒤 그림 · 딱지를 맞춘다(시험이 보던 자리로 되돌릴 때).</summary>
+    public void ApplyCamera() => SyncCamera();
+
+    /// <summary>시험용: 그 딱지의 3D 자리(장면 좌표).</summary>
+    public Vec3 LabelPoint(int index) => _labelViews[index].at;
+
+    /// <summary>시험용: 그 딱지가 지금 화면에 보이는가(겹쳐 숨긴 딱지는 아님).</summary>
+    public bool LabelShown(int index) => index >= 0 && index < _labelViews.Count && _labelViews[index].view.Visibility == Visibility.Visible;
 
     // 그 차례의 몸과 모서리를 _meshes[i] 로 만든다. 모서리 띠는 화면 1픽셀의 길이를 안 뒤에만(SyncCamera 가 처음 만든다).
     private void Make(int i)

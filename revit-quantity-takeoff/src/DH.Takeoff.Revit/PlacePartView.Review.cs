@@ -89,13 +89,12 @@ public sealed partial class PlacePartView
         CancelFollow();
         _view3d.SetLabels(Array.Empty<(Vec3, string)>());
         _view3d.SetGuides(Array.Empty<(IReadOnlyList<Vec3>, bool, int)>());
-        if (_message.Text == LabelsCapped || _message.Text == ConcreteCapped) ShowMessage("");
+        if (_message.Text == ConcreteCapped) ShowMessage("");
     }
 
     // ③ 에서 고른 거푸집 줄의 판마다 길이 숫자(R60 — JACK «수식의 길이에 해당하는 부분이 3D 객체에 텍스트로»): 지금 보이는 판(종류 · 층 거름 · 숨긴 부재 —
-    // 설치 전 검토 중간)만 · 넓은 판부터 MaxLabelPlates 장까지. 거름이 바뀌면(RefreshReview) 다시 고른다 · 판마다 숫자는 한 번만 센다.
-    private const int MaxLabelPlates = 60;
-    private static readonly string LabelsCapped = $"길이 숫자는 넓은 판 {MaxLabelPlates}장만";
+    // 설치 전 검토 중간) 모두 · 넓은 판부터(3D 가 겹친 딱지를 숨길 때 앞 차례가 남는다 — LabelLayout). 거름이 바뀌면(RefreshReview) 다시 고른다 · 판마다 숫자는 한 번만 센다.
+    // 1028(JACK «상부슬래브 쪽 치수가 없는 것들»): 전에는 넓은 판 60장까지만 숫자를 지어 판이 많은 줄은 나머지 판에 숫자가 없었다.
     private readonly Dictionary<FormworkUnit, List<(Vec3, string, Vec3, Vec3)>> _rvLabels = new(ReferenceEqualityComparer.Instance);
     private List<FormworkUnit>? _rvLabeled;                 // 지금 숫자를 띄운 판(같으면 다시 놓지 않는다)
 
@@ -109,16 +108,13 @@ public sealed partial class PlacePartView
             _rvLabeled = null;
             _view3d.SetGuides(Array.Empty<(IReadOnlyList<Vec3>, bool, int)>());
         }
-        int visible = 0;
         try
         {
             var units = new List<FormworkUnit>();
             if (_board != null && _rvFormLine != null)
             {
                 var shown = _board.PiecesOfLine(_rvFormLine).Where(x => ReviewShown(MemberCount + x.piece)).SelectMany(x => x.patches).ToHashSet(ReferenceEqualityComparer.Instance);
-                var seen = _rvFormLine.Units.Where(u => u.Members.Any(m => shown.Contains(m.Patch))).OrderByDescending(u => u.Area).ToList();
-                visible = seen.Count;
-                units = seen.Take(MaxLabelPlates).ToList();
+                units = _rvFormLine.Units.Where(u => u.Members.Any(m => shown.Contains(m.Patch))).OrderByDescending(u => u.Area).ToList();
             }
             if (_rvLabeled != null && _rvLabeled.SequenceEqual(units, ReferenceEqualityComparer.Instance)) return;
             var labels = new List<(Vec3, string, Vec3, Vec3)>();
@@ -142,8 +138,7 @@ public sealed partial class PlacePartView
             ShowMessage("길이 숫자를 놓지 못했습니다: " + ex.Message, true);
             return;
         }
-        if (visible > MaxLabelPlates) ShowMessage(LabelsCapped);
-        else if (_message.Text == LabelsCapped || _message.Text == ConcreteCapped) ShowMessage("");   // 지난 줄의 알림만 거둔다
+        if (_message.Text == ConcreteCapped) ShowMessage("");   // 지난 콘크리트 줄의 알림만 거둔다
     }
 
     private FrameworkElement BuildReviewSide()

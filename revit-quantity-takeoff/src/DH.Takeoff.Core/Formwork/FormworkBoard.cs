@@ -569,8 +569,26 @@ public sealed partial class FormworkBoard
         KindCheck = FormworkSummary.CheckKinds(Results, Options.ActiveRules);
         HiddenTypeRules = FormworkSummary.HiddenTypeRules(Results, Options.ActiveRules);
         Pieces = BuildPieces();
+        SplitKinds = Pieces.Where(p => p.Plate != null)
+            .SelectMany(p => p.Members.Where(m => m.Patch.SplitLead.Length == 0).Select(m => m.Patch.KindLead).Where(l => l.Length > 0).Distinct(StringComparer.Ordinal).Select(lead => (lead, p)))
+            .GroupBy(x => x.lead, StringComparer.Ordinal).Where(g => g.Select(x => x.p).Distinct().Count() > 1).Select(g => g.Key).ToList();
         RefreshMilliseconds = watch.ElapsedMilliseconds;
     }
+
+    /// <summary>판 모양 검사(R68 — FormworkShapeCheck)에 걸린 그 판의 걸림(판이 아닌 덩이 · 걸리지 않은 판은 빈 목록).</summary>
+    public IReadOnlyList<FormworkShapeCheck.Finding> FindingsOf(FormworkPiece piece) =>
+        piece.Plate is { } plate && Sheet.Checks.TryGetValue(plate, out var found) ? found : Array.Empty<FormworkShapeCheck.Finding>();
+
+    /// <summary>그 검사에 걸린 덩이 차례(판 목록 차례 — 넓은 판 먼저가 아님).</summary>
+    public List<int> PiecesWith(FormworkShapeCheck.Test test) =>
+        Enumerable.Range(0, Pieces.Count).Where(i => FindingsOf(Pieces[i]).Any(f => f.Test == test)).ToList();
+
+    /// <summary>
+    /// 판 종류 기록(판 한 장마다 하나) 가운데 그 조각이 지금 판 둘 이상에 흩어진 것의 대표 열쇠(R68 — 규칙이 바뀌어 판이 나뉨 · critic R68 M3: 조각을 모두
+    /// 찾으면 CheckKinds 는 말이 없어 옛 판에 건 종류가 나뉜 판들에 말없이 남는다) — «모양이 바뀐 판»에 더한다. 사람이 나눈 판(판 쪼갬 기록)의 조각은 보지 않는다
+    /// (종류를 정한 뒤 [부재마다 나누기] 는 일부러 나눈 것 — 설치 전 검토 높음).
+    /// </summary>
+    public IReadOnlyList<string> SplitKinds { get; private set; } = Array.Empty<string>();
 
     // 덩이를 짓는다(R48): ① 판 — 시트의 판마다 하나(든 조각 전부) ② 뺀 조각 — 대표 열쇠마다 하나 ③ 그 밖의 줄 조각(RowPatches — 세지 않는 조각 ·
     // 아직 정하지 않은 아래가 빈 밑면)은 (부재 · 유형 · 면의 갈래 · 안팎 · 높이 구간 · 까닭이 있는가 · 맞닿은 벽)마다 하나 — 열쇠가 같으면 색 · 상태가 같다.
