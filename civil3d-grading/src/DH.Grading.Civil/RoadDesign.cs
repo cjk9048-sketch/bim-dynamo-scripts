@@ -15,6 +15,7 @@ internal sealed class RoadDesign
     public double SuggestH = 0;                 // 옹벽 제안 높이(0 = 안 봄)
     public string LimitHandle = "";             // 사업 경계 폴리선 핸들
     public string PlanProfile = "", BaseProfile = "", BaseSurface = "";
+    public string SurfaceHandle = "";           // [도로 면 만들기]로 만든 지표면(다시 만들면 이것을 지우고 같은 이름으로)
     public List<double[]> Walls = new();         // [s0, s1, 쪽(−1 좌 · +1 우)]
 
     const string Key = "DH_ROAD";

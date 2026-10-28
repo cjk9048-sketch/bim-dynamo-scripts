@@ -77,7 +77,9 @@ internal sealed class RoadPanel : UserControl
 
         Section("결과");
         _root.Children.Add(_result);
-        Buttons(("다시 계산", "!", ""), ("끝내기", "DHROADOFF", "미리보기 끄기(노선 · 종단은 그대로)"));
+        // ★[v110.1 · JACK 1029] [끝내기]가 «마치고 결과 남기기»로 읽혀 → 이름을 [미리보기 끄기]로 · 면은 [도로 면 만들기]로 따로
+        Buttons(("도로 면 만들기", "DHROADSURF", "도로 + 사면을 지표면 «진입도로_DH»로(정지면_DH는 그대로 · 다시 누르면 새로)"),
+                ("다시 계산", "!", ""), ("미리보기 끄기", "DHROADOFF", "임시 선만 지움(노선 · 종단 · 도로 면은 그대로)"));
         Show(null);
     }
 

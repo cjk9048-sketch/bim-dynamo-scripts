@@ -12,7 +12,7 @@ namespace DH.Grading.Civil;
 internal static class RoadBuilder
 {
     internal const string AlignBase = "DH도로";
-    internal const string LayAlign = "DH도로-노선", LayProf = "DH도로-종단", LayView = "DH도로-종단뷰";
+    internal const string LayAlign = "DH도로-노선", LayProf = "DH도로-종단", LayView = "DH도로-종단뷰", LaySurf = "DH도로-지표면";
 
     /// <summary>바탕면 — 정지면_DH(부지 정지가 있으면 도로가 그 위에 얹힘) · 없으면 원지반.
     /// <para>★[설치 전 검토 · 중간] 정지면은 종단 · 횡단과 같은 규칙(`정지면_DH` 또는 `정지면_DH_N` · 마지막 것) — 정확히 같은 이름만 보면 `_N`일 때 원지반으로 떨어진다.</para></summary>

@@ -518,6 +518,63 @@ public static class RoadGrade
         return c;
     }
 
+    /// <summary>★★[v110.1 · JACK 1029 «도로 면만 따로 보기» — 인터뷰: 도로 + 사면(데이라잇까지) · 단추로 만듦] 도로 지표면 삼각형.
+    /// <para>꼭짓점 = 바뀐 칸(도로 1 · 절토 2 · 성토 3 · 충돌 4)의 가운데(설계 높이) + 그 둘레 한 겹의 «그대로» 칸(바탕 높이 — 면 끝이 땅에 닿게).
+    /// 칸 가운데 네 점이 다 있으면 두 세모(대각선 = 높이 차가 작은 쪽 — 사면 꺾임을 덜 깎음) · 셋이면 한 세모. 바탕 없는 칸(255)은 안 씀.
+    /// 격자 그대로라 세모가 고르고(바늘 없음) 점이 칸 크기만큼 떨어져 Civil이 합칠 점이 없다. 도로 가장자리 꺾임은 칸 하나 폭 안에서 둥글어진다(칸 0.5 m면 0.5 m).</para></summary>
+    public static List<WallDaylight.Tri> SurfaceTris(Result r, out string note)
+    {
+        var tris = new List<WallDaylight.Tri>();
+        int W = r.W, H = r.H;
+        if (W < 2 || H < 2 || r.Kind.Length != W * H) { note = "격자 없음"; return tris; }
+        var use = new bool[W * H]; var z = new double[W * H];
+        int nChanged = 0, nRing = 0;
+        for (int k = 0; k < W * H; k++)
+            if (r.Kind[k] is 1 or 2 or 3 or 4 && float.IsFinite(r.Z[k])) { use[k] = true; z[k] = r.Z[k]; nChanged++; }
+        var ring = new List<int>();
+        for (int j = 0; j < H; j++)
+            for (int i = 0; i < W; i++)
+            {
+                int k = j * W + i;
+                if (use[k] || r.Kind[k] != 0 || !float.IsFinite(r.Base[k])) continue;
+                bool near = false;
+                for (int dj = -1; dj <= 1 && !near; dj++)
+                    for (int di = -1; di <= 1 && !near; di++)
+                    {
+                        int ii = i + di, jj = j + dj;
+                        if (ii < 0 || jj < 0 || ii >= W || jj >= H) continue;
+                        int q = jj * W + ii;
+                        if (r.Kind[q] is 1 or 2 or 3 or 4 && float.IsFinite(r.Z[q])) near = true;
+                    }
+                if (near) ring.Add(k);
+            }
+        foreach (int k in ring) { use[k] = true; z[k] = r.Base[k]; nRing++; }
+        Point3 P(int i, int j) => new(r.X0 + (i + 0.5) * r.Cell, r.Y0 + (j + 0.5) * r.Cell, z[j * W + i]);
+        int quads = 0, singles = 0;
+        for (int j = 0; j + 1 < H; j++)
+            for (int i = 0; i + 1 < W; i++)
+            {
+                int a = j * W + i, b = a + 1, c = a + W + 1, d = a + W;
+                bool ua = use[a], ub = use[b], uc = use[c], ud = use[d];
+                int nU = (ua ? 1 : 0) + (ub ? 1 : 0) + (uc ? 1 : 0) + (ud ? 1 : 0);
+                if (nU == 4)
+                {
+                    var pa = P(i, j); var pb = P(i + 1, j); var pc = P(i + 1, j + 1); var pd = P(i, j + 1);
+                    if (Math.Abs(z[a] - z[c]) <= Math.Abs(z[b] - z[d])) { tris.Add(new(pa, pb, pc)); tris.Add(new(pa, pc, pd)); }
+                    else { tris.Add(new(pa, pb, pd)); tris.Add(new(pb, pc, pd)); }
+                    quads++;
+                }
+                else if (nU == 3)
+                {
+                    var l = new List<Point3>(3);
+                    if (ua) l.Add(P(i, j)); if (ub) l.Add(P(i + 1, j)); if (uc) l.Add(P(i + 1, j + 1)); if (ud) l.Add(P(i, j + 1));
+                    tris.Add(new(l[0], l[1], l[2])); singles++;
+                }
+            }
+        note = $"칸 {r.Cell:0.##} m · 바뀐 점 {nChanged:N0} · 둘레 점 {nRing:N0} · 세모 {tris.Count:N0}(네모 {quads:N0} · 홑 {singles:N0})";
+        return tris;
+    }
+
     /// <summary>고른 종류 칸들의 경계선 — 칸 가운데 격자에 마칭 스퀘어(값 0/1 · 0.5 등치선) · 선분을 이어 꺾은선으로.
     /// 데이라잇 = 바뀐 자리(1 · 2 · 3 · 4) · 충돌 자리 = 4.</summary>
     public static List<List<(double X, double Y)>> Outline(Result r, Func<byte, bool> pick)

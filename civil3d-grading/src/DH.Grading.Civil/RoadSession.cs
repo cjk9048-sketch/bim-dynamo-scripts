@@ -285,6 +285,145 @@ internal sealed class RoadSession
         finally { Suppress = false; }
     }
 
+    internal const string SurfBase = "진입도로_DH";
+    const string TempSurf = "진입도로_작업중";
+    const double SurfCell = 0.5;
+    const int MaxSurfTris = 1_500_000;
+
+    /// <summary>★★[v110.1 · JACK 1029 «도로 면만 따로 보기» — 인터뷰: 도로 + 사면 · 단추로 · 정지면_DH는 안 건드림 · 이번엔 Civil 화면만]
+    /// 지금 설계로 0.5 m 칸 한 번 더 계산 → Core 세모(<see cref="RoadGrade.SurfaceTris"/>) → LandXML(새 파일) → Civil 면 → 되읽어 넘긴 면과 같은지 대조 → 굳힘.
+    /// 옹벽 배면 면(WallBackBuilder)과 같은 길 — Civil이 그대로 안 받았으면 지우고 실패로 알린다. 다시 누르면 앞의 면을 지우고 같은 이름으로. 명령 안에서 부른다(문서 잠김).</summary>
+    internal string MakeSurface()
+    {
+        var db = _doc.Database;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var d = Fresh();
+        EnsureBase();
+        double[] X, Y, Z; double s0; string note; List<(double, double)>? limit;
+        using (var tr = db.TransactionManager.StartTransaction())
+        {
+            (X, Y, Z, s0, _, note) = RoadBuilder.Sample(tr, AlignId, PlanId);
+            limit = ReadLimit(tr);
+            tr.Commit();
+        }
+        double reach = Last != null && Last.Error.Length == 0 && !Last.ReachHit && Last.ReachUsed > 40 ? Last.ReachUsed : 40;
+        var r = RoadGrade.Run(new RoadGrade.Input
+        {
+            X = X, Y = Y, Z = Z, Sec = d.Section(), Cut = d.Cut(), Fill = d.Fill(),
+            Walls = d.CoreWalls().Select(w => w with { S0 = w.S0 - s0, S1 = w.S1 - s0 }).ToList(),
+            Base = _base!, Cell = SurfCell, Reach = reach, SuggestH = d.SuggestH, Limit = limit,
+        });
+        if (r.Error.Length > 0) throw new InvalidOperationException(r.Error);
+        var tris = RoadGrade.SurfaceTris(r, out string tnote);
+        // ★[설치 전 검토 중간 3] 아주 큰 도로(세모 150만 넘음) — 1 m 칸으로 다시(시간 · 메모리)
+        if (tris.Count > MaxSurfTris)
+        {
+            r = RoadGrade.Run(new RoadGrade.Input
+            {
+                X = X, Y = Y, Z = Z, Sec = d.Section(), Cut = d.Cut(), Fill = d.Fill(),
+                Walls = d.CoreWalls().Select(w => w with { S0 = w.S0 - s0, S1 = w.S1 - s0 }).ToList(),
+                Base = _base!, Cell = 1.0, Reach = reach, SuggestH = d.SuggestH, Limit = limit,
+            });
+            if (r.Error.Length > 0) throw new InvalidOperationException(r.Error);
+            tris = RoadGrade.SurfaceTris(r, out tnote);
+            tnote += " · 커서 1 m 칸으로";
+        }
+        if (tris.Count == 0) throw new InvalidOperationException("바뀐 자리가 없어 면을 안 만들었습니다 — " + tnote);
+        long msGrid = sw.ElapsedMilliseconds;
+        string xml = GradingBuilder.NewXmlPath(db, "진입도로");
+        WallDaylight.WriteLandXmlTin(xml, "ROAD", tris, 1e-7, out int np, out int nf, out int nd);
+        long msXml = sw.ElapsedMilliseconds;
+        ObjectId made = ObjectId.Null;
+        Suppress = true;
+        try
+        {
+            // ★[설치 전 검토 낮음 4] 앞에서 못 치운 작업 면이 남았으면 먼저 치운다
+            using (var trC = db.TransactionManager.StartTransaction())
+            {
+                var cdocC = Autodesk.Civil.ApplicationServices.CivilDocument.GetCivilDocument(db);
+                foreach (ObjectId sid in cdocC.GetSurfaceIds())
+                {
+                    if (sid.IsNull || sid.IsErased) continue;
+                    try { if (trC.GetObject(sid, OpenMode.ForRead) is CivilDb.Surface sS && sS.Name == TempSurf) trC.GetObject(sid, OpenMode.ForWrite, false, true).Erase(); } catch { }
+                }
+                trC.Commit();
+            }
+            // 실패하면 트랜잭션을 버린다(앞 면 지움 · 기록도 되돌아감) — 만든 면이 그래도 남았으면 아래 finally가 따로 지운다
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                ObjectId cid = CivilDb.TinSurface.CreateFromLandXML(db, TempSurf, xml, "ROAD");
+                if (cid.IsNull) throw new InvalidOperationException("CreateFromLandXML이 빈 ObjectId를 돌려줬다");
+                made = cid;
+                var cTin = (CivilDb.TinSurface)tr.GetObject(cid, OpenMode.ForWrite, false, true);
+                int civPts = -1; try { civPts = cTin.GetGeneralProperties().NumberOfPoints; } catch { }
+                var theirs = PureWithWallsBuilder.ReadTris(cTin, out int lost);
+                long msMake = sw.ElapsedMilliseconds;
+                // ★[설치 전 검토 중간 3] 수부터 틀리면 대조(다른 세모 전부 합집합 — 큰 면에서 수 분)를 하지 않고 바로 실패
+                if (lost != 0 || nd != 0 || theirs.Count != nf || civPts != np)
+                    throw new InvalidOperationException($"Civil이 면을 그대로 안 받았습니다 — Civil 점 {civPts}/{np} · 세모 {theirs.Count}/{nf} · 못 읽음 {lost} · 합친 세모 {nd}");
+                var cmp = CivilSafeMesh.Compare(tris, theirs);
+                long msCmp = sw.ElapsedMilliseconds;
+                double area = 0; foreach (var t in tris) area += Math.Abs((t.B.X - t.A.X) * (t.C.Y - t.A.Y) - (t.B.Y - t.A.Y) * (t.C.X - t.A.X)) / 2;
+                bool gate = lost == 0 && nd == 0 && theirs.Count == nf && civPts == np && cmp.Exceptions == 0
+                            && cmp.SymArea <= 1e-8 + 1e-12 * area && cmp.Hausdorff <= 1e-6 && cmp.MaxDz <= 1e-3;
+                string back = $"Civil 점 {civPts}/{np} · 세모 {theirs.Count}/{nf} · {cmp.Summary}";
+                if (!gate) throw new InvalidOperationException("Civil이 면을 그대로 안 받았습니다 — " + back);
+                string frz = GradingBuilder.FreezeXmlBacked(cTin);
+                // 앞에 만든 면 — 지우고 그 이름을 그대로
+                //   ★[설치 전 검토 중간 1] 이름이 우리 꼴(«진입도로_DH» · «진입도로_DH_N»)일 때만 — 사람이 이름을 바꿔 남겨 둔 안(«진입도로_1안»)이나
+                //   다른 도면에서 온 기록이 가리키는 남의 면(원지반 등)은 건드리지 않고 새 이름을 붙인다
+                string name = "";
+                var old = Handle(db, d.SurfaceHandle);
+                if (!old.IsNull && old != cid && tr.GetObject(old, OpenMode.ForRead) is CivilDb.TinSurface oldTin
+                    && Commands.SectionCommand.IsBase(oldTin.Name, SurfBase))
+                {
+                    name = oldTin.Name;
+                    tr.GetObject(old, OpenMode.ForWrite, false, true).Erase();      // ★[낮음 5] 잠긴 레이어여도
+                }
+                if (name.Length == 0) name = UniqueSurfaceName(db, tr, SurfBase);
+                cTin.Name = name;
+                try { cTin.Description = $"DH 진입도로 지표면(도로 + 사면 · 정지면_DH와 따로) — {Name} · {DateTime.Now:yyyy-MM-dd HH:mm} · {GradingSettings.Version}"; } catch { }
+                try { var bs = (CivilDb.TinSurface)tr.GetObject(BaseSurfId, OpenMode.ForRead); cTin.StyleId = bs.StyleId; } catch { }
+                try { cTin.LayerId = Commands.SectionCommand.EnsureLayer(db, tr, RoadBuilder.LaySurf, 3); } catch { }
+                d.SurfaceHandle = cid.Handle.ToString();
+                d.Write(tr, AlignId);
+                tr.Commit();
+                made = ObjectId.Null;
+                Design = d;
+                // ★[설치 전 검토 낮음 6] 면 끝이 땅에 안 닿은 자리 · 옹벽 자리(가운데 높이)를 알림 · 수량은 이 면의 칸 기준
+                string msg = $"도로 면 '{name}' — 절토 {r.CutVol:N0} ㎥ · 성토 {r.FillVol:N0} ㎥({r.Cell:0.#} m 칸) · {sw.ElapsedMilliseconds / 1000.0:F1}초"
+                             + (r.ReachHit ? $" · ⚠데이라잇 못 찾음(범위 {r.ReachUsed:F0} m 끝에서 면이 땅에 안 닿음)" : "")
+                             + (r.Conflicts > 0 ? $" · ⚠사면 충돌 {r.Conflicts}칸(옹벽 자리 — 가운데 높이로 넣음)" : "")
+                             + (frz.Length > 0 ? " · ⚠굳힘 실패 " + frz : "");
+                try { DiagLog.Append($"\n[진입도로] {Name} — {msg} · {tnote} · 격자 {msGrid} · XML {msXml - msGrid} · Civil 면 + 되읽기 {msMake - msXml} · 대조 {msCmp - msMake} ms · 되읽기 {back}"); } catch { }
+                return msg;
+            }
+        }
+        finally
+        {
+            Suppress = false;
+            if (!made.IsNull)
+            {
+                try { using var trE = db.TransactionManager.StartTransaction(); if (!made.IsErased) trE.GetObject(made, OpenMode.ForWrite, false, true).Erase(); trE.Commit(); }
+                catch (System.Exception exE) { try { DiagLog.Append($"\n[진입도로] ⚠작업 면 «{TempSurf}»을 못 지움(다음 누를 때 다시 치움) — {exE.Message}"); } catch { } }
+            }
+        }
+    }
+
+    /// <summary>같은 이름이 없게(지운 면은 건너뜀) — «진입도로_DH» · «진입도로_DH_2» …</summary>
+    static string UniqueSurfaceName(Database db, Transaction tr, string baseName)
+    {
+        var have = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var cdoc = Autodesk.Civil.ApplicationServices.CivilDocument.GetCivilDocument(db);
+        foreach (ObjectId id in cdoc.GetSurfaceIds())
+        {
+            if (id.IsNull || id.IsErased) continue;
+            try { if (tr.GetObject(id, OpenMode.ForRead) is CivilDb.Surface s) have.Add(s.Name); } catch { }
+        }
+        if (!have.Contains(baseName)) return baseName;
+        for (int i = 2; ; i++) { string c = $"{baseName}_{i}"; if (!have.Contains(c)) return c; }
+    }
+
     /// <summary>사업 경계 밖 사면 길이(m) — 쪽마다 측점이 이어진(1 m 안) 표본 구간의 길이 합.</summary>
     internal static double OutOfLimitLength(RoadGrade.Result r)
     {
