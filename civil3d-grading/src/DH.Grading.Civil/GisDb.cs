@@ -17,16 +17,22 @@ namespace DH.Grading.Civil;
 /// </summary>
 internal static class GisDb
 {
-    private const string Host = "geo-spatial-hub-prod.postgres.database.azure.com";
-    private const int Port = 6432;                 // PgBouncer
-    private const string Database = "dde-water";
-    private const string User = "waterviewer";     // 읽기 전용 계정
-    private const string Password = "water123!@#";
+    // ★★[v109 · 계획_v109.md 1 · 검토 H3] 접속 정보(주소 · 계정 · 비밀번호)는 <b>소스에 없다</b> — 설치 폴더의 dh.keys.json(<see cref="DhKeys"/>).
+    //   0731~1028 이 자리에 평문으로 있었고 저장소가 공개라 그대로 보였다(값은 git 기록에 남음 — 비밀번호를 바꿔야 한다).
     private const int DbSrid = 5186;               // DB 원본 좌표계(중부원점 2010)
 
-    private static string ConnString =>
-        $"Host={Host};Port={Port};Database={Database};Username={User};Password={Password};" +
-        "SslMode=Require;Timeout=15;CommandTimeout=180;Pooling=true";
+    private static string ConnString
+    {
+        get
+        {
+            var d = DhKeys.Installed.GisDb;
+            return new NpgsqlConnectionStringBuilder
+            {
+                Host = d.Host, Port = d.Port, Database = d.Database, Username = d.User, Password = d.Password,
+                SslMode = SslMode.Require, Timeout = 15, CommandTimeout = 180, Pooling = true,
+            }.ConnectionString;
+        }
+    }
 
     /// <summary>등고선 1가닥 — 표고(Z 이미 반영), 계곡선 여부, 도면 좌표 점렬.</summary>
     internal sealed class ContourLine
@@ -50,12 +56,25 @@ internal static class GisDb
     /// <para>★★이건 <b>명령 스레드에서</b> 도는 확인이라 오래 걸리면 AutoCAD가 하얘진다.
     /// VPN이 꺼져 있으면 없는 주소로 거는 셈이라 기본값(15초)을 다 채운다 — 그 사이 "응답 없음"이 붙는다.
     /// 살았는지 죽었는지만 알면 되므로 <b>3초</b>면 충분하다(검토 0901).</para></summary>
+    /// <summary>★[v109 · 설치 전 검토 L7] 오류 글에서 접속 주소 · 비밀번호를 가린다 — Npgsql 글은 «Failed to connect to 주소:포트» 꼴이라 명령창 · 알림에 그대로 나갔다.</summary>
+    internal static string Clean(string msg)
+    {
+        var d = DhKeys.Installed.GisDb;
+        foreach (var s in new[] { d.Host, d.Password })
+            if (s.Length >= 3) msg = msg.Replace(s, "(사내 DB)");
+        return msg;
+    }
+
     public static bool CanConnect(out string reason)
     {
+        if (!DhKeys.Installed.GisDb.Ready)
+        {
+            reason = "사내 GIS DB 접속 정보가 설치돼 있지 않습니다(dh.keys.json)";
+            return false;
+        }
         try
         {
-            var probe = System.Text.RegularExpressions.Regex.Replace(
-                ConnString, @"Timeout=[0-9]+", "Timeout=3");
+            var probe = new NpgsqlConnectionStringBuilder(ConnString) { Timeout = 3 }.ConnectionString;
             using var c = new NpgsqlConnection(probe);
             c.Open();
             reason = "";
@@ -63,7 +82,7 @@ internal static class GisDb
         }
         catch (System.Exception ex)
         {
-            reason = ex.Message;
+            reason = Clean(ex.Message);
             return false;
         }
     }

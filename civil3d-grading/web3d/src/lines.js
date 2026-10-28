@@ -6,14 +6,28 @@ import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
-// 선분 묶음(x0,y0,z0,x1,y1,z1 …) → 굵은 선 하나. w = CSS px
+// 선분 묶음(x0,y0,z0,x1,y1,z1 …) → 굵은 선 하나. w = CSS px · opts.dash = [긋기, 띄기] 화면 px(screenDash로 맞춤)
 export function fatLines(view, seg, color, w, opts = {}) {
   const g = new LineSegmentsGeometry();
   g.setPositions(seg instanceof Float32Array ? seg : new Float32Array(seg));
-  const m = new LineMaterial({ color, linewidth: w, worldUnits: false, depthTest: opts.depthTest ?? true, transparent: opts.opacity !== undefined, opacity: opts.opacity ?? 1 });
+  const m = new LineMaterial({ color, linewidth: w, worldUnits: false, depthTest: opts.depthTest ?? true, depthWrite: opts.depthWrite ?? true, transparent: opts.opacity !== undefined, opacity: opts.opacity ?? 1 });
+  if (opts.dash) { m.dashed = true; m.dashSize = opts.dash[0]; m.gapSize = opts.dash[1]; }
   const L = new LineSegments2(g, m);
+  if (opts.dash) L.computeLineDistances();
   L.renderOrder = opts.renderOrder ?? 2;
   return L;
+}
+
+// ★[JACK 1028 «측점 선은 점선»] 점선 마디를 화면 px로 — 보는 자리(돌리는 중심) 거리에서 1 m가 몇 px인지를 dashScale로
+//   (가까이 가도 · 멀어져도 마디 꼴이 같다 · 멀리 있는 선은 원근대로 촘촘)
+export function screenDash(view, mats, visible) {
+  view.onDraw(() => {
+    if (!visible()) return;
+    const cam = view.camera, d = Math.max(1, cam.position.distanceTo(view.controls.target));
+    const H = view.renderer.domElement.height / view.renderer.getPixelRatio();
+    const k = H / (2 * d * Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)));
+    for (const m of mats) m.dashScale = k;
+  });
 }
 
 // 꺾은선(x,y,z …) → 선분 묶음 — 높이가 없는 점(NaN · −99999)에서 끊는다
@@ -47,7 +61,7 @@ export function textSprite(text, x, y, z, color = '#ffe14d', size = 0.028) {
 }
 
 // 글자 표는 가까운 것만 — 사진기에서 maxDist 안 · 먼저 놓을 것(userData.pri 큰 것 · 가까운 것)부터 max개 ·
-// 화면에서 이미 놓은 글자와 겹치면 건너뜀(촘촘한 측점 이름이 한 덩어리로 뭉개지지 않게)
+// 화면에서 이미 놓은 글자와 겹치면 건너뜀(촘촘한 측점 이름이 한 덩어리로 뭉개지지 않게) · userData.force(마우스 올린 측점)는 거리 · 개수와 상관없이 맨 먼저
 const _v = new THREE.Vector3();
 export function nearLabels(sprites, camera, maxDist, max, H) {
   const p = camera.position;
@@ -55,9 +69,9 @@ export function nearLabels(sprites, camera, maxDist, max, H) {
   for (const s of sprites) {
     const d = s.position.distanceTo(p);
     s.visible = false;
-    if (d < maxDist && !s.userData.hide) near.push([d, s]);
+    if ((d < maxDist || s.userData.force) && !s.userData.hide) near.push([d, s]);
   }
-  near.sort((a, b) => ((b[1].userData.pri || 0) - (a[1].userData.pri || 0)) || a[0] - b[0]);
+  near.sort((a, b) => ((b[1].userData.force ? 1 : 0) - (a[1].userData.force ? 1 : 0)) || ((b[1].userData.pri || 0) - (a[1].userData.pri || 0)) || a[0] - b[0]);
   // 글자 크기(px) = 크기 × 초점 배율 ÷ 2 × 화면 높이(sizeAttenuation 끈 글자 — three 스프라이트 셰이더와 같은 셈)
   const f = camera.projectionMatrix.elements[5], kH = f / 2 * (H || 1000);
   const placed = [];

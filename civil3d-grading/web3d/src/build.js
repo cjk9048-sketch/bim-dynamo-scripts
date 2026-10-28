@@ -120,9 +120,9 @@ export class Build {
     if (!this.mesh) this._makeMesh();
     this.on = true;
     const L = this.L, T = L.terrain;
-    // 설계 자리는 격자가 대신 — 지형은 원지반 그대로 자리만 · 절성토 색 · 원지반 · 터파기 · 빗물 · 지적 · 측점은 끔(정지면에 얹은 선이라 공중에 뜬다)
+    // 설계 자리는 격자가 대신 — 지형은 원지반 그대로 자리만 · 절성토 색 · 원지반 · 터파기 · 빗물 · 지적 · 측점 · 경사는 끔(정지면에 얹은 것이라 공중에 뜬다)
     T.obj.material = T.mats;
-    for (const id of ['ground', 'excav', 'drain', 'cad', 'align']) if (L[id] && L[id].obj) L[id].obj.visible = false;
+    for (const id of ['ground', 'excav', 'drain', 'cad', 'align', 'slope']) if (L[id] && L[id].obj) L[id].obj.visible = false;
     for (const m of this._wallMats()) { m.clippingPlanes = [this.rise]; m.clipShadows = true; m.side = THREE.DoubleSide; m.needsUpdate = true; }
     this.mesh.visible = true;
     this.set(0);

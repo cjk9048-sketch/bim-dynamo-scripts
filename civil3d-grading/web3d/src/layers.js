@@ -258,7 +258,7 @@ export async function buildLayers(view, head) {
     mesh.userData = { layer: 'pattern', wall: p.wall, pat: p.layer };
     patGrp.add(mesh);
   }
-  if (wallGrp.children.length) { scene.add(wallGrp); L.wall = { obj: wallGrp, label: '옹벽', on: true }; }
+  if (wallGrp.children.length) { scene.add(wallGrp); L.wall = { obj: wallGrp, label: '옹벽', on: true, fixed: true }; }   // ★[JACK 1028] 옹벽은 늘 보임 — 층 목록에 단추 없음
   if (patGrp.children.length) { scene.add(patGrp); L.pattern = { obj: patGrp, label: '옹벽 무늬', on: true }; }
 
   applyTerrainMode(L);
@@ -290,4 +290,5 @@ export function applyTerrainMode(L) {
   // 원지반 보기에서는 옹벽 · 무늬도 없다(그때는 없던 것)
   if (L.wall) L.wall.obj.visible = wallOn;
   if (L.pattern) L.pattern.obj.visible = L.pattern.on && !groundMode;
+  if (L.slope) L.slope.obj.visible = L.slope.on && !groundMode;       // 경사 화살표는 정지면 것
 }

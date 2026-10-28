@@ -41,10 +41,15 @@ for full, rel in files:
 # 필수 파일이 정말 들어갔는지 확인 — 빠뜨리면 설치는 되는데 안 뜬다
 must = ["PackageContents.xml", "Contents/DH.Grading.Civil.dll", "Contents/DH.Grading.Core.dll",
         "Contents/NetTopologySuite.dll", "Contents/3D_VIEW_LOCATION.LSP",
-        "Contents/coordsys/CSLibrary.xml"]
+        "Contents/coordsys/CSLibrary.xml",
+        # ★[v109 · 설치 전 검토 중간 ②] 내장 VWorld 키 · 사내 DB 접속 정보(설치 전용 · git에 없음) — 빠지면 받은 사람은 위성 · 등고선이 «키 없음».
+        #   ★이 묶음(EXE · ZIP)에는 비밀값이 들어간다 — 사내 배포만(공개 저장소 릴리스 · 공개 NAS 금지).
+        "Contents/dh.keys.json"]
 have = {r for _, r in files}
 missing = [m for m in must if m not in have]
 print("MISSING:", missing if missing else "none")
+if missing:
+    raise SystemExit("필수 파일이 빠졌습니다 — 묶음을 만들지 않습니다: %s" % missing)
 
 d = io.open(os.path.join(SRC, "Contents", "DH.Grading.Civil.dll"), "rb").read()
 print("dll sha256 =", hashlib.sha256(d).hexdigest()[:16])

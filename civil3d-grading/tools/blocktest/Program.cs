@@ -62,6 +62,22 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "web3d")
     return fails == 0 ? 0 : 1;
 }
 
+// ★[v110] BLOCKTEST_ONLY=road — 도로 정지 · 종단 초안(S178)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "road")
+{
+    RoadCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
+// ★[v109] BLOCKTEST_ONLY=secrets — 비밀값 검사(S177)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "secrets")
+{
+    SecretScanCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
 // ★[v105.3] BLOCKTEST_ONLY=xsec2d — 횡단 2D 터파기선 · 배면 · 공제 · 3D 원뿔 낮추기(S173)만(개발 중 부분 시험)
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "xsec2d")
 {
@@ -117,6 +133,8 @@ Xsec2DCheck.Run(Check);   // ★[v105.3] S173 — 횡단 2D 터파기선(가로�
 WallSweepCheck.Run(Check);   // ★[v106] S174 — 옹벽 3D 스윕 계획 · 보이는 면 무늬 · 지형 덮기
 Web3DCheck.Run(Check);   // ★[v107] S175 — [3D 보기] 옹벽 메시 · 지형 구분 · 장면 묶음
 DrainageCheck.Run(Check);   // ★[v108] S176 — 정지면 빗물 검토(웅덩이 · 고임 · 평지 · 물길)
+SecretScanCheck.Run(Check);   // ★[v109] S177 — 비밀값 검사(공개 저장소)
+RoadCheck.Run(Check);   // ★[v110] S178 — 도로 정지(원뿔 감싸기) · 종단 초안
 
 const double W = 0.46, H = 0.2, STEP = 5.0, HW = W / 2;
 const double D = 0.5, FS = D / 2; // 깊이·전면 돌출(벽 중심=링, JACK 0720 Z-파이팅 해소): 절토 +FS(안쪽), 성토 −FS

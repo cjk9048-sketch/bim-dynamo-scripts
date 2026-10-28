@@ -49,3 +49,5 @@ DH_진행중*.txt
 DH_진행중*.txt.tmp
 DH_세션*.txt
 DH_세션*.txt.tmp
+# ★[v109] 내장 VWorld 키 · 사내 GIS DB 접속 정보 — 설치 전용(공개 저장소 금지)
+**/dh.keys*.json

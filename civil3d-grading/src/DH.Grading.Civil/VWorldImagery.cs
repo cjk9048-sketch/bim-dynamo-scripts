@@ -8,7 +8,7 @@ namespace DH.Grading.Civil;
 /// <summary>브이월드(V-World) 위성영상 익스포터 — 부지 경계상자(한국 평면직각 TM, 원점은 파라미터)에 걸치는 위성 타일을
 /// 받아 한 장으로 이어붙이고, 월드파일(.jgw)+투영정보(.prj)를 함께 저장한다(InfraWorks 래스터 지형피복용).
 ///
-/// 타일 서비스: <c>http://api.vworld.kr/req/wmts/1.0.0/{키}/Satellite/{z}/{y}/{x}.jpeg</c>
+/// 타일 서비스: <c>https://api.vworld.kr/req/wmts/1.0.0/{키}/Satellite/{z}/{y}/{x}.jpeg</c>
 ///   — 표준 웹메르카토르(EPSG:3857) XYZ 타일, 위성 최대 줌 z19(≈0.24m/px @ 위도37°).
 /// 좌표 흐름: 부지 TM(E,N) → 경위도(GRS80) → 웹메르카토르 타일. 모자이크는 3857 좌표로 월드파일 기록,
 ///   InfraWorks가 모델 좌표계로 재투영해 지형 위에 드리운다. (AutoCAD 의존성 없음 — 단독 테스트 가능)</summary>
@@ -16,7 +16,12 @@ public static class VWorldImagery
 {
     /// <summary>VWorld 키 — 타일과 <b>지도 팝업</b>이 같은 것을 쓴다.
     /// <para>★[JACK 0901] 키를 두 곳에 적지 않는다(§50) — <c>MapPage</c>가 여기서 읽어 간다.</para></summary>
-    internal const string ApiKey = "8EA87CD2-C75D-3407-A41C-D1FBE9B33CAA";
+    //   ★★[v109 · 계획_v109.md 2 · JACK 1028] 키는 소스에 없다 — 내 키([기타 설정]) 또는 내장 키(설치 폴더 dh.keys.json) ·
+    //   옛 상수는 0723~1028 공개 저장소에 그대로 보였다(값은 git 기록에 남음 — VWorld에서 바꿔야 한다).
+    internal static string ApiKey => VWorldKey.Current;
+    /// <summary>방금 받은 타일이 키 오류였나(작은 XML 응답 · locator="key" 등) — 실패 글을 «인터넷»이 아니라 «키»로 낸다(검토 M8).</summary>
+    private static volatile bool _keyBad;
+    private static void NoteSmall(byte[] b) { try { if (b.Length < 4000 && VWorldKey.IsKeyError(System.Text.Encoding.UTF8.GetString(b))) _keyBad = true; } catch { } }
     private const string Layer = "Satellite";
     private const int TileSize = 256;
     private const int MaxZoom = 19;           // 위성 최대 줌(≈0.24m/px @위도37°) — JACK: 항상 최고해상도만
@@ -41,6 +46,8 @@ public static class VWorldImagery
         double lon0Deg, double falseNorthing, int epsgOut,
         System.Action<int, int>? progress = null)
     {
+        _keyBad = false;
+        if (ApiKey.Length == 0) return (false, VWorldKey.NoKeyHelp, 0, 0, 0);
         if (maxE <= minE || maxN <= minN) return (false, "지정한 범위가 유효하지 않습니다.", 0, 0, 0);
 
         // 네 모서리 → 경위도 bbox(TM은 직각이 아니라 살짝 기울어 4모서리로 안전하게).
@@ -82,8 +89,8 @@ public static class VWorldImagery
         var dv = new DrawingVisual();
         using (var dc = dv.RenderOpen())
         {
-            for (int ty = ymin; ty <= ymax; ty++)
-                for (int tx = xmin; tx <= xmax; tx++)
+            for (int ty = ymin; ty <= ymax && !(_keyBad && okTiles == 0); ty++)
+                for (int tx = xmin; tx <= xmax && !(_keyBad && okTiles == 0); tx++)
                 {
                     var bmp = DownloadTile(z, ty, tx);
                     doneTiles++;
@@ -95,6 +102,7 @@ public static class VWorldImagery
         }
         mosaic.Render(dv);
         // [JACK 0731] 전량 실패의 흔한 원인은 인터넷이 아니라 '좌표계가 틀려 위성사진이 없는 위치를 요청'한 경우.
+        if (okTiles == 0 && _keyBad) return (false, VWorldKey.KeyHelp, 0, 0, 0);
         if (okTiles == 0) return (false, "해당하는 위치에 위성사진이 존재하지 않습니다.\n좌표계(원점)가 맞는지 확인하세요. (인터넷 차단일 수도 있음)", 0, 0, 0);
 
         int W = cols * TileSize, H = rows * TileSize;
@@ -126,6 +134,8 @@ public static class VWorldImagery
                                 double lon0Deg = 127.0, double falseNorthing = 600000.0,
                                 int epsgOut = 3857)
     {
+        _keyBad = false;
+        if (ApiKey.Length == 0) return "위성: " + VWorldKey.NoKeyHelp;
         if (maxE <= minE || maxN <= minN) return "위성: 경계상자가 유효하지 않아 생략";
         minE -= marginM; minN -= marginM; maxE += marginM; maxN += marginM;
 
@@ -154,8 +164,8 @@ public static class VWorldImagery
         var dv = new DrawingVisual();
         using (var dc = dv.RenderOpen())
         {
-            for (int ty = ymin; ty <= ymax; ty++)
-                for (int tx = xmin; tx <= xmax; tx++)
+            for (int ty = ymin; ty <= ymax && !(_keyBad && okTiles == 0); ty++)
+                for (int tx = xmin; tx <= xmax && !(_keyBad && okTiles == 0); tx++)
                 {
                     var bmp = DownloadTile(z, ty, tx);
                     if (bmp == null) continue;
@@ -299,13 +309,13 @@ public static class VWorldImagery
     /// <summary>웹메르카토르 위성 타일 1장 다운로드 → BitmapSource(실패 시 null, 최대 2회 재시도).</summary>
     private static BitmapSource? DownloadTile(int z, int y, int x)
     {
-        string url = $"http://api.vworld.kr/req/wmts/1.0.0/{ApiKey}/{Layer}/{z}/{y}/{x}.jpeg";
+        string url = $"https://api.vworld.kr/req/wmts/1.0.0/{ApiKey}/{Layer}/{z}/{y}/{x}.jpeg";
         for (int attempt = 0; attempt < 2; attempt++)
         {
             try
             {
                 byte[] bytes = Http.GetByteArrayAsync(url).GetAwaiter().GetResult();
-                if (bytes.Length < 500) return null;   // 없는 타일은 작은 XML 예외로 옴
+                if (bytes.Length < 500) { NoteSmall(bytes); return null; }   // 없는 타일은 작은 XML 예외로 옴(키 오류도 작은 XML)
                 var bi = new BitmapImage();
                 bi.BeginInit();
                 bi.CacheOption = BitmapCacheOption.OnLoad;
@@ -330,6 +340,8 @@ public static class VWorldImagery
         double lon0Deg, double falseNorthing, string cacheDir,
         long maxPixels = 16_000_000, int maxSide = 8192, int maxTiles = 800, int quality = 88)
     {
+        _keyBad = false;
+        if (ApiKey.Length == 0) return (null, 0, 0, 0, 0, 0, VWorldKey.NoKeyHelp);
         if (!(maxE > minE) || !(maxN > minN)) return (null, 0, 0, 0, 0, 0, "범위 없음");
         var c = new[]
         {
@@ -377,7 +389,7 @@ public static class VWorldImagery
 
         // 첫 장 시험(짧게) — 인터넷이 조용히 막힌 자리에서 수십 초 멈추지 않게
         if (Fetch(z, ymin, xmin, quick: true) == null && Fetch(z, ymax, xmax, quick: true) == null)
-            return (null, 0, 0, 0, 0, 0, "위성 첫 타일을 못 받음(인터넷 · 차단 확인)");
+            return (null, 0, 0, 0, 0, 0, _keyBad ? "위성 첫 타일을 못 받음 — " + VWorldKey.KeyHelp : "위성 첫 타일을 못 받음(인터넷 · 차단 확인)");
 
         // 4장씩 동시에 받고(바이트만) · 연달아 8장 못 받으면 멈춤 · 풀기(WPF 그림)는 이 스레드에서 차례로
         var raw = new System.Collections.Concurrent.ConcurrentDictionary<(int, int), byte[]>();
@@ -405,7 +417,7 @@ public static class VWorldImagery
         var tiles = new Dictionary<(int, int), byte[]>();
         foreach (var kv in raw) { var px = Decode(kv.Value); if (px != null) tiles[kv.Key] = px; }
         int ok = tiles.Count;
-        if (ok == 0) return (null, 0, 0, 0, 0, 0, "위성 타일을 하나도 못 받음");
+        if (ok == 0) return (null, 0, 0, 0, 0, 0, _keyBad ? "위성 타일을 하나도 못 받음 — " + VWorldKey.KeyHelp : "위성 타일을 하나도 못 받음");
 
         // 도면 좌표 격자로(최근접 · 32 px 격자 보간 — ReprojectToTm과 같은 법) → JPEG
         double mpp = 2.0 * OriginShift / (TileSize * System.Math.Pow(2, z));
@@ -460,14 +472,15 @@ public static class VWorldImagery
     /// <summary>타일 한 장의 JPEG 바이트(없거나 못 받으면 null — 아무 스레드에서나). quick이면 3초 한 번 · 아니면 8초 두 번.</summary>
     private static byte[]? Fetch(int z, int y, int x, bool quick)
     {
-        string url = $"http://api.vworld.kr/req/wmts/1.0.0/{ApiKey}/{Layer}/{z}/{y}/{x}.jpeg";
+        string url = $"https://api.vworld.kr/req/wmts/1.0.0/{ApiKey}/{Layer}/{z}/{y}/{x}.jpeg";
         for (int attempt = 0; attempt < (quick ? 1 : 2); attempt++)
         {
             try
             {
                 using var cts = new System.Threading.CancellationTokenSource(System.TimeSpan.FromSeconds(quick ? 3 : 8));
                 byte[] bytes = HttpQuick.GetByteArrayAsync(url, cts.Token).GetAwaiter().GetResult();
-                return bytes.Length < 500 ? null : bytes;   // 없는 타일은 작은 XML 예외로 옴
+                if (bytes.Length < 500) { NoteSmall(bytes); return null; }   // 없는 타일은 작은 XML 예외로 옴(키 오류도 작은 XML)
+                return bytes;
             }
             catch { if (!quick) System.Threading.Thread.Sleep(200); }
         }

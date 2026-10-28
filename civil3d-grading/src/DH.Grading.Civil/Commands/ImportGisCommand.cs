@@ -110,7 +110,7 @@ public sealed class ImportGisCommand
             {
                 lines = GisDb.LoadContours(x0, y0, x1, y1, epsg, SimplifyM, MaxContourRows, out cut, out diag);
             }
-            catch (System.Exception dex) { Refuse(ed, "등고선", "등고선을 받지 못했습니다.\n" + dex.Message); return false; }
+            catch (System.Exception dex) { Refuse(ed, "등고선", "등고선을 받지 못했습니다.\n" + GisDb.Clean(dex.Message)); return false; }
 
             ed.WriteMessage("\n[등고선] " + diag);
             if (lines.Count == 0)
@@ -229,7 +229,7 @@ public sealed class ImportGisCommand
             {
                 parcels = GisDb.LoadParcels(x0, y0, x1, y1, epsg, MaxParcelRows, out cut, out diag);
             }
-            catch (System.Exception dex) { Refuse(ed, "지적도", "지적도를 받지 못했습니다.\n" + dex.Message); return; }
+            catch (System.Exception dex) { Refuse(ed, "지적도", "지적도를 받지 못했습니다.\n" + GisDb.Clean(dex.Message)); return; }
 
             ed.WriteMessage("\n[지적도] " + diag);
             if (parcels.Count == 0)
@@ -723,9 +723,12 @@ public sealed class ImportGisCommand
     {
         if (GisDb.CanConnect(out string why)) return true;
         ed.WriteMessage("\n[가져오기] 사내 DB 접속 실패 — " + why);
-        AcadApp.ShowAlertDialog(
-            "사내 지형·지적 데이터베이스에 접속할 수 없습니다.\n\n" +
-            "사내망(VPN)에 연결되어 있는지 확인해 주세요.\n\n상세: " + why);
+        // ★[v109] 접속 정보가 설치 파일에 없으면 VPN 탓이 아니다 — 까닭을 갈라 말한다
+        AcadApp.ShowAlertDialog(!DhKeys.Installed.GisDb.Ready
+            ? "사내 지형·지적 데이터베이스 접속 정보가 설치돼 있지 않습니다.\n\n"
+              + "사내 배포본으로 다시 설치하거나, 수치지형도 DXF를 [수치지도 DXF]로 넣어 주세요."
+            : "사내 지형·지적 데이터베이스에 접속할 수 없습니다.\n\n" +
+              "사내망(VPN)에 연결되어 있는지 확인해 주세요.\n\n상세: " + why);
         return false;
     }
 

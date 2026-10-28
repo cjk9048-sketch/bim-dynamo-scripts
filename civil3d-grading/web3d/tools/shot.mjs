@@ -83,6 +83,12 @@ try {
         await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 });
         await sleep(150);
       }
+      if (v.moveAt) {   // 진짜 마우스 올리기(누르지 않음) — 측점 강조
+        const [x, y] = await evaluate(`DH3D.screen(${JSON.stringify(v.moveAt)})`);
+        await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x - 30, y: y - 30 });
+        await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+        await sleep(150);
+      }
       if (v.text) log.push(`글 ${v.name}: ` + JSON.stringify(await evaluate(`[...document.querySelectorAll(${JSON.stringify(v.text)})].filter(e => e.offsetParent).map(e => e.innerText).join(' | ')`)));
       if (v.wait) await sleep(v.wait);
       await sleep(300);

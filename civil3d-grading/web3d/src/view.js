@@ -73,17 +73,28 @@ export class View {
 
     this._need = true;
     this._listeners = [];
+    this._anims = [];
+    this._tAnim = 0;
     const ro = new ResizeObserver(() => this.resize());
     ro.observe(host);
     this.resize();
-    const loop = () => {
+    const loop = (now) => {
       requestAnimationFrame(loop);
+      // 움직이는 것(빗물 흐름 · 고임)이 있으면 초당 30장 — 그것 때문에만 그리는 장은 그림자 지도를 다시 굽지 않는다(물은 그림자를 안 만든다)
+      let anim = false;
+      if (this._anims.length && now - this._tAnim >= 32) {
+        for (const f of this._anims) if (f(now / 1000)) anim = true;
+        if (anim) this._tAnim = now;
+      }
       if (this._need) { this._need = false; this.draw(); }
+      else if (anim) this.draw(true);
     };
     requestAnimationFrame(loop);
   }
 
   onDraw(fn) { this._listeners.push(fn); }
+  // fn(초) → 그리는 중이면 true(보이지 않으면 false — 그때는 다시 그리지 않는다)
+  addAnim(fn) { this._anims.push(fn); }
   request() { this._need = true; }
 
   resize() {
@@ -135,9 +146,10 @@ export class View {
     this.sun.target.updateMatrixWorld();
   }
 
-  draw() {
+  draw(animOnly = false) {
     this._fitClip();
-    if (this.sun.castShadow) this._fitShadow();
+    if (this.sun.castShadow && !animOnly) this._fitShadow();
+    this.renderer.shadowMap.autoUpdate = !animOnly;
     for (const f of this._listeners) f();
     this.renderer.render(this.scene, this.camera);
   }

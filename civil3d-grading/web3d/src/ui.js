@@ -1,5 +1,12 @@
 // 화면 위 칸들 — 층 · 정보 풍선 · 재기 · 토공량 · 자가진단 · 저장 메뉴 · 바쁨/오류 · 아래 가운데 칸(해 · 시공 · 자르기 · 영상).
 import { CLASS_STYLE } from './layers.js';
+import { SLOPE_STOPS } from './extras.js';
+
+// 경사 범례 눈금 — 로그 눈금 자리(0~100 %) · 글
+const _lg = (g) => Math.log10(g);
+const SLOPE_POS = SLOPE_STOPS.map(([g]) => (_lg(g) - _lg(SLOPE_STOPS[0][0])) / (_lg(SLOPE_STOPS[SLOPE_STOPS.length - 1][0]) - _lg(SLOPE_STOPS[0][0])) * 100);
+const SLOPE_TXT = ['0.5%', '2%', '5%', '10%', '30%', '1:1.5'];
+const SLOPE_GRAD = `linear-gradient(90deg,${SLOPE_STOPS.map(([, c], i) => `${c} ${SLOPE_POS[i].toFixed(1)}%`).join(',')})`;
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -51,7 +58,7 @@ export class Ui {
     box.innerHTML = '';
     for (const id of order) {
       const l = L[id];
-      if (!l) continue;
+      if (!l || l.fixed) continue;     // 늘 보이는 층(옹벽)은 단추 없음
       const row = document.createElement('label');
       const sw = SWATCH[id];
       if (l.missing) {
@@ -83,10 +90,32 @@ export class Ui {
     if (show) { $('lgCut').textContent = `절토 ${lim.toFixed(1)} m`; $('lgFill').textContent = `성토 ${lim.toFixed(1)} m`; }
   }
 
-  // 빗물 범례 — 층이 켜졌을 때만
+  // 빗물 범례 — 층이 켜졌을 때만 · 왼쪽 아래 따로 한 칸(JACK 1028) · ↻ = 고임 다시 채우기
   drainLegend(show, summary) {
     $('drainLg').style.display = show ? 'block' : 'none';
     if (show) $('drainSum').textContent = summary || '';
+    $('drainRe').onclick = () => { if (this.onDrainReplay) this.onDrainReplay(); };
+  }
+
+  // 경사 범례 — 층이 켜졌을 때만 · 왼쪽 아래 따로 한 칸(빗물 범례와 같은 자리 줄) · 색 막대 = 화살표 색과 같은 로그 눈금
+  slopeLegend(show) {
+    const el = $('slopeLg');
+    if (!el.dataset.made) {
+      el.dataset.made = '1';
+      $('slopeBar').style.background = SLOPE_GRAD;
+      $('slopeTick').innerHTML = SLOPE_TXT.map((t, i) => `<span style="left:${SLOPE_POS[i].toFixed(1)}%">${t}</span>`).join('');
+    }
+    el.style.display = show ? 'block' : 'none';
+  }
+
+  // ★[JACK 1028] 웹 주소로 공유 — 올리기 전에 한 번 묻는다([계속] · [닫기])
+  confirmShare(go) {
+    const el = $('shareAsk');
+    el.style.display = 'block';
+    const close = () => { el.style.display = 'none'; };
+    $('askGo').onclick = () => { close(); go(); };
+    $('askX').onclick = close;
+    $('askNo').onclick = close;
   }
 
   earth(e) {
@@ -182,6 +211,7 @@ export class Ui {
 const SWATCH = {
   terrain: CLASS_STYLE.plan.color, sat: '#4f6b3a', cutfill: 'linear-gradient(90deg,#cc2a1f,#f4f4f0,#265ccc)',
   ground: '#5f7a45', excav: '#9b7b52', wall: '#c2bfb8', pattern: '#a8a090', drain: '#1e7bff', cad: '#ffd400', align: '#ff4d4d',
+  slope: SLOPE_GRAD,
 };
 
 // 아래 가운데 칸 — 해 · 시공 · 자르기 · 영상 중 하나만 열림. 닫으면 연 쪽의 끝내기를 부른다

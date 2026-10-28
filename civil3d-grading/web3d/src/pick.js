@@ -44,6 +44,15 @@ export class Picker {
       down = null;
       if (moved < 5 && quick) this.click(e.clientX, e.clientY);
     });
+    // ★[JACK 1028] 측점 위에 마우스 — 그 측점 강조(누르면 풍선이 뜰 바로 그 측점) · 끄는 중(버튼 누름)에는 끔 · 그림 한 장에 한 번만 셈
+    this._hov = -1;
+    let hx = 0, hy = 0, hraf = 0;
+    el.addEventListener('pointermove', e => {
+      if (e.buttons) { this.hover(null); return; }
+      hx = e.clientX; hy = e.clientY;
+      if (!hraf) hraf = requestAnimationFrame(() => { hraf = 0; this.hover(hx, hy); });
+    });
+    el.addEventListener('pointerleave', () => this.hover(null));
     el.addEventListener('dblclick', e => {
       if (!this.enabled) return;
       const h = this.hit(e.clientX, e.clientY);
@@ -104,7 +113,7 @@ export class Picker {
     return [(v.x + 1) / 2 * r.width + r.left, (1 - v.y) / 2 * r.height + r.top];
   }
 
-  // 선분 묶음 중 화면에서 (cx, cy)에 가장 가까운 것(tol px 안) — 순번
+  // 선분 묶음 중 화면에서 (cx, cy)에 가장 가까운 것(tol px 안) — 순번 · this._d2 = 그 거리²
   _nearSeg(seg, cx, cy, tol) {
     let best = -1, bd = tol * tol;
     const cp = this.clip(), mid = new THREE.Vector3();
@@ -117,23 +126,48 @@ export class Picker {
       const ex = a[0] + dx * t - cx, ey = a[1] + dy * t - cy, d2 = ex * ex + ey * ey;
       if (d2 < bd) { bd = d2; best = k; }
     }
+    this._d2 = bd;
+    return best;
+  }
+
+  _prep() {
+    this._rect = this.view.renderer.domElement.getBoundingClientRect();
+    this.view.camera.updateMatrixWorld();
+  }
+
+  // 화면에서 가장 가까운 측점 가로선(10 px 안) — 촘촘하면 첫 것이 아니라 가장 가까운 것(강조 = 누를 것)
+  _nearStation(cx, cy) {
+    const A = this.L.align;
+    if (!A || !A.obj.visible) return null;
+    let best = null, bd = Infinity;
+    for (const st of A.st) if (this._nearSeg(st.seg, cx, cy, 10) >= 0 && this._d2 < bd) { bd = this._d2; best = st; }
     return best;
   }
 
   // 측점 가로선 · 물길 — 화면 거리로(10 px · 8 px 안)
   _nearLine(cx, cy) {
-    this._rect = this.view.renderer.domElement.getBoundingClientRect();
-    this.view.camera.updateMatrixWorld();
-    const A = this.L.align;
-    if (A && A.obj.visible) {
-      for (const st of A.st) if (this._nearSeg(st.seg, cx, cy, 10) >= 0) return { station: st };
-    }
+    this._prep();
+    const st = this._nearStation(cx, cy);
+    if (st) return { station: st };
     const D = this.L.drain;
     if (D && D.obj.visible && D.pickSeg.length) {
       const k = this._nearSeg(D.pickSeg, cx, cy, 8);
       if (k >= 0) return { stream: D.pickAcc[k] };
     }
     return null;
+  }
+
+  // 마우스 올린 측점 강조 — (null) = 끔 · 정보 모드에서만(재기 · 시공 재생 중에는 안 함)
+  hover(cx, cy) {
+    let st = null;
+    if (cx != null && this.enabled && this.mode === 'info') { this._prep(); st = this._nearStation(cx, cy); }
+    const i = st ? st.i : -1;
+    if (i === this._hov) return;
+    this._hov = i;
+    const A = this.L.align;
+    if (A && A.highlight) A.highlight(st);
+    this.view.renderer.domElement.style.cursor = st ? 'pointer' : '';
+    this.view.request();
   }
 
   click(cx, cy) {
@@ -251,6 +285,7 @@ export class Picker {
 
   setMode(m) {
     this.mode = m;
+    this.hover(null);
     this.endMeasure(true);
     this.clearMarks();
     this.ui.hideInfo();

@@ -93,10 +93,12 @@ public sealed class ResetCommand
             //   (다른 것이 물고 있으면 그렇다) <c>catch { }</c>가 삼켜 "완료"만 남는다 —
             //   이 저장소가 여러 번 데인 그 모양이다(§60 "0을 만들어 놓고 완료라고 하기").
             string left = Survivors(doc);
-            ed.WriteMessage("\n[초기화] " + msg + " · 직접 그린 것과 원지반만 남음"
+            // ★[v110 · 설치 전 검토 · 중간] 진입도로 노선 · 종단은 초기화가 안 지운다 — 있으면 그렇다고 말한다
+            string keep = HasRoad(doc) ? "직접 그린 것 · 원지반 · 진입도로 노선" : "직접 그린 것과 원지반";
+            ed.WriteMessage("\n[초기화] " + msg + " · " + keep + "만 남음"
                           + (left.Length > 0 ? "\n  ⚠남은 것 — " + left : ""));
             AcadApp.ShowAlertDialog("초기화 완료\n\n" + msg +
-                "\n\n직접 그린 것과 원지반만 남았습니다.\n[지표면 생성]부터 다시 시작하세요."
+                "\n\n" + keep + "만 남았습니다.\n[지표면 생성]부터 다시 시작하세요."
                 + (left.Length > 0 ? "\n\n⚠남은 것 — " + left : ""));
             try { DiagLog.Append($"\n■ DHRESET(초기화)\n  {msg}"
                                + (left.Length > 0 ? $"\n  ⚠남은 것 — {left}" : "\n  남은 것 없음")
@@ -321,6 +323,20 @@ public sealed class ResetCommand
         return n;
     }
 
+    /// <summary>[v110] 진입도로 노선(DH도로_N)이 있는가 — 초기화는 그것을 안 지우므로 알림 문구에 적는다.</summary>
+    private static bool HasRoad(Document doc)
+    {
+        try
+        {
+            var cdoc = Autodesk.Civil.ApplicationServices.CivilDocument.GetCivilDocument(doc.Database);
+            using var tr = doc.Database.TransactionManager.StartTransaction();
+            foreach (ObjectId aid in cdoc.GetAlignmentIds())
+                if (tr.GetObject(aid, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.Alignment al && al.Name.StartsWith(RoadBuilder.AlignBase, System.StringComparison.Ordinal)) return true;
+        }
+        catch { }
+        return false;
+    }
+
     /// <summary>★[JACK 0902] 초기화 뒤에 <b>우리 것이 무엇이 남았는지</b> 센다.
     /// <para>지우는 코드는 전부 <c>catch { }</c>로 감싸여 있어 <b>실패해도 조용하다</b> —
     /// 다른 객체가 물고 있으면 지우기가 안 되는데 화면에는 "완료"만 뜬다.
@@ -377,6 +393,8 @@ public sealed class ResetCommand
                             if (!ly.StartsWith("DH", System.StringComparison.Ordinal)
                              && !ly.StartsWith("CR-", System.StringComparison.OrdinalIgnoreCase)) continue;
                             if (System.Array.IndexOf(ImportGisCommand.ImportLayers, ly) >= 0) continue;   // 가져온 자료는 뺀다
+                            // ★[v110 · 설치 전 검토 · 중간] 진입도로(노선 · 종단 · 종단뷰)는 초기화가 일부러 안 지운다 — «남은 것»으로 세지 않는다
+                            if (ly.StartsWith(RoadBuilder.AlignBase + "-", System.StringComparison.Ordinal)) continue;
                             byLayer.TryGetValue(ly, out int c); byLayer[ly] = c + 1;
                         }
                         catch { }

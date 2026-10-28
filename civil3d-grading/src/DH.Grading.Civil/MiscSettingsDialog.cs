@@ -21,6 +21,9 @@ public sealed class MiscSettingsDialog : Window
 {
     private readonly ComboBox _coordSys;
     private readonly CheckBox _showOnlyResult;
+    private readonly TextBox _vwKey;
+    /// <summary>[저장]에서 VWorld 키가 바뀌었나 — 부른 쪽이 지도 도킹바를 새 키로 다시 연다.</summary>
+    internal bool KeyChanged { get; private set; }
 
     public MiscSettingsDialog()
     {
@@ -77,10 +80,84 @@ public sealed class MiscSettingsDialog : Window
         // ★★★[v103.3 · JACK 1021 «기타설정에있는 옹벽형태를 계획부지생성 도킹바에 넣고»] 옹벽 형태는 <b>도킹바로 옮겼다</b>
         //   (0910엔 이리로 왔었다 — «엄밀히 따지면 인프라웍스 관련»). 이제 «뒷채움 터파기»와 한 묶음이다(GradingPanel).
 
+        // ── 3. VWorld 인증키 ── ★★[v109 · 계획_v109.md 2 · JACK 1028 «옵션에서 각자 키를 발급받아서 넣을 수 있게» · «기본은 내장 키(진입장벽)»]
+        GradingDialog.AddSection(root, "3. VWorld 인증키",
+            "위성사진 · 지도 도킹바 · 지적에 씁니다. 비워 두면 내장 키를 씁니다.\n"
+          + "VWorld 약관상 키는 본인만 쓰게 돼 있어, 자주 쓰면 내 키를 넣는 것이 맞습니다(vworld.kr · 무료 · 개발키 6개월 · 연장 3번).");
+        _vwKey = new TextBox
+        {
+            Text = VWorldKey.User,
+            Width = 300, Height = 26,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            ToolTip = "8-4-4-4-12 꼴(예: 1A2B3C4D-…). 비우면 내장 키",
+        };
+        var vwRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
+        vwRow.Children.Add(_vwKey);
+        var test = new Button { Content = "키 시험", MinWidth = 72, Margin = new Thickness(6, 0, 0, 0) };
+        var how = new Button
+        {
+            Content = "발급 방법", MinWidth = 72, Margin = new Thickness(6, 0, 0, 0),
+            ToolTip = "vworld.kr 회원가입 → 마이포털 → 인증키 발급\n"
+                    + "· 서비스유형: 기타(QGIS, ArcGIS 등) · 서비스URL: 비워도 됨\n"
+                    + "· 활용 API: WMTS/TMS · WMS/WFS · 2D데이터 · 국가중점\n"
+                    + "· 바로 나오는 개발키를 복사해 여기에 붙여 넣기",
+        };
+        vwRow.Children.Add(test);
+        vwRow.Children.Add(how);
+        root.Children.Add(vwRow);
+        var vwState = new TextBlock { FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) };
+        void ShowSource() => vwState.Text = "지금: " + VWorldKey.Source;
+        ShowSource();
+        root.Children.Add(vwState);
+        how.Click += (_, __) =>
+        {
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("https://www.vworld.kr/mypo/mypo_apiKey_i001.do") { UseShellExecute = true }); }
+            catch (System.Exception ex) { vwState.Text = "브라우저를 못 열었습니다 — " + ex.Message; }
+        };
+        // [키 시험] — 칸에 적은 키(비었으면 내장 키)로 네 가지를 한 번씩. 저장은 [저장]을 눌러야(취소면 버림 · 검토 L4)
+        test.Click += async (_, __) =>
+        {
+            string k = _vwKey.Text.Trim();
+            if (k.Length > 0 && !VWorldKey.LooksValid(k)) { vwState.Foreground = DhBrand.Warn; vwState.Text = "키 꼴이 아닙니다(8-4-4-4-12)"; return; }
+            string use = k.Length > 0 ? k : DhKeys.Installed.VWorld;
+            if (use.Length == 0) { vwState.Foreground = DhBrand.Warn; vwState.Text = "내장 키가 없습니다 — 내 키를 넣으세요"; return; }
+            test.IsEnabled = false;
+            vwState.Foreground = DhBrand.Sub;
+            vwState.Text = "시험 중…";
+            try
+            {
+                var r = await System.Threading.Tasks.Task.Run(() => VWorldKey.Test(use));   // 화면 스레드 밖에서(프록시 찾기 등으로 창이 굳지 않게 · 검토 L3)
+                bool all = r.TrueForAll(p => p.Ok);
+                vwState.Foreground = all ? DhBrand.Brand : DhBrand.Warn;
+                vwState.Text = (k.Length > 0 ? "내 키" : "내장 키") + " 시험 — "
+                             + string.Join(" · ", r.ConvertAll(p => (p.Ok ? "✓ " : "✗ ") + p.Name + (p.Ok ? "" : $"({p.Why})")));
+            }
+            catch (System.Exception ex) { vwState.Foreground = DhBrand.Warn; vwState.Text = "시험 실패 — " + ex.Message; }
+            finally { test.IsEnabled = true; }
+        };
+
         var ok = new Button { Content = "저장", IsDefault = true, MinWidth = 96 };
         var cancel = new Button { Content = "취소", IsCancel = true, MinWidth = 80 };
         ok.Click += (_, __) =>
         {
+            // VWorld 키 — 비우면 내 키를 지움(내장 키로) · 꼴이 아니면 저장 안 하고 창을 닫지 않음
+            string vk = _vwKey.Text.Trim();
+            if (vk.Length > 0 && !VWorldKey.LooksValid(vk))
+            {
+                vwState.Foreground = DhBrand.Warn;
+                vwState.Text = "VWorld 키 꼴이 아닙니다(8-4-4-4-12) — 고치거나 비우세요";
+                return;
+            }
+            if (vk != VWorldKey.User)
+            {
+                try
+                {
+                    if (vk.Length == 0) VWorldKey.ClearUser(); else VWorldKey.SaveUser(vk);
+                    KeyChanged = true;
+                }
+                catch (System.Exception ex) { vwState.Foreground = DhBrand.Warn; vwState.Text = "키를 저장하지 못했습니다 — " + ex.Message; return; }
+            }
             // ★이 화면이 정하는 값은 <b>둘</b>(좌표계·표시)뿐이라 <see cref="GradingForm.Apply"/>를 안 쓴다 —
             //   그것은 정지 제원 칸들이 <b>다 있어야</b> 도는 물건이다.
             GradingSettings.ExportEpsg = GradingDialog.EpsgCodes[
@@ -90,6 +167,6 @@ public sealed class MiscSettingsDialog : Window
             Close();
         };
 
-        DhBrand.Dress(this, "기타 설정", "좌표계 · 표시", root, ok, cancel);
+        DhBrand.Dress(this, "기타 설정", "좌표계 · 표시 · VWorld 키", root, ok, cancel);
     }
 }
