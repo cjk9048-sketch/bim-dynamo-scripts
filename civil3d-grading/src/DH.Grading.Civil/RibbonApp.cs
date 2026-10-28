@@ -45,6 +45,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.NgiiCommand))]               // DHNGII(수치지도 DXF → 원지반)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.CropGroundCommand))]         // DHCROP(원지형 자르기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SelfCheckCommand))]          // DHSELFCHECK(자가점검 — 읽기만 · v103.1.7)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.RoadCommand))]               // ★[v110] DHROAD · DHROADWALL · DHROADLIMIT · DHROADREDRAFT · DHROADOFF(진입도로)
 
 namespace DH.Grading.Civil;
 
@@ -760,6 +761,14 @@ public sealed class RibbonApp : IExtensionApplication
             pGrade.Items.Add(splitGround);
             pGrade.Items.Add(Spacer());
             pGrade.Items.Add(splitSurf);
+            pGrade.Items.Add(Spacer());
+            // ★★[v110 · JACK 1028 «진입도로 — 인프라웍스처럼»] 노선(폴리선 · Civil 노선) → 종단 초안 → 실시간 미리보기 + 도킹창
+            var btnRoad = MakeButton("진입\n도로", "DHROAD ", "진입도로 — 노선을 고르면 종단 초안 · 사면 · 토공량을 바로 봅니다", "노리선");
+            btnRoad.ToolTip = MakeTip("진입도로 (DHROAD)",
+                "폴리선(또는 Civil 노선)을 고르면 노선 · 종단 초안 · 종단뷰를 만들고 사면 · 옹벽 · 토공량을 바로 보여 줍니다.\n" +
+                "· 종단뷰에서 계획 종단 PVI를 옮기거나 노선 · 창 값을 바꾸면 바로 다시 계산\n" +
+                "· 빨강 = 옹벽 제안 · 사면 충돌", null);
+            pGrade.Items.Add(btnRoad);
             pGrade.Items.Add(Spacer());
             // ★★[계획 8단계 · JACK 지시 3 "UI에서 사면수정버튼은 없애고"]
             //   사면 수정은 <b>도킹창 안</b>으로 들어갔다 — 정지는 [정지 창], 터파기는 [터파기 창].

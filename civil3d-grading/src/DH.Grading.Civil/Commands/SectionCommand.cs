@@ -959,7 +959,7 @@ public sealed class SectionCommand
     }
 
     /// <summary>이름이 baseName 또는 baseName_숫자 인가.</summary>
-    private static bool IsBase(string nm, string baseName) =>
+    internal static bool IsBase(string nm, string baseName) =>
         nm == baseName ||
         (nm.StartsWith(baseName + "_") && int.TryParse(nm.Substring(baseName.Length + 1), out _));
 

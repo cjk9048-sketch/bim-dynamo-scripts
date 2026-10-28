@@ -2132,47 +2132,41 @@ public sealed class XsecViewCommand
                     //   고 적어 놓고 <b>어디에도 안 썼다</b> — 소스 전체에 "흙막이"가 0건이었다.
                     //   ★기준면과 <b>무관하게</b> 언제나 빠지는 것이므로 조건 없이 붙인다.
                     //   규모: 배수지 둘레 160m × 깊이 9m ≒ <b>1,440㎡</b>(토공 다음으로 큰 항목).
+                    // ★★[JACK 1028 스샷 «토적표에 이상한 ?? 글씨»] 안내문이 ?로 찍히고 표 아랫줄과 겹쳤다.
+                    //   원인 ① 글꼴을 안 줘서 도면의 현재 글꼴(Standard — 한글 없음)을 썼다 — 표 칸은 kst를 받는데 이 줄만 빠졌다.
+                    //   원인 ② 자리를 표 높이 <b>어림</b>(줄 높이 × 줄 수)으로 잡았다 — 두 줄 글이 든 칸에서 줄이 늘면 표가 그보다 길다.
+                    //   → 한글 글꼴 · 표를 다시 그려 <b>실제 아랫변</b>을 재고 그 밑에 · 표 폭에서 줄바꿈(MText — 옆 횡단도로 뻗지 않게).
+                    //   미포함 · 계획지표면 안내를 한 덩이(두 문단)로 — 첫 줄이 몇 줄로 접히든 둘째가 겹치지 않는다.
+                    double tblBot = py - tableH;
+                    try { tb.RecomputeTableBlock(true); tblBot = System.Math.Min(tblBot, ((Entity)tb).GeometricExtents.MinPoint.Y); }
+                    catch (System.Exception exB) { log?.AppendLine("  ⚠표 아랫변을 못 쟀다(어림 높이로 둠) — " + exB.Message); }
                     try
                     {
-                        double nh0 = txtH * 0.8;
-                        var miss = new DBText
-                        {
-                            TextString = "※ 미포함 — 흙막이(가시설) 면적 · 성토에서 구조물 부피 공제"
-                                       + " · 되메우기에서 옹벽 밖 구조물 부피 공제"
-                                       + (string.IsNullOrEmpty(qty.Foot) ? "" : "  ※ " + qty.Foot),
-                            Height = nh0,
-                            LayerId = layE,
-                            ColorIndex = 256,
-                            HorizontalMode = TextHorizontalMode.TextLeft,
-                            VerticalMode = TextVerticalMode.TextTop,
-                        };
-                        miss.AlignmentPoint = new Point3d(px, py - tableH - nh0 * 0.9, 0);
-                        ms.AppendEntity(miss); tr.AddNewlyCreatedDBObject(miss, true);
+                        double nh0 = txtH * 0.8, tblW = 0;
+                        foreach (double w in colW) tblW += w;
+                        bool plan = basis == DH.Grading.Core.CrossSectionArea.ExcavBase.Plan;
+                        // MText 서식 글자(\ { })는 글자 그대로 — 덧붙는 말(qty.Foot)이 서식으로 읽히지 않게
+                        static string Lit(string s) => s.Replace("\\", "\\\\").Replace("{", "\\{").Replace("}", "\\}");
+                        var note = new MText();
+                        note.SetDatabaseDefaults(db);
+                        if (!kst.IsNull) note.TextStyleId = kst;   // 한글 글꼴 — 높이보다 먼저
+                        note.Contents = Lit("※ 미포함 — 흙막이(가시설) 면적 · 성토에서 구조물 부피 공제"
+                                          + " · 되메우기에서 옹벽 밖 구조물 부피 공제"
+                                          + (string.IsNullOrEmpty(qty.Foot) ? "" : "  ※ " + qty.Foot))
+                                      // ★표의 <c>Position</c>은 <b>왼쪽 위</b>다 — 계획지표면 안내는 다음 문단(겹치지 않게).
+                                      + (plan ? "\\P" + Lit("※ 계획지표면 기준 — 구조물 자리 성토는 되메우기와 겹칩니다"
+                                                          + "(쌓고·파고·되메우는 각각 실제 시공 물량입니다).") : "");
+                        note.TextHeight = nh0;
+                        note.Width = tblW;
+                        note.Attachment = AttachmentPoint.TopLeft;
+                        note.Location = new Point3d(px, tblBot - nh0 * 0.9, 0);
+                        if (!layE.IsNull) note.LayerId = layE;   // ★EnsureLayer는 ObjectId를 돌려준다(이름이 아니다)
+                        note.ColorIndex = 256;
+                        ms.AppendEntity(note); tr.AddNewlyCreatedDBObject(note, true);
                         nMiss++;
+                        if (plan) nNote++;
                     }
-                    catch (System.Exception exM) { log?.AppendLine("  ⚠미포함 안내문 실패 — " + exM.Message); }
-
-                    if (basis == DH.Grading.Core.CrossSectionArea.ExcavBase.Plan)
-                        try
-                        {
-                            double noteH = txtH * 0.8;
-                            var note = new DBText
-                            {
-                                TextString = "※ 계획지표면 기준 — 구조물 자리 성토는 되메우기와 겹칩니다"
-                                           + "(쌓고·파고·되메우는 각각 실제 시공 물량입니다).",
-                                Height = noteH,
-                                LayerId = layE,      // ★EnsureLayer는 ObjectId를 돌려준다(이름이 아니다)
-                                ColorIndex = 256,
-                                HorizontalMode = TextHorizontalMode.TextLeft,
-                                VerticalMode = TextVerticalMode.TextTop,
-                            };
-                            // ★표의 <c>Position</c>은 <b>왼쪽 위</b>다 — 아래로 표 높이만큼 내리고 한 줄 띄운다.
-                            // 미포함 줄 아래로 한 줄 더(겹치지 않게).
-                            note.AlignmentPoint = new Point3d(px, py - tableH - noteH * 2.2, 0);
-                            ms.AppendEntity(note); tr.AddNewlyCreatedDBObject(note, true);
-                            nNote++;
-                        }
-                        catch (System.Exception exN) { log?.AppendLine("  ⚠표 밑 안내문 실패 — " + exN.Message); }
+                    catch (System.Exception exM) { log?.AppendLine("  ⚠표 밑 안내문 실패 — " + exM.Message); }
 
                     // ★★★[JACK 0907] <b>합친 빈칸에 대각선 하나.</b>
                     //   <c>Table</c>에는 대각선 칸선이 없다 — 선을 따로 그어야 한다.

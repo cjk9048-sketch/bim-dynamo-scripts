@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { loadScene } from './data.js';
 import { View } from './view.js';
 import { buildLayers, applyTerrainMode } from './layers.js';
-import { buildDrain, buildCad, buildStations } from './extras.js';
+import { buildDrain, buildCad, buildStations, buildSlope } from './extras.js';
 import { Picker } from './pick.js';
 import { Ui, Dock } from './ui.js';
 import { Section } from './section.js';
@@ -13,7 +13,7 @@ import { Sun, sunPosition } from './sun.js';
 import { photo, video, download, fileName } from './capture.js';
 import { inHost, post, onHost } from './host.js';
 
-const ORDER = ['terrain', 'sat', 'cutfill', 'ground', 'wall', 'pattern', 'excav', 'drain', 'cad', 'align'];
+const ORDER = ['terrain', 'sat', 'cutfill', 'ground', 'wall', 'pattern', 'excav', 'drain', 'slope', 'cad', 'align'];
 const KEEP = 'dh3d.layers.v1';
 
 function loadKeep() { try { return JSON.parse(localStorage.getItem(KEEP) || '{}'); } catch { return {}; } }
@@ -50,11 +50,12 @@ async function main() {
     buildDrain(view, head, L);
     buildCad(view, head, L);
     buildStations(view, head, L);
+    buildSlope(view, head, L);
   } catch (e) { fail('3D를 못 그렸습니다 — ' + e.message); return; }
 
   // 지난번 층 켬/끔(이 PC 브라우저 기억) — 없으면 처음 값
   const keep = loadKeep();
-  for (const id of ORDER) if (L[id] && !L[id].missing && typeof keep[id] === 'boolean') L[id].on = keep[id];
+  for (const id of ORDER) if (L[id] && !L[id].missing && !L[id].fixed && typeof keep[id] === 'boolean') L[id].on = keep[id];
 
   const dock = new Dock();
   let section = null;   // 3D 자르기(아래에서 만든다)
@@ -64,9 +65,10 @@ async function main() {
     l.on = on;
     // 자르는 동안 측점 층은 숨겨 둔다(끝나면 이 체크대로 — 설치 전 검토 낮음)
     if (l.obj) l.obj.visible = on && !(id === 'align' && section && section.on);
-    if (id === 'sat' || id === 'cutfill' || id === 'wall' || id === 'ground' || id === 'pattern') applyTerrainMode(L);
+    if (id === 'sat' || id === 'cutfill' || id === 'wall' || id === 'ground' || id === 'pattern' || id === 'slope') applyTerrainMode(L);
     if (id === 'cutfill') ui.legend(on, L.terrain ? L.terrain.cfLim : 1);
-    if (id === 'drain') ui.drainLegend(on, L.drain.summary);
+    if (id === 'drain') { ui.drainLegend(on, L.drain.summary); if (on) L.drain.replay(); }
+    if (id === 'slope' || id === 'ground') ui.slopeLegend(!!(L.slope && L.slope.on && !(L.ground && L.ground.on)));   // 원지반 보기에서는 화살표와 함께 숨김
     ui.setLayerChecked(L, id, on);
     saveKeep(L);
     view.request();
@@ -79,7 +81,9 @@ async function main() {
   };
   refreshLayers();
   if (L.cutfill && L.cutfill.on) ui.legend(true, L.terrain.cfLim);
-  if (L.drain && L.drain.on) ui.drainLegend(true, L.drain.summary);
+  if (L.drain && L.drain.on) { ui.drainLegend(true, L.drain.summary); L.drain.replay(); }
+  if (L.drain) ui.onDrainReplay = () => L.drain.replay();
+  if (L.slope && L.slope.on && !(L.ground && L.ground.on)) ui.slopeLegend(true);
 
   ui.stamp(head);
   ui.layers(L, ORDER);
@@ -139,11 +143,13 @@ async function main() {
     ui.hideInfo(); picker.clearMarks();
     build.panel(dock);
     build.enter();
+    picker.hover(null);
     picker.enabled = false;            // ★[계획 검토 중간 3] 재생 중에는 누르기 끔(보이는 것과 자료가 다르다)
   };
   sunBtn.onclick = openSun;
   buildBtn.onclick = openBuild;
   const cutAt = (where) => {
+    picker.hover(null);
     // 다른 칸(시공 재생)을 먼저 닫는다 — 닫힐 때 옹벽 재료의 자르는 면을 걷으므로 자르기 뒤에 닫으면 자르기가 풀린다
     if (dock.kind !== 'cut') { dock.close(); section.start(where); section.panel(dock); }
     else section.start(where, false);
@@ -209,7 +215,12 @@ async function main() {
       post({ t: 'refresh' });
       setTimeout(() => { if (document.getElementById('busy').style.display !== 'none') { ui.busy(null); ui.toast('응답이 없습니다 — 명령창을 보세요'); } }, 180000);
     };
-    ui.saveMenu((what) => post(what === 'shareset' ? { t: 'shareset' } : { t: 'save', what }));
+    // ★[JACK 1028] [웹 주소로 공유]는 한 번 묻고 올린다(개발자 NAS · 주소를 아는 사람은 봄)
+    ui.saveMenu((what) => {
+      if (what === 'shareset') post({ t: 'shareset' });
+      else if (what === 'share') ui.confirmShare(() => post({ t: 'save', what }));
+      else post({ t: 'save', what });
+    });
     ui.onGoto = (go) => post({ t: 'goto', ...go });
     onHost((m) => {
       if (m.t === 'busy') ui.busy(m.text || null);
@@ -261,7 +272,7 @@ async function main() {
     counts,
     head: {
       origin: head.origin, bbox: b, walls: (head.walls || []).length, patterns: (head.patterns || []).length, warn: head.warn || [],
-      drain: L.drain ? L.drain.summary : null, cad: L.cad ? (L.cad.missing ? 'missing' : (head.cad.labels || []).length) : null,
+      drain: L.drain ? L.drain.summary : null, slope: L.slope ? { n: L.slope.n, step: L.slope.step } : null, cad: L.cad ? (L.cad.missing ? 'missing' : (head.cad.labels || []).length) : null,
       align: L.align ? { name: L.align.name, st: L.align.st.length, views: L.align.views } : null, build: !!head.build, geo: head.geo || null,
     },
     layer: (id, on) => setLayer(id, on),
@@ -301,6 +312,7 @@ async function main() {
     photo: async () => { const bl = await photo(view); return { bytes: bl.size, type: bl.type, ...(await (async () => { const bm = await createImageBitmap(bl); const r = { w: bm.width, h: bm.height }; bm.close(); return r; })()) }; },
     video: async (frames) => { const t = performance.now(); const r = await video(view, { focus, frames: frames || 30 }); return r ? { bytes: r.blob.size, ext: r.ext, codec: r.codec, frames: r.frames, ms: Math.round(performance.now() - t) } : null; },
     dock: () => dock.kind,
+    frames: () => view.renderer.info.render.frame,     // 그린 장 수(빗물 움직임이 꺼지면 늘지 않아야)
     // 도면 좌표 → 화면 px(시험이 측점 선을 진짜로 누를 때)
     screen: (at) => {
       const o = head.origin || [0, 0];

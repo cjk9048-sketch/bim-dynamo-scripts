@@ -39,9 +39,29 @@ svg{width:16px;height:16px;flex:none}
 .lay.off{opacity:.5}
 .lay.miss{opacity:.45;cursor:default}
 .lay .wn{color:var(--warn);margin-left:auto}
-#drainLg{margin:6px 4px 2px;display:none;font-size:12px;color:var(--dim)}
+#bl{position:absolute;left:10px;bottom:10px;display:flex;flex-direction:column;align-items:stretch;gap:8px;pointer-events:none}
+#bl>.pnl{pointer-events:auto}
+#drainLg{padding:7px 10px 8px;display:none;font-size:12px;color:var(--dim);min-width:170px}
+#drainLg .hd{display:flex;align-items:center;justify-content:space-between;color:var(--text);font-size:13px;margin-bottom:3px}
 #drainLg .k{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:2px}
 #drainLg i{display:inline-block;width:14px;height:8px;border-radius:2px;margin-right:4px;vertical-align:middle}
+#drainLg i.flow{height:4px;background:repeating-linear-gradient(90deg,#cfeeff 0 3px,#1e7bff 3px 10px);background-size:10px 4px;animation:flow .6s linear infinite}
+@keyframes flow{to{background-position:10px 0}}
+#slopeLg{padding:7px 10px 8px;display:none;font-size:12px;color:var(--dim);width:236px}
+#slopeLg .hd{display:flex;align-items:baseline;justify-content:space-between;color:var(--text);font-size:13px;margin-bottom:5px}
+#slopeLg .hd span{color:var(--dim);font-size:11.5px}
+#slopeBar{height:9px;border-radius:5px;margin:0 8px}
+#slopeTick{position:relative;height:15px;margin:2px 8px 0;font-size:10.5px}
+#slopeTick span{position:absolute;transform:translateX(-50%);white-space:nowrap}
+#dock .lg{gap:14px;font-size:12px;color:var(--dim)}
+#dock .lg i{display:inline-block;width:16px;height:9px;border-radius:2px;margin-right:5px;vertical-align:middle}
+#dock .lg i.ln{height:3px;border-radius:0}
+#shareAsk{position:absolute;left:50%;top:70px;transform:translateX(-50%);width:min(440px,calc(100% - 20px));padding:10px 14px 12px;display:none;z-index:8}
+#shareAsk .t{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+#shareAsk p{margin:4px 0;word-break:keep-all}
+#shareAsk .d{color:var(--dim);font-size:13px}
+#shareAsk .row{display:flex;justify-content:flex-end;gap:6px;margin-top:10px}
+#shareAsk .go{background:rgba(61,139,255,.25);color:#cfe0ff}
 #dock{position:absolute;left:50%;transform:translateX(-50%);bottom:58px;width:min(600px,calc(100% - 20px));padding:8px 10px;display:none;z-index:6}
 #dock .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 #dock .row+.row,#dock .stages{margin-top:6px}
@@ -56,14 +76,14 @@ svg{width:16px;height:16px;flex:none}
 #dock .bar{height:6px;border-radius:3px;background:rgba(255,255,255,.12);overflow:hidden;flex:1;min-width:140px}
 #dock .bar>div{height:100%;width:0;background:var(--accent)}
 #nav .sep{width:1px;height:20px;background:var(--line);margin:0 3px}
-@media (max-width:900px){body.docked #earth{display:none}}
+@media (max-width:900px){body.docked #bl{display:none}}
 #legend{margin:6px 4px 2px;display:none}
 #legend .bar{height:10px;border-radius:5px;background:linear-gradient(90deg,#cc2a1f,#f4f4f0,#265ccc)}
 #legend .ends{display:flex;justify-content:space-between;color:var(--dim);font-size:11px;margin-top:2px}
 #nav{position:absolute;right:10px;bottom:10px;display:flex;align-items:center;gap:2px;padding:4px}
 #compass{width:34px;height:34px;padding:0;justify-content:center}
 #compass svg{width:28px;height:28px;transition:none}
-#earth{position:absolute;left:10px;bottom:10px;padding:8px 12px;display:none;min-width:170px}
+#earth{padding:8px 12px;display:none;min-width:170px}
 #earth table{border-collapse:collapse}
 #earth td{padding:1px 0}
 #earth td:last-child{text-align:right;padding-left:14px;font-variant-numeric:tabular-nums}
@@ -122,11 +142,14 @@ body.inhost .host{display:inline-flex}
   <div class="hd"><span>층</span><button class="x" id="sideClose">✕</button></div>
   <div class="body"><div id="layers"></div>
     <div id="legend"><div class="bar"></div><div class="ends"><span id="lgCut"></span><span>0</span><span id="lgFill"></span></div></div>
-    <div id="drainLg"><div class="k"><span><i style="background:#1e7bff"></i>물길</span><span><i style="background:#2f86d6;opacity:.7"></i>고임</span><span><i style="background:radial-gradient(circle,#7dd7ff 35%,transparent 40%);background-size:6px 6px"></i>평지</span></div><span id="drainSum"></span></div>
   </div>
 </div>
 
-<div id="earth" class="pnl"><table id="earthT"></table></div>
+<div id="bl">
+  <div id="slopeLg" class="pnl"><div class="hd"><b>경사</b><span>화살표 = 내리막</span></div><div id="slopeBar"></div><div id="slopeTick"></div></div>
+  <div id="drainLg" class="pnl"><div class="hd"><b>빗물</b><button class="x" id="drainRe" title="고임 다시 채우기">↻</button></div><div class="k"><span><i class="flow"></i>물길</span><span><i style="background:#2f86d6;opacity:.75"></i>고임</span><span><i style="background:radial-gradient(circle,#7dd7ff 35%,transparent 40%);background-size:6px 6px"></i>평지</span></div><span id="drainSum"></span></div>
+  <div id="earth" class="pnl"><table id="earthT"></table></div>
+</div>
 
 <div id="nav" class="pnl">
   <button id="fitBtn" title="전체"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
@@ -147,6 +170,10 @@ body.inhost .host{display:inline-flex}
 <div id="menu" class="pnl"><button data-save="share">웹 주소로 공유</button><button data-save="html">3D 파일</button><button data-save="infra">InfraWorks 파일</button><button data-save="shareset" class="sub">웹 공유 설정 · 올린 것</button></div>
 <div id="share" class="pnl"><div class="t" style="display:flex;justify-content:space-between;align-items:center"><b>웹 주소</b><button class="x" id="shareX">✕</button></div>
   <input id="shareUrl" readonly><div class="row"><button id="shareCopy">복사</button><button id="shareOpen">브라우저로 열기</button></div><div id="shareNote"></div></div>
+<div id="shareAsk" class="pnl"><div class="t"><b>웹 주소로 공유</b><button class="x" id="askX">✕</button></div>
+  <p>이 3D 화면(HTML 파일 하나)을 개발자 NAS에 올려 주소로 나눕니다.</p>
+  <p class="d">주소를 아는 사람은 누구나 볼 수 있으니, 민감한 현장은 [3D 파일]로 저장해 직접 전달하세요.</p>
+  <div class="row"><button id="askNo">닫기</button><button id="askGo" class="go">계속</button></div></div>
 <div id="toast" class="pnl"></div>
 <div id="attrib">위성 © VWorld</div>
 <div id="busy"><div class="box pnl"><div class="spin"></div><span id="busyT">불러오는 중</span></div></div>

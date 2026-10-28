@@ -1,11 +1,13 @@
 // ★★[v108 · 계획_v108.md 2.7] 3D에서 자르기 — 측점 가로선을 지나는 세로 면으로 자르고(보는 쪽 반을 숨김) 옹벽 잘린 면을 채운다.
 //   옹벽 · 무늬 잘린 면 = 스텐실(뒷면 +1 · 앞면 −1 → 0이 아닌 자리에만 뚜껑 — 몸통 · 모서리 메움이 겹쳐도 0이 아님)
-//   지형 · 원지반 = 잘린 선(노랑 · 갈색) · 면을 측점 따라 앞뒤로 옮김(막대 · ◀ ▶).
+//   지형 · 원지반 = 잘린 선(노랑 · 하늘색) · 면을 측점 따라 앞뒤로 옮김(막대 · ◀ ▶) · 아래 칸에 범례.
 import * as THREE from 'three';
 import { fatLines } from './lines.js';
 import { alignAt, stationName } from './extras.js';
 
 const fmt = (v, d = 2) => Number.isFinite(v) ? v.toLocaleString('ko-KR', { minimumFractionDigits: d, maximumFractionDigits: d }) : '—';
+const PLAN_LINE = 0xffd400, GROUND_LINE = 0x3ee6ff, CAP = 0x8b877f;   // 정지면 선 · 원지형 선 · 옹벽 잘린 면
+const hex = (c) => '#' + c.toString(16).padStart(6, '0');
 
 export class Section {
   constructor(view, L, head, ui) {
@@ -27,13 +29,13 @@ export class Section {
 
   get available() { return !!(this.L.align && this.L.align.st.length); }
 
-  // 잘리는 재료 — 지형 구분 · 절성토 · 원지반 · 터파기 · 옹벽 · 무늬 · 빗물 · 지적(측점 · 자른 선 · 뚜껑은 안 잘림)
+  // 잘리는 재료 — 지형 구분 · 절성토 · 원지반 · 터파기 · 옹벽 · 무늬 · 빗물 · 지적 · 경사(측점 · 자른 선 · 뚜껑은 안 잘림)
   _materials() {
     const set = new Set();
     const add = (m) => { if (!m) return; for (const x of (Array.isArray(m) ? m : [m])) set.add(x); };
     const L = this.L;
     if (L.terrain) { L.terrain.mats.forEach(add); add(L.terrain.cfMat); }
-    for (const id of ['ground', 'excav', 'wall', 'pattern', 'drain', 'cad']) {
+    for (const id of ['ground', 'excav', 'wall', 'pattern', 'drain', 'cad', 'slope']) {
       const l = L[id];
       if (!l || !l.obj) continue;
       l.obj.traverse(o => { if (o.material && !o.userData.noClip && !o.userData.stencil) add(o.material); });
@@ -75,7 +77,7 @@ export class Section {
     }
     const rep = THREE.ReplaceStencilOp;
     const capMat = new THREE.MeshStandardMaterial({
-      color: 0x8b877f, roughness: 0.95, side: THREE.DoubleSide,
+      color: CAP, roughness: 0.95, side: THREE.DoubleSide,
       stencilWrite: true, stencilRef: 0, stencilFunc: THREE.NotEqualStencilFunc, stencilFail: rep, stencilZFail: rep, stencilZPass: rep,
     });
     this.cap = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), capMat);
@@ -208,14 +210,20 @@ export class Section {
     if (T && T.pos) {
       const seg = Section.slice(T.pos, T.idx, n, d0, 0.03);
       if (seg.length) {
-        const l = fatLines(this.view, seg, 0xffd400, 3.2, { renderOrder: 7 }); l.userData.noClip = true; this.lines.add(l);
+        const l = fatLines(this.view, seg, PLAN_LINE, 3.2, { renderOrder: 7 }); l.userData.noClip = true; this.lines.add(l);
         this.lines.add(this._earth(seg, n));
       }
     }
     // 원지반 — 그릴 때 5 cm 내렸다(layers.js) · 되올려 원래 높이
+    //   ★[JACK 1028 «원지형선 색이 잘린 단면색과 비슷해 헷갈림»] 갈색(흙 빗금과 같은 계열) → 하늘색 + 어두운 테(흙 · 하늘 · 위성 어디서나 보임)
+    //   깊이를 안 따진다 — 노란 선과 같은 자리라 깊이를 다투면 테가 하늘색을 이겨 검은 점 · 노란 점이 박힌다(1028 화면에서 봄).
+    //   선은 자르는 면 위 · 사진기는 숨긴 쪽이라 앞을 가릴 것이 없다(남는 쪽 물체는 다 면 뒤).
     if (G && G.pos) {
       const seg = Section.slice(G.pos, G.idx, n, d0, 0.05 + 0.03);
-      if (seg.length) { const l = fatLines(this.view, seg, 0x9a5b2a, 2.6, { renderOrder: 7 }); l.userData.noClip = true; this.lines.add(l); }
+      if (seg.length)
+        for (const [c, w, ro] of [[0x0c1a20, 6.5, 8], [GROUND_LINE, 3.2, 9]]) {
+          const l = fatLines(this.view, seg, c, w, { renderOrder: ro, depthTest: false, depthWrite: false }); l.userData.noClip = true; this.lines.add(l);
+        }
     }
   }
 
@@ -259,12 +267,17 @@ export class Section {
     return t;
   }
 
-  // 아래 칸 — 자르기 · 측점 · ◀ 막대 ▶ · 끝
+  // 아래 칸 — 자르기 · 측점 · ◀ 막대 ▶ · 범례(★[JACK 1028] 자르는 동안만 — 칸이 닫히면 같이 사라짐) · 끝
   panel(dock) {
     const A = this.L.align;
+    const key = [`<span><i class="ln" style="background:${hex(PLAN_LINE)}"></i>정지면</span>`];
+    if (this.head.ground && this.head.ground.pos) key.push(`<span><i class="ln" style="background:${hex(GROUND_LINE)};box-shadow:0 0 0 1.5px #0c1a20"></i>원지형</span>`);
+    key.push('<span><i style="background:repeating-linear-gradient(-45deg,#7a5a3c 0 4px,#a88a6c 4px 5px)"></i>흙</span>');
+    if (this.L.wall) key.push(`<span><i style="background:${hex(CAP)}"></i>옹벽</span>`);
     dock.open('cut', `
       <div class="row"><span class="t">자르기</span><span class="v" id="cutT"></span><span class="grow"></span><button class="x" id="cutX" title="자르기 끝">✕</button></div>
-      <div class="row"><button id="cutPrev" title="이전 측점">◀</button><input type="range" id="cutS" min="${A.s0}" max="${A.s1}" step="any"><button id="cutNext" title="다음 측점">▶</button></div>`,
+      <div class="row"><button id="cutPrev" title="이전 측점">◀</button><input type="range" id="cutS" min="${A.s0}" max="${A.s1}" step="any"><button id="cutNext" title="다음 측점">▶</button></div>
+      <div class="row lg">${key.join('')}</div>`,
     () => this.end());
     const $ = (id) => document.getElementById(id);
     const sl = $('cutS');

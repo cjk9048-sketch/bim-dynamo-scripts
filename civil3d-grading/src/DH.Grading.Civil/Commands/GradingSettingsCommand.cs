@@ -62,6 +62,12 @@ public sealed class MiscSettingsCommand
         // ★이 화면은 정지 <b>제원</b>(단높이·소단·구배)을 안 건드리므로 도킹창 값을 되채울 것이 없다.
         //   ★[v103.3] 옹벽 형태는 도킹바로 옮겼다 — 맨 아래 그림 다시 그리기는 해롭지 않아 둔다.
         if (dlg.DialogResult != true) return;
+        // ★[v109] VWorld 키가 바뀌었으면 열린 지도 도킹바를 새 키로(위성 · 3D 보기는 다음에 받을 때 새 키)
+        if (dlg.KeyChanged)
+        {
+            MapPalette.KeyChanged();
+            doc.Editor.WriteMessage("\n[기타 설정] VWorld 키: " + VWorldKey.Source);
+        }
 
         // [JACK 0731 — 좌표계 연동] 사용자가 좌표계를 **실제로 바꿨을 때만** 도면 좌표계에 반영(MAPCSASSIGN 상당)
         //   + 이미 깔린 배경지도를 새 좌표계로 자동 재생성. 안 바꿨으면 아무것도 건드리지 않는다(리뷰 D-1).

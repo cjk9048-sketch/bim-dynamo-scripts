@@ -18,7 +18,7 @@ internal static class MapPage
 {
     /// <summary>VWorld 키 — 위성영상 타일이 쓰는 것과 <b>같은 키</b>다.
     /// <para>★<see cref="VWorldImagery"/>가 들고 있는 것을 그대로 쓴다(§50: 키를 두 곳에 적지 않는다).</para></summary>
-    private static string Key => VWorldImagery.ApiKey;
+    private static string Key => VWorldKey.Current;
 
     /// <param name="cm">도면 좌표계의 중앙자오선(도) — 지도를 <b>그 근처</b>에서 시작한다.</param>
     /// <param name="token">이 주소에 붙은 한 번 쓰는 표 — 되돌려 보낼 때 같이 보낸다.
@@ -31,7 +31,9 @@ internal static class MapPage
         // 처음 보여 줄 자리 — 도면 좌표계의 원점 부근. 위도는 남한 한가운데쯤.
         string lon0 = cm.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
         return HTML.Replace("__LON0__", lon0)
-                   .Replace("__KEY__", Esc(Key))
+                   // ★[v109 · 검토 M7] 도킹바(embedded)는 키를 페이지 글에 안 넣는다 — 이 글은 PC 폴더에 index.html로 써지기 때문.
+                   //   키는 WebView2가 문서를 만들 때 메모리에서 넣는다(window.__DHKEY · MapPanel). 브라우저 길(MapPick)은 메모리 서버라 그대로.
+                   .Replace("__KEY__", embedded ? "" : Esc(Key))
                    .Replace("__TOK__", Esc(token))
                    .Replace("__EMBED__", embedded ? "1" : "0");
     }
@@ -140,7 +142,8 @@ internal static class MapPage
   }
   if (typeof L === 'undefined') { dead('지도 로드 실패'); return; }
 
-  var KEY='__KEY__';
+  var KEY=(window.__DHKEY||'__KEY__');
+  if (!KEY) { dead('VWorld 키가 없습니다 — [기타 설정]에서 키를 넣으세요'); return; }
   var map=L.map('map',{center:[36.5,__LON0__],zoom:8});
   function tiles(layer,ext){
     return L.tileLayer('https://api.vworld.kr/req/wmts/1.0.0/'+KEY+'/'+layer+'/{z}/{y}/{x}.'+ext,
@@ -188,7 +191,7 @@ internal static class MapPage
   //   몇 장 연달아 실패하면 대놓고 말한다(검토 0901).
   var bad=0, good=0, told=false;
   function say(m){ if(EMBED){ try{ window.chrome.webview.postMessage(JSON.stringify({kind:'diag',text:m})); }catch(e){} } }
-  function watch(l){ l.on('tileerror',function(){ bad++; if(bad>=6&&good===0) dead('타일 수신 실패'); }); }
+  function watch(l){ l.on('tileerror',function(){ bad++; if(bad>=6&&good===0) dead('타일 수신 실패 — 인터넷 또는 VWorld 키([기타 설정] → 키 시험) 확인'); }); }
   watch(base.Satellite); watch(base.Base); watch(labels);
   function ok(l){ l.on('tileload',function(){ good++; bad=0; }); }
   ok(base.Satellite); ok(base.Base); ok(labels);

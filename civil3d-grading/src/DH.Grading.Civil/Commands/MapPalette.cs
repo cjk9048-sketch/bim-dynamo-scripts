@@ -34,6 +34,9 @@ public static class MapPalette
     internal static (string DocName, int Epsg, string CsNote,
                      double X0, double Y0, double X1, double Y1, bool Cad)? Pending;
 
+    /// <summary>★[v109] VWorld 키가 바뀌었다 — 열려 있으면 새 키로 다시 연다.</summary>
+    internal static void KeyChanged() { try { _panel?.KeyChanged(); } catch { } }
+
     /// <summary>지도 도킹바를 연다.</summary>
     /// <param name="epsg">조회에 쓸 원점 — <b>부르는 쪽이 정해서 넘긴다</b>(박스와 조회가 같아야 한다).</param>
     internal static void Show(Document doc, int epsg, string csNote)
@@ -432,6 +435,8 @@ internal sealed class MapPanel : UserControl
             //   문자열로 직접 띄우면 출처가 없어 타일·스크립트가 막히는 판이 있다.
             core.SetVirtualHostNameToFolderMapping(
                 "dh.map", HomeDir, CoreWebView2HostResourceAccessKind.DenyCors);
+            // ★[v109 · 검토 M7] VWorld 키는 문서를 만들 때 메모리에서 넣는다 — index.html(PC 폴더)에는 안 쓴다
+            _keyScript = await core.AddScriptToExecuteOnDocumentCreatedAsync(KeyScript());
 
             core.WebMessageReceived += OnMessage;
             // ★★페이지가 떴는지 <b>기록으로 남긴다</b> — 검은 화면이 또 나오면
@@ -487,6 +492,27 @@ internal sealed class MapPanel : UserControl
     }
 
     private string _shownFor;
+    private string _keyScript;
+
+    private static string KeyScript() => "window.__DHKEY=" + System.Text.Json.JsonSerializer.Serialize(VWorldKey.Current) + ";";
+
+    /// <summary>★[v109] [기타 설정]에서 VWorld 키를 바꿨다 — 넣는 스크립트를 바꾸고 지도를 다시 연다(지적 그림 · 위성 타일이 새 키로).</summary>
+    internal async void KeyChanged()
+    {
+        try
+        {
+            var core = _web?.CoreWebView2;
+            // ★[검토 L6] 아직 열리는 중이면 손대지 않는다 — 여는 쪽(InitAsync)이 그때의 키로 등록한다
+            if (core == null || !_ready) return;
+            if (_keyScript != null) core.RemoveScriptToExecuteOnDocumentCreated(_keyScript);
+            _keyScript = await core.AddScriptToExecuteOnDocumentCreatedAsync(KeyScript());
+            // ★[검토 L5] 옛 키가 든 타일 주소가 엔진 디스크 캐시에 남지 않게
+            try { await core.Profile.ClearBrowsingDataAsync(CoreWebView2BrowsingDataKinds.DiskCache); } catch { }
+            _shownFor = null;
+            NavigateNow();
+        }
+        catch (System.Exception ex) { try { DiagLog.Append("\n[지도도킹바] 키 바꾸기 실패 — " + ex.Message); } catch { } }
+    }
 
     private void NavigateNow()
     {
