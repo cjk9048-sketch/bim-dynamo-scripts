@@ -18,6 +18,8 @@ static class RoadCheck
         return (X, Y, Z);
     }
 
+    static double Sq(double v) => v * v;
+
     /// <summary>점(x, y)이 든 칸의 (가운데 x, 가운데 y, 설계 z, 종류).</summary>
     static (double Cx, double Cy, double Z, byte K) At(RoadGrade.Result r, double x, double y)
     {
@@ -279,6 +281,38 @@ static class RoadCheck
             check("S178 ⑱ 종단 초안 — 구간 길이 음수 · 0 예외 없음 · 언덕 꼭대기 PVI 남음(최고 PVI ≥ 105.6) · 구간 ≥ 20 m",
                 err.Length == 0 && neg != null && zero != null && top >= 105.6 && gapOk && d.MaxGrade <= 0.12 + 1e-9,
                 $"{(err.Length > 0 ? "예외 " + err : "예외 없음")} · 최고 PVI {top:F2} · {d.Text} · 음수 {neg?.Text} · 0 {zero?.Text}");
+        }
+
+        // ⑲ ★[v110.1 · JACK 1029 «도로 면만 따로»] 도로 면 세모 — 곧은 성토(평지 0 · 계획고 5 · 0.5 m 칸):
+        //   바뀐 칸 가운데가 모두 꼭짓점(설계 높이) · 둘레 점 = 바탕 0 · 넓이 0 세모 없음 · 변 ≤ 칸 × √2 · 세모 위 높이로 잰 성토 부피 = 격자 성토(1 %) · 가운데 단면 높이 = 설계
+        {
+            var (X, Y, Z) = Line(0, 0, 100, 0, 5, 5, 100);
+            var r = RoadGrade.Run(new RoadGrade.Input { X = X, Y = Y, Z = Z, Sec = sec, Base = new G((x, y) => 0), Cell = 0.5, Reach = 20 });
+            var tris = RoadGrade.SurfaceTris(r, out string note);
+            var vz = new Dictionary<(long, long), double>();
+            static (long, long) K(double x, double y) => ((long)Math.Round(x * 1000), (long)Math.Round(y * 1000));
+            int zero = 0; double maxEdge = 0, vol = 0;
+            foreach (var t in tris)
+            {
+                foreach (var p in new[] { t.A, t.B, t.C }) vz[K(p.X, p.Y)] = p.Z;
+                double cr = (t.B.X - t.A.X) * (t.C.Y - t.A.Y) - (t.B.Y - t.A.Y) * (t.C.X - t.A.X);
+                if (Math.Abs(cr) < 1e-12) zero++;
+                maxEdge = Math.Max(maxEdge, Math.Max(Math.Sqrt(Sq(t.A.X - t.B.X) + Sq(t.A.Y - t.B.Y)), Math.Max(Math.Sqrt(Sq(t.B.X - t.C.X) + Sq(t.B.Y - t.C.Y)), Math.Sqrt(Sq(t.A.X - t.C.X) + Sq(t.A.Y - t.C.Y)))));
+                vol += Math.Abs(cr) / 2 * (t.A.Z + t.B.Z + t.C.Z) / 3;          // 바탕 0 위 부피
+            }
+            int miss = 0, badZ = 0, ringBad = 0;
+            for (int j = 0; j < r.H; j++)
+                for (int i = 0; i < r.W; i++)
+                {
+                    int k = j * r.W + i; double cx = r.X0 + (i + 0.5) * r.Cell, cy = r.Y0 + (j + 0.5) * r.Cell;
+                    bool has = vz.TryGetValue(K(cx, cy), out double zz);
+                    if (r.Kind[k] is 1 or 2 or 3 or 4) { if (!has) miss++; else if (Math.Abs(zz - r.Z[k]) > 1e-4) badZ++; }
+                    else if (has && Math.Abs(zz - r.Base[k]) > 1e-6) ringBad++;
+                }
+            double want = r.FillVol;
+            check("S178 ⑲ 도로 면 세모 — 바뀐 칸 모두 꼭짓점 · 설계 높이 · 둘레 = 바탕 · 넓이 0 없음 · 변 ≤ 칸√2 · 부피 = 격자 성토(1 %)",
+                tris.Count > 0 && miss == 0 && badZ == 0 && ringBad == 0 && zero == 0 && maxEdge <= r.Cell * Math.Sqrt(2) + 1e-9 && Math.Abs(vol - want) / want < 0.01,
+                $"{note} · 빠진 점 {miss} · 높이 틀림 {badZ} · 둘레 틀림 {ringBad} · 넓이 0 {zero} · 최대 변 {maxEdge:F3} · 부피 {vol:F1}/{want:F1} ㎥");
         }
 
         // ⑩ 옹벽 제안 — 성토 8 m · 높이 기준 5 m → 양쪽 다 제안(길이 대부분) · 좁은 사업 경계(±8 m) → «경계 밖»

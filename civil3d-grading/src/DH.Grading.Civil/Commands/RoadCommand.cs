@@ -188,6 +188,27 @@ public class RoadCommand
         try { s.Recompute(); } catch { }
     }
 
+    /// <summary>★[v110.1 · JACK 1029] [도로 면 만들기] — 도로 + 사면을 따로 지표면(«진입도로_DH»)으로. 정지면_DH는 안 건드림 · 다시 누르면 새로.</summary>
+    [CommandMethod("DHROADSURF")]
+    public void Surf()
+    {
+        var doc = AcadApp.DocumentManager.MdiActiveDocument; var ed = doc.Editor;
+        var s = Need(ed); if (s == null) return;
+        try
+        {
+            string msg;
+            using (BusyPopup.Scope("도로 면 만드는 중입니다.")) msg = s.MakeSurface();
+            ed.WriteMessage("\n[진입도로] " + msg);
+            try { ed.Regen(); } catch { }
+        }
+        catch (System.Exception ex)
+        {
+            ed.WriteMessage("\n[진입도로] 도로 면 실패 — " + ex.Message);
+            try { DiagLog.Append("\n[진입도로] 도로 면 실패 — " + ex); } catch { }
+        }
+        try { s.Recompute(); } catch { }
+    }
+
     [CommandMethod("DHROADOFF")]
     public void Off()
     {
