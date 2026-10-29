@@ -659,7 +659,8 @@ public static class FormworkSheet
             if (Upright(e.Unit.Shape) is { } r) faces.Add((e, r.a, r.b, r.z0, r.z1, owner));
         }
         static (long, long) Key((double x, double y) p) => ((long)Math.Round(p.x * 1000), (long)Math.Round(p.y * 1000));
-        foreach (var level in faces.GroupBy(f => (f.E.LineHead, (long)Math.Round(f.Z0 * 1000), (long)Math.Round(f.Z1 * 1000), f.Owner)))
+        // 같은 높이 = cm 로 같은 아래 · 위(식 숫자와 같은 자릿수 — 위 끝이 5.001 인 벽 하나로 방 고리가 끊기지 않게 · JACK 2026-10-29).
+        foreach (var level in faces.GroupBy(f => (f.E.LineHead, (long)Math.Round(f.Z0 * 100, MidpointRounding.AwayFromZero), (long)Math.Round(f.Z1 * 100, MidpointRounding.AwayFromZero), f.Owner)))
         {
             var list = level.ToList();
             var ends = new Dictionary<(long, long), List<int>>();
@@ -719,25 +720,39 @@ public static class FormworkSheet
                     return Math.Sqrt((v.x - u.x) * (v.x - u.x) + (v.y - u.y) * (v.y - u.y));
                 }).ToList();
                 double h = list[start].Z1 - list[start].Z0;
-                string formula;
-                List<int> terms;
-                if (loop.Count == 4 && Num(widths[0]) == Num(widths[2]) && Num(widths[1]) == Num(widths[3]))
-                {
-                    formula = $"({Num(Math.Max(widths[0], widths[1]))}+{Num(Math.Min(widths[0], widths[1]))})*2*{Num(h)}";
-                    bool evenFirst = widths[0] >= widths[1];       // 긴 변(같으면 0 번 면)이 앞 항
-                    terms = Enumerable.Range(0, 4).Select(k => (k % 2 == 0) == evenFirst ? 0 : 1).ToList();
-                }
-                else
-                {
-                    int longest = widths.IndexOf(widths.Max());
-                    formula = "(" + string.Join("+", Enumerable.Range(0, widths.Count).Select(k => Num(widths[(longest + k) % widths.Count]))) + $")*{Num(h)}";
-                    terms = Enumerable.Range(0, widths.Count).Select(k => (k - longest + widths.Count) % widths.Count).ToList();
-                }
                 double area = loop.Sum(i => list[i].E.Unit.Area);
-                double value;
-                try { value = FormulaEvaluator.Evaluate(formula); }
-                catch (FormatException) { refused++; continue; }
-                if (!double.IsFinite(value) || Math.Abs(value - area) > 0.005 * area + 1e-4) { refused++; continue; }
+                // 산출서 자릿수로 적어 0.5% 밖이면 mm 로 한 번 더(ShapeDetail 과 같은 길).
+                (string formula, List<int> terms)? Build()
+                {
+                    string formula;
+                    List<int> terms;
+                    if (loop.Count == 4 && Num(widths[0]) == Num(widths[2]) && Num(widths[1]) == Num(widths[3]))
+                    {
+                        formula = $"({Num(Math.Max(widths[0], widths[1]))}+{Num(Math.Min(widths[0], widths[1]))})*2*{Num(h)}";
+                        bool evenFirst = widths[0] >= widths[1];       // 긴 변(같으면 0 번 면)이 앞 항
+                        terms = Enumerable.Range(0, 4).Select(k => (k % 2 == 0) == evenFirst ? 0 : 1).ToList();
+                    }
+                    else
+                    {
+                        int longest = widths.IndexOf(widths.Max());
+                        formula = "(" + string.Join("+", Enumerable.Range(0, widths.Count).Select(k => Num(widths[(longest + k) % widths.Count]))) + $")*{Num(h)}";
+                        terms = Enumerable.Range(0, widths.Count).Select(k => (k - longest + widths.Count) % widths.Count).ToList();
+                    }
+                    double value;
+                    try { value = FormulaEvaluator.Evaluate(formula); }
+                    catch (FormatException) { return null; }
+                    return double.IsFinite(value) && Math.Abs(value - area) <= 0.005 * area + 1e-4 ? (formula, terms) : null;
+                }
+                var built = Build();
+                if (built == null)
+                {
+                    bool before = _mm;
+                    _mm = true;
+                    try { built = Build(); }
+                    finally { _mm = before; }
+                }
+                if (built is not { } ok) { refused++; continue; }
+                var (formula, terms) = ok;
                 var members = loop.Select(i => list[i].E).ToList();
                 var ring = new Ring { Faces = members, First = members.MinBy(m => m.Seen)!, Formula = formula, Terms = terms };
                 foreach (var m in members) found[m] = ring;
@@ -919,12 +934,16 @@ public static class FormworkSheet
 
     // ── 조각 → 식 ────────────────────────────────────────────────────────────────
 
-    private static string Num(double v) => Math.Round(v, 3).ToString("0.###", CultureInfo.InvariantCulture);
+    // 식에 적는 숫자: 콘크리트 식과 같은 산출서 자릿수(둘째 자리 · 1% 넘게 바뀌는 작은 수만 셋째 — JACK 2026-10-29 «5.001 과 5.0 은 같은 것»).
+    // 같은 식 · 같은 항(«4.4*4*40»)으로 묶는 것도 이 글자로 본다. _mm = 그렇게 적은 식이 조각 넓이와 0.5% 밖이라 그 조각만 mm(셋째 자리)로 다시 적는 중
+    // (콘크리트 식이 ±1% 밖이면 긴 숫자로 다시 적는 것과 같은 길 — «1.05*0.248» 같은 작은 조각이 넓이만 남지 않게).
+    [ThreadStatic] private static bool _mm;
+    private static string Num(double v) => _mm ? Math.Round(v, 3, MidpointRounding.AwayFromZero).ToString("0.###", CultureInfo.InvariantCulture) : FormulaDecomposer.SheetText(v);
 
     /// <summary>
     /// 조각을 «가로 × 높이 [+ 떨어진 조각 …] [− 구멍 …]» 숫자 식으로. 고리가 모두 직각으로만 꺾이고(직사각형 · ㄱ자 · ㄷ자 — 꺾인 고리는 네모의 합이나
-    /// «바깥 네모 − 빈 곳» · R49), 길이를 mm(셋째 자리)로 끊은 식의 값이
-    /// 조각 넓이와 0.5% 안일 때만 — 아니면 넓이만(셋째 자리) 적는다(areaOnly).
+    /// «바깥 네모 − 빈 곳» · R49), 산출서 자릿수(둘째 자리 — Num)로 적은 식의 값이 조각 넓이와 0.5% 안일 때만 — 밖이면 mm(셋째 자리)로 한 번 더,
+    /// 그래도 밖이면 넓이만 적는다(areaOnly).
     /// 고리가 구멍인지 떨어진 조각인지는 도는 방향으로 가른다: 가장 큰 고리(바깥)의 법선에 비춘 부호 넓이가 같은 쪽이면 떨어진 조각(더한다),
     /// 거꾸로면 구멍(뺀다) — 조각의 테두리는 Clipper 의 결과(바깥 고리와 구멍이 서로 반대로 돈다)를 그 차례 그대로 3D 로 옮긴 것이다.
     /// (절댓값 넓이로만 보면 떨어진 자투리를 구멍으로 빼는 식이 0.5% 안에 들 수 있었다 — core R42 M-1.)
@@ -946,6 +965,16 @@ public static class FormworkSheet
     /// 조각의 숫자 글이 든 덩이에서 고른다. 넓이만이면 숫자 없음.
     /// </summary>
     public static (string formula, bool areaOnly, List<ShapeLabel> labels) ShapeDetail(FacePatch patch)
+    {
+        var cm = ShapeOnce(patch);
+        if (!cm.areaOnly) return cm;
+        bool before = _mm;
+        _mm = true;
+        try { var mm = ShapeOnce(patch); return mm.areaOnly ? cm : mm; }
+        finally { _mm = before; }
+    }
+
+    private static (string formula, bool areaOnly, List<ShapeLabel> labels) ShapeOnce(FacePatch patch)
     {
         string areaText = Num(patch.Area);
         var none = new List<ShapeLabel>();

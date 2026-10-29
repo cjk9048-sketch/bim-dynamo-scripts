@@ -124,6 +124,6 @@ public static class StairFormula
         return false;
     }
 
-    /// <summary>식에 적는 숫자(m — 셋째 자리 · 끝 0 없음).</summary>
-    public static string N(double v) => Math.Round(v, 3, MidpointRounding.AwayFromZero).ToString("0.###", CultureInfo.InvariantCulture);
+    /// <summary>식에 적는 숫자(m — 산출서 자릿수: 둘째 자리 · 1% 넘게 바뀌는 작은 수만 셋째 · 끝 0 없음 — JACK 2026-10-29).</summary>
+    public static string N(double v) => FormulaDecomposer.SheetText(v);
 }
