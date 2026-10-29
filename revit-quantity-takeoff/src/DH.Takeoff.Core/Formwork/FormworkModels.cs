@@ -354,4 +354,10 @@ public sealed class FormworkOptions
     /// 기초 카테고리 부재의 밑면을 땅으로 볼지(R53a — 채움 · 바닥 묶음만) · 턱을 수직면 덩어리에서 뺄지(R53a)에 쓴다.
     /// </summary>
     public Func<string, string> PartGroup { get; set; } = part => PartCatalog.GroupOf(part);
+
+    /// <summary>
+    /// 시공 순서표(R71): 있으면 «나중 부재를 없는 것으로 볼지»(Absent) · «닿은 자리를 공제하지 않을지»(JointRule)를 이 표로 정한다. 없으면(null) 지금 규칙 그대로 —
+    /// R71a 는 그림자 재기에만 꽂는다.
+    /// </summary>
+    public PourOrder? Order { get; set; }
 }

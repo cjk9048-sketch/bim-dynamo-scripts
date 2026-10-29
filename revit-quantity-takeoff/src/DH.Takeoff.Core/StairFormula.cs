@@ -4,7 +4,7 @@ namespace DH.Takeoff.Core;
 
 /// <summary>
 /// 계단 콘크리트 식(R65 — JACK 2026-10-27 «계단 산출» · 10/22 «녹촌 2D 꼴»): 녹촌 2D «배수지 계단» 줄처럼
-/// «(경사 길이 합) × 폭 × 두께 + 디딤 × 챌면 × 0.5 × 폭 × (디딤 수 합)» — 참은 따로(참 두께가 런 두께와 다르다).
+/// «(경사 길이 합) × 폭 × 두께 + 디딤 × 챌면 × 1/2 × 폭 × (디딤 수 합)» — 참은 따로(참 두께가 런 두께와 다르다).
 ///  · 런 하나 = (T·√(d²+h²)·t + 0.5·d·h·T)·w — T = 디딤 수(Revit 은 런 끝 챌면 · 허리 끝을 참 입체에 넣는다), h = 런 높이 ÷ 챌면 수, d = 디딤, t = 구조 깊이,
 ///    w = 런 폭(실제 계단 덤프의 런 입체와 검산 — 0.01 % 안).
 ///  · 바닥에 선 런(런 밑 = 계단 밑)은 허리가 바닥에서 잘린 쐐기 0.5 × (t/sinθ) × (t/cosθ) × w 를 뺀다(t²/sin2θ · w).
@@ -45,7 +45,7 @@ public static class StairFormula
     public static bool Usable(Run r) => r.Width > 1e-6 && r.Tread > 1e-6 && r.Riser > 1e-6 && r.Depth > 1e-6 && r.Treads >= 1;
 
     /// <summary>
-    /// 런 · 참 · 겹침으로 식을 짓는다. 런은 (폭 · 두께 · 디딤 · 챌면)이 같은 것끼리 한 덩이(«(L1+L2) × 폭 × 두께 + 디딤 × 챌면 × 0.5 × 폭 × (T1+T2)»),
+    /// 런 · 참 · 겹침으로 식을 짓는다. 런은 (폭 · 두께 · 디딤 · 챌면)이 같은 것끼리 한 덩이(«(L1+L2) × 폭 × 두께 + 디딤 × 챌면 × 1/2 × 폭 × (T1+T2)»),
     /// 바닥에 선 런마다 쐐기를 뺀다. 참은 푼 식이면 «+(식)», 못 풀었으면 (폭 · 두께)가 같은 것끼리 «(L1+L2) × 폭 × 참 두께»(L = 체적 ÷ (폭 × 두께)).
     /// 겹침(m³)이 0.0005 이상이면 «− 겹침».
     /// </summary>
@@ -60,11 +60,11 @@ public static class StairFormula
             string slopes = string.Join("+", list.Select(r => N(Slope(r))));
             string treads = string.Join("+", list.Select(r => r.Treads.ToString(CultureInfo.InvariantCulture)));
             terms.Add((list.Count > 1 ? "(" + slopes + ")" : slopes) + $"*{w}*{t}");
-            terms.Add($"{d}*{h}*0.5*{w}*" + (list.Count > 1 ? "(" + treads + ")" : treads));
+            terms.Add($"{d}*{h}*1/2*{w}*" + (list.Count > 1 ? "(" + treads + ")" : treads));
             foreach (var r in list.Where(r => r.OnFloor))
             {
                 var (a, b) = WedgeLegs(r);
-                terms.Add($"-0.5*{N(a)}*{N(b)}*{w}");
+                terms.Add($"-1/2*{N(a)}*{N(b)}*{w}");   // 반은 «1/2»(JACK 2026-10-29 — 일반 산근 꼴)
             }
         }
         int converted = 0;

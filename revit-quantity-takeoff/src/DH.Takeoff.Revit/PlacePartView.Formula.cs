@@ -23,7 +23,7 @@ public sealed partial class PlacePartView
     private readonly List<(Border box, TextBlock text)> _rvFormulaNumbers = new();
     private int _rvFormulaHover = -1;        // 식 띠에서 마우스를 올린 숫자의 차례(R63)
     private int _rvFormulaCount = -1;        // 식 띠 끝 « × n »(같은 줄 개수)의 차례 — 치수가 아니라 3D 와 잇지 않는다(R65c) · 없으면 −1
-    private static readonly Regex Number = new(@"\d+(?:\.\d+)?", RegexOptions.CultureInvariant);
+    private static Regex Number => FormworkLabels.NumberPattern;   // 줄 식의 숫자 차례와 같게(«1/2» 는 숫자 하나 — JACK 2026-10-29)
 
     // ③ 의 아래: 식 띠(줄을 골랐을 때만) + ② 와 같은 색 풀이 · 마우스 안내.
     private FrameworkElement BuildReviewBottom()

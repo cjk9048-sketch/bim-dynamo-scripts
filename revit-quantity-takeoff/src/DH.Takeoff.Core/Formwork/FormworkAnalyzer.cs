@@ -119,13 +119,16 @@ public static class FormworkAnalyzer
         // 문맥 하나를 같이 쓴다(대개 묶음은 두셋 — 벽 · 슬래브는 다 빼고, 보는 헌치 · 받침만, 채움은 받침만).
         // 입체(Body)는 같이 쓴다(높이마다의 그림자 · 단면은 그 입체만으로 정해지는 값). 높이 구간 · 평면 그림은 콘크리트가 다르므로 문맥마다 따로 둔다.
         // 계단(Revit 계단 · 부위 묶음 «계단»)도 이 틀로: 벽보다 나중에 치므로 벽 같은 구조체를 잴 때는 빠진다(R64 — JACK 2026-10-26 «벽은 다 셈 · 중간슬래브는 뺌»).
-        var laterEls = elements.Where(e => e.Later || IsStair(e, all.Options)).Distinct(ReferenceEqualityComparer.Instance).Cast<FormworkElement>().ToList();
+        var laterEls = elements.Where(e => all.Options.Order?.MayBeAbsent(e, all.Options) ?? (e.Later || IsStair(e, all.Options)))
+                               .Distinct(ReferenceEqualityComparer.Instance).Cast<FormworkElement>().ToList();
         var contexts = new Dictionary<string, (Context ctx, List<Body>? gone)>(StringComparer.Ordinal);
         (Context ctx, List<Body>? gone) ContextOf(FormworkElement el)
         {
-            if (el.Later || laterEls.Count == 0) return (all, null);
+            // 나중에 치는 부재는 모두를 본다(옛 규칙의 지름길). 시공 순서표가 있으면 지름길 없이 짝마다 판정 — ② «칠 때»로 같이로 옮긴 부위 · 칸이 여럿인 표에서도
+            // 맞게(설치 전 검토 R71 중간 · 나중 칸 주인은 Absent 가 모두 «있음»이라 같은 문맥이 된다).
+            if ((all.Options.Order == null && el.Later) || laterEls.Count == 0) return (all, null);
             var key = new System.Text.StringBuilder();
-            for (int i = 0; i < laterEls.Count; i++) key.Append(Absent(laterEls[i], el, all.Options) ? '1' : '0');
+            for (int i = 0; i < laterEls.Count; i++) key.Append(AbsentFor(laterEls[i], el, all.Options) ? '1' : '0');
             string k = key.ToString();
             if (contexts.TryGetValue(k, out var made)) return made;
             var goneEls = new HashSet<FormworkElement>(laterEls.Where((l, i) => k[i] == '1'), ReferenceEqualityComparer.Instance);
@@ -196,11 +199,17 @@ public static class FormworkAnalyzer
     /// <summary>
     /// 구조체 structure 를 잴 때 other 가 빠지는가: 나중에 치는 부재가 순위로 지면(GivesWay) · 계단이 벽 같은 구조체에 닿으면(R64 — JACK 2026-10-26
     /// «벽체에 붙은 계단 쪽이 벽체에서 공제돼서 이상하게 나와» · 고름 «벽은 다 셈 · 중간슬래브는 뺌» — 계단은 벽 다음에 친다. 중간슬래브 · 보 · 기둥 · 슬래브 가장자리는
-    /// 그대로 계단이 덮는다 — R56c-1 «중간슬래브의 계단이 붙는 세로면은 거푸집이 필요 없다»).
+    /// 그대로 계단이 덮는다 — R56c-1 «중간슬래브의 계단이 붙는 세로면은 거푸집이 필요 없다»). 헌치도 벽처럼 계단보다 먼저 쳐 계단이 빠진다(R70c — JACK 2026-10-29
+    /// 2D 산출서의 바닥헌치 줄은 계단 자리를 빼지 않고 전체 길이 · 고름 «2D 처럼 안 뺌»).
     /// </summary>
     public static bool Absent(FormworkElement other, FormworkElement structure, FormworkOptions options) =>
         GivesWay(other, structure)
-        || (!ReferenceEquals(other, structure) && !structure.Later && IsStair(other, options) && !IsStair(structure, options) && WallLike(structure, options));
+        || (!ReferenceEquals(other, structure) && !structure.Later && IsStair(other, options) && !IsStair(structure, options)
+            && (WallLike(structure, options) || IsHaunch(structure, options)));
+
+    // 시공 순서표(R71 — options.Order)가 있으면 그 표로 · 없으면 위 지금 규칙.
+    private static bool AbsentFor(FormworkElement other, FormworkElement structure, FormworkOptions options) =>
+        options.Order?.Absent(other, structure, options) ?? Absent(other, structure, options);
 
     /// <summary>
     /// 접합부 규칙(R67 — JACK 2026-10-27 고름 · 녹촌 2D: 벽 = 둘레 × 높이 − 문 · 보 = 길이를 이어서 · 계단 식에 헌치 공제 없음): 이웃이 면의 일부만 덮을 때
@@ -986,7 +995,8 @@ public static class FormworkAnalyzer
             }
             if (contact < Tiny && cutIn == null) continue;
             bool ignore = other.El.Id != body.El.Id && result.Class != FaceClass.Top
-                && (o.ActiveRules?.JointOf(body.El.Id, n.X, n.Y, n.Z, result.PlaneD, other.El.Id) ?? JointRule(body.El, other.El, result.Class, contact, result.Polygon, o));
+                && (o.ActiveRules?.JointOf(body.El.Id, n.X, n.Y, n.Z, result.PlaneD, other.El.Id)
+                    ?? o.Order?.Keeps(body.El, other.El, result.Class, contact, result.Polygon, o) ?? JointRule(body.El, other.El, result.Class, contact, result.Polygon, o));
             double cutArea = cutIn != null ? Poly.Area(cutIn) : 0;
             if (ignore)
             {
@@ -1405,6 +1415,15 @@ public static class FormworkAnalyzer
 
     /// <summary>마지막으로 잴 때 본 안쪽 벽 면의 슬래브 띠(R69 — 일지 · 모델 검증).</summary>
     public static IReadOnlyList<SlabBand> LastSlabBands { get; private set; } = Array.Empty<SlabBand>();
+
+    /// <summary>정적 «마지막» 값들(일지용)을 떠 둔다 — 그림자 재기(R71a)가 진짜 재기의 값을 덮지 않게 RestoreLast 로 되돌린다(계획 검토 R71 M5).</summary>
+    public static object SaveLast() => (LastRisers, LastLowWalls, LastGrouping, LastOwnKind, LastContexts, LastSlabBands);
+
+    public static void RestoreLast(object saved)
+    {
+        if (saved is ValueTuple<int, IReadOnlyList<(long, string, double, long)>, (long, int), IReadOnlyList<(long, string, double)>, (int, long), IReadOnlyList<SlabBand>> s)
+            (LastRisers, LastLowWalls, LastGrouping, LastOwnKind, LastContexts, LastSlabBands) = s;
+    }
 
     /// <summary>슬래브 같은 부재(R69): 수직면 덩어리에 드는 부재 가운데 벽 같은 부재가 아닌 것(바닥 · 중간 · 상부 · 기초 슬래브 — InLump 와 같은 잣대).</summary>
     internal static bool SlabLike(FormworkElement el, FormworkOptions options) => InLump(el, options) && !WallLike(el, options);
@@ -2100,7 +2119,7 @@ public static class FormworkAnalyzer
             var ea = byId[a];
             // 구조체 ↔ 그 구조체를 잴 때 빠진 나중 부재: 구조체 쪽은 일부러 빼지 않았다(R54 — 구조체를 이기는 나중 부재는 양쪽에서 재므로 견준다).
             // 벽 ↔ 계단(R64)도 같다 — 벽은 계단 없이 잰다.
-            if (Absent(ea, eb, opts) || Absent(eb, ea, opts)) continue;
+            if (AbsentFor(ea, eb, opts) || AbsentFor(eb, ea, opts)) continue;
             if (ignoredPairs.Contains((Math.Min(a, b), Math.Max(a, b)))) continue;
             double fromB = contact.GetValueOrDefault((b, a));
             if (Math.Abs(fromA - fromB) > 1e-3 + 1e-3 * Math.Max(fromA, fromB))

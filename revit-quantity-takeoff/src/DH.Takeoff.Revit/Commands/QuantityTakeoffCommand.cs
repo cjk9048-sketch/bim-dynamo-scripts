@@ -1341,6 +1341,8 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
             Rules = rules, PartDefault = part => PartCatalog.FormworkDefault(part, groups.GetValueOrDefault(part)), Bands = FormworkOptions.AutoBands(scene.Elements),
             // ① 목록의 묶음(사용자가 옮긴 것까지) — 기초 카테고리의 밑면 · 턱 덩어리 빼기가 쓴다(R53a).
             PartGroup = part => groups.TryGetValue(part, out var g) && g.Length > 0 ? g : PartCatalog.GroupOf(part),
+            // 시공 순서표(R71b): 처음 값(지금 규칙 다섯 줄) + 대응표의 «짝:» · «칸:» 줄 — 처음 값은 옛 규칙과 면 하나까지 같음(녹촌 실제 ① 부위 2,361면 · 시험 25 모델).
+            Order = PourOrder.From(rules),
         };
         var results = FormworkAnalyzer.AnalyzeAutoBands(scene.Elements, scene.Zones, options);   // 7 m 를 넘는 유로폼 조각이 없으면 구간 없이
         int unpainted = FormworkReader.AttachCurved(scene, results);
@@ -1417,6 +1419,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         var stairReturned = results.Select(r => (id: r.Element.Id, area: r.Faces.Sum(f => f.StairCovered))).Where(x => x.area > 1e-6).OrderByDescending(x => x.area).ToList();
         if (stairReturned.Count > 0) session.Note(FormattableString.Invariant($"계단 자리\t벽으로 돌려 센 넓이 {stairReturned.Sum(x => x.area):0.####} ㎡(") +
                      string.Join(" · ", stairReturned.Take(12).Select(x => FormattableString.Invariant($"{x.id} {x.area:0.####}"))) + ")");
+        session.Note($"시공 순서표\t{options.Order?.Text()} · 고친 줄 짝 {rules.Pairs.Count} · 칠 때 {rules.Stages.Count}");
         // «부위와 모양이 안 맞음»(R57 P4 — 경고만 · 셈은 그대로): 유형 이름이 다른 부위 묶음을 가리킴 · 받침류인데 밑면이 바닥판 위 1 m 넘게 떠 있음.
         var odd = FormworkPartCheck.Check(results, part => groups.TryGetValue(part, out var g) && g.Length > 0 ? g : null);
         foreach (var f in odd) session.Note($"부위 경고\t{f.Id}\t{f.Type}\t{f.Part}\t{f.Text}");
