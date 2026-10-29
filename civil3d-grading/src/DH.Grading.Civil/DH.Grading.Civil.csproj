@@ -59,6 +59,11 @@
       <HintPath>$(AcadDir)Map\AcMapCoordsysCoreMgd.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- [v109.1] Map 개체 데이터(지적 속성을 특성 창에) — ParcelObjectData 한 곳에서만 쓴다(없는 판이면 그 자리만 실패 · XData는 남음). -->
+    <Reference Include="ManagedMapApi">
+      <HintPath>$(AcadDir)Map\ManagedMapApi.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>

@@ -21,6 +21,7 @@ public sealed class MiscSettingsDialog : Window
 {
     private readonly ComboBox _coordSys;
     private readonly CheckBox _showOnlyResult;
+    private readonly CheckBox _parcelOd;
     private readonly TextBox _vwKey;
     /// <summary>[저장]에서 VWorld 키가 바뀌었나 — 부른 쪽이 지도 도킹바를 새 키로 다시 연다.</summary>
     internal bool KeyChanged { get; private set; }
@@ -76,6 +77,16 @@ public sealed class MiscSettingsDialog : Window
                     + "해제하고 저장: 숨겼던 지표면을 모두 다시 표시합니다.",
         };
         root.Children.Add(_showOnlyResult);
+        // ★[v109.1 · 검토 M9] 지적 속성 → 특성 창(Map 개체 데이터) — 끄면 XData만
+        _parcelOd = new CheckBox
+        {
+            Content = "지적 속성을 특성 창에 표시",
+            IsChecked = GradingSettings.ParcelObjectData,
+            Margin = new Thickness(0, 0, 0, 6),
+            ToolTip = "체크: [지적도]로 가져온 필지 선 · 해치 · 지번을 고르면 특성 창에 지번 · 지목 · 소유 구분 · 공시지가가 보입니다(Map 개체 데이터 DH_PARCEL_V1).\n"
+                    + "해제: 속성은 XData(DH_PARCEL)에만 넣습니다 — 다음 [지적도]부터.",
+        };
+        root.Children.Add(_parcelOd);
 
         // ★★★[v103.3 · JACK 1021 «기타설정에있는 옹벽형태를 계획부지생성 도킹바에 넣고»] 옹벽 형태는 <b>도킹바로 옮겼다</b>
         //   (0910엔 이리로 왔었다 — «엄밀히 따지면 인프라웍스 관련»). 이제 «뒷채움 터파기»와 한 묶음이다(GradingPanel).
@@ -163,6 +174,7 @@ public sealed class MiscSettingsDialog : Window
             GradingSettings.ExportEpsg = GradingDialog.EpsgCodes[
                 System.Math.Clamp(_coordSys.SelectedIndex, 0, GradingDialog.EpsgCodes.Length - 1)];
             GradingSettings.ShowOnlyResultSurface = _showOnlyResult.IsChecked == true;
+            GradingSettings.ParcelObjectData = _parcelOd.IsChecked == true;
             DialogResult = true;
             Close();
         };

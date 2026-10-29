@@ -141,6 +141,12 @@ internal static class BusyPopup
         catch { }
     }
 
+    /// <summary>★[v109.1] 떠 있으면 글만 바꾼다 — 아무 스레드에서나(창을 새로 만들지 않음 · 받는 중 진행 글).</summary>
+    internal static void Text(string text)
+    {
+        try { lock (Gate) _disp?.BeginInvoke(() => { if (_txt != null) _txt.Text = text; }); } catch { }
+    }
+
     /// <summary>잠깐 숨긴다(사람에게 묻는 동안) — 창과 스레드는 그대로.</summary>
     internal static void Pause()
     {

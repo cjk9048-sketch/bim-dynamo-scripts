@@ -17,6 +17,11 @@ internal sealed class RoadDesign
     public string PlanProfile = "", BaseProfile = "", BaseSurface = "";
     public string SurfaceHandle = "";           // [도로 면 만들기]로 만든 지표면(다시 만들면 이것을 지우고 같은 이름으로)
     public List<double[]> Walls = new();         // [s0, s1, 쪽(−1 좌 · +1 우)]
+    /// <summary>★[v110.2 · 설치 전 검토 · 중간] 곡선을 우리가 넣었나 — 폴리선 · [경로 그리기]로 만든 노선 = 참 · 기존 Civil 노선으로 연 도로 = 거짓(사람이 설계한 곡선이라 곡선 반경 칸이 안 바꿈).</summary>
+    public bool OwnCurves = true;
+
+    /// <summary>★[v110.2 · JACK 1029 «곡선 반경 = 도킹창 값 하나»] 다음 노선의 곡선 반경 — 도킹창 칸이 바꾼다(열린 도로가 있으면 그 도로에도 · 세션 동안 기억).</summary>
+    internal static double LastCurveR = 30;
 
     const string Key = "DH_ROAD";
     static readonly JsonSerializerOptions Js = new() { IncludeFields = true };
@@ -28,6 +33,16 @@ internal sealed class RoadDesign
     public RoadGrade.SlopeRule Cut() => new() { Slope = Pos(CutSlope, 1.5), BenchH = Pos(CutBenchH, 5), BenchW = Math.Max(0, CutBenchW) };
     public RoadGrade.SlopeRule Fill() => new() { Slope = Pos(FillSlope, 1.8), BenchH = Pos(FillBenchH, 5), BenchW = Math.Max(0, FillBenchW) };
     public List<RoadGrade.Wall> CoreWalls() => Walls.Where(w => w.Length >= 3 && double.IsFinite(w[0]) && double.IsFinite(w[1])).Select(w => new RoadGrade.Wall(Math.Min(w[0], w[1]), Math.Max(w[0], w[1]), w[2] < 0 ? -1 : 1)).ToList();
+
+    /// <summary>★★[v110.3 · JACK 1029 «계획부지처럼 소단선을 변환»] 계단선 변환 옹벽 — [s0, s1, 쪽(−1 좌 · +1 우), 몇 번째 단부터(0 = 가장자리), 옹벽 사이 소단 길이](노선 측점).
+    /// 옛 <see cref="Walls"/>(가장자리 옹벽)는 읽을 때 [s0, s1, 쪽, 0, 0]으로 옮긴다(Core가 옛 길로 탐).</summary>
+    public List<double[]> TierWalls = new();
+
+    /// <summary>Core 기록(측점은 Core 측점 = 노선 측점 − <paramref name="s0"/>).</summary>
+    public List<RoadGrade.TierWall> CoreTierWalls(double s0) => TierWalls
+        .Where(w => w.Length >= 5 && double.IsFinite(w[0]) && double.IsFinite(w[1]) && Math.Abs(w[1] - w[0]) > 1e-6)
+        .Select(w => new RoadGrade.TierWall(Math.Min(w[0], w[1]) - s0, Math.Max(w[0], w[1]) - s0, w[2] < 0 ? -1 : 1, Math.Max(0, (int)Math.Round(w[3])), Math.Max(0, w[4])))
+        .ToList();
     static double Pos(double v, double d) => double.IsFinite(v) && v > 0 ? v : d;
 
     /// <summary>노선에서 읽기 — 없으면 null.</summary>
@@ -41,7 +56,17 @@ internal sealed class RoadDesign
             var xr = (Xrecord)tr.GetObject(dict.GetAt(Key), OpenMode.ForRead);
             var sb = new System.Text.StringBuilder();
             foreach (TypedValue tv in xr.Data ?? new ResultBuffer()) if (tv.TypeCode == (int)DxfCode.Text) sb.Append((string)tv.Value);
-            return JsonSerializer.Deserialize<RoadDesign>(sb.ToString(), Js);
+            var d = JsonSerializer.Deserialize<RoadDesign>(sb.ToString(), Js);
+            // ★[v110.2 재검토 · 중간] v110.0/1 기록에는 OwnCurves 칸이 없다(없으면 기본값 참) — 기존 Civil 노선으로 연 옛 도로의 곡선을 바꾸지 않게 우리 이름(DH도로…)일 때만 참
+            if (d != null && !sb.ToString().Contains("\"OwnCurves\"", StringComparison.Ordinal))
+                d.OwnCurves = o is Autodesk.Civil.DatabaseServices.Alignment al && (al.Name ?? "").StartsWith(RoadBuilder.AlignBase, StringComparison.Ordinal);
+            // ★[v110.3 · 검토 M4] 옛 가장자리 옹벽 → 계단선 변환 기록(0단 · 소단 0 = 옛 길)
+            if (d != null && d.Walls.Count > 0)
+            {
+                foreach (var w in d.Walls) if (w.Length >= 3) d.TierWalls.Insert(0, new[] { w[0], w[1], w[2], 0, 0 });
+                d.Walls.Clear();
+            }
+            return d;
         }
         catch { return null; }
     }

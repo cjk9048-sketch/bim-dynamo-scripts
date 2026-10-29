@@ -11,7 +11,7 @@ namespace DH.Grading.Core;
 /// 굽은 도로에서 조용히 틀어지는 것(GradingGeometry.cs:939 · :4979)을 피한다.</para>
 /// <para>옹벽 구간의 가장자리 표본은 원뿔을 안 낸다(수직) — 벽 밖은 바탕 그대로 · 벽 끝은 이웃 사면 원뿔이 감싸 날개 사면이 저절로.</para>
 /// <para>바탕 = 원지반, 또는 부지 정지가 있으면 정지면 — 도로가 부지 위에 얹힌다(종점 = 계획고라 그 자리는 차이 0).</para></summary>
-public static class RoadGrade
+public static partial class RoadGrade
 {
     /// <summary>표준횡단(한쪽마다) — 중심(크라운)에서 가장자리로 내려간다. 사면은 길어깨 바깥 끝에서 시작.</summary>
     public sealed class Section
@@ -39,6 +39,11 @@ public static class RoadGrade
     /// <summary>옹벽 구간 — 측점 [S0, S1] · 좌(−1)/우(+1) · MaxH = 벽 높이 상한(형식표 · NaN = 없음 — 넘으면 벽 위는 사면).</summary>
     public sealed record Wall(double S0, double S1, int Side, double MaxH = double.NaN);
 
+    /// <summary>★★[v110.3 · JACK 1029 «계획부지처럼 먼저 사면으로 생성한 후 소단선을 변환»] 계단선 변환 옹벽 — 측점 [S0, S1] · 좌(−1)/우(+1) ·
+    /// <b>Tier = 몇 번째 단부터 바깥이 수직 옹벽</b>(0 = 가장자리 첫 단) · BenchL = 옹벽 사이 소단 길이. 절토 · 성토 어느 쪽 사면이든 같은 규칙.
+    /// <para>Tier 0 · BenchL 0(끝없는 가장자리 옹벽)은 부르는 쪽이 <see cref="Wall"/>로 넘긴다(옛 길 그대로 — 원뿔 없음 · 벽 뒤 막음).</para></summary>
+    public sealed record TierWall(double S0, double S1, int Side, int Tier, double BenchL);
+
     public sealed class Input
     {
         public double[] X = Array.Empty<double>(), Y = Array.Empty<double>();   // 중심선 점(진행 차례 · 곡선은 잘게)
@@ -46,6 +51,10 @@ public static class RoadGrade
         public Section Sec = new();
         public SlopeRule Cut = new(), Fill = new() { Slope = 1.8 };
         public List<Wall> Walls = new();
+        /// <summary>★[v110.3] 계단선 변환 옹벽(나중 기록이 겹친 구간에서 이김).</summary>
+        public List<TierWall> TierWalls = new();
+        /// <summary>★[v110.3] 수직 옹벽의 평면폭 비(단높이 × 이 값 — 부지 MinSlope와 같은 뜻).</summary>
+        public double MinSlope = 0.01;
         public IGroundSurface Base = null!;
         public double Cell = 1.0;          // 격자 칸(m)
         public double Reach = 60;          // 가장자리에서 사면을 찾는 최대 수평거리(m)
@@ -63,6 +72,8 @@ public static class RoadGrade
         public double EdgeZ, Height, Width;   // 사면 높이 · 수평폭(가장자리 → 데이라잇) · 없으면 0
         public double Dx = double.NaN, Dy = double.NaN;   // 데이라잇 점
         public bool OutOfLimit;               // 데이라잇이 사업 경계 밖
+        /// <summary>★[v110.3] 가장자리 표본 자리 · 계단선 변환 기록 번호(−1 = 없음).</summary>
+        public double X, Y; public int Rec = -1;
     }
 
     public sealed class Result
@@ -71,12 +82,26 @@ public static class RoadGrade
         public float[] Z = Array.Empty<float>(), Base = Array.Empty<float>();
         /// <summary>0 = 그대로 · 1 = 도로 면 · 2 = 절토 · 3 = 성토 · 4 = 사면 충돌(옹벽 자리) · 255 = 바탕 없음.</summary>
         public byte[] Kind = Array.Empty<byte>();
+        /// <summary>★★[v110.2 · JACK 1029 «경계가 부드러워야 하는데 톱니가 너무 심해»] 칸 가운데의 «안쪽 값»(m) — 음수 = 바뀐 자리(도로 · 절 · 성 · 충돌) · 0 = 데이라잇 · NaN = 바탕 없음.
+        /// 사면 칸 = min(절토 원뿔 − 땅, 땅 − 성토 원뿔) · 도로 칸 = −(가장자리까지) − |설계 − 땅|(가장자리에서 바깥 값과 이어짐).
+        /// 이어진 값이라 칸 사이 0 자리를 선형 보간으로 찾는다 — 칸 경계로 자르면 톱니(0.5 m 칸 0.47 m · 1 m 칸 0.94 m — 1029 실측).</summary>
+        public float[] F = Array.Empty<float>();
+        /// <summary>★[v110.3 · 계획 검토 H2] 칸 가운데에서 도로 띠(가장자리 · 마구리)까지 수평거리(m · 띠 안은 음수) — 사면선 · 소단선 = 이 값의 등치선(꺾임 거리마다).
+        /// FS = 가장 가까운 중심선 측점(Core 측점 0부터) · FSide = 그 쪽(−1 좌 · +1 우 · 0 = 끝 마구리 너머).</summary>
+        public float[] D = Array.Empty<float>(), FS = Array.Empty<float>();
+        public sbyte[] FSide = Array.Empty<sbyte>();
+        /// <summary>★[v110.3] 단면들(0 = 기본 · 그 뒤 = 계단선 변환 변형) · 변환 기록 · 기록 → 단면 번호.</summary>
+        internal List<Profile> CutProfs = new(), FillProfs = new();
+        internal List<TierWall> Recs = new();
+        internal int[] RecProf = Array.Empty<int>();
         public double CutVol, FillVol, MaxCut, MaxFill, Length;
         public List<SlopeAt> Slopes = new();
         public List<(double S0, double S1, int Side, string Why)> Suggest = new();
         public List<List<(double X, double Y)>> Daylight = new();
         public List<(double X, double Y, double Z)> EdgeL = new(), EdgeR = new();
         public int EdgeSamples; public long ConeEvals; public double Ms;
+        /// <summary>★[v110.3.1] 가장자리 표본 간격(m) — 표본 사이 칸은 원뿔 거리가 D보다 길다(면 세모가 옹벽 곁 높이를 믿을지 가름).</summary>
+        public double EdgeStep = 0.5;
         /// <summary>★[계획 검토 M2] 사면끼리 부딪힌 칸(lo &gt; hi — 옹벽 자리) 수.</summary>
         public int Conflicts;
         /// <summary>★[계획 검토 M1] 넓혀도 데이라잇이 범위 밖(격자 끝까지 절 · 성) · 마지막에 쓴 범위.</summary>
@@ -88,20 +113,35 @@ public static class RoadGrade
               + $" · 칸 {Cell:0.##} m {W}×{H} · 표본 {EdgeSamples} · {Ms:F0} ms";
     }
 
-    /// <summary>사면 단면 — (수평거리, 누적 높이) 꺾임 목록 → F(거리) 표(0.05 m)로. 부지 StepProfile과 같은 뜻(사면 = 단높이 × 구배 · 소단 = 평탄).</summary>
+    /// <summary>단면의 한 면(단 k의 사면 또는 옹벽) — 가장자리에서 수평거리 [A, B] · 벽이면 수직(평면폭 = 단높이 × MinSlope).</summary>
+    public readonly record struct Face(int K, double A, double B, bool Wall);
+
+    /// <summary>사면 단면 — (수평거리, 누적 높이) 꺾임 목록 → F(거리) 표(★[v110.3.1] 0.005 m — 0.05 m 표는 옹벽 면(단높이 3 × 0.01 = 3 cm) 앞 2 cm를 면 위 높이로 흐려 소단 칸이 바깥으로 갈렸다)로. 부지 StepProfile과 같은 뜻(사면 = 단높이 × 구배 · 소단 = 평탄).
+    /// <para>★[v110.3 · JACK 1029 «계획부지처럼 소단선을 변환»] 변형: 단 <paramref name="tier"/>부터 = 수직 옹벽(평면폭 단높이 × minSlope) + 소단 <paramref name="benchL"/> 되풀이(부지 DHWALL과 같은 뜻). tier &lt; 0 = 기본.</para></summary>
     internal sealed class Profile
     {
         readonly float[] _t; readonly double _dt, _tail; readonly double _end, _endRise;
-        public Profile(SlopeRule r, double reach, double dt = 0.05)
+        public readonly List<Face> Faces = new();
+        readonly List<(double D, double R)> _e = new();   // ★[v110.3.1] 꺾임 목록 — FAt(정확한 높이 · 옹벽 위 끝 · 아래 끝)
+        public float[] Table => _t;
+        public Profile(SlopeRule r, double reach, double dt = 0.005, int tier = -1, double benchL = 0, double minSlope = 0.01)
         {
             var e = new List<(double D, double R)> { (0, 0) };
             double d = 0, rise = 0, bh = Math.Max(0.1, r.BenchH), n = Math.Max(0.01, r.Slope), bw = Math.Max(0, r.BenchW);
+            double ms = Math.Clamp(minSlope, 0.001, 0.2), bl = Math.Max(0, benchL);
+            int fk = 0;
             while (d < reach + bh * n + bw && rise < r.MaxRise)
             {
-                d += bh * n; rise += bh; e.Add((d, rise));
-                if (bw > 0) { d += bw; e.Add((d, rise)); }
+                bool wall = tier >= 0 && fk >= tier;
+                double w = bh * (wall ? ms : n);
+                Faces.Add(new Face(fk, d, d + w, wall));
+                d += w; rise += bh; e.Add((d, rise));
+                double b = wall ? bl : bw;
+                if (b > 0) { d += b; e.Add((d, rise)); }
+                fk++;
             }
-            _dt = dt; _end = e[^1].D; _endRise = e[^1].R; _tail = 1.0 / n;
+            _dt = dt; _end = e[^1].D; _endRise = e[^1].R; _tail = tier >= 0 ? 1.0 / ms : 1.0 / n;
+            _e = e;
             int m = (int)Math.Ceiling((reach + 1) / dt) + 2;
             _t = new float[m];
             int k = 0;
@@ -121,10 +161,35 @@ public static class RoadGrade
             if (i >= _t.Length - 1) return _t[^1] + (dist - (_t.Length - 1) * _dt) * _tail;
             return _t[i] + (_t[i + 1] - _t[i]) * (u - i);
         }
+
+        Profile(float[] t, double dt, double tail) { _t = t; _dt = dt; _tail = tail; }
+
+        /// <summary>★[v110.3.1 · JACK 1029 «옹벽변환 수행했더니 라운드부분이 톱니처럼 깨져»] 꺾임 목록으로 정확한 높이 — 표(0.05 m 간격)는 5 cm 옹벽 면 안에서 몇 m 어긋난다(면을 옹벽 위 · 아래 끝에서 자를 때 씀).
+        /// 꺾임 목록이 없으면(최솟값 표) 표 값.</summary>
+        public double FAt(double d)
+        {
+            if (_e.Count < 2) return F(d);
+            if (d <= 0) return 0;
+            if (d > _end) return _endRise + (d - _end) * _tail;
+            int lo = 0, hi = _e.Count - 1;                         // _e[lo].D < d <= _e[hi].D 찾기(이분)
+            while (hi - lo > 1) { int mid = (lo + hi) >> 1; if (_e[mid].D < d) lo = mid; else hi = mid; }
+            var a = _e[lo]; var b = _e[hi];
+            return b.D - a.D < 1e-12 ? b.R : a.R + (b.R - a.R) * (d - a.D) / (b.D - a.D);
+        }
+
+        /// <summary>★[v110.3 · 계획 검토 중간] 점별 최솟값 표 — 가지치기 아래 한계(쓰는 모든 F 이하여야 맞다). 같은 간격 표의 칸별 최솟값을 선형 보간하면 각 F(선형 보간)의 최솟값 이하(오목 함수 ≥ 현).</summary>
+        internal static Profile Min(IReadOnlyList<Profile> ps)
+        {
+            if (ps.Count == 1) return ps[0];
+            int m = ps.Min(p => p._t.Length);
+            var t = new float[m];
+            for (int i = 0; i < m; i++) { float v = float.MaxValue; foreach (var p in ps) v = Math.Min(v, p._t[i]); t[i] = v; }
+            return new Profile(t, ps[0]._dt, ps.Min(p => p._tail));
+        }
     }
 
     /// <summary>가장자리 표본 — N = 바깥 방향(원뿔은 그 반평면에만) · T = 진행 방향 · G = 그 자리 종단경사(★[계획 검토 H1] 경사 보정 원뿔) · WallH = 벽 높이 상한(NaN = 없음).</summary>
-    struct Edge { public double X, Y, Z, S, Nx, Ny, Tx, Ty, G, WallH; public int Side; public bool Wall; }
+    struct Edge { public double X, Y, Z, S, Nx, Ny, Tx, Ty, G, WallH, Th; public int Side; public bool Wall; public int Prof, Rec; }
 
     /// <summary>★[계획 검토 M1] 격자 끝 칸까지 절 · 성이면(데이라잇이 범위 밖) 범위를 1.6배로 넓혀 다시(두 번까지) — 그래도면 ReachHit로 알림.</summary>
     /// <para>★[설치 전 검토 · 중간 — 성능] 넓히는 도중의 판은 격자만 — 사면 걷기 · 데이라잇 선은 마지막 판에 한 번(창 값 · PVI마다 다시 셈).</para>
@@ -155,7 +220,7 @@ public static class RoadGrade
     {
         tail = null;
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var r = new Result();
+        var r = new Result { EdgeStep = inp.EdgeStep };
         int n = Math.Min(inp.X.Length, Math.Min(inp.Y.Length, inp.Z.Length));
         if (n < 2 || inp.Base == null) { r.Error = "중심선이 두 점보다 적거나 바탕면이 없습니다"; return r; }
         for (int i = 0; i < n; i++)
@@ -165,11 +230,55 @@ public static class RoadGrade
         // ── 중심선 측점 ──
         var S = new double[n];
         for (int i = 1; i < n; i++) S[i] = S[i - 1] + Math.Sqrt(Sq(inp.X[i] - inp.X[i - 1]) + Sq(inp.Y[i] - inp.Y[i - 1]));
+        // ★[v110.3.1 · 설치 전 검토 M1] 중심선 누적 꺾임(절댓값 · 선분마다) — 같은 다리 «방향» 판정에 사이 꺾임 ≤ 100°를 건다.
+        //   절댓값이라야 지그재그(왼쪽 180° · 오른쪽 180° — 합은 0)의 첫 다리와 셋째 다리를 가른다(셋째 다리 경사를 200 m 넘게 늘여 첫 다리 곁을 깊이 깎을 뻔)
+        var turn = new double[Math.Max(1, n - 1)];
+        {
+            double head = double.NaN;
+            for (int i = 0; i + 1 < n; i++)
+            {
+                double dx = inp.X[i + 1] - inp.X[i], dy = inp.Y[i + 1] - inp.Y[i];
+                double acc = i > 0 ? turn[i - 1] : 0;
+                if (dx * dx + dy * dy > 1e-18)
+                {
+                    double a = Math.Atan2(dy, dx);
+                    if (double.IsFinite(head)) { double da = a - head; while (da > Math.PI) da -= 2 * Math.PI; while (da < -Math.PI) da += 2 * Math.PI; acc += Math.Abs(da); }
+                    head = a;
+                }
+                turn[i] = acc;
+            }
+        }
+        double TurnAt(double s)
+        {
+            int i = Array.BinarySearch(S, s); if (i < 0) i = ~i - 1;
+            return turn[Math.Clamp(i, 0, turn.Length - 1)];
+        }
         r.Length = S[n - 1];
         if (!(r.Length > 0.1)) { r.Error = "중심선 길이가 0입니다"; return r; }
         var sec = inp.Sec;
-        bool WallAt(double s, int side) { foreach (var w in inp.Walls) if (w.Side == side && s >= Math.Min(w.S0, w.S1) - 1e-9 && s <= Math.Max(w.S0, w.S1) + 1e-9) return true; return false; }
-        double WallHAt(double s, int side) { foreach (var w in inp.Walls) if (w.Side == side && s >= Math.Min(w.S0, w.S1) - 1e-9 && s <= Math.Max(w.S0, w.S1) + 1e-9) return w.MaxH; return double.NaN; }
+        // ★★[v110.3 · 계획 1 · 설치 전 검토 M1] 계단선 변환 기록 — 측점 · 쪽마다 «마지막 기록 하나»가 정한다(겹치면 나중 것이 이김).
+        //   그 기록이 0단 · 소단 0(끝없는 가장자리 옹벽)이면 옛 Walls 길(원뿔 없음 · 벽 뒤 막음) · 아니면 변형 단면. 옛 Walls(부르는 쪽이 직접 넘긴 것)는 따로 그대로.
+        var recs = new List<TierWall>();
+        foreach (var t in inp.TierWalls)
+        {
+            if (!(Math.Abs(t.S1 - t.S0) > 1e-6) || (t.Side != -1 && t.Side != 1)) continue;
+            recs.Add(t with { S0 = Math.Min(t.S0, t.S1), S1 = Math.Max(t.S0, t.S1), Tier = Math.Max(0, t.Tier), BenchL = Math.Max(0, t.BenchL) });
+        }
+        static bool EdgeWall(TierWall t) => t.Tier <= 0 && t.BenchL <= 0;
+        int RecAt(double s, int side)
+        {
+            for (int i = recs.Count - 1; i >= 0; i--)
+                if (recs[i].Side == side && s >= recs[i].S0 - 1e-9 && s <= recs[i].S1 + 1e-9) return i;
+            return -1;
+        }
+        var wallsAll = inp.Walls;
+        bool WallAt(double s, int side)
+        {
+            foreach (var w in wallsAll) if (w.Side == side && s >= Math.Min(w.S0, w.S1) - 1e-9 && s <= Math.Max(w.S0, w.S1) + 1e-9) return true;
+            int ri = RecAt(s, side);
+            return ri >= 0 && EdgeWall(recs[ri]);
+        }
+        double WallHAt(double s, int side) { foreach (var w in wallsAll) if (w.Side == side && s >= Math.Min(w.S0, w.S1) - 1e-9 && s <= Math.Max(w.S0, w.S1) + 1e-9) return w.MaxH; return double.NaN; }
 
         // ── 가장자리 표본(양쪽) — 선분마다 EdgeStep · 꺾인 꼭짓점 바깥은 부채꼴로 메움 ──
         var edges = new List<Edge>();
@@ -241,7 +350,37 @@ public static class RoadGrade
                 edges.Add(new Edge { X = inp.X[end] - nx * d, Y = inp.Y[end] - ny * d, Z = inp.Z[end] + sec.Drop(d), S = S[end], Nx = end == 0 ? -dx / len : dx / len, Ny = end == 0 ? -dy / len : dy / len, Tx = dx / len, Ty = dy / len, G = 0, Side = 0, Wall = false, WallH = double.NaN });
             }
         }
+        for (int k = 0; k < edges.Count; k++) { var e = edges[k]; e.Th = TurnAt(e.S); edges[k] = e; }
         r.EdgeSamples = edges.Count;
+
+        // ★★[v110.3 · 계획 1] 변형 단면 — 기록마다 (Tier, BenchL) · 0단 · 소단 0 기록은 단면 없음(RecProf −1 · 옛 가장자리 옹벽 길)
+        double reachF = inp.Reach + Math.Max(4.0, Math.Min(16.0, inp.Reach / 4)) * 2;
+        r.CutProfs = new List<Profile> { new(inp.Cut, reachF) };
+        r.FillProfs = new List<Profile> { new(inp.Fill, reachF) };
+        var profKey = new Dictionary<(int, double), int>();
+        r.RecProf = new int[recs.Count];
+        for (int i = 0; i < recs.Count; i++)
+        {
+            if (EdgeWall(recs[i])) { r.RecProf[i] = -1; continue; }
+            var key = (recs[i].Tier, Math.Round(recs[i].BenchL, 3));
+            if (!profKey.TryGetValue(key, out int pi))
+            {
+                pi = r.CutProfs.Count;
+                r.CutProfs.Add(new Profile(inp.Cut, reachF, tier: key.Item1, benchL: key.Item2, minSlope: inp.MinSlope));
+                r.FillProfs.Add(new Profile(inp.Fill, reachF, tier: key.Item1, benchL: key.Item2, minSlope: inp.MinSlope));
+                profKey[key] = pi;
+            }
+            r.RecProf[i] = pi;
+        }
+        r.Recs = recs;
+        for (int k = 0; k < edges.Count; k++)
+        {
+            var e = edges[k];
+            e.Rec = e.Side == 0 || e.Wall ? -1 : RecAt(e.S, e.Side);
+            if (e.Rec >= 0 && r.RecProf[e.Rec] < 0) e.Rec = -1;   // 0단 · 소단 0은 Wall로 이미 탐
+            e.Prof = e.Rec >= 0 ? r.RecProf[e.Rec] : 0;
+            edges[k] = e;
+        }
 
         // ── 격자 ──
         double pad = Math.Max(sec.OuterL, sec.OuterR) + inp.Reach + inp.Cell;
@@ -252,7 +391,8 @@ public static class RoadGrade
         while ((long)Math.Ceiling((maxX - minX) / cell) * (long)Math.Ceiling((maxY - minY) / cell) > inp.MaxCells) cell *= 1.25;
         int W = (int)Math.Ceiling((maxX - minX) / cell), H = (int)Math.Ceiling((maxY - minY) / cell);
         r.W = W; r.H = H; r.X0 = minX; r.Y0 = minY; r.Cell = cell;
-        r.Z = new float[W * H]; r.Base = new float[W * H]; r.Kind = new byte[W * H];
+        r.Z = new float[W * H]; r.Base = new float[W * H]; r.Kind = new byte[W * H]; r.F = new float[W * H];
+        r.D = new float[W * H]; r.FS = new float[W * H]; r.FSide = new sbyte[W * H];
 
         // 칸 색인 — 중심선 선분 · 가장자리 표본(같은 버킷 크기)
         double bk = Math.Max(4.0, Math.Min(16.0, inp.Reach / 4));
@@ -287,8 +427,11 @@ public static class RoadGrade
             (edgeB[b] ??= new()).Add(k);
             bZmin[b] = Math.Min(bZmin[b], e.Z + up); bZmax[b] = Math.Max(bZmax[b], e.Z - up); bG[b] = Math.Max(bG[b], Math.Abs(e.G));
         }
-        var cutF = new Profile(inp.Cut, inp.Reach + bk * 2);
-        var fillF = new Profile(inp.Fill, inp.Reach + bk * 2);
+        // ★[v110.3 · 검토 중간] 가지치기 아래 한계 = 모든 단면의 점별 최솟값(변형 원뿔이 구간 밖에서 쓰는 max(변형, 기본)도 이 이상)
+        var cutF = Profile.Min(r.CutProfs);
+        var fillF = Profile.Min(r.FillProfs);
+        var cutP = r.CutProfs; var fillP = r.FillProfs;
+        bool anyRec = r.RecProf.Any(q => q >= 0);
         int rb = (int)Math.Ceiling(inp.Reach / bk) + 1;
         // 버킷을 가까운 차례로(거리 아래 한계) — 가지치기(F 단조: 버킷 최소 높이 + F(최소 거리)가 지금 hi 이상이면 그 버킷 · 그 너머는 못 이김)
         var order = new List<(int dx, int dy, double dmin)>();
@@ -338,17 +481,20 @@ public static class RoadGrade
                     {
                         double z = bz + sec.Drop(bsd * d);
                         r.Z[idx] = (float)z; r.Kind[idx] = 1;
+                        r.F[idx] = (float)(-(outer - d) - (okB ? Math.Abs(z - zb) : 0));
+                        r.D[idx] = (float)(d - outer); r.FS[idx] = (float)bs; r.FSide[idx] = (sbyte)bsd;
                         if (okB) { double dz = z - zb; if (dz > 0) { fv += dz * ca; mf = Math.Max(mf, dz); } else { cv -= dz * ca; mc = Math.Max(mc, -dz); } }
                         continue;
                     }
                 }
-                if (!okB) { r.Z[idx] = float.NaN; r.Kind[idx] = 255; continue; }
+                if (!okB) { r.Z[idx] = float.NaN; r.Kind[idx] = 255; r.F[idx] = float.NaN; r.D[idx] = float.NaN; continue; }
                 // ★[계획 검토 H3] 벽 뒤 띠 — 같은 쪽 · 가장 가까운 중심선 측점이 그 쪽 벽 구간 안(끝 마구리 밖) → 같은 쪽 사면 표본 원뿔은 안 씀(벽이 흙을 받친다)
                 // 가장 가까운 중심선(사면 거리까지) — 측점 s_P · 쪽 · 끝 마구리 밖인가. 경사 보정과 벽 뒤 판정이 쓴다.
-                int shadow = 0;
-                double fs = double.NaN;
+                int shadow = 0, recCell = -1, fside = 0;
+                double fs = double.NaN, fnx = 0, fny = 0, fth = 0;   // ★[v110.3.1] 중심선 가장 가까운 점 → 칸 방향 · 그 자리 누적 꺾임(같은 다리 판정)
+                double vZ = double.NaN, vD = 0;             // ★[v110.3.1] 발 표본 — 칸에서 가장 가까운 가장자리 점의 높이 · 거리
                 {
-                    double fb = double.MaxValue, fsd = 0; bool fend = false;
+                    double fb = double.MaxValue, fsd = 0, fAlong = 0, fLat = 0, fzc = 0; bool fend = false;
                     var fl = segFar[By(py) * BW + Bx(px)];
                     if (fl != null)
                         foreach (int si in fl)
@@ -356,17 +502,51 @@ public static class RoadGrade
                             double ax = inp.X[si], ay = inp.Y[si], dx = inp.X[si + 1] - ax, dy = inp.Y[si + 1] - ay, l2 = dx * dx + dy * dy;
                             double t0 = l2 > 0 ? ((px - ax) * dx + (py - ay) * dy) / l2 : 0, t = Math.Clamp(t0, 0, 1);
                             double qx = ax + dx * t - px, qy = ay + dy * t - py, d2 = qx * qx + qy * qy;
-                            if (d2 < fb) { fb = d2; fs = S[si] + Math.Sqrt(l2) * t; fsd = dx * (py - ay) - dy * (px - ax) >= 0 ? -1 : 1; fend = (si == 0 && t0 < 0) || (si == n - 2 && t0 > 1); }
+                            if (d2 < fb)
+                            {
+                                fb = d2; fs = S[si] + Math.Sqrt(l2) * t; fsd = dx * (py - ay) - dy * (px - ax) >= 0 ? -1 : 1; fend = (si == 0 && t0 < 0) || (si == n - 2 && t0 > 1);
+                                double dq = Math.Sqrt(d2); fnx = dq > 1e-9 ? -qx / dq : 0; fny = dq > 1e-9 ? -qy / dq : 0; fzc = Zc(si, t); fth = turn[Math.Min(si, turn.Length - 1)];
+                                double ll = Math.Sqrt(l2);
+                                fAlong = fend ? (t0 < 0 ? -t0 : t0 - 1) * ll : 0;                                   // 끝 너머 거리
+                                fLat = ll > 0 ? Math.Abs(dx * (py - ay) - dy * (px - ax)) / ll : 0;                  // 중심선(연장)에서 옆 거리
+                            }
                         }
                     // ★[계획 검토 H3] 벽 뒤 띠 — 같은 쪽 · 측점이 그 쪽 벽 구간 안(끝 마구리 밖) → 같은 쪽 사면 표본 원뿔은 안 씀(벽이 흙을 받친다)
-                    if (inp.Walls.Count > 0 && fb < double.MaxValue && !fend && WallAt(fs, (int)fsd)) shadow = (int)fsd;
+                    fside = (int)fsd;
+                    if ((wallsAll.Count > 0 || recs.Count > 0) && fb < double.MaxValue && !fend && WallAt(fs, (int)fsd)) shadow = (int)fsd;
+                    // ★[v110.3 · 검토 H1] 계단선 변환 구간의 벽 뒤 — 그 기록의 변형이 아닌 같은 쪽 원뿔은 건너뜀(이웃 기본 원뿔이 벽 뒤를 깎지 않게)
+                    if (anyRec && fb < double.MaxValue && !fend) { int ri = RecAt(fs, (int)fsd); if (ri >= 0 && r.RecProf[ri] >= 0) recCell = ri; }
+                    // ★[v110.3 · 검토 H2] 도로 띠까지 수평거리 — 옆으로는 중심선 거리 − 바깥 폭 · 끝 너머는 마구리(직선)까지
+                    if (fb < double.MaxValue)
+                    {
+                        double outerS = fsd < 0 ? sec.OuterL : sec.OuterR;
+                        double dd = fend ? Math.Sqrt(fAlong * fAlong + Sq(Math.Max(0, fLat - outerS))) : Math.Sqrt(fb) - outerS;
+                        r.D[idx] = (float)dd; r.FS[idx] = (float)fs; r.FSide[idx] = (sbyte)(fend ? 0 : fsd);
+                        if (!fend && dd >= 0) { vZ = fzc + sec.Drop(fsd * outerS); vD = dd; }
+                    }
+                    else r.D[idx] = float.NaN;
                 }
                 // ② 사면 — 경사 보정 원뿔 감싸기(가까운 버킷부터 · 가지치기)
                 //   ★[계획 검토 H1] hi_e = z_e + g_e·(s_P − s_e) + F절(|P−e|) — 측점 차이로 보정: 곧은 도로 · 곡선 모두 모든 e가 z(s_P) + F(거리) →
                 //   가장 가까운(직각) 표본이 이김 = 측점 직각 횡단(소단이 종단경사를 따라 수평 · 내려앉지 않음).
                 //   (진행 방향 투영으로 보정하면 곡선 안쪽에서 측점 차이와 어긋나 소단이 20 cm 내려앉았다 — S178 ⑫ · 끝 너머로 경사를 늘이면 낭떠러지 — ④)
                 //   s_P가 다른 다리면(측점 차이 > 거리 + 1) 그 표본 진행 방향 투영 · 도로 양 끝 밖으로는 늘이지 않음.
+                // ★[v110.3.1 · ⑳n 계측] 같은 다리 — 측점 차이만 보면 굽은 안쪽(오목)에서 틀린다: 가장자리 호가 중심선보다 짧고 사면이 모여 칸까지 거리가 측점 차보다 짧아져
+                //   변환 구간 밖 기본 원뿔이 벽 뒤 소단을 2 m 넘게 깎았다(R 25 반원 · 구간 끝에서 35° 안). 같은 쪽 표본의 바깥 방향이 칸 방향과 80° 안이고 사이 중심선 꺾임(절댓값)이 100° 안이면 같은 다리(헤어핀 맞은편 다리는 반대 방향 · 60°로는 R 25 반원 구간 끝에서 60° 떨어진 표본이 다시 샜다 · 꺾임 한도가 없으면 지그재그 셋째 다리가 첫 다리와 같은 방향이라 같은 다리가 됐다 — 설치 전 검토 M1).
+                bool SameLeg(in Edge e, double dist, double ds) => Math.Abs(ds) <= dist + 1.0 || (e.Side != 0 && e.Side == fside && fnx * e.Nx + fny * e.Ny > 0.17 && Math.Abs(fth - e.Th) <= 1.75);
                 double hi = double.PositiveInfinity, lo = double.NegativeInfinity;
+                int kHi = -1, kLo = -1; double dHi = 0, dLo = 0;   // ★[v110.3 재검토 · 중간] 이긴 표본(사면선 거리장을 그 다리 기준으로)
+                // ★[v110.3.1 · ⑳o 계측] 발 표본 — 칸에서 가장 가까운 가장자리 점(표본 사이)도 원뿔 하나로. 표본이 0.5 m 간격이라 표본 사이 칸은 원뿔 거리가 D보다 길고(가장자리 곁 0.25 m)
+                //   옹벽 면(3~5 cm) 바로 앞 칸이 면 위 높이를 받아 바깥으로 갈려 소단이 땅까지 기울었다. 이어진 가장자리라면 있을 표본(같은 다리 · 그 측점 · 경사 보정 0).
+                //   옛 가장자리 옹벽 뒤(shadow)는 그대로(벽 표본만). 이 칸 단면 = 그 측점 기록의 변형 · 없으면 기본.
+                if (double.IsFinite(vZ) && shadow == 0)
+                {
+                    int vp = recCell >= 0 ? r.RecProf[recCell] : 0;
+                    double vh = vZ + cutP[vp].FAt(vD), vl = vZ - fillP[vp].FAt(vD);   // ★[설치 전 검토 L3] 꺾임 목록 값(표가 벽 위 끝 곁 5 mm를 흐리지 않게 · 칸마다 한 번)
+                    ev++;
+                    if (vh < hi) { hi = vh; kHi = -2; dHi = vD; }
+                    if (vl > lo) { lo = vl; kLo = -2; dLo = vD; }
+                }
                 int cbx = Bx(px), cby = By(py);
                 foreach (var (ox, oy, dmin) in order)
                 {
@@ -376,7 +556,8 @@ public static class RoadGrade
                     int b = by * BW + bx;
                     var list = edgeB[b];
                     if (list == null) continue;
-                    double gpad = bG[b] * (dmin + 3 * bk + 1);
+                    // ★[v110.3.1 · 설치 전 검토 M1] 방향으로 같은 다리가 된 굽은 안쪽 표본은 측점 차이가 거리의 몇 배(R 10 안쪽 ≈ 2.7배)라 경사 보정 한도를 세 배로
+                    double gpad = bG[b] * (3 * dmin + 3 * bk + 1);
                     double hiLow = bZmin[b] + cutF.F(dmin) - gpad, loHigh = bZmax[b] - fillF.F(dmin) + gpad;
                     bool skipHi = hiLow >= hi, skipLo = loHigh <= lo;
                     if (skipHi && skipLo) continue;
@@ -386,17 +567,28 @@ public static class RoadGrade
                         // ★바깥 반평면에만 — 오른쪽 가장자리 원뿔이 도로를 건너 왼쪽(옹벽 쪽 등)으로 넘어가지 않게(S178 ⑤에서 잡음)
                         double rx = px - e.X, ry = py - e.Y;
                         if (rx * e.Nx + ry * e.Ny < -1e-9) continue;
-                        if (shadow != 0 && e.Side == shadow && !e.Wall) continue;     // 벽 뒤에는 같은 쪽 사면 원뿔 없음
                         double dist = Math.Sqrt(rx * rx + ry * ry), up = e.Wall ? e.WallH : 0;
                         double ds = fs - e.S;
-                        if (!(Math.Abs(ds) <= dist + 1.0)) ds = rx * e.Tx + ry * e.Ty;
+                        bool sameLeg = SameLeg(e, dist, ds);   // 측점 차이 ≤ 거리 + 1 · 또는 같은 쪽 바깥 방향이 80° 안 = 같은 다리(아래 경사 보정과 같은 판정)
+                        // ★[v110.3 재검토 · 높음] 벽 뒤 막음은 같은 다리일 때만 — 헤어핀 안쪽은 두 다리가 다 같은 쪽이라 다른 다리 원뿔까지 건너뛰면 충돌(옹벽 자리)이 사라진다
+                        if (shadow != 0 && e.Side == shadow && !e.Wall && sameLeg) continue;     // 벽 뒤에는 같은 쪽 사면 원뿔 없음
+                        if (recCell >= 0 && e.Side == recs[recCell].Side && e.Rec != recCell && sameLeg) continue;   // ★[v110.3 · H1] 변환 구간 벽 뒤 — 그 기록 표본만
+                        if (!sameLeg) ds = rx * e.Tx + ry * e.Ty;
                         double along = e.G * Math.Clamp(ds, -e.S, r.Length - e.S);
                         ev++;
-                        if (!skipHi) { double h = e.Z + up + along + cutF.F(dist); if (h < hi) hi = h; }
-                        if (!skipLo) { double l = e.Z - up + along - fillF.F(dist); if (l > lo) lo = l; }
+                        // ★[v110.3 · 검토 M1] 변형 단면 표본이 자기 구간 밖 칸에 닿으면 max(변형, 기본) — 소단 길이가 길어도 바깥 기본 사면에 계단이 안 생김
+                        double fc, ff;
+                        if (e.Prof == 0) { fc = cutP[0].F(dist); ff = fillP[0].F(dist); }
+                        else if (e.Rec == recCell) { fc = cutP[e.Prof].F(dist); ff = fillP[e.Prof].F(dist); }
+                        else { fc = Math.Max(cutP[e.Prof].F(dist), cutP[0].F(dist)); ff = Math.Max(fillP[e.Prof].F(dist), fillP[0].F(dist)); }
+                        if (!skipHi) { double h = e.Z + up + along + fc; if (h < hi) { hi = h; kHi = k; dHi = dist; } }
+                        if (!skipLo) { double l = e.Z - up + along - ff; if (l > lo) { lo = l; kLo = k; dLo = dist; } }
                     }
                 }
                 double zd = zb;
+                // ★[v110.2] 안쪽 값 — 원뿔이 하나도 안 닿으면(둘 다 무한) 멀리 바깥(1e6)
+                double fv0 = Math.Min(hi - zb, zb - lo);
+                r.F[idx] = (float)(double.IsFinite(fv0) ? fv0 : 1e6);
                 // ★[계획 검토 M2] lo > hi = 두 다리 사면이 부딪힘(사면으로 안 맞음 — 옹벽 자리) → 종류 4 · 가운데 높이
                 if (lo > hi + 1e-6)
                 {
@@ -412,6 +604,13 @@ public static class RoadGrade
                 double dzz = zd - zb;
                 if (dzz > 1e-4) { r.Kind[idx] = 3; fv += dzz * ca; mf = Math.Max(mf, dzz); }
                 else if (dzz < -1e-4) { r.Kind[idx] = 2; cv -= dzz * ca; mc = Math.Max(mc, -dzz); }
+                // ★[v110.3 재검토 · 중간] 이긴 원뿔이 다른 다리면(높이가 다른 두 다리 사이) 거리장 · 측점 · 쪽을 그 다리 기준으로 — 가장 가까운 다리로 그리면 엉뚱한 사면 위에 선이 선다
+                int kw = r.Kind[idx] == 2 ? kHi : r.Kind[idx] == 3 ? kLo : -1;
+                if (kw >= 0)
+                {
+                    var ew = edges[kw]; double dw = r.Kind[idx] == 2 ? dHi : dLo;
+                    if (!SameLeg(ew, dw, fs - ew.S)) { r.D[idx] = (float)dw; r.FS[idx] = (float)ew.S; r.FSide[idx] = (sbyte)ew.Side; }
+                }
             }
             return (cv, fv, mc, mf, ev);
         }, acc =>
@@ -428,8 +627,8 @@ public static class RoadGrade
         //   마지막 판에만(Run이 부름)
         tail = () =>
         {
-            SlopesAndSuggest(inp, r, edges, cutF, fillF);
-            r.Daylight = Outline(r, k => k is 1 or 2 or 3 or 4);
+            SlopesAndSuggest(inp, r, edges);
+            r.Daylight = DaylightLines(r);   // ★[v110.2] 칸 사이 보간(톱니 없음)
         };
         return r;
     }
@@ -447,13 +646,14 @@ public static class RoadGrade
 
     /// <summary>가장자리 표본마다 바깥 법선으로 걸어(0.25 m) 사면이 바탕과 만나는 곳 — 사면 높이 · 폭 · 데이라잇 점 · 사업 경계 밖.
     /// 옹벽 제안 = 사면 높이 &gt; SuggestH 또는 데이라잇이 경계 밖인 표본이 이어진 구간(같은 쪽 · 1 m 넘게 띄면 끊음).</summary>
-    static void SlopesAndSuggest(Input inp, Result r, List<Edge> edges, Profile cutF, Profile fillF)
+    static void SlopesAndSuggest(Input inp, Result r, List<Edge> edges)
     {
         int n = inp.X.Length;
         // 표본별 바깥 법선 — 가장 가까운 중심선 점에서 표본 쪽으로
         foreach (var e in edges)
         {
-            var sa = new SlopeAt { S = e.S, Side = e.Side, Wall = e.Wall, EdgeZ = e.Z };
+            var sa = new SlopeAt { S = e.S, Side = e.Side, Wall = e.Wall, EdgeZ = e.Z, X = e.X, Y = e.Y, Rec = e.Rec };
+            var cutF = r.CutProfs[e.Prof]; var fillF = r.FillProfs[e.Prof];   // ★[v110.3 · 검토 M5] 그 표본의 단면으로 걷는다
             // 법선 = 중심선에서 표본으로(중심선 위 가장 가까운 점)
             double bx = 0, by = 0, best = double.MaxValue;
             for (int i = 0; i + 1 < n; i++)
@@ -487,7 +687,7 @@ public static class RoadGrade
         // 옹벽 제안 — 쪽마다 측점 차례로 이어진 구간
         foreach (int side in new[] { -1, 1 })
         {
-            var list = r.Slopes.Where(q => q.Side == side && !q.Wall).OrderBy(q => q.S).ToList();
+            var list = r.Slopes.Where(q => q.Side == side && !q.Wall && q.Rec < 0).OrderBy(q => q.S).ToList();   // ★[v110.3 · M5] 변환한 구간엔 제안 안 냄
             double s0 = double.NaN, last = double.NaN; string why = "";
             foreach (var q in list)
             {
@@ -519,60 +719,477 @@ public static class RoadGrade
     }
 
     /// <summary>★★[v110.1 · JACK 1029 «도로 면만 따로 보기» — 인터뷰: 도로 + 사면(데이라잇까지) · 단추로 만듦] 도로 지표면 삼각형.
-    /// <para>꼭짓점 = 바뀐 칸(도로 1 · 절토 2 · 성토 3 · 충돌 4)의 가운데(설계 높이) + 그 둘레 한 겹의 «그대로» 칸(바탕 높이 — 면 끝이 땅에 닿게).
-    /// 칸 가운데 네 점이 다 있으면 두 세모(대각선 = 높이 차가 작은 쪽 — 사면 꺾임을 덜 깎음) · 셋이면 한 세모. 바탕 없는 칸(255)은 안 씀.
-    /// 격자 그대로라 세모가 고르고(바늘 없음) 점이 칸 크기만큼 떨어져 Civil이 합칠 점이 없다. 도로 가장자리 꺾임은 칸 하나 폭 안에서 둥글어진다(칸 0.5 m면 0.5 m).</para></summary>
+    /// <para>★★[v110.2 · JACK 1029 «배수지 부지처럼 경계가 부드러워야 하는데 톱니가 너무 심해»] 칸 가운데 격자의 네모마다 <b>안쪽 값 <see cref="Result.F"/>로 자른다</b>(마칭 스퀘어 채움):
+    /// 안쪽 꼭짓점 = 설계 높이 · 변 위 0 자리(선형 보간) = 그 자리 땅 높이(데이라잇 — 면 끝이 땅에 닿음). 자른 조각은 볼록이라 부채꼴로 세모.
+    /// 종전(v110.1)은 바뀐 칸 + 둘레 한 겹 칸을 그대로 이어 둘레가 칸 계단을 따라 톱니(0.5 m 칸 0.47 m — 1029 실측)였다.</para>
+    /// <para>안장(대각선 두 꼭짓점만 안쪽)은 네모 가운데 평균으로 가른다(음수 = 이어짐 · 아니면 두 세모). 0 자리가 꼭짓점에 아주 붙으면(칸의 1 %) 꼭짓점으로 —
+    /// Civil이 0.1 mm 안 점을 합쳐 바늘 세모가 생기지 않게. 같은 변의 0 자리는 이웃 네모와 같은 수(변의 두 끝을 늘 같은 차례로 셈).
+    /// 바탕 없는 칸(NaN)이 낀 네모는 안쪽 꼭짓점이 셋 이상일 때만 그 꼭짓점들로(종전과 같음).</para>
+    /// <para>★★[v110.3.1 · JACK 1029 «옹벽변환 수행했더니 깨지고 라운드부분이 톱니처럼 깨져»] 계단선 변환 옹벽이 지나는 네모는 <b>옹벽 아래 끝 · 위 끝(거리장 D = 면 A · B)에서 가른다</b> —
+    /// 칸 가운데 점끼리 이으면 5 m 벽이 칸 한 폭(0.5 m)에 비스듬히 퍼지고, 곡선에서는 벽을 비스듬히 가로지르는 세모가 톱니로 보였다.
+    /// 자른 점 높이 = 두 끝의 «가장자리 기준 높이»(z − 부호 × 단면 높이)를 보간 + 부호 × 단면 높이(그 끝 거리) — 벽 높이가 정확히 단높이.
+    /// 자른 점은 격자 변마다 그 변의 두 끝만으로 셈(이웃 네모와 같은 점 — 틈 · T자 없음). 끝에서 2 mm 안이면 점을 넣지 않고 그 끝을 면 위로 친다.
+    /// 표(0.05 m 간격)가 벽 곁 꼭짓점 높이를 흐리면(벽 평면폭이 간격과 안 맞을 때) 꺾임 목록 값으로 바로잡는다.</para></summary>
     public static List<WallDaylight.Tri> SurfaceTris(Result r, out string note)
     {
         var tris = new List<WallDaylight.Tri>();
         int W = r.W, H = r.H;
-        if (W < 2 || H < 2 || r.Kind.Length != W * H) { note = "격자 없음"; return tris; }
-        var use = new bool[W * H]; var z = new double[W * H];
-        int nChanged = 0, nRing = 0;
-        for (int k = 0; k < W * H; k++)
-            if (r.Kind[k] is 1 or 2 or 3 or 4 && float.IsFinite(r.Z[k])) { use[k] = true; z[k] = r.Z[k]; nChanged++; }
-        var ring = new List<int>();
-        for (int j = 0; j < H; j++)
-            for (int i = 0; i < W; i++)
+        if (W < 2 || H < 2 || r.Kind.Length != W * H || r.F.Length != W * H) { note = "격자 없음"; return tris; }
+        const double Snap = 0.01;    // 칸의 1 % 안이면 꼭짓점으로
+        const double SnapD = 0.002;  // ★[v110.3.1] 옹벽 끝에서 거리장 2 mm 안이면 그 끝 위로(점 안 넣음)
+        double cs = r.Cell;
+        bool In(int k) => float.IsFinite(r.F[k]) && r.F[k] < 0 && float.IsFinite(r.Z[k]);
+
+        // ★[v110.3.1] 옹벽 면 — 변환 단면이 있을 때만. 칸마다 단면 번호 · 벽 곁 높이 바로잡기
+        bool walls = r.D.Length == W * H && r.FS.Length == W * H && r.FSide.Length == W * H && r.CutProfs.Count > 1 && r.FillProfs.Count == r.CutProfs.Count;
+        double wMin = double.PositiveInfinity, wMax = double.NegativeInfinity;
+        if (walls)
+            foreach (var ps in new[] { r.CutProfs, r.FillProfs })
+                for (int i = 1; i < ps.Count; i++)
+                    foreach (var f in ps[i].Faces) if (f.Wall) { wMin = Math.Min(wMin, f.A); wMax = Math.Max(wMax, f.B); }
+        walls = walls && wMin <= wMax;
+        Profile? Prof(int kind, int pk) => pk <= 0 || pk >= r.CutProfs.Count ? null : kind == 2 ? r.CutProfs[pk] : kind == 3 ? r.FillProfs[pk] : null;
+        // ★[⑳n 계측] 옹벽 면 곁 꼭짓점은 높이를 못 믿는다 — 원뿔 거리(가까운 가장자리 표본까지)가 D보다 표본 반 간격만큼 길 수 있고(가장자리 곁 0.25 m)
+        //   면 기울기가 100이라 1 mm 차이도 10 cm. 면 [A − (원뿔 거리 − D 최대), B]에 든 꼭짓점은 가장자리 기준 높이를 셈하지 않는다.
+        double hs = Math.Max(0.01, r.EdgeStep / 2);
+        bool NearFace(Profile p, double d)
+        {
+            double dp = Math.Max(0, d), pad = Math.Sqrt(dp * dp + hs * hs) - dp + SnapD;
+            foreach (var f in p.Faces) if (f.Wall && d > f.A - pad && d < f.B + SnapD) return true;
+            return false;
+        }
+        float[] z = r.Z;
+        int[] prof = Array.Empty<int>();
+        int zFix = 0, wallQ = 0, slabs = 0, noSplit = 0, centered = 0;
+        if (walls)
+        {
+            z = (float[])r.Z.Clone();
+            prof = new int[W * H];
+            for (int k = 0; k < W * H; k++)
             {
-                int k = j * W + i;
-                if (use[k] || r.Kind[k] != 0 || !float.IsFinite(r.Base[k])) continue;
-                bool near = false;
-                for (int dj = -1; dj <= 1 && !near; dj++)
-                    for (int di = -1; di <= 1 && !near; di++)
-                    {
-                        int ii = i + di, jj = j + dj;
-                        if (ii < 0 || jj < 0 || ii >= W || jj >= H) continue;
-                        int q = jj * W + ii;
-                        if (r.Kind[q] is 1 or 2 or 3 or 4 && float.IsFinite(r.Z[q])) near = true;
-                    }
-                if (near) ring.Add(k);
+                if (!In(k) || !float.IsFinite(r.D[k])) continue;
+                prof[k] = ProfAt(r, r.FSide[k], r.FS[k]);
+                double d = r.D[k];
+                if (d < wMin - 0.2 || d > wMax + 0.2) continue;
+                var p = Prof(r.Kind[k], prof[k]);
+                if (p == null) continue;
+                if (NearFace(p, d)) continue;   // 벽 면 곁 꼭짓점은 높이가 정해지지 않음(수직) — 그대로
+                double fix = p.FAt(d) - p.F(d);
+                if (Math.Abs(fix) > 1e-3) { z[k] = (float)(r.Z[k] + (r.Kind[k] == 2 ? fix : -fix)); zFix++; }
             }
-        foreach (int k in ring) { use[k] = true; z[k] = r.Base[k]; nRing++; }
-        Point3 P(int i, int j) => new(r.X0 + (i + 0.5) * r.Cell, r.Y0 + (j + 0.5) * r.Cell, z[j * W + i]);
-        int quads = 0, singles = 0;
+        }
+        // 꼭짓점마다 가장자리 기준 높이(z − 부호 × 단면 높이) — 옹벽 면 곁이라 못 믿으면 이웃 여덟 칸(같은 종류 · 단면) 중 믿을 만한 것의 평균(꼭짓점마다 하나 — 이웃 네모와 같은 수)
+        double[] zr = Array.Empty<double>();
+        if (walls)
+        {
+            var zr0 = new double[W * H];
+            for (int k = 0; k < W * H; k++)
+            {
+                zr0[k] = double.NaN;
+                if (!In(k) || !float.IsFinite(r.D[k])) continue;
+                if (r.Kind[k] == 1) { zr0[k] = z[k]; continue; }
+                var p = Prof(r.Kind[k], prof[k]);
+                if (p == null || NearFace(p, r.D[k])) continue;
+                zr0[k] = z[k] - (r.Kind[k] == 2 ? 1 : -1) * p.FAt(Math.Max(0, r.D[k]));
+            }
+            zr = (double[])zr0.Clone();
+            for (int k = 0; k < W * H; k++)
+            {
+                if (!double.IsNaN(zr0[k]) || !In(k) || r.Kind[k] is not (2 or 3) || Prof(r.Kind[k], prof[k]) == null) continue;
+                int ki = k % W, kj = k / W, cnt = 0; double sum = 0;
+                for (int dj = -1; dj <= 1; dj++)
+                    for (int di = -1; di <= 1; di++)
+                    {
+                        int ii = ki + di, jj = kj + dj;
+                        if ((di == 0 && dj == 0) || ii < 0 || jj < 0 || ii >= W || jj >= H) continue;
+                        int q = jj * W + ii;
+                        if (double.IsNaN(zr0[q]) || r.Kind[q] != r.Kind[k] || prof[q] != prof[k]) continue;
+                        sum += zr0[q]; cnt++;
+                    }
+                if (cnt > 0) zr[k] = sum / cnt;
+            }
+        }
+        Point3 Ctr(int k) => new(r.X0 + (k % W + 0.5) * cs, r.Y0 + (k / W + 0.5) * cs, z[k]);
+        SPt Corner(int k) => new() { P = Ctr(k), D = r.D.Length == W * H ? r.D[k] : double.NaN, Lo = k, Hi = k };
+        // 변 위 0 자리 — 안쪽 a · 바깥 b(늘 작은 번호 쪽에서 t를 세어 이웃 네모와 같은 수) · 붙으면 null(꼭짓점으로)
+        SPt? Cross(int a, int b)
+        {
+            int lo = Math.Min(a, b), hi = Math.Max(a, b);
+            double fl = r.F[lo], fh = r.F[hi];
+            double t = fl / (fl - fh);                       // lo에서 hi 쪽으로
+            if (WallCrossT(r, lo, hi) is double wt) t = wt;   // ★[v110.3] 옹벽 면이 끼면 그 면 자리(D로 — 선형 보간이면 옹벽을 따라 톱니)
+            if (!double.IsFinite(t)) return null;
+            t = Math.Clamp(t, 0, 1);
+            double tin = a == lo ? t : 1 - t;               // 안쪽 꼭짓점에서 잰 거리(칸 비)
+            if (tin < Snap) return null;                     // 안쪽 꼭짓점에 붙음 → 그 꼭짓점을 씀
+            // ★[설치 전 검토 · 높음] 바깥 꼭짓점에 붙어도 그 자리로 옮기지 않고 변의 99 %에서 멈춘다 — 옮기면 같은 변 위 세 점(바깥 꼭짓점 · 이웃 변 0 자리 · 안쪽 꼭짓점)이
+            //   부채꼴 한 세모가 되어 넓이 0 → LandXML이 버려 «Civil이 면을 그대로 안 받음»으로 멈춘다(울퉁불퉁한 땅 20번 중 12~14번 — 검토 재현)
+            if (tin > 1 - Snap) { tin = 1 - Snap; t = a == lo ? tin : 1 - tin; }
+            double x = r.X0 + (lo % W + 0.5) * cs + ((hi % W) - (lo % W)) * cs * t;
+            double y = r.Y0 + (lo / W + 0.5) * cs + ((hi / W) - (lo / W)) * cs * t;
+            double zl = float.IsFinite(r.Base[lo]) ? r.Base[lo] : r.Z[lo], zh = float.IsFinite(r.Base[hi]) ? r.Base[hi] : r.Z[hi];
+            double dd = r.D.Length == W * H ? r.D[lo] + (r.D[hi] - r.D[lo]) * t : double.NaN;
+            return new SPt { P = new Point3(x, y, zl + (zh - zl) * t), D = dd, Lo = lo, Hi = hi, T = t };
+        }
+        int full = 0, cut = 0, saddle = 0, nanQ = 0, flat = 0;
+
+        // ── 세모 넣기 — 볼록 조각을 넓이 0 세모 없이(한 변 위에 점이 여럿이면 그 점들을 지나는 꼭짓점을 피함 · 다 걸리면 가운데 점에서) ──
+        double eps = 1e-8 * cs * cs;
+        static double A2(Point3 a, Point3 b, Point3 c) => (b.X - a.X) * (c.Y - a.Y) - (b.Y - a.Y) * (c.X - a.X);
+        void Fan(List<SPt> pg)
+        {
+            // 같은 자리 점(붙어서 꼭짓점으로 간 0 자리) 걷기
+            for (int q = pg.Count - 1; q >= 0 && pg.Count > 1; q--)
+            {
+                var p0 = pg[q].P; var p1 = pg[(q + 1) % pg.Count].P;
+                if (Math.Abs(p0.X - p1.X) < 1e-9 && Math.Abs(p0.Y - p1.Y) < 1e-9) pg.RemoveAt(q);
+            }
+            int n = pg.Count;
+            if (n < 3) return;
+            for (int s = 0; s < n; s++)
+            {
+                bool ok = true;
+                for (int q = 1; q + 1 < n && ok; q++) if (Math.Abs(A2(pg[s].P, pg[(s + q) % n].P, pg[(s + q + 1) % n].P)) < eps) ok = false;
+                if (!ok) continue;
+                for (int q = 1; q + 1 < n; q++) tris.Add(new(pg[s].P, pg[(s + q) % n].P, pg[(s + q + 1) % n].P));
+                return;
+            }
+            double cx = 0, cy = 0, cz = 0;
+            foreach (var v in pg) { cx += v.P.X; cy += v.P.Y; cz += v.P.Z; }
+            var c = new Point3(cx / n, cy / n, cz / n);
+            int added = 0;
+            for (int q = 0; q < n; q++)
+            {
+                var p0 = pg[q].P; var p1 = pg[(q + 1) % n].P;
+                // 안전망 — 넓이가 사실상 0인 세모는 넣지 않는다(셈)
+                if (Math.Abs(A2(c, p0, p1)) < eps) { flat++; continue; }
+                tris.Add(new(c, p0, p1)); added++;
+            }
+            if (added > 0) centered++;
+        }
+
+        // ── ★[v110.3.1] 옹벽 면 가르기 ──
+        // 격자 변(lo < hi)의 단면 — 안쪽인 끝들의 종류(절/성) · 단면 번호가 같아야(다리 · 구간이 섞이면 없음) · 도로 칸은 어느 쪽과도 맞음
+        (Profile P, int S)? EdgeProf(int lo, int hi)
+        {
+            bool il = In(lo), ih = In(hi);
+            if (!il && !ih) return null;
+            float dl = r.D[lo], dh = r.D[hi];
+            if (!float.IsFinite(dl) || !float.IsFinite(dh) || Math.Abs(dh - dl) > Math.Sqrt(2) * cs + 0.05) return null;
+            if (Math.Max(dl, dh) < wMin - SnapD || Math.Min(dl, dh) > wMax + SnapD) return null;
+            int kind = 0, pk = -1;
+            foreach (int k in new[] { lo, hi })
+            {
+                if (!In(k)) continue;
+                byte kk = r.Kind[k];
+                if (kk == 4) return null;
+                if (kk != 2 && kk != 3) continue;
+                if (kind != 0 && (kind != kk || pk != prof[k])) return null;
+                kind = kk; pk = prof[k];
+            }
+            if (kind == 0)
+            {
+                // 도로 칸뿐 — 한 끝만 안쪽(0단 옹벽에 땅이 닿음)이면 바깥 땅이 높을 때 절토
+                if (il && ih) return null;
+                int ki = il ? lo : hi, ko = il ? hi : lo;
+                if (!float.IsFinite(r.Base[ko])) return null;
+                kind = r.Base[ko] > z[ki] ? 2 : 3; pk = prof[ki];
+                // ★[V61 계측] 옹벽 구간 끝에서 도로 칸 측점이 구간 밖이면 바깥 칸(벽 쪽) 측점으로 — 한 네모의 두 변이 다른 단면을 받아 못 갈렸다(1 m 칸 톱니 하나)
+                if (pk <= 0 && float.IsFinite(r.FS[ko]) && r.FSide[ko] != 0) pk = ProfAt(r, r.FSide[ko], r.FS[ko]);
+            }
+            var p = Prof(kind, pk);
+            return p == null ? null : (p, kind == 2 ? 1 : -1);
+        }
+        // 가장자리 기준 높이 — 도로 칸은 그 높이(단면 높이 0) · 사면 칸은 위에서 셈한 것(옹벽 면 곁은 이웃 평균 · 없으면 NaN)
+        double ZR(int k, (Profile P, int S) e) => r.Kind[k] == 1 ? z[k] : zr[k];
+        static double Pick(double a, double b, double t) => !double.IsNaN(a) && !double.IsNaN(b) ? a + (b - a) * t : !double.IsNaN(a) ? a : b;
+        bool IsCorner(in SPt v) => v.Lo == v.Hi && v.Lo >= 0;
+        // 이웃한 두 점이 같은 격자 변 위인가(네모 변) — 아니면 현(데이라잇 · 바탕 없는 칸 대각선)
+        (int Lo, int Hi)? SideOf(in SPt u, in SPt v)
+        {
+            bool cu = IsCorner(u), cv = IsCorner(v);
+            if (cu && cv)
+            {
+                int a = Math.Min(u.Lo, v.Lo), b = Math.Max(u.Lo, v.Lo);
+                return (b - a == 1 && a / W == b / W) || b - a == W ? (a, b) : null;
+            }
+            if (cu && !cv && v.Lo >= 0) return v.Lo == u.Lo || v.Hi == u.Lo ? (v.Lo, v.Hi) : null;
+            if (!cu && cv && u.Lo >= 0) return u.Lo == v.Lo || u.Hi == v.Lo ? (u.Lo, u.Hi) : null;
+            return null;
+        }
+        var lv = new List<double>(8);
+        var cutL = new List<double>(8);
+        var outp = new List<SPt>(16);
+        // 옹벽 끝 거리(꺾임)에서 조각 둘레에 점을 넣는다 → outp · 걸린 거리 → lv. 걸린 게 없으면 false
+        bool Cuts(List<SPt> pg)
+        {
+            lv.Clear(); outp.Clear();
+            int n = pg.Count;
+            double dmn = double.PositiveInfinity, dmx = double.NegativeInfinity;
+            foreach (var v in pg) { if (!double.IsFinite(v.D)) return false; dmn = Math.Min(dmn, v.D); dmx = Math.Max(dmx, v.D); }
+            if (dmx < wMin - SnapD || dmn > wMax + SnapD) return false;
+            // 1) 변마다 단면 · 걸린 거리
+            var sides = new (int Lo, int Hi, Profile P, int S)?[n];
+            (Profile P, int S)? sq = null;
+            for (int q = 0; q < n; q++)
+            {
+                var u = pg[q]; var v = pg[(q + 1) % n];
+                if (SideOf(u, v) is not (int lo, int hi) || EdgeProf(lo, hi) is not (Profile p, int sg)) continue;
+                sides[q] = (lo, hi, p, sg);
+                double a = Math.Min(u.D, v.D) + SnapD, b = Math.Max(u.D, v.D) - SnapD;
+                foreach (var f in p.Faces)
+                {
+                    if (!f.Wall) continue;
+                    foreach (double L in new[] { f.A, f.B })
+                        if (L > a && L < b) { bool dup = false; foreach (double x in lv) if (Math.Abs(x - L) <= SnapD) dup = true; if (!dup) lv.Add(L); sq ??= (p, sg); }
+                }
+            }
+            if (lv.Count == 0) return false;
+            lv.Sort();
+            // 2) 둘레를 돌며 점 넣기 — 변은 그 격자 변의 두 끝으로(이웃 네모와 같은 점) · 현은 이 네모의 걸린 거리로
+            for (int q = 0; q < n; q++)
+            {
+                var u = pg[q]; var v = pg[(q + 1) % n];
+                outp.Add(u);
+                if (Math.Abs(v.D - u.D) < 1e-9) continue;
+                cutL.Clear();
+                double a = Math.Min(u.D, v.D) + SnapD, b = Math.Max(u.D, v.D) - SnapD;
+                if (sides[q] is (int lo, int hi, Profile p, int sg))
+                {
+                    foreach (var f in p.Faces) { if (!f.Wall) continue; if (f.A > a && f.A < b) cutL.Add(f.A); if (f.B > a && f.B < b) cutL.Add(f.B); }
+                    if (cutL.Count == 0) continue;
+                    cutL.Sort(); if (v.D < u.D) cutL.Reverse();
+                    double dl = r.D[lo], dh = r.D[hi];
+                    var e = (p, sg);
+                    double zl = In(lo) ? ZR(lo, e) : double.NaN, zh = In(hi) ? ZR(hi, e) : double.NaN;
+                    var pl = Ctr(lo); var ph = Ctr(hi);
+                    foreach (double L in cutL)
+                    {
+                        double t = (L - dl) / (dh - dl);
+                        double zr = Pick(zl, zh, t);
+                        // 두 끝 다 못 믿으면(드묾) 그 토막 두 끝 높이 보간
+                        double zz = double.IsNaN(zr) ? u.P.Z + (v.P.Z - u.P.Z) * (L - u.D) / (v.D - u.D) : zr + sg * p.FAt(L);
+                        outp.Add(new SPt { P = new Point3(pl.X + (ph.X - pl.X) * t, pl.Y + (ph.Y - pl.Y) * t, zz), D = L, Lo = lo, Hi = hi, T = t });
+                    }
+                }
+                else if (SideOf(u, v) == null)
+                {
+                    foreach (double L in lv) if (L > a && L < b) cutL.Add(L);
+                    if (cutL.Count == 0) continue;
+                    if (v.D < u.D) cutL.Reverse();
+                    bool du = IsCorner(u) && In(u.Lo), dv = IsCorner(v) && In(v.Lo);
+                    foreach (double L in cutL)
+                    {
+                        double t = (L - u.D) / (v.D - u.D), zz;
+                        if (sq is (Profile qp, int qs) && (du || dv))
+                        {
+                            double zu = du ? ZR(u.Lo, (qp, qs)) : double.NaN, zv = dv ? ZR(v.Lo, (qp, qs)) : double.NaN, zr = Pick(zu, zv, t);
+                            zz = double.IsNaN(zr) ? u.P.Z + (v.P.Z - u.P.Z) * t : zr + qs * qp.FAt(L);
+                        }
+                        else zz = u.P.Z + (v.P.Z - u.P.Z) * t;
+                        outp.Add(new SPt { P = new Point3(u.P.X + (v.P.X - u.P.X) * t, u.P.Y + (v.P.Y - u.P.Y) * t, zz), D = L, Lo = -1, Hi = -2, T = t });
+                    }
+                }
+            }
+            return true;
+        }
+        // 걸린 거리마다 조각을 둘로 — 둘레에서 «안쪽(D < L) · 바깥(D > L)»이 한 덩이씩일 때만(아니면 그대로 · 점은 둘레에 남아 틈 없음)
+        void Split(List<SPt> pg0)
+        {
+            var cur = new List<List<SPt>> { new(pg0) };
+            foreach (double L in lv)
+            {
+                var next = new List<List<SPt>>(cur.Count + 1);
+                foreach (var g in cur)
+                {
+                    int n = g.Count, neg = 0, pos = 0;
+                    var s = new int[n];
+                    for (int q = 0; q < n; q++) { double dd = g[q].D - L; s[q] = Math.Abs(dd) <= SnapD ? 0 : dd < 0 ? -1 : 1; if (s[q] < 0) neg++; else if (s[q] > 0) pos++; }
+                    if (neg == 0 || pos == 0) { next.Add(g); continue; }
+                    bool direct = false;
+                    for (int q = 0; q < n; q++) if (s[q] * s[(q + 1) % n] < 0) direct = true;
+                    int last = 0, changes = 0;
+                    for (int q = 0; q < n; q++) if (s[q] != 0) last = s[q];
+                    int prev = last;
+                    for (int q = 0; q < n; q++) if (s[q] != 0) { if (s[q] != prev) changes++; prev = s[q]; }
+                    if (direct || changes != 2) { next.Add(g); noSplit++; continue; }
+                    // 0(면 위) 점 — 앞뒤 부호가 다르면 양쪽 · 같으면 그쪽만
+                    var lo = new List<SPt>(n); var hi = new List<SPt>(n);
+                    for (int q = 0; q < n; q++)
+                    {
+                        if (s[q] < 0) { lo.Add(g[q]); continue; }
+                        if (s[q] > 0) { hi.Add(g[q]); continue; }
+                        int sb = 0, sa = 0;
+                        for (int m = 1; m < n && sb == 0; m++) sb = s[(q - m + n) % n];
+                        for (int m = 1; m < n && sa == 0; m++) sa = s[(q + m) % n];
+                        // ★[설치 전 검토 L1] 앞뒤가 다른 0 덩이(점 둘 이상)는 «안쪽 바로 곁» 점만 안쪽 조각에 — 다 넣으면 0 점 셋이 두 조각에 다 들어 바늘 세모가 겹쳤다
+                        if (sb == sa) { if (sb < 0) lo.Add(g[q]); else hi.Add(g[q]); continue; }
+                        hi.Add(g[q]);
+                        if (s[(q - 1 + n) % n] < 0 || s[(q + 1) % n] < 0) lo.Add(g[q]);
+                    }
+                    if (lo.Count < 3 || hi.Count < 3) { next.Add(g); noSplit++; continue; }
+                    next.Add(lo); next.Add(hi);
+                }
+                cur = next;
+            }
+            slabs += cur.Count;
+            foreach (var g in cur) Fan(g);
+        }
+        void Emit(List<SPt> pg)
+        {
+            if (walls && pg.Count >= 3 && Cuts(pg)) { wallQ++; Split(outp); return; }
+            Fan(pg);
+        }
+
+        var poly = new List<SPt>(8);
         for (int j = 0; j + 1 < H; j++)
             for (int i = 0; i + 1 < W; i++)
             {
                 int a = j * W + i, b = a + 1, c = a + W + 1, d = a + W;
-                bool ua = use[a], ub = use[b], uc = use[c], ud = use[d];
-                int nU = (ua ? 1 : 0) + (ub ? 1 : 0) + (uc ? 1 : 0) + (ud ? 1 : 0);
-                if (nU == 4)
+                int[] q4 = { a, b, c, d };                  // 반시계
+                bool ia = In(a), ib = In(b), ic = In(c), id = In(d);
+                int nIn = (ia ? 1 : 0) + (ib ? 1 : 0) + (ic ? 1 : 0) + (id ? 1 : 0);
+                if (nIn == 0) continue;
+                if (nIn == 4)
                 {
-                    var pa = P(i, j); var pb = P(i + 1, j); var pc = P(i + 1, j + 1); var pd = P(i, j + 1);
+                    if (walls)
+                    {
+                        poly.Clear(); foreach (int k in q4) poly.Add(Corner(k));
+                        if (Cuts(poly)) { wallQ++; Split(outp); full++; continue; }
+                    }
+                    var pa = Ctr(a); var pb = Ctr(b); var pc = Ctr(c); var pd = Ctr(d);
                     if (Math.Abs(z[a] - z[c]) <= Math.Abs(z[b] - z[d])) { tris.Add(new(pa, pb, pc)); tris.Add(new(pa, pc, pd)); }
                     else { tris.Add(new(pa, pb, pd)); tris.Add(new(pb, pc, pd)); }
-                    quads++;
+                    full++;
+                    continue;
                 }
-                else if (nU == 3)
+                bool anyNan = false;
+                foreach (int k in q4) if (!float.IsFinite(r.F[k])) anyNan = true;
+                if (anyNan)
                 {
-                    var l = new List<Point3>(3);
-                    if (ua) l.Add(P(i, j)); if (ub) l.Add(P(i + 1, j)); if (uc) l.Add(P(i + 1, j + 1)); if (ud) l.Add(P(i, j + 1));
-                    tris.Add(new(l[0], l[1], l[2])); singles++;
+                    if (nIn == 3) { poly.Clear(); foreach (int k in q4) if (In(k)) poly.Add(Corner(k)); Emit(poly); }
+                    nanQ++;
+                    continue;
+                }
+                bool sad = nIn == 2 && ia == ic;
+                if (sad && (r.F[a] + r.F[b] + r.F[c] + r.F[d]) / 4 >= 0)
+                {
+                    // 안장 · 가운데가 바깥 → 안쪽 꼭짓점마다 세모 하나
+                    foreach (int s in new[] { 0, 2 })
+                    {
+                        int k = ia ? q4[s] : q4[s + 1];
+                        int idx = Array.IndexOf(q4, k);
+                        int prev = q4[(idx + 3) % 4], next = q4[(idx + 1) % 4];
+                        poly.Clear(); poly.Add(Corner(k));
+                        if (Cross(k, next) is SPt xn) poly.Add(xn);
+                        if (Cross(k, prev) is SPt xp) poly.Add(xp);
+                        Emit(poly);
+                    }
+                    saddle++;
+                    continue;
+                }
+                // 네모를 0 등치선으로 자른 조각(볼록) — 꼭짓점을 돌며 안쪽이면 넣고, 변이 0을 지나면 그 자리를 넣음
+                poly.Clear();
+                for (int s = 0; s < 4; s++)
+                {
+                    int k = q4[s], kn = q4[(s + 1) % 4];
+                    bool ik = In(k), ikn = In(kn);
+                    if (ik) poly.Add(Corner(k));
+                    if (ik != ikn && Cross(ik ? k : kn, ik ? kn : k) is SPt x) poly.Add(x);
+                }
+                Emit(poly);
+                if (sad) saddle++; else cut++;
+            }
+        note = $"칸 {r.Cell:0.##} m · 세모 {tris.Count:N0}(온 네모 {full:N0} · 자른 네모 {cut:N0} · 안장 {saddle:N0}" + (nanQ > 0 ? $" · 바탕 없는 네모 {nanQ:N0}" : "") + (flat > 0 ? $" · 넓이 0 걸러냄 {flat:N0}" : "") + ") · 둘레 = 칸 사이 보간(v110.2)"
+             + (walls ? $" · 옹벽 면 네모 {wallQ:N0}(조각 {slabs:N0}" + (noSplit > 0 ? $" · 못 가름 {noSplit:N0}" : "") + (centered > 0 ? $" · 가운데 점 {centered:N0}" : "") + (zFix > 0 ? $" · 벽 곁 높이 바로잡음 {zFix:N0}" : "") + ")" : "");
+        return tris;
+    }
+
+    /// <summary>★[v110.3.1] 면 조각 둘레 점 — P · 거리장 D · 놓인 격자 변(Lo &lt; Hi · 꼭짓점이면 Lo = Hi = 그 칸 · 현 위 점이면 −1/−2) · 변 위 비율 T(Lo에서).</summary>
+    struct SPt { public Point3 P; public double D; public int Lo, Hi; public double T; }
+
+    /// <summary>★★[v110.2] 데이라잇 선 — <see cref="Result.F"/> 0 등치선(칸 사이 선형 보간 · 마칭 스퀘어) · 선분을 이어 꺾은선으로.
+    /// 바탕 없는 칸 · 격자 밖은 바깥(작은 양수)으로 친다. 종전(0/1 가운데 자리)은 칸 계단을 따라 톱니(1 m 칸 0.94 m — 1029 실측).</summary>
+    public static List<List<(double X, double Y)>> DaylightLines(Result r)
+    {
+        int W = r.W, H = r.H;
+        if (r.F.Length != W * H) return Outline(r, k => k is 1 or 2 or 3 or 4);
+        double V(int i, int j)
+        {
+            if (i < 0 || j < 0 || i >= W || j >= H) return 1e-3;
+            float f = r.F[j * W + i];
+            return float.IsFinite(f) ? (f == 0 ? 1e-9 : f) : 1e-3;
+        }
+        (double, double) X(int i0, int j0, int i1, int j1)
+        {
+            // 늘 작은 쪽(아래 · 왼쪽)에서 세어 이웃 네모와 같은 수
+            if (j1 < j0 || (j1 == j0 && i1 < i0)) { (i0, i1) = (i1, i0); (j0, j1) = (j1, j0); }
+            double f0 = V(i0, j0), f1 = V(i1, j1), t = Math.Clamp(f0 / (f0 - f1), 0, 1);
+            // ★[v110.3] 옹벽 면이 끼면 그 면 자리(D로) — 선형 보간이면 옹벽을 따라 톱니
+            if (i0 >= 0 && j0 >= 0 && i1 < W && j1 < H && WallCrossT(r, j0 * W + i0, j1 * W + i1) is double wt) t = wt;
+            return (Math.Round(r.X0 + (i0 + 0.5 + (i1 - i0) * t) * r.Cell, 6), Math.Round(r.Y0 + (j0 + 0.5 + (j1 - j0) * t) * r.Cell, 6));
+        }
+        var segs = new List<((double, double) A, (double, double) B)>();
+        for (int j = -1; j < H; j++)
+            for (int i = -1; i < W; i++)
+            {
+                double a = V(i, j), b = V(i + 1, j), c = V(i + 1, j + 1), d = V(i, j + 1);
+                int code = (a < 0 ? 1 : 0) | (b < 0 ? 2 : 0) | (c < 0 ? 4 : 0) | (d < 0 ? 8 : 0);
+                if (code == 0 || code == 15) continue;
+                int ci = i, cj = j;
+                (double, double) bot() => X(ci, cj, ci + 1, cj);
+                (double, double) rig() => X(ci + 1, cj, ci + 1, cj + 1);
+                (double, double) top() => X(ci, cj + 1, ci + 1, cj + 1);
+                (double, double) lef() => X(ci, cj, ci, cj + 1);
+                bool mid = (a + b + c + d) / 4 < 0;
+                switch (code)
+                {
+                    case 1: case 14: segs.Add((lef(), bot())); break;
+                    case 2: case 13: segs.Add((bot(), rig())); break;
+                    case 3: case 12: segs.Add((lef(), rig())); break;
+                    case 4: case 11: segs.Add((rig(), top())); break;
+                    case 6: case 9: segs.Add((bot(), top())); break;
+                    case 7: case 8: segs.Add((lef(), top())); break;
+                    case 5: if (mid) { segs.Add((lef(), top())); segs.Add((bot(), rig())); } else { segs.Add((lef(), bot())); segs.Add((rig(), top())); } break;
+                    case 10: if (mid) { segs.Add((lef(), bot())); segs.Add((rig(), top())); } else { segs.Add((lef(), top())); segs.Add((bot(), rig())); } break;
                 }
             }
-        note = $"칸 {r.Cell:0.##} m · 바뀐 점 {nChanged:N0} · 둘레 점 {nRing:N0} · 세모 {tris.Count:N0}(네모 {quads:N0} · 홑 {singles:N0})";
-        return tris;
+        return Join(segs);
+    }
+
+    /// <summary>선분 묶음 → 이은 꺾은선(끝점이 같은 수인 것끼리).</summary>
+    static List<List<(double X, double Y)>> Join(List<((double, double) A, (double, double) B)> segs)
+    {
+        var adj = new Dictionary<(double, double), List<int>>();
+        for (int k = 0; k < segs.Count; k++)
+        {
+            if (segs[k].A.Equals(segs[k].B)) continue;   // 꼭짓점에서 만나 길이 0인 토막
+            (adj.TryGetValue(segs[k].A, out var la) ? la : adj[segs[k].A] = new()).Add(k);
+            (adj.TryGetValue(segs[k].B, out var lb) ? lb : adj[segs[k].B] = new()).Add(k);
+        }
+        var used = new bool[segs.Count];
+        var lines = new List<List<(double X, double Y)>>();
+        for (int k = 0; k < segs.Count; k++)
+        {
+            if (used[k] || segs[k].A.Equals(segs[k].B)) continue;
+            used[k] = true;
+            var line = new List<(double, double)> { segs[k].A, segs[k].B };
+            foreach (bool fwd in new[] { true, false })
+            {
+                while (true)
+                {
+                    var end = fwd ? line[^1] : line[0];
+                    int nk = -1;
+                    foreach (int q in adj[end]) if (!used[q]) { nk = q; break; }
+                    if (nk < 0) break;
+                    used[nk] = true;
+                    var other = segs[nk].A.Equals(end) ? segs[nk].B : segs[nk].A;
+                    if (fwd) line.Add(other); else line.Insert(0, other);
+                }
+            }
+            lines.Add(line.Select(p => (p.Item1, p.Item2)).ToList());
+        }
+        return lines;
     }
 
     /// <summary>고른 종류 칸들의 경계선 — 칸 가운데 격자에 마칭 스퀘어(값 0/1 · 0.5 등치선) · 선분을 이어 꺾은선으로.
@@ -602,35 +1219,6 @@ public static class RoadGrade
                     case 10: segs.Add((lef, bot)); segs.Add((rig, top)); break;
                 }
             }
-        // 잇기
-        var adj = new Dictionary<(double, double), List<int>>();
-        for (int k = 0; k < segs.Count; k++)
-        {
-            (adj.TryGetValue(segs[k].A, out var la) ? la : adj[segs[k].A] = new()).Add(k);
-            (adj.TryGetValue(segs[k].B, out var lb) ? lb : adj[segs[k].B] = new()).Add(k);
-        }
-        var used = new bool[segs.Count];
-        var lines = new List<List<(double X, double Y)>>();
-        for (int k = 0; k < segs.Count; k++)
-        {
-            if (used[k]) continue;
-            used[k] = true;
-            var line = new List<(double, double)> { segs[k].A, segs[k].B };
-            foreach (bool fwd in new[] { true, false })
-            {
-                while (true)
-                {
-                    var end = fwd ? line[^1] : line[0];
-                    int nk = -1;
-                    foreach (int q in adj[end]) if (!used[q]) { nk = q; break; }
-                    if (nk < 0) break;
-                    used[nk] = true;
-                    var other = segs[nk].A.Equals(end) ? segs[nk].B : segs[nk].A;
-                    if (fwd) line.Add(other); else line.Insert(0, other);
-                }
-            }
-            lines.Add(line.Select(p => (p.Item1, p.Item2)).ToList());
-        }
-        return lines;
+        return Join(segs);
     }
 }
