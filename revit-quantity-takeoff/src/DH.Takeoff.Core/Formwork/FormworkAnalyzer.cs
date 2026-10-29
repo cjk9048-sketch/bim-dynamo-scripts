@@ -73,6 +73,7 @@ public static class FormworkAnalyzer
         public Dictionary<int, LevelInfo> LevelInfos = new();
         public Dictionary<(int level, long z), (Paths64 concrete, Paths64 filled)> Sections = new(); // (구간, 높이) → 평면 그림
         public List<SlabBand> SlabBands = new();                                // 안쪽 벽 면의 슬래브 띠(R69 — 한 번 잴 때 모든 문맥이 같이 씀 · 정적 칸 아님)
+        public List<Body> Stairs = new();                                       // 계단 입체 전부(R70 — 벽을 잴 때 문맥에는 없지만 방 바닥은 계단으로 이어진다 · RoomCovered)
     }
 
     /// <summary>벽 옆면 조각 하나(높이 구간으로 자르기 전)와 그 조각이 높이를 잰 바닥 — 바로 위에 같은 평면으로 얹힌 옆면이 물려받는다(R45).</summary>
@@ -111,6 +112,7 @@ public static class FormworkAnalyzer
                 if (body != null) all.Bodies.Add(body);
             }
         all.Levels = LevelsOf(all.Bodies);
+        all.Stairs = all.Bodies.Where(b => IsStair(b.El, all.Options)).ToList();
         MarkLowWalls(elements, all.Bodies, all.Options);
         // 나중에 치는 부재(받침 · PAD · 디딤판 …)가 있으면 구조체의 면은 그것들을 뺀 콘크리트로 잰다 — 구조체를 칠 때는 아직 없다(JACK 2026-10-15).
         // 뺄 것은 그 구조체가 겹친 자리 순위로 이기는 나중 부재뿐이다(R54 · GivesWay — 보를 이기는 중간슬래브는 보를 잴 때 있다). 빼는 묶음이 같은 구조체끼리
@@ -130,7 +132,7 @@ public static class FormworkAnalyzer
             if (goneEls.Count == 0) made = (all, null);
             else
             {
-                var ctx = new Context { Bodies = all.Bodies.Where(b => !goneEls.Contains(b.El)).ToList(), Zones = all.Zones, Options = all.Options, Floors = all.Floors, SlabBands = all.SlabBands };
+                var ctx = new Context { Bodies = all.Bodies.Where(b => !goneEls.Contains(b.El)).ToList(), Zones = all.Zones, Options = all.Options, Floors = all.Floors, SlabBands = all.SlabBands, Stairs = all.Stairs };
                 ctx.Levels = LevelsOf(ctx.Bodies);
                 made = (ctx, all.Bodies.Where(b => goneEls.Contains(b.El)).ToList());
             }
@@ -1000,7 +1002,8 @@ public static class FormworkAnalyzer
             if (slabCut && other.El.Id != body.El.Id)
             {
                 // 슬래브가 닿은 자리 = 맞닿음 + 결합이 깎은 자리(critic R69 M2) · 계단은 빼고(M3) · 무시한 접합(R67)은 따로 — 띠 판정에 쓰지 않는다(M1).
-                if (ignore) { if (contact >= Tiny) ignoredHits = Poly.Union(ignoredHits, contactHit); }
+                // 무시한 접합은 맞닿음 + 깎은 자리(되살림) 둘 다 — 벽을 깎은 보도 띠에 걸치면 애매로(설치 전 검토 R70 M2).
+                if (ignore) { var joint = cutIn != null ? Poly.Union(contactHit, cutIn) : contactHit; if (Poly.Area(joint) >= Tiny) ignoredHits = Poly.Union(ignoredHits, joint); }
                 else if (SlabLike(other.El, o) && !IsStair(other.El, o))
                 {
                     var slabHit = cutIn != null ? Poly.Union(contactHit, cutIn) : contactHit;
@@ -1353,14 +1356,17 @@ public static class FormworkAnalyzer
             var (ru0, rv0, ru1, rv1) = Extent(region);
             double bottomZ = frame.O.Z + rv0 * vz, baseZ = bottomZ;
             bool floor = false;
+            // 바로 아래 같은 평면에 가장 길게 맞닿은 조각이 물려주지 않는 조각(먼저 치는 하부슬래브 옆 · 슬래브 띠)이면 이 조각은 그 위에서 새로 선다 — 바깥으로 나온
+            // 버림 윗면(= 하부슬래브 밑)을 바닥으로 잡지 않게(설치 전 검토 R70 M3).
+            var below = FloorBelow(ctx, body, frame, ru0, ru1, bottomZ);
             var low = InteriorPoints(region, 1, atFraction: 0.02);
-            if (low.Count > 0)
+            if (low.Count > 0 && below is not { stops: true })
             {
                 V3 p = frame.To3D(low[0].u, low[0].v) + frame.N * Probe;
                 if (TopBelow(ctx, p) is double z && bottomZ - z < 1.0) { baseZ = z; floor = true; }
             }
             bool inherited = false;
-            if (!floor && FloorBelow(ctx, body, frame, ru0, ru1, bottomZ) is double below) { baseZ = below; inherited = true; }
+            if (!floor && below is { stops: false } under) { baseZ = under.floor; inherited = true; }
             // 옆면 조각은 자기가 쓴 바닥을 남긴다(바로 위에 얹힌 옆면이 물려받게 — R53a 부터 벽만이 아니라 슬래브 · 기초 옆면도).
             // 나중 부재와 따로 적는 것(버림 · 받침류 — StandsAlone)은 남기지 않는다 — 버림 옆면 위의 하부슬래브가 버림 밑부터 재이지 않게(녹촌: 버림은 따로 6회).
             // R70(기준표 2 · 5): 슬래브 옆은 벽에서 물려받은 바깥 조각(벽 위 중간 · 상부슬래브 옆 — 이어진 바깥면)만 물려준다. 안쪽 슬래브 옆 · 슬래브 띠(층마다 —
@@ -1392,10 +1398,10 @@ public static class FormworkAnalyzer
     /// <summary>
     /// 안쪽 벽 면의 슬래브 띠 하나(R69 · R70): 부재 Id · 띠 높이(아래 · 위) · 갈랐나 · 띠 안 드러난 토막 수 · 양옆 닿음으로 구멍 옆이라 본 수 · 방 바닥으로 본 수 ·
     /// 닿은 슬래브 · 그 조각의 넓이 · 방 바닥을 그 층 슬래브가 덮은 비율(못 재면 −1) · 가르지 않은 까닭("" = 갈랐음) · 면 위 끝의 띠인가(벽이 슬래브 윗면까지 — 층을
-    /// 지나가지 않음). 위 끝이 아닌 띠는 모델 검증 «층 통째 벽» · 가르지 않은 띠는 그 경고가 된다.
+    /// 지나가지 않음) · 방 넓이(계측) · 띠를 본 안쪽 면의 법선(모델 검증이 그 반대쪽 면으로 외벽을 가림). 위 끝이 아닌 띠는 모델 검증 «층 통째 벽» · 가르지 않은 띠는 그 경고가 된다.
     /// </summary>
     public sealed record SlabBand(long ElementId, double ZBottom, double ZTop, bool Cut, int Segments, int BySides, int ByRoom, long[] Slabs, double Area,
-                                  double Cover, string Why, bool Top, double Room = -1);
+                                  double Cover, string Why, bool Top, double Room = -1, V3 N = default);
 
     /// <summary>마지막으로 잴 때 본 안쪽 벽 면의 슬래브 띠(R69 — 일지 · 모델 검증).</summary>
     public static IReadOnlyList<SlabBand> LastSlabBands { get; private set; } = Array.Empty<SlabBand>();
@@ -1439,18 +1445,22 @@ public static class FormworkAnalyzer
             else bands[at] = (bands[at].vb, bands[at].vt, Poly.Union(bands[at].hits, p.hit), bands[at].slabs.Append(p.slab).ToList());
         }
         var regions = new List<(Paths64 region, bool opening)> { (part, false) };
+        var near = Clipper.InflatePaths(part, join * Poly.Scale, JoinType.Miter, EndType.Polygon);
         foreach (var (vb, vt, hits, slabs) in bands)
         {
             if (vb <= face.v0 + join) continue;   // 면 아래 끝 — 벽이 그 슬래브에서 섬(층마다 그린 벽)
+            // 이 조각에 닿지 않은 띠는 보지 않는다 — 가로지른 벽 건너 다른 방의 슬래브 띠로 이 조각을 재지 않게(설치 전 검토 R70 L4).
+            if (Poly.Area(Poly.Intersect(near, hits)) < Tiny) continue;
             bool top = vt >= face.v1 - join;       // 면 위 끝 — 벽이 슬래브 윗면까지(층을 지나가지 않음 · 구멍 옆 자리만 개구부로)
             double zb = frame.O.Z + vb * frame.V.Z, zt = frame.O.Z + vt * frame.V.Z;
             var ids = slabs.Select(b => b.El.Id).Distinct().ToArray();
-            // 한 띠는 (부재 · 높이 · 갈랐나)마다 한 번(면 둘 · 조각 여럿이 같은 띠를 본다).
+            // 한 띠는 (부재 · 면 방향 · 높이 · 갈랐나)마다 한 번(조각 여럿이 같은 띠를 본다 · 면 방향은 모델 검증의 외벽 가름에 쓴다 — 설치 전 검토 R70 L1).
             double roomArea = -1;
             void Note(bool cut, int segs, int sides, int room, double cover, string why)
             {
-                if (!ctx.SlabBands.Any(x => x.ElementId == body.El.Id && x.Cut == cut && Math.Abs(x.ZBottom - zb) < 1e-6 && Math.Abs(x.ZTop - zt) < 1e-6))
-                    ctx.SlabBands.Add(new SlabBand(body.El.Id, zb, zt, cut, segs, sides, room, ids, Poly.Area(part), cover, why, top, roomArea));
+                if (!ctx.SlabBands.Any(x => x.ElementId == body.El.Id && x.Cut == cut && x.N.Dot(frame.N) > 1 - 1e-6
+                                            && Math.Abs(x.ZBottom - zb) < 1e-6 && Math.Abs(x.ZTop - zt) < 1e-6))
+                    ctx.SlabBands.Add(new SlabBand(body.El.Id, zb, zt, cut, segs, sides, room, ids, Poly.Area(part), cover, why, top, roomArea, frame.N));
             }
             // 이 조각 밖(위 · 아래로 맞닿음): 슬래브가 띠를 다 덮어 면이 이미 층마다 갈렸다 — 가를 것은 없고 «통째로 그린 벽»으로 적기만.
             if (vt <= v0 + join || vb >= v1 - join)
@@ -1489,8 +1499,9 @@ public static class FormworkAnalyzer
             foreach (var (region, opening) in regions)
             {
                 if (opening) { next.Add((region, true)); continue; }
-                var cuts = new List<(Paths64, bool)> { (Poly.Rect(u0 - 1, v0 - 1, u1 + 1, vb), false), (Poly.Rect(u0 - 1, vb, u1 + 1, vt), true) };
-                if (!top) cuts.Add((Poly.Rect(u0 - 1, vt, u1 + 1, v1 + 1), false));
+                // 위 끝 띠여도 위 네모는 둔다 — 면 위 끝이 슬래브 윗면보다 몇 mm 높으면 그 틈이 사라진다(설치 전 검토 R70 M1 · 꼭 맞으면 빈 조각).
+                var cuts = new List<(Paths64, bool)> { (Poly.Rect(u0 - 1, v0 - 1, u1 + 1, vb), false), (Poly.Rect(u0 - 1, vb, u1 + 1, vt), true),
+                                                       (Poly.Rect(u0 - 1, vt, u1 + 1, v1 + 1), false) };
                 foreach (var (rect, open) in cuts)
                 {
                     var piece = Poly.Intersect(region, rect);
@@ -1529,6 +1540,9 @@ public static class FormworkAnalyzer
 
     // 토막 앞의 방(슬래브 바로 밑 5 cm 높이에서 면 앞 5 cm 점이 든 둘러싸인 빈 곳)의 바닥을 그 층 슬래브(그 띠의 슬래브 + 같은 높이를 지나는 슬래브 · 계단 빼고)가
     // 덮은 비율(0~1) · 둘러싸인 빈 곳이 아니면 −1. 벽을 잴 때 문맥에는 계단 · 나중 부재가 없다(R64 · R54 — 방이 계단으로 갈리지 않는다).
+    // 그 띠 높이에 닿는 계단 부재(지나가거나 · 거기서 서거나 · 끝남)의 평면 자리도 바닥으로 친다 — 계단 구멍은 계단이 지나가라고 뚫은 슬래브 구멍이다
+    // (R70 1029 계측: 녹촌 계단실 9.89 ㎡ 에 중간슬래브는 계단참 0.163 뿐 · 나머지는 계단 — 2D 는 층마다 4.1 · 3.9 + 개구부 0.3 · 송악3 두 층 높이 방 104 ㎡ 는 덮음 0 그대로).
+    // 부재 단위로 본다: 한 계단이 오름 · 참마다 입체로 나뉘어도(녹촌 계단 = 입체 14) 그리기에 따라 덮음이 달라지지 않게.
     private static (double cover, double room) RoomCovered(Context ctx, Body body, Frame frame, Paths64 seg, double vb, double vt, List<Body> bandSlabs)
     {
         var (a, _, b, _) = Extent(seg);
@@ -1544,6 +1558,10 @@ public static class FormworkAnalyzer
         var floor = new Paths64();
         foreach (var other in ctx.Bodies.Where(o => o.Min.Z < zMid && o.Max.Z > zMid && (bandSlabs.Contains(o) || (SlabLike(o.El, ctx.Options) && !IsStair(o.El, ctx.Options)))))
             if (RealOf(other, zMid) is { Count: > 0 } cut) floor = Poly.Union(floor, cut);
+        double zb = frame.O.Z + vb * frame.V.Z, zt = frame.O.Z + vt * frame.V.Z;
+        foreach (var stair in ctx.Stairs.GroupBy(s => (object)s.El, ReferenceEqualityComparer.Instance)
+                                        .Where(g => g.Min(s => s.Min.Z) < zt + 0.01 && g.Max(s => s.Max.Z) > zb - 0.01).SelectMany(g => g))
+            floor = Poly.Union(floor, ShadowOf(stair));
         return (floor.Count == 0 ? 0 : Poly.Area(Poly.Intersect(room, floor)) / roomArea, roomArea);
     }
 
@@ -2124,15 +2142,14 @@ public static class FormworkAnalyzer
     /// 이 옆면 조각(u 범위 u0~u1 · 아래 끝 bottomZ)의 바로 아래에 같은 평면 · 같은 방향으로 맞닿은 옆면 조각(먼저 잰 것 — Context.Floors · R53a 부터
     /// 벽만이 아니라 슬래브 · 기초 옆면도)이 있으면 그 조각이 쓴 바닥 높이. 맞닿음: 아래 조각의 위 끝이 bottomZ 와 2 mm 안 · 가로(u)로 1 cm 넘게 겹침.
     /// 여럿이면 가장 길게 겹친 것, 같으면 부재 Id 가 작은 것(core-verify R45 M2 — 차례에 따라 바뀌지 않게). 부재를 아래부터 재므로 층마다 나눈 벽은
-    /// 아랫벽의, 하부슬래브 옆면 위의 바깥 벽은 하부슬래브 옆면의 바닥을 물려받는다(녹촌 «이어진 옆면의 아래 끝부터»).
+    /// 아랫벽의 바닥을 물려받는다. stops = 그 조각이 물려주지 않는 조각(R70 — WallFloor.Slab: 하부슬래브 옆 · 슬래브 띠 · 안쪽 슬래브 옆 — 이 조각은 제 아래 끝부터).
     /// </summary>
-    private static double? FloorBelow(Context ctx, Body body, Frame frame, double u0, double u1, double bottomZ)
+    private static (double floor, bool stops)? FloorBelow(Context ctx, Body body, Frame frame, double u0, double u1, double bottomZ)
     {
-        (double overlap, long id, double floor)? best = null;
+        (double overlap, long id, double floor, bool stops)? best = null;
         foreach (var w in ctx.Floors)
         {
             if (w.ElementId == body.El.Id || w.N.Dot(frame.N) < 1 - 1e-9) continue;                 // 같은 방향(자기 자신의 다른 조각은 보지 않는다)
-            if (w.Slab) continue;                                                                   // 물려주지 않는 조각(R70 — WallFloor.Slab)
             if (Math.Abs(w.Top - bottomZ) > 0.002) continue;                                        // 벽 조각의 위 끝 = 이 조각의 아래 끝
             if (Math.Abs(frame.Dist(w.Outline[0])) > ctx.Options.Epsilon) continue;                // 같은 평면(ε 안)
             double wu0 = double.MaxValue, wu1 = double.MinValue;
@@ -2145,9 +2162,9 @@ public static class FormworkAnalyzer
             double overlap = Math.Min(u1, wu1) - Math.Max(u0, wu0);
             if (overlap < 0.01) continue;                                                           // 가로로 1 cm 넘게 겹쳐야 맞닿음
             if (best is not { } b || overlap > b.overlap + 1e-9 || (Math.Abs(overlap - b.overlap) <= 1e-9 && w.ElementId < b.id))
-                best = (overlap, w.ElementId, w.Floor);
+                best = (overlap, w.ElementId, w.Floor, w.Slab);
         }
-        return best?.floor;
+        return best is { } got ? (got.floor, got.stops) : null;
     }
 
     private static (double u0, double v0, double u1, double v1) Extent(Paths64 paths)

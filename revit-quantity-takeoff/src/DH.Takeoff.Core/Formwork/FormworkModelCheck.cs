@@ -67,7 +67,9 @@ public static class FormworkModelCheck
         {
             var bands = w.SlabBands.Where(x => !x.Top).ToList();   // 면 위 끝의 띠(벽이 슬래브 윗면까지)는 층을 지나가지 않는다
             bool cutAll = bands.All(x => x.Cut);
-            bool outer = w.Faces.Any(f => f.Patches.Any(p => p.Side == "외측"));
+            // 외벽 = 띠를 본 안쪽 면의 반대쪽 면이 바깥(R70 — 벽 끝이 건물 모서리에 드러난 끝면 0.2 m 의 «외측»으로는 외벽이 아니다).
+            bool outer = w.Faces.Any(f => f.Normal.Length == 3 && f.Patches.Any(p => p.Side == "외측")
+                                          && bands.Any(x => x.N.X * f.Normal[0] + x.N.Y * f.Normal[1] + x.N.Z * f.Normal[2] < -0.99));
             string at = string.Join(" · ", bands.Select(x => $"{Z(x.ZBottom)}~{Z(x.ZTop)}{(x.Cut ? "" : "(못 나눔)")}").Distinct());
             string why = string.Join(" · ", bands.Where(x => !x.Cut).Select(x => x.Why).Distinct());
             if (!cutAll || !outer)
@@ -80,14 +82,19 @@ public static class FormworkModelCheck
             var box = boxes[w.Element.Id];
             var enders = new List<long>();
             foreach (var x in bands)
+            {
+                // 같은 방 = 띠를 본 면 쪽의 벽(설치 전 검토 R70 L5 — 벽 건너편 방 · 긴 벽 상자 안의 벽을 넣지 않게): 상자 가운데가 그 면의 평면 앞.
+                double face = Math.Max(x.N.X * box.min.X, x.N.X * box.max.X) + Math.Max(x.N.Y * box.min.Y, x.N.Y * box.max.Y) + Math.Max(x.N.Z * box.min.Z, x.N.Z * box.max.Z);
                 foreach (var o in walls)
                 {
                     if (ReferenceEquals(o, w) || enders.Contains(o.Element.Id)) continue;
                     var c = boxes[o.Element.Id];
                     if (!PlanTouch(box, c)) continue;
+                    if (x.N.X * (c.min.X + c.max.X) / 2 + x.N.Y * (c.min.Y + c.max.Y) / 2 + x.N.Z * (c.min.Z + c.max.Z) / 2 < face - Touch) continue;
                     bool ends = Math.Abs(c.max.Z - x.ZBottom) <= Gap || Math.Abs(c.min.Z - x.ZTop) <= Gap;
                     if (ends) enders.Add(o.Element.Id);
                 }
+            }
             if (enders.Count > 0)
                 items.Add(new Item(Mixed, !cutAll, new[] { w.Element.Id }.Concat(enders).ToList(),
                     $"{w.Element.Type} {w.Element.Id} 는 슬래브 높이를 지나가고(통째) 맞닿은 벽 {string.Join(", ", enders)} 는 그 슬래브에서 끝남(층마다)",
