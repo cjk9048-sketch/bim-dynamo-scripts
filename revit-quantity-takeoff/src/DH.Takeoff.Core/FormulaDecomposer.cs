@@ -109,8 +109,7 @@ public static partial class FormulaDecomposer
     /// <param name="precision">입력 좌표의 정밀도(m). Revit 직접 읽기는 기본값(0.1µm), 반올림된 덤프는 그 자릿수.</param>
     /// <param name="thickness">부재 두께(m, 벽 두께·바닥 두께). 식이 같은 길이면 이 값을 맨 뒤에 곱하는 식을 고른다. 모르면 0.</param>
     /// <param name="sheetNumbers">
-    /// true(기본): 숫자를 수량산출서 자릿수로 적는다 — mm 에 딱 떨어지는 도면 치수는 그대로(셋째 자리까지),
-    /// 그렇지 않은 수(손으로 그린 치수·계산으로 나온 길이·각도)는 소수 둘째 자리로. 그렇게 적어 ±1% 에 들지 못하는
+    /// true(기본): 숫자를 수량산출서 자릿수로 적는다 — 소수 둘째 자리(1% 넘게 바뀌는 작은 수만 셋째 자리 · SheetText). 그렇게 적어 ±1% 에 들지 못하는
     /// 부재만 긴 숫자 그대로(정밀하게) 적는다. false: 처음부터 정밀하게만 적는다.
     /// </param>
     public static DecompResult Decompose(IReadOnlyList<ShapeSolid> solids, double precision = 1e-7, double thickness = 0,
@@ -207,7 +206,7 @@ public static partial class FormulaDecomposer
     /// <summary>
     /// 물량을 적는 자릿수 — 수량산출서(참고자료 「배수지 산근」)의 콘크리트 줄이 모두 =ROUND(…,2) 이다.
     /// 물량(DH_수식물량·DH_BIM물량)은 이 자릿수로 적는다. 식 안의 숫자는 SheetText 규칙으로 적는다
-    /// (mm 에 딱 떨어지는 도면 치수는 그대로, 그 밖의 긴 숫자는 둘째 자리).
+    /// (둘째 자리 · 1% 넘게 바뀌는 작은 수만 셋째 자리).
     /// </summary>
     public const int QuantityDecimals = 2;
 
@@ -341,12 +340,9 @@ public static partial class FormulaDecomposer
     }
 
     // 숫자를 적는 방식 — 입체 하나의 식을 찾는 동안(Search)에만 켜 두는 설정이다. 글자를 찍는 함수(F·G·D·Deg)가 읽는다.
-    //   _sheet = true : 수량산출서 자릿수. mm 에 딱 떨어지는 도면 치수는 그대로(셋째 자리까지),
-    //                   그렇지 않은 수(손으로 그린 치수·계산으로 나온 길이·각도)는 소수 둘째 자리로.
+    //   _sheet = true : 수량산출서 자릿수 — 소수 둘째 자리(cm · 작은 수 예외는 SheetText).
     //   _sheet = false: 정밀. 치수는 mm, 계산으로 나온 길이는 여섯째 자리, 각도는 필요한 만큼.
-    // _gridEps = mm 격자에 떨어졌다고 볼 폭(좌표의 잔 흔들림).
     [ThreadStatic] private static bool _sheet;
-    [ThreadStatic] private static double _gridEps;
 
     // --- 입체 하나: 산출서 자릿수로 먼저 풀고, 그렇게는 ±1% 에 들지 못할 때만 정밀하게 적는다 ---
     private static Candidate? DecomposeSolid(ShapeSolid s, double eps, double precision, double thickness, bool sheet, out string reason)
@@ -367,11 +363,9 @@ public static partial class FormulaDecomposer
     private static Candidate? Search(ShapeSolid s, double eps, double precision, double thickness, bool sheet, out string reason)
     {
         bool sheetBefore = _sheet;
-        double epsBefore = _gridEps;
         _sheet = sheet;
-        _gridEps = eps;
         try { return SearchSolid(s, eps, precision, thickness, out reason); }
-        finally { _sheet = sheetBefore; _gridEps = epsBefore; }
+        finally { _sheet = sheetBefore; }
     }
 
     // --- 떡가래 축을 찾고 가장 알맞은 식을 고른다 ---
@@ -1527,32 +1521,29 @@ public static partial class FormulaDecomposer
     private static string Mm(double v) => RoundAt(v, 3).ToString("0.###", CultureInfo.InvariantCulture);
 
     /// <summary>
-    /// 수량산출서 자릿수로 적은 숫자 글자: mm 에 딱 떨어지는 값(도면 치수)은 그대로(셋째 자리까지),
-    /// 그렇지 않은 값(손으로 그린 치수·계산으로 나온 길이)은 소수 둘째 자리로 줄인다.
-    /// 다만 둘째 자리로 줄이면 그 값 자체가 1% 넘게 달라지는 작은 수(0.0188 → 0.02, 0.0023 → 0)는 셋째 자리로 적는다 —
-    /// 식에 *0 이 찍히거나 작은 치수가 크게 틀어지지 않게.
-    /// gridEps = mm 에 떨어졌다고 볼 폭(m).
+    /// 수량산출서 자릿수로 적은 숫자 글자: 소수 둘째 자리(cm — 2D 산출서처럼 · JACK 2026-10-29 «5.001 과 5.0 은 같은 것» · 거푸집 식도 이것으로).
+    /// 다만 둘째 자리로 줄이면 그 값 자체가 1% 넘게 달라지는 작은 수(0.0188 → 0.02, 0.044 → 0.04, 0.0023 → 0)는 셋째 자리로 적는다 —
+    /// 식에 *0 이 찍히거나 작은 치수가 크게 틀어지지 않게. (전 1007 규칙의 «mm 에 딱 떨어지는 도면 치수는 셋째 자리 그대로»는 걷음 — 모델의 1 mm
+    /// 어긋남(5.001)이 같은 치수를 다른 줄 · 다른 항으로 갈랐다.)
     /// </summary>
-    public static string SheetText(double v, double gridEps = 1e-6)
+    public static string SheetText(double v)
     {
-        double mm = RoundAt(v, 3);
-        if (Math.Abs(v - mm) <= gridEps) return mm.ToString("0.###", CultureInfo.InvariantCulture);
         double cm = RoundAt(v, 2);
-        return (Math.Abs(cm - v) > MatchTolerance * Math.Abs(v) ? mm : cm).ToString("0.###", CultureInfo.InvariantCulture);
+        return (Math.Abs(cm - v) > MatchTolerance * Math.Abs(v) ? RoundAt(v, 3) : cm).ToString("0.###", CultureInfo.InvariantCulture);
     }
 
     // 치수 글자. 산출서 자릿수면 SheetText, 정밀이면 mm(셋째 자리).
-    private static string F(double v) => _sheet ? SheetText(v, _gridEps) : Mm(v);
+    private static string F(double v) => _sheet ? SheetText(v) : Mm(v);
 
     // 현·중심거리처럼 도면 치수가 아니라 계산으로 나온 길이. 정밀이면 여섯째 자리까지(mm로 자르면 큰 반지름에서 값이 어긋난다),
     // 산출서 자릿수면 다른 숫자와 같은 규칙(SheetText)이다.
     private static string G(double v) =>
-        _sheet ? SheetText(v, _gridEps) : RoundAt(v, 6).ToString("0.######", CultureInfo.InvariantCulture);
+        _sheet ? SheetText(v) : RoundAt(v, 6).ToString("0.######", CultureInfo.InvariantCulture);
 
     // 조각 치수 글자. 정밀일 때: 도면 치수면 mm, 호 위의 점에서 나온 길이(fine)는 여섯째 자리까지 —
     // 다만 mm 에 딱 떨어지는 값(eps 안)은 fine 이어도 mm 로 적는다(4.000002 가 아니라 4).
     private static string D(double v, bool fine, double eps) =>
-        _sheet ? SheetText(v, _gridEps) : !fine || Math.Abs(v - RoundAt(v, 3)) <= eps ? Mm(v) : G(v);
+        _sheet ? SheetText(v) : !fine || Math.Abs(v - RoundAt(v, 3)) <= eps ? Mm(v) : G(v);
 
     // 적으면 0이 되는 치수인가(mm 기준 — 산출서 자릿수에서도 0 으로 찍히는 것은 mm 로 0 인 값뿐이다:
     // 둘째 자리로 줄여 0 이 되는 값은 1% 넘게 달라지는 것이라 SheetText 가 셋째 자리로 적는다).

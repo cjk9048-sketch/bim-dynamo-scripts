@@ -42,7 +42,7 @@ public static class WizardLogic
         {
             string? t = fieldText(m.Groups[1].Value);
             // 쉼표를 천 단위로 읽지 않는다("1,5" 를 15 로 읽지 않게 — 그런 칸은 값이 없는 것으로 둔다)
-            // 잰 값은 자동 식과 같은 규칙으로 적는다: mm 에 떨어지면 그대로, 아니면 둘째 자리(FormulaDecomposer.SheetText).
+            // 잰 값은 자동 식과 같은 규칙으로 적는다: 둘째 자리 · 1% 넘게 바뀌는 작은 수만 셋째 자리(FormulaDecomposer.SheetText).
             return t != null && double.TryParse(t.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var v) && v > 0
                 ? FormulaDecomposer.SheetText(v)
                 : m.Value;
