@@ -397,7 +397,7 @@ public sealed class GradingDialog : Window
     /// 든 칸에서는 그것이 곧 <b>상태를 못 보게 되는 것</b>이다.
     /// 그래서 접힌 동안만 제목 옆에 한 줄 요약을 띄운다. 펼치면 진짜 줄들이 보이므로 요약은 숨는다.</para></summary>
     /// <param name="level">★[v103.3.1 · JACK 1021 «사면 설정 · 기타 설정 … 접기 펼치기»] 칸 안의 칸 — 1 = 큰 칸(지금 모양) ·
-    /// 2 = 그 안의 칸(중간 제목 글씨 · 짙은 글자) · 3 = 또 그 안(2와 같은 글씨 · 왼쪽 12px 들임).</param>
+    /// 2 = 그 안의 칸(중간 제목 글씨 · 짙은 글자) · 3 = 또 그 안(2와 같은 글씨). 들임은 펼친 내용이 단계마다 12px(v110.2.1).</param>
     internal static StackPanel AddCollapsible(Panel parent, string title, out TextBlock badge,
                                               string? tip = null, bool first = false,
                                               bool open = true, string? key = null, string? group = null, int level = 1)
@@ -405,7 +405,9 @@ public sealed class GradingDialog : Window
         string k = key ?? title;
         bool on = SectionOpen.TryGetValue(k, out bool remembered) ? remembered : open;
         bool sub = level >= 2;
-        double indent = level >= 3 ? 12 : 0;
+        // ★★[v110.2.1 · JACK 1029 «팝업창에서 대제목 소제목간에 들여쓰기를 해서 구분»] 펼친 내용(body)을 단계마다 12px 들인다 — 칸 안의 칸은 부모 body 안에 놓이므로
+        //   대제목 0 · 소제목 12 · 그 안 24로 저절로 쌓인다(종전: 3단계 머리만 12px · 1 · 2단계는 같은 왼쪽 줄이라 구분이 안 됐다).
+        const double indent = 0, bodyIndent = 12;
 
         var arrow = new TextBlock
         {
@@ -460,7 +462,7 @@ public sealed class GradingDialog : Window
             ToolTip = tip,
         };
 
-        var body = new StackPanel { Visibility = on ? Visibility.Visible : Visibility.Collapsed, Margin = new Thickness(indent, 0, 0, 0) };
+        var body = new StackPanel { Visibility = on ? Visibility.Visible : Visibility.Collapsed, Margin = new Thickness(indent + bodyIndent, 0, 0, 0) };
 
         // ★한 자리에서만 모양을 바꾼다 — 누를 때와 <b>남이 닫을 때</b>가 같은 길을 타야
         //   화살표·요약·여백이 어긋나지 않는다.

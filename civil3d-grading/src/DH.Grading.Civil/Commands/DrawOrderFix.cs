@@ -33,15 +33,24 @@ internal static class DrawOrderFix
             var clsImage = RXObject.GetClass(typeof(RasterImage));
             var clsText = RXObject.GetClass(typeof(DBText));
             var clsMText = RXObject.GetClass(typeof(MText));
+            var clsHatch = RXObject.GetClass(typeof(Hatch));
 
             var images = new ObjectIdCollection();
             var texts = new ObjectIdCollection();
+            var fills = new ObjectIdCollection();   // ★[v109.1] 국공유지 해치 — 이미지 바로 위(필지 선 · 사면 해치 · 글자 밑)
             foreach (ObjectId id in ms)      // 지워진 객체는 애초에 나오지 않는다
             {
                 try
                 {
                     RXClass c = id.ObjectClass;
                     if (c.IsDerivedFrom(clsImage)) { images.Add(id); continue; }
+                    if (c.IsDerivedFrom(clsHatch))
+                    {
+                        if (tr.GetObject(id, OpenMode.ForRead) is AcadEntity he &&
+                            string.Equals(he.Layer, ImportGisCommand.LayerParcelPublic, System.StringComparison.OrdinalIgnoreCase))
+                            fills.Add(id);
+                        continue;
+                    }
                     if (!c.IsDerivedFrom(clsText) && !c.IsDerivedFrom(clsMText)) continue;
                     if (tr.GetObject(id, OpenMode.ForRead) is AcadEntity e &&
                         string.Equals(e.Layer, ImportGisCommand.LayerJibun,
@@ -51,9 +60,11 @@ internal static class DrawOrderFix
                 catch { }
             }
 
-            if (images.Count == 0 && texts.Count == 0) { tr.Commit(); return; }
+            if (images.Count == 0 && texts.Count == 0 && fills.Count == 0) { tr.Commit(); return; }
 
             var dot = (DrawOrderTable)tr.GetObject(ms.DrawOrderTableId, OpenMode.ForWrite);
+            // 해치를 먼저 맨 아래로 → 그다음 이미지를 그 밑으로(차례 = 이미지 · 국공유지 해치 · 나머지 · 지번)
+            if (fills.Count > 0) { try { dot.MoveToBottom(fills); } catch { } }
             if (images.Count > 0) { try { dot.MoveToBottom(images); } catch { } }
             if (texts.Count > 0) { try { dot.MoveToTop(texts); } catch { } }
             tr.Commit();

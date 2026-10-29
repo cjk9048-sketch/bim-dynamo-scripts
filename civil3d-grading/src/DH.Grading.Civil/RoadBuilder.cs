@@ -82,6 +82,82 @@ internal static class RoadBuilder
         return aid;
     }
 
+    /// <summary>★[v110.2] 직선 ↔ 직선 사이 곡선의 반경을 <paramref name="radius"/>로(접선이 짧으면 0.7배씩 3 m까지) — 곡선이 없던 꺾임에는 새로 넣음.
+    /// 반경을 바로 못 바꾸는 곡선은 지우고 다시 넣는다. 돌려줌 = 결과 한 줄.</summary>
+    internal static string ReCurve(Document doc, ObjectId aid, double radius)
+    {
+        var db = doc.Database;
+        int changed = 0, reduced = 0, failed = 0, added = 0, kept = 0;
+        using (var tr = db.TransactionManager.StartTransaction())
+        {
+            var al = (CivilDb.Alignment)tr.GetObject(aid, OpenMode.ForWrite);
+            bool Fit(Func<double, bool> tryR)
+            {
+                double r = Math.Max(3, radius);
+                while (r >= 3 - 1e-9)
+                {
+                    if (tryR(r)) { if (r < radius - 1e-6) reduced++; return true; }
+                    r *= 0.7;
+                }
+                return false;
+            }
+            // 곡선(앞뒤가 직선) — 반경 바꾸기
+            var arcs = new List<(int Prev, int Arc, int Next)>();
+            var gaps = new List<(int A, int B)>();
+            int n = al.Entities.Count;
+            for (int i = 0; i < n; i++)
+            {
+                var e = al.Entities.GetEntityByOrder(i);
+                if (e.EntityType == CivilDb.AlignmentEntityType.Arc && i > 0 && i + 1 < n)
+                {
+                    var p = al.Entities.GetEntityByOrder(i - 1); var q = al.Entities.GetEntityByOrder(i + 1);
+                    if (p.EntityType == CivilDb.AlignmentEntityType.Line && q.EntityType == CivilDb.AlignmentEntityType.Line) arcs.Add((p.EntityId, e.EntityId, q.EntityId));
+                }
+                else if (e.EntityType == CivilDb.AlignmentEntityType.Line && i + 1 < n && al.Entities.GetEntityByOrder(i + 1).EntityType == CivilDb.AlignmentEntityType.Line)
+                    gaps.Add((e.EntityId, al.Entities.GetEntityByOrder(i + 1).EntityId));
+            }
+            foreach (var (pv, ar, nx) in arcs)
+            {
+                var arc = (CivilDb.AlignmentArc)al.Entities.EntityAtId(ar);
+                // ★[설치 전 검토 · 중간] 우리가 넣은 자유 곡선(Free)만 — 폴리선 볼록으로 그린 호(Fixed)는 «호는 그대로»
+                if (arc.Constraint1 != CivilDb.AlignmentEntityConstraintType.Free) { kept++; continue; }
+                double old = arc.Radius;
+                if (Math.Abs(old - radius) < 1e-6) continue;
+                // 바꾼 뒤 이웃 직선이 남아 있어야 맞는 곡선(반경이 접선보다 길면 예외 없이 겹친 노선이 될 수 있다 — 검토 확인 필요 항목)
+                bool Valid(double r)
+                {
+                    try
+                    {
+                        var la = (CivilDb.AlignmentLine)al.Entities.EntityAtId(pv); var lb = (CivilDb.AlignmentLine)al.Entities.EntityAtId(nx);
+                        return Math.Abs(arc.Radius - r) < 1e-6 && arc.Length > 1e-3 && la.Length > 0.01 && lb.Length > 0.01;
+                    }
+                    catch { return false; }
+                }
+                bool ok = Fit(r => { try { arc.Radius = r; return Valid(r); } catch { return false; } });
+                // ★[설치 전 검토 · 중간] 못 맞추면 지우지 않고 원래 반경으로 되돌린다(지운 뒤 다시 못 넣으면 곡선이 사라진 채 저장됐다)
+                if (!ok) { try { arc.Radius = old; } catch { } failed++; }
+                else changed++;
+            }
+            foreach (var (a, b) in gaps)
+            {
+                // 거의 한 줄(꺾임 0.5° 안)이면 곡선 자리가 아니다 — 못 바꿈으로 세지 않음
+                try
+                {
+                    var la = (CivilDb.AlignmentLine)al.Entities.EntityAtId(a); var lb = (CivilDb.AlignmentLine)al.Entities.EntityAtId(b);
+                    double d1 = Math.Atan2(la.EndPoint.Y - la.StartPoint.Y, la.EndPoint.X - la.StartPoint.X), d2 = Math.Atan2(lb.EndPoint.Y - lb.StartPoint.Y, lb.EndPoint.X - lb.StartPoint.X);
+                    double dd = Math.Abs(Math.IEEERemainder(d2 - d1, 2 * Math.PI));
+                    if (dd < 0.5 * Math.PI / 180) continue;
+                }
+                catch { }
+                bool ok = Fit(r => { try { al.Entities.AddFreeCurve(a, b, r, CivilDb.CurveParamType.Radius, false, CivilDb.CurveType.Compound); return true; } catch { return false; } });
+                if (ok) added++; else failed++;
+            }
+            tr.Commit();
+        }
+        return $"곡선 반경 {radius:0.#} m — 바꿈 {changed}" + (added > 0 ? $" · 새로 {added}" : "") + (reduced > 0 ? $" · 접선이 짧아 줄임 {reduced}" : "")
+            + (kept > 0 ? $" · 그린 호 그대로 {kept}" : "") + (failed > 0 ? $" · ⚠못 바꿈 {failed}(원래 반경)" : "");
+    }
+
     /// <summary>바탕 종단(면에서) + 계획 종단(레이아웃 · 자동 초안 PVI). 돌려줌 = (바탕, 계획, 초안 결과).</summary>
     internal static (ObjectId Base, ObjectId Plan, RoadProfileDraft.Result Draft) MakeProfiles(Document doc, ObjectId aid, ObjectId baseSurf, RoadDesign d, System.Text.StringBuilder log)
     {

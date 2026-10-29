@@ -26,7 +26,7 @@ namespace DH.Grading.Civil.Commands;
 /// </summary>
 internal static class ZoneEditCommon
 {
-    private const short SelAci = 2;   // 선택 = 노랑(대상선 시안과 구분)
+    internal const short SelAci = 2;   // 선택 = 노랑(대상선 시안과 구분)
 
     /// <summary>부분 구간의 <b>최소 길이(m)</b> — <see cref="GradingGeometry.MinPartSpan"/>가 정한다.
     /// <para>★[검토 0910 · 보통4] 종전엔 여기 <c>3.0</c> 리터럴이 있었다. 그런데 그 값이 성립하는
@@ -39,11 +39,11 @@ internal static class ZoneEditCommon
     /// <para>★[검토 0910 · 보통3] 커서를 따라가는 띠와 확정된 띠가 <b>서로 다른 식</b>을 쓰고 있었다
     /// (하나는 고리 둘레, 하나는 그 조각의 바운딩박스). 그래서 조각이 짧으면 확정 순간
     /// 띠가 <b>홀쭉해졌다</b>. 식을 하나로 모은다 — 부지가 커도 선을 안 덮고, 조각이 짧아도 보인다.</para></summary>
-    private static double BandHalf(double ringLen)
+    internal static double BandHalf(double ringLen)
         => System.Math.Max(0.35, System.Math.Min(ringLen * 0.004, 2.0));
 
     /// <summary>커서를 따라 그리는 표식의 색 — 고른 선(노랑)·대상선(시안)과 <b>구분되는</b> 빨강.</summary>
-    private const short GlyphAci = 1;
+    internal const short GlyphAci = 1;
 
     /// <summary>커서 표식이 <b>한 번이라도</b> 자빠졌나 — 그 사실을 로그에 한 번만 남기려는 걸쇠.
     /// <para>★[검토 0910 · 보통5] 이 자리는 마우스가 움직이는 내내 도는 곳이라
@@ -95,7 +95,7 @@ internal static class ZoneEditCommon
 
     /// <summary>화면에 얹을 <b>굵은 띠</b> — 선을 따라 사각형을 이어 칠한다.
     /// <para>임시 그래픽이 아니라 <c>ViewportDraw</c>라 <b>이 프레임에만</b> 그려지고 저절로 사라진다.</para></summary>
-    private static void DrawBand(Autodesk.AutoCAD.GraphicsInterface.ViewportDraw dc,
+    internal static void DrawBand(Autodesk.AutoCAD.GraphicsInterface.ViewportDraw dc,
                                  System.Collections.Generic.IReadOnlyList<Point3> path, double half)
     {
         if (dc == null || path == null || path.Count < 2) return;
@@ -124,7 +124,7 @@ internal static class ZoneEditCommon
     }
 
     /// <summary>진행 방향 <b>화살촉</b> — 띠 끝에 얹어 "이쪽으로 간다"를 보여 준다.</summary>
-    private static void DrawArrow(Autodesk.AutoCAD.GraphicsInterface.ViewportDraw dc,
+    internal static void DrawArrow(Autodesk.AutoCAD.GraphicsInterface.ViewportDraw dc,
                                   Point3 tip, double dirX, double dirY, double size)
     {
         if (dc == null) return;

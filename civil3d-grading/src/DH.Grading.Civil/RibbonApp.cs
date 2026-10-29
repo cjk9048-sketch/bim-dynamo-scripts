@@ -524,11 +524,13 @@ public sealed class RibbonApp : IExtensionApplication
                 "<b>결과지표면만 표시</b> — 만든 뒤 정지면_DH만 남기고 나머지는 숨김.\n\n" +
                 "※ 정지 제원(단높이·소단·구배)과 옹벽 형태는 [계획부지 생성] ▸ [계획부지 정지] 창에 있습니다.", null);
             var btnParcel = MakeButton(
-                "지적도", "DHPARCEL ", "두 점으로 범위를 찍으면 그 범위 필지 경계와 지번을 도면 좌표계로 가져옵니다", "지적");
+                "지적도", "DHPARCEL ", "두 점으로 범위를 찍으면 그 범위 필지 경계 · 지번 · 국공유지를 도면 좌표계로 가져옵니다", "지적");
             btnParcel.ToolTip = MakeTip("지적도 가져오기 (DHPARCEL)",
                 "범위 두 모서리를 클릭하면 그 사각 범위대로 잘라서\n" +
-                "필지 경계를 가져옵니다. 지번은 별도 레이어(DH-지번)에 들어갑니다.\n" +
-                "※ GIS_Design_Loader server 제공", null);
+                "필지 경계를 가져옵니다. 지번 · 지목은 별도 레이어(DH-지번),\n" +
+                "국공유지는 하늘색 반투명 해치(DH-지적-국공유지)입니다.\n" +
+                "필지를 고르면 특성 창에 소유 구분 · 공시지가가 보입니다.\n" +
+                "※ 출처: VWorld(연속지적 · 토지소유정보)", null);
             var btnContour = MakeButton(
                 "서버\n지표면", "DHCONTOUR ", "지도 도킹바가 열립니다 — 지도에서 박스로 범위를 고르면 그 자리의 수치지형도 등고선을 3D로 가져오고 '원지반' 지표면까지 자동 생성(지적도 동시 가능)", "서버지표면");
             btnContour.ToolTip = MakeTip("서버지표면 (DHCONTOUR)",
@@ -763,12 +765,38 @@ public sealed class RibbonApp : IExtensionApplication
             pGrade.Items.Add(splitSurf);
             pGrade.Items.Add(Spacer());
             // ★★[v110 · JACK 1028 «진입도로 — 인프라웍스처럼»] 노선(폴리선 · Civil 노선) → 종단 초안 → 실시간 미리보기 + 도킹창
-            var btnRoad = MakeButton("진입\n도로", "DHROAD ", "진입도로 — 노선을 고르면 종단 초안 · 사면 · 토공량을 바로 봅니다", "노리선");
-            btnRoad.ToolTip = MakeTip("진입도로 (DHROAD)",
-                "폴리선(또는 Civil 노선)을 고르면 노선 · 종단 초안 · 종단뷰를 만들고 사면 · 옹벽 · 토공량을 바로 보여 줍니다.\n" +
+            // ★★[v110.2 · JACK 1029 «진입도로 버튼은 스플릿버튼 — 첫째 경로 그리기(직접 눌러 그리면 선형) · 둘째 지금처럼 폴리선 선택»]
+            var btnRoadDraw = MakeButton("경로\n그리기", "DHROADDRAW ", "점을 차례로 찍고 Enter — 꺾인 곳은 곡선으로 노선이 되고 종단 · 사면 · 토공량을 바로 봅니다", "노리선");
+            btnRoadDraw.ToolTip = MakeTip("경로 그리기 (DHROADDRAW)",
+                "도면에 꺾인 점을 차례로 찍고 Enter — 꺾인 곳은 도킹창 «곡선 반경»으로 곡선이 됩니다.\n" +
+                "· U = 마지막 점 빼기 · Esc = 그만\n" +
+                "· 끝나면 노선 · 종단도 · 사면 미리보기 · 도킹창", null);
+            var btnRoad = MakeButton("폴리선\n선택", "DHROAD ", "진입도로 — 폴리선(또는 Civil 노선)을 고르면 종단 · 사면 · 토공량을 바로 봅니다", "노리선");
+            btnRoad.ToolTip = MakeTip("폴리선 선택 (DHROAD)",
+                "폴리선(또는 Civil 노선)을 고르면 노선 · 종단도를 만들고 사면 · 옹벽 · 토공량을 바로 보여 줍니다.\n" +
                 "· 종단뷰에서 계획 종단 PVI를 옮기거나 노선 · 창 값을 바꾸면 바로 다시 계산\n" +
-                "· 빨강 = 옹벽 제안 · 사면 충돌", null);
-            pGrade.Items.Add(btnRoad);
+                "· 자홍 = 옹벽 제안 · 빨강 = 옹벽 · 사면 충돌 · 회색 = 사면선 · 소단선", null);
+            var splitRoad = new RibbonSplitButton
+            {
+                Text = "진입도로",
+                ShowText = true,
+                ShowImage = true,
+                LargeImage = MakeGlyph("노리선"),
+                Image = MakeGlyph("노리선"),
+                Size = RibbonItemSize.Large,
+                Orientation = System.Windows.Controls.Orientation.Vertical,
+                IsSplit = true,
+                IsSynchronizedWithCurrentItem = false,
+                ListStyle = RibbonSplitButtonListStyle.List,
+                ToolTip = MakeTip("진입도로",
+                    "**경로 그리기** — 점을 찍어 노선을 그립니다.\n" +
+                    "**폴리선 선택** — 그려 둔 폴리선(또는 Civil 노선)을 고릅니다.\n" +
+                    "아래 화살표를 눌러 고릅니다.", null),
+            };
+            splitRoad.Items.Add(btnRoadDraw);
+            splitRoad.Items.Add(btnRoad);
+            splitRoad.Current = btnRoadDraw;
+            pGrade.Items.Add(splitRoad);
             pGrade.Items.Add(Spacer());
             // ★★[계획 8단계 · JACK 지시 3 "UI에서 사면수정버튼은 없애고"]
             //   사면 수정은 <b>도킹창 안</b>으로 들어갔다 — 정지는 [정지 창], 터파기는 [터파기 창].

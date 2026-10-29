@@ -25,7 +25,7 @@ public static class GradingSettings
     /// <b>같은 번호를 단 빌드가 여러 개</b>가 되어, 어느 것이 깔렸는지 물으면 답할 수가 없었다.</para>
     /// <para><c>x.0</c> = 화면·명령이 바뀌어 <b>사용자가 다르게 일하게</b> 되는 판 ·
     /// <c>x.y</c> = 같은 화면에서 결함을 고친 판.</para></summary>
-    public const string Version = "v110.1.0 (2026-10-29)";
+    public const string Version = "v110.3.1 (2026-10-29)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -339,6 +339,9 @@ public static class GradingSettings
     // [JACK 0728] 결과지표면만 표시 — 체크(기본): 정지면_DH 생성 시 다른 지표면 숨김.
     // 해제 후 저장: 숨겼던 지표면 전부 표시(정지 옵션 대화상자 하단 체크박스, 저장 즉시 반영).
     public static bool ShowOnlyResultSurface = true;
+
+    /// <summary>★[v109.1 · 계획_v109.md 3 · 검토 M9] 지적 속성을 Map 개체 데이터로도 넣는다(특성 창에 보임) — 끄면 XData(DH_PARCEL)만. [기타 설정] 2. 표시.</summary>
+    public static bool ParcelObjectData = true;
 
     /// <summary>[배경지도 0731 — JACK] 위성 배경지도 목표 해상도(m/픽셀) — 높음 0.25 / 보통 0.5 / 낮음 1.0.
     /// 지정 범위가 넓으면 파일이 감당 가능한 크기가 되도록 자동으로 더 낮은 해상도로 물러난다(생성 실패 방지).</summary>

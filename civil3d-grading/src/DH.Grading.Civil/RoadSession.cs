@@ -24,6 +24,8 @@ internal sealed class RoadSession
     internal RoadDesign Design;
     internal string Name = "";
     internal RoadGrade.Result? Last;
+    /// <summary>★[v110.3] 지난 계산의 사면선 · 소단선 · 옹벽선(Core 좌표 = 도면 좌표 · 측점은 Core 측점 — 노선 측점 = + S0).</summary>
+    internal List<RoadGrade.TierLine> Lines = new();
     internal double S0;                     // Core 측점 0 = 노선 측점 S0(실제 첫 표본)
     internal double GradeNow;               // 계획 종단 지금 최대 경사(PVI 사이 · 사람이 옮긴 뒤)
     internal string Note = "";
@@ -214,17 +216,20 @@ internal sealed class RoadSession
             var inp = new RoadGrade.Input
             {
                 X = X, Y = Y, Z = Z, Sec = Design.Section(), Cut = Design.Cut(), Fill = Design.Fill(),
-                Walls = Design.CoreWalls().Select(w => w with { S0 = w.S0 - s0, S1 = w.S1 - s0 }).ToList(),
+                TierWalls = Design.CoreTierWalls(s0),   // ★[v110.3] 계단선 변환 옹벽(옛 가장자리 옹벽은 0단 · 소단 0)
                 Base = _base, Cell = 1.0, Reach = reach, SuggestH = Design.SuggestH, Limit = limit,
             };
             Last = RoadGrade.Run(inp);
+            // ★[v110.3] 사면선 · 소단선 · 옹벽선(미리보기 · [옹벽 변환] 찍기가 씀)
+            var swL = System.Diagnostics.Stopwatch.StartNew();
+            try { Lines = Last.Error.Length == 0 ? RoadGrade.TierLines(Last) : new(); } catch (System.Exception exL) { Lines = new(); try { DiagLog.Append("\n[진입도로] 계단선 못 셈 — " + exL.Message); } catch { } }
             Note = string.Join(" · ", new[] { _baseNote, note }.Where(t => t.Length > 0));
             _baseNote = "";
             var swD = System.Diagnostics.Stopwatch.StartNew();
             DrawPreview();
             _retried = false;
             // ★[재검토 열린 질문] 임시 선 걷고 거는 시간도 함께(Core 계산 시간만으로는 화면 멈춤을 못 봄)
-            try { DiagLog.Append($"\n[진입도로] {Name} — {Last.Text} · 그리기 {swD.Elapsed.TotalMilliseconds:F0} ms · 선 {_marks.Count} · 최대 종단경사 {GradeNow * 100:F1} %" + (note.Length > 0 ? " · " + note : "")); } catch { }
+            try { DiagLog.Append($"\n[진입도로] {Name} — {Last.Text} · 계단선 {Lines.Count}가닥 {swL.Elapsed.TotalMilliseconds:F0} ms · 그리기 {swD.Elapsed.TotalMilliseconds:F0} ms · 선 {_marks.Count} · 최대 종단경사 {GradeNow * 100:F1} %" + (note.Length > 0 ? " · " + note : "")); } catch { }
         }
         catch (System.Exception ex)
         {
@@ -285,6 +290,22 @@ internal sealed class RoadSession
         finally { Suppress = false; }
     }
 
+    /// <summary>★[v110.2 · JACK 1029 «곡선 반경 = 도킹창 값 하나»] 이 노선의 직선 ↔ 직선 곡선 반경을 바꾸고 다시 계산(우리가 쓰는 동안 바뀜 표시 막음). 돌려줌 = 결과 한 줄.</summary>
+    internal string ReCurve(double r)
+    {
+        string note;
+        if (!Design.OwnCurves) { Recompute(); return "기존 Civil 노선으로 연 도로라 곡선은 그대로(곡선 반경 칸은 새 도로에만)"; }
+        Suppress = true;
+        try
+        {
+            using var dl = _doc.LockDocument();
+            note = RoadBuilder.ReCurve(_doc, AlignId, r);
+        }
+        finally { Suppress = false; }
+        Recompute();
+        return note;
+    }
+
     internal const string SurfBase = "진입도로_DH";
     const string TempSurf = "진입도로_작업중";
     const double SurfCell = 0.5;
@@ -310,7 +331,7 @@ internal sealed class RoadSession
         var r = RoadGrade.Run(new RoadGrade.Input
         {
             X = X, Y = Y, Z = Z, Sec = d.Section(), Cut = d.Cut(), Fill = d.Fill(),
-            Walls = d.CoreWalls().Select(w => w with { S0 = w.S0 - s0, S1 = w.S1 - s0 }).ToList(),
+            TierWalls = d.CoreTierWalls(s0),
             Base = _base!, Cell = SurfCell, Reach = reach, SuggestH = d.SuggestH, Limit = limit,
         });
         if (r.Error.Length > 0) throw new InvalidOperationException(r.Error);
@@ -321,7 +342,7 @@ internal sealed class RoadSession
             r = RoadGrade.Run(new RoadGrade.Input
             {
                 X = X, Y = Y, Z = Z, Sec = d.Section(), Cut = d.Cut(), Fill = d.Fill(),
-                Walls = d.CoreWalls().Select(w => w with { S0 = w.S0 - s0, S1 = w.S1 - s0 }).ToList(),
+                TierWalls = d.CoreTierWalls(s0),
                 Base = _base!, Cell = 1.0, Reach = reach, SuggestH = d.SuggestH, Limit = limit,
             });
             if (r.Error.Length > 0) throw new InvalidOperationException(r.Error);
@@ -383,18 +404,22 @@ internal sealed class RoadSession
                 if (name.Length == 0) name = UniqueSurfaceName(db, tr, SurfBase);
                 cTin.Name = name;
                 try { cTin.Description = $"DH 진입도로 지표면(도로 + 사면 · 정지면_DH와 따로) — {Name} · {DateTime.Now:yyyy-MM-dd HH:mm} · {GradingSettings.Version}"; } catch { }
-                try { var bs = (CivilDb.TinSurface)tr.GetObject(BaseSurfId, OpenMode.ForRead); cTin.StyleId = bs.StyleId; } catch { }
+                // ★[v110.3 · JACK 1029 «평면 사면 모양 = 2D처럼» · 검토 M8] 평면 = 경계만(사면 모양은 사면선 · 소단선 · 노리선이 보여 줌) · 모형(3D) = 세모
+                try { var stId = EnsureRoadSurfStyle(tr); if (!stId.IsNull) cTin.StyleId = stId; else { var bs = (CivilDb.TinSurface)tr.GetObject(BaseSurfId, OpenMode.ForRead); cTin.StyleId = bs.StyleId; } } catch { }
                 try { cTin.LayerId = Commands.SectionCommand.EnsureLayer(db, tr, RoadBuilder.LaySurf, 3); } catch { }
                 d.SurfaceHandle = cid.Handle.ToString();
                 d.Write(tr, AlignId);
                 tr.Commit();
                 made = ObjectId.Null;
                 Design = d;
+                // ★[v110.3] 실제 선 — 사면선 · 소단선 · 노리선 · 옹벽선(이 도로 것만 지우고 새로 — 검토 M7)
+                string lineNote;
+                try { lineNote = DrawRoadLines(db, r); } catch (System.Exception exL) { lineNote = "⚠선을 못 그림 — " + exL.Message; }
                 // ★[설치 전 검토 낮음 6] 면 끝이 땅에 안 닿은 자리 · 옹벽 자리(가운데 높이)를 알림 · 수량은 이 면의 칸 기준
                 string msg = $"도로 면 '{name}' — 절토 {r.CutVol:N0} ㎥ · 성토 {r.FillVol:N0} ㎥({r.Cell:0.#} m 칸) · {sw.ElapsedMilliseconds / 1000.0:F1}초"
                              + (r.ReachHit ? $" · ⚠데이라잇 못 찾음(범위 {r.ReachUsed:F0} m 끝에서 면이 땅에 안 닿음)" : "")
                              + (r.Conflicts > 0 ? $" · ⚠사면 충돌 {r.Conflicts}칸(옹벽 자리 — 가운데 높이로 넣음)" : "")
-                             + (frz.Length > 0 ? " · ⚠굳힘 실패 " + frz : "");
+                             + (frz.Length > 0 ? " · ⚠굳힘 실패 " + frz : "") + " · " + lineNote;
                 try { DiagLog.Append($"\n[진입도로] {Name} — {msg} · {tnote} · 격자 {msGrid} · XML {msXml - msGrid} · Civil 면 + 되읽기 {msMake - msXml} · 대조 {msCmp - msMake} ms · 되읽기 {back}"); } catch { }
                 return msg;
             }
@@ -408,6 +433,89 @@ internal sealed class RoadSession
                 catch (System.Exception exE) { try { DiagLog.Append($"\n[진입도로] ⚠작업 면 «{TempSurf}»을 못 지움(다음 누를 때 다시 치움) — {exE.Message}"); } catch { } }
             }
         }
+    }
+
+    internal const string LaySlope = "DH도로-사면선", LayBench = "DH도로-소단선", LayNori = "DH도로-노리선", LayWall = "DH도로-옹벽선";
+    const string LineApp = "DH_ROADLINE";
+    internal const string SurfStyleName = "DH-진입도로 경계";
+
+    /// <summary>★★[v110.3 · 계획 4 · 검토 M7] [도로 면 만들기]의 실제 선 — 사면선(윗선) · 소단선(아랫선) · 옹벽선(굵게) · 노리선(짧은 · 긴) · 3D(설계 높이).
+    /// 이 도로(노선 핸들 XData)의 것만 먼저 지움 — 한 도면에 도로가 둘이어도 남의 선은 그대로. 못 지우면 안 그림(겹쳐 두 벌이 되지 않게).</summary>
+    string DrawRoadLines(Database db, RoadGrade.Result r)
+    {
+        var lines = RoadGrade.TierLines(r);
+        var ticks = RoadGrade.Ticks(r, lines, GradingSettings.HatchShort, GradingSettings.HatchLong);
+        string me = AlignId.Handle.ToString();
+        var lays = new[] { LaySlope, LayBench, LayNori, LayWall };
+        int erased = 0, failErase = 0, nLine = 0, nWall = 0, nTick = 0;
+        using var tr = db.TransactionManager.StartTransaction();
+        GradingBuilder.EnsureRegApp(db, tr, LineApp);
+        var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+        var want = new HashSet<string>(lays, StringComparer.OrdinalIgnoreCase);
+        var victims = new List<ObjectId>();
+        foreach (ObjectId id in ms)
+        {
+            try
+            {
+                if (tr.GetObject(id, OpenMode.ForRead) is not Entity e || !want.Contains(e.Layer)) continue;
+                using var rb = e.GetXDataForApplication(LineApp);
+                var v = rb?.AsArray();
+                if (v != null && v.Length >= 2 && v[1].Value as string == me) victims.Add(id);
+            }
+            catch { }
+        }
+        foreach (var id in victims) { try { tr.GetObject(id, OpenMode.ForWrite, false, true).Erase(); erased++; } catch { failErase++; } }
+        if (failErase > 0) { tr.Abort(); return $"⚠옛 선 {failErase}개를 못 지워 선을 안 그림(레이어 잠금 확인)"; }
+        ObjectId lS = Commands.SectionCommand.EnsureLayer(db, tr, LaySlope, 8), lB = Commands.SectionCommand.EnsureLayer(db, tr, LayBench, 8),
+                 lN = Commands.SectionCommand.EnsureLayer(db, tr, LayNori, 2), lW = Commands.SectionCommand.EnsureLayer(db, tr, LayWall, 1);
+        ResultBuffer Tag() => new(new TypedValue((int)DxfCode.ExtendedDataRegAppName, LineApp), new TypedValue((int)DxfCode.ExtendedDataAsciiString, me));
+        foreach (var tl in lines)
+        {
+            // ★[설치 전 검토 L5] 0.5 m 등치선 점을 1 cm 허용으로 줄임(꼭짓점 객체 수)
+            var pc = new Point3dCollection();
+            foreach (var p in Simplify(tl.Pts.Where(q => double.IsFinite(q.Z)).Select(q => new Point3d(q.X, q.Y, q.Z)).ToList(), 0.01)) pc.Add(p);
+            if (pc.Count < 2) continue;
+            var pl = new Polyline3d(Poly3dType.SimplePoly, pc, false);
+            bool wall = tl.Role == RoadGrade.LineRole.Wall;
+            pl.LayerId = wall ? lW : tl.Role == RoadGrade.LineRole.Crest ? lS : lB;
+            if (wall) pl.LineWeight = LineWeight.LineWeight050;
+            ms.AppendEntity(pl); tr.AddNewlyCreatedDBObject(pl, true);
+            using (var tg = Tag()) pl.XData = tg;
+            if (wall) nWall++; else nLine++;
+        }
+        foreach (var (a, b) in ticks)
+        {
+            if (!double.IsFinite(a.Z) || !double.IsFinite(b.Z)) continue;
+            var ln = new Line(new Point3d(a.X, a.Y, a.Z), new Point3d(b.X, b.Y, b.Z)) { LayerId = lN };
+            ms.AppendEntity(ln); tr.AddNewlyCreatedDBObject(ln, true);
+            using (var tg = Tag()) ln.XData = tg;
+            nTick++;
+        }
+        tr.Commit();
+        return $"사면선 · 소단선 {nLine} · 옹벽선 {nWall} · 노리선 {nTick}" + (erased > 0 ? $"(옛 선 {erased} 지움)" : "");
+    }
+
+    /// <summary>★[v110.3 · 검토 M8] 진입도로 면 스타일 — 평면 = 경계만 · 모형 = 세모 + 경계(없으면 만들고 · 있으면 그대로 씀 — 사람이 고친 값을 안 덮음).</summary>
+    static ObjectId EnsureRoadSurfStyle(Transaction tr)
+    {
+        var cdoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+        var styles = cdoc.Styles.SurfaceStyles;
+        foreach (ObjectId sid in styles)
+        {
+            try { if (tr.GetObject(sid, OpenMode.ForRead) is CivilDb.Styles.SurfaceStyle s0 && string.Equals(s0.Name, SurfStyleName, StringComparison.OrdinalIgnoreCase)) return sid; }
+            catch { }
+        }
+        ObjectId id = styles.Add(SurfStyleName);
+        if (id.IsNull) return ObjectId.Null;
+        var st = (CivilDb.Styles.SurfaceStyle)tr.GetObject(id, OpenMode.ForWrite);
+        foreach (CivilDb.Styles.SurfaceDisplayStyleType t in Enum.GetValues(typeof(CivilDb.Styles.SurfaceDisplayStyleType)))
+        {
+            bool plan = t == CivilDb.Styles.SurfaceDisplayStyleType.Boundary;
+            bool model = t == CivilDb.Styles.SurfaceDisplayStyleType.Boundary || t == CivilDb.Styles.SurfaceDisplayStyleType.Triangles;
+            try { st.GetDisplayStylePlan(t).Visible = plan; } catch { }
+            try { st.GetDisplayStyleModel(t).Visible = model; } catch { }
+        }
+        return id;
     }
 
     /// <summary>같은 이름이 없게(지운 면은 건너뜀) — «진입도로_DH» · «진입도로_DH_2» …</summary>
@@ -504,6 +612,16 @@ internal sealed class RoadSession
         return o;
     }
 
+    /// <summary>★[v110.3.1 · JACK 1029 «계획지표면때 기능을 답습»] [옹벽 변환] · [사면 변환]이 고르는 동안 — 미리보기에서 계단선 · 노리선을 빼서
+    /// 고를 선(시안 · 도면에 잠깐 그린 실제 선)이 회색 임시 선에 가려지지 않게. 끝나면 끄고 다시 그림.</summary>
+    internal bool PickMode { get; private set; }
+    internal void SetPickMode(bool on)
+    {
+        if (PickMode == on) return;
+        PickMode = on;
+        try { DrawPreview(); } catch { }
+    }
+
     void DrawPreview()
     {
         ClearMarks();
@@ -553,11 +671,13 @@ internal sealed class RoadSession
                     if (sc >= b) yield break;
                 }
             }
-            foreach (var w in Design.CoreWalls()) Line(Along(w.S0, w.S1, w.Side), 5);
-            foreach (var (a, b, side, _) in r.Suggest) Line(Along(a + S0, b + S0, side), 1);
+            // ★[v110.3 · 검토 L4] 옹벽 제안 = 자홍(옹벽선 빨강과 구별) · 옛 «가장자리 따라 파란 옹벽»은 옹벽선(아래)으로 대신
+            foreach (var (a, b, side, _) in r.Suggest) Line(Along(a + S0, b + S0, side), 6);
             tr.Commit();
         }
         catch { }
+        // ★[v110.3 · JACK 1029 «평면 사면 모양 = 2D처럼 소단선 방향»] 사면선 · 소단선(회색) · 옹벽선(빨강) — ★[설치 전 검토 L4] 맨 뒤(조각이 넘치면 제안 · 데이라잇보다 먼저 잘림)
+        if (!PickMode) foreach (var tl in Lines) Line(tl.Pts.Select(p => new Point3d(p.X, p.Y, p.Z)), (short)(tl.Role == RoadGrade.LineRole.Wall ? 1 : 8));
         var add = new List<Entity>();
         for (double tol = 0.05; ; tol *= 2)
         {
@@ -574,6 +694,18 @@ internal sealed class RoadSession
             if (segs > MaxSegs) Note = (Note.Length > 0 ? Note + " · " : "") + $"미리보기 선이 많아 일부만({MaxSegs}조각)";
             break;
         }
+        // ★[v110.3 · 검토 M6] 노리선(긴 선만 · 노랑) — 줄이기 · 점 수 버리기와 따로 · 몫 넘으면 고르게 솎음
+        if (!PickMode) try
+        {
+            var tk = RoadGrade.Ticks(r, Lines, GradingSettings.HatchShort, GradingSettings.HatchLong, longOnly: true);
+            int stride = Math.Max(1, (int)Math.Ceiling(tk.Count / (double)MaxTicks));
+            for (int i = 0; i < tk.Count; i += stride)
+            {
+                var (a, b) = tk[i];
+                if (double.IsFinite(a.Z) && double.IsFinite(b.Z)) add.Add(new Autodesk.AutoCAD.DatabaseServices.Line(new Point3d(a.X, a.Y, a.Z), new Point3d(b.X, b.Y, b.Z)) { ColorIndex = 2 });
+            }
+        }
+        catch { }
         try
         {
             var tm = TransientManager.CurrentTransientManager;
@@ -591,6 +723,8 @@ internal sealed class RoadSession
 
     /// <summary>임시 선 조각 상한 — 넘으면 덜 꺾이게 줄이는 허용을 두 배씩(0.05 m부터).</summary>
     const int MaxSegs = 3000;
+    /// <summary>★[v110.3] 미리보기 노리선 몫(긴 선).</summary>
+    const int MaxTicks = 1200;
 
     /// <summary>설계를 노선에 쓴다(문서 잠금 · 바뀜 표시 막고) — 창 값 · 옹벽 구간 · 경계.</summary>
     internal void SaveDesign()

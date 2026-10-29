@@ -182,11 +182,10 @@ public static class MapPalette
             bool ok = ImportGisCommand.ImportContourBox(doc, p.Epsg, p.CsNote, p.X0, p.Y0, p.X1, p.Y1);
             // ★[JACK 0901 "지적도 체크하면 지적도랑 지표면 같이 불러지게 해"]
             //   <b>같은 범위</b>로 이어서 받는다 — 따로 두 번 고르게 하지 않는다.
-            //   다만 지표면이 실패했으면 건너뛴다 — 오류 대화상자가 둘 연달아 뜬다.
-            if (p.Cad && ok)
+            //   ★[v109.1 · 검토 H1] 지적은 이제 VWorld(사내 DB와 따로) — 지표면이 실패해도 받는다.
+            //   완료 창은 안 띄운다(지표면 쪽이 성공 · 실패 창을 이미 띄움 · 설치 전 검토 낮음 — 둘 연달아) — 결과는 명령창 · 실패는 그대로 창.
+            if (p.Cad)
                 ImportGisCommand.ImportParcelBox(doc, p.Epsg, p.CsNote, p.X0, p.Y0, p.X1, p.Y1, alone: false);
-            else if (p.Cad)
-                doc.Editor.WriteMessage("\n[지적도] 지표면을 못 가져와 지적도는 건너뜁니다.");
         }
         finally
         {

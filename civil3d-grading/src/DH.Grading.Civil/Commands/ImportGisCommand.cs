@@ -12,10 +12,10 @@ using AcadEntity = Autodesk.AutoCAD.DatabaseServices.Entity;
 namespace DH.Grading.Civil.Commands;
 
 /// <summary>
-/// [가져오기 — JACK 0731] 사내 PostGIS에서 수치지형도 등고선·연속지적을 도면 좌표계로 가져온다.
+/// [가져오기 — JACK 0731] 수치지형도 등고선(사내 PostGIS)·연속지적(VWorld — v109.1)을 도면 좌표계로 가져온다.
 ///  · DHCONTOUR : 범위 두 점 클릭 → 3D 등고선 작도 → **"원지반" TIN 지표면 자동 생성**
-///  · DHPARCEL  : 범위 두 점 클릭 → 필지 경계선(사각 범위대로 클립) + 지번 문자(별도 레이어, 글자 1.0)
-/// 좌표계는 항상 정지옵션/도면 설정을 따른다(DB가 5186 → 도면 좌표계로 변환해서 보내줌).
+///  · DHPARCEL  : 범위 두 점 클릭 → 필지 경계선(사각 범위대로 클립) + 지번 문자(별도 레이어, 글자 1.0) + 국공유지 해치 + 필지 속성
+/// 좌표계는 항상 정지옵션/도면 설정을 따른다(DB · VWorld 모두 도면 좌표계로 보내줌).
 /// </summary>
 public sealed class ImportGisCommand
 {
@@ -23,6 +23,10 @@ public sealed class ImportGisCommand
     internal const string LayerContourIndex = "DH-등고선-계곡선";
     internal const string LayerParcel = "DH-지적도";
     internal const string LayerJibun = "DH-지번";
+    /// <summary>★[v109.1] 국공유지 필지 해치(하늘색 반투명) — 사유지 · 소유 자료 없음은 칠 없음.</summary>
+    internal const string LayerParcelPublic = "DH-지적-국공유지";
+    /// <summary>★★[v109.1 · 검토 H2] 지적이 올라가는 레이어 <b>한 목록</b> — 가져오기(교체) · 지적도 삭제 · 초기화 보존이 모두 이것을 쓴다(«두 경로가 다른 자» 막기).</summary>
+    internal static readonly string[] ParcelLayers = { LayerParcel, LayerJibun, LayerParcelPublic };
     /// <summary>수치지도 DXF의 표고점 — 서버 지표면에는 없고 DXF에만 있다.</summary>
     internal const string LayerSpot = "DH-표고점";
 
@@ -34,7 +38,7 @@ public sealed class ImportGisCommand
 
     /// <summary>가져온 데이터가 올라가는 레이어(초기화·보존 판정 공용).</summary>
     internal static readonly string[] ImportLayers =
-        { LayerContour, LayerContourIndex, LayerParcel, LayerJibun, LayerSpot };
+        { LayerContour, LayerContourIndex, LayerParcel, LayerJibun, LayerParcelPublic, LayerSpot };
 
     private const int MaxContourRows = 60000;   // 안전 상한(실측 5km각 754가닥이라 사실상 여유)
     private const int MaxParcelRows = 20000;    // 실측 5km각 6만 필지 → 상한 걸고 안내
@@ -195,9 +199,8 @@ public sealed class ImportGisCommand
             // ★좌표계를 <b>먼저</b> 정한다 — 지도에서 고른 박스도 이 원점으로 옮겨야 하기 때문이다.
             int epsg = ResolveEpsg(db, out string csNote);
             ed.WriteMessage($"\n[지적도] 좌표계: {csNote}");
-            // ★★<b>접속부터 본다</b> — 10분 걸려 범위를 고른 뒤에 "VPN을 확인하세요"는
-            //   못 할 짓이다. 서버가 없으면 어차피 범위를 골라도 소용이 없다(검토 0901).
-            if (!Reachable(ed)) return;
+            // ★★[v109.1 · 검토 H1] 지적은 이제 VWorld — <b>키부터 본다</b>(범위를 다 고른 뒤 «키 없음»은 못 할 짓 · 0901 교훈 그대로). 사내 DB(VPN)는 안 본다.
+            if (VWorldKey.Current.Length == 0) { Refuse(ed, "지적도", VWorldKey.NoKeyHelp); return; }
             // ★[JACK 0901 "지적도 버튼 눌러서 하는 건 그냥 캐드상 드래그로"]
             //   지적도는 이미 현장이 있는 도면에서 쓰는 것이라 두 점이 더 빠르다.
             if (!TwoPoints(ed, "지적도", out double x0, out double y0, out double x1, out double y1)) return;
@@ -212,6 +215,9 @@ public sealed class ImportGisCommand
 
     /// <summary>★★★[JACK 0901] <b>범위를 이미 안다</b>는 전제로 지적도를 받아 그린다.
     /// <para>지도 도킹바에서 [지적도]를 체크해 두면 지표면과 <b>같은 범위로 같이</b> 들어온다.</para>
+    /// <para>★★[v109.1 · 계획_v109.md 3 · JACK 1028 «지적은 VWorld로 · 지번은 속성에 · 국유지/사유지 구분이 중요»]
+    /// 사내 DB 대신 <b>VWorld</b>(연속지적 + 토지소유정보) · 필지마다 속성(XData <c>DH_PARCEL</c> + Map 개체 데이터) · <b>국공유지 = 하늘색 반투명 해치</b>
+    /// · 지번 글자 = 지번 + 지목(«645-1전» — 지적도 표기). <b>다 받은 뒤에</b> 옛 지적을 지운다 — 하나라도 못 받으면 도면은 그대로(검토 M2).</para>
     /// <param name="alone">혼자 부른 것인가 — 그때만 완료 대화상자를 띄운다.
     ///   지표면과 같이 올 때는 <b>대화상자가 둘</b>이면 성가시다.</param></summary>
     internal static void ImportParcelBox(Document doc, int epsg, string csNote,
@@ -222,17 +228,26 @@ public sealed class ImportGisCommand
         using var dlAll2 = SafeLock(doc);
         try
         {
-            ed.WriteMessage("\n[지적도] 사내 DB에서 받는 중…");
-            List<GisDb.Parcel> parcels;
-            bool cut; string diag;
-            try
+            string key = VWorldKey.Current;
+            if (key.Length == 0) { Refuse(ed, "지적도", VWorldKey.NoKeyHelp); return; }
+            var box = new VWorldParcels.Box(x0, y0, x1, y1);
+            ed.WriteMessage($"\n[지적도] VWorld에서 받는 중…({VWorldKey.Source} · {csNote})");
+            VWorldCadastral.Got? got = null; string fail = ""; bool keyErr = false;
+            using (BusyPopup.Scope("지적 받는 중…"))
             {
-                parcels = GisDb.LoadParcels(x0, y0, x1, y1, epsg, MaxParcelRows, out cut, out diag);
+                try { got = VWorldCadastral.Fetch(box, epsg, key, MaxParcelRows, BusyPopup.Text); }
+                catch (VWorldCadastral.FetchException fx) { fail = fx.Message; keyErr = fx.KeyError; }
+                catch (System.Exception ex) { fail = ex.GetType().Name + " — " + ex.Message; }
             }
-            catch (System.Exception dex) { Refuse(ed, "지적도", "지적도를 받지 못했습니다.\n" + GisDb.Clean(dex.Message)); return; }
-
-            ed.WriteMessage("\n[지적도] " + diag);
-            if (parcels.Count == 0)
+            if (got == null)
+            {
+                try { DiagLog.Append($"\n■ DHPARCEL — 못 받음(도면 그대로) · {fail} · {csNote}\n"); } catch { }
+                Refuse(ed, "지적도", "지적도를 받지 못했습니다 — 도면의 지적도는 그대로입니다.\n\n" + fail);
+                return;
+            }
+            ed.WriteMessage("\n[지적도] " + got.Diag);
+            var res = VWorldParcels.Assemble(got.Raws, got.Own, box);
+            if (res.Parcels.Count == 0)
             {
                 Refuse(ed, "지적도", "이 범위에는 지적 자료가 없습니다.\n" +
                                      "좌표계(원점)가 맞는지, 범위가 국내인지 확인하세요.");
@@ -240,181 +255,171 @@ public sealed class ImportGisCommand
             }
 
             const double txtH = 1.0;   // 지번 글자 크기 — 1.0 고정(JACK 0731)
-            int nLine = 0, nText = 0; string dupNote = ""; int eraseFail = 0;
+            string today = System.DateTime.Now.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+            int nLine = 0, nHole = 0, nText = 0, nFill = 0, fillFail = 0, eraseFail = 0, nOd = 0;
+            string odNote = "";
             using (var tr = db.TransactionManager.StartTransaction())
             {
                 // ★못 지웠으면 <b>새로 그리지 않는다</b> — 그리면 옛것 위에 겹쳐 두 벌이 된다.
                 //   (트랜잭션을 커밋 안 하고 나가므로 도면은 <b>건드린 자국조차 안 남는다</b>.)
-                eraseFail = EraseOnLayers(db, tr, new[] { LayerParcel, LayerJibun });   // 다시 불러오면 교체
+                eraseFail = EraseOnLayers(db, tr, ParcelLayers);   // 다시 불러오면 교체(선 · 지번 · 국공유지 해치 — 한 목록)
                 if (eraseFail > 0) goto erasedFailed;
                 ObjectId layP = EnsureLayer(db, tr, LayerParcel, 2);        // 필지 노란색(JACK 0731)
                 ObjectId layT = EnsureLayer(db, tr, LayerJibun, 7);         // 지번 흰색(별도 레이어 — JACK)
+                bool newFill = !((LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead)).Has(LayerParcelPublic);
+                ObjectId layH = EnsureLayer(db, tr, LayerParcelPublic, 4);  // 국공유지 하늘색
+                // 투명 60 % — 처음 만들 때만(사람이 바꾼 값은 안 덮음) · 해치는 «도면층별»을 따른다
+                if (newFill) try { ((LayerTableRecord)tr.GetObject(layH, OpenMode.ForWrite)).Transparency = new Transparency((byte)102); } catch { }
+                GradingBuilder.EnsureRegApp(db, tr, ParcelXData.App);
                 // [JACK 0731] 지번이 '?'로 깨지는 문제 — 기본 글꼴(txt.shx)이 한글을 못 그린다('산12-1' 등).
                 //   한글 트루타입 글꼴 스타일을 만들어 지번 문자에 지정한다.
                 ObjectId styleId = EnsureKoreanTextStyle(db, tr);
                 var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
 
-                // ══ ★★★[JACK 0917 <i>"지적도 기능을 쓰면 문자랑 선이 중복돼서 들어와"</i>] ═══════
-                //
-                //   <para><b>중복이 생길 수 있는 길이 둘</b>이고, 여기서 <b>둘 다</b> 막는다.</para>
-                //
-                //   <para><b>① 같은 필지가 여러 줄로 온다.</b> 표 <c>lsmd_cont_ldreg</c>(연속지적)는
-                //   도엽별로 만든 자료를 이어 붙인 것이라 <b>같은 필지가 여러 도엽에 겹쳐</b> 들어 있는 일이 흔하다.
-                //   질의에 <c>DISTINCT</c>도 PNU 묶음도 없어, 오는 대로 다 그린다.</para>
-                //
-                //   <para><b>② <c>ST_Dump</c>가 한 필지를 여러 조각으로 쪼갠다.</b> 교집합이 여러 폴리곤이 되면
-                //   <b>조각마다 한 줄</b>씩 오고, 선은 조각마다 있는 게 맞지만
-                //   <b>지번 문자는 조각 수만큼 찍힌다</b> — 같은 지번이 두 번 세 번 보인다.</para>
-                //
-                //   <para>※<b>[검토 0917 정정]</b> 처음에 여기에 <i>"범위 상자에 걸친 필지는 (으레) 여러 폴리곤"</i>이라
-                //   적었는데 <b>틀렸다</b>. 볼록한 도형은 볼록한 사각 박스와 만나도 <b>언제나 한 덩이</b>다
-                //   (볼록∩볼록=볼록). 쪼개지려면 <b>필지 자체가 오목</b>(ㄱ자·잘록한 목)하고
-                //   박스 변이 <b>하필 그 잘록한 자리</b>를 지나야 한다. 실무 필지에 오목한 것이 드물지 않아
-                //   ②가 일어나는 것 자체는 맞지만, <b>"걸치면 으레"는 아니다</b>.
-                //   고치는 방법에는 영향이 없다 — 쪼개지든 아니든 아래가 그대로 맞게 돈다.</para>
-                //
-                //   <para>★고침: <b>선은 같은 모양이면 한 번만</b>, <b>문자는 한 필지(PNU)에 한 번만</b>
-                //   — 그 필지의 <b>가장 큰 조각</b> 위에 놓는다.
-                //   그리고 <b>몇 개를 걷어냈는지 로그에 적는다</b> — 그 숫자가 곧 어느 길이었는지 말해 준다
-                //   (선도 문자도 걷혔으면 ①, 문자만 걷혔으면 ②).</para>
-                var seenRing = new System.Collections.Generic.HashSet<string>();
-                // ★[검토 0917] 표식은 <b>mm까지 같아야</b> 걸린다. 도엽 두 장이 <b>따로 디지타이징</b>돼
-                //   좌표가 cm쯤 어긋난 진짜 중복이면 표식으로는 못 잡는다.
-                //   → 같은 필지(PNU) 안에서 <b>넓이와 중심</b>으로 한 번 더 본다.
-                //   갈라진 조각은 <b>중심이 멀리 떨어져</b> 있으므로 살아남는다.
-                //   ※이 cm 차이 중복이 실제로 오는지는 <b>안 쟀다</b>(사내 DB를 안 봤다).
-                var seenShape = new System.Collections.Generic.Dictionary<string,
-                    System.Collections.Generic.List<(double A, double Cx, double Cy)>>();
-                var bestLabel = new System.Collections.Generic.Dictionary<string, (double Area, Point3d At, string Jibun)>();
-                int dupLine = 0, dupText = 0, dupNear = 0;
-
-                static string RingSig(Point3dCollection r)
+                // ★[M9] 특성 창용 개체 데이터 — 안 되는 판이면 XData만(로그) · 한 줄이 느리면(앞 100줄 평균 5 ms 넘게) 그 뒤는 끔
+                ParcelObjectData? od = null;
+                if (GradingSettings.ParcelObjectData)
                 {
-                    // 시작 정점이 달라도 같은 모양이면 같은 값이 나오게 — 순서에 안 기대는 표식
-                    int n = r.Count; double sx = 0, sy = 0, mnx = double.MaxValue, mny = double.MaxValue,
-                        mxx = double.MinValue, mxy = double.MinValue;
-                    foreach (Point3d q in r)
-                    {
-                        sx += q.X; sy += q.Y;
-                        if (q.X < mnx) mnx = q.X; if (q.Y < mny) mny = q.Y;
-                        if (q.X > mxx) mxx = q.X; if (q.Y > mxy) mxy = q.Y;
-                    }
-                    return $"{n}|{sx:F3}|{sy:F3}|{mnx:F3}|{mny:F3}|{mxx:F3}|{mxy:F3}";
+                    try { od = OpenParcelOd(db); }
+                    catch (System.Exception oex) { odNote = "특성 창 표시(개체 데이터) 못 함 — " + oex.GetType().Name; }
                 }
-                static double RingArea2D(Point3dCollection r)
+                var odWatch = new System.Diagnostics.Stopwatch();
+                void Od(Autodesk.AutoCAD.DatabaseServices.DBObject o, VWorldParcels.Parcel p)
                 {
-                    double a2 = 0; int n = r.Count;
-                    for (int i = 0; i < n; i++)
-                    { var u = r[i]; var v = r[(i + 1) % n]; a2 += u.X * v.Y - v.X * u.Y; }
-                    return System.Math.Abs(a2) * 0.5;
-                }
-
-                foreach (var p in parcels)
-                {
-                    string pk = p.Pnu.Length > 0 ? p.Pnu : StripJimok(p.Jibun);
-                    foreach (var ring in p.Rings)
-                    {
-                        if (!seenRing.Add(RingSig(ring))) { dupLine++; continue; }   // ★똑같은 선은 한 번만
-                        // ★거의 같은 선도 한 번만 — 같은 필지 · 넓이 0.5% 안 · 중심 1m 안
-                        double aR = RingArea2D(ring), cx = 0, cy = 0;
-                        foreach (Point3d q in ring) { cx += q.X; cy += q.Y; }
-                        if (ring.Count > 0) { cx /= ring.Count; cy /= ring.Count; }
-                        if (pk.Length > 0)
-                        {
-                            if (!seenShape.TryGetValue(pk, out var lst))
-                            { lst = new System.Collections.Generic.List<(double, double, double)>(); seenShape[pk] = lst; }
-                            bool near = false;
-                            foreach (var (A, Cx, Cy) in lst)
-                                if (System.Math.Abs(A - aR) <= System.Math.Max(0.01, A * 0.005)
-                                 && (Cx - cx) * (Cx - cx) + (Cy - cy) * (Cy - cy) <= 1.0)
-                                { near = true; break; }
-                            if (near) { dupNear++; continue; }
-                            lst.Add((aR, cx, cy));
-                        }
-                        try
-                        {
-                            var pl = new Polyline3d(Poly3dType.SimplePoly, ring, true);   // 닫힌 링
-                            pl.LayerId = layP;
-                            ms.AppendEntity(pl); tr.AddNewlyCreatedDBObject(pl, true);
-                            nLine++;
-                        }
-                        catch { }
-                    }
-                    // 지번 문자 — 지목 꼬리(한글)를 떼고 지번만(예 '645-1전' → '645-1')
-                    string jibun = StripJimok(p.Jibun);
-                    if (jibun.Length == 0) continue;
-                    // ★한 필지에 한 번만. PNU가 비면 지번을 열쇠로 쓴다(그래도 없으면 자리별로).
-                    string key = p.Pnu.Length > 0 ? "P:" + p.Pnu : "J:" + jibun;
-                    double aBig = 0; foreach (var ring in p.Rings) aBig = System.Math.Max(aBig, RingArea2D(ring));
-                    if (bestLabel.TryGetValue(key, out var prev))
-                    {
-                        dupText++;
-                        if (aBig > prev.Area) bestLabel[key] = (aBig, p.Label, jibun);   // <b>가장 큰 조각</b>에 붙인다
-                    }
-                    else bestLabel[key] = (aBig, p.Label, jibun);
-                }
-                foreach (var kv in bestLabel)
-                {
+                    if (od == null) return;
                     try
                     {
+                        odWatch.Start(); od.Attach(o, p, today); odWatch.Stop(); nOd++;
+                        if (nOd == 100 && odWatch.ElapsedMilliseconds > 500) { od = null; odNote = $"개체 데이터가 느려(100줄 {odWatch.ElapsedMilliseconds} ms) 앞 100줄만 넣음"; }
+                    }
+                    catch (System.Exception oex) { odWatch.Stop(); od = null; odNote = "개체 데이터를 넣다 멈춤 — " + oex.GetType().Name; }
+                }
+
+                foreach (var p in res.Parcels)
+                {
+                    for (int i = 0; i < p.Pieces.Count; i++)
+                    {
+                        var pc = p.Pieces[i];
+                        // 바깥 고리 · 구멍 — 닫힌 폴리선(XData에 역할 · 조각 번호)
+                        foreach (var (ring, role) in new[] { (pc.Shell, "outer") }.Concat(pc.Holes.Select(h => (h, "hole"))))
+                        {
+                            try
+                            {
+                                var pl = new Polyline(ring.Count) { Closed = true, LayerId = layP };
+                                for (int k = 0; k < ring.Count; k++) pl.AddVertexAt(k, new Point2d(ring[k].X, ring[k].Y), 0, 0, 0);
+                                ms.AppendEntity(pl); tr.AddNewlyCreatedDBObject(pl, true);
+                                pl.XData = ParcelXData.Build(p, role, i, today);
+                                if (role == "outer") { nLine++; Od(pl, p); } else nHole++;
+                            }
+                            catch { }
+                        }
+                        // 국공유지(일부 국공유는 빗금) — 비연관 해치(바깥 + 구멍 고리)
+                        var kind = p.Own.Kind;
+                        if (kind != VWorldParcels.OwnKind.Public && kind != VWorldParcels.OwnKind.Mixed) continue;
+                        Hatch? h = null;
+                        try
+                        {
+                            h = new Hatch { LayerId = layH, Associative = false };
+                            ms.AppendEntity(h); tr.AddNewlyCreatedDBObject(h, true);
+                            if (kind == VWorldParcels.OwnKind.Public) h.SetHatchPattern(HatchPatternType.PreDefined, "SOLID");
+                            else { h.PatternScale = 1.0; h.SetHatchPattern(HatchPatternType.PreDefined, "ANSI31"); }
+                            // ★바깥 고리 = External — Outermost · Default로 주면 해치 넓이를 못 읽는다(eNotApplicable · 특성 창 넓이 빈칸 — 1029 화면 없는 Civil 실험 10×10 네모: External만 100.0)
+                            h.AppendLoop(HatchLoopTypes.External | HatchLoopTypes.Polyline, Loop(pc.Shell), Bulges(pc.Shell.Count + 1));
+                            foreach (var hr in pc.Holes) h.AppendLoop(HatchLoopTypes.Default | HatchLoopTypes.Polyline, Loop(hr), Bulges(hr.Count + 1));
+                            h.EvaluateHatch(true);
+                            h.XData = ParcelXData.Build(p, "fill", i, today);
+                            Od(h, p);
+                            nFill++;
+                        }
+                        catch { fillFail++; try { h?.Erase(); } catch { } }
+                    }
+                    // 지번 글자 «645-1전» — 한 필지에 한 번 · 가장 큰 조각의 안쪽 점(오목해도 안쪽)
+                    if (p.LabelText.Length == 0) continue;
+                    try
+                    {
+                        var at = new Point3d(p.Label.X, p.Label.Y, 0);
                         var t = new DBText
                         {
-                            TextString = kv.Value.Jibun,
-                            Position = kv.Value.At,
+                            TextString = p.LabelText,
+                            Position = at,
                             Height = txtH,
                             HorizontalMode = TextHorizontalMode.TextCenter,
                             VerticalMode = TextVerticalMode.TextVerticalMid,
-                            AlignmentPoint = kv.Value.At,
+                            AlignmentPoint = at,
                             LayerId = layT,
                         };
                         if (!styleId.IsNull) t.TextStyleId = styleId;   // 한글 글꼴
                         ms.AppendEntity(t); tr.AddNewlyCreatedDBObject(t, true);
+                        t.XData = ParcelXData.Build(p, "label", -1, today);
+                        Od(t, p);
                         nText++;
                     }
                     catch { }
                 }
-                dupNote = (dupLine > 0 || dupNear > 0 || dupText > 0)
-                    ? $" · <b>겹친 것 걷어냄</b>(선 {dupLine}"
-                      + (dupNear > 0 ? $"+거의같음 {dupNear}" : "") + $" · 지번 {dupText})"
-                      + (dupLine + dupNear > 0 && dupText > 0 ? " — <b>같은 필지가 여러 줄로 온다</b>"
-                         : dupLine + dupNear > 0 ? " — 같은 모양의 선이 여러 줄로 온다"
-                         : " — <b>한 필지가 조각으로 쪼개져 온다</b>(ST_Dump)")
-                      + (dupNear > 0 ? "(<b>거의같음</b> = 좌표가 cm쯤 어긋난 중복 — 도엽을 따로 딴 자료다)" : "")
-                    : " · 겹친 것 없음";
                 tr.Commit();
             }
-            DrawOrderFix.Apply(db);   // 배경지도 위로 지번이 보이게(JACK 0731)
+            DrawOrderFix.Apply(db);   // 배경지도 위로 지번이 보이게(JACK 0731) · 국공유지 해치는 이미지 바로 위
             ed.Regen();
             goto drawn;
 
         erasedFailed:
-            ed.WriteMessage($"\n[지적도] 이전 지적도 {eraseFail}개를 <b>못 지웠습니다</b> — 새로 그리지 않았습니다."
-                .Replace("<b>", "").Replace("</b>", "")
-                + $"\n  '{LayerParcel}'·'{LayerJibun}' 레이어의 <b>잠금</b>을 풀고 다시 하세요."
-                .Replace("<b>", "").Replace("</b>", ""));
+            ed.WriteMessage($"\n[지적도] 이전 지적도 {eraseFail}개를 못 지웠습니다 — 새로 그리지 않았습니다."
+                + $"\n  '{LayerParcel}'·'{LayerJibun}'·'{LayerParcelPublic}' 레이어의 잠금을 풀고 다시 하세요.");
             AcadApp.ShowAlertDialog("지적도를 다시 가져오지 못했습니다.\n\n"
                 + $"이전 필지·지번 {eraseFail}개를 못 지웠습니다(레이어 잠금 확인).\n"
-                + $"'{LayerParcel}'·'{LayerJibun}' 잠금을 풀고 다시 시도하세요.\n\n"
-                + "※그냥 그리면 옛것 위에 겹쳐 <b>두 벌</b>이 됩니다.".Replace("<b>", "").Replace("</b>", ""));
-            try { DiagLog.Append($"\n■ DHPARCEL — <b>안 그렸다</b>(이전 것 {eraseFail}개를 못 지움 · 레이어 잠금)\n"); } catch { }
+                + $"'{LayerParcel}'·'{LayerJibun}'·'{LayerParcelPublic}' 잠금을 풀고 다시 시도하세요.\n\n"
+                + "※그냥 그리면 옛것 위에 겹쳐 두 벌이 됩니다.");
+            try { DiagLog.Append($"\n■ DHPARCEL — 안 그렸다(이전 것 {eraseFail}개를 못 지움 · 레이어 잠금)\n"); } catch { }
             return;
 
         drawn:
-            string done = $"필지 {parcels.Count}개(선 {nLine}·지번 {nText})" + dupNote +
-                          (cut ? $" · ⚠상한 {MaxParcelRows} 도달(범위 축소 권장)" : "");
+            // ★[H4] «소유 자료 없음» ≠ 사유지 — 칠하지 않은 까닭을 숨기지 않고 센다
+            string own = $"국공유지 {res.Public:N0} · 사유지 {res.Private:N0}" + (res.Mixed > 0 ? $" · 일부 국공유 {res.Mixed:N0}" : "")
+                       + (res.NoOwn > 0 ? $" · 소유 자료 없음 {res.NoOwn:N0}" : "");
+            var warn = new List<string>();
+            if (res.NoOwn > 0) warn.Add($"소유 자료 없음 {res.NoOwn:N0}필지는 칠하지 않았습니다(사유지라는 뜻이 아님)");
+            if (got.WfsCut > 0) warn.Add("필지가 아주 많은 곳은 소유 정보가 일부 빠졌을 수 있습니다");
+            if (got.LookupFail > 0 || got.LookupSkipped > 0) warn.Add($"공유 필지 소유 조회 {got.LookupFail + got.LookupSkipped:N0}건을 못 했습니다");
+            if (fillFail > 0) warn.Add($"국공유지 해치 {fillFail:N0}개를 못 만들었습니다(선은 있음)");
+            if (odNote.Length > 0) warn.Add(odNote);
+            string done = $"필지 {res.Parcels.Count:N0}개({own}) · 선 {nLine:N0}" + (nHole > 0 ? $"(구멍 {nHole:N0})" : "")
+                        + $" · 지번 {nText:N0} · 해치 {nFill:N0}"
+                        + (res.DupRows > 0 ? $" · 상자 경계 겹침 {res.DupRows:N0} 걷음" : "") + (res.Fixed > 0 ? $" · 도형 고침 {res.Fixed:N0}" : "")
+                        + (res.JibunMismatch > 0 ? $" · 지번 글자 ≠ PNU {res.JibunMismatch:N0}(PNU 씀)" : "");
             ed.WriteMessage($"\n[지적도] {done}");
+            foreach (var w in warn) ed.WriteMessage($"\n  ⚠ {w}");
             // ★지표면과 같이 올 때는 대화상자를 안 띄운다 — 둘이 연달아 뜨면 성가시다.
             if (alone)
-                AcadApp.ShowAlertDialog("지적도 가져오기 완료\n\n" + done +
-                    "\n\n※ GIS_Design_Loader server 제공" +
-                    (cut ? "\n⚠ 자료가 많아 일부만 가져왔습니다 — 범위를 좁혀 다시 받으세요." : ""));
-            try { DiagLog.Append($"\n■ DHPARCEL — {done} · {csNote}\n"); } catch { }
+                AcadApp.ShowAlertDialog($"지적도 가져오기 완료\n\n필지 {res.Parcels.Count:N0}개 — {own}"
+                    + (warn.Count > 0 ? "\n\n⚠ " + string.Join("\n⚠ ", warn) : "")
+                    + "\n\n※ 출처: VWorld(연속지적 · 토지소유정보)");
+            try { DiagLog.Append($"\n■ DHPARCEL — {done} · {got.Diag} · 개체 데이터 {nOd:N0}" + (warn.Count > 0 ? " · ⚠ " + string.Join(" · ", warn) : "") + $" · {csNote}\n"); } catch { }
         }
         catch (System.Exception ex)
         {
             ed.WriteMessage("\n[지적도 오류] " + ex.Message);
             AcadApp.ShowAlertDialog("지적도 가져오기 중 오류:\n" + ex.Message);
         }
+    }
+
+    /// <summary>Map 개체 데이터 표 — 따로 부른다(Map 모듈이 없는 판이면 여기서만 터진다 · 부르는 쪽이 잡음).</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static ParcelObjectData OpenParcelOd(Database db) => ParcelObjectData.Open(db);
+
+    /// <summary>해치 폴리선 고리 — 닫는 점까지.</summary>
+    private static Point2dCollection Loop(List<(double X, double Y)> r)
+    {
+        var c = new Point2dCollection();
+        foreach (var (x, y) in r) c.Add(new Point2d(x, y));
+        c.Add(new Point2d(r[0].X, r[0].Y));
+        return c;
+    }
+
+    private static DoubleCollection Bulges(int n)
+    {
+        var b = new DoubleCollection();
+        for (int i = 0; i < n; i++) b.Add(0);
+        return b;
     }
 
     // ── 공통 ──────────────────────────────────────────────────────────────────
@@ -730,22 +735,6 @@ public sealed class ImportGisCommand
             : "사내 지형·지적 데이터베이스에 접속할 수 없습니다.\n\n" +
               "사내망(VPN)에 연결되어 있는지 확인해 주세요.\n\n상세: " + why);
         return false;
-    }
-
-    /// <summary>'645-1전' → '645-1' (지번 뒤 한글 지목 제거 — DB에 지목 컬럼이 따로 없음).</summary>
-    internal static string StripJimok(string jibun)
-    {
-        if (string.IsNullOrWhiteSpace(jibun)) return "";
-        string s = jibun.Trim();
-        int end = s.Length;
-        while (end > 0)
-        {
-            char c = s[end - 1];
-            if (c >= '0' && c <= '9') break;      // 숫자로 끝나면 거기까지가 지번
-            end--;
-        }
-        string cut = end > 0 ? s.Substring(0, end) : s;
-        return cut.Length > 0 ? cut : s;
     }
 
     /// <summary>주어진 레이어의 객체를 <b>모두</b> 지운다. <b>못 지운 개수</b>를 돌려준다.
