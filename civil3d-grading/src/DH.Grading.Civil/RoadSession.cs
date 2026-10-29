@@ -1,4 +1,4 @@
-using Autodesk.AutoCAD.ApplicationServices;
+﻿using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Geometry;
 using Autodesk.AutoCAD.GraphicsInterface;
@@ -201,11 +201,23 @@ internal sealed class RoadSession
             _limitId = Handle(db, Design.LimitHandle);
             EnsureBase();
             double[] X, Y, Z; double s0, s1; string note; List<(double, double)>? limit = null;
+            string sheetNote = "";
             using (var tr = db.TransactionManager.StartTransaction())
             {
                 (X, Y, Z, s0, s1, note) = RoadBuilder.Sample(tr, AlignId, PlanId);
                 limit = ReadLimit(tr);
                 try { GradeNow = RoadBuilder.PlanGrade(tr, PlanId); } catch { GradeNow = double.NaN; }
+                // ★[v110.4 · 계획 3.3] 종단도가 지금 종단(PVI · 노선 길이) · 축척과 다르면 알림 — 밴드 값은 Civil이 따라가지만 측점 · 표고 범위 · 글씨 벌리기는 그대로
+                try
+                {
+                    if (Design.SheetViews.Count > 0)
+                    {
+                        double cs = Commands.SheetCommand.CurrentDrawingScale(db);
+                        if (RoadSheets.StampOf(tr, AlignId, PlanId) != Design.SheetStamp || (cs > 0 && Math.Abs(cs - Design.SheetScale) > 1e-6))
+                            sheetNote = "종단도가 지금 종단 · 축척과 다릅니다 — [종단도 다시]";
+                    }
+                }
+                catch { }
                 tr.Commit();
             }
             S0 = s0;
@@ -223,7 +235,7 @@ internal sealed class RoadSession
             // ★[v110.3] 사면선 · 소단선 · 옹벽선(미리보기 · [옹벽 변환] 찍기가 씀)
             var swL = System.Diagnostics.Stopwatch.StartNew();
             try { Lines = Last.Error.Length == 0 ? RoadGrade.TierLines(Last) : new(); } catch (System.Exception exL) { Lines = new(); try { DiagLog.Append("\n[진입도로] 계단선 못 셈 — " + exL.Message); } catch { } }
-            Note = string.Join(" · ", new[] { _baseNote, note }.Where(t => t.Length > 0));
+            Note = string.Join(" · ", new[] { _baseNote, note, sheetNote }.Where(t => t.Length > 0));
             _baseNote = "";
             var swD = System.Diagnostics.Stopwatch.StartNew();
             DrawPreview();
@@ -280,14 +292,14 @@ internal sealed class RoadSession
     /// <summary>[종단 초안 다시] — 지금 바탕면에서 노선을 따라 읽어 계획 종단 PVI를 다시(우리가 쓰는 동안 바뀜 표시 막음).</summary>
     internal RoadProfileDraft.Result RedraftNow()
     {
-        Suppress = true;
+        bool was = Suppress; Suppress = true;   // ★[v110.4 · 검토 L1] 겹쳐 불려도 바깥 막음을 안 풂
         try
         {
             using var dl = _doc.LockDocument();
             EnsureBase();
             return RoadBuilder.Redraft(_doc, AlignId, _base!, PlanId, Fresh());
         }
-        finally { Suppress = false; }
+        finally { Suppress = was; }
     }
 
     /// <summary>★[v110.2 · JACK 1029 «곡선 반경 = 도킹창 값 하나»] 이 노선의 직선 ↔ 직선 곡선 반경을 바꾸고 다시 계산(우리가 쓰는 동안 바뀜 표시 막음). 돌려줌 = 결과 한 줄.</summary>
@@ -295,15 +307,35 @@ internal sealed class RoadSession
     {
         string note;
         if (!Design.OwnCurves) { Recompute(); return "기존 Civil 노선으로 연 도로라 곡선은 그대로(곡선 반경 칸은 새 도로에만)"; }
-        Suppress = true;
+        bool was = Suppress; Suppress = true;   // ★[v110.4 · 검토 L1]
         try
         {
             using var dl = _doc.LockDocument();
             note = RoadBuilder.ReCurve(_doc, AlignId, r);
         }
-        finally { Suppress = false; }
+        finally { Suppress = was; }
         Recompute();
         return note;
+    }
+
+    /// <summary>★★[v110.4 · 계획_v110_4.md 3.3] [종단도 다시] · 노선 만들 때 — 부지 [종단도]와 같은 꼴(A1 도곽 · 밴드 6칸)로 이 도로 종단도를 <paramref name="at"/>에 새로.
+    /// 바뀜 표시를 막고(겹쳐 불려도 바깥 막음 유지 — 검토 L1) 설계는 노선에서 다시 읽는다 · 바탕면은 이름으로 다시 찾는다 · 다시 계산(Recompute)은 안 부른다.</summary>
+    internal string MakeSheets(Point3d at, System.Text.StringBuilder log)
+    {
+        bool was = Suppress; Suppress = true;
+        try
+        {
+            using var dl = _doc.LockDocument();
+            using (var tr = _doc.Database.TransactionManager.StartTransaction())
+            {
+                var d = RoadDesign.Read(tr, AlignId);
+                tr.Commit();
+                if (d != null) Design = d;
+            }
+            EnsureBase();
+            return RoadSheets.Build(this, at, log);
+        }
+        finally { Suppress = was; }
     }
 
     internal const string SurfBase = "진입도로_DH";
@@ -355,7 +387,7 @@ internal sealed class RoadSession
         WallDaylight.WriteLandXmlTin(xml, "ROAD", tris, 1e-7, out int np, out int nf, out int nd);
         long msXml = sw.ElapsedMilliseconds;
         ObjectId made = ObjectId.Null;
-        Suppress = true;
+        bool was = Suppress; Suppress = true;   // ★[v110.4 · 검토 L1]
         try
         {
             // ★[설치 전 검토 낮음 4] 앞에서 못 치운 작업 면이 남았으면 먼저 치운다
@@ -426,7 +458,7 @@ internal sealed class RoadSession
         }
         finally
         {
-            Suppress = false;
+            Suppress = was;
             if (!made.IsNull)
             {
                 try { using var trE = db.TransactionManager.StartTransaction(); if (!made.IsErased) trE.GetObject(made, OpenMode.ForWrite, false, true).Erase(); trE.Commit(); }
@@ -729,7 +761,7 @@ internal sealed class RoadSession
     /// <summary>설계를 노선에 쓴다(문서 잠금 · 바뀜 표시 막고) — 창 값 · 옹벽 구간 · 경계.</summary>
     internal void SaveDesign()
     {
-        Suppress = true;
+        bool was = Suppress; Suppress = true;   // ★[v110.4 · 검토 L1] [종단도 다시] 안에서 불려도 바깥 막음을 안 풂
         try
         {
             using var dl = _doc.LockDocument();
@@ -737,7 +769,7 @@ internal sealed class RoadSession
             Design.Write(tr, AlignId);
             tr.Commit();
         }
-        finally { Suppress = false; }
+        finally { Suppress = was; }
     }
 
     internal Document Doc => _doc;

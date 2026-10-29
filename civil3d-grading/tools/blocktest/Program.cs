@@ -70,6 +70,14 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "road")
     return fails == 0 ? 0 : 1;
 }
 
+// ★[v110.4] BLOCKTEST_ONLY=sheet — 진입도로 종단도(축척 · 폭 · 도장 · 지우기 · 묶음 주인 — S180)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "sheet")
+{
+    RoadSheetCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
 // ★[v109.1] BLOCKTEST_ONLY=parcel — VWorld 지적 · 소유(S179)만
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "parcel")
 {
@@ -144,6 +152,7 @@ DrainageCheck.Run(Check);   // ★[v108] S176 — 정지면 빗물 검토(웅덩
 SecretScanCheck.Run(Check);   // ★[v109] S177 — 비밀값 검사(공개 저장소)
 RoadCheck.Run(Check);   // ★[v110] S178 — 도로 정지(원뿔 감싸기) · 종단 초안
 ParcelCheck.Run(Check);   // ★[v109.1] S179 — VWorld 지적 · 소유(읽기 · 합치기 · 자르기)
+RoadSheetCheck.Run(Check);   // ★[v110.4] S180 — 진입도로 종단도(축척 · 검토선 폭 · 도장 · 지우기 · 밴드 묶음 주인)
 
 const double W = 0.46, H = 0.2, STEP = 5.0, HW = W / 2;
 const double D = 0.5, FS = D / 2; // 깊이·전면 돌출(벽 중심=링, JACK 0720 Z-파이팅 해소): 절토 +FS(안쪽), 성토 −FS

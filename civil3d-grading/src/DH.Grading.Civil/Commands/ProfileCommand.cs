@@ -810,232 +810,11 @@ public sealed class ProfileCommand
             //   사용자가 축척을 고정하면 노선이 길수록 한 장을 넘치는데, 종전엔 <b>넘친 채로 그리고
             //   경고만</b> 찍었다. 이제 <b>그 축척에서 가장 꽉 차는 측점까지</b> 넣고 다음 장으로 넘긴다.
             //   도곽은 간격 0으로 <b>딱 붙인다</b>(JACK — 횡단도와 같은 관례).
-            double stA9 = 0, stB9 = 0;
-            try
-            {
-                using var trA9 = db.TransactionManager.StartTransaction();
-                if (trA9.GetObject(alignId, OpenMode.ForRead) is CivilDb.Alignment al9)
-                { stA9 = al9.StartingStation; stB9 = al9.EndingStation; }
-                trA9.Commit();
-            }
-            catch { }
-            var plan9 = GradingSettings.ProfileScale > 0
-                      ? SheetCommand.SplitPlan(stA9, stB9, GradingSettings.ProfileScale, GradingSettings.XsecInterval, log)
-                      : new System.Collections.Generic.List<(double S0, double S1)> { (stA9, stB9) };
-
-            // ★★★[JACK 0904 "돌렸는데 튕겼어"] <b>단계마다 파일에 바로 쓴다.</b>
-            //   종단은 로그를 <c>StringBuilder</c>에 모아 <b>끝에서 한 번</b> 쓴다 — 그래서 중간에 죽으면
-            //   <b>아무 흔적도 안 남는다</b>(실측: 크래시 뒤 로그에 종단 실행 자국이 없었다).
-            //   여러 장은 새 길이라 어디서 죽는지부터 알아야 한다 — 이 한 줄씩은 <b>즉시</b> 디스크로 간다.
-            void Step9(string t)
-            {
-                log.AppendLine("    " + t);
-                try { DiagLog.Append("\n[여러장] " + t); } catch { }
-            }
-            Step9($"시작 — {plan9.Count}장 계획 · 고정축척 {(GradingSettings.ProfileScale > 0 ? "1:" + GradingSettings.ProfileScale.ToString("F0") : "자동")}");
-
-            ObjectId pvId = ObjectId.Null;
-            // ★[JACK 0904 "첫 종단만 옹벽 막대가 보이고 나머지는 사라짐"] <b>장마다 다시 그려야 하는 것들</b>이
-            //   있다(옹벽 막대·지층 이름). 그것들은 지금 <c>pvId</c> 하나만 보고 그리므로 장 목록을 남긴다.
-            var pvIds9 = new System.Collections.Generic.List<ObjectId>();
-            string sheetAll = "";
-            double stepX9 = SheetCommand.SheetW * (GradingSettings.ProfileScale > 0 ? GradingSettings.ProfileScale : 200.0) / 1000.0;
-            for (int sh9 = 0; sh9 < plan9.Count; sh9++)
-            {
-                // ★★★[JACK 0904 "횡단처럼 빈공간없이 딱 붙게"] <b>시작측점만큼 빼서 놓는다.</b>
-                //
-                //   실측(로그): 도곽 왼쪽이 211409.67 → 211553.77 → 211697.87로 <b>144.1m씩</b> 벌어졌다.
-                //   종이 한 장은 84.1m이고 차이 60.0m는 <b>한 장의 측점 길이</b>다.
-                //   Civil은 종단뷰를 그릴 때 <b>노선 시작측점을 삽입점에 놓는다</b> — 그래서 측점 60부터
-                //   보여 주는 뷰는 삽입점보다 <b>60m 오른쪽</b>에서 그려진다(가로는 측점 1m = 모형 1m).
-                //   → 밀어 놓을 때 그만큼 <b>빼면</b> 도곽이 딱 붙는다.
-                double backX9 = plan9[sh9].S0 - plan9[0].S0;
-                var pt9 = plan9.Count > 1
-                        ? new Point3d(placeAt.X + stepX9 * sh9 - backX9, placeAt.Y, placeAt.Z)
-                        : placeAt;
-                Step9($"{sh9 + 1}/{plan9.Count} ① 뷰 만들기 X={pt9.X:F1}");
-                var pvId9 = CivilDb.ProfileView.Create(alignId, pt9);
-                Step9($"{sh9 + 1}/{plan9.Count} ① 뷰 만듦");
-                if (plan9.Count > 1)
-                {
-                    // ★장마다 제 측점 범위만 보여 준다 — 경계 측점은 양쪽 장에 다 나온다(이어짐 확인).
-                    try
-                    {
-                        using var trR9 = db.TransactionManager.StartTransaction();
-                        if (trR9.GetObject(pvId9, OpenMode.ForWrite) is CivilDb.ProfileView pvR9)
-                        {
-                            // ★★★[JACK 0904 "각 종단의 마지막 측점값이 표에 걸쳐짐"]
-                            //   <b>표 끝 여백을 여기서 붙인다.</b> <see cref="SheetCommand"/>의 <c>ExtendTail</c>은
-                            //   <i>"측점범위를 이미 지정했으면 건너뛴다"</i>(이미 붙인 꼬리에 또 붙이지 않으려는 관문)라,
-                            //   <b>우리가 나눈 장에는 여백이 안 붙었다</b> — 그래서 끝 측점 글씨가 표 선에 반쯤 걸쳤다.
-                            //   한 장짜리 도면이 받는 것과 <b>같은 여백</b>(종이 기준)을 준다.
-                            double pad9 = SheetCommand.TailPadModel(GradingSettings.ProfileScale);
-                            // ★★★[검토 0904 "둘째 장부터 시작측점이 +0.00"] <b>시작측점을 1cm 당긴다.</b>
-                            //
-                            //   실측 근거: 세 장 모두 로그에 <c>시작라벨=켬</c>인데 <b>1장만 No.0이 나온다</b> —
-                            //   스위치는 범인이 아니다. <c>LabelAtStartStation</c>은 <b>노선 시작측점</b>에만 반응하고
-                            //   (이 파일 v24.1 주석이 그렇게 적고 있다), Civil의 주 증분 라벨은
-                            //   <b>시작 측점 다음 자리부터</b> 찍는다. 그래서 2장 시작(60m)은 <b>양쪽 다 비어</b>
-                            //   굴곡부 라벨 <c>+0.00</c>만 남았다. 60m가 주측점인지는 <b>무관</b>했다.
-                            //
-                            //   → 뷰 시작을 1cm 앞으로 당기면 <c>S0</c>이 <b>뷰 안쪽</b> 측점이 되어
-                            //     주 증분이 정상으로 <c>No.3</c>을 찍는다.
-                            //   ※1장은 그대로 둔다 — 거기는 노선 기점이라 <c>No.0</c>이 제대로 나오고,
-                            //     시작 쪽으로 당기면 v24.1이 되돌린 그 사고(<b>기점이 표 안쪽으로 밀림</b>)가 재발한다.
-                            // ★[검토 0904] 들이는 양은 <see cref="SheetCommand.SplitPlan"/>이 <b>이미 반영</b>했다 —
-                            //   여기서 또 빼면 계획과 자리계산이 어긋난다(종전 1cm 겹침의 원인).
-                            pvR9.StationRangeMode = CivilDb.StationRangeType.UserSpecified;
-                            pvR9.StationStart = System.Math.Max(stA9, plan9[sh9].S0);
-                            // ★★[검토 0904] <b>노선 끝으로 자르지 않는다.</b> 종전 <c>Min(…, stB9)</c>은
-                            //   마지막 장(S1 == 노선 끝)에서 여백을 <b>도로 깎아</b> 스스로를 무효화했다.
-                            //   한 장짜리 도면의 <c>ExtendTail</c>도 노선 끝을 <b>넘겨서</b> 건다 — 같은 방식으로 맞춘다.
-                            pvR9.StationEnd = plan9[sh9].S1 + pad9;
-                        }
-                        trR9.Commit();
-                    }
-                    catch (System.Exception exR9) { Step9($"{sh9 + 1} ⚠측점범위 실패 — " + exR9.Message); }
-                    Step9($"{sh9 + 1}/{plan9.Count} ② 측점범위 {plan9[sh9].S0:F1}~{plan9[sh9].S1:F1}");
-                    // ★[검토 0904] <b>되읽어 확인한다</b> — Civil이 넣은 값을 되돌리는 일이 잦다
-                    //   (<c>ExtendTail</c>도 같은 검증을 한다).
-                    //   `LabelAtStartStation`은 <b>노선 시작측점</b>에 No.X를 그리는 스위치다 —
-                    //   둘째 장부터는 그 자리가 아니므로 안 붙고, 굴곡부 라벨(+0.00)만 남았을 수 있다.
-                    //   실제로 무엇이 켜져 있는지부터 본다(짐작으로 스위치를 만지면 기점 No.0이 날아간다).
-                    try
-                    {
-                        using var trQ9 = db.TransactionManager.StartTransaction();
-                        if (trQ9.GetObject(pvId9, OpenMode.ForRead) is CivilDb.ProfileView pvQ9)
-                        {
-                            var sb9 = new System.Text.StringBuilder();
-                            using (var it9 = pvQ9.Bands.GetBottomBandItems())
-                                for (int q9 = 0; q9 < it9.Count; q9++)
-                                {
-                                    string st9 = "?", en9 = "?", kd9 = "?";
-                                    try { st9 = it9[q9].LabelAtStartStation.ToString(); } catch { }
-                                    try { en9 = it9[q9].LabelAtEndStation.ToString(); } catch { }
-                                    try { kd9 = it9[q9].BandType.ToString(); } catch { }
-                                    sb9.Append($" [{q9}:{kd9} 시작{st9} 끝{en9}]");
-                                }
-                            Step9($"{sh9 + 1} 밴드 라벨 스위치 · 뷰측점 {pvQ9.StationStart:F2}~{pvQ9.StationEnd:F2}{sb9}");
-                        }
-                        trQ9.Commit();
-                    }
-                    catch (System.Exception exQ9) { Step9($"{sh9 + 1} ⚠라벨 스위치 되읽기 실패 — " + exQ9.Message); }
-                }
-                if (pvId.IsNull) pvId = pvId9;          // 첫 장을 대표로 — 뒤 코드가 이 하나를 본다
-                pvIds9.Add(pvId9);
-                Step9($"{sh9 + 1}/{plan9.Count} ③ 스타일 걸기");
-                string sty9 = ApplyViewStyle(db, cdoc, pvId9, pidGround, pidPad, slGroupId, surfs, ed, log);
-                Step9($"{sh9 + 1}/{plan9.Count} ③ 스타일 걸었다");
-                if (sh9 == 0) { log.AppendLine(sty9); ed.WriteMessage("\n  · " + sty9); }
-                if (plan9.Count > 1)
-                    log.AppendLine($"  ── {sh9 + 1}/{plan9.Count}장 · 측점 {plan9[sh9].S0:F1}~{plan9[sh9].S1:F1}m · 자리 X {pt9.X:F1}");
-                // ★[JACK 0904 · 검토 0904] 시작측점 라벨은 <b>첫 장만</b> — <b>인자로</b> 넘긴다.
-                //   전역이면 중간에 예외가 났을 때 false로 굳어, 뒤이은 <c>DHSHEET</c> 단독이
-                //   멀쩡한 도면의 기점 글씨를 끈다.
-                bool startLabel9 = (sh9 == 0);
-                Step9($"{sh9 + 1}/{plan9.Count} ④ 도곽 시작(시작측점라벨 {(startLabel9 ? "켬" : "끔")})");
-                string sh9Note = SheetCommand.Build(db, ed, pvId9, log, startLabel9);
-                Step9($"{sh9 + 1}/{plan9.Count} ④ 도곽 끝 — {sh9Note}");
-
-                // ★★★[JACK 0904 "두 번째 장부터 측점 시작이 +19.99부터 시작돼"]
-                //   <b>2장부터는 시작측점 라벨을 끈다.</b>
-                //
-                //   스샷으로 확정: 시작 자리에 글씨가 <b>둘</b> 겹쳐 있다 — <c>No.6</c>(주 증분, 120.00m)과
-                //   <c>+19.99</c>(뷰 시작 119.99m). 앞의 것이 우리가 원한 것이고 뒤의 것이 군더더기다.
-                //   즉 <c>LabelAtStartStation</c>은 <b>뷰</b> 시작측점에 붙는다(검토가 '노선 시작'이라 본 것은 틀렸다) —
-                //   1cm 당긴 자리가 <c>No.5+19.99</c>라 그렇게 찍혔다.
-                //   ★1장은 끄면 안 된다 — 거기는 노선 기점이고 그 라벨이 <c>No.0</c>을 그리는 주체다
-                //     (v24.0에 껐다가 기점이 통째로 비어 되돌린 기록이 이 저장소에 있다).
-                //   ※켜고 끄는 것은 <see cref="SheetCommand.StartLabelOn"/> 하나로 <b>도곽보다 앞서</b> 정한다 —
-                //     도곽 뒤에 끄면 벌리기가 이미 그 글씨를 피해 밀어 놓은 자리가 남는다(JACK 지적).
-                if (sh9 > 0)
-                {
-                    // 되읽기 — 스위치가 실제로 먹었는지(Civil이 되돌리는 일이 잦다).
-                    try
-                    {
-                        using var trL9 = db.TransactionManager.StartTransaction();
-                        if (trL9.GetObject(pvId9, OpenMode.ForRead) is CivilDb.ProfileView pvL9)
-                        {
-                            int on9 = 0, all9 = 0;
-                            using var re9 = pvL9.Bands.GetBottomBandItems();
-                            for (int q9 = 0; q9 < re9.Count; q9++)
-                            { all9++; try { if (re9[q9].LabelAtStartStation) on9++; } catch { } }
-                            Step9($"{sh9 + 1} 시작측점 라벨 되읽기 — 켜진 칸 {on9}/{all9}" + (on9 > 0 ? " ⚠(+xx.xx가 덧붙는다)" : ""));
-
-                            // ★★★[JACK 0907 "+19.99 여전히 있어"] <b>누가 그리는지 이름으로 잡는다.</b>
-                            //   시작측점 라벨은 되읽기로 <b>0/6</b>이 확인됐다 — 그 스위치가 아니다.
-                            //   밴드 라벨 덤프는 X만 남겨 <b>종류를 못 가린다</b>. 뷰 시작 부근 라벨의
-                            //   <b>스타일 이름</b>을 찍으면 주증분·보조증분·굴곡부(VGP) 중 무엇인지 바로 갈린다.
-                            try
-                            {
-                                double gx9 = 0, gy9 = 0;
-                                if (pvL9.FindXYAtStationAndElevation(pvL9.StationStart, pvL9.ElevationMin, ref gx9, ref gy9))
-                                {
-                                    var bt9 = (BlockTable)trL9.GetObject(db.BlockTableId, OpenMode.ForRead);
-                                    var ms9 = (BlockTableRecord)trL9.GetObject(bt9[BlockTableRecord.ModelSpace], OpenMode.ForRead);
-                                    var who9 = new System.Text.StringBuilder();
-                                    int shown9 = 0;
-                                    foreach (ObjectId gid9 in ms9)
-                                    {
-                                        if (shown9 >= 8) break;
-                                        object go9; try { go9 = trL9.GetObject(gid9, OpenMode.ForRead); } catch { continue; }
-                                        if (go9 is not CivilDb.LabelGroup lgw9) continue;
-                                        if (!go9.GetType().Name.Contains("ProfileData")) continue;
-                                        uint nw9; try { nw9 = lgw9.SubEntityCount; } catch { continue; }
-                                        for (uint w9 = 0; w9 < nw9 && shown9 < 8; w9++)
-                                            try
-                                            {
-                                                var se9 = lgw9.GetAt(w9);
-                                                if (se9 == null) continue;
-                                                double dx9 = 0; try { dx9 = se9.DraggedOffset.X; } catch { }
-                                                double ax9 = se9.LabelLocation.X - dx9;
-                                                if (System.Math.Abs(ax9 - gx9) > 3.0) continue;   // 뷰 시작에서 3m 안쪽만
-                                                // ★[JACK 0907] <b>슬롯과 같은 자로 찍는다</b> — 종전엔 슬롯은 핸들,
-                                                //   라벨은 GUID 이름이라 <b>맞댈 수가 없었다</b>(자를 서로 다르게 댄 것).
-                                                string sh9s = "?";
-                                                try { if (!se9.StyleId.IsNull) sh9s = se9.StyleId.Handle.ToString(); } catch { }
-                                                who9.Append($" [{ax9 - gx9:+0.000;-0.000;0.000}m 보임{(se9.Visibility ? "O" : "X")} 스타일핸들 {sh9s}]");
-                                                shown9++;
-                                            }
-                                            catch { }
-                                    }
-                                    Step9($"{sh9 + 1} 뷰 시작 부근 라벨(±3m){(who9.Length == 0 ? " 없음" : who9.ToString())}");
-
-                                    // ★[JACK 0907] 스타일이 이름 없는 GUID라 종류를 못 가린다 —
-                                    //   밴드 스타일의 <b>다섯 슬롯</b> id를 나란히 찍어 맞대 본다.
-                                    //   (주증분·보조증분·VGP·HGP·측점방정식 — 어느 슬롯과 같은지가 곧 종류다.)
-                                    try
-                                    {
-                                        using var it5 = pvL9.Bands.GetBottomBandItems();
-                                        for (int b5 = 0; b5 < it5.Count; b5++)
-                                        {
-                                            if (it5[b5].BandType != Autodesk.Civil.BandType.ProfileData) continue;
-                                            if (trL9.GetObject(it5[b5].BandStyleId, OpenMode.ForRead)
-                                                is not Autodesk.Civil.DatabaseServices.Styles.ProfileDataBandStyle bs5) continue;
-                                            Step9($"{sh9 + 1} 밴드 스타일 슬롯 — 주증분 {bs5.MajorIncrementLabelStyleId.Handle}"
-                                                + $" · 보조증분 {bs5.MinorIncrementLabelStyleId.Handle}"
-                                                + $" · VGP {bs5.VGPLabelStyleId.Handle} · HGP {bs5.HGPLabelStyleId.Handle}"
-                                                + $" · 측점방정식 {bs5.StationEquationLabelStyleId.Handle}");
-                                            break;
-                                        }
-                                    }
-                                    catch (System.Exception ex5) { Step9($"{sh9 + 1} ⚠밴드 스타일 슬롯 못 읽음 — " + ex5.Message); }
-                                }
-                            }
-                            catch (System.Exception exW9) { Step9($"{sh9 + 1} ⚠시작 부근 라벨 조사 실패 — " + exW9.Message); }
-                        }
-                        trL9.Commit();
-                    }
-                    catch (System.Exception exL9) { Step9($"{sh9 + 1} ⚠시작측점 라벨 되읽기 실패 — " + exL9.Message); }
-                }
-                if (sh9 == 0) sheetAll = sh9Note;
-            }
-            if (plan9.Count > 1)
-            {
-                sheetAll = $"{plan9.Count}장으로 나눔 · " + sheetAll;
-                ed.WriteMessage($"\n  · 종단도를 {plan9.Count}장으로 나눴습니다(고정 축척 1:{GradingSettings.ProfileScale:F0}).");
-            }
-            log.AppendLine("종단면도 배치 완료" + (plan9.Count > 1 ? $" ({plan9.Count}장)" : ""));
+            // ★★[v110.4 · 계획_v110_4.md 2.B-5 · 검토 L2] 장 루프(옛 P:813-1037)는 <see cref="PlaceSheets"/>로 떼었다(부지 · 진입도로 공용).
+            //   부지 = 지금 값 그대로(축척 = 도면설정 · 대상 = null · 체인 = 이번 실행 static) — 돌려받는 것은 뒤에서 쓰는 넷(첫 장 · 장 목록 · 도곽 글 · 장 수).
+            var (pvId, pvIds9, sheetAll, nSheets9) = PlaceSheets(db, ed, cdoc, alignId, placeAt, GradingSettings.ProfileScale,
+                                                                 pidGround, pidPad, slGroupId, surfs, log, null, null);
+            log.AppendLine("종단면도 배치 완료" + (nSheets9 > 1 ? $" ({nSheets9}장)" : ""));
 
             // ★[JACK 0810] "도곽 버튼이 왜 필요하지? 그냥 종단도 누르면 모형탭하고 배치까지 자동으로 되야 되."
             //   버튼을 늘리지 않고 여기서 끝까지 간다 — 모형 도곽 범위 + 배치 한 장까지.
@@ -1290,10 +1069,266 @@ public sealed class ProfileCommand
         //   JACK: <i>"업데이트되는 게 아니라 그냥 전에 있던 횡단 내용은 다 사라지는 걸로."</i>
         //   종단만 손보고 싶을 때가 있고, 그때마다 횡단이 다시 그려지면 느리고 성가시다.
         //   지우는 일은 <c>SheetCommand.EraseAll</c>이 이미 한다(DH-횡단-* 레이어 포함).
+        // ★[v110.4 · 계획 검토 M7] 진입도로 종단도 축척이 지금 부지 축척과 다르면 알림만(부지 결과는 안 바꿈 — 도로는 도킹창 [종단도 다시])
+        try
+        {
+            string rw = RoadSheets.ScaleMismatch(db, SheetCommand.CurrentDrawingScale(db));
+            if (rw.Length > 0) { log.AppendLine("  ⚠" + rw); ed.WriteMessage("\n  · ⚠" + rw); }
+        }
+        catch { }
         Finish(ed, log, $"노선 {routeLen:F0}m · 선형 '{alignName}' · 종단 {nProf}개 · 종단도 배치 완료", quiet: rebuild);
         return true;
     }
 
+
+
+    /// <summary>★★[v110.4 · 계획_v110_4.md 2.B-5 · 검토 L2] <b>종단도 장 루프</b> — 장 나누기 → 장마다 뷰 · 측점 범위 · 스타일 · 도곽(<see cref="SheetCommand.Build"/>).
+    /// <para>옛 <see cref="Body"/> 813~1037줄을 <b>그대로</b> 옮겼다. 바뀐 자리는 다섯뿐 — 축척(<c>GradingSettings.ProfileScale</c> → <paramref name="scale"/>: 장 나누기 · 첫 줄 · 장 간격 · 표 끝 여백 · 알림) ·
+    /// 체인(<paramref name="chain"/>) · 도곽 대상(<paramref name="ctx"/>) · 진입도로면 뷰 레이어. 부지 자리는 <c>ProfileScale · null · null</c>로 불러 지금과 같다.</para>
+    /// 돌려줌 = 첫 장(대표) · 장 목록 · 도곽 글(첫 장 · 여러 장이면 «N장으로 나눔 · ») · 장 수.</summary>
+    internal static (ObjectId PvId, System.Collections.Generic.List<ObjectId> PvIds, string SheetAll, int Count) PlaceSheets(
+        Database db, Editor ed, CivilApp.CivilDocument cdoc, ObjectId alignId, Point3d placeAt, double scale,
+        ObjectId pidGround, ObjectId pidPad, ObjectId slGroupId, System.Collections.Generic.List<SectionCommand.SurfPick> surfs,
+        System.Text.StringBuilder log, SheetContext? ctx, ObjectId? chain)
+    {
+        {
+            double stA9 = 0, stB9 = 0;
+            try
+            {
+                using var trA9 = db.TransactionManager.StartTransaction();
+                if (trA9.GetObject(alignId, OpenMode.ForRead) is CivilDb.Alignment al9)
+                { stA9 = al9.StartingStation; stB9 = al9.EndingStation; }
+                trA9.Commit();
+            }
+            catch { }
+            var plan9 = scale > 0
+                      ? SheetCommand.SplitPlan(stA9, stB9, scale, GradingSettings.XsecInterval, log)
+                      : new System.Collections.Generic.List<(double S0, double S1)> { (stA9, stB9) };
+
+            // ★★★[JACK 0904 "돌렸는데 튕겼어"] <b>단계마다 파일에 바로 쓴다.</b>
+            //   종단은 로그를 <c>StringBuilder</c>에 모아 <b>끝에서 한 번</b> 쓴다 — 그래서 중간에 죽으면
+            //   <b>아무 흔적도 안 남는다</b>(실측: 크래시 뒤 로그에 종단 실행 자국이 없었다).
+            //   여러 장은 새 길이라 어디서 죽는지부터 알아야 한다 — 이 한 줄씩은 <b>즉시</b> 디스크로 간다.
+            void Step9(string t)
+            {
+                log.AppendLine("    " + t);
+                try { DiagLog.Append("\n[여러장] " + t); } catch { }
+            }
+            Step9($"시작 — {plan9.Count}장 계획 · 고정축척 {(scale > 0 ? "1:" + scale.ToString("F0") : "자동")}");
+
+            ObjectId pvId = ObjectId.Null;
+            // ★[JACK 0904 "첫 종단만 옹벽 막대가 보이고 나머지는 사라짐"] <b>장마다 다시 그려야 하는 것들</b>이
+            //   있다(옹벽 막대·지층 이름). 그것들은 지금 <c>pvId</c> 하나만 보고 그리므로 장 목록을 남긴다.
+            var pvIds9 = new System.Collections.Generic.List<ObjectId>();
+            string sheetAll = "";
+            double stepX9 = SheetCommand.SheetW * (scale > 0 ? scale : 200.0) / 1000.0;
+            for (int sh9 = 0; sh9 < plan9.Count; sh9++)
+            {
+                // ★★★[JACK 0904 "횡단처럼 빈공간없이 딱 붙게"] <b>시작측점만큼 빼서 놓는다.</b>
+                //
+                //   실측(로그): 도곽 왼쪽이 211409.67 → 211553.77 → 211697.87로 <b>144.1m씩</b> 벌어졌다.
+                //   종이 한 장은 84.1m이고 차이 60.0m는 <b>한 장의 측점 길이</b>다.
+                //   Civil은 종단뷰를 그릴 때 <b>노선 시작측점을 삽입점에 놓는다</b> — 그래서 측점 60부터
+                //   보여 주는 뷰는 삽입점보다 <b>60m 오른쪽</b>에서 그려진다(가로는 측점 1m = 모형 1m).
+                //   → 밀어 놓을 때 그만큼 <b>빼면</b> 도곽이 딱 붙는다.
+                double backX9 = plan9[sh9].S0 - plan9[0].S0;
+                var pt9 = plan9.Count > 1
+                        ? new Point3d(placeAt.X + stepX9 * sh9 - backX9, placeAt.Y, placeAt.Z)
+                        : placeAt;
+                Step9($"{sh9 + 1}/{plan9.Count} ① 뷰 만들기 X={pt9.X:F1}");
+                var pvId9 = CivilDb.ProfileView.Create(alignId, pt9);
+                // ★[v110.4 · 계획 2.B-5] 진입도로 — 뷰 레이어 «DH도로-종단뷰»(부지 초기화 · «DH-» 지우기에 안 걸림)
+                if (ctx != null)
+                    try
+                    {
+                        using var trV9 = db.TransactionManager.StartTransaction();
+                        ((Entity)trV9.GetObject(pvId9, OpenMode.ForWrite)).LayerId = SectionCommand.EnsureLayer(db, trV9, RoadBuilder.LayView, 7);
+                        trV9.Commit();
+                    }
+                    catch (System.Exception exV9) { Step9($"{sh9 + 1} ⚠뷰 레이어 실패 — " + exV9.Message); }
+                Step9($"{sh9 + 1}/{plan9.Count} ① 뷰 만듦");
+                if (plan9.Count > 1)
+                {
+                    // ★장마다 제 측점 범위만 보여 준다 — 경계 측점은 양쪽 장에 다 나온다(이어짐 확인).
+                    try
+                    {
+                        using var trR9 = db.TransactionManager.StartTransaction();
+                        if (trR9.GetObject(pvId9, OpenMode.ForWrite) is CivilDb.ProfileView pvR9)
+                        {
+                            // ★★★[JACK 0904 "각 종단의 마지막 측점값이 표에 걸쳐짐"]
+                            //   <b>표 끝 여백을 여기서 붙인다.</b> <see cref="SheetCommand"/>의 <c>ExtendTail</c>은
+                            //   <i>"측점범위를 이미 지정했으면 건너뛴다"</i>(이미 붙인 꼬리에 또 붙이지 않으려는 관문)라,
+                            //   <b>우리가 나눈 장에는 여백이 안 붙었다</b> — 그래서 끝 측점 글씨가 표 선에 반쯤 걸쳤다.
+                            //   한 장짜리 도면이 받는 것과 <b>같은 여백</b>(종이 기준)을 준다.
+                            double pad9 = SheetCommand.TailPadModel(scale);
+                            // ★★★[검토 0904 "둘째 장부터 시작측점이 +0.00"] <b>시작측점을 1cm 당긴다.</b>
+                            //
+                            //   실측 근거: 세 장 모두 로그에 <c>시작라벨=켬</c>인데 <b>1장만 No.0이 나온다</b> —
+                            //   스위치는 범인이 아니다. <c>LabelAtStartStation</c>은 <b>노선 시작측점</b>에만 반응하고
+                            //   (이 파일 v24.1 주석이 그렇게 적고 있다), Civil의 주 증분 라벨은
+                            //   <b>시작 측점 다음 자리부터</b> 찍는다. 그래서 2장 시작(60m)은 <b>양쪽 다 비어</b>
+                            //   굴곡부 라벨 <c>+0.00</c>만 남았다. 60m가 주측점인지는 <b>무관</b>했다.
+                            //
+                            //   → 뷰 시작을 1cm 앞으로 당기면 <c>S0</c>이 <b>뷰 안쪽</b> 측점이 되어
+                            //     주 증분이 정상으로 <c>No.3</c>을 찍는다.
+                            //   ※1장은 그대로 둔다 — 거기는 노선 기점이라 <c>No.0</c>이 제대로 나오고,
+                            //     시작 쪽으로 당기면 v24.1이 되돌린 그 사고(<b>기점이 표 안쪽으로 밀림</b>)가 재발한다.
+                            // ★[검토 0904] 들이는 양은 <see cref="SheetCommand.SplitPlan"/>이 <b>이미 반영</b>했다 —
+                            //   여기서 또 빼면 계획과 자리계산이 어긋난다(종전 1cm 겹침의 원인).
+                            pvR9.StationRangeMode = CivilDb.StationRangeType.UserSpecified;
+                            pvR9.StationStart = System.Math.Max(stA9, plan9[sh9].S0);
+                            // ★★[검토 0904] <b>노선 끝으로 자르지 않는다.</b> 종전 <c>Min(…, stB9)</c>은
+                            //   마지막 장(S1 == 노선 끝)에서 여백을 <b>도로 깎아</b> 스스로를 무효화했다.
+                            //   한 장짜리 도면의 <c>ExtendTail</c>도 노선 끝을 <b>넘겨서</b> 건다 — 같은 방식으로 맞춘다.
+                            pvR9.StationEnd = plan9[sh9].S1 + pad9;
+                        }
+                        trR9.Commit();
+                    }
+                    catch (System.Exception exR9) { Step9($"{sh9 + 1} ⚠측점범위 실패 — " + exR9.Message); }
+                    Step9($"{sh9 + 1}/{plan9.Count} ② 측점범위 {plan9[sh9].S0:F1}~{plan9[sh9].S1:F1}");
+                    // ★[검토 0904] <b>되읽어 확인한다</b> — Civil이 넣은 값을 되돌리는 일이 잦다
+                    //   (<c>ExtendTail</c>도 같은 검증을 한다).
+                    //   `LabelAtStartStation`은 <b>노선 시작측점</b>에 No.X를 그리는 스위치다 —
+                    //   둘째 장부터는 그 자리가 아니므로 안 붙고, 굴곡부 라벨(+0.00)만 남았을 수 있다.
+                    //   실제로 무엇이 켜져 있는지부터 본다(짐작으로 스위치를 만지면 기점 No.0이 날아간다).
+                    try
+                    {
+                        using var trQ9 = db.TransactionManager.StartTransaction();
+                        if (trQ9.GetObject(pvId9, OpenMode.ForRead) is CivilDb.ProfileView pvQ9)
+                        {
+                            var sb9 = new System.Text.StringBuilder();
+                            using (var it9 = pvQ9.Bands.GetBottomBandItems())
+                                for (int q9 = 0; q9 < it9.Count; q9++)
+                                {
+                                    string st9 = "?", en9 = "?", kd9 = "?";
+                                    try { st9 = it9[q9].LabelAtStartStation.ToString(); } catch { }
+                                    try { en9 = it9[q9].LabelAtEndStation.ToString(); } catch { }
+                                    try { kd9 = it9[q9].BandType.ToString(); } catch { }
+                                    sb9.Append($" [{q9}:{kd9} 시작{st9} 끝{en9}]");
+                                }
+                            Step9($"{sh9 + 1} 밴드 라벨 스위치 · 뷰측점 {pvQ9.StationStart:F2}~{pvQ9.StationEnd:F2}{sb9}");
+                        }
+                        trQ9.Commit();
+                    }
+                    catch (System.Exception exQ9) { Step9($"{sh9 + 1} ⚠라벨 스위치 되읽기 실패 — " + exQ9.Message); }
+                }
+                if (pvId.IsNull) pvId = pvId9;          // 첫 장을 대표로 — 뒤 코드가 이 하나를 본다
+                pvIds9.Add(pvId9);
+                Step9($"{sh9 + 1}/{plan9.Count} ③ 스타일 걸기");
+                string sty9 = ApplyViewStyle(db, cdoc, pvId9, pidGround, pidPad, slGroupId, surfs, ed, log, chain);
+                Step9($"{sh9 + 1}/{plan9.Count} ③ 스타일 걸었다");
+                if (sh9 == 0) { log.AppendLine(sty9); ed.WriteMessage("\n  · " + sty9); }
+                if (plan9.Count > 1)
+                    log.AppendLine($"  ── {sh9 + 1}/{plan9.Count}장 · 측점 {plan9[sh9].S0:F1}~{plan9[sh9].S1:F1}m · 자리 X {pt9.X:F1}");
+                // ★[JACK 0904 · 검토 0904] 시작측점 라벨은 <b>첫 장만</b> — <b>인자로</b> 넘긴다.
+                //   전역이면 중간에 예외가 났을 때 false로 굳어, 뒤이은 <c>DHSHEET</c> 단독이
+                //   멀쩡한 도면의 기점 글씨를 끈다.
+                bool startLabel9 = (sh9 == 0);
+                Step9($"{sh9 + 1}/{plan9.Count} ④ 도곽 시작(시작측점라벨 {(startLabel9 ? "켬" : "끔")})");
+                string sh9Note = SheetCommand.Build(db, ed, pvId9, log, startLabel9, ctx);
+                Step9($"{sh9 + 1}/{plan9.Count} ④ 도곽 끝 — {sh9Note}");
+
+                // ★★★[JACK 0904 "두 번째 장부터 측점 시작이 +19.99부터 시작돼"]
+                //   <b>2장부터는 시작측점 라벨을 끈다.</b>
+                //
+                //   스샷으로 확정: 시작 자리에 글씨가 <b>둘</b> 겹쳐 있다 — <c>No.6</c>(주 증분, 120.00m)과
+                //   <c>+19.99</c>(뷰 시작 119.99m). 앞의 것이 우리가 원한 것이고 뒤의 것이 군더더기다.
+                //   즉 <c>LabelAtStartStation</c>은 <b>뷰</b> 시작측점에 붙는다(검토가 '노선 시작'이라 본 것은 틀렸다) —
+                //   1cm 당긴 자리가 <c>No.5+19.99</c>라 그렇게 찍혔다.
+                //   ★1장은 끄면 안 된다 — 거기는 노선 기점이고 그 라벨이 <c>No.0</c>을 그리는 주체다
+                //     (v24.0에 껐다가 기점이 통째로 비어 되돌린 기록이 이 저장소에 있다).
+                //   ※켜고 끄는 것은 <see cref="SheetCommand.StartLabelOn"/> 하나로 <b>도곽보다 앞서</b> 정한다 —
+                //     도곽 뒤에 끄면 벌리기가 이미 그 글씨를 피해 밀어 놓은 자리가 남는다(JACK 지적).
+                if (sh9 > 0)
+                {
+                    // 되읽기 — 스위치가 실제로 먹었는지(Civil이 되돌리는 일이 잦다).
+                    try
+                    {
+                        using var trL9 = db.TransactionManager.StartTransaction();
+                        if (trL9.GetObject(pvId9, OpenMode.ForRead) is CivilDb.ProfileView pvL9)
+                        {
+                            int on9 = 0, all9 = 0;
+                            using var re9 = pvL9.Bands.GetBottomBandItems();
+                            for (int q9 = 0; q9 < re9.Count; q9++)
+                            { all9++; try { if (re9[q9].LabelAtStartStation) on9++; } catch { } }
+                            Step9($"{sh9 + 1} 시작측점 라벨 되읽기 — 켜진 칸 {on9}/{all9}" + (on9 > 0 ? " ⚠(+xx.xx가 덧붙는다)" : ""));
+
+                            // ★★★[JACK 0907 "+19.99 여전히 있어"] <b>누가 그리는지 이름으로 잡는다.</b>
+                            //   시작측점 라벨은 되읽기로 <b>0/6</b>이 확인됐다 — 그 스위치가 아니다.
+                            //   밴드 라벨 덤프는 X만 남겨 <b>종류를 못 가린다</b>. 뷰 시작 부근 라벨의
+                            //   <b>스타일 이름</b>을 찍으면 주증분·보조증분·굴곡부(VGP) 중 무엇인지 바로 갈린다.
+                            try
+                            {
+                                double gx9 = 0, gy9 = 0;
+                                if (pvL9.FindXYAtStationAndElevation(pvL9.StationStart, pvL9.ElevationMin, ref gx9, ref gy9))
+                                {
+                                    var bt9 = (BlockTable)trL9.GetObject(db.BlockTableId, OpenMode.ForRead);
+                                    var ms9 = (BlockTableRecord)trL9.GetObject(bt9[BlockTableRecord.ModelSpace], OpenMode.ForRead);
+                                    var who9 = new System.Text.StringBuilder();
+                                    int shown9 = 0;
+                                    foreach (ObjectId gid9 in ms9)
+                                    {
+                                        if (shown9 >= 8) break;
+                                        object go9; try { go9 = trL9.GetObject(gid9, OpenMode.ForRead); } catch { continue; }
+                                        if (go9 is not CivilDb.LabelGroup lgw9) continue;
+                                        if (!go9.GetType().Name.Contains("ProfileData")) continue;
+                                        uint nw9; try { nw9 = lgw9.SubEntityCount; } catch { continue; }
+                                        for (uint w9 = 0; w9 < nw9 && shown9 < 8; w9++)
+                                            try
+                                            {
+                                                var se9 = lgw9.GetAt(w9);
+                                                if (se9 == null) continue;
+                                                double dx9 = 0; try { dx9 = se9.DraggedOffset.X; } catch { }
+                                                double ax9 = se9.LabelLocation.X - dx9;
+                                                if (System.Math.Abs(ax9 - gx9) > 3.0) continue;   // 뷰 시작에서 3m 안쪽만
+                                                // ★[JACK 0907] <b>슬롯과 같은 자로 찍는다</b> — 종전엔 슬롯은 핸들,
+                                                //   라벨은 GUID 이름이라 <b>맞댈 수가 없었다</b>(자를 서로 다르게 댄 것).
+                                                string sh9s = "?";
+                                                try { if (!se9.StyleId.IsNull) sh9s = se9.StyleId.Handle.ToString(); } catch { }
+                                                who9.Append($" [{ax9 - gx9:+0.000;-0.000;0.000}m 보임{(se9.Visibility ? "O" : "X")} 스타일핸들 {sh9s}]");
+                                                shown9++;
+                                            }
+                                            catch { }
+                                    }
+                                    Step9($"{sh9 + 1} 뷰 시작 부근 라벨(±3m){(who9.Length == 0 ? " 없음" : who9.ToString())}");
+
+                                    // ★[JACK 0907] 스타일이 이름 없는 GUID라 종류를 못 가린다 —
+                                    //   밴드 스타일의 <b>다섯 슬롯</b> id를 나란히 찍어 맞대 본다.
+                                    //   (주증분·보조증분·VGP·HGP·측점방정식 — 어느 슬롯과 같은지가 곧 종류다.)
+                                    try
+                                    {
+                                        using var it5 = pvL9.Bands.GetBottomBandItems();
+                                        for (int b5 = 0; b5 < it5.Count; b5++)
+                                        {
+                                            if (it5[b5].BandType != Autodesk.Civil.BandType.ProfileData) continue;
+                                            if (trL9.GetObject(it5[b5].BandStyleId, OpenMode.ForRead)
+                                                is not Autodesk.Civil.DatabaseServices.Styles.ProfileDataBandStyle bs5) continue;
+                                            Step9($"{sh9 + 1} 밴드 스타일 슬롯 — 주증분 {bs5.MajorIncrementLabelStyleId.Handle}"
+                                                + $" · 보조증분 {bs5.MinorIncrementLabelStyleId.Handle}"
+                                                + $" · VGP {bs5.VGPLabelStyleId.Handle} · HGP {bs5.HGPLabelStyleId.Handle}"
+                                                + $" · 측점방정식 {bs5.StationEquationLabelStyleId.Handle}");
+                                            break;
+                                        }
+                                    }
+                                    catch (System.Exception ex5) { Step9($"{sh9 + 1} ⚠밴드 스타일 슬롯 못 읽음 — " + ex5.Message); }
+                                }
+                            }
+                            catch (System.Exception exW9) { Step9($"{sh9 + 1} ⚠시작 부근 라벨 조사 실패 — " + exW9.Message); }
+                        }
+                        trL9.Commit();
+                    }
+                    catch (System.Exception exL9) { Step9($"{sh9 + 1} ⚠시작측점 라벨 되읽기 실패 — " + exL9.Message); }
+                }
+                if (sh9 == 0) sheetAll = sh9Note;
+            }
+            if (plan9.Count > 1)
+            {
+                sheetAll = $"{plan9.Count}장으로 나눔 · " + sheetAll;
+                ed.WriteMessage($"\n  · 종단도를 {plan9.Count}장으로 나눴습니다(고정 축척 1:{scale:F0}).");
+            }
+            return (pvId, pvIds9, sheetAll, plan9.Count);
+        }
+    }
 
     /// <summary>★★[v28.0 · JACK 0811 확정] <b>측점 라벨 전용 '체인 종단' — 값은 안 쓰고 자리만 쓴다.</b>
     ///
@@ -1313,7 +1348,7 @@ public sealed class ProfileCommand
     /// 반환=만든 체인 종단(실패하면 Null).</summary>
     private static ObjectId BuildLabelChain(Database db, ObjectId alignId, ObjectId padId, ObjectId groundId,
                                             System.Collections.Generic.List<StationMarks.Mark> all,
-                                            double major, System.Text.StringBuilder log)
+                                            double major, System.Text.StringBuilder log, string? layerName = null)
     {
         if (padId.IsNull || all == null || all.Count == 0) return ObjectId.Null;
         try
@@ -1330,7 +1365,7 @@ public sealed class ProfileCommand
 
             ObjectId lay;
             using (var tr = db.TransactionManager.StartTransaction())
-            { lay = SectionCommand.EnsureLayer(db, tr, LayerChain, 8); tr.Commit(); }
+            { lay = SectionCommand.EnsureLayer(db, tr, layerName ?? LayerChain, 8); tr.Commit(); }   // ★[v110.4] 도로 = «DH도로-측점체인(숨김)»(부지 «지우고 새로»가 레이어로 지우지 않게)
 
             // ★[v28.2 실측] <c>labelSetId</c>에 <c>ObjectId.Null</c>을 주면 <b>거절당한다</b> —
             //   "Object id of ProfileLabelSetStyle is expected". 실제 라벨 세트를 골라 준다
@@ -1444,11 +1479,14 @@ public sealed class ProfileCommand
     /// 실측 종단은 지우지 않고 <see cref="GroundRawName"/>으로 이름을 바꿔 감춰 둔다 —
     /// 나중에 견주어 볼 때 스타일만 되돌리면 보인다.</para>
     /// 반환=앞으로 쓸 원지반 종단(꺾은선). 실패하면 <b>넘겨받은 것을 그대로</b> 돌려준다.</summary>
-    private static ObjectId RebuildGroundAsPolyline(Database db, ObjectId alignId, ObjectId srcId,
+    /// <param name="newName">★[v110.4 · 계획 2.B-3] 꺾은선 이름(null = «DH_원지반») · <paramref name="tempName"/> 만드는 동안 이름(null = «DH_지반작업중») ·
+    /// <paramref name="renameRaw"/> 실측 종단을 «DH_지반실측(숨김)»으로 바꿔 숨길까(도로 = 거짓 — «-바탕»은 이름 그대로 · 뷰마다 재정의로 숨김).</param>
+    internal static ObjectId RebuildGroundAsPolyline(Database db, ObjectId alignId, ObjectId srcId,
         ObjectId layer, ObjectId styleId, ObjectId labelSet,
         System.Collections.Generic.IReadOnlyList<StationMarks.Mark> marks,
-        System.Text.StringBuilder log)
+        System.Text.StringBuilder log, string? newName = null, string? tempName = null, bool renameRaw = true)
     {
+        string finalName = newName ?? SectionCommand.ProfGroundName, workName = tempName ?? GroundTempName;
         if (srcId.IsNull) { log.AppendLine("  원지반 꺾은선: 원지반 종단이 없어 건너뜀"); return srcId; }
         if (marks == null || marks.Count < 2)
         { log.AppendLine("  원지반 꺾은선: 측점이 2개 미만이라 지표면 종단을 그대로 쓴다"); return srcId; }
@@ -1524,7 +1562,7 @@ public sealed class ProfileCommand
             ObjectId newId = ObjectId.Null; string cerr = null;
             for (int i = 0; i < 20 && newId.IsNull; i++)
             {
-                string tmp = i == 0 ? GroundTempName : $"{GroundTempName}-{i}";
+                string tmp = i == 0 ? workName : $"{workName}-{i}";
                 try { newId = CivilDb.Profile.CreateByLayout(tmp, alignId, layer, styleId, labelSet); }
                 catch (System.Exception ex) { cerr = ex.Message; }
             }
@@ -1571,13 +1609,13 @@ public sealed class ProfileCommand
             {
                 try
                 {
-                    if (tr.GetObject(srcId, OpenMode.ForWrite) is CivilDb.Profile src2)
+                    if (renameRaw && tr.GetObject(srcId, OpenMode.ForWrite) is CivilDb.Profile src2)
                     {
                         src2.Name = GroundRawName;
                         if (!hideStyle.IsNull) try { src2.StyleId = hideStyle; } catch { }
                     }
                     if (tr.GetObject(newId, OpenMode.ForWrite) is CivilDb.Profile np)
-                        np.Name = SectionCommand.ProfGroundName;
+                        np.Name = finalName;
                     tr.Commit();
                     swapped = true;
                 }
@@ -1619,11 +1657,11 @@ public sealed class ProfileCommand
             }
             double tol = System.Math.Max(0.01, GradingSettings.GroundBreakTolZ);
 
-            log.AppendLine($"  원지반 꺾은선 '{SectionCommand.ProfGroundName}' — 정점 {made}개로 다시 그렸다"
+            log.AppendLine($"  원지반 꺾은선 '{finalName}' — 정점 {made}개로 다시 그렸다"
                            + $"(측점 {marks.Count}개 + 양 끝 → 겹침 정리 후 {outPts.Count}개)"
                            + (bad > 0 ? $" · 심기 실패 {bad}개" : "")
                            + (nNoElev > 0 ? $" · 표고가 이상해 뺀 자리 {nNoElev}개" : "")
-                           + $" · 실측 종단은 '{GroundRawName}'으로 감췄다"
+                           + (renameRaw ? $" · 실측 종단은 '{GroundRawName}'으로 감췄다" : " · 실측 종단은 이름 그대로(뷰마다 재정의로 숨김)")
                            + $"\n     자가검증(실제 그린 선 ↔ 원본 표본 {raw.Count}개): 최대 높이오차 {maxDev:0.###}m"
                            + $" @ {(maxDev > 1e-9 ? maxAt.ToString("0.00") + "m" : "-")}"
                            + (maxDev <= tol + 1e-6 ? $" → 허용치({tol:0.###}m) 안"
@@ -1641,7 +1679,7 @@ public sealed class ProfileCommand
     }
 
     /// <summary>안 보이는 종단 스타일 — 선·곡선 표시를 전부 끈다(체인은 라벨 자리 용도다).</summary>
-    private static ObjectId EnsureHiddenProfileStyle(Database db, System.Text.StringBuilder log)
+    internal static ObjectId EnsureHiddenProfileStyle(Database db, System.Text.StringBuilder log)
     {
         try
         {
@@ -1771,18 +1809,22 @@ public sealed class ProfileCommand
     /// <para><b>솎지 않는다</b>(JACK: "최소간격 없어 둘 다 찍어"). 정측점과 굴곡부가 30cm 차이로
     /// 붙어도 둘 다 남긴다 — 라벨이 겹쳐 보이는 것보다 <b>빠지는 것</b>이 나쁘다.</para>
     /// 반환=만든 단면검토선 그룹(실패하면 Null).</summary>
-    private static ObjectId BuildSampleLines(Database db, Editor ed, ObjectId alignId,
+    /// <param name="t">★★[v110.4 · 계획_v110_4.md 2.B-1] 대상 — <c>null</c> = 부지(지금 식 그대로) · 값 = 진입도로(부지 출처 · static · 횡단 그룹 없음 · 폭 · 이름 · 레이어를 인자로 · 결과는 <c>t</c>에).</param>
+    internal static ObjectId BuildSampleLines(Database db, Editor ed, ObjectId alignId,
                                              ObjectId pidGround, ObjectId pidPad,
                                              System.Collections.Generic.List<SectionCommand.SurfPick> surfs,
                                              double interval,
                                              out System.Collections.Generic.List<StationMarks.Mark> allMarks,
-                                             System.Text.StringBuilder log)
+                                             System.Text.StringBuilder log, ProfileTarget? t = null)
     {
         allMarks = new System.Collections.Generic.List<StationMarks.Mark>();
+        bool site = t == null || t.SiteSources;     // ★[v110.4] 부지 출처(정지 경계 · 번들 · 옹벽면 · 터파기 · 벽 자리)
+        bool wrS = t == null || t.WriteStatics;     // ★[v110.4] Last* static에 쓸까(도로는 안 씀 — 부지 횡단 · 도곽 · 측점 찍기가 부지 값을 계속 읽게)
         try
         {
             // ★[JACK 0908] 폭은 <see cref="XsecWidth"/> 한 자에서만 나온다(§50).
-            var (wl0, wr0) = XsecWidth.Resolve(db, alignId, log);
+            // ★[v110.4 · 계획 검토 L4] 진입도로는 폭을 인자로(XsecWidth.Resolve는 횡단 폭 설정을 덮으므로 안 부른다)
+            var (wl0, wr0) = t != null ? t.Width : XsecWidth.Resolve(db, alignId, log);
             double wl = System.Math.Max(1.0, wl0);
             double wr = System.Math.Max(1.0, wr0);
             var marks = new System.Collections.Generic.List<StationMarks.Mark>();
@@ -1851,6 +1893,7 @@ public sealed class ProfileCommand
                 // ★[v30.3] 도면의 <c>DH-정지경계</c>는 <b>번들이 없을 때만</b> 쓰는 보조 근거다.
                 //   정본은 아래의 번들 복원이다 — 도면 선은 그릴 때 레이어를 지우므로
                 //   누적 구역에서 마지막 것만 남아 있을 수 있다. 같은 자리는 합쳐지므로 겹쳐도 해가 없다.
+                if (site)
                 marks.AddRange(StationMarks.FromLayerLines(tr, db, al,
                                    new[] { LayerDaylight, LayerClip }, "데이라잇(도면)", null, log));
 
@@ -1877,6 +1920,7 @@ public sealed class ProfileCommand
                 //   그렇다고 "[노리선]을 먼저 돌리세요"라고 하면 그게 곧 제약이다.
                 //   → 노리선이 하는 <b>복원 계산을 여기서 직접</b> 한다. 누적 구역이 전부 들어오고,
                 //     뒤 구역이 덮은 자리는 빠지므로 지금 정지면과 맞는다. <b>순서에 매이지 않는다.</b>
+                if (site)
                 try
                 {
                     var regions = GradingBundleStore.TryLoadAll(db, tr, out _);
@@ -1936,6 +1980,7 @@ public sealed class ProfileCommand
 
                 // ★★★[v103.2 · 계획 2-5] 옹벽 폴리곤 안 — 번들 재료를 가리고 지금 그리는 «정지면»을 걸어서 벽 · 끊김 · 꺾임을 낸다
                 //   (번들 복원 뒤 · 터파기 · 벽 자리 정리 · 수동 앞 — «데이라잇(최종면)»은 벽 자리 정리가 벽 두께 안이면 벽 자리로 묶는다)
+                if (site)
                 try
                 {
                     var padPick = surfs.Find(sp => sp.Label == "정지면");
@@ -1945,12 +1990,15 @@ public sealed class ProfileCommand
 
                 // ★[JACK 0825] 터파기 — 정지 번들과 <b>다른 칸</b>(EXCAV)이라 따로 연다.
                 //   가시설(수직 굴착)은 상단·바닥을 가운데 한 자리로 접는다 — 측점 명령과 같은 자.
+                if (site)
                 try { marks.AddRange(StationMarks.FromExcavation(al, db, tr, null, log, vbars, wspans)); }
                 catch (System.Exception ex) { log.AppendLine("  터파기 측점 실패 — " + ex.Message); }
 
                 // ★[JACK 0825] 벽 두께 안 데이라잇을 벽 자리로 — 옹벽 옆 10cm에 측점이 또 서던 것.
+                if (site)
                 try { StationMarks.PullDaylightToWalls(marks, vbars, log, wspans); }
                 catch (System.Exception ex) { log.AppendLine("  벽 측점 정리 실패 — " + ex.Message); }
+                if (!site) log.AppendLine("  [진입도로] 부지 출처(정지 경계 · 번들 사면 · 옹벽면 · 터파기 · 벽 자리)는 안 봄 — 절성 경계 · 지반 꺾임 · 수동만");
 
                 // ⓒ 수동 — 선형에 적어 둔 것(DHSTATION).
                 var man = StationMarks.Load(tr, alignId);
@@ -1993,8 +2041,11 @@ public sealed class ProfileCommand
             double sub = interval / 2.0;
             var all = StationMarks.Merge(s0, s1, sub, marks, tol: 0.01);
             allMarks = all;      // ★[v32.24] 원지반 꺾은선이 이 목록을 그대로 정점으로 쓴다
-            LastStationInterval = interval;   // ★[JACK 0826] 횡단도가 같은 이름을 만들 수 있게
-            try { LastDbFinger = db.FingerprintGuid.ToString(); } catch { LastDbFinger = ""; }
+            if (wrS)
+            {
+                LastStationInterval = interval;   // ★[JACK 0826] 횡단도가 같은 이름을 만들 수 있게
+                try { LastDbFinger = db.FingerprintGuid.ToString(); } catch { LastDbFinger = ""; }
+            }
             //   사유를 갈라 적는다 — 로그를 도면과 대조할 때 '왜 여기 측점이 있나'가 바로 보여야 한다.
             for (int i = 0; i < all.Count; i++)
                 if (all[i].Why == "정체인")
@@ -2022,7 +2073,8 @@ public sealed class ProfileCommand
                 all.RemoveAll(m => StationMarks.IsDropped(dropped, m.Station));
                 log.AppendLine($"  지운 자리 {dropped.Count}곳 → 측점 {before0 - all.Count}개 뺐다");
             }
-            LastMarks = new System.Collections.Generic.List<StationMarks.Mark>(all);
+            if (wrS) LastMarks = new System.Collections.Generic.List<StationMarks.Mark>(all);
+            if (t != null) t.Marks = new System.Collections.Generic.List<StationMarks.Mark>(all);
             log.AppendLine($"측점 목록 {all.Count}개(정측점 {interval:0.#}m + 굴곡부 + 수동):\n    " +
                            string.Join("\n    ", all.ConvertAll(m => $"{m.Station,9:0.00}m  {StationMarks.Fmt(m.Station, interval),-12} {m.Why}")));
 
@@ -2100,7 +2152,7 @@ public sealed class ProfileCommand
 
             // ── ③ 그룹과 선을 만든다.
             var cdoc = CivilApp.CivilApplication.ActiveDocument;
-            string groupName = SectionCommand.UniqueName(db, cdoc, SectionCommand.GroupBase);
+            string groupName = SectionCommand.UniqueName(db, cdoc, t?.GroupBase ?? SectionCommand.GroupBase);   // ★[v110.4] 도로 = «DH도로_N-검토»(«DH횡단»이면 초기화 · 횡단 판정에 섞인다)
             ObjectId groupId;
             try { groupId = CivilDb.SampleLineGroup.Create(groupName, alignId); }
             catch (System.Exception ex)
@@ -2136,6 +2188,17 @@ public sealed class ProfileCommand
                 }
                 catch (System.Exception ex) { firstErr ??= $"{cuts[i].Station:F2}m {ex.Message}"; }
             }
+            // ★[v110.4 · 계획 2.B-1] 진입도로 — 검토선 레이어(«DH도로-검토선» · 부지 «DH-» 지우기 · 초기화에 안 걸림)
+            if (t != null && t.SampleLineLayer.Length > 0 && made.Count > 0)
+                try
+                {
+                    using var trSl = db.TransactionManager.StartTransaction();
+                    var laySl = SectionCommand.EnsureLayer(db, trSl, t.SampleLineLayer, 8);
+                    foreach (var mk in made)
+                        try { if (trSl.GetObject(mk.Id, OpenMode.ForWrite) is Entity se) se.LayerId = laySl; } catch { }
+                    trSl.Commit();
+                }
+                catch (System.Exception ex) { log.AppendLine("  검토선 레이어 경고 — " + ex.Message); }
             log.AppendLine($"단면검토선 '{groupName}' — {nSl}/{cuts.Count}개 생성 · 좌{wl:0.#}m/우{wr:0.#}m · 표본 지표면 {nSrc}개[{srcNames.ToString().Trim()}]" +
                            (firstErr != null ? $"\n  ⚠첫 실패: {firstErr}" : ""));
 
@@ -2171,20 +2234,25 @@ public sealed class ProfileCommand
             // ★[v32.45] 꾸미기는 여기서 하지 않는다 — 글씨 크기가 <b>도면 축척</b>을 따라야 하는데
             //   축척은 <see cref="SheetCommand.Build"/>가 <b>나중에</b> 정한다(JACK: "측점 문자가 축척이 안 먹음").
             //   만든 것만 넘겨 두고, 축척이 확정된 뒤 <see cref="DecorateSampleLines"/>가 꾸민다.
-            LastSampleLines = made;
+            if (wrS) LastSampleLines = made;
+            if (t != null) t.Made = made;
 
             // ── ★★[JACK 0825] <b>횡단용 그룹</b> — 벽 자리는 (전)(후) 둘. 평면에서는 숨긴다.
             //   Civil은 <b>단면검토선 하나당 횡단면도 한 장</b>이라, 두 장을 얻으려면 검토선이 둘이어야 한다.
             //   그런데 그 둘을 평면에 두면 선이 두꺼워 보이고 측점명이 떡진다(JACK 지적) —
             //   벽 두께가 2~5cm라 1:100에서 0.2~0.5mm 벌어진다.
             //   → 그룹을 갈라, 평면은 표시용만 보고 횡단면도는 이쪽에서 뽑는다.
-            LastXsecGroupId = ObjectId.Null;
-            LastWallSpans = wspans;   // ★ 자리 계산은 언제나 남긴다 — 횡단면도를 만들 때 여기서 뽑는다
-            LastVertBars = vbars;     // ★ 중심 보정을 받은 막대 목록 — DrawVertBars가 이것을 쓴다
+            if (wrS)
+            {
+                LastXsecGroupId = ObjectId.Null;
+                LastWallSpans = wspans;   // ★ 자리 계산은 언제나 남긴다 — 횡단면도를 만들 때 여기서 뽑는다
+                LastVertBars = vbars;     // ★ 중심 보정을 받은 막대 목록 — DrawVertBars가 이것을 쓴다
+            }
+            if (t != null) { t.Spans = wspans; t.Bars = vbars; }
             if (!GradingSettings.BuildXsecSampleLines && nSplit > 0)
                 log.AppendLine($"  횡단용 검토선은 만들지 않았다(벽 {nSplit}곳의 (전)(후) 자리는 기억해 둔다) — " +
                                "미리 만들면 그 선이 종단도에도 나타난다");
-            if (cutsX.Count > 0 && GradingSettings.BuildXsecSampleLines)
+            if (cutsX.Count > 0 && GradingSettings.BuildXsecSampleLines && (t == null || t.XsecGroup))
             {
                 try
                 {
@@ -2266,16 +2334,19 @@ public sealed class ProfileCommand
             }
 
             // ── ④ 측점 행이 쓸 <b>라벨 자리 전용 체인</b>(값은 안 쓴다).
-            LastLabelChainId = BuildLabelChain(db, alignId, pidPad, pidGround, all, interval, log);
+            var chainMade = BuildLabelChain(db, alignId, pidPad, pidGround, all, interval, log, t?.ChainLayer);
+            if (wrS) LastLabelChainId = chainMade;
+            if (t != null) t.ChainId = chainMade;
             return groupId;
         }
         catch (System.Exception ex) { log.AppendLine("단면검토선 실패 — " + ex.Message); return ObjectId.Null; }
     }
 
+    /// <param name="chain">★[v110.4 · 계획 2.B-4] 측점 행 체인 — null = 부지(이번 실행 static · <see cref="AliveChain"/>) · 값 = 진입도로(그 도로 체인 · Null이면 없음).</param>
     private static string ApplyViewStyle(Database db, CivilApp.CivilDocument cdoc, ObjectId pvId,
                                          ObjectId pidGround, ObjectId pidPad, ObjectId slGroupId,
                                          System.Collections.Generic.List<SectionCommand.SurfPick> surfs,
-                                         Editor ed, System.Text.StringBuilder log)
+                                         Editor ed, System.Text.StringBuilder log, ObjectId? chain = null)
     {
         var msg = new System.Text.StringBuilder("스타일 지정: ");
 
@@ -2474,7 +2545,7 @@ public sealed class ProfileCommand
                                     //   종전엔 체인이 없으면 조용히 계획 종단을 꽂았다. 그건 지표면 표본이라
                                     //   62m 노선에 PVI가 78개 잡힌 실측이 있다 — 굴곡부 라벨이 수십 개 겹쳐 찍힌다.
                                     //   <b>조용히 틀린 도면</b>보다 <b>빠진 채로 로그에 남는 편</b>이 낫다.
-                                    ObjectId p1 = AliveChain(db, pv.AlignmentId);
+                                    ObjectId p1 = chain ?? AliveChain(db, pv.AlignmentId);
                                     if (!p1.IsNull) fresh[k].Profile1Id = p1;
                                     else act += " · ⚠측점 체인 없음(굴곡부 측점이 안 찍힌다)";
                                     if (!pidGround.IsNull) fresh[k].Profile2Id = pidGround;
@@ -3260,11 +3331,13 @@ public sealed class ProfileCommand
     ///
     /// <para>⚠ <b>부르는 자리가 중요하다</b> — <see cref="SheetCommand.Build"/>가 축척을 건 <b>뒤</b>라야
     /// 글씨가 종단 밴드와 같은 크기(종이 2.5mm)로 나온다.</para></summary>
-    private static void DecorateSampleLines(Database db, CivilApp.CivilDocument cdoc, ObjectId alignId,
+    /// <param name="madeArg">★[v110.4 · 계획 2.B-6] 꾸밀 검토선 — null = 부지(이번 실행 static) · 값 = 진입도로(그 도로 것 · 새 지시선 · 글씨는 부르는 쪽이 표식을 붙인다).</param>
+    internal static void DecorateSampleLines(Database db, CivilApp.CivilDocument cdoc, ObjectId alignId,
                                             double interval, double wl, double wr,
-                                            System.Text.StringBuilder log)
+                                            System.Text.StringBuilder log,
+                                            List<(ObjectId Id, double St, Point2d L, Point2d R)>? madeArg = null)
     {
-        var made = LastSampleLines;
+        var made = madeArg ?? LastSampleLines;
         if (made == null || made.Count == 0) { log.AppendLine("  검토선 꾸미기: 대상이 없다"); return; }
         try
         {

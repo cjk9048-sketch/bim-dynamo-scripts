@@ -738,7 +738,16 @@ public static class StationCommand
         {
             if (tr.GetObject(per.ObjectId, OpenMode.ForRead) is Line ln &&
                 string.Equals(ln.Layer, SheetCommand.GridVertLayer, StringComparison.OrdinalIgnoreCase))
+            {
+                // ★[v110.4 · 계획 2.D] 진입도로 종단도 세로선은 부지 측점이 아니다 — 알리고 다시 고르게
+                if (SheetTag.IsRoad(ln))
+                {
+                    tr.Commit();
+                    ed.WriteMessage("\n  · 그건 진입도로 종단도의 세로선입니다 — 부지 종단도의 세로선을 골라 주세요(도로 측점은 도킹창 [종단도 다시]).");
+                    return 2;
+                }
                 x = ln.StartPoint.X;
+            }
             tr.Commit();
         }
         if (double.IsNaN(x))
