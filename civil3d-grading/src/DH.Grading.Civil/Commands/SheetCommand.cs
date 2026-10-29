@@ -241,7 +241,8 @@ public static class SheetCommand
     /// 되돌리는 줄에 안 닿아 <b>false로 굳고</b>, 그 뒤 <c>DHSHEET</c> 단독 실행이 그 값을 물려받아
     /// <b>멀쩡한 도면의 기점 글씨를 끈다</b>(검토 0904 실측 경로 — 그 예외는 실제로 났었다).
     /// 부르는 곳이 둘뿐이라 인자로 넘기는 비용이 없다.</para></param>
-    public static string Build(Database db, Editor ed, ObjectId pvId, System.Text.StringBuilder log, bool startLabel = true)
+    public static string Build(Database db, Editor ed, ObjectId pvId, System.Text.StringBuilder log, bool startLabel = true,
+                               SheetContext? ctx = null)
     {
         // ★[v32.31] 지난 판이 적어 둔 '장식 자리'를 먼저 지운다 — 축척이 바뀌면 그 좌표는
         //   전혀 다른 곳을 가리키고, 도곽만 엉뚱하게 넓어진다.
@@ -259,7 +260,7 @@ public static class SheetCommand
 
         // ── ② 축척과 수직과장을 **함께** 푼다 — 따로 정하면 서로를 무너뜨린다.
         B9("② 축척 풀기");
-        string veNote = FitSheet(db, pvId, log, out double scale, out bool overflow);
+        string veNote = FitSheet(db, pvId, log, out double scale, out bool overflow, ctx);
         B9($"② 축척 1:{scale:F0}");
 
         // ── ②-a 표 끝 여백은 **종이 기준**이므로 축척을 알아야 모형 거리로 바꿀 수 있다.
@@ -268,14 +269,16 @@ public static class SheetCommand
         //   그래서 <b>축척을 먼저 풀고 → 꼬리를 붙이고 → 축척을 다시 푼다</b>.
         //   꼬리는 폭의 1~2%라 대개 같은 축척이 다시 나오지만, 경계에 걸리면 2차에서 바로잡힌다.
         if (ExtendTail(db, pvId, scale, log))
-            veNote = FitSheet(db, pvId, log, out scale, out overflow);
+            veNote = FitSheet(db, pvId, log, out scale, out overflow, ctx);
 
         // ★★[v32.4] <b>도면 축척은 여기서 딱 한 번 건다 — 최종값이 정해진 뒤에.</b>
         //   종전엔 <see cref="FitSheet"/> 안에서 걸었는데, 그 함수가 두 번 불리므로
         //   <b>1차에서 건 축척이 2차 측정을 부풀렸다</b>(실측 68.6m → 664.6m, 정확히 120배 여분).
         //   재는 도중에 자를 바꾸면 안 된다.
         B9("③ 도면 축척 걸기");
-        SetDrawingScale(db, scale, log);
+        // ★[v110.4 · 계획 검토 M1 · 시험 D] 진입도로가 부지 축척을 따랐으면 도면 주석 축척을 다시 걸지 않는다(같은 값 — 손대지 않음)
+        if (ctx == null || !ctx.KeepDrawingScale) SetDrawingScale(db, scale, log);
+        else log.AppendLine($"도면 축척 그대로(진입도로 — 부지 축척 1:{scale:F0}을 따름)");
         LogGrid(db, pvId, log, "① 축척 건 뒤");        // ★[v32.32] 격자가 어느 단계에서 좁아지는지 — 설명은 LogGrid
 
         // ── ②-b 뷰 스타일이 정해진 **뒤에** 왼쪽 축 눈금을 세운다(JACK: "왼쪽 바를 스케일(체크)로").
@@ -289,17 +292,17 @@ public static class SheetCommand
         PolishView(db, pvId, log);      // V·H 표시 자리 · 종단선 화살표
         LogGrid(db, pvId, log, "④ 뷰 다듬기 뒤");
         B9("⑦ 표고바");
-        DrawScaleBar(db, pvId, scale, log);   // 흑백 교차 표고바 — 직접 그린다(축 스타일엔 그 기능이 없다)
+        DrawScaleBar(db, pvId, scale, log, ctx);   // 흑백 교차 표고바 — 직접 그린다(축 스타일엔 그 기능이 없다)
         B9("⑧ 제목칸");
-        DecorateBandTitles(db, pvId, scale, log);   // 제목칸 이중 테두리(JACK 0812)
+        DecorateBandTitles(db, pvId, scale, log, ctx);   // 제목칸 이중 테두리(JACK 0812)
         B9("⑨ 축척 배너");
-        PlaceScaleBanner(db, pvId, scale, log);     // 축척 배너 블록 + V·H 글자
+        PlaceScaleBanner(db, pvId, scale, log, ctx);     // 축척 배너 블록 + V·H 글자
         // ★★[v24.1] 굴곡부 세로줄은 <b>직접 그린 선</b>이라 선형이 바뀌어도 따라오지 않는다
         //   (JACK: "선형이 변경될 때 변경되야 하거든"). 굴곡부를 다시 켤 때 <b>순정 격자로 낼 방법</b>부터
         //   찾는다. 지금은 <see cref="VgpOn"/>이 꺼져 있어 <b>지우기만</b> 하고 그리지 않는다 —
         //   그냥 건너뛰면 지난 판에 그어 둔 빨간 줄이 도면에 그대로 남는다.
         B9("⑩ 세로격자");
-        DrawVgpGrid(db, pvId, scale, log);
+        DrawVgpGrid(db, pvId, scale, log, ctx);
         B9("⑪ 크기 재기");
 
         // ── ③ 정해진 스타일로 실제 크기를 다시 잰다(밴드까지 포함한 전체 상자)
@@ -341,9 +344,9 @@ public static class SheetCommand
         //   <b>순정 글씨는 밀려가고 우리 글씨는 제자리</b>에 남아 간격이 좁아진다.
         //   벽 자리는 측점이 몰리는 곳이라 밀릴 확률이 높다.
         B9("⑭ 밴드 벌리기");
-        SpreadBandLabels(db, pvId, scale, log);
+        SpreadBandLabels(db, pvId, scale, log, ctx);
         B9("⑮ 옹벽 두 값");
-        WallBandPairs(db, pvId, scale, log);
+        WallBandPairs(db, pvId, scale, log, ctx);
         B9("⑯ 끝");   // ★[JACK 0827] 수직부는 한 칸에 두 값   // ★[v32.38] 떡진 밴드 값을 오른쪽으로 밀어 떨어뜨린다
         DumpBandLabels(db, log);            // ★[v32.37] 민 뒤의 상태를 남긴다(간격이 벌어졌는지)
 
@@ -367,8 +370,8 @@ public static class SheetCommand
              // ★[검토 반영] 넘친 <b>이유</b>가 둘이라 안내도 갈라야 한다 — 축척을 고정해 넘친 것을
              //   '노선이 길어서'로 안내하면 사용자가 엉뚱한 곳(장 넘김)을 찾는다.
              + (overflow
-                ? (GradingSettings.ProfileScale > 0
-                   ? $" · ⚠고정 축척 1:{GradingSettings.ProfileScale:F0}으로는 한 장에 안 들어갑니다(도면설정에서 '자동'으로 두면 맞춰집니다)"
+                ? ((ctx?.Scale ?? GradingSettings.ProfileScale) > 0
+                   ? $" · ⚠고정 축척 1:{(ctx?.Scale ?? GradingSettings.ProfileScale):F0}으로는 한 장에 안 들어갑니다(도면설정에서 '자동'으로 두면 맞춰집니다)"
                    : " · ⚠한 장을 넘침(장 넘김은 관로 기능에서)")
                 : "");
     }
@@ -395,12 +398,12 @@ public static class SheetCommand
     /// <para>★자를 세 번 고쳤다(30cm → 1cm → 0.5m). 셋 다 <b>이번 도면이 되게</b> 만드는 짓이었다 —
     /// 축척·측점 간격·옹벽 개수가 달라지면 또 깨진다. <b>붙일 곳이 있으면 자가 필요 없다.</b></para>
     /// <returns>붙인 측점. 목록이 없으면 받은 값 그대로.</returns></summary>
-    private static double SnapToKnownStation(double st, out double moved)
+    private static double SnapToKnownStation(double st, out double moved, SheetContext? ctx = null)
     {
         moved = 0;
         try
         {
-            var sl = ProfileCommand.LastSampleLinesPublic;
+            var sl = ctx != null ? ctx.SampleLines : ProfileCommand.LastSampleLinesPublic;   // ★[v110.4] 진입도로 = 그 도로 검토선
             if (sl == null || sl.Count == 0) return st;
             double best = st, bd = double.MaxValue;
             foreach (var e in sl)
@@ -435,7 +438,7 @@ public static class SheetCommand
     }
 
     private static string FitSheet(Database db, ObjectId pvId, System.Text.StringBuilder log,
-                                   out double scale, out bool overflow)
+                                   out double scale, out bool overflow, SheetContext? ctx = null)
     {
         // ★★[JACK 0810 확정] 자동으로 고르지 않는다 — **V=1:200, H=1:1000 고정**으로 먼저 간다.
         //   "가로 세로 축척에 대해서 정의를 다시 하자. 일단은 V=1:200, H=1:1000을 기준으로 먼저 만들어 보자."
@@ -469,7 +472,7 @@ public static class SheetCommand
                 //   <b>축척을 정한 뒤</b> 일어나, 여기서 잰 30m로 축척을 정하고 실제로는 12m가 그려졌다.
                 //   <b>스타일을 건 뒤</b>라야 한다 — 격자 설정은 스타일에 들어 있어 그 전에 하면 엉뚱한 스타일을 고친다.
                 LogGrid(db, pvId, log, "⓪ 좁히기 전");
-                ShrinkGrid(db, pvId, log);
+                ShrinkGrid(db, pvId, log, ctx);
                 LogGrid(db, pvId, log, "⓪ 좁히기 뒤 ← 이 격자로 축척을 정한다");
 
                 var e0 = Measure(db, pvId);
@@ -596,7 +599,7 @@ public static class SheetCommand
                 //   <b>고정값은 검사만 하고 바꾸지 않는다.</b> 사용자가 1:100을 골랐는데 안 들어간다고 1:120으로
                 //   올리면 <b>도면에 적힌 축척과 실제가 어긋난다</b> — 현장에서 자로 재는 값이라 그것이 더 나쁘다.
                 //   넘치면 <b>넘친 채로 그리고 로그로 알린다</b>(<see cref="ExtendTail"/> 뒤 2차 호출에서도 같다).
-                double pinned = GradingSettings.ProfileScale;
+                double pinned = ctx != null ? ctx.Scale : GradingSettings.ProfileScale;   // ★[v110.4] 진입도로 = 늘 고정 축척(계획 3.4)
                 if (pinned > 0)
                 {
                     overflow = pinned < want;      // 필요한 것보다 크게 그리면(=숫자가 작으면) 자리를 넘는다
@@ -642,7 +645,7 @@ public static class SheetCommand
                 //   순서가 중요하다 — 자리에 담기는 표고 범위는 <b>축척이 있어야</b> 나온다(mm ÷ 1000 × 축척).
                 //   반대로 이 함수가 넓힌 범위는 축척을 뒤흔들지 않는다: 자리를 넘지 않게 <b>내림</b>으로만 잡으므로
                 //   2차 <see cref="FitSheet"/>에서 높이 기준 필요 축척이 지금 축척보다 커질 수 없다.
-                FitElevationRange(db, pvId, s0, availMm, log);
+                FitElevationRange(db, pvId, s0, availMm, log, ctx);
                 // ★ 지정한 범위가 그대로 격자가 됐는지 확인한다 — <c>GridPadding</c>이 그 위에 <b>덧붙는지</b>가
                 //   문서에 없다(UserSpecified면 무시되는 것이 보통이지만 확인 전에는 모른다).
                 //   덧붙었다면 아래 줄의 격자 폭이 방금 지정한 값보다 크게 나온다.
@@ -660,7 +663,7 @@ public static class SheetCommand
                 SetStyle(db, pvId, pick.S.Id);
                 // ★[v32.32] 토공 갈래와 같은 이유로 <b>재기 전에</b> 좁힌다 — 여기 빠뜨리면 관로를 되살릴 때
                 //   격자가 아예 안 좁혀진다(종전엔 <see cref="SetAxisTicks"/>가 두 갈래 뒤에서 해 줬다).
-                ShrinkGrid(db, pvId, log);
+                ShrinkGrid(db, pvId, log, ctx);
                 var e = Measure(db, pvId);
                 double w = (e.MaxPoint.X - e.MinPoint.X) * 1000.0 / HScale;
                 double h = (e.MaxPoint.Y - e.MinPoint.Y) * 1000.0 / HScale;
@@ -1439,7 +1442,7 @@ public static class SheetCommand
     ///
     /// <para>⚠ <b>부르는 자리가 중요하다</b> — 이것은 <b>뷰 스타일</b>을 고치므로,
     /// <see cref="FitSheet"/>가 스타일을 건 <b>뒤에</b> 불러야 한다. 그 전에 부르면 <b>엉뚱한 스타일</b>을 고친다.</para></summary>
-    private static void ShrinkGrid(Database db, ObjectId pvId, System.Text.StringBuilder log)
+    private static void ShrinkGrid(Database db, ObjectId pvId, System.Text.StringBuilder log, SheetContext? ctx = null)
     {
         try
         {
@@ -1483,6 +1486,13 @@ public static class SheetCommand
             {
                 // 원지반 종단의 <b>실제 이름</b>을 읽는다 — 이름 상수를 박으면 '-2' 같은 중복 회피 이름에서 빗나간다.
                 string groundName = null;
+                // ★[v110.4 · 계획 2.C-3] 진입도로 — 그린 지반 꺾은선(«DH도로_N-지반»)의 이름(«원지반»이 안 든다)
+                if (ctx != null)
+                {
+                    try { if (tr.GetObject(ctx.PidGroundLine, OpenMode.ForRead) is CivilDb.Profile pg) groundName = pg.Name; }
+                    catch (System.Exception ex) { log.AppendLine("   세로줄 자르기: 도로 지반 종단 읽기 실패 — " + Brief(ex)); }
+                }
+                else
                 try
                 {
                     if (tr.GetObject(pv.AlignmentId, OpenMode.ForRead) is CivilDb.Alignment alg)
@@ -2334,6 +2344,7 @@ public static class SheetCommand
                 try
                 {
                     if (tr.GetObject(id, OpenMode.ForRead) is not CivilDb.ProfileView pv) continue;
+                    if (SheetTag.IsRoadView(tr, pv)) continue;   // ★[v110.4 · 계획 2.C-11] 진입도로 종단뷰는 부지 측점 환산 후보가 아니다
                     double ax = 0, ay = 0, bx = 0, by = 0;
                     if (!pv.FindXYAtStationAndElevation(pv.StationStart, pv.ElevationMin, ref ax, ref ay) ||
                         !pv.FindXYAtStationAndElevation(pv.StationEnd, pv.ElevationMin, ref bx, ref by)) continue;
@@ -2356,13 +2367,13 @@ public static class SheetCommand
             var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
             var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
             foreach (ObjectId id in ms)
-                try { if (tr.GetObject(id, OpenMode.ForRead) is CivilDb.ProfileView) found = id; } catch { }
+                try { if (tr.GetObject(id, OpenMode.ForRead) is CivilDb.ProfileView pvA && !SheetTag.IsRoadView(tr, pvA)) found = id; } catch { }   // ★[v110.4] 도로 뷰 뺌
         }
         catch { }
         return found;
     }
 
-    private static void DrawVgpGrid(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log)
+    private static void DrawVgpGrid(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log, SheetContext? ctx = null)
     {
         try
         {
@@ -2390,6 +2401,10 @@ public static class SheetCommand
             if (gHi < gLo) (gLo, gHi) = (gHi, gLo);
 
             CivilDb.Profile ground = null;
+            // ★[v110.4 · 계획 2.C-4] 진입도로 — 그린 지반 꺾은선 · 이 도로 검토선 그룹만(부지 이름 · 횡단 그룹 static을 안 봄)
+            if (ctx != null)
+                try { ground = tr.GetObject(ctx.PidGroundLine, OpenMode.ForRead) as CivilDb.Profile; } catch { }
+            else
             try
             {
                 if (tr.GetObject(pv.AlignmentId, OpenMode.ForRead) is CivilDb.Alignment alg)
@@ -2401,6 +2416,15 @@ public static class SheetCommand
 
             var stG = new List<double>();
             int nSkipGrp = 0;
+            if (ctx != null)
+                try
+                {
+                    if (tr.GetObject(ctx.GroupId, OpenMode.ForRead) is CivilDb.SampleLineGroup grpR)
+                        foreach (ObjectId slid in grpR.GetSampleLineIds())
+                            try { if (tr.GetObject(slid, OpenMode.ForRead) is CivilDb.SampleLine slR) stG.Add(slR.Station); } catch { }
+                }
+                catch (System.Exception ex) { log.AppendLine("   세로줄: 도로 검토선 읽기 실패 — " + Brief(ex)); }
+            else
             try
             {
                 var xsecGid = ProfileCommand.LastXsecGroupId;
@@ -2431,12 +2455,15 @@ public static class SheetCommand
             int wiped = 0;
             double xMin = ext.MinPoint.X - 1e-6, xMax = ext.MaxPoint.X + 1e-6;
             double yMin = ext.MinPoint.Y - 1e-6, yMax = ext.MaxPoint.Y + 1e-6;
+            // ★[v110.4 · 계획 2.C-4 · 4] 지우기는 부지 길만 · 도로 표식은 건너뜀(도로는 [종단도 다시]가 표식으로 미리 지운다)
+            if (ctx == null)
             foreach (ObjectId id in ms)
             {
                 try
                 {
                     if (tr.GetObject(id, OpenMode.ForRead) is not Entity e || e.LayerId != layer) continue;
                     if (e is not Line old) continue;
+                    if (SheetTag.IsRoad(e)) continue;
                     var q = old.StartPoint;
                     if (q.X < xMin || q.X > xMax || q.Y < yMin || q.Y > yMax) continue;
                     tr.GetObject(id, OpenMode.ForWrite).Erase(); wiped++;
@@ -2612,7 +2639,7 @@ public static class SheetCommand
             var bt = (BlockTable)tr.GetObject(db2.BlockTableId, OpenMode.ForRead);
             var ms2 = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
             foreach (ObjectId id in ms2)
-                try { if (tr.GetObject(id, OpenMode.ForRead) is CivilDb.ProfileView) n++; } catch { }
+                try { if (tr.GetObject(id, OpenMode.ForRead) is CivilDb.ProfileView pvC && !SheetTag.IsRoadView(tr, pvC)) n++; } catch { }   // ★[v110.4 · 검토 L3] 도로 뷰 뺌(도로 장식은 표식으로 따로 지킴)
         }
         catch { }
         return n;
@@ -2645,7 +2672,7 @@ public static class SheetCommand
         catch { return false; }
     }
 
-    private static void PlaceScaleBanner(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log)
+    private static void PlaceScaleBanner(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log, SheetContext? ctx = null)
     {
         try
         {
@@ -2689,6 +2716,7 @@ public static class SheetCommand
             // 지난 판에 놓은 같은 블록만 지운다(우리가 놓은 것만 — 남의 것은 건드리지 않는다).
             bool spanOk = SheetXSpan(tr, pvId, scale, out double sxLo, out double sxHi);
             int wiped = 0;
+            if (ctx == null)   // ★[v110.4 · 계획 2.C-5] 부지 길만 지운다 · 도로 표식은 건너뜀
             foreach (ObjectId id in ms)
             {
                 try
@@ -2696,6 +2724,7 @@ public static class SheetCommand
                     if (tr.GetObject(id, OpenMode.ForRead) is not BlockReference br) continue;
                     if (br.BlockTableRecord != defId) continue;
                     if (!InSheetX(br, spanOk, sxLo, sxHi)) continue;   // ★[JACK 0904] 남의 장 것은 안 지운다
+                    if (SheetTag.IsRoad(br)) continue;
                     tr.GetObject(id, OpenMode.ForWrite).Erase(); wiped++;
                 }
                 catch { }
@@ -2839,7 +2868,7 @@ public static class SheetCommand
         catch (System.Exception ex) { log.AppendLine("   축척배너 실패 — " + Brief(ex)); }
     }
 
-    private static void DecorateBandTitles(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log)
+    private static void DecorateBandTitles(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log, SheetContext? ctx = null)
     {
         try
         {
@@ -2863,12 +2892,14 @@ public static class SheetCommand
 
             bool spanOk = SheetXSpan(tr, pvId, scale, out double sxLo, out double sxHi);
             int wiped = 0;
+            if (ctx == null)   // ★[v110.4 · 계획 2.C-5] 부지 길만 지운다 · 도로 표식은 건너뜀
             foreach (ObjectId id in ms)
             {
                 try
                 {
                     if (tr.GetObject(id, OpenMode.ForRead) is not Entity e || e.LayerId != layer) continue;
                     if (!InSheetX(e, spanOk, sxLo, sxHi)) continue;    // ★[JACK 0904] 남의 장 것은 안 지운다
+                    if (SheetTag.IsRoad(e)) continue;
                     tr.GetObject(id, OpenMode.ForWrite).Erase(); wiped++;
                 }
                 catch { }
@@ -2951,7 +2982,7 @@ public static class SheetCommand
     /// 멀쩡한 회사 값을 매번 덮어쓰지 않기 위해서다.</summary>
     private const double AxisLabelWantMm = 15.0, AxisLabelMinMm = 8.0, AxisLabelMaxMm = 40.0;
 
-    private static void DrawScaleBar(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log)
+    private static void DrawScaleBar(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log, SheetContext? ctx = null)
     {
         try
         {
@@ -3012,12 +3043,14 @@ public static class SheetCommand
             // ── 다시 돌릴 때 겹치지 않게 먼저 지운다. 우리가 만든 레이어라 남의 것을 건드릴 일이 없다.
             bool spanOk = SheetXSpan(tr, pvId, scale, out double sxLo, out double sxHi);
             int wiped = 0;
+            if (ctx == null)   // ★[v110.4 · 계획 2.C-5] 부지 길만 지운다 · 도로 표식은 건너뜀
             foreach (ObjectId id in ms)
             {
                 try
                 {
                     if (tr.GetObject(id, OpenMode.ForRead) is not Entity e || e.LayerId != layer) continue;
                     if (!InSheetX(e, spanOk, sxLo, sxHi)) continue;    // ★[JACK 0904] 남의 장 것은 안 지운다
+                    if (SheetTag.IsRoad(e)) continue;
                     tr.GetObject(id, OpenMode.ForWrite).Erase(); wiped++;
                 }
                 catch { }
@@ -3649,7 +3682,7 @@ public static class SheetCommand
     /// <c>UserSpecified</c>로 지정하면 <b>지정값을 돌려주므로</b>, 그것으로 다시 계산하면
     /// 두 번째 실행부터 자기가 넣은 값을 데이터로 착각한다(<see cref="FitSheet"/>는 두 번 불린다).</para></summary>
     private static void FitElevationRange(Database db, ObjectId pvId, double scale, double availMm,
-                                          System.Text.StringBuilder log)
+                                          System.Text.StringBuilder log, SheetContext? ctx = null)
     {
         try
         {
@@ -3657,6 +3690,35 @@ public static class SheetCommand
 
             // ① 데이터 실제 범위 — 이 뷰에 걸린 종단들의 최저·최고
             double lo = double.MaxValue, hi = double.MinValue;
+            // ★★[v110.4 · 계획 검토 M6] 진입도로 — <b>그 장 측점 범위 안</b>의 지반 꺾은선 · 계획만(장마다 제 범위 · 1 m마다 + 끝 · PVI 자리)
+            //   부지는 노선 전체 범위 그대로(아래 else) — 여러 장에서도 같은 격자를 쓰는 지금 동작을 안 바꾼다.
+            if (ctx != null)
+                using (var trR = db.TransactionManager.StartTransaction())
+                {
+                    var pvR = (CivilDb.ProfileView)trR.GetObject(pvId, OpenMode.ForRead);
+                    double a = pvR.StationStart, b = pvR.StationEnd;
+                    foreach (var pid in new[] { ctx.PidGroundLine, ctx.PidPad })
+                    {
+                        if (pid.IsNull || trR.GetObject(pid, OpenMode.ForRead) is not CivilDb.Profile pr) continue;
+                        double p0 = System.Math.Max(a, pr.StartingStation), p1 = System.Math.Min(b, pr.EndingStation);
+                        if (p1 < p0) continue;
+                        var sts = new List<double>();
+                        for (double st = p0; st < p1; st += 1.0) sts.Add(st);
+                        sts.Add(p1);
+                        try { foreach (CivilDb.ProfilePVI q in pr.PVIs) { double qs = q.RawStation; if (qs >= p0 && qs <= p1) sts.Add(qs); } } catch { }
+                        foreach (double st in sts)
+                        {
+                            try
+                            {
+                                double z = pr.ElevationAt(st);
+                                if (double.IsFinite(z)) { lo = System.Math.Min(lo, z); hi = System.Math.Max(hi, z); }
+                            }
+                            catch { }
+                        }
+                    }
+                    trR.Commit();
+                }
+            else
             using (var tr = db.TransactionManager.StartTransaction())
             {
                 var pv0 = (CivilDb.ProfileView)tr.GetObject(pvId, OpenMode.ForRead);
@@ -4207,6 +4269,7 @@ public static class SheetCommand
                         {
                             if (tr.GetObject(id, OpenMode.ForRead) is not Entity e) continue;
                             if (!want.TryGetValue(e.LayerId, out string lname)) continue;
+                            if (SheetTag.IsRoad(e)) continue;   // ★[v110.4 · 계획 2.C-10] 진입도로 종단도 것은 부지 «지우고 새로» · 초기화가 안 지운다
                             tr.GetObject(id, OpenMode.ForWrite).Erase();
                             total++;
                             hit[lname] = hit.TryGetValue(lname, out int c) ? c + 1 : 1;
@@ -4638,6 +4701,8 @@ public static class SheetCommand
                 foreach (ObjectId aid in cdoc.GetAlignmentIds())
                 {
                     if (tr.GetObject(aid, OpenMode.ForRead) is not CivilDb.Alignment al) continue;
+                    // ★[v110.4 · 계획 2.C-11] 진입도로 노선의 종단뷰는 뺀다 — 도로 종단도는 도킹창 [종단도 다시]
+                    if (RoadDesign.Has(tr, aid)) continue;
                     foreach (ObjectId vid in al.GetProfileViewIds())
                         if (tr.GetObject(vid, OpenMode.ForRead) is CivilDb.ProfileView pv) found.Add((vid, pv.Name));
                 }
@@ -4658,11 +4723,14 @@ public static class SheetCommand
         peo.AddAllowedClass(typeof(CivilDb.ProfileView), true);
         var per = ed.GetEntity(peo);
         if (per.Status != PromptStatus.OK) return ObjectId.Null;
+        bool road = false;
         using (var tr = db.TransactionManager.StartTransaction())
         {
-            if (tr.GetObject(per.ObjectId, OpenMode.ForRead) is CivilDb.ProfileView pv) name = pv.Name;
+            if (tr.GetObject(per.ObjectId, OpenMode.ForRead) is CivilDb.ProfileView pv) { name = pv.Name; road = SheetTag.IsRoadView(tr, pv); }
             tr.Commit();
         }
+        // ★[v110.4 · 계획 2.C-11] 진입도로 종단뷰 — 알리고 멈춤(부지 static으로 도곽을 씌우면 부지 옹벽 · 측점이 섞인다)
+        if (road) { ed.WriteMessage("\n[도곽] 진입도로 종단도입니다 — 도킹창 [진입도로] ■ 결과 [종단도 다시]로 다시 그리세요."); return ObjectId.Null; }
         return per.ObjectId;
     }
 
@@ -4776,14 +4844,15 @@ public static class SheetCommand
     /// 알고 있고(수직 막대를 그리려고 구해 둔 것), 계획 종단에서 그 두 자리 표고를 읽으면 된다.</para>
     /// <para><b>순정 글씨는 그 자리만 숨긴다.</b> <c>LabelGroupSubEntity.Visibility</c>로 낱개를 끌 수 있다.
     /// 그룹은 <c>StyleName</c>에 "계획"이 든 것만 고른다 — 지반고 칸은 건드리지 않는다.</para></summary>
-    private static void WallBandPairs(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log)
+    private static void WallBandPairs(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log, SheetContext? ctx = null)
     {
         // ★★[검증 0902 · M5] <b>남의 도면 값을 쓰지 않는다.</b> 벽 목록은 프로그램 전역이라
         //   A 도면에서 종단을 돌린 뒤 B 도면에서 도곽을 그리면 <b>A의 벽</b>을 B에 대고 맞춘다.
         //   저장소에 이미 관문이 있는데(<c>ProfileCommand.SameDrawing</c>) 여기만 안 쓰고 있었다.
-        if (!ProfileCommand.SameDrawing(db))
+        // ★[v110.4 · 계획 2.C-7] 진입도로는 인자 목록(빈 목록 — 도로 옹벽 막대 · 두 값은 다음 판)을 쓰고 도면 관문을 건너뛴다
+        if (ctx == null && !ProfileCommand.SameDrawing(db))
         { log.AppendLine("  수직부 두 값: 벽 목록이 <b>다른 도면</b> 것이라 건너뜀 — [종단]을 이 도면에서 먼저 돌리세요"); return; }
-        var spans = ProfileCommand.LastWallSpans;
+        var spans = ctx != null ? ctx.WallSpans : ProfileCommand.LastWallSpans;
         if (spans == null || spans.Count == 0) { log.AppendLine("  수직부 두 값: 옹벽·가시설이 없어 건너뜀"); return; }
 
         int nHide = 0, nDraw = 0, nGrp = 0, nMiss = 0, nSkipKind = 0, nSkipManual = 0, wipedAll = 0, nFar = 0, nBand = 0, nProbe = 0, nSkipView = 0, nNoWall = 0, nOnMark = 0, nOneSide = 0, nHalfZ = 0;
@@ -4817,8 +4886,8 @@ public static class SheetCommand
             //   같은 말이 든 종단이 하나만 더 있어도 <b>마지막에 잡힌 것</b>이 이긴다.
             //   못 받았을 때만(도면을 다시 연 뒤 등) 이름으로 물러난다.
             CivilDb.Profile pad = null, gnd = null;
-            try { if (tr.GetObject(ProfileCommand.LastPidPad, OpenMode.ForRead) is CivilDb.Profile p1) pad = p1; } catch { }
-            try { if (tr.GetObject(ProfileCommand.LastPidGround, OpenMode.ForRead) is CivilDb.Profile p2) gnd = p2; } catch { }
+            try { if (tr.GetObject(ctx != null ? ctx.PidPad : ProfileCommand.LastPidPad, OpenMode.ForRead) is CivilDb.Profile p1) pad = p1; } catch { }
+            try { if (tr.GetObject(ctx != null ? ctx.PidGround : ProfileCommand.LastPidGround, OpenMode.ForRead) is CivilDb.Profile p2) gnd = p2; } catch { }
             if (pad == null || gnd == null)
             {
                 if (tr.GetObject(pv.AlignmentId, OpenMode.ForRead) is CivilDb.Alignment al)
@@ -4888,6 +4957,7 @@ public static class SheetCommand
                 try
                 {
                     if (tr.GetObject(oid, OpenMode.ForRead) is not Entity e0 || e0.LayerId != layer) continue;
+                    if (!DH.Grading.Core.ProfileSheetRules.ShouldErase(ctx != null, SheetTag.Of(e0, out string tg0, out _, out _) ? tg0 : null, ctx?.RoadHandle)) continue;   // ★[v110.4] 부지 = 도로 표식 건너뜀
                     // ★★[검토 0902] <b>이 뷰 것만 지운다.</b> 레이어는 뷰별이 아니다 —
                     //   종단도가 둘인 도면에서 B 뷰로 [도곽]을 돌리면 <b>A 뷰의 글씨까지</b> 지워졌고,
                     //   A의 순정 라벨은 <b>숨긴 채로 되돌리는 곳이 없어</b> 그 칸이 영영 빈칸이 됐다.
@@ -4952,6 +5022,8 @@ public static class SheetCommand
             if (byScan)
             {
                 double xLo = System.Math.Min(gx0, gx1) - 1e-6, xHi = System.Math.Max(gx0, gx1) + 1e-6;
+                // ★★[v110.4 · 계획 검토 H1] 부지 길 — 도로 도곽(표식 사각형) 안의 묶음은 뺀다(같은 X에 도로 종단도가 있어도 부지 라벨만)
+                var roadRects = ctx == null ? SheetTag.RoadFrames(db, tr) : null;
                 foreach (ObjectId oid2 in ms)
                 {
                     object o2;
@@ -4968,6 +5040,8 @@ public static class SheetCommand
                     if (c1 == 0) continue;
                     double mx = sx / c1;
                     if (mx < xLo || mx > xHi) continue;      // 남의 종단도 것
+                    if (roadRects != null && !DH.Grading.Core.ProfileSheetRules.SiteOwnsGroup(mx, sy / c1, roadRects)) continue;
+                    try { if (lg1 is CivilDb.LabelBase lbW && !lbW.FeatureId.IsNull && lbW.FeatureId != pvId && tr.GetObject(lbW.FeatureId, OpenMode.ForRead) is CivilDb.ProfileView pvW && SheetTag.IsRoadView(tr, pvW)) continue; } catch { }
                     string nm1 = "";
                     try { if (lg1 is CivilDb.ProfileBandLabelGroup pg1) nm1 = pg1.StyleName ?? ""; } catch { }
                     if (nm1.Length == 0) { try { nm1 = lg1.StyleName ?? ""; } catch { } }
@@ -5080,7 +5154,7 @@ public static class SheetCommand
                         //   하나씩 서므로, 가장 가까운 측점이 곧 <b>그 글씨의 진짜 측점</b>이다.
                         //   측점끼리는 최소 8cm 떨어져 있고 남는 오차는 mm라 <b>헷갈릴 수가 없다</b>.
                         //   목록이 없으면(다른 경로로 만든 도면) 되돌린 값을 그대로 쓴다.
-                        double st3 = SnapToKnownStation(stRaw, out double snapD);
+                        double st3 = SnapToKnownStation(stRaw, out double snapD, ctx);
                         if (snapD > 0) { nSnap++; snapMax = System.Math.Max(snapMax, snapD); }
 
                         // ★★★[JACK 0902 계측] <b>자를 8.9cm짜리 현실에 맞춘다.</b>
@@ -5143,7 +5217,7 @@ public static class SheetCommand
                         //   고치기 전에 <b>둘을 나란히 남겨</b> 실제로 다른지부터 본다.
                         if (nProbe < 3 && kind == "계획고")
                         {
-                            var vb = ProfileCommand.LastVertBars?.Find(v => System.Math.Abs(v.Station - hit.Mid) < 0.05);
+                            var vb = (ctx != null ? ctx.VertBars : ProfileCommand.LastVertBars)?.Find(v => System.Math.Abs(v.Station - hit.Mid) < 0.05);
                             probe.Append($"\n      {hit.Mid:F2}m {hit.Kind} 글씨 {zF:F2}/{zB:F2}"
                                        + (vb != null && !double.IsNaN(vb.Value.ZTop)
                                           ? $" · 막대 {vb.Value.ZTop:F2}/{vb.Value.ZBottom:F2}" : " · 막대 없음"));
@@ -5395,13 +5469,13 @@ public static class SheetCommand
     ///
     /// <para>→ 라벨을 <b>가장 가까운 측점 하나</b>에 1:1로 붙이고(벽 붙이기가 이미 쓰는 방식),
     /// 그 측점의 사유로 <see cref="StationMarks.IsBendOnly"/>를 묻는다.</para></summary>
-    private static List<(double X, double St, string Why)> MarkXs(Database db, ObjectId pvId)
+    private static List<(double X, double St, string Why)> MarkXs(Database db, ObjectId pvId, SheetContext? ctx = null)
     {
         var xs = new List<(double X, double St, string Why)>();
         try
         {
-            if (!ProfileCommand.SameDrawing(db)) return xs;
-            var marks = ProfileCommand.LastMarks;
+            if (ctx == null && !ProfileCommand.SameDrawing(db)) return xs;
+            var marks = ctx != null ? ctx.Marks : ProfileCommand.LastMarks;   // ★[v110.4 · 계획 2.C-8] 진입도로 = 그 도로 측점
             if (marks == null || marks.Count == 0) return xs;
             using var tr = db.TransactionManager.StartTransaction();
             if (tr.GetObject(pvId, OpenMode.ForRead) is CivilDb.ProfileView pv)
@@ -5471,13 +5545,13 @@ public static class SheetCommand
         => (System.Math.Abs(v) < 0.005 ? 0.0 : v).ToString("F2");
 
     private static List<(double X, double Mid, bool Two, bool First)> WallXs(
-        Database db, ObjectId pvId, double scale, System.Text.StringBuilder log)
+        Database db, ObjectId pvId, double scale, System.Text.StringBuilder log, SheetContext? ctx = null)
     {
         var xs = new List<(double X, double Mid, bool Two, bool First)>();
         try
         {
-            if (!ProfileCommand.SameDrawing(db)) return xs;
-            var spans = ProfileCommand.LastWallSpans;
+            if (ctx == null && !ProfileCommand.SameDrawing(db)) return xs;
+            var spans = ctx != null ? ctx.WallSpans : ProfileCommand.LastWallSpans;   // ★[v110.4 · 계획 2.C-8] 진입도로 = 빈 목록
             if (spans == null || spans.Count == 0) return xs;
             double need = 2.0 * MinLabelGapMm / 1000.0 * scale;   // 두 값이 들어가려면 이만큼
             using var tr = db.TransactionManager.StartTransaction();
@@ -5550,7 +5624,7 @@ public static class SheetCommand
     ///
     /// <para>→ <b>같은 줄 세우기에 태우되 폭만 다르게</b> 준다. 가운데 사이 거리는
     /// <c>(앞 폭 + 내 폭) / 2</c>다 — 둘 다 하나짜리면 예전과 똑같은 식이 된다.</para></summary>
-    private static void SpreadBandLabels(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log)
+    private static void SpreadBandLabels(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log, SheetContext? ctx = null)
     {
         try
         {
@@ -5560,9 +5634,9 @@ public static class SheetCommand
             double minGap = MinLabelGapMm / 1000.0 * scale;      // 글씨 한 자리(종이 mm → 모형 m)
             double pairGap = (CalsT25 * scale / 1000.0) * 1.35;  // 두 값 사이 거리 — 그리는 쪽과 같은 식
             S9("b 벽 자리");
-            var walls = WallXs(db, pvId, scale, log);
+            var walls = WallXs(db, pvId, scale, log, ctx);
             S9($"b 벽 {walls.Count}곳");
-            var marks = MarkXs(db, pvId);
+            var marks = MarkXs(db, pvId, ctx);
             S9($"c 측점 {marks.Count}곳");
             int groups = 0, moved = 0, wide = 0, back = 0, fail = 0, outside = 0;
             int skipView = 0, crowd = 0, noName = 0, dropped = 0, kept = 0, nLead = 0, nailed = 0, farMark = 0, blankSkip = 0;
@@ -5638,12 +5712,28 @@ public static class SheetCommand
                         nBandTop++;
                     }
                 }
-                if (ProfileCommand.SameDrawing(db)) { pidPad = ProfileCommand.LastPidPad; pidGnd = ProfileCommand.LastPidGround; }
+                if (ctx != null) { pidPad = ctx.PidPad; pidGnd = ctx.PidGround; }   // ★[v110.4 · 계획 2.C-9] 진입도로 = 인자
+                else if (ProfileCommand.SameDrawing(db)) { pidPad = ProfileCommand.LastPidPad; pidGnd = ProfileCommand.LastPidGround; }
             }
             catch { }
 
             // 밴드 라벨 그룹을 모아 <b>위에서 아래로</b> 번호를 매긴다(밴드 순서와 같다).
             var glist = new List<(ObjectId Id, double Y)>();
+            // ★★[v110.4 · 계획 검토 H1] 묶음 주인 = 기하로 — 부지 길: 도로 도곽(표식 사각형) 안이면 뺌(부지만 있는 도면은 목록이 비어 그대로) ·
+            //   도로 길: 그 뷰의 밴드 상자(X 범위 × [그래프 아래 끝 − 밴드 모형 높이, 그래프 아래 끝]) 안만
+            var roadRects = ctx == null ? SheetTag.RoadFrames(db, tr) : null;
+            var foreignGroups = new HashSet<ObjectId>();   // 이 뷰 것이 아닌 묶음(부지만 있는 도면 = 늘 빈 목록)
+            double yGraph = double.NaN, bandBox = LastBandModelH;
+            if (ctx != null)
+                try
+                {
+                    if (tr.GetObject(pvId, OpenMode.ForRead) is CivilDb.ProfileView pvY)
+                    {
+                        double ga = 0, gb = 0;
+                        if (pvY.FindXYAtStationAndElevation(pvY.StationStart, pvY.ElevationMin, ref ga, ref gb)) yGraph = gb;
+                    }
+                }
+                catch { }
             foreach (ObjectId id0 in ms)
             {
                 try
@@ -5659,6 +5749,18 @@ public static class SheetCommand
                     if (c0 == 0) continue;
                     double mx = sx / c0;
                     if (mx < xLo || mx > xHi) continue;              // 다른 종단도 것
+                    // ★[v110.4 · 검토 H1 · 화면 없는 Civil 실측 1029] 밴드 묶음의 FeatureId = 그 종단뷰(도로 뷰 6 · 부지 뷰 6 — 12/12) — 읽히면 그것으로, 아니면 기하로.
+                    //   주인이 아닌 묶음은 <b>아래 자리표 · 쓰기 루프에서도</b> 뺀다(그 둘은 X 범위만 본다 — 같은 X 위 · 아래 종단도의 글씨를 옮기던 자리).
+                    ObjectId fid0 = ObjectId.Null;
+                    try { if (lg0b is CivilDb.LabelBase lbF) fid0 = lbF.FeatureId; } catch { }
+                    bool fidRoad = false;   // 부지 길 — FeatureId가 진입도로 뷰(못 읽으면 거짓 = 지금 식)
+                    if (ctx == null && !fid0.IsNull && fid0 != pvId)
+                        try { fidRoad = tr.GetObject(fid0, OpenMode.ForRead) is CivilDb.ProfileView pvF && SheetTag.IsRoadView(tr, pvF); } catch { }
+                    bool foreign0 = ctx == null
+                        ? (roadRects != null && !DH.Grading.Core.ProfileSheetRules.SiteOwnsGroup(mx, sy / c0, roadRects)) || fidRoad
+                        : !fid0.IsNull ? fid0 != pvId
+                        : double.IsNaN(yGraph) || !DH.Grading.Core.ProfileSheetRules.RoadOwnsGroup(mx, sy / c0, xLo, xHi, yGraph, bandBox, System.Math.Max(minGap, 0.1 * bandBox));
+                    if (foreign0) { foreignGroups.Add(id0); continue; }
                     glist.Add((id0, sy / c0));
                 }
                 catch { }
@@ -5733,6 +5835,7 @@ public static class SheetCommand
                         if (pvS0.FindXYAtStationAndElevation(pvS0.StationStart, pvS0.ElevationMin, ref sx0, ref sy0))
                             foreach (ObjectId gid in ms)
                             {
+                                if (foreignGroups.Contains(gid)) continue;   // ★[v110.4 · H1] 이 뷰 것이 아닌 묶음
                                 object go; try { go = tr.GetObject(gid, OpenMode.ForRead); } catch { continue; }
                                 if (go is not CivilDb.LabelGroup lgh) continue;
                                 if (!go.GetType().Name.Contains("ProfileData")) continue;
@@ -5771,6 +5874,7 @@ public static class SheetCommand
             var msP = (BlockTableRecord)trPre.GetObject(btP[BlockTableRecord.ModelSpace], OpenMode.ForRead);
             foreach (ObjectId id0s in msP)
             {
+                if (foreignGroups.Contains(id0s)) continue;   // ★[v110.4 · H1] 이 뷰 것이 아닌 묶음은 자리표에 안 넣음
                 object os;
                 try { os = trPre.GetObject(id0s, OpenMode.ForRead); } catch { continue; }
                 if (os is not CivilDb.LabelGroup lgS) continue;
@@ -5923,6 +6027,7 @@ public static class SheetCommand
             S9($"g 쓰기 시작(좌석 {order.Count}개)");
             foreach (ObjectId id in ms)
             {
+                if (foreignGroups.Contains(id)) continue;   // ★[v110.4 · H1] 이 뷰 것이 아닌 묶음은 안 옮김
                 object o;
                 try { o = tr.GetObject(id, OpenMode.ForRead); } catch { continue; }
                 if (o is not CivilDb.LabelGroup lg) continue;

@@ -20,6 +20,13 @@ internal sealed class RoadDesign
     /// <summary>★[v110.2 · 설치 전 검토 · 중간] 곡선을 우리가 넣었나 — 폴리선 · [경로 그리기]로 만든 노선 = 참 · 기존 Civil 노선으로 연 도로 = 거짓(사람이 설계한 곡선이라 곡선 반경 칸이 안 바꿈).</summary>
     public bool OwnCurves = true;
 
+    /// <summary>★★[v110.4 · 계획_v110_4.md 3.1-12 · 3.2] 종단도(도곽 · 밴드) 기록 — 놓은 자리 [x, y] · 축척 · 뷰 핸들 · 검토선 그룹 · «-지반» · 측점 체인 · 계획 종단 도장.
+    /// 옛 기록(v110.3 이전)에는 칸이 없다 = 기본값(종단도 없음). [종단도 다시]가 이 핸들들로 이 도로 것만 지운다(검토 M3).</summary>
+    public double[] SheetAt = Array.Empty<double>();
+    public double SheetScale = 0;
+    public List<string> SheetViews = new();
+    public string SheetGroup = "", SheetGround = "", SheetChain = "", SheetStamp = "";
+
     /// <summary>★[v110.2 · JACK 1029 «곡선 반경 = 도킹창 값 하나»] 다음 노선의 곡선 반경 — 도킹창 칸이 바꾼다(열린 도로가 있으면 그 도로에도 · 세션 동안 기억).</summary>
     internal static double LastCurveR = 30;
 
@@ -70,6 +77,9 @@ internal sealed class RoadDesign
         }
         catch { return null; }
     }
+
+    /// <summary>★[v110.4 · 계획 2.C-11] 이 노선이 진입도로인가(설계 XRecord가 있음) — 부지 도곽 · 측점 찍기 · DHSHEET가 도로 종단뷰를 후보에서 뺀다.</summary>
+    public static bool Has(Transaction tr, ObjectId alignId) => !alignId.IsNull && !XrecId(tr, alignId).IsNull;
 
     /// <summary>설계 XRecord의 ID — 실행 취소로 그것만 바뀌어도 알아채려고(세션이 지켜봄) · 없으면 Null.</summary>
     public static ObjectId XrecId(Transaction tr, ObjectId alignId)

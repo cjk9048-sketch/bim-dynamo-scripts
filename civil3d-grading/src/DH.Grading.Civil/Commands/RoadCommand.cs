@@ -118,6 +118,9 @@ public class RoadCommand
             RoadDesign? d = null;
             if (isAlign)
             {
+                // ★[v110.4 · 계획 검토 M4] 부지 종단 노선(«DH선형»)은 진입도로로 안 받는다 — 부지 «지우고 새로»가 지우고 · 도곽 · 측점 찍기가 섞인다
+                string refuse = SiteAlignRefusal(db, aid);
+                if (refuse.Length > 0) { SectionCommand.Refuse(ed, refuse); return; }
                 using var tr = db.TransactionManager.StartTransaction();
                 d = RoadDesign.Read(tr, aid);
                 tr.Commit();
@@ -144,16 +147,12 @@ public class RoadCommand
             }
             written = true;
             log.AppendLine($"  바탕면 '{bsName}'");
-            // 종단뷰 — v110.2b에서 부지 [종단도]와 같은 꼴(도곽 · 밴드)로 바꿈(JACK 1029 결정 · 부지 종단 코드를 대상 인자로 고치는 일이 먼저)
-            var ppr = ed.GetPoint("\n[진입도로] 종단뷰를 놓을 자리(Esc = 안 그림): ");
-            if (ppr.Status == PromptStatus.OK)
-            {
-                try { RoadBuilder.MakeView(doc, aid, ppr.Value.TransformBy(ed.CurrentUserCoordinateSystem)); log.AppendLine("  종단뷰 그림 — 계획 종단(PVI)을 끌어 옮기면 바로 다시 계산합니다"); }
-                catch (System.Exception ex) { log.AppendLine("  ⚠종단뷰를 못 그림 — " + ex.Message); }
-            }
             ed.WriteMessage("\n" + log.ToString().TrimEnd());
             try { DiagLog.Append("\n" + log); } catch { }
             Open(doc, aid);
+            // ★★[v110.4 · 계획_v110_4.md 3.5 · JACK 1029] 종단도 = 부지 [종단도]와 같은 꼴(A1 도곽 · 밴드 6칸) — 노선 만들 때 바로 · 실패해도 도로는 열림
+            var s = RoadSession.Of(doc);
+            if (s != null) AskAndPlaceSheets(doc, s, again: false);
             if (draft.EndUnreachable) ed.WriteMessage("\n[진입도로] ⚠종점 높이를 최대 종단경사로 못 맞춥니다 — 노선을 늘리거나 최대 경사를 올리세요.");
         }
         catch (System.Exception ex)
@@ -178,6 +177,77 @@ public class RoadCommand
         {
             if (tempPolyline) SectionCommand.EraseQuiet(db, srcId);
         }
+    }
+
+    /// <summary>★[v110.4 · 계획 검토 M4] 부지 종단 노선(«DH선형»으로 시작 · 진입도로 설계 없음)이면 거절 글 — 아니면 빈 글.</summary>
+    internal static string SiteAlignRefusal(Database db, ObjectId aid)
+    {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            string nm = tr.GetObject(aid, OpenMode.ForRead) is CivilDb.Alignment al ? al.Name ?? "" : "";
+            bool road = RoadDesign.Has(tr, aid);
+            tr.Commit();
+            return !road && nm.StartsWith(SectionCommand.AlignBase, StringComparison.Ordinal)
+                ? $"«{nm}»은 부지 [종단도] 노선입니다 — 진입도로로 쓸 수 없습니다(부지 «지우고 새로»가 지우고 · 도곽 · 측점이 섞임).\n진입도로는 폴리선 · [경로 그리기] · 다른 Civil 노선으로 만드세요."
+                : "";
+        }
+        catch { return ""; }
+    }
+
+    /// <summary>★★[v110.4 · 계획 3.5 · 검토 H1] 종단도 놓을 자리 묻기 → 다른 종단도와 가로 범위가 겹치면 다시 → <see cref="RoadSession.MakeSheets"/>.
+    /// <paramref name="again"/>(= [종단도 다시] · DHROADSHEET)이면 Enter = 지난 자리. Esc = 안 그림(도로는 그대로).</summary>
+    static void AskAndPlaceSheets(Document doc, RoadSession s, bool again)
+    {
+        var ed = doc.Editor; var db = doc.Database;
+        try
+        {
+            GradingSettings.SyncToDocument(doc);   // ★[설치 전 검토 · 낮음] 겹침 검사(축척 · 장 수)도 이 도면 설정으로
+            double[] last = s.Fresh().SheetAt;
+            bool hasLast = again && last.Length >= 2 && double.IsFinite(last[0]) && double.IsFinite(last[1]);
+            var (scale, scNote, _) = RoadSheets.ScaleFor(db);
+            int n = RoadSheets.SheetCount(db, s.AlignId, scale);
+            ed.WriteMessage($"\n[진입도로] 종단도 1:{scale:0} · {n}장 — {scNote}");
+            while (true)
+            {
+                var ppo = new PromptPointOptions(hasLast
+                    ? "\n[진입도로] 종단도(도곽 · 밴드)를 놓을 자리 <Enter = 지난 자리 · Esc = 그만>: "
+                    : "\n[진입도로] 종단도(도곽 · 밴드)를 놓을 자리(Esc = 안 그림 · 나중에 [종단도 다시]): ") { AllowNone = hasLast };
+                var pr = ed.GetPoint(ppo);
+                Point3d at;
+                if (pr.Status == PromptStatus.None && hasLast) at = new Point3d(last[0], last[1], 0);
+                else if (pr.Status == PromptStatus.OK) at = pr.Value.TransformBy(ed.CurrentUserCoordinateSystem);
+                else { ed.WriteMessage("\n[진입도로] 종단도는 안 그렸습니다 — 나중에 도킹창 ■ 결과 [종단도 다시]."); return; }
+                string hit = RoadSheets.Overlap(db, s.AlignId, at, scale, n);
+                if (hit.Length > 0)
+                {
+                    ed.WriteMessage($"\n[진입도로] ⚠{hit}와(과) 가로 범위가 겹칩니다(위 · 아래 포함 — 장식 · 밴드 글씨 정리가 가로 범위로 주인을 가림) — 옆으로 비켜 찍으세요.");
+                    hasLast = false;
+                    continue;
+                }
+                var log = new System.Text.StringBuilder();
+                string msg;
+                using (BusyPopup.Scope("종단도 그리는 중입니다.")) msg = s.MakeSheets(at, log);
+                ed.WriteMessage("\n[진입도로] " + msg);
+                try { DiagLog.Append("\n" + log); } catch { }
+                try { s.Recompute(); } catch { }
+                return;
+            }
+        }
+        catch (System.Exception ex)
+        {
+            ed.WriteMessage("\n[진입도로] 종단도 실패 — " + ex.Message + "(도로는 그대로 — [종단도 다시]로 다시)");
+            try { DiagLog.Append("\n[진입도로] 종단도 실패 — " + ex); } catch { }
+        }
+    }
+
+    /// <summary>★★[v110.4 · 계획 3.5 · 3.6] [종단도 다시] — 지금 종단 · 축척으로 이 도로 종단도를 새로(옛것은 이 도로 표식 · 핸들로만 지움). Enter = 지난 자리.</summary>
+    [CommandMethod("DHROADSHEET")]
+    public void Sheet()
+    {
+        var doc = AcadApp.DocumentManager.MdiActiveDocument; if (doc == null) return;
+        var s = Need(doc.Editor); if (s == null) return;
+        AskAndPlaceSheets(doc, s, again: true);
     }
 
     static void Open(Document doc, ObjectId aid)

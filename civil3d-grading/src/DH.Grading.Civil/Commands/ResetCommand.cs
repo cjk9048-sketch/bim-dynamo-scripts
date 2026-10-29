@@ -371,6 +371,7 @@ public sealed class ResetCommand
 
             // DH- 레이어에 남은 객체 — 레이어별로 몇 개인지
             var byLayer = new System.Collections.Generic.Dictionary<string, int>(System.StringComparer.OrdinalIgnoreCase);
+            var roadRects = SheetTag.RoadFrames(db, tr);   // ★[v110.4] 도로 도곽(밴드 라벨 주인 가리기)
             var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
             foreach (ObjectId bid in bt)
             {
@@ -395,6 +396,18 @@ public sealed class ResetCommand
                             if (System.Array.IndexOf(ImportGisCommand.ImportLayers, ly) >= 0) continue;   // 가져온 자료는 뺀다
                             // ★[v110 · 설치 전 검토 · 중간] 진입도로(노선 · 종단 · 종단뷰)는 초기화가 일부러 안 지운다 — «남은 것»으로 세지 않는다
                             if (ly.StartsWith(RoadBuilder.AlignBase + "-", System.StringComparison.Ordinal)) continue;
+                            // ★[v110.4 · 계획 2.D] 진입도로 종단도 — 표식 있는 것 · 도로 노선 종단(«-지반» · «-계획»은 CR- 레이어로 옮겨짐) · 도로 도곽 안 밴드 라벨은 «남은 것»이 아니다
+                            if (SheetTag.IsRoad(e)) continue;
+                            if (e is Autodesk.Civil.DatabaseServices.Profile rpf && RoadDesign.Has(tr, rpf.AlignmentId)) continue;
+                            if (e is Autodesk.Civil.DatabaseServices.LabelGroup && roadRects.Count > 0)
+                            {
+                                try
+                                {
+                                    var rx = e.GeometricExtents;
+                                    if (!DH.Grading.Core.ProfileSheetRules.SiteOwnsGroup((rx.MinPoint.X + rx.MaxPoint.X) / 2, (rx.MinPoint.Y + rx.MaxPoint.Y) / 2, roadRects)) continue;
+                                }
+                                catch { }
+                            }
                             byLayer.TryGetValue(ly, out int c); byLayer[ly] = c + 1;
                         }
                         catch { }
@@ -495,6 +508,7 @@ public sealed class ResetCommand
                 if (tr.GetObject(id, OpenMode.ForRead) is not AcadEntity e) continue;
                 if (e.Layer == null || !e.Layer.StartsWith("DH-", System.StringComparison.Ordinal)) continue;
                 if (keep.Contains(e.Layer)) continue;   // 가져온 데이터 보존
+                if (SheetTag.IsRoad(e)) continue;       // ★[v110.4 · 계획 2.D] 진입도로 종단도(도곽 · 장식 · 검토선 글씨)는 초기화가 남긴다(도로처럼)
                 victims.Add(id);
             }
             catch { }
