@@ -465,6 +465,18 @@ public sealed partial class PlacePartView
             _fwJoints.Children.Add(button);
             _fwJointButtons.Add(button);
         }
+        if (chips.Count > 0)
+        {
+            // R71: 칸 상태를 규칙(짝 예외)으로 — 같은 부위 짝 전부에.
+            var all = _ui.Button("이 짝 전부에", "BtnSoft", "이 판들의 겹침 칸 상태를 규칙(짝 예외)으로 올립니다 — 같은 부위 짝 전부에 걸립니다(② 규칙 탭).", "btn.fw.joint.promote");
+            all.Focusable = false;
+            all.MinHeight = 24;
+            all.FontSize = 12;
+            all.Padding = new Thickness(8, 0, 8, 1);
+            all.Margin = new Thickness(6, 0, 4, 2);
+            all.Click += (_, _) => PromoteJoints();
+            _fwJoints.Children.Add(all);
+        }
     }
 
     // 칸을 눌렀다: 모두 무시였으면 공제로 · 아니면(공제 · 일부 무시) 무시로 — 그 판들의 면 × 그 이름의 이웃 전부(형상부터 다시 잰다).

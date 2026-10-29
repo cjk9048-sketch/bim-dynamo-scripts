@@ -19,12 +19,13 @@ public sealed partial class FormworkBoard
 
     private string _measuredJoints = "";
 
-    // 판을 잰 «겹침» 기록(사용자 모드일 때만 걸린다 — 자동은 "").
-    private string MeasureKey() => Options.ActiveRules?.JointText ?? "";
+    // 판을 잰 «겹침» 기록(사용자 모드일 때만 걸린다 — 자동은 "") + 시공 순서표 짝 예외(R71 — 모드와 상관없이).
+    private string MeasureKey() => (Options.ActiveRules?.JointText ?? "") + "\u0001" + Rules.PairText;
 
-    // 대응표를 다시 건다 — «겹침» 기록이 판을 잰 때와 다르면 형상부터 다시 잰다.
+    // 대응표를 다시 건다 — «겹침» 기록 · 짝 예외가 판을 잰 때와 다르면 형상부터 다시 잰다(시공 순서표는 대응표에서 다시 짓는다).
     private void Reclassify()
     {
+        Options.Order = PourOrder.From(Rules);
         if (Remeasure != null && MeasureKey() != _measuredJoints)
         {
             var watch = System.Diagnostics.Stopwatch.StartNew();

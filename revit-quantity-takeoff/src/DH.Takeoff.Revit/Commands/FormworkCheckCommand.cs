@@ -82,6 +82,7 @@ public sealed class FormworkCheckCommand : IExternalCommand
                     }
                     catch { /* 판을 못 읽으면 알릴 것도 없다 */ }
                     options.Rules = rules;
+                    options.Order = PourOrder.From(rules);   // 시공 순서표(R71 — [수량산출]과 같은 수량)
 
                     options.Bands = FormworkOptions.AutoBands(scene.Elements);   // 다시 잴 때마다 처음부터(지난번에 끈 구간이 남지 않게)
                     results = FormworkAnalyzer.AnalyzeAutoBands(scene.Elements, scene.Zones, options);

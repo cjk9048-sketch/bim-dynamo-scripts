@@ -485,6 +485,45 @@ public sealed class FormworkRules
         return null;
     }
 
+    /// <summary>
+    /// «짝» 줄의 머리(R71 — 시공 순서표 짝 예외 · JACK 2026-10-29): 유형 칸 «짝:면 주인»(부위 이름 또는 «묶음:열쇠») · 면 칸 닿는 것 · 종류 칸 값(없는 것 · 뺌 · 자리만 ·
+    /// 일부만) · 넷째 칸 면 범위(옆면 · 모든 면). 처음 값(PourOrder.Default)과 다른 줄만 적는다 · 판 기록이 아니라 규칙이라 모드와 상관없이 걸린다(계획 검토 R71 M2).
+    /// </summary>
+    public const string PairPrefix = "짝:";
+
+    private readonly List<PourOrder.Pair> _pairs = new();
+
+    public IReadOnlyList<PourOrder.Pair> Pairs => _pairs;
+
+    /// <summary>짝 예외를 적는다(같은 면 주인 · 닿는 것이 있으면 갈아 끼움).</summary>
+    public void SetPair(PourOrder.Pair pair)
+    {
+        pair = pair with { Owner = Cell(pair.Owner).Trim(), Other = Cell(pair.Other).Trim() };   // 줄 글과 같게(탭 · 줄바꿈 없음 — 다시 읽어도 같은 열쇠)
+        _pairs.RemoveAll(p => p.Owner == pair.Owner && p.Other == pair.Other);
+        _pairs.Add(pair);
+    }
+
+    /// <summary>짝 예외를 지운다(처음 값으로). 있었으면 true.</summary>
+    public bool RemovePair(string owner, string other) => _pairs.RemoveAll(p => p.Owner == owner && p.Other == other) > 0;
+
+    /// <summary>짝 예외 · 칠 때의 글(다시 잴지 — FormworkBoard.MeasureKey · 차례와 상관없이).</summary>
+    public string PairText => string.Join("\n", _pairs.Select(p => $"{p.Owner}>{p.Other}>{PourOrder.NameOf(p.Value)}>{PourOrder.NameOf(p.Scope)}")
+                                                     .Concat(_stages.Select(kv => $"{kv.Key}={kv.Value}")).Order(StringComparer.Ordinal));
+
+    /// <summary>
+    /// «칸» 줄의 머리(R71 — ② 규칙 탭의 «칠 때»): 유형 칸 «칸:부위»(또는 «묶음:열쇠») · 면 칸 1(같이) / 2(나중에 침) · 종류 칸 «칠 때». ① «나중에 침»(처음 값)과 다른 것만 —
+    /// 거푸집에만 걸린다(콘크리트 주인은 ① 그대로).
+    /// </summary>
+    public const string StagePrefix = "칸:";
+
+    private readonly Dictionary<string, int> _stages = new(StringComparer.Ordinal);
+
+    public IReadOnlyDictionary<string, int> Stages => _stages;
+
+    public void SetStage(string key, int stage) => _stages[Cell(key).Trim()] = stage;
+
+    public bool RemoveStage(string key) => _stages.Remove(key);
+
     /// <summary>«겹침» 기록의 글(판을 잰 기록과 지금 기록이 같은가 — FormworkBoard.Recount).</summary>
     public string JointText => string.Join("\n", _joints.Select(j => $"{j.FaceText}>{j.Other}>{(j.Ignore ? JointIgnore : JointKeep)}").Order(StringComparer.Ordinal));   // 차례와 상관없이(같은 기록을 다시 적어 차례만 바뀌어도 다시 재지 않게)
 
@@ -557,6 +596,10 @@ public sealed class FormworkRules
         _splits.AddRange(copy._splits);
         _joints.Clear();
         _joints.AddRange(copy._joints);
+        _pairs.Clear();
+        _pairs.AddRange(copy._pairs);
+        _stages.Clear();
+        foreach (var kv in copy._stages) _stages[kv.Key] = kv.Value;
         _userMode = copy._userMode;
         _dropIndex = null;
         _kindIndex = null;
@@ -734,6 +777,21 @@ public sealed class FormworkRules
                     rules.SetJoint(joint);
                 continue;
             }
+            if (cells[0].StartsWith(PairPrefix, StringComparison.Ordinal))
+            {
+                // 짝 예외(R71) — 모르는 값은 버림(처음 값대로).
+                string owner = Cell(cells[0][PairPrefix.Length..]).Trim(), other = Cell(cells[1]).Trim();
+                if (owner.Length > 0 && other.Length > 0 && PourOrder.KindOf(cells[2].Trim()) is { } kind)
+                    rules.SetPair(new PourOrder.Pair(owner, other, kind, cells.Length > 3 && cells[3].Trim() == PourOrder.NameOf(PourOrder.Scope.Side) ? PourOrder.Scope.Side : PourOrder.Scope.All));
+                continue;
+            }
+            if (cells[0].StartsWith(StagePrefix, StringComparison.Ordinal))
+            {
+                // 칠 때(R71) — 1 · 2 만.
+                string key = Cell(cells[0][StagePrefix.Length..]).Trim();
+                if (key.Length > 0 && int.TryParse(cells[1].Trim(), out int stage) && stage is 1 or 2) rules._stages[key] = stage;
+                continue;
+            }
             if (cells[0] == ModePrefix)
             {
                 // 모드(R66) — 모르는 값은 정하지 않은 것으로(기록이 있으면 사용자).
@@ -815,6 +873,16 @@ public sealed class FormworkRules
                 if (merged._joints.FirstOrDefault(j => j.SameKey(joint)) is { Element: > 0 } had && had.Ignore != joint.Ignore) conflicts++;
                 merged.SetJoint(joint);
             }
+            foreach (var pair in copy._pairs)
+            {
+                if (merged._pairs.FirstOrDefault(p => p.Owner == pair.Owner && p.Other == pair.Other) is { } had && had != pair) conflicts++;
+                merged.SetPair(pair);
+            }
+            foreach (var (key, stage) in copy._stages)
+            {
+                if (merged._stages.TryGetValue(key, out int had) && had != stage) conflicts++;
+                merged._stages[key] = stage;
+            }
             if (copy._userMode is { } mode)
             {
                 if (merged._userMode is { } had && had != mode) conflicts++;
@@ -842,6 +910,8 @@ public sealed class FormworkRules
         if (_places.Count > 0) sb.Append("# «판 자리:» 줄 = 판 한 장의 엑셀 부위 줄 · 중분류(넷째 칸)를 바꾼 판의 조각.\n");
         if (_splits.Count > 0) sb.Append("# «판 쪼갬:» 줄 = 부재마다 나눈 판의 조각.\n");
         if (_joints.Count > 0) sb.Append("# «겹침:» 줄 = 면(부재 Id|법선 x|y|z|평면 자리)에서 그 이웃(면 칸)이 덮은 자리를 무시 / 공제.\n");
+        if (_pairs.Count > 0) sb.Append("# «짝:» 줄 = 시공 순서표 짝 예외(면 주인 ← 닿는 것 · 값 · 면 범위 — 처음 값과 다른 것만).\n");
+        if (_stages.Count > 0) sb.Append("# «칸:» 줄 = 시공 순서표 칠 때(1 같이 · 2 나중에 침 — ① 나중에 침과 다른 것만 · 거푸집만).\n");
         if (_userMode is { } mode) sb.Append(ModePrefix).Append('\t').Append(mode ? ModeUser : ModeAuto).Append('\t').Append('\n');
         sb.Append("유형\t면\t종류\n");
         foreach (var (type, group, item) in All)
@@ -863,6 +933,10 @@ public sealed class FormworkRules
         foreach (var joint in _joints)
             sb.Append(JointPrefix).Append(joint.FaceText).Append('\t').Append(joint.Other.ToString(System.Globalization.CultureInfo.InvariantCulture)).Append('\t')
               .Append(joint.Ignore ? JointIgnore : JointKeep).Append('\n');
+        foreach (var pair in _pairs)
+            sb.Append(PairPrefix).Append(pair.Owner).Append('\t').Append(pair.Other).Append('\t').Append(PourOrder.NameOf(pair.Value)).Append('\t').Append(PourOrder.NameOf(pair.Scope)).Append('\n');
+        foreach (var (key, stage) in _stages.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+            sb.Append(StagePrefix).Append(key).Append('\t').Append(stage.ToString(System.Globalization.CultureInfo.InvariantCulture)).Append('\t').Append("칠 때").Append('\n');
         return sb.ToString();
     }
 

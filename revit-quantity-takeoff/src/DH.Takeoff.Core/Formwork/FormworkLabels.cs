@@ -75,8 +75,8 @@ public static class FormworkLabels
         return made.Count > 0 ? made : null;
     }
 
-    private static readonly Regex TrapezoidText = new(@"^\((\d+(?:\.\d+)?)\+(\d+(?:\.\d+)?)\)\*0\.5\*(\d+(?:\.\d+)?)$", RegexOptions.CultureInvariant);
-    private static readonly Regex TriangleText = new(@"^(\d+(?:\.\d+)?)\*(\d+(?:\.\d+)?)\*0\.5$", RegexOptions.CultureInvariant);
+    private static readonly Regex TrapezoidText = new(@"^\((\d+(?:\.\d+)?)\+(\d+(?:\.\d+)?)\)\*1/2\*(\d+(?:\.\d+)?)$", RegexOptions.CultureInvariant);
+    private static readonly Regex TriangleText = new(@"^(\d+(?:\.\d+)?)\*(\d+(?:\.\d+)?)\*1/2$", RegexOptions.CultureInvariant);
 
     // 비스듬한 판의 숫자(R65b — FormworkSheet.Sloped 의 한 항 식): 사다리꼴 · 삼각형 · 평행사변형. 변을 못 찾으면 null(부르는 쪽이 다른 길로).
     private static List<(Vec3 at, string text, Vec3 from, Vec3 to)>? SlopedSpots(string formula, List<(Vec3 a, Vec3 b)> edges, Vec3 origin)
@@ -133,8 +133,11 @@ public static class FormworkLabels
         static double Parse(string s) => double.Parse(s, CultureInfo.InvariantCulture);
     }
 
-    /// <summary>식의 숫자(식 글의 차례 — ③ 아래 식 띠 · 숫자 딱지 잇기가 같은 셈).</summary>
-    public static readonly Regex NumberPattern = new(@"\d+(?:\.\d+)?", RegexOptions.CultureInvariant);
+    /// <summary>
+    /// 식의 숫자(식 글의 차례 — ③ 아래 식 띠 · 숫자 딱지 잇기가 같은 셈). 삼각형 · 사다리꼴의 반 «1/2»(JACK 2026-10-29 «일반적인 산근에서 1/2 로 표시 —
+    /// 0.5 로 하면 안 됨»)은 숫자 하나로 읽는다(«1» · «2» 둘로 갈리면 사다리꼴 «(a+b)*1/2*h» 의 h 차례가 어긋난다).
+    /// </summary>
+    public static readonly Regex NumberPattern = new(@"(?<![\d.])1/2(?![\d.])|\d+(?:\.\d+)?", RegexOptions.CultureInvariant);
 
     /// <summary>
     /// 식을 풀어 쓴 항들(R63d): 항마다 든 숫자의 차례(식 글의 숫자 차례 — 0부터). «(1+1)*2*1» → [0,2,3] · [1,2,3] · «(a*3+b)*c» → [a,3,c] · [b,c].
@@ -215,7 +218,7 @@ public static class FormworkLabels
         }
         else if (spotTexts.Count == 3 && mono.Count >= 3 && k + 1 < monos.Count && monos[k + 1].Count >= 3)
         {
-            // 사다리꼴 «(a+b)*0.5*h»(R65b — 설치 전 검토 중간 4): 펼치면 [a, 0.5, h] · [b, 0.5, h] — a = 이 항의 첫 수 · b = 다음 항의 첫 수 · h = 이 항의 셋째 수.
+            // 사다리꼴 «(a+b)*1/2*h»(R65b — 설치 전 검토 중간 4): 펼치면 [a, 1/2, h] · [b, 1/2, h] — a = 이 항의 첫 수 · b = 다음 항의 첫 수 · h = 이 항의 셋째 수.
             int a = mono[0], b = monos[k + 1][0], h = mono[2];
             if (numbers[a] == spotTexts[0]) result[0] = a;
             if (numbers[b] == spotTexts[1]) result[1] = b;

@@ -996,7 +996,7 @@ public static class FormworkSheet
             }
             // 직각으로만 꺾인 고리(ㄱ자 · ㄷ자 — 수직면 덩어리에서 벽 + 아래 호퍼 안쪽처럼 · R49)는 네모의 합 «18*5+2.5*1.5» · 구멍이면 괄호로 싸서 뺀다.
             else if (Rectilinear(ring, up, outer, parts) is { } sum) (piece ? pieces : holes).Add(piece ? sum : "(" + sum + ")");
-            // 비스듬한 변이 든 고리(사다리꼴 · 삼각형 · 귀퉁이를 자른 네모 — R65b)는 2D 꼴 «(a+b)*0.5*h» · «a*h*0.5» · «전체 − 귀퉁이».
+            // 비스듬한 변이 든 고리(사다리꼴 · 삼각형 · 귀퉁이를 자른 네모 — R65b)는 2D 꼴 «(a+b)*1/2*h» · «a*h*1/2» · «전체 − 귀퉁이»(반은 «1/2» — JACK 2026-10-29).
             else if (Sloped(ring, up, outer, parts) is { } slope) (piece ? pieces : holes).Add(piece ? slope : "(" + slope + ")");
             else return (areaText, true, none);
         }
@@ -1008,7 +1008,7 @@ public static class FormworkSheet
         return (formula, false, LabelsOf(formula, parts));
     }
 
-    // 식 한 조각의 숫자들(모델 좌표 선분) · 사다리꼴(펼치면 덩이 둘 — [짧은 변, 0.5, h] · [긴 변, 0.5, h])인가.
+    // 식 한 조각의 숫자들(모델 좌표 선분) · 사다리꼴(펼치면 덩이 둘 — [짧은 변, 1/2, h] · [긴 변, 1/2, h])인가.
     private sealed record Piece3(List<(string text, double[] a, double[] b)> Labels, bool Trapezoid = false);
 
     // 조각마다 숫자를 식의 차례에 잇는다(R66a): 식을 곱셈 덩이로 펼쳐 조각의 숫자 글이 모두 든 덩이(안 쓴 것 먼저 · 같은 크기 묶음은 함께 씀)를 고르고
@@ -1033,9 +1033,9 @@ public static class FormworkSheet
             {
                 if (part.Trapezoid && part.Labels.Count == 3)
                 {
-                    // [짧은 변, 0.5, h] · [긴 변, 0.5, h]
+                    // [짧은 변, 1/2, h] · [긴 변, 1/2, h]
                     string lo = part.Labels[0].text, hi = part.Labels[1].text, h = part.Labels[2].text;
-                    int k = Pick(i => i + 1 < monos.Count && Holds(Texts(monos[i]), new[] { lo, "0.5", h }) && Holds(Texts(monos[i + 1]), new[] { hi, "0.5", h }));
+                    int k = Pick(i => i + 1 < monos.Count && Holds(Texts(monos[i]), new[] { lo, "1/2", h }) && Holds(Texts(monos[i + 1]), new[] { hi, "1/2", h }));
                     if (k >= 0)
                     {
                         used[k] = used[k + 1] = true;
@@ -1296,9 +1296,9 @@ public static class FormworkSheet
                 if (lo == hi)                                                // 평행사변형(밑변 × 높이)
                     terms.Add((rect(wb, h), new() { (Num(wb), l.b, y0, r.b, y0), (hText, (l.b + r.b + l.t + r.t) / 4, y0, (l.b + r.b + l.t + r.t) / 4, y1) }, false));
                 else if (lo == "0")                                          // 삼각형
-                    terms.Add(($"{hi}*{hText}*0.5", new() { (hi, wideA, wideY, wideB, wideY), (hText, mid, narrowY, mid, wideY) }, false));
+                    terms.Add(($"{hi}*{hText}*1/2", new() { (hi, wideA, wideY, wideB, wideY), (hText, mid, narrowY, mid, wideY) }, false));
                 else                                                         // 사다리꼴(짧은 변 먼저)
-                    terms.Add(($"({lo}+{hi})*0.5*{hText}", new() { (lo, narrowA, narrowY, narrowB, narrowY), (hi, wideA, wideY, wideB, wideY), (hText, mid, narrowY, mid, wideY) }, true));
+                    terms.Add(($"({lo}+{hi})*1/2*{hText}", new() { (lo, narrowA, narrowY, narrowB, narrowY), (hi, wideA, wideY, wideB, wideY), (hText, mid, narrowY, mid, wideY) }, true));
             }
             foreach (var key in open.Keys.ToList())
                 if (!spans.Contains(key)) { terms.Add(Rect(key.x0, open[key], key.x1 - key.x0, y0 - open[key])); open.Remove(key); }

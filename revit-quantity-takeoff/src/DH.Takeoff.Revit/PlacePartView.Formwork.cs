@@ -412,15 +412,25 @@ public sealed partial class PlacePartView
     private FrameworkElement BuildFormworkSide()
     {
         var dock = new DockPanel { Margin = new Thickness(0, 0, 10, 0) };
+        var tabs = BuildSideTabs();               // [판 | 규칙](R71)
+        DockPanel.SetDock(tabs, Dock.Top);
+        dock.Children.Add(tabs);
+        var plates = new DockPanel();
         var modes = BuildModeBar();               // [자동 | 사용자](R66)
         DockPanel.SetDock(modes, Dock.Top);
-        dock.Children.Add(modes);
+        plates.Children.Add(modes);
         var list = new StackPanel();
         list.Children.Add(_fwPlateRows);          // 판 목록 · 확인할 자리 · 세지 않는 면(R66)
         list.Children.Add(_fwDropRows);           // 지운 판(R56a)
         list.Children.Add(BuildRuleFold());       // 유형 · 부위별로 한꺼번에(사용자 모드 — 옛 대응표)
         _fwSideScroll = new ScrollViewer { Content = list, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Focusable = false };
-        dock.Children.Add(_fwSideScroll);
+        plates.Children.Add(_fwSideScroll);
+        plates.Visibility = _fwRulesOpen ? Visibility.Collapsed : Visibility.Visible;
+        _fwPlatesPane = plates;
+        var host = new Grid();
+        host.Children.Add(plates);
+        host.Children.Add(BuildRulesPane());      // 칠 때 · 짝 예외(R71 — 시공 순서표)
+        dock.Children.Add(host);
         return dock;
     }
 
@@ -852,6 +862,7 @@ public sealed partial class PlacePartView
         else UpdateFormworkLook();
         RefreshPlateList();                        // 판 목록 · 모드 · 접은 칸(R66)
         RefreshDroppedRows();
+        RefreshRulesPane();                        // 규칙 탭(R71 — 열려 있을 때만)
         _syncing = true;
         try
         {
