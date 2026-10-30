@@ -44,7 +44,9 @@ public sealed class ResetCommand
           "가상옹벽_DH", "순수옹벽_DH", "옹벽뚜껑원본_DH", "옹벽뚜껑_DH", "옹벽뚜껑A_DH", "옹벽뚜껑B_DH",
           // ★[v101.0] 옹벽 합성(DHWALLCOMP) 산출물
           Commands.WallCompositeCommand.BaseName, Commands.WallCompositeCommand.OldCompName,
-          Commands.WallCompositeCommand.TempName, Commands.WallCompositeCommand.OldTempName };
+          Commands.WallCompositeCommand.TempName, Commands.WallCompositeCommand.OldTempName,
+          // ★[v111.1.1 · JACK 1030 «초기화 눌러도 진입도로 관련된게 남어»] 진입도로 면 · 작업 면
+          RoadSession.SurfBase, RoadSession.TempSurf };
         for (int i = 1; i <= GradingSettings.WallPartMax; i++)
         { l.Add($"옹벽조각{i}_DH"); l.Add($"옹벽뚜껑{i}_DH"); }
         return l.ToArray();
@@ -63,6 +65,7 @@ public sealed class ResetCommand
         var answer = System.Windows.MessageBox.Show(
             "DH가 만든 것을 모두 지웁니다.\n\n" +
             "· 정지·터파기·옹벽 지표면, 사면선·소단선·노리선·옹벽선 등\n" +
+            "· 진입도로(노선·종단·종단도·도로 면·도로 선)\n" +
             "· 서버에서 가져온 지적도·지번\n\n" +
             "직접 그린 것과 '원지반'(등고선·표고점 포함)은 남깁니다.\n\n" +
             "계속할까요?",
@@ -93,8 +96,8 @@ public sealed class ResetCommand
             //   (다른 것이 물고 있으면 그렇다) <c>catch { }</c>가 삼켜 "완료"만 남는다 —
             //   이 저장소가 여러 번 데인 그 모양이다(§60 "0을 만들어 놓고 완료라고 하기").
             string left = Survivors(doc);
-            // ★[v110 · 설치 전 검토 · 중간] 진입도로 노선 · 종단은 초기화가 안 지운다 — 있으면 그렇다고 말한다
-            string keep = HasRoad(doc) ? "직접 그린 것 · 원지반 · 진입도로 노선" : "직접 그린 것과 원지반";
+            // ★[v111.1.1 · JACK 1030] 진입도로도 지운다(v110에선 남겼음) — 남는 것은 직접 그린 것과 원지반
+            const string keep = "직접 그린 것과 원지반";
             ed.WriteMessage("\n[초기화] " + msg + " · " + keep + "만 남음"
                           + (left.Length > 0 ? "\n  ⚠남은 것 — " + left : ""));
             AcadApp.ShowAlertDialog("초기화 완료\n\n" + msg +
@@ -135,6 +138,8 @@ public sealed class ResetCommand
     {
         Database db = doc.Database;
         int ents = 0, surfs = 0; bool bundleCleared = false;
+        // ★[v111.1.1 · JACK 1030] 진입도로 미리보기부터 끈다 — 노선 · 종단을 지우는 동안 세션이 바뀜을 받아 다시 계산하지 않게(임시 선도 걷음)
+        try { RoadSession.Stop(doc); } catch { }
 
         // ★★★[JACK 0902 "초기화 하면 종단 관련 선이랑 잔재들 남는거"]
         //   <b>아래 ①은 <c>DH-</c>로 시작하는 레이어만 훑는다.</b> 그런데 [도곽]이 그린
@@ -167,6 +172,7 @@ public sealed class ResetCommand
             //    선형이 DH- 레이어에 있어 아래 ① 훑기에 걸리는데, 딸린 종단·뷰를 남긴 채 선형만 지우면
             //    남은 뷰가 깨진 참조가 된다 → 자식부터 순서대로 지운 뒤 선형을 지운다.
             ents += EraseSectionObjects(db, tr);
+            ents += EraseRoadObjects(db, tr);
 
             // ① DH- 레이어 객체 삭제(모델공간). 레이어 자체는 남겨 다음 생성에 재사용.
             ents += EraseEntitiesOnDhLayers(db, tr, includeImported, keepGround);
@@ -323,18 +329,96 @@ public sealed class ResetCommand
         return n;
     }
 
-    /// <summary>[v110] 진입도로 노선(DH도로_N)이 있는가 — 초기화는 그것을 안 지우므로 알림 문구에 적는다.</summary>
-    private static bool HasRoad(Document doc)
+    /// <summary>★★[v111.1.1 · JACK 1030 «초기화 눌러도 진입도로 관련된게 이렇게 남어 — 이게 되야 이제까지 한 거 다시 테스트»] 진입도로가 만든 것 — 반환 = 지운 개수.
+    /// <para>v110에선 노선 · 종단을 일부러 남겼다(그때 결정) — 이제 초기화는 진입도로도 걷는다:
+    /// 종단도 장식(표식 DH_ROADSHEET — 도곽 · 밴드 · 글씨) → 종단뷰 → 종단 → 노선(우리가 만든 «DH도로…») → 주인 없는 노선 라벨 → «DH도로-» 레이어에 남은 것(도로 선 · 노리선 · 옹벽선).</para>
+    /// <para>사람이 만든 Civil 노선으로 연 도로는 노선을 남기고 우리 종단 · 종단뷰 · 설계 기록만 지운다. 사업 경계 · 고른 폴리선(직접 그린 것)은 남김. 도로 면(«진입도로_DH»)은 지표면 이름 목록에서.</para></summary>
+    private static int EraseRoadObjects(Database db, Transaction tr)
     {
+        int n = 0;
         try
         {
-            var cdoc = Autodesk.Civil.ApplicationServices.CivilDocument.GetCivilDocument(doc.Database);
-            using var tr = doc.Database.TransactionManager.StartTransaction();
+            var cdoc = Autodesk.Civil.ApplicationServices.CivilDocument.GetCivilDocument(db);
+            var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+            static bool RoadLayer(string? ly) => (ly ?? "").StartsWith(RoadBuilder.AlignBase + "-", System.StringComparison.Ordinal);
+            int Kill(System.Collections.Generic.IEnumerable<ObjectId> ids)
+            {
+                int k = 0;
+                foreach (var id in ids)
+                    try { if (!id.IsNull && !id.IsErased) { tr.GetObject(id, OpenMode.ForWrite, false, true).Erase(); k++; } } catch { }   // 잠긴 레이어여도
+                return k;
+            }
+            // ① 종단도 장식(표식)
+            var tagged = new System.Collections.Generic.List<ObjectId>();
+            foreach (ObjectId id in ms) try { if (tr.GetObject(id, OpenMode.ForRead) is AcadEntity e && SheetTag.IsRoad(e)) tagged.Add(id); } catch { }
+            n += Kill(tagged);
+            // ② 노선 — 우리 것(이름 «DH도로…») · 사람 것(설계 기록만 있음)
+            var ours = new System.Collections.Generic.List<ObjectId>(); var theirs = new System.Collections.Generic.HashSet<ObjectId>();
             foreach (ObjectId aid in cdoc.GetAlignmentIds())
-                if (tr.GetObject(aid, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.Alignment al && al.Name.StartsWith(RoadBuilder.AlignBase, System.StringComparison.Ordinal)) return true;
+                try
+                {
+                    if (tr.GetObject(aid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Alignment al) continue;
+                    // ★[설치 전 검토 L] 이름을 바꿔도 우리 노선 레이어(DH도로-노선)면 우리 것
+                    if (RoadBuilder.IsOurs(al)) ours.Add(aid);
+                    else if (RoadDesign.Has(tr, aid)) theirs.Add(aid);
+                }
+                catch { }
+            foreach (var aid in ours)
+            {
+                Autodesk.Civil.DatabaseServices.Alignment al;
+                try { al = (Autodesk.Civil.DatabaseServices.Alignment)tr.GetObject(aid, OpenMode.ForRead); } catch { continue; }
+                n += Kill(Ids(Safe(() => al.GetSampleLineGroupIds())));
+                n += Kill(Ids(Safe(() => al.GetProfileViewIds())));
+                n += Kill(Ids(Safe(() => al.GetProfileIds())));
+                n += Kill(new[] { aid });
+            }
+            // 사람 노선 — 우리 것만: 설계에 적어 둔 핸들(«-바탕» · «-계획» · 종단도 «-지반» · 측점 체인 · 검토 측점선 묶음 · 종단뷰) · 우리 레이어(DH도로-)
+            //   ★[v111.2 · 전체 검토 H1] 이름으로는 안 고름 — 사람 종단 «본선-지반고» · «본선-계획고»가 걸림 · 노선마다 따로 실패
+            foreach (var aid in theirs)
+            {
+                try
+                {
+                    var al = (Autodesk.Civil.DatabaseServices.Alignment)tr.GetObject(aid, OpenMode.ForRead);
+                    var d = RoadDesign.Read(tr, aid);
+                    var mine = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+                    if (d != null) { mine.Add(d.PlanProfile); mine.Add(d.BaseProfile); mine.Add(d.SheetGround); mine.Add(d.SheetChain); mine.Add(d.SheetGroup); foreach (var v in d.SheetViews) mine.Add(v); }
+                    mine.Remove("");
+                    bool Ours(ObjectId id)
+                    {
+                        try
+                        {
+                            if (mine.Contains(id.Handle.ToString())) return true;
+                            return tr.GetObject(id, OpenMode.ForRead) is AcadEntity e && RoadLayer(e.Layer);
+                        }
+                        catch { return false; }
+                    }
+                    n += Kill(Ids(Safe(() => al.GetSampleLineGroupIds())).Where(Ours).ToList());
+                    n += Kill(Ids(Safe(() => al.GetProfileViewIds())).Where(Ours).ToList());
+                    n += Kill(Ids(Safe(() => al.GetProfileIds())).Where(Ours).ToList());
+                    if (RoadDesign.Remove(tr, aid)) n++;
+                }
+                catch (System.Exception exT) { try { DiagLog.Append($"\n■ 초기화 — 사람 노선의 진입도로 지우기 실패: {exT.Message}\n"); } catch { } }
+            }
+            // ③ 주인(지운 우리 노선)이 없는 라벨 묶음 — EraseSectionObjects와 같은 까닭(선형을 지워도 묶음 하나가 남음)
+            if (ours.Count > 0)
+            {
+                var gone = new System.Collections.Generic.HashSet<ObjectId>(ours);
+                var orphans = new System.Collections.Generic.List<ObjectId>();
+                foreach (ObjectId id in ms)
+                    try { if (tr.GetObject(id, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.LabelBase lb && gone.Contains(lb.FeatureId)) orphans.Add(id); } catch { }
+                n += Kill(orphans);
+            }
+            // ④ «DH도로-» 레이어에 남은 것 — 도로 선(사면선 · 소단선 · 노리선 · 옹벽선) · 도로 면 · 남은 종단 등(사람 노선은 건너뜀)
+            var rest = new System.Collections.Generic.List<ObjectId>();
+            foreach (ObjectId id in ms)
+                try { if (!theirs.Contains(id) && tr.GetObject(id, OpenMode.ForRead) is AcadEntity e && RoadLayer(e.Layer)) rest.Add(id); } catch { }
+            n += Kill(rest);
         }
-        catch { }
-        return false;
+        catch (System.Exception ex) { try { DiagLog.Append($"\n■ 초기화 — 진입도로 지우기 중 오류: {ex.Message}\n"); } catch { } }
+        return n;
+
+        static System.Collections.Generic.IEnumerable<ObjectId> Ids(ObjectIdCollection? c)
+        { if (c == null) yield break; foreach (ObjectId id in c) yield return id; }
     }
 
     /// <summary>★[JACK 0902] 초기화 뒤에 <b>우리 것이 무엇이 남았는지</b> 센다.
@@ -357,7 +441,9 @@ public sealed class ResetCommand
                 try
                 {
                     if (tr.GetObject(aid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Alignment al) continue;
-                    if (!al.Name.StartsWith(SectionCommand.AlignBase, System.StringComparison.OrdinalIgnoreCase)) continue;
+                    // ★[v111.1.1] 진입도로 노선(«DH도로…» · 설계 기록 남은 노선)도 남은 것으로 센다
+                    if (!al.Name.StartsWith(SectionCommand.AlignBase, System.StringComparison.OrdinalIgnoreCase)
+                        && !al.Name.StartsWith(RoadBuilder.AlignBase, System.StringComparison.Ordinal) && !RoadDesign.Has(tr, aid)) continue;
                     nAl++; if (names.Count < 4) names.Add(al.Name);
                     try { nPv += al.GetProfileViewIds().Count; } catch { }
                     try { nPf += al.GetProfileIds().Count; } catch { }
@@ -371,7 +457,6 @@ public sealed class ResetCommand
 
             // DH- 레이어에 남은 객체 — 레이어별로 몇 개인지
             var byLayer = new System.Collections.Generic.Dictionary<string, int>(System.StringComparer.OrdinalIgnoreCase);
-            var roadRects = SheetTag.RoadFrames(db, tr);   // ★[v110.4] 도로 도곽(밴드 라벨 주인 가리기)
             var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
             foreach (ObjectId bid in bt)
             {
@@ -394,20 +479,7 @@ public sealed class ResetCommand
                             if (!ly.StartsWith("DH", System.StringComparison.Ordinal)
                              && !ly.StartsWith("CR-", System.StringComparison.OrdinalIgnoreCase)) continue;
                             if (System.Array.IndexOf(ImportGisCommand.ImportLayers, ly) >= 0) continue;   // 가져온 자료는 뺀다
-                            // ★[v110 · 설치 전 검토 · 중간] 진입도로(노선 · 종단 · 종단뷰)는 초기화가 일부러 안 지운다 — «남은 것»으로 세지 않는다
-                            if (ly.StartsWith(RoadBuilder.AlignBase + "-", System.StringComparison.Ordinal)) continue;
-                            // ★[v110.4 · 계획 2.D] 진입도로 종단도 — 표식 있는 것 · 도로 노선 종단(«-지반» · «-계획»은 CR- 레이어로 옮겨짐) · 도로 도곽 안 밴드 라벨은 «남은 것»이 아니다
-                            if (SheetTag.IsRoad(e)) continue;
-                            if (e is Autodesk.Civil.DatabaseServices.Profile rpf && RoadDesign.Has(tr, rpf.AlignmentId)) continue;
-                            if (e is Autodesk.Civil.DatabaseServices.LabelGroup && roadRects.Count > 0)
-                            {
-                                try
-                                {
-                                    var rx = e.GeometricExtents;
-                                    if (!DH.Grading.Core.ProfileSheetRules.SiteOwnsGroup((rx.MinPoint.X + rx.MaxPoint.X) / 2, (rx.MinPoint.Y + rx.MaxPoint.Y) / 2, roadRects)) continue;
-                                }
-                                catch { }
-                            }
+                            // ★[v111.1.1 · JACK 1030] 진입도로(노선 · 종단 · 종단뷰 · 종단도 장식 · 도로 선)도 이제 지운다 — 남았으면 «남은 것»(v110의 건너뜀 규칙 걷음)
                             byLayer.TryGetValue(ly, out int c); byLayer[ly] = c + 1;
                         }
                         catch { }

@@ -285,7 +285,7 @@ internal static class ZoneEditCommon
     /// <summary>노리선이 이미 그려져 있나 — <b>그 레이어에 객체가 하나라도 있으면</b> 그렇다.
     /// <para>번들이나 설정이 아니라 <b>도면에 실제로 있는 것</b>으로 판단한다 —
     /// 사용자가 손으로 지웠으면 다시 그리지 않는 편이 맞다.</para></summary>
-    private static bool HasNoriLines(Database db)
+    internal static bool HasNoriLines(Database db)
     {
         try
         {

@@ -66,6 +66,14 @@ internal sealed class RoadSession
         var s = new RoadSession(doc, aid, d) { Name = name };
         s.PlanId = Handle(db, d.PlanProfile); s.BaseProfId = Handle(db, d.BaseProfile);
         if (s.PlanId.IsNull) throw new InvalidOperationException("계획 종단을 못 찾았습니다(지웠나요?) — [진입도로]로 폴리선부터 다시");
+        // ★[v111.2 · 전체 검토 H2] 노선을 복사하면 설계 기록(확장 사전)이 따라와 원래 노선의 종단 · 도로 면을 가리킨다 — 열면 남의 종단을 고치고 남의 도로 면을 지움 → 안 염
+        using (var tr = db.TransactionManager.StartTransaction())
+        {
+            bool Foreign(ObjectId pid) => !pid.IsNull && tr.GetObject(pid, OpenMode.ForRead) is CivilDb.Profile p && p.AlignmentId != aid;
+            bool bad = Foreign(s.PlanId) || Foreign(s.BaseProfId);
+            tr.Commit();
+            if (bad) throw new InvalidOperationException($"«{name}»의 진입도로 기록이 다른 노선의 종단을 가리킵니다(노선을 복사했나요?) — 원래 노선을 열거나, 이 노선을 [진입도로]로 고르면 새로 만듭니다");
+        }
         // ★[설치 전 검토 · 중간] 바탕면을 이름으로 못 찾으면(초기화 · 재정지로 바뀜) 지금 도면에서 다시 고른다
         if (!s.ResolveBase()) throw new InvalidOperationException("바탕면(정지면_DH 또는 원지반)이 없습니다");
         using (var tr = db.TransactionManager.StartTransaction()) { s._xrecId = RoadDesign.XrecId(tr, aid); tr.Commit(); }
@@ -119,6 +127,18 @@ internal sealed class RoadSession
         return true;
     }
 
+    /// <summary>★[v111.2 · 전체 검토 H2] 설계 기록이 다른 노선의 종단을 가리키나(노선 복사 — 확장 사전이 따라옴).</summary>
+    internal static bool ForeignRecord(Transaction tr, ObjectId aid, RoadDesign d)
+    {
+        var db = aid.Database;
+        foreach (var h in new[] { d.PlanProfile, d.BaseProfile })
+        {
+            var pid = Handle(db, h);
+            try { if (!pid.IsNull && tr.GetObject(pid, OpenMode.ForRead) is CivilDb.Profile p && p.AlignmentId != aid) return true; } catch { }
+        }
+        return false;
+    }
+
     static ObjectId Handle(Database db, string h)
     {
         try { if (h.Length > 0 && db.TryGetObjectId(new Autodesk.AutoCAD.DatabaseServices.Handle(Convert.ToInt64(h, 16)), out var id) && !id.IsErased) return id; } catch { }
@@ -154,6 +174,9 @@ internal sealed class RoadSession
 
     /// <summary>창 값이 바뀌었다 — 바로 다시(문서는 여기서 잠금).</summary>
     internal void MarkDirty() => _dirty = true;
+
+    /// <summary>★[v111.2 · 전체 검토 M2] 바뀜 표시가 남아 있으면 지금 다시 계산 — 명령이 시계(350 ms)보다 먼저 들어와 옛 미리보기로 고르지 않게.</summary>
+    internal void RecomputeIfDirty() { if (_dirty) { _dirty = false; Recompute(); } }
 
     void Tick()
     {
@@ -202,6 +225,11 @@ internal sealed class RoadSession
             EnsureBase();
             double[] X, Y, Z; double s0, s1; string note; List<(double, double)>? limit = null;
             string sheetNote = "";
+            // ★[v111 · 설치 전 검토 M6] 옛 판 기록 틈 메움 알림(실행 취소 · [사면 변환]으로 되돌릴 수 있게 자리를 적음)
+            string gapNote = Design.GapsMerged > 0
+                ? $"옛 옹벽 기록 틈 {Design.GapsMerged}곳 이어 붙임(" + string.Join(", ", Design.GapsAt.Select(g => $"{(g.Side < 0 ? "좌" : "우")} {g.S0:F2}~{g.S1:F2}")) + ")"
+                : "";
+            if (gapNote.Length > 0) { try { DiagLog.Append($"\n[진입도로] {Name} — {gapNote}"); } catch { } }
             using (var tr = db.TransactionManager.StartTransaction())
             {
                 (X, Y, Z, s0, s1, note) = RoadBuilder.Sample(tr, AlignId, PlanId);
@@ -230,18 +258,24 @@ internal sealed class RoadSession
                 X = X, Y = Y, Z = Z, Sec = Design.Section(), Cut = Design.Cut(), Fill = Design.Fill(),
                 TierWalls = Design.CoreTierWalls(s0),   // ★[v110.3] 계단선 변환 옹벽(옛 가장자리 옹벽은 0단 · 소단 0)
                 Base = _base, Cell = 1.0, Reach = reach, SuggestH = Design.SuggestH, Limit = limit,
+                SectionGap = Math.Max(0.5, GradingSettings.VertexSpacing),   // ★[v111.2] 삼각망 해상도 = 부지 둘레 점 간격
             };
+            // ★[v111.2 · 전체 검토 L2] 그린 도로 면이 지금 설계(종단 · 횡단 · 사면 · 옹벽 기록 · 바탕면)와 다르면 알림 — PVI를 끌거나 창 값을 바꾼 뒤
+            string surfNote = "";
+            try { if (Design.SurfaceSig.Length > 0 && SigOf(inp, BaseSurfId) != Design.SurfaceSig && HasSurface()) surfNote = "도로 면이 지금 설계와 다릅니다 — [도로 면 만들기]"; } catch { }
             Last = RoadGrade.Run(inp);
             // ★[v110.3] 사면선 · 소단선 · 옹벽선(미리보기 · [옹벽 변환] 찍기가 씀)
+            // ★★[v111 · 계획_v111.md 2.4] 단면 광선 선(선 끝 = 기록 경계 정확히 · 곧은 곳은 곧게) — 못 하면 옛 칸 등치선(알림)
             var swL = System.Diagnostics.Stopwatch.StartNew();
-            try { Lines = Last.Error.Length == 0 ? RoadGrade.TierLines(Last) : new(); } catch (System.Exception exL) { Lines = new(); try { DiagLog.Append("\n[진입도로] 계단선 못 셈 — " + exL.Message); } catch { } }
-            Note = string.Join(" · ", new[] { _baseNote, note, sheetNote }.Where(t => t.Length > 0));
+            string lineNote = "";
+            try { Lines = Last.Error.Length == 0 ? RoadGrade.ExactLines(inp, Last, out lineNote) : new(); } catch (System.Exception exL) { Lines = new(); try { DiagLog.Append("\n[진입도로] 계단선 못 셈 — " + exL.Message); } catch { } }
+            Note = string.Join(" · ", new[] { _baseNote, note, sheetNote, surfNote, gapNote, lineNote.StartsWith("⚠") ? lineNote : "" }.Where(t => t.Length > 0));
             _baseNote = "";
             var swD = System.Diagnostics.Stopwatch.StartNew();
             DrawPreview();
             _retried = false;
             // ★[재검토 열린 질문] 임시 선 걷고 거는 시간도 함께(Core 계산 시간만으로는 화면 멈춤을 못 봄)
-            try { DiagLog.Append($"\n[진입도로] {Name} — {Last.Text} · 계단선 {Lines.Count}가닥 {swL.Elapsed.TotalMilliseconds:F0} ms · 그리기 {swD.Elapsed.TotalMilliseconds:F0} ms · 선 {_marks.Count} · 최대 종단경사 {GradeNow * 100:F1} %" + (note.Length > 0 ? " · " + note : "")); } catch { }
+            try { DiagLog.Append($"\n[진입도로] {Name} — {Last.Text} · 계단선 {Lines.Count}가닥 {swL.Elapsed.TotalMilliseconds:F0} ms({lineNote}) · 그리기 {swD.Elapsed.TotalMilliseconds:F0} ms · 선 {_marks.Count} · 최대 종단경사 {GradeNow * 100:F1} %" + (note.Length > 0 ? " · " + note : "")); } catch { }
         }
         catch (System.Exception ex)
         {
@@ -257,6 +291,32 @@ internal sealed class RoadSession
         Changed?.Invoke(this);
     }
     bool _retried;
+
+    /// <summary>★[v111.2 · 전체 검토 L2] 도로 면 입력 지문 — 중심선 표본(자리 · 계획고) · 횡단 · 사면 · 옹벽 기록 · 해상도 · 바탕면(칸 · 범위는 뺌 — 미리보기 1 m · 면 0.5 m가 같게).</summary>
+    static string SigOf(RoadGrade.Input inp, ObjectId baseSurf)
+    {
+        var sb = new System.Text.StringBuilder();
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        for (int i = 0; i < inp.X.Length; i++) sb.Append(inp.X[i].ToString("R", ci)).Append(',').Append(inp.Y[i].ToString("R", ci)).Append(',').Append(inp.Z[i].ToString("R", ci)).Append(';');
+        var opt = new System.Text.Json.JsonSerializerOptions { IncludeFields = true };
+        sb.Append(System.Text.Json.JsonSerializer.Serialize(new { inp.Sec, inp.Cut, inp.Fill, inp.TierWalls, inp.Walls, inp.MinSlope, inp.SectionGap, inp.EdgeStep }, opt));
+        sb.Append('|').Append(baseSurf.IsNull ? "" : baseSurf.Handle.ToString());
+        // ★[v111.3 · 설치 전 검토 M2] 바탕면 내용도 — 같은 핸들로 고쳐진(정지면 다시 · 원지반 편집) 바탕이면 [노리선]이 면과 안 맞는 노리선을 말없이 그렸다.
+        //   중심선 표본 10개마다 양쪽 5 · 15 · 30 · 50 m 바탕 높이(0.1 mm) — 도로 자리 곁 바탕이 바뀌면 지문이 바뀐다(먼 곳 편집은 도로 면과 상관없음)
+        if (inp.Base != null)
+            for (int i = 0; i + 1 < inp.X.Length; i += 10)
+            {
+                double dx = inp.X[i + 1] - inp.X[i], dy = inp.Y[i + 1] - inp.Y[i], l = Math.Sqrt(dx * dx + dy * dy);
+                if (l < 1e-9) continue;
+                foreach (double o in new[] { -50.0, -30, -15, -5, 5, 15, 30, 50 })
+                {
+                    sb.Append(inp.Base.TryGetElevation(inp.X[i] - dy / l * o, inp.Y[i] + dx / l * o, out double z) ? Math.Round(z, 4).ToString("R", ci) : "-").Append(',');
+                }
+            }
+        return Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(sb.ToString())));
+    }
+    string _pendingSig = "";
+    double _pendingReach = 40;
 
     /// <summary>★[설치 전 검토 · 중간] 바탕면이 바뀌었다(지움 · 이름 바뀜 = 재정지) — 이름으로 다시 찾고(옛 면을 말없이 따라가지 않게) 높이 표를 다시 만든다. 문서는 부르는 쪽이 잠금.</summary>
     void EnsureBase()
@@ -339,14 +399,40 @@ internal sealed class RoadSession
     }
 
     internal const string SurfBase = "진입도로_DH";
-    const string TempSurf = "진입도로_작업중";
+    internal const string TempSurf = "진입도로_작업중";
     const double SurfCell = 0.5;
     const int MaxSurfTris = 1_500_000;
 
     /// <summary>★★[v110.1 · JACK 1029 «도로 면만 따로 보기» — 인터뷰: 도로 + 사면 · 단추로 · 정지면_DH는 안 건드림 · 이번엔 Civil 화면만]
     /// 지금 설계로 0.5 m 칸 한 번 더 계산 → Core 세모(<see cref="RoadGrade.SurfaceTris"/>) → LandXML(새 파일) → Civil 면 → 되읽어 넘긴 면과 같은지 대조 → 굳힘.
-    /// 옹벽 배면 면(WallBackBuilder)과 같은 길 — Civil이 그대로 안 받았으면 지우고 실패로 알린다. 다시 누르면 앞의 면을 지우고 같은 이름으로. 명령 안에서 부른다(문서 잠김).</summary>
+    /// 옹벽 배면 면(WallBackBuilder)과 같은 길 — Civil이 그대로 안 받았으면 지우고 실패로 알린다. 다시 누르면 앞의 면을 지우고 같은 이름으로. 명령 안에서 부른다(문서 잠김).
+    /// <para>★★[v111.1 · JACK 1030 «두 단추 다»] 면을 만든 뒤 부지 노리선이 이미 그려져 있으면(DH-노리선 — [사면 변환] 뒤 저절로와 같은 판정) 저절로 다시 그린다 — 도로 면 자리는 빼고.</para></summary>
     internal string MakeSurface()
+    {
+        // ★[v111.3 · JACK 1030 스샷 «자꾸 정보 오류창이 뜨는데 안 뜨게»] LandXML 면 가져오기 정보(«V1.1 이전 알고리즘 … 인접이 없습니다») 한 줄에 이벤트 뷰어 창이 뜸 —
+        //   계획부지 생성 · 옹벽 합성 · 터파기 면과 같은 법(EventViewerMute — 자동 알림만 끔 · 기록은 남음 · 끝나면 원래 설정)
+        var evPrev = EventViewerMute.Begin();
+        try { return MakeSurfaceMuted(); }
+        finally { EventViewerMute.End(evPrev); }
+    }
+
+    string MakeSurfaceMuted()
+    {
+        string msg = MakeSurfaceCore();
+        // ★★[v111.3 · JACK 1030 «노리선은 노리선 버튼을 누를 때 다 한꺼번에» · 인터뷰: 도로 면을 다시 만들면 «부지 · 도로 모두 지움»]
+        //   v111.1의 «도로 면 뒤 부지 노리선 저절로 다시»를 거둠 — 도로 면이 바뀌면 그려 둔 노리선(부지 DH-노리선 · 모든 도로 DH도로-노리선)은 옛 모양이라 지운다. [노리선]이 둘 다 새로.
+        //   (면은 이미 만들어짐 — 지우기에서 무엇이 터져도 «도로 면 실패»로 알리지 않게 · 설치 전 검토 L6과 같은 뜻)
+        try
+        {
+            int nT = EraseAllTicks(_doc.Database, out int nLocked);
+            if (nT > 0) msg += $" · 노리선 {nT}개 지움(옛 모양 — [노리선]으로 다시)";
+            if (nLocked > 0) msg += $" · ⚠노리선 {nLocked}개 못 지움(레이어 잠금?)";
+        }
+        catch (Exception exN) { msg += " · ⚠옛 노리선 못 지움 — " + exN.Message; }
+        return msg;
+    }
+
+    string MakeSurfaceCore()
     {
         var db = _doc.Database;
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -360,28 +446,57 @@ internal sealed class RoadSession
             tr.Commit();
         }
         double reach = Last != null && Last.Error.Length == 0 && !Last.ReachHit && Last.ReachUsed > 40 ? Last.ReachUsed : 40;
-        var r = RoadGrade.Run(new RoadGrade.Input
+        var inp = new RoadGrade.Input
         {
             X = X, Y = Y, Z = Z, Sec = d.Section(), Cut = d.Cut(), Fill = d.Fill(),
             TierWalls = d.CoreTierWalls(s0),
             Base = _base!, Cell = SurfCell, Reach = reach, SuggestH = d.SuggestH, Limit = limit,
-        });
+            SectionGap = Math.Max(0.5, GradingSettings.VertexSpacing),   // ★[v111.2 · JACK 1030] 삼각망 해상도 = 부지 둘레 점 간격(VertexSpacing · 기본 2 m)
+        };
+        try { _pendingSig = SigOf(inp, BaseSurfId); } catch { _pendingSig = ""; }   // ★[v111.2 · 전체 검토 L2] 이 면의 입력 지문 — 나중에 설계가 바뀌면 알림(못 세면 알림 안 함 · 면은 그대로 만듦)
+        _pendingReach = reach;   // ★[v111.3] [노리선]이 같은 입력(시작 범위 포함)으로 다시 셈
+        var r = RoadGrade.Run(inp);
         if (r.Error.Length > 0) throw new InvalidOperationException(r.Error);
-        var tris = RoadGrade.SurfaceTris(r, out string tnote);
-        // ★[설치 전 검토 중간 3] 아주 큰 도로(세모 150만 넘음) — 1 m 칸으로 다시(시간 · 메모리)
-        if (tris.Count > MaxSurfTris)
+        // ★★★[v111 · 계획_v111.md 2.5] 선 면(단면 광선 띠) — Core 검사를 못 넘으면 칸 면(알림) · Civil이 못 받으면 아래에서 칸 면으로 한 번 더(계획 검토 H1)
+        var tris = RoadGrade.ExactSurface(inp, r, out string tnote, out var lines);
+        bool exact = !tnote.StartsWith("⚠");
+        // ★[설치 전 검토 중간 3] 아주 큰 도로(세모 150만 넘음) — 1 m 칸으로 다시(시간 · 메모리) — 칸 면일 때만
+        if (!exact && tris.Count > MaxSurfTris)
         {
-            r = RoadGrade.Run(new RoadGrade.Input
-            {
-                X = X, Y = Y, Z = Z, Sec = d.Section(), Cut = d.Cut(), Fill = d.Fill(),
-                TierWalls = d.CoreTierWalls(s0),
-                Base = _base!, Cell = 1.0, Reach = reach, SuggestH = d.SuggestH, Limit = limit,
-            });
+            inp.Cell = 1.0;
+            r = RoadGrade.Run(inp);
             if (r.Error.Length > 0) throw new InvalidOperationException(r.Error);
-            tris = RoadGrade.SurfaceTris(r, out tnote);
-            tnote += " · 커서 1 m 칸으로";
+            tris = RoadGrade.SurfaceTris(r, out string t1);
+            lines = RoadGrade.TierLines(r);
+            tnote += " · " + t1 + " · 커서 1 m 칸으로";
         }
         if (tris.Count == 0) throw new InvalidOperationException("바뀐 자리가 없어 면을 안 만들었습니다 — " + tnote);
+        try { return CreateSurface(d, r, tris, tnote, lines, sw); }
+        catch (InvalidOperationException exG) when (exact && exG.Message.StartsWith("Civil이 면을 그대로 안 받았습니다"))
+        {
+            try { DiagLog.Append($"\n[진입도로] {Name} — ⚠선 면을 Civil이 못 받음({exG.Message}) → 칸 면으로 다시"); } catch { }
+            var old = RoadGrade.SurfaceTris(r, out string t2);
+            var lineR = r;   // ★[v111.1] 선 · 노리선은 처음 결과의 광선으로(1 m 칸 결과엔 광선이 없음)
+            // ★[설치 전 검토 L9] 칸 면도 너무 크면 1 m 칸으로
+            if (old.Count > MaxSurfTris)
+            {
+                inp.Cell = 1.0;
+                var r1 = RoadGrade.Run(inp);
+                if (r1.Error.Length > 0) throw new InvalidOperationException(r1.Error);
+                old = RoadGrade.SurfaceTris(r1, out t2);
+                t2 += " · 커서 1 m 칸으로";
+                r = r1;
+            }
+            // ★[설치 전 검토 M3] 면만 칸 면 — 선은 단면 광선 선 그대로(미리보기 · [옹벽 변환] 찍기 선과 같게)
+            return CreateSurface(d, r, old, "⚠선 면을 Civil이 못 받음 → 칸 면 · " + t2, lines, sw, lineR);
+        }
+    }
+
+    /// <summary>세모 → LandXML → Civil 면 → 되읽기 대조(못 맞으면 예외 · 만든 면 지움) → 굳힘 · 이름 · 스타일 → 실제 선. 돌려줌 = 알림 한 줄.
+    /// <paramref name="lineR"/> = 선 · 노리선을 뽑을 결과(없으면 <paramref name="r"/>).</summary>
+    string CreateSurface(RoadDesign d, RoadGrade.Result r, List<WallDaylight.Tri> tris, string tnote, List<RoadGrade.TierLine> lines, System.Diagnostics.Stopwatch sw, RoadGrade.Result? lineR = null)
+    {
+        var db = _doc.Database;
         long msGrid = sw.ElapsedMilliseconds;
         string xml = GradingBuilder.NewXmlPath(db, "진입도로");
         WallDaylight.WriteLandXmlTin(xml, "ROAD", tris, 1e-7, out int np, out int nf, out int nd);
@@ -437,21 +552,24 @@ internal sealed class RoadSession
                 cTin.Name = name;
                 try { cTin.Description = $"DH 진입도로 지표면(도로 + 사면 · 정지면_DH와 따로) — {Name} · {DateTime.Now:yyyy-MM-dd HH:mm} · {GradingSettings.Version}"; } catch { }
                 // ★[v110.3 · JACK 1029 «평면 사면 모양 = 2D처럼» · 검토 M8] 평면 = 경계만(사면 모양은 사면선 · 소단선 · 노리선이 보여 줌) · 모형(3D) = 세모
-                try { var stId = EnsureRoadSurfStyle(tr); if (!stId.IsNull) cTin.StyleId = stId; else { var bs = (CivilDb.TinSurface)tr.GetObject(BaseSurfId, OpenMode.ForRead); cTin.StyleId = bs.StyleId; } } catch { }
+                try { var stId = EnsureRoadSurfStyle(tr, BaseSurfId); if (!stId.IsNull) cTin.StyleId = stId; else { var bs = (CivilDb.TinSurface)tr.GetObject(BaseSurfId, OpenMode.ForRead); cTin.StyleId = bs.StyleId; } } catch { }
                 try { cTin.LayerId = Commands.SectionCommand.EnsureLayer(db, tr, RoadBuilder.LaySurf, 3); } catch { }
                 d.SurfaceHandle = cid.Handle.ToString();
+                d.SurfaceSig = _pendingSig;
+                d.SurfaceReach = _pendingReach;
                 d.Write(tr, AlignId);
                 tr.Commit();
                 made = ObjectId.Null;
                 Design = d;
                 // ★[v110.3] 실제 선 — 사면선 · 소단선 · 노리선 · 옹벽선(이 도로 것만 지우고 새로 — 검토 M7)
                 string lineNote;
-                try { lineNote = DrawRoadLines(db, r); } catch (System.Exception exL) { lineNote = "⚠선을 못 그림 — " + exL.Message; }
+                try { lineNote = DrawRoadLines(db, lineR ?? r, lines); } catch (System.Exception exL) { lineNote = "⚠선을 못 그림 — " + exL.Message; }
                 // ★[설치 전 검토 낮음 6] 면 끝이 땅에 안 닿은 자리 · 옹벽 자리(가운데 높이)를 알림 · 수량은 이 면의 칸 기준
                 string msg = $"도로 면 '{name}' — 절토 {r.CutVol:N0} ㎥ · 성토 {r.FillVol:N0} ㎥({r.Cell:0.#} m 칸) · {sw.ElapsedMilliseconds / 1000.0:F1}초"
                              + (r.ReachHit ? $" · ⚠데이라잇 못 찾음(범위 {r.ReachUsed:F0} m 끝에서 면이 땅에 안 닿음)" : "")
                              + (r.Conflicts > 0 ? $" · ⚠사면 충돌 {r.Conflicts}칸(옹벽 자리 — 가운데 높이로 넣음)" : "")
-                             + (frz.Length > 0 ? " · ⚠굳힘 실패 " + frz : "") + " · " + lineNote;
+                             + (frz.Length > 0 ? " · ⚠굳힘 실패 " + frz : "") + " · " + lineNote
+                             + (tnote.StartsWith("⚠") ? " · " + tnote : $" · 세모 {tris.Count:N0}");
                 try { DiagLog.Append($"\n[진입도로] {Name} — {msg} · {tnote} · 격자 {msGrid} · XML {msXml - msGrid} · Civil 면 + 되읽기 {msMake - msXml} · 대조 {msCmp - msMake} ms · 되읽기 {back}"); } catch { }
                 return msg;
             }
@@ -473,13 +591,12 @@ internal sealed class RoadSession
 
     /// <summary>★★[v110.3 · 계획 4 · 검토 M7] [도로 면 만들기]의 실제 선 — 사면선(윗선) · 소단선(아랫선) · 옹벽선(굵게) · 노리선(짧은 · 긴) · 3D(설계 높이).
     /// 이 도로(노선 핸들 XData)의 것만 먼저 지움 — 한 도면에 도로가 둘이어도 남의 선은 그대로. 못 지우면 안 그림(겹쳐 두 벌이 되지 않게).</summary>
-    string DrawRoadLines(Database db, RoadGrade.Result r)
+    string DrawRoadLines(Database db, RoadGrade.Result r, List<RoadGrade.TierLine> lines)
     {
-        var lines = RoadGrade.TierLines(r);
-        var ticks = RoadGrade.Ticks(r, lines, GradingSettings.HatchShort, GradingSettings.HatchLong);
+        // ★[v111.3 · JACK 1030] 노리선은 여기서 안 그림 — [노리선] 단추(부지 + 모든 도로 한꺼번에 · DrawRoadTicks). 이 도로의 옛 노리선은 아래에서 함께 지움
         string me = AlignId.Handle.ToString();
         var lays = new[] { LaySlope, LayBench, LayNori, LayWall };
-        int erased = 0, failErase = 0, nLine = 0, nWall = 0, nTick = 0;
+        int erased = 0, failErase = 0, nLine = 0, nWall = 0;
         using var tr = db.TransactionManager.StartTransaction();
         GradingBuilder.EnsureRegApp(db, tr, LineApp);
         var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
@@ -499,7 +616,7 @@ internal sealed class RoadSession
         foreach (var id in victims) { try { tr.GetObject(id, OpenMode.ForWrite, false, true).Erase(); erased++; } catch { failErase++; } }
         if (failErase > 0) { tr.Abort(); return $"⚠옛 선 {failErase}개를 못 지워 선을 안 그림(레이어 잠금 확인)"; }
         ObjectId lS = Commands.SectionCommand.EnsureLayer(db, tr, LaySlope, 8), lB = Commands.SectionCommand.EnsureLayer(db, tr, LayBench, 8),
-                 lN = Commands.SectionCommand.EnsureLayer(db, tr, LayNori, 2), lW = Commands.SectionCommand.EnsureLayer(db, tr, LayWall, 1);
+                 lW = Commands.SectionCommand.EnsureLayer(db, tr, LayWall, 1);
         ResultBuffer Tag() => new(new TypedValue((int)DxfCode.ExtendedDataRegAppName, LineApp), new TypedValue((int)DxfCode.ExtendedDataAsciiString, me));
         foreach (var tl in lines)
         {
@@ -515,38 +632,267 @@ internal sealed class RoadSession
             using (var tg = Tag()) pl.XData = tg;
             if (wall) nWall++; else nLine++;
         }
-        foreach (var (a, b) in ticks)
-        {
-            if (!double.IsFinite(a.Z) || !double.IsFinite(b.Z)) continue;
-            var ln = new Line(new Point3d(a.X, a.Y, a.Z), new Point3d(b.X, b.Y, b.Z)) { LayerId = lN };
-            ms.AppendEntity(ln); tr.AddNewlyCreatedDBObject(ln, true);
-            using (var tg = Tag()) ln.XData = tg;
-            nTick++;
-        }
         tr.Commit();
-        return $"사면선 · 소단선 {nLine} · 옹벽선 {nWall} · 노리선 {nTick}" + (erased > 0 ? $"(옛 선 {erased} 지움)" : "");
+        return $"사면선 · 소단선 {nLine} · 옹벽선 {nWall}" + (erased > 0 ? $"(옛 선 {erased} 지움)" : "");
     }
 
-    /// <summary>★[v110.3 · 검토 M8] 진입도로 면 스타일 — 평면 = 경계만 · 모형 = 세모 + 경계(없으면 만들고 · 있으면 그대로 씀 — 사람이 고친 값을 안 덮음).</summary>
-    static ObjectId EnsureRoadSurfStyle(Transaction tr)
+    internal const string SiteNoriLayer = "DH-노리선";
+
+    /// <summary>★[v111.3] 도면에 살아 있는 우리 진입도로 면 수(설계 + 레이어 · 설명) — [노리선]이 부지 결과가 없어도 도로 노리선은 그리게.</summary>
+    internal static int CountRoadSurfaces(Database db)
+    {
+        int n = 0;
+        try
+        {
+            var cdoc = Autodesk.Civil.ApplicationServices.CivilDocument.GetCivilDocument(db);
+            using var tr = db.TransactionManager.StartTransaction();
+            foreach (ObjectId aid in cdoc.GetAlignmentIds())
+            {
+                try
+                {
+                    if (aid.IsErased || !RoadDesign.Has(tr, aid)) continue;
+                    var d = RoadDesign.Read(tr, aid);
+                    var sid = d == null ? ObjectId.Null : Handle(db, d.SurfaceHandle);
+                    if (!sid.IsNull && tr.GetObject(sid, OpenMode.ForRead) is CivilDb.TinSurface ts
+                        && (string.Equals(ts.Layer, RoadBuilder.LaySurf, StringComparison.OrdinalIgnoreCase) || (ts.Description ?? "").StartsWith("DH 진입도로 지표면"))) n++;
+                }
+                catch { }
+            }
+            tr.Commit();
+        }
+        catch { }
+        return n;
+    }
+
+    /// <summary>★★[v111.3 · JACK 1030 인터뷰 «부지 · 도로 모두 지움»] 그려 둔 노리선을 모두 지운다 — 부지(DH-노리선) · 모든 진입도로(DH도로-노리선). 모형 공간만 · 잠긴 레이어도.
+    /// 돌려줌 = 지운 수 · <paramref name="failed"/> = 못 지운 수.</summary>
+    internal static int EraseAllTicks(Database db, out int failed)
+    {
+        failed = 0; int n = 0;
+        using var tr = db.TransactionManager.StartTransaction();
+        var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+        foreach (ObjectId id in ms)
+        {
+            Entity? e = null;
+            try { e = tr.GetObject(id, OpenMode.ForRead) as Entity; } catch { }   // ★[설치 전 검토 L6] 읽기 실패(남의 객체)는 «못 지움»으로 세지 않음
+            if (e == null || (!string.Equals(e.Layer, LayNori, StringComparison.OrdinalIgnoreCase) && !string.Equals(e.Layer, SiteNoriLayer, StringComparison.OrdinalIgnoreCase))) continue;
+            try { tr.GetObject(id, OpenMode.ForWrite, false, true).Erase(); n++; }
+            catch { failed++; }
+        }
+        tr.Commit();
+        return n;
+    }
+
+    /// <summary>★★[v111.3 · JACK 1030 «노리선은 노리선 버튼을 누를 때 다 한꺼번에»] [노리선]이 부른다 — 도면의 진입도로마다(설계 + 살아 있는 우리 도로 면)
+    /// 그 면을 만든 입력(설계 · 바탕면 · 시작 범위)으로 다시 계산 → 단면 광선 노리선 → 그 도로의 옛 노리선을 지우고 새로(DH도로-노리선 · 도로 표식).
+    /// 설계가 면과 다르면(지문이 다름) 그 도로는 건너뛰고 알림(면과 안 맞는 노리선을 그리지 않게). 돌려줌 = 한 줄 · <paramref name="drawn"/> = 그린 수 · <paramref name="roads"/> = 그린 도로 수.</summary>
+    internal static string DrawRoadTicks(Document doc, out int drawn, out int roads)
+    {
+        drawn = 0; roads = 0;
+        var db = doc.Database;
+        var cdoc = Autodesk.Civil.ApplicationServices.CivilDocument.GetCivilDocument(db);
+        var notes = new List<string>();
+        var aids = new List<ObjectId>();
+        using (var tr = db.TransactionManager.StartTransaction())
+        {
+            foreach (ObjectId aid in cdoc.GetAlignmentIds()) { try { if (!aid.IsErased && RoadDesign.Has(tr, aid)) aids.Add(aid); } catch { } }
+            tr.Commit();
+        }
+        foreach (var aid in aids)
+        {
+            string name = "";
+            try
+            {
+                RoadDesign? d; bool ours;
+                using (var tr = db.TransactionManager.StartTransaction())
+                {
+                    d = RoadDesign.Read(tr, aid);
+                    name = ((CivilDb.Alignment)tr.GetObject(aid, OpenMode.ForRead)).Name;
+                    var sid = d == null ? ObjectId.Null : Handle(db, d.SurfaceHandle);
+                    ours = !sid.IsNull && tr.GetObject(sid, OpenMode.ForRead) is CivilDb.TinSurface ts
+                           && (string.Equals(ts.Layer, RoadBuilder.LaySurf, StringComparison.OrdinalIgnoreCase) || (ts.Description ?? "").StartsWith("DH 진입도로 지표면"));
+                    tr.Commit();
+                }
+                if (d == null || !ours)
+                {
+                    // 도로 면이 없는 도로 — 노리선 없음 · ★[설치 전 검토 L6] 면을 손으로 지웠으면 남은 그 도로 노리선도 지움
+                    using var trO = db.TransactionManager.StartTransaction();
+                    var msO = (BlockTableRecord)trO.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+                    string meO = aid.Handle.ToString();
+                    foreach (ObjectId id in msO)
+                    {
+                        try
+                        {
+                            if (trO.GetObject(id, OpenMode.ForRead) is not Entity eo || !string.Equals(eo.Layer, LayNori, StringComparison.OrdinalIgnoreCase)) continue;
+                            using var rbo = eo.GetXDataForApplication(LineApp);
+                            var vo = rbo?.AsArray();
+                            if (vo != null && vo.Length >= 2 && vo[1].Value as string == meO) trO.GetObject(id, OpenMode.ForWrite, false, true).Erase();
+                        }
+                        catch { }
+                    }
+                    trO.Commit();
+                    continue;
+                }
+                var planId = Handle(db, d.PlanProfile);
+                var baseId = FindSurface(db, cdoc, d.BaseSurface);
+                if (planId.IsNull || baseId.IsNull) { notes.Add($"{name} — ⚠계획 종단 · 바탕면을 못 찾아 건너뜀"); continue; }
+                double[] X, Y, Z; double s0;
+                CachedGroundSurface ground;
+                using (var tr = db.TransactionManager.StartTransaction())
+                {
+                    (X, Y, Z, s0, _, _) = RoadBuilder.Sample(tr, aid, planId);
+                    ground = new CachedGroundSurface((CivilDb.TinSurface)tr.GetObject(baseId, OpenMode.ForRead));
+                    tr.Commit();
+                }
+                // MakeSurfaceCore와 같은 입력(칸 0.5 · 해상도 · 시작 범위) — 사업 경계(Limit)는 옹벽 제안만 바꿔 뺌
+                var inp = new RoadGrade.Input
+                {
+                    X = X, Y = Y, Z = Z, Sec = d.Section(), Cut = d.Cut(), Fill = d.Fill(),
+                    TierWalls = d.CoreTierWalls(s0),
+                    Base = ground, Cell = SurfCell, Reach = d.SurfaceReach > 0 ? d.SurfaceReach : 40, SuggestH = d.SuggestH,
+                    SectionGap = Math.Max(0.5, GradingSettings.VertexSpacing),
+                };
+                // 지문이 없으면(v111.2.1 전에 만든 면) 그 면과 맞는지 알 길이 없음 — 말없이 틀린 노리선을 그리지 않고 건너뜀
+                if (d.SurfaceSig.Length == 0) { notes.Add($"{name} — ⚠옛 판에서 만든 도로 면이라 건너뜀([도로 면 만들기] 한 번 뒤 [노리선])"); continue; }
+                if (SigOf(inp, baseId) != d.SurfaceSig) { notes.Add($"{name} — ⚠도로 면이 지금 설계와 달라 건너뜀([도로 면 만들기] 뒤 [노리선])"); continue; }
+                var r = RoadGrade.Run(inp);
+                if (r.Error.Length > 0) { notes.Add($"{name} — ⚠계산 실패 {r.Error}"); continue; }
+                var lines = RoadGrade.ExactLines(inp, r, out _);
+                var ticks = RoadGrade.Ticks(r, lines, GradingSettings.HatchShort, GradingSettings.HatchLong);
+                int n = 0;
+                string me = aid.Handle.ToString();
+                using (var tr = db.TransactionManager.StartTransaction())
+                {
+                    GradingBuilder.EnsureRegApp(db, tr, LineApp);
+                    var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+                    foreach (ObjectId id in ms)
+                    {
+                        try
+                        {
+                            if (tr.GetObject(id, OpenMode.ForRead) is not Entity e || !string.Equals(e.Layer, LayNori, StringComparison.OrdinalIgnoreCase)) continue;
+                            using var rb = e.GetXDataForApplication(LineApp);
+                            var v = rb?.AsArray();
+                            if (v != null && v.Length >= 2 && v[1].Value as string == me) tr.GetObject(id, OpenMode.ForWrite, false, true).Erase();
+                        }
+                        catch { }
+                    }
+                    var lN = Commands.SectionCommand.EnsureLayer(db, tr, LayNori, 2);
+                    foreach (var (a, b) in ticks)
+                    {
+                        if (!double.IsFinite(a.Z) || !double.IsFinite(b.Z)) continue;
+                        var ln = new Line(new Point3d(a.X, a.Y, a.Z), new Point3d(b.X, b.Y, b.Z)) { LayerId = lN };
+                        ms.AppendEntity(ln); tr.AddNewlyCreatedDBObject(ln, true);
+                        using (var tg = new ResultBuffer(new TypedValue((int)DxfCode.ExtendedDataRegAppName, LineApp), new TypedValue((int)DxfCode.ExtendedDataAsciiString, me))) ln.XData = tg;
+                        n++;
+                    }
+                    tr.Commit();
+                }
+                drawn += n; roads++;
+            }
+            catch (Exception ex) { notes.Add($"{name} — ⚠노리선 못 그림 {ex.Message}"); try { DiagLog.Append($"\n[진입도로 노리선] {name} — {ex}"); } catch { } }
+        }
+        string msg = roads > 0 ? $"진입도로 노리선 {drawn}(도로 {roads}개)" : "";
+        if (notes.Count > 0) msg += (msg.Length > 0 ? " · " : "") + string.Join(" · ", notes);
+        return msg;
+    }
+
+    /// <summary>★[v111.2] 이 도로의 [도로 면 만들기] 면이 살아 있나(설계에 적힌 핸들 · 우리 면 — 레이어 DH도로-지표면 또는 설명 «DH 진입도로 지표면»).</summary>
+    internal bool HasSurface()
+    {
+        try
+        {
+            var db = _doc.Database;
+            var sid = Handle(db, Fresh().SurfaceHandle);
+            if (sid.IsNull) return false;
+            using var tr = db.TransactionManager.StartTransaction();
+            bool ok = tr.GetObject(sid, OpenMode.ForRead) is CivilDb.TinSurface ts
+                      && (string.Equals(ts.Layer, RoadBuilder.LaySurf, StringComparison.OrdinalIgnoreCase) || (ts.Description ?? "").StartsWith("DH 진입도로 지표면"));
+            tr.Commit();
+            return ok;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>★★[v111.1 · 계획_v111_1.md 2.1 · JACK 1030 «합쳐진 노리선»] 도면의 진입도로 면 자리(발자국) — 진입도로 설계마다 기록된 면(<see cref="RoadDesign.SurfaceHandle"/>)이 살아 있으면 그 세모로.
+    /// 이름을 바꿔 남겨 둔 안 · 미리보기는 안 본다(지금 도로 면만). 없으면 null.</summary>
+    internal static NetTopologySuite.Geometries.Geometry? Footprints(Database db, Transaction tr, out int nRoads, out string note)
+    {
+        nRoads = 0; note = "";
+        var cdoc = Autodesk.Civil.ApplicationServices.CivilDocument.GetCivilDocument(db);
+        var geoms = new List<NetTopologySuite.Geometries.Geometry>();
+        foreach (ObjectId aid in cdoc.GetAlignmentIds())
+        {
+            if (aid.IsErased || !RoadDesign.Has(tr, aid)) continue;
+            var d = RoadDesign.Read(tr, aid);
+            if (d == null) continue;
+            var sid = Handle(db, d.SurfaceHandle);
+            if (sid.IsNull || tr.GetObject(sid, OpenMode.ForRead) is not CivilDb.TinSurface ts) continue;
+            // ★[설치 전 검토 M1] 우리 도로 면일 때만(레이어 · 설명) — 다른 도면에서 온 기록이 정지면_DH · 원지반을 가리키면 부지 선이 다 지워진다(CreateSurface 이름 확인과 같은 뜻)
+            string desc = ""; try { desc = ts.Description ?? ""; } catch { }
+            if (!string.Equals(ts.Layer, RoadBuilder.LaySurf, StringComparison.OrdinalIgnoreCase) && !desc.StartsWith("DH 진입도로 지표면"))
+            {
+                note += (note.Length > 0 ? " · " : "") + $"«{ts.Name}» 진입도로 면이 아니라 건너뜀";
+                continue;
+            }
+            var g = RoadFootprint.FromTris(PureWithWallsBuilder.ReadTris(ts, out _), out string fn);
+            if (fn.Length > 0) note += (note.Length > 0 ? " · " : "") + $"«{ts.Name}» {fn}";
+            if (g != null) { geoms.Add(g); nRoads++; }
+        }
+        if (geoms.Count == 0) return null;
+        return geoms.Count == 1 ? geoms[0] : NetTopologySuite.Operation.Union.CascadedPolygonUnion.Union(geoms);
+    }
+
+    /// <summary>★[v110.3 · 검토 M8] 진입도로 면 스타일 — 평면 = 경계만(없으면 만들고 · 평면은 사람이 고친 값을 안 덮음) · ★[v111.2] 모형(3D)은 면을 만들 때마다 바탕면 스타일로 맞춤(사람이 고친 3D 값은 덮임).</summary>
+    static ObjectId EnsureRoadSurfStyle(Transaction tr, ObjectId baseSurfId)
     {
         var cdoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
         var styles = cdoc.Styles.SurfaceStyles;
+        ObjectId id = ObjectId.Null;
         foreach (ObjectId sid in styles)
         {
-            try { if (tr.GetObject(sid, OpenMode.ForRead) is CivilDb.Styles.SurfaceStyle s0 && string.Equals(s0.Name, SurfStyleName, StringComparison.OrdinalIgnoreCase)) return sid; }
+            try { if (tr.GetObject(sid, OpenMode.ForRead) is CivilDb.Styles.SurfaceStyle s0 && string.Equals(s0.Name, SurfStyleName, StringComparison.OrdinalIgnoreCase)) { id = sid; break; } }
             catch { }
         }
-        ObjectId id = styles.Add(SurfStyleName);
-        if (id.IsNull) return ObjectId.Null;
-        var st = (CivilDb.Styles.SurfaceStyle)tr.GetObject(id, OpenMode.ForWrite);
-        foreach (CivilDb.Styles.SurfaceDisplayStyleType t in Enum.GetValues(typeof(CivilDb.Styles.SurfaceDisplayStyleType)))
+        if (id.IsNull)
         {
-            bool plan = t == CivilDb.Styles.SurfaceDisplayStyleType.Boundary;
-            bool model = t == CivilDb.Styles.SurfaceDisplayStyleType.Boundary || t == CivilDb.Styles.SurfaceDisplayStyleType.Triangles;
-            try { st.GetDisplayStylePlan(t).Visible = plan; } catch { }
-            try { st.GetDisplayStyleModel(t).Visible = model; } catch { }
+            id = styles.Add(SurfStyleName);
+            if (id.IsNull) return ObjectId.Null;
+            var st = (CivilDb.Styles.SurfaceStyle)tr.GetObject(id, OpenMode.ForWrite);
+            foreach (CivilDb.Styles.SurfaceDisplayStyleType t in Enum.GetValues(typeof(CivilDb.Styles.SurfaceDisplayStyleType)))
+            {
+                bool plan = t == CivilDb.Styles.SurfaceDisplayStyleType.Boundary;
+                bool model = t == CivilDb.Styles.SurfaceDisplayStyleType.Boundary || t == CivilDb.Styles.SurfaceDisplayStyleType.Triangles;
+                try { st.GetDisplayStylePlan(t).Visible = plan; } catch { }
+                try { st.GetDisplayStyleModel(t).Visible = model; } catch { }
+            }
         }
+        // ★★[v111.2 · JACK 1030 «3D 화면으로 볼 때 진입도로면만 하늘색 선이 … 가시성이 떨어져»] 모형(3D) 표시는 바탕면(정지면_DH · 원지반) 스타일과 같게 — 켜고 끔 · 색 · 등고선 간격.
+        //   평면은 그대로(경계만 — 사면 모양은 사면선 · 소단선 · 노리선). 매번 맞춘다(바탕 스타일을 바꾸면 따라감).
+        try
+        {
+            if (!baseSurfId.IsNull && !baseSurfId.IsErased && tr.GetObject(baseSurfId, OpenMode.ForRead) is CivilDb.Surface bsf
+                && tr.GetObject(bsf.StyleId, OpenMode.ForRead) is CivilDb.Styles.SurfaceStyle bst && bsf.StyleId != id)
+            {
+                var st = (CivilDb.Styles.SurfaceStyle)tr.GetObject(id, OpenMode.ForWrite);
+                foreach (CivilDb.Styles.SurfaceDisplayStyleType t in Enum.GetValues(typeof(CivilDb.Styles.SurfaceDisplayStyleType)))
+                {
+                    try
+                    {
+                        var src = bst.GetDisplayStyleModel(t); var dst = st.GetDisplayStyleModel(t);
+                        dst.Visible = src.Visible; dst.Color = src.Color;
+                        try { dst.Lineweight = src.Lineweight; } catch { }
+                        try { dst.Layer = src.Layer; } catch { }        // ★[검토 M1] 도면층 색(ByLayer)으로 그리는 바탕 스타일도 같은 색
+                        try { dst.Linetype = src.Linetype; } catch { }
+                    }
+                    catch { }
+                }
+                var sc = bst.ContourStyle; var cc = st.ContourStyle;
+                try { cc.MinorContourInterval = sc.MinorContourInterval; cc.MajorContourInterval = sc.MajorContourInterval; }
+                catch { try { cc.MajorContourInterval = sc.MajorContourInterval; cc.MinorContourInterval = sc.MinorContourInterval; } catch { } }
+                try { cc.BaseElevationInterval = sc.BaseElevationInterval; } catch { }
+            }
+        }
+        catch { }
         return id;
     }
 
@@ -682,7 +1028,9 @@ internal sealed class RoadSession
         // 가장자리(하늘) · 데이라잇(주황) · 충돌(빨강)
         Line(r.EdgeL.Select(p => new Point3d(p.X, p.Y, p.Z)), 4);
         Line(r.EdgeR.Select(p => new Point3d(p.X, p.Y, p.Z)), 4);
-        foreach (var l in r.Daylight) Line(l.Select(p => new Point3d(p.X, p.Y, Zat(p.X, p.Y))), 30);
+        // ★[v111] 단면 광선 데이라잇은 점마다 땅 높이를 갖고 있다(칸 높이로 다시 읽지 않음)
+        if (r.DaylightZ.Count > 0) foreach (var l in r.DaylightZ) Line(l.Select(p => new Point3d(p.X, p.Y, p.Z)), 30);
+        else foreach (var l in r.Daylight) Line(l.Select(p => new Point3d(p.X, p.Y, Zat(p.X, p.Y))), 30);
         foreach (var l in RoadGrade.Outline(r, k => k == 4)) Line(l.Select(p => new Point3d(p.X, p.Y, Zat(p.X, p.Y))), 1);
         // 옹벽(파랑 · 설계) · 제안 옹벽(빨강) — 가장자리를 따라
         try

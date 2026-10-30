@@ -14,6 +14,8 @@ public static partial class RoadGrade
     public sealed class TierLine
     {
         public bool Cut; public int Side; public int K; public LineRole Role; public int Prof;
+        /// <summary>★[v111.3] 끝면 선 — 옹벽 변환 끝(띠 경계)의 수직면 옹벽선(노선을 가로지름 · 측점 폭 0 — [옹벽/사면 변환] 고를 선 아님).</summary>
+        public bool Cross;
         public List<(double X, double Y, double Z, double S)> Pts = new();
     }
 
@@ -40,7 +42,7 @@ public static partial class RoadGrade
     {
         if (side == 0) return 0;
         for (int i = r.Recs.Count - 1; i >= 0; i--)
-            if (r.Recs[i].Side == side && s >= r.Recs[i].S0 - 1e-9 && s <= r.Recs[i].S1 + 1e-9) return Math.Max(0, r.RecProf[i]);   // 0단 · 소단 0(−1) = 가장자리 옹벽 — 사면 없음(기본으로 둬도 F ≥ 0이라 선 안 남음)
+            if (r.Recs[i].Side == side && s >= r.Recs[i].S0 - 1e-9 && s <= r.Recs[i].S1 + 1e-9) return Math.Max(0, r.ProfFor(i, side, s));   // 0단 · 소단 0(−1) = 가장자리 옹벽 — 사면 없음(기본으로 둬도 F ≥ 0이라 선 안 남음) · ★[v111.3] 끝면 띠면 그 띠 단면
         return 0;
     }
 
@@ -275,9 +277,11 @@ public static partial class RoadGrade
     }
 
     /// <summary>노리선 — 윗선(Crest)을 따라 <paramref name="shortSp"/>마다 · 윗선에 직각 · 아랫선 쪽으로 · 길이 = 단 평면폭(<paramref name="longSp"/>마다 전부 · 나머지 절반) ·
-    /// 바뀐 자리 밖(F ≥ 0)에서 멈춤 · 부지와 같은 겹침 걷기(<see cref="SlopeHatchGenerator.RemoveOverlaps(IReadOnlyList{ValueTuple{Point3, Point3}})"/>).</summary>
+    /// 바뀐 자리 밖(F ≥ 0)에서 멈춤 · 부지와 같은 겹침 걷기(<see cref="SlopeHatchGenerator.RemoveOverlaps(IReadOnlyList{ValueTuple{Point3, Point3}})"/>).
+    /// <para>★[v111.1] 횡단 광선이 있으면(<see cref="ExactLines"/> · <see cref="ExactSurface"/> 뒤) 광선 띠에서(<see cref="SectionTicks"/> — 모든 사면 면 · <paramref name="lines"/>는 안 씀).</para></summary>
     public static List<(Point3 A, Point3 B)> Ticks(Result r, List<TierLine> lines, double shortSp = 1.0, double longSp = 5.0, bool longOnly = false)
     {
+        if (r.Sections != null) return SectionTicks(r, r.Sections, shortSp, longSp, longOnly);
         var ticks = new List<(Point3, Point3)>();
         if (shortSp <= 0) shortSp = 1.0;
         if (longSp <= 0) longSp = 5.0;
@@ -417,6 +421,16 @@ public static partial class RoadGrade
             double s = double.IsFinite(a.S) && double.IsFinite(b.S) ? a.S + (b.S - a.S) * u : double.IsFinite(a.S) ? a.S : b.S;
             return (a.X + (b.X - a.X) * u, a.Y + (b.Y - a.Y) * u, a.Z + (b.Z - a.Z) * u, s);
         }
+        /// <summary>★[v111.2 · 전체 검토 M4] t0 → t1 사이 길의 측점 범위(두 끝 + 사이 점 모두) — 측점이 한쪽으로만 늘지 않는 선(곡선 안쪽 주름 곁)에서도 빨간 띠와 같은 구간.</summary>
+        public (double S0, double S1) SRange(double t0, double t1)
+        {
+            double a = Math.Min(t0, t1), b = Math.Max(t0, t1), lo = double.PositiveInfinity, hi = double.NegativeInfinity;
+            void Take(double s) { if (double.IsFinite(s)) { lo = Math.Min(lo, s); hi = Math.Max(hi, s); } }
+            Take(At(a).S); Take(At(b).S);
+            for (int i = 0; i < _p.Count; i++) if (_c[i] > a && _c[i] < b) Take(_p[i].S);
+            return (lo, hi);
+        }
+
         /// <summary>t0 → t1 사이 길(두 끝 포함 · 어느 쪽이 커도).</summary>
         public List<(double X, double Y, double Z)> Sub(double t0, double t1)
         {
@@ -454,13 +468,36 @@ public static partial class RoadGrade
         return touched;
     }
 
+    /// <summary>★[v111.3 · 계획 검토 M3] 고른 선의 측점 구간 [a, b]를 «그 선을 낸 단면이 주인인 자리»로 줄임 — 이웃 사면선이 끝면 띠(옹벽 구간 안)로 이어 들어간 몫은 뺀다.
+    /// 선 점마다 그 측점 바로 앞 · 뒤(1 mm)의 본 단면(이긴 기록 · 없으면 기본)이 선 단면과 같으면 남김(경계 짝 점은 측점이 경계라 한쪽만 맞음). 남은 점이 없으면 NaN.</summary>
+    public static (double S0, double S1) OwnerRange(Result r, TierLine line, double a, double b)
+    {
+        if (line.Side == 0 || r.ProfMain.Length == 0 || r.Trans.Count == 0) return (a, b);
+        int Main(double s)
+        {
+            if (s < 0 || s > r.Length) return int.MinValue;
+            for (int i = r.Recs.Count - 1; i >= 0; i--)
+                if (r.Recs[i].Side == line.Side && s >= r.Recs[i].S0 - 1e-9 && s <= r.Recs[i].S1 + 1e-9) return Math.Max(0, r.RecProf[i]);
+            return 0;
+        }
+        double lo = double.PositiveInfinity, hi = double.NegativeInfinity;
+        foreach (var p in line.Pts)
+        {
+            if (!double.IsFinite(p.S) || p.S < a - 1e-6 || p.S > b + 1e-6) continue;
+            if (Main(p.S - 1e-3) != line.Prof && Main(p.S + 1e-3) != line.Prof) continue;
+            lo = Math.Min(lo, p.S); hi = Math.Max(hi, p.S);
+        }
+        return lo <= hi ? (Math.Max(a, lo), Math.Min(b, hi)) : (double.NaN, double.NaN);
+    }
+
     /// <summary>★[v110.3.1 · 설치 전 검토 M2] 옹벽선 → 그 선을 낸 기록 고르기 — 단면 번호 0(도로 가장자리 0단 옹벽선)이면 가장자리 옹벽 기록(0단 · 소단 0) ·
     /// 그 밖이면 그 단면의 (단, 소단) 기록(단면 번호 = 엔진이 기록 (단, 소단 1 mm 반올림)마다 하나씩 만든 것).</summary>
     public static Func<double[], bool> WallLineMatch(Result r, TierLine line)
     {
         if (line.Prof <= 0) return w => w.Length >= 5 && w[3] <= 0 && w[4] <= 0;
+        int lp = line.Prof < r.ProfMain.Length ? r.ProfMain[line.Prof] : line.Prof;   // ★[v111.3] 끝면 띠 단면이면 본 옹벽 단면
         for (int i = 0; i < r.Recs.Count && i < r.RecProf.Length; i++)
-            if (r.RecProf[i] == line.Prof)
+            if (r.RecProf[i] == lp)
             {
                 int tier = r.Recs[i].Tier; double bl = Math.Round(r.Recs[i].BenchL, 3);
                 return w => w.Length >= 5 && !(w[3] <= 0 && w[4] <= 0) && (int)Math.Max(0, w[3]) == tier && Math.Round(Math.Max(0, w[4]), 3) == bl;

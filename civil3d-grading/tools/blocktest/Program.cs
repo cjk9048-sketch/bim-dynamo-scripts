@@ -70,6 +70,15 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "road")
     return fails == 0 ? 0 : 1;
 }
 
+// ★[v111] BLOCKTEST_ONLY=mesh — 선 기반 진입도로 면(S181)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "mesh")
+{
+    RoadMeshCheck.Run(Check);
+    RoadBandCheck.Run(Check);   // ★[v111.3] S182 — 옹벽 변환 끝면 띠
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
 // ★[v110.4] BLOCKTEST_ONLY=sheet — 진입도로 종단도(축척 · 폭 · 도장 · 지우기 · 묶음 주인 — S180)만
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "sheet")
 {
@@ -152,6 +161,8 @@ DrainageCheck.Run(Check);   // ★[v108] S176 — 정지면 빗물 검토(웅덩
 SecretScanCheck.Run(Check);   // ★[v109] S177 — 비밀값 검사(공개 저장소)
 RoadCheck.Run(Check);   // ★[v110] S178 — 도로 정지(원뿔 감싸기) · 종단 초안
 ParcelCheck.Run(Check);   // ★[v109.1] S179 — VWorld 지적 · 소유(읽기 · 합치기 · 자르기)
+RoadBandCheck.Run(Check);    // ★[v111.3] S182 — 옹벽 변환 끝면 띠(끝면도 단높이마다 소단)
+RoadMeshCheck.Run(Check);    // ★[v111] S181 — 선 기반 진입도로 면(단면 광선 · 띠 세모 · 계단선 · 기록 경계)
 RoadSheetCheck.Run(Check);   // ★[v110.4] S180 — 진입도로 종단도(축척 · 검토선 폭 · 도장 · 지우기 · 밴드 묶음 주인)
 
 const double W = 0.46, H = 0.2, STEP = 5.0, HW = W / 2;
