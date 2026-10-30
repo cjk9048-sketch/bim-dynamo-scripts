@@ -16,6 +16,8 @@ internal sealed class RoadDesign
     public string LimitHandle = "";             // 사업 경계 폴리선 핸들
     public string PlanProfile = "", BaseProfile = "", BaseSurface = "";
     public string SurfaceHandle = "";           // [도로 면 만들기]로 만든 지표면(다시 만들면 이것을 지우고 같은 이름으로)
+    public string SurfaceSig = "";              // ★[v111.2] 그 면을 만든 입력 지문 — 지금 설계와 다르면 도킹창 알림
+    public double SurfaceReach;                 // ★[v111.3] 그 면을 만든 계산의 시작 범위(m) — [노리선]이 같은 입력으로 다시 셈(0 = 40)
     public List<double[]> Walls = new();         // [s0, s1, 쪽(−1 좌 · +1 우)]
     /// <summary>★[v110.2 · 설치 전 검토 · 중간] 곡선을 우리가 넣었나 — 폴리선 · [경로 그리기]로 만든 노선 = 참 · 기존 Civil 노선으로 연 도로 = 거짓(사람이 설계한 곡선이라 곡선 반경 칸이 안 바꿈).</summary>
     public bool OwnCurves = true;
@@ -45,6 +47,49 @@ internal sealed class RoadDesign
     /// 옛 <see cref="Walls"/>(가장자리 옹벽)는 읽을 때 [s0, s1, 쪽, 0, 0]으로 옮긴다(Core가 옛 길로 탐).</summary>
     public List<double[]> TierWalls = new();
 
+    /// <summary>★[v111 · 계획_v111.md 2.6] 선 판 — 111 = 단면 광선 선(선 끝 = 기록 경계 정확히). 칸이 없는 옛 기록(v110.3~110.4)은 읽을 때 한 번 틈 메움(<see cref="MergeOldGaps"/>).
+    /// 판별은 JSON에 칸이 있는지로(필드 기본값은 옛 기록에도 111이 들어가므로 — 계획 검토 L17).</summary>
+    public int LineVer = 111;
+    /// <summary>이번 읽기에서 메운 옛 틈 수(저장 안 함).</summary>
+    [System.Text.Json.Serialization.JsonIgnore] public int GapsMerged;
+
+    /// <summary>★★[v111 · JACK 1029 «자동으로 메움»] 옛 판 미리보기 선(1 m 칸 등치선)이 기록 경계보다 한 칸 짧게 끝나 [옹벽 변환] 기록 사이에 생긴 틈 —
+    /// 같은 쪽 · 같은 단 · 같은 소단(1 mm) 기록이 측점 차례로 0 &lt; 틈 ≤ 1.5 m이고 그 틈을 다른 같은 쪽 기록이 덮지 않으면 앞 기록 끝을 뒤 기록 시작까지 늘린다(나중 기록이 이기는 차례는 그대로).</summary>
+    internal int MergeOldGaps()
+    {
+        int n = 0;
+        GapsAt.Clear();
+        var recs = TierWalls.Where(w => w.Length >= 5 && double.IsFinite(w[0]) && double.IsFinite(w[1])).ToList();
+        // ★[설치 전 검토 M6] 가장자리 옹벽(0단 · 소단 0 — 옛 Walls)은 메우지 않음(그 틈은 옛 미리보기 선과 무관)
+        foreach (var g in recs.Where(w => !(w[3] <= 0 && w[4] <= 0)).GroupBy(w => ((int)Math.Sign(w[2]), (int)Math.Round(w[3]), Math.Round(Math.Max(0, w[4]), 3))))
+        {
+            var list = g.OrderBy(w => Math.Min(w[0], w[1])).ToList();
+            // ★[설치 전 검토 L13] 지금까지 가장 멀리 간 기록과 다음 기록 사이(감싼 기록이 있어도 실제 틈을 찾게)
+            var far = list[0];
+            for (int i = 1; i < list.Count; i++)
+            {
+                var b = list[i];
+                double e = Math.Max(far[0], far[1]), st = Math.Min(b[0], b[1]), gap = st - e;
+                if (gap > 1e-6 && gap <= 1.5)
+                {
+                    var a = far;
+                    bool covered = recs.Any(w => !ReferenceEquals(w, a) && !ReferenceEquals(w, b) && Math.Sign(w[2]) == Math.Sign(a[2])
+                                                 && Math.Min(w[0], w[1]) < st - 1e-9 && Math.Max(w[0], w[1]) > e + 1e-9);
+                    if (!covered)
+                    {
+                        if (a[0] <= a[1]) a[1] = st; else a[0] = st;
+                        GapsAt.Add((e, st, Math.Sign(a[2])));
+                        n++;
+                    }
+                }
+                if (Math.Max(b[0], b[1]) > Math.Max(far[0], far[1])) far = b;
+            }
+        }
+        return n;
+    }
+    /// <summary>메운 옛 틈(노선 측점 · 쪽) — 알림용(저장 안 함).</summary>
+    [System.Text.Json.Serialization.JsonIgnore] public List<(double S0, double S1, int Side)> GapsAt = new();
+
     /// <summary>Core 기록(측점은 Core 측점 = 노선 측점 − <paramref name="s0"/>).</summary>
     public List<RoadGrade.TierWall> CoreTierWalls(double s0) => TierWalls
         .Where(w => w.Length >= 5 && double.IsFinite(w[0]) && double.IsFinite(w[1]) && Math.Abs(w[1] - w[0]) > 1e-6)
@@ -73,6 +118,8 @@ internal sealed class RoadDesign
                 foreach (var w in d.Walls) if (w.Length >= 3) d.TierWalls.Insert(0, new[] { w[0], w[1], w[2], 0, 0 });
                 d.Walls.Clear();
             }
+            // ★[v111 · 계획 2.6] 옛 판 기록(LineVer 칸 없음)의 틈 메움 — 다음 저장 때 LineVer = 111로 써서 다시 안 함
+            if (d != null && !sb.ToString().Contains("\"LineVer\"", StringComparison.Ordinal)) d.GapsMerged = d.MergeOldGaps();
             return d;
         }
         catch { return null; }
@@ -91,6 +138,18 @@ internal sealed class RoadDesign
             return dict.Contains(Key) ? dict.GetAt(Key) : ObjectId.Null;
         }
         catch { return ObjectId.Null; }
+    }
+
+    /// <summary>★[v111.1.1 · JACK 1030 «초기화 눌러도 진입도로 관련된게 남어»] 설계 기록만 지움 — 사람이 만든 Civil 노선으로 연 도로(노선은 남김). 지웠으면 참.</summary>
+    public static bool Remove(Transaction tr, ObjectId alignId)
+    {
+        var xid = XrecId(tr, alignId);
+        if (xid.IsNull) return false;
+        var o = (DBObject)tr.GetObject(alignId, OpenMode.ForRead);
+        var dict = (DBDictionary)tr.GetObject(o.ExtensionDictionary, OpenMode.ForWrite);
+        dict.Remove(xid);
+        tr.GetObject(xid, OpenMode.ForWrite).Erase();
+        return true;
     }
 
     /// <summary>노선에 쓰기 — JSON을 200자씩 나눠(글자 칸 길이 한도).

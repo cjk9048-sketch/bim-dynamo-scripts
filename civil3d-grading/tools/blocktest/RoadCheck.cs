@@ -543,7 +543,8 @@ static class RoadCheck
             {
                 double cx = both.X0 + (k % both.W + 0.5) * both.Cell, cy = both.Y0 + (k / both.W + 0.5) * both.Cell;
                 if (cy < 4 || !float.IsFinite(both.Z[k])) continue;
-                if (cx >= 57 && cx <= 63) dVar = Math.Max(dVar, Math.Abs(both.Z[k] - onlyVar.Z[k]));
+                // ★[v111.3] 혼자 있는 변형 기록은 양 끝(이웃 = 사면)에 끝면 띠(소단 2 m × 띠 4 = 8 m)가 생김 · 가장자리 옹벽 안에서는 이웃이 옹벽이라 띠 없음 → 띠 밖(59 ~ 61)에서만 견줌
+                if (cx >= 59 && cx <= 61) dVar = Math.Max(dVar, Math.Abs(both.Z[k] - onlyVar.Z[k]));
                 if (cx >= 27 && cx <= 40) dEdge = Math.Max(dEdge, Math.Abs(both.Z[k] - onlyEdge.Z[k]));
             }
             check("S178 ⑳k 가장자리 옹벽 뒤 겹친 변형 기록 — 겹친 곳은 변형(나중 기록) · 안 겹친 곳은 가장자리 옹벽", dVar < 1e-6 && dEdge < 1e-6, $"변형 구간 차 {dVar:E2} · 옹벽 구간 차 {dEdge:E2}");

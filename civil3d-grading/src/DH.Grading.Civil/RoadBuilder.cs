@@ -187,7 +187,7 @@ internal static class RoadBuilder
             tr.Commit();
         }
         if (s.Count < 2) throw new InvalidOperationException("바탕면에서 종단을 읽지 못했습니다(노선이 면 밖?)");
-        var draft = RoadProfileDraft.Make(s, g, g[0], g[^1], d.MaxGrade, d.MinPviLen, 0.3);
+        var draft = WithStations(doc, RoadProfileDraft.Make(s, g, g[0], g[^1], d.MaxGrade, d.MinPviLen, 0.3));
         ObjectId pp = CivilDb.Profile.CreateByLayout(an + "-계획", aid, lay, pStyle, labels);
         using (var tr = db.TransactionManager.StartTransaction())
         {
@@ -199,6 +199,19 @@ internal static class RoadBuilder
             ? $" · 종점까지 {Math.Abs(g[^1] - g[0]) / Math.Max(1e-6, d.MaxGrade) - (s[^1] - s[0]):F0} m 더 길어야 함" : ""));
         return (bp, pp, draft);
     }
+
+    /// <summary>★★[v111.2 · JACK 1030 «종단상 직선구간이더라도 주측점엔 PVI점 — 사용자가 잡아끌 수 있게» · 인터뷰: 간격 = 도면 측점 간격] 초안 PVI에 주측점(측점 간격의 배수 = 종단도 No.)마다 PVI를 더함 — 모양 그대로.</summary>
+    static RoadProfileDraft.Result WithStations(Document doc, RoadProfileDraft.Result draft)
+    {
+        GradingSettings.SyncToDocument(doc);   // 측점 간격은 도면 설정
+        var (pvi, added) = RoadProfileDraft.AddStations(draft.Pvi, Math.Max(1.0, GradingSettings.XsecInterval));
+        draft.Pvi = pvi; draft.StationAdded = added;
+        return draft;
+    }
+
+    /// <summary>★[v111.2 · 전체 검토 H1] 우리가 만든 진입도로 노선인가(이름 «DH도로…» 또는 레이어 DH도로-노선) — 아니면 사람 노선(진입도로를 얹은 남의 Civil 노선): 이름으로 고르는 지우기 금지.</summary>
+    internal static bool IsOurs(CivilDb.Alignment al)
+        => (al.Name ?? "").StartsWith(AlignBase, StringComparison.Ordinal) || string.Equals(al.Layer, LayAlign, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>계획 종단 초안을 다시(지금 PVI를 모두 지우고 새로) — 노선이 바뀌어 끝 측점이 달라졌을 때 · [종단 초안 다시].</summary>
     /// <para>★[재검토 열린 질문] 바탕은 «지금» 바탕면(세션이 이름으로 다시 찾은 것)에서 직접 읽는다 — 처음 만든 «-바탕» 종단은 재정지 · 초기화 뒤 옛 면을 따라갈 수 있다.</para>
@@ -216,7 +229,7 @@ internal static class RoadBuilder
             if (sc >= s1) break;
         }
         if (s.Count < 2) throw new InvalidOperationException("바탕면에서 노선을 따라 높이를 읽지 못했습니다(노선이 면 밖?)");
-        var draft = RoadProfileDraft.Make(s, g, g[0], g[^1], d.MaxGrade, d.MinPviLen, 0.3);
+        var draft = WithStations(doc, RoadProfileDraft.Make(s, g, g[0], g[^1], d.MaxGrade, d.MinPviLen, 0.3));
         var pr = (CivilDb.Profile)tr.GetObject(planProf, OpenMode.ForWrite);
         // ★★[설치 전 검토 · 중간 → 화면 없는 Civil 실측 1028] 처음 · 끝 PVI는 지울 수 없고(«Could not remove the first or the last PVI»),
         //   요소를 다 비운 종단에는 AddPVI가 안 들어간다(커밋 뒤에도 «Value does not fall within the expected range»).
@@ -261,13 +274,20 @@ internal static class RoadBuilder
         string note = "";
         if (pr.StartingStation > al.StartingStation + 0.5 || pr.EndingStation < al.EndingStation - 0.5)
             note = $"계획 종단이 노선 일부만 덮음({pr.StartingStation:F1}~{pr.EndingStation:F1} / 노선 {al.StartingStation:F1}~{al.EndingStation:F1}) — [종단 초안 다시]";
-        double first = double.NaN;                     // ★[설치 전 검토 L3] Core 측점 0 = 실제 첫 표본(첫 측점이 실패하면 옹벽 · 제안 측점이 밀림)
-        for (double st = s0; ; st += 1.0)
+        double first = double.NaN, lastSc = double.NaN;   // ★[설치 전 검토 L3] Core 측점 0 = 실제 첫 표본(첫 측점이 실패하면 옹벽 · 제안 측점이 밀림)
+        for (int k = 0; ; k++)
         {
-            double sc = Math.Min(st, s1);
+            // ★[v111.2 · 전체 검토 L] 측점을 더해 가지 않고 곱으로(누적 반올림) · 끝 측점이 앞 표본과 1 mm 안이면 그 표본을 끝으로 바꿈 —
+            //   길이 0 선분이 끼면 선 면이 «꺾임 10° 넘음»으로 도로 전체를 칸 면으로 물림
+            double sc = Math.Min(s0 + k, s1);
             double x = 0, y = 0, z;
             try { al.PointLocation(sc, 0, ref x, ref y); z = pr.ElevationAt(sc); } catch { if (sc >= s1) break; continue; }
-            if (double.IsFinite(z)) { X.Add(x); Y.Add(y); Z.Add(z); if (double.IsNaN(first)) first = sc; }
+            if (double.IsFinite(z))
+            {
+                if (X.Count > 0 && sc - lastSc < 1e-3) { X[^1] = x; Y[^1] = y; Z[^1] = z; }
+                else { X.Add(x); Y.Add(y); Z.Add(z); if (double.IsNaN(first)) first = sc; }
+                lastSc = sc;
+            }
             if (sc >= s1) break;
         }
         return (X.ToArray(), Y.ToArray(), Z.ToArray(), double.IsNaN(first) ? s0 : first, s1, note);

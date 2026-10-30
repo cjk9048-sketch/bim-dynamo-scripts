@@ -104,6 +104,56 @@ internal static class RoadSheets
         return "";
     }
 
+    /// <summary>★★[v111.3 · JACK 1030 «노선을 선택하거나 그리고 나서 무조건 종단은 생성 — 실수로 Esc로 꺼도 수행되게»] 종단도 자리를 안 찍었을 때 놓을 빈 자리.
+    /// 다른 종단도(도곽 · 다른 노선 종단뷰)가 있으면 그 가장 오른쪽 끝 너머(가장 오른쪽 종단뷰와 같은 높이 — 한 줄로) · 없으면 도면 아래(노선 왼쪽 끝 · 도면 맨 아래보다 종이 700 mm 아래).
+    /// 그래도 겹치면 한 장 폭씩 오른쪽으로(스무 번까지).</summary>
+    internal static Point3d AutoSpot(Database db, ObjectId aid, double scale, int sheets)
+    {
+        double s = (double.IsFinite(scale) && scale > 0 ? scale : ProfileSheetRules.DefaultScale) / 1000.0;
+        double right = double.NegativeInfinity, rowY = double.NaN, rightView = double.NegativeInfinity;
+        double alX = double.NaN, alY = double.NaN;
+        string me = aid.Handle.ToString();
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            try { var ae = ((Entity)tr.GetObject(aid, OpenMode.ForRead)).GeometricExtents; alX = ae.MinPoint.X; alY = ae.MinPoint.Y; } catch { }
+            var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+            foreach (ObjectId id in ms)
+            {
+                try
+                {
+                    var o = tr.GetObject(id, OpenMode.ForRead);
+                    if (o is Polyline pl && pl.Closed && string.Equals(pl.Layer, SheetCommand.LayFrameModel, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (SheetTag.Of(pl, out string r, out _, out _) && string.Equals(r, me, StringComparison.OrdinalIgnoreCase)) continue;
+                        right = Math.Max(right, pl.GeometricExtents.MaxPoint.X);
+                    }
+                    else if (o is CivilDb.ProfileView pv && pv.AlignmentId != aid)
+                    {
+                        var ex = pv.GeometricExtents;
+                        right = Math.Max(right, ex.MaxPoint.X);
+                        if (ex.MaxPoint.X > rightView) { rightView = ex.MaxPoint.X; rowY = pv.Location.Y; }
+                    }
+                }
+                catch { }
+            }
+            tr.Commit();
+        }
+        catch { }
+        Point3d at;
+        if (double.IsFinite(right) && double.IsFinite(rowY)) at = new Point3d(right + (130.0 + 100.0) * s, rowY, 0);
+        else
+        {
+            double minY = double.NaN;
+            try { if (db.Extmin.X <= db.Extmax.X && db.Extmin.Y <= db.Extmax.Y) minY = db.Extmin.Y; } catch { }
+            if (!double.IsFinite(minY)) minY = double.IsFinite(alY) ? alY : 0;
+            double x = double.IsFinite(right) ? right + (130.0 + 100.0) * s : double.IsFinite(alX) ? alX + 130.0 * s : 0;
+            at = new Point3d(x, minY - 700.0 * s, 0);
+        }
+        for (int k = 0; k < 20 && Overlap(db, aid, at, scale, sheets).Length > 0; k++) at = new Point3d(at.X + ProfileSheetRules.SheetWmm * s, at.Y, 0);
+        return at;
+    }
+
     /// <summary>계획 종단 도장(<see cref="ProfileSheetRules.Stamp"/>) — PVI · 노선 시 · 종점.</summary>
     internal static string StampOf(Transaction tr, ObjectId aid, ObjectId planId)
     {
@@ -156,6 +206,8 @@ internal static class RoadSheets
         {
             nTag = SheetTag.EraseRoad(db, tr, me);
             var al = (CivilDb.Alignment)tr.GetObject(aid, OpenMode.ForRead);
+            // ★[v111.2 · 전체 검토 H1] 사람 노선(진입도로를 얹은 남의 Civil 노선)이면 이름으로 안 지움 — 사람 종단 «본선-지반고» 등이 «-지반»에 걸려 지워짐 → 적어 둔 핸들만
+            bool ours = RoadBuilder.IsOurs(al);
             var hv = new HashSet<string>(d.SheetViews, StringComparer.OrdinalIgnoreCase);
             foreach (ObjectId vid in al.GetProfileViewIds())
             {
@@ -172,7 +224,7 @@ internal static class RoadSheets
                 try
                 {
                     var g = (CivilDb.SampleLineGroup)tr.GetObject(gid, OpenMode.ForRead);
-                    if (gid.Handle.ToString() != d.SheetGroup && !(g.Name ?? "").StartsWith(an + "-검토", StringComparison.Ordinal)) continue;
+                    if (gid.Handle.ToString() != d.SheetGroup && !(ours && (g.Name ?? "").StartsWith(an + "-검토", StringComparison.Ordinal))) continue;
                     tr.GetObject(gid, OpenMode.ForWrite, false, true).Erase(); nGrp++;
                 }
                 catch { }
@@ -184,8 +236,8 @@ internal static class RoadSheets
                     if (pid == s.PlanId || pid == s.BaseProfId) continue;
                     var p = (CivilDb.Profile)tr.GetObject(pid, OpenMode.ForRead);
                     string pn = p.Name ?? "", h = pid.Handle.ToString();
-                    bool mine = h == d.SheetGround || h == d.SheetChain || pn.StartsWith(an + "-지반", StringComparison.Ordinal)
-                                || pn.StartsWith("DH_측점체인", StringComparison.Ordinal);
+                    bool mine = h == d.SheetGround || h == d.SheetChain
+                                || (ours && (pn.StartsWith(an + "-지반", StringComparison.Ordinal) || pn.StartsWith("DH_측점체인", StringComparison.Ordinal)));
                     if (!mine) continue;
                     tr.GetObject(pid, OpenMode.ForWrite, false, true).Erase(); nProf++;
                 }
@@ -254,7 +306,8 @@ internal static class RoadSheets
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
-            if (tr.GetObject(aid, OpenMode.ForWrite) is CivilDb.Alignment alIdx) alIdx.StationIndexIncrement = iv;
+            // ★[전체 검토 L1] 사람 노선의 측점 표기는 안 바꿈
+            if (tr.GetObject(aid, OpenMode.ForRead) is CivilDb.Alignment alIdx && RoadBuilder.IsOurs(alIdx)) { alIdx.UpgradeOpen(); alIdx.StationIndexIncrement = iv; }
             tr.Commit();
         }
         catch (System.Exception ex) { log.AppendLine("  측점 색인 증분 실패 — " + ex.Message); }

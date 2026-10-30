@@ -48,7 +48,7 @@ public static class CivilSafeMesh
     /// 0929 다섯 판·돌린 판: 1로 두나 0.2로 두나 접힌 수(284~400)·남은 짧은 변(0~1)·옹벽 높이 최대(0.48~0.50mm — 이건 Civil 합치기 쌍 몫)가 같아 아껴 쓴다.</summary>
     const double ShortFoldScore = 0.2;
     /// <summary>★[v102.1 · 0930 화면 없는 Civil] 가는 바늘 문턱 — Civil이 긴 변을 뒤집는 높이(0929 실험: 긴 변 선까지 ≤122.0µm면 깨지고 ≥122.5µm면 받는다) 곁.</summary>
-    const double ThinH = 1.25e-4;
+    internal const double ThinH = 1.25e-4;
 
     /// <summary>하네스 전용 계측 — null이 아니면 합치기·접기·먼저 뒤집기와 남은 위험 면을 한 줄씩 적는다(출하 경로는 null).</summary>
     internal static Action<string>? DebugLog;          // ★[코드 검토 낮음 9] 하네스 전용 — 출하 DLL 밖에서 못 건드리게 internal(InternalsVisibleTo blocktest)

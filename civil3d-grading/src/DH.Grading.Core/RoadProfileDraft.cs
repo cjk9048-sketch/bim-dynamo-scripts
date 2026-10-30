@@ -12,7 +12,8 @@ public static class RoadProfileDraft
         public List<(double S, double Z)> Pvi = new();
         public double MaxGrade;            // 실제 최대 경사(절댓값)
         public bool EndUnreachable;        // 종점 높이를 최대 경사로 못 맞춤(그래도 곧은 선으로 잇고 알림)
-        public string Text => $"PVI {Pvi.Count}개 · 최대 종단경사 {MaxGrade * 100:F1} %" + (EndUnreachable ? " · ⚠종점 높이를 경사 한도로 못 맞춤" : "");
+        public int StationAdded;           // ★[v111.2] 주측점마다 더한 PVI 수(모양 그대로 · 잡아끌기용)
+        public string Text => $"PVI {Pvi.Count}개" + (StationAdded > 0 ? $"(주측점 {StationAdded}개 포함)" : "") + $" · 최대 종단경사 {MaxGrade * 100:F1} %" + (EndUnreachable ? " · ⚠종점 높이를 경사 한도로 못 맞춤" : "");
     }
 
     public static Result Make(IReadOnlyList<double> s, IReadOnlyList<double> g, double startZ, double endZ,
@@ -92,6 +93,31 @@ public static class RoadProfileDraft
         for (int k = 1; k < res.Pvi.Count; k++)
             res.MaxGrade = Math.Max(res.MaxGrade, Math.Abs(res.Pvi[k].Z - res.Pvi[k - 1].Z) / Math.Max(1e-9, res.Pvi[k].S - res.Pvi[k - 1].S));
         return res;
+    }
+
+    /// <summary>★★[v111.2 · JACK 1030 «종단상 직선구간이더라도 주측점엔 PVI점 — 사용자가 잡아끌 수 있게»] 주측점(측점 간격의 배수 = 종단도 No. 자리)마다 PVI를 더한다 —
+    /// 그 자리 꺾은선 높이라 모양은 그대로. 처음 · 끝 PVI 안쪽만 · 이미 PVI가 <paramref name="gap"/> 안에 있으면 안 넣음. 돌려줌 = 측점 차례로 합친 목록 · 더한 수.</summary>
+    public static (List<(double S, double Z)> Pvi, int Added) AddStations(IReadOnlyList<(double S, double Z)> pvi, double interval, double gap = double.NaN)
+    {
+        var res = pvi.ToList();
+        if (pvi.Count < 2 || !(interval > 0)) return (res, 0);
+        interval = Math.Max(1.0, interval);   // ★[v111.2 · 전체 검토 L] 아주 작은 간격(0.001 등)이면 수백만 번 — 1 m 아래는 안 받음
+        // ★[설치 전 검토 L3] 경사 꺾임 PVI와 너무 붙으면(끌면 극단 경사 · 라벨 겹침) 안 넣음 — 간격의 1/4 · 2.5 m 중 작은 것
+        if (!(gap >= 0)) gap = Math.Min(interval / 4, 2.5);
+        gap = Math.Max(gap, 1e-6);            // 같은 측점 PVI 두 개 막음
+        double s0 = pvi[0].S, s1 = pvi[^1].S;
+        int added = 0;
+        // ★[설치 전 검토 L2] 노선 시점부터 센다(횡단 측점 StationMarks와 같은 자리 — 시점이 0이 아닌 노선)
+        for (long k = 1; s0 + k * interval < s1 - gap; k++)
+        {
+            double st = s0 + k * interval;
+            if (st <= s0 + gap) continue;
+            if (pvi.Any(p => Math.Abs(p.S - st) < gap)) continue;
+            res.Add((st, At(pvi, st)));
+            added++;
+        }
+        res.Sort((a, b) => a.S.CompareTo(b.S));
+        return (res, added);
     }
 
     /// <summary>PVI 꺾은선의 측점 s 높이(직선 보간 · 범위 밖은 끝값).</summary>

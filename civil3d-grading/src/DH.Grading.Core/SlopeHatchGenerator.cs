@@ -19,6 +19,10 @@ namespace DH.Grading.Core;
 /// </summary>
 public static class SlopeHatchGenerator
 {
+    static int _extraFail;
+    /// <summary>★[v111.1 · 설치 전 검토 L4] 자르기 영역에서 <c>extraArea</c>(진입도로 면 자리)를 못 뺀 횟수 — 부르는 쪽이 앞뒤를 견줘 알린다.</summary>
+    public static int ExtraAreaFailures => System.Threading.Volatile.Read(ref _extraFail);
+
     /// <summary>평면폭/높이 비가 이보다 작으면 수직 옹벽으로 보고 노리선 생략(구배 0 등).</summary>
     private const double WallRatio = 0.1;
 
@@ -34,7 +38,8 @@ public static class SlopeHatchGenerator
         IReadOnlyList<SlopeZone>? wallZones = null,
         IReadOnlyList<Point3>? zoneBoundary = null,
         double baseSlope = 1.5, double minSlope = 0.05,
-        IReadOnlyList<IReadOnlyList<Point3>>? extraHoles = null)
+        IReadOnlyList<IReadOnlyList<Point3>>? extraHoles = null,
+        Geometry? extraArea = null)
     {
         var ticks = new List<(Point3, Point3)>();
         var cornerTicks = new List<(Point3, Point3)>();
@@ -44,7 +49,7 @@ public static class SlopeHatchGenerator
         if (longSpacing <= 0) longSpacing = 5.0;
         int ratio = Math.Max(1, (int)Math.Round(longSpacing / shortSpacing)); // 몇 번째마다 긴선
         int sgn = up ? -1 : +1; // 구성측 부호(절토=지반아래, 성토=지반위)
-        var clip = ClipRegion.Build(clipOuter, clipHole, extraHoles);
+        var clip = ClipRegion.Build(clipOuter, clipHole, extraHoles, extraArea);
         // [§75] 옹벽 구간(경계 호길이)에는 노리선을 만들지 않음(JACK 0728) — 단(bench)별 판정.
         double[]? cumZ = (wallZones != null && wallZones.Count > 0 && zoneBoundary != null && zoneBoundary.Count >= 3)
             ? GradingGeometry.CumLen2D(zoneBoundary) : null;
@@ -119,7 +124,8 @@ public static class SlopeHatchGenerator
         List<(bool IsSlope, int Bench, int Seg, List<Point3> Pts)>? wallEdgesOut = null,
         double baseSlope = 1.5, double minSlope = 0.05,
         IReadOnlyList<IReadOnlyList<Point3>>? extraHoles = null,
-        List<(int Bench, bool IsCrest, List<Point3> Pts)>? wallAllOut = null)
+        List<(int Bench, bool IsCrest, List<Point3> Pts)>? wallAllOut = null,
+        Geometry? extraArea = null)
     {
         var outList = new List<(bool, int, int, List<Point3>)>();
         if (rings == null || rings.Count < 2) return outList;
@@ -135,7 +141,7 @@ public static class SlopeHatchGenerator
         //   <c>WallRunBuilder</c>는 같은 상황에서 <c>globalIsWall</c>로 벽이라 판정해 11줄을 만들었다 —
         //   <b>두 경로가 다른 자를 쓰고 있었다.</b> 자를 맞춘다.
         bool globalIsWall = baseSlope <= minSlope + 1e-9;
-        var clip = ClipRegion.Build(clipOuter, clipHole, extraHoles);
+        var clip = ClipRegion.Build(clipOuter, clipHole, extraHoles, extraArea);
         // [§75] 옹벽 구간: 사면선/소단선 제외 — 구간 안 크레스트(계단 상단)는 '옹벽선'으로 분리 반환(두꺼운 빨강 표현용).
         double[]? cumZ = (wallZones != null && wallZones.Count > 0 && zoneBoundary != null && zoneBoundary.Count >= 3)
             ? GradingGeometry.CumLen2D(zoneBoundary) : null;
@@ -670,7 +676,7 @@ public static class SlopeHatchGenerator
         private readonly STRtree<LineSegment> _edges = new();
 
         public static ClipRegion? Build(IReadOnlyList<Point3>? outer, IReadOnlyList<Point3>? hole,
-            IReadOnlyList<IReadOnlyList<Point3>>? extraHoles = null)
+            IReadOnlyList<IReadOnlyList<Point3>>? extraHoles = null, Geometry? extraArea = null)
         {
             if (outer == null || outer.Count < 3) return null;
             var gf = new GeometryFactory();
@@ -692,6 +698,18 @@ public static class SlopeHatchGenerator
             Sub(hole);
             // [다중 구역 0804] 뒤 구역이 덮어쓴 영역 제외 — 안 빼면 앞 구역의 노리선이 최종 지표면과 무관하게 남는다.
             if (extraHoles != null) foreach (var eh in extraHoles) Sub(eh);
+            // ★★[v111.1 · JACK 1030 «합쳐진 노리선»] 진입도로 면 자리(구멍 = 도로 안 땅 섬 그대로) — 다 덮이면 빈 영역(아무것도 안 그림 · 앞 상태로 두지 않음)
+            if (extraArea != null && !extraArea.IsEmpty && g.EnvelopeInternal.Intersects(extraArea.EnvelopeInternal))
+            {
+                // ★[설치 전 검토 L4] 실패하면 그대로 두고 센다(부르는 쪽이 알림 · 정확 자르기 RoadFootprint.Cutter가 자리 안 조각을 뺀다) · 폴리곤 아닌 답이면 지우는 쪽으로 가지 않음
+                Geometry? diff = null;
+                try { diff = g.Difference(extraArea); }
+                catch { try { diff = g.Buffer(0).Difference(extraArea.Buffer(0)); } catch { } }
+                if (diff == null) System.Threading.Interlocked.Increment(ref _extraFail);
+                else if (diff.IsEmpty) g = gf.CreatePolygon();   // 다 덮임 — 아무것도 안 그림
+                else if (diff is IPolygonal) g = diff;
+                else System.Threading.Interlocked.Increment(ref _extraFail);
+            }
             return new ClipRegion(g);
         }
 

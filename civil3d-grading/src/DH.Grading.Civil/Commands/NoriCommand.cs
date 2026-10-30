@@ -22,17 +22,52 @@ public sealed class NoriCommand
     {
         Document doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
+        Draw(doc, quiet: false, out _);
+    }
+
+    /// <summary>★[v111.1 · 계획_v111_1.md 2.3 · 2.4] 노리선 그리기 몸통 — [노리선] 단추와 [도로 면 만들기] 뒤 저절로(<paramref name="quiet"/> = 팝업 없음) 공용.
+    /// 진입도로 면이 있으면 그 자리(발자국) 안의 부지 선은 빼고 경계에서 끊는다(JACK 1030 «합쳐진 노리선»). 돌려줌 = 한 줄 요약.</summary>
+    internal static string Draw(Document doc, bool quiet, out int drawn)
+    {
+        drawn = 0;
+        int rcLine0 = 0, rcLine1 = 0;          // 진입도로 면 자리로 자른 선 수(전 → 후)
         GradingSettings.SyncToDocument(doc);   // [도면 전환 0803] 도면이 바뀌었으면 그 도면 기준으로 설정·기억 재정렬
         Editor ed = doc.Editor;
         Database db = doc.Database;
 
+        // ★★[v111.3 · JACK 1030 «노리선은 노리선 버튼을 누를 때 다 한꺼번에»] 진입도로 노리선도 여기서(도로 면 만들기는 안 그림) — 부지 결과가 없어도 도로는 그림
+        int roadCount = RoadSession.CountRoadSurfaces(db);
         try
         {
             using Transaction tr = db.TransactionManager.StartTransaction();
 
             // ── 실행 게이트 3중(유령선 차단) — DHINFRA와 공용 ──
-            var regions = PassGates(db, tr, ed, "노리선", out string note);
-            if (regions == null) return;
+            var regions = PassGates(db, tr, ed, "노리선", out string note, quiet, quietRefuse: roadCount > 0);
+            if (regions == null)
+            {
+                if (roadCount == 0) return "부지 노리선 — 정지 결과가 없어 건너뜀";
+                tr.Commit();
+                string rOnly;
+                int rt, rr;
+                using (BusyPopup.Scope("진입도로 노리선 그리는 중입니다.")) rOnly = RoadSession.DrawRoadTicks(doc, out rt, out rr);
+                drawn = rt;
+                if (!quiet) AcadApp.ShowAlertDialog((rt > 0 ? "노리선 생성 완료" : "노리선 — 그린 것이 없습니다") + $"\n\n진입도로 노리선 {rt}개(도로 {rr}개)\n부지 정지 결과는 없어 부지 노리선은 건너뜀"
+                                                   + (rOnly.Contains('⚠') ? "\n\n" + rOnly.Replace(" · ", "\n") : ""));
+                try { DiagLog.Append($"\n■ DHNORI — 부지 결과 없음 · {rOnly}\n"); } catch { }
+                return rOnly;
+            }
+            // ★★[v111.1 · JACK 1030] 진입도로 면 자리 — 부지 선을 그 밖만(도로 면이 정지면 위에 얹혔으므로 그 자리 최종 모양은 도로)
+            //   ★[계획 검토 M1] 부지 생성기 자르기(ClipRegion)에 넣는다 — 보이는 폭 기준으로 짧은 선 = 절반(0724 리듬) · 윗선이 도로 밑이면 도로 경계에서 시작.
+            //   뒤의 정확 자르기(Cutter)는 두 끝이 밖인데 가운데가 도로를 지나는 드문 조각만 뺀다.
+            RoadFootprint.Cutter? roadCut = null; NetTopologySuite.Geometries.Geometry? roadGeom = null; int nRoads = 0; string roadNote = "";
+            try
+            {
+                roadGeom = RoadSession.Footprints(db, tr, out nRoads, out string fpNote);
+                if (roadGeom != null) roadCut = new RoadFootprint.Cutter(roadGeom);
+                if (fpNote.Length > 0) roadNote += "\n" + fpNote;
+            }
+            catch (System.Exception exF) { roadGeom = null; roadCut = null; roadNote = $"\n⚠진입도로 면 자리를 못 읽어 빼지 않음 — {exF.Message}"; }
+            int rcTick0 = 0, rcTick1 = 0, failBase = SlopeHatchGenerator.ExtraAreaFailures;
 
             // ── 링 복원(결정적 재계산 — ground 불필요, NullGround 주입) + 작도 ──
             var ng = new NullGround();
@@ -108,9 +143,9 @@ public sealed class NoriCommand
                         double bs = System.Math.Max(slopeN, bundle.Params.MinSlope), ms = bundle.Params.WallGateSlope;
                         var (t, ct, _) = SlopeHatchGenerator.Generate(vs.Rings, ng, up,
                             GradingSettings.HatchShort, GradingSettings.HatchLong, finalRing, bundle.Boundary,
-                            zones, bundle.Boundary, bs, ms, later);
+                            zones, bundle.Boundary, bs, ms, later, extraArea: roadGeom);
                         var edges = SlopeHatchGenerator.GenerateEdgeLinesTagged(vs.Rings, ng, up, finalRing, bundle.Boundary,
-                            zones, bundle.Boundary, wallLines, null, bs, ms, later);
+                            zones, bundle.Boundary, wallLines, null, bs, ms, later, extraArea: roadGeom);
                         ticks.AddRange(t);
                         cornerTicks.AddRange(ct);
                         if (up) cutEdges.AddRange(edges); else fillEdges.AddRange(edges);
@@ -132,6 +167,7 @@ public sealed class NoriCommand
                     detail += $"\n{rTag}전환사면(내부 단차): 면 {transFaces.Count} · 노리선 {tt.Count}";
                 }
 
+                if (roadCut != null) { cutEdges = CutEdges(roadCut, cutEdges); fillEdges = CutEdges(roadCut, fillEdges); }
                 GradingBuilder.DrawSlopeEdgesTagged(db, tr, cutEdges, fillEdges,
                     bundle.PlanHandle, clearFirst: firstEdgeDraw);
                 firstEdgeDraw = false;
@@ -170,6 +206,26 @@ public sealed class NoriCommand
                 catch { }
             }
 
+            // ★★[v111.1] 진입도로 면 자리 — 노리선 · 옹벽선 · 전환사면 선도 그 밖만(사면선 · 소단선은 구역마다 위에서)
+            if (roadCut != null)
+            {
+                rcTick0 = ticks.Count + cornerTicks.Count;
+                ticks = roadCut.Ticks(ticks);
+                cornerTicks = roadCut.Ticks(cornerTicks);
+                rcTick1 = ticks.Count + cornerTicks.Count;
+                System.Collections.Generic.List<System.Collections.Generic.List<Point3>> CutLines(RoadFootprint.Cutter c, System.Collections.Generic.List<System.Collections.Generic.List<Point3>> src)
+                {
+                    var res = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
+                    foreach (var l in src) { rcLine0++; foreach (var run in c.Line(l)) { res.Add(run); rcLine1++; } }
+                    return res;
+                }
+                wallLines = CutLines(roadCut, wallLines); transCrest = CutLines(roadCut, transCrest); transToe = CutLines(roadCut, transToe);
+                int clipFail = SlopeHatchGenerator.ExtraAreaFailures - failBase;
+                roadNote += $"\n진입도로 면 {nRoads}개 자리 뺌(넓이 {roadCut.Area:N0} ㎡) — 정확 자르기 노리선 {rcTick0} → {rcTick1} · 선 {rcLine0} → {rcLine1}"
+                            + (clipFail > 0 ? $" · ⚠생성기 자리 빼기 실패 {clipFail}회(정확 자르기만 — 짧은 선 길이 규칙이 어긋날 수 있음)" : "");
+            }
+            detail += roadNote;
+
             // [겹침 제거 — JACK 0727] 코너·급커브 격자 겹침을 실제 2D 교차 판정으로 정리(생성은 최대, 겹치는 것만 제거).
             //   볼록 코너 대각선(cornerTicks)은 우선 보존 — 겹치면 주변 수직틱이 대신 빠진다.
             int rawTicks = ticks.Count + cornerTicks.Count;
@@ -185,14 +241,25 @@ public sealed class NoriCommand
             GradingBuilder.DrawSlopeHatch(db, tr, ticks,
                 System.Array.Empty<System.Collections.Generic.IReadOnlyList<Point3>>());
             tr.Commit();
+            // ★★[v111.3] 진입도로 노리선 — 도로마다 그 면을 만든 입력으로 다시 셈(부지 선은 위에서 도로 자리를 뺐다)
+            string roadSum = ""; int roadTicks = 0, roadsDrawn = 0;
+            if (roadCount > 0)
+            {
+                try { using (BusyPopup.Scope("진입도로 노리선 그리는 중입니다.")) roadSum = RoadSession.DrawRoadTicks(doc, out roadTicks, out roadsDrawn); }
+                catch (System.Exception exR) { roadSum = "⚠진입도로 노리선 못 그림 — " + exR.Message; }
+                detail += "\n" + roadSum;
+            }
 
             // ★★★[JACK 0901 "노리선 작성 기능이 안 돼"] — <b>안 된 게 아니라 그릴 것이 없었다.</b>
             //   정지옵션에서 절토·성토가 <b>둘 다 옹벽</b>이면 노리선을 그릴 <b>사면이 없다</b>.
             //   그런데 팝업이 "노리선 생성 완료" 한 줄뿐이라 <b>0개를 그려 놓고 완료</b>라고 했다 —
             //   사용자 눈에는 고장이다. 사유는 로그에만 있었다.
             //   → <b>숫자를 팝업에 싣고</b>, 아무것도 안 그렸으면 왜인지 말한다.
-            int drawn = ticks.Count + wallLines.Count;
-            if (drawn == 0)
+            drawn = ticks.Count + wallLines.Count + roadTicks;
+            string sum = $"부지 노리선 {ticks.Count}" + (wallLines.Count > 0 ? $" · 옹벽선 {wallLines.Count}" : "")
+                         + (roadCut != null ? $"(진입도로 면 {nRoads}개 자리 뺌)" : "") + (roadSum.Length > 0 ? " · " + roadSum : "");
+            if (quiet) { }
+            else if (drawn == 0)
             {
                 string why = detail.Contains("기본 옹벽(")
                     ? "절토·성토가 모두 옹벽이고, 사면으로 바꾼 구간이 없습니다."
@@ -205,22 +272,35 @@ public sealed class NoriCommand
             {
                 AcadApp.ShowAlertDialog($"노리선 생성 완료\n\n노리선 {ticks.Count}개"
                                       + (wallLines.Count > 0 ? $" · 옹벽선 {wallLines.Count}개" : "")
-                                      + (fglMarks.Count > 0 ? $" · FGL 표기 {fglMarks.Count}건" : ""));
+                                      + (fglMarks.Count > 0 ? $" · FGL 표기 {fglMarks.Count}건" : "")
+                                      + (roadCount > 0 ? $"\n진입도로 노리선 {roadTicks}개(도로 {roadsDrawn}개)" : "")
+                                      + (roadSum.Contains('⚠') ? "\n" + roadSum.Replace(" · ", "\n") : ""));
             }
-            ed.WriteMessage("\n" + ("노리선 생성 완료" + note + detail +
-                $"\n레이어: DH-사면선-절토/성토 · DH-소단선-절토/성토 · DH-노리선(노랑)" +
-                $"\n긴선 {GradingSettings.HatchLong}m마다 · 짧은선 {GradingSettings.HatchShort}m마다(절반)").Replace("\n\n", "\n"));
+            if (!quiet)   // ★[계획 검토 L9] 저절로일 때는 부르는 쪽 한 줄(도로 면 알림)에만
+                ed.WriteMessage("\n" + ("노리선 생성 완료" + note + detail +
+                    $"\n레이어: DH-사면선-절토/성토 · DH-소단선-절토/성토 · DH-노리선(노랑)" +
+                    $"\n긴선 {GradingSettings.HatchLong}m마다 · 짧은선 {GradingSettings.HatchShort}m마다(절반)").Replace("\n\n", "\n"));
             try
             {
                 DiagLog.Append(
-                    "\n■ DHNORI(노리선 버튼)" + note + detail + "\n");
+                    $"\n■ DHNORI(노리선 {(quiet ? "— 저절로" : "버튼")})" + note + detail + "\n");
             }
             catch { }
+            return sum;
         }
         catch (System.Exception ex)
         {
             ed.WriteMessage("\n[DHNORI 오류] " + ex.Message);
-            AcadApp.ShowAlertDialog("노리선 생성 중 오류:\n" + ex.Message);
+            if (!quiet) AcadApp.ShowAlertDialog("노리선 생성 중 오류:\n" + ex.Message);
+            return "⚠부지 노리선 못 그림 — " + ex.Message;
+        }
+
+        System.Collections.Generic.List<(bool, int, int, System.Collections.Generic.List<Point3>)> CutEdges(RoadFootprint.Cutter c,
+            System.Collections.Generic.List<(bool, int, int, System.Collections.Generic.List<Point3>)> src)
+        {
+            var res = new System.Collections.Generic.List<(bool, int, int, System.Collections.Generic.List<Point3>)>();
+            foreach (var (s, b, g, pts) in src) { rcLine0++; foreach (var run in c.Line(pts)) { res.Add((s, b, g, run)); rcLine1++; } }
+            return res;
         }
     }
 
@@ -323,14 +403,16 @@ public sealed class NoriCommand
     }
 
     internal static System.Collections.Generic.List<GradingBundle>? PassGates(
-        Database db, Transaction tr, Editor ed, string cmdLabel, out string note)
+        Database db, Transaction tr, Editor ed, string cmdLabel, out string note, bool quiet = false, bool quietRefuse = false)
     {
         note = "";
+        // ★[v111.1] quiet = 저절로 — 팝업 없이 건너뜀 · ★[v111.3 · 설치 전 검토 L1] quietRefuse = 거절 팝업만 끔(도로 노리선은 그리므로) · 계획선 바뀜 알림은 그대로
+        void No(string msg) { if (!quiet && !quietRefuse) Refuse(ed, cmdLabel, msg); }
         // 게이트 ① 번들
         var regions = GradingBundleStore.TryLoadAll(db, tr, out string reason);
         if (regions == null || regions.Count == 0)
         {
-            Refuse(ed, cmdLabel, $"{cmdLabel}을(를) 실행할 수 없습니다.\n{reason}\n\n[정지면 생성](DHGRADE)을 먼저 실행하세요.");
+            No($"{cmdLabel}을(를) 실행할 수 없습니다.\n{reason}\n\n[정지면 생성](DHGRADE)을 먼저 실행하세요.");
             return null;
         }
         // ★★[v30.1 · JACK 0812] <b>게이트 ②는 거부가 아니라 알림이다.</b>
@@ -366,7 +448,7 @@ public sealed class NoriCommand
             }
             else note += $"\n({rTag}원본 계획선을 도면에서 찾지 못함 — 번들 기준으로 진행)";
         }
-        if (changed > 0)
+        if (changed > 0 && !quiet)
             ed.WriteMessage($"\n  · ⚠계획선이 바뀐 구역 {changed}개 — 번들 기준으로 그립니다(정지면과 일치)");
         // 게이트 ③ 정지 표면 존재(표면이 지워졌으면 유령선 방지 위해 중단)
         bool surfOk = GradingBuilder.SurfaceExistsByBaseName(tr, "정지면_DH")
@@ -374,8 +456,8 @@ public sealed class NoriCommand
                    || GradingBuilder.SurfaceExistsByBaseName(tr, "가상성토_DH");
         if (!surfOk)
         {
-            Refuse(ed, cmdLabel, "정지 표면(정지면_DH)이 도면에 없습니다.\n" +
-                       "[정지면 생성](DHGRADE)을 먼저 실행하세요.");
+            No("정지 표면(정지면_DH)이 도면에 없습니다.\n" +
+               "[정지면 생성](DHGRADE)을 먼저 실행하세요.");
             return null;
         }
         return regions;

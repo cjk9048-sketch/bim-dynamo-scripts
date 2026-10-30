@@ -106,6 +106,9 @@ internal sealed class RoadPanel : UserControl
         _host = GradingDialog.AddCollapsible(_root, "■ 진입도로 수정", "만든 사면의 한 구간을 옹벽으로 세우거나 다시 사면으로 되돌립니다", open: true, key: "도로:수정");
         Buttons(("옹벽 변환", "DHROADWALLCONV", "계단선(시안)을 골라 그 단부터 바깥을 옹벽으로 세웁니다. 전체구간/구간지정 · 소단 길이를 그 자리에서 정합니다.", false),
                 ("사면 변환", "DHROADSLOPECONV", "옹벽선을 골라 그 자리 옹벽을 다시 사면으로 되돌립니다.", false));
+        // ★[v111.2 · JACK 1030 «PVI 수정 기능 — 넣기 · 삭제»] 종단도에서 찍기(Enter까지 여러 번)
+        Buttons(("PVI 넣기", "DHROADPVIADD", "종단도를 찍은 측점에 PVI를 넣습니다 — 지금 계획선 위라 모양은 그대로, 넣은 뒤 잡아끌어 높이를 바꿉니다(Enter 끝)", false),
+                ("PVI 지우기", "DHROADPVIDEL", "종단도에서 찍은 자리 가까운 PVI를 지웁니다 — 처음 · 끝은 못 지움(Enter 끝)", false));
 
         // ── ■ 결과 ──
         _host = GradingDialog.AddCollapsible(_root, "■ 결과", "토공량 · 높이 · 경사 · 옹벽", open: true, key: "도로:결과");
@@ -177,11 +180,17 @@ internal sealed class RoadPanel : UserControl
         if (s == null && cmd != "DHROADOFF") return;
         try
         {
-            if (cmd == "!") { s!.Recompute(); return; }
+            if (cmd == "!")
+            {
+                if (Busy(doc)) { _note.Text = "명령 중에는 다시 계산하지 않습니다 — 명령을 끝낸(Esc) 뒤"; return; }   // ★[전체 검토 M1]
+                s!.Recompute(); return;
+            }
             doc.SendStringToExecute("\x03\x03" + cmd + " ", true, false, false);
         }
         catch (System.Exception ex) { _note.Text = text + " 실패 — " + ex.Message; }
     }
+
+    static bool Busy(Autodesk.AutoCAD.ApplicationServices.Document doc) { try { return !string.IsNullOrEmpty(doc.CommandInProgress); } catch { return false; } }
 
     void Commit()
     {
@@ -195,6 +204,14 @@ internal sealed class RoadPanel : UserControl
             else _note.Text = "범위 밖 값 — 3 ~ 1000";
             _curve.Text = RoadDesign.LastCurveR.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
             _shown[_curve] = _curve.Text;
+            return;
+        }
+        // ★[v111.2 · 전체 검토 M1] 명령이 도는 중(옹벽 변환 고르기 등)에는 설계를 안 바꿈 — 그 명령이 옛 모양 · 새 기록을 섞지 않게 · 실행 취소 묶음 밖에서 쓰지 않게
+        if (Busy(_s.Doc))
+        {
+            var inv0 = System.Globalization.CultureInfo.InvariantCulture;
+            foreach (var (box, get, _, scale, _, _) in _fields) { box.Text = (get(_s.Design) * scale).ToString("0.###", inv0); _shown[box] = box.Text; }
+            _note.Text = "명령 중에는 값을 바꾸지 않습니다 — 명령을 끝낸(Esc) 뒤 다시 넣으세요";
             return;
         }
         _s.Fresh();

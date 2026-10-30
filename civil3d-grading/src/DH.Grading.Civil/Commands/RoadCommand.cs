@@ -112,8 +112,15 @@ public class RoadCommand
         var cdoc = CivilApp.CivilDocument.GetCivilDocument(db);
         var log = new System.Text.StringBuilder();
         ObjectId created = ObjectId.Null; bool written = false;
+        var profBefore = new HashSet<ObjectId>();   // ★[전체 검토 M3] 사람 노선에서 실패하면 이번에 만든 종단만 지우려고(처음부터 있던 것은 그대로)
         try
         {
+            if (isAlign)
+            {
+                using var trP = db.TransactionManager.StartTransaction();
+                if (trP.GetObject(srcId, OpenMode.ForRead) is CivilDb.Alignment alP) foreach (ObjectId p in alP.GetProfileIds()) profBefore.Add(p);
+                trP.Commit();
+            }
             ObjectId aid = srcId;
             RoadDesign? d = null;
             if (isAlign)
@@ -121,10 +128,26 @@ public class RoadCommand
                 // ★[v110.4 · 계획 검토 M4] 부지 종단 노선(«DH선형»)은 진입도로로 안 받는다 — 부지 «지우고 새로»가 지우고 · 도곽 · 측점 찍기가 섞인다
                 string refuse = SiteAlignRefusal(db, aid);
                 if (refuse.Length > 0) { SectionCommand.Refuse(ed, refuse); return; }
-                using var tr = db.TransactionManager.StartTransaction();
-                d = RoadDesign.Read(tr, aid);
-                tr.Commit();
-                if (d != null) { Open(doc, aid); return; }        // 이미 진입도로 — 다시 연다
+                bool foreign;
+                using (var tr = db.TransactionManager.StartTransaction())
+                {
+                    d = RoadDesign.Read(tr, aid);
+                    foreign = d != null && RoadSession.ForeignRecord(tr, aid, d);
+                    // ★[v111.2 · 전체 검토 H2] 복사한 노선 — 따라온 기록(원래 노선의 종단 · 도로 면을 가리킴)을 지우고 이 노선으로 새로
+                    if (foreign) { RoadDesign.Remove(tr, aid); d = null; }
+                    tr.Commit();
+                }
+                if (foreign) ed.WriteMessage("\n[진입도로] 복사된 노선이라 따라온 진입도로 기록(원래 노선 것)을 지우고 이 노선으로 새로 만듭니다.");
+                if (d != null)
+                {
+                    Open(doc, aid);   // 이미 진입도로 — 다시 연다
+                    // ★[v111.3 · JACK 1030 «노선을 선택하거나 그리고 나서 무조건 종단은 생성» · 설치 전 검토 열린 질문] 종단도(이 노선 종단뷰)가 하나도 없으면 지금 만든다(Esc여도 빈 자리)
+                    int nPv = 1;
+                    try { using var trV = db.TransactionManager.StartTransaction(); nPv = ((CivilDb.Alignment)trV.GetObject(aid, OpenMode.ForRead)).GetProfileViewIds().Count; trV.Commit(); } catch { }
+                    var so = nPv == 0 ? RoadSession.Of(doc) : null;
+                    if (so != null) AskAndPlaceSheets(doc, so, again: false);
+                    return;
+                }
             }
             // ★[재검토 낮음 1] 바탕면을 노선 만들기 «앞»에서 — 없으면 아무것도 안 만들고 멈춤(주인 없는 DH도로_N이 남지 않게)
             var (bs, bsName) = RoadBuilder.PickBase(db, cdoc);
@@ -172,6 +195,20 @@ public class RoadCommand
                 }
                 catch { }
             }
+            else if (!written && isAlign)
+            {
+                // ★[전체 검토 M3] 사람 노선 — 이번에 만든 종단(«-바탕» · «-계획»)만 지움(다시 하면 겹치지 않게)
+                try
+                {
+                    using var tr = db.TransactionManager.StartTransaction();
+                    int nk = 0;
+                    if (tr.GetObject(srcId, OpenMode.ForRead) is CivilDb.Alignment alK)
+                        foreach (ObjectId pid in alK.GetProfileIds()) if (!profBefore.Contains(pid)) { try { tr.GetObject(pid, OpenMode.ForWrite, false, true).Erase(); nk++; } catch { } }
+                    tr.Commit();
+                    if (nk > 0) ed.WriteMessage($"\n[진입도로] 이번에 만든 종단 {nk}개를 지웠습니다(노선은 그대로).");
+                }
+                catch { }
+            }
         }
         finally
         {
@@ -210,15 +247,25 @@ public class RoadCommand
             ed.WriteMessage($"\n[진입도로] 종단도 1:{scale:0} · {n}장 — {scNote}");
             while (true)
             {
+                // ★★[v111.3 · JACK 1030 «노선을 선택하거나 그리고 나서 무조건 종단은 생성 — 종단 없이 설계는 안 되니 실수로 Esc로 꺼도 수행되게»]
+                //   노선을 만들 때(again = false)는 Esc · Enter여도 빈 자리(RoadSheets.AutoSpot)에 그린다 · [종단도 다시]의 Esc는 지금처럼 그만(옛 종단도 그대로)
                 var ppo = new PromptPointOptions(hasLast
                     ? "\n[진입도로] 종단도(도곽 · 밴드)를 놓을 자리 <Enter = 지난 자리 · Esc = 그만>: "
-                    : "\n[진입도로] 종단도(도곽 · 밴드)를 놓을 자리(Esc = 안 그림 · 나중에 [종단도 다시]): ") { AllowNone = hasLast };
+                    : "\n[진입도로] 종단도(도곽 · 밴드)를 놓을 자리 <Enter · Esc = 빈 자리에 저절로>: ") { AllowNone = true };
                 var pr = ed.GetPoint(ppo);
                 Point3d at;
+                bool auto = false;
                 if (pr.Status == PromptStatus.None && hasLast) at = new Point3d(last[0], last[1], 0);
                 else if (pr.Status == PromptStatus.OK) at = pr.Value.TransformBy(ed.CurrentUserCoordinateSystem);
-                else { ed.WriteMessage("\n[진입도로] 종단도는 안 그렸습니다 — 나중에 도킹창 ■ 결과 [종단도 다시]."); return; }
-                string hit = RoadSheets.Overlap(db, s.AlignId, at, scale, n);
+                else if (!again)
+                {
+                    at = RoadSheets.AutoSpot(db, s.AlignId, scale, n);
+                    auto = true;   // 빈 자리를 찾아 둔 것 — 겹침으로 다시 묻지 않음(Esc를 또 눌러도 되풀이 안 됨)
+                    ed.WriteMessage($"\n[진입도로] 자리를 안 찍어 빈 자리({at.X:F0}, {at.Y:F0})에 종단도를 그립니다 — 옮기려면 도킹창 ■ 결과 [종단도 다시].");
+                }
+                else if (pr.Status == PromptStatus.None) { hasLast = false; continue; }   // [종단도 다시] — 지난 자리가 없으면 Enter는 다시 묻기
+                else { ed.WriteMessage("\n[진입도로] 종단도는 그대로 둡니다(그만)."); return; }
+                string hit = auto ? "" : RoadSheets.Overlap(db, s.AlignId, at, scale, n);
                 if (hit.Length > 0)
                 {
                     ed.WriteMessage($"\n[진입도로] ⚠{hit}와(과) 가로 범위가 겹칩니다(위 · 아래 포함 — 장식 · 밴드 글씨 정리가 가로 범위로 주인을 가림) — 옆으로 비켜 찍으세요.");
@@ -317,30 +364,35 @@ public class RoadCommand
 
     const string PickLayer = "DH-도로계단선_선택";
 
-    static void Convert(bool wallMode)
+    static (bool Changed, RoadSession? S) ConvertCore(bool wallMode)
     {
         string label = wallMode ? "옹벽 변환" : "사면 변환", noun = wallMode ? "계단선" : "옹벽선";
         var doc = AcadApp.DocumentManager.MdiActiveDocument;
         var ed = doc.Editor;
         RoadSession? s = null;
+        bool changed = false;   // 기록을 바꿨나(끝에서 도로 면 다시 — Convert)
         var made = new Dictionary<ObjectId, int>();
         try
         {
-            s = Need(ed); if (s == null) return;
-            if (s.Last == null || s.Last.Error.Length > 0) { ed.WriteMessage($"\n[{label}] 계산된 도로가 없습니다 — [다시 계산] 뒤 하세요."); return; }
+            s = Need(ed); if (s == null) return (changed, s);
+            s.RecomputeIfDirty();   // ★[전체 검토 M2] PVI를 끌거나 실행 취소한 직후라도 지금 모양으로 고르게
+            if (s.Last == null || s.Last.Error.Length > 0) { ed.WriteMessage($"\n[{label}] 계산된 도로가 없습니다 — [다시 계산] 뒤 하세요."); return (changed, s); }
+            // ★[전체 검토 M1] 고르는 동안 창 값으로 다시 계산돼도 이 명령은 처음 모양(측점 0 · 결과)으로 — 선 · 측점 · 기록 판정이 섞이지 않게
+            double s0Snap = s.S0; var lastSnap = s.Last;
             // ★[설치 전 검토 L8] 배치 공간(모형 뷰포트 밖)에서는 잠깐 그린 선을 못 고른다
             try
             {
                 if (System.Convert.ToInt32(AcadApp.GetSystemVariable("TILEMODE")) == 0 && System.Convert.ToInt32(AcadApp.GetSystemVariable("CVPORT")) == 1)
-                { ed.WriteMessage($"\n[{label}] 모형 공간(또는 배치의 모형 뷰포트 안)에서 하세요."); return; }
+                { ed.WriteMessage($"\n[{label}] 모형 공간(또는 배치의 모형 뷰포트 안)에서 하세요."); return (changed, s); }
             }
             catch { }
             // 고를 선 — 옹벽 변환 = 사면선 · 소단선 · 사면 변환 = 옹벽선(도로 가장자리 0단 옹벽선 포함 — 계단선이 표본에서 냄). 끝 마구리 둘레(쪽 없음)는 측점 구간으로 못 바꿔 뺀다
-            var cands = s.Lines.Where(l => l.Side != 0 && (l.Role == RoadGrade.LineRole.Wall) != wallMode).ToList();
+            //   ★[v111.3] 끝면 선(Cross — 노선을 가로지르는 수직면 옹벽선 · 측점 폭 0)도 뺀다
+            var cands = s.Lines.Where(l => l.Side != 0 && !l.Cross && (l.Role == RoadGrade.LineRole.Wall) != wallMode).ToList();
             if (cands.Count == 0)
             {
                 ed.WriteMessage(wallMode ? $"\n[{label}] 사면선 · 소단선이 없습니다 — 사면이 생기는 도로에서 하세요." : $"\n[{label}] 옹벽이 없습니다 — 먼저 [옹벽 변환]을 하세요.");
-                return;
+                return (changed, s);
             }
             var db = doc.Database;
             using (var tr = db.TransactionManager.StartTransaction())
@@ -385,7 +437,7 @@ public class RoadCommand
                 }
                 tr.Commit();
             }
-            if (made.Count == 0) { ed.WriteMessage($"\n[{label}] 고를 선을 그리지 못했습니다."); return; }
+            if (made.Count == 0) { ed.WriteMessage($"\n[{label}] 고를 선을 그리지 못했습니다."); return (changed, s); }
             s.SetPickMode(true);
             ed.WriteMessage($"\n[{label}] ① {noun}(시안)을 클릭 → ② 전체구간/구간지정 → ③ " + (wallMode ? "소단 길이 정하고 Enter." : "Enter.") + " (전체해제=C · Esc=취소)");
             ObjectId selId = ObjectId.Null;
@@ -408,7 +460,7 @@ public class RoadCommand
                 var peo = new PromptEntityOptions($"\n{noun}을 클릭하세요 (Esc=취소)") { AllowNone = false };
                 peo.Keywords.Add("C", "C", "전체해제(C)");
                 var per = ed.GetEntity(peo);
-                if (per.Status == PromptStatus.Cancel) return;
+                if (per.Status == PromptStatus.Cancel) return (changed, s);
                 // 키워드는 Keyword로도 OK로도 온다 — 둘 다 받음(부지와 같음)
                 if (per.Status == PromptStatus.Keyword || (per.Status == PromptStatus.OK && per.ObjectId.IsNull))
                 {
@@ -422,9 +474,9 @@ public class RoadCommand
                     var ynr = ed.GetKeywords(yn);
                     if (!((ynr.Status == PromptStatus.OK || ynr.Status == PromptStatus.Keyword) && (ynr.StringResult ?? "").Trim().ToUpperInvariant() == "Y")) { ed.WriteMessage("\n → 전체 해제 안 함."); continue; }
                     dc.TierWalls.Clear();
-                    s.SaveDesign(); s.Recompute();
+                    s.SaveDesign(); changed = true; s.Recompute();   // ★[검토 L6] 기록이 저장되면 바뀐 것(다시 계산이 실패해도 도로 면은 다시)
                     ed.WriteMessage($"\n → 전체 해제 — 옹벽 {n0}구간을 지우고 사면으로 다시 계산했습니다.");
-                    return;
+                    return (changed, s);
                 }
                 if (per.Status != PromptStatus.OK) continue;
                 int li;
@@ -441,8 +493,12 @@ public class RoadCommand
                 if (selId != hitId) { Paint(selId, false); selId = hitId; Paint(selId, true); }
                 var line = cands[li];
                 var (w0, w1) = RoadGrade.RangeOnLine(line, null, null);
+                // ★[v111.3 · 계획 검토 M3] 이웃 사면선이 끝면 띠로 옹벽 구간 안까지 이어 들어간 몫은 뺌(그 선을 낸 단면이 주인인 자리만 — 안 빼면 변환할 때마다 옆 옹벽 구간이 띠만큼 먹힘)
+                (w0, w1) = RoadGrade.OwnerRange(lastSnap, line, w0, w1);
                 double span = w1 - w0;
                 string what = $"{(line.Side < 0 ? "좌" : "우")} · {(line.Cut ? "절토" : "성토")} {line.K + 1}단 {(line.Role == RoadGrade.LineRole.Crest ? "사면선" : line.Role == RoadGrade.LineRole.Toe ? "소단선" : "옹벽선")}";
+                // ★[v111.3 · 설치 전 검토 L3] 고른 선이 모두 옹벽 구간 끝면 띠 안(그 선의 주인 구간이 없음)이면 «NaN m» 대신 까닭
+                if (!double.IsFinite(span)) { ed.WriteMessage("\n → 이 선은 옹벽 구간 끝면 띠 안이라 고를 수 없습니다 — 띠 밖(사면 구간)의 선을 클릭하세요."); Paint(selId, false); selId = ObjectId.Null; continue; }
                 if (!double.IsFinite(span) || span < 0.5) { ed.WriteMessage($"\n → 이 선은 {span:0.##}m로 너무 짧습니다 — 다른 선을 클릭하세요."); Paint(selId, false); selId = ObjectId.Null; continue; }
                 // ② 전체구간 / 구간지정 — 부지와 같은 글
                 var scope = new PromptKeywordOptions($"\n무엇을 바꿀까요? 〈{what} · {span:0.#}m〉 [전체구간(A)/구간지정(P)] <전체구간(A)>");
@@ -462,13 +518,13 @@ public class RoadCommand
                     if (r1.Status != PromptStatus.OK) { ed.WriteMessage("\n → 구간지정 취소."); Paint(selId, false); selId = ObjectId.Null; continue; }
                     var r2 = PickOnLine(ed, "\n끝점 선택: ", ruler, ta, out double tb);
                     if (r2.Status != PromptStatus.OK) { ed.WriteMessage("\n → 구간지정 취소."); Paint(selId, false); selId = ObjectId.Null; continue; }
-                    double sa = ruler.At(ta).S, sb = ruler.At(tb).S;
-                    c0 = Math.Min(sa, sb); c1 = Math.Max(sa, sb);
+                    (c0, c1) = ruler.SRange(ta, tb);   // ★[전체 검토 M4] 두 찍은 점만이 아니라 그 사이 선의 측점 모두(빨간 띠와 같은 구간)
+                    if (double.IsFinite(c0) && double.IsFinite(c1)) (c0, c1) = RoadGrade.OwnerRange(lastSnap, line, c0, c1);   // ★[v111.3 · M3]
                     if (!double.IsFinite(c0) || !double.IsFinite(c1) || c1 - c0 < 0.5) { ed.WriteMessage("\n → 구간이 0.5 m보다 짧습니다 — 선을 다시 클릭하세요."); Paint(selId, false); selId = ObjectId.Null; continue; }
                     ed.WriteMessage($"\n → 구간지정 {c1 - c0:0.#}m (전체 {span:0.#}m 중)");
                 }
                 else ed.WriteMessage($"\n → 전체구간({span:0.#}m)을 바꿉니다.");
-                double a0 = c0 + s.S0, a1 = c1 + s.S0;                         // Core 측점 → 노선 측점
+                double a0 = c0 + s0Snap, a1 = c1 + s0Snap;                     // Core 측점 → 노선 측점(고를 때 모양 기준)
                 var d = s.Fresh();
                 if (wallMode)
                 {
@@ -478,18 +534,18 @@ public class RoadCommand
                     var pdr = ed.GetDouble(pdo);
                     if (pdr.Status != PromptStatus.OK) { Paint(selId, false); selId = ObjectId.Null; continue; }
                     d.TierWalls.Add(new[] { a0, a1, (double)line.Side, line.K, pdr.Value });
-                    s.SaveDesign(); s.Recompute();
+                    s.SaveDesign(); changed = true; s.Recompute();   // ★[검토 L6] 기록이 저장되면 바뀐 것(다시 계산이 실패해도 도로 면은 다시)
                     ed.WriteMessage($"\n[{label}] {what} — {a0:F1} ~ {a1:F1} m({a1 - a0:F1} m) · {line.K + 1}단부터 옹벽 · 소단 {pdr.Value:0.##} m");
                 }
                 else
                 {
                     // ★[설치 전 검토 M2] 전체구간 = 고른 옹벽선을 낸 기록만 통째로(옆 단 · 옆 구간 기록은 그대로) · 구간지정 = 그 구간의 옹벽을 모두 잘라 냄
-                    int n = RoadGrade.CutWallRecords(d.TierWalls, line.Side, a0, a1, whole: !part, match: part ? null : RoadGrade.WallLineMatch(s.Last, line));
+                    int n = RoadGrade.CutWallRecords(d.TierWalls, line.Side, a0, a1, whole: !part, match: part ? null : RoadGrade.WallLineMatch(lastSnap, line));
                     if (n == 0) { ed.WriteMessage("\n → 이 자리에는 옹벽 기록이 없습니다 — 다른 옹벽선을 클릭하세요."); Paint(selId, false); selId = ObjectId.Null; continue; }
-                    s.SaveDesign(); s.Recompute();
+                    s.SaveDesign(); changed = true; s.Recompute();   // ★[검토 L6] 기록이 저장되면 바뀐 것(다시 계산이 실패해도 도로 면은 다시)
                     ed.WriteMessage($"\n[{label}] {(line.Side < 0 ? "좌" : "우")} {a0:F1} ~ {a1:F1} m — 옹벽 {n}구간을 사면으로" + (part ? "(고른 구간만)" : ""));
                 }
-                return;
+                return (changed, s);
             }
         }
         catch (System.Exception ex)
@@ -511,6 +567,29 @@ public class RoadCommand
                 catch (System.Exception exE) { try { DiagLog.Append($"\n[{label}] 고를 선 지우기 실패 — " + exE.Message); } catch { } }
             try { s?.SetPickMode(false); } catch { }
         }
+        return (changed, s);
+    }
+
+    /// <summary>★★[v111.2 · JACK 1030 «옹벽변환하면 바로 도로면 만들기도 갱신되어야 해»] [옹벽 변환] · [사면 변환] · 전체 해제 — 기록을 바꿨고 도로 면이 이미 있으면 그 자리에서 다시 만든다
+    /// (도로 선 · 노리선 · 부지 노리선 합치기도 같이 — <see cref="RoadSession.MakeSurface"/>). 도로 면을 아직 안 만든 도로는 그대로(미리보기만).</summary>
+    static void Convert(bool wallMode)
+    {
+        var (changed, s) = ConvertCore(wallMode);
+        if (!changed || s == null || !s.HasSurface()) return;
+        var ed = AcadApp.DocumentManager.MdiActiveDocument.Editor;
+        try
+        {
+            string msg;
+            using (BusyPopup.Scope("도로 면 다시 만드는 중입니다.")) msg = s.MakeSurface();
+            ed.WriteMessage("\n[진입도로] 도로 면 다시 — " + msg);
+            try { ed.Regen(); } catch { }
+        }
+        catch (System.Exception ex)
+        {
+            ed.WriteMessage("\n[진입도로] ⚠도로 면을 다시 못 만듦(기록은 바뀜 — [도로 면 만들기]로 다시) — " + ex.Message);
+            try { DiagLog.Append("\n[진입도로] 변환 뒤 도로 면 다시 실패 — " + ex); } catch { }
+        }
+        try { s.Recompute(); } catch { }
     }
 
     /// <summary>★[v110.3.1] 계단선 위에서 한 점 — 부지 구간지정(ZoneEditCommon.PickOnRing)과 같은 꼴: 시작점은 선을 가로지르는 짧고 굵은 빨간 표시,
@@ -604,6 +683,136 @@ public class RoadCommand
         }
         catch (System.Exception ex) { ed.WriteMessage("\n[진입도로] 종단 초안 실패 — " + ex.Message); }
         try { s.Recompute(); } catch { }
+    }
+
+    /// <summary>★★[v111.2 · JACK 1030 «팝업창에 PVI 수정 기능 — 넣기 · 삭제» · 인터뷰: 도킹창 단추 · 넣는 높이 = 지금 계획선 위] 종단도를 찍은 측점에 PVI 넣기(모양 그대로 — 넣은 뒤 잡아끌어 높이) · Enter까지 여러 번.</summary>
+    [CommandMethod("DHROADPVIADD")]
+    public void PviAdd() => PviEdit(true);
+
+    /// <summary>★★[v111.2] 종단도에서 찍은 자리 가까운 PVI 지우기(처음 · 끝은 Civil이 못 지움) · Enter까지 여러 번.</summary>
+    [CommandMethod("DHROADPVIDEL")]
+    public void PviDel() => PviEdit(false);
+
+    static void PviEdit(bool add)
+    {
+        var doc = AcadApp.DocumentManager.MdiActiveDocument; var ed = doc.Editor; var db = doc.Database;
+        var s = Need(ed); if (s == null) return;
+        string tag = add ? "[PVI 넣기]" : "[PVI 지우기]";
+        try
+        {
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                int nv = ((CivilDb.Alignment)tr.GetObject(s.AlignId, OpenMode.ForRead)).GetProfileViewIds().Count;
+                tr.Commit();
+                if (nv == 0) { ed.WriteMessage($"\n{tag} 이 도로의 종단도가 없습니다 — [종단도 다시]부터"); return; }
+            }
+            int done = 0;
+            bool was = s.Suppress; s.Suppress = true;   // 우리가 쓰는 동안 바뀜 표시 막음 — 끝에서 한 번 다시 계산
+            try
+            {
+                while (true)
+                {
+                    var pr = ed.GetPoint(new PromptPointOptions(add
+                        ? "\n[PVI 넣기] 넣을 자리 — 종단도 안을 찍으세요(지금 계획선 위에 넣음 · Enter 끝): "
+                        : "\n[PVI 지우기] 지울 PVI 근처를 찍으세요(종단도 안 · Enter 끝): ") { AllowNone = true });
+                    if (pr.Status != PromptStatus.OK) break;
+                    var p = pr.Value.TransformBy(ed.CurrentUserCoordinateSystem);
+                    string msg;
+                    // ★[설치 전 검토 M1] 한 번 찍기가 실패해도 다음 찍기 · 끝의 다시 계산은 그대로(앞에서 넣은 PVI가 미리보기에 안 보이는 일 없게)
+                    try
+                    {
+                        using var tr = db.TransactionManager.StartTransaction();
+                        msg = add ? PviAddAt(tr, s, p) : PviDelAt(tr, s, p);
+                        tr.Commit();
+                    }
+                    catch (System.Exception exP) { msg = "⚠못 함 — " + exP.Message; }
+                    ed.WriteMessage($"\n{tag} {msg}");
+                    if (!msg.StartsWith("⚠")) done++;
+                }
+            }
+            finally
+            {
+                s.Suppress = was;
+                if (done > 0) { try { s.Recompute(); } catch { } }
+            }
+            if (done > 0) ed.WriteMessage($"\n{tag} {done}개 — 종단도 밴드 · 표고는 [종단도 다시]로 맞춥니다 · 실행 취소(U)는 이번에 한 것을 한꺼번에 되돌림");
+        }
+        catch (System.Exception ex)
+        {
+            ed.WriteMessage($"\n{tag} 실패 — " + ex.Message);
+            try { DiagLog.Append($"\n{tag} 실패 — " + ex); } catch { }
+        }
+    }
+
+    /// <summary>찍은 점이 든 이 도로의 종단뷰 → (뷰, 측점, 표고) · 없으면 null(종단도가 여러 장이면 그 점이 든 장).</summary>
+    static (CivilDb.ProfileView View, double St, double El)? PickInView(Transaction tr, ObjectId aid, Point3d p)
+    {
+        var al = (CivilDb.Alignment)tr.GetObject(aid, OpenMode.ForRead);
+        foreach (ObjectId vid in al.GetProfileViewIds())
+        {
+            try
+            {
+                if (tr.GetObject(vid, OpenMode.ForRead) is not CivilDb.ProfileView pv) continue;
+                double st = 0, el = 0;
+                if (!pv.FindStationAndElevationAtXY(p.X, p.Y, ref st, ref el)) continue;
+                if (st < pv.StationStart - 1e-6 || st > pv.StationEnd + 1e-6 || el < pv.ElevationMin - 1e-6 || el > pv.ElevationMax + 1e-6) continue;
+                return (pv, st, el);
+            }
+            catch { }
+        }
+        return null;
+    }
+
+    const double PviGap = 0.5;   // 이웃 PVI와 이보다 가까우면 안 넣음(m)
+
+    static string PviAddAt(Transaction tr, RoadSession s, Point3d p)
+    {
+        var hit = PickInView(tr, s.AlignId, p);
+        if (hit == null) return "⚠종단도 밖입니다 — 이 도로 종단도 안을 찍으세요";
+        var prof = (CivilDb.Profile)tr.GetObject(s.PlanId, OpenMode.ForRead);   // ★[검토 L4] 거절이면 안 씀(쓰기는 넣기 바로 앞)
+        double st = Math.Round(hit.Value.St, 2);
+        if (prof.PVIs.Count < 2) return "⚠계획 종단이 비었습니다";
+        double a = prof.PVIs[0].RawStation, b = prof.PVIs[prof.PVIs.Count - 1].RawStation;
+        if (st <= a + PviGap || st >= b - PviGap) return $"⚠측점 {st:F2} m — 처음 · 끝 PVI 사이({a:F1} ~ {b:F1} m)만 넣습니다";
+        for (int i = 0; i < prof.PVIs.Count; i++)
+            if (Math.Abs(prof.PVIs[i].RawStation - st) < PviGap) return $"⚠측점 {st:F2} m 곁 {PviGap} m 안에 PVI가 있습니다(측점 {prof.PVIs[i].RawStation:F2} m)";
+        double z = prof.ElevationAt(st);
+        prof.UpgradeOpen();
+        prof.PVIs.AddPVI(st, z);
+        return $"측점 {st:F2} m · 표고 {z:F2} m 넣음(PVI {prof.PVIs.Count}개) — 잡아끌어 높이를 바꾸세요";
+    }
+
+    static string PviDelAt(Transaction tr, RoadSession s, Point3d p)
+    {
+        var hit = PickInView(tr, s.AlignId, p);
+        if (hit == null) return "⚠종단도 밖입니다 — 이 도로 종단도 안을 찍으세요";
+        var pv = hit.Value.View;
+        var prof = (CivilDb.Profile)tr.GetObject(s.PlanId, OpenMode.ForRead);
+        int best = -1; double bd = double.MaxValue;
+        for (int i = 0; i < prof.PVIs.Count; i++)
+        {
+            var q = prof.PVIs[i];
+            if (q.RawStation < pv.StationStart - 1e-6 || q.RawStation > pv.StationEnd + 1e-6) continue;
+            double x = 0, y = 0;
+            try { if (!pv.FindXYAtStationAndElevation(q.RawStation, q.Elevation, ref x, ref y)) continue; } catch { continue; }
+            double d = Math.Sqrt((x - p.X) * (x - p.X) + (y - p.Y) * (y - p.Y));
+            if (d < bd) { bd = d; best = i; }
+        }
+        // 찍기 허용 = 화면 15 px(지금 확대 기준)
+        double tol = 1.0;
+        try
+        {
+            double vs = System.Convert.ToDouble(AcadApp.GetSystemVariable("VIEWSIZE"));
+            var sc = (Point2d)AcadApp.GetSystemVariable("SCREENSIZE");
+            if (sc.Y > 0) tol = vs / sc.Y * 15;
+        }
+        catch { }
+        if (best < 0 || bd > tol) return "⚠찍은 자리 가까이에 PVI가 없습니다 — PVI(꺾인 점) 바로 위를 찍으세요";
+        if (best == 0 || best == prof.PVIs.Count - 1) return "⚠처음 · 끝 PVI는 지울 수 없습니다(노선 시점 · 종점 높이)";
+        double st = prof.PVIs[best].RawStation, z = prof.PVIs[best].Elevation;
+        prof.UpgradeOpen();
+        prof.PVIs.RemoveAt(best);
+        return $"측점 {st:F2} m · 표고 {z:F2} m 지움(PVI {prof.PVIs.Count}개)";
     }
 
     /// <summary>★[v110.1 · JACK 1029] [도로 면 만들기] — 도로 + 사면을 따로 지표면(«진입도로_DH»)으로. 정지면_DH는 안 건드림 · 다시 누르면 새로.</summary>
