@@ -648,6 +648,9 @@ internal sealed class GradingPanel : UserControl
     /// <para>여덟 칸과 세 스위치를 저장된 값과 견준다. 글자로 견주므로
     /// <c>1.5</c>와 <c>1.50</c>이 다르게 잡힐 수 있는데, <b>안전한 쪽</b>이다
     /// (안 지웠는데 지웠다고 말하는 것이, 지워 놓고 말 안 하는 것보다 낫다).</para></summary>
+    /// <summary>★[v111.7.1] 치다 만 값이 있나 — 저장 안 한 칸 · 적기 기다리는 터파기 값(<see cref="GradingPalette.Editing"/>).</summary>
+    internal bool MidEdit() => _exTimer.IsEnabled || Dirty();
+
     private bool Dirty()
     {
         try

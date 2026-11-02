@@ -8,7 +8,7 @@ namespace DH.Grading.Civil;
 /// 읽기 · 높이 · 바닥은 Core <see cref="Web3DBuildings"/>, 그리기는 뷰어(<c>web3d/src/extras.js</c>). 도면 · InfraWorks 파일에는 안 넣는다(3D 장면만).
 /// <para>지적(<see cref="VWorldCadastral"/>)과 같은 법: 상자 ≤ 1.9 km² · 쪽 1,000 · 호출 하나 10초(한 번 다시) · 전체 60초 · 4개 동시 · 좌표계 = 도면 EPSG 그대로 · 키 오류 따로.
 /// <b>하나라도 실패면 <see cref="Fail"/></b> — 부르는 쪽(<see cref="Web3DBuilder"/>)은 건물 없이 3D를 짓는다.</para>
-/// <para>건물이 한도보다 많으면 받기 전에 범위를 줄여 다시 센다 — 둘레 여유부터(200 → 50 → 0 m) · 그다음 현장 안쪽으로(넓이 ∝ 건물 수 · 세 번까지).
+/// <para>건물이 한도보다 많으면 받기 전에 범위를 줄여 다시 센다 — ★[v111.7.1 · JACK 1102] 지형 전체 → 바뀐 자리 + 500 → + 200 → + 50 → + 0 m(<see cref="Web3DBuildings.Ranges"/>) · 그다음 가운데로(넓이 ∝ 건물 수 · 세 번까지).
 /// 쪽 일부만 받으면 빠진 건물이 고장처럼 보인다.</para>
 /// <para>★[검토 M · 보안] 페이지는 NAS · 웹으로 나간다 — 실패는 <see cref="Fail.Page"/>(정해 둔 짧은 글)만 페이지로, 응답 조각 · 예외 글은 <see cref="System.Exception.Message"/>(키를 지운 것)로 진단 로그에만.</para>
 /// <para>★기다림은 모두 ConfigureAwait(false) — 명령 스레드가 막고 기다려도 묶이지 않게(지적과 같은 1028 실측).</para></summary>
@@ -46,26 +46,27 @@ internal static class VWorldBuildings
     internal sealed class Got
     {
         public List<Web3DBuildings.Raw> Raws = new();
-        /// <summary>실제로 받은 범위 · 그 둘레 여유(m · 현장 안쪽까지 줄였으면 0).</summary>
+        /// <summary>실제로 받은 범위 · 그 이름(«지형 전체» · «바뀐 자리 + 500 m» … · 가운데까지 줄였으면 «… 가운데»).</summary>
         public VWorldParcels.Box Box;
-        public double Margin;
+        public string Label = "";
         /// <summary>처음 범위의 건물 수(VWorld가 알린 수 · 상자 경계 건물은 두 번 셈).</summary>
         public long Total0;
         public int Boxes, Pages;
         /// <summary>줄였나 · 현장 안쪽까지 줄였나.</summary>
         public bool Shrunk, IntoSite;
         public long Ms;
-        public string Diag => $"상자 {Boxes} · 쪽 {Pages}" + (Shrunk ? $" · ⚠ 많아서 범위 줄임(처음 {Total0:N0}동 → {Box.W:N0}×{Box.H:N0} m · " + (IntoSite ? "현장 안쪽)" : $"둘레 {Margin:N0} m)") : "") + $" · {Ms:N0} ms";
+        public string Diag => $"범위 {Label} {Box.W:N0}×{Box.H:N0} m · 상자 {Boxes} · 쪽 {Pages}" + (Shrunk ? $" · ⚠ 많아서 범위 줄임(처음 {Total0:N0}동)" : "") + $" · {Ms:N0} ms";
     }
 
-    /// <summary><paramref name="site"/>(도면 좌표 · <paramref name="epsg"/>) + 둘레 <paramref name="margin"/> m에 걸친 건물. <paramref name="maxBuildings"/>보다 많으면 범위를 줄인다.</summary>
-    internal static Got Fetch(VWorldParcels.Box site, double margin, int epsg, string key, int maxBuildings, System.Action<string>? progress)
+    /// <summary>★[v111.7.1] <paramref name="ranges"/> 첫 범위(도면 좌표 · <paramref name="epsg"/> — 지형 전체)에 걸친 건물. <paramref name="maxBuildings"/>보다 많으면 다음 범위로 ·
+    /// 다 써도 많으면 마지막 범위를 가운데로 줄인다(<paramref name="core"/> = 범위가 없을 때만 · <paramref name="coreLabel"/> = 줄인 범위 이름 앞머리).</summary>
+    internal static Got Fetch(List<(VWorldParcels.Box Box, string Label)> ranges, VWorldParcels.Box core, string coreLabel, int epsg, string key, int maxBuildings, System.Action<string>? progress)
     {
-        try { return System.Threading.Tasks.Task.Run(() => FetchAsync(site, margin, epsg, key, maxBuildings, progress)).GetAwaiter().GetResult(); }
+        try { return System.Threading.Tasks.Task.Run(() => FetchAsync(ranges, core, coreLabel, epsg, key, maxBuildings, progress)).GetAwaiter().GetResult(); }
         catch (System.AggregateException ae) when (ae.InnerException != null) { throw ae.InnerException; }
     }
 
-    static async System.Threading.Tasks.Task<Got> FetchAsync(VWorldParcels.Box site, double margin, int epsg, string key, int maxBuildings, System.Action<string>? progress)
+    static async System.Threading.Tasks.Task<Got> FetchAsync(List<(VWorldParcels.Box Box, string Label)> ranges, VWorldParcels.Box core, string coreLabel, int epsg, string key, int maxBuildings, System.Action<string>? progress)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var got = new Got();
@@ -115,11 +116,11 @@ internal static class VWorldBuildings
             throw F(PageBad, "건물 자료 오류 — " + (dp.Error.Length > 0 ? dp.Error : dp.Status.Length > 0 ? dp.Status : "꼴 아님"));
         }
 
-        // ① 상자마다 첫 쪽(건물 수를 먼저 안다) → 한도보다 많으면 줄여 다시: 둘레 여유 200 → 50 → 0 m → 현장 안쪽(넓이 ∝ 수 · 0.9배 여유 · 세 번까지)
-        var margins = Web3DBuildings.Margins(margin);
+        // ① 상자마다 첫 쪽(건물 수를 먼저 안다) → 한도보다 많으면 줄여 다시: ★[v111.7.1] 지형 전체 → 바뀐 자리 + 500 → + 200 → + 50 → + 0 m → 가운데(넓이 ∝ 수 · 0.9배 여유 · 세 번까지)
+        if (ranges == null || ranges.Count == 0) ranges = new() { (core, coreLabel) };
         int mi = 0, inner = 0;
-        var core = site;
-        var cur = Web3DBuildings.Expand(core, margins[0]);
+        var cur = ranges[0].Box;
+        string label = ranges[0].Label;
         List<VWorldParcels.Box> boxes;
         Web3DBuildings.DataPage[] firsts;
         for (int round = 0; ; round++)
@@ -130,12 +131,16 @@ internal static class VWorldBuildings
             long sum = firsts.Sum(p => (long)p.Total);
             if (round == 0) got.Total0 = sum;
             if (sum <= maxBuildings) break;
-            if (mi + 1 < margins.Count) cur = Web3DBuildings.Expand(core, margins[++mi]);
-            else if (inner < MaxShrink) { core = Web3DBuildings.ShrinkAround(core, sum, maxBuildings); cur = core; inner++; got.IntoSite = true; }
+            if (mi + 1 < ranges.Count) { (cur, label) = ranges[++mi]; }
+            else if (inner < MaxShrink)
+            {
+                // ★[v111.7.1 · 검토 낮음] 가운데로 — 방금 센 그 범위(cur)를 그 범위의 건물 수로 줄임(마지막 범위 = 바뀐 자리 + 0 m · 큰 범위의 수를 작은 범위에 쓰지 않음 · 늘 줄어듦)
+                cur = Web3DBuildings.ShrinkAround(cur, sum, maxBuildings); inner++; got.IntoSite = true; label = coreLabel + " 가운데";
+            }
             else throw F(PageMany, $"범위를 줄여도 {sum:N0}동 · 한도 {maxBuildings:N0}");
             got.Shrunk = true;
         }
-        got.Box = cur; got.Margin = got.IntoSite ? 0 : margins[mi]; got.Boxes = boxes.Count;
+        got.Box = cur; got.Label = label; got.Boxes = boxes.Count;
         var rest = new List<(int Box, System.Threading.Tasks.Task<Web3DBuildings.DataPage> T)>();
         for (int i = 0; i < boxes.Count; i++)
             for (int pg = 2; pg <= firsts[i].Pages; pg++) rest.Add((i, Page(boxes[i], pg)));

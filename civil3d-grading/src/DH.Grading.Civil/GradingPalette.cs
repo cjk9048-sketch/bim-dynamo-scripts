@@ -161,6 +161,13 @@ public static class GradingPalette
     /// 이번엔 뿌리가 레지스트리가 아니라 <b>낡은 화면</b>일 뿐이다.</para>
     ///
     /// <para>★8단계에서 팝업을 없애면 이 문제 자체가 사라진다 — 그때까지의 다리다.</para></summary>
+    /// <summary>★[v111.7.1 · 진입도로 검토 낮음] 정지 창이 떠 있고 치다 만 값(저장 안 한 칸 · 적기 기다리는 터파기 값)이 있다 —
+    /// 진입도로 저절로 다시 만들기가 설정을 다른 도면으로 맞추지 않고 기다린다(그 값 · 옹벽 고르기를 안 지우게).</summary>
+    internal static bool Editing
+    {
+        get { try { return _ps != null && _ps.Visible && _panel != null && _panel.MidEdit(); } catch { return false; } }
+    }
+
     internal static void Refresh()
     {
         try { if (_ps != null && _ps.Visible) _panel?.SyncTo(AcadApp.DocumentManager.MdiActiveDocument); }
