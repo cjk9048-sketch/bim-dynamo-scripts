@@ -79,6 +79,14 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "mesh")
     return fails == 0 ? 0 : 1;
 }
 
+// ★[v111.5] BLOCKTEST_ONLY=roadxsec — 진입도로 횡단(합친 계획면 · 복사본 이름 · 측점 이름 · 구간 · 바뀜 — S183)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "roadxsec")
+{
+    RoadXsecCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
 // ★[v110.4] BLOCKTEST_ONLY=sheet — 진입도로 종단도(축척 · 폭 · 도장 · 지우기 · 묶음 주인 — S180)만
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "sheet")
 {
@@ -91,6 +99,14 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "sheet")
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "parcel")
 {
     ParcelCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
+// ★[v111.7 · JACK 1102] BLOCKTEST_ONLY=bldg — [3D 보기] 건물(VWorld 건물정보 읽기 · 높이 · 바닥 · 닿음 · 장면 배열 — S184)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "bldg")
+{
+    BuildingCheck.Run(Check);
     Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
     return fails == 0 ? 0 : 1;
 }
@@ -161,8 +177,10 @@ DrainageCheck.Run(Check);   // ★[v108] S176 — 정지면 빗물 검토(웅덩
 SecretScanCheck.Run(Check);   // ★[v109] S177 — 비밀값 검사(공개 저장소)
 RoadCheck.Run(Check);   // ★[v110] S178 — 도로 정지(원뿔 감싸기) · 종단 초안
 ParcelCheck.Run(Check);   // ★[v109.1] S179 — VWorld 지적 · 소유(읽기 · 합치기 · 자르기)
+BuildingCheck.Run(Check);   // ★[v111.7] S184 — [3D 보기] 건물(VWorld 건물정보 읽기 · 높이 · 바닥 · 닿음 · 장면 배열)
 RoadBandCheck.Run(Check);    // ★[v111.3] S182 — 옹벽 변환 끝면 띠(끝면도 단높이마다 소단)
 RoadMeshCheck.Run(Check);    // ★[v111] S181 — 선 기반 진입도로 면(단면 광선 · 띠 세모 · 계단선 · 기록 경계)
+RoadXsecCheck.Run(Check);    // ★[v111.5] S183 — 진입도로 횡단(합친 계획면 · 복사본 이름 · 측점 이름 · 구간 · 바뀜)
 RoadSheetCheck.Run(Check);   // ★[v110.4] S180 — 진입도로 종단도(축척 · 검토선 폭 · 도장 · 지우기 · 밴드 묶음 주인)
 
 const double W = 0.46, H = 0.2, STEP = 5.0, HW = W / 2;

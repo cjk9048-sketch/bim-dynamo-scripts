@@ -894,12 +894,23 @@ public static class SheetCommand
                     //   횡단 데이터 밴드에 걸면 매번 예외가 나고 로그만 더럽힌다 — 아예 묻지 않는다.
                     bool sectItem = false;
                     try { sectItem = items[i].BandType == Autodesk.Civil.BandType.SectionalData; } catch { }
-                    if (!sectItem) { vTry++; vOk += EnableGeometryPoints(items[i], i, log); }
+                    // ★[v111.4 · 계획 검토 H5] 진입도로 구배 칸(종단 기하) — 굴곡부 · 값 글자 자리 손질을 안 건다(측점 칸이 아님 · 템플릿 라벨 자리 그대로)
+                    bool vgItem = false;
+                    try { vgItem = items[i].BandType == Autodesk.Civil.BandType.VerticalGeometry; } catch { }
+                    if (!sectItem && !vgItem) { vTry++; vOk += EnableGeometryPoints(items[i], i, log); }
                     try
                     {
                         var st = tr.GetObject(items[i].BandStyleId, OpenMode.ForWrite);
                         if (Set(st, "BandHeight", eachM)) hOk++;
                         else log.AppendLine($"   [{i}칸] 밴드높이 못 씀 — {st.GetType().Name}에 BandHeight가 없거나 읽기전용");
+                        if (vgItem)
+                        {
+                            // 제목칸은 표의 같은 열 — 정사각 · 글씨 2.5 mm(다른 칸과 같게) · 접선 라벨은 템플릿 자리 그대로
+                            if (!Set(st, "TextBoxWidth", BandCellMm / 1000.0)) log.AppendLine($"   [{i}칸] 구배 제목상자 폭 못 씀({st.GetType().Name})");
+                            if (!Set(st, "TextHeight", CalsT25 / 1000.0)) log.AppendLine($"   [{i}칸] 구배 제목 글씨높이 못 씀({st.GetType().Name})");
+                            log.AppendLine($"   [{i}칸] 구배(종단 기하) — 칸 {eachM * 1000:F1}mm · 제목칸만 맞춤(라벨은 템플릿 그대로)");
+                            continue;
+                        }
 
                         // ★★[v27.3 · JACK 0811] <b>횡단 데이터 밴드는 높이만 손대고 나머지는 템플릿 그대로 둔다.</b>
                         //
@@ -2225,6 +2236,10 @@ public static class SheetCommand
                     //   0의 뜻이 '안 솎음'인지 '안 그림'인지 모르는 채로 넣을 값이 아니다.
                     bool isSect = false;
                     try { isSect = items[i].BandType == Autodesk.Civil.BandType.SectionalData; } catch { }
+                    // ★[v111.4 · H5] 진입도로 구배 칸도 템플릿 솎기 그대로(측점 솎기 값을 걸면 짧은 구간의 구배 글자가 걸러짐)
+                    bool isVg = false;
+                    try { isVg = items[i].BandType == Autodesk.Civil.BandType.VerticalGeometry; } catch { }
+                    if (isVg) { skip++; log.AppendLine($"   [{i}칸] 구배 — 솎기 템플릿 그대로"); continue; }
                     if (isSect)
                     {
                         double w0 = double.NaN; try { w0 = items[i].Weeding; } catch { }
@@ -4712,7 +4727,7 @@ public static class SheetCommand
         }
         if (found.Count == 0)
         {
-            SectionCommand.Refuse(ed, "도면에 종단도가 없습니다.\n먼저 [종단도]로 만드세요.");
+            SectionCommand.Refuse(ed, "도면에 종단도가 없습니다.\n먼저 계획지표면 [종단도]로 만드세요.");
             return ObjectId.Null;
         }
         if (found.Count == 1) { name = found[0].Name; return found[0].Id; }
@@ -4730,7 +4745,7 @@ public static class SheetCommand
             tr.Commit();
         }
         // ★[v110.4 · 계획 2.C-11] 진입도로 종단뷰 — 알리고 멈춤(부지 static으로 도곽을 씌우면 부지 옹벽 · 측점이 섞인다)
-        if (road) { ed.WriteMessage("\n[도곽] 진입도로 종단도입니다 — 도킹창 [진입도로] ■ 결과 [종단도 다시]로 다시 그리세요."); return ObjectId.Null; }
+        if (road) { ed.WriteMessage("\n[도곽] 진입도로 종단도입니다 — 진입도로 [종단도]로 다시 그리세요."); return ObjectId.Null; }
         return per.ObjectId;
     }
 
@@ -4851,7 +4866,7 @@ public static class SheetCommand
         //   저장소에 이미 관문이 있는데(<c>ProfileCommand.SameDrawing</c>) 여기만 안 쓰고 있었다.
         // ★[v110.4 · 계획 2.C-7] 진입도로는 인자 목록(빈 목록 — 도로 옹벽 막대 · 두 값은 다음 판)을 쓰고 도면 관문을 건너뛴다
         if (ctx == null && !ProfileCommand.SameDrawing(db))
-        { log.AppendLine("  수직부 두 값: 벽 목록이 <b>다른 도면</b> 것이라 건너뜀 — [종단]을 이 도면에서 먼저 돌리세요"); return; }
+        { log.AppendLine("  수직부 두 값: 벽 목록이 <b>다른 도면</b> 것이라 건너뜀 — 계획지표면 [종단도]를 이 도면에서 먼저 돌리세요"); return; }
         var spans = ctx != null ? ctx.WallSpans : ProfileCommand.LastWallSpans;
         if (spans == null || spans.Count == 0) { log.AppendLine("  수직부 두 값: 옹벽·가시설이 없어 건너뜀"); return; }
 
@@ -5879,6 +5894,7 @@ public static class SheetCommand
                 try { os = trPre.GetObject(id0s, OpenMode.ForRead); } catch { continue; }
                 if (os is not CivilDb.LabelGroup lgS) continue;
                 if (!os.GetType().Name.Contains("BandLabelGroup")) continue;
+                if (os.GetType().Name.Contains("VerticalGeometry")) continue;   // ★[v111.4 · 계획 검토 H5] 진입도로 구배 칸 — 접선 가운데 라벨(측점 자리 아님)은 자리표에 안 넣음
                 uint nS; try { nS = lgS.SubEntityCount; } catch { continue; }
                 if (nS < 1) continue;
                 int bIdxS = bandOf.TryGetValue(id0s, out int biS) ? biS : -1;
@@ -6032,6 +6048,7 @@ public static class SheetCommand
                 try { o = tr.GetObject(id, OpenMode.ForRead); } catch { continue; }
                 if (o is not CivilDb.LabelGroup lg) continue;
                 if (!o.GetType().Name.Contains("BandLabelGroup")) continue;
+                if (o.GetType().Name.Contains("VerticalGeometry")) continue;   // ★[v111.4 · H5] 구배 칸 라벨은 안 옮김
                 uint n;
                 try { n = lg.SubEntityCount; } catch { continue; }
                 if (n < 1) continue;
@@ -6280,7 +6297,7 @@ public static class SheetCommand
                          + (back > 0 ? $" · 지난판 밀림 되돌림 {back}개(최대 {backMax:F2}m)" : "")
                          + $" · 측점 최소간격 {(worstBefore == double.MaxValue ? 0 : worstBefore):F3}m"
                          + $" → 가장 좀은 틈 {(clearMin == double.MaxValue ? 0 : clearMin):F3}m(0 이상이면 안 겹친다)"
-                         + (marks.Count > 0 ? $" · 굴곡부 지움 {dropped}개(살린 굴곡부 {kept}개 · 측점 목록 {marks.Count}곳)" : " · 측점 목록 없음([종단]을 먼저)")
+                         + (marks.Count > 0 ? $" · 굴곡부 지움 {dropped}개(살린 굴곡부 {kept}개 · 측점 목록 {marks.Count}곳)" : " · 측점 목록 없음(계획지표면 [종단도]를 먼저)")
                          + $" · 지시선 끔 글씨 {nLead}개"
                          + (crowd > 0 ? $" · 지울 굴곡부가 없어 밀린 벽 {crowd}개" : "")
                          + (outside > 0 ? $" · ⚠오른쪽 눈금 밖으로 나간 글씨 {outside}개" : "")

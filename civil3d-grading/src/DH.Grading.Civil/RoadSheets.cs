@@ -52,7 +52,8 @@ internal static class RoadSheets
     {
         bool site; double fw;
         using (var tr = db.TransactionManager.StartTransaction()) { (site, fw) = SiteInfo(db, tr); tr.Commit(); }
-        var r = ProfileSheetRules.RoadScale(site, SheetCommand.CurrentDrawingScale(db), fw, GradingSettings.ProfileScale, SheetCommand.Scales);
+        // ★[v111.4 · JACK 1030 «진입도로 종횡단 축척은 도면설정에 별도로»] 부지 종단도가 없을 때의 고정 축척 = 도면설정 «진입도로 종단도 축척»(도면에 저장) — 부지 «종단뷰 축척» 칸은 안 따름
+        var r = ProfileSheetRules.RoadScale(site, SheetCommand.CurrentDrawingScale(db), fw, RoadDrawingSettings.Read(db).Profile, SheetCommand.Scales);
         return (r.Scale, r.Note, site);
     }
 
@@ -104,56 +105,6 @@ internal static class RoadSheets
         return "";
     }
 
-    /// <summary>★★[v111.3 · JACK 1030 «노선을 선택하거나 그리고 나서 무조건 종단은 생성 — 실수로 Esc로 꺼도 수행되게»] 종단도 자리를 안 찍었을 때 놓을 빈 자리.
-    /// 다른 종단도(도곽 · 다른 노선 종단뷰)가 있으면 그 가장 오른쪽 끝 너머(가장 오른쪽 종단뷰와 같은 높이 — 한 줄로) · 없으면 도면 아래(노선 왼쪽 끝 · 도면 맨 아래보다 종이 700 mm 아래).
-    /// 그래도 겹치면 한 장 폭씩 오른쪽으로(스무 번까지).</summary>
-    internal static Point3d AutoSpot(Database db, ObjectId aid, double scale, int sheets)
-    {
-        double s = (double.IsFinite(scale) && scale > 0 ? scale : ProfileSheetRules.DefaultScale) / 1000.0;
-        double right = double.NegativeInfinity, rowY = double.NaN, rightView = double.NegativeInfinity;
-        double alX = double.NaN, alY = double.NaN;
-        string me = aid.Handle.ToString();
-        try
-        {
-            using var tr = db.TransactionManager.StartTransaction();
-            try { var ae = ((Entity)tr.GetObject(aid, OpenMode.ForRead)).GeometricExtents; alX = ae.MinPoint.X; alY = ae.MinPoint.Y; } catch { }
-            var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
-            foreach (ObjectId id in ms)
-            {
-                try
-                {
-                    var o = tr.GetObject(id, OpenMode.ForRead);
-                    if (o is Polyline pl && pl.Closed && string.Equals(pl.Layer, SheetCommand.LayFrameModel, StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (SheetTag.Of(pl, out string r, out _, out _) && string.Equals(r, me, StringComparison.OrdinalIgnoreCase)) continue;
-                        right = Math.Max(right, pl.GeometricExtents.MaxPoint.X);
-                    }
-                    else if (o is CivilDb.ProfileView pv && pv.AlignmentId != aid)
-                    {
-                        var ex = pv.GeometricExtents;
-                        right = Math.Max(right, ex.MaxPoint.X);
-                        if (ex.MaxPoint.X > rightView) { rightView = ex.MaxPoint.X; rowY = pv.Location.Y; }
-                    }
-                }
-                catch { }
-            }
-            tr.Commit();
-        }
-        catch { }
-        Point3d at;
-        if (double.IsFinite(right) && double.IsFinite(rowY)) at = new Point3d(right + (130.0 + 100.0) * s, rowY, 0);
-        else
-        {
-            double minY = double.NaN;
-            try { if (db.Extmin.X <= db.Extmax.X && db.Extmin.Y <= db.Extmax.Y) minY = db.Extmin.Y; } catch { }
-            if (!double.IsFinite(minY)) minY = double.IsFinite(alY) ? alY : 0;
-            double x = double.IsFinite(right) ? right + (130.0 + 100.0) * s : double.IsFinite(alX) ? alX + 130.0 * s : 0;
-            at = new Point3d(x, minY - 700.0 * s, 0);
-        }
-        for (int k = 0; k < 20 && Overlap(db, aid, at, scale, sheets).Length > 0; k++) at = new Point3d(at.X + ProfileSheetRules.SheetWmm * s, at.Y, 0);
-        return at;
-    }
-
     /// <summary>계획 종단 도장(<see cref="ProfileSheetRules.Stamp"/>) — PVI · 노선 시 · 종점.</summary>
     internal static string StampOf(Transaction tr, ObjectId aid, ObjectId planId)
     {
@@ -184,7 +135,7 @@ internal static class RoadSheets
             }
             tr.Commit();
         }
-        return bad.Count == 0 ? "" : $"진입도로 종단도 축척 다름({string.Join(", ", bad)} ≠ 부지 1:{siteScale:0}) — 도킹창 [종단도 다시]";
+        return bad.Count == 0 ? "" : $"진입도로 종단도 축척 다름({string.Join(", ", bad)} ≠ 부지 1:{siteScale:0}) — 진입도로 [종단도]";
     }
 
     /// <summary>★★[계획 3.1] 진입도로 종단도 짓기 — 부르는 쪽(<see cref="RoadSession.MakeSheets"/>)이 문서 잠금 · 바뀜 표시 막음(Suppress)을 건다.
@@ -450,6 +401,8 @@ internal static class RoadSheets
         d.SheetAt = new[] { at.X, at.Y };
         d.SheetScale = scale;
         d.SheetViews = r.PvIds.Select(v => v.Handle.ToString()).ToList();
+        d.SheetViewAt = RoadSession.ViewAt(db, r.PvIds);   // ★[v111.7] 첫 · 끝 뷰 자리(옮겼나 — 저절로 다시 그리기)
+        d.SheetLost = false;                               // ★[v111.7] 그려졌으면 «못 그림» 알림 끔
         d.SheetGroup = grp.IsNull ? "" : grp.Handle.ToString();
         d.SheetGround = groundLine.IsNull || groundLine == baseProf ? "" : groundLine.Handle.ToString();
         d.SheetChain = t.ChainId.IsNull ? "" : t.ChainId.Handle.ToString();

@@ -18,6 +18,7 @@ internal sealed class RoadDesign
     public string SurfaceHandle = "";           // [도로 면 만들기]로 만든 지표면(다시 만들면 이것을 지우고 같은 이름으로)
     public string SurfaceSig = "";              // ★[v111.2] 그 면을 만든 입력 지문 — 지금 설계와 다르면 도킹창 알림
     public double SurfaceReach;                 // ★[v111.3] 그 면을 만든 계산의 시작 범위(m) — [노리선]이 같은 입력으로 다시 셈(0 = 40)
+    public string SurfaceSigParts = "";         // ★[v111.3.1] 지문 몫(노선 | 종단 | 값 | 바탕면) — 무엇이 바뀌었나 한 줄
     public List<double[]> Walls = new();         // [s0, s1, 쪽(−1 좌 · +1 우)]
     /// <summary>★[v110.2 · 설치 전 검토 · 중간] 곡선을 우리가 넣었나 — 폴리선 · [경로 그리기]로 만든 노선 = 참 · 기존 Civil 노선으로 연 도로 = 거짓(사람이 설계한 곡선이라 곡선 반경 칸이 안 바꿈).</summary>
     public bool OwnCurves = true;
@@ -28,6 +29,20 @@ internal sealed class RoadDesign
     public double SheetScale = 0;
     public List<string> SheetViews = new();
     public string SheetGroup = "", SheetGround = "", SheetChain = "", SheetStamp = "";
+
+    /// <summary>★★[v111.5 · 계획_v111_4.md 3] 횡단도 기록 — 놓은 자리 [x, y] · 축척 · 그때 도면 주석 축척 · 그때 도면설정 칸(0 = 자동) · 숨긴 검토선 그룹 · 뷰 핸들 ·
+    /// 지문(측점 | 지표면 핸들 | 지표면 입력 지문 — <see cref="DH.Grading.Core.RoadXsecRules.Stamp"/>). 옛 기록에는 칸이 없다 = 횡단도 없음.</summary>
+    public double[] XsecAt = Array.Empty<double>();
+    public double XsecScale = 0, XsecAnno = 0, XsecPin = 0;
+    public string XsecGroup = "", XsecStamp = "";
+    public List<string> XsecViews = new();
+
+    /// <summary>★[v111.7 · 설치 전 검토 M2] 그릴 때 첫 · 끝 뷰 자리 [x0, y0, x1, y1](<see cref="SheetViews"/> · <see cref="XsecViews"/> 차례) — 사람이 MOVE로 옮겼으면 저절로 다시 그리기가 옮긴 자리에.
+    /// 옛 기록(v111.6 이전)에는 칸이 없다 = 자리를 몰라 저절로 다시 그리지 않음(단추로 한 번 그리면 생김).</summary>
+    public double[] SheetViewAt = Array.Empty<double>(), XsecViewAt = Array.Empty<double>();
+    /// <summary>★[v111.7 · 재검토 낮음] 다시 그리다 실패해 옛 종단도 · 횡단도가 지워진 채 — 도킹창 알림(미리보기를 껐다 켜도 · 도면을 다시 열어도 남음).
+    /// 그 명령을 U로 되돌리면 이 기록도 함께 되돌아가 꺼지고 · 다시 그려지면 끔.</summary>
+    public bool SheetLost, XsecLost;
 
     /// <summary>★[v110.2 · JACK 1029 «곡선 반경 = 도킹창 값 하나»] 다음 노선의 곡선 반경 — 도킹창 칸이 바꾼다(열린 도로가 있으면 그 도로에도 · 세션 동안 기억).</summary>
     internal static double LastCurveR = 30;

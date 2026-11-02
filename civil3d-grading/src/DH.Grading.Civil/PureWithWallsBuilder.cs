@@ -278,34 +278,56 @@ internal static class PureWithWallsBuilder
     {
         try
         {
-            var db = doc.Database;
-            var civ = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
-            ObjectId g = Commands.SectionCommand.FindSurfaces(db, civ).Find(sp => sp.Label == "원지반").SurfId;
-            string now = StampHead(CurrentStamp(db, g));
-            int stale = 0, unknown = 0;
-            using (var tr = db.TransactionManager.StartTransaction())
-            {
-                foreach (ObjectId aid in civ.GetAlignmentIds())
-                {
-                    try
-                    {
-                        if (tr.GetObject(aid, OpenMode.ForRead) is not Alignment al || !(al.Name ?? "").StartsWith(Commands.SectionCommand.AlignBase, System.StringComparison.Ordinal)) continue;
-                        var r = ReadAlign(tr, al);
-                        if (r == null) unknown++;
-                        else if (StampHead(r.Value.Stamp) != now) stale++;
-                    }
-                    catch { }
-                }
-                tr.Commit();
-            }
+            // ★[v111.6 · JACK 1102] 세는 일은 <see cref="CountStale"/>로 뺐다(정지 창 ■ 도면 알림이 같은 셈을 읽기만 한다) — 알림 · 세션 한 번 규칙은 그대로
+            var (stale, unknown, now) = CountStale(doc.Database, Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument);
             if (stale + unknown == 0 || !_notified.Add(doc.Name + "|" + now)) return;
+            // ★[v111.6] «종단 버튼» → 리본 이름(계획지표면 [종단도]) — 진입도로에도 [종단도]가 생겨 어느 것인지 밝힌다
             string msg = stale > 0
-                ? $"그려 둔 종단 · 횡단(선형 {stale}개)은 옛 면 기준입니다" + (unknown > 0 ? $"(그 밖에 {unknown}개는 옛 면 기준일 수 있습니다)" : "") + " — 종단 버튼을 다시 누르면 지금 면으로 그립니다."
-                : $"그려 둔 종단 · 횡단(선형 {unknown}개)은 옛 면 기준일 수 있습니다 — 종단 버튼을 다시 누르면 지금 면으로 그립니다.";
+                ? $"그려 둔 종단 · 횡단(선형 {stale}개)은 옛 면 기준입니다" + (unknown > 0 ? $"(그 밖에 {unknown}개는 옛 면 기준일 수 있습니다)" : "") + " — 계획지표면 [종단도]를 다시 누르면 지금 면으로 그립니다."
+                : $"그려 둔 종단 · 횡단(선형 {unknown}개)은 옛 면 기준일 수 있습니다 — 계획지표면 [종단도]를 다시 누르면 지금 면으로 그립니다.";
             try { doc.Editor.WriteMessage("\n[종단 · 횡단] " + msg); } catch { }
             try { DiagLog.Append("\n■ 옛 면 기준 알림 — " + msg); } catch { }
         }
         catch { }
+    }
+
+    /// <summary>★★[v111.6 · JACK 1102] 정지 창 ■ 도면 알림 — 그려 둔 계획지표면 종단 · 횡단이 <b>옛 면 기준</b>인가(선형에 적힌 면 도장 ≠ 지금 면).
+    /// <para>읽기만 한다 — 명령줄 · 로그 · «세션에 한 번» 기억이 없다(<see cref="NotifyStale"/>과 다름). 면 도장은 지금 도면의 Civil 문서로 재므로 지금 도면만 본다(아니면 거짓).</para>
+    /// <para>도장이 없는 선형(옛 판 도면 · 사람이 만든 선형)은 «바뀌었다»가 아니라 «모름»이라 넣지 않는다 — 창 글이 «바뀌었습니다»라고 단정하기 때문(재지 않은 것을 사실로 적지 않음).</para></summary>
+    internal static bool SheetsStale(Database db)
+    {
+        try
+        {
+            var doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+            if (db == null || doc == null || doc.Database != db) return false;
+            return CountStale(db, Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument).Stale > 0;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>★[v111.6] 부지 선형(<c>DH선형…</c>)마다 적힌 면 도장 앞 두 칸을 지금 면과 견준다 — (옛 면 기준 수 · 도장 없는 수 · 지금 면 도장 앞 두 칸).
+    /// 읽기만 · 선형이 하나도 없으면 지금 면은 재지 않는다(명령이 끝날 때마다 불리므로 — 결과는 종전 셈과 같다). 예외는 부르는 쪽이 받는다.</summary>
+    static (int Stale, int Unknown, string Now) CountStale(Database db, Autodesk.Civil.ApplicationServices.CivilDocument civ)
+    {
+        var heads = new System.Collections.Generic.List<string?>();   // 선형마다 도장 앞 두 칸 · null = 도장 없음
+        using (var tr = db.TransactionManager.StartTransaction())
+        {
+            foreach (ObjectId aid in civ.GetAlignmentIds())
+            {
+                try
+                {
+                    if (tr.GetObject(aid, OpenMode.ForRead) is not Alignment al || !(al.Name ?? "").StartsWith(Commands.SectionCommand.AlignBase, System.StringComparison.Ordinal)) continue;
+                    var r = ReadAlign(tr, al);
+                    heads.Add(r == null ? null : StampHead(r.Value.Stamp));
+                }
+                catch { }
+            }
+            tr.Commit();
+        }
+        if (heads.Count == 0) return (0, 0, "");
+        ObjectId g = Commands.SectionCommand.FindSurfaces(db, civ).Find(sp => sp.Label == "원지반").SurfId;
+        string now = StampHead(CurrentStamp(db, g));
+        return (heads.Count(h => h != null && h != now), heads.Count(h => h == null), now);
     }
 
     /// <summary>선형에 적힌 «쓴 면» — 없으면 null(옛 도면 · 사용자가 만든 선형).</summary>

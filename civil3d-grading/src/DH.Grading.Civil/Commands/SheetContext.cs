@@ -52,12 +52,50 @@ internal sealed class ProfileTarget
     internal ObjectId ChainId = ObjectId.Null;
 }
 
+/// <summary>★★[v111.5 · 계획_v111_4.md 3 · 검토 M2] [횡단도](<see cref="XsecViewCommand"/> Build)를 <b>누구 것으로</b> 그리나 — <c>null</c> = 부지(지금 식 · static 읽고 씀) ·
+/// 값 = 진입도로(이 인자만 읽는다 — LastAt · 검토선 그룹 · 벽 자리 · 측점 · 측점 간격 · 같은 도면 · «마지막 DH선형» · 횡단 폭 · 옹벽 단면은 안 읽고 안 씀).
+/// <para>만드는 쪽 = <see cref="RoadXsec.Build"/>.</para></summary>
+internal sealed class XsecTarget
+{
+    internal ObjectId AlignId;
+    internal string AlignName = "", RoadHandle = "";
+    /// <summary>진입도로 종단도 검토선 그룹(«{노선}-검토»)의 측점 · 이름 꼬리 — 측점 차례.</summary>
+    internal List<(double St, string Label)> Stations = new();
+    /// <summary>원지반 · 정지면(부지 — 선만) · 진입도로 · 지층 · 지하수위.</summary>
+    internal List<SectionCommand.SurfPick> Surfs = new();
+    /// <summary>계획면(수량 · FGL) = FirstOf(진입도로, 도로 바탕면) — 바탕이 정지면_DH면 <see cref="BaseIsPad"/>.</summary>
+    internal ObjectId RoadSurfId, BaseSurfId;
+    internal bool BaseIsPad;
+    internal (double L, double R) Width;
+    /// <summary>숨긴 횡단 검토선 그룹 이름 앞머리 «{노선}-횡단»(부지 IsXsecGroupName에 안 걸림).</summary>
+    internal string GroupBase = "";
+    internal string Title = "진입도로 횡단면도";
+    /// <summary>도면설정 «진입도로 횡단도 축척»(0 = 자동 — 부지와 같은 PickScale).</summary>
+    internal double Pin;
+    /// <summary>지울 옛 횡단(이 도로 기록 — 그룹 핸들 · 뷰 핸들).</summary>
+    internal string OldGroup = "";
+    internal List<string> OldViews = new();
+    internal bool OwnAlign = true;
+    // ── 나오는 값
+    internal ObjectId GroupId = ObjectId.Null;
+    internal List<ObjectId> Views = new();
+    internal double Scale, Anno;
+    internal string Msg = "";
+    internal int Tagged;
+    /// <summary>복사본 밴드 스타일인데 라벨 스타일이 원본과 같은 객체(얕은 복사) — 글자 크기를 안 씀(부지 라벨이 바뀌지 않게).</summary>
+    internal HashSet<ObjectId> SharedLabels = new();
+    /// <summary>★[v111.5 · 설치 전 검토 L1] 진입도로 수량표 스타일 — 복사본을 못 만들어도 부지 «DH-수량표»를 덮지 않게 처음부터 진입도로 이름(최종 복사본이면 축척 짝 이름으로 바뀜).</summary>
+    internal string TableStyle = "DH-수량표(진입도로)";
+}
+
 /// <summary>★★[v110.4 · 계획 2.A · 4 · 검토 M2] 진입도로 종단도가 그린 <b>평범한 도면 객체</b>(도곽 · 장식 · 세로선 · 검토선 글씨)의 표식 —
 /// XData «DH_ROADSHEET» [1000 노선 핸들][1000 뷰 핸들][1000 종류]. 부지 지우기(레이어 · X 범위)는 표식 있는 것을 건너뛰고,
 /// 도로 [종단도 다시]는 «이 노선 표식»만 지운다(<see cref="WallSectionDraw"/> 표식과 같은 꼴).</summary>
 internal static class SheetTag
 {
     internal const string App = "DH_ROADSHEET";
+    /// <summary>★[v111.5 · 계획 3 · 검토 H4] 진입도로 횡단도 장식의 종류 칸 — 종단도 장식은 레이어 이름을 적는다(이것과 안 겹침).</summary>
+    internal const string KindXsec = "XSEC";
 
     internal static void Put(Database db, Transaction tr, Entity e, string road, string view, string kind)
     {
@@ -89,8 +127,9 @@ internal static class SheetTag
     /// <summary>진입도로 종단도 것인가(표식 있음) — 부지 지우기가 건너뛴다(<see cref="ProfileSheetRules.ShouldErase"/>).</summary>
     internal static bool IsRoad(Entity e) => Of(e, out _, out _, out _);
 
-    /// <summary>이 노선 표식이 있는 모형 공간 객체를 모두 지운다(모아 두고 밖에서 지움 · 잠긴 레이어여도).</summary>
-    internal static int EraseRoad(Database db, Transaction tr, string road)
+    /// <summary>이 노선 표식이 있는 모형 공간 객체를 지운다(모아 두고 밖에서 지움 · 잠긴 레이어여도).
+    /// <para>★[v111.5 · 계획 3 · 검토 H4] 종류로 거른다 — <paramref name="xsec"/> 거짓 = 종단도 장식만([종단도 새로 그리기]) · 참 = 횡단도 장식(«XSEC»)만.</para></summary>
+    internal static int EraseRoad(Database db, Transaction tr, string road, bool xsec = false)
     {
         var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
         var kill = new List<ObjectId>();
@@ -98,8 +137,8 @@ internal static class SheetTag
         {
             try
             {
-                if (tr.GetObject(id, OpenMode.ForRead) is Entity e && Of(e, out string r, out _, out _)
-                    && ProfileSheetRules.ShouldErase(true, r, road)) kill.Add(id);
+                if (tr.GetObject(id, OpenMode.ForRead) is Entity e && Of(e, out string r, out _, out string k)
+                    && ProfileSheetRules.ShouldErase(true, r, road) && string.Equals(k, KindXsec, StringComparison.Ordinal) == xsec) kill.Add(id);
             }
             catch { }
         }

@@ -27,11 +27,26 @@ internal static class RoadPalette
             RoadSession.Changed += s => { try { _panel.Dispatcher.Invoke(() => _panel.Show(s ?? RoadSession.Of(AcadApp.DocumentManager.MdiActiveDocument))); } catch { } };
             AcadApp.DocumentManager.DocumentActivated += (_, e) => { try { _panel.Show(RoadSession.Of(e.Document)); } catch { } };
         }
+        // ★[v111.7 · JACK 1102 «진입도로 창을 열면 부지 창(계획부지 정지 · 구조물 터파기)은 닫기»] 숨기기만(고른 것 · 값은 그대로)
+        GradingPalette.Hide();
+        ExcavPalette.Hide();
         // ★[v110.3.1 · JACK 1029 «도킹팝업은 무조건 도킹상태로 시작되게»] 다른 도킹창(계획부지 정지 · 터파기 · 지층)과 같이 — 보인 뒤에 오른쪽에 붙임(안 뜬 창에는 Dock이 무시됨) · 부를 때마다
         _ps.Visible = true;
         try { if (_ps.Dock != DockSides.Right) _ps.Dock = DockSides.Right; } catch { }
         try { _ps.Size = new System.Drawing.Size(Math.Max(_ps.Size.Width, 380), Math.Max(_ps.Size.Height, 640)); } catch { }
         _panel!.Show(RoadSession.Of(AcadApp.DocumentManager.MdiActiveDocument));
+    }
+
+    /// <summary>★[v111.7 · JACK 1102] 부지 창을 열 때 이 창을 숨긴다(떠 있을 때만 · 도로 세션은 안 닫음).</summary>
+    internal static void Hide()
+    {
+        try { if (_ps != null && _ps.Visible) _ps.Visible = false; } catch { }
+    }
+
+    /// <summary>★[v111.7] 이 창 칸에 글자를 넣는 중 — 저절로 다시 그리기(RoadSession)를 미룬다(명령이 포커스를 가져가 덜 친 값이 확정되지 않게).</summary>
+    internal static bool Typing
+    {
+        get { try { return _panel != null && _panel.IsKeyboardFocusWithin && System.Windows.Input.Keyboard.FocusedElement is TextBox; } catch { return false; } }
     }
 }
 
@@ -74,10 +89,11 @@ internal sealed class RoadPanel : UserControl
         }));
         Content = deck;
 
-        // ── ■ 도로 설정 — 작은 칸 다섯(한 번에 하나 펼침 · 창을 만들 때마다 «노선»이 열린 채로) ──
+        // ── ■ 도로 설정 — 작은 칸 셋(한 번에 하나 펼침 · 창을 만들 때마다 «노선»이 열린 채로) ──
+        // ★★[v111.7 · JACK 1102 «도킹창 묶음 정리»] 작은 칸 «종단» · «옹벽 제안»은 새 큰 칸 ■ 종단 · ■ 옹벽으로 옮김 — 여기는 값만(노선 · 횡단 · 사면)
         const string G = "도로:설정칸";
-        GradingDialog.ForgetOpen("도로:노선", "도로:횡단", "도로:사면", "도로:종단", "도로:옹벽");
-        var secSet = GradingDialog.AddCollapsible(_root, "■ 도로 설정", "노선 · 횡단 · 사면 · 종단 · 옹벽", first: true, open: true, key: "도로:설정");
+        GradingDialog.ForgetOpen("도로:노선", "도로:횡단", "도로:사면");
+        var secSet = GradingDialog.AddCollapsible(_root, "■ 도로 설정", "노선 · 횡단 · 사면", first: true, open: true, key: "도로:설정");
 
         _host = GradingDialog.AddCollapsible(secSet, "노선", "꺾인 곳 곡선 반경 — [경로 그리기] · [폴리선 선택] 둘 다 · 바꾸면 열린 도로의 곡선도 바뀝니다", open: true, key: "도로:노선", group: G, level: 2);
         _curve = Row(("곡선 반경 m", d => d.CurveR, (d, v) => { d.CurveR = v; RoadDesign.LastCurveR = v; _recurve = true; }, 1, 3, 1000))[0];
@@ -92,34 +108,86 @@ internal sealed class RoadPanel : UserControl
         Row(("절토 1:", d => d.CutSlope, (d, v) => d.CutSlope = v, 1, 0.1, 10), ("단높이", d => d.CutBenchH, (d, v) => d.CutBenchH = v, 1, 0.5, 50), ("소단", d => d.CutBenchW, (d, v) => d.CutBenchW = v, 1, 0, 10));
         Row(("성토 1:", d => d.FillSlope, (d, v) => d.FillSlope = v, 1, 0.1, 10), ("단높이", d => d.FillBenchH, (d, v) => d.FillBenchH = v, 1, 0.5, 50), ("소단", d => d.FillBenchW, (d, v) => d.FillBenchW = v, 1, 0, 10));
 
-        _host = GradingDialog.AddCollapsible(secSet, "종단", "최대 종단경사 · PVI 사이 최소 길이", open: false, key: "도로:종단", group: G, level: 2);
+        // ── ■ 종단 ──
+        // ★★[v111.7 · JACK 1102 «도킹창 묶음 정리»] 값(최대 경사 · PVI 간격) → [PVI 넣기] [PVI 지우기](옛 ■ 진입도로 수정에서 옮김) → [종단 자동으로 다시](옛 [종단 초안 다시] — 명령에서 한 번 물음)
+        _host = GradingDialog.AddCollapsible(_root, "■ 종단", "최대 종단경사 · PVI 간격 · PVI 넣기 · 지우기", open: true, key: "도로:종단");
         Row(("최대 경사 %", d => d.MaxGrade, (d, v) => d.MaxGrade = v, 100, 0.5, 30), ("PVI 간격", d => d.MinPviLen, (d, v) => d.MinPviLen = v, 1, 1, 500));
-        Buttons(("종단 초안 다시", "DHROADREDRAFT", "계획 종단 PVI를 지우고 바탕을 따라 다시 잡습니다", false));
-
-        _host = GradingDialog.AddCollapsible(secSet, "옹벽 제안", "제안 높이 · 사업 경계", open: false, key: "도로:옹벽", group: G, level: 2);
-        Row(("제안 높이 m", d => d.SuggestH, (d, v) => d.SuggestH = v, 1, 0, 50));
-        Buttons(("사업 경계", "DHROADLIMIT", "사면이 이 폴리선 밖으로 나가면 자홍 제안", false));
-
-        // ── ■ 진입도로 수정 ──
-        // ★★[v110.3.1 · JACK 1029 «도킹창에 옹벽변환 위에 그 창은 뭔지 모르겠어 · 사용법을 간결하게 하면서 계획지표면때 기능을 답습»] 옹벽 목록 칸 · [빼기] · [전체 해제]를 없애고
-        //   계획부지 [■ 계획부지 수정]과 같은 칸 — [옹벽 변환] [사면 변환](열림). 전체 해제는 명령 안 C(부지와 같음)
-        _host = GradingDialog.AddCollapsible(_root, "■ 진입도로 수정", "만든 사면의 한 구간을 옹벽으로 세우거나 다시 사면으로 되돌립니다", open: true, key: "도로:수정");
-        Buttons(("옹벽 변환", "DHROADWALLCONV", "계단선(시안)을 골라 그 단부터 바깥을 옹벽으로 세웁니다. 전체구간/구간지정 · 소단 길이를 그 자리에서 정합니다.", false),
-                ("사면 변환", "DHROADSLOPECONV", "옹벽선을 골라 그 자리 옹벽을 다시 사면으로 되돌립니다.", false));
         // ★[v111.2 · JACK 1030 «PVI 수정 기능 — 넣기 · 삭제»] 종단도에서 찍기(Enter까지 여러 번)
         Buttons(("PVI 넣기", "DHROADPVIADD", "종단도를 찍은 측점에 PVI를 넣습니다 — 지금 계획선 위라 모양은 그대로, 넣은 뒤 잡아끌어 높이를 바꿉니다(Enter 끝)", false),
                 ("PVI 지우기", "DHROADPVIDEL", "종단도에서 찍은 자리 가까운 PVI를 지웁니다 — 처음 · 끝은 못 지움(Enter 끝)", false));
+        Buttons(("종단 자동으로 다시", "DHROADREDRAFT",
+                 "계획 종단 PVI를 모두 지우고 지금 땅(정지면_DH 또는 원지반)을 따라 최대 경사 · PVI 간격으로 처음부터 다시 잡습니다 — 손으로 옮긴 PVI는 사라집니다(누르면 한 번 묻습니다)", false));
+
+        // ── ■ 옹벽 ──
+        // ★★[v111.7 · JACK 1102] [옹벽 변환] [사면 변환](옛 ■ 진입도로 수정에서 옮김 — 전체 해제는 명령 안 C · 부지와 같음) → 옹벽 제안 한 줄(제안 높이 · [사업 경계]) · 풍선 글은 쉬운 말로
+        _host = GradingDialog.AddCollapsible(_root, "■ 옹벽", "사면 → 옹벽 · 옹벽 → 사면 · 옹벽 제안", open: true, key: "도로:옹벽");
+        Buttons(("옹벽 변환", "DHROADWALLCONV",
+                 "사면선 · 소단선 하나를 클릭하면(고를 선은 하늘색으로 잠깐 그려짐) 그 단부터 바깥쪽 사면을 수직 옹벽으로 바꿉니다. 전체 구간인지 일부 구간인지, 옹벽 사이 소단 길이는 명령창에서 정합니다.", false),
+                ("사면 변환", "DHROADSLOPECONV",
+                 "옹벽선 하나를 클릭하면(고를 선은 하늘색으로 잠깐 그려짐) 그 자리 옹벽을 없애고 다시 사면으로 되돌립니다. 전체 구간인지 일부 구간인지는 명령창에서 정합니다.", false));
+        // 옹벽 제안 한 줄 — 이름 · 제안 높이 칸 · [사업 경계](좁으면 아래로 접힘)
+        var sug = new WrapPanel { Margin = new Thickness(0, 4, 0, 0) };
+        sug.Children.Add(new TextBlock
+        {
+            Text = "옹벽 제안", FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = DhBrand.Ink, Margin = new Thickness(2, 0, 10, 8),
+            ToolTip = "사면 높이가 «제안 높이»보다 높거나 사면이 사업 경계 밖으로 나가는 구간을 분홍빛 보라(자홍) 선으로 표시합니다 — 그 자리에 옹벽을 세우라는 제안입니다(제안 높이 0 = 높이로는 제안 안 함).",
+        });
+        _host.Children.Add(sug);
+        var hostKeep = _host; _host = sug;
+        Row(("제안 높이 m", d => d.SuggestH, (d, v) => d.SuggestH = v, 1, 0, 50));
+        Buttons(("사업 경계", "DHROADLIMIT", "사업 경계가 되는 닫힌 폴리선을 고릅니다 — 사면이 이 선 밖으로 나가는 구간을 분홍빛 보라(자홍) 선으로 표시해 옹벽을 제안합니다(Enter = 경계 지우기)", false));
+        _host = hostKeep;
+        foreach (UIElement c in sug.Children) if (c is FrameworkElement fe) fe.VerticalAlignment = VerticalAlignment.Center;
 
         // ── ■ 결과 ──
         _host = GradingDialog.AddCollapsible(_root, "■ 결과", "토공량 · 높이 · 경사 · 옹벽", open: true, key: "도로:결과");
         var resCard = Card(_result);
         _host.Children.Add(resCard); _needRoad.Add(resCard);
-        // ★[v110.1 · JACK 1029] [끝내기]가 «마치고 결과 남기기»로 읽혀 → 이름을 [미리보기 끄기]로 · 면은 [도로 면 만들기]로 따로
-        Buttons(("도로 면 만들기", "DHROADSURF", "도로 + 사면을 지표면 «진입도로_DH»로(정지면_DH는 그대로 · 다시 누르면 새로)", true),
-                ("다시 계산", "!", "", false), ("미리보기 끄기", "DHROADOFF", "임시 선만 지움(노선 · 종단 · 도로 면은 그대로)", false));
-        // ★[v110.4 · 계획_v110_4.md 3.6] 종단도(부지 [종단도]와 같은 A1 도곽 · 밴드) — PVI를 옮긴 뒤 · 축척이 바뀐 뒤 다시(Enter = 지난 자리)
-        Buttons(("종단도 다시", "DHROADSHEET", "지금 종단 · 축척으로 종단도(도곽 · 밴드)를 다시 그립니다 — 이 도로 것만 지우고 새로(Enter = 지난 자리)", false));
+        // ★★[v111.3.1 · JACK 1030 «버튼 이름도 진입도로 지표면 생성으로» · «종단이 수정되면 그 아래 종단이 수정되었다고 · 버튼이 깜박» · «미리보기 끄기 · 다시 계산 · 종단도 다시가 뭔지 모르겠어»]
+        //   인터뷰: [미리보기 끄기] → [미리보기 선 숨기기](누를 때마다 숨기기/보이기) · [다시 계산] 없앰(늘 저절로) · [종단도 다시] → [종단도 새로 그리기](PVI가 바뀌면 아래 한 줄 + 깜박임 — 지표면 생성과 같게 · 이름은 내 판단)
+        _surfBtn = Buttons(("진입도로 지표면 생성", "DHROADSURF", "도로 + 사면을 지표면 «진입도로_DH»로(정지면_DH는 그대로 · 다시 누르면 새로)", true))[0];
+        _surfState = StateLine();
+        _prevBtn = Buttons(("미리보기 선 숨기기", "PREVIEW", "값을 바꾸면 바로 보이는 임시 선(사면선 · 옹벽선)을 숨기거나 다시 보입니다 — 도면에는 남지 않는 선", false))[0];
+
+        // ── ■ 도면 ──
+        // ★★[v111.6 · JACK 1102 «계획지표면과 진입도로 둘 다 종단 · 횡단 — 리본 · 도킹창 이름 통일»] ■ 결과에서 종단도 · 횡단도를 떼어 ■ 도면으로(정지 창 ■ 도면과 같은 꼴)
+        //   이름 = 리본 [진입도로] 패널과 같게: [종단도 새로 그리기] → [종단도] · [횡단도 그리기] → [횡단도] · 명령 · 아래 한 줄 · 깜박은 그대로
+        _host = GradingDialog.AddCollapsible(_root, "■ 도면", "진입도로 종단도 · 횡단도", open: true, key: "도로:도면");
+        _sheetBtn = Buttons(("종단도", "DHROADSHEET", "지금 종단 · 축척으로 종단도(도곽 · 밴드)를 지우고 새로 그립니다 — 놓을 자리를 찍음(Enter = 지난 자리)", false))[0];
+        _sheetState = StateLine();
+        // ★★[v111.5 · 계획_v111_4.md 3 · JACK 1030] [횡단도 그리기] — 부지 [횡단도]와 같은 꼴 · 아래 한 줄 + 깜박(종단 · 지표면 · 축척이 바뀜)
+        _xsecBtn = Buttons(("횡단도", "DHROADXSEC", "종단도 측점마다 횡단면도(도곽 · 밴드 · 토량표)를 그립니다 — 놓을 자리를 찍음(Enter = 지난 자리) · 종단도 · 진입도로 지표면이 있어야 합니다", false))[0];
+        _xsecState = StateLine();
         Show(null);
+    }
+
+    Button _surfBtn = null!, _sheetBtn = null!, _prevBtn = null!, _xsecBtn = null!;
+    TextBlock _surfState = null!, _sheetState = null!, _xsecState = null!;
+
+    /// <summary>단추 바로 아래 알림 한 줄(비면 접힘).</summary>
+    TextBlock StateLine()
+    {
+        var t = new TextBlock { FontSize = 11, Foreground = DhBrand.Warn, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, -2, 0, 6), Visibility = Visibility.Collapsed };
+        _host.Children.Add(t);
+        return t;
+    }
+
+    /// <summary>★[v111.6] 정지 창 ■ 도면도 같은 꼴로 쓴다(internal — 베끼지 않음).</summary>
+    internal static void SetState(TextBlock t, string text)
+    {
+        t.Text = text;
+        t.Visibility = text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>단추 깜박임(흐려졌다 돌아옴 · 0.6초) — 켜져 있으면 다시 걸지 않음. ★[v111.6] 정지 창 ■ 도면도 이것을 쓴다.</summary>
+    internal static void Blink(Button b, bool on)
+    {
+        bool now = Equals(b.Tag, "blink");
+        if (on == now) return;
+        b.Tag = on ? "blink" : null;
+        if (on) b.BeginAnimation(UIElement.OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(1, 0.35, TimeSpan.FromSeconds(0.6))
+        { AutoReverse = true, RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever });
+        else { b.BeginAnimation(UIElement.OpacityProperty, null); b.Opacity = 1; }
     }
 
     static Border Card(UIElement child) => new()
@@ -155,8 +223,9 @@ internal sealed class RoadPanel : UserControl
         return boxes;
     }
 
-    void Buttons(params (string Text, string Cmd, string Tip, bool Primary)[] items)
+    List<Button> Buttons(params (string Text, string Cmd, string Tip, bool Primary)[] items)
     {
+        var made = new List<Button>();
         var wp = new WrapPanel { Margin = new Thickness(0, 2, 0, 4) };
         foreach (var (text, cmd, tip, primary) in items)
         {
@@ -168,23 +237,26 @@ internal sealed class RoadPanel : UserControl
             if (primary) try { if (DhBrand.Skin != null) b.Style = (Style)DhBrand.Skin["DhPrimary"]; } catch { }
             b.Click += (_, __) => Act(text, cmd);
             wp.Children.Add(b);
-            if (cmd != "DHROADOFF") _needRoad.Add(b);
+            _needRoad.Add(b);
+            made.Add(b);
         }
         _host.Children.Add(wp);
+        return made;
     }
     void Act(string text, string cmd)
     {
         var doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
         var s = RoadSession.Of(doc);
-        if (s == null && cmd != "DHROADOFF") return;
+        if (s == null) return;
         try
         {
-            if (cmd == "!")
+            if (cmd == "PREVIEW")
             {
-                if (Busy(doc)) { _note.Text = "명령 중에는 다시 계산하지 않습니다 — 명령을 끝낸(Esc) 뒤"; return; }   // ★[전체 검토 M1]
-                s!.Recompute(); return;
+                if (Busy(doc)) { _note.Text = "명령 중에는 미리보기 선을 바꾸지 않습니다 — 명령을 끝낸(Esc) 뒤"; return; }   // ★[전체 검토 M1]과 같은 뜻
+                s.SetPreviewHidden(!s.PreviewHidden); return;
             }
+            RoadSession.NoteUserSend();   // ★[v111.7] 1초 안에는 저절로 다시 그리기를 안 보냄(이 명령과 엇갈리지 않게)
             doc.SendStringToExecute("\x03\x03" + cmd + " ", true, false, false);
         }
         catch (System.Exception ex) { _note.Text = text + " 실패 — " + ex.Message; }
@@ -214,6 +286,12 @@ internal sealed class RoadPanel : UserControl
             _note.Text = "명령 중에는 값을 바꾸지 않습니다 — 명령을 끝낸(Esc) 뒤 다시 넣으세요";
             return;
         }
+        // ★[v111.7 · 재검토 낮음] 남은 바뀜(실행 취소 표시 포함)을 먼저 셈 — 칸 값으로 고친 결과에 실행 취소 표시가 묻어 저절로 안 그려지는 일이 없게.
+        //   다시 계산이 창을 다시 채우므로(Show) 사람이 친 글자는 지켰다가 되돌려 놓는다
+        var typed = _fields.Where(f => !(_shown.TryGetValue(f.Box, out var w0) && f.Box.Text.Trim() == w0)).Select(f => (f.Box, f.Box.Text)).ToList();
+        try { _s.RecomputeIfDirty(); } catch { }
+        if (_s == null) return;
+        foreach (var (tb, t) in typed) tb.Text = t;
         _s.Fresh();
         _recurve = false;
         bool changed = false; string bad = "";
@@ -264,6 +342,17 @@ internal sealed class RoadPanel : UserControl
             }
             var r = s?.Last;
             _note.Text = s == null ? "" : s.Note;
+            // ★[v111.3.1] 단추 아래 한 줄 + 깜박임 · 미리보기 단추 글자
+            SetState(_surfState, s != null && s.SurfaceStale.Length > 0 ? s.SurfaceStale + " — 다시 생성하세요" : "");
+            Blink(_surfBtn, s != null && s.SurfaceStale.Length > 0);
+            // ★[v111.7 · 설치 전 검토 M3] 다시 그리다 못 그려 옛것이 지워졌으면 그 알림이 먼저(늘 남음 · U로 되돌리면 꺼짐)
+            string sheetLine = s == null ? "" : s.SheetLost.Length > 0 ? s.SheetLost : s.SheetStale.Length > 0 ? s.SheetStale + " — 종단도를 새로 그리세요" : "";
+            SetState(_sheetState, sheetLine);
+            Blink(_sheetBtn, sheetLine.Length > 0);
+            string xsecLine = s == null ? "" : s.XsecLost.Length > 0 ? s.XsecLost : s.XsecStale.Length > 0 ? s.XsecStale + " — 횡단도를 새로 그리세요" : "";   // ★[v111.5]
+            SetState(_xsecState, xsecLine);
+            Blink(_xsecBtn, xsecLine.Length > 0);
+            _prevBtn.Content = s != null && s.PreviewHidden ? "미리보기 선 보이기" : "미리보기 선 숨기기";
             if (r == null) { _result.Text = ""; return; }
             if (r.Error.Length > 0) { _result.Text = r.Error; return; }
             var wl = s!.Design.TierWalls.Where(w => w.Length >= 2).ToList();

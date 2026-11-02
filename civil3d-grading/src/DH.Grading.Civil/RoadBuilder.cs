@@ -213,7 +213,7 @@ internal static class RoadBuilder
     internal static bool IsOurs(CivilDb.Alignment al)
         => (al.Name ?? "").StartsWith(AlignBase, StringComparison.Ordinal) || string.Equals(al.Layer, LayAlign, StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>계획 종단 초안을 다시(지금 PVI를 모두 지우고 새로) — 노선이 바뀌어 끝 측점이 달라졌을 때 · [종단 초안 다시].</summary>
+    /// <summary>계획 종단 초안을 다시(지금 PVI를 모두 지우고 새로) — 노선이 바뀌어 끝 측점이 달라졌을 때 · [종단 자동으로 다시](★[v111.7] 옛 [종단 초안 다시]).</summary>
     /// <para>★[재검토 열린 질문] 바탕은 «지금» 바탕면(세션이 이름으로 다시 찾은 것)에서 직접 읽는다 — 처음 만든 «-바탕» 종단은 재정지 · 초기화 뒤 옛 면을 따라갈 수 있다.</para>
     internal static RoadProfileDraft.Result Redraft(Document doc, ObjectId aid, IGroundSurface baseSurf, ObjectId planProf, RoadDesign d)
     {
@@ -273,7 +273,7 @@ internal static class RoadBuilder
         var X = new List<double>(); var Y = new List<double>(); var Z = new List<double>();
         string note = "";
         if (pr.StartingStation > al.StartingStation + 0.5 || pr.EndingStation < al.EndingStation - 0.5)
-            note = $"계획 종단이 노선 일부만 덮음({pr.StartingStation:F1}~{pr.EndingStation:F1} / 노선 {al.StartingStation:F1}~{al.EndingStation:F1}) — [종단 초안 다시]";
+            note = $"계획 종단이 노선 일부만 덮음({pr.StartingStation:F1}~{pr.EndingStation:F1} / 노선 {al.StartingStation:F1}~{al.EndingStation:F1}) — [종단 자동으로 다시]";
         double first = double.NaN, lastSc = double.NaN;   // ★[설치 전 검토 L3] Core 측점 0 = 실제 첫 표본(첫 측점이 실패하면 옹벽 · 제안 측점이 밀림)
         for (int k = 0; ; k++)
         {

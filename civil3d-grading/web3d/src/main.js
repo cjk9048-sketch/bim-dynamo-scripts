@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { loadScene } from './data.js';
 import { View } from './view.js';
 import { buildLayers, applyTerrainMode } from './layers.js';
-import { buildDrain, buildCad, buildStations, buildSlope } from './extras.js';
+import { buildDrain, buildCad, buildStations, buildSlope, buildBldg } from './extras.js';
 import { Picker } from './pick.js';
 import { Ui, Dock } from './ui.js';
 import { Section } from './section.js';
@@ -13,7 +13,7 @@ import { Sun, sunPosition } from './sun.js';
 import { photo, video, download, fileName } from './capture.js';
 import { inHost, post, onHost } from './host.js';
 
-const ORDER = ['terrain', 'sat', 'cutfill', 'ground', 'wall', 'pattern', 'excav', 'drain', 'slope', 'cad', 'align'];
+const ORDER = ['terrain', 'sat', 'cutfill', 'ground', 'wall', 'pattern', 'excav', 'drain', 'slope', 'cad', 'bldg', 'align'];
 const KEEP = 'dh3d.layers.v1';
 
 function loadKeep() { try { return JSON.parse(localStorage.getItem(KEEP) || '{}'); } catch { return {}; } }
@@ -49,6 +49,8 @@ async function main() {
     L = await buildLayers(view, head);
     buildDrain(view, head, L);
     buildCad(view, head, L);
+    // ★[v111.7 검토 L] 건물을 못 그려도 3D는 뜬다 — 층만 회색 + ⚠
+    try { buildBldg(view, head, L); } catch { L.bldg = { label: '건물', on: false, missing: '건물을 못 그렸습니다' }; }
     buildStations(view, head, L);
     buildSlope(view, head, L);
   } catch (e) { fail('3D를 못 그렸습니다 — ' + e.message); return; }
@@ -273,6 +275,7 @@ async function main() {
     head: {
       origin: head.origin, bbox: b, walls: (head.walls || []).length, patterns: (head.patterns || []).length, warn: head.warn || [],
       drain: L.drain ? L.drain.summary : null, slope: L.slope ? { n: L.slope.n, step: L.slope.step } : null, cad: L.cad ? (L.cad.missing ? 'missing' : (head.cad.labels || []).length) : null,
+      bldg: L.bldg ? (L.bldg.missing ? { missing: L.bldg.missing, quiet: !!L.bldg.quiet } : { n: L.bldg.n, hit: L.bldg.hit }) : null,
       align: L.align ? { name: L.align.name, st: L.align.st.length, views: L.align.views } : null, build: !!head.build, geo: head.geo || null,
     },
     layer: (id, on) => setLayer(id, on),

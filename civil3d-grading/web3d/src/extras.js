@@ -303,6 +303,75 @@ export function buildCad(view, head, L) {
   L.cad = { obj: grp, label: '지적', on: false };
 }
 
+// ── 건물 ── ★[v111.7 · JACK 1102 «3D 보기에 건물 · 층수로 높이 · 켜고 끄기»] VWorld 건물정보 — 바닥(원지반 가장 낮은 곳) → 바닥 + 지상층수 × 3.5 m
+//   바뀌는 자리에 닿는 건물 = 빨강 반투명(그림자 없음) · 그 밖 = 흰 회색 · 지붕 테두리 선 · 누르기에는 안 걸림(아래 지형 정보 그대로) · 못 받았으면 층을 회색 + ⚠ + 까닭(범위에 없으면 ⚠ 없이)
+//   자료 꼴(C# Web3DBuildings.Pack과 짝): xy(x, y 차례) · ring[i] = 고리 i 첫 점 · poly[j] = 다각형 j 첫 고리(첫 = 바깥 반시계 · 나머지 = 구멍 시계) · bldg[k] = 건물 k 첫 다각형 · 셋 다 끝에 전체 수 · z0 · h · hit
+const BLDG_COLOR = '#e4e2dc', BLDG_HIT = '#e8392e', BLDG_EDGE = 0x77736b;
+export function buildBldg(view, head, L) {
+  const B = head.bldg;
+  if (!B) return;
+  if (B.missing || !B.xy || !B.n) {
+    // 못 받음 = 회색 + ⚠ · 범위에 건물이 없음(quiet) = 회색만
+    L.bldg = { label: '건물', on: false, missing: B.missing || '건물 자료가 없습니다', quiet: !!B.quiet };
+    return;
+  }
+  const xy = B.xy, R = B.ring, P = B.poly, K = B.bldg;
+  const out = [{ pos: [], idx: [] }, { pos: [], idx: [] }];      // 0 = 그 밖 · 1 = 닿음
+  const edge = [];
+  const V2 = (i) => new THREE.Vector2(xy[i * 2], xy[i * 2 + 1]);
+  let nHit = 0;
+  for (let k = 0; k < B.n; k++) {
+    const z0 = B.z0[k], z1 = z0 + B.h[k], o = out[B.hit[k] ? 1 : 0];
+    if (B.hit[k]) nHit++;
+    for (let j = K[k]; j < K[k + 1]; j++) {
+      const rings = [];
+      for (let r = P[j]; r < P[j + 1]; r++) { const ring = []; for (let i = R[r]; i < R[r + 1]; i++) ring.push(V2(i)); rings.push(ring); }
+      if (!rings.length || rings[0].length < 3) continue;
+      // 벽 — 고리마다 변 하나 = 네모 둘(바깥 반시계 · 구멍 시계라 같은 차례로 법선이 바깥) · 점은 면마다 따로(평평한 칠)
+      for (const ring of rings) {
+        for (let i = 0; i < ring.length; i++) {
+          const a = ring[i], b = ring[(i + 1) % ring.length], v = o.pos.length / 3;
+          o.pos.push(a.x, a.y, z0, b.x, b.y, z0, b.x, b.y, z1, a.x, a.y, z1);
+          o.idx.push(v, v + 1, v + 2, v, v + 2, v + 3);
+          edge.push(a.x, a.y, z1 + 0.02, b.x, b.y, z1 + 0.02);
+        }
+      }
+      // 지붕 — 바깥 + 구멍을 한 판으로 세모 나누기(색인은 바깥 → 구멍 차례로 이은 점)
+      const tri = THREE.ShapeUtils.triangulateShape(rings[0], rings.slice(1));
+      const v0 = o.pos.length / 3;
+      for (const ring of rings) for (const p of ring) o.pos.push(p.x, p.y, z1);
+      for (const t of tri) o.idx.push(v0 + t[0], v0 + t[1], v0 + t[2]);
+    }
+  }
+  const grp = new THREE.Group();
+  const mats = [
+    new THREE.MeshStandardMaterial({ color: new THREE.Color(BLDG_COLOR), roughness: 0.85, flatShading: true }),
+    new THREE.MeshStandardMaterial({ color: new THREE.Color(BLDG_HIT), roughness: 0.7, flatShading: true, transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide }),
+  ];
+  out.forEach((o, i) => {
+    if (!o.idx.length) return;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(o.pos), 3));
+    g.setIndex(new THREE.BufferAttribute(new Uint32Array(o.idx), 1));
+    g.computeBoundingSphere(); g.computeBoundingBox();
+    const m = new THREE.Mesh(g, mats[i]);
+    m.castShadow = i === 0; m.receiveShadow = i === 0;     // 반투명 빨강은 그림자를 안 만든다(없어질 건물 그림자가 현장을 덮지 않게)
+    m.renderOrder = i === 1 ? 2 : 0;
+    m.userData = { layer: 'bldg', hit: i === 1 };
+    m.raycast = () => {};
+    grp.add(m);
+  });
+  if (edge.length) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(edge), 3));
+    const l = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: BLDG_EDGE }));
+    l.raycast = () => {};
+    grp.add(l);
+  }
+  view.scene.add(grp);
+  L.bldg = { obj: grp, label: '건물', on: true, n: B.n, hit: nHit, title: B.note || '' };
+}
+
 // ── 측점 ── 중심선(빨강) · 측점 가로선(흰 점선 · 정측점 굵게 · 땅을 따라) · 이름(가까이 갈 때) · 마우스 올린 측점은 주황 실선
 const ST_DASH = [8, 5];    // 측점 점선 긋기 · 띄기(화면 px)
 const ST_HOV = 0xffa31a;   // 마우스 올린 측점

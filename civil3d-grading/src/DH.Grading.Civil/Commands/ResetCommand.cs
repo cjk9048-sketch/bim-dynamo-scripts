@@ -312,6 +312,13 @@ public sealed class ResetCommand
     private static ObjectIdCollection? Safe(System.Func<ObjectIdCollection> f)
     { try { return f(); } catch { return null; } }
 
+    /// <summary>★[v111.5] 기록 핸들(16진) → ID · 없거나 지워졌으면 Null.</summary>
+    private static ObjectId HandleId(Database db, string h)
+    {
+        try { if (!string.IsNullOrEmpty(h) && db.TryGetObjectId(new Handle(System.Convert.ToInt64(h, 16)), out var id) && !id.IsErased) return id; } catch { }
+        return ObjectId.Null;
+    }
+
     private static int EraseEach(Transaction tr, ObjectIdCollection? ids)
     {
         if (ids == null) return 0;
@@ -367,6 +374,8 @@ public sealed class ResetCommand
             {
                 Autodesk.Civil.DatabaseServices.Alignment al;
                 try { al = (Autodesk.Civil.DatabaseServices.Alignment)tr.GetObject(aid, OpenMode.ForRead); } catch { continue; }
+                // ★[v111.5 · 계획 3] 횡단도 뷰(기록 핸들) — 그룹을 지우면 Civil이 딸린 뷰도 지우지만 먼저 확실히
+                try { var dX = RoadDesign.Read(tr, aid); if (dX != null) n += Kill(dX.XsecViews.Select(h => HandleId(db, h)).ToList()); } catch { }
                 n += Kill(Ids(Safe(() => al.GetSampleLineGroupIds())));
                 n += Kill(Ids(Safe(() => al.GetProfileViewIds())));
                 n += Kill(Ids(Safe(() => al.GetProfileIds())));
@@ -382,6 +391,8 @@ public sealed class ResetCommand
                     var d = RoadDesign.Read(tr, aid);
                     var mine = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
                     if (d != null) { mine.Add(d.PlanProfile); mine.Add(d.BaseProfile); mine.Add(d.SheetGround); mine.Add(d.SheetChain); mine.Add(d.SheetGroup); foreach (var v in d.SheetViews) mine.Add(v); }
+                    // ★[v111.5 · 계획 3] 진입도로 횡단 — 숨긴 검토선 그룹 · 뷰(기록 핸들)
+                    if (d != null) { mine.Add(d.XsecGroup); n += Kill(d.XsecViews.Select(h => HandleId(db, h)).ToList()); }
                     mine.Remove("");
                     bool Ours(ObjectId id)
                     {

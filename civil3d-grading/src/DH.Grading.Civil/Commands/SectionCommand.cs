@@ -108,7 +108,7 @@ public sealed class SectionCommand
         if (surfs.Count == 0)
         {
             Refuse(ed, "종단·횡단을 만들 지표면이 없습니다.\n\n" +
-                       "먼저 [서버지표면]으로 원지반을 만들거나 [부지정지]를 실행하세요.");
+                       "먼저 [원지반 가져오기]로 원지반을 만들거나 [계획부지 생성]을 실행하세요.");
             return;
         }
         ed.WriteMessage("\n[종단/횡단] 대상 지표면: " +

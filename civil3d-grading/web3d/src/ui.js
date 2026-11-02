@@ -62,14 +62,15 @@ export class Ui {
       const row = document.createElement('label');
       const sw = SWATCH[id];
       if (l.missing) {
-        // 자료가 없는 층 — 회색 + ⚠(까닭은 풍선 글)
+        // 자료가 없는 층 — 회색 + ⚠(까닭은 풍선 글) · quiet(범위에 그릴 것이 없을 뿐 — 실패 아님)는 ⚠ 없이
         row.className = 'lay miss';
         row.title = l.missing;
-        row.innerHTML = `<input type="checkbox" disabled>${sw ? `<span class="sw" style="background:${sw}"></span>` : ''}<span>${esc(l.label)}</span><span class="wn">⚠</span>`;
+        row.innerHTML = `<input type="checkbox" disabled>${sw ? `<span class="sw" style="background:${sw}"></span>` : ''}<span>${esc(l.label)}</span>${l.quiet ? '' : '<span class="wn">⚠</span>'}`;
         box.appendChild(row);
         continue;
       }
       row.className = 'lay' + (l.on ? '' : ' off');
+      if (l.title) row.title = l.title;
       row.innerHTML = `<input type="checkbox" ${l.on ? 'checked' : ''}>${sw ? `<span class="sw" style="background:${sw}"></span>` : ''}<span>${esc(l.label)}</span>`;
       const cb = row.querySelector('input');
       cb.onchange = () => { row.classList.toggle('off', !cb.checked); if (this.onLayer) this.onLayer(id, cb.checked); };
@@ -211,6 +212,7 @@ export class Ui {
 const SWATCH = {
   terrain: CLASS_STYLE.plan.color, sat: '#4f6b3a', cutfill: 'linear-gradient(90deg,#cc2a1f,#f4f4f0,#265ccc)',
   ground: '#5f7a45', excav: '#9b7b52', wall: '#c2bfb8', pattern: '#a8a090', drain: '#1e7bff', cad: '#ffd400', align: '#ff4d4d',
+  bldg: 'linear-gradient(90deg,#e4e2dc 50%,#e8392e 50%)',
   slope: SLOPE_GRAD,
 };
 

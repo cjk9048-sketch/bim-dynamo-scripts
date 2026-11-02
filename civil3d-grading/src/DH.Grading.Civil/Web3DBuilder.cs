@@ -30,6 +30,9 @@ internal static class Web3DBuilder
 {
     internal static string Dir => System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "DH.Grading", "3d");
 
+    /// <summary>★[v111.7 · JACK 1102] 건물 한도 — 넘으면 범위를 가운데로 줄인다(<see cref="VWorldBuildings"/>).</summary>
+    internal const int MaxBuildings = 5000;
+
     /// <summary>마지막에 지은 페이지 — 저장 단추 · 팔레트가 쓴다.</summary>
     internal static string LastPath = "", LastDwg = "", LastDwgKey = "";
     internal static long LastBytes;
@@ -233,7 +236,67 @@ internal static class Web3DBuilder
             }
         }
         catch (System.Exception aex) { c.Warn.Add("종단 측점을 못 읽었습니다 — " + aex.Message); log.AppendLine("  측점: 실패 — " + aex); }
-        Lap("빗물 · 지적 · 측점", skipSat ? null : "위성사진 받는 중");
+        Lap("빗물 · 지적 · 측점", skipSat ? null : "건물 받는 중");
+
+        // ④c ★★[v111.7 · JACK 1102 «3D 보기에 건물 · 층수로 높이 · 켜고 끄기»] 건물 — VWorld 건물정보 · 범위는 지적과 같음(바뀐 자리 + 200 m · 없으면 지형 전체)
+        //   높이 = 지상층수 × 3.5 m(0 · 빈칸은 안 그림) · 바닥 = 발자국 아래 원지반 가장 낮은 곳(그 건물 밑에 원지반이 없으면 보이는 지형) · 바뀌는 자리에 닿으면 빨강 반투명
+        //   못 받아도(키 · 인터넷) 3D는 그대로 — 층 목록에 회색 + ⚠ · 장면에만(도면 · InfraWorks 파일에는 안 넣음) · 화면 없는 시험(skipSat)은 인터넷을 안 쓴다
+        //   ★[검토 M · 보안] 페이지(경고 · 층 글)에는 정해 둔 짧은 글만 — 받은 글 · 예외 글은 진단 로그에만(키를 지우고)
+        object? bldgHead = null;
+        if (skipSat) log.AppendLine("  건물: 시험 — 건너뜀");
+        else
+        {
+            string why = "", detail = "", key = VWorldKey.Current;
+            try
+            {
+                bool hasC = double.IsFinite(tm.CMinX);
+                var site = hasC ? new VWorldParcels.Box(tm.CMinX, tm.CMinY, tm.CMaxX, tm.CMaxY) : new VWorldParcels.Box(mnx, mny, mxx, mxy);
+                VWorldBuildings.Got? got = null;
+                if (c.Epsg <= 0) why = "도면 좌표계를 몰라 건물을 받지 못했습니다";
+                else if (key.Length == 0) why = VWorldKey.NoKeyHelp;
+                else
+                {
+                    // ★[검토 L] 도면에 좌표계가 없으면(설정값으로 받음) 알림 — 원점이 다르면 건물이 엉뚱한 자리에 선다
+                    string csCode = "";
+                    try { csCode = KoreaCs.Read(db); } catch { }
+                    if (KoreaCs.ResolveEpsgFromCode(csCode) == null)
+                        c.Warn.Add((string.IsNullOrEmpty(csCode) ? "도면 좌표계 없음" : "도면 좌표계 자동인식 밖") + $" — 설정 EPSG:{c.Epsg}로 건물을 받음");
+                    try { got = VWorldBuildings.Fetch(site, hasC ? 200 : 0, c.Epsg, key, MaxBuildings, s => BusyPopup.Text("3D 보기 — " + s)); }
+                    catch (VWorldBuildings.Fail f) { why = f.Page; detail = f.Message; }
+                }
+                if (got != null)
+                {
+                    // 바닥 — 원지반(없으면 보이는 지형) · 원지반이 있어도 그 건물 밑에 없으면 보이는 지형으로 다시(검토 M)
+                    Func<double, double, double?> baseZ = c.Ground != null ? (x, y) => c.Ground.TryGetElevation(x, y, out double z) ? z : null : SurfZ;
+                    var pr = Web3DBuildings.Place(got.Raws, baseZ, tm.InChanged, c.Ground != null ? SurfZ : null);
+                    log.AppendLine($"  건물: {pr.Text} · {got.Diag}");
+                    if (got.Shrunk)
+                        c.Warn.Add($"건물이 많아(범위 안 약 {got.Total0:N0}동) {got.Box.W:N0}×{got.Box.H:N0} m 범위만 3D에 넣었습니다("
+                                   + (got.IntoSite ? "바뀐 자리 가운데" : $"바뀐 자리 + {got.Margin:N0} m") + $" · 한도 {MaxBuildings:N0}동)");
+                    // 그릴 것이 없음 — 실패가 아니라 ⚠ 없이 회색(quiet) · 뺀 까닭은 셈만
+                    if (pr.Raws == 0) bldgHead = new Dictionary<string, object> { ["missing"] = "이 범위에 건물 자료가 없습니다", ["quiet"] = true };
+                    else if (pr.Items.Count == 0) bldgHead = new Dictionary<string, object> { ["missing"] = $"그릴 건물이 없습니다 — 받은 {pr.Raws:N0}동 · {pr.DropText}", ["quiet"] = true };
+                    else
+                    {
+                        var ar = Web3DBuildings.Pack(pr.Items, ox, oy);
+                        bldgHead = new Dictionary<string, object>
+                        {
+                            ["n"] = pr.Items.Count, ["xy"] = sc.F32(ar.Xy), ["ring"] = sc.U32(ar.Ring), ["poly"] = sc.U32(ar.Poly), ["bldg"] = sc.U32(ar.Bldg),
+                            ["z0"] = sc.F32(ar.Z0), ["h"] = sc.F32(ar.H), ["hit"] = sc.U8(ar.Hit),
+                            ["note"] = $"건물 {pr.Items.Count:N0}동 · 바뀌는 자리에 닿음 {pr.Touch:N0}동(빨강) · 뺌: {pr.DropText} · 높이 = 지상층수 × {Web3DBuildings.FloorHeight} m",
+                        };
+                    }
+                }
+            }
+            catch (System.Exception bex) { why = "건물을 넣지 못했습니다(진단 로그 참고)"; detail = bex.ToString(); }
+            if (why.Length > 0)
+            {
+                c.Warn.Add(why + " — 3D에 건물 없음");
+                log.AppendLine("  건물: 못 받음 — " + why + (detail.Length > 0 ? " · " + VWorldBuildings.Scrub(detail, key) : ""));
+                bldgHead = new Dictionary<string, object> { ["missing"] = why };
+            }
+        }
+        Lap("건물", skipSat ? null : "위성사진 받는 중");
 
         // ⑤ 위성 — 자세히(바뀐 자리 + 50 m · 0.3 m/px) + 바탕(지형 전체 + 30 m)
         object? satHead = null;
@@ -286,7 +349,7 @@ internal static class Web3DBuilder
             ["classes"] = TerrainMesh.Keys.Select((k, i) => new Dictionary<string, object> { ["key"] = k, ["name"] = TerrainMesh.Names[i] }).ToList(),
         };
         H["sat"] = satHead;
-        H["drain"] = drainHead; H["cad"] = cadHead; H["align"] = alignHead; H["build"] = buildHead;
+        H["drain"] = drainHead; H["cad"] = cadHead; H["align"] = alignHead; H["build"] = buildHead; H["bldg"] = bldgHead;
         // 해 그림자 — 원점의 위경도(도면 좌표계 벨트)
         try { var ll = KoreaTm.ToLonLat(ox, oy, c.BeltCm, c.BeltFn); H["geo"] = new Dictionary<string, object> { ["lat"] = Web3DScene.Num(ll.Lat, 6), ["lon"] = Web3DScene.Num(ll.Lon, 6) }; } catch { }
         H["ground"] = ground.Idx.Length > 0 ? new Dictionary<string, object> { ["pos"] = sc.F32(ground.Pos), ["idx"] = sc.U32(ground.Idx), ["name"] = c.GroundName } : null;

@@ -187,7 +187,7 @@ public static class SampleLineCommand
         }
         if (found.Count == 0)
         {
-            SectionCommand.Refuse(ed, "도면에 노선(선형)이 없습니다.\n먼저 [종단도]로 노선을 그리세요.");
+            SectionCommand.Refuse(ed, "도면에 노선(선형)이 없습니다.\n먼저 계획지표면 [종단도]로 노선을 그리세요.");
             return ObjectId.Null;
         }
         if (found.Count == 1) { name = found[0].Name; return found[0].Id; }
