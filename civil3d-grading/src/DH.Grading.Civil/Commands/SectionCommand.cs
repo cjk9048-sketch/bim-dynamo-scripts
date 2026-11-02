@@ -253,7 +253,7 @@ public sealed class SectionCommand
             AcadApp.ShowAlertDialog(
                 $"횡단이 {cuts.Count}개나 됩니다(간격 {interval:0.#}m · 노선 {lineLen:F0}m).\n" +
                 $"도면이 감당하기 어려워 횡단은 만들지 않았습니다.\n\n" +
-                $"도면설정에서 '횡단 간격'을 늘린 뒤 다시 실행하세요(예 {System.Math.Ceiling(lineLen / 50)}m 이상).");
+                $"도면설정에서 '측점 간격'을 늘린 뒤 다시 실행하세요(예 {System.Math.Ceiling(lineLen / 50)}m 이상).");
             Done(ed, $"선형 '{alignName}' · 종단 {nProf}개 · 종단면도 완료 (횡단 {cuts.Count}개 → 상한 초과로 생략)");
             return;
         }
@@ -318,7 +318,7 @@ public sealed class SectionCommand
         string msg = $"선형 '{alignName}' · 종단 {nProf}개 · 종단면도 1개 · 측점선 {nSl}개 · 횡단면도 {nSv}개";
         Done(ed, msg);
         AcadApp.ShowAlertDialog("종단·횡단 생성 완료\n\n" + msg +
-            $"\n\n· 횡단 간격 {interval:0.#}m · 좌 {wl:0.#}m / 우 {wr:0.#}m · 가로 {GradingSettings.XsecLayoutC}개씩" +
+            $"\n\n· 측점 간격 {interval:0.#}m · 좌 {wl:0.#}m / 우 {wr:0.#}m · 가로 {GradingSettings.XsecLayoutC}개씩" +
             "\n· 간격·폭·열 수는 [도면설정]에서 바꿉니다." +
             "\n· 정지면을 고치면 종단·횡단은 Civil3D가 자동으로 갱신합니다.");
         try { DiagLog.Append($"\n■ DHSECTION — {msg} · 간격{interval} 좌{wl} 우{wr} St.{stStart:F1}~{stEnd:F1}\n"); } catch { }

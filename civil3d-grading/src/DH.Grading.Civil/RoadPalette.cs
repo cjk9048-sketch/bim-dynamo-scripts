@@ -44,13 +44,6 @@ internal static class RoadPalette
         try { if (_ps != null && _ps.Visible) _ps.Visible = false; } catch { }
     }
 
-    /// <summary>★[v111.7] 이 창 칸에 글자를 넣는 중 — 저절로 다시 그리기(RoadSession)를 미룬다(명령이 포커스를 가져가 덜 친 값이 확정되지 않게).
-    /// <para>★[v111.7.1 · JACK 1102 B-3] 칸에 포커스만 남은 것은 아님(값을 넣고 Enter 뒤에도 포커스가 칸에 남아 «입력 중»이 끝나지 않을 수 있었음) —
-    /// 칸에 포커스 + (2초 안에 키를 눌렀거나 · 아직 확정 안 한 글자가 있음)일 때만.</para></summary>
-    internal static bool Typing
-    {
-        get { try { return _panel != null && _panel.TypingNow(); } catch { return false; } }
-    }
 }
 
 internal sealed class RoadPanel : UserControl
@@ -74,7 +67,6 @@ internal sealed class RoadPanel : UserControl
         //   DhBrand 껍질 · 머리띠(로고 + 제목) · 로고 워터마크 · 접는 칸(작은 칸은 한 번에 하나) · 값 칸(이름 11px 옅은 글자 + 40px 칸) · 청록 기본 단추.
         DhBrand.Apply(this);
         Background = DhBrand.Wall;
-        PreviewKeyDown += (_, __) => _keyAt = Environment.TickCount64;   // ★[v111.7.1] 칸에 치는 중(저절로 다시 만들기를 미룸)
         var head = DhBrand.Header("진입도로", "", drag: null, onClose: null, logoHeight: 17, titleSize: 13, pad: new Thickness(0, 0, 0, 6));
         head.Background = System.Windows.Media.Brushes.Transparent;
         var top = new StackPanel { Margin = new Thickness(10, 10, 10, 0) };
@@ -146,68 +138,57 @@ internal sealed class RoadPanel : UserControl
         // ── ■ 결과 ──
         _host = GradingDialog.AddCollapsible(_root, "■ 결과", "토공량 · 높이 · 경사 · 옹벽", open: true, key: "도로:결과");
         var resCard = Card(_result);
+        resCard.ToolTip = $"최대 종단경사가 {ProfileSheetRules.WarnGrade * 100:0} %(경고 문턱 — 고정)를 넘으면 빨간 글로 알립니다 · ■ 종단 «최대 경사 %»는 자동 초안 한도(그 사이는 경고 없음)";
         _host.Children.Add(resCard); _needRoad.Add(resCard);
-        // ★★★[v111.7.1 · JACK 1102 «2초 쉬면 저절로 · 클릭 수를 최대한 적게»] [진입도로 지표면 생성] · [미리보기 선 숨기기] 없앰 —
-        //   고치고 손을 떼면 2초 뒤 지표면 · 종단도 · 횡단도를 저절로(한 명령 · 실행 취소 한 번) · 상태 한 줄 · 못 하면 까닭 + [다시 시도](그때만 보임)
+        // ★★★[v111.7.2 · JACK 1102 «측점(PVI) 움직일 때마다 모든 게 재작성되니 오래 걸린다 · 마지막에 팝업창 단추를 누르면 한꺼번에 업데이트»]
+        //   저절로 다시 만들기 · [다시 시도] 없앰 → [업데이트] 하나(늘 보임 · 고친 것이 있으면 깜박 + 상태 줄) · 한 명령 · 실행 취소 한 번
+        //   ■ 도면([종단도] [횡단도] + 상태 줄)도 없앰(JACK — 리본에 이미 있음 · 처음 놓기 · 옮겨 다시 = 리본 [종단도] [횡단도] 또는 [업데이트])
+        _updateBtn = Buttons(("업데이트", "DHROADUPDATE", "지표면 · 종단도 · 횡단도를 한꺼번에 다시 만듭니다", true))[0];
         _autoState = StateLine();
-        _retryBtn = Buttons(("다시 시도", "DHROADSURF", "지표면 · 종단도 · 횡단도를 지금 한 번 다시 만듭니다(저절로 다시 만들기와 같은 차례 · 놓인 자리를 모르는 도면은 ■ 도면 단추로)", true))[0];
-        _retryBtn.Visibility = Visibility.Collapsed;
-
-        // ── ■ 도면 ──
-        // ★★[v111.6 · JACK 1102 «계획지표면과 진입도로 둘 다 종단 · 횡단 — 리본 · 도킹창 이름 통일»] ■ 결과에서 종단도 · 횡단도를 떼어 ■ 도면으로(정지 창 ■ 도면과 같은 꼴)
-        //   이름 = 리본 [진입도로] 패널과 같게: [종단도 새로 그리기] → [종단도] · [횡단도 그리기] → [횡단도] · 명령 · 아래 한 줄 · 깜박은 그대로
-        _host = GradingDialog.AddCollapsible(_root, "■ 도면", "진입도로 종단도 · 횡단도", open: true, key: "도로:도면");
-        _sheetBtn = Buttons(("종단도", "DHROADSHEET", "지금 종단 · 축척으로 종단도(도곽 · 밴드)를 지우고 새로 그립니다 — 놓을 자리를 찍음(Enter = 지난 자리)", false))[0];
-        _sheetState = StateLine();
-        // ★★[v111.5 · 계획_v111_4.md 3 · JACK 1030] [횡단도 그리기] — 부지 [횡단도]와 같은 꼴 · 아래 한 줄 + 깜박(종단 · 지표면 · 축척이 바뀜)
-        _xsecBtn = Buttons(("횡단도", "DHROADXSEC", "종단도 측점마다 횡단면도(도곽 · 밴드 · 토량표)를 그립니다 — 놓을 자리를 찍음(Enter = 지난 자리) · 종단도 · 진입도로 지표면이 있어야 합니다", false))[0];
-        _xsecState = StateLine();
         Show(null);
     }
 
-    Button _retryBtn = null!, _sheetBtn = null!, _xsecBtn = null!;
-    TextBlock _autoState = null!, _sheetState = null!, _xsecState = null!;
-    long _keyAt;                                              // ★[v111.7.1] 이 창에서 마지막으로 키를 누른 때(Environment.TickCount64)
+    Button _updateBtn = null!;
+    TextBlock _autoState = null!;
 
-    /// <summary>★[v111.7.1 · JACK 1102 B-3] 칸에 치는 중 — 포커스가 값 칸에 있고 (2초 안에 키를 눌렀거나 · 확정 안 한 글자가 있음).</summary>
-    internal bool TypingNow()
-    {
-        if (!IsKeyboardFocusWithin || System.Windows.Input.Keyboard.FocusedElement is not TextBox tb) return false;
-        if (Environment.TickCount64 - _keyAt < 2000) return true;
-        return _shown.TryGetValue(tb, out var w) && tb.Text.Trim() != w;
-    }
-
-    /// <summary>★★[v111.7.1 · JACK 1102] ■ 결과 상태 한 줄 — 최신 · 곧 저절로(손을 떼면 2초 뒤) · 못 함(까닭 + [다시 시도]만 이때 보임) ·
-    /// ★[검토 중간 2] 다시 만든 지표면이 노리선을 지웠으면 다음 [노리선]까지 «노리선 지움 n — [노리선]으로 다시». 돌려줌 = 글 · [다시 시도] 보임 · 주황.</summary>
-    internal static (string Text, bool Retry, bool Warn) AutoStateText(RoadSession? s)
+    /// <summary>★★[v111.7.2 · JACK 1102] ■ 결과 상태 줄 — 최신(«✓ 최신 — 지표면 · 종단도 · 횡단도») · 고친 것이 있음(«고친 것이 있습니다 — [업데이트]를 누르세요» + [업데이트] 깜박) ·
+    /// [업데이트]가 못 한 까닭(실패 · 자리 모름 · 겹침) · 다시 그리다 지워진 종단도 · 횡단도 · 다시 만든 지표면이 지운 노리선. 돌려줌 = 글 · 주황(경고 글자) · [업데이트] 깜박.</summary>
+    internal static (string Text, bool Warn, bool Blink) StateText(RoadSession? s)
     {
         if (s == null) return ("", false, false);
-        string block = s.AutoBlock, t;
-        bool pending = s.StaleKey.Length > 0 && block.Length == 0;
-        if (s.StaleKey.Length == 0)
+        bool stale = s.StaleKey.Length > 0;
+        var lines = new List<string>();
+        if (!stale)
         {
             var have = new List<string>();
             if (!s.SurfaceMissing && s.Last != null && s.Last.Error.Length == 0) have.Add("지표면");
-            if (s.Design.SheetViews.Count > 0) have.Add("종단도");
-            if (s.Design.XsecViews.Count > 0) have.Add("횡단도");
-            t = have.Count > 0 ? "✓ 최신 — " + string.Join(" · ", have) : "";
+            // ★[v111.7.2 검토 낮음] 살아 있는 뷰만(지운 종단도 · 횡단도를 «최신»이라 하지 않음)
+            var dbS = s.Doc.Database;
+            if (RoadSession.AnyAlive(dbS, s.Design.SheetViews)) have.Add("종단도");
+            if (RoadSession.AnyAlive(dbS, s.Design.XsecViews)) have.Add("횡단도");
+            if (have.Count > 0) lines.Add("✓ 최신 — " + string.Join(" · ", have));
         }
-        else t = pending ? "손을 떼면 2초 뒤 지표면 · 종단도 · 횡단도를 다시 만듭니다" : BlockText(block);
-        if (s.TicksErased > 0) t = (t.Length > 0 ? t + "\n" : "") + $"노리선 지움 {s.TicksErased} — [노리선]으로 다시";
-        return (t, s.StaleKey.Length > 0 && !pending, s.StaleKey.Length > 0 || s.TicksErased > 0);
+        else
+        {
+            string fail = s.FailWhy;
+            lines.Add(fail.Length == 0 ? "고친 것이 있습니다 — [업데이트]를 누르세요" : FailText(fail));
+        }
+        // ★[v111.7 · 설치 전 검토 M3] 다시 그리다 못 그려 옛것이 지워졌으면 늘 남음(U로 되돌리면 꺼짐) — 옛 ■ 도면 줄에서 옮김
+        if (s.SheetLost.Length > 0) lines.Add(s.SheetLost);
+        if (s.XsecLost.Length > 0) lines.Add(s.XsecLost);
+        if (s.TicksErased > 0) lines.Add($"노리선 지움 {s.TicksErased} — [노리선]으로 다시");
+        bool warn = stale || s.TicksErased > 0 || s.SheetLost.Length > 0 || s.XsecLost.Length > 0;
+        return (string.Join("\n", lines), warn, stale || s.SheetLost.Length > 0 || s.XsecLost.Length > 0);
     }
 
-    /// <summary>★[v111.7.1] 저절로 안 한 까닭(<see cref="RoadSession.AutoBlock"/>) → 상태 줄 짧은 글(자세한 것은 진단 로그).</summary>
-    static string BlockText(string w) => w switch
+    /// <summary>★[v111.7.2] [업데이트]가 못 한 까닭(<see cref="RoadSession.FailWhy"/>) → 상태 줄 짧은 글(자세한 것은 진단 로그).</summary>
+    internal static string FailText(string w) => w switch
     {
-        RoadSession.WhyUndo => "실행 취소로 되돌린 상태 — 저절로 안 만듦",
-        RoadSession.WhyOpen => "도면을 열 때부터 옛것 — 저절로 안 만듦",
-        RoadSession.WhyDone or "다시 해도 남음" => "다시 만들어도 다름 — 진단 로그 확인",
+        "다시 해도 남음" => "다시 만들어도 다름 — 진단 로그 확인",
         "계산 오류" => "계산 오류 — 값을 확인하세요",
         _ when w.StartsWith("실패 — ") => "다시 만들지 못함 — " + w[5..],
-        _ when w.StartsWith("못 보냄 — ") => "저절로 다시 만들기가 안 돌았습니다 — " + w[7..],
-        _ when w.StartsWith("못 보냄") => "저절로 다시 만들기가 안 돌았습니다",
-        _ when w.Contains("종단도") || w.Contains("횡단도") => w + " — ■ 도면 단추로",
+        _ when w.Contains(RoadAutoRules.WhySheetPlace) || w.Contains(RoadAutoRules.WhySheetOverlap) || w.Contains(RoadAutoRules.WhyXsecPlace) => w + " — [업데이트]를 누르면 자리를 묻습니다",
+        _ when w.Contains(RoadAutoRules.WhyXsecRefused) => w + " — [업데이트]로 다시",
         _ => w,
     };
 
@@ -298,7 +279,6 @@ internal sealed class RoadPanel : UserControl
         if (s == null) return;
         try
         {
-            RoadSession.NoteUserSend();   // ★[v111.7] 1초 안에는 저절로 다시 그리기를 안 보냄(이 명령과 엇갈리지 않게)
             doc.SendStringToExecute("\x03\x03" + cmd + " ", true, false, false);
         }
         catch (System.Exception ex) { _note.Text = text + " 실패 — " + ex.Message; }
@@ -384,39 +364,38 @@ internal sealed class RoadPanel : UserControl
             }
             var r = s?.Last;
             _note.Text = s == null ? "" : s.Note;
-            // ★★[v111.7.1 · JACK 1102] ■ 결과 상태 한 줄 — 최신 · 곧 저절로(손을 떼면 2초 뒤) · 못 함(까닭 + [다시 시도]만 이때 보임)
-            string block = s?.AutoBlock ?? "";
-            var (stText, stRetry, stWarn) = AutoStateText(s);
+            // ★★[v111.7.2 · JACK 1102] ■ 결과 상태 줄 + [업데이트] 깜박(고친 것이 있으면)
+            var (stText, stWarn, stBlink) = StateText(s);
             SetState(_autoState, stText);
             _autoState.Foreground = stWarn ? DhBrand.Warn : DhBrand.Sub;
-            _retryBtn.Visibility = stRetry ? Visibility.Visible : Visibility.Collapsed;
-            // ■ 도면 — 찍어야 하는 일(자리 모름 · 겹침 · 못 그려 지워짐)만 그 단추 아래 한 줄 + 깜박(곧 저절로 다시 만들 것은 알리지 않음 — JACK «계속 다시 그리라고 나온다»)
-            // ★[v111.7 · 설치 전 검토 M3] 다시 그리다 못 그려 옛것이 지워졌으면 그 알림이 먼저(늘 남음 · U로 되돌리면 꺼짐)
-            string sheetLine = s == null ? "" : s.SheetLost.Length > 0 ? s.SheetLost
-                             : s.SheetStale.Length > 0 && block.Contains(RoadAutoRules.WhySheetPlace) ? "종단도 자리를 모릅니다(지웠거나 일부만 옮김) — [종단도]로 자리를 찍으세요"
-                             : s.SheetStale.Length > 0 && block.Contains(RoadAutoRules.WhySheetOverlap) ? "다른 종단도와 겹칩니다(장 수가 늘어남) — [종단도]로 비켜 찍으세요" : "";
-            SetState(_sheetState, sheetLine);
-            Blink(_sheetBtn, sheetLine.Length > 0);
-            string xsecLine = s == null ? "" : s.XsecLost.Length > 0 ? s.XsecLost   // ★[v111.5]
-                            : s.XsecStale.Length > 0 && block.Contains(RoadAutoRules.WhyXsecPlace) ? "횡단도 자리를 모릅니다(지웠거나 일부만 옮김) — [횡단도]로 자리를 찍으세요"
-                            : s.XsecStale.Length > 0 && block.Contains(RoadAutoRules.WhyXsecRefused) ? s.XsecStale + " — [횡단도]로 다시" : "";
-            SetState(_xsecState, xsecLine);
-            Blink(_xsecBtn, xsecLine.Length > 0);
-            if (r == null) { _result.Text = ""; return; }
+            Blink(_updateBtn, stBlink);
+            _result.Inlines.Clear();
+            if (r == null) return;
             if (r.Error.Length > 0) { _result.Text = r.Error; return; }
             var wl = s!.Design.TierWalls.Where(w => w.Length >= 2).ToList();
             double wallLen = wl.Sum(w => Math.Abs(w[1] - w[0]));
             double outLen = RoadSession.OutOfLimitLength(r);
-            bool over = double.IsFinite(s.GradeNow) && s.GradeNow > s.Design.MaxGrade + 1e-6;
-            _result.Text =
-                $"절토  {r.CutVol:N0} ㎥\n성토  {r.FillVol:N0} ㎥\n순토량  {Math.Abs(r.FillVol - r.CutVol):N0} ㎥ {(r.FillVol >= r.CutVol ? "반입" : "반출")}\n" +
-                $"최대 절토고  {r.MaxCut:F1} m · 성토고  {r.MaxFill:F1} m\n" +
-                (double.IsFinite(s.GradeNow) ? $"{(over ? "⚠ " : "")}최대 종단경사  {s.GradeNow * 100:F1} %{(over ? $"(한도 {s.Design.MaxGrade * 100:0.#} %)" : "")}\n" : "") +
-                $"옹벽  {wl.Count}구간 {wallLen:F0} m · 제안  {r.Suggest.Count}구간" +
-                (outLen > 0 ? $"\n⚠ 사업 경계 밖 사면  {outLen:F0} m" : "") +
-                (r.Conflicts > 0 ? $"\n⚠ 사면 충돌  {r.Conflicts}칸(옹벽 자리)" : "") +
-                (r.ReachHit ? "\n⚠ 데이라잇 못 찾음(범위 밖)" : "") +
-                $"\n도로 {r.Length:F0} m · {r.Ms:F0} ms\n(편경사 · 확폭 · 측구 빠짐)";
+            // ★★[v111.7.2 · JACK 1102 «20 %까지는 문제없이 — 그 이상이면 경고»] 최대 종단경사가 20 %(고정)를 넘으면 그 줄을 빨갛게 + 어디인지 한 줄
+            bool over = double.IsFinite(s.GradeNow) && s.GradeNow > ProfileSheetRules.WarnGrade + 1e-6;
+            void L(string t, bool red = false)
+            {
+                if (_result.Inlines.Count > 0) _result.Inlines.Add(new System.Windows.Documents.LineBreak());
+                var run = new System.Windows.Documents.Run(t);
+                if (red) { run.Foreground = DhBrand.Warn; run.FontWeight = FontWeights.SemiBold; }
+                _result.Inlines.Add(run);
+            }
+            L($"절토  {r.CutVol:N0} ㎥");
+            L($"성토  {r.FillVol:N0} ㎥");
+            L($"순토량  {Math.Abs(r.FillVol - r.CutVol):N0} ㎥ {(r.FillVol >= r.CutVol ? "반입" : "반출")}");
+            L($"최대 절토고  {r.MaxCut:F1} m · 성토고  {r.MaxFill:F1} m");
+            if (double.IsFinite(s.GradeNow)) L($"최대 종단경사  {s.GradeNow * 100:F1} %", over);
+            if (s.GradeWarn.Length > 0) L(s.GradeWarn, true);
+            L($"옹벽  {wl.Count}구간 {wallLen:F0} m · 제안  {r.Suggest.Count}구간");
+            if (outLen > 0) L($"⚠ 사업 경계 밖 사면  {outLen:F0} m");
+            if (r.Conflicts > 0) L($"⚠ 사면 충돌  {r.Conflicts}칸(옹벽 자리)");
+            if (r.ReachHit) L("⚠ 데이라잇 못 찾음(범위 밖)");
+            L($"도로 {r.Length:F0} m · {r.Ms:F0} ms");
+            L("(편경사 · 확폭 · 측구 빠짐)");
         }
         finally { _loading = false; }
     }

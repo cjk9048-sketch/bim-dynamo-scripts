@@ -17,7 +17,7 @@ public static class RoadProfileDraft
     }
 
     public static Result Make(IReadOnlyList<double> s, IReadOnlyList<double> g, double startZ, double endZ,
-                              double maxGrade = 0.12, double minLen = 20, double tol = 0.3)
+                              double maxGrade = 0.15, double minLen = 20, double tol = 0.3)   // ★[v111.7.2 · JACK 1102] 기본 최대 경사 12 → 15 %
     {
         var res = new Result();
         int n = Math.Min(s.Count, g.Count);

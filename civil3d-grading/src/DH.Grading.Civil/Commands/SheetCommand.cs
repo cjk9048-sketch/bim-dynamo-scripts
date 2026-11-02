@@ -347,6 +347,8 @@ public static class SheetCommand
         SpreadBandLabels(db, pvId, scale, log, ctx);
         B9("⑮ 옹벽 두 값");
         WallBandPairs(db, pvId, scale, log, ctx);
+        // ★★[v111.7.2 · JACK 1102 «PVI가 두 번 꺾였으면 구배 3개만»] 진입도로 — 구배 칸을 합친 구간으로 직접 그림(Civil 접선 라벨은 스타일에서 끔) · 부지는 안 탐
+        if (ctx != null) { B9("⑮-b 구배 칸"); RoadGradeBand.Draw(db, pvId, ctx.PidPad, scale, log); }
         B9("⑯ 끝");   // ★[JACK 0827] 수직부는 한 칸에 두 값   // ★[v32.38] 떡진 밴드 값을 오른쪽으로 밀어 떨어뜨린다
         DumpBandLabels(db, log);            // ★[v32.37] 민 뒤의 상태를 남긴다(간격이 벌어졌는지)
 
@@ -1002,6 +1004,8 @@ public static class SheetCommand
                     catch (System.Exception ex)
                     { log.AppendLine($"   [{i}칸] 밴드 스타일 손보기 실패 — {Brief(ex)}"); }
                 }
+                // ★★[v111.7.2 · JACK 1102 «구배 글씨가 나머지 밴드랑 달라 — 색상도»] 진입도로 구배 칸 제목 · 테두리를 옆 칸(횡단 데이터)과 같게 — 구배 칸이 없으면(부지) 아무것도 안 함
+                RoadGradeBand.StyleRow(tr, items, log);
                 pv.Bands.SetBottomBandItems(items);
                 log.AppendLine($"   ({n}칸 — 한 스냅샷에 모아 한 번 저장)");
             }
@@ -1280,7 +1284,7 @@ public static class SheetCommand
     /// 칸끼리는 붙여 표로 읽히게 하되, 그래프와 표 사이만 띄워 경계가 보이게 한다.
     /// 이 틈은 밴드 총높이에 포함되어 축척 계산에 자동으로 반영된다(<see cref="BandPaperHeight"/>가 간격까지 더한다).</summary>
 
-    private const double TopGapMm = 10.0;
+    internal const double TopGapMm = 10.0;
 
     /// <summary>★[v26.0] 칸과 칸 사이 틈(종이 mm) — <b>0이 아니되 눈에 안 보이는</b> 값.
     /// <para>표는 붙어야 표로 읽히므로 원래 0이었다. 그런데 코드에서 칸마다 다르게 주는 값이
@@ -1293,7 +1297,7 @@ public static class SheetCommand
     /// <summary>★★[v31.0 · JACK 0812] <b>밴드 한 칸의 높이(종이 mm) — 칸 수와 무관하게 고정.</b>
     /// <para>제목칸을 <b>정사각형</b>으로 두기로 했으므로(JACK), 이 값이 곧 <b>제목칸의 한 변</b>이다.
     /// 표 칸 크기가 도면마다 달라지지 않게 하는 것이 목적이다.</para></summary>
-    private const double BandCellMm = 20.0;
+    internal const double BandCellMm = 20.0;
 
     /// <summary>★[JACK 0810] <b>"계획지반고의 변곡점 측점이 누락됨"</b> —
     /// v23.5에서 굴곡부 <b>눈금</b>은 켰는데(굴곡부 12/12) 도면엔 값이 안 나왔다.

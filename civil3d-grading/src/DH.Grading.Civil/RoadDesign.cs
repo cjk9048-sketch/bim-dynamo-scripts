@@ -11,7 +11,10 @@ internal sealed class RoadDesign
 {
     public double HalfL = 3.0, HalfR = 3.0, CrossSlope = 0.02, ShoulderL = 0.5, ShoulderR = 0.5, ShoulderSlope = 0.04;
     public double CutSlope = 1.5, CutBenchH = 5, CutBenchW = 1, FillSlope = 1.8, FillBenchH = 5, FillBenchW = 1;
-    public double MaxGrade = 0.12, MinPviLen = 20, CurveR = 30;
+    /// <summary>★[v111.7.2 · JACK 1102 «모두 15 %»] 최대 종단경사(자동 초안 한도) 기본 12 → 15 % — 옛 기록이 옛 기본값 12 %(0.12) 그대로면 읽을 때 15 %로(다른 값은 그대로 · 종단 PVI는 안 바꿈).</summary>
+    public double MaxGrade = 0.15, MinPviLen = 20, CurveR = 30;
+    /// <summary>★[v111.7.2 검토 중간 1] 최대 경사 기본값 판 — 칸이 없는 옛 기록만 읽을 때 12 % → 15 %(한 번 · 저장하면 1이 써져 다시 안 옮김). 판별은 JSON에 칸이 있는지로(<see cref="LineVer"/>와 같은 법).</summary>
+    public int GradeVer = 1;
     public double SuggestH = 0;                 // 옹벽 제안 높이(0 = 안 봄)
     public string LimitHandle = "";             // 사업 경계 폴리선 핸들
     public string PlanProfile = "", BaseProfile = "", BaseSurface = "";
@@ -36,6 +39,8 @@ internal sealed class RoadDesign
     public double XsecScale = 0, XsecAnno = 0, XsecPin = 0;
     public string XsecGroup = "", XsecStamp = "";
     public List<string> XsecViews = new();
+    /// <summary>★[v111.7.2 · JACK 1102 «횡단도 배치를 바꿔도 안 바뀌어»] 그릴 때 도면설정 «횡단도 배치»(차례 번호) — 옛 기록 = −1(1×2로 그렸다고 봄 · <see cref="DH.Grading.Core.RoadXsecRules.LayoutDefault"/>).</summary>
+    public int XsecLayout = -1;
 
     /// <summary>★[v111.7 · 설치 전 검토 M2] 그릴 때 첫 · 끝 뷰 자리 [x0, y0, x1, y1](<see cref="SheetViews"/> · <see cref="XsecViews"/> 차례) — 사람이 MOVE로 옮겼으면 저절로 다시 그리기가 옮긴 자리에.
     /// 옛 기록(v111.6 이전)에는 칸이 없다 = 자리를 몰라 저절로 다시 그리지 않음(단추로 한 번 그리면 생김).</summary>
@@ -48,6 +53,8 @@ internal sealed class RoadDesign
     internal static double LastCurveR = 30;
 
     const string Key = "DH_ROAD";
+    /// <summary>★[v111.7.2] 옛 기본 최대 경사(12 %) — 이 값 그대로인 옛 기록만 15 %로 옮김.</summary>
+    internal const double OldMaxGrade = 0.12;
     static readonly JsonSerializerOptions Js = new() { IncludeFields = true };
 
     public RoadGrade.Section Section() => new()
@@ -135,6 +142,9 @@ internal sealed class RoadDesign
             }
             // ★[v111 · 계획 2.6] 옛 판 기록(LineVer 칸 없음)의 틈 메움 — 다음 저장 때 LineVer = 111로 써서 다시 안 함
             if (d != null && !sb.ToString().Contains("\"LineVer\"", StringComparison.Ordinal)) d.GapsMerged = d.MergeOldGaps();
+            // ★[v111.7.2 · JACK 1102 «모두 15 %»] 옛 기본값 12 %(정확히 0.12)만 15 %로 — 사람이 친 다른 값은 그대로 · 한도만(종단은 그대로)
+            //   ★[v111.7.2 검토 중간 1] 한 번만 — GradeVer 칸이 없는 옛 기록(v111.7.1 이전)만 옮긴다. 다음 저장 때 GradeVer = 1로 써서 그 뒤 사람이 고른 12 %는 그대로 남는다
+            if (d != null && !sb.ToString().Contains("\"GradeVer\"", StringComparison.Ordinal) && Math.Abs(d.MaxGrade - OldMaxGrade) < 1e-12) d.MaxGrade = 0.15;
             return d;
         }
         catch { return null; }

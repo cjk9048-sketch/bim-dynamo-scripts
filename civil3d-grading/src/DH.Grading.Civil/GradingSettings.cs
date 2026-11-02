@@ -25,7 +25,7 @@ public static class GradingSettings
     /// <b>같은 번호를 단 빌드가 여러 개</b>가 되어, 어느 것이 깔렸는지 물으면 답할 수가 없었다.</para>
     /// <para><c>x.0</c> = 화면·명령이 바뀌어 <b>사용자가 다르게 일하게</b> 되는 판 ·
     /// <c>x.y</c> = 같은 화면에서 결함을 고친 판.</para></summary>
-    public const string Version = "v111.7.1 (2026-11-02)";
+    public const string Version = "v111.7.2 (2026-11-02)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -749,6 +749,11 @@ public static class GradingSettings
             var det = KoreaCs.ResolveEpsgFromCode(KoreaCs.Read(db));
             if (det.HasValue && KoreaCs.CodeForEpsg(ExportEpsg) != null) ExportEpsg = det.Value;
         }
+        catch { }
+
+        // ★★[v111.7.2 · JACK 1102 «횡단도 배치 드롭박스를 바꿔도 안 바뀌어»] 횡단도 배치는 도면에 저장된 값(기록이 없으면 세션 값 그대로 — 새로 켠 Civil이면 1×2)
+        //   ★[검토 중간 2] 기록이 없는 도면은 기본(1×2) — 앞 도면 배치를 물려받지 않게(배치는 도면마다)
+        try { int lay = RoadDrawingSettings.ReadLayout(db); XsecLayout = lay >= 0 ? System.Math.Clamp(lay, 0, XsecLayoutLabels.Length - 1) : DH.Grading.Core.RoadXsecRules.LayoutDefault; }
         catch { }
 
         try { DiagLog.Append($"\n[도면 전환] 세션 설정을 '{System.IO.Path.GetFileName(key)}' 기준으로 맞춤(마지막 작업 기억 초기화)"); }

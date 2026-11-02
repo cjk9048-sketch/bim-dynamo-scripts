@@ -68,7 +68,7 @@ internal static class RoadXsec
             tr.Commit();
             if (gid.IsNull) return "진입도로 종단도가 없습니다 — 진입도로 [종단도]로 종단도부터 그리세요(횡단 측점 = 종단도 측점).";
         }
-        if (!surfaceComing && !s.HasSurface()) return "진입도로 지표면이 없습니다 — 진입도로 창 ■ 결과 [다시 시도]로 만드세요(횡단의 도로 선 · 수량 = 그 지표면).";
+        if (!surfaceComing && !s.HasSurface()) return "진입도로 지표면이 없습니다 — 진입도로 창 ■ 결과 [업데이트]로 만드세요(횡단의 도로 선 · 수량 = 그 지표면).";
         return "";
     }
 
@@ -131,7 +131,7 @@ internal static class RoadXsec
             tr.Commit();
         }
         if (stations.Count == 0) throw new InvalidOperationException("진입도로 종단도 측점이 없습니다 — 진입도로 [종단도]부터");
-        if (roadSurf.IsNull) throw new InvalidOperationException("진입도로 지표면이 없습니다 — 진입도로 창 ■ 결과 [다시 시도]로 만드세요");
+        if (roadSurf.IsNull) throw new InvalidOperationException("진입도로 지표면이 없습니다 — 진입도로 창 ■ 결과 [업데이트]로 만드세요");
 
         var all = SectionCommand.FindSurfaces(db, cdoc);
         var surfs = new List<SectionCommand.SurfPick>();
@@ -195,6 +195,9 @@ internal static class RoadXsec
             // ③ 설계에 적고 저장(실패해도 · 예외여도 — 옛것은 이미 지웠으니 지금 상태를 적는다 · ★[v111.5 · 설치 전 검토 M1] 예외 때 안 적으면 사람 노선에 그룹 · 뷰가 주인 없이 남음)
             d.XsecAt = new[] { at.X, at.Y };
             d.XsecScale = t.Scale; d.XsecAnno = t.Anno; d.XsecPin = pin;
+            d.XsecLayout = GradingSettings.XsecLayout;   // ★[v111.7.2] 그때 배치(바뀌면 횡단도 바뀜)
+            // ★[v111.7.2 검토 중간 2] 그린 배치를 도면에도(기록 없는 도면 = 그 배치가 이 도면 것 — 바뀜 판정 · 다시 열기가 같은 값을 봄)
+            try { if (RoadDrawingSettings.ReadLayout(db) != d.XsecLayout) RoadDrawingSettings.WriteLayout(db, d.XsecLayout); } catch (System.Exception exL) { log.AppendLine("  ⚠횡단도 배치 기록 못 씀 — " + exL.Message); }
             d.XsecGroup = t.GroupId.IsNull ? "" : t.GroupId.Handle.ToString();
             d.XsecViews = t.Views.Select(v => v.Handle.ToString()).ToList();
             d.XsecViewAt = ok ? RoadSession.ViewAt(db, t.Views) : Array.Empty<double>();   // ★[v111.7] 첫 · 끝 뷰 자리(옮겼나 — 저절로 다시 그리기 · 못 그렸으면 없음)

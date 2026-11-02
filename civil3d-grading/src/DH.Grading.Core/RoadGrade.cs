@@ -356,7 +356,7 @@ public static partial class RoadGrade
     }
 
     /// <summary>가장자리 표본 — N = 바깥 방향(원뿔은 그 반평면에만) · T = 진행 방향 · G = 그 자리 종단경사(★[계획 검토 H1] 경사 보정 원뿔) · WallH = 벽 높이 상한(NaN = 없음).</summary>
-    internal struct Edge { public double X, Y, Z, S, Nx, Ny, Tx, Ty, G, WallH, Th; public int Side; public bool Wall; public int Prof, Rec; }
+    internal struct Edge { public double X, Y, Z, S, Nx, Ny, Tx, Ty, G, WallH, Th, Zc; public int Side; public bool Wall; public int Prof, Rec; }   // ★[v111.7.2] Zc = 그 측점 중심선 계획고(같은 다리 경사 보정 — 평가마다 찾지 않게 미리)
 
     /// <summary>★★[v111 · 계획_v111.md 2.1] 점 하나의 계산(칸 계산과 같은 식) — 격자 칸 값(float) · 설계 높이(double) · 원뿔 위아래 · 이긴 표본(−2 = 발 표본 · −1 = 없음) · 이긴 원뿔이 다른 다리인가.</summary>
     internal struct PointEval
@@ -457,6 +457,16 @@ public static partial class RoadGrade
         // ── 가장자리 표본(양쪽) — 선분마다 EdgeStep · 꺾인 꼭짓점 바깥은 부채꼴로 메움 ──
         var edges = new List<Edge>();
         double Zc(int i, double t) => inp.Z[i] + (inp.Z[i + 1] - inp.Z[i]) * t;
+        // ★★[v111.7.2 · JACK 1102 «20 %까지는 문제없이» · 하네스 S181 ⑲ 계측] 측점 → 중심선 계획고(표본 꺾은선 그대로) — 경사 보정 원뿔이 «z(s_P)»를 진짜 종단에서 읽게
+        double ZAt(double s)
+        {
+            if (!(s > S[0])) return inp.Z[0];
+            if (s >= S[n - 1]) return inp.Z[n - 1];
+            int lo = 0, hi = n - 1;
+            while (hi - lo > 1) { int mid = (lo + hi) >> 1; if (S[mid] <= s) lo = mid; else hi = mid; }
+            double l = S[lo + 1] - S[lo];
+            return l > 1e-12 ? Zc(lo, (s - S[lo]) / l) : inp.Z[lo];
+        }
         for (int i = 0; i + 1 < n; i++)
         {
             double dx = inp.X[i + 1] - inp.X[i], dy = inp.Y[i + 1] - inp.Y[i], len = Math.Sqrt(dx * dx + dy * dy);
@@ -524,7 +534,7 @@ public static partial class RoadGrade
                 edges.Add(new Edge { X = inp.X[end] - nx * d, Y = inp.Y[end] - ny * d, Z = inp.Z[end] + sec.Drop(d), S = S[end], Nx = end == 0 ? -dx / len : dx / len, Ny = end == 0 ? -dy / len : dy / len, Tx = dx / len, Ty = dy / len, G = 0, Side = 0, Wall = false, WallH = double.NaN });
             }
         }
-        for (int k = 0; k < edges.Count; k++) { var e = edges[k]; e.Th = TurnAt(e.S); edges[k] = e; }
+        for (int k = 0; k < edges.Count; k++) { var e = edges[k]; e.Th = TurnAt(e.S); e.Zc = ZAt(e.S); edges[k] = e; }
         r.EdgeSamples = edges.Count;
 
         // ★★[v110.3 · 계획 1] 변형 단면 — 기록마다 (Tier, BenchL) · 0단 · 소단 0 기록은 단면 없음(RecProf −1 · 옛 가장자리 옹벽 길)
@@ -577,7 +587,9 @@ public static partial class RoadGrade
         var segFar = new List<int>[BW * BH];   // 사면 거리까지 가장 가까운 중심선(경사 보정 측점 · ★[H3] 벽 뒤 판정)
         var edgeB = new List<int>[BW * BH];
         var bZmin = new double[BW * BH]; var bZmax = new double[BW * BH]; var bG = new double[BW * BH];
-        for (int b = 0; b < bZmin.Length; b++) { bZmin[b] = double.MaxValue; bZmax[b] = double.MinValue; }
+        // ★[v111.7.2] 같은 다리 원뿔 = z(s_P) + (표본 높이 − 그 측점 중심선 높이) + F — 버킷마다 뒤 몫의 최솟값 · 최댓값(가지치기 아래 한계)
+        var bDmin = new double[BW * BH]; var bDmax = new double[BW * BH];
+        for (int b = 0; b < bZmin.Length; b++) { bZmin[b] = double.MaxValue; bZmax[b] = double.MinValue; bDmin[b] = double.MaxValue; bDmax[b] = double.MinValue; }
         int Bx(double x) => Math.Clamp((int)((x - minX) / bk), 0, BW - 1);
         int By(double y) => Math.Clamp((int)((y - minY) / bk), 0, BH - 1);
         for (int i = 0; i + 1 < n; i++)
@@ -602,6 +614,7 @@ public static partial class RoadGrade
             int b = By(e.Y) * BW + Bx(e.X);
             (edgeB[b] ??= new()).Add(k);
             bZmin[b] = Math.Min(bZmin[b], e.Z + up); bZmax[b] = Math.Max(bZmax[b], e.Z - up); bG[b] = Math.Max(bG[b], Math.Abs(e.G));
+            bDmin[b] = Math.Min(bDmin[b], e.Z + up - e.Zc); bDmax[b] = Math.Max(bDmax[b], e.Z - up - e.Zc);
         }
         // ★[v110.3 · 검토 중간] 가지치기 아래 한계 = 모든 단면의 점별 최솟값(변형 원뿔이 구간 밖에서 쓰는 max(변형, 기본)도 이 이상)
         var cutF = Profile.Min(r.CutProfs);
@@ -696,6 +709,8 @@ public static partial class RoadGrade
                 }
                 else o.D = float.NaN;
             }
+            // ★[v111.7.2] 이 칸 측점의 중심선 계획고(같은 다리 경사 보정 — 도로 양 끝 밖으로는 안 늘임)
+            double zfs = double.IsFinite(fs) ? ZAt(Math.Clamp(fs, 0, r.Length)) : double.NaN;
             // ② 사면 — 경사 보정 원뿔 감싸기(가까운 버킷부터 · 가지치기)
             //   ★[계획 검토 H1] hi_e = z_e + g_e·(s_P − s_e) + F절(|P−e|) — 측점 차이로 보정: 곧은 도로 · 곡선 모두 모든 e가 z(s_P) + F(거리) →
             //   가장 가까운(직각) 표본이 이김 = 측점 직각 횡단(소단이 종단경사를 따라 수평 · 내려앉지 않음).
@@ -729,6 +744,8 @@ public static partial class RoadGrade
                 // ★[v110.3.1 · 설치 전 검토 M1] 방향으로 같은 다리가 된 굽은 안쪽 표본은 측점 차이가 거리의 몇 배(R 10 안쪽 ≈ 2.7배)라 경사 보정 한도를 세 배로
                 double gpad = bG[b] * (3 * dmin + 3 * bk + 1);
                 double hiLow = bZmin[b] + cutF.F(dmin) - gpad, loHigh = bZmax[b] - fillF.F(dmin) + gpad;
+                // ★[v111.7.2] 같은 다리 원뿔(z(s_P) 기준)의 아래 한계도 — 둘 중 낮은 쪽(어느 표본이든 이 아래로는 안 감)
+                if (double.IsFinite(zfs)) { hiLow = Math.Min(hiLow, zfs + bDmin[b] + cutF.F(dmin)); loHigh = Math.Max(loHigh, zfs + bDmax[b] - fillF.F(dmin)); }
                 bool skipHi = hiLow >= hi, skipLo = loHigh <= lo;
                 if (skipHi && skipLo) continue;
                 foreach (int k in list)
@@ -743,8 +760,14 @@ public static partial class RoadGrade
                     // ★[v110.3 재검토 · 높음] 벽 뒤 막음은 같은 다리일 때만 — 헤어핀 안쪽은 두 다리가 다 같은 쪽이라 다른 다리 원뿔까지 건너뛰면 충돌(옹벽 자리)이 사라진다
                     if (shadow != 0 && e.Side == shadow && !e.Wall && sameLeg) continue;     // 벽 뒤에는 같은 쪽 사면 원뿔 없음
                     if (recCell >= 0 && e.Side == recs[recCell].Side && e.Rec != recCell && sameLeg) continue;   // ★[v110.3 · H1] 변환 구간 벽 뒤 — 그 기록 표본만
-                    if (!sameLeg) ds = rx * e.Tx + ry * e.Ty;
-                    double along = e.G * Math.Clamp(ds, -e.S, r.Length - e.S);
+                    // ★★[v111.7.2 · JACK 1102 «20 %까지는 문제없이» · 하네스 S181 ⑲ 계측] 같은 다리 경사 보정 = 진짜 종단 차이 z(s_P) − z(s_e) — 표본 한 자리 경사(G) × 측점 차이로 늘이면
+                    //   PVI 꺾임 곁에서 틀린다: 곡선 안쪽(가장자리가 몰림 — 거리 1 cm · 측점 차이 7 cm)에서 꺾임 표본(20 % 쪽 경사)을 꺾임 앞 칸까지 늘여
+                    //   그 칸 원뿔이 제 횡단보다 낮아져(0 → 20 % 오목 · 절토) · 높아져(20 % → 0 볼록 · 성토) 가장자리 바로 곁이 남의 것(충돌 · 주름)이 됐다 → 선 면 «주름 틈» → 칸 면.
+                    //   곧은 길 · 꺾임 없는 경사는 G × 측점 차이와 같다(결과 그대로). 다른 다리는 종전대로(그 다리 진행 방향 투영 × 그 표본 경사). 끝 마구리 표본(쪽 0)은 경사 0 그대로.
+                    double along;
+                    if (!sameLeg) { ds = rx * e.Tx + ry * e.Ty; along = e.G * Math.Clamp(ds, -e.S, r.Length - e.S); }
+                    else if (e.Side != 0 && double.IsFinite(zfs)) along = zfs - e.Zc;
+                    else along = e.G * Math.Clamp(ds, -e.S, r.Length - e.S);
                     ev++;
                     // ★[v110.3 · 검토 M1] 변형 단면 표본이 자기 구간 밖 칸에 닿으면 max(변형, 기본) — 소단 길이가 길어도 바깥 기본 사면에 계단이 안 생김
                     double fc, ff;

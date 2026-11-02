@@ -219,14 +219,14 @@ public class RoadCommand
     }
 
     /// <summary>★★[v111.7.1 · JACK 1102 «[진입도로 지표면 생성]을 누르지 않아도»] 첫 진입도로 지표면 — DHROAD · DHROADDRAW 끝(종단도를 놓은 바로 뒤 · 같은 명령 = 실행 취소 한 번).
-    /// 이미 있거나 계산이 깨졌으면 안 함. 못 만들면 명령창 한 줄 + 도킹창 상태 줄에 까닭 + [다시 시도](그 바뀜은 저절로 다시 안 함 — 다음에 고치면 다시).</summary>
+    /// 이미 있거나 계산이 깨졌으면 안 함. 못 만들면 명령창 한 줄 + 도킹창 상태 줄에 까닭(진입도로 창 [업데이트]로 다시).</summary>
     static void MakeFirstSurface(Document doc, RoadSession s)
     {
         var ed = doc.Editor;
         try { s.RecomputeIfDirty(); } catch { }
         if (s.HasSurface()) return;
         // ★[v111.7.1 · 검토 낮음] 계산이 깨져 못 만들면 말없이 넘기지 않음(도킹창 상태 줄 = 계산 오류)
-        if (s.Last == null || s.Last.Error.Length > 0) { ed.WriteMessage("\n[진입도로] ⚠계산 오류라 진입도로 지표면을 아직 안 만들었습니다 — " + (s.Last?.Error is { Length: > 0 } er ? er : s.Note) + " (값을 고치면 저절로)"); return; }
+        if (s.Last == null || s.Last.Error.Length > 0) { ed.WriteMessage("\n[진입도로] ⚠계산 오류라 진입도로 지표면을 아직 안 만들었습니다 — " + (s.Last?.Error is { Length: > 0 } er ? er : s.Note) + " (값을 고친 뒤 진입도로 창 [업데이트])"); return; }
         try
         {
             string msg;
@@ -237,21 +237,11 @@ public class RoadCommand
         }
         catch (System.Exception ex)
         {
-            ed.WriteMessage("\n[진입도로] ⚠진입도로 지표면을 못 만들었습니다 — " + ex.Message + " (진입도로 창 [다시 시도])");
+            ed.WriteMessage("\n[진입도로] ⚠진입도로 지표면을 못 만들었습니다 — " + ex.Message + " (진입도로 창 [업데이트])");
             try { DiagLog.Append("\n[진입도로] 첫 지표면 실패 — " + ex); } catch { }
             try { s.Recompute(); } catch { }
             s.NoteFail("실패 — 지표면 " + ex.Message);
         }
-    }
-
-    /// <summary>★[v111.7.1 · JACK 1102 «마우스 옆에 종단도 작성 위치 클릭»] 자리 찍기 + 커서 옆 풍선 글(명령창 글은 그대로) — 찍는 동안만 걸고 끝나면 뗀다.</summary>
-    static PromptPointResult GetPointTip(Editor ed, PromptPointOptions ppo, string tip)
-    {
-        void OnMove(object? o, PointMonitorEventArgs e) { try { e.AppendToolTipText(tip); } catch { } }
-        bool hooked = false;
-        if (!SelfCheckLog.Headless) try { ed.PointMonitor += OnMove; hooked = true; } catch { }   // 화면 없는 Civil은 커서가 없음
-        try { return ed.GetPoint(ppo); }
-        finally { if (hooked) { try { ed.PointMonitor -= OnMove; } catch { } } }
     }
 
     /// <summary>★[v110.4 · 계획 검토 M4] 부지 종단 노선(«DH선형»으로 시작 · 진입도로 설계 없음)이면 거절 글 — 아니면 빈 글.</summary>
@@ -271,8 +261,9 @@ public class RoadCommand
     }
 
     /// <summary>★★[v110.4 · 계획 3.5 · 검토 H1] 종단도 놓을 자리 묻기 → 다른 종단도와 가로 범위가 겹치면 다시 → <see cref="RoadSession.MakeSheets"/>.
-    /// <paramref name="again"/>(= [종단도 다시] · DHROADSHEET)이면 Enter = 지난 자리. Esc = 안 그림(도로는 그대로).</summary>
-    static void AskAndPlaceSheets(Document doc, RoadSession s, bool again)
+    /// <paramref name="again"/>(= [종단도 다시] · DHROADSHEET · [업데이트]가 자리를 모를 때)이면 Enter = 지난 자리. Esc = 안 그림(도로는 그대로).
+    /// ★[v111.7.2] 돌려줌 = 그렸나(실패 · 그만 = 거짓).</summary>
+    static bool AskAndPlaceSheets(Document doc, RoadSession s, bool again)
     {
         var ed = doc.Editor; var db = doc.Database;
         try
@@ -291,13 +282,13 @@ public class RoadCommand
                 var ppo = new PromptPointOptions(hasLast
                     ? "\n[진입도로] 종단도(도곽 · 밴드)를 놓을 자리 <Enter = 지난 자리 · Esc = 그만>: "
                     : "\n[진입도로] 종단도(도곽 · 밴드)를 놓을 자리를 찍으세요: ") { AllowNone = true };
-                var pr = GetPointTip(ed, ppo, "종단도 작성 위치 클릭");   // ★[v111.7.1 · JACK 1102] 커서 옆 풍선 글
+                var pr = CursorLabel.GetPoint(ed, ppo, "종단도 작성 위치 클릭");   // ★[v111.7.2 · JACK 1102 «마우스에 메모로»] 커서를 따라다니는 이름표(우리가 그림 · AutoCAD 풍선은 안 떴음)
                 Point3d at;
                 if (pr.Status == PromptStatus.None && hasLast) at = new Point3d(last[0], last[1], 0);
                 else if (pr.Status == PromptStatus.OK) at = pr.Value.TransformBy(ed.CurrentUserCoordinateSystem);
                 else if (!again) { ed.WriteMessage("\n[진입도로] 종단도는 꼭 있어야 합니다(종단 없이 설계 안 됨) — 놓을 자리를 찍으세요."); continue; }
                 else if (pr.Status == PromptStatus.None) { hasLast = false; continue; }   // [종단도 새로 그리기] — 지난 자리가 없으면 Enter는 다시 묻기
-                else { ed.WriteMessage("\n[진입도로] 종단도는 그대로 둡니다(그만)."); return; }
+                else { ed.WriteMessage("\n[진입도로] 종단도는 그대로 둡니다(그만)."); return false; }
                 string hit = RoadSheets.Overlap(db, s.AlignId, at, scale, n);
                 if (hit.Length > 0)
                 {
@@ -311,7 +302,7 @@ public class RoadCommand
                 ed.WriteMessage("\n[진입도로] " + msg);
                 try { DiagLog.Append("\n" + log); } catch { }
                 try { s.Recompute(); } catch { }
-                return;
+                return true;
             }
         }
         catch (System.Exception ex)
@@ -319,6 +310,7 @@ public class RoadCommand
             ed.WriteMessage("\n[진입도로] 종단도 실패 — " + ex.Message + "(도로는 그대로 — 진입도로 [종단도]로 다시)");
             try { DiagLog.Append("\n[진입도로] 종단도 실패 — " + ex); } catch { }
         }
+        return false;
     }
 
     /// <summary>★★[v111.6 · JACK 1102 «진입도로도 리본에서 창을 열 수 있게»] 리본 [진입도로 창] — 진입도로 도킹창을 연다. 열린 도로가 없으면 한 줄 알리고 창은 «열린 도로 없음»으로 뜬다(곡선 반경은 그리기 전에도 정함).</summary>
@@ -345,28 +337,36 @@ public class RoadCommand
     public void Xsec()
     {
         var doc = AcadApp.DocumentManager.MdiActiveDocument; if (doc == null) return;
+        var s = Need(doc.Editor); if (s == null) return;
+        AskAndPlaceXsec(doc, s);
+    }
+
+    /// <summary>★[v111.7.2] 횡단도 놓을 자리 묻기(Enter = 지난 자리 · Esc = 그만) → <see cref="RoadSession.MakeXsec"/> — [횡단도] · [업데이트](자리를 모를 때) 공용. 돌려줌 = 그렸나.</summary>
+    static bool AskAndPlaceXsec(Document doc, RoadSession s)
+    {
         var ed = doc.Editor;
-        var s = Need(ed); if (s == null) return;
+        bool drawn = false;
         try
         {
             GradingSettings.SyncToDocument(doc);
             string why = RoadXsec.Refusal(s);
-            if (why.Length > 0) { ed.WriteMessage("\n[진입도로] " + why); return; }
+            if (why.Length > 0) { ed.WriteMessage("\n[진입도로] " + why); return false; }
             double[] last = s.Fresh().XsecAt;
             bool hasLast = last.Length >= 2 && double.IsFinite(last[0]) && double.IsFinite(last[1]);
             var ppo = new PromptPointOptions(hasLast
                 ? "\n[진입도로] 횡단도를 놓을 왼쪽 아래 자리 <Enter = 지난 자리 · Esc = 그만>: "
                 : "\n[진입도로] 횡단도를 놓을 왼쪽 아래 자리를 찍으세요 (Esc = 그만): ") { AllowNone = hasLast };
-            var pr = GetPointTip(ed, ppo, "횡단도 작성 위치 클릭");   // ★[v111.7.1 · JACK 1102] 커서 옆 풍선 글
+            var pr = CursorLabel.GetPoint(ed, ppo, "횡단도 작성 위치 클릭");   // ★[v111.7.2 · JACK 1102 «마우스에 메모로»] 커서를 따라다니는 이름표(우리가 그림 · AutoCAD 풍선은 안 떴음)
             Point3d at;
             if (pr.Status == PromptStatus.None && hasLast) at = new Point3d(last[0], last[1], 0);
             else if (pr.Status == PromptStatus.OK) at = pr.Value.TransformBy(ed.CurrentUserCoordinateSystem);
-            else { ed.WriteMessage("\n[진입도로] 횡단도는 그대로 둡니다(그만)."); return; }
+            else { ed.WriteMessage("\n[진입도로] 횡단도는 그대로 둡니다(그만)."); return false; }
             var log = new System.Text.StringBuilder();
             string msg;
             using (BusyPopup.Scope("횡단도 그리는 중입니다.")) msg = s.MakeXsec(at, log);
             ed.WriteMessage("\n[진입도로] " + msg);
             try { DiagLog.Append("\n" + log); } catch { }
+            drawn = !msg.StartsWith("⚠");
         }
         catch (System.Exception ex)
         {
@@ -374,6 +374,7 @@ public class RoadCommand
             try { DiagLog.Append("\n[진입도로] 횡단도 실패 — " + ex); } catch { }
         }
         try { s.Recompute(); } catch { }
+        return drawn;
     }
 
     static void Open(Document doc, ObjectId aid, bool fresh = false)
@@ -658,8 +659,8 @@ public class RoadCommand
     {
         var (changed, s) = ConvertCore(wallMode);
         if (!changed || s == null) return;
-        // ★★★[v111.7.1 · JACK 1102 «2초 쉬면 저절로»] 기록이 바뀌었으면 이 명령 안에서 바로 저절로 다시 만들기와 같은 차례(지표면 → 종단도 → 횡단도 — 변환과 함께 실행 취소 한 번)
-        //   지표면이 아직 없던 도로도 만든다(옛: 있을 때만) · 못 만들면 도킹창 상태 줄에 까닭 + [다시 시도]
+        // ★★★[v111.7.1] 기록이 바뀌었으면 이 명령 안에서 바로 [업데이트]와 같은 차례(지표면 → 종단도 → 횡단도 — 변환과 함께 실행 취소 한 번 · 자리는 안 물음)
+        //   지표면이 아직 없던 도로도 만든다(옛: 있을 때만) · 못 만들면 도킹창 상태 줄에 까닭 + [업데이트]
         RedrawStale(AcadApp.DocumentManager.MdiActiveDocument, s);
     }
 
@@ -820,15 +821,8 @@ public class RoadCommand
                 Hilite(db, planId, false);
                 if (done > 0) { try { s.Recompute(); } catch { } }
             }
-            // ★[v111.7 · v111.7.1] 손을 떼면 2초 뒤 저절로 지표면 · 종단도 · 횡단도 — 종단도 놓인 자리를 모르면 종단도만 단추로
-            bool autoOk;
-            using (var trA = db.TransactionManager.StartTransaction())
-            {
-                var dA = s.Design;
-                autoOk = RoadSession.PlaceNow(trA, db, dA.SheetAt, dA.SheetViews, dA.SheetViewAt) != null;
-                trA.Commit();
-            }
-            if (done > 0) ed.WriteMessage($"\n{tag} {done}개 — " + (autoOk ? "손을 떼면 2초 뒤 지표면 · 종단도 · 횡단도를 다시 만듭니다" : "지표면은 손을 떼면 2초 뒤 다시 · 종단도는 진입도로 [종단도]로 맞춥니다") + " · 실행 취소(U)는 이번에 한 것을 한꺼번에 되돌림");
+            // ★[v111.7.2 · JACK 1102 «마지막에 팝업창 단추를 누르면 한꺼번에»] 미리보기 선만 바로 — 지표면 · 종단도 · 횡단도는 [업데이트]
+            if (done > 0) ed.WriteMessage($"\n{tag} {done}개 — 미리보기 선만 바뀌었습니다 · 진입도로 창 [업데이트]를 누르면 지표면 · 종단도 · 횡단도를 다시 만듭니다 · 실행 취소(U)는 이번에 한 것을 한꺼번에 되돌림");
             // 끝 — 계획 종단을 골라 둠(그립 → 바로 끌어 PVI 높이)
             try { if (!planId.IsNull && !planId.IsErased) ed.SetImpliedSelection(new[] { planId }); } catch { }
         }
@@ -972,46 +966,30 @@ public class RoadCommand
         return $"측점 {st:F2} m · 표고 {z:F2} m 지움(PVI {prof.PVIs.Count}개)";
     }
 
-    /// <summary>★[v110.1 · JACK 1029] [도로 면 만들기] — 도로 + 사면을 따로 지표면(«진입도로_DH»)으로. 정지면_DH는 안 건드림 · 다시 누르면 새로.
-    /// <para>★★[v111.7.1 · JACK 1102] 단추는 없앰 — 진입도로 창 ■ 결과 [다시 시도](저절로 안 한 바뀜이 있을 때만 보임)가 부른다: 저절로 다시 만들기와 같은 차례
-    /// (지표면 → 종단도 → 횡단도)를 한 번 · 해 본 바뀜이어도 함. 바뀐 것이 없으면 지표면만 새로(옛 [진입도로 지표면 생성]처럼).</para></summary>
-    [CommandMethod("DHROADSURF")]
-    public void Surf()
+    /// <summary>★★★[v111.7.2 · JACK 1102 «측점(PVI) 움직일 때마다 모든 게 재작성되니 오래 걸린다 · 마지막에 팝업창 단추를 누르면 한꺼번에 업데이트»] 진입도로 창 ■ 결과 [업데이트] —
+    /// 지표면 → 종단도 → 횡단도를 한 명령(실행 취소 한 번)으로. 종단도 · 횡단도 자리를 모르면(처음 · 지웠음 · 일부만 옮김 · 겹침) 커서 이름표로 자리를 묻는다(종단도 먼저 · Esc = 그것만 건너뜀).
+    /// 바뀐 것이 없으면 지표면만 새로(옛 [진입도로 지표면 생성]처럼). 옛 저절로 다시 만들기(DHROADAUTOREDRAW) · [다시 시도](DHROADSURF)를 이것 하나로.</summary>
+    [CommandMethod("DHROADUPDATE")]
+    public void Update()
     {
         var doc = AcadApp.DocumentManager.MdiActiveDocument;
         var s = Need(doc.Editor); if (s == null) return;
-        RedrawStale(doc, s, auto: false, surfaceIfFresh: true);
+        RedrawStale(doc, s, ask: true, surfaceIfFresh: true);
     }
 
-    /// <summary>★★[v111.7 · JACK 1102 «설계가 바뀐 뒤 2초쯤 손을 멈추면 같은 자리에 저절로 다시»] 저절로 다시 만들기 — <see cref="RoadSession"/> 시계가 보낸다(묻지 않음 · 지난 자리에만).
-    /// 사람이 칠 일은 없다(쳐도 바뀐 것이 없으면 아무 일도 안 함).</summary>
-    [CommandMethod(RoadSession.AutoCmd, CommandFlags.Modal | CommandFlags.NoHistory | CommandFlags.Redraw)]
-    public void AutoRedraw()
-    {
-        var doc = AcadApp.DocumentManager.MdiActiveDocument; if (doc == null) return;
-        var s = RoadSession.Of(doc);
-        if (s == null) return;
-        if (s.Suppress || s.PickMode) { s.AutoUnsent(); return; }   // ★[v111.7.1] 안 돌았으면 «보냄» 표시를 지움(시계가 다시 따짐)
-        RedrawStale(doc, s, auto: true);
-    }
-
-    /// <summary>★★[v111.7 · JACK 1102] 지금과 다른 진입도로 종단도 · 횡단도를 지난 자리에 다시 그린다 — 묻지 않음(찍기 · 예/아니오 없음).
-    /// <para>★★★[v111.7.1 · JACK 1102 «2초 쉬면 저절로 · 클릭 수를 최대한 적게»] 차례 = ① 지표면(옛것이거나 없으면 — <see cref="RoadSession.MakeSurface"/>) →
+    /// <summary>★★[v111.7 · JACK 1102] 지금과 다른 진입도로 지표면 · 종단도 · 횡단도를 다시 만든다 — 차례 = ① 지표면(옛것이거나 없으면 — <see cref="RoadSession.MakeSurface"/>) →
     /// ② 종단도(알림 + 지금 놓인 자리 — <see cref="RoadSession.PlaceNow"/> · 다른 종단도와 겹치면 안 그림) → ③ 횡단도(지표면 · 종단도를 다시 만든 뒤 다시 잰 알림 + 지금 놓인 자리 + 그릴 수 있음).
-    /// 모두 이 한 명령 안 = 실행 취소 한 번. 자리를 모르면(처음은 찍어야 함) 그것만 안 함 — 도킹창 상태 줄에 까닭.</para>
-    /// <para>옛것을 지운 뒤 못 그리면 도킹창에 늘 남는 «다시 그리지 못했습니다 — U로 되돌리면 …» + 깜박(<see cref="RoadSession.SheetLost"/>).
-    /// 끝에 다시 계산 · 앞 · 뒤 바뀜 열쇠를 «해 봄»(그 까닭 — 다시 만듦 · 실패 · 자리 모름)으로 적음(시계가 같은 바뀜을 되풀이하지 않게). 명령창은 요약 한 줄(짓는 줄은 진단 로그로).</para>
-    /// <para>부르는 곳 = 시계(DHROADAUTOREDRAW — <paramref name="auto"/>) · [다시 시도](DHROADSURF — <paramref name="surfaceIfFresh"/>) · [옹벽 변환]/[사면 변환]/전체 해제 · 도면설정 저장.</para></summary>
-    internal static void RedrawStale(Document doc, RoadSession s, bool auto = false, bool surfaceIfFresh = false)
+    /// 모두 이 한 명령 안 = 실행 취소 한 번.
+    /// <para>★[v111.7.2] <paramref name="ask"/>(= [업데이트])이면 자리를 모르거나 겹치는 종단도 · 한 번도 안 그린 종단도 · 횡단도는 커서 이름표로 자리를 묻는다 —
+    /// 아니면(도면설정 저장 · [옹벽 변환]/[사면 변환] · [노리선]) 그것만 안 하고 상태 줄에 까닭. 기록한 뷰가 모두 지워졌으면 처음과 같이 물음(횡단도는 세션에 한 번).</para>
+    /// <para>옛것을 지운 뒤 못 그리면 도킹창에 늘 남는 «다시 그리지 못했습니다 — U로 되돌리면 …»(<see cref="RoadSession.SheetLost"/>).
+    /// 끝에 다시 계산 · 남은 바뀜이 있으면 그 까닭(실패 · 자리 모름 · 겹침)을 적음(상태 줄). 명령창은 요약 한 줄(짓는 줄은 진단 로그로).</para></summary>
+    internal static void RedrawStale(Document doc, RoadSession s, bool ask = false, bool surfaceIfFresh = false)
     {
         var ed = doc.Editor; var db = doc.Database;
-        // ★[설치 전 검토 낮음] 시계 길은 설정이 이 도면 것일 때만(짓는 코드가 SyncToDocument로 다른 도면의 옹벽 고르기 등 기억을 지우지 않게) — 상태 줄 그대로
-        // ★[v111.7.1 · 검토 낮음] 설정을 이 도면으로 맞추는 때 = 여기(돌기 직전)만 — 계획부지 정지 창에 치다 만 값이 있으면 저절로는 안 돌고 기다림(그 값 · 옹벽 고르기를 안 지우게)
-        if (auto && !GradingSettings.IsSyncedTo(doc) && GradingPalette.Editing) { s.AutoUnsent(); return; }
-        s.Redrawing = true;
         string pre = "";
-        bool force = false;
-        var log = new System.Text.StringBuilder($"[진입도로] {(auto ? "저절로 다시 만들기" : "다시 만들기")} — {s.Name}\n");
+        bool force = false, run = false;
+        var log = new System.Text.StringBuilder($"[진입도로] {(ask ? "업데이트" : "다시 만들기")} — {s.Name}\n");
         string why = "", bad = "", surfMsg = "", left = "";
         bool surfDone = false, sheetDone = false, xsecDone = false;
         static string Add(string a, string b) => a.Length > 0 ? a + " · " + b : b;
@@ -1019,12 +997,19 @@ public class RoadCommand
         {
             try { s.RecomputeCore(); } catch { }
             pre = s.StaleKey;
-            force = surfaceIfFresh && pre.Length == 0;
-            if (pre.Length == 0 && !force) return;
+            var d0 = s.Design;
+            // [업데이트] — 한 번도 안 놓은 종단도 · 횡단도도 할 일(자리를 물음) · ★[v111.7.2 검토 낮음] 기록한 뷰가 하나도 안 남았으면(모두 지움) 처음과 같이
+            //   횡단도는 이 세션에 한 번만 물음(Esc로 안 그리기로 했으면 [업데이트]마다 다시 안 물음 — 리본 [횡단도]는 그대로) · 지표면만 새로(force)는 횡단도와 따로
+            bool sheetGone = !RoadSession.AnyAlive(db, d0.SheetViews), xsecGone = !RoadSession.AnyAlive(db, d0.XsecViews);
+            bool mayAskXsec = ask && (!xsecGone || !s.XsecAsked);
+            bool firstSheet = ask && sheetGone, firstXsec = mayAskXsec && xsecGone;
+            force = surfaceIfFresh && pre.Length == 0 && !firstSheet;
+            run = pre.Length > 0 || force || firstSheet || firstXsec;
+            if (!run) return;
             GradingSettings.SyncToDocument(doc);
             // ★[v111.7.1 · 검토 열린 물음] [PVI 넣기]가 골라 둔 계획 종단(그립)을 먼저 풂 — 아래에서 그 종단뷰를 지우고 새로 그림(그립이 지운 뷰 위에 남지 않게)
             try { ed.SetImpliedSelection(System.Array.Empty<ObjectId>()); } catch { }
-            // ① 지표면 — 옛것 · 없음(· [다시 시도]에서 바뀐 것이 없으면 새로)
+            // ① 지표면 — 옛것 · 없음(· [업데이트]에서 바뀐 것이 없으면 새로)
             if (s.SurfaceStale.Length > 0 || s.SurfaceMissing || force)
             {
                 if (s.Last == null || s.Last.Error.Length > 0) bad = Add(bad, "지표면 — 계산 오류");
@@ -1054,46 +1039,66 @@ public class RoadCommand
                 xsecAt = RoadSession.PlaceNow(tr, db, d.XsecAt, d.XsecViews, d.XsecViewAt);   // 종단도를 다시 그려도 횡단뷰는 그대로 — 지금 잼
                 tr.Commit();
             }
-            if (sheetAt is Point3d at)
+            bool needSheet = s.SheetStale.Length > 0 || firstSheet;
+            string sheetHit = needSheet && sheetAt is Point3d at0 ? s.SheetOverlap(at0) : "";
+            if (needSheet && sheetAt is Point3d at && sheetHit.Length == 0)
             {
-                string hit = s.SheetOverlap(at);
-                if (hit.Length > 0) bad = Add(bad, $"종단도 자리가 {hit}와(과) 겹칩니다(장 수가 늘어남) — [종단도]로 자리를 찍으세요");
-                else
+                string w = s.SheetStale;
+                try
                 {
-                    string w = s.SheetStale;
-                    try
-                    {
-                        string msg;
-                        ProfileCommand.Quiet = true;
-                        using (BusyPopup.Scope("종단도를 같은 자리에 다시 그리는 중입니다.")) msg = s.MakeSheets(at, log);
-                        sheetDone = true; if (why.Length == 0) why = w;
-                        log.AppendLine("  종단도 — " + msg);
-                    }
-                    catch (System.Exception exS)
-                    {
-                        bad = Add(bad, s.SheetLost.Length > 0 ? s.SheetLost : "종단도를 못 그렸습니다 — " + exS.Message);
-                        log.AppendLine("  종단도 실패 — " + exS);
-                    }
-                    finally { ProfileCommand.Quiet = false; }
+                    string msg;
+                    ProfileCommand.Quiet = true;
+                    using (BusyPopup.Scope("종단도를 같은 자리에 다시 그리는 중입니다.")) msg = s.MakeSheets(at, log);
+                    sheetDone = true; if (why.Length == 0) why = w;
+                    log.AppendLine("  종단도 — " + msg);
                 }
+                catch (System.Exception exS)
+                {
+                    bad = Add(bad, s.SheetLost.Length > 0 ? s.SheetLost : "종단도를 못 그렸습니다 — " + exS.Message);
+                    log.AppendLine("  종단도 실패 — " + exS);
+                }
+                finally { ProfileCommand.Quiet = false; }
             }
+            else if (needSheet && ask)
+            {
+                // ★[v111.7.2] 자리를 모름(처음 · 지웠음 · 일부만 옮김) · 겹침 — 커서 이름표로 자리를 물음(Enter = 지난 자리 · Esc = 종단도만 건너뜀)
+                if (sheetHit.Length > 0) ed.WriteMessage($"\n[진입도로] ⚠지난 자리는 {sheetHit}와(과) 겹칩니다(장 수가 늘어남) — 옆으로 비켜 찍으세요.");
+                else if (!firstSheet) ed.WriteMessage("\n[진입도로] 종단도 자리를 모릅니다(지웠거나 일부만 옮김) — 놓을 자리를 찍으세요.");
+                if (AskAndPlaceSheets(doc, s, again: true)) { sheetDone = true; if (why.Length == 0) why = s.SheetStale.Length > 0 ? s.SheetStale : "종단도가 없어"; }
+                log.AppendLine($"  종단도 — 자리를 물음 → {(sheetDone ? "그림" : "안 그림")}");
+            }
+            else if (needSheet && sheetHit.Length > 0) bad = Add(bad, $"종단도 자리가 {sheetHit}와(과) 겹칩니다(장 수가 늘어남) — [업데이트] 또는 리본 [종단도]로 자리를 찍으세요");
             // ③ 횡단도 — 지표면 · 종단도를 다시 만들었으면 지표면 · 측점이 바뀌었을 수 있다 → 지금 바뀜을 다시 잼
             string xs = s.XsecStaleNow();
-            if (xs.Length > 0 && xsecAt is Point3d xat && RoadXsec.Refusal(s).Length == 0)
+            bool needXsec = xs.Length > 0 || firstXsec;
+            string refuse = needXsec ? RoadXsec.Refusal(s) : "";
+            if (needXsec && refuse.Length > 0)
+            {
+                if (ask) bad = Add(bad, "횡단도 — " + refuse);
+                log.AppendLine("  횡단도 — 못 그림: " + refuse);
+            }
+            else if (needXsec && xsecAt is Point3d xat)
             {
                 try
                 {
                     string msg;
                     using (BusyPopup.Scope("횡단도를 같은 자리에 다시 그리는 중입니다.")) msg = s.MakeXsec(xat, log);
                     log.AppendLine("  횡단도 — " + msg);
-                    if (msg.StartsWith("⚠")) bad = Add(bad, s.XsecLost.Length > 0 ? s.XsecLost : "횡단도를 못 그렸습니다 — [횡단도]로 다시");
-                    else { xsecDone = true; if (why.Length == 0) why = xs; }
+                    if (msg.StartsWith("⚠")) bad = Add(bad, s.XsecLost.Length > 0 ? s.XsecLost : "횡단도를 못 그렸습니다 — [업데이트] 또는 리본 [횡단도]로 다시");
+                    else { xsecDone = true; if (why.Length == 0) why = xs.Length > 0 ? xs : "횡단도가 없어"; }
                 }
                 catch (System.Exception exX)
                 {
                     bad = Add(bad, s.XsecLost.Length > 0 ? s.XsecLost : "횡단도를 못 그렸습니다 — " + exX.Message);
                     log.AppendLine("  횡단도 실패 — " + exX);
                 }
+            }
+            else if (needXsec && mayAskXsec)
+            {
+                if (xsecGone) s.XsecAsked = true;
+                if (!firstXsec) ed.WriteMessage("\n[진입도로] 횡단도 자리를 모릅니다(지웠거나 일부만 옮김) — 놓을 자리를 찍으세요.");
+                if (AskAndPlaceXsec(doc, s)) { xsecDone = true; if (why.Length == 0) why = xs.Length > 0 ? xs : "횡단도가 없어"; }
+                log.AppendLine($"  횡단도 — 자리를 물음 → {(xsecDone ? "그림" : "안 그림")}");
             }
         }
         catch (System.Exception ex)
@@ -1103,16 +1108,15 @@ public class RoadCommand
         }
         finally
         {
-            if (pre.Length > 0 || force)
+            if (run)
             {
                 try { s.RecomputeCore(); } catch { }
-                // ★[v111.7.1] 뒤 열쇠가 남았으면 그 까닭(실패 · 자리 모름 · 겹침) — 도킹창 상태 줄 + [다시 시도]
+                // ★[v111.7.2] 남은 바뀜이 있으면 그 까닭(실패 · 자리 모름 · 겹침) — 도킹창 상태 줄
                 string post = s.StaleKey;
-                if (post.Length > 0 && bad.Length == 0) { try { using var dl = doc.LockDocument(); left = s.AutoPlan().WhyNot; } catch { } }
-                s.AutoTried(pre, post, allOk: (surfDone || sheetDone || xsecDone) && bad.Length == 0, why: bad.Length > 0 ? "실패 — " + bad : left);
+                if (post.Length > 0 && bad.Length == 0) { try { using var dl = doc.LockDocument(); left = s.UpdatePlan().WhyNot; } catch { } }
+                s.NoteUpdate(post, bad.Length > 0 ? "실패 — " + bad : left);
                 log.AppendLine($"  끝 — 지표면 {surfDone} · 종단도 {sheetDone} · 횡단도 {xsecDone}" + (post.Length > 0 ? " · 남음(" + (bad.Length > 0 ? "실패" : left.Length > 0 ? left : "다시 해도 남음") + ")" : " · 모두 최신"));
             }
-            s.Redrawing = false;
         }
         if (surfDone) { try { ed.Regen(); } catch { } }
         try
@@ -1124,9 +1128,9 @@ public class RoadCommand
             if (force && surfDone && !sheetDone && !xsecDone) ed.WriteMessage("\n[진입도로] " + surfMsg);
             else if (what.Length > 0) ed.WriteMessage($"\n[진입도로] {Because(why)} 다시 만들었습니다 — {what}{tick}" + (bad.Length > 0 ? " · ⚠" + bad : ""));
             else if (bad.Length > 0) ed.WriteMessage("\n[진입도로] ⚠" + bad);
-            // ★[v111.7.1] [다시 시도]를 눌렀는데 할 수 있는 것이 없음(자리 모름 · 겹침) — 말없이 끝내지 않음
-            else if (!auto && left.Length > 0) ed.WriteMessage("\n[진입도로] " + left + " — ■ 도면 [종단도] · [횡단도]로 자리를 찍으세요");
-            DiagLog.Append("\n" + log);
+            // ★[v111.7.1] 할 수 있는 것이 없음(자리 모름 · 겹침) — 말없이 끝내지 않음
+            else if (left.Length > 0 && !ask) ed.WriteMessage("\n[진입도로] " + left + " — 진입도로 창 [업데이트]를 누르면 자리를 묻습니다");
+            if (run) DiagLog.Append("\n" + log);
         }
         catch { }
     }
@@ -1142,6 +1146,9 @@ public class RoadCommand
         "지표면이 다시 만들어졌습니다" => "진입도로 지표면이 다시 만들어져",
         "지표면이 없어" => "지표면이 없어",
         "옛 판에서 만든 지표면입니다" => "옛 판에서 만든 지표면이라",
+        "횡단도 배치가 바뀌었습니다" => "횡단도 배치가 바뀌어",   // ★[v111.7.2]
+        "종단도가 없어" => "종단도가 없어",                       // ★[v111.7.2] [업데이트]가 처음 놓음
+        "횡단도가 없어" => "횡단도가 없어",
         _ => "설계가 바뀌어",
     };
 

@@ -135,4 +135,18 @@ public static class RoadXsecRules
         if (Math.Abs(P(pinWas) - P(pinNow)) > 1e-6 || Math.Abs(P(annoWas) - P(annoNow)) > 1e-6) return "축척이 바뀌었습니다";
         return "";
     }
+
+    /// <summary>★★[v111.7.2 · JACK 1102 «횡단도 배치 드롭박스를 바꿔도 안 바뀌어»] 위 판정 + 횡단도 배치(도면설정 «횡단도 배치» 차례 번호) — 그릴 때 배치와 지금 배치가 다르면 «횡단도 배치가 바뀌었습니다».
+    /// <paramref name="layoutWas"/> &lt; 0 = 배치를 안 적은 옛 기록(v111.7.1 이전) → <see cref="LayoutDefault"/>(1×2)로 그렸다고 본다 — 그때까지 배치는 저장되지 않아 Civil을 켤 때마다 1×2였다.</summary>
+    public static string Stale(string stampWas, string stationsNow, string surfHandleNow, string surfSigNow,
+                               double pinWas, double pinNow, double annoWas, double annoNow, int layoutWas, int layoutNow)
+    {
+        string r = Stale(stampWas, stationsNow, surfHandleNow, surfSigNow, pinWas, pinNow, annoWas, annoNow);
+        if (r.Length > 0) return r;
+        int was = layoutWas >= 0 ? layoutWas : LayoutDefault;
+        return layoutNow >= 0 && was != layoutNow ? "횡단도 배치가 바뀌었습니다" : "";
+    }
+
+    /// <summary>도면설정 «횡단도 배치» 기본 차례 번호(1 = 1×2) — <c>GradingSettings.XsecLayout</c> 기본값과 같다.</summary>
+    public const int LayoutDefault = 1;
 }

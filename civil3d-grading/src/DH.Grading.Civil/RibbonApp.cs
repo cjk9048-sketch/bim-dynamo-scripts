@@ -425,12 +425,12 @@ public sealed class RibbonApp : IExtensionApplication
             //   가른 기준: <b>흙의 모양을 바꾸는가(정지옵션), 도면의 모양을 바꾸는가(여기).</b>
             // ★[v111.6 · JACK 1102] 창 안이 «1. 계획지표면 · 2. 진입도로 · 3. 공통»으로 갈렸다 — 풍선 글도 그 차례로
             var btnSheetSet = MakeButton(
-                "도면\n설정", "DHSHEETSET ", "계획지표면 · 진입도로 종단도 · 횡단도의 축척, 횡단 간격 · 배치, 배경지도 화질을 정합니다", "도면설정");
+                "도면\n설정", "DHSHEETSET ", "계획지표면 · 진입도로 종단도 · 횡단도의 축척, 측점 간격 · 횡단도 배치, 배경지도 화질을 정합니다", "도면설정");
             btnSheetSet.ToolTip = MakeTip("도면 설정 (DHSHEETSET)",
                 "**도면을 어떻게 그릴지**를 정합니다 — 흙의 모양(정지옵션)과는 별개입니다.\n\n" +
                 "· 1. 계획지표면 — 종단뷰 · 단면검토선 축척 · 단면검토선 폭 · 종단 원지반 굴곡 · 횡단도 축척\n" +
                 "· 2. 진입도로 — 종단도 · 횡단도 축척\n" +
-                "· 3. 공통 — 횡단 간격 · 횡단도 배치 · 배경지도 화질\n\n" +
+                "· 3. 공통 — 측점 간격 · 횡단도 배치 · 배경지도 화질\n\n" +
                 "여기 값은 정지면 형상에 영향을 주지 않으므로 **정지면을 다시 만들 필요가 없습니다**.\n" +
                 "이미 만든 종단도에 반영하려면 계획지표면 [종단도]를 다시 눌러 '지우고새로'를 고르세요.", null);
             var btnNori = MakeButton(
@@ -1511,7 +1511,6 @@ public sealed class RibbonApp : IExtensionApplication
         public void Execute(object? parameter)
         {
             var doc = AcadApp.DocumentManager.MdiActiveDocument;
-            RoadSession.NoteUserSend();   // ★[v111.7] 1초 안에는 진입도로 저절로 다시 그리기를 안 보냄(이 명령과 엇갈리지 않게)
             doc?.SendStringToExecute(CancelPrefix + command, true, false, true);
         }
     }

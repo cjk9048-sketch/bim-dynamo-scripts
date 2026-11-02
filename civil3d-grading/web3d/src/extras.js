@@ -1,6 +1,7 @@
 // ★★[v108 · 계획_v108.md 2.1 · 2.6 · 2.7] 덧 층 — 빗물(물길 · 고임 · 평지) · 지적(선 · 지번) · 측점(중심선 · 가로선 · 이름).
 import * as THREE from 'three';
 import { fatLines, polySeg, textSprite, nearLabels, screenDash } from './lines.js';
+import { facadeMaterial, roofMaterial, bldgStyle, FLOOR_H } from './facade.js';
 
 // 물길 굵기 칸 — [모인 넓이 하한 ㎡, 굵기 CSS px]
 const STREAM_W = [[0, 1.8], [1000, 2.8], [3000, 4.0], [10000, 5.5]];
@@ -306,7 +307,34 @@ export function buildCad(view, head, L) {
 // ── 건물 ── ★[v111.7 · JACK 1102 «3D 보기에 건물 · 층수로 높이 · 켜고 끄기»] VWorld 건물정보 — 바닥(원지반 가장 낮은 곳) → 바닥 + 지상층수 × 3.5 m
 //   바뀌는 자리에 닿는 건물 = 빨강 반투명(그림자 없음) · 그 밖 = 흰 회색 · 지붕 테두리 선 · 누르기에는 안 걸림(아래 지형 정보 그대로) · 못 받았으면 층을 회색 + ⚠ + 까닭(범위에 없으면 ⚠ 없이)
 //   자료 꼴(C# Web3DBuildings.Pack과 짝): xy(x, y 차례) · ring[i] = 고리 i 첫 점 · poly[j] = 다각형 j 첫 고리(첫 = 바깥 반시계 · 나머지 = 구멍 시계) · bldg[k] = 건물 k 첫 다각형 · 셋 다 끝에 전체 수 · z0 · h · hit
-const BLDG_COLOR = '#e4e2dc', BLDG_HIT = '#e8392e', BLDG_EDGE = 0x77736b;
+//   ★[v111.7.2 · JACK 1102 «너무 회색 민짜 — 건물처럼»] 그 밖 건물 = 겉면 무늬(facade.js — 아파트 · 석재 · 벽돌 빌라 · 유리 업무 · 띠창 · 미장 · 금속 패널 · 공장)
+//     · 형식은 도면 좌표 · 층수 · 바닥 넓이로 결정적(다시 만들어도 같은 모습) · 창 = 층마다 한 줄 · 벽 줄기마다 정수 개 · 지붕 = 건물마다 색 + 얼룩
+//     · 그리기 = 벽 한 번 · 지붕 한 번 · 빨강 한 번 · 테두리 선 한 번(5,000동도 같음) · 닿는 건물(빨강)은 전과 그대로(무늬 없음)
+const BLDG_HIT = '#e8392e', BLDG_EDGE = 0x77736b;
+const COS_CORNER = Math.cos(THREE.MathUtils.degToRad(25));   // 이보다 꺾이면 모서리(벽 줄기를 끊음)
+
+// 벽 줄기 — 고리를 모서리에서 끊는다 · 점이 더 찍힌 곧은 벽 · 굽은 벽은 한 줄기(창이 줄기 길이에 맞게 · 모서리에서 안 잘림)
+function wallRuns(ring) {
+  const pts = [];
+  for (const p of ring) { const q = pts[pts.length - 1]; if (!q || Math.hypot(p.x - q.x, p.y - q.y) > 1e-3) pts.push(p); }
+  while (pts.length > 2 && Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].y - pts[pts.length - 1].y) <= 1e-3) pts.pop();
+  const n = pts.length;
+  if (n < 3) return [];
+  const corner = [];
+  for (let i = 0; i < n; i++) {
+    const a = pts[(i - 1 + n) % n], b = pts[i], c = pts[(i + 1) % n];
+    const ux = b.x - a.x, uy = b.y - a.y, vx = c.x - b.x, vy = c.y - b.y;
+    if ((ux * vx + uy * vy) / (Math.hypot(ux, uy) * Math.hypot(vx, vy)) < COS_CORNER) corner.push(i);
+  }
+  if (!corner.length) return [[...pts, pts[0]]];
+  return corner.map((s, k) => {
+    const e = corner[(k + 1) % corner.length], run = [pts[s]];
+    let i = s;
+    do { i = (i + 1) % n; run.push(pts[i]); } while (i !== e);
+    return run;
+  });
+}
+
 export function buildBldg(view, head, L) {
   const B = head.bldg;
   if (!B) return;
@@ -315,52 +343,117 @@ export function buildBldg(view, head, L) {
     L.bldg = { label: '건물', on: false, missing: B.missing || '건물 자료가 없습니다', quiet: !!B.quiet };
     return;
   }
-  const xy = B.xy, R = B.ring, P = B.poly, K = B.bldg;
-  const out = [{ pos: [], idx: [] }, { pos: [], idx: [] }];      // 0 = 그 밖 · 1 = 닿음
+  const xy = B.xy, R = B.ring, P = B.poly, K = B.bldg, org = head.origin || [0, 0];
+  const red = { pos: [], idx: [] };                                         // 닿음 — 벽 + 지붕 한 덩어리
+  const W = { pos: [], uv: [], info: [], tint: [], idx: [] };              // 그 밖 벽
+  const Rf = { pos: [], uv: [], col: [], idx: [] };                        // 그 밖 지붕
   const edge = [];
   const V2 = (i) => new THREE.Vector2(xy[i * 2], xy[i * 2 + 1]);
   let nHit = 0;
   for (let k = 0; k < B.n; k++) {
-    const z0 = B.z0[k], z1 = z0 + B.h[k], o = out[B.hit[k] ? 1 : 0];
-    if (B.hit[k]) nHit++;
+    const z0 = B.z0[k], z1 = z0 + B.h[k], hit = !!B.hit[k];
+    if (hit) nHit++;
+    const polys = [];
     for (let j = K[k]; j < K[k + 1]; j++) {
       const rings = [];
       for (let r = P[j]; r < P[j + 1]; r++) { const ring = []; for (let i = R[r]; i < R[r + 1]; i++) ring.push(V2(i)); rings.push(ring); }
-      if (!rings.length || rings[0].length < 3) continue;
+      if (rings.length && rings[0].length >= 3) polys.push(rings);
+    }
+    if (!polys.length) continue;
+    if (hit) {
       // 벽 — 고리마다 변 하나 = 네모 둘(바깥 반시계 · 구멍 시계라 같은 차례로 법선이 바깥) · 점은 면마다 따로(평평한 칠)
-      for (const ring of rings) {
-        for (let i = 0; i < ring.length; i++) {
-          const a = ring[i], b = ring[(i + 1) % ring.length], v = o.pos.length / 3;
-          o.pos.push(a.x, a.y, z0, b.x, b.y, z0, b.x, b.y, z1, a.x, a.y, z1);
-          o.idx.push(v, v + 1, v + 2, v, v + 2, v + 3);
-          edge.push(a.x, a.y, z1 + 0.02, b.x, b.y, z1 + 0.02);
+      for (const rings of polys) {
+        for (const ring of rings) {
+          for (let i = 0; i < ring.length; i++) {
+            const a = ring[i], b = ring[(i + 1) % ring.length], v = red.pos.length / 3;
+            red.pos.push(a.x, a.y, z0, b.x, b.y, z0, b.x, b.y, z1, a.x, a.y, z1);
+            red.idx.push(v, v + 1, v + 2, v, v + 2, v + 3);
+            edge.push(a.x, a.y, z1 + 0.02, b.x, b.y, z1 + 0.02);
+          }
         }
+        // 지붕 — 바깥 + 구멍을 한 판으로 세모 나누기(색인은 바깥 → 구멍 차례로 이은 점)
+        const tri = THREE.ShapeUtils.triangulateShape(rings[0], rings.slice(1));
+        const v0 = red.pos.length / 3;
+        for (const ring of rings) for (const p of ring) red.pos.push(p.x, p.y, z1);
+        for (const t of tri) red.idx.push(v0 + t[0], v0 + t[1], v0 + t[2]);
       }
-      // 지붕 — 바깥 + 구멍을 한 판으로 세모 나누기(색인은 바깥 → 구멍 차례로 이은 점)
+      continue;
+    }
+    // 모습 — 첫 바깥 고리 가운데(도면 좌표) · 바깥 고리 넓이 합
+    let cx = 0, cy = 0, area = 0;
+    for (const p of polys[0][0]) { cx += p.x; cy += p.y; }
+    cx /= polys[0][0].length; cy /= polys[0][0].length;
+    for (const rings of polys) area += Math.abs(THREE.ShapeUtils.area(rings[0]));
+    const floors = Math.max(1, Math.round(B.h[k] / FLOOR_H));
+    const st = bldgStyle(cx + org[0], cy + org[1], floors, area);
+    const tint = st.tint.map(t => Math.round(Math.min(1, t / 2) * 255));
+    for (const rings of polys) {
+      for (const ring of rings) {
+        const runs = wallRuns(ring);
+        const lens = runs.map(run => { let s = 0; for (let i = 1; i < run.length; i++) s += run[i].distanceTo(run[i - 1]); return s; });
+        const longest = Math.max(0, ...lens);
+        runs.forEach((run, ri) => {
+          const len = lens[ri];
+          if (len < 1e-3) return;
+          // 아파트 옆벽(긴 벽의 반이 안 되는 7~20 m 끝 벽) = 거의 빈 벽
+          const typ = st.end >= 0 && len >= 7 && len <= 20 && len <= 0.45 * longest ? st.end : st.typ;
+          const nMod = Math.round(len / st.mod), off = Math.floor(st.rnd() * 4);
+          const v0 = W.pos.length / 3;
+          let s = 0;
+          for (let i = 0; i < run.length; i++) {
+            if (i) s += run[i].distanceTo(run[i - 1]);
+            // u — 창 모듈(벽 줄기마다 정수 개 · 시작 무늬는 건물마다 다르게) · 1.5 m 못 되는 짧은 벽 = 창 사이 벽(정수 자리)만
+            const u = nMod >= 1 ? off + (s / len) * nMod : off + (s / len - 0.5) * Math.min(len / st.mod, 0.3);
+            const p = run[i];
+            W.pos.push(p.x, p.y, z0, p.x, p.y, z1);
+            W.uv.push(u, 0, u, floors);
+            W.info.push(typ, st.gnd, st.seed, floors, typ, st.gnd, st.seed, floors);
+            W.tint.push(...tint, 255, ...tint, 255);
+            if (i) {
+              edge.push(run[i - 1].x, run[i - 1].y, z1 + 0.02, p.x, p.y, z1 + 0.02);
+              const a = v0 + (i - 1) * 2, b = a + 2;
+              W.idx.push(a, b, b + 1, a, b + 1, a + 1);
+            }
+          }
+        });
+      }
       const tri = THREE.ShapeUtils.triangulateShape(rings[0], rings.slice(1));
-      const v0 = o.pos.length / 3;
-      for (const ring of rings) for (const p of ring) o.pos.push(p.x, p.y, z1);
-      for (const t of tri) o.idx.push(v0 + t[0], v0 + t[1], v0 + t[2]);
+      const v0 = Rf.pos.length / 3;
+      for (const ring of rings)
+        for (const p of ring) { Rf.pos.push(p.x, p.y, z1); Rf.uv.push(p.x / 16, p.y / 16); Rf.col.push(st.roof.r, st.roof.g, st.roof.b); }
+      for (const t of tri) Rf.idx.push(v0 + t[0], v0 + t[1], v0 + t[2]);
     }
   }
   const grp = new THREE.Group();
-  const mats = [
-    new THREE.MeshStandardMaterial({ color: new THREE.Color(BLDG_COLOR), roughness: 0.85, flatShading: true }),
-    new THREE.MeshStandardMaterial({ color: new THREE.Color(BLDG_HIT), roughness: 0.7, flatShading: true, transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide }),
-  ];
-  out.forEach((o, i) => {
-    if (!o.idx.length) return;
+  const mesh = (pos, idx, mat, attrs, shadow, order, isHit) => {
+    if (!idx.length) return;
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(o.pos), 3));
-    g.setIndex(new THREE.BufferAttribute(new Uint32Array(o.idx), 1));
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+    for (const [name, a] of Object.entries(attrs)) g.setAttribute(name, a);
+    g.setIndex(new THREE.BufferAttribute(new Uint32Array(idx), 1));
     g.computeBoundingSphere(); g.computeBoundingBox();
-    const m = new THREE.Mesh(g, mats[i]);
-    m.castShadow = i === 0; m.receiveShadow = i === 0;     // 반투명 빨강은 그림자를 안 만든다(없어질 건물 그림자가 현장을 덮지 않게)
-    m.renderOrder = i === 1 ? 2 : 0;
-    m.userData = { layer: 'bldg', hit: i === 1 };
+    const m = new THREE.Mesh(g, mat);
+    m.castShadow = shadow; m.receiveShadow = shadow;     // 반투명 빨강은 그림자를 안 만든다(없어질 건물 그림자가 현장을 덮지 않게)
+    m.renderOrder = order;
+    m.userData = { layer: 'bldg', hit: isHit };
     m.raycast = () => {};
     grp.add(m);
-  });
+  };
+  if (W.idx.length) {
+    mesh(W.pos, W.idx, facadeMaterial(view), {
+      facUv: new THREE.BufferAttribute(new Float32Array(W.uv), 2),
+      facInfo: new THREE.BufferAttribute(new Float32Array(W.info), 4),
+      facTint: new THREE.BufferAttribute(new Uint8Array(W.tint), 4, true),
+    }, true, 0, false);
+  }
+  if (Rf.idx.length) {
+    mesh(Rf.pos, Rf.idx, roofMaterial(view), {
+      uv: new THREE.BufferAttribute(new Float32Array(Rf.uv), 2),
+      color: new THREE.BufferAttribute(new Float32Array(Rf.col), 3),
+    }, true, 0, false);
+  }
+  mesh(red.pos, red.idx, new THREE.MeshStandardMaterial({ color: new THREE.Color(BLDG_HIT), roughness: 0.7, flatShading: true, transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide }),
+    {}, false, 2, true);
   if (edge.length) {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(edge), 3));

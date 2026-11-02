@@ -143,9 +143,11 @@ public sealed class SheetDialog : Window
         // ══ 3. 공통 ════════════════════════════════════════════════════
         //   ★★[v111.6 · JACK 1102] 계획지표면 · 진입도로가 함께 쓰는 값 — 횡단 간격 · 횡단도 배치(옛 «2. 횡단»에서) · 배경지도 화질(옛 «4. 도면설정 기타»)
         GradingDialog.AddSection(root, "3. 공통",
-            "계획지표면 · 진입도로가 함께 쓰는 값. 노선 길이 ÷ 횡단 간격이 횡단 개수가 됩니다(권장 상한 200개)."
+            "계획지표면 · 진입도로가 함께 쓰는 값. 노선 길이 ÷ 측점 간격이 횡단 개수가 됩니다(권장 상한 200개)."
           + " 배경지도 화질 = [위성지도] 버튼으로 까는 위성사진의 해상도(범위가 넓으면 파일이 너무 커지지 않게 자동으로 낮춰 생성).");
-        _xsecInterval = GradingDialog.AddRow(root, "횡단 간격 (m)", GradingSettings.XsecInterval, "");
+        // ★[v111.7.2 · JACK 1102] «횡단 간격» → «측점 간격»(값 · 칸 이름 XsecInterval · 동작 그대로 — 화면 글만)
+        _xsecInterval = GradingDialog.AddRow(root, "측점 간격 (m)", GradingSettings.XsecInterval, "");
+        _xsecInterval.ToolTip = "No.0 · No.1 … 사이 거리 — 횡단도는 측점마다 · 종단 밴드 측점 이름 · 진입도로 주측점 PVI가 이 간격을 따릅니다 · 꺾이는 곳(+측점)은 따로 더해집니다";
         // ★★[JACK 0826] 배치는 <b>여기서</b> 고른다 — 명령을 누를 때마다 묻지 않는다.
         _xsecLayout = AddCombo(root, "횡단도 배치", GradingSettings.XsecLayoutLabels,
             System.Math.Clamp(GradingSettings.XsecLayout, 0, GradingSettings.XsecLayoutLabels.Length - 1),
@@ -206,7 +208,7 @@ public sealed class SheetDialog : Window
 
     private void OnOk(object sender, RoutedEventArgs e)
     {
-        if (!GradingDialog.TryParseCore(this, _xsecInterval, "횡단 간격", out double xi, positive: true) ||
+        if (!GradingDialog.TryParseCore(this, _xsecInterval, "측점 간격", out double xi, positive: true) ||
             !GradingDialog.TryParseCore(this, _xsecLeft, "단면검토선 폭 — 좌측", out double xl, positive: false) ||
             !GradingDialog.TryParseCore(this, _xsecRight, "단면검토선 폭 — 우측", out double xr, positive: false) ||
             false)
