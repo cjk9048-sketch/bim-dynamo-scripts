@@ -993,7 +993,9 @@ public static class FormworkAnalyzer
             Paths64? cutIn = null;
             // 깎인 자리 = 이웃이 면의 평면을 지나는 자리(면 안 ε 과 면 바깥 ε 단면 둘 다 — 벽을 꿰뚫은 보 · 모서리에 걸친 보)만: 면 평면 안에서 나란히 놓인 부재
             // (L 자 벽의 빈 귀퉁이 위를 따라가는 보 · 벽 면과 같은 평면의 기둥)는 깎은 것이 아니라 제 면을 따로 센다(최종 검토 중간 1 — 두 번 세지 않게).
-            if (inside != null && other.Planar && other.El.Id != body.El.Id && cut.Count > 0 && Section.Cut(other.Solid, inside) is { Count: > 0 } innerCut)
+            // R73a6 설치 전 검토 높음: 계단 면은 보지 않는다 — 디딤 계단 옆면의 «싼 네모 − 면»은 계단 사선 위 허공이라 이웃(슬래브 · 트렌치)이 거기를 지나도 깎은 것이 아니다
+            // (녹촌 계단 3: 0.002 ~ 0.018 ㎡ 다섯 곳이 허공에 빗금 · 되살린 것 없음 — 수량 그대로).
+            if (inside != null && other.Planar && other.El.Id != body.El.Id && cut.Count > 0 && !IsStair(body.El, o) && Section.Cut(other.Solid, inside) is { Count: > 0 } innerCut)
             {
                 cutIn = Poly.Intersect(Poly.Difference(Poly.Intersect(innerCut, box), paths), cut);
                 if (Poly.Area(cutIn) < Tiny) cutIn = null;

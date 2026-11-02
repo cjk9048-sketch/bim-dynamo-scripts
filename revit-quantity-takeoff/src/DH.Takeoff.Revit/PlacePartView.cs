@@ -284,7 +284,7 @@ public sealed partial class PlacePartView
         notes.Children.Add(_toast);
         _notes = notes;
         stage.Children.Add(notes);
-        // «이 부재만 보기» 동안 왼쪽 «위치» 그림과 나눈다(R73a5 — Locator.cs). 둘레를 함께 둥글게 자른다.
+        // «부재 단독 보기» 동안 오른쪽 «전체 모델» 그림과 나눈다(R73a5 · R73a6 — Locator.cs: 왼쪽 = 이 그림 · 오른쪽 = 전체 모델). 둘레를 함께 둥글게 자른다.
         var split = BuildSplit(stage);
         split.SizeChanged += (_, _) => split.Clip = new RectangleGeometry(new Rect(0, 0, split.ActualWidth, split.ActualHeight), 9, 9);
         right.Children.Add(new Border { BorderBrush = _line, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10), Child = split });
@@ -303,6 +303,7 @@ public sealed partial class PlacePartView
             _editor.Click(_members[index].Id, ctrl);
             RefreshAll();
         };
+        _view3d.LabelClick = (index, ctrl) => ClickMarkLabel(index, ctrl, whole: false);   // ② 빗금 딱지 → 그 이웃의 맞닿은 면(R73a7)
         _view3d.Banded += (indices, ctrl) =>
         {
             if (Step == 1) { BandFormwork(indices, ctrl); return; }   // ② 판 여러 장(R66)
@@ -351,8 +352,9 @@ public sealed partial class PlacePartView
             // JACK 1030 천장을 치우려 Del 을 눌렀다가 보 판 4.80 ㎡ 가 말없이 빠졌다) · Ctrl+Z = ② 에서 한 일 되돌리기(R55b).
             // ① 의 모델 되돌리기로 흘러가지 않게 이 갈래에서 끝낸다(계획 검토 L4).
             // R73a5: 도구를 든 동안 Esc = 도구만 내려놓음(고른 것 · 이 부재만 보기는 그대로 — 한 번 더 Esc 면 전처럼).
-            if (e.Key == Key.Escape && _fwTool != CutTool.None) { _view3d.CancelDrag(); SetTool(CutTool.None, "Esc"); e.Handled = true; }
-            else if (e.Key == Key.Escape) { _view3d.CancelDrag(); if (!ClosePlaceBar()) PickRow(null); e.Handled = true; }
+            // R73a6: 오른쪽 «전체 모델»에서 끌던 것도 그만둔다(글자판은 늘 왼쪽 그림 — 어느 그림을 눌렀든 같은 길).
+            if (e.Key == Key.Escape && _fwTool != CutTool.None) { _view3d.CancelDrag(); _locator?.CancelDrag(); SetTool(CutTool.None, "Esc"); e.Handled = true; }
+            else if (e.Key == Key.Escape) { _view3d.CancelDrag(); _locator?.CancelDrag(); if (!ClosePlaceBar()) PickRow(null); e.Handled = true; }
             else if (e.Key == Key.Delete) { HideSelected(); e.Handled = true; }
             else if (e.Key == Key.Z && (Keyboard.Modifiers & ModifierKeys.Control) != 0) { FormworkUndo(); e.Handled = true; }
             return;

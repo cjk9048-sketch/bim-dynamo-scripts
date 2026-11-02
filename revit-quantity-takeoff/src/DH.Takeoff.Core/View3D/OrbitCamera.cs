@@ -104,6 +104,29 @@ public sealed class OrbitCamera
         Width = Math.Clamp(width > 0 ? width : 10, MinWidth, MaxWidth);
     }
 
+    /// <summary>
+    /// 상자가 화면에 꽉 차게 맞추고(Fit — 보는 방향은 그대로 · margin = 한쪽 여백 비율 · 화면 가로가 minWidth m 아래로는 좁아지지 않게) 가운데를 focus 쪽으로 옮긴다 —
+    /// 상자가 화면 밖으로 나가지 않는 만큼만(R73a6 — ② 오른쪽 «전체 모델»: 고른 부재가 꽉 차게 · 고른 면은 그 안에서 가운데 쪽으로). focus = null 이면 상자 가운데.
+    /// </summary>
+    public void Frame(Box3 box, Vec3? focus, double margin, double minWidth = MinWidth)
+    {
+        if (box.IsEmpty) return;
+        Fit(box, margin);
+        if (Width < minWidth) Width = Math.Min(minWidth, MaxWidth);
+        if (focus is not { } f) return;
+        double halfW = 0, halfH = 0;
+        Vec3 right = Right, up = Up, center = box.Center;
+        foreach (var c in box.Corners())
+        {
+            var d = c - center;
+            halfW = Math.Max(halfW, Math.Abs(d.Dot(right)));
+            halfH = Math.Max(halfH, Math.Abs(d.Dot(up)));
+        }
+        double ps = PixelSize, slackX = Math.Max(0, Math.Max(1, ViewW) / 2 * ps - halfW), slackY = Math.Max(0, Math.Max(1, ViewH) / 2 * ps - halfH);
+        var shift = f - center;
+        Target = center + right * Math.Clamp(shift.Dot(right), -slackX, slackX) + up * Math.Clamp(shift.Dot(up), -slackY, slackY);
+    }
+
     /// <summary>미리 정해 둔 방향으로 본다(바라보는 점과 크기는 그대로).</summary>
     public void Look(ViewPreset preset)
     {
@@ -132,6 +155,35 @@ public sealed class OrbitCamera
         if (flat < 0.3) return (yaw, nz < 0 ? -40 * deg : 60 * deg);
         double facing = Math.Atan2(ny, nx);   // 카메라가 그 면의 바깥(법선) 쪽에 선다 — Yaw 는 Target 에서 카메라 쪽 방위
         return (facing, nz > 0.3 ? 45 * deg : nz < -0.3 ? -30 * deg : 25 * deg);
+    }
+
+    /// <summary>
+    /// 면 하나를 볼 방향 후보(R73a6 — 녹촌 전수 검사: 벽 개구부 둘레 · 계단 면은 FacingAngles(25° 위)에서 그 부재 몸에 가려 찍히지 않았다 · 56 + 6 곳):
+    /// FacingAngles → 법선 그대로 → 법선에서 30° · 55° 기울인 넷씩(수평 · 수직 쪽 — 개구부 · 계단 사이로 비스듬히). 부르는 쪽이 보이는 첫 후보를 고른다.
+    /// 법선을 모르면 FacingAngles 하나.
+    /// </summary>
+    public static IEnumerable<(double yaw, double pitch)> ViewCandidates(double[]? normal, double yaw, double pitch)
+    {
+        yield return FacingAngles(normal, yaw, pitch);
+        if (normal is not { Length: 3 }) yield break;
+        var n = new Vec3(normal[0], normal[1], normal[2]).Unit();
+        var u = Vec3.UnitZ.Cross(n);
+        u = u.Length < 1e-6 ? new Vec3(1, 0, 0) : u.Unit();
+        var v = n.Cross(u).Unit();
+        yield return AnglesOf(n);
+        foreach (double deg in new[] { 30.0, 55.0 })
+        {
+            double t = deg * Math.PI / 180;
+            foreach (var a in new[] { u, u * -1, v, v * -1 }) yield return AnglesOf(n * Math.Cos(t) + a * Math.Sin(t));
+        }
+    }
+
+    /// <summary>카메라가 Target 에서 그 방향(단위)에 선 각(Yaw · Pitch — 위 · 아래 끝은 MaxPitch 로).</summary>
+    public static (double yaw, double pitch) AnglesOf(Vec3 toCamera)
+    {
+        var d = toCamera.Unit();
+        double flat = Math.Sqrt(d.X * d.X + d.Y * d.Y);
+        return (flat < 1e-9 ? -90 * Math.PI / 180 : Math.Atan2(d.Y, d.X), Math.Clamp(Math.Atan2(d.Z, flat), -MaxPitch, MaxPitch));
     }
 
     /// <summary>값을 떠 둔 사본(날아가기의 처음 · 끝 자리).</summary>

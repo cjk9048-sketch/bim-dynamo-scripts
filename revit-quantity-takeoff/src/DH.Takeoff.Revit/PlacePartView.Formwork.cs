@@ -108,7 +108,8 @@ public sealed partial class PlacePartView
         _view3d.StyleOf = FormworkStyle;
         // 줄 · 판을 고른 동안 옅게 그린 부재는 찍히지 않는다 — 그 뒤의 판을 찍어 바로 옮겨 고를 수 있게(부재를 찍어도 ② 에서는 할 일이 없다).
         // 옅게 그린 판은 찍힌다(R73a — 전에는 윤곽선만 · GhostPickable). 고른 면을 보이는 동안은 그 면의 부재(보통)도 찍지 않는다(그 위의 옅은 판을 찍게).
-        _view3d.Pickable = i => i < OverlayStart && (i >= MemberCount || (!_fwFocusLook && FormworkStyle(i) == MeshStyle.Solid));   // 덧그린 몫 · 고른 면은 찍지 않는다(그 밑의 판을 찍는다)
+        // R73a6: 부재 단독 보기는 고른 면이 있어도 몸을 찍는다(판이 없는 자리 = 다 덮인 면 · 공제 위치 — 몸 위의 그 면을 고른다 · 판은 몸보다 4 mm 앞이라 판이 먼저).
+        _view3d.Pickable = i => i < OverlayStart && (i >= MemberCount || ((!_fwFocusLook || SoloOn) && FormworkStyle(i) == MeshStyle.Solid));   // 덧그린 몫 · 고른 면은 찍지 않는다(그 밑의 판을 찍는다)
         _view3d.GhostPickable = true;
         _view3d.PickFilm = i => i < FaceOverlayStart;      // 고른 면(R73a)은 흰 막 없이 제 색 + 분홍 테두리
         _view3d.OutlinesOnTop = true;                      // 분홍 테두리는 맨 위 층에(덧그림 층 한 겹을 덜 그린다 — 계획 §5)
@@ -149,7 +150,7 @@ public sealed partial class PlacePartView
         _fwFaceOverlayFor.AddRange(_fwFaces);
         _fwFaceOverlayWhole = SoloWhole;
         if (Step == 1 && !_fwFaceOverlayWhole)
-            foreach (var face in FocusFaces()) _fwFaceOverlay.Add((FaceMesh(face), face));
+            foreach (var face in FocusFaces().DistinctBy(f => f.Siblings[0])) _fwFaceOverlay.Add((FaceMesh(face), face));   // 한 면처럼 볼 면들은 겉면 · 테두리 하나(R73a7)
         if (selectionOnly && !hadOverlay && _fwOverlay.Count == 0 && _fwFaceOverlay.Count == 0)
         {
             UpdateFormworkLook();
@@ -384,8 +385,10 @@ public sealed partial class PlacePartView
     // 위치 나무가 그 줄까지 펼쳐진다. 부재 · 빈 곳은 그대로 둔다(Esc 로 푼다).
     private void ClickFormwork(int index, bool ctrl = false, int triangle = -1)
     {
-        if (_board == null || index < MemberCount || index >= OverlayStart) return;
-        if (FaceAtClick(index - MemberCount, triangle) is { } face) SelectFaces(new[] { face }, ctrl ? SelectMode.Toggle : SelectMode.Replace, fly: false);
+        if (_board == null || index < 0 || index >= OverlayStart) return;
+        // R73a6: 부재 몸을 찍으면 그 자리의 면(다 덮인 면 — 판이 없어 몸만 보인다 · 판의 구멍(공제 위치) 자리 · JACK 1102 «면 선택도 안 되고»).
+        var face = index < MemberCount ? BodyFace(_view3d, index, _view3d.ClickPoint) : FaceAtClick(index - MemberCount, triangle);
+        if (face != null) SelectFaces(new[] { face }, ctrl ? SelectMode.Toggle : SelectMode.Replace, fly: false);
     }
 
     // 표(«유형 · 부위별로 한꺼번에»)에서 줄을 골랐다(또는 Esc 로 풀었다): 고른 판은 푼다. 줄을 고르면 그 줄의 판이 다 보이게 화면을 맞춘다(JACK 2026-10-21 «포커싱도»).
@@ -426,7 +429,7 @@ public sealed partial class PlacePartView
         if (index < MemberCount)
         {
             var m = _members[index];
-            return $"{m.Category} {m.Type} · Id {m.Id} · 거푸집을 대지 않는 면(윗면 · 다른 콘크리트가 맞닿은 자리 등)";
+            return $"{m.Category} {m.Type} · Id {m.Id} · 거푸집 산출 대상이 아닌 면(상부면 · 다른 콘크리트와 접합된 부위 등)";
         }
         if (index >= OverlayStart) return OverlayPiece(index) is int under && under >= 0 ? PieceText(PieceAt(under)) : "";
         return PieceText(PieceAt(index));
@@ -447,7 +450,7 @@ public sealed partial class PlacePartView
         {
             string title = plate.Part + (plate.Sub.Length > 0 ? " - " + plate.Sub : "");
             string tag = plate.Tag.Length > 0 ? $" ({plate.Tag})" : "";
-            string check = lead.NeedsCheck ? " · 확인 필요" + (lead.Note.Length > 0 ? ": " + lead.Note : "") : "";
+            string check = lead.NeedsCheck ? " · 검토 필요" + (lead.Note.Length > 0 ? ": " + lead.Note : "") : "";
             return $"{moved}{plate.Section} · {title} · {plate.Mark}{tag} : {plate.Formula.Replace('*', '×')} · {M2(plate.Area)} ㎡ · 부재 {members}{check}";
         }
         if (moved.Length > 0) return $"{moved}{KindText(lead)} · {M2(piece.Area)} ㎡ · 부재 {members}" + (lead.Note.Length > 0 ? " · " + lead.Note : "");
@@ -520,7 +523,10 @@ public sealed partial class PlacePartView
 
     private string KindText(FacePatch patch) =>
         patch.Counted ? $"{patch.Item} {(patch.Item == FormworkTable.Euro && _board != null ? FormworkTable.BandName(patch.Band, _board.Options.Bands) : "")}".TrimEnd()
-        : patch.NeedsCheck ? "확인 필요" : FormworkRules.NotCounted;
+        : patch.NeedsCheck ? "검토 필요" : DropLabel;   // R73a6 전문 용어(기록 값 «세지 않음»은 그대로 — 보이는 말만)
+
+    // 산출 제외(R73a6 — 기록 값 FormworkRules.NotCounted «세지 않음»의 보이는 말).
+    private const string DropLabel = "산출 제외";
 
     // ── 왼쪽 판: 대응표 ─────────────────────────────────────────────────────────
 
@@ -668,7 +674,7 @@ public sealed partial class PlacePartView
         combo.Items.Add(new ComboBoxItem { Content = SubAuto(row, sub), Tag = "", ContentTemplate = AutoTemplate() });
         bool banded = row.Group is not (FormworkTable.GroupSlope or FormworkTable.GroupHole);
         foreach (string item in FormworkTable.Items)
-            if (banded || item != FormworkTable.Euro) combo.Items.Add(KindItem(item, item));
+            if (banded || item != FormworkTable.Euro) combo.Items.Add(KindItem(item, item == FormworkRules.NotCounted ? DropLabel : item));
         if (sub.Rule.Length > 0 && !combo.Items.OfType<ComboBoxItem>().Any(i => (string)i.Tag == sub.Rule)) combo.Items.Add(KindItem(sub.Rule, sub.Rule));
         SelectKind(combo, sub.Rule);
         combo.SelectionChanged += (_, _) =>
@@ -753,9 +759,9 @@ public sealed partial class PlacePartView
     private ComboBox KindCombo(FormworkRow row, bool blinding)
     {
         string tip = FormworkRules.PartOf(row.Type) != null
-            ? "이 부위의 모든 면(구멍 둘레 · 아래가 빈 밑면 빼고)에 적용됩니다."
+            ? "이 부위의 모든 면(개구부 · 하부가 빈 하부면 제외)에 적용됩니다."
             : "이 유형의 이 면에 적용됩니다(부위를 넣은 부재의 면은 부위 줄에서 정합니다).";
-        if (blinding) tip += " 버림의 안쪽 면(호퍼 · 피트 둘레)은 자동으로는 세지 않습니다 — 종류를 고르면 다시 셉니다.";
+        if (blinding) tip += " 버림의 내측면(호퍼 · 피트 둘레)은 자동 산출에서 제외합니다 — 종류를 선택하면 다시 산출합니다.";
         var combo = _ui.Combo(tip, $"fw.kind.{row.Type}.{row.Group}");
         combo.MinHeight = 26;
         combo.FontSize = 12.5;
@@ -763,7 +769,7 @@ public sealed partial class PlacePartView
         combo.Items.Add(AutoItem(row));
         bool banded = row.Group is not (FormworkTable.GroupSlope or FormworkTable.GroupHole);
         foreach (string item in FormworkTable.Items)
-            if (banded || item != FormworkTable.Euro) combo.Items.Add(KindItem(item, item));
+            if (banded || item != FormworkTable.Euro) combo.Items.Add(KindItem(item, item == FormworkRules.NotCounted ? DropLabel : item));
         if (row.Rule.Length > 0 && !combo.Items.OfType<ComboBoxItem>().Any(i => (string)i.Tag == row.Rule)) combo.Items.Add(KindItem(row.Rule, row.Rule));
         SelectKind(combo, row.Rule);
         var key = (row.Type, row.Group);
@@ -930,7 +936,7 @@ public sealed partial class PlacePartView
         var box = new DockPanel { Margin = new Thickness(2, 10, 2, 0) };
         var hint = new TextBlock
         {
-            Text = hintText ?? "굴림 = 확대 · 가운데 끌기 = 옮기기 · 오른쪽 끌기 = 돌리기 · 찍기 = 면 고르기(Ctrl = 더하기 · 끌기 = 네모로) · Del = 숨기기 · Ctrl+Z = 되돌리기",
+            Text = hintText ?? "휠 = 확대 · 가운데 끌기 = 이동 · 오른쪽 끌기 = 회전 · 클릭 = 면 선택(Ctrl = 추가 · 끌기 = 범위 선택) · Del = 숨기기 · Ctrl+Z = 되돌리기",
             Foreground = _sub, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0), Opacity = 0.9, TextTrimming = TextTrimming.CharacterEllipsis,
         };
         DockPanel.SetDock(hint, Dock.Right);
@@ -952,11 +958,11 @@ public sealed partial class PlacePartView
         Item(FormworkPalette.Base(FormworkTable.Ply3), FormworkTable.Ply3);
         Item(FormworkPalette.Base(FormworkTable.Ply4), FormworkTable.Ply4);
         Item(FormworkPalette.Base(FormworkTable.Ply6), FormworkTable.Ply6);
-        Item(FormworkPalette.Check, "확인할 자리");
+        Item(FormworkPalette.Check, "검토 필요");
         Item(FormworkPalette.Dropped, "지운 판");
         // 풀이 글은 둘로(좁은 칸에서 하나가 잘리지 않고 다음 줄로 — R73a).
-        legend.Children.Add(new TextBlock { Text = "연한 색 = 안쪽 면", Foreground = _sub, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 2) });
-        legend.Children.Add(new TextBlock { Text = "분홍 테두리 = 고른 면", Foreground = _sub, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 0, 2) });
+        legend.Children.Add(new TextBlock { Text = "연한 색 = 내측면", Foreground = _sub, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 2) });
+        legend.Children.Add(new TextBlock { Text = "분홍 테두리 = 선택한 면", Foreground = _sub, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 0, 2) });
         box.Children.Add(legend);
         return box;
     }
@@ -1039,7 +1045,7 @@ public sealed partial class PlacePartView
         _fwTotal.Inlines.Clear();
         _fwTotal.Inlines.Add(new Run("거푸집  ") { Foreground = _sub });
         _fwTotal.Inlines.Add(new Run(M2(_board.Total) + " ㎡") { FontSize = 15.5, FontWeight = FontWeights.SemiBold });
-        _fwTotal.Inlines.Add(new Run(checks > 0 ? $"      확인할 자리 {checks}곳" : "      확인할 자리 없음") { Foreground = checks > 0 ? _warn : _sub, FontSize = 12.5 });
+        _fwTotal.Inlines.Add(new Run(checks > 0 ? $"      검토 필요 {checks}곳" : "      검토 필요 없음") { Foreground = checks > 0 ? _warn : _sub, FontSize = 12.5 });   // R73a6 «확인할 자리» → «검토 필요»
         // 경고 딱지: 대응표 줄이 없어 3D 에 칠하지 않는 틈(아래 콘크리트와 너무 가까운 밑면 — 세지 않음 · core R42 M-3) ·
         // 엑셀에서 한 줄로 잇지 못한 자리(같은 평면에 맞닿았는데 대응표의 종류가 다르다 — JACK 2026-10-15: 잇지 않고 알린다). 종류를 바꿀 때마다 다시 센다.
         _fwWarnings.Children.Clear();
@@ -1147,7 +1153,7 @@ public sealed partial class PlacePartView
             _fwKinds.Children.Add(line);
             parts.Add($"{name} {M2(t.Area)}");
         }
-        _fwTotalText = $"거푸집 {M2(_board.Total)} ㎡ · 확인할 자리 {checks}곳" + (gaps > 0 ? $" · 그림에 없는 틈 {gaps}곳" : "") + (splits > 0 ? $" · 종류가 달라 못 이은 면 {splits}곳" : "") +
+        _fwTotalText = $"거푸집 {M2(_board.Total)} ㎡ · 검토 필요 {checks}곳" + (gaps > 0 ? $" · 그림에 없는 틈 {gaps}곳" : "") + (splits > 0 ? $" · 종류가 달라 못 이은 면 {splits}곳" : "") +
                        (dropped > 0 ? $" · 세지 않는 판 {dropped}장" : "") + (moved > 0 ? $" · 옮긴 판 {moved}장" : "") + (orphans > 0 ? $" · 옮길 줄이 없어진 판 {orphans}장" : "") +
                        (lost > 0 ? $" · 모양이 바뀌어 다시 센 판 {lost}장" : "") + "\n" + string.Join(" · ", parts);
         _status.Text = _board.UserMode
@@ -1158,6 +1164,7 @@ public sealed partial class PlacePartView
         _ui.Tip(_undo, _fwUndo.Count > 0 ? $"되돌리기(Ctrl+Z): {_fwUndo[^1].what}" : "되돌릴 것이 없습니다.");
         RefreshPlateBar();                         // 고른 판의 띠(R66)
         ShowFaceMarks();                           // 고른 면 위 이름 · 치수 · 판 모양 검사 선 · 평면 지도(R73a)
+        SyncWhole();                               // 오른쪽 «전체 모델» 그림의 고른 부재 · 판 · 고른 면(R73a6)
     }
 
     // «모양이 바뀐 판» 딱지(R63b)가 지운 판을 차례로 고른다: 3D 에서 그 판을 찍고 그 판이 보이게 화면을 맞춘다 · 나무는 그 판의 첫 면까지 펼친다(R73a — 전의 «지운 판» 줄 대신).

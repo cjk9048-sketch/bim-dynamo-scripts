@@ -18,6 +18,7 @@ public sealed class BoardFace
         Piece = piece;
         Patches = patches;
         Lead = patches.OrderByDescending(p => p.Area).First();
+        Siblings = new[] { this };
         // 가운데(넓이로 무게를 단 세모의 가운데 — 세모가 없으면 테두리 점의 가운데) · 높이 범위.
         double ax = 0, ay = 0, az = 0, w = 0, zMin = double.MaxValue, zMax = double.MinValue;
         foreach (var p in patches)
@@ -59,7 +60,26 @@ public sealed class BoardFace
     /// <summary>가장 넓은 조각(색 · 종류 · 다시 잡는 열쇠).</summary>
     public FacePatch Lead { get; }
 
-    /// <summary>쉬운 이름(FaceNames — «바깥 면» · «안쪽 면(수조부)» · «끝면 1» · «밑면» …).</summary>
+    /// <summary>
+    /// 다른 부재가 다 덮어 거푸집이 없는 면(R73a6 — JACK 1102 «출입구 디딤판 … 닿는 부분이 있는데 빗금 표현이 안 돼 있고»): 조각이 없던 면에 원본 면 모양의 보기용 조각 하나를 붙여 둔다
+    /// (넓이 0 · 세지 않음 — 수량 · 기록 · 엑셀과 상관없음). 빗금 · 고르기 · 도구가 그 면을 쓴다. 나무에는 싣지 않는다(Fixed).
+    /// </summary>
+    public bool Covered { get; internal init; }
+
+    /// <summary>
+    /// 한 면처럼 볼 면들(R73a7 — JACK 1102 «계단 같은 경우에 하나의 객체인데 옆면이 여러 개로 조각나 있어서 벽체 벽체 벽체 … 면을 선택하기가 힘들어»):
+    /// 같은 부재 · 같은 평면 · 같은 판(판이 없으면 둘 다 다 덮인 면)이고 테두리가 맞닿은 면들 — Revit 계단은 단마다 옆면이 따로다(녹촌 계단 1: 옆면 25 · 26 조각).
+    /// 나무 줄 하나 · 이름 하나 · 고르면 함께 · 테두리 하나. 첫 것이 대표(면 차례가 가장 앞) · 혼자면 자기 하나. 보기만 — 조각 · 넓이 · 기록 그대로.
+    /// </summary>
+    public IReadOnlyList<BoardFace> Siblings { get; internal set; }
+
+    /// <summary>한 면처럼 볼 면들의 넓이(R73a7 — 이름표 · 나무).</summary>
+    public double JoinedArea => Siblings.Sum(f => f.Area);
+
+    /// <summary>다 덮인 면의 닿은 넓이(덮음 + 깎임 + 무시 — 이웃끼리 겹치면 면보다 클 수 있다 · 그 밖은 0).</summary>
+    public double CoveredArea => Covered ? Face.Covers.Concat(Face.Cut).Concat(Face.Ignored).Sum(c => c.Area) : 0;
+
+    /// <summary>쉬운 이름(FaceNames — «외측면» · «내측면(수조부)» · «마구리면 1» · «하부면» …).</summary>
     public string Name { get; internal set; } = "";
 
     public long ElementId => Result.Element.Id;
@@ -151,6 +171,96 @@ public sealed partial class FormworkBoard
         return first;
     }
 
+    /// <summary>
+    /// 면 하나의 겉면(R73a6 — 고른 면 분홍 테두리 · 마우스 밑 굵은 테두리 · JACK 1102 «안 헷갈리게 해»): 세모는 조각마다(PatchMesh 와 같은 띄움) ·
+    /// 테두리는 조각들을 면 평면에서 합친 모양 하나(받침 높이로 나눈 조각 사이 이음매는 없고 진짜 구멍은 남는다 — UnionOutline). 보기만 — 조각 · 넓이 · 기록 그대로.
+    /// 조각이 하나뿐이거나 합칠 수 없으면(곡면 · 고리 없음) PatchMesh 그대로. R73a7: 한 면처럼 볼 면들(Siblings — 단마다 따로인 계단 옆면)을 함께 · 테두리 하나.
+    /// </summary>
+    public MeshData FaceMesh(BoardFace face)
+    {
+        var patches = face.Siblings.Count > 1 ? face.Siblings.SelectMany(f => f.Patches).ToList() : face.Patches;
+        if (patches.Count < 2 || face.Face.Normal is not { Length: 3 } normal || UnionOutline(patches, normal) is not { Count: > 0 } outline) return PatchMesh(patches);
+        return MeshOf(patches, _origin, new FacePatch { Outline = outline }, normal).mesh;
+    }
+
+    /// <summary>
+    /// 조각들의 테두리를 면 평면(법선 normal)에서 합친 고리들(R73a6 — 바깥 + 구멍 · 모델 좌표): 조각마다 짝홀로 정리한 뒤 합치고, 1 mm 안의 틈(조각 사이 실 같은 틈)은 메운다.
+    /// 고리가 없으면 빈 목록.
+    /// </summary>
+    public static List<List<double[]>> UnionOutline(IEnumerable<FacePatch> patches, double[] normal)
+    {
+        var result = new List<List<double[]>>();
+        var first = patches.SelectMany(p => p.Outline).SelectMany(r => r).FirstOrDefault(q => q.Length >= 3);
+        if (first == null || normal is not { Length: 3 }) return result;
+        var frame = Frame.Of(V3.Of(first), V3.Of(normal));
+        var all = new Clipper2Lib.Paths64();
+        foreach (var patch in patches)
+        {
+            var rings = new Clipper2Lib.Paths64();
+            foreach (var ring in patch.Outline.Where(r => r.Count >= 3))
+            {
+                var path = new Clipper2Lib.Path64(ring.Count);
+                foreach (var q in ring) { var (u, v) = frame.To2D(V3.Of(q)); path.Add(Poly.P(u, v)); }
+                rings.Add(path);
+            }
+            if (rings.Count > 0) all.AddRange(Poly.Normalize(rings));
+        }
+        if (all.Count == 0) return result;
+        const double Seal = 0.0005 * Poly.Scale;   // 0.5 mm 부풀렸다 줄임 = 1 mm 안 틈 메움(네모 귀는 그대로 — 뾰족 이음)
+        var merged = Clipper2Lib.Clipper.Union(all, Clipper2Lib.FillRule.NonZero);
+        merged = Clipper2Lib.Clipper.InflatePaths(merged, Seal, Clipper2Lib.JoinType.Miter, Clipper2Lib.EndType.Polygon);
+        merged = Clipper2Lib.Clipper.InflatePaths(merged, -Seal, Clipper2Lib.JoinType.Miter, Clipper2Lib.EndType.Polygon);
+        foreach (var path in Clipper2Lib.Clipper.SimplifyPaths(merged, 1))
+        {
+            if (path.Count < 3) continue;
+            result.Add(path.Select(p => { var w = frame.To3D(p.X / Poly.Scale, p.Y / Poly.Scale); return new[] { w.X, w.Y, w.Z }; }).ToList());
+        }
+        return result;
+    }
+
+    /// <summary>조각 안의 대표 점(모델 좌표 — 넓이 가운데가 조각 밖이면 가장 큰 세모의 가운데 · R73a6 화면이 그 면이 보이는 방향을 찾을 때 시선을 쏘는 자리).</summary>
+    public static Vec3 AnchorOf(FacePatch patch)
+    {
+        var (x, y, z) = PatchGeometry.Anchor(patch);
+        return new Vec3(x, y, z);
+    }
+
+    /// <summary>
+    /// 부재 겉면 위의 점(모델 좌표)이 든 면(R73a6 — ② 오른쪽 «전체 모델» 그림은 다른 부재를 판 없이 부재 겉면으로만 찍는다): 시선(direction)을 마주한 면 가운데
+    /// 평면에서 2 cm 안이고 · 조각 테두리 안(SpotEdge 여유)이면 그 조각의 면 · 아니면 맞닿은 · 깎인 · 무시한 자리 고리 안이면 그 면(덩이에 든 면 먼저) · 없으면 null.
+    /// 여럿이면 평면이 가장 가까운 것.
+    /// </summary>
+    public BoardFace? FaceAtPoint(long elementId, Vec3 point, Vec3 direction)
+    {
+        const double PlaneGap = 0.02;
+        var dir = direction.Length > 1e-12 ? direction.Unit() : Vec3.Zero;
+        BoardFace? best = null, bare = null;
+        double bestGap = double.MaxValue, bareGap = double.MaxValue;
+        bool bestPatch = false;
+        foreach (var f in FacesOfElement(elementId))
+        {
+            if (f.Face.Normal is not { Length: 3 } nn) continue;
+            var n = new Vec3(nn[0], nn[1], nn[2]);
+            if (dir.Length > 0 && n.Dot(dir) > -0.02) continue;                // 뒤를 보는 면
+            double gap = Math.Abs(n.Dot(point) - f.Face.PlaneD);
+            if (gap > PlaneGap) continue;
+            var covers = f.Face.Covers.Concat(f.Face.Cut).Concat(f.Face.Ignored).ToList();
+            // 테두리가 없는 면(형상이 정해 세지 않는 윗면 등 — 조각에 고리가 없다)은 평면만으로(다른 면이 품지 않을 때).
+            if (f.Patches.All(p => p.Outline.Count == 0) && covers.All(c => c.Outline.Count == 0))
+            {
+                if (gap < bareGap) (bare, bareGap) = (f, gap);
+                continue;
+            }
+            bool onPatch = f.Patches.Any(p => Inside(p.Outline, point, n));
+            bool onCover = !onPatch && covers.Any(c => Inside(c.Outline, point, n));
+            if (!onPatch && !onCover) continue;
+            // 조각 안 > 고리 안(같은 FaceResult 를 덩이마다 나눈 면 — 고리 안이면 덩이에 든 면) > 평면이 가까운 것.
+            bool better = best == null || (onPatch && !bestPatch) || (onPatch == bestPatch && (gap < bestGap - 1e-6 || (Math.Abs(gap - bestGap) <= 1e-6 && best.Piece < 0 && f.Piece >= 0)));
+            if (better) (best, bestGap, bestPatch) = (f, gap, onPatch);
+        }
+        return best ?? bare;
+    }
+
     private void EnsureFaces()
     {
         if (_faces != null) return;
@@ -184,7 +294,28 @@ public sealed partial class FormworkBoard
                     foreach (var p in patches) faceOf[p] = face;
                 }
             }
-            FaceNames.Assign(r, mine.Skip(start).ToList());
+            var own = mine.Skip(start).ToList();
+            Join(own);
+            FaceNames.Assign(r, own);
+            // R73a6: 다른 부재가 다 덮어 조각이 없는 면 — 원본 면 모양의 보기용 조각 하나로 «다 덮인 면»(빗금 · 고르기 · 도구가 쓴다 · 수량 · 기록과 상관없음).
+            // 이름은 거푸집 면의 차례 번호를 흔들지 않게 따로 짓고 «(전부 공제)»를 붙인다.
+            // R73a7(JACK 1102 «드레인 피트 상부는 빗금 처리하고 하부슬래브 표현 · 바닥슬래브 위에 벽체 등 — 왜 어떤 건 표현되고 어떤 건 안 되는 거야»): 윗면도.
+            var covered = new List<BoardFace>();
+            foreach (var f in r.Faces)
+            {
+                if (f.Patches.Count > 0 || f.Covers.Concat(f.Cut).Concat(f.Ignored).Sum(c => c.Area) < JointChipMin || CoveredPatch(f) is not { } patch) continue;
+                var face = new BoardFace(faces.Count, r, f, -1, new List<FacePatch> { patch }) { Covered = true };
+                faces.Add(face);
+                mine.Add(face);
+                covered.Add(face);
+                faceOf[patch] = face;
+            }
+            if (covered.Count > 0)
+            {
+                Join(covered);
+                FaceNames.Assign(r, covered);
+                foreach (var face in covered) face.Name += "(전부 공제)";
+            }
         }
         _faces = faces;
         _faceOf = faceOf;
@@ -192,15 +323,75 @@ public sealed partial class FormworkBoard
         FacesMilliseconds = watch.ElapsedMilliseconds;
     }
 
+    /// <summary>한 면처럼 볼 면의 평면 거리 여유(m — R73a7 · 1 mm).</summary>
+    public const double SamePlaneGap = 0.001;
+
+    // 한 부재의 면들을 한 면처럼 볼 무리로 묶는다(R73a7 — BoardFace.Siblings): 같은 평면(법선 1e-6 · 거리 SamePlaneGap) · 같은 판(판이 없으면 둘 다 다 덮인 면 —
+    // 판 없는 땅 위 밑면 · 확인할 자리는 묶지 않는다) · 조각 테두리가 맞닿거나 겹침(SpotEdge 여유 — 단마다 따로인 계단 옆면은 변을 나눈다). 무리 차례 = 면 차례.
+    private static void Join(IReadOnlyList<BoardFace> faces)
+    {
+        var parent = Enumerable.Range(0, faces.Count).ToArray();
+        int Root(int i) { while (parent[i] != i) i = parent[i] = parent[parent[i]]; return i; }
+        static List<List<double[]>> Rings(BoardFace f) => f.Patches.SelectMany(p => p.Outline).Where(r => r.Count >= 3).ToList();
+        for (int i = 0; i < faces.Count; i++)
+        {
+            var a = faces[i];
+            if (a.Face.Normal is not { Length: 3 } na || (a.Piece < 0 && !a.Covered)) continue;
+            var n = new Vec3(na[0], na[1], na[2]);
+            List<List<double[]>>? ra = null;
+            for (int j = i + 1; j < faces.Count; j++)
+            {
+                var b = faces[j];
+                if (b.Piece != a.Piece || b.Covered != a.Covered || Root(i) == Root(j)) continue;
+                if (b.Face.Normal is not { Length: 3 } nb || n.Dot(new Vec3(nb[0], nb[1], nb[2])) < 1 - 1e-6 || Math.Abs(a.Face.PlaneD - b.Face.PlaneD) > SamePlaneGap) continue;
+                ra ??= Rings(a);
+                var rb = Rings(b);
+                if (ra.Count == 0 || rb.Count == 0) continue;
+                if (ra.SelectMany(r => r).Any(q => Inside(rb, V(q), n)) || rb.SelectMany(r => r).Any(q => Inside(ra, V(q), n))) parent[Root(j)] = Root(i);
+            }
+        }
+        foreach (var g in Enumerable.Range(0, faces.Count).GroupBy(Root).Where(g => g.Count() > 1))
+        {
+            var group = g.OrderBy(i => i).Select(i => faces[i]).ToList();
+            foreach (var f in group) f.Siblings = group;
+        }
+        static Vec3 V(double[] q) => new(q[0], q[1], q[2]);
+    }
+
+    // 다 덮인 면의 보기용 조각(R73a6): 원본 면 고리(바깥 + 구멍)와 그 세모(면 평면에서 — 바깥을 보게 돈다) · 넓이 0 · 세지 않음 · 정한 것(확인할 자리 아님).
+    private readonly Dictionary<FaceResult, FacePatch?> _coveredPatches = new(ReferenceEqualityComparer.Instance);
+    private IReadOnlyList<ElementFormwork>? _coveredFor;
+
+    private FacePatch? CoveredPatch(FaceResult f)
+    {
+        // 같은 면 결과면 같은 조각(설치 전 검토 낮음 — 판을 다시 지을 때마다 새 조각이면 고른 다 덮인 면이 열쇠를 잃어 풀렸다) · 형상을 다시 재면 새로.
+        if (!ReferenceEquals(_coveredFor, Results)) { _coveredPatches.Clear(); _coveredFor = Results; }
+        if (_coveredPatches.TryGetValue(f, out var made)) return made;
+        return _coveredPatches[f] = MakeCoveredPatch(f);
+    }
+
+    private FacePatch? MakeCoveredPatch(FaceResult f)
+    {
+        if (FacePolygon(f) is not { } pg) return null;
+        var outline = pg.paths.Select(path => path.Select(q => { var w = pg.frame.To3D(q.X / Poly.Scale, q.Y / Poly.Scale); return new[] { w.X, w.Y, w.Z }; }).ToList()).ToList();
+        var triangles = Poly.Triangles(pg.paths).Select(t => { var w = pg.frame.To3D(t.u, t.v); return new[] { w.X, w.Y, w.Z }; }).ToList();
+        if (triangles.Count < 3) return null;
+        return new FacePatch { Area = 0, Counted = false, Decided = true, Outline = outline, Triangles = triangles, Note = "다른 부재와 접합" };
+    }
+
     /// <summary>
     /// 면을 감싸는 네모(면 위 치수 — R73a). 곡면(법선 없음) · 테두리가 없는 면은 null. 서 있는 면의 가로 = 수평 · 세로 = 위 ·
     /// 누운 면의 가로 = 가장 긴 변 방향 · 경사면의 가로 = 그 면의 수평 방향.
     /// </summary>
-    public static FaceBox? BoxOf(BoardFace face)
+    public static FaceBox? BoxOf(BoardFace face) => BoxOf(new[] { face });
+
+    /// <summary>한 면처럼 볼 면들(R73a7 — Siblings · 같은 평면)을 함께 감싸는 네모 · 채운 비율은 넓이를 더해서. 첫 면의 법선.</summary>
+    public static FaceBox? BoxOf(IReadOnlyList<BoardFace> faces)
     {
-        if (face.Face.Normal is not { Length: 3 } nn) return null;
+        if (faces.Count == 0 || faces[0].Face.Normal is not { Length: 3 } nn) return null;
         var n = new Vec3(nn[0], nn[1], nn[2]).Unit();
-        var points = face.Patches.SelectMany(p => p.Outline).SelectMany(r => r).Where(q => q.Length >= 3).Select(q => new Vec3(q[0], q[1], q[2])).ToList();
+        var patches = faces.SelectMany(f => f.Patches).ToList();
+        var points = patches.SelectMany(p => p.Outline).SelectMany(r => r).Where(q => q.Length >= 3).Select(q => new Vec3(q[0], q[1], q[2])).ToList();
         if (points.Count < 3 || n.Length < 0.5) return null;
         Vec3 u;
         if (Math.Abs(n.Z) < 0.9) u = Vec3.UnitZ.Cross(n).Unit();   // 서 있는 면 · 경사면: 수평
@@ -209,7 +400,7 @@ public sealed partial class FormworkBoard
             // 누운 면: 가장 긴 변(면 위로 누른 것)
             u = Vec3.Zero;
             double longest = 0;
-            foreach (var ring in face.Patches.SelectMany(p => p.Outline))
+            foreach (var ring in patches.SelectMany(p => p.Outline))
                 for (int i = 0; i < ring.Count; i++)
                 {
                     double[] a = ring[i], b = ring[(i + 1) % ring.Count];
@@ -233,6 +424,6 @@ public sealed partial class FormworkBoard
         double w = u1 - u0, h = v1 - v0;
         if (!(w > 1e-6) || !(h > 1e-6)) return null;
         Vec3 At(double a, double b) => o + u * a + v * b;
-        return new FaceBox(n, u, v, w, h, face.Area / (w * h), new[] { At(u0, v0), At(u1, v0), At(u1, v1), At(u0, v1) });
+        return new FaceBox(n, u, v, w, h, faces.Sum(f => f.Area) / (w * h), new[] { At(u0, v0), At(u1, v0), At(u1, v1), At(u0, v1) });
     }
 }

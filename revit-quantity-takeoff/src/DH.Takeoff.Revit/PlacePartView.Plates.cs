@@ -205,6 +205,7 @@ public sealed partial class PlacePartView
         head.Children.Add(_fwPlateText);
 
         var actions = new WrapPanel { Margin = new Thickness(0, 5, 0, 0) };
+        _fwPlateActions = actions;
         Button Add(string text, string kind, string tip, string id, Action click, double left = 0)
         {
             var button = _ui.Button(text, kind, tip, id);
@@ -221,11 +222,12 @@ public sealed partial class PlacePartView
             string choice = item;
             _fwKindButtons[item] = Add(item, "BtnSecondary", "", "btn.fw.kind." + item, () => SetKindSelected(choice));
         }
-        _fwDropButton = Add(FormworkRules.NotCounted, "BtnSecondary", "고른 판을 세지 않습니다 — 합계 · 엑셀 · 거푸집 객체에 넣지 않습니다.", "btn.fw.drop", () => DropSelected());
-        _fwAutoButton = Add("↺ 자동으로", "BtnGhost", "고른 판에 직접 정한 것(종류 · 세지 않음 · 자리 · 나누기 · 합치기)을 걷고 규칙대로 셉니다.", "btn.fw.kind.auto", () => AutoSelected(), 8);
-        _fwSplitButton = Add("부재마다 나누기", "BtnSoft", "여러 부재를 이은 판을 부재마다 한 장씩 나눕니다(종류는 그대로).", "btn.fw.split", () => SplitSelected(), 8);
-        _fwMergeButton = Add("합치기", "BtnSoft", "고른 판들을 한 장으로 잇습니다 — 종류는 넓은 판의 것(같은 평면에 맞닿은 판만).", "btn.fw.merge", () => MergeSelected());
-        _fwPlaceButton = Add("자리 바꾸기", "BtnSoft", "고른 판이 엑셀에서 들 부위 줄 · 중분류를 바꿉니다.", "btn.fw.place", () => TogglePlace());
+        // R73a6 전문 용어(JACK 1102): [세지 않음] → [산출 제외] · [부재마다 나누기] → [부재별 분할] · [합치기] → [병합] · [자리 바꾸기] → [산출 위치 변경] — 기록 값(«세지 않음»)은 그대로.
+        _fwDropButton = Add(DropLabel, "BtnSecondary", "선택한 판을 산출에서 제외합니다 — 합계 · 엑셀 · 거푸집 객체에 넣지 않습니다.", "btn.fw.drop", () => DropSelected());
+        _fwAutoButton = Add("↺ 자동으로", "BtnGhost", "선택한 판에 직접 정한 것(종류 · 산출 제외 · 산출 위치 · 분할 · 병합)을 걷고 규칙대로 산출합니다.", "btn.fw.kind.auto", () => AutoSelected(), 8);
+        _fwSplitButton = Add("부재별 분할", "BtnSoft", "여러 부재를 이은 판을 부재별로 한 장씩 분할합니다(종류는 그대로).", "btn.fw.split", () => SplitSelected(), 8);
+        _fwMergeButton = Add("병합", "BtnSoft", "선택한 판들을 한 장으로 병합합니다 — 종류는 넓은 판의 것(같은 평면에 맞닿은 판만).", "btn.fw.merge", () => MergeSelected());
+        _fwPlaceButton = Add("산출 위치 변경", "BtnSoft", "선택한 판이 엑셀에서 들어갈 부위 줄 · 중분류를 변경합니다.", "btn.fw.place", () => TogglePlace());
 
         _fwPlacePart = _ui.Combo("엑셀에서 이 판이 들 부위 줄 — «그대로» = 판 부재의 부위", "fw.place.part");
         _fwPlaceZone = _ui.Combo("이 판의 중분류 — «그대로» = 판 부재의 중분류", "fw.place.zone");
@@ -235,11 +237,11 @@ public sealed partial class PlacePartView
             combo.MinHeight = 26;
             combo.Margin = new Thickness(0, 0, 6, 0);
         }
-        _fwPlaceApply = _ui.Button("바꾸기", "BtnPrimary", "고른 판의 엑셀 자리를 바꿉니다.", "btn.fw.placeApply");
+        _fwPlaceApply = _ui.Button("적용", "BtnPrimary", "선택한 판의 엑셀 산출 위치를 변경합니다.", "btn.fw.placeApply");
         _fwPlaceApply.Focusable = false;
         _fwPlaceApply.MinHeight = 26;
         _fwPlaceApply.Click += (_, _) => ApplyPlace();
-        var cancel = _ui.Button("취소", "BtnGhost", "자리 바꾸기를 그만둡니다(Esc).", "btn.fw.placeCancel");
+        var cancel = _ui.Button("취소", "BtnGhost", "산출 위치 변경을 취소합니다(Esc).", "btn.fw.placeCancel");
         cancel.Focusable = false;
         cancel.MinHeight = 26;
         cancel.Margin = new Thickness(4, 0, 0, 0);
@@ -272,12 +274,30 @@ public sealed partial class PlacePartView
     {
         if (_fwPlateBar == null || _board == null) return;
         var pieces = SelectedPieceList();
-        _fwPlateBar.Visibility = pieces.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        // R73a6: 판이 없는 고른 면(다 덮인 면)도 카드 — 머리 «부재 · 면 · 접합 ㎡ · 거푸집 없음» + 접합부 줄(단추 없음 — 바꾸기는 3D [공제 제외]).
+        var bare = pieces.Count == 0 ? FocusFaces().Where(f => f.Covered).ToList() : new List<BoardFace>();
+        _fwPlateBar.Visibility = pieces.Count == 0 && bare.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        if (_fwPlateActions != null) _fwPlateActions.Visibility = pieces.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         RefreshCutLines();                         // 빠진 자리 줄 · 3D 빗금(R73a2 — 고른 면이 없으면 비움)
-        if (pieces.Count == 0) { _fwPlaceOpen = false; ShowPlateChecks(pieces); return; }
+        if (pieces.Count == 0)
+        {
+            _fwPlaceOpen = false;
+            ShowPlateChecks(pieces);
+            if (bare.Count > 0)
+            {
+                _fwPlateText.Text = bare.Count == 1 ? $"{MemberLabel(bare[0].Result.Element)} · {bare[0].Name} · 접합 {M2(bare[0].CoveredArea)} ㎡ · 거푸집 없음"
+                                                     : $"다 덮인 면 {bare.Count}개 · 접합 {M2(bare.Sum(f => f.CoveredArea))} ㎡ · 거푸집 없음";
+                _fwPlateText.ToolTip = bare.All(f => f.Face.Class == FaceClass.Top)
+                    ? "다른 부재가 다 덮은 상부면입니다 — 빨간 빗금 = 닿는 부위. 상부면은 원래 거푸집이 없어 공제 · 공제 제외와 관계없습니다."   // R73a7
+                    : "다른 부재가 다 덮어 거푸집이 없는 면입니다 — 빨간 빗금 = 공제 위치. 3D 왼쪽 위 [공제 제외]로 빗금을 선택하면 거푸집 면적에 포함합니다.";
+                _fwPlateState.Text = "";
+                if (_fwPlaceBar != null) _fwPlaceBar.Visibility = Visibility.Collapsed;
+            }
+            return;
+        }
         int members = pieces.SelectMany(p => p.Members).Select(m => m.Result.Element.Id).Distinct().Count();
         // 머리 = 단추가 바꾸는 범위(R73a 검토 M3 — 면을 골라도 판 전체에): «판 전체: 벽체 W1 외 부재 2 · 63.20 ㎡» · 엑셀 줄(식)은 풍선 글로.
-        _fwPlateText.Text = pieces.Count == 1 ? PlateHead(pieces[0]) : $"판 {pieces.Count}장 · {M2(pieces.Sum(p => p.Area))} ㎡ · 부재 {members}";
+        _fwPlateText.Text = pieces.Count == 1 ? PlateHead(pieces[0]) : $"거푸집 판 {pieces.Count}장 · {M2(pieces.Sum(p => p.Area))} ㎡ · 부재 {members}";
         _fwPlateText.ToolTip = string.Join("\n", pieces.Take(8).Select(PieceText));
         ShowPlateChecks(pieces);
         bool anyDirect = pieces.Any(FormworkBoard.Direct), anyRuled = pieces.Any(_board.RowRuled);
@@ -313,7 +333,7 @@ public sealed partial class PlacePartView
     private string PlateHead(FormworkPiece piece)
     {
         int others = piece.Members.Select(m => m.Result.Element.Id).Distinct().Count() - 1;
-        return $"{(piece.Dropped ? "지운 판" : "판 전체")}: {MemberLabel(piece.Result.Element)}{(others > 0 ? $" 외 부재 {others}" : "")} · {M2(piece.Area)} ㎡";
+        return $"{(piece.Dropped ? "지운 판" : "거푸집 판")}: {MemberLabel(piece.Result.Element)}{(others > 0 ? $" 외 부재 {others}" : "")} · {M2(piece.Area)} ㎡";   // R73a6 «판 전체» → «거푸집 판»
     }
 
     // 고른 판의 모양 검사(R68): 판 띠 둘째 줄(한 장 = 걸림 글 · 여러 장 = 검사마다 장 수) + 3D 에 걸린 자리 빨간 실선(홈 · 띠는 그 자리, 그 밖은 판 테두리).
@@ -339,6 +359,7 @@ public sealed partial class PlacePartView
     }
 
     private string _fwCheckKey = "";
+    private WrapPanel? _fwPlateActions;                      // 판 띠의 단추 줄(R73a6 — 다 덮인 면만 고르면 숨김)
 
     /// <summary>시험용: 판 띠의 모양 검사 줄(숨겼으면 "").</summary>
     public string PlateCheckText => _fwPlateCheck.Visibility == Visibility.Visible ? _fwPlateCheck.Text : "";
@@ -385,19 +406,19 @@ public sealed partial class PlacePartView
     private bool DropSelected()
     {
         if (_board == null || Busy) return false;
-        if (SelectedPieceList().Count == 0) { ShowMessage("세지 않을 판을 3D 나 목록에서 먼저 고르세요."); return false; }
-        return ChangePlates(FormworkRules.NotCounted, (b, ps) => b.DropPlates(ps), "이미 세지 않는 판입니다.");
+        if (SelectedPieceList().Count == 0) { ShowMessage("산출 제외할 판을 3D 나 목록에서 먼저 선택하세요."); return false; }
+        return ChangePlates(DropLabel, (b, ps) => b.DropPlates(ps), "이미 산출 제외된 판입니다.");
     }
 
     private bool AutoSelected() => ChangePlates("자동으로", (b, ps) => b.AutoPlates(ps), "직접 정한 것이 없는 판입니다.");
 
-    private bool SplitSelected() => ChangePlates("부재마다 나누기", (b, ps) => b.SplitPlates(ps), "나눌 수 있는 판이 없습니다(부재가 둘 이상 이어진 판만).");
+    private bool SplitSelected() => ChangePlates("부재별 분할", (b, ps) => b.SplitPlates(ps), "분할할 수 있는 판이 없습니다(부재가 둘 이상 이어진 판만).");
 
     private bool MergeSelected()
     {
         string why = "";
-        bool done = ChangePlates("합치기", (b, ps) => { why = b.MergePlates(ps); return why.Length == 0 ? 1 : 0; });
-        if (!done && why.Length > 0) ShowMessage($"합치지 못했습니다 — {why}", true);
+        bool done = ChangePlates("병합", (b, ps) => { why = b.MergePlates(ps); return why.Length == 0 ? 1 : 0; });
+        if (!done && why.Length > 0) ShowMessage($"병합하지 못했습니다 — {why}", true);
         return done;
     }
 
@@ -436,7 +457,7 @@ public sealed partial class PlacePartView
     private bool ApplyPlace()
     {
         if (_board == null || Busy || _fwPlacePart?.SelectedItem is not ComboBoxItem { Tag: string part } || _fwPlaceZone?.SelectedItem is not ComboBoxItem { Tag: string zone }) return false;
-        string name = part.Length == 0 && zone.Length == 0 ? "자리 → 그대로" : $"자리 → {(part.Length > 0 ? part : "부위 그대로")} · {(zone.Length > 0 ? zone : "중분류 그대로")}";
+        string name = part.Length == 0 && zone.Length == 0 ? "산출 위치 → 그대로" : $"산출 위치 → {(part.Length > 0 ? part : "부위 그대로")} · {(zone.Length > 0 ? zone : "중분류 그대로")}";
         return ChangePlates(name, (b, ps) => b.PlacePlates(ps, part, zone));
     }
 
@@ -454,11 +475,11 @@ public sealed partial class PlacePartView
     {
         if (_board == null || Busy) return false;
         var pieces = SelectedPieceList();
-        if (pieces.Count == 0) { ShowMessage("판을 3D 나 목록에서 먼저 고르세요."); return false; }
+        if (pieces.Count == 0) { ShowMessage("판을 3D 나 목록에서 먼저 선택하세요."); return false; }
         var patches = pieces.SelectMany(p => p.Patches).ToList();
         var primary = PrimaryPlate;
         double area = pieces.Sum(p => p.Area);
-        string text = pieces.Count == 1 ? PieceText(pieces[0]) : $"판 {pieces.Count}장 · {M2(area)} ㎡";
+        string text = pieces.Count == 1 ? PieceText(pieces[0]) : $"거푸집 판 {pieces.Count}장 · {M2(area)} ㎡";
         var ids = pieces.SelectMany(p => p.Members).Select(m => m.Result.Element.Id).Distinct().ToList();
         string snapshot = _board.Snapshot();
         int measured = _board.MeasureVersion;
@@ -475,7 +496,7 @@ public sealed partial class PlacePartView
         if (_board.MeasureVersion == measured) Reselect(patches, primary);   // 형상을 다시 쟀으면 조각이 새것 — 면 · 대표 점으로 다시 잡는다(SyncMeasured)
         _fwPlaceOpen = false;
         FinishChange($"거푸집 판 {what}\t{text} · 바뀐 판 {n} · 부재 Id {string.Join(",", ids.Take(8))}{(ids.Count > 8 ? " …" : "")}",
-            $"{what} · {(n == 1 && pieces.Count == 1 ? M2(area) + " ㎡" : $"판 {n}장")} · 거푸집 {M2(_board.Total)} ㎡", what);
+            $"{what} · {(n == 1 && pieces.Count == 1 ? M2(area) + " ㎡" : $"거푸집 판 {n}장")} · 거푸집 {M2(_board.Total)} ㎡", what);
         return true;
     }
 }

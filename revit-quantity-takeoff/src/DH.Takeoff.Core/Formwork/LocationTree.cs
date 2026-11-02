@@ -62,6 +62,13 @@ public sealed class LocationTree
     }
 
     /// <summary>부재 이름(나무 · 카드 머리 · 이름표): «부위 + 마크(없으면 유형)» — 부위는 보드의 PlaceOf(비었으면 자동 이름).</summary>
+    /// <summary>
+    /// 면 넓이 글(R73a6 — 나무 줄 · 이름표 · 딱지 공통): 둘째 자리(«1,234.50»). 0.005 ㎡ 아래 0 아닌 넓이는 셋째 자리까지(«0.003» — 전에는 «0.00»으로 보여 빈 면처럼 읽혔다 · JACK 1102 계단 «0.00㎡»).
+    /// </summary>
+    public static string AreaText(double area) =>
+        area > 0 && area < 0.005 ? (area < 0.0005 ? "<0.001" : area.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture))
+        : area.ToString("#,##0.00", System.Globalization.CultureInfo.InvariantCulture);
+
     public static string MemberName(FormworkBoard board, FormworkElement el) =>
         (board.PlaceOf(el.Id).part is { Length: > 0 } p ? p : CalcPlan.KindName(el.Kind, el.Type)) + " " + (el.Mark.Length > 0 ? el.Mark : el.Type);
 
@@ -160,6 +167,7 @@ public sealed class LocationTree
         var floorNodes = new Dictionary<int, Node>();
         var zoneNodes = new Dictionary<(int floor, string zone), Node>();
         var memberNodes = new Dictionary<(int floor, string zone, long id), Node>();
+        var joinedRows = new Dictionary<(Node member, BoardFace lead), Node>();
         foreach (var f in faces)
         {
             int floor = floorOf.TryGetValue(f, out int fl) ? fl : -1;
@@ -185,6 +193,14 @@ public sealed class LocationTree
                 zn.Children.Add(mn);
                 parent[mn] = zn;
             }
+            // 한 면처럼 볼 면(R73a7 — 단마다 따로인 계단 옆면)은 부재 줄마다 줄 하나에(넓이는 줄의 면을 더함 — Node.Area · 층이 갈리면 층마다 하나 — 설치 전 검토).
+            if (f.Siblings.Count > 1 && joinedRows.TryGetValue((mn, f.Siblings[0]), out var joined))
+            {
+                joined.Faces.Add(f);
+                faceNodes[f] = joined;
+                for (Node? at = mn; at != null; at = parent.TryGetValue(at, out var p) ? p : null) at.Faces.Add(f);
+                continue;
+            }
             var node = new Node { Level = Level.Face, Key = $"x{el.Id}:{f.Face.Solid}:{f.Face.Face}:{f.Piece}", Name = f.Name, Depth = depth + 2, Element = el.Id, Face = f };
             if (f.Piece >= 0 && plateMembers.TryGetValue(f.Piece, out var with) && with.Count > 1)
             {
@@ -193,6 +209,7 @@ public sealed class LocationTree
                 node.Tip = $"판: {leadName} 외 부재 {with.Count - 1}와 한 장";
             }
             node.Faces.Add(f);
+            if (f.Siblings.Count > 1) joinedRows[(mn, f.Siblings[0])] = node;
             mn.Children.Add(node);
             parent[node] = mn;
             faceNodes[f] = node;
