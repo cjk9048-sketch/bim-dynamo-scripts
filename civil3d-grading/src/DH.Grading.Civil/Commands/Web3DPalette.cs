@@ -91,7 +91,7 @@ public sealed class Web3DCommand
         Autodesk.AutoCAD.DatabaseServices.Extents3d? ext; int matched, total;
         try { (ext, matched, total) = Web3DExtras.FindViews(doc.Database, p.Label, p.St); }
         catch (System.Exception ex) { Tell(false, "횡단도를 찾지 못했습니다 — " + ex.Message); return; }
-        if (total == 0) { Tell(false, "횡단도가 없습니다 — [횡단]을 먼저 하세요"); return; }
+        if (total == 0) { Tell(false, "횡단도가 없습니다 — 계획지표면 [횡단도]를 먼저 하세요"); return; }
         if (ext == null || matched == 0) { Tell(false, $"이 측점({p.Label}) 횡단도가 없습니다"); return; }
         // 뷰 범위에는 아래 띠(밴드)와 수량표가 안 든다 — 아래로 높이만큼 · 오른쪽으로 폭 절반 더 연다
         var e = ext.Value;

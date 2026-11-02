@@ -242,7 +242,7 @@ public static class StationCommand
         try
         {
             if (!ProfileCommand.Rebuild(doc))
-                ed.WriteMessage("\n  · (종단도가 아직 없어 목록에만 담았습니다 — [종단도]를 누르면 반영됩니다)");
+                ed.WriteMessage("\n  · (종단도가 아직 없어 목록에만 담았습니다 — 계획지표면 [종단도]를 누르면 반영됩니다)");
         }
         catch (System.Exception ex) { ed.WriteMessage("\n  · ⚠종단도 갱신 실패 — " + ex.Message); }
     }
@@ -273,7 +273,7 @@ public static class StationCommand
         }
         if (found.Count == 0)
         {
-            SectionCommand.Refuse(ed, "도면에 노선(선형)이 없습니다.\n먼저 [종단도]로 노선을 그리세요.");
+            SectionCommand.Refuse(ed, "도면에 노선(선형)이 없습니다.\n먼저 계획지표면 [종단도]로 노선을 그리세요.");
             return ObjectId.Null;
         }
         if (found.Count == 1)
@@ -427,7 +427,7 @@ public static class StationCommand
             note = $"꺾임 {nPi} · 사면·소단 {nEdge} · 옹벽 {nWall} · 데이라잇 {nDl}"
                  + (nExc > 0 ? $" · 터파기 {nExc}" : "")
                  + (wfWarn.Length > 0 ? " · " + wfWarn : "")
-                 + (nEdge + nDl + nWall == 0 ? " (번들이 없어 정지 경계는 못 잡음 — [부지정지]를 먼저)" : "");
+                 + (nEdge + nDl + nWall == 0 ? " (번들이 없어 정지 경계는 못 잡음 — [계획부지 생성]을 먼저)" : "");
         }
         catch { }
         return list;
@@ -743,7 +743,7 @@ public static class StationCommand
                 if (SheetTag.IsRoad(ln))
                 {
                     tr.Commit();
-                    ed.WriteMessage("\n  · 그건 진입도로 종단도의 세로선입니다 — 부지 종단도의 세로선을 골라 주세요(도로 측점은 도킹창 [종단도 다시]).");
+                    ed.WriteMessage("\n  · 그건 진입도로 종단도의 세로선입니다 — 부지 종단도의 세로선을 골라 주세요(도로 측점은 진입도로 [종단도]).");
                     return 2;
                 }
                 x = ln.StartPoint.X;

@@ -26,6 +26,9 @@ namespace DH.Grading.Civil.Commands;
 /// </summary>
 public sealed class ProfileCommand
 {
+    /// <summary>★[v111.7 · 설치 전 검토 낮음] 참이면 짓는 중 명령창 줄(스타일 지정 · 장 나눔 · 단면검토선 수)을 안 찍는다 — 진입도로 저절로 다시 그리기는 요약 한 줄만(자세한 것은 진단 로그). 경고(⚠)는 그대로.</summary>
+    internal static bool Quiet;
+
     /// <summary>사용자가 그린 노선이 놓이는 레이어 — <b>노란색</b>(JACK 지정).</summary>
     internal const string LayerRoute = "DH-종단노선";
 
@@ -227,9 +230,9 @@ public sealed class ProfileCommand
         {
             if (!ReadExistingRoute(db, out var pts, out var viewPt))
             {
-                ed.WriteMessage("\n[도면 설정] 다시 그릴 종단도가 없습니다 — [종단도] 버튼으로 먼저 만드세요."
+                ed.WriteMessage("\n[도면 설정] 다시 그릴 종단도가 없습니다 — 계획지표면 [종단도]로 먼저 만드세요."
                                 + "\n  ※v32.29 이전에 만든 종단도라면 '어디에 놓았는지'가 기록돼 있지 않습니다."
-                                + " 한 번만 [종단도]로 새로 만들면 그 뒤로는 저장할 때마다 자동으로 갱신됩니다.");
+                                + " 한 번만 계획지표면 [종단도]로 새로 만들면 그 뒤로는 저장할 때마다 자동으로 갱신됩니다.");
                 return false;   // ★started는 거짓 그대로 — 손을 안 댔다
             }
             started = true;     // ★여기서부터는 부술 수 있다 — 실패해도 복구가 필요하다
@@ -366,7 +369,7 @@ public sealed class ProfileCommand
         if (surfs.Count == 0)
         {
             SectionCommand.Refuse(ed, "종단도를 만들 지표면이 없습니다.\n\n" +
-                                      "먼저 [서버지표면]으로 원지반을 만들거나 [부지정지]를 실행하세요.");
+                                      "먼저 [원지반 가져오기]로 원지반을 만들거나 [계획부지 생성]을 실행하세요.");
             return false;
         }
         // ★★★[v103.2 · 계획 2-4] 옹벽이 든 면이 있으면 그것이 «정지면»이다(종단 · 단면검토선 · 횡단 · 수량이 모두 이 목록을 본다)
@@ -1217,7 +1220,7 @@ public sealed class ProfileCommand
                 Step9($"{sh9 + 1}/{plan9.Count} ③ 스타일 걸기");
                 string sty9 = ApplyViewStyle(db, cdoc, pvId9, pidGround, pidPad, slGroupId, surfs, ed, log, chain);
                 Step9($"{sh9 + 1}/{plan9.Count} ③ 스타일 걸었다");
-                if (sh9 == 0) { log.AppendLine(sty9); ed.WriteMessage("\n  · " + sty9); }
+                if (sh9 == 0) { log.AppendLine(sty9); if (!Quiet) ed.WriteMessage("\n  · " + sty9); }
                 if (plan9.Count > 1)
                     log.AppendLine($"  ── {sh9 + 1}/{plan9.Count}장 · 측점 {plan9[sh9].S0:F1}~{plan9[sh9].S1:F1}m · 자리 X {pt9.X:F1}");
                 // ★[JACK 0904 · 검토 0904] 시작측점 라벨은 <b>첫 장만</b> — <b>인자로</b> 넘긴다.
@@ -1324,7 +1327,7 @@ public sealed class ProfileCommand
             if (plan9.Count > 1)
             {
                 sheetAll = $"{plan9.Count}장으로 나눔 · " + sheetAll;
-                ed.WriteMessage($"\n  · 종단도를 {plan9.Count}장으로 나눴습니다(고정 축척 1:{scale:F0}).");
+                if (!Quiet) ed.WriteMessage($"\n  · 종단도를 {plan9.Count}장으로 나눴습니다(고정 축척 1:{scale:F0}).");
             }
             return (pvId, pvIds9, sheetAll, plan9.Count);
         }
@@ -2145,7 +2148,7 @@ public sealed class ProfileCommand
             {
                 string warn = $"측점이 {cuts.Count}개다(권장 상한 {SectionCommand.MaxSections}개)"
                             + " — 도면이 무거워지고 횡단면도도 그만큼 생긴다."
-                            + $" 도면설정의 '원지반 굴곡'을 더 단순한 쪽으로 옮기면 줄어든다(지금 {GradingSettings.GroundBreakTolZ:0.###}m).";
+                            + $" 도면설정의 '종단 원지반 굴곡'을 더 단순한 쪽으로 옮기면 줄어든다(지금 {GradingSettings.GroundBreakTolZ:0.###}m).";
                 log.AppendLine("  ⚠" + warn);
                 ed.WriteMessage("\n  ⚠" + warn);
             }
@@ -2229,7 +2232,7 @@ public sealed class ProfileCommand
                 trC.Commit();
             }
             catch (System.Exception ex) { log.AppendLine("  검토선 되읽기 실패 — " + ex.Message); }
-            ed.WriteMessage($"\n  · 단면검토선 {nSl}개 (정측점 {interval:0.#}m + 굴곡부 + 수동)");
+            if (!Quiet) ed.WriteMessage($"\n  · 단면검토선 {nSl}개 (정측점 {interval:0.#}m + 굴곡부 + 수동)");
 
             // ★[v32.45] 꾸미기는 여기서 하지 않는다 — 글씨 크기가 <b>도면 축척</b>을 따라야 하는데
             //   축척은 <see cref="SheetCommand.Build"/>가 <b>나중에</b> 정한다(JACK: "측점 문자가 축척이 안 먹음").
@@ -2342,6 +2345,69 @@ public sealed class ProfileCommand
         catch (System.Exception ex) { log.AppendLine("단면검토선 실패 — " + ex.Message); return ObjectId.Null; }
     }
 
+    /// <summary>★★[v111.4 · JACK 1030 인터뷰 «밴드 맨 위 · S=5.20% L=40.00 · 오르막 ╱ 내리막 ╲»] 진입도로 구배 밴드 스타일 — 회사 템플릿 «DH_종단 뷰_수직 지오메트리_구배»의
+    /// <b>복사본</b> «…(진입도로)»(원본 = 관로 · 도로 세트가 씀 — 손대지 않음). 접선 라벨: «종단경사»(S= · 오르막 Sn · 내리막 SD — 템플릿 그대로) · «수평,수직 길이» → «L=<[접선 수평 길이]>»(H 뺌 · 수평 길이 — 내 판단) ·
+    /// 시작 · 끝 표고 끔. 접선 선(╱ ╲)은 템플릿 그대로. 돌려줌 = 복사본 이름 · 못 하면 빈 글(구배 칸 없이 · 로그).
+    /// <para>복사본 라벨 스타일이 원본과 같은 객체면(얕은 복사) 고치면 원본도 바뀌므로 복사본을 지우고 뺀다.</para></summary>
+    internal static string EnsureRoadGradeStyle(Database db, CivilApp.CivilDocument cdoc, System.Text.StringBuilder log)
+    {
+        const string Src = "DH_종단 뷰_수직 지오메트리_구배", Dst = Src + "(진입도로)";
+        const string LenField = "L=<[접선 수평 길이(Um|P2|RN|AP|Sn|OF)]>";
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var coll = cdoc.Styles.BandStyles.ProfileViewVerticalGeometryBandStyles;
+            ObjectId src = ObjectId.Null, dst = ObjectId.Null;
+            foreach (ObjectId id in coll)
+            {
+                if (tr.GetObject(id, OpenMode.ForRead) is not CivilDb.Styles.StyleBase sb) continue;
+                if (sb.Name == Src) src = id; else if (sb.Name == Dst) dst = id;
+            }
+            if (src.IsNull && dst.IsNull) { tr.Commit(); log.AppendLine($"  [구배] ⚠회사 템플릿에 '{Src}' 밴드 스타일이 없어 구배 칸을 뺌"); return ""; }
+            if (dst.IsNull)
+            {
+                dst = ((CivilDb.Styles.StyleBase)tr.GetObject(src, OpenMode.ForRead)).CopyAsSibling(Dst);
+                var s0 = (CivilDb.Styles.VerticalGeometryBandStyle)tr.GetObject(src, OpenMode.ForRead);
+                var s1 = (CivilDb.Styles.VerticalGeometryBandStyle)tr.GetObject(dst, OpenMode.ForRead);
+                if (s1.UphillTangentLabelStyleId == s0.UphillTangentLabelStyleId || s1.DownhillTangentLabelStyleId == s0.DownhillTangentLabelStyleId)
+                {
+                    tr.GetObject(dst, OpenMode.ForWrite).Erase();
+                    tr.Commit();
+                    log.AppendLine("  [구배] ⚠복사본 라벨이 원본과 같은 객체(얕은 복사)라 고치면 원본도 바뀜 — 구배 칸을 뺌");
+                    return "";
+                }
+            }
+            var st = (CivilDb.Styles.VerticalGeometryBandStyle)tr.GetObject(dst, OpenMode.ForRead);
+            int nLen = 0, nOff = 0;
+            foreach (ObjectId lsId in new[] { st.UphillTangentLabelStyleId, st.DownhillTangentLabelStyleId })
+            {
+                if (lsId.IsNull) continue;
+                var ls = (CivilDb.Styles.LabelStyle)tr.GetObject(lsId, OpenMode.ForWrite);
+                foreach (ObjectId cid in ls.GetComponents(CivilDb.Styles.LabelStyleComponentType.Text))
+                {
+                    if (tr.GetObject(cid, OpenMode.ForWrite) is not CivilDb.Styles.LabelStyleTextComponent tc) continue;
+                    string nm = tc.General.Name ?? "";
+                    if (nm.Contains("표고값"))
+                    {
+                        if (tc.General.Visible.Value) { tc.General.Visible.Value = false; nOff++; }
+                    }
+                    else if (nm.Contains("길이"))
+                    {
+                        string c = tc.Text.Contents.Value ?? "";
+                        if (c.Contains("접선 수평 길이")) continue;   // 이미 고침
+                        string c2 = System.Text.RegularExpressions.Regex.Replace(c, @"H=<\[[^\]]*\]>\s*,\s*L=<\[[^\]]*\]>", LenField.Replace("$", "$$"));
+                        tc.Text.Contents.Value = c2 != c ? c2 : LenField;
+                        nLen++;
+                    }
+                }
+            }
+            tr.Commit();
+            log.AppendLine($"  [구배] 진입도로 구배 밴드 스타일 '{Dst}' — 길이 글자 {nLen}곳 «L=수평 길이» · 표고 글자 {nOff}곳 끔");
+            return Dst;
+        }
+        catch (System.Exception ex) { log.AppendLine("  [구배] ⚠구배 밴드 스타일을 못 만듦 — " + ex.Message); return ""; }
+    }
+
     /// <param name="chain">★[v110.4 · 계획 2.B-4] 측점 행 체인 — null = 부지(이번 실행 static · <see cref="AliveChain"/>) · 값 = 진입도로(그 도로 체인 · Null이면 없음).</param>
     private static string ApplyViewStyle(Database db, CivilApp.CivilDocument cdoc, ObjectId pvId,
                                          ObjectId pidGround, ObjectId pidPad, ObjectId slGroupId,
@@ -2355,6 +2421,8 @@ public sealed class ProfileCommand
         //   선택에서도 안 떠도 돼. 무조건 토공이야 이 애드인은."</i>
         //   0810에 '실행할 때 고른다'로 정했던 것을 거둔다 — 고를 것이 하나뿐이면 묻는 것 자체가 손해다.
         string want = GradingSettings.BandSet;   // 항상 "토공"(상수)
+        // ★★[v111.4 · JACK 1030 «진입도로 종단에 구배가 빠졌어 — 구배 밴드» · 인터뷰: 맨 위 · «S=5.20% L=40.00»] 진입도로(chain 있음)만 — 회사 구배 밴드 스타일의 진입도로 복사본
+        string grade = chain.HasValue ? EnsureRoadGradeStyle(db, cdoc, log) : "";
 
         // ── ① 필수 구간 — 뷰 스타일 + 밴드 세트. 여기가 깨지면 되돌린다.
         bool core = false;
@@ -2488,6 +2556,13 @@ public sealed class ProfileCommand
                             order.Add((t0, n0));
                         }
                     if (order.Count == 0) continue;
+                    // ★★[v111.4] 진입도로 구배 칸 — 밴드 맨 위(그래프 바로 아래)에 새로 넣어 다른 칸과 함께 만든다(나중에 Get/Add/Set 하면 라벨 묶음이 날아감 — 위 v27.2 주석)
+                    //   Profile1 = 계획 종단(아래 VerticalGeometry 갈래) · 세트에 이미 종단 기하 칸이 있으면 안 넣음
+                    if (bottom && grade.Length > 0 && !order.Any(o => o.T == Autodesk.Civil.BandType.VerticalGeometry))
+                    {
+                        order.Insert(0, (Autodesk.Civil.BandType.VerticalGeometry, grade));
+                        detail.AppendLine($"    [구배] 진입도로 — 맨 위에 '{grade}'");
+                    }
 
                     using var fresh = new CivilDb.ProfileViewBandItemCollection(
                         pvId, bottom ? Autodesk.Civil.BandLocationType.Bottom : Autodesk.Civil.BandLocationType.Top);

@@ -74,6 +74,8 @@ public static class ExcavPalette
             _panel?.SyncTo(AcadApp.DocumentManager.MdiActiveDocument);
 
             // ★도킹은 <b>보인 뒤에</b> — 안 뜬 팔레트에는 AutoCAD가 Dock을 무시한다(0831 교훈).
+            // ★[v111.7 · JACK 1102 «부지 창을 열면 진입도로 창은 닫기»] 숨기기만(도로 세션 · 값은 그대로)
+            RoadPalette.Hide();
             _ps.Visible = true;
             try { if (_ps.Dock != DockSides.Right) _ps.Dock = DockSides.Right; } catch { }
             // ★[JACK 0910] <b>열 때마다</b> 최소 폭을 지킨다(정지 창과 같은 규칙) —
@@ -103,6 +105,12 @@ public static class ExcavPalette
             }
             catch { }
         }
+    }
+
+    /// <summary>★[v111.7 · JACK 1102] 진입도로 창을 열 때 이 창을 숨긴다(떠 있을 때만 · 고른 것 · 값은 그대로 — 닫기 단추와 같음).</summary>
+    internal static void Hide()
+    {
+        try { if (_ps != null && _ps.Visible) _ps.Visible = false; } catch { }
     }
 
     /// <summary>바깥에서 값이 바뀌었다 — 창을 다시 채운다.</summary>

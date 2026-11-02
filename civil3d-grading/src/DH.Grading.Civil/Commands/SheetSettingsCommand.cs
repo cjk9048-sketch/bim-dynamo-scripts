@@ -23,9 +23,17 @@ public sealed class SheetSettingsCommand
         // [도면 전환 0803] 도면이 바뀌었으면 그 도면이 저장한 값을 보여준다(정지옵션과 같은 규칙).
         GradingSettings.SyncToDocument(doc);
 
-        var dlg = new SheetDialog("저장");
+        var (rp0, rx0) = RoadDrawingSettings.Read(doc.Database);
+        var dlg = new SheetDialog("저장", rp0, rx0);
         AcadApp.ShowModalWindow(dlg);
         if (dlg.DialogResult != true) return;
+        // ★[v111.4] 진입도로 칸 둘 — 도면에 저장 · 열린 진입도로가 있으면 다시 계산(종단도 · 횡단도가 그 축척과 다르면 도킹창 «축척이 바뀌었습니다» + 깜박)
+        bool roadChanged = System.Math.Abs(dlg.RoadProfileScale - rp0) > 1e-9 || System.Math.Abs(dlg.RoadXsecScale - rx0) > 1e-9;
+        if (roadChanged)
+        {
+            try { RoadDrawingSettings.Write(doc.Database, dlg.RoadProfileScale, dlg.RoadXsecScale); }
+            catch (System.Exception exR) { doc.Editor.WriteMessage("\n[도면 설정] 진입도로 축척 저장 실패 — " + exR.Message); }
+        }
 
         // ★★★[검토 0908 · 심각] <b>안내문은 재생성 <u>뒤에</u> 찍는다.</b>
         //
@@ -86,5 +94,9 @@ public sealed class SheetSettingsCommand
                        // ★[검토 0908 · 높음] <b>못 그렸으면 못 그렸다고 한다.</b>
                        //   종전엔 이 경우 아무 말이 없어, 지워지기만 한 것을 사람이 알 길이 없었다.
                        : " · 횡단도는 다시 그리지 못했습니다 — 위 [횡단도] 메시지를 보세요"));
+        // ★[v111.4] 열린 진입도로 — 축척(진입도로 칸 · 부지 축척 바뀜)이 그린 종단도 · 횡단도와 다르면 도킹창 «축척이 바뀌었습니다» + 깜박
+        // ★★[v111.7 · JACK 1102] 이 명령 안에서 같은 자리에 바로 다시(지난 자리가 없거나 못 그리면 알림 + 깜박 그대로 · 그 안에서 다시 계산)
+        var rs = RoadSession.Of(doc);
+        if (rs != null) RoadCommand.RedrawStale(doc, rs);
     }
 }

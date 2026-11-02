@@ -845,7 +845,7 @@ public sealed class InfraworksCommand
                     wallWarn.Add($"폴더에 예전 {GradingSettings.InfraWallDwg}가 남아 있습니다 — 이번 내보내기와 맞지 않으니 지우세요");
                 // ★[계획 검토 중간 3] 터파기 켬인데 종단이 지은 터파기면이 지금 설정 · 표와 다르면 — 3D(지금 단면)와 수량(지난 종단 단면)이 어긋날 수 있다(모르면 안 띄운다)
                 if (exSt.On && secLines != null && secLines.Count > 0 && WallExcavBuilder.HasCurrentSurface(db, gid3) == false)
-                    wallWarn.Add("옹벽 터파기면이 지금 단면 표 · 설정과 다릅니다 — [종단도]를 다시 그리면 수량 단면과 3D가 같아집니다");
+                    wallWarn.Add("옹벽 터파기면이 지금 단면 표 · 설정과 다릅니다 — 계획지표면 [종단도]를 다시 그리면 수량 단면과 3D가 같아집니다");
                 foreach (var nt in secNotes.Distinct().Take(12)) log.AppendLine("  · " + nt);
                 if (secNotes.Count > 12) log.AppendLine($"  · … 외 {secNotes.Count - 12}건");
                 log.AppendLine("■ 옹벽 3D · SHP 자가진단");

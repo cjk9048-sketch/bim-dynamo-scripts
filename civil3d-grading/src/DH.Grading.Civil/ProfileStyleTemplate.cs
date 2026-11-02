@@ -194,7 +194,8 @@ public static class ProfileStyleTemplate
             //   복사본을 새로 만들 필요가 없다 — <b>이미 도면에 있는 그 객체를 옮기면</b> 된다.
             //   (잘못된 딕셔너리에서 빼고 → 맞는 딕셔너리에 이름으로 넣는다.)
             var twins = Collect(db, cdoc, si => si.Cls.Contains("SectionalData", StringComparison.Ordinal)
-                                             && Norm(si.Name).StartsWith(Prefix, StringComparison.Ordinal))
+                                             && Norm(si.Name).StartsWith(Prefix, StringComparison.Ordinal)
+                                             && !DH.Grading.Core.RoadXsecRules.IsRoadClone(si.Name))   // ★[v111.5 · 설치 전 검토 열린 질문] 진입도로 횡단 복사본은 옮기지 않음
                         .GroupBy(s => Norm(s.Name)).Select(g => g.First()).ToList();
 
             // ★★[v29.0 점검 반영 · 치명] <b>빼기부터 하면 실패할 때 스타일이 증발한다.</b>

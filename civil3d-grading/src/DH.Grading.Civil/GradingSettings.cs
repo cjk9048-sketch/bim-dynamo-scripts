@@ -25,7 +25,7 @@ public static class GradingSettings
     /// <b>같은 번호를 단 빌드가 여러 개</b>가 되어, 어느 것이 깔렸는지 물으면 답할 수가 없었다.</para>
     /// <para><c>x.0</c> = 화면·명령이 바뀌어 <b>사용자가 다르게 일하게</b> 되는 판 ·
     /// <c>x.y</c> = 같은 화면에서 결함을 고친 판.</para></summary>
-    public const string Version = "v111.3.0 (2026-10-30)";
+    public const string Version = "v111.7.0 (2026-11-02)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -692,6 +692,13 @@ public static class GradingSettings
 
     /// <summary>이 세션 설정이 어느 도면 것인지(전체 경로). 도면이 바뀌면 그 도면 기준으로 다시 맞춘다.</summary>
     private static string _ownerDoc = "";
+
+    /// <summary>★[v111.7 · 설치 전 검토 낮음] 설정이 이미 이 도면 것인가(아직 어느 도면에도 안 맞췄으면 참 — 지울 남의 기억이 없음).
+    /// 진입도로 저절로 다시 그리기는 거짓이면 안 그린다 — 짓는 코드가 <see cref="SyncToDocument"/>를 불러 다른 도면의 옹벽 고르기 등 기억을 말없이 지우지 않게.</summary>
+    internal static bool IsSyncedTo(Autodesk.AutoCAD.ApplicationServices.Document doc)
+    {
+        try { string k = doc?.Name ?? ""; return k.Length > 0 && (_ownerDoc.Length == 0 || k == _ownerDoc); } catch { return false; }
+    }
 
     /// <summary>
     /// [도면 전환 0803 — JACK] 설정과 '마지막 작업 기억'은 Civil3D 전체에 **한 벌뿐**이라 도면을 바꿔도 따라오지 않는다.

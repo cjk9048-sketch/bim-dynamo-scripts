@@ -105,6 +105,8 @@ public static class GradingPalette
             //   ★이 12줄짜리 교훈이 <see cref="StrataPalette"/>에 이미 적혀 있었는데(0831)
             //     가져오지 않았다. <b>값을 치르고 배운 것을 되밟은 것</b>이다.
             //   ★그리고 <b>부를 때마다</b> 확인한다 — 떼어 놓았다가 다시 누르면 그때도 붙는 편이 낫다.
+            // ★[v111.7 · JACK 1102 «부지 창을 열면 진입도로 창은 닫기»] 숨기기만(도로 세션 · 값은 그대로)
+            RoadPalette.Hide();
             _ps.Visible = true;
             try { if (_ps.Dock != DockSides.Right) _ps.Dock = DockSides.Right; } catch { }
             // ★★[JACK 0910 <i>"처음 도킹창이 뜰때는 무조건 … 닫고 다시 열더라도"</i>]
@@ -143,6 +145,12 @@ public static class GradingPalette
         }
     }
 
+    /// <summary>★[v111.7 · JACK 1102] 진입도로 창을 열 때 이 창을 숨긴다(떠 있을 때만 · 고른 것 · 값은 그대로 — 닫기 단추와 같음).</summary>
+    internal static void Hide()
+    {
+        try { if (_ps != null && _ps.Visible) _ps.Visible = false; } catch { }
+    }
+
     /// <summary>★★★[검토 0909 · 높음] <b>바깥에서 값이 바뀌었다 — 창을 다시 채운다.</b>
     ///
     /// <para><b>무엇이 문제였나.</b> 5a는 팝업과 도킹창을 <b>나란히</b> 두기로 했는데,
@@ -163,6 +171,14 @@ public static class GradingPalette
     internal static void RefreshComposite()
     {
         try { if (_ps != null && _ps.Visible) _panel?.RefreshComposite(); }
+        catch { }
+    }
+
+    /// <summary>★[v111.6 · JACK 1102] ■ 도면(단추 켜짐 · 옛 면 알림)만 다시 맞춘다 — 우리 명령(DH…)이 끝날 때 RibbonApp 명령 끝 훅이 부른다.
+    /// 칸 값은 안 건드린다(<see cref="Refresh"/>=SyncTo는 치고 있던 숫자를 되돌린다). 창이 안 떠 있으면 아무것도 안 한다(DB도 안 읽음).</summary>
+    internal static void RefreshSheets()
+    {
+        try { if (_ps != null && _ps.Visible) _panel?.RefreshSheets(); }
         catch { }
     }
 
