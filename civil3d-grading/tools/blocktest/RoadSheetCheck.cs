@@ -114,5 +114,33 @@ static class RoadSheetCheck
             var two = ProfileSheetRules.RoadSheetsSpan(0, 500, 3);
             check("S180 ⑥ 1:500 세 장 = 841 mm × 3 × 0.5 + 왼쪽 65 m", Math.Abs(two.X1 - 1261.5) < 1e-9 && Math.Abs(two.X0 + 65) < 1e-9, $"{two}");
         }
+
+        // ⑦ ★[v111.7.2 · JACK 1102] 구배 칸 — 보이는 구배(0.01 %)가 같은 이웃 접선은 한 구간 · 두 번 꺾이면 세 구간
+        {
+            // 주측점(20 m)마다 PVI · 진짜 꺾임은 60 m · 140 m 두 곳: −12 % · +0.36 % · −5 %
+            var p = new List<(double, double)>();
+            for (int k = 0; k <= 3; k++) p.Add((k * 20.0, 100 - 0.12 * k * 20));                  // 0~60: −12 %
+            for (int k = 1; k <= 4; k++) p.Add((60 + k * 20.0, 92.8 + 0.0036 * k * 20));          // 60~140: +0.36 %
+            for (int k = 1; k <= 3; k++) p.Add((140 + k * 20.0, 93.088 - 0.05 * k * 20));         // 140~200: −5 %
+            var r = ProfileSheetRules.GradeRuns(p);
+            check("S180 ⑦ 주측점마다 PVI + 두 번 꺾임 → 세 구간(−12.00 · 0.36 · −5.00 %) · 길이 60 · 80 · 60",
+                r.Count == 3 && r[0].GradePct == -12.00 && r[1].GradePct == 0.36 && r[2].GradePct == -5.00
+                && Math.Abs(r[0].S1 - r[0].S0 - 60) < 1e-9 && Math.Abs(r[1].S1 - r[1].S0 - 80) < 1e-9 && Math.Abs(r[2].S1 - r[2].S0 - 60) < 1e-9
+                && Math.Abs(r[2].Z1 - (93.088 - 3)) < 1e-9,
+                string.Join(" | ", r.Select(q => $"{q.S0:0.##}~{q.S1:0.##} {q.GradePct:0.00}%")));
+            // 0.004 % 차이(보이는 자리 아래) = 한 구간 · 0.01 % 차이 = 두 구간 · 부호만 다름(−1 · +1) = 두 구간
+            var a = ProfileSheetRules.GradeRuns(new List<(double, double)> { (0, 100), (20, 100.2), (40, 100.40001) });
+            var b = ProfileSheetRules.GradeRuns(new List<(double, double)> { (0, 100), (20, 100.2), (40, 100.402) });
+            var c = ProfileSheetRules.GradeRuns(new List<(double, double)> { (0, 100), (20, 99.8), (40, 100) });
+            check("S180 ⑦ 0.00005 % 차이 = 한 구간 · 0.01 % 차이 = 두 구간 · 내리막 → 오르막(같은 크기) = 두 구간",
+                a.Count == 1 && a[0].GradePct == 1.00 && b.Count == 2 && b[1].GradePct == 1.01 && c.Count == 2 && c[0].GradePct == -1 && c[1].GradePct == 1,
+                $"{a.Count} · {b.Count} · {c.Count}");
+            // 평탄(−0.001 % · +0.001 %) = 0.00 하나 · 같은 측점 · 거꾸로 · 숫자 아님 = 건너뜀 · PVI 하나 이하 = 빈 목록
+            var d = ProfileSheetRules.GradeRuns(new List<(double, double)> { (0, 100), (20, 99.9998), (40, 100.0000), (40, 105), (30, 90), (double.NaN, 1), (60, 100.0002) });
+            check("S180 ⑦ 평탄 ±0.001 % = 0.00 % 한 구간 · 같은 측점 · 거꾸로 · NaN 건너뜀 · PVI 하나 = 빈 목록",
+                d.Count == 1 && d[0].GradePct == 0 && !double.IsNegative(d[0].GradePct) && Math.Abs(d[0].S1 - 60) < 1e-9
+                && ProfileSheetRules.GradeRuns(new List<(double, double)> { (0, 1) }).Count == 0 && ProfileSheetRules.GradeRuns(null).Count == 0,
+                d.Count > 0 ? $"{d[0].S0}~{d[0].S1} {d[0].GradePct}" : "빈 목록");
+        }
     }
 }

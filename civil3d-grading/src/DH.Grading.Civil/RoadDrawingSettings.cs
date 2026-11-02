@@ -28,6 +28,46 @@ internal static class RoadDrawingSettings
         catch { return (0, 0); }
     }
 
+    /// <summary>★★[v111.7.2 · JACK 1102 «횡단도 배치 드롭박스를 바꿔도 안 바뀌어»] 도면설정 «3. 공통» «횡단도 배치»(차례 번호) — <b>도면에 저장</b>(도면 사전 XRecord «DH_SHEETLAYOUT» · 진입도로 칸과 같은 길).
+    /// 종전엔 세션 값뿐이라 Civil을 켤 때마다 1×2로 돌아갔다. 기록이 없으면 −1(세션 값 그대로 — 새로 켠 Civil이면 기본 1×2).</summary>
+    internal static int ReadLayout(Database db)
+    {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
+            int lay = -1;
+            if (nod.Contains(LayoutKey) && tr.GetObject(nod.GetAt(LayoutKey), OpenMode.ForRead) is Xrecord xr && xr.Data != null)
+            {
+                var v = xr.Data.AsArray();
+                if (v.Length >= 1 && v[0].Value is int a && a >= 0) lay = a;
+            }
+            tr.Commit();
+            return lay;
+        }
+        catch { return -1; }
+    }
+
+    /// <summary>★[v111.7.2] «횡단도 배치» 저장 — 명령 안(문서 잠김)에서 부른다.</summary>
+    internal static void WriteLayout(Database db, int layout)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
+        Xrecord xr;
+        if (nod.Contains(LayoutKey)) xr = (Xrecord)tr.GetObject(nod.GetAt(LayoutKey), OpenMode.ForWrite);
+        else
+        {
+            nod.UpgradeOpen();
+            xr = new Xrecord();
+            nod.SetAt(LayoutKey, xr);
+            tr.AddNewlyCreatedDBObject(xr, true);
+        }
+        xr.Data = new ResultBuffer(new TypedValue((int)DxfCode.Int32, layout));
+        tr.Commit();
+    }
+
+    const string LayoutKey = "DH_SHEETLAYOUT";
+
     /// <summary>명령 안(문서 잠김)에서 부른다.</summary>
     internal static void Write(Database db, double profile, double xsec)
     {

@@ -105,6 +105,15 @@ static class RoadXsecCheck
                 none == "" && stc == "종단이 수정되었습니다" && srf == "지표면이 다시 만들어졌습니다" && sig == srf && gone == srf
                 && pin == "축척이 바뀌었습니다" && ann == pin && both == stc && old == "" && nan == "",
                 $"«{none}» «{stc}» «{srf}» «{pin}» «{ann}» «{both}» «{old}» «{nan}»");
+            // ★[v111.7.2 · JACK 1102] 횡단도 배치 — 그릴 때 배치 ≠ 지금 배치 → «횡단도 배치가 바뀌었습니다» · 옛 기록(−1) = 1×2로 그렸다고 봄 · 다른 까닭이 먼저
+            string lSame = RoadXsecRules.Stale(stamp, k0, "1A2B", "SIG", 200, 200, 500, 500, 4, 4);
+            string lMove = RoadXsecRules.Stale(stamp, k0, "1A2B", "SIG", 200, 200, 500, 500, 1, 4);
+            string lOld1 = RoadXsecRules.Stale(stamp, k0, "1A2B", "SIG", 200, 200, 500, 500, -1, 1);
+            string lOld4 = RoadXsecRules.Stale(stamp, k0, "1A2B", "SIG", 200, 200, 500, 500, -1, 4);
+            string lFirst = RoadXsecRules.Stale(stamp, kMove, "1A2B", "SIG", 200, 200, 500, 500, 1, 4);
+            check("S183 ⑤ 배치 — 같음 = 빈 글 · 1×2 → 2×3 = «횡단도 배치» · 옛 기록 = 1×2로 봄(1 같음 · 4 바뀜) · 측점이 먼저",
+                lSame == "" && lMove == "횡단도 배치가 바뀌었습니다" && lOld1 == "" && lOld4 == lMove && lFirst == stc,
+                $"«{lSame}» «{lMove}» «{lOld1}» «{lOld4}» «{lFirst}»");
         }
     }
 }

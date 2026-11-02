@@ -142,8 +142,12 @@ public static class StationMarks
         "정측점", "보조측점", "정체인", "직접 찍음",
         "옹벽", "가시설", "터파기",   // ★[검토 0902] "터파기"가 빠져 있었다(로그 실측 4건) —
         "사면", "소단", "데이라잇",   //   "원지반굴곡·터파기"가 되면 그 측점이 지워졌다
-        "절성경계", "꺾임", "종점", "기점"
+        "절성경계", "꺾임", "종점", "기점",
+        PviWhy,                       // ★[v111.7.2] 진입도로 계획 종단 PVI 자리(사람이 찍고 옮긴 꺾임) — 굴곡부와 합쳐져도 안 지움
     };
+
+    /// <summary>★[v111.7.2 · JACK 1102] 진입도로 계획 종단 PVI 측점의 사유.</summary>
+    public const string PviWhy = "종단 PVI";
 
     /// <summary>이 측점이 <b>수동 (전)(후)</b>인가. 사유를 읽는 자는 여기 하나뿐이다.</summary>
     public static bool IsFrontBack(string why)

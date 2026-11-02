@@ -28,7 +28,7 @@ public sealed class NoriCommand
         if (rs != null)
         {
             try { rs.RecomputeIfDirty(); } catch { }
-            if (rs.AutoPending) RoadCommand.RedrawStale(doc, rs);
+            if (rs.Pending) RoadCommand.RedrawStale(doc, rs);   // ★[v111.7.2] 저절로 다시 만들기 없앰 — 아직 [업데이트] 안 한 바뀜이면 먼저(자리는 안 물음)
         }
         Draw(doc, quiet: SelfCheckLog.Headless, out _);   // 화면 없는 Civil은 알림창을 못 띄움(정지 명령과 같은 법)
         rs?.NoteTicksDrawn();   // ★[v111.7.1] 도킹창 «노리선 지움 n» 끔

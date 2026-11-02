@@ -146,4 +146,71 @@ public static class ProfileSheetRules
         double hh = Math.Max(h, w / a) * k;
         return ((x0 + x1) / 2, (y0 + y1) / 2, hh * a, hh);
     }
+
+    /// <summary>★★[v111.7.2 · JACK 1102 «PVI가 두 번 꺾였으면 구간 3개 → 구배 3개만»] 진입도로 종단도 구배 칸 — PVI(측점 · 표고) 차례에서 <b>보이는 구배(0.01 %)가 같은 이웃 접선을 하나로</b> 묶는다.
+    /// <para>주측점마다 PVI가 있어도(v111.2 «주측점 PVI» — 끌어 옮기기용) 진짜로 꺾이는 곳만 구간이 갈린다. 돌려줌 = 구간마다 시작 · 끝 측점 · 표고 · 보이는 구배(%, 부호 있음 — 소수 둘째 자리).
+    /// 측점이 앞으로 안 가는 PVI(같은 측점 · 거꾸로) · 숫자 아님은 건너뛴다.</para></summary>
+    public static List<(double S0, double S1, double Z0, double Z1, double GradePct)> GradeRuns(IEnumerable<(double S, double Z)>? pvi, int digits = 2)
+    {
+        var p = new List<(double S, double Z)>();
+        foreach (var q in pvi ?? Array.Empty<(double, double)>())
+        {
+            if (!double.IsFinite(q.S) || !double.IsFinite(q.Z)) continue;
+            if (p.Count > 0 && q.S <= p[^1].S + 1e-9) continue;
+            p.Add(q);
+        }
+        var runs = new List<(double S0, double S1, double Z0, double Z1, double GradePct)>();
+        for (int i = 0; i + 1 < p.Count; i++)
+        {
+            double g = Math.Round((p[i + 1].Z - p[i].Z) / (p[i + 1].S - p[i].S) * 100.0, digits, MidpointRounding.AwayFromZero);
+            if (g == 0) g = 0;   // −0.00 → 0.00
+            if (runs.Count > 0 && runs[^1].GradePct == g) { var r = runs[^1]; runs[^1] = (r.S0, p[i + 1].S, r.Z0, p[i + 1].Z, g); }
+            else runs.Add((p[i].S, p[i + 1].S, p[i].Z, p[i + 1].Z, g));
+        }
+        return runs;
+    }
+
+    /// <summary>★★[v111.7.2 · JACK 1102 «넉넉히 경사 20 %까지는 문제없이 작성됐으면 좋겠어 — 그 이상이면 경고»] 진입도로 종단경사 경고 문턱 — 고정 20 %.
+    /// 도킹창 «최대 경사 %»(자동 초안 한도 · 기본 15 %)와 따로 — 그 사이는 경고 없음.</summary>
+    public const double WarnGrade = 0.20;
+
+    /// <summary>★[v111.7.2] 접선(PVI 사이) 중 |구배| &gt; <paramref name="limit"/>(+ 1e-6)인 것 — 개수 · 가장 가파른 접선(구배 % 부호 있음 · 시작 · 끝 측점). 없으면 (0, 0, NaN, NaN).
+    /// PVI 정리는 <see cref="GradeRuns"/>와 같다(같은 측점 · 거꾸로 · 숫자 아님은 건너뜀).</summary>
+    public static (int Count, double WorstPct, double S0, double S1) Steep(IEnumerable<(double S, double Z)>? pvi, double limit)
+    {
+        var p = new List<(double S, double Z)>();
+        foreach (var q in pvi ?? Array.Empty<(double, double)>())
+        {
+            if (!double.IsFinite(q.S) || !double.IsFinite(q.Z)) continue;
+            if (p.Count > 0 && q.S <= p[^1].S + 1e-9) continue;
+            p.Add(q);
+        }
+        int n = 0; double worst = 0, w0 = double.NaN, w1 = double.NaN;
+        double lim = double.IsFinite(limit) ? Math.Abs(limit) : WarnGrade;
+        for (int i = 0; i + 1 < p.Count; i++)
+        {
+            double g = (p[i + 1].Z - p[i].Z) / (p[i + 1].S - p[i].S);
+            if (!(Math.Abs(g) > lim + 1e-6)) continue;
+            n++;
+            if (Math.Abs(g) > Math.Abs(worst)) { worst = g; w0 = p[i].S; w1 = p[i + 1].S; }
+        }
+        return (n, worst * 100.0, w0, w1);
+    }
+
+    /// <summary>★★[v111.7.2 · JACK 1102 «종단도에 PVI점을 찍고 수정했으면 해당 위치에도 측점이 추가되어야 해»] 진입도로 측점에 더할 계획 종단 PVI 측점 —
+    /// 노선 범위(<paramref name="s0"/> ~ <paramref name="s1"/>) 안 · 기점 · 종점에서 <paramref name="tol"/>(측점 합침 1 cm) 넘게 떨어진 것만 · 서로 <paramref name="tol"/> 안은 하나 · 차례대로.
+    /// 주측점 · 다른 측점과 1 cm 안이면 측점 목록 합치기(<c>StationMarks.Merge</c> — 같은 1 cm)가 하나로 묶는다(이름은 주측점 «No.n» 그대로).</summary>
+    public static List<double> PviStations(IEnumerable<double>? pvi, double s0, double s1, double tol = 0.01)
+    {
+        var outp = new List<double>();
+        if (!double.IsFinite(s0) || !double.IsFinite(s1) || s1 <= s0) return outp;
+        double t = double.IsFinite(tol) && tol > 0 ? tol : 0.01;
+        foreach (double st in (pvi ?? Array.Empty<double>()).Where(double.IsFinite).OrderBy(v => v))
+        {
+            if (st <= s0 + t || st >= s1 - t) continue;
+            if (outp.Count > 0 && st - outp[^1] <= t) continue;
+            outp.Add(st);
+        }
+        return outp;
+    }
 }

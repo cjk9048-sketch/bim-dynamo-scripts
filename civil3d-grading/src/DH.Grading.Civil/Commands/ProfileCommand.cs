@@ -1883,6 +1883,17 @@ public sealed class ProfileCommand
                     marks.AddRange(StationMarks.FromCutFillLine(prPad, prGrd, s0, s1, 0.5, log));
                 else log.AppendLine("  ⚠종단 둘을 못 열어 절성 경계를 못 잡는다");
 
+                // ★★[v111.7.2 · JACK 1102 «종단도에 PVI점을 찍고 수정했으면 해당 위치에도 측점이 추가되어야 해»] 진입도로 — 계획 종단 PVI마다 측점(처음 · 끝 PVI = 기점 · 종점 빼고)
+                //   주측점 PVI는 1 cm 안이라 주측점과 하나로 합쳐짐(아래 Merge) · 다른 자리는 «+» 측점(밴드 측점 이름 · 검토선 · 횡단도)
+                if (t != null && prPad != null)
+                {
+                    var pvSt = new System.Collections.Generic.List<double>();
+                    try { foreach (CivilDb.ProfilePVI q in prPad.PVIs) pvSt.Add(q.RawStation); } catch { }
+                    var pvAdd = DH.Grading.Core.ProfileSheetRules.PviStations(pvSt, s0, s1, StationMarks.MergeTol);
+                    foreach (double st in pvAdd) marks.Add(new StationMarks.Mark(st, StationMarks.PviWhy));
+                    log.AppendLine($"  [진입도로] 계획 종단 PVI {pvSt.Count}개 → 측점 후보 {pvAdd.Count}개(기점 · 종점 빼고 · 주측점과 겹치면 하나로)");
+                }
+
                 // ★★[v32.23~24 · JACK 0812] <b>원지반이 꺾이는 자리도 측점이다.</b>
                 //   JACK: <i>"꺾은선으로 바꿨으면 조금이라도 종단상에서 각진 부분은 측점으로 추가해야 해."</i>
                 //   여기서 고른 꺾임점이 그대로 측점이 되고, <b>이 목록 전체가 곧 원지반선의 정점</b>이 된다
@@ -2351,7 +2362,9 @@ public sealed class ProfileCommand
     /// <para>복사본 라벨 스타일이 원본과 같은 객체면(얕은 복사) 고치면 원본도 바뀌므로 복사본을 지우고 뺀다.</para></summary>
     internal static string EnsureRoadGradeStyle(Database db, CivilApp.CivilDocument cdoc, System.Text.StringBuilder log)
     {
-        const string Src = "DH_종단 뷰_수직 지오메트리_구배", Dst = Src + "(진입도로)";
+        // ★★[v111.7.2 · JACK 1102 «구배가 측점별로 나오는데 · 꺾이는 구간까지 한 번에»] 새 복사본 «…(진입도로 · 구간 합침)» — 접선 라벨 · 선 · 눈금을 끄고 합친 구간을 애드인이 그린다(<see cref="RoadGradeBand.Draw"/>).
+        //   옛 복사본 «…(진입도로)»은 그대로 둠 — 아직 다시 안 그린 다른 도로 종단도가 그 스타일로 Civil 라벨을 계속 보여야 하므로(같은 스타일을 고치면 그쪽 구배 글자가 사라짐)
+        const string Src = "DH_종단 뷰_수직 지오메트리_구배", Dst = Src + "(진입도로 · 구간 합침)";
         const string LenField = "L=<[접선 수평 길이(Um|P2|RN|AP|Sn|OF)]>";
         try
         {
@@ -2369,7 +2382,9 @@ public sealed class ProfileCommand
                 dst = ((CivilDb.Styles.StyleBase)tr.GetObject(src, OpenMode.ForRead)).CopyAsSibling(Dst);
                 var s0 = (CivilDb.Styles.VerticalGeometryBandStyle)tr.GetObject(src, OpenMode.ForRead);
                 var s1 = (CivilDb.Styles.VerticalGeometryBandStyle)tr.GetObject(dst, OpenMode.ForRead);
-                if (s1.UphillTangentLabelStyleId == s0.UphillTangentLabelStyleId || s1.DownhillTangentLabelStyleId == s0.DownhillTangentLabelStyleId)
+                // ★[v111.7.2 검토 낮음] 제목 라벨 스타일도 — 구배 칸 제목을 가로 · 옆 칸 색으로 고치므로 원본(회사 템플릿) 제목이 같은 객체면 안 됨
+                if (s1.UphillTangentLabelStyleId == s0.UphillTangentLabelStyleId || s1.DownhillTangentLabelStyleId == s0.DownhillTangentLabelStyleId
+                    || (!s0.TitleTextLabelStyleId.IsNull && s1.TitleTextLabelStyleId == s0.TitleTextLabelStyleId))
                 {
                     tr.GetObject(dst, OpenMode.ForWrite).Erase();
                     tr.Commit();
@@ -2401,8 +2416,15 @@ public sealed class ProfileCommand
                     }
                 }
             }
+            // ★★[v111.7.2] Civil 접선 라벨 · 접선 선 · 눈금 끔 — 접선(PVI 사이)마다 그려 주측점 PVI마다 갈림 · 합친 구간은 RoadGradeBand가 그림
+            int nHide = 0;
+            st.UpgradeOpen();
+            foreach (var t in new[] { CivilDb.Styles.VerticalGeometryDisplayStyleType.TangentLabels, CivilDb.Styles.VerticalGeometryDisplayStyleType.TangentGeometry,
+                                      CivilDb.Styles.VerticalGeometryDisplayStyleType.Ticks })
+                try { using var ds = st.GetDisplayStylePlan(t); if (ds.Visible) { ds.Visible = false; nHide++; } }
+                catch (System.Exception exH) { log.AppendLine($"  [구배] ⚠{t} 끄기 실패 — " + exH.Message); }
             tr.Commit();
-            log.AppendLine($"  [구배] 진입도로 구배 밴드 스타일 '{Dst}' — 길이 글자 {nLen}곳 «L=수평 길이» · 표고 글자 {nOff}곳 끔");
+            log.AppendLine($"  [구배] 진입도로 구배 밴드 스타일 '{Dst}' — 길이 글자 {nLen}곳 «L=수평 길이» · 표고 글자 {nOff}곳 끔 · Civil 접선 라벨 · 선 · 눈금 {nHide}종 끔(합친 구간은 애드인이 그림)");
             return Dst;
         }
         catch (System.Exception ex) { log.AppendLine("  [구배] ⚠구배 밴드 스타일을 못 만듦 — " + ex.Message); return ""; }

@@ -24,15 +24,54 @@ public sealed class SheetSettingsCommand
         GradingSettings.SyncToDocument(doc);
 
         var (rp0, rx0) = RoadDrawingSettings.Read(doc.Database);
+        int lay0 = GradingSettings.XsecLayout;
         var dlg = new SheetDialog("저장", rp0, rx0);
         AcadApp.ShowModalWindow(dlg);
         if (dlg.DialogResult != true) return;
+        Saved(doc, rp0, rx0, dlg.RoadProfileScale, dlg.RoadXsecScale, lay0);
+    }
+
+    /// <summary>★[v111.7.2 검토 낮음] 이 도면에 부지 횡단뷰(진입도로가 아닌 노선의 검토선에 매달린 횡단뷰)가 있나.</summary>
+    static bool HasSiteXsec(Autodesk.AutoCAD.DatabaseServices.Database db)
+    {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var ms = (Autodesk.AutoCAD.DatabaseServices.BlockTableRecord)tr.GetObject(Autodesk.AutoCAD.DatabaseServices.SymbolUtilityServices.GetBlockModelSpaceId(db), Autodesk.AutoCAD.DatabaseServices.OpenMode.ForRead);
+            foreach (Autodesk.AutoCAD.DatabaseServices.ObjectId id in ms)
+            {
+                try
+                {
+                    if (tr.GetObject(id, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.SectionView sv) continue;
+                    if (tr.GetObject(sv.SampleLineId, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.SampleLine sl) continue;
+                    if (tr.GetObject(sl.GroupId, Autodesk.AutoCAD.DatabaseServices.OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.SampleLineGroup g) continue;
+                    if (!RoadDesign.Has(tr, g.ParentAlignmentId)) { tr.Commit(); return true; }
+                }
+                catch { }
+            }
+            tr.Commit();
+        }
+        catch { }
+        return false;
+    }
+
+    /// <summary>★[v111.7.2] [저장] 뒤 — 창 없이 시험이 같은 길을 부를 수 있게 떼어 냄(창이 세션 설정에 이미 넣은 뒤).
+    /// <paramref name="lay0"/> = 창을 열기 전 «횡단도 배치».</summary>
+    internal static void Saved(Document doc, double rp0, double rx0, double rp1, double rx1, int lay0)
+    {
         // ★[v111.4] 진입도로 칸 둘 — 도면에 저장 · 열린 진입도로가 있으면 다시 계산(종단도 · 횡단도가 그 축척과 다르면 도킹창 «축척이 바뀌었습니다» + 깜박)
-        bool roadChanged = System.Math.Abs(dlg.RoadProfileScale - rp0) > 1e-9 || System.Math.Abs(dlg.RoadXsecScale - rx0) > 1e-9;
+        bool roadChanged = System.Math.Abs(rp1 - rp0) > 1e-9 || System.Math.Abs(rx1 - rx0) > 1e-9;
         if (roadChanged)
         {
-            try { RoadDrawingSettings.Write(doc.Database, dlg.RoadProfileScale, dlg.RoadXsecScale); }
+            try { RoadDrawingSettings.Write(doc.Database, rp1, rx1); }
             catch (System.Exception exR) { doc.Editor.WriteMessage("\n[도면 설정] 진입도로 축척 저장 실패 — " + exR.Message); }
+        }
+        // ★★[v111.7.2 · JACK 1102 «횡단도 배치 드롭박스를 바꿔도 안 바뀌어»] 횡단도 배치 — 도면에 저장(바뀌었거나 기록과 다를 때만 씀)
+        bool layoutChanged = GradingSettings.XsecLayout != lay0;
+        if (layoutChanged || RoadDrawingSettings.ReadLayout(doc.Database) != GradingSettings.XsecLayout)
+        {
+            try { RoadDrawingSettings.WriteLayout(doc.Database, GradingSettings.XsecLayout); }
+            catch (System.Exception exL) { doc.Editor.WriteMessage("\n[도면 설정] 횡단도 배치 저장 실패 — " + exL.Message); }
         }
 
         // ★★★[검토 0908 · 심각] <b>안내문은 재생성 <u>뒤에</u> 찍는다.</b>
@@ -71,7 +110,9 @@ public sealed class SheetSettingsCommand
         //     반대로 <c>Body</c>가 중간에 실패한 경우에는 <b>이미 부순 뒤</b>라 꼭 다시 그려야 한다 —
         //     그래서 성공/실패가 아니라 <b>손을 댔는가</b>로 가른다.
         bool xsecBack = false;
-        bool xsecTried = profileTouched && XsecViewCommand.LastAt != null;
+        // ★[v111.7.2] 횡단도 배치만 바꿔도 부지 횡단도를 같은 자리에 다시(종단을 안 다시 그렸어도)
+        //   ★[검토 낮음] 배치만 바뀐 때는 이 도면에 부지 횡단뷰가 있을 때만(LastAt은 세션 값 — 다른 도면에서 그린 자리일 수 있음)
+        bool xsecTried = XsecViewCommand.LastAt != null && (profileTouched || (layoutChanged && HasSiteXsec(doc.Database)));
         if (xsecTried)
             doc.Editor.WriteMessage("\n[도면 설정] 횡단도도 같은 자리에 다시 그립니다 — 장수가 많으면 시간이 걸립니다...");
         try { if (xsecTried) xsecBack = XsecViewCommand.Refresh(doc); }
@@ -79,7 +120,8 @@ public sealed class SheetSettingsCommand
 
         // ★재생성이 폭을 고쳤을 수 있으므로 <b>지금</b> 읽어 찍는다.
         doc.Editor.WriteMessage(
-            "\n[도면 설정] 저장했습니다 — 횡단 간격 " + GradingSettings.XsecInterval.ToString("0.#") + "m"
+            "\n[도면 설정] 저장했습니다 — 측점 간격 " + GradingSettings.XsecInterval.ToString("0.#") + "m"
+            + " · 횡단도 배치 " + GradingSettings.XsecLayoutLabels[System.Math.Clamp(GradingSettings.XsecLayout, 0, GradingSettings.XsecLayoutLabels.Length - 1)]
             + " · 폭 좌" + GradingSettings.XsecLeft.ToString("0.#") + "/우" + GradingSettings.XsecRight.ToString("0.#") + "m"
             + (GradingSettings.XsecWidthAuto ? "(자동 — 정지 결과에서 쟀습니다)" : "(수동 — 치신 값)")
             + " · 원지반 굴곡 " + GradingSettings.GroundBreakLabels[GradingSettings.GroundBreakStep()]

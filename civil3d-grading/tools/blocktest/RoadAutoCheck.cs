@@ -1,4 +1,4 @@
-// ── S185 ★★[v111.7.1 · JACK 1102 «2초 쉬면 저절로 · 클릭 수를 최대한 적게»] 진입도로 저절로 다시 만들기 판정(보낼까 · 무엇을) · [PVI 넣기] 확대할 종단도 · 확대 창 ──
+// ── S185 ★★[v111.7.1 · v111.7.2] 진입도로 [업데이트] 무엇을 다시 만들까 · [PVI 넣기] 확대할 종단도 · 확대 창 · 종단경사 경고(20 %) ──
 //   시계 · 입력 거르개(PreTranslateMessage) · 화면은 화면 없는 Civil에서 못 돈다 — 그 판정만 떼어 낸 Core 함수(RoadAutoRules · ProfileSheetRules)를 본다(만든 값만)
 using DH.Grading.Core;
 
@@ -7,36 +7,8 @@ static class RoadAutoCheck
     public static void Run(Action<string, bool, string> check0)
     {
         void check(string name, bool ok, string detail = "") => check0(name, ok, detail);
-        Console.WriteLine("\n== S185 진입도로 저절로 다시 만들기(판정 · 무엇을 · PVI 확대) ==");
-        RoadAutoRules.Facts Ok() => new() { Stale = true, SinceChange = 5, SinceInput = 5, SinceUserSend = 5 };
-        string D(RoadAutoRules.Facts f) { var (a, w) = RoadAutoRules.Decide(f); return a + (w.Length > 0 ? ":" + w : ""); }
-
-        // ① 보낼까 — 막을 것이 없으면 보냄 · 막는 까닭은 앞에서부터 하나
-        {
-            var cases = new (string Name, RoadAutoRules.Facts F, string Want)[]
-            {
-                ("바뀐 것 없음", new() { Stale = false, Command = true }, "Fresh:최신"),
-                ("모두 됨", Ok(), "Send"),
-                ("해 봄(실행 취소)", new() { Stale = true, Tried = "실행 취소로 온 상태", SinceChange = 5, SinceInput = 5, SinceUserSend = 5 }, "Block:해 봄(실행 취소로 온 상태)"),
-                ("계산 오류", new() { Stale = true, CalcError = true, SinceChange = 5, SinceInput = 5, SinceUserSend = 5 }, "Block:계산 오류"),
-                ("명령 중", new() { Stale = true, Command = true, SinceChange = 5, SinceInput = 5, SinceUserSend = 5 }, "Wait:명령 중"),
-                ("고르는 중", new() { Stale = true, Picking = true, SinceChange = 5, SinceInput = 5, SinceUserSend = 5 }, "Wait:고르는 중"),
-                ("방금 바뀜(1.9초)", new() { Stale = true, SinceChange = 1.9, SinceInput = 5, SinceUserSend = 5 }, "Wait:방금 바뀜"),
-                ("단추 누름(0.5초)", new() { Stale = true, SinceChange = 5, SinceInput = 5, SinceUserSend = 0.5 }, "Wait:단추 누름"),
-                ("칸 입력 중", new() { Stale = true, Typing = true, SinceChange = 5, SinceInput = 5, SinceUserSend = 5 }, "Wait:칸 입력 중"),
-                ("입력 1.5초 전", new() { Stale = true, SinceChange = 5, SinceInput = 1.5, SinceUserSend = 5 }, "Wait:입력 중"),
-                ("단추 누른 채(끌기)", new() { Stale = true, ButtonDown = true, SinceChange = 5, SinceInput = 9, SinceUserSend = 5 }, "Wait:입력 중"),
-                ("창 뒤", new() { Stale = true, Front = false, SinceChange = 5, SinceInput = 5, SinceUserSend = 5 }, "Wait:창 뒤"),
-                ("다른 도면 설정", new() { Stale = true, Synced = false, SinceChange = 5, SinceInput = 5, SinceUserSend = 5 }, "Wait:다른 도면 설정"),
-                ("해 봄이 명령 중보다 앞", new() { Stale = true, Tried = "보냄", Command = true }, "Block:해 봄(보냄)"),
-                ("명령 중이 입력 중보다 앞", new() { Stale = true, Command = true, SinceChange = 0, SinceInput = 0, Typing = true, Front = false }, "Wait:명령 중"),
-                ("2.0초 딱 = 보냄", new() { Stale = true, SinceChange = 2.0, SinceInput = 2.0, SinceUserSend = 1.0 }, "Send"),
-            };
-            var bad = cases.Where(c => D(c.F) != c.Want).Select(c => $"{c.Name}: {D(c.F)} ≠ {c.Want}").ToList();
-            check("S185 ① 보낼까(최신 · 보냄 · 해 봄 · 계산 오류 · 명령 · 고르기 · 방금 바뀜 · 단추 · 칸 입력 · 입력 · 끌기 · 창 뒤 · 다른 도면 — 앞에서부터 하나)", bad.Count == 0, string.Join(" | ", bad));
-            // 마우스를 움직이기만 하는 것은 입력이 아님 — 시계는 SinceInput(키 · 단추 · 휠 시각)만 넘긴다: 움직임은 이 함수에 안 들어온다(= 2초 지나면 보냄)
-            check("S185 ① 마우스 움직임만(진짜 입력 9초 전) = 보냄", D(new() { Stale = true, SinceChange = 3, SinceInput = 9, SinceUserSend = 9 }) == "Send", "");
-        }
+        Console.WriteLine("\n== S185 진입도로 [업데이트](무엇을) · PVI 확대 · 종단경사 경고 ==");
+        // ★[v111.7.2 · JACK 1102 «마지막에 팝업창 단추를 누르면 한꺼번에»] 저절로 보낼까 판정(① Decide)은 저절로 다시 만들기와 함께 없앰 — ② 무엇을 · ③ 확대만 남음
 
         // ② 무엇을 — 지표면(옛것 · 없음) · 종단도(옛것 + 자리 + 안 겹침) · 횡단도(그린 적 + 자리 + 그릴 수 있음 + (옛것 · 새 지표면))
         {
@@ -73,6 +45,32 @@ static class RoadAutoCheck
             bool zOk = Math.Abs(cx - 700) < 1e-9 && Math.Abs(cy - 75) < 1e-9 && Math.Abs(w - 400 * 1.16) < 1e-6 && Math.Abs(w / h - 16.0 / 9.0) < 1e-9
                 && Math.Abs(h2 - 400 * 1.16) < 1e-6 && Math.Abs(w2 / h2 - 16.0 / 9.0) < 1e-9 && Math.Abs(cx2 - 50) < 1e-9 && Math.Abs(cy2 - 200) < 1e-9;
             check("S185 ③ 확대 창(가운데 · 둘레 8 % · 화면 가로세로 비 유지)", zOk, $"{cx:F1},{cy:F1} {w:F1}×{h:F1} · {cx2:F1},{cy2:F1} {w2:F1}×{h2:F1}");
+        }
+
+        // ④ ★[v111.7.2 · JACK 1102 «20 %까지는 문제없이 — 그 이상이면 경고»] 종단경사 경고 — 20 % 넘는 접선만(문턱 고정 · «최대 경사 %»와 따로)
+        {
+            var ok = ProfileSheetRules.Steep(new List<(double, double)> { (0, 100), (50, 110), (100, 100) }, ProfileSheetRules.WarnGrade);              // ±20 % 딱 = 경고 없음
+            var one = ProfileSheetRules.Steep(new List<(double, double)> { (0, 100), (20, 104.1), (40, 104.1) }, ProfileSheetRules.WarnGrade);         // 20.5 %
+            var big = ProfileSheetRules.Steep(new List<(double, double)> { (0, 100), (20, 95), (27, 104.26), (40, 104.26), (60, 99) }, ProfileSheetRules.WarnGrade);   // −25 % · +132.3 % · −26.3 %
+            var mid = ProfileSheetRules.Steep(new List<(double, double)> { (0, 100), (100, 118) }, ProfileSheetRules.WarnGrade);                       // 18 % — «최대 경사 15 %»와 20 % 사이 = 없음
+            var junk = ProfileSheetRules.Steep(new List<(double, double)> { (0, 100), (0, 200), (double.NaN, 1), (10, 100.5) }, ProfileSheetRules.WarnGrade);
+            check("S185 ④ 경고 — ±20 % 딱 = 없음 · 20.5 % = 1 · 가장 가파른 접선(132.3 % · 측점 20~27) · 개수 3 · 18 % = 없음 · 같은 측점 · NaN 건너뜀",
+                ok.Count == 0 && one.Count == 1 && Math.Abs(one.WorstPct - 20.5) < 1e-9 && big.Count == 3 && Math.Abs(big.WorstPct - 132.2857142857) < 1e-6
+                && big.S0 == 20 && big.S1 == 27 && mid.Count == 0 && junk.Count == 0 && double.IsNaN(ok.S0),
+                $"{ok.Count} · {one.Count} {one.WorstPct:F2} · {big.Count} {big.WorstPct:F1} {big.S0}~{big.S1} · {mid.Count} · {junk.Count}");
+        }
+
+        // ⑤ ★[v111.7.2 · JACK 1102 «PVI점을 찍었으면 그 위치에도 측점»] 진입도로 측점에 더할 PVI — 기점 · 종점 빼고 · 1 cm 안은 하나 · 차례 · 이름은 «+» 측점
+        {
+            var pv = new List<double> { 0, 20, 47.5, 47.505, 60.004, 33.25, double.NaN, 120.0 - 0.005, 120 };
+            var a = ProfileSheetRules.PviStations(pv, 0, 120, 0.01);
+            string names = string.Join(" ", a.Select(v => StationNaming.Fmt(v, 20)));
+            var none = ProfileSheetRules.PviStations(new List<double> { 0, 120 }, 0, 120);
+            var bad = ProfileSheetRules.PviStations(new List<double> { 10 }, 50, 20);
+            check("S185 ⑤ PVI 측점 — 기점 · 종점(1 cm 안 포함) 빼고 · 47.5 · 47.505 = 하나 · NaN 건너뜀 · 차례 · 주측점 PVI(20 · 60.004)는 «No.n»으로 합쳐질 자리 · 처음 · 끝만 = 없음 · 거꾸로 범위 = 없음",
+                a.Count == 4 && a[0] == 20 && a[1] == 33.25 && a[2] == 47.5 && Math.Abs(a[3] - 60.004) < 1e-12
+                && names == "No.1 No.1+13.25 No.2+07.50 No.3" && none.Count == 0 && bad.Count == 0,
+                $"{string.Join(", ", a)} → {names}");
         }
     }
 }

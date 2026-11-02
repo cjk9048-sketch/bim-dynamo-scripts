@@ -324,6 +324,45 @@ static class RoadMeshCheck
                 set != null && reachEnd == 0 && r.ReachUsed > 50 && maxD > 50 && Math.Abs(r2.ReachUsed - 40) < 1e-9 && !r2.ReachHit,
                 $"범위 {r.ReachUsed:F0} m · 범위 끝 광선 {reachEnd} · 최대 광선 {maxD:F2} m · 얕은 깎기 범위 {r2.ReachUsed:F0} m · {ln}");
         }
+        // ⑲ ★★[v111.7.2 · JACK 1102 «넉넉히 경사 20 %까지는 문제없이 작성됐으면 좋겠어»] 20 %까지 — 선 면 검사 통과(칸 면으로 안 물러섬) · 날카로운 PVI 꺾임 ·
+        //   0 → 20 % 꺾임 · +20 → −20 % 볼록 · −20 → +20 % 오목 · R 30 곡선 위 20 % · 꺾임이 1 m 표본 사이(40.5) — 노선 표본 1 m(RoadBuilder.Sample과 같음) · 땅 = 평지 · 기운 땅
+        {
+            static double[] Prof(IReadOnlyList<(double S, double Z)> pv, int n)
+            {
+                var z = new double[n + 1];
+                for (int i = 0; i <= n; i++) z[i] = RoadProfileDraft.At(pv, i);
+                return z;
+            }
+            var cases = new List<(string Name, RoadGrade.Input Inp)>();
+            void Straight(string name, IReadOnlyList<(double S, double Z)> pv, int len, Func<double, double, double> gnd)
+            {
+                var (X, Y, _) = Line(0, 0, len, 0, 0, 0);
+                cases.Add((name, new RoadGrade.Input { X = X, Y = Y, Z = Prof(pv, len), Sec = sec, Base = new G(gnd), Cell = 0.5, Reach = 40 }));
+            }
+            Straight("0 → 20 % 꺾임(40)", new List<(double, double)> { (0, 10), (40, 10), (120, 26) }, 120, (x, y) => 14);
+            Straight("0 → 20 % 꺾임이 표본 사이(40.5)", new List<(double, double)> { (0, 10), (40.5, 10), (120, 25.9) }, 120, (x, y) => 14 + 0.03 * (y - OY));
+            Straight("+20 → −20 % 볼록(60)", new List<(double, double)> { (0, 10), (60, 22), (120, 10) }, 120, (x, y) => 15);
+            Straight("−20 → +20 % 오목(60)", new List<(double, double)> { (0, 22), (60, 10), (120, 22) }, 120, (x, y) => 15);
+            Straight("+20 → −20 → +20 % 짧은 톱니(20 m마다)", new List<(double, double)> { (0, 10), (20, 14), (40, 10), (60, 14), (80, 10) }, 80, (x, y) => 12 + 0.02 * (x - OX));
+            {
+                // R 30 · 90° 곡선 위 20 % 오르막(곡선 앞뒤 직선 20 m) · 기운 땅
+                var X = new List<double>(); var Y = new List<double>(); var S = new List<double>();
+                for (int i = 0; i <= 20; i++) { X.Add(OX + i); Y.Add(OY); S.Add(i); }
+                double R = 30, cx = 20, cy = R; int na = (int)Math.Ceiling(R * Math.PI / 2);
+                for (int i = 1; i <= na; i++) { double a = -Math.PI / 2 + Math.PI / 2 * i / na; X.Add(OX + cx + R * Math.Cos(a)); Y.Add(OY + cy + R * Math.Sin(a)); S.Add(20 + R * Math.PI / 2 * i / na); }
+                double sArc = S[^1];
+                for (int i = 1; i <= 20; i++) { X.Add(OX + cx + R); Y.Add(OY + cy + i); S.Add(sArc + i); }
+                var pv = new List<(double, double)> { (0, 10), (20, 10), (sArc, 10 + 0.2 * (sArc - 20)), (sArc + 20, 10 + 0.2 * (sArc - 20)) };
+                cases.Add(("R 30 곡선 위 20 % · 앞뒤 평탄", new RoadGrade.Input { X = X.ToArray(), Y = Y.ToArray(), Z = S.Select(s => RoadProfileDraft.At(pv, s)).ToArray(), Sec = sec, Base = new G((x, y) => 12 + 0.05 * (x - OX)), Cell = 0.5, Reach = 40 }));
+            }
+            foreach (var (name, inp) in cases)
+            {
+                var r = RoadGrade.Run(inp);
+                var tris = RoadGrade.ExactSurface(inp, r, out string tn, out _);
+                check($"S181 ⑲ 20 %까지 — {name}: 선 면(칸 면으로 안 물러섬) · 세모 있음", r.Error.Length == 0 && tn.StartsWith("선 면") && tris.Count > 0, $"{tn} · {r.Text}");
+            }
+        }
+
         // ⑰ ★[v111.2 · JACK 1030 «주측점엔 PVI»] 주측점 PVI — 측점 간격 배수마다 · 모양 그대로 · 처음 · 끝 PVI 밖 없음 · 설계 PVI 곁 2.5 m(간격/4 · 2.5 m 중 작은 것) 안이면 안 넣음
         {
             var pvi = new List<(double S, double Z)> { (0, 105), (107, 78.34), (269, 78.89), (343.1, 70.01) };
