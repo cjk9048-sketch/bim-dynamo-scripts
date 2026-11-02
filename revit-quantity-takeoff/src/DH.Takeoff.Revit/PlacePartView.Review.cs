@@ -65,6 +65,9 @@ public sealed partial class PlacePartView
         // 기본은 판(거푸집 줄)을 찍는다 · 콘크리트 줄을 고른 동안은 판을 숨겨 부재를 찍는다(계획 검토 L9) · 윤곽선만인 것도 찍힌다(고른 채로 옮겨 고르게 — 설치 전 검토 낮음).
         _view3d.Pickable = i => i < OverlayStart && ReviewShown(i);
         _view3d.GhostPickable = true;
+        _view3d.PickFilm = _ => true;              // ③ 은 R73a 의 고른 면 그림을 쓰지 않는다(지금 그림 그대로)
+        _view3d.OutlinesOnTop = false;
+        _view3d.SeenFirst = false;
         SetFormworkMeshes();
         ShowStep();
         RefreshAll();
@@ -77,6 +80,11 @@ public sealed partial class PlacePartView
         _fwPicked = null;
         _fwPickedSub = null;
         _fwSel.Clear();
+        _fwFaces.Clear();                          // 고른 면 · 마우스 밑 테두리 · 지도(R73a)
+        _fwMarksFor = null;
+        _fwHoverFace = null;
+        _view3d.SetHoverOutline(null);
+        _hoverPill.Margin = new Thickness(10);
         _fwPlaceOpen = false;
         _fwFocus = null;
         _rvFormLine = null;

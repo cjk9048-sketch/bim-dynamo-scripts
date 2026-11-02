@@ -9,8 +9,19 @@ public static class Picker
     /// <summary>시선이 맨 먼저 닿는 겉면. index = meshes 의 차례(없으면 −1), distance = 시선의 출발점에서 닿은 곳까지(보는 방향으로, 음수일 수 있다).</summary>
     public static (int index, double distance) Pick(IReadOnlyList<MeshData> meshes, Func<int, bool> shown, Vec3 origin, Vec3 direction)
     {
+        var (index, _, distance) = PickHit(meshes, shown, origin, direction);
+        return (index, distance);
+    }
+
+    /// <summary>
+    /// 시선이 맨 먼저 닿는 겉면과 그 세모(R73a — 면 단위 찍기: 덩이 겉면의 세모 → 조각 → 면). triangle = 그 겉면의 세모 차례(T 의 셋씩 · 없으면 −1).
+    /// minT = 이보다 앞(가까운 쪽)에서 닿은 것은 보지 않는다(보이는 겉면 바로 뒤의 판을 찾을 때 — R73a 검토 높음 1).
+    /// </summary>
+    public static (int index, int triangle, double distance) PickHit(IReadOnlyList<MeshData> meshes, Func<int, bool> shown, Vec3 origin, Vec3 direction,
+                                                                     double minT = double.NegativeInfinity)
+    {
         var dir = direction.Unit();
-        int best = -1;
+        int best = -1, bestTriangle = -1;
         double bestT = double.MaxValue;
         for (int m = 0; m < meshes.Count; m++)
         {
@@ -19,10 +30,10 @@ public static class Picker
             for (int i = 0; i + 2 < mesh.T.Length; i += 3)
             {
                 double t = HitTriangle(origin, dir, mesh.Vertex(mesh.T[i]), mesh.Vertex(mesh.T[i + 1]), mesh.Vertex(mesh.T[i + 2]));
-                if (t < bestT) { bestT = t; best = m; }
+                if (t < bestT && t >= minT) { bestT = t; best = m; bestTriangle = i / 3; }
             }
         }
-        return best >= 0 ? (best, bestT) : (-1, 0);
+        return best >= 0 ? (best, bestTriangle, bestT) : (-1, -1, 0);
     }
 
     /// <summary>

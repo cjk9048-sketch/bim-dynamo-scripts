@@ -10,7 +10,7 @@ namespace DH.Takeoff.Core.Formwork;
 ///    «없는 것으로 봄» · «뺌»은 부재 단위(문맥 — Present) · «자리만» · «일부만»은 면 단위(Keeps). «없는 것으로 봄»은 면 주인보다 먼저 친 부재에는 걸리지 않는다
 ///    (먼저 친 콘크리트는 늘 있다 — 지금 «나중에 친 부재는 모두를 본다»).
 ///  · 먼저 정하는 차례: 판 기록(R67 — FormworkRules) > (부위,부위) > (부위,묶음) > (묶음,부위) > (묶음,묶음) > 칸 규칙.
-/// 처음 값(Default)은 지금 애드인 안의 규칙 다섯 줄 — 숨은 규칙이 표 위에 드러난다. R71a 는 이 표를 옛 판정과 나란히 재어 일지에만 적는다(FormworkOptions.Order).
+/// 처음 값(Default)은 옛 애드인 안의 규칙 다섯 줄(숨은 규칙이 표 위에 드러남) + R72 위 슬래브 ← 계단(2D 237행 — 옛 규칙과 다르게 잼). FormworkOptions.Order.
 /// </summary>
 public sealed class PourOrder
 {
@@ -28,7 +28,7 @@ public sealed class PourOrder
     /// <summary>칸(칠 때)을 바꾼 부위 · 묶음(없으면 ① «나중에 침» — 켜면 2 · 아니면 1).</summary>
     public Dictionary<string, int> Stages { get; } = new(StringComparer.Ordinal);
 
-    /// <summary>처음 값 — 지금 애드인 규칙(R64 · R70c · R67 A · B)을 표 위 다섯 줄로.</summary>
+    /// <summary>처음 값 — 애드인 규칙(R64 · R70c · R67 A · B)을 표 위 다섯 줄로 + R72 위 슬래브 ← 계단.</summary>
     public static PourOrder Default()
     {
         var order = new PourOrder();
@@ -37,6 +37,7 @@ public sealed class PourOrder
         order.Pairs.Add(new(Group(PartCatalog.Wall), Group(PartCatalog.Frame), Kind.Partial, Scope.Side));    // R67 A
         order.Pairs.Add(new(Group(PartCatalog.Frame), Group(PartCatalog.Frame), Kind.Partial, Scope.Side));   // R67 A
         order.Pairs.Add(new(Group(PartCatalog.Stair), Group(PartCatalog.Haunch), Kind.Partial));     // R67 B
+        order.Pairs.Add(new(Group(PartCatalog.Upper), Group(PartCatalog.Stair), Kind.Partial));      // R72 녹촌 2D 237행 — 슬래브 개구부는 계단 자리를 빼지 않음
         return order;
     }
 

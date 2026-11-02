@@ -265,6 +265,19 @@ public sealed class PickEditor
         Prune();
     }
 
+    /// <summary>
+    /// 그 부재들을 숨긴다(R73a3 — ② Del = 잠깐 숨기기: 3D 에서만 · 값 · 수량 · 기록은 그대로 · ① 의 숨기기와 같은 묶음이라 ① [모두 보이기] · ② [모두 보기]가 되돌린다).
+    /// 숨긴 부재는 고른 것에서 빠진다. 새로 숨긴 수.
+    /// </summary>
+    public int Hide(IEnumerable<long> ids)
+    {
+        int added = 0;
+        foreach (long id in ids)
+            if (_byId.ContainsKey(id) && Hidden.Add(id)) added++;
+        Prune();
+        return added;
+    }
+
     /// <summary>[모두 보이기]: 숨긴 부재를 되돌리고 '남은 것만 보기'도 끈다(JACK 1015 — 끝난 부재까지 다 보여야 한다). 종류 · 층 거름은 그대로다.</summary>
     public void ShowAll()
     {

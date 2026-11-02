@@ -120,6 +120,37 @@ public sealed class OrbitCamera
     }
 
     /// <summary>
+    /// 면 하나를 보러 갈 방향(R73a — JACK 1030 «목록에서 눌러도 그 부위가 정확히 어딘지 모르겠고» · 계획 §3.6):
+    /// 옆면(·경사면) = 그 면 앞쪽에서 25° 위(위를 보는 경사면은 45° · 아래를 보는 경사면은 아래 30°) · 밑면 = 아래에서 40° 비스듬히 · 윗면 = 위에서 60° ·
+    /// 법선을 모르는 면(곡면) = 지금 방향 그대로. 누운 면은 방위를 지금 그대로 둔다(돌아가지 않게).
+    /// </summary>
+    public static (double yaw, double pitch) FacingAngles(double[]? normal, double yaw, double pitch)
+    {
+        const double deg = Math.PI / 180;
+        if (normal is not { Length: 3 }) return (yaw, pitch);
+        double nx = normal[0], ny = normal[1], nz = normal[2], flat = Math.Sqrt(nx * nx + ny * ny);
+        if (flat < 0.3) return (yaw, nz < 0 ? -40 * deg : 60 * deg);
+        double facing = Math.Atan2(ny, nx);   // 카메라가 그 면의 바깥(법선) 쪽에 선다 — Yaw 는 Target 에서 카메라 쪽 방위
+        return (facing, nz > 0.3 ? 45 * deg : nz < -0.3 ? -30 * deg : 25 * deg);
+    }
+
+    /// <summary>값을 떠 둔 사본(날아가기의 처음 · 끝 자리).</summary>
+    public OrbitCamera Clone() => new() { Target = Target, Yaw = Yaw, Pitch = Pitch, Width = Width, ViewW = ViewW, ViewH = ViewH };
+
+    /// <summary>
+    /// from → to 의 사이 자리로 맞춘다(t = 0 ~ 1 · R73a 날아가기): 가운데는 곧게 · 크기는 비율로(가까이 갈수록 천천히 줄지 않게) · 방위는 짧은 쪽으로 돈다.
+    /// 화면 크기(ViewW · ViewH)는 그대로 둔다.
+    /// </summary>
+    public void Blend(OrbitCamera from, OrbitCamera to, double t)
+    {
+        t = Math.Clamp(t, 0, 1);
+        Target = from.Target + (to.Target - from.Target) * t;
+        Width = Math.Clamp(from.Width * Math.Pow(to.Width / from.Width, t), MinWidth, MaxWidth);
+        Yaw = Math.IEEERemainder(from.Yaw + Math.IEEERemainder(to.Yaw - from.Yaw, 2 * Math.PI) * t, 2 * Math.PI);
+        Pitch = Math.Clamp(from.Pitch + (to.Pitch - from.Pitch) * t, -MaxPitch, MaxPitch);
+    }
+
+    /// <summary>
     /// 그리는 쪽(WPF 카메라)에 넘길 값: 카메라 자리와 가까운·먼 자르기 거리. scene = 그릴 것 전부를 싸는 상자.
     /// 가까운·먼 거리를 모델 크기에 맞춰야 깊이 판정이 촘촘하다(면 위에 살짝 띄운 모서리 띠가 깜박이지 않는다).
     /// </summary>
