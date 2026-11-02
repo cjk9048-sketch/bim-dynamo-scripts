@@ -121,4 +121,29 @@ public static class ProfileSheetRules
         int n = Math.Max(1, sheets);
         return (atX - 130.0 * s, atX + n * SheetWmm * s);
     }
+
+    /// <summary>★[v111.7.1 · JACK 1102 «모르는 사람은 그걸 어디에 찍는지 모른다»] [PVI 넣기] · [PVI 지우기]가 확대할 종단도 — 지금 화면 가운데(<paramref name="x"/>, <paramref name="y"/>)가 든 뷰 ·
+    /// 없으면 가장 가까운 뷰(상자까지 거리 · 같으면 앞 차례). 상자가 없거나 모두 깨졌으면 −1.</summary>
+    public static int NearestBox(IReadOnlyList<(double X0, double Y0, double X1, double Y1)> boxes, double x, double y)
+    {
+        int best = -1; double bd = double.MaxValue;
+        for (int i = 0; i < (boxes?.Count ?? 0); i++)
+        {
+            var b = boxes![i];
+            if (!(double.IsFinite(b.X0) && double.IsFinite(b.Y0) && double.IsFinite(b.X1) && double.IsFinite(b.Y1)) || b.X1 < b.X0 || b.Y1 < b.Y0) continue;
+            double dx = x < b.X0 ? b.X0 - x : x > b.X1 ? x - b.X1 : 0, dy = y < b.Y0 ? b.Y0 - y : y > b.Y1 ? y - b.Y1 : 0;
+            double d = dx * dx + dy * dy;
+            if (d < bd) { bd = d; best = i; }
+        }
+        return best;
+    }
+
+    /// <summary>★[v111.7.1] 상자를 화면에 꽉 차게(둘레 <paramref name="pad"/> 비율 여유 · 화면 가로세로 비 <paramref name="aspect"/> = 너비/높이 유지) — 가운데 · 너비 · 높이.</summary>
+    public static (double Cx, double Cy, double W, double H) ZoomWindow(double x0, double y0, double x1, double y1, double aspect, double pad = 0.08)
+    {
+        double w = Math.Max(1e-6, x1 - x0), h = Math.Max(1e-6, y1 - y0), a = double.IsFinite(aspect) && aspect > 0 ? aspect : 1.0;
+        double k = 1 + 2 * Math.Max(0, pad);
+        double hh = Math.Max(h, w / a) * k;
+        return ((x0 + x1) / 2, (y0 + y1) / 2, hh * a, hh);
+    }
 }

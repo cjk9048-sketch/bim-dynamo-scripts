@@ -87,10 +87,11 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "roadxsec")
     return fails == 0 ? 0 : 1;
 }
 
-// ★[v110.4] BLOCKTEST_ONLY=sheet — 진입도로 종단도(축척 · 폭 · 도장 · 지우기 · 묶음 주인 — S180)만
+// ★[v110.4] BLOCKTEST_ONLY=sheet — 진입도로 종단도(축척 · 폭 · 도장 · 지우기 · 묶음 주인 — S180) · ★[v111.7.1] 저절로 다시 만들기 판정(S185)만
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "sheet")
 {
     RoadSheetCheck.Run(Check);
+    RoadAutoCheck.Run(Check);   // ★[v111.7.1] S185 — 진입도로 저절로 다시 만들기 판정 · PVI 확대
     Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
     return fails == 0 ? 0 : 1;
 }
@@ -182,6 +183,7 @@ RoadBandCheck.Run(Check);    // ★[v111.3] S182 — 옹벽 변환 끝면 띠(�
 RoadMeshCheck.Run(Check);    // ★[v111] S181 — 선 기반 진입도로 면(단면 광선 · 띠 세모 · 계단선 · 기록 경계)
 RoadXsecCheck.Run(Check);    // ★[v111.5] S183 — 진입도로 횡단(합친 계획면 · 복사본 이름 · 측점 이름 · 구간 · 바뀜)
 RoadSheetCheck.Run(Check);   // ★[v110.4] S180 — 진입도로 종단도(축척 · 검토선 폭 · 도장 · 지우기 · 밴드 묶음 주인)
+RoadAutoCheck.Run(Check);    // ★[v111.7.1] S185 — 진입도로 저절로 다시 만들기 판정(보낼까 · 무엇을) · PVI 확대할 종단도 · 확대 창
 
 const double W = 0.46, H = 0.2, STEP = 5.0, HW = W / 2;
 const double D = 0.5, FS = D / 2; // 깊이·전면 돌출(벽 중심=링, JACK 0720 Z-파이팅 해소): 절토 +FS(안쪽), 성토 −FS

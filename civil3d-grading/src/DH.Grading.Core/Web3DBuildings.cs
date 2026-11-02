@@ -174,10 +174,27 @@ public static class Web3DBuildings
         return res;
     }
 
-    // ── 받을 범위 — 건물이 한도보다 많으면 둘레 여유부터 줄이고(200 → 50 → 0 m) 그다음에 현장 안쪽으로(넓이 ∝ 건물 수) ──
+    // ── 받을 범위 — ★[v111.7.1 · JACK 1102 «주변 아파트가 빠짐»] 처음은 3D 지형 전체(위성 바탕과 같은 범위) · 건물이 한도보다 많으면
+    //    바뀐 자리 + 500 → + 200 → + 50 → + 0 m(지형 안으로 자름) · 그다음에 가운데로(넓이 ∝ 그 범위 건물 수) ──
 
-    /// <summary>둘레 여유 차례 — <paramref name="margin"/> → 50 → 0 m(처음 여유보다 큰 것은 뺌).</summary>
-    public static List<double> Margins(double margin) => new[] { margin, 50.0, 0.0 }.Where(m => m >= 0 && m <= margin + 1e-9).Distinct().ToList();
+    /// <summary>★[v111.7.1] 바뀐 자리 둘레 여유 차례(m) — 지형 전체 다음.</summary>
+    public static readonly double[] SiteMargins = { 500.0, 200.0, 50.0, 0.0 };
+
+    /// <summary>★[v111.7.1] 받을 범위 차례 — 지형 전체 → 바뀐 자리 + 500 · 200 · 50 · 0 m(지형 안으로 자름 · 0 = «바뀐 자리»).
+    /// 앞 범위보다 넓이가 줄지 않는 것은 뺀다(지형이 작으면 지형 전체 하나). 바뀐 자리가 없으면 지형 전체만. 그다음 줄이기는 <see cref="ShrinkAround"/>(가운데).</summary>
+    public static List<(VWorldParcels.Box Box, string Label)> Ranges(VWorldParcels.Box terrain, VWorldParcels.Box? site)
+    {
+        var o = new List<(VWorldParcels.Box Box, string Label)> { (terrain, "지형 전체") };
+        if (site is not VWorldParcels.Box s) return o;
+        foreach (double m in SiteMargins)
+        {
+            var e = Expand(s, m);
+            var c = new VWorldParcels.Box(Math.Max(e.X0, terrain.X0), Math.Max(e.Y0, terrain.Y0), Math.Min(e.X1, terrain.X1), Math.Min(e.Y1, terrain.Y1));
+            if (!(c.W > 0 && c.H > 0)) c = e;                       // 지형 밖(있을 수 없음) — 자르지 않음
+            if (c.Area < o[^1].Box.Area * (1 - 1e-9)) o.Add((c, m > 0 ? $"바뀐 자리 + {m:0} m" : "바뀐 자리"));
+        }
+        return o;
+    }
 
     public static VWorldParcels.Box Expand(VWorldParcels.Box b, double m) => new(b.X0 - m, b.Y0 - m, b.X1 + m, b.Y1 + m);
 

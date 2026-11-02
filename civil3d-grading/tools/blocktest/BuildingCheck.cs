@@ -133,18 +133,31 @@ static class BuildingCheck
             check("S184 ④b 같은 건물 가르기(id 없으면 도형 전체 · 점 수 + 첫 점만 같으면 다른 건물 · id 같으면 겹침)", d.Items.Count == 3 && d.Dup == 2, d.Text);
         }
 
-        // ④c ★[검토 M] 범위 줄이기 — 둘레 여유부터(200 → 50 → 0) · 그다음 현장 안쪽(가운데 그대로 · 넓이 ≤ 0.81 × 한도/수 · 늘 줄어듦)
+        // ④c ★[검토 M] 범위 줄이기 — ★[v111.7.1 · JACK 1102 «주변 아파트가 빠짐»] 지형 전체 → 바뀐 자리 + 500 → + 200 → + 50 → + 0 m(지형 안으로 자름 · 안 줄면 뺌) · 그다음 가운데(넓이 ≤ 0.81 × 한도/수 · 늘 줄어듦)
         {
-            bool mOk = Web3DBuildings.Margins(200).SequenceEqual(new[] { 200.0, 50, 0 }) && Web3DBuildings.Margins(0).SequenceEqual(new[] { 0.0 })
-                && Web3DBuildings.Margins(30).SequenceEqual(new[] { 30.0, 0 }) && Web3DBuildings.Margins(50).SequenceEqual(new[] { 50.0, 0 });
+            var terrain = new VWorldParcels.Box(0, 0, 3000, 2500);
             var site = new VWorldParcels.Box(1000, 2000, 1300, 2200);
+            var rg = Web3DBuildings.Ranges(terrain, site);
+            string Rs(List<(VWorldParcels.Box Box, string Label)> l) => string.Join(" → ", l.Select(q => $"{q.Label}[{q.Box.X0:0},{q.Box.Y0:0},{q.Box.X1:0},{q.Box.Y1:0}]"));
+            // + 500은 위(2700)가 지형 밖이라 2500에서 잘림 · + 200 · + 50 · + 0(바뀐 자리)은 지형 안
+            bool rOk = rg.Count == 5 && rg[0].Box == terrain && rg[0].Label == "지형 전체"
+                && rg[1].Box == new VWorldParcels.Box(500, 1500, 1800, 2500) && rg[1].Label == "바뀐 자리 + 500 m"
+                && rg[2].Box == new VWorldParcels.Box(800, 1800, 1500, 2400) && rg[2].Label == "바뀐 자리 + 200 m"
+                && rg[3].Box == new VWorldParcels.Box(950, 1950, 1350, 2250) && rg[3].Label == "바뀐 자리 + 50 m"
+                && rg[4].Box == site && rg[4].Label == "바뀐 자리"
+                && rg.Zip(rg.Skip(1)).All(z => z.Second.Box.Area < z.First.Box.Area);
+            var none = Web3DBuildings.Ranges(terrain, null);
+            var small = Web3DBuildings.Ranges(new VWorldParcels.Box(900, 1900, 1400, 2300), site);   // 지형이 작아 + 500 · + 200은 지형 전체와 같음 → 뺌 · + 50 · + 0만 남음
+            bool eOk = none.Count == 1 && none[0].Label == "지형 전체" && small.Count == 3 && small[1].Label == "바뀐 자리 + 50 m" && small[2].Box == site && small[2].Label == "바뀐 자리";
+            check("S184 ④c 받을 범위 차례(지형 전체 → 바뀐 자리 + 500 → + 200 → + 50 → + 0 · 지형 안으로 자름 · 안 줄면 뺌 · 바뀐 자리 없으면 지형 전체만)", rOk && eOk,
+                $"{Rs(rg)} | 없음 {Rs(none)} | 작은 지형 {Rs(small)}");
             var e = Web3DBuildings.Expand(site, 50);
             var s1 = Web3DBuildings.ShrinkAround(site, 20000, 5000);
             var s2 = Web3DBuildings.ShrinkAround(site, 5001, 5000);
             bool sOk = e.X0 == 950 && e.Y1 == 2250 && Math.Abs(s1.Area / site.Area - 0.81 * 5000 / 20000) < 1e-9
                 && Math.Abs((s1.X0 + s1.X1) / 2 - 1150) < 1e-9 && Math.Abs((s1.Y0 + s1.Y1) / 2 - 2100) < 1e-9 && s2.Area < site.Area * 0.82;
-            check("S184 ④c 범위 줄이기(여유 200 → 50 → 0 · 현장 안쪽은 가운데로 · 넓이 비율)", mOk && sOk,
-                $"[{string.Join(",", Web3DBuildings.Margins(200))}] · 줄인 넓이 비 {s1.Area / site.Area:F4} · 겨우 넘음 {s2.Area / site.Area:F3}");
+            check("S184 ④c 범위 줄이기(가운데로 · 넓이 비율 · 늘 줄어듦)", sOk,
+                $"줄인 넓이 비 {s1.Area / site.Area:F4} · 겨우 넘음 {s2.Area / site.Area:F3}");
         }
 
         // ⑤ 장면 배열 — 원점 빼기 · 첫 순번 표 셋(끝에 전체 수) · 바닥 · 높이 · 닿음

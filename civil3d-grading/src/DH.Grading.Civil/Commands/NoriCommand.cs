@@ -22,7 +22,16 @@ public sealed class NoriCommand
     {
         Document doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
-        Draw(doc, quiet: false, out _);
+        // ★★[v111.7.1 · 진입도로 검토 중간 2] 진입도로가 곧 저절로 다시 만들 바뀜(고친 뒤 2초 안 · 보낸 채)을 들고 있으면 이 명령 안에서 먼저 같은 차례(지표면 → 종단도 → 횡단도) —
+        //   안 그러면 방금 그린 노리선을 2초 뒤 저절로 다시 만든 지표면이 지운다. 해 본 바뀜(실행 취소 · 실패)은 안 돌림(그 도로 노리선은 «지표면이 설계와 달라 건너뜀»)
+        var rs = RoadSession.Of(doc);
+        if (rs != null)
+        {
+            try { rs.RecomputeIfDirty(); } catch { }
+            if (rs.AutoPending) RoadCommand.RedrawStale(doc, rs);
+        }
+        Draw(doc, quiet: SelfCheckLog.Headless, out _);   // 화면 없는 Civil은 알림창을 못 띄움(정지 명령과 같은 법)
+        rs?.NoteTicksDrawn();   // ★[v111.7.1] 도킹창 «노리선 지움 n» 끔
     }
 
     /// <summary>★[v111.1 · 계획_v111_1.md 2.3 · 2.4] 노리선 그리기 몸통 — [노리선] 단추와 [도로 면 만들기] 뒤 저절로(<paramref name="quiet"/> = 팝업 없음) 공용.

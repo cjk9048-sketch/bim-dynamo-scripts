@@ -56,8 +56,9 @@ internal static class RoadXsec
         return gid.IsNull ? "" : RoadXsecRules.StationsKey(Stations(tr, gid, gname, Math.Max(1.0, GradingSettings.XsecInterval)));
     }
 
-    /// <summary>[횡단도 그리기]를 못 하는 까닭(빈 글 = 됨) — 종단도 검토선 · 진입도로 지표면이 있어야 한다.</summary>
-    internal static string Refusal(RoadSession s)
+    /// <summary>[횡단도 그리기]를 못 하는 까닭(빈 글 = 됨) — 종단도 검토선 · 진입도로 지표면이 있어야 한다.
+    /// ★[v111.7.1] <paramref name="surfaceComing"/> = 저절로 다시 만들기가 이 앞에서 지표면을 만든다(지표면은 안 봄).</summary>
+    internal static string Refusal(RoadSession s, bool surfaceComing = false)
     {
         var db = s.Doc.Database;
         var d = s.Fresh();
@@ -67,7 +68,7 @@ internal static class RoadXsec
             tr.Commit();
             if (gid.IsNull) return "진입도로 종단도가 없습니다 — 진입도로 [종단도]로 종단도부터 그리세요(횡단 측점 = 종단도 측점).";
         }
-        if (!s.HasSurface()) return "진입도로 지표면이 없습니다 — [진입도로 지표면 생성]부터 하세요(횡단의 도로 선 · 수량 = 그 지표면).";
+        if (!surfaceComing && !s.HasSurface()) return "진입도로 지표면이 없습니다 — 진입도로 창 ■ 결과 [다시 시도]로 만드세요(횡단의 도로 선 · 수량 = 그 지표면).";
         return "";
     }
 
@@ -130,7 +131,7 @@ internal static class RoadXsec
             tr.Commit();
         }
         if (stations.Count == 0) throw new InvalidOperationException("진입도로 종단도 측점이 없습니다 — 진입도로 [종단도]부터");
-        if (roadSurf.IsNull) throw new InvalidOperationException("진입도로 지표면이 없습니다 — [진입도로 지표면 생성]부터");
+        if (roadSurf.IsNull) throw new InvalidOperationException("진입도로 지표면이 없습니다 — 진입도로 창 ■ 결과 [다시 시도]로 만드세요");
 
         var all = SectionCommand.FindSurfaces(db, cdoc);
         var surfs = new List<SectionCommand.SurfPick>();

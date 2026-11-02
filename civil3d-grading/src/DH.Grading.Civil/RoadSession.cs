@@ -52,7 +52,8 @@ internal sealed class RoadSession
     }
 
     /// <summary>노선의 설계(XRecord)로 세션을 연다 — 같은 도면의 앞 세션은 닫는다.</summary>
-    internal static RoadSession Start(Document doc, ObjectId aid)
+    /// <param name="fresh">★[v111.7.1 · 검토 낮음] 이 명령이 막 만든 도로(DHROAD · DHROADDRAW 새 노선) — 열 때부터 옛것 표시를 안 함(그린 적이 없음).</param>
+    internal static RoadSession Start(Document doc, ObjectId aid, bool fresh = false)
     {
         Stop(doc);
         var db = doc.Database;
@@ -79,14 +80,18 @@ internal sealed class RoadSession
         using (var tr = db.TransactionManager.StartTransaction()) { s._xrecId = RoadDesign.XrecId(tr, aid); tr.Commit(); }
         s._limitId = Handle(db, d.LimitHandle);
         _all[doc] = s;
+        // ★[v111.7.1 · JACK 1102 B-4] 진입도로를 여는 명령 = 이 도면에서 일함 — 설정을 이 도면으로(저절로 다시 만들기가 «다른 도면 설정»으로 끝없이 기다리지 않게) · 입력 시각 거르개
+        try { GradingSettings.SyncToDocument(doc); } catch { }
+        HookOnce();
         db.ObjectModified += s.OnModified;
         db.ObjectErased += s.OnErased;
         // ★[v111.7 · 재검토 중간] 실행 취소 · 다시 실행 명령이 끝나면 — 지켜보는 객체를 안 건드렸어도(선 그리고 U 등) 그 자리를 «해 봄»으로(저절로 다시 그려 REDO를 끊지 않게)
         doc.CommandEnded += s.OnCmdEnd; doc.CommandCancelled += s.OnCmdEnd; doc.CommandFailed += s.OnCmdEnd;
+        doc.CommandWillStart += s.OnCmdWillStart; doc.UnknownCommand += s.OnUnknownCmd;   // ★[v111.7.1 · 검토 중간 1] 보낸 저절로 명령이 정말 시작됐나
         AcadApp.DocumentManager.DocumentToBeDestroyed -= OnDocGone;      // ★[설치 전 검토 L1] 여러 번 걸리지 않게
         AcadApp.DocumentManager.DocumentToBeDestroyed += OnDocGone;
         s._timer.Start();
-        s._markNext = true;   // ★[v111.7 · 설치 전 검토 높음] 열 때 이미 옛 종단도 · 횡단도는 저절로 안 그림(연 뒤에 바뀐 것만) — 알림 · 깜박은 그대로
+        if (!fresh) { s._markNext = true; s._markWhy = WhyOpen; }   // ★[v111.7 · 설치 전 검토 높음] 열 때 이미 옛 지표면 · 종단도 · 횡단도는 저절로 안 만듦(연 뒤에 바뀐 것만) — 상태 줄에 까닭 + [다시 시도]
         s.Recompute();
         return s;
     }
@@ -99,6 +104,7 @@ internal sealed class RoadSession
         try { doc.Database.ObjectModified -= s.OnModified; } catch { }
         try { doc.Database.ObjectErased -= s.OnErased; } catch { }
         try { doc.CommandEnded -= s.OnCmdEnd; doc.CommandCancelled -= s.OnCmdEnd; doc.CommandFailed -= s.OnCmdEnd; } catch { }   // ★[v111.7]
+        try { doc.CommandWillStart -= s.OnCmdWillStart; doc.UnknownCommand -= s.OnUnknownCmd; } catch { }   // ★[v111.7.1]
         s.ClearMarks();
         Changed?.Invoke(null);
     }
@@ -177,7 +183,7 @@ internal sealed class RoadSession
         try
         {
             string c = (e.GlobalCommandName ?? "").ToUpperInvariant();
-            if (c == "U" || c == "UNDO" || c == "REDO" || c == "MREDO") { _markNext = true; _dirty = true; }
+            if (c == "U" || c == "UNDO" || c == "REDO" || c == "MREDO") { _markNext = true; _markWhy = WhyUndo; _dirty = true; _recheckTicks = true; }
         }
         catch { }
     }
@@ -206,7 +212,7 @@ internal sealed class RoadSession
         _lastChange = DateTime.UtcNow;
         //   실행 취소 · 다시 실행으로 온 상태 = 다음 계산에서 «해 봄»(저절로 안 그림 — U · REDO를 몇 번 거슬러도 새로 그려 REDO를 끊지 않게)
         //   사람이 고침 = 그려서 «된» 바뀜만 잊음(같은 상태로 다시 오면 다시 그림) · 실패 · 실행 취소로 온 것 · 열 때 이미 옛것은 그대로
-        if (undoing) _markNext = true; else ForgetDone();
+        if (undoing) { _markNext = true; _markWhy = WhyUndo; } else ForgetDone();
     }
 
     /// <summary>창 값이 바뀌었다 — 바로 다시(문서는 여기서 잠금).</summary>
@@ -218,68 +224,207 @@ internal sealed class RoadSession
     void Tick()
     {
         if (Suppress) return;
+        bool cmd;
         try
         {
             if (AcadApp.DocumentManager.MdiActiveDocument != _doc) return;
-            if (!string.IsNullOrEmpty(_doc.CommandInProgress)) return;
+            cmd = !string.IsNullOrEmpty(_doc.CommandInProgress);
         }
         catch { return; }
+        CheckLostSend();   // ★[v111.7.1 · 검토 중간 1] 보냈는데 5초 안에 안 시작했으면 «못 보냄»(명령 중이어도 — 사람 명령이 보낸 글을 먹었을 수 있음)
+        // ★[v111.7.1 · JACK 1102] 명령 중에도 판정 한 줄(«명령 중») — 진단 로그에 까닭이 남게(보내지는 않음)
+        if (cmd) { AutoNote(RoadAutoRules.Decide(new RoadAutoRules.Facts { Stale = StaleKey.Length > 0, Tried = TriedWhy(), Command = true }), ""); return; }
         if (_dirty) { _dirty = false; RecomputeCore(); return; }
         AutoTick();   // ★[v111.7]
     }
 
     // ── ★★[v111.7 · JACK 1102 «설계가 바뀐 뒤 2초쯤 손을 멈추면 같은 자리에 저절로 다시 · 처음은 자리를 찍고 · 단추는 옮겨 다시 그리기로 남김»] ──
+    // ★★★[v111.7.1 · JACK 1102 «2초 쉬면 저절로 · 클릭 수를 최대한 적게»] 한 명령(DHROADAUTOREDRAW)이 차례로 지표면(옛것 · 없음) → 종단도 → 횡단도 — 실행 취소 한 번.
+    //   v111.7 시계가 화면에서 한 번도 안 보낸 까닭을 몰라(까닭 로그 없음) — 판정이 바뀔 때마다 한 줄(«저절로 기다림 — 까닭: …» · «저절로 보냄 — …») ·
+    //   손 멈춤은 진짜 입력(키 · 마우스 단추 · 휠 — PreTranslateMessage)만 셈(GetLastInputInfo는 마우스를 조금만 움직여도 새로 세어 늘 «입력 중»이었을 것)
     internal const string AutoCmd = "DHROADAUTOREDRAW";
-    const double AutoIdleSec = 2.0;
     DateTime _lastChange = DateTime.UtcNow;                  // 마지막 바뀜(Flag · 다시 계산)
-    /// <summary>★[v111.7] 저절로 안 보낼 바뀜 열쇠 — 보낸 것 · 실패한 것 · 실행 취소로 온 상태 · 열 때 이미 옛것.</summary>
-    readonly HashSet<string> _autoTried = new(StringComparer.Ordinal);
-    /// <summary>★[설치 전 검토 높음] 그중 그려서 «된» 바뀜 — 사람이 고치면 이것만 잊는다(<see cref="ForgetDone"/>). 실패 · 실행 취소 · 열 때 것은 안 잊음(되풀이 · REDO 끊김 없게).</summary>
+    /// <summary>★[v111.7 · v111.7.1 까닭 붙임] 저절로 안 보낼 바뀜 열쇠 → 까닭 — 보냄 · 다시 만듦 · 실패 · 실행 취소로 온 상태 · 열 때부터 옛것 · 자리 모름 · 겹침.</summary>
+    readonly Dictionary<string, string> _autoTried = new(StringComparer.Ordinal);
+    /// <summary>★[설치 전 검토 높음] 그중 다시 만들어 «된» 바뀜 — 사람이 고치면 이것만 잊는다(<see cref="ForgetDone"/>). 실패 · 실행 취소 · 열 때 것은 안 잊음(되풀이 · REDO 끊김 없게).</summary>
     readonly HashSet<string> _autoOk = new(StringComparer.Ordinal);
-    /// <summary>★[설치 전 검토 높음] 다음 계산의 바뀜 열쇠를 «해 봄»에 넣음 — 실행 취소 · 다시 실행(Flag) · 열 때(Start).</summary>
+    /// <summary>★[설치 전 검토 높음] 다음 계산의 바뀜 열쇠를 «해 봄»에 넣음(그 까닭 <see cref="_markWhy"/>) — 실행 취소 · 다시 실행(Flag) · 열 때(Start).</summary>
     bool _markNext;
-    /// <summary>★[v111.7] 저절로 다시 그리는 중(<see cref="Commands.RoadCommand.RedrawStale"/>) — 그동안의 바뀜은 사람 바뀜으로 안 봄.</summary>
+    string _markWhy = "";
+    internal const string WhyUndo = "실행 취소로 온 상태", WhyOpen = "열 때부터 옛것", WhySent = "보냄", WhyDone = "다시 만듦";
+    /// <summary>★[v111.7] 저절로 다시 만드는 중(<see cref="Commands.RoadCommand.RedrawStale"/>) — 그동안의 바뀜은 사람 바뀜으로 안 봄.</summary>
     internal bool Redrawing;
-    /// <summary>★[v111.7] 지금 바뀜 열쇠 — 종단도 · 횡단도 알림 + 그 판정에 든 값(빈 글 = 둘 다 지금과 같음). 같은 열쇠는 저절로 한 번만.</summary>
+    /// <summary>★[v111.7 · v111.7.1 지표면 몫 붙임] 지금 바뀜 열쇠 — 지표면(옛것 · 없음 + 지금 설계 지문) · 종단도 · 횡단도 알림 + 그 판정에 든 값(빈 글 = 모두 지금과 같음). 같은 열쇠는 저절로 한 번만.</summary>
     internal string StaleKey = "";
     /// <summary>★[설치 전 검토 낮음] 마지막으로 사람이 단추(도킹창 · 리본)로 명령을 보낸 때 — 1초 안이면 저절로 안 보냄(그 명령과 엇갈리지 않게).</summary>
     static DateTime _userSendAt = DateTime.MinValue;
     internal static void NoteUserSend() => _userSendAt = DateTime.UtcNow;
 
-    /// <summary>★[v111.7] 종단도 · 횡단도가 지금과 다르고(알림) 지금 놓인 자리를 알면 — 마지막 바뀜 뒤 2초 · 사람 입력 없이 2초(Win32) · AutoCAD 창이 앞 ·
-    /// 명령 없음(Tick이 봄) · 막음 없음 · 창 칸 입력 중 아님 · 설정이 이 도면 것일 때 묻지 않는 명령(<see cref="AutoCmd"/>)을 한 번 보낸다.
-    /// 같은 바뀜은 한 번만 따져 봄 — 자리를 모르거나(처음 · 지움 · 일부만 옮김) · 실패하거나 · 실행 취소로 되돌아온 것은 다시 안 함(알림 · 깜박 그대로).</summary>
-    void AutoTick()
+    /// <summary>★[v111.7.1] 지금 열쇠를 해 본 까닭(null = 아직 · 바뀐 것 없음).</summary>
+    string? TriedWhy() => StaleKey.Length > 0 && _autoTried.TryGetValue(StaleKey, out var w) ? w : null;
+
+    /// <summary>★[v111.7.1] 도킹창 ■ 결과 상태 줄 — 저절로 안 하는 까닭(빈 글 = 최신이거나 곧 저절로). «보냄»은 곧 돌 명령이라 기다림으로 본다.</summary>
+    internal string AutoBlock
     {
-        if (StaleKey.Length == 0 || _autoTried.Contains(StaleKey)) return;
-        if (Last == null || Last.Error.Length > 0 || PickMode) return;           // 계산이 깨진 채로는 안 그림
-        if ((DateTime.UtcNow - _lastChange).TotalSeconds < AutoIdleSec) return;
-        if ((DateTime.UtcNow - _userSendAt).TotalSeconds < 1.0) return;
-        if (RoadPalette.Typing || !UserIdle(AutoIdleSec)) return;
-        if (!GradingSettings.IsSyncedTo(_doc)) return;                          // 다른 도면 설정이 걸려 있음 — 바꾸면 그 도면 기억(옹벽 고르기 등)이 지워짐
-        try { if (!_doc.Editor.IsQuiescent || _doc.Editor.IsDragging) return; } catch { return; }
-        _autoTried.Add(StaleKey);
-        bool want;
-        try { using var dl = _doc.LockDocument(); want = AutoWanted(); } catch { want = false; }
-        if (!want) return;                                                      // 놓인 자리를 모름 · 횡단도를 못 그림
-        try { _doc.SendStringToExecute(AutoCmd + " ", true, false, false); }
-        catch (System.Exception ex) { try { DiagLog.Append("\n[진입도로] 저절로 다시 그리기 못 보냄 — " + ex.Message); } catch { } }
+        get
+        {
+            if (StaleKey.Length == 0) return "";
+            string? w = TriedWhy();
+            if (w == WhySent) return "";
+            if (w != null) return w;
+            return Last == null || Last.Error.Length > 0 ? "계산 오류" : "";
+        }
     }
 
-    /// <summary>★[v111.7] 다시 그릴 것이 있나 — 종단도(알림 + 지금 놓인 자리 + 다른 종단도와 안 겹침) 또는 횡단도(알림 + 지금 놓인 자리 + 그릴 수 있음).
-    /// ★[재검토 낮음] 겹치면 안 보냄(빈 실행 취소 단계 · 같은 경고 되풀이 없게 — 알림 · 깜박 그대로).</summary>
-    bool AutoWanted()
+    /// <summary>★[v111.7.1] 판정이 바뀔 때만 진단 로그 한 줄 — «[진입도로] 저절로 기다림 — 까닭: 입력 중» · «… 저절로 보냄 — 지표면 · 종단도» · «… 저절로 — 최신».</summary>
+    string _autoLogged = "Fresh|최신";
+    void AutoNote((RoadAutoRules.Act Act, string Why) d, string what)
     {
-        var db = _doc.Database;
-        Point3d? sp; bool xsec;
-        using (var tr = db.TransactionManager.StartTransaction())
+        if (d.Act == RoadAutoRules.Act.Block && d.Why == "해 봄(" + WhySent + ")") return;   // 보낸 명령이 돌기 전 · 도는 동안 — «보냄» 줄로 충분
+        string k = d.Act + "|" + (d.Act == RoadAutoRules.Act.Send ? what : d.Why);
+        if (k == _autoLogged) return;
+        _autoLogged = k;
+        string line = d.Act switch
         {
-            sp = SheetStale.Length > 0 ? PlaceNow(tr, db, Design.SheetAt, Design.SheetViews, Design.SheetViewAt) : null;
-            xsec = XsecStale.Length > 0 && PlaceNow(tr, db, Design.XsecAt, Design.XsecViews, Design.XsecViewAt) != null;
+            RoadAutoRules.Act.Fresh => "저절로 — 최신",
+            RoadAutoRules.Act.Send => "저절로 보냄 — " + what,
+            _ => "저절로 기다림 — 까닭: " + d.Why,
+        };
+        try { DiagLog.Append($"\n[진입도로] {Name} {line} ({DateTime.Now:HH:mm:ss})"); } catch { }
+    }
+
+    /// <summary>★[v111.7 · v111.7.1 판정 = Core <see cref="RoadAutoRules.Decide"/>] 바뀐 것이 있고 · 해 본 적 없고 · 계산이 깨지지 않았고 · 명령 · 고르기 없고 ·
+    /// 마지막 바뀜 2초 · 진짜 입력(키 · 단추 · 휠) 2초 · 단추 보낸 지 1초 · 창 칸에 치는 중 아님 · AutoCAD 창이 앞 · 설정이 이 도면 것 → 무엇을 할지(<see cref="AutoPlan"/>) →
+    /// 할 것이 있으면 묻지 않는 명령(<see cref="AutoCmd"/>)을 한 번 보낸다. 자리를 모르거나 겹쳐 아무것도 못 하면 그 까닭으로 «해 봄»(같은 바뀜은 다시 안 따짐 — 상태 줄에 까닭 + [다시 시도]).</summary>
+    void AutoTick()
+    {
+        var f = new RoadAutoRules.Facts
+        {
+            Stale = StaleKey.Length > 0, Tried = TriedWhy(), CalcError = Last == null || Last.Error.Length > 0, Picking = PickMode,
+            SinceChange = (DateTime.UtcNow - _lastChange).TotalSeconds, SinceUserSend = (DateTime.UtcNow - _userSendAt).TotalSeconds,
+        };
+        if (f.Stale && f.Tried == null)
+        {
+            // 사람 · 창 사실 — 해 본 적 없는 바뀜이 있을 때만 잰다(0.35초마다 · Win32 몇 번)
+            f.Typing = RoadPalette.Typing;
+            f.ButtonDown = ButtonDown();
+            f.SinceInput = SinceInput();
+            f.Front = Front();
+            // ★[v111.7.1 · 검토 낮음] 설정이 다른 도면 것이어도 보낼 수 있음 — 명령(RedrawStale)이 돌 때 맞춘다. 계획부지 정지 창에 치다 만 값이 있으면만 기다림(그 값 · 옹벽 고르기를 안 지우게)
+            f.Synced = GradingSettings.IsSyncedTo(_doc) || !GradingPalette.Editing;
+            try { f.Command = !_doc.Editor.IsQuiescent || _doc.Editor.IsDragging; } catch { f.Command = true; }
+        }
+        var d = RoadAutoRules.Decide(f);
+        if (d.Act != RoadAutoRules.Act.Send) { AutoNote(d, ""); return; }
+        string key = StaleKey;
+        RoadAutoRules.Plan plan;
+        try { using var dl = _doc.LockDocument(); plan = AutoPlan(); }
+        catch (System.Exception ex) { plan = new RoadAutoRules.Plan(false, false, false, "판정 실패 — " + ex.Message); }
+        if (!plan.Any)
+        {
+            _autoTried[key] = plan.WhyNot; _autoOk.Remove(key);
+            AutoNote((RoadAutoRules.Act.Block, "해 봄(" + plan.WhyNot + ")"), "");
+            Changed?.Invoke(this);
+            return;
+        }
+        _autoTried[key] = WhySent; _autoOk.Remove(key);
+        _sentKey = key; _sentAt = Environment.TickCount64; _sentStarted = false;
+        AutoNote(d, plan.What);
+        try { _doc.SendStringToExecute(AutoCmd + " ", true, false, false); }
+        catch (System.Exception ex)
+        {
+            _autoTried[key] = "못 보냄 — " + ex.Message;
+            try { DiagLog.Append("\n[진입도로] 저절로 다시 만들기 못 보냄 — " + ex.Message); } catch { }
+            Changed?.Invoke(this);
+        }
+    }
+
+    // ── ★★[v111.7.1 · 검토 중간 1] 보낸 글이 명령이 안 될 수 있다(사람이 «PL»까지 치고 멈춤 → «PLDHROADAUTOREDRAW» 모르는 명령 · 매크로가 먹음) —
+    //    보낸 때를 적고, 5초 안에 그 명령이 시작 안 하면 «못 보냄»(상태 줄 까닭 + [다시 시도] · 로그 한 줄). 앞에 ^C^C는 안 붙임(사람이 치던 글을 지움) ──
+    internal const long LostSendMs = 5000;
+    string _sentKey = "";
+    long _sentAt;
+    bool _sentStarted;
+    void OnCmdWillStart(object? sender, CommandEventArgs e)
+    {
+        try { if (string.Equals(e.GlobalCommandName, AutoCmd, StringComparison.OrdinalIgnoreCase)) _sentStarted = true; } catch { }
+    }
+    void OnUnknownCmd(object? sender, UnknownCommandEventArgs e)
+    {
+        try { if ((e.GlobalCommandName ?? "").IndexOf(AutoCmd, StringComparison.OrdinalIgnoreCase) >= 0) LostSend($"모르는 명령 «{e.GlobalCommandName}»(치던 글과 섞임)"); } catch { }
+    }
+    /// <summary>★[v111.7.1] 보낸 지 <see cref="LostSendMs"/>가 지났는데 시작 안 했으면 «못 보냄»으로(시계가 부름).</summary>
+    internal void CheckLostSend()
+    {
+        if (_sentKey.Length == 0 || _sentStarted) return;
+        if (!_autoTried.TryGetValue(_sentKey, out var w) || w != WhySent) { _sentKey = ""; return; }
+        if (Environment.TickCount64 - _sentAt < LostSendMs) return;
+        LostSend($"{LostSendMs / 1000}초 안에 시작 안 됨");
+    }
+    void LostSend(string why)
+    {
+        if (_sentKey.Length == 0) return;
+        if (_autoTried.TryGetValue(_sentKey, out var w) && w == WhySent) _autoTried[_sentKey] = "못 보냄 — " + why;
+        _sentKey = "";
+        try { DiagLog.Append($"\n[진입도로] {Name} 저절로 다시 만들기 못 보냄 — {why} ({DateTime.Now:HH:mm:ss})"); } catch { }
+        Changed?.Invoke(this);
+    }
+
+    /// <summary>★[v111.7.1 · 검토 중간 2] 곧 저절로 다시 만들 바뀜이 있다(바뀜 열쇠 · 아직 안 해 봄 또는 보낸 채 · 계산 됨) — [노리선]이 먼저 같은 차례를 돌린다.</summary>
+    internal bool AutoPending
+    {
+        get { string? w = TriedWhy(); return StaleKey.Length > 0 && (w == null || w == WhySent) && Last != null && Last.Error.Length == 0; }
+    }
+
+    /// <summary>★[v111.7.1 · 검토 중간 2] 다시 만든 지표면이 지운 노리선 수(부지 · 도로 — 다음 [노리선]까지) — 도킹창 상태 줄 «노리선 지움 n — [노리선]으로 다시».</summary>
+    internal int TicksErased;
+    bool _recheckTicks;
+    /// <summary>[노리선]을 그렸다 — 상태 줄 알림을 끔.</summary>
+    internal void NoteTicksDrawn() { if (TicksErased == 0) return; TicksErased = 0; Changed?.Invoke(this); }
+    /// <summary>모형 공간에 노리선(부지 · 도로)이 하나라도 있나 — 실행 취소로 되살아났는지(«노리선 지움» 알림 끄기).</summary>
+    static bool AnyTicks(Database db)
+    {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+            foreach (ObjectId id in ms)
+            {
+                try
+                {
+                    if (tr.GetObject(id, OpenMode.ForRead) is Entity e && (string.Equals(e.Layer, LayNori, StringComparison.OrdinalIgnoreCase) || string.Equals(e.Layer, SiteNoriLayer, StringComparison.OrdinalIgnoreCase)))
+                    { tr.Commit(); return true; }
+                }
+                catch { }
+            }
             tr.Commit();
         }
-        if (sp is Point3d p && SheetOverlap(p).Length == 0) return true;
-        return xsec && RoadXsec.Refusal(this).Length == 0;
+        catch { }
+        return false;
+    }
+
+    /// <summary>★[v111.7.1] 보낸 명령이 안 돌고 돌아섰다(막음 · 고르는 중) — «보냄» 표시를 지워 시계가 다시 따지게.</summary>
+    internal void AutoUnsent()
+    {
+        if (StaleKey.Length > 0 && _autoTried.TryGetValue(StaleKey, out var w) && w == WhySent) _autoTried.Remove(StaleKey);
+    }
+
+    /// <summary>★[v111.7.1] 무엇을 다시 만들까(<see cref="RoadAutoRules.Choose"/>) — 지표면(옛것 · 없음) · 종단도(알림 + 지금 놓인 자리 + 다른 종단도와 안 겹침) ·
+    /// 횡단도(그린 적 있음 + 지금 놓인 자리 + 그릴 수 있음 — 지표면을 다시 만들면 그 뒤에 다시 잼). 문서는 부르는 쪽이 잠금.</summary>
+    internal RoadAutoRules.Plan AutoPlan()
+    {
+        var db = _doc.Database;
+        Point3d? sp = null; bool xsecPlace = false, xsecHas = Design.XsecViews.Count > 0;
+        using (var tr = db.TransactionManager.StartTransaction())
+        {
+            if (SheetStale.Length > 0) sp = PlaceNow(tr, db, Design.SheetAt, Design.SheetViews, Design.SheetViewAt);
+            if (xsecHas) xsecPlace = PlaceNow(tr, db, Design.XsecAt, Design.XsecViews, Design.XsecViewAt) != null;
+            tr.Commit();
+        }
+        bool overlap = sp is Point3d p && SheetOverlap(p).Length > 0;
+        bool surf = SurfaceStale.Length > 0 || SurfaceMissing;
+        bool refused = xsecHas && xsecPlace && (XsecStale.Length > 0 || surf) && RoadXsec.Refusal(this, surfaceComing: surf).Length > 0;
+        return RoadAutoRules.Choose(SurfaceStale.Length > 0, SurfaceMissing, SheetStale.Length > 0, sp != null, overlap, xsecHas, XsecStale.Length > 0, xsecPlace, refused);
     }
 
     /// <summary>★[v111.7] 이 도로 종단도를 <paramref name="at"/>에 지금 축척 · 장 수로 그리면 겹치는 다른 종단도(빈 글 = 안 겹침).</summary>
@@ -330,33 +475,95 @@ internal sealed class RoadSession
         catch { return Array.Empty<double>(); }
     }
 
-    /// <summary>★[v111.7] 저절로 다시 그리기 끝 — <paramref name="pre"/> = 그리기 전 열쇠 · <paramref name="post"/> = 뒤 열쇠(빈 글 = 다 됨) ·
-    /// <paramref name="allOk"/> = 해 본 것(종단도 · 횡단도)이 하나라도 있고 모두 됨(겹쳐 못 그림 · 실패 = 아님).
+    /// <summary>★[v111.7 · v111.7.1 까닭] 저절로 다시 만들기 끝 — <paramref name="pre"/> = 앞 열쇠 · <paramref name="post"/> = 뒤 열쇠(빈 글 = 다 됨) ·
+    /// <paramref name="allOk"/> = 해 본 것(지표면 · 종단도 · 횡단도)이 하나라도 있고 모두 됨 · <paramref name="why"/> = 뒤 열쇠가 남은 까닭(실패 · 자리 모름 …).
     /// ★[재검토 낮음] 모두 됐을 때만 앞 열쇠 = «된» 것(사람이 고치면 잊음) · 아니면 앞 · 뒤 열쇠 모두 다시 안 함.</summary>
-    internal void AutoTried(string pre, string post, bool allOk)
+    internal void AutoTried(string pre, string post, bool allOk, string why = "")
     {
-        if (pre.Length > 0) { _autoTried.Add(pre); if (allOk && post != pre) _autoOk.Add(pre); else _autoOk.Remove(pre); }
-        if (post.Length > 0) { _autoTried.Add(post); _autoOk.Remove(post); }
+        if (pre.Length > 0)
+        {
+            bool ok = allOk && post != pre;
+            _autoTried[pre] = ok ? WhyDone : why.Length > 0 ? why : "다시 해도 남음";
+            if (ok) _autoOk.Add(pre); else _autoOk.Remove(pre);
+        }
+        if (post.Length > 0) { _autoTried[post] = why.Length > 0 ? why : "다시 해도 남음"; _autoOk.Remove(post); }
+        Changed?.Invoke(this);
     }
 
-    /// <summary>★[설치 전 검토 높음] 사람이 고쳤다 — 그려서 «된» 바뀜만 잊는다(같은 상태로 다시 오면 다시 그림).</summary>
-    void ForgetDone() { _autoTried.ExceptWith(_autoOk); _autoOk.Clear(); }
+    /// <summary>★[v111.7.1] 명령 안에서 실패했다(DHROAD 첫 지표면 등) — 지금 열쇠를 그 까닭으로 «해 봄»(상태 줄에 까닭 + [다시 시도]).</summary>
+    internal void NoteFail(string why)
+    {
+        if (StaleKey.Length == 0) return;
+        _autoTried[StaleKey] = why; _autoOk.Remove(StaleKey);
+        Changed?.Invoke(this);
+    }
 
-    // ★[설치 전 검토 M4] 사람이 정말 손을 멈췄나 — 마지막 입력(키보드 · 마우스)부터 2초 · 앞 창이 AutoCAD(또는 그 아래 창 — 떠 있는 도킹창 · 명령창)
+    /// <summary>★[설치 전 검토 높음] 사람이 고쳤다 — 다시 만들어 «된» 바뀜만 잊는다(같은 상태로 다시 오면 다시 만듦).</summary>
+    void ForgetDone() { foreach (var k in _autoOk) _autoTried.Remove(k); _autoOk.Clear(); }
+
+    // ── ★★[v111.7.1 · JACK 1102 B-2] 진짜 입력 시각 — 키(누름 · 글자) · 마우스 단추(누름 · 뗌 · 창 틀 포함) · 휠만. 마우스를 움직이기만 하는 것은 안 셈(사람은 늘 마우스를 올려 둠) ──
+    static bool _hooked, _msgHook;
+    static long _inputAt = Environment.TickCount64;
+    /// <summary>한 번만 — AutoCAD 메시지 거르개(PreTranslateMessage — 도면 · 도킹창 · 명령창 모두 이 스레드).
+    /// ★[v111.7.1 · 검토 낮음] 도면이 앞에 올 때 설정을 맞추지 않는다(다른 도면의 옹벽 고르기 · 정지 창 «치고 있던 숫자» 알림을 건드림) — 저절로 다시 만들기가 돌 때만(RedrawStale).</summary>
+    static void HookOnce()
+    {
+        if (_hooked) return;
+        _hooked = true;
+        try { AcadApp.PreTranslateMessage += OnPreTranslate; _msgHook = true; }
+        catch (System.Exception ex) { try { DiagLog.Append("\n[진입도로] 입력 시각 거르개를 못 걸어 옛 방법(GetLastInputInfo)으로 — " + ex.Message); } catch { } }
+    }
+    static void OnPreTranslate(object? sender, PreTranslateMessageEventArgs e)
+    {
+        switch (e.Message.message)
+        {
+            case 0x0100: case 0x0104: case 0x0102:                      // WM_KEYDOWN · WM_SYSKEYDOWN · WM_CHAR
+            case 0x0201: case 0x0202: case 0x0203:                      // 왼쪽 누름 · 뗌 · 두 번
+            case 0x0204: case 0x0205: case 0x0207: case 0x0208:         // 오른쪽 · 가운데 누름 · 뗌
+            case 0x020A: case 0x020E: case 0x020B: case 0x020C:         // 휠 · 가로 휠 · X 단추
+            case 0x00A1: case 0x00A2: case 0x00A4: case 0x00A5:         // 창 틀(제목줄 · 도킹창 머리) 누름 · 뗌
+                _inputAt = Environment.TickCount64;
+                break;
+        }
+    }
+
+    /// <summary>진짜 입력 뒤 지난 초 — 거르개를 못 걸었으면 옛 방법(마지막 입력 — 마우스 움직임 포함).</summary>
+    static double SinceInput()
+    {
+        if (_msgHook) return (Environment.TickCount64 - _inputAt) / 1000.0;
+        try
+        {
+            var li = new LastInput { Size = (uint)System.Runtime.InteropServices.Marshal.SizeOf<LastInput>() };
+            return GetLastInputInfo(ref li) ? unchecked((uint)Environment.TickCount - li.Time) / 1000.0 : 0;
+        }
+        catch { return 0; }
+    }
+
+    // ★[설치 전 검토 M4] 앞 창이 AutoCAD(또는 그 아래 창 — 떠 있는 도킹창 · 명령창) · ★[v111.7.1] 마우스 단추를 누른 채(끌어 옮기기 · 가운데 단추 화면 이동)면 아직 입력 중
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     struct LastInput { public uint Size; public uint Time; }
     [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool GetLastInputInfo(ref LastInput li);
     [System.Runtime.InteropServices.DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     [System.Runtime.InteropServices.DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
-    static bool UserIdle(double sec)
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern short GetAsyncKeyState(int vk);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+    /// <summary>★[v111.7.1] 앞 창이 이 AutoCAD 것(본창 · 떠 있는 도킹창 · 명령창 — 같은 프로세스). 옛 판은 MainWindow 핸들과만 견줘, 그 핸들이 맨 위 창이 아니면 늘 «창 뒤»로 막혔을 수 있다.</summary>
+    static bool Front()
     {
         try
         {
-            var li = new LastInput { Size = (uint)System.Runtime.InteropServices.Marshal.SizeOf<LastInput>() };
-            if (!GetLastInputInfo(ref li) || unchecked((uint)Environment.TickCount - li.Time) < sec * 1000) return false;
-            IntPtr fg = GetForegroundWindow(), main = AcadApp.MainWindow.Handle;
-            return fg != IntPtr.Zero && (fg == main || GetAncestor(fg, 3 /* GA_ROOTOWNER */) == main);
+            IntPtr fg = GetForegroundWindow();
+            if (fg == IntPtr.Zero) return false;
+            GetWindowThreadProcessId(fg, out uint pid);
+            if (pid == (uint)Environment.ProcessId) return true;
+            IntPtr main = AcadApp.MainWindow.Handle;
+            return fg == main || GetAncestor(fg, 3 /* GA_ROOTOWNER */) == main;
         }
+        catch { return false; }
+    }
+    static bool ButtonDown()
+    {
+        try { return (GetAsyncKeyState(0x01) & 0x8000) != 0 || (GetAsyncKeyState(0x02) & 0x8000) != 0 || (GetAsyncKeyState(0x04) & 0x8000) != 0; }
         catch { return false; }
     }
 
@@ -449,10 +656,12 @@ internal sealed class RoadSession
             };
             // ★[v111.2 · 전체 검토 L2] 그린 도로 면이 지금 설계(종단 · 횡단 · 사면 · 옹벽 기록 · 바탕면)와 다르면 알림 — PVI를 끌거나 창 값을 바꾼 뒤
             //   ★[v111.3.1 · JACK 1030 «종단이 수정되면 도로면 만들기 아래 종단이 수정되었다고 · 버튼이 깜박»] [진입도로 지표면 생성] 아래 한 줄(SurfaceStale) + 깜박임 · 까닭은 바뀐 몫으로
-            string surfNote = "";
+            string surfNote = "", sigNow = "";
+            bool hasSurf = HasSurface();
+            try { sigNow = SigOf(inp, BaseSurfId); } catch { }   // ★[v111.7.1] 바뀜 열쇠의 지표면 몫(지금 설계 지문 — 실패 뒤 다시 고치면 새 열쇠)
             try
             {
-                if (Design.SurfaceSig.Length > 0 && SigOf(inp, BaseSurfId) != Design.SurfaceSig && HasSurface())
+                if (Design.SurfaceSig.Length > 0 && sigNow.Length > 0 && sigNow != Design.SurfaceSig && hasSurf)
                 {
                     var now = SigParts(inp, BaseSurfId); var was = Design.SurfaceSigParts.Split('|');
                     surfNote = was.Length != now.Length ? "설계가 바뀌었습니다"
@@ -461,6 +670,8 @@ internal sealed class RoadSession
                              : was[2] != now[2] ? "횡단 · 사면 · 옹벽 값이 바뀌었습니다"
                              : "바탕면이 바뀌었습니다";
                 }
+                // ★[v111.7.1] 지문 없는 옛 판(v111.2.1 전) 지표면 — 지금 설계와 같은지 알 길이 없어 옛것으로 본다(열 때는 «열 때부터 옛것» · 한 번 고치면 저절로 새로 만들어 지문이 생김)
+                else if (hasSurf && Design.SurfaceSig.Length == 0 && sigNow.Length > 0) surfNote = "옛 판에서 만든 지표면입니다";
             }
             catch { }
             Last = RoadGrade.Run(inp);
@@ -471,17 +682,23 @@ internal sealed class RoadSession
             try { Lines = Last.Error.Length == 0 ? RoadGrade.ExactLines(inp, Last, out lineNote) : new(); } catch (System.Exception exL) { Lines = new(); try { DiagLog.Append("\n[진입도로] 계단선 못 셈 — " + exL.Message); } catch { } }
             Note = string.Join(" · ", new[] { _baseNote, note, gapNote, lineNote.StartsWith("⚠") ? lineNote : "" }.Where(t => t.Length > 0));
             SurfaceStale = surfNote; SheetStale = sheetNote; XsecStale = xsecNote;
+            // ★★[v111.7.1 · JACK 1102 «2초 쉬면 저절로»] 지표면이 없음(계산은 됨) — 저절로 다시 만들기가 만든다(첫 지표면은 DHROAD 끝에서)
+            SurfaceMissing = Last.Error.Length == 0 && !hasSurf;
             // ★[v111.7] 바뀜 열쇠 — 알림 + 그 판정에 든 값(그린 도장 · 지금 도장 · 축척 · 측점 · 지표면). 실행 취소로 같은 상태가 되면 같은 열쇠
+            //   ★[v111.7.1] 지표면 몫(옛것 · 없음 + 지금 설계 지문)도 — 지표면만 옛것이어도 열쇠가 생김
             var ciK = System.Globalization.CultureInfo.InvariantCulture;
-            StaleKey = sheetNote.Length + xsecNote.Length == 0 ? ""
-                     : string.Join("|", sheetNote, xsecNote, Design.SheetStamp, stampNow, Design.SheetScale.ToString("R", ciK), wantSheet.ToString("R", ciK), Design.XsecStamp, xsecInputs);
-            // ★[설치 전 검토 높음] 실행 취소 · 다시 실행으로 온 상태 · 열 때 이미 옛것 = «해 봄»(저절로 안 그림 · 사람이 고쳐도 안 잊음) — 알림 · 깜박은 남음
+            string surfKey = SurfaceMissing ? "없음:" + sigNow : surfNote.Length > 0 ? "옛것:" + sigNow + ":" + Design.SurfaceSig : "";
+            StaleKey = surfKey.Length + sheetNote.Length + xsecNote.Length == 0 ? ""
+                     : string.Join("|", surfKey, sheetNote, xsecNote, Design.SheetStamp, stampNow, Design.SheetScale.ToString("R", ciK), wantSheet.ToString("R", ciK), Design.XsecStamp, xsecInputs);
+            // ★[설치 전 검토 높음] 실행 취소 · 다시 실행으로 온 상태 · 열 때 이미 옛것 = «해 봄»(저절로 안 만듦 · 사람이 고쳐도 안 잊음) — 상태 줄에 까닭 + [다시 시도]
             if (_markNext)
             {
                 _markNext = false;
-                if (StaleKey.Length > 0) { _autoTried.Add(StaleKey); _autoOk.Remove(StaleKey); }
+                if (StaleKey.Length > 0) { _autoTried[StaleKey] = _markWhy.Length > 0 ? _markWhy : WhyUndo; _autoOk.Remove(StaleKey); }
             }
             _baseNote = "";
+            // ★[v111.7.1 · 검토 중간 2] 실행 취소 · 다시 실행 뒤 한 번 — 노리선이 되살아났으면 «노리선 지움» 알림을 끔
+            if (_recheckTicks) { _recheckTicks = false; if (TicksErased > 0 && AnyTicks(db)) TicksErased = 0; }
             var swD = System.Diagnostics.Stopwatch.StartNew();
             DrawPreview();
             _retried = false;
@@ -493,6 +710,8 @@ internal sealed class RoadSession
             // ★[설치 전 검토 · 중간] 실패하면 옛 미리보기를 걷는다 — 결과처럼 계속 보이지 않게
             Note = "계산 실패 — " + ex.Message;
             Last = null;
+            // ★[v111.7.1 · 검토 낮음] 열쇠도 «계산 실패» 표지로 — 옛 열쇠가 남아 다시 만들기 끝(AutoTried)이 엉뚱한 열쇠에 까닭을 다는 일이 없게(상태 줄 = 계산 오류)
+            StaleKey = "계산 실패:" + ex.Message;
             ClearMarks();
             try { _doc.Editor.UpdateScreen(); } catch { }
             try { DiagLog.Append($"\n[진입도로] {Name} — 계산 실패 — {ex}"); } catch { }
@@ -552,6 +771,8 @@ internal sealed class RoadSession
     internal string SurfaceStale = "", SheetStale = "";
     /// <summary>★[v111.5 · 계획 3] 그린 횡단도가 지금과 다른 까닭(빈 글 = 같음 · 횡단도 없음) — [횡단도 그리기] 아래 한 줄 + 깜박임.</summary>
     internal string XsecStale = "";
+    /// <summary>★[v111.7.1] 계산은 됐는데 진입도로 지표면이 없다 — 저절로 다시 만들기가 만든다 · 그동안 미리보기 선을 보인다.</summary>
+    internal bool SurfaceMissing;
 
     /// <summary>★[v111.7] 그린 횡단도가 지금과 다른 까닭(<see cref="XsecStale"/>와 같은 판정 — 다시 계산 안에서 · 저절로 다시 그리기가 종단도를 다시 그린 뒤).
     /// <paramref name="inputs"/> = 판정에 든 지금 값(측점 · 지표면 · 축척 — 바뀜 열쇠용).</summary>
@@ -582,15 +803,9 @@ internal sealed class RoadSession
         }
         catch { return ""; }
     }
-    /// <summary>★[v111.3.1 · JACK 1030 «미리보기 선 숨기기»] 미리보기(임시 선)를 숨김 — 다시 계산은 그대로 하고 그리지만 않음.</summary>
-    internal bool PreviewHidden;
-    internal void SetPreviewHidden(bool hide)
-    {
-        PreviewHidden = hide;
-        if (hide) ClearMarks(); else DrawPreview();
-        try { _doc.Editor.UpdateScreen(); } catch { }
-        Changed?.Invoke(this);
-    }
+    /// <summary>★★[v111.7.1 · JACK 1102 «미리보기 선 숨기기 단추 없앰»] 미리보기 임시 선은 지표면이 옛것이거나 없을 때만(고친 뒤 · 다시 만들기 전 몇 초) —
+    /// 지표면이 지금 설계와 같으면 도면의 진짜 선(사면선 · 소단선 · 옹벽선 · 지표면 경계)만 보인다. 옹벽 제안(자홍) · 사면 충돌(빨강)은 진짜 선이 없어 늘 보인다.</summary>
+    bool PreviewFull => SurfaceStale.Length > 0 || SurfaceMissing;
 
     /// <summary>★[설치 전 검토 · 중간] 바탕면이 바뀌었다(지움 · 이름 바뀜 = 재정지) — 이름으로 다시 찾고(옛 면을 말없이 따라가지 않게) 높이 표를 다시 만든다. 문서는 부르는 쪽이 잠금.</summary>
     void EnsureBase()
@@ -759,7 +974,7 @@ internal sealed class RoadSession
     {
         string msg = MakeSurfaceCore();
         // ★[v111.3.1] 막 만든 면 = 지금 설계 — 단추 아래 «바뀜» 한 줄 · 깜박임을 바로 끔(다음 다시 계산을 기다리지 않음)
-        SurfaceStale = "";
+        SurfaceStale = ""; SurfaceMissing = false;
         try { Changed?.Invoke(this); } catch { }
         // ★★[v111.3 · JACK 1030 «노리선은 노리선 버튼을 누를 때 다 한꺼번에» · 인터뷰: 도로 면을 다시 만들면 «부지 · 도로 모두 지움»]
         //   v111.1의 «도로 면 뒤 부지 노리선 저절로 다시»를 거둠 — 도로 면이 바뀌면 그려 둔 노리선(부지 DH-노리선 · 모든 도로 DH도로-노리선)은 옛 모양이라 지운다. [노리선]이 둘 다 새로.
@@ -767,6 +982,7 @@ internal sealed class RoadSession
         try
         {
             int nT = EraseAllTicks(_doc.Database, out int nLocked);
+            TicksErased += nT;   // ★[v111.7.1 · 검토 중간 2] 도킹창 상태 줄에도(다음 [노리선]까지)
             if (nT > 0) msg += $" · 노리선 {nT}개 지움(옛 모양 — [노리선]으로 다시)";
             if (nLocked > 0) msg += $" · ⚠노리선 {nLocked}개 못 지움(레이어 잠금?)";
         }
@@ -841,6 +1057,14 @@ internal sealed class RoadSession
     {
         var db = _doc.Database;
         long msGrid = sw.ElapsedMilliseconds;
+        // ★[v111.7.1 · 검토 낮음] 고칠 때마다 저절로 새 면 = 새 XML 파일 — 새 파일을 쓰기 «앞»에서 아무 면도 안 무는 옛 원본을 치운다(부지 생성 · 옹벽 합성과 같은 TidyXml · 되돌리기 여유는 XmlStore가 지킴)
+        try
+        {
+            string td;
+            using (var trT = db.TransactionManager.StartTransaction()) { td = GradingBuilder.TidyXml(db, trT); trT.Commit(); }
+            DiagLog.Append($"\n[진입도로] {Name} — XML 정리: " + (td.Length > 0 ? td : "지울 것 없음"));
+        }
+        catch (System.Exception exT) { try { DiagLog.Append($"\n[진입도로] {Name} — XML 정리 못 함 — {exT.Message}"); } catch { } }
         string xml = GradingBuilder.NewXmlPath(db, "진입도로");
         WallDaylight.WriteLandXmlTin(xml, "ROAD", tris, 1e-7, out int np, out int nf, out int nd);
         long msXml = sw.ElapsedMilliseconds;
@@ -1097,8 +1321,8 @@ internal sealed class RoadSession
                     SectionGap = Math.Max(0.5, GradingSettings.VertexSpacing),
                 };
                 // 지문이 없으면(v111.2.1 전에 만든 면) 그 면과 맞는지 알 길이 없음 — 말없이 틀린 노리선을 그리지 않고 건너뜀
-                if (d.SurfaceSig.Length == 0) { notes.Add($"{name} — ⚠옛 판에서 만든 진입도로 지표면이라 건너뜀([진입도로 지표면 생성] 한 번 뒤 [노리선])"); continue; }
-                if (SigOf(inp, baseId) != d.SurfaceSig) { notes.Add($"{name} — ⚠진입도로 지표면이 지금 설계와 달라 건너뜀([진입도로 지표면 생성] 뒤 [노리선])"); continue; }
+                if (d.SurfaceSig.Length == 0) { notes.Add($"{name} — ⚠옛 판에서 만든 진입도로 지표면이라 건너뜀(DHROADSURF로 한 번 다시 만든 뒤 [노리선])"); continue; }
+                if (SigOf(inp, baseId) != d.SurfaceSig) { notes.Add($"{name} — ⚠진입도로 지표면이 지금 설계와 달라 건너뜀(지표면이 저절로 다시 만들어진 뒤 · 안 되면 진입도로 창 [다시 시도] 뒤 [노리선])"); continue; }
                 var r = RoadGrade.Run(inp);
                 if (r.Error.Length > 0) { notes.Add($"{name} — ⚠계산 실패 {r.Error}"); continue; }
                 var lines = RoadGrade.ExactLines(inp, r, out _);
@@ -1348,7 +1572,8 @@ internal sealed class RoadSession
     {
         ClearMarks();
         var r = Last;
-        if (r == null || r.Error.Length > 0 || PreviewHidden) return;   // ★[v111.3.1] [미리보기 선 숨기기]
+        if (r == null || r.Error.Length > 0) return;
+        bool full = PreviewFull;   // ★[v111.7.1] 지표면이 지금 설계와 같으면 가장자리 · 데이라잇 · 계단선 · 노리선은 안 그림(진짜 선이 있음) — 충돌 · 옹벽 제안만
         // ★[설치 전 검토 · 열린 질문] 도면에 안 넣은 Polyline3d가 임시 선으로 보이는지 근거가 없다 — 저장소에서 보이는 것이 확인된 Line 조각으로(PickMark와 같음).
         //   꺾은선을 먼저 모으고 덜 꺾이게 줄인 뒤, 전체가 많으면 허용을 키워 다시(임시 선 수 상한)
         var polys = new List<(List<Point3d> P, short Aci)>();
@@ -1370,10 +1595,11 @@ internal sealed class RoadSession
             float z = r.Z[j * r.W + i]; return float.IsFinite(z) ? z : r.Base[j * r.W + i];
         }
         // 가장자리(하늘) · 데이라잇(주황) · 충돌(빨강)
-        Line(r.EdgeL.Select(p => new Point3d(p.X, p.Y, p.Z)), 4);
-        Line(r.EdgeR.Select(p => new Point3d(p.X, p.Y, p.Z)), 4);
+        if (full) Line(r.EdgeL.Select(p => new Point3d(p.X, p.Y, p.Z)), 4);
+        if (full) Line(r.EdgeR.Select(p => new Point3d(p.X, p.Y, p.Z)), 4);
         // ★[v111] 단면 광선 데이라잇은 점마다 땅 높이를 갖고 있다(칸 높이로 다시 읽지 않음)
-        if (r.DaylightZ.Count > 0) foreach (var l in r.DaylightZ) Line(l.Select(p => new Point3d(p.X, p.Y, p.Z)), 30);
+        if (!full) { }
+        else if (r.DaylightZ.Count > 0) foreach (var l in r.DaylightZ) Line(l.Select(p => new Point3d(p.X, p.Y, p.Z)), 30);
         else foreach (var l in r.Daylight) Line(l.Select(p => new Point3d(p.X, p.Y, Zat(p.X, p.Y))), 30);
         foreach (var l in RoadGrade.Outline(r, k => k == 4)) Line(l.Select(p => new Point3d(p.X, p.Y, Zat(p.X, p.Y))), 1);
         // 옹벽(파랑 · 설계) · 제안 옹벽(빨강) — 가장자리를 따라
@@ -1401,7 +1627,7 @@ internal sealed class RoadSession
         }
         catch { }
         // ★[v110.3 · JACK 1029 «평면 사면 모양 = 2D처럼 소단선 방향»] 사면선 · 소단선(회색) · 옹벽선(빨강) — ★[설치 전 검토 L4] 맨 뒤(조각이 넘치면 제안 · 데이라잇보다 먼저 잘림)
-        if (!PickMode) foreach (var tl in Lines) Line(tl.Pts.Select(p => new Point3d(p.X, p.Y, p.Z)), (short)(tl.Role == RoadGrade.LineRole.Wall ? 1 : 8));
+        if (full && !PickMode) foreach (var tl in Lines) Line(tl.Pts.Select(p => new Point3d(p.X, p.Y, p.Z)), (short)(tl.Role == RoadGrade.LineRole.Wall ? 1 : 8));
         var add = new List<Entity>();
         for (double tol = 0.05; ; tol *= 2)
         {
@@ -1419,7 +1645,7 @@ internal sealed class RoadSession
             break;
         }
         // ★[v110.3 · 검토 M6] 노리선(긴 선만 · 노랑) — 줄이기 · 점 수 버리기와 따로 · 몫 넘으면 고르게 솎음
-        if (!PickMode) try
+        if (full && !PickMode) try
         {
             var tk = RoadGrade.Ticks(r, Lines, GradingSettings.HatchShort, GradingSettings.HatchLong, longOnly: true);
             int stride = Math.Max(1, (int)Math.Ceiling(tk.Count / (double)MaxTicks));
