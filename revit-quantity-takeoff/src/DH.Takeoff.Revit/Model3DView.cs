@@ -51,6 +51,7 @@ public enum MeshStyle
 ///    날아가기(FlyTo — 나는 동안 모서리 띠를 숨기고 끝에 한 번 다시 만든다).
 ///  · R73a2: 흐린 윤곽(Faint — «부재만 보기»의 나머지) · 빠진 자리 빗금(점선 갈래 4). 판 전체의 가는 둘째 테두리(R73a 검토 M3)는 걷었다(JACK 1030 — 허공에 뜬 큰 틀로 보임).
 ///  · R73a5: 도구 마우스 모양(ToolCursor) · 마우스 밑 자리(HoverPoint) · 도구가 바꿀 자리 굵은 테두리(SetToolRings) · 보이는 겉면까지 거리(SurfaceDistance) · 점 딱지 비켜 놓기.
+///  · R73a6: 바로 가기(JumpTo) · 윤곽 화면 선은 윤곽 겉면이 같으면 다시 모으지 않음(«전체 모델»이 면을 고를 때마다 다시 그린다).
 /// </summary>
 public sealed class Model3DView : Grid
 {
@@ -101,6 +102,8 @@ public sealed class Model3DView : Grid
     private int _labelsAbove;                                                           // 앞에서 이만큼은 자리 위에 띄운다(R73a2)
     private bool _labelsNudge;                                                          // 점 딱지(선분 없음)는 겹치면 비켜 놓는다(R73a5 — 닿은 자리 이름)
     private int _pickedLabel = -1;                                                      // 마우스를 올린 숫자(R61c — 그 상자 · 그 선을 주황으로)
+    private (double dx, double dy)[] _labelShift = Array.Empty<(double, double)>();     // 딱지마다 마지막에 비켜 놓은 만큼(R73a7 — 마우스를 올린 딱지는 그 자리 그대로)
+    private readonly List<bool> _labelClickable = new();                                // 딱지마다 누르면 이웃으로 가는가(R73a7 — 손 모양)
     private System.Windows.Shapes.Path? _pickedLine;
     private readonly HashSet<int> _marked = new();                                      // 식 띠에서 가리킨 숫자의 딱지들(R63 · R63d — 그 상자 · 그 선을 주황으로)
     private System.Windows.Shapes.Path? _markedLines;
@@ -158,6 +161,9 @@ public sealed class Model3DView : Grid
         {
             _toolCursor = value;
             if (_drag == Drag.None) Cursor = value ?? (_hover >= 0 ? Cursors.Hand : Cursors.Arrow);
+            // 도구를 든 동안 딱지는 손 모양이 아니다(누름은 도구로 간다 — R73a7 설치 전 검토 낮음).
+            for (int i = 0; i < _labelViews.Count && i < _labelClickable.Count; i++)
+                _labelViews[i].view.Cursor = _labelClickable[i] && value == null ? Cursors.Hand : null;
         }
     }
 
@@ -294,11 +300,13 @@ public sealed class Model3DView : Grid
     /// 누르기는 딱지가 받지 않는다 — 그 밑의 부재 · 판 찍기로 간다. above = 앞에서 그만큼의 딱지는 그 자리 바로 위에 띄운다(R73a2 — ② 고른 면의 이름이 작은 면 ·
     /// 빠진 자리 빗금을 덮지 않게 면 윗변 위에). facing = 딱지마다 그 자리 면의 바깥 법선(R73a4 — 뒤를 보는 면의 딱지는 숨김 · 없거나 영 벡터 = 늘 보임).
     /// </summary>
-    public void SetLabels(IReadOnlyList<(Vec3 at, string text, Vec3 from, Vec3 to)> labels, int above = 0, IReadOnlyList<Vec3>? facing = null, bool nudge = false)
+    public void SetLabels(IReadOnlyList<(Vec3 at, string text, Vec3 from, Vec3 to)> labels, int above = 0, IReadOnlyList<Vec3>? facing = null, bool nudge = false, Func<int, bool>? clickable = null)
     {
         _labels.Children.Clear();
         _labelViews.Clear();
         _labelFacing.Clear();
+        _labelShift = Array.Empty<(double, double)>();
+        _labelClickable.Clear();
         for (int i = 0; i < labels.Count; i++) _labelFacing.Add(facing != null && i < facing.Count ? facing[i] : Vec3.Zero);
         _labelsAbove = above;
         _labelsNudge = nudge;
@@ -325,6 +333,9 @@ public sealed class Model3DView : Grid
             // 마우스를 올린 동안만 고른다(끄는 중에는 바꾸지 않는다 — 돌리다 지나가는 숫자마다 깜빡이지 않게).
             view.MouseEnter += (_, _) => { if (_drag == Drag.None) PickLabel(index); };
             view.MouseLeave += (_, _) => { if (_pickedLabel == index) PickLabel(-1); };
+            bool canClick = clickable?.Invoke(index) == true;
+            _labelClickable.Add(canClick);
+            if (canClick && _toolCursor == null) view.Cursor = Cursors.Hand;   // 누르면 그 이웃으로(R73a7 — LabelClick · 도구를 든 동안은 아님)
             _labels.Children.Add(view);
             _labelViews.Add((at, view, from, to));
         }
@@ -333,6 +344,28 @@ public sealed class Model3DView : Grid
 
     /// <summary>마우스를 올린 숫자 딱지의 차례(내리면 −1) — ③ 아래 식에서 그 숫자를 칠한다(R61c · R63d 차례로).</summary>
     public event Action<int>? LabelHovered;
+
+    /// <summary>
+    /// 딱지를 눌렀다(R73a7 — JACK 1102 «좌측 뷰의 빗금 부분 문자를 누르면 해당 객체의 해당 겹치는 부위로 객체가 바뀌게»): (딱지 차례, Ctrl) → 받았으면 true(그 밑 찍기는 없음) ·
+    /// false · 없으면 전처럼 그 밑의 부재 · 판 찍기. 끌지 않고 뗀 왼쪽 누르기 · 누른 자리가 보이는 딱지 안일 때만.
+    /// </summary>
+    public Func<int, bool, bool>? LabelClick { get; set; }
+
+    /// <summary>화면 자리(그림 좌표)의 보이는 딱지 차례(겹치면 위에 그린 것 · 없으면 −1).</summary>
+    public int LabelAt(Point at)
+    {
+        bool On(int i)
+        {
+            var view = _labelViews[i].view;
+            if (view.Visibility != Visibility.Visible) return false;
+            double x = Canvas.GetLeft(view), y = Canvas.GetTop(view);
+            return !double.IsNaN(x) && !double.IsNaN(y) && at.X >= x && at.X <= x + view.ActualWidth && at.Y >= y && at.Y <= y + view.ActualHeight;
+        }
+        if (_pickedLabel >= 0 && _pickedLabel < _labelViews.Count && On(_pickedLabel)) return _pickedLabel;   // 마우스를 올려 밝힌 딱지 먼저(보이는 그대로)
+        for (int i = _labelViews.Count - 1; i >= 0; i--)
+            if (On(i)) return i;
+        return -1;
+    }
 
     /// <summary>딱지 수 · 그 딱지의 글(없으면 null).</summary>
     public int LabelCount => _labelViews.Count;
@@ -396,7 +429,8 @@ public sealed class Model3DView : Grid
     /// <summary>
     /// 3D 자리(장면 좌표)의 점선들(③ 콘크리트 숫자 — R61b): kind 0 = 더하는 도형(파랑) · 1 = 빼는 도형(빨강 — JACK «공제는 빨간 점선») · 2 = 잰 선(회색) ·
     /// 3 = 판 모양 검사에 걸린 자리(빨간 실선 · 굵게 — R68 ② 고른 판) · 4 = 빠진 자리(R73a2 — 닫힌 고리를 빨간 빗금으로 채움 · 화면 7 px 간격이라 확대와 상관없이 읽힘) ·
-    /// 5 = 빼지 않은 자리(R73a4 — 청록 빗금 · 반대쪽으로 기움).
+    /// 5 = 빼지 않은 자리(R73a4 — 청록 빗금 · 반대쪽으로 기움 → R73a7 JACK 1102 «공제 제외하면 바로 거푸집 모양으로 바뀌게 해 줘 · 계속 빗금으로 남아 있지 말고»:
+    /// 채우지 않고 청록 점선 테두리만 — 그 자리는 판 색이 그대로 보인다).
     /// 딱지처럼 보는 자리가 바뀌면 다시 놓는다 · 빈 목록 = 지움. 그림 위에 그린다(가린 부재 뒤의 자리도 보임). facing = 점선마다 그 면의 바깥 법선(R73a4 — 뒤를 보는 면의 빗금은
     /// 그리지 않는다: «이 부재만 보기»는 부재의 모든 면에 빗금을 걸어 앞뒤 면의 빗금이 겹쳐 보였다 · 없거나 영 벡터 = 늘 그림).
     /// </summary>
@@ -415,9 +449,9 @@ public sealed class Model3DView : Grid
                 brush.Freeze();
                 _guidePaths[k] = new System.Windows.Shapes.Path
                 {
-                    Stroke = brush, StrokeThickness = k switch { 2 => 1.1, 3 => 2.4, 4 or 5 => 1.4, _ => 1.6 },
-                    StrokeDashArray = k switch { 2 => new DoubleCollection { 2, 3 }, 3 or 4 or 5 => null, _ => new DoubleCollection { 5, 3 } },
-                    Fill = k is 4 or 5 ? HatchBrush(_dark, kept: k == 5) : null,
+                    Stroke = brush, StrokeThickness = k switch { 2 => 1.1, 3 => 2.4, 4 => 1.4, 5 => 2.0, _ => 1.6 },
+                    StrokeDashArray = k switch { 2 => new DoubleCollection { 2, 3 }, 3 or 4 => null, 5 => new DoubleCollection { 3, 2 }, _ => new DoubleCollection { 5, 3 } },
+                    Fill = k == 4 ? HatchBrush(_dark) : null,
                     IsHitTestVisible = false,
                 };
                 _guideLayer.Children.Add(_guidePaths[k]);
@@ -433,26 +467,24 @@ public sealed class Model3DView : Grid
 
     /// <summary>
     /// 빠진 자리 빗금(R73a2): 빨간 사선(화면 7 px 간격) + 아주 옅은 빨강 바탕 — 3D 빗금과 카드 줄의 작은 네모가 같은 것을 쓴다.
-    /// kept = 빼지 않은 자리(R73a4): 청록 사선 · 반대쪽으로 기움(색을 못 가려도 갈리게).
+    /// kept = 빼지 않은 자리(R73a4 청록 사선 → R73a7 «공제 제외하면 바로 거푸집 모양으로 · 빗금으로 남아 있지 말고»): 사선 없이 아주 옅은 청록 바탕만
+    /// (카드 줄 · 풀이의 작은 네모 — 3D 는 청록 점선 테두리만 · 안은 판 색).
     /// </summary>
     public static Brush HatchBrush(bool dark, bool kept = false)
     {
         const double tile = 7;
         var line = HatchColor(dark, kept);
-        var pen = new Pen(new SolidColorBrush(line), 1.3);
-        var strokes = new GeometryGroup();
         if (kept)
         {
-            strokes.Children.Add(new LineGeometry(new Point(0, 0), new Point(tile, tile)));
-            strokes.Children.Add(new LineGeometry(new Point(tile - 1, -1), new Point(tile + 1, 1)));         // 타일 귀퉁이 — 이어지는 선이 끊겨 보이지 않게
-            strokes.Children.Add(new LineGeometry(new Point(-1, tile - 1), new Point(1, tile + 1)));
+            var plain = new SolidColorBrush(Color.FromArgb(dark ? (byte)0x30 : (byte)0x22, line.R, line.G, line.B));
+            plain.Freeze();
+            return plain;
         }
-        else
-        {
-            strokes.Children.Add(new LineGeometry(new Point(0, tile), new Point(tile, 0)));
-            strokes.Children.Add(new LineGeometry(new Point(-1, 1), new Point(1, -1)));                    // 타일 귀퉁이 — 이어지는 선이 끊겨 보이지 않게
-            strokes.Children.Add(new LineGeometry(new Point(tile - 1, tile + 1), new Point(tile + 1, tile - 1)));
-        }
+        var pen = new Pen(new SolidColorBrush(line), 1.3);
+        var strokes = new GeometryGroup();
+        strokes.Children.Add(new LineGeometry(new Point(0, tile), new Point(tile, 0)));
+        strokes.Children.Add(new LineGeometry(new Point(-1, 1), new Point(1, -1)));                    // 타일 귀퉁이 — 이어지는 선이 끊겨 보이지 않게
+        strokes.Children.Add(new LineGeometry(new Point(tile - 1, tile + 1), new Point(tile + 1, tile - 1)));
         var drawing = new DrawingGroup();
         drawing.Children.Add(new GeometryDrawing(new SolidColorBrush(Color.FromArgb(dark ? (byte)0x30 : (byte)0x26, line.R, line.G, line.B)), null, new RectangleGeometry(new Rect(0, 0, tile, tile))));
         drawing.Children.Add(new GeometryDrawing(null, pen, strokes));
@@ -487,6 +519,45 @@ public sealed class Model3DView : Grid
     /// <summary>시험용(R73a5): 도구가 바꿀 자리 굵은 테두리의 고리 수.</summary>
     public int ToolRingCount => _toolRings.Count;
 
+    /// <summary>
+    /// 고른 것의 분홍 테두리를 화면 선으로(R73a6 — «전체 모델»의 고른 면: 3D 맨 위 층을 하나 더 그리면 녹촌 한 장이 45 ms 늘었다 · 장면 좌표 선분 · null = 지움).
+    /// 빗금 층 위에 3 px · 가려진 면의 테두리도 보인다(왼쪽 그림의 맨 위 층과 같게). 보는 자리를 바꾸면 다시 놓는다.
+    /// </summary>
+    public void SetPickLines(IReadOnlyList<(Vec3 a, Vec3 b)>? segments)
+    {
+        _pickSegs = segments?.ToList() ?? new List<(Vec3 a, Vec3 b)>();
+        if (_pickPath == null)
+        {
+            if (_pickSegs.Count == 0) return;
+            var brush = new SolidColorBrush(Color.FromRgb(ZonePalette.Picked.r, ZonePalette.Picked.g, ZonePalette.Picked.b));
+            brush.Freeze();
+            _pickPath = new System.Windows.Shapes.Path { Stroke = brush, StrokeThickness = PickEdgePixels, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round, IsHitTestVisible = false };
+            _guideLayer.Children.Insert(0, _pickPath);       // 빗금 · 딱지 아래(빗금 위 이름이 가려지지 않게)
+        }
+        PlacePickLines();
+    }
+
+    /// <summary>시험용(R73a6): 화면 선으로 그린 분홍 테두리 선분 수.</summary>
+    public int PickLineCount => _pickSegs.Count;
+
+    private List<(Vec3 a, Vec3 b)> _pickSegs = new();
+    private System.Windows.Shapes.Path? _pickPath;
+
+    private void PlacePickLines()
+    {
+        if (_pickPath == null) return;
+        if (_pickSegs.Count == 0) { _pickPath.Data = null; return; }
+        var geometry = new StreamGeometry();
+        using (var ctx = geometry.Open())
+            foreach (var (a, b) in _pickSegs)
+            {
+                ctx.BeginFigure(ScreenOf(a), false, false);
+                ctx.LineTo(ScreenOf(b), true, false);
+            }
+        geometry.Freeze();
+        _pickPath.Data = geometry;
+    }
+
     private void PlaceToolRings()
     {
         if (_toolPath == null) return;
@@ -512,7 +583,7 @@ public sealed class Model3DView : Grid
     // 점선을 지금 카메라로 화면에 놓는다(갈래마다 StreamGeometry 하나 · 빠진 자리(4) · 빼지 않은 자리(5)는 채운 고리 — 구멍 고리는 화면에서도 반대로 돌아 NonZero 로 빠진다).
     private void PlaceGuides()
     {
-        if (_guidePaths[0] == null) return;
+        if (_guidePaths[0] == null) { PlaceToolRings(); PlacePickLines(); return; }
         for (int k = 0; k < GuideKinds; k++)
         {
             var geometry = new StreamGeometry { FillRule = FillRule.Nonzero };
@@ -527,6 +598,7 @@ public sealed class Model3DView : Grid
             _guidePaths[k].Data = geometry;
         }
         PlaceToolRings();
+        PlacePickLines();
     }
 
     // 누른 숫자가 재는 선(주황 실선 — 점선 위). 선분이 없는 딱지(가운데 식 · 각도)는 상자만 바뀐다.
@@ -592,6 +664,12 @@ public sealed class Model3DView : Grid
         }
         var forced = new HashSet<int>(_marked);
         if (_pickedLabel >= 0) forced.Add(_pickedLabel);
+        // 마우스를 올린 딱지는 비켜 놓았던 자리 그대로(R73a7 하네스 — 늘 보일 딱지는 제 자리에 먼저 놓여 비켜 놓은 딱지가 마우스 밑에서 튀어 가고
+        // 다른 딱지가 그 자리로 와, 누르면 엉뚱한 이웃으로 갔다).
+        if (_labelShift.Length != _labelViews.Count) _labelShift = new (double dx, double dy)[_labelViews.Count];
+        var shift = new (double dx, double dy)[_labelViews.Count];
+        if (_pickedLabel >= 0 && _pickedLabel < shift.Length) shift[_pickedLabel] = _labelShift[_pickedLabel];
+        for (int i = 0; i < boxes.Count; i++) boxes[i] = (boxes[i].x + shift[i].dx, boxes[i].y + shift[i].dy, boxes[i].w, boxes[i].h);
         // 뒤를 보는 면의 딱지(R73a4)는 화면 밖으로 쳐서 자리를 차지하지 않게(늘 보일 딱지가 아니면).
         var placed = boxes.Select((b, i) => i < _labelFacing.Count && !FacesCamera(_labelFacing[i]) && !forced.Contains(i) ? (double.NaN, double.NaN, b.w, b.h) : b).ToList();
         // R73a5: 점 딱지(닿은 자리 이름 · 면 이름 — 선분이 없는 것)는 앞 딱지와 겹치면 위 · 아래 · 옆으로 비켜 본다(치수는 그대로 숨김 — 먼저 빠진다).
@@ -600,6 +678,7 @@ public sealed class Model3DView : Grid
         for (int i = 0; i < _labelViews.Count; i++)
         {
             var view = _labelViews[i].view;
+            _labelShift[i] = (shift[i].dx + moved[i].dx, shift[i].dy + moved[i].dy);
             Canvas.SetLeft(view, boxes[i].x + moved[i].dx);   // 숨긴 딱지도 자리는 맞춰 둔다(다시 보일 때 · 시험이 자리를 본다)
             Canvas.SetTop(view, boxes[i].y + moved[i].dy);
             // Hidden(Collapsed 아님): 접은 딱지는 WPF 가 크기를 0 으로 재 — 다음 배치에서 점이 되어 겹침 판정 · 가운데 자리가 틀어진다.
@@ -612,6 +691,20 @@ public sealed class Model3DView : Grid
 
     /// <summary>시험용: 그 딱지의 3D 자리(장면 좌표).</summary>
     public Vec3 LabelPoint(int index) => _labelViews[index].at;
+
+    /// <summary>시험용: 그 딱지의 화면 네모(그림 좌표 · 숨긴 딱지는 null — R73a7 딱지 누르기).</summary>
+    public Rect? LabelRect(int index)
+    {
+        if (index < 0 || index >= _labelViews.Count || _labelViews[index].view is not { Visibility: Visibility.Visible } view) return null;
+        double x = Canvas.GetLeft(view), y = Canvas.GetTop(view);
+        return double.IsNaN(x) || double.IsNaN(y) ? null : new Rect(x, y, view.ActualWidth, view.ActualHeight);
+    }
+
+    /// <summary>시험용: 그 점선 종류를 채워 그리는가(R73a7 — 공제 제외 자리 = 테두리만).</summary>
+    public bool GuideFilled(int kind) => kind >= 0 && kind < GuideKinds && _guidePaths[kind]?.Fill != null;
+
+    /// <summary>시험용: 그 딱지에 손 모양 마우스가 걸렸는가(누르면 이웃으로 — R73a7).</summary>
+    public bool LabelClickable(int index) => index >= 0 && index < _labelClickable.Count && _labelClickable[index];
 
     /// <summary>시험용: 그 딱지가 지금 화면에 보이는가(겹쳐 숨긴 딱지는 아님).</summary>
     public bool LabelShown(int index) => index >= 0 && index < _labelViews.Count && _labelViews[index].view.Visibility == Visibility.Visible;
@@ -845,8 +938,7 @@ public sealed class Model3DView : Grid
         _tintBodies.Children.Clear();
         _topModels.Children.Clear();
         Array.Clear(_styleCounts);
-        _flatSegs.Clear();
-        var flatSeen = new HashSet<(long, long, long, long, long, long)>();
+        var flatOf = new List<MeshData>();                                // 윤곽 화면 선으로 그릴 겉면(R73a6 — 같으면 선분을 다시 모으지 않는다)
         for (int i = 0; i < _meshes.Count; i++)
         {
             var body = _bodyModel[i];
@@ -860,7 +952,7 @@ public sealed class Model3DView : Grid
             switch (style)
             {
                 case MeshStyle.Ghost:
-                    if (FlatGhosts) { AddFlat(_meshes[i], flatSeen); break; }   // 화면 선으로(R73a5 — 아래 PlaceFlat)
+                    if (FlatGhosts) { flatOf.Add(_meshes[i]); break; }   // 화면 선으로(R73a5 — 아래 PlaceFlat)
                     if (edge != null) { edge.Material = edge.BackMaterial = FlatOf(GhostEdge); _bodies.Children.Add(edge); }
                     break;
                 case MeshStyle.Faint:
@@ -890,8 +982,20 @@ public sealed class Model3DView : Grid
                     break;
             }
         }
-        PlaceFlat();
+        // 윤곽 겉면이 그대로면 선분도 그대로(R73a6 — «전체 모델»은 면을 고를 때마다 다시 그린다: 녹촌 윤곽 선분을 매번 모으지 않게).
+        if (!flatOf.SequenceEqual(_flatFor, ReferenceEqualityComparer.Instance))
+        {
+            _flatFor = flatOf;
+            _flatSegs.Clear();
+            var flatSeen = new HashSet<(long, long, long, long, long, long)>();
+            foreach (var mesh in flatOf) AddFlat(mesh, flatSeen);
+            _flatPlaced = false;
+        }
+        if (!_flatPlaced) PlaceFlat();
     }
+
+    private List<MeshData> _flatFor = new();
+    private bool _flatPlaced;                    // 지금 카메라로 화면 선을 놓았다(카메라가 바뀌면 SyncCamera 가 다시 놓는다)
 
     /// <summary>
     /// 윤곽(MeshStyle.Ghost)을 3D 모서리 띠 대신 화면 선으로 그린다(R73a5 «위치» 그림 — 소프트웨어 그리기에서 녹촌 모서리 띠(세모 2만 2천)가 한 장 80 ms 였다).
@@ -919,6 +1023,7 @@ public sealed class Model3DView : Grid
     // 윤곽 화면 선을 지금 카메라로 놓는다(FlatGhosts — 없으면 비움).
     private void PlaceFlat()
     {
+        _flatPlaced = true;
         if (_flatSegs.Count == 0) { _flatLines.Data = null; return; }
         if (_flatLines.Stroke == null)
         {
@@ -1058,6 +1163,17 @@ public sealed class Model3DView : Grid
         _flyTimer.Start();
     }
 
+    /// <summary>그 카메라 자리로 바로 간다(날지 않고 — R73a6 «전체 모델»을 처음 맞출 때 · 모서리 띠를 두 번 짓지 않게). 화면 크기는 지금 것.</summary>
+    public void JumpTo(OrbitCamera to)
+    {
+        Land();
+        var goal = to.Clone();
+        goal.ViewW = Camera.ViewW;
+        goal.ViewH = Camera.ViewH;
+        Camera.Blend(goal, goal, 1);
+        if (_fitted) SyncCamera();
+    }
+
     /// <summary>상자를 그 방향(Yaw · Pitch)에서 보러 날아간다 — margin = 둘레 여백(한쪽 비율) · minWidth = 화면 가로가 이보다 좁아지지 않게(m).</summary>
     public void FlyTo(Box3 box, double yaw, double pitch, double margin, double minWidth) => FlyTo(box, yaw, pitch, margin, minWidth, default);
 
@@ -1179,37 +1295,43 @@ public sealed class Model3DView : Grid
     public (int index, int triangle) HitAt(Point at)
     {
         var (origin, direction) = Camera.Ray(at.X, at.Y);
+        var (index, triangle, _) = HitRay(origin, direction);
+        return (index, triangle);
+    }
+
+    /// <summary>
+    /// 그 시선(장면 좌표 · 방향)의 찍기 — HitAt 과 같은 차례(R73a6: 화면 자리 없이도 — 그 면이 보이는 방향을 찾을 때). distance = origin 에서 닿은 곳까지(방향 단위 · 음수일 수 있다).
+    /// </summary>
+    public (int index, int triangle, double distance) HitRay(Vec3 origin, Vec3 direction)
+    {
         if (_layered && SeenFirst)
         {
             // 눈에 보이는 겉면 먼저(R73a 검토 높음 1 · 중간 2 — ②): 맨 위 층 → 보통 층 차례로 찍기와 상관없이 가장 가까운 겉면(고른 면의 부재 · 옅은 부재도
             // 가린다). 그것이 찍을 것이면 그대로, 아니면 그 겉면 바로 뒤 1 cm 안(제 판은 4 mm 띄움)의 찍을 것, 없으면 찍지 않음 — 가려진 판(위 슬래브 밑면 ·
             // 맞은편 벽)을 잡지 않게.
-            (int index, int triangle)? Seen(Func<int, bool> layer)
+            (int index, int triangle, double distance)? Seen(Func<int, bool> layer)
             {
                 var seen = Picker.PickHit(_meshes, i => _bodyModel[i] != null && Shown(i) && layer(i), origin, direction);
                 if (seen.index < 0) return null;
-                if (Pickable(seen.index)) return (seen.index, seen.triangle);
+                if (Pickable(seen.index)) return seen;
                 var behind = Picker.PickHit(_meshes, i => _bodyModel[i] != null && Shown(i) && Pickable(i) && StyleOf(i) is not (MeshStyle.Ghost or MeshStyle.Faint), origin, direction, seen.distance - 0.01);   // 흐린 윤곽은 잡지 않는다(R73a2 검토 L3)
-                return behind.index >= 0 && behind.distance <= seen.distance + 0.01 ? (behind.index, behind.triangle) : (-1, -1);
+                return behind.index >= 0 && behind.distance <= seen.distance + 0.01 ? behind : (-1, -1, 0);
             }
             if (Seen(i => StyleOf(i) == MeshStyle.Top) is { } onTop) return onTop;
             if (Seen(i => StyleOf(i) is MeshStyle.Solid or MeshStyle.Tint or MeshStyle.Faded) is { } inBody) return inBody;
-            if (!GhostPickable) return (-1, -1);
-            var outline = Picker.PickHit(_meshes, i => _bodyModel[i] != null && Shown(i) && Pickable(i) && StyleOf(i) == MeshStyle.Ghost, origin, direction);
-            return (outline.index, outline.triangle);
+            if (!GhostPickable) return (-1, -1, 0);
+            return Picker.PickHit(_meshes, i => _bodyModel[i] != null && Shown(i) && Pickable(i) && StyleOf(i) == MeshStyle.Ghost, origin, direction);
         }
         if (_layered)
         {
             // 맨 위 층의 것은 다른 것에 가려져 있어도 보이므로 먼저 닿는다. 모서리만 그린 둘레 부재는 찍히지 않는다. 옅게(R73a)는 보통 것과 같은 차례(가까운 것).
             var top = Picker.PickHit(_meshes, i => _bodyModel[i] != null && Shown(i) && Pickable(i) && StyleOf(i) == MeshStyle.Top, origin, direction);
-            if (top.index >= 0) return (top.index, top.triangle);
+            if (top.index >= 0) return top;
             var body = Picker.PickHit(_meshes, i => _bodyModel[i] != null && Shown(i) && Pickable(i) && StyleOf(i) is MeshStyle.Solid or MeshStyle.Tint or MeshStyle.Faded, origin, direction);
-            if (body.index >= 0 || !GhostPickable) return (body.index, body.triangle);
-            var ghost = Picker.PickHit(_meshes, i => _bodyModel[i] != null && Shown(i) && Pickable(i) && StyleOf(i) == MeshStyle.Ghost, origin, direction);
-            return (ghost.index, ghost.triangle);
+            if (body.index >= 0 || !GhostPickable) return body;
+            return Picker.PickHit(_meshes, i => _bodyModel[i] != null && Shown(i) && Pickable(i) && StyleOf(i) == MeshStyle.Ghost, origin, direction);
         }
-        var hit = Picker.PickHit(_meshes, i => _bodyModel[i] != null && Shown(i) && Pickable(i), origin, direction);
-        return (hit.index, hit.triangle);
+        return Picker.PickHit(_meshes, i => _bodyModel[i] != null && Shown(i) && Pickable(i), origin, direction);
     }
 
     /// <summary>
@@ -1419,6 +1541,7 @@ public sealed class Model3DView : Grid
         {
             ClickPoint = ended.down;
             ClickMoved = Math.Abs(at.X - ended.down.X) > DragPixels || Math.Abs(at.Y - ended.down.Y) > DragPixels;
+            if (!ClickMoved && LabelClick != null && LabelAt(ended.down) is var label and >= 0 && LabelClick(label, ended.ctrl)) return;   // 딱지 누르기(R73a7)
             var (index, triangle) = HitAt(ended.down);
             ClickTriangle = triangle;
             Clicked?.Invoke(index, ended.ctrl);

@@ -89,6 +89,12 @@ public sealed partial class FormworkBoard
     // 칸 이름: 부위(사람이 넣은 이름 — «중간슬래브» · «바닥 헌치») · 없으면 부재 종류(보 · 벽 · 슬래브 …).
     private static string JointLabel(FormworkElement el) => el.Part.Length > 0 ? el.Part : CalcPlan.KindName(el.Kind, el.Type);
 
+    /// <summary>빗금 · 카드 줄의 이웃 이름(R73a6 — 시험 · 전수 검사가 같은 이름으로 견준다).</summary>
+    public static string JointLabelOf(FormworkElement el) => JointLabel(el);
+
+    /// <summary>면 평면 위의 점이 고리들(바깥 + 구멍 — 홀짝) 안인가(R73a6 — 변에서 SpotEdge 안이면 안).</summary>
+    public static bool InsideRings(List<List<double[]>> outline, Vec3 q, Vec3 n) => Inside(outline, q, n);
+
     private static List<FaceResult> FacesOf(IReadOnlyList<FormworkPiece> pieces) =>
         pieces.SelectMany(p => p.Members).Select(m => m.Face).Distinct(ReferenceEqualityComparer.Instance).Cast<FaceResult>().ToList();
 
@@ -189,8 +195,10 @@ public sealed partial class FormworkBoard
     /// <summary>
     /// 빠진 자리 한 갈래(R73a2): 이웃 이름(부위 · 없으면 종류 — «겹침» 칸과 같은 이름) · 그 이름의 이웃들 · 빠진 넓이(공제 — 맞닿음 + 깎인 자리) · 빼지 않은 넓이(무시) ·
     /// 빠진 자리의 고리(모델 좌표 — 3D 빨간 빗금) · 빼지 않은 자리의 고리(R73a4 — 3D 청록 빗금 · JACK 1102 «다른 객체와 닿는 부분만 확인할 수 있으면 돼»).
+    /// R73a7: 고리마다 그 고리를 낸 이웃(RingOwners · KeptRingOwners — Rings · KeptRings 와 같은 차례 · 빗금 딱지를 누르면 그 이웃으로).
     /// </summary>
-    public sealed record FaceCut(string Label, IReadOnlyList<long> Others, double Area, double Kept, IReadOnlyList<IReadOnlyList<Vec3>> Rings, IReadOnlyList<IReadOnlyList<Vec3>> KeptRings);
+    public sealed record FaceCut(string Label, IReadOnlyList<long> Others, double Area, double Kept, IReadOnlyList<IReadOnlyList<Vec3>> Rings, IReadOnlyList<IReadOnlyList<Vec3>> KeptRings,
+                                 IReadOnlyList<long>? RingOwners = null, IReadOnlyList<long>? KeptRingOwners = null);
 
     /// <summary>
     /// 그 면들이 다른 부재 때문에 빠진 자리(이름마다 · 넓은 차례 · JointChipMin 아래는 뺌). 넓이 = 그 면들의 Covers + Cut(무시 = Ignored)를 그대로 더한 값 — 땅 위 밑면 ·
@@ -198,65 +206,281 @@ public sealed partial class FormworkBoard
     /// </summary>
     public List<FaceCut> CutsOf(IEnumerable<BoardFace> faces) => CutsOf(faces.Select(f => f.Face).Distinct(ReferenceEqualityComparer.Instance).Cast<FaceResult>(), ElementsById());
 
-    private static List<FaceCut> CutsOf(IEnumerable<FaceResult> faces, Dictionary<long, FormworkElement> elements)
+    private List<FaceCut> CutsOf(IEnumerable<FaceResult> faces, Dictionary<long, FormworkElement> elements)
     {
-        var sums = new Dictionary<string, (double area, double kept, HashSet<long> ids, List<IReadOnlyList<Vec3>> rings, List<IReadOnlyList<Vec3>> keptRings)>(StringComparer.Ordinal);
-        static IEnumerable<IReadOnlyList<Vec3>> Rings(FaceCover c) => c.Outline.Where(r => r.Count >= 3).Select(r => (IReadOnlyList<Vec3>)r.Select(q => new Vec3(q[0], q[1], q[2])).ToList());
+        var sums = new Dictionary<string, (double area, double kept, HashSet<long> ids, List<IReadOnlyList<Vec3>> rings, List<IReadOnlyList<Vec3>> keptRings, List<long> owners, List<long> keptOwners)>(StringComparer.Ordinal);
         foreach (var face in faces)
-        {
-            void Add(IEnumerable<FaceCover> list, bool kept)
+            foreach (var (c, rings, area, kept) in ContactsOf(face))
             {
-                foreach (var c in list)
-                {
-                    string label = elements.TryGetValue(c.ElementId, out var el) ? JointLabel(el) : "주변 콘크리트";
-                    if (!sums.TryGetValue(label, out var s)) sums[label] = s = (0, 0, new HashSet<long>(), new List<IReadOnlyList<Vec3>>(), new List<IReadOnlyList<Vec3>>());
-                    s.ids.Add(c.ElementId);
-                    (kept ? s.keptRings : s.rings).AddRange(Rings(c));
-                    sums[label] = kept ? (s.area, s.kept + c.Area, s.ids, s.rings, s.keptRings) : (s.area + c.Area, s.kept, s.ids, s.rings, s.keptRings);
-                }
+                string label = elements.TryGetValue(c.ElementId, out var el) ? JointLabel(el) : "주변 콘크리트";
+                if (!sums.TryGetValue(label, out var s)) sums[label] = s = (0, 0, new HashSet<long>(), new List<IReadOnlyList<Vec3>>(), new List<IReadOnlyList<Vec3>>(), new List<long>(), new List<long>());
+                s.ids.Add(c.ElementId);
+                (kept ? s.keptRings : s.rings).AddRange(rings.Select(r => (IReadOnlyList<Vec3>)r.Select(q => new Vec3(q[0], q[1], q[2])).ToList()));
+                (kept ? s.keptOwners : s.owners).AddRange(rings.Select(_ => c.ElementId));
+                sums[label] = kept ? (s.area, s.kept + area, s.ids, s.rings, s.keptRings, s.owners, s.keptOwners) : (s.area + area, s.kept, s.ids, s.rings, s.keptRings, s.owners, s.keptOwners);
             }
-            Add(face.Covers, false);
-            Add(face.Cut, false);
-            Add(face.Ignored, true);
-        }
         return sums.Where(kv => kv.Value.area + kv.Value.kept >= JointChipMin)
             .OrderByDescending(kv => kv.Value.area + kv.Value.kept).ThenBy(kv => kv.Key, StringComparer.Ordinal)
-            .Select(kv => new FaceCut(kv.Key, kv.Value.ids.Order().ToList(), kv.Value.area, kv.Value.kept, kv.Value.rings, kv.Value.keptRings)).ToList();
+            .Select(kv => new FaceCut(kv.Key, kv.Value.ids.Order().ToList(), kv.Value.area, kv.Value.kept, kv.Value.rings, kv.Value.keptRings, kv.Value.owners, kv.Value.keptOwners)).ToList();
+    }
+
+    // ── 닿은 자리(R73a6) ──
+    // 맞닿은 자리(Covers)는 면 다각형 안(분석이 면 ∩ 이웃 단면으로 잰다) — 원본 면 고리로 한 번 더 잘라 둔다(혹시 모를 밖의 몫 · 넓이 × 안 몫).
+    // 깎인 자리(Cut — 결합이 판 구멍 · 홈)와 무시(Ignored — 맞닿음 + 되살린 깎인 자리)는 면 다각형 밖이 제 자리라 그대로 둔다(설치 전 검토 높음 —
+    // 처음 꼴은 모두 잘라 R67 «결합 구멍도 되살림»의 빗금 · 카드 줄 · [공제 제외]가 사라졌다). 계단 면의 가짜 홈은 분석에서 뺐다(FormworkAnalyzer).
+    private readonly Dictionary<FaceResult, List<(FaceCover cover, List<List<double[]>> rings, double area, bool kept)>> _contacts = new(ReferenceEqualityComparer.Instance);
+    private IReadOnlyList<ElementFormwork>? _contactsFor;
+
+    /// <summary>그 면의 닿은 자리(덮음 · 깎임 = 공제 · 무시 = 공제 제외)를 그 면 다각형으로 자른 것(R73a6 — 빗금 · 카드 줄 · 도구가 같은 것을 쓴다).</summary>
+    internal List<(FaceCover cover, List<List<double[]>> rings, double area, bool kept)> ContactsOf(FaceResult face)
+    {
+        if (!ReferenceEquals(_contactsFor, Results)) { _contacts.Clear(); _contactsFor = Results; }
+        if (_contacts.TryGetValue(face, out var made)) return made;
+        var list = new List<(FaceCover, List<List<double[]>>, double, bool)>();
+        var polygon = FacePolygon(face);
+        foreach (var (c, kept) in face.Covers.Select(c => (c, false)).Concat(face.Cut.Select(c => (c, false))).Concat(face.Ignored.Select(c => (c, true))))
+        {
+            var rings = c.Outline.Where(r => r.Count >= 3).ToList();
+            double area = c.Area;
+            bool cover = !kept && face.Covers.Contains(c);
+            if (cover && polygon is { } pg && rings.Count > 0)
+            {
+                var paths = Poly.Normalize(ToPaths(rings, pg.frame));
+                double whole = Poly.Area(paths);
+                if (whole > 1e-9)
+                {
+                    var inside = Poly.Intersect(paths, pg.paths);
+                    double share = Poly.Area(inside) / whole;
+                    if (share < 0.999)
+                    {
+                        area = c.Area * Math.Max(0, share);
+                        rings = inside.Where(x => x.Count >= 3).Select(x => x.Select(q => { var w = pg.frame.To3D(q.X / Poly.Scale, q.Y / Poly.Scale); return new[] { w.X, w.Y, w.Z }; }).ToList()).ToList();
+                    }
+                }
+            }
+            list.Add((c, rings, area, kept));
+        }
+        _contacts[face] = list;
+        return list;
+    }
+
+    private static Clipper2Lib.Paths64 ToPaths(IEnumerable<List<double[]>> rings, Frame frame)
+    {
+        var paths = new Clipper2Lib.Paths64();
+        foreach (var ring in rings)
+        {
+            var path = new Clipper2Lib.Path64(ring.Count);
+            foreach (var q in ring) { var (u, v) = frame.To2D(V3.Of(q)); path.Add(Poly.P(u, v)); }
+            if (path.Count >= 3) paths.Add(path);
+        }
+        return paths;
     }
 
     /// <summary>
-    /// 빗금 딱지 하나(R73a4 «이 부재만 보기»): 이웃 이름 · 딱지 자리(그 면 · 그 이름의 가장 넓은 고리의 넓이 가운데 — 모델 좌표) · 넓이 · 빼지 않은 자리인가.
+    /// 그 면 결과의 다각형(원본 입체 면의 고리 — 바깥 + 구멍 · 면 평면 좌표계). 곡면 · 원본을 모르면 null. 다 덮인 면의 보기용 조각(R73a6)도 이것으로 짓는다.
     /// </summary>
-    public sealed record CutMark(string Label, Vec3 At, double Area, bool Kept);
+    internal (Frame frame, Clipper2Lib.Paths64 paths)? FacePolygon(FaceResult face)
+    {
+        if (face.Normal is not { Length: 3 } n || ElementOf(face.ElementId) is not { } el || face.Solid >= el.Solids.Count || face.Face >= el.Solids[face.Solid].Faces.Count) return null;
+        var loops = el.Solids[face.Solid].Faces[face.Face].Loops.Where(l => l.Pts.Count >= 3).Select(l => l.Pts).ToList();
+        if (loops.Count == 0) return null;
+        var frame = Frame.Of(V3.Of(loops[0][0]), V3.Of(n));
+        var paths = Poly.Normalize(ToPaths(loops, frame));
+        return paths.Count == 0 ? null : (frame, paths);
+    }
+
+    private Dictionary<long, FormworkElement>? _elementsById;
+    private IReadOnlyList<ElementFormwork>? _elementsFor;
+    private FormworkElement? ElementOf(long id)
+    {
+        if (!ReferenceEquals(_elementsFor, Results)) { _elementsById = ElementsById(); _elementsFor = Results; }
+        return _elementsById!.TryGetValue(id, out var el) ? el : null;
+    }
+
+    /// <summary>
+    /// 빗금 딱지 하나(R73a4 «이 부재만 보기»): 이웃 이름 · 딱지 자리(그 면 · 그 이름의 가장 넓은 고리의 넓이 가운데 — 모델 좌표) · 넓이 · 빼지 않은 자리인가 ·
+    /// 그 덩이의 이웃(R73a7 — 딱지 자리 고리의 이웃 먼저 · 딱지를 누르면 그 이웃의 맞닿은 면으로).
+    /// </summary>
+    public sealed record CutMark(string Label, Vec3 At, double Area, bool Kept, IReadOnlyList<long>? Others = null, long Owner = 0);
+
+    /// <summary>
+    /// 딱지를 누르면 갈 이웃의 면(R73a7 — JACK 1102 «해당 객체의 해당 겹치는 부위로»): 그 자리에서 이 면(법선 normal)을 마주한 이웃의 면(FaceAtPoint) ·
+    /// 없으면(두 부재가 파고들어 겹친 자리 — 벽이 슬래브 옆을 뚫음 · 계단이 슬래브에 묻힘) 그 이웃의 면 가운데 이 부재(owner)와 닿은 자리 고리가 그 점에서 가장 가까운 면
+    /// (1 m 안 · 고를 수 있는 면 먼저). 없으면 null.
+    /// </summary>
+    public BoardFace? TouchFace(long other, long owner, Vec3 at, Vec3 normal)
+    {
+        if (FaceAtPoint(other, at, normal) is { } facing) return facing;
+        BoardFace? best = null;
+        double gap = 1.0;
+        bool bestPick = false;
+        foreach (var f in FacesOfElement(other))
+        {
+            if (f.Face.Normal is not { Length: 3 } nn) continue;
+            var n = new Vec3(nn[0], nn[1], nn[2]);
+            bool pick = f.Covered || !f.Fixed;
+            foreach (var (c, rings, _, _) in ContactsOf(f.Face))
+            {
+                if (c.ElementId != owner || rings.Count == 0) continue;
+                double d = Inside(rings, at, n) ? Math.Abs(n.Dot(at) - f.Face.PlaneD) : double.MaxValue;
+                foreach (var ring in rings)
+                    for (int i = 0, j = ring.Count - 1; i < ring.Count; j = i++)
+                    {
+                        var a = V3Of(ring[j]);
+                        var ab = V3Of(ring[i]) - a;
+                        double len = ab.Dot(ab), s = len > 1e-18 ? Math.Clamp((at - a).Dot(ab) / len, 0, 1) : 0;
+                        d = Math.Min(d, (a + ab * s - at).Length);
+                    }
+                if ((pick && !bestPick && d < 1.0) || (pick == bestPick && d < gap - 1e-9)) (best, gap, bestPick) = (f, d, pick);
+            }
+        }
+        return best;
+        static Vec3 V3Of(double[] q) => new(q[0], q[1], q[2]);
+    }
 
     /// <summary>
     /// 면 하나(FaceResult)의 빠진 · 빼지 않은 자리(R73a4): 바깥 법선(곡면이면 영 벡터 — 뒤를 보는 면의 빗금 · 딱지는 화면이 숨긴다) · 이름마다의 갈래(CutsOf 와 같은 셈) ·
-    /// 딱지(이름마다 · 빠진 / 빼지 않은 자리마다 하나 — 한 면에 같은 이웃이 여러 고리여도 가장 넓은 고리에 하나 · min ㎡ 아래는 없음 · 넓은 차례).
+    /// 딱지(이름마다 · 빠진 / 빼지 않은 자리마다 · R73a6 부터 떨어진 덩이마다 하나 — 덩이의 가장 넓은 고리 가운데 · 덩이 넓이가 min ㎡ 아래면 없음 · 넓은 차례).
     /// </summary>
     public sealed record FaceCuts(FaceResult Face, Vec3 Normal, IReadOnlyList<FaceCut> Cuts, IReadOnlyList<CutMark> Marks);
 
     /// <summary>
     /// 그 면들의 빠진 · 빼지 않은 자리를 면(FaceResult)마다(R73a4 — JACK 1102 «그 객체에서 거푸집이 어디에 생기는지 … 다른 객체와 닿는 부분만 확인할 수 있으면 돼»):
     /// 3D 빗금(면의 법선과 함께) · 이웃 이름 딱지. 갈래는 면마다 CutsOf 와 같은 셈(JointChipMin 아래는 면마다 뺌 — 그래서 면마다 더한 것은 CutsOf(같은 면들)보다 그만큼 작을 수 있다).
-    /// 갈래가 없는 면은 뺀다.
+    /// 갈래가 없는 면은 뺀다. R73a7(JACK 1102 «계단 … 옆면이 여러 개로 조각나 있어서 벽체 벽체 벽체 벽체 이런 식으로 나와서»): 딱지 덩이는 같은 부재 · 같은 평면의 면들을
+    /// 함께 본다 — 단마다 따로인 계단 옆면의 이어진 빗금은 딱지 하나(딱지는 덩이의 가장 넓은 고리를 낸 면에 · 그 고리의 넓이 가운데).
     /// </summary>
     public List<FaceCuts> CutsByFace(IEnumerable<BoardFace> faces, double markMin)
     {
         var elements = ElementsById();
-        var list = new List<FaceCuts>();
+        var entries = new List<(FaceResult face, Vec3 n, List<FaceCut> cuts)>();
         foreach (var face in faces.Select(f => f.Face).Distinct(ReferenceEqualityComparer.Instance).Cast<FaceResult>())
         {
             var cuts = CutsOf(new[] { face }, elements);
             if (cuts.Count == 0) continue;
-            var n = face.Normal is { Length: 3 } nn ? new Vec3(nn[0], nn[1], nn[2]) : Vec3.Zero;
-            var marks = new List<CutMark>();
-            if (n.Length > 0.5)
-                foreach (var cut in cuts)
-                    foreach (var (rings, area, kept) in new[] { (cut.Rings, cut.Area, false), (cut.KeptRings, cut.Kept, true) })
-                        if (area >= markMin && RingCenter(rings, n) is { } at) marks.Add(new CutMark(cut.Label, at, area, kept));
-            list.Add(new FaceCuts(face, n, cuts, marks.OrderByDescending(m => m.Area).ToList()));
+            entries.Add((face, face.Normal is { Length: 3 } nn ? new Vec3(nn[0], nn[1], nn[2]) : Vec3.Zero, cuts));
         }
-        return list;
+        // 같은 부재 · 같은 평면(법선 1e-6 · 거리 SamePlaneGap)끼리 — 곡면은 딱지 없음.
+        var planes = new List<List<int>>();
+        for (int i = 0; i < entries.Count; i++)
+        {
+            if (entries[i].n.Length < 0.5) continue;
+            var (fi, ni, _) = entries[i];
+            var plane = planes.FirstOrDefault(p => entries[p[0]].face.ElementId == fi.ElementId && entries[p[0]].n.Dot(ni) >= 1 - 1e-6 && Math.Abs(entries[p[0]].face.PlaneD - fi.PlaneD) <= SamePlaneGap);
+            if (plane != null) plane.Add(i);
+            else planes.Add(new List<int> { i });
+        }
+        var marks = entries.Select(_ => new List<CutMark>()).ToList();
+        // R73a6(JACK 1102 «같은 객체라도 해당 뷰에서 나눠졌다면 객체 이름표를 다 붙여 줘»): 떨어진 빗금 덩이마다 딱지 하나(이어진 고리 · 품은 구멍은 한 덩이).
+        foreach (var plane in planes)
+        {
+            var n = entries[plane[0]].n;
+            foreach (string label in plane.SelectMany(i => entries[i].cuts.Select(c => c.Label)).Distinct(StringComparer.Ordinal))
+                foreach (bool kept in new[] { false, true })
+                {
+                    var rings = new List<IReadOnlyList<Vec3>>();
+                    var owners = new List<long>();
+                    var from = new List<int>();
+                    foreach (int i in plane)
+                        foreach (var cut in entries[i].cuts.Where(c => c.Label == label))
+                        {
+                            var (own, ids) = kept ? (cut.KeptRings, cut.KeptRingOwners) : (cut.Rings, cut.RingOwners);
+                            for (int k = 0; k < own.Count; k++)
+                            {
+                                rings.Add(own[k]);
+                                owners.Add(ids != null && k < ids.Count ? ids[k] : cut.Others.FirstOrDefault());
+                                from.Add(i);
+                            }
+                        }
+                    foreach (var region in RegionIndices(rings, n))
+                    {
+                        var shape = region.Select(k => rings[k]).ToList();
+                        double area = RegionArea(shape, n);
+                        if (area < markMin || RingCenter(shape, n) is not { } at) continue;
+                        // 넓이 가운데가 빗금 밖이면(가운데가 뚫린 고리 — 드레인 피트 윗면 · ㄱ자) 빗금 안의 점으로(R73a7 전수 검사 6 — 딱지가 구멍 위에 떠 · 누르면 이웃의 면을 못 찾았다).
+                        if (!Inside(shape.Select(r => r.Select(p => new[] { p.X, p.Y, p.Z }).ToList()).ToList(), at, n) && InteriorPoint(shape, n) is { } inner) at = inner;
+                        int lead = region.OrderByDescending(k => Math.Abs(RegionArea(new[] { rings[k] }, n))).First();   // 딱지 자리 = 가장 넓은 고리(RingCenter 와 같은 고리)
+                        var others = new[] { owners[lead] }.Concat(region.Select(k => owners[k])).Distinct().ToList();
+                        marks[from[lead]].Add(new CutMark(label, at, area, kept, others, entries[from[lead]].face.ElementId));
+                    }
+                }
+        }
+        return entries.Select((e, i) => new FaceCuts(e.face, e.n, e.cuts, marks[i].OrderByDescending(m => m.Area).ToList())).ToList();
+    }
+
+    /// <summary>
+    /// 고리들을 떨어진 덩이로 나눈다(R73a6 — 빗금 딱지 덩이마다): 두 고리가 맞닿거나(한 고리의 꼭짓점이 다른 고리의 변에서 SpotEdge 안) 겹치거나 품으면(꼭짓점이 안)
+    /// 한 덩이. 덩이 차례 = 첫 고리 차례. 면 평면 위의 고리만(법선 n).
+    /// </summary>
+    public static List<List<IReadOnlyList<Vec3>>> Regions(IReadOnlyList<IReadOnlyList<Vec3>> rings, Vec3 n)
+    {
+        var list = rings.Where(r => r.Count >= 3).ToList();
+        return RegionIndices(list, n).Select(g => g.Select(i => list[i]).ToList()).ToList();
+    }
+
+    // 고리들(바깥 + 구멍 — 짝홀) 안의 점(R73a7): 면 평면에서 세모로 나눈 가장 넓은 세모의 가운데(모델 좌표). 없으면 null.
+    private static Vec3? InteriorPoint(IReadOnlyList<IReadOnlyList<Vec3>> rings, Vec3 n)
+    {
+        var first = rings.FirstOrDefault(r => r.Count >= 3);
+        if (first == null) return null;
+        var frame = Frame.Of(new V3(first[0].X, first[0].Y, first[0].Z), new V3(n.X, n.Y, n.Z));
+        var paths = Poly.Normalize(ToPaths(rings.Where(r => r.Count >= 3).Select(r => r.Select(p => new[] { p.X, p.Y, p.Z }).ToList()), frame));
+        var tri = Poly.Triangles(paths);
+        (double u, double v)? best = null;
+        double most = 0;
+        for (int i = 0; i + 2 < tri.Count; i += 3)
+        {
+            var (a, b, c) = (tri[i], tri[i + 1], tri[i + 2]);
+            double s = Math.Abs((b.u - a.u) * (c.v - a.v) - (b.v - a.v) * (c.u - a.u));
+            if (s > most) (most, best) = (s, ((a.u + b.u + c.u) / 3, (a.v + b.v + c.v) / 3));
+        }
+        if (best is not { } q) return null;
+        var w = frame.To3D(q.u, q.v);
+        return new Vec3(w.X, w.Y, w.Z);
+    }
+
+    // 덩이마다 고리 차례(R73a7 — 고리마다 이웃을 따라가려고 · Regions 와 같은 셈). 꼭짓점이 셋 안 되는 고리는 들지 않는다.
+    private static List<List<int>> RegionIndices(IReadOnlyList<IReadOnlyList<Vec3>> rings, Vec3 n)
+    {
+        var list = Enumerable.Range(0, rings.Count).Where(i => rings[i].Count >= 3).ToList();
+        var parent = Enumerable.Range(0, list.Count).ToArray();
+        int Root(int i) { while (parent[i] != i) i = parent[i] = parent[parent[i]]; return i; }
+        var outlines = list.Select(i => new List<List<double[]>> { rings[i].Select(p => new[] { p.X, p.Y, p.Z }).ToList() }).ToList();
+        for (int i = 0; i < list.Count; i++)
+            for (int j = i + 1; j < list.Count; j++)
+            {
+                if (Root(i) == Root(j)) continue;
+                var (a, b) = (rings[list[i]], rings[list[j]]);
+                if (a.Any(p => Inside(outlines[j], p, n)) || b.Any(p => Inside(outlines[i], p, n)) || Crossing(a, b, n)) parent[Root(j)] = Root(i);
+            }
+        return Enumerable.Range(0, list.Count).GroupBy(Root).OrderBy(g => g.Min()).Select(g => g.Select(i => list[i]).ToList()).ToList();
+    }
+
+    // 두 고리의 변이 엇갈리는가(꼭짓점이 서로 밖인 십자 겹침 — 면 평면에서 법선의 가장 큰 축을 버리고 센다).
+    private static bool Crossing(IReadOnlyList<Vec3> a, IReadOnlyList<Vec3> b, Vec3 n)
+    {
+        double ax = Math.Abs(n.X), ay = Math.Abs(n.Y), az = Math.Abs(n.Z);
+        (double u, double v) Flat(Vec3 p) => az >= ax && az >= ay ? (p.X, p.Y) : ay >= ax ? (p.X, p.Z) : (p.Y, p.Z);
+        static double Side((double u, double v) o, (double u, double v) p, (double u, double v) q) => (p.u - o.u) * (q.v - o.v) - (p.v - o.v) * (q.u - o.u);
+        for (int i = 0; i < a.Count; i++)
+        {
+            var (p1, p2) = (Flat(a[i]), Flat(a[(i + 1) % a.Count]));
+            for (int j = 0; j < b.Count; j++)
+            {
+                var (q1, q2) = (Flat(b[j]), Flat(b[(j + 1) % b.Count]));
+                if (Side(p1, p2, q1) * Side(p1, p2, q2) < 0 && Side(q1, q2, p1) * Side(q1, q2, p2) < 0) return true;
+            }
+        }
+        return false;
+    }
+
+    // 덩이의 넓이(고리 넓이를 법선 쪽으로 더함 — 반대로 도는 구멍은 빠진다 · 음수면 크기).
+    private static double RegionArea(IReadOnlyList<IReadOnlyList<Vec3>> rings, Vec3 n)
+    {
+        double sum = 0;
+        foreach (var ring in rings)
+            for (int i = 1; i + 1 < ring.Count; i++) sum += n.Dot((ring[i] - ring[0]).Cross(ring[i + 1] - ring[0])) / 2;
+        return Math.Abs(sum);
     }
 
     // 가장 넓은 고리의 넓이 가운데(면 평면 위 — 첫 점에서 부채꼴 세모로 · 넓이가 거의 0 이면 점의 가운데). 고리가 없으면 null.
@@ -292,6 +516,22 @@ public sealed partial class FormworkBoard
     public sealed record CutSpot(BoardFace Face, long Other, string Label, bool Kept, double Area, IReadOnlyList<BoardFace> Faces,
                                  IReadOnlyList<IReadOnlyList<Vec3>> Rings, Vec3 Normal);
 
+    /// <summary>
+    /// 도구가 그 자리를 바꿀 수 없는 까닭(R73a6 — 이름표 한 줄 · 없으면 null): 다 덮인 하부면(받침 콘크리트 위 — 거푸집을 댈 수 없는 자리) · 곡면(기록 열쇠가 평면).
+    /// </summary>
+    public string? ToolBlock(CutSpot spot) =>
+        spot.Face.Face.Normal is not { Length: 3 } ? "곡면 접합부는 기록할 수 없습니다"
+        // R73a7: 상부면(드레인 피트 위의 바닥슬래브 · 바닥슬래브 위의 벽 자리)은 원래 거푸집이 없다 — 빗금은 닿은 자리를 보기만(분석도 윗면은 접합부 규칙을 보지 않는다).
+        : spot.Face.Face.Class == FaceClass.Top ? "상부면 접합부는 거푸집 수량과 관계없습니다"
+        // 받친 하부면(다 덮인 하부면 — 벽 · 기둥 · 슬래브가 바닥 위에 앉은 자리 · 기초 · 버림이 받친 하부면)은 «겹침: 무시»를 적어도 분석이 받침(땅)으로 보아
+        // 거푸집이 되지 않는다(실제 모델 전수 검사: 바닥 위 벽 밑 · 피트 위 슬래브 밑 · 버림 위 기초는 거의 그대로).
+        // 판이 있는 슬래브 밑의 벽 · 보 자리(동바리)는 바꿀 수 있다(실제 모델 전수 검사 — 그 넓이만큼 바뀜).
+        // R73a6 설치 전 검토 중간: 아래 경사면(계단 사면 ← 트렌치 등)도 · 일부만 얹힌 하부면도 — 벽 · 보 · 기둥이 아닌 이웃(슬래브 · 기초 · 버림 · 그 밖)이 받친 자리.
+        : spot.Face.Face.Class is FaceClass.Bottom or FaceClass.SlopeDown && !spot.Kept
+          && (spot.Face.Covered || ElementOf(spot.Other) is not { Kind: MemberKind.Wall or MemberKind.Beam or MemberKind.Column })
+            ? "받친 하부면 접합부는 공제 제외할 수 없습니다"
+        : null;
+
     /// <summary>고리 안 판정의 여유(m — 변에서 이만큼 밖도 안으로 친다 · 5 mm).</summary>
     public const double SpotEdge = 0.005;
 
@@ -304,12 +544,13 @@ public sealed partial class FormworkBoard
     /// 가려진 것으로 뺀다 — 빠진 자리는 판의 구멍이라 시선이 그 부재의 몸(면 평면)에 닿고 · 넣은 자리는 판 위에 닿는다. 여럿이면 가장 앞(시선이 먼저 지나는) 평면.
     /// 없으면 null.
     /// </summary>
-    public CutSpot? CutAt(IEnumerable<BoardFace> faces, Vec3 origin, Vec3 direction, double visible = double.PositiveInfinity)
+    public CutSpot? CutAt(IEnumerable<BoardFace> faces, Vec3 origin, Vec3 direction, double visible = double.PositiveInfinity, Func<BoardFace, bool>? shown = null)
     {
         if (direction.Length < 1e-12) return null;
         var dir = direction.Unit();
         BoardFace? best = null;
         FaceCover? cover = null;
+        double coverArea = 0;
         bool kept = false;
         double bestT = double.MaxValue;
         var seen = new HashSet<FaceResult>(ReferenceEqualityComparer.Instance);
@@ -324,23 +565,39 @@ public sealed partial class FormworkBoard
             if (t > visible + SpotBehind || t > bestT + 1e-6) continue;
             var q = origin + dir * t;
             // 이웃끼리 겹친 자리(버림 위 벽 등)는 좁은 것 — 넓은 것은 다른 자리를 눌러 바꿀 수 있지만 좁은 것은 그 자리뿐이다.
-            foreach (var (c, isKept) in face.Covers.Concat(face.Cut).Select(c => (c, false)).Concat(face.Ignored.Select(c => (c, true))))
-                if ((t < bestT - 1e-6 || c.Area < cover!.Area) && Inside(c.Outline, q, n))
-                    (best, cover, kept, bestT) = (f, c, isKept, Math.Min(t, bestT));
+            // R73a6: 그 면 다각형으로 자른 고리(ContactsOf — 면 밖에 놓인 자국은 찾지 않는다).
+            foreach (var (c, cRings, cArea, isKept) in ContactsOf(face))
+                if (cRings.Count > 0 && (t < bestT - 1e-6 || cArea < coverArea) && Inside(cRings, q, n))
+                    (best, cover, coverArea, kept, bestT) = (f, c, cArea, isKept, Math.Min(t, bestT));
         }
         if (best == null || cover == null) return null;
         var elements = ElementsById();
         string label = elements.TryGetValue(cover.ElementId, out var el) ? JointLabel(el) : "주변 콘크리트";
         var scope = SamePlaneFaces(new[] { best });
-        double area = 0;
         var rings = new List<IReadOnlyList<Vec3>>();
+        // 바뀔 넓이(R73a6 — 녹촌 · 송악3 전수 검사 3): 그 범위(같은 평면 면들)에서 그 이웃 자리를 한 평면에 모아 합친 것(입체가 여럿인 계단은 같은 평면 면이 겹쳐 두 번 셌다) −
+        // 다른 이웃이 공제한 자리(겹친 자리는 그 이웃만 바꿔도 거푸집이 되지도 · 빠지지도 않는다) · 넣은 자리를 다시 공제할 때는 지금 세는 조각 안의 몫만
+        // (계단 경사면 — 넣은 자리 일부가 «아래 콘크리트와의 틈이 너무 좁음» 조각에 들어 원래 세지 않음). 면 다각형을 모르면(곡면) 분석 넓이를 더한다.
+        var plane = FacePolygon(best.Face)?.frame;
+        var union = new Clipper2Lib.Paths64();
+        double loose = 0;
         foreach (var face in scope.Select(x => x.Face).Distinct(ReferenceEqualityComparer.Instance).Cast<FaceResult>())
-            foreach (var c in kept ? face.Ignored : face.Covers.Concat(face.Cut))
+        {
+            var contacts = ContactsOf(face);
+            bool drawn = shown == null || scope.Any(x => ReferenceEquals(x.Face, face) && shown(x));
+            foreach (var (c, cr, ca, ck) in contacts)
             {
-                if (c.ElementId != cover.ElementId) continue;
-                area += c.Area;
-                rings.AddRange(c.Outline.Where(r => r.Count >= 3).Select(r => (IReadOnlyList<Vec3>)r.Select(p => new Vec3(p[0], p[1], p[2])).ToList()));
+                if (c.ElementId != cover.ElementId || ck != kept) continue;
+                if (drawn) rings.AddRange(cr.Select(r => (IReadOnlyList<Vec3>)r.Select(p => new Vec3(p[0], p[1], p[2])).ToList()));
+                if (plane == null || cr.Count == 0) { loose += ca; continue; }
+                var left = Poly.Normalize(ToPaths(cr, plane));
+                var others = Poly.Normalize(ToPaths(contacts.Where(x => x.cover.ElementId != cover.ElementId && !x.kept).SelectMany(x => x.rings), plane));
+                if (others.Count > 0) left = Poly.Difference(left, others);
+                if (kept) left = Poly.Intersect(left, Poly.Normalize(ToPaths(face.Patches.Where(p => p.Counted).SelectMany(p => p.Outline).Where(r => r.Count >= 3), plane)));
+                union = union.Count == 0 ? left : Poly.Union(union, left);
             }
+        }
+        double area = Poly.Area(union) + loose;
         var normal = new Vec3(best.Face.Normal[0], best.Face.Normal[1], best.Face.Normal[2]);
         return new CutSpot(best, cover.ElementId, label, kept, area, scope, rings, normal);
     }

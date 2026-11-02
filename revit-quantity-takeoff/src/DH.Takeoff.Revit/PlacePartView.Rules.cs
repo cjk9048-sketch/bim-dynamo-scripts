@@ -25,7 +25,7 @@ public partial class PlacePartView
     private FrameworkElement BuildSideTabs()
     {
         _fwTabPlates = _ui.Segment("판", "판마다 종류 · 자리를 정합니다.", "fw.tab.plates");
-        _fwTabRules = _ui.Segment("규칙", "부재끼리 닿은 자리를 뺄지 정합니다(칠 때 · 짝 예외).", "fw.tab.rules");
+        _fwTabRules = _ui.Segment("규칙", "부재 간 접합부의 공제 여부를 정합니다(타설 순서 · 짝 예외).", "fw.tab.rules");
         _fwTabPlates.IsChecked = !_fwRulesOpen;
         _fwTabRules.IsChecked = _fwRulesOpen;
         _fwTabPlates.Checked += (_, _) => ShowRulesTab(false);
