@@ -514,7 +514,7 @@ public static class FormworkAnalyzer
             if (c.F.Class == FaceClass.Side && c.P.Side == "외측" && !near[i].Any(IsBelow)
                 && near[i].Any(j => IsAbove(j) && WallLike(cands[j].R.Element, options))
                 && !near[i].Any(j => WallLike(cands[j].R.Element, options) && !IsAbove(j))) return true;
-            return c.P.Side.StartsWith("내측", StringComparison.Ordinal) && near[i].Any(IsBelow) && near[i].Any(IsAbove);
+            return (c.P.Side.StartsWith("내측", StringComparison.Ordinal) || c.P.UpperEdge) && near[i].Any(IsBelow) && near[i].Any(IsAbove);
         }
 
         // 낮은 벽 w(제 종류)가 슬래브 조각 s 위에 얹혔나.
@@ -969,6 +969,11 @@ public static class FormworkAnalyzer
         var slabHits = new List<(Body slab, Paths64 hit)>();
         var ignoredHits = new Paths64();
         var cutIns = new Dictionary<long, double>();
+        // R73a2(JACK 1030 «빠진 자리를 3D에 빗금으로»): 이웃마다 빠진 자리(맞닿음 · 깎인 자리 · 무시한 자리)의 모양 — FaceCover.Outline. 넓이는 위 사전 그대로.
+        var coverAt = new Dictionary<long, Paths64>();
+        var cutAt = new Dictionary<long, Paths64>();
+        var ignoredAt = new Dictionary<long, Paths64>();
+        static void Gather(Dictionary<long, Paths64> map, long id, Paths64 region) => map[id] = map.TryGetValue(id, out var had) ? Poly.Union(had, region) : region;
         var fills = new Paths64();
         foreach (var other in neighbours)
         {
@@ -1001,12 +1006,21 @@ public static class FormworkAnalyzer
             if (ignore)
             {
                 ignored[other.El.Id] = ignored.GetValueOrDefault(other.El.Id) + contact + cutArea;
+                Gather(ignoredAt, other.El.Id, cutIn != null ? Poly.Union(contactHit, cutIn) : contactHit);
                 if (cutIn != null) fills = Poly.Union(fills, cutIn);
             }
             else
             {
-                if (other.El.Id != body.El.Id && contact >= Tiny) covers[other.El.Id] = covers.GetValueOrDefault(other.El.Id) + contact;
-                if (cutIn != null) cutIns[other.El.Id] = cutIns.GetValueOrDefault(other.El.Id) + cutArea;
+                if (other.El.Id != body.El.Id && contact >= Tiny)
+                {
+                    covers[other.El.Id] = covers.GetValueOrDefault(other.El.Id) + contact;
+                    Gather(coverAt, other.El.Id, contactHit);
+                }
+                if (cutIn != null)
+                {
+                    cutIns[other.El.Id] = cutIns.GetValueOrDefault(other.El.Id) + cutArea;
+                    Gather(cutAt, other.El.Id, cutIn);
+                }
             }
             if (cut.Count > 0) near.Add((cut, contactHit, ignore));
             if (slabCut && other.El.Id != body.El.Id)
@@ -1034,7 +1048,7 @@ public static class FormworkAnalyzer
             var hit = fills.Count > 0 ? Poly.Intersect(paths, outCut) : contactHit;
             if (Poly.Area(hit) >= Tiny) cover = Poly.Union(cover, hit);
         }
-        result.Cut = cutIns.Select(kv => new FaceCover { ElementId = kv.Key, Area = kv.Value }).OrderByDescending(c => c.Area).ToList();
+        result.Cut = cutIns.Select(kv => new FaceCover { ElementId = kv.Key, Area = kv.Value, Outline = OutlineOf(frame, cutAt[kv.Key]) }).OrderByDescending(c => c.Area).ToList();
         var net = cover.Count > 0 ? Poly.Difference(paths, cover) : paths;
         result.Covered = Poly.Area(cover);
         // 나중에 치는 부재가 맞닿았지만 구조체라서 거푸집으로 센 넓이(다른 콘크리트가 이미 덮은 자리는 빼고) — 어느 부재에 얼마를 돌려 셌는지 일지로 본다.
@@ -1060,8 +1074,9 @@ public static class FormworkAnalyzer
                 result.StairCovered = Poly.Area(taken.Count > 0 ? Poly.Difference(stairCover, taken) : stairCover);
             }
         }
-        result.Covers = covers.Select(kv => new FaceCover { ElementId = kv.Key, Area = kv.Value }).OrderByDescending(c => c.Area).ToList();
-        result.Ignored = ignored.Select(kv => new FaceCover { ElementId = kv.Key, Area = kv.Value }).OrderByDescending(c => c.Area).ToList();
+        result.Covers = covers.Select(kv => new FaceCover { ElementId = kv.Key, Area = kv.Value, Outline = OutlineOf(frame, coverAt[kv.Key]) }).OrderByDescending(c => c.Area).ToList();
+        result.Ignored = ignored.Select(kv => new FaceCover { ElementId = kv.Key, Area = kv.Value, Outline = ignoredAt.TryGetValue(kv.Key, out var at) ? OutlineOf(frame, at) : new() })
+            .OrderByDescending(c => c.Area).ToList();
         if (curvedNeighbour) result.Flag = "곡면 부재가 곁에 있어 맞닿은 자리를 다 재지 못함";
         else if (brokenNeighbour) result.Flag = "곁 부재의 단면을 잇지 못해 맞닿은 자리를 다 재지 못함";
 
@@ -1153,10 +1168,14 @@ public static class FormworkAnalyzer
         return result;
     }
 
+    // 면 평면의 자리 → 고리마다 점(x, y, z — 조각의 테두리 · 빠진 자리의 모양 R73a2).
+    private static List<List<double[]>> OutlineOf(Frame frame, Paths64 region) =>
+        region.Select(path => path.Select(p => { V3 q = frame.To3D(p.X / Poly.Scale, p.Y / Poly.Scale); return new[] { q.X, q.Y, q.Z }; }).ToList()).ToList();
+
     private static FacePatch Patch(Frame frame, Paths64 region, double area) => new()
     {
         Area = area,
-        Outline = region.Select(path => path.Select(p => { V3 q = frame.To3D(p.X / Poly.Scale, p.Y / Poly.Scale); return new[] { q.X, q.Y, q.Z }; }).ToList()).ToList(),
+        Outline = OutlineOf(frame, region),
         Triangles = Poly.Triangles(region).Select(t => { V3 q = frame.To3D(t.u, t.v); return new[] { q.X, q.Y, q.Z }; }).ToList(),
     };
 
@@ -1315,6 +1334,11 @@ public static class FormworkAnalyzer
         double zLow = frame.O.Z + v0 * vz, zHigh = frame.O.Z + v1 * vz;
         // 부재를 꿰뚫은 구멍의 둘레 면은 안팎이 없다 — 개구부다.
         var (side, note) = hole ? (Opening, "") : SideOf(ctx, body, frame, part, zLow, zHigh);
+        // R72(JACK 2026-10-30 고름 «2D 처럼»): 위 슬래브(중간 · 상부)의 안쪽 옆면은 슬래브 개구부다 — 따냄이 벽 쪽으로 열려 고리가 아니어도(녹촌 계단실 따냄 ·
+        // 2D «상부및 중간스라브 개구부»). 구역으로 가르지 않고 «HOLE 주위»에. 끼인 자리 · 바닥 물려주기는 안쪽 옆면 그대로(FacePatch.UpperEdge).
+        // 면이 슬래브 밑까지 내려온 것만 — 꿰뚫지 않은 홈(배수 홈)의 옆면은 «내측» 그대로(설치 전 검토 R72 낮음).
+        bool upperEdge = bands && side == "내측" && UpperSlab(body.El, ctx.Options) && frame.O.Z + face.v0 * vz <= body.Min.Z + 0.01;
+        if (upperEdge) side = Opening;
 
         // 안쪽이면 구역 상자로 자른다(긴 벽이 두 구역에 걸칠 수 있다). 남는 자리는 구역 이름 없는 '내측'.
         // R69: 그 앞에, 안쪽 벽 면을 그 면에 슬래브가 닿는 높이에서 가른다(SlabCut — 구멍 옆 띠는 «개구부», 아래 · 위는 안쪽 그대로).
@@ -1356,7 +1380,7 @@ public static class FormworkAnalyzer
             if (!bands || ctx.Options.Bands.Count == 0 || vz < 0.2)
             {
                 var whole = Patch(frame, region, Poly.Area(region));
-                whole.Counted = true; whole.Side = tag; whole.Note = note; whole.SlabBand = band; whole.SlabCut = cut;
+                whole.Counted = true; whole.Side = tag; whole.Note = note; whole.SlabBand = band; whole.SlabCut = cut; whole.UpperEdge = upperEdge;
                 yield return whole;
                 continue;
             }
@@ -1381,7 +1405,7 @@ public static class FormworkAnalyzer
             // 나중 부재와 따로 적는 것(버림 · 받침류 — StandsAlone)은 남기지 않는다 — 버림 옆면 위의 하부슬래브가 버림 밑부터 재이지 않게(녹촌: 버림은 따로 6회).
             // R70(기준표 2 · 5): 슬래브 옆은 벽에서 물려받은 바깥 조각(벽 위 중간 · 상부슬래브 옆 — 이어진 바깥면)만 물려준다. 안쪽 슬래브 옆 · 슬래브 띠(층마다 —
             // 안쪽 면은 제 층 바닥부터) · 맨 아래 바깥 슬래브 옆(하부슬래브 · 기초 — 합판 3회 따로: 그 위 벽은 슬래브 윗면부터)은 물려주지 않는다.
-            bool stops = band || (SlabLike(body.El, ctx.Options) && (tag.StartsWith("내측", StringComparison.Ordinal) || !inherited));
+            bool stops = band || (SlabLike(body.El, ctx.Options) && (tag.StartsWith("내측", StringComparison.Ordinal) || upperEdge || !inherited));
             if (!body.El.Later && !FormworkTable.StandsAlone(body.El) && region.Count > 0)
                 ctx.Floors.Add(new WallFloor
                 {
@@ -1399,7 +1423,7 @@ public static class FormworkAnalyzer
                 double area = Poly.Area(piece);
                 if (area < Tiny) continue;
                 var patch = Patch(frame, piece, area);
-                patch.Counted = true; patch.Side = tag; patch.Band = b; patch.Note = note; patch.SlabBand = band; patch.SlabCut = cut;
+                patch.Counted = true; patch.Side = tag; patch.Band = b; patch.Note = note; patch.SlabBand = band; patch.SlabCut = cut; patch.UpperEdge = upperEdge;
                 yield return patch;
             }
         }
@@ -1427,6 +1451,10 @@ public static class FormworkAnalyzer
 
     /// <summary>슬래브 같은 부재(R69): 수직면 덩어리에 드는 부재 가운데 벽 같은 부재가 아닌 것(바닥 · 중간 · 상부 · 기초 슬래브 — InLump 와 같은 잣대).</summary>
     internal static bool SlabLike(FormworkElement el, FormworkOptions options) => InLump(el, options) && !WallLike(el, options);
+
+    /// <summary>위 슬래브(중간 · 상부 — 부위 묶음 · 슬래브 낱말이 든 덩어리 슬래브 · 트라프 · 캐노피 빼고 — 설치 전 검토 R72 중간)인가(R72).</summary>
+    internal static bool UpperSlab(FormworkElement el, FormworkOptions options) =>
+        el.Kind == MemberKind.Slab && el.Part.Length > 0 && options.PartGroup(el.Part) == PartCatalog.Upper && SlabLike(el, options);
 
     /// <summary>방 바닥을 그 층 슬래브가 이만큼 넘게 덮으면 띠의 드러난 자리를 «슬래브 구멍 옆»으로 본다(R70 — 녹촌 · 송악3 덤프 계측으로 정함).</summary>
     public const double RoomCover = 0.5;

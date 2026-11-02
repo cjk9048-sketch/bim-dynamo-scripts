@@ -155,6 +155,9 @@ public sealed class FacePatch
     /// <summary>R69: 슬래브 높이에서 가른 면의 조각(아래 · 띠 · 위) — 전에 그 면에 건 기록이 넓이가 달라졌으면 «모양이 바뀐 판»(critic R69 M4).</summary>
     internal bool SlabCut { get; set; }
 
+    /// <summary>R72: «개구부»로 바꾼 위 슬래브의 안쪽 옆면(끼인 자리 · 바닥 물려주기는 안쪽 옆면 그대로).</summary>
+    internal bool UpperEdge { get; set; }
+
     /// <summary>
     /// 사람이 ② 3D 에서 뺀 판에 든 조각이면 그 판의 대표 열쇠(대응표 파일의 «뺀 판:…» 줄 — R48 · JACK 2026-10-16 «찍어서 빼기 · 판 한 장»), 아니면 "".
     /// 뺀 조각은 세지 않고(정한 것으로) 종류는 대응표대로 남긴다 — 맞닿은 바닥판 옆면이 이 벽 조각의 종류를 그대로 따르게.
@@ -235,6 +238,9 @@ public sealed class FaceCover
 {
     public long ElementId { get; set; }
     public double Area { get; set; }
+
+    /// <summary>그 이웃 때문에 빠진(무시면 되살린) 자리의 모양 — 면 평면의 고리(바깥 + 구멍)마다 점(x, y, z). ② 빗금(R73a2 — JACK 1030 «빠진 자리를 3D에 빗금으로»).</summary>
+    public List<List<double[]>> Outline { get; set; } = new();
 }
 
 /// <summary>면 하나의 결과.</summary>

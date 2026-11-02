@@ -69,6 +69,11 @@ public sealed class FormworkPiece
     /// <summary>바깥으로 조금 띄운 세모 + 테두리(장면 좌표 — 부재의 겉면과 같은 원점을 뺐다). 이은 판의 테두리는 합친 테두리 하나다.</summary>
     public MeshData Mesh { get; internal set; } = new();
 
+    /// <summary>
+    /// 조각마다 Mesh 의 세모 범위(R73a — 면 단위 찍기: 세모 → 조각 → 면). 겉면을 지을 때 실제로 더한 세모로 센다(찌그러진 세모는 빠진다) · 세모 차례대로.
+    /// </summary>
+    public IReadOnlyList<FormworkBoard.PatchSpan> Spans { get; internal set; } = Array.Empty<FormworkBoard.PatchSpan>();
+
     internal int LeadIndex { get; set; }
 
     /// <summary>덩이를 대표하는 조각(판은 가장 넓은 조각 — 엑셀 줄의 부호 · 부위를 준 조각 · 뺀 판은 대표 열쇠의 조각).</summary>
@@ -129,9 +134,12 @@ public sealed partial class FormworkBoard
     public Vec3 Origin => _origin;
     private readonly Func<long, (string part, string zone)> _placeOf;
     private readonly Func<string, int> _partOrder;
-    // 덩이의 겉면은 든 조각이 같으면 다시 쓴다(대응표를 고칠 때 바뀐 판만 다시 짓게).
+    // 덩이의 겉면은 든 조각이 같으면 다시 쓴다(대응표를 고칠 때 바뀐 판만 다시 짓게) — 조각마다의 세모 범위(R73a)도 함께 담아 둔다.
     private readonly Dictionary<FacePatch, int> _serial = new(ReferenceEqualityComparer.Instance);
-    private Dictionary<string, MeshData> _meshes = new(StringComparer.Ordinal);
+    private Dictionary<string, (MeshData mesh, PatchSpan[] spans)> _meshes = new(StringComparer.Ordinal);
+
+    /// <summary>덩이 겉면 안의 조각 하나의 세모 범위(R73a): 세모 First ~ First + Count − 1(Mesh.T 의 세모 차례).</summary>
+    public readonly record struct PatchSpan(FacePatch Patch, int First, int Count);
 
     /// <param name="results">Analyze 의 결과(곡면 조각의 세모는 붙인 뒤 — 없으면 그 곡면은 칠하지 않는다).</param>
     /// <param name="origin">장면의 원점(m) — 부재의 겉면(ZoneScene)에서 뺀 것과 같은 값.</param>
@@ -166,6 +174,12 @@ public sealed partial class FormworkBoard
 
     /// <summary>모든 조각의 거푸집 넓이(㎡).</summary>
     public double Total => Totals.Sum(t => t.Area);
+
+    /// <summary>부재 Id → (부위 이름, 중분류) — 판을 지은 값 그대로(① 의 지금 값 — R73a 위치 나무도 이것을 쓴다 · 계획 검토 M6).</summary>
+    public (string part, string zone) PlaceOf(long id) => _placeOf(id);
+
+    /// <summary>부위 이름 → 목록의 차례(시트 줄의 차례와 같은 잣대).</summary>
+    public int PartOrder(string part) => _partOrder(part);
 
     /// <summary>
     /// 확인할 자리 가운데 대응표 줄에 드는 것(아래가 빈 밑면 · 안팎을 정하지 못한 면 · 곡면 — 3D 에 분홍으로 칠한 자리) · 대응표에서 정하면 줄어든다.
@@ -598,7 +612,7 @@ public sealed partial class FormworkBoard
         var pieces = new List<FormworkPiece>();
         var keyedOf = new Dictionary<FacePatch, FormworkSummary.Keyed>(ReferenceEqualityComparer.Instance);
         foreach (var k in FormworkSummary.RowPatches(Results)) keyedOf[k.Patch] = k;
-        var meshes = new Dictionary<string, MeshData>(StringComparer.Ordinal);
+        var meshes = new Dictionary<string, (MeshData, PatchSpan[])>(StringComparer.Ordinal);
         var placed = new HashSet<FacePatch>(ReferenceEqualityComparer.Instance);
 
         foreach (var plate in Sheet.Plates)
@@ -610,7 +624,7 @@ public sealed partial class FormworkBoard
             // 대표 = 엑셀 줄의 대표 조각(벽 · 구멍을 이어 가는 부재 — 판을 찍으면 그 줄을 고른다 · R57 설치 전 검토 M3) · 없으면 가장 넓은 조각.
             int lead = plate.Lead is { } lp ? piece.Members.FindIndex(m => ReferenceEquals(m.Patch, lp)) : -1;
             piece.LeadIndex = lead >= 0 ? lead : Largest(piece);
-            piece.Mesh = MeshFor("plate", piece, meshes, plate.Joined ? plate.Shape : null, plate.Normal);
+            MeshFor("plate", piece, meshes, plate.Joined ? plate.Shape : null, plate.Normal);
             pieces.Add(piece);
         }
 
@@ -641,10 +655,11 @@ public sealed partial class FormworkBoard
             // 대표 = 대표 열쇠의 조각(모양이 바뀌어 없으면 가장 넓은 조각).
             int at = piece.Members.FindIndex(m => DropRecord.Of(m.Face, m.Patch).Text == piece.DropLead);
             piece.LeadIndex = at >= 0 ? at : Largest(piece);
-            piece.Mesh = MeshFor("drop", piece, meshes, null, null);
+            MeshFor("drop", piece, meshes, null, null);
         }
-        foreach (var piece in chunks.Values) piece.Mesh = MeshFor("chunk", piece, meshes, null, null);
+        foreach (var piece in chunks.Values) MeshFor("chunk", piece, meshes, null, null);
         _meshes = meshes;
+        _faces = null;   // 면 목록(R73a)은 새 덩이로 다시
         return pieces;
     }
 
@@ -660,24 +675,27 @@ public sealed partial class FormworkBoard
         return best;
     }
 
-    // 덩이의 겉면 — 든 조각(과 이은 판의 테두리)이 지난번과 같으면 그 겉면을 다시 쓴다.
-    private MeshData MeshFor(string kind, FormworkPiece piece, Dictionary<string, MeshData> meshes, FacePatch? outline, double[]? normal)
+    // 덩이의 겉면 — 든 조각(과 이은 판의 테두리)이 지난번과 같으면 그 겉면 · 세모 범위를 다시 쓴다(범위의 조각은 같은 조각 — 열쇠가 조각의 차례 번호다).
+    private void MeshFor(string kind, FormworkPiece piece, Dictionary<string, (MeshData, PatchSpan[])> meshes, FacePatch? outline, double[]? normal)
     {
         string key = kind + ":" + (outline != null ? "j" : "") + string.Join(",", piece.Patches.Select(p => _serial.TryGetValue(p, out int n) ? n : -1).Order());
-        if (!_meshes.TryGetValue(key, out var mesh) && !meshes.TryGetValue(key, out mesh)) mesh = MeshOf(piece.Patches, _origin, outline, normal);
-        meshes[key] = mesh;
-        return mesh;
+        if (!_meshes.TryGetValue(key, out var made) && !meshes.TryGetValue(key, out made)) made = MeshOf(piece.Patches, _origin, outline, normal);
+        meshes[key] = made;
+        (piece.Mesh, piece.Spans) = made;
     }
 
     // 조각들의 세모를 바깥(세모의 법선 쪽 — 세모는 면의 바깥을 보게 돌아 있다)으로 Lift 만큼 띄워 담고, 테두리를 모서리 선분으로 담는다.
     // outline 을 주면(이은 판) 조각마다의 테두리 대신 합친 테두리 하나를 그린다 — 이음매 선이 없이 엑셀 한 줄 · Revit 판 한 장과 같은 모양.
-    private static MeshData MeshOf(IEnumerable<FacePatch> patches, Vec3 origin, FacePatch? outline = null, double[]? normal = null)
+    // 조각마다 실제로 더한 세모의 범위도 돌려준다(R73a — 찌그러진 세모 · 너무 작은 세모는 빠지므로 그릇의 세모 수로 센다).
+    private static (MeshData mesh, PatchSpan[] spans) MeshOf(IEnumerable<FacePatch> patches, Vec3 origin, FacePatch? outline = null, double[]? normal = null)
     {
         var builder = new MeshBuilder();
+        var spans = new List<PatchSpan>();
         Vec3? first = null;
         foreach (var patch in patches)
         {
             Vec3? up = null;
+            int from = builder.Triangles;
             for (int i = 0; i + 2 < patch.Triangles.Count; i += 3)
             {
                 Vec3 a = Of(patch.Triangles[i]), b = Of(patch.Triangles[i + 1]), c = Of(patch.Triangles[i + 2]);
@@ -687,13 +705,31 @@ public sealed partial class FormworkBoard
                 up ??= n.Unit();
                 builder.AddTriangle(a + lift, b + lift, c + lift);
             }
+            spans.Add(new PatchSpan(patch, from, builder.Triangles - from));
             first ??= up;
             // 테두리(평면 조각만 있다 — 곡면은 세모만): 면과 같이 띄운다. 법선을 모르면(세모가 없는 조각) 테두리도 그리지 않는다.
             if (outline == null && up is { } own) AddOutline(builder, patch.Outline, own);
         }
         if (outline != null && (normal is { Length: 3 } ? new Vec3(normal[0], normal[1], normal[2]).Unit() : first) is { } plane)
             AddOutline(builder, outline.Outline, plane);
-        return builder.Build(origin);
+        return (builder.Build(origin), spans.ToArray());
+    }
+
+    /// <summary>그 덩이 겉면의 그 세모가 든 조각(R73a — 면 단위 찍기 · 범위 밖이면 null).</summary>
+    public FacePatch? PatchAt(int piece, int triangle)
+    {
+        if (piece < 0 || piece >= Pieces.Count || triangle < 0) return null;
+        var spans = Pieces[piece].Spans;
+        int lo = 0, hi = spans.Count - 1;
+        while (lo <= hi)
+        {
+            int mid = (lo + hi) / 2;
+            var s = spans[mid];
+            if (triangle < s.First) hi = mid - 1;
+            else if (triangle >= s.First + s.Count) lo = mid + 1;
+            else return s.Patch;
+        }
+        return null;
     }
 
     // ── 산출서 줄(R57 P1b — JACK 2026-10-23 «수량을 산출한 뒤 산출서를 띄우고 줄을 골라 거푸집을 보면 옳게 뽑힌 수량인지 판단 가능») ──
@@ -736,7 +772,48 @@ public sealed partial class FormworkBoard
     }
 
     /// <summary>조각들만의 겉면(덩이와 같은 모양 · 같은 띄움 — 산출서 줄의 몫을 덧그릴 때).</summary>
-    public MeshData PatchMesh(IEnumerable<FacePatch> patches) => MeshOf(patches, _origin);
+    public MeshData PatchMesh(IEnumerable<FacePatch> patches) => MeshOf(patches, _origin).mesh;
+
+    /// <summary>
+    /// 숨긴 부재(R73a3 — ② Del = 잠깐 숨기기 · ① 숨기기)의 조각을 뺀 덩이 겉면 — 여러 부재를 이은 판에서 숨긴 부재 몫만 빠지게(판이 통째로 남아 «숨겼는데 그대로»가 되지 않게).
+    /// 세모 차례는 그대로다(숨긴 조각의 세모는 넓이 0 — 그려지지도 찍히지도 않고 · 세모 → 조각 → 면은 그대로 맞는다). 테두리는 남은 조각마다(이음매 선이 생길 수 있다).
+    /// 그 덩이에 숨긴 부재가 없으면 null(덩이 겉면 그대로). 보기만 — 수량 · 기록은 바꾸지 않는다.
+    /// </summary>
+    public MeshData? MeshWithout(int piece, IReadOnlySet<long> hidden)
+    {
+        if (piece < 0 || piece >= Pieces.Count || hidden.Count == 0) return null;
+        var p = Pieces[piece];
+        var off = new HashSet<FacePatch>(ReferenceEqualityComparer.Instance);
+        foreach (var m in p.Members)
+            if (hidden.Contains(m.Result.Element.Id)) off.Add(m.Patch);
+        if (off.Count == 0) return null;
+        var mesh = p.Mesh;
+        var t = (int[])mesh.T.Clone();
+        var box = Box3.Empty;
+        foreach (var span in p.Spans)
+            for (int k = span.First; k < span.First + span.Count && 3 * k + 2 < t.Length; k++)
+            {
+                if (off.Contains(span.Patch)) { t[3 * k + 1] = t[3 * k + 2] = t[3 * k]; continue; }
+                for (int j = 0; j < 3; j++) box = box.With(mesh.Vertex(t[3 * k + j]));
+            }
+        // 테두리: 남은 조각마다(MeshOf 와 같은 띄움 — 그 조각 첫 세모의 법선).
+        var edges = new MeshBuilder();
+        foreach (var patch in p.Patches)
+        {
+            if (off.Contains(patch)) continue;
+            for (int i = 0; i + 2 < patch.Triangles.Count; i += 3)
+            {
+                var n = (Of(patch.Triangles[i + 1]) - Of(patch.Triangles[i])).Cross(Of(patch.Triangles[i + 2]) - Of(patch.Triangles[i]));
+                if (!(n.Length > 1e-12) || !n.IsFinite) continue;
+                AddOutline(edges, patch.Outline, n.Unit());
+                break;
+            }
+        }
+        var e = edges.Build(_origin).E;
+        for (int i = 0; i + MeshData.SegmentStride <= e.Length; i += MeshData.SegmentStride)
+            box = box.With(new Vec3(e[i], e[i + 1], e[i + 2])).With(new Vec3(e[i + 3], e[i + 4], e[i + 5]));
+        return new MeshData { P = mesh.P, T = t, E = e, Box = box };
+    }
 
     private static void AddOutline(MeshBuilder builder, List<List<double[]>> rings, Vec3 up)
     {

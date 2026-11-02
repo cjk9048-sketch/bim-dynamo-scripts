@@ -11,9 +11,8 @@ namespace DH.Takeoff.Revit;
 // R66c — ② 판 먼저 → 판마다 지정(JACK 2026-10-27 «모든 면에 대해 거푸집을 먼저 만들고 그다음 지정 · 처음부터 사용자 모드 / 자동 모드» ·
 // 인터뷰: 흐름 «② 판 만들기 + 지정 → ③ 확인» · 사용자 모드 = 자동 결과에서 시작해 고침 · 한 판 안 종류 나누기 = 부재 경계로 쪼개기 단추 ·
 // 위치 = 엑셀의 부위 줄 + 중분류 · 합치기 = 넓은 판의 종류):
-//  · 왼쪽 위 [자동 | 사용자] · 판 목록(엑셀 줄과 같은 차례 — 줄을 누르면 그 판들 · Ctrl = 더하기) · 확인할 자리 · 세지 않는 면 ·
-//    사용자 모드의 «유형 · 부위별로 한꺼번에»(옛 대응표 — 줄 규칙 · 접어 둠).
-//  · 3D: 판 찍기 = 그 판 · Ctrl+찍기 = 더하거나 빼기 · 끌기 = 네모로(Ctrl = 더하기).
+//  · 왼쪽 위 [자동 | 사용자] · 위치 나무(R73a — 판 목록 대신 · PlacePartView.Tree) · 사용자 모드의 «유형 · 부위별로 한꺼번에»(옛 대응표 — 줄 규칙 · 접어 둠).
+//  · 3D: 찍기 = 그 면 + 그 면의 판(R73a — 카드의 단추는 판 전체에 · 검토 M3) · Ctrl+찍기 = 더하거나 빼기 · 끌기 = 판을 네모로(Ctrl = 더하기).
 //  · 그림 위 띠: 고른 판의 엑셀 줄 · 종류 단추 · 세지 않음 · ↺ 자동으로 · 부재마다 나누기 · 합치기 · 자리 바꾸기(부위 줄 · 중분류).
 //    자동 모드에서 고치면 사용자 모드로 바뀌고 알린다(계획 검토 H3 · M3). 되돌리기 = 기록 글 전체(FormworkBoard.Snapshot).
 public sealed partial class PlacePartView
@@ -27,11 +26,7 @@ public sealed partial class PlacePartView
     // 고른 판의 모양 검사 한 줄(R68 — 판 띠 둘째 줄 · 걸린 것이 없으면 숨김).
     private readonly TextBlock _fwPlateCheck = new() { FontSize = 12, Margin = new Thickness(0, 1, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis, Visibility = Visibility.Collapsed };
 
-    // 판 목록(R66).
-    private readonly StackPanel _fwPlateRows = new();
-    private readonly List<(Border row, FormworkBoard.PlateLine line)> _fwLineViews = new();
-    private FormworkSheetData? _fwListFor;                 // 판 목록을 지은 시트(기록을 고치면 새 시트 — 다시 짓는다)
-    private ScrollViewer? _fwSideScroll;
+    // 판 목록(R66)은 R73a 에서 걷었다 — 위치 나무(PlacePartView.Tree)가 그 자리.
     private RadioButton? _fwAutoMode, _fwUserMode;
     private Border? _fwFold;
     private FrameworkElement? _fwFoldBody;
@@ -46,10 +41,7 @@ public sealed partial class PlacePartView
     private ComboBox? _fwPlacePart, _fwPlaceZone;
     private bool _fwPlaceOpen;
 
-    // «겹침» 칸(R67 — 고른 판의 면을 덮거나 깎은 이웃마다 공제 / 무시) · 다시 잰 판(MeasureVersion)과 고른 판을 다시 잡을 열쇠(면 · 대표 점).
-    private readonly WrapPanel _fwJoints = new() { VerticalAlignment = VerticalAlignment.Center };
-    private FrameworkElement? _fwJointBar;
-    private readonly List<Button> _fwJointButtons = new();
+    // «빠진 자리» 줄(R73a2 — 전의 «겹침» 칸(R67) 대신 · PlacePartView.Cuts) · 다시 잰 판(MeasureVersion)과 고른 판을 다시 잡을 열쇠(면 · 대표 점).
     private int _fwMeasured;
     private List<(DropRecord record, int solid, int face)> _fwSelKeys = new();
 
@@ -96,16 +88,12 @@ public sealed partial class PlacePartView
     // 직접 정한 판(지운 판 빼고 — 지운 판은 따로 센다).
     private int DirectCount() => _board?.Pieces.Count(p => !p.Dropped && FormworkBoard.Direct(p)) ?? 0;
 
-    // ── 판 목록 ──────────────────────────────────────────────────────────────────
+    // ── 모드 · 접은 칸 ───────────────────────────────────────────────────────────
 
     private void RefreshPlateList()
     {
         if (_board == null) return;
         SyncMode();
-        if (!ReferenceEquals(_fwListFor, _board.Sheet)) BuildPlateList();
-        foreach (var (row, line) in _fwLineViews)
-            row.Background = line.Pieces.Any(_fwPickedSet.Contains) ? _ui["AccentSoft"]
-                : line.Group == FormworkBoard.CheckGroup ? _ui["WarnBg"] : Brushes.Transparent;
         if (_fwFold != null) _fwFold.Visibility = _board.UserMode ? Visibility.Visible : Visibility.Collapsed;
         if (_fwFoldBody != null) _fwFoldBody.Visibility = _fwFoldOpen ? Visibility.Visible : Visibility.Collapsed;
         if (_fwFoldHead != null)
@@ -115,93 +103,6 @@ public sealed partial class PlacePartView
             int rules = _board.Rules.Count;
             if (rules > 0) _fwFoldHead.Inlines.Add(new Run($"   줄 규칙 {rules}") { Foreground = _ui["AccentText"], FontSize = 12 });
         }
-    }
-
-    // 판 목록을 짓는다: 묶음(절 · 확인할 자리 · 세지 않는 면 — «계») → 작은 제목(부위) → 줄(색 · 글 · 꼬리표 · 값).
-    private void BuildPlateList()
-    {
-        _fwPlateRows.Children.Clear();
-        _fwLineViews.Clear();
-        if (_board == null) return;
-        _fwListFor = _board.Sheet;
-        var lines = _board.PlateLines();
-        if (lines.Count == 0)
-        {
-            _fwPlateRows.Children.Add(Note("거푸집으로 볼 면이 없습니다."));
-            return;
-        }
-        string? group = null, title = null;
-        foreach (var line in lines)
-        {
-            if (line.Group != group)
-            {
-                group = line.Group;
-                title = null;
-                var mine = lines.Where(l => l.Group == group).ToList();
-                bool plates = mine[0].Line != null;
-                var head = new TextBlock { Margin = new Thickness(2, _fwPlateRows.Children.Count == 0 ? 2 : 12, 0, 3), TextTrimming = TextTrimming.CharacterEllipsis };
-                head.Inlines.Add(new Run(group) { FontWeight = FontWeights.SemiBold });
-                head.Inlines.Add(new Run(plates ? $"   계 {M2(mine.Sum(l => l.Value))} ㎡" : $"   {mine.Sum(l => l.Pieces.Count)}곳 · {M2(mine.Sum(l => l.Value))} ㎡")
-                {
-                    Foreground = group == FormworkBoard.CheckGroup ? _warn : _sub, FontSize = 12,
-                });
-                _fwPlateRows.Children.Add(head);
-            }
-            if (line.Title.Length > 0 && line.Title != title)
-            {
-                title = line.Title;
-                _fwPlateRows.Children.Add(new TextBlock { Text = title, FontSize = 12.5, Margin = new Thickness(6, 5, 0, 1), TextTrimming = TextTrimming.CharacterEllipsis });
-            }
-            AddPlateLine(line);
-        }
-    }
-
-    private void AddPlateLine(FormworkBoard.PlateLine line)
-    {
-        int at = _fwLineViews.Count;
-        var pieces = line.Pieces.Select(i => _board!.Pieces[i]).ToList();
-        var lead = pieces[0].Lead;
-        var grey = (ZonePalette.Todo.r, ZonePalette.Todo.g, ZonePalette.Todo.b);
-        var c = lead.Counted || lead.NeedsCheck ? FormworkPalette.Of(lead) : grey;
-        var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(74) });
-        var swatch = Swatch(c.r, c.g, c.b);
-        swatch.VerticalAlignment = VerticalAlignment.Center;
-        var text = new TextBlock { Text = line.Text, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
-        // 꼬리표: 직접(판마다 정한 판이 든 줄) · 줄 규칙(사용자 모드의 옛 대응표 줄이 정한 판이 든 줄).
-        bool direct = pieces.Any(FormworkBoard.Direct), ruled = !direct && pieces.Any(_board!.RowRuled);
-        // 판 모양 검사에 걸린(경고) 판이 든 줄은 ⚠(R68 — 풍선 글에 걸림).
-        var warned = pieces.SelectMany(p => _board!.FindingsOf(p)).Where(f => !FormworkShapeCheck.IsInfo(f.Test)).ToList();
-        var tag = new TextBlock
-        {
-            Text = (warned.Count > 0 ? "⚠ " : "") + (direct ? "직접" : ruled ? "줄 규칙" : ""), FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0),
-            Foreground = warned.Count > 0 ? _warn : direct ? _ui["AccentText"] : _sub,
-        };
-        var value = new TextBlock { Text = M2(line.Value), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
-        Grid.SetColumn(text, 1);
-        Grid.SetColumn(tag, 2);
-        Grid.SetColumn(value, 3);
-        grid.Children.Add(swatch);
-        grid.Children.Add(text);
-        grid.Children.Add(tag);
-        grid.Children.Add(value);
-        int members = pieces.SelectMany(p => p.Members).Select(m => m.Result.Element.Id).Distinct().Count();
-        var row = new Border { Child = grid, CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 3, 4, 3), Margin = new Thickness(0, 1, 0, 1), Background = Brushes.Transparent, Cursor = Cursors.Hand };
-        _ui.Mark(row, $"{line.Text} · 판 {pieces.Count}장 · 부재 {members}" +
-                      string.Concat(warned.Select(f => $"\n⚠ {FormworkShapeCheck.NameOf(f.Test)} {f.Text}").Distinct().Take(4)), "fw.line." + at);
-        row.MouseLeftButtonUp += (_, _) => PickLine(at, (Keyboard.Modifiers & ModifierKeys.Control) != 0);
-        _fwPlateRows.Children.Add(row);
-        _fwLineViews.Add((row, line));
-    }
-
-    // 목록의 줄을 눌렀다: 그 줄의 판들(Ctrl = 더하기) · 화면을 그 판들에 맞춘다.
-    private void PickLine(int at, bool ctrl)
-    {
-        if (_board == null || Busy || at < 0 || at >= _fwLineViews.Count) return;
-        SelectPieces(_fwLineViews[at].line.Pieces, ctrl ? SelectMode.Add : SelectMode.Replace, zoom: true);
     }
 
     // 사용자 모드의 «유형 · 부위별로 한꺼번에»(옛 대응표 — 유형 × 면 · 부위 줄 · 아래 줄): 머리를 누르면 펼치고 접는다.
@@ -219,10 +120,11 @@ public sealed partial class PlacePartView
         var body = new StackPanel();
         body.Children.Add(RuleColumns());
         body.Children.Add(_fwRows);
-        _fwFoldBody = body;
+        // 왼쪽 판 맨 아래에 붙는다(R73a — 위는 위치 나무) · 펼치면 제 자리에서 굴린다.
+        _fwFoldBody = new ScrollViewer { Content = body, MaxHeight = 330, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Focusable = false };
         var box = new StackPanel();
         box.Children.Add(head);
-        box.Children.Add(body);
+        box.Children.Add(_fwFoldBody);
         _fwFold = new Border { Child = box };
         return _fwFold;
     }
@@ -245,6 +147,7 @@ public sealed partial class PlacePartView
         if (_board == null) return;
         var list = pieces.Where(i => i >= 0 && i < _board.Pieces.Count).Distinct().ToList();
         if (mode == SelectMode.Replace) _fwSel.Clear();
+        _fwFaces.Clear();                          // 판으로 고르면(끌기 · 딱지) 고른 면은 푼다(R73a)
         foreach (int i in list)
         {
             int at = _fwSel.FindIndex(p => _board.IndexOf(p) == i);
@@ -258,11 +161,9 @@ public sealed partial class PlacePartView
         RefreshAll();
         var chosen = SelectedPieceList();
         if (chosen.Count == 0) { CancelFollow(); return; }
-        // 판 목록에서 첫 판의 줄까지 굴린다.
+        // 위치 나무를 첫 판의 첫 면까지 펼친다(R73a — 전의 판 목록 줄 대신).
         int primary = _board.IndexOf(PrimaryPlate!);
-        var lineView = _fwLineViews.FirstOrDefault(v => v.line.Pieces.Contains(primary)).row;
-        if (lineView != null) lineView.BringIntoView();
-        else if (_board.Pieces[primary].Dropped && _fwDropLines.TryGetValue(_board.Pieces[primary].DropLead, out var dropLine)) dropLine.BringIntoView();
+        if (_board.FacesOfPiece(primary).FirstOrDefault() is { } first) RevealFace(first);
         var box = Box3.Empty;
         foreach (var piece in chosen)
             if (FormworkShown(MemberCount + _board.IndexOf(piece.Lead))) box = box.With(piece.Mesh.Box);
@@ -275,7 +176,7 @@ public sealed partial class PlacePartView
     private void BandFormwork(IReadOnlyList<int> indices, bool ctrl)
     {
         if (_board == null || Busy) return;
-        var pieces = indices.Where(i => i >= MemberCount && i < OverlayStart && FormworkShown(i)).Select(i => i - MemberCount).ToList();
+        var pieces = indices.Where(i => i >= MemberCount && i < OverlayStart && FormworkShown(i) && InIsolate(i)).Select(i => i - MemberCount).ToList();   // 부재만 보기(R73a2)면 무리 안의 판만
         if (pieces.Count == 0 && ctrl) return;
         SelectPieces(pieces, ctrl ? SelectMode.Add : SelectMode.Replace);
     }
@@ -320,7 +221,7 @@ public sealed partial class PlacePartView
             string choice = item;
             _fwKindButtons[item] = Add(item, "BtnSecondary", "", "btn.fw.kind." + item, () => SetKindSelected(choice));
         }
-        _fwDropButton = Add(FormworkRules.NotCounted, "BtnSecondary", "고른 판을 세지 않습니다(Del) — 합계 · 엑셀 · 거푸집 객체에 넣지 않습니다.", "btn.fw.drop", () => DropSelected());
+        _fwDropButton = Add(FormworkRules.NotCounted, "BtnSecondary", "고른 판을 세지 않습니다 — 합계 · 엑셀 · 거푸집 객체에 넣지 않습니다.", "btn.fw.drop", () => DropSelected());
         _fwAutoButton = Add("↺ 자동으로", "BtnGhost", "고른 판에 직접 정한 것(종류 · 세지 않음 · 자리 · 나누기 · 합치기)을 걷고 규칙대로 셉니다.", "btn.fw.kind.auto", () => AutoSelected(), 8);
         _fwSplitButton = Add("부재마다 나누기", "BtnSoft", "여러 부재를 이은 판을 부재마다 한 장씩 나눕니다(종류는 그대로).", "btn.fw.split", () => SplitSelected(), 8);
         _fwMergeButton = Add("합치기", "BtnSoft", "고른 판들을 한 장으로 잇습니다 — 종류는 넓은 판의 것(같은 평면에 맞닿은 판만).", "btn.fw.merge", () => MergeSelected());
@@ -352,21 +253,13 @@ public sealed partial class PlacePartView
         place.Children.Add(cancel);
         _fwPlaceBar = place;
 
-        // «겹침»(R67): 이웃마다 칸 — 누르면 공제 ↔ 무시(그 판들의 면 · 형상부터 다시 잰다).
-        var joints = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
-        var jointHead = new TextBlock { Text = "겹침", Foreground = _sub, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
-        _ui.Mark(jointHead, "고른 판의 면을 덮거나 깎은 부재입니다. 누르면 그 겹침을 공제 ↔ 무시(무시 = 그 자리도 거푸집)로 바꿉니다.", "fw.joint.head");
-        joints.Children.Add(jointHead);
-        joints.Children.Add(_fwJoints);
-        _fwJointBar = joints;
-
         _fwPlateCheck.Foreground = _warn;
         _ui.Mark(_fwPlateCheck, "", "fw.plate.check");
         var lines = new StackPanel();
         lines.Children.Add(head);
         lines.Children.Add(_fwPlateCheck);
         lines.Children.Add(actions);
-        lines.Children.Add(joints);
+        lines.Children.Add(_fwCuts);               // 빠진 자리 줄(R73a2 — 전의 «겹침» 칸)
         lines.Children.Add(place);
         return new Border
         {
@@ -380,10 +273,12 @@ public sealed partial class PlacePartView
         if (_fwPlateBar == null || _board == null) return;
         var pieces = SelectedPieceList();
         _fwPlateBar.Visibility = pieces.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        RefreshCutLines();                         // 빠진 자리 줄 · 3D 빗금(R73a2 — 고른 면이 없으면 비움)
         if (pieces.Count == 0) { _fwPlaceOpen = false; ShowPlateChecks(pieces); return; }
         int members = pieces.SelectMany(p => p.Members).Select(m => m.Result.Element.Id).Distinct().Count();
-        _fwPlateText.Text = pieces.Count == 1 ? PieceText(pieces[0]) : $"판 {pieces.Count}장 · {M2(pieces.Sum(p => p.Area))} ㎡ · 부재 {members}";
-        _fwPlateText.ToolTip = _fwPlateText.Text;
+        // 머리 = 단추가 바꾸는 범위(R73a 검토 M3 — 면을 골라도 판 전체에): «판 전체: 벽체 W1 외 부재 2 · 63.20 ㎡» · 엑셀 줄(식)은 풍선 글로.
+        _fwPlateText.Text = pieces.Count == 1 ? PlateHead(pieces[0]) : $"판 {pieces.Count}장 · {M2(pieces.Sum(p => p.Area))} ㎡ · 부재 {members}";
+        _fwPlateText.ToolTip = string.Join("\n", pieces.Take(8).Select(PieceText));
         ShowPlateChecks(pieces);
         bool anyDirect = pieces.Any(FormworkBoard.Direct), anyRuled = pieces.Any(_board.RowRuled);
         _fwPlateState.Text = !_board.UserMode ? "자동 모드" : anyDirect ? "직접" : anyRuled ? "줄 규칙" : "자동";
@@ -412,7 +307,13 @@ public sealed partial class PlacePartView
         }
         if (plates == 0) _fwPlaceOpen = false;
         if (_fwPlaceBar != null) _fwPlaceBar.Visibility = _fwPlaceOpen ? Visibility.Visible : Visibility.Collapsed;
-        RefreshJointChips(pieces);
+    }
+
+    // 카드 머리(R73a): «판 전체: {부위 마크} 외 부재 n · ㎡»(지운 판은 «지운 판: …»).
+    private string PlateHead(FormworkPiece piece)
+    {
+        int others = piece.Members.Select(m => m.Result.Element.Id).Distinct().Count() - 1;
+        return $"{(piece.Dropped ? "지운 판" : "판 전체")}: {MemberLabel(piece.Result.Element)}{(others > 0 ? $" 외 부재 {others}" : "")} · {M2(piece.Area)} ㎡";
     }
 
     // 고른 판의 모양 검사(R68): 판 띠 둘째 줄(한 장 = 걸림 글 · 여러 장 = 검사마다 장 수) + 3D 에 걸린 자리 빨간 실선(홈 · 띠는 그 자리, 그 밖은 판 테두리).
@@ -430,61 +331,20 @@ public sealed partial class PlacePartView
         _fwPlateCheck.Visibility = found.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         if (Step != 1) return;
         var origin = _board.Origin;
-        var guides = found.SelectMany(x => x.list).Where(f => !FormworkShapeCheck.IsInfo(f.Test))
+        // 3D 에 거는 것은 ShowFaceMarks(R73a — 고른 면의 치수 네모와 함께 · 선이 바뀌었을 때만 다시 놓는다).
+        _fwCheckGuides = found.SelectMany(x => x.list).Where(f => !FormworkShapeCheck.IsInfo(f.Test))
             .SelectMany(f => f.Rings).Where(r => r.Count >= 2)
             .Select(r => ((IReadOnlyList<Vec3>)r.Select(q => new Vec3(q[0], q[1], q[2]) - origin).ToList(), true, 3)).ToList();
-        _view3d.SetGuides(guides);
+        _fwCheckKey = string.Join("|", _fwCheckGuides.Select(g => $"{g.points.Count}:{g.points[0].X:0.###},{g.points[0].Y:0.###},{g.points[0].Z:0.###}"));
     }
+
+    private string _fwCheckKey = "";
 
     /// <summary>시험용: 판 띠의 모양 검사 줄(숨겼으면 "").</summary>
     public string PlateCheckText => _fwPlateCheck.Visibility == Visibility.Visible ? _fwPlateCheck.Text : "";
 
-    /// <summary>시험용: 판 목록을 다시 짓는다(같은 시트에 걸림을 넣어 본 뒤 — 화면에서는 시트가 바뀔 때마다 다시 짓는다).</summary>
-    public void RebuildPlateList() => BuildPlateList();
-
-    // «겹침» 칸(R67): 이름 · 넓이 · 공제 / 무시 / 일부 무시 — 다시 잴 수 없거나 겹친 부재가 없으면 줄을 숨긴다.
-    private void RefreshJointChips(List<FormworkPiece> pieces)
-    {
-        if (_board == null || _fwJointBar == null) return;
-        var chips = _board.JointChips(pieces);
-        _fwJoints.Children.Clear();
-        _fwJointButtons.Clear();
-        _fwJointBar.Visibility = chips.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
-        for (int i = 0; i < chips.Count; i++)
-        {
-            var chip = chips[i];
-            string state = chip.Ignored ? "무시" : chip.Mixed ? "일부 무시" : "공제";
-            var button = _ui.Button($"{chip.Label} {M2(chip.Area)} ㎡ · {state}", chip.Ignored ? "BtnSoft" : "BtnSecondary",
-                chip.Ignored ? "누르면 이 겹침을 공제합니다(그 자리는 거푸집이 아님)." : "누르면 이 겹침을 무시합니다(그 자리도 거푸집 — 판이 온전한 모양으로).", "btn.fw.joint." + i);
-            button.Focusable = false;
-            button.MinHeight = 24;
-            button.FontSize = 12;
-            button.Padding = new Thickness(8, 0, 8, 1);
-            button.Margin = new Thickness(0, 0, 4, 2);
-            button.Click += (_, _) => ToggleJoint(chip);
-            _fwJoints.Children.Add(button);
-            _fwJointButtons.Add(button);
-        }
-        if (chips.Count > 0)
-        {
-            // R71: 칸 상태를 규칙(짝 예외)으로 — 같은 부위 짝 전부에.
-            var all = _ui.Button("이 짝 전부에", "BtnSoft", "이 판들의 겹침 칸 상태를 규칙(짝 예외)으로 올립니다 — 같은 부위 짝 전부에 걸립니다(② 규칙 탭).", "btn.fw.joint.promote");
-            all.Focusable = false;
-            all.MinHeight = 24;
-            all.FontSize = 12;
-            all.Padding = new Thickness(8, 0, 8, 1);
-            all.Margin = new Thickness(6, 0, 4, 2);
-            all.Click += (_, _) => PromoteJoints();
-            _fwJoints.Children.Add(all);
-        }
-    }
-
-    // 칸을 눌렀다: 모두 무시였으면 공제로 · 아니면(공제 · 일부 무시) 무시로 — 그 판들의 면 × 그 이름의 이웃 전부(형상부터 다시 잰다).
-    private bool ToggleJoint(FormworkBoard.JointChip chip)
-    {
-        bool ignore = !chip.Ignored;
-        return ChangePlates($"겹침 {chip.Label} → {(ignore ? "무시" : "공제")}", (b, ps) => b.SetJoints(ps, chip.Others, ignore));
-    }
+    /// <summary>시험용: 판 모양 검사의 3D 선을 다시 건다(같은 시트에 걸림을 넣어 본 뒤 — 화면에서는 시트가 바뀔 때마다 다시 짓는다).</summary>
+    public void RebuildChecks() { _fwMarksFor = null; RefreshAll(); }
 
     // 형상을 다시 잰 판(R67): 부재 모서리 선을 다시 빼고(덮는 판이 바뀜) · 고른 판을 면 · 대표 점으로 다시 잡는다(조각은 새로 만들어졌다).
     private void SyncMeasured()
@@ -497,7 +357,7 @@ public sealed partial class PlacePartView
             if (_board.PieceNear(record, solid, face) is int at && at >= 0 && !found.Contains(at)) found.Add(at);
         _fwSel.Clear();
         _fwSel.AddRange(found.Select(i => _board.Pieces[i].Lead));
-        _fwListFor = null;
+        SyncMeasuredFaces();                       // 고른 면도 면 · 대표 점으로(R73a)
         // 다시 재며 높이 구간이 바뀌었을 수 있다(7 m 넘는 유로폼) — 색 풀이도 다시(최종 검토 낮음).
         _fwBottom = BuildFormworkBottom();
         if (Step == 1) _bottom.Child = _fwBottom;
@@ -607,7 +467,6 @@ public sealed partial class PlacePartView
         {
             // 바뀐 것이 없다(Board 가 기록 · 모드를 되돌렸다) — 고른 판은 그대로.
             Log?.Invoke($"거푸집 판 {what} 바뀐 것 없음\t{text}");
-            _fwListFor = null;
             RefreshAll();
             if (none != null) ShowMessage(none);
             return false;

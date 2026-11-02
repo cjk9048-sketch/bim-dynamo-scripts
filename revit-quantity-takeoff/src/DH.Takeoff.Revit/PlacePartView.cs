@@ -43,6 +43,7 @@ public sealed partial class PlacePartView
     private readonly Model3DView _view3d;
     private readonly TextBlock _remain, _total, _pickedHead, _pickedHint, _hover, _message, _status, _counts, _countNotes, _noPlaceLabel;
     private readonly Border _hoverPill, _toast, _side, _top, _bottom;
+    private StackPanel? _notes;                   // 부재만 보기 띠 + 알림(R73a5 — ② 는 도구 줄 아래)
     private readonly FrameworkElement _progress, _placeSide, _pickedBand, _stateBand;
     private readonly ColumnDefinition _barDone = new(), _barRest = new();
     private readonly WrapPanel _pickedValues = new(), _statusPlaces = new(), _statusParts = new(), _statusFlags = new();
@@ -264,7 +265,7 @@ public sealed partial class PlacePartView
         _toast = new Border
         {
             Background = _ui["Glass"], BorderBrush = _line, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(11, 5, 11, 6),
-            Margin = new Thickness(10, 10, 330, 10), MaxWidth = 620, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
+            MaxWidth = 620, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
             IsHitTestVisible = false, Visibility = Visibility.Collapsed, Child = _message,
         };
         // 그림을 둥근 테두리 안에 담는다: 모서리 밖으로 그림이 삐져나오지 않게 둥글게 자른다.
@@ -272,15 +273,32 @@ public sealed partial class PlacePartView
         stage.Children.Add(_view3d);
         stage.Children.Add(BuildLook());
         stage.Children.Add(_hoverPill);
-        stage.Children.Add(_toast);
-        stage.SizeChanged += (_, _) => stage.Clip = new RectangleGeometry(new Rect(0, 0, stage.ActualWidth, stage.ActualHeight), 9, 9);
-        right.Children.Add(new Border { BorderBrush = _line, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10), Child = stage });
+        // 왼쪽 위: ② [빼기 | 넣기] 도구(R73a5 — 보기 단추와 같은 줄).
+        var cutTools = BuildCutTools();
+        cutTools.Margin = new Thickness(10);
+        stage.Children.Add(cutTools);
+        // 부재만 보기 띠(R73a2 — 오른쪽) + 그 아래 알림(왼쪽): 좁은 3D(R73a5 나눔)에서도 서로 덮지 않는다 · 띠가 없으면 알림이 그 자리.
+        // ② 는 도구 · 보기 단추 줄 아래(위 52) · ① · ③ 은 전처럼 왼쪽 위(보기 단추 자리 330 은 비움 — ShowStep).
+        var notes = new StackPanel { Margin = new Thickness(10, 10, 330, 10), VerticalAlignment = VerticalAlignment.Top };
+        notes.Children.Add(BuildIsoBar());
+        notes.Children.Add(_toast);
+        _notes = notes;
+        stage.Children.Add(notes);
+        // «이 부재만 보기» 동안 왼쪽 «위치» 그림과 나눈다(R73a5 — Locator.cs). 둘레를 함께 둥글게 자른다.
+        var split = BuildSplit(stage);
+        split.SizeChanged += (_, _) => split.Clip = new RectangleGeometry(new Rect(0, 0, split.ActualWidth, split.ActualHeight), 9, 9);
+        right.Children.Add(new Border { BorderBrush = _line, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10), Child = split });
         dock.Children.Add(right);
 
         _view3d.Clicked += (index, ctrl) =>
         {
             if (Step == 2) { ClickReview(index); return; }
-            if (Step == 1) { ClickFormwork(index, ctrl); return; }
+            if (Step == 1)
+            {
+                if (_fwTool != CutTool.None) { ClickTool(); return; }   // [빼기] · [넣기]를 든 동안은 고르기 대신 그 자리(R73a5)
+                ClickFormwork(index, ctrl, _view3d.ClickTriangle);
+                return;
+            }
             if (index < 0) return;                       // 빈 곳을 찍으면 그대로 둔다(Esc · [선택 풀기]로 푼다)
             _editor.Click(_members[index].Id, ctrl);
             RefreshAll();
@@ -294,8 +312,17 @@ public sealed partial class PlacePartView
         };
         _view3d.Hovered += index =>
         {
-            _hover.Text = index < 0 ? " " : Step == 2 ? DescribeReview(index) : Step == 1 ? DescribeFormwork(index) : Describe(_members[index]);
+            if (Step == 1) { if (index < 0) HoverFormwork(-1, -1); return; }   // ② 는 면마다(R73a — HoverMoved)
+            _hover.Text = index < 0 ? " " : Step == 2 ? DescribeReview(index) : Describe(_members[index]);
             _hoverPill.Visibility = index < 0 || _hover.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        };
+        // ② 마우스 밑의 면(R73a): 같은 판 안에서 면이 바뀌어도 굵은 테두리 · 이름표를 고친다(면이 바뀔 때만 테두리를 짓는다).
+        _view3d.HoverMoved += (index, triangle) => { if (Step == 1) HoverFormwork(index, triangle); };
+        // 날기 일지(R73a 계획 §5): 처음 한 번 + 느려 바로 끝으로 간 날기만(면을 누를 때마다 쌓이지 않게).
+        _view3d.Landed += () =>
+        {
+            if (Step == 1 && (_fwFlights++ == 0 || _view3d.FlightFrames < 5))
+                Log?.Invoke($"② 날기\t사이 장면 {_view3d.FlightFrames} · 장면 사이 가장 긴 틈 {_view3d.FlightWorstMs:0} ms · 모서리 띠 다시 만듦 {_view3d.EdgeRebuilds}번째");
         };
         _view3d.Failed += ex => ShowMessage("3D 그림에서 오류가 났습니다(끌던 것은 그만두었습니다): " + ex.Message, true);
 
@@ -320,10 +347,13 @@ public sealed partial class PlacePartView
         }
         if (Step == 1)
         {
-            // ② : Esc = 옮길 줄 고르기 취소 → 고른 줄 풀기 · Del = 찍은 판 지우기 · Ctrl+Z = ② 에서 한 일 되돌리기(R55b — JACK 2026-10-21 «지우기(Del 키도) · 되돌리기»).
+            // ② : Esc = 옮길 줄 고르기 취소 → 고른 줄 풀기 · Del = 고른 면의 부재를 잠깐 숨기기(R73a3 — 3D 에서만 · 수량 그대로 · 전의 «세지 않음»은 카드 단추로만:
+            // JACK 1030 천장을 치우려 Del 을 눌렀다가 보 판 4.80 ㎡ 가 말없이 빠졌다) · Ctrl+Z = ② 에서 한 일 되돌리기(R55b).
             // ① 의 모델 되돌리기로 흘러가지 않게 이 갈래에서 끝낸다(계획 검토 L4).
-            if (e.Key == Key.Escape) { _view3d.CancelDrag(); if (!ClosePlaceBar()) PickRow(null); e.Handled = true; }
-            else if (e.Key == Key.Delete) { DropSelected(); e.Handled = true; }
+            // R73a5: 도구를 든 동안 Esc = 도구만 내려놓음(고른 것 · 이 부재만 보기는 그대로 — 한 번 더 Esc 면 전처럼).
+            if (e.Key == Key.Escape && _fwTool != CutTool.None) { _view3d.CancelDrag(); SetTool(CutTool.None, "Esc"); e.Handled = true; }
+            else if (e.Key == Key.Escape) { _view3d.CancelDrag(); if (!ClosePlaceBar()) PickRow(null); e.Handled = true; }
+            else if (e.Key == Key.Delete) { HideSelected(); e.Handled = true; }
             else if (e.Key == Key.Z && (Keyboard.Modifiers & ModifierKeys.Control) != 0) { FormworkUndo(); e.Handled = true; }
             return;
         }
@@ -369,7 +399,10 @@ public sealed partial class PlacePartView
         _undo.Visibility = Show(Step != 2);                // [되돌리기]는 ① · ② (② 는 ② 에서 한 일 — R55b) · ③ 은 보기만
         // ② 에는 고른 부재가 없다: 숨기기 · 남은 것만 보기는 ① 에서만(① 에서 숨긴 부재는 ② 에서도 숨긴 채다). 종류 · 층은 둘 다.
         _hide.Visibility = _showAll.Visibility = _onlyRemaining.Visibility = Show(places);
-        _view3d.BandSelect = places || Step == 1;   // ② 도 끌어 판 여러 장(R66)
+        if (Step != 1 && _fwTool != CutTool.None) SetTool(CutTool.None, "걸음 바뀜");   // [빼기] · [넣기]는 ② 에서만(R73a5)
+        _view3d.BandSelect = places || (Step == 1 && _fwTool == CutTool.None);   // ② 도 끌어 판 여러 장(R66) · 도구를 든 동안은 끔(R73a5)
+        if (_fwTools != null) _fwTools.Visibility = Step == 1 ? Visibility.Visible : Visibility.Collapsed;
+        if (_notes != null) _notes.Margin = Step == 1 ? new Thickness(10, 52, 10, 10) : new Thickness(10, 10, 330, 10);
         _nextArmed = false;
     }
 

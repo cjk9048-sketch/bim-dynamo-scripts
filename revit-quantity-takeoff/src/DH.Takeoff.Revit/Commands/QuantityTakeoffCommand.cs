@@ -1341,7 +1341,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
             Rules = rules, PartDefault = part => PartCatalog.FormworkDefault(part, groups.GetValueOrDefault(part)), Bands = FormworkOptions.AutoBands(scene.Elements),
             // ① 목록의 묶음(사용자가 옮긴 것까지) — 기초 카테고리의 밑면 · 턱 덩어리 빼기가 쓴다(R53a).
             PartGroup = part => groups.TryGetValue(part, out var g) && g.Length > 0 ? g : PartCatalog.GroupOf(part),
-            // 시공 순서표(R71b): 처음 값(지금 규칙 다섯 줄) + 대응표의 «짝:» · «칸:» 줄 — 처음 값은 옛 규칙과 면 하나까지 같음(녹촌 실제 ① 부위 2,361면 · 시험 25 모델).
+            // 시공 순서표(R71b): 처음 값(옛 규칙 다섯 줄 — 면 하나까지 같음 · 녹촌 2,361면 · 시험 25 모델 + R72 위 슬래브 ← 계단) + 대응표의 «짝:» · «칸:» 줄.
             Order = PourOrder.From(rules),
         };
         var results = FormworkAnalyzer.AnalyzeAutoBands(scene.Elements, scene.Zones, options);   // 7 m 를 넘는 유로폼 조각이 없으면 구간 없이

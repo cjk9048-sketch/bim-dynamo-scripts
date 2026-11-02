@@ -263,12 +263,4 @@ public partial class PlacePartView
         FinishChange($"거푸집 규칙\t{what} · 표 {_board.Options.Order?.Text()}" + (_board.LastPairDiff is { } x ? $" · 바뀐 면 {x.Different} · {M2(x.CountedOld)} → {M2(x.CountedNew)} ㎡" : ""), said, "규칙");
         return true;
     }
-
-    // «이 짝 전부에»(R71): 고른 판의 «겹침» 칸 지금 상태를 짝 예외로.
-    private bool PromoteJoints()
-    {
-        var pieces = SelectedPieceList();
-        if (pieces.Count == 0) { ShowMessage("판을 3D 나 목록에서 먼저 고르세요."); return false; }
-        return ChangeRules("겹침 → 이 짝 전부에", b => b.PromoteJoints(pieces), "규칙이 이미 이 칸 상태와 같습니다(일부만 무시한 칸은 건너뜁니다).");
-    }
 }
