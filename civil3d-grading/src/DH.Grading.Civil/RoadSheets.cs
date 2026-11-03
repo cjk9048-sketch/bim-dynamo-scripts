@@ -70,39 +70,145 @@ internal static class RoadSheets
         return SheetCommand.SplitPlan(a, b, scale, GradingSettings.XsecInterval, new System.Text.StringBuilder()).Count;
     }
 
-    /// <summary>★[계획 검토 H1] 놓을 자리가 다른 종단도(부지 · 다른 도로)의 도곽 · 종단뷰 가로 범위와 겹치면 그 이름 — 안 겹치면 빈 글.
-    /// <para>같은 X(위 · 아래)도 겹침으로 본다 — 부지 장식 지우기 · 밴드 글씨 벌리기가 가로 범위로 주인을 가린다. 이 도로의 옛 종단도(지울 것)는 뺀다.</para></summary>
+    /// <summary>놓을 자리 둘레 여유(종이 mm) — 이웃 도곽과 이만큼은 띄운다.</summary>
+    internal const double PlaceMarginMm = 10.0;
+
+    /// <summary>★[계획 검토 H1] 놓을 자리가 다른 종단도(부지 · 다른 도로)의 도곽 · 종단뷰와 겹치면 그 이름 — 안 겹치면 빈 글. 이 도로의 옛 종단도(지울 것)는 뺀다.
+    /// <para>★★[JACK 1103 «충분히 멀리 찍었는데도 그래»] 종전엔 <b>가로 범위만</b> 보아 같은 X면 아무리 위 · 아래로 떨어져도 거절했다(장식 · 밴드 글씨 정리가 가로 범위로 주인을 가린다는 까닭).
+    /// 이제 주인 가리기가 모두 평면(가로 × 세로) — 도로 것은 표식 · 밴드 묶음은 FeatureId · 밴드 상자 · 부지 장식 지우기는 장 상자(<see cref="SheetCommand.SheetXSpanOf"/>) — 라
+    /// <b>새 도곽들이 차지할 사각형</b>이 남의 도곽 · 종단뷰(밴드 포함)와 <b>평면에서 실제로 겹칠 때만</b> 거절한다(여유 <see cref="PlaceMarginMm"/>).</para>
+    /// <para>★[설치 전 검토 · 중간] 새 사각형 세로 — 그래프 높이 = 표고 범위를 눈금(5 m)으로 올림 + 한 칸 × 수직과장(<see cref="SheetCommand.PlannedExaggeration"/>).
+    /// 이 도로 종단도가 이미 그려져 있으면 그 <b>실제</b> 도곽 · 뷰의 위 · 아래 끝(첫 뷰 자리 기준)을 쓰고(그래프가 더 높아질 것은 위 끝에 반영) · 없으면 놓는 점 ± 종이 한 장 높이
+    /// (<see cref="ProfileSheetRules.RoadSheetsBox"/>). 그려 본 뒤에는 <see cref="PlacedOverlap"/>가 실제 범위로 한 번 더 본다.</para></summary>
     internal static string Overlap(Database db, ObjectId aid, Point3d at, double scale, int sheets)
     {
-        var (x0, x1) = ProfileSheetRules.RoadSheetsSpan(at.X, scale, sheets);
         string me = aid.Handle.ToString();
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
-            var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
-            foreach (ObjectId id in ms)
+            double mm = (scale > 0 ? scale : ProfileSheetRules.DefaultScale) / 1000.0, m = PlaceMarginMm * mm;
+            // 그래프 높이 — 이 노선 종단들의 표고 범위(지층 · 지하수위 종단은 뷰 범위에 안 끼므로 뺌) · 못 읽으면 0(도곽 한 장 높이만)
+            double zLo = double.MaxValue, zHi = double.MinValue;
+            try
             {
-                try
-                {
-                    var o = tr.GetObject(id, OpenMode.ForRead);
-                    if (o is Polyline pl && pl.Closed && string.Equals(pl.Layer, SheetCommand.LayFrameModel, StringComparison.OrdinalIgnoreCase))
+                var al = (CivilDb.Alignment)tr.GetObject(aid, OpenMode.ForRead);
+                foreach (ObjectId pid in al.GetProfileIds())
+                    try
                     {
-                        if (SheetTag.Of(pl, out string r, out _, out _) && string.Equals(r, me, StringComparison.OrdinalIgnoreCase)) continue;
-                        var ex = pl.GeometricExtents;
-                        if (ProfileSheetRules.SpansOverlap(x0, x1, ex.MinPoint.X, ex.MaxPoint.X)) return "다른 종단도의 도곽";
+                        if (pid.IsErased || tr.GetObject(pid, OpenMode.ForRead) is not CivilDb.Profile p) continue;
+                        if (p.Name == StrataDraw.WaterSurfName || p.Name.StartsWith(StrataDraw.SurfPrefix, StringComparison.Ordinal)) continue;
+                        double a = p.ElevationMin, b = p.ElevationMax;
+                        if (double.IsFinite(a) && double.IsFinite(b) && b >= a) { zLo = Math.Min(zLo, a); zHi = Math.Max(zHi, b); }
                     }
-                    else if (o is CivilDb.ProfileView pv && pv.AlignmentId != aid)
-                    {
-                        var ex = pv.GeometricExtents;
-                        if (ProfileSheetRules.SpansOverlap(x0, x1, ex.MinPoint.X, ex.MaxPoint.X)) return $"종단도 «{pv.Name}»";
-                    }
-                }
-                catch { }
+                    catch { }
+            }
+            catch { }
+            double graphH = zHi >= zLo ? ProfileSheetRules.GraphHeight(zLo, zHi, SheetCommand.ElevStepM, SheetCommand.PlannedExaggeration()) : 0;
+            var box = ProfileSheetRules.RoadSheetsBox(at.X, at.Y, scale, sheets, graphH, PlaceMarginMm);
+            var own = OwnRects(tr, db, aid, me, mm, out Point3d? origin);
+            if (own.Count > 0 && origin is Point3d o)
+            {
+                double y0 = own.Min(r => r.Y0) - o.Y, y1 = own.Max(r => r.Y1) - o.Y;
+                box = new ProfileSheetRules.Rect(box.X0, at.Y + y0 - m, box.X1, at.Y + Math.Max(y1, graphH) + m);
+            }
+            foreach (var (r, name) in OtherRects(tr, db, aid, me, mm))
+                if (ProfileSheetRules.RectsOverlap(box, r)) return name;
+            tr.Commit();
+        }
+        catch { }
+        return "";
+    }
+
+    /// <summary>★[설치 전 검토 · 중간] 그려 놓은 이 도로 종단도(실제 도곽 · 종단뷰 + 밴드)가 남의 도곽 · 종단뷰와 평면에서 겹치면 그 이름 — 안 겹치면 빈 글.
+    /// 짐작(<see cref="Overlap"/>)보다 그래프가 높게 나온 경우(급한 도로 · 수직과장)를 그린 뒤에 잡는다 — 부르는 쪽이 다른 자리를 다시 묻는다.</summary>
+    internal static string PlacedOverlap(Database db, ObjectId aid, double scale)
+    {
+        string me = aid.Handle.ToString();
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            double mm = (scale > 0 ? scale : ProfileSheetRules.DefaultScale) / 1000.0, m = PlaceMarginMm * mm;
+            var own = OwnRects(tr, db, aid, me, mm, out _);
+            var others = OtherRects(tr, db, aid, me, mm);
+            foreach (var a in own)
+            {
+                var g = new ProfileSheetRules.Rect(a.X0 - m, a.Y0 - m, a.X1 + m, a.Y1 + m);
+                foreach (var (r, name) in others) if (ProfileSheetRules.RectsOverlap(g, r)) return name;
             }
             tr.Commit();
         }
         catch { }
         return "";
+    }
+
+    /// <summary>종단뷰 사각형 — 경계상자(그래프만 · 밴드는 안 들어 있다)를 아래 · 위 밴드 칸 수만큼 넓힘.</summary>
+    static ProfileSheetRules.Rect ViewRect(CivilDb.ProfileView pv, double mm)
+    {
+        var ex = pv.GeometricExtents;
+        int nB = 0, nT = 0;
+        try { using (var bi = pv.Bands.GetBottomBandItems()) nB = bi.Count; } catch { }
+        try { using (var ti = pv.Bands.GetTopBandItems()) nT = ti.Count; } catch { }
+        double dn = nB > 0 ? (SheetCommand.TopGapMm + nB * SheetCommand.BandCellMm) * mm : 0;
+        double dt = nT > 0 ? (SheetCommand.TopGapMm + nT * SheetCommand.BandCellMm) * mm : 0;
+        return new ProfileSheetRules.Rect(ex.MinPoint.X, ex.MinPoint.Y - dn, ex.MaxPoint.X, ex.MaxPoint.Y + dt);
+    }
+
+    /// <summary>남의 것 — 이 도로 표식이 없는 모형 도곽 사각형 · 다른 노선의 종단뷰(밴드 포함) · 이름.</summary>
+    static List<(ProfileSheetRules.Rect R, string Name)> OtherRects(Transaction tr, Database db, ObjectId aid, string me, double mm)
+    {
+        var l = new List<(ProfileSheetRules.Rect, string)>();
+        var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+        foreach (ObjectId id in ms)
+        {
+            try
+            {
+                var o = tr.GetObject(id, OpenMode.ForRead);
+                if (o is Polyline pl && pl.Closed && string.Equals(pl.Layer, SheetCommand.LayFrameModel, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (SheetTag.Of(pl, out string r, out _, out _) && string.Equals(r, me, StringComparison.OrdinalIgnoreCase)) continue;
+                    var ex = pl.GeometricExtents;
+                    l.Add((new ProfileSheetRules.Rect(ex.MinPoint.X, ex.MinPoint.Y, ex.MaxPoint.X, ex.MaxPoint.Y), "다른 종단도의 도곽"));
+                }
+                else if (o is CivilDb.ProfileView pv && pv.AlignmentId != aid) l.Add((ViewRect(pv, mm), $"종단도 «{pv.Name}»"));
+            }
+            catch { }
+        }
+        return l;
+    }
+
+    /// <summary>이 도로 종단도 — 표식 있는 모형 도곽(횡단 «XSEC» 빼고) · 이 노선 종단뷰(밴드 포함). <paramref name="origin"/> = 첫 뷰 자리(설계 기록 첫 핸들 · 없으면 가장 왼쪽 뷰).</summary>
+    static List<ProfileSheetRules.Rect> OwnRects(Transaction tr, Database db, ObjectId aid, string me, double mm, out Point3d? origin)
+    {
+        origin = null;
+        var l = new List<ProfileSheetRules.Rect>();
+        string first = "";
+        try { var d = RoadDesign.Read(tr, aid); if (d != null && d.SheetViews.Count > 0) first = d.SheetViews[0]; } catch { }
+        Point3d? leftMost = null;
+        var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+        foreach (ObjectId id in ms)
+        {
+            try
+            {
+                var o = tr.GetObject(id, OpenMode.ForRead);
+                if (o is Polyline pl && pl.Closed && string.Equals(pl.Layer, SheetCommand.LayFrameModel, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!SheetTag.Of(pl, out string r, out _, out string k) || !string.Equals(r, me, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(k, SheetTag.KindXsec, StringComparison.Ordinal)) continue;
+                    var ex = pl.GeometricExtents;
+                    l.Add(new ProfileSheetRules.Rect(ex.MinPoint.X, ex.MinPoint.Y, ex.MaxPoint.X, ex.MaxPoint.Y));
+                }
+                else if (o is CivilDb.ProfileView pv && pv.AlignmentId == aid)
+                {
+                    l.Add(ViewRect(pv, mm));
+                    var p = pv.Location;
+                    if (string.Equals(id.Handle.ToString(), first, StringComparison.OrdinalIgnoreCase)) origin = p;
+                    if (leftMost == null || p.X < leftMost.Value.X) leftMost = p;
+                }
+            }
+            catch { }
+        }
+        origin ??= leftMost;
+        return l;
     }
 
     /// <summary>계획 종단 도장(<see cref="ProfileSheetRules.Stamp"/>) — PVI · 노선 시 · 종점.</summary>
@@ -112,7 +218,16 @@ internal static class RoadSheets
         var pr = (CivilDb.Profile)tr.GetObject(planId, OpenMode.ForRead);
         var pv = new List<(double, double)>();
         foreach (CivilDb.ProfilePVI q in pr.PVIs) pv.Add((q.RawStation, q.Elevation));
-        return ProfileSheetRules.Stamp(pv, al.StartingStation, al.EndingStation);
+        string st = ProfileSheetRules.Stamp(pv, al.StartingStation, al.EndingStation);
+        // ★[도로 마무리 ① · 계획 5.8] 끝 맞춤 도로 — 도로 구간(빈 구간 · 가상 자르기)이 바뀌면 «옛것»(끝 맞춤 꺼진 도로는 도장 그대로)
+        var d = RoadDesign.Read(tr, aid);
+        if (d != null && d.EndsOn)
+        {
+            var rg = RoadRanges.Of(tr, aid, d);
+            if (rg.Count != 1 || Math.Abs(rg[0].A - al.StartingStation) > 1e-3 || Math.Abs(rg[0].B - al.EndingStation) > 1e-3)
+                st += "|구간" + string.Join(",", rg.Select(r => $"{r.A:F3}~{r.B:F3}"));
+        }
+        return st;
     }
 
     /// <summary>★[계획 검토 M7] 부지 [종단도] 끝 — 진입도로 종단도 축척이 <paramref name="siteScale"/>과 다르면 한 줄(같으면 빈 글).</summary>

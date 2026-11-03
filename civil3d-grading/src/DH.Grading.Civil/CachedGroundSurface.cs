@@ -8,7 +8,7 @@ namespace DH.Grading.Civil;
 /// 표고를 조회한다. ray-march 루프마다 Surface.FindElevationAtXY를 호출하는 비용을 제거(JACK 성능 최적화).
 /// 격자 버킷 인덱스로 후보 삼각형만 검사 → O(1)에 가깝게 조회.
 /// </summary>
-public sealed class CachedGroundSurface : IGroundSurface
+public sealed class CachedGroundSurface : IGroundSurface, IGroundBreaks
 {
     // 삼각형 정점 XY/Z (정점 3개 평탄 배열)
     private readonly double[] _ax, _ay, _az, _bx, _by, _bz, _cx, _cy, _cz;
@@ -131,6 +131,12 @@ public sealed class CachedGroundSurface : IGroundSurface
                 }
         }
     }
+
+    /// <summary>★★[도로 마무리 ③ · 계획_도로마무리.md 4.1] 땅 꺾임 자리 — 이 면의 세모 · 격자 그대로(복사 없음 · 처음 부를 때 한 번 만듦).</summary>
+    TinBreaks? _breaks;
+    public void Breaks(double x0, double y0, double x1, double y1, List<GroundBreak> output)
+        => System.Threading.LazyInitializer.EnsureInitialized(ref _breaks, () => new TinBreaks(_ax, _ay, _az, _bx, _by, _bz, _cx, _cy, _cz, _count, _grid, _minX, _minY, _cell, _nx, _ny))!
+              .Breaks(x0, y0, x1, y1, output);
 
     public bool TryGetElevation(double x, double y, out double z)
     {

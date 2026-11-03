@@ -4,10 +4,18 @@
 import * as THREE from 'three';
 import { fatLines } from './lines.js';
 import { alignAt, stationName } from './extras.js';
+import { strataCut } from './strata.js';
 
 const fmt = (v, d = 2) => Number.isFinite(v) ? v.toLocaleString('ko-KR', { minimumFractionDigits: d, maximumFractionDigits: d }) : '—';
 const PLAN_LINE = 0xffd400, GROUND_LINE = 0x3ee6ff, CAP = 0x8b877f;   // 정지면 선 · 원지형 선 · 옹벽 잘린 면
 const hex = (c) => '#' + c.toString(16).padStart(6, '0');
+// ★★[JACK 1103] 지층 — 색 = 머리 color(2D 횡단 · 종단과 같은 색표) · 지하수위 = 파랑 점선(2D 파랑 점선 · 흙 위에서 보이게 밝게)
+const WATER_LINE = 0x3b82ff;
+const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+//   칠 색 = 2D 색 80 % + 흙 갈색 20 %(넓은 면이라 2D 선 색 그대로면 눈이 아프다 · 색 차례 · 빛깔은 그대로)
+const EARTH_RGB = [0x7a, 0x5a, 0x3c];
+const fillRgb = (c) => c.map((v, i) => Math.round(v * 0.8 + EARTH_RGB[i] * 0.2));
+const rgbHex = (c) => ((c[0] & 255) << 16) | ((c[1] & 255) << 8) | (c[2] & 255);
 
 export class Section {
   constructor(view, L, head, ui) {
@@ -20,6 +28,8 @@ export class Section {
     this.lines.userData.noClip = true;
     view.scene.add(this.lines);
     this.onEnd = null;     // 자르기 끝 — 아래 칸을 닫는 쪽에 알림
+    // ★[JACK 1103] 자르는 노선 — 부지 선형(처음 값) 또는 진입도로 하나(그 도로 측점을 누른 [3D에서 자르기]) · ◀ ▶ · 막대는 그 노선 측점만
+    this.A = L.align ? L.align.aligns[0] : null;
     // 보는 쪽 반을 숨긴다 — 사진기가 남는 쪽으로 넘어가면 면을 뒤집는다(돌아가 보면 반대쪽 단면 · 흙 채움도 그쪽으로 다시)
     view.onDraw(() => {
       if (!this.on) return;
@@ -27,7 +37,7 @@ export class Section {
     });
   }
 
-  get available() { return !!(this.L.align && this.L.align.st.length); }
+  get available() { return !!(this.A && this.A.st.length); }
 
   // 잘리는 재료 — 지형 구분 · 절성토 · 원지반 · 터파기 · 옹벽 · 무늬 · 빗물 · 지적 · 경사 · 건물(측점 · 자른 선 · 뚜껑은 안 잘림)
   _materials() {
@@ -91,7 +101,7 @@ export class Section {
 
   // 측점 i(가로선 그대로) · 또는 측점 값 s(중심선 위 · 진행 방향에 직각)
   at(where) {
-    const A = this.L.align;
+    const A = this.A;
     let p, n, s;
     if (typeof where === 'number' && Number.isInteger(where) && A.st[where]) {
       const st = A.st[where];
@@ -128,7 +138,8 @@ export class Section {
     this.view.request();
   }
 
-  start(where, face = true) {
+  start(where, face = true, A = null) {
+    if (A) this.A = A;
     this._ensureStencil();
     this._facing = face;
     if (!this.on) {
@@ -136,9 +147,8 @@ export class Section {
       this._setClip(true);
       for (const s of this.stencil) s.visible = true;
       this.cap.visible = true;
-      // 측점 층은 자르는 동안 숨긴다 — 중심선 · 이름이 단면 가운데에 겹겹이 쌓인다(끝나면 체크 상태대로)
-      const A = this.L.align;
-      if (A && A.obj) A.obj.visible = false;
+      // 측점 층(부지 · 진입도로)은 자르는 동안 숨긴다 — 중심선 · 이름이 단면 가운데에 겹겹이 쌓인다(끝나면 체크 상태대로)
+      for (const l of [this.L.align, this.L.ralign]) if (l && l.obj) l.obj.visible = false;
     }
     this.at(where);
     if (face) { this._face(); this._cutLines(this.p, this.plane.normal); }
@@ -151,8 +161,7 @@ export class Section {
     this._setClip(false);
     for (const s of this.stencil || []) s.visible = false;
     if (this.cap) this.cap.visible = false;
-    const A = this.L.align;
-    if (A && A.obj) A.obj.visible = A.on;
+    for (const l of [this.L.align, this.L.ralign]) if (l && l.obj) l.obj.visible = l.on;
     this._clearLines();
     this.view.request();
     if (this.onEnd) this.onEnd();
@@ -163,7 +172,7 @@ export class Section {
     const v = this.view, p = this.p;
     // 측점에서 진행 방향 뒤쪽(작은 측점 쪽)에서 본다 — 면은 사진기 쪽이 숨도록 다시 맞춤
     const n = this.plane.normal.clone();
-    const st = this.L.align.st[0];
+    const st = this.A.st[0];
     const w = st ? Math.hypot(st.r[0] - st.l[0], st.r[1] - st.l[1]) : 60;
     const d = Math.max(40, w * 1.15);
     const el = THREE.MathUtils.degToRad(18);
@@ -210,8 +219,11 @@ export class Section {
     if (T && T.pos) {
       const seg = Section.slice(T.pos, T.idx, n, d0, 0.03);
       if (seg.length) {
+        // ★[JACK 1103] 지층이 있으면 어두운 테 — 노란 지층(ACI 2) 위에서도 정지면 선이 보이게(지층 없는 장면은 그대로)
+        if (this.head.strata) { const k = fatLines(this.view, seg, 0x0c1a20, 6.5, { renderOrder: 6.9, depthWrite: false }); k.userData.noClip = true; this.lines.add(k); }
         const l = fatLines(this.view, seg, PLAN_LINE, 3.2, { renderOrder: 7 }); l.userData.noClip = true; this.lines.add(l);
         this.lines.add(this._earth(seg, n));
+        if (this.head.strata) this._strata(seg, n);
       }
     }
     // 원지반 — 그릴 때 5 cm 내렸다(layers.js) · 되올려 원래 높이
@@ -253,6 +265,52 @@ export class Section {
     return mesh;
   }
 
+  // ★★[JACK 1103] 잘린 땅 위 지층 띠 — 층마다 제 색 빗금(흙 막보다 1 cm 앞 · 옹벽 뚜껑보다 뒤) · 지하수위 = 지형 아래만 파랑 점선
+  _strata(seg, n) {
+    const S = this.head.strata, b = this.head.bbox || [0, 0, 0, 0, 0, 0];
+    const { tris, water } = strataCut(S, seg, b[2] - 5, 0.03);
+    const ox = n.x * 0.01, oy = n.y * 0.01, t = new THREE.Vector3(-n.y, n.x, 0);
+    let tex = null;
+    tris.forEach((a, k) => {
+      if (!a.length) return;
+      const pos = new Float32Array(a);
+      const uv = new Float32Array((pos.length / 3) * 2);
+      for (let i = 0, j = 0; i < pos.length; i += 3, j += 2) {
+        uv[j] = (pos[i] * t.x + pos[i + 1] * t.y) / 3; uv[j + 1] = pos[i + 2] / 3;
+        pos[i] += ox; pos[i + 1] += oy;
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+      tex = tex || this._strataTex();
+      const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ map: tex, color: rgbHex(fillRgb(S.layers[k].color)), side: THREE.DoubleSide }));
+      mesh.renderOrder = 5;
+      mesh.userData.noClip = true;
+      mesh.userData.stratum = S.layers[k].name;
+      mesh.raycast = () => {};
+      this.lines.add(mesh);
+    });
+    if (water.length) {
+      const l = fatLines(this.view, water, WATER_LINE, 2.4, { renderOrder: 8, depthTest: false, depthWrite: false, dash: [1.0, 0.6] });
+      l.userData.noClip = true;
+      this.lines.add(l);
+    }
+  }
+
+  // 지층 빗금 — 흰 바탕 + 45° 옅은 어두운 선(재료 색을 곱해 층 색 빗금)
+  _strataTex() {
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = 64;
+    const g = cv.getContext('2d');
+    g.fillStyle = '#ffffff'; g.fillRect(0, 0, 64, 64);
+    g.strokeStyle = 'rgba(0,0,0,0.22)'; g.lineWidth = 3;
+    for (let i = -64; i <= 64; i += 16) { g.beginPath(); g.moveTo(i, 64); g.lineTo(i + 64, 0); g.stroke(); }
+    const tx = new THREE.CanvasTexture(cv);
+    tx.wrapS = tx.wrapT = THREE.RepeatWrapping;
+    tx.colorSpace = THREE.SRGBColorSpace;
+    return tx;
+  }
+
   // 흙 빗금(횡단도 흙 표시) — 갈색 바탕 + 45° 옅은 선
   _earthTex() {
     const cv = document.createElement('canvas');
@@ -269,10 +327,19 @@ export class Section {
 
   // 아래 칸 — 자르기 · 측점 · ◀ 막대 ▶ · 범례(★[JACK 1028] 자르는 동안만 — 칸이 닫히면 같이 사라짐) · 끝
   panel(dock) {
-    const A = this.L.align;
+    const A = this.A;
     const key = [`<span><i class="ln" style="background:${hex(PLAN_LINE)}"></i>정지면</span>`];
     if (this.head.ground && this.head.ground.pos) key.push(`<span><i class="ln" style="background:${hex(GROUND_LINE)};box-shadow:0 0 0 1.5px #0c1a20"></i>원지형</span>`);
     key.push('<span><i style="background:repeating-linear-gradient(-45deg,#7a5a3c 0 4px,#a88a6c 4px 5px)"></i>흙</span>');
+    // ★★[JACK 1103] 지층 · 지하수위(있을 때만)
+    const S = this.head.strata;
+    if (S) {
+      for (const l of S.layers) {
+        const f = fillRgb(l.color), c = `rgb(${f.join(',')})`, d = `rgb(${f.map(v => Math.round(v * 0.78)).join(',')})`;
+        key.push(`<span><i style="background:repeating-linear-gradient(-45deg,${c} 0 4px,${d} 4px 5px)"></i>${esc(l.name)}</span>`);
+      }
+      if (S.water) key.push(`<span><i class="ln" style="background:repeating-linear-gradient(90deg,${hex(WATER_LINE)} 0 6px,transparent 6px 9px)"></i>${esc(S.water.name || '지하수위')}</span>`);
+    }
     if (this.L.wall) key.push(`<span><i style="background:${hex(CAP)}"></i>옹벽</span>`);
     dock.open('cut', `
       <div class="row"><span class="t">자르기</span><span class="v" id="cutT"></span><span class="grow"></span><button class="x" id="cutX" title="자르기 끝">✕</button></div>
@@ -300,8 +367,8 @@ export class Section {
   _label() {
     const el = document.getElementById('cutT');
     if (!el) return;
-    const A = this.L.align;
+    const A = this.A;
     const hit = A.st.find(t => Math.abs(t.s - this.s) < 0.01);
-    el.textContent = `${hit ? hit.label : stationName(this.s, A.index)} · ${fmt(this.s, 2)} m`;
+    el.textContent = `${A.road ? A.name + ' · ' : ''}${hit ? hit.label : stationName(this.s, A.index)} · ${fmt(this.s, 2)} m`;
   }
 }

@@ -78,5 +78,28 @@ else {
     }
 }
 
+# ── ③ [v112.0 · 계획_도면화.md Q1 · JACK 1103] 기본 도곽(K-water) — 공개 저장소에 안 올림 → 이 PC의 참고자료에서 해시 확인 후 번들로 ──
+#   해시가 다르면 복사하지 않고 알린다(JACK이 도곽을 고친 것 → 칸 숫자를 다시 재야 함). 없으면 도면화는 «단순 도곽»으로 된다.
+$frameSha = '9D32ACFC8B85AF9D604BABFFD56D5F6195B9E57368E53B739898A6C23F5915E3'
+$frameSrc = @(
+    (Join-Path $scriptDir '..\..\참고자료\그레이딩 참고도면\xr-수자원공사(BOX)_토목.dwg'),
+    (Join-Path $env:USERPROFILE 'Desktop\AI\참고자료\그레이딩 참고도면\xr-수자원공사(BOX)_토목.dwg')
+) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+$frameDst = Join-Path $pluginDir 'Contents\Frames\KWATER.dwg'
+if (-not $frameSrc) {
+    Say "기본 도곽(K-water) 원본을 못 찾음 — 도면화는 «단순 도곽»으로 됩니다(도면설정 «4. 도곽»에서 고를 수 있음)." 'Yellow'
+} else {
+    $h = (Get-FileHash -LiteralPath $frameSrc -Algorithm SHA256).Hash
+    if ($h -ne $frameSha) {
+        Say "! 기본 도곽 해시가 다릅니다($($h.Substring(0,8))… ≠ 9D32ACFC…) — 복사하지 않습니다." 'Red'
+        Say "  도곽 파일이 고쳐졌으면 표제란 칸 숫자(KWATER.frame.json)를 다시 재야 합니다." 'Yellow'
+    } else {
+        New-Item -ItemType Directory -Force (Split-Path -Parent $frameDst) | Out-Null
+        Copy-Item -LiteralPath $frameSrc $frameDst -Force
+        $h2 = (Get-FileHash -LiteralPath $frameDst -Algorithm SHA256).Hash
+        if ($h2 -eq $frameSha) { Say "기본 도곽(K-water) 복사 완료" 'Green' } else { Say "! 기본 도곽 복사 뒤 해시가 다름 — 다시 설치하세요." 'Red' }
+    }
+}
+
 Say "==== 설치 종료 ====" 'Cyan'
 Say "Civil3D를 실행하면 'DH 정지' 리본이 로드됩니다." 'Gray'

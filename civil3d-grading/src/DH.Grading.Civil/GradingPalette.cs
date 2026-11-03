@@ -181,11 +181,11 @@ public static class GradingPalette
         catch { }
     }
 
-    /// <summary>★[v111.6 · JACK 1102] ■ 도면(단추 켜짐 · 옛 면 알림)만 다시 맞춘다 — 우리 명령(DH…)이 끝날 때 RibbonApp 명령 끝 훅이 부른다.
+    /// <summary>★[v111.10] [계획지표면 초기화] 켜짐만 다시 맞춘다(옛 ■ 도면 자리) — 명령(DH… · U · UNDO · REDO · MREDO)이 끝날 때 RibbonApp 명령 끝 훅이 부른다.
     /// 칸 값은 안 건드린다(<see cref="Refresh"/>=SyncTo는 치고 있던 숫자를 되돌린다). 창이 안 떠 있으면 아무것도 안 한다(DB도 안 읽음).</summary>
-    internal static void RefreshSheets()
+    internal static void RefreshReset()
     {
-        try { if (_ps != null && _ps.Visible) _panel?.RefreshSheets(); }
+        try { if (_ps != null && _ps.Visible) _panel?.RefreshReset(); }
         catch { }
     }
 

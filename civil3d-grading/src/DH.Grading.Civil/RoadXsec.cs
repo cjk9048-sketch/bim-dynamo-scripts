@@ -50,10 +50,21 @@ internal static class RoadXsec
     }
 
     /// <summary>지금 측점 지문(도킹창 «종단이 수정되었습니다» 판정) — 그룹이 없으면 빈 글.</summary>
-    internal static string StationsKeyNow(Transaction tr, Database db, RoadDesign d)
+    internal static string StationsKeyNow(Transaction tr, Database db, RoadDesign d) => StationsKeyIn(tr, db, d, ObjectId.Null);
+
+    /// <summary>★[도로 마무리 ① · 계획 5.8] 도로 구간 안 측점으로 잰 지문(<see cref="Build"/>가 쓰는 측점과 같음 — 끝 맞춤 꺼진 도로는 <see cref="StationsKeyNow"/>와 같음). 이름을 따로 둠 — 시험 도구가 옛 것을 세 인자로 부름.</summary>
+    internal static string StationsKeyIn(Transaction tr, Database db, RoadDesign d, ObjectId aid)
     {
         var (gid, gname) = SheetGroup(tr, db, d);
-        return gid.IsNull ? "" : RoadXsecRules.StationsKey(Stations(tr, gid, gname, Math.Max(1.0, GradingSettings.XsecInterval)));
+        return gid.IsNull ? "" : RoadXsecRules.StationsKey(InRoad(tr, aid, d, Stations(tr, gid, gname, Math.Max(1.0, GradingSettings.XsecInterval))));
+    }
+
+    /// <summary>★[도로 마무리 ① · 계획 5.8] 도로 구간 안 측점만(빈 구간 · 잘린 끝 밖은 횡단도에서 뺌) — 끝 맞춤 꺼진 도로는 그대로(지금과 같음).</summary>
+    internal static List<(double St, string Label)> InRoad(Transaction tr, ObjectId aid, RoadDesign d, List<(double St, string Label)> st)
+    {
+        if (!d.EndsOn || aid.IsNull) return st;
+        var rg = RoadRanges.Of(tr, aid, d);
+        return rg.Count == 0 ? st : st.Where(q => RoadRanges.Inside(rg, q.St)).ToList();
     }
 
     /// <summary>[횡단도 그리기]를 못 하는 까닭(빈 글 = 됨) — 종단도 검토선 · 진입도로 지표면이 있어야 한다.
@@ -74,7 +85,7 @@ internal static class RoadXsec
 
     /// <summary>★[계획 3 · 검토 M6] 횡단 폭 — 진입도로 면 바깥 경계 꼭짓점의 노선 옆거리 최대(좌 · 우) + 여유 5 m를 5 m 단위로 올림(종단도 검토선 폭과 같은 규칙 — <see cref="ProfileSheetRules.RoadWidth"/>).
     /// 노선 시점 앞 · 종점 뒤 꼭짓점은 뺀다(그 자리는 횡단이 안 지남). 못 재면 (0, 0).</summary>
-    internal static (double L, double R, int N) RoadSideReach(Transaction tr, ObjectId aid, ObjectId roadSurf)
+    internal static (double L, double R, int N) RoadSideReach(Transaction tr, ObjectId aid, ObjectId roadSurf, List<(double A, double B)>? ranges = null)
     {
         double l = 0, r = 0; int n = 0;
         try
@@ -88,6 +99,7 @@ internal static class RoadXsec
                     double st = 0, off = 0; bool outside = false;
                     try { al.StationOffsetAcceptOutOfRange(p.X, p.Y, ref st, ref off, ref outside); } catch { continue; }
                     if (outside || st < s0 - 1e-6 || st > s1 + 1e-6) continue;
+                    if (ranges is { Count: > 0 } && !RoadRanges.Inside(ranges, st)) continue;   // ★[도로 마무리 ① · 계획 5.8] 구간 안 꼭짓점만
                     if (off < 0) l = Math.Max(l, -off); else r = Math.Max(r, off);
                     n++;
                 }
@@ -117,7 +129,7 @@ internal static class RoadXsec
         {
             var (gid, gn) = SheetGroup(tr, db, d);
             gname = gn;
-            stations = Stations(tr, gid, gn, Math.Max(1.0, GradingSettings.XsecInterval));
+            stations = InRoad(tr, aid, d, Stations(tr, gid, gn, Math.Max(1.0, GradingSettings.XsecInterval)));
             try
             {
                 // ★[v111.5 · 설치 전 검토 L8] 우리 진입도로 면일 때만(레이어 · 설명 — RoadSession.HasSurface와 같은 판정)
@@ -127,7 +139,7 @@ internal static class RoadXsec
             }
             catch { }
             ours = tr.GetObject(aid, OpenMode.ForRead) is CivilDb.Alignment al0 && RoadBuilder.IsOurs(al0);
-            reach = roadSurf.IsNull ? (0, 0, 0) : RoadSideReach(tr, aid, roadSurf);
+            reach = roadSurf.IsNull ? (0, 0, 0) : RoadSideReach(tr, aid, roadSurf, d.EndsOn ? RoadRanges.Of(tr, aid, d) : null);
             tr.Commit();
         }
         if (stations.Count == 0) throw new InvalidOperationException("진입도로 종단도 측점이 없습니다 — 진입도로 [종단도]부터");

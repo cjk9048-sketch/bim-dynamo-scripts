@@ -10,10 +10,12 @@ public static partial class RoadGrade
     internal sealed class MeshReport
     {
         public int Polys, Quads, Cdt, CdtFail, Inserted, Tris, FlatDropped;
+        /// <summary>★★[도로 마무리 ③] 레일에 넣은 땅 꺾임 점 · 몰림 무리 · 남는 오차 한도 최대(m) · 자리 · 바탕이 꺾임을 못 물음.</summary>
+        public int RailBreaks, RailClusters; public double RailBound; public string RailBoundAt = ""; public bool NoBreaks;
         public int NonManifold, Flipped, TJunctions, OpenEnds, OverlapHits, Holes, Thin; public double Area;
         public string ByPart = "";
         public bool Ok => CdtFail == 0 && NonManifold == 0 && Flipped == 0 && TJunctions == 0 && OverlapHits == 0 && Thin == 0 && OpenEnds == 0;
-        public string Text => $"세모 {Tris:N0}(네모 {Quads:N0} · 들로네 {Cdt:N0}" + (CdtFail > 0 ? $" · ⚠못 가름 {CdtFail}" : "") + (Inserted > 0 ? $" · 둘레 끼움 {Inserted}" : "") + (FlatDropped > 0 ? $" · 넓이 0 뺌 {FlatDropped}" : "") + (Holes > 0 ? $" · 속 구멍 메움 {Holes}" : "") + (Thin > 0 ? $" · ⚠바늘 {Thin}" : "") + ")"
+        public string Text => $"세모 {Tris:N0}(네모 {Quads:N0} · 들로네 {Cdt:N0}" + (CdtFail > 0 ? $" · ⚠못 가름 {CdtFail}" : "") + (Inserted > 0 ? $" · 둘레 끼움 {Inserted}" : "") + (FlatDropped > 0 ? $" · 넓이 0 뺌 {FlatDropped}" : "") + (Holes > 0 ? $" · 속 구멍 메움 {Holes}" : "") + (Thin > 0 ? $" · ⚠바늘 {Thin}" : "") + (RailBreaks > 0 ? $" · 땅 꺾임 점 {RailBreaks}" + (RailClusters > 0 ? $"(몰림 {RailClusters})" : "") + (RailBound > 0 ? $" · 남는 오차 한도 {RailBound * 1000:F2} mm" : "") : "") + (NoBreaks ? " · ⚠땅 꺾임 못 물음" : "") + ")"
                               + $" · 넓이 {Area:N0} ㎡" + (Ok ? " · 검사 통과" : $" · ⚠검사 — 세 세모 이상 변 {NonManifold} · 뒤집힘 {Flipped} · T자 {TJunctions} · 겹침 {OverlapHits} · 주름 틈 {OpenEnds}");
     }
 
@@ -116,7 +118,7 @@ public static partial class RoadGrade
         foreach (var cap in set.Caps) for (int i = 0; i + 1 < cap.Count; i++) Link(cap[i], cap[i + 1]);
         // ── 레일 — 내 점 + 이웃의 꺾임 거리(내 꺾은선 위 보간 · 이웃 띠와 같은 점 = 맞닿음) + 데이라잇 너머 땅(이웃이 더 길면 그 거리마다 · 바늘 세모 막음 · 계획 검토 M8) ──
         var rails = new Dictionary<Ray, List<RayPt>>(ReferenceEqualityComparer.Instance);
-        foreach (var kv in nb) rails[kv.Key] = Rail(kv.Key, kv.Value, ground);
+        foreach (var kv in nb) rails[kv.Key] = Rail(kv.Key, kv.Value, ground, rp);
         // ★[설치 전 검토 M2] 주인이 바뀌어 끊긴 광선 끝(주름 · 충돌) — 메운 뒤에도 둘레에 남으면 틈(칸 면으로 물러섬) · 속 구멍은 이 점이 낀 것만 메움(진짜 땅 섬은 안 덮음)
         var creaseV = new HashSet<int>();
         foreach (var r0 in nb.Keys) if (r0.End == RayEnd.Crease && r0.Pts.Count > 0) { var p = r0.Pts[^1]; creaseV.Add(vt.Id(p.X, p.Y, p.Z)); }
@@ -210,11 +212,16 @@ public static partial class RoadGrade
             var x = set.X[i]; var d = x.Deck;
             var sec = set.Sec;
             // ★[설치 전 검토 M1] MakeX가 점을 넣는 조건 그대로(한쪽 길어깨만 있어도)
-            var lats = new List<double> { -sec.OuterL };
+            // ★[도로 마무리 ②] 측구 구간이면 가장자리 = 측구 바깥 · 길어깨 끝 점이 하나 더(MakeX와 같은 조건)
+            var inpD = set.Inp;
+            double wL = inpD == null || inpD.Ditches.Count == 0 ? 0 : inpD.DitchW(-1, x.S), wR = inpD == null || inpD.Ditches.Count == 0 ? 0 : inpD.DitchW(1, x.S);
+            var lats = new List<double> { -sec.OuterL - wL };
+            if (wL > 1e-6) lats.Add(-sec.OuterL);
             if (sec.ShoulderL > 1e-6) lats.Add(-sec.HalfL);
             lats.Add(0);
             if (sec.ShoulderR > 1e-6) lats.Add(sec.HalfR);
-            lats.Add(sec.OuterR);
+            if (wR > 1e-6) lats.Add(sec.OuterR);
+            lats.Add(sec.OuterR + wR);
             var o = new List<(double, double, double, double)>();
             for (int k = 0; k < d.Count && k < lats.Count; k++) o.Add((lats[k], d[k].X, d[k].Y, d[k].Z));
             if (i == 0 || i == set.X.Count - 1)
@@ -352,7 +359,7 @@ public static partial class RoadGrade
     }
 
     /// <summary>레일 — 광선 점 + 이웃 꺾임 거리(내 꺾은선 위 보간) + 데이라잇(· 가장자리 옹벽)으로 끝났으면 이웃이 더 긴 만큼 땅 위 점(이웃 거리마다).</summary>
-    static List<RayPt> Rail(Ray r, List<Ray> nbrs, IGroundSurface ground)
+    static List<RayPt> Rail(Ray r, List<Ray> nbrs, IGroundSurface ground, MeshReport? rp = null)
     {
         var res = new List<RayPt>(r.Pts);
         if (r.Pts.Count == 0) return res;
@@ -379,13 +386,25 @@ public static partial class RoadGrade
         {
             var last = r.Pts[^1];
             double ux = r.Pts.Count > 1 ? (last.X - r.Pts[0].X) / Math.Max(1e-12, last.D) : r.Nx, uy = r.Pts.Count > 1 ? (last.Y - r.Pts[0].Y) / Math.Max(1e-12, last.D) : r.Ny;
-            double lastD = end;
+            double lastD = end, lastZ = last.Z;
             foreach (double d in ext)
             {
                 if (d - lastD < RailGap) continue;
-                lastD = d;
                 double x = r.Pts[0].X + ux * d, y = r.Pts[0].Y + uy * d;
                 if (!ground.TryGetElevation(x, y, out double g)) break;
+                // ★★[도로 마무리 ③ · 계획 4.2] ext 점 규칙(RailGap)은 그대로 · 그 사이 땅 꺾임 점을 정확히(몰림 = 점 하나 · 한도 보고)
+                if (rp != null)
+                {
+                    int na = 0, nc = 0;
+                    double bd = GroundBreaksOnRay(ground, r.Pts[0].X, r.Pts[0].Y, ux, uy, lastD, lastZ, d, g, res, ref na, ref nc);
+                    if (double.IsNaN(bd)) rp.NoBreaks = true;
+                    else
+                    {
+                        rp.RailBreaks += na; rp.RailClusters += nc;
+                        if (bd > rp.RailBound) { rp.RailBound = bd; rp.RailBoundAt = $"({x:F2},{y:F2})"; }
+                    }
+                }
+                lastD = d; lastZ = g;
                 res.Add(new RayPt(d, x, y, g, -2));
             }
         }

@@ -524,5 +524,134 @@ static class Web3DCheck
                       && r.Walls[0].Sta[0] == 0f && r.Walls[0].Sta[1] == 0f;
             check("S175 ⑦ 옹벽 층 — 줄마다 몸통 · 무늬 · 정거장 표(5칸) · 발자국 · 뒤집힘 0 · 열린 변 0 · 실패 0 · 원점 뺌", ok, r.Text);
         }
+
+        // ⑫ ★★[JACK 1103] 지층 격자(자르기 뷰) — 가짜 좌표(X ≈ 200,000 · Y ≈ 550,000) · 층 상단 셋 + 지하수위 · 범위 밖 NaN · 위 층보다 높은 마디 누름 · 높이 없는 층 뺌 · 되읽기
+        {
+            const double OX = 200000, OY = 550000;
+            double Gz(double x, double y) => 18 + 0.05 * (x - OX) + 2 * Math.Sin((y - OY) / 15);
+            // 층 1 표토 = 원지반 · 층 2 풍화암 = 표고 15 평평(원지반이 낮은 자리에서 위로 뚫음 → 누름) · 층 3 연암 = 원지반 − 6(x < OX + 30만) · 층 4 = 높이 없음
+            Func<double, double, double?> in60(Func<double, double, double> f) => (x, y) => x >= OX - 60 && x <= OX + 60 && y >= OY - 40 && y <= OY + 40 ? f(x, y) : null;
+            var layers = new List<Web3DStrata.Layer>
+            {
+                new("연암", 3, 255, 0, 191, (x, y) => x < OX + 30 && x >= OX - 60 && x <= OX + 60 && y >= OY - 40 && y <= OY + 40 ? Gz(x, y) - 6 : null),
+                new("표토", 1, 255, 127, 0, in60(Gz)),
+                new("풍화암", 2, 255, 255, 0, in60((x, y) => 15)),
+                new("없는층", 4, 0, 0, 0, (x, y) => null),
+            };
+            // 범위: 측점 상자 ± 여유 → 2 m부터(마디 한도 안) · 넓으면 키움
+            var g = Web3DStrata.Pick(OX - 70, OY - 50, OX + 70, OY + 50)!.Value;
+            var gBig = Web3DStrata.Pick(OX - 2000, OY - 1500, OX + 2000, OY + 1500)!.Value;
+            bool pickOk = g.Cell == 2.0 && g.W == 70 && g.H == 50 && gBig.Nodes <= Web3DStrata.MaxNodes && gBig.Cell > 1 && gBig.X0 + gBig.W * gBig.Cell >= OX + 2000 - 1e-9
+                          && Web3DStrata.Pick(OX, OY, OX, OY + 5) == null && Web3DStrata.Pick(double.NaN, 0, 1, 1) == null;
+            var sc = new Web3DScene();
+            var h = Web3DStrata.Head(sc, g, layers, (x, y) => x >= OX - 60 && x <= OX + 60 && y >= OY - 40 && y <= OY + 40 ? 17.5 : null, OX, OY, out string txt)!;
+            sc.Head["strata"] = h;
+            var (hd, buf, bo) = Web3DScene.Unpack(sc.PackGzip());
+            var S = hd.RootElement.GetProperty("strata");
+            var L = S.GetProperty("layers");
+            string names = string.Join(",", L.EnumerateArray().Select(e => e.GetProperty("name").GetString()));
+            var z1 = Web3DScene.ReadF32(L[0].GetProperty("z"), buf, bo); var z2 = Web3DScene.ReadF32(L[1].GetProperty("z"), buf, bo); var z3 = Web3DScene.ReadF32(L[2].GetProperty("z"), buf, bo);
+            var zw = Web3DScene.ReadF32(S.GetProperty("water").GetProperty("z"), buf, bo);
+            int bad = 0, nanOut = 0, pressed = 0, nan3 = 0; string first = "";
+            for (int j = 0; j <= g.H; j++)
+                for (int i = 0; i <= g.W; i++)
+                {
+                    int k = j * (g.W + 1) + i;
+                    double x = g.X0 + i * g.Cell, y = g.Y0 + j * g.Cell;
+                    bool inside = x >= OX - 60 && x <= OX + 60 && y >= OY - 40 && y <= OY + 40;
+                    if (!inside) { if (float.IsNaN(z1[k]) && float.IsNaN(z2[k]) && float.IsNaN(z3[k]) && float.IsNaN(zw[k])) nanOut++; else bad++; continue; }
+                    double g0 = Gz(x, y), w2 = Math.Min(15, g0), w3 = x < OX + 30 ? Math.Min(g0 - 6, w2) : double.NaN;
+                    if (15 > g0) pressed++;
+                    if (double.IsNaN(w3)) nan3++;
+                    bool ok = Math.Abs(z1[k] - g0) < 1e-4 && Math.Abs(z2[k] - w2) < 1e-4 && (double.IsNaN(w3) ? float.IsNaN(z3[k]) : Math.Abs(z3[k] - w3) < 1e-4) && zw[k] == 17.5f;
+                    if (!ok) { bad++; if (first.Length == 0) first = $"({i},{j}) {z1[k]}/{z2[k]}/{z3[k]} 대 {g0:F4}/{w2:F4}/{w3:F4}"; }
+                }
+            bool headOk = names == "표토,풍화암,연암" && Math.Abs(S.GetProperty("x0").GetDouble() + 70) < 1e-9 && Math.Abs(S.GetProperty("y0").GetDouble() + 50) < 1e-9
+                          && S.GetProperty("cell").GetDouble() == 2.0 && S.GetProperty("w").GetInt32() == 70 && S.GetProperty("h").GetInt32() == 50
+                          && L[2].GetProperty("color").EnumerateArray().Select(e => e.GetInt32()).SequenceEqual(new[] { 255, 0, 191 }) && L[1].GetProperty("ord").GetInt32() == 2
+                          && z1.Length == g.Nodes && txt.Contains("높이 없어 뺀 층 1") && txt.Contains("누른 마디");
+            // 지층이 하나도 없으면(범위 밖 · 높이 없음) null — 부르는 쪽이 열쇠를 안 넣는다
+            var none = Web3DStrata.Head(new Web3DScene(), g, new[] { layers[3] }, null, OX, OY, out string txt0);
+            check("S175 ⑫ 지층 격자(자르기 뷰) — 2 m 격자 · 넓으면 키움(마디 한도) · 층 차례 = 번호 · 위 층보다 높은 마디 누름 · 범위 밖 NaN · 높이 없는 층 뺌 · 지하수위 · 되읽기 · 원점 뺌 · 다 없으면 null",
+                pickOk && headOk && bad == 0 && nanOut > 0 && pressed > 0 && nan3 > 0 && none == null,
+                $"{txt} · 틀린 마디 {bad}{(first.Length > 0 ? " 첫 " + first : "")} · 범위 밖 NaN {nanOut} · 누른 자리 {pressed} · 연암 없음 {nan3} · 큰 범위 칸 {gBig.Cell:0.###} m 마디 {gBig.Nodes:N0} · «{txt0}»");
+        }
+
+        // ⑬ ★★[JACK 1103 «3D 뷰에서 진입도로 측점이 없어 · 부지 측점, 진입도로 측점이 별도로»] 진입도로 측점 머리 — 가짜 좌표(X ≈ 200,000 · Y ≈ 550,000) · 곧은 노선 둘(30° · −60°) ·
+        //    부지 «align»과 같은 열쇠 · 측점 차례 · 1 cm 겹침 뺌 · 노선 밖 측점만 뺌 · 정측점 · 좌우 끝 = 옆거리 · 오른쪽이 진행 방향 오른쪽 · 가로선 1 m마다 · 높이 = 지형 + 0.3 · 높이 없음 −99999/NaN ·
+        //    중심선 2 m마다 + 끝 · 원점 뺌 · 되읽기 · 측점 없으면 null + 덩어리 0(도로 없는 장면 바이트 그대로) · 검토선 옆거리 → 폭
+        {
+            const double OX = 200000, OY = 550000;
+            double? Z(double x, double y) => x > OX + 70 ? null : 30 + 0.02 * (x - OX) - 0.01 * (y - OY);
+            // 곧은 노선 — 시점 (x0, y0) · 방향각 deg · 길이 len · 옆거리 + = 진행 방향 오른쪽(Civil PointLocation과 같음)
+            Func<double, double, (double X, double Y)?> Road(double x0, double y0, double deg, double len)
+            {
+                double dx = Math.Cos(deg * Math.PI / 180), dy = Math.Sin(deg * Math.PI / 180);
+                return (s, o) => s < -1e-9 || s > len + 1e-9 ? null : (x0 + s * dx + o * dy, y0 + s * dy - o * dx);
+            }
+            var at1 = Road(OX + 10, OY - 20, 30, 85.3);
+            var at2 = Road(OX - 40, OY + 30, -60, 47.0);
+            var marks1 = new List<Web3DRoadStations.Mark>
+            {
+                new(40.004, "No.2(겹침)", 0), new(32.5, "No.1+12.50", 1), new(0, "No.0", 1), new(90, "No.4+10.00", 0), new(double.NaN, "?", 0),
+                new(20, "No.1", 2), new(40, "No.2", 1), new(85.3, "No.4+05.30", 0),
+            };
+            var sc = new Web3DScene();
+            var h1 = Web3DRoadStations.Head(sc, "DH도로_1", 0, 85.3, 20, 12.5, 9.75, marks1, at1, Z, OX, OY, out int skip1)!;
+            var h2 = Web3DRoadStations.Head(sc, "DH도로_2", 0, 47.0, 20, 8, 8, new[] { new Web3DRoadStations.Mark(0, "No.0", 0), new Web3DRoadStations.Mark(47, "No.2+07.00", 0) }, at2, Z, OX, OY, out int skip2)!;
+            sc.Head["roadAlign"] = new List<object> { h1, h2 };
+            var (hd, buf, bo) = Web3DScene.Unpack(sc.PackGzip());
+            var R = hd.RootElement.GetProperty("roadAlign");
+            var r1 = R[0];
+            var st = r1.GetProperty("st");
+            string keys = string.Join(",", r1.EnumerateObject().Select(p => p.Name)), skeys = string.Join(",", st[0].EnumerateObject().Select(p => p.Name));
+            string labels = string.Join(",", st.EnumerateArray().Select(e => e.GetProperty("label").GetString()));
+            string majors = string.Join("", st.EnumerateArray().Select(e => e.GetProperty("major").GetBoolean() ? "1" : "0"));
+            int bad = 0; string first = "";
+            void Bad(string w) { bad++; if (first.Length == 0) first = w; }
+            double c30 = Math.Cos(Math.PI / 6), s30 = Math.Sin(Math.PI / 6);
+            for (int k = 0; k < st.GetArrayLength(); k++)
+            {
+                var e = st[k];
+                double s = e.GetProperty("s").GetDouble();
+                double[] A(string n) => e.GetProperty(n).EnumerateArray().Select(q => q.GetDouble()).ToArray();
+                var c = A("c"); var l = A("l"); var r = A("r");
+                var pts = Web3DScene.ReadF32(e.GetProperty("pts"), buf, bo);
+                double wx = OX + 10 + s * c30, wy = OY - 20 + s * s30;
+                if (Math.Abs(c[0] - (wx - OX)) > 1e-3 || Math.Abs(c[1] - (wy - OY)) > 1e-3) Bad($"{s} 중심 자리");
+                var zz = Z(wx, wy);
+                if (zz.HasValue ? Math.Abs(c[2] - (zz.Value + Web3DRoadStations.Lift)) > 1e-3 : c[2] != -99999) Bad($"{s} 중심 높이 {c[2]}");
+                double dl = Math.Sqrt((l[0] - c[0]) * (l[0] - c[0]) + (l[1] - c[1]) * (l[1] - c[1])), dr = Math.Sqrt((r[0] - c[0]) * (r[0] - c[0]) + (r[1] - c[1]) * (r[1] - c[1]));
+                double cross = c30 * (r[1] - c[1]) - s30 * (r[0] - c[0]);     // 진행 방향 × (오른 끝 − 중심) < 0 = 오른쪽
+                if (Math.Abs(dl - 12.5) > 1e-3 || Math.Abs(dr - 9.75) > 1e-3 || cross >= 0) Bad($"{s} 좌우 {dl:F3}/{dr:F3} · 외적 {cross:F3}");
+                int np = (int)Math.Ceiling(12.5 + 9.75);
+                if (pts.Length != (np + 1) * 3 || Math.Abs(pts[0] - l[0]) > 1e-3 || Math.Abs(pts[^3] - r[0]) > 1e-3 || Math.Abs(pts[^2] - r[1]) > 1e-3) Bad($"{s} 가로선 점 {pts.Length / 3}");
+                for (int i = 0; i < pts.Length; i += 3)
+                {
+                    var zp = Z(pts[i] + OX, pts[i + 1] + OY);
+                    if (zp.HasValue ? Math.Abs(pts[i + 2] - (zp.Value + Web3DRoadStations.Lift)) > 1e-3 : !float.IsNaN(pts[i + 2])) { Bad($"{s} 가로선 높이 {i / 3}"); break; }
+                }
+            }
+            var line = Web3DScene.ReadF32(r1.GetProperty("line"), buf, bo);
+            int nLine = line.Length / 3;
+            double lastX = line[^3] + OX, lastY = line[^2] + OY;
+            bool lineOk = nLine == 44 && Math.Abs(line[3] - (10 + 2 * c30)) < 1e-3 && Math.Abs(lastX - (OX + 10 + 85.3 * c30)) < 1e-3 && Math.Abs(lastY - (OY - 20 + 85.3 * s30)) < 1e-3 && float.IsNaN(line[^1])
+                          && r1.GetProperty("step").GetDouble() == 2 && r1.GetProperty("s1").GetDouble() == 85.3 && r1.GetProperty("index").GetDouble() == 20;
+            bool headOk = keys == "name,line,s0,s1,step,index,views,st" && skeys == "s,label,major,views,c,l,r,pts" && R.GetArrayLength() == 2
+                          && r1.GetProperty("name").GetString() == "DH도로_1" && R[1].GetProperty("name").GetString() == "DH도로_2" && R[1].GetProperty("st").GetArrayLength() == 2
+                          && labels == "No.0,No.1,No.1+12.50,No.2,No.4+05.30" && majors == "11010" && r1.GetProperty("views").GetInt32() == 5 && skip1 == 1 && skip2 == 0;
+            // 측점이 없거나 다 노선 밖이면 null · 덩어리 0(부르는 쪽이 열쇠를 안 넣어 도로 없는 장면 바이트 그대로)
+            var sc0 = new Web3DScene();
+            var n0 = Web3DRoadStations.Head(sc0, "x", 0, 85.3, 20, 10, 10, Array.Empty<Web3DRoadStations.Mark>(), at1, Z, OX, OY, out _);
+            var n1 = Web3DRoadStations.Head(sc0, "x", 0, 85.3, 20, 10, 10, new[] { new Web3DRoadStations.Mark(99, "No.4+19.00", 0) }, at1, Z, OX, OY, out int skipN);
+            var n2 = Web3DRoadStations.Head(sc0, "x", 0, 85.3, 20, 0, 0, marks1, at1, Z, OX, OY, out _);
+            bool nullOk = n0 == null && n1 == null && skipN == 1 && n2 == null && sc0.BlobBytes == 0 && sc0.Pack().SequenceEqual(new Web3DScene().Pack());
+            var reach = Web3DRoadStations.Reach(new[] { -12.5, -3, 0, 4, 9.75, double.NaN });
+            var reach0 = Web3DRoadStations.Reach(Array.Empty<double>());
+            bool reachOk = reach == (12.5, 9.75) && reach0 == (0, 0);
+            check("S175 ⑬ 진입도로 측점 머리 — 부지 «align»과 같은 열쇠 · 측점 차례 · 1 cm 겹침 뺌 · 노선 밖만 뺌 · 정측점 · 좌우 끝 = 옆거리(오른쪽 = 진행 방향 오른쪽) · 가로선 1 m · 높이 = 지형 + 0.3 · 높이 없음 −99999/NaN · 중심선 2 m + 끝 · 도로 둘 · 되읽기 · 없으면 null + 덩어리 0 · 검토선 옆거리 → 폭",
+                headOk && lineOk && bad == 0 && nullOk && reachOk,
+                $"측점 {labels} · 정측점 {majors} · 뺌 {skip1} · 중심선 점 {nLine} · 틀림 {bad}{(first.Length > 0 ? " 첫 " + first : "")} · 열쇠 {keys} / {skeys} · null {nullOk} · 폭 {reach}");
+        }
     }
 }

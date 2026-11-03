@@ -23,10 +23,20 @@ public sealed class ImportGisCommand
     internal const string LayerContourIndex = "DH-등고선-계곡선";
     internal const string LayerParcel = "DH-지적도";
     internal const string LayerJibun = "DH-지번";
-    /// <summary>★[v109.1] 국공유지 필지 해치(하늘색 반투명) — 사유지 · 소유 자료 없음은 칠 없음.</summary>
+    /// <summary>★[v109.1] 국공유지 필지 해치(하늘색 반투명 · v111.10.1부터 일부 국공유는 따로 옅은 하늘색 칠 — 빗금 없음).</summary>
     internal const string LayerParcelPublic = "DH-지적-국공유지";
+    /// <summary>★[v111.11 · JACK 1103 «국공유지 · 사유지 표시도 안 돼»] 사유지 필지 해치(모래색 반투명).</summary>
+    internal const string LayerParcelPrivate = "DH-지적-사유지";
+    /// <summary>★[v111.11] 소유 자료 없음 필지 — 옅은 회색 칠(사유지라는 뜻이 아님).</summary>
+    internal const string LayerParcelNoOwn = "DH-지적-소유없음";
+    /// <summary>★[v111.10.1 · JACK 1103 «빗금 해치는 쓰지 마 — 도면이 너무 복잡해 보여»] 일부 국공유 필지 — 빗금 대신 더 옅은 하늘색 칠(따로 레이어).</summary>
+    internal const string LayerParcelMixed = "DH-지적-일부국공유";
+    /// <summary>★[v111.11] 소유 구분 범례(상자 오른쪽 위 바깥).</summary>
+    internal const string LayerParcelLegend = "DH-지적-범례";
+    /// <summary>필지 칠이 올라가는 레이어(그리기 순서 — 이미지 바로 위).</summary>
+    internal static readonly string[] ParcelFillLayers = { LayerParcelPublic, LayerParcelMixed, LayerParcelPrivate, LayerParcelNoOwn };
     /// <summary>★★[v109.1 · 검토 H2] 지적이 올라가는 레이어 <b>한 목록</b> — 가져오기(교체) · 지적도 삭제 · 초기화 보존이 모두 이것을 쓴다(«두 경로가 다른 자» 막기).</summary>
-    internal static readonly string[] ParcelLayers = { LayerParcel, LayerJibun, LayerParcelPublic };
+    internal static readonly string[] ParcelLayers = { LayerParcel, LayerJibun, LayerParcelPublic, LayerParcelMixed, LayerParcelPrivate, LayerParcelNoOwn, LayerParcelLegend };
     /// <summary>수치지도 DXF의 표고점 — 서버 지표면에는 없고 DXF에만 있다.</summary>
     internal const string LayerSpot = "DH-표고점";
 
@@ -38,7 +48,7 @@ public sealed class ImportGisCommand
 
     /// <summary>가져온 데이터가 올라가는 레이어(초기화·보존 판정 공용).</summary>
     internal static readonly string[] ImportLayers =
-        { LayerContour, LayerContourIndex, LayerParcel, LayerJibun, LayerParcelPublic, LayerSpot };
+        { LayerContour, LayerContourIndex, LayerParcel, LayerJibun, LayerParcelPublic, LayerParcelMixed, LayerParcelPrivate, LayerParcelNoOwn, LayerParcelLegend, LayerSpot };
 
     private const int MaxContourRows = 60000;   // 안전 상한(실측 5km각 754가닥이라 사실상 여유)
     private const int MaxParcelRows = 20000;    // 실측 5km각 6만 필지 → 상한 걸고 안내
@@ -256,47 +266,45 @@ public sealed class ImportGisCommand
 
             const double txtH = 1.0;   // 지번 글자 크기 — 1.0 고정(JACK 0731)
             string today = System.DateTime.Now.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
-            int nLine = 0, nHole = 0, nText = 0, nFill = 0, fillFail = 0, eraseFail = 0, nOd = 0;
+            int nLine = 0, nHole = 0, nText = 0, nFill = 0, fillFail = 0, eraseFail = 0, nOd = 0, nLayerOn = 0;
+            var fillBy = new int[4];   // 칠한 조각 — 국공유 · 일부 국공유 · 사유 · 소유 자료 없음
             string odNote = "";
+            // ★[v111.11] 개체 데이터는 그리기 트랜잭션을 닫은 <b>뒤</b> 따로 붙인다(아래 까닭)
+            var odJobs = new List<(ObjectId Id, VWorldParcels.Parcel P)>();
             using (var tr = db.TransactionManager.StartTransaction())
             {
                 // ★못 지웠으면 <b>새로 그리지 않는다</b> — 그리면 옛것 위에 겹쳐 두 벌이 된다.
                 //   (트랜잭션을 커밋 안 하고 나가므로 도면은 <b>건드린 자국조차 안 남는다</b>.)
-                eraseFail = EraseOnLayers(db, tr, ParcelLayers);   // 다시 불러오면 교체(선 · 지번 · 국공유지 해치 — 한 목록)
+                eraseFail = EraseOnLayers(db, tr, ParcelLayers);   // 다시 불러오면 교체(선 · 지번 · 칠 · 범례 — 한 목록)
                 if (eraseFail > 0) goto erasedFailed;
                 ObjectId layP = EnsureLayer(db, tr, LayerParcel, 2);        // 필지 노란색(JACK 0731)
                 ObjectId layT = EnsureLayer(db, tr, LayerJibun, 7);         // 지번 흰색(별도 레이어 — JACK)
-                bool newFill = !((LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead)).Has(LayerParcelPublic);
-                ObjectId layH = EnsureLayer(db, tr, LayerParcelPublic, 4);  // 국공유지 하늘색
-                // 투명 60 % — 처음 만들 때만(사람이 바꾼 값은 안 덮음) · 해치는 «도면층별»을 따른다
-                if (newFill) try { ((LayerTableRecord)tr.GetObject(layH, OpenMode.ForWrite)).Transparency = new Transparency((byte)102); } catch { }
+                // ★[v111.11 · JACK 1103] 소유 구분 칠 넷 — 색 · 투명은 처음 만들 때만(사람이 바꾼 값은 안 덮음) · 해치는 «도면층별»을 따른다
+                //   ★[v111.10.1 · JACK 1103 «빗금 해치는 쓰지 마 · 색상 해치만 희미하게»] 모두 단색 칠 · 투명 80 %(알파 51) · v111.10.0이 만든 옛 값(60 % · 40 %)이면 새 값으로 올림
+                ObjectId layPub = EnsureFillLayer(db, tr, LayerParcelPublic, Color.FromRgb(110, 170, 225), 51, 102);            // 국공유지 하늘색(순색 청록은 눈이 아파 누그러뜨림)
+                ObjectId layMix = EnsureFillLayer(db, tr, LayerParcelMixed, Color.FromRgb(175, 210, 238), 51, 0);               // 일부 국공유 — 더 옅은 하늘색
+                ObjectId layPri = EnsureFillLayer(db, tr, LayerParcelPrivate, Color.FromRgb(230, 190, 110), 51, 102);           // 사유지 모래색
+                ObjectId layUnk = EnsureFillLayer(db, tr, LayerParcelNoOwn, Color.FromRgb(170, 170, 170), 51, 153, Color.FromRgb(160, 160, 160));   // 소유 자료 없음 옅은 회색(옛 기본 160 회색이면 함께 바꿈)
+                ObjectId layLeg = EnsureLayer(db, tr, LayerParcelLegend, 7);
+                // ★[v111.11] 가져오기 = 보고 싶다는 뜻 — 꺼짐 · 동결이면 켠다([보기] 단추들이 DH- 레이어를 끄고 «전부 보기»가 가져온 레이어를 안 되켜던 길)
+                nLayerOn = ShowLayers(db, tr, ParcelLayers);
                 GradingBuilder.EnsureRegApp(db, tr, ParcelXData.App);
                 // [JACK 0731] 지번이 '?'로 깨지는 문제 — 기본 글꼴(txt.shx)이 한글을 못 그린다('산12-1' 등).
                 //   한글 트루타입 글꼴 스타일을 만들어 지번 문자에 지정한다.
                 ObjectId styleId = EnsureKoreanTextStyle(db, tr);
                 var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
 
-                // ★[M9] 특성 창용 개체 데이터 — 안 되는 판이면 XData만(로그) · 한 줄이 느리면(앞 100줄 평균 5 ms 넘게) 그 뒤는 끔
-                ParcelObjectData? od = null;
-                if (GradingSettings.ParcelObjectData)
-                {
-                    try { od = OpenParcelOd(db); }
-                    catch (System.Exception oex) { odNote = "특성 창 표시(개체 데이터) 못 함 — " + oex.GetType().Name; }
-                }
-                var odWatch = new System.Diagnostics.Stopwatch();
-                void Od(Autodesk.AutoCAD.DatabaseServices.DBObject o, VWorldParcels.Parcel p)
-                {
-                    if (od == null) return;
-                    try
-                    {
-                        odWatch.Start(); od.Attach(o, p, today); odWatch.Stop(); nOd++;
-                        if (nOd == 100 && odWatch.ElapsedMilliseconds > 500) { od = null; odNote = $"개체 데이터가 느려(100줄 {odWatch.ElapsedMilliseconds} ms) 앞 100줄만 넣음"; }
-                    }
-                    catch (System.Exception oex) { odWatch.Stop(); od = null; odNote = "개체 데이터를 넣다 멈춤 — " + oex.GetType().Name; }
-                }
-
                 foreach (var p in res.Parcels)
                 {
+                    // 소유 구분 → 칠(국공유 = 하늘색 · 일부 국공유 = 옅은 하늘색 · 사유 = 모래색 · 자료 없음 = 옅은 회색 — 모두 단색 · 빗금 없음)
+                    var kind = p.Own.Kind;
+                    var (layF, slot) = kind switch
+                    {
+                        VWorldParcels.OwnKind.Public => (layPub, 0),
+                        VWorldParcels.OwnKind.Mixed => (layMix, 1),
+                        VWorldParcels.OwnKind.Private => (layPri, 2),
+                        _ => (layUnk, 3),
+                    };
                     for (int i = 0; i < p.Pieces.Count; i++)
                     {
                         var pc = p.Pieces[i];
@@ -305,31 +313,29 @@ public sealed class ImportGisCommand
                         {
                             try
                             {
-                                var pl = new Polyline(ring.Count) { Closed = true, LayerId = layP };
+                                var pl = new Polyline(ring.Count) { LayerId = layP };
                                 for (int k = 0; k < ring.Count; k++) pl.AddVertexAt(k, new Point2d(ring[k].X, ring[k].Y), 0, 0, 0);
+                                pl.Closed = true;
                                 ms.AppendEntity(pl); tr.AddNewlyCreatedDBObject(pl, true);
                                 pl.XData = ParcelXData.Build(p, role, i, today);
-                                if (role == "outer") { nLine++; Od(pl, p); } else nHole++;
+                                if (role == "outer") { nLine++; odJobs.Add((pl.ObjectId, p)); } else nHole++;
                             }
                             catch { }
                         }
-                        // 국공유지(일부 국공유는 빗금) — 비연관 해치(바깥 + 구멍 고리)
-                        var kind = p.Own.Kind;
-                        if (kind != VWorldParcels.OwnKind.Public && kind != VWorldParcels.OwnKind.Mixed) continue;
+                        // 비연관 해치(바깥 + 구멍 고리)
                         Hatch? h = null;
                         try
                         {
-                            h = new Hatch { LayerId = layH, Associative = false };
+                            h = new Hatch { LayerId = layF, Associative = false };
                             ms.AppendEntity(h); tr.AddNewlyCreatedDBObject(h, true);
-                            if (kind == VWorldParcels.OwnKind.Public) h.SetHatchPattern(HatchPatternType.PreDefined, "SOLID");
-                            else { h.PatternScale = 1.0; h.SetHatchPattern(HatchPatternType.PreDefined, "ANSI31"); }
+                            h.SetHatchPattern(HatchPatternType.PreDefined, "SOLID");
                             // ★바깥 고리 = External — Outermost · Default로 주면 해치 넓이를 못 읽는다(eNotApplicable · 특성 창 넓이 빈칸 — 1029 화면 없는 Civil 실험 10×10 네모: External만 100.0)
                             h.AppendLoop(HatchLoopTypes.External | HatchLoopTypes.Polyline, Loop(pc.Shell), Bulges(pc.Shell.Count + 1));
                             foreach (var hr in pc.Holes) h.AppendLoop(HatchLoopTypes.Default | HatchLoopTypes.Polyline, Loop(hr), Bulges(hr.Count + 1));
                             h.EvaluateHatch(true);
                             h.XData = ParcelXData.Build(p, "fill", i, today);
-                            Od(h, p);
-                            nFill++;
+                            odJobs.Add((h.ObjectId, p));
+                            nFill++; fillBy[slot]++;
                         }
                         catch { fillFail++; try { h?.Erase(); } catch { } }
                     }
@@ -351,39 +357,69 @@ public sealed class ImportGisCommand
                         if (!styleId.IsNull) t.TextStyleId = styleId;   // 한글 글꼴
                         ms.AppendEntity(t); tr.AddNewlyCreatedDBObject(t, true);
                         t.XData = ParcelXData.Build(p, "label", -1, today);
-                        Od(t, p);
+                        odJobs.Add((t.ObjectId, p));
                         nText++;
                     }
                     catch { }
                 }
+                // ★[v111.11] 범례 — 상자 오른쪽 위 바깥(소유 구분 넷 + 필지 경계 · 필지 수)
+                try { DrawParcelLegend(tr, ms, layLeg, styleId, box, res, today); } catch { }
                 tr.Commit();
             }
-            DrawOrderFix.Apply(db);   // 배경지도 위로 지번이 보이게(JACK 0731) · 국공유지 해치는 이미지 바로 위
+            // ★★[v111.11 · JACK 1029 · 1103 «문자만 나와»] 개체 데이터(Map)는 그리기를 커밋한 <b>뒤</b> 따로 붙인다.
+            //   두 번 다 화면에서 필지 선만 안 보였다(15:20 자동 저장본에는 선 5 · 노랑 · 켜짐 · 높이 0 · 이미지 위 — 출력하면 보임).
+            //   화면 없는 Civil(개체 데이터가 못 붙음)은 늘 정상 — 다른 점은 «같은 트랜잭션에서 막 만든 객체에 Map이 제 트랜잭션으로 붙임» 하나라 그것을 뗀다.
+            if (GradingSettings.ParcelObjectData && odJobs.Count > 0)
+            {
+                ParcelObjectData? od = null;
+                try { od = OpenParcelOd(db); }
+                catch (System.Exception oex) { odNote = "특성 창 표시(개체 데이터) 못 함 — " + oex.GetType().Name; }
+                if (od != null)
+                {
+                    // 한 줄이 느리면(앞 100줄 0.5초 넘게) 그 뒤는 끔(M9 그대로)
+                    var odWatch = new System.Diagnostics.Stopwatch();
+                    using var trO = db.TransactionManager.StartTransaction();
+                    foreach (var (oid, p) in odJobs)
+                    {
+                        try
+                        {
+                            var o = trO.GetObject(oid, OpenMode.ForWrite);
+                            odWatch.Start(); od.Attach(o, p, today); odWatch.Stop(); nOd++;
+                            if (nOd == 100 && odWatch.ElapsedMilliseconds > 500) { odNote = $"개체 데이터가 느려(100줄 {odWatch.ElapsedMilliseconds} ms) 앞 100줄만 넣음"; break; }
+                        }
+                        catch (System.Exception oex) { odWatch.Stop(); odNote = "개체 데이터를 넣다 멈춤 — " + oex.GetType().Name; break; }
+                    }
+                    trO.Commit();
+                }
+            }
+            DrawOrderFix.Apply(db);   // 차례 = 이미지 · 필지 칠 · 나머지 · 필지 선 · 지번(선과 글자를 맨 위로 — 그리기도 다시 함)
+            try { db.TransactionManager.QueueForGraphicsFlush(); doc.TransactionManager.FlushGraphics(); } catch { }
             ed.Regen();
             goto drawn;
 
         erasedFailed:
             ed.WriteMessage($"\n[지적도] 이전 지적도 {eraseFail}개를 못 지웠습니다 — 새로 그리지 않았습니다."
-                + $"\n  '{LayerParcel}'·'{LayerJibun}'·'{LayerParcelPublic}' 레이어의 잠금을 풀고 다시 하세요.");
+                + $"\n  '{string.Join("'·'", ParcelLayers)}' 레이어의 잠금을 풀고 다시 하세요.");
             AcadApp.ShowAlertDialog("지적도를 다시 가져오지 못했습니다.\n\n"
                 + $"이전 필지·지번 {eraseFail}개를 못 지웠습니다(레이어 잠금 확인).\n"
-                + $"'{LayerParcel}'·'{LayerJibun}'·'{LayerParcelPublic}' 잠금을 풀고 다시 시도하세요.\n\n"
+                + $"'{string.Join("'·'", ParcelLayers)}' 잠금을 풀고 다시 시도하세요.\n\n"
                 + "※그냥 그리면 옛것 위에 겹쳐 두 벌이 됩니다.");
             try { DiagLog.Append($"\n■ DHPARCEL — 안 그렸다(이전 것 {eraseFail}개를 못 지움 · 레이어 잠금)\n"); } catch { }
             return;
 
         drawn:
-            // ★[H4] «소유 자료 없음» ≠ 사유지 — 칠하지 않은 까닭을 숨기지 않고 센다
+            // ★[H4] «소유 자료 없음» ≠ 사유지 — 따로 센다 · [v111.10.1] 옅은 회색으로 따로 칠함
             string own = $"국공유지 {res.Public:N0} · 사유지 {res.Private:N0}" + (res.Mixed > 0 ? $" · 일부 국공유 {res.Mixed:N0}" : "")
                        + (res.NoOwn > 0 ? $" · 소유 자료 없음 {res.NoOwn:N0}" : "");
             var warn = new List<string>();
-            if (res.NoOwn > 0) warn.Add($"소유 자료 없음 {res.NoOwn:N0}필지는 칠하지 않았습니다(사유지라는 뜻이 아님)");
+            if (res.NoOwn > 0) warn.Add($"소유 자료 없음 {res.NoOwn:N0}필지 = 옅은 회색(VWorld에 소유 구분이 없음 — 사유지라는 뜻이 아님)");
             if (got.WfsCut > 0) warn.Add("필지가 아주 많은 곳은 소유 정보가 일부 빠졌을 수 있습니다");
             if (got.LookupFail > 0 || got.LookupSkipped > 0) warn.Add($"공유 필지 소유 조회 {got.LookupFail + got.LookupSkipped:N0}건을 못 했습니다");
-            if (fillFail > 0) warn.Add($"국공유지 해치 {fillFail:N0}개를 못 만들었습니다(선은 있음)");
+            if (fillFail > 0) warn.Add($"소유 구분 칠 {fillFail:N0}개를 못 만들었습니다(선은 있음)");
+            if (nLayerOn > 0) warn.Add($"꺼져 있던 지적 레이어 {nLayerOn:N0}개를 켰습니다");
             if (odNote.Length > 0) warn.Add(odNote);
             string done = $"필지 {res.Parcels.Count:N0}개({own}) · 선 {nLine:N0}" + (nHole > 0 ? $"(구멍 {nHole:N0})" : "")
-                        + $" · 지번 {nText:N0} · 해치 {nFill:N0}"
+                        + $" · 지번 {nText:N0} · 칠 {nFill:N0}(국공유 {fillBy[0]:N0} · 일부 국공유 {fillBy[1]:N0} · 사유 {fillBy[2]:N0} · 자료 없음 {fillBy[3]:N0})"
                         + (res.DupRows > 0 ? $" · 상자 경계 겹침 {res.DupRows:N0} 걷음" : "") + (res.Fixed > 0 ? $" · 도형 고침 {res.Fixed:N0}" : "")
                         + (res.JibunMismatch > 0 ? $" · 지번 글자 ≠ PNU {res.JibunMismatch:N0}(PNU 씀)" : "");
             ed.WriteMessage($"\n[지적도] {done}");
@@ -392,6 +428,7 @@ public sealed class ImportGisCommand
             if (alone)
                 AcadApp.ShowAlertDialog($"지적도 가져오기 완료\n\n필지 {res.Parcels.Count:N0}개 — {own}"
                     + (warn.Count > 0 ? "\n\n⚠ " + string.Join("\n⚠ ", warn) : "")
+                    + "\n\n칠: 국공유지 = 하늘색 · 일부 국공유 = 옅은 하늘색 · 사유지 = 모래색 · 소유 자료 없음 = 옅은 회색(범례 = 범위 오른쪽 위)"
                     + "\n\n※ 출처: VWorld(연속지적 · 토지소유정보)");
             try { DiagLog.Append($"\n■ DHPARCEL — {done} · {got.Diag} · 개체 데이터 {nOd:N0}" + (warn.Count > 0 ? " · ⚠ " + string.Join(" · ", warn) : "") + $" · {csNote}\n"); } catch { }
         }
@@ -420,6 +457,131 @@ public sealed class ImportGisCommand
         var b = new DoubleCollection();
         for (int i = 0; i < n; i++) b.Add(0);
         return b;
+    }
+
+    /// <summary>★[v111.11] 칠 레이어 — 없을 때만 만들고 색 · 투명(<paramref name="alpha"/> = 255 불투명 · 0 투명)을 준다. 있으면 그대로(사람이 바꾼 값은 안 덮음).
+    /// ★[v111.10.1] 단, 같은 색에 투명이 우리 옛 기본(<paramref name="oldAlpha"/> — v111.10.0)이면 새 투명으로 올린다(사람이 바꾼 값이 아니라 우리 옛 값).</summary>
+    private static ObjectId EnsureFillLayer(Database db, Transaction tr, string name, Color color, byte alpha, byte oldAlpha, Color? oldColor = null)
+    {
+        var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+        if (lt.Has(name))
+        {
+            try
+            {
+                var r = (LayerTableRecord)tr.GetObject(lt[name], OpenMode.ForRead);
+                if (oldAlpha != 0 && r.Transparency.IsByAlpha && r.Transparency.Alpha == oldAlpha)
+                {
+                    r.UpgradeOpen();
+                    r.Transparency = new Transparency(alpha);
+                    // ★[v111.10.1 검토 낮음] 색은 우리 옛 기본 RGB 그대로일 때만(사람이 색만 바꾼 것은 안 덮음)
+                    if (oldColor is Color oc && r.Color.ColorMethod == ColorMethod.ByColor
+                        && r.Color.Red == oc.Red && r.Color.Green == oc.Green && r.Color.Blue == oc.Blue) r.Color = color;
+                }
+            }
+            catch { }
+            return lt[name];
+        }
+        lt.UpgradeOpen();
+        var ltr = new LayerTableRecord { Name = name, Color = color };
+        ObjectId id = lt.Add(ltr);
+        tr.AddNewlyCreatedDBObject(ltr, true);
+        try { ltr.Transparency = new Transparency(alpha); } catch { }
+        return id;
+    }
+
+    /// <summary>★[v111.11] 레이어가 꺼짐 · 동결이면 켠다(현재 레이어는 동결일 수 없음). 켠 개수.</summary>
+    private static int ShowLayers(Database db, Transaction tr, string[] names)
+    {
+        int n = 0;
+        var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+        foreach (var nm in names)
+        {
+            if (!lt.Has(nm)) continue;
+            try
+            {
+                var r = (LayerTableRecord)tr.GetObject(lt[nm], OpenMode.ForRead);
+                if (!r.IsOff && !r.IsFrozen) continue;
+                r.UpgradeOpen();
+                if (r.IsOff) r.IsOff = false;
+                if (r.IsFrozen) r.IsFrozen = false;
+                n++;
+            }
+            catch { }
+        }
+        return n;
+    }
+
+    /// <summary>★[v111.11 · JACK 1103] 소유 구분 범례 — 범위 상자 오른쪽 위 바깥 · 견본(칠 레이어와 같은 색 · 투명 · 무늬) + 이름 + 필지 수.
+    /// 모두 범례 레이어에 둔다(필지 선 레이어에 두면 [3D 보기]가 필지로 읽는다).</summary>
+    private static void DrawParcelLegend(Transaction tr, BlockTableRecord ms, ObjectId layLeg, ObjectId styleId,
+                                         VWorldParcels.Box box, VWorldParcels.Result res, string today)
+    {
+        var db = ms.Database;
+        double h = System.Math.Clamp(System.Math.Max(box.W, box.H) / 80.0, 1.0, 8.0);   // 글자 높이 · 견본 크기의 단위
+        double x0 = box.X1 + 2 * h, yTop = box.Y1;
+        var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+        (Color C, Transparency T) Look(string layer)
+        {
+            var r = (LayerTableRecord)tr.GetObject(lt[layer], OpenMode.ForRead);
+            return (r.Color, r.Transparency);
+        }
+        void Add(AcadEntity e) { e.LayerId = layLeg; ms.AppendEntity(e); tr.AddNewlyCreatedDBObject(e, true); }
+        void Text(string s, double x, double y, double ht)
+        {
+            var t = new DBText { TextString = s, Height = ht, Position = new Point3d(x, y, 0),
+                                 HorizontalMode = TextHorizontalMode.TextLeft, VerticalMode = TextVerticalMode.TextVerticalMid, AlignmentPoint = new Point3d(x, y, 0) };
+            if (!styleId.IsNull) t.TextStyleId = styleId;
+            Add(t);
+        }
+        Polyline Square(double y, short aci)
+        {
+            var pl = new Polyline(4);
+            pl.AddVertexAt(0, new Point2d(x0, y - 0.6 * h), 0, 0, 0);
+            pl.AddVertexAt(1, new Point2d(x0 + 2.4 * h, y - 0.6 * h), 0, 0, 0);
+            pl.AddVertexAt(2, new Point2d(x0 + 2.4 * h, y + 0.6 * h), 0, 0, 0);
+            pl.AddVertexAt(3, new Point2d(x0, y + 0.6 * h), 0, 0, 0);
+            pl.Closed = true;
+            pl.Color = Color.FromColorIndex(ColorMethod.ByAci, aci);
+            return pl;
+        }
+        void Fill(double y, string layer)
+        {
+            var (c, tp) = Look(layer);
+            var sq = Square(y, 8);
+            Add(sq);
+            var hh = new Hatch { Associative = false };
+            Add(hh);
+            hh.Color = c; hh.Transparency = tp;
+            hh.SetHatchPattern(HatchPatternType.PreDefined, "SOLID");
+            var loop = new Point2dCollection();
+            for (int i = 0; i < 4; i++) loop.Add(sq.GetPoint2dAt(i));
+            loop.Add(sq.GetPoint2dAt(0));
+            hh.AppendLoop(HatchLoopTypes.External | HatchLoopTypes.Polyline, loop, Bulges(5));
+            hh.EvaluateHatch(true);
+        }
+
+        Text($"지적 소유 구분(VWorld {today})", x0, yTop - 0.5 * h, h);
+        var rows = new (string Name, int N, string Layer)[]
+        {
+            ("국공유지", res.Public, LayerParcelPublic),
+            ("일부 국공유", res.Mixed, LayerParcelMixed),
+            ("사유지", res.Private, LayerParcelPrivate),
+            ("소유 자료 없음", res.NoOwn, LayerParcelNoOwn),
+        };
+        double y = yTop - 2.3 * h;
+        // 필지 경계 견본(노란 선)
+        var ln = new Polyline(2);
+        ln.AddVertexAt(0, new Point2d(x0, y), 0, 0, 0);
+        ln.AddVertexAt(1, new Point2d(x0 + 2.4 * h, y), 0, 0, 0);
+        ln.Color = Color.FromColorIndex(ColorMethod.ByAci, 2);
+        Add(ln);
+        Text($"필지 경계 · 지번({res.Parcels.Count:N0}필지)", x0 + 3.2 * h, y, 0.8 * h);
+        foreach (var (name, n, layer) in rows)
+        {
+            y -= 1.8 * h;
+            Fill(y, layer);
+            Text($"{name} {n:N0}", x0 + 3.2 * h, y, 0.8 * h);
+        }
     }
 
     // ── 공통 ──────────────────────────────────────────────────────────────────
@@ -634,8 +796,10 @@ public sealed class ImportGisCommand
         if (id.IsNull) return ObjectId.Null;
 
         var st = (Autodesk.Civil.DatabaseServices.Styles.SurfaceStyle)tr.GetObject(id, OpenMode.ForWrite);
-        try { st.ContourStyle.MinorContourInterval = MinorInterval; } catch { }
-        try { st.ContourStyle.MajorContourInterval = MajorInterval; } catch { }
+        // ★[v111.11 · JACK 1103] 도면설정 «등고선 · 계곡선 간격»을 바꾼 도면이면 그 값(기록이 없으면 2 · 10 그대로)
+        double mi = MinorInterval, ma = MajorInterval;
+        if (ContourInterval.TryRead(tr, st.Database, out double cmi, out double cma)) { mi = cmi; ma = cma; }
+        try { ContourInterval.SetOn(st, mi, ma); } catch { }
 
         // 표시 항목 정리 — 등고선·경계만 켜고 나머지(삼각망·점·경사 등)는 전부 끈다.
         //   열거값 이름을 일일이 적지 않고 전체를 돌며 처리(버전별 항목 차이에 안전).

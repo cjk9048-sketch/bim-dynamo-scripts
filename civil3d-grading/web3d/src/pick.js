@@ -45,7 +45,7 @@ export class Picker {
       if (moved < 5 && quick) this.click(e.clientX, e.clientY);
     });
     // ★[JACK 1028] 측점 위에 마우스 — 그 측점 강조(누르면 풍선이 뜰 바로 그 측점) · 끄는 중(버튼 누름)에는 끔 · 그림 한 장에 한 번만 셈
-    this._hov = -1;
+    this._hov = null;
     let hx = 0, hy = 0, hraf = 0;
     el.addEventListener('pointermove', e => {
       if (e.buttons) { this.hover(null); return; }
@@ -136,11 +136,13 @@ export class Picker {
   }
 
   // 화면에서 가장 가까운 측점 가로선(10 px 안) — 촘촘하면 첫 것이 아니라 가장 가까운 것(강조 = 누를 것)
+  //   ★[JACK 1103] 부지 측점 · 진입도로 측점 두 층 모두(보이는 것만)
   _nearStation(cx, cy) {
-    const A = this.L.align;
-    if (!A || !A.obj.visible) return null;
     let best = null, bd = Infinity;
-    for (const st of A.st) if (this._nearSeg(st.seg, cx, cy, 10) >= 0 && this._d2 < bd) { bd = this._d2; best = st; }
+    for (const A of [this.L.align, this.L.ralign]) {
+      if (!A || !A.obj.visible) continue;
+      for (const st of A.st) if (this._nearSeg(st.seg, cx, cy, 10) >= 0 && this._d2 < bd) { bd = this._d2; best = st; }
+    }
     return best;
   }
 
@@ -161,11 +163,10 @@ export class Picker {
   hover(cx, cy) {
     let st = null;
     if (cx != null && this.enabled && this.mode === 'info') { this._prep(); st = this._nearStation(cx, cy); }
-    const i = st ? st.i : -1;
-    if (i === this._hov) return;
-    this._hov = i;
-    const A = this.L.align;
-    if (A && A.highlight) A.highlight(st);
+    if (st === this._hov) return;
+    this._hov = st;
+    // 그 측점이 든 층만 강조 · 다른 층은 끔
+    for (const A of [this.L.align, this.L.ralign]) if (A && A.highlight) A.highlight(st && A.st.includes(st) ? st : null);
     this.view.renderer.domElement.style.cursor = st ? 'pointer' : '';
     this.view.request();
   }
@@ -254,6 +255,7 @@ export class Picker {
 
   describeStation(st) {
     const rows = [['측점', fmt(st.s, 3) + ' m'], ['횡단도', st.views > 0 ? `${st.views}장` : '없음']];
+    if (st.a && st.a.road) rows.unshift(['진입도로', st.a.name]);   // ★[JACK 1103] 도로가 여럿이어도 어느 도로인지
     return { title: st.label, rows, acts: this.stationActs ? this.stationActs(st) : [] };
   }
 

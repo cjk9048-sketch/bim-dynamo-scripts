@@ -264,7 +264,7 @@ public sealed class ViewSurfaceCommand
                     //   안 그리게") — 지표면이 제 등고선을 따로 그리므로 두 겹이 겹치기 때문이다.
                     //   그런데 예전 판으로 만든 도면에는 이 이름들이 <b>도면 안에 적혀</b> 남아 있어,
                     //   [전부 보기] 한 번에 원본이 되살아나 JACK 지시가 <b>되돌려진다</b>.
-                    if (System.Array.IndexOf(ImportGisCommand.ImportLayers, nm) >= 0) continue;
+                    if (System.Array.IndexOf(ImportGisCommand.GroundImportLayers, nm) >= 0) continue;   // ★[v111.11] 지적은 다시 켠다(등고선 · 표고점 원본만 꺼 둠 — 지적이 끈 채 남던 길)
                     try
                     {
                         var lr = (LayerTableRecord)tr.GetObject(lt[nm], OpenMode.ForRead);

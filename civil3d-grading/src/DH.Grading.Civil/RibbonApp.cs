@@ -21,7 +21,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.Web3DCommand))]               // DH3D(3D 보기 — Civil 안 3D 창 · v107)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ViewSurfaceCommand))]         // DHVIEW(지표면 보기 전환)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ExcavCommand))]              // DHEXCAV(터파기 지표면 — 지하구조물)
-[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ResetCommand))]               // DHRESET(초기화 — 정지면 생성 전으로)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ResetCommand))]               // DHRESET(전체 초기화) · DHGRADERESET(계획지표면 초기화) · DHROADRESET(진입도로 초기화)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.BasemapCommand))]             // DHMAP/DHMAPOFF(위성 배경지도 켜기·끄기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SectionCommand))]             // DHSECTION(종단·횡단 생성)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ProfileCommand))]             // DHPROFILE(종단도 — 노선 직접 그리기)
@@ -46,6 +46,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.CropGroundCommand))]         // DHCROP(원지형 자르기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SelfCheckCommand))]          // DHSELFCHECK(자가점검 — 읽기만 · v103.1.7)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.RoadCommand))]               // ★[v110] DHROAD · DHROADWALL · DHROADLIMIT · DHROADREDRAFT · DHROADOFF(진입도로) · ★[v111.6] DHROADPANEL(진입도로 창)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SheetBookCommand))]          // ★[v112.0] DHSHEETBOOK(도킹창 «도면화») · DHSHEETMAKE([작성하기] — 배치탭 · 도곽 · 표제란)
 
 namespace DH.Grading.Civil;
 
@@ -176,12 +177,21 @@ public sealed class RibbonApp : IExtensionApplication
         {
             d.CommandEnded += (_, e3) =>
             {
-                if (e3.GlobalCommandName != null &&
-                    e3.GlobalCommandName.StartsWith("DH", System.StringComparison.OrdinalIgnoreCase))
+                string c3 = (e3.GlobalCommandName ?? "").ToUpperInvariant();
+                if (c3.StartsWith("DH", System.StringComparison.Ordinal))
                 {
                     RefreshEnabled();
-                    // ★[v111.6 · JACK 1102] 정지 창 ■ 도면 — 정지면 생성 · 옹벽/사면 변환 · 종단도가 끝나면 «옛 면 기준» 한 줄을 다시 잰다(창이 떠 있을 때만)
-                    GradingPalette.RefreshSheets();
+                    // ★[v111.10] 정지 창 [계획지표면 초기화] · 진입도로 창 [진입도로 초기화] 켜짐(창이 떠 있을 때만)
+                    GradingPalette.RefreshReset();
+                    RoadPalette.RefreshReset();
+                    SheetBookPalette.Refresh();   // ★[v112.0] 도면화 창 — 장 수 · 축척 · 옛것(창이 보일 때만)
+                }
+                // ★[v111.10 · 계획 3.5] 초기화를 U로 되돌려도 단추가 꺼진 채 남지 않게 — 실행 취소 · 다시 실행도(RefreshEnabled는 빼고)
+                else if (c3 == "U" || c3 == "UNDO" || c3 == "REDO" || c3 == "MREDO")
+                {
+                    GradingPalette.RefreshReset();
+                    RoadPalette.RefreshReset();
+                    SheetBookPalette.Refresh();   // ★[v112.0] 도면화 창 — 장 수 · 축척 · 옛것(창이 보일 때만)
                 }
             };
         }
@@ -540,7 +550,7 @@ public sealed class RibbonApp : IExtensionApplication
             btnParcel.ToolTip = MakeTip("지적도 가져오기 (DHPARCEL)",
                 "범위 두 모서리를 클릭하면 그 사각 범위대로 잘라서\n" +
                 "필지 경계를 가져옵니다. 지번 · 지목은 별도 레이어(DH-지번),\n" +
-                "국공유지는 하늘색 반투명 해치(DH-지적-국공유지)입니다.\n" +
+                "소유 구분은 옅은 색 칠입니다(국공유 하늘 · 일부 국공유 옅은 하늘 · 사유 모래 · 자료 없음 회색).\n" +
                 "필지를 고르면 특성 창에 소유 구분 · 공시지가가 보입니다.\n" +
                 "※ 출처: VWorld(연속지적 · 토지소유정보)", null);
             var btnContour = MakeButton(
@@ -576,7 +586,7 @@ public sealed class RibbonApp : IExtensionApplication
             btnGroundOff.ToolTip = MakeTip("원지반 삭제 (DHGROUNDOFF)",
                 "[원지반 가져오기]로 만든 <b>'원지반' 지표면</b>과 그 재료(등고선·계곡선·표고점)를 지웁니다.\n" +
                 "· 직접 고른 다른 지표면은 지우지 않습니다.\n" +
-                "· 원지반으로 만든 정지·터파기 결과가 있으면 <b>같이 지웁니다</b>([초기화]와 같음) — 지우기 전에 물어봅니다.", null);
+                "· 원지반으로 만든 정지·터파기 결과가 있으면 <b>같이 지웁니다</b>([전체 초기화]와 같음) — 지우기 전에 물어봅니다.", null);
             var splitGround = new RibbonSplitButton
             {
                 Text = "원지반\n가져오기",
@@ -639,7 +649,7 @@ public sealed class RibbonApp : IExtensionApplication
             btnParcelOff.ToolTip = MakeTip("지적도 삭제 (DHPARCELOFF)",
                 "[지적도 삽입]으로 가져온 것을 <b>레이어 통째로</b> 지웁니다 — 필지 경계와 지번 글씨.\n" +
                 "· 레이어 자체는 남겨 다음에 다시 씁니다.\n" +
-                "· [초기화]는 <b>가져온 자료까지 함께</b> 지웁니다 — 지적도만 따로 버리고 싶을 때 쓰는 단추입니다.", null);
+                "· [전체 초기화]는 <b>가져온 자료까지 함께</b> 지웁니다 — 지적도만 따로 버리고 싶을 때 쓰는 단추입니다.", null);
 
             var splitParcel = new RibbonSplitButton
             {
@@ -672,12 +682,14 @@ public sealed class RibbonApp : IExtensionApplication
                 "  범위가 지형 밖이면 아무것도 지우지 않습니다.\n" +
                 "· 범위 밖에 통째로 있는 원본 등고선·표고점도 같이 정리합니다.", null);
 
+            // ★[v111.10 · JACK 1103 «리본 [초기화]는 없애지 않고 전체 초기화로»] 하는 일은 그대로 — 계획지표면 · 진입도로만 지우는 단추는 각 창 맨 끝(주황)
             var btnReset = MakeButton(
-                "초기화", "DHRESET ", "정지면 생성 전(원지반+계획폴리곤) 상태로 초기화 — DH가 만든 지표면·선을 모두 삭제", "초기화");
-            btnReset.ToolTip = MakeTip("초기화 (DHRESET)",
-                "정지 지표면(정지면_DH 등)과 사면선·소단선·노리선·옹벽선 등\n" +
+                "전체\n초기화", "DHRESET ", "정지면 생성 전(원지반+계획폴리곤) 상태로 초기화 — DH가 만든 지표면·선을 모두 삭제", "초기화");
+            btnReset.ToolTip = MakeTip("전체 초기화 (DHRESET)",
+                "정지 지표면(정지면_DH 등)과 사면선·소단선·노리선·옹벽선, 진입도로, 가져온 지적도 등\n" +
                 "DH가 만든 객체를 모두 지워 '정지면 생성 전' 상태로 되돌립니다.\n" +
-                "원지반과 계획폴리곤은 그대로 유지 — 부지를 바꿔 다시 검토할 때 사용.", null);
+                "원지반과 계획폴리곤은 그대로 유지 — 부지를 바꿔 다시 검토할 때 사용.\n" +
+                "· 계획지표면만 · 진입도로만 지우려면 각 창 맨 끝 [계획지표면 초기화] · [진입도로 초기화].", null);
 
             // ★★★[JACK 0901 UI 재배치] <b>일하는 순서대로</b> 늘어놓는다 —
             //   정지옵션 → 원지반 가져오기 → 계획부지 생성 → 사면 수정 → 보기.
@@ -874,6 +886,15 @@ public sealed class RibbonApp : IExtensionApplication
             pCommon.Items.Add(Spacer());
 
             tab.Panels.Add(new RibbonPanel { Source = pExport });
+            // ★★★[v112.0 · 계획_도면화.md 4.10 · JACK 1103 «도면화 단추 새로»] «내보내기» 맨 앞 — 도킹창 «도면화»(표제란 값 → [작성하기])
+            var btnBook = MakeButton("도면화", "DHSHEETBOOK ", "모형의 종단도 · 횡단도로 배치탭(도곽 · 표제란)을 만듭니다", "도면화");
+            btnBook.ToolTip = MakeTip("도면화 (DHSHEETBOOK)",
+                "모형의 종단도 · 횡단도로 **배치탭(도곽 · 표제란)**을 만듭니다.\n\n" +
+                "· 탭 = 전체 계획평면도 · 부지 종단면도 · 부지 횡단면도 · 진입도로 종단면도 · 진입도로 횡단면도\n" +
+                "· 장마다 페이지 설정(A1 · A3 맞춤)\n" +
+                "· 도곽 바꾸기는 [도면설정] «4. 도곽»", null);
+            pExport.Items.Add(Spacer());
+            pExport.Items.Add(btnBook);
             pExport.Items.Add(Spacer());
             pExport.Items.Add(btnInfra);
             pExport.Items.Add(Spacer());
@@ -1103,6 +1124,15 @@ public sealed class RibbonApp : IExtensionApplication
                         break;
 
                     // ── 도면화 ───────────────────────────────────────────────
+                    case "도면화": // ★[v112.0] 겹친 종이 두 장 + 표제란 띠 — 배치탭
+                        var bk = P(0x1f, 0x8a, 0x8e);
+                        dc.DrawRectangle(null, P(0xb0, 0xcc, 0xe8), new Rect(8, 3, 21, 16));
+                        dc.DrawRectangle(Brushes.White, bk, new Rect(3, 10, 22, 17));
+                        dc.DrawLine(bk, new Point(3, 22), new Point(25, 22));
+                        dc.DrawLine(bk, new Point(16, 22), new Point(16, 27));
+                        dc.DrawLine(P(0xf0, 0xa8, 0x3a), new Point(7, 15), new Point(20, 15));
+                        break;
+
                     case "도면설정": // 도곽 + 톱니 — 도면을 어떻게 그릴지
                         var ds = P(0xf0, 0xa8, 0x3a);
                         dc.DrawRectangle(null, ds, new Rect(4, 6, 17, 20));

@@ -122,6 +122,34 @@ public static class ProfileSheetRules
         return (atX - 130.0 * s, atX + n * SheetWmm * s);
     }
 
+    /// <summary>A1 세로(종이 mm) — <c>SheetCommand.SheetH</c>와 같은 값.</summary>
+    public const double SheetHmm = 594.0;
+
+    /// <summary>★★[JACK 1103 «충분히 멀리 찍었는데도 그래»] 도로 종단도 <paramref name="sheets"/>장이 쓸 <b>모형 사각형</b>(가로 · 세로) — 놓는 점 = 첫 뷰 삽입점(그래프 왼쪽 아래).
+    /// <para>가로 = <see cref="RoadSheetsSpan"/>. 세로 — 도곽(종이 594 mm)은 그래프 왼쪽 아래를 품으므로 놓는 점에서 아래로 한 장 높이보다 더 내려가지 않고
+    /// 위로도 한 장 높이를 넘지 않는다 · 그래프가 그보다 높으면(<paramref name="graphH"/> 모형 m) 그래프 꼭대기까지. 둘레에 <paramref name="marginMm"/>(종이 mm) 여유.</para></summary>
+    public static Rect RoadSheetsBox(double atX, double atY, double scale, int sheets, double graphH, double marginMm)
+    {
+        double s = (double.IsFinite(scale) && scale > 0 ? scale : DefaultScale) / 1000.0;
+        double m = (double.IsFinite(marginMm) && marginMm > 0 ? marginMm : 0) * s;
+        double up = Math.Max(SheetHmm * s, double.IsFinite(graphH) && graphH > 0 ? graphH : 0);
+        var (x0, x1) = RoadSheetsSpan(atX, scale, sheets);
+        return new Rect(x0 - m, atY - SheetHmm * s - m, x1 + m, atY + up + m);
+    }
+
+    /// <summary>★[설치 전 검토 · 중간] 종단 그래프 높이 짐작(모형 m) — 표고 범위를 눈금(<paramref name="step"/>)으로 올리고 한 칸 더(격자를 눈금에 맞추며 위 · 아래로 붙는 여유) × 수직과장.
+    /// 자리를 채우려 범위를 넓히는 것은 도곽 안이라 따로 셈하지 않는다. 범위가 없으면 0.</summary>
+    public static double GraphHeight(double zLo, double zHi, double step, double exaggeration)
+    {
+        if (!(double.IsFinite(zLo) && double.IsFinite(zHi)) || zHi < zLo) return 0;
+        double st = double.IsFinite(step) && step > 0 ? step : 5.0, ve = double.IsFinite(exaggeration) && exaggeration > 0 ? exaggeration : 1.0;
+        return (Math.Ceiling((zHi - zLo) / st) + 1) * st * ve;
+    }
+
+    /// <summary>두 사각형이 겹치나 —가로 · 세로 둘 다 겹쳐야 겹침(맞닿기만 하면 안 겹침). 같은 X라도 위 · 아래로 떨어져 있으면 안 겹침.</summary>
+    public static bool RectsOverlap(Rect a, Rect b)
+        => SpansOverlap(a.X0, a.X1, b.X0, b.X1) && SpansOverlap(a.Y0, a.Y1, b.Y0, b.Y1);
+
     /// <summary>★[v111.7.1 · JACK 1102 «모르는 사람은 그걸 어디에 찍는지 모른다»] [PVI 넣기] · [PVI 지우기]가 확대할 종단도 — 지금 화면 가운데(<paramref name="x"/>, <paramref name="y"/>)가 든 뷰 ·
     /// 없으면 가장 가까운 뷰(상자까지 거리 · 같으면 앞 차례). 상자가 없거나 모두 깨졌으면 −1.</summary>
     public static int NearestBox(IReadOnlyList<(double X0, double Y0, double X1, double Y1)> boxes, double x, double y)

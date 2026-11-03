@@ -25,10 +25,25 @@ public sealed class SheetSettingsCommand
 
         var (rp0, rx0) = RoadDrawingSettings.Read(doc.Database);
         int lay0 = GradingSettings.XsecLayout;
-        var dlg = new SheetDialog("저장", rp0, rx0);
+        var (cm0, cM0) = ContourInterval.Read(doc.Database);
+        var dlg = new SheetDialog("저장", rp0, rx0, cm0, cM0);
         AcadApp.ShowModalWindow(dlg);
         if (dlg.DialogResult != true) return;
+        SavedContour(doc, cm0, cM0, dlg.ContourMinor, dlg.ContourMajor);
         Saved(doc, rp0, rx0, dlg.RoadProfileScale, dlg.RoadXsecScale, lay0);
+    }
+
+    /// <summary>★★[v111.11 · JACK 1103 «원지형 및 모든 지형의 등고선 간격»] [저장] 뒤 — 바뀌었을 때만 도면에 적고 우리 지표면 스타일의 간격을 고친다
+    /// (이 명령 안이라 실행 취소 한 줄에 함께 · 안 바꿨으면 아무것도 안 씀). 창 없이 시험이 같은 길을 부른다.</summary>
+    internal static void SavedContour(Document doc, double mi0, double ma0, double mi1, double ma1)
+    {
+        if (System.Math.Abs(mi1 - mi0) <= 1e-9 && System.Math.Abs(ma1 - ma0) <= 1e-9) return;
+        try
+        {
+            ContourInterval.Write(doc.Database, mi1, ma1);
+            doc.Editor.WriteMessage("\n[도면 설정] " + ContourInterval.Apply(doc.Database, mi1, ma1));
+        }
+        catch (System.Exception ex) { doc.Editor.WriteMessage("\n[도면 설정] 등고선 간격 저장 실패 — " + ex.Message); }
     }
 
     /// <summary>★[v111.7.2 검토 낮음] 이 도면에 부지 횡단뷰(진입도로가 아닌 노선의 검토선에 매달린 횡단뷰)가 있나.</summary>

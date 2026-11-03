@@ -2134,6 +2134,23 @@ public sealed class CreateGradingCommand
                     // [JACK 목적② + 짜투리 제거] 계획과 무관한 루프·미세 조각(<5㎡)을 순수 루프에서 필터.
                     var own = RawTriangleIntersectionFinder.FilterPlanRelated(pureLoops[label], boundary, 5.0, out string fdiag);
                     diagX += $"\n■ 루프필터({label}) {fdiag}\n";
+                    // ★★[JACK 1103 «옹벽 변환 뒤 라운드부 구석이 깨져(계단)»] 이어닫기가 같은 옹벽 링 위 두 끝을 곧은 현으로 이은 변 → 링을 따라간다.
+                    //   현은 둥근 모서리에서 링 안쪽(아랫단 소단 위)으로 처져 수직 옹벽 면(평면폭 5 cm)을 통째로 지나고, Civil은 평면으로 잘라 그 면 세모를 버렸다(Core DaylightRings).
+                    //   옹벽 면(구배 ≤ WallGateSlope)의 머리 · 발에서만 — 옹벽 없는 도면은 v111.10.0 그대로 · 엇갈림이 늘면 그 변만 되돌린다(같은 방향 다른 고리 · 반대 방향 고리와도 셈)
+                    {
+                        var swR = System.Diagnostics.Stopwatch.StartNew();
+                        var ringsL = label == "절토" ? cut.Rings : fill.Rings;
+                        var oppLoops = pureLoops.TryGetValue(oppL, out var olR) ? olR : new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>();
+                        var rs = new DaylightRings.Stats();
+                        for (int oi = 0; oi < own.Count; oi++)
+                        {
+                            var others = new System.Collections.Generic.List<System.Collections.Generic.List<Point3>>(oppLoops);
+                            for (int oj = 0; oj < own.Count; oj++) if (oj != oi) others.Add(own[oj]);
+                            own[oi] = DaylightRings.FollowRings(own[oi], ringsL, GradingSettings.WallGateSlope, others, out var s1);
+                            rs.Add(s1);
+                        }
+                        diagX += $"■ 링 지름길({label}) — 같은 옹벽 링 위 두 끝을 곧게 이은 변 → 링 따라 {rs.Fixed}곳(현에서 최대 {rs.MaxSag * 100:0.#} cm) · 옹벽 아님 그대로 {rs.NotWall} · 너무 돌아 그대로 {rs.TooLong} · 엇갈림 늘어 되돌림 {rs.Reverted} · {swR.ElapsedMilliseconds} ms\n";
+                    }
                     // [진단 0729 — 다중 구역] 순수 루프가 전부 걸러졌으면(생성 실패 직행) 원인 분석용으로
                     //   병합 교선 전체를 CSV로 덤프 — 오프라인 하니스 재현에 사용(형상 미변경, 진단 전용).
                     if (own.Count == 0 && pureLoops[label].Count > 0)

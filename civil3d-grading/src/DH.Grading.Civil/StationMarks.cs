@@ -76,9 +76,7 @@ public static class StationMarks
             var d = (DBDictionary)tr.GetObject(obj.ExtensionDictionary, OpenMode.ForWrite);
             var rb = new ResultBuffer();
             foreach (double st in stations.OrderBy(x => x)) rb.Add(new TypedValue((short)DxfCode.Real, st));
-            var xr = new Xrecord { Data = rb };
-            d.SetAt(DictKeyDrop, xr);
-            tr.AddNewlyCreatedDBObject(xr, true);
+            PutXrecord(tr, d, DictKeyDrop, rb);
             return true;
         }
         catch { return false; }
@@ -262,12 +260,21 @@ public static class StationMarks
                 rb.Add(new TypedValue((short)DxfCode.Real, m.Station));
                 rb.Add(new TypedValue((short)DxfCode.Text, m.Why ?? ""));
             }
-            var xr = new Xrecord { Data = rb };
-            d.SetAt(DictKey, xr);          // 같은 이름이 있으면 갈아 끼운다
-            tr.AddNewlyCreatedDBObject(xr, true);
+            PutXrecord(tr, d, DictKey, rb);
             return true;
         }
         catch { return false; }
+    }
+
+    /// <summary>★[도로 마무리 · 화면 없는 Civil V98u 실측 1103] 같은 이름이 있으면 그 Xrecord의 값만 바꾼다(없으면 새로).
+    /// <para>예전처럼 SetAt으로 새 Xrecord를 갈아 끼우면 실행 취소(U)가 새것만 걷고 옛것을 되돌리지 않아 <b>항목이 통째로 사라졌다</b>
+    /// ([끝 맞추기] → U 뒤 수동 측점 · 지운 측점이 빈 목록) — 설계 기록(RoadDesign.Write)과 같은 법으로.</para></summary>
+    static void PutXrecord(Transaction tr, DBDictionary d, string key, ResultBuffer rb)
+    {
+        if (d.Contains(key) && tr.GetObject(d.GetAt(key), OpenMode.ForWrite) is Xrecord old) { old.Data = rb; return; }
+        var xr = new Xrecord { Data = rb };
+        d.SetAt(key, xr);
+        tr.AddNewlyCreatedDBObject(xr, true);
     }
 
     // ── 모으는 쪽(수집기) ────────────────────────────────────────────────────

@@ -206,7 +206,7 @@ public sealed partial class XsecViewCommand
         else if (at0 != null) { at = at0.Value; log.AppendLine("  자리는 지난번 그대로(측점을 고쳐 다시 그린다)"); }
         else
         {
-            var pr = ed.GetPoint("\n[횡단도] 횡단면도를 놓을 왼쪽 아래 자리를 클릭 (Esc=취소): ");
+            var pr = CursorLabel.GetPoint(ed, new PromptPointOptions("\n[횡단도] 횡단면도를 놓을 왼쪽 아래 자리를 클릭 (Esc=취소): "), "횡단도 작성 위치(왼쪽 아래) 클릭", "Esc 취소");   // ★[JACK 1103] 진입도로처럼 커서 이름표
             if (pr.Status != PromptStatus.OK) { ed.WriteMessage("\n[횡단도] 취소."); Flush(log); return false; }
             at = pr.Value.TransformBy(ed.CurrentUserCoordinateSystem);
         }
@@ -809,7 +809,7 @@ public sealed partial class XsecViewCommand
         //   자리는 뷰를 옮긴 <b>뒤</b>라야 맞으므로 <see cref="DrawCenterAxis"/>와 같은 자리에 둔다.
         else DrawCenterTickLabels(db, viewIds, XsecStyleId(db, viewIds), scale, annoScale, log);
         X9($"중심축/눈금 끝 — 도곽 {nPages}장 그리기");
-        DrawXsecFrames(db, at, nPages, sc, cols, rows, PageGap, scale, log, t?.Title);   // ★[v111.5] 진입도로 제목 «진입도로 횡단면도»
+        DrawXsecFrames(db, at, nPages, sc, cols, rows, PageGap, scale, log, t?.Title, annoScale);   // ★[v111.5] 진입도로 제목 «진입도로 횡단면도» · ★[v112.0] 장 표식에 그린 때 주석 축척
         X9("도곽 끝 — 수량표 그리기");
         DrawQtyTables(db, viewIds, bandPaperMm, sc, tableRight, TableGapMm * sc, qty, fold, log, qty.Basis, t?.TableStyle);   // ★[v111.5] 진입도로 = 수량표 스타일 복사본
         // ★[JACK 0826] 선 색·눈금은 <b>숨기기 전</b>에 — 숨긴 뒤에도 되지만 로그 차례가 헷갈린다.
@@ -831,7 +831,7 @@ public sealed partial class XsecViewCommand
         DrawStrataNames(db, viewIds, kindOf, alignId, wl, wr, scale, leftLim, log);   // ★[JACK 0828] 지층·지하수위 이름
         X9("옹벽 단면");
         // ★[v111.5 · 계획 2 · 검토 M2] 진입도로 = 옹벽 단면 · 터파기선을 안 그림(도로 옹벽은 지표면 선의 수직면으로만 — 부지 옹벽 기록은 부지 노선 것)
-        string wsec = t == null ? DrawWallSections(db, viewIds, alignId, wl, wr, scale, log, qty.X2) : "";   // ★★★[v104.1 · JACK 1022] 옹벽 단면 넣기 · ★[v105.3] 2D 터파기선 · 배면
+        string wsec = t == null ? DrawWallSections(db, viewIds, alignId, wl, wr, scale, log, qty.X2) : DrawDitchSections(db, viewIds, alignId, wl, wr, scale, log);   // ★★★[v104.1 · JACK 1022] 옹벽 단면 넣기 · ★[v105.3] 2D 터파기선 · 배면 · ★[도로 마무리 ②] 진입도로 = 측구 단면
         X9("밴드 묶기");
         BindBandSections(db, viewIds, kindOf, scale, annoScale, log, t != null ? RoadKind : "정지면");   // ★[v111.5 · 검토 M1] 진입도로 FGL = 진입도로 단면
         X9("측점 밴드");
@@ -1735,7 +1735,7 @@ public sealed partial class XsecViewCommand
     /// <b>칸 경계선</b>도 함께 그어 준다 — 한 칸에 하나씩 들어갔는지 눈으로 대볼 수 있다.</para></summary>
     private static int DrawXsecFrames(Database db, Point3d at, int nPages, double sc,
                                       int cols, int rows, double pageGap, double scaleForTitle,
-                                      System.Text.StringBuilder log, string title = null)
+                                      System.Text.StringBuilder log, string title = null, double annoScale = 0)
     {
         title ??= "토공 횡단면도";   // ★[v111.5] 진입도로 = «진입도로 횡단면도»
         if (nPages <= 0) return 0;
@@ -1763,7 +1763,9 @@ public sealed partial class XsecViewCommand
                 // 배치의 원점(at)은 <b>안쪽 왼쪽 아래</b>다 — 뷰를 거기 기준으로 놓았으므로 도곽도 거기서 되짚는다.
                 double ix = at.X + p * (sheetW + pageGap);
                 double iy = at.Y;
-                SheetCommand.AddRect(tr, ms, lay, ix - mL, iy - mB, ix - mL + sheetW, iy - mB + sheetH);  // 종이
+                var outer = SheetCommand.AddRect(tr, ms, lay, ix - mL, iy - mB, ix - mL + sheetW, iy - mB + sheetH);  // 종이
+                // ★★[v112.0 · 계획_도면화.md 4.4-1 · 검토 H2] 장 표식 — 횡단은 그때의 주석 축척(annoScale)에 맞춰 글자를 그렸다 → 도면화 뷰포트가 그 값을 건다
+                SheetFrameTag.Put(db, tr, outer, SheetFrameTag.KindXsec, scaleForTitle, annoScale);
                 SheetCommand.AddRect(tr, ms, lay, ix, iy, ix + innerW, iy + innerH);                       // 안쪽
                 n++;
                 // ★[JACK 도면] 제목은 <b>안쪽 테두리 바로 위</b> 가운데, 아래에 축척.

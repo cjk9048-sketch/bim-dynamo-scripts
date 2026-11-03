@@ -401,6 +401,19 @@ internal static class DhBrand
         return (ok, cancel);
     }
 
+    /// <summary>★[v111.10 · JACK 1103 «창마다 초기화 단추 = 주황»] 지우는 단추(주황 테두리 · 주황 글자) — 계획부지 정지 창 · 진입도로 창 맨 끝.</summary>
+    internal static Button CautionButton(string text, string tip)
+    {
+        var b = new Button
+        {
+            Content = text, Height = 30, MinWidth = 72, Padding = new Thickness(12, 0, 12, 0), Margin = new Thickness(0, 2, 6, 4),
+            HorizontalAlignment = HorizontalAlignment.Left, VerticalContentAlignment = VerticalAlignment.Center, ToolTip = tip,
+        };
+        var sk = Skin;
+        if (sk != null) try { b.Style = (Style)sk["DhCaution"]; } catch { }
+        return b;
+    }
+
     // ── 모양표(XAML) ───────────────────────────────────────────────────────
     /// <summary>이름표 없는 스타일 모음 — 붙이기만 하면 그 아래 전부에 걸린다.
     /// <para>편집형 콤보(<c>IsEditable</c>)는 이 저장소에 <b>하나도 없다</b>(0908 확인).
@@ -418,6 +431,10 @@ internal static class DhBrand
   <SolidColorBrush x:Key="DhLineB"     Color="#DCE3E4"/>
   <SolidColorBrush x:Key="DhCardB"     Color="#FFFFFF"/>
   <SolidColorBrush x:Key="DhWallB"     Color="#F5F8F8"/>
+  <!-- ★[v111.10 · JACK 1103 «초기화 단추는 주황»] 지우는 단추 — 흰 바탕 · 주황 테두리 · 주황 글자(눈에 띄되 기본 단추보다 조용히) -->
+  <SolidColorBrush x:Key="DhCautionB"    Color="#C2581B"/>
+  <SolidColorBrush x:Key="DhCautionLnB"  Color="#E8B48E"/>
+  <SolidColorBrush x:Key="DhCautionDimB" Color="#FCF1E8"/>
 
   <!-- 입력칸 -->
   <Style TargetType="TextBox">
@@ -530,6 +547,47 @@ internal static class DhBrand
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter TargetName="bd" Property="Background" Value="{StaticResource DhLineB}"/>
+              <Setter Property="Foreground" Value="{StaticResource DhSubB}"/>
+              <Setter Property="Cursor" Value="Arrow"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <Style x:Key="DhCaution" TargetType="Button">
+    <Setter Property="FontFamily" Value="Malgun Gothic"/>
+    <Setter Property="FontSize" Value="12"/>
+    <Setter Property="Foreground" Value="{StaticResource DhCautionB}"/>
+    <Setter Property="Background" Value="{StaticResource DhCardB}"/>
+    <Setter Property="BorderBrush" Value="{StaticResource DhCautionLnB}"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="Padding" Value="14,0,14,0"/>
+    <Setter Property="MinHeight" Value="30"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="bd" CornerRadius="4" SnapsToDevicePixels="True"
+                  Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="{TemplateBinding BorderThickness}">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                              Margin="{TemplateBinding Padding}" RecognizesAccessKey="True"/>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="bd" Property="Background" Value="{StaticResource DhCautionDimB}"/>
+              <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource DhCautionB}"/>
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+              <Setter TargetName="bd" Property="Background" Value="{StaticResource DhCautionDimB}"/>
+              <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource DhCautionB}"/>
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter TargetName="bd" Property="Background" Value="{StaticResource DhWallB}"/>
+              <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource DhLineB}"/>
               <Setter Property="Foreground" Value="{StaticResource DhSubB}"/>
               <Setter Property="Cursor" Value="Arrow"/>
             </Trigger>

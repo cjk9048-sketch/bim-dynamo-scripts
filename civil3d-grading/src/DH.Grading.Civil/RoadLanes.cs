@@ -13,7 +13,20 @@ internal static class RoadLanes
     const double Step = 0.5;
 
     /// <summary>도로 하나 — 노선 · 이름 · 범위 · 폭(지금 설계는 한 값 — 확폭이 생기면 측점마다로) · 그 도로 면 발자국 F(차선 칸이 F 밖이면 버림).</summary>
-    internal sealed record Road(ObjectId Aid, string Name, double S0, double S1, double HalfL, double HalfR, double OuterL, double OuterR, Geometry? Foot);
+    /// <param name="Ranges">★[도로 마무리 ① · 계획 5.8] 도로 구간(<see cref="RoadRanges"/> — 잘린 끝 · 빈 구간 뺌 · 하나면 [S0, S1]).</param>
+    /// <param name="D">★[도로 마무리 ②] 설계(측구 구간의 포장 폭 — 측구 윗면 = 콘크리트 «길어깨» 구분). 측구가 없으면 폭은 한 값(지금과 같음).</param>
+    internal sealed record Road(ObjectId Aid, string Name, double S0, double S1, double HalfL, double HalfR, double OuterL, double OuterR, Geometry? Foot,
+                                List<(double A, double B)>? Ranges = null, RoadDesign? D = null)
+    {
+        internal List<(double A, double B)> Spans => Ranges is { Count: > 0 } ? Ranges : new() { (S0, S1) };
+        /// <summary>그 측점 포장 바깥 반폭(좌 · 우) — 측구 구간이면 + 측구 윗폭.</summary>
+        internal (double L, double R) OuterAt(double s)
+        {
+            if (D == null || D.Ditches.Count == 0) return (OuterL, OuterR);
+            double wl = D.DitchAt(-1, s) is { } a ? RoadDesign.ShapeOf(a)?.TopWidth ?? 0 : 0, wr = D.DitchAt(1, s) is { } b ? RoadDesign.ShapeOf(b)?.TopWidth ?? 0 : 0;
+            return (OuterL + wl, OuterR + wr);
+        }
+    }
 
     internal static Road? Of(Transaction tr, ObjectId aid, RoadDesign d, string name, Geometry? foot)
     {
@@ -24,13 +37,28 @@ internal static class RoadLanes
         double s0 = Math.Max(al.StartingStation, pr.StartingStation), s1 = Math.Min(al.EndingStation, pr.EndingStation);
         if (!(s1 > s0)) return null;
         var sec = d.Section();
-        return new Road(aid, name, s0, s1, sec.HalfL, sec.HalfR, sec.OuterL, sec.OuterR, foot);
+        var rg = RoadRanges.Of(tr, aid, d);   // ★[도로 마무리 ① · 계획 5.8] 끝 맞춤 꺼진 도로 = [s0, s1] 하나(지금과 같음)
+        if (rg.Count == 0) return null;
+        return new Road(aid, name, rg[0].A, rg[^1].B, sec.HalfL, sec.HalfR, sec.OuterL, sec.OuterR, foot, rg, d);
     }
 
     /// <summary>측점 — 0.5 m마다(곱으로 — 누적 반올림 없음) + 노선 요소 경계(범위 안) + 범위 끝 · 1 µm 안 겹침 뺌.</summary>
-    static List<double> Stations(CivilDb.Alignment al, double s0, double s1)
+    /// <summary>★[도로 마무리 ②] 측구 구간 경계(포장 폭이 바뀜) — 경계 ±1 mm 측점(폭이 거의 직각으로 바뀌게).</summary>
+    static List<double> DitchCuts(Road r, double s0, double s1)
+    {
+        var o = new List<double>();
+        if (r.D == null || r.D.Ditches.Count == 0) return o;
+        foreach (var w in r.D.Ditches)
+            if (w.Length >= 2)
+                foreach (double c in new[] { Math.Min(w[0], w[1]), Math.Max(w[0], w[1]) })
+                    foreach (double q in new[] { c - 1e-3, c + 1e-3 }) if (q > s0 && q < s1) o.Add(q);
+        return o;
+    }
+
+    static List<double> Stations(CivilDb.Alignment al, double s0, double s1, IEnumerable<double>? extra = null)
     {
         var l = new List<double>();
+        if (extra != null) l.AddRange(extra);
         for (int k = 0; s0 + k * Step < s1; k++) l.Add(s0 + k * Step);
         l.Add(s1);
         try
@@ -61,13 +89,14 @@ internal static class RoadLanes
     internal static (Geometry? Pave, Geometry? Lane, int Dropped) Pavement(Transaction tr, Road r, GeometryFactory gf)
     {
         var al = (CivilDb.Alignment)tr.GetObject(r.Aid, OpenMode.ForRead);
-        var st = Stations(al, r.S0, r.S1);
         int dropped = 0;
-        Geometry? Band(double left, double right)
+        List<double> st = null!;
+        Geometry? Band(Func<double, (double L, double R)> w)
         {
             var lf = new List<Coordinate>(st.Count); var rt = new List<Coordinate>(st.Count);
             foreach (double s in st)
             {
+                var (left, right) = w(s);
                 if (At(al, s, -left) is { } a && At(al, s, right) is { } b) { lf.Add(new Coordinate(a.X, a.Y)); rt.Add(new Coordinate(b.X, b.Y)); }
                 else dropped++;
             }
@@ -80,15 +109,26 @@ internal static class RoadLanes
             if (!g.IsValid) g = g.Buffer(0);
             return g.IsEmpty ? null : g;
         }
-        var pave = Band(r.OuterL, r.OuterR); var lane = Band(r.HalfL, r.HalfR);
-        return (pave, lane, dropped);
+        // ★[도로 마무리 ① · ②] 도로 구간마다(빈 구간 · 잘린 끝 밖은 없음) · 포장 폭 = 측점마다(측구 구간이면 측구 바깥까지)
+        var paves = new List<Geometry>(); var lanes = new List<Geometry>();
+        foreach (var (a0, b0) in r.Spans)
+        {
+            st = Stations(al, a0, b0, DitchCuts(r, a0, b0));
+            if (Band(r.OuterAt) is { } p) paves.Add(p);
+            if (Band(_ => (r.HalfL, r.HalfR)) is { } q) lanes.Add(q);
+        }
+        static Geometry? U(List<Geometry> g) => g.Count == 0 ? null : g.Count == 1 ? g[0] : NetTopologySuite.Operation.Union.CascadedPolygonUnion.Union(g);
+        return (U(paves), U(lanes), dropped);
     }
 
     /// <summary>흰 차선 띠(양쪽) — 높이 = <paramref name="zAt"/> + 0.03 m(Core <see cref="RoadMarks.Lift"/>) · 지형 없음 · 곡선 안쪽 좁음 · 꼬인 칸은 Core가 버리고 센다.</summary>
     internal static RoadMarks.RibbonResult Lanes(Transaction tr, Road r, Func<double, double, double?> zAt)
     {
         var al = (CivilDb.Alignment)tr.GetObject(r.Aid, OpenMode.ForRead);
-        var st = Stations(al, r.S0, r.S1);
-        return RoadMarks.Lanes(st, (s, o) => At(al, s, o), _ => (r.HalfL, r.HalfR), zAt);
+        // ★[도로 마무리 ① · 계획 5.8] 빈 구간은 자리 없음(NaN) 한 측점으로 끊음 — 구간 밖에 차선 칸 0
+        var sp = r.Spans;
+        var st = new List<double>();
+        for (int i = 0; i < sp.Count; i++) { if (i > 0) st.Add((sp[i - 1].B + sp[i].A) / 2); st.AddRange(Stations(al, sp[i].A, sp[i].B)); }
+        return RoadMarks.Lanes(st, (s, o) => RoadRanges.Inside(sp, s) ? At(al, s, o) : null, _ => (r.HalfL, r.HalfR), zAt);
     }
 }

@@ -36,6 +36,9 @@ public sealed class SheetDialog : Window
     private readonly ComboBox _xsecLayout;
     private readonly ComboBox _roadProfileScale;
     private readonly ComboBox _roadXsecScale;
+    private readonly TextBox _contourMinor;
+    private readonly TextBox _contourMajor;
+    private readonly TextBlock _contourMsg;
 
     /// <summary>★[v111.4] 진입도로 횡단도 축척 칸을 보이나 — ★[v111.5] 진입도로 [횡단도 그리기]가 들어감 → 참.</summary>
     const bool RoadXsecUi = true;
@@ -43,10 +46,15 @@ public sealed class SheetDialog : Window
     /// <summary>★[v111.4] 진입도로 칸 둘(도면에 저장 — 부르는 쪽이 <see cref="RoadDrawingSettings.Write"/>) · 열 때 값 = 그 도면 값.</summary>
     internal double RoadProfileScale { get; private set; }
     internal double RoadXsecScale { get; private set; }
+    /// <summary>★[v111.11 · JACK 1103] 등고선(주곡선) · 계곡선 간격(도면에 저장 — 부르는 쪽이 <see cref="ContourInterval.Write"/> · <see cref="ContourInterval.Apply"/>) · 열 때 값 = 그 도면 값.</summary>
+    internal double ContourMinor { get; private set; }
+    internal double ContourMajor { get; private set; }
 
-    public SheetDialog(string okText = "저장", double roadProfileScale = 0, double roadXsecScale = 0)
+    public SheetDialog(string okText = "저장", double roadProfileScale = 0, double roadXsecScale = 0,
+                       double contourMinor = ContourInterval.DefaultMinor, double contourMajor = ContourInterval.DefaultMajor)
     {
         RoadProfileScale = roadProfileScale; RoadXsecScale = roadXsecScale;
+        ContourMinor = contourMinor; ContourMajor = contourMajor;
         Title = "DH 도면 설정";
         Width = 560;   // ★머리띠(로고+제목)가 들어갈 만큼 넓혔다
         SizeToContent = SizeToContent.Height;
@@ -144,7 +152,8 @@ public sealed class SheetDialog : Window
         //   ★★[v111.6 · JACK 1102] 계획지표면 · 진입도로가 함께 쓰는 값 — 횡단 간격 · 횡단도 배치(옛 «2. 횡단»에서) · 배경지도 화질(옛 «4. 도면설정 기타»)
         GradingDialog.AddSection(root, "3. 공통",
             "계획지표면 · 진입도로가 함께 쓰는 값. 노선 길이 ÷ 측점 간격이 횡단 개수가 됩니다(권장 상한 200개)."
-          + " 배경지도 화질 = [위성지도] 버튼으로 까는 위성사진의 해상도(범위가 넓으면 파일이 너무 커지지 않게 자동으로 낮춰 생성).");
+          + " 배경지도 화질 = [위성지도] 버튼으로 까는 위성사진의 해상도(범위가 넓으면 파일이 너무 커지지 않게 자동으로 낮춰 생성)."
+          + " 등고선 · 계곡선 간격 = 원지반 · 정지면 · 최종지표면 · 진입도로 지표면의 등고선(도면에 저장).");
         // ★[v111.7.2 · JACK 1102] «횡단 간격» → «측점 간격»(값 · 칸 이름 XsecInterval · 동작 그대로 — 화면 글만)
         _xsecInterval = GradingDialog.AddRow(root, "측점 간격 (m)", GradingSettings.XsecInterval, "");
         _xsecInterval.ToolTip = "No.0 · No.1 … 사이 거리 — 횡단도는 측점마다 · 종단 밴드 측점 이름 · 진입도로 주측점 PVI가 이 간격을 따릅니다 · 꺾이는 곳(+측점)은 따로 더해집니다";
@@ -158,6 +167,23 @@ public sealed class SheetDialog : Window
         int bmIdx = System.Array.IndexOf(GradingSettings.BasemapResValues, GradingSettings.BasemapRes);
         _basemapRes = AddCombo(root, "배경지도 화질", GradingSettings.BasemapResLabels,
                                bmIdx >= 0 ? bmIdx : 1, "");
+        // ★★[v111.11 · JACK 1103 «원지형 및 모든 지형의 등고선 간격을 … 3. 공통에»] 지표면 스타일의 간격 — 도면에 저장
+        const string contourTip = "원지반 · 정지면 · 최종지표면 · 진입도로 지표면의 등고선 간격\n"
+                                + "가져온 수치지도 등고선(선)은 원본 자료라 그대로입니다";
+        _contourMinor = GradingDialog.AddRow(root, "등고선 간격 (m)", contourMinor, "");
+        _contourMajor = GradingDialog.AddRow(root, "계곡선 간격 (m)", contourMajor, "", out _contourMsg);
+        _contourMinor.ToolTip = contourTip;
+        _contourMajor.ToolTip = contourTip;
+        _contourMsg.Foreground = DhBrand.Warn;
+        _contourMinor.TextChanged += (_, __) => _contourMsg.Text = "";
+        _contourMajor.TextChanged += (_, __) => _contourMsg.Text = "";
+
+        // ══ 4. 도곽 ════════════════════════════════════════════════════
+        //   ★★[v112.0 · 계획_도면화.md 4.10 · JACK 1103 «다른 도곽 DWG를 고르면 이 PC의 애드인에 저장»] «3. 공통» 뒤 —
+        //   도곽은 도면 값이 아니라 PC 값이라 고르는 순간 저장(아래 [저장]과 따로 — 내 판단 10)
+        GradingDialog.AddSection(root, "4. 도곽",
+            "[도면화] 배치탭이 쓰는 도곽 — 이 PC에 저장됩니다(도면과 따로 · 고르는 순간 저장).");
+        AddFrameRow(root);
 
         // ★★★[JACK 0908 "너무 옛스럽고 딱딱한데" · "회사로고 활용" · "도킹창도 일관성있는 색으로"]
         //   창의 껍데기(청록 띠·로고 머리띠·바닥 단추)와 컨트롤 모양은 <see cref="DhBrand"/>가 맡는다.
@@ -168,6 +194,38 @@ public sealed class SheetDialog : Window
         DhBrand.Dress(this, "도면 설정", "도면을 어떻게 그릴지 — 정지면 형상은 바뀌지 않습니다", root, ok, cancel);
     }
 
+
+    /// <summary>★[v112.0] «4. 도곽» 줄 — 지금 도곽 이름 + ⚠ 딱지(풍선 글에 경로 · 해시 · 칸) + [바꾸기…] + [기본으로].</summary>
+    private void AddFrameRow(Panel parent)
+    {
+        var row = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = false };
+        var lbl = new TextBlock { Text = "도곽", Width = 110, VerticalAlignment = VerticalAlignment.Center };
+        DockPanel.SetDock(lbl, Dock.Left); row.Children.Add(lbl);
+        var name = new TextBlock { VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 8, 0) };
+        var badge = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Foreground = DhBrand.Warn, FontSize = 11, Margin = new Thickness(0, 0, 8, 0) };
+        var change = new Button { Content = "바꾸기…", Height = 26, Padding = new Thickness(10, 0, 10, 0), Margin = new Thickness(0, 0, 6, 0), ToolTip = "도곽 DWG를 골라 이 PC에 저장합니다(표제란 칸을 찾아 둡니다)" };
+        var reset = new Button { Content = "기본으로", Height = 26, Padding = new Thickness(10, 0, 10, 0), ToolTip = "K-water 기본 도곽으로 돌아갑니다(고른 도곽 사본은 남겨 둡니다)" };
+        foreach (var e in new UIElement[] { name, badge, change, reset }) { DockPanel.SetDock(e, Dock.Left); row.Children.Add(e); }
+        void Show()
+        {
+            var (n, b, tip) = FrameLibrary.Status();
+            name.Text = n;
+            badge.Text = b.Length > 0 ? "⚠" + b : "";
+            name.ToolTip = tip; badge.ToolTip = tip;
+            reset.IsEnabled = !n.Contains("기본") || b.Length > 0;
+        }
+        change.Click += (_, __) =>
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog { Filter = "도곽 DWG (*.dwg)|*.dwg", Title = "도곽 DWG 고르기" };
+            if (dlg.ShowDialog(this) != true) return;
+            var (ok, msg) = FrameLibrary.Pick(dlg.FileName);
+            if (!ok) MessageBox.Show(this, "도곽으로 쓸 수 없습니다 — " + msg, "도곽", MessageBoxButton.OK, MessageBoxImage.Warning);
+            Show();
+        };
+        reset.Click += (_, __) => { FrameLibrary.Reset(); Show(); };
+        Show();
+        parent.Children.Add(row);
+    }
 
     /// <summary>라벨 + 콤보 한 줄 — <see cref="GradingDialog.AddRow"/>와 같은 자리맞춤(라벨 110).</summary>
     private static ComboBox AddCombo(Panel parent, string label, string[] items, int index, string hint)
@@ -214,6 +272,19 @@ public sealed class SheetDialog : Window
             false)
             return;
 
+        // ★[v111.11] 등고선 · 계곡선 — 틀리면 칸 옆 빨간 짧은 글(창은 안 닫힘)
+        static bool Num(TextBox b, out double v)
+            => double.TryParse(b.Text.Trim().Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out v);
+        bool okMi = Num(_contourMinor, out double cmi), okMa = Num(_contourMajor, out double cma);
+        string? cBad = !okMi || !okMa ? "숫자를 넣으세요" : ContourInterval.Check(cmi, cma);
+        if (cBad != null)
+        {
+            _contourMsg.Text = "  " + cBad;
+            var tb = !okMi || (okMa && cmi < ContourInterval.MinValue) ? _contourMinor : _contourMajor;
+            tb.Focus(); tb.SelectAll();
+            return;
+        }
+
         // 좌우 폭이 둘 다 0이면 횡단을 그릴 수 없다(정지옵션에 있던 검증을 그대로 옮겼다).
         if (xl + xr < 0.5)
         {
@@ -254,6 +325,7 @@ public sealed class SheetDialog : Window
 
         GradingSettings.BasemapRes = GradingSettings.BasemapResValues[
             System.Math.Clamp(_basemapRes.SelectedIndex, 0, GradingSettings.BasemapResValues.Length - 1)];
+        ContourMinor = cmi; ContourMajor = cma;
 
         DialogResult = true;
         Close();

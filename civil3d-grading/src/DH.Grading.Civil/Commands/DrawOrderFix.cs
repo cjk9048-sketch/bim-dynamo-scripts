@@ -37,7 +37,10 @@ internal static class DrawOrderFix
 
             var images = new ObjectIdCollection();
             var texts = new ObjectIdCollection();
-            var fills = new ObjectIdCollection();   // ★[v109.1] 국공유지 해치 — 이미지 바로 위(필지 선 · 사면 해치 · 글자 밑)
+            var fills = new ObjectIdCollection();   // ★[v109.1] 국공유지 해치 — 이미지 바로 위(필지 선 · 사면 해치 · 글자 밑) · [v111.11] 소유 구분 칠 셋 다
+            var lines = new ObjectIdCollection();   // ★[v111.11] 필지 선 — 지번 바로 밑(맨 위 둘째)
+            var fillLayers = new System.Collections.Generic.HashSet<string>(ImportGisCommand.ParcelFillLayers, System.StringComparer.OrdinalIgnoreCase);
+            var clsPline = RXObject.GetClass(typeof(Polyline));
             foreach (ObjectId id in ms)      // 지워진 객체는 애초에 나오지 않는다
             {
                 try
@@ -46,9 +49,15 @@ internal static class DrawOrderFix
                     if (c.IsDerivedFrom(clsImage)) { images.Add(id); continue; }
                     if (c.IsDerivedFrom(clsHatch))
                     {
-                        if (tr.GetObject(id, OpenMode.ForRead) is AcadEntity he &&
-                            string.Equals(he.Layer, ImportGisCommand.LayerParcelPublic, System.StringComparison.OrdinalIgnoreCase))
+                        if (tr.GetObject(id, OpenMode.ForRead) is AcadEntity he && fillLayers.Contains(he.Layer))
                             fills.Add(id);
+                        continue;
+                    }
+                    if (c.IsDerivedFrom(clsPline))
+                    {
+                        if (tr.GetObject(id, OpenMode.ForRead) is AcadEntity pe &&
+                            string.Equals(pe.Layer, ImportGisCommand.LayerParcel, System.StringComparison.OrdinalIgnoreCase))
+                            lines.Add(id);
                         continue;
                     }
                     if (!c.IsDerivedFrom(clsText) && !c.IsDerivedFrom(clsMText)) continue;
@@ -60,12 +69,14 @@ internal static class DrawOrderFix
                 catch { }
             }
 
-            if (images.Count == 0 && texts.Count == 0 && fills.Count == 0) { tr.Commit(); return; }
+            if (images.Count == 0 && texts.Count == 0 && fills.Count == 0 && lines.Count == 0) { tr.Commit(); return; }
 
             var dot = (DrawOrderTable)tr.GetObject(ms.DrawOrderTableId, OpenMode.ForWrite);
-            // 해치를 먼저 맨 아래로 → 그다음 이미지를 그 밑으로(차례 = 이미지 · 국공유지 해치 · 나머지 · 지번)
+            // 해치를 먼저 맨 아래로 → 그다음 이미지를 그 밑으로 · 필지 선을 맨 위로 → 지번을 그 위로(차례 = 이미지 · 지적 칠 · 나머지 · 필지 선 · 지번)
+            //   ★[v111.11 · JACK 1103 «문자만 나와»] 필지 선도 옮긴다 — 옮긴 객체는 화면에서 다시 그려진다(두 번 다 글자만 보였다)
             if (fills.Count > 0) { try { dot.MoveToBottom(fills); } catch { } }
             if (images.Count > 0) { try { dot.MoveToBottom(images); } catch { } }
+            if (lines.Count > 0) { try { dot.MoveToTop(lines); } catch { } }
             if (texts.Count > 0) { try { dot.MoveToTop(texts); } catch { } }
             tr.Commit();
         }
