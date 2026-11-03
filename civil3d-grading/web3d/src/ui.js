@@ -126,7 +126,8 @@ export class Ui {
       `<tr><td class="k">절토</td><td class="cut">${n0(e.cut)} ㎥</td></tr>` +
       `<tr><td class="k">성토</td><td class="fill">${n0(e.fill)} ㎥</td></tr>` +
       `<tr><td class="k">순토량</td><td>${n0(Math.abs(net))} ㎥ ${net >= 0 ? '반입' : '반출'}</td></tr>` +
-      (Number.isFinite(e.area) && e.area > 0 ? `<tr><td class="k">계획면적</td><td>${n0(e.area)} ㎡</td></tr>` : '');
+      (Number.isFinite(e.area) && e.area > 0 ? `<tr><td class="k">계획면적</td><td>${n0(e.area)} ㎡</td></tr>` : '') +
+      (e.note ? `<tr><td class="k" colspan="2" style="font-size:11px;padding:3px 0 0;text-align:left">${esc(e.note)}</td></tr>` : '');   // 계획_v111_8 M6 «진입도로 제외»
     $('earth').style.display = 'block';
     $('earth').title = e.ground ? `원지반: ${e.ground}` : '';
   }

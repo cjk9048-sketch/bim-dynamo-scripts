@@ -234,6 +234,8 @@ public class RoadCommand
             ed.WriteMessage("\n[진입도로] " + msg);
             try { ed.Regen(); } catch { }
             try { s.Recompute(); } catch { }
+            // ★[v111.8 · L13 · M2] 첫 면의 최종지표면이 실패했으면 상태 줄에도 까닭([업데이트]로 다시)
+            if (s.FinalNote.StartsWith("⚠")) s.NoteFail("실패 — " + s.FinalNote.TrimStart('⚠'));
         }
         catch (System.Exception ex)
         {
@@ -991,7 +993,7 @@ public class RoadCommand
         bool force = false, run = false;
         var log = new System.Text.StringBuilder($"[진입도로] {(ask ? "업데이트" : "다시 만들기")} — {s.Name}\n");
         string why = "", bad = "", surfMsg = "", left = "";
-        bool surfDone = false, sheetDone = false, xsecDone = false;
+        bool surfDone = false, sheetDone = false, xsecDone = false, finalDone = false;
         static string Add(string a, string b) => a.Length > 0 ? a + " · " + b : b;
         try
         {
@@ -1021,6 +1023,8 @@ public class RoadCommand
                         using (BusyPopup.Scope(s.SurfaceMissing ? "진입도로 지표면 만드는 중입니다." : "진입도로 지표면 다시 만드는 중입니다.")) surfMsg = s.MakeSurface();
                         surfDone = true; if (why.Length == 0) why = w;
                         log.AppendLine("  지표면 — " + surfMsg);
+                        // ★[v111.8 · M2] 최종지표면 실패는 조용히 넘기지 않음 — 실패 글(상태 줄 까닭 · 깜박 유지 · 명령창)
+                        if (s.FinalNote.StartsWith("⚠")) bad = Add(bad, s.FinalNote.TrimStart('⚠'));
                     }
                     catch (System.Exception exF)
                     {
@@ -1029,6 +1033,16 @@ public class RoadCommand
                     }
                     try { s.RecomputeCore(); } catch { }   // 새 면 → 횡단도 알림 · 열쇠를 지금으로
                 }
+            }
+            // ①b ★[v111.8 · 계획 4장] 도로 면은 맞는데 최종지표면만 옛것 · 없음(앞 실패 포함) — 최종면만 다시
+            else if (s.FinalStale)
+            {
+                string w = s.FinalState == FinalSurfaceBuilder.State.Missing ? "최종지표면이 없어" : "최종지표면이 옛것입니다";
+                surfMsg = s.MakeFinal();
+                log.AppendLine("  최종지표면 — " + surfMsg);
+                if (surfMsg.StartsWith("⚠")) bad = Add(bad, surfMsg.TrimStart('⚠'));
+                else { finalDone = true; if (why.Length == 0) why = w; }
+                try { s.RecomputeCore(); } catch { }
             }
             // ② 종단도
             var d = s.Design;
@@ -1115,16 +1129,18 @@ public class RoadCommand
                 string post = s.StaleKey;
                 if (post.Length > 0 && bad.Length == 0) { try { using var dl = doc.LockDocument(); left = s.UpdatePlan().WhyNot; } catch { } }
                 s.NoteUpdate(post, bad.Length > 0 ? "실패 — " + bad : left);
-                log.AppendLine($"  끝 — 지표면 {surfDone} · 종단도 {sheetDone} · 횡단도 {xsecDone}" + (post.Length > 0 ? " · 남음(" + (bad.Length > 0 ? "실패" : left.Length > 0 ? left : "다시 해도 남음") + ")" : " · 모두 최신"));
+                log.AppendLine($"  끝 — 지표면 {surfDone} · 최종지표면만 {finalDone} · 종단도 {sheetDone} · 횡단도 {xsecDone}" + (post.Length > 0 ? " · 남음(" + (bad.Length > 0 ? "실패" : left.Length > 0 ? left : "다시 해도 남음") + ")" : " · 모두 최신"));
             }
         }
-        if (surfDone) { try { ed.Regen(); } catch { } }
+        if (surfDone || finalDone) { try { ed.Regen(); } catch { } }
         try
         {
             var parts = new List<string>();
-            if (surfDone) parts.Add("지표면"); if (sheetDone) parts.Add("종단도"); if (xsecDone) parts.Add("횡단도");
+            if (surfDone) parts.Add("지표면"); else if (finalDone) parts.Add("최종지표면"); if (sheetDone) parts.Add("종단도"); if (xsecDone) parts.Add("횡단도");
             string what = string.Join(" · ", parts);
             string tick = surfMsg.Contains("노리선") ? " · 노리선은 [노리선]으로 다시" : "";
+            // ★[v111.8 · 7.7] 최종지표면은 만들었는데 경고(가파른 띠 — 사면이 땅에 못 닿음 등)가 있으면 그 글
+            if ((surfDone || finalDone) && !s.FinalNote.StartsWith("⚠") && s.FinalNote.Contains('⚠')) tick += " · " + s.FinalNote[s.FinalNote.IndexOf('⚠')..];
             if (force && surfDone && !sheetDone && !xsecDone) ed.WriteMessage("\n[진입도로] " + surfMsg);
             else if (what.Length > 0) ed.WriteMessage($"\n[진입도로] {Because(why)} 다시 만들었습니다 — {what}{tick}" + (bad.Length > 0 ? " · ⚠" + bad : ""));
             else if (bad.Length > 0) ed.WriteMessage("\n[진입도로] ⚠" + bad);
@@ -1149,6 +1165,8 @@ public class RoadCommand
         "횡단도 배치가 바뀌었습니다" => "횡단도 배치가 바뀌어",   // ★[v111.7.2]
         "종단도가 없어" => "종단도가 없어",                       // ★[v111.7.2] [업데이트]가 처음 놓음
         "횡단도가 없어" => "횡단도가 없어",
+        "최종지표면이 없어" => "최종지표면이 없어",            // ★[v111.8]
+        "최종지표면이 옛것입니다" => "최종지표면이 옛것이라",
         _ => "설계가 바뀌어",
     };
 

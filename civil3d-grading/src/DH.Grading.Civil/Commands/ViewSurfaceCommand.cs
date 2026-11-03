@@ -64,6 +64,8 @@ public sealed class ViewSurfaceCommand
             //   목록에 없으면 «원지반만» 보기에서 원지반처럼 켜진다
             WallCompositeCommand.BaseName, WallCompositeCommand.OldCompName, WallCompositeCommand.TempName, WallCompositeCommand.OldTempName,
             "가상옹벽_DH", WallDaylightBuilder.PureName,
+            // ★[v111.8 · 계획 5장] 최종지표면 · 짓는중 · 옛 최종면 · 진입도로 면 · 작업 면 — 목록 밖이면 «원지반만»에서 원지반처럼 켜진다
+            FinalSurfaceBuilder.Name, FinalSurfaceBuilder.TempName, FinalSurfaceBuilder.OldName, RoadSession.SurfBase, RoadSession.TempSurf,
         };
         for (int k = 1; k <= 16; k++) l.Add($"{ExcavCommand.VirtName}{k}");
         // ★[v101.1 · 계획 검토 낮음 7] 옹벽 전이면 단계의 재료 — 목록 밖이면 «원지반만» 보기에서 원지반처럼 켜진다
@@ -161,10 +163,16 @@ public sealed class ViewSurfaceCommand
 
                 case "P":
                     if (!hasPlan) { ed.WriteMessage("\n[보기] 계획지표면이 아직 없습니다."); tr.Commit(); return; }
-                    keeps.Add(PlanPick());          // 합성면 — 원지반을 이미 품고 있다
+                    {
+                        // ★[v111.8 · 계획 5장] 맞는 최종지표면이 있으면 그것 + 진입도로 면(경계선) — 없으면 종전대로
+                        string res = FinalSurfaceBuilder.ResultName(db, tr);
+                        string pick = res == Plan ? PlanPick() : res;
+                        keeps.Add(pick);          // 합성면 — 원지반을 이미 품고 있다
+                        if (pick != PlanPick()) { keeps.Add(FinalSurfaceBuilder.Name); keeps.Add(RoadSession.SurfBase); }   // 이름 목록은 본 이름(_N 포함)으로 켜고 끈다
+                        msg = $"계획지표면({pick} — 원지반 합성)";
+                    }
                     showGround = false; lines = false;
                     keep = null;
-                    msg = $"계획지표면({PlanPick()} — 원지반 합성)";
                     break;
 
                 case "E":

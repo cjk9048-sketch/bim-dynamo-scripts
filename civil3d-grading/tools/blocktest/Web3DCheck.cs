@@ -306,6 +306,161 @@ static class Web3DCheck
                 $"발자국 없음: 면 {o2.Count[(int)TerrainMesh.Cls.WallFace]} · 자리 {o2.Count[(int)TerrainMesh.Cls.WallZone]} / 있음: 면 {o3.Count[(int)TerrainMesh.Cls.WallFace]} · 자리 {o3.Count[(int)TerrainMesh.Cls.WallZone]}");
         }
 
+        // ⑨ ★[v111.8 · 계획 6장 · JACK 1102] 진입도로 구분 — 차로 = «진입도로»(땅과 같은 높이여도) · 길어깨 = «길어깨» · 사면 = 절/성(정지면 기준) · 평평 = 소단 · 가파름 = 옹벽 자리 ·
+        //    부지 다각형이 도로를 못 덮음 · 도로 밖은 지금과 같음 · RoadArea null이면 옛 답 그대로 · 새 열쇠는 맨 끝
+        {
+            const double OX = 200000, OY = 550000;
+            static double Zy(double y) => y <= 4.5 ? 0 : y <= 5 ? -4 * (y - 4.5) : y <= 8.5 ? -2 + 2 * (y - 5) / 3.5 : y <= 11.5 ? 0 : y <= 13 ? (y - 11.5) : y <= 13.5 ? 1.5 + 6 * (y - 13) : y <= 15 ? 4.5 : y <= 15.5 ? 4.5 - 9 * (y - 15) : 0;
+            int nx = 60, ny = 40; double d = 0.5;
+            var X = new List<double>(); var Y = new List<double>(); var Z = new List<double>();
+            for (int j = 0; j <= ny; j++) for (int i = 0; i <= nx; i++) { X.Add(OX + i * d); Y.Add(OY + j * d); Z.Add(Zy(j * d)); }
+            var F = new List<int>();
+            for (int j = 0; j < ny; j++)
+                for (int i = 0; i < nx; i++)
+                {
+                    int a = j * (nx + 1) + i, b = a + 1, c = a + nx + 1, e = c + 1;
+                    if ((i + j) % 2 == 0) { F.AddRange(new[] { a, b, e }); F.AddRange(new[] { a, e, c }); } else { F.AddRange(new[] { a, b, c }); F.AddRange(new[] { b, e, c }); }
+                }
+            var gf = NtsSupport.Factory();
+            Geometry Box(double x0, double y0, double x1, double y1) => gf.CreatePolygon(new[] { new Coordinate(OX + x0, OY + y0), new Coordinate(OX + x1, OY + y0), new Coordinate(OX + x1, OY + y1), new Coordinate(OX + x0, OY + y1), new Coordinate(OX + x0, OY + y0) });
+            var old = new TerrainMesh.Input { X = X.ToArray(), Y = Y.ToArray(), Z = Z.ToArray(), F = F.ToArray(), GroundZ = (x, y) => 0.0, Plan = Box(-1, -1, 31, 21) };
+            var road = new TerrainMesh.Input
+            {
+                X = old.X, Y = old.Y, Z = old.Z, F = old.F, GroundZ = old.GroundZ, Plan = old.Plan,
+                RoadArea = Box(-1, 5, 31, 15), RoadPave = Box(-1, 8.5, 31, 11.5), RoadLane = Box(-1, 9, 31, 11), BaseZ = (x, y) => 0.0,
+            };
+            var o0 = TerrainMesh.Build(old, OX, OY);
+            var o1 = TerrainMesh.Build(road, OX, OY);
+            // 따로 센 답(무게중심 y로) · 도로 밖은 옛 답과 같은 구분
+            var nT = F.Count / 3;
+            var c0 = new TerrainMesh.Cls[nT]; var c1 = new TerrainMesh.Cls[nT];
+            Array.Fill(c0, (TerrainMesh.Cls)255); Array.Fill(c1, (TerrainMesh.Cls)255);
+            foreach (var (o, c) in new[] { (o0, c0), (o1, c1) })
+                foreach (var r in o.Ranges)
+                    for (int k = r.Start; k < r.Start + r.Count; k++)
+                    {
+                        // 출력 세모 k의 무게중심으로 원래 세모를 찾는다(구분마다 점을 따로 둬 차례가 바뀜)
+                        double cx = (o.Pos[o.Idx[k * 3] * 3] + o.Pos[o.Idx[k * 3 + 1] * 3] + o.Pos[o.Idx[k * 3 + 2] * 3]) / 3, cy = (o.Pos[o.Idx[k * 3] * 3 + 1] + o.Pos[o.Idx[k * 3 + 1] * 3 + 1] + o.Pos[o.Idx[k * 3 + 2] * 3 + 1]) / 3;
+                        int i = (int)Math.Floor(cx / d), j = (int)Math.Floor(cy / d);
+                        int slot = (j * nx + i) * 2;   // 칸 안 두 세모는 같은 띠(띠 경계가 0.5 m 칸 경계)라 구분이 같아야 — 들어온 차례로 채움
+                        c[c[slot] == (TerrainMesh.Cls)255 ? slot : slot + 1] = r.Cls;
+                    }
+            int bad = 0, outsideSame = 0, outsideN = 0; var cnt = new Dictionary<TerrainMesh.Cls, int>();
+            for (int j = 0; j < ny; j++)
+                for (int i = 0; i < nx; i++)
+                    for (int h = 0; h < 2; h++)
+                    {
+                        double cy = (j + 0.5) * d;
+                        var k = c1[(j * nx + i) * 2 + h];
+                        cnt[k] = cnt.TryGetValue(k, out int m) ? m + 1 : 1;
+                        TerrainMesh.Cls? want = cy > 9 && cy < 11 ? TerrainMesh.Cls.Road : (cy > 8.5 && cy < 9) || (cy > 11 && cy < 11.5) ? TerrainMesh.Cls.Shoulder
+                            : cy > 11.5 && cy < 13 ? TerrainMesh.Cls.SlopeFill : cy > 13 && cy < 13.5 ? TerrainMesh.Cls.WallZone : cy > 13.5 && cy < 15 ? TerrainMesh.Cls.Bench
+                            : cy > 5 && cy < 8.5 ? TerrainMesh.Cls.SlopeCut : null;
+                        if (want != null) { if (k != want) bad++; }
+                        else { outsideN++; if (k == c0[(j * nx + i) * 2 + h]) outsideSame++; }
+                    }
+            // RoadArea null → 옛 답 그대로(배열 비트 같음)
+            var oN = TerrainMesh.Build(new TerrainMesh.Input { X = old.X, Y = old.Y, Z = old.Z, F = old.F, GroundZ = old.GroundZ, Plan = old.Plan, RoadPave = road.RoadPave, RoadLane = road.RoadLane, BaseZ = road.BaseZ }, OX, OY);
+            bool sameOld = oN.Idx.SequenceEqual(o0.Idx) && oN.Pos.SequenceEqual(o0.Pos) && oN.Count.SequenceEqual(o0.Count);
+            bool keys = TerrainMesh.Keys.Length == TerrainMesh.Names.Length && TerrainMesh.Keys.Length == Enum.GetValues<TerrainMesh.Cls>().Length
+                        && TerrainMesh.Keys[(int)TerrainMesh.Cls.Road] == "road" && TerrainMesh.Keys[(int)TerrainMesh.Cls.Shoulder] == "shoulder"
+                        && (int)TerrainMesh.Cls.Road == 8 && (int)TerrainMesh.Cls.Other == 7 && TerrainMesh.Keys[7] == "other";
+            check("S175 ⑨ 진입도로 구분 — 차로(땅과 같은 높이여도) · 길어깨 · 성토/절토 사면(정지면 기준) · 옹벽 자리 · 소단 · 부지 다각형이 못 덮음 · 도로 밖 = 옛 답 · RoadArea null = 옛 답 비트 같음 · 새 열쇠 맨 끝(옛 번호 그대로)",
+                bad == 0 && outsideN > 0 && outsideSame == outsideN && sameOld && keys && o1.Count[(int)TerrainMesh.Cls.Road] > 0 && o1.Count[(int)TerrainMesh.Cls.Shoulder] > 0 && o1.Count.Sum() == nT,
+                $"틀린 구분 {bad} · 도로 밖 같음 {outsideSame}/{outsideN} · 옛 답 그대로 {sameOld} · 열쇠 {keys} · " + string.Join(" · ", cnt.OrderBy(q => q.Key).Select(q => $"{TerrainMesh.Names[(int)q.Key]} {q.Value}")));
+        }
+
+        // ⑩ ★★[v111.8.1 · JACK 1103 «진입도로의 소단이 안 보여»] 도로 소단 = 엔진 계단선 짝 사이 횡단으로 평평한 띠 — 종단 경사 15 %(옛 1:10 기울기로는 소단 0)
+        //    가짜 도로(X 방향 · 원점 X 200,000 Y 550,000 · 현장 값 없음): 포장 y 8.5~11.5 · 절토 쪽 사면 1:1.5(높이 1) — 소단 13~14 — 사면 — 15.5 위 평탄 ·
+        //    성토 쪽 사면 — 소단 6~7 — 사면 — 4.5 아래 평탄 · 16~17 = 부지 계획면(정지면 그대로 → 부지 규칙 «계획면») · 짝 거리 1.6 m(사면 짝도 후보 — 평평함으로 걸러야)
+        //    + 끝과 끝이 이어진 두 선(경사 0 — 진행 방향 짝은 평평해도 소단 아님) · 시공 격자 진입도로 마디 표시 = 다각형 덮음 · u8 덩어리 되읽기
+        {
+            const double OX = 200000, OY = 550000, G = 0.15;
+            double E(double x) => 10 + G * (x - OX);
+            double Pz(double y) => y >= 15.5 ? 2 : y >= 14 ? 1 + (y - 14) / 1.5 : y >= 13 ? 1 : y >= 11.5 ? (y - 11.5) / 1.5
+                                 : y >= 8.5 ? 0 : y >= 7 ? -(8.5 - y) / 1.5 : y >= 6 ? -1 : y >= 4.5 ? -1 - (6 - y) / 1.5 : -2;
+            double Zd(double x, double y) => E(x) + Pz(y - OY);
+            double Zg(double x, double y) { double ry = y - OY; return ry < 3 || ry > 17 ? Zd(x, y) : ry >= 16 ? Zd(x, y) - 2 : ry > 10 ? Zd(x, y) + 2 : Zd(x, y) - 2; }
+            double Zb(double x, double y) => y - OY >= 16 ? Zd(x, y) : Zg(x, y);
+            int nx = 60, ny = 40; double d = 0.5;
+            var X = new List<double>(); var Y = new List<double>(); var Z = new List<double>();
+            for (int j = 0; j <= ny; j++) for (int i = 0; i <= nx; i++) { X.Add(OX + i * d); Y.Add(OY + j * d); Z.Add(Zd(OX + i * d, OY + j * d)); }
+            var F = new List<int>();
+            for (int j = 0; j < ny; j++)
+                for (int i = 0; i < nx; i++)
+                {
+                    int a = j * (nx + 1) + i, b = a + 1, c = a + nx + 1, e = c + 1;
+                    if ((i + j) % 2 == 0) { F.AddRange(new[] { a, b, e }); F.AddRange(new[] { a, e, c }); } else { F.AddRange(new[] { a, b, c }); F.AddRange(new[] { b, e, c }); }
+                }
+            var gf = NtsSupport.Factory();
+            Geometry Box(double x0, double y0, double x1, double y1) => gf.CreatePolygon(new[] { new Coordinate(OX + x0, OY + y0), new Coordinate(OX + x1, OY + y0), new Coordinate(OX + x1, OY + y1), new Coordinate(OX + x0, OY + y1), new Coordinate(OX + x0, OY + y0) });
+            // 계단선(엔진 꼴 — 절토: 끝 아랫선 11.5 · 윗선 13 · 아랫선 14 · 윗선 15.5 / 성토: 윗선 8.5 · 아랫선 7 · 윗선 6 · 아랫선 4.5) · 2 m마다 점 · 높이 = 가장자리 + 누적 높이
+            IReadOnlyList<(double X, double Y, double Z)> Ln(double y, double rise, double x0 = 0, double x1 = 30) => Enumerable.Range(0, (int)Math.Round((x1 - x0) / 2) + 1).Select(k => (OX + x0 + k * 2.0, OY + y, E(OX + x0 + k * 2.0) + rise)).ToList();
+            var tl = new List<IReadOnlyList<(double X, double Y, double Z)>> { Ln(11.5, 0), Ln(13, 1), Ln(14, 1), Ln(15.5, 2), Ln(8.5, 0), Ln(7, -1), Ln(6, -1), Ln(4.5, -2) };
+            var br = RoadBenches.Strips(tl, (x, y) => Zd(x, y), 1.6);
+            var mk = new TerrainMesh.Input
+            {
+                X = X.ToArray(), Y = Y.ToArray(), Z = Z.ToArray(), F = F.ToArray(), GroundZ = (x, y) => Zg(x, y), Plan = Box(-1, 16, 31, 17.5),
+                RoadArea = Box(-1, 3, 31, 17), RoadPave = Box(-1, 8.5, 31, 11.5), RoadLane = Box(-1, 9, 31, 11), BaseZ = (x, y) => Zb(x, y),
+            };
+            var oOld = TerrainMesh.Build(mk, OX, OY);
+            mk.RoadBench = br.Strips;
+            var oNew = TerrainMesh.Build(mk, OX, OY);
+            // 출력 세모 → 무게중심 y 띠별 구분
+            Dictionary<double, Dictionary<TerrainMesh.Cls, int>> Bands(TerrainMesh.Output o)
+            {
+                var res = new Dictionary<double, Dictionary<TerrainMesh.Cls, int>>();
+                foreach (var r in o.Ranges)
+                    for (int k = r.Start; k < r.Start + r.Count; k++)
+                    {
+                        double cy = (o.Pos[o.Idx[k * 3] * 3 + 1] + o.Pos[o.Idx[k * 3 + 1] * 3 + 1] + o.Pos[o.Idx[k * 3 + 2] * 3 + 1]) / 3;
+                        double band = Math.Floor(cy / d) * d;
+                        if (!res.TryGetValue(band, out var m)) res[band] = m = new();
+                        m[r.Cls] = m.GetValueOrDefault(r.Cls) + 1;
+                    }
+                return res;
+            }
+            TerrainMesh.Cls? Want(double y) => y >= 16 && y < 17 ? TerrainMesh.Cls.Plan : y >= 13 && y < 14 || y >= 6 && y < 7 ? TerrainMesh.Cls.Bench
+                : y >= 9 && y < 11 ? TerrainMesh.Cls.Road : y >= 8.5 && y < 11.5 ? TerrainMesh.Cls.Shoulder : y >= 11.5 && y < 16 ? TerrainMesh.Cls.SlopeCut : y >= 3 && y < 8.5 ? TerrainMesh.Cls.SlopeFill : null;
+            int bad = 0, nb = 0; string firstBad = "";
+            foreach (var (band, m) in Bands(oNew))
+            {
+                var w = Want(band);
+                if (w == null) continue;
+                foreach (var (k, n) in m) if (k != w) { bad += n; if (firstBad.Length == 0) firstBad = $"y {band:F1}: {TerrainMesh.Names[(int)k]} {n}(바람 {TerrainMesh.Names[(int)w]})"; }
+                if (w == TerrainMesh.Cls.Bench) nb += m.GetValueOrDefault(TerrainMesh.Cls.Bench);
+            }
+            int oldBench = oOld.Count[(int)TerrainMesh.Cls.Bench];
+            double wantArea = 2 * 30;   // 소단 둘 × 폭 1 m × 길이 30 m
+            // 끝과 끝이 이어진 두 선(경사 0 · 평평 · 0.3 m 어긋남) — 진행 방향 짝(상대 선 끝점)은 소단이 아님
+            var bEnd = RoadBenches.Strips(new List<IReadOnlyList<(double X, double Y, double Z)>> { new[] { (OX, OY, 5.0), (OX + 10, OY, 5.0) }, new[] { (OX + 10.5, OY + 0.3, 5.0), (OX + 20, OY + 0.3, 5.0) } }, (x, y) => 5.0, 1.6);
+            check("S175 ⑩ 진입도로 소단 — 엔진 계단선 짝 사이 횡단으로 평평한 띠(종단 15 %: 옛 기울기 규칙 소단 0) · 사면 짝은 걸러짐 · 띠 넓이 = 2 × 30 m² · 정지면 그대로 세모 = 부지 규칙(계획면) · 진행 방향 끝-끝 짝 없음",
+                bad == 0 && nb == 2 * 2 * 60 * 2 && oldBench == 0 && Math.Abs(br.Area - wantArea) < 1e-6 && br.MaxDz < 1e-9 && (bEnd.Strips == null || bEnd.Strips.IsEmpty) && oNew.Count.Sum() == F.Count / 3,
+                $"틀린 구분 {bad}{(firstBad.Length > 0 ? " — 처음 " + firstBad : "")} · 소단 세모 {nb}(옛 규칙 {oldBench}) · {br.Text} · 끝-끝 짝 띠 {(bEnd.Strips == null ? 0 : bEnd.Strips.Area):F3} ㎡");
+
+            // 시공 격자 진입도로 마디 — 다각형 덮음(경계 포함) · 차례 j·(w+1) + i · 장면 u8 덩어리 되읽기
+            var area = Box(3, 3, 17, 13);
+            int gw = 24, gh = 20; double gx0 = OX, gy0 = OY, gc = 1.0;
+            var mask = TerrainMesh.GridMask(area, gx0, gy0, gc, gw, gh, out int nm);
+            int mBad = 0, mOn = 0;
+            for (int j = 0; j <= gh; j++)
+                for (int i = 0; i <= gw; i++)
+                {
+                    bool want = i >= 3 && i <= 17 && j >= 3 && j <= 13;
+                    if ((mask[j * (gw + 1) + i] == 1) != want) mBad++;
+                    if (want) mOn++;
+                }
+            var sc = new Web3DScene();
+            sc.Head["build"] = new Dictionary<string, object> { ["w"] = gw, ["h"] = gh, ["zf"] = sc.F32(new float[(gw + 1) * (gh + 1)]), ["road"] = sc.U8(mask) };
+            var (hd, buf, bo) = Web3DScene.Unpack(sc.PackGzip());
+            var rr = hd.RootElement.GetProperty("build").GetProperty("road");
+            var back = buf.AsSpan(bo + rr.GetProperty("o").GetInt32(), rr.GetProperty("n").GetInt32()).ToArray();
+            var emptyM = TerrainMesh.GridMask(gf.CreatePolygon(), gx0, gy0, gc, gw, gh, out int nEmpty);
+            check("S175 ⑪ 시공 격자 진입도로 마디 — 다각형 덮음(경계 포함 · j·(w+1) + i) · 수 · u8 덩어리 되읽기 같음 · 4바이트 맞춤 · 빈 다각형 = 0",
+                mBad == 0 && nm == mOn && back.SequenceEqual(mask) && rr.GetProperty("t").GetString() == "u8" && rr.GetProperty("o").GetInt32() % 4 == 0 && nEmpty == 0 && emptyM.All(v => v == 0),
+                $"틀린 마디 {mBad} · 켠 마디 {nm}/{mOn} · 되읽기 {back.Length} 바이트");
+        }
+
         // ⑧ 두 TIN 사이 절성토(Civil 체적면 없이) — 서로 다른 세모 나누기 · 0선이 세모를 가로지름 · 겹친 자리만
         {
             // 기준 z = 0(5×9 칸 · 흔든 점) · 비교 z = x − 5(7×7 칸 · 다른 흔듦) · [0,10]² — 성토 = 절토 = 10 × 12.5 = 125

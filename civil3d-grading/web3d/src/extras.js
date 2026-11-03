@@ -179,7 +179,7 @@ export function buildDrain(view, head, L) {
 //   정지한 자리(계획면 · 소단 · 사면 · 정지 — 원지반 · 옹벽 자리 · 옹벽 면 빼고)의 고른 간격 점마다 그 자리 세모의 기울기:
 //   화살표 = 내리막(물 흐르는 쪽) · 면에 눕힘 · 색 = 경사(로그 눈금 이음) · 0.5 % 미만 = 파란 점(방향 없음).
 export const SLOPE_STOPS = [[0.005, '#3d7bff'], [0.02, '#2ecc71'], [0.05, '#f2e23a'], [0.10, '#ffc93a'], [0.30, '#ff8a1f'], [0.667, '#e8392e']];
-const SLOPE_KEEP = new Set(['plan', 'bench', 'slopeCut', 'slopeFill', 'other']);
+const SLOPE_KEEP = new Set(['plan', 'bench', 'slopeCut', 'slopeFill', 'other', 'road', 'shoulder']);
 const _stopCol = SLOPE_STOPS.map(([g, c]) => [Math.log10(g), new THREE.Color(c)]);
 export function slopeColor(g, out) {
   const lg = Math.log10(Math.max(1e-6, g));

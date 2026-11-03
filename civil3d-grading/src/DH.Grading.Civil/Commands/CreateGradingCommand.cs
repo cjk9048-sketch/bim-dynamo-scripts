@@ -71,6 +71,9 @@ public sealed class CreateGradingCommand
             GradingBuilder.IsolateSurfaces(trV, null);
             // ★[v101.1 · 계획 검토 중간 3] 합성 전 정지면은 보관용이다 — 켜 두면 원지반으로 잘못 고를 수 있다
             GradingBuilder.SetSurfaceVisible(trV, WallCompositeCommand.BaseName, false);
+            // ★[v111.8 · M5] 최종지표면 · 짓는중도 — 켜 두면 원지반으로 잘못 고를 수 있다
+            GradingBuilder.SetSurfaceVisible(trV, FinalSurfaceBuilder.Name, false);
+            GradingBuilder.SetSurfaceVisible(trV, FinalSurfaceBuilder.TempName, false);
             trV.Commit();
         }
         catch { }
@@ -153,9 +156,15 @@ public sealed class CreateGradingCommand
             var peoSurf = new PromptEntityOptions(gp);
             peoSurf.SetRejectMessage("\nTIN Surface여야 합니다.");
             peoSurf.AddAllowedClass(typeof(TinSurface), true);
-            var rSurf = ed.GetEntity(peoSurf);
-            if (rSurf.Status != PromptStatus.OK) return;
-            groundSel = rSurf.ObjectId;
+            // ★[v111.8 · M5] 우리 최종지표면 · 진입도로 면은 거절하고 다시 묻는다(«정지면_DH이전» 같은 기준 지반은 그대로 받음)
+            while (true)
+            {
+                var rSurf = ed.GetEntity(peoSurf);
+                if (rSurf.Status != PromptStatus.OK) return;
+                if (FinalSurfaceBuilder.RejectPick(doc.Database, ed, rSurf.ObjectId)) continue;
+                groundSel = rSurf.ObjectId;
+                break;
+            }
         }
         else if (mode == GradeMode.Append)
             ed.WriteMessage("\n[이어서] 기준 지반 = 현재 정지면_DH (기존 구역 유지, 새 구역 추가)");
@@ -3913,6 +3922,8 @@ public sealed class CreateGradingCommand
             if (wallEnd.Length > 0) { box.AppendLine(); box.AppendLine(wallEnd.Replace("<b>", "").Replace("</b>", "")); }
             if (!gradeOk)
                 box.AppendLine("\n자세한 내용은 진단 로그를 확인하세요:\n" + DiagLog.FilePath);
+            // ★[v111.8 · 계획 4장] 진입도로가 있으면 한 줄(도로 없는 도면은 글 그대로)
+            if (gradeOk) { string rn = FinalSurfaceBuilder.SiteChangedNote(db); if (rn.Length > 0) { box.AppendLine(); box.AppendLine(rn); } }
             string msg = box.ToString().TrimEnd();
 
             // ★★[JACK 0807 'DH정지면에 스냅샷 재작성 느낌표가 뜬 상태로 작성됨'] **맨 마지막에 한 번 더** 재작성한다.

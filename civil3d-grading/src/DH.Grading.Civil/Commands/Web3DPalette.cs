@@ -135,9 +135,9 @@ public static class Web3DPalette
         if (!_ps!.Visible)
         {
             try { _ps.Size = new System.Drawing.Size(w, h); } catch { }
-            _ps.Visible = true;
             // ★도킹은 보인 뒤에 — 안 뜬 팔레트에는 AutoCAD가 Dock을 무시한다(§56)
-            try { if (_ps.Dock != DockSides.Right) _ps.Dock = DockSides.Right; } catch { }
+            // ★[JACK 1103 «3D 뷰 도킹팝업창 … 기존 팝업에 겹치게 생기는데 그렇지 않게» → «오른쪽에 나란히»] 다른 DH 창이 붙어 있으면 그 왼쪽 옆에(<see cref="DhDock"/>)
+            DhDock.ShowRight(_ps, "3D 보기", w);
             try { _ps.Size = new System.Drawing.Size(w, h); } catch { }
         }
     }

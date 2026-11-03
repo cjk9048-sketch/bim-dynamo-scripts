@@ -164,7 +164,8 @@ public sealed class MiscSettingsCommand
                 GradingBuilder.SetSurfaceVisible(tr, WallCompositeCommand.BaseName, false);
             }
             else if (GradingBuilder.SurfaceExistsByBaseName(tr, "정지면_DH"))
-                GradingBuilder.IsolateSurfaces(tr, "정지면_DH");
+                // ★[v111.8 · 계획 5장 · L14] 맞는 최종지표면이 있으면 그것(없으면 정지면_DH) + 진입도로 면(경계선)은 켠 채
+                GradingBuilder.IsolateSurfaces(tr, FinalSurfaceBuilder.ResultName(doc.Database, tr), FinalSurfaceBuilder.IsRoadSurface);
 
             // ★★[v32.4 · JACK 0812 '자꾸 스냅샷 재작성 느낌표가 뜬다'] <b>느낌표의 진범이 여기 있었다.</b>
             //

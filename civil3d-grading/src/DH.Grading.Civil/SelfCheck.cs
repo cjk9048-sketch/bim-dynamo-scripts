@@ -389,7 +389,8 @@ internal static class SelfCheck
                     if (sid.IsNull || sid.IsErased) continue;
                     if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
                     string nm = s.Name ?? "";
-                    if (!IsOurSurfaceName(nm) || d.ContainsKey(nm)) continue;
+                    // ★[v111.8 · 검토 M1] 남이 붙여넣는 옛 최종면(«최종지표면_DH(옛)»)도 굳은 우리 면 — 재작성 앞뒤 지문을 견준다(초기화 · «남은 우리 면» 셈에는 안 넣음 — 일부러 남긴 면)
+                    if ((!IsOurSurfaceName(nm) && !FinalSurfaceBuilder.IsOldName(nm)) || d.ContainsKey(nm)) continue;
                     bool frozen = false;
                     try
                     {

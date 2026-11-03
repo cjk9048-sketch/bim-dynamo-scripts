@@ -94,15 +94,15 @@ public static class StrataPalette
             //
             //   → <b>보인 뒤에 건다.</b> 그리고 <b>부를 때마다</b> 확인한다 —
             //     사용자가 떼어 놓았다가 다시 누르면 그때도 오른쪽으로 붙는 편이 낫다.
-            _ps.Visible = true;
-            try { if (_ps.Dock != DockSides.Right) _ps.Dock = DockSides.Right; } catch { }
+            //   ★[JACK 1103 «오른쪽에 나란히»] 다른 DH 창이 붙어 있으면 그 왼쪽 옆에(<see cref="DhDock"/>)
+            DhDock.ShowRight(_ps, "지층 구성", System.Math.Max(_ps.Size.Width, StrataPanel.WidestWidth));
             // ★되읽어 남긴다 — 안 붙었으면 그 사실이 로그에 있어야 다음에 헤매지 않는다.
+            //   ★[1103] <c>Dock</c> 읽기는 쪽을 안 알려 준다(종전 ⚠는 헛경보) → 자리로 가린다
             try
             {
-                var got = _ps.Dock;
                 DiagLog.Append($"\n[지층구성] 창 열기 — 너비 {StrataPanel.WidestWidth}px(표가 정한 값)"
-                             + $" · 실제 {_ps.Size.Width}px · 도킹 {got}"
-                             + (got == DockSides.Right ? " (우측)" : " ⚠<b>우측에 안 붙었다</b>"));
+                             + $" · 실제 {_ps.Size.Width}px · 도킹 {DhDock.Where(_ps)}"
+                             + (DhDock.IsRight(_ps) ? "" : " ⚠<b>우측에 안 붙었다</b>"));
             }
             catch { }
             _panel?.Refresh();

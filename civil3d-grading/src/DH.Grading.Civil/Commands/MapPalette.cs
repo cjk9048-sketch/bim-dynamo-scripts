@@ -64,8 +64,8 @@ public static class MapPalette
             try { _ps.Size = new System.Drawing.Size(w, h); } catch { }
 
             // ★도킹은 <b>보인 뒤에</b> 건다 — 안 뜬 팔레트에는 AutoCAD가 Dock을 무시한다(§56에서 데였다).
-            _ps.Visible = true;
-            try { if (_ps.Dock != DockSides.Right) _ps.Dock = DockSides.Right; } catch { }
+            // ★[JACK 1103 «오른쪽에 나란히»] 다른 DH 창이 붙어 있으면 그 왼쪽 옆에(<see cref="DhDock"/>)
+            DhDock.ShowRight(_ps, "서버 지표면", w);
             try { _ps.Size = new System.Drawing.Size(w, h); } catch { }
 
             _panel.Start(doc, epsg, csNote);
@@ -73,7 +73,7 @@ public static class MapPalette
             try
             {
                 DiagLog.Append($"\n[지도도킹바] 열기 — 요청 {w}×{h}px · 실제 {_ps.Size.Width}×{_ps.Size.Height}px"
-                             + $" · 도킹 {_ps.Dock} · EPSG:{epsg}");
+                             + $" · 도킹 {DhDock.Where(_ps)} · EPSG:{epsg}");
             }
             catch { }
         }

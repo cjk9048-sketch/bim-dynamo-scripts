@@ -79,6 +79,8 @@ public sealed class ExcavCommand
             using var trV = db.TransactionManager.StartTransaction();
             GradingBuilder.IsolateSurfaces(trV, null);
             GradingBuilder.SetSurfaceVisible(trV, WallCompositeCommand.BaseName, false);   // ★[v101.1] 합성 전 정지면은 보관용
+            GradingBuilder.SetSurfaceVisible(trV, FinalSurfaceBuilder.Name, false);        // ★[v111.8 · M5] 최종지표면 · 짓는중도(원지반으로 잘못 고르지 않게)
+            GradingBuilder.SetSurfaceVisible(trV, FinalSurfaceBuilder.TempName, false);
             trV.Commit();
         }
         catch { }
@@ -113,9 +115,15 @@ public sealed class ExcavCommand
             var peoS = new PromptEntityOptions("\n원지반 표면(TIN Surface)을 선택: ");
             peoS.SetRejectMessage("\nTIN Surface여야 합니다.");
             peoS.AddAllowedClass(typeof(TinSurface), true);
-            var rS = ed.GetEntity(peoS);
-            if (rS.Status != PromptStatus.OK) return;
-            groundId = rS.ObjectId;
+            // ★[v111.8 · M5] 우리 최종지표면 · 진입도로 면은 거절하고 다시 묻는다
+            while (true)
+            {
+                var rS = ed.GetEntity(peoS);
+                if (rS.Status != PromptStatus.OK) return;
+                if (FinalSurfaceBuilder.RejectPick(db, ed, rS.ObjectId)) continue;
+                groundId = rS.ObjectId;
+                break;
+            }
         }
         else ed.WriteMessage("\n원지반 = 마지막 정지에 쓴 지반(자동)");
 

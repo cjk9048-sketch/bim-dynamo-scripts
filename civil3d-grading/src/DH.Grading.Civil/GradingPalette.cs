@@ -107,8 +107,8 @@ public static class GradingPalette
             //   ★그리고 <b>부를 때마다</b> 확인한다 — 떼어 놓았다가 다시 누르면 그때도 붙는 편이 낫다.
             // ★[v111.7 · JACK 1102 «부지 창을 열면 진입도로 창은 닫기»] 숨기기만(도로 세션 · 값은 그대로)
             RoadPalette.Hide();
-            _ps.Visible = true;
-            try { if (_ps.Dock != DockSides.Right) _ps.Dock = DockSides.Right; } catch { }
+            // ★[JACK 1103 «오른쪽에 나란히»] 다른 DH 창(터파기 · 3D 보기 …)이 붙어 있으면 그 왼쪽 옆에(<see cref="DhDock"/>)
+            DhDock.ShowRight(_ps, "계획부지 정지", _sizedOnce ? 0 : PanelW);
             // ★★[JACK 0910 <i>"처음 도킹창이 뜰때는 무조건 … 닫고 다시 열더라도"</i>]
             //   <b>이 세션에서 처음 열 때 한 번만</b> 폭을 정해 준다.
             //   ★<b>열 때마다</b> 하면 안 된다 — 넓혀 놓고 창을 접었다 펼 때마다 도로 좁아져
@@ -127,9 +127,9 @@ public static class GradingPalette
             // ★되읽어 남긴다 — 안 붙었으면 그 사실이 로그에 있어야 다음에 헤매지 않는다.
             try
             {
-                var got = _ps.Dock;
-                DiagLog.Append($"\n[계획부지 정지] 창 열기 — 너비 {PanelW}px · 실제 {_ps.Size.Width}px · 도킹 {got}"
-                             + (got == DockSides.Right ? " (우측)" : " ⚠<b>우측에 안 붙었다</b>"));
+                // ★[1103] <c>Dock</c> 읽기는 쪽을 안 알려 준다(붙으면 늘 Left|Top|Right|Bottom — 종전 ⚠는 헛경보) → 자리로 가린다
+                DiagLog.Append($"\n[계획부지 정지] 창 열기 — 너비 {PanelW}px · 실제 {_ps.Size.Width}px · 도킹 {DhDock.Where(_ps)}"
+                             + (DhDock.IsRight(_ps) ? "" : " ⚠<b>우측에 안 붙었다</b>"));
             }
             catch { }
         }

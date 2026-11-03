@@ -34,7 +34,7 @@ export class Section {
     const set = new Set();
     const add = (m) => { if (!m) return; for (const x of (Array.isArray(m) ? m : [m])) set.add(x); };
     const L = this.L;
-    if (L.terrain) { L.terrain.mats.forEach(add); add(L.terrain.cfMat); }
+    if (L.terrain) { L.terrain.mats.forEach(add); add(L.terrain.cfMat); add(L.terrain.laneMat); }
     for (const id of ['ground', 'excav', 'wall', 'pattern', 'drain', 'cad', 'slope', 'bldg']) {
       const l = L[id];
       if (!l || !l.obj) continue;

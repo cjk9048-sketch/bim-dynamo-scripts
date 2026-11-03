@@ -1407,7 +1407,10 @@ public static class GradingBuilder
 
     /// <summary>[§75 — JACK 0728] 지표면 표시 정리: keepBaseName(정지면_DH)만 보이고 나머지(원지반·가상면 등)는
     /// 전부 숨김. keepBaseName=null이면 모든 지표면 표시 복원(DHGRADE 시작 시 — 원지반을 클릭 선택해야 하므로).</summary>
-    public static void IsolateSurfaces(Transaction tr, string? keepBaseName)
+    public static void IsolateSurfaces(Transaction tr, string? keepBaseName) => IsolateSurfaces(tr, keepBaseName, null);
+
+    /// <summary>★[v111.8 · 계획 5장] <paramref name="alsoKeep"/>가 참인 면도 켠다(정지옵션 저장 — 맞는 최종면 + 진입도로 면 경계선 · L14).</summary>
+    public static void IsolateSurfaces(Transaction tr, string? keepBaseName, Func<Autodesk.Civil.DatabaseServices.Surface, bool>? alsoKeep)
     {
         var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
         foreach (ObjectId sid in civilDoc.GetSurfaceIds())
@@ -1415,7 +1418,8 @@ public static class GradingBuilder
             if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
             bool keep = keepBaseName == null
                 || s.Name == keepBaseName
-                || (s.Name.StartsWith(keepBaseName + "_") && int.TryParse(s.Name.Substring(keepBaseName.Length + 1), out _));
+                || (s.Name.StartsWith(keepBaseName + "_") && int.TryParse(s.Name.Substring(keepBaseName.Length + 1), out _))
+                || (alsoKeep != null && alsoKeep(s));
             try
             {
                 // ★[v32.11 · 조사 반영] <b>이미 같은 값이면 쓰지 않는다.</b>
@@ -1731,7 +1735,8 @@ public static class GradingBuilder
         {
             nm = w.Name ?? "?";
             // ★[v103.1.7 · 검토 열린 물음 3] 손으로 이름을 바꾼 사본(«정지면_DH 1차» 등)도 — 옛 판이 깨 놓은 면은 늘 정지면_DH… · 정지순수_DH…였다
-            bool ours = SelfCheck.IsOurSurfaceName(nm) || nm.StartsWith("정지면_DH", System.StringComparison.Ordinal) || nm.StartsWith("정지순수_DH", System.StringComparison.Ordinal);
+            bool ours = SelfCheck.IsOurSurfaceName(nm) || nm.StartsWith("정지면_DH", System.StringComparison.Ordinal) || nm.StartsWith("정지순수_DH", System.StringComparison.Ordinal)
+                        || FinalSurfaceBuilder.IsOldName(nm);   // ★[v111.8 · 검토 M1]
             gone = ours && w.HasSnapshot && SnapBlock(w, out _) == 1;
         }
         catch { }
@@ -1826,7 +1831,8 @@ public static class GradingBuilder
     {
         string nm;
         try { nm = s.Name ?? ""; } catch { return false; }
-        if (!DhXmlName.IsMatch(nm)) return false;
+        // ★[v111.8 · 검토 M1] 남이 붙여넣어 이름만 바꿔 둔 옛 최종면(«최종지표면_DH(옛)» · «…_N»)도 우리 XML 면 — 굳힌 채 재작성만(이름 꼴은 위 규칙 밖)
+        if (!DhXmlName.IsMatch(nm) && !FinalSurfaceBuilder.IsOldName(nm)) return false;
         var files = new List<string>();
         if (!TryXmlFilesOf(s, files)) return true;
         foreach (string f in files) if (XmlStore.IsOurs(f)) return true;
@@ -1864,7 +1870,8 @@ public static class GradingBuilder
         => !string.IsNullOrEmpty(note)
         && (note.IndexOf("되찍기도 실패", System.StringComparison.Ordinal) >= 0
             || note.IndexOf("⚠되찍은 면이 재작성 뒤 바뀌었다", System.StringComparison.Ordinal) >= 0
-            || note.IndexOf("굳힌 면이 바뀌었다", System.StringComparison.Ordinal) >= 0);   // ★[v103.1.7 · 검토 낮음 3②] XML 면(굳힘 → 재작성)도 같은 모양이어야 한다
+            || note.IndexOf("굳힌 면이 바뀌었다", System.StringComparison.Ordinal) >= 0   // ★[v103.1.7 · 검토 낮음 3②] XML 면(굳힘 → 재작성)도 같은 모양이어야 한다
+            || note.IndexOf("띠 든 면 재작성 한 번 더 실패", System.StringComparison.Ordinal) >= 0);   // ★[v111.9 · 설치 전 검토 L1] 원지형 자르기 띠가 든 면 — 스냅샷만 새로 굽고 재작성이 못 된 채 커밋하지 않게
 
     /// <summary>저장된 도면이면 그 전체 경로 · 이름 없는 새 도면(템플릿에서 막 만든 것)이면 빈 문자열 — XML 원본 폴더와 «마지막 저장 시각»의 기준.</summary>
     static string DwgPathOf(Database db)
@@ -2239,6 +2246,10 @@ public static class GradingBuilder
                 {
                     int r = RebuildSnapshotSafe(w, out string sn);
                     if (r > 0) snap++; else if (r == 0) snapT.Skip.Add(sn); else snapT.Bad.Add(sn);
+                    // ★[v111.9 · 계획_원지형자르기.md 6장 · V86 R] 원지형 자르기 띠가 든 면은 스냅샷 재작성 뒤 «구식»으로 남는다 → 재작성 한 번 더(«ok · 스냅샷ok» 실측) · 자르지 않은 도면은 안 탐
+                    if (r > 0 && w.IsOutOfDate && GroundCropBuilder.IsCropped(tr, w))
+                        try { w.Rebuild(); }
+                        catch (System.Exception exC) { snapT.Bad.Add($"{w.Name}(띠 든 면 재작성 한 번 더 실패 {exC.GetType().Name}: {exC.Message})"); }   // ★[v111.9 · 설치 전 검토 L1] 삼키지 않음 · MustAbort가 봄
                 }
                 nComp++;
             }
@@ -2426,6 +2437,10 @@ public static class GradingBuilder
                     else
                     {
                         int r = RebuildSnapshotSafe(w, out string sn);
+                        // ★[v111.9 · 계획_원지형자르기.md 6장] 자르기 띠가 든 면은 스냅샷 재작성 뒤 구식 → 재작성 한 번 더(자르지 않은 도면은 안 탐)
+                        if (r > 0 && w.IsOutOfDate && GroundCropBuilder.IsCropped(tr, w))
+                        try { w.Rebuild(); }
+                        catch (System.Exception exC) { snapT.Bad.Add($"{w.Name}(띠 든 면 재작성 한 번 더 실패 {exC.GetType().Name}: {exC.Message})"); }   // ★[v111.9 · 설치 전 검토 L1] 삼키지 않음 · MustAbort가 봄
                         if (r > 0) snapOk++;
                         else if (r == 0) { snapSkip++; if (skipWhy.Length == 0) skipWhy = sn; }
                         // ★[v103.1.7 · 검토 낮음 3①] 실패 글은 전부 남긴다(첫 까닭 하나만 남기면 같은 이름 면이 둘이거나 앞에서 다른 예외가 나면 «되찍기도 실패»가 글에서 빠져 MustAbort가 못 본다)

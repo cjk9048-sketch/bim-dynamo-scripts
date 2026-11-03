@@ -42,15 +42,38 @@ public sealed class CachedGroundSurface : IGroundSurface
         }
     }
 
-    public CachedGroundSurface(TinSurface surface)
+    public CachedGroundSurface(TinSurface surface) : this(ReadVisible(surface, out int reported), reported) { }
+
+    /// <summary>★[v111.8 · 계획 5장] 메모리 세모(최종지표면 메모리 합치기 · 가지 바탕)로 — 면에서 읽은 것과 같은 격자 · 지문(세모 차례 그대로).</summary>
+    public CachedGroundSurface(IReadOnlyList<WallDaylight.Tri> tris) : this(tris, tris.Count) { }
+
+    /// <summary>보이는 세모를 Civil이 준 차례로 — 읽다 예외 난 세모는 뺀다(<paramref name="reported"/> = Civil이 준 수).</summary>
+    static List<WallDaylight.Tri> ReadVisible(TinSurface surface, out int reported)
     {
         // ★[검토 0901] 삼각형 목록은 <b>네이티브 메모리</b>라 GC 압박을 안 준다 —
         //   안 닫으면 관리 힙은 멀쩡한데 바깥 메모리만 조용히 는다.
         // ★[검토 0918 · 정정] false = <b>보이는</b> 삼각형만(경계로 가린 것은 빠진다) — 종전 주석 «모든 삼각형»은 틀렸다
         //   (GradingBuilder가 경계를 넣고 Rebuild한 뒤 이 호출로 삼각형 수를 세어 그 차이를 이미 쓰고 있다).
         using var tris = surface.GetTriangles(false);
+        reported = tris.Count;
+        var res = new List<WallDaylight.Tri>(reported);
+        foreach (var t in tris)
+        {
+            try
+            {
+                var p1 = t.Vertex1.Location; var p2 = t.Vertex2.Location; var p3 = t.Vertex3.Location;
+                res.Add(new WallDaylight.Tri(new Point3(p1.X, p1.Y, p1.Z), new Point3(p2.X, p2.Y, p2.Z), new Point3(p3.X, p3.Y, p3.Z)));
+            }
+            catch { }
+            finally { t.Dispose(); }
+        }
+        return res;
+    }
+
+    CachedGroundSurface(IReadOnlyList<WallDaylight.Tri> tris, int reported)
+    {
         int n = tris.Count;
-        _reported = n;
+        _reported = reported;
         _ax = new double[n]; _ay = new double[n]; _az = new double[n];
         _bx = new double[n]; _by = new double[n]; _bz = new double[n];
         _cx = new double[n]; _cy = new double[n]; _cz = new double[n];
@@ -61,26 +84,21 @@ public sealed class CachedGroundSurface : IGroundSurface
         ulong sig = 0;
         foreach (var t in tris)
         {
-            try
-            {
-                var p1 = t.Vertex1.Location; var p2 = t.Vertex2.Location; var p3 = t.Vertex3.Location;
-                _ax[k] = p1.X; _ay[k] = p1.Y; _az[k] = p1.Z;
-                _bx[k] = p2.X; _by[k] = p2.Y; _bz[k] = p2.Z;
-                _cx[k] = p3.X; _cy[k] = p3.Y; _cz[k] = p3.Z;
-                unchecked { sig += Mix(VertexHash(p1.X, p1.Y, p1.Z) + VertexHash(p2.X, p2.Y, p2.Z) + VertexHash(p3.X, p3.Y, p3.Z)); }
-                double tMinX = Math.Min(p1.X, Math.Min(p2.X, p3.X));
-                double tMaxX = Math.Max(p1.X, Math.Max(p2.X, p3.X));
-                double tMinY = Math.Min(p1.Y, Math.Min(p2.Y, p3.Y));
-                double tMaxY = Math.Max(p1.Y, Math.Max(p2.Y, p3.Y));
-                if (tMinX < minX) minX = tMinX; if (tMaxX > maxX) maxX = tMaxX;
-                if (tMinY < minY) minY = tMinY; if (tMaxY > maxY) maxY = tMaxY;
-                double tMinZ = Math.Min(p1.Z, Math.Min(p2.Z, p3.Z));
-                double tMaxZ = Math.Max(p1.Z, Math.Max(p2.Z, p3.Z));
-                if (tMinZ < minZ) minZ = tMinZ; if (tMaxZ > maxZ) maxZ = tMaxZ;
-                k++;
-            }
-            catch { }
-            finally { t.Dispose(); }
+            var p1 = t.A; var p2 = t.B; var p3 = t.C;
+            _ax[k] = p1.X; _ay[k] = p1.Y; _az[k] = p1.Z;
+            _bx[k] = p2.X; _by[k] = p2.Y; _bz[k] = p2.Z;
+            _cx[k] = p3.X; _cy[k] = p3.Y; _cz[k] = p3.Z;
+            unchecked { sig += Mix(VertexHash(p1.X, p1.Y, p1.Z) + VertexHash(p2.X, p2.Y, p2.Z) + VertexHash(p3.X, p3.Y, p3.Z)); }
+            double tMinX = Math.Min(p1.X, Math.Min(p2.X, p3.X));
+            double tMaxX = Math.Max(p1.X, Math.Max(p2.X, p3.X));
+            double tMinY = Math.Min(p1.Y, Math.Min(p2.Y, p3.Y));
+            double tMaxY = Math.Max(p1.Y, Math.Max(p2.Y, p3.Y));
+            if (tMinX < minX) minX = tMinX; if (tMaxX > maxX) maxX = tMaxX;
+            if (tMinY < minY) minY = tMinY; if (tMaxY > maxY) maxY = tMaxY;
+            double tMinZ = Math.Min(p1.Z, Math.Min(p2.Z, p3.Z));
+            double tMaxZ = Math.Max(p1.Z, Math.Max(p2.Z, p3.Z));
+            if (tMinZ < minZ) minZ = tMinZ; if (tMaxZ > maxZ) maxZ = tMaxZ;
+            k++;
         }
         _count = k;
         Signature = unchecked(sig + (ulong)k);
