@@ -227,6 +227,32 @@ public static class FormworkMerge
                 outcome.Add(joined);
             }
         }
+
+        // R73b(JACK 2026-11-03 «계단 … 공제 제외하고 합판 3회 해서 옆면 눌렀더니 한 칸만 바뀌었어 · 왜 이렇게 분리가 되어 있지»): 한 면(원본 면을 분석이 합친 FaceResult)
+        // 안에서 위 잇기에 들지 않은 세는 조각(검토 필요 · 안팎을 모름 — 벽에 붙은 계단 옆면을 거푸집 추가하면 단마다 «바로 앞 8 cm 안에 다른 콘크리트» 조각 23 = 판 23)도
+        // 같은 종류 · 구간 · 쪽 · 까닭 · 잇기 열쇠이고 맞닿으면 한 장으로. 면을 넘어서는 잇지 않는다(검토 필요 자리를 다른 면 · 다른 부재와 섞지 않게).
+        foreach (var r in results)
+            foreach (var f in r.Faces)
+            {
+                if (f.Normal.Length != 3 || f.Patches.Count < 2) continue;
+                var loose = f.Patches.Where(p => p.Counted && p.Item.Length > 0 && p.Outline.Count > 0 && p.Outline[0].Count >= 3 && p.Vertical == null
+                                                 && !claimed.Contains(p) && outcome.GroupOf(p) == null)
+                                     .Select(p => (Result: r, Face: f, Patch: p)).ToList();
+                if (loose.Count < 2) continue;
+                var n = new V3(f.Normal[0], f.Normal[1], f.Normal[2]).Unit();
+                var parts = loose.GroupBy(m => (m.Patch.Item, acrossBands || m.Patch.Item != FormworkTable.Euro ? 0 : m.Patch.Band, m.Patch.Side, m.Patch.NeedsCheck, m.Patch.Note, MoveKey(r, m.Patch)))
+                                 .SelectMany(g => Connected(g.ToList(), n)).Where(g => g.Count >= 2);
+                foreach (var members in parts)
+                {
+                    var lead = members.OrderByDescending(m => m.Patch.Area).First();
+                    var merged = TryJoin(members.Select(m => m.Patch).ToList(), n, lead.Patch);
+                    if (merged == null) { outcome.Refused++; continue; }
+                    var joined = new Joined { Lead = lead };
+                    foreach (var m in members) joined.Members.Add(m);
+                    Fill(joined.Merged, merged);
+                    outcome.Add(joined);
+                }
+            }
         return outcome;
     }
 

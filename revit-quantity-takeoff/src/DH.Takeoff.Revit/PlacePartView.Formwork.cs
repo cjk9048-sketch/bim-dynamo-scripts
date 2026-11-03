@@ -476,6 +476,9 @@ public sealed partial class PlacePartView
             return true;
         }));
 
+    /// <summary>시험용(R73b): 되돌릴 일의 이름들(차례 — 마지막이 Ctrl+Z).</summary>
+    public IReadOnlyList<string> FormworkUndoNames => _fwUndo.Select(u => u.what).ToList();
+
     // 다시 센 뒤: 겉면 갈아 끼우기 · 파일에 적기 · 일지 · 알림(자동 모드에서 고쳐 사용자 모드로 바뀌었으면 함께 — R66 계획 검토 H3 · M3).
     private void FinishChange(string log, string said, string what)
     {
@@ -490,7 +493,7 @@ public sealed partial class PlacePartView
                     $" · 일부만 찾음 {_board.DropCheck.Partial.Count} · 넓이 달라짐 {_board.DropCheck.Resized.Count} · 거푸집 {M2(_board.Total)} ㎡" +
                     $" · 되돌릴 일 {_fwUndo.Count} · 판 다시 지음 {_board.RefreshMilliseconds} ms · 형상 다시 잼 {_board.MeasureVersion}번(마지막 {_board.RemeasureMilliseconds} ms)" +
                     $" · 겹침 기록 {_board.Rules.JointCount} · 그림 {watch.ElapsedMilliseconds} ms");
-        if (switched) said = "사용자 모드로 바꿨습니다 · " + said;
+        // R73b: [자동 | 사용자] 단추를 걷어 모드는 보이지 않는다 — 알림에 «사용자 모드로 바꿨습니다»를 붙이지 않는다(일지에만).
         if (problem.Length > 0) ShowMessage($"{what} — 기록을 모델에 적지 못했습니다(이 창에서는 바꾼 대로 셉니다): {problem}", true);
         else ShowMessage(said);
     }
@@ -734,7 +737,11 @@ public sealed partial class PlacePartView
     {
         if (_board == null || Busy) return false;
         string snapshot = _board.Snapshot();
-        if (!_board.SetSubRule(key.type, key.group, sub, choice)) return false;
+        if (!_board.SetSubRule(key.type, key.group, sub, choice))
+        {
+            if (_board.NeedsDecision) AskWake($"{RowLabel(key)} · {sub} → {(choice.Length > 0 ? choice : "자동")}", () => ChangeSubRule(key, sub, choice));   // 쉬는 기록(R73b)
+            return false;
+        }
         var label = RowOf(key) is { } r && r.Subs.FirstOrDefault(s => s.Key == sub) is { } s ? SubLabel(r, s) : sub;
         string name = choice.Length > 0 ? choice : "줄 값 · 자동";
         RecordUndo($"{RowLabel(key)} · {label} → {name}", snapshot);
@@ -869,7 +876,11 @@ public sealed partial class PlacePartView
     {
         if (_board == null || Busy) return false;
         string snapshot = _board.Snapshot();
-        if (!_board.SetRule(key.type, key.group, choice)) return false;
+        if (!_board.SetRule(key.type, key.group, choice))
+        {
+            if (_board.NeedsDecision) AskWake($"{RowLabel(key)} → {(choice.Length > 0 ? choice : "자동")}", () => ChangeRule(key, choice, record));   // 쉬는 기록(R73b)
+            return false;
+        }
         // 되돌리기 목록(R55b · R66): 기록 글 전체(아래 줄 값 · 모드까지).
         if (record) RecordUndo($"{RowLabel(key)} → {(choice.Length > 0 ? choice : "자동")}", snapshot);
         string problem = SaveRules?.Invoke() ?? "";
@@ -1058,7 +1069,7 @@ public sealed partial class PlacePartView
                 "벽과 슬래브 옆처럼 같은 평면에 맞닿았지만 대응표의 종류가 달라 엑셀에서 한 줄로 잇지 못한 자리입니다. 종류를 맞추면 한 줄이 됩니다.\n"
                 + string.Join("\n", _board.Merge.SplitSummary(5).Select(s => "  " + s)), "fw.warn.splits"));   // 풍선 글은 굴리지 않는다 — 앞 다섯 가지만(전부는 일지)
         // 사람이 지운 판(R48 — 1021 «지우기»): 합계 · 엑셀 · 거푸집 객체에서 빠진 것을 잊지 않게 · 옮긴 판(R55b) · 옮길 줄이 없어진 판 · 모양이 바뀌어 다시 센 판.
-        int dropped = _board.DroppedCount, lost = _board.LostDrops.Count + _board.KindCheck.Lost.Count, moved = _board.MovedCount, orphans = _board.OrphanCount;
+        int dropped = _board.DroppedCount, lost = _board.LostDrops.Count + _board.KindCheck.Lost.Count + _board.FaceKindCheck.Lost.Count, moved = _board.MovedCount, orphans = _board.OrphanCount;
         int directPlates = DirectCount();
         if (dropped > 0)
             _fwWarnings.Children.Add(WarnChip($"세지 않는 판 {dropped}장 · {M2(_board.DroppedArea)} ㎡",
@@ -1069,11 +1080,26 @@ public sealed partial class PlacePartView
                 + string.Join("\n", _board.Rules.Moves.Take(5).Select(m => "  → " + RowLabel(m.to))) + (moved > 5 ? "\n  …" : ""), "fw.warn.moved"));
         if (directPlates > 0)
             _fwWarnings.Children.Add(WarnChip($"직접 정한 판 {directPlates}장",
-                "사용자 모드에서 판마다 종류 · 자리 · 나누기 · 합치기를 정한 판입니다(Revit 판의 종류 칸에서 고친 판도). 판을 고르고 [↺ 자동으로]로 규칙대로 돌립니다.", "fw.warn.kinds"));
-        // 자동 모드인데 모델에 사람이 정한 기록이 있다(R66 — 계획 §4 «기록은 지우지 않고 한 줄»): 쓰지 않고 남겨 둔다 — [사용자]로 바꾸면 다시 걸린다.
-        if (!_board.UserMode && _board.Rules.HasRecords)
-            _fwWarnings.Children.Add(WarnChip("직접 정한 기록 쓰지 않음",
-                "자동 모드라 사용자 모드에서 정한 줄 · 판 기록을 쓰지 않고 규칙대로 셉니다. 기록은 모델에 남아 있어 [사용자]로 바꾸면 다시 걸립니다.", "fw.warn.autoKept"));
+                "판마다 종류 · 자리 · 나누기 · 합치기를 정했거나 면을 칠한 판입니다(Revit 판의 종류 칸에서 고친 판도). 판을 고르고 [↺ 자동으로] · 면을 고르고 [↺ 처음 값].", "fw.warn.kinds"));
+        // 쉬는 기록(R66 «기록은 지우지 않고 한 줄» → R73b [자동 | 사용자]를 걷음 · 계획 §3.3): 쓰지 않고 남겨 둔 기록 — 곁에 [다시 쓰기] · [지우기](짝 · 칸은 남김).
+        if (_board.Sleeping)
+        {
+            var line = new StackPanel { Orientation = Orientation.Horizontal };
+            line.Children.Add(WarnChip($"쓰지 않는 직접 정한 기록 {SleepingCount()}개",
+                "전에 직접 정한 줄 · 판 · 면 기록이 모델에 남아 있지만 쓰지 않고 규칙대로 셉니다. [다시 쓰기] = 다시 걸기 · [지우기] = 기록을 지움(시공 순서표는 남김). 고치면 먼저 묻습니다.", "fw.warn.autoKept"));
+            foreach (var (text, keep, id, tip) in new[] { ("다시 쓰기", true, "btn.fw.wake.keepChip", "직접 정한 기록을 다시 씁니다(합계가 그 기록대로 바뀝니다)."),
+                                                          ("지우기", false, "btn.fw.wake.clearChip", "직접 정한 기록을 지웁니다(시공 순서표 · 합계는 그대로).") })
+            {
+                bool k = keep;
+                var button = _ui.Button(text, "BtnGhost", tip, id);
+                button.Focusable = false;
+                button.Margin = new Thickness(0, 4, 6, 0);
+                button.VerticalAlignment = VerticalAlignment.Center;
+                button.Click += (_, _) => WakeNow(k);
+                line.Children.Add(button);
+            }
+            _fwWarnings.Children.Add(line);
+        }
         if (orphans > 0)
             _fwWarnings.Children.Add(WarnChip($"옮길 줄이 없어진 판 {orphans}장",
                 "옮긴 줄이 표에서 없어져(① 에서 부위 이름을 바꿈 · 줄이 가려짐) 세지 않는 판으로 돌아갔습니다. 판을 고르고 종류를 정하세요.", "fw.warn.orphan"));
@@ -1094,7 +1120,8 @@ public sealed partial class PlacePartView
         // 찾았지만 모양이 바뀐 뺀 판(core-verify R48 설치 전 M3): 일부 조각만 찾음 · 빠진 넓이가 뺄 때와 5% 넘게 다름.
         var check = _board.DropCheck;
         // 판 종류를 정한 판이 지금 둘 이상으로 나뉨(R68) · 층마다 갈려 넓이가 바뀜(R70)도 — 한 기록은 한 번.
-        int kindPartial = _board.KindCheck.Partial.Union(_board.SplitKinds, StringComparer.Ordinal).Union(_board.KindCheck.Resized, StringComparer.Ordinal).Count();
+        int kindPartial = _board.KindCheck.Partial.Union(_board.SplitKinds, StringComparer.Ordinal).Union(_board.KindCheck.Resized, StringComparer.Ordinal).Count()
+                          + _board.FaceKindCheck.Partial.Union(_board.FaceKindCheck.Resized, StringComparer.Ordinal).Count();   // 칠한 면(R73b)도
         var changedLeads = check.Partial.Concat(check.Resized).Distinct().ToList();
         if (changedLeads.Count > 0)
             _fwWarnings.Children.Add(WarnButton($"⚠ 모양이 바뀐 판 {check.Changed + kindPartial}",
@@ -1156,9 +1183,10 @@ public sealed partial class PlacePartView
         _fwTotalText = $"거푸집 {M2(_board.Total)} ㎡ · 검토 필요 {checks}곳" + (gaps > 0 ? $" · 그림에 없는 틈 {gaps}곳" : "") + (splits > 0 ? $" · 종류가 달라 못 이은 면 {splits}곳" : "") +
                        (dropped > 0 ? $" · 세지 않는 판 {dropped}장" : "") + (moved > 0 ? $" · 옮긴 판 {moved}장" : "") + (orphans > 0 ? $" · 옮길 줄이 없어진 판 {orphans}장" : "") +
                        (lost > 0 ? $" · 모양이 바뀌어 다시 센 판 {lost}장" : "") + "\n" + string.Join(" · ", parts);
-        _status.Text = _board.UserMode
-            ? $"사용자 모드 · 직접 정한 판 {directPlates}장" + (_board.Rules.Count > 0 ? $" · 줄 규칙 {_board.Rules.Count}" : "") + " · 고칠 때마다 모델에 적힙니다"
-            : "자동 모드 · 규칙대로 셉니다";
+        // R73b: 모드 낱말 없이(단추를 걷었다) — 쉬는 기록 · 직접 정한 것 · 규칙대로.
+        _status.Text = _board.Sleeping ? "쓰지 않는 직접 정한 기록 있음 · 고치면 먼저 묻습니다"
+            : _board.UserMode && _board.Rules.HasRecords ? $"직접 정한 판 {directPlates}장" + (_board.Rules.Count > 0 ? $" · 줄 규칙 {_board.Rules.Count}" : "") + " · 고칠 때마다 모델에 적힙니다"
+            : "규칙대로 셉니다 · 고칠 때마다 모델에 적힙니다";
         // [되돌리기](② 에서 한 일 — R55b): 할 것이 없으면 꺼짐 · 풍선 글 = 되돌릴 일.
         _undo.IsEnabled = _fwUndo.Count > 0;
         _ui.Tip(_undo, _fwUndo.Count > 0 ? $"되돌리기(Ctrl+Z): {_fwUndo[^1].what}" : "되돌릴 것이 없습니다.");
@@ -1268,7 +1296,6 @@ public sealed partial class PlacePartView
     /// <summary>고른 판을 세지 않음([세지 않음] 단추와 같은 길 — R73a3 부터 Del 은 숨기기).</summary>
     public bool DropPicked() => DropSelected();
     /// <summary>[자동] · [사용자] 칸(R66).</summary>
-    public RadioButton? ModeButton(bool user) => user ? _fwUserMode : _fwAutoMode;
     /// <summary>자리 바꾸기 칸의 부위 · 중분류 고르는 칸(열려 있을 때만).</summary>
     public ComboBox? PlacePartBox => _fwPlaceOpen ? _fwPlacePart : null;
     public ComboBox? PlaceZoneBox => _fwPlaceOpen ? _fwPlaceZone : null;

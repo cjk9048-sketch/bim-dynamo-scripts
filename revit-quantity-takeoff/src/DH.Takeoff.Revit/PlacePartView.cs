@@ -277,6 +277,7 @@ public sealed partial class PlacePartView
         var cutTools = BuildCutTools();
         cutTools.Margin = new Thickness(10);
         stage.Children.Add(cutTools);
+        stage.Children.Add(BuildWakeCard());       // 쉬는 기록 세 갈래 창(R73b — 그림 가운데 · 고칠 때만)
         // 부재만 보기 띠(R73a2 — 오른쪽) + 그 아래 알림(왼쪽): 좁은 3D(R73a5 나눔)에서도 서로 덮지 않는다 · 띠가 없으면 알림이 그 자리.
         // ② 는 도구 · 보기 단추 줄 아래(위 52) · ① · ③ 은 전처럼 왼쪽 위(보기 단추 자리 330 은 비움 — ShowStep).
         var notes = new StackPanel { Margin = new Thickness(10, 10, 330, 10), VerticalAlignment = VerticalAlignment.Top };
@@ -295,7 +296,7 @@ public sealed partial class PlacePartView
             if (Step == 2) { ClickReview(index); return; }
             if (Step == 1)
             {
-                if (_fwTool != CutTool.None) { ClickTool(); return; }   // [빼기] · [넣기]를 든 동안은 고르기 대신 그 자리(R73a5)
+                if (_fwTool != CutTool.None) { ClickTool(); return; }   // [빼기] · [넣기]를 든 동안은 고르기 대신 그 자리(R73a5) · 붓은 그 면 칠하기(R73b)
                 ClickFormwork(index, ctrl, _view3d.ClickTriangle);
                 return;
             }
@@ -304,6 +305,8 @@ public sealed partial class PlacePartView
             RefreshAll();
         };
         _view3d.LabelClick = (index, ctrl) => ClickMarkLabel(index, ctrl, whole: false);   // ② 빗금 딱지 → 그 이웃의 맞닿은 면(R73a7)
+        _view3d.PaintMoved += PaintMovedTo;        // 붓 끌기(R73b)
+        _view3d.PaintEnded += PaintDragEnded;
         _view3d.Banded += (indices, ctrl) =>
         {
             if (Step == 1) { BandFormwork(indices, ctrl); return; }   // ② 판 여러 장(R66)
@@ -353,7 +356,10 @@ public sealed partial class PlacePartView
             // ① 의 모델 되돌리기로 흘러가지 않게 이 갈래에서 끝낸다(계획 검토 L4).
             // R73a5: 도구를 든 동안 Esc = 도구만 내려놓음(고른 것 · 이 부재만 보기는 그대로 — 한 번 더 Esc 면 전처럼).
             // R73a6: 오른쪽 «전체 모델»에서 끌던 것도 그만둔다(글자판은 늘 왼쪽 그림 — 어느 그림을 눌렀든 같은 길).
-            if (e.Key == Key.Escape && _fwTool != CutTool.None) { _view3d.CancelDrag(); _locator?.CancelDrag(); SetTool(CutTool.None, "Esc"); e.Handled = true; }
+            // R73b: 세 갈래 창 · 종류 작은 판이 떠 있으면 Esc 는 그것만 닫는다.
+            if (e.Key == Key.Escape && WakeOpen) { AnswerWake(0); e.Handled = true; }
+            else if (e.Key == Key.Escape && KindPanelOpen) { CloseKindPanel(); e.Handled = true; }
+            else if (e.Key == Key.Escape && _fwTool != CutTool.None) { _view3d.CancelDrag(); _locator?.CancelDrag(); SetTool(CutTool.None, "Esc"); e.Handled = true; }
             else if (e.Key == Key.Escape) { _view3d.CancelDrag(); _locator?.CancelDrag(); if (!ClosePlaceBar()) PickRow(null); e.Handled = true; }
             else if (e.Key == Key.Delete) { HideSelected(); e.Handled = true; }
             else if (e.Key == Key.Z && (Keyboard.Modifiers & ModifierKeys.Control) != 0) { FormworkUndo(); e.Handled = true; }
@@ -403,6 +409,8 @@ public sealed partial class PlacePartView
         _hide.Visibility = _showAll.Visibility = _onlyRemaining.Visibility = Show(places);
         if (Step != 1 && _fwTool != CutTool.None) SetTool(CutTool.None, "걸음 바뀜");   // [빼기] · [넣기]는 ② 에서만(R73a5)
         _view3d.BandSelect = places || (Step == 1 && _fwTool == CutTool.None);   // ② 도 끌어 판 여러 장(R66) · 도구를 든 동안은 끔(R73a5)
+        _view3d.PaintDrag = Step == 1 && _fwTool == CutTool.Paint;              // 붓 끌기(R73b)
+        if (Step != 1) { _fwWakeRetry = null; if (_fwWake != null) _fwWake.Visibility = Visibility.Collapsed; CloseKindPanel(); }   // 세 갈래 창 · 종류 작은 판은 ② 에서만(R73b)
         if (_fwTools != null) _fwTools.Visibility = Step == 1 ? Visibility.Visible : Visibility.Collapsed;
         if (_notes != null) _notes.Margin = Step == 1 ? new Thickness(10, 52, 10, 10) : new Thickness(10, 10, 330, 10);
         _nextArmed = false;

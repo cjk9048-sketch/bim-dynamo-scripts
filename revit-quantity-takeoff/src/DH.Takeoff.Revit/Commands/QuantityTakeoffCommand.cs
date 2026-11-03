@@ -1208,6 +1208,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         if (stored.Exists || stored.Problem.Length > 0)
         {
             session.Note($"대응표 읽음\t모델 · 기록 {stored.Copies}벌 · 합칠 때 다른 값 {stored.Conflicts} · 고친 줄 {stored.Rules.Count} · 뺀 판 {stored.Rules.DropCount} · 옮긴 판 {stored.Rules.MoveCount}" +
+                         $" · 판 종류 {stored.Rules.KindCount} · 면 종류 {stored.Rules.FaceKindCount}{(stored.Rules.Sleeping ? " · 쉬는 기록(모드 자동)" : "")}" +
                          (notice.Length > 0 ? " · " + notice.Replace('\n', ' ') : ""));
             return (stored.Rules, notice, false);
         }
@@ -1241,6 +1242,13 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         if (seen.Count == 0) return (rules, "", false);
         var copy = FormworkRules.Parse(rules.ToText());
         var o = FormworkPlateIntake.Apply(seen, copy);
+        // R73b(계획 §3.3 · 검토 H4): 쉬는 기록이 있는 모델(모드 «자동» + 기록)이면 받지 않고 미룬다 — 받으면 사용자 모드로 바뀌며 쉬던 기록까지 한꺼번에 걸린다.
+        // Revit 판의 표시는 그대로 · 다음 열 때(② 에서 쉬는 기록을 정한 뒤) 받는다. 합계는 그대로.
+        if (rules.Sleeping && o.Taken.Count > 0)
+        {
+            session.Note($"판 종류 받아들이기 미룸\t쉬는 기록 · 바꾼 판 {o.Taken.Count}장 — 다음 열기에 받음");
+            return (rules, $"Revit 판에서 바꾼 종류 {o.Taken.Count}장 — 아직 안 받음(쓰지 않는 직접 정한 기록을 [다시 쓰기] · [지우기]로 정한 뒤 다시 열면 받습니다)", false);
+        }
         foreach (string line in o.Log) session.Note("판 종류\t" + line);
         var notes = new List<string>();
         bool took = false;
@@ -1409,7 +1417,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
         // Revit 계단(R56c-1): 둘레 콘크리트로 넣은 수 + 계단마다 한 줄(런 · 참 · 재료 · 형상 출처 · 체적 — 계단을 부재로 세기(R56c-2) 전에 첫 실행 값을 본다).
         if (scene.StairLines.Count > 0)
         {
-            session.Note($"계단\t계단 {scene.StairLines.Count} · 콘크리트로 넣음 {scene.StairContexts} · 셈 대상 {scene.StairTargets}(R65) · 챌면 조각 {FormworkAnalyzer.LastRisers}(R70 셈)");
+            session.Note($"계단\t계단 {scene.StairLines.Count} · 콘크리트로 넣음 {scene.StairContexts} · 셈 대상 {scene.StairTargets}(R65) · 챌면 조각 {FormworkAnalyzer.LastRisers}(R70 셈) · 합친 원본 면 {FormworkAnalyzer.LastMergedFaces}(R73b)");
             foreach (string line in scene.StairLines) session.Note("  계단\t" + line);
             // 계단 식(R65 — StairReader.Formula): 런 · 참 식과 입체 · 겹침 · 식 · 런마다 식 / 입체(산출식을 지은 계단만).
             foreach (var e in scene.Elements.Where(e => e.Stair && e.Target))
@@ -1663,7 +1671,7 @@ public sealed class QuantityTakeoffCommand : IExternalCommand
                     rulesUnsaved = "";
                     session.Committed();
                     session.Note($"대응표 적음\t모드 {(now.UserMode ? "사용자" : "자동")} · 고친 줄 {now.Count} · 뺀 판 {now.DropCount} · 옮긴 판 {now.MoveCount}" +
-                                 $" · 판 종류 {now.KindCount} · 판 자리 {now.PlaceCount} · 판 쪼갬 {now.SplitCount} · 겹침 {now.JointCount}\t모델");
+                                 $" · 판 종류 {now.KindCount} · 면 종류 {now.FaceKindCount} · 판 자리 {now.PlaceCount} · 판 쪼갬 {now.SplitCount} · 겹침 {now.JointCount} · 판 v{FormworkRulesStore.VersionOf(now)}\t모델");
                 }
                 else
                 {

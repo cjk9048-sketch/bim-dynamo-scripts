@@ -18,9 +18,11 @@ namespace DH.Takeoff.Revit;
 //  · R73a7(JACK 1102 «공제 제외를 누르면 그 버튼 아래로 합판부터 유로폼까지 버튼이 확장되고 거기서 누르고 위치를 누르면 해당 색으로 바뀌게»): [공제 제외]를 들면 아래 줄
 //    [자동 | 유로폼 | 합판 3회 | 합판 4회 | 합판 6회] — 종류를 고르고 빗금을 누르면 공제 제외 + 그 자리가 든 판의 종류(SetKinds — 붙어 있던 판이면 그 판 전체 · JACK 정함) ·
 //    되돌리기 한 줄. 이미 공제 제외된 자리(청록 점선)를 누르면 그 판의 종류만. 자동 = 판 종류는 그대로(규칙).
+//  · R73b(JACK 1103 «공제 제외는 헷갈린다 → 거푸집 추가» · «계단 옆면에 합판 3회를 했더니 한 칸만»): 셋째 조각 [칠하기](붓 — PlacePartView.Brush) ·
+//    [거푸집 추가] 아래 종류도 붓과 같은 길 = 누른 자리의 면 전체(한 평면의 무리 — 판이 여럿이어도)에 «면 종류» 한 기록(판 종류 SetKinds 가 아님) · 되돌리기 한 줄.
 public sealed partial class PlacePartView
 {
-    private enum CutTool { None, Deduct, Keep }
+    private enum CutTool { None, Deduct, Keep, Paint }
     private CutTool _fwTool;
     private RadioButton? _fwToolDeduct, _fwToolKeep;
     private FrameworkElement? _fwTools;
@@ -33,9 +35,9 @@ public sealed partial class PlacePartView
     private string _fwToolKey = "";                                 // 굵은 테두리를 그린 빗금 열쇠(빗금이 바뀌면 걷는다)
 
     private const string ToolDeductTip = "공제 — 다른 부재와 닿는 접합부를 선택해 거푸집 면적에서 공제합니다";   // R73a6 전문 용어(JACK 1102 «빠진 → 공제»)
-    private const string ToolKeepTip = "공제 제외 — 공제 위치(빨간 빗금)를 선택해 거푸집 면적에 포함합니다";
+    private const string ToolKeepTip = "거푸집 추가 — 공제 위치(빨간 빗금)를 선택해 거푸집 면적에 포함합니다";
 
-    private static string ToolName(CutTool tool) => tool == CutTool.Keep ? "공제 제외" : "공제";
+    private static string ToolName(CutTool tool) => tool switch { CutTool.Keep => "거푸집 추가", CutTool.Paint => "칠하기", _ => "공제" };
 
     // 3D 왼쪽 위 [빼기 | 넣기](UiTheme 조각 — 켠 조각을 다시 누르면 내려놓는다: 조각은 스스로 꺼지지 않으므로 누르기 앞에서 받는다).
     private FrameworkElement BuildCutTools()
@@ -57,16 +59,17 @@ public sealed partial class PlacePartView
             return segment;
         }
         _fwToolDeduct = Make("공제", ToolDeductTip, "fw.tool.deduct", CutTool.Deduct);
-        _fwToolKeep = Make("공제 제외", ToolKeepTip, "fw.tool.keep", CutTool.Keep);
-        var bar = _ui.Segments(_fwToolDeduct, _fwToolKeep);
+        _fwToolKeep = Make("거푸집 추가", ToolKeepTip, "fw.tool.keep", CutTool.Keep);
+        _fwToolPaint = Make("칠하기", PaintTip, "fw.tool.paint", CutTool.Paint);   // 붓(R73b)
+        var bar = _ui.Segments(_fwToolDeduct, _fwToolKeep, _fwToolPaint);
         bar.HorizontalAlignment = HorizontalAlignment.Left;
         // [공제 제외] 아래 종류 줄(R73a7): 자동 + 판 종류(카드의 종류 단추와 같은 이름 · 3D 판 색 점).
         var kinds = new List<UIElement>();
         foreach (string item in new[] { AutoKind }.Concat(FormworkTable.Items.Where(i => i != FormworkRules.NotCounted)))
         {
             string choice = item;
-            var segment = _ui.Segment(item, item == AutoKind ? "공제 제외한 자리는 붙어 있던 거푸집 판의 종류 그대로(규칙대로)"
-                                                             : $"공제 제외한 자리가 든 거푸집 판을 «{item}»으로 합니다 — 붙어 있던 판이면 그 판 전체. 이미 공제 제외된 자리를 누르면 종류만 바꿉니다.", "fw.tool.kind." + item);
+            var segment = _ui.Segment(item, item == AutoKind ? "거푸집 추가한 자리는 그 면의 종류 그대로(규칙대로)"
+                                                             : $"거푸집 추가한 자리가 든 면 전체를 «{item}»으로 합니다. 이미 거푸집 추가된 자리를 누르면 종류만 바꿉니다.", "fw.tool.kind." + item);
             segment.Focusable = false;
             segment.MinHeight = 26;
             segment.Padding = new Thickness(9, 0, 10, 1);
@@ -86,7 +89,7 @@ public sealed partial class PlacePartView
             segment.Checked += (_, _) =>
             {
                 _fwToolKind = choice == AutoKind ? null : choice;
-                Log?.Invoke($"② 공제 제외 종류\t{choice}");
+                Log?.Invoke($"② 거푸집 추가 종류\t{choice}");
                 if (_fwTool != CutTool.None) HoverTool();
             };
             _fwToolKindButtons[item] = segment;
@@ -97,14 +100,16 @@ public sealed partial class PlacePartView
         foreach (var k in kinds) column.Children.Add(k);
         var kindRow = new Border { Background = _ui["Key"], CornerRadius = new CornerRadius(7), Padding = new Thickness(2), Child = column };
         kindRow.Margin = new Thickness(0, 4, 0, 0);
-        kindRow.HorizontalAlignment = HorizontalAlignment.Right;
+        kindRow.HorizontalAlignment = HorizontalAlignment.Left;   // 왼쪽 자리 = 그 조각 아래(SetTool 이 맞춘다 — R73b 셋째 조각이 생겨 오른쪽 끝이 아님)
         kindRow.MinWidth = 96;
         kindRow.Visibility = Visibility.Collapsed;
-        _ui.Mark(kindRow, "공제 제외할 자리의 거푸집 종류 — 고른 뒤 빗금을 누르세요", "fw.tool.kinds");
+        _ui.Mark(kindRow, "거푸집 추가할 자리의 거푸집 종류 — 고른 뒤 빗금을 누르세요", "fw.tool.kinds");
         _fwToolKinds = kindRow;
         var stack = new StackPanel();
         stack.Children.Add(bar);
         stack.Children.Add(kindRow);
+        stack.Children.Add(BuildPaintKinds());     // [칠하기] 아래 종류 줄(R73b)
+        _fwToolStack = stack;
         var chip = new Border
         {
             Background = _ui["Glass"], BorderBrush = _line, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(3),
@@ -118,7 +123,7 @@ public sealed partial class PlacePartView
     // 도구를 든다 · 내려놓는다(why = 내려놓은 까닭 — 일지). 칸 · 마우스 모양 · 끌어 고르기 · 마우스 밑 표시를 맞춘다.
     private void SetTool(CutTool tool, string why)
     {
-        if (tool != CutTool.None && !ToolsReady) tool = CutTool.None;
+        if (tool != CutTool.None && !(tool == CutTool.Paint ? PaintReady : ToolsReady)) tool = CutTool.None;
         var was = _fwTool;
         _fwTool = tool;
         if (was != tool)
@@ -131,15 +136,23 @@ public sealed partial class PlacePartView
         {
             if (_fwToolDeduct != null) _fwToolDeduct.IsChecked = tool == CutTool.Deduct;
             if (_fwToolKeep != null) _fwToolKeep.IsChecked = tool == CutTool.Keep;
+            if (_fwToolPaint != null) _fwToolPaint.IsChecked = tool == CutTool.Paint;
         }
         finally { _fwToolSync = false; }
         if (_fwToolKinds != null) _fwToolKinds.Visibility = tool == CutTool.Keep ? Visibility.Visible : Visibility.Collapsed;   // 종류 줄(R73a7)
+        if (_fwPaintKinds != null) _fwPaintKinds.Visibility = tool == CutTool.Paint ? Visibility.Visible : Visibility.Collapsed;   // 붓 종류 줄(R73b)
+        AlignKinds(_fwToolKinds, _fwToolKeep);
+        AlignKinds(_fwPaintKinds, _fwToolPaint);
         // 알림은 도구 칸 아래 왼쪽이라 펼친 종류 줄을 덮는다(하네스 그림) — 든 동안은 도구 칸 오른쪽으로.
-        _toast.Margin = tool == CutTool.Keep ? new Thickness((_fwTools?.ActualWidth ?? 150) + 6, 0, 0, 0) : new Thickness(0);
-        _view3d.ToolCursor = tool != CutTool.None ? Cursors.Cross : null;
+        _fwTools?.UpdateLayout();
+        _toast.Margin = tool is CutTool.Keep or CutTool.Paint ? new Thickness((_fwTools?.ActualWidth ?? 150) + 6, 0, 0, 0) : new Thickness(0);
+        _view3d.ToolCursor = tool == CutTool.Paint ? Cursors.Pen : tool != CutTool.None ? Cursors.Cross : null;
         _view3d.BandSelect = Step == 0 || (Step == 1 && tool == CutTool.None);   // 든 동안은 끌어 고르지 않는다(끌다 뗀 것도 받지 않음)
+        _view3d.PaintDrag = Step == 1 && tool == CutTool.Paint;                  // 붓은 끌어 칠한다(R73b)
         if (was == tool) return;
         _fwToolSpot = null;
+        _fwPaintSpot = null;
+        if (was == CutTool.Paint) EndPaintDrag();
         _view3d.SetToolRings(null);
         if (tool != CutTool.None) HoverTool();
         else if (Step == 1)
@@ -154,6 +167,17 @@ public sealed partial class PlacePartView
     // 도구를 쓸 수 있는가: ② · 다시 잴 수 있음 · 빗금(빠진 · 넣은 자리 고리)이 있음.
     private bool ToolsReady => Step == 1 && _board is { Remeasure: not null } && _fwCutList.Any(c => c.Rings.Count + c.KeptRings.Count > 0);
 
+    // 종류 줄을 그 조각 바로 아래로(R73b — 왼쪽 자리 = 조각의 왼쪽).
+    private void AlignKinds(FrameworkElement? column, FrameworkElement? segment)
+    {
+        if (column == null || segment == null || _fwToolStack == null || column.Visibility != Visibility.Visible) return;
+        _fwToolStack.UpdateLayout();
+        double left = segment.IsVisible ? segment.TranslatePoint(new Point(0, 0), _fwToolStack).X : 0;
+        column.Margin = new Thickness(Math.Max(0, left), 4, 0, 0);
+    }
+
+    private StackPanel? _fwToolStack;
+
     // 칸을 지금 것으로(RefreshCutLines 끝에서): ② 에서만 보임 · 빗금이 없으면 흐리게 + 까닭 풍선 글 · 든 도구는 내려놓음 · 빗금이 바뀌면 굵은 테두리를 걷는다.
     private void RefreshCutTools()
     {
@@ -167,7 +191,8 @@ public sealed partial class PlacePartView
             segment.IsEnabled = ready;
             _ui.Tip(segment, ready ? tip : off);
         }
-        if (!ready && _fwTool != CutTool.None) SetTool(CutTool.None, _fwCutFaces == 0 ? "선택 없음" : "접합부 없음");
+        if (_fwToolPaint != null) _fwToolPaint.IsEnabled = PaintReady;   // 붓은 빗금과 상관없이(R73b)
+        if (!ready && _fwTool is CutTool.Deduct or CutTool.Keep) SetTool(CutTool.None, _fwCutFaces == 0 ? "선택 없음" : "접합부 없음");
         if (_fwCutKey != _fwToolKey)
         {
             _fwToolKey = _fwCutKey;
@@ -179,6 +204,7 @@ public sealed partial class PlacePartView
     // 마우스 밑(든 동안): 닿은 자리면 굵은 테두리 + «계단 · 0.03㎡ · 지금: 빠짐 → 넣기» · 아니면 «닿은 자리를 누르세요» · 그림 밖이면 이름표를 접는다.
     private void HoverTool()
     {
+        if (_fwTool == CutTool.Paint) { HoverPaint(); return; }   // 붓(R73b)
         _fwHoverFace = null;
         _view3d.SetHoverOutline(null);
         if (_view3d.HoverPoint is not { } at || _board == null)
@@ -206,8 +232,34 @@ public sealed partial class PlacePartView
     {
         bool keep = _fwTool == CutTool.Keep;
         string kind = keep && _fwToolKind != null ? _fwToolKind : "";
-        return $"{spot.Label} 접합부 · {M2(spot.Area)}㎡ · 현재: {(spot.Kept ? "공제 제외" : "공제")}"
-               + (spot.Kept != keep ? $" → {ToolName(_fwTool)}" + (kind.Length > 0 ? " · " + kind : "") : kind.Length > 0 ? " → " + kind : "");
+        // R73b: 시공 순서로 센 자리 = «거푸집 추가(시공 순서)» · [공제]는 같은 짝 모두(짝 예외 «뺌»).
+        string places = spot.Ordered && !keep && _board?.OrderPairOf(spot) is { pair: not null } o ? $" · 같은 짝 {o.places}곳" : "";
+        return $"{spot.Label} 접합부 · {M2(spot.Area)}㎡ · 현재: {(spot.Ordered ? OrderedName : spot.Kept ? "거푸집 추가" : "공제")}"
+               + (spot.Kept != keep ? $" → {ToolName(_fwTool)}" + (kind.Length > 0 ? " · " + kind : "") + places : kind.Length > 0 ? " → " + kind : "");
+    }
+
+    private const string OrderedName = "거푸집 추가(시공 순서)";
+
+    // 시공 순서로 센 자리(R73b — JACK 1103 «헌치에 겹친 계단 · 보이기 + [공제]로 뺄 수 있게»)를 [공제]: 그 짝(면 주인 ← 이웃)을 «뺌»으로 하는 짝 예외 한 줄 —
+    // 같은 짝 모든 곳 · 형상부터 다시 잼 · 되돌리기 한 줄(규칙 탭 짝 예외와 같은 기록).
+    private bool ApplyOrderDeduct(FormworkBoard.CutSpot spot)
+    {
+        if (_board == null || Busy) return false;
+        var (pair, places) = _board.OrderPairOf(spot);
+        if (pair == null) { ShowMessage("공제하지 못했습니다 — 그 짝을 찾지 못했습니다."); return false; }
+        string owner = PourOrder.LabelOf(pair.Owner), other = PourOrder.LabelOf(pair.Other);
+        string what = $"{spot.Label} 접합부 공제(시공 순서 · {owner} ← {other})";
+        string snapshot = _board.Snapshot();
+        double before = _board.Total;
+        int n = _board.SetPair(pair);
+        if (n == 0) { RefreshAll(); ShowMessage("바뀐 것이 없습니다."); return false; }
+        double delta = _board.Total - before;
+        RecordUndo(what, snapshot);
+        FinishChange($"② 공제(시공 순서)\t부재 {spot.Face.ElementId} · {spot.Face.Name} · {spot.Label}(Id {spot.Other}) · 짝 {pair.Owner} ← {pair.Other} 뺌 · 같은 짝 {places}곳 · 합계 {(delta >= 0 ? "+" : "−")}{M2(Math.Abs(delta))}㎡",
+            $"{spot.Label} 접합부 공제 · {owner} ← {other} 같은 짝 {places}곳 · 거푸집 {(delta >= 0 ? "+" : "−")}{M2(Math.Abs(delta))} ㎡ → {M2(_board.Total)} ㎡", what);
+        _fwToolSpot = null;
+        if (_fwTool != CutTool.None) HoverTool();
+        return true;
     }
 
     // 화면의 그 자리의 닿은 자리(빗금을 건 면에서 · 보이는 겉면 = 그 면 주인 부재의 몸 · 그 부재가 든 판 · 고른 면 겉면까지).
@@ -227,6 +279,7 @@ public sealed partial class PlacePartView
     // 3D 를 눌렀다(든 동안 — 고르기 대신): 닿은 자리면 넣기 · 빼기 · 아니면 아무 일 없음(이름표가 «닿은 자리를 누르세요»).
     private void ClickTool()
     {
+        if (_fwTool == CutTool.Paint) { ClickPaint(); return; }   // 붓(R73b)
         if (_board == null || Busy || _view3d.ClickMoved) return;
         var spot = ToolSpotAt(_view3d.ClickPoint);
         if (spot == null)
@@ -240,9 +293,10 @@ public sealed partial class PlacePartView
         if (spot.Kept == keep)
         {
             if (keep && _fwToolKind != null) { ApplyToolKind(spot); return; }   // 이미 공제 제외된 자리 — 그 판의 종류만(R73a7)
-            ShowMessage(keep ? "이미 공제 제외되어 있습니다." : "이미 공제되어 있습니다.");
+            ShowMessage(spot.Ordered ? "이미 거푸집에 포함(시공 순서)." : keep ? "이미 거푸집 추가되어 있습니다." : "이미 공제되어 있습니다.");
             return;
         }
+        if (spot.Ordered) { ApplyOrderDeduct(spot); return; }   // 시공 순서로 센 자리의 [공제] = 짝 예외(R73b)
         ApplyTool(spot, keep);
     }
 
@@ -259,37 +313,34 @@ public sealed partial class PlacePartView
         return (o + dir * ((spot.Face.Face.PlaneD - spot.Normal.Dot(o)) / dn), dir);
     }
 
-    // 다시 잰 뒤 그 점이 든 판(그 부재 · 그 면 평면의 판 조각 — FaceAtPoint · 그 조각 테두리 안이어야: 고리로 찾은 같은 면의 다른 판이면 아님 — 설치 전 검토 낮음) ·
-    // 산출 제외 · 산출 위치를 바꾼 판은 고르지 않는다(SetKinds 가 그 기록을 걷어 판 전체가 다시 세어진다 — 설치 전 검토 높음). (판 · 까닭) — 판이 없으면 까닭.
-    private (FormworkPiece? piece, string why) PieceAt(long element, (Vec3 point, Vec3 direction)? at)
+    // 누른 자리의 면(R73b — 다시 잰 뒤에도: 그 부재 · 그 면 평면의 점이 든 면 · 무리째 칠한다). 칠할 수 없으면 까닭.
+    private (BoardFace? face, string why) FaceAtTool(long element, (Vec3 point, Vec3 direction)? at)
     {
         if (_board == null || at is not { } p) return (null, "그 자리를 찾지 못했습니다");
-        if (_board.FaceAtPoint(element, p.point, p.direction) is not { Piece: >= 0 } face || face.Piece >= _board.Pieces.Count || face.Face.Normal is not { Length: 3 } nn
-            || !face.Patches.Any(x => FormworkBoard.InsideRings(x.Outline, p.point, new Vec3(nn[0], nn[1], nn[2]))))
-            return (null, "그 자리에 거푸집 판이 없습니다");
-        var piece = _board.Pieces[face.Piece];
-        if (piece.Dropped) return (null, "산출 제외된 판입니다 — 종류는 판 띠에서 바꾸세요");
-        if (piece.Moved) return (null, "산출 위치를 바꾼 판입니다 — 종류는 판 띠에서 바꾸세요");
-        return (piece, "");
+        if (_board.FaceAtPoint(element, p.point, p.direction) is not { } face || face.Covered && face.Siblings.All(f => f.Covered)) return (null, "그 자리에 거푸집 면이 없습니다");
+        if (!FormworkBoard.Paintable(face)) return (null, PaintBlock(face));
+        return (face, "");
     }
 
-    // 이미 공제 제외된 자리(R73a7): 그 자리가 든 판의 종류만 고른 종류로(판 띠의 종류 단추와 같은 기록 — 붙어 있던 판이면 그 판 전체) · 되돌리기 한 줄.
+    // 이미 공제 제외된 자리(R73a7): 그 자리가 든 면의 종류만 고른 종류로 · 되돌리기 한 줄.
+    // R73b(JACK 1103 «계단 옆면에 합판 3회를 했더니 한 칸만 바뀜»): 판 하나(SetKinds)가 아니라 그 면 전체(한 평면의 무리 — 판이 여럿이어도) = 붓과 같은 «면 종류» 한 기록.
     private bool ApplyToolKind(FormworkBoard.CutSpot spot)
     {
         if (_board == null || Busy || _fwToolKind is not { } kind) return false;
         string what = $"{spot.Label} 접합부 거푸집 종류 → {kind}";
-        var (piece, why) = PieceAt(spot.Face.ElementId, ToolPoint(spot, _view3d.ClickPoint));
-        if (piece == null)
+        var (face, why) = FaceAtTool(spot.Face.ElementId, ToolPoint(spot, _view3d.ClickPoint));
+        if (face == null)
         {
             ShowMessage($"종류를 바꾸지 못했습니다 — {why}.");
-            Log?.Invoke($"② 공제 제외 종류\t{what} · {why}");
+            Log?.Invoke($"② 거푸집 추가 종류\t{what} · {why}");
             return false;
         }
         string snapshot = _board.Snapshot();
-        int n = _board.SetKinds(new[] { piece }, kind);
-        if (n == 0) { RefreshAll(); ShowMessage($"이미 {kind}입니다."); return false; }
+        var o = _board.Paint(new[] { face }, kind);
+        if (o.NeedsDecision) { AskWake(what, () => ApplyToolKind(spot)); return false; }
+        if (o.Painted == 0) { RefreshAll(); ShowMessage($"이미 {kind}입니다."); return false; }
         RecordUndo(what, snapshot);
-        FinishChange($"② 공제 제외 종류\t부재 {spot.Face.ElementId} · {spot.Face.Name} · {spot.Label}(Id {spot.Other}) · 판 {piece.Area:0.##}㎡ → {kind}", $"{what} · 판 {M2(piece.Area)} ㎡", what);
+        FinishChange($"② 거푸집 추가 종류\t부재 {spot.Face.ElementId} · {face.Name} · {spot.Label}(Id {spot.Other}) · 면 {M2(face.JoinedArea)}㎡(무리 {face.Siblings.Count}) → {kind}", $"{what} · 면 {M2(ShownArea(face))} ㎡", what);
         _fwToolSpot = null;
         if (_fwTool != CutTool.None) HoverTool();
         return true;
@@ -300,7 +351,7 @@ public sealed partial class PlacePartView
     private bool ApplyTool(FormworkBoard.CutSpot spot, bool keep)
     {
         if (_board == null || Busy) return false;
-        string name = keep ? "공제 제외" : "공제", what = $"{spot.Label} 접합부 {name}";
+        string name = keep ? "거푸집 추가" : "공제", what = $"{spot.Label} 접합부 {name}";
         string? kind = keep ? _fwToolKind : null;
         var at = kind != null ? ToolPoint(spot, _view3d.ClickPoint) : null;   // 다시 재기 전에(카메라 그대로 — 면 평면 위 점)
         // 바뀌는 면(그 이웃이 지금 상태로 걸린 같은 평면 면) — 다시 재면 면이 새것이라 먼저 센다.
@@ -309,6 +360,11 @@ public sealed partial class PlacePartView
         string snapshot = _board.Snapshot();
         double before = _board.Total;
         int n = _board.SetFaceJoints(spot.Faces, new[] { spot.Other }, keep);
+        if (n == 0 && _board.NeedsDecision)
+        {
+            AskWake(what, () => ApplyTool(spot, keep));   // 쉬는 기록(R73b)
+            return false;
+        }
         if (n == 0)
         {
             Log?.Invoke(head + " · 바뀐 것 없음");
@@ -334,13 +390,13 @@ public sealed partial class PlacePartView
         string kindNote = "", kindSaid = "";
         if (kind != null)
         {
-            // 다시 잰 판에서 누른 자리가 든 판 — 종류 기록(SetKinds 도 형상은 그대로 · 판만 다시 짓는다). 판이 없으면(확인할 자리 등) · 산출 제외 · 위치를 바꾼 판이면 공제 제외만
+            // 다시 잰 뒤 누른 자리가 든 면 전체(R73b — 한 평면의 무리 · 판이 여럿이어도 · 붓과 같은 «면 종류» 기록 · 형상은 그대로). 칠할 수 없는 면이면 공제 제외만
             // (설치 전 검토: 알림에도 그대로 — 종류를 못 바꿨으면 그 까닭).
-            var (piece, why) = PieceAt(spot.Face.ElementId, at);
-            if (piece == null) (kindNote, kindSaid) = ($" · 종류 못 바꿈({why})", $" · 종류는 그대로({why})");
-            else if (_board.SetKinds(new[] { piece }, kind) > 0) (kindNote, kindSaid) = ($" · 판 {M2(piece.Area)}㎡ → {kind}", $" · 판 {M2(piece.Area)}㎡ → {kind}");
+            var (face, why) = FaceAtTool(spot.Face.ElementId, at);
+            if (face == null) (kindNote, kindSaid) = ($" · 종류 못 바꿈({why})", $" · 종류는 그대로({why})");
+            else if (_board.Paint(new[] { face }, kind).Painted > 0) (kindNote, kindSaid) = ($" · 면 {M2(face.JoinedArea)}㎡(무리 {face.Siblings.Count}) → {kind}", $" · 면 {M2(ShownArea(face))}㎡ → {kind}");
             else (kindNote, kindSaid) = ($" · {kind} 이미 같음", $" · 이미 {kind}");
-            if (piece != null) what += " · " + kind;
+            if (face != null) what += " · " + kind;
         }
         delta = _board.Total - before;             // 종류까지 건 뒤(설치 전 검토 높음 — 알림의 넓이 변화가 실제 합계 변화와 같게)
         RecordUndo(what, snapshot);

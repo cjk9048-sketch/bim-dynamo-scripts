@@ -64,7 +64,7 @@ public sealed partial class PlacePartView
             // 넣은 갈래만 남으면 «0.00㎡ 빠짐»이 아니라 «넣음 n»(R73a4 — 부재 통째 줄은 갈래가 많다).
             double restArea = rest.Sum(c => c.Area);
             int restKept = rest.Count(c => c.Area < FormworkBoard.JointChipMin);
-            string restText = $"외 {rest.Count}곳" + (restArea >= FormworkBoard.JointChipMin ? $" · {M2(restArea)}㎡ 공제" : "") + (restKept > 0 ? $" · 공제 제외 {restKept}" : "");
+            string restText = $"외 {rest.Count}곳" + (restArea >= FormworkBoard.JointChipMin ? $" · {M2(restArea)}㎡ 공제" : "") + (restKept > 0 ? $" · 거푸집 추가 {restKept}" : "");
             var more = new TextBlock { Text = restText, Foreground = _sub, FontSize = 12, Margin = new Thickness(21, 0, 0, 2) };
             _ui.Mark(more, string.Join("\n", rest.Select(CutText)), "fw.cut.more");
             _fwCuts.Children.Add(more);
@@ -77,7 +77,8 @@ public sealed partial class PlacePartView
     private static string CutText(FormworkBoard.FaceCut cut)
     {
         bool cutting = cut.Area >= FormworkBoard.JointChipMin, kept = cut.Kept >= FormworkBoard.JointChipMin;
-        return cutting ? $"{cut.Label} 접합부 {M2(cut.Area)}㎡ 공제" + (kept ? $" · {M2(cut.Kept)}㎡ 공제 제외" : "") : $"{cut.Label} 접합부 {M2(cut.Kept)}㎡ 공제 제외";
+        string add = cut.Ordered >= cut.Kept - 1e-9 && cut.Ordered > 0 ? "거푸집 추가(시공 순서)" : "거푸집 추가";   // R73b: 시공 순서로 센 자리만이면
+        return cutting ? $"{cut.Label} 접합부 {M2(cut.Area)}㎡ 공제" + (kept ? $" · {M2(cut.Kept)}㎡ {add}" : "") : $"{cut.Label} 접합부 {M2(cut.Kept)}㎡ {add}";
     }
 
     // 줄 하나: [빗금 네모] «계단 0.03㎡ 빠짐» [같은 곳 모두 (트렌치 ← 계단 n곳)] · 넣은 것은 [청록 네모] «계단 0.03㎡ 넣음».
@@ -95,7 +96,8 @@ public sealed partial class PlacePartView
         var text = new TextBlock { Text = CutText(cut), FontSize = 12.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0), Foreground = _text };
         // 이 부재만 보기(R73a4)는 뒤를 보는 면의 빗금을 그리지 않는다 — 안 보이면 돌려 보라고 풍선 글에.
         string turn = SoloOn ? " 반대쪽 면의 빗금은 3D 를 돌리면 보입니다." : "";
-        _ui.Mark(text, cutting ? $"{cut.Label}(부재 {cut.Others.Count})와 닿는 접합부 — 거푸집 면적에서 공제한 위치(3D 의 빨간 빗금). 3D 왼쪽 위 [공제 제외]를 누르고 그 빗금을 선택하면 거푸집 면적에 포함합니다." + turn
+        _ui.Mark(text, cutting ? $"{cut.Label}(부재 {cut.Others.Count})와 닿는 접합부 — 거푸집 면적에서 공제한 위치(3D 의 빨간 빗금). 3D 왼쪽 위 [거푸집 추가]를 누르고 그 빗금을 선택하면 거푸집 면적에 포함합니다." + turn
+                              : cut.Ordered > 0 ? $"{cut.Label}은(는) 시공 순서상 나중에 쳐서 그 자리도 거푸집 면적에 포함합니다(3D 의 청록 빗금). [공제]를 누르고 그 빗금을 선택하면 같은 짝 모두 공제합니다." + turn
                               : $"{cut.Label} 접합부를 거푸집 면적에 포함합니다(3D 의 청록 빗금). [공제]를 누르고 그 빗금을 선택하면 다시 공제합니다." + turn, "fw.cut." + i);
         line.Children.Add(text);
         if (!cutting) return line;
@@ -119,7 +121,7 @@ public sealed partial class PlacePartView
 
     // [같은 곳 모두]: 짝 예외 한 줄(규칙 탭과 같은 길 — 되돌리기 한 줄 · 위 띠에 바뀐 면 · ㎡).
     private bool KeepEverywhere(PourOrder.Pair pair) =>
-        ChangeRules($"동일 접합부 일괄 적용 {PourOrder.LabelOf(pair.Owner)} ← {PourOrder.LabelOf(pair.Other)} → 공제 제외", b => b.SetPair(pair), "이미 그렇게 산출합니다.");
+        ChangeRules($"동일 접합부 일괄 적용 {PourOrder.LabelOf(pair.Owner)} ← {PourOrder.LabelOf(pair.Other)} → 거푸집 추가", b => b.SetPair(pair), "이미 그렇게 산출합니다.");
 
     // 3D 빗금(ShowFaceMarks 가 고른 면의 치수와 함께 건다): 빠진 자리 고리(4 — 빨강) · 넣은 자리 고리(5 — 청록 · R73a4) · 장면 좌표 + 그 면의 바깥 법선
     // («이 부재만 보기»만 — 면마다 · 뒤를 보는 면은 화면이 숨김 · 그 밖은 영 벡터 = 늘 그림 · 전과 같음).
@@ -152,7 +154,7 @@ public sealed partial class PlacePartView
             return true;
         }
         var face = _board.TouchFace(other, mark.Owner, mark.At, normal);   // 마주한 면 · 없으면(파고들어 겹친 자리) 그 이웃에서 이 부재와 닿은 빗금이 가장 가까운 면
-        if (face != null && (face.Covered || !face.Fixed))
+        if (face != null && face.Siblings.Any(s => s.Covered || !s.Fixed))   // R73b: 무리에 고를 수 있는 면이 있으면(설치 전 검토 낮음)
         {
             _editor.Hidden.Remove(other);          // 숨긴(Del) 부재면 다시 보이게(나무 줄과 같음 — 고를 것이 있을 때만 · 설치 전 검토 낮음)
             Log?.Invoke($"② 공제 위치 딱지 누름({where})\t{mark.Label} {M2(mark.Area)}㎡ → {name} · {face.Name}");

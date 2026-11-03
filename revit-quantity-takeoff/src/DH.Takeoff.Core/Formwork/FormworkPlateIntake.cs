@@ -56,6 +56,8 @@ public static class FormworkPlateIntake
             if (p.Locked) { outcome.Locked++; outcome.Log.Add($"판 {p.Id}\t{p.KindStored} → {kind} — 고칠 수 없는 판이라 받아들이지 못함"); continue; }
             if (p.Records.Count == 0 || p.Lead.Length == 0) { outcome.Empty++; outcome.Log.Add($"판 {p.Id}\t판 기록에 조각 열쇠가 없음 — 받아들이지 못함"); continue; }
             string what, kindLead = p.KindLead;
+            // R73b «적을 때 하나만»: 판 쪽에서 쓰면 먼저 그 판 조각의 면 종류(붓)를 뺀다 — 나중에 한 사람 일이 이긴다.
+            bool fromFace = rules.RemoveFaceKindRecords(p.Records) > 0;
             if (kind == FormworkRules.NotCounted)
             {
                 // ② 에서 지우거나 옮긴 기록이 이미 이 판의 조각을 덮으면 그 기록으로(옮긴 판이면 지운 판으로 — 같은 조각에 지운 판 기록이 둘 생기지 않게 · P3 검토 중간 2).
@@ -77,7 +79,7 @@ public static class FormworkPlateIntake
                 // 그 종류를 판 종류로 적는다 — 셈이 Revit 판과 같게(P3 검토 높음: 아무것도 안 바뀌고 «받아들였습니다»만 뜨지 않게).
                 bool fromKind = p.KindLead.Length > 0 && rules.RemoveKindRecords(p.KindLead, p.Records);
                 bool fromLead = p.Lead != p.KindLead && rules.RemoveKindRecords(p.Lead, p.Records);
-                if (fromKind || fromLead) { kindLead = ""; what = "원래 종류로(그 판 몫만)"; }
+                if (fromKind || fromLead || fromFace) { kindLead = ""; what = "원래 종류로(그 판 몫만)"; }
                 else
                 {
                     rules.SetKind(p.Lead, kind, p.Records);
@@ -116,7 +118,7 @@ public static class FormworkPlateIntake
         var leadMember = unit.Lead is { } lp ? unit.Members.FirstOrDefault(m => ReferenceEquals(m.Patch, lp)) : default;
         if (leadMember.Patch == null && unit.Members.Count > 0) leadMember = unit.Members.OrderByDescending(m => m.Patch.Area).First();
         string lead = leadMember.Patch == null ? "" : DropRecord.Of(leadMember.Face, leadMember.Patch).Text;
-        var bases = unit.Members.Select(m => m.Patch.KindLead.Length > 0 ? m.Patch.KindBase : m.Patch.Item).Distinct().ToList();
+        var bases = unit.Members.Select(m => m.Patch.FaceKindLead.Length > 0 ? m.Patch.FaceKindBase : m.Patch.KindLead.Length > 0 ? m.Patch.KindBase : m.Patch.Item).Distinct().ToList();   // 칠한 면(R73b)도 걸기 전 값
         string kindLead = unit.Members.Select(m => m.Patch.KindLead).FirstOrDefault(k => k.Length > 0) ?? "";
         return (lead, records, bases.Count == 1 ? bases[0] : "", kindLead);
     }

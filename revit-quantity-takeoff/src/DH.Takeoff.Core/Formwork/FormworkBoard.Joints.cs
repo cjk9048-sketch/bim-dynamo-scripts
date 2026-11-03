@@ -109,7 +109,7 @@ public sealed partial class FormworkBoard
 
     private int SetJoints(IReadOnlyList<FaceResult> faces, IReadOnlyCollection<long> others, bool ignore)
     {
-        if (Remeasure == null || others.Count == 0) return 0;
+        if (Remeasure == null || others.Count == 0 || Blocked()) return 0;
         string before = Snapshot();
         bool wasUser = Rules.UserMode;
         bool switched = EnsureUser();
@@ -197,8 +197,9 @@ public sealed partial class FormworkBoard
     /// 빠진 자리의 고리(모델 좌표 — 3D 빨간 빗금) · 빼지 않은 자리의 고리(R73a4 — 3D 청록 빗금 · JACK 1102 «다른 객체와 닿는 부분만 확인할 수 있으면 돼»).
     /// R73a7: 고리마다 그 고리를 낸 이웃(RingOwners · KeptRingOwners — Rings · KeptRings 와 같은 차례 · 빗금 딱지를 누르면 그 이웃으로).
     /// </summary>
+    /// <remarks>R73b: Ordered = Kept 가운데 시공 순서로 거푸집에 센 넓이(FaceResult.Absent — 나중에 치는 이웃이 닿은 · 파고든 자리 · 카드 «거푸집 추가(시공 순서)»).</remarks>
     public sealed record FaceCut(string Label, IReadOnlyList<long> Others, double Area, double Kept, IReadOnlyList<IReadOnlyList<Vec3>> Rings, IReadOnlyList<IReadOnlyList<Vec3>> KeptRings,
-                                 IReadOnlyList<long>? RingOwners = null, IReadOnlyList<long>? KeptRingOwners = null);
+                                 IReadOnlyList<long>? RingOwners = null, IReadOnlyList<long>? KeptRingOwners = null, double Ordered = 0);
 
     /// <summary>
     /// 그 면들이 다른 부재 때문에 빠진 자리(이름마다 · 넓은 차례 · JointChipMin 아래는 뺌). 넓이 = 그 면들의 Covers + Cut(무시 = Ignored)를 그대로 더한 값 — 땅 위 밑면 ·
@@ -208,20 +209,21 @@ public sealed partial class FormworkBoard
 
     private List<FaceCut> CutsOf(IEnumerable<FaceResult> faces, Dictionary<long, FormworkElement> elements)
     {
-        var sums = new Dictionary<string, (double area, double kept, HashSet<long> ids, List<IReadOnlyList<Vec3>> rings, List<IReadOnlyList<Vec3>> keptRings, List<long> owners, List<long> keptOwners)>(StringComparer.Ordinal);
+        var sums = new Dictionary<string, (double area, double kept, HashSet<long> ids, List<IReadOnlyList<Vec3>> rings, List<IReadOnlyList<Vec3>> keptRings, List<long> owners, List<long> keptOwners, double ordered)>(StringComparer.Ordinal);
         foreach (var face in faces)
             foreach (var (c, rings, area, kept) in ContactsOf(face))
             {
                 string label = elements.TryGetValue(c.ElementId, out var el) ? JointLabel(el) : "주변 콘크리트";
-                if (!sums.TryGetValue(label, out var s)) sums[label] = s = (0, 0, new HashSet<long>(), new List<IReadOnlyList<Vec3>>(), new List<IReadOnlyList<Vec3>>(), new List<long>(), new List<long>());
+                if (!sums.TryGetValue(label, out var s)) sums[label] = s = (0, 0, new HashSet<long>(), new List<IReadOnlyList<Vec3>>(), new List<IReadOnlyList<Vec3>>(), new List<long>(), new List<long>(), 0);
                 s.ids.Add(c.ElementId);
                 (kept ? s.keptRings : s.rings).AddRange(rings.Select(r => (IReadOnlyList<Vec3>)r.Select(q => new Vec3(q[0], q[1], q[2])).ToList()));
                 (kept ? s.keptOwners : s.owners).AddRange(rings.Select(_ => c.ElementId));
-                sums[label] = kept ? (s.area, s.kept + area, s.ids, s.rings, s.keptRings, s.owners, s.keptOwners) : (s.area + area, s.kept, s.ids, s.rings, s.keptRings, s.owners, s.keptOwners);
+                double ordered = s.ordered + (face.Absent.Contains(c) ? area : 0);   // 시공 순서로 센 자리(R73b)
+                sums[label] = kept ? (s.area, s.kept + area, s.ids, s.rings, s.keptRings, s.owners, s.keptOwners, ordered) : (s.area + area, s.kept, s.ids, s.rings, s.keptRings, s.owners, s.keptOwners, ordered);
             }
         return sums.Where(kv => kv.Value.area + kv.Value.kept >= JointChipMin)
             .OrderByDescending(kv => kv.Value.area + kv.Value.kept).ThenBy(kv => kv.Key, StringComparer.Ordinal)
-            .Select(kv => new FaceCut(kv.Key, kv.Value.ids.Order().ToList(), kv.Value.area, kv.Value.kept, kv.Value.rings, kv.Value.keptRings, kv.Value.owners, kv.Value.keptOwners)).ToList();
+            .Select(kv => new FaceCut(kv.Key, kv.Value.ids.Order().ToList(), kv.Value.area, kv.Value.kept, kv.Value.rings, kv.Value.keptRings, kv.Value.owners, kv.Value.keptOwners, kv.Value.ordered)).ToList();
     }
 
     // ── 닿은 자리(R73a6) ──
@@ -231,14 +233,15 @@ public sealed partial class FormworkBoard
     private readonly Dictionary<FaceResult, List<(FaceCover cover, List<List<double[]>> rings, double area, bool kept)>> _contacts = new(ReferenceEqualityComparer.Instance);
     private IReadOnlyList<ElementFormwork>? _contactsFor;
 
-    /// <summary>그 면의 닿은 자리(덮음 · 깎임 = 공제 · 무시 = 공제 제외)를 그 면 다각형으로 자른 것(R73a6 — 빗금 · 카드 줄 · 도구가 같은 것을 쓴다).</summary>
+    /// <summary>그 면의 닿은 자리(덮음 · 깎임 = 공제 · 무시 = 공제 제외)를 그 면 다각형으로 자른 것(R73a6 — 빗금 · 카드 줄 · 도구가 같은 것을 쓴다).
+    /// R73b: 시공 순서로 거푸집에 센 자리(FaceResult.Absent — 나중에 치는 이웃)도 «거푸집 추가» 꼴로(kept — face.Absent 에 든 것인지로 가른다).</summary>
     internal List<(FaceCover cover, List<List<double[]>> rings, double area, bool kept)> ContactsOf(FaceResult face)
     {
         if (!ReferenceEquals(_contactsFor, Results)) { _contacts.Clear(); _contactsFor = Results; }
         if (_contacts.TryGetValue(face, out var made)) return made;
         var list = new List<(FaceCover, List<List<double[]>>, double, bool)>();
         var polygon = FacePolygon(face);
-        foreach (var (c, kept) in face.Covers.Select(c => (c, false)).Concat(face.Cut.Select(c => (c, false))).Concat(face.Ignored.Select(c => (c, true))))
+        foreach (var (c, kept) in face.Covers.Select(c => (c, false)).Concat(face.Cut.Select(c => (c, false))).Concat(face.Ignored.Select(c => (c, true))).Concat(face.Absent.Select(c => (c, true))))
         {
             var rings = c.Outline.Where(r => r.Count >= 3).ToList();
             double area = c.Area;
@@ -286,6 +289,13 @@ public sealed partial class FormworkBoard
         if (loops.Count == 0) return null;
         var frame = Frame.Of(V3.Of(loops[0][0]), V3.Of(n));
         var paths = Poly.Normalize(ToPaths(loops, frame));
+        // 합친 원본 면(R73b — FaceResult.Merged)도 한 다각형으로.
+        foreach (var (s, k) in face.Merged)
+        {
+            if (s >= el.Solids.Count || k >= el.Solids[s].Faces.Count) continue;
+            var more = el.Solids[s].Faces[k].Loops.Where(l => l.Pts.Count >= 3).Select(l => l.Pts).ToList();
+            if (more.Count > 0) paths = Poly.Union(paths, Poly.Normalize(ToPaths(more, frame)));
+        }
         return paths.Count == 0 ? null : (frame, paths);
     }
 
@@ -513,8 +523,9 @@ public sealed partial class FormworkBoard
     /// 바뀔 넓이(같은 부재 · 같은 평면 면에서 그 이웃의 지금 상태 넓이) · 기록이 바꾸는 면(SamePlaneFaces — 단추와 같은 범위) ·
     /// 그 면들의 그 이웃 고리(지금 상태 — 마우스 밑 굵은 테두리) · 누른 면의 바깥 법선.
     /// </summary>
+    /// <remarks>R73b: Ordered = 시공 순서로 거푸집에 센 자리(FaceResult.Absent — Kept 이기도 함 · [공제] = 시공 순서 짝 예외 «뺌» · OrderPairOf).</remarks>
     public sealed record CutSpot(BoardFace Face, long Other, string Label, bool Kept, double Area, IReadOnlyList<BoardFace> Faces,
-                                 IReadOnlyList<IReadOnlyList<Vec3>> Rings, Vec3 Normal);
+                                 IReadOnlyList<IReadOnlyList<Vec3>> Rings, Vec3 Normal, bool Ordered = false);
 
     /// <summary>
     /// 도구가 그 자리를 바꿀 수 없는 까닭(R73a6 — 이름표 한 줄 · 없으면 null): 다 덮인 하부면(받침 콘크리트 위 — 거푸집을 댈 수 없는 자리) · 곡면(기록 열쇠가 평면).
@@ -529,7 +540,7 @@ public sealed partial class FormworkBoard
         // R73a6 설치 전 검토 중간: 아래 경사면(계단 사면 ← 트렌치 등)도 · 일부만 얹힌 하부면도 — 벽 · 보 · 기둥이 아닌 이웃(슬래브 · 기초 · 버림 · 그 밖)이 받친 자리.
         : spot.Face.Face.Class is FaceClass.Bottom or FaceClass.SlopeDown && !spot.Kept
           && (spot.Face.Covered || ElementOf(spot.Other) is not { Kind: MemberKind.Wall or MemberKind.Beam or MemberKind.Column })
-            ? "받친 하부면 접합부는 공제 제외할 수 없습니다"
+            ? "받친 하부면 접합부는 거푸집 추가할 수 없습니다"
         : null;
 
     /// <summary>고리 안 판정의 여유(m — 변에서 이만큼 밖도 안으로 친다 · 5 mm).</summary>
@@ -571,6 +582,7 @@ public sealed partial class FormworkBoard
                     (best, cover, coverArea, kept, bestT) = (f, c, cArea, isKept, Math.Min(t, bestT));
         }
         if (best == null || cover == null) return null;
+        bool ordered = best.Face.Absent.Contains(cover);
         var elements = ElementsById();
         string label = elements.TryGetValue(cover.ElementId, out var el) ? JointLabel(el) : "주변 콘크리트";
         var scope = SamePlaneFaces(new[] { best });
@@ -587,7 +599,7 @@ public sealed partial class FormworkBoard
             bool drawn = shown == null || scope.Any(x => ReferenceEquals(x.Face, face) && shown(x));
             foreach (var (c, cr, ca, ck) in contacts)
             {
-                if (c.ElementId != cover.ElementId || ck != kept) continue;
+                if (c.ElementId != cover.ElementId || ck != kept || face.Absent.Contains(c) != ordered) continue;
                 if (drawn) rings.AddRange(cr.Select(r => (IReadOnlyList<Vec3>)r.Select(p => new Vec3(p[0], p[1], p[2])).ToList()));
                 if (plane == null || cr.Count == 0) { loose += ca; continue; }
                 var left = Poly.Normalize(ToPaths(cr, plane));
@@ -599,7 +611,20 @@ public sealed partial class FormworkBoard
         }
         double area = Poly.Area(union) + loose;
         var normal = new Vec3(best.Face.Normal[0], best.Face.Normal[1], best.Face.Normal[2]);
-        return new CutSpot(best, cover.ElementId, label, kept, area, scope, rings, normal);
+        return new CutSpot(best, cover.ElementId, label, kept, area, scope, rings, normal, ordered);
+    }
+
+    /// <summary>
+    /// 시공 순서로 거푸집에 센 자리(CutSpot.Ordered — R73b · JACK 1103 «보이기 + [공제]로 뺄 수 있게»)를 공제로 바꿀 짝 예외(면 주인 열쇠 ← 이웃 열쇠 · «뺌»)와
+    /// 그 짝이 걸리는 같은 짝의 면 수(그 열쇠의 부재 면 가운데 그 열쇠의 이웃이 시공 순서로 빠진 면). 걸 짝이 없으면 (null, 0). 거는 일은 SetPair(형상부터 다시 잼).
+    /// </summary>
+    public (PourOrder.Pair? pair, int places) OrderPairOf(CutSpot spot)
+    {
+        if (!spot.Ordered || ElementOf(spot.Face.ElementId) is not { } owner || ElementOf(spot.Other) is not { } other) return (null, 0);
+        var pair = new PourOrder.Pair(PourOrder.KeyOf(owner, Options), PourOrder.KeyOf(other, Options), PourOrder.Kind.Deduct);
+        int n = Results.Where(r => PourOrder.KeyOf(r.Element, Options) == pair.Owner).SelectMany(r => r.Faces)
+            .Count(f => f.Absent.Any(c => ElementOf(c.ElementId) is { } x && PourOrder.KeyOf(x, Options) == pair.Other));
+        return (pair, n);
     }
 
     // 면 평면 위의 점이 고리들(바깥 + 구멍 — 홀짝) 안인가 · 변에서 SpotEdge 안이면 안으로 친다. 법선의 가장 큰 축을 버린 평면에서 센다.

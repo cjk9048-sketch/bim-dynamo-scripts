@@ -189,6 +189,15 @@ public sealed class FacePatch
     /// <summary>판 종류를 걸기 전의 종류(세던 조각이면 그 종류 · 아니면 "") — Revit 판 기록의 Base(되돌린 것인지 가른다). 판 종류가 없으면 "".</summary>
     public string KindBase { get; internal set; } = "";
 
+    /// <summary>
+    /// ② 붓으로 칠한 면의 조각이면 그 면 종류 기록의 대표 열쇠(R73b — FormworkRules.FaceKindOf), 아니면 "". 판 종류보다 앞 · 지운 판보다 뒤(FormworkAnalyzer.OverlayFaceKind).
+    /// 판 잇기 열쇠(FormworkMerge.MoveKey)에 들지 않는다 — 같은 종류로 칠한 이웃 면끼리는 자동처럼 한 판(계획 §3.2).
+    /// </summary>
+    public string FaceKindLead { get; internal set; } = "";
+
+    /// <summary>면 종류 · 판 종류를 걸기 전의 종류(세던 조각이면 그 종류 · 아니면 "") — ↺ 의 «처음 값» · Revit 판 기록의 Base. 면 종류가 없으면 "".</summary>
+    public string FaceKindBase { get; internal set; } = "";
+
     /// <summary>판 자리 기록(R66 — 엑셀 부위 줄 · 중분류를 판마다)에 맞는 조각이면 그 대표 열쇠와 자리(빈 값 = 그대로), 아니면 "" · null. 엑셀 줄 · Revit 판의 자리만 바꾼다.</summary>
     public string PlaceLead { get; internal set; } = "";
     public (string Part, string Zone)? Place { get; internal set; }
@@ -269,6 +278,12 @@ public sealed class FaceResult
     /// <summary>맞닿았지만 공제하지 않은 이웃별 넓이(R67 — 접합부 규칙 · 판마다 «겹침» 기록이 «무시»). 면은 그 자리까지 거푸집이다.</summary>
     public List<FaceCover> Ignored { get; set; } = new();
 
+    /// <summary>
+    /// 시공 순서로 이 면을 잴 때 없던(나중에 치는) 이웃이 닿은 · 파고든 자리(R73b — JACK 1103 «헌치에 붙은 계단 … 헌치 부분에 표현이 돼야»): 거푸집으로 센 자리다(다른 이웃이 덮은 곳은 뺌).
+    /// ② 빗금(거푸집 추가 꼴) · [공제] = 시공 순서 짝 예외. 수량 · 기록과 상관없이 보기용.
+    /// </summary>
+    public List<FaceCover> Absent { get; set; } = new();
+
     /// <summary>평면 자리(바깥 법선 · 면 위의 점 — R67 «겹침» 기록의 면 열쇠). 곡면이면 0.</summary>
     public double PlaneD { get; set; }
 
@@ -278,6 +293,18 @@ public sealed class FaceResult
     /// <summary>깎인 자리를 «무시»로 되살려 면에 더한 넓이(R67 — Polygon + Restored = Covered + Shared + Net).</summary>
     public double Restored { get; set; }
     public List<FacePatch> Patches { get; set; } = new();
+
+    /// <summary>
+    /// 이 면에 합친 원본 면들(R73b — Solid · Face 말고 · 차례대로): Revit 이 한 평면을 여러 면으로 준 것(계단 = 단 · 참마다 입체 · 면 분할 · 여러 입체 패밀리)을
+    /// 분석이 한 면으로 합쳤다(FormworkAnalyzer.MergeSplitFaces). 조각은 원본 면마다 잰 그대로(수량 · 기록 그대로). 합치지 않았으면 빈 목록.
+    /// </summary>
+    public List<(int Solid, int Face)> Merged { get; set; } = new();
+
+    /// <summary>합친 면에서 조각마다 제 원본 면의 덮인 넓이(R73b — 판 모양 검사 «작은 판»이 원본 면 기준으로 보게 · 설치 전 검토 중간). 합치지 않았으면 null.</summary>
+    internal Dictionary<FacePatch, double>? SourceCovered { get; set; }
+
+    /// <summary>그 조각이 든 원본 면의 덮인 넓이(합치지 않았으면 Covered).</summary>
+    public double CoveredFor(FacePatch patch) => SourceCovered != null && SourceCovered.TryGetValue(patch, out double c) ? c : Covered;
 
     public double CountedArea => Patches.Where(p => p.Counted).Sum(p => p.Area);
 }

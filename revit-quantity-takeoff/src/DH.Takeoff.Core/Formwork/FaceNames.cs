@@ -6,19 +6,22 @@ namespace DH.Takeoff.Core.Formwork;
 ///  · 벽 · 보 · 그 밖의 옆면: 넓은 쪽 = «외측면» · «내측면(수조부)»(내측이면 구역 이름 · 개구부 측면 · 내외측 확인), 짧은 쪽 = «마구리면».
 ///    넓은 쪽 = 그 부재의 가장 넓은 옆면과 나란한 면(평면에서 45° 안). 거의 네모난 부재(기둥 · 넓은 옆면과 꺾인 옆면이 85 % 넘게 비슷)는 방위 «북측면»(지도와 같은 북 = +Y).
 ///  · 슬래브 · 기초의 옆면 = «측면»(내측이면 «내측면(…)») · 하부면 = «하부면» · 경사면 = «경사면» · 구멍 둘레 = «개구부» ·
-///    곡면 = «곡면» · 윗면 = «상부면» · Revit 계단 = «계단 하부면 · 측면 · 경사면».
+///    곡면 = «곡면» · 윗면 = «상부면» · Revit 계단 = «계단 하부면 · 측면 · 챌면 · 마구리면 · 경사면»(R73b).
 ///  · 한 부재에 같은 이름이 둘 넘으면 «마구리면 1 · 마구리면 2»(면 차례).
 /// 이름은 보기만 한다 — 기록 · 엑셀 줄에는 쓰지 않는다.
 /// </summary>
 public static class FaceNames
 {
+    /// <summary>계단 챌면으로 볼 가장 큰 높이(m — R73b).</summary>
+    public const double RiserMax = 0.3;
+
     /// <summary>나무에서 면 줄의 차례(이름의 머리말 → 차례 — 넓은 옆면 먼저 · 하부면 · 경사 · 개구부 · 곡면 · 상부면).</summary>
     public static int Order(string name) =>
         name.StartsWith("외측면", StringComparison.Ordinal) ? 0
         : name.StartsWith("내측면", StringComparison.Ordinal) ? 1
         : name.Length > 2 && "북남동서".Contains(name[0]) && name.Contains("측면", StringComparison.Ordinal) ? 2
         : name.StartsWith("측면", StringComparison.Ordinal) || name.StartsWith("계단 측면", StringComparison.Ordinal) ? 3
-        : name.StartsWith("마구리면", StringComparison.Ordinal) ? 4
+        : name.StartsWith("마구리면", StringComparison.Ordinal) || name.StartsWith("계단 챌면", StringComparison.Ordinal) || name.StartsWith("계단 마구리면", StringComparison.Ordinal) ? 4
         : name.StartsWith("개구부 측면", StringComparison.Ordinal) ? 5
         : name.Contains("하부면", StringComparison.Ordinal) ? 6
         : name.Contains("경사면", StringComparison.Ordinal) ? 7
@@ -66,7 +69,13 @@ public static class FaceNames
             case FaceClass.Curved: return "곡면";
             case FaceClass.HoleEdge: return "개구부";
         }
-        if (stair) return "계단 측면";
+        if (stair)
+        {
+            // R73b(JACK 1103 «계단 측면 1 · 2 · 3 …»): 넓은 옆면(옆판 · 원본 면을 분석이 한 면으로 합침)과 꺾인 세로면을 가른다 — 낮은 것(디딤 한 단 높이 · 0.3 m 이하)은 챌면 · 그 밖은 마구리면.
+            if (Flat(f.Normal) is { } sh && wide is { } sw && Math.Abs(sh.x * sw.x + sh.y * sw.y) < 0.7071)
+                return face.ZMax - face.ZMin <= RiserMax ? "계단 챌면" : "계단 마구리면";
+            return "계단 측면";
+        }
         if (side == FormworkAnalyzer.Opening) return "개구부 측면";
         if (el.Kind is MemberKind.Slab or MemberKind.Foundation)
             return side.StartsWith("내측", StringComparison.Ordinal) ? "내측면" + Zone(side) : "측면";

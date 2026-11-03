@@ -114,8 +114,10 @@ public sealed partial class PlacePartView
         if (_board == null) { _fwFaces.Clear(); return; }
         var plates = _fwSel.Select(p => _board.IndexOf(p)).Where(i => i >= 0).ToHashSet();
         var kept = new List<FacePatch>();
+        // R73b(설치 전 검토 중간): 무리째 — 무리의 판 가운데 고른 판이 하나라도 남았거나 무리에 판이 없으면 무리를 다 남긴다(무리 일부만 남지 않게).
+        bool Keep(BoardFace face) => face.Siblings.All(s => s.Piece < 0) || face.Siblings.Any(s => s.Piece >= 0 && plates.Contains(s.Piece));
         foreach (var anchor in _fwFaces)
-            if (_board.FaceOf(anchor) is { } face && (face.Piece < 0 || plates.Contains(face.Piece)) && !kept.Any(p => ReferenceEquals(_board.FaceOf(p), face))) kept.Add(anchor);
+            if (_board.FaceOf(anchor) is { } face && Keep(face) && !kept.Any(p => ReferenceEquals(_board.FaceOf(p), face))) kept.Add(anchor);
         _fwFaces.Clear();
         _fwFaces.AddRange(kept);
     }
@@ -147,6 +149,10 @@ public sealed partial class PlacePartView
         var watch = Stopwatch.StartNew();
         // R73a7(JACK 1102 «계단 … 옆면이 여러 개로 조각나 있어서 면을 선택하기가 힘들어»): 한 면처럼 볼 면들(Siblings)은 함께 고르고 · 함께 푼다.
         int picks = faces.Select(f => f.Siblings[0]).Distinct().Count();
+        // R73b(설치 전 검토 높음): 무리가 판 여럿에 걸쳐도(벽 내측면 + 개구부 옆 띠 · 슬래브 띠) 판 띠 · 판 단추는 누른 면의 판 하나만 — 무리마다 대표 = 누른 면
+        // (나무 줄이면 무리째 오므로 판이 있는 가장 넓은 세는 면). 대표는 맨 뒤(첫 면 · 이름표 · 나무 펼치기 — 다 덮인 면 · 나무 밖 면이 되지 않게: 검토 중간).
+        var leads = faces.GroupBy(f => f.Siblings[0]).Select(g => g.Count() == 1 && !g.First().Fixed ? g.First()
+            : g.Where(f => f.Piece >= 0).OrderByDescending(f => f.CountedArea).FirstOrDefault() ?? g.FirstOrDefault(f => !f.Fixed) ?? g.First()).ToList();
         faces = faces.SelectMany(f => f.Siblings).Distinct().ToList();
         // Ctrl(더하기 · 빼기)이면 판으로 고른 것(끌기 · 딱지)도 그대로 둔다 — 뺀 면의 판은 그 판에 고른 면이 더 없을 때만 뺀다.
         var plates = mode == SelectMode.Replace ? new List<int>() : _fwSel.Select(p => _board.IndexOf(p)).Where(i => i >= 0).Distinct().ToList();
@@ -156,7 +162,8 @@ public sealed partial class PlacePartView
         foreach (var group in faces.GroupBy(f => f.Siblings[0]))
         {
             bool held = mode == SelectMode.Toggle && group.Any(f => _fwFaces.Any(p => ReferenceEquals(_board.FaceOf(p), f)));
-            foreach (var face in group)
+            var lead = leads.FirstOrDefault(l => ReferenceEquals(l.Siblings[0], group.Key)) ?? group.First();
+            foreach (var face in group.OrderBy(f => ReferenceEquals(f, lead) ? 1 : 0))   // 대표가 맨 뒤
             {
                 int at = _fwFaces.FindIndex(p => ReferenceEquals(_board.FaceOf(p), face));
                 if (at >= 0) _fwFaces.RemoveAt(at);
@@ -171,7 +178,9 @@ public sealed partial class PlacePartView
             _fwIsoSolo = !IsolateOnTreeClick;
         }
         _fwSoloWhole = isolate && whole && !IsolateOnTreeClick ? _fwFaces.ToList() : null;
-        var facePlates = chosen.Where(f => f.Piece >= 0).Reverse().Select(f => f.Piece).Distinct().Reverse().ToList();   // 첫 면의 판이 맨 뒤
+        // 판 = 무리마다 대표 면의 판만(R73b — 같은 평면의 다른 판까지 판 단추가 바꾸지 않게) · 첫 면의 판이 맨 뒤.
+        var leadSet = chosen.Select(f => f.Siblings[0]).Distinct().Select(k => chosen.Last(f => ReferenceEquals(f.Siblings[0], k))).ToHashSet();
+        var facePlates = chosen.Where(f => f.Piece >= 0 && leadSet.Contains(f)).Reverse().Select(f => f.Piece).Distinct().Reverse().ToList();
         plates.RemoveAll(i => facePlates.Contains(i) || dropped.Contains(i));
         _fwSel.Clear();
         foreach (int piece in plates.Concat(facePlates)) _fwSel.Add(_board.Pieces[piece].Lead);
@@ -187,7 +196,7 @@ public sealed partial class PlacePartView
         {
             _fwIsoLogged = true;
             Log?.Invoke($"② 부재 단독 보기\t부재 {string.Join(",", _fwIso.Order().Take(4))}{(_fwIso.Count > 4 ? " …" : "")}{(SoloWhole ? "(부재 줄)" : "")} · 면 {_fwCutFaces}" +
-                        $" · 공제 위치 {_fwCutList.Count(c => c.Area >= FormworkBoard.JointChipMin)}({M2(_fwCutList.Sum(c => c.Area))}㎡) · 공제 제외 위치 {_fwCutList.Count(c => c.Kept >= FormworkBoard.JointChipMin)}" +
+                        $" · 공제 위치 {_fwCutList.Count(c => c.Area >= FormworkBoard.JointChipMin)}({M2(_fwCutList.Sum(c => c.Area))}㎡) · 거푸집 추가 위치 {_fwCutList.Count(c => c.Kept >= FormworkBoard.JointChipMin)}" +
                         $" · 빗금 {_view3d.GuideCount(4) + _view3d.GuideCount(5)} · 딱지 {_view3d.LabelCount} · 판 {_fwIsoOwn.Count} · {watch.ElapsedMilliseconds} ms");
         }
         else if (isolate && _fwIso != null)
@@ -354,11 +363,8 @@ public sealed partial class PlacePartView
     private void HoverFormwork(int index, int triangle)
     {
         if (_board == null) return;
-        if (_fwTool != CutTool.None) { HoverTool(); return; }   // [빼기] · [넣기]를 든 동안은 닿은 자리(R73a5)
-        BoardFace? face = null;
-        if (index >= MemberCount && index < OverlayStart) face = _board.FaceAt(index - MemberCount, triangle) ?? _board.FaceOf(_board.Pieces[index - MemberCount].Lead);
-        else if (index >= FaceOverlayStart && index - FaceOverlayStart < _fwFaceOverlay.Count) face = _fwFaceOverlay[index - FaceOverlayStart].face;
-        else if (index >= 0 && index < MemberCount && _view3d.HoverPoint is { } at) face = BodyFace(_view3d, index, at);   // 부재 몸 위(R73a6 — 다 덮인 면 · 판의 구멍 자리)
+        if (_fwTool != CutTool.None) { HoverTool(); return; }   // [빼기] · [넣기]를 든 동안은 닿은 자리(R73a5) · 붓(R73b)
+        var face = HitFace(index, triangle, _view3d.HoverPoint);
         if (!ReferenceEquals(face, _fwHoverFace))
         {
             _fwHoverFace = face;
@@ -368,28 +374,47 @@ public sealed partial class PlacePartView
         _hoverPill.Visibility = index < 0 || _hover.Text.Trim().Length == 0 ? Visibility.Collapsed : Visibility.Visible;
     }
 
+    // 왼쪽 그림의 찍힌 차례 · 세모의 면(판 → 그 세모의 면 · 고른 면 겉면 → 그 면 · 부재 몸 → 그 자리의 면 — R73a6 다 덮인 면 · 판의 구멍 자리). 마우스 밑 · 붓이 같은 길.
+    private BoardFace? HitFace(int index, int triangle, Point? at)
+    {
+        if (_board == null) return null;
+        if (index >= MemberCount && index < OverlayStart) return _board.FaceAt(index - MemberCount, triangle) ?? _board.FaceOf(_board.Pieces[index - MemberCount].Lead);
+        if (index >= FaceOverlayStart && index - FaceOverlayStart < _fwFaceOverlay.Count) return _fwFaceOverlay[index - FaceOverlayStart].face;
+        if (index >= 0 && index < MemberCount && at is { } p) return BodyFace(_view3d, index, p);
+        return null;
+    }
+
     /// <summary>면 한 줄(마우스 밑 이름표 · 시험): «부위 마크 · 면 이름 · ㎡ · 지금: 종류».</summary>
     public string FaceText(BoardFace face) =>
-        face.Covered ? $"{MemberLabel(face.Result.Element)} · {face.Name} · 접합 {LocationTree.AreaText(face.Siblings.Sum(f => f.CoveredArea))} ㎡ · 현재: 전부 공제"   // R73a6 다 덮인 면(거푸집 없음)
-        : $"{MemberLabel(face.Result.Element)} · {face.Name} · {LocationTree.AreaText(face.JoinedArea)} ㎡ · 현재: {FaceKind(face)}";   // R73a6 «지금» → «현재» · 0.005 ㎡ 아래는 셋째 자리 · R73a7 한 면처럼 볼 면들의 넓이
+        face.Siblings.All(f => f.Covered) ? $"{MemberLabel(face.Result.Element)} · {face.Name} · 접합 {LocationTree.AreaText(face.Siblings.Sum(f => f.CoveredArea))} ㎡ · 현재: 전부 공제"   // R73a6 다 덮인 면(거푸집 없음)
+        : $"{MemberLabel(face.Result.Element)} · {face.Name} · {LocationTree.AreaText(ShownArea(face))} ㎡ · 현재: {FaceKind(face)}";
+
+    // 면 이름표의 넓이(R73b — 설치 전 검토 중간): 세는 조각이 있으면 세는 넓이(나무 줄과 같음) · 없으면 면 넓이.
+    private static double ShownArea(BoardFace face) => face.Siblings.Any(f => f.Counted) ? face.Siblings.Sum(f => f.CountedArea) : face.JoinedArea;   // R73a6 «지금» → «현재» · 0.005 ㎡ 아래는 셋째 자리 · R73a7 한 면처럼 볼 면들의 넓이
 
     // 부재 이름(나무 · 카드 머리와 같은 말 — LocationTree.MemberName).
     private string MemberLabel(FormworkElement el) => _board != null ? LocationTree.MemberName(_board, el) : el.Type;
 
     // 면의 지금 종류(나무 · 이름표): 지운 판 · 확인 필요 · 종류(유로폼은 높이 구간) · 세지 않음.
+    // R73b: 한 면처럼 볼 면들(Siblings — 판이 갈린 한 평면) 모두 — 종류가 여럿이면 넓은 것 «외 n»(«유로폼 외 1»).
     private string FaceKind(BoardFace face)
     {
-        if (face.Covered) return "전부 공제";
-        if (face.Patches.Any(p => p.DropLead.Length > 0)) return "지운 판";
-        var lead = face.Patches.FirstOrDefault(p => p.Counted) ?? face.Lead;
-        return KindText(lead);
+        var group = face.Siblings;
+        if (group.All(f => f.Covered)) return "전부 공제";
+        var patches = group.SelectMany(f => f.Patches).ToList();
+        var kinds = patches.Where(p => p.Counted).GroupBy(KindText).OrderByDescending(g => g.Sum(p => p.Area)).Select(g => g.Key).ToList();
+        if (patches.Any(p => p.DropLead.Length > 0)) kinds.Add("지운 판");
+        if (kinds.Count == 0) return KindText(patches.OrderByDescending(p => p.Area).FirstOrDefault() ?? face.Lead);
+        return kinds.Count == 1 ? kinds[0] : $"{kinds[0]} 외 {kinds.Count - 1}";
     }
 
-    // 면의 색(나무의 점): 3D 의 판 색과 같다.
+    // 면의 색(나무의 점): 3D 의 판 색과 같다(R73b — 한 면처럼 볼 면들 가운데 가장 넓은 세는 조각).
     private (byte r, byte g, byte b) FaceColor(BoardFace face)
     {
-        if (face.Patches.Any(p => p.DropLead.Length > 0)) return FormworkPalette.Dropped;
-        var lead = face.Patches.FirstOrDefault(p => p.Counted) ?? face.Lead;
+        var patches = face.Siblings.SelectMany(f => f.Patches).ToList();
+        var lead = patches.Where(p => p.Counted).OrderByDescending(p => p.Area).FirstOrDefault();
+        if (lead == null && patches.Any(p => p.DropLead.Length > 0)) return FormworkPalette.Dropped;
+        lead ??= patches.OrderByDescending(p => p.Area).FirstOrDefault() ?? face.Lead;
         return lead.Counted || lead.NeedsCheck ? FormworkPalette.Of(lead) : (ZonePalette.Todo.r, ZonePalette.Todo.g, ZonePalette.Todo.b);
     }
 
@@ -430,11 +455,12 @@ public sealed partial class PlacePartView
             var center = face.Center - origin + lift;
             string part = _board.PlaceOf(face.ElementId).part;
             double coveredArea = group.Sum(f => f.CoveredArea);
-            string name = $"{(part.Length > 0 ? part + " · " : "")}{face.Name} · {(face.Covered ? "접합 " + LocationTree.AreaText(coveredArea) : LocationTree.AreaText(face.JoinedArea))}㎡";
+            bool allCovered = group.All(f => f.Covered);   // R73b: 무리 모두가 다 덮였을 때만 «접합»
+            string name = $"{(part.Length > 0 ? part + " · " : "")}{face.Name} · {(allCovered ? "접합 " + LocationTree.AreaText(coveredArea) : LocationTree.AreaText(ShownArea(face)))}㎡";
             if (box == null) labels.Add((center, name, center, center));
             else
             {
-                string near = (face.Covered ? coveredArea / Math.Max(1e-9, box.Width * box.Height) : box.Fill) < 0.5 ? "≈" : "";   // 다 덮인 면은 닿은 넓이로(R73a6)
+                string near = (allCovered ? coveredArea / Math.Max(1e-9, box.Width * box.Height) : box.Fill) < 0.5 ? "≈" : "";   // 다 덮인 면은 닿은 넓이로(R73a6)
                 var c = box.Corners.Select(q => q - origin + lift).ToList();
                 // 이름은 윗변 바로 위(R73a2 — 가운데 두면 작은 면 · 빠진 자리 빗금을 덮었다: 녹촌 트렌치 0.17 ㎡ 면). 면 하나를 골랐고 빗금이 윗변 위로 나가면 빗금 위에
                 // (이 부재만 보기는 그 면의 빗금만 — 부재의 다른 면 빗금까지 보면 이름이 멀리 뜬다).
@@ -501,9 +527,6 @@ public sealed partial class PlacePartView
     private FrameworkElement BuildTreePane()
     {
         var pane = new DockPanel();
-        var modes = BuildModeBar();               // [자동 | 사용자](R66 — 그대로 · R73b 에서 걷는다)
-        DockPanel.SetDock(modes, Dock.Top);
-        pane.Children.Add(modes);
         var filter = BuildTreeFilter();
         DockPanel.SetDock(filter, Dock.Top);
         pane.Children.Add(filter);
@@ -516,6 +539,7 @@ public sealed partial class PlacePartView
         var host = new Grid();
         host.Children.Add(_fwTreeList);
         host.Children.Add(_fwTreeEmpty);           // 거른 나무가 비었을 때 한 줄
+        host.Children.Add(BuildTreeKindLayer());   // 줄 끝 종류 글을 누르면 뜨는 종류 다섯(R73b)
         pane.Children.Add(host);
         return pane;
     }
@@ -670,14 +694,21 @@ public sealed partial class PlacePartView
         grid.Children.Add(name);
         if (node.Face is { } g)
         {
-            var kind = new TextBlock { FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
-            kind.Inlines.Add(new Run(FaceKind(g)) { Foreground = g.NeedsCheck ? _warn : _sub });
-            if (g.Direct) kind.Inlines.Add(new Run(" ●") { Foreground = _ui["AccentText"] });
+            var kind = new TextBlock { FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0), Background = Brushes.Transparent };
+            // 종류 글을 누르면 종류 다섯 작은 판(R73b — 계획 §3.4 · 줄 이름은 고르기 · 날기만): 칠할 수 있는 면만.
+            if (FormworkBoard.Paintable(g))
+            {
+                kind.Cursor = Cursors.Hand;
+                _ui.Mark(kind, "누르면 이 면의 거푸집 종류를 고릅니다", "fw.tree.kind." + node.Key);
+                kind.MouseLeftButtonUp += (_, e) => { e.Handled = true; OpenKindPanel(node, kind); };
+            }
+            kind.Inlines.Add(new Run(FaceKind(g)) { Foreground = g.Siblings.Any(x => x.NeedsCheck) ? _warn : _sub });
+            if (g.Siblings.Any(x => x.Direct)) kind.Inlines.Add(new Run(" ●") { Foreground = _ui["AccentText"] });
             Grid.SetColumn(kind, 3);
             grid.Children.Add(kind);
         }
         // 세지 않는 면은 0.00 대신 면 넓이를 옅게 · 가운데 줄(JACK 1030 첫 확인 전 — «0.00»은 무엇을 뺐는지 안 보임).
-        bool off = node.Face is { Counted: false };
+        bool off = node.Face != null && node.Faces.All(x => !x.Counted);   // R73b: 줄의 면 모두(한 면처럼 볼 면들)
         var area = new TextBlock
         {
             Text = LocationTree.AreaText(off ? node.Faces.Sum(x => x.Area) : node.Area), FontSize = 12, Foreground = face && !off ? _text : _sub, MinWidth = 58, TextAlignment = TextAlignment.Right,
@@ -709,6 +740,7 @@ public sealed partial class PlacePartView
     private void ClickTreeRow(LocationTree.Node node, bool ctrl)
     {
         if (_board == null || Busy) return;
+        CloseKindPanel();
         // 숨긴(Del · ① 숨기기) 부재의 줄을 누르면 그 부재는 다시 보인다(R73a3 — 보이지 않는 것으로 날아가 «아무 일 없음»이 되지 않게).
         if (node.Level is LocationTree.Level.Face or LocationTree.Level.Member && _editor.Hidden.Count > 0)
             _editor.Hidden.ExceptWith(node.Level == LocationTree.Level.Face ? new[] { node.Face!.ElementId } : node.Faces.Select(f => f.ElementId));
@@ -885,7 +917,7 @@ public sealed partial class PlacePartView
                 Width = 13, Height = 13, CornerRadius = new CornerRadius(2), Margin = new Thickness(kept ? 10 : 0, 0, 5, 0), VerticalAlignment = VerticalAlignment.Center,
                 Background = Model3DView.HatchBrush(_ui.IsDark, kept), BorderBrush = new SolidColorBrush(Model3DView.HatchColor(_ui.IsDark, kept)), BorderThickness = new Thickness(1),
             });
-            solo.Children.Add(new TextBlock { Text = kept ? "공제 제외 위치" : "공제 위치(닿는 부위)", FontSize = 12.5, VerticalAlignment = VerticalAlignment.Center, Foreground = _text });   // R73a6 전문 용어(JACK 1102 «빠진 자리 → 공제 위치(닿는 부위)»)
+            solo.Children.Add(new TextBlock { Text = kept ? "거푸집 추가 위치" : "공제 위치(닿는 부위)", FontSize = 12.5, VerticalAlignment = VerticalAlignment.Center, Foreground = _text });   // R73a6 전문 용어(JACK 1102 «빠진 자리 → 공제 위치(닿는 부위)»)
         }
         _fwSoloLegend = solo;
         _fwIsoHidden.Foreground = _sub;
@@ -942,7 +974,7 @@ public sealed partial class PlacePartView
         if (_fwIsoLegend != null) _fwIsoLegend.Visibility = iso && !solo ? Visibility.Visible : Visibility.Collapsed;
         if (_fwSoloLegend != null) _fwSoloLegend.Visibility = solo ? Visibility.Visible : Visibility.Collapsed;
         if (_fwIsoChip != null)
-            _ui.Tip(_fwIsoChip, solo ? "목록에서 선택한 부재만 표시합니다 — 거푸집 면은 종류 색 · 나머지는 회색. 빨간 빗금 = 다른 부재와 닿아 거푸집 면적에서 공제한 위치 · 청록 빗금 = 접합부지만 거푸집 면적에 포함한 위치(왼쪽 위 [공제] · [공제 제외]로 변경)."
+            _ui.Tip(_fwIsoChip, solo ? "목록에서 선택한 부재만 표시합니다 — 거푸집 면은 종류 색 · 나머지는 회색. 빨간 빗금 = 다른 부재와 닿아 거푸집 면적에서 공제한 위치 · 청록 빗금 = 접합부지만 거푸집 면적에 포함한 위치(왼쪽 위 [공제] · [거푸집 추가]로 변경)."
                                 : iso ? "목록에서 고른 부재와, 거기 닿은 부재의 닿은 근처(0.3 m)만 진하게 봅니다 — 고른 부재의 판은 제 색 · 닿은 부재는 청록 몸에 옅은 판 · 나머지는 흐린 윤곽(찍히지 않음). Del 로 숨긴 부재는 3D 에서만 숨깁니다(수량 그대로)."
                                 : "Del 로 숨긴 부재(3D 에서만 — 수량 그대로 · [전체 보기]로 다시 표시).");
         _fwIsoCount.Text = $"닿은 부재 {_fwIsoNear.Count(id => IndexOf(id) >= 0)}";

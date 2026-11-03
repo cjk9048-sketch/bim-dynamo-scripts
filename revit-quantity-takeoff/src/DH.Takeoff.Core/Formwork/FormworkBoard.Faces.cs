@@ -95,7 +95,12 @@ public sealed class BoardFace
     public bool Fixed => Piece < 0 && !NeedsCheck;
 
     /// <summary>사람이 판마다 정한 기록이 걸린 면(지운 판 · 옮긴 판 · 판 종류 · 판 자리 · 판 쪼갬 — 나무의 ●).</summary>
-    public bool Direct => Patches.Any(p => p.DropLead.Length > 0 || p.MoveLead.Length > 0 || p.KindLead.Length > 0 || p.PlaceLead.Length > 0 || p.SplitLead.Length > 0);
+    public bool Direct => Patches.Any(p => p.DropLead.Length > 0 || p.MoveLead.Length > 0 || p.KindLead.Length > 0 || p.FaceKindLead.Length > 0 || p.PlaceLead.Length > 0 || p.SplitLead.Length > 0);
+
+    /// <summary>
+    /// 면 ↺ 로 걷을 기록이 걸린 면(R73b — 면 종류 · 판 종류 · 지운 판 · 옮긴 판: 칠하기 · 산출 제외가 «적을 때 하나만»으로 다루는 넷). 판 자리 · 쪼갬 · 겹침은 판 일.
+    /// </summary>
+    public bool Painted => Patches.Any(p => p.FaceKindLead.Length > 0 || p.KindLead.Length > 0 || p.DropLead.Length > 0 || p.MoveLead.Length > 0);
 
     /// <summary>아래를 보는 면(밑면 · 아래 경사) — 레벨에 꼭 맞으면 아래 층(위치 나무).</summary>
     public bool Down => Face.Class is FaceClass.Bottom or FaceClass.SlopeDown || (Face.Normal is { Length: 3 } n && n[2] < -0.3);
@@ -295,8 +300,6 @@ public sealed partial class FormworkBoard
                 }
             }
             var own = mine.Skip(start).ToList();
-            Join(own);
-            FaceNames.Assign(r, own);
             // R73a6: 다른 부재가 다 덮어 조각이 없는 면 — 원본 면 모양의 보기용 조각 하나로 «다 덮인 면»(빗금 · 고르기 · 도구가 쓴다 · 수량 · 기록과 상관없음).
             // 이름은 거푸집 면의 차례 번호를 흔들지 않게 따로 짓고 «(전부 공제)»를 붙인다.
             // R73a7(JACK 1102 «드레인 피트 상부는 빗금 처리하고 하부슬래브 표현 · 바닥슬래브 위에 벽체 등 — 왜 어떤 건 표현되고 어떤 건 안 되는 거야»): 윗면도.
@@ -310,12 +313,15 @@ public sealed partial class FormworkBoard
                 covered.Add(face);
                 faceOf[patch] = face;
             }
+            // R73b(JACK 1103 «쪼개지지 않게»): 한 면처럼 볼 면 = 같은 평면에서 맞닿은 면 모두(판 · 세지 않는 조각 · 다 덮인 면 상관없이) — 무리를 먼저 짓고 이름을 붙인다.
+            Join(own.Concat(covered).ToList());
+            FaceNames.Assign(r, own);
             if (covered.Count > 0)
             {
-                Join(covered);
                 FaceNames.Assign(r, covered);
-                foreach (var face in covered) face.Name += "(전부 공제)";
+                foreach (var face in covered.Where(f => ReferenceEquals(f.Siblings[0], f) || f.Siblings[0].Covered)) face.Name += "(전부 공제)";
             }
+            foreach (var face in own.Concat(covered)) if (!ReferenceEquals(face.Siblings[0], face)) face.Name = face.Siblings[0].Name;
         }
         _faces = faces;
         _faceOf = faceOf;
@@ -326,8 +332,10 @@ public sealed partial class FormworkBoard
     /// <summary>한 면처럼 볼 면의 평면 거리 여유(m — R73a7 · 1 mm).</summary>
     public const double SamePlaneGap = 0.001;
 
-    // 한 부재의 면들을 한 면처럼 볼 무리로 묶는다(R73a7 — BoardFace.Siblings): 같은 평면(법선 1e-6 · 거리 SamePlaneGap) · 같은 판(판이 없으면 둘 다 다 덮인 면 —
-    // 판 없는 땅 위 밑면 · 확인할 자리는 묶지 않는다) · 조각 테두리가 맞닿거나 겹침(SpotEdge 여유 — 단마다 따로인 계단 옆면은 변을 나눈다). 무리 차례 = 면 차례.
+    // 한 부재의 면들을 한 면처럼 볼 무리로 묶는다(R73a7 — BoardFace.Siblings): 같은 평면(법선 1e-6 · 거리 SamePlaneGap) · 조각 테두리가 맞닿거나 겹침(SpotEdge 여유).
+    // R73b(JACK 1103 «계단 옆면처럼 그런 경우의 원인을 찾아서 쪼개지지 않게 · 비단 계단만 그런 일이 벌어지진 않을 거잖아»): 판이 달라도 · 판이 없어도(좁은 틈 자투리 · 땅 위 ·
+    // 확인할 자리) · 다 덮인 면이어도 묶는다 — 한 평면의 맞닿은 자리는 한 면(벽 내측면 + 개구부 옆 띠 · 계단 밑면 + 틈 자투리 · 기초 하부면 받침 높이 둘).
+    // 보 사이 칸처럼 떨어진 자리는 묶지 않는다. Revit 이 나눠 준 원본 면은 분석이 이미 한 면으로 합쳤다(FormworkAnalyzer.MergeSplitFaces). 무리 차례 = 면 차례.
     private static void Join(IReadOnlyList<BoardFace> faces)
     {
         var parent = Enumerable.Range(0, faces.Count).ToArray();
@@ -336,13 +344,13 @@ public sealed partial class FormworkBoard
         for (int i = 0; i < faces.Count; i++)
         {
             var a = faces[i];
-            if (a.Face.Normal is not { Length: 3 } na || (a.Piece < 0 && !a.Covered)) continue;
+            if (a.Face.Normal is not { Length: 3 } na) continue;
             var n = new Vec3(na[0], na[1], na[2]);
             List<List<double[]>>? ra = null;
             for (int j = i + 1; j < faces.Count; j++)
             {
                 var b = faces[j];
-                if (b.Piece != a.Piece || b.Covered != a.Covered || Root(i) == Root(j)) continue;
+                if (Root(i) == Root(j)) continue;
                 if (b.Face.Normal is not { Length: 3 } nb || n.Dot(new Vec3(nb[0], nb[1], nb[2])) < 1 - 1e-6 || Math.Abs(a.Face.PlaneD - b.Face.PlaneD) > SamePlaneGap) continue;
                 ra ??= Rings(a);
                 var rb = Rings(b);
