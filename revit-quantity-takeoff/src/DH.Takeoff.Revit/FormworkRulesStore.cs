@@ -24,8 +24,16 @@ public static class FormworkRulesStore
     /// 4 = 모드 · 판 자리 · 판 쪼갬(R66)이 든 기록: 자동 모드를 모르는 R65 까지가 기록을 걸어 덮어쓰지 않게.
     /// 5 = «겹침»(R67 — 판마다 접합부 무시 / 공제)이 든 기록: R66 이 그 줄을 모르는 줄로 담아 덮어쓰지 않게.
     /// 6 = 시공 순서표 «짝:» · «칸:»(R71 — ② 규칙 탭)이 든 기록: R70 이 그 줄을 모르는 줄로 담아 덮어쓰지 않게.
+    /// 7 = «면 종류:»(R73b — ② 붓으로 칠한 면)이 든 기록: R73a 까지가 그 줄을 모르는 줄로 담아 덮어쓰지 않게(전 판은 읽기만 · 알림 한 줄).
     /// </summary>
-    public const int CurrentVersion = 6;
+    public const int CurrentVersion = 7;
+
+    /// <summary>그 기록을 적을 판 번호(내용으로 고름 — 든 것 가운데 가장 새 갈래 · 시험이 이 함수로 판정한다).</summary>
+    public static int VersionOf(FormworkRules rules) =>
+        rules.FaceKindCount > 0 ? 7 : rules.Pairs.Count + rules.Stages.Count > 0 ? 6 : rules.JointCount > 0 ? 5 : rules.ModeSet || rules.PlaceCount > 0 || rules.SplitCount > 0 ? 4 : rules.SubCount > 0 ? 3 : rules.KindCount > 0 ? 2 : 1;
+
+    /// <summary>그 판 번호의 기록을 이 판(애드인 판 = current)이 읽기만 하는가(더 새 판이 적은 기록 — Read 의 Problem 과 같은 잣대).</summary>
+    public static bool ReadOnlyFor(int stored, int current = CurrentVersion) => stored > current;
 
     private static Schema GetSchema()
     {
@@ -82,7 +90,7 @@ public static class FormworkRulesStore
             }
             copies.Sort((a, b) => string.CompareOrdinal(a.at, b.at) is int c && c != 0 ? c : a.id.CompareTo(b.id));
             loaded.Rules = FormworkRules.Merge(copies.Select(c => FormworkRules.Parse(c.text)), out loaded.Conflicts);
-            if (copies.Count > 0 && copies.Max(c => c.version) > CurrentVersion)
+            if (copies.Count > 0 && ReadOnlyFor(copies.Max(c => c.version)))
                 loaded.Problem = "더 새 판 애드인이 적은 거푸집 대응표입니다 — 이 판에서는 읽기만 하고 고친 것을 모델에 적지 않습니다(애드인을 새 판으로 올려 주세요)";
         }
         catch (Exception ex) { loaded.Rules = new FormworkRules(); loaded.Problem = "모델의 거푸집 대응표를 읽지 못했습니다: " + ex.Message; }
@@ -108,7 +116,7 @@ public static class FormworkRulesStore
         var entity = new Entity(schema);
         entity.Set(Field, rules.ToText());
         entity.Set(SavedAtField, DateTime.UtcNow.ToString("o"));
-        entity.Set(VersionField, rules.Pairs.Count + rules.Stages.Count > 0 ? 6 : rules.JointCount > 0 ? 5 : rules.ModeSet || rules.PlaceCount > 0 || rules.SplitCount > 0 ? 4 : rules.SubCount > 0 ? 3 : rules.KindCount > 0 ? 2 : 1);
+        entity.Set(VersionField, VersionOf(rules));
         holder.SetEntity(entity);
     }
 

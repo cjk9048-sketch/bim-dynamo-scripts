@@ -167,8 +167,8 @@ public sealed partial class FormworkBoard
                 foreach (var p in f.Patches)
                     _serial.TryAdd(p, _serial.Count);
         // 뺀 판은 곡면의 세모를 붙인 뒤에 다시 맞춘다(Analyze 때는 곡면에 세모가 없어 그 조각을 알아보지 못한다).
-        if (options.ActiveRules is { } active && (active.DropCount > 0 || active.KindCount > 0 || active.PlaceCount > 0 || active.SplitCount > 0))
-            FormworkAnalyzer.Reclassify(results, options);   // 판 종류도(R57 P3 — 계획 검토 M2) · 판 자리 · 쪼갬도(R66)
+        if (options.ActiveRules is { } active && (active.DropCount > 0 || active.KindCount > 0 || active.FaceKindCount > 0 || active.PlaceCount > 0 || active.SplitCount > 0))
+            FormworkAnalyzer.Reclassify(results, options);   // 판 종류도(R57 P3 — 계획 검토 M2) · 판 자리 · 쪼갬도(R66) · 면 종류도(R73b)
         Refresh();
     }
 
@@ -223,6 +223,7 @@ public sealed partial class FormworkBoard
         // 줄에서 고르면 그 줄의 판 전부 — 아래 줄 값도 지운다(R64). 줄 값이 같아도 아래 줄 값이 있으면 지운다(«자동» · ↺ 가 듣게 — critic R64 M2).
         var subs = Rules.SubsOf(type, group);
         if (RuleOf(type, group) == next && subs.Count == 0 && Rules.UserMode) return false;
+        if (Blocked()) return false;
         ModeSwitched = EnsureUser();
         Rules.Set(type, group, next);
         foreach (var (sub, _) in subs) Rules.Set(type, FormworkRules.SubGroup(group, sub), "");
@@ -242,6 +243,7 @@ public sealed partial class FormworkBoard
     {
         string next = (choice ?? "").Trim();
         if (sub.Length == 0 || (SubRuleOf(type, group, sub) == next && Rules.UserMode)) return false;
+        if (Blocked()) return false;
         ModeSwitched = EnsureUser();
         Rules.Set(type, FormworkRules.SubGroup(group, sub), next);
         Reclassify();
@@ -286,7 +288,7 @@ public sealed partial class FormworkBoard
     {
         lead = "";
         // 옮긴 판은 SetMove(null)로 지운다 — 여기서 새로 적으면 판의 일부 조각 기록만 남아 나머지가 말없이 원래 줄로 돌아간다(R55b 계획 검토 H3).
-        if (piece.Dropped || piece.Moved || piece.Plate == null || piece.Members.Count == 0) return false;
+        if (piece.Dropped || piece.Moved || piece.Plate == null || piece.Members.Count == 0 || Blocked()) return false;
         var records = piece.Members.Select(m => DropRecord.Of(m.Face, m.Patch)).ToList();
         string key = records[piece.LeadIndex].Text;
         lead = key;
@@ -336,6 +338,12 @@ public sealed partial class FormworkBoard
     /// <summary>판 종류 기록을 지금 모양에서 다시 찾은 결과(FormworkSummary.CheckKinds — 하나도 못 찾음 · 일부만 찾음).</summary>
     public FormworkSummary.DropCheck KindCheck { get; private set; } = FormworkSummary.DropCheck.None;
 
+    /// <summary>면 종류 기록(R73b — 붓)을 지금 모양에서 다시 찾은 결과(KindCheck 와 같은 잣대).</summary>
+    public FormworkSummary.DropCheck FaceKindCheck { get; private set; } = FormworkSummary.DropCheck.None;
+
+    /// <summary>붓으로 칠해 센 면(지운 판 아님)의 수(서로 다른 면 종류 기록 — R73b).</summary>
+    public int PaintedCount => AllPatches.Where(p => p.FaceKindLead.Length > 0 && p.DropLead.Length == 0).Select(p => p.FaceKindLead).Distinct(StringComparer.Ordinal).Count();
+
     /// <summary>Revit 판 종류로 센 판(지운 판 아님)의 수(서로 다른 판 종류 기록)와 넓이.</summary>
     public int PlateKindCount => KindPatches.Select(p => p.KindLead).Distinct(StringComparer.Ordinal).Count();
     public double PlateKindArea => KindPatches.Where(p => p.Counted).Sum(p => p.Area);
@@ -364,7 +372,7 @@ public sealed partial class FormworkBoard
     /// <summary>모양이 바뀌어 하나도 찾지 못한 판 종류 기록을 지운다(합계는 그대로 — 그 자리는 이미 원래 종류로 센다). 지운 수.</summary>
     public int ForgetLostKinds()
     {
-        int n = KindCheck.Lost.ToList().Count(lead => Rules.ClearKind(lead));
+        int n = KindCheck.Lost.ToList().Count(lead => Rules.ClearKind(lead)) + FaceKindCheck.Lost.ToList().Count(lead => Rules.ClearFaceKind(lead));   // 면 종류도(R73b)
         if (n == 0) return 0;
         Reclassify();
         Refresh();
@@ -533,7 +541,7 @@ public sealed partial class FormworkBoard
 
     // 조각이 그 줄(· 아래 줄)에 드는가 — PiecesOfRow · InRow · AreaIn 의 한 잣대.
     private static bool InRowMember(FormworkSummary.Keyed m, string type, string group, string? sub) =>
-        m.Patch.KindLead.Length == 0 && FormworkSummary.RowOf(m) == (type, group) && (sub == null || (m.Patch.MovedTo == null && m.Patch.Sub == sub));
+        m.Patch.KindLead.Length == 0 && m.Patch.FaceKindLead.Length == 0 && FormworkSummary.RowOf(m) == (type, group) && (sub == null || (m.Patch.MovedTo == null && m.Patch.Sub == sub));
 
     /// <summary>그 덩이가 그 줄(· 아래 줄)에 드는가(PiecesOf 와 같은 잣대 — 화면이 덩이마다 묻는다).</summary>
     public bool InRow(FormworkPiece piece, string type, string group, string? sub = null) =>
@@ -545,14 +553,14 @@ public sealed partial class FormworkBoard
 
     /// <summary>그 덩이의 대표 조각의 아래 줄 열쇠(R64 — 3D 에서 판을 찍으면 표에서 그 아래 줄을 고른다 · 뺀 판 · 판 종류 판 · 옮긴 판은 null).</summary>
     public string? SubOf(FormworkPiece piece) =>
-        piece.Dropped || piece.KindLead.Length > 0 || piece.LeadMember.Patch.MovedTo != null ? null : piece.LeadMember.Patch.Sub;
+        piece.Dropped || piece.KindLead.Length > 0 || piece.LeadMember.Patch.FaceKindLead.Length > 0 || piece.LeadMember.Patch.MovedTo != null ? null : piece.LeadMember.Patch.Sub;
 
     /// <summary>
     /// 그 덩이를 정한 줄(revit-verify R47 M1 — 3D 에서 덩이를 누르면 ② 표에서 이 줄을 고른다): 대표 조각이 드는 줄(부위를 넣은 부재의 면이면 부위 줄,
     /// 아니면 유형 줄 — R48). 뺀 판은 null(띠에 [되살리기]만).
     /// </summary>
     public (string type, string group)? RowOf(FormworkPiece piece) =>
-        piece.Dropped || piece.KindLead.Length > 0 ? null : FormworkSummary.RowOf(piece.LeadMember);   // 판 종류 판은 줄이 정하지 않는다(R57 P3)
+        piece.Dropped || piece.KindLead.Length > 0 || piece.LeadMember.Patch.FaceKindLead.Length > 0 ? null : FormworkSummary.RowOf(piece.LeadMember);   // 판 종류 판 · 칠한 면(R73b)은 줄이 정하지 않는다(R57 P3)
 
     /// <summary>그 판의 원래 줄(옮기기 전 — 지운 판 · 옮긴 판도 · R55b: 옮길 줄 고르기에서 제 줄은 고를 수 없다). 조각이 없으면 null.</summary>
     public (string type, string group)? OriginRowOf(FormworkPiece piece) =>
@@ -581,6 +589,7 @@ public sealed partial class FormworkBoard
         // 자동 모드(R66)는 기록을 걸지 않으니 찾지 못한 기록 · 가려진 줄도 없다.
         DropCheck = FormworkSummary.CheckDrops(Results, Options.ActiveRules);
         KindCheck = FormworkSummary.CheckKinds(Results, Options.ActiveRules);
+        FaceKindCheck = FormworkSummary.CheckFaceKinds(Results, Options.ActiveRules);
         HiddenTypeRules = FormworkSummary.HiddenTypeRules(Results, Options.ActiveRules);
         Pieces = BuildPieces();
         SplitKinds = Pieces.Where(p => p.Plate != null)

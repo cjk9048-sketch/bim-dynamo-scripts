@@ -127,7 +127,7 @@ public sealed class Model3DView : Grid
     private bool _fitted;
     private int _hover = -1;
 
-    private enum Drag { None, Pending, Band, Pan, Orbit }
+    private enum Drag { None, Pending, Band, Pan, Orbit, Paint }
     private Drag _drag = Drag.None;
     private Point _down, _last;
     private bool _downCtrl;
@@ -137,7 +137,22 @@ public sealed class Model3DView : Grid
     public OrbitCamera Camera { get; } = new();
 
     /// <summary>끌고 있는 중인가(돌리기 · 옮기기 · 네모).</summary>
-    public bool Dragging => _drag is Drag.Band or Drag.Pan or Drag.Orbit;
+    public bool Dragging => _drag is Drag.Band or Drag.Pan or Drag.Orbit or Drag.Paint;
+
+    /// <summary>
+    /// 붓 끌기(R73b — ② [칠하기]를 든 동안): 왼쪽 단추를 누른 채 DragPixels 넘게 움직이면 끌어 고르기 대신 지나간 자리를 PaintMoved 로 알리고, 떼면 PaintEnded(true) ·
+    /// 그만두면(Esc · 마우스를 놓침) PaintEnded(false). 움직이지 않고 떼면 전처럼 Clicked(한 면 칠하기).
+    /// </summary>
+    public bool PaintDrag { get; set; }
+
+    /// <summary>붓 끌기 동안 지나간 화면 자리(누른 자리부터 · R73b).</summary>
+    public event Action<Point>? PaintMoved;
+
+    /// <summary>붓 끌기가 끝났다(true = 뗌 — 한 번에 적기 · false = 그만둠 — 미리보기만 걷음 · R73b).</summary>
+    public event Action<bool>? PaintEnded;
+
+    /// <summary>붓 끌기 중인가(R73b).</summary>
+    public bool Painting => _drag == Drag.Paint;
 
     /// <summary>단추가 눌려 있는가(끌기 시작 전의 누름 포함) — 이때의 Esc 는 누른 것을 그만두는 데 쓴다.</summary>
     public bool Pressed => _drag != Drag.None;
@@ -520,6 +535,48 @@ public sealed class Model3DView : Grid
     public int ToolRingCount => _toolRings.Count;
 
     /// <summary>
+    /// 붓 끌기의 미리보기(R73b — 지나간 면을 붓 색으로 · 다시 세지 않음): 장면 좌표의 닫힌 고리(바깥 + 구멍 — 홀짝) · 화면 채움 · null = 지움. 보는 자리를 바꾸면 다시 놓는다.
+    /// </summary>
+    public void SetPaintPreview(IReadOnlyList<IReadOnlyList<Vec3>>? rings, (byte r, byte g, byte b) color)
+    {
+        _paintRings = rings?.Where(r => r.Count >= 3).ToList() ?? new List<IReadOnlyList<Vec3>>();
+        if (_paintPath == null)
+        {
+            if (_paintRings.Count == 0) return;
+            _paintPath = new System.Windows.Shapes.Path { StrokeThickness = 2, StrokeLineJoin = PenLineJoin.Round, IsHitTestVisible = false };
+            _guideLayer.Children.Add(_paintPath);
+        }
+        var fill = new SolidColorBrush(Color.FromArgb(150, color.r, color.g, color.b));
+        fill.Freeze();
+        var edge = new SolidColorBrush(Color.FromRgb(color.r, color.g, color.b));
+        edge.Freeze();
+        _paintPath.Fill = fill;
+        _paintPath.Stroke = edge;
+        PlacePaintPreview();
+    }
+
+    /// <summary>시험용(R73b): 붓 미리보기 고리 수.</summary>
+    public int PaintPreviewRings => _paintRings.Count;
+
+    private List<IReadOnlyList<Vec3>> _paintRings = new();
+    private System.Windows.Shapes.Path? _paintPath;
+
+    private void PlacePaintPreview()
+    {
+        if (_paintPath == null) return;
+        if (_paintRings.Count == 0) { _paintPath.Data = null; return; }
+        var geometry = new StreamGeometry { FillRule = FillRule.EvenOdd };
+        using (var ctx = geometry.Open())
+            foreach (var ring in _paintRings)
+            {
+                ctx.BeginFigure(ScreenOf(ring[0]), true, true);
+                ctx.PolyLineTo(ring.Skip(1).Select(ScreenOf).ToList(), true, true);
+            }
+        geometry.Freeze();
+        _paintPath.Data = geometry;
+    }
+
+    /// <summary>
     /// 고른 것의 분홍 테두리를 화면 선으로(R73a6 — «전체 모델»의 고른 면: 3D 맨 위 층을 하나 더 그리면 녹촌 한 장이 45 ms 늘었다 · 장면 좌표 선분 · null = 지움).
     /// 빗금 층 위에 3 px · 가려진 면의 테두리도 보인다(왼쪽 그림의 맨 위 층과 같게). 보는 자리를 바꾸면 다시 놓는다.
     /// </summary>
@@ -583,7 +640,7 @@ public sealed class Model3DView : Grid
     // 점선을 지금 카메라로 화면에 놓는다(갈래마다 StreamGeometry 하나 · 빠진 자리(4) · 빼지 않은 자리(5)는 채운 고리 — 구멍 고리는 화면에서도 반대로 돌아 NonZero 로 빠진다).
     private void PlaceGuides()
     {
-        if (_guidePaths[0] == null) { PlaceToolRings(); PlacePickLines(); return; }
+        if (_guidePaths[0] == null) { PlaceToolRings(); PlacePickLines(); PlacePaintPreview(); return; }
         for (int k = 0; k < GuideKinds; k++)
         {
             var geometry = new StreamGeometry { FillRule = FillRule.Nonzero };
@@ -599,6 +656,7 @@ public sealed class Model3DView : Grid
         }
         PlaceToolRings();
         PlacePickLines();
+        PlacePaintPreview();
     }
 
     // 누른 숫자가 재는 선(주황 실선 — 점선 위). 선분이 없는 딱지(가운데 식 · 각도)는 상자만 바뀐다.
@@ -1456,10 +1514,12 @@ public sealed class Model3DView : Grid
     /// <summary>끌던 것을 그만둔다(Esc · 오류 · 마우스를 놓침).</summary>
     public void CancelDrag()
     {
+        bool painting = _drag == Drag.Paint;
         _drag = Drag.None;
         _band.Visibility = Visibility.Collapsed;
         if (IsMouseCaptured) ReleaseMouseCapture();
         Cursor = _toolCursor ?? (_hover >= 0 ? Cursors.Hand : Cursors.Arrow);
+        if (painting) PaintEnded?.Invoke(false);   // 붓 끌기를 그만둠(R73b — 미리보기만 걷는다)
     }
 
     // 아래 넷이 마우스 처리의 알맹이다(화면 좌표를 받는다). 마우스 이벤트가 이것을 부르고, 시험(tools/uipreview)도 같은 것을 부른다.
@@ -1501,6 +1561,14 @@ public sealed class Model3DView : Grid
                 HoverMoved?.Invoke(index, triangle);   // 같은 판 안에서 면이 바뀌어도(R73a)
                 return;
             case Drag.Pending:
+                if (PaintDrag)
+                {
+                    // 붓 끌기(R73b): 끌어 고르기 대신 지나간 자리 — 누른 자리부터.
+                    if (Math.Abs(at.X - _down.X) <= DragPixels && Math.Abs(at.Y - _down.Y) <= DragPixels) return;
+                    _drag = Drag.Paint;
+                    PaintMoved?.Invoke(_down);
+                    goto case Drag.Paint;
+                }
                 if (!BandSelect) return;
                 if (Math.Abs(at.X - _down.X) <= DragPixels && Math.Abs(at.Y - _down.Y) <= DragPixels) return;
                 _drag = Drag.Band;
@@ -1508,6 +1576,10 @@ public sealed class Model3DView : Grid
                 goto case Drag.Band;
             case Drag.Band:
                 ShowBand(at);
+                break;
+            case Drag.Paint:
+                HoverPoint = at;
+                PaintMoved?.Invoke(at);
                 break;
             case Drag.Pan:
                 Camera.Pan(at.X - _last.X, at.Y - _last.Y);
@@ -1546,6 +1618,7 @@ public sealed class Model3DView : Grid
             ClickTriangle = triangle;
             Clicked?.Invoke(index, ended.ctrl);
         }
+        else if (ended.drag == Drag.Paint) PaintEnded?.Invoke(true);   // 붓 끌기를 뗌(R73b — 한 번에 적기)
         else if (ended.drag == Drag.Band)
         {
             // 왼쪽에서 오른쪽으로 끌면 온전히 든 것만, 오른쪽에서 왼쪽으로 끌면 걸친 것까지.

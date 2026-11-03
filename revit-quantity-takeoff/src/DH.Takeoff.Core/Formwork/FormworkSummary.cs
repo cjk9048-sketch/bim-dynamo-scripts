@@ -129,7 +129,7 @@ public static class FormworkSummary
             if (!subOf.TryGetValue(p.Sub, out var subEntry)) subOf[p.Sub] = subEntry = (new FormworkSubRow { Key = p.Sub }, new HashSet<string>(), new HashSet<long>());
             if (p.DropLead.Length > 0) continue;
             // 판 종류 조각(R57 P3)은 줄의 넓이 · 부재 · 초안에 들지 않는다 — 그 줄의 종류를 바꿔도 이 조각은 판의 종류(줄 단추가 일부만 듣지 않게 · 계획 검토 L8).
-            if (p.KindLead.Length > 0) { plateKinds.Add(key); continue; }
+            if (p.KindLead.Length > 0 || p.FaceKindLead.Length > 0) { plateKinds.Add(key); continue; }   // 칠한 면(R73b)도 — 줄 단추가 듣지 않는 조각
             if (p.MovedTo != null) { moved.Add(k); continue; }
             if (!elevated.TryGetValue(src.Result, out bool raised)) elevated[src.Result] = raised = src.Result.Faces.Any(x => x.Patches.Any(q => q.Below == Below.Supported));
             entry.row.Area += p.Area;
@@ -150,7 +150,7 @@ public static class FormworkSummary
         }
         // 옮긴 판의 조각(R55b): 옮긴 줄의 넓이 · 부재 수에만 든다(그 줄이 있을 때만 — 없으면 ApplyMoves 가 지운 판으로 돌렸다).
         foreach (var k in moved)
-            if (k.Patch.KindLead.Length == 0 && rows.TryGetValue(RowOf(k), out var entry))
+            if (k.Patch.KindLead.Length == 0 && k.Patch.FaceKindLead.Length == 0 && rows.TryGetValue(RowOf(k), out var entry))
             {
                 entry.row.Area += k.Patch.Area;
                 entry.ids.Add(k.Result.Element.Id);
@@ -225,9 +225,15 @@ public static class FormworkSummary
     /// 그 판은 원래 종류로 센다) · Partial(일부 조각 열쇠만 맞음 — 맞은 조각만 그 종류) · Resized(R70 — 다 맞았지만 맞은 조각이 슬래브 높이에서 갈린 안쪽 면 조각이고
     /// 넓이가 적힌 넓이의 95 ~ 105% 밖: 층마다 가른 뒤 옛 통판에 건 종류가 한 층 조각에만 남음 — critic R69 M4). 나중 기록에 가려진 조각도 «맞음»으로 센다.
     /// </summary>
-    public static DropCheck CheckKinds(IReadOnlyList<ElementFormwork> results, FormworkRules? rules)
+    public static DropCheck CheckKinds(IReadOnlyList<ElementFormwork> results, FormworkRules? rules) =>
+        rules == null || rules.KindCount == 0 ? DropCheck.None : CheckKindEntries(results, rules.Kinds);
+
+    /// <summary>면 종류 기록(R73b — 붓)을 지금 모양에서 다시 찾은 결과(CheckKinds 와 같은 잣대 · «모양이 바뀐 판»에 함께 보인다).</summary>
+    public static DropCheck CheckFaceKinds(IReadOnlyList<ElementFormwork> results, FormworkRules? rules) =>
+        rules == null || rules.FaceKindCount == 0 ? DropCheck.None : CheckKindEntries(results, rules.FaceKinds);
+
+    private static DropCheck CheckKindEntries(IReadOnlyList<ElementFormwork> results, IReadOnlyList<FormworkRules.KindEntry> kinds)
     {
-        if (rules == null || rules.KindCount == 0) return DropCheck.None;
         var check = new DropCheck(new List<string>(), new List<string>(), new List<string>());
         var byElement = new Dictionary<long, List<(FaceResult face, FacePatch patch)>>();
         foreach (var r in results)
@@ -237,7 +243,7 @@ public static class FormworkSummary
                     if (!byElement.TryGetValue(f.ElementId, out var list)) byElement[f.ElementId] = list = new List<(FaceResult, FacePatch)>();
                     list.Add((f, p));
                 }
-        foreach (var kind in rules.Kinds)
+        foreach (var kind in kinds)
         {
             var hits = kind.Records.Select(record => (record, hit: byElement.TryGetValue(record.Element, out var list)
                                                          ? list.FirstOrDefault(x => record.Matches(x.face, x.patch)).patch : null)).ToList();

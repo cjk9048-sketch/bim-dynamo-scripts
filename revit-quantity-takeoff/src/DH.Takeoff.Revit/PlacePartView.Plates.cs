@@ -11,7 +11,7 @@ namespace DH.Takeoff.Revit;
 // R66c — ② 판 먼저 → 판마다 지정(JACK 2026-10-27 «모든 면에 대해 거푸집을 먼저 만들고 그다음 지정 · 처음부터 사용자 모드 / 자동 모드» ·
 // 인터뷰: 흐름 «② 판 만들기 + 지정 → ③ 확인» · 사용자 모드 = 자동 결과에서 시작해 고침 · 한 판 안 종류 나누기 = 부재 경계로 쪼개기 단추 ·
 // 위치 = 엑셀의 부위 줄 + 중분류 · 합치기 = 넓은 판의 종류):
-//  · 왼쪽 위 [자동 | 사용자] · 위치 나무(R73a — 판 목록 대신 · PlacePartView.Tree) · 사용자 모드의 «유형 · 부위별로 한꺼번에»(옛 대응표 — 줄 규칙 · 접어 둠).
+//  · (R73b 에서 [자동 | 사용자] 걷음) · 위치 나무(R73a — 판 목록 대신 · PlacePartView.Tree) · 사용자 모드의 «유형 · 부위별로 한꺼번에»(옛 대응표 — 줄 규칙 · 접어 둠).
 //  · 3D: 찍기 = 그 면 + 그 면의 판(R73a — 카드의 단추는 판 전체에 · 검토 M3) · Ctrl+찍기 = 더하거나 빼기 · 끌기 = 판을 네모로(Ctrl = 더하기).
 //  · 그림 위 띠: 고른 판의 엑셀 줄 · 종류 단추 · 세지 않음 · ↺ 자동으로 · 부재마다 나누기 · 합치기 · 자리 바꾸기(부위 줄 · 중분류).
 //    자동 모드에서 고치면 사용자 모드로 바뀌고 알린다(계획 검토 H3 · M3). 되돌리기 = 기록 글 전체(FormworkBoard.Snapshot).
@@ -26,8 +26,7 @@ public sealed partial class PlacePartView
     // 고른 판의 모양 검사 한 줄(R68 — 판 띠 둘째 줄 · 걸린 것이 없으면 숨김).
     private readonly TextBlock _fwPlateCheck = new() { FontSize = 12, Margin = new Thickness(0, 1, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis, Visibility = Visibility.Collapsed };
 
-    // 판 목록(R66)은 R73a 에서 걷었다 — 위치 나무(PlacePartView.Tree)가 그 자리.
-    private RadioButton? _fwAutoMode, _fwUserMode;
+    // 판 목록(R66)은 R73a 에서 걷었다 — 위치 나무(PlacePartView.Tree)가 그 자리. [자동 | 사용자](R66)는 R73b 에서 걷었다(계획 §3.3 — 쉬는 기록은 세 갈래 창 하나로).
     private Border? _fwFold;
     private FrameworkElement? _fwFoldBody;
     private TextBlock? _fwFoldHead;
@@ -45,46 +44,6 @@ public sealed partial class PlacePartView
     private int _fwMeasured;
     private List<(DropRecord record, int solid, int face)> _fwSelKeys = new();
 
-    // ── 모드 ─────────────────────────────────────────────────────────────────────
-
-    private FrameworkElement BuildModeBar()
-    {
-        _fwAutoMode = _ui.Segment("자동", "프로그램 규칙대로 셉니다 — 직접 정한 것은 쓰지 않고 남겨 둡니다.", "fw.mode.auto");
-        _fwUserMode = _ui.Segment("사용자", "자동 결과에서 시작해 판마다 종류 · 자리를 고칩니다(자동 모드에서 판을 고쳐도 사용자 모드로 바뀝니다).", "fw.mode.user");
-        _fwAutoMode.Checked += (_, _) => { if (!_syncing) SetMode(false); };
-        _fwUserMode.Checked += (_, _) => { if (!_syncing) SetMode(true); };
-        var segments = _ui.Segments(_fwAutoMode, _fwUserMode);
-        segments.HorizontalAlignment = HorizontalAlignment.Left;
-        segments.Margin = new Thickness(2, 0, 0, 8);
-        return segments;
-    }
-
-    private void SyncMode()
-    {
-        if (_board == null || _fwAutoMode == null || _fwUserMode == null) return;
-        bool was = _syncing;
-        _syncing = true;
-        try
-        {
-            _fwAutoMode.IsChecked = !_board.UserMode;
-            _fwUserMode.IsChecked = _board.UserMode;
-        }
-        finally { _syncing = was; }
-    }
-
-    private void SetMode(bool user)
-    {
-        if (_board == null) return;
-        if (Busy || _board.UserMode == user) { SyncMode(); return; }
-        string snapshot = _board.Snapshot();
-        if (!_board.SetMode(user)) { SyncMode(); return; }
-        RecordUndo(user ? "사용자 모드" : "자동 모드", snapshot);
-        _fwPicked = null;                          // 접은 표의 줄을 고른 채 자동으로 가면 숨은 줄이 고른 채 남지 않게
-        _fwPickedSub = null;
-        FinishChange($"거푸집 모드\t{(user ? "사용자" : "자동")}",
-            user ? $"사용자 모드 · 거푸집 {M2(_board.Total)} ㎡" : $"자동 모드 — 규칙대로 셉니다 · 거푸집 {M2(_board.Total)} ㎡", "모드");
-    }
-
     // 직접 정한 판(지운 판 빼고 — 지운 판은 따로 센다).
     private int DirectCount() => _board?.Pieces.Count(p => !p.Dropped && FormworkBoard.Direct(p)) ?? 0;
 
@@ -93,8 +52,8 @@ public sealed partial class PlacePartView
     private void RefreshPlateList()
     {
         if (_board == null) return;
-        SyncMode();
-        if (_fwFold != null) _fwFold.Visibility = _board.UserMode ? Visibility.Visible : Visibility.Collapsed;
+        // R73b: 모드 단추를 걷어 «유형 · 부위별로 한꺼번에»는 늘 보인다(새 모델에서도 줄 규칙을 고를 수 있게 — 쉬는 기록이면 고칠 때 묻는다).
+        if (_fwFold != null) _fwFold.Visibility = Visibility.Visible;
         if (_fwFoldBody != null) _fwFoldBody.Visibility = _fwFoldOpen ? Visibility.Visible : Visibility.Collapsed;
         if (_fwFoldHead != null)
         {
@@ -225,6 +184,7 @@ public sealed partial class PlacePartView
         // R73a6 전문 용어(JACK 1102): [세지 않음] → [산출 제외] · [부재마다 나누기] → [부재별 분할] · [합치기] → [병합] · [자리 바꾸기] → [산출 위치 변경] — 기록 값(«세지 않음»)은 그대로.
         _fwDropButton = Add(DropLabel, "BtnSecondary", "선택한 판을 산출에서 제외합니다 — 합계 · 엑셀 · 거푸집 객체에 넣지 않습니다.", "btn.fw.drop", () => DropSelected());
         _fwAutoButton = Add("↺ 자동으로", "BtnGhost", "선택한 판에 직접 정한 것(종류 · 산출 제외 · 산출 위치 · 분할 · 병합)을 걷고 규칙대로 산출합니다.", "btn.fw.kind.auto", () => AutoSelected(), 8);
+        _fwFaceReset = Add("↺ 처음 값", "BtnGhost", "", "btn.fw.face.reset", () => ResetSelectedFaces());   // 고른 면만(R73b — 칠한 종류 · 산출 제외 · 판 종류를 그 면 몫만 걷음)
         _fwSplitButton = Add("부재별 분할", "BtnSoft", "여러 부재를 이은 판을 부재별로 한 장씩 분할합니다(종류는 그대로).", "btn.fw.split", () => SplitSelected(), 8);
         _fwMergeButton = Add("병합", "BtnSoft", "선택한 판들을 한 장으로 병합합니다 — 종류는 넓은 판의 것(같은 평면에 맞닿은 판만).", "btn.fw.merge", () => MergeSelected());
         _fwPlaceButton = Add("산출 위치 변경", "BtnSoft", "선택한 판이 엑셀에서 들어갈 부위 줄 · 중분류를 변경합니다.", "btn.fw.place", () => TogglePlace());
@@ -288,8 +248,8 @@ public sealed partial class PlacePartView
                 _fwPlateText.Text = bare.Count == 1 ? $"{MemberLabel(bare[0].Result.Element)} · {bare[0].Name} · 접합 {M2(bare[0].CoveredArea)} ㎡ · 거푸집 없음"
                                                      : $"다 덮인 면 {bare.Count}개 · 접합 {M2(bare.Sum(f => f.CoveredArea))} ㎡ · 거푸집 없음";
                 _fwPlateText.ToolTip = bare.All(f => f.Face.Class == FaceClass.Top)
-                    ? "다른 부재가 다 덮은 상부면입니다 — 빨간 빗금 = 닿는 부위. 상부면은 원래 거푸집이 없어 공제 · 공제 제외와 관계없습니다."   // R73a7
-                    : "다른 부재가 다 덮어 거푸집이 없는 면입니다 — 빨간 빗금 = 공제 위치. 3D 왼쪽 위 [공제 제외]로 빗금을 선택하면 거푸집 면적에 포함합니다.";
+                    ? "다른 부재가 다 덮은 상부면입니다 — 빨간 빗금 = 닿는 부위. 상부면은 원래 거푸집이 없어 공제 · 거푸집 추가와 관계없습니다."   // R73a7
+                    : "다른 부재가 다 덮어 거푸집이 없는 면입니다 — 빨간 빗금 = 공제 위치. 3D 왼쪽 위 [거푸집 추가]로 빗금을 선택하면 거푸집 면적에 포함합니다.";
                 _fwPlateState.Text = "";
                 if (_fwPlaceBar != null) _fwPlaceBar.Visibility = Visibility.Collapsed;
             }
@@ -301,8 +261,8 @@ public sealed partial class PlacePartView
         _fwPlateText.ToolTip = string.Join("\n", pieces.Take(8).Select(PieceText));
         ShowPlateChecks(pieces);
         bool anyDirect = pieces.Any(FormworkBoard.Direct), anyRuled = pieces.Any(_board.RowRuled);
-        _fwPlateState.Text = !_board.UserMode ? "자동 모드" : anyDirect ? "직접" : anyRuled ? "줄 규칙" : "자동";
-        _fwPlateState.Foreground = _board.UserMode && anyDirect ? _ui["AccentText"] : _sub;
+        _fwPlateState.Text = _board.Sleeping ? "쓰지 않는 기록" : anyDirect ? "직접" : anyRuled ? "줄 규칙" : "자동";   // R73b: 모드 낱말 없이
+        _fwPlateState.Foreground = !_board.Sleeping && anyDirect ? _ui["AccentText"] : _sub;
         // 지금 종류: 모두 세지 않음 = «세지 않음» · 모두 같은 종류로 셈 = 그 종류 · 섞이면 진한 단추 없음.
         var kinds = pieces.Select(p => p.Dropped || !p.Lead.Counted ? (p.Lead.NeedsCheck ? "?" : FormworkRules.NotCounted) : p.Lead.Item).Distinct().ToList();
         string now = kinds.Count == 1 ? kinds[0] : "";
@@ -317,6 +277,7 @@ public sealed partial class PlacePartView
         }
         if (_fwDropButton != null) _fwDropButton.Style = _ui.StyleOf(now == FormworkRules.NotCounted ? "BtnPrimary" : "BtnSecondary");
         if (_fwAutoButton != null) _fwAutoButton.Visibility = anyDirect ? Visibility.Visible : Visibility.Collapsed;
+        RefreshFaceReset();                        // 고른 면의 [↺ 처음 값](R73b)
         if (_fwSplitButton != null) _fwSplitButton.Visibility = pieces.Any(FormworkBoard.Splittable) ? Visibility.Visible : Visibility.Collapsed;
         int plates = pieces.Count(p => p.Plate != null && !p.Dropped);
         if (_fwMergeButton != null) _fwMergeButton.Visibility = plates >= 2 ? Visibility.Visible : Visibility.Collapsed;
@@ -418,7 +379,7 @@ public sealed partial class PlacePartView
     {
         string why = "";
         bool done = ChangePlates("병합", (b, ps) => { why = b.MergePlates(ps); return why.Length == 0 ? 1 : 0; });
-        if (!done && why.Length > 0) ShowMessage($"병합하지 못했습니다 — {why}", true);
+        if (!done && why.Length > 0 && _board?.NeedsDecision != true) ShowMessage($"병합하지 못했습니다 — {why}", true);
         return done;
     }
 
@@ -484,6 +445,12 @@ public sealed partial class PlacePartView
         string snapshot = _board.Snapshot();
         int measured = _board.MeasureVersion;
         int n = act(_board, pieces);
+        if (n == 0 && _board.NeedsDecision)
+        {
+            // 쉬는 기록(R73b): 세 갈래 창 — 정하면 같은 일을 다시(되돌리기 한 줄 · 저장 한 번).
+            AskWake(what, () => ChangePlates(what, act, none));
+            return false;
+        }
         if (n == 0)
         {
             // 바뀐 것이 없다(Board 가 기록 · 모드를 되돌렸다) — 고른 판은 그대로.

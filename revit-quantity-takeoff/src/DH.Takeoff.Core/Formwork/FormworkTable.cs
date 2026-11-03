@@ -251,20 +251,26 @@ public sealed class FormworkRules
     /// <summary>판 한 장의 종류를 정한다(같은 대표 열쇠가 있으면 갈아 끼워 맨 뒤로 — 나중 것이 이긴다). 종류는 «세지 않음»이 아닌 대응표 종류.</summary>
     public void SetKind(string lead, string item, IEnumerable<DropRecord> records)
     {
+        PutKind(_kinds, lead, item, records);
+        _kindIndex = null;
+    }
+
+    // 판 종류 · 면 종류(R73b) 한 기록을 맨 뒤에 적는다(같은 대표 열쇠가 있으면 갈아 끼움).
+    private static void PutKind(List<KindEntry> kinds, string lead, string item, IEnumerable<DropRecord> records)
+    {
         string key = Cell(lead).Trim(), value = Cell(item).Trim();
         var list = records.Distinct().ToList();
         if (key.Length == 0 || value.Length == 0 || list.Count == 0) return;
-        int at = _kinds.FindIndex(k => k.Lead == key);
+        int at = kinds.FindIndex(k => k.Lead == key);
         if (at >= 0)
         {
             // 같은 열쇠의 기록에 이 판 밖의 조각이 있으면(한 기록이 다시 짓기 뒤 판 둘로 갈림) 그 나머지는 제 열쇠로 그 자리에 남긴다 —
             // 다른 판의 종류가 말없이 사라지지 않게(P3 다시 검토 낮음 1).
-            var rest = _kinds[at].Records.Where(r => !list.Contains(r)).ToList();
-            if (rest.Count > 0) _kinds[at] = new KindEntry(rest[0].Text, _kinds[at].Item, rest);
-            else _kinds.RemoveAt(at);
+            var rest = kinds[at].Records.Where(r => !list.Contains(r)).ToList();
+            if (rest.Count > 0) kinds[at] = new KindEntry(rest[0].Text, kinds[at].Item, rest);
+            else kinds.RemoveAt(at);
         }
-        _kinds.Add(new KindEntry(key, value, list));
-        _kindIndex = null;
+        kinds.Add(new KindEntry(key, value, list));
     }
 
     /// <summary>
@@ -337,6 +343,132 @@ public sealed class FormworkRules
         return index;
     }
 
+    // ── R73b — 면 종류(붓 · JACK 1030 «초보도 원하는 위치를 쉽게 선택해서 거푸집으로 설정» · 계획 §3.2 · §10.1) ──
+
+    /// <summary>
+    /// 면 종류 줄의 머리(R73b — ② 붓으로 칠한 면): 유형 칸 «면 종류:대표 열쇠» · 면 칸 조각 열쇠 · 종류 칸 종류 — 칠한 면의 조각마다 한 줄. 판 종류와 같은 꼴이되 따로 된 목록이고
+    /// 판 잇기 열쇠에 들지 않는다(같은 종류로 칠한 이웃 면끼리는 자동처럼 한 판 — 면마다 판 열쇠면 엑셀 줄이 폭증). 걸리는 차례: 지운 판 &gt; 면 종류 &gt; 판 종류 &gt; 줄 규칙 &gt; 자동
+    /// (목록 차례와 상관없이 — FormworkAnalyzer.ApplyRules). 전 판(R73a 까지)은 모르는 유형 줄로 담는다(모델 기록 판 7 — 전 판은 읽기만).
+    /// </summary>
+    public const string FaceKindPrefix = "면 종류:";
+
+    private readonly List<KindEntry> _faceKinds = new();
+    private Dictionary<long, List<(DropRecord record, int entry)>>? _faceKindIndex;
+
+    /// <summary>면 종류 기록 수(R73b).</summary>
+    public int FaceKindCount => _faceKinds.Count;
+
+    /// <summary>면 종류 기록들(넣은 차례).</summary>
+    public IReadOnlyList<KindEntry> FaceKinds => _faceKinds;
+
+    /// <summary>칠한 면 하나의 종류를 정한다(같은 대표 열쇠가 있으면 갈아 끼워 맨 뒤로). 종류는 «세지 않음»이 아닌 대응표 종류(«산출 제외» 칠하기는 지운 판).</summary>
+    public void SetFaceKind(string lead, string item, IEnumerable<DropRecord> records)
+    {
+        PutKind(_faceKinds, lead, item, records);
+        _faceKindIndex = null;
+    }
+
+    /// <summary>그 조각에 맞는 면 종류(나중 것 · 없으면 null).</summary>
+    public (string lead, string item)? FaceKindOf(FaceResult face, FacePatch patch)
+    {
+        if (_faceKinds.Count == 0) return null;
+        _faceKindIndex ??= IndexOf(_faceKinds.Select(k => k.Records).ToList());
+        int at = Latest(_faceKindIndex, face, patch);
+        return at < 0 ? null : (_faceKinds[at].Lead, _faceKinds[at].Item);
+    }
+
+    /// <summary>그 대표 열쇠의 면 종류 기록을 지운다(모양이 바뀌어 찾지 못한 기록 지우기). 있었으면 true.</summary>
+    public bool ClearFaceKind(string lead)
+    {
+        string key = Cell(lead).Trim();
+        if (_faceKinds.RemoveAll(k => k.Lead == key) == 0) return false;
+        _faceKindIndex = null;
+        return true;
+    }
+
+    /// <summary>
+    /// 면 종류 기록에서 그 조각 열쇠들(글이 같은 것 — Revit 판 기록의 열쇠)만 뺀다(R73b — Revit 판 종류 칸을 받을 때 «적을 때 하나만» · 나중에 한 사람 일이 이김). 뺀 열쇠 수.
+    /// </summary>
+    public int RemoveFaceKindRecords(IEnumerable<DropRecord> records)
+    {
+        var gone = records.Select(r => r.Text).ToHashSet(StringComparer.Ordinal);
+        int n = TrimKinds(_faceKinds, r => gone.Contains(r.Text));
+        if (n > 0) _faceKindIndex = null;
+        return n;
+    }
+
+    /// <summary>
+    /// 그 조각들(면 하나)의 열쇠만 판 종류 · 면 종류 · 지운 판 · 옮긴 판 기록에서 뺀다(R73b «적을 때 하나만» — 계획 검토 H1 · H2): 붓 칠하기 · 붓 «산출 제외» · 면 ↺ 가 먼저 부른다.
+    /// 판 통째로 되살리지 않는다(같은 기록의 다른 면은 그대로) · 지운 판의 대표 열쇠가 빠지면 남은 첫 열쇠로 다시 이름 짓고 옮긴 줄도 새 열쇠로. 판 자리 · 쪼갬 · 겹침 · 줄 규칙은 그대로(판 일).
+    /// 뺀 열쇠 수(0 = 걸린 기록 없음).
+    /// </summary>
+    public int RemovePatchRecords(IReadOnlyList<(FaceResult face, FacePatch patch)> patches)
+    {
+        bool Hit(DropRecord r) => patches.Any(x => x.face.ElementId == r.Element && r.Matches(x.face, x.patch));
+        int kinds = TrimKinds(_kinds, Hit), faces = TrimKinds(_faceKinds, Hit), drops = 0;
+        if (kinds > 0) _kindIndex = null;
+        if (faces > 0) _faceKindIndex = null;
+        foreach (var (lead, records) in _drops.ToList())
+        {
+            var left = records.Where(r => !Hit(r)).ToList();
+            if (left.Count == records.Count) continue;
+            drops += records.Count - left.Count;
+            _drops.Remove(lead);
+            (string type, string group)? to = _moves.TryGetValue(lead, out var row) ? row : null;
+            _moves.Remove(lead);
+            if (left.Count == 0) continue;
+            string key = left.Any(r => r.Text == lead) ? lead : left[0].Text;   // 대표 열쇠가 빠지면 남은 첫 열쇠(다음에 그 면을 다시 지울 때 같은 열쇠로 덮어쓰지 않게)
+            if (_drops.TryGetValue(key, out var had)) left = had.Concat(left).Distinct().ToList();
+            _drops[key] = left;
+            if (to is { } t) _moves[key] = t;
+        }
+        if (drops > 0) _dropIndex = null;
+        return kinds + faces + drops;
+    }
+
+    // 종류 기록들에서 맞는 열쇠만 뺀다(빈 기록은 지움 · 대표 열쇠는 그대로 — Revit 판 기록이 그 열쇠로 찾는다). 뺀 열쇠 수.
+    private static int TrimKinds(List<KindEntry> kinds, Func<DropRecord, bool> hit)
+    {
+        int n = 0;
+        for (int i = kinds.Count - 1; i >= 0; i--)
+        {
+            var left = kinds[i].Records.Where(r => !hit(r)).ToList();
+            if (left.Count == kinds[i].Records.Count) continue;
+            n += kinds[i].Records.Count - left.Count;
+            if (left.Count == 0) kinds.RemoveAt(i);
+            else kinds[i] = kinds[i] with { Records = left };
+        }
+        return n;
+    }
+
+    /// <summary>
+    /// 쉬는 기록(R73b — 계획 §3.3 · 검토 H4): 모드를 «자동»으로 적었고 사람이 정한 기록이 있다(짝 · 칸은 늘 걸려 세지 않음). [자동 | 사용자] 단추를 걷은 뒤로는
+    /// 이 문 하나로만 묻는다 — 고칠 때 [다시 쓰고 계속] · [지우고 계속] · [취소](FormworkBoard.Wake).
+    /// </summary>
+    public bool Sleeping => _userMode == false && HasRecords;
+
+    /// <summary>
+    /// 사람이 정한 기록을 모두 지운다(R73b «지우고 계속»): 대응표 줄 · 아래 줄 · 지운 판 · 옮긴 판 · 판 종류 · 면 종류 · 판 자리 · 쪼갬 · 겹침. 짝 · 칸(시공 순서표 — 모드와 상관없이 늘 걸림)은 남긴다.
+    /// 지운 뒤 모드 = 사용자로 적는다.
+    /// </summary>
+    public void ClearRecords()
+    {
+        _items.Clear();
+        _drops.Clear();
+        _moves.Clear();
+        _kinds.Clear();
+        _faceKinds.Clear();
+        _places.Clear();
+        _splits.Clear();
+        _joints.Clear();
+        _dropIndex = null;
+        _kindIndex = null;
+        _faceKindIndex = null;
+        _placeIndex = null;
+        _splitIndex = null;
+        _userMode = true;
+    }
+
     // ── R66 — 판마다 지정(JACK 2026-10-27 «모든 면에 대해 거푸집을 먼저 만들고 그다음 지정 · 처음부터 사용자 모드 / 자동 모드») ──
 
     /// <summary>모드 줄(R66): 유형 칸 «모드:» · 면 칸 «사용자» / «자동». 정한 적이 없으면 적지 않는다.</summary>
@@ -358,8 +490,8 @@ public sealed class FormworkRules
     /// <summary>모드를 정한 적이 있는가(모드 줄을 적는다 — 모델 기록의 판 번호 4).</summary>
     public bool ModeSet => _userMode != null;
 
-    /// <summary>사람이 정한 것이 하나라도 있는가(대응표 줄 · 아래 줄 · 지운 판 · 옮긴 판 · 판 종류 · 판 자리 · 판 쪼갬).</summary>
-    public bool HasRecords => _items.Count > 0 || _drops.Count > 0 || _kinds.Count > 0 || _places.Count > 0 || _splits.Count > 0 || _joints.Count > 0;
+    /// <summary>사람이 정한 것이 하나라도 있는가(대응표 줄 · 아래 줄 · 지운 판 · 옮긴 판 · 판 종류 · 면 종류(R73b) · 판 자리 · 판 쪼갬 · 겹침).</summary>
+    public bool HasRecords => _items.Count > 0 || _drops.Count > 0 || _kinds.Count > 0 || _faceKinds.Count > 0 || _places.Count > 0 || _splits.Count > 0 || _joints.Count > 0;
 
     /// <summary>
     /// 판 자리 줄의 머리(R66 — JACK 고름 «엑셀의 부위 줄 + 중분류»): 유형 칸 «판 자리:대표 열쇠» · 면 칸 조각 열쇠 · 종류 칸 부위 · 넷째 칸 중분류 —
@@ -531,7 +663,8 @@ public sealed class FormworkRules
     /// 그 조각들에 맞는 판 기록을 걷는다(R66 — ↺ «자동으로» · [합치기]): 지운 판(맞는 조각이 하나라도 있으면 그 판 통째로 — 옮긴 줄도) · 판 종류 · 판 자리 · 판 쪼갬은
     /// 맞는 조각 열쇠만 빼고 빈 기록은 지운다. 대응표 줄(유형 · 부위 줄)은 건드리지 않는다(판 기록만 — 계획 검토 M1). 걷은 기록 수.
     /// </summary>
-    public int Forget(IReadOnlyList<(FaceResult face, FacePatch patch)> patches, bool drops = true, bool kinds = true, bool places = true, bool splits = true, bool joints = false)
+    /// <param name="faceKinds">면 종류(R73b — 붓)도 그 조각 열쇠만 뺀다(null = kinds 와 같이 — 판 종류를 걷는 자리는 면 종류도: SetKinds · 병합 · ↺).</param>
+    public int Forget(IReadOnlyList<(FaceResult face, FacePatch patch)> patches, bool drops = true, bool kinds = true, bool places = true, bool splits = true, bool joints = false, bool? faceKinds = null)
     {
         bool Hit(DropRecord r) => patches.Any(x => x.face.ElementId == r.Element && r.Matches(x.face, x.patch));
         int n = 0;
@@ -548,6 +681,11 @@ public sealed class FormworkRules
                 else _kinds[i] = _kinds[i] with { Records = left };
                 _kindIndex = null;
             }
+        if (faceKinds ?? kinds)
+        {
+            int trimmed = _faceKinds.Count(k => k.Records.Any(Hit));
+            if (TrimKinds(_faceKinds, Hit) > 0) { n += trimmed; _faceKindIndex = null; }
+        }
         if (places)
             for (int i = _places.Count - 1; i >= 0; i--)
             {
@@ -590,6 +728,8 @@ public sealed class FormworkRules
         foreach (var kv in copy._moves) _moves[kv.Key] = kv.Value;
         _kinds.Clear();
         _kinds.AddRange(copy._kinds);
+        _faceKinds.Clear();
+        _faceKinds.AddRange(copy._faceKinds);
         _places.Clear();
         _places.AddRange(copy._places);
         _splits.Clear();
@@ -603,6 +743,7 @@ public sealed class FormworkRules
         _userMode = copy._userMode;
         _dropIndex = null;
         _kindIndex = null;
+        _faceKindIndex = null;
         _placeIndex = null;
         _splitIndex = null;
     }
@@ -752,14 +893,16 @@ public sealed class FormworkRules
                 if (DropRecord.Parse(cells[1].Trim()) is { } record) rules.AddDrop(cells[0][DropPrefix.Length..], record);
                 continue;
             }
-            if (cells[0].StartsWith(KindPrefix, StringComparison.Ordinal))
+            if (cells[0].StartsWith(KindPrefix, StringComparison.Ordinal) || cells[0].StartsWith(FaceKindPrefix, StringComparison.Ordinal))
             {
-                // 판 종류(R57 P3) — 같은 대표 열쇠의 줄은 처음 나온 자리의 차례로 모은다(나중 것이 이기는 차례 · 모르는 꼴의 열쇠는 버림).
-                string lead = Cell(cells[0][KindPrefix.Length..]).Trim(), item = Cell(cells[2]).Trim();
+                // 판 종류(R57 P3) · 면 종류(R73b) — 같은 대표 열쇠의 줄은 처음 나온 자리의 차례로 모은다(나중 것이 이기는 차례 · 모르는 꼴의 열쇠는 버림).
+                bool face = cells[0].StartsWith(FaceKindPrefix, StringComparison.Ordinal);
+                var list = face ? rules._faceKinds : rules._kinds;
+                string lead = Cell(cells[0][(face ? FaceKindPrefix : KindPrefix).Length..]).Trim(), item = Cell(cells[2]).Trim();
                 if (lead.Length == 0 || item.Length == 0 || DropRecord.Parse(cells[1].Trim()) is not { } record) continue;
-                int at = rules._kinds.FindIndex(k => k.Lead == lead);
-                if (at < 0) rules._kinds.Add(new KindEntry(lead, item, new List<DropRecord> { record }));
-                else if (!rules._kinds[at].Records.Contains(record)) ((List<DropRecord>)rules._kinds[at].Records).Add(record);
+                int at = list.FindIndex(k => k.Lead == lead);
+                if (at < 0) list.Add(new KindEntry(lead, item, new List<DropRecord> { record }));
+                else if (!list[at].Records.Contains(record)) ((List<DropRecord>)list[at].Records).Add(record);
                 continue;
             }
             if (cells[0].StartsWith(MovePrefix, StringComparison.Ordinal))
@@ -857,6 +1000,12 @@ public sealed class FormworkRules
                 if (merged._kinds.FirstOrDefault(k => k.Lead == kind.Lead) is { } had && (had.Item != kind.Item || !had.Records.SequenceEqual(kind.Records))) conflicts++;
                 merged.SetKind(kind.Lead, kind.Item, kind.Records);
             }
+            // 면 종류(R73b): 판 종류와 같이 — 나중 벌의 것이 맨 뒤.
+            foreach (var kind in copy._faceKinds)
+            {
+                if (merged._faceKinds.FirstOrDefault(k => k.Lead == kind.Lead) is { } had && (had.Item != kind.Item || !had.Records.SequenceEqual(kind.Records))) conflicts++;
+                merged.SetFaceKind(kind.Lead, kind.Item, kind.Records);
+            }
             // 판 자리 · 판 쪼갬 · 모드(R66): 나중 벌의 것이 이긴다.
             foreach (var place in copy._places)
             {
@@ -907,6 +1056,7 @@ public sealed class FormworkRules
         if (_drops.Count > 0) sb.Append("# «뺀 판:» 줄 = ② 3D 에서 뺀 판의 조각(부재 Id|법선 x|y|z|평면 자리|조각 안의 점 x|y|z|넓이).\n");
         if (Moves.Any()) sb.Append("# «옮긴 판:» 줄 = 지운 판을 옮긴 대응표 줄(유형 · 면).\n");
         if (_kinds.Count > 0) sb.Append("# «판 종류:» 줄 = 판 한 장의 종류(② 사용자 모드 · Revit 판의 종류 칸)를 정한 판의 조각(나중 줄이 이긴다).\n");
+        if (_faceKinds.Count > 0) sb.Append("# «면 종류:» 줄 = ② 붓으로 칠한 면의 조각과 종류(나중 줄이 이긴다 · 지운 판 다음 · 판 종류보다 앞).\n");
         if (_places.Count > 0) sb.Append("# «판 자리:» 줄 = 판 한 장의 엑셀 부위 줄 · 중분류(넷째 칸)를 바꾼 판의 조각.\n");
         if (_splits.Count > 0) sb.Append("# «판 쪼갬:» 줄 = 부재마다 나눈 판의 조각.\n");
         if (_joints.Count > 0) sb.Append("# «겹침:» 줄 = 면(부재 Id|법선 x|y|z|평면 자리)에서 그 이웃(면 칸)이 덮은 자리를 무시 / 공제.\n");
@@ -924,6 +1074,9 @@ public sealed class FormworkRules
         foreach (var kind in _kinds)
             foreach (var record in kind.Records)
                 sb.Append(KindPrefix).Append(kind.Lead).Append('\t').Append(record.Text).Append('\t').Append(kind.Item).Append('\n');
+        foreach (var kind in _faceKinds)
+            foreach (var record in kind.Records)
+                sb.Append(FaceKindPrefix).Append(kind.Lead).Append('\t').Append(record.Text).Append('\t').Append(kind.Item).Append('\n');
         foreach (var place in _places)
             foreach (var record in place.Records)
                 sb.Append(PlacePrefix).Append(place.Lead).Append('\t').Append(record.Text).Append('\t').Append(place.Part).Append('\t').Append(place.Zone).Append('\n');

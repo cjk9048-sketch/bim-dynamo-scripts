@@ -147,7 +147,7 @@ public static class FormworkAnalyzer
         // R53a 녹촌 «이어진 옆면의 아래 끝부터»: 하부슬래브 옆면을 먼저 재어 그 위 벽 · 지붕 옆이 하부슬래브 밑부터 재지게 — core-verify R53 계획 H1).
         // 결과의 차례는 받은 부재의 차례 그대로다(엑셀 줄의 '처음 나온 차례'가 바뀌지 않게).
         var analyzed = new Dictionary<FormworkElement, ElementFormwork>(ReferenceEqualityComparer.Instance);
-        int risers = 0;
+        int risers = 0, mergedFaces = 0;
         var order = elements.Where(e => e.Target)                     // 주변 콘크리트로만 쓰는 부재는 재지 않는다
             .Select((e, i) => (e, i))
             .OrderBy(x => all.Bodies.Where(b => ReferenceEquals(b.El, x.e)).Select(b => b.Min.Z).DefaultIfEmpty(0).Min())
@@ -157,13 +157,18 @@ public static class FormworkAnalyzer
         {
             var (ctx, gone) = ContextOf(el);
             var ef = new ElementFormwork { Element = el };
+            var sources = new List<FaceInfo>();
             foreach (var body in ctx.Bodies.Where(b => ReferenceEquals(b.El, el)))
             {
                 var holeEdges = HoleEdgeFaces(body);
                 for (int f = 0; f < body.Faces.Count; f++)
+                {
                     ef.Faces.Add(AnalyzeFace(ctx, body, f, holeEdges.Contains(f), gone));
+                    sources.Add(body.Faces[f]);
+                }
             }
             if (el.Risers.Count > 0) risers += CountRisers(ef);
+            mergedFaces += MergeSplitFaces(ef, sources);
             analyzed[el] = ef;
         }
         var results = elements.Where(e => e.Target).Select(e => analyzed[e]).ToList();
@@ -171,6 +176,7 @@ public static class FormworkAnalyzer
         LastSlabBands = all.SlabBands;
         foreach (var ef in analyzed.Values) ef.SlabBands = all.SlabBands.Where(x => x.ElementId == ef.Element.Id).ToList();
         LastRisers = risers;
+        LastMergedFaces = mergedFaces;
         // 수직면 덩어리를 묶어 둔다(형상만으로 — 대응표와 상관없다 · R49).
         GroupVerticals(results, all.Options);
         // 종류는 부재 전체를 본 뒤에 붙인다: 조각마다 대응표 → 덩어리는 다스리는 조각을 따름 → 3D 에서 뺀 판을 덮음.
@@ -261,6 +267,141 @@ public static class FormworkAnalyzer
 
     /// <summary>마지막으로 잴 때 센 계단 챌면 조각 수(R65 · R70 — 일지).</summary>
     public static int LastRisers { get; private set; }
+
+    /// <summary>마지막으로 잴 때 한 면으로 합친 원본 면 수(R73b — 일지 · MergeSplitFaces).</summary>
+    public static int LastMergedFaces { get; private set; }
+
+    /// <summary>시험이 합치기 전과 견줄 때만 끈다(R73b).</summary>
+    internal static bool MergeSplit = true;
+
+    /// <summary>한 면으로 볼 평면 거리 여유(m — R73b · 1 mm).</summary>
+    public const double SplitPlaneGap = 0.001;
+
+    // 맞닿았다고 보는 잣대(R73b): 한쪽 면을 1 mm 부풀려 다른 면과 겹친 넓이가 1 mm × 5 mm 넘음 = 변을 5 mm 넘게 나눔(귀퉁이만 닿은 것은 아님).
+    private const double SplitGrow = 0.001;
+    private const double SplitTouch = SplitGrow * 0.005;
+
+    /// <summary>
+    /// 한 평면을 여러 면으로 준 원본을 한 면으로(R73b — JACK 2026-11-03 «계단 옆면처럼 그런 경우의 원인을 찾아서 쪼개지지 않게 해줘 · 비단 계단만 그런 일이
+    /// 벌어지진 않을 거잖아»). 원인(계측 — 실제 모델 둘의 모든 부재): Revit 계단은 단 · 참마다 입체가 따로라 같은 옆면이 단마다 다른 면으로 온다
+    /// (계단에서만 — 벽 · 슬래브 · 보 · 기둥 · 기초는 없음). 같은 일은 여러 입체로 그린 패밀리 · Revit «면 분할»에서도 생긴다 — 그래서 계단만 보지 않고
+    /// 같은 부재 · 같은 갈래 · 같은 바깥 법선 · 같은 평면(1 mm) · 변을 나눈(맞닿은) 면은 모두 한 면으로 합친다(입체가 같든 다르든).
+    /// 조각은 원본 면마다 잰 그대로 옮긴다 — 넓이 · 엑셀 줄 · 기록 열쇠(조각 모양)가 그대로다. 면의 넓이 값은 더하고 · 이웃별 맞닿은 자리는 이웃마다 합친다.
+    /// 대표 = 차례가 가장 앞인 면(Solid · Face · FaceId) · 나머지는 Merged 에. 곡면은 합치지 않는다. 돌려주는 값 = 합쳐 없어진 면 수.
+    /// </summary>
+    private static int MergeSplitFaces(ElementFormwork ef, List<FaceInfo> sources)
+    {
+        int n = ef.Faces.Count;
+        if (!MergeSplit || n < 2 || sources.Count != n) return 0;
+        var parent = Enumerable.Range(0, n).ToArray();
+        int Root(int i) { while (parent[i] != i) i = parent[i] = parent[parent[i]]; return i; }
+        for (int i = 0; i < n; i++)
+        {
+            var a = ef.Faces[i];
+            var ia = sources[i];
+            if (a.Normal.Length != 3 || ia.Frame == null || ia.Paths == null) continue;
+            Paths64? grown = null;
+            for (int j = i + 1; j < n; j++)
+            {
+                var b = ef.Faces[j];
+                var ib = sources[j];
+                if (b.Normal.Length != 3 || ib.Frame == null || b.Class != a.Class || Root(i) == Root(j)) continue;
+                if (a.Normal[0] * b.Normal[0] + a.Normal[1] * b.Normal[1] + a.Normal[2] * b.Normal[2] < 1 - 1e-6 || Math.Abs(a.PlaneD - b.PlaneD) > SplitPlaneGap) continue;
+                if (Apart(ia.Min, ia.Max, ib.Min, ib.Max, SplitGrow + SplitPlaneGap)) continue;
+                var pb = Section.FacePaths(ib.Face, ia.Frame);
+                if (pb == null) continue;
+                grown ??= Clipper.InflatePaths(ia.Paths, SplitGrow * Poly.Scale, JoinType.Miter, EndType.Polygon);
+                if (Poly.Area(Poly.Intersect(grown, pb)) >= SplitTouch) parent[Root(j)] = Root(i);
+            }
+        }
+        int gone = 0;
+        var keep = new List<FaceResult>(n);
+        var groups = Enumerable.Range(0, n).GroupBy(Root).ToDictionary(g => g.Key, g => g.OrderBy(i => i).ToList());
+        for (int i = 0; i < n; i++)
+        {
+            var group = groups[Root(i)];
+            if (group[0] != i) continue;
+            var lead = ef.Faces[i];
+            keep.Add(lead);
+            if (group.Count == 1) continue;
+            var frame = sources[i].Frame!;
+            var others = group.Skip(1).Select(k => ef.Faces[k]).ToList();
+            var sourceCovered = new Dictionary<FacePatch, double>(ReferenceEqualityComparer.Instance);
+            foreach (var f in group.Select(k => ef.Faces[k])) foreach (var p in f.Patches) sourceCovered[p] = f.Covered;
+            // 면 다각형 넓이 = 원본 면을 합친 모양(포갠 원본 면 — 계단 디딤 윗면 — 을 두 번 세지 않게 · 설치 전 검토 중간). Revit 넓이도 같은 몫만큼.
+            var union = Poly.Normalize(sources[i].Paths!);
+            bool whole = true;
+            foreach (int k in group.Skip(1)) { var pk = Section.FacePaths(sources[k].Face, frame); if (pk == null) { whole = false; break; } union = Poly.Union(union, pk); }
+            double polygonSum = group.Sum(k => ef.Faces[k].Polygon);
+            foreach (var b in others)
+            {
+                lead.Merged.Add((b.Solid, b.Face));
+                lead.Patches.AddRange(b.Patches);
+                lead.Gross += b.Gross; lead.Polygon += b.Polygon; lead.Covered += b.Covered; lead.Shared += b.Shared;
+                lead.StairCovered += b.StairCovered; lead.LaterCovered += b.LaterCovered; lead.Net += b.Net; lead.Restored += b.Restored;
+                lead.ZMin = Math.Min(lead.ZMin, b.ZMin); lead.ZMax = Math.Max(lead.ZMax, b.ZMax);
+                if (b.Flag.Length > 0 && !lead.Flag.Contains(b.Flag, StringComparison.Ordinal)) lead.Flag = lead.Flag.Length == 0 ? b.Flag : lead.Flag + " · " + b.Flag;
+            }
+            lead.SourceCovered = sourceCovered;
+            if (whole)
+            {
+                double overlap = Math.Max(0, polygonSum - Poly.Area(union));
+                // 포갠 몫은 한쪽 원본 면에서 «포개진 자리»(Shared)로 빠졌다 — 그만큼 Shared 도 빼야 Polygon + Restored = Covered + Shared + Net 이 그대로다.
+                double fromShared = Math.Min(overlap, lead.Shared);
+                lead.Polygon -= fromShared;
+                lead.Shared -= fromShared;
+                lead.Gross = Math.Max(0, lead.Gross - fromShared);
+            }
+            lead.Covers = JoinCovers(frame, group.Select(k => ef.Faces[k].Covers));
+            lead.Cut = JoinCovers(frame, group.Select(k => ef.Faces[k].Cut));
+            lead.Ignored = JoinCovers(frame, group.Select(k => ef.Faces[k].Ignored));
+            lead.Absent = JoinCovers(frame, group.Select(k => ef.Faces[k].Absent));
+            gone += others.Count;
+        }
+        if (gone > 0) ef.Faces = keep;
+        return gone;
+    }
+
+    // 면마다의 이웃별 자리를 이웃마다 하나로(R73b): 넓이는 더하고 · 모양은 면 평면에서 합친다(맞닿은 두 면에 걸친 이웃 자리 = 빗금 한 덩이 · 이음매 1 mm 안 틈은 메움).
+    private static List<FaceCover> JoinCovers(Frame frame, IEnumerable<List<FaceCover>> lists)
+    {
+        var all = lists.SelectMany(l => l).ToList();
+        if (all.Count == 0) return new List<FaceCover>();
+        const double Seal = 0.0005 * Poly.Scale;
+        var result = new List<FaceCover>();
+        foreach (var g in all.GroupBy(c => c.ElementId))
+        {
+            var items = g.ToList();
+            double area = items.Sum(c => c.Area);
+            List<List<double[]>> outline;
+            if (items.Count == 1) outline = items[0].Outline;
+            else
+            {
+                var paths = new Paths64();
+                double each = 0;
+                foreach (var c in items)
+                {
+                    var rings = new Paths64();
+                    foreach (var ring in c.Outline.Where(r => r.Count >= 3))
+                    {
+                        var path = new Path64(ring.Count);
+                        foreach (var q in ring) { var (u, v) = frame.To2D(V3.Of(q)); path.Add(Poly.P(u, v)); }
+                        rings.Add(path);
+                    }
+                    if (rings.Count > 0) { var one = Poly.Normalize(rings); each += Poly.Area(one); paths.AddRange(one); }
+                }
+                var merged = Clipper.Union(paths, FillRule.NonZero);
+                // 원본 면끼리 포갠 자리(계단 디딤 윗면 — 입체 둘이 같은 윗면을 나눠 가짐)는 한 번만: 포갠 넓이(따로 잰 모양 합 − 합친 모양)만 뺀다
+                // (모양을 다시 0.1 mm 로 맞춘 넓이로 바꾸면 가는 띠는 0.5 % 넘게 달라진다).
+                if (items.All(c => c.Outline.Any(r => r.Count >= 3))) area -= Math.Max(0, each - Poly.Area(merged));
+                merged = Clipper.InflatePaths(merged, Seal, JoinType.Miter, EndType.Polygon);
+                merged = Clipper.InflatePaths(merged, -Seal, JoinType.Miter, EndType.Polygon);
+                outline = OutlineOf(frame, merged);   // 다듬지 않음(SimplifyPaths 는 가는 띠의 넓이를 0.5 % 넘게 바꾼다)
+            }
+            result.Add(new FaceCover { ElementId = g.Key, Area = area, Outline = outline });
+        }
+        return result.OrderByDescending(c => c.Area).ToList();
+    }
 
     // 계단 챌면 조각 수(일지만): 계단(Risers 가 있는 부재)의 세로 옆면 조각 가운데 높이가 어느 런의 챌면(±1 cm)이고 폭이 그 런 폭 + 1 cm 이하 · 5 cm 이상이고
     // 네모(넓이 = 높이 × 폭 ±2 %)인 것. R65 는 이것을 세지 않았으나 R70(기준표 12 — 대자 · 명장 · 배수지 · 김포 다수 «챌면 = 폭 × 단 높이 × 단 수» · 녹촌도 센 것으로
@@ -556,6 +697,7 @@ public static class FormworkAnalyzer
                 foreach (var patch in face.Patches)
                 {
                     OverlayKind(options, face, patch);
+                    OverlayFaceKind(options, face, patch);   // R73b: 면 종류 > 판 종류(목록 차례와 상관없는 고정 차례 — 지운 판 > 면 종류 > 판 종류 > 줄 규칙 > 자동)
                     OverlayDrop(options, face, patch);
                     OverlayPlate(options, face, patch);
                 }
@@ -588,6 +730,24 @@ public static class FormworkAnalyzer
         patch.Note = PlateKindNote;
     }
 
+    /// <summary>붓으로 칠한 조각의 까닭(R73b).</summary>
+    public const string FaceKindNote = "면마다 정함";
+
+    // ② 붓으로 칠한 면(R73b — 계획 §3.2): 판 종류와 같은 잣대(형상이 세는 조각 · 아래가 빈 밑면)로 그 종류로 센다 — 판 종류 뒤라 판 종류를 덮고, 지운 판(OverlayDrop)이 이것을 덮는다.
+    // 걸기 전 값(FaceKindBase)은 판 종류도 걸기 전 값(↺ 의 «처음 값» · 옮긴 판 다수결 — 계획 §3.2 표).
+    private static void OverlayFaceKind(FormworkOptions options, FaceResult face, FacePatch patch)
+    {
+        if (options.ActiveRules is not { FaceKindCount: > 0 } rules) return;
+        bool raw = (patch.Unruled?.Counted ?? patch.Counted) || patch.Below == Below.Floating;
+        if (!raw || rules.FaceKindOf(face, patch) is not { } kind) return;
+        patch.FaceKindBase = patch.KindLead.Length > 0 ? patch.KindBase : patch.Counted ? patch.Item : "";
+        patch.FaceKindLead = kind.lead;
+        patch.Counted = true;
+        patch.Decided = true;
+        patch.Item = kind.item;
+        patch.Note = FaceKindNote;
+    }
+
     /// <summary>옮긴 판의 조각에 적는 까닭 — 옮긴 줄이 없어져(부위 이름이 바뀜 · 줄이 가려짐) 지운 판으로 돌아간 것(R55b — 계획 검토 M4).</summary>
     public const string OrphanNote = "옮길 줄이 없어짐 — 지운 판";
 
@@ -614,7 +774,8 @@ public static class FormworkAnalyzer
             present.Add(row);
             // 판 종류 조각(R57 P3)은 판 종류를 걸기 전 종류(KindBase)로 다수결에 든다 — 판 하나의 종류가 옮긴 다른 판에 번지지 않고(계획 검토 M3),
             // 판 종류만 남은 줄로 옮긴 판도 그 줄 본래 종류로 센다(P3 검토 중간 3). 걸기 전에 세지 않던 조각(KindBase "")은 넣지 않는다.
-            string item = k.Patch.KindLead.Length > 0 ? k.Patch.KindBase : k.Patch.Item;
+            // R73b: 칠한 면도 걸기 전 값으로(FaceKindBase — 판 종류도 걸기 전).
+            string item = k.Patch.FaceKindLead.Length > 0 ? k.Patch.FaceKindBase : k.Patch.KindLead.Length > 0 ? k.Patch.KindBase : k.Patch.Item;
             if (!k.Patch.Counted || item.Length == 0) continue;
             bool down = DownFlat(k.Face);
             Add(byDir, (row, down), item, k.Patch.Area);
@@ -634,11 +795,11 @@ public static class FormworkAnalyzer
                 patch.BeforeMove = "";
                 continue;
             }
-            if (patch.KindLead.Length > 0)
+            if (patch.KindLead.Length > 0 || patch.FaceKindLead.Length > 0)
             {
-                // 판 종류가 든 판(R57 P3): 줄만 옮기고 종류는 판의 것 · 옮긴 줄이 «세지 않음»이어도 센다(판 > 줄 — 다시 검토 낮음 5).
+                // 판 종류가 든 판(R57 P3) · 칠한 면(R73b): 줄만 옮기고 종류는 판 · 면의 것 · 옮긴 줄이 «세지 않음»이어도 센다(판 > 줄 — 다시 검토 낮음 5).
                 patch.Counted = true;
-                patch.Note = PlateKindNote;
+                patch.Note = patch.FaceKindLead.Length > 0 ? FaceKindNote : PlateKindNote;
                 continue;
             }
             string? human = options.ActiveRules?.Lookup(to.type, to.group);
@@ -806,6 +967,7 @@ public static class FormworkAnalyzer
                     patch.DropLead = "";
                     (patch.MovedTo, patch.MoveLead, patch.BeforeMove) = (null, "", "");   // 옮긴 판도 대응표를 다시 걸 때 다시 정한다(계획 검토 M1)
                     (patch.KindLead, patch.KindBase) = ("", "");                          // 판 종류도(R57 P3)
+                    (patch.FaceKindLead, patch.FaceKindBase) = ("", "");                  // 면 종류도(R73b)
                     (patch.PlaceLead, patch.Place, patch.SplitLead) = ("", null, "");     // 판 자리 · 판 쪼갬도(R66)
                 }
         }
@@ -1060,15 +1222,26 @@ public static class FormworkAnalyzer
         {
             var laterCover = new Paths64();
             var stairCover = new Paths64();
+            var absentAt = new Dictionary<long, Paths64>();   // R73b: 나중에 치는 이웃마다 닿은 자리 모양(FaceResult.Absent — ② 빗금)
             foreach (var other in later)
             {
                 if (Apart(info.Min, info.Max, other.Min, other.Max, o.Epsilon + Section.Merge)) continue;
                 var cut = (other.Planar ? Section.Cut(other.Solid, outside) : null) ?? FacingFaces(other, frame, info, o.Epsilon);
                 if (cut.Count == 0) continue;
                 var hit = Poly.Intersect(paths, cut);
-                if (!other.El.Later && IsStair(other.El, o)) { if (!down) stairCover = Poly.Union(stairCover, hit); }
+                if (!other.El.Later && IsStair(other.El, o)) { if (!down) stairCover = Poly.Union(stairCover, hit); else continue; }
                 else laterCover = Poly.Union(laterCover, hit);
+                if (other.El.Id != body.El.Id && Poly.Area(hit) >= Tiny) Gather(absentAt, other.El.Id, hit);
             }
+            // R73b(JACK 2026-11-03 «헌치에 붙은 계단처럼 아예 닿는 게 아니라 겹쳐지는 건 표현이 안 돼 · 헌치 부분에 표현이 돼야 되는데»): 시공 순서로 빠진 이웃(헌치를 잴 때의 계단 ·
+            // 구조체를 잴 때의 받침 …)이 닿은 · 파고든 자리 — 거푸집으로 센다(다른 이웃이 이미 덮은 자리는 뺌). 보기 · [공제](시공 순서 짝 예외)만 쓴다 — 수량은 그대로.
+            foreach (var (id, region) in absentAt)
+            {
+                var left = cover.Count > 0 ? Poly.Difference(region, cover) : region;
+                double area = Poly.Area(left);
+                if (area >= Tiny) result.Absent.Add(new FaceCover { ElementId = id, Area = area, Outline = OutlineOf(frame, left) });
+            }
+            result.Absent.Sort((a, b) => b.Area.CompareTo(a.Area));
             if (laterCover.Count > 0) result.LaterCovered = Poly.Area(cover.Count > 0 ? Poly.Difference(laterCover, cover) : laterCover);
             if (stairCover.Count > 0)
             {

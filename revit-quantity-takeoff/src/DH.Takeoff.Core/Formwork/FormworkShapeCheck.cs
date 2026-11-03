@@ -123,7 +123,7 @@ public static class FormworkShapeCheck
         }
 
         // 작은 판: 이웃이 덮고 남은 부스러기만(면의 일부를 콘크리트가 덮음 · 받침류 아님).
-        if (plate.Area < SmallArea && plate.Members.Any(m => m.Face.Covered > 1e-6 && !FormworkTable.IsSmallPart(m.Result.Element.Type)))
+        if (plate.Area < SmallArea && plate.Members.Any(m => m.Face.CoveredFor(m.Patch) > 1e-6 && !FormworkTable.IsSmallPart(m.Result.Element.Type)))
             found.Add(new Finding(Test.Small, FormattableString.Invariant($"{plate.Area:0.###} ㎡"), outline));
 
         // 섞임(정보): 부위 둘 이상 · 덩어리를 따라 제 사슬과 다른 종류를 받은 조각(사람 값 · Revit 판 종류는 아님).
@@ -150,7 +150,7 @@ public static class FormworkShapeCheck
 
     /// <summary>덩어리를 따라 종류를 받은 조각인가(FollowGroups 가 다스리는 조각의 종류를 준 것 — 제 사슬의 종류와 다름 · 사람 값 · Revit 판 종류가 아님).</summary>
     internal static bool Inherited(FacePatch patch) =>
-        patch.Follow is { } follow && patch.Item == follow && patch.Own is { } own && own.Item != follow && patch.KindLead.Length == 0;
+        patch.Follow is { } follow && patch.Item == follow && patch.Own is { } own && own.Item != follow && patch.KindLead.Length == 0 && patch.FaceKindLead.Length == 0;
 
     // 반폭 d(m) 만큼 늘이기(−면 줄이기) — 모서리는 뾰족하게(직각 오목 귀가 닫기 · 열기에 그대로 남게).
     private static Paths64 Grow(Paths64 paths, double d) => Clipper.InflatePaths(paths, d * Poly.Scale, JoinType.Miter, EndType.Polygon);

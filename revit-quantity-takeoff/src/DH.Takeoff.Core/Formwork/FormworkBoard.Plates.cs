@@ -16,6 +16,36 @@ public sealed partial class FormworkBoard
     /// <summary>마지막으로 고친 일이 자동 모드를 사용자 모드로 바꿨는가(화면이 알린다).</summary>
     public bool ModeSwitched { get; private set; }
 
+    /// <summary>
+    /// 마지막 고침이 쉬는 기록(R73b — FormworkRules.Sleeping) 때문에 아무것도 하지 않았는가: 화면이 [다시 쓰고 계속] · [지우고 계속] · [취소]를 묻고 Wake 뒤 다시 한다(계획 §3.3 · 검토 H4).
+    /// </summary>
+    public bool NeedsDecision { get; private set; }
+
+    /// <summary>쉬는 기록이 있는가(R73b — 모드를 «자동»으로 적었고 사람이 정한 기록이 있음 · 고치면 먼저 묻는다).</summary>
+    public bool Sleeping => Rules.Sleeping;
+
+    // 고치기 전의 문(R73b): 쉬는 기록이면 아무것도 바꾸지 않고 «정해야 함» — EnsureUser 로 말없이 사용자로 바꾸면 쉬던 기록이 한꺼번에 걸린다.
+    private bool Blocked()
+    {
+        NeedsDecision = Rules.Sleeping;
+        return NeedsDecision;
+    }
+
+    /// <summary>
+    /// 쉬는 기록을 정한다(R73b 세 갈래 창): keep = [다시 쓰고 계속](모드를 사용자로 — 기록이 다시 걸림) · 아니면 [지우고 계속](기록을 지움 — 짝 · 칸은 남김 · FormworkRules.ClearRecords).
+    /// 다시 센다. 쉬는 기록이 아니면 아무 일 없음(false). 부르는 쪽이 먼저 Snapshot 을 떠 두고 고침과 함께 되돌리기 한 줄 · 저장 한 번.
+    /// </summary>
+    public bool Wake(bool keep)
+    {
+        NeedsDecision = false;
+        if (!Rules.Sleeping) return false;
+        if (keep) Rules.UserMode = true;
+        else Rules.ClearRecords();
+        Reclassify();
+        Refresh();
+        return true;
+    }
+
     // 고치기 전에: 자동 모드면 사용자 모드로. 바꿨으면 true.
     private bool EnsureUser()
     {
@@ -27,6 +57,9 @@ public sealed partial class FormworkBoard
         Rules.UserMode = true;
         return true;
     }
+
+    /// <summary>MergePlates 가 쉬는 기록 때문에 하지 않았을 때 돌려주는 까닭(R73b — 화면은 NeedsDecision 을 보고 묻는다).</summary>
+    public const string NeedsDecisionText = "쓰지 않는 직접 정한 기록이 있습니다";
 
     /// <summary>모드를 바꾼다(기록은 그대로 — 자동이면 걸지 않음). 바뀌었으면 true(다시 센다).</summary>
     public bool SetMode(bool user)
@@ -63,12 +96,12 @@ public sealed partial class FormworkBoard
 
     /// <summary>사람이 판마다 정한 기록이 든 판인가(R66 «직접» — 지운 판 · 옮긴 판 · 판 종류 · 판 자리 · 판 쪼갬). 대응표 줄의 값은 아니다(RowRuled).</summary>
     public static bool Direct(FormworkPiece piece) =>
-        piece.Dropped || piece.Patches.Any(p => p.MoveLead.Length > 0 || p.KindLead.Length > 0 || p.PlaceLead.Length > 0 || p.SplitLead.Length > 0);
+        piece.Dropped || piece.Patches.Any(p => p.MoveLead.Length > 0 || p.KindLead.Length > 0 || p.FaceKindLead.Length > 0 || p.PlaceLead.Length > 0 || p.SplitLead.Length > 0);
 
     /// <summary>판의 종류를 대응표 줄(유형 · 부위 줄 · 아래 줄)의 사람 값이 정하는가(사용자 모드 · 판 기록이 없는 판 — 계획 검토 M1 «줄 규칙으로»).</summary>
     public bool RowRuled(FormworkPiece piece)
     {
-        if (Options.ActiveRules is not { Count: > 0 } rules || piece.Dropped || piece.Members.Count == 0 || piece.KindLead.Length > 0) return false;
+        if (Options.ActiveRules is not { Count: > 0 } rules || piece.Dropped || piece.Members.Count == 0 || piece.KindLead.Length > 0 || piece.LeadMember.Patch.FaceKindLead.Length > 0) return false;
         var lead = piece.LeadMember;
         return FormworkAnalyzer.HumanRule(rules, lead.Result.Element, lead.Group, lead.Patch.Sub) != null;
     }
@@ -84,7 +117,7 @@ public sealed partial class FormworkBoard
     public int SetKinds(IReadOnlyList<FormworkPiece> pieces, string item)
     {
         string value = (item ?? "").Trim();
-        if (value.Length == 0 || value == FormworkRules.NotCounted) return 0;
+        if (value.Length == 0 || value == FormworkRules.NotCounted || Blocked()) return 0;
         string before = Snapshot();
         bool switched = EnsureUser();
         var leads = new List<(string lead, List<DropRecord> records, FormworkPiece piece)>();
@@ -104,6 +137,7 @@ public sealed partial class FormworkBoard
     /// <summary>고른 판들을 세지 않는다(지운 판 — 판마다 한 기록 · 옮긴 판은 옮긴 줄만 걷음). 지운 판 수 · 듣지 않은 판의 기록은 걷는다(L3).</summary>
     public int DropPlates(IReadOnlyList<FormworkPiece> pieces)
     {
+        if (Blocked()) return 0;
         string before = Snapshot();
         bool switched = EnsureUser();
         var leads = new List<(string lead, bool moved, FormworkPiece piece)>();
@@ -123,6 +157,7 @@ public sealed partial class FormworkBoard
     /// <summary>고른 판들을 자동으로(↺ — 그 판의 판 기록을 모두 걷음 · 대응표 줄은 그대로). 걷은 기록이 있는 판 수.</summary>
     public int AutoPlates(IReadOnlyList<FormworkPiece> pieces)
     {
+        if (Blocked()) return 0;
         string before = Snapshot();
         if (Rules.UserMode && !Rules.ModeSet) Rules.UserMode = true;   // 기록으로 짐작한 사용자 모드를 적어 둔다 — 마지막 기록을 걷어도 «자동»으로 넘어가지 않게(설치 전 검토 L1)
         int n = pieces.Where(p => p.Members.Count > 0).Distinct().Count(piece => Rules.Forget(FacesOf(piece), joints: true) > 0);   // ↺ 만 «겹침» 기록도 걷는다(R67)
@@ -132,6 +167,7 @@ public sealed partial class FormworkBoard
     /// <summary>고른 판들을 부재마다 나눈다(든 부재가 둘 이상인 판만). 나눈 판 수(나뉘지 않은 판은 기록을 되돌린다).</summary>
     public int SplitPlates(IReadOnlyList<FormworkPiece> pieces)
     {
+        if (Blocked()) return 0;
         string before = Snapshot();
         bool switched = EnsureUser();
         var split = new List<(string lead, List<DropRecord> records)>();
@@ -167,6 +203,7 @@ public sealed partial class FormworkBoard
     {
         var plates = pieces.Where(p => p.Plate != null && !p.Dropped && p.Members.Count > 0).Distinct().ToList();
         if (plates.Count < 2) return "판을 두 장 이상 고르세요";
+        if (Blocked()) return NeedsDecisionText;
         var wide = plates.OrderByDescending(p => p.Area).ThenBy(p => p.Result.Element.Id).First();
         var wideRecords = RecordsOf(wide);
         var widePlace = wide.Patches.Select(p => p.Place).FirstOrDefault(x => x != null);
@@ -235,6 +272,7 @@ public sealed partial class FormworkBoard
     /// </summary>
     public int PlacePlates(IReadOnlyList<FormworkPiece> pieces, string part, string zone)
     {
+        if (Blocked()) return 0;
         string before = Snapshot();
         bool clear = (part ?? "").Trim().Length == 0 && (zone ?? "").Trim().Length == 0;
         var plates = pieces.Where(p => p.Plate != null && !p.Dropped && p.Members.Count > 0).Distinct().ToList();
