@@ -12,9 +12,10 @@ namespace DH.Grading.Core;
 /// </list></summary>
 public static class TerrainMesh
 {
-    public enum Cls : byte { Ground, Plan, Bench, SlopeCut, SlopeFill, WallZone, WallFace, Other }
-    public static readonly string[] Keys = { "ground", "plan", "bench", "slopeCut", "slopeFill", "wallZone", "wallFace", "other" };
-    public static readonly string[] Names = { "원지반", "계획면", "소단", "사면(절토)", "사면(성토)", "옹벽 자리", "옹벽 면", "정지" };
+    /// <summary>★[v111.8 · 계획_v111_8.md 6장 · JACK 1102 «차로 = 아스팔트 · 길어깨 = 콘크리트»] 진입도로 구분 둘(차로 · 길어깨)은 <b>맨 끝</b>에 — 옛 번호 그대로(옛 뷰어 · S175 옛 답).</summary>
+    public enum Cls : byte { Ground, Plan, Bench, SlopeCut, SlopeFill, WallZone, WallFace, Other, Road, Shoulder }
+    public static readonly string[] Keys = { "ground", "plan", "bench", "slopeCut", "slopeFill", "wallZone", "wallFace", "other", "road", "shoulder" };
+    public static readonly string[] Names = { "원지반", "계획면", "소단", "사면(절토)", "사면(성토)", "옹벽 자리", "옹벽 면", "정지", "진입도로", "길어깨" };
 
     public sealed class Input
     {
@@ -28,6 +29,19 @@ public static class TerrainMesh
         /// <summary>가파름 — 세모 법선 |nz|가 이보다 작으면(약 65° 넘게 섬) 옹벽 면 후보.</summary>
         public double SteepNz = 0.42;
         public double Cell = 2.0;
+        /// <summary>★[v111.8] 진입도로 자리 — 도로마다 넓힌 발자국(F ⊕ ε · 이음 띠 포함)의 합. null = 도로 없음(옛 규칙 그대로).
+        /// 무게중심이 이 안이면 부지 다각형보다 먼저 가른다: 포장(<see cref="RoadPave"/>) → 차로(<see cref="RoadLane"/>) / 길어깨 · 그 밖 = 원지반 그대로 → 옹벽 자리(가파름) → 소단(<see cref="RoadBench"/> 띠 안 · 없으면 거의 평평) → 사면(절/성 — <see cref="BaseZ"/> 기준).</summary>
+        public Geometry? RoadArea;
+        /// <summary>★[v111.8] 설계 포장(차로 + 길어깨 — 노선에서) · 차로만(차로 끝까지). 차로가 null이면 포장 전체가 «진입도로».</summary>
+        public Geometry? RoadPave, RoadLane;
+        /// <summary>★[v111.8] 정지면 높이(도로 사면 절/성 가름 — 무게중심 높이 ≥ 이것이면 성토) · null이면 원지반으로.</summary>
+        public Func<double, double, double?>? BaseZ;
+        /// <summary>★[v111.8] 도로 자리 «소단» — 경사(높이/수평)가 이보다 작으면(1:10). <see cref="RoadBench"/>가 없을 때만(옛 규칙).</summary>
+        public double BenchSlope = 0.1;
+        /// <summary>★★[v111.8.1 · JACK 1103 «진입도로의 소단이 안 보여»] 도로 엔진의 소단 띠(<see cref="RoadBenches.Strips"/> — 계단선 짝 사이 횡단으로 평평한 띠).
+        /// 있으면(비어 있어도) 도로 자리 소단은 이 띠 안만 — 도로 소단은 종단 경사(최대 24.9 % 실측)를 따라가 기울기로는 못 가른다.
+        /// 또 이 규칙에서는 도로 자리 안이라도 세 점 모두 정지면(<see cref="BaseZ"/>) 그대로인 세모(이음 띠 · 부지 계획면)는 부지 규칙으로 간다. null = 옛 규칙 그대로.</summary>
+        public Geometry? RoadBench;
     }
 
     public sealed class Output
@@ -60,6 +74,20 @@ public static class TerrainMesh
         }
     }
 
+    /// <summary>★[v111.8.1 · JACK 1103 시공 순서 «진입도로부터»] 시공 재생 격자 마디 표시 — 마디 (x0 + i·cell, y0 + j·cell)가 <paramref name="area"/> 안(경계 포함)이면 1 · 차례 = j·(w+1) + i(zf · zg와 같음).</summary>
+    public static byte[] GridMask(Geometry area, double x0, double y0, double cell, int w, int h, out int count)
+    {
+        var m = new byte[(w + 1) * (h + 1)];
+        count = 0;
+        if (area == null || area.IsEmpty) return m;
+        var pa = PreparedGeometryFactory.Prepare(area);
+        var gf = NtsSupport.Factory();
+        for (int j = 0; j <= h; j++)
+            for (int i = 0; i <= w; i++)
+                if (pa.Covers(gf.CreatePoint(new Coordinate(x0 + i * cell, y0 + j * cell)))) { m[j * (w + 1) + i] = 1; count++; }
+        return m;
+    }
+
     public static Output Build(Input inp, double ox, double oy)
     {
         var o = new Output();
@@ -74,6 +102,9 @@ public static class TerrainMesh
         IPreparedGeometry? P(Geometry? g) => g == null || g.IsEmpty ? null : PreparedGeometryFactory.Prepare(g);
         var pMask = P(inp.WallMask); var pFoot = P(inp.WallFoot); var pBench = P(inp.Bench);
         var pCut = P(inp.SlopeCut); var pFill = P(inp.SlopeFill); var pPlan = P(inp.Plan);
+        var pRoad = P(inp.RoadArea); var pPave = P(inp.RoadPave); var pLane = P(inp.RoadLane);
+        var pRBench = P(inp.RoadBench);
+        bool benchRule = inp.RoadBench != null;
         var gf = NtsSupport.Factory();
         var cls = new Cls[nT];
         double mnx = double.MaxValue, mny = double.MaxValue, mxx = double.MinValue, mxy = double.MinValue;
@@ -83,6 +114,36 @@ public static class TerrainMesh
         {
             int a = inp.F[t * 3], b = inp.F[t * 3 + 1], c = inp.F[t * 3 + 2];
             bool changed = noGround || Changed(cf[a], inp.Tol) || Changed(cf[b], inp.Tol) || Changed(cf[c], inp.Tol);
+            Cls k;
+            // ★[v111.8 · 계획 6장] 진입도로 자리 먼저(부지 다각형보다 · 포장은 땅과 같은 높이여도 «진입도로» — 위성으로 보이면 «도로가 끊김»으로 읽힘)
+            if (pRoad != null)
+            {
+                double rx = (inp.X[a] + inp.X[b] + inp.X[c]) / 3, ry = (inp.Y[a] + inp.Y[b] + inp.Y[c]) / 3;
+                var rp = gf.CreatePoint(new Coordinate(rx, ry));
+                if (pRoad.Contains(rp) && !(benchRule && OnBase(a) && OnBase(b) && OnBase(c) && !(pPave != null && pPave.Contains(rp))))
+                {
+                    if (pPave != null && pPave.Contains(rp)) k = pLane == null || pLane.Contains(rp) ? Cls.Road : Cls.Shoulder;
+                    else if (!changed) k = Cls.Ground;
+                    else
+                    {
+                        double ux0 = inp.X[b] - inp.X[a], uy0 = inp.Y[b] - inp.Y[a], uz0 = inp.Z[b] - inp.Z[a];
+                        double vx0 = inp.X[c] - inp.X[a], vy0 = inp.Y[c] - inp.Y[a], vz0 = inp.Z[c] - inp.Z[a];
+                        double nx0 = uy0 * vz0 - uz0 * vy0, ny0 = uz0 * vx0 - ux0 * vz0, nz0 = ux0 * vy0 - uy0 * vx0, nl0 = Math.Sqrt(nx0 * nx0 + ny0 * ny0 + nz0 * nz0);
+                        if (nl0 > 0 && Math.Abs(nz0) / nl0 < inp.SteepNz) k = Cls.WallZone;                          // 옹벽 자리 · 가파른 띠(도로 옹벽 3D 몸통은 없음)
+                        else if (benchRule ? pRBench != null && pRBench.Contains(rp)                                             // ★[v111.8.1] 엔진 소단 띠 → 소단(쇄석)
+                                           : nz0 != 0 && Math.Sqrt(nx0 * nx0 + ny0 * ny0) / Math.Abs(nz0) < inp.BenchSlope) k = Cls.Bench;   // 옛 규칙 — 거의 평평 → 소단
+                        else
+                        {
+                            double cz = (inp.Z[a] + inp.Z[b] + inp.Z[c]) / 3;
+                            double? bzv = inp.BaseZ != null ? inp.BaseZ(rx, ry) : inp.GroundZ?.Invoke(rx, ry);
+                            k = bzv == null || cz >= bzv.Value ? Cls.SlopeFill : Cls.SlopeCut;
+                        }
+                    }
+                    cls[t] = k;
+                    if (k != Cls.Ground) Grow(a, b, c);
+                    continue;
+                }
+            }
             if (!changed) { cls[t] = Cls.Ground; continue; }
             double cx = (inp.X[a] + inp.X[b] + inp.X[c]) / 3, cy = (inp.Y[a] + inp.Y[b] + inp.Y[c]) / 3;
             var pt = gf.CreatePoint(new Coordinate(cx, cy));
@@ -90,7 +151,6 @@ public static class TerrainMesh
             double vx = inp.X[c] - inp.X[a], vy = inp.Y[c] - inp.Y[a], vz = inp.Z[c] - inp.Z[a];
             double nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, nl = Math.Sqrt(nx * nx + ny * ny + nz * nz);
             bool steep = nl > 0 && Math.Abs(nz) / nl < inp.SteepNz;
-            Cls k;
             if (steep && pFoot != null && pFoot.Contains(pt)) k = Cls.WallFace;
             else if (pMask != null && pMask.Contains(pt)) k = steep ? Cls.WallFace : Cls.WallZone;
             else if (pBench != null && pBench.Contains(pt)) k = Cls.Bench;
@@ -102,6 +162,12 @@ public static class TerrainMesh
             if (k == Cls.WallFace && (pFoot == null || !pFoot.Contains(pt))) k = Cls.WallZone;
             cls[t] = k;
             if (k == Cls.Ground) continue;
+            Grow(a, b, c);
+        }
+        // ★[v111.8.1] 정지면 그대로인 점(도로 자리 이음 띠 — 부지 쪽 세모)
+        bool OnBase(int v) { var bz = inp.BaseZ?.Invoke(inp.X[v], inp.Y[v]); return bz != null && Math.Abs(inp.Z[v] - bz.Value) <= inp.Tol; }
+        void Grow(int a, int b, int c)
+        {
             mnx = Math.Min(mnx, Math.Min(inp.X[a], Math.Min(inp.X[b], inp.X[c]))); mxx = Math.Max(mxx, Math.Max(inp.X[a], Math.Max(inp.X[b], inp.X[c])));
             mny = Math.Min(mny, Math.Min(inp.Y[a], Math.Min(inp.Y[b], inp.Y[c]))); mxy = Math.Max(mxy, Math.Max(inp.Y[a], Math.Max(inp.Y[b], inp.Y[c])));
         }

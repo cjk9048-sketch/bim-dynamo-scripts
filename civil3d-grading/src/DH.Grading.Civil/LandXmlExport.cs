@@ -16,12 +16,34 @@ public static class LandXmlExport
     public static int ExportSurface(TinSurface tin, string path, string surfaceName, int centralMeridian = 127)
     {
         var (pts, faces) = ReadMesh(tin);
+        return WriteMesh(path, pts, faces, surfaceName, centralMeridian);
+    }
+
+    /// <summary>★[v111.8 · 계획 5장] 점 · 면 → path(.xml) + InfraWorks 캐시(.aecc.pnt/.tri) 삭제 — <see cref="ExportSurface"/>와 같은 글(메모리 합친 최종지표면도 이것으로). 반환 = 면 수.</summary>
+    public static int WriteMesh(string path, IReadOnlyList<(double x, double y, double z)> pts, IReadOnlyList<(int a, int b, int c)> faces, string surfaceName, int centralMeridian = 127)
+    {
         string xml = BuildXml(pts, faces, surfaceName, centralMeridian);
         System.IO.File.WriteAllText(path, xml, new UTF8Encoding(false));
         // ★InfraWorks 지형 캐시 삭제 → Refresh 시 새 xml로 지형을 다시 구움(안 지우면 옛 캐시라 안 바뀜/사라짐).
         foreach (var ext in new[] { ".aecc.pnt", ".aecc.tri" })
             try { System.IO.File.Delete(path + ext); } catch { }
         return faces.Count;
+    }
+
+    /// <summary>★[v111.8] 메모리 세모 → 점(mm로 합침 — <see cref="ReadMesh"/>와 같은 법) · 면(1부터) · 세모 차례 그대로.</summary>
+    public static (List<(double x, double y, double z)> Pts, List<(int a, int b, int c)> Faces) Weld(IEnumerable<DH.Grading.Core.WallDaylight.Tri> tris)
+    {
+        var pts = new List<(double x, double y, double z)>();
+        var faces = new List<(int a, int b, int c)>();
+        var index = new Dictionary<(long, long, long), int>();
+        int Idx(DH.Grading.Core.Point3 p)
+        {
+            var key = (Q(p.X), Q(p.Y), Q(p.Z));
+            if (!index.TryGetValue(key, out int i)) { i = pts.Count + 1; index[key] = i; pts.Add((p.X, p.Y, p.Z)); }
+            return i;
+        }
+        foreach (var t in tris) faces.Add((Idx(t.A), Idx(t.B), Idx(t.C)));
+        return (pts, faces);
     }
 
     /// <summary>보이는 삼각형 → 점(mm로 합침) · 면(1부터). ★[v107] [3D 보기]도 이것을 쓴다 — 지형.xml과 같은 점 · 면.</summary>

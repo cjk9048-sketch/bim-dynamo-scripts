@@ -5,6 +5,8 @@ import * as THREE from 'three';
 import grassUrl from '../tex/grass.jpg';
 import soilUrl from '../tex/soil.jpg';
 import gravelUrl from '../tex/gravel.jpg';
+import asphaltUrl from '../tex/asphalt.jpg';
+import concreteUrl from '../tex/concrete.jpg';
 
 const srgb = (hex) => new THREE.Color(hex);
 const rgb = (a) => new THREE.Color().setRGB(a[0] / 255, a[1] / 255, a[2] / 255, THREE.SRGBColorSpace);
@@ -19,8 +21,11 @@ export const CLASS_STYLE = {
   wallZone: { color: '#b9b7af', label: '옹벽 자리' },
   wallFace: { color: '#b9b7af', label: '옹벽 면' },
   other: { color: '#d8c9b0', label: '정지', tex: 'soil', tile: 6 },
+  // ★[계획_v111_8 6장 · JACK 1102] 진입도로 — 차로 = 아스팔트 · 길어깨 = 콘크리트(도로 사면 · 소단 · 옹벽 자리는 위 구분 그대로)
+  road: { color: '#ffffff', label: '진입도로', tex: 'asphalt', tile: 4 },
+  shoulder: { color: '#ffffff', label: '길어깨', tex: 'concrete', tile: 3 },
 };
-const TEX_URL = { grass: grassUrl, soil: soilUrl, gravel: gravelUrl };
+const TEX_URL = { grass: grassUrl, soil: soilUrl, gravel: gravelUrl, asphalt: asphaltUrl, concrete: concreteUrl };
 
 // 땅 질감 한 장(m 기준 · uv2) — 시공 재생 격자도 같이 쓴다
 export function groundTex(view, key, tile) {
@@ -203,6 +208,18 @@ export async function buildLayers(view, head) {
     scene.add(mesh);
     const cfMat = T.cf ? new THREE.MeshStandardMaterial({ vertexColors: true }) : null;
     L.terrain = { obj: mesh, label: '지형', on: true, mats, cfMat, cfLim, classOf };
+    // ★[계획_v111_8 6장 · JACK Q1 · Q5] 흰 차선(차로 끝 안 0.1 m · 폭 0.1 m — Civil이 설계에서 띠로 보냄) · 지형 층에 붙임(단추 없음) · 누르면 아래 지형
+    const N = head.lanes;
+    if (N && N.pos && N.idx && N.idx.length) {
+      const laneMat = new THREE.MeshStandardMaterial({ color: srgb('#f2f2ee'), roughness: 0.6, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+      const lanes = new THREE.Mesh(smooth(geom(N.pos, N.idx)), laneMat);
+      lanes.receiveShadow = true;
+      lanes.raycast = () => {};
+      lanes.userData = { layer: 'lanes' };
+      mesh.add(lanes);
+      L.terrain.lanes = lanes;
+      L.terrain.laneMat = laneMat;
+    }
     if (satTex) L.sat = { label: '위성', on: true, virtual: true };
     if (cfMat) L.cutfill = { label: '절성토 깊이', on: false, virtual: true };
   }
@@ -287,6 +304,7 @@ export function applyTerrainMode(L) {
     m.visible = groundMode ? key === 'ground' : key === 'wallFace' ? !wallOn : true;
   }
   if (L.ground) satToggle(L.ground.obj.material);
+  if (T.lanes) T.lanes.visible = !groundMode;                          // 차선은 설계 것 — 원지반 보기에서 숨김
   // 원지반 보기에서는 옹벽 · 무늬도 없다(그때는 없던 것)
   if (L.wall) L.wall.obj.visible = wallOn;
   if (L.pattern) L.pattern.obj.visible = L.pattern.on && !groundMode;

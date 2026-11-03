@@ -857,6 +857,47 @@ public sealed class InfraworksCommand
             // ── ③ 지형.xml + 위성용 경계상자 ──
             prog.Stage("지형 XML");
             double sMinE = 0, sMinN = 0, sMaxE = 0, sMaxN = 0; bool haveExtent = false;
+            // ★★★[v111.8 · 계획 5장] 진입도로가 있으면 최종지표면(맞음 = 그 면 · 없음/옛것 = 메모리 합침 — 도면 안 바꿈) · 없으면 아래 옛 코드 그대로(한 줄도 안 달라짐)
+            FinalSurfaceBuilder.Pick? fpick = null;
+            var fwarn = new System.Collections.Generic.List<string>();
+            // ★[v111.8 · 검토 L1] 도로가 있나는 따로 싸게(고르기가 터져도 «진입도로 제외» · 도로 없는 도면엔 도로 경고 없음)
+            bool roadsHere = FinalSurfaceBuilder.AnyRoads(db);
+            try { fpick = FinalSurfaceBuilder.PickTerrain(db, log, fwarn); }
+            catch (System.Exception pex) { if (roadsHere) fwarn.Add("진입도로 빠짐 — " + pex.Message); log.AppendLine("최종지표면: 고르기 실패 — " + pex); }
+            foreach (var w in fwarn) { if (web != null) web.Warn.Add(w); else log.AppendLine("지형.xml: ⚠" + w); }
+            if (roadsHere && web != null) web.HasRoads = true;
+            if (fpick != null && fpick.InTerrain)
+            try
+            {
+                string xmlPath = System.IO.Path.Combine(folder, GradingSettings.InfraTerrainXml);
+                if (web != null)
+                {
+                    if (fpick.Tris != null) { (web.MeshPts, web.MeshFaces) = LandXmlExport.Weld(fpick.Tris); web.MeshTris = fpick.Tris; }
+                    else web.TerrainId = fpick.Id;
+                    web.TerrainName = fpick.Source;
+                    web.RoadArea = fpick.RoadArea; web.RoadPave = fpick.RoadPave; web.RoadLane = fpick.RoadLane; web.RoadBench = fpick.RoadBench; web.BaseZ = fpick.Base;
+                    web.Lanes.AddRange(fpick.Roads);
+                }
+                else if (fpick.Tris != null)
+                {
+                    // 지표면 이름은 «정지면_DH» 그대로(JACK Q2)
+                    var (wp, wf) = LandXmlExport.Weld(fpick.Tris);
+                    int ntri = LandXmlExport.WriteMesh(xmlPath, wp, wf, "정지면_DH", beltCm);
+                    log.AppendLine($"지형.xml: 삼각형 {ntri}개(최종지표면 — 메모리 합침)"); made.Add("지형.xml");
+                    sMinE = wp.Min(p => p.x); sMinN = wp.Min(p => p.y); sMaxE = wp.Max(p => p.x); sMaxN = wp.Max(p => p.y); haveExtent = true;
+                }
+                else
+                {
+                    using Transaction trF = db.TransactionManager.StartTransaction();
+                    var fs = (Autodesk.Civil.DatabaseServices.TinSurface)trF.GetObject(fpick.Id, OpenMode.ForRead);
+                    int ntri = LandXmlExport.ExportSurface(fs, xmlPath, "정지면_DH", beltCm);
+                    log.AppendLine($"지형.xml: 삼각형 {ntri}개({fpick.Source})"); made.Add("지형.xml");
+                    try { var ext = fs.GeometricExtents; sMinE = ext.MinPoint.X; sMinN = ext.MinPoint.Y; sMaxE = ext.MaxPoint.X; sMaxN = ext.MaxPoint.Y; haveExtent = true; } catch { }
+                    trF.Commit();
+                }
+            }
+            catch (System.Exception xex) { log.AppendLine($"지형.xml: 실패 — {xex.Message} (파일 열려 있으면 닫고 재실행)"); }
+            else
             try
             {
                 string xmlPath = System.IO.Path.Combine(folder, GradingSettings.InfraTerrainXml);
@@ -898,7 +939,7 @@ public sealed class InfraworksCommand
             // ── ⑤ 토공량.csv — 절토/성토/순토량 상세(하나만) ──
             try
             {
-                string vmsg = WriteVolumeCsv(db, groundName, regions, folder, web);
+                string vmsg = WriteVolumeCsv(db, groundName, regions, folder, web, roadsHere);
                 log.AppendLine(vmsg);
                 if (files && System.IO.File.Exists(System.IO.Path.Combine(folder, "토공량.csv"))) made.Add("토공량.csv");
             }
@@ -971,7 +1012,7 @@ public sealed class InfraworksCommand
     /// 부호 규약: 정지면이 원지반보다 낮으면 절토, 높으면 성토. 순토량=성토−절토(양수=부족/반입, 음수=여유/반출).
     /// [다중 구역 0729] 정지면_DH가 구역 누적 결과라 절/성토량은 자동으로 '전체 누적'. 면적·파라미터는 구역별 표기.</summary>
     private static string WriteVolumeCsv(Database db, string groundName,
-        System.Collections.Generic.IReadOnlyList<GradingBundle> regions, string folder, Web3DCollect? web = null)
+        System.Collections.Generic.IReadOnlyList<GradingBundle> regions, string folder, Web3DCollect? web = null, bool roads = false)
     {
         ObjectId groundId = ObjectId.Null, designId = ObjectId.Null;
         using (Transaction tr = db.TransactionManager.StartTransaction())
@@ -1055,6 +1096,8 @@ public sealed class InfraworksCommand
             sb.AppendLine(string.Create(ci, $"{rp}절토구배,1:{prm.CutSlope:F2},,수직1:수평n"));
             sb.AppendLine(string.Create(ci, $"{rp}성토구배,1:{prm.FillSlope:F2},,수직1:수평n"));
         }
+        // ★[v111.8 · M6] 진입도로가 있을 때만 끝에 한 줄(도로 없는 도면은 바이트 같음)
+        if (roads) sb.AppendLine("비고,진입도로 제외(계획부지만 — 다음 판)");
         System.IO.File.WriteAllText(System.IO.Path.Combine(folder, "토공량.csv"), sb.ToString(), new System.Text.UTF8Encoding(true));
         string tail = regions.Count > 1 ? $" — 구역 {regions.Count}개 누적" : "";
         return string.Create(ci, $"토공량.csv: 절토 {cut:F0}㎥ · 성토 {fill:F0}㎥ · 순 {System.Math.Abs(net):F0}㎥({netWord}){tail}");

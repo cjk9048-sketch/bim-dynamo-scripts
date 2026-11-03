@@ -17,6 +17,20 @@ internal sealed class Web3DCollect
     public Geometry? WallMask;
     public List<WallExcav.SecLine>? Lines;
     public ObjectId TerrainId = ObjectId.Null;
+    /// <summary>★[v111.8 · 계획 5장] 메모리에서 합친 최종지표면(최종지표면_DH가 없거나 옛것) — 있으면 TerrainId 대신(점 · 면은 지형.xml과 같은 mm 합침 · 세모는 높이 표용).</summary>
+    public List<(double x, double y, double z)>? MeshPts;
+    public List<(int a, int b, int c)>? MeshFaces;
+    public IReadOnlyList<WallDaylight.Tri>? MeshTris;
+    /// <summary>★[v111.8] 진입도로 자리(F ⊕ ε 합) · 포장(차로 + 길어깨) · 차로 · 정지면 높이(절/성 가름) · 차선을 그릴 도로 — 지형에 도로가 들었을 때만.</summary>
+    public Geometry? RoadArea, RoadPave, RoadLane;
+    /// <summary>★[v111.8.1] 도로 소단 띠(엔진 계단선 짝) — 지형에 도로가 들었을 때만.</summary>
+    public Geometry? RoadBench;
+    public CachedGroundSurface? BaseZ;
+    public readonly List<RoadLanes.Road> Lanes = new();
+    /// <summary>★[v111.8 · M6] 도면에 진입도로가 있다 — 토공량 칸 «진입도로 제외».</summary>
+    public bool HasRoads;
+    /// <summary>지형 원천 이름(로그 · 시험) — «정지면_DH» · «최종지표면_DH» · «메모리 합침».</summary>
+    public string TerrainName = "정지면_DH";
     public CachedGroundSurface? Ground;
     public string GroundName = "", GroundOfName = "";
     public double Cut = double.NaN, Fill = double.NaN, PlanArea = double.NaN;
@@ -34,6 +48,10 @@ internal static class Web3DBuilder
     internal const int MaxBuildings = 5000;
     /// <summary>★[v111.7.1 · JACK 1102] 건물 층 풍선 글 끝 한 줄 — 자료 한계.</summary>
     internal const string BldgNote = "VWorld 자료 기준 — 철거된 건물이 남아 있을 수 있음";
+
+    /// <summary>★[v111.8 · 시험 이음매] 마지막 장면의 지형 — 원천 · 세모 수 · 구분별 수 · 차선(줄 · 칸 · 남긴 칸 · 차선 높이 − (지형 + 0.03) 최대 |m|).</summary>
+    internal sealed record TerrainStats(string Source, int Tris, Dictionary<string, int> Classes, int LaneLines, int LaneCells, int LaneKept, double LaneDzMax, string LaneText);
+    internal static TerrainStats? LastTerrainStats;
 
     /// <summary>마지막에 지은 페이지 — 저장 단추 · 팔레트가 쓴다.</summary>
     internal static string LastPath = "", LastDwg = "", LastDwgKey = "";
@@ -88,15 +106,17 @@ internal static class Web3DBuilder
         var gf = NtsSupport.Factory();
         var sc = new Web3DScene();
 
-        // ① 정지면 점 · 면(지형.xml과 같은 것)
-        if (c.TerrainId.IsNull) throw new System.InvalidOperationException("정지면_DH가 없습니다 — 먼저 부지정지를 하세요");
+        // ① 정지면 점 · 면(지형.xml과 같은 것) · ★[v111.8] 메모리에서 합친 최종지표면이면 그 점 · 면
+        if (c.TerrainId.IsNull && c.MeshPts == null) throw new System.InvalidOperationException("정지면_DH가 없습니다 — 먼저 부지정지를 하세요");
         List<(double x, double y, double z)> pts; List<(int a, int b, int c)> faces;
-        using (var tr = db.TransactionManager.StartTransaction())
-        {
-            var tin = (Autodesk.Civil.DatabaseServices.TinSurface)tr.GetObject(c.TerrainId, OpenMode.ForRead);
-            (pts, faces) = LandXmlExport.ReadMesh(tin);
-            tr.Commit();
-        }
+        if (c.MeshPts != null && c.MeshFaces != null) { pts = c.MeshPts; faces = c.MeshFaces; }
+        else
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                var tin = (Autodesk.Civil.DatabaseServices.TinSurface)tr.GetObject(c.TerrainId, OpenMode.ForRead);
+                (pts, faces) = LandXmlExport.ReadMesh(tin);
+                tr.Commit();
+            }
         if (pts.Count < 3 || faces.Count == 0) throw new System.InvalidOperationException("정지면_DH 삼각형이 없습니다");
         double mnx = pts.Min(p => p.x), mxx = pts.Max(p => p.x), mny = pts.Min(p => p.y), mxy = pts.Max(p => p.y), mnz = pts.Min(p => p.z), mxz = pts.Max(p => p.z);
         double ox = System.Math.Round((mnx + mxx) / 2 / 100) * 100, oy = System.Math.Round((mny + mxy) / 2 / 100) * 100;
@@ -127,6 +147,9 @@ internal static class Web3DBuilder
             SlopeFill = Union(c.Strips.TryGetValue("사면_성토", out var sf0) ? sf0 : Enumerable.Empty<IReadOnlyList<IReadOnlyList<Point3>>>(), gf),
             WallMask = c.WallMask,
             WallFoot = walls?.Foot,
+            // ★[v111.8 · 계획 6장] 진입도로 자리 · 포장 · 차로 · 정지면 높이(도로가 지형에 들었을 때만 — 아니면 null = 옛 규칙)
+            RoadArea = c.RoadArea, RoadPave = c.RoadPave, RoadLane = c.RoadLane, RoadBench = c.RoadBench,
+            BaseZ = c.BaseZ == null ? null : (x, y) => c.BaseZ.TryGetElevation(x, y, out double z) ? z : null,
         };
         var tm = TerrainMesh.Build(inp, ox, oy);
         log.AppendLine("  지형: 세모 " + faces.Count.ToString("N0") + " · " + string.Join(" · ", tm.Ranges.Select(r => $"{TerrainMesh.Names[(int)r.Cls]} {r.Count:N0}"))
@@ -144,7 +167,42 @@ internal static class Web3DBuilder
 
         // ④b ★[v108 · 계획_v108.md 2.1 · 2.6 · 2.7] 빗물(바뀐 자리 + 30 m) · 지적(도면 레이어) · 종단 측점(Civil 선형) — 높이는 정지면(없으면 원지반)
         CachedGroundSurface? designC = null;
-        try { using var trD = db.TransactionManager.StartTransaction(); designC = new CachedGroundSurface((Autodesk.Civil.DatabaseServices.TinSurface)trD.GetObject(c.TerrainId, OpenMode.ForRead)); trD.Commit(); } catch { }
+        if (c.MeshTris != null) designC = new CachedGroundSurface(c.MeshTris);   // ★[v111.8] 메모리 합침 — 같은 격자 코드
+        else try { using var trD = db.TransactionManager.StartTransaction(); designC = new CachedGroundSurface((Autodesk.Civil.DatabaseServices.TinSurface)trD.GetObject(c.TerrainId, OpenMode.ForRead)); trD.Commit(); } catch { }
+        // ④a ★★[v111.8 · 계획 6장 · JACK Q1 · Q5] 흰 차선 — 설계(노선 + 폭)에서 · 높이 = 지형 + 0.03 m · 그 도로 면 발자국 F 밖 칸은 버림(도로 면이 지금 설계와 다름) · 5 % 넘게 버리면 ⚠
+        object? laneHead = null;
+        int laneLines = 0, laneCells = 0, laneKept = 0; double laneDz = 0; var laneTexts = new List<string>();
+        if (c.Lanes.Count > 0 && designC != null)
+        {
+            try
+            {
+                var lp = new List<float>(); var li = new List<int>();
+                using var trL = db.TransactionManager.StartTransaction();
+                foreach (var rd in c.Lanes)
+                {
+                    var pf = rd.Foot == null ? null : NetTopologySuite.Geometries.Prepared.PreparedGeometryFactory.Prepare(rd.Foot);
+                    double? Z(double x, double y) => (pf == null || pf.Covers(gf.CreatePoint(new Coordinate(x, y)))) && designC.TryGetElevation(x, y, out double z) ? z : null;
+                    var rr = RoadLanes.Lanes(trL, rd, Z);
+                    int b0 = lp.Count / 3;
+                    foreach (var p in rr.Pos)
+                    {
+                        lp.Add((float)(p.X - ox)); lp.Add((float)(p.Y - oy)); lp.Add((float)p.Z);
+                        // 자가 점검 — 차선 높이 = 지형 + 0.03(그 자리 지형을 다시 읽어 견줌)
+                        if (designC.TryGetElevation(p.X, p.Y, out double zt)) laneDz = System.Math.Max(laneDz, System.Math.Abs(p.Z - (zt + RoadMarks.Lift)));
+                    }
+                    foreach (int i in rr.Idx) li.Add(b0 + i);
+                    laneLines += rr.Lines; laneCells += rr.Cells; laneKept += rr.Kept;
+                    laneTexts.Add($"«{rd.Name}» {rr.Text}");
+                    if (rr.Cells > 0 && rr.DropNoZ > 0.05 * rr.Cells) c.Warn.Add($"진입도로 «{rd.Name}» 지표면이 지금 설계와 다름 — [업데이트] 뒤 [3D 보기]");
+                }
+                trL.Commit();
+                if (li.Count > 0) laneHead = new Dictionary<string, object> { ["pos"] = sc.F32(lp.ToArray()), ["idx"] = sc.U32(li.ToArray()), ["n"] = laneLines };
+                log.AppendLine($"  차선: {string.Join(" · ", laneTexts)} · 높이 − (지형 + {RoadMarks.Lift} m) 최대 {laneDz * 1000:F3} mm");
+            }
+            catch (System.Exception lex) { c.Warn.Add("흰 차선을 못 그렸습니다 — " + lex.Message); log.AppendLine("  차선: 실패 — " + lex); }
+        }
+        LastTerrainStats = new TerrainStats(c.TerrainName, faces.Count, tm.Ranges.GroupBy(r => TerrainMesh.Keys[(int)r.Cls]).ToDictionary(g => g.Key, g => g.Sum(r => r.Count)),
+                                            laneLines, laneCells, laneKept, laneDz, string.Join(" · ", laneTexts));
         double? SurfZ(double x, double y)
         {
             if (designC != null && designC.TryGetElevation(x, y, out double zd)) return zd;
@@ -168,8 +226,14 @@ internal static class Web3DBuilder
                         zf[k] = designC.TryGetElevation(x, y, out double a) ? (float)a : float.NaN;
                         zg[k] = c.Ground.TryGetElevation(x, y, out double b) ? (float)b : zf[k];
                     }
-                buildHead = new Dictionary<string, object> { ["x0"] = Web3DScene.Num(gx0 - ox, 3), ["y0"] = Web3DScene.Num(gy0 - oy, 3), ["cell"] = Web3DScene.Num(gc, 3), ["w"] = gw, ["h"] = gh, ["zf"] = sc.F32(zf), ["zg"] = sc.F32(zg) };
-                log.AppendLine($"  시공 격자: {gw}×{gh} · 칸 {gc:0.##} m");
+                var bh = new Dictionary<string, object> { ["x0"] = Web3DScene.Num(gx0 - ox, 3), ["y0"] = Web3DScene.Num(gy0 - oy, 3), ["cell"] = Web3DScene.Num(gc, 3), ["w"] = gw, ["h"] = gh, ["zf"] = sc.F32(zf), ["zg"] = sc.F32(zg) };
+                // ★★[v111.8.1 · JACK 1103 «시공순서도 현실성있게 · 보통 진입도로부터 하지 않아?»] 진입도로 자리 마디(1 = 진입도로 자리 RoadArea 안 — 도로 면 + 그 절 · 성토 사면 + 이음 띠) —
+                //   뷰어가 «원지반 → 진입도로 → 절토 → 옹벽 → 성토 → 포장·녹화»로 돈다(장비가 들어갈 길을 먼저 연다 · 포장은 장비 일이 끝난 뒤).
+                //   도로가 지형에 없으면 이 열쇠를 안 넣는다(옛 장면 바이트 그대로 · 옛 다섯 단계).
+                int nRoad = 0;
+                if (c.RoadArea != null && !c.RoadArea.IsEmpty) bh["road"] = sc.U8(TerrainMesh.GridMask(c.RoadArea, gx0, gy0, gc, gw, gh, out nRoad));
+                buildHead = bh;
+                log.AppendLine($"  시공 격자: {gw}×{gh} · 칸 {gc:0.##} m" + (c.RoadArea != null ? $" · 진입도로 자리 마디 {nRoad:N0}" : ""));
             }
         }
         catch (System.Exception bex) { c.Warn.Add("시공 순서 자료를 못 만들었습니다 — " + bex.Message); log.AppendLine("  시공 격자: 실패 — " + bex); }
@@ -371,6 +435,9 @@ internal static class Web3DBuilder
         H["earth"] = double.IsFinite(c.Cut) && double.IsFinite(c.Fill)
             ? new Dictionary<string, object> { ["cut"] = Web3DScene.Num(c.Cut, 1), ["fill"] = Web3DScene.Num(c.Fill, 1), ["area"] = Web3DScene.Num(c.PlanArea, 1), ["ground"] = c.GroundName }
             : null;
+        // ★[v111.8 · M6] 토량은 계획부지만(다음 판) — 진입도로가 있을 때만 표 아래 한 줄 · 차선은 있을 때만(도로 없는 장면은 머리 그대로)
+        if (c.HasRoads && H["earth"] is Dictionary<string, object> eh) eh["note"] = "진입도로 제외";
+        if (laneHead != null) H["lanes"] = laneHead;
         if (c.Ground != null && c.GroundOfName.Length > 0 && c.GroundOfName != c.GroundName)
             c.Warn.Add($"원지반이 둘입니다 — 토공량 · 절성토 색은 «{c.GroundName}», 옹벽 변환 자리 · 단면은 «{c.GroundOfName}»");
         H["warn"] = c.Warn.Select(NoPath).Distinct().ToList();

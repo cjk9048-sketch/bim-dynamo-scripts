@@ -76,8 +76,8 @@ public static class ExcavPalette
             // ★도킹은 <b>보인 뒤에</b> — 안 뜬 팔레트에는 AutoCAD가 Dock을 무시한다(0831 교훈).
             // ★[v111.7 · JACK 1102 «부지 창을 열면 진입도로 창은 닫기»] 숨기기만(도로 세션 · 값은 그대로)
             RoadPalette.Hide();
-            _ps.Visible = true;
-            try { if (_ps.Dock != DockSides.Right) _ps.Dock = DockSides.Right; } catch { }
+            // ★[JACK 1103 «오른쪽에 나란히»] 다른 DH 창(계획부지 정지 · 3D 보기 …)이 붙어 있으면 그 왼쪽 옆에(<see cref="DhDock"/>)
+            DhDock.ShowRight(_ps, "구조물 터파기", System.Math.Max(_ps.Size.Width, PanelW));
             // ★[JACK 0910] <b>열 때마다</b> 최소 폭을 지킨다(정지 창과 같은 규칙) —
             //   <c>MinimumSize</c>는 <b>끌어서 줄이는 것</b>만 막고, 이미 좁게 떠 있던 창은 그대로 둔다.
             //   ★넓혀 놓고 쓰던 폭은 안 줄인다.
@@ -89,9 +89,9 @@ public static class ExcavPalette
             catch { }
             try
             {
-                var got = _ps.Dock;
-                DiagLog.Append($"\n[구조물 터파기] 창 열기 — 너비 {PanelW}px · 실제 {_ps.Size.Width}px · 도킹 {got}"
-                             + (got == DockSides.Right ? " (우측)" : " ⚠<b>우측에 안 붙었다</b>"));
+                // ★[1103] <c>Dock</c> 읽기는 쪽을 안 알려 준다(종전 ⚠는 헛경보) → 자리로 가린다
+                DiagLog.Append($"\n[구조물 터파기] 창 열기 — 너비 {PanelW}px · 실제 {_ps.Size.Width}px · 도킹 {DhDock.Where(_ps)}"
+                             + (DhDock.IsRight(_ps) ? "" : " ⚠<b>우측에 안 붙었다</b>"));
             }
             catch { }
         }

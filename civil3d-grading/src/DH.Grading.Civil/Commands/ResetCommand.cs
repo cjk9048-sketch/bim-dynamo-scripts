@@ -31,7 +31,8 @@ public sealed class ResetCommand
     private static string[] BuildSurfaceBaseNames()
     {
         var l = new System.Collections.Generic.List<string>
-        { "정지면_DH", "정지면_DH이전", SectionCommand.PurePadSurfaceBase, SectionCommand.PurePadSurfaceBase + "이전",
+        { FinalSurfaceBuilder.Name, FinalSurfaceBuilder.TempName,   // ★[v111.8 · 계획 4장] 맨 앞 — 소스 없는 면이라 먼저 지워도 남이 안 매달림(남이 쓰면 ② 앞에서 이름만 바꿈 · L10)
+          "정지면_DH", "정지면_DH이전", SectionCommand.PurePadSurfaceBase, SectionCommand.PurePadSurfaceBase + "이전",
           PureWithWallsBuilder.Name, PureWithWallsBuilder.TempName, CreateGradingCommand.StashBase,   // ★[v103.2] 옹벽면(종단 · 횡단용) · «이어서»가 비켜 둔 면
           WallExcavBuilder.Name, WallExcavBuilder.TempName, WallExcavBuilder.PieceName,   // ★[v103.3] 옹벽 뒷채움 터파기면 · 임시 · 조각
           WallBackBuilder.Name, WallBackBuilder.TempName,   // ★[v105.1.2 · JACK 1023 스샷] 옹벽 배면사면(v104.0)이 빠져 초기화 뒤에 남았다
@@ -177,6 +178,15 @@ public sealed class ResetCommand
             // ① DH- 레이어 객체 삭제(모델공간). 레이어 자체는 남겨 다음 생성에 재사용.
             ents += EraseEntitiesOnDhLayers(db, tr, includeImported, keepGround);
 
+            // ★[v111.8 · L10] 최종지표면 — 남의 면이 붙여넣기 소스 · 체적면으로 쓰면 지우지 않고 «최종지표면_DH(옛)_N»으로 이름 바꿔 숨김(지우면 그 면이 매달린 소스를 물어 다음 재작성에서 Civil이 죽음 — 1013 메모)
+            try
+            {
+                string rf = FinalSurfaceBuilder.RetireOld(db, tr, ObjectId.Null, out int nf);
+                surfs += nf;
+                if (rf.Length > 0) DiagLog.Append($"\n■ 초기화 — {rf}\n");
+                if (rf.Contains('⚠')) doc.Editor.WriteMessage("\n[초기화] " + rf[rf.IndexOf('⚠')..]);
+            }
+            catch (System.Exception exF) { try { DiagLog.Append($"\n■ 초기화 — 최종지표면 정리 실패: {exF.Message}\n"); } catch { } }
             // ② 지표면 삭제(이름/이름_N). 좌표계 변경 시에는 가져온 '원지반'까지 포함.
             foreach (var baseName in SurfaceBaseNames)
             {
@@ -204,6 +214,8 @@ public sealed class ResetCommand
                 var before = CountSurfaces(tr, ImportGisCommand.GroundSurfaceName);
                 GradingBuilder.EraseSurfacesByBaseName(tr, ImportGisCommand.GroundSurfaceName);
                 surfs += before;
+                // ★[v111.9 · 계획_원지형자르기.md 6장] 원지반까지 지우면(좌표계 변경) 원지형 자르기 기록도 — [초기화](원지반 남김)는 남긴다(잘린 원지반의 띠를 다음 자르기가 알아보게)
+                GroundCropBuilder.ClearRecord(db, tr);
             }
 
             // ③ 저장된 번들 삭제 + 숨겼던 지표면 다시 표시.
@@ -221,6 +233,7 @@ public sealed class ResetCommand
                 for (int r = 1; r <= 8; r++)
                     GradingBuilder.EraseSurfacesByBaseName(tr, $"터파기_절토복원{i}_{r}_DH");
             GradingBuilder.IsolateSurfaces(tr, null);
+            GradingBuilder.SetSurfaceVisible(tr, FinalSurfaceBuilder.OldName, false);   // ★[v111.8 · L10] 남이 쓰는 옛 최종면은 숨긴 채(원지반과 겹쳐 보이지 않게)
 
             tr.Commit();
         }

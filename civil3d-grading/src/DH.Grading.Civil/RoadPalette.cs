@@ -32,8 +32,8 @@ internal static class RoadPalette
         GradingPalette.Hide();
         ExcavPalette.Hide();
         // ★[v110.3.1 · JACK 1029 «도킹팝업은 무조건 도킹상태로 시작되게»] 다른 도킹창(계획부지 정지 · 터파기 · 지층)과 같이 — 보인 뒤에 오른쪽에 붙임(안 뜬 창에는 Dock이 무시됨) · 부를 때마다
-        _ps.Visible = true;
-        try { if (_ps.Dock != DockSides.Right) _ps.Dock = DockSides.Right; } catch { }
+        // ★[JACK 1103 «오른쪽에 나란히»] 보이고 붙이기는 <see cref="DhDock"/> 한 곳 — 다른 DH 창이 붙어 있으면 그 왼쪽 옆에 · 고른 길은 «[도킹]» 줄
+        DhDock.ShowRight(_ps, "진입도로", Math.Max(_ps.Size.Width, 380));
         try { _ps.Size = new System.Drawing.Size(Math.Max(_ps.Size.Width, 380), Math.Max(_ps.Size.Height, 640)); } catch { }
         _panel!.Show(RoadSession.Of(AcadApp.DocumentManager.MdiActiveDocument));
     }

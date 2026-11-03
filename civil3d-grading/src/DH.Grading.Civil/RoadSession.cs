@@ -485,8 +485,18 @@ internal sealed class RoadSession
             //   ★[v111.7.1] 지표면 몫(옛것 · 없음 + 지금 설계 지문)도 — 지표면만 옛것이어도 열쇠가 생김
             var ciK = System.Globalization.CultureInfo.InvariantCulture;
             string surfKey = SurfaceMissing ? "없음:" + sigNow : surfNote.Length > 0 ? "옛것:" + sigNow + ":" + Design.SurfaceSig : "";
-            StaleKey = surfKey.Length + sheetNote.Length + xsecNote.Length == 0 ? ""
-                     : string.Join("|", surfKey, sheetNote, xsecNote, Design.SheetStamp, stampNow, Design.SheetScale.ToString("R", ciK), wantSheet.ToString("R", ciK), Design.XsecStamp, xsecInputs);
+            // ★[v111.8 · 계획 4장 · M2] 도로 면은 맞는데 최종지표면이 옛것 · 없음(실패 포함) — 읽기만(핸들 + 지문) · [업데이트] 깜박 · 열쇠에 지금 입력 지문
+            string finalKey = "";
+            try
+            {
+                FinalState = FinalSurfaceBuilder.StateOf(db, out string fs0);
+                FinalStale = hasSurf && surfKey.Length == 0 && Last.Error.Length == 0 && (FinalState == FinalSurfaceBuilder.State.Stale || FinalState == FinalSurfaceBuilder.State.Missing);
+                if (FinalStale) finalKey = "최종:" + FinalState + ":" + Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(fs0)))[..16];
+            }
+            catch { FinalStale = false; }
+            StaleKey = surfKey.Length + sheetNote.Length + xsecNote.Length + finalKey.Length == 0 ? ""
+                     : string.Join("|", surfKey, sheetNote, xsecNote, Design.SheetStamp, stampNow, Design.SheetScale.ToString("R", ciK), wantSheet.ToString("R", ciK), Design.XsecStamp, xsecInputs)
+                       + (finalKey.Length > 0 ? "|" + finalKey : "");
             _baseNote = "";
             // ★[v111.7.1 · 검토 중간 2] 실행 취소 · 다시 실행 뒤 한 번 — 노리선이 되살아났으면 «노리선 지움» 알림을 끔
             if (_recheckTicks) { _recheckTicks = false; if (TicksErased > 0 && AnyTicks(db)) TicksErased = 0; }
@@ -784,7 +794,53 @@ internal sealed class RoadSession
             if (nLocked > 0) msg += $" · ⚠노리선 {nLocked}개 못 지움(레이어 잠금?)";
         }
         catch (Exception exN) { msg += " · ⚠옛 노리선 못 지움 — " + exN.Message; }
+        // ★★★[v111.8 · 계획_v111_8.md 4장 · JACK Q3 = A «매번 최종지표면까지»] 도로 면을 만든 같은 명령 안에서 최종지표면_DH(같은 실행 취소 묶음) — 실패해도 도로 면은 그대로 성공(M2: 글로 알림)
+        msg += " · " + MakeFinalCore();
         return msg;
+    }
+
+    /// <summary>★[v111.8 · M2] 지난 최종지표면 짓기 결과 한 줄 — «⚠»로 시작하면 실패([업데이트] 실패 글 · 깜박 · 다시 하기).</summary>
+    internal string FinalNote = "";
+    /// <summary>★[v111.8] 도로 면은 지금 설계와 같은데 최종지표면이 옛것 · 없음(실패 포함) — [업데이트] 깜박 · ① 지표면 단계에서 최종면만 다시.</summary>
+    internal bool FinalStale;
+    internal FinalSurfaceBuilder.State FinalState = FinalSurfaceBuilder.State.NoRoads;
+
+    /// <summary>★[v111.8] [업데이트]의 «최종면만» — 이벤트 뷰어 알림 끔(LandXML 가져오기 정보 창) · 바뀜 막음 · 로딩 글.</summary>
+    internal string MakeFinal()
+    {
+        var evPrev = EventViewerMute.Begin();
+        try { return MakeFinalCore(); }
+        finally { EventViewerMute.End(evPrev); }
+    }
+
+    string MakeFinalCore()
+    {
+        bool was = Suppress; Suppress = true;   // 정지면_DH 숨김이 바탕면 바뀜으로 잡히지 않게(모양은 안 바뀜 — Step 0 측정)
+        try
+        {
+            using (BusyPopup.Scope("최종지표면 만드는 중입니다."))
+            {
+                BusyPopup.Text("최종지표면 만드는 중입니다.");
+                FinalNote = FinalSurfaceBuilder.Build(_doc);
+            }
+        }
+        catch (Exception exF) { FinalNote = "⚠최종지표면 못 만듦 — " + exF.Message; }
+        finally { Suppress = was; }
+        FinalStale = false;
+        try { Changed?.Invoke(this); } catch { }
+        return FinalNote;
+    }
+
+    /// <summary>★[v111.8 · 7.7] 이 도로 면의 바탕 몫 지문(중심선 곁 바탕 높이 · 바탕면 핸들)이 <paramref name="baseSurf"/> · <paramref name="baseC"/>로 잰 지금과 같은가 — 가파른 띠 까닭(«지금 계획부지와 안 맞음» / «사면이 못 닿음»). 지문 없는 옛 면은 거짓.</summary>
+    internal static bool BaseMatches(Database db, Transaction tr, ObjectId aid, RoadDesign d, ObjectId baseSurf, CachedGroundSurface baseC)
+    {
+        var was = d.SurfaceSigParts.Split('|');
+        if (was.Length < 4) return false;
+        var planId = Handle(db, d.PlanProfile);
+        if (planId.IsNull) return false;
+        var (X, Y, Z, _, _, _) = RoadBuilder.Sample(tr, aid, planId);
+        var now = SigParts(new RoadGrade.Input { X = X, Y = Y, Z = Z, Base = baseC }, baseSurf);
+        return now[3] == was[3];
     }
 
     string MakeSurfaceCore()
@@ -951,7 +1007,7 @@ internal sealed class RoadSession
     }
 
     internal const string LaySlope = "DH도로-사면선", LayBench = "DH도로-소단선", LayNori = "DH도로-노리선", LayWall = "DH도로-옹벽선";
-    const string LineApp = "DH_ROADLINE";
+    internal const string LineApp = "DH_ROADLINE";
     internal const string SurfStyleName = "DH-진입도로 경계";
 
     /// <summary>★★[v110.3 · 계획 4 · 검토 M7] [도로 면 만들기]의 실제 선 — 사면선(윗선) · 소단선(아랫선) · 옹벽선(굵게) · 노리선(짧은 · 긴) · 3D(설계 높이).
@@ -1208,7 +1264,7 @@ internal sealed class RoadSession
     }
 
     /// <summary>★[v110.3 · 검토 M8] 진입도로 면 스타일 — 평면 = 경계만(없으면 만들고 · 평면은 사람이 고친 값을 안 덮음) · ★[v111.2] 모형(3D)은 면을 만들 때마다 바탕면 스타일로 맞춤(사람이 고친 3D 값은 덮임).</summary>
-    static ObjectId EnsureRoadSurfStyle(Transaction tr, ObjectId baseSurfId)
+    internal static ObjectId EnsureRoadSurfStyle(Transaction tr, ObjectId baseSurfId)
     {
         var cdoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
         var styles = cdoc.Styles.SurfaceStyles;

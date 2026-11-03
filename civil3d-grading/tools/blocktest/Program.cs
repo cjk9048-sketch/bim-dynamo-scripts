@@ -79,6 +79,24 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "mesh")
     return fails == 0 ? 0 : 1;
 }
 
+// ★[v111.8] BLOCKTEST_ONLY=final — 최종지표면 합치기(S186 SF) · 흰 차선 띠(S187 SL) · [3D 보기] 지형 구분 + 진입도로(S175)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "final")
+{
+    FinalSurfaceCheck.Run(Check);
+    RoadMarksCheck.Run(Check);
+    Web3DCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
+// ★[v111.9] BLOCKTEST_ONLY=crop — 원지형 자르기 순수 셈(S188 CR — 네 띠 · 우리 띠 알아보기 · 설계 자리 검사 · 나간 조각 · 안쪽 지문 · 다시 키우기)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "crop")
+{
+    CropCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
 // ★[v111.5] BLOCKTEST_ONLY=roadxsec — 진입도로 횡단(합친 계획면 · 복사본 이름 · 측점 이름 · 구간 · 바뀜 — S183)만
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "roadxsec")
 {
@@ -184,6 +202,9 @@ RoadMeshCheck.Run(Check);    // ★[v111] S181 — 선 기반 진입도로 면(�
 RoadXsecCheck.Run(Check);    // ★[v111.5] S183 — 진입도로 횡단(합친 계획면 · 복사본 이름 · 측점 이름 · 구간 · 바뀜)
 RoadSheetCheck.Run(Check);   // ★[v110.4] S180 — 진입도로 종단도(축척 · 검토선 폭 · 도장 · 지우기 · 밴드 묶음 주인)
 RoadAutoCheck.Run(Check);    // ★[v111.7.1] S185 — 진입도로 저절로 다시 만들기 판정(보낼까 · 무엇을) · PVI 확대할 종단도 · 확대 창
+FinalSurfaceCheck.Run(Check);   // ★[v111.8] S186 SF — 최종지표면 합치기(ε 이음 띠 · 도로 세모 비트 그대로 · Δv · 가파른 띠 · 섬 · 바탕 밖 · 도로 둘 · 같은 결과 · 속도 · 옛 길이면 실패)
+RoadMarksCheck.Run(Check);      // ★[v111.8] S187 SL — 흰 차선 띠(차로 끝 안쪽 0.1 m · 폭 0.1 m · 직선 · R 30 · 지형 없는 칸 · 좁은 안쪽 곡선 · 끝 측점)
+CropCheck.Run(Check);           // ★[v111.9] S188 CR — 원지형 자르기(네 띠 · 우리 띠 알아보기 · 설계 자리 검사 · 나간 조각 · 안쪽 지문 · 다시 키우기 · 옛 길이면 실패)
 
 const double W = 0.46, H = 0.2, STEP = 5.0, HW = W / 2;
 const double D = 0.5, FS = D / 2; // 깊이·전면 돌출(벽 중심=링, JACK 0720 Z-파이팅 해소): 절토 +FS(안쪽), 성토 −FS
