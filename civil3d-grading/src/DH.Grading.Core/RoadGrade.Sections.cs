@@ -22,6 +22,8 @@ public static partial class RoadGrade
         /// <summary>끝(0 시점 · 1 종점)마다 왼쪽 옆 광선(모서리 부채 시작) → 끝 마구리 → 오른쪽 옆 광선(모서리 부채 끝) 차례.</summary>
         public List<Ray>[] Caps = { new(), new() };
         public Section Sec = new();
+        /// <summary>★[도로 마무리 ②] 입력(측구 폭 — 도로 면 점 차례).</summary>
+        public Input? Inp;
         public int Refined, Removed, Capped; public double Ms;   // Capped = 세분 한도(횡단 4만 · 마구리 광선 2천)에 걸린 횟수
     }
 
@@ -32,7 +34,7 @@ public static partial class RoadGrade
     internal static SectionSet BuildSections(RayCtx c, bool simplify = true)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var set = new SectionSet { Sec = c.Sec };
+        var set = new SectionSet { Sec = c.Sec, Inp = c.Inp };
         double L = c.CL.Length, step = Math.Max(0.1, c.Inp.EdgeStep);
         // 기록 경계(양쪽) — 단면이 바뀌는 측점 ± 끝면 폭/2
         var changes = new SortedSet<double>();
@@ -44,11 +46,12 @@ public static partial class RoadGrade
             foreach (var t in c.R.Recs) if (t.Side == side) { cand.Add(t.S0); cand.Add(t.S1); }
             foreach (double bc in c.R.BandCuts(side)) cand.Add(bc);   // ★[v111.3] 끝면 띠 경계도 직각 끝면 짝
             foreach (var w in c.Inp.Walls) if (w.Side == side) { cand.Add(Math.Min(w.S0, w.S1)); cand.Add(Math.Max(w.S0, w.S1)); }
+            foreach (var dt in c.Inp.Ditches) if (dt.Side == side) { cand.Add(Math.Min(dt.S0, dt.S1)); cand.Add(Math.Max(dt.S0, dt.S1)); }   // ★[도로 마무리 ② · 계획 6.1] 측구 구간 경계 = 단면이 바뀌는 자리
             foreach (double s in cand)
             {
                 if (s <= 2 * PairGap || s >= L - 2 * PairGap) continue;   // ★[설치 전 검토 L7] 끝 횡단(0 · L)과 안 겹치게
                 var a = c.ProfileAt(side, s - PairGap / 2); var b = c.ProfileAt(side, s + PairGap / 2);
-                if (a == b) continue;
+                if (a == b && (c.Inp.Ditches.Count == 0 || Math.Abs(c.Inp.DitchW(side, s - PairGap / 2) - c.Inp.DitchW(side, s + PairGap / 2)) < 1e-9)) continue;
                 // ★[설치 전 검토 L8] 다른 쪽 경계와 5 cm 안이면 짝 하나로
                 double near = changes.FirstOrDefault(q => Math.Abs(q - s) < PairGap, double.NaN);
                 if (double.IsNaN(near)) { changes.Add(s); chgSide[s] = side; own[s] = side < 0 ? (s, double.NaN) : (double.NaN, s); }
@@ -105,7 +108,7 @@ public static partial class RoadGrade
                 bool brk = i == set.X.Count || set.X[i - 1].PairStart || !SameShape(set.X[i - 1], set.X[i]);
                 if (!brk) continue;
                 keep[i0] = true; keep[i - 1] = true;
-                Dp(set.X, i0, i - 1, keep);
+                Dp(set.X, i0, i - 1, keep, c.Inp.Base);
                 i0 = i;
             }
             // ★[v111.2 · JACK 1030 «삼각망 해상도는 계획부지처럼»] 줄여도 이웃 횡단은 SectionGap 안 — 곧은 곳이 수십 m 한 띠(길쭉한 세모)가 되지 않게
@@ -182,9 +185,12 @@ public static partial class RoadGrade
         var (cx, cy, cz, nx, ny) = c.CL.At(s);
         var sec = c.Sec;
         x.Deck.Add((x.L.Ex, x.L.Ey, x.L.Ez));
+        // ★[도로 마무리 ② · 계획 6.1] 측구 구간 — 길어깨 끝 점(측구 안쪽 끝)을 도로 면 띠에(측구 자리 = 길어깨 끝 높이로 평평)
+        if (c.Inp.Ditches.Count > 0 && c.Inp.DitchW(-1, s) > 1e-6) x.Deck.Add((cx + nx * sec.OuterL, cy + ny * sec.OuterL, cz + sec.Drop(-sec.OuterL)));
         if (sec.ShoulderL > 1e-6) x.Deck.Add((cx + nx * sec.HalfL, cy + ny * sec.HalfL, cz + sec.Drop(-sec.HalfL)));
         x.Deck.Add((cx, cy, cz));
         if (sec.ShoulderR > 1e-6) x.Deck.Add((cx - nx * sec.HalfR, cy - ny * sec.HalfR, cz + sec.Drop(sec.HalfR)));
+        if (c.Inp.Ditches.Count > 0 && c.Inp.DitchW(1, s) > 1e-6) x.Deck.Add((cx - nx * sec.OuterR, cy - ny * sec.OuterR, cz + sec.Drop(sec.OuterR)));
         x.Deck.Add((x.R.Ex, x.R.Ey, x.R.Ez));
         return x;
     }
@@ -212,15 +218,15 @@ public static partial class RoadGrade
             if (ra.End == RayEnd.Daylight && ra.Pts.Count > 1)
             {
                 var p = ra.Pts[^1]; var q = rb.Pts[^1];
-                double mx = (p.X + q.X) / 2, my = (p.Y + q.Y) / 2, mz = (p.Z + q.Z) / 2;
-                if (c.Inp.Base.TryGetElevation(mx, my, out double g) && Math.Abs(g - mz) > LineTol) return true;
+                // ★★[도로 마무리 ③ · 계획 4.5] 가운데 한 점이 아니라 현이 지나는 땅 꺾임 자리 전부
+                if (BoundaryGap(c.Inp.Base, ra, rb).Dev > LineTol) return true;
             }
         }
         return false;
     }
 
     /// <summary>같은 꼴 횡단 [a, b] 더글라스-포이커 — 가운데 횡단의 모든 점(양쪽 광선 · 도로 면)이 a · b 보간에서 1 cm 안이면 뺌.</summary>
-    static void Dp(List<XSec> xs, int a0, int b0, bool[] keep)
+    static void Dp(List<XSec> xs, int a0, int b0, bool[] keep, IGroundSurface? ground = null)
     {
         // ★[설치 전 검토 L10] 재귀 대신 스택(횡단이 많아도 스택 넘침 없음)
         var st = new Stack<(int, int)>(); st.Push((a0, b0));
@@ -245,6 +251,24 @@ public static partial class RoadGrade
                 Acc(A.Deck[k].X, A.Deck[k].Y, A.Deck[k].Z, B.Deck[k].X, B.Deck[k].Y, B.Deck[k].Z, M.Deck[k].X, M.Deck[k].Y, M.Deck[k].Z);
             if (e > worst) { worst = e; wi = i; }
         }
+        // ★★[도로 마무리 ③ · 계획 4.5] 남길 두 횡단의 데이라잇 현이 땅과 1 cm 넘게 벌어지면 그 자리에 가장 가까운 가운데 횡단을 남김(가운데 점들만 보던 구멍)
+        if (worst <= LineTol * LineTol && ground != null)
+            foreach (var (ra, rb, left) in new[] { (A.L, B.L, true), (A.R, B.R, false) })
+            {
+                if (ra.End != RayEnd.Daylight || ra.Pts.Count < 2) continue;
+                var p = ra.Pts[^1]; var q = rb.Pts[^1];
+                var (dev, gx, gy) = BoundaryGap(ground, ra, rb);
+                if (dev <= LineTol) continue;
+                double bd = double.MaxValue;
+                for (int i = a + 1; i < b; i++)
+                {
+                    var w = (left ? xs[i].L : xs[i].R).Pts[^1];
+                    double d2 = Sq(w.X - gx) + Sq(w.Y - gy);
+                    if (d2 < bd) { bd = d2; wi = i; }
+                }
+                worst = double.MaxValue;
+                break;
+            }
         if (worst > LineTol * LineTol) { keep[wi] = true; st.Push((a, wi)); st.Push((wi, b)); }
         }
     }
@@ -303,7 +327,20 @@ public static partial class RoadGrade
         var ds = new SortedSet<double> { 0, dMax };
         foreach (var p in a.Pts) if (p.D < dMax) ds.Add(p.D);
         foreach (var p in b.Pts) if (p.D < dMax) ds.Add(p.D);
-        for (double d = Math.Min(a.Pts[^1].D, b.Pts[^1].D) + 0.5; d < dMax; d += 0.5) ds.Add(d);   // 데이라잇 너머(땅 — 직선 아님)
+        // ★★[도로 마무리 ③ · 계획 4.3] 데이라잇 너머(땅) = 그 줄이 TIN 세모 변을 지나는 자리 전부(땅 그대로) · 바탕이 못 물으면 옛 0.5 m 걸음
+        if (c.Inp.Base is IGroundBreaks gbk)
+        {
+            var bb = new List<GroundBreak>();
+            foreach (var q in new[] { a, b })
+            {
+                double d0 = q.Pts[^1].D;
+                if (!(dMax > d0 + 1e-6)) continue;
+                gbk.Breaks(q.Ex + q.Nx * d0, q.Ey + q.Ny * d0, q.Ex + q.Nx * dMax, q.Ey + q.Ny * dMax, bb);
+                foreach (var k in bb) ds.Add(d0 + (dMax - d0) * k.T);
+            }
+        }
+        else
+            for (double d = Math.Min(a.Pts[^1].D, b.Pts[^1].D) + 0.5; d < dMax; d += 0.5) ds.Add(d);   // 데이라잇 너머(땅 — 직선 아님)
         var arr = ds.ToList();
         var spans = new List<(double A, double B)>();
         bool prev = In(arr[0]); double open = arr[0];
@@ -410,6 +447,7 @@ public static partial class RoadGrade
             if ((q.End == RayEnd.Daylight || q.End == RayEnd.EdgeWall) && q.Pts.Count > 1)
             {
                 if (cur == null) { cur = new(); daylight.Add(cur); }
+                else if (qi > 0) DaylightJump(c, loop[qi - 1], q, cur);
                 var p = q.Pts[^1]; cur.Add((p.X, p.Y, p.Z));
                 continue;
             }
@@ -431,6 +469,10 @@ public static partial class RoadGrade
     static List<Ray> CapChain(RayCtx c, int end, XSec x, SectionSet set)
     {
         var sec = c.Sec;
+        // ★[도로 마무리 ② · 계획 6.1] 끝 선 폭 = 그 끝 측점의 폭(측구 구간이면 측구 바깥까지)
+        double sEnd = end == 0 ? 0 : c.CL.Length;
+        double oL = c.Inp.Outer(-1, sEnd), oR = c.Inp.Outer(1, sEnd);
+        bool dL = oL > sec.OuterL + 1e-6, dR = oR > sec.OuterR + 1e-6;
         // 매개 u: [0, 1] 왼쪽 부채 · [1, 2] 끝 선(−OuterL → +OuterR) · [2, 3] 오른쪽 부채
         Ray At(double u)
         {
@@ -438,16 +480,18 @@ public static partial class RoadGrade
             if (u >= 3) return x.R;
             if (u <= 1) return c.CornerRay(end, -1, u);
             if (u >= 2) return c.CornerRay(end, 1, 3 - u);
-            return c.EndRay(end, -sec.OuterL + (sec.OuterL + sec.OuterR) * (u - 1));
+            return c.EndRay(end, -oL + (oL + oR) * (u - 1));
         }
         var us = new List<double> { 0 };
         for (int q = 1; q < 8; q++) us.Add(q / 8.0);
         // 끝 선 — 도로 면 점(차로 끝 · 중심)과 0.5 m마다
-        var lats = new SortedSet<double> { -sec.OuterL, sec.OuterR, 0 };
+        var lats = new SortedSet<double> { -oL, oR, 0 };
         if (sec.ShoulderL > 1e-6) lats.Add(-sec.HalfL);
         if (sec.ShoulderR > 1e-6) lats.Add(sec.HalfR);
-        for (double l = -sec.OuterL; l < sec.OuterR; l += 0.5) lats.Add(l);
-        foreach (double l in lats) us.Add(1 + (l + sec.OuterL) / (sec.OuterL + sec.OuterR));
+        if (dL) lats.Add(-sec.OuterL);
+        if (dR) lats.Add(sec.OuterR);
+        for (double l = -oL; l < oR; l += 0.5) lats.Add(l);
+        foreach (double l in lats) us.Add(1 + (l + oL) / (oL + oR));
         for (int q = 1; q < 8; q++) us.Add(2 + q / 8.0);
         us.Add(3);
         us = us.Distinct().OrderBy(v => v).ToList();
@@ -469,6 +513,8 @@ public static partial class RoadGrade
                     double dx = (p.X + q.X) / 2 - w.X, dy = (p.Y + q.Y) / 2 - w.Y, dz = (p.Z + q.Z) / 2 - w.Z;
                     split = dx * dx + dy * dy + dz * dz > LineTol * LineTol;
                 }
+            // ★★[도로 마무리 ③ · 계획 4.5] 끝 마구리도 둘레가 지나는 길의 땅 틈(땅 꺾임 자리 전부)
+            if (!split && rays[i].End == RayEnd.Daylight && rays[i].Pts.Count > 1 && BoundaryGap(c.Inp.Base, rays[i], rays[i + 1]).Dev > LineTol) split = true;
             if (split) { us.Insert(i + 1, um); rays.Insert(i + 1, m); continue; }
             i++;
         }
@@ -481,13 +527,14 @@ public static partial class RoadGrade
             bool brk = i == rays.Count || !rays[i - 1].SameShape(rays[i]);
             if (!brk) continue;
             keep[i0] = true; keep[i - 1] = true;
-            DpRays(rays, us, i0, i - 1, keep);
+            DpRays(rays, us, i0, i - 1, keep, c.Inp.Base);
             i0 = i;
         }
         keep[0] = true; keep[^1] = true;
         // 도로 면 꺾임 자리(차로 끝 · 중심)의 끝 선 광선은 남김 — 도로 면 끝 꼭짓점과 끝 마구리 띠가 같은 점을 나눠 갖게(T자 없음)
         for (int i = 0; i < rays.Count; i++)
-            if (rays[i].Side == 0 && (Math.Abs(rays[i].Lat) < 1e-9 || (sec.ShoulderL > 1e-6 && Math.Abs(rays[i].Lat + sec.HalfL) < 1e-9) || (sec.ShoulderR > 1e-6 && Math.Abs(rays[i].Lat - sec.HalfR) < 1e-9))) keep[i] = true;
+            if (rays[i].Side == 0 && (Math.Abs(rays[i].Lat) < 1e-9 || (sec.ShoulderL > 1e-6 && Math.Abs(rays[i].Lat + sec.HalfL) < 1e-9) || (sec.ShoulderR > 1e-6 && Math.Abs(rays[i].Lat - sec.HalfR) < 1e-9)
+                                      || (dL && Math.Abs(rays[i].Lat + sec.OuterL) < 1e-9) || (dR && Math.Abs(rays[i].Lat - sec.OuterR) < 1e-9))) keep[i] = true;
         // ★[v111.2] 끝 마구리도 이웃 광선 간격(뿌리 · 끝점 중 먼 것) SectionGap 안 — 남긴 광선(도로 면 꺾임 자리 포함)을 센 뒤(검토 L4)
         double gap = c.Inp.SectionGap;
         if (gap > 0)
@@ -505,7 +552,7 @@ public static partial class RoadGrade
         return o;
     }
 
-    static void DpRays(List<Ray> rays, List<double> us, int a0, int b0, bool[] keep)
+    static void DpRays(List<Ray> rays, List<double> us, int a0, int b0, bool[] keep, IGroundSurface? ground = null)
     {
         var st = new Stack<(int, int)>(); st.Push((a0, b0));
         while (st.Count > 0)
@@ -522,6 +569,17 @@ public static partial class RoadGrade
                 e = Math.Max(e, Sq(p.X + (q.X - p.X) * t - w.X) + Sq(p.Y + (q.Y - p.Y) * t - w.Y) + Sq(p.Z + (q.Z - p.Z) * t - w.Z));
             }
             if (e > worst) { worst = e; wi = i; }
+        }
+        // ★★[도로 마무리 ③ · 계획 4.5] 남길 두 광선 사이 둘레 길이 땅과 1 cm 넘게 벌어지면 그 자리에 가장 가까운 가운데 광선을 남김
+        if (worst <= LineTol * LineTol && ground != null && rays[a].End == RayEnd.Daylight && rays[a].Pts.Count > 1)
+        {
+            var (dev, gx, gy) = BoundaryGap(ground, rays[a], rays[b]);
+            if (dev > LineTol)
+            {
+                double bd = double.MaxValue;
+                for (int i = a + 1; i < b; i++) { var w = rays[i].Pts[^1]; double d2 = Sq(w.X - gx) + Sq(w.Y - gy); if (d2 < bd) { bd = d2; wi = i; } }
+                worst = double.MaxValue;
+            }
         }
         if (worst > LineTol * LineTol) { keep[wi] = true; st.Push((a, wi)); st.Push((wi, b)); }
         }

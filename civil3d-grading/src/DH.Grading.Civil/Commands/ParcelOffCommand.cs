@@ -29,7 +29,7 @@ public sealed class ParcelOffCommand
         try
         {
             int n = 0, fail = 0;
-            // ★[v109.1 · 검토 H2] 가져오기와 같은 목록(선 · 지번 · 국공유지 해치)
+            // ★[v109.1 · 검토 H2] 가져오기와 같은 목록(선 · 지번 · 소유 구분 칠 · 범례)
             var want = new System.Collections.Generic.HashSet<string>(
                 ImportGisCommand.ParcelLayers, System.StringComparer.OrdinalIgnoreCase);
 
@@ -71,8 +71,8 @@ public sealed class ParcelOffCommand
                 AcadApp.ShowAlertDialog("지적도 삭제\n\n지울 것이 없습니다 — 가져온 지적도가 없습니다.");
                 return;
             }
-            ed.WriteMessage($"\n[지적도 삭제] {n:N0}개 지웠습니다(필지 경계·지번·국공유지 해치).");
-            AcadApp.ShowAlertDialog($"지적도 삭제 완료\n\n{n:N0}개를 지웠습니다(필지 경계·지번·국공유지 해치).");
+            ed.WriteMessage($"\n[지적도 삭제] {n:N0}개 지웠습니다(필지 경계·지번·소유 구분 칠·범례).");
+            AcadApp.ShowAlertDialog($"지적도 삭제 완료\n\n{n:N0}개를 지웠습니다(필지 경계·지번·소유 구분 칠·범례).");
             try { DiagLog.Append($"\n■ DHPARCELOFF — {n}개 삭제(레이어 {string.Join("·", ImportGisCommand.ParcelLayers)})\n"); } catch { }
         }
         catch (System.Exception ex)

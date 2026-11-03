@@ -310,12 +310,12 @@ internal static class SelfCheckCmd
     /// <summary>표지를 세우는 명령 — 도면을 바꾸거나 오래 걸리는 것만(찍기 · 창 열기 같은 잔명령은 뺀다 — 기록이 잡음으로 덮이지 않게).</summary>
     static readonly HashSet<string> Tracked = new(System.StringComparer.OrdinalIgnoreCase)
     {
-        "DHGRADE", "DHWALL", "DHSLOPE", "DHWALLCOMP", "DHRESET", "DHMISCSET", "DHNORI", "DHINFRA", "DH3D",
+        "DHGRADE", "DHWALL", "DHSLOPE", "DHWALLCOMP", "DHRESET", "DHGRADERESET", "DHROADRESET", "DHMISCSET", "DHNORI", "DHINFRA", "DH3D",
         "DHPROFILE", "DHSECTION", "DHXVIEW", "DHSAMPLE", "DHSHEET", "DHSHEETSET",
         "DHSTATION", "DHSTATIONFB", "DHSTATIONDEL",
         "DHEXCAV", "DHEXCAVWALL", "DHEXCAVSLOPE", "DHEXCAVWALLCLEAR",
         "DHNGII", "DHCROP", "DHGNDREBUILD", "DHCONTOUR", "DHCONTOURWEB", "DHCONTOURBOX", "DHPARCEL", "DHPARCELOFF",
-        "DHSTRATAPICK", "DHSELFCHECK",
+        "DHSTRATAPICK", "DHSELFCHECK", "DHSHEETMAKE",
     };
     static readonly Dictionary<Document, (string Id, string Name, System.Diagnostics.Stopwatch Sw)> _now = new();
 
@@ -390,7 +390,8 @@ internal static class SelfCheck
                     if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
                     string nm = s.Name ?? "";
                     // ★[v111.8 · 검토 M1] 남이 붙여넣는 옛 최종면(«최종지표면_DH(옛)»)도 굳은 우리 면 — 재작성 앞뒤 지문을 견준다(초기화 · «남은 우리 면» 셈에는 안 넣음 — 일부러 남긴 면)
-                    if ((!IsOurSurfaceName(nm) && !FinalSurfaceBuilder.IsOldName(nm)) || d.ContainsKey(nm)) continue;
+                    //   ★[v111.10] 물러난 면은 표식으로(«정지면_DH(옛)» · «가상터파기_DH3(옛)» … — 이름 꼴 말고)
+                    if ((!IsOurSurfaceName(nm) && !SurfaceRetire.IsRetired(s)) || d.ContainsKey(nm)) continue;
                     bool frozen = false;
                     try
                     {

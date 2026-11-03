@@ -134,6 +134,14 @@ internal static class RoadGradeBand
             var pvi = new List<(double, double)>();
             foreach (CivilDb.ProfilePVI q in plan.PVIs) pvi.Add((q.RawStation, q.Elevation));
             var runs = ProfileSheetRules.GradeRuns(pvi);
+            // ★[도로 마무리 ① · 계획 5.8] 빈 구간(부지 바닥) — 그 칸은 경사 글자 대신 «부지 바닥 구간»(대각선 없음) · 끝 맞춤 꺼진 도로는 그대로
+            var gapsB = new List<(double A, double B)>();
+            try
+            {
+                var dB = RoadDesign.Read(tr, pv.AlignmentId);
+                if (dB != null && dB.EndsOn) { var rgB = RoadRanges.Of(tr, pv.AlignmentId, dB); for (int i = 1; i < rgB.Count; i++) gapsB.Add((rgB[i - 1].B, rgB[i].A)); }
+            }
+            catch { }
 
             // 칸 자리 — 그래프 상자 아래 «틈» 띄우고 칸마다 같은 높이(SheetCommand 제목칸 꾸미기와 같은 셈)
             double mm = scale / 1000.0, cell = SheetCommand.BandCellMm * mm;
@@ -179,9 +187,10 @@ internal static class RoadGradeBand
                 else if (r.GradePct < 0) { y0 = yT - m; y1 = yB + m; }
                 else { y0 = y1 = (yT + yB) / 2; }   // 0.00 % — 가운데 가로선(내 판단 · Civil 템플릿엔 평탄 예가 없음)
                 double Y(double st) => y0 + (y1 - y0) * (st - r.S0) / Math.Max(1e-9, r.S1 - r.S0);
-                Add(new Line(new Point3d(X(a), Y(a), 0), new Point3d(X(b), Y(b), 0)), layL, colL);
+                bool inGap = gapsB.Any(g => r.S0 >= g.A - 1e-3 && r.S1 <= g.B + 1e-3);
+                if (!inGap) Add(new Line(new Point3d(X(a), Y(a), 0), new Point3d(X(b), Y(b), 0)), layL, colL);
                 nRun++;
-                string sTxt = $"S={Math.Abs(r.GradePct):0.00}%", lTxt = $"L={r.S1 - r.S0:0.00}";
+                string sTxt = inGap ? "부지 바닥 구간" : $"S={Math.Abs(r.GradePct):0.00}%", lTxt = $"L={r.S1 - r.S0:0.00}";
                 double la = Math.Max(r.S0, na), lb = Math.Min(r.S1, nb);
                 if (X(lb) - X(la) >= LabelWidth(Math.Max(sTxt.Length, lTxt.Length), hT))
                 {
@@ -221,6 +230,131 @@ internal static class RoadGradeBand
         {
             log.AppendLine("   [구배] ⚠구배 칸 그리기 실패 — " + ex.Message);
             try { DiagLog.Append("\n[구배] 그리기 실패 — " + ex); } catch { }
+            return -1;
+        }
+    }
+
+    /// <summary>★★[도로 마무리 ① · 계획_도로마무리.md 5.6 · 5.8] 빈 구간(부지 바닥) — 종단도 그래프의 계획선을 그 구간만 <b>점선</b> + 위에 «부지 바닥 구간».
+    /// <para>Civil 종단선은 구간마다 선 꼴을 못 바꾼다 → 그 구간 계획선 위를 배경 가림 띠(MText 배경 가림 · 종이 0.8 mm 높이 · 선만 가림)로 덮고
+    /// 같은 자리에 점선(DASHED — 횡단 · 종단 구조물 점선과 같은 무늬 크기) · 색 · 레이어 = 계획 종단 스타일의 선. 그리기 차례 = 가림 띠 → 점선 → 글자(맨 위).</para>
+    /// <para>끝 맞춤 꺼진 도로 · 빈 구간 없는 도로는 아무것도 안 그림(지금과 같음). 그린 것은 평범한 도면 객체라 종단도 짓기의 표식으로 다시 그릴 때 지워진다.
+    /// 돌려줌 = 이 뷰에 그린 빈 구간 수(−1 = 못 그림). 부르는 곳 = <see cref="SheetCommand.Build"/> 끝(진입도로만 · 구배 칸 다음).</para></summary>
+    internal static int DrawGaps(Database db, ObjectId pvId, ObjectId planId, double scale, System.Text.StringBuilder log)
+    {
+        try
+        {
+            List<(double A, double B)> gaps = new();
+            using (var tr0 = db.TransactionManager.StartTransaction())
+            {
+                var pv0 = (CivilDb.ProfileView)tr0.GetObject(pvId, OpenMode.ForRead);
+                var d = RoadDesign.Read(tr0, pv0.AlignmentId);
+                if (d != null && d.EndsOn) { var rg = RoadRanges.Of(tr0, pv0.AlignmentId, d); for (int i = 1; i < rg.Count; i++) gaps.Add((rg[i - 1].B, rg[i].A)); }
+                tr0.Commit();
+            }
+            if (gaps.Count == 0) return 0;
+            var (ltName, lts) = WallSectionDraw.Prepare(db);   // 점선 선종류 싣기(제 트랜잭션) — 아래 트랜잭션 앞에서
+            var made = new List<ObjectId>();
+            int n = 0;
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                var pv = (CivilDb.ProfileView)tr.GetObject(pvId, OpenMode.ForRead);
+                var plan = (CivilDb.Profile)tr.GetObject(planId, OpenMode.ForRead);
+                double mm = scale / 1000.0, vs0 = pv.StationStart, vs1 = pv.StationEnd;
+                // 계획선 모양 — 스타일 «선»의 레이어(도면에 없으면 종단 레이어) · 색
+                ObjectId lay = plan.LayerId;
+                var col = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByLayer, 256);
+                try
+                {
+                    var st = (CS.ProfileStyle)tr.GetObject(plan.StyleId, OpenMode.ForRead);
+                    using var ds = st.GetDisplayStyleProfile(CS.ProfileDisplayStyleProfileType.Line);
+                    var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+                    string ln = ds.Layer ?? "";
+                    if (ln.Length > 0 && ln != "0" && lt.Has(ln)) lay = lt[ln];
+                    col = ds.Color;
+                }
+                catch { }
+                // 글자 — 구배 칸과 같은 글꼴 스타일 · 높이(옆 칸 값 라벨)
+                CS.SectionalDataBandStyle? sib;
+                using (var items = pv.Bands.GetBottomBandItems()) sib = Sibling(tr, items, OpenMode.ForRead);
+                var (_, _, styT, hT, pre, post) = TextLook(tr, db, pv, sib, mm);
+                ObjectId ltId = ObjectId.Null;
+                if (ltName != null) { var ltt = (LinetypeTable)tr.GetObject(db.LinetypeTableId, OpenMode.ForRead); if (ltt.Has(ltName)) ltId = ltt[ltName]; }
+                var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+                ObjectId Add(Entity e)
+                {
+                    e.SetDatabaseDefaults(db);
+                    e.LayerId = lay; e.Color = col;
+                    var id = ms.AppendEntity(e); tr.AddNewlyCreatedDBObject(e, true);
+                    made.Add(id);
+                    return id;
+                }
+                // 계획선에 곡선(종단 곡선)이 있으면 0.5 m마다 · 아니면 PVI 자리만(직선 접선 — 뷰에서도 곧음)
+                bool curved = false;
+                try { foreach (CivilDb.ProfileEntity pe in plan.Entities) if (pe.EntityType != CivilDb.ProfileEntityType.Tangent) { curved = true; break; } } catch { curved = true; }
+                var pvis = new List<double>();
+                foreach (CivilDb.ProfilePVI q in plan.PVIs) pvis.Add(q.RawStation);
+                foreach (var g in gaps)
+                {
+                    double a = Math.Max(g.A, vs0), b = Math.Min(g.B, vs1);
+                    if (!(b - a > 1e-6)) continue;
+                    var ss = new SortedSet<double> { a, b };
+                    foreach (double s in pvis) if (s > a + 1e-6 && s < b - 1e-6) ss.Add(s);
+                    if (curved) for (double s = a + 0.5; s < b - 1e-6; s += 0.5) ss.Add(s);
+                    var pts = new List<Point2d>();
+                    foreach (double s in ss)
+                    {
+                        double x = 0, y = 0;
+                        try { if (pv.FindXYAtStationAndElevation(s, plan.ElevationAt(s), ref x, ref y)) pts.Add(new Point2d(x, y)); } catch { }
+                    }
+                    if (pts.Count < 2) { log.AppendLine($"   [빈 구간] ⚠측점 {a:0.##}~{b:0.##} 계획선 자리를 못 얻음 — 안 그림"); continue; }
+                    // ① 가림 띠(선분마다) — MText 배경 가림(도면 배경색 · 종이에는 흰색) · 너비 = 선분 길이 · 높이 = 종이 0.8 mm
+                    for (int i = 0; i + 1 < pts.Count; i++)
+                    {
+                        var p = pts[i]; var q = pts[i + 1]; double len = p.GetDistanceTo(q);
+                        if (len < 1e-6) continue;
+                        Add(new MText
+                        {
+                            Contents = " ", TextHeight = 0.8 * mm, Width = len, Attachment = AttachmentPoint.MiddleCenter,
+                            Location = new Point3d((p.X + q.X) / 2, (p.Y + q.Y) / 2, 0), Rotation = Math.Atan2(q.Y - p.Y, q.X - p.X),
+                            BackgroundFill = true, UseBackgroundColor = true, BackgroundScaleFactor = 1.0,
+                        });
+                    }
+                    // ② 점선
+                    var pl = new Polyline(pts.Count);
+                    for (int i = 0; i < pts.Count; i++) pl.AddVertexAt(i, pts[i], 0, 0, 0);
+                    Add(pl);
+                    if (!ltId.IsNull) { pl.LinetypeId = ltId; if (lts > 0) pl.LinetypeScale = lts; }
+                    // ③ 글자 — 보이는 조각 가운데 · 선 위 종이 1.5 mm
+                    var mid = new Point2d((pts[0].X + pts[^1].X) / 2, (pts[0].Y + pts[^1].Y) / 2);
+                    string txt = "부지 바닥 구간";
+                    if (pts[^1].X - pts[0].X >= LabelWidth(txt.Length * 2, hT))   // 한글 = 숫자 두 자 폭 어림
+                    {
+                        var mt = new MText { Contents = pre + txt + post, Attachment = AttachmentPoint.BottomCenter, Location = new Point3d(mid.X, mid.Y + 1.5 * mm, 0) };
+                        Add(mt);
+                        mt.TextStyleId = styT; mt.TextHeight = hT;
+                    }
+                    n++;
+                    log.AppendLine($"   [빈 구간] 측점 {g.A:0.##}~{g.B:0.##}(이 뷰 {a:0.##}~{b:0.##}) — 계획선 점선 {pts.Count}점 · 선종류 {ltName ?? "없음(실선)"} · 무늬 {lts:0.###}");
+                }
+                tr.Commit();
+            }
+            // 그리기 차례 — 막 만든 것은 다른 트랜잭션에서 맨 위로(DrawOrderFix와 같은 법) · 만든 차례 그대로(가림 띠 → 점선 → 글자)
+            if (made.Count > 0)
+                try
+                {
+                    using var tr2 = db.TransactionManager.StartTransaction();
+                    var ms2 = (BlockTableRecord)tr2.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+                    var dot = (DrawOrderTable)tr2.GetObject(ms2.DrawOrderTableId, OpenMode.ForWrite);
+                    foreach (var id in made) dot.MoveToTop(new ObjectIdCollection { id });
+                    tr2.Commit();
+                }
+                catch (System.Exception exO) { log.AppendLine("   [빈 구간] ⚠그리기 차례 못 맞춤 — " + exO.Message); }
+            return n;
+        }
+        catch (System.Exception ex)
+        {
+            log.AppendLine("   [빈 구간] ⚠계획선 점선 못 그림 — " + ex.Message);
+            try { DiagLog.Append("\n[빈 구간] 점선 그리기 실패 — " + ex); } catch { }
             return -1;
         }
     }
@@ -279,17 +413,21 @@ internal static class RoadGradeBand
                 try { using var ds = sib.GetDisplayStylePlan(CS.SectionalDataDisplayStyleType.SampleLineStationLabels); col = ds.Color; } catch { }
         }
         catch { }
-        // 레이어 — 그 칸 라벨 묶음(횡단 데이터 밴드 라벨)이 이 뷰 가로 범위 안에 앉은 레이어
+        // 레이어 — 그 칸 라벨 묶음(횡단 데이터 밴드 라벨)이 이 뷰 밴드 자리(가로 범위 × 그래프 아래 끝 ~ 아래 밴드 높이) 안에 앉은 레이어
+        //   ★[JACK 1103] 세로 아래 끝도 본다 — 같은 X 아래에 놓인 남의 종단도 묶음의 레이어를 따라가지 않게
         try
         {
             var ext = pv.GeometricExtents;
+            int nb = 0;
+            try { using var bi = pv.Bands.GetBottomBandItems(); nb = bi.Count; } catch { }
+            double yMin = ext.MinPoint.Y - (SheetCommand.TopGapMm + (nb + 1) * SheetCommand.BandCellMm) * mm;
             var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
             foreach (ObjectId id in ms)
             {
                 DBObject o; try { o = tr.GetObject(id, OpenMode.ForRead); } catch { continue; }
                 if (o is not CivilDb.LabelGroup lg || !o.GetType().Name.Contains("SectionalDataBand", StringComparison.Ordinal) || lg.SubEntityCount == 0) continue;
                 var p = lg.GetAt(0).LabelLocation;
-                if (p.X < ext.MinPoint.X - 1 || p.X > ext.MaxPoint.X + 1 || p.Y > ext.MinPoint.Y) continue;
+                if (p.X < ext.MinPoint.X - 1 || p.X > ext.MaxPoint.X + 1 || p.Y > ext.MinPoint.Y || p.Y < yMin) continue;
                 lay = lg.LayerId;
                 break;
             }

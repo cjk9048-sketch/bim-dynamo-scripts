@@ -212,7 +212,7 @@ export class Ui {
 
 const SWATCH = {
   terrain: CLASS_STYLE.plan.color, sat: '#4f6b3a', cutfill: 'linear-gradient(90deg,#cc2a1f,#f4f4f0,#265ccc)',
-  ground: '#5f7a45', excav: '#9b7b52', wall: '#c2bfb8', pattern: '#a8a090', drain: '#1e7bff', cad: '#ffd400', align: '#ff4d4d',
+  ground: '#5f7a45', excav: '#9b7b52', wall: '#c2bfb8', pattern: '#a8a090', ditch: '#3b3d40', drain: '#1e7bff', cad: '#ffd400', align: '#ff4d4d', ralign: '#ff5ad2',
   bldg: 'linear-gradient(90deg,#e4e2dc 50%,#e8392e 50%)',
   slope: SLOPE_GRAD,
 };

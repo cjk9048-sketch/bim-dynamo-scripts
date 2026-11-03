@@ -45,6 +45,84 @@ public sealed partial class XsecViewCommand
         return ok;
     }
 
+    /// <summary>★★[도로 마무리 ② · 계획 6.5] 진입도로 횡단 — 그 측점이 측구 구간(나중 기록이 이김 · 도로 구간 안)이면 <see cref="DitchSection"/> 꼴을 뷰에(옵셋 · 높이 → 그림 = <see cref="WallSectionDraw.Affine"/>)
+    /// + 형식 글자 지시선(«U형 측구 B300×H300» · «L형 측구 W750» — 옹벽 단면 인출과 같은 꼴 · CALS 구조물 레이어). 표식은 <see cref="BuildRoad"/>가 그린 것 모두에(«XSEC» — 다시 그릴 때 · 초기화가 지움).
+    /// 측구 윗면 = 길어깨 끝 높이(지표면은 파지 않음 — 계획 1장).</summary>
+    static string DrawDitchSections(Database db, List<(ObjectId Id, double St, string Name)> views, ObjectId alignId, double wl, double wr, double scale, System.Text.StringBuilder log)
+    {
+        if (views == null || views.Count == 0) return "";
+        int nSec = 0, nEnt = 0, nMap = 0;
+        // 측구 기록이 없는 도로는 아무것도 안 함(선종류 싣기도 — 측구 없는 도면 그대로)
+        try { using var tr0 = db.TransactionManager.StartTransaction(); var d0 = RoadDesign.Read(tr0, alignId); tr0.Commit(); if (d0 == null || d0.Ditches.Count == 0) return ""; }
+        catch { return ""; }
+        var dash = WallSectionDraw.Prepare(db);
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var d = RoadDesign.Read(tr, alignId);
+            if (d == null || d.Ditches.Count == 0 || d.PlanProfile.Length == 0 || !db.TryGetObjectId(new Handle(System.Convert.ToInt64(d.PlanProfile, 16)), out var pid) || pid.IsErased) { tr.Commit(); return ""; }
+            var pr = (CivilDb.Profile)tr.GetObject(pid, OpenMode.ForRead);
+            var rg = RoadRanges.Of(tr, alignId, d);
+            var sec = d.Section();
+            var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+            var L = WallSectionDraw.XsecLayers(db, tr, dash);
+            var kst = ImportGisCommand.EnsureKoreanTextStyle(db, tr);
+            double txtH = WallSectionDraw.LabelMm / 1000.0 * scale;
+            void Put(Entity e, ObjectId lay) { e.SetDatabaseDefaults(db); e.LayerId = lay; ms.AppendEntity(e); tr.AddNewlyCreatedDBObject(e, true); nEnt++; }
+            foreach (var (vid, _, _) in views)
+            {
+                try
+                {
+                    if (tr.GetObject(vid, OpenMode.ForRead) is not CivilDb.SectionView sv) continue;
+                    if (tr.GetObject(sv.SampleLineId, OpenMode.ForRead) is not CivilDb.SampleLine ln) continue;
+                    double st = ln.Station;
+                    if (rg.Count > 0 && !RoadRanges.Inside(rg, st)) continue;
+                    double zc;
+                    try { zc = pr.ElevationAt(st); } catch { continue; }
+                    System.Func<double, double, Point2d>? map = null;
+                    foreach (int side in new[] { -1, 1 })
+                    {
+                        var rec = d.DitchAt(side, st);
+                        var sh = rec == null ? null : RoadDesign.ShapeOf(rec);
+                        if (sh == null) continue;
+                        map ??= WallSectionDraw.Affine(-wl, wr, sv.ElevationMin, sv.ElevationMax,
+                            (o, z) => { double x = 0, y = 0; return sv.FindXYAtOffsetAndElevation(o, z, ref x, ref y) ? new Point2d(x, y) : (Point2d?)null; });
+                        if (map == null) { nMap++; break; }
+                        double outer = side < 0 ? sec.OuterL : sec.OuterR, zE = zc + sec.Drop(side * outer);
+                        Point2d P(double O, double Z) => map(side * (outer + O), zE + Z);
+                        foreach (var ring in sh.Concrete.Concat(sh.Curb != null ? new[] { sh.Curb } : System.Array.Empty<List<(double O, double Z)>>()))
+                        {
+                            if (ring.Count < 3) continue;
+                            var pl = new Polyline();
+                            for (int i = 0; i < ring.Count; i++) pl.AddVertexAt(i, P(ring[i].O, ring[i].Z), 0, 0, 0);
+                            pl.Closed = true;
+                            Put(pl, L.Line);
+                        }
+                        // 형식 글자 — 측구 윗면 가운데에서 위 · 바깥으로 지시선
+                        var A = P(sh.TopWidth / 2, 0);
+                        double fx = map(side * (outer + sh.TopWidth), zE).X - map(side * outer, zE).X >= 0 ? 1 : -1;   // 바깥(사면 쪽)이 도면 어느 쪽인가
+                        var P1 = new Point2d(A.X + fx * 1.5 * txtH, A.Y + 3.2 * txtH);
+                        double w = sh.Label.Length * txtH * 0.95 + 0.6 * txtH;
+                        var P2 = new Point2d(P1.X + fx * w, P1.Y);
+                        var ld = new Polyline(); ld.AddVertexAt(0, A, 0, 0, 0); ld.AddVertexAt(1, P1, 0, 0, 0); ld.AddVertexAt(2, P2, 0, 0, 0);
+                        Put(ld, L.Leal);
+                        var t = new DBText { TextString = sh.Label, Height = txtH, HorizontalMode = fx > 0 ? TextHorizontalMode.TextLeft : TextHorizontalMode.TextRight, VerticalMode = TextVerticalMode.TextBottom };
+                        t.SetDatabaseDefaults(db);
+                        if (!kst.IsNull) t.TextStyleId = kst;
+                        t.AlignmentPoint = new Point3d(P1.X + fx * 0.3 * txtH, P1.Y + 0.25 * txtH, 0);
+                        t.LayerId = L.Leat; ms.AppendEntity(t); tr.AddNewlyCreatedDBObject(t, true); nEnt++;
+                        nSec++;
+                    }
+                }
+                catch (System.Exception exV) { log?.AppendLine("  측구 단면 — 뷰 하나 못 그림: " + exV.Message); }
+            }
+            tr.Commit();
+        }
+        catch (System.Exception ex) { log?.AppendLine("  측구 단면 — 실패: " + ex.Message); return "⚠측구 단면 못 넣음 — " + ex.Message; }
+        log?.AppendLine($"  측구 단면 — {nSec}개(객체 {nEnt})" + (nMap > 0 ? $" · ⚠뷰 좌표를 못 잰 뷰 {nMap}" : ""));
+        return nSec > 0 ? $"측구 단면 {nSec}" : "";
+    }
+
     static int TagRoadXsec(Database db, XsecTarget t, List<ObjectId> appended)
     {
         int n = 0;

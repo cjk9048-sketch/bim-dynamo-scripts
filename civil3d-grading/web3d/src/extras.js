@@ -468,27 +468,40 @@ export function buildBldg(view, head, L) {
 // ── 측점 ── 중심선(빨강) · 측점 가로선(흰 점선 · 정측점 굵게 · 땅을 따라) · 이름(가까이 갈 때) · 마우스 올린 측점은 주황 실선
 const ST_DASH = [8, 5];    // 측점 점선 긋기 · 띄기(화면 px)
 const ST_HOV = 0xffa31a;   // 마우스 올린 측점
-export function buildStations(view, head, L) {
-  const A = head.align;
-  if (!A || !A.st || !A.st.length) return;
+export const ROAD_CENTER = 0xff5ad2;   // ★[JACK 1103] 진입도로 중심선(부지 빨강과 가름 · 아스팔트 위에서 보임)
+
+// ★★[JACK 1103 «부지 측점, 진입도로 측점이 별도로»] 측점 층 하나 — 노선 여럿(부지 = 하나 · 진입도로 = 도로마다)을 같은 꼴로.
+//   노선마다 a = { name, road, line, s0, s1, step, index, views, st } · 측점마다 a(그 노선 — 자르기 · 풍선이 쓴다) · i(그 노선 안 순번)
+function stationLayer(view, list, centerColor, road) {
   const grp = new THREE.Group();
-  const center = polySeg(A.line);
-  if (center.length) grp.add(fatLines(view, center, 0xff4d4d, 3));
-  const minor = [], major = [], labels = [];
-  const sts = A.st.map((s, i) => {
-    const pts = s.pts && s.pts.length >= 6 ? s.pts : [...s.l, ...s.c, ...s.r];
-    const seg = polySeg(pts);
-    const into = s.major ? major : minor;
-    for (const v of seg) into.push(v);
-    const cz = s.c[2] > -9999 ? s.c[2] : NaN;
-    if (Number.isFinite(cz)) {
-      const sp = textSprite(s.label, s.c[0], s.c[1], cz + 2.0, s.major ? '#ffffff' : '#e6e9ee', s.major ? 0.026 : 0.022);
-      sp.userData.st = i;
-      sp.userData.pri = s.major ? 1 : 0;      // 정측점 이름부터 놓는다
-      labels.push(sp);
-    }
-    return { ...s, i, seg: new Float32Array(seg) };
-  });
+  const minor = [], major = [], labels = [], all = [], aligns = [];
+  for (const A of list) {
+    if (!A || !A.st || !A.st.length) continue;
+    const center = polySeg(A.line);
+    if (center.length) grp.add(fatLines(view, center, centerColor, 3));
+    // 중심선 점의 측점 값 — s0부터 step마다 · 마지막 점 = 끝 측점 s1(마지막 토막은 step보다 짧을 수 있음)
+    const n = A.line.length / 3, step = A.step || 2, s0 = A.s0 || 0;
+    const s1 = Number.isFinite(A.s1) ? A.s1 : s0 + step * (n - 1);
+    const a = { name: A.name, road, line: A.line, s0, s1, step, index: A.index || 20, views: A.views || 0, st: null };
+    a.st = A.st.map((s, i) => {
+      const pts = s.pts && s.pts.length >= 6 ? s.pts : [...s.l, ...s.c, ...s.r];
+      const seg = polySeg(pts);
+      const into = s.major ? major : minor;
+      for (const v of seg) into.push(v);
+      const st = { ...s, i, a, seg: new Float32Array(seg) };
+      const cz = s.c[2] > -9999 ? s.c[2] : NaN;
+      if (Number.isFinite(cz)) {
+        const sp = textSprite(s.label, s.c[0], s.c[1], cz + 2.0, s.major ? '#ffffff' : '#e6e9ee', s.major ? 0.026 : 0.022);
+        sp.userData.st = st;
+        sp.userData.pri = s.major ? 1 : 0;      // 정측점 이름부터 놓는다
+        labels.push(sp);
+      }
+      return st;
+    });
+    aligns.push(a);
+    for (const st of a.st) all.push(st);
+  }
+  if (!aligns.length) return null;
   // ★[JACK 1028 «측점 선은 점선 · 조금 더 얇게»] 2.2 · 3.6 px 실선 → 1.5 · 2.4 px 점선
   const dashMats = [];
   for (const [seg, color, w] of [[minor, 0xf2f4f7, 1.5], [major, 0xffffff, 2.4]]) {
@@ -514,13 +527,27 @@ export function buildStations(view, head, L) {
       hov.raycast = () => {};
       grp.add(hov);
     }
-    hovSp = labels.find(s => s.userData.st === st.i) || null;
+    hovSp = labels.find(s => s.userData.st === st) || null;
     if (hovSp) { hovSp.material.color.set(ST_HOV); hovSp.userData.force = true; }
   };
-  // 중심선 점의 측점 값 — s0부터 step마다 · 마지막 점 = 끝 측점 s1(마지막 토막은 step보다 짧을 수 있음)
-  const n = A.line.length / 3, step = A.step || 2, s0 = A.s0 || 0;
-  const s1 = Number.isFinite(A.s1) ? A.s1 : s0 + step * (n - 1);
-  L.align = { obj: grp, label: '측점', on: true, name: A.name, st: sts, labels, line: A.line, s0, s1, step, index: A.index || 20, views: A.views || 0, highlight };
+  return { obj: grp, on: true, st: all, aligns, labels, highlight };
+}
+
+// 부지 측점 — 머리 «align»(종단 선형 하나) · 층 이름 «부지 측점»(진입도로 측점과 가름)
+export function buildStations(view, head, L) {
+  const S = stationLayer(view, [head.align], 0xff4d4d, false);
+  if (!S) return;
+  const a = S.aligns[0];
+  L.align = { ...S, label: '부지 측점', name: a.name, line: a.line, s0: a.s0, s1: a.s1, step: a.step, index: a.index, views: a.views };
+}
+
+// ★★[JACK 1103] 진입도로 측점 — 머리 «roadAlign»(도로마다 «align»과 같은 꼴) · 도로가 없으면 층 없음 · 도로 이름은 풍선 · 층 풍선 글
+export function buildRoadStations(view, head, L) {
+  const R = head.roadAlign;
+  if (!Array.isArray(R) || !R.length) return;
+  const S = stationLayer(view, R, ROAD_CENTER, true);
+  if (!S) return;
+  L.ralign = { ...S, label: '진입도로 측점', roads: S.aligns, title: S.aligns.map(a => a.name).join(' · ') };
 }
 
 // 중심선 위 측점 s의 점 · 진행 방향(수평 단위) — 3D 자르기 면

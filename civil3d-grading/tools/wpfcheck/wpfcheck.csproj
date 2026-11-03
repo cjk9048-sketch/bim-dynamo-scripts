@@ -26,5 +26,10 @@
     <Compile Include="..\..\src\DH.Grading.Civil\SlopeDiagram.cs" />
     <Compile Include="..\..\src\DH.Grading.Civil\WallStyle.cs" />
     <Compile Include="..\..\src\DH.Grading.Civil\DhBrand.cs" />
+    <Compile Include="..\..\src\DH.Grading.Civil\SheetBookPanel.cs" />
+    <Compile Include="SheetBookShot.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\DH.Grading.Core\DH.Grading.Core.csproj" />
   </ItemGroup>
 </Project>

@@ -51,3 +51,6 @@ DH_세션*.txt
 DH_세션*.txt.tmp
 # ★[v109] 내장 VWorld 키 · 사내 GIS DB 접속 정보 — 설치 전용(공개 저장소 금지)
 **/dh.keys*.json
+
+# ★[v112.0 · 계획_도면화.md Q1 · JACK 1103] 기본 도곽 DWG(K-water)는 공개 저장소에 안 올림 — 다른 사업 글이 박혀 있다 · 설치 때 참고자료에서 해시 확인 후 복사(배포/설치.ps1 ③)
+**/Contents/Frames/*.dwg

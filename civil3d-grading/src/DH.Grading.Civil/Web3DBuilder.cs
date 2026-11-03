@@ -201,6 +201,76 @@ internal static class Web3DBuilder
             }
             catch (System.Exception lex) { c.Warn.Add("흰 차선을 못 그렸습니다 — " + lex.Message); log.AppendLine("  차선: 실패 — " + lex); }
         }
+        // ④a2 ★★[도로 마무리 ② · 계획 6.6] 측구 — 윗면 = 도로 면 측구 자리(«길어깨» 콘크리트 구분 · RoadLanes 포장 폭) · 그 위:
+        //   U형 = 홈 자리(안폭)에 어두운 띠(그레이팅 · 뚜껑 없으면 물길) · L형 = 경계석 몸통(폭 · 보이는 높이)을 지형 위로 · 땅속 몸통은 안 그림(계획 12장).
+        //   측구 기록이 없으면 머리를 안 넣음(장면 바이트 그대로)
+        object? ditchHead = null;
+        if (c.Lanes.Any(r => r.D != null && r.D.Ditches.Count > 0) && designC != null)
+        {
+            try
+            {
+                var gp = new List<float>(); var gi = new List<int>(); var wp = new List<float>(); var wi = new List<int>(); var cp = new List<float>(); var ci = new List<int>();
+                int nU = 0, nL = 0;
+                using var trD = db.TransactionManager.StartTransaction();
+                foreach (var rd in c.Lanes)
+                {
+                    if (rd.D == null || rd.D.Ditches.Count == 0) continue;
+                    var al = (Autodesk.Civil.DatabaseServices.Alignment)trD.GetObject(rd.Aid, OpenMode.ForRead);
+                    var sec = rd.D.Section();
+                    (double X, double Y)? At(double s, double o) { try { double x = 0, y = 0; al.PointLocation(s, o, ref x, ref y); return double.IsFinite(x) && double.IsFinite(y) ? (x, y) : null; } catch { return null; } }
+                    double? Z(double x, double y) => designC.TryGetElevation(x, y, out double z) ? z : null;
+                    void Put(List<float> P, List<int> I, RoadMarks.RibbonResult rr)
+                    {
+                        int b0 = P.Count / 3;
+                        foreach (var p in rr.Pos) { P.Add((float)(p.X - ox)); P.Add((float)(p.Y - oy)); P.Add((float)p.Z); }
+                        foreach (int i in rr.Idx) I.Add(b0 + i);
+                    }
+                    foreach (int side in new[] { -1, 1 })
+                        foreach (var (a0, b0, rec) in rd.D.DitchSpans(side))
+                        {
+                            var sh = RoadDesign.ShapeOf(rec);
+                            if (sh == null) continue;
+                            double outer = side < 0 ? sec.OuterL : sec.OuterR;
+                            foreach (var (a, b) in RoadRanges.Clip(rd.Spans, a0, b0))
+                            {
+                                var st = RoadDitchLines.Stations(al, a, b);
+                                List<(double X, double Y)> Line(double o) => st.Select(s => At(s, side * (outer + o)) ?? (double.NaN, double.NaN)).ToList();
+                                var ctr = st.Select(s => At(s, 0) ?? (double.NaN, double.NaN)).ToList();
+                                if (sh.Kind == DH.Grading.Core.DitchSection.Kind.U && sh.Channel is { } ch)
+                                {
+                                    bool lid = rec.Length > 12 && rec[12] > 0.5;
+                                    Put(lid ? gp : wp, lid ? gi : wi, RoadMarks.Ribbon(Line(ch.O0), Line(ch.O1), Z, RoadMarks.Lift, RoadMarks.MinRadius, ctr));
+                                    nU++;
+                                }
+                                else if (sh.Kind == DH.Grading.Core.DitchSection.Kind.L && sh.Curb is { Count: >= 4 } cb)
+                                {
+                                    double o0 = cb.Min(q => q.O), o1 = cb.Max(q => q.O), reveal = rec.Length > 8 ? rec[8] : 0.2;
+                                    var la = Line(o0); var lb = Line(o1);
+                                    Put(cp, ci, RoadMarks.Ribbon(la, lb, Z, reveal, RoadMarks.MinRadius, ctr));   // 윗면(지형 + 보이는 높이)
+                                    foreach (var edge in new[] { la, lb })   // 앞 · 뒤 옆면(지형 → 윗면)
+                                        for (int i = 0; i + 1 < edge.Count; i++)
+                                        {
+                                            var p = edge[i]; var q = edge[i + 1];
+                                            if (!double.IsFinite(p.X) || !double.IsFinite(q.X) || Z(p.X, p.Y) is not double zp || Z(q.X, q.Y) is not double zq) continue;
+                                            int k = cp.Count / 3;
+                                            foreach (var (x, y, z) in new[] { (p.X, p.Y, zp), (q.X, q.Y, zq), (q.X, q.Y, zq + reveal), (p.X, p.Y, zp + reveal) }) { cp.Add((float)(x - ox)); cp.Add((float)(y - oy)); cp.Add((float)z); }
+                                            ci.AddRange(new[] { k, k + 1, k + 2, k, k + 2, k + 3 });
+                                        }
+                                    nL++;
+                                }
+                            }
+                        }
+                }
+                trD.Commit();
+                var dh = new Dictionary<string, object>();
+                if (gi.Count > 0) dh["grate"] = new Dictionary<string, object> { ["pos"] = sc.F32(gp.ToArray()), ["idx"] = sc.U32(gi.ToArray()) };
+                if (wi.Count > 0) dh["water"] = new Dictionary<string, object> { ["pos"] = sc.F32(wp.ToArray()), ["idx"] = sc.U32(wi.ToArray()) };
+                if (ci.Count > 0) dh["curb"] = new Dictionary<string, object> { ["pos"] = sc.F32(cp.ToArray()), ["idx"] = sc.U32(ci.ToArray()), ["mat"] = "콘크리트" };
+                if (dh.Count > 0) ditchHead = dh;
+                log.AppendLine($"  측구: U형 {nU}구간 · L형 {nL}구간 · 세모 그레이팅 {gi.Count / 3:N0} · 물길 {wi.Count / 3:N0} · 경계석 {ci.Count / 3:N0}");
+            }
+            catch (System.Exception dex) { c.Warn.Add("측구를 못 그렸습니다 — " + dex.Message); log.AppendLine("  측구: 실패 — " + dex); }
+        }
         LastTerrainStats = new TerrainStats(c.TerrainName, faces.Count, tm.Ranges.GroupBy(r => TerrainMesh.Keys[(int)r.Cls]).ToDictionary(g => g.Key, g => g.Sum(r => r.Count)),
                                             laneLines, laneCells, laneKept, laneDz, string.Join(" · ", laneTexts));
         double? SurfZ(double x, double y)
@@ -209,7 +279,8 @@ internal static class Web3DBuilder
             if (c.Ground != null && c.Ground.TryGetElevation(x, y, out double zg)) return zg;
             return null;
         }
-        object? drainHead = null, cadHead = null, alignHead = null, buildHead = null;
+        object? drainHead = null, cadHead = null, alignHead = null, buildHead = null, strataHead = null;
+        double[]? alignBox = null;   // 측점 가로선 범위(도면 좌표 minx, miny, maxx, maxy) — 지층 격자 범위
         // ★[계획 검토 높음 4] 시공 재생 격자 — 바뀐 자리 + 10 m · 1 m(40만 칸 넘으면 키움) · 마디마다 정지면 · 원지반 높이(원지반 없으면 정지면) — 꼭짓점만 내리면 부지 밑 봉우리가 사라진다
         try
         {
@@ -299,9 +370,23 @@ internal static class Web3DBuilder
                         ["s"] = Web3DScene.Num(s.S, 3), ["label"] = s.Label, ["major"] = s.Major, ["views"] = s.Views, ["c"] = N3(s.C), ["l"] = N3(s.L), ["r"] = N3(s.R), ["pts"] = sc.F32(s.P),
                     }).ToList(),
                 };
+                double bx0 = double.MaxValue, by0 = double.MaxValue, bx1 = double.MinValue, by1 = double.MinValue;
+                foreach (var s in sts)
+                    foreach (var q in new[] { s.L, s.C, s.R })
+                        if (double.IsFinite(q[0]) && double.IsFinite(q[1])) { bx0 = System.Math.Min(bx0, q[0] + ox); by0 = System.Math.Min(by0, q[1] + oy); bx1 = System.Math.Max(bx1, q[0] + ox); by1 = System.Math.Max(by1, q[1] + oy); }
+                if (bx0 <= bx1) alignBox = new[] { bx0, by0, bx1, by1 };
             }
         }
         catch (System.Exception aex) { c.Warn.Add("종단 측점을 못 읽었습니다 — " + aex.Message); log.AppendLine("  측점: 실패 — " + aex); }
+        // ④e ★★[JACK 1103 «3D 뷰에서 진입도로 측점이 없어 · 부지 측점, 진입도로 측점이 별도로»] 진입도로 측점 — 도로마다 종단도 검토선(«{노선}-검토») · 도로가 없으면 열쇠를 안 넣는다(옛 장면 바이트 그대로)
+        List<object>? roadAlignHead = null;
+        try { roadAlignHead = RoadStations(db, SurfZ, ox, oy, sc, log, c.Warn); }
+        catch (System.Exception rex) { c.Warn.Add("진입도로 측점을 못 읽었습니다 — " + rex.Message); log.AppendLine("  진입도로 측점: 실패 — " + rex); }
+        // ④d ★★[JACK 1103 «3D 뷰에서 지층을 모델링했다면 자르기 뷰에서 지층도 보이게»] 지층 — 자르기는 측점 가로선이라 측점이 있을 때만 ·
+        //   지층면(DH_지층_n_*)이 없으면 열쇠를 안 넣는다(옛 장면 바이트 그대로)
+        if (alignBox != null)
+            try { strataHead = Strata(db, alignBox, ox, oy, sc, log); }
+            catch (System.Exception stx) { c.Warn.Add("지층을 3D에 못 넣었습니다 — " + stx.Message); log.AppendLine("  지층: 실패 — " + stx); }
         Lap("빗물 · 지적 · 측점", skipSat ? null : "건물 받는 중");
 
         // ④c ★★[v111.7 · JACK 1102 «3D 보기에 건물 · 층수로 높이 · 켜고 끄기»] 건물 — VWorld 건물정보
@@ -438,6 +523,9 @@ internal static class Web3DBuilder
         // ★[v111.8 · M6] 토량은 계획부지만(다음 판) — 진입도로가 있을 때만 표 아래 한 줄 · 차선은 있을 때만(도로 없는 장면은 머리 그대로)
         if (c.HasRoads && H["earth"] is Dictionary<string, object> eh) eh["note"] = "진입도로 제외";
         if (laneHead != null) H["lanes"] = laneHead;
+        if (ditchHead != null) H["ditches"] = ditchHead;   // ★[도로 마무리 ②] 측구가 있을 때만
+        if (strataHead != null) H["strata"] = strataHead;
+        if (roadAlignHead != null) H["roadAlign"] = roadAlignHead;
         if (c.Ground != null && c.GroundOfName.Length > 0 && c.GroundOfName != c.GroundName)
             c.Warn.Add($"원지반이 둘입니다 — 토공량 · 절성토 색은 «{c.GroundName}», 옹벽 변환 자리 · 단면은 «{c.GroundOfName}»");
         H["warn"] = c.Warn.Select(NoPath).Distinct().ToList();
@@ -463,6 +551,114 @@ internal static class Web3DBuilder
         LastPath = path; LastDwg = c.Dwg; LastDwgKey = c.DwgKey; LastBytes = bytes;
         log.AppendLine($"  장면: 묶음 {sc.BlobBytes / 1048576.0:F1} MB → gzip {gz.Length / 1048576.0:F1} MB → 페이지 {bytes / 1048576.0:F1} MB · {string.Join(" · ", times)}");
         return path;
+    }
+
+    /// <summary>★★[JACK 1103] 지층 격자 — 지층면(<c>DH_지층_n_이름</c> = 그 층 상단 · 번호 차례) · 지하수위를 측점 가로선 범위 + 가로선 폭(30 m 이상) 안 격자로 읽는다(지층면 범위와 겹친 곳만).
+    /// 색 = 2D 횡단 · 종단과 같은 색표(<see cref="Commands.XsecViewCommand.StrataAciOf"/>). 도면은 읽기만. 지층면이 없으면 null.</summary>
+    static Dictionary<string, object>? Strata(Database db, double[] box, double ox, double oy, Web3DScene sc, System.Text.StringBuilder log)
+    {
+        var cdoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+        var found = new List<(int Ord, string Name, CachedGroundSurface S)>();
+        CachedGroundSurface? water = null;
+        using (var tr = db.TransactionManager.StartTransaction())
+        {
+            foreach (ObjectId sid in cdoc.GetSurfaceIds())
+            {
+                if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.TinSurface ts) continue;
+                string nm = ts.Name ?? "";
+                if (nm == StrataDraw.WaterSurfName) water = new CachedGroundSurface(ts);
+                else if (nm.StartsWith(StrataDraw.SurfPrefix, System.StringComparison.Ordinal)) found.Add((Commands.ProfileCommand.StrataOrdOf(nm), StrataDraw.ShortName(nm), new CachedGroundSurface(ts)));
+            }
+            tr.Commit();
+        }
+        if (found.Count == 0) return null;
+        // 범위 = 측점 가로선 + 가로선 폭(자르기가 마주 보는 화면 폭 ±0.75폭을 넉넉히 덮음 · 30 m 이상) ∩ 지층면 범위 — 그 밖 자른 면은 종전 흙 빗금
+        double m = System.Math.Max(30, System.Math.Max(5, GradingSettings.XsecLeft) + System.Math.Max(5, GradingSettings.XsecRight));
+        double sx0 = double.MaxValue, sy0 = double.MaxValue, sx1 = double.MinValue, sy1 = double.MinValue;
+        foreach (var f in found) { var b = f.S.XYBounds; sx0 = System.Math.Min(sx0, b.MinX); sy0 = System.Math.Min(sy0, b.MinY); sx1 = System.Math.Max(sx1, b.MaxX); sy1 = System.Math.Max(sy1, b.MaxY); }
+        var g = Web3DStrata.Pick(System.Math.Max(box[0] - m, sx0), System.Math.Max(box[1] - m, sy0), System.Math.Min(box[2] + m, sx1), System.Math.Min(box[3] + m, sy1));
+        if (g == null) { log.AppendLine($"  지층: {found.Count}층 — 측점 범위 밖(안 실음)"); return null; }
+        var layers = found.OrderBy(f => f.Ord).ThenBy(f => f.Name, System.StringComparer.Ordinal).Select(f =>
+        {
+            var col = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, Commands.XsecViewCommand.StrataAciOf(f.Ord)).ColorValue;
+            var s = f.S;
+            return new Web3DStrata.Layer(f.Name, f.Ord, col.R, col.G, col.B, (x, y) => s.TryGetElevation(x, y, out double z) ? z : null);
+        }).ToList();
+        var h = Web3DStrata.Head(sc, g.Value, layers, water == null ? null : (x, y) => water.TryGetElevation(x, y, out double z) ? z : null, ox, oy, out string text);
+        log.AppendLine("  지층: " + text);
+        return h;
+    }
+
+    /// <summary>★★[JACK 1103] 진입도로 측점 — 진입도로 설계 기록이 있는 노선마다(먼저 만든 노선 먼저) 종단도 검토선 그룹(<see cref="RoadXsec.SheetGroup"/> — 횡단도와 같은 측점 · 같은 이름)을
+    /// <see cref="Web3DRoadStations.Head"/>로. 가로선 폭 = 검토선 꼭짓점의 옆거리(못 재면 포장 끝 + 5 m). 도면은 읽기만. 진입도로가 없으면 null(열쇠를 안 넣는다).</summary>
+    static List<object>? RoadStations(Database db, Func<double, double, double?> z, double ox, double oy, Web3DScene sc, System.Text.StringBuilder log, List<string> warn)
+    {
+        var cdoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
+        var heads = new List<object>();
+        var texts = new List<string>();
+        int roads = 0;
+        using var tr = db.TransactionManager.StartTransaction();
+        var ids = new List<ObjectId>();
+        foreach (ObjectId aid in cdoc.GetAlignmentIds())
+            try { if (!aid.IsErased && RoadDesign.Has(tr, aid)) ids.Add(aid); } catch { }
+        ids.Sort((a, b) => a.Handle.Value.CompareTo(b.Handle.Value));
+        foreach (var aid in ids)
+        {
+            var d = RoadDesign.Read(tr, aid);
+            if (d == null || tr.GetObject(aid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Alignment al) continue;
+            roads++;
+            string name = al.Name ?? "";
+            var (gid, gname) = RoadXsec.SheetGroup(tr, db, d);
+            if (gid.IsNull) { warn.Add($"진입도로 «{name}» 측점 없음 — 진입도로 [종단도]를 그리면 3D에 측점이 나옵니다"); texts.Add($"«{name}» 종단도 없음"); continue; }
+            double index = al.StationIndexIncrement > 1e-6 ? al.StationIndexIncrement : 20.0;
+            // 측점마다 횡단 뷰 수 — 진입도로 횡단도는 따로 묶음(«{노선}-횡단_n»)에 뷰를 단다 → 이 노선 모든 묶음의 샘플 선에서 같은 측점(1 cm)의 뷰를 셈
+            var viewsAt = new Dictionary<long, int>();
+            foreach (ObjectId vg in al.GetSampleLineGroupIds())
+                try
+                {
+                    if (tr.GetObject(vg, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.SampleLineGroup sg) continue;
+                    foreach (ObjectId vs in sg.GetSampleLineIds())
+                        if (tr.GetObject(vs, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.SampleLine vl)
+                        {
+                            int nv = vl.GetSectionViewIds().Count;
+                            if (nv > 0) { long k = (long)System.Math.Round(vl.Station * 100); viewsAt[k] = viewsAt.GetValueOrDefault(k) + nv; }
+                        }
+                }
+                catch { }
+            var marks = new List<Web3DRoadStations.Mark>();
+            var offs = new List<double>();
+            // ★[도로 마무리 ① · 계획 5.8] 도로 구간(잘린 끝 · 빈 구간 뺌) — 그 밖 측점은 3D에 안 그림 · 끝 맞춤 꺼진 도로 = 노선 ∩ 종단(측점은 지금처럼 노선 전체)
+            var rg = d.EndsOn ? RoadRanges.Of(tr, aid, d) : new List<(double A, double B)>();
+            var g = (Autodesk.Civil.DatabaseServices.SampleLineGroup)tr.GetObject(gid, OpenMode.ForRead);
+            foreach (ObjectId sid in g.GetSampleLineIds())
+            {
+                try
+                {
+                    if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.SampleLine sl) continue;
+                    double st = sl.Station;
+                    if (rg.Count > 0 && !RoadRanges.Inside(rg, st)) continue;
+                    marks.Add(new Web3DRoadStations.Mark(st, RoadXsecRules.LabelOf(sl.Name, gname, StationNaming.Fmt(st, index)), viewsAt.GetValueOrDefault((long)System.Math.Round(st * 100))));
+                    foreach (Autodesk.Civil.DatabaseServices.SampleLineVertex v in sl.Vertices)
+                        try { double s = 0, o = 0; al.StationOffset(v.Location.X, v.Location.Y, ref s, ref o); offs.Add(o); } catch { }
+                }
+                catch { }
+            }
+            var (wl, wr) = Web3DRoadStations.Reach(offs);
+            if (wl < 1 || wr < 1) { var sec = d.Section(); var w = ProfileSheetRules.RoadWidth(sec.OuterL, sec.OuterR, 0, 0); if (wl < 1) wl = w.L; if (wr < 1) wr = w.R; }
+            (double X, double Y)? At(double s, double o)
+            {
+                try { double x = 0, y = 0; al.PointLocation(s, o, ref x, ref y); return double.IsFinite(x) && double.IsFinite(y) ? (x, y) : null; }
+                catch { return null; }
+            }
+            var h = Web3DRoadStations.Head(sc, name, rg.Count > 0 ? rg[0].A : al.StartingStation, rg.Count > 0 ? rg[^1].B : al.EndingStation, index, wl, wr, marks, At, z, ox, oy, out int skipped);
+            if (skipped > 0) warn.Add($"진입도로 «{name}» 노선 밖 측점 {skipped}개는 3D에 안 그렸습니다(노선을 고친 뒤 남은 검토선)");
+            texts.Add($"«{name}» 측점 {marks.Count - skipped} · 폭 좌 {wl:0.#} / 우 {wr:0.#} m");
+            if (h != null) heads.Add(h);
+        }
+        tr.Commit();
+        if (roads == 0) return null;
+        log.AppendLine("  진입도로 측점: " + string.Join(" · ", texts));
+        return heads.Count > 0 ? heads : null;
     }
 
     /// <summary>그림 범위(원점 뺀 minx, miny, maxx, maxy) — 돌려받은 W·res로.</summary>

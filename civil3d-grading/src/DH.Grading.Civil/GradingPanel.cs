@@ -43,9 +43,8 @@ internal sealed class GradingPanel : UserControl
     // ── ★[5b] 대상 ────────────────────────────────────────────────────────
     private readonly Button _pickPlan, _pickGround, _build;
     private readonly Button _toWall, _toSlope;
-    /// <summary>★[v111.6 · JACK 1102] ■ 도면 — [종단도] · [횡단도](리본 [계획지표면] 패널과 같은 명령) + 옛 면 알림 한 줄(<see cref="RefreshSheets"/>).</summary>
-    private readonly Button _profBtn, _xsecBtn;
-    private readonly TextBlock _sheetState;
+    /// <summary>★[v111.10 · JACK 1103] [계획지표면 초기화](주황 · 창 맨 끝 — <see cref="RefreshReset"/>). 옛 ■ 도면([종단도] · [횡단도])은 없앰(리본에 있음).</summary>
+    private readonly Button _resetBtn;
     private readonly TextBlock _planWhat, _groundWhat;
     // ★★[v103.1.12 · JACK 1014 «합성 미루기 = 정지 창 옵션 · 기본 꺼짐» · 1015 «도면마다 기억»] 켜면 옹벽 변환은 옹벽만 짓고 합성은 [옹벽 합성] 한 번에
     private readonly CheckBox _defer;
@@ -461,29 +460,13 @@ internal sealed class GradingPanel : UserControl
             Margin = new Thickness(0, 0, 0, 4),
         });
 
-        // ── ■ 도면 ★★[v111.6 · JACK 1102 «계획지표면 · 진입도로 둘 다 종단 · 횡단이 나온다 — 그 둘로 정리 · 통일»] ──────
-        //   진입도로 창 ■ 도면과 같은 꼴 · 같은 이름 — 리본 [계획지표면] 패널의 [종단도](DHPROFILE) · [횡단도](DHXVIEW)를 창에서 바로.
-        //   보내는 문은 다른 단추와 같다(<see cref="PickSession.Send"/> — ^C^C). 값 반영(Apply)은 안 한다 — 두 명령은 창의 절성토 값을 안 읽는다(사면 수정 단추와 다름).
-        //   단추 아래 한 줄 + [종단도] 깜박 = 그려 둔 종단 · 횡단이 옛 면 기준(<see cref="RefreshSheets"/>).
-        //   ★[횡단도]는 안 깜박인다 — 종단이 옛 면이면 횡단은 «[종단도]를 먼저»로 물러나므로(SectionCommand.FindSurfacesForAlignment) 먼저 누를 단추는 [종단도] 하나다.
-        var secSheet = GradingDialog.AddCollapsible(root, "■ 도면", "계획지표면 종단도 · 횡단도",
-            open: true, key: "정지:도면", group: null);   // ★묶음 없음 — 위 두 칸과 같은 까닭
-        var sRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
-        Button SBtn(string t, string cmd, string tip)
-        {
-            var b = new Button { Content = t, MinWidth = 104, Height = 30, Margin = new Thickness(0, 0, 6, 0), ToolTip = tip };
-            b.Click += (_, __) => PickSession.Send(Doc, cmd);
-            sRow.Children.Add(b);
-            return b;
-        }
-        _profBtn = SBtn("종단도", "DHPROFILE",
-            "계획지표면 종단도 — 노선을 직접 그리면(노란 선) 그 노선을 따라 종단면도를 만듭니다(Enter = 끝 · U = 마지막 점 취소).");
-        _xsecBtn = SBtn("횡단도", "DHXVIEW",
-            "계획지표면 횡단도 — 종단도 측점대로 횡단면도를 만듭니다(옹벽·가시설은 (전)(후) 두 장). 종단도가 먼저 있어야 합니다.");
-        secSheet.Children.Add(sRow);
-        // RoadPanel.StateLine과 같은 꼴(경고색 11px · 비면 접힘)
-        _sheetState = new TextBlock { FontSize = 11, Foreground = DhBrand.Warn, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, -2, 0, 6), Visibility = Visibility.Collapsed };
-        secSheet.Children.Add(_sheetState);
+        // ── ★[v111.10 · JACK 1103 «UI에 버튼이 있으니 필요 없음»] ■ 도면([종단도] [횡단도] + 옛 면 알림)은 없앰 — 리본 [계획지표면] 패널 [종단도] · [횡단도] 그대로 ──
+        // ── ★[v111.10 · 계획_초기화.md 3.5 · JACK 1103 «창마다 초기화 단추 = 주황»] [계획지표면 초기화] — 창 맨 끝 얇은 줄 아래 ──
+        //   보내는 문은 다른 단추와 같다(<see cref="PickSession.Send"/> — ^C^C) · 값 반영(Apply)은 안 한다(창 값을 안 읽음) · 지울 것이 없으면 꺼짐(<see cref="RefreshReset"/>)
+        root.Children.Add(new Border { Height = 1, Background = DhBrand.Line, Margin = new Thickness(0, 10, 0, 6) });
+        _resetBtn = DhBrand.CautionButton("계획지표면 초기화", "정지면 · 옹벽 · 터파기 · 종단도 · 횡단도 · 진입도로를 지웁니다. 원지반 · 지층 · 직접 그린 것은 남습니다.");
+        _resetBtn.Click += (_, __) => PickSession.Send(Doc, "DHGRADERESET");
+        root.Children.Add(_resetBtn);
 
         // 값이 바뀌면 예시를 바로 다시 그린다 — 도킹창의 값어치가 여기 있다.
         // ★★★[JACK 0910 <i>"별도의 값저장없이 도킹창에 넣은 값이 상시 저장된다고 생각하면 될것같은데"</i>]
@@ -845,7 +828,7 @@ internal sealed class GradingPanel : UserControl
             _fixOk = !busy && madeAny;
             SyncEnabled();
             RefreshComposite();   // ★[v103.1.12] 미루기 칸 · 대기 수도 같은 때에(도면 전환 · 명령 끝 · 찍기 상태)
-            RefreshSheets();      // ★[v111.6] ■ 도면 단추 · 옛 면 알림도 같은 때에
+            RefreshReset();       // ★[v111.10] [계획지표면 초기화] 켜짐도 같은 때에(옛 ■ 도면 자리)
             // ★[v103.3] 도면의 터파기 기록이 화면과 다르면(DHRESET · 되돌리기 · 다른 길로 바뀜) 화면을 도면 값으로 — 치는 중(타이머)이면 그대로
             if (!_exTimer.IsEnabled && WallListStore.ExcavOf(doc?.Database, out _) != _exStored) FillExcav(doc);
             else SyncExcavLock();
@@ -858,26 +841,14 @@ internal sealed class GradingPanel : UserControl
         }
     }
 
-    /// <summary>★★[v111.6 · JACK 1102] ■ 도면 — 단추 켜짐 · 옛 면 알림 한 줄 + [종단도] 깜박(진입도로 창과 같은 꼴 — <see cref="RoadPanel.SetState"/> · <see cref="RoadPanel.Blink"/>).
-    /// <para>켜짐 = 계획지표면이 있고 찍는 중이 아님(리본 [종단도] · [횡단도]와 같은 조건 — <see cref="Commands.ViewSurfaceCommand.WhatExists"/>).
-    /// 알림 = 그려 둔 계획지표면 종단 · 횡단이 옛 면 기준(<see cref="PureWithWallsBuilder.SheetsStale"/> — 읽기만).</para>
-    /// <para>부르는 때 = <see cref="RefreshPicks"/>(창이 붙을 때 · 도면 전환 <see cref="SyncTo"/> · 찍기 상태) + 우리 명령(DH…)이 끝날 때(<see cref="GradingPalette.RefreshSheets"/> ← RibbonApp 명령 끝 훅). 시계로 되풀이해 재지 않는다.</para></summary>
-    internal void RefreshSheets()
+    /// <summary>★[v111.10 · 계획_초기화.md 3.5] [계획지표면 초기화] 켜짐 — 찍는 중이 아니고 지울 것이 있음(싸게: 우리 면 이름 · «DH선형» 노선 · 정지 기록 · 진입도로 — <see cref="Commands.ResetCommand.AnySite"/>).
+    /// <para>부르는 때 = <see cref="RefreshPicks"/>(창이 붙을 때 · 도면 전환 <see cref="SyncTo"/> · 찍기 상태) + 명령 끝(DH… · U · UNDO · REDO · MREDO — <see cref="GradingPalette.RefreshReset"/> ← RibbonApp 명령 끝 훅). 시계로 되풀이해 재지 않는다.</para></summary>
+    internal void RefreshReset()
     {
-        try
-        {
-            var doc = Doc;
-            bool hasPlan = doc != null && Commands.ViewSurfaceCommand.WhatExists(doc.Database).Plan;
-            bool on = !PickSession.Busy && hasPlan;
-            _profBtn.IsEnabled = on;
-            _xsecBtn.IsEnabled = on;
-            bool stale = hasPlan && PureWithWallsBuilder.SheetsStale(doc!.Database);
-            RoadPanel.SetState(_sheetState, stale ? "계획지표면이 바뀌었습니다 — 종단도 · 횡단도를 새로 그리세요" : "");
-            RoadPanel.Blink(_profBtn, stale && on);
-        }
+        try { _resetBtn.IsEnabled = !PickSession.Busy && Commands.ResetCommand.AnySite(Doc?.Database); }
         catch (System.Exception ex)
         {
-            try { DiagLog.Append("\n■ 정지창 ■ 도면 갱신 실패 — " + ex.Message + "\n"); } catch { }
+            try { DiagLog.Append("\n■ 정지창 [계획지표면 초기화] 켜짐 갱신 실패 — " + ex.Message + "\n"); } catch { }
         }
     }
 

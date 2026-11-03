@@ -10,9 +10,25 @@ public static class TinVolume
 
     /// <summary><paramref name="cmp"/>(비교 = 정지면) − <paramref name="bas"/>(기준 = 원지반). 세모는 도면 좌표 — 안에서 원점을 빼 셈한다.</summary>
     public static Result Compute(IReadOnlyList<(Point3 A, Point3 B, Point3 C)> cmp, IReadOnlyList<(Point3 A, Point3 B, Point3 C)> bas)
+        => Compute(cmp, bas, null, true);
+
+    /// <summary>★★[v112.0 · 계획_도면화.md 4.9 · 검토 M7] <b>영역 거름</b> — <paramref name="mask"/>(도면 좌표 NTS 다각형) 안(<paramref name="inside"/>)이나 밖만 센다.
+    /// 비교 세모가 다각형 안/밖에 통째로 들면 거름 없이(같은 셈) · 걸친 세모만 쌍 조각을 다각형으로 잘라 1차식 적분(근사 없음) — 안 + 밖 = 전체.
+    /// <paramref name="mask"/> = null이면 옛 셈 그대로(바이트 같음).</summary>
+    public static Result Compute(IReadOnlyList<(Point3 A, Point3 B, Point3 C)> cmp, IReadOnlyList<(Point3 A, Point3 B, Point3 C)> bas,
+                                 NetTopologySuite.Geometries.Geometry? mask, bool inside)
     {
         if (cmp.Count == 0 || bas.Count == 0) return new Result(0, 0, 0, 0);
         double ox = cmp[0].A.X, oy = cmp[0].A.Y;
+        NetTopologySuite.Geometries.Geometry? mk = null;
+        NetTopologySuite.Geometries.Prepared.IPreparedGeometry? prep = null;
+        var gf = NetTopologySuite.Geometries.GeometryFactory.Default;
+        if (mask != null)
+        {
+            if (mask.IsEmpty) return inside ? new Result(0, 0, 0, 0) : Compute(cmp, bas, null, true);
+            mk = NetTopologySuite.Geometries.Utilities.AffineTransformation.TranslationInstance(-ox, -oy).Transform(mask);
+            prep = NetTopologySuite.Geometries.Prepared.PreparedGeometryFactory.Prepare(mk);
+        }
         // 기준면 세모 — 평면식 z = a·x + b·y + c(원점 뺀 좌표) · 상자 · 격자
         int nb = bas.Count;
         var bx = new double[nb * 3]; var by = new double[nb * 3];
@@ -51,6 +67,14 @@ public static class TinVolume
             if (!Plane(ax, ay, A.Z, bxx, byy, B.Z, cx, cy, C.Z, out double ta, out double tb, out double tc)) continue;
             double tx0 = Math.Min(ax, Math.Min(bxx, cx)), tx1 = Math.Max(ax, Math.Max(bxx, cx)), ty0 = Math.Min(ay, Math.Min(byy, cy)), ty1 = Math.Max(ay, Math.Max(byy, cy));
             if (tx1 < mnx || tx0 > mxx || ty1 < mny || ty0 > mxy) continue;
+            bool edge = false;
+            if (prep != null)
+            {
+                var tri = gf.CreatePolygon(new[] { new NetTopologySuite.Geometries.Coordinate(ax, ay), new NetTopologySuite.Geometries.Coordinate(bxx, byy), new NetTopologySuite.Geometries.Coordinate(cx, cy), new NetTopologySuite.Geometries.Coordinate(ax, ay) });
+                if (prep.Contains(tri)) { if (!inside) continue; }
+                else if (!prep.Intersects(tri)) { if (inside) continue; }
+                else edge = true;
+            }
             int i0 = Math.Max(0, (int)((tx0 - mnx) / cell)), i1 = Math.Min(gw - 1, (int)((tx1 - mnx) / cell));
             int j0 = Math.Max(0, (int)((ty0 - mny) / cell)), j1 = Math.Min(gh - 1, (int)((ty1 - mny) / cell));
             seen.Clear();
@@ -67,6 +91,21 @@ public static class TinVolume
                         double sx0 = bx[s * 3], sy0 = by[s * 3], sx1 = bx[s * 3 + 1], sy1 = by[s * 3 + 1], sx2 = bx[s * 3 + 2], sy2 = by[s * 3 + 2];
                         if ((sx1 - sx0) * (sy2 - sy0) - (sy1 - sy0) * (sx2 - sx0) < 0) { (sx1, sx2) = (sx2, sx1); (sy1, sy2) = (sy2, sy1); }
                         if (!Clip(poly, tmp, sx0, sy0, sx1, sy1) || !Clip(poly, tmp, sx1, sy1, sx2, sy2) || !Clip(poly, tmp, sx2, sy2, sx0, sy0)) continue;
+                        if (edge)
+                        {
+                            // ★[v112.0] 다각형 경계에 걸친 조각 — 다각형과 겹친(또는 뺀) 자리만 1차식 적분
+                            var pc0 = new NetTopologySuite.Geometries.Coordinate[poly.Count + 1];
+                            for (int k = 0; k < poly.Count; k++) pc0[k] = new NetTopologySuite.Geometries.Coordinate(poly[k].X, poly[k].Y);
+                            pc0[poly.Count] = pc0[0];
+                            NetTopologySuite.Geometries.Geometry piece;
+                            try { var pg = gf.CreatePolygon(pc0); piece = inside ? pg.Intersection(mk) : pg.Difference(mk); }
+                            catch { continue; }
+                            double al = ta - pa[s], be = tb - pb[s], ga = tc - pc[s];
+                            var (pArea, pTot, pPos) = Integrate(piece, al, be, ga);
+                            if (pArea <= 0) continue;
+                            area += pArea; fill += pPos; cut += pPos - pTot; pairs++;
+                            continue;
+                        }
                         // 높이차 d = 비교 − 기준(둘 다 1차식) — 부채꼴 세모마다 양 · 음 몫
                         double D((double X, double Y) p) => (ta * p.X + tb * p.Y + tc) - (pa[s] * p.X + pb[s] * p.Y + pc[s]);
                         double d0 = D(poly[0]); bool any = false;
@@ -84,6 +123,51 @@ public static class TinVolume
                 }
         }
         return new Result(cut, fill, area, pairs);
+    }
+
+    /// <summary>다각형(구멍 포함 · 여럿) 위 1차식 d = α·x + β·y + γ의 (넓이, ∫d, ∫max(0,d)).</summary>
+    static (double Area, double Tot, double Pos) Integrate(NetTopologySuite.Geometries.Geometry g, double al, double be, double ga)
+    {
+        double area = 0, tot = 0, pos = 0;
+        for (int i = 0; i < g.NumGeometries; i++)
+        {
+            if (g.GetGeometryN(i) is not NetTopologySuite.Geometries.Polygon p || p.IsEmpty) continue;
+            void Ring(NetTopologySuite.Geometries.Coordinate[] cs, double sign)
+            {
+                var r = new List<(double X, double Y)>(cs.Length);
+                for (int k = 0; k + 1 < cs.Length; k++) r.Add((cs[k].X, cs[k].Y));
+                if (r.Count < 3) return;
+                var (a0, mx0, my0) = Moments(r);
+                if (a0 < 0) { r.Reverse(); (a0, mx0, my0) = (-a0, -mx0, -my0); }
+                area += sign * a0; tot += sign * (al * mx0 + be * my0 + ga * a0);
+                // d ≥ 0 반평면으로 자른 고리(오목이어도 넓이 · 모멘트 식은 맞음)
+                var c = new List<(double X, double Y)>(r.Count + 4);
+                for (int k = 0; k < r.Count; k++)
+                {
+                    var a = r[k]; var b = r[(k + 1) % r.Count];
+                    double da = al * a.X + be * a.Y + ga, db = al * b.X + be * b.Y + ga;
+                    if (da >= 0) c.Add(a);
+                    if ((da >= 0) != (db >= 0)) { double t = da / (da - db); c.Add((a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t)); }
+                }
+                if (c.Count >= 3) { var (a1, mx1, my1) = Moments(c); pos += sign * (al * mx1 + be * my1 + ga * a1); }
+            }
+            Ring(p.ExteriorRing.Coordinates, 1);
+            foreach (var h in p.InteriorRings) Ring(h.Coordinates, -1);
+        }
+        return (area, tot, Math.Max(0, pos));
+    }
+
+    /// <summary>닫힌 고리의 (부호 넓이, ∫x dA, ∫y dA) — 신발끈.</summary>
+    static (double A, double Mx, double My) Moments(List<(double X, double Y)> r)
+    {
+        double a = 0, mx = 0, my = 0;
+        for (int k = 0; k < r.Count; k++)
+        {
+            var p = r[k]; var q = r[(k + 1) % r.Count];
+            double cr = p.X * q.Y - q.X * p.Y;
+            a += cr; mx += (p.X + q.X) * cr; my += (p.Y + q.Y) * cr;
+        }
+        return (a / 2, mx / 6, my / 6);
     }
 
     /// <summary>세 점 평면 z = a·x + b·y + c(위에서 보아 넓이 0이면 거짓 — 선 세모는 부피 없음).</summary>

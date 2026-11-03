@@ -222,7 +222,7 @@ public sealed class SectionCommand
         }
 
         // ── ⑤ 종단도 배치 ───────────────────────────────────────────────────
-        var pvPt = ed.GetPoint("\n[종단/횡단] 종단면도를 놓을 위치 클릭 (Esc=종단만 만들고 끝): ");
+        var pvPt = CursorLabel.GetPoint(ed, new PromptPointOptions("\n[종단/횡단] 종단면도를 놓을 위치 클릭 (Esc=종단만 만들고 끝): "), "종단도 작성 위치 클릭", "Esc 종단만 만들고 끝");   // ★[JACK 1103] 커서 이름표
         if (pvPt.Status != PromptStatus.OK)
         {
             Done(ed, $"선형 '{alignName}' · 종단 {nProf}개 생성(종단도 배치는 건너뜀)");
@@ -304,7 +304,7 @@ public sealed class SectionCommand
         }
 
         // ── ⑦ 횡단도 격자 배치 ──────────────────────────────────────────────
-        var svPt = ed.GetPoint("\n[종단/횡단] 횡단면도를 놓을 위치(왼쪽 위) 클릭 (Esc=측점선까지만): ");
+        var svPt = CursorLabel.GetPoint(ed, new PromptPointOptions("\n[종단/횡단] 횡단면도를 놓을 위치(왼쪽 위) 클릭 (Esc=측점선까지만): "), "횡단도 작성 위치(왼쪽 위) 클릭", "Esc 측점선까지만");   // ★[JACK 1103] 커서 이름표
         if (svPt.Status != PromptStatus.OK)
         {
             Done(ed, $"선형 '{alignName}' · 종단 {nProf}개 · 종단면도 · 측점선 {nSl}개 (횡단도 배치는 건너뜀)");

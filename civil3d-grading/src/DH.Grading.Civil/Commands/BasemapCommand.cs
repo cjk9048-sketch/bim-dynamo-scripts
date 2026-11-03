@@ -21,7 +21,7 @@ namespace DH.Grading.Civil.Commands;
 /// </summary>
 public sealed class BasemapCommand
 {
-    private const string Layer = "DH-배경지도";
+    internal const string Layer = "DH-배경지도";   // ★[v111.10] [계획지표면 초기화] 남김 목록이 씀
     private const string DefPrefix = "DH배경지도";
 
     /// <summary>도면상 배치 범위(축정렬).</summary>

@@ -89,6 +89,24 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "final")
     return fails == 0 ? 0 : 1;
 }
 
+// ★[도로 마무리] BLOCKTEST_ONLY=rail — S190 RB만(개발 중 부분 시험)
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "rail")
+{
+    RoadRailCheck.Run(Check);
+    RoadEndsCheck.Run(Check);
+    DitchCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
+// ★[JACK 1103] BLOCKTEST_ONLY=ring — S189 데이라잇 고리의 링 지름길만(개발 중 부분 시험)
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "ring")
+{
+    RingShortcutCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
 // ★[v111.9] BLOCKTEST_ONLY=crop — 원지형 자르기 순수 셈(S188 CR — 네 띠 · 우리 띠 알아보기 · 설계 자리 검사 · 나간 조각 · 안쪽 지문 · 다시 키우기)만
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "crop")
 {
@@ -110,6 +128,14 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "sheet")
 {
     RoadSheetCheck.Run(Check);
     RoadAutoCheck.Run(Check);   // ★[v111.7.1] S185 — 진입도로 저절로 다시 만들기 판정 · PVI 확대
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
+// ★[v112.0] BLOCKTEST_ONLY=sheetbook — 도면화 순수 셈(S190 SB)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "sheetbook")
+{
+    SheetBookCheck.Run(Check);
     Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
     return fails == 0 ? 0 : 1;
 }
@@ -205,6 +231,11 @@ RoadAutoCheck.Run(Check);    // ★[v111.7.1] S185 — 진입도로 저절로 �
 FinalSurfaceCheck.Run(Check);   // ★[v111.8] S186 SF — 최종지표면 합치기(ε 이음 띠 · 도로 세모 비트 그대로 · Δv · 가파른 띠 · 섬 · 바탕 밖 · 도로 둘 · 같은 결과 · 속도 · 옛 길이면 실패)
 RoadMarksCheck.Run(Check);      // ★[v111.8] S187 SL — 흰 차선 띠(차로 끝 안쪽 0.1 m · 폭 0.1 m · 직선 · R 30 · 지형 없는 칸 · 좁은 안쪽 곡선 · 끝 측점)
 CropCheck.Run(Check);           // ★[v111.9] S188 CR — 원지형 자르기(네 띠 · 우리 띠 알아보기 · 설계 자리 검사 · 나간 조각 · 안쪽 지문 · 다시 키우기 · 옛 길이면 실패)
+RingShortcutCheck.Run(Check);   // ★[JACK 1103] S189 RS — 데이라잇 고리의 링 지름길 → 링 따라(둥근 모서리 수직 옹벽 면 · 옛 길이면 실패)
+SheetBookCheck.Run(Check);      // ★[v112.0] S190 SB — 도면화(장 알아보기 · 표제란 · 페이지 설정 이름 · 평면 축척 · 글자 맞춤 · 도곽 검출 · 토공량 영역 거름)
+RoadRailCheck.Run(Check);       // ★[도로 마무리 ③] S190 RB — 도로 면 둘레가 땅(TIN) 꺾임을 정확히(레일 꺾임 점 · 몰림 = 점 하나 · 같은 결과 · 꼴 재현 · 평평한 땅 비트 같음 · 가지 바탕 = 정지면 + 본 도로 합침)
+RoadEndsCheck.Run(Check);       // ★[도로 마무리 ①] S191 SE — 도로 끝 판정(넘침 · 못 미침 20 m · 꺾어 · 비스듬히 · 빈 구간 · 가지 · 고정 PVI · 시점 옮김)
+DitchCheck.Run(Check);          // ★[도로 마무리 ②] S192 DG — 측구 단면 꼴(U형 · L형 대표단면 · 치수 칸 · 넓이 · 경고)
 
 const double W = 0.46, H = 0.2, STEP = 5.0, HW = W / 2;
 const double D = 0.5, FS = D / 2; // 깊이·전면 돌출(벽 중심=링, JACK 0720 Z-파이팅 해소): 절토 +FS(안쪽), 성토 −FS

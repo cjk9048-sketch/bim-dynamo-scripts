@@ -59,7 +59,7 @@ internal static class FinalSurfaceBuilder
     internal static bool IsOurs(CivilDb.Surface s)
     {
         string nm = s.Name ?? "";
-        return Commands.SectionCommand.IsBase(nm, Name) || Commands.SectionCommand.IsBase(nm, TempName) || Commands.SectionCommand.IsBase(nm, OldName) || IsRoadSurface(s);
+        return Commands.SectionCommand.IsBase(nm, Name) || Commands.SectionCommand.IsBase(nm, TempName) || SurfaceRetire.IsRetired(s) || IsRoadSurface(s);   // ★[v111.10] 물러난 면은 표식으로(이름 꼴 말고)
     }
 
     /// <summary>★[M5] 원지반 찍기에서 우리 면을 골랐으면 한 줄 알리고 참(다시 묻기) — DHGRADE · DHEXCAV.</summary>
@@ -266,21 +266,10 @@ internal static class FinalSurfaceBuilder
 
     internal static string RetireOld(Database db, Transaction tr, ObjectId keep, out int erased)
     {
-        erased = 0; var kept = new List<string>();
-        foreach (var id in Finals(db, tr, Name).Concat(Finals(db, tr, TempName)))
-        {
-            if (id == keep) continue;
-            if (ReferencedElsewhere(db, tr, id, out string who))
-            {
-                var s = (CivilDb.Surface)tr.GetObject(id, OpenMode.ForWrite, false, true);
-                string nm = UniqueName(db, tr, OldName);
-                kept.Add($"{s.Name} → {nm}(«{who}»가 씀)");
-                s.Name = nm; s.Visible = false;
-                continue;
-            }
-            tr.GetObject(id, OpenMode.ForWrite, false, true).Erase();
-            erased++;
-        }
+        // ★[v111.10 · 계획_초기화.md 3.1] 물러남 규칙 한 곳(<see cref="SurfaceRetire.Apply"/>) — 이름 «최종지표면_DH(옛)»(_N) · 표식 · 레이어 «옛면_DH» · 설명 · 숨김
+        var R = SurfaceRetire.Apply(db, tr, Finals(db, tr, Name).Concat(Finals(db, tr, TempName)).Where(id => id != keep));
+        erased = R.Erased;
+        var kept = R.Retired.Concat(R.Failed).ToList();
         return (erased > 0 ? $"옛 최종면 {erased}개 지움" : "") + (kept.Count > 0 ? (erased > 0 ? " · " : "") + "⚠남이 쓰는 옛 최종면은 이름만 바꿔 숨김 — " + string.Join(" · ", kept) : "");
     }
 
@@ -396,10 +385,11 @@ internal static class FinalSurfaceBuilder
                 baseId = I.BaseId;
                 if (I.Roads.Count == 0 || I.BaseId.IsNull) { tr.Commit(); return Skip(db, I.Roads.Count == 0 ? "진입도로 지표면 없음" : I.BaseWhy); }
                 baseT = ReadAll((CivilDb.TinSurface)tr.GetObject(I.BaseId, OpenMode.ForRead), Commands.WallCompositeCommand.PlanName);
+                var ranks = BranchBase.LayerRanks(tr, db);   // ★[도로 마무리 ① · 계획 5.5 · L8] 가지(끝 맞춤 도로)는 본 도로 뒤(위) — 없으면 모두 0(핸들 차례 · 지금과 같음)
                 foreach (var r in I.Roads)
                 {
                     var ts = (CivilDb.TinSurface)tr.GetObject(r.SurfId, OpenMode.ForRead);
-                    layers.Add(new FinalSurface.Layer(ReadAll(ts, ts.Name), r.Name, r.Aid.Handle.Value));
+                    layers.Add(new FinalSurface.Layer(ReadAll(ts, ts.Name), r.Name, r.Aid.Handle.Value, ranks.TryGetValue(r.Aid.Handle.Value, out int rk) ? rk : 0));
                 }
                 tr.Commit();
             }
@@ -623,7 +613,8 @@ internal static class FinalSurfaceBuilder
         }
         else
         {
-            var fin = FinalSurface.Compose(baseT, roadT.Select(q => new FinalSurface.Layer(q.T, q.R.Name, q.R.Aid.Handle.Value)).ToList(), null, out var rep);
+            var ranks = BranchBase.LayerRanks(tr, db);   // ★[계획 5.5] 최종면과 같은 차례(가지 위)
+            var fin = FinalSurface.Compose(baseT, roadT.Select(q => new FinalSurface.Layer(q.T, q.R.Name, q.R.Aid.Handle.Value, ranks.TryGetValue(q.R.Aid.Handle.Value, out int rk) ? rk : 0)).ToList(), null, out var rep);
             P.Base = new CachedGroundSurface(baseT);
             if (fin == null)
             {

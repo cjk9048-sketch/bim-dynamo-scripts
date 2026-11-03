@@ -793,7 +793,8 @@ public sealed class ProfileCommand
         else
         {
             BusyPopup.Pause();
-            var pvPt = ed.GetPoint("\n[종단도] 종단면도를 놓을 위치 클릭 (Esc=종단만 만들고 끝): ");
+            // ★[JACK 1103] 진입도로처럼 커서 이름표(화면 없는 Civil = 그냥 GetPoint)
+            var pvPt = CursorLabel.GetPoint(ed, new PromptPointOptions("\n[종단도] 종단면도를 놓을 위치 클릭 (Esc=종단만 만들고 끝): "), "종단도 작성 위치 클릭", "Esc 종단만 만들고 끝");
             if (pvPt.Status != PromptStatus.OK)
             {
                 log.AppendLine("종단도 배치 건너뜀(사용자 취소)");
@@ -2953,14 +2954,14 @@ public sealed class ProfileCommand
             //   장마다 부르게 고쳤더니(0904) 2장이 1장 것을, 3장이 2장 것을 지워
             //   증상이 <i>"첫 장만 보임"</i>에서 <i>"끝 장만 보임"</i>으로 <b>뒤집혔을 뿐</b>이었다.
             //   한 장짜리 도면에서는 모든 것이 범위 안이라 종전과 똑같이 돈다.
-            bool spanOkS = SheetCommand.SheetXSpanOf(tr, pvId, out double sxLoS, out double sxHiS);
+            bool spanOkS = SheetCommand.SheetXSpanOf(tr, pvId, out double sxLoS, out double sxHiS, out double syLoS, out double syHiS);
             foreach (ObjectId id in ms)
             {
                 try
                 {
                     if (tr.GetObject(id, OpenMode.ForRead) is not Entity e) continue;
                     if (e.LayerId != layS && e.LayerId != layW) continue;
-                    if (!SheetCommand.InSheetXOf(e, spanOkS, sxLoS, sxHiS)) continue;
+                    if (!SheetCommand.InSheetXOf(e, spanOkS, sxLoS, sxHiS, syLoS, syHiS)) continue;
                     tr.GetObject(id, OpenMode.ForWrite).Erase(); nWiped++;
                 }
                 catch { }
@@ -3120,14 +3121,14 @@ public sealed class ProfileCommand
             //   장마다 부르게 고쳤더니(0904) 2장이 1장 것을, 3장이 2장 것을 지워
             //   증상이 <i>"첫 장만 보임"</i>에서 <i>"끝 장만 보임"</i>으로 <b>뒤집혔을 뿐</b>이었다.
             //   한 장짜리 도면에서는 모든 것이 범위 안이라 종전과 똑같이 돈다.
-            bool spanOkB = SheetCommand.SheetXSpanOf(tr, pvId, out double sxLoB, out double sxHiB);
+            bool spanOkB = SheetCommand.SheetXSpanOf(tr, pvId, out double sxLoB, out double sxHiB, out double syLoB, out double syHiB);
             foreach (ObjectId id in ms)
             {
                 try
                 {
                     if (tr.GetObject(id, OpenMode.ForRead) is not Entity e) continue;
                     if (e.LayerId != lw && e.LayerId != ls) continue;
-                    if (!SheetCommand.InSheetXOf(e, spanOkB, sxLoB, sxHiB)) continue;
+                    if (!SheetCommand.InSheetXOf(e, spanOkB, sxLoB, sxHiB, syLoB, syHiB)) continue;
                     tr.GetObject(id, OpenMode.ForWrite).Erase(); wiped++;
                 }
                 catch { }

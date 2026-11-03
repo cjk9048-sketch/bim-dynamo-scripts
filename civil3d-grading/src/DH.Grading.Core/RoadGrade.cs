@@ -28,6 +28,12 @@ public static partial class RoadGrade
             double a = Math.Abs(d), half = d < 0 ? HalfL : HalfR;
             return a <= half ? -CrossSlope * a : -CrossSlope * half - ShoulderSlope * (a - half);
         }
+        /// <summary>★★[도로 마무리 ② · 계획 6.1 · JACK Q3] 길어깨 바깥(측구 자리)은 길어깨 끝 높이 그대로(평평 · 파지 않음) — |d| ≤ 바깥 끝이면 <see cref="Drop"/>와 비트 같음.</summary>
+        public double DropC(double d)
+        {
+            double o = d < 0 ? OuterL : OuterR;
+            return Math.Abs(d) <= o ? Drop(d) : Drop(d < 0 ? -o : o);
+        }
     }
 
     /// <summary>사면 규칙(절토 또는 성토) — 부지 정지와 같은 뜻: 단높이 · 구배(1:n) · 소단폭.</summary>
@@ -43,6 +49,10 @@ public static partial class RoadGrade
     /// <b>Tier = 몇 번째 단부터 바깥이 수직 옹벽</b>(0 = 가장자리 첫 단) · BenchL = 옹벽 사이 소단 길이. 절토 · 성토 어느 쪽 사면이든 같은 규칙.
     /// <para>Tier 0 · BenchL 0(끝없는 가장자리 옹벽)은 부르는 쪽이 <see cref="Wall"/>로 넘긴다(옛 길 그대로 — 원뿔 없음 · 벽 뒤 막음).</para></summary>
     public sealed record TierWall(double S0, double S1, int Side, int Tier, double BenchL);
+
+    /// <summary>★★[도로 마무리 ② · 계획 6.1 · JACK Q3 «측구는 길어깨 바깥 · 사면은 측구 바깥»] 측구 구간 — 측점 [S0, S1] · 좌(−1)/우(+1) · 윗폭 W(m · 0 = 없음 — 나중 기록이 이김).
+    /// 그 구간 가장자리 = 길어깨 끝 + W(높이 = 길어깨 끝 높이 · 측구 자리 평평) · 사면 · 옹벽은 그 바깥에서 시작.</summary>
+    public sealed record Ditch(double S0, double S1, int Side, double W);
 
     public sealed class Input
     {
@@ -66,6 +76,22 @@ public static partial class RoadGrade
         public double SuggestH = 0;
         /// <summary>옹벽 제안 — 데이라잇이 이 다각형(사업 경계) 밖이면(null = 안 봄).</summary>
         public IReadOnlyList<(double X, double Y)>? Limit;
+        /// <summary>★★[도로 마무리 ②] 측구 구간(Core 측점 · 나중 기록이 이김 · 비어 있으면 옛 동작 그대로 — 비트 같음).</summary>
+        public List<Ditch> Ditches = new();
+        /// <summary>그 쪽 · 측점의 측구 윗폭(m · 없으면 0) — 나중 기록이 이김(옹벽 기록과 같은 법).</summary>
+        public double DitchW(int side, double s)
+        {
+            for (int i = Ditches.Count - 1; i >= 0; i--)
+            {
+                var d = Ditches[i];
+                if (d.Side == side && s >= Math.Min(d.S0, d.S1) - 1e-9 && s <= Math.Max(d.S0, d.S1) + 1e-9) return Math.Max(0, d.W);
+            }
+            return 0;
+        }
+        /// <summary>그 쪽 · 측점의 가장자리 옵셋(길어깨 끝 + 측구 윗폭) — 측구가 없으면 <see cref="Section.OuterL"/> · <see cref="Section.OuterR"/> 그대로.</summary>
+        public double Outer(int side, double s) => (side < 0 ? Sec.OuterL : Sec.OuterR) + (Ditches.Count == 0 ? 0 : DitchW(side, s));
+        /// <summary>도로 전체에서 가장 넓은 가장자리 옵셋(격자 · 버킷 여유).</summary>
+        public double MaxOuter => Math.Max(Sec.OuterL, Sec.OuterR) + (Ditches.Count == 0 ? 0 : Ditches.Max(d => Math.Max(0, d.W)));
     }
 
     public sealed class SlopeAt
@@ -479,9 +505,9 @@ public static partial class RoadGrade
                 double t = (double)k / m, cx = inp.X[i] + dx * t, cy = inp.Y[i] + dy * t, s = S[i] + len * t, zc = Zc(i, t);
                 foreach (int side in new[] { -1, 1 })
                 {
-                    double off = side < 0 ? sec.OuterL : sec.OuterR;
+                    double off = inp.Outer(side, s);
                     double ex = cx - side * nx * off, ey = cy - side * ny * off;   // 좌 = +법선 쪽
-                    edges.Add(new Edge { X = ex, Y = ey, Z = zc + sec.Drop(side * off), S = s, Nx = -side * nx, Ny = -side * ny, Tx = ux, Ty = uy, G = (inp.Z[i + 1] - inp.Z[i]) / len, Side = side, Wall = WallAt(s, side), WallH = WallHAt(s, side) });
+                    edges.Add(new Edge { X = ex, Y = ey, Z = zc + sec.DropC(side * off), S = s, Nx = -side * nx, Ny = -side * ny, Tx = ux, Ty = uy, G = (inp.Z[i + 1] - inp.Z[i]) / len, Side = side, Wall = WallAt(s, side), WallH = WallHAt(s, side) });
                 }
             }
             // 꼭짓점 부채꼴(다음 선분과 방향이 꺾이면 바깥쪽 호를 표본으로)
@@ -496,12 +522,12 @@ public static partial class RoadGrade
                     if (Math.Abs(da) > 1e-3)
                         foreach (int side in new[] { da > 0 ? 1 : -1 })
                         {
-                            double off = side < 0 ? sec.OuterL : sec.OuterR;
+                            double off = inp.Outer(side, S[i + 1]);
                             int steps = Math.Max(1, (int)Math.Ceiling(Math.Abs(da) * off / inp.EdgeStep));
                             for (int q = 1; q < steps; q++)
                             {
                                 double a = a0 + da * q / steps, lx = -Math.Sin(a), ly = Math.Cos(a);
-                                edges.Add(new Edge { X = inp.X[i + 1] - side * lx * off, Y = inp.Y[i + 1] - side * ly * off, Z = inp.Z[i + 1] + sec.Drop(side * off), S = S[i + 1], Nx = -side * lx, Ny = -side * ly, Tx = Math.Cos(a), Ty = Math.Sin(a), G = (inp.Z[i + 2] - inp.Z[i + 1]) / l2, Side = side, Wall = WallAt(S[i + 1], side), WallH = WallHAt(S[i + 1], side) });
+                                edges.Add(new Edge { X = inp.X[i + 1] - side * lx * off, Y = inp.Y[i + 1] - side * ly * off, Z = inp.Z[i + 1] + sec.DropC(side * off), S = S[i + 1], Nx = -side * lx, Ny = -side * ly, Tx = Math.Cos(a), Ty = Math.Sin(a), G = (inp.Z[i + 2] - inp.Z[i + 1]) / l2, Side = side, Wall = WallAt(S[i + 1], side), WallH = WallHAt(S[i + 1], side) });
                             }
                         }
                 }
@@ -510,7 +536,7 @@ public static partial class RoadGrade
         // ★도로 면 안에 떨어진 표본은 진짜 가장자리가 아니다(안쪽 모서리 · 지그재그에서 한 다리의 가장자리가 다른 다리 도로 면 안) — 빼야 사면이 앞당겨지지 않는다
         edges = edges.Where(e =>
         {
-            double off = e.Side < 0 ? sec.OuterL : sec.OuterR, best = double.MaxValue;
+            double off = inp.Outer(e.Side, e.S), best = double.MaxValue;
             for (int i = 0; i + 1 < n; i++)
             {
                 double ax = inp.X[i], ay = inp.Y[i], dx = inp.X[i + 1] - ax, dy = inp.Y[i + 1] - ay, l2 = dx * dx + dy * dy;
@@ -527,11 +553,12 @@ public static partial class RoadGrade
             double dx = inp.X[a + 1] - inp.X[a], dy = inp.Y[a + 1] - inp.Y[a], len = Math.Sqrt(dx * dx + dy * dy);
             if (len < 1e-9) continue;
             double nx = -dy / len, ny = dx / len;
-            int m = Math.Max(2, (int)Math.Ceiling((sec.OuterL + sec.OuterR) / inp.EdgeStep));
+            double oL = inp.Outer(-1, S[end]), oR = inp.Outer(1, S[end]);   // ★[도로 마무리 ②] 끝 마구리 폭 = 그 끝 측점의 폭(측구 포함)
+            int m = Math.Max(2, (int)Math.Ceiling((oL + oR) / inp.EdgeStep));
             for (int q = 1; q < m; q++)
             {
-                double d = -sec.OuterL + (sec.OuterL + sec.OuterR) * q / m;   // 좌(−) → 우(+)
-                edges.Add(new Edge { X = inp.X[end] - nx * d, Y = inp.Y[end] - ny * d, Z = inp.Z[end] + sec.Drop(d), S = S[end], Nx = end == 0 ? -dx / len : dx / len, Ny = end == 0 ? -dy / len : dy / len, Tx = dx / len, Ty = dy / len, G = 0, Side = 0, Wall = false, WallH = double.NaN });
+                double d = -oL + (oL + oR) * q / m;   // 좌(−) → 우(+)
+                edges.Add(new Edge { X = inp.X[end] - nx * d, Y = inp.Y[end] - ny * d, Z = inp.Z[end] + sec.DropC(d), S = S[end], Nx = end == 0 ? -dx / len : dx / len, Ny = end == 0 ? -dy / len : dy / len, Tx = dx / len, Ty = dy / len, G = 0, Side = 0, Wall = false, WallH = double.NaN });
             }
         }
         for (int k = 0; k < edges.Count; k++) { var e = edges[k]; e.Th = TurnAt(e.S); e.Zc = ZAt(e.S); edges[k] = e; }
@@ -569,7 +596,7 @@ public static partial class RoadGrade
         }
 
         // ── 격자 ──
-        double pad = Math.Max(sec.OuterL, sec.OuterR) + inp.Reach + inp.Cell;
+        double pad = inp.MaxOuter + inp.Reach + inp.Cell;
         double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
         for (int i = 0; i < n; i++) { minX = Math.Min(minX, inp.X[i]); maxX = Math.Max(maxX, inp.X[i]); minY = Math.Min(minY, inp.Y[i]); maxY = Math.Max(maxY, inp.Y[i]); }
         minX -= pad; minY -= pad; maxX += pad; maxY += pad;
@@ -594,7 +621,7 @@ public static partial class RoadGrade
         int By(double y) => Math.Clamp((int)((y - minY) / bk), 0, BH - 1);
         for (int i = 0; i + 1 < n; i++)
         {
-            double o = Math.Max(sec.OuterL, sec.OuterR);
+            double o = inp.MaxOuter;
             int x0 = Bx(Math.Min(inp.X[i], inp.X[i + 1]) - o), x1 = Bx(Math.Max(inp.X[i], inp.X[i + 1]) + o);
             int y0 = By(Math.Min(inp.Y[i], inp.Y[i + 1]) - o), y1 = By(Math.Max(inp.Y[i], inp.Y[i + 1]) + o);
             for (int by = y0; by <= y1; by++) for (int bx = x0; bx <= x1; bx++) (segB[by * BW + bx] ??= new()).Add(i);
@@ -659,10 +686,10 @@ public static partial class RoadGrade
                 double d = Math.Sqrt(best);
                 // 끝 마구리: 투영이 끝점에 붙었으면(t = 0 · 1) 띠 밖으로 친다 — 도로 면은 진행 방향으로만 이어진다
                 bool atEnd = (bs <= 1e-6 || bs >= S[n - 1] - 1e-6) && d > 1e-6 && IsBeyondEnd(px, py, inp, n);
-                double outer = bsd < 0 ? sec.OuterL : sec.OuterR;
+                double outer = inp.Outer((int)bsd, bs);
                 if (!atEnd && d <= outer + 1e-9)
                 {
-                    double z = bz + sec.Drop(bsd * d);
+                    double z = bz + sec.DropC(bsd * d);
                     o.Zd = z; o.Z = (float)z; o.Kind = 1;
                     o.F = (float)(-(outer - d) - (okB ? Math.Abs(z - zb) : 0));
                     o.D = (float)(d - outer); o.FS = (float)bs; o.FSide = (sbyte)bsd;
@@ -702,10 +729,10 @@ public static partial class RoadGrade
                 // ★[v110.3 · 검토 H2] 도로 띠까지 수평거리 — 옆으로는 중심선 거리 − 바깥 폭 · 끝 너머는 마구리(직선)까지
                 if (fb < double.MaxValue)
                 {
-                    double outerS = fsd < 0 ? sec.OuterL : sec.OuterR;
+                    double outerS = inp.Outer((int)fsd, Math.Clamp(fs, 0, S[n - 1]));
                     double dd = fend ? Math.Sqrt(fAlong * fAlong + Sq(Math.Max(0, fLat - outerS))) : Math.Sqrt(fb) - outerS;
                     o.D = (float)dd; o.FS = (float)fs; o.FSide = (sbyte)(fend ? 0 : fsd);
-                    if (!fend && dd >= 0) { vZ = fzc + sec.Drop(fsd * outerS); vD = dd; }
+                    if (!fend && dd >= 0) { vZ = fzc + sec.DropC(fsd * outerS); vD = dd; }
                 }
                 else o.D = float.NaN;
             }

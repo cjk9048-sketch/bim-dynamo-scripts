@@ -344,8 +344,7 @@ public sealed class InfraworksCommand
                 double cutTotal = 0;
                 for (int ri = 0; ri < regions.Count; ri++)
                 {
-                    var later0 = GradingBundle.LaterFootprints(regions, ri);
-                    var pieces = GradingPolygons.PlanMinusFootprints(regions[ri].Boundary, later0, out double excl);
+                    var pieces = PadFloors.Pieces(regions, ri, out double excl);   // ★[도로 마무리 ① · 계획 5.1] 도로 끝 «부지 바닥»과 같은 판정
                     foreach (var pc in pieces) feats.Add((pc.Rings, new object?[] { "계획면", pc.Area }));
                     if (excl > 0.5)
                     {
@@ -1014,18 +1013,8 @@ public sealed class InfraworksCommand
     private static string WriteVolumeCsv(Database db, string groundName,
         System.Collections.Generic.IReadOnlyList<GradingBundle> regions, string folder, Web3DCollect? web = null, bool roads = false)
     {
-        ObjectId groundId = ObjectId.Null, designId = ObjectId.Null;
-        using (Transaction tr = db.TransactionManager.StartTransaction())
-        {
-            var civilDoc = Autodesk.Civil.ApplicationServices.CivilApplication.ActiveDocument;
-            foreach (ObjectId sid in civilDoc.GetSurfaceIds())
-            {
-                if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.TinSurface ts) continue;
-                if (!string.IsNullOrEmpty(groundName) && ts.Name == groundName) groundId = sid;
-                if (ts.Name == "정지면_DH") designId = sid;
-            }
-            tr.Commit();
-        }
+        // ★[v112.0 · 계획_도면화.md 1.5] 면 찾기 + 세모 셈은 공용 도우미(EarthworkVolume) — 도면화 토공량표와 같은 셈(동작 그대로)
+        var (groundId, designId) = EarthworkVolume.Find(db, groundName, "정지면_DH");
         if (groundId.IsNull || designId.IsNull) return "토공량.csv: 생략(원지반/정지면 표면 없음)";
 
         double cut, fill;
@@ -1036,12 +1025,7 @@ public sealed class InfraworksCommand
             try
             {
                 BusyPopup.Show("3D 보기 — 토공량 계산 중");
-                using Transaction trW = db.TransactionManager.StartTransaction();
-                var dTin =(Autodesk.Civil.DatabaseServices.TinSurface)trW.GetObject(designId, OpenMode.ForRead);
-                var gTin = (Autodesk.Civil.DatabaseServices.TinSurface)trW.GetObject(groundId, OpenMode.ForRead);
-                var vr = TinVolume.Compute(new CachedGroundSurface(dTin).AllTriangles().Select(t => (t.A, t.B, t.C)).ToList(),
-                                           new CachedGroundSurface(gTin).AllTriangles().Select(t => (t.A, t.B, t.C)).ToList());
-                trW.Commit();
+                var vr = EarthworkVolume.Compute(db, designId, groundId);
                 cut = vr.Cut; fill = vr.Fill;
             }
             catch (System.Exception ex) { return "토공량: 계산 실패 — " + ex.Message; }

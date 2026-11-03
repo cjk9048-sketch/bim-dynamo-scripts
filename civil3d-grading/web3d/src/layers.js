@@ -278,6 +278,23 @@ export async function buildLayers(view, head) {
   if (wallGrp.children.length) { scene.add(wallGrp); L.wall = { obj: wallGrp, label: '옹벽', on: true, fixed: true }; }   // ★[JACK 1028] 옹벽은 늘 보임 — 층 목록에 단추 없음
   if (patGrp.children.length) { scene.add(patGrp); L.pattern = { obj: patGrp, label: '옹벽 무늬', on: true }; }
 
+  // ── ★[도로 마무리 ② · 계획 6.6] 진입도로 측구 — U형 그레이팅(어두운 격자 띠) · 물길(뚜껑 없음) · L형 경계석(콘크리트) · 층 «측구»(없는 장면은 안 생김)
+  const DT = head.ditches;
+  if (DT) {
+    const grp = new THREE.Group();
+    for (const [key, color, mat] of [['grate', '#3b3d40', null], ['water', '#2d5470', null], ['curb', null, '콘크리트']]) {
+      const s = DT[key];
+      if (!s || !s.pos || !s.idx || s.idx.length === 0) continue;
+      const m = mat ? matOf('m:' + mat, srgb(MAT_COLOR[mat] || '#b4b4b4'))
+                    : new THREE.MeshStandardMaterial({ color: srgb(color), roughness: 0.8, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+      const mesh = new THREE.Mesh(mat ? flat(geom(s.pos, s.idx)) : smooth(geom(s.pos, s.idx)), m);
+      mesh.castShadow = !!mat; mesh.receiveShadow = true;
+      mesh.userData = { layer: 'ditch', part: key };
+      grp.add(mesh);
+    }
+    if (grp.children.length) { scene.add(grp); L.ditch = { obj: grp, label: '측구', on: true }; }
+  }
+
   applyTerrainMode(L);
   return L;
 }
@@ -305,6 +322,7 @@ export function applyTerrainMode(L) {
   }
   if (L.ground) satToggle(L.ground.obj.material);
   if (T.lanes) T.lanes.visible = !groundMode;                          // 차선은 설계 것 — 원지반 보기에서 숨김
+  if (L.ditch) L.ditch.obj.visible = L.ditch.on && !groundMode;         // ★[도로 마무리 ②] 측구도 설계 것
   // 원지반 보기에서는 옹벽 · 무늬도 없다(그때는 없던 것)
   if (L.wall) L.wall.obj.visible = wallOn;
   if (L.pattern) L.pattern.obj.visible = L.pattern.on && !groundMode;

@@ -42,6 +42,9 @@ internal static class RoadBuilder
         ObjectId lay = Commands.SectionCommand.EnsureLayerStandalone(db, LayAlign, 1);
         ObjectId flat = Commands.SectionCommand.MakeFlatCopy(db, plId, lay, out int nv, out double len);
         if (flat.IsNull) throw new InvalidOperationException("폴리선을 읽지 못했습니다(점이 두 개보다 적거나 길이 0)");
+        // ★★[도로 마무리 ① · 계획 5.3 «만들 때» · JACK «종단 작성 단계부터 기존 선형 자체를 강제로 끝단에 맞춰서»] 평 사본을 부지 바닥 끝 · 본 도로 포장 끝에 맞춤(넘침 = 자름 · 20 m 안 못 미침 = 늘림)
+        try { flat = AdjustEnds(db, flat, radius, log); }
+        catch (Exception exE) { log.AppendLine("  ⚠도로 끝을 못 맞춤(그린 그대로) — " + exE.Message); try { DiagLog.Append("\n[진입도로 끝] 만들 때 못 맞춤 — " + exE); } catch { } }
         string name = Commands.SectionCommand.UniqueName(db, cdoc, AlignBase);
         ObjectId aid;
         try
@@ -80,6 +83,70 @@ internal static class RoadBuilder
         }
         log.AppendLine($"  곡선 {curves}개(R {radius:F0} m" + (reduced > 0 ? $" · 접선이 짧아 반경 줄임 {reduced}" : "") + ")" + (failed > 0 ? $" · ⚠곡선 못 넣은 꺾임 {failed}" : ""));
         return aid;
+    }
+
+    /// <summary>★★[도로 마무리 ① · 계획 5.3 «만들 때»] 노선을 만들기 앞 평 사본(LWPOLYLINE)의 끝 — 넘침 = 그 자리에서 자름(GetSplitCurves) · 못 미침(20 m 안) = 끝 꼭짓점을 옮김(곧게) 또는 꼭짓점을 더함(꺾어 — 곡선은 노선을 만들 때 직선 사이에 저절로).
+    /// 돌려줌 = 평 사본 ID(잘랐으면 새 것). 바닥 · 다른 도로가 없으면 그대로.</summary>
+    static ObjectId AdjustEnds(Database db, ObjectId flat, double radius, System.Text.StringBuilder log)
+    {
+        using var tr = db.TransactionManager.StartTransaction();
+        if (tr.GetObject(flat, OpenMode.ForRead) is not Polyline pl) { tr.Commit(); return flat; }
+        var floors = PadFloors.Load(db, tr, out _);
+        var roads = new List<RoadEnds.Road>();
+        foreach (var id in RoadRanges.Roads(tr, db)) { var dd = RoadDesign.Read(tr, id); var c = dd == null ? null : RoadRanges.Centre(tr, id, dd); if (c != null) roads.Add(c); }
+        if (floors.Count == 0 && roads.Count == 0) { tr.Commit(); return flat; }
+        double len = pl.Length;
+        var S = new List<double>(); var X = new List<double>(); var Y = new List<double>();
+        for (int k = 0; ; k++)
+        {
+            double s = Math.Min(k * 0.25, len);
+            var p = pl.GetPointAtDist(s);
+            if (S.Count > 0 && s - S[^1] < 1e-3) { S[^1] = s; X[^1] = p.X; Y[^1] = p.Y; }   // 끝 1 mm 안 토막은 앞 표본을 끝으로(방향이 흔들리지 않게)
+            else { S.Add(s); X.Add(p.X); Y.Add(p.Y); }
+            if (s >= len) break;
+        }
+        var sec = new RoadDesign().Section();
+        const long Me = long.MaxValue;   // 새 도로 = 핸들이 가장 큼(가지 판정 «핸들 작은 것이 본»과 같은 차례)
+        roads.Add(new RoadEnds.Road(Me, S, X, Y, sec.OuterL, sec.OuterR));
+        // 바닥 높이는 여기서 안 씀(끝 PVI는 종단 초안이 바탕면에서 읽음 = 바닥 높이)
+        var res = RoadEnds.Solve(roads, floors, (_, _) => null, null, new RoadEnds.Options { CurveR = Math.Max(3, radius) }).First(r => r.Handle == Me);
+        foreach (var n in res.Notes) log.AppendLine("  [도로 끝] " + n);
+        double a = res.Start.Kind is RoadEnds.Kind.Floor or RoadEnds.Kind.Branch && res.Start.Station > 0.01 ? res.Start.Station : 0;
+        double b = res.Finish.Kind is RoadEnds.Kind.Floor or RoadEnds.Kind.Branch && res.Finish.Station < len - 0.01 ? res.Finish.Station : len;
+        ObjectId outId = flat;
+        if (a > 0 || b < len)
+        {
+            var pars = new DoubleCollection();
+            if (a > 0) pars.Add(pl.GetParameterAtDistance(a));
+            if (b < len) pars.Add(pl.GetParameterAtDistance(b));
+            var pieces = pl.GetSplitCurves(pars);
+            int keep = a > 0 ? 1 : 0;
+            if (pieces.Count <= keep || pieces[keep] is not Polyline np) throw new InvalidOperationException("폴리선을 못 자름");
+            np.LayerId = pl.LayerId;
+            var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+            outId = ms.AppendEntity(np); tr.AddNewlyCreatedDBObject(np, true);
+            for (int i = 0; i < pieces.Count; i++) if (i != keep) pieces[i].Dispose();
+            pl.UpgradeOpen(); pl.Erase();
+            pl = np;
+            if (a > 0) log.AppendLine($"  [도로 끝] 시점을 {(res.Start.Kind == RoadEnds.Kind.Branch ? "본 도로 포장" : "부지 바닥")} 끝에서 잘랐습니다({a:F1} m)");
+            if (b < len) log.AppendLine($"  [도로 끝] 종점을 {(res.Finish.Kind == RoadEnds.Kind.Branch ? "본 도로 포장" : "부지 바닥")} 끝에서 잘랐습니다({len - b:F1} m)");
+        }
+        else pl.UpgradeOpen();
+        // 늘리기 — 끝 꼭짓점 옮김(직선 끝) · 아니면 꼭짓점 더함
+        void Ext(RoadEnds.End e, bool atEnd)
+        {
+            if (e.Kind != RoadEnds.Kind.Extend || e.Ext == null) return;
+            int n = pl.NumberOfVertices, i = atEnd ? n - 1 : 0;
+            bool straightEnd = Math.Abs(pl.GetBulgeAt(atEnd ? n - 2 : 0)) < 1e-12;
+            var q = new Point2d(e.Ext.Qx, e.Ext.Qy);
+            if (e.Ext.Straight && straightEnd) pl.SetPointAt(i, q);
+            else if (atEnd) pl.AddVertexAt(n, q, 0, 0, 0);
+            else pl.AddVertexAt(0, q, 0, 0, 0);
+            log.AppendLine($"  [도로 끝] {(atEnd ? "종점" : "시점")}을 부지 바닥 끝까지 {e.Ext.Length:F1} m {(e.Ext.Straight ? "늘렸습니다" : $"꺾어({e.Ext.BendDeg:F0}°) 늘렸습니다")}");
+        }
+        Ext(res.Finish, true); Ext(res.Start, false);
+        tr.Commit();
+        return outId;
     }
 
     /// <summary>★[v110.2] 직선 ↔ 직선 사이 곡선의 반경을 <paramref name="radius"/>로(접선이 짧으면 0.7배씩 3 m까지) — 곡선이 없던 꺾임에는 새로 넣음.
@@ -187,7 +254,28 @@ internal static class RoadBuilder
             tr.Commit();
         }
         if (s.Count < 2) throw new InvalidOperationException("바탕면에서 종단을 읽지 못했습니다(노선이 면 밖?)");
-        var draft = WithStations(doc, RoadProfileDraft.Make(s, g, g[0], g[^1], d.MaxGrade, d.MinPviLen, 0.3));
+        // ★★[도로 마무리 ① · 계획 5.4 · 5.5 · 5.6] 끝 높이 고정 — 바닥 끝 = 바탕(정지면) 높이(= g 끝 그대로) · 가지 끝 = 본 도로 포장 높이 · 빈 구간 두 자리도 바닥 높이
+        double zS = g[0], zE = g[^1]; RoadEnds.Result? ends = null;
+        if (d.EndsOn)
+        {
+            try
+            {
+                using var tr = db.TransactionManager.StartTransaction();
+                var tin = (CivilDb.TinSurface)tr.GetObject(baseSurf, OpenMode.ForRead);
+                double? Fz(double x, double y) { try { double z = tin.FindElevationAtXY(x, y); return double.IsFinite(z) ? z : null; } catch { return null; } }
+                ends = RoadRanges.Solve(tr, db, aid, PadFloors.Load(db, tr, out _), Fz, true, new RoadEnds.Options { CurveR = d.CurveR > 0 ? d.CurveR : 30 }, d);
+                tr.Commit();
+                if (ends != null && ends.Start.Kind == RoadEnds.Kind.Branch && double.IsFinite(ends.Start.Z)) zS = ends.Start.Z;
+                if (ends != null && ends.Finish.Kind == RoadEnds.Kind.Branch && double.IsFinite(ends.Finish.Z)) zE = ends.Finish.Z;
+            }
+            catch (Exception exE) { log.AppendLine("  ⚠도로 끝 높이 판정 실패(바탕면 높이로) — " + exE.Message); }
+        }
+        var draft = WithStations(doc, RoadProfileDraft.Make(s, g, zS, zE, d.MaxGrade, d.MinPviLen, 0.3));
+        if (ends != null && ends.Gaps.Count > 0 && draft.Pvi.Count >= 2)
+        {
+            draft.Pvi = RoadEnds.PinPvis(draft.Pvi, draft.Pvi[0].S, draft.Pvi[0].Z, draft.Pvi[^1].S, draft.Pvi[^1].Z, ends.Gaps);
+            log.AppendLine($"  [도로 끝] 부지 바닥을 가로지름 — 빈 구간 {ends.Gaps.Count}(" + string.Join(", ", ends.Gaps.Select(q => $"{q.A:F1}~{q.B:F1} m")) + ") · 두 끝 높이 = 바닥 높이");
+        }
         ObjectId pp = CivilDb.Profile.CreateByLayout(an + "-계획", aid, lay, pStyle, labels);
         using (var tr = db.TransactionManager.StartTransaction())
         {
@@ -266,10 +354,17 @@ internal static class RoadBuilder
 
     /// <summary>노선 중심선 표본(1 m마다 + 끝) · 계획 종단 높이 → Core 입력. 종단 범위 밖 측점은 뺀다.</summary>
     internal static (double[] X, double[] Y, double[] Z, double S0, double S1, string Note) Sample(Transaction tr, ObjectId aid, ObjectId planProf)
+        => SampleRange(tr, aid, planProf, double.NaN, double.NaN);
+
+    /// <summary>★[도로 마무리 ① · 계획 5.8] <see cref="Sample"/>을 도로 구간 [<paramref name="ra"/>, <paramref name="rb"/>]로(<see cref="RoadRanges"/> — 가상 자르기 · 빈 구간 토막) · NaN = 노선 ∩ 종단 그대로(비트 같음).
+    /// 이름을 따로 둠 — 시험 도구가 <see cref="Sample"/>을 세 인자로 부름.</summary>
+    internal static (double[] X, double[] Y, double[] Z, double S0, double S1, string Note) SampleRange(Transaction tr, ObjectId aid, ObjectId planProf, double ra, double rb)
     {
         var al = (CivilDb.Alignment)tr.GetObject(aid, OpenMode.ForRead);
         var pr = (CivilDb.Profile)tr.GetObject(planProf, OpenMode.ForRead);
         double s0 = Math.Max(al.StartingStation, pr.StartingStation), s1 = Math.Min(al.EndingStation, pr.EndingStation);
+        if (double.IsFinite(ra)) s0 = Math.Max(s0, ra);
+        if (double.IsFinite(rb)) s1 = Math.Min(s1, rb);
         var X = new List<double>(); var Y = new List<double>(); var Z = new List<double>();
         string note = "";
         if (pr.StartingStation > al.StartingStation + 0.5 || pr.EndingStation < al.EndingStation - 0.5)

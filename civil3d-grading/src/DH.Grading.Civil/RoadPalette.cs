@@ -38,6 +38,13 @@ internal static class RoadPalette
         _panel!.Show(RoadSession.Of(AcadApp.DocumentManager.MdiActiveDocument));
     }
 
+    /// <summary>★[v111.10 · 계획 3.5] [진입도로 초기화] 켜짐만 다시 — 명령 끝 훅(DH… · U · UNDO · REDO · MREDO)이 부른다(창이 떠 있을 때만 · 칸 값은 안 건드림).</summary>
+    internal static void RefreshReset()
+    {
+        try { if (_ps != null && _ps.Visible) _panel?.RefreshReset(RoadSession.Of(AcadApp.DocumentManager.MdiActiveDocument)); }
+        catch { }
+    }
+
     /// <summary>★[v111.7 · JACK 1102] 부지 창을 열 때 이 창을 숨긴다(떠 있을 때만 · 도로 세션은 안 닫음).</summary>
     internal static void Hide()
     {
@@ -135,6 +142,32 @@ internal sealed class RoadPanel : UserControl
         _host = hostKeep;
         foreach (UIElement c in sug.Children) if (c is FrameworkElement fe) fe.VerticalAlignment = VerticalAlignment.Center;
 
+        // ── ■ 측구 ★★[도로 마무리 ② · 계획 6.3 · JACK 1102 «드롭박스 · 대표단면 + 치수»] 형식 → 그 형식 치수(mm) → [구간 지정](두 점 · 쪽 = 첫 점) ──
+        _host = GradingDialog.AddCollapsible(_root, "■ 측구", "U형 · L형 · 치수 · 구간 지정", open: false, key: "도로:측구");
+        var kindRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(2, 2, 0, 6) };
+        kindRow.Children.Add(new TextBlock { Text = "형식", FontSize = 11, Foreground = DhBrand.Sub, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
+        _ditchKind = new ComboBox { Width = 96, Height = 26, ToolTip = "[구간 지정]으로 넣을 측구 형식 — «없음»으로 구간을 지정하면 그 구간 측구를 지웁니다" };
+        foreach (var k in new[] { "없음", "U형", "L형" }) _ditchKind.Items.Add(k);
+        _ditchKind.SelectionChanged += (_, __) => DitchKindChanged();
+        kindRow.Children.Add(_ditchKind);
+        _host.Children.Add(kindRow); _needRoad.Add(_ditchKind);
+        var hostD = _host;
+        _ditchU = new StackPanel(); _host = _ditchU; hostD.Children.Add(_ditchU);
+        Row(("안폭", d => d.DitchU[0], (d, v) => d.DitchU[0] = v, 1000, 50, 3000), ("안높이", d => d.DitchU[1], (d, v) => d.DitchU[1] = v, 1000, 50, 3000), ("벽", d => d.DitchU[2], (d, v) => d.DitchU[2] = v, 1000, 10, 1000));
+        Row(("바닥", d => d.DitchU[3], (d, v) => d.DitchU[3] = v, 1000, 10, 1000), ("기초", d => d.DitchU[4], (d, v) => d.DitchU[4] = v, 1000, 0, 1000), ("기초 내밈", d => d.DitchU[5], (d, v) => d.DitchU[5] = v, 1000, 0, 1000));
+        Row(("뚜껑 자리 폭", d => d.DitchU[6], (d, v) => d.DitchU[6] = v, 1000, 0, 500), ("깊이", d => d.DitchU[7], (d, v) => d.DitchU[7] = v, 1000, 0, 500));
+        _ditchLid = new CheckBox { Content = "그레이팅", FontSize = 11, Margin = new Thickness(2, 0, 0, 6), ToolTip = "U형 뚜껑(그레이팅) — 3D에 어두운 격자 띠 · 없으면 물길 띠" };
+        _ditchLid.Click += (_, __) => DitchLidChanged();
+        _ditchU.Children.Add(_ditchLid); _needRoad.Add(_ditchLid);
+        _ditchL = new StackPanel(); _host = _ditchL; hostD.Children.Add(_ditchL);
+        Row(("배수면 폭", d => d.DitchL[0], (d, v) => d.DitchL[0] = v, 1000, 50, 3000), ("경사 %", d => d.DitchL[1], (d, v) => d.DitchL[1] = v, 100, 0, 30), ("경계석 폭", d => d.DitchL[2], (d, v) => d.DitchL[2] = v, 1000, 10, 1000));
+        Row(("경계석 높이", d => d.DitchL[3], (d, v) => d.DitchL[3] = v, 1000, 10, 2000), ("보이는 높이", d => d.DitchL[4], (d, v) => d.DitchL[4] = v, 1000, 10, 2000), ("밑", d => d.DitchL[5], (d, v) => d.DitchL[5] = v, 1000, 10, 1000));
+        Row(("뒤 폭", d => d.DitchL[6], (d, v) => d.DitchL[6] = v, 1000, 0, 1000), ("뒤 턱", d => d.DitchL[7], (d, v) => d.DitchL[7] = v, 1000, 0, 1000), ("끝 두께", d => d.DitchL[8], (d, v) => d.DitchL[8] = v, 1000, 10, 2000));
+        _host = hostD;
+        _ditchWarn = new TextBlock { FontSize = 11, Foreground = DhBrand.Warn, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 0, 0, 4), Visibility = Visibility.Collapsed };
+        _host.Children.Add(_ditchWarn);
+        Buttons(("구간 지정", "DHROADDITCH", "도로 가장자리 곁 두 점(시작 · 끝)을 찍어 그 구간에 지금 형식 · 치수의 측구를 넣습니다 — 쪽은 첫 점 · «없음»이면 그 구간 측구를 지웁니다", false));
+
         // ── ■ 결과 ──
         _host = GradingDialog.AddCollapsible(_root, "■ 결과", "토공량 · 높이 · 경사 · 옹벽", open: true, key: "도로:결과");
         var resCard = Card(_result);
@@ -145,10 +178,68 @@ internal sealed class RoadPanel : UserControl
         //   ■ 도면([종단도] [횡단도] + 상태 줄)도 없앰(JACK — 리본에 이미 있음 · 처음 놓기 · 옮겨 다시 = 리본 [종단도] [횡단도] 또는 [업데이트])
         _updateBtn = Buttons(("업데이트", "DHROADUPDATE", "지표면 · 종단도 · 횡단도를 한꺼번에 다시 만듭니다", true))[0];
         _autoState = StateLine();
+        // ★★[도로 마무리 ① · 계획 5.3 · 비평 M6] 이 판 앞 도로 — 끝 맞춤 제안 한 줄 + [끝 맞추기](한 번 누르면 그 뒤 [업데이트]가 늘 맞춤)
+        _endsLine = new TextBlock { FontSize = 11, Foreground = DhBrand.Ink, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 0, 0, 2), Visibility = Visibility.Collapsed };
+        _host.Children.Add(_endsLine);
+        _endsBtn = Buttons(("끝 맞추기", "DHROADENDS", "노선 끝을 부지 바닥 끝 · 본 도로 포장 끝에 맞춥니다(넘치면 자르고 · 20 m 안 못 미치면 늘림 · 끝 높이 = 바닥 높이) — 그 뒤 [업데이트]가 늘 맞춥니다", false))[0];
+        _endsBtn.Visibility = Visibility.Collapsed;
+        // ★[v111.10 · 계획_초기화.md 3.5 · JACK 1103 «창마다 초기화 단추 = 주황»] [진입도로 초기화] — 창 맨 끝 얇은 줄 아래 · 도면의 모든 진입도로.
+        //   열린 도로가 없어도(도면에 도로가 있으면) 켜져야 한다 → Buttons · Act · _needRoad를 안 쓰고 바로 보냄(Act는 세션이 없으면 아무것도 안 보냄)
+        _root.Children.Add(new Border { Height = 1, Background = DhBrand.Line, Margin = new Thickness(0, 10, 0, 6) });
+        _resetBtn = DhBrand.CautionButton("진입도로 초기화", "이 도면의 진입도로를 모두 지웁니다(노선 · 종단도 · 횡단도 · 도로 면 · 최종지표면). 계획지표면은 그대로입니다.");
+        _resetBtn.Click += (_, __) =>
+        {
+            var doc = AcadApp.DocumentManager.MdiActiveDocument;
+            if (doc == null) return;
+            // ★[v111.10.1 · JACK 1103 «=HROADRESET 알 수 없는 명령»] C# \x는 16진 4자리까지 먹는다 — "\x03D"가 '='(0x3D)가 돼 D가 사라졌다 → 나눠 붙임
+            try { doc.SendStringToExecute("\x03\x03" + "DHROADRESET ", true, false, false); }
+            catch (System.Exception ex) { _note.Text = "진입도로 초기화 실패 — " + ex.Message; }
+        };
+        _root.Children.Add(_resetBtn);
         Show(null);
     }
 
     Button _updateBtn = null!;
+    Button _resetBtn = null!;
+    Button _endsBtn = null!;
+    TextBlock _endsLine = null!, _ditchWarn = null!;
+    ComboBox _ditchKind = null!;
+    CheckBox _ditchLid = null!;
+    StackPanel _ditchU = null!, _ditchL = null!;
+
+    /// <summary>★[도로 마무리 ②] 형식 드롭박스 — 그 형식 치수 칸만 보임 · 설계에 적음(다음 [구간 지정]의 형식 · 다시 계산은 안 함).</summary>
+    void DitchKindChanged()
+    {
+        int k = Math.Max(0, _ditchKind.SelectedIndex);
+        _ditchU.Visibility = k == 1 ? Visibility.Visible : Visibility.Collapsed;
+        _ditchL.Visibility = k == 2 ? Visibility.Visible : Visibility.Collapsed;
+        if (_loading || _s == null) return;
+        var d = _s.Fresh();
+        if (d.DitchKind == k) return;
+        d.DitchKind = k;
+        try { _s.SaveDesign(); } catch (System.Exception ex) { _note.Text = "저장 실패 — " + ex.Message; }
+        DitchWarn(_s.Design);
+    }
+    void DitchLidChanged()
+    {
+        if (_loading || _s == null) return;
+        var d = _s.Fresh();
+        d.DitchU[8] = _ditchLid.IsChecked == true ? 1 : 0;
+        try { _s.SaveDesign(); } catch (System.Exception ex) { _note.Text = "저장 실패 — " + ex.Message; }
+    }
+    /// <summary>치수 확인(⚠ — 넣지 못하는 값 · L형 끝 두께가 셈과 다름).</summary>
+    void DitchWarn(RoadDesign d)
+    {
+        string w = d.DitchKind == 1 ? DitchSection.U(RoadDesign.UOf(d.DitchU)).Warn : d.DitchKind == 2 ? DitchSection.L(RoadDesign.LOf(d.DitchL)).Warn : "";
+        SetState(_ditchWarn, w.Length > 0 ? "⚠ " + w : "");
+    }
+
+    /// <summary>★[v111.10] [진입도로 초기화] 켜짐 — 열린 도로가 있으면 켬 · 없으면 도면에 진입도로가 있나(노선 목록 · 설계 기록 · 도로 면 이름만 — <see cref="Commands.ResetCommand.AnyRoad"/>).</summary>
+    internal void RefreshReset(RoadSession? s)
+    {
+        try { _resetBtn.IsEnabled = s != null || Commands.ResetCommand.AnyRoad(AcadApp.DocumentManager.MdiActiveDocument?.Database); }
+        catch { _resetBtn.IsEnabled = true; }
+    }
     TextBlock _autoState = null!;
 
     /// <summary>★★[v111.7.2 · JACK 1102] ■ 결과 상태 줄 — 최신(«✓ 최신 — 지표면 · 종단도 · 횡단도») · 고친 것이 있음(«고친 것이 있습니다 — [업데이트]를 누르세요» + [업데이트] 깜박) ·
@@ -156,8 +247,12 @@ internal sealed class RoadPanel : UserControl
     internal static (string Text, bool Warn, bool Blink) StateText(RoadSession? s)
     {
         if (s == null) return ("", false, false);
+        // ★[v111.10 · 계획_초기화.md 3.4 · JACK 1103] DHROAD · DHROADDRAW가 처음 만드는 중 — 곧 만들 것을 «[업데이트]를 누르라»고 하지 않음(옅은 글 · 안 깜박)
+        if (s.Making) return ("처음 만드는 중", false, false);
         bool stale = s.StaleKey.Length > 0;
         var lines = new List<string>();
+        // ★[도로 마무리 ① · 계획 5.3] 끝 맞춤을 켠 도로가 맞춤이 필요함(바닥이 움직였거나 PVI를 끝 밖으로 옮김) — [업데이트]가 맞춤
+        if (s.Design.EndsOn && s.EndsStale.Length > 0) lines.Add("끝 맞춤 필요 — [업데이트]");
         if (!stale)
         {
             var have = new List<string>();
@@ -171,7 +266,11 @@ internal sealed class RoadPanel : UserControl
         else
         {
             string fail = s.FailWhy;
-            lines.Add(fail.Length == 0 ? "고친 것이 있습니다 — [업데이트]를 누르세요" : FailText(fail));
+            // ★[v111.10 · 계획_초기화.md 3.4 · 4장] «아직 안 만듦» · «지워짐» · «최종면만 옛것»을 «고침»과 가른 글(열쇠 · 업데이트 판정은 그대로)
+            lines.Add(fail.Length > 0 ? FailText(fail)
+                    : s.SurfaceMissing ? (s.Design.SurfaceHandle.Length == 0 ? "지표면 아직 없음 — [업데이트]" : "지표면 지워짐 — [업데이트]")
+                    : s.SurfaceStale.Length + s.SheetStale.Length + s.XsecStale.Length == 0 && s.FinalStale ? "최종지표면 옛것 — [업데이트]"
+                    : "고친 것이 있습니다 — [업데이트]를 누르세요");
         }
         // ★[v111.7 · 설치 전 검토 M3] 다시 그리다 못 그려 옛것이 지워졌으면 늘 남음(U로 되돌리면 꺼짐) — 옛 ■ 도면 줄에서 옮김
         if (s.SheetLost.Length > 0) lines.Add(s.SheetLost);
@@ -353,6 +452,9 @@ internal sealed class RoadPanel : UserControl
             // ★[v110.2] 창 전체를 끄지 않는다 — 곡선 반경은 그리기 전에 정할 수 있게(나머지 칸 · 단추만 끔)
             foreach (var (box, _, _, _, _, _) in _fields) box.IsEnabled = s != null || ReferenceEquals(box, _curve);
             foreach (var el in _needRoad) el.IsEnabled = s != null;
+            // ★[v111.10 · 계획 3.4] 처음 만드는 중에는 [업데이트] 꺼 둠(누르면 ^C^C가 DHROAD를 끊음) — 위 루프가 다시 켜므로 그 뒤에
+            _updateBtn.IsEnabled = s != null && !s.Making;
+            RefreshReset(s);
             _title.Text = s == null ? "열린 도로 없음 — [경로 그리기] · [폴리선 선택]" : s.Name;
             foreach (var (box, get, _, scale, _, _) in _fields)
             {
@@ -364,6 +466,19 @@ internal sealed class RoadPanel : UserControl
             }
             var r = s?.Last;
             _note.Text = s == null ? "" : s.Note;
+            // ★[도로 마무리 ②] ■ 측구 — 형식 · 그레이팅 · 경고
+            if (s != null)
+            {
+                _ditchKind.SelectedIndex = Math.Clamp(s.Design.DitchKind, 0, 2);
+                _ditchU.Visibility = s.Design.DitchKind == 1 ? Visibility.Visible : Visibility.Collapsed;
+                _ditchL.Visibility = s.Design.DitchKind == 2 ? Visibility.Visible : Visibility.Collapsed;
+                _ditchLid.IsChecked = s.Design.DitchU.Length > 8 && s.Design.DitchU[8] > 0.5;
+                DitchWarn(s.Design);
+            }
+            // ★[도로 마무리 ① · 계획 5.3] 끝 맞춤 제안(끝 맞춤 꺼진 옛 도로만) + [끝 맞추기]
+            string prop = s != null && !s.Design.EndsOn ? s.EndsProposal : "";
+            SetState(_endsLine, prop.Length > 0 ? "도로 끝 맞춤: " + prop : "");
+            _endsBtn.Visibility = prop.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
             // ★★[v111.7.2 · JACK 1102] ■ 결과 상태 줄 + [업데이트] 깜박(고친 것이 있으면)
             var (stText, stWarn, stBlink) = StateText(s);
             SetState(_autoState, stText);
@@ -384,18 +499,24 @@ internal sealed class RoadPanel : UserControl
                 if (red) { run.Foreground = DhBrand.Warn; run.FontWeight = FontWeights.SemiBold; }
                 _result.Inlines.Add(run);
             }
-            L($"절토  {r.CutVol:N0} ㎥");
-            L($"성토  {r.FillVol:N0} ㎥");
-            L($"순토량  {Math.Abs(r.FillVol - r.CutVol):N0} ㎥ {(r.FillVol >= r.CutVol ? "반입" : "반출")}");
-            L($"최대 절토고  {r.MaxCut:F1} m · 성토고  {r.MaxFill:F1} m");
+            // ★[도로 마무리 ① · 계획 5.6] 빈 구간이면 토막 합(하나면 그대로)
+            var rs = s.Pieces.Count > 1 && ReferenceEquals(s.Pieces[0].R, r) ? s.Pieces.Where(p => p.R != null && p.R.Error.Length == 0).Select(p => p.R!).ToList() : new List<RoadGrade.Result> { r };
+            double cutV = rs.Sum(q => q.CutVol), fillV = rs.Sum(q => q.FillVol);
+            L($"절토  {cutV:N0} ㎥");
+            L($"성토  {fillV:N0} ㎥");
+            L($"순토량  {Math.Abs(fillV - cutV):N0} ㎥ {(fillV >= cutV ? "반입" : "반출")}");
+            L($"최대 절토고  {rs.Max(q => q.MaxCut):F1} m · 성토고  {rs.Max(q => q.MaxFill):F1} m");
             if (double.IsFinite(s.GradeNow)) L($"최대 종단경사  {s.GradeNow * 100:F1} %", over);
             if (s.GradeWarn.Length > 0) L(s.GradeWarn, true);
-            L($"옹벽  {wl.Count}구간 {wallLen:F0} m · 제안  {r.Suggest.Count}구간");
+            L($"옹벽  {wl.Count}구간 {wallLen:F0} m · 제안  {rs.Sum(q => q.Suggest.Count)}구간");
+            if (s.DitchQty.Length > 0) L("측구  " + s.DitchQty);
             if (outLen > 0) L($"⚠ 사업 경계 밖 사면  {outLen:F0} m");
             if (r.Conflicts > 0) L($"⚠ 사면 충돌  {r.Conflicts}칸(옹벽 자리)");
             if (r.ReachHit) L("⚠ 데이라잇 못 찾음(범위 밖)");
-            L($"도로 {r.Length:F0} m · {r.Ms:F0} ms");
-            L("(편경사 · 확폭 · 측구 빠짐)");
+            // ★[도로 마무리 ① · 계획 5.8] 도로 길이 = 도로 구간 합(잘린 끝 · 빈 구간 뺌)
+            double roadLen = s.Ranges.Count > 0 ? s.Ranges.Sum(q => q.B - q.A) : r.Length;
+            L($"도로 {roadLen:F0} m" + (s.Ranges.Count > 1 ? $"(빈 구간 {s.Ranges.Count - 1})" : "") + $" · {rs.Sum(q => q.Ms):F0} ms");
+            L("(편경사 · 확폭 빠짐)");
         }
         finally { _loading = false; }
     }

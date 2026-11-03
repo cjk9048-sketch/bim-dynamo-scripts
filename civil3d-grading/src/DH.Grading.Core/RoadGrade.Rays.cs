@@ -144,11 +144,11 @@ public static partial class RoadGrade
         public Ray SideRay(int side, double s)
         {
             var (cx, cy, cz, nx, ny) = CL.At(s);
-            double off = side < 0 ? Sec.OuterL : Sec.OuterR;
+            double off = Inp.Outer(side, s);   // ★[도로 마무리 ②] 측구 구간이면 길어깨 끝 + 측구 윗폭(높이 = 길어깨 끝)
             var (p, ew) = ProfileAt(side, s);
             var ray = new Ray
             {
-                Side = side, S = s, Ex = cx - side * nx * off, Ey = cy - side * ny * off, Ez = cz + Sec.Drop(side * off),
+                Side = side, S = s, Ex = cx - side * nx * off, Ey = cy - side * ny * off, Ez = cz + Sec.DropC(side * off),
                 Nx = -side * nx, Ny = -side * ny, Prof = p, EdgeWall = ew,
                 // 끝 측점의 옆 광선 = 모서리 부채의 첫 광선 — 엔진은 그 자리를 끝 너머(쪽 0)로도 본다(투영 비율이 0을 살짝 넘나듦)
                 EndCap = s <= 1e-9 ? 0 : s >= CL.Length - 1e-9 ? 1 : -1,
@@ -166,7 +166,7 @@ public static partial class RoadGrade
             double cx = end == 0 ? CL.X[0] : CL.X[CL.N - 1], cy = end == 0 ? CL.Y[0] : CL.Y[CL.N - 1], cz = end == 0 ? CL.Z[0] : CL.Z[CL.N - 1];
             var ray = new Ray
             {
-                Side = 0, S = end == 0 ? 0 : CL.Length, Ex = cx - nx * lat, Ey = cy - ny * lat, Ez = cz + Sec.Drop(lat),
+                Side = 0, S = end == 0 ? 0 : CL.Length, Ex = cx - nx * lat, Ey = cy - ny * lat, Ez = cz + Sec.DropC(lat),
                 Nx = end == 0 ? -tx : tx, Ny = end == 0 ? -ty : ty, Prof = 0, EndCap = end, Lat = lat,
             };
             Walk(ray);
@@ -179,13 +179,13 @@ public static partial class RoadGrade
             int i = end == 0 ? 0 : CL.N - 2;
             var (tx, ty) = CL.Dir(i);
             double nx = -ty, ny = tx;
-            double off = side < 0 ? Sec.OuterL : Sec.OuterR;
+            double off = Inp.Outer(side, end == 0 ? 0 : CL.Length);
             double cx = end == 0 ? CL.X[0] : CL.X[CL.N - 1], cy = end == 0 ? CL.Y[0] : CL.Y[CL.N - 1], cz = end == 0 ? CL.Z[0] : CL.Z[CL.N - 1];
             double ox = -side * nx, oy = -side * ny, lx = end == 0 ? -tx : tx, ly = end == 0 ? -ty : ty;
             double ang = a * Math.PI / 2, dx = ox * Math.Cos(ang) + lx * Math.Sin(ang), dy = oy * Math.Cos(ang) + ly * Math.Sin(ang);
             var ray = new Ray
             {
-                Side = side, S = end == 0 ? 0 : CL.Length, Ex = cx - side * nx * off, Ey = cy - side * ny * off, Ez = cz + Sec.Drop(side * off),
+                Side = side, S = end == 0 ? 0 : CL.Length, Ex = cx - side * nx * off, Ey = cy - side * ny * off, Ez = cz + Sec.DropC(side * off),
                 Nx = dx, Ny = dy, Prof = 0, EndCap = end,
             };
             Walk(ray);

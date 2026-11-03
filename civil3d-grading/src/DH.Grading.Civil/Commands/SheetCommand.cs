@@ -153,7 +153,11 @@ public static class SheetCommand
     /// <i>"간격은 5m 단위로 하되 … 고도값의 범위 버퍼를 더 두라는 이야기였어.
     /// 격자 단위를 1m씩 바꾸라는 게 아니고."</i>
     /// <para>범위를 이 배수로만 잡으므로 <b>격자 눈금은 종전 그대로</b>이고, 늘어나는 것은 위아래 여유뿐이다.</para></summary>
-    private const double ElevStepM = 5.0;
+    internal const double ElevStepM = 5.0;
+
+    /// <summary>★[설치 전 검토 · 중간] 종단도가 끝에 걸 수직과장 — 토공 세트 = 1배(수직과장 없음 · <see cref="FitSheet"/> 토공 갈래) · 관로 세트 = 가로 ÷ 세로 축척(5배).
+    /// 진입도로 놓을 자리 짐작(<see cref="RoadSheets.Overlap"/>)이 그래프 높이에 곱한다.</summary>
+    internal static double PlannedExaggeration() => GradingSettings.BandSet == "관로" ? HScale / VScale : 1.0;
 
     /// <summary>세로로 <b>최소 이만큼은 차야 한다</b>(JACK: "최소 80%는 찰 수 있게").
     /// 못 미치면 고치지 않고 <b>로그로 알린다</b> — 눈금 5m를 깨는 것이 더 나쁘다.</summary>
@@ -349,6 +353,7 @@ public static class SheetCommand
         WallBandPairs(db, pvId, scale, log, ctx);
         // ★★[v111.7.2 · JACK 1102 «PVI가 두 번 꺾였으면 구배 3개만»] 진입도로 — 구배 칸을 합친 구간으로 직접 그림(Civil 접선 라벨은 스타일에서 끔) · 부지는 안 탐
         if (ctx != null) { B9("⑮-b 구배 칸"); RoadGradeBand.Draw(db, pvId, ctx.PidPad, scale, log); }
+        if (ctx != null) { B9("⑮-c 빈 구간"); RoadGradeBand.DrawGaps(db, pvId, ctx.PidPad, scale, log); }   // ★[도로 마무리 ① · 계획 5.6] 부지 바닥 구간 = 계획선 점선 + 글자(빈 구간 없으면 안 그림)
         B9("⑯ 끝");   // ★[JACK 0827] 수직부는 한 칸에 두 값   // ★[v32.38] 떡진 밴드 값을 오른쪽으로 밀어 떨어뜨린다
         DumpBandLabels(db, log);            // ★[v32.37] 민 뒤의 상태를 남긴다(간격이 벌어졌는지)
 
@@ -362,7 +367,7 @@ public static class SheetCommand
         //     ③ 그 둘이 뜨는 동안 모형탭이 제대로 됐는지 <b>볼 수가 없다</b>.
         //   모형탭이 확정되기 전에 배치를 붙이면 <b>어느 쪽이 틀렸는지 가릴 수 없다</b> — 먼저 하나만 본다.
         //
-        //   <see cref="MakeLayout_Unused"/>·<see cref="AddA3PageSetup"/>는 <b>지우지 않고 남겨 둔다</b>
+        //   ★[v112.0] 옛 배치 만들기 두 함수는 지웠다 — 배치탭은 도면화(DHSHEETMAKE)가 만든다(그 전엔 지우지 않고 남겨 뒀다)
         //   (이 저장소 관례 — <see cref="FitSheetAuto_Unused"/>와 같다). 모형탭이 닫히면 호출만 되살리면 된다.
         //   <b><see cref="EraseAll"/>의 배치 삭제는 그대로 둔다</b> — 지난 판이 만들어 둔 배치가 도면에 남아 있고,
         //   이제 아무도 다시 만들지 않으므로 <b>청소해 주는 쪽이 이 함수뿐</b>이다.
@@ -2620,9 +2625,13 @@ public static class SheetCommand
     private const double SpanLeftMm = AxisRoomMm + BannerGapMm + 6.0;   // 60
     private const double SpanRightMm = 12.0;
 
-    private static bool SheetXSpan(Transaction tr, ObjectId pvId, double scale, out double xLo, out double xHi)
+    /// <summary>★★[JACK 1103 «충분히 멀리 찍었는데도 그래»] 장 상자는 <b>가로 × 세로</b> — 세로(<paramref name="yLo"/> ~ <paramref name="yHi"/>)는 이 장의 실제 도곽(<see cref="SheetFrameY"/>) · 위로는 그래프 꼭대기까지 + 밴드 한 칸.
+    /// 도곽이 없으면 그래프 상자에서 아래로 종이 한 장 높이(도곽 · 밴드 · 축척배너는 그래프 왼쪽 아래를 품은 도곽 안이라 그보다 못 내려감) · 위로 그래프 꼭대기와 «아래 끝 + 한 장 높이» 중 높은 쪽 + 밴드 한 칸.
+    /// 같은 X의 위 · 아래 종단도(다른 노선) 것은 이 장 것으로 안 본다. 세로를 못 재면 종전처럼 세로는 열어 둔다(가로만).</summary>
+    private static bool SheetXSpan(Transaction tr, ObjectId pvId, double scale, out double xLo, out double xHi, out double yLo, out double yHi)
     {
         xLo = double.NegativeInfinity; xHi = double.PositiveInfinity;
+        yLo = double.NegativeInfinity; yHi = double.PositiveInfinity;
         try
         {
             if (tr.GetObject(pvId, OpenMode.ForRead) is not CivilDb.ProfileView pv) return false;
@@ -2643,9 +2652,49 @@ public static class SheetCommand
             double s = scale / 1000.0;
             xLo = System.Math.Min(gx0, gx1) - SpanLeftMm * s;
             xHi = System.Math.Max(gx0, gx1) + SpanRightMm * s;
+            try
+            {
+                var ge = pv.GeometricExtents;   // 그래프 상자(밴드는 안 들어 있다)
+                // ★[설치 전 검토 · 낮음] 이 장의 실제 도곽(그래프 왼쪽 아래를 품은 표식 없는 모형 도곽)이 있으면 그 세로 — 없을 때만 종이 한 장 높이(도곽보다 넓음)
+                if (SheetFrameY(tr, System.Math.Min(gx0, gx1), gy0, out double fy0, out double fy1))
+                { yLo = fy0; yHi = System.Math.Max(fy1, ge.MaxPoint.Y) + BandCellMm * s; }
+                else
+                {
+                    yLo = ge.MinPoint.Y - SheetH * s;
+                    yHi = System.Math.Max(ge.MaxPoint.Y, ge.MinPoint.Y + SheetH * s) + BandCellMm * s;
+                }
+            }
+            catch { yLo = double.NegativeInfinity; yHi = double.PositiveInfinity; }
             return true;
         }
         catch { return false; }
+    }
+
+    /// <summary>★[설치 전 검토 · 낮음] 점(<paramref name="x"/>, <paramref name="y"/> — 그래프 왼쪽 아래)을 품은 <b>표식 없는</b> 모형 도곽 중 가장 큰 것(종이 전체 사각형)의 세로 범위.
+    /// 없으면 거짓(첫 그리기 · «지우고 새로»가 도곽을 먼저 지운 뒤 — 부르는 쪽이 종이 한 장 높이로 물러남).</summary>
+    internal static bool SheetFrameY(Transaction tr, double x, double y, out double y0, out double y1)
+    {
+        y0 = double.NegativeInfinity; y1 = double.PositiveInfinity;
+        double best = 0;
+        try
+        {
+            var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(HostApplicationServices.WorkingDatabase), OpenMode.ForRead);
+            foreach (ObjectId id in ms)
+            {
+                try
+                {
+                    if (tr.GetObject(id, OpenMode.ForRead) is not Polyline pl || !pl.Closed) continue;
+                    if (!string.Equals(pl.Layer, LayFrameModel, System.StringComparison.OrdinalIgnoreCase) || SheetTag.IsRoad(pl)) continue;
+                    var ex = pl.GeometricExtents;
+                    if (x < ex.MinPoint.X || x > ex.MaxPoint.X || y < ex.MinPoint.Y || y > ex.MaxPoint.Y) continue;
+                    double a = (ex.MaxPoint.X - ex.MinPoint.X) * (ex.MaxPoint.Y - ex.MinPoint.Y);
+                    if (a > best) { best = a; y0 = ex.MinPoint.Y; y1 = ex.MaxPoint.Y; }
+                }
+                catch { }
+            }
+        }
+        catch { }
+        return best > 0;
     }
 
     /// <summary>도면의 종단뷰 개수 — <b>여러 장인가</b>를 판정하는 데만 쓴다.</summary>
@@ -2666,25 +2715,25 @@ public static class SheetCommand
 
     /// <summary>★[검토 0904] 축척을 모르는 곳(<see cref="ProfileCommand"/>)에서 쓰는 판 —
     /// 도면 축척을 스스로 읽는다. 없으면 200으로 물러선다(종전 기본).</summary>
-    internal static bool SheetXSpanOf(Transaction tr, ObjectId pvId, out double xLo, out double xHi)
+    internal static bool SheetXSpanOf(Transaction tr, ObjectId pvId, out double xLo, out double xHi, out double yLo, out double yHi)
     {
         double sc = GradingSettings.ProfileScale > 0 ? GradingSettings.ProfileScale : 200.0;
-        return SheetXSpan(tr, pvId, sc, out xLo, out xHi);
+        return SheetXSpan(tr, pvId, sc, out xLo, out xHi, out yLo, out yHi);
     }
 
     /// <summary>★[검토 0904] <see cref="InSheetX"/>의 공개 판.</summary>
-    internal static bool InSheetXOf(Entity e, bool ok, double xLo, double xHi) => InSheetX(e, ok, xLo, xHi);
+    internal static bool InSheetXOf(Entity e, bool ok, double xLo, double xHi, double yLo, double yHi) => InSheetX(e, ok, xLo, xHi, yLo, yHi);
 
-    /// <summary>지울 대상이 이 장 안에 있나 — 범위를 못 구했으면 <b>종전대로 전부</b>(한 장 도면).</summary>
-    private static bool InSheetX(Entity e, bool ok, double xLo, double xHi)
+    /// <summary>지울 대상이 이 장 안에 있나(가운데 점이 장 상자 안 — 가로 × 세로) — 범위를 못 구했으면 <b>종전대로 전부</b>(한 장 도면).</summary>
+    private static bool InSheetX(Entity e, bool ok, double xLo, double xHi, double yLo, double yHi)
     {
         // 범위를 못 구했다 — 여러 장이면 NaN이 와서 <b>안 지운다</b>, 한 장이면 종전대로 전부 지운다.
         if (!ok) return !double.IsNaN(xLo);
         try
         {
             var ex = e.GeometricExtents;
-            double cx = (ex.MinPoint.X + ex.MaxPoint.X) * 0.5;
-            return cx >= xLo && cx <= xHi;
+            double cx = (ex.MinPoint.X + ex.MaxPoint.X) * 0.5, cy = (ex.MinPoint.Y + ex.MaxPoint.Y) * 0.5;
+            return cx >= xLo && cx <= xHi && cy >= yLo && cy <= yHi;
         }
         // ★★[검토 0904] <b>못 재면 안 지운다.</b> 종전엔 <c>true</c>(지운다)라,
         //   경계상자를 못 내는 물건(빈 글자·속성 없는 블록참조) 하나가 <b>남의 장에서도 지워졌다</b>.
@@ -2733,7 +2782,7 @@ public static class SheetCommand
                 SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
 
             // 지난 판에 놓은 같은 블록만 지운다(우리가 놓은 것만 — 남의 것은 건드리지 않는다).
-            bool spanOk = SheetXSpan(tr, pvId, scale, out double sxLo, out double sxHi);
+            bool spanOk = SheetXSpan(tr, pvId, scale, out double sxLo, out double sxHi, out double syLo, out double syHi);
             int wiped = 0;
             if (ctx == null)   // ★[v110.4 · 계획 2.C-5] 부지 길만 지운다 · 도로 표식은 건너뜀
             foreach (ObjectId id in ms)
@@ -2742,7 +2791,7 @@ public static class SheetCommand
                 {
                     if (tr.GetObject(id, OpenMode.ForRead) is not BlockReference br) continue;
                     if (br.BlockTableRecord != defId) continue;
-                    if (!InSheetX(br, spanOk, sxLo, sxHi)) continue;   // ★[JACK 0904] 남의 장 것은 안 지운다
+                    if (!InSheetX(br, spanOk, sxLo, sxHi, syLo, syHi)) continue;   // ★[JACK 0904] 남의 장 것은 안 지운다
                     if (SheetTag.IsRoad(br)) continue;
                     tr.GetObject(id, OpenMode.ForWrite).Erase(); wiped++;
                 }
@@ -2909,7 +2958,7 @@ public static class SheetCommand
             var ms = (BlockTableRecord)tr.GetObject(
                 SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
 
-            bool spanOk = SheetXSpan(tr, pvId, scale, out double sxLo, out double sxHi);
+            bool spanOk = SheetXSpan(tr, pvId, scale, out double sxLo, out double sxHi, out double syLo, out double syHi);
             int wiped = 0;
             if (ctx == null)   // ★[v110.4 · 계획 2.C-5] 부지 길만 지운다 · 도로 표식은 건너뜀
             foreach (ObjectId id in ms)
@@ -2917,7 +2966,7 @@ public static class SheetCommand
                 try
                 {
                     if (tr.GetObject(id, OpenMode.ForRead) is not Entity e || e.LayerId != layer) continue;
-                    if (!InSheetX(e, spanOk, sxLo, sxHi)) continue;    // ★[JACK 0904] 남의 장 것은 안 지운다
+                    if (!InSheetX(e, spanOk, sxLo, sxHi, syLo, syHi)) continue;    // ★[JACK 0904] 남의 장 것은 안 지운다
                     if (SheetTag.IsRoad(e)) continue;
                     tr.GetObject(id, OpenMode.ForWrite).Erase(); wiped++;
                 }
@@ -3060,7 +3109,7 @@ public static class SheetCommand
                 SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
 
             // ── 다시 돌릴 때 겹치지 않게 먼저 지운다. 우리가 만든 레이어라 남의 것을 건드릴 일이 없다.
-            bool spanOk = SheetXSpan(tr, pvId, scale, out double sxLo, out double sxHi);
+            bool spanOk = SheetXSpan(tr, pvId, scale, out double sxLo, out double sxHi, out double syLo, out double syHi);
             int wiped = 0;
             if (ctx == null)   // ★[v110.4 · 계획 2.C-5] 부지 길만 지운다 · 도로 표식은 건너뜀
             foreach (ObjectId id in ms)
@@ -3068,7 +3117,7 @@ public static class SheetCommand
                 try
                 {
                     if (tr.GetObject(id, OpenMode.ForRead) is not Entity e || e.LayerId != layer) continue;
-                    if (!InSheetX(e, spanOk, sxLo, sxHi)) continue;    // ★[JACK 0904] 남의 장 것은 안 지운다
+                    if (!InSheetX(e, spanOk, sxLo, sxHi, syLo, syHi)) continue;    // ★[JACK 0904] 남의 장 것은 안 지운다
                     if (SheetTag.IsRoad(e)) continue;
                     tr.GetObject(id, OpenMode.ForWrite).Erase(); wiped++;
                 }
@@ -4180,10 +4229,14 @@ public static class SheetCommand
         var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
         var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
         ObjectId layer = SectionCommand.EnsureLayer(db, tr, LayFrameModel, 30);   // 30 = 주황
+        // ★★[v112.0 · 계획_도면화.md 4.4-1 · 검토 H2] 장 표식 — 그린 때의 주석 축척은 그린 쪽만 안다(도면화 뷰포트가 장마다 그 값을 건다).
+        //   부지 = 방금 건 CANNOSCALE · 진입도로 = 그대로 둔 CANNOSCALE(KeepDrawingScale) — 둘 다 «그린 직후의 도면 주석 축척»(검토 후속 3)
+        double annoNow = CurrentDrawingScale(db);
         foreach (var f in list)
         {
-            AddRect(tr, ms, layer, f.SheetMin.X, f.SheetMin.Y,
+            var outer = AddRect(tr, ms, layer, f.SheetMin.X, f.SheetMin.Y,
                     f.SheetMin.X + f.SheetW2, f.SheetMin.Y + f.SheetH2);                 // 종이 전체
+            SheetFrameTag.Put(db, tr, outer, SheetFrameTag.KindProf, scale, annoNow);
             AddRect(tr, ms, layer, f.ViewCenter.X - f.ViewW / 2, f.ViewCenter.Y - f.ViewH / 2,
                     f.ViewCenter.X + f.ViewW / 2, f.ViewCenter.Y + f.ViewH / 2);         // 뷰포트가 볼 자리
         }
@@ -4195,7 +4248,7 @@ public static class SheetCommand
         return list;
     }
 
-    internal static void AddRect(Transaction tr, BlockTableRecord owner, ObjectId layer,
+    internal static Polyline AddRect(Transaction tr, BlockTableRecord owner, ObjectId layer,
                                 double x0, double y0, double x1, double y1)
     {
         var pl = new Polyline();
@@ -4206,6 +4259,7 @@ public static class SheetCommand
         pl.Closed = true;
         pl.LayerId = layer;
         owner.AppendEntity(pl); tr.AddNewlyCreatedDBObject(pl, true);
+        return pl;
     }
 
     /// <summary>★★[v32.27 · JACK 0813] <b>종단도가 도면에 그린 것을 전부 지운다</b> — '지우고 새로'가 부른다.
@@ -4282,6 +4336,8 @@ public static class SheetCommand
                 {
                     if (tr.GetObject(btrId, OpenMode.ForRead) is not BlockTableRecord btr) continue;
                     if (btr.IsFromExternalReference || btr.IsFromOverlayReference) continue;
+                    // ★★[v112.0 · 계획_도면화.md 4.11 · 검토 M2] 배치 레코드(모형 + 배치탭)만 — 블록 정의 안(사람 CALS 도곽의 «CR-» 객체 · 도면화 도곽 «DH_FRAME»)은 안 지운다
+                    if (!btr.IsLayout || FrameLibrary.ReadTag(tr, btr).Length > 0) continue;
                     foreach (ObjectId id in btr)
                     {
                         try
@@ -4340,373 +4396,10 @@ public static class SheetCommand
         return total;
     }
 
-    /// <summary>배치를 만들고 도곽·내부선·1/3 구분선을 그린 뒤, 아래 2/3에 뷰포트를 놓는다.
-    /// 뷰포트는 <b>모형의 도곽 범위를 그대로</b> 가져온다 — 사용자는 배치에서 가져오기만 하면 된다.
-    ///
-    /// <para>★★[JACK 0813] <b>지금은 부르지 않는다</b> — <see cref="Build"/> ⑤단계 설명 참조.
-    /// 모형탭이 확정되면 그 호출 한 줄만 되살리면 된다. 안의 논리(여백·용지·뷰포트 배율)는
-    /// 여러 판에 걸쳐 실측으로 맞춰 둔 것이라 <b>지우면 그 값을 다시 찾아야 한다.</b></para></summary>
-    private static string MakeLayout_Unused(Database db, Editor ed, Frame frame, double scale,
-                                            System.Text.StringBuilder log)
-    {
-        var lm = LayoutManager.Current;
-        string name = LayoutBase;
-        for (int i = 2; lm.LayoutExists(name); i++) name = $"{LayoutBase}_{i}";
-        ObjectId layId = lm.CreateLayout(name);
-        lm.CurrentLayout = name;
-
-        using var tr = db.TransactionManager.StartTransaction();
-        var lay = (Layout)tr.GetObject(layId, OpenMode.ForWrite);
-        var ps = (BlockTableRecord)tr.GetObject(lay.BlockTableRecordId, OpenMode.ForWrite);
-        ObjectId layer = SectionCommand.EnsureLayer(db, tr, LayFrame, 7);
-
-        // 도곽은 배치 원점을 좌하단으로 잡는다 — 종이 좌표와 1:1이라 눈으로 검산된다.
-        void Rect(double x0, double y0, double x1, double y1)
-        {
-            var pl = new Polyline();
-            pl.AddVertexAt(0, new Point2d(x0, y0), 0, 0, 0);
-            pl.AddVertexAt(1, new Point2d(x1, y0), 0, 0, 0);
-            pl.AddVertexAt(2, new Point2d(x1, y1), 0, 0, 0);
-            pl.AddVertexAt(3, new Point2d(x0, y1), 0, 0, 0);
-            pl.Closed = true;
-            pl.LayerId = layer;
-            ps.AppendEntity(pl); tr.AddNewlyCreatedDBObject(pl, true);
-        }
-        // ★★[JACK 0811] <b>"흰색 배경부분에 도곽박스가 딱 맞지 않음"</b>
-        //   배치의 원점 (0,0)은 <b>종이 모서리가 아니라 '인쇄 가능 영역'의 좌하단</b>이다.
-        //   그래서 (0,0)에서 841×594를 그으면 여백만큼 밀린다 — 스샷의 그 어긋남이다.
-        //   종이 모서리는 (0,0)에서 여백만큼 <b>바깥</b>이므로 그만큼 빼서 그린다.
-        //
-        // ★★★[v32.20 · §26에 '미확인'으로 남겨 둔 것] <b>재기 전에 용지를 먼저 정한다.</b>
-        //   종전엔 이 여백을 <b>맨 위에서</b> 읽고, 용지(A1)·단위(mm) 지정은 <b>90줄 뒤 ⑤단계</b>에서 했다.
-        //   그래서 읽은 값이 두 가지로 틀릴 수 있었다:
-        //     ① <b>용지가 다르다</b> — 여백은 출력장치·용지마다 다른데 아직 A1로 바꾸기 전이라
-        //        새 배치의 <b>기본 용지</b>(보통 A4·레터, 기본 프린터) 여백을 A1 도곽에 쓰고 있었다.
-        //     ② <b>단위가 다르다</b> — <c>PlotPaperMargins</c>는 <c>PlotPaperUnits</c>를 따라간다(§26에서 확인).
-        //        기본이 인치면 0.25가 나오는데 우리는 그걸 0.25<b>mm</b>로 알고 밀었다 — 실제로는 6.35mm다.
-        //   → <b>용지·단위를 먼저 걸고, 그 설정에서 여백을 읽는다.</b> 부작용 없는 순서 교환이다.
-        //   A3 출력은 종전에도 안전했다(창이 도곽과 같은 <c>ox,oy</c>를 써서 자기일관적) — 영향은 A1 배치뿐.
-        double ox = 0, oy = 0;
-
-        // ── [계측] 종전 코드가 쓰던 바로 그 값을 먼저 남긴다. 아래 새 값과 다르면
-        //    그 차이가 곧 '여태 어긋나 있던 양'이다 — §26의 '미확인'이 실행 한 번으로 닫힌다.
-        try
-        {
-            var mg0 = lay.PlotPaperMargins;
-            log.AppendLine($"[용지 설정 전] 단위 {lay.PlotPaperUnits} · 용지 {lay.PlotPaperSize.X:F1}×{lay.PlotPaperSize.Y:F1}"
-                           + $" · 여백 좌하({mg0.MinPoint.X:F2},{mg0.MinPoint.Y:F2})  ← 종전 코드가 mm로 알고 쓰던 값");
-        }
-        catch (System.Exception ex) { log.AppendLine("[용지 설정 전] 못 읽음 — " + Brief(ex)); }
-
-        // ── ⑤ 출력 용지를 A1 · 단위를 mm로. 실패해도 도곽은 그대로 쓸 수 있으므로 조용히 넘어간다.
-        //   ★[검토 지적] <b>단계 이름을 들고 다닌다</b> — "실패 — eInvalidInput" 한 줄로는 여덟 호출 중
-        //   어디서 물렸는지 못 좁힌다(0807 교훈이자 바로 아래 <see cref="AddA3PageSetup"/>이 이미 배운 것).
-        bool paperOk = false;
-        string pstep = "시작";
-        try
-        {
-            var psv = PlotSettingsValidator.Current;
-            using var pset = new PlotSettings(lay.ModelType);
-            pstep = "옛 설정 복사"; pset.CopyFrom(lay);
-            pstep = "출력장치(DWG To PDF.pc3)"; psv.SetPlotConfigurationName(pset, "DWG To PDF.pc3", null);
-            pstep = "용지 목록 새로고침"; psv.RefreshLists(pset);
-            pstep = "A1 용지 고르기";
-            string? media = psv.GetCanonicalMediaNameList(pset).Cast<string>()
-                               .FirstOrDefault(m => m.Contains("A1", StringComparison.OrdinalIgnoreCase));
-            // ★[검토 지적] 용지를 <b>못 찾았으면 여기서 물러난다.</b> 종전엔 그대로 진행해
-            //   <b>장치 기본 용지</b>(대개 A4·레터)의 여백으로 도곽 원점을 잡고 <c>lay</c>까지 그 용지로 바꿨다 —
-            //   로그에는 남지만 동작은 조용히 틀린다. 옛 설정을 건드리지 않는 편이 낫다.
-            if (media == null)
-            {
-                log.AppendLine("출력 용지: 이 출력장치에 A1 용지가 없다 — 용지 설정을 건너뛴다(도곽은 그대로 그린다)");
-            }
-            else
-            {
-                pstep = "용지 지정"; psv.SetCanonicalMediaName(pset, media);
-                // 용지를 고른 <b>다음에</b> 단위를 건다. 여백이 항상 mm인지 단위를 따르는지는 아직 논쟁 중이지만
-                // (아래 참조), <b>어느 쪽이든 이 순서가 손해가 없다</b> — 단위를 따른다면 이 순서라야 맞다.
-                pstep = "단위(mm)"; psv.SetPlotPaperUnits(pset, PlotPaperUnit.Millimeters);
-                pstep = "출력 종류=배치"; psv.SetPlotType(pset, Autodesk.AutoCAD.DatabaseServices.PlotType.Layout);
-                pstep = "배치에 반영"; lay.CopyFrom(pset);
-
-                pstep = "여백 재기";
-                var sz = pset.PlotPaperSize;
-                var mg = pset.PlotPaperMargins;
-                ox = -mg.MinPoint.X; oy = -mg.MinPoint.Y;
-                paperOk = true;
-                log.AppendLine($"출력 용지: {media}"
-                               + $" · 용지 {sz.X:F1}×{sz.Y:F1} · 여백 좌하({mg.MinPoint.X:F2},{mg.MinPoint.Y:F2})"
-                               + $" → 도곽을 ({ox:F2},{oy:F2})에서 시작");
-
-                // ★[검토 지적 · 계측이 스스로 검산되게] 용지가 도곽과 맞는지 <b>직접 대조</b>한다.
-                //   이 한 줄이 세로용지·크기틀림·단위실패를 <b>한꺼번에</b> 잡는다 —
-                //   종전의 <c>sz.Y &gt; sz.X</c>는 단위가 인치로 남아 33.1×23.4가 돼도 거짓이라 조용했다.
-                if (System.Math.Abs(sz.X - SheetW) > 1.0 || System.Math.Abs(sz.Y - SheetH) > 1.0)
-                    log.AppendLine($"   ⚠ 용지 {sz.X:F1}×{sz.Y:F1} ≠ 도곽 {SheetW:F0}×{SheetH:F0}mm"
-                                   + " — 방향·크기·단위 중 하나가 틀렸다(도곽이 종이와 안 맞는다)");
-
-                // ★[검토 지적] 배치의 흰 종이 배경을 실제로 정하는 것은 <b><c>CopyFrom</c> 뒤의 <c>lay</c></b>다.
-                //   DB에 올라간 Layout에서 AutoCAD가 여백을 다시 계산하는지는 문서에 없다 — 그러니 <b>재서 적는다</b>.
-                try
-                {
-                    var mgL = lay.PlotPaperMargins;
-                    log.AppendLine($"   [배치 반영 후] 단위 {lay.PlotPaperUnits} · 용지 {lay.PlotPaperSize.X:F1}×{lay.PlotPaperSize.Y:F1}"
-                                   + $" · 여백 좌하({mgL.MinPoint.X:F2},{mgL.MinPoint.Y:F2})"
-                                   + (System.Math.Abs(mgL.MinPoint.X - mg.MinPoint.X) > 0.01 ||
-                                      System.Math.Abs(mgL.MinPoint.Y - mg.MinPoint.Y) > 0.01
-                                        ? "  ⚠설정값과 다르다 — 도곽 원점은 이 값으로 잡아야 한다" : ""));
-                }
-                catch (System.Exception ex) { log.AppendLine("   [배치 반영 후] 못 읽음 — " + Brief(ex)); }
-            }
-        }
-        catch (System.Exception ex) { log.AppendLine($"출력 용지 설정 건너뜀({pstep}) — " + Brief(ex)); }
-
-        // ── 설정이 실패했으면 배치가 지금 들고 있는 값으로라도 맞춘다.
-        //
-        //   ★★[검토 지적 · 높음] <b>단위 환산(×25.4)을 넣지 않는다.</b>
-        //   Autodesk 공식 레퍼런스는 <c>PlotPaperMargins</c>에 대해
-        //   <i>"The values returned are in millimeters, <b>regardless of the units selected by the user</b>"</i>
-        //   라고 못박는다. 반면 이 저장소의 §26은 "단위를 따라간다"고 적어 두었다 — <b>둘 중 하나는 틀렸고
-        //   아직 실측이 없다.</b>
-        //
-        //   <b>손익이 비대칭이다.</b> 환산을 안 하면 최악이 여백만큼(≈6mm) 어긋나는 것이고,
-        //   환산을 했다가 문서가 맞으면 6.35에 25.4가 곱해져 <b>도곽이 종이 밖 161mm로 날아간다</b>.
-        //   확인 안 된 가정에 큰 쪽을 걸 이유가 없다 — <b>실측이 §26을 확인해 주면 그때 되살린다.</b>
-        //   위 <c>[용지 설정 전]</c> 로그가 바로 그 실측이다: 단위가 인치인데 여백이 6.35로 찍히면 문서가 맞고,
-        //   0.25로 찍히면 §26이 맞다.
-        if (!paperOk)
-        {
-            try
-            {
-                var mg = lay.PlotPaperMargins;
-                ox = -mg.MinPoint.X; oy = -mg.MinPoint.Y;
-                log.AppendLine($"도곽 원점 보정(물러남): 단위 {lay.PlotPaperUnits}"
-                               + $" · 용지 {lay.PlotPaperSize.X:F1}×{lay.PlotPaperSize.Y:F1}"
-                               + $" · 여백 좌하({mg.MinPoint.X:F2},{mg.MinPoint.Y:F2}) → ({ox:F2},{oy:F2})"
-                               + "  ※A1로 못 바꾼 상태라 도곽이 종이와 안 맞을 수 있다");
-            }
-            catch (System.Exception ex) { log.AppendLine("도곽 원점 보정 실패(0,0에서 그림) — " + Brief(ex)); }
-        }
-
-        Rect(ox, oy, ox + SheetW, oy + SheetH);                                          // ① 도곽
-        Rect(ox + MarginLeft, oy + MarginBottom, ox + SheetW - MarginRight, oy + SheetH - MarginTop); // ② 내부 여백선(하단이 넓다)
-
-        // ③ 구분선 두 개 — <b>실제 구도와 같은 자리에</b> 긋는다.
-        //   ★[v23.28] 종전엔 1/3·2/3에 그었는데, 실제 구도와 어긋나 뷰포트 윗선과 9mm 벌어져 있었다.
-        //   ★★[v32.30] 종평면도 칸이 없어졌다 — 본문(80%)의 <b>아래·위 경계</b> 두 줄만 남는다.
-        //   아랫줄은 내부 여백선과 겹친다(본문이 여백선에서 바로 시작하므로) — 겹쳐도 무해하다.
-        double yBot = oy + MarginBottom;              // 본문 아랫선 = 내부 여백선
-        double yTop = yBot + ViewH;                   // 본문 / 제목부 경계
-        foreach (double y in new[] { yBot, yTop })
-        {
-            var ln = new Line(new Point3d(ox + MarginLeft, y, 0), new Point3d(ox + SheetW - MarginRight, y, 0)) { LayerId = layer };
-            ps.AppendEntity(ln); tr.AddNewlyCreatedDBObject(ln, true);
-        }
-
-        // ※[JACK 0811 보류] <b>가로 막대 축척은 여기가 아니다.</b>
-        //   설계도서는 A1 원도를 A3로 축소 제본하므로 <c>S=1:200</c>이라는 숫자 축척이 거짓이 된다 —
-        //   막대는 같이 줄어드니 항상 맞아서 실무가 막대를 넣는다(세로 짝은 <see cref="DrawScaleBar"/>가 이미 그린다).
-        //   다만 <b>막대가 들어갈 자리는 도곽 아래 설명란</b>이고, 그 설명란은 앞으로 만들
-        //   <b>'도곽 불러오기'</b>가 회사 도곽 파일에서 통째로 가져올 물건이다(JACK 판단).
-        //   그때 같이 붙인다 — 지금 제목부에 임시로 그려 두면 나중에 두 번 그리게 된다.
-
-        // ④ 본문 자리(80%)에 뷰포트 — **모형의 도곽 범위를 그대로 가져온다**
-        //   ★★[v32.30] 바닥은 <see cref="MarginBottom"/>(50mm — 범례·서명란) 위다.
-        double vpH = ViewH;
-        var vp = new Viewport();
-        ps.AppendEntity(vp); tr.AddNewlyCreatedDBObject(vp, true);
-        vp.Width = InnerW;
-        vp.Height = vpH;
-        // ★★[검토 지적 0827] <b>종이 한가운데가 아니라 <u>안쪽 네모</u>의 한가운데다.</b>
-        //   <c>SheetW / 2</c>(420.5)는 <b>좌우 여백이 같을 때만</b> 우연히 맞던 식이다.
-        //   좌 25 · 우 20으로 가르고 나면 안쪽은 25~821이라 한가운데가 <b>423</b> —
-        //   그대로 두면 배치 뷰포트가 도곽 여백선에서 <b>2.5mm 어긋난다</b>.
-        //   (지금은 이 배치 만들기가 잠들어 있어 화면에 안 나오지만, 되살리는 날 조용히 틀린다.)
-        vp.CenterPoint = new Point3d(ox + MarginLeft + InnerW / 2.0, oy + MarginBottom + vpH / 2.0, 0);
-        vp.On = true;
-        vp.CustomScale = 1000.0 / scale;      // 모형 1m = 종이 1000/축척 mm
-        vp.ViewCenter = frame.ViewCenter;     // 모형 도곽의 뷰 영역 한가운데
-        vp.Locked = true;                     // 실수로 확대해 축척이 틀어지는 것을 막는다
-
-        // ★★[JACK 0811] <b>"원지반까지 같이 나와서 이상하고"</b>
-        //   뷰포트는 그 창에 걸리는 <b>모형의 모든 것</b>을 보여준다 — 종단도를 부지 근처에 놓았으니
-        //   지형(등고선)과 평면 노선이 같이 딸려 들어왔다. 종단면도 시트에는 종단만 있어야 한다.
-        //   → <b>이 뷰포트에서만</b> 지형·평면 레이어를 끈다(도면 자체는 그대로 둔다).
-        try
-        {
-            // ★★[v29.0 점검 반영 · 높음] <b>레이어 '이름표'가 아니라 '열쇠(ObjectId)'를 건네야 한다.</b>
-            //   종전엔 이름 목록을 넘겼는데 <c>FreezeLayersInViewport</c>는 <c>ObjectId</c>를 기다린다 —
-            //   첫 개에서 바로 <c>NullReferenceException</c>이 나고 <b>한 개도 안 얼어붙었다</b>.
-            //   로그에 매번 "뷰포트 레이어 끄기 실패"만 남고 원인이 안 보였다.
-            //
-            //   ★ 그리고 <b>남길 목록에 종단도 본체를 반드시 넣는다.</b> 종단도는 Civil이 만든
-            //   <b>자기 레이어</b>(선형/종단/종단뷰 레이어)에 놓이는데 그게 <c>CR-*</c>가 아니다.
-            //   종전 목록대로 끄면 <b>종단도가 통째로 사라진다</b> — 지금까지 이 기능이 실패해 온 덕에
-            //   그 사고가 안 났을 뿐이다. 고치는 김에 같이 막는다.
-            var keep = new System.Collections.Generic.HashSet<string>(
-                new[] { LayFrame, "0", SectionCommand.LayerAlign, ProfileCommand.LayerRoute },
-                StringComparer.OrdinalIgnoreCase);
-            var hideIds = new ObjectIdCollection();
-            var hideNames = new List<string>();
-            var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-            foreach (ObjectId lid in lt)
-            {
-                if (tr.GetObject(lid, OpenMode.ForRead) is not LayerTableRecord ltr) continue;
-                string n = ltr.Name;
-                if (n.StartsWith("CR-", StringComparison.OrdinalIgnoreCase)) continue;   // CALS 종단 레이어
-                if (n.StartsWith("DH_", StringComparison.OrdinalIgnoreCase)) continue;   // Civil이 만든 종단·선형 레이어
-                if (keep.Contains(n)) continue;
-                hideIds.Add(lid); hideNames.Add(n);
-            }
-            if (hideIds.Count > 0)
-            {
-                vp.FreezeLayersInViewport(hideIds.GetEnumerator());
-                log.AppendLine($"  뷰포트 레이어 끔 {hideIds.Count}개: " +
-                               string.Join(" · ", hideNames.Take(12)) + (hideNames.Count > 12 ? " …" : ""));
-            }
-            else log.AppendLine("  뷰포트 레이어: 끌 것이 없다(전부 남길 목록)");
-        }
-        catch (System.Exception ex) { log.AppendLine("뷰포트 레이어 끄기 실패 — " + Brief(ex)); }
-
-        // ※ 출력 용지(A1)·단위(mm) 설정은 <b>도곽을 그리기 전</b>으로 옮겼다(v32.20 — 위 ⑤ 참고).
-        //   여백을 정하는 것이 용지인데 여백을 먼저 읽고 있었다.
-
-        // ⑥ ★[JACK 0811] A3 축소 출력용 페이지 설정을 미리 넣어 둔다 — 제본은 A3다.
-        //   ★[v32.1] 도곽이 어디에 놓였는지(ox,oy)를 넘긴다 — 그 네 변이 곧 출력 창이다.
-        AddA3PageSetup(db, ox, oy, log);
-
-        tr.Commit();
-        log.AppendLine($"배치 '{name}' · 뷰포트 {InnerW:F0}×{vpH:F1}mm · 축척 1:{scale:F0}");
-        ed.Regen();
-        return name;
-    }
-
-    /// <summary>★[JACK 0811] <b>A3 축소 출력용 페이지 설정을 미리 저장해 둔다.</b>
-    /// <para>설계도서 제본은 A3다. 그런데 매번 플롯 대화상자에서 용지·축척·중심을 맞추는 것은
-    /// 손이 가고 <b>틀리기 쉽다</b>(축척을 잘못 두면 도면이 거짓이 된다).
-    /// 이름 붙은 페이지 설정으로 넣어 두면 <b>고르기만</b> 하면 된다.</para>
-    /// <para>A3는 A1의 정확히 절반이라 <c>1:2</c>가 맞다 — '용지에 맞춤'은 여백에 따라
-    /// 미세하게 달라져 축척이 어긋날 수 있으므로 쓰지 않는다.</para></summary>
-    /// <summary>★★[v32.1 · JACK 0812] <b>A3 페이지 설정이 <c>eInvalidInput</c>으로 실패하던 것 — 세 가지가 겹쳤다.</b>
-    ///
-    /// <para>① <b><c>출력 종류=배치</c>에 '가운데 정렬'을 걸 수 없다.</b> 배치 출력은 원점이
-    /// <b>용지에 고정</b>이라 가운데로 옮길 여지가 없다 — 그래서 <c>eInvalidInput</c>이 났다.</para>
-    ///
-    /// <para>② 성공했더라도 <b>결과가 틀렸다.</b> <c>배치</c>는 '지금 용지의 인쇄영역'을 찍는다.
-    /// 용지를 A3으로 바꿔 놨으니 <b>A3만큼만</b> 찍혀 A1 도곽의 <b>왼쪽 아래 귀퉁이</b>만 나온다.
-    /// → <b>도곽 네 변을 창(Window)으로</b> 준다. 그러면 용지가 무엇이든 <b>찍히는 것은 도곽 한 장</b>이다.</para>
-    ///
-    /// <para>③ <b>한 번 실패하면 영영 안 고쳐졌다.</b> '이미 있음'이면 그냥 돌아섰는데,
-    /// 실패한 판도 <b>이름은 이미 사전에 올라가 있다</b> — 반쪽짜리 설정이 그대로 남았다.
-    /// §25 교훈 10과 같은 함정이다(<i>"안 건드리면 원래대로 돌아간다"고 생각하기</i>).
-    /// → <b>있으면 지우고 다시 만든다.</b> 여러 번 돌려도 결과가 같다.</para>
-    ///
-    /// <para><b>어디서 실패했는지 남긴다.</b> 종전엔 한 덩어리를 감싸 잡아서
-    /// 로그가 "실패 — eInvalidInput" 한 줄뿐이었다. 그 한 줄로는 다섯 개 설정 중
-    /// 어느 것이 물렸는지 알 수 없다 — <b>개수만으로는 원인 자리를 못 좁힌다</b>(0807 교훈).
-    /// 단계 이름을 들고 다니며 실패한 자리를 그대로 적는다.</para>
-    ///
-    /// <para><b>용지는 full bleed를 먼저 찾는다.</b> A1 841×594를 1:2로 줄이면 420.5×297.0mm인데
-    /// A3은 420×297이다 — <b>가로로 0.5mm 넘친다</b>(가운데 정렬이므로 양옆 0.25mm씩).
-    /// 보통 A3은 여기에 인쇄 여백 4~5mm가 더 붙어 도곽선이 잘린다. 여백이 0인 full bleed면
-    /// 넘침이 0.25mm로 줄어 선 굵기 안에 묻힌다. 실제로 들어가는지 <b>재서 로그에 적는다.</b></para></summary>
-    private static void AddA3PageSetup(Database db, double ox, double oy, System.Text.StringBuilder log)
-    {
-        const string setupName = "DH-A3 축소(1:2)";
-        string step = "시작";
-        try
-        {
-            // ── ③ <b>지우고 다시 만들지 않는다 — 있으면 그 자리에서 값만 다시 맞춘다.</b>
-            //   지웠다가 같은 이름으로 다시 넣는 것이 되는지는 문서에 없다(심볼테이블에서는
-            //   같은 이름 재삽입이 거부된다는 보고가 있다). <b>확인 안 된 길로 갈 이유가 없다</b> —
-            //   기존 항목을 열어 값을 덮으면 재등록 자체가 없어 그 질문이 사라진다.
-            //   반쪽짜리가 남아 있어도 어차피 전부 다시 씌우므로 결과는 같다(여러 번 돌려도 같다).
-            //
-            //   ★ 그리고 <b>전부 한 트랜잭션 안에서</b> 한다. 중간에 걸리면 커밋이 안 되어
-            //   <b>통째로 물러난다</b> — 용지를 못 찾고 돌아설 때 '이름만 올라간 껍데기'가 남던 길이 막힌다.
-            using var tr = db.TransactionManager.StartTransaction();
-
-            var dict = (DBDictionary)tr.GetObject(db.PlotSettingsDictionaryId, OpenMode.ForWrite);
-            PlotSettings pset;
-            if (dict.Contains(setupName))
-            {
-                step = "옛 설정 열기";
-                pset = (PlotSettings)tr.GetObject(dict.GetAt(setupName), OpenMode.ForWrite);
-                log.AppendLine($"A3 페이지 설정 '{setupName}': 이미 있어 값만 다시 맞춘다");
-            }
-            else
-            {
-                // ★ <c>AddNewlyCreatedDBObject</c>를 반드시 부른다 — 이게 빠지면 객체가
-                //   <b>열린 채로 남아</b> 정작 도면을 저장·닫을 때 엉뚱한 오류로 튀어나온다.
-                step = "사전에 등록";
-                pset = new PlotSettings(false) { PlotSettingsName = setupName };
-                pset.AddToPlotSettingsDictionary(db);
-                tr.AddNewlyCreatedDBObject(pset, true);
-            }
-
-            var psv = PlotSettingsValidator.Current;
-            step = "출력장치(DWG To PDF.pc3)"; psv.SetPlotConfigurationName(pset, "DWG To PDF.pc3", null);
-            step = "용지 목록 새로고침"; psv.RefreshLists(pset);
-
-            // ── 용지: 여백 0인 full bleed A3을 먼저, 없으면 아무 A3.
-            step = "A3 용지 고르기";
-            var medias = psv.GetCanonicalMediaNameList(pset).Cast<string>().ToList();
-            bool IsA3(string m) => m.IndexOf("A3", StringComparison.OrdinalIgnoreCase) >= 0;
-            string media = medias.FirstOrDefault(m => IsA3(m) &&
-                               m.IndexOf("full_bleed", StringComparison.OrdinalIgnoreCase) >= 0)
-                        ?? medias.FirstOrDefault(IsA3);
-            if (media == null)
-            {
-                log.AppendLine("A3 페이지 설정: 이 출력장치에 A3 용지가 없다 — 도면의 용지 목록 "
-                               + string.Join(" · ", medias.Take(8)) + (medias.Count > 8 ? " …" : ""));
-                return;                     // 커밋 안 함 → 방금 올린 항목도 같이 물러난다
-            }
-            step = "용지 지정"; psv.SetCanonicalMediaName(pset, media);
-            step = "단위(mm)"; psv.SetPlotPaperUnits(pset, PlotPaperUnit.Millimeters);
-
-            // ── 세로 A3이 잡혔으면 <b>먼저</b> 90° 돌려 가로로 쓴다(도곽이 가로 841×594라서).
-            //   ★[검토 지적] <b>돌리기를 가운데 정렬보다 앞에 둔다.</b> 정렬은 '용지 안에서 어디에 놓을지'라
-            //   용지 방향이 정해진 뒤에 계산되어야 한다. 뒤에 돌리면 앞서 잡은 원점이 헌 값이 될 수 있다 —
-            //   문서에 계산 시점이 안 적혀 있으니 <b>순서로 막는다</b>(바꿔도 잃을 것이 없다).
-            step = "용지 방향";
-            var sz = pset.PlotPaperSize;                 // 회전 전 크기 — 아래 인쇄영역 계산의 기준
-            bool rot = sz.Y > sz.X;
-            if (rot) psv.SetPlotRotation(pset, PlotRotation.Degrees090);
-
-            // ── ② 도곽 네 변을 그대로 창으로. 창을 먼저 주고 종류를 창으로 바꾼다(순서가 있다).
-            step = "출력 창(도곽 네 변)";
-            psv.SetPlotWindowArea(pset, new Extents2d(ox, oy, ox + SheetW, oy + SheetH));
-            step = "출력 종류=창"; psv.SetPlotType(pset, Autodesk.AutoCAD.DatabaseServices.PlotType.Window);
-
-            step = "축척 1:2";
-            psv.SetUseStandardScale(pset, true);
-            psv.SetStdScaleType(pset, StdScaleType.StdScale1To2);
-            step = "가운데 정렬"; psv.SetPlotCentered(pset, true);   // ← ①이 막던 자리
-
-            // ── 실제로 들어가는지 재서 남긴다(추측하지 않는다).
-            //   여백은 <b>회전을 반영해 주지 않는다</b> — 돌렸으면 가로·세로를 우리가 맞바꿔 본다.
-            step = "여백 재기";
-            var mg = pset.PlotPaperMargins;
-            double printW = System.Math.Abs(sz.X) - mg.MinPoint.X - mg.MaxPoint.X;
-            double printH = System.Math.Abs(sz.Y) - mg.MinPoint.Y - mg.MaxPoint.Y;
-            if (rot) (printW, printH) = (printH, printW);
-            double needW = SheetW / 2.0, needH = SheetH / 2.0;         // 420.5 × 297.0
-            double overW = needW - printW, overH = needH - printH;
-            bool fits = overW <= 1e-6 && overH <= 1e-6;
-
-            log.AppendLine($"A3 페이지 설정 '{setupName}' 등록 · 용지 {media} · 창=도곽 {SheetW:F0}×{SheetH:F0}mm"
-                           + $" · 축척 1:2 · 가운데 정렬{(rot ? " · 90° 회전" : "")}");
-            log.AppendLine($"   A3 인쇄영역 {printW:F1}×{printH:F1}mm · 1:2면 {needW:F1}×{needH:F1}mm 필요 → "
-                           + (fits ? "들어감"
-                                   : $"⚠넘침 가로 {System.Math.Max(0, overW):F1}mm · 세로 {System.Math.Max(0, overH):F1}mm"
-                                     + " — 도곽선이 그만큼 잘린다"
-                                     + "(여백 0인 full bleed A3을 쓰거나 '용지에 맞춤'으로 바꿔야 한다)"));
-            // ★[계측] 정렬이 실제로 먹었는지 원점으로 확인한다 — 값이 (0,0)에 머물면 정렬이 안 걸린 것이다.
-            log.AppendLine($"   출력원점 = ({pset.PlotOrigin.X:F2}, {pset.PlotOrigin.Y:F2})");
-            tr.Commit();
-        }
-        catch (System.Exception ex) { log.AppendLine($"A3 페이지 설정 실패({step}) — " + Brief(ex)); }
-    }
+    // ★★[v112.0 · 계획_도면화.md 1.2 · 내 판단 8] 잠들어 있던 배치 만들기(MakeLayout_Unused) · A3 페이지 설정(AddA3PageSetup)은 지웠다 —
+    //   같은 일을 도면화(SheetBookBuilder.SetupLayout · PageSetups)가 하고, 0811~0827에 실측으로 배운 것(용지 · 단위를 먼저 걸고 여백 읽기 ·
+    //   배치 원점 = 인쇄 가능 영역 왼쪽 아래 · FreezeLayersInViewport는 ObjectId 열거자 · A3 = 창 + 회전 먼저 · 있으면 열어 값만 · AddNewlyCreatedDBObject ·
+    //   단계 이름을 들고 다니며 실패 자리 기록)은 그 함수 주석으로 옮겼다. 두 벌이면 한쪽만 고쳐진다.
 
     private static ObjectId PickProfileView(Database db, Editor ed, out string name)
     {
@@ -4971,6 +4664,7 @@ public static class SheetCommand
             //   <b>[도곽]만 다시 돌리면 안 돈다</b> — 그러면 지난 판 글씨 위에 새 글씨가 겹쳐 쌓인다.
             //   우리가 만든 레이어라 남의 것을 건드릴 일이 없다.
             int wiped = 0;
+            double wpLo = double.NaN;   // 세로 아래 끝(처음 지울 후보에서 한 번 셈)
             foreach (ObjectId oid in ms)
             {
                 try
@@ -4981,11 +4675,14 @@ public static class SheetCommand
                     //   종단도가 둘인 도면에서 B 뷰로 [도곽]을 돌리면 <b>A 뷰의 글씨까지</b> 지워졌고,
                     //   A의 순정 라벨은 <b>숨긴 채로 되돌리는 곳이 없어</b> 그 칸이 영영 빈칸이 됐다.
                     //   <see cref="SpreadBandLabels"/>에 넣은 가로범위와 <b>같은 잣대</b>를 쓴다.
+                    //   ★★[JACK 1103] 세로도 본다 — 글씨는 아래 밴드 칸(이 장 도곽 아래 끝 ~ 그래프 아래 끝 · 도곽이 없으면 종이 한 장 높이) · 같은 X의 위 · 아래 종단도 글씨는 남의 것
                     try
                     {
                         var ee = e0.GeometricExtents;
-                        double cx = (ee.MinPoint.X + ee.MaxPoint.X) * 0.5;
-                        if (cx < System.Math.Min(gx0, gx1) - 1.0 || cx > System.Math.Max(gx0, gx1) + 1.0)
+                        double cx = (ee.MinPoint.X + ee.MaxPoint.X) * 0.5, cy = (ee.MinPoint.Y + ee.MaxPoint.Y) * 0.5, sM = scale / 1000.0;
+                        if (double.IsNaN(wpLo)) wpLo = SheetFrameY(tr, System.Math.Min(gx0, gx1), gy0, out double wf0, out _) ? wf0 : gy0 - SheetH * sM;
+                        if (cx < System.Math.Min(gx0, gx1) - 1.0 || cx > System.Math.Max(gx0, gx1) + 1.0
+                            || cy < wpLo || cy > gy0 + BandCellMm * sM)
                         { nSkipView++; continue; }
                     }
                     catch { }
@@ -5060,7 +4757,15 @@ public static class SheetCommand
                     double mx = sx / c1;
                     if (mx < xLo || mx > xHi) continue;      // 남의 종단도 것
                     if (roadRects != null && !DH.Grading.Core.ProfileSheetRules.SiteOwnsGroup(mx, sy / c1, roadRects)) continue;
-                    try { if (lg1 is CivilDb.LabelBase lbW && !lbW.FeatureId.IsNull && lbW.FeatureId != pvId && tr.GetObject(lbW.FeatureId, OpenMode.ForRead) is CivilDb.ProfileView pvW && SheetTag.IsRoadView(tr, pvW)) continue; } catch { }
+                    // ★★[JACK 1103] 주인 = FeatureId(그 종단뷰)가 읽히면 그것 — 다른 종단뷰(부지 · 도로 · 같은 X의 위 · 아래)면 뺌 ·
+                    //   못 읽으면 도로 길은 이 뷰 밴드 상자(가로 × 그래프 아래 끝 − 밴드 높이)만(SpreadBandLabels와 같은 잣대)
+                    ObjectId fidW = ObjectId.Null;
+                    try { if (lg1 is CivilDb.LabelBase lbW) fidW = lbW.FeatureId; } catch { }
+                    bool otherView = false;
+                    if (!fidW.IsNull && fidW != pvId) try { otherView = tr.GetObject(fidW, OpenMode.ForRead) is CivilDb.ProfileView; } catch { }
+                    if (otherView) continue;
+                    if (ctx != null && fidW.IsNull
+                        && !DH.Grading.Core.ProfileSheetRules.RoadOwnsGroup(mx, sy / c1, xLo, xHi, gy0, LastBandModelH, System.Math.Max(1.0, 0.1 * LastBandModelH))) continue;
                     string nm1 = "";
                     try { if (lg1 is CivilDb.ProfileBandLabelGroup pg1) nm1 = pg1.StyleName ?? ""; } catch { }
                     if (nm1.Length == 0) { try { nm1 = lg1.StyleName ?? ""; } catch { } }
@@ -5772,9 +5477,10 @@ public static class SheetCommand
                     //   주인이 아닌 묶음은 <b>아래 자리표 · 쓰기 루프에서도</b> 뺀다(그 둘은 X 범위만 본다 — 같은 X 위 · 아래 종단도의 글씨를 옮기던 자리).
                     ObjectId fid0 = ObjectId.Null;
                     try { if (lg0b is CivilDb.LabelBase lbF) fid0 = lbF.FeatureId; } catch { }
-                    bool fidRoad = false;   // 부지 길 — FeatureId가 진입도로 뷰(못 읽으면 거짓 = 지금 식)
+                    bool fidRoad = false;   // 부지 길 — FeatureId가 다른 종단뷰(못 읽으면 거짓 = 지금 식)
+                    // ★★[JACK 1103] 진입도로 뷰만이 아니라 <b>다른 종단뷰 모두</b> — 같은 X의 위 · 아래에 놓인 남의 종단도 묶음을 이 뷰 것으로 줄 세우지 않게
                     if (ctx == null && !fid0.IsNull && fid0 != pvId)
-                        try { fidRoad = tr.GetObject(fid0, OpenMode.ForRead) is CivilDb.ProfileView pvF && SheetTag.IsRoadView(tr, pvF); } catch { }
+                        try { fidRoad = tr.GetObject(fid0, OpenMode.ForRead) is CivilDb.ProfileView; } catch { }
                     bool foreign0 = ctx == null
                         ? (roadRects != null && !DH.Grading.Core.ProfileSheetRules.SiteOwnsGroup(mx, sy / c0, roadRects)) || fidRoad
                         : !fid0.IsNull ? fid0 != pvId

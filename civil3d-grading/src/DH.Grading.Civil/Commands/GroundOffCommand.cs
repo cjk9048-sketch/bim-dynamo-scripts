@@ -42,7 +42,7 @@ public sealed class GroundOffCommand
             string ask = results.Length == 0
                 ? "'원지반' 지표면과 그 재료(등고선·계곡선·표고점)를 지웁니다.\n\n계속할까요?"
                 : "원지반으로 만든 결과가 있습니다.\n" + results + "\n\n" +
-                  "원지반만 지우면 그 결과가 깨지므로 같이 지웁니다([초기화]와 같음 — 지적도·지번도).\n" +
+                  "원지반만 지우면 그 결과가 깨지므로 같이 지웁니다([전체 초기화]와 같음 — 지적도·지번도).\n" +
                   "직접 그린 것은 남깁니다.\n\n계속할까요?";
             var ans = System.Windows.MessageBox.Show(ask, "DH 정지 — 원지반 삭제", System.Windows.MessageBoxButton.YesNo,
                                                      System.Windows.MessageBoxImage.Warning, System.Windows.MessageBoxResult.No);

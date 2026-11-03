@@ -49,6 +49,67 @@ internal sealed class RoadDesign
     /// 그 명령을 U로 되돌리면 이 기록도 함께 되돌아가 꺼지고 · 다시 그려지면 끔.</summary>
     public bool SheetLost, XsecLost;
 
+    /// <summary>★★[도로 마무리 ① · 계획_도로마무리.md 5.3 · 비평 M6] 도로 끝 맞춤을 하는 도로인가 — 칸이 없는 옛 기록 = 거짓(말없이 안 바꿈 · ■ 결과 제안 + [끝 맞추기]).
+    /// DHROAD · DHROADDRAW로 새로 만든 도로 · [끝 맞추기]를 한 번 누른 도로 = 참([업데이트]가 늘 끝을 맞춤).</summary>
+    public bool EndsOn;
+
+    /// <summary>★★[도로 마무리 ② · 계획 6.3] 측구 기록 — [s0, s1, 쪽(−1 좌 · +1 우), 형식(0 없음 · 1 U · 2 L), 치수…](노선 측점 · m) · 나중 기록이 이김 · «없음» 기록 = 그 구간 지움.
+    /// U 치수 = 안폭 · 안높이 · 벽 · 바닥 · 기초 두께 · 기초 내민 폭 · 뚜껑 자리 폭 · 깊이 · 뚜껑(1/0) / L 치수 = 배수면 폭 · 경사 · 경계석 폭 · 높이 · 보이는 높이 · 밑 · 뒤 폭 · 뒤 턱 · 끝 두께.</summary>
+    public List<double[]> Ditches = new();
+    /// <summary>■ 측구 창 칸 값(다음 [구간 지정]의 형식 · 치수) — 형식 0 없음 · 1 U · 2 L.</summary>
+    public int DitchKind = 1;
+    public double[] DitchU = UArr(new DitchSection.UDims()), DitchL = LArr(new DitchSection.LDims());
+
+    internal static double[] UArr(DitchSection.UDims u) => new[] { u.B, u.H, u.Tw, u.Tb, u.Tf, u.Pf, u.Sw, u.Sd, u.Lid ? 1 : 0 };
+    internal static double[] LArr(DitchSection.LDims l) => new[] { l.Wg, l.Sg, l.Wc, l.Hc, l.Reveal, l.Tb, l.Wb, l.Hb, l.Te };
+    internal static DitchSection.UDims UOf(IReadOnlyList<double> a, int o = 0) => a.Count >= o + 9
+        ? new DitchSection.UDims(a[o], a[o + 1], a[o + 2], a[o + 3], a[o + 4], a[o + 5], a[o + 6], a[o + 7], a[o + 8] > 0.5) : new();
+    internal static DitchSection.LDims LOf(IReadOnlyList<double> a, int o = 0) => a.Count >= o + 9
+        ? new DitchSection.LDims(a[o], a[o + 1], a[o + 2], a[o + 3], a[o + 4], a[o + 5], a[o + 6], a[o + 7], a[o + 8]) : new();
+
+    /// <summary>측구 기록 하나의 꼴(형식 없음 · 기록이 깨짐 = null).</summary>
+    internal static DitchSection.Shape? ShapeOf(double[] rec)
+    {
+        if (rec.Length < 4 || !double.IsFinite(rec[0]) || !double.IsFinite(rec[1])) return null;
+        var k = (DitchSection.Kind)(int)Math.Round(rec[3]);
+        return k switch { DitchSection.Kind.U => DitchSection.U(UOf(rec, 4)), DitchSection.Kind.L => DitchSection.L(LOf(rec, 4)), _ => null };
+    }
+
+    /// <summary>Core 측구 구간(측점 = 노선 측점 − <paramref name="s0"/> · 윗폭 = 꼴 윗폭 · «없음» = 폭 0으로 그 구간을 지움). 기록이 없으면 빈 목록(엔진 · 지문 옛것 그대로).</summary>
+    public List<RoadGrade.Ditch> CoreDitches(double s0) => Ditches
+        .Where(w => w.Length >= 4 && double.IsFinite(w[0]) && double.IsFinite(w[1]) && Math.Abs(w[1] - w[0]) > 1e-6)
+        .Select(w => new RoadGrade.Ditch(Math.Min(w[0], w[1]) - s0, Math.Max(w[0], w[1]) - s0, w[2] < 0 ? -1 : 1, ShapeOf(w)?.TopWidth ?? 0))
+        .ToList();
+
+    /// <summary>그 쪽 · 노선 측점에서 이긴 측구 기록(나중 기록이 이김 · «없음»이면 null).</summary>
+    internal double[]? DitchAt(int side, double st)
+    {
+        for (int i = Ditches.Count - 1; i >= 0; i--)
+        {
+            var w = Ditches[i];
+            if (w.Length < 4 || (w[2] < 0 ? -1 : 1) != side || st < Math.Min(w[0], w[1]) - 1e-9 || st > Math.Max(w[0], w[1]) + 1e-9) continue;
+            return (int)Math.Round(w[3]) == 0 ? null : w;
+        }
+        return null;
+    }
+
+    /// <summary>그 쪽에서 측구가 실제로 있는 구간들(노선 측점 · 나중 기록이 이김을 풀어 놓은 것 · 같은 기록 이웃 구간은 합침) — 평면 선 · 수량 · 3D.</summary>
+    internal List<(double A, double B, double[] Rec)> DitchSpans(int side)
+    {
+        var cuts = new SortedSet<double>();
+        foreach (var w in Ditches) if (w.Length >= 4 && (w[2] < 0 ? -1 : 1) == side && double.IsFinite(w[0]) && double.IsFinite(w[1])) { cuts.Add(Math.Min(w[0], w[1])); cuts.Add(Math.Max(w[0], w[1])); }
+        var c = cuts.ToList(); var o = new List<(double A, double B, double[] Rec)>();
+        for (int i = 0; i + 1 < c.Count; i++)
+        {
+            if (c[i + 1] - c[i] < 1e-6) continue;
+            var rec = DitchAt(side, (c[i] + c[i + 1]) / 2);
+            if (rec == null) continue;
+            if (o.Count > 0 && ReferenceEquals(o[^1].Rec, rec) && Math.Abs(o[^1].B - c[i]) < 1e-9) o[^1] = (o[^1].A, c[i + 1], rec);
+            else o.Add((c[i], c[i + 1], rec));
+        }
+        return o;
+    }
+
     /// <summary>★[v110.2 · JACK 1029 «곡선 반경 = 도킹창 값 하나»] 다음 노선의 곡선 반경 — 도킹창 칸이 바꾼다(열린 도로가 있으면 그 도로에도 · 세션 동안 기억).</summary>
     internal static double LastCurveR = 30;
 

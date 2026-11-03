@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { loadScene } from './data.js';
 import { View } from './view.js';
 import { buildLayers, applyTerrainMode } from './layers.js';
-import { buildDrain, buildCad, buildStations, buildSlope, buildBldg } from './extras.js';
+import { buildDrain, buildCad, buildStations, buildRoadStations, buildSlope, buildBldg } from './extras.js';
 import { Picker } from './pick.js';
 import { Ui, Dock } from './ui.js';
 import { Section } from './section.js';
@@ -13,7 +13,8 @@ import { Sun, sunPosition } from './sun.js';
 import { photo, video, download, fileName } from './capture.js';
 import { inHost, post, onHost } from './host.js';
 
-const ORDER = ['terrain', 'sat', 'cutfill', 'ground', 'wall', 'pattern', 'excav', 'drain', 'slope', 'cad', 'bldg', 'align'];
+// ★[JACK 1103] 'align' = 부지 측점 · 'ralign' = 진입도로 측점(도로가 있을 때만)
+const ORDER = ['terrain', 'sat', 'cutfill', 'ground', 'wall', 'pattern', 'ditch', 'excav', 'drain', 'slope', 'cad', 'bldg', 'align', 'ralign'];
 const KEEP = 'dh3d.layers.v1';
 
 function loadKeep() { try { return JSON.parse(localStorage.getItem(KEEP) || '{}'); } catch { return {}; } }
@@ -52,6 +53,7 @@ async function main() {
     // ★[v111.7 검토 L] 건물을 못 그려도 3D는 뜬다 — 층만 회색 + ⚠
     try { buildBldg(view, head, L); } catch { L.bldg = { label: '건물', on: false, missing: '건물을 못 그렸습니다' }; }
     buildStations(view, head, L);
+    buildRoadStations(view, head, L);
     buildSlope(view, head, L);
   } catch (e) { fail('3D를 못 그렸습니다 — ' + e.message); return; }
 
@@ -66,7 +68,7 @@ async function main() {
     if (!l || l.missing) return;
     l.on = on;
     // 자르는 동안 측점 층은 숨겨 둔다(끝나면 이 체크대로 — 설치 전 검토 낮음)
-    if (l.obj) l.obj.visible = on && !(id === 'align' && section && section.on);
+    if (l.obj) l.obj.visible = on && !((id === 'align' || id === 'ralign') && section && section.on);
     if (id === 'sat' || id === 'cutfill' || id === 'wall' || id === 'ground' || id === 'pattern' || id === 'slope') applyTerrainMode(L);
     if (id === 'cutfill') ui.legend(on, L.terrain ? L.terrain.cfLim : 1);
     if (id === 'drain') { ui.drainLegend(on, L.drain.summary); if (on) L.drain.replay(); }
@@ -150,18 +152,19 @@ async function main() {
   };
   sunBtn.onclick = openSun;
   buildBtn.onclick = openBuild;
-  const cutAt = (where) => {
+  // ★[JACK 1103] A = 자를 노선(부지 선형 · 진입도로 하나 — 없으면 지금 노선) · 노선이 바뀌면 칸을 다시 연다(막대 범위 · ◀ ▶ 측점이 그 노선 것)
+  const cutAt = (where, A) => {
     picker.hover(null);
     // 다른 칸(시공 재생)을 먼저 닫는다 — 닫힐 때 옹벽 재료의 자르는 면을 걷으므로 자르기 뒤에 닫으면 자르기가 풀린다
-    if (dock.kind !== 'cut') { dock.close(); section.start(where); section.panel(dock); }
+    if (dock.kind !== 'cut' || (A && A !== section.A)) { dock.close(); section.start(where, true, A); section.panel(dock); }
     else section.start(where, false);
   };
 
-  // 측점 풍선 단추 — [도면 횡단 보기](Civil 안만) · [3D에서 자르기]
+  // 측점 풍선 단추 — [도면 횡단 보기](Civil 안 · 부지 측점만 — 도면 쪽 찾기가 부지 선형 횡단도만 본다) · [3D에서 자르기](그 측점의 노선으로)
   picker.stationActs = (st) => {
     const acts = [];
-    if (inHost) acts.push({ text: '도면 횡단 보기', fn: () => post({ t: 'xsec', st: st.s, label: st.label }) });
-    acts.push({ text: '3D에서 자르기', fn: () => { ui.hideInfo(); cutAt(st.i); } });
+    if (inHost && !(st.a && st.a.road)) acts.push({ text: '도면 횡단 보기', fn: () => post({ t: 'xsec', st: st.s, label: st.label }) });
+    acts.push({ text: '3D에서 자르기', fn: () => { ui.hideInfo(); cutAt(st.i, st.a); } });
     return acts;
   };
 
@@ -277,6 +280,7 @@ async function main() {
       drain: L.drain ? L.drain.summary : null, slope: L.slope ? { n: L.slope.n, step: L.slope.step } : null, cad: L.cad ? (L.cad.missing ? 'missing' : (head.cad.labels || []).length) : null,
       bldg: L.bldg ? (L.bldg.missing ? { missing: L.bldg.missing, quiet: !!L.bldg.quiet } : { n: L.bldg.n, hit: L.bldg.hit }) : null,
       align: L.align ? { name: L.align.name, st: L.align.st.length, views: L.align.views } : null, build: !!head.build, geo: head.geo || null,
+      ralign: L.ralign ? L.ralign.roads.map(a => ({ name: a.name, st: a.st.length, views: a.views })) : null,
     },
     layer: (id, on) => setLayer(id, on),
     // 보기: 'fit' | 'top' | { at:[X,Y,Z](도면 좌표), dist, az(북=0 · 시계), el(도) }
@@ -310,8 +314,10 @@ async function main() {
     sun: (date, h) => { if (dock.kind !== 'sun') sun.panel(dock); sun.set(date, h * 60); view.draw(); return { az: sun.az, el: sun.el }; },
     sunAt: (date, h, lat, lon) => { const [Y, M, D] = date.split('-').map(Number); return sunPosition(Date.UTC(Y, M - 1, D) + (h - 9) * 3600000, lat, lon); },
     build: (k) => { if (k === null) { dock.close(); return null; } if (dock.kind !== 'build') openBuild(); build.stop(); build.set(k); view.draw(); return build.stage(); },
-    cut: (i) => { if (i === null) { dock.close(); return null; } cutAt(i); view.draw(); return { s: section.s, n: section.plane.normal.toArray() }; },
+    // r = 진입도로 순번(없으면 부지 선형)
+    cut: (i, r) => { if (i === null) { dock.close(); return null; } cutAt(i, r == null ? (L.align ? L.align.aligns[0] : null) : L.ralign.roads[r]); view.draw(); return { s: section.s, n: section.plane.normal.toArray(), road: section.A.road ? section.A.name : null }; },
     stations: () => (L.align ? L.align.st.map(s => ({ i: s.i, label: s.label, s: s.s, views: s.views, c: s.c })) : []),
+    roadStations: () => (L.ralign ? L.ralign.st.map(s => ({ road: s.a.name, r: L.ralign.roads.indexOf(s.a), i: s.i, label: s.label, s: s.s, views: s.views, c: s.c, major: s.major })) : []),
     photo: async () => { const bl = await photo(view); return { bytes: bl.size, type: bl.type, ...(await (async () => { const bm = await createImageBitmap(bl); const r = { w: bm.width, h: bm.height }; bm.close(); return r; })()) }; },
     video: async (frames) => { const t = performance.now(); const r = await video(view, { focus, frames: frames || 30 }); return r ? { bytes: r.blob.size, ext: r.ext, codec: r.codec, frames: r.frames, ms: Math.round(performance.now() - t) } : null; },
     dock: () => dock.kind,

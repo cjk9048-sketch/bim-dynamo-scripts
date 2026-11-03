@@ -100,17 +100,37 @@ static class RoadSheetCheck
                 $"{inBox} {inGraph} {below} {sideX} {edge}");
         }
 
-        // ⑥ 놓을 자리 겹침(검토 H1) — 부지 도곽 바로 위 · 아래(같은 X)는 겹침 · 옆으로 비키면 안 겹침 · 맞닿음 = 안 겹침
+        // ⑥ 놓을 자리 겹침(검토 H1) — 가로 범위: 옆으로 비키면 안 겹침 · 맞닿음 = 안 겹침
         {
             double s = 200 / 1000.0;
             double siteX0 = 0, siteX1 = 841 * s;                           // 부지 한 장(모형 168.2 m)
-            var up = ProfileSheetRules.RoadSheetsSpan(30, 200, 1);          // 같은 X에서 위로
             var right = ProfileSheetRules.RoadSheetsSpan(siteX1 + 130 * s + 1, 200, 2);
             var touch = ProfileSheetRules.RoadSheetsSpan(siteX1 + 130 * s, 200, 1);
-            check("S180 ⑥ 같은 X(위 · 아래) = 겹침 · 옆 = 안 겹침 · 맞닿음 = 안 겹침",
-                ProfileSheetRules.SpansOverlap(siteX0, siteX1, up.X0, up.X1) && !ProfileSheetRules.SpansOverlap(siteX0, siteX1, right.X0, right.X1)
-                && !ProfileSheetRules.SpansOverlap(siteX0, siteX1, touch.X0, touch.X1),
-                $"위 {up.X0:F1}~{up.X1:F1} · 옆 {right.X0:F1}~{right.X1:F1}");
+            check("S180 ⑥ 가로 범위 — 옆 = 안 겹침 · 맞닿음 = 안 겹침",
+                !ProfileSheetRules.SpansOverlap(siteX0, siteX1, right.X0, right.X1) && !ProfileSheetRules.SpansOverlap(siteX0, siteX1, touch.X0, touch.X1),
+                $"옆 {right.X0:F1}~{right.X1:F1}");
+            // ★★[JACK 1103 «충분히 멀리 찍었는데도 그래»] 평면 겹침 — 같은 X라도 위 · 아래로 떨어지면 안 겹침 · 실제로 덮으면 겹침
+            //   부지 도곽(만든 값): X 0~168.2 · Y 1000~1118.8(1:200 한 장 594 mm) — 도로 1:200 · 1장 · 그래프 높이 20 m · 여유 10 mm(= 2 m)
+            var site = new ProfileSheetRules.Rect(0, 1000, siteX1, 1000 + 594 * s);
+            double H = 594 * s, m = 10 * s;
+            var below = ProfileSheetRules.RoadSheetsBox(30, 1000 - H - m - 1, 200, 1, 20, 10);          // 상자 위 끝 = 놓는 점 + 한 장 높이 + 여유 → 부지 아래 끝보다 1 m 아래
+            var above = ProfileSheetRules.RoadSheetsBox(30, 1000 + H + H + m + 1, 200, 1, 20, 10);      // 상자 아래 끝 = 놓는 점 − 한 장 높이 − 여유 → 부지 위 끝보다 1 m 위
+            var inside = ProfileSheetRules.RoadSheetsBox(30, 1000 + 0.5 * H, 200, 1, 20, 10);           // 부지 도곽 한가운데
+            var nearBelow = ProfileSheetRules.RoadSheetsBox(30, 1000 - H, 200, 1, 20, 10);              // 위 끝이 부지 아래 끝에 여유만큼 못 미침
+            var tall = ProfileSheetRules.RoadSheetsBox(30, 1000 - 200, 200, 1, 250, 10);                // 그래프가 한 장보다 높음(250 m) → 꼭대기가 부지에 닿음
+            check("S180 ⑥ 평면 — 같은 X 바로 아래 · 위(떨어짐) = 안 겹침 · 한가운데 = 겹침 · 여유 안 = 겹침 · 높은 그래프 = 겹침",
+                !ProfileSheetRules.RectsOverlap(site, below) && !ProfileSheetRules.RectsOverlap(site, above)
+                && ProfileSheetRules.RectsOverlap(site, inside) && ProfileSheetRules.RectsOverlap(site, nearBelow) && ProfileSheetRules.RectsOverlap(site, tall),
+                $"아래 {below.Y0:F1}~{below.Y1:F1} · 위 {above.Y0:F1}~{above.Y1:F1} · 높은 {tall.Y1:F1}");
+            // ★[설치 전 검토 · 중간] 그래프 높이 짐작 — 표고 범위를 5 m로 올림 + 한 칸 × 수직과장(만든 값)
+            double g1 = ProfileSheetRules.GraphHeight(72.0, 105.0, 5, 1), g5 = ProfileSheetRules.GraphHeight(72.0, 105.0, 5, 5), g0 = ProfileSheetRules.GraphHeight(10, 10, 5, 1), gx = ProfileSheetRules.GraphHeight(20, 10, 5, 1);
+            check("S180 ⑥ 그래프 높이 짐작 — 33 m → 40 m(7칸 + 1) · 5배 과장 200 m · 범위 0 = 한 칸 · 뒤바뀐 범위 = 0",
+                Math.Abs(g1 - 40) < 1e-9 && Math.Abs(g5 - 200) < 1e-9 && Math.Abs(g0 - 5) < 1e-9 && gx == 0, $"{g1} · {g5} · {g0} · {gx}");
+            var steep = ProfileSheetRules.RoadSheetsBox(30, 1000 - H - m - 1, 200, 1, ProfileSheetRules.GraphHeight(70, 300, 5, 1), 10);
+            check("S180 ⑥ 급한 도로(그래프 235 m) — 같은 아래 자리라도 꼭대기가 부지에 닿아 겹침", ProfileSheetRules.RectsOverlap(site, steep), $"위 끝 {steep.Y1:F1}");
+            var boxX = ProfileSheetRules.RoadSheetsBox(0, 0, 500, 3, 0, 0);
+            check("S180 ⑥ 상자 가로 = 가로 범위 · 세로 = 놓는 점 ± 한 장 높이(여유 0 · 그래프 낮음)",
+                Math.Abs(boxX.X0 + 65) < 1e-9 && Math.Abs(boxX.X1 - 1261.5) < 1e-9 && Math.Abs(boxX.Y0 + 297) < 1e-9 && Math.Abs(boxX.Y1 - 297) < 1e-9, $"{boxX}");
             var two = ProfileSheetRules.RoadSheetsSpan(0, 500, 3);
             check("S180 ⑥ 1:500 세 장 = 841 mm × 3 × 0.5 + 왼쪽 65 m", Math.Abs(two.X1 - 1261.5) < 1e-9 && Math.Abs(two.X0 + 65) < 1e-9, $"{two}");
         }

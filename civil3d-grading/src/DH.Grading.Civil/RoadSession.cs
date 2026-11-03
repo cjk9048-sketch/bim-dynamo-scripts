@@ -27,6 +27,20 @@ internal sealed class RoadSession
     /// <summary>★[v110.3] 지난 계산의 사면선 · 소단선 · 옹벽선(Core 좌표 = 도면 좌표 · 측점은 Core 측점 — 노선 측점 = + S0).</summary>
     internal List<RoadGrade.TierLine> Lines = new();
     internal double S0;                     // Core 측점 0 = 노선 측점 S0(실제 첫 표본)
+    /// <summary>★★[도로 마무리 ① · 계획 5.6 · Q6] 도로 토막(빈 구간이면 둘 이상) — 토막마다 Core 측점 0(노선 측점) · 입력 · 결과 · 선(그 토막 Core 측점).
+    /// 토막이 하나면 <see cref="Last"/> · <see cref="Lines"/> · <see cref="S0"/>와 같다(지금과 같음).</summary>
+    internal List<Piece> Pieces = new();
+    internal sealed class Piece { public double S0, S1; public RoadGrade.Input Inp = null!; public RoadGrade.Result? R; public List<RoadGrade.TierLine> Lines = new(); public string Note = ""; }
+    /// <summary>★[도로 마무리 ①] 지금 도로 구간(노선 측점) · 끝 판정 · 제안 글(EndsOn 거짓 = [끝 맞추기] 제안) · 끝 맞춤 필요(EndsOn 참 = [업데이트] 깜박).</summary>
+    internal List<(double A, double B)> Ranges = new();
+    internal RoadEnds.Result? Ends;
+    internal string EndsProposal = "", EndsStale = "";
+    /// <summary>★[도로 마무리 ② · 계획 6.7] ■ 결과 측구 수량 한 줄(측구선 길이 · 콘크리트 — 도로 구간 안 몫).</summary>
+    internal string DitchQty = "";
+    List<RoadEnds.Floor>? _floors; string _floorNote = "";
+    /// <summary>★★[도로 마무리 ① · 계획 5.5] 모든 도로 끝 판정(가지 사슬) · 가지 바탕(바탕면 + 본 도로 면 합침 — 열쇠가 같으면 다시 안 합침) · 그 알림.</summary>
+    List<RoadEnds.Result>? _allEnds;
+    CachedGroundSurface? _eng; string _engKey = "", _engNote = "", _engNoteKept = "";
     internal double GradeNow;               // 계획 종단 지금 최대 경사(PVI 사이 · 사람이 옮긴 뒤)
     /// <summary>★[v111.7.2 · JACK 1102] 20 %(<see cref="ProfileSheetRules.WarnGrade"/>) 넘는 접선 알림 한 줄(빈 글 = 없음) — ■ 결과 빨간 줄.</summary>
     internal string GradeWarn = "";
@@ -56,7 +70,8 @@ internal sealed class RoadSession
     }
 
     /// <summary>노선의 설계(XRecord)로 세션을 연다 — 같은 도면의 앞 세션은 닫는다.</summary>
-    /// <param name="fresh">★[v111.7.1 · 검토 낮음] 이 명령이 막 만든 도로(DHROAD · DHROADDRAW 새 노선) — 열 때부터 옛것 표시를 안 함(그린 적이 없음).</param>
+    /// <param name="fresh">★[v111.7.1 · 검토 낮음] 이 명령이 막 만든 도로(DHROAD · DHROADDRAW 새 노선) — 열 때부터 옛것 표시를 안 함(그린 적이 없음).
+    /// ★[v111.10 · 계획_초기화.md 3.4] v111.7.2부터 아무 데도 안 쓰던 값 → <see cref="Making"/>(첫 계산 앞에) — 부르는 명령이 끝에 <see cref="EndMaking"/>.</param>
     internal static RoadSession Start(Document doc, ObjectId aid, bool fresh = false)
     {
         Stop(doc);
@@ -68,7 +83,7 @@ internal sealed class RoadSession
             name = ((CivilDb.Alignment)tr.GetObject(aid, OpenMode.ForRead)).Name;
             tr.Commit();
         }
-        var s = new RoadSession(doc, aid, d) { Name = name };
+        var s = new RoadSession(doc, aid, d) { Name = name, Making = fresh };
         s.PlanId = Handle(db, d.PlanProfile); s.BaseProfId = Handle(db, d.BaseProfile);
         if (s.PlanId.IsNull) throw new InvalidOperationException("계획 종단을 못 찾았습니다(지웠나요?) — [진입도로]로 폴리선부터 다시");
         // ★[v111.2 · 전체 검토 H2] 노선을 복사하면 설계 기록(확장 사전)이 따라와 원래 노선의 종단 · 도로 면을 가리킨다 — 열면 남의 종단을 고치고 남의 도로 면을 지움 → 안 염
@@ -401,9 +416,14 @@ internal sealed class RoadSession
                 ? $"옛 옹벽 기록 틈 {Design.GapsMerged}곳 이어 붙임(" + string.Join(", ", Design.GapsAt.Select(g => $"{(g.Side < 0 ? "좌" : "우")} {g.S0:F2}~{g.S1:F2}")) + ")"
                 : "";
             if (gapNote.Length > 0) { try { DiagLog.Append($"\n[진입도로] {Name} — {gapNote}"); } catch { } }
+            List<Piece> pcs;
             using (var tr = db.TransactionManager.StartTransaction())
             {
-                (X, Y, Z, s0, s1, note) = RoadBuilder.Sample(tr, AlignId, PlanId);
+                // ★★[도로 마무리 ① · 계획 5.8] 도로 구간(가상 자르기 · 빈 구간) → 토막마다 표본
+                ComputeEnds(tr, db);
+                pcs = MakePieces(tr, AlignId, PlanId, Design, EngineGround(tr, db), Ranges);
+                (X, Y, Z, s0, s1, note) = (pcs[0].Inp.X, pcs[0].Inp.Y, pcs[0].Inp.Z, pcs[0].S0, pcs[^1].S1, pcs[0].Note);
+                try { DitchQty = RoadDitchLines.Quantities(RoadDitchLines.Lines(tr, AlignId, PlanId, Design, Ranges)); } catch { DitchQty = ""; }
                 limit = ReadLimit(tr);
                 try { GradeNow = RoadBuilder.PlanGrade(tr, PlanId); } catch { GradeNow = double.NaN; }
                 // ★★[v111.7.2 · JACK 1102 «20 %까지는 문제없이 — 그 이상이면 경고»] 20 %(고정 · «최대 경사 %»와 따로) 넘는 접선 — ■ 결과 빨간 줄 · 처음 넘을 때 명령창 한 줄
@@ -444,23 +464,18 @@ internal sealed class RoadSession
             //   지난 사면이 모두 35 m 안에서 끝났으면 다시 40부터(넓은 범위를 계속 끌고 가지 않게)
             double reach = Last != null && Last.Error.Length == 0 && !Last.ReachHit && Last.ReachUsed > 40
                            && Last.Slopes.Count > 0 && Last.Slopes.Max(q => q.Width) > 35 ? Last.ReachUsed : 40;
-            var inp = new RoadGrade.Input
-            {
-                X = X, Y = Y, Z = Z, Sec = Design.Section(), Cut = Design.Cut(), Fill = Design.Fill(),
-                TierWalls = Design.CoreTierWalls(s0),   // ★[v110.3] 계단선 변환 옹벽(옛 가장자리 옹벽은 0단 · 소단 0)
-                Base = _base, Cell = 1.0, Reach = reach, SuggestH = Design.SuggestH, Limit = limit,
-                SectionGap = Math.Max(0.5, GradingSettings.VertexSpacing),   // ★[v111.2] 삼각망 해상도 = 부지 둘레 점 간격
-            };
+            foreach (var pc in pcs) { pc.Inp.Cell = 1.0; pc.Inp.Reach = reach; pc.Inp.Limit = limit; }
+            var inp = pcs[0].Inp;
             // ★[v111.2 · 전체 검토 L2] 그린 도로 면이 지금 설계(종단 · 횡단 · 사면 · 옹벽 기록 · 바탕면)와 다르면 알림 — PVI를 끌거나 창 값을 바꾼 뒤
             //   ★[v111.3.1 · JACK 1030 «종단이 수정되면 도로면 만들기 아래 종단이 수정되었다고 · 버튼이 깜박»] [진입도로 지표면 생성] 아래 한 줄(SurfaceStale) + 깜박임 · 까닭은 바뀐 몫으로
             string surfNote = "", sigNow = "";
             bool hasSurf = HasSurface();
-            try { sigNow = SigOf(inp, BaseSurfId); } catch { }   // ★[v111.7.1] 바뀜 열쇠의 지표면 몫(지금 설계 지문 — 실패 뒤 다시 고치면 새 열쇠)
+            try { sigNow = SigOfAll(pcs, BaseSurfId); } catch { }   // ★[v111.7.1] 바뀜 열쇠의 지표면 몫(지금 설계 지문 — 실패 뒤 다시 고치면 새 열쇠)
             try
             {
                 if (Design.SurfaceSig.Length > 0 && sigNow.Length > 0 && sigNow != Design.SurfaceSig && hasSurf)
                 {
-                    var now = SigParts(inp, BaseSurfId); var was = Design.SurfaceSigParts.Split('|');
+                    var now = SigPartsAll(pcs, BaseSurfId); var was = Design.SurfaceSigParts.Split('|');
                     surfNote = was.Length != now.Length ? "설계가 바뀌었습니다"
                              : was[0] != now[0] ? "노선이 수정되었습니다"
                              : was[1] != now[1] ? "종단이 수정되었습니다"
@@ -477,7 +492,21 @@ internal sealed class RoadSession
             var swL = System.Diagnostics.Stopwatch.StartNew();
             string lineNote = "";
             try { Lines = Last.Error.Length == 0 ? RoadGrade.ExactLines(inp, Last, out lineNote) : new(); } catch (System.Exception exL) { Lines = new(); try { DiagLog.Append("\n[진입도로] 계단선 못 셈 — " + exL.Message); } catch { } }
-            Note = string.Join(" · ", new[] { _baseNote, note, gapNote, lineNote.StartsWith("⚠") ? lineNote : "" }.Where(t => t.Length > 0));
+            pcs[0].R = Last; pcs[0].Lines = Lines;
+            // ★★[도로 마무리 ① · 계획 5.6] 빈 구간 뒤 토막 — 따로 계산 · 선은 첫 토막 Core 측점으로 옮겨 합침(미리보기) · [옹벽 변환]은 토막마다
+            if (pcs.Count > 1)
+            {
+                Lines = new List<RoadGrade.TierLine>(Lines);
+                for (int k = 1; k < pcs.Count; k++)
+                {
+                    var rk = RoadGrade.Run(pcs[k].Inp); pcs[k].R = rk;
+                    if (rk.Error.Length > 0) { if (Last.Error.Length == 0) Last = rk; continue; }
+                    try { pcs[k].Lines = RoadGrade.ExactLines(pcs[k].Inp, rk, out _); } catch { pcs[k].Lines = new(); }
+                    Lines.AddRange(ShiftLines(pcs[k].Lines, pcs[k].S0 - pcs[0].S0));
+                }
+            }
+            Pieces = pcs;
+            Note = string.Join(" · ", new[] { _baseNote, note, gapNote, lineNote.StartsWith("⚠") ? lineNote : "", _engNote.StartsWith("⚠") ? _engNote : "" }.Where(t => t.Length > 0));
             SurfaceStale = surfNote; SheetStale = sheetNote; XsecStale = xsecNote;
             // ★★[v111.7.1] 지표면이 없음(계산은 됨) — [업데이트]가 만든다(첫 지표면은 DHROAD 끝에서)
             SurfaceMissing = Last.Error.Length == 0 && !hasSurf;
@@ -494,9 +523,11 @@ internal sealed class RoadSession
                 if (FinalStale) finalKey = "최종:" + FinalState + ":" + Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(fs0)))[..16];
             }
             catch { FinalStale = false; }
-            StaleKey = surfKey.Length + sheetNote.Length + xsecNote.Length + finalKey.Length == 0 ? ""
+            // ★[도로 마무리 ① · 계획 5.3] 끝 맞춤 필요(EndsOn 참)도 바뀜 열쇠에 — [업데이트] 깜박 · ⓪이 맞춤
+            string endsKey = Design.EndsOn && EndsStale.Length > 0 ? "끝:" + EndsStale : "";
+            StaleKey = surfKey.Length + sheetNote.Length + xsecNote.Length + finalKey.Length + endsKey.Length == 0 ? ""
                      : string.Join("|", surfKey, sheetNote, xsecNote, Design.SheetStamp, stampNow, Design.SheetScale.ToString("R", ciK), wantSheet.ToString("R", ciK), Design.XsecStamp, xsecInputs)
-                       + (finalKey.Length > 0 ? "|" + finalKey : "");
+                       + (finalKey.Length > 0 ? "|" + finalKey : "") + (endsKey.Length > 0 ? "|" + endsKey : "");
             _baseNote = "";
             // ★[v111.7.1 · 검토 중간 2] 실행 취소 · 다시 실행 뒤 한 번 — 노리선이 되살아났으면 «노리선 지움» 알림을 끔
             if (_recheckTicks) { _recheckTicks = false; if (TicksErased > 0 && AnyTicks(db)) TicksErased = 0; }
@@ -535,6 +566,8 @@ internal sealed class RoadSession
         for (int i = 0; i < inp.X.Length; i++) sb.Append(inp.X[i].ToString("R", ci)).Append(',').Append(inp.Y[i].ToString("R", ci)).Append(',').Append(inp.Z[i].ToString("R", ci)).Append(';');
         var opt = new System.Text.Json.JsonSerializerOptions { IncludeFields = true };
         sb.Append(System.Text.Json.JsonSerializer.Serialize(new { inp.Sec, inp.Cut, inp.Fill, inp.TierWalls, inp.Walls, inp.MinSlope, inp.SectionGap, inp.EdgeStep }, opt));
+        // ★[도로 마무리 ② · 계획 6.1 · 비평 M6] 측구는 있을 때만(측구 없는 도로 지문 = 옛 문자열 그대로)
+        if (inp.Ditches.Count > 0) sb.Append("|측구").Append(System.Text.Json.JsonSerializer.Serialize(inp.Ditches, opt));
         sb.Append('|').Append(baseSurf.IsNull ? "" : baseSurf.Handle.ToString());
         // ★[v111.3 · 설치 전 검토 M2] 바탕면 내용도 — 같은 핸들로 고쳐진(정지면 다시 · 원지반 편집) 바탕이면 [노리선]이 면과 안 맞는 노리선을 말없이 그렸다.
         //   중심선 표본 10개마다 양쪽 5 · 15 · 30 · 50 m 바탕 높이(0.1 mm) — 도로 자리 곁 바탕이 바뀌면 지문이 바뀐다(먼 곳 편집은 도로 면과 상관없음)
@@ -559,6 +592,7 @@ internal sealed class RoadSession
         for (int i = 0; i < inp.X.Length; i++) { xy.Append(inp.X[i].ToString("R", ci)).Append(',').Append(inp.Y[i].ToString("R", ci)).Append(';'); z.Append(inp.Z[i].ToString("R", ci)).Append(';'); }
         var opt = new System.Text.Json.JsonSerializerOptions { IncludeFields = true };
         string vals = System.Text.Json.JsonSerializer.Serialize(new { inp.Sec, inp.Cut, inp.Fill, inp.TierWalls, inp.Walls, inp.MinSlope, inp.SectionGap, inp.EdgeStep }, opt);
+        if (inp.Ditches.Count > 0) vals += "|측구" + System.Text.Json.JsonSerializer.Serialize(inp.Ditches, opt);   // ★[도로 마무리 ②] 있을 때만
         var bs = new System.Text.StringBuilder(baseSurf.IsNull ? "" : baseSurf.Handle.ToString());
         if (inp.Base != null)
             for (int i = 0; i + 1 < inp.X.Length; i += 10)
@@ -570,6 +604,176 @@ internal sealed class RoadSession
             }
         return new[] { H(xy.ToString()), H(z.ToString()), H(vals), H(bs.ToString()) };
     }
+    /// <summary>★[도로 마무리 ① · 계획 5.6] 토막이 여럿이면 토막 지문을 이어 한 번 더(하나면 <see cref="SigOf"/> 그대로 — 비트 같음).</summary>
+    internal static string SigOfAll(List<Piece> pcs, ObjectId baseSurf)
+        => pcs.Count == 1 ? SigOf(pcs[0].Inp, baseSurf)
+           : Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes("토막" + string.Join("+", pcs.Select(p => SigOf(p.Inp, baseSurf))))));
+    static string[] SigPartsAll(List<Piece> pcs, ObjectId baseSurf)
+    {
+        if (pcs.Count == 1) return SigParts(pcs[0].Inp, baseSurf);
+        var all = pcs.Select(p => SigParts(p.Inp, baseSurf)).ToList();
+        return Enumerable.Range(0, all[0].Length).Select(i => string.Join("+", all.Select(a => a[i]))).ToArray();
+    }
+
+    /// <summary>★★[도로 마무리 ① · 계획 5.8] 도로 구간마다 엔진 입력(표본 · 횡단 · 사면 · 옹벽 · 측구 · 해상도) — 칸 · 시작 범위 · 사업 경계는 부르는 쪽이.
+    /// 구간이 하나(빈 구간 없음)면 지금과 같은 입력(비트 같음).</summary>
+    internal static List<Piece> MakePieces(Transaction tr, ObjectId aid, ObjectId planId, RoadDesign d, IGroundSurface ground, List<(double A, double B)> ranges)
+    {
+        var o = new List<Piece>();
+        var rs = ranges.Count > 0 ? ranges : new List<(double A, double B)> { (double.NaN, double.NaN) };
+        foreach (var (a, b) in rs)
+        {
+            var (X, Y, Z, s0, s1, note) = RoadBuilder.SampleRange(tr, aid, planId, a, b);
+            if (X.Length < 2 && rs.Count > 1) continue;
+            o.Add(new Piece
+            {
+                S0 = s0, S1 = s1, Note = note,
+                Inp = new RoadGrade.Input
+                {
+                    X = X, Y = Y, Z = Z, Sec = d.Section(), Cut = d.Cut(), Fill = d.Fill(),
+                    TierWalls = d.CoreTierWalls(s0),   // ★[v110.3] 계단선 변환 옹벽(옛 가장자리 옹벽은 0단 · 소단 0)
+                    Ditches = d.CoreDitches(s0),       // ★[도로 마무리 ②] 측구(없으면 빈 목록 — 옛 동작)
+                    Base = ground, SuggestH = d.SuggestH,
+                    SectionGap = Math.Max(0.5, GradingSettings.VertexSpacing),   // ★[v111.2] 삼각망 해상도 = 부지 둘레 점 간격
+                },
+            });
+        }
+        if (o.Count == 0) throw new InvalidOperationException("도로 구간에서 표본을 못 읽었습니다");
+        return o;
+    }
+
+    /// <summary>선 측점을 옮긴 사본(빈 구간 뒤 토막 → 첫 토막 Core 측점).</summary>
+    internal static List<RoadGrade.TierLine> ShiftLines(List<RoadGrade.TierLine> ls, double ds)
+        => ls.Select(l => new RoadGrade.TierLine { Cut = l.Cut, Side = l.Side, K = l.K, Role = l.Role, Prof = l.Prof, Cross = l.Cross, Pts = l.Pts.Select(p => (p.X, p.Y, p.Z, p.S + ds)).ToList() }).ToList();
+
+    /// <summary>★★[도로 마무리 ① · 계획 5.3] 끝 판정 · 도로 구간 · 제안 글 · 끝 맞춤 필요(읽기만). 바닥 캐시는 바탕 바뀜 때만 다시.</summary>
+    void ComputeEnds(Transaction tr, Database db)
+    {
+        Ends = null; _allEnds = null; EndsProposal = ""; EndsStale = "";
+        var ap = RoadRanges.AlignProfile(tr, AlignId, Design);
+        if (ap == null) { Ranges = new(); return; }
+        var al = (CivilDb.Alignment)tr.GetObject(AlignId, OpenMode.ForRead);
+        try
+        {
+            if (_floors == null) _floors = PadFloors.Load(db, tr, out _floorNote);
+            _allEnds = RoadRanges.SolveAll(tr, db, AlignId, _floors, (x, y) => _base != null && _base.TryGetElevation(x, y, out double z) ? z : null, true,
+                                           new RoadEnds.Options { CurveR = Design.CurveR > 0 ? Design.CurveR : 30 });
+            Ends = _allEnds?.FirstOrDefault(r => r.Handle == AlignId.Handle.Value);
+        }
+        catch (Exception ex) { Ends = null; _allEnds = null; try { DiagLog.Append($"\n[진입도로 끝] {Name} — 판정 실패(끝 그대로) — {ex.Message}"); } catch { } }
+        Ranges = Design.EndsOn ? RoadRanges.FromResult(Ends, ap.Value, al.StartingStation, al.EndingStation) : new() { ap.Value };
+        string prop = RoadRanges.Proposal(Ends, al.StartingStation, al.EndingStation, Design.OwnCurves);
+        if (!Design.EndsOn) { EndsProposal = prop; return; }
+        // 끝 맞춤 필요 — 실제 노선을 바꿀 것(우리 노선) · 끝 PVI가 고정 높이와 1 mm 넘게 다름 · 빈 구간 PVI 없음
+        var why = new List<string>();
+        if (Ends != null)
+        {
+            bool own = Design.OwnCurves;
+            if (own && (Ends.Start.Kind == RoadEnds.Kind.Extend || Ends.Finish.Kind == RoadEnds.Kind.Extend)) why.Add("늘림");
+            if (own && ((Ends.Start.Kind is RoadEnds.Kind.Floor or RoadEnds.Kind.Branch && Ends.Start.Station > al.StartingStation + 0.01)
+                     || (Ends.Finish.Kind is RoadEnds.Kind.Floor or RoadEnds.Kind.Branch && Ends.Finish.Station < al.EndingStation - 0.01))) why.Add("자름");
+            try
+            {
+                var pr = (CivilDb.Profile)tr.GetObject(PlanId, OpenMode.ForRead);
+                var pv = new List<(double S, double Z)>(); foreach (CivilDb.ProfilePVI q in pr.PVIs) pv.Add((q.RawStation, q.Elevation));
+                bool Pin(double s, double z) => !double.IsFinite(z) || pv.Any(p => Math.Abs(p.S - s) < 0.01 && Math.Abs(p.Z - z) <= 1e-3);
+                double sa = Ranges[0].A, sb = Ranges[^1].B;
+                if (Ends.Start.Kind != RoadEnds.Kind.Free && Ends.Start.Kind != RoadEnds.Kind.Extend && !Pin(sa, Ends.Start.Z)) why.Add("시점 높이");
+                if (Ends.Finish.Kind != RoadEnds.Kind.Free && Ends.Finish.Kind != RoadEnds.Kind.Extend && !Pin(sb, Ends.Finish.Z)) why.Add("종점 높이");
+                foreach (var g in Ends.Gaps) if (!Pin(g.A, g.Za) || !Pin(g.B, g.Zb) || pv.Any(p => p.S > g.A + 0.01 && p.S < g.B - 0.01)) { why.Add("빈 구간 PVI"); break; }
+            }
+            catch { }
+        }
+        EndsStale = why.Count > 0 ? prop + (prop.Length > 0 ? " · " : "") + string.Join("+", why) : "";
+    }
+
+    /// <summary>★★★[도로 마무리 ① · 계획 5.5 · 계획_v111_8.md 7.5] 이 도로 엔진의 바탕 — 끝 맞춤 도로가 가지(끝이 다른 도로 포장 안)면 «바탕면 + 본 도로 면» 합침(<see cref="BranchBase"/>) ·
+    /// 아니면 바탕면 그대로. <see cref="ComputeEnds"/> 뒤에(같은 트랜잭션). 합친 면은 열쇠(바탕 지문 · 본 도로 면 핸들)가 같으면 다시 안 만듦 — 실패도 열쇠가 바뀔 때까지 다시 안 함(시계마다 되풀이 안 함 · 알림 남김).</summary>
+    IGroundSurface EngineGround(Transaction tr, Database db)
+    {
+        _engNote = "";
+        if (!Design.EndsOn || _allEnds == null || _base == null) return _base!;
+        var mains = BranchBase.Mains(tr, db, _allEnds, AlignId, out string mn);
+        if (mains.Count == 0) { _engNote = mn; return _base; }
+        string key = BranchBase.Key(_base, mains);
+        if (key != _engKey)
+        {
+            _eng = null;
+            try { _eng = BranchBase.Compose(tr, _base, mains, out _engNoteKept); }
+            catch (Exception ex) { _engNoteKept = "⚠가지 바탕 못 합침 — " + ex.Message + "(바탕면만으로 계산)"; }
+            _engKey = key;
+            if (_engNoteKept.StartsWith("⚠")) { try { DiagLog.Append($"\n[진입도로 가지 바탕] {Name} — {_engNoteKept}"); } catch { } }
+        }
+        _engNote = string.Join(" · ", new[] { mn, _engNoteKept }.Where(t => t.Length > 0));
+        return _eng ?? (IGroundSurface)_base;
+    }
+
+    /// <summary>★★★[도로 마무리 ① · 계획 5.3 ⓪] 끝 맞추기 — 노선 자르기 · 늘리기(우리 노선) + 끝 · 빈 구간 PVI 고정 + 시점이 움직이면 측점 기록을 옮기고 1 mm 확인.
+    /// 실패하면 그 트랜잭션을 물리고 PVI 고정만(가상 자르기) 한 번 더 · 그것도 안 되면 그대로. <paramref name="turnOn"/> = [끝 맞추기](EndsOn을 켬 — 실패해도 켬: 가상 자르기로 계속).
+    /// 돌려줌 = 한 줄(«⚠»로 시작 = 실패). 부르는 명령 안(실행 취소 한 줄 · 문서 잠금).</summary>
+    internal string FixEndsNow(bool turnOn)
+    {
+        bool was = Suppress; Suppress = true;
+        string note;
+        try
+        {
+            using var dl = _doc.LockDocument();
+            EnsureBase();
+            var db = _doc.Database;
+            RoadEnds.Result? res; RoadDesign? d0;
+            using (var tr0 = db.TransactionManager.StartTransaction())
+            {
+                d0 = RoadDesign.Read(tr0, AlignId);
+                if (_floors == null) _floors = PadFloors.Load(db, tr0, out _floorNote);
+                res = d0 == null ? null : RoadRanges.Solve(tr0, db, AlignId, _floors, (x, y) => _base != null && _base.TryGetElevation(x, y, out double z) ? z : null, true,
+                                                           new RoadEnds.Options { CurveR = d0.CurveR > 0 ? d0.CurveR : 30 });
+                tr0.Commit();
+            }
+            if (d0 == null) return "⚠설계 기록이 없습니다";
+            if (!turnOn && !d0.EndsOn) return "";
+            note = "";
+            string fail = "";
+            if (res != null)
+                foreach (bool edits in new[] { true, false })
+                {
+                    using var tr = db.TransactionManager.StartTransaction();
+                    try
+                    {
+                        var d = RoadDesign.Read(tr, AlignId)!;
+                        var rep = RoadEndFix.Fix(tr, AlignId, PlanId, d, res, edits);
+                        d.EndsOn = true;
+                        d.Write(tr, AlignId);
+                        tr.Commit();
+                        Design = d;
+                        note = (edits ? "" : "노선은 그대로(가상 자르기) — ") + (rep.Text.Length > 0 ? rep.Text : "바꿀 것 없음");
+                        if (fail.Length > 0) note += $" · ⚠노선 고치기 물림({fail})";
+                        try { DiagLog.Append($"\n[진입도로 끝] {Name} — {note}" + (res.Notes.Count > 0 ? " · " + string.Join(" · ", res.Notes) : "")); } catch { }
+                        fail = "";
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        tr.Abort();
+                        fail = ex.Message;
+                        try { DiagLog.Append($"\n[진입도로 끝] {Name} — {(edits ? "노선 고치기" : "PVI 고정")} 물림 — {ex}"); } catch { }
+                    }
+                }
+            if (res == null || fail.Length > 0)
+            {
+                if (turnOn)
+                    using (var tr = db.TransactionManager.StartTransaction())
+                    {
+                        var d = RoadDesign.Read(tr, AlignId)!; d.EndsOn = true; d.Write(tr, AlignId); tr.Commit(); Design = d;
+                    }
+                note = res == null ? "부지 바닥 · 다른 도로가 없어 끝은 그대로" : "⚠끝 맞추기 실패 — " + fail;
+            }
+        }
+        catch (Exception ex) { note = "⚠끝 맞추기 실패 — " + ex.Message; }
+        finally { Suppress = was; }
+        _dirty = true;
+        return note;
+    }
+
     string _pendingSig = "", _pendingParts = "";
     double _pendingReach = 40;
     /// <summary>★[v111.3.1] 만든 지표면이 지금 설계와 다른 까닭(빈 글 = 같음 · 면 없음) · 그린 종단도가 지금 종단 · 축척과 다른 까닭 — 도킹창 단추 아래 한 줄 + 깜박임.</summary>
@@ -578,6 +782,17 @@ internal sealed class RoadSession
     internal string XsecStale = "";
     /// <summary>★[v111.7.1] 계산은 됐는데 진입도로 지표면이 없다 — 저절로 다시 만들기가 만든다 · 그동안 미리보기 선을 보인다.</summary>
     internal bool SurfaceMissing;
+    /// <summary>★[v111.10 · 계획_초기화.md 3.4 · JACK 1103 «처음 만들면 벌써 고친 것이 있다고 나옴»] DHROAD · DHROADDRAW가 이 도로를 처음 만드는 중(종단도 자리 찍기 · 첫 지표면) —
+    /// 상태 줄 «처음 만드는 중» · [업데이트] 꺼짐(누르면 ^C^C가 그 명령을 끊음). 명령이 끝나면 <see cref="EndMaking"/>.</summary>
+    internal bool Making;
+
+    /// <summary>★[v111.10] 처음 만들기 끝 — 표시를 내리고 창을 다시 그림(명령 안 실패 · Esc여도 부름).</summary>
+    internal void EndMaking()
+    {
+        if (!Making) return;
+        Making = false;
+        Changed?.Invoke(this);
+    }
 
     /// <summary>★[v111.7] 그린 횡단도가 지금과 다른 까닭(<see cref="XsecStale"/>와 같은 판정 — 다시 계산 안에서 · 저절로 다시 그리기가 종단도를 다시 그린 뒤).
     /// <paramref name="inputs"/> = 판정에 든 지금 값(측점 · 지표면 · 축척 — 바뀜 열쇠용).</summary>
@@ -585,7 +800,7 @@ internal sealed class RoadSession
     {
         inputs = "";
         if (Design.XsecViews.Count == 0) return "";
-        string surfNow = HasSurface() ? Design.SurfaceHandle : "", stations = RoadXsec.StationsKeyNow(tr, db, Design);
+        string surfNow = HasSurface() ? Design.SurfaceHandle : "", stations = RoadXsec.StationsKeyIn(tr, db, Design, AlignId);
         double pinNow = RoadDrawingSettings.Read(db).Xsec, annoNow = Commands.SheetCommand.CurrentDrawingScale(db);
         var ci = System.Globalization.CultureInfo.InvariantCulture;
         // ★[v111.7.2] 횡단도 배치도 판정에(바뀌면 다시 그림) · ★[검토 중간 2] 이 도면에 저장된 배치(세션 값은 다른 도면 것일 수 있음 — 시계가 뒤 도면을 다시 셀 때 앞 도면 배치로 «바뀜»이 뜨지 않게) · 기록 없으면 기본 1×2
@@ -618,6 +833,8 @@ internal sealed class RoadSession
     void EnsureBase()
     {
         if (!(_baseDirty || _base == null || BaseSurfId.IsErased)) return;
+        _floors = null;   // ★[도로 마무리 ① · 계획 5.1] 바닥 캐시 = 바탕 바뀜 때만 다시
+        _eng = null; _engKey = "";   // ★[계획 5.5] 가지 바탕도
         if (!ResolveBase()) throw new InvalidOperationException("바탕면(정지면_DH 또는 원지반)이 없습니다");
         if (_base == null || _baseDirty)
         {
@@ -653,7 +870,11 @@ internal sealed class RoadSession
         {
             using var dl = _doc.LockDocument();
             EnsureBase();
-            return RoadBuilder.Redraft(_doc, AlignId, _base!, PlanId, Fresh());
+            var d = Fresh();
+            // ★[도로 마무리 ① · 계획 5.5] 가지 도로는 본 도로 면을 합친 바탕을 따라 읽음(끝 = 본 도로 포장 높이)
+            IGroundSurface g;
+            using (var tr = _doc.Database.TransactionManager.StartTransaction()) { ComputeEnds(tr, _doc.Database); g = EngineGround(tr, _doc.Database); tr.Commit(); }
+            return RoadBuilder.Redraft(_doc, AlignId, g, PlanId, d);
         }
         finally { Suppress = was; }
     }
@@ -838,8 +1059,9 @@ internal sealed class RoadSession
         if (was.Length < 4) return false;
         var planId = Handle(db, d.PlanProfile);
         if (planId.IsNull) return false;
-        var (X, Y, Z, _, _, _) = RoadBuilder.Sample(tr, aid, planId);
-        var now = SigParts(new RoadGrade.Input { X = X, Y = Y, Z = Z, Base = baseC }, baseSurf);
+        // ★[도로 마무리 ① · 계획 5.6] 도로 구간 토막마다(하나면 지금과 같음)
+        var g = BranchBase.For(tr, db, aid, d, baseC, null, out _);   // ★[계획 5.5] 가지면 그 도로가 지어진 합친 바탕으로 잼
+        var now = SigPartsAll(MakePieces(tr, aid, planId, d, g, RoadRanges.Of(tr, aid, d)), baseSurf);
         return now[3] == was[3];
     }
 
@@ -849,24 +1071,21 @@ internal sealed class RoadSession
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var d = Fresh();
         EnsureBase();
-        double[] X, Y, Z; double s0; string note; List<(double, double)>? limit;
+        List<(double, double)>? limit; List<Piece> pcs;
         using (var tr = db.TransactionManager.StartTransaction())
         {
-            (X, Y, Z, s0, _, note) = RoadBuilder.Sample(tr, AlignId, PlanId);
+            ComputeEnds(tr, db);   // ★[도로 마무리 ① · 계획 5.8] 도로 구간 · 토막
+            pcs = MakePieces(tr, AlignId, PlanId, d, EngineGround(tr, db), Ranges);   // ★[계획 5.5] 가지면 바탕면 + 본 도로 면
             limit = ReadLimit(tr);
             tr.Commit();
         }
         double reach = Last != null && Last.Error.Length == 0 && !Last.ReachHit && Last.ReachUsed > 40 ? Last.ReachUsed : 40;
-        var inp = new RoadGrade.Input
-        {
-            X = X, Y = Y, Z = Z, Sec = d.Section(), Cut = d.Cut(), Fill = d.Fill(),
-            TierWalls = d.CoreTierWalls(s0),
-            Base = _base!, Cell = SurfCell, Reach = reach, SuggestH = d.SuggestH, Limit = limit,
-            SectionGap = Math.Max(0.5, GradingSettings.VertexSpacing),   // ★[v111.2 · JACK 1030] 삼각망 해상도 = 부지 둘레 점 간격(VertexSpacing · 기본 2 m)
-        };
-        try { _pendingSig = SigOf(inp, BaseSurfId); } catch { _pendingSig = ""; }   // ★[v111.2 · 전체 검토 L2] 이 면의 입력 지문 — 나중에 설계가 바뀌면 알림(못 세면 알림 안 함 · 면은 그대로 만듦)
+        foreach (var pc in pcs) { pc.Inp.Cell = SurfCell; pc.Inp.Reach = reach; pc.Inp.Limit = limit; }
+        var inp = pcs[0].Inp;
+        try { _pendingSig = SigOfAll(pcs, BaseSurfId); } catch { _pendingSig = ""; }   // ★[v111.2 · 전체 검토 L2] 이 면의 입력 지문 — 나중에 설계가 바뀌면 알림(못 세면 알림 안 함 · 면은 그대로 만듦)
         _pendingReach = reach;   // ★[v111.3] [노리선]이 같은 입력(시작 범위 포함)으로 다시 셈
-        try { _pendingParts = string.Join("|", SigParts(inp, BaseSurfId)); } catch { _pendingParts = ""; }
+        try { _pendingParts = string.Join("|", SigPartsAll(pcs, BaseSurfId)); } catch { _pendingParts = ""; }
+        if (pcs.Count > 1) return MakeSurfacePieces(d, pcs, sw);
         var r = RoadGrade.Run(inp);
         if (r.Error.Length > 0) throw new InvalidOperationException(r.Error);
         // ★★★[v111 · 계획_v111.md 2.5] 선 면(단면 광선 띠) — Core 검사를 못 넘으면 칸 면(알림) · Civil이 못 받으면 아래에서 칸 면으로 한 번 더(계획 검토 H1)
@@ -901,6 +1120,33 @@ internal sealed class RoadSession
             }
             // ★[설치 전 검토 M3] 면만 칸 면 — 선은 단면 광선 선 그대로(미리보기 · [옹벽 변환] 찍기 선과 같게)
             return CreateSurface(d, r, old, "⚠선 면을 Civil이 못 받음 → 칸 면 · " + t2, lines, sw, lineR);
+        }
+    }
+
+    /// <summary>★★[도로 마무리 ① · 계획 5.6 · Q6] 빈 구간이 있는 도로 — 토막마다 엔진(양 끝 마구리 · 끝 높이 고정은 종단이) · 세모를 합쳐 도로 면 하나(서로 안 닿는 조각 · LandXML 하나).
+    /// Civil이 선 면을 안 받으면 모든 토막을 칸 면으로 한 번 더(한 토막 도로와 같은 법).</summary>
+    string MakeSurfacePieces(RoadDesign d, List<Piece> pcs, System.Diagnostics.Stopwatch sw)
+    {
+        var tris = new List<WallDaylight.Tri>(); var lines = new List<RoadGrade.TierLine>();
+        var rs = new List<RoadGrade.Result>(); var notes = new List<string>(); bool exact = true;
+        foreach (var pc in pcs)
+        {
+            var r = RoadGrade.Run(pc.Inp);
+            if (r.Error.Length > 0) throw new InvalidOperationException(r.Error);
+            var t = RoadGrade.ExactSurface(pc.Inp, r, out string tn, out var ls);
+            if (tn.StartsWith("⚠")) exact = false;
+            tris.AddRange(t); lines.AddRange(ls); rs.Add(r); notes.Add(tn);
+        }
+        if (tris.Count == 0) throw new InvalidOperationException("바뀐 자리가 없어 면을 안 만들었습니다");
+        string vol = $"토막 {pcs.Count}(빈 구간) · 절토 {rs.Sum(q => q.CutVol):N0} ㎥ · 성토 {rs.Sum(q => q.FillVol):N0} ㎥";
+        string tnote = (exact ? "" : "⚠") + string.Join(" / ", notes);
+        try { return CreateSurface(d, rs[0], tris, tnote, lines, sw) + " · " + vol; }
+        catch (InvalidOperationException exG) when (exact && exG.Message.StartsWith("Civil이 면을 그대로 안 받았습니다"))
+        {
+            try { DiagLog.Append($"\n[진입도로] {Name} — ⚠선 면을 Civil이 못 받음({exG.Message}) → 칸 면으로 다시(토막 {pcs.Count})"); } catch { }
+            var old = new List<WallDaylight.Tri>(); var t2 = new List<string>();
+            foreach (var r in rs) { old.AddRange(RoadGrade.SurfaceTris(r, out string n2)); t2.Add(n2); }
+            return CreateSurface(d, rs[0], old, "⚠선 면을 Civil이 못 받음 → 칸 면 · " + string.Join(" / ", t2), lines, sw) + " · " + vol;
         }
     }
 
@@ -1016,8 +1262,8 @@ internal sealed class RoadSession
     {
         // ★[v111.3 · JACK 1030] 노리선은 여기서 안 그림 — [노리선] 단추(부지 + 모든 도로 한꺼번에 · DrawRoadTicks). 이 도로의 옛 노리선은 아래에서 함께 지움
         string me = AlignId.Handle.ToString();
-        var lays = new[] { LaySlope, LayBench, LayNori, LayWall };
-        int erased = 0, failErase = 0, nLine = 0, nWall = 0;
+        var lays = new[] { LaySlope, LayBench, LayNori, LayWall, RoadDitchLines.Layer };
+        int erased = 0, failErase = 0, nLine = 0, nWall = 0, nDitch = 0;
         using var tr = db.TransactionManager.StartTransaction();
         GradingBuilder.EnsureRegApp(db, tr, LineApp);
         var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
@@ -1053,8 +1299,27 @@ internal sealed class RoadSession
             using (var tg = Tag()) pl.XData = tg;
             if (wall) nWall++; else nLine++;
         }
+        // ★★[도로 마무리 ② · 계획 6.4] 측구 가운데 선(«DH도로-측구선» · 하늘) — 형식은 선의 기록(XData)
+        try
+        {
+            var dls = RoadDitchLines.Lines(tr, AlignId, PlanId, Design, Ranges);
+            if (dls.Count > 0)
+            {
+                ObjectId lD = Commands.SectionCommand.EnsureLayer(db, tr, RoadDitchLines.Layer, RoadDitchLines.Aci);
+                foreach (var dl in dls)
+                {
+                    var pc = new Point3dCollection(); foreach (var p in dl.Pts) pc.Add(p);
+                    var pl = new Polyline3d(Poly3dType.SimplePoly, pc, false) { LayerId = lD };
+                    ms.AppendEntity(pl); tr.AddNewlyCreatedDBObject(pl, true);
+                    using (var tg = new ResultBuffer(new TypedValue((int)DxfCode.ExtendedDataRegAppName, LineApp), new TypedValue((int)DxfCode.ExtendedDataAsciiString, me),
+                                                    new TypedValue((int)DxfCode.ExtendedDataAsciiString, "측구 " + dl.Shape.Label))) pl.XData = tg;
+                    nDitch++;
+                }
+            }
+        }
+        catch (System.Exception exD) { try { DiagLog.Append($"\n[진입도로] {Name} — ⚠측구선 못 그림 — {exD.Message}"); } catch { } }
         tr.Commit();
-        return $"사면선 · 소단선 {nLine} · 옹벽선 {nWall}" + (erased > 0 ? $"(옛 선 {erased} 지움)" : "");
+        return $"사면선 · 소단선 {nLine} · 옹벽선 {nWall}" + (nDitch > 0 ? $" · 측구선 {nDitch}" : "") + (erased > 0 ? $"(옛 선 {erased} 지움)" : "");
     }
 
     internal const string SiteNoriLayer = "DH-노리선";
@@ -1157,29 +1422,29 @@ internal sealed class RoadSession
                 var planId = Handle(db, d.PlanProfile);
                 var baseId = FindSurface(db, cdoc, d.BaseSurface);
                 if (planId.IsNull || baseId.IsNull) { notes.Add($"{name} — ⚠계획 종단 · 바탕면을 못 찾아 건너뜀"); continue; }
-                double[] X, Y, Z; double s0;
-                CachedGroundSurface ground;
+                CachedGroundSurface ground; List<Piece> pcs;
                 using (var tr = db.TransactionManager.StartTransaction())
                 {
-                    (X, Y, Z, s0, _, _) = RoadBuilder.Sample(tr, aid, planId);
                     ground = new CachedGroundSurface((CivilDb.TinSurface)tr.GetObject(baseId, OpenMode.ForRead));
+                    var gB = BranchBase.For(tr, db, aid, d, ground, null, out string gNote);   // ★[계획 5.5] 가지면 바탕면 + 본 도로 면(면을 지은 바탕과 같게 — 지문이 맞음)
+                    if (gNote.StartsWith("⚠")) notes.Add($"{name} — {gNote}");
+                    pcs = MakePieces(tr, aid, planId, d, gB, RoadRanges.Of(tr, aid, d));   // ★[도로 마무리 ① · 계획 5.8] 도로 구간 · 토막
                     tr.Commit();
                 }
                 // MakeSurfaceCore와 같은 입력(칸 0.5 · 해상도 · 시작 범위) — 사업 경계(Limit)는 옹벽 제안만 바꿔 뺌
-                var inp = new RoadGrade.Input
-                {
-                    X = X, Y = Y, Z = Z, Sec = d.Section(), Cut = d.Cut(), Fill = d.Fill(),
-                    TierWalls = d.CoreTierWalls(s0),
-                    Base = ground, Cell = SurfCell, Reach = d.SurfaceReach > 0 ? d.SurfaceReach : 40, SuggestH = d.SuggestH,
-                    SectionGap = Math.Max(0.5, GradingSettings.VertexSpacing),
-                };
+                foreach (var pc in pcs) { pc.Inp.Cell = SurfCell; pc.Inp.Reach = d.SurfaceReach > 0 ? d.SurfaceReach : 40; }
                 // 지문이 없으면(v111.2.1 전에 만든 면) 그 면과 맞는지 알 길이 없음 — 말없이 틀린 노리선을 그리지 않고 건너뜀
                 if (d.SurfaceSig.Length == 0) { notes.Add($"{name} — ⚠옛 판에서 만든 진입도로 지표면이라 건너뜀(진입도로 창 [업데이트]로 한 번 다시 만든 뒤 [노리선])"); continue; }
-                if (SigOf(inp, baseId) != d.SurfaceSig) { notes.Add($"{name} — ⚠진입도로 지표면이 지금 설계와 달라 건너뜀(진입도로 창 [업데이트] 뒤 [노리선])"); continue; }
-                var r = RoadGrade.Run(inp);
-                if (r.Error.Length > 0) { notes.Add($"{name} — ⚠계산 실패 {r.Error}"); continue; }
-                var lines = RoadGrade.ExactLines(inp, r, out _);
-                var ticks = RoadGrade.Ticks(r, lines, GradingSettings.HatchShort, GradingSettings.HatchLong);
+                if (SigOfAll(pcs, baseId) != d.SurfaceSig) { notes.Add($"{name} — ⚠진입도로 지표면이 지금 설계와 달라 건너뜀(진입도로 창 [업데이트] 뒤 [노리선])"); continue; }
+                var ticks = new List<(Point3 A, Point3 B)>(); string tickErr = "";
+                foreach (var pc in pcs)
+                {
+                    var r = RoadGrade.Run(pc.Inp);
+                    if (r.Error.Length > 0) { tickErr = r.Error; break; }
+                    var lines = RoadGrade.ExactLines(pc.Inp, r, out _);
+                    ticks.AddRange(RoadGrade.Ticks(r, lines, GradingSettings.HatchShort, GradingSettings.HatchLong));
+                }
+                if (tickErr.Length > 0) { notes.Add($"{name} — ⚠계산 실패 {tickErr}"); continue; }
                 int n = 0;
                 string me = aid.Handle.ToString();
                 using (var tr = db.TransactionManager.StartTransaction())
@@ -1424,8 +1689,7 @@ internal sealed class RoadSession
     void DrawPreview()
     {
         ClearMarks();
-        var r = Last;
-        if (r == null || r.Error.Length > 0) return;
+        if (Last == null || Last.Error.Length > 0) return;
         bool full = PreviewFull;   // ★[v111.7.1] 지표면이 지금 설계와 같으면 가장자리 · 데이라잇 · 계단선 · 노리선은 안 그림(진짜 선이 있음) — 충돌 · 옹벽 제안만
         // ★[설치 전 검토 · 열린 질문] 도면에 안 넣은 Polyline3d가 임시 선으로 보이는지 근거가 없다 — 저장소에서 보이는 것이 확인된 Line 조각으로(PickMark와 같음).
         //   꺾은선을 먼저 모으고 덜 꺾이게 줄인 뒤, 전체가 많으면 허용을 키워 다시(임시 선 수 상한)
@@ -1442,6 +1706,12 @@ internal sealed class RoadSession
             }
             if (c.Count >= 2) polys.Add((c, aci));
         }
+        // ★[도로 마무리 ① · 계획 5.6] 토막마다(빈 구간이면 둘 이상 — 하나면 지금과 같음)
+        var pieces = Pieces.Count > 0 && ReferenceEquals(Pieces[0].R, Last) ? Pieces : new List<Piece> { new Piece { S0 = S0, R = Last, Lines = Lines } };
+        foreach (var pc in pieces)
+        {
+        var r = pc.R;
+        if (r == null || r.Error.Length > 0) continue;
         float Zat(double x, double y)
         {
             int i = Math.Clamp((int)((x - r.X0) / r.Cell), 0, r.W - 1), j = Math.Clamp((int)((y - r.Y0) / r.Cell), 0, r.H - 1);
@@ -1475,8 +1745,17 @@ internal sealed class RoadSession
                 }
             }
             // ★[v110.3 · 검토 L4] 옹벽 제안 = 자홍(옹벽선 빨강과 구별) · 옛 «가장자리 따라 파란 옹벽»은 옹벽선(아래)으로 대신
-            foreach (var (a, b, side, _) in r.Suggest) Line(Along(a + S0, b + S0, side), 6);
+            foreach (var (a, b, side, _) in r.Suggest) Line(Along(a + pc.S0, b + pc.S0, side), 6);
             tr.Commit();
+        }
+        catch { }
+        }
+        // ★[도로 마무리 ② · 계획 6.4] 측구 가운데 선(하늘 · 도면 «DH도로-측구선»과 같은 자리) — 지표면이 옛것일 때만(진짜 선이 있으면 안 그림)
+        if (full) try
+        {
+            using var trD = _doc.Database.TransactionManager.StartTransaction();
+            foreach (var dl in RoadDitchLines.Lines(trD, AlignId, PlanId, Design, Ranges)) Line(dl.Pts, 4);
+            trD.Commit();
         }
         catch { }
         // ★[v110.3 · JACK 1029 «평면 사면 모양 = 2D처럼 소단선 방향»] 사면선 · 소단선(회색) · 옹벽선(빨강) — ★[설치 전 검토 L4] 맨 뒤(조각이 넘치면 제안 · 데이라잇보다 먼저 잘림)
@@ -1500,7 +1779,8 @@ internal sealed class RoadSession
         // ★[v110.3 · 검토 M6] 노리선(긴 선만 · 노랑) — 줄이기 · 점 수 버리기와 따로 · 몫 넘으면 고르게 솎음
         if (full && !PickMode) try
         {
-            var tk = RoadGrade.Ticks(r, Lines, GradingSettings.HatchShort, GradingSettings.HatchLong, longOnly: true);
+            var tk = new List<(Point3 A, Point3 B)>();
+            foreach (var pc in pieces) if (pc.R != null && pc.R.Error.Length == 0) tk.AddRange(RoadGrade.Ticks(pc.R, pc.Lines, GradingSettings.HatchShort, GradingSettings.HatchLong, longOnly: true));
             int stride = Math.Max(1, (int)Math.Ceiling(tk.Count / (double)MaxTicks));
             for (int i = 0; i < tk.Count; i += stride)
             {

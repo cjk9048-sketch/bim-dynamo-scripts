@@ -94,6 +94,7 @@ internal static class GroundCropBuilder
     {
         if (s is CivilDb.TinVolumeSurface || s is CivilDb.GridVolumeSurface) return Kind.Volume;
         if (s is not CivilDb.TinSurface) return Kind.Other;
+        if (SurfaceRetire.IsRetired(s)) return Kind.Skip;   // ★[v111.10 · 계획_초기화.md 3.1] 물러난 면(«…(옛)» · 숨김 · 남이 씀)은 손 안 댐 — 레이어 · 이름으로 도로 면 · 땅 크기 면으로 갈리지 않게
         string nm = s.Name ?? "";
         if (nm == "_DH토량임시" || nm.Contains("짓는중") || nm == RoadSession.TempSurf) return Kind.Skip;
         if (FinalSurfaceBuilder.IsRoadSurface(s)) return Kind.Design;
@@ -437,7 +438,7 @@ internal static class GroundCropBuilder
                     }
                     else if (s is CivilDb.TinVolumeSurface tv) { try { var vp = tv.GetVolumeProperties(); u.Sources.Add(vp.BaseSurface); u.Sources.Add(vp.ComparisonSurface); } catch { } }
                     else if (s is CivilDb.GridVolumeSurface gv) { try { var vp = gv.GetVolumeProperties(); u.Sources.Add(vp.BaseSurface); u.Sources.Add(vp.ComparisonSurface); } catch { } }
-                    if (u.K == Kind.Skip) R.Skipped.Add(u.Name + "(짓는중 · 임시)");
+                    if (u.K == Kind.Skip) R.Skipped.Add(u.Name + (SurfaceRetire.IsRetired(s) ? "(물러난 면)" : "(짓는중 · 임시)"));
                     if (u.K == Kind.Other) R.Skipped.Add(u.Name + "(격자면 — 못 자름)");
                     surfs.Add(u);
                 }

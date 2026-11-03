@@ -1416,10 +1416,11 @@ public static class GradingBuilder
         foreach (ObjectId sid in civilDoc.GetSurfaceIds())
         {
             if (tr.GetObject(sid, OpenMode.ForRead) is not Autodesk.Civil.DatabaseServices.Surface s) continue;
-            bool keep = keepBaseName == null
+            // ★[v111.10 · 계획_초기화.md 3.1] 물러난 면(«…(옛)»)은 늘 끔 — 초기화 · 정지옵션 저장이 «모든 면 켬»으로 다시 보이게 하지 않게
+            bool keep = !SurfaceRetire.IsRetired(s) && (keepBaseName == null
                 || s.Name == keepBaseName
                 || (s.Name.StartsWith(keepBaseName + "_") && int.TryParse(s.Name.Substring(keepBaseName.Length + 1), out _))
-                || (alsoKeep != null && alsoKeep(s));
+                || (alsoKeep != null && alsoKeep(s)));
             try
             {
                 // ★[v32.11 · 조사 반영] <b>이미 같은 값이면 쓰지 않는다.</b>
@@ -1462,8 +1463,13 @@ public static class GradingBuilder
         var c = (Autodesk.Civil.DatabaseServices.Styles.SurfaceStyle)tr.GetObject(cid, OpenMode.ForWrite);
         var sc = src.ContourStyle; var cc = c.ContourStyle;
         // ★[v103.1 · v103.0.1 검토 낮음 3] 보조 → 주 차례가 중간 상태(보조 2 · 주 5 등)에서 거부될 수 있다 — 안 되면 주 → 보조로
-        try { cc.MinorContourInterval = sc.MinorContourInterval; cc.MajorContourInterval = sc.MajorContourInterval; }
-        catch { cc.MajorContourInterval = sc.MajorContourInterval; cc.MinorContourInterval = sc.MinorContourInterval; }
+        // ★[v111.11 · JACK 1103] 도면설정 «등고선 · 계곡선 간격»을 바꾼 도면이면 원본 대신 그 값(기록이 없으면 원본을 따름 — 종전 그대로)
+        if (ContourInterval.TryRead(tr, c.Database, out double cmi, out double cma)) ContourInterval.SetOn(c, cmi, cma);
+        else
+        {
+            try { cc.MinorContourInterval = sc.MinorContourInterval; cc.MajorContourInterval = sc.MajorContourInterval; }
+            catch { cc.MajorContourInterval = sc.MajorContourInterval; cc.MinorContourInterval = sc.MinorContourInterval; }
+        }
         cc.BaseElevationInterval = sc.BaseElevationInterval + ContourLift;
         note = $"등고선 +1cm 사본{(made ? " 만듦" : "")}(보조 {cc.MinorContourInterval:0.###}m · 주 {cc.MajorContourInterval:0.###}m · 기준 {cc.BaseElevationInterval:0.###}m)";
         return cid;
@@ -1736,7 +1742,7 @@ public static class GradingBuilder
             nm = w.Name ?? "?";
             // ★[v103.1.7 · 검토 열린 물음 3] 손으로 이름을 바꾼 사본(«정지면_DH 1차» 등)도 — 옛 판이 깨 놓은 면은 늘 정지면_DH… · 정지순수_DH…였다
             bool ours = SelfCheck.IsOurSurfaceName(nm) || nm.StartsWith("정지면_DH", System.StringComparison.Ordinal) || nm.StartsWith("정지순수_DH", System.StringComparison.Ordinal)
-                        || FinalSurfaceBuilder.IsOldName(nm);   // ★[v111.8 · 검토 M1]
+                        || SurfaceRetire.IsRetired(w);   // ★[v111.8 · 검토 M1] ★[v111.10] 물러난 면은 표식으로(이름 꼴 말고)
             gone = ours && w.HasSnapshot && SnapBlock(w, out _) == 1;
         }
         catch { }
@@ -1832,7 +1838,8 @@ public static class GradingBuilder
         string nm;
         try { nm = s.Name ?? ""; } catch { return false; }
         // ★[v111.8 · 검토 M1] 남이 붙여넣어 이름만 바꿔 둔 옛 최종면(«최종지표면_DH(옛)» · «…_N»)도 우리 XML 면 — 굳힌 채 재작성만(이름 꼴은 위 규칙 밖)
-        if (!DhXmlName.IsMatch(nm) && !FinalSurfaceBuilder.IsOldName(nm)) return false;
+        //   ★[v111.10 · 계획_초기화.md 3.1] 이름 꼴 말고 표식으로 — 물러남 규칙이 만드는 «가상터파기_DH3(옛)» 같은 이름도
+        if (!DhXmlName.IsMatch(nm) && !SurfaceRetire.IsRetired(s)) return false;
         var files = new List<string>();
         if (!TryXmlFilesOf(s, files)) return true;
         foreach (string f in files) if (XmlStore.IsOurs(f)) return true;
