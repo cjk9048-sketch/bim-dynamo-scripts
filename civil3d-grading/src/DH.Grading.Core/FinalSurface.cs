@@ -1243,8 +1243,19 @@ public static class FinalSurface
     {
         var ok = gs.Where(g => g != null && !g.IsEmpty && g.Area > 1e-12).ToList();
         if (ok.Count == 0) return 0;
-        var u = NetTopologySuite.Operation.OverlayNG.OverlayNGRobust.Union(ok);
-        return u?.Area ?? 0;
+        try
+        {
+            var u = NetTopologySuite.Operation.OverlayNG.OverlayNGRobust.Union(ok);
+            return u?.Area ?? 0;
+        }
+        catch (Exception)
+        {
+            // ★[JACK 1104 실측] 넓이 대조용 합집합 — 부동소수 겹침 연산이 세모 수천 개의 거의 맞닿은 변에서 «Ring edge missing»으로 깨졌다(진입도로 끝 띠 조각 · 같은 자리의 도로 세모는 옛 판과 비트 같음 → 자리 탓 아님, 합치는 차례 탓).
+            //   1 µm 격자 스냅 라운딩(늘 위상이 맞는 겹침 연산)으로 다시 셈 — 넓이 차는 둘레 × 1 µm 꼴(수 km 둘레에도 0.001 ㎡ 안 · 대조 한도 1e-6 × 넓이 안)
+            var f = ok[0].Factory;
+            var u = NetTopologySuite.Operation.OverlayNG.UnaryUnionNG.Union(f.BuildGeometry(ok), new PrecisionModel(1e6));
+            return u?.Area ?? 0;
+        }
     }
 
     /// <summary>세모 차례 — 꼭짓점을 (X, Y)로 정렬한 셋을 견줌(같으면 높이).</summary>

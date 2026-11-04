@@ -202,7 +202,9 @@ static class RoadMeshCheck
             var inp = new RoadGrade.Input { X = X.ToArray(), Y = Y.ToArray(), Z = Z.ToArray(), Sec = sec, Base = new G((x, y) => 6), Cell = 0.5, Reach = 30 };
             var r = RoadGrade.Run(inp);
             var tris = RoadGrade.ExactSurface(inp, r, out string tn, out _);
-            check("S181 ⑨ 헤어핀(두 다리 주름) — 면이 나옴(선 면이거나, 못 넘으면 칸 면 + 까닭)", tris.Count > 0 && (tn.StartsWith("선 면") || tn.Contains("→ 칸 면")), tn);
+            check("S181 ⑨ 헤어핀(두 다리 주름) — 면이 나옴(선 면 · 선 따라 TIN · 칸 면 + 까닭)", tris.Count > 0 && (tn.StartsWith("선 면") || tn.StartsWith("선 따라 TIN") || tn.Contains("→ 칸 면")), tn);
+            // ★[JACK 1104] 선 면이 못 넘어도 칸 면(0.5 m 모자이크)으로 안 감 — 선 따라 TIN(끊김선 들로네)
+            check("S181 ⑨ 헤어핀 — 선 면 못 넘으면 선 따라 TIN(칸 면 아님)", tn.StartsWith("선 면") || tn.StartsWith("선 따라 TIN"), tn[..Math.Min(200, tn.Length)]);
         }
 
         // ── ★★[v111.1 · 계획_v111_1.md 3 · JACK 1030 «노리선도 봐줘» · «합쳐진 노리선»] 노리선 = 광선 띠 · 도로 면 자리 ──
