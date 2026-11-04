@@ -106,6 +106,9 @@ internal sealed class GradingPanel : UserControl
     /// <para><c>_picksOk</c>=고른 것이 갖춰졌나 · <c>_fixOk</c>=고칠 정지면이 있나 ·
     /// <c>_valOk</c>=칸의 숫자가 쓸 수 있는 값인가.</para></summary>
     private bool _picksOk, _fixOk, _valOk = true;
+    /// <summary>★[v113.0 · JACK 1104 «깜박이기는 하는데 눌리지가 않아»] 생성에 성공하면 고른 것을 걷으므로(<c>PickSession.ClearAll</c>) 값만 바꾼 뒤엔 <c>_picksOk</c>가 거짓 —
+    /// 고른 것이 없고 지난 결과가 있으면 «마지막 구역을 새 값으로 다시»(사면 변환 · 이어서 같은 계획선과 같은 길)로 누를 수 있다. <c>_stale</c>일 때만 켠다.</summary>
+    private bool _rerunOk, _stale;
 
     // ★[v113.0 · JACK 1104 «정지 조건 바뀌면 생성하기 깜박»] [계획부지생성하기] 아래 «재생성 필요» 한 줄 + 단추 깜박(진입도로 [업데이트]와 같은 <see cref="RoadPanel.Blink"/>).
     //   _gen = 이 도면 번들(정본)의 마지막 구역 제원 — 도면 전환 · 명령 끝 · 생성 끝에 다시 읽는다(<see cref="ReloadGenerated"/>). 없으면(만든 적 없음) 안 알린다.
@@ -791,6 +794,8 @@ internal sealed class GradingPanel : UserControl
                 }
                 else return;
             }
+            _stale = stale;
+            SyncEnabled();
             RoadPanel.SetState(_staleLine, stale ? "아래 조건이 수정되어 재생성이 필요합니다." : "");
             RoadPanel.Blink(_build, stale);
         }
@@ -820,7 +825,7 @@ internal sealed class GradingPanel : UserControl
     {
         try
         {
-            if (_build != null) _build.IsEnabled = _picksOk && _valOk;
+            if (_build != null) _build.IsEnabled = (_picksOk || (_stale && _rerunOk)) && _valOk;
             if (_toWall != null) _toWall.IsEnabled = _fixOk && _valOk;
             if (_toSlope != null) _toSlope.IsEnabled = _fixOk && _valOk;
         }
@@ -915,6 +920,7 @@ internal sealed class GradingPanel : UserControl
             //     나중에 배치를 바꾸는 순간 단추가 조용히 잠긴다.
             bool madeAny = hasPrev;
             _fixOk = !busy && madeAny;
+            _rerunOk = !busy && hasPrev && !hasPlan;
             SyncEnabled();
             RefreshComposite();   // ★[v103.1.12] 미루기 칸 · 대기 수도 같은 때에(도면 전환 · 명령 끝 · 찍기 상태)
             RefreshReset();       // ★[v111.10] [계획지표면 초기화] 켜짐도 같은 때에(옛 ■ 도면 자리)

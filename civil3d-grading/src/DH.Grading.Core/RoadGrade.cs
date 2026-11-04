@@ -970,6 +970,8 @@ public static partial class RoadGrade
         // ★[v111.2 · 전체 검토 H] 바뀐 칸이 범위 끝(가장자리에서 Reach − 칸 1.5)에 닿으면 데이라잇이 범위 밖 — 격자 테두리 칸만 보면
         //   비스듬한 도로(테두리가 범위보다 훨씬 멂) · 양 끝이 땅에 붙은 도로에서 못 알아채고 사면이 범위에서 잘린 채 면이 된다
         double reachEdge = inp.Reach - 1.5 * cell;
+        // ★[v113.1 · 검토 M6 · LOW] 칸마다 범위 끝 닿음 · 부피 몫(double) — 섬 칸을 땅으로 되돌린 뒤 남은 칸만으로 다시 셈(섬이 없으면 안 씀)
+        var touch = new bool[W * H]; var dzc = new double[W * H];
         var lockObj = new object();
         System.Threading.Tasks.Parallel.For(0, H, () => (0.0, 0.0, 0.0, 0.0, 0L), (j, _, acc) =>
         {
@@ -981,24 +983,25 @@ public static partial class RoadGrade
                 int idx = j * W + i;
                 var pe = EvalAt(px, py, ref ev);
                 // 다른 다리 칸(헤어핀 두 다리 사이 — D = 먼 다리 원뿔까지)은 빼고(확인 검토 A — PVI 끌 때마다 세 번 계산 · 거짓 «못 찾음»)
-                if (pe.Kind is 2 or 3 or 4 && !pe.OtherLeg && float.IsFinite(pe.D) && pe.D > reachEdge && reachTouch == 0) System.Threading.Interlocked.Exchange(ref reachTouch, 1);
+                if (pe.Kind is 2 or 3 or 4 && !pe.OtherLeg && float.IsFinite(pe.D) && pe.D > reachEdge) { touch[idx] = true; if (reachTouch == 0) System.Threading.Interlocked.Exchange(ref reachTouch, 1); }
                 r.Base[idx] = pe.Base; r.Z[idx] = pe.Z; r.Kind[idx] = pe.Kind; r.F[idx] = pe.F;
                 if (pe.Kind != 255) { r.D[idx] = pe.D; r.FS[idx] = pe.FS; r.FSide[idx] = pe.FSide; }
                 else r.D[idx] = float.NaN;
+                dzc[idx] = double.NaN;
                 if (pe.Kind == 1)
                 {
-                    if (pe.HasBase) { double dz = pe.Zd - pe.Zb; if (dz > 0) { fv += dz * ca; mf = Math.Max(mf, dz); } else { cv -= dz * ca; mc = Math.Max(mc, -dz); } }
+                    if (pe.HasBase) { double dz = pe.Zd - pe.Zb; dzc[idx] = dz; if (dz > 0) { fv += dz * ca; mf = Math.Max(mf, dz); } else { cv -= dz * ca; mc = Math.Max(mc, -dz); } }
                     continue;
                 }
                 if (pe.Kind == 255) continue;
                 if (pe.Kind == 4)
                 {
                     System.Threading.Interlocked.Increment(ref conflicts);
-                    double dc = pe.Zd - pe.Zb;
+                    double dc = pe.Zd - pe.Zb; dzc[idx] = dc;
                     if (dc > 0) { fv += dc * ca; mf = Math.Max(mf, dc); } else { cv -= dc * ca; mc = Math.Max(mc, -dc); }
                     continue;
                 }
-                double dzz = pe.Zd - pe.Zb;
+                double dzz = pe.Zd - pe.Zb; dzc[idx] = dzz;
                 if (dzz > 1e-4) { fv += dzz * ca; mf = Math.Max(mf, dzz); }
                 else if (dzz < -1e-4) { cv -= dzz * ca; mc = Math.Max(mc, -dzz); }
             }
@@ -1008,19 +1011,28 @@ public static partial class RoadGrade
             lock (lockObj) { cutV += acc.Item1; fillV += acc.Item2; maxCut = Math.Max(maxCut, acc.Item3); maxFill = Math.Max(maxFill, acc.Item4); evals += acc.Item5; }
         });
         // ★★[v113.1 · JACK 1104 «섬 지형»] 도로 면과 안 이어진 바뀐 칸 걷기 — 데이라잇 너머 땅이 다시 파인(낮아진) 자리에서 사면 원뿔이 땅 위로 다시 나와(성토) 칸 면 · 최종지표면에 따로 떨어진 조각(실측 164 세모 · 15 ㎡ · 데이라잇 밖 9 m)이 됐다.
-        //   도로 칸(종류 1)에서 바뀐 칸(1 · 2 · 3 · 4)을 따라(여덟 이웃) 못 닿는 칸은 땅 그대로(종류 0) · 부피는 그때만 다시 셈(섬이 없으면 비트 같음).
+        //   칸 면(SurfaceTris)과 같은 이음: 면 안 칸(F &lt; 0 · 높이 있음)을 네 이웃으로 · 대각 이웃은 그 2×2 네모의 F 평균이 &lt; 0(안장이 가운데로 이어짐)일 때만(검토 M5).
+        //   도로 칸(종류 1)에서 못 닿는 바뀐 칸(2 · 3 · 4)은 땅 그대로(종류 0) · 부피 · 범위 끝 닿음은 그때만 남은 칸으로 다시 셈(섬이 없으면 비트 같음).
         {
+            bool InC(int k) => float.IsFinite(r.F[k]) && r.F[k] < 0 && float.IsFinite(r.Z[k]);
             var reach = new bool[W * H]; var stack = new Stack<int>();
-            for (int k = 0; k < W * H; k++) if (r.Kind[k] == 1) { reach[k] = true; stack.Push(k); }
+            for (int k = 0; k < W * H; k++) if (r.Kind[k] == 1 && InC(k)) { reach[k] = true; stack.Push(k); }
             while (stack.Count > 0)
             {
                 int k = stack.Pop(), ki = k % W, kj = k / W;
                 for (int dj = -1; dj <= 1; dj++) for (int di = -1; di <= 1; di++)
                 {
+                    if (di == 0 && dj == 0) continue;
                     int ii = ki + di, jj = kj + dj;
                     if (ii < 0 || jj < 0 || ii >= W || jj >= H) continue;
                     int kk = jj * W + ii;
-                    if (reach[kk] || r.Kind[kk] is not (2 or 3 or 4)) continue;
+                    if (reach[kk] || !InC(kk)) continue;
+                    if (di != 0 && dj != 0)
+                    {
+                        int k1 = kj * W + ii, k2 = jj * W + ki;   // 같은 네모의 다른 두 칸
+                        double sum = (double)r.F[k] + r.F[kk] + r.F[k1] + r.F[k2];
+                        if (!(sum / 4 < 0)) continue;
+                    }
                     reach[kk] = true; stack.Push(kk);
                 }
             }
@@ -1030,6 +1042,7 @@ public static partial class RoadGrade
                 {
                     r.Kind[k] = 0; r.Z[k] = r.Base[k];
                     r.F[k] = float.IsFinite(r.F[k]) ? Math.Max(Math.Abs(r.F[k]), 1e-3f) : 1e6f;
+                    touch[k] = false;
                     isl++;
                 }
             if (isl > 0)
@@ -1038,12 +1051,13 @@ public static partial class RoadGrade
                 cutV = 0; fillV = 0; maxCut = 0; maxFill = 0;
                 for (int k = 0; k < W * H; k++)
                 {
-                    if (r.Kind[k] is 0 or 255 || !float.IsFinite(r.Base[k]) || !float.IsFinite(r.Z[k])) continue;
-                    double dz = r.Z[k] - r.Base[k];
+                    double dz = dzc[k];
+                    if (r.Kind[k] is 0 or 255 || double.IsNaN(dz)) continue;
                     if (r.Kind[k] == 1 || r.Kind[k] == 4) { if (dz > 0) { fillV += dz * ca; maxFill = Math.Max(maxFill, dz); } else { cutV -= dz * ca; maxCut = Math.Max(maxCut, -dz); } }
                     else if (dz > 1e-4) { fillV += dz * ca; maxFill = Math.Max(maxFill, dz); }
                     else if (dz < -1e-4) { cutV -= dz * ca; maxCut = Math.Max(maxCut, -dz); }
                 }
+                reachTouch = touch.Any(t => t) ? 1 : 0;   // ★[검토 M6] 섬 칸의 범위 끝 닿음은 빼고
             }
         }
         r.Eval = (x, y) => { long e0 = 0; return EvalAt(x, y, ref e0); };
@@ -1551,6 +1565,7 @@ public static partial class RoadGrade
         bool any = false;
         foreach (var t in tris) if (H(t.A, t.B, t.C) < CivilSafeMesh.ThinH) { any = true; break; }
         if (!any) return 0;
+        var orig = new List<WallDaylight.Tri>(tris);   // ★[검토 M4] 접은 뒤 세 세모 이상 쓰는 변이 생기면 모두 물림
         int done = 0;
         for (int pass = 0; pass < 4; pass++)
         {
@@ -1564,17 +1579,25 @@ public static partial class RoadGrade
                 if (H(t.A, t.B, t.C) >= CivilSafeMesh.ThinH) continue;
                 var (u, v, ls) = L(t.A, t.B) <= L(t.B, t.C) && L(t.A, t.B) <= L(t.C, t.A) ? (t.A, t.B, L(t.A, t.B)) : L(t.B, t.C) <= L(t.C, t.A) ? (t.B, t.C, L(t.B, t.C)) : (t.C, t.A, L(t.C, t.A));
                 if (ls >= Tol || ls == 0) continue;
-                if (!at.TryGetValue((u.X, u.Y), out var lu)) continue;
-                Point3 Sw(Point3 p) => p.X == u.X && p.Y == u.Y ? v : p;
+                if (Math.Abs(u.Z - v.Z) > 0.01) continue;   // ★[검토 M4] 두 점 높이가 1 cm 넘게 다르면(수직 면 곁) 안 접음 — 접으면 높이가 뛴다
                 bool Has(WallDaylight.Tri w, Point3 p) => (w.A.X == p.X && w.A.Y == p.Y) || (w.B.X == p.X && w.B.Y == p.Y) || (w.C.X == p.X && w.C.Y == p.Y);
-                bool ok = true;
-                foreach (int s in lu)
+                // u → v 로 옮겨 이웃이 하나라도 바늘 · 뒤집힘이 되면 반대(v → u)로 — 한쪽만 보면 벽 끝 마구리 곁 바늘(2.1 mm · 71 µm)을 못 접었다(이웃 1.9 mm 세모가 42 µm 바늘이 됨 · 반대 방향은 이웃 모두 멀쩡 — 계측)
+                bool Can(Point3 uu, Point3 vv)
                 {
-                    if (dead.Contains(s) || Has(tris[s], v)) continue;
-                    var w = tris[s]; var a = Sw(w.A); var b = Sw(w.B); var c = Sw(w.C);
-                    if (Math.Sign(Cr(a, b, c)) != Math.Sign(Cr(w.A, w.B, w.C)) || H(a, b, c) < CivilSafeMesh.ThinH) { ok = false; break; }
+                    if (!at.TryGetValue((uu.X, uu.Y), out var lst)) return false;
+                    foreach (int s in lst)
+                    {
+                        if (dead.Contains(s) || Has(tris[s], vv)) continue;
+                        var w = tris[s];
+                        Point3 S2(Point3 p) => p.X == uu.X && p.Y == uu.Y ? vv : p;
+                        var a = S2(w.A); var b = S2(w.B); var c = S2(w.C);
+                        if (Math.Sign(Cr(a, b, c)) != Math.Sign(Cr(w.A, w.B, w.C)) || H(a, b, c) < CivilSafeMesh.ThinH) return false;
+                    }
+                    return true;
                 }
-                if (!ok) continue;
+                if (!Can(u, v)) { if (!Can(v, u)) continue; (u, v) = (v, u); }
+                var lu = at[(u.X, u.Y)];
+                Point3 Sw(Point3 p) => p.X == u.X && p.Y == u.Y ? v : p;
                 foreach (int s in lu)
                 {
                     if (dead.Contains(s)) continue;
@@ -1590,6 +1613,19 @@ public static partial class RoadGrade
             var keep = new List<WallDaylight.Tri>();
             for (int q = 0; q < tris.Count; q++) if (!dead.Contains(q)) keep.Add(tris[q]);
             tris.Clear(); tris.AddRange(keep);
+        }
+        if (done > 0)
+        {
+            var ec = new Dictionary<(double, double, double, double), int>();
+            bool bad = false;
+            foreach (var t in tris)
+                foreach (var (p, q) in new[] { (t.A, t.B), (t.B, t.C), (t.C, t.A) })
+                {
+                    var key = p.X < q.X || (p.X == q.X && p.Y < q.Y) ? (p.X, p.Y, q.X, q.Y) : (q.X, q.Y, p.X, p.Y);
+                    int m = ec.TryGetValue(key, out int m0) ? m0 + 1 : 1; ec[key] = m;
+                    if (m > 2) bad = true;
+                }
+            if (bad) { tris.Clear(); tris.AddRange(orig); return 0; }
         }
         return done;
     }

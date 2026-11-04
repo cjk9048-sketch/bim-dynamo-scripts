@@ -78,6 +78,7 @@ public sealed class GroundContourCommand
         var spots = new List<Point3d>();
         int nZero = 0, nZeroPart = 0, nZeroPt = 0, nMat = 0, nShort = 0, nBlock = 0, nOther = 0, nFail = 0;
         var material = new HashSet<string>(ImportGisCommand.GroundImportLayers, StringComparer.OrdinalIgnoreCase) { CropGroundCommand.CutAwayLayer };
+        var usedLayers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // ★[JACK 1104] 원지반에 쓴 원본 선 · 점의 레이어 — 다 지으면 끔
         using (var tr = db.TransactionManager.StartTransaction())
         {
             foreach (var id in picked)
@@ -89,7 +90,7 @@ public sealed class GroundContourCommand
                     if (material.Contains(e.Layer ?? "")) { nMat++; continue; }
                     if (e is DBPoint dp)
                     {
-                        if (Math.Abs(dp.Position.Z) < ZeroTol) nZeroPt++; else spots.Add(dp.Position);
+                        if (Math.Abs(dp.Position.Z) < ZeroTol) nZeroPt++; else { spots.Add(dp.Position); usedLayers.Add(e.Layer ?? ""); }
                         continue;
                     }
                     if (e is BlockReference) { nBlock++; continue; }
@@ -101,6 +102,7 @@ public sealed class GroundContourCommand
                     foreach (var p in pts) { zMin = Math.Min(zMin, p.Z); zMax = Math.Max(zMax, p.Z); if (Math.Abs(p.Z) < ZeroTol) anyZero = true; }
                     bool flat = zMax - zMin <= FlatTol;
                     if (anyZero) { if (flat) nZero++; else nZeroPart++; continue; }
+                    usedLayers.Add(e.Layer ?? "");
                     if (flat)
                     {
                         for (int i = 0; i < pts.Count; i++) pts[i] = new Point3d(pts[i].X, pts[i].Y, zMin);   // 1 mm 안 흔들림은 한 표고로
@@ -209,7 +211,27 @@ public sealed class GroundContourCommand
                     + $" · 표고 {z0:F2}~{z1:F2}m{skipped} · {surfNote}";
         try { DiagLog.Append($"\n■ DHGNDCONTOUR — {done} · EPSG:{epsg}{(csWarn == null ? "" : " · ⚠" + csWarn)}\n"); } catch { }
         if (!built) return (false, "원지반을 만들지 못했습니다.\n\n" + done);
-        return (true, done + "\n  고른 원본 선은 그대로 둡니다(지표면 등고선과 겹쳐 보이면 그 레이어를 끄세요)."
+        // ★[JACK 1104 «원지반이 생성되면 그거에 활용된 등고선 레이어들은 다 꺼줘»] 쓴 원본의 레이어를 끔(지우지 않음 · 원지반 레이어는 건드리지 않음)
+        var offNames = new List<string>();
+        try
+        {
+            using var dl3 = TryLock(doc);
+            using var tr = db.TransactionManager.StartTransaction();
+            var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+            foreach (string ly in usedLayers)
+            {
+                if (ly.Length == 0 || !lt.Has(ly) || string.Equals(ly, ImportGisCommand.GroundSurfaceLayer, StringComparison.OrdinalIgnoreCase)) continue;
+                var ltr = (LayerTableRecord)tr.GetObject(lt[ly], OpenMode.ForRead);
+                if (ltr.IsOff) continue;
+                ltr.UpgradeOpen();
+                ltr.IsOff = true;
+                offNames.Add(ly);
+            }
+            tr.Commit();
+        }
+        catch { }
+        try { ed.Regen(); } catch { }
+        return (true, done + (offNames.Count > 0 ? $"\n  쓴 등고선 레이어 끔: {string.Join(", ", offNames)}" : "")
                            + (csWarn == null ? "" : "\n  ⚠" + csWarn));
     }
 

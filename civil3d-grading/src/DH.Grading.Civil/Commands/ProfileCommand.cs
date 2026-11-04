@@ -1144,6 +1144,7 @@ public sealed class ProfileCommand
                 {
                     sPlan.H = mpl.H; sPlan.V = mpl.V; sPlan.Sheets = mpl.Sheets; sPlan.Note = mpl.Note; sPlan.Over = mpl.Over;
                     sPlan.PinH = mpl.H; sPlan.PinV = mpl.V;     // 장 루프 = 고정
+                    sPlan.FromAuto = true;
                     auto9 = true;
                 }
                 else { sPlan.PinH = sPlan.PinH > 0 ? sPlan.PinH : 0; if (sPlan.PinV == 0) sPlan.PinV = DH.Grading.Core.ProfileScaleFit.SameAsH; }   // 못 쟀으면 옛 식(한 장 · V = H)

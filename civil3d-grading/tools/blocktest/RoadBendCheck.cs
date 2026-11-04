@@ -81,6 +81,21 @@ static class RoadBendCheck
         return Enumerable.Range(0, par.Count).Select(F).Distinct().Count();
     }
 
+    /// <summary>광선 점 목록 그대로 같은가(비트).</summary>
+    static bool SameRay(RoadGrade.Ray a, RoadGrade.Ray b)
+    {
+        if (a.End != b.End || a.Pts.Count != b.Pts.Count) return false;
+        for (int i = 0; i < a.Pts.Count; i++) if (a.Pts[i] != b.Pts[i]) return false;
+        return true;
+    }
+
+    static RoadGrade.SectionSet Sections(RoadGrade.Input inp, bool slumpOff)
+    {
+        RoadGrade.SlumpOff = slumpOff;
+        try { var r = RoadGrade.Run(inp); return RoadGrade.BuildSections(new RoadGrade.RayCtx(inp, r)); }
+        finally { RoadGrade.SlumpOff = false; }
+    }
+
     static RoadGrade.Input Bend(double R, double g, double drop)
     {
         var xs = new List<double>(); var ys = new List<double>();
@@ -119,6 +134,40 @@ static class RoadBendCheck
                 exact && pc == 1 && j <= lim, $"{(exact ? "선 면" : "칸 면")} · 세모 {tris.Count} · 조각 {pc} · 이웃 차 최대 {j:F3} m @({jx:F2},{jy:F2}) · 흘러내림 {set?.Slumped} · 끝 합침 {set?.Merged} · {note}");
             if (!tight) Check($"{tag} — 흘러내림 · 끝 합치기 안 돎(주름 높이가 맞는 길 = 옛 그대로)", set != null && set.Slumped == 0 && set.Merged == 0, $"흘러내림 {set?.Slumped} · 끝 합침 {set?.Merged}");
         }
+        // ── ⑨ [검토 H2] 경사진 주름(R 20 · 내림 8 % · 절토 — 급한 곡선 아님) — 곧은 들머리 · 날머리 광선(곡선에서 2 × 단면 간격 밖)은 흘러내림을 켜도 비트 같음(계단식 짧아짐 없음) ──
+        {
+            var inp = Bend(20, 0.08, -6);
+            var on = Sections(inp, false); var off = Sections(inp, true);
+            double arcEnd = 25 + Math.PI / 2 * 20, gap = 2 * inp.SectionGap;
+            int n = 0, diff = 0; string first = "";
+            for (int i = 0; i < Math.Min(on.X.Count, off.X.Count); i++)
+            {
+                if (on.X[i].S != off.X[i].S) { diff++; if (first == "") first = $"측점 다름 {on.X[i].S:F3}/{off.X[i].S:F3}"; continue; }
+                double s = on.X[i].S;
+                if (s > 25 - gap && s < arcEnd + gap) continue;
+                foreach (var (a, b) in new[] { (on.X[i].L, off.X[i].L), (on.X[i].R, off.X[i].R) }) { n++; if (!SameRay(a, b)) { diff++; if (first == "") first = $"측점 {s:F2} 쪽 {a.Side} · 끝 {a.End}/{b.End} · 점 {a.Pts.Count}/{b.Pts.Count}"; } }
+            }
+            Check("⑨ [H2] 경사진 주름(R 20 · 8 % · 절토) — 곧은 구간 광선은 흘러내림을 켜도 비트 같음(깎인 원뿔 기울기 = √(k² + g²) · 대상 = 주름 곁만)",
+                n > 0 && diff == 0, $"견준 광선 {n} · 다름 {diff} {first} · 흘러내림 {on.Slumped} · 원천 주름 끝 {off.X.Count(x => x.L.End is RoadGrade.RayEnd.Crease or RoadGrade.RayEnd.Meet || x.R.End is RoadGrade.RayEnd.Crease or RoadGrade.RayEnd.Meet)} · {on.SlumpMs:F0} ms");
+        }
+        // ── ⑩ [검토 H1] 급한 곡선 + 계단선 옹벽(안쪽 · 1단 위 옹벽 · 소단 1 m) — 옹벽 단면 광선은 흘러내림에서 빠짐(원뿔 원천도 대상도 아님 → 비트 같음) · 면 조각 1 ──
+        {
+            var inp = Bend(8, 0.17, 8);
+            inp.TierWalls.Add(new RoadGrade.TierWall(20, 45, -1, 1, 1));
+            var on = Sections(inp, false); var off = Sections(inp, true);
+            var rr = RoadGrade.Run(inp); var tris = RoadGrade.ExactSurface(inp, rr, out string note, out _);
+            int n = 0, diff = 0;
+            for (int i = 0; i < Math.Min(on.X.Count, off.X.Count); i++)
+                foreach (var (a, b) in new[] { (on.X[i].L, off.X[i].L), (on.X[i].R, off.X[i].R) })
+                {
+                    if (a.Regime == 0 || a.EdgeWall) { if (a.EdgeWall) { n++; if (!SameRay(a, b)) diff++; } continue; }
+                    var pr = (a.Regime > 0 ? rr.CutProfs : rr.FillProfs)[Math.Clamp(a.Prof, 0, rr.CutProfs.Count - 1)];
+                    if (!pr.Faces.Any(f => f.Wall)) continue;
+                    n++; if (!SameRay(a, b)) diff++;
+                }
+            Check("⑩ [H1] 급한 곡선 + 계단선 옹벽 — 옹벽 단면 광선은 흘러내림을 켜도 비트 같음 · 면 조각 1",
+                n > 0 && diff == 0 && Pieces(tris) == 1, $"옹벽 광선 {n} · 다름 {diff} · 흘러내림 {on.Slumped} · 조각 {Pieces(tris)} · {(note.StartsWith("⚠") ? "칸 면" : "선 면")} · {note[..Math.Min(140, note.Length)]}");
+        }
         // ── ⑥ 섬 — 곧은 성토 도로 · 데이라잇(≈ 16 m) 너머 22 ~ 30 m 웅덩이(깊이 30 m)에서 원뿔이 땅 위로 다시 나옴 ──
         {
             var xs = Enumerable.Range(0, 61).Select(i => OX + i).ToArray(); var ys = xs.Select(_ => OY).ToArray();
@@ -148,6 +197,18 @@ static class RoadBendCheck
                 folded >= 1 && h1 >= CivilSafeMesh.ThinH && Math.Abs(a1 - a0) < 0.01, $"접음 {folded} · 가장 낮은 높이 {h0 * 1e6:F0} → {h1 * 1e6:F0} µm · 세모 {tris.Count} · 넓이 {a0:F4} → {a1:F4} ㎡");
             var clean = new List<Tri> { new(a, c, d), new(a, f, c) };
             Check("⑦ 바늘이 없으면 안 건드림(비트 같음)", RoadGrade.FoldNeedles(clean) == 0 && clean.Count == 2, $"세모 {clean.Count}");
+        }
+        // ── ⑧ 바늘 접기 방향 — 짧은 변(2.1 mm)을 u → v로 접으면 이웃 세모(높이 1.9 mm)가 41 µm 바늘이 되고, v → u는 이웃이 다 멀쩡한 꼴(벽 끝 마구리 곁 계측 꼴 · 만든 값) ──
+        {
+            Point3 P(double x, double y, double z) => new(OX + 100 + x, OY + 100 + y, z);
+            var p = P(0.5, -0.0985, 46.88); var u = P(0, 0, 41.8806); var v = P(0.00208, -0.00048, 41.8805); var x = P(0, 0.0084, 42.92); var y = P(-0.094, 0.4015, 41.775); var q = P(0.425, -0.0985, 41.877);
+            var tris = new List<Tri> { new(p, u, v), new(x, y, u), new(p, x, u), new(p, v, q) };
+            static double Hm(List<Tri> l) => l.Min(t => { double cr = Math.Abs((t.B.X - t.A.X) * (t.C.Y - t.A.Y) - (t.B.Y - t.A.Y) * (t.C.X - t.A.X)); double lm = Math.Max(Math.Sqrt((t.A.X - t.B.X) * (t.A.X - t.B.X) + (t.A.Y - t.B.Y) * (t.A.Y - t.B.Y)), Math.Max(Math.Sqrt((t.B.X - t.C.X) * (t.B.X - t.C.X) + (t.B.Y - t.C.Y) * (t.B.Y - t.C.Y)), Math.Sqrt((t.C.X - t.A.X) * (t.C.X - t.A.X) + (t.C.Y - t.A.Y) * (t.C.Y - t.A.Y)))); return cr / lm; });
+            double h0 = Hm(tris);
+            int folded = RoadGrade.FoldNeedles(tris);
+            double h1 = Hm(tris);
+            Check("⑧ 바늘 접기 — 한쪽(u → v)이 이웃을 바늘로 만들면 반대쪽(v → u)으로 접음(벽 끝 마구리 곁 Civil 되읽기 실패 꼴)",
+                folded == 1 && tris.Count == 3 && h1 >= CivilSafeMesh.ThinH, $"접음 {folded} · 세모 {tris.Count} · 가장 낮은 높이 {h0 * 1e6:F0} → {h1 * 1e6:F0} µm");
         }
     }
 }

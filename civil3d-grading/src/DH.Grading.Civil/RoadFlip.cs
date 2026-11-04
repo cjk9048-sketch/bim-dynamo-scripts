@@ -14,6 +14,9 @@ internal static class RoadFlip
 {
     const string SnapKey = "DH_ROADFLIP";
 
+    /// <summary>화면 없는 시험 칸 — 참이면 노선을 뒤집은 직후 물림(트랜잭션 되돌림이 노선 · 딸린 종단 · 검토선까지 되돌리는지 잼). 평소 거짓.</summary>
+    internal static bool TestFailAfterReverse;
+
     static (double X, double Y)? P(CivilDb.Alignment al, double s)
     {
         try { double x = 0, y = 0; al.PointLocation(s, 0, ref x, ref y); return (x, y); } catch { return null; }
@@ -96,6 +99,7 @@ internal static class RoadFlip
                 Marks = marks.Select(m => new ProfileFlip.Mark(m.Station, m.Why ?? "")).ToList(),
                 Drops = drops.ToList(),
                 Lr = new[] { d.HalfL, d.HalfR, d.ShoulderL, d.ShoulderR },
+                A0 = a0, B0 = b0,   // ★[설치 전 검토 H1] 노선 길이가 사이에 바뀌면 되돌림 기록을 안 씀
             };
             foreach (CivilDb.ProfilePVI q in pr.PVIs) now.Pvis.Add(new ProfileFlip.Pvi(q.RawStation, q.Elevation));
             var (next, snap, exact) = ProfileFlip.Toggle(now, b0, a0, ReadSnap(tr, s.AlignId));
@@ -112,6 +116,7 @@ internal static class RoadFlip
             if (Math.Abs(al.StartingStation - a0) > 1e-9 && P(al, al.StartingStation) is { } sp) { al.ReferencePoint = new Point2d(sp.X, sp.Y); al.ReferencePointStation = a0; }
             if (Math.Abs(al.StartingStation - a0) > 1e-6 || Math.Abs(al.EndingStation - b0) > 1e-3)
                 throw new InvalidOperationException($"뒤집은 노선 측점 {al.StartingStation:F3}~{al.EndingStation:F3}이 처음({a0:F3}~{b0:F3})과 다름");
+            if (TestFailAfterReverse) throw new InvalidOperationException("시험 — 뒤집은 뒤 물림");
             // ④ 계획 종단 PVI(RoadEndFix와 같은 법 — 가운데 지우고 처음 · 끝 고쳐 넣기)
             var want = next.Pvis;
             if (want.Count < 2) throw new InvalidOperationException("계획 종단 PVI가 두 개보다 적음");
@@ -124,9 +129,11 @@ internal static class RoadFlip
             for (int k = 1; k + 1 < want.Count; k++) pr.PVIs.AddPVI(want[k].S, want[k].Z);
             if (pr.PVIs.Count != want.Count) throw new InvalidOperationException($"계획 종단 PVI 수가 다름({pr.PVIs.Count}/{want.Count})");
             // ⑤ 설계 기록(옹벽 · 측구 쪽 반대 · 차례 그대로 · 좌우 맞바꿈) · 측점
+            // 바뀐 것이 없으면(기록 없음 · 좌우 같음) 설계 기록을 안 씀 — 옛 판 기록의 바이트를 그대로 둔다(쓰면 새 판 칸이 붙어 «두 번 = 처음»이 값만 같고 글자는 달라짐 · V113 RB 실측)
+            bool designSame = now.TierWalls.Count == 0 && now.Ditches.Count == 0 && now.Lr.SequenceEqual(next.Lr);
             d.TierWalls = next.TierWalls; d.Ditches = next.Ditches;
             if (next.Lr.Length >= 4) { d.HalfL = next.Lr[0]; d.HalfR = next.Lr[1]; d.ShoulderL = next.Lr[2]; d.ShoulderR = next.Lr[3]; }
-            d.Write(tr, s.AlignId);
+            if (!designSame) d.Write(tr, s.AlignId);
             if (marks.Count > 0 && !StationMarks.Save(tr, s.AlignId, next.Marks.Select(m => new StationMarks.Mark(m.S, m.Why)))) throw new InvalidOperationException("수동 측점을 못 옮김");
             if (drops.Count > 0 && !StationMarks.SaveDropped(tr, s.AlignId, next.Drops)) throw new InvalidOperationException("지운 측점을 못 옮김");
             WriteJson(tr, s.AlignId, SnapKey, ProfileFlip.ToJson(snap));

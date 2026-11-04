@@ -141,7 +141,29 @@ static class ZoneRulerCheck
         }
         check("S202 ③모든 링에 턱 0(전이 띠 거리가 자 위 매개를 따라 이어짐)", steps == 0, $"턱 {steps}곳 · 최대 {stepMax:F3} m {stepAt}");
 
-        // ④ 단마다 띠 길이 — 아랫단 묶음 = 10 m(설정 그대로) · 창은 잇달아(시작 · 끝이 단을 따라 줄지 않음) · 모든 창이 구간 절반 안
+        // ★[v112.7 · JACK 1104 17:51] 자의 볼록 모퉁이 자리(E에서 안쪽 거리) — 창 끝 맞춤 검사(④ · ⑪)가 쓴다(ZoneBlend와 같은 꺾임 문턱 0.5°)
+        List<double> CornersIn(ZoneBlend.End en, SlopeZone zz)
+        {
+            var (rp, rcm) = zz.Ruler(pad, GradingGeometry.CumLen2D(pad));
+            int m = rcm.Length - 1; double sa = 0; var res = new List<double>();
+            for (int i = 0; i < m; i++) sa += rp[i].X * rp[(i + 1) % m].Y - rp[(i + 1) % m].X * rp[i].Y;
+            for (int i = 0; i < m; i++)
+            {
+                var pv = rp[(i - 1 + m) % m]; var pc = rp[i]; var nx = rp[(i + 1) % m];
+                double ax = pc.X - pv.X, ay = pc.Y - pv.Y, bx = nx.X - pc.X, by = nx.Y - pc.Y;
+                double lA = Math.Sqrt(ax * ax + ay * ay), lB = Math.Sqrt(bx * bx + by * by);
+                if (lA < 1e-9 || lB < 1e-9 || (ax * bx + ay * by) / (lA * lB) >= Math.Cos(0.5 * Math.PI / 180)) continue;
+                double cr = ax * by - ay * bx;
+                if (!(sa > 0 ? cr > 0 : cr < 0)) continue;
+                double d = en.AtT0 ? rcm[i] - en.E : en.E - rcm[i];
+                d %= en.Total; if (d < 0) d += en.Total;
+                res.Add(d);
+            }
+            res.Sort();
+            return res;
+        }
+
+        // ④ 단마다 띠 길이 — 아랫단 묶음 = 10 m(설정 그대로 — 다음 묶음이 모퉁이 앞에 한 단도 못 들면 그 모퉁이까지 늘 수 있다) · 창은 잇달아 · 모든 창이 구간 절반 안
         {
             bool ok = ends.Count == 2;
             string txt = "";
@@ -150,14 +172,16 @@ static class ZoneRulerCheck
                 if (!en.Staged) { ok = false; continue; }
                 double half = en.Avail / 2;
                 var eb = Enumerable.Range(0, en.Elig.Length).Where(b => en.Elig[b]).ToList();
-                ok &= !en.Warn && Math.Abs(en.Lb[eb[0]] - 10) < 1e-12 && Math.Abs(en.Ob[eb[0]] - en.O) < 1e-12;
+                double end0 = en.Ob[eb[0]] + en.Lb[eb[0]];
+                bool firstOk = Math.Abs(en.Lb[eb[0]] - 10) < 1e-12 || (en.Lb[eb[0]] > 10 && CornersIn(en, zone).Exists(c => Math.Abs(c - end0) < 1e-9));
+                ok &= !en.Warn && firstOk && Math.Abs(en.Ob[eb[0]] - en.O) < 1e-12;
                 for (int q = 1; q < eb.Count; q++)
                     ok &= en.Ob[eb[q]] >= en.Ob[eb[q - 1]] - 1e-12 && en.Ob[eb[q]] + en.Lb[eb[q]] >= en.Ob[eb[q - 1]] + en.Lb[eb[q - 1]] - 1e-12;
                 ok &= en.Ob[eb[^1]] + en.Lb[eb[^1]] <= half + 1e-9 && Math.Abs(en.O + en.L - (en.Ob[eb[^1]] + en.Lb[eb[^1]])) < 1e-9;
                 int first10 = eb.Count(b => en.Ob[b] + en.Lb[b] <= 10 + 1e-9);
                 txt += $" [{(en.AtT0 ? "T0" : "T1")} 10 m 안에 끝나는 단 {first10}/{eb.Count} · 1단 {en.Lb[eb[0]]:0.##} m · 끝 단 {en.Ob[eb[^1]]:0.##}~{en.Ob[eb[^1]] + en.Lb[eb[^1]]:0.##} m · 절반 {half:0.##} m]";
             }
-            check("S202 ④단마다 띠 — 아랫단 10 m · 창 잇달아 · 구간 절반 안", ok, txt);
+            check("S202 ④단마다 띠 — 아랫단 10 m(모퉁이에 맞추면 그 모퉁이까지) · 창 잇달아 · 구간 절반 안", ok, txt);
         }
 
         // ⑤ 곧음 — 바뀐 구간 한가운데 변(p2→p3 · 두 끝에서 46 m 넘게 안)에서 아랫단 링 1~20(1~10단)은 «전부 1:0.8로 지은 판»의 같은 링과 같은 선 위
@@ -298,6 +322,56 @@ static class ZoneRulerCheck
                       ns == 0 && cr == 0 && vq.JumpsOther == 0 && vq.JumpsWall == 0 && WallRunBuilder.LastExtraWall == 0,
                       $"안 단순 {ns} · 건넘 {cr} · 이음 {vq.JumpsOther}/{vq.JumpsWall} · 옹벽 오판 {WallRunBuilder.LastExtraWall}");
             }
+        }
+
+        // ⑪ ★[v112.7 · JACK 1104 17:51 «아직도 미세하게 짜글거려»] 띠 안에 자의 볼록 모퉁이가 있는 판 — 창이 모퉁이를 걸치지 않고(모퉁이에 창 끝)
+        //   링에 «Z» 턱(1.5 m 길 안에서 10° 넘게 반대로 두 번 꺾임) 0. 재현: T0에서 9.6 m 안에 모퉁이 p2(τ 81) — 1묶음 10 m 창이 0.4 m 넘어 걸치던 자리.
+        {
+            var z11 = new SlopeZone { T0 = 81 - 9.6, T1 = (81 - 9.6 + 125) % tot, Ref = ruler };
+            z11.Rules.Add((0, 0.8, 1.0)); z11.Normalize();
+            var zs11 = new List<SlopeZone> { z11 };
+            var bl11 = new ZoneBlend(zs11, pad, GradingGeometry.CumLen2D(pad), P(400), 1.5, 5, 1, true, prof);
+            int straddle = 0, staged11 = 0; string stTxt = "";
+            foreach (var en in bl11.Ends.Where(x => x.Any))
+            {
+                if (!en.Staged) continue;
+                staged11++;
+                var cs = CornersIn(en, z11);
+                var eb = Enumerable.Range(0, en.Elig.Length).Where(b => en.Elig[b]).ToList();
+                foreach (int bb in eb)
+                    foreach (double c in cs)
+                        if (c > en.Ob[bb] + 1e-9 && c < en.Ob[bb] + en.Lb[bb] - 1e-9) { straddle++; if (stTxt.Length == 0) stTxt = $"{(en.AtT0 ? "T0" : "T1")} {bb + 1}단 창 {en.Ob[bb]:0.##}~{en.Ob[bb] + en.Lb[bb]:0.##} m · 모퉁이 {c:0.##} m"; }
+            }
+            var v11 = GradingGeometry.Build(pad, g, P(400), true, zs11);
+            int zjog = 0; string zAt = "";
+            for (int k = 1; k <= 40 && k < v11.Rings.Count; k++)
+            {
+                var r = new List<Point3>();
+                foreach (var q in v11.Rings[k]) if (r.Count == 0 || Math.Abs(r[^1].X - q.X) + Math.Abs(r[^1].Y - q.Y) > 0.05) r.Add(q);
+                while (r.Count > 3 && Math.Abs(r[^1].X - r[0].X) + Math.Abs(r[^1].Y - r[0].Y) <= 0.05) r.RemoveAt(r.Count - 1);   // 닫는 점(처음과 겹침)
+                int n = r.Count;
+                var turn = new double[n]; var segL = new double[n];
+                for (int i = 0; i < n; i++)
+                {
+                    var q0 = r[(i - 1 + n) % n]; var q1 = r[i]; var q2 = r[(i + 1) % n];
+                    turn[i] = Math.Atan2((q1.X - q0.X) * (q2.Y - q1.Y) - (q1.Y - q0.Y) * (q2.X - q1.X), (q1.X - q0.X) * (q2.X - q1.X) + (q1.Y - q0.Y) * (q2.Y - q1.Y)) * 180 / Math.PI;
+                    segL[i] = Math.Sqrt((q2.X - q1.X) * (q2.X - q1.X) + (q2.Y - q1.Y) * (q2.Y - q1.Y));
+                }
+                for (int i = 0; i < n; i++)
+                {
+                    if (Math.Abs(turn[i]) <= 10) continue;
+                    double walk = 0;
+                    for (int s = 1; s < n && walk < 1.5; s++)
+                    {
+                        walk += segL[(i + s - 1) % n];
+                        int j = (i + s) % n;
+                        if (walk >= 1.5) break;
+                        if (Math.Abs(turn[j]) > 10 && Math.Sign(turn[j]) != Math.Sign(turn[i])) { zjog++; if (zAt.Length == 0) zAt = $"링 {k} ({r[i].X - OX:F1},{r[i].Y - OY:F1}) {turn[i]:0}° → {turn[j]:0}°"; break; }
+                    }
+                }
+            }
+            check("S202 ⑪띠 안 볼록 모퉁이 — 창이 모퉁이를 안 걸침 · 링 1~40에 «Z» 턱 0", staged11 > 0 && straddle == 0 && zjog == 0,
+                  $"묶음 끝 {staged11} · 걸친 창 {straddle} {stTxt} · Z 턱 {zjog} {zAt}");
         }
     }
 }

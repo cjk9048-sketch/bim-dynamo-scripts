@@ -670,6 +670,8 @@ public sealed class ImportGisCommand
             ObjectId surfId = TinSurface.Create(db, useName);
             using var tr = db.TransactionManager.StartTransaction();
             var surf = (TinSurface)tr.GetObject(surfId, OpenMode.ForWrite);
+            // ★[v113.0 · JACK 1104 «원지반이 0 레이어에 생김»] 종전엔 레이어를 안 정해 그때 현재 레이어에 생겼다 → 서버 · DXF · 등고선 세 길 모두 «DH-원지반»
+            try { surf.LayerId = EnsureLayer(db, tr, GroundSurfaceLayer, 7); } catch { }
             // [JACK 0731 — 지표면이 뭉뚱그려짐] 정밀도 3종 세트:
             //   ① weeding 사실상 끔(0.01m·0.1°) — 원본 등고선 정점을 버리지 않는다.
             //   ② supplementing 5m(중간종거 0.1m) — 등고선을 따라 점을 보충해 삼각형을 잘게.
@@ -756,6 +758,9 @@ public sealed class ImportGisCommand
     /// <summary>지표면 스타일 이름 — <b>간격을 이름에 넣지 않는다</b>(검토 0901).
     /// <para>예전 이름은 "(5·25)"였는데 간격을 5·1로 바꾸자 이름만 거짓말이 됐다.</para></summary>
     internal const string GroundStyleName = "DH-원지반 등고선";
+
+    /// <summary>★[v113.0 · JACK 1104] 원지반 지표면 레이어 — 서버 · DXF · 등고선 세 길 같음.</summary>
+    internal const string GroundSurfaceLayer = "DH-원지반";
 
     /// <summary>옛 이름 — 이미 이 이름으로 만들어진 도면이 있어 <b>찾아서 이어 쓴다</b>.
     /// <para>안 그러면 스타일 목록에 둘이 남고, 사람은 어느 것이 사는지 모른다.</para></summary>

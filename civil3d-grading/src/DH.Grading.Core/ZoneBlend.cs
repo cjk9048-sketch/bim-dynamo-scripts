@@ -399,27 +399,73 @@ internal sealed class ZoneBlend
             return need;                                         // 한도만으로 든 길이(L 바닥은 부르는 쪽이)
         }
         double room = half - e.O;
-        static double Total(List<(int I, int J, double Len)> st) { double t = 0; foreach (var s in st) t += s.Len; return t; }
-        List<(int I, int J, double Len)> Plan(double lam)
+        // ★★[v112.7 · JACK 1104 17:51 «아직도 미세하게 짜글거려»] 자의 볼록 모퉁이(마이터 머리 · 계획 꼭짓점) — 창이 모퉁이를 걸치지 않게.
+        //   모퉁이 바깥 쐐기의 점은 모두 모퉁이 한 매개로 투영된다(자 위 길이 0) → 걸친 창은 모퉁이까지 섞다 쐐기에서 멈추고 건너편에서 남은 몫을 짧게 몰아 섞어
+        //   링마다 «Z» 턱이 쐐기 경계 위에 줄지어 섰다(1104 17:47 현장: T0에서 9.36m 안 모퉁이 · 1묶음 창 9.8m → 남은 0.44m에 6단 링 0.79m 턱).
+        var corners = new List<double>();   // E에서 안쪽으로 잰 볼록 모퉁이 자리(띠 자리 안)
         {
-            var st = new List<(int, int, double)>();
-            int i = 0; double li = System.Math.Max(L0, LenOf(0, 0, lam));
-            for (int j = 1; j < elig.Count; j++)
+            int m = cum.Length - 1;
+            double sa2 = 0;
+            for (int i2 = 0; i2 < m; i2++) sa2 += poly[i2].X * poly[(i2 + 1) % m].Y - poly[(i2 + 1) % m].X * poly[i2].Y;
+            for (int i2 = 0; i2 < m; i2++)
             {
-                double lj = System.Math.Max(L0, LenOf(i, j, lam));
-                if (lj <= li + 1e-12) { li = lj; continue; }
-                st.Add((i, j - 1, li)); i = j; li = System.Math.Max(L0, LenOf(j, j, lam));
+                var pv = poly[(i2 - 1 + m) % m]; var pc = poly[i2]; var nx = poly[(i2 + 1) % m];
+                double ax = pc.X - pv.X, ay = pc.Y - pv.Y, bx = nx.X - pc.X, by = nx.Y - pc.Y;
+                double lA = System.Math.Sqrt(ax * ax + ay * ay), lB = System.Math.Sqrt(bx * bx + by * by);
+                if (lA < 1e-9 || lB < 1e-9) continue;
+                if ((ax * bx + ay * by) / (lA * lB) >= System.Math.Cos(0.5 * System.Math.PI / 180)) continue;   // 곧은 꼭짓점(FanRegions와 같은 문턱)
+                double cr = ax * by - ay * bx;
+                if (!(sa2 > 0 ? cr > 0 : cr < 0)) continue;                                                    // 오목은 아래 «오목 꼭짓점 곁» 규칙이 맡는다
+                double d = atT0 ? Wrap(cum[i2] - E, tot) : Wrap(E - cum[i2], tot);
+                if (d > e.O + 1e-9 && d < e.O + room - 1e-9) corners.Add(d);
             }
-            st.Add((i, elig.Count - 1, li));
-            // ★[설치 전 검토 중간 · 1104] 묶음마다 L 바닥 탓에 창 합이 띠 하나 늘림(need)보다 길어 넘치면 — 한도를 늦추기 전에 바닥을 푼다:
-            //   윗 묶음부터 제 한도 길이(LenOf)까지 줄여 남은 자리에 맞춘다(아랫 묶음은 되도록 L 그대로 · 마지막 묶음만 줄이던 것의 일반화).
-            double over = Total(st) - room;
-            for (int s = st.Count - 1; s >= 0 && over > 1e-9; s--)
+            corners.Sort();
+        }
+        double Total(List<(int I, int J, double S, double Len)> st) => st.Count == 0 ? 0 : st[^1].S + st[^1].Len - e.O;
+        List<(int I, int J, double S, double Len)> Plan(double lam)
+        {
+            var st = new List<(int, int, double, double)>();
+            double a = e.O, lastPin = e.O; int i = 0, ci = 0;
+            while (i < elig.Count)
             {
-                var (sI, sJ, sLen) = st[s];
-                double cut = System.Math.Min(over, sLen - System.Math.Max(LenOf(sI, sJ, lam), 1e-9));
-                if (cut <= 0) continue;
-                st[s] = (sI, sJ, sLen - cut); over -= cut;
+                int j = i; double li = System.Math.Max(L0, LenOf(i, i, lam));
+                while (j + 1 < elig.Count)
+                {
+                    double lj = System.Math.Max(L0, LenOf(i, j + 1, lam));
+                    if (lj <= li + 1e-12) { li = lj; j++; } else break;
+                }
+                while (ci < corners.Count && corners[ci] <= a + 1e-9) ci++;
+                if (ci < corners.Count && a + li > corners[ci] + 1e-9)
+                {
+                    // 모퉁이를 걸친다 — 모퉁이 앞에 드는 단만(한도 안) 모퉁이에서 끝내고, 다음 묶음은 모퉁이에서 시작
+                    double c = corners[ci], r1 = c - a;
+                    int jj = j;
+                    while (jj >= i && LenOf(i, jj, lam) > r1 + 1e-12) jj--;
+                    if (jj >= i) { st.Add((i, jj, a, r1)); i = jj + 1; }
+                    else if (st.Count > 0) { var pr = st[^1]; st[^1] = (pr.Item1, pr.Item2, pr.Item3, c - pr.Item3); }   // 한 단도 안 든다 — 앞 창을 모퉁이까지(완만해짐)
+                    a = c; lastPin = c;                                                                               // 첫 창이면 모퉁이까지 앞 여백(바깥 값)
+                    continue;
+                }
+                st.Add((i, j, a, li)); a += li; i = j + 1;
+            }
+            // ★[설치 전 검토 중간 · 1104] 넘치면 — 한도를 늦추기 전에 바닥을 푼다: 마지막 모퉁이 뒤 창만 윗 묶음부터 제 한도 길이(LenOf)까지 줄여 다시 잇달아 놓는다
+            //   (모퉁이에 맞춘 창 끝은 움직이지 않는다)
+            double over = (a - e.O) - room;
+            if (over > 1e-9)
+            {
+                int k0 = st.FindIndex(s => s.Item3 >= lastPin - 1e-9);
+                if (k0 >= 0)
+                {
+                    for (int s = st.Count - 1; s >= k0 && over > 1e-9; s--)
+                    {
+                        var (sI, sJ, sS, sLen) = st[s];
+                        double cut = System.Math.Min(over, sLen - System.Math.Max(LenOf(sI, sJ, lam), 1e-9));
+                        if (cut <= 0) continue;
+                        st[s] = (sI, sJ, sS, sLen - cut); over -= cut;
+                    }
+                    double x = st[k0].Item3;
+                    for (int s = k0; s < st.Count; s++) { var (sI, sJ, _, sLen) = st[s]; st[s] = (sI, sJ, x, sLen); x += sLen; }
+                }
             }
             return st;
         }
@@ -471,12 +517,11 @@ internal sealed class ZoneBlend
         // 창 자리
         var ob = new double[_nb]; var lb = new double[_nb];
         var cuts = new List<double> { 0, e.O };
-        double a = e.O;
-        foreach (var (I, J, Len) in plan)
+        double a = e.O + Total(plan);
+        foreach (var (I, J, S, Len) in plan)
         {
-            for (int q = I; q <= J; q++) { ob[elig[q]] = a; lb[elig[q]] = Len; }
-            cuts.Add(a); cuts.Add(a + Len);
-            a += Len;
+            for (int q = I; q <= J; q++) { ob[elig[q]] = S; lb[elig[q]] = Len; }
+            cuts.Add(S); cuts.Add(S + Len);
         }
         // 자의 부채꼴 안에 창 끝이 떨어지면 종전 늘림으로(밀기 · 줄이기는 띠 하나에만 맞춰 짰다)
         if (z.Ref != null)
@@ -493,7 +538,7 @@ internal sealed class ZoneBlend
         e.Cuts = cu.ToArray();
         // 가장 가파른 면(묶음마다 그 묶음 몫 / ℓ — Steepness와 같은 gap 셈)
         e.Steepest = double.PositiveInfinity; e.SteepBench = -1;
-        foreach (var (I, J, Len) in plan)
+        foreach (var (I, J, _, Len) in plan)
         {
             double acc = 0; int q = I;
             for (int k = elig[I]; k < nf; k++)
@@ -518,16 +563,14 @@ internal sealed class ZoneBlend
             }
         }
         var sb = new System.Text.StringBuilder();
-        double a2 = e.O;
         for (int s = 0; s < plan.Count; s++)
         {
-            var (I, J, Len) = plan[s];
+            var (I, J, S, Len) = plan[s];
             if (s < 3 || s == plan.Count - 1)
-                sb.Append($"{(s > 0 ? " · " : "")}{elig[I] + 1}{(J > I ? $"~{elig[J] + 1}" : "")}단 {a2:0.#}~{a2 + Len:0.#}m");
+                sb.Append($"{(s > 0 ? " · " : "")}{elig[I] + 1}{(J > I ? $"~{elig[J] + 1}" : "")}단 {S:0.#}~{S + Len:0.#}m");
             else if (s == 3) sb.Append(" · …");
-            a2 += Len;
         }
-        why.Append($" · 단마다 띠(묶음 {plan.Count}: {sb})" +
+        why.Append($" · 단마다 띠(묶음 {plan.Count}: {sb}{(corners.Count > 0 ? $" · 모퉁이 {corners.Count}곳에 창 끝 맞춤" : "")})" +
                    (e.Warn ? $" · ⚠묶음을 구간 절반({half:0.##}m)에 넣느라 한도를 {lamUse:0.###}배로 늦췄다 — 옹벽 판정 한도 가까이 가파르다" : ""));
         return true;
     }

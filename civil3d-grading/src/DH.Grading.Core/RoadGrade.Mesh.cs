@@ -357,10 +357,18 @@ public static partial class RoadGrade
         }
         // ★★★[v113.1 · JACK 1104 A1 «급한 굽은 안쪽도 선 면으로»] 둘레에 남은 주름 틈 — 바깥 둘레로 열린 홈(주름이 데이라잇까지 감) · 갈림 꼭짓점이 낀 속 구멍.
         //   둘레 고리(갈림 꼭짓점은 시계 방향 첫 변으로)에서 주름 끝점이 잇달아 놓인 줄마다 앞뒤 둘레 점을 이은 현으로 닫아 그 꼭짓점만으로 가름 — 주름 끝점이 둘레에 안 남으면 안 돎(비트 같음).
+        // ★[검토 M3] 홈 입 현의 두 끝은 땅 위 둘레 점(데이라잇 · 가장자리 옹벽 끝 · 땅 따라 늘인 점)이어야 — 현은 땅 높이 점을 넣어 땅을 따라감
+        var dayV = new HashSet<int>();
+        if (creaseV.Count > 0)
+            foreach (var kv in rails)
+            {
+                if (kv.Key.Pts.Count > 0 && kv.Key.End is RayEnd.Daylight or RayEnd.EdgeWall) { var p = kv.Key.Pts[^1]; dayV.Add(vt.Id(p.X, p.Y, p.Z)); }
+                foreach (var p in kv.Value) if (p.K == -2) dayV.Add(vt.Id(p.X, p.Y, p.Z));
+            }
         if (creaseV.Count > 0)
             for (int pass = 0; pass < 3; pass++)
             {
-                var pk = Pockets(vt, tl, creaseV);
+                var pk = Pockets(vt, tl, creaseV, dayV, ground);
                 if (pk.Count == 0) break;
                 foreach (var h in pk)
                 {
@@ -509,19 +517,25 @@ public static partial class RoadGrade
                 if (Cr(a, b, c) / lm >= CivilSafeMesh.ThinH) continue;
                 var (u, v, ls) = l1 <= l2 && l1 <= l3 ? (a, b, l1) : l2 <= l3 ? (b, c, l2) : (c, a, l3);
                 if (ls >= Tol) continue;
+                if (Math.Abs(vt.Z[u] - vt.Z[v]) > 0.01) continue;   // ★[검토 M4] 두 점 높이가 1 cm 넘게 다르면(수직 면 곁) 안 접음
                 if (creaseV.Contains(u) && !creaseV.Contains(v)) (u, v) = (v, u);   // 남길 점 = v(주름 끝점이면 그것)
-                // u → v: u를 쓰는 세모(이 둘을 다 쓰면 사라짐) 방향 확인
-                bool ok = true; var gone = new List<int>();
-                foreach (int t in at[u])
+                // u → v: u를 쓰는 세모(이 둘을 다 쓰면 사라짐) 방향 확인 — 안 되면 반대(v → u)로(한쪽만 보면 이웃이 바늘이 되는 자리를 못 접었다 — 벽 끝 마구리 계측)
+                bool Can(int uu, int vv)
                 {
-                    if (dead.Contains(t)) continue;
-                    var (p0, p1, p2) = tl[t];
-                    if (p0 == v || p1 == v || p2 == v) { gone.Add(t); continue; }
-                    int r0 = p0 == u ? v : p0, r1 = p1 == u ? v : p1, r2 = p2 == u ? v : p2;
-                    double cr = Cr(r0, r1, r2), lm2 = Math.Max(L(r0, r1), Math.Max(L(r1, r2), L(r2, r0)));
-                    if (!(cr / lm2 >= CivilSafeMesh.ThinH)) { ok = false; break; }
+                    foreach (int t in at[uu])
+                    {
+                        if (dead.Contains(t)) continue;
+                        var (p0, p1, p2) = tl[t];
+                        if (p0 == vv || p1 == vv || p2 == vv) continue;
+                        int r0 = p0 == uu ? vv : p0, r1 = p1 == uu ? vv : p1, r2 = p2 == uu ? vv : p2;
+                        double cr = Cr(r0, r1, r2), lm2 = Math.Max(L(r0, r1), Math.Max(L(r1, r2), L(r2, r0)));
+                        if (!(cr / lm2 >= CivilSafeMesh.ThinH)) return false;
+                    }
+                    return true;
                 }
-                if (!ok) continue;
+                if (!Can(u, v)) { if (!Can(v, u)) continue; (u, v) = (v, u); }
+                var gone = new List<int>();
+                foreach (int t in at[u]) { if (dead.Contains(t)) continue; var (p0, p1, p2) = tl[t]; if (p0 == v || p1 == v || p2 == v) gone.Add(t); }
                 foreach (int t in at[u])
                 {
                     if (dead.Contains(t)) continue;
@@ -545,7 +559,7 @@ public static partial class RoadGrade
     /// <summary>★★[v113.1 · A1] 둘레에 남은 주름 틈 고리 — 둘레 변(세모 하나)을 방향 따라 잇되 갈림 꼭짓점에서는 들어온 변에서 시계 방향 첫 변으로(면 하나씩 감음).
     /// 시계 방향 고리(속 구멍)는 주름 끝점이 끼면 통째로 · 반시계 고리(바깥 둘레)는 주름 끝점이 잇달아 놓인 줄마다 앞뒤 둘레 점까지 — 앞뒤 점을 이은 현이 둘레 변과 안 엇갈리고
     /// 고리가 시계 방향(바깥으로 패인 홈)일 때만(아니면 앞뒤로 한 점씩 넓혀 다시 · 여덟 번까지). 돌려줌 = 시계 방향 고리들(속 구멍과 같은 꼴).</summary>
-    static List<List<int>> Pockets(VertTable vt, List<(int A, int B, int C)> tl, HashSet<int> creaseV)
+    static List<List<int>> Pockets(VertTable vt, List<(int A, int B, int C)> tl, HashSet<int> creaseV, HashSet<int> dayV, IGroundSurface ground)
     {
         var und = new Dictionary<(int, int), int>();
         foreach (var (a, b, c) in tl)
@@ -600,9 +614,23 @@ public static partial class RoadGrade
                     for (int q = i - widen; q <= j + widen; q++) ring.Add(loop[((q % n) + n) % n]);
                     if (Area2(ring) >= 0) continue;
                     int pa = ring[^1], pb = ring[0];
+                    if (!dayV.Contains(pa) || !dayV.Contains(pb)) continue;   // ★[검토 M3] 입은 땅 위 둘레 점끼리만
                     bool hit = false;
                     foreach (var (bu, bv) in bnd) if (bu != pa && bu != pb && bv != pa && bv != pb && Cross(vt, pa, pb, bu, bv)) { hit = true; break; }
                     if (hit) continue;
+                    // ★[검토 M3] 현을 땅 높이 점으로 나눔(가운데 땅과 1 cm 안이 될 때까지) — 못 물으면 이 홈은 안 닫음
+                    var chord = new List<int>(); bool okG = true;
+                    void Sub(double xa, double ya, double za, double xb, double yb, double zb, int depth)
+                    {
+                        if (!okG || depth > 12 || Math.Sqrt(Sq(xb - xa) + Sq(yb - ya)) < 0.02) return;
+                        double xm = (xa + xb) / 2, ym = (ya + yb) / 2;
+                        if (!ground.TryGetElevation(xm, ym, out double gm)) { okG = false; return; }
+                        if (Math.Abs(gm - (za + zb) / 2) <= LineTol) return;
+                        Sub(xa, ya, za, xm, ym, gm, depth + 1); chord.Add(vt.Id(xm, ym, gm)); Sub(xm, ym, gm, xb, yb, zb, depth + 1);
+                    }
+                    Sub(vt.X[pa], vt.Y[pa], vt.Z[pa], vt.X[pb], vt.Y[pb], vt.Z[pb], 0);
+                    if (!okG) continue;
+                    ring.AddRange(chord);
                     res.Add(ring);
                     break;
                 }
