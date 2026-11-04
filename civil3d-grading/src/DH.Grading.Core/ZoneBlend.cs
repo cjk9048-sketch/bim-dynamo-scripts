@@ -271,7 +271,10 @@ internal sealed class ZoneBlend
         double need = Steepness(e, e.L, out _, out _);
         // ★★[v112.7 · JACK 1104 «직각 · 사면변환 짜글짜글» → 단마다 띠] 늘려야 할 때 띠 하나를 통째로 늘리면(1104 현장: 83단 중 81단 탓 10 → 56.77m)
         //   아랫단까지 구간 전체가 띠가 되어 바뀐 사면선이 곧은 데가 없었다 → 단을 묶음으로 나눠 잇달아 섞는다(묶음 띠 — 안 되면 종전 늘림).
-        if (need > e.L + 1e-9 && TryStage(e, e.L, half, z, poly, cum, atT0, E, tot, why)) { e.Note = why.ToString(); return e; }
+        //   ★[v112.7 · JACK 1104 17:51] 먼저 창 끝을 자의 볼록 모퉁이에 맞춘 묶음 — 다짐(⚠ · 가파름)에 걸리면 맞추지 않은 묶음(v112.6) — 그것도 안 되면 종전 늘림
+        //     (1104 14:28 판: 모퉁이에 맞추면 한도를 더 늦춰야 해 종전 늘림으로 떨어져 곧음을 잃었다)
+        if (need > e.L + 1e-9 && (TryStage(e, e.L, half, z, poly, cum, atT0, E, tot, why, pin: true) ||
+                                  TryStage(e, e.L, half, z, poly, cum, atT0, E, tot, why, pin: false))) { e.Note = why.ToString(); return e; }
         if (need > e.L + 1e-9)
         {
             double cap = half - e.O;
@@ -346,7 +349,7 @@ internal sealed class ZoneBlend
     /// <para>이웃 링은 안 건넌다 — 링 e+1과 e의 거리 차는 한 단의 사면폭 · 소단폭(두 값 사이)이라 어느 자리에서나 양수다.
     /// 자에 부채꼴(라운드 자)이 있고 창 끝이 그 안이면 종전 늘림으로 돌아간다(false).</para></summary>
     private bool TryStage(End e, double L0, double half, SlopeZone z, IReadOnlyList<Point3> poly, double[] cum, bool atT0, double E, double tot,
-                          System.Text.StringBuilder why)
+                          System.Text.StringBuilder why, bool pin)
     {
         if (!(L0 > 1e-9) || half - e.O < L0 - 1e-9) return false;
         // 설정 길이(10m)를 다 못 쓰는 짧은 구간(L = 구간/3)은 종전 늘림 — 거기서 묶으면 아랫단이 늘림보다 오히려 짧아(가팔라) 곧게 할 몫이 없다
@@ -402,7 +405,8 @@ internal sealed class ZoneBlend
         // ★★[v112.7 · JACK 1104 17:51 «아직도 미세하게 짜글거려»] 자의 볼록 모퉁이(마이터 머리 · 계획 꼭짓점) — 창이 모퉁이를 걸치지 않게.
         //   모퉁이 바깥 쐐기의 점은 모두 모퉁이 한 매개로 투영된다(자 위 길이 0) → 걸친 창은 모퉁이까지 섞다 쐐기에서 멈추고 건너편에서 남은 몫을 짧게 몰아 섞어
         //   링마다 «Z» 턱이 쐐기 경계 위에 줄지어 섰다(1104 17:47 현장: T0에서 9.36m 안 모퉁이 · 1묶음 창 9.8m → 남은 0.44m에 6단 링 0.79m 턱).
-        var corners = new List<double>();   // E에서 안쪽으로 잰 볼록 모퉁이 자리(띠 자리 안)
+        var corners = new List<double>();   // E에서 안쪽으로 잰 볼록 모퉁이 자리(띠 자리 안) — pin이 아니면 비움(v112.6 묶음 그대로)
+        if (pin)
         {
             int m = cum.Length - 1;
             double sa2 = 0;

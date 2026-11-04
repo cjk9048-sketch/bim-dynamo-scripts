@@ -216,6 +216,14 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "back")
     return fails == 0 ? 0 : 1;
 }
 
+// ★[v113.1 · JACK 1104 «한다»] BLOCKTEST_ONLY=budget — 부지 둘레 땅으로 잰 수직 예산(S213)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "budget")
+{
+    VerticalBudgetCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
 // ★[v112.7 · JACK 1104 «직각 · 사면변환 짜글짜글»] BLOCKTEST_ONLY=ruler — 구간 자 위 최근접 호길이 = 전수 셈 · 전이 띠 링 턱 0(S202)만
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "ruler")
 {
@@ -253,6 +261,7 @@ OutsideFixCheck.Run(Check, Path.Combine(AppContext.BaseDirectory, "..", "..", ".
 ExtendCheck.Run(Check);   // ★[v103.1.14] S160 — 맞닿은 옹벽 이어 짓기(판정 · 측선 방향 · 이은 폴리곤 · 겹침 · 목록 판 3 · 번호 물려받기)
 ZoneBlendCheck.Run(Check);   // ★[v103.1.15] S161 — 사면 구간 끝 전이 띠(이음 0 · 링 · 거리 · 띠 밖 그대로 · 옹벽 판정 · 맞닿음 · 옛 번들 · 시간)
 ZoneRulerCheck.Run(Check);   // ★[v112.7 · JACK 1104] S202 — 구간 자 위 최근접 호길이(격자 색인 = 전수 셈) · 전이 띠 링 턱 0
+VerticalBudgetCheck.Run(Check);   // ★[v113.1 · JACK 1104] S213 — 부지 둘레 땅으로 잰 수직 예산(먼 산 · 닿는 언덕 · 모든 방향 데이라잇 · 성토 · 대소단 · 띠)
 PureWallsCheck.Run(Check);   // ★[v103.2] S162 · S163 — 옹벽이 든 순수면(뚜껑 · 고르기 · 목록 판 4 · 걷기)
 ExcavCheck.Run(Check);   // ★[v103.3] S164 · S166 · S167 — 옹벽 뒷채움 터파기(앞면 선 · 재기 · 띠 · 설정 · 목록 판 5 · 아래 껍질)
 WallSectionCheck.Run(Check);   // ★[v104] S168 — 옹벽 형식별 일반단면(첫 표 · 단면 넓이 · 표 고르기 · 터파기 범위 · 기록)

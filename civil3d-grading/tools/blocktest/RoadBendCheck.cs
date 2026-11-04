@@ -135,15 +135,23 @@ static class RoadBendCheck
             if (!tight) Check($"{tag} — 흘러내림 · 끝 합치기 안 돎(주름 높이가 맞는 길 = 옛 그대로)", set != null && set.Slumped == 0 && set.Merged == 0, $"흘러내림 {set?.Slumped} · 끝 합침 {set?.Merged}");
         }
         // ── ⑪ [JACK 1104 A안 «주름 지퍼»] 두 다리 주름 끝이 한 주름선에 엇갈려 놓이는 자리(R 8 · 내림 17 % · 절토 4 m) — 지퍼가 돌고 선 면 검사 통과 · 조각 1(지퍼 없으면 못 가름 · 칸 면) ──
+        // ⑪ 절토 꼴의 0.55 m 이웃 차는 짝 단면(1.6 cm · 소단 있는 단면 ↔ 없는 단면) 경계 수직면이다 — 옛 길에도 같은 꼴(실제 도면 선 면 66곳 · 최대 1.04 m)이 있고 S182가 «수직면 ≤ 단높이»로 잰다 → 한도 = 단높이(5 m)
+        foreach (var (tag, R, g, drop, wantZip, lim) in new (string, double, double, double, bool, double)[]
         {
-            var inp = Bend(8, 0.17, -4); inp.Cut = new RoadGrade.SlopeRule { Slope = 1.5 };
+            ("⑪ 엇갈린 두 다리 주름(R 8 · 17 % · 절토 4 m)", 8, 0.17, -4, true, 5.0),
+            ("⑪ 엇갈린 두 다리 주름(R 8 · 12 % · 성토 8 m)", 8, 0.12, 8, true, 0.3),
+            ("⑪ 완만한 곡선(R 30 · 17 % · 성토 8 m — 흘러내림 없음)", 30, 0.17, 8, false, 0.3),
+        })
+        {
+            var inp = Bend(R, g, drop); inp.Cut = new RoadGrade.SlopeRule { Slope = 1.5 };
             var r = RoadGrade.Run(inp);
             var set = RoadGrade.BuildSections(new RoadGrade.RayCtx(inp, r));
             var mt = RoadGrade.MeshFromSections(set, inp.Base, out var rep);
             var tris = RoadGrade.ExactSurface(inp, r, out string note, out _);
             var (j, jx, jy) = Jump(tris);
-            Check("⑪ 엇갈린 두 다리 주름(R 8 · 17 % · 절토 4 m) — 주름 지퍼가 변을 나눠 두 둘레를 한 줄로 · 선 면 검사 통과 · 조각 1",
-                rep.Zipped > 0 && rep.Ok && !note.StartsWith("⚠") && Pieces(tris) == 1, $"지퍼 {rep.Zipped} · {rep.Text[..Math.Min(120, rep.Text.Length)]} · 조각 {Pieces(tris)} · 이웃 차 최대 {j:F3} m @({jx:F2},{jy:F2})");
+            bool zipOk = wantZip ? rep.Zipped > 0 : rep.Zipped == 0 && set.Slumped == 0;
+            Check(tag + (wantZip ? " — 주름 지퍼가 변을 나눠 두 둘레를 한 줄로" : " — 지퍼 · 흘러내림 안 돎(옛 길)") + $" · 선 면 검사 통과(바늘 · 열린 끝 0) · 조각 1 · 5 cm 이웃 높이 차 ≤ {lim} m",
+                zipOk && rep.Ok && !note.StartsWith("⚠") && Pieces(tris) == 1 && j <= lim, $"지퍼 {rep.Zipped} · 흘러내림 {set.Slumped} · {rep.Text[..Math.Min(120, rep.Text.Length)]} · 조각 {Pieces(tris)} · 이웃 차 최대 {j:F3} m @({jx:F2},{jy:F2})");
         }
         // ── ⑨ [검토 H2] 경사진 주름(R 20 · 내림 8 % · 절토 — 급한 곡선 아님) — 곧은 들머리 · 날머리 광선(곡선에서 2 × 단면 간격 밖)은 흘러내림을 켜도 비트 같음(계단식 짧아짐 없음) ──
         {

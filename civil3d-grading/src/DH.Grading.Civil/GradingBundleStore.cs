@@ -137,7 +137,10 @@ public static class GradingBundleStore
     /// 노리선 · 인프라웍스 · 클릭선 · 터파기가 번들 제원으로 링을 다시 뜨므로, 이 값이 없으면 면과 다른 기하가 나온다.
     /// 옛 번들(v12 이하)은 <b>−1(모름)</b>로 읽고 그대로 다시 쓴다 — 기하는 띠 없음(옛 면과 같은 기하), 세션 설정으로 되살릴 때만 기본값(재검토 중간 4:
     /// 0으로 읽으면 여러 구역 도면에서 다시 짓지 않은 옛 구역이 0으로 굳어 다음 열기에 세션 값을 0으로 만든다).</para></summary>
-    public const int Version = 13;
+    /// <para>★★★[v113.1 · JACK 1104 «한다»] <b>v14 = params 끝(전이 띠 길이 뒤)에 방향별 수직 예산</b>(<c>MaxRiseCut</c> · <c>MaxRiseFill</c> — 부지 둘레 땅으로 잰 값).
+    /// 다시 짓는 판(클릭선 · 노리선 · 인프라웍스 · 옹벽 자리 · 터파기)이 정지면과 같은 링 수를 뜬다(종전엔 담지 않아 0 → 합친 MaxRise로 더 많이 떴다).
+    /// 옛 번들(v13 이하)은 0으로 읽는다 — 종전과 같이 MaxRise로 물러난다.</para>
+    public const int Version = 14;
 
     /// <summary>[v4] 구역 전체 저장 — 헤더(서명·버전·구역수) 뒤에 구역 본문을 차례로.</summary>
     public static void SaveAll(Database db, Transaction tr, IReadOnlyList<GradingBundle> regions)
@@ -243,7 +246,7 @@ public static class GradingBundleStore
     private static GradingBundle ReadRegion(TypedValue[] arr, ref int i, bool withGroundHandle, bool withZoneTo,
                                             bool splitBench, bool withRules, bool withClip, bool withRuns,
                                             bool withSteps = false, bool withZoneRef = false,
-                                            bool withPartial = false, bool withBlend = false)
+                                            bool withPartial = false, bool withBlend = false, bool withRise = false)
     {
         var b = new GradingBundle { PlanHandle = Str(arr, ref i), VertexCount = I32(arr, ref i) };
         b.CentroidX = Dbl(arr, ref i); b.CentroidY = Dbl(arr, ref i);
@@ -251,7 +254,7 @@ public static class GradingBundleStore
         b.BboxMaxX = Dbl(arr, ref i); b.BboxMaxY = Dbl(arr, ref i);
         b.Perimeter = Dbl(arr, ref i); b.Diagonal = Dbl(arr, ref i);
         b.Boundary = ReadPoints(arr, ref i) ?? new List<Point3>();
-        b.Params = ReadParams(arr, ref i, splitBench, withSteps, withBlend);
+        b.Params = ReadParams(arr, ref i, splitBench, withSteps, withBlend, withRise);
         b.CutHasSlope = I32(arr, ref i) != 0;
         b.FillHasSlope = I32(arr, ref i) != 0;
         b.CutFinalRing = ReadPoints(arr, ref i);
@@ -313,7 +316,9 @@ public static class GradingBundleStore
                                      // ★[v12 · JACK 0915] 옛 번들엔 칸이 없다 → 전체로 읽는다(종전 동작)
                                      withPartial: ver >= 12,
                                      // ★[v13 · v103.1.15] params 끝의 사면 구간 끝 전이 띠 길이
-                                     withBlend: ver >= 13));
+                                     withBlend: ver >= 13,
+                                     // ★[v14 · v113.1] params 끝의 방향별 수직 예산
+                                     withRise: ver >= 14));
                 return l;
             }
             if (ver == 3)   // 하위호환 — 기존 도면(v3 단일 구역)도 그대로 사용
@@ -468,11 +473,12 @@ public static class GradingBundleStore
         }
         Steps(p.CutBenchSteps); Steps(p.FillBenchSteps);
         D(p.ZoneBlendLength);   // ★[v13 · v103.1.15] 사면 구간 끝 전이 띠 길이(−1 = 옛 번들에서 온 «모름» 그대로)
+        D(p.MaxRiseCut); D(p.MaxRiseFill);   // ★[v14 · v113.1] 방향별 수직 예산(부지 둘레 땅 — 0 = 옛 번들에서 온 «모름»)
     }
 
     /// <summary>splitBench=true(v6)는 단높이·소단폭이 절토/성토 4필드, false(v5 이하)는 공용 2필드 —
     /// 옛 번들은 절토=성토=그 값으로 채운다(그때는 실제로 공용이었으므로 의미가 정확히 보존됨).</summary>
-    private static GradingParams ReadParams(TypedValue[] arr, ref int i, bool splitBench, bool withSteps = false, bool withBlend = false)
+    private static GradingParams ReadParams(TypedValue[] arr, ref int i, bool splitBench, bool withSteps = false, bool withBlend = false, bool withRise = false)
     {
         double cutBenchH, fillBenchH, cutBenchW, fillBenchW;
         if (splitBench)
@@ -506,6 +512,8 @@ public static class GradingBundleStore
         }
         // ★[v13 · v103.1.15] 사면 구간 끝 전이 띠 — 옛 번들은 −1(모름: 띠 없음으로 짓고 세션은 기본값)
         double blend = withBlend ? Dbl(arr, ref i) : -1;
+        // ★[v14 · v113.1] 방향별 수직 예산 — 옛 번들은 0(종전처럼 MaxRise로 물러남)
+        double riseCut = withRise ? Dbl(arr, ref i) : 0, riseFill = withRise ? Dbl(arr, ref i) : 0;
         return new GradingParams
         {
             CutBenchHeight = cutBenchH, FillBenchHeight = fillBenchH,
@@ -517,6 +525,7 @@ public static class GradingBundleStore
             MaxRise = maxRise,
             CutBenchSteps = cutSteps, FillBenchSteps = fillSteps,
             ZoneBlendLength = blend,
+            MaxRiseCut = riseCut, MaxRiseFill = riseFill,
         };
     }
 

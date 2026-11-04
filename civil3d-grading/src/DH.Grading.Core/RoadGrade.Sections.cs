@@ -172,6 +172,7 @@ public static partial class RoadGrade
         int cuts = 0;
         var slumped = new HashSet<Ray>(ReferenceEqualityComparer.Instance);
         var oldEnd = new Dictionary<Ray, (double X, double Y)>(ReferenceEqualityComparer.Instance);   // 자른 광선의 옛 끝(비운 자리)
+        var oldDay = new HashSet<Ray>(ReferenceEqualityComparer.Instance);   // 그 옛 끝이 땅(데이라잇 · 바탕 없음)이었던 광선
         bool SlopeOnly(Ray q)
         {
             if (q.Regime == 0 || q.EdgeWall || q.Pts.Count < 2) return false;
@@ -283,6 +284,7 @@ public static partial class RoadGrade
                 if (cutAt >= dEnd - 1e-6) continue;
                 double zc = RayZ(r, cutAt);
                 oldEnd[r] = (r.Pts[^1].X, r.Pts[^1].Y);
+                if (r.End is RayEnd.Daylight or RayEnd.NoGround) oldDay.Add(r);
                 while (r.Pts.Count > 1 && r.Pts[^1].D > cutAt + 1e-9) r.Pts.RemoveAt(r.Pts.Count - 1);
                 if (r.Pts[^1].D < cutAt - 1e-9) r.Pts.Add(new RayPt(cutAt, r.Ex + r.Nx * cutAt, r.Ey + r.Ny * cutAt, zc, -6));
                 r.End = RayEnd.Crease;
@@ -335,6 +337,13 @@ public static partial class RoadGrade
                 if (!ca) oa = (ra.Pts[^1].X, ra.Pts[^1].Y);
                 if (!cb) ob = (rb.Pts[^1].X, rb.Pts[^1].Y);
                 vac.Add((new[] { ra.Pts[^1].X, oa.X, ob.X, rb.Pts[^1].X }, new[] { ra.Pts[^1].Y, oa.Y, ob.Y, rb.Pts[^1].Y }));
+                // ★[검토 H] 비운 띠의 바깥 변이 옛 데이라잇(땅)이면 그 너머도 비운 자리(땅까지 감) — 바깥 변에서 멈추면 이긴 광선이 땅 위 공중에서 주름으로 끝나 홈이 평평하게 닫혔다(실측 79곳 중 77곳 1 cm 넘게 뜸 · 최대 1.9 m)
+                bool da = ca ? oldDay.Contains(ra) : ra.End is RayEnd.Daylight or RayEnd.NoGround, db = cb ? oldDay.Contains(rb) : rb.End is RayEnd.Daylight or RayEnd.NoGround;
+                if (da && db)
+                {
+                    double L = c.DMax;
+                    vac.Add((new[] { oa.X, oa.X + ra.Nx * L, ob.X + rb.Nx * L, ob.X }, new[] { oa.Y, oa.Y + ra.Ny * L, ob.Y + rb.Ny * L, ob.Y }));
+                }
             }
             var vgrid = new Dictionary<(int, int), List<int>>();
             for (int vi = 0; vi < vac.Count; vi++)

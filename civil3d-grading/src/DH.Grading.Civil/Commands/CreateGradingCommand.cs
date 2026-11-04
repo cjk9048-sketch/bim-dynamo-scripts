@@ -280,9 +280,9 @@ public sealed class CreateGradingCommand
             long t0 = sw.ElapsedMilliseconds;
             var ground = new CachedGroundSurface((TinSurface)tr.GetObject(groundId, OpenMode.ForRead));
             long msG = sw.ElapsedMilliseconds - t0;
-            var p = BuildParams(boundary, ground);
             var regionsPrev = mode != GradeMode.Fresh ? GradingBundleStore.TryLoadAll(db, tr, out _) : null;
             var rz = RunZones(mode, zoneOverride, zoneReplaceAll, regionsPrev, boundary);
+            var p = BuildParams(boundary, ground, rz.Cut, rz.Fill);   // ★[v113.1] 부지 둘레 땅 예산이 구간 구배를 본다 — 1단계(정지면 만들기)와 같은 구간
             var cut = rz.Cut; var fill = rz.Fill;
             // 1단계와 같다 — 부분 지정 옹벽 구간은 링 셈에서 뺀다(더하기 명세가 없을 때는 번들에서도 뺀다 · 1단계 «옛 판 부분 지정 옹벽 구간»)
             if (GradingSettings.TransitionStage >= 1)
@@ -1474,7 +1474,7 @@ public sealed class CreateGradingCommand
                     var gTinNow = (TinSurface)trS.GetObject(groundId, OpenMode.ForRead);
                     var gNow = new CachedGroundSurface(gTinNow);
                     groundReuse = gNow; groundReuseId = groundId;
-                    var pNow = BuildParams(bNow, gNow);
+                    var pNow = BuildParams(bNow, gNow, zoneOverride.Value.Cut, zoneOverride.Value.Fill);   // ★[v113.1] 견줄 제원도 같은 구간으로
                     diff = SameAsLastGrade(doc.Name, db.UnmanagedObject, planPolyId.Handle.ToString(), groundId.Handle.ToString(), p0Now, bNow, pNow,
                                            zoneOverride.Value.Cut, zoneOverride.Value.Fill, gNow.Signature, SelfCheck.PrintOf(gTinNow));
                     if (diff.Length == 0) p0IdNow = p0IdS;
@@ -1558,7 +1558,7 @@ public sealed class CreateGradingCommand
                 var ground = groundReuse != null && groundReuseId == groundId ? groundReuse : new CachedGroundSurface(groundTin); // 원지반 표고 캐싱(단수 계산용)
                 if (groundReuse != null && groundReuseId == groundId) try { DiagLog.AppendCarry("\n  ★원지반 캐시 다시 씀(되돌리기 견주기에서 뜬 것 — 한 번 덜 뜸)\n"); } catch { }
                 groundSig = ground.Signature;
-                p = BuildParams(boundary, ground);
+                // ★[v113.1] 제원(수직 예산)은 구간이 정해진 뒤에 — 부지 둘레 땅 예산이 구간 구배를 본다(아래 RunZones 바로 다음)
 
                 // [0729 — JACK 계획고 실수 감지] 경계를 따라 지반고를 표본해 '절토/성토가 필요한가'와
                 //   '경계에서 지반자료가 없는가'를 기록 — 뒤에서 데이라잇이 안 나왔을 때 조용히 넘어가지 않고
@@ -1590,6 +1590,7 @@ public sealed class CreateGradingCommand
                 //   (zoneOverride면 그것 · 아니면 옛 옹벽 선택 + «다시»면 번들 마지막 구역과 병합 — 종전 이 자리의 셈을 그대로 옮겼다)
                 var rz = RunZones(mode, zoneOverride, zoneReplaceAll, regionsPrev, boundary);
                 cutZones = rz.Cut; fillZones = rz.Fill;
+                p = BuildParams(boundary, ground, rz.Cut, rz.Fill);   // ★[v113.1] 부지 둘레 땅 예산(구간 구배까지 본다)
                 if (zoneOverride != null)
                     ed.WriteMessage($"\n[사면생성 적용] 절토 구간 {cutZones.Count} · 성토 구간 {fillZones.Count}");
                 else
@@ -4686,7 +4687,10 @@ public sealed class CreateGradingCommand
     internal static string LastBudgetNote = "";
 
     /// <summary>설정값을 읽고, 원지반/계획고 표고차로 필요한 최대 단수를 좁혀 매개변수를 만든다(+여유단).</summary>
-    public static GradingParams BuildParams(System.Collections.Generic.List<Point3> boundary, CachedGroundSurface ground)
+    /// <param name="cutZones">★[v113.1] 이 구역 절토 구간(부지 둘레 땅 예산의 «가장 완만한 구배 · 가장 넓은 소단») — null이면 전역 제원만</param>
+    /// <param name="fillZones">★[v113.1] 성토 구간 — 같음</param>
+    public static GradingParams BuildParams(System.Collections.Generic.List<Point3> boundary, CachedGroundSurface ground,
+        System.Collections.Generic.IReadOnlyList<SlopeZone>? cutZones = null, System.Collections.Generic.IReadOnlyList<SlopeZone>? fillZones = null)
     {
         double designMin = double.MaxValue, designMax = double.MinValue;
         foreach (var v in boundary) { designMin = System.Math.Min(designMin, v.Z); designMax = System.Math.Max(designMax, v.Z); }
@@ -4735,13 +4739,55 @@ public sealed class CreateGradingCommand
             double spareM = spare * System.Math.Max(s.LargerBenchHeight, 1e-6);
             maxRiseCut = System.Math.Max(needCut, 0) + spareM;
             maxRiseFill = System.Math.Max(needFill, 0) + spareM;
+            // ★★★[v113.1 · JACK 1104 «궁극적으로 고칠 수 없어?» → «한다»] 부지 둘레 땅으로 잰 예산 — 링이 닿는 거리 안의 땅만(VerticalBudget).
+            //   1104 현장: TIN 전체(5~465 m)로 83단 → 부지 곁 땅으로 몇 단. 사면 구간 전이 띠의 가파름 지킴이 안 보이는 윗단 탓에 띠를 늘리던 일이 없어진다.
+            //   번들(v14)에 담아 다시 짓는 판(클릭선 · 노리선 · 인프라웍스 · 옹벽 자리)이 같은 링을 뜬다 · 옛 번들(값 없음)은 종전 MaxRise 그대로.
+            //   못 재면 종전(TIN 전체) 값 그대로.
+            string localNote = "";
+            try
+            {
+                int Spare(double diff)
+                {
+                    int sp = 2;
+                    if (GradingSettings.MountainTerrace && GradingSettings.TerraceInterval > 1e-6)
+                        sp += (int)System.Math.Floor(diff / GradingSettings.TerraceInterval) + 2;
+                    return sp;
+                }
+                (double SMax, double WMax) Gentlest(bool up, System.Collections.Generic.IReadOnlyList<SlopeZone>? zs)
+                {
+                    double sm = up ? s.CutSlope : s.FillSlope, wm = s.BenchWidthOf(up);
+                    if (zs != null)
+                        foreach (var z in zs)
+                            if (z != null)
+                                foreach (var r in z.Rules) { sm = System.Math.Max(sm, r.Slope); if (r.BenchW >= 0) wm = System.Math.Max(wm, r.BenchW); }
+                    return (sm, wm);
+                }
+                var gc = Gentlest(true, cutZones); var gfl = Gentlest(false, fillZones);
+                double Reach(bool up, double rise)
+                {
+                    var (sm, wm) = up ? gc : gfl;
+                    return VerticalBudget.ReachOf(rise, sm, wm, s.SmallestBenchHeightOf(up), s.MinFaceRun,
+                                                  s.MountainTerrace, s.TerraceInterval, s.TerraceWidth);
+                }
+                var vb = VerticalBudget.Local(boundary, ground.AllTriangles(), Reach,
+                                              d => Spare(d) * System.Math.Max(s.LargerBenchHeight, 1e-6),
+                                              System.Math.Max(needCut, 0), System.Math.Max(needFill, 0));
+                if (!vb.Fallback)
+                {
+                    double spL = Spare(System.Math.Max(vb.NeedCut, vb.NeedFill)) * System.Math.Max(s.LargerBenchHeight, 1e-6);
+                    maxRiseCut = vb.NeedCut + spL;
+                    maxRiseFill = vb.NeedFill + spL;
+                }
+                localNote = " · ★" + vb.Note;
+            }
+            catch (System.Exception lx) { localNote = $" · ⚠부지 둘레 예산 못 잼({lx.GetType().Name}) — 종전 예산"; }
             LastBudgetNote =
                 $"[수직 예산] 원지반 {gMin:F1}~{gMax:F1}m · 계획 {designMin:F1}~{designMax:F1}m" +
                 $" → 필요 절토 {needCut:F1}m / 성토 {needFill:F1}m" +
                 $" · 배정 절토 {maxRiseCut:F1}m / 성토 {maxRiseFill:F1}m(★방향별) · 최대 {maxBenches}단" +
                 (System.Math.Abs(maxRiseCut - maxRiseFill) > 1e-6
                     ? "  (예산을 방향별로 나눴다 — 헛단 없음)"
-                    : "");
+                    : "") + localNote;
         }
         catch (System.Exception ex)
         {

@@ -1556,9 +1556,8 @@ public static partial class RoadGrade
 
     /// <summary>★★[v113.1] 세모 무더기의 Civil 바늘(가장 긴 변에 대한 높이 &lt; <see cref="CivilSafeMesh.ThinH"/>) 짧은 변 접기 — 짧은 변이 5 mm 안이면 한 끝을 다른 끝으로(좌표 그대로 같은 점) 옮기고
     /// 넓이 0 세모를 뺀다. 옮긴 점을 쓰는 다른 세모가 하나라도 바늘 · 뒤집힘이 되면 안 접음. 칸 면(벽 끝 마구리 곁 2.1 mm 두 점 — 벽 폴리선 계측) · 선 면이 같은 법. 돌려줌 = 접은 수.</summary>
-    internal static int FoldNeedles(List<WallDaylight.Tri> tris)
+    internal static int FoldNeedles(List<WallDaylight.Tri> tris, double Tol = 0.005)
     {
-        const double Tol = 0.005;
         static double Cr(Point3 o, Point3 a, Point3 b) => (a.X - o.X) * (b.Y - o.Y) - (a.Y - o.Y) * (b.X - o.X);
         static double L(Point3 a, Point3 b) => Math.Sqrt(Sq(a.X - b.X) + Sq(a.Y - b.Y));
         static double H(Point3 a, Point3 b, Point3 c) => Math.Abs(Cr(a, b, c)) / Math.Max(1e-300, Math.Max(L(a, b), Math.Max(L(b, c), L(c, a))));
