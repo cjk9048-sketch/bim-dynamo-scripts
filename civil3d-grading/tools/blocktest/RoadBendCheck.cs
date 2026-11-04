@@ -134,6 +134,17 @@ static class RoadBendCheck
                 exact && pc == 1 && j <= lim, $"{(exact ? "선 면" : "칸 면")} · 세모 {tris.Count} · 조각 {pc} · 이웃 차 최대 {j:F3} m @({jx:F2},{jy:F2}) · 흘러내림 {set?.Slumped} · 끝 합침 {set?.Merged} · {note}");
             if (!tight) Check($"{tag} — 흘러내림 · 끝 합치기 안 돎(주름 높이가 맞는 길 = 옛 그대로)", set != null && set.Slumped == 0 && set.Merged == 0, $"흘러내림 {set?.Slumped} · 끝 합침 {set?.Merged}");
         }
+        // ── ⑪ [JACK 1104 A안 «주름 지퍼»] 두 다리 주름 끝이 한 주름선에 엇갈려 놓이는 자리(R 8 · 내림 17 % · 절토 4 m) — 지퍼가 돌고 선 면 검사 통과 · 조각 1(지퍼 없으면 못 가름 · 칸 면) ──
+        {
+            var inp = Bend(8, 0.17, -4); inp.Cut = new RoadGrade.SlopeRule { Slope = 1.5 };
+            var r = RoadGrade.Run(inp);
+            var set = RoadGrade.BuildSections(new RoadGrade.RayCtx(inp, r));
+            var mt = RoadGrade.MeshFromSections(set, inp.Base, out var rep);
+            var tris = RoadGrade.ExactSurface(inp, r, out string note, out _);
+            var (j, jx, jy) = Jump(tris);
+            Check("⑪ 엇갈린 두 다리 주름(R 8 · 17 % · 절토 4 m) — 주름 지퍼가 변을 나눠 두 둘레를 한 줄로 · 선 면 검사 통과 · 조각 1",
+                rep.Zipped > 0 && rep.Ok && !note.StartsWith("⚠") && Pieces(tris) == 1, $"지퍼 {rep.Zipped} · {rep.Text[..Math.Min(120, rep.Text.Length)]} · 조각 {Pieces(tris)} · 이웃 차 최대 {j:F3} m @({jx:F2},{jy:F2})");
+        }
         // ── ⑨ [검토 H2] 경사진 주름(R 20 · 내림 8 % · 절토 — 급한 곡선 아님) — 곧은 들머리 · 날머리 광선(곡선에서 2 × 단면 간격 밖)은 흘러내림을 켜도 비트 같음(계단식 짧아짐 없음) ──
         {
             var inp = Bend(20, 0.08, -6);

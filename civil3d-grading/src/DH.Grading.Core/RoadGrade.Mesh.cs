@@ -15,6 +15,8 @@ public static partial class RoadGrade
         public int NonManifold, Flipped, TJunctions, OpenEnds, OverlapHits, Holes, Thin; public double Area;
         /// <summary>★[v113.1 · A1] 닫은 주름 홈(바깥 둘레로 열린 주름 틈 · 갈림 꼭짓점 낀 속 구멍) 수.</summary>
         public int Pockets;
+        /// <summary>★[JACK 1104 A안] 주름 지퍼 — 남의 주름 끝으로 나눈 둘레 변 수.</summary>
+        public int Zipped;
         /// <summary>★[v113.1 · A1] 접은 바늘 짧은 변(5 mm 안 두 점) 수.</summary>
         public int Collapsed;
         public string ByPart = "";
@@ -332,6 +334,9 @@ public static partial class RoadGrade
             if (Math.Abs(cr) < 1e-10) { rp.FlatDropped++; continue; }
             tl.Add(cr > 0 ? (a, b, c) : (a, c, b)); tlTag.Add(tags[q]);
         }
+        // ★★[JACK 1104 A안 «주름 지퍼»] 두 다리 주름 끝이 한 주름선 위에 1 ~ 2 cm 엇갈려 놓이면 두 둘레 줄이 서로 건너 홈 고리가 꼬였다(못 가름).
+        //   남의 주름 끝이 내 둘레 변 곁(2 cm 안 · 변 안쪽 투영)이면 그 변을 그 점에서 나눔 → 두 다리 둘레가 같은 주름 줄(점을 주름선 차례로)이 되어 변을 함께 씀. 그런 끝이 없으면 안 돎(비트 같음).
+        rp.Zipped = CreaseZip(vt, tl, tlTag, creaseV);
         // ── 속 구멍 메움(주름 틈 · 충돌 자리 — 계획 검토 M7 · M10) — 둘레 변(세모 하나만 씀)을 방향 따라 이은 고리 중 시계 방향(속 구멍)을 그 꼭짓점만으로 가름 ──
         for (int pass = 0; pass < 2; pass++)
         {
@@ -559,6 +564,86 @@ public static partial class RoadGrade
     /// <summary>★★[v113.1 · A1] 둘레에 남은 주름 틈 고리 — 둘레 변(세모 하나)을 방향 따라 잇되 갈림 꼭짓점에서는 들어온 변에서 시계 방향 첫 변으로(면 하나씩 감음).
     /// 시계 방향 고리(속 구멍)는 주름 끝점이 끼면 통째로 · 반시계 고리(바깥 둘레)는 주름 끝점이 잇달아 놓인 줄마다 앞뒤 둘레 점까지 — 앞뒤 점을 이은 현이 둘레 변과 안 엇갈리고
     /// 고리가 시계 방향(바깥으로 패인 홈)일 때만(아니면 앞뒤로 한 점씩 넓혀 다시 · 여덟 번까지). 돌려줌 = 시계 방향 고리들(속 구멍과 같은 꼴).</summary>
+    /// <summary>★★[JACK 1104 A안 «주름 지퍼»] 주름 끝 점 P가 그 점에 안 닿는 둘레 변(세모 하나만 씀) u–v 곁(2 cm 안 · 투영 변 안쪽)이면 그 세모 (u, v, w)를 (u, P, w) · (P, v, w)로 나눔 —
+    /// 두 다리 둘레 줄이 같은 주름 줄로 모여 변을 함께 쓴다(엇갈린 끝 사이 꼬인 홈 없음). 두 새 세모가 같은 방향 · 높이 ≥ ThinH일 때만. 돌려줌 = 나눈 수.</summary>
+    static int CreaseZip(VertTable vt, List<(int A, int B, int C)> tl, List<string> tlTag, HashSet<int> creaseV)
+    {
+        const double Tol = 0.02, Cell = 1.0;
+        if (creaseV.Count == 0) return 0;
+        double Cr(int o, int a, int b) => (vt.X[a] - vt.X[o]) * (vt.Y[b] - vt.Y[o]) - (vt.Y[a] - vt.Y[o]) * (vt.X[b] - vt.X[o]);
+        double Ln(int a, int b) => Math.Sqrt(Sq(vt.X[a] - vt.X[b]) + Sq(vt.Y[a] - vt.Y[b]));
+        int total = 0;
+        for (int pass = 0; pass < 64; pass++)
+        {
+            var use = new Dictionary<(int, int), int>();
+            foreach (var (a, b, c) in tl) foreach (var (p, q) in new[] { (a, b), (b, c), (c, a) }) { var k = p < q ? (p, q) : (q, p); use[k] = use.TryGetValue(k, out int n) ? n + 1 : 1; }
+            var bv = new HashSet<int>();
+            foreach (var kv in use) if (kv.Value == 1) { bv.Add(kv.Key.Item1); bv.Add(kv.Key.Item2); }
+            var g = new Dictionary<(int, int), List<int>>();
+            foreach (int v in bv) if (creaseV.Contains(v)) { var k = ((int)Math.Floor(vt.X[v] / Cell), (int)Math.Floor(vt.Y[v] / Cell)); if (!g.TryGetValue(k, out var l)) g[k] = l = new(); l.Add(v); }
+            if (g.Count == 0) return total;
+            int done = 0;
+            int nt = tl.Count;
+            for (int t = 0; t < nt; t++)
+            {
+                var (a, b, c) = tl[t];
+                foreach (var (u, v, w) in new[] { (a, b, c), (b, c, a), (c, a, b) })
+                {
+                    var key = u < v ? (u, v) : (v, u);
+                    if (use[key] != 1) continue;
+                    double L = Ln(u, v); if (L < 1e-6) continue;
+                    double ux = (vt.X[v] - vt.X[u]) / L, uy = (vt.Y[v] - vt.Y[u]) / L;
+                    int best = -1; double bestD = Tol;
+                    for (int gx = (int)Math.Floor((Math.Min(vt.X[u], vt.X[v]) - Tol) / Cell); gx <= (int)Math.Floor((Math.Max(vt.X[u], vt.X[v]) + Tol) / Cell); gx++)
+                        for (int gy = (int)Math.Floor((Math.Min(vt.Y[u], vt.Y[v]) - Tol) / Cell); gy <= (int)Math.Floor((Math.Max(vt.Y[u], vt.Y[v]) + Tol) / Cell); gy++)
+                        {
+                            if (!g.TryGetValue((gx, gy), out var l)) continue;
+                            foreach (int p in l)
+                            {
+                                if (p == u || p == v || p == w) continue;
+                                double s = (vt.X[p] - vt.X[u]) * ux + (vt.Y[p] - vt.Y[u]) * uy;
+                                if (s < 1e-3 || s > L - 1e-3) continue;
+                                double d = Math.Abs((vt.X[p] - vt.X[u]) * uy - (vt.Y[p] - vt.Y[u]) * ux);
+                                if (d < bestD) { bestD = d; best = p; }
+                            }
+                        }
+                    if (best < 0) continue;
+                    int P = best;
+                    double c1 = Cr(u, P, w), c2 = Cr(P, v, w);
+                    double h1 = c1 / Math.Max(Ln(u, P), Math.Max(Ln(P, w), Ln(w, u))), h2 = c2 / Math.Max(Ln(P, v), Math.Max(Ln(v, w), Ln(w, P)));
+                    if (!(h1 >= CivilSafeMesh.ThinH && h2 >= CivilSafeMesh.ThinH))
+                    {
+                        // 나누면 뒤집히는 자리(P가 세모 쐐기 밖 — 끝점 곁 2 cm 안) → P를 그 끝점으로 합침(같은 주름 점) · P 세모가 모두 그 방향 · 높이를 지킬 때만
+                        int q0 = Ln(u, P) < Ln(P, v) ? u : v;
+                        if (Ln(q0, P) >= Tol || Math.Abs(vt.Z[q0] - vt.Z[P]) > 2 * LineTol) continue;
+                        bool ok = true; var drop = new List<int>();
+                        for (int k = 0; k < tl.Count && ok; k++)
+                        {
+                            var (x0, x1, x2) = tl[k];
+                            if (x0 != P && x1 != P && x2 != P) continue;
+                            if (x0 == q0 || x1 == q0 || x2 == q0) { drop.Add(k); continue; }
+                            int y0 = x0 == P ? q0 : x0, y1 = x1 == P ? q0 : x1, y2 = x2 == P ? q0 : x2;
+                            double cc = Cr(y0, y1, y2), hh = cc / Math.Max(Ln(y0, y1), Math.Max(Ln(y1, y2), Ln(y2, y0)));
+                            if (!(hh >= CivilSafeMesh.ThinH)) ok = false;
+                        }
+                        if (!ok) continue;
+                        for (int k = 0; k < tl.Count; k++) { var (x0, x1, x2) = tl[k]; if (x0 == P || x1 == P || x2 == P) tl[k] = (x0 == P ? q0 : x0, x1 == P ? q0 : x1, x2 == P ? q0 : x2); }
+                        foreach (int k in drop.OrderByDescending(k => k)) { tl.RemoveAt(k); tlTag.RemoveAt(k); }
+                        creaseV.Add(q0); done++;
+                        goto nextPass;
+                    }
+                    tl[t] = (u, P, w); tl.Add((P, v, w)); tlTag.Add(tlTag[t] + " · 지퍼");
+                    use[key] = 0; done++;
+                    break;
+                }
+            }
+            nextPass:
+            total += done;
+            if (done == 0) break;
+        }
+        return total;
+    }
+
     static List<List<int>> Pockets(VertTable vt, List<(int A, int B, int C)> tl, HashSet<int> creaseV, HashSet<int> dayV, IGroundSurface ground)
     {
         var und = new Dictionary<(int, int), int>();

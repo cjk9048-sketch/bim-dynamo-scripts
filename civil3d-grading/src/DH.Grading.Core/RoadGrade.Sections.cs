@@ -171,6 +171,7 @@ public static partial class RoadGrade
         var swS = System.Diagnostics.Stopwatch.StartNew();
         int cuts = 0;
         var slumped = new HashSet<Ray>(ReferenceEqualityComparer.Instance);
+        var oldEnd = new Dictionary<Ray, (double X, double Y)>(ReferenceEqualityComparer.Instance);   // 자른 광선의 옛 끝(비운 자리)
         bool SlopeOnly(Ray q)
         {
             if (q.Regime == 0 || q.EdgeWall || q.Pts.Count < 2) return false;
@@ -281,6 +282,7 @@ public static partial class RoadGrade
                 cutAt = Math.Max(cutAt, Math.Min(0.05, dEnd / 2));
                 if (cutAt >= dEnd - 1e-6) continue;
                 double zc = RayZ(r, cutAt);
+                oldEnd[r] = (r.Pts[^1].X, r.Pts[^1].Y);
                 while (r.Pts.Count > 1 && r.Pts[^1].D > cutAt + 1e-9) r.Pts.RemoveAt(r.Pts.Count - 1);
                 if (r.Pts[^1].D < cutAt - 1e-9) r.Pts.Add(new RayPt(cutAt, r.Ex + r.Nx * cutAt, r.Ey + r.Ny * cutAt, zc, -6));
                 r.End = RayEnd.Crease;
@@ -323,6 +325,22 @@ public static partial class RoadGrade
                     }
                 return best;
             }
+            // ★[JACK 1104 A안] 비운 자리 = 자른 광선이 내준 띠(새 끝 → 옛 끝) — 이긴 광선은 이 안에서만 늘임(살아남은 남의 주름을 넘지 않음 · 실측 바늘 6 → 0 · T자 8 → 0)
+            var vac = new List<(double[] Px, double[] Py)>();
+            for (int i = 0; i + 1 < rays.Count; i++)
+            {
+                var ra = rays[i]; var rb = rays[i + 1];
+                bool ca = oldEnd.TryGetValue(ra, out var oa), cb = oldEnd.TryGetValue(rb, out var ob);
+                if (!ca && !cb) continue;
+                if (!ca) oa = (ra.Pts[^1].X, ra.Pts[^1].Y);
+                if (!cb) ob = (rb.Pts[^1].X, rb.Pts[^1].Y);
+                vac.Add((new[] { ra.Pts[^1].X, oa.X, ob.X, rb.Pts[^1].X }, new[] { ra.Pts[^1].Y, oa.Y, ob.Y, rb.Pts[^1].Y }));
+            }
+            var vgrid = new Dictionary<(int, int), List<int>>();
+            for (int vi = 0; vi < vac.Count; vi++)
+                for (int a = (int)Math.Floor(vac[vi].Px.Min() / Cell); a <= (int)Math.Floor(vac[vi].Px.Max() / Cell); a++)
+                    for (int b = (int)Math.Floor(vac[vi].Py.Min() / Cell); b <= (int)Math.Floor(vac[vi].Py.Max() / Cell); b++)
+                    { if (!vgrid.TryGetValue((a, b), out var l)) vgrid[(a, b)] = l = new(); l.Add(vi); }
             var quads = new List<(int I, double[] Px, double[] Py)>();
             for (int i = 0; i + 1 < rays.Count; i++)
             {
@@ -381,6 +399,10 @@ public static partial class RoadGrade
                 {
                     double x = e0.X + r.Nx * t, y = e0.Y + r.Ny * t;
                     if (!c.Inp.Base.TryGetElevation(x, y, out double g)) return 3;
+                    bool inV = false;
+                    if (vgrid.TryGetValue(((int)Math.Floor(x / Cell), (int)Math.Floor(y / Cell)), out var vl))
+                        foreach (int vi in vl) if (InPoly(x, y, vac[vi].Px, vac[vi].Py)) { inV = true; break; }
+                    if (!inV) return 2;
                     double z = ZS(x, y);
                     if (!double.IsFinite(z) || (fill ? z <= g : z >= g)) return 1;
                     if (qgrid.TryGetValue(((int)Math.Floor(x / Cell), (int)Math.Floor(y / Cell)), out var ql))
