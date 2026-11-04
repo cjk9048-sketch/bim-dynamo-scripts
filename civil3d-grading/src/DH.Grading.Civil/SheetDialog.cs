@@ -38,6 +38,8 @@ public sealed class SheetDialog : Window
     private readonly ComboBox _roadXsecScale;
     /// <summary>★★[v113.1 · 계획_종단방향_축척.md 2.2 · JACK 1104 «종단 축척 H · V 따로»] 부지 종단 V · 진입도로 종단 H · V.</summary>
     private readonly ComboBox _profileScaleV, _roadProfileV;
+    /// <summary>★[설치 전 검토 M4] 부지 H · V 칸의 처음 차례 — 둘 다 그대로면 옛 규칙 표지를 안 끔(등고선만 바꾼 [저장]이 옛 종단도를 다시 나누지 않게).</summary>
+    private readonly int _profH0, _profV0;
     private readonly TextBox _contourMinor;
     private readonly TextBox _contourMajor;
     private readonly TextBlock _contourMsg;
@@ -83,6 +85,7 @@ public sealed class SheetDialog : Window
             first: true);
         // ★★[v113.1 · JACK 1104 «종단 축척 H · V 따로 · [자동]»] 한 줄에 H · V
         (_profileScale, _profileScaleV) = AddComboHV(root, "종단도 축척", GradingSettings.ProfileScaleIndex(), GradingSettings.ProfileScaleVIndex(GradingSettings.ProfileScaleV));
+        _profH0 = _profileScale.SelectedIndex; _profV0 = _profileScaleV.SelectedIndex;
         _sectionScale = AddCombo(root, "단면검토선 축척", GradingSettings.ProfileScaleLabels,
                                  GradingSettings.SectionLineScaleIndex(), "");
 
@@ -143,6 +146,12 @@ public sealed class SheetDialog : Window
             "진입도로 [종단도] · [횡단도]가 쓰는 축척 — 계획지표면과 따로 정합니다.");
         int Idx(double v) { var a = GradingSettings.ProfileScaleValues; for (int i = 0; i < a.Length; i++) if (System.Math.Abs(a[i] - v) < 1e-9) return i; return 0; }
         (_roadProfileScale, _roadProfileV) = AddComboHV(root, "종단도 축척", Idx(roadH), GradingSettings.ProfileScaleVIndex(roadV));
+        // ★[설치 전 검토 M3] 옛 규칙 축척이 사다리 밖(사용자 주석 축척 등)이면 «자동»으로 보이지 않게 그 값을 맨 끝 칸으로 — 안 건드리면 그 값 그대로
+        if (roadH > 0 && System.Array.IndexOf(GradingSettings.ProfileScaleValues, roadH) < 0 && !GradingSettings.ProfileScaleValues.Any(q => System.Math.Abs(q - roadH) < 1e-9))
+        {
+            _roadProfileScale.Items.Add($"1:{roadH:0.##} (지금)");
+            _roadProfileScale.SelectedIndex = _roadProfileScale.Items.Count - 1;
+        }
         _roadProfileScale.ToolTip = HTip;
         _roadProfileV.ToolTip = VTip;
         // 진입도로 횡단도 축척 칸은 진입도로 [횡단도 그리기]가 들어가는 판에서 보임(눌러도 아무 일 없는 칸을 두지 않음) — 그때까지 값은 그대로 지나감
@@ -351,11 +360,11 @@ public sealed class SheetDialog : Window
         // ★[v113.1] V · 옛 규칙 끔([저장]한 도면 = 새 규칙 — 자동 H ≤ 1:1000 · 길면 여러 장)
         double[] pvv = GradingSettings.ProfileScaleVValues;
         GradingSettings.ProfileScaleV = pvv[System.Math.Clamp(_profileScaleV.SelectedIndex, 0, pvv.Length - 1)];
-        GradingSettings.ProfileLegacy = false;
+        if (_profileScale.SelectedIndex != _profH0 || _profileScaleV.SelectedIndex != _profV0) GradingSettings.ProfileLegacy = false;
         GradingSettings.SectionLineScale = psv[System.Math.Clamp(_sectionScale.SelectedIndex, 0, psv.Length - 1)];
         GradingSettings.XsecScale = psv[System.Math.Clamp(_xsecScale.SelectedIndex, 0, psv.Length - 1)];
         // 옛 «진입도로 종단도 축척» 칸(RoadProfileScale)은 받은 값 그대로 — 판 2 H · V가 대신함(옛 애드인이 읽는 칸)
-        RoadH = psv[System.Math.Clamp(_roadProfileScale.SelectedIndex, 0, psv.Length - 1)];
+        if (_roadProfileScale.SelectedIndex < psv.Length) RoadH = psv[System.Math.Max(0, _roadProfileScale.SelectedIndex)];   // 맨 끝 «(지금)» 칸 = 받은 값 그대로
         RoadV = pvv[System.Math.Clamp(_roadProfileV.SelectedIndex, 0, pvv.Length - 1)];
         RoadXsecScale = psv[System.Math.Clamp(_roadXsecScale.SelectedIndex, 0, psv.Length - 1)];
 

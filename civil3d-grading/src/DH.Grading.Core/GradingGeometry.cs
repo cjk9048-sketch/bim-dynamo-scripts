@@ -395,16 +395,18 @@ public static class GradingGeometry
             int n = ring.Count;
             if (n >= 2 && Math.Abs(ring[0].X - ring[n - 1].X) < 1e-9 && Math.Abs(ring[0].Y - ring[n - 1].Y) < 1e-9) n--;
             if (n < 2) return;
-            var tv = new double[n]; var kv = new bool[n];
-            // ★[JACK 0824] 유지 판정은 **점**으로 한다(구간마다 자가 다르다). tv는 조립 순서용 정렬키일 뿐이다.
-            for (int i = 0; i < n; i++) { tv[i] = ParamAt(keyPoly, keyCum, ring[i].X, ring[i].Y); kv[i] = Math.Abs(masks[i] - want) <= 1e-9; }
+            var kv = new bool[n];
+            // ★[JACK 0824] 유지 판정은 **점**으로 한다(구간마다 자가 다르다). 열쇠(ParamAt)는 조립 순서용 정렬키일 뿐이다.
+            // ★[v113 · JACK 1104 «경사 계획선 계획부지 생성이 너무 오래»] 열쇠는 <b>run 첫 점에서만</b> 잰다 — 종전엔 모든 점에서 재고(점 n × 자 n)
+            //   run 첫 점 것만 썼다. 같은 함수 · 같은 점이라 열쇠는 비트 같다(1104 실측: 단 81개 · 링 5600점 판 Build 9.8초 중 6.4초가 이 자리).
+            for (int i = 0; i < n; i++) kv[i] = Math.Abs(masks[i] - want) <= 1e-9;
             int start = System.Array.IndexOf(kv, false);
-            if (start < 0) { outRuns.Add((tv[0], ring.GetRange(0, n), want)); return; } // 전부 유지(고리 하나 — 열쇠가 차례를 안 가른다)
+            if (start < 0) { outRuns.Add((ParamAt(keyPoly, keyCum, ring[0].X, ring[0].Y), ring.GetRange(0, n), want)); return; } // 전부 유지(고리 하나 — 열쇠가 차례를 안 가른다)
             List<Point3>? cur = null; double curKey = 0;
             for (int s = 1; s <= n; s++)
             {
                 int i = (start + s) % n;
-                if (kv[i]) { if (cur == null) { cur = new List<Point3>(); curKey = tv[i]; } cur.Add(ring[i]); }
+                if (kv[i]) { if (cur == null) { cur = new List<Point3>(); curKey = ParamAt(keyPoly, keyCum, ring[i].X, ring[i].Y); } cur.Add(ring[i]); }
                 else if (cur != null) { if (cur.Count >= 2) outRuns.Add((curKey, cur, want)); cur = null; }
             }
             if (cur != null && cur.Count >= 2) outRuns.Add((curKey, cur, want));

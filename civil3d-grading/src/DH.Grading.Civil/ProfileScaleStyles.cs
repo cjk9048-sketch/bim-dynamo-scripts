@@ -23,6 +23,8 @@ internal sealed class ProfilePlan
     internal double KeepAnno;
     /// <summary>진입도로 노선 핸들(복사본 이름 꼬리 · 부지 = 빈 글).</summary>
     internal string RoadTag = "";
+    /// <summary>★[설치 전 검토 낮음] 고정 칸이 사람이 고른 값이 아니라 앞 판 자동이 정한 값(알림 글 «고정 축척»을 안 씀).</summary>
+    internal bool FromAuto;
 
     // ── 결과
     internal double H, V;

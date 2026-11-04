@@ -54,8 +54,20 @@ public static class ProfileScaleFit
             else if (sheetsFor != null && h <= hm + Tol) { n = Math.Max(1, sheetsFor(h)); split = true; }
             else n = 1;
             double wr = nW / (n * h);                 // 가로 채움(1 넘으면 넘침)
-            foreach (double v in vs) cands.Add((h, v, n, wr, nV / v, split));
+            foreach (double v in vs)
+            {
+                // ★[설치 전 검토 M2] H 자동 · V 고정도 과장 1 ~ veMax(세로가 가로보다 작게 · 10배 넘게는 안 고름 — 짧은 종단이 V 1:200에 H 1:50으로 눌리던 것)
+                if (!fixH && fixV && (h / v < 1 - Tol || h / v > veMax + Tol)) continue;
+                cands.Add((h, v, n, wr, nV / v, split));
+            }
         }
+        // ★[설치 전 검토 낮음] 고를 짝이 하나도 없으면(사다리 밖 고정 V 등) 과장 범위 없이 다시 — 늘 하나는 돌려줌
+        if (cands.Count == 0)
+            foreach (double h in hs)
+            {
+                int n = fixH ? Math.Max(1, sheetsFor?.Invoke(h) ?? 1) : 1;
+                foreach (double v in fixV ? new[] { pinV } : same ? new[] { h } : lad.ToArray()) cands.Add((h, v, n, nW / (n * h), nV / v, false));
+            }
         bool Fits((double H, double V, int N, double WRatio, double VRatio, bool Split) c) => c.WRatio <= 1 + Tol && c.VRatio <= 1 + Tol;
         // H 자동: 한 장 · H ≤ 한도 → 나눔(한도 안) 차례
         var pool = cands.Where(c => Fits(c) && (fixH || (c.N == 1 && c.H <= hm + Tol))).ToList();

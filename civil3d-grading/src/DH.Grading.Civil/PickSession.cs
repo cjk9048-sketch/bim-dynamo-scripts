@@ -416,6 +416,22 @@ public sealed class PickCommands
 
         // ① 고른 것이 아직 있는가 — 없으면 자리를 비우고(창이 "미선택"으로) 말한다.
         var planId = PickSession.ResolveForUse(doc, PickSession.KeyPlan);
+        // ★★[v113.0 · JACK 1104 «생성하기가 깜박이기는 하는데 눌리지가 않아 — 재생성이 안 돼»] 생성에 성공하면 고른 것을 걷으므로(아래 ClearAll)
+        //   값만 바꾼 뒤엔 고른 계획선이 없다 → 지난 결과가 있으면 <b>마지막 구역의 계획선</b>으로 «이어서»를 가린다 = 같은 계획선이니 RerunLast
+        //   (마지막 구역을 새 값으로 다시 · 기준 지반 = 그 구역이 쓴 면 · 구간 · 옹벽 기록 그대로 — 이어서에 같은 선을 고른 것과 같은 길)
+        bool rerunNoPick = false;
+        if (planId.IsNull)
+        {
+            try
+            {
+                using var trL = doc.Database.TransactionManager.StartTransaction();
+                var regs = GradingBundleStore.TryLoadAll(doc.Database, trL, out _);
+                bool hasG = GradingBuilder.SurfaceExistsByBaseName(trL, "정지면_DH");
+                trL.Commit();
+                if (regs is { Count: > 0 } && hasG) { planId = Commands.NoriCommand.FindByHandle(doc.Database, regs[^1].PlanHandle); rerunNoPick = !planId.IsNull; }
+            }
+            catch { planId = ObjectId.Null; }
+        }
         if (planId.IsNull)
         {
             ed.WriteMessage("\n[계획부지 정지] 계획 경계를 고르지 않았습니다(또는 그 사이 지워졌습니다).");
@@ -423,7 +439,13 @@ public sealed class PickCommands
         }
 
         // ③ 이어서/새로시작을 <b>지금</b> 다시 가린다.
-        var plan = GradeStart.Decide(doc, planId, PickSession.AppendMode);
+        var plan = GradeStart.Decide(doc, planId, rerunNoPick || PickSession.AppendMode);
+        if (rerunNoPick && !plan.Blocked && plan.Mode != Commands.GradeMode.RerunLast)
+        {
+            // 마지막 구역 계획선인데 RerunLast가 아니면(지운 뒤 같은 핸들 등) 말없이 다른 길로 가지 않는다
+            ed.WriteMessage("\n[계획부지 정지] 마지막 구역을 다시 만들 수 없습니다 — 계획 경계를 다시 골라 주세요.");
+            return;
+        }
         // ★★★[v103.1.12 · JACK 1015 ② · 계획 4판 H4] «이어서» 합성 관문 — DHGRADE와 같다(Decide 밖 · 합성했으면 Decide 다시)
         if (!plan.Blocked && plan.Mode == Commands.GradeMode.Append)
         {

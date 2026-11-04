@@ -41,7 +41,15 @@ public sealed class ProfileFlipCommand
         ed.WriteMessage("\n[종단 방향] " + r);
         if (!flipped) return;
         // 도면설정 [저장]과 같은 길 — 종단도를 그 자리에 다시(노선 · 놓은 자리 재사용) → 손댔으면 횡단도도
-        ProfileCommand.Rebuild(doc, out bool touched);
+        bool ok = ProfileCommand.Rebuild(doc, out bool touched);
+        // ★[설치 전 검토 M1] 다시 그리기가 손대기 전에 물러났으면(옛 종단도 그대로) 노선 · 측점만 뒤집힌 반쪽 — 되돌림 기록으로 처음 값에 돌려놓는다
+        if (!ok && !touched)
+        {
+            string back = FlipSite(doc, out bool undone);
+            ed.WriteMessage("\n[종단 방향] ⚠종단도를 다시 그리지 못해 방향을 처음대로 돌려놓았습니다" + (undone ? "" : " — 못 돌려놓음: " + back + " · U로 되돌리세요"));
+            return;
+        }
+        if (!ok) { ed.WriteMessage("\n[종단 방향] ⚠종단도를 다시 그리다 멈췄습니다 — U로 되돌리거나 계획지표면 [종단도]를 다시 누르세요(노선 · 측점은 새 방향)."); return; }
         bool xs = false;
         try { if (touched && XsecViewCommand.LastAt != null) xs = XsecViewCommand.Refresh(doc); } catch (System.Exception ex) { ed.WriteMessage("\n[종단 방향] 횡단도 다시 그리기 실패 — " + ex.Message); }
         if (touched && XsecViewCommand.LastAt == null) ed.WriteMessage("\n[종단 방향] 횡단도는 이 세션에서 그린 자리를 몰라 지워진 채입니다 — 계획지표면 [횡단도]를 다시 누르세요.");
@@ -84,6 +92,7 @@ public sealed class ProfileFlipCommand
             {
                 Marks = marks.Select(m => new ProfileFlip.Mark(m.Station, m.Why ?? "")).ToList(),
                 Drops = drops.ToList(), Route = route,
+                A0 = a0, B0 = b0,   // ★[설치 전 검토 H1]
             };
             ProfileFlip.Snapshot? snap = null;
             {

@@ -474,7 +474,8 @@ internal sealed class RoadSession
                         else if (v2 || Design.SheetScaleKey != null)
                         {
                             if (!v2 || key != Design.SheetScaleKey) sheetNote = "축척이 바뀌었습니다";
-                            else if (Design.SheetAnno is double an0 && Math.Abs(an0 - Commands.SheetCommand.CurrentDrawingScale(db)) > 1e-6) sheetNote = "축척이 바뀌었습니다";
+                            // ★[설치 전 검토 열린 질문 a] 지금 주석 축척을 못 읽으면(배치탭 1:1 등 DH 규약 아님 — 0) 견주지 않음
+                            else if (Design.SheetAnno is double an0 && Commands.SheetCommand.CurrentDrawingScale(db) is double anNow && anNow > 0 && Math.Abs(an0 - anNow) > 1e-6) sheetNote = "축척이 바뀌었습니다";
                         }
                         else if (want > 0 && Math.Abs(want - Design.SheetScale) > 1e-6) sheetNote = "축척이 바뀌었습니다";
                     }

@@ -123,6 +123,7 @@ internal static class RoadSheets
                     {
                         if (pid.IsErased || tr.GetObject(pid, OpenMode.ForRead) is not CivilDb.Profile p) continue;
                         if (p.Name == StrataDraw.WaterSurfName || p.Name.StartsWith(StrataDraw.SurfPrefix, StringComparison.Ordinal)) continue;
+                        if (!SheetCommand.ProfileHasData(p)) continue;   // ★[v113.1] 빈 종단(표고 0~0)은 뺀다
                         double a = p.ElevationMin, b = p.ElevationMax;
                         if (double.IsFinite(a) && double.IsFinite(b) && b >= a) { zLo = Math.Min(zLo, a); zHi = Math.Max(zHi, b); }
                     }

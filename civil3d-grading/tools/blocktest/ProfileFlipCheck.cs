@@ -25,6 +25,7 @@ static class ProfileFlipCheck
         int np = r.Next(2, 9); var ps = Enumerable.Range(0, np - 2).Select(_ => S()).OrderBy(v => v).ToList(); ps.Insert(0, a0); ps.Add(b0);
         foreach (double s in ps) st.Pvis.Add(new(s, 100 + r.NextDouble() * 20));
         st.Lr = new[] { 3 + r.NextDouble(), 3 + r.NextDouble(), 0.5, 0.75 };
+        st.A0 = a0; st.B0 = b0;
         return st;
     }
 
@@ -81,6 +82,24 @@ static class ProfileFlipCheck
             var (n2, _, e2) = ProfileFlip.Toggle(n1, 80, 0, s1);
             check("S210 PF④ 사이에 PVI를 끌면 — 기록 무시(식) · 끈 높이 그대로 · 자리는 처음 자리", !e2 && n2.Pvis.Count == 3 && Math.Abs(n2.Pvis[1].S - 40) < 1e-9 && n2.Pvis[1].Z == 107 && Math.Abs(n2.Marks[0].S - 10) < 1e-9,
                   string.Join(",", n2.Pvis.Select(p => $"{p.S:F6}/{p.Z}")));
+        }
+        // ④b ★[설치 전 검토 H1] 사이에 노선 길이를 바꾸면(끌어 늘림 L → L + 3.7) 되돌림 기록을 안 씀 — 지금 값을 새 길이로 식
+        {
+            var st = new ProfileFlip.State { A0 = 0, B0 = 100 };
+            st.Pvis.AddRange(new ProfileFlip.Pvi[] { new(0, 100), new(40, 104), new(100, 101) }); st.TierWalls.Add(new double[] { 10, 30, -1, 0, 0 });
+            var (n1, s1, _) = ProfileFlip.Toggle(st, 100, 0, null);
+            var n1e = n1.Clone(); n1e.B0 = 103.7;                                    // 노선을 끌어 늘림(값은 그대로)
+            n1e.Pvis[^1] = n1e.Pvis[^1] with { S = 103.7 };
+            var (n2, _, e2) = ProfileFlip.Toggle(n1e, 103.7, 0, s1);
+            var (n3, _, e3) = ProfileFlip.Toggle(n1, 100, 0, s1);                     // 안 바꿨으면 처음 그대로
+            bool ok = !e2 && Math.Abs(n2.TierWalls[0][0] - (103.7 - 90)) < 1e-9 && Math.Abs(n2.Pvis[^1].S - (103.7 - 0)) < 1e-9 && e3 && ProfileFlip.Hash(n3) == ProfileFlip.Hash(st);
+            check("S210 PF④b 사이에 노선 길이를 바꾸면 되돌림 기록 안 씀(식 · 새 길이로) · 안 바꿨으면 처음 그대로", ok,
+                  $"e2 {e2} · 옹벽 {n2.TierWalls[0][0]:F3}~{n2.TierWalls[0][1]:F3} · 끝 PVI {n2.Pvis[^1].S:F3} · e3 {e3}");
+            // 지문이 같아도(우연) 값이 식과 1e-6 넘게 다르면 식 — 되돌림 기록을 손으로 엉뚱하게 바꾼 경우
+            var bad = ProfileFlip.FromJson(ProfileFlip.ToJson(s1))!; bad.Prior.TierWalls[0][0] = 55;
+            bad.AfterHash = ProfileFlip.Hash(n1);
+            var (n4, _, e4) = ProfileFlip.Toggle(n1, 100, 0, bad);
+            check("S210 PF④c 되돌림 기록 값이 식과 1e-6 넘게 다르면 기록 안 씀(식)", !e4 && Math.Abs(n4.TierWalls[0][0] - 10) < 1e-9, $"e4 {e4} · {n4.TierWalls[0][0]}");
         }
         // ⑤ 깨진 기록 그대로 · 쪽 0 = 우 → 좌
         {
@@ -226,6 +245,11 @@ static class ProfileFlipCheck
                       && nm.EndsWith("(DH H1:500 V1:100@200)") && ProfileScaleFit.CloneSuffix(500, 100, 500) == "(DH H1:500 V1:100)";
             bool k = ProfileScaleFit.Key(0, -1) == "H0|V-1" && ProfileScaleFit.Key(500, 100) != ProfileScaleFit.Key(500, 0);
             check("S211 PS⑤ 글 «H=1:500, V=1:100» · 같으면 «1:200» · 칸 값 확인 · 복사본 이름 · 원본 이름 · 열쇠", t && cl && cn && k, nm);
+            // ⑦ 짧은 종단 · V 고정 1:200 · H 자동 → H는 V보다 작게(숫자) 안 고름(과장 ≥ 1) · 사다리 밖 V = 그래도 하나 돌려줌
+            var sh = ProfileScaleFit.Pick(40, 30, lad, 0, 200);
+            var off = ProfileScaleFit.Pick(40, 30, lad, 0, 99999);
+            check("S211 PS⑦ 짧은 종단 V 고정 1:200 · H 자동 → H 1:200(과장 1 · 1:50으로 안 눌림) · 사다리 밖 V 99999 → 넘침 표시와 함께 하나", sh.H == 200 && sh.V == 200 && off.V == 99999 && off.H > 0,
+                  $"{sh.Note} | {off.Note}");
             double r = ProfileScaleFit.PaperToStyle(2.5, 500, 200), r1 = ProfileScaleFit.PaperToStyle(2.5, 200, 200);
             check("S211 PS⑥ 종이 → 스타일 값 — 그릴 축척 1:500 · 주석 1:200 → 2.5배 · 같으면 그대로", Math.Abs(r - 0.00625) < 1e-15 && Math.Abs(r1 - 0.0025) < 1e-15, string.Format(Ci, "{0} {1}", r, r1));
         }

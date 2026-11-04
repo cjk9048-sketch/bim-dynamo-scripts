@@ -35,13 +35,15 @@ public static class ProfileFlip
         public double[] Lr = Array.Empty<double>();
         /// <summary>부지 노선 꼭짓점 [x0, y0, x1, y1, …] — 도로는 빈 배열.</summary>
         public double[] Route = Array.Empty<double>();
+        /// <summary>★[설치 전 검토 H1] 이 값들이 걸린 노선 측점 범위 [A0, B0](모르면 NaN) — 지문에 넣는다(사이에 노선 길이를 바꾸면 되돌림 기록을 안 씀).</summary>
+        public double A0 = double.NaN, B0 = double.NaN;
 
         public State Clone() => new()
         {
             TierWalls = TierWalls.Select(w => (double[])w.Clone()).ToList(),
             Ditches = Ditches.Select(w => (double[])w.Clone()).ToList(),
             Marks = Marks.ToList(), Drops = Drops.ToList(), Pvis = Pvis.ToList(),
-            Lr = (double[])Lr.Clone(), Route = (double[])Route.Clone(),
+            Lr = (double[])Lr.Clone(), Route = (double[])Route.Clone(), A0 = A0, B0 = B0,
         };
     }
 
@@ -60,6 +62,8 @@ public static class ProfileFlip
             Pvis = st.Pvis.AsEnumerable().Reverse().Select(p => p with { S = Map(p.S, b0, a1) }).ToList(),
             Lr = st.Lr.Length >= 4 ? new[] { st.Lr[1], st.Lr[0], st.Lr[3], st.Lr[2] }.Concat(st.Lr.Skip(4)).ToArray() : (double[])st.Lr.Clone(),
             Route = ReverseRoute(st.Route),
+            A0 = double.IsFinite(st.A0) ? a1 : double.NaN,
+            B0 = double.IsFinite(st.A0) ? a1 + (b0 - st.A0) : double.NaN,
         };
         return o;
     }
@@ -86,6 +90,8 @@ public static class ProfileFlip
         sb.Append("|P"); foreach (var p in st.Pvis) { D(p.S); D(p.Z); sb.Append(';'); }
         sb.Append("|L"); foreach (var v in st.Lr) D(v);
         sb.Append("|R"); foreach (var v in st.Route) D(v);
+        // ★[설치 전 검토 H1] 측점 범위 — µm로 반올림(노선을 다시 만들 때 끝자리 잡음은 같은 지문 · 손으로 늘리고 줄인 것은 다른 지문)
+        sb.Append("|S").Append(double.IsFinite(st.A0) ? Math.Round(st.A0, 6).ToString("R", ci) : "-").Append(',').Append(double.IsFinite(st.B0) ? Math.Round(st.B0, 6).ToString("R", ci) : "-");
         return Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(Encoding.UTF8.GetBytes(sb.ToString())));
     }
 
@@ -100,8 +106,26 @@ public static class ProfileFlip
     public static (State Next, Snapshot Snap, bool Exact) Toggle(State now, double b0, double a1, Snapshot? snap)
     {
         bool exact = snap != null && snap.AfterHash.Length > 0 && snap.AfterHash == Hash(now);
-        var next = exact ? snap!.Prior.Clone() : Flip(now, b0, a1);
+        var f = Flip(now, b0, a1);
+        // ★[설치 전 검토 H1] 되돌림 기록의 값이 지금 값을 식으로 바꾼 것과 1e-6 안일 때만 그대로 씀 — 아니면(노선이 바뀜 · 지문이 우연히 같음) 식
+        if (exact && !Close(f, snap!.Prior, 1e-6)) exact = false;
+        var next = exact ? snap!.Prior.Clone() : f;
         return (next, new Snapshot { AfterHash = Hash(next), Prior = now.Clone() }, exact);
+    }
+
+    /// <summary>두 값 한 벌이 <paramref name="tol"/> 안에서 같은가(측점 · 높이 · 좌표 · 칸 수 · 사유 글 · NaN끼리 같음).</summary>
+    public static bool Close(State a, State b, double tol)
+    {
+        bool D(double x, double y) => (double.IsNaN(x) && double.IsNaN(y)) || Math.Abs(x - y) <= tol;
+        bool Arr(double[] x, double[] y) => x.Length == y.Length && x.Zip(y).All(q => D(q.First, q.Second));
+        bool Recs(List<double[]> x, List<double[]> y) => x.Count == y.Count && x.Zip(y).All(q => Arr(q.First, q.Second));
+        if (!Recs(a.TierWalls, b.TierWalls) || !Recs(a.Ditches, b.Ditches) || !Arr(a.Lr, b.Lr) || !Arr(a.Route, b.Route)) return false;
+        if (!D(a.A0, b.A0) || !D(a.B0, b.B0)) return false;
+        if (a.Pvis.Count != b.Pvis.Count || !a.Pvis.Zip(b.Pvis).All(q => D(q.First.S, q.Second.S) && D(q.First.Z, q.Second.Z))) return false;
+        var ma = a.Marks.OrderBy(m => m.S).ToList(); var mb = b.Marks.OrderBy(m => m.S).ToList();
+        if (ma.Count != mb.Count || !ma.Zip(mb).All(q => D(q.First.S, q.Second.S) && string.Equals(q.First.Why ?? "", q.Second.Why ?? "", StringComparison.Ordinal))) return false;
+        var da = a.Drops.OrderBy(v => v).ToArray(); var db = b.Drops.OrderBy(v => v).ToArray();
+        return Arr(da, db);
     }
 
     static readonly JsonSerializerOptions Js = new() { IncludeFields = true, NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals };

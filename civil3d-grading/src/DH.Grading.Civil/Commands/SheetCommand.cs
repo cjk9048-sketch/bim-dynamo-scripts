@@ -389,7 +389,9 @@ public static class SheetCommand
              // ★[검토 반영] 넘친 <b>이유</b>가 둘이라 안내도 갈라야 한다 — 축척을 고정해 넘친 것을
              //   '노선이 길어서'로 안내하면 사용자가 엉뚱한 곳(장 넘김)을 찾는다.
              + (overflow
-                ? (plan.PinH > 0 || plan.PinV > 0
+                ? (plan.FromAuto
+                   ? $" · ⚠자동으로 고른 축척 {DH.Grading.Core.ProfileScaleFit.ScaleText(scale, scaleV)}에서도 이 장이 자리를 넘칩니다"
+                   : plan.PinH > 0 || plan.PinV > 0
                    ? $" · ⚠고정 축척 {DH.Grading.Core.ProfileScaleFit.ScaleText(scale, scaleV)}으로는 한 장에 안 들어갑니다(도면설정에서 '자동'으로 두면 맞춰집니다)"
                    : " · ⚠한 장을 넘침")
                 : "");
@@ -639,8 +641,10 @@ public static class SheetCommand
                 double s0 = pk.H, v0 = pk.V;
                 overflow = pk.OverW || pk.OverV;
                 double pinned = plan.PinH;
+                if (s0 > 0 && v0 > s0 + 1e-9)
+                    log.AppendLine($"⚠V 1:{v0:F0}가 H 1:{s0:F0}보다 작게 그림(과장 {s0 / v0:0.##}배 < 1 — 고정값이라 그대로)");
                 if (pinned > 0)
-                    log.AppendLine($"축척 고정 H 1:{pinned:F0} (도면설정)"
+                    log.AppendLine($"축척 {(plan.FromAuto ? "H(앞 판 자동)" : "고정 H")} 1:{pinned:F0}{(plan.FromAuto ? "" : " (도면설정)")}"
                                  + (overflow
                                     ? $" ⚠자리에 안 들어간다(필요 폭 1:{needW:F0} · 높이 1:{needH0:F0}) — 도곽을 넘칠 수 있다"
                                     : $" · 자리의 {want / pinned * 100:F0}% 사용"));
@@ -3817,6 +3821,12 @@ public static class SheetCommand
         catch (System.Exception ex) { log.AppendLine("   표고 범위 지정 실패 — " + Brief(ex)); }
     }
 
+    /// <summary>★[v113.1 · 화면 없는 실측 EZ] 종단에 자료가 있나 — 노선이 안 닿는 면에서 딴 종단은 요소 0 · 측점 0~0 · 길이 0 · 표고 0~0(Civil). 못 읽으면 참(옛 동작).</summary>
+    internal static bool ProfileHasData(CivilDb.Profile p)
+    {
+        try { return p.Entities.Count > 0 && p.Length > 1e-9; } catch { return true; }
+    }
+
     /// <summary>★[v113.1] 표고 범위를 정하는 데이터 범위(<see cref="FitElevationRange"/>와 FitSheet 세로 필요 축척이 같은 값을 보게 — 따로 세면 고정 V가 넘친다).</summary>
     private static void ElevDataRange(Database db, ObjectId pvId, SheetContext? ctx, out double lo, out double hi)
     {
@@ -3866,6 +3876,8 @@ public static class SheetCommand
                         //   지층은 <b>곁들이</b>이고, 도면의 주인공은 원지반과 계획선이다.
                         if (pr.Name == StrataDraw.WaterSurfName
                             || pr.Name.StartsWith(StrataDraw.SurfPrefix, System.StringComparison.Ordinal)) continue;
+                        // ★[v113.1 · 화면 없는 실측 EZ] 노선이 안 닿는 면에서 딴 종단(옹벽 터파기 · 배면 — 요소 0 · 길이 0)은 Civil이 표고 0~0을 돌려준다 → 범위를 0까지 끌어내림 · 뺀다
+                        if (!ProfileHasData(pr)) continue;
                         try { lo = System.Math.Min(lo, pr.ElevationMin); hi = System.Math.Max(hi, pr.ElevationMax); }
                         catch { }
                     }
