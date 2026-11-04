@@ -1,0 +1,98 @@
+// ── S208 ★★[v113.0 · JACK 1104 «[옹벽 추가] — 첫 점 경계 위 · 가운데 경계 안 · 끝 점 다시 경계 위»] 찍는 동안 점마다 규칙(BoundaryDraw) ──
+using DH.Grading.Core;
+
+static class BoundaryDrawCheck
+{
+    static List<Point3> L(params (double X, double Y)[] p) => p.Select(q => new Point3(q.X, q.Y, 0)).ToList();
+
+    public static void Run(Action<string, bool, string> check)
+    {
+        Console.WriteLine("\n== S208 옹벽 추가 — 찍는 규칙(BoundaryDraw) ==");
+        // 네모 경계 0..100 · 바닥(계획선) 40..60
+        var sq = L((0, 0), (100, 0), (100, 100), (0, 100));
+        var fl = L((40, 40), (60, 40), (60, 60), (40, 60));
+        // U 꼴 경계(가운데 홈 30..70 · y ≥ 30) · 바닥 40..60 × 5..20
+        var u = L((0, 0), (100, 0), (100, 100), (70, 100), (70, 30), (30, 30), (30, 100), (0, 100));
+        var ufl = L((40, 5), (60, 5), (60, 20), (40, 20));
+        const double snap = 1.0;
+
+        var f1 = BoundaryDraw.First(sq, fl, 0.3, 50, snap);
+        check("S208 ① 첫 점 — 경계 0.3 m 곁 → 경계 위로 붙임", f1.Kind == BoundaryDraw.Kind.Start && Math.Abs(f1.X) < 1e-12 && Math.Abs(f1.Y - 50) < 1e-12, $"{f1.Kind} ({f1.X:F4}, {f1.Y:F4}) {f1.Why}");
+        var f2 = BoundaryDraw.First(sq, fl, 10, 50, snap);
+        check("S208 ② 첫 점 — 경계 밖 10 m(안쪽) → 거절", f2.Kind == BoundaryDraw.Kind.No && f2.Why.Contains("경계 위"), f2.Why);
+        var flB = L((40, 0), (60, 0), (60, 20), (40, 20));
+        var f3 = BoundaryDraw.First(sq, flB, 50, 0.2, snap);
+        check("S208 ③ 첫 점 — 바닥에 붙은 경계 자리 → 거절", f3.Kind == BoundaryDraw.Kind.No && f3.Why.Contains("바닥"), f3.Why);
+
+        var st = new List<(double X, double Y)> { (0, 50) };
+        var n1 = BoundaryDraw.Next(sq, fl, st, 20, 30, snap);
+        check("S208 ④ 가운데 점 — 경계 안 → 받음", n1.Kind == BoundaryDraw.Kind.Inside, $"{n1.Kind} {n1.Why}");
+        var n2 = BoundaryDraw.Next(sq, fl, st, -5, 50, snap);
+        check("S208 ⑤ 가운데 점 — 경계 밖(5 m) → 거절", n2.Kind == BoundaryDraw.Kind.No && n2.Why.Contains("경계 밖"), n2.Why);
+
+        var us = new List<(double X, double Y)> { (0, 80), (15, 50) };
+        var n3 = BoundaryDraw.Next(u, ufl, us, 85, 50, snap);
+        check("S208 ⑥ 선이 홈(경계)을 지남 → 거절 · 자리", n3.Kind == BoundaryDraw.Kind.No && n3.Why.Contains("지납") && n3.At != null && (Math.Abs(n3.At.Value.X - 30) < 1e-6 || Math.Abs(n3.At.Value.X - 70) < 1e-6) && Math.Abs(n3.At.Value.Y - 50) < 1e-6, $"{n3.Why} @{n3.At}");
+        var us2 = new List<(double X, double Y)> { (0, 80), (15, 25) };
+        var n4 = BoundaryDraw.Next(u, ufl, us2, 100.3, 26, snap);
+        check("S208 ⑦ 끝 점 — 경계 0.3 m 곁 → 붙여 끝", n4.Kind == BoundaryDraw.Kind.End && Math.Abs(n4.X - 100) < 1e-12 && Math.Abs(n4.Y - 26) < 1e-12, $"{n4.Kind} ({n4.X:F4}, {n4.Y:F4}) {n4.Why}");
+        var n5 = BoundaryDraw.Next(u, ufl, us, 0.3, 79.5, snap);
+        check("S208 ⑧ 끝 점 — 시작 자리와 1 m 안 → 거절", n5.Kind == BoundaryDraw.Kind.No && n5.Why.Contains("시작"), n5.Why);
+        var us3 = new List<(double X, double Y)> { (0, 80), (15, 15) };
+        var n6 = BoundaryDraw.Next(u, ufl, us3, 85, 15, snap);
+        check("S208 ⑨ 선이 바닥을 지남 → 거절", n6.Kind == BoundaryDraw.Kind.No && n6.Why.Contains("바닥"), n6.Why);
+        var us4 = new List<(double X, double Y)> { (0, 90), (25, 40), (10, 40) };
+        var n7 = BoundaryDraw.Next(u, ufl, us4, 20, 60, snap);
+        check("S208 ⑩ 앞 선과 엇갈림 → 거절 · 자리(17.5, 55)", n7.Kind == BoundaryDraw.Kind.No && n7.Why.Contains("엇갈") && n7.At != null && Math.Abs(n7.At.Value.X - 17.5) < 1e-6 && Math.Abs(n7.At.Value.Y - 55) < 1e-6, $"{n7.Why} @{n7.At}");
+        var n8 = BoundaryDraw.Next(u, ufl, us4, 10.2, 40.1, snap);
+        check("S208 ⑪ 앞 점과 0.5 m 안 → 거절", n8.Kind == BoundaryDraw.Kind.No && n8.Why.Contains("앞 점"), n8.Why);
+        // 끝까지 가는 선이 경계를 먼저 지나면(홈 건너 오른쪽 경계) 거절
+        var n9 = BoundaryDraw.Next(u, ufl, us, 100.2, 60, snap);
+        check("S208 ⑫ 끝 점까지 가는 선이 경계를 먼저 지남 → 거절", n9.Kind == BoundaryDraw.Kind.No && n9.Why.Contains("먼저"), n9.Why);
+        // 가운데 점이 경계에 snap 안 → 끝 점으로(저절로 끝)
+        var n10 = BoundaryDraw.Next(sq, fl, st, 20, 99.5, snap);
+        check("S208 ⑬ 경계 곁 클릭 = 끝 점(저절로 끝)", n10.Kind == BoundaryDraw.Kind.End && Math.Abs(n10.Y - 100) < 1e-12, $"{n10.Kind} ({n10.X:F3}, {n10.Y:F3})");
+
+        // ⑭ 다 그린 점 → 늘여 판정(Classify) = 통과 · A · B = 경계 위 두 점 · 바닥 쪽이 남음
+        var drawn = new List<(double X, double Y)> { (0, 80) };
+        var s1 = BoundaryDraw.Next(u, ufl, drawn, 15, 25, snap); drawn.Add((s1.X, s1.Y));
+        var s2 = BoundaryDraw.Next(u, ufl, drawn, 85, 25, snap);
+        // (15,25) → (85,25)는 바닥(5..20) 위 5 m · 홈(y ≥ 30) 아래 — 받음
+        if (s2.Ok) drawn.Add((s2.X, s2.Y));
+        var s3 = BoundaryDraw.Next(u, ufl, drawn, 100.4, 50, snap);
+        if (s3.Ok) drawn.Add((s3.X, s3.Y));
+        var line = BoundaryDraw.Extend(drawn, 1.0);
+        var cut = BoundaryCut.Classify(line, u, ufl);
+        bool okAB = cut.Ok && Math.Abs(cut.A.X - 0) < 1e-6 && Math.Abs(cut.A.Y - 80) < 1e-6 && Math.Abs(cut.B.X - 100) < 1e-6 && Math.Abs(cut.B.Y - 50) < 1e-6;
+        check("S208 ⑭ 그린 점(경계 위 → 안 → 안 → 경계 위) → 늘여 판정 통과 · 교점 = 찍은 경계 점", s1.Ok && s2.Ok && s3.Kind == BoundaryDraw.Kind.End && okAB,
+              $"{s1.Kind}/{s2.Kind}/{s3.Kind} {s2.Why}{s3.Why} · 판정 {BoundaryCut.CodeName(cut.Code)} {cut.Why} · A({cut.A.X:F3},{cut.A.Y:F3}) B({cut.B.X:F3},{cut.B.Y:F3}) · 교차 {cut.Crossings}");
+        // ⑮ 경계 꼭짓점에 붙인 첫 점(모서리) — 첫 토막이 모서리에서 안으로
+        var f4 = BoundaryDraw.First(sq, fl, 0.2, 0.3, snap);
+        var n11 = BoundaryDraw.Next(sq, fl, new List<(double X, double Y)> { (f4.X, f4.Y) }, 10, 10, snap);
+        // ⑯ 기운 3D 화면 — 높이 100 m 자리에서 찍힌 점을 시선(0.5, −0.8, 0.3)을 따라 Z = 0으로 · 위에서 본 화면은 그대로
+        var fl1 = BoundaryDraw.Flat(10, 20, 100, 0.5, -0.8, 0.3);
+        double ex1 = 10 + 0.5 * (-100 / 0.3), ey1 = 20 - 0.8 * (-100 / 0.3);
+        var fl2 = BoundaryDraw.Flat(10, 20, 100, 0, 0, 1);
+        var fl3 = BoundaryDraw.Flat(10, 20, 0, 0.5, -0.8, 0.3);
+        check("S208 ⑯ 기운 화면 점 → 시선 따라 경계 평면(Z = 0) · 위에서 본 화면 · Z = 0은 그대로", Math.Abs(fl1.X - ex1) < 1e-9 && Math.Abs(fl1.Y - ey1) < 1e-9 && fl2 == (10.0, 20.0) && fl3 == (10.0, 20.0),
+              $"기운 ({fl1.X:F3}, {fl1.Y:F3}) / 기대 ({ex1:F3}, {ey1:F3}) · 위 {fl2} · Z0 {fl3}");
+        // ⑰ [설치 전 검토 3] 경계 밖 클릭 → 앞 점에서 그쪽으로 가는 선이 처음 경계를 지나는 자리에서 끝
+        var us5 = new List<(double X, double Y)> { (0, 80), (15, 25) };
+        var n12 = BoundaryDraw.Next(u, ufl, us5, 110, 26, snap);
+        double ey17 = 25 + (100 - 15) / (110.0 - 15) * 1;
+        check("S208 ⑰ 경계 밖 클릭 → 선이 경계를 지나는 자리(100, 25.895)에서 끝", n12.Kind == BoundaryDraw.Kind.End && Math.Abs(n12.X - 100) < 1e-9 && Math.Abs(n12.Y - ey17) < 1e-9, $"{n12.Kind} ({n12.X:F4}, {n12.Y:F4}) {n12.Why}");
+        // ⑱ [설치 전 검토 3] 붙임 거리(snap)가 커도 가운데 클릭은 0.5 m 밖이면 가운데 점(좁은 사면 띠에서 끝나지 않게)
+        var n13 = BoundaryDraw.Next(sq, fl, st, 20, 99.2, 5.0);
+        var n14 = BoundaryDraw.Next(sq, fl, st, 20, 99.6, 5.0);
+        check("S208 ⑱ snap 5 m — 경계 0.8 m 안쪽 클릭 = 가운데 점 · 0.4 m = 끝", n13.Kind == BoundaryDraw.Kind.Inside && n14.Kind == BoundaryDraw.Kind.End, $"0.8 m {n13.Kind} · 0.4 m {n14.Kind}");
+        // ⑲ [설치 전 검토 4] 한 번 지은 경계(Prepare)에 붙임 — 고친 고리(가시 빠짐)에 붙인다 · 같은 판정
+        var spike = L((0, 0), (100, 0), (100, 50), (130, 50), (100, 50), (100, 100), (0, 100));
+        var cx19 = BoundaryDraw.Prepare(spike, null);
+        var f19 = cx19 == null ? null : BoundaryDraw.First(cx19, 125, 50.2, snap);
+        var cxq = BoundaryDraw.Prepare(sq, fl);
+        var same19 = cxq != null && BoundaryDraw.Next(cxq, st, 20, 30, snap).Kind == n1.Kind && BoundaryDraw.Next(cxq, st, -5, 50, snap).Kind == n2.Kind;
+        check("S208 ⑲ 준비한 경계 — 가시(유효하지 않은 고리)는 고친 고리로 · 가시 끝 곁 클릭 거절 · 준비한 판정 = 한 번 판정", cx19 != null && f19 != null && f19.Kind == BoundaryDraw.Kind.No && same19,
+              $"고리 점 {cx19?.RingCount} · 가시 끝 곁 {f19?.Kind} {f19?.Why} · 같음 {same19}");
+        check("S208 ⑮ 모서리 곁 첫 점 → 붙임 · 안쪽 토막 받음", f4.Kind == BoundaryDraw.Kind.Start && n11.Kind == BoundaryDraw.Kind.Inside, $"{f4.Kind} ({f4.X:F3},{f4.Y:F3}) → {n11.Kind} {n11.Why}");
+    }
+}

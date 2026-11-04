@@ -42,7 +42,7 @@ internal sealed class GradingPanel : UserControl
 
     // ── ★[5b] 대상 ────────────────────────────────────────────────────────
     private readonly Button _pickPlan, _pickGround, _build;
-    private readonly Button _toWall, _toSlope;
+    private readonly Button _toWall, _toSlope, _addWall;
     /// <summary>★[v111.10 · JACK 1103] [계획지표면 초기화](주황 · 창 맨 끝 — <see cref="RefreshReset"/>). 옛 ■ 도면([종단도] · [횡단도])은 없앰(리본에 있음).</summary>
     private readonly Button _resetBtn;
     private readonly TextBlock _planWhat, _groundWhat;
@@ -425,12 +425,12 @@ internal sealed class GradingPanel : UserControl
         //       베끼지 않는다(§20). 도킹창은 <b>부르는 자리</b>일 뿐이다.
         // ★[JACK 0915] <i>"3계획부지수정은 그냥 앞에 머리기호 똑같은거 넣고 계획부지 수정이라고 하고 <b>열림상태로</b> 놔"</i>
         var secFix = GradingDialog.AddCollapsible(root, "■ 계획부지 수정",
-            "이미 만든 사면의 한 구간을 옹벽으로 세우거나 다시 사면으로 되돌립니다",
+            "사면 → 옹벽 · 옹벽 → 사면 · 옹벽 추가",
             open: true, key: "정지:계획부지수정", group: null);   // ★묶음 없음 — 위 주석과 같은 까닭
-        var wRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
+        var wRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 2) };   // ★[v113.0] 단추 셋 — 좁으면 아래로 접힘
         Button WBtn(string t, string cmd, string tip)
         {
-            var b = new Button { Content = t, MinWidth = 104, Height = 30, Margin = new Thickness(0, 0, 6, 0), ToolTip = tip };
+            var b = new Button { Content = t, MinWidth = 92, Height = 30, Margin = new Thickness(0, 0, 6, 4), ToolTip = tip };
             // ★★★[JACK 0910 질문 <i>"사면수정에 문제가생기나?"</i>] <b>그렇다 — 그래서 여기도 먼저 반영한다.</b>
             //   <para><c>DHWALL</c>/<c>DHSLOPE</c>는 단높이·소단폭 <b>기본값을 <c>GradingSettings</c>에서 읽는다</b>
             //   (<c>ZoneEditCommon</c>: <i>"사용자가 방금 바꾼 값이 그대로 기본값이 된다"</i>).
@@ -440,10 +440,10 @@ internal sealed class GradingPanel : UserControl
             wRow.Children.Add(b);
             return b;
         }
-        _toWall = WBtn("옹벽 변환", "DHWALL",
-            "고른 선부터 바깥 단을 옹벽으로 세웁니다. 단높이·소단길이를 그 자리에서 정합니다.");
-        _toSlope = WBtn("사면 변환", "DHSLOPE",
-            "옹벽선을 골라 그 단부터 다시 사면으로 되돌립니다. 사면구배도 그 자리에서 정합니다.");
+        // ★★[v113.0 · JACK 1104 «옹벽 변환은 말 그대로 소단선을 변형 · 폴리선으로 옹벽을 추가하는 건 별도 단추»] [사면→옹벽] · [옹벽→사면] · [옹벽 추가]
+        _toWall = WBtn("사면→옹벽", "DHWALL", "고른 계단선부터 바깥 단을 옹벽으로 바꿉니다.");
+        _toSlope = WBtn("옹벽→사면", "DHSLOPE", "옹벽선을 골라 다시 사면으로 되돌립니다. 추가한 옹벽은 W로 지웁니다.");
+        _addWall = WBtn("옹벽 추가", "DHWALLADD", "경계에서 경계까지 폴리선을 그려 옹벽을 추가합니다.");
         // ★[v102.2 · JACK 0930 «옹벽합성 버튼은 없애고 노선 선정과정이 끝나면 자동으로 진행되게»] [옹벽 합성] 버튼 없앰 —
         //   옹벽 변환(부분 지정)이 옹벽을 끝까지 지으면 합성이 이어서 돈다(ZoneEditCommon). DHWALLCOMP 명령은 남는다(손으로 다시 합성 · 복구용)
         secFix.Children.Add(wRow);
@@ -453,13 +453,13 @@ internal sealed class GradingPanel : UserControl
         {
             Content = "옹벽 합성 미루기",
             Margin = new Thickness(0, 2, 0, 4),
-            ToolTip = "켜면 옹벽 변환은 옹벽만 짓고, 정지면_DH 합성은 [옹벽 합성]으로 한 번에 합니다.\n내보내기·터파기·이어서 전에는 빠진 옹벽을 먼저 합성합니다. 이 도면에만 적용됩니다.",
+            ToolTip = "켜면 [사면→옹벽] · [옹벽 추가]는 옹벽만 짓고, 정지면_DH 합성은 [옹벽 합성]으로 한 번에 합니다.\n내보내기·터파기·이어서 전에는 빠진 옹벽을 먼저 합성합니다. 이 도면에만 적용됩니다.",
         };
         secFix.Children.Add(_defer);
         // ★★★[v103.1.15 · JACK 1020 «고른 구간 안쪽 · 양끝 10m · 정지 창에서 바꿀 수 있게»] 구배 전이(m) — 설명은 풍선 글만(JACK 1014 «설명 적게»)
         var bRow = new WrapPanel { Margin = new Thickness(2, 0, 0, 4) };
         _blend = Cell(bRow, "구배 전이(m)", GradingSettings.ZoneBlendLength);
-        bRow.ToolTip = "사면 변환으로 구배·소단을 바꾼 구간의 양끝 안쪽에서 사면이 서서히 바뀌는 길이입니다.\n0이면 끊어서 바뀝니다(경계가 깨질 수 있음). 바꾼 값은 다음 재생성부터 들어갑니다.";
+        bRow.ToolTip = "[옹벽→사면]으로 구배·소단을 바꾼 구간의 양끝 안쪽에서 사면이 서서히 바뀌는 길이입니다.\n0이면 끊어서 바뀝니다(경계가 깨질 수 있음). 바꾼 값은 다음 재생성부터 들어갑니다.";
         secFix.Children.Add(bRow);
         var cRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6), Visibility = Visibility.Collapsed };
         _compose = new Button { Content = "옹벽 합성", MinWidth = 104, Height = 30, Margin = new Thickness(0, 0, 8, 0), ToolTip = "모아 둔 옹벽을 정지면_DH에 한 번에 합성합니다(DHWALLCOMP)." };
@@ -828,6 +828,7 @@ internal sealed class GradingPanel : UserControl
             if (_build != null) _build.IsEnabled = (_picksOk || (_stale && _rerunOk)) && _valOk;
             if (_toWall != null) _toWall.IsEnabled = _fixOk && _valOk;
             if (_toSlope != null) _toSlope.IsEnabled = _fixOk && _valOk;
+            if (_addWall != null) _addWall.IsEnabled = _fixOk && _valOk;
         }
         catch { }
     }

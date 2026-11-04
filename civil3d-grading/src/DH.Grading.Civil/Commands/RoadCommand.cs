@@ -562,6 +562,37 @@ public class RoadCommand
     [CommandMethod("DHROADSLOPECONV")]
     public void SlopeConvert() => Convert(false);
 
+    /// <summary>★★[v113.0 · JACK 1104 «폴리선으로 옹벽을 추가하는 건 별도 단추»] [옹벽 추가] — 도로 면 경계 위에서 시작해 사면 안을 지나 다시 경계 위에서 끝나는 폴리선(또는 S로 고르기)
+    /// → 2점 판정 → 단높이 · 소단 → 기록 · 다시 계산(<see cref="RoadWallLine.Run"/> — 옛 [옹벽 변환]의 L 길 그대로) → 바꿨으면 지표면 → 종단도 → 횡단도(<see cref="RedrawStale"/>).</summary>
+    [CommandMethod("DHROADWALLADD")]
+    public void WallAdd()
+    {
+        const string label = "옹벽 추가";
+        var doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        var ed = doc.Editor;
+        RoadSession? s = null;
+        bool changed = false;
+        try
+        {
+            s = Need(ed); if (s == null) return;
+            if (s.Last == null || s.Last.Error.Length > 0) { ed.WriteMessage($"\n[{label}] 계산된 도로가 없습니다 — 진입도로 창 ■ 결과에 숫자가 나온 뒤 하세요."); return; }
+            try
+            {
+                if (System.Convert.ToInt32(AcadApp.GetSystemVariable("TILEMODE")) == 0 && System.Convert.ToInt32(AcadApp.GetSystemVariable("CVPORT")) == 1)
+                { ed.WriteMessage($"\n[{label}] 모형 공간(또는 배치의 모형 뷰포트 안)에서 하세요."); return; }
+            }
+            catch { }
+            changed = RoadWallLine.Run(doc, s);
+        }
+        catch (System.Exception ex)
+        {
+            ed.WriteMessage($"\n[{label}] 실패 — " + ex.Message);
+            try { DiagLog.Append($"\n[{label}] 실패 — " + ex); } catch { }
+        }
+        if (changed && s != null) RedrawStale(doc, s);
+    }
+
     const string PickLayer = "DH-도로계단선_선택";
 
     /// <summary>★[v113.0 · 설치 전 검토 M4] 사면 변환 W — 폴리선 옹벽을 번호로 통째로 지움(쉬는 기록도 · 다른 옹벽 기록은 그대로) · 지웠으면 참.</summary>
@@ -585,7 +616,7 @@ public class RoadCommand
 
     static (bool Changed, RoadSession? S) ConvertCore(bool wallMode)
     {
-        string label = wallMode ? "옹벽 변환" : "사면 변환", noun = wallMode ? "계단선" : "옹벽선";
+        string label = wallMode ? "사면→옹벽" : "옹벽→사면", noun = wallMode ? "계단선" : "옹벽선";   // ★[v113.0 · JACK 1104] 단추 이름과 같게
         var doc = AcadApp.DocumentManager.MdiActiveDocument;
         var ed = doc.Editor;
         RoadSession? s = null;
@@ -619,7 +650,7 @@ public class RoadCommand
             {
                 // ★[v113.0 · 설치 전 검토 M4] 옹벽선이 없어도(폴리선 옹벽이 모두 쉬는 중) 사면 변환은 폴리선 옹벽을 번호로 지울 수 있게
                 if (!wallMode && (s.Fresh().BoundWalls?.Count ?? 0) > 0) { changed = RemoveBoundByNumber(ed, s, label); return (changed, s); }
-                ed.WriteMessage(wallMode ? $"\n[{label}] 사면선 · 소단선이 없습니다 — 사면이 생기는 도로에서 하세요." : $"\n[{label}] 옹벽이 없습니다 — 먼저 [옹벽 변환]을 하세요.");
+                ed.WriteMessage(wallMode ? $"\n[{label}] 사면선 · 소단선이 없습니다 — 사면이 생기는 도로에서 하세요." : $"\n[{label}] 옹벽이 없습니다 — 먼저 [사면→옹벽]이나 [옹벽 추가]를 하세요.");
                 return (changed, s);
             }
             var db = doc.Database;
@@ -668,7 +699,7 @@ public class RoadCommand
             if (made.Count == 0) { ed.WriteMessage($"\n[{label}] 고를 선을 그리지 못했습니다."); return (changed, s); }
             s.SetPickMode(true);
             // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 옹벽 변환 = 클릭한 선 전체(구간지정 없음) · 일부는 폴리선(L)
-            ed.WriteMessage(wallMode ? $"\n[{label}] ① {noun}(시안)을 클릭(그 선 전체) 또는 폴리선(L) → ② 소단 길이 정하고 Enter. (전체해제=C · Esc=취소)"
+            ed.WriteMessage(wallMode ? $"\n[{label}] ① {noun}(시안)을 클릭(그 선 전체) → ② 소단 길이 정하고 Enter. (전체해제=C · Esc=취소)"
                                      : $"\n[{label}] ① {noun}(시안)을 클릭 → ② 전체구간/구간지정 → ③ Enter. 폴리선 옹벽 선은 그 옹벽을 통째로 되돌립니다. (전체해제=C · Esc=취소)");
             ObjectId selId = ObjectId.Null;
             void Paint(ObjectId id, bool on)
@@ -688,8 +719,7 @@ public class RoadCommand
             while (true)
             {
                 var peo = new PromptEntityOptions($"\n{noun}을 클릭하세요 (Esc=취소)") { AllowNone = false };
-                if (wallMode) peo.Keywords.Add("L", "L", "폴리선(L)");   // ★[v113.0 · JACK 1104 «옹벽 폴리선»]
-                else if ((s.Design.BoundWalls?.Count ?? 0) > 0) peo.Keywords.Add("W", "W", "폴리선옹벽(W)");   // ★[v113.0 · 설치 전 검토 M4] 번호로 지우기(쉬는 옹벽도)
+                if (!wallMode && (s.Design.BoundWalls?.Count ?? 0) > 0) peo.Keywords.Add("W", "W", "폴리선옹벽(W)");   // ★[v113.0 · 설치 전 검토 M4] 번호로 지우기(쉬는 옹벽도)
                 peo.Keywords.Add("C", "C", "전체해제(C)");
                 var per = ed.GetEntity(peo);
                 if (per.Status == PromptStatus.Cancel) return (changed, s);
@@ -697,13 +727,6 @@ public class RoadCommand
                 if (per.Status == PromptStatus.Keyword || (per.Status == PromptStatus.OK && per.ObjectId.IsNull))
                 {
                     string kw0 = (per.StringResult ?? "").Trim().ToUpperInvariant();
-                    if (wallMode && kw0 == "L")
-                    {
-                        // ★★[v113.0] 폴리선 길 — 고를 선은 끝(finally)에서 지운다 · 바꿨으면 부르는 쪽이 도로 면 · 종단 · 횡단을 다시
-                        Paint(selId, false);
-                        changed = RoadWallLine.Run(doc, s);
-                        return (changed, s);
-                    }
                     if (!wallMode && kw0 == "W")
                     {
                         Paint(selId, false);

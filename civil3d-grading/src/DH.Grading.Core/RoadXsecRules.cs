@@ -149,4 +149,21 @@ public static class RoadXsecRules
 
     /// <summary>도면설정 «횡단도 배치» 기본 차례 번호(1 = 1×2) — <c>GradingSettings.XsecLayout</c> 기본값과 같다.</summary>
     public const int LayoutDefault = 1;
+
+    /// <summary>★★[v113.2 · JACK 1104 «횡단도 배치는 부지 별도 진입도로 별도»] 도면 기록 «DH_SHEETLAYOUT»(정수 칸 차례) → (부지, 진입도로) 배치.
+    /// 판 1 = [배치] (옛 «공통» — 둘 다 그 값) · 판 2 = [부지, 2, 진입도로]. 기록이 없거나 깨졌으면 −1(부르는 쪽이 기본값).
+    /// 옛 애드인은 첫 칸만 읽으므로 판 2도 부지 배치로 읽는다.</summary>
+    public static (int Site, int Road) DecodeLayouts(int[] v)
+    {
+        int s = v != null && v.Length >= 1 && v[0] >= 0 ? v[0] : -1;
+        int r = IsLayoutsV2(v) ? v[2] : s;
+        return (s, r);
+    }
+
+    /// <summary>판 2 기록인가(진입도로 배치를 따로 적음).</summary>
+    public static bool IsLayoutsV2(int[] v) => v != null && v.Length >= 3 && v[0] >= 0 && v[1] == 2 && v[2] >= 0;
+
+    /// <summary>쓸 기록 — 판 2가 아니던 도면에서 둘이 같으면 판 1 그대로(옛 도면 기록이 바뀌지 않게) · 그 밖엔 판 2.</summary>
+    public static int[] EncodeLayouts(int site, int road, bool wasV2)
+        => !wasV2 && site == road ? new[] { site } : new[] { site, 2, road };
 }

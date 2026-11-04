@@ -25,7 +25,7 @@ public static class GradingSettings
     /// <b>같은 번호를 단 빌드가 여러 개</b>가 되어, 어느 것이 깔렸는지 물으면 답할 수가 없었다.</para>
     /// <para><c>x.0</c> = 화면·명령이 바뀌어 <b>사용자가 다르게 일하게</b> 되는 판 ·
     /// <c>x.y</c> = 같은 화면에서 결함을 고친 판.</para></summary>
-    public const string Version = "v113.1.0 (2026-11-04)";
+    public const string Version = "v113.2.0 (2026-11-04)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -390,6 +390,16 @@ public static class GradingSettings
 
     /// <summary>고른 배치의 행 수.</summary>
     public static int XsecLayoutR => XsecLayoutRows[System.Math.Clamp(XsecLayout, 0, XsecLayoutRows.Length - 1)];
+
+    /// <summary>★★[v113.2 · JACK 1104 «횡단도 배치는 부지 별도 진입도로 별도»] 진입도로 횡단도 배치(위 목록의 자리) — 위 <see cref="XsecLayout"/>는 부지 횡단도.
+    /// 도면에 따로 적은 값이 없으면(옛 도면) 옛 «공통» 배치에서 시작한다.</summary>
+    public static int XsecLayoutRoad = 1;
+
+    /// <summary>진입도로 배치의 열 수.</summary>
+    public static int XsecLayoutRoadC => XsecLayoutCols[System.Math.Clamp(XsecLayoutRoad, 0, XsecLayoutCols.Length - 1)];
+
+    /// <summary>진입도로 배치의 행 수.</summary>
+    public static int XsecLayoutRoadR => XsecLayoutRows[System.Math.Clamp(XsecLayoutRoad, 0, XsecLayoutRows.Length - 1)];
 
     /// <summary>★★[v32.21 · JACK 0812] <b>원지반 굴곡부를 고르는 높이 오차(m) — 이 값이 곧 토공량 최대 높이오차다.</b>
     ///
@@ -799,7 +809,13 @@ public static class GradingSettings
 
         // ★★[v111.7.2 · JACK 1102 «횡단도 배치 드롭박스를 바꿔도 안 바뀌어»] 횡단도 배치는 도면에 저장된 값(기록이 없으면 세션 값 그대로 — 새로 켠 Civil이면 1×2)
         //   ★[검토 중간 2] 기록이 없는 도면은 기본(1×2) — 앞 도면 배치를 물려받지 않게(배치는 도면마다)
-        try { int lay = RoadDrawingSettings.ReadLayout(db); XsecLayout = lay >= 0 ? System.Math.Clamp(lay, 0, XsecLayoutLabels.Length - 1) : DH.Grading.Core.RoadXsecRules.LayoutDefault; }
+        // ★[v113.2] 부지 · 진입도로 따로(판 2가 없으면 진입도로도 옛 공통 값)
+        try
+        {
+            var (lay, layR, _) = RoadDrawingSettings.ReadLayouts(db);
+            XsecLayout = lay >= 0 ? System.Math.Clamp(lay, 0, XsecLayoutLabels.Length - 1) : DH.Grading.Core.RoadXsecRules.LayoutDefault;
+            XsecLayoutRoad = layR >= 0 ? System.Math.Clamp(layR, 0, XsecLayoutLabels.Length - 1) : DH.Grading.Core.RoadXsecRules.LayoutDefault;
+        }
         catch { }
 
         // ★★[v112.1 · JACK 1102 «도면설정 도면마다 저장»] 측점 간격 · 폭 · 축척 · 굴곡 · 화질 — 도면 기록이 있으면 그 값(없으면 지금 값 그대로 — 새 도면은 직전 값으로 시작)

@@ -15,7 +15,7 @@ namespace DH.Grading.Civil.Commands;
 /// <para>화면 없는 탐침: <see cref="Make"/>(그린 점 · H · T — 질문 없음).</para></summary>
 internal static class RoadWallLine
 {
-    const string Tag = "진입도로 옹벽 변환(폴리선)";
+    const string Tag = "진입도로 옹벽 추가";
 
     /// <summary>도로 지표면 바깥 고리 · 도로 띠(가장자리 표본 고리) · 막을 다각형(부지 계획선). 빈 구간(토막 둘 이상)은 이번 판에 막는다.</summary>
     internal static (List<Point3>? Bd, List<Point3>? Band, List<(string Name, IReadOnlyList<Point3> Ring)> Bl, string Why) OutlineOf(Database db, RoadSession s)
@@ -110,7 +110,7 @@ internal static class RoadWallLine
         return (0, why);
     }
 
-    /// <summary>★[v113.0] 대화 — [옹벽 변환] 첫 질문에서 L. 바꿨으면 참(부르는 쪽이 도로 면 · 종단 · 횡단을 다시).</summary>
+    /// <summary>★[v113.0] 대화 — [옹벽 추가](DHROADWALLADD · JACK 1104 — 옛 [옹벽 변환]의 L). 바꿨으면 참(부르는 쪽이 도로 면 · 종단 · 횡단을 다시).</summary>
     internal static bool Run(Document doc, RoadSession s)
     {
         var ed = doc.Editor;

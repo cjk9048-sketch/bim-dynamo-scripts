@@ -24,7 +24,7 @@ public sealed class SheetSettingsCommand
         GradingSettings.SyncToDocument(doc);
 
         var (rp0, rx0) = RoadDrawingSettings.Read(doc.Database);
-        int lay0 = GradingSettings.XsecLayout;
+        int lay0 = GradingSettings.XsecLayout, layR0 = GradingSettings.XsecLayoutRoad;
         var (cm0, cM0) = ContourInterval.Read(doc.Database);
         // ★[v113.1] 진입도로 종단 H · V — 판 2 기록이 없으면(옛 도면) 지금 그리는 축척(옛 규칙)을 고정 H로 · V = H와 같게(그대로 [저장]하면 같은 그림)
         var rs = RoadSheets.Setting(doc.Database, "");
@@ -34,7 +34,7 @@ public sealed class SheetSettingsCommand
         if (dlg.DialogResult != true) return;
         SavedContour(doc, cm0, cM0, dlg.ContourMinor, dlg.ContourMajor);
         SavedRoadVH(doc, rs.V2, rh0, rv0, dlg.RoadH, dlg.RoadV);
-        Saved(doc, rp0, rx0, dlg.RoadProfileScale, dlg.RoadXsecScale, lay0);
+        Saved(doc, rp0, rx0, dlg.RoadProfileScale, dlg.RoadXsecScale, lay0, layR0);
     }
 
     /// <summary>★★[v113.1 · 계획_종단방향_축척.md 3] 진입도로 종단 H · V — 판 2로 적음(바뀌었거나 판 2가 없던 도면에서 값이 옛 규칙과 다를 때). 창 없이 시험이 같은 길을 부른다.</summary>
@@ -85,9 +85,10 @@ public sealed class SheetSettingsCommand
     }
 
     /// <summary>★[v111.7.2] [저장] 뒤 — 창 없이 시험이 같은 길을 부를 수 있게 떼어 냄(창이 세션 설정에 이미 넣은 뒤).
-    /// <paramref name="lay0"/> = 창을 열기 전 «횡단도 배치».</summary>
-    internal static void Saved(Document doc, double rp0, double rx0, double rp1, double rx1, int lay0)
+    /// <paramref name="lay0"/> = 창을 열기 전 «횡단도 배치» · ★[v113.2] <paramref name="layR0"/> = 진입도로 «횡단도 배치»(−1 = 부지와 같았다고 봄).</summary>
+    internal static void Saved(Document doc, double rp0, double rx0, double rp1, double rx1, int lay0, int layR0 = -1)
     {
+        if (layR0 < 0) layR0 = lay0;
         SheetPrefs.TryPin(doc.Database, "저장");   // ★[v112.1] 도면마다 저장(다시 그린 뒤 자동 폭이 바뀌면 아래에서 한 번 더)
         // ★[v111.4] 진입도로 칸 둘 — 도면에 저장 · 열린 진입도로가 있으면 다시 계산(종단도 · 횡단도가 그 축척과 다르면 도킹창 «축척이 바뀌었습니다» + 깜박)
         bool roadChanged = System.Math.Abs(rp1 - rp0) > 1e-9 || System.Math.Abs(rx1 - rx0) > 1e-9;
@@ -97,10 +98,13 @@ public sealed class SheetSettingsCommand
             catch (System.Exception exR) { doc.Editor.WriteMessage("\n[도면 설정] 진입도로 축척 저장 실패 — " + exR.Message); }
         }
         // ★★[v111.7.2 · JACK 1102 «횡단도 배치 드롭박스를 바꿔도 안 바뀌어»] 횡단도 배치 — 도면에 저장(바뀌었거나 기록과 다를 때만 씀)
+        //   ★[v113.2 · JACK 1104] 부지 · 진입도로 따로 — 부지 배치가 바뀌면 부지 횡단도만, 진입도로 배치는 아래 RedrawStale(진입도로 «바뀜» 판정)이
         bool layoutChanged = GradingSettings.XsecLayout != lay0;
-        if (layoutChanged || RoadDrawingSettings.ReadLayout(doc.Database) != GradingSettings.XsecLayout)
+        bool roadLayoutChanged = GradingSettings.XsecLayoutRoad != layR0;
+        var (lsRec, lrRec, _) = RoadDrawingSettings.ReadLayouts(doc.Database);
+        if (layoutChanged || roadLayoutChanged || lsRec != GradingSettings.XsecLayout || lrRec != GradingSettings.XsecLayoutRoad)
         {
-            try { RoadDrawingSettings.WriteLayout(doc.Database, GradingSettings.XsecLayout); }
+            try { RoadDrawingSettings.WriteLayouts(doc.Database, GradingSettings.XsecLayout, GradingSettings.XsecLayoutRoad); }
             catch (System.Exception exL) { doc.Editor.WriteMessage("\n[도면 설정] 횡단도 배치 저장 실패 — " + exL.Message); }
         }
 
@@ -152,6 +156,7 @@ public sealed class SheetSettingsCommand
         doc.Editor.WriteMessage(
             "\n[도면 설정] 저장했습니다 — 측점 간격 " + GradingSettings.XsecInterval.ToString("0.#") + "m"
             + " · 횡단도 배치 " + GradingSettings.XsecLayoutLabels[System.Math.Clamp(GradingSettings.XsecLayout, 0, GradingSettings.XsecLayoutLabels.Length - 1)]
+            + "(진입도로 " + GradingSettings.XsecLayoutLabels[System.Math.Clamp(GradingSettings.XsecLayoutRoad, 0, GradingSettings.XsecLayoutLabels.Length - 1)] + ")"
             + " · 폭 좌" + GradingSettings.XsecLeft.ToString("0.#") + "/우" + GradingSettings.XsecRight.ToString("0.#") + "m"
             + (GradingSettings.XsecWidthAuto ? "(자동 — 정지 결과에서 쟀습니다)" : "(수동 — 치신 값)")
             + " · 원지반 굴곡 " + GradingSettings.GroundBreakLabels[GradingSettings.GroundBreakStep()]

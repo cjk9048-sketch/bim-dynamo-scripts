@@ -269,6 +269,7 @@ internal sealed class ZoneBlend
         var why = new System.Text.StringBuilder();
         // 가파름 지킴 — 띠 안 면 링 간격이 옹벽 판정 한도(WallRunBuilder gapLim)의 3배 아래면 띠를 늘린다(같은 값 구간 절반까지).
         double need = Steepness(e, e.L, out _, out _);
+        bool plainBand = !(need > e.L + 1e-9);   // ★[v113.2] 늘리지 않은 띠 하나 — 아래 «모퉁이 맞춤»이 이것만 본다
         // ★★[v112.7 · JACK 1104 «직각 · 사면변환 짜글짜글» → 단마다 띠] 늘려야 할 때 띠 하나를 통째로 늘리면(1104 현장: 83단 중 81단 탓 10 → 56.77m)
         //   아랫단까지 구간 전체가 띠가 되어 바뀐 사면선이 곧은 데가 없었다 → 단을 묶음으로 나눠 잇달아 섞는다(묶음 띠 — 안 되면 종전 늘림).
         //   ★[v112.7 · JACK 1104 17:51] 먼저 창 끝을 자의 볼록 모퉁이에 맞춘 묶음 — 다짐(⚠ · 가파름)에 걸리면 맞추지 않은 묶음(v112.6) — 그것도 안 되면 종전 늘림
@@ -298,6 +299,34 @@ internal sealed class ZoneBlend
                     if (db <= half) { e.L = db - e.O; why.Append($" · 띠를 {e.L:0.##}m로 늘림(띠 끝이 자의 부채꼴)"); }
                     else if (da - e.O > 1e-3) { e.L = da - e.O; why.Append($" · 띠를 {e.L:0.##}m로 줄임(띠 끝이 자의 부채꼴)"); }
                 }
+            }
+        }
+        // ★★[v113.2 · JACK 1104 «무조건 수정»] 늘리지 않은 띠 하나(10 m)도 자의 볼록 모퉁이를 걸치지 않게 — 묶음 띠와 같은 까닭:
+        //   모퉁이 바깥 쐐기의 점은 모퉁이 한 매개로 모여 섞기가 멈추고, 건너편에서 남은 몫을 짧게 몰아 섞어 링마다 «Z» 턱이 섰다
+        //   (1104 17:47 현장 · 부지 둘레 예산: T0에서 9.36 m 안 모퉁이 · 띠 10 m → 남은 0.64 m · 링 3~ 턱 14).
+        //   모퉁이에서 끝내도 가파름이 지켜지면 모퉁이에서 끝 · 아니면 모퉁이에서 시작(앞은 바깥 값) · 그것도 구간 절반을 넘으면 그대로.
+        //   부채꼴(라운드 자) 안 모퉁이는 위 «띠 끝 밀기»가 맡는다. ★이 고침으로 모퉁이를 걸치던 띠는 종전과 비트 같지 않다(그 자리 링 모양이 바뀐 것이 고친 것).
+        //   ★오목 꼭짓점 곁(묶음 띠와 같은 «오목 꼭짓점 곁» 규칙 · 띠가 옮겨 갈 수 있는 구간 절반까지)이면 손대지 않는다 —
+        //     S161 무작위 판 실측: ㄷ자 홈 곁 띠를 볼록 모퉁이에 맞추자 먼 링 이음 20 · 건넘 1이 새로 났다(씨앗 11 #39).
+        if (plainBand && e.L > 1e-9 && !ConcaveNear(DMaxOf(e), z, atT0, E, tot, half))
+        {
+            var fans = z.Ref != null ? FanRegions(poly, cum, atT0, E, tot) : new List<(double, double)>();
+            var cs = ConvexCorners(poly, cum, atT0, E, tot);
+            for (int guard = 0; guard < 8; guard++)
+            {
+                double c = double.NaN;
+                foreach (double d in cs)
+                {
+                    if (d <= e.O + 1e-9 || d >= e.O + e.L - 1e-9) continue;
+                    bool inFan = false;
+                    foreach (var (da, db) in fans) if ((da < 0 || d > da - 1e-9) && d < db + 1e-9) { inFan = true; break; }
+                    if (!inFan) { c = d; break; }
+                }
+                if (double.IsNaN(c)) break;
+                double l1 = c - e.O;
+                if (l1 > 1e-9 && Steepness(e, l1, out _, out _) <= l1 + 1e-9) { e.L = l1; why.Append($" · 띠 끝을 자의 모퉁이에 맞춤({l1:0.##}m)"); break; }
+                if (c + e.L <= half + 1e-9) { e.O = c; why.Append($" · 띠 시작을 자의 모퉁이로({c:0.##}m)"); continue; }
+                break;
             }
         }
         // ★[재검토 낮음] 부채꼴 «줄임»이 가파름 늘림을 되돌렸으면 ⚠를 다시 정한다(마지막 길이로)
@@ -407,24 +436,8 @@ internal sealed class ZoneBlend
         //   링마다 «Z» 턱이 쐐기 경계 위에 줄지어 섰다(1104 17:47 현장: T0에서 9.36m 안 모퉁이 · 1묶음 창 9.8m → 남은 0.44m에 6단 링 0.79m 턱).
         var corners = new List<double>();   // E에서 안쪽으로 잰 볼록 모퉁이 자리(띠 자리 안) — pin이 아니면 비움(v112.6 묶음 그대로)
         if (pin)
-        {
-            int m = cum.Length - 1;
-            double sa2 = 0;
-            for (int i2 = 0; i2 < m; i2++) sa2 += poly[i2].X * poly[(i2 + 1) % m].Y - poly[(i2 + 1) % m].X * poly[i2].Y;
-            for (int i2 = 0; i2 < m; i2++)
-            {
-                var pv = poly[(i2 - 1 + m) % m]; var pc = poly[i2]; var nx = poly[(i2 + 1) % m];
-                double ax = pc.X - pv.X, ay = pc.Y - pv.Y, bx = nx.X - pc.X, by = nx.Y - pc.Y;
-                double lA = System.Math.Sqrt(ax * ax + ay * ay), lB = System.Math.Sqrt(bx * bx + by * by);
-                if (lA < 1e-9 || lB < 1e-9) continue;
-                if ((ax * bx + ay * by) / (lA * lB) >= System.Math.Cos(0.5 * System.Math.PI / 180)) continue;   // 곧은 꼭짓점(FanRegions와 같은 문턱)
-                double cr = ax * by - ay * bx;
-                if (!(sa2 > 0 ? cr > 0 : cr < 0)) continue;                                                    // 오목은 아래 «오목 꼭짓점 곁» 규칙이 맡는다
-                double d = atT0 ? Wrap(cum[i2] - E, tot) : Wrap(E - cum[i2], tot);
+            foreach (double d in ConvexCorners(poly, cum, atT0, E, tot))
                 if (d > e.O + 1e-9 && d < e.O + room - 1e-9) corners.Add(d);
-            }
-            corners.Sort();
-        }
         double Total(List<(int I, int J, double S, double Len)> st) => st.Count == 0 ? 0 : st[^1].S + st[^1].Len - e.O;
         List<(int I, int J, double S, double Len)> Plan(double lam)
         {
@@ -491,33 +504,7 @@ internal sealed class ZoneBlend
         // 오목 꼭짓점 곁이면 종전 늘림 — 오목 꼭짓점은 거리 D 링에서 자 위 매개를 꼭짓점 앞뒤 D·cot(β/2)씩 건너뛴다(β = 바깥 각).
         //   그 안에 창 끝이 여럿 떨어지면 띠 끝 잇기(오목부 ⓕ · 뾰족점)가 맞춰진 띠 하나 판과 달라진다 — S161 무작위 판 실측:
         //   오목 꼴(ㄱ · ㄷ · 135°)에서 이음 · 건넘이 늘고 네모는 그대로였다. 가장 먼 링 거리로 재 그 범위에 오목 꼭짓점이 하나라도 들면 묶지 않는다.
-        {
-            double dMax = System.Math.Max(p0.Edges[ne - 1].dist, p1.Edges[ne - 1].dist);
-            double env = Total(plan);
-            int pn = _plan.Count;
-            if (pn >= 2 && System.Math.Abs(_plan[0].X - _plan[pn - 1].X) < 1e-9 && System.Math.Abs(_plan[0].Y - _plan[pn - 1].Y) < 1e-9) pn--;
-            double sa = 0;
-            for (int i = 0; i < pn; i++) sa += _plan[i].X * _plan[(i + 1) % pn].Y - _plan[(i + 1) % pn].X * _plan[i].Y;
-            for (int i = 0; i < pn; i++)
-            {
-                var pv = _plan[(i - 1 + pn) % pn]; var pc = _plan[i]; var nx = _plan[(i + 1) % pn];
-                double ax = pc.X - pv.X, ay = pc.Y - pv.Y, bx = nx.X - pc.X, by = nx.Y - pc.Y;
-                double lA = System.Math.Sqrt(ax * ax + ay * ay), lB = System.Math.Sqrt(bx * bx + by * by);
-                if (lA < 1e-9 || lB < 1e-9) continue;
-                double cosT = (ax * bx + ay * by) / (lA * lB);
-                if (cosT >= System.Math.Cos(0.5 * System.Math.PI / 180)) continue;       // 곧은 꼭짓점(FanRegions와 같은 꺾임 문턱)
-                double cr = ax * by - ay * bx;
-                bool reflex = sa > 0 ? cr < 0 : cr > 0;
-                if (!reflex) continue;
-                double turn = System.Math.Acos(System.Math.Clamp(cosT, -1, 1));          // 꺾인 각 — 바깥 각 β = π − turn
-                double beta = System.Math.PI - turn;
-                double reach = beta > 1e-9 ? dMax / System.Math.Tan(beta / 2) : double.PositiveInfinity;
-                double tv = z.RulerParamAt(pc.X, pc.Y, _plan, _planCum);
-                double din = atT0 ? Wrap(tv - E, tot) : Wrap(E - tv, tot);
-                double dout = atT0 ? Wrap(E - tv, tot) : Wrap(tv - E, tot);
-                if (din <= e.O + env + reach || dout <= reach) return false;
-            }
-        }
+        if (ConcaveNear(System.Math.Max(p0.Edges[ne - 1].dist, p1.Edges[ne - 1].dist), z, atT0, E, tot, e.O + Total(plan))) return false;
         // 창 자리
         var ob = new double[_nb]; var lb = new double[_nb];
         var cuts = new List<double> { 0, e.O };
@@ -577,6 +564,71 @@ internal sealed class ZoneBlend
         why.Append($" · 단마다 띠(묶음 {plan.Count}: {sb}{(corners.Count > 0 ? $" · 모퉁이 {corners.Count}곳에 창 끝 맞춤" : "")})" +
                    (e.Warn ? $" · ⚠묶음을 구간 절반({half:0.##}m)에 넣느라 한도를 {lamUse:0.###}배로 늦췄다 — 옹벽 판정 한도 가까이 가파르다" : ""));
         return true;
+    }
+
+    /// <summary>★[v113.2] 이 끝의 가장 먼 링 거리(섞기 전 바깥 값 · 구간 값 두 프로파일의 마지막 모서리 중 큰 쪽).</summary>
+    private double DMaxOf(End e)
+    {
+        var s0 = new double[_nb]; var w0 = new double[_nb];
+        for (int b = 0; b < _nb; b++) { s0[b] = e.Elig[b] ? e.OutS[b] : e.InS[b]; w0[b] = e.Elig[b] ? e.OutW[b] : e.InW[b]; }
+        var p0 = Profile(s0, w0); var p1 = Profile(e.InS, e.InW);
+        int ne = System.Math.Min(p0.Edges.Count, p1.Edges.Count);
+        return ne <= 0 ? 0 : System.Math.Max(p0.Edges[ne - 1].dist, p1.Edges[ne - 1].dist);
+    }
+
+    /// <summary>★[v112.7 · v113.2] 띠 자리(E에서 안쪽 <paramref name="env"/>m) 곁에 <b>계획의 오목 꼭짓점</b>이 있나 — 오목 꼭짓점은 거리 D 링에서 자 위 매개를
+    /// 꼭짓점 앞뒤 D·cot(β/2)씩 건너뛴다(β = 바깥 각 · D = 가장 먼 링 <paramref name="dMax"/>). 그 안에 창 끝을 옮기면 띠 끝 잇기(오목부 ⓕ · 뾰족점)가
+    /// 맞춰진 판과 달라진다(S161 무작위 판 실측: 오목 꼴에서 이음 · 건넘이 늘고 네모는 그대로) — 묶음 띠 · 띠 하나 모퉁이 맞춤 둘 다 여기 걸리면 손대지 않는다.</summary>
+    private bool ConcaveNear(double dMax, SlopeZone z, bool atT0, double E, double tot, double env)
+    {
+        int pn = _plan.Count;
+        if (pn >= 2 && System.Math.Abs(_plan[0].X - _plan[pn - 1].X) < 1e-9 && System.Math.Abs(_plan[0].Y - _plan[pn - 1].Y) < 1e-9) pn--;
+        double sa = 0;
+        for (int i = 0; i < pn; i++) sa += _plan[i].X * _plan[(i + 1) % pn].Y - _plan[(i + 1) % pn].X * _plan[i].Y;
+        for (int i = 0; i < pn; i++)
+        {
+            var pv = _plan[(i - 1 + pn) % pn]; var pc = _plan[i]; var nx = _plan[(i + 1) % pn];
+            double ax = pc.X - pv.X, ay = pc.Y - pv.Y, bx = nx.X - pc.X, by = nx.Y - pc.Y;
+            double lA = System.Math.Sqrt(ax * ax + ay * ay), lB = System.Math.Sqrt(bx * bx + by * by);
+            if (lA < 1e-9 || lB < 1e-9) continue;
+            double cosT = (ax * bx + ay * by) / (lA * lB);
+            if (cosT >= System.Math.Cos(0.5 * System.Math.PI / 180)) continue;       // 곧은 꼭짓점(FanRegions와 같은 꺾임 문턱)
+            double cr = ax * by - ay * bx;
+            bool reflex = sa > 0 ? cr < 0 : cr > 0;
+            if (!reflex) continue;
+            double turn = System.Math.Acos(System.Math.Clamp(cosT, -1, 1));          // 꺾인 각 — 바깥 각 β = π − turn
+            double beta = System.Math.PI - turn;
+            double reach = beta > 1e-9 ? dMax / System.Math.Tan(beta / 2) : double.PositiveInfinity;
+            double tv = z.RulerParamAt(pc.X, pc.Y, _plan, _planCum);
+            double din = atT0 ? Wrap(tv - E, tot) : Wrap(E - tv, tot);
+            double dout = atT0 ? Wrap(E - tv, tot) : Wrap(tv - E, tot);
+            if (din <= env + reach || dout <= reach) return true;
+        }
+        return false;
+    }
+
+    /// <summary>★[v112.7 · v113.2] 자의 <b>볼록 모퉁이</b>(꺾임 0.5° 넘음 · FanRegions와 같은 문턱)를 E에서 안쪽으로 잰 거리 — 작은 차례.
+    /// 모퉁이 바깥 쐐기의 점은 모두 그 한 매개로 투영된다(자 위 길이 0) — 띠 창이 걸치면 «Z» 턱. 오목은 묶음 띠의 «오목 꼭짓점 곁» 규칙이 맡는다.</summary>
+    private static List<double> ConvexCorners(IReadOnlyList<Point3> poly, double[] cum, bool atT0, double E, double tot)
+    {
+        var res = new List<double>();
+        int m = cum.Length - 1;
+        if (m < 3) return res;
+        double sa2 = 0;
+        for (int i2 = 0; i2 < m; i2++) sa2 += poly[i2].X * poly[(i2 + 1) % m].Y - poly[(i2 + 1) % m].X * poly[i2].Y;
+        for (int i2 = 0; i2 < m; i2++)
+        {
+            var pv = poly[(i2 - 1 + m) % m]; var pc = poly[i2]; var nx = poly[(i2 + 1) % m];
+            double ax = pc.X - pv.X, ay = pc.Y - pv.Y, bx = nx.X - pc.X, by = nx.Y - pc.Y;
+            double lA = System.Math.Sqrt(ax * ax + ay * ay), lB = System.Math.Sqrt(bx * bx + by * by);
+            if (lA < 1e-9 || lB < 1e-9) continue;
+            if ((ax * bx + ay * by) / (lA * lB) >= System.Math.Cos(0.5 * System.Math.PI / 180)) continue;   // 곧은 꼭짓점
+            double cr = ax * by - ay * bx;
+            if (!(sa2 > 0 ? cr > 0 : cr < 0)) continue;
+            res.Add(atT0 ? Wrap(cum[i2] - E, tot) : Wrap(E - cum[i2], tot));
+        }
+        res.Sort();
+        return res;
     }
 
     /// <summary>자의 <b>부채꼴</b>(라운드 모서리 — 꺾이는 꼭짓점이 같은 계획 꼭짓점을 둘러 여럿 이어진 자리)을 E에서 안쪽으로 잰 거리 [da, db]로.

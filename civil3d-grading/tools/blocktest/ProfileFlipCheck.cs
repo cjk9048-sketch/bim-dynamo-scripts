@@ -253,5 +253,26 @@ static class ProfileFlipCheck
             double r = ProfileScaleFit.PaperToStyle(2.5, 500, 200), r1 = ProfileScaleFit.PaperToStyle(2.5, 200, 200);
             check("S211 PS⑥ 종이 → 스타일 값 — 그릴 축척 1:500 · 주석 1:200 → 2.5배 · 같으면 그대로", Math.Abs(r - 0.00625) < 1e-15 && Math.Abs(r1 - 0.0025) < 1e-15, string.Format(Ci, "{0} {1}", r, r1));
         }
+        // ⑧ ★[v113.2 · JACK 1104] 횡단도 배치 부지 · 진입도로 따로 — 기록 판 1(옛 공통) = 둘 다 그 값 · 판 2 = 따로 · 옛 도면 기록 그대로 · 진입도로 «바뀜»은 진입도로 배치만
+        {
+            var none = RoadXsecRules.DecodeLayouts(Array.Empty<int>());
+            var v1 = RoadXsecRules.DecodeLayouts(new[] { 4 });
+            var v2 = RoadXsecRules.DecodeLayouts(new[] { 4, 2, 0 });
+            var bad = RoadXsecRules.DecodeLayouts(new[] { 3, 7, 1 });             // 판 표지가 아님 → 옛 공통으로
+            bool dec = none == (-1, -1) && v1 == (4, 4) && v2 == (4, 0) && bad == (3, 3)
+                       && !RoadXsecRules.IsLayoutsV2(new[] { 4 }) && RoadXsecRules.IsLayoutsV2(new[] { 4, 2, 0 });
+            bool enc = RoadXsecRules.EncodeLayouts(1, 1, false).SequenceEqual(new[] { 1 })            // 옛 도면 · 둘 같음 → 옛 꼴 그대로
+                       && RoadXsecRules.EncodeLayouts(3, 1, false).SequenceEqual(new[] { 3, 2, 1 })
+                       && RoadXsecRules.EncodeLayouts(2, 2, true).SequenceEqual(new[] { 2, 2, 2 });   // 한 번 판 2면 판 2
+            bool rt = true;
+            for (int s = 0; s < 6; s++) for (int q = 0; q < 6; q++) foreach (bool w in new[] { false, true })
+                rt &= RoadXsecRules.DecodeLayouts(RoadXsecRules.EncodeLayouts(s, q, w)) == (s, q);
+            // 옛 [1] 도면에서 부지만 3으로 → [3,2,1] → 진입도로 그린 배치 1 그대로 = 안 바뀜 · 진입도로를 3으로 = 바뀜
+            int roadNow = RoadXsecRules.DecodeLayouts(RoadXsecRules.EncodeLayouts(3, 1, false)).Road;
+            string st0 = RoadXsecRules.Stale("a|b|c", "a", "b", "c", 0, 0, 200, 200, 1, roadNow);
+            string st1 = RoadXsecRules.Stale("a|b|c", "a", "b", "c", 0, 0, 200, 200, 1, RoadXsecRules.DecodeLayouts(RoadXsecRules.EncodeLayouts(1, 3, false)).Road);
+            check("S211 PS⑧ 횡단도 배치 부지 · 진입도로 따로 — 옛 기록 = 둘 다 그 값 · 판 2 따로 · 옛 도면 둘 같으면 옛 꼴 · 왕복 72 · 부지만 바꾸면 진입도로 안 바뀜",
+                  dec && enc && rt && st0 == "" && st1 == "횡단도 배치가 바뀌었습니다", $"dec {dec} enc {enc} rt {rt} «{st0}» «{st1}»");
+        }
     }
 }

@@ -4685,6 +4685,8 @@ public sealed class CreateGradingCommand
     /// <summary>[0807] 직전 <see cref="BuildParams"/>의 수직 예산 실측 — DoGrade가 로그를 새로 시작한 뒤에 찍는다.
     /// (BuildParams 안에서 바로 쓰면 그 뒤 <c>DiagLog.Reset</c>에 지워진다 — 0807 1차 시도의 실패.)</summary>
     internal static string LastBudgetNote = "";
+    /// <summary>★[v113.2] 부지 둘레 예산의 마지막 셈(열쇠 = 부지 · 원지반 지문 · 제원) — 같은 정지면 만들기 안 BuildParams 세 번이 한 번만 잰다.</summary>
+    static (string Key, VerticalBudget.Result Res)? _vbCache;
 
     /// <summary>설정값을 읽고, 원지반/계획고 표고차로 필요한 최대 단수를 좁혀 매개변수를 만든다(+여유단).</summary>
     /// <param name="cutZones">★[v113.1] 이 구역 절토 구간(부지 둘레 땅 예산의 «가장 완만한 구배 · 가장 넓은 소단») — null이면 전역 제원만</param>
@@ -4763,15 +4765,30 @@ public sealed class CreateGradingCommand
                     return (sm, wm);
                 }
                 var gc = Gentlest(true, cutZones); var gfl = Gentlest(false, fillZones);
+                // ★[v113.2 · 설치 뒤 검토 높음] 직각 모드(마이터)면 볼록 모퉁이 링 꼭짓점이 MitreLimit배까지 나간다 — 그 거리 안 땅까지 본다
+                double cornerF = s.MiterConvex ? System.Math.Max(s.MiterLimit, 1) : 1;
                 double Reach(bool up, double rise)
                 {
                     var (sm, wm) = up ? gc : gfl;
                     return VerticalBudget.ReachOf(rise, sm, wm, s.SmallestBenchHeightOf(up), s.MinFaceRun,
-                                                  s.MountainTerrace, s.TerraceInterval, s.TerraceWidth);
+                                                  s.MountainTerrace, s.TerraceInterval, s.TerraceWidth, cornerF);
                 }
-                var vb = VerticalBudget.Local(boundary, ground.AllTriangles(), Reach,
+                // ★[v113.2 · 설치 뒤 검토 중간 — 속도] 한 번의 정지면 만들기에서 BuildParams가 세 번까지 불린다(재기 전 · 견주기 · 본 셈) — 같은 입력이면 다시 안 잰다
+                //   열쇠 = 부지 꼭짓점(비트) · 원지반 지문 · 방향별 구배 · 소단 · 단높이 · 대소단 · 마이터 · 종전 예산 · 여유 단높이
+                var kb = new System.Text.StringBuilder();
+                foreach (var q in boundary) kb.Append(System.BitConverter.DoubleToInt64Bits(q.X)).Append(',').Append(System.BitConverter.DoubleToInt64Bits(q.Y)).Append(',').Append(System.BitConverter.DoubleToInt64Bits(q.Z)).Append(';');
+                kb.Append('|').Append(ground.Signature).Append('|').Append(string.Join(",", gc.SMax, gc.WMax, gfl.SMax, gfl.WMax, s.SmallestBenchHeightOf(true), s.SmallestBenchHeightOf(false),
+                    s.MinFaceRun, s.MountainTerrace, s.TerraceInterval, s.TerraceWidth, cornerF, needCut, needFill, s.LargerBenchHeight, GradingSettings.MountainTerrace, GradingSettings.TerraceInterval));
+                string vbKey = kb.ToString();
+                VerticalBudget.Result vb;
+                if (_vbCache is { } hit && hit.Key == vbKey) vb = hit.Res;
+                else
+                {
+                    vb = VerticalBudget.Local(boundary, ground.AllTriangles(), Reach,
                                               d => Spare(d) * System.Math.Max(s.LargerBenchHeight, 1e-6),
                                               System.Math.Max(needCut, 0), System.Math.Max(needFill, 0));
+                    _vbCache = (vbKey, vb);
+                }
                 if (!vb.Fallback)
                 {
                     double spL = Spare(System.Math.Max(vb.NeedCut, vb.NeedFill)) * System.Math.Max(s.LargerBenchHeight, 1e-6);

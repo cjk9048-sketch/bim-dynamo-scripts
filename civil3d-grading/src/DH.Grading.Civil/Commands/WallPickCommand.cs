@@ -23,4 +23,20 @@ public sealed class WallPickCommand
         GradingSettings.SyncToDocument(doc);   // [도면 전환 0803] 도면이 바뀌었으면 그 도면 기준으로 설정·기억 재정렬
         ZoneEditCommon.Run(doc, wallMode: true);
     }
+
+    /// <summary>★★[v113.0 · JACK 1104 «옹벽 변환은 소단선을 변형 · 폴리선으로 옹벽을 추가하는 건 별도 단추»] [옹벽 추가] — 경계 위에서 시작해 경계 안을 지나 다시 경계 위에서 끝나는 폴리선을 그리면(또는 S로 고르면)
+    /// 2점 판정 → 단높이 · 소단 → 옹벽 짓기(<see cref="WallLineFlow.Run"/> — 옛 [옹벽 변환]의 L 길 그대로).</summary>
+    [CommandMethod("DHWALLADD")]
+    public void Add()
+    {
+        Document doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        GradingSettings.SyncToDocument(doc);
+        try { WallLineFlow.Run(doc); }
+        catch (System.Exception ex)
+        {
+            doc.Editor.WriteMessage("\n[옹벽 추가] 실패 — " + ex.Message);
+            try { DiagLog.Append($"\n■ [옹벽 추가] 예외 — {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}\n"); } catch { }
+        }
+    }
 }

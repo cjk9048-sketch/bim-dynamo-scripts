@@ -27,6 +27,8 @@ public static partial class RoadGrade
         public int Refined, Removed, Capped; public double Ms;   // Capped = 세분 한도(횡단 4만 · 마구리 광선 2천)에 걸린 횟수
         /// <summary>★[v113.1 · B1] 급한 굽은 안쪽 주름에서 흘러내린 원뿔 감싸기에 져서 자른 광선 수(0 = 주름 높이가 맞음 · 옛 그대로).</summary>
         public int Slumped;
+        /// <summary>★[검토 2] 흘러내림 원천 마디(사면 원뿔) — 선 따라 TIN 틈 면 높이를 B1 기준으로 잴 때.</summary>
+        public List<(double X0, double Y0, double Z0, double X1, double Y1, double Z1, sbyte Reg, double Ke)> SlumpSrc = new();
         /// <summary>★[v113.1 · 검토 성능] 흘러내림 셈에 든 시간(ms).</summary>
         public double SlumpMs;
         /// <summary>★[v113.1 · A1] 몰려 한 점으로 합친 광선 끝 수.</summary>
@@ -189,8 +191,9 @@ public static partial class RoadGrade
             // 원천 = 주름 · 만남으로 끝난 사면 광선의 사면 마디(가장자리 → 끝 · 기울기 ≤ 사면 구배) — 자르기 전 값으로(차례에 안 매임)
             var src = new List<(double X0, double Y0, double Z0, double X1, double Y1, double Z1, sbyte Reg, Ray R, double Ke)>();
             var srcEnds = new List<(double X, double Y)>();
-            foreach (var q in rays)
+            for (int qi = 0; qi < rays.Count; qi++)
             {
+                var q = rays[qi];
                 if (!(q.End == RayEnd.Crease || q.End == RayEnd.Meet) || !SlopeOnly(q)) continue;
                 bool fq = q.Regime < 0; double kq = K(fq), ke = Math.Sqrt(kq * kq + Sq(Grade(q.S)));
                 for (int i = 0; i + 1 < q.Pts.Count; i++)
@@ -203,6 +206,7 @@ public static partial class RoadGrade
                 srcEnds.Add((q.Pts[^1].X, q.Pts[^1].Y));
             }
             if (src.Count == 0) continue;
+            foreach (var q0 in src) set.SlumpSrc.Add((q0.X0, q0.Y0, q0.Z0, q0.X1, q0.Y1, q0.Z1, q0.Reg, q0.Ke));
             // 원천 칸 색인(8 m)
             var grid = new Dictionary<(int, int), List<int>>();
             for (int i = 0; i < src.Count; i++)
