@@ -18,7 +18,7 @@ namespace DH.Grading.Civil.Commands;
 /// <para>화면 없는 탐침: <see cref="Make"/>(그린 점 · H · T를 받아 목록까지 — 질문 없음)를 부른 뒤 DHWALLCOMP.</para></summary>
 internal static class WallLineFlow
 {
-    const string Tag = "옹벽 변환(폴리선)";
+    const string Tag = "옹벽 추가";
     static void Log(string s) { try { DiagLog.AppendCarry("\n" + s); } catch { } }
 
     /// <summary>생성된 지표면 경계 Bd(마지막 구역 — 클립링 ∪ 계획선 · 없으면 순수교선) + 막을 다각형(구멍 · 다른 옹벽 · 굳은 옹벽 · 앞 구역 · 진입도로).</summary>
@@ -245,7 +245,7 @@ internal static class WallLineFlow
 
     static double Dist(Point3 a, Point3 b) => System.Math.Sqrt((a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y));
 
-    /// <summary>★[v113.0] 옹벽 변환 폴리선(L) 대화 — ZoneEditCommon이 계단선 고르기를 걷은 뒤 부른다.</summary>
+    /// <summary>★[v113.0] [옹벽 추가](DHWALLADD · JACK 1104 — 옛 [옹벽 변환]의 L) 대화.</summary>
     internal static void Run(Document doc)
     {
         var ed = doc.Editor; var db = doc.Database;
@@ -374,7 +374,7 @@ internal static class WallLineFlow
         var b = BuildGeom(cut, bd, reg, bl, w.H, w.T, sW, fR, gr, System.Math.Max(0, GradingSettings.WallPolygonMargin), new CachedGroundSurface(gTin), new CachedGroundSurface(p0), clipB);
         if (!b.Ok) return $"폴리선 옹벽 — 새 정지면에서 못 지음: {b.Why}";
         string moved = WallByLine.SamePlace(w, cut, b);
-        if (moved.Length > 0) return "폴리선 옹벽 자리가 움직였다 — " + moved + " · 사면 변환으로 되돌리거나 다시 그리세요";
+        if (moved.Length > 0) return "폴리선 옹벽 자리가 움직였다 — " + moved + " · [옹벽→사면]으로 되돌리거나 다시 그리세요";
         var er = WallTags.Erase(db, tr, (n, r) => n == w.No && (r.Length == 0 || r == region), false, groundId);
         var (wh, blk, note) = BuildSurface(db, tr, b, w.No, region, groundId);
         if (wh.Length == 0) return note;

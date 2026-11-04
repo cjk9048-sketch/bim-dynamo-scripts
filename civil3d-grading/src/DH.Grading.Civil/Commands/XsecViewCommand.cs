@@ -124,7 +124,7 @@ public sealed partial class XsecViewCommand
             X9($"명령 시작 — 배치 {GradingSettings.XsecLayoutC}×{GradingSettings.XsecLayoutR}"
              + $" · 축척 {(GradingSettings.XsecScale > 0 ? $"고정 1:{GradingSettings.XsecScale:F0}" : "자동")}");
         else
-            X9($"진입도로 횡단 시작 — {t.AlignName} · 배치 {GradingSettings.XsecLayoutC}×{GradingSettings.XsecLayoutR}"
+            X9($"진입도로 횡단 시작 — {t.AlignName} · 배치 {GradingSettings.XsecLayoutRoadC}×{GradingSettings.XsecLayoutRoadR}"
              + $" · 축척 {(t.Pin > 0 ? $"고정 1:{t.Pin:F0}" : "자동")}");
         log.AppendLine($"\n[{(t == null ? "횡단도" : "진입도로 횡단도")}] {System.DateTime.Now:yyyy-MM-dd HH:mm:ss}  [DH.Grading {GradingSettings.Version}]");
 
@@ -392,7 +392,9 @@ public sealed partial class XsecViewCommand
         // ── ⑤ ★★[JACK 0826] <b>종단도와 같은 원리</b>: 종이 규격을 고정하고 <b>축척을 그림에 맞춘다.</b>
         //   그림이 얼마나 큰지는 <b>만들어 봐야</b> 아므로 순서가 이렇게 된다:
         //     뷰를 임시 자리에 만든다 → 재다 → 축척을 고른다 → 칸을 계산한다 → 옮긴다 → 도곽을 그린다
-        int cols = GradingSettings.XsecLayoutC, rows = GradingSettings.XsecLayoutR;
+        // ★[v113.2 · JACK 1104] 부지 · 진입도로 배치 따로
+        int cols = t == null ? GradingSettings.XsecLayoutC : GradingSettings.XsecLayoutRoadC,
+            rows = t == null ? GradingSettings.XsecLayoutR : GradingSettings.XsecLayoutRoadR;
         int perSheet = System.Math.Max(1, cols * rows);
         int nPages = (slIds.Count + perSheet - 1) / perSheet;   // 임시 — 뷰를 만든 뒤 다시 센다
         // 임시 간격 — 뷰끼리 겹치지만 않으면 된다. 잰 뒤 제자리로 옮긴다.

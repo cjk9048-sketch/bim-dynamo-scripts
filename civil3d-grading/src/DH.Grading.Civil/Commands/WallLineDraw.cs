@@ -7,11 +7,13 @@ using Autodesk.AutoCAD.Geometry;
 using Autodesk.AutoCAD.GraphicsInterface;
 using DH.Grading.Core;
 using AcadPoly = Autodesk.AutoCAD.DatabaseServices.Polyline;
+using AcadApp = Autodesk.AutoCAD.ApplicationServices.Core.Application;
 
 namespace DH.Grading.Civil.Commands;
 
-/// <summary>★★★[v113.0 · JACK 1104 «옹벽 폴리선 — 경계 2점 자르기 + 안쪽 다단»] 옹벽 폴리선 <b>그리기 · 고르기</b> — 부지(DHWALL) · 진입도로(DHROADWALLCONV)가 함께 쓴다(계획 4-1 ③ · 4-2 · 5-4).
-/// <para>점 찍기(Enter = 끝 · U = 되돌리기) 또는 기존 폴리선 고르기(S — LWPOLYLINE · POLYLINE · 3D 폴리선 · XY만 · 호는 0.5 m로 촘촘히).
+/// <summary>★★★[v113.0 · JACK 1104 «옹벽 폴리선 — 경계 2점 자르기 + 안쪽 다단»] 옹벽 폴리선 <b>그리기 · 고르기</b> — 부지 [옹벽 추가](DHWALLADD) · 진입도로 [옹벽 추가](DHROADWALLADD)가 함께 쓴다(계획 4-1 ③ · 4-2 · 5-4).
+/// <para>★★[JACK 1104] 점 찍기 = 첫 점 경계 위(붙임) → 가운데 점 경계 안 → 경계 위를 누르면 끝(점마다 Core <see cref="BoundaryDraw"/> · 거절이면 까닭 한 줄 · 그 점 다시) · U = 되돌리기 ·
+/// 기존 폴리선 고르기(S — LWPOLYLINE · POLYLINE · 3D 폴리선 · XY만 · 호는 0.5 m로 촘촘히).
 /// 찍는 동안은 <see cref="CursorLabel.GetPoint"/>의 지그가 경계(시안) · 찍은 토막 · 고무줄 · 경계와 만나는 자리(빨간 점)를 화면마다 다시 그린다(확대 · 축소에도 남는다 — v112.4).</para>
 /// <para>다 그리면 <paramref name="classify"/>(Core <see cref="BoundaryCut.Classify"/>)로 판정 — 거절이면 까닭 한 줄 + 문제 자리 빨간 X · [다시 그리기(R)] · Esc = 그만.</para></summary>
 internal static class WallLineDraw
@@ -23,20 +25,6 @@ internal static class WallLineDraw
         public List<Point3> Pts = new();
         public string SrcHandle = "";
         public BoundaryCut.Result Cut = new();
-    }
-
-    /// <summary>선분 a→b가 고리와 만나는 자리(2D).</summary>
-    static IEnumerable<(double X, double Y)> Hits(Point3d a, Point3d b, IReadOnlyList<Point3> ring)
-    {
-        int n = ring.Count;
-        for (int j = 0; j < n; j++)
-        {
-            var p = ring[j]; var q = ring[(j + 1) % n];
-            double dx = b.X - a.X, dy = b.Y - a.Y, ex = q.X - p.X, ey = q.Y - p.Y, den = dx * ey - dy * ex;
-            if (System.Math.Abs(den) < 1e-15) continue;
-            double s = ((p.X - a.X) * ey - (p.Y - a.Y) * ex) / den, u = ((p.X - a.X) * dy - (p.Y - a.Y) * dx) / den;
-            if (s >= 0 && s <= 1 && u >= 0 && u <= 1) yield return (a.X + dx * s, a.Y + dy * s);
-        }
     }
 
     /// <summary>곡선 → 점열(꼭짓점 + 굽은 토막은 0.5 m) · XY만.</summary>
@@ -77,8 +65,33 @@ internal static class WallLineDraw
     /// <param name="floor">바닥(계획선 · 도로 띠) — 회색으로.</param>
     internal static Got? Run(Document doc, string tag, IReadOnlyList<Point3> bd, IReadOnlyList<Point3>? floor, System.Func<List<Point3>, BoundaryCut.Result> classify)
     {
+        // ★★[v113.0 · JACK 1104 · 1104 화면 없는 시험 «340 m»] 찍는 동안은 우리 경계 붙이기가 스냅이다 — AutoCAD 객체 스냅(OSMODE)을 끄고 어느 길로 나가든(Esc · 오류 포함) 되돌린다.
+        //   기운 3D 화면에서 객체 스냅이 켜져 있으면 클릭이 지표면 같은 3D 객체로 붙어 평면 자리가 수백 m 어긋났다(시험 도면: OSMODE 16383 · 3D 화면 · 338~346 m).
+        object? osm = null;
+        try { osm = AcadApp.GetSystemVariable("OSMODE"); AcadApp.SetSystemVariable("OSMODE", 0); } catch { osm = null; }
+        try { return RunCore(doc, tag, bd, floor, classify); }
+        finally
+        {
+            if (osm != null) try { AcadApp.SetSystemVariable("OSMODE", osm); } catch (System.Exception ex) { try { DiagLog.Append($"\n[{tag}] ⚠객체 스냅(OSMODE) 되돌리기 실패 — {ex.Message}"); } catch { } }
+        }
+    }
+
+    /// <summary>화면 시선 방향으로 경계 평면(Z = 0)에 내린 점 — 기운 3D 화면에서 커서가 가리키는 평면 자리(위에서 본 화면이면 X · Y 그대로).</summary>
+    internal static Point3d Flat(Point3d p, Vector3d viewDir)
+    {
+        var f = BoundaryDraw.Flat(p.X, p.Y, p.Z, viewDir.X, viewDir.Y, viewDir.Z);
+        return new Point3d(f.X, f.Y, 0);
+    }
+
+    static Got? RunCore(Document doc, string tag, IReadOnlyList<Point3> bd, IReadOnlyList<Point3>? floor, System.Func<List<Point3>, BoundaryCut.Result> classify)
+    {
         var ed = doc.Editor; var db = doc.Database;
         var ucs = ed.CurrentUserCoordinateSystem;
+        Vector3d vdir = Vector3d.ZAxis;
+        try { vdir = ed.GetCurrentView().ViewDirection; } catch { }
+        // ★[설치 전 검토 4] 경계 · 바닥 다각형은 한 번만 짓는다(지그가 화면마다 다시 짓지 않게) · 붙이기는 그 고친 고리에(Classify와 같은 고리)
+        var geo = BoundaryDraw.Prepare(bd, floor);
+        if (geo == null) { ed.WriteMessage($"\n[{tag}] 경계를 다각형으로 못 만들었습니다 — 아무것도 안 바꿨습니다."); return null; }
         var bdD = bd.Select(q => new Point3d(q.X, q.Y, 0)).ToList();
         var flD = floor?.Select(q => new Point3d(q.X, q.Y, 0)).ToList();
         double diag;
@@ -98,43 +111,60 @@ internal static class WallLineDraw
             wd.SubEntityTraits.Color = aci;
             for (int i = 0; i < r.Count; i++) wd.Geometry.WorldLine(r[i], r[(i + 1) % r.Count]);
         }
+        void Box(WorldDraw wd, double x, double y, short aci)
+        {
+            wd.SubEntityTraits.Color = aci;
+            var c = new[] { new Point3d(x - mk, y - mk, 0), new Point3d(x + mk, y - mk, 0), new Point3d(x + mk, y + mk, 0), new Point3d(x - mk, y + mk, 0) };
+            for (int i = 0; i < 4; i++) wd.Geometry.WorldLine(c[i], c[(i + 1) % 4]);
+        }
+        // 경계 위로 붙는 거리 = 화면 높이의 1.5 %(0.2 ~ 15 m) — 확대하면 촘촘히 · 축소하면 넉넉히
+        double SnapTol()
+        {
+            try { var vh = System.Convert.ToDouble(Autodesk.AutoCAD.ApplicationServices.Core.Application.GetSystemVariable("VIEWSIZE")); return System.Math.Clamp(vh * 0.015, 0.2, 15); }
+            catch { return 1.0; }
+        }
         while (true)
         {
             var pts = new List<Point3d>();
             string src = "";
-            var marks = new List<(double X, double Y)>();
-            // ── 점 찍기 · 고르기 ──
+            bool drawnMode = true;   // 찍어 그림(첫 · 끝 = 경계 위 → 판정 전에 바깥으로 늘임) · 거짓 = 기존 폴리선 고르기(S)
+            // ── 점 찍기(★★[v113.0 · JACK 1104 «[옹벽 추가]» — 첫 점 = 경계 위 · 가운데 = 경계 안 · 경계 위를 누르면 끝] · 점마다 BoundaryDraw) · 고르기(S) ──
             while (true)
             {
-                var ppo = new PromptPointOptions(pts.Count == 0 ? $"\n[{tag}] 폴리선 첫 점 [기존 폴리선(S)]: "
-                    : pts.Count == 1 ? $"\n[{tag}] 다음 점 [되돌리기(U)]: " : $"\n[{tag}] 다음 점 (점 {pts.Count}개) [되돌리기(U)] <Enter = 끝>: ");
-                if (pts.Count == 0) ppo.Keywords.Add("S", "S", "기존 폴리선(S)");
+                double snap = SnapTol();
+                bool first = pts.Count == 0;
+                var ppo = new PromptPointOptions(first ? $"\n[{tag}] 시작점 — 경계 위 클릭 [고르기(S)]: " : $"\n[{tag}] 다음 점 — 경계 안 · 경계 위나 밖을 누르면 끝 [되돌리기(U)]: ");
+                if (first) ppo.Keywords.Add("S", "S", "고르기(S)");
                 else
                 {
                     if (SelfCheckLog.Headless) { ppo.UseBasePoint = true; ppo.BasePoint = pts[^1].TransformBy(ucs.Inverse()); ppo.UseDashedLine = false; }
                     ppo.Keywords.Add("U", "U", "되돌리기(U)");
-                    ppo.AllowNone = pts.Count >= 2;
                 }
+                ppo.AllowNone = false;
                 ppo.AppendKeywordsToMessage = false;
-                var drawn = pts.ToList();
-                int nHit = 0;
-                for (int i = 0; i + 1 < drawn.Count; i++) nHit += Hits(drawn[i], drawn[i + 1], bd).Count();
+                var drawn = pts.Select(q => (q.X, q.Y)).ToList();
+                BoundaryDraw.Step Try(double x, double y) => first ? BoundaryDraw.First(geo, x, y, snap) : BoundaryDraw.Next(geo, drawn, x, y, snap);
                 void Path(WorldDraw wd, Point3d cur, bool has)
                 {
                     Ring(wd, bdD, 4);
                     if (flD != null) Ring(wd, flD, 8);
                     wd.SubEntityTraits.Color = 2;
-                    for (int i = 0; i + 1 < drawn.Count; i++) wd.Geometry.WorldLine(drawn[i], drawn[i + 1]);
-                    for (int i = 0; i + 1 < drawn.Count; i++) foreach (var h in Hits(drawn[i], drawn[i + 1], bd)) Cross(wd, h.X, h.Y, 1);
-                    if (has && drawn.Count > 0)
+                    for (int i = 0; i + 1 < drawn.Count; i++) wd.Geometry.WorldLine(new Point3d(drawn[i].X, drawn[i].Y, 0), new Point3d(drawn[i + 1].X, drawn[i + 1].Y, 0));
+                    if (!has) return;
+                    BoundaryDraw.Step st;
+                    var cf = Flat(cur, vdir);
+                    try { st = Try(cf.X, cf.Y); } catch { return; }
+                    var to = st.Ok ? new Point3d(st.X, st.Y, 0) : cf;
+                    if (drawn.Count > 0)
                     {
-                        var c = new Point3d(cur.X, cur.Y, 0);
-                        wd.SubEntityTraits.Color = 1; wd.Geometry.WorldLine(drawn[^1], c);
-                        foreach (var h in Hits(drawn[^1], c, bd)) Cross(wd, h.X, h.Y, 1);
+                        wd.SubEntityTraits.Color = (short)(st.Kind == BoundaryDraw.Kind.End ? 3 : st.Ok ? 2 : 1);
+                        wd.Geometry.WorldLine(new Point3d(drawn[^1].X, drawn[^1].Y, 0), to);
                     }
+                    if (st.Kind is BoundaryDraw.Kind.Start or BoundaryDraw.Kind.End) Box(wd, st.X, st.Y, 3);   // 경계 위에 붙는 자리
+                    else if (!st.Ok && st.At != null && drawn.Count > 0) Cross(wd, st.At.Value.X, st.At.Value.Y, 1);
                 }
-                string label = pts.Count == 0 ? "폴리선 첫 점 · S 기존 폴리선" : $"다음 점 · 경계와 {nHit}번 만남{(pts.Count >= 2 ? " · Enter 끝" : "")}";
-                var lr = CursorLabel.GetPoint(ed, ppo, label, "U 되돌리기 · Esc 그만", Path);
+                string label = first ? "시작점 · 경계 위" : "다음 점 · 경계 위·밖 = 끝";
+                var lr = CursorLabel.GetPoint(ed, ppo, label, "", Path);
                 if (lr.Status == PromptStatus.Keyword)
                 {
                     string kw = (lr.StringResult ?? "").Trim().ToUpperInvariant();
@@ -154,21 +184,28 @@ internal static class WallLineDraw
                             src = per.ObjectId.Handle.ToString();
                         }
                         tr.Commit();
-                        if (pts.Count >= 2) break;
+                        if (pts.Count >= 2) { drawnMode = false; break; }
                         ed.WriteMessage("\n  폴리선 점을 못 읽었습니다.");
                         pts.Clear();
                         continue;
                     }
                     continue;
                 }
-                if (lr.Status == PromptStatus.None) break;
-                if (lr.Status != PromptStatus.OK) { ed.WriteMessage($"\n[{tag}] 그만두었습니다 — 아무것도 안 바꿨습니다."); return null; }
-                var w = lr.Value.TransformBy(ucs);
-                if (pts.Count > 0 && System.Math.Sqrt((w.X - pts[^1].X) * (w.X - pts[^1].X) + (w.Y - pts[^1].Y) * (w.Y - pts[^1].Y)) < 0.5) { ed.WriteMessage("\n  (앞 점과 0.5 m 안 — 건너뜀)"); continue; }
-                pts.Add(new Point3d(w.X, w.Y, 0));
+                if (lr.Status != PromptStatus.OK) { ed.WriteMessage($"\n[{tag}] 아무것도 안 바꿨습니다."); return null; }
+                var w = Flat(lr.Value.TransformBy(ucs), vdir);   // UCS → WCS → 시선 따라 경계 평면(Z = 0)
+                var stp = Try(w.X, w.Y);
+                if (!stp.Ok)
+                {
+                    ed.WriteMessage($"\n  {stp.Why}");
+                    try { var nb = BoundaryDraw.Nearest(geo, w.X, w.Y); DiagLog.AppendCarry($"\n  [{tag}] 점 거절 — ({w.X:F3}, {w.Y:F3}) · 경계까지 {nb.D:F3} m · 붙임 {snap:F2} m · 점 {pts.Count}개 · {stp.Why}"); } catch { }
+                    continue;
+                }
+                pts.Add(new Point3d(stp.X, stp.Y, 0));
+                if (stp.Kind == BoundaryDraw.Kind.End) break;
             }
             if (pts.Count < 2) { ed.WriteMessage($"\n[{tag}] 점이 모자랍니다 — 아무것도 안 바꿨습니다."); return null; }
-            var list = pts.Select(q => new Point3(q.X, q.Y, 0)).ToList();
+            // 찍어 그린 선은 첫 · 끝 토막을 경계 밖으로 1 m 늘여 판정(Classify는 양 끝이 경계 밖이어야 — 경계 위 두 점이 그대로 교점)
+            var list = drawnMode ? BoundaryDraw.Extend(pts.Select(q => (q.X, q.Y)).ToList(), 1.0) : pts.Select(q => new Point3(q.X, q.Y, 0)).ToList();
             var cut = classify(list);
             try { DiagLog.AppendCarry($"\n  [{tag}] 폴리선 판정 — 점 {list.Count}개{(src.Length > 0 ? $"(기존 폴리선 {src})" : "")} · {BoundaryCut.CodeName(cut.Code)} · 교차 {cut.Crossings}" + (cut.Ok ? $" · A({cut.A.X:F2},{cut.A.Y:F2}) · B({cut.B.X:F2},{cut.B.Y:F2}) · 교차각 {cut.AngleA:F0}°/{cut.AngleB:F0}° · 옛 {cut.AreaOld:F1} = 새 {cut.AreaNew:F1} + 잘라낼 {cut.AreaCut:F1}㎡" : " · " + cut.Why)); } catch { }
             SelfCheckLog.Line(tag + " — 폴리선 판정", cut.Ok ? '–' : '⚠', $"{BoundaryCut.CodeName(cut.Code)} · 교차 {cut.Crossings}" + (cut.Ok ? "" : " · " + cut.Why), doc.Name);
@@ -182,7 +219,7 @@ internal static class WallLineDraw
             var live = Show(cut.Marks, list, mk);
             try
             {
-                var pk = new PromptKeywordOptions($"\n[{tag}] [다시 그리기(R)] <Esc = 그만>: ");
+                var pk = new PromptKeywordOptions($"\n[{tag}] [다시 그리기(R)]: ");
                 pk.Keywords.Add("R", "R", "다시 그리기(R)");
                 pk.AllowNone = false; pk.AppendKeywordsToMessage = false;
                 var kr = ed.GetKeywords(pk);

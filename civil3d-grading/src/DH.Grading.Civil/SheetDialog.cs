@@ -34,6 +34,10 @@ public sealed class SheetDialog : Window
     private readonly ComboBox _basemapRes;
     private readonly ComboBox _xsecScale;
     private readonly ComboBox _xsecLayout;
+    /// <summary>★[v113.2 · JACK 1104] 진입도로 횡단도 배치 — 부지(<see cref="_xsecLayout"/>)와 따로.</summary>
+    private readonly ComboBox _roadXsecLayout;
+    const string LayoutTip = "배치는 '한 장에 몇 개'를 정하고, 그것이 곧 칸 크기가 됩니다.\n"
+                           + "축척이 자동이면 배치가 사실상 축척을 정합니다 — 촘촘히 놓을수록 그림이 작아집니다.";
     private readonly ComboBox _roadProfileScale;
     private readonly ComboBox _roadXsecScale;
     /// <summary>★★[v113.1 · 계획_종단방향_축척.md 2.2 · JACK 1104 «종단 축척 H · V 따로»] 부지 종단 V · 진입도로 종단 H · V.</summary>
@@ -137,13 +141,19 @@ public sealed class SheetDialog : Window
             "자동 — 배치한 칸에 가장 크게 들어가는 표준 축척을 고릅니다.\n"
           + "고정하면 그 값을 그대로 씁니다. 칸을 넘쳐도 바꾸지 않고 넘친 채로 그리며 로그로 알립니다 —\n"
           + "도면에 적힌 축척과 실제가 어긋나는 것이 더 나쁘기 때문입니다.";
+        // ★★[JACK 0826] 배치는 <b>여기서</b> 고른다 — 명령을 누를 때마다 묻지 않는다.
+        //   ★★[v113.2 · JACK 1104 «횡단도 배치는 공통에 있는데 부지 별도 진입도로 별도로»] «3. 공통» → 여기(부지 횡단도만) · 진입도로는 «2.»에 따로
+        _xsecLayout = AddCombo(root, "횡단도 배치", GradingSettings.XsecLayoutLabels,
+            System.Math.Clamp(GradingSettings.XsecLayout, 0, GradingSettings.XsecLayoutLabels.Length - 1),
+            "한 장(A1)에 몇 개씩 놓을지 — 칸 크기가 이것으로 정해집니다");
+        _xsecLayout.ToolTip = LayoutTip;
 
         // ══ 2. 진입도로 ════════════════════════════════════════════════
         //   ★★[v111.4 · JACK 1030 «계획지표면의 종횡단과 진입도로의 종횡단의 축척은 도면설정에 별도로» · 인터뷰: 횡단만 따로 · 종단은 부지 따름]
         //   도면에 저장(RoadDrawingSettings) — 위 부지 칸과 따로 · ★[v111.6] 3 → 2
         // ★★[v113.1 · JACK 1104 «부지 · 진입도로 종단 H · V 따로»] 진입도로 종단도는 부지와 따로(옛 «부지 따름» 칸은 기록만 이어 감 — 옛 애드인이 읽음)
         GradingDialog.AddSection(root, "2. 진입도로",
-            "진입도로 [종단도] · [횡단도]가 쓰는 축척 — 계획지표면과 따로 정합니다.");
+            "진입도로 [종단도] · [횡단도]가 쓰는 축척 · 배치 — 계획지표면과 따로 정합니다.");
         int Idx(double v) { var a = GradingSettings.ProfileScaleValues; for (int i = 0; i < a.Length; i++) if (System.Math.Abs(a[i] - v) < 1e-9) return i; return 0; }
         (_roadProfileScale, _roadProfileV) = AddComboHV(root, "종단도 축척", Idx(roadH), GradingSettings.ProfileScaleVIndex(roadV));
         // ★[설치 전 검토 M3] 옛 규칙 축척이 사다리 밖(사용자 주석 축척 등)이면 «자동»으로 보이지 않게 그 값을 맨 끝 칸으로 — 안 건드리면 그 값 그대로
@@ -161,6 +171,10 @@ public sealed class SheetDialog : Window
             _roadXsecScale = AddCombo(root, "횡단도 축척", GradingSettings.XsecScaleLabels, Idx(roadXsecScale), "");
             _roadXsecScale.ToolTip = "자동 — 배치한 칸에 가장 크게 들어가는 표준 축척(부지 횡단도와 같은 규칙) · 고정하면 그 값.\n부지 횡단도 축척과 따로 정합니다.";
         }
+        // ★[v113.2 · JACK 1104] 진입도로 횡단도 배치(부지와 따로 — 옛 도면은 옛 공통 값에서 시작)
+        _roadXsecLayout = AddCombo(root, "횡단도 배치", GradingSettings.XsecLayoutLabels,
+            System.Math.Clamp(GradingSettings.XsecLayoutRoad, 0, GradingSettings.XsecLayoutLabels.Length - 1), "");
+        _roadXsecLayout.ToolTip = LayoutTip + "\n부지 횡단도 배치와 따로 정합니다.";
 
         // ══ 3. 공통 ════════════════════════════════════════════════════
         //   ★★[v111.6 · JACK 1102] 계획지표면 · 진입도로가 함께 쓰는 값 — 횡단 간격 · 횡단도 배치(옛 «2. 횡단»에서) · 배경지도 화질(옛 «4. 도면설정 기타»)
@@ -171,13 +185,6 @@ public sealed class SheetDialog : Window
         // ★[v111.7.2 · JACK 1102] «횡단 간격» → «측점 간격»(값 · 칸 이름 XsecInterval · 동작 그대로 — 화면 글만)
         _xsecInterval = GradingDialog.AddRow(root, "측점 간격 (m)", GradingSettings.XsecInterval, "");
         _xsecInterval.ToolTip = "No.0 · No.1 … 사이 거리 — 횡단도는 측점마다 · 종단 밴드 측점 이름 · 진입도로 주측점 PVI가 이 간격을 따릅니다 · 꺾이는 곳(+측점)은 따로 더해집니다";
-        // ★★[JACK 0826] 배치는 <b>여기서</b> 고른다 — 명령을 누를 때마다 묻지 않는다.
-        _xsecLayout = AddCombo(root, "횡단도 배치", GradingSettings.XsecLayoutLabels,
-            System.Math.Clamp(GradingSettings.XsecLayout, 0, GradingSettings.XsecLayoutLabels.Length - 1),
-            "한 장(A1)에 몇 개씩 놓을지 — 칸 크기가 이것으로 정해집니다");
-        _xsecLayout.ToolTip =
-            "배치는 '한 장에 몇 개'를 정하고, 그것이 곧 칸 크기가 됩니다.\n"
-          + "축척이 자동이면 배치가 사실상 축척을 정합니다 — 촘촘히 놓을수록 그림이 작아집니다.";
         int bmIdx = System.Array.IndexOf(GradingSettings.BasemapResValues, GradingSettings.BasemapRes);
         _basemapRes = AddCombo(root, "배경지도 화질", GradingSettings.BasemapResLabels,
                                bmIdx >= 0 ? bmIdx : 1, "");
@@ -347,6 +354,8 @@ public sealed class SheetDialog : Window
         GradingSettings.XsecLeft = xl;
         GradingSettings.XsecRight = xr;
         GradingSettings.XsecLayout = System.Math.Clamp(_xsecLayout.SelectedIndex, 0,
+                                        GradingSettings.XsecLayoutLabels.Length - 1);
+        GradingSettings.XsecLayoutRoad = System.Math.Clamp(_roadXsecLayout.SelectedIndex, 0,
                                         GradingSettings.XsecLayoutLabels.Length - 1);
 
         // 슬라이더는 표에 있는 값만 고른다 — 0이나 0.001 같은 값이 들어올 길이 없다.

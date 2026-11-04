@@ -53,7 +53,7 @@ internal sealed class RoadSession
             var sts = pcs.Where(p => p.R != null).SelectMany(p => p.R!.Bounds.Where(x => x.No == b.No)).ToList();
             if (sts.Any(x => x.Ok)) continue;
             var why = sts.FirstOrDefault(x => !x.Why.StartsWith("좌표를 못 바꿈", StringComparison.Ordinal))?.Why ?? sts.FirstOrDefault()?.Why ?? "계산에 안 들어감";
-            bad.Add($"⚠폴리선 옹벽 {b.No} — {why} · 다시 그리거나 지우세요(사면 변환 W)");
+            bad.Add($"⚠폴리선 옹벽 {b.No} — {why} · 다시 그리거나 지우세요([옹벽→사면] W)");
         }
         return string.Join(" · ", bad);
     }
@@ -850,7 +850,7 @@ internal sealed class RoadSession
         double pinNow = RoadDrawingSettings.Read(db).Xsec, annoNow = Commands.SheetCommand.CurrentDrawingScale(db);
         var ci = System.Globalization.CultureInfo.InvariantCulture;
         // ★[v111.7.2] 횡단도 배치도 판정에(바뀌면 다시 그림) · ★[검토 중간 2] 이 도면에 저장된 배치(세션 값은 다른 도면 것일 수 있음 — 시계가 뒤 도면을 다시 셀 때 앞 도면 배치로 «바뀜»이 뜨지 않게) · 기록 없으면 기본 1×2
-        int layNow = RoadDrawingSettings.ReadLayout(db); if (layNow < 0) layNow = RoadXsecRules.LayoutDefault;
+        int layNow = RoadDrawingSettings.ReadLayoutRoad(db); if (layNow < 0) layNow = RoadXsecRules.LayoutDefault;   // ★[v113.2] 진입도로 배치(부지 배치를 바꿔도 «바뀜» 아님)
         inputs = string.Join("|", stations, surfNow, Design.SurfaceSig, pinNow.ToString("R", ci), annoNow.ToString("R", ci), layNow.ToString(ci));
         return RoadXsecRules.Stale(Design.XsecStamp, stations, surfNow, Design.SurfaceSig, Design.XsecPin, pinNow, Design.XsecAnno, annoNow, Design.XsecLayout, layNow);
     }
@@ -1151,7 +1151,22 @@ internal sealed class RoadSession
         try { return CreateSurface(d, r, tris, tnote, lines, sw); }
         catch (InvalidOperationException exG) when (exact && exG.Message.StartsWith("Civil이 면을 그대로 안 받았습니다"))
         {
-            try { DiagLog.Append($"\n[진입도로] {Name} — ⚠선 면을 Civil이 못 받음({exG.Message}) → 칸 면으로 다시"); } catch { }
+            // ★★[JACK 1104] Civil이 선 면을 안 받으면 칸 면 전에 선 따라 TIN(이미 선 따라 TIN이었으면 바로 칸 면) — 단계마다 까닭을 남김
+            string path1 = tnote.StartsWith("선 따라 TIN") ? "선 따라 TIN" : "선 면";
+            if (path1 == "선 면")
+            {
+                var bt = RoadGrade.BreakTinSurface(inp, r, out string bn, lines);
+                try { DiagLog.Append($"\n[진입도로] {Name} — ⚠선 면을 Civil이 못 받음({exG.Message}) → " + (bt != null ? "선 따라 TIN으로 다시" : $"선 따라 TIN 못 함({bn}) → 칸 면으로 다시")); } catch { }
+                if (bt != null && bt.Count > 0)
+                {
+                    try { return CreateSurface(d, r, bt, bn + " · (선 면을 Civil이 못 받음)", lines, sw); }
+                    catch (InvalidOperationException exG2) when (exG2.Message.StartsWith("Civil이 면을 그대로 안 받았습니다"))
+                    {
+                        try { DiagLog.Append($"\n[진입도로] {Name} — ⚠선 따라 TIN도 Civil이 못 받음({exG2.Message}) → 칸 면으로 다시"); } catch { }
+                    }
+                }
+            }
+            else try { DiagLog.Append($"\n[진입도로] {Name} — ⚠선 따라 TIN을 Civil이 못 받음({exG.Message}) → 칸 면으로 다시"); } catch { }
             var old = RoadGrade.SurfaceTris(r, out string t2);
             var lineR = r;   // ★[v111.1] 선 · 노리선은 처음 결과의 광선으로(1 m 칸 결과엔 광선이 없음)
             // ★[설치 전 검토 L9] 칸 면도 너무 크면 1 m 칸으로
@@ -1165,7 +1180,7 @@ internal sealed class RoadSession
                 r = r1;
             }
             // ★[설치 전 검토 M3] 면만 칸 면 — 선은 단면 광선 선 그대로(미리보기 · [옹벽 변환] 찍기 선과 같게)
-            return CreateSurface(d, r, old, "⚠선 면을 Civil이 못 받음 → 칸 면 · " + t2, lines, sw, lineR);
+            return CreateSurface(d, r, old, $"⚠{path1}을 Civil이 못 받음 → 칸 면 · " + t2, lines, sw, lineR);
         }
     }
 
@@ -1189,7 +1204,24 @@ internal sealed class RoadSession
         try { return CreateSurface(d, rs[0], tris, tnote, lines, sw) + " · " + vol; }
         catch (InvalidOperationException exG) when (exact && exG.Message.StartsWith("Civil이 면을 그대로 안 받았습니다"))
         {
-            try { DiagLog.Append($"\n[진입도로] {Name} — ⚠선 면을 Civil이 못 받음({exG.Message}) → 칸 면으로 다시(토막 {pcs.Count})"); } catch { }
+            // ★★[JACK 1104 (c)] 빈 구간 도로도 한 토막 도로와 같은 사슬 — 선 면 토막은 선 따라 TIN으로 다시(이미 TIN인 토막은 그대로) → 그래도 못 받으면 칸 면
+            {
+                var bt = new List<WallDaylight.Tri>(); var bns = new List<string>(); bool okAll = true;
+                for (int k = 0; k < pcs.Count && okAll; k++)
+                {
+                    if (notes[k].StartsWith("선 따라 TIN")) { okAll = false; break; }   // 이미 TIN이었던 토막이 있으면 칸 면으로(무엇을 못 받았는지 모름)
+                    var b = RoadGrade.BreakTinSurface(pcs[k].Inp, rs[k], out string bn);
+                    if (b == null || b.Count == 0) { okAll = false; bns.Add(bn); break; }
+                    bt.AddRange(b); bns.Add(bn);
+                }
+                try { DiagLog.Append($"\n[진입도로] {Name} — ⚠선 면을 Civil이 못 받음({exG.Message}) → " + (okAll ? $"선 따라 TIN으로 다시(토막 {pcs.Count})" : $"선 따라 TIN 못 함({string.Join(" / ", bns)}) → 칸 면으로 다시(토막 {pcs.Count})")); } catch { }
+                if (okAll)
+                {
+                    try { return CreateSurface(d, rs[0], bt, "선 따라 TIN — " + string.Join(" / ", bns) + " · (선 면을 Civil이 못 받음)", lines, sw) + " · " + vol; }
+                    catch (InvalidOperationException exG2) when (exG2.Message.StartsWith("Civil이 면을 그대로 안 받았습니다"))
+                    { try { DiagLog.Append($"\n[진입도로] {Name} — ⚠선 따라 TIN도 Civil이 못 받음({exG2.Message}) → 칸 면으로 다시(토막 {pcs.Count})"); } catch { } }
+                }
+            }
             var old = new List<WallDaylight.Tri>(); var t2 = new List<string>();
             foreach (var r in rs) { old.AddRange(RoadGrade.SurfaceTris(r, out string n2)); t2.Add(n2); }
             return CreateSurface(d, rs[0], old, "⚠선 면을 Civil이 못 받음 → 칸 면 · " + string.Join(" / ", t2), lines, sw) + " · " + vol;

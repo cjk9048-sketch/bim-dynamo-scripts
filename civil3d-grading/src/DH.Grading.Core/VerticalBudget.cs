@@ -12,15 +12,18 @@
 public static class VerticalBudget
 {
     /// <summary>링이 닿는 수평 거리 — 높이 <paramref name="rise"/>까지(넉넉하게): 구배 · 단마다 소단 · 최소 사면폭 · 대소단.</summary>
+    /// <param name="cornerFactor">★[v113.2 · 설치 뒤 검토 높음] 볼록 모퉁이에서 링이 부지에서 떨어지는 배수 — 직각 모드(마이터 버퍼)면 꼭짓점이
+    /// 1/sin(θ/2)배(90°면 √2배)까지 나가고 MitreLimit에서 잘린다 → MiterConvex면 MitreLimit · 라운드면 1(부채꼴은 거리 그대로).
+    /// 종전엔 1로 보아 대각선 1.0~1.4·D 밖 언덕을 못 보고 그 모퉁이가 데이라잇 없이 끝날 수 있었다.</param>
     public static double ReachOf(double rise, double slopeMax, double benchWMax, double benchHMin, double minFaceRun,
-                                 bool terrace, double terraceInterval, double terraceWidth)
+                                 bool terrace, double terraceInterval, double terraceWidth, double cornerFactor = 1)
     {
         if (!(rise > 0)) return 0;
         double h = System.Math.Max(benchHMin, 1e-6);
         double benches = System.Math.Ceiling(rise / h) + 1;
         double d = rise * System.Math.Max(slopeMax, 0) + benches * (System.Math.Max(benchWMax, 0) + System.Math.Max(minFaceRun, 0));
         if (terrace && terraceInterval > 1e-6) d += (System.Math.Floor(rise / terraceInterval) + 1) * System.Math.Max(terraceWidth, 0);
-        return d;
+        return d * System.Math.Max(cornerFactor, 1);
     }
 
     /// <summary>결과 — 필요한 높이(여유 빼고) · 되풀이 수 · 마지막 거리 · 종전(TIN 전체) 값으로 물러났나.</summary>
@@ -42,9 +45,32 @@ public static class VerticalBudget
         foreach (var v in pad) { designMin = System.Math.Min(designMin, v.Z); designMax = System.Math.Max(designMax, v.Z); }
         int n = pad.Count;
         if (n >= 2 && System.Math.Abs(pad[0].X - pad[n - 1].X) < 1e-9 && System.Math.Abs(pad[0].Y - pad[n - 1].Y) < 1e-9) n--;
+        // ★[v113.2 · 설치 뒤 검토 중간 — 속도] 부지까지 거리는 NTS 색인(변 STR 나무 · 안팎 색인)으로 — 종전엔 점마다 부지 변을 다 훑었다(세모 × 3 × 부지 꼭짓점).
+        //   색인을 못 만들면(꼬인 경계 등) 종전 전수 셈.
+        double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+        for (int i = 0; i < n; i++) { minX = System.Math.Min(minX, pad[i].X); minY = System.Math.Min(minY, pad[i].Y); maxX = System.Math.Max(maxX, pad[i].X); maxY = System.Math.Max(maxY, pad[i].Y); }
+        NetTopologySuite.Operation.Distance.IndexedFacetDistance? ifd = null;
+        NetTopologySuite.Algorithm.Locate.IndexedPointInAreaLocator? loc = null;
+        var gf = NetTopologySuite.NtsGeometryServices.Instance.CreateGeometryFactory();
+        try
+        {
+            var cs = new NetTopologySuite.Geometries.Coordinate[n + 1];
+            for (int i = 0; i < n; i++) cs[i] = new NetTopologySuite.Geometries.Coordinate(pad[i].X, pad[i].Y);
+            cs[n] = cs[0].Copy();
+            var poly = gf.CreatePolygon(cs);
+            ifd = new NetTopologySuite.Operation.Distance.IndexedFacetDistance(poly.ExteriorRing);
+            loc = new NetTopologySuite.Algorithm.Locate.IndexedPointInAreaLocator(poly);
+        }
+        catch { ifd = null; loc = null; }
         // 부지 다각형까지 거리(안이면 0)
         double DistToPad(double x, double y)
         {
+            if (ifd != null && loc != null)
+            {
+                var c = new NetTopologySuite.Geometries.Coordinate(x, y);
+                if (loc.Locate(c) != NetTopologySuite.Geometries.Location.Exterior) return 0;
+                return ifd.Distance(gf.CreatePoint(c));
+            }
             double best = double.MaxValue; bool inside = false;
             for (int i = 0, j = n - 1; i < n; j = i++)
             {
@@ -59,20 +85,32 @@ public static class VerticalBudget
             }
             return inside ? 0 : System.Math.Sqrt(best);
         }
+        // 볼 수 있는 가장 먼 거리 — 종전 예산 + 여유까지의 거리(두 방향 큰 쪽). 세모 테두리 상자가 부지 상자에서 이보다 멀면 처음부터 뺀다(어느 되풀이에도 안 든다).
+        double far = System.Math.Max(reach(true, capCut + spareOf(System.Math.Max(capCut, capFill))),
+                                     reach(false, capFill + spareOf(System.Math.Max(capCut, capFill))));
+        if (!double.IsFinite(far)) far = double.MaxValue;
         // 세모마다 «부지에서 이만큼이면 걸친다» 거리 · 높이 범위 — 거리로 늘어놓고 누적 최고 · 최저
-        int m = tris.Count;
-        var key = new double[m]; var zHi = new double[m]; var zLo = new double[m];
-        for (int t = 0; t < m; t++)
+        int mAll = tris.Count;
+        var keyL = new List<double>(); var zHiL = new List<double>(); var zLoL = new List<double>();
+        for (int t = 0; t < mAll; t++)
         {
             var tr = tris[t];
+            double tx0 = System.Math.Min(tr.A.X, System.Math.Min(tr.B.X, tr.C.X)), tx1 = System.Math.Max(tr.A.X, System.Math.Max(tr.B.X, tr.C.X));
+            double ty0 = System.Math.Min(tr.A.Y, System.Math.Min(tr.B.Y, tr.C.Y)), ty1 = System.Math.Max(tr.A.Y, System.Math.Max(tr.B.Y, tr.C.Y));
+            double gx = System.Math.Max(0, System.Math.Max(minX - tx1, tx0 - maxX)), gy = System.Math.Max(0, System.Math.Max(minY - ty1, ty0 - maxY));
+            if (gx * gx + gy * gy > far * far) continue;                 // 상자끼리도 그 거리보다 멀다 — 세모의 어느 점도 더 멀다
             double da = DistToPad(tr.A.X, tr.A.Y), db = DistToPad(tr.B.X, tr.B.Y), dc = DistToPad(tr.C.X, tr.C.Y);
             double lab = System.Math.Sqrt((tr.B.X - tr.A.X) * (tr.B.X - tr.A.X) + (tr.B.Y - tr.A.Y) * (tr.B.Y - tr.A.Y));
             double lbc = System.Math.Sqrt((tr.C.X - tr.B.X) * (tr.C.X - tr.B.X) + (tr.C.Y - tr.B.Y) * (tr.C.Y - tr.B.Y));
             double lca = System.Math.Sqrt((tr.A.X - tr.C.X) * (tr.A.X - tr.C.X) + (tr.A.Y - tr.C.Y) * (tr.A.Y - tr.C.Y));
-            key[t] = System.Math.Max(0, System.Math.Min(da, System.Math.Min(db, dc)) - System.Math.Max(lab, System.Math.Max(lbc, lca)));
-            zHi[t] = System.Math.Max(tr.A.Z, System.Math.Max(tr.B.Z, tr.C.Z));
-            zLo[t] = System.Math.Min(tr.A.Z, System.Math.Min(tr.B.Z, tr.C.Z));
+            keyL.Add(System.Math.Max(0, System.Math.Min(da, System.Math.Min(db, dc)) - System.Math.Max(lab, System.Math.Max(lbc, lca))));
+            zHiL.Add(System.Math.Max(tr.A.Z, System.Math.Max(tr.B.Z, tr.C.Z)));
+            zLoL.Add(System.Math.Min(tr.A.Z, System.Math.Min(tr.B.Z, tr.C.Z)));
         }
+        int m = keyL.Count;
+        if (m == 0)
+            return new Result(capCut, capFill, 0, 0, far, far, true, $"닿는 거리({far:0.#}m) 안에 원지반 세모 없음(세모 {mAll}개) — 종전 예산");
+        var key = keyL.ToArray(); var zHi = zHiL.ToArray(); var zLo = zLoL.ToArray();
         var idx = new int[m];
         for (int t = 0; t < m; t++) idx[t] = t;
         System.Array.Sort(key, idx);
@@ -111,6 +149,6 @@ public static class VerticalBudget
         var c1 = Fix(true, capCut, 0); var f1 = Fix(false, capFill, c1.Need);
         var c2 = Fix(true, capCut, f1.Need); var f2 = Fix(false, capFill, c2.Need);
         return new Result(c2.Need, f2.Need, c1.Iter + c2.Iter, f1.Iter + f2.Iter, c2.Reach, f2.Reach, false,
-                          $"부지 둘레 땅(세모 {m}개) — 절토 {c2.Need:0.#}m(거리 {c2.Reach:0.#}m · 종전 {capCut:0.#}m) · 성토 {f2.Need:0.#}m(거리 {f2.Reach:0.#}m · 종전 {capFill:0.#}m)");
+                          $"부지 둘레 땅(세모 {m}/{mAll}개) — 절토 {c2.Need:0.#}m(거리 {c2.Reach:0.#}m · 종전 {capCut:0.#}m) · 성토 {f2.Need:0.#}m(거리 {f2.Reach:0.#}m · 종전 {capFill:0.#}m)");
     }
 }

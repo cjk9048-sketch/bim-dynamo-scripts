@@ -54,11 +54,12 @@ static class VerticalBudgetCheck
         };
         // BuildParams와 같은 셈(여유 2단 · 대소단이면 간격마다 더)
         double SpareOf(double diff, bool terrace) => (2 + (terrace ? (int)Math.Floor(diff / 15) + 2 : 0)) * 5.0;
-        VerticalBudget.Result Budget(GridGround g, bool terrace, double slopeMax = 1.5)
+        // ★[v113.2] 모퉁이 배수 = 출하(BuildParams)와 같게 — 직각 모드(MiterConvex) · MitreLimit 2
+        VerticalBudget.Result Budget(GridGround g, bool terrace, double slopeMax = 1.5, double cornerFactor = 2)
         {
             double gMax = g.Tris.Max(t => Math.Max(t.A.Z, Math.Max(t.B.Z, t.C.Z))), gMin = g.Tris.Min(t => Math.Min(t.A.Z, Math.Min(t.B.Z, t.C.Z)));
             return VerticalBudget.Local(pad, g.Tris,
-                (up, rise) => VerticalBudget.ReachOf(rise, slopeMax, 1, 5, 0.005, terrace, 15, 15),
+                (up, rise) => VerticalBudget.ReachOf(rise, slopeMax, 1, 5, 0.005, terrace, 15, 15, cornerFactor),
                 d => SpareOf(d, terrace), Math.Max(gMax - 100, 0), Math.Max(100 - gMin, 0));
         }
         // 마지막 링이 모든 점에서 땅보다 높다(절토) / 낮다(성토) — 땅이 있는 점만
@@ -140,6 +141,33 @@ static class VerticalBudgetCheck
             bool newPlain = eNew.Count == 2 && eNew.All(x => !x.Staged && Math.Abs(x.L - 10) < 1e-12 && !x.Warn);
             check("S213 ⑥먼 산 탓에 늘던 사면 구간 전이 띠 — 부지 둘레 예산이면 10 m 띠 하나(묶음 · 늘림 · ⚠ 없음)", oldStretched && newPlain,
                   $"종전(310 m) [{string.Join(" ", eOld.Select(x => $"{(x.AtT0 ? "T0" : "T1")} 묶음 {x.Staged} 띠 {x.L:0.##}m"))}] · 둘레({localRise:0.#} m) [{string.Join(" ", eNew.Select(x => $"{(x.AtT0 ? "T0" : "T1")} 묶음 {x.Staged} 띠 {x.L:0.##}m ⚠{x.Warn}"))}]");
+        }
+
+        // ⑦ ★[v113.2 · 설치 뒤 검토 높음] 직각 모퉁이 대각선의 언덕 — 마이터 링 꼭짓점은 모퉁이에서 √2·D까지 나간다.
+        //   부지 곁 101 m 평지 · 꼭짓점 (40,30)의 대각선 바깥 1.3·D(D = 모퉁이 배수 없이 잰 거리)에 언덕 → 배수 2로 재면 언덕까지 보고 데이라잇 · 배수 1(종전)이면 못 봐 그 모퉁이가 땅 밑에서 끝남
+        {
+            double d0 = VerticalBudget.ReachOf(1 + SpareOf(1, false), 1.5, 1, 5, 0.005, false, 15, 15);   // 평지 1 m + 여유 — 배수 없이
+            double r = 1.3 * d0 / Math.Sqrt(2);                                                              // 대각선으로 1.3·D
+            //   언덕 = 반지름 2 m 원기둥(꼬리 없음) — 꼬리가 D 안에 있으면 되풀이가 언덕 비탈을 타고 올라 배수 없이도 찾는다(그건 맞는 동작) · 여기는 배수만 가른다
+            double kx = OX + 40 + r, ky = OY + 30 + r;
+            var gKnoll = new GridGround(OX - 150, OY - 150, OX + 210, OY + 200, 1, (x, y) => (x - kx) * (x - kx) + (y - ky) * (y - ky) < 4 ? 141 : 101);
+            var bOld = Budget(gKnoll, false, cornerFactor: 1);
+            var bNew = Budget(gKnoll, false);
+            var dOld = DaylightAll(gKnoll, P(bOld.NeedCut + SpareOf(Math.Max(bOld.NeedCut, bOld.NeedFill), false), 5), true);
+            var dNew = DaylightAll(gKnoll, P(bNew.NeedCut + SpareOf(Math.Max(bNew.NeedCut, bNew.NeedFill), false), 5), true);
+            check("S213 ⑦직각 모퉁이 대각선 1.3·D 언덕 — 마이터 배수로 재면 모든 방향 데이라잇(배수 1은 재현: 땅 밑 점이 있다)",
+                  dNew.Bad == 0 && dNew.Seen > 0 && dOld.Bad > 0,
+                  $"D {d0:0.##} m · 언덕 대각선 {1.3 * d0:0.##} m · 배수1 절토 {bOld.NeedCut:0.##} m 낮은 점 {dOld.Bad}/{dOld.Seen} · 배수2 절토 {bNew.NeedCut:0.##} m 낮은 점 {dNew.Bad}/{dNew.Seen}");
+        }
+
+        // ⑧ ★[v113.2 · 설치 뒤 검토 중간 — 속도] 세모 113만 개(현장 큰 원지반 크기) — 한 번 셈 시간
+        {
+            var gBig = new GridGround(OX - 1500, OY - 1500, OX + 1500, OY + 1500, 4, (x, y) => 105 + Hill(x, y, OX + 1100, OY + 15, 300, 120));
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var bBig = Budget(gBig, false);
+            long ms = sw.ElapsedMilliseconds;
+            check("S213 ⑧세모 113만 개 — 한 번 셈 시간(5초 안) · 먼 산 안 봄", ms < 5000 && Math.Abs(bBig.NeedCut - 5) < 1e-6,
+                  $"세모 {gBig.Tris.Count} · {ms} ms · {bBig.Note}");
         }
     }
 }

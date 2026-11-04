@@ -126,11 +126,11 @@ internal sealed class RoadPanel : UserControl
 
         // ── ■ 옹벽 ──
         // ★★[v111.7 · JACK 1102] [옹벽 변환] [사면 변환](옛 ■ 진입도로 수정에서 옮김 — 전체 해제는 명령 안 C · 부지와 같음) → 옹벽 제안 한 줄(제안 높이 · [사업 경계]) · 풍선 글은 쉬운 말로
-        _host = GradingDialog.AddCollapsible(_root, "■ 옹벽", "사면 → 옹벽 · 옹벽 → 사면 · 옹벽 제안", open: true, key: "도로:옹벽");
-        Buttons(("옹벽 변환", "DHROADWALLCONV",
-                 "사면선 · 소단선 하나를 클릭하면(고를 선은 하늘색으로 잠깐 그려짐) 그 단부터 바깥쪽 사면을 수직 옹벽으로 바꿉니다. 전체 구간인지 일부 구간인지, 옹벽 사이 소단 길이는 명령창에서 정합니다.", false),
-                ("사면 변환", "DHROADSLOPECONV",
-                 "옹벽선 하나를 클릭하면(고를 선은 하늘색으로 잠깐 그려짐) 그 자리 옹벽을 없애고 다시 사면으로 되돌립니다. 전체 구간인지 일부 구간인지는 명령창에서 정합니다.", false));
+        _host = GradingDialog.AddCollapsible(_root, "■ 옹벽", "사면 → 옹벽 · 옹벽 → 사면 · 옹벽 추가 · 옹벽 제안", open: true, key: "도로:옹벽");
+        // ★★[v113.0 · JACK 1104 «옹벽 변환은 소단선 변형 · 폴리선 옹벽 추가는 별도 단추»] [사면→옹벽] · [옹벽→사면] · [옹벽 추가](풍선 글 짧게)
+        Buttons(("사면→옹벽", "DHROADWALLCONV", "고른 사면선 · 소단선부터 바깥을 옹벽으로 바꿉니다.", false),
+                ("옹벽→사면", "DHROADSLOPECONV", "옹벽선을 골라 다시 사면으로 되돌립니다. 추가한 옹벽은 W로 지웁니다.", false),
+                ("옹벽 추가", "DHROADWALLADD", "경계에서 경계까지 폴리선을 그려 옹벽을 추가합니다.", false));
         // 옹벽 제안 한 줄 — 이름 · 제안 높이 칸 · [사업 경계](좁으면 아래로 접힘)
         var sug = new WrapPanel { Margin = new Thickness(0, 4, 0, 0) };
         sug.Children.Add(new TextBlock

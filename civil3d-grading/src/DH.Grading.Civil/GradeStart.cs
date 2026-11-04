@@ -73,7 +73,7 @@ internal static class GradeStart
                 tr.Commit();
                 return new Plan(Commands.GradeMode.Fresh, ObjectId.Null,
                     $"정지면_DH가 없고 옹벽 합성 전 정지면('{Commands.WallCompositeCommand.BaseName}')만 남아 있습니다.\n\n"
-                  + "옹벽 변환이나 사면 변환을 한 번 돌리면 합성 전 면이 정지면_DH로 돌아옵니다 — 그 뒤에 이어서 하세요.\n"
+                  + "[사면→옹벽]이나 [옹벽→사면]을 한 번 돌리면 합성 전 면이 정지면_DH로 돌아옵니다 — 그 뒤에 이어서 하세요.\n"
                   + "(처음부터 다시 만들려면 [새로시작])", true);
             }
             if (!hasPrev || !append) { tr.Commit(); return fresh; }

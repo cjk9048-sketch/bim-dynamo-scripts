@@ -312,7 +312,7 @@ internal static class ZoneEditCommon
 
     public static void Run(Document doc, bool wallMode)
     {
-        string cmdLabel = wallMode ? "옹벽 변환" : "사면 변환";
+        string cmdLabel = wallMode ? "사면→옹벽" : "옹벽→사면";   // ★[v113.0 · JACK 1104] 단추 이름과 같게(옛 «옹벽 변환» · «사면 변환»)
         Editor ed = doc.Editor;
         Database db = doc.Database;
         string app = GradingSettings.WallPickAppName;
@@ -385,7 +385,7 @@ internal static class ZoneEditCommon
         (bool up, int gid, int bench)? pick = null;   // [1회 1개] 선택은 항상 최대 하나
         bool finishedByEnter = false;
         bool clearAll = false;
-        bool polyMode = false, boundRevert = false;   // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 폴리선(L) 길 · 폴리선 옹벽 되돌리기(W)
+        bool boundRevert = false;   // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 폴리선 옹벽 되돌리기(W) — 폴리선으로 짓기는 따로 [옹벽 추가](DHWALLADD)
         int gidSeq = 0;
 
         try
@@ -748,7 +748,7 @@ internal static class ZoneEditCommon
             // ★[JACK 0910] 차례가 셋으로 갈렸으므로 <b>그 차례를 그대로</b> 적는다.
             // ★[v113.0 · JACK 1104] 옹벽 변환은 «전체구간/구간지정» 질문이 없다 — 클릭 = 그 선 전체 · 일부는 폴리선(L)
             ed.WriteMessage(wallMode
-                ? $"\n[{cmdLabel}] ① 계단선을 클릭(그 선 전체) 또는 폴리선(L) → ② 단높이·소단길이 정하고 Enter. (전체해제=C · Esc=취소)"
+                ? $"\n[{cmdLabel}] ① 계단선을 클릭(그 선 전체) → ② 단높이·소단길이 정하고 Enter. (전체해제=C · Esc=취소)"
                 : $"\n[{cmdLabel}] ① 계단선을 클릭 → ② 전체구간/구간지정(이미 변환한 자리는 전체만) → ③ 단높이·사면구배·소단길이 정하고 Enter."
                   + (listWalls.Any(w => w.Kind == 1) ? " (폴리선 옹벽 되돌리기=W · 전체해제=C · Esc=취소)" : " (전체해제=C · Esc=취소)"));
 
@@ -927,8 +927,7 @@ internal static class ZoneEditCommon
                 //     → <b>매칭용 이름(localName)은 글자 하나</b>로 두고, 한글은 <b>표시용(displayName)</b>에만 쓴다.
                 //     세 인자가 각각 다른 일을 한다: global=코드가 받는 값 · local=사용자가 치는 값 · display=화면.
                 // ★★[v113.0 · JACK 1104 «옹벽 폴리선 — 경계 2점 자르기 + 안쪽 다단»] 옹벽 변환 = 폴리선(L) · 사면 변환 = 폴리선 옹벽 되돌리기(W — 그런 옹벽이 있을 때만)
-                if (wallMode) peo.Keywords.Add("L", "L", "폴리선(L)");
-                else if (listWalls.Any(w => w.Kind == 1)) peo.Keywords.Add("W", "W", "폴리선옹벽(W)");
+                if (!wallMode && listWalls.Any(w => w.Kind == 1)) peo.Keywords.Add("W", "W", "폴리선옹벽(W)");   // 폴리선(L)은 [옹벽 추가]로 옮김(JACK 1104)
                 peo.Keywords.Add("C", "C", "전체해제(C)");   // ★선을 안 골라도 쓰는 것이라 이 단계에 남긴다
                 var per = ed.GetEntity(peo);
                 if (per.Status == PromptStatus.Cancel) break;
@@ -937,7 +936,6 @@ internal static class ZoneEditCommon
                     || (per.Status == PromptStatus.OK && per.ObjectId.IsNull))
                 {
                     string kw0 = (per.StringResult ?? "").Trim().ToUpperInvariant();
-                    if (wallMode && kw0 == "L") { polyMode = true; break; }
                     if (!wallMode && kw0 == "W") { boundRevert = true; break; }
                     // ★[JACK 0820 '대문자로 표기되었지만 대문자나 소문자 다 먹어야 돼'] 대소문자를 안 가린다.
                     if (kw0 != "C") continue;
@@ -1056,7 +1054,7 @@ internal static class ZoneEditCommon
                 SelfCheckLog.Line(cmdLabel + " — 고른 조각", '–', pickTxt, doc.Name);   // ★[v103.1.7] 자가점검 기록에도
                 if (sameKind)
                 {
-                    ed.WriteMessage($"\n   이미 옹벽입니다{(wallPiece ? $"(옹벽 {wSel})" : "")} — 옹벽 변환을 할 수 없습니다. 값을 바꾸려면 사면 변환으로 되돌린 뒤 다시 옹벽 변환하세요.");
+                    ed.WriteMessage($"\n   이미 옹벽입니다{(wallPiece ? $"(옹벽 {wSel})" : "")} — [사면→옹벽]을 할 수 없습니다. 값을 바꾸려면 [옹벽→사면]으로 되돌린 뒤 다시 [사면→옹벽]하세요.");
                     tr.Commit();
                     Deselect(key);
                     continue;
@@ -1081,7 +1079,7 @@ internal static class ZoneEditCommon
                     // ★★[v113.0 · JACK 1104 «옹벽 변환에서 전체구간/구간지정 질문 없앰 — 클릭 = 그 선 전체»] 직접 사면 변환한 조각도 조각 전체(손 폴리곤 길은 안 연다 ·
                     //   구간 = 조각 양끝의 수직 규칙 · v103.1.1~10의 길). 일부만 옹벽으로 하려면 폴리선(L)
                     partArc.Remove(key); DropPart();
-                    ed.WriteMessage($"\n   {(slopeToWall ? $"이미 사면 변환한 자리(지금 1:{pieceS:0.##} · 소단 {pieceW:0.##}m) — " : "")}클릭한 선 전체를 바꿉니다 · 일부만 옹벽으로 하려면 Esc 뒤 폴리선(L).");
+                    ed.WriteMessage($"\n   {(slopeToWall ? $"이미 사면 변환한 자리(지금 1:{pieceS:0.##} · 소단 {pieceW:0.##}m) — " : "")}클릭한 선 전체를 바꿉니다 · 일부만 옹벽으로 하려면 [옹벽 추가].");
                     Log($"   옹벽 변환 — 클릭한 선 전체 [{lineArc[key].T0:F2}..{lineArc[key].T1:F2}](구간지정 묻지 않음 · v113.0){(slopeToWall ? " · 직접 사면 변환한 조각" : "")}");
                     slopeToWall = false;
                 }
@@ -1219,14 +1217,7 @@ internal static class ZoneEditCommon
 
             DropPart();   // ★[JACK 0910] 빨간 띠는 명령이 끝나면 반드시 걷는다(도면엔 아무것도 안 남는다)
             RestoreAndCleanup(db, madeIds);
-            // ★★★[v113.0 · JACK 1104 «옹벽 폴리선 — 경계 2점 자르기 + 안쪽 다단»] 폴리선(L) — 계단선 고르기를 걷고 폴리선 길로(정지면은 안 다시 짓는다)
-            if (polyMode)
-            {
-                Log($"■ {cmdLabel} — 폴리선(L) 길로");
-                WallLineFlow.Run(doc);
-                return;
-            }
-            // ★[v113.0] 사면 변환 W — 폴리선 옹벽을 통째로 지우고 옛 사면 · 옛 경계로(구간지정 없음 · 계획 4-5)
+            // ★[v113.0] [옹벽→사면] W — 폴리선 옹벽을 통째로 지우고 옛 사면 · 옛 경계로(구간지정 없음 · 계획 4-5)
             if (boundRevert)
             {
                 RevertBound(doc, region!, listWalls, activePlan);
@@ -1563,7 +1554,7 @@ internal static class ZoneEditCommon
             {
                 // ★[v103.1 · 코드 검토 중간 1] 옹벽 변환 «전체구간»으로 구간 옹벽 자리를 고르면 옹벽 위에 전체구간 옹벽이 겹친다 — 바꾸지 않고 길을 알린다
                 string cvw = string.Join(", ", covered.Select(w => $"옹벽 {w.No}"));
-                ed.WriteMessage($"\n[{cmdLabel}] 이 자리는 이미 구간 옹벽({cvw})입니다 — 값을 바꾸려면 사면 변환으로 되돌린 뒤 다시 옹벽 변환하세요. 아무것도 안 바꿨습니다.");
+                ed.WriteMessage($"\n[{cmdLabel}] 이 자리는 이미 구간 옹벽({cvw})입니다 — 값을 바꾸려면 [옹벽→사면]으로 되돌린 뒤 다시 [사면→옹벽]하세요. 아무것도 안 바꿨습니다.");
                 Log($"■ {cmdLabel} — 전체구간 옹벽 변환이 구간 옹벽({cvw})을 덮어 멈춤(안 바꿈)");
                 Abandon();
                 return;
@@ -1963,7 +1954,7 @@ internal static class ZoneEditCommon
     private static void RevertBound(Document doc, GradingBundle region, System.Collections.Generic.List<WallRec> listWalls, string activePlan)
     {
         var ed = doc.Editor; var db = doc.Database;
-        const string lbl = "사면 변환";
+        const string lbl = "옹벽→사면";
         var bound = listWalls.Where(w => w.Kind == 1).ToList();
         if (bound.Count == 0) { ed.WriteMessage($"\n[{lbl}] 폴리선 옹벽이 없습니다."); return; }
         int no = 0;

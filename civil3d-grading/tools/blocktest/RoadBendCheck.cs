@@ -153,6 +153,54 @@ static class RoadBendCheck
             Check(tag + (wantZip ? " — 주름 지퍼가 변을 나눠 두 둘레를 한 줄로" : " — 지퍼 · 흘러내림 안 돎(옛 길)") + $" · 선 면 검사 통과(바늘 · 열린 끝 0) · 조각 1 · 5 cm 이웃 높이 차 ≤ {lim} m",
                 zipOk && rep.Ok && !note.StartsWith("⚠") && Pieces(tris) == 1 && j <= lim, $"지퍼 {rep.Zipped} · 흘러내림 {set.Slumped} · {rep.Text[..Math.Min(120, rep.Text.Length)]} · 조각 {Pieces(tris)} · 이웃 차 최대 {j:F3} m @({jx:F2},{jy:F2})");
         }
+        // ── ⑫ [JACK 1104 20:16] 곡선 넷(S자 · R 30) · 18 % — 선 면 또는 선 따라 TIN(칸 면 아님) · Civil 되읽기 관문 흉내(작은 속 구멍 0 · 0.1 mm 안 점 쌍 0 · 바늘 0 — Civil이 세모를 더하거나 합치는 꼴) ──
+        foreach (var (tag, grade, drop) in new (string, double, double)[] { ("⑫ S자 곡선 넷(R 30 · 18 % · 성토 6 m)", 0.18, 6), ("⑫ S자 곡선 넷(R 30 · 18 % · 절토 4 m)", 0.18, -4) })
+        {
+            var xs = new List<double>(); var ys = new List<double>(); double cx = OX, cy = OY, hd = 0;
+            void Arc(double R, double turn) { int na = (int)Math.Ceiling(Math.Abs(turn) * R); double sg = Math.Sign(turn); double ox = cx - sg * R * Math.Sin(hd), oy = cy + sg * R * Math.Cos(hd); for (int k = 1; k <= na; k++) { double h = hd + turn * k / na; xs.Add(ox + sg * R * Math.Sin(h)); ys.Add(oy - sg * R * Math.Cos(h)); } hd += turn; cx = xs[^1]; cy = ys[^1]; }
+            void Str(double L) { for (double t = 1; t <= L; t += 1) { xs.Add(cx + Math.Cos(hd)); ys.Add(cy + Math.Sin(hd)); cx = xs[^1]; cy = ys[^1]; } }
+            xs.Add(cx); ys.Add(cy);
+            Str(20); Arc(30, Math.PI / 3); Str(15); Arc(30, -Math.PI / 2); Str(15); Arc(30, Math.PI / 2); Str(15); Arc(30, -Math.PI / 3); Str(20);
+            var ss = new double[xs.Count]; for (int i = 1; i < xs.Count; i++) ss[i] = ss[i - 1] + Math.Sqrt((xs[i] - xs[i - 1]) * (xs[i] - xs[i - 1]) + (ys[i] - ys[i - 1]) * (ys[i] - ys[i - 1]));
+            const double z0 = 100;
+            var inp = new RoadGrade.Input { X = xs.ToArray(), Y = ys.ToArray(), Z = ss.Select(s => z0 - grade * s).ToArray(), Base = new G((x, y) => z0 - grade * 60 - drop), Cell = 0.5, Reach = 40, SectionGap = 2, Fill = new RoadGrade.SlopeRule { Slope = 1.8 }, Cut = new RoadGrade.SlopeRule { Slope = 1.5 } };
+            var r = RoadGrade.Run(inp);
+            var tris = RoadGrade.ExactSurface(inp, r, out string note, out _);
+            // Civil 관문 흉내 — 속 구멍(시계 방향 둘레 고리) · 0.1 mm 안 점 쌍 · 바늘
+            var und = new Dictionary<((double, double), (double, double)), int>();
+            foreach (var t in tris) foreach (var (p, q) in new[] { (t.A, t.B), (t.B, t.C), (t.C, t.A) }) { var a1 = (p.X, p.Y); var b1 = (q.X, q.Y); var k = a1.CompareTo(b1) < 0 ? (a1, b1) : (b1, a1); und[k] = und.GetValueOrDefault(k) + 1; }
+            var nx = new Dictionary<(double, double), List<(double, double)>>();
+            foreach (var t in tris) foreach (var (p, q) in new[] { (t.A, t.B), (t.B, t.C), (t.C, t.A) }) { var a1 = (p.X, p.Y); var b1 = (q.X, q.Y); var k = a1.CompareTo(b1) < 0 ? (a1, b1) : (b1, a1); if (und[k] == 1) { if (!nx.TryGetValue(a1, out var l)) nx[a1] = l = new(); l.Add(b1); } }
+            var used = new HashSet<((double, double), (double, double))>(); int holes = 0;
+            foreach (var a0 in nx.Keys.ToList()) foreach (var b0 in nx[a0].ToList())
+            {
+                if (used.Contains((a0, b0))) continue;
+                var ring = new List<(double, double)> { a0 }; var cur = a0; var nq = b0; bool closed = false;
+                for (int g = 0; g < 200000; g++) { used.Add((cur, nq)); if (nq == a0) { closed = true; break; } ring.Add(nq); cur = nq; if (!nx.TryGetValue(cur, out var outs)) break; int ci = outs.FindIndex(w => !used.Contains((cur, w))); if (ci < 0) break; nq = outs[ci]; }
+                if (!closed) continue;
+                double ar = 0; for (int i = 0; i < ring.Count; i++) { var p = ring[i]; var q = ring[(i + 1) % ring.Count]; ar += (p.Item1 - ring[0].Item1) * (q.Item2 - ring[0].Item2) - (q.Item1 - ring[0].Item1) * (p.Item2 - ring[0].Item2); }
+                if (ar < 0 && -ar / 2 < 1.0) holes++;
+            }
+            var pts = tris.SelectMany(t => new[] { t.A, t.B, t.C }).Select(p => (p.X, p.Y)).Distinct().ToList();
+            var cell = new Dictionary<(long, long), List<(double X, double Y)>>(); int pairs = 0;
+            foreach (var p in pts) { var k = ((long)Math.Floor(p.X / 1e-4), (long)Math.Floor(p.Y / 1e-4)); for (long a = k.Item1 - 1; a <= k.Item1 + 1; a++) for (long b = k.Item2 - 1; b <= k.Item2 + 1; b++) if (cell.TryGetValue((a, b), out var l)) foreach (var o in l) if ((o.X - p.X) * (o.X - p.X) + (o.Y - p.Y) * (o.Y - p.Y) < 1e-8) pairs++; if (!cell.TryGetValue(k, out var m)) cell[k] = m = new(); m.Add(p); }
+            int thin = 0;
+            foreach (var t in tris) { double l1 = Math.Sqrt((t.A.X - t.B.X) * (t.A.X - t.B.X) + (t.A.Y - t.B.Y) * (t.A.Y - t.B.Y)), l2 = Math.Sqrt((t.B.X - t.C.X) * (t.B.X - t.C.X) + (t.B.Y - t.C.Y) * (t.B.Y - t.C.Y)), l3 = Math.Sqrt((t.C.X - t.A.X) * (t.C.X - t.A.X) + (t.C.Y - t.A.Y) * (t.C.Y - t.A.Y)); double cr = Math.Abs((t.B.X - t.A.X) * (t.C.Y - t.A.Y) - (t.B.Y - t.A.Y) * (t.C.X - t.A.X)); if (cr / Math.Max(l1, Math.Max(l2, l3)) < CivilSafeMesh.ThinH) thin++; }
+            string path = note.StartsWith("선 면") ? "선 면" : note.StartsWith("선 따라 TIN") ? "선 따라 TIN" : "칸 면";
+            // ★[JACK 1104 (e)] 4° 넘게 꺾인 변(3D 보기 · 등고선의 «짜글짜글») — 칸 면의 절반 아래
+            int Kink(IReadOnlyList<Tri> ts)
+            {
+                var em = new Dictionary<((double, double), (double, double)), int>(); var nrm = new (double X, double Y, double Z)[ts.Count];
+                for (int i = 0; i < ts.Count; i++) { var t = ts[i]; double ax = t.B.X - t.A.X, ay = t.B.Y - t.A.Y, az = t.B.Z - t.A.Z, bx = t.C.X - t.A.X, by = t.C.Y - t.A.Y, bz = t.C.Z - t.A.Z; double nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx, l = Math.Sqrt(nx * nx + ny * ny + nz * nz); if (nz < 0) l = -l; nrm[i] = (nx / l, ny / l, nz / l); }
+                int k = 0; double c = Math.Cos(4 * Math.PI / 180);
+                for (int i = 0; i < ts.Count; i++) { var t = ts[i]; foreach (var (p, q) in new[] { (t.A, t.B), (t.B, t.C), (t.C, t.A) }) { var a1 = (p.X, p.Y); var b1 = (q.X, q.Y); var key = a1.CompareTo(b1) < 0 ? (a1, b1) : (b1, a1); if (em.TryGetValue(key, out int j)) { var n1 = nrm[i]; var n2 = nrm[j]; if (n1.X * n2.X + n1.Y * n2.Y + n1.Z * n2.Z < c) k++; } else em[key] = i; } }
+                return k;
+            }
+            int kc = Kink(tris), kg = Kink(RoadGrade.SurfaceTris(r, out _));
+            Check(tag + " — 4° 넘게 꺾인 변이 칸 면의 절반 아래(짜글짜글 없음)", kc * 2 < kg, $"{path} {kc:N0} · 칸 면 {kg:N0}");
+            Check(tag + " — 선 면 또는 선 따라 TIN(칸 면 아님) · Civil 관문 흉내: 작은 속 구멍 0 · 0.1 mm 안 점 쌍 0 · 바늘 0 · 조각 1",
+                path != "칸 면" && holes == 0 && pairs == 0 && thin == 0 && Pieces(tris) == 1, $"{path} · 세모 {tris.Count:N0} · 속 구멍 {holes} · 0.1 mm 쌍 {pairs} · 바늘 {thin} · 조각 {Pieces(tris)} · {note[..Math.Min(160, note.Length)]}");
+        }
         // ── ⑨ [검토 H2] 경사진 주름(R 20 · 내림 8 % · 절토 — 급한 곡선 아님) — 곧은 들머리 · 날머리 광선(곡선에서 2 × 단면 간격 밖)은 흘러내림을 켜도 비트 같음(계단식 짧아짐 없음) ──
         {
             var inp = Bend(20, 0.08, -6);

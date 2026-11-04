@@ -29,28 +29,39 @@ internal static class RoadDrawingSettings
     }
 
     /// <summary>★★[v111.7.2 · JACK 1102 «횡단도 배치 드롭박스를 바꿔도 안 바뀌어»] 도면설정 «3. 공통» «횡단도 배치»(차례 번호) — <b>도면에 저장</b>(도면 사전 XRecord «DH_SHEETLAYOUT» · 진입도로 칸과 같은 길).
-    /// 종전엔 세션 값뿐이라 Civil을 켤 때마다 1×2로 돌아갔다. 기록이 없으면 −1(세션 값 그대로 — 새로 켠 Civil이면 기본 1×2).</summary>
-    internal static int ReadLayout(Database db)
+    /// 종전엔 세션 값뿐이라 Civil을 켤 때마다 1×2로 돌아갔다. 기록이 없으면 −1(세션 값 그대로 — 새로 켠 Civil이면 기본 1×2).
+/// ★[v113.2] 이제 «1. 계획지표면» 횡단도 배치(판 2의 첫 칸 · 옛 판 1 = 공통 값).</summary>
+    internal static int ReadLayout(Database db) => ReadLayouts(db).Site;
+
+    /// <summary>★★[v113.2 · JACK 1104 «횡단도 배치는 부지 별도 진입도로 별도»] 진입도로 횡단도 배치 — 판 2 기록이 없으면(옛 도면) 옛 «공통» 값 · 기록이 없으면 −1.</summary>
+    internal static int ReadLayoutRoad(Database db) => ReadLayouts(db).Road;
+
+    /// <summary>★[v113.2] (부지, 진입도로) 배치 + 판 2 기록인가 — <see cref="DH.Grading.Core.RoadXsecRules.DecodeLayouts"/>.</summary>
+    internal static (int Site, int Road, bool V2) ReadLayouts(Database db)
     {
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
             var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
-            int lay = -1;
+            int[] a = System.Array.Empty<int>();
             if (nod.Contains(LayoutKey) && tr.GetObject(nod.GetAt(LayoutKey), OpenMode.ForRead) is Xrecord xr && xr.Data != null)
             {
                 var v = xr.Data.AsArray();
-                if (v.Length >= 1 && v[0].Value is int a && a >= 0) lay = a;
+                a = new int[v.Length];
+                for (int i = 0; i < v.Length; i++) a[i] = v[i].Value is int k ? k : -1;
             }
             tr.Commit();
-            return lay;
+            var (s, r) = DH.Grading.Core.RoadXsecRules.DecodeLayouts(a);
+            return (s, r, DH.Grading.Core.RoadXsecRules.IsLayoutsV2(a));
         }
-        catch { return -1; }
+        catch { return (-1, -1, false); }
     }
 
-    /// <summary>★[v111.7.2] «횡단도 배치» 저장 — 명령 안(문서 잠김)에서 부른다.</summary>
-    internal static void WriteLayout(Database db, int layout)
+    /// <summary>★[v111.7.2] «횡단도 배치» 저장 — 명령 안(문서 잠김)에서 부른다.
+    /// ★[v113.2] 부지 · 진입도로 둘 — 판 2가 아니던 도면에서 둘이 같으면 옛 꼴(정수 하나) 그대로.</summary>
+    internal static void WriteLayouts(Database db, int site, int road)
     {
+        bool wasV2 = ReadLayouts(db).V2;
         using var tr = db.TransactionManager.StartTransaction();
         var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
         Xrecord xr;
@@ -62,7 +73,9 @@ internal static class RoadDrawingSettings
             nod.SetAt(LayoutKey, xr);
             tr.AddNewlyCreatedDBObject(xr, true);
         }
-        xr.Data = new ResultBuffer(new TypedValue((int)DxfCode.Int32, layout));
+        var rb = new ResultBuffer();
+        foreach (int k in DH.Grading.Core.RoadXsecRules.EncodeLayouts(site, road, wasV2)) rb.Add(new TypedValue((int)DxfCode.Int32, k));
+        xr.Data = rb;
         tr.Commit();
     }
 

@@ -235,9 +235,14 @@ internal static class RoadXsec
             // ③ 설계에 적고 저장(실패해도 · 예외여도 — 옛것은 이미 지웠으니 지금 상태를 적는다 · ★[v111.5 · 설치 전 검토 M1] 예외 때 안 적으면 사람 노선에 그룹 · 뷰가 주인 없이 남음)
             d.XsecAt = new[] { at.X, at.Y };
             d.XsecScale = t.Scale; d.XsecAnno = t.Anno; d.XsecPin = pin;
-            d.XsecLayout = GradingSettings.XsecLayout;   // ★[v111.7.2] 그때 배치(바뀌면 횡단도 바뀜)
-            // ★[v111.7.2 검토 중간 2] 그린 배치를 도면에도(기록 없는 도면 = 그 배치가 이 도면 것 — 바뀜 판정 · 다시 열기가 같은 값을 봄)
-            try { if (RoadDrawingSettings.ReadLayout(db) != d.XsecLayout) RoadDrawingSettings.WriteLayout(db, d.XsecLayout); } catch (System.Exception exL) { log.AppendLine("  ⚠횡단도 배치 기록 못 씀 — " + exL.Message); }
+            d.XsecLayout = GradingSettings.XsecLayoutRoad;   // ★[v111.7.2] 그때 배치(바뀌면 횡단도 바뀜) · ★[v113.2] 진입도로 배치
+            // ★[v111.7.2 검토 중간 2] 그린 배치를 도면에도(기록 없는 도면 = 그 배치가 이 도면 것 — 바뀜 판정 · 다시 열기가 같은 값을 봄) · ★[v113.2] 부지 칸은 그대로(기록 없으면 세션 부지 값)
+            try
+            {
+                var (ls0, lr0, _) = RoadDrawingSettings.ReadLayouts(db);
+                if (lr0 != d.XsecLayout) RoadDrawingSettings.WriteLayouts(db, ls0 >= 0 ? ls0 : GradingSettings.XsecLayout, d.XsecLayout);
+            }
+            catch (System.Exception exL) { log.AppendLine("  ⚠횡단도 배치 기록 못 씀 — " + exL.Message); }
             d.XsecGroup = t.GroupId.IsNull ? "" : t.GroupId.Handle.ToString();
             d.XsecViews = t.Views.Select(v => v.Handle.ToString()).ToList();
             d.XsecViewAt = ok ? RoadSession.ViewAt(db, t.Views) : Array.Empty<double>();   // ★[v111.7] 첫 · 끝 뷰 자리(옮겼나 — 저절로 다시 그리기 · 못 그렸으면 없음)
