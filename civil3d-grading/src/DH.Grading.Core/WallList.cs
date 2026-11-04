@@ -50,6 +50,20 @@ public sealed class WallRec
     /// <summary>★★[v103.2 · 판 4] 합성이 남긴 뚜껑(옹벽 뒤에 되살아난 원지반 — 종단 · 횡단의 «옹벽이 든 순수면»에서 뺀다). null = 없음.</summary>
     public PureWithWalls.Cap? Cap;
 
+    // ── ★★[v113.0 · 판 6 · JACK 1104 «옹벽 폴리선 — 경계 2점 자르기 + 안쪽 다단»] 경계 폴리선 옹벽 ──
+    /// <summary>0 = 손 폴리곤(옛 · 판 1~5는 늘 0) · 1 = 경계 폴리선(<see cref="WallByLine"/> — Poly = 바꿀 자리 Z · Seg = Line · Bench = −1 · 합성은 바꿔 끼움).</summary>
+    public int Kind;
+    /// <summary>Kind 1 — 경계 두 점 사이 폴리선(A..B · 2D · z = 0).</summary>
+    public List<Point3> Line = new();
+    /// <summary>Kind 1 — 그린 폴리선 원본(자르기 전 · 정지면을 다시 지으면 이것으로 다시 판정한다).</summary>
+    public List<Point3> Src = new();
+    /// <summary>Kind 1 — 바닥 높이(기운 바닥이면 폴리선 위 가장 낮은(절토) · 높은(성토) 바닥) · 단 수 · 뚜껑 높이.</summary>
+    public double PadZ, CapZ;
+    public int Tiers;
+    /// <summary>Kind 1 — 고른 기존 폴리선 핸들(그렸으면 빈 값).</summary>
+    public string SrcHandle = "";
+    public bool IsBound => Kind == 1;
+
     public string Side => Up ? "절토" : "성토";
     public static string WallSurfaceName(int no) => $"가상옹벽{no}_DH";
     public static string PureSurfaceName(int no) => $"순수옹벽{no}_DH";
@@ -82,12 +96,17 @@ public sealed class FrozenWall
     public List<bool> IsWall = new();
     public double T, HeadZ;
     public bool HasLine => IsWall.Count == Poly.Count && Poly.Count >= 3;
+    /// <summary>★[v113.0 · 판 6 · JACK 1104 «옹벽 폴리선»] 0 = 손 폴리곤 · 1 = 경계 폴리선(굳힐 때 옮긴다 — 앞면 선을 Poly · IsWall로 다시 짓지 못하므로 읽는 쪽은 ⚠로 뺀다).</summary>
+    public int Kind;
+    public List<Point3> Line = new();
+    public double PadZ, CapZ;
+    public int Tiers;
 }
 
 public static class WallList
 {
     public const string Sign = "DH_WALLS";
-    public const int Version = 5;
+    public const int Version = 6;
 
     /// <summary>(종류, 값) — 'S' 글 · 'I' 정수 · 'D' 실수. Civil이 DxfCode.Text · Int32 · Real로 옮긴다.
     /// <para>★[v103.1.14] 판 3 칸(ReplaceNo2 · KeepNo)은 <b>이어 짓기가 걸려 있을 때만</b> 쓴다 — 둘 다 0인 목록은 판 2 그대로(바이트까지 같음 · 옛 판 애드인도 읽는다).</para>
@@ -95,7 +114,9 @@ public static class WallList
     public static List<(char Kind, object Value)> Encode(WallListHead head, IReadOnlyList<WallRec> walls)
     {
         // ★[v103.3] 판 5 = 옹벽선을 가진 굳은 칸이 있을 때만(없으면 판 4 바이트 그대로 — v103.2 애드인도 읽는다)
-        int ver = head.Frozen.Any(f => f.IsWall.Count > 0) ? 5
+        // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 판 6 = 경계 폴리선 옹벽(종류 1)이 하나라도 있을 때만(없으면 판 5 이하 바이트 그대로 — v112 애드인도 읽는다)
+        int ver = walls.Any(w => w.Kind != 0) || head.Frozen.Any(f => f.Kind != 0) ? 6
+                : head.Frozen.Any(f => f.IsWall.Count > 0) ? 5
                 : walls.Any(w => !string.IsNullOrEmpty(w.CompNonce)) || head.Frozen.Count > 0 ? 4
                 : walls.Any(w => w.ReplaceNo2 != 0 || w.KeepNo != 0) ? 3 : 2;
         var v = new List<(char, object)>
@@ -138,6 +159,20 @@ public static class WallList
                     v.Add(('I', f.IsWall.Count)); foreach (var b in f.IsWall) v.Add(('I', b ? 1 : 0));
                     v.Add(('D', f.T)); v.Add(('D', f.HeadZ));
                 }
+            }
+        }
+        if (ver >= 6)
+        {
+            // ★[v113.0 · 판 6] 끝에 붙인다(옛 칸 차례 그대로) — 옹벽마다 종류 + 종류 1 칸 · 굳은 칸마다 종류 + 종류 1 칸
+            foreach (var w in walls)
+            {
+                v.Add(('I', w.Kind));
+                if (w.Kind != 0) { Pts(w.Line); Pts(w.Src); v.Add(('D', w.PadZ)); v.Add(('I', w.Tiers)); v.Add(('D', w.CapZ)); v.Add(('S', w.SrcHandle ?? "")); }
+            }
+            foreach (var f in head.Frozen)
+            {
+                v.Add(('I', f.Kind));
+                if (f.Kind != 0) { Pts(f.Line); v.Add(('D', f.PadZ)); v.Add(('I', f.Tiers)); v.Add(('D', f.CapZ)); }
             }
         }
         return v;
@@ -198,6 +233,21 @@ public static class WallList
                         f.T = D(); f.HeadZ = D();
                     }
                     head.Frozen.Add(f);
+                }
+            }
+            if (ver >= 6)
+            {
+                foreach (var w in walls)
+                {
+                    w.Kind = I();
+                    if (w.Kind < 0 || w.Kind > 1) throw new FormatException($"옹벽 {w.No} 종류 {w.Kind}(이 애드인은 0 · 1만 안다)");
+                    if (w.Kind != 0) { w.Line = Pts(); w.Src = Pts(); w.PadZ = D(); w.Tiers = I(); w.CapZ = D(); w.SrcHandle = S(); }
+                }
+                foreach (var f in head.Frozen)
+                {
+                    f.Kind = I();
+                    if (f.Kind < 0 || f.Kind > 1) throw new FormatException($"굳은 옹벽 {f.No} 종류 {f.Kind}");
+                    if (f.Kind != 0) { f.Line = Pts(); f.PadZ = D(); f.Tiers = I(); f.CapZ = D(); }
                 }
             }
             if (i != v.Count) { why = $"옹벽 목록 끝에 값 {v.Count - i}개가 남았다"; return false; }

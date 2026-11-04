@@ -67,12 +67,23 @@ public class RoadCommand
                     : pts.Count == 1 ? "\n[경로 그리기] 다음 점 [되돌리기(U)]: " : $"\n[경로 그리기] 다음 점 (점 {pts.Count}개) [되돌리기(U)] <Enter = 끝>: ");
                 if (pts.Count > 0)
                 {
-                    ppo.UseBasePoint = true; ppo.BasePoint = pts[^1].TransformBy(ucs.Inverse()); ppo.UseDashedLine = false;
+                    // ★[v112.4 · JACK 1104 «클릭하고 휠로 줌하면 전에 찍은 게 없어져서 작성이 안 돼»] 화면 없는 Civil(지그 없음)만 기준점 고무줄 — 화면에서는 아래 지그가 찍은 선 + 고무줄을 그림
+                    if (SelfCheckLog.Headless) { ppo.UseBasePoint = true; ppo.BasePoint = pts[^1].TransformBy(ucs.Inverse()); ppo.UseDashedLine = false; }
                     ppo.Keywords.Add("U", "U", "되돌리기(U)");
                     ppo.AppendKeywordsToMessage = false;   // 글에 이미 [되돌리기(U)] — 두 번 붙지 않게
                     ppo.AllowNone = pts.Count >= 2;
                 }
-                var pr = ed.GetPoint(ppo);
+                // 찍은 토막(청록) + 마지막 점 → 커서 고무줄 — 지그가 화면마다 다시 그림(확대 · 축소 · 화면 이동에도 남음)
+                var drawn = pts.ToList();
+                void Path(Autodesk.AutoCAD.GraphicsInterface.WorldDraw wd, Point3d cur, bool has)
+                {
+                    var t = wd.SubEntityTraits;
+                    t.Color = 4;
+                    for (int i = 0; i + 1 < drawn.Count; i++) wd.Geometry.WorldLine(drawn[i], drawn[i + 1]);
+                    if (has && drawn.Count > 0) { t.Color = 2; wd.Geometry.WorldLine(drawn[^1], new Point3d(cur.X, cur.Y, drawn[^1].Z)); }
+                }
+                var lr = CursorLabel.GetPoint(ed, ppo, pts.Count == 0 ? "시작점 클릭" : pts.Count == 1 ? "다음 점 클릭" : "다음 점 클릭 · Enter 끝", "", Path);
+                var pr = (Status: lr.Status, Value: lr.Value);
                 if (pr.Status == PromptStatus.Keyword) { if (pts.Count > 0) pts.RemoveAt(pts.Count - 1); Redraw(); continue; }
                 if (pr.Status == PromptStatus.None) break;
                 if (pr.Status != PromptStatus.OK) { ed.Regen(); ed.WriteMessage("\n[경로 그리기] 그만두었습니다."); return; }
@@ -285,7 +296,9 @@ public class RoadCommand
             GradingSettings.SyncToDocument(doc);   // ★[설치 전 검토 · 낮음] 겹침 검사(축척 · 장 수)도 이 도면 설정으로
             double[] last = s.Fresh().SheetAt;
             bool hasLast = again && !mustMove && last.Length >= 2 && double.IsFinite(last[0]) && double.IsFinite(last[1]);
-            var (scale, scNote, _) = RoadSheets.ScaleFor(db);
+            // ★[v113.1] 도면설정 «2. 진입도로» H · V(판 2 — 자동 H는 1:1000으로 넓게 짐작 · 실제는 그릴 때 정함) · 옛 설정 = 옛 규칙
+            var (scale, veP) = RoadSheets.PlannedScale(db);
+            string scNote = RoadSheets.Setting(db, "").Note;
             int n = RoadSheets.SheetCount(db, s.AlignId, scale);
             ed.WriteMessage($"\n[진입도로] 종단도 1:{scale:0} · {n}장 — {scNote}");
             while (true)
@@ -306,7 +319,7 @@ public class RoadCommand
                 else if (!again) { ed.WriteMessage("\n[진입도로] 종단도는 꼭 있어야 합니다(종단 없이 설계 안 됨) — 놓을 자리를 찍으세요."); continue; }
                 else if (pr.Status == PromptStatus.None) { hasLast = false; continue; }   // [종단도 새로 그리기] — 지난 자리가 없으면 Enter는 다시 묻기
                 else { ed.WriteMessage("\n[진입도로] 종단도는 그대로 둡니다(그만)."); return false; }
-                string hit = RoadSheets.Overlap(db, s.AlignId, at, scale, n);
+                string hit = RoadSheets.Overlap(db, s.AlignId, at, scale, n, veP);
                 if (hit.Length > 0)
                 {
                     ed.WriteMessage($"\n[진입도로] ⚠{hit}와(과) 겹칩니다(새 도곽 {n}장 + 여유 {RoadSheets.PlaceMarginMm:0} mm) — 빈 자리(위 · 아래 · 옆)에 찍으세요.");
@@ -319,7 +332,7 @@ public class RoadCommand
                 ed.WriteMessage("\n[진입도로] " + msg);
                 try { DiagLog.Append("\n" + log); } catch { }
                 // ★[설치 전 검토 · 중간] 그린 것으로 다시 봄 — 짐작보다 그래프가 높아 남의 것과 겹쳤으면 다른 자리를 묻는다(다음 짐작은 방금 그린 실제 높이를 씀)
-                string after = RoadSheets.PlacedOverlap(db, s.AlignId, scale);
+                string after = RoadSheets.PlacedOverlap(db, s.AlignId, s.Design.SheetScale > 0 ? s.Design.SheetScale : scale);   // ★[v113.1] 그린 축척
                 if (after.Length > 0)
                 {
                     ed.WriteMessage($"\n[진입도로] ⚠그린 종단도가 {after}와(과) 겹칩니다(그래프가 짐작보다 높음) — 다른 빈 자리를 찍으세요(그 자리에 다시 그림).");
@@ -551,6 +564,25 @@ public class RoadCommand
 
     const string PickLayer = "DH-도로계단선_선택";
 
+    /// <summary>★[v113.0 · 설치 전 검토 M4] 사면 변환 W — 폴리선 옹벽을 번호로 통째로 지움(쉬는 기록도 · 다른 옹벽 기록은 그대로) · 지웠으면 참.</summary>
+    static bool RemoveBoundByNumber(Editor ed, RoadSession s, string label)
+    {
+        var d = s.Fresh();
+        var nos = (d.BoundWalls ?? new()).Select(b => b.No).OrderBy(n => n).ToList();
+        if (nos.Count == 0) { ed.WriteMessage("\n → 폴리선 옹벽이 없습니다."); return false; }
+        var pio = new PromptIntegerOptions($"\n지울 폴리선 옹벽 번호 〈{string.Join(", ", nos)}〉") { AllowNone = false, LowerLimit = 1, UpperLimit = 100000 };
+        if (nos.Count == 1) { pio.DefaultValue = nos[0]; pio.UseDefaultValue = true; }
+        var ir = ed.GetInteger(pio);
+        if (ir.Status != PromptStatus.OK) return false;
+        int rm = d.BoundWalls!.RemoveAll(b => b.No == ir.Value);
+        if (rm == 0) { ed.WriteMessage($"\n → 폴리선 옹벽 {ir.Value}이 없습니다."); return false; }
+        if (d.BoundWalls.Count == 0) d.BoundWalls = null;
+        s.SaveDesign(); s.Recompute();
+        ed.WriteMessage($"\n[{label}] 폴리선 옹벽 {ir.Value}를 지우고 사면으로 되돌렸습니다.");
+        try { DiagLog.Append($"\n■ [{label}] 폴리선 옹벽 {ir.Value} 번호로 지움(W)"); } catch { }
+        return true;
+    }
+
     static (bool Changed, RoadSession? S) ConvertCore(bool wallMode)
     {
         string label = wallMode ? "옹벽 변환" : "사면 변환", noun = wallMode ? "계단선" : "옹벽선";
@@ -585,6 +617,8 @@ public class RoadCommand
                     foreach (var l in pieceSnap[pk].Lines.Where(l => l.Side != 0 && !l.Cross && (l.Role == RoadGrade.LineRole.Wall) != wallMode)) { cands.Add(l); candP.Add(pk); }
             if (cands.Count == 0)
             {
+                // ★[v113.0 · 설치 전 검토 M4] 옹벽선이 없어도(폴리선 옹벽이 모두 쉬는 중) 사면 변환은 폴리선 옹벽을 번호로 지울 수 있게
+                if (!wallMode && (s.Fresh().BoundWalls?.Count ?? 0) > 0) { changed = RemoveBoundByNumber(ed, s, label); return (changed, s); }
                 ed.WriteMessage(wallMode ? $"\n[{label}] 사면선 · 소단선이 없습니다 — 사면이 생기는 도로에서 하세요." : $"\n[{label}] 옹벽이 없습니다 — 먼저 [옹벽 변환]을 하세요.");
                 return (changed, s);
             }
@@ -633,7 +667,9 @@ public class RoadCommand
             }
             if (made.Count == 0) { ed.WriteMessage($"\n[{label}] 고를 선을 그리지 못했습니다."); return (changed, s); }
             s.SetPickMode(true);
-            ed.WriteMessage($"\n[{label}] ① {noun}(시안)을 클릭 → ② 전체구간/구간지정 → ③ " + (wallMode ? "소단 길이 정하고 Enter." : "Enter.") + " (전체해제=C · Esc=취소)");
+            // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 옹벽 변환 = 클릭한 선 전체(구간지정 없음) · 일부는 폴리선(L)
+            ed.WriteMessage(wallMode ? $"\n[{label}] ① {noun}(시안)을 클릭(그 선 전체) 또는 폴리선(L) → ② 소단 길이 정하고 Enter. (전체해제=C · Esc=취소)"
+                                     : $"\n[{label}] ① {noun}(시안)을 클릭 → ② 전체구간/구간지정 → ③ Enter. 폴리선 옹벽 선은 그 옹벽을 통째로 되돌립니다. (전체해제=C · Esc=취소)");
             ObjectId selId = ObjectId.Null;
             void Paint(ObjectId id, bool on)
             {
@@ -652,24 +688,42 @@ public class RoadCommand
             while (true)
             {
                 var peo = new PromptEntityOptions($"\n{noun}을 클릭하세요 (Esc=취소)") { AllowNone = false };
+                if (wallMode) peo.Keywords.Add("L", "L", "폴리선(L)");   // ★[v113.0 · JACK 1104 «옹벽 폴리선»]
+                else if ((s.Design.BoundWalls?.Count ?? 0) > 0) peo.Keywords.Add("W", "W", "폴리선옹벽(W)");   // ★[v113.0 · 설치 전 검토 M4] 번호로 지우기(쉬는 옹벽도)
                 peo.Keywords.Add("C", "C", "전체해제(C)");
                 var per = ed.GetEntity(peo);
                 if (per.Status == PromptStatus.Cancel) return (changed, s);
                 // 키워드는 Keyword로도 OK로도 온다 — 둘 다 받음(부지와 같음)
                 if (per.Status == PromptStatus.Keyword || (per.Status == PromptStatus.OK && per.ObjectId.IsNull))
                 {
-                    if ((per.StringResult ?? "").Trim().ToUpperInvariant() != "C") continue;
+                    string kw0 = (per.StringResult ?? "").Trim().ToUpperInvariant();
+                    if (wallMode && kw0 == "L")
+                    {
+                        // ★★[v113.0] 폴리선 길 — 고를 선은 끝(finally)에서 지운다 · 바꿨으면 부르는 쪽이 도로 면 · 종단 · 횡단을 다시
+                        Paint(selId, false);
+                        changed = RoadWallLine.Run(doc, s);
+                        return (changed, s);
+                    }
+                    if (!wallMode && kw0 == "W")
+                    {
+                        Paint(selId, false);
+                        changed = RemoveBoundByNumber(ed, s, label);
+                        if (changed) return (changed, s);
+                        continue;
+                    }
+                    if (kw0 != "C") continue;
                     var dc = s.Fresh();
-                    int n0 = dc.TierWalls.Count;
-                    if (n0 == 0) { ed.WriteMessage("\n → 옹벽 구간이 없습니다."); continue; }
+                    int n0 = dc.TierWalls.Count, nb = dc.BoundWalls?.Count ?? 0;   // ★[v113.0] 폴리선 옹벽도 함께(묻는 글에 둘 다 셈)
+                    if (n0 + nb == 0) { ed.WriteMessage("\n → 옹벽 구간이 없습니다."); continue; }
                     // ★[설치 전 검토 L5] 두 쪽 옹벽을 다 지우는 일이라 한 번 묻는다(되돌리기는 됨)
-                    var yn = new PromptKeywordOptions($"\n옹벽 {n0}구간을 모두 지우고 사면으로 되돌릴까요? [예(Y)/아니오(N)] <아니오(N)>");
+                    var yn = new PromptKeywordOptions($"\n옹벽 {n0}구간{(nb > 0 ? $" · 폴리선 옹벽 {nb}개" : "")}를 모두 지우고 사면으로 되돌릴까요? [예(Y)/아니오(N)] <아니오(N)>");
                     yn.Keywords.Add("Y", "Y", "예(Y)"); yn.Keywords.Add("N", "N", "아니오(N)"); yn.Keywords.Default = "N"; yn.AllowNone = true;
                     var ynr = ed.GetKeywords(yn);
                     if (!((ynr.Status == PromptStatus.OK || ynr.Status == PromptStatus.Keyword) && (ynr.StringResult ?? "").Trim().ToUpperInvariant() == "Y")) { ed.WriteMessage("\n → 전체 해제 안 함."); continue; }
                     dc.TierWalls.Clear();
+                    if (nb > 0) dc.BoundWalls = null;
                     s.SaveDesign(); changed = true; s.Recompute();   // ★[검토 L6] 기록이 저장되면 바뀐 것(다시 계산이 실패해도 도로 면은 다시)
-                    ed.WriteMessage($"\n → 전체 해제 — 옹벽 {n0}구간을 지우고 사면으로 다시 계산했습니다.");
+                    ed.WriteMessage($"\n → 전체 해제 — 옹벽 {n0}구간{(nb > 0 ? $" · 폴리선 옹벽 {nb}개" : "")}를 지우고 사면으로 다시 계산했습니다.");
                     return (changed, s);
                 }
                 if (per.Status != PromptStatus.OK) continue;
@@ -695,15 +749,32 @@ public class RoadCommand
                 // ★[v111.3 · 설치 전 검토 L3] 고른 선이 모두 옹벽 구간 끝면 띠 안(그 선의 주인 구간이 없음)이면 «NaN m» 대신 까닭
                 if (!double.IsFinite(span)) { ed.WriteMessage("\n → 이 선은 옹벽 구간 끝면 띠 안이라 고를 수 없습니다 — 띠 밖(사면 구간)의 선을 클릭하세요."); Paint(selId, false); selId = ObjectId.Null; continue; }
                 if (!double.IsFinite(span) || span < 0.5) { ed.WriteMessage($"\n → 이 선은 {span:0.##}m로 너무 짧습니다 — 다른 선을 클릭하세요."); Paint(selId, false); selId = ObjectId.Null; continue; }
-                // ② 전체구간 / 구간지정 — 부지와 같은 글
-                var scope = new PromptKeywordOptions($"\n무엇을 바꿀까요? 〈{what} · {span:0.#}m〉 [전체구간(A)/구간지정(P)] <전체구간(A)>");
-                scope.Keywords.Add("A", "A", "전체구간(A)");
-                scope.Keywords.Add("P", "P", "구간지정(P)");
-                scope.Keywords.Default = "A";
-                scope.AllowNone = true;
-                var scr = ed.GetKeywords(scope);
-                if (scr.Status == PromptStatus.Cancel) { Paint(selId, false); selId = ObjectId.Null; continue; }
-                string kw = scr.Status == PromptStatus.Keyword || scr.Status == PromptStatus.OK ? (scr.StringResult ?? "A").Trim().ToUpperInvariant() : "A";
+                // ★★[v113.0 · JACK 1104 «옹벽 폴리선» · 계획 5-4] 사면 변환 — 폴리선 옹벽의 옹벽선이면 그 기록을 통째로 지운다(구간지정 안 받음)
+                int boundNo = wallMode ? -1 : RoadGrade.BoundOfLine(lastSnap, line);
+                if (boundNo >= 0)
+                {
+                    var db2 = s.Fresh();
+                    int rm = db2.BoundWalls?.RemoveAll(b => b.No == boundNo) ?? 0;
+                    if (rm == 0) { ed.WriteMessage($"\n → 폴리선 옹벽 {boundNo}의 기록을 못 찾았습니다."); Paint(selId, false); selId = ObjectId.Null; continue; }
+                    if (db2.BoundWalls != null && db2.BoundWalls.Count == 0) db2.BoundWalls = null;
+                    s.SaveDesign(); changed = true; s.Recompute();
+                    ed.WriteMessage($"\n[{label}] 폴리선 옹벽 {boundNo}를 지우고 사면으로 되돌렸습니다.");
+                    try { DiagLog.Append($"\n■ [{label}] 폴리선 옹벽 {boundNo} 통째로 지움"); } catch { }
+                    return (changed, s);
+                }
+                // ② 전체구간 / 구간지정 — 부지와 같은 글 · ★[v113.0 · JACK 1104] 옹벽 변환은 묻지 않고 그 선 전체(일부는 폴리선 L)
+                string kw = "A";
+                if (!wallMode)
+                {
+                    var scope = new PromptKeywordOptions($"\n무엇을 바꿀까요? 〈{what} · {span:0.#}m〉 [전체구간(A)/구간지정(P)] <전체구간(A)>");
+                    scope.Keywords.Add("A", "A", "전체구간(A)");
+                    scope.Keywords.Add("P", "P", "구간지정(P)");
+                    scope.Keywords.Default = "A";
+                    scope.AllowNone = true;
+                    var scr = ed.GetKeywords(scope);
+                    if (scr.Status == PromptStatus.Cancel) { Paint(selId, false); selId = ObjectId.Null; continue; }
+                    kw = scr.Status == PromptStatus.Keyword || scr.Status == PromptStatus.OK ? (scr.StringResult ?? "A").Trim().ToUpperInvariant() : "A";
+                }
                 double c0 = w0, c1 = w1;
                 bool part = kw == "P";
                 if (part)
@@ -1188,7 +1259,7 @@ public class RoadCommand
                     sheetDone = true; if (why.Length == 0) why = w;
                     log.AppendLine("  종단도 — " + msg);
                     // ★[설치 전 검토 · 중간] 다시 그린 종단도(그래프가 높아졌을 수 있음)가 남의 것과 겹치면 — 물을 수 있으면 다른 자리를 물어 옮겨 그림 · 아니면 알림
-                    string after = RoadSheets.PlacedOverlap(db, s.AlignId, RoadSheets.ScaleFor(db).Scale);
+                    string after = RoadSheets.PlacedOverlap(db, s.AlignId, s.Design.SheetScale > 0 ? s.Design.SheetScale : RoadSheets.ScaleFor(db).Scale);   // ★[v113.1] 그린 축척
                     if (after.Length > 0)
                     {
                         log.AppendLine($"  종단도 — 다시 그린 뒤 {after}와(과) 겹침");

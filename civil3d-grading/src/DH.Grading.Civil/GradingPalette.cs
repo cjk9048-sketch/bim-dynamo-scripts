@@ -185,7 +185,15 @@ public static class GradingPalette
     /// 칸 값은 안 건드린다(<see cref="Refresh"/>=SyncTo는 치고 있던 숫자를 되돌린다). 창이 안 떠 있으면 아무것도 안 한다(DB도 안 읽음).</summary>
     internal static void RefreshReset()
     {
-        try { if (_ps != null && _ps.Visible) _panel?.RefreshReset(); }
+        try
+        {
+            if (_ps != null && _ps.Visible)
+            {
+                _panel?.RefreshReset();
+                // ★[v113.0 · JACK 1104] 명령이 끝나면 «만들 때 쓴 값»을 다시 읽어 [계획부지생성하기] 깜박을 맞춘다(U · UNDO로 생성을 되돌려도) — 칸 값은 안 건드림
+                _panel?.ReloadGenerated();
+            }
+        }
         catch { }
     }
 

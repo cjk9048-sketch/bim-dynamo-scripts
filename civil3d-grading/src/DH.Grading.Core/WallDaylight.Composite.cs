@@ -107,19 +107,23 @@ public static partial class WallDaylight
     /// <param name="down">★★[v102.0 · JACK 0929 «성토 — 앞 = 원지반 · 뒤 = 계획면»] 성토 — 폴리곤 안 = <b>min(정지면, max(옹벽, 원지반))</b>
     /// (절토 규칙의 −z 거울: 옹벽이 땅 위면 옹벽 · 땅에 묻히면 원지반(성토 사면이 없어진다) · 원지반이 계획면 위면 계획면).
     /// 입력을 전부 −z로 뒤집어 같은 셈을 하고 Zone·Untouched를 되뒤집는다 — 손 안 댄 삼각형은 −(−z) = z라 비트 그대로다.</param>
+    /// <param name="replace">★[v113.0 · JACK 1104 «옹벽 폴리선 — 경계 2점 자르기 + 안쪽 다단»] <b>바꿔 끼움</b> — 폴리곤 안 = 절토 <b>min(옹벽, 원지반)</b> · 성토 max(옹벽, 원지반)(정지면을 안 본다).
+    /// 경계 폴리선 옹벽(목록 종류 1)만 — 바닥 연장(옹벽 = 부지 높이 · 옛 사면보다 낮다)이 정지면에 다시 덮이지 않게. 거짓이면 종전과 비트 같다.</param>
     public static CompositeResult BuildComposite(IReadOnlyList<Point3> poly, IReadOnlyList<Tri> wallTris, IReadOnlyList<Tri> groundTris, IReadOnlyList<Tri> planAll,
-        bool down = false)
+        bool down = false, bool replace = false)
     {
-        if (!down) return BuildCompositeCore(poly, wallTris, groundTris, planAll, false);
-        var r = BuildCompositeCore(NegZ(poly, "poly"), NegZ(wallTris, "wall"), NegZ(groundTris, "ground"), NegZ(planAll, "plan"), true);
+        if (!down) return BuildCompositeCore(poly, wallTris, groundTris, planAll, false, replace);
+        var r = BuildCompositeCore(NegZ(poly, "poly"), NegZ(wallTris, "wall"), NegZ(groundTris, "ground"), NegZ(planAll, "plan"), true, replace);
         r.NegateZ();
         return r;
     }
 
     /// <param name="down">사람에게 보이는 높이(EdgeAt·ZOneAt)만 되뒤집어 적는다 — 입력은 이미 뒤집혀 왔다.</param>
     static CompositeResult BuildCompositeCore(IReadOnlyList<Point3> poly, IReadOnlyList<Tri> wallTris, IReadOnlyList<Tri> groundTris, IReadOnlyList<Tri> planAll,
-        bool down)
+        bool down, bool replace = false)
     {
+        // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 규칙 한 곳 — 바꿔 끼움이면 정지면을 안 본다(절토 min(W, G) · 성토는 −z로 뒤집혀 와 같은 식)
+        double RuleOf(double zp, double zw, double zg) => replace ? Math.Min(zw, zg) : Math.Max(zp, Math.Min(zw, zg));
         double Hz(double z) => down ? -z : z;
         var R = new CompositeResult();
         var sw = Stopwatch.StartNew();
@@ -334,13 +338,14 @@ public static partial class WallDaylight
                     double t = (double)q / n, x = a.X + t * (b.X - a.X) - ox, y = a.Y + t * (b.Y - a.Y) - oy;
                     if (!W.TryZNear(x, y, 1e-5, out double zw) || !G.TryZNear(x, y, 1e-5, out double zg) || !P.TryZNear(x, y, 1e-5, out double zp)) continue;
                     R.EdgeSamples++;
-                    double dz = Math.Abs(Math.Max(zp, Math.Min(zw, zg)) - zp);
-                    if (dz > R.EdgeMax) { R.EdgeMax = dz; R.EdgeAt = $"({x + ox:F3},{y + oy:F3}) 규칙 {Hz(Math.Max(zp, Math.Min(zw, zg))):F3} · 정지면 {Hz(zp):F3}"; }
+                    double dz = Math.Abs(RuleOf(zp, zw, zg) - zp);
+                    if (dz > R.EdgeMax) { R.EdgeMax = dz; R.EdgeAt = $"({x + ox:F3},{y + oy:F3}) 규칙 {Hz(RuleOf(zp, zw, zg)):F3} · 정지면 {Hz(zp):F3}"; }
                 }
             }
         }
         var zs = new List<ZeroSet>();
-        foreach (var (a, b) in new[] { (W, G), (W, P), (G, P) })
+        // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 바꿔 끼움은 정지면을 안 보므로 W = G 교선만 — W = P · G = P 교선은 측선(W = P0)을 µm로 따라붙어 못 푸는 쌍만 만든다
+        foreach (var (a, b) in replace ? new[] { (W, G) } : new[] { (W, G), (W, P), (G, P) })
             foreach (double lv in new[] { +ZeroD, -ZeroD })
                 zs.Add(ZeroLines(a, b, gf, ox, oy, null, lv));
         foreach (var z in zs) { R.OverlayFail += z.OverlayFail; if (R.OverlayAt.Length == 0 && z.FailAt.Length > 0) R.OverlayAt = z.FailAt; }
@@ -399,7 +404,7 @@ public static partial class WallDaylight
         {
             ok = W.TryZ(x, y, out double zw) & G.TryZ(x, y, out double zg) & P.TryZ(x, y, out double zp);
             if (!ok) return double.NaN;
-            return Math.Max(zp, Math.Min(zw, zg));
+            return RuleOf(zp, zw, zg);
         }
         foreach (var gpz in pz.GetPolygons())
         {
@@ -421,7 +426,15 @@ public static partial class WallDaylight
                 if (tw < 0 || tg < 0) { R.UnknownPieces++; R.UnknownArea += f.Area; continue; }
                 double zw = W.Z(tw, ip.X, ip.Y), zg = G.Z(tg, ip.X, ip.Y), zp = P.Z(tp, ip.X, ip.Y);
                 double m = Math.Min(zw, zg);
-                if (zp >= m) { src = P; tIdx = tp; }
+                if (replace)
+                {
+                    // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 바꿔 끼움 — 정지면은 후보가 아니다(낮은 쪽 W · G) · 정지면과 다른 넓이는 |차|로 센다(바닥 연장은 정지면 아래)
+                    double dzr = Math.Abs(m - zp);
+                    if (dzr > 1e-4) { R.NonPlanArea += f.Area; R.NonPlanMaxDz = Math.Max(R.NonPlanMaxDz, dzr); }
+                    if (zw <= zg) { src = W; tIdx = tw; }
+                    else { src = G; tIdx = tg; capPiece = m - zp > 1e-4; }
+                }
+                else if (zp >= m) { src = P; tIdx = tp; }
                 else if (zw <= zg) { src = W; tIdx = tw; R.NonPlanArea += f.Area; R.NonPlanMaxDz = Math.Max(R.NonPlanMaxDz, m - zp); }
                 else { src = G; tIdx = tg; R.NonPlanArea += f.Area; R.NonPlanMaxDz = Math.Max(R.NonPlanMaxDz, m - zp); capPiece = m - zp > 1e-4; }   // m − 정지면 > 0(고른 면이 정지면 위)
             }
@@ -500,7 +513,7 @@ public static partial class WallDaylight
                     {
                         double x = q.X - ox, y = q.Y - oy;
                         if (W.TryZNear(x, y, 1e-5, out double zw) && G.TryZNear(x, y, 1e-5, out double zg) && P.TryZNear(x, y, 1e-5, out double zp))
-                            z = Math.Max(zp, Math.Min(zw, zg));
+                            z = RuleOf(zp, zw, zg);
                         else { z = q.Z; R.ZOneMiss++; if (R.ZOneMissAt.Length == 0) R.ZOneMissAt = $"({q.X:F3},{q.Y:F3})"; }
                     }
                     zOne[k] = z;
@@ -606,6 +619,8 @@ public static partial class WallDaylight
         public IReadOnlyList<Tri> WallTris = Array.Empty<Tri>();
         public IReadOnlyList<Tri> GroundTris = Array.Empty<Tri>();
         public bool Down;
+        /// <summary>★[v113.0 · JACK 1104 «옹벽 폴리선»] 바꿔 끼움 규칙(경계 폴리선 옹벽 — 목록 종류 1) — <see cref="BuildComposite"/>의 replace.</summary>
+        public bool Replace;
     }
 
     /// <summary>한 옹벽의 합성 단계 — 결과 · 앞 옹벽 폴리곤 안을 건드린 삼각형 수(0이어야 한다) · 앞 단계가 다시 지은 삼각형을 건드린 수.</summary>
@@ -710,7 +725,7 @@ public static partial class WallDaylight
                 }
             }
             var sw = Stopwatch.StartNew();
-            var r = BuildComposite(w.Poly, w.WallTris, w.GroundTris, cur, w.Down);
+            var r = BuildComposite(w.Poly, w.WallTris, w.GroundTris, cur, w.Down, w.Replace);
             var st = new ComposeStep { No = w.No, R = r, Ms = sw.ElapsedMilliseconds };
             res.Steps.Add(st);
             if (r.Zone == null) { res.FailIndex = k; res.Fail = $"옹벽 {w.No} — {r.Fail}"; return res; }

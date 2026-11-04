@@ -149,10 +149,13 @@ public sealed class SlopeZone
         for (int rad = 0; rad < Math.Max(_gnx, _gny) + 1; rad++)
         {
             // 이 반경까지 덮은 사각형 밖의 최소 거리 — 지금 최선보다 멀면 더 볼 것이 없다.
+            // ★★[v112.7 · JACK 1104 «직각 · 사면변환 짜글짜글»] 덮은 사각형 = <b>이미 본</b> 반경 rad−1까지다(이 반경 칸은 아직 안 봤다).
+            //   종전엔 rad까지 본 것처럼 한 칸 넓게 재 너무 일찍 멈췄다 → 자 위 매개가 몇 m 붙박였다 튐(S202: 부지 링 밖 점 61/4000 · 최대 0.57 m 먼 답) →
+            //   전이 띠 링 거리가 계단(1단 · 2단 링 턱 0.19 m · 등고선 짜글짜글) · 짧은 구간 소속도 어긋남(54곳). 0824 격자 색인부터.
             if (best < double.MaxValue)
             {
-                double lo = _gx0 + (ci - rad) * _gc, hi = _gx0 + (ci + rad + 1) * _gc;
-                double lo2 = _gy0 + (cj - rad) * _gc, hi2 = _gy0 + (cj + rad + 1) * _gc;
+                double lo = _gx0 + (ci - rad + 1) * _gc, hi = _gx0 + (ci + rad) * _gc;
+                double lo2 = _gy0 + (cj - rad + 1) * _gc, hi2 = _gy0 + (cj + rad) * _gc;
                 double margin = Math.Min(Math.Min(x - lo, hi - x), Math.Min(y - lo2, hi2 - y));
                 if (margin > 0 && best <= margin * margin) break;
             }

@@ -466,9 +466,44 @@ public sealed class GradingDialog : Window
 
         // ★한 자리에서만 모양을 바꾼다 — 누를 때와 <b>남이 닫을 때</b>가 같은 길을 타야
         //   화살표·요약·여백이 어긋나지 않는다.
+        // ★★[v113.0 · JACK 1104 «접히거나 열릴 때 스르륵 — 딱딱 변하니 어지러워»] 높이 · 투명도를 0.18초에 걸쳐 바꿈(처음 그릴 때는 그대로) · 잇달아 누르면 마지막 것이 이김
+        int ver = 0;
+        void Animate(bool now)
+        {
+            int my = ++ver;
+            body.ClipToBounds = true;
+            var dur = new Duration(System.TimeSpan.FromMilliseconds(180));
+            var ease = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut };
+            double from = body.Visibility == Visibility.Visible ? body.ActualHeight : 0;
+            double to;
+            if (now)
+            {
+                body.Visibility = Visibility.Visible;
+                double w = body.ActualWidth > 0 ? body.ActualWidth : (parent.ActualWidth > 0 ? parent.ActualWidth : double.PositiveInfinity);
+                body.Height = double.NaN;
+                body.Measure(new Size(w, double.PositiveInfinity));
+                to = body.DesiredSize.Height;
+            }
+            else to = 0;
+            var ha = new System.Windows.Media.Animation.DoubleAnimation(from, to, dur) { EasingFunction = ease };
+            ha.Completed += (_, __) =>
+            {
+                if (my != ver) return;
+                body.BeginAnimation(FrameworkElement.HeightProperty, null);
+                body.Height = double.NaN;
+                if (!now) body.Visibility = Visibility.Collapsed;
+            };
+            body.BeginAnimation(FrameworkElement.HeightProperty, ha);
+            body.BeginAnimation(UIElement.OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(now ? 0 : 1, now ? 1 : 0, dur) { EasingFunction = ease });
+        }
+
+        bool isOpen = on;   // 논리 상태(닫히는 애니메이션 동안에도 보이기는 Visible — 그걸로 판단하면 잇달아 누를 때 꼬임)
         void SetOpen(bool now)
         {
-            body.Visibility = now ? Visibility.Visible : Visibility.Collapsed;
+            bool was = isOpen;
+            isOpen = now;
+            if (was != now && body.IsLoaded) Animate(now);
+            else { ver++; body.BeginAnimation(FrameworkElement.HeightProperty, null); body.BeginAnimation(UIElement.OpacityProperty, null); body.Height = double.NaN; body.Opacity = 1; body.Visibility = now ? Visibility.Visible : Visibility.Collapsed; }
             arrow.Text = now ? "▾" : "▸";
             sum.Visibility = now ? Visibility.Collapsed : Visibility.Visible;
             // ★접었을 때 밑줄만 남으면 <b>빈 줄이 떠 있는 것</b>처럼 보인다 — 아래 여백을 줄인다.
@@ -487,7 +522,7 @@ public sealed class GradingDialog : Window
 
         head.MouseLeftButtonUp += (_, __) =>
         {
-            bool now = body.Visibility != Visibility.Visible;
+            bool now = !isOpen;
             // ★펼치는 참이면 <b>같은 묶음의 나머지를 먼저 닫는다</b>(JACK 0910).
             //   닫는 참일 때는 아무것도 안 건드린다 — 그러면 전부 닫힌 상태가 된다.
             if (now && group != null && Accordion.TryGetValue(group, out var members))

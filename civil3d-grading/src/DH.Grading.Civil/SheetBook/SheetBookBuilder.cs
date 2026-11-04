@@ -52,13 +52,17 @@ internal sealed class SheetBookInput
     public string Project = "", Prefix = "", NoPrefix = "C-", Date = "";
     public int NoStart = 1;
     public double PlanScale;   // 0 = 자동
+    /// <summary>★[v112.5 · JACK 1104] 평면 꾸미기 — 도면 기울기(도 · 반시계 +) · 계곡선 등고값 · 측점 보이기.</summary>
+    public double PlanRot;
+    public bool ContourLabels = true, Stations = true;
     public readonly Dictionary<Kind, bool> On = Kinds.ToDictionary(k => k, _ => true);
     public readonly Dictionary<Kind, string> Titles = Kinds.ToDictionary(k => k, DefaultTitle);
 
     public string ToText()
     {
         var l = new List<string> { "project=" + Esc(Project), "prefix=" + Esc(Prefix), "noprefix=" + Esc(NoPrefix), "nostart=" + NoStart.ToString(CultureInfo.InvariantCulture),
-                                   "date=" + Esc(Date), "planscale=" + PlanScale.ToString(CultureInfo.InvariantCulture) };
+                                   "date=" + Esc(Date), "planscale=" + PlanScale.ToString(CultureInfo.InvariantCulture),
+                                   "planrot=" + PlanRot.ToString("R", CultureInfo.InvariantCulture), "contourlabels=" + (ContourLabels ? 1 : 0), "stations=" + (Stations ? 1 : 0) };
         foreach (var k in Kinds) { l.Add($"on.{Code(k)}={(On[k] ? 1 : 0)}"); l.Add($"title.{Code(k)}=" + Esc(Titles[k])); }
         return string.Join("\n", l);
     }
@@ -80,6 +84,9 @@ internal sealed class SheetBookInput
                 case "date": r.Date = v; break;
                 case "nostart": if (int.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) && n >= 0) r.NoStart = n; break;
                 case "planscale": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out double d) && d >= 0) r.PlanScale = d; break;
+                case "planrot": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out double pr) && double.IsFinite(pr)) r.PlanRot = Math.IEEERemainder(pr, 360); break;
+                case "contourlabels": r.ContourLabels = v.Trim() != "0"; break;
+                case "stations": r.Stations = v.Trim() != "0"; break;
                 default:
                     if (k.StartsWith("on.") && FromCode(k.Substring(3)) is Kind ko) r.On[ko] = v.Trim() != "0";
                     else if (k.StartsWith("title.") && FromCode(k.Substring(6)) is Kind kt) r.Titles[kt] = v;
@@ -381,6 +388,8 @@ internal static class SheetBookBuilder
         public bool Tagged;         // DH_ROADSHEET · DH_WALLSECDRAW
         public ObjectId StyleId;    // 종단뷰 스타일(수직과장)
         public bool IsProfileView;
+        /// <summary>★[v112.5] Civil 라벨 · 라벨 묶음(밴드 값 글 등) — 경계상자를 못 믿음(원점 근처 · 엉뚱한 크기) → 장 뷰포트에서는 늘 내용(안 얼림).</summary>
+        public bool IsLabel;
     }
 
     internal static List<ModelItem> ModelIndex(Database db, Transaction tr)
@@ -396,6 +405,7 @@ internal static class SheetBookBuilder
                 it.IsProfileView = e is CivilDb.ProfileView;
                 it.ByType = e is CivilDb.Profile || e is CivilDb.Section;
                 it.CivilContent = it.IsProfileView || e is CivilDb.SectionView || e is CivilDb.Label || e is Table;
+                it.IsLabel = e is CivilDb.Label || (e.GetType().Namespace ?? "").StartsWith("Autodesk.Civil", StringComparison.Ordinal) && e.GetType().Name.Contains("Label");
                 if (it.IsProfileView) it.StyleId = ((CivilDb.ProfileView)e).StyleId;
                 try { using var rb = e.GetXDataForApplication(SheetTag.App); if (rb != null) it.Tagged = true; } catch { }
                 if (!it.Tagged) try { using var rb2 = e.GetXDataForApplication(WallSectionDraw.App); if (rb2 != null) it.Tagged = true; } catch { }
@@ -420,6 +430,8 @@ internal static class SheetBookBuilder
         foreach (var it in idx)
         {
             if (it.ByType) { content.Add(it.LayerId); continue; }
+            // ★★[v112.5 · JACK 1104 스샷 «부지 종단면도 밴드에 아무것도 안 써 있어»] 원인 = 밴드 값 라벨 묶음의 경계상자가 엉뚱해 «장 밖에 걸친 것»으로 보고 C-ROAD-PROF-TEXT를 얼림 → Civil 라벨은 경계를 안 보고 내용
+            if (it.IsLabel) { content.Add(it.LayerId); continue; }
             if (!it.HasBox || !Overlap(it.Box, w)) continue;
             bool inside = Inside(it.Box, w, tol);
             bool c = inside && (it.CivilContent || it.Tagged || SheetLayers.Contains(it.Layer) || it.Layer.StartsWith("CR-", StringComparison.OrdinalIgnoreCase));
@@ -472,6 +484,7 @@ internal static class SheetBookBuilder
             step = "종류=배치"; psv.SetPlotType(pset, Autodesk.AutoCAD.DatabaseServices.PlotType.Layout);
             step = "축척 1:1"; psv.SetUseStandardScale(pset, true); psv.SetStdScaleType(pset, StdScaleType.StdScale1To1);
             if (ctb != null) { step = "CTB"; try { psv.SetCurrentStyleSheet(pset, ctb); } catch { } }
+            step = "투명도 출력"; try { pset.PlotTransparency = true; } catch { }   // ★[v112.2] 회색 칠(투명) · 제목 기호가 모노 출력에서 옅게
             step = "배치에 반영"; lo.CopyFrom(pset);
             // ★[교훈 ②] 배치 원점 = 인쇄 가능 영역 왼쪽 아래(여백만큼 밀림)
             var mg = lo.PlotPaperMargins;
@@ -568,10 +581,13 @@ internal static class SheetBookBuilder
                     ["도면명"] = DrawingTitle(c.Inp.Prefix, c.Inp.Titles[kind], i + 1, n),
                     ["도면번호"] = DrawingNo(c.Inp.NoPrefix, c.Inp.NoStart, c.NoCounter++),
                     ["축척"] = ScaleText(kind, scale, exag),
-                    ["날짜"] = DateText(c.Inp.Date, c.Now, def.Cells.TryGetValue("날짜", out var dc) ? dc.Fmt ?? "yyyy.MM" : "yyyy.MM"),
+                    ["날짜"] = DateText(c.Inp.Date, c.Now),   // ★[v112.2 · JACK 1104] 비면 오늘(yyyy.MM.dd) — 도곽 칸 꼴(옛 «이번 달»)은 안 따름 · 창에서 고친 값이면 그대로
                     ["공사명"] = c.Inp.Project.Trim(),
                 };
                 TitleTexts(c, tr, ps, br, layTitle, X0, Y0, vals);
+                // ★[v112.2 · JACK 1104] 위 제목 — 모든 탭(평면은 PlanSheet.Draw가 같은 함수로)
+                if (kind != Kind.Plan)
+                    TopTitle(c.Db, tr, ps, layTitle, c.TextStyle, X0 + def.DrawArea[0], X0 + def.DrawArea[2], Y0 + def.DrawArea[3] - TitleBand, Y0 + def.DrawArea[3], vals["도면명"], vals["축척"]);
                 if (i == 0 || i == n - 1) log.AppendLine($"  장 {i + 1}/{n}: «{vals["도면명"]}» · {vals["도면번호"]} · {vals["축척"]} · {vals["날짜"]}");
             }
             c.R.Sheets += n;
@@ -615,12 +631,14 @@ internal static class SheetBookBuilder
     static void AddViewport(Ctx c, Transaction tr, BlockTableRecord ps, ObjectId layer, double X0, double Y0, Sheet s, int i, int n)
     {
         var da = c.Frame.Def.DrawArea;
-        double w = Math.Min(da[2] - da[0], DrawW), h = Math.Min(da[3] - da[1], DrawH);
-        var (mx, my) = s.DrawCenter;
+        // ★[v112.2 · JACK 1104 «제목이 평면도에만 있다»] 위 제목 띠(TitleBand)는 종이에 직접 쓴다 → 뷰포트는 그 아래만 · 모형 장의 제목 자리(위 40 mm)는 안 보임(제목 둘 겹침 없음)
+        double w = Math.Min(da[2] - da[0], DrawW), h = Math.Min(da[3] - da[1], DrawH) - TitleBand;
+        var (mx, _) = s.DrawCenter;
+        double my = s.Y0 + (DrawBottom + (DrawH - TitleBand) / 2) * s.S;
         var vp = new Viewport();
         ps.AppendEntity(vp); tr.AddNewlyCreatedDBObject(vp, true);
         vp.LayerId = layer;
-        vp.CenterPoint = new Point3d(X0 + (da[0] + da[2]) / 2, Y0 + (da[1] + da[3]) / 2, 0);
+        vp.CenterPoint = new Point3d(X0 + (da[0] + da[2]) / 2, Y0 + (da[1] + da[3] - TitleBand) / 2, 0);
         vp.Width = w; vp.Height = h;
         vp.ViewDirection = Vector3d.ZAxis; vp.ViewTarget = Point3d.Origin; vp.TwistAngle = 0;
         vp.ViewCenter = new Point2d(mx, my);
@@ -641,6 +659,97 @@ internal static class SheetBookBuilder
         // ★[검토 1103 · 1] 뷰포트마다 얼림 목록 전부(자르지 않음)
         c.R.Log.AppendLine($"  장 {i + 1}: 뷰포트 1:{s.Scale:0.###} · 주석 {an}{(s.Tagged ? "" : "(옛 장 — 지금 CANNOSCALE)")} · 보는 곳 ({mx:F3},{my:F3}) · 얼림 {names.Count}개: {string.Join(" · ", names)}"
                               + (mixed.Count > 0 ? $" · ⚠못 숨김(장 내용과 평면이 함께): {string.Join(" · ", mixed)}" : ""));
+    }
+
+    /// <summary>★[v112.2] 종이 칠 레이어(평면 부지 계획구간 · 범례 견본).</summary>
+    internal const string LayFill = "도면화-부지칠";
+    /// <summary>★[v112.5] 평면 등고값 레이어(종이 공간 · 회색).</summary>
+    internal const string LayContourText = "도면화-등고값";
+    internal static ObjectId EnsureFillLayer(Database db, Transaction tr) => SectionCommand.EnsureLayer(db, tr, LayFill, 8);
+
+    /// <summary>★[v112.2] 다각형(모형 또는 종이 좌표 — <paramref name="toPaper"/>로 종이로) → 종이 공간 SOLID 칠(구멍 포함 · 경계선은 칠 뒤 지움). 돌려줌 = 칠함.</summary>
+    internal static bool PaperFill(Transaction tr, BlockTableRecord ps, ObjectId layer, NetTopologySuite.Geometries.Polygon pg, Func<double, double, (double X, double Y)> toPaper, short aci, double opacity)
+    {
+        var tmp = new List<Polyline>();
+        try
+        {
+            Polyline Ring(NetTopologySuite.Geometries.LineString r)
+            {
+                var c = r.Coordinates; int n = c.Length - 1;
+                var pl = new Polyline(n);
+                for (int i = 0; i < n; i++) { var (x, y) = toPaper(c[i].X, c[i].Y); pl.AddVertexAt(i, new Point2d(x, y), 0, 0, 0); }
+                pl.Closed = true; pl.LayerId = layer;
+                ps.AppendEntity(pl); tr.AddNewlyCreatedDBObject(pl, true); tmp.Add(pl);
+                return pl;
+            }
+            if (pg.ExteriorRing.NumPoints < 4) return false;
+            var h = new Hatch { LayerId = layer };
+            ps.AppendEntity(h); tr.AddNewlyCreatedDBObject(h, true);
+            h.SetHatchPattern(HatchPatternType.PreDefined, "SOLID");
+            h.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, aci);
+            h.Transparency = new Autodesk.AutoCAD.Colors.Transparency((byte)Math.Clamp(255 * opacity, 0, 255));
+            h.AppendLoop(HatchLoopTypes.External, new ObjectIdCollection { Ring(pg.ExteriorRing).ObjectId });
+            foreach (var hole in pg.InteriorRings) if (hole.NumPoints >= 4) h.AppendLoop(HatchLoopTypes.Default, new ObjectIdCollection { Ring(hole).ObjectId });
+            h.EvaluateHatch(true);
+            return true;
+        }
+        finally { foreach (var pl in tmp) try { pl.Erase(); } catch { } }
+    }
+
+    /// <summary>★[v112.2] 위 제목 띠 높이(종이 mm) — 모형 장 제목 자리(SheetCommand.TitleMm)와 같음.</summary>
+    internal const double TitleBand = 40.0;
+
+    /// <summary>★★[v112.2 · JACK 1104 «도면 샘플처럼 꾸며줘»] 위 제목 — 참고도면(화도 · 용담) 꼴: 회색 네모 기호 + 제목 8 mm + 굵은 밑줄 + 오른쪽 아래 «S = 1:N» 4 mm.
+    /// 띠 [x0, x1] × [yb, yt] 가운데 · 제목이 띠보다 넓으면 글자를 줄임. 회색 = 투명도(모노 출력에서도 옅게 — 페이지 설정 «투명도 출력» 켬).</summary>
+    internal static void TopTitle(Database db, Transaction tr, BlockTableRecord ps, ObjectId layer, ObjectId textStyle, double x0, double x1, double yb, double yt, string title, string scale)
+    {
+        double cx = (x0 + x1) / 2, cy = (yb + yt) / 2;
+        void Add(Entity e) { e.LayerId = layer; ps.AppendEntity(e); tr.AddNewlyCreatedDBObject(e, true); }
+        var t = new DBText { TextString = title, Height = 8.0, HorizontalMode = TextHorizontalMode.TextCenter, VerticalMode = TextVerticalMode.TextBase };
+        t.Position = t.AlignmentPoint = new Point3d(cx + 5, cy, 0);
+        if (!textStyle.IsNull) t.TextStyleId = textStyle;
+        Add(t);
+        double tw = title.Length * 8.0;
+        try
+        {
+            t.AdjustAlignment(db);
+            var x = t.GeometricExtents; tw = x.MaxPoint.X - x.MinPoint.X;
+            double room = (x1 - x0) - 60;
+            if (tw > room && room > 20) { t.WidthFactor = room / tw; t.AdjustAlignment(db); tw = room; }
+        }
+        catch { }
+        double left = cx + 5 - tw / 2, right = cx + 5 + tw / 2, uy = cy - 2.5;
+        // 밑줄(굵게) — 기호 앞부터 제목 뒤까지
+        var ul = new Polyline(2); ul.AddVertexAt(0, new Point2d(left - 17, uy), 0, 0, 0); ul.AddVertexAt(1, new Point2d(right + 6, uy), 0, 0, 0); ul.ConstantWidth = 0.7;
+        Add(ul);
+        // 기호 — 회색 네모(칠 · 투명) 위에 검은 테 네모(어긋나게)
+        var sq = new Polyline(4);
+        double sx = left - 15, sy = uy + 1.5;
+        sq.AddVertexAt(0, new Point2d(sx, sy), 0, 0, 0); sq.AddVertexAt(1, new Point2d(sx + 6, sy), 0, 0, 0); sq.AddVertexAt(2, new Point2d(sx + 6, sy + 6), 0, 0, 0); sq.AddVertexAt(3, new Point2d(sx, sy + 6), 0, 0, 0); sq.Closed = true;
+        Add(sq);
+        try
+        {
+            var hb = new Polyline(4);
+            double gx = sx + 3, gy = sy + 2.5;
+            hb.AddVertexAt(0, new Point2d(gx, gy), 0, 0, 0); hb.AddVertexAt(1, new Point2d(gx + 6, gy), 0, 0, 0); hb.AddVertexAt(2, new Point2d(gx + 6, gy + 6), 0, 0, 0); hb.AddVertexAt(3, new Point2d(gx, gy + 6), 0, 0, 0); hb.Closed = true;
+            Add(hb);
+            var h = new Hatch { LayerId = layer };
+            ps.AppendEntity(h); tr.AddNewlyCreatedDBObject(h, true);
+            h.SetHatchPattern(HatchPatternType.PreDefined, "SOLID");
+            h.Color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByAci, 8);
+            h.Transparency = new Autodesk.AutoCAD.Colors.Transparency((byte)(255 * 0.45));
+            h.AppendLoop(HatchLoopTypes.Outermost, new ObjectIdCollection { hb.ObjectId });
+            h.EvaluateHatch(true);
+            hb.Erase();
+        }
+        catch { }
+        // 축척 — 밑줄 아래 오른쪽 끝 맞춤
+        string st = scale.StartsWith("1:", StringComparison.Ordinal) ? "S = " + scale : scale;
+        var s = new DBText { TextString = st, Height = 4.0, HorizontalMode = TextHorizontalMode.TextRight, VerticalMode = TextVerticalMode.TextTop };
+        s.Position = s.AlignmentPoint = new Point3d(right + 6, uy - 2.0, 0);
+        if (!textStyle.IsNull) s.TextStyleId = textStyle;
+        Add(s);
+        try { s.AdjustAlignment(db); } catch { }
     }
 
     /// <summary>★[계획 4.2] 표제 글 — 칸 가운데 · 높이 h · 폭 넘치면 줄임 · 속성 도곽이면 속성 참조.</summary>
@@ -717,6 +826,7 @@ internal static class SheetBookBuilder
                     step = "종류=창"; psv.SetPlotType(pset, Autodesk.AutoCAD.DatabaseServices.PlotType.Window);
                     step = "축척"; psv.SetUseStandardScale(pset, true); psv.SetStdScaleType(pset, paper == "A1" ? StdScaleType.StdScale1To1 : StdScaleType.ScaleToFit);
                     step = "가운데"; psv.SetPlotCentered(pset, true);
+                    step = "투명도 출력"; try { pset.PlotTransparency = true; } catch { }
                     if (c.Ctb != null) { step = "CTB"; try { psv.SetCurrentStyleSheet(pset, c.Ctb); } catch { } }
                     WriteXr(tr, pset, TabTag, Code(kind), (i + 1).ToString(CultureInfo.InvariantCulture), paper);
                     tr.Commit();
@@ -774,7 +884,8 @@ internal static class SheetBookBuilder
     }
 
     /// <summary>★★★ [작성하기] 몸통 — 명령(<c>DHSHEETMAKE</c>) 안에서 부른다(문서 잠김 · 명령 하나 = U 한 번).</summary>
-    internal static Result Make(Document doc, SheetBookInput inp)
+    /// <param name="only">★[v112.5] 이 종류만 다시(평면 꾸미기 — 평면 탭만) · null = 창에서 고른 것(<c>inp.On</c>) · 저장하는 창 값(<c>inp.On</c>)은 그대로.</param>
+    internal static Result Make(Document doc, SheetBookInput inp, IReadOnlyCollection<Kind>? only = null)
     {
         var db = doc.Database;
         var c = new Ctx { Db = db, Inp = inp, R = new Result() };
@@ -785,8 +896,8 @@ internal static class SheetBookBuilder
         c.Scan = SheetBookScan.Read(db);
         R.Warns.AddRange(c.Scan.Warns);
         log.AppendLine($"  모형 장 {c.Scan.Sheets.Count}(" + string.Join(" · ", Kinds.Where(k => k != Kind.Plan).Select(k => $"{ShortName(k)} {c.Scan.Of(k).Count()}")) + $") · 평면 {(c.Scan.PlanExt != null ? "있음" : "없음")} · 찾기 {c.Scan.Ms} ms" + (c.Scan.Ms > 1000 ? " ⚠1초 넘음" : ""));
-        var kinds = Kinds.Where(k => inp.On[k] && c.Scan.Has(k)).ToList();
-        foreach (var k in Kinds.Where(k => inp.On[k] && !c.Scan.Has(k))) R.Warns.Add($"{TabName(k)} — 모형에 없음");
+        var kinds = Kinds.Where(k => (only != null ? only.Contains(k) : inp.On[k]) && c.Scan.Has(k)).ToList();
+        foreach (var k in Kinds.Where(k => (only != null ? only.Contains(k) : inp.On[k]) && !c.Scan.Has(k))) R.Warns.Add($"{TabName(k)} — 모형에 없음");
         if (kinds.Count == 0) { R.Line = "만들 것 없음 — 모형에 종단도 · 횡단도 · 평면 결과가 없습니다"; return R; }
         foreach (var k in kinds.Where(c.Scan.ModelStale)) R.Warns.Add($"{TabName(k)} — 모형 장이 옛것(지금 면과 다름) — [종단도]/[횡단도] 다시");
 
@@ -798,7 +909,8 @@ internal static class SheetBookBuilder
         if (orphan > 0) log.AppendLine($"  ⓪ 고아 페이지 설정 {orphan}개 쓸어 냄");
         // ★[검토 1103 · 4 · JACK 결정 «덜 놀라게»] 바꿔치기 = 이번에 짓는 종류의 옛 탭만 · 모형에서 사라진 종류(도로를 지움 등)의 옛 탭은 지우고 ⚠ ·
         //   고르지 않은 종류의 옛 탭 · 페이지 설정은 그대로 둔다(계획 4.4 ③ «고르지 않은 탭도 지운다»를 바꿈)
-        var oldTabs = tabs0.Where(t => !t.Temp && (kinds.Contains(t.Kind) || !c.Scan.Has(t.Kind))).ToList();
+        // ★[v112.5 검토 낮음] 평면 꾸미기(only)면 그 종류 탭만 — 모형에서 사라진 다른 종류 탭을 덩달아 지우지 않음
+        var oldTabs = tabs0.Where(t => !t.Temp && (kinds.Contains(t.Kind) || (only == null && !c.Scan.Has(t.Kind)))).ToList();
         var keptTabs = tabs0.Where(t => !t.Temp && !oldTabs.Contains(t)).ToList();
         var replaceKinds = oldTabs.Select(t => t.Kind).Concat(kinds).ToHashSet();
         if (keptTabs.Count > 0) log.AppendLine($"  고르지 않은 종류 탭 그대로: {string.Join(" · ", keptTabs.Select(t => t.Name))}");
@@ -828,7 +940,7 @@ internal static class SheetBookBuilder
         catch { R.Warns.Add("출력 스타일 목록을 못 읽음 — 비움"); }
         if (kinds.Contains(Kind.Plan))
         {
-            c.Plan = PlanSheet.Prepare(db, c.Scan, inp, c.Frame.Def, log, R.Warns);
+            c.Plan = PlanSheet.Prepare(db, c.Scan, inp, c.Frame.Def, log, R.Warns, useVolCache: only != null);
             if (c.Plan == null) { kinds.Remove(Kind.Plan); R.Warns.Add(TabName(Kind.Plan) + " — 평면 범위 없음"); }
         }
         foreach (double n in c.Scan.Sheets.Where(s => kinds.Contains(s.Kind)).Select(s => s.Anno).Concat(c.Plan != null ? new[] { c.Plan.Scale } : Array.Empty<double>()).Where(v => v > 0).Distinct())

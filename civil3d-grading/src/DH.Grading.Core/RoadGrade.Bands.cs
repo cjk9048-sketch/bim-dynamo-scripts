@@ -44,6 +44,7 @@ public static partial class RoadGrade
             int Into(int p, int q)
             {
                 if (p <= 0 || q == -2 || !(benchL[p] >= 2 * PairGap)) return -1;
+                if (q > 0 && q < r.ProfBound.Length && r.ProfBound[q] >= 0) return -1;   // ★[v113.0 · JACK 1104 «옹벽 폴리선» 답 2] 폴리선 옹벽과 맞닿는 끝은 수직(띠 없음)
                 if (q == 0) return 0;
                 return q > 0 && Deeper(r.CutProfs[p], r.CutProfs[q]) && Deeper(r.FillProfs[p], r.FillProfs[q]) ? q : -1;
             }

@@ -78,6 +78,8 @@ public sealed partial class XsecViewCommand
     public void Run()
     {
         _mem0 = StageTimer.Mem();
+        // ★[v112.1 검토 H3] 도면이 바뀌었으면 그 도면 설정부터(도면설정 값이 도면마다 — 앞 도면 값으로 그리고 이 도면 기록을 덮지 않게)
+        try { GradingSettings.SyncToDocument(AcadApp.DocumentManager.MdiActiveDocument); } catch { }
         _ = Build(AcadApp.DocumentManager.MdiActiveDocument, null);   // 사람이 부른 것이라 결과는 화면 메시지로 본다
     }
 
@@ -101,6 +103,7 @@ public sealed partial class XsecViewCommand
         if (doc == null) return false;
         Editor ed = doc.Editor;
         Database db = doc.Database;
+        SheetPrefs.TryPin(db, "횡단도");   // ★[v112.1] 이 도면을 그린 도면설정 값을 도면에
         var cdoc = CivilApp.CivilApplication.ActiveDocument;
         var log = new System.Text.StringBuilder();
 
@@ -4179,6 +4182,7 @@ public sealed partial class XsecViewCommand
                             }
                             else if (kind == "지하수위") { if (!stWater.IsNull) { sec.StyleId = stWater; nW++; } }
                             else if (road && kind == RoadKind) { if (!stPlan.IsNull) { sec.StyleId = stPlan; nRd++; } }          // ★[v111.5] 진입도로 = 계획선
+                            else if (road && kind == RoadMainKind) { if (!stPlan.IsNull) { sec.StyleId = stPlan; nRd++; } }      // ★[v112.1] 본 도로(가지 도로 횡단) = 계획선
                             else if (road && kind == RoadPadKind) { if (!stRoadPad.IsNull) { sec.StyleId = stRoadPad; nRp++; } }  // ★[v111.5] 부지 정지면 = 가는 점선
                             else nSkip++;
                         }
@@ -4774,6 +4778,7 @@ public sealed partial class XsecViewCommand
             //   측점마다 다시 만들면 삼각형을 수십 번 읽는다.
             CachedGroundSurface csG = null, csP = null, csE = null, csW = null, csWx = null;
             CachedGroundSurface csRoad = null, csPadR = null;   // ★[v111.5] 진입도로 횡단만
+            var csMainById = new System.Collections.Generic.Dictionary<ObjectId, CachedGroundSurface>();   // ★[v112.1] 가지 도로의 본 도로 면
             var cacheById = new System.Collections.Generic.Dictionary<ObjectId, CachedGroundSurface>();
             var strataCs = new List<(int Ord, DH.Grading.Core.RockClass Rock, CachedGroundSurface Cs, string Nm, string How)>();
             int nTri = 0;
@@ -4822,6 +4827,7 @@ public sealed partial class XsecViewCommand
                     else if (sp.Label == "지하수위") csW = cs;
                     else if (xt != null && sp.Label == RoadKind) csRoad = cs;        // ★[v111.5] 진입도로
                     else if (xt != null && sp.Label == RoadPadKind) csPadR = cs;     // ★[v111.5] 부지 정지면(정지면_DH — 선 · 겹침 알림)
+                    else if (xt != null && sp.Label == RoadMainKind) csMainById[sp.SurfId] = cs;   // ★[v112.1] 본 도로(가지 도로 횡단)
                 }
                 catch (System.Exception exC) { log?.AppendLine($"  ⚠지표면 '{sp.Label}' 캐시 실패 — {exC.Message}"); }
             }
@@ -4919,8 +4925,15 @@ public sealed partial class XsecViewCommand
                 cacheById.TryGetValue(xt.BaseSurfId, out csBaseR);
                 if (csBaseR == null && !xt.BaseSurfId.IsNull)
                     try { if (tr.GetObject(xt.BaseSurfId, OpenMode.ForRead) is CivilDb.TinSurface tsB) csBaseR = new CachedGroundSurface(tsB); } catch { }
-                planQ = new DH.Grading.Core.FirstOfSurfaces(csRoad, csBaseR);
-                roadEdges = new System.Collections.Generic.List<DH.Grading.Core.IGroundSurface> { csRoad, csBaseR };
+                // ★[v112.1] 가지 도로 = 가지 → 본 도로(가까운 것 먼저) → 바탕면 — 이음매 근처 본 도로 자리를 정지면으로 세던 것
+                var planList = new System.Collections.Generic.List<DH.Grading.Core.IGroundSurface> { csRoad };
+                foreach (var mid in xt.MainSurfIds) if (csMainById.TryGetValue(mid, out var csM)) planList.Add(csM);
+                int nMain = planList.Count - 1;
+                planList.Add(csBaseR);
+                planQ = new DH.Grading.Core.FirstOfSurfaces(planList.ToArray());
+                roadEdges = planList;
+                if (xt.MainSurfIds.Count > 0)
+                    log?.AppendLine($"  ★가지 도로 — 본 도로 면 {nMain}/{xt.MainSurfIds.Count}개를 계획면에(가지 다음 · 바탕면 앞)");
                 log?.AppendLine($"  ★진입도로 계획면 = 진입도로{(csRoad == null ? "(⚠면 없음)" : "")} → 바탕면 {(xt.BaseIsPad ? "정지면_DH" : "원지반")}{(csBaseR == null ? "(⚠면 없음)" : "")}(앞 면에 표고가 있으면 그것)"
                               + (csPadR != null ? " · 부지 정지면 선은 그림만(수량은 계획면으로)" : ""));
             }

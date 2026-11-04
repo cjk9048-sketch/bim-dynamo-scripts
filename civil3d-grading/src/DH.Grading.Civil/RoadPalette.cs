@@ -118,6 +118,9 @@ internal sealed class RoadPanel : UserControl
         // ★[v111.2 · JACK 1030 «PVI 수정 기능 — 넣기 · 삭제»] 종단도에서 찍기(Enter까지 여러 번)
         Buttons(("PVI 넣기", "DHROADPVIADD", "종단도를 찍은 측점에 PVI를 넣습니다 — 지금 계획선 위라 모양은 그대로, 넣은 뒤 잡아끌어 높이를 바꿉니다(Enter 끝)", false),
                 ("PVI 지우기", "DHROADPVIDEL", "종단도에서 찍은 자리 가까운 PVI를 지웁니다 — 처음 · 끝은 못 지움(Enter 끝)", false));
+        // ★★[v113.1 · JACK 1104 «종단 방향 변경»] 시점 ↔ 종점(모양 · 높이 그대로 · 측점 0이 반대쪽 끝 · 다시 누르면 처음)
+        Buttons(("시점↔종점 바꾸기", "DHROADREV",
+                 "노선 방향을 뒤집습니다 — 모양 · 높이 그대로, 측점 0이 반대쪽 끝에서 시작합니다. 옹벽 · 측구 · 측점 기록도 같은 자리로 옮깁니다. 다시 누르면 처음으로 · 그 뒤 [업데이트]", false));
         Buttons(("종단 자동으로 다시", "DHROADREDRAFT",
                  "계획 종단 PVI를 모두 지우고 지금 땅(정지면_DH 또는 원지반)을 따라 최대 경사 · PVI 간격으로 처음부터 다시 잡습니다 — 손으로 옮긴 PVI는 사라집니다(누르면 한 번 묻습니다)", false));
 

@@ -40,6 +40,8 @@ public sealed class ProfileCommand
     /// <b>옛 도면에 남아 있으므로</b> 청소 목록에는 남긴다.</para></summary>
     internal const string LayerSlMajor = "DH-검토선(정측점)";
     internal const string LayerSlMinor = "DH-검토선(보조)";
+    /// <summary>★[v112.6] 부지 종단 단면검토선(Civil SampleLine) 레이어 — 평면도 [측점] 끄기로 얼릴 수 있게(옛 도면은 0 레이어 — 도면화가 옮김).</summary>
+    internal const string SiteSampleLineLayer = "DH-검토선(Civil)";
     internal const string LayerSlTextOld = "DH-검토선측점";
     /// <summary>부지정지가 그려 두는 <b>데이라잇</b>(계획면이 원지반과 만나는 선) 레이어 —
     /// <c>GradingBuilder.DrawDaylight</c>가 이 이름으로 그린다. 굴곡부 판정의 출처다.</summary>
@@ -263,9 +265,15 @@ public sealed class ProfileCommand
     /// 둘 다 있어야 참이다 — 노선이 여럿이면 <b>마지막 것</b>(가장 나중에 그린 것)을 쓴다.</summary>
     private static bool ReadExistingRoute(Database db, out System.Collections.Generic.List<Point3d> pts,
                                           out Point3d viewPt)
+        => ReadExistingRoute(db, out pts, out viewPt, out _);
+
+    /// <summary>★[v113.1 · 시점↔종점 바꾸기] 같은 판정 — 다시 그리기가 쓸 노선 폴리선 Id까지(판정을 두 벌 두지 않음).</summary>
+    internal static bool ReadExistingRoute(Database db, out System.Collections.Generic.List<Point3d> pts,
+                                           out Point3d viewPt, out ObjectId routeId)
     {
         pts = new System.Collections.Generic.List<Point3d>();
         viewPt = Point3d.Origin;
+        routeId = ObjectId.Null;
         bool ok = false;
         try
         {
@@ -290,7 +298,7 @@ public sealed class ProfileCommand
                 if (xd == null) continue;
                 foreach (TypedValue tv in xd)
                     if (tv.TypeCode == (short)DxfCode.ExtendedDataXCoordinate && tv.Value is Point3d vp)
-                    { viewPt = vp; pts = got; ok = true; }     // 마지막 것이 이긴다
+                    { viewPt = vp; pts = got; ok = true; routeId = id; }     // 마지막 것이 이긴다
             }
             tr.Commit();
         }
@@ -360,6 +368,7 @@ public sealed class ProfileCommand
         var cdoc = CivilApp.CivilApplication.ActiveDocument;
         var log = new System.Text.StringBuilder();
         bool rebuild = presetRoute is { Count: >= 2 };
+        SheetPrefs.TryPin(db, "종단도");   // ★[v112.1] 이 도면을 그린 도면설정 값을 도면에
         if (rebuild) log.AppendLine($"※다시 그리기 — 노선 {presetRoute.Count}점과 놓은 자리를 재사용한다");
         // ★★[v29.0 점검 반영 · 치명] 지난 판의 체인 ID가 넘어오지 않게 <b>맨 먼저 비운다</b>.
         LastLabelChainId = ObjectId.Null;
@@ -1093,7 +1102,7 @@ public sealed class ProfileCommand
     internal static (ObjectId PvId, System.Collections.Generic.List<ObjectId> PvIds, string SheetAll, int Count) PlaceSheets(
         Database db, Editor ed, CivilApp.CivilDocument cdoc, ObjectId alignId, Point3d placeAt, double scale,
         ObjectId pidGround, ObjectId pidPad, ObjectId slGroupId, System.Collections.Generic.List<SectionCommand.SurfPick> surfs,
-        System.Text.StringBuilder log, SheetContext? ctx, ObjectId? chain)
+        System.Text.StringBuilder log, SheetContext? ctx, ObjectId? chain, ProfilePlan? sPlan = null)
     {
         {
             double stA9 = 0, stB9 = 0;
@@ -1105,6 +1114,42 @@ public sealed class ProfileCommand
                 trA9.Commit();
             }
             catch { }
+            // ★★★[v113.1 · 계획_종단방향_축척.md 2.3 · JACK 1104 Q3 «여러 장으로 나눔»] 자동 칸(H 또는 V)이 있으면 앞 판 —
+            //   노선 전체 뷰 하나를 만들어 재고(밴드 정리 · 격자 좁히기 · 필요 폭 · 세로) Core 고르기(자동 H ≤ 1:1000 · 한 장에 안 들면 장 나누기)로 H · V · 장 수를 정한 뒤 그 뷰는 지우고
+            //   아래 장 루프는 정한 H · V를 고정값으로 그린다(장마다 같은 V). 옛 도면(V = H와 같게 · 옛 규칙) · 둘 다 고정 = 앞 판 없이 지금과 같음.
+            sPlan ??= ctx == null ? ProfilePlan.Site() : new ProfilePlan { PinH = scale, PinV = DH.Grading.Core.ProfileScaleFit.SameAsH };
+            double iv9 = GradingSettings.XsecInterval;
+            bool auto9 = false;
+            if (!sPlan.Legacy && (sPlan.PinH <= 0 || sPlan.PinV == 0))
+            {
+                var mpl = new ProfilePlan
+                {
+                    PinH = sPlan.PinH, PinV = sPlan.PinV, HMax = sPlan.HMax, KeepAnno = sPlan.KeepAnno, RoadTag = sPlan.RoadTag, PlanOnly = true,
+                    SheetsFor = h => SheetCommand.SplitPlan(stA9, stB9, h, iv9, null).Count,
+                };
+                ObjectId mv = ObjectId.Null;
+                try
+                {
+                    mv = CivilDb.ProfileView.Create(alignId, placeAt);
+                    ApplyViewStyle(db, cdoc, mv, pidGround, pidPad, slGroupId, surfs, ed, new System.Text.StringBuilder(), chain);
+                    string pn = SheetCommand.Build(db, ed, mv, log, true, ctx, mpl);
+                    log.AppendLine($"  축척 앞 판 — {pn}");
+                }
+                catch (System.Exception exM) { log.AppendLine("  ⚠축척 앞 판 실패 — " + exM.Message); }
+                finally
+                {
+                    if (!mv.IsNull) try { using var trM = db.TransactionManager.StartTransaction(); trM.GetObject(mv, OpenMode.ForWrite, false, true).Erase(); trM.Commit(); } catch { }
+                }
+                if (mpl.H > 0)
+                {
+                    sPlan.H = mpl.H; sPlan.V = mpl.V; sPlan.Sheets = mpl.Sheets; sPlan.Note = mpl.Note; sPlan.Over = mpl.Over;
+                    sPlan.PinH = mpl.H; sPlan.PinV = mpl.V;     // 장 루프 = 고정
+                    auto9 = true;
+                }
+                else { sPlan.PinH = sPlan.PinH > 0 ? sPlan.PinH : 0; if (sPlan.PinV == 0) sPlan.PinV = DH.Grading.Core.ProfileScaleFit.SameAsH; }   // 못 쟀으면 옛 식(한 장 · V = H)
+                sPlan.SheetsFor = null; sPlan.HMax = double.PositiveInfinity;
+                scale = sPlan.PinH;
+            }
             var plan9 = scale > 0
                       ? SheetCommand.SplitPlan(stA9, stB9, scale, GradingSettings.XsecInterval, log)
                       : new System.Collections.Generic.List<(double S0, double S1)> { (stA9, stB9) };
@@ -1229,7 +1274,7 @@ public sealed class ProfileCommand
                 //   멀쩡한 도면의 기점 글씨를 끈다.
                 bool startLabel9 = (sh9 == 0);
                 Step9($"{sh9 + 1}/{plan9.Count} ④ 도곽 시작(시작측점라벨 {(startLabel9 ? "켬" : "끔")})");
-                string sh9Note = SheetCommand.Build(db, ed, pvId9, log, startLabel9, ctx);
+                string sh9Note = SheetCommand.Build(db, ed, pvId9, log, startLabel9, ctx, sPlan);
                 Step9($"{sh9 + 1}/{plan9.Count} ④ 도곽 끝 — {sh9Note}");
 
                 // ★★★[JACK 0904 "두 번째 장부터 측점 시작이 +19.99부터 시작돼"]
@@ -1328,7 +1373,7 @@ public sealed class ProfileCommand
             if (plan9.Count > 1)
             {
                 sheetAll = $"{plan9.Count}장으로 나눔 · " + sheetAll;
-                if (!Quiet) ed.WriteMessage($"\n  · 종단도를 {plan9.Count}장으로 나눴습니다(고정 축척 1:{scale:F0}).");
+                if (!Quiet) ed.WriteMessage($"\n  · 종단도를 {plan9.Count}장으로 나눴습니다({(auto9 ? "자동 " : "고정 ")}{DH.Grading.Core.ProfileScaleFit.ScaleText(scale, sPlan.PinV > 0 ? sPlan.PinV : scale)}).");
             }
             return (pvId, pvIds9, sheetAll, plan9.Count);
         }
@@ -2204,11 +2249,13 @@ public sealed class ProfileCommand
                 catch (System.Exception ex) { firstErr ??= $"{cuts[i].Station:F2}m {ex.Message}"; }
             }
             // ★[v110.4 · 계획 2.B-1] 진입도로 — 검토선 레이어(«DH도로-검토선» · 부지 «DH-» 지우기 · 초기화에 안 걸림)
-            if (t != null && t.SampleLineLayer.Length > 0 && made.Count > 0)
+            // ★[v112.6 · JACK 1104 «측점 끄면 진입도로 측점만 꺼짐»] 부지도 제 레이어(«DH-검토선(Civil)») — 지금까지는 그때 현재 레이어(대개 0)에 붙어 평면도에서 못 껐음
+            string slLayer = t != null ? t.SampleLineLayer : SiteSampleLineLayer;
+            if (slLayer.Length > 0 && made.Count > 0)
                 try
                 {
                     using var trSl = db.TransactionManager.StartTransaction();
-                    var laySl = SectionCommand.EnsureLayer(db, trSl, t.SampleLineLayer, 8);
+                    var laySl = SectionCommand.EnsureLayer(db, trSl, slLayer, 8);
                     foreach (var mk in made)
                         try { if (trSl.GetObject(mk.Id, OpenMode.ForWrite) is Entity se) se.LayerId = laySl; } catch { }
                     trSl.Commit();

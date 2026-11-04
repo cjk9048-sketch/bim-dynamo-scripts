@@ -91,8 +91,11 @@ internal static class WallFaceMarks
         var smp = Sample(al);
         if (smp.Count < 2) return "";
         var ivs = new System.Collections.Generic.List<(double S0, double S1, PureWithWallsBuilder.ReflWall W, Envelope Env)>();
+        int boundSkip = 0;
         foreach (var w in walls)
         {
+            // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 경계 폴리선 옹벽의 Poly는 바꿀 자리(R_out 포함)라 측점 가리기 · 걷기에 쓰면 원지반 자리까지 가린다 — 빼고 로그에 적는다
+            if (w.Kind == 1) { boundSkip++; continue; }
             if (w.Poly == null || w.Poly.Count < 3) continue;
             var ring = w.Poly.Select(q => new Coordinate(q.X, q.Y)).ToList(); ring.Add(ring[0].Copy());
             Geometry pg = gf.CreatePolygon(ring.ToArray());
@@ -100,6 +103,7 @@ internal static class WallFaceMarks
             var pgB = pg.Buffer(0.01);
             foreach (var (a, b) in Intervals(smp, pgB, gf)) ivs.Add((a, b, w, pgB.EnvelopeInternal));
         }
+        if (boundSkip > 0) log?.AppendLine($"  ⚠폴리선 옹벽 {boundSkip}개는 종단 측점 가리기 · 걷기에서 뺐다(다음 판)");
         if (ivs.Count == 0) return "";
         bool InAny(double s) => ivs.Any(v => s >= v.S0 - 1e-6 && s <= v.S1 + 1e-6);
         // ① 가리기

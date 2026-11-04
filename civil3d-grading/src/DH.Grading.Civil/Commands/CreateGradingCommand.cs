@@ -271,7 +271,7 @@ public sealed class CreateGradingCommand
                 tr.Commit();
                 return new PreCheck(cand, none, "옹벽 목록을 못 읽었다 — " + lwhy, "", sw.ElapsedMilliseconds);
             }
-            var cl = WallPlace.Candidates(head, walls, planPolyId.Handle.ToString(), coveredNos, WallCompositeCommand.RebuildFailTag);
+            var cl = WallPlace.Candidates(head, walls.Where(w => w.Kind == 0).ToList(), planPolyId.Handle.ToString(), coveredNos, WallCompositeCommand.RebuildFailTag);   // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 경계 폴리선 옹벽은 단 링 자리가 없다 — 다시 합성 때 새 경계로 다시 잰다(WallLineFlow.Rebuild)
             foreach (var w in cl) cand.Add(w.No);
             if (cl.Count == 0) { tr.Commit(); return new PreCheck(cand, none, "", "", sw.ElapsedMilliseconds); }
             var boundary = BoundaryReader.Read(tr, planPolyId);
@@ -788,7 +788,13 @@ public sealed class CreateGradingCommand
             head.VerifiedP0 = finalSurfId.IsNull ? "" : finalSurfId.Handle.ToString();
             if (mode == GradeMode.RerunLast && (head.PlanHandle.Length == 0 || head.PlanHandle == region))
             {
-                var checks = WallPlace.CheckAll(walls.Where(w => w.State == 1).ToList(), boundary, p, cutZones, fillZones);
+                var checks = WallPlace.CheckAll(walls.Where(w => w.State == 1 && w.Kind == 0).ToList(), boundary, p, cutZones, fillZones);
+                // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 경계 폴리선 옹벽 — 단 링 자리 재기 대신 다시 합성(DHWALLCOMP)이 새 경계로 판정을 다시 돌린다(제자리면 다시 짓고 · 움직였으면 «다시 짓기 실패» 보류 · 지우지 않음)
+                foreach (var wb in walls.Where(w => w.State == 1 && w.Kind == 1))
+                {
+                    wb.Hold = ""; keep++;
+                    sbL.Append($"  폴리선 옹벽 {wb.No}({wb.Side}) — 다시 합성 때 새 경계로 다시 잰다(제자리면 다시 짓고 · 움직였으면 보류)\n");
+                }
                 var sorted = WallPlace.SortEnd(checks, _preCand, _preYes, WallCompositeCommand.RebuildFailTag);
                 var remove = new System.Collections.Generic.HashSet<int>();
                 foreach (var (c, k) in sorted)
@@ -4315,7 +4321,8 @@ public sealed class CreateGradingCommand
                 // ★[v103.3 · 목록 판 5] 옹벽 터파기가 앞면 선을 다시 지을 재료(표 · 소단 · 머리 높이)도 굳힌다
                 wHead.Frozen.Add(new FrozenWall { No = w.No, PlanHandle = region, Up = w.Up, H = w.H, SlopeW = w.SlopeW, FaceRun = w.FaceRun,
                                                   Reflected = refl.Contains(w.No), Poly = w.Poly.ToList(),
-                                                  IsWall = w.IsWall.ToList(), T = w.T, HeadZ = w.HeadZ });
+                                                  IsWall = w.IsWall.ToList(), T = w.T, HeadZ = w.HeadZ,
+                                                  Kind = w.Kind, Line = w.Line.ToList(), PadZ = w.PadZ, Tiers = w.Tiers, CapZ = w.CapZ });   // ★[v113.0] 판 6 — 종류도 굳힌다
             }
             wHead.PlanHandle = "";
             WallListStore.Save(db, tr, wHead, new System.Collections.Generic.List<WallRec>());

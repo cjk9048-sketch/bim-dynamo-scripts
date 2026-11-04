@@ -108,6 +108,12 @@ internal static class RoadXsec
         return (l, r, n);
     }
 
+    /// <summary>★[v112.1] 본 도로 차례 — 깊은(가까운) 본 도로 먼저 · 같은 깊이는 핸들 큰 것 먼저(최종면 FinalSurface.Compose에서 뒤 = 위와 같게 — 검토 M3).</summary>
+    internal static IEnumerable<BranchBase.Main> MainOrder(IEnumerable<BranchBase.Main> mains) => mains.OrderByDescending(m => m.Rank).ThenByDescending(m => m.Handle);
+
+    /// <summary>★[v112.1] 횡단도 열쇠의 본 도로 몫(없으면 빈 글).</summary>
+    internal static string MainsKey(IEnumerable<ObjectId> surfs) { var l = surfs.Select(x => x.Handle.ToString()).ToList(); return l.Count == 0 ? "" : "+" + string.Join(",", l); }
+
     /// <summary>★★[계획 3] 진입도로 횡단도 짓기 — 부르는 쪽(<see cref="RoadSession.MakeXsec"/>)이 문서 잠금 · 바뀜 표시 막음을 건다. 돌려줌 = 결과 한 줄(자세한 것은 <paramref name="log"/> · 진단 로그).</summary>
     internal static string Build(RoadSession s, Point3d at, System.Text.StringBuilder log)
     {
@@ -177,6 +183,28 @@ internal static class RoadXsec
             log.AppendLine($"  ⚠정지한 자리만 담은 면(정지순수_DH)이 없어 '{padName}'으로 정지면 선을 그림 — 정지 밖 측점에서 원지반선과 겹쳐 보임");
         if (!pad.IsNull && !surfs.Exists(x => x.SurfId == pad)) surfs.Add(new SectionCommand.SurfPick(pad, padName, padName, XsecViewCommand.RoadPadKind));
         surfs.Add(new SectionCommand.SurfPick(roadSurf, roadName, roadName, XsecViewCommand.RoadKind));
+        // ★[v112.1 · JACK 1104 남은 것] 가지 도로면 본 도로 면도 계획선 · 계획면 — 이음매 근처 본 도로 자리가 정지면으로 보이고 그렇게 셈하던 것(가지 바탕 BranchBase와 같은 사슬)
+        var mainIds = new List<ObjectId>();
+        if (d.EndsOn)
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                try
+                {
+                    var allEnds = RoadRanges.SolveAll(tr, db, aid, PadFloors.Load(db, tr, out _), null, false);
+                    var mains = BranchBase.Mains(tr, db, allEnds, aid, out string mn);
+                    if (mn.Length > 0) log.AppendLine("  " + mn);
+                    foreach (var m in MainOrder(mains))
+                    {
+                        if (m.Surf == roadSurf || surfs.Exists(x => x.SurfId == m.Surf)) continue;
+                        string nm = ((CivilDb.TinSurface)tr.GetObject(m.Surf, OpenMode.ForRead)).Name ?? "";
+                        surfs.Add(new SectionCommand.SurfPick(m.Surf, nm, nm, XsecViewCommand.RoadMainKind));
+                        mainIds.Add(m.Surf);
+                    }
+                    if (mainIds.Count > 0) log.AppendLine($"  가지 도로 — 본 도로 면 {mainIds.Count}개를 계획선으로(«{string.Join("», «", mains.Select(m => m.Name))}»)");
+                }
+                catch (Exception ex) { log.AppendLine("  ⚠본 도로 면을 못 찾아 가지 도로 횡단은 바탕면만으로 — " + ex.Message); }
+                tr.Commit();
+            }
         foreach (var x in all) if (x.Label == "지층" || x.Label == "지하수위") surfs.Add(x);
         if (!surfs.Exists(x => x.Label == "원지반")) log.AppendLine("  ⚠원지반을 못 찾았다 — 절토 · 성토가 빈다");
 
@@ -197,7 +225,7 @@ internal static class RoadXsec
         var t = new XsecTarget
         {
             AlignId = aid, AlignName = an, RoadHandle = me, Stations = stations, Surfs = surfs,
-            RoadSurfId = roadSurf, BaseSurfId = s.BaseSurfId, BaseIsPad = baseIsPad, Width = (w.L, w.R),
+            RoadSurfId = roadSurf, BaseSurfId = s.BaseSurfId, BaseIsPad = baseIsPad, MainSurfIds = mainIds, Width = (w.L, w.R),
             GroupBase = an + "-횡단", Pin = pin, OldGroup = d.XsecGroup, OldViews = new List<string>(d.XsecViews), OwnAlign = ours,
         };
         bool ok = false;
@@ -214,7 +242,8 @@ internal static class RoadXsec
             d.XsecViews = t.Views.Select(v => v.Handle.ToString()).ToList();
             d.XsecViewAt = ok ? RoadSession.ViewAt(db, t.Views) : Array.Empty<double>();   // ★[v111.7] 첫 · 끝 뷰 자리(옮겼나 — 저절로 다시 그리기 · 못 그렸으면 없음)
             if (ok) d.XsecLost = false;                                                       // ★[v111.7] 그려졌으면 «못 그림» 알림 끔(못 그렸으면 RoadSession.MakeXsec가 켬)
-            d.XsecStamp = ok ? RoadXsecRules.Stamp(RoadXsecRules.StationsKey(stations), roadSurf.Handle.ToString(), d.SurfaceSig) : "";
+            // ★[v112.1 검토 M2] 본 도로 면도 열쇠에(본 도로 [업데이트] = 새 핸들 → 가지 횡단도 «바뀜»)
+            d.XsecStamp = ok ? RoadXsecRules.Stamp(RoadXsecRules.StationsKey(stations), roadSurf.Handle.ToString() + MainsKey(mainIds), d.SurfaceSig) : "";
             s.Design = d;
             try { s.SaveDesign(); } catch (System.Exception exS) { log.AppendLine("  ⚠횡단 기록 저장 실패 — " + exS.Message); }
         }

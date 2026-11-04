@@ -79,6 +79,14 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "mesh")
     return fails == 0 ? 0 : 1;
 }
 
+// ★[v113.1 · JACK 1104] BLOCKTEST_ONLY=bend — 급한 굽은 안쪽 진입도로 면(S212 BD — 선 면 · 곡선 중심 낭떠러지 · 섬 · Civil 바늘)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "bend")
+{
+    RoadBendCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
 // ★[v111.8] BLOCKTEST_ONLY=final — 최종지표면 합치기(S186 SF) · 흰 차선 띠(S187 SL) · [3D 보기] 지형 구분 + 진입도로(S175)만
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "final")
 {
@@ -132,6 +140,34 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "sheet")
     return fails == 0 ? 0 : 1;
 }
 
+// ★[v112.5] BLOCKTEST_ONLY=cl — 등고값(S194 CL)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "cl") { ContourLabelCheck.Run(Check); return fails == 0 ? 0 : 1; }
+
+// ★[v113.0 · JACK 1104 «옹벽 폴리선»] BLOCKTEST_ONLY=wline — 경계 폴리선 옹벽(S195 판정 · S196 띠 · S197 줄 · S198/S199 합성 바꿔 끼움 · S201 목록 판 6 · S203 진입도로 좌표 · S204~S206 진입도로 엔진 · 광선 · 쉬는 기록 · S207 비스듬한 다리 턱)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "wline")
+{
+    WallLineCheck.Run(Check);
+    RoadBoundCheck.Run(Check);   // S203 진입도로 좌표 바꾸기
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
+// ★[v113.1] BLOCKTEST_ONLY=flip — 종단 방향 바꾸기 · 축척 H · V(S210 PF · S211 PS)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "flip")
+{
+    ProfileFlipCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
+// ★[v112.1] BLOCKTEST_ONLY=alt — 대안(S193 AL)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "alt")
+{
+    AltCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
 // ★[v112.0] BLOCKTEST_ONLY=sheetbook — 도면화 순수 셈(S190 SB)만
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "sheetbook")
 {
@@ -180,6 +216,14 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "back")
     return fails == 0 ? 0 : 1;
 }
 
+// ★[v112.7 · JACK 1104 «직각 · 사면변환 짜글짜글»] BLOCKTEST_ONLY=ruler — 구간 자 위 최근접 호길이 = 전수 셈 · 전이 띠 링 턱 0(S202)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "ruler")
+{
+    ZoneRulerCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
 // ★[v103.1.15] BLOCKTEST_ONLY=blend — 사면 구간 끝 전이 띠(S161)만(개발 중 부분 시험)
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "blend")
 {
@@ -208,6 +252,7 @@ CompStateCheck.Run(Check);   // ★[v103.1.12] S158 — 합성 셈 · 보류 종
 OutsideFixCheck.Run(Check, Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "data"));   // ★[v103.1.13] S159 — 넘길 면 전체의 «Civil이 고칠 면» · 먼저 뒤집기
 ExtendCheck.Run(Check);   // ★[v103.1.14] S160 — 맞닿은 옹벽 이어 짓기(판정 · 측선 방향 · 이은 폴리곤 · 겹침 · 목록 판 3 · 번호 물려받기)
 ZoneBlendCheck.Run(Check);   // ★[v103.1.15] S161 — 사면 구간 끝 전이 띠(이음 0 · 링 · 거리 · 띠 밖 그대로 · 옹벽 판정 · 맞닿음 · 옛 번들 · 시간)
+ZoneRulerCheck.Run(Check);   // ★[v112.7 · JACK 1104] S202 — 구간 자 위 최근접 호길이(격자 색인 = 전수 셈) · 전이 띠 링 턱 0
 PureWallsCheck.Run(Check);   // ★[v103.2] S162 · S163 — 옹벽이 든 순수면(뚜껑 · 고르기 · 목록 판 4 · 걷기)
 ExcavCheck.Run(Check);   // ★[v103.3] S164 · S166 · S167 — 옹벽 뒷채움 터파기(앞면 선 · 재기 · 띠 · 설정 · 목록 판 5 · 아래 껍질)
 WallSectionCheck.Run(Check);   // ★[v104] S168 — 옹벽 형식별 일반단면(첫 표 · 단면 넓이 · 표 고르기 · 터파기 범위 · 기록)
@@ -236,6 +281,12 @@ SheetBookCheck.Run(Check);      // ★[v112.0] S190 SB — 도면화(장 알아�
 RoadRailCheck.Run(Check);       // ★[도로 마무리 ③] S190 RB — 도로 면 둘레가 땅(TIN) 꺾임을 정확히(레일 꺾임 점 · 몰림 = 점 하나 · 같은 결과 · 꼴 재현 · 평평한 땅 비트 같음 · 가지 바탕 = 정지면 + 본 도로 합침)
 RoadEndsCheck.Run(Check);       // ★[도로 마무리 ①] S191 SE — 도로 끝 판정(넘침 · 못 미침 20 m · 꺾어 · 비스듬히 · 빈 구간 · 가지 · 고정 PVI · 시점 옮김)
 DitchCheck.Run(Check);          // ★[도로 마무리 ②] S192 DG — 측구 단면 꼴(U형 · L형 대표단면 · 치수 칸 · 넓이 · 경고)
+AltCheck.Run(Check);            // ★[v112.1] S193 AL — 대안(폴더 · 목록 왕복 · 이름 · 옹벽 앞면 선 길이 · 사면 겉넓이)
+ContourLabelCheck.Run(Check);   // ★[v112.5] S194 CL — 등고선 잇기 · 값 자리
+WallLineCheck.Run(Check);       // ★[v113.0] S195~S199 · S201 — 경계 폴리선 옹벽(판정 · 띠 · 줄 · 합성 바꿔 끼움 · 목록 판 6)
+RoadBoundCheck.Run(Check);      // ★[v113.0] S203~S207 — 진입도로 폴리선 옹벽(좌표 바꾸기 · 엔진 바닥 + 단면 · 선 면 · 옹벽선 · 쉬는 기록 · 비스듬한 다리 턱)
+ProfileFlipCheck.Run(Check);    // ★[v113.1] S210 PF · S211 PS — 종단 방향 바꾸기(측점 기록 · 되돌림 기록 · 엔진 대칭) · 종단 축척 H · V(옛 규칙 · 전수 · 나눔)
+RoadBendCheck.Run(Check);       // ★[v113.1 · JACK 1104] S212 BD — 급한 굽은 안쪽 진입도로 면(선 면 검사 통과 · 곡선 중심 낭떠러지 · 섬 · Civil 바늘 접기)
 
 const double W = 0.46, H = 0.2, STEP = 5.0, HW = W / 2;
 const double D = 0.5, FS = D / 2; // 깊이·전면 돌출(벽 중심=링, JACK 0720 Z-파이팅 해소): 절토 +FS(안쪽), 성토 −FS

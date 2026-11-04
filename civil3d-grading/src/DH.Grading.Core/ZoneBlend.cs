@@ -50,6 +50,11 @@ internal sealed class ZoneBlend
         public int SteepBench = -1;
         public bool Warn;             // 늘려도 옹벽 판정 한도의 3배를 못 지킴
         public string Note = "";
+        // ★★[v112.7 · JACK 1104 «직각 · 사면변환 짜글짜글» → 단마다 띠] 가파름 지킴이 띠를 늘려야 할 때만 — 단 b의 창 [Ob, Ob+Lb](E에서 안쪽 거리).
+        //   묶음마다 잇달아(1묶음 0~L · 2묶음 L~…) — 아랫단은 L(10m)에서 끝나 곧고, 윗단만 길다. O + L = 모든 창의 끝(바깥 둘레 — 띠 판정 · 곁 판정이 그대로 쓴다).
+        public bool Staged;
+        public double[] Ob = System.Array.Empty<double>(), Lb = System.Array.Empty<double>();
+        public double[] Cuts = System.Array.Empty<double>();  // 창 시작 · 끝(SegThresholds 후보)
     }
 
     private readonly End?[] _t0, _t1;
@@ -140,16 +145,17 @@ internal sealed class ZoneBlend
         {
             int z = own[b];
             if (z < 0 || z >= limit) continue;
-            End? e = null; double d = 0;
+            End? e = null; double d = 0, eo = 0, el = 0;
             foreach (var en in _byZone[z])       // 그 구간을 덮는 띠(자기 끝 + 사슬 짝의 끝)
             {
                 if (en.Zone >= limit || !en.Elig[b]) continue;
                 double tau = TauOf(en.Zone, x, y);
                 double dd = en.AtT0 ? Wrap(tau - en.E, en.Total) : Wrap(en.E - tau, en.Total);
-                if (dd < en.O + en.L) { e = en; d = dd; break; }
+                double ob = en.Staged ? en.Ob[b] : en.O, lb = en.Staged ? en.Lb[b] : en.L;   // ★[v112.7] 단마다 창(묶음 띠일 때만 — 아니면 종전 그대로)
+                if (dd < ob + lb) { e = en; d = dd; eo = ob; el = lb; break; }
             }
             if (e == null) continue;
-            double u = e.L > 1e-12 ? System.Math.Clamp((d - e.O) / e.L, 0, 1) : 1;
+            double u = el > 1e-12 ? System.Math.Clamp((d - eo) / el, 0, 1) : 1;
             if (u >= 1) continue;
             double ns = e.OutS[b] + (s[b] - e.OutS[b]) * u;
             double nw = e.OutW[b] + (w[b] - e.OutW[b]) * u;
@@ -263,6 +269,9 @@ internal sealed class ZoneBlend
         var why = new System.Text.StringBuilder();
         // 가파름 지킴 — 띠 안 면 링 간격이 옹벽 판정 한도(WallRunBuilder gapLim)의 3배 아래면 띠를 늘린다(같은 값 구간 절반까지).
         double need = Steepness(e, e.L, out _, out _);
+        // ★★[v112.7 · JACK 1104 «직각 · 사면변환 짜글짜글» → 단마다 띠] 늘려야 할 때 띠 하나를 통째로 늘리면(1104 현장: 83단 중 81단 탓 10 → 56.77m)
+        //   아랫단까지 구간 전체가 띠가 되어 바뀐 사면선이 곧은 데가 없었다 → 단을 묶음으로 나눠 잇달아 섞는다(묶음 띠 — 안 되면 종전 늘림).
+        if (need > e.L + 1e-9 && TryStage(e, e.L, half, z, poly, cum, atT0, E, tot, why)) { e.Note = why.ToString(); return e; }
         if (need > e.L + 1e-9)
         {
             double cap = half - e.O;
@@ -326,6 +335,201 @@ internal sealed class ZoneBlend
                 need = System.Math.Max(need, dmax / System.Math.Sqrt((fr / thr) * (fr / thr) - 1));
         }
         return need;
+    }
+
+    /// <summary>★★[v112.7 · JACK 1104 «직각 · 사면변환 짜글짜글» → 단마다 띠] <b>묶음 띠</b> — 가파름 지킴이 띠를 늘려야 할 때 단을 아래부터 묶어 잇달아 섞는다.
+    /// <para>한 띠를 통째로 늘리면 모든 링이 구간 절반까지 비스듬하다. 아랫단만 짧게 하면 윗단 링이 아랫단 몫을 짧은 데서 다 받아 오히려 가팔라진다
+    /// (같은 자리에서 시작하는 창은 기울기가 더해진다). 그래서 창을 <b>잇달아</b> 둔다 — 묶음 j는 [a_j, a_j+ℓ_j] 안에서만 섞고 앞 묶음은 이미 끝났다.
+    /// 한 자리에서 섞이는 것은 한 묶음뿐이라 면마다 기울기 = 그 묶음 몫 / ℓ_j(Steepness와 같은 셈 · 같은 한도).</para>
+    /// <para>묶음 = 아랫단부터 한도(옹벽 판정 한도의 3배 — λ배까지)를 지키며 ℓ = L(10m) 안에 드는 만큼. 한 단이 혼자 L로 안 되면 그 묶음만 길다.
+    /// 모든 묶음이 구간 절반 안에 들면 끝 · 안 들면 한도를 가장 적게 늦춘 λ(이분)로 — 띠 하나 통째 늘림(종전)보다 나쁘지 않다(λ가 그 경우를 포함).</para>
+    /// <para>이웃 링은 안 건넌다 — 링 e+1과 e의 거리 차는 한 단의 사면폭 · 소단폭(두 값 사이)이라 어느 자리에서나 양수다.
+    /// 자에 부채꼴(라운드 자)이 있고 창 끝이 그 안이면 종전 늘림으로 돌아간다(false).</para></summary>
+    private bool TryStage(End e, double L0, double half, SlopeZone z, IReadOnlyList<Point3> poly, double[] cum, bool atT0, double E, double tot,
+                          System.Text.StringBuilder why)
+    {
+        if (!(L0 > 1e-9) || half - e.O < L0 - 1e-9) return false;
+        // 설정 길이(10m)를 다 못 쓰는 짧은 구간(L = 구간/3)은 종전 늘림 — 거기서 묶으면 아랫단이 늘림보다 오히려 짧아(가팔라) 곧게 할 몫이 없다
+        if (L0 < _len - 1e-9) return false;
+        var s0 = new double[_nb]; var w0 = new double[_nb];
+        for (int b = 0; b < _nb; b++) { s0[b] = e.Elig[b] ? e.OutS[b] : e.InS[b]; w0[b] = e.Elig[b] ? e.OutW[b] : e.InW[b]; }
+        var p0 = Profile(s0, w0); var p1 = Profile(e.InS, e.InW);
+        int ne = System.Math.Min(p0.Edges.Count, p1.Edges.Count);
+        int nf = (ne + 1) / 2;                                   // 면 k = 모서리 2k−1(발) ~ 2k(머리)
+        if (nf < 1) return false;
+        double D(int ed) => ed < 0 ? 0 : (ed < ne ? p1.Edges[ed].dist - p0.Edges[ed].dist : D(ne - 1));
+        var dc = new double[nf]; var full = new double[nf];      // 단 b가 머리 모서리에 · 다음 단부터 주는 몫(부호 그대로)
+        var kcap = new double[nf]; var fr = new double[nf]; var hh = new double[nf];
+        for (int k = 0; k < nf; k++)
+        {
+            dc[k] = D(2 * k) - D(2 * k - 1);
+            full[k] = D(2 * k + 1) - D(2 * k - 1);
+            int ec = 2 * k, et = 2 * k - 1;
+            double c0 = p0.Edges[ec].dist, c1 = p1.Edges[ec].dist;
+            double t0 = et >= 0 ? p0.Edges[et].dist : 0, t1 = et >= 0 ? p1.Edges[et].dist : 0;
+            hh[k] = p0.Edges[ec].rise - (et >= 0 ? p0.Edges[et].rise : 0);
+            fr[k] = System.Math.Min(c0 - t0, c1 - t1);
+            kcap[k] = double.PositiveInfinity;                   // 한도 없음(Steepness가 건너뛰는 면 — 원래부터 한도 곁 · 높이 0)
+            if (hh[k] <= 1e-9) continue;
+            double lim = _gate * hh[k] * 1.05 + 5e-3;
+            if (fr[k] <= 1.2 * lim) continue;
+            double thr = System.Math.Min(3 * lim, 0.8 * fr[k]);
+            kcap[k] = System.Math.Sqrt((fr[k] / thr) * (fr[k] / thr) - 1);
+        }
+        var capAbove = new double[nf + 1];                       // capAbove[k] = min kcap[k..]
+        capAbove[nf] = double.PositiveInfinity;
+        for (int k = nf - 1; k >= 0; k--) capAbove[k] = System.Math.Min(kcap[k], capAbove[k + 1]);
+        var elig = new List<int>();
+        for (int b = 0; b < nf && b < _nb; b++) if (e.Elig[b]) elig.Add(b);
+        if (elig.Count == 0) return false;
+        // 묶음 [i..j](elig 차례)의 최소 창 길이 — 면 k ≥ 첫 단: 발 = 묶음 안 아랫단 몫 합 · 머리 = 발 + 제 단 머리 몫 · 묶음 위 면 = 묶음 몫 전부
+        double LenOf(int i, int j, double lam)
+        {
+            int b0 = elig[i], b1 = elig[j];
+            double need = 0, acc = 0; int q = i;
+            for (int k = b0; k <= b1; k++)
+            {
+                double gt = acc, gc = acc;
+                if (q <= j && elig[q] == k) { gc = acc + dc[k]; acc += full[k]; q++; }
+                double g = System.Math.Max(System.Math.Abs(gt), System.Math.Abs(gc));
+                if (g > 0 && kcap[k] < double.PositiveInfinity) need = System.Math.Max(need, g / (lam * kcap[k]));
+            }
+            if (b1 + 1 < nf && capAbove[b1 + 1] < double.PositiveInfinity && System.Math.Abs(acc) > 0)
+                need = System.Math.Max(need, System.Math.Abs(acc) / (lam * capAbove[b1 + 1]));
+            return need;                                         // 한도만으로 든 길이(L 바닥은 부르는 쪽이)
+        }
+        double room = half - e.O;
+        static double Total(List<(int I, int J, double Len)> st) { double t = 0; foreach (var s in st) t += s.Len; return t; }
+        List<(int I, int J, double Len)> Plan(double lam)
+        {
+            var st = new List<(int, int, double)>();
+            int i = 0; double li = System.Math.Max(L0, LenOf(0, 0, lam));
+            for (int j = 1; j < elig.Count; j++)
+            {
+                double lj = System.Math.Max(L0, LenOf(i, j, lam));
+                if (lj <= li + 1e-12) { li = lj; continue; }
+                st.Add((i, j - 1, li)); i = j; li = System.Math.Max(L0, LenOf(j, j, lam));
+            }
+            st.Add((i, elig.Count - 1, li));
+            // ★[설치 전 검토 중간 · 1104] 묶음마다 L 바닥 탓에 창 합이 띠 하나 늘림(need)보다 길어 넘치면 — 한도를 늦추기 전에 바닥을 푼다:
+            //   윗 묶음부터 제 한도 길이(LenOf)까지 줄여 남은 자리에 맞춘다(아랫 묶음은 되도록 L 그대로 · 마지막 묶음만 줄이던 것의 일반화).
+            double over = Total(st) - room;
+            for (int s = st.Count - 1; s >= 0 && over > 1e-9; s--)
+            {
+                var (sI, sJ, sLen) = st[s];
+                double cut = System.Math.Min(over, sLen - System.Math.Max(LenOf(sI, sJ, lam), 1e-9));
+                if (cut <= 0) continue;
+                st[s] = (sI, sJ, sLen - cut); over -= cut;
+            }
+            return st;
+        }
+        double lamUse = 1;
+        var plan = Plan(1);
+        if (Total(plan) > room + 1e-9)
+        {
+            double lo = 1, hi = 2;
+            while (Total(Plan(hi)) > room + 1e-9 && hi < 1e12) hi *= 2;
+            for (int it = 0; it < 60; it++) { double mid = 0.5 * (lo + hi); if (Total(Plan(mid)) > room + 1e-9) lo = mid; else hi = mid; }
+            lamUse = hi; plan = Plan(hi);
+            if (Total(plan) > room + 1e-9) return false;
+        }
+        // ★[설치 전 검토 중간 · 1104] 다짐 — 묶음 띠는 종전 늘림이 ⚠ 없이 지키는 자리에서 ⚠를 내지 않는다(아래에서 «더 가파르지 않다»도 다짐)
+        double need0 = Steepness(e, L0, out _, out _);
+        bool oldWarn = need0 > room + 1e-9;
+        if (lamUse > 1 + 1e-9 && !oldWarn) return false;
+        if (plan.Count < 2) return false;                        // 묶음 하나 = 띠 하나 늘림(종전 길과 같다)
+        // 오목 꼭짓점 곁이면 종전 늘림 — 오목 꼭짓점은 거리 D 링에서 자 위 매개를 꼭짓점 앞뒤 D·cot(β/2)씩 건너뛴다(β = 바깥 각).
+        //   그 안에 창 끝이 여럿 떨어지면 띠 끝 잇기(오목부 ⓕ · 뾰족점)가 맞춰진 띠 하나 판과 달라진다 — S161 무작위 판 실측:
+        //   오목 꼴(ㄱ · ㄷ · 135°)에서 이음 · 건넘이 늘고 네모는 그대로였다. 가장 먼 링 거리로 재 그 범위에 오목 꼭짓점이 하나라도 들면 묶지 않는다.
+        {
+            double dMax = System.Math.Max(p0.Edges[ne - 1].dist, p1.Edges[ne - 1].dist);
+            double env = Total(plan);
+            int pn = _plan.Count;
+            if (pn >= 2 && System.Math.Abs(_plan[0].X - _plan[pn - 1].X) < 1e-9 && System.Math.Abs(_plan[0].Y - _plan[pn - 1].Y) < 1e-9) pn--;
+            double sa = 0;
+            for (int i = 0; i < pn; i++) sa += _plan[i].X * _plan[(i + 1) % pn].Y - _plan[(i + 1) % pn].X * _plan[i].Y;
+            for (int i = 0; i < pn; i++)
+            {
+                var pv = _plan[(i - 1 + pn) % pn]; var pc = _plan[i]; var nx = _plan[(i + 1) % pn];
+                double ax = pc.X - pv.X, ay = pc.Y - pv.Y, bx = nx.X - pc.X, by = nx.Y - pc.Y;
+                double lA = System.Math.Sqrt(ax * ax + ay * ay), lB = System.Math.Sqrt(bx * bx + by * by);
+                if (lA < 1e-9 || lB < 1e-9) continue;
+                double cosT = (ax * bx + ay * by) / (lA * lB);
+                if (cosT >= System.Math.Cos(0.5 * System.Math.PI / 180)) continue;       // 곧은 꼭짓점(FanRegions와 같은 꺾임 문턱)
+                double cr = ax * by - ay * bx;
+                bool reflex = sa > 0 ? cr < 0 : cr > 0;
+                if (!reflex) continue;
+                double turn = System.Math.Acos(System.Math.Clamp(cosT, -1, 1));          // 꺾인 각 — 바깥 각 β = π − turn
+                double beta = System.Math.PI - turn;
+                double reach = beta > 1e-9 ? dMax / System.Math.Tan(beta / 2) : double.PositiveInfinity;
+                double tv = z.RulerParamAt(pc.X, pc.Y, _plan, _planCum);
+                double din = atT0 ? Wrap(tv - E, tot) : Wrap(E - tv, tot);
+                double dout = atT0 ? Wrap(E - tv, tot) : Wrap(tv - E, tot);
+                if (din <= e.O + env + reach || dout <= reach) return false;
+            }
+        }
+        // 창 자리
+        var ob = new double[_nb]; var lb = new double[_nb];
+        var cuts = new List<double> { 0, e.O };
+        double a = e.O;
+        foreach (var (I, J, Len) in plan)
+        {
+            for (int q = I; q <= J; q++) { ob[elig[q]] = a; lb[elig[q]] = Len; }
+            cuts.Add(a); cuts.Add(a + Len);
+            a += Len;
+        }
+        // 자의 부채꼴 안에 창 끝이 떨어지면 종전 늘림으로(밀기 · 줄이기는 띠 하나에만 맞춰 짰다)
+        if (z.Ref != null)
+            foreach (var (da, db) in FanRegions(poly, cum, atT0, E, tot))
+                foreach (double c in cuts)
+                    if ((da < 0 && c < db - 1e-9) || (c > da + 1e-9 && c < db - 1e-9)) return false;
+        // 프로파일 밖 여분 단(_nb는 모서리 수/2 + 2) · 안 섞는 단 — 마지막 묶음 창(안 섞는 단은 Effective가 안 본다)
+        var lastSt = plan[^1];
+        for (int b = 0; b < _nb; b++)
+            if (!e.Elig[b] || b >= nf) { ob[b] = a - lastSt.Len; lb[b] = lastSt.Len; }
+        e.Staged = true; e.Ob = ob; e.Lb = lb; e.L = a - e.O;
+        cuts.Sort(); var cu = new List<double>();
+        foreach (double c in cuts) if (cu.Count == 0 || c - cu[^1] > 1e-12) cu.Add(c);
+        e.Cuts = cu.ToArray();
+        // 가장 가파른 면(묶음마다 그 묶음 몫 / ℓ — Steepness와 같은 gap 셈)
+        e.Steepest = double.PositiveInfinity; e.SteepBench = -1;
+        foreach (var (I, J, Len) in plan)
+        {
+            double acc = 0; int q = I;
+            for (int k = elig[I]; k < nf; k++)
+            {
+                double gt = acc, gc = acc;
+                if (q <= J && elig[q] == k) { gc = acc + dc[k]; acc += full[k]; q++; }
+                double g = System.Math.Max(System.Math.Abs(gt), System.Math.Abs(gc)) / Len;
+                if (hh[k] <= 1e-9 || g < 1e-12) continue;
+                double gap = fr[k] / System.Math.Sqrt(1 + g * g);
+                if (gap / hh[k] < e.Steepest) { e.Steepest = gap / hh[k]; e.SteepBench = k; }
+            }
+        }
+        e.Warn = lamUse > 1 + 1e-9;
+        // 다짐 — 종전 늘림(띠 = need, 넘치면 구간 절반)의 가장 가파른 면보다 가파르면 묶지 않는다(종전 길로)
+        {
+            Steepness(e, oldWarn ? System.Math.Max(L0, room) : need0, out double oldSt, out _);
+            if (e.Steepest < oldSt - 1e-12 || (e.Warn && !oldWarn))
+            {
+                e.Staged = false; e.Ob = System.Array.Empty<double>(); e.Lb = System.Array.Empty<double>(); e.Cuts = System.Array.Empty<double>();
+                e.L = L0; e.Steepest = double.PositiveInfinity; e.SteepBench = -1; e.Warn = false;
+                return false;
+            }
+        }
+        var sb = new System.Text.StringBuilder();
+        double a2 = e.O;
+        for (int s = 0; s < plan.Count; s++)
+        {
+            var (I, J, Len) = plan[s];
+            if (s < 3 || s == plan.Count - 1)
+                sb.Append($"{(s > 0 ? " · " : "")}{elig[I] + 1}{(J > I ? $"~{elig[J] + 1}" : "")}단 {a2:0.#}~{a2 + Len:0.#}m");
+            else if (s == 3) sb.Append(" · …");
+            a2 += Len;
+        }
+        why.Append($" · 단마다 띠(묶음 {plan.Count}: {sb})" +
+                   (e.Warn ? $" · ⚠묶음을 구간 절반({half:0.##}m)에 넣느라 한도를 {lamUse:0.###}배로 늦췄다 — 옹벽 판정 한도 가까이 가파르다" : ""));
+        return true;
     }
 
     /// <summary>자의 <b>부채꼴</b>(라운드 모서리 — 꺾이는 꼭짓점이 같은 계획 꼭짓점을 둘러 여럿 이어진 자리)을 E에서 안쪽으로 잰 거리 [da, db]로.
@@ -437,7 +641,7 @@ internal sealed class ZoneBlend
             double d = Wrap(tb - ta + tot / 2, tot) - tot / 2;
             if (System.Math.Abs(d) < 1e-12) continue;
             double sg = e.AtT0 ? 1 : -1;
-            foreach (double off in new[] { 0.0, e.O, e.O + e.L })
+            foreach (double off in e.Staged ? e.Cuts : new[] { 0.0, e.O, e.O + e.L })   // ★[v112.7] 묶음 띠면 창 시작 · 끝 모두
             {
                 double th = e.E + sg * off;
                 double s = (Wrap(th - ta + tot / 2, tot) - tot / 2) / d;

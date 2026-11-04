@@ -57,6 +57,31 @@ internal static class RoadSheets
         return (r.Scale, r.Note, site);
     }
 
+    /// <summary>★★[v113.1 · 계획_종단방향_축척.md 2.2 · 2.5 · 3 · JACK 1104 «부지 · 진입도로 종단 H · V 따로»] 진입도로 종단 축척 계획.
+    /// <para>판 2 기록(도면설정 «2. 진입도로» H · V) = 그 칸(자동 H ≤ 1:1000 · 한 장에 안 들면 장 나누기) · 부지 종단도가 있으면 그 주석 축척(<see cref="ProfilePlan.KeepAnno"/>) — H가 다르면 짓는 동안만 바꾸고 비율을 굽는다.</para>
+    /// <para>판 2가 없으면(옛 도면) = 옛 규칙(<see cref="ScaleFor"/> — 부지 따름 · 옛 칸 · 1:500) + V = H와 같게(지금 그림 그대로).</para></summary>
+    internal static (ProfilePlan Plan, bool V2, string Key, string Note, bool Site) Setting(Database db, string roadHandle)
+    {
+        var vh = RoadDrawingSettings.ReadVH(db);
+        var (lscale, lnote, site) = ScaleFor(db);
+        if (!vh.V2) return (new ProfilePlan { PinH = lscale, PinV = ProfileScaleFit.SameAsH, RoadTag = roadHandle }, false, "", lnote, site);
+        double anno = SheetCommand.CurrentDrawingScale(db);
+        var p = new ProfilePlan { PinH = vh.H, PinV = vh.V, HMax = ProfileScaleFit.AutoHMax, KeepAnno = site && anno > 0 ? anno : 0, RoadTag = roadHandle };
+        string note = $"도면설정 H {(vh.H > 0 ? $"1:{vh.H:0}" : "자동")} · V {(vh.V > 0 ? $"1:{vh.V:0}" : vh.V < 0 ? "H와 같게" : "자동")}"
+                    + (p.KeepAnno > 0 ? $" · 부지 주석 축척 1:{anno:0}" : "");
+        return (p, true, ProfileScaleFit.Key(vh.H, vh.V), note, site);
+    }
+
+    /// <summary>★[v113.1] 놓을 자리 짐작용 H · 수직과장 — 고정이면 그 값 · 자동 H = 1:1000(가장 넓게 잡음) · 자동 V = 0(그래프는 도곽 안에 맞춰짐).</summary>
+    internal static (double H, double Ve) PlannedScale(Database db)
+    {
+        var (p, v2, _, _, _) = Setting(db, "");
+        if (!v2) return (p.PinH, SheetCommand.PlannedExaggeration());
+        double h = p.PinH > 0 ? p.PinH : ProfileScaleFit.AutoHMax;
+        double ve = p.PinV > 0 ? h / p.PinV : p.PinV < 0 ? 1 : 0;
+        return (h, ve);
+    }
+
     /// <summary>이 축척에서 장 수(부지와 같은 장 나누기 — 측점 간격의 배수로 끊음).</summary>
     internal static int SheetCount(Database db, ObjectId aid, double scale)
     {
@@ -80,8 +105,9 @@ internal static class RoadSheets
     /// <para>★[설치 전 검토 · 중간] 새 사각형 세로 — 그래프 높이 = 표고 범위를 눈금(5 m)으로 올림 + 한 칸 × 수직과장(<see cref="SheetCommand.PlannedExaggeration"/>).
     /// 이 도로 종단도가 이미 그려져 있으면 그 <b>실제</b> 도곽 · 뷰의 위 · 아래 끝(첫 뷰 자리 기준)을 쓰고(그래프가 더 높아질 것은 위 끝에 반영) · 없으면 놓는 점 ± 종이 한 장 높이
     /// (<see cref="ProfileSheetRules.RoadSheetsBox"/>). 그려 본 뒤에는 <see cref="PlacedOverlap"/>가 실제 범위로 한 번 더 본다.</para></summary>
-    internal static string Overlap(Database db, ObjectId aid, Point3d at, double scale, int sheets)
+    internal static string Overlap(Database db, ObjectId aid, Point3d at, double scale, int sheets, double ve = double.NaN)
     {
+        if (double.IsNaN(ve)) ve = SheetCommand.PlannedExaggeration();
         string me = aid.Handle.ToString();
         try
         {
@@ -103,7 +129,8 @@ internal static class RoadSheets
                     catch { }
             }
             catch { }
-            double graphH = zHi >= zLo ? ProfileSheetRules.GraphHeight(zLo, zHi, SheetCommand.ElevStepM, SheetCommand.PlannedExaggeration()) : 0;
+            // ★[v113.1] 자동 V(ve 0) = 그래프가 도곽 안에 맞춰짐 — 도곽 한 장 높이만
+            double graphH = zHi >= zLo && ve > 0 ? ProfileSheetRules.GraphHeight(zLo, zHi, SheetCommand.ElevStepM, ve) : 0;
             var box = ProfileSheetRules.RoadSheetsBox(at.X, at.Y, scale, sheets, graphH, PlaceMarginMm);
             var own = OwnRects(tr, db, aid, me, mm, out Point3d? origin);
             if (own.Count > 0 && origin is Point3d o)
@@ -243,14 +270,17 @@ internal static class RoadSheets
                 try
                 {
                     var d = RoadDesign.Read(tr, aid);
-                    if (d == null || d.SheetViews.Count == 0 || !(d.SheetScale > 0) || Math.Abs(d.SheetScale - siteScale) < 1e-6) continue;
+                    if (d == null || d.SheetViews.Count == 0 || !(d.SheetScale > 0)) continue;
+                    // ★[v113.1] 판 2 설정으로 그린 도로 = 축척은 따로(같을 필요 없음) — 그린 뒤 주석 축척이 지금과 다를 때만(밴드 글자 비율이 어긋남)
+                    if (d.SheetAnno is double an0) { if (Math.Abs(an0 - siteScale) < 1e-6) continue; bad.Add($"{((CivilDb.Alignment)tr.GetObject(aid, OpenMode.ForRead)).Name} 주석 1:{an0:0}"); continue; }
+                    if (Math.Abs(d.SheetScale - siteScale) < 1e-6) continue;
                     bad.Add($"{((CivilDb.Alignment)tr.GetObject(aid, OpenMode.ForRead)).Name} 1:{d.SheetScale:0}");
                 }
                 catch { }
             }
             tr.Commit();
         }
-        return bad.Count == 0 ? "" : $"진입도로 종단도 축척 다름({string.Join(", ", bad)} ≠ 부지 1:{siteScale:0}) — 진입도로 [종단도]";
+        return bad.Count == 0 ? "" : $"진입도로 종단도 축척 다름({string.Join(", ", bad)} ≠ 부지 1:{siteScale:0}) — 진입도로 [업데이트]";
     }
 
     /// <summary>★★[계획 3.1] 진입도로 종단도 짓기 — 부르는 쪽(<see cref="RoadSession.MakeSheets"/>)이 문서 잠금 · 바뀜 표시 막음(Suppress)을 건다.
@@ -263,8 +293,11 @@ internal static class RoadSheets
         var d = s.Design;
         ObjectId aid = s.AlignId;
         string an = s.Name, me = aid.Handle.ToString();
-        var (scale, scNote, site) = ScaleFor(db);                              // ② 축척(검토 M1)
-        log.AppendLine($"[진입도로 종단도] {an} — 축척 1:{scale:0} · {scNote}");
+        // ② 축척 — ★[v113.1] 도면설정 «2. 진입도로» H · V(판 2) · 옛 도면 = 옛 규칙(검토 M1 — 부지 따름)
+        var (plan, v2, setKey, scNote, site) = Setting(db, me);
+        double scale = plan.PinH;
+        var annoKeep = db.Cannoscale;   // ★[3단계] 짓는 동안만 H로 바꿨으면 끝에 되돌릴 부지 주석 축척
+        log.AppendLine($"[진입도로 종단도] {an} — 축척 {(scale > 0 ? $"H 1:{scale:0}" : "H 자동")} · {scNote}");
 
         // ③ 옛것 지우기 — 이 도로 노선 안에서만(검토 M3): 표식 → 종단뷰(적어 둔 핸들 · «DH도로-종단뷰» 레이어) → «{노선}-검토*» 그룹 → «-지반» · 측점 체인(«-바탕» · «-계획»은 남김)
         int nTag = 0, nView = 0, nGrp = 0, nProf = 0;
@@ -312,6 +345,7 @@ internal static class RoadSheets
             tr.Commit();
         }
         log.AppendLine($"  옛 종단도 지움 — 표식 {nTag} · 종단뷰 {nView} · 검토선 그룹 {nGrp} · 종단 {nProf}");
+        ProfileScaleStyles.DropRoadClones(db, me, log);   // ★[v113.1 · 3단계] 이 도로 지난 판 축척 복사본(비율을 두 번 곱하지 않게 새로)
 
         ObjectId layProf = SectionCommand.EnsureLayerStandalone(db, RoadBuilder.LayProf, 6);
         ObjectId labels = SectionCommand.PickStyle(db, cdoc.Styles.LabelSetStyles.ProfileLabelSetStyles, "_없음", "None", "표준", "Standard");
@@ -414,7 +448,8 @@ internal static class RoadSheets
             AlignId = aid, PidGround = baseProf, PidPad = s.PlanId, PidGroundLine = groundLine, ChainId = t.ChainId, GroupId = grp,
             Scale = scale, SampleLines = t.Made, Marks = t.Marks, RoadHandle = me,
             // ★[설치 전 검토 · 중간] 도면 축척을 안 거는 것은 부지가 건 주석 축척과 같을 때만 — 축척을 도곽 폭 · 기본값에서 얻었으면(사용자가 상태줄에서 바꿈 등) 걸어야 밴드 글씨 · 칸이 축척을 따른다
-            KeepDrawingScale = site && SheetCommand.CurrentDrawingScale(db) > 0 && Math.Abs(SheetCommand.CurrentDrawingScale(db) - scale) < 1e-6,
+            //   ★[v113.1] 판 2는 ProfilePlan.KeepAnno로(H를 장 루프가 정함)
+            KeepDrawingScale = !v2 && site && SheetCommand.CurrentDrawingScale(db) > 0 && Math.Abs(SheetCommand.CurrentDrawingScale(db) - scale) < 1e-6,
         };
         var appended = new List<ObjectId>();
         void OnApp(object? o, ObjectEventArgs e)
@@ -428,9 +463,16 @@ internal static class RoadSheets
         (ObjectId PvId, List<ObjectId> PvIds, string SheetAll, int Count) r;
         bool hooked = true;
         db.ObjectAppended += OnApp;
+        string bake = "";
+        double hDone = scale, vDone = scale;
         try
         {
-            r = ProfileCommand.PlaceSheets(db, ed, cdoc, aid, at, scale, groundLine, s.PlanId, grp, surfs, log, ctx, t.ChainId);
+            r = ProfileCommand.PlaceSheets(db, ed, cdoc, aid, at, scale, groundLine, s.PlanId, grp, surfs, log, ctx, t.ChainId, plan);
+            hDone = plan.H > 0 ? plan.H : scale; vDone = plan.V > 0 ? plan.V : hDone;
+            // ★★[v113.1 · 3단계 · P3 실측 — 밴드 칸 · 라벨은 CANNOSCALE을 따름] 부지 주석 축척과 다른 H로 지었으면 이 도로 복사본 스타일에 비율(H ÷ 부지)을 굽고 주석 축척을 되돌린다
+            double k = plan.KeepAnno > 0 && Math.Abs(plan.KeepAnno - hDone) > 1e-6 ? hDone / plan.KeepAnno : 1;
+            if (Math.Abs(k - 1) > 1e-9) bake = ProfileScaleStyles.BakeRatio(db, r.PvIds, hDone, vDone, plan.KeepAnno, me, k, log);
+            RestoreAnno();   // 평면 검토선 글씨는 부지 주석 축척으로(지금과 같게)
             ProfileCommand.DecorateSampleLines(db, cdoc, aid, iv, w.L, w.R, log, t.Made);   // ⑩ 검토선 꾸미기(부지와 같게)
         }
         catch
@@ -440,7 +482,17 @@ internal static class RoadSheets
             try { TagAppended(new List<ObjectId>()); } catch { }
             throw;
         }
-        finally { if (hooked) db.ObjectAppended -= OnApp; }
+        finally
+        {
+            if (hooked) db.ObjectAppended -= OnApp;
+            RestoreAnno();   // ★[v113.1 · 3단계] 실패해도 되돌림
+        }
+        // ★[v113.1 · 3단계] 짓는 동안만 H로 건 주석 축척을 되돌림
+        void RestoreAnno()
+        {
+            try { if (plan.KeepAnno > 0 && annoKeep != null && db.Cannoscale?.Name != annoKeep.Name) { db.Cannoscale = annoKeep; log.AppendLine($"  도면 주석 축척 되돌림 → {annoKeep.Name}"); } }
+            catch (Exception exA) { log.AppendLine("  ⚠주석 축척 되돌리기 실패 — " + exA.Message); }
+        }
 
         // ⑪ 표식 · «-바탕» 숨김(뷰마다 재정의 — 검토 M5) — 막대 · 지층 · 터파기 재정의는 안 부름
         int nTagged = TagAppended(r.PvIds), nHid = 0;
@@ -514,7 +566,11 @@ internal static class RoadSheets
         }
         catch { d.SheetStamp = ""; }
         d.SheetAt = new[] { at.X, at.Y };
-        d.SheetScale = scale;
+        d.SheetScale = hDone;
+        // ★[v113.1] 판 2 설정으로 그렸으면 V · 설정 열쇠 · 그린 뒤 주석 축척(바뀌면 «축척이 바뀌었습니다») — 옛 설정은 null(옛 비교 · 옛 JSON 그대로)
+        d.SheetScaleV = v2 ? vDone : null;
+        d.SheetScaleKey = v2 ? setKey : null;
+        d.SheetAnno = v2 ? SheetCommand.CurrentDrawingScale(db) : null;
         d.SheetViews = r.PvIds.Select(v => v.Handle.ToString()).ToList();
         d.SheetViewAt = RoadSession.ViewAt(db, r.PvIds);   // ★[v111.7] 첫 · 끝 뷰 자리(옮겼나 — 저절로 다시 그리기)
         d.SheetLost = false;                               // ★[v111.7] 그려졌으면 «못 그림» 알림 끔
@@ -524,7 +580,8 @@ internal static class RoadSheets
         s.Design = d;
         s.SaveDesign();
         try { ed.Regen(); } catch { }
-        string msg = $"종단도 {r.Count}장(1:{scale:0} · A1 도곽 · 밴드) — 측점 {t.Marks.Count}개 · 검토선 {t.Made.Count}개 · 표식 {nTagged}개"
+        string msg = $"종단도 {r.Count}장({ProfileScaleFit.ScaleText(hDone, vDone)} · A1 도곽 · 밴드) — 측점 {t.Marks.Count}개 · 검토선 {t.Made.Count}개 · 표식 {nTagged}개"
+                   + (bake.Length > 0 ? " · " + bake : "")
                    + (nHid > 0 ? "" : " · ⚠«-바탕» 숨김 못 함")
                    + (scNote.Contains("⚠") ? " · " + scNote : "")
                    + (grp.IsNull ? " · ⚠검토선 그룹 없음(밴드 값이 빈다)" : "");

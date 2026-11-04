@@ -60,7 +60,7 @@ static class SheetBookCheck
             check("S190 ② 축척 — 평면 · 횡단 «1:600» · 종단 수직과장 5 → «H=1:1000, V=1:200» · 과장 없음 «1:200»",
                   ScaleText(Kind.Plan, 600) == "1:600" && ScaleText(Kind.Xsec, 200, 5) == "1:200" && ScaleText(Kind.Prof, 1000, 5) == "H=1:1000, V=1:200"
                   && ScaleText(Kind.RProf, 200, 1) == "1:200" && ScaleText(Kind.Prof, 300, 1.5) == "H=1:300, V=1:200", ScaleText(Kind.Prof, 1000, 5));
-            check("S190 ② 날짜 — 비면 이번 달 «yyyy.MM» · 넣으면 그대로", DateText("", new DateTime(2026, 11, 3)) == "2026.11" && DateText(" 2026.07 ", DateTime.Now) == "2026.07", "");
+            check("S190 ② 날짜 — 비면 오늘 «yyyy.MM.dd»(JACK 1104) · 도곽 칸 꼴 «yyyy.MM»이면 그 꼴 · 넣으면 그대로", DateText("", new DateTime(2026, 11, 3)) == "2026.11.03" && DateText("", new DateTime(2026, 11, 3), "yyyy.MM") == "2026.11" && DateText(" 2026.07 ", DateTime.Now) == "2026.07", "");
             var ps = new[] { PageSetupName(Kind.Xsec, 1, 5, "A1"), PageSetupName(Kind.Xsec, 5, 5, "A3"), PageSetupName(Kind.Plan, 1, 1, "A1") };
             check("S190 ② 페이지 설정 이름 — «/» 없음 · 한 장이면 번호 없음", ps[0] == "DH 부지횡단 1-5 A1" && ps[1] == "DH 부지횡단 5-5 A3" && ps[2] == "DH 평면 A1" && ps.All(p => !p.Contains('/')), string.Join(" · ", ps));
             var taken = new HashSet<string> { "부지 종단면도", "부지 종단면도(DH)" };

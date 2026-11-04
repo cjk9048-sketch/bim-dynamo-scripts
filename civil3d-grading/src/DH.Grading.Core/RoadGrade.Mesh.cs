@@ -13,6 +13,10 @@ public static partial class RoadGrade
         /// <summary>★★[도로 마무리 ③] 레일에 넣은 땅 꺾임 점 · 몰림 무리 · 남는 오차 한도 최대(m) · 자리 · 바탕이 꺾임을 못 물음.</summary>
         public int RailBreaks, RailClusters; public double RailBound; public string RailBoundAt = ""; public bool NoBreaks;
         public int NonManifold, Flipped, TJunctions, OpenEnds, OverlapHits, Holes, Thin; public double Area;
+        /// <summary>★[v113.1 · A1] 닫은 주름 홈(바깥 둘레로 열린 주름 틈 · 갈림 꼭짓점 낀 속 구멍) 수.</summary>
+        public int Pockets;
+        /// <summary>★[v113.1 · A1] 접은 바늘 짧은 변(5 mm 안 두 점) 수.</summary>
+        public int Collapsed;
         public string ByPart = "";
         public bool Ok => CdtFail == 0 && NonManifold == 0 && Flipped == 0 && TJunctions == 0 && OverlapHits == 0 && Thin == 0 && OpenEnds == 0;
         public string Text => $"세모 {Tris:N0}(네모 {Quads:N0} · 들로네 {Cdt:N0}" + (CdtFail > 0 ? $" · ⚠못 가름 {CdtFail}" : "") + (Inserted > 0 ? $" · 둘레 끼움 {Inserted}" : "") + (FlatDropped > 0 ? $" · 넓이 0 뺌 {FlatDropped}" : "") + (Holes > 0 ? $" · 속 구멍 메움 {Holes}" : "") + (Thin > 0 ? $" · ⚠바늘 {Thin}" : "") + (RailBreaks > 0 ? $" · 땅 꺾임 점 {RailBreaks}" + (RailClusters > 0 ? $"(몰림 {RailClusters})" : "") + (RailBound > 0 ? $" · 남는 오차 한도 {RailBound * 1000:F2} mm" : "") : "") + (NoBreaks ? " · ⚠땅 꺾임 못 물음" : "") + ")"
@@ -161,9 +165,17 @@ public static partial class RoadGrade
         // 두 꺾은선(매개 오름차순)을 지퍼처럼 — 매개가 덜 나간 쪽을 한 칸씩
         void Zip(List<int> a, List<double> ta, List<int> b, List<double> tb, bool openEnd = false)
         {
-            int i = 0, j = 0;
+            int i = 0, j = 0, strip = 0;
+            double Cr(int o, int p, int q) => (vt.X[p] - vt.X[o]) * (vt.Y[q] - vt.Y[o]) - (vt.Y[p] - vt.Y[o]) * (vt.X[q] - vt.X[o]);
             // 같은 점에서 나온 두 꺾은선(모서리 부채 · 끝 선 모서리) — 첫 세모를 (뿌리, a1, b1)로 · 그래야 한 꺾은선 위 점들이 뿌리와 세모(넓이 0 · 바늘 · T자)를 안 만든다
             if (a.Count > 1 && b.Count > 1 && a[0] == b[0]) { AddT((a[0], a[1], b[1])); i = 1; j = 1; }
+            // ★[v113.1 · A1] 띠 방향 — 뿌리 쪽 세모(가장자리 곁은 광선이 넉넉히 벌어져 믿을 만함)
+            else if (a.Count > 1 || b.Count > 1)
+            {
+                double c0 = a.Count > 1 ? Cr(a[0], b[0], a[1]) : 0;
+                if (Math.Abs(c0) <= 1e-10 && b.Count > 1) c0 = Cr(a[0], b[0], b[1]);
+                strip = Math.Abs(c0) > 1e-10 ? Math.Sign(c0) : 0;
+            }
             while (i < a.Count - 1 || j < b.Count - 1)
             {
                 // ★ 한쪽이 먼저 끝났고 두 끝 사이가 바깥 둘레(데이라잇)면 — 남은 점을 그 끝에 부채로 잇지 않고 두 끝을 이은 선분 위 점(같은 비율)과 지퍼로(바늘 막음)
@@ -191,7 +203,17 @@ public static partial class RoadGrade
                 bool stepA;
                 if (i >= a.Count - 1) stepA = false;
                 else if (j >= b.Count - 1) stepA = true;
-                else stepA = ta[i + 1] < tb[j + 1] - 1e-12 || (Math.Abs(ta[i + 1] - tb[j + 1]) <= 1e-12 && Sq(vt.X[a[i + 1]] - vt.X[b[j]]) + Sq(vt.Y[a[i + 1]] - vt.Y[b[j]]) <= Sq(vt.X[b[j + 1]] - vt.X[a[i]]) + Sq(vt.Y[b[j + 1]] - vt.Y[a[i]]));
+                else
+                {
+                    stepA = ta[i + 1] < tb[j + 1] - 1e-12 || (Math.Abs(ta[i + 1] - tb[j + 1]) <= 1e-12 && Sq(vt.X[a[i + 1]] - vt.X[b[j]]) + Sq(vt.Y[a[i + 1]] - vt.Y[b[j]]) <= Sq(vt.X[b[j + 1]] - vt.X[a[i]]) + Sq(vt.Y[b[j + 1]] - vt.Y[a[i]]));
+                    // ★★[v113.1 · A1 «맞는 대각선»] 고른 세모가 띠 방향과 거꾸로(뒤집힘)면 다른 쪽 걸음 — 급한 굽은 안쪽에서 몰려 끝나는 광선 끝이 몇 mm 엇갈려 띠가 접히던 자리.
+                    //   둘 다 거꾸로면 그대로(검사가 잡음). 접힌 띠가 없는 면은 안 바뀜(비트 같음).
+                    if (strip != 0)
+                    {
+                        double cp = Cr(a[i], b[j], stepA ? a[i + 1] : b[j + 1]), co = Cr(a[i], b[j], stepA ? b[j + 1] : a[i + 1]);
+                        if (cp * strip < -1e-10 && co * strip > 1e-10) stepA = !stepA;
+                    }
+                }
                 if (stepA) { AddT((a[i], b[j], a[i + 1])); i++; }
                 else { AddT((a[i], b[j], b[j + 1])); j++; }
             }
@@ -214,7 +236,7 @@ public static partial class RoadGrade
             // ★[설치 전 검토 M1] MakeX가 점을 넣는 조건 그대로(한쪽 길어깨만 있어도)
             // ★[도로 마무리 ②] 측구 구간이면 가장자리 = 측구 바깥 · 길어깨 끝 점이 하나 더(MakeX와 같은 조건)
             var inpD = set.Inp;
-            double wL = inpD == null || inpD.Ditches.Count == 0 ? 0 : inpD.DitchW(-1, x.S), wR = inpD == null || inpD.Ditches.Count == 0 ? 0 : inpD.DitchW(1, x.S);
+            double wL = inpD == null || !inpD.HasWiden ? 0 : inpD.DitchW(-1, x.S), wR = inpD == null || !inpD.HasWiden ? 0 : inpD.DitchW(1, x.S);
             var lats = new List<double> { -sec.OuterL - wL };
             if (wL > 1e-6) lats.Add(-sec.OuterL);
             if (sec.ShoulderL > 1e-6) lats.Add(-sec.HalfL);
@@ -333,6 +355,32 @@ public static partial class RoadGrade
                 rp.Holes++;
             }
         }
+        // ★★★[v113.1 · JACK 1104 A1 «급한 굽은 안쪽도 선 면으로»] 둘레에 남은 주름 틈 — 바깥 둘레로 열린 홈(주름이 데이라잇까지 감) · 갈림 꼭짓점이 낀 속 구멍.
+        //   둘레 고리(갈림 꼭짓점은 시계 방향 첫 변으로)에서 주름 끝점이 잇달아 놓인 줄마다 앞뒤 둘레 점을 이은 현으로 닫아 그 꼭짓점만으로 가름 — 주름 끝점이 둘레에 안 남으면 안 돎(비트 같음).
+        if (creaseV.Count > 0)
+            for (int pass = 0; pass < 3; pass++)
+            {
+                var pk = Pockets(vt, tl, creaseV);
+                if (pk.Count == 0) break;
+                foreach (var h in pk)
+                {
+                    if (DebugMesh != null) DebugMesh($"주름 홈 — 꼭짓점 {h.Count} · 첫 점 ({vt.X[h[0]]:F3}, {vt.Y[h[0]]:F3})");
+                    int before = triIds.Count; curTag = "주름 홈";
+                    var hr = new List<int>(h); hr.Reverse();
+                    TriangulateRing(hr);
+                    for (int k = before; k < triIds.Count; k++)
+                    {
+                        var (a, b, c) = triIds[k];
+                        double cr = Cross(a, b, c);
+                        if (Math.Abs(cr) < 1e-10) { rp.FlatDropped++; continue; }
+                        tl.Add(cr > 0 ? (a, b, c) : (a, c, b)); tlTag.Add("주름 홈");
+                    }
+                    rp.Pockets++;
+                }
+            }
+        // ★★[v113.1 · A1 «몰린 끝 합치기»] Civil 바늘(가장 긴 변에 대한 높이 < ThinH) 중 짧은 변이 5 mm 안이면 그 변을 접음(두 점 = 같은 주름 자리 — 몰린 광선 끝 · 이웃 거리로 끼운 레일 점).
+        //   이웃 세모 방향이 안 뒤집힐 때만 · 바늘이 없는 면은 안 돎(비트 같음).
+        rp.Collapsed = CollapseNeedles(vt, tl, tlTag, creaseV);
         for (int q = 0; q < tl.Count; q++)
         {
             var (a, b, c) = tl[q];
@@ -437,6 +485,128 @@ public static partial class RoadGrade
             if (!ok || loop.Count < 3) continue;
             double a2 = 0, lx0 = vt.X[loop[0]], ly0 = vt.Y[loop[0]]; for (int i = 0; i < loop.Count; i++) { int p = loop[i], q = loop[(i + 1) % loop.Count]; a2 += (vt.X[p] - lx0) * (vt.Y[q] - ly0) - (vt.X[q] - lx0) * (vt.Y[p] - ly0); }
             if (a2 < 0) res.Add(loop);   // 세모가 반시계 → 바깥 둘레도 반시계 · 속 구멍은 시계
+        }
+        return res;
+    }
+
+    /// <summary>★★[v113.1 · A1] 바늘 짧은 변 접기 — 짧은 변(5 mm 안)의 한 끝(주름 끝점을 남김)을 다른 끝으로 옮기고 넓이 0 세모를 뺀다. 옮긴 뒤 그 점을 쓰는 세모가 하나라도 뒤집히거나 납작해지면 안 접음. 돌려줌 = 접은 수.</summary>
+    static int CollapseNeedles(VertTable vt, List<(int A, int B, int C)> tl, List<string> tags, HashSet<int> creaseV)
+    {
+        const double Tol = 0.005;
+        double Cr(int o, int a, int b) => (vt.X[a] - vt.X[o]) * (vt.Y[b] - vt.Y[o]) - (vt.Y[a] - vt.Y[o]) * (vt.X[b] - vt.X[o]);
+        double L(int a, int b) => Math.Sqrt(Sq(vt.X[a] - vt.X[b]) + Sq(vt.Y[a] - vt.Y[b]));
+        int done = 0;
+        for (int pass = 0; pass < 4; pass++)
+        {
+            var at = new Dictionary<int, List<int>>();
+            for (int q = 0; q < tl.Count; q++) { var (a, b, c) = tl[q]; foreach (int v in new[] { a, b, c }) { if (!at.TryGetValue(v, out var l)) at[v] = l = new(); l.Add(q); } }
+            var dead = new HashSet<int>(); bool any = false;
+            for (int q = 0; q < tl.Count; q++)
+            {
+                if (dead.Contains(q)) continue;
+                var (a, b, c) = tl[q];
+                double l1 = L(a, b), l2 = L(b, c), l3 = L(c, a), lm = Math.Max(l1, Math.Max(l2, l3));
+                if (Cr(a, b, c) / lm >= CivilSafeMesh.ThinH) continue;
+                var (u, v, ls) = l1 <= l2 && l1 <= l3 ? (a, b, l1) : l2 <= l3 ? (b, c, l2) : (c, a, l3);
+                if (ls >= Tol) continue;
+                if (creaseV.Contains(u) && !creaseV.Contains(v)) (u, v) = (v, u);   // 남길 점 = v(주름 끝점이면 그것)
+                // u → v: u를 쓰는 세모(이 둘을 다 쓰면 사라짐) 방향 확인
+                bool ok = true; var gone = new List<int>();
+                foreach (int t in at[u])
+                {
+                    if (dead.Contains(t)) continue;
+                    var (p0, p1, p2) = tl[t];
+                    if (p0 == v || p1 == v || p2 == v) { gone.Add(t); continue; }
+                    int r0 = p0 == u ? v : p0, r1 = p1 == u ? v : p1, r2 = p2 == u ? v : p2;
+                    double cr = Cr(r0, r1, r2), lm2 = Math.Max(L(r0, r1), Math.Max(L(r1, r2), L(r2, r0)));
+                    if (!(cr / lm2 >= CivilSafeMesh.ThinH)) { ok = false; break; }
+                }
+                if (!ok) continue;
+                foreach (int t in at[u])
+                {
+                    if (dead.Contains(t)) continue;
+                    if (gone.Contains(t)) { dead.Add(t); continue; }
+                    var (p0, p1, p2) = tl[t];
+                    tl[t] = (p0 == u ? v : p0, p1 == u ? v : p1, p2 == u ? v : p2);
+                    if (!at[v].Contains(t)) at[v].Add(t);
+                }
+                at[u] = new();
+                if (creaseV.Contains(u)) creaseV.Add(v);
+                done++; any = true;
+            }
+            if (!any) break;
+            var keep = new List<(int, int, int)>(); var kt = new List<string>();
+            for (int q = 0; q < tl.Count; q++) if (!dead.Contains(q)) { keep.Add(tl[q]); kt.Add(tags[q]); }
+            tl.Clear(); tl.AddRange(keep); tags.Clear(); tags.AddRange(kt);
+        }
+        return done;
+    }
+
+    /// <summary>★★[v113.1 · A1] 둘레에 남은 주름 틈 고리 — 둘레 변(세모 하나)을 방향 따라 잇되 갈림 꼭짓점에서는 들어온 변에서 시계 방향 첫 변으로(면 하나씩 감음).
+    /// 시계 방향 고리(속 구멍)는 주름 끝점이 끼면 통째로 · 반시계 고리(바깥 둘레)는 주름 끝점이 잇달아 놓인 줄마다 앞뒤 둘레 점까지 — 앞뒤 점을 이은 현이 둘레 변과 안 엇갈리고
+    /// 고리가 시계 방향(바깥으로 패인 홈)일 때만(아니면 앞뒤로 한 점씩 넓혀 다시 · 여덟 번까지). 돌려줌 = 시계 방향 고리들(속 구멍과 같은 꼴).</summary>
+    static List<List<int>> Pockets(VertTable vt, List<(int A, int B, int C)> tl, HashSet<int> creaseV)
+    {
+        var und = new Dictionary<(int, int), int>();
+        foreach (var (a, b, c) in tl)
+            foreach (var (u, v) in new[] { (a, b), (b, c), (c, a) }) { var k = u < v ? (u, v) : (v, u); und[k] = und.TryGetValue(k, out int m) ? m + 1 : 1; }
+        var outE = new Dictionary<int, List<int>>();
+        var bnd = new List<(int U, int V)>();
+        foreach (var (a, b, c) in tl)
+            foreach (var (u, v) in new[] { (a, b), (b, c), (c, a) })
+                if (und[u < v ? (u, v) : (v, u)] == 1) { if (!outE.TryGetValue(u, out var l)) outE[u] = l = new(); l.Add(v); bnd.Add((u, v)); }
+        double Ang(int o, int p) => Math.Atan2(vt.Y[p] - vt.Y[o], vt.X[p] - vt.X[o]);
+        var used = new HashSet<(int, int)>();
+        var res = new List<List<int>>();
+        double Area2(List<int> r) { double a2 = 0, x0 = vt.X[r[0]], y0 = vt.Y[r[0]]; for (int i = 0; i < r.Count; i++) { int p = r[i], q = r[(i + 1) % r.Count]; a2 += (vt.X[p] - x0) * (vt.Y[q] - y0) - (vt.X[q] - x0) * (vt.Y[p] - y0); } return a2; }
+        static bool Cross(VertTable t, int a, int b, int c, int d)
+        {
+            double O(int p, int q, int r) => (t.X[q] - t.X[p]) * (t.Y[r] - t.Y[p]) - (t.Y[q] - t.Y[p]) * (t.X[r] - t.X[p]);
+            double o1 = O(a, b, c), o2 = O(a, b, d), o3 = O(c, d, a), o4 = O(c, d, b);
+            return ((o1 > 1e-12 && o2 < -1e-12) || (o1 < -1e-12 && o2 > 1e-12)) && ((o3 > 1e-12 && o4 < -1e-12) || (o3 < -1e-12 && o4 > 1e-12));
+        }
+        foreach (var (u0, v0) in bnd)
+        {
+            if (used.Contains((u0, v0))) continue;
+            var loop = new List<int>(); int u = u0, v = v0;
+            while (used.Add((u, v)))
+            {
+                loop.Add(u);
+                if (!outE.TryGetValue(v, out var nx) || nx.Count == 0) { loop.Clear(); break; }
+                int w = nx[0];
+                if (nx.Count > 1)
+                {
+                    // 들어온 변을 거꾸로 본 방향(v → u)에서 시계 방향으로 돌아 처음 만나는 나가는 변
+                    double a0 = Ang(v, u), best = double.MaxValue;
+                    foreach (int c in nx) { double cw = a0 - Ang(v, c); while (cw <= 1e-12) cw += 2 * Math.PI; while (cw > 2 * Math.PI) cw -= 2 * Math.PI; if (cw < best && !used.Contains((v, c))) { best = cw; w = c; } }
+                }
+                u = v; v = w;
+                if (loop.Count > 200000) { loop.Clear(); break; }
+            }
+            if (loop.Count < 3 || u != u0 || v != v0) continue;
+            if (!loop.Any(creaseV.Contains)) continue;
+            if (Area2(loop) < 0) { res.Add(loop); continue; }   // 속 구멍(갈림 꼭짓점 낀 것 — 위 속 구멍 메움이 건너뜀)
+            int n = loop.Count;
+            var done = new bool[n];
+            for (int i = 0; i < n; i++)
+            {
+                if (done[i] || !creaseV.Contains(loop[i]) || creaseV.Contains(loop[(i - 1 + n) % n])) continue;
+                int j = i; while (creaseV.Contains(loop[(j + 1) % n]) && (j + 1) % n != i) j++;
+                for (int q = i; q <= j; q++) done[q % n] = true;
+                if (j - i + 3 > n) continue;
+                for (int widen = 1; widen <= 8 && j - i + 2 * widen + 1 <= n; widen++)
+                {
+                    var ring = new List<int>();
+                    for (int q = i - widen; q <= j + widen; q++) ring.Add(loop[((q % n) + n) % n]);
+                    if (Area2(ring) >= 0) continue;
+                    int pa = ring[^1], pb = ring[0];
+                    bool hit = false;
+                    foreach (var (bu, bv) in bnd) if (bu != pa && bu != pb && bv != pa && bv != pb && Cross(vt, pa, pb, bu, bv)) { hit = true; break; }
+                    if (hit) continue;
+                    res.Add(ring);
+                    break;
+                }
+            }
         }
         return res;
     }

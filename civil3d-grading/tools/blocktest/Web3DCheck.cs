@@ -287,6 +287,26 @@ static class Web3DCheck
             }
             bool clipOk = near && gi.Length / 3 >= nT - ground && o.InChanged(1010, 2010) && !o.InChanged(1001, 2001);
             check("S175 ⑥ 원지반 층 — 바뀐 칸(2 m · 둘레 한 칸) 안 세모만 · 먼 곳 없음 · 바뀐 자리는 다 덮음", clipOk, $"원지반 세모 {gi.Length / 3}/{nT} · 바뀐 세모 {nT - ground} · 바뀐 범위 {o.CMinX - 1000:F0}~{o.CMaxX - 1000:F0}");
+            // ★[v112.6 · JACK 1104 «원지반 + 지형 흰 깨짐»] 큰 원지반 세모(점 · 무게중심이 바뀐 칸 밖)가 좁은 바뀐 띠를 가로질러도 원지반 층에 남는다 — 안 남으면 «원지반» 보기에서 그 자리가 구멍
+            {
+                int hn = 40; var hx = new List<double>(); var hy = new List<double>(); var hz = new List<double>(); var hf = new List<int>();
+                for (int j = 0; j <= hn; j++) for (int i = 0; i <= hn; i++) { hx.Add(5000 + i); hy.Add(6000 + j); hz.Add(j >= 19 && j <= 21 ? 1.0 : 0.0); }
+                for (int j = 0; j < hn; j++) for (int i = 0; i < hn; i++) { int a = j * (hn + 1) + i, b = a + 1, c = a + hn + 1, d = c + 1; hf.AddRange(new[] { a, b, d }); hf.AddRange(new[] { a, d, c }); }
+                var hInp = new TerrainMesh.Input { X = hx.ToArray(), Y = hy.ToArray(), Z = hz.ToArray(), F = hf.ToArray(), GroundZ = (x, y) => 0.0, Plan = Box(4990, 6019, 5050, 6021) };
+                var hO = TerrainMesh.Build(hInp, 5000, 6000);
+                var hBig = new List<(Point3, Point3, Point3)>
+                {
+                    (new Point3(5000, 6000, 0), new Point3(5040, 6000, 0), new Point3(5040, 6040, 0)),
+                    (new Point3(5000, 6000, 0), new Point3(5040, 6040, 0), new Point3(5000, 6040, 0)),
+                };
+                bool oldMiss = hBig.All(t => !(hO.InChanged((t.Item1.X + t.Item2.X + t.Item3.X) / 3, (t.Item1.Y + t.Item2.Y + t.Item3.Y) / 3) || hO.InChanged(t.Item1.X, t.Item1.Y) || hO.InChanged(t.Item2.X, t.Item2.Y) || hO.InChanged(t.Item3.X, t.Item3.Y)));
+                var (hgp, hgi) = TerrainMesh.Clip(hBig, hO, 5000, 6000);
+                // 닿지 않는 세모(띠에서 먼 구석 작은 세모)는 여전히 뺀다
+                var hFar = new List<(Point3, Point3, Point3)> { (new Point3(5000, 6000, 0), new Point3(5003, 6000, 0), new Point3(5000, 6003, 0)) };
+                var (_, hfi) = TerrainMesh.Clip(hFar, hO, 5000, 6000);
+                check("S175 ⑥ 원지반 층 — 큰 세모(점 · 무게중심 모두 바뀐 칸 밖)가 좁은 띠를 가로지르면 남김 · 먼 작은 세모는 뺌", oldMiss && hgi.Length / 3 == 2 && hfi.Length == 0,
+                    $"점만 보면 놓침 {oldMiss} · 남김 {hgi.Length / 3}/2 · 먼 세모 {hfi.Length / 3}");
+            }
             // 옹벽 면 — 가파른 세모: 3D 발자국 안이면 «옹벽 면»(숨김 후보) · 밖이면 «옹벽 자리»(보임)
             var X2 = new double[] { 0, 10, 0, 10, 0, 10 }; var Y2 = new double[] { 0, 0, 0, 0, 1, 1 }; var Z2 = new double[] { 0, 0, 3, 3, 3, 3 };
             X2 = new double[] { 0, 10, 0, 10, 0, 10 }; Y2 = new double[] { 0, 0, 0.05, 0.05, 1, 1 };

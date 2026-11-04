@@ -100,6 +100,35 @@ public static class ProfileStyleTemplate
 
     /// <summary>도면의 Civil 스타일을 <b>전부 열거</b>해 이름·종류를 읽는다.
     /// 이름으로 묻지(Contains) 않고 열거하는 이유는 클래스 주석 참조.</summary>
+    /// <summary>★[v113.1] 모든 스타일(축척 복사본 포함) — 이름 · ID(진입도로 지난 판 복사본 정리용).</summary>
+    internal static List<(ObjectId Id, string Name)> CollectAll(Database db, CivilDocument doc)
+    {
+        var res = new List<(ObjectId, string)>();
+        var seen = new HashSet<ObjectId>();
+        var map = new Dictionary<string, StyleCollectionBase>();
+        Walk(doc.Styles, "", 0, map);
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            foreach (var kv in map)
+            {
+                int n;
+                try { n = kv.Value.Count; } catch { continue; }
+                for (int i = 0; i < n; i++)
+                    try
+                    {
+                        ObjectId sid = kv.Value[i];
+                        if (sid.IsNull || !seen.Add(sid)) continue;
+                        if (tr.GetObject(sid, OpenMode.ForRead) is StyleBase sb && !string.IsNullOrEmpty(sb.Name)) res.Add((sid, sb.Name));
+                    }
+                    catch { }
+            }
+            tr.Commit();
+        }
+        catch { }
+        return res;
+    }
+
     public static List<StyleInfo> Collect(Database db, CivilDocument doc, Func<StyleInfo, bool>? keep)
     {
         var res = new List<StyleInfo>();
@@ -124,6 +153,8 @@ public static class ProfileStyleTemplate
                         if (tr.GetObject(sid, OpenMode.ForRead) is not StyleBase sb) continue;
                         string nm; try { nm = sb.Name; } catch { continue; }
                         if (string.IsNullOrEmpty(nm)) continue;
+                        // ★[v113.1] 종단 축척 복사본(«(DH H1:…)» — 수직과장 · 진입도로 주석 비율)은 회사 스타일이 아니다 — 고르기 · 옮기기에서 뺌(이름에 «수직과장 없음»이 남아 평 스타일로 뽑힐 수 있음)
+                        if (DH.Grading.Core.ProfileScaleFit.IsClone(nm)) continue;
                         var si = new StyleInfo(sid, nm, cls, kv.Key);
                         if (keep == null || keep(si)) res.Add(si);
                     }

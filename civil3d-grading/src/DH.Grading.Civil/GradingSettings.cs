@@ -25,7 +25,7 @@ public static class GradingSettings
     /// <b>같은 번호를 단 빌드가 여러 개</b>가 되어, 어느 것이 깔렸는지 물으면 답할 수가 없었다.</para>
     /// <para><c>x.0</c> = 화면·명령이 바뀌어 <b>사용자가 다르게 일하게</b> 되는 판 ·
     /// <c>x.y</c> = 같은 화면에서 결함을 고친 판.</para></summary>
-    public const string Version = "v112.0.0 (2026-11-03)";
+    public const string Version = "v112.6.0 (2026-11-04)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -457,6 +457,46 @@ public static class GradingSettings
     /// 값 하나만 보면 어느 쪽인지 정해진다 — 플래그와 값이 <b>따로 놀 여지</b>를 두지 않는다.</para></summary>
     public static double ProfileScale = 0.0;
 
+    /// <summary>★★[v113.1 · 계획_종단방향_축척.md 2 · JACK 1104 «종단 축척 H · V 따로»] 부지 종단도 세로(V) 축척 — −1 = H와 같게(수직과장 없음 · 옛 그림) · 0 = 자동 · &gt; 0 = 고정.
+    /// <para>도면에 저장(<see cref="SheetPrefs"/> 판 2). 옛 도면(판 1 · 기록 없이 부지 종단도가 있음) = −1 + <see cref="ProfileLegacy"/>.</para></summary>
+    public static double ProfileScaleV = 0.0;
+
+    /// <summary>★[v113.1] 옛 도면의 종단 축척 규칙(자동 H = 한 장 · 사다리 끝까지 — 1:1000 한도 · 장 나누기 없음) — [저장]하면 거짓(새 규칙).</summary>
+    public static bool ProfileLegacy;
+
+    /// <summary>★[v113.1] V 콤보 값 — [자동, H와 같게, 사다리…].</summary>
+    public static double[] ProfileScaleVValues
+    {
+        get
+        {
+            double[] src = Commands.SheetCommand.Scales;
+            var v = new double[src.Length + 2];
+            v[0] = 0.0; v[1] = DH.Grading.Core.ProfileScaleFit.SameAsH;
+            System.Array.Copy(src, 0, v, 2, src.Length);
+            return v;
+        }
+    }
+
+    public static string[] ProfileScaleVLabels
+    {
+        get
+        {
+            double[] v = ProfileScaleVValues;
+            var s = new string[v.Length];
+            for (int i = 0; i < v.Length; i++)
+                s[i] = v[i] == 0 ? "자동 (공간에 맞춤)" : v[i] < 0 ? "H와 같게 (수직과장 없음)" : "1:" + v[i].ToString("F0");
+            return s;
+        }
+    }
+
+    /// <summary>V 칸 값의 차례 — 목록에 없으면 자동(0번).</summary>
+    public static int ProfileScaleVIndex(double v)
+    {
+        double[] a = ProfileScaleVValues;
+        for (int i = 0; i < a.Length; i++) if (System.Math.Abs(a[i] - v) < 1e-9) return i;
+        return 0;
+    }
+
     /// <summary>축척 콤보의 값/표시 — <b>맨 앞이 자동(0)</b>이고 나머지는 표준 축척 사다리 그대로다.
     ///
     /// <para>★ <b>정적 필드가 아니라 속성이다 — 장래 방어다.</b> [검토 0813 확인]
@@ -695,6 +735,12 @@ public static class GradingSettings
 
     /// <summary>★[v111.7 · 설치 전 검토 낮음] 설정이 이미 이 도면 것인가(아직 어느 도면에도 안 맞췄으면 참 — 지울 남의 기억이 없음).
     /// 진입도로 저절로 다시 그리기는 거짓이면 안 그린다 — 짓는 코드가 <see cref="SyncToDocument"/>를 불러 다른 도면의 옹벽 고르기 등 기억을 말없이 지우지 않게.</summary>
+    /// <summary>★[v112.1 검토 H3] 세션 설정이 바로 이 도면 것으로 맞춰졌나(아직 아무 도면에도 안 맞췄으면 거짓 — 도면설정 기록을 쓸 때만 씀).</summary>
+    internal static bool IsOwnedBy(Autodesk.AutoCAD.ApplicationServices.Document? doc)
+    {
+        try { string k = doc?.Name ?? ""; return k.Length > 0 && k == _ownerDoc; } catch { return false; }
+    }
+
     internal static bool IsSyncedTo(Autodesk.AutoCAD.ApplicationServices.Document doc)
     {
         try { string k = doc?.Name ?? ""; return k.Length > 0 && (_ownerDoc.Length == 0 || k == _ownerDoc); } catch { return false; }
@@ -756,7 +802,12 @@ public static class GradingSettings
         try { int lay = RoadDrawingSettings.ReadLayout(db); XsecLayout = lay >= 0 ? System.Math.Clamp(lay, 0, XsecLayoutLabels.Length - 1) : DH.Grading.Core.RoadXsecRules.LayoutDefault; }
         catch { }
 
-        try { DiagLog.Append($"\n[도면 전환] 세션 설정을 '{System.IO.Path.GetFileName(key)}' 기준으로 맞춤(마지막 작업 기억 초기화)"); }
+        // ★★[v112.1 · JACK 1102 «도면설정 도면마다 저장»] 측점 간격 · 폭 · 축척 · 굴곡 · 화질 — 도면 기록이 있으면 그 값(없으면 지금 값 그대로 — 새 도면은 직전 값으로 시작)
+        string prefNote = "";
+        try { prefNote = SheetPrefs.Apply(db); }
+        catch (System.Exception exP) { prefNote = "⚠도면설정 기록을 못 읽음 — " + exP.Message; }
+
+        try { DiagLog.Append($"\n[도면 전환] 세션 설정을 '{System.IO.Path.GetFileName(key)}' 기준으로 맞춤(마지막 작업 기억 초기화)" + (prefNote.Length > 0 ? " · " + prefNote : "")); }
         catch { }
     }
 
