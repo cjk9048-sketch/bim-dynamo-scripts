@@ -247,7 +247,15 @@ public static class SheetCommand
     /// 부르는 곳이 둘뿐이라 인자로 넘기는 비용이 없다.</para></param>
     public static string Build(Database db, Editor ed, ObjectId pvId, System.Text.StringBuilder log, bool startLabel = true,
                                SheetContext? ctx = null)
+        => Build(db, ed, pvId, log, startLabel, ctx, null);
+
+    /// <summary>★★[v113.1 · 계획_종단방향_축척.md 2.3 · 2.4] 축척 계획(<see cref="ProfilePlan"/> — H · V 칸 · 자동 한도 · 장 나누기)을 받는 판.
+    /// <c>plan.PlanOnly</c>면 밴드 정리 · 재기 · 고르기까지만 하고 돌아온다(장 나누기를 정하는 앞 판 — 부르는 쪽이 이 뷰를 지운다).</summary>
+    internal static string Build(Database db, Editor ed, ObjectId pvId, System.Text.StringBuilder log, bool startLabel,
+                                 SheetContext? ctx, ProfilePlan? plan)
     {
+        plan ??= ctx == null ? ProfilePlan.Site() : new ProfilePlan { PinH = ctx.Scale, PinV = DH.Grading.Core.ProfileScaleFit.SameAsH };
+        if (plan.SheetsFor == null) plan.HMax = double.PositiveInfinity;   // 나눌 수 없는 길(DHSHEET 다시 씌우기 · 장마다 그리기) — 한 장 안에서 고름
         // ★[v32.31] 지난 판이 적어 둔 '장식 자리'를 먼저 지운다 — 축척이 바뀌면 그 좌표는
         //   전혀 다른 곳을 가리키고, 도곽만 엉뚱하게 넓어진다.
         ResetDeco();
@@ -264,8 +272,9 @@ public static class SheetCommand
 
         // ── ② 축척과 수직과장을 **함께** 푼다 — 따로 정하면 서로를 무너뜨린다.
         B9("② 축척 풀기");
-        string veNote = FitSheet(db, pvId, log, out double scale, out bool overflow, ctx);
-        B9($"② 축척 1:{scale:F0}");
+        string veNote = FitSheet(db, pvId, log, out double scale, out double scaleV, out bool overflow, ctx, plan);
+        B9($"② 축척 {DH.Grading.Core.ProfileScaleFit.ScaleText(scale, scaleV)}");
+        if (plan.PlanOnly) return veNote;   // ★[v113.1] 장 나누기를 정하는 앞 판 — 여기까지
 
         // ── ②-a 표 끝 여백은 **종이 기준**이므로 축척을 알아야 모형 거리로 바꿀 수 있다.
         //   ★[JACK 0810] "축척에 따라 모든 기능이 자연스럽게 연동되어야 해."
@@ -273,7 +282,7 @@ public static class SheetCommand
         //   그래서 <b>축척을 먼저 풀고 → 꼬리를 붙이고 → 축척을 다시 푼다</b>.
         //   꼬리는 폭의 1~2%라 대개 같은 축척이 다시 나오지만, 경계에 걸리면 2차에서 바로잡힌다.
         if (ExtendTail(db, pvId, scale, log))
-            veNote = FitSheet(db, pvId, log, out scale, out overflow, ctx);
+            veNote = FitSheet(db, pvId, log, out scale, out scaleV, out overflow, ctx, plan);
 
         // ★★[v32.4] <b>도면 축척은 여기서 딱 한 번 건다 — 최종값이 정해진 뒤에.</b>
         //   종전엔 <see cref="FitSheet"/> 안에서 걸었는데, 그 함수가 두 번 불리므로
@@ -281,13 +290,15 @@ public static class SheetCommand
         //   재는 도중에 자를 바꾸면 안 된다.
         B9("③ 도면 축척 걸기");
         // ★[v110.4 · 계획 검토 M1 · 시험 D] 진입도로가 부지 축척을 따랐으면 도면 주석 축척을 다시 걸지 않는다(같은 값 — 손대지 않음)
-        if (ctx == null || !ctx.KeepDrawingScale) SetDrawingScale(db, scale, log);
-        else log.AppendLine($"도면 축척 그대로(진입도로 — 부지 축척 1:{scale:F0}을 따름)");
+        //   ★★[v113.1 · 3단계] 진입도로가 부지 주석 축척과 다른 H면 — 짓는 동안만 H로 건다(RoadSheets.Build가 끝에 되돌리고 이 도로 복사본에 비율을 굽는다)
+        bool keepAnno = ctx != null && (ctx.KeepDrawingScale || (plan.KeepAnno > 0 && System.Math.Abs(plan.KeepAnno - scale) < 1e-6));
+        if (!keepAnno) SetDrawingScale(db, scale, log);
+        else log.AppendLine($"도면 축척 그대로(진입도로 — 부지 축척 1:{scale:F0}과 같음)");
         LogGrid(db, pvId, log, "① 축척 건 뒤");        // ★[v32.32] 격자가 어느 단계에서 좁아지는지 — 설명은 LogGrid
 
         // ── ②-b 뷰 스타일이 정해진 **뒤에** 왼쪽 축 눈금을 세운다(JACK: "왼쪽 바를 스케일(체크)로").
         B9("④ 축 눈금");
-        SetAxisTicks(db, pvId, scale, log);
+        SetAxisTicks(db, pvId, scale, log, scaleV);
         LogGrid(db, pvId, log, "② 축 눈금 뒤");
         B9("⑤ 밴드 솎기");
         SetBandWeeding(db, pvId, scale, log);   // 굴곡부 라벨 솎아내기 — 축척을 알아야 정할 수 있다
@@ -296,11 +307,11 @@ public static class SheetCommand
         PolishView(db, pvId, log);      // V·H 표시 자리 · 종단선 화살표
         LogGrid(db, pvId, log, "④ 뷰 다듬기 뒤");
         B9("⑦ 표고바");
-        DrawScaleBar(db, pvId, scale, log, ctx);   // 흑백 교차 표고바 — 직접 그린다(축 스타일엔 그 기능이 없다)
+        DrawScaleBar(db, pvId, scale, log, ctx, scaleV);   // 흑백 교차 표고바 — 직접 그린다(축 스타일엔 그 기능이 없다)
         B9("⑧ 제목칸");
         DecorateBandTitles(db, pvId, scale, log, ctx);   // 제목칸 이중 테두리(JACK 0812)
         B9("⑨ 축척 배너");
-        PlaceScaleBanner(db, pvId, scale, log, ctx);     // 축척 배너 블록 + V·H 글자
+        PlaceScaleBanner(db, pvId, scale, log, ctx, scaleV);     // 축척 배너 블록 + V·H 글자
         // ★★[v24.1] 굴곡부 세로줄은 <b>직접 그린 선</b>이라 선형이 바뀌어도 따라오지 않는다
         //   (JACK: "선형이 변경될 때 변경되야 하거든"). 굴곡부를 다시 켤 때 <b>순정 격자로 낼 방법</b>부터
         //   찾는다. 지금은 <see cref="VgpOn"/>이 꺼져 있어 <b>지우기만</b> 하고 그리지 않는다 —
@@ -338,7 +349,8 @@ public static class SheetCommand
         //   이 구조라야 나중에 관로에서 '정해진 거리마다 장이 넘어가게'가 그대로 얹힌다 —
         //   모형에 도곽을 여러 장 늘어놓고 배치를 그 수만큼 만들면 된다.
         B9("⑫ 도곽 그리기");
-        var frames = DrawModelFrames(db, ext, scale, log);
+        // ★[v113.1 · 3단계] 진입도로를 짓는 동안만 H로 건 주석 축척 — 장 표식은 되돌릴 부지 주석 축척(도면화 뷰포트가 그 값을 건다 · 복사본에 비율을 구움)
+        var frames = DrawModelFrames(db, ext, scale, log, ctx != null && !keepAnno && plan.KeepAnno > 0 ? plan.KeepAnno : 0);
 
         DumpBands(db, pvId, log);   // ★ 마지막 상태를 통째로 — 다음 판에서 로그만 보고 짚게
         B9("⑬ 끌기상태");
@@ -372,14 +384,14 @@ public static class SheetCommand
         //   <b><see cref="EraseAll"/>의 배치 삭제는 그대로 둔다</b> — 지난 판이 만들어 둔 배치가 도면에 남아 있고,
         //   이제 아무도 다시 만들지 않으므로 <b>청소해 주는 쪽이 이 함수뿐</b>이다.
 
-        return $"모형 도곽 {frames.Count}장 · A1 {SheetW:F0}×{SheetH:F0} · 축척 1:{scale:F0} · {veNote} · {bandNote}"
+        return $"모형 도곽 {frames.Count}장 · A1 {SheetW:F0}×{SheetH:F0} · 축척 {DH.Grading.Core.ProfileScaleFit.ScaleText(scale, scaleV)} · {veNote} · {bandNote}"
              + " · 배치탭 도면화는 꺼 둠(모형탭 확정 뒤 되살림)"
              // ★[검토 반영] 넘친 <b>이유</b>가 둘이라 안내도 갈라야 한다 — 축척을 고정해 넘친 것을
              //   '노선이 길어서'로 안내하면 사용자가 엉뚱한 곳(장 넘김)을 찾는다.
              + (overflow
-                ? ((ctx?.Scale ?? GradingSettings.ProfileScale) > 0
-                   ? $" · ⚠고정 축척 1:{(ctx?.Scale ?? GradingSettings.ProfileScale):F0}으로는 한 장에 안 들어갑니다(도면설정에서 '자동'으로 두면 맞춰집니다)"
-                   : " · ⚠한 장을 넘침(장 넘김은 관로 기능에서)")
+                ? (plan.PinH > 0 || plan.PinV > 0
+                   ? $" · ⚠고정 축척 {DH.Grading.Core.ProfileScaleFit.ScaleText(scale, scaleV)}으로는 한 장에 안 들어갑니다(도면설정에서 '자동'으로 두면 맞춰집니다)"
+                   : " · ⚠한 장을 넘침")
                 : "");
     }
 
@@ -445,8 +457,17 @@ public static class SheetCommand
     }
 
     private static string FitSheet(Database db, ObjectId pvId, System.Text.StringBuilder log,
-                                   out double scale, out bool overflow, SheetContext? ctx = null)
+                                   out double scale, out double scaleV, out bool overflow, SheetContext? ctx, ProfilePlan plan)
     {
+        string note = FitSheetCore(db, pvId, log, out scale, out overflow, ctx, plan);
+        scaleV = plan.V > 0 ? plan.V : scale;
+        return note;
+    }
+
+    private static string FitSheetCore(Database db, ObjectId pvId, System.Text.StringBuilder log,
+                                       out double scale, out bool overflow, SheetContext? ctx, ProfilePlan plan)
+    {
+        plan.V = 0;
         // ★★[JACK 0810 확정] 자동으로 고르지 않는다 — **V=1:200, H=1:1000 고정**으로 먼저 간다.
         //   "가로 세로 축척에 대해서 정의를 다시 하자. 일단은 V=1:200, H=1:1000을 기준으로 먼저 만들어 보자."
         //   축척을 노선마다 자동으로 고르면 도면마다 축척이 달라져 현장에서 비교가 안 되고,
@@ -595,9 +616,14 @@ public static class SheetCommand
                 double usableW = System.Math.Max(50.0, InnerW - AxisRoomMm);
                 double needW = wRange * 1000.0 / usableW;
                 double needH0 = noRoom ? double.PositiveInfinity : hM0 * 1000.0 / availMm;
+                // ★[v113.1 · V112 화면 없는 실측] 새 규칙 — 세로 필요 축척은 표고 범위를 맞출 데이터(FitElevationRange와 같은 값)도 본다.
+                //   격자(좁힌 것)만 보면 고정 V로 그릴 때 데이터가 자리를 넘친다(옛 규칙은 두 번째 고르기가 H를 키워 메웠다 — 옛 도면은 그 길 그대로)
+                if (!plan.Legacy && !noRoom)
+                {
+                    ElevDataRange(db, pvId, ctx, out double dLo, out double dHi);
+                    if (dLo <= dHi) needH0 = System.Math.Max(needH0, System.Math.Max(ElevStepM, System.Math.Ceiling((dHi - dLo) / ElevStepM - 1e-9) * ElevStepM) * 1000.0 / availMm);
+                }
                 double want = System.Math.Max(needW, needH0);
-                double s0 = Scales.FirstOrDefault(s => s >= want);
-                if (s0 <= 0) { s0 = Scales[Scales.Length - 1]; overflow = true; }
 
                 // ★★★[v32.30 · JACK 0813] <b>도면설정에서 축척을 고정했으면 그것을 쓴다.</b>
                 //   <i>"기본값은 자동으로 두고, 자동일 경우 지금처럼 해당 공간에 딱 알맞게 들어가는 축척으로 하고
@@ -606,17 +632,22 @@ public static class SheetCommand
                 //   <b>고정값은 검사만 하고 바꾸지 않는다.</b> 사용자가 1:100을 골랐는데 안 들어간다고 1:120으로
                 //   올리면 <b>도면에 적힌 축척과 실제가 어긋난다</b> — 현장에서 자로 재는 값이라 그것이 더 나쁘다.
                 //   넘치면 <b>넘친 채로 그리고 로그로 알린다</b>(<see cref="ExtendTail"/> 뒤 2차 호출에서도 같다).
-                double pinned = ctx != null ? ctx.Scale : GradingSettings.ProfileScale;   // ★[v110.4] 진입도로 = 늘 고정 축척(계획 3.4)
+                // ★★★[v113.1 · 계획_종단방향_축척.md 2.3 · JACK 1104 «H · V 따로 · 자동»] 고르기는 Core 한 곳(<see cref="DH.Grading.Core.ProfileScaleFit.Pick"/> — 하니스 S211).
+                //   V «H와 같게» · 한도 없음 · 나눔 없음 = 옛 식 그대로(첫 사다리 ≥ max(폭, 높이) · 고정 = 넘침 검사만).
+                var pk = DH.Grading.Core.ProfileScaleFit.Pick(needW, needH0, Scales, plan.PinH, plan.PinV, plan.HMax, plan.SheetsFor);
+                plan.H = pk.H; plan.V = pk.V; plan.Sheets = pk.Sheets; plan.Over = pk.OverW || pk.OverV; plan.Note = pk.Note; plan.NeedW = needW; plan.NeedV = needH0;
+                double s0 = pk.H, v0 = pk.V;
+                overflow = pk.OverW || pk.OverV;
+                double pinned = plan.PinH;
                 if (pinned > 0)
-                {
-                    overflow = pinned < want;      // 필요한 것보다 크게 그리면(=숫자가 작으면) 자리를 넘는다
-                    log.AppendLine($"축척 고정 1:{pinned:F0} (도면설정) — 자동이었다면 1:{s0:F0}"
+                    log.AppendLine($"축척 고정 H 1:{pinned:F0} (도면설정)"
                                  + (overflow
-                                    ? $" ⚠자리에 안 들어간다(필요 1:{want:F0}) — 도곽을 넘칠 수 있다"
+                                    ? $" ⚠자리에 안 들어간다(필요 폭 1:{needW:F0} · 높이 1:{needH0:F0}) — 도곽을 넘칠 수 있다"
                                     : $" · 자리의 {want / pinned * 100:F0}% 사용"));
-                    s0 = pinned;
-                }
+                log.AppendLine($"축척 고르기 — 필요 폭 1:{needW:F1} · 세로 1:{needH0:F1} → {pk.Note}");
+                if (plan.PlanOnly) { scale = s0; plan.V = v0; return "계획 " + pk.Note; }
                 scale = s0;
+                plan.V = v0;
                 if (noRoom)
                     log.AppendLine($"⚠밴드가 뷰 자리를 통째로 먹었다 — 밴드 {bandMm:F1}mm ≥ 자리 {ViewH:F1}mm."
                                  + $" 그래프가 들어갈 높이가 없다(밴드 칸수·BandHeight를 먼저 확인할 것). S=1:{s0:F0}로 둔다.");
@@ -648,11 +679,30 @@ public static class SheetCommand
                 //   → 축척은 <b>최종값이 정해진 뒤</b> <see cref="Build"/>에서 한 번만 건다.
                 LastBandModelH = bandPaperM * s0;   // 도곽이 밴드까지 덮도록 넘겨준다
 
+                // ★★[v113.1 · 계획 2.1 · P2 실측] V ≠ H — 평 스타일의 복사본(수직과장 H ÷ V)을 건다. 축 눈금 간격이 스타일에 있으므로 공유 스타일에 쓰지 않는다.
+                //   진입도로가 부지 주석 축척과 다른 H면(3단계) 이 도로만 쓰는 복사본(이름 꼬리 « #핸들») — 끝에 비율을 굽는다(RoadSheets.Build)
+                bool roadRatio = ctx != null && plan.KeepAnno > 0 && System.Math.Abs(plan.KeepAnno - s0) > 1e-6;
+                string veName = flat.S.Id.IsNull ? "" : flat.S.Name;
+                if (!flat.S.Id.IsNull && (System.Math.Abs(s0 - v0) > 1e-9 || roadRatio))
+                {
+                    try
+                    {
+                        var vsId = ProfileScaleStyles.EnsureView(db, flat.S.Id, s0, v0, roadRatio ? plan.KeepAnno : s0, plan.RoadTag, log);
+                        SetStyle(db, pvId, vsId);
+                        ShrinkGrid(db, pvId, log, ctx);   // 복사본에도 격자 여백 · 세로줄 자르기(같은 값)
+                        using var trN = db.TransactionManager.StartTransaction();
+                        veName = ((CivilDb.Styles.StyleBase)trN.GetObject(vsId, OpenMode.ForRead)).Name;
+                        trN.Commit();
+                    }
+                    catch (System.Exception exV) { log.AppendLine("⚠수직과장 복사본을 못 걸었다(평 스타일 그대로) — " + Brief(exV)); v0 = s0; plan.V = s0; }
+                }
+
                 // ★★★[v32.32 · JACK 0813] <b>축척이 정해진 뒤에 표고 범위를 자리에 맞춘다.</b>
                 //   순서가 중요하다 — 자리에 담기는 표고 범위는 <b>축척이 있어야</b> 나온다(mm ÷ 1000 × 축척).
                 //   반대로 이 함수가 넓힌 범위는 축척을 뒤흔들지 않는다: 자리를 넘지 않게 <b>내림</b>으로만 잡으므로
                 //   2차 <see cref="FitSheet"/>에서 높이 기준 필요 축척이 지금 축척보다 커질 수 없다.
-                FitElevationRange(db, pvId, s0, availMm, log, ctx);
+                // ★[v113.1] 세로는 V(표고 1 m = 종이 1000 ÷ V mm)
+                FitElevationRange(db, pvId, v0, availMm, log, ctx);
                 // ★ 지정한 범위가 그대로 격자가 됐는지 확인한다 — <c>GridPadding</c>이 그 위에 <b>덧붙는지</b>가
                 //   문서에 없다(UserSpecified면 무시되는 것이 보통이지만 확인 전에는 모른다).
                 //   덧붙었다면 아래 줄의 격자 폭이 방금 지정한 값보다 크게 나온다.
@@ -660,7 +710,9 @@ public static class SheetCommand
                 if (flat.S.Id.IsNull) return $"S=1:{s0:F0} (수직과장 스타일 없음 — 도면 기본값)";
                 if (System.Math.Abs(flat.V - 1.0) > 0.01)
                     log.AppendLine($"⚠회사 표준에 '수직과장 없음'이 없어 가장 가까운 {flat.V:0.#}배를 썼다.");
-                return $"S=1:{s0:F0} · 수직과장 {flat.V:0.#}배 ('{flat.S.Name}')";
+                return System.Math.Abs(s0 - v0) > 1e-9
+                    ? $"H=1:{s0:F0} · V=1:{v0:F0} · 수직과장 {s0 / v0:0.##}배 ('{veName}')"
+                    : $"S=1:{s0:F0} · 수직과장 {flat.V:0.#}배 ('{veName}')";
             }
 
             double wantVe = HScale / VScale;                       // 관로: 1000/200 = 5배
@@ -1579,8 +1631,10 @@ public static class SheetCommand
         catch (System.Exception ex) { log.AppendLine("   격자 좁히기 실패 — " + Brief(ex)); }
     }
 
-    private static void SetAxisTicks(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log)
+    private static void SetAxisTicks(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log, double scaleV = 0)
     {
+        // ★[v113.1] 표고 눈금은 세로 축척(V) — 표고 1 m = 종이 1000 ÷ V mm(V = H면 지금과 같음)
+        if (scaleV > 0) scale = scaleV;
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
@@ -2740,7 +2794,7 @@ public static class SheetCommand
         catch { return false; }
     }
 
-    private static void PlaceScaleBanner(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log, SheetContext? ctx = null)
+    private static void PlaceScaleBanner(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log, SheetContext? ctx = null, double scaleV = 0)
     {
         try
         {
@@ -2811,7 +2865,7 @@ public static class SheetCommand
             ms.AppendEntity(bref); tr.AddNewlyCreatedDBObject(bref, true);
 
             // ── 글자: 속성이 있으면 채우고, 없으면 그냥 둔다(다음 판에서 자리를 정한다).
-            string vTxt = $"V = 1:{scale:F0}", hTxt = $"H = 1:{scale:F0}";
+            string vTxt = $"V = 1:{(scaleV > 0 ? scaleV : scale):F0}", hTxt = $"H = 1:{scale:F0}";   // ★[v113.1] V = 세로 축척
             int nAttr = 0;
             try
             {
@@ -3050,8 +3104,9 @@ public static class SheetCommand
     /// 멀쩡한 회사 값을 매번 덮어쓰지 않기 위해서다.</summary>
     private const double AxisLabelWantMm = 15.0, AxisLabelMinMm = 8.0, AxisLabelMaxMm = 40.0;
 
-    private static void DrawScaleBar(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log, SheetContext? ctx = null)
+    private static void DrawScaleBar(Database db, ObjectId pvId, double scale, System.Text.StringBuilder log, SheetContext? ctx = null, double scaleV = 0)
     {
+        double vSc = scaleV > 0 ? scaleV : scale;   // ★[v113.1] 칸 높이(표고)는 V · 폭 · 띄움은 H
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
@@ -3079,7 +3134,7 @@ public static class SheetCommand
             //   그래서 <b>5줄을 기본으로 하되, 종이에서 너무 얇거나 두꺼우면 나눔 수를 바꾼다.</b>
             //   기준은 종이 거리이므로 어떤 축척에서도 표척처럼 읽힌다.
             int rowsPer = RowsPerMajor;
-            double PaperMm(int k) => major / k / scale * 1000.0;
+            double PaperMm(int k) => major / k / vSc * 1000.0;
             if (PaperMm(rowsPer) < BarRowMinMm || PaperMm(rowsPer) > BarRowMaxMm)
             {
                 int[] cand = { 1, 2, 4, 5, 8, 10, 20 };
@@ -3755,9 +3810,19 @@ public static class SheetCommand
         try
         {
             if (availMm <= 1.0 || scale <= 0) return;
+            ElevDataRange(db, pvId, ctx, out double lo, out double hi);
+            if (lo > hi) { log.AppendLine("   표고 범위: 종단 표고를 못 읽어 자동 그대로 둔다"); return; }
+            FitElevationRangeTail(db, pvId, scale, availMm, log, lo, hi);
+        }
+        catch (System.Exception ex) { log.AppendLine("   표고 범위 지정 실패 — " + Brief(ex)); }
+    }
 
+    /// <summary>★[v113.1] 표고 범위를 정하는 데이터 범위(<see cref="FitElevationRange"/>와 FitSheet 세로 필요 축척이 같은 값을 보게 — 따로 세면 고정 V가 넘친다).</summary>
+    private static void ElevDataRange(Database db, ObjectId pvId, SheetContext? ctx, out double lo, out double hi)
+    {
+        lo = double.MaxValue; hi = double.MinValue;
+        {
             // ① 데이터 실제 범위 — 이 뷰에 걸린 종단들의 최저·최고
-            double lo = double.MaxValue, hi = double.MinValue;
             // ★★[v110.4 · 계획 검토 M6] 진입도로 — <b>그 장 측점 범위 안</b>의 지반 꺾은선 · 계획만(장마다 제 범위 · 1 m마다 + 끝 · PVI 자리)
             //   부지는 노선 전체 범위 그대로(아래 else) — 여러 장에서도 같은 격자를 쓰는 지금 동작을 안 바꾼다.
             if (ctx != null)
@@ -3806,8 +3871,13 @@ public static class SheetCommand
                     }
                 tr.Commit();
             }
-            if (lo > hi) { log.AppendLine("   표고 범위: 종단 표고를 못 읽어 자동 그대로 둔다"); return; }
+        }
+    }
 
+    private static void FitElevationRangeTail(Database db, ObjectId pvId, double scale, double availMm, System.Text.StringBuilder log, double lo, double hi)
+    {
+        try
+        {
             // ② 자리에 담기는 최대 범위 → 눈금 배수로 내림
             double maxSpan = availMm / 1000.0 * scale;
             double span = System.Math.Floor(maxSpan / ElevStepM) * ElevStepM;
@@ -4180,7 +4250,7 @@ public static class SheetCommand
     }
 
     private static List<Frame> DrawModelFrames(Database db, Extents3d ext, double scale,
-                                               System.Text.StringBuilder log)
+                                               System.Text.StringBuilder log, double tagAnno = 0)
     {
         double s = scale / 1000.0;                    // 종이 1mm = 모형 s m
         // ★★[v32.1 · 검토 지적] <b>v23.28이 배치만 고치고 여기를 빼먹었다.</b>
@@ -4231,7 +4301,7 @@ public static class SheetCommand
         ObjectId layer = SectionCommand.EnsureLayer(db, tr, LayFrameModel, 30);   // 30 = 주황
         // ★★[v112.0 · 계획_도면화.md 4.4-1 · 검토 H2] 장 표식 — 그린 때의 주석 축척은 그린 쪽만 안다(도면화 뷰포트가 장마다 그 값을 건다).
         //   부지 = 방금 건 CANNOSCALE · 진입도로 = 그대로 둔 CANNOSCALE(KeepDrawingScale) — 둘 다 «그린 직후의 도면 주석 축척»(검토 후속 3)
-        double annoNow = CurrentDrawingScale(db);
+        double annoNow = tagAnno > 0 ? tagAnno : CurrentDrawingScale(db);   // ★[v113.1 · 3단계] 진입도로 비율 = 되돌릴 부지 주석 축척
         foreach (var f in list)
         {
             var outer = AddRect(tr, ms, layer, f.SheetMin.X, f.SheetMin.Y,

@@ -79,7 +79,7 @@ public static partial class RoadGrade
         /// <summary>★★[도로 마무리 ②] 측구 구간(Core 측점 · 나중 기록이 이김 · 비어 있으면 옛 동작 그대로 — 비트 같음).</summary>
         public List<Ditch> Ditches = new();
         /// <summary>그 쪽 · 측점의 측구 윗폭(m · 없으면 0) — 나중 기록이 이김(옹벽 기록과 같은 법).</summary>
-        public double DitchW(int side, double s)
+        public double DitchOnly(int side, double s)
         {
             for (int i = Ditches.Count - 1; i >= 0; i--)
             {
@@ -88,10 +88,58 @@ public static partial class RoadGrade
             }
             return 0;
         }
-        /// <summary>그 쪽 · 측점의 가장자리 옵셋(길어깨 끝 + 측구 윗폭) — 측구가 없으면 <see cref="Section.OuterL"/> · <see cref="Section.OuterR"/> 그대로.</summary>
-        public double Outer(int side, double s) => (side < 0 ? Sec.OuterL : Sec.OuterR) + (Ditches.Count == 0 ? 0 : DitchW(side, s));
+        /// <summary>그 쪽 · 측점의 길어깨 바깥 평평한 폭 = 측구 윗폭 + ★[v113.0] 폴리선 옹벽 바닥 폭(둘 다 길어깨 끝 높이로 평평 — 도로 면 띠가 같은 법으로 잇는다 · 바닥이 없으면 측구 그대로).</summary>
+        public double DitchW(int side, double s) => DitchOnly(side, s) + (Floors.Count == 0 ? 0 : FloorW(side, s));
+        /// <summary>★[v113.0] 측구 · 폴리선 옹벽 바닥 중 하나라도 있나(도로 면 띠의 길어깨 끝 점 · 넓힌 자리 — 둘 다 없으면 옛 길 그대로).</summary>
+        public bool HasWiden => Ditches.Count > 0 || Floors.Count > 0;
+        /// <summary>★[v113.0] 가장자리 옵셋(길어깨 끝 + 측구) — 폴리선 옹벽 바닥을 뺀 것(폴리선 좌표 바꾸기 · 바닥 높이가 쓴다).</summary>
+        public double OuterBase(int side, double s) => (side < 0 ? Sec.OuterL : Sec.OuterR) + (Ditches.Count == 0 ? 0 : DitchOnly(side, s));
+        /// <summary>그 쪽 · 측점의 가장자리 옵셋(길어깨 끝 + 측구 윗폭 + ★[v113.0] 폴리선 옹벽 바닥) — 둘 다 없으면 <see cref="Section.OuterL"/> · <see cref="Section.OuterR"/> 그대로.</summary>
+        public double Outer(int side, double s) => OuterBase(side, s) + (Floors.Count == 0 ? 0 : FloorW(side, s));
         /// <summary>도로 전체에서 가장 넓은 가장자리 옵셋(격자 · 버킷 여유).</summary>
-        public double MaxOuter => Math.Max(Sec.OuterL, Sec.OuterR) + (Ditches.Count == 0 ? 0 : Ditches.Max(d => Math.Max(0, d.W)));
+        public double MaxOuter => Math.Max(Sec.OuterL, Sec.OuterR) + (Ditches.Count == 0 ? 0 : Ditches.Max(d => Math.Max(0, d.W))) + (Floors.Count == 0 ? 0 : Floors.Max(f => f.MaxW));
+
+        /// <summary>★★[v113.0 · JACK 1104 «옹벽 폴리선 — 경계 2점 자르기 + 안쪽 다단»] 폴리선 옹벽(경계 두 교점 사이 폴리선 · 단높이 · 소단 — 나중 기록이 이김 · 계단선 기록보다 뒤).
+        /// 엔진이 돌 때마다 좌표를 다시 바꾸고(<see cref="RoadBound.Build"/>) 바닥 폭 · 단 수를 다시 정한다 — 안 맞으면 쉬고 <see cref="Result.Bounds"/>에 까닭.</summary>
+        public List<BoundWall> BoundWalls = new();
+        /// <summary>★[v113.0] 이번 계산의 폴리선 옹벽 바닥(엔진이 채운다 · 부르는 쪽은 안 씀).</summary>
+        internal List<Floor> Floors = new();
+        /// <summary>★[v113.0] 같은 입력 + 폴리선 옹벽만 바꾼 사본(시험 계산 — 미리보기 · 판정 · 원본 입력은 안 건드림).</summary>
+        public Input WithBounds(IEnumerable<BoundWall> bounds)
+        {
+            var c = (Input)MemberwiseClone();
+            c.BoundWalls = bounds.ToList(); c.Floors = new List<Floor>();
+            return c;
+        }
+        /// <summary>그 쪽 · 측점의 폴리선 옹벽 바닥 폭 = max(0, D_P(s) − 단 n개 폭) — 나중 기록이 이김.</summary>
+        internal double FloorW(int side, double s)
+        {
+            for (int i = Floors.Count - 1; i >= 0; i--)
+            {
+                var f = Floors[i];
+                if (f.Side != side || s < f.S0 - 1e-9 || s > f.S1 + 1e-9) continue;
+                double dp = f.M.DP(Math.Clamp(s, f.M.S0, f.M.S1));
+                return double.IsFinite(dp) ? Math.Max(0, dp - f.Wn) : 0;
+            }
+            return 0;
+        }
+    }
+
+    /// <summary>★[v113.0] 폴리선 옹벽 하나 — 번호 · 경계 두 교점 사이 폴리선(세계 XY) · 단높이 · 소단 길이.</summary>
+    public sealed record BoundWall(int No, double[] X, double[] Y, double H, double T);
+
+    /// <summary>★[v113.0 · 설치 전 검토 M3] 폴리선 옹벽 소단 — 0이면 1 mm(기록 · 단면 · 바닥 폭이 같은 값).</summary>
+    internal static double BoundBench(double t) => Math.Max(1e-3, double.IsFinite(t) ? t : 0);
+
+    /// <summary>★[v113.0] 엔진이 쓴 폴리선 옹벽 바닥 — 쪽 · 측점 구간 · 좌표 바꾸기 · 단 n개 폭 · 가장 넓은 바닥.</summary>
+    internal sealed record Floor(int Side, double S0, double S1, RoadBound.Map M, double Wn, double MaxW);
+
+    /// <summary>★[v113.0] 폴리선 옹벽의 이번 계산 상태 — 쓰였나 · 까닭(쉬는 기록) · 쪽 · 측점 구간 · 절토인가 · 단 수 · 엔진 기록 번호.</summary>
+    public sealed class BoundState
+    {
+        public int No; public bool Ok; public string Why = "";
+        public int Side; public double S0 = double.NaN, S1 = double.NaN; public bool Up; public int Tiers; public int Rec = -1;
+        public double FloorMin, FloorMax;
     }
 
     public sealed class SlopeAt
@@ -122,6 +170,9 @@ public static partial class RoadGrade
         internal List<Profile> CutProfs = new(), FillProfs = new();
         internal List<TierWall> Recs = new();
         internal int[] RecProf = Array.Empty<int>();
+        /// <summary>★[v113.0] 단면 번호 → 폴리선 옹벽 번호(−1 = 아님) · 폴리선 옹벽 상태(입력 차례).</summary>
+        internal int[] ProfBound = Array.Empty<int>();
+        public List<BoundState> Bounds = new();
         /// <summary>★★[v111.3 · JACK 1030 «끝면도 옹벽처럼 단»] 단면 번호 → 본 단면(끝면 띠 단면이면 그 옹벽 단면 · 아니면 자기) · 변형 단면의 (단, 소단 길이).</summary>
         internal int[] ProfMain = Array.Empty<int>();
         internal int[] ProfTier = Array.Empty<int>();
@@ -197,6 +248,8 @@ public static partial class RoadGrade
         public double EdgeStep = 0.5;
         /// <summary>★[계획 검토 M2] 사면끼리 부딪힌 칸(lo &gt; hi — 옹벽 자리) 수.</summary>
         public int Conflicts;
+        /// <summary>★[v113.1 · JACK 1104 «섬 지형»] 도로 면과 안 이어져 땅으로 되돌린 칸 수(데이라잇 너머 다시 나온 원뿔 조각).</summary>
+        public int Islands;
         /// <summary>★[계획 검토 M1] 넓혀도 데이라잇이 범위 밖(격자 끝까지 절 · 성) · 마지막에 쓴 범위.</summary>
         public bool ReachHit; public double ReachUsed;
         /// <summary>★★[v111 · 계획 2.1] 점 평가기(칸 계산과 같은 식 · 이 판의 표본 · 기록 · 단면을 붙잡음) · 가장자리 표본 — 단면 광선이 «이 점의 주인»을 묻는다.</summary>
@@ -224,20 +277,21 @@ public static partial class RoadGrade
         public readonly List<Face> Faces = new();
         readonly List<(double D, double R)> _e = new();   // ★[v110.3.1] 꺾임 목록 — FAt(정확한 높이 · 옹벽 위 끝 · 아래 끝)
         public float[] Table => _t;
-        public Profile(SlopeRule r, double reach, double dt = 0.005, int tier = -1, double benchL = 0, double minSlope = 0.01)
+        /// <param name="maxFaces">★[v113.0 · JACK 1104 «옹벽 폴리선»] 단 수 한도 — 폴리선 옹벽 단면(단 n개 · 마지막 단 뒤 소단 없이 수직 = 폴리선 너머는 원지반). 기본 = 한도 없음(옛 단면 그대로).</param>
+        public Profile(SlopeRule r, double reach, double dt = 0.005, int tier = -1, double benchL = 0, double minSlope = 0.01, int maxFaces = int.MaxValue)
         {
             var e = new List<(double D, double R)> { (0, 0) };
             double d = 0, rise = 0, bh = Math.Max(0.1, r.BenchH), n = Math.Max(0.01, r.Slope), bw = Math.Max(0, r.BenchW);
             double ms = Math.Clamp(minSlope, 0.001, 0.2), bl = Math.Max(0, benchL);
             int fk = 0;
-            while (d < reach + bh * n + bw && rise < r.MaxRise)
+            while (d < reach + bh * n + bw && rise < r.MaxRise && fk < maxFaces)
             {
                 bool wall = tier >= 0 && fk >= tier;
                 double w = bh * (wall ? ms : n);
                 Faces.Add(new Face(fk, d, d + w, wall));
                 d += w; rise += bh; e.Add((d, rise));
                 double b = wall ? bl : bw;
-                if (b > 0) { d += b; e.Add((d, rise)); }
+                if (b > 0 && fk + 1 < maxFaces) { d += b; e.Add((d, rise)); }
                 fk++;
             }
             _dt = dt; _end = e[^1].D; _endRise = e[^1].R; _tail = tier >= 0 ? 1.0 / ms : 1.0 / n;
@@ -421,6 +475,7 @@ public static partial class RoadGrade
         tail = null;
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var r = new Result { EdgeStep = inp.EdgeStep };
+        inp.Floors.Clear();   // ★[v113.0] 폴리선 옹벽 바닥은 계산마다 다시(아래 — 측점 · 종단이 바뀌었을 수 있다)
         int n = Math.Min(inp.X.Length, Math.Min(inp.Y.Length, inp.Z.Length));
         if (n < 2 || inp.Base == null) { r.Error = "중심선이 두 점보다 적거나 바탕면이 없습니다"; return r; }
         for (int i = 0; i < n; i++)
@@ -463,6 +518,55 @@ public static partial class RoadGrade
         {
             if (!(Math.Abs(t.S1 - t.S0) > 1e-6) || (t.Side != -1 && t.Side != 1)) continue;
             recs.Add(t with { S0 = Math.Min(t.S0, t.S1), S1 = Math.Max(t.S0, t.S1), Tier = Math.Max(0, t.Tier), BenchL = Math.Max(0, t.BenchL) });
+        }
+        // ★★★[v113.0 · JACK 1104 «옹벽 폴리선 — 경계 2점 자르기 + 안쪽 다단» · 계획 5-1 · 5-2] 폴리선 옹벽 = 바닥(길어깨 끝 높이로 평평 · 폭 D_P(s) − 단 n개 폭 — 측구와 같은 법) +
+        //   그 바깥 끝에서 0단부터 옹벽(단높이 H · 소단 T · 단 n개 뒤 수직 = 폴리선 너머 원지반)인 계단선 기록(나중 기록 — 이 구간에서 이김 · 끝면 띠 없음 = 양 끝 수직).
+        //   칸 · 광선 · 횡단 · 선이 모두 같은 가장자리(Outer) · 같은 단면 번호를 보므로 따로 갈래를 두지 않는다. 단 수 = 폴리선 위 max(원지반 − 바닥 높이)로 한 번(JACK 답 1) · 소단은 횡단 방향 거리.
+        var recBound = new List<int>();   // recs 차례 → 폴리선 옹벽 상태 번호(−1 = 아님)
+        foreach (var _ in recs) recBound.Add(-1);
+        var boundSpec = new List<(int Bi, int Tiers, bool Up)>();
+        for (int bi = 0; bi < inp.BoundWalls.Count; bi++)
+        {
+            var bw = inp.BoundWalls[bi];
+            var st = new BoundState { No = bw.No };
+            r.Bounds.Add(st);
+            var line = new List<Point3>();
+            for (int i = 0; i < Math.Min(bw.X.Length, bw.Y.Length); i++) line.Add(new Point3(bw.X[i], bw.Y[i], 0));
+            var mp = RoadBound.Build(inp.X, inp.Y, inp.OuterBase, line);
+            if (!mp.Ok) { st.Why = $"좌표를 못 바꿈 — {mp.Why}"; continue; }
+            st.Side = mp.Side; st.S0 = mp.S0; st.S1 = mp.S1;
+            if (!(bw.H > 0.05)) { st.Why = "단높이가 0입니다"; continue; }
+            // 바닥 높이 zE(s) = 그 측점 띠 바깥 끝(측구 포함 · 폴리선 옹벽 바닥 뺌) — 칸 계산 vZ와 같은 값
+            int pos = 0, neg = 0; double dMax = double.MinValue, dMin = double.MaxValue; (double, double) mixAt = (0, 0);
+            for (int i = 0; i < mp.S.Length; i++)
+            {
+                if (!inp.Base.TryGetElevation(mp.X[i], mp.Y[i], out double g)) continue;
+                double zE = ZAt(mp.S[i]) + sec.DropC(mp.Side * inp.OuterBase(mp.Side, mp.S[i]));
+                double dz = g - zE;
+                dMax = Math.Max(dMax, dz); dMin = Math.Min(dMin, dz);
+                if (dz > 0.01) pos++; else if (dz < -0.01) { neg++; }
+                if (pos > 0 && neg > 0 && mixAt == (0, 0)) mixAt = (mp.X[i], mp.Y[i]);
+            }
+            if (pos + neg == 0) { st.Why = "폴리선 위 원지반이 바닥과 같은 높이이거나 못 읽음"; continue; }
+            if (pos > 0 && neg > 0) { st.Why = $"폴리선을 따라 절토 · 성토가 섞입니다 ({mixAt.Item1:F1}, {mixAt.Item2:F1}) — 한쪽만 됩니다"; continue; }
+            bool up = pos > 0;
+            int nt = up ? WallInPoly.BenchCount(0, dMax, bw.H) : WallInPoly.BenchCountDown(0, dMin, bw.H);
+            // ★[v113.0 · 설치 전 검토 M3] 소단 0 = 1 mm — 0단 · 소단 0 기록은 옛 «가장자리 옹벽» 길(단면 없음)로 빠져 폴리선 옹벽 단면 · 표지 · 수직 끝을 잃는다
+            double ms = Math.Clamp(inp.MinSlope, 0.001, 0.2), face = bw.H * ms, T = BoundBench(bw.T);
+            double wn = (nt - 1) * (face + T) + face;
+            double fMin = mp.U.Min() - wn, fMax = mp.U.Max() - wn;
+            st.Up = up; st.Tiers = nt;   // 폭이 모자라 쉬어도 방향 · 단 수는 알린다(기본값 고르기)
+            if (fMin < -1e-6)
+            {
+                int k = Array.IndexOf(mp.U, mp.U.Min());
+                st.Why = $"폴리선이 도로 띠에 너무 가깝습니다 — 단 {nt}개에 필요한 폭 {wn:F2} m · 가장 좁은 곳 {mp.U.Min():F2} m ({mp.X[k]:F1}, {mp.Y[k]:F1})"; continue;
+            }
+            st.Ok = true; st.Up = up; st.Tiers = nt; st.FloorMin = Math.Max(0, fMin); st.FloorMax = Math.Max(0, fMax);
+            inp.Floors.Add(new Floor(mp.Side, mp.S0, mp.S1, mp, wn, Math.Max(0, fMax)));
+            st.Rec = recs.Count;
+            recs.Add(new TierWall(mp.S0, mp.S1, mp.Side, 0, T));
+            recBound.Add(bi);
+            boundSpec.Add((bi, nt, up));
         }
         static bool EdgeWall(TierWall t) => t.Tier <= 0 && t.BenchL <= 0;
         int RecAt(double s, int side)
@@ -570,9 +674,24 @@ public static partial class RoadGrade
         r.FillProfs = new List<Profile> { new(inp.Fill, reachF) };
         var profKey = new Dictionary<(int, double), int>();
         r.RecProf = new int[recs.Count];
+        var profBound = new List<int> { -1 };
         for (int i = 0; i < recs.Count; i++)
         {
             if (EdgeWall(recs[i])) { r.RecProf[i] = -1; continue; }
+            // ★[v113.0] 폴리선 옹벽 — 제 단면(0단부터 옹벽 · 단높이 H · 소단 T · 단 n개 뒤 수직) · 반대 방향은 기본 단면 그대로(바닥이 땅보다 높은 자리는 보통 사면)
+            if (recBound[i] >= 0)
+            {
+                var (bi, nt, up) = boundSpec.First(b => b.Bi == recBound[i]);
+                var bw = inp.BoundWalls[bi];
+                var rule = new SlopeRule { BenchH = bw.H, Slope = up ? inp.Cut.Slope : inp.Fill.Slope, BenchW = 0, MaxRise = double.MaxValue };
+                var bp = new Profile(rule, reachF, tier: 0, benchL: BoundBench(bw.T), minSlope: inp.MinSlope, maxFaces: nt);
+                r.RecProf[i] = r.CutProfs.Count;
+                r.CutProfs.Add(up ? bp : new Profile(inp.Cut, reachF));
+                r.FillProfs.Add(up ? new Profile(inp.Fill, reachF) : bp);
+                while (profBound.Count < r.CutProfs.Count - 1) profBound.Add(-1);
+                profBound.Add(bi);
+                continue;
+            }
             var key = (recs[i].Tier, Math.Round(recs[i].BenchL, 3));
             if (!profKey.TryGetValue(key, out int pi))
             {
@@ -584,8 +703,11 @@ public static partial class RoadGrade
             r.RecProf[i] = pi;
         }
         r.Recs = recs;
+        while (profBound.Count < r.CutProfs.Count) profBound.Add(-1);
+        r.ProfBound = profBound.ToArray();
         // ★★[v111.3 · JACK 1030 «끝면도 옹벽처럼 단» · 인터뷰: 고른 구간 안으로] 끝면 띠 단면(RoadGrade.Bands.cs) — 표본 · 칸 · 광선 · 선이 모두 ProfFor로 같은 단면을 본다
         BuildBands(inp, r, edges, reachF, profKey, WallAt, RecAt);
+        { var pb = r.ProfBound; int n0 = pb.Length; Array.Resize(ref pb, r.CutProfs.Count); for (int i = n0; i < pb.Length; i++) pb[i] = -1; r.ProfBound = pb; }   // ★[v113.0] 띠 단면은 폴리선 옹벽 아님
         for (int k = 0; k < edges.Count; k++)
         {
             var e = edges[k];
@@ -751,7 +873,11 @@ public static partial class RoadGrade
             // ★[v110.3.1 · ⑳o 계측] 발 표본 — 칸에서 가장 가까운 가장자리 점(표본 사이)도 원뿔 하나로. 표본이 0.5 m 간격이라 표본 사이 칸은 원뿔 거리가 D보다 길고(가장자리 곁 0.25 m)
             //   옹벽 면(3~5 cm) 바로 앞 칸이 면 위 높이를 받아 바깥으로 갈려 소단이 땅까지 기울었다. 이어진 가장자리라면 있을 표본(같은 다리 · 그 측점 · 경사 보정 0).
             //   옛 가장자리 옹벽 뒤(shadow)는 그대로(벽 표본만). 이 칸 단면 = 그 측점 기록의 변형 · 없으면 기본.
-            if (double.IsFinite(vZ) && shadow == 0)
+            // ★★[v113.0 · 화면 없는 시험 1104 · 계획 5-2 «안쪽 = 그 측점 횡단 거리 x 한 식 · 다른 표본 원뿔은 안 본다»] 폴리선 옹벽 칸은 이 발 표본(그 측점 바닥 끝 · 횡단 거리) 하나만 —
+            //   이웃 측점 바닥 끝 원뿔까지 보면 폴리선이 비스듬한 자리(양 끝 다리는 늘 비스듬)에서 평면 거리가 횡단 거리보다 짧아(79° 다리: 단 6개 폭 5.24 m → 1.0 m)
+            //   단이 다 못 들어가고 폴리선 위에 높이 그대로의 낭떠러지가 섰다(JACK 1104 도면 성토 · 안쪽 5 cm 땅보다 8.76 m). 나중 기록이 이기므로 옛 가장자리 옹벽 뒤여도 이 표본.
+            bool boundCell = recCell >= 0 && recBound[recCell] >= 0;
+            if (double.IsFinite(vZ) && (shadow == 0 || boundCell))
             {
                 int vp = pcell;   // ★[v111.3] 끝면 띠면 그 띠 단면
                 double vh = vZ + cutP[vp].FAt(vD), vl = vZ - fillP[vp].FAt(vD);   // ★[설치 전 검토 L3] 꺾임 목록 값(표가 벽 위 끝 곁 5 mm를 흐리지 않게 · 칸마다 한 번)
@@ -762,6 +888,7 @@ public static partial class RoadGrade
             int cbx = Bx(px), cby = By(py);
             foreach (var (ox, oy, dmin) in order)
             {
+                if (boundCell) break;   // ★[v113.0] 폴리선 옹벽 칸 = 발 표본 하나(위)
                 // 이 버킷의 아래 한계로 더 볼 필요가 없는지(두 쪽 모두) — 경사 보정은 −|g|·거리 이상
                 int bx = cbx + ox, by = cby + oy;
                 if (bx < 0 || by < 0 || bx >= BW || by >= BH) continue;
@@ -880,6 +1007,45 @@ public static partial class RoadGrade
         {
             lock (lockObj) { cutV += acc.Item1; fillV += acc.Item2; maxCut = Math.Max(maxCut, acc.Item3); maxFill = Math.Max(maxFill, acc.Item4); evals += acc.Item5; }
         });
+        // ★★[v113.1 · JACK 1104 «섬 지형»] 도로 면과 안 이어진 바뀐 칸 걷기 — 데이라잇 너머 땅이 다시 파인(낮아진) 자리에서 사면 원뿔이 땅 위로 다시 나와(성토) 칸 면 · 최종지표면에 따로 떨어진 조각(실측 164 세모 · 15 ㎡ · 데이라잇 밖 9 m)이 됐다.
+        //   도로 칸(종류 1)에서 바뀐 칸(1 · 2 · 3 · 4)을 따라(여덟 이웃) 못 닿는 칸은 땅 그대로(종류 0) · 부피는 그때만 다시 셈(섬이 없으면 비트 같음).
+        {
+            var reach = new bool[W * H]; var stack = new Stack<int>();
+            for (int k = 0; k < W * H; k++) if (r.Kind[k] == 1) { reach[k] = true; stack.Push(k); }
+            while (stack.Count > 0)
+            {
+                int k = stack.Pop(), ki = k % W, kj = k / W;
+                for (int dj = -1; dj <= 1; dj++) for (int di = -1; di <= 1; di++)
+                {
+                    int ii = ki + di, jj = kj + dj;
+                    if (ii < 0 || jj < 0 || ii >= W || jj >= H) continue;
+                    int kk = jj * W + ii;
+                    if (reach[kk] || r.Kind[kk] is not (2 or 3 or 4)) continue;
+                    reach[kk] = true; stack.Push(kk);
+                }
+            }
+            int isl = 0;
+            for (int k = 0; k < W * H; k++)
+                if (!reach[k] && r.Kind[k] is 2 or 3 or 4)
+                {
+                    r.Kind[k] = 0; r.Z[k] = r.Base[k];
+                    r.F[k] = float.IsFinite(r.F[k]) ? Math.Max(Math.Abs(r.F[k]), 1e-3f) : 1e6f;
+                    isl++;
+                }
+            if (isl > 0)
+            {
+                r.Islands = isl;
+                cutV = 0; fillV = 0; maxCut = 0; maxFill = 0;
+                for (int k = 0; k < W * H; k++)
+                {
+                    if (r.Kind[k] is 0 or 255 || !float.IsFinite(r.Base[k]) || !float.IsFinite(r.Z[k])) continue;
+                    double dz = r.Z[k] - r.Base[k];
+                    if (r.Kind[k] == 1 || r.Kind[k] == 4) { if (dz > 0) { fillV += dz * ca; maxFill = Math.Max(maxFill, dz); } else { cutV -= dz * ca; maxCut = Math.Max(maxCut, -dz); } }
+                    else if (dz > 1e-4) { fillV += dz * ca; maxFill = Math.Max(maxFill, dz); }
+                    else if (dz < -1e-4) { cutV -= dz * ca; maxCut = Math.Max(maxCut, -dz); }
+                }
+            }
+        }
         r.Eval = (x, y) => { long e0 = 0; return EvalAt(x, y, ref e0); };
         r.Edges = edges;
         r.CutVol = cutV; r.FillVol = fillV; r.MaxCut = maxCut; r.MaxFill = maxFill; r.ConeEvals = evals; r.Conflicts = conflicts;
@@ -1368,7 +1534,64 @@ public static partial class RoadGrade
             }
         note = $"칸 {r.Cell:0.##} m · 세모 {tris.Count:N0}(온 네모 {full:N0} · 자른 네모 {cut:N0} · 안장 {saddle:N0}" + (nanQ > 0 ? $" · 바탕 없는 네모 {nanQ:N0}" : "") + (flat > 0 ? $" · 넓이 0 걸러냄 {flat:N0}" : "") + ") · 둘레 = 칸 사이 보간(v110.2)"
              + (walls ? $" · 옹벽 면 네모 {wallQ:N0}(조각 {slabs:N0}" + (noSplit > 0 ? $" · 못 가름 {noSplit:N0}" : "") + (centered > 0 ? $" · 가운데 점 {centered:N0}" : "") + (zFix > 0 ? $" · 벽 곁 높이 바로잡음 {zFix:N0}" : "") + ")" : "");
+        // ★★[v113.1 · 벽 폴리선 Civil 되읽기 «48746/48748 · 11.760 mm»] Civil은 높이 ≲122 µm 바늘을 뒤집는다 — 짧은 변(5 mm 안 두 점)을 접어 없앤다(이웃 방향이 안 뒤집힐 때만 · 바늘이 없으면 그대로 · 비트 같음)
+        int folded = FoldNeedles(tris);
+        if (folded > 0) note += $" · 바늘 접음 {folded}";
         return tris;
+    }
+
+    /// <summary>★★[v113.1] 세모 무더기의 Civil 바늘(가장 긴 변에 대한 높이 &lt; <see cref="CivilSafeMesh.ThinH"/>) 짧은 변 접기 — 짧은 변이 5 mm 안이면 한 끝을 다른 끝으로(좌표 그대로 같은 점) 옮기고
+    /// 넓이 0 세모를 뺀다. 옮긴 점을 쓰는 다른 세모가 하나라도 바늘 · 뒤집힘이 되면 안 접음. 칸 면(벽 끝 마구리 곁 2.1 mm 두 점 — 벽 폴리선 계측) · 선 면이 같은 법. 돌려줌 = 접은 수.</summary>
+    internal static int FoldNeedles(List<WallDaylight.Tri> tris)
+    {
+        const double Tol = 0.005;
+        static double Cr(Point3 o, Point3 a, Point3 b) => (a.X - o.X) * (b.Y - o.Y) - (a.Y - o.Y) * (b.X - o.X);
+        static double L(Point3 a, Point3 b) => Math.Sqrt(Sq(a.X - b.X) + Sq(a.Y - b.Y));
+        static double H(Point3 a, Point3 b, Point3 c) => Math.Abs(Cr(a, b, c)) / Math.Max(1e-300, Math.Max(L(a, b), Math.Max(L(b, c), L(c, a))));
+        bool any = false;
+        foreach (var t in tris) if (H(t.A, t.B, t.C) < CivilSafeMesh.ThinH) { any = true; break; }
+        if (!any) return 0;
+        int done = 0;
+        for (int pass = 0; pass < 4; pass++)
+        {
+            var at = new Dictionary<(double, double), List<int>>();
+            for (int q = 0; q < tris.Count; q++) foreach (var p in new[] { tris[q].A, tris[q].B, tris[q].C }) { if (!at.TryGetValue((p.X, p.Y), out var l)) at[(p.X, p.Y)] = l = new(); l.Add(q); }
+            var dead = new HashSet<int>(); bool moved = false;
+            for (int q = 0; q < tris.Count; q++)
+            {
+                if (dead.Contains(q)) continue;
+                var t = tris[q];
+                if (H(t.A, t.B, t.C) >= CivilSafeMesh.ThinH) continue;
+                var (u, v, ls) = L(t.A, t.B) <= L(t.B, t.C) && L(t.A, t.B) <= L(t.C, t.A) ? (t.A, t.B, L(t.A, t.B)) : L(t.B, t.C) <= L(t.C, t.A) ? (t.B, t.C, L(t.B, t.C)) : (t.C, t.A, L(t.C, t.A));
+                if (ls >= Tol || ls == 0) continue;
+                if (!at.TryGetValue((u.X, u.Y), out var lu)) continue;
+                Point3 Sw(Point3 p) => p.X == u.X && p.Y == u.Y ? v : p;
+                bool Has(WallDaylight.Tri w, Point3 p) => (w.A.X == p.X && w.A.Y == p.Y) || (w.B.X == p.X && w.B.Y == p.Y) || (w.C.X == p.X && w.C.Y == p.Y);
+                bool ok = true;
+                foreach (int s in lu)
+                {
+                    if (dead.Contains(s) || Has(tris[s], v)) continue;
+                    var w = tris[s]; var a = Sw(w.A); var b = Sw(w.B); var c = Sw(w.C);
+                    if (Math.Sign(Cr(a, b, c)) != Math.Sign(Cr(w.A, w.B, w.C)) || H(a, b, c) < CivilSafeMesh.ThinH) { ok = false; break; }
+                }
+                if (!ok) continue;
+                foreach (int s in lu)
+                {
+                    if (dead.Contains(s)) continue;
+                    if (Has(tris[s], v)) { dead.Add(s); continue; }
+                    var w = tris[s]; tris[s] = new WallDaylight.Tri(Sw(w.A), Sw(w.B), Sw(w.C));
+                    if (!at.TryGetValue((v.X, v.Y), out var lv)) at[(v.X, v.Y)] = lv = new();
+                    lv.Add(s);
+                }
+                at.Remove((u.X, u.Y));
+                done++; moved = true;
+            }
+            if (!moved) break;
+            var keep = new List<WallDaylight.Tri>();
+            for (int q = 0; q < tris.Count; q++) if (!dead.Contains(q)) keep.Add(tris[q]);
+            tris.Clear(); tris.AddRange(keep);
+        }
+        return done;
     }
 
     /// <summary>★[v110.3.1] 면 조각 둘레 점 — P · 거리장 D · 놓인 격자 변(Lo &lt; Hi · 꼭짓점이면 Lo = Hi = 그 칸 · 현 위 점이면 −1/−2) · 변 위 비율 T(Lo에서).</summary>

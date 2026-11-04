@@ -631,13 +631,16 @@ public sealed class ImportGisCommand
     /// <param name="spotIds">표고점(DBPoint). ★★<b>등고선과 같은 자루에 넣으면 안 된다</b>(검토 0901) —
     ///   등고선 정의는 <b>선만</b> 받으므로 점은 조용히 무시된다. 봉우리·안부·계곡 바닥처럼
     ///   등고선 사이에 표고점만 있는 자리가 <b>납작해지는데</b> "표고점 851개"라고 보고되어 맞아 보인다.</param>
+    /// <param name="breakIds">★[v113.0 · JACK 1104 «원지반 — 등고선으로 작성»] 표고가 제각각인 3D 선 — 등고선이 아니라 브레이크라인으로 넣는다(서버 · DXF 길은 안 줌 = 그대로).</param>
     internal static string BuildGroundSurfaceFrom(Database db, Editor ed,
                                                   ObjectIdCollection contourIds,
-                                                  ObjectIdCollection spotIds = null)
-        => BuildGroundSurface(db, ed, contourIds, spotIds);
+                                                  ObjectIdCollection spotIds = null,
+                                                  ObjectIdCollection breakIds = null)
+        => BuildGroundSurface(db, ed, contourIds, spotIds, breakIds);
 
     private static string BuildGroundSurface(Database db, Editor ed, ObjectIdCollection contourIds,
-                                             ObjectIdCollection spotIds = null)
+                                             ObjectIdCollection spotIds = null,
+                                             ObjectIdCollection breakIds = null)
     {
         if (contourIds.Count == 0) return "지표면 생략(등고선 없음)";
         try
@@ -703,6 +706,21 @@ public sealed class ImportGisCommand
                 {
                     spotNote = " · ⚠표고점 반영 실패";
                     ed.WriteMessage("\n[지표면] 표고점을 못 넣었습니다 — " + pex.Message);
+                }
+            }
+            // ★[v113.0 · JACK 1104] 브레이크라인도 따로 감싼다 — 서로 엇갈린 선이 있어 거절돼도 등고선 면은 살린다.
+            //   보충 3m · 중간종거 0.05m · 솎기 사실상 끔(0.01m · 0.1°) — 등고선과 같은 정밀도.
+            if (breakIds != null && breakIds.Count > 0)
+            {
+                try
+                {
+                    surf.BreaklinesDefinition.AddStandardBreaklines(breakIds, 0.05, 3.0, 0.01, 0.1);
+                    spotNote += $" · 브레이크라인 {breakIds.Count}개 반영";
+                }
+                catch (System.Exception bex)
+                {
+                    spotNote += " · ⚠브레이크라인 반영 실패";
+                    ed.WriteMessage("\n[지표면] 브레이크라인을 못 넣었습니다 — " + bex.Message);
                 }
             }
             tr.Commit();

@@ -490,6 +490,16 @@ public static partial class RoadGrade
         return lo <= hi ? (Math.Max(a, lo), Math.Min(b, hi)) : (double.NaN, double.NaN);
     }
 
+    /// <summary>★[v113.0 · JACK 1104 «옹벽 폴리선»] 이 선을 낸 폴리선 옹벽 번호(−1 = 아님) — 그 옹벽 단면 · 그 방향(절토 옹벽이면 절토 선)일 때만. [사면 변환]이 통째로 지운다.</summary>
+    public static int BoundOfLine(Result r, TierLine line)
+    {
+        int p = line.Prof;
+        if (p < 0 || p >= r.ProfBound.Length) return -1;
+        int bi = r.ProfBound[p];
+        if (bi < 0 || bi >= r.Bounds.Count || !r.Bounds[bi].Ok || r.Bounds[bi].Up != line.Cut) return -1;
+        return r.Bounds[bi].No;
+    }
+
     /// <summary>★[v110.3.1 · 설치 전 검토 M2] 옹벽선 → 그 선을 낸 기록 고르기 — 단면 번호 0(도로 가장자리 0단 옹벽선)이면 가장자리 옹벽 기록(0단 · 소단 0) ·
     /// 그 밖이면 그 단면의 (단, 소단) 기록(단면 번호 = 엔진이 기록 (단, 소단 1 mm 반올림)마다 하나씩 만든 것).</summary>
     public static Func<double[], bool> WallLineMatch(Result r, TierLine line)

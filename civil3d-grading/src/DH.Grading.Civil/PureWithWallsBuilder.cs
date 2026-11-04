@@ -35,6 +35,18 @@ internal static class PureWithWallsBuilder
         public double T, HeadZ;
         /// <summary>그 옹벽 앞면의 실제 구배 = max(SlopeW, FaceRun ÷ 단높이) — 모르면 문턱 1:0.05(계획 2-5 · 확인 낮음).</summary>
         public double FaceSlope => System.Math.Max(System.Math.Max(SlopeW, H > 1e-9 && FaceRun > 0 ? FaceRun / H : 0), 0.05);
+        /// <summary>★[v113.0 · JACK 1104 «옹벽 폴리선»] 0 = 손 폴리곤 · 1 = 경계 폴리선(Poly = 바꿀 자리 Z · IsWall = 측선 — 앞면 선이 아니다. 터파기 · 측점 가리기는 이 종류를 ⚠로 뺀다).</summary>
+        public int Kind;
+        /// <summary>Kind 1 — 앞면 선 길이 합(폴리선 길이 × 단 수 · 대안 옹벽 길이).</summary>
+        public double LineLen;
+    }
+
+    /// <summary>★[v113.0 · JACK 1104 «옹벽 폴리선»] 열린 선 2D 길이.</summary>
+    internal static double LenOf(System.Collections.Generic.IReadOnlyList<Point3>? l)
+    {
+        double s = 0; if (l == null) return 0;
+        for (int i = 0; i + 1 < l.Count; i++) s += System.Math.Sqrt((l[i + 1].X - l[i].X) * (l[i + 1].X - l[i].X) + (l[i + 1].Y - l[i].Y) * (l[i + 1].Y - l[i].Y));
+        return s;
     }
 
     internal sealed class Result
@@ -358,7 +370,7 @@ internal static class PureWithWallsBuilder
             if (WallListStore.TryLoad(db, tr, out var head, out var walls, out _))
             {
                 foreach (var f in head.Frozen.Where(f => f.Reflected))
-                    res.Add(new ReflWall { No = f.No, Up = f.Up, Frozen = true, Poly = f.Poly, SlopeW = f.SlopeW, FaceRun = f.FaceRun, H = f.H, IsWall = f.IsWall, T = f.T, HeadZ = f.HeadZ });
+                    res.Add(new ReflWall { No = f.No, Up = f.Up, Frozen = true, Poly = f.Poly, SlopeW = f.SlopeW, FaceRun = f.FaceRun, H = f.H, IsWall = f.IsWall, T = f.T, HeadZ = f.HeadZ, Kind = f.Kind, LineLen = LenOf(f.Line) * f.Tiers });
                 var (ids, _) = Commands.WallCompositeCommand.Candidates(civ, tr, Commands.WallCompositeCommand.PlanName, groundId);
                 if (ids.Count == 1)
                 {
@@ -371,7 +383,7 @@ internal static class PureWithWallsBuilder
                         {
                             var w = walls.FirstOrDefault(x => x.No == no);
                             if (w == null || w.CompNonce != nonce || w.Cap == null) continue;
-                            res.Add(new ReflWall { No = w.No, Up = w.Up, Poly = w.Poly, SlopeW = w.SlopeW, FaceRun = w.FaceRun, H = w.H, IsWall = w.IsWall, T = w.T, HeadZ = w.HeadZ });
+                            res.Add(new ReflWall { No = w.No, Up = w.Up, Poly = w.Poly, SlopeW = w.SlopeW, FaceRun = w.FaceRun, H = w.H, IsWall = w.IsWall, T = w.T, HeadZ = w.HeadZ, Kind = w.Kind, LineLen = LenOf(w.Line) * w.Tiers });
                         }
                 }
             }
@@ -416,7 +428,7 @@ internal static class PureWithWallsBuilder
             if (listOk)
             {
                 foreach (var f in head.Frozen.Where(f => f.Reflected))
-                    R.Walls.Add(new ReflWall { No = f.No, Up = f.Up, Frozen = true, Poly = f.Poly, SlopeW = f.SlopeW, FaceRun = f.FaceRun, H = f.H, IsWall = f.IsWall, T = f.T, HeadZ = f.HeadZ });
+                    R.Walls.Add(new ReflWall { No = f.No, Up = f.Up, Frozen = true, Poly = f.Poly, SlopeW = f.SlopeW, FaceRun = f.FaceRun, H = f.H, IsWall = f.IsWall, T = f.T, HeadZ = f.HeadZ, Kind = f.Kind, LineLen = LenOf(f.Line) * f.Tiers });
                 // ★[계획 2-7] 앞 구역 옹벽 가운데 종단 · 횡단에 없는 것 — «반영 없이 이어서»로 굳은 칸 · 목록에도 굳은 칸에도 없는 옹벽 면(옛 판에서 «이어서»로 굳은 것 등)
                 var lost = head.Frozen.Where(f => !f.Reflected).Select(f => f.No).OrderBy(n => n).ToList();
                 var known = new System.Collections.Generic.HashSet<int>(walls.Select(w => w.No).Concat(head.Frozen.Select(f => f.No)));
@@ -466,7 +478,7 @@ internal static class PureWithWallsBuilder
                 if (string.IsNullOrEmpty(nonce) || w.CompNonce != nonce || w.Cap == null) { old.Add(no); continue; }
                 caps.Add((no, w.Cap));
                 polys[no] = w.Poly;
-                R.Walls.Add(new ReflWall { No = w.No, Up = w.Up, Poly = w.Poly, SlopeW = w.SlopeW, FaceRun = w.FaceRun, H = w.H, IsWall = w.IsWall, T = w.T, HeadZ = w.HeadZ });
+                R.Walls.Add(new ReflWall { No = w.No, Up = w.Up, Poly = w.Poly, SlopeW = w.SlopeW, FaceRun = w.FaceRun, H = w.H, IsWall = w.IsWall, T = w.T, HeadZ = w.HeadZ, Kind = w.Kind, LineLen = LenOf(w.Line) * w.Tiers });
             }
             if (old.Count + gone.Count > 0)
             {

@@ -107,6 +107,11 @@ internal sealed class GradingPanel : UserControl
     /// <c>_valOk</c>=칸의 숫자가 쓸 수 있는 값인가.</para></summary>
     private bool _picksOk, _fixOk, _valOk = true;
 
+    // ★[v113.0 · JACK 1104 «정지 조건 바뀌면 생성하기 깜박»] [계획부지생성하기] 아래 «재생성 필요» 한 줄 + 단추 깜박(진입도로 [업데이트]와 같은 <see cref="RoadPanel.Blink"/>).
+    //   _gen = 이 도면 번들(정본)의 마지막 구역 제원 — 도면 전환 · 명령 끝 · 생성 끝에 다시 읽는다(<see cref="ReloadGenerated"/>). 없으면(만든 적 없음) 안 알린다.
+    private readonly TextBlock _staleLine;
+    private DH.Grading.Core.GradingParams? _gen;
+
     /// <summary>절토 쪽 값 세 칸 줄 — <b>이 줄이 한 줄에 들어가는가</b>가 창 폭을 정한 근거라
     /// 열릴 때 실제로 재어 로그에 적는다(<see cref="LogWidthOnce"/>).</summary>
     private readonly WrapPanel _trioCut;
@@ -398,6 +403,15 @@ internal sealed class GradingPanel : UserControl
         try { if (DhBrand.Skin != null) _build.Style = (Style)DhBrand.Skin["DhPrimary"]; } catch { }
         _build.Click += (_, __) => { if (Apply()) PickSession.Send(Doc, PickCommands.CmdBuild); };
         secTarget.Children.Add(_build);   // ★[v103.3.1] 안쪽 칸을 접어도 단추는 큰 칸 끝에 남는다
+        // ★[v113.0 · JACK 1104] 사면 설정 · 기타 설정을 바꾸면 단추 아래에 한 줄(문구는 JACK 그대로) — 바탕 상태는 <see cref="EvalStale"/>
+        _staleLine = new TextBlock
+        {
+            Text = "아래 조건이 수정되어 재생성이 필요합니다.",
+            FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = DhBrand.Warn,
+            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 6),
+            Visibility = Visibility.Collapsed,
+        };
+        secTarget.Children.Add(_staleLine);
 
         // ── 5. 사면 수정 ──────────────────────────────────────────────────
         //   ★★★[계획 8단계 · JACK 지시 3 "도킹창안에 사면수정 기능을 넣어서 … UI에서 사면수정버튼은 없애고"]
@@ -591,6 +605,7 @@ internal sealed class GradingPanel : UserControl
         if (_exTimer.IsEnabled) { _exTimer.Stop(); try { SaveExcav(null); } catch { } }
 
         try { GradingSettings.SyncToDocument(doc); } catch { }
+        LoadGenerated(doc);   // ★[v113.0 · JACK 1104] 이 도면의 «만들 때 쓴 값» — 아래 PushValues가 EvalStale로 견준다
         _loading = true;
         try
         {
@@ -707,8 +722,82 @@ internal sealed class GradingPanel : UserControl
 
             _badgeVal = _valOk ? "" : " · ⚠값 확인"; SyncBadge();
             SyncEnabled();
+            EvalStale();   // ★[v113.0 · JACK 1104] 칸을 고칠 때마다 «만들 때 쓴 값»과 견준다
         }
         catch { }
+    }
+
+    /// <summary>★★[v113.0 · JACK 1104 «계획부지정지에서 계획부지 생성하기 하고나서 기타설정이나 사면설정칸을 변경하면 계획부지 생성하기 버튼이 깜박이면서 아래 조건이 수정되어 재생성이 필요합니다. 멘트 띄워»]
+    /// 이 도면 번들(정본 — <see cref="GradingBundleStore"/>)의 <b>마지막 구역 제원</b>을 읽어 둔다. 번들이 없거나 못 읽으면 null(= 안 알림).
+    /// <para>부르는 때 = 도면 전환 · 창 열기(<see cref="SyncTo"/>) + 명령 끝(<see cref="ReloadGenerated"/> ← RibbonApp 훅). 생성 끝은 <c>GradingPalette.Refresh</c> → SyncTo라 따로 안 건다.</para></summary>
+    private void LoadGenerated(AcDoc? doc)
+    {
+        _gen = null;
+        try
+        {
+            if (doc == null) return;
+            var db = doc.Database;
+            using var tr = db.TransactionManager.StartTransaction();
+            var regions = GradingBundleStore.TryLoadAll(db, tr, out _);
+            tr.Commit();
+            if (regions is { Count: > 0 }) _gen = regions[regions.Count - 1].Params;
+        }
+        catch (System.Exception ex)
+        {
+            try { DiagLog.Append("\n■ 정지창 «만들 때 쓴 값» 읽기 실패 — " + ex.Message + "\n"); } catch { }
+        }
+    }
+
+    /// <summary>★[v113.0 · JACK 1104] 명령이 끝났을 때(DH… · U · UNDO · REDO) 번들을 다시 읽고 견준다 — 칸 값은 안 건드린다(<see cref="SyncTo"/>와 달리).</summary>
+    internal void ReloadGenerated()
+    {
+        LoadGenerated(Doc);
+        EvalStale();
+    }
+
+    /// <summary>★[v113.0 · JACK 1104] 화면 값이 «만들 때 쓴 값»과 다르면 [계획부지생성하기]를 깜박이고 한 줄을 띄운다. 같아지면(되돌려도) 걷는다. 저절로 다시 만들지는 않는다.
+    /// <para><b>지표면을 바꾸는 값만</b> 견준다 — 절토 · 성토 단높이 · 소단폭 · 구배(여섯) · 사면형상(직각/라운드) · 산지 대소단 켬 · (켠 때만) 간격 · 폭.
+    /// 옹벽 묶음(형식 · 뒷채움 터파기 · 단면)은 종단 · 횡단 · 수량을 그릴 때 쓰고 정지면은 안 바꾸므로 안 센다. 구배 전이(계획부지 수정 칸)는 사면 구간을 고칠 때만 쓰므로 안 센다.
+    /// 틀린 숫자가 든 동안(<c>_valOk</c> 아님)은 견줄 수 없어 지금 상태를 그대로 둔다.</para></summary>
+    private void EvalStale()
+    {
+        if (_staleLine == null || _build == null) return;
+        try
+        {
+            if (_loading) return;
+            bool stale = false;
+            var g = _gen;
+            if (g != null && !_valOk) return;
+            if (g != null)
+            {
+                static bool Num(TextBox t, out double v) =>
+                    double.TryParse((t.Text ?? "").Trim().Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out v);
+                static bool Ne(double a, double b) => System.Math.Abs(a - b) > 1e-6;
+                double floor = GradingSettings.MinSlope;
+                double cs = 0, fs = 0;
+                bool ok = Num(_cutH, out double ch) & Num(_cutW, out double cw) & Num(_cutS, out cs)
+                        & Num(_fillH, out double fh) & Num(_fillW, out double fw) & Num(_fillS, out fs)
+                        & Num(_tInt, out double ti) & Num(_tW, out double tw);
+                if (ok)
+                {
+                    if (cs < floor) cs = floor;   // 구배 0 = 수직 → 하한(PushValues · Apply와 같은 규칙)
+                    if (fs < floor) fs = floor;
+                    bool terr = _terrace.IsChecked == true;
+                    stale = Ne(ch, g.CutBenchHeight) || Ne(cw, g.CutBenchWidth) || Ne(cs, g.CutSlope)
+                         || Ne(fh, g.FillBenchHeight) || Ne(fw, g.FillBenchWidth) || Ne(fs, g.FillSlope)
+                         || (_shapeMiter.IsChecked == true) != g.MiterConvex
+                         || terr != g.MountainTerrace
+                         || (terr && (Ne(ti, g.TerraceInterval) || Ne(tw, g.TerraceWidth)));
+                }
+                else return;
+            }
+            RoadPanel.SetState(_staleLine, stale ? "아래 조건이 수정되어 재생성이 필요합니다." : "");
+            RoadPanel.Blink(_build, stale);
+        }
+        catch (System.Exception ex)
+        {
+            try { DiagLog.Append("\n■ 정지창 «재생성 필요» 견주기 실패 — " + ex.Message + "\n"); } catch { }
+        }
     }
 
     /// <summary>칸 하나를 재고, 틀리면 <b>그 칸을 물들인다</b>.</summary>

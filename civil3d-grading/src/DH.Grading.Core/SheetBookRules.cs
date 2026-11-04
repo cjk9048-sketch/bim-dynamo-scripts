@@ -123,9 +123,12 @@ public static class SheetBookRules
         return $"1:{N(scale)}";
     }
 
-    /// <summary>날짜 칸 — 비면 이번 달 «yyyy.MM».</summary>
-    public static string DateText(string? input, DateTime now, string fmt = "yyyy.MM")
-        => string.IsNullOrWhiteSpace(input) ? now.ToString(string.IsNullOrWhiteSpace(fmt) ? "yyyy.MM" : fmt, CultureInfo.InvariantCulture) : input.Trim();
+    /// <summary>★[v112.2 · JACK 1104 «날짜는 기본 현재 날짜 · 사용자가 바꿀 수 있게»] 날짜 기본 꼴 — 오늘(yyyy.MM.dd).</summary>
+    public const string DateFmt = "yyyy.MM.dd";
+
+    /// <summary>날짜 칸 — 비면 오늘(<see cref="DateFmt"/> · 도곽 칸 꼴이 있으면 그 꼴).</summary>
+    public static string DateText(string? input, DateTime now, string fmt = DateFmt)
+        => string.IsNullOrWhiteSpace(input) ? now.ToString(string.IsNullOrWhiteSpace(fmt) ? DateFmt : fmt, CultureInfo.InvariantCulture) : input.Trim();
 
     /// <summary>페이지 설정 이름 — «DH {약칭} {i}-{n} {종이}» · 장이 하나면 «DH {약칭} {종이}»(«/» 안 씀).</summary>
     public static string PageSetupName(Kind k, int i, int n, string paper)
@@ -152,6 +155,13 @@ public static class SheetBookRules
         if (pinned > 0) return (pinned, Fit(pinned));
         foreach (double s in PlanLadder) if (Fit(s)) return (s, true);
         return (PlanLadder[^1], false);
+    }
+
+    /// <summary>★[v112.5 · JACK 1104 «도면 기울기»] 폭 × 높이 상자를 <paramref name="rad"/>만큼 돌렸을 때 감싸는 상자 크기.</summary>
+    public static (double W, double H) RotatedBox(double w, double h, double rad)
+    {
+        double c = Math.Abs(Math.Cos(rad)), s = Math.Abs(Math.Sin(rad));
+        return (w * c + h * s, w * s + h * c);
     }
 
     /// <summary>평면도 자리(종이 mm · 그림 자리 기준) — 위 40 제목 · 오른쪽 140 띠 · 나머지 뷰포트(K-water 그림 자리면 25–681 × 50–534 = 656 × 484).
@@ -265,7 +275,7 @@ public static class SheetBookRules
             ["도면명"] = new() { Rect = new[] { 420, 38.02, 535, 50 }, H = 4.0 },
             ["도면번호"] = new() { Rect = new[] { 490, 32.02, 535, 38.02 }, H = 3.0 },
             ["축척"] = new() { Rect = new[] { 420, 26.02, 465, 32.02 }, H = 3.0 },
-            ["날짜"] = new() { Rect = new[] { 560, 26.02, 585, 32.02 }, H = 3.0, Fmt = "yyyy.MM" },
+            ["날짜"] = new() { Rect = new[] { 560, 26.02, 585, 32.02 }, H = 3.0, Fmt = DateFmt },
             ["공사명"] = new() { Rect = new[] { 50.0, 20, 185, 30 }, H = 2.5 },
         },
         Found = new() { "도면명", "도면번호", "축척", "날짜", "공사명" },
@@ -423,7 +433,7 @@ public static class SheetBookRules
                 var best = g.OrderByDescending(x => x.Score).ThenBy(x => x.Order).First();
                 var val = best.Val;
                 double hgt = Math.Max(1.8, Math.Min(4.0, (val[3] - val[1]) * 0.5));
-                def.Cells[g.Key] = new Cell { Rect = val.Select(v => Math.Round(v, 3)).ToArray(), H = Math.Round(hgt, 2), Clear = "ifValue", Fmt = g.Key == "날짜" ? "yyyy.MM" : null };
+                def.Cells[g.Key] = new Cell { Rect = val.Select(v => Math.Round(v, 3)).ToArray(), H = Math.Round(hgt, 2), Clear = "ifValue", Fmt = g.Key == "날짜" ? DateFmt : null };
                 if (!def.Found.Contains(g.Key)) def.Found.Add(g.Key);
             }
         }

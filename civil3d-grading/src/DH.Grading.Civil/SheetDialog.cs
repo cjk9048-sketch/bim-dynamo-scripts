@@ -36,6 +36,8 @@ public sealed class SheetDialog : Window
     private readonly ComboBox _xsecLayout;
     private readonly ComboBox _roadProfileScale;
     private readonly ComboBox _roadXsecScale;
+    /// <summary>★★[v113.1 · 계획_종단방향_축척.md 2.2 · JACK 1104 «종단 축척 H · V 따로»] 부지 종단 V · 진입도로 종단 H · V.</summary>
+    private readonly ComboBox _profileScaleV, _roadProfileV;
     private readonly TextBox _contourMinor;
     private readonly TextBox _contourMajor;
     private readonly TextBlock _contourMsg;
@@ -46,14 +48,19 @@ public sealed class SheetDialog : Window
     /// <summary>★[v111.4] 진입도로 칸 둘(도면에 저장 — 부르는 쪽이 <see cref="RoadDrawingSettings.Write"/>) · 열 때 값 = 그 도면 값.</summary>
     internal double RoadProfileScale { get; private set; }
     internal double RoadXsecScale { get; private set; }
+    /// <summary>★[v113.1] 진입도로 종단 H(0 = 자동) · V(−1 = H와 같게 · 0 = 자동) — 부르는 쪽이 <see cref="RoadDrawingSettings.WriteVH"/>.</summary>
+    internal double RoadH { get; private set; }
+    internal double RoadV { get; private set; }
     /// <summary>★[v111.11 · JACK 1103] 등고선(주곡선) · 계곡선 간격(도면에 저장 — 부르는 쪽이 <see cref="ContourInterval.Write"/> · <see cref="ContourInterval.Apply"/>) · 열 때 값 = 그 도면 값.</summary>
     internal double ContourMinor { get; private set; }
     internal double ContourMajor { get; private set; }
 
     public SheetDialog(string okText = "저장", double roadProfileScale = 0, double roadXsecScale = 0,
-                       double contourMinor = ContourInterval.DefaultMinor, double contourMajor = ContourInterval.DefaultMajor)
+                       double contourMinor = ContourInterval.DefaultMinor, double contourMajor = ContourInterval.DefaultMajor,
+                       double roadH = 0, double roadV = 0)
     {
         RoadProfileScale = roadProfileScale; RoadXsecScale = roadXsecScale;
+        RoadH = roadH; RoadV = roadV;
         ContourMinor = contourMinor; ContourMajor = contourMajor;
         Title = "DH 도면 설정";
         Width = 560;   // ★머리띠(로고+제목)가 들어갈 만큼 넓혔다
@@ -74,8 +81,8 @@ public sealed class SheetDialog : Window
         GradingDialog.AddSection(root, "1. 계획지표면",
             "계획지표면 [종단도] · [횡단도]가 쓰는 값. 단면검토선(평면도에 놓이는 절단선)도 여기서 정합니다.",
             first: true);
-        _profileScale = AddCombo(root, "종단뷰 축척", GradingSettings.ProfileScaleLabels,
-                                 GradingSettings.ProfileScaleIndex(), "");
+        // ★★[v113.1 · JACK 1104 «종단 축척 H · V 따로 · [자동]»] 한 줄에 H · V
+        (_profileScale, _profileScaleV) = AddComboHV(root, "종단도 축척", GradingSettings.ProfileScaleIndex(), GradingSettings.ProfileScaleVIndex(GradingSettings.ProfileScaleV));
         _sectionScale = AddCombo(root, "단면검토선 축척", GradingSettings.ProfileScaleLabels,
                                  GradingSettings.SectionLineScaleIndex(), "");
 
@@ -114,10 +121,8 @@ public sealed class SheetDialog : Window
             "평면도의 단면검토선에 붙는 측점 글씨 크기를 정합니다(종이 2.5mm — 종단 밴드와 같은 크기)."
             + " 자동이면 도면에 걸린 축척을 따릅니다."
             + " 검토선은 평면도에 놓이므로 종단도 축척과 별개입니다 — [저장]을 누르면 그 축척으로 다시 그립니다.";
-        _profileScale.ToolTip =
-            "자동 — 종단도가 도곽 안에 가장 크게 들어가는 표준 축척을 고릅니다(도면마다 달라질 수 있습니다).\n" +
-            "직접 고르면 그 축척으로 고정됩니다.\n\n" +
-            "※ 고른 축척이 자동보다 크게 그리는 값이면 종단도가 도곽을 넘칠 수 있습니다 — 그때는 로그에 ⚠로 알립니다.";
+        _profileScale.ToolTip = HTip;
+        _profileScaleV.ToolTip = VTip;
 
         // ── (1. 계획지표면 안) 횡단 ──
         // ★★[JACK 0826] 횡단도도 <b>종단과 같은 규약</b> — 자동(칸에 맞춤) 또는 고정.
@@ -133,13 +138,13 @@ public sealed class SheetDialog : Window
         // ══ 2. 진입도로 ════════════════════════════════════════════════
         //   ★★[v111.4 · JACK 1030 «계획지표면의 종횡단과 진입도로의 종횡단의 축척은 도면설정에 별도로» · 인터뷰: 횡단만 따로 · 종단은 부지 따름]
         //   도면에 저장(RoadDrawingSettings) — 위 부지 칸과 따로 · ★[v111.6] 3 → 2
+        // ★★[v113.1 · JACK 1104 «부지 · 진입도로 종단 H · V 따로»] 진입도로 종단도는 부지와 따로(옛 «부지 따름» 칸은 기록만 이어 감 — 옛 애드인이 읽음)
         GradingDialog.AddSection(root, "2. 진입도로",
-            "진입도로 [종단도] · [횡단도]가 쓰는 축척. 한 도면에 주석 축척은 하나라, 계획지표면 종단도가 있으면 진입도로 종단도는 그 축척을 따릅니다.");
+            "진입도로 [종단도] · [횡단도]가 쓰는 축척 — 계획지표면과 따로 정합니다.");
         int Idx(double v) { var a = GradingSettings.ProfileScaleValues; for (int i = 0; i < a.Length; i++) if (System.Math.Abs(a[i] - v) < 1e-9) return i; return 0; }
-        var roadProfLabels = (string[])GradingSettings.ProfileScaleLabels.Clone();
-        roadProfLabels[0] = "기본 1:500";
-        _roadProfileScale = AddCombo(root, "종단도 축척", roadProfLabels, Idx(roadProfileScale), "");
-        _roadProfileScale.ToolTip = "부지 종단도가 없을 때만 씁니다 — 부지 종단도가 있으면 그 축척을 따릅니다(한 도면 한 주석 축척).";
+        (_roadProfileScale, _roadProfileV) = AddComboHV(root, "종단도 축척", Idx(roadH), GradingSettings.ProfileScaleVIndex(roadV));
+        _roadProfileScale.ToolTip = HTip;
+        _roadProfileV.ToolTip = VTip;
         // 진입도로 횡단도 축척 칸은 진입도로 [횡단도 그리기]가 들어가는 판에서 보임(눌러도 아무 일 없는 칸을 두지 않음) — 그때까지 값은 그대로 지나감
         _roadXsecScale = new ComboBox { ItemsSource = GradingSettings.XsecScaleLabels, SelectedIndex = Idx(roadXsecScale) };
         if (RoadXsecUi)
@@ -225,6 +230,31 @@ public sealed class SheetDialog : Window
         reset.Click += (_, __) => { FrameLibrary.Reset(); Show(); };
         Show();
         parent.Children.Add(row);
+    }
+
+    const string HTip = "H(가로) — 자동: 도곽에 가장 크게 들어가는 표준 축척(1:1000보다 작게는 안 함 · 길면 여러 장)\n고르면 그 축척(길면 여러 장)";
+    const string VTip = "V(세로) — 자동: 그래프 자리를 가장 많이 채우는 표준 축척(가로의 1~10배 과장)\nH와 같게 = 수직과장 없음";
+
+    /// <summary>★[v113.1] 라벨 + «H [▼] V [▼]» 한 줄 — H = [자동, 사다리] · V = [자동, H와 같게, 사다리].</summary>
+    private static (ComboBox H, ComboBox V) AddComboHV(Panel parent, string label, int hIndex, int vIndex)
+    {
+        var row = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = false };
+        var lbl = new TextBlock { Text = label, Width = 110, VerticalAlignment = VerticalAlignment.Center };
+        DockPanel.SetDock(lbl, Dock.Left); row.Children.Add(lbl);
+        ComboBox One(string tag, string[] items, int idx)
+        {
+            var t = new TextBlock { Text = tag, Width = 16, VerticalAlignment = VerticalAlignment.Center, Foreground = GradingDialog.GreyBrush };
+            DockPanel.SetDock(t, Dock.Left); row.Children.Add(t);
+            var cb = new ComboBox { Width = 150, Height = 28, VerticalContentAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) };
+            foreach (string s in items) cb.Items.Add(s);
+            cb.SelectedIndex = System.Math.Clamp(idx, 0, items.Length - 1);
+            DockPanel.SetDock(cb, Dock.Left); row.Children.Add(cb);
+            return cb;
+        }
+        var h = One("H", GradingSettings.ProfileScaleLabels, hIndex);
+        var v = One("V", GradingSettings.ProfileScaleVLabels, vIndex);
+        parent.Children.Add(row);
+        return (h, v);
     }
 
     /// <summary>라벨 + 콤보 한 줄 — <see cref="GradingDialog.AddRow"/>와 같은 자리맞춤(라벨 110).</summary>
@@ -318,9 +348,15 @@ public sealed class SheetDialog : Window
         // 축척은 목록에 있는 값만 고른다(0 = 자동) — 슬라이더와 같은 규칙이라 이상한 값이 들어올 길이 없다.
         double[] psv = GradingSettings.ProfileScaleValues;
         GradingSettings.ProfileScale = psv[System.Math.Clamp(_profileScale.SelectedIndex, 0, psv.Length - 1)];
+        // ★[v113.1] V · 옛 규칙 끔([저장]한 도면 = 새 규칙 — 자동 H ≤ 1:1000 · 길면 여러 장)
+        double[] pvv = GradingSettings.ProfileScaleVValues;
+        GradingSettings.ProfileScaleV = pvv[System.Math.Clamp(_profileScaleV.SelectedIndex, 0, pvv.Length - 1)];
+        GradingSettings.ProfileLegacy = false;
         GradingSettings.SectionLineScale = psv[System.Math.Clamp(_sectionScale.SelectedIndex, 0, psv.Length - 1)];
         GradingSettings.XsecScale = psv[System.Math.Clamp(_xsecScale.SelectedIndex, 0, psv.Length - 1)];
-        RoadProfileScale = psv[System.Math.Clamp(_roadProfileScale.SelectedIndex, 0, psv.Length - 1)];
+        // 옛 «진입도로 종단도 축척» 칸(RoadProfileScale)은 받은 값 그대로 — 판 2 H · V가 대신함(옛 애드인이 읽는 칸)
+        RoadH = psv[System.Math.Clamp(_roadProfileScale.SelectedIndex, 0, psv.Length - 1)];
+        RoadV = pvv[System.Math.Clamp(_roadProfileV.SelectedIndex, 0, pvv.Length - 1)];
         RoadXsecScale = psv[System.Math.Clamp(_roadXsecScale.SelectedIndex, 0, psv.Length - 1)];
 
         GradingSettings.BasemapRes = GradingSettings.BasemapResValues[

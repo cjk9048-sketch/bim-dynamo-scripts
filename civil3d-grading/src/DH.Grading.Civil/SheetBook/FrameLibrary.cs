@@ -74,6 +74,7 @@ internal static class FrameLibrary
     {
         string warn = "";
         var cur = ReadCurrent();
+        if (cur != null && cur.id == SimpleId) return new Choice();   // ★[v112.2] 도면화 창에서 «단순 도곽»을 고름
         if (cur != null && cur.file.Length > 0)
         {
             string dwg = Path.Combine(PcDir, cur.file);
@@ -134,6 +135,64 @@ internal static class FrameLibrary
                 new UTF8Encoding(false));
             try { DiagLog.Append($"\n■ 도곽 고름 — {path} · {Short(h)} · 칸 {string.Join(" · ", def.Found)}" + (def.Notes.Count > 0 ? " · ⚠" + string.Join(" · ", def.Notes) : "") + $"\n  {def.ToJson().Replace("\n", "\n  ")}\n"); } catch { }
             return (true, def.Notes.Count > 0 ? string.Join(" · ", def.Notes) : "");
+        }
+        catch (System.Exception ex) { return (false, ex.Message); }
+    }
+
+    /// <summary>★[v112.2 · JACK 1104 «도곽을 선택하는 기능 · 기본은 수공 것»] 고를 수 있는 도곽 — K-water(기본 · 파일이 맞을 때) · 이 PC에 저장한 도곽(전에 고른 DWG — 파일 · 정의가 있는 것) · 단순 도곽.</summary>
+    internal static List<(string Id, string Label)> Items()
+    {
+        var l = new List<(string, string)>();
+        if (Bundled(out _) != null) l.Add((BundledId, "K-water(기본)"));
+        try
+        {
+            if (Directory.Exists(PcDir))
+                foreach (var js in Directory.GetFiles(PcDir, "*.frame.json").OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+                {
+                    string dwg = js.Substring(0, js.Length - ".frame.json".Length) + ".dwg";
+                    if (!File.Exists(dwg)) continue;
+                    var def = FrameDef.FromJson(File.ReadAllText(js, Encoding.UTF8));
+                    string file = Path.GetFileName(dwg);
+                    l.Add(("F:" + file, def?.Name is { Length: > 0 } n ? n : Path.GetFileNameWithoutExtension(file)));
+                }
+        }
+        catch { }
+        l.Add((SimpleId, "단순 도곽"));
+        return l;
+    }
+
+    /// <summary>지금 쓸 도곽의 <see cref="Items"/> 열쇠.</summary>
+    internal static string CurrentItemId()
+    {
+        var c = Resolve();
+        return c.User && c.Dwg != null ? "F:" + Path.GetFileName(c.Dwg) : c.Id == BundledId ? BundledId : SimpleId;
+    }
+
+    /// <summary>★[v112.2] 목록에서 고름 — K-water = 기본(current.json 지움) · 단순 = current.json «SIMPLE» · 저장한 도곽 = 그 파일(해시 다시 잼). 돌려줌 = (됨, 까닭).</summary>
+    internal static (bool Ok, string Msg) Select(string itemId)
+    {
+        try
+        {
+            if (itemId == BundledId) { Reset(); return (true, ""); }
+            Directory.CreateDirectory(PcDir);
+            var opt = new System.Text.Json.JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+            Current cur;
+            if (itemId == SimpleId) cur = new Current { id = SimpleId, name = "단순 도곽", saved = DateTime.Now.ToString("yyyy-MM-dd HH:mm") };
+            else if (itemId.StartsWith("F:", StringComparison.Ordinal))
+            {
+                string file = itemId.Substring(2);
+                if (Path.GetFileName(file) != file) return (false, "파일 이름이 이상합니다");
+                string dwg = Path.Combine(PcDir, file), js = Path.ChangeExtension(dwg, ".frame.json");
+                if (!File.Exists(dwg) || !File.Exists(js)) return (false, "저장한 도곽 파일이 없습니다");
+                var def = FrameDef.FromJson(File.ReadAllText(js, Encoding.UTF8));
+                if (def == null) return (false, "도곽 정의를 못 읽었습니다");
+                string h = Sha(dwg);
+                cur = new Current { id = "U" + Short(h), name = def.Name is { Length: > 0 } n ? n : Path.GetFileNameWithoutExtension(file), file = file, sha256 = h, saved = DateTime.Now.ToString("yyyy-MM-dd HH:mm") };
+            }
+            else return (false, "모르는 도곽");
+            File.WriteAllText(Path.Combine(PcDir, "current.json"), System.Text.Json.JsonSerializer.Serialize(cur, opt), new UTF8Encoding(false));
+            try { DiagLog.Append($"\n■ 도곽 고름(도면화 창) — {cur.name} · {itemId}"); } catch { }
+            return (true, "");
         }
         catch (System.Exception ex) { return (false, ex.Message); }
     }

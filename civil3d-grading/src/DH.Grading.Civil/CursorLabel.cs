@@ -10,7 +10,7 @@ namespace DH.Grading.Civil;
 /// <summary>★★[v111.7.2 · JACK 1102 «마우스에 메모로 못 붙여?»] <b>자리 찍기 + 커서를 따라다니는 이름표(우리가 그린다)</b>.
 /// <para>v111.7.1은 AutoCAD 풍선 글(<c>PointMonitor</c> · <c>AppendToolTipText</c>)을 썼는데 JACK 화면에 안 떴다 — 그 풍선은 AutoCAD 설정(롤오버 · 커서가 객체 위에 머묾)에 달렸다.
 /// 이제 점 찍기를 <c>DrawJig</c>로 받아 커서 오른쪽 아래(화면 18 px · 18 px)에 이름표를 직접 그린다(화면 px 크기 — 확대 · 축소해도 같은 크기).</para>
-/// <para>★★[JACK 1103 «너무 허접»] 꼴 = <b>둥근 모서리 짙은 회색 카드 + 왼쪽 주황 세로 띠</b> · 흰 글 한 줄(이름) · 그 아래 작고 흐린 글 한 줄(<c>hint</c> — 그 질문에서 정말 듣는 키만 · 없으면 안 그림).
+/// <para>★★[JACK 1104] 꼴 = <b>흰 카드 + 검은 테 + 검은 글 한 줄</b>(옛 1103 짙은 회색 카드 · 주황 띠 · 둘째 줄 키 안내는 없앰 — <c>hint</c>는 받기만 하고 안 그림).
 /// 모양은 모두 지그 그림(일시 그래픽)이라 도면에 아무것도 안 남는다(DBMOD 그대로) — 질문이 끝나면(점 · Enter · Esc · 오류) 지그와 함께 사라진다.
 /// 크기는 Windows 배율(DPI)을 곱한다 — 150 %면 1.5배(화면 px이 실제 화소라 그대로 두면 작아 보임).</para>
 /// 명령창 글 · Esc · Enter · 키워드 뜻은 <see cref="Editor.GetPoint(PromptPointOptions)"/>와 같고, 돌려주는 점도 GetPoint처럼 <b>UCS</b>다(부르는 쪽 UCS → WCS 변환 그대로).
@@ -22,11 +22,12 @@ internal static class CursorLabel
 
     /// <param name="label">카드 첫 줄(흰 글) — 예: «종단도 작성 위치 클릭».</param>
     /// <param name="hint">둘째 줄(작고 흐린 글) — 그 질문에서 듣는 키만(예: «Enter 지난 자리 · Esc 그만») · 빈 글이면 한 줄 카드.</param>
-    internal static Result GetPoint(Editor ed, PromptPointOptions ppo, string label, string hint = "")
+    /// <param name="extra">★[v112.4 · JACK 1104 «경로 찍다가 휠로 줌하면 전에 찍은 게 없어져»] 이름표 밑에 함께 그릴 것(WCS 커서 자리 · 커서를 받았나) — 지그가 화면마다 다시 그려 줌 · 확대 · 축소에도 안 사라짐(DrawVector는 Regen에서 사라짐).</param>
+    internal static Result GetPoint(Editor ed, PromptPointOptions ppo, string label, string hint = "", System.Action<WorldDraw, Point3d, bool>? extra = null)
     {
         if (SelfCheckLog.Headless || ppo.UseBasePoint || string.IsNullOrWhiteSpace(label)) return Plain(ed, ppo);
         LabelJig jig;
-        try { jig = new LabelJig(ed, ppo, label, hint ?? ""); }
+        try { jig = new LabelJig(ed, ppo, label, hint ?? "") { Extra = extra }; }
         catch (System.Exception ex) { try { DiagLog.Append("\n[커서 이름표] 못 만듦 — 그냥 찍기: " + ex.Message); } catch { } return Plain(ed, ppo); }
         using (jig)
         {
@@ -68,9 +69,40 @@ internal static class CursorLabel
     }
 
     // ── 카드 꼴(화면 px · 배율 1 기준 — 미리보기 그림과 같은 수) ──
-    internal const double OffPx = 18, MainPx = 14, HintPx = 11, PadLPx = 10, PadRPx = 12, PadTPx = 7, PadBPx = 7, GapPx = 5, BarPx = 5, RadPx = 6;
-    internal static readonly (byte R, byte G, byte B) CardRgb = (0x2A, 0x2E, 0x33), EdgeRgb = (0x4A, 0x50, 0x56),
-        AccentRgb = (0xE8, 0x59, 0x0C), MainRgb = (0xFF, 0xFF, 0xFF), HintRgb = (0xAE, 0xB4, 0xBA);
+    // ★[v112.3 · JACK 1104 «아래 Esc 취소 그런 건 다 없애»] 글 한 줄(둘째 줄 없음)
+    // ★★[v112.4 · JACK 1104 스샷 «희미하고 멍텅구리 · 도화 느낌 나게(이름 · 로고는 넣지 말고)»] 원인 = 지그의 면 채우기를 AutoCAD가 반투명(50 %)으로 그림
+    //   (스샷 화소: 흰 바탕 = 정확히 128 회색 · 글 · 선은 그대로) → 바탕을 면 채우기가 아니라 화면 1 화소 간격 가로선으로 깔아 불투명하게 ·
+    //   색 = 도화 청록(DhBrand.BrandHi #0A6269) 바탕 + 흰 굵은 글 + 밝은 청록 테(검은 화면에서도 테가 보이게) + 왼쪽 옅은 청록 띠
+    internal const double OffPx = 18, MainPx = 15, HintPx = 11, PadLPx = 11, PadRPx = 12, PadTPx = 7, PadBPx = 7, GapPx = 5, BarPx = 4, RadPx = 4;
+    internal static readonly (byte R, byte G, byte B) CardRgb = (0x0A, 0x62, 0x69), EdgeRgb = (0x5F, 0xB3, 0xB8),
+        AccentRgb = (0xA8, 0xE0, 0xE3), MainRgb = (0xFF, 0xFF, 0xFF), HintRgb = (0xD6, 0xEE, 0xEF);
+
+    /// <summary>볼록 다각형을 가로선 y로 자른 구간(없으면 null).</summary>
+    internal static (double A, double B)? SpanAt(List<(double X, double Y)> poly, double y)
+    {
+        double a = double.MaxValue, b = double.MinValue;
+        for (int i = 0; i < poly.Count; i++)
+        {
+            var p = poly[i]; var q = poly[(i + 1) % poly.Count];
+            if ((p.Y - y) * (q.Y - y) > 0 || System.Math.Abs(q.Y - p.Y) < 1e-15) continue;
+            double x = p.X + (q.X - p.X) * (y - p.Y) / (q.Y - p.Y);
+            a = System.Math.Min(a, x); b = System.Math.Max(b, x);
+        }
+        return b > a ? (a, b) : null;
+    }
+    /// <summary>둘째 줄(키 안내)을 그리나 — JACK 1104 «다 없애».</summary>
+    internal const bool ShowHint = false;
+
+    // ★[v112.3 · 1104 튕김(힙 손상 0xc0000374 · 덤프 없음)] 글꼴(TextStyle)은 한 번 만들어 계속 씀 — 지그마다 만들고 Drag 뒤 바로 지우던 것을 없앰
+    //   (그린 뒤 AutoCAD 그래픽이 그 글꼴을 다시 볼 때 이미 지운 것이면 메모리가 깨질 수 있다 — 이번 튕김의 원인으로 확인된 것은 아님 · 지울 까닭이 없는 객체라 남겨 둠)
+    static TextStyle? _sts;
+    static TextStyle SharedStyle()
+    {
+        if (_sts != null) return _sts;
+        var ts = new TextStyle();
+        ts.Font = new FontDescriptor("Malgun Gothic", true, false, 129, 34);   // 129 = 한글 charset(ImportGisCommand와 같은 글꼴) · 굵게
+        return _sts = ts;
+    }
 
     /// <summary>둥근 사각형 둘레(왼쪽 위에서 시계 방향 · 모서리마다 짧은 호) — x0 &lt; x1 · yB &lt; yT.</summary>
     internal static List<(double X, double Y)> RoundRect(double x0, double yT, double x1, double yB, double r, int seg = 6)
@@ -112,8 +144,9 @@ internal static class CursorLabel
     {
         readonly JigPromptPointOptions _opt;
         readonly string _label, _hint;
+        internal System.Action<WorldDraw, Point3d, bool>? Extra;
         readonly Vector3d _right = Vector3d.XAxis, _up = Vector3d.YAxis, _normal = Vector3d.ZAxis;
-        readonly TextStyle _ts = new(), _tsH = new();
+        readonly TextStyle _ts = SharedStyle();
         readonly double _dpi = DpiScale();
         double _px;               // 화면 1 px = 도면 몇 단위(VIEWSIZE / SCREENSIZE.Y) × 배율
         Extents2d _ext, _extH;    // 글 범위(글 자리 기준 · 도면 단위)
@@ -125,15 +158,13 @@ internal static class CursorLabel
 
         internal LabelJig(Editor ed, PromptPointOptions ppo, string label, string hint)
         {
-            _label = label; _hint = hint.Trim();
+            _label = label; _hint = ShowHint ? hint.Trim() : "";
             _opt = new JigPromptPointOptions(ppo.Message)
             {
                 UserInputControls = UserInputControls.Accept3dCoordinates | UserInputControls.NullResponseAccepted,
                 AppendKeywordsToMessage = ppo.AppendKeywordsToMessage,
             };
             foreach (Keyword k in ppo.Keywords) _opt.Keywords.Add(k.GlobalName, k.LocalName, k.DisplayName, k.Visible, k.Enabled);
-            _ts.Font = new FontDescriptor("Malgun Gothic", true, false, 129, 34);    // 129 = 한글 charset(ImportGisCommand와 같은 글꼴) · 이름은 굵게
-            _tsH.Font = new FontDescriptor("Malgun Gothic", false, false, 129, 34);
             // 화면 오른쪽 · 위 방향(평면이면 WCS X · Y) — 뷰 방향 · 비틀기에서
             try
             {
@@ -171,9 +202,8 @@ internal static class CursorLabel
         {
             _px = px;
             _ts.TextSize = MainPx * px;
-            _tsH.TextSize = HintPx * px;
             _ext = Measure(_ts, _label);
-            _extH = _hint.Length > 0 ? Measure(_tsH, _hint) : new Extents2d(0, 0, 0, 0);
+            _extH = new Extents2d(0, 0, 0, 0);
         }
 
         protected override SamplerStatus Sampler(JigPrompts prompts)
@@ -192,6 +222,7 @@ internal static class CursorLabel
 
         protected override bool WorldDraw(WorldDraw draw)
         {
+            if (Extra != null) try { Extra(draw, Point, _has); } catch { }
             if (!_has) return true;
             try
             {
@@ -207,32 +238,36 @@ internal static class CursorLabel
                 double x1 = xT + System.Math.Max(wM, wH) + PadRPx * u;
                 double yB = yT - (PadTPx * u + hM + (two ? GapPx * u + hH : 0) + PadBPx * u);
                 var card = RoundRect(x0, yT, x1, yB, RadPx * u);
-                double xBar = x0 + BarPx * u;
                 var tr = draw.SubEntityTraits;
-                tr.FillType = FillType.FillAlways;
-                tr.TrueColor = new EntityColor(AccentRgb.R, AccentRgb.G, AccentRgb.B);   // 왼쪽 주황 띠(둥근 왼쪽 모서리 그대로)
-                draw.Geometry.Polygon(Pc(ClipX(card, xBar, left: true)));
-                tr.TrueColor = new EntityColor(CardRgb.R, CardRgb.G, CardRgb.B);         // 몸통(띠와 안 겹침)
-                draw.Geometry.Polygon(Pc(ClipX(card, xBar, left: false)));
+                try { tr.Transparency = new Autodesk.AutoCAD.Colors.Transparency(255); } catch { }   // 불투명(되는 판이면)
                 tr.FillType = FillType.FillNever;
-                tr.TrueColor = new EntityColor(EdgeRgb.R, EdgeRgb.G, EdgeRgb.B);         // 가는 테두리 — 검은 바탕에서도 카드 끝이 보이게
+                // ★★[v112.4] 바탕 = 화면 1 화소마다 가로선(면 채우기는 지그에서 반투명으로 나옴) · 왼쪽 띠는 다른 색
+                double step = System.Math.Max(u / System.Math.Max(_dpi, 1.0), 1e-9) * 0.9, xBar = x0 + BarPx * u;
+                var bodyC = new EntityColor(CardRgb.R, CardRgb.G, CardRgb.B); var barC = new EntityColor(AccentRgb.R, AccentRgb.G, AccentRgb.B);
+                for (double y = yB; y <= yT + 1e-12; y += step)
+                {
+                    if (SpanAt(card, y) is not (double a, double b)) continue;
+                    if (BarPx > 0 && a < xBar)
+                    {
+                        tr.TrueColor = barC; draw.Geometry.WorldLine(P(a, y), P(System.Math.Min(xBar, b), y));
+                        if (b <= xBar) continue;
+                        a = xBar;
+                    }
+                    tr.TrueColor = bodyC; draw.Geometry.WorldLine(P(a, y), P(b, y));
+                }
+                tr.TrueColor = new EntityColor(EdgeRgb.R, EdgeRgb.G, EdgeRgb.B);         // 밝은 청록 테
                 var edge = Pc(card); edge.Add(edge[0]);
                 draw.Geometry.Polyline(edge, _normal, System.IntPtr.Zero);
                 // 글 — 줄 칸(높이 = 글자 크기) 가운데에 실제 글자 범위의 가운데를 맞춤(글 자리 = 바닥선 왼쪽)
                 tr.TrueColor = new EntityColor(MainRgb.R, MainRgb.G, MainRgb.B);
                 double yM = yT - PadTPx * u - hM;
                 draw.Geometry.Text(P(xT - _ext.MinPoint.X, yM + 0.5 * (hM - _ext.MaxPoint.Y - _ext.MinPoint.Y)), _normal, _right, _label, true, _ts);
-                if (two)
-                {
-                    tr.TrueColor = new EntityColor(HintRgb.R, HintRgb.G, HintRgb.B);
-                    double yH = yM - GapPx * u - hH;
-                    draw.Geometry.Text(P(xT - _extH.MinPoint.X, yH + 0.5 * (hH - _extH.MaxPoint.Y - _extH.MinPoint.Y)), _normal, _right, _hint, true, _tsH);
-                }
             }
             catch { }
             return true;
         }
 
-        public void Dispose() { try { _ts.Dispose(); } catch { } try { _tsH.Dispose(); } catch { } }
+        /// <summary>★[v112.3] 글꼴은 함께 쓰는 것이라 안 지움(<see cref="SharedStyle"/>).</summary>
+        public void Dispose() { }
     }
 }

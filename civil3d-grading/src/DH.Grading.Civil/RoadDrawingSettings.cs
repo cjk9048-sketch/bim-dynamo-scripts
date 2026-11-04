@@ -68,9 +68,35 @@ internal static class RoadDrawingSettings
 
     const string LayoutKey = "DH_SHEETLAYOUT";
 
-    /// <summary>명령 안(문서 잠김)에서 부른다.</summary>
-    internal static void Write(Database db, double profile, double xsec)
+    /// <summary>★★[v113.1 · 계획_종단방향_축척.md 3 · JACK 1104 «부지 · 진입도로 종단 H · V 따로»] 판 2 — 끝에 [2][H][V]
+    /// (H 0 = 자동 · V −1 = H와 같게 · 0 = 자동). 판 2가 없으면(옛 도면) = 옛 규칙(부지 따름 · 옛 칸 · 1:500) + V = H와 같게 — <c>V2 = false</c>.</summary>
+    internal static (bool V2, double H, double V) ReadVH(Database db)
     {
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
+            (bool, double, double) r = (false, 0, DH.Grading.Core.ProfileScaleFit.SameAsH);
+            if (nod.Contains(Key) && tr.GetObject(nod.GetAt(Key), OpenMode.ForRead) is Xrecord xr && xr.Data != null)
+            {
+                var v = xr.Data.AsArray();
+                if (v.Length >= 5 && v[2].Value is int ver && ver >= 2 && v[3].Value is double h && v[4].Value is double vv)
+                {
+                    double hc = DH.Grading.Core.ProfileScaleFit.CleanH(h, Commands.SheetCommand.Scales, 0);
+                    double vc = DH.Grading.Core.ProfileScaleFit.CleanV(vv, Commands.SheetCommand.Scales, 0);
+                    r = (true, hc, vc);
+                }
+            }
+            tr.Commit();
+            return r;
+        }
+        catch { return (false, 0, DH.Grading.Core.ProfileScaleFit.SameAsH); }
+    }
+
+    /// <summary>★[v113.1] 판 2로 쓰기 — 앞 두 칸(옛 종단 칸 · 횡단)은 그대로 이어 씀(옛 애드인도 읽음). 명령 안(문서 잠김)에서 부른다.</summary>
+    internal static void WriteVH(Database db, double h, double v)
+    {
+        var (p0, x0) = Read(db);
         using var tr = db.TransactionManager.StartTransaction();
         var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
         Xrecord xr;
@@ -82,7 +108,30 @@ internal static class RoadDrawingSettings
             nod.SetAt(Key, xr);
             tr.AddNewlyCreatedDBObject(xr, true);
         }
-        xr.Data = new ResultBuffer(new TypedValue((int)DxfCode.Real, profile), new TypedValue((int)DxfCode.Real, xsec));
+        xr.Data = new ResultBuffer(new TypedValue((int)DxfCode.Real, p0), new TypedValue((int)DxfCode.Real, x0),
+                                   new TypedValue((int)DxfCode.Int32, 2), new TypedValue((int)DxfCode.Real, h), new TypedValue((int)DxfCode.Real, v));
+        tr.Commit();
+    }
+
+    /// <summary>명령 안(문서 잠김)에서 부른다.</summary>
+    internal static void Write(Database db, double profile, double xsec)
+    {
+        var vh = ReadVH(db);   // ★[v113.1] 판 2 칸은 그대로 이어 씀
+        using var tr = db.TransactionManager.StartTransaction();
+        var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
+        Xrecord xr;
+        if (nod.Contains(Key)) xr = (Xrecord)tr.GetObject(nod.GetAt(Key), OpenMode.ForWrite);
+        else
+        {
+            nod.UpgradeOpen();
+            xr = new Xrecord();
+            nod.SetAt(Key, xr);
+            tr.AddNewlyCreatedDBObject(xr, true);
+        }
+        xr.Data = vh.V2
+            ? new ResultBuffer(new TypedValue((int)DxfCode.Real, profile), new TypedValue((int)DxfCode.Real, xsec),
+                               new TypedValue((int)DxfCode.Int32, 2), new TypedValue((int)DxfCode.Real, vh.H), new TypedValue((int)DxfCode.Real, vh.V))
+            : new ResultBuffer(new TypedValue((int)DxfCode.Real, profile), new TypedValue((int)DxfCode.Real, xsec));
         tr.Commit();
     }
 }

@@ -72,6 +72,38 @@ public static class TerrainMesh
                 }
             return false;
         }
+
+        /// <summary>★[v112.6 · JACK 1104] 세모(도면 좌표)가 바뀐 칸(표시된 칸 자체)과 겹치는가 — 세모 상자 안 칸마다 «세모 ∩ 칸» 분리축 검사(칸 수가 적은 세모는 바로 끝).</summary>
+        public bool TouchesChanged(double ax, double ay, double bx, double by, double cx, double cy)
+        {
+            if (GMark.Length == 0) return false;
+            int i0 = Math.Max(0, (int)Math.Floor((Math.Min(ax, Math.Min(bx, cx)) - GX0) / GCell)), i1 = Math.Min(GW - 1, (int)Math.Floor((Math.Max(ax, Math.Max(bx, cx)) - GX0) / GCell));
+            int j0 = Math.Max(0, (int)Math.Floor((Math.Min(ay, Math.Min(by, cy)) - GY0) / GCell)), j1 = Math.Min(GH - 1, (int)Math.Floor((Math.Max(ay, Math.Max(by, cy)) - GY0) / GCell));
+            for (int j = j0; j <= j1; j++)
+                for (int i = i0; i <= i1; i++)
+                {
+                    if (!GMark[j * GW + i]) continue;
+                    double x0 = GX0 + i * GCell, y0 = GY0 + j * GCell, x1 = x0 + GCell, y1 = y0 + GCell;
+                    if (TriBox(ax, ay, bx, by, cx, cy, x0, y0, x1, y1)) return true;
+                }
+            return false;
+        }
+
+        // 세모와 칸(축 평행 상자) 겹침 — 칸 상자는 이미 세모 상자와 겹치니 세모 세 변의 바깥쪽 판정만 남는다
+        static bool TriBox(double ax, double ay, double bx, double by, double cx, double cy, double x0, double y0, double x1, double y1)
+        {
+            double area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+            if (area == 0) return false;
+            if (area < 0) { (bx, cx) = (cx, bx); (by, cy) = (cy, by); }
+            return EdgeIn(ax, ay, bx, by, x0, y0, x1, y1) && EdgeIn(bx, by, cx, cy, x0, y0, x1, y1) && EdgeIn(cx, cy, ax, ay, x0, y0, x1, y1);
+        }
+
+        // 반시계 변(p→q) 왼쪽에 칸 꼭짓점이 하나라도 있는가(전부 오른쪽이면 분리됨)
+        static bool EdgeIn(double px, double py, double qx, double qy, double x0, double y0, double x1, double y1)
+        {
+            double dx = qx - px, dy = qy - py;
+            return dx * (y0 - py) - dy * (x0 - px) >= 0 || dx * (y0 - py) - dy * (x1 - px) >= 0 || dx * (y1 - py) - dy * (x0 - px) >= 0 || dx * (y1 - py) - dy * (x1 - px) >= 0;
+        }
     }
 
     /// <summary>★[v111.8.1 · JACK 1103 시공 순서 «진입도로부터»] 시공 재생 격자 마디 표시 — 마디 (x0 + i·cell, y0 + j·cell)가 <paramref name="area"/> 안(경계 포함)이면 1 · 차례 = j·(w+1) + i(zf · zg와 같음).</summary>
@@ -248,7 +280,8 @@ public static class TerrainMesh
         foreach (var (a, b, c) in tris)
         {
             double cx = (a.X + b.X + c.X) / 3, cy = (a.Y + b.Y + c.Y) / 3;
-            if (!(o.InChanged(cx, cy) || o.InChanged(a.X, a.Y) || o.InChanged(b.X, b.Y) || o.InChanged(c.X, c.Y))) continue;
+            // ★[v112.6 · JACK 1104 «원지반 + 지형 흰 깨짐»] 점(무게중심 · 꼭짓점)만 보면 큰 원지반 세모가 좁은 바뀐 띠(진입도로)를 가로질러도 빠져 구멍이 난다 → 세모가 바뀐 칸에 닿는지도 잰다
+            if (!(o.InChanged(cx, cy) || o.InChanged(a.X, a.Y) || o.InChanged(b.X, b.Y) || o.InChanged(c.X, c.Y) || o.TouchesChanged(a.X, a.Y, b.X, b.Y, c.X, c.Y))) continue;
             int ia = V(a), ib = V(b), ic = V(c);
             if (ia == ib || ib == ic || ic == ia) continue;
             double cz = (b.X - a.X) * (c.Y - a.Y) - (b.Y - a.Y) * (c.X - a.X);

@@ -206,7 +206,7 @@ public sealed class NgiiCommand
     /// <summary>좌표 범위가 이 원점에 <b>말이 되나</b>. 이상하면 한 줄로 알린다(막지는 않는다).
     /// <para>★DXF(R12)에는 좌표계가 안 담긴다. 틀린 원점을 쓰면 지형이 <b>수십 km 옆</b>에 놓이는데
     /// 숫자는 그럴듯해서 화면만 봐서는 모른다.</para></summary>
-    private static string BeltCheck(int epsg, double x0, double y0, double x1, double y1)
+    internal static string BeltCheck(int epsg, double x0, double y0, double x1, double y1)   // ★[v113.0] 등고선으로 작성도 씀
     {
         var belt = ShapefileWriter.Belt(epsg);
         if (belt == null) return $"EPSG:{epsg}는 아직 못 다루는 원점입니다 — [기타 설정]에서 다시 고르세요.";

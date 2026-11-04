@@ -37,6 +37,26 @@ internal sealed class RoadSession
     internal string EndsProposal = "", EndsStale = "";
     /// <summary>★[도로 마무리 ② · 계획 6.7] ■ 결과 측구 수량 한 줄(측구선 길이 · 콘크리트 — 도로 구간 안 몫).</summary>
     internal string DitchQty = "";
+    /// <summary>★[v113.0 · JACK 1104 «옹벽 폴리선» · 계획 5-4] 쉬는 폴리선 옹벽(도로가 바뀌어 폴리선이 안 맞음 · 새 판 칸) — 상태 줄 ⚠(기록은 안 지움).</summary>
+    internal string BoundNote = "";
+
+    /// <summary>폴리선 옹벽마다 — 어느 토막에서든 쓰였으면 됨 · 아니면 까닭(도로 끝 너머 탓 «좌표를 못 바꿈»은 다른 토막 것일 수 있어 뒤로).</summary>
+    internal static string BoundNoteOf(RoadDesign d, List<Piece> pcs)
+    {
+        d.CoreBoundWalls(out var tooNew);
+        var bad = new List<string>();
+        foreach (int no in tooNew) bad.Add($"⚠폴리선 옹벽 {no} — 이 애드인보다 새 판 기록이라 안 그림");
+        if (d.BoundWalls == null || d.BoundWalls.Count == 0) return string.Join(" · ", bad);
+        foreach (var b in d.BoundWalls)
+        {
+            if (b == null || tooNew.Contains(b.No)) continue;
+            var sts = pcs.Where(p => p.R != null).SelectMany(p => p.R!.Bounds.Where(x => x.No == b.No)).ToList();
+            if (sts.Any(x => x.Ok)) continue;
+            var why = sts.FirstOrDefault(x => !x.Why.StartsWith("좌표를 못 바꿈", StringComparison.Ordinal))?.Why ?? sts.FirstOrDefault()?.Why ?? "계산에 안 들어감";
+            bad.Add($"⚠폴리선 옹벽 {b.No} — {why} · 다시 그리거나 지우세요(사면 변환 W)");
+        }
+        return string.Join(" · ", bad);
+    }
     List<RoadEnds.Floor>? _floors; string _floorNote = "";
     /// <summary>★★[도로 마무리 ① · 계획 5.5] 모든 도로 끝 판정(가지 사슬) · 가지 바탕(바탕면 + 본 도로 면 합침 — 열쇠가 같으면 다시 안 합침) · 그 알림.</summary>
     List<RoadEnds.Result>? _allEnds;
@@ -318,8 +338,8 @@ internal sealed class RoadSession
     internal string SheetOverlap(Point3d at)
     {
         var db = _doc.Database;
-        double scale = RoadSheets.ScaleFor(db).Scale;
-        return RoadSheets.Overlap(db, AlignId, at, scale, RoadSheets.SheetCount(db, AlignId, scale));
+        var (scale, ve) = RoadSheets.PlannedScale(db);   // ★[v113.1] 도면설정 H · V(자동 H = 1:1000으로 넓게 짐작 · 자동 V = 도곽 안)
+        return RoadSheets.Overlap(db, AlignId, at, scale, RoadSheets.SheetCount(db, AlignId, scale), ve);
     }
 
     /// <summary>★[v111.7.2 검토 낮음] 기록한 뷰(핸들) 중 하나라도 살아 있나 — [업데이트] «처음 놓기» · 상태 줄 «✓ 최신 — …»이 지운 뷰를 있다고 하지 않게.</summary>
@@ -446,9 +466,16 @@ internal sealed class RoadSession
                     if (Design.SheetViews.Count > 0)
                     {
                         // ★[v111.4] 축척 = 지금 규칙의 축척(부지 종단도 축척 · 없으면 도면설정 진입도로 칸) — 도면 주석 축척만 보면 진입도로 칸을 바꿔도 못 알아챔
-                        double want = wantSheet = RoadSheets.ScaleFor(db).Scale;
+                        // ★★[v113.1] 판 2 설정(도면설정 «2. 진입도로» H · V) = 칸 열쇠 · 그린 뒤 주석 축척으로 견줌(자동 축척은 그 값을 미리 모름) · 옛 설정 = 지금 비교 그대로
+                        var (pl, v2, key, _, _) = RoadSheets.Setting(db, "");
+                        double want = wantSheet = pl.PinH;
                         stampNow = RoadSheets.StampOf(tr, AlignId, PlanId);
                         if (stampNow != Design.SheetStamp) sheetNote = "종단이 수정되었습니다";
+                        else if (v2 || Design.SheetScaleKey != null)
+                        {
+                            if (!v2 || key != Design.SheetScaleKey) sheetNote = "축척이 바뀌었습니다";
+                            else if (Design.SheetAnno is double an0 && Math.Abs(an0 - Commands.SheetCommand.CurrentDrawingScale(db)) > 1e-6) sheetNote = "축척이 바뀌었습니다";
+                        }
                         else if (want > 0 && Math.Abs(want - Design.SheetScale) > 1e-6) sheetNote = "축척이 바뀌었습니다";
                     }
                 }
@@ -506,7 +533,8 @@ internal sealed class RoadSession
                 }
             }
             Pieces = pcs;
-            Note = string.Join(" · ", new[] { _baseNote, note, gapNote, lineNote.StartsWith("⚠") ? lineNote : "", _engNote.StartsWith("⚠") ? _engNote : "" }.Where(t => t.Length > 0));
+            BoundNote = BoundNoteOf(Design, pcs);
+            Note = string.Join(" · ", new[] { _baseNote, note, gapNote, lineNote.StartsWith("⚠") ? lineNote : "", _engNote.StartsWith("⚠") ? _engNote : "", BoundNote }.Where(t => t.Length > 0));
             SurfaceStale = surfNote; SheetStale = sheetNote; XsecStale = xsecNote;
             // ★★[v111.7.1] 지표면이 없음(계산은 됨) — [업데이트]가 만든다(첫 지표면은 DHROAD 끝에서)
             SurfaceMissing = Last.Error.Length == 0 && !hasSurf;
@@ -568,6 +596,7 @@ internal sealed class RoadSession
         sb.Append(System.Text.Json.JsonSerializer.Serialize(new { inp.Sec, inp.Cut, inp.Fill, inp.TierWalls, inp.Walls, inp.MinSlope, inp.SectionGap, inp.EdgeStep }, opt));
         // ★[도로 마무리 ② · 계획 6.1 · 비평 M6] 측구는 있을 때만(측구 없는 도로 지문 = 옛 문자열 그대로)
         if (inp.Ditches.Count > 0) sb.Append("|측구").Append(System.Text.Json.JsonSerializer.Serialize(inp.Ditches, opt));
+        if (inp.BoundWalls.Count > 0) sb.Append("|폴리선옹벽").Append(System.Text.Json.JsonSerializer.Serialize(inp.BoundWalls, opt));   // ★[v113.0] 있을 때만(옛 지문 그대로)
         sb.Append('|').Append(baseSurf.IsNull ? "" : baseSurf.Handle.ToString());
         // ★[v111.3 · 설치 전 검토 M2] 바탕면 내용도 — 같은 핸들로 고쳐진(정지면 다시 · 원지반 편집) 바탕이면 [노리선]이 면과 안 맞는 노리선을 말없이 그렸다.
         //   중심선 표본 10개마다 양쪽 5 · 15 · 30 · 50 m 바탕 높이(0.1 mm) — 도로 자리 곁 바탕이 바뀌면 지문이 바뀐다(먼 곳 편집은 도로 면과 상관없음)
@@ -593,6 +622,7 @@ internal sealed class RoadSession
         var opt = new System.Text.Json.JsonSerializerOptions { IncludeFields = true };
         string vals = System.Text.Json.JsonSerializer.Serialize(new { inp.Sec, inp.Cut, inp.Fill, inp.TierWalls, inp.Walls, inp.MinSlope, inp.SectionGap, inp.EdgeStep }, opt);
         if (inp.Ditches.Count > 0) vals += "|측구" + System.Text.Json.JsonSerializer.Serialize(inp.Ditches, opt);   // ★[도로 마무리 ②] 있을 때만
+        if (inp.BoundWalls.Count > 0) vals += "|폴리선옹벽" + System.Text.Json.JsonSerializer.Serialize(inp.BoundWalls, opt);   // ★[v113.0] 있을 때만
         var bs = new System.Text.StringBuilder(baseSurf.IsNull ? "" : baseSurf.Handle.ToString());
         if (inp.Base != null)
             for (int i = 0; i + 1 < inp.X.Length; i += 10)
@@ -633,6 +663,7 @@ internal sealed class RoadSession
                     X = X, Y = Y, Z = Z, Sec = d.Section(), Cut = d.Cut(), Fill = d.Fill(),
                     TierWalls = d.CoreTierWalls(s0),   // ★[v110.3] 계단선 변환 옹벽(옛 가장자리 옹벽은 0단 · 소단 0)
                     Ditches = d.CoreDitches(s0),       // ★[도로 마무리 ②] 측구(없으면 빈 목록 — 옛 동작)
+                    BoundWalls = d.CoreBoundWalls(out _),   // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 폴리선 옹벽(세계 XY — 토막마다 엔진이 제 것만 받는다 · 없으면 빈 목록 — 옛 동작)
                     Base = ground, SuggestH = d.SuggestH,
                     SectionGap = Math.Max(0.5, GradingSettings.VertexSpacing),   // ★[v111.2] 삼각망 해상도 = 부지 둘레 점 간격
                 },
@@ -801,6 +832,20 @@ internal sealed class RoadSession
         inputs = "";
         if (Design.XsecViews.Count == 0) return "";
         string surfNow = HasSurface() ? Design.SurfaceHandle : "", stations = RoadXsec.StationsKeyIn(tr, db, Design, AlignId);
+        // ★[v112.1 검토 M2] 가지 도로 = 본 도로 면 핸들도(RoadXsec 열쇠와 같은 차례) · 끝 판정을 아직 못 했으면 그린 때 것 그대로로 봄
+        if (surfNow.Length > 0 && Design.EndsOn)
+        {
+            if (_allEnds != null)
+            {
+                try
+                {
+                    var own = db.TryGetObjectId(new Handle(Convert.ToInt64(Design.SurfaceHandle, 16)), out var oid) ? oid : ObjectId.Null;
+                    surfNow += RoadXsec.MainsKey(RoadXsec.MainOrder(BranchBase.Mains(tr, db, _allEnds, AlignId, out _)).Select(m => m.Surf).Where(x => x != own).Distinct());
+                }
+                catch { }
+            }
+            else { var w = (Design.XsecStamp ?? "").Split('|'); if (w.Length >= 3 && w[1].StartsWith(surfNow + "+", StringComparison.Ordinal)) surfNow = w[1]; }
+        }
         double pinNow = RoadDrawingSettings.Read(db).Xsec, annoNow = Commands.SheetCommand.CurrentDrawingScale(db);
         var ci = System.Globalization.CultureInfo.InvariantCulture;
         // ★[v111.7.2] 횡단도 배치도 판정에(바뀌면 다시 그림) · ★[검토 중간 2] 이 도면에 저장된 배치(세션 값은 다른 도면 것일 수 있음 — 시계가 뒤 도면을 다시 셀 때 앞 도면 배치로 «바뀜»이 뜨지 않게) · 기록 없으면 기본 1×2

@@ -26,11 +26,25 @@ public sealed class SheetSettingsCommand
         var (rp0, rx0) = RoadDrawingSettings.Read(doc.Database);
         int lay0 = GradingSettings.XsecLayout;
         var (cm0, cM0) = ContourInterval.Read(doc.Database);
-        var dlg = new SheetDialog("저장", rp0, rx0, cm0, cM0);
+        // ★[v113.1] 진입도로 종단 H · V — 판 2 기록이 없으면(옛 도면) 지금 그리는 축척(옛 규칙)을 고정 H로 · V = H와 같게(그대로 [저장]하면 같은 그림)
+        var rs = RoadSheets.Setting(doc.Database, "");
+        double rh0 = rs.Plan.PinH, rv0 = rs.V2 ? rs.Plan.PinV : DH.Grading.Core.ProfileScaleFit.SameAsH;
+        var dlg = new SheetDialog("저장", rp0, rx0, cm0, cM0, rh0, rv0);
         AcadApp.ShowModalWindow(dlg);
         if (dlg.DialogResult != true) return;
         SavedContour(doc, cm0, cM0, dlg.ContourMinor, dlg.ContourMajor);
+        SavedRoadVH(doc, rs.V2, rh0, rv0, dlg.RoadH, dlg.RoadV);
         Saved(doc, rp0, rx0, dlg.RoadProfileScale, dlg.RoadXsecScale, lay0);
+    }
+
+    /// <summary>★★[v113.1 · 계획_종단방향_축척.md 3] 진입도로 종단 H · V — 판 2로 적음(바뀌었거나 판 2가 없던 도면에서 값이 옛 규칙과 다를 때). 창 없이 시험이 같은 길을 부른다.</summary>
+    internal static void SavedRoadVH(Document doc, bool v2Before, double h0, double v0, double h1, double v1)
+    {
+        // 안 바꿨으면 안 씀 — 옛 도면은 옛 규칙 그대로(부지 따름 등) · 판 2 도면은 그 값 그대로
+        bool changed = System.Math.Abs(h1 - h0) > 1e-9 || System.Math.Abs(v1 - v0) > 1e-9;
+        if (!changed) return;
+        try { RoadDrawingSettings.WriteVH(doc.Database, h1, v1); }
+        catch (System.Exception ex) { doc.Editor.WriteMessage("\n[도면 설정] 진입도로 종단 H · V 저장 실패 — " + ex.Message); }
     }
 
     /// <summary>★★[v111.11 · JACK 1103 «원지형 및 모든 지형의 등고선 간격»] [저장] 뒤 — 바뀌었을 때만 도면에 적고 우리 지표면 스타일의 간격을 고친다
@@ -74,6 +88,7 @@ public sealed class SheetSettingsCommand
     /// <paramref name="lay0"/> = 창을 열기 전 «횡단도 배치».</summary>
     internal static void Saved(Document doc, double rp0, double rx0, double rp1, double rx1, int lay0)
     {
+        SheetPrefs.TryPin(doc.Database, "저장");   // ★[v112.1] 도면마다 저장(다시 그린 뒤 자동 폭이 바뀌면 아래에서 한 번 더)
         // ★[v111.4] 진입도로 칸 둘 — 도면에 저장 · 열린 진입도로가 있으면 다시 계산(종단도 · 횡단도가 그 축척과 다르면 도킹창 «축척이 바뀌었습니다» + 깜박)
         bool roadChanged = System.Math.Abs(rp1 - rp0) > 1e-9 || System.Math.Abs(rx1 - rx0) > 1e-9;
         if (roadChanged)
@@ -141,9 +156,11 @@ public sealed class SheetSettingsCommand
             + (GradingSettings.XsecWidthAuto ? "(자동 — 정지 결과에서 쟀습니다)" : "(수동 — 치신 값)")
             + " · 원지반 굴곡 " + GradingSettings.GroundBreakLabels[GradingSettings.GroundBreakStep()]
             + "(" + GradingSettings.GroundBreakTolZ.ToString("0.###") + "m)"
-            + " · 종단뷰 축척 " + (GradingSettings.ProfileScale > 0
+            + " · 종단뷰 축척 H " + (GradingSettings.ProfileScale > 0
                                    ? "1:" + GradingSettings.ProfileScale.ToString("F0") + "(고정)"
                                    : "자동")
+            + " · V " + (GradingSettings.ProfileScaleV > 0 ? "1:" + GradingSettings.ProfileScaleV.ToString("F0")
+                         : GradingSettings.ProfileScaleV < 0 ? "H와 같게" : "자동")
             + (!xsecTried
                    ? ""                                            // 그린 적이 없거나 손댄 것이 없으면 할 말이 없다
                    : xsecBack
@@ -153,6 +170,7 @@ public sealed class SheetSettingsCommand
                        : " · 횡단도는 다시 그리지 못했습니다 — 위 [횡단도] 메시지를 보세요"));
         // ★[v111.4] 열린 진입도로 — 축척(진입도로 칸 · 부지 축척 바뀜)이 그린 종단도 · 횡단도와 다르면 도킹창 «축척이 바뀌었습니다» + 깜박
         // ★★[v111.7 · JACK 1102] 이 명령 안에서 같은 자리에 바로 다시(지난 자리가 없거나 못 그리면 알림 + 깜박 그대로 · 그 안에서 다시 계산)
+        SheetPrefs.TryPin(doc.Database, "저장 뒤");
         var rs = RoadSession.Of(doc);
         if (rs != null) RoadCommand.RedrawStale(doc, rs);
     }

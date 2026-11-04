@@ -43,10 +43,13 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.MapPickCommand))]            // DHMAPPICK(지도에서 범위 고르기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.MapPalette))]                // DHCONTOURBOX(지도 도킹바가 넘긴 범위로 지표면 가져오기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.NgiiCommand))]               // DHNGII(수치지도 DXF → 원지반)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.GroundContourCommand))]      // ★[v113.0] DHGNDCONTOUR(도면의 등고선 → 원지반)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.CropGroundCommand))]         // DHCROP(원지형 자르기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SelfCheckCommand))]          // DHSELFCHECK(자가점검 — 읽기만 · v103.1.7)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.RoadCommand))]               // ★[v110] DHROAD · DHROADWALL · DHROADLIMIT · DHROADREDRAFT · DHROADOFF(진입도로) · ★[v111.6] DHROADPANEL(진입도로 창)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.AltCommand))]                // ★[v112.1] DHALT(대안 — 도면 사본 저장 · 수량표 · 열기 · 지우기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SheetBookCommand))]          // ★[v112.0] DHSHEETBOOK(도킹창 «도면화») · DHSHEETMAKE([작성하기] — 배치탭 · 도곽 · 표제란)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ProfileFlipCommand))]        // ★[v113.1] DHPROFILEREV · DHROADREV(종단 시점 ↔ 종점 바꾸기)
 
 namespace DH.Grading.Civil;
 
@@ -70,6 +73,8 @@ public sealed class RibbonApp : IExtensionApplication
         // [JACK 0730] 작업공간(제도 및 주석 ↔ Civil 3D 등) 전환 시 리본이 CUI 기준으로 재구성되며
         //   코드로 만든 탭이 사라짐 → WSCURRENT 변경을 감지해 다음 Idle에 탭 재생성(FindTab이 중복 방지).
         AcadApp.SystemVariableChanged += OnSysVarChanged;
+        // ★[v112.6 · JACK 1104] 전체 계획평면도 배치탭으로 가면 «평면 꾸미기» 창
+        try { PlanOptsWindow.Hook(); } catch { }
 
         // ★★[JACK 0825] 보기 버튼 켜고 끄기 — 배선은 <b>Idle로 미룬다</b>.
         //   ★[JACK 0826] 종전엔 여기서 바로 했다. <b>Initialize는 AutoCAD 시작 도중</b>이라
@@ -577,6 +582,17 @@ public sealed class RibbonApp : IExtensionApplication
                 "· <b>표고가 0인 등고선·표고점은 버립니다</b> — 측량이 안 된 자리라\n" +
                 "  그대로 두면 지표면에 절벽이 생깁니다.\n\n" +
                 "좌표계는 [기타 설정]을 따릅니다(DXF에는 좌표계가 안 담겨 있습니다).", null);
+            // ★[v113.0 · JACK 1104 «원지반 — 등고선으로 작성»] 도면에 이미 가져온 표고 든 등고선을 골라 만든다.
+            var btnGndContour = MakeButton(
+                "등고선으로\n작성", "DHGNDCONTOUR ", "도면에 있는 표고 든 등고선을 골라(ALL 가능) '원지반' 지표면을 만듭니다", "등고선작성");
+            btnGndContour.ToolTip = MakeTip("등고선으로 작성 (DHGNDCONTOUR)",
+                "도면에 가져온 <b>고도(표고)가 든 등고선</b>을 고르면(창 · 걸침 · ALL)\n" +
+                "그것으로 '원지반' 지표면을 만듭니다.\n\n" +
+                "· 쓰는 것: 폴리선 · 2D/3D 폴리선 · 선 · 호 · 원 · 스플라인(표고가 한결같으면 등고선,\n" +
+                "  제각각인 3D 선은 브레이크라인) · 표고 든 점(POINT)은 표고점.\n" +
+                "· <b>표고가 0인 선은 뺍니다</b> · 블록 안의 선은 못 씁니다(분해 후 고르기).\n" +
+                "· 고른 원본은 그대로 둡니다 — 사본을 원지반 재료 레이어에 넣어 씁니다.\n" +
+                "· 이미 원지반이 있으면 새것으로 바꿉니다(다른 가져오기와 같음).", null);
             // ★★★[JACK 0901 "원지반 가져오기 스플릿 버튼 만들고 그 안에 수치지도 DXF, 서버 지표면 넣어 줘"]
             //   원지반을 얻는 길이 둘이 됐다 — 나란히 두면 <b>어느 것을 눌러야 하나</b>가 된다.
             //   하나로 묶고 화살표로 고르게 한다.
@@ -602,13 +618,15 @@ public sealed class RibbonApp : IExtensionApplication
                 ListStyle = RibbonSplitButtonListStyle.List,
                 ToolTip = MakeTip("원지반 가져오기",
                     "**수치지도 DXF** — 브이월드에서 내려받은 파일로 만듭니다(사내망 없어도 됨).\n" +
-                    "**서버 지표면** — 지도에서 범위를 골라 사내 서버에서 받습니다(VPN 필요).\n\n" +
+                    "**서버 지표면** — 지도에서 범위를 골라 사내 서버에서 받습니다(VPN 필요).\n" +
+                    "**등고선으로 작성** — 도면에 가져온 표고 든 등고선을 골라 만듭니다.\n\n" +
                     "둘 다 결과는 같은 '원지반' 지표면입니다 — 이후 공정은 똑같습니다.\n" +
                     "**원지반 삭제** — 가져온 원지반과 등고선·표고점을 지웁니다.\n" +
                     "아래 화살표를 눌러 고릅니다.", null),
             };
             splitGround.Items.Add(btnNgii);
             splitGround.Items.Add(btnContour);
+            splitGround.Items.Add(btnGndContour);
             splitGround.Items.Add(btnGroundOff);
             splitGround.Current = btnNgii;
 
@@ -722,9 +740,17 @@ public sealed class RibbonApp : IExtensionApplication
                     "**측점 삭제** — 찍은 자리의 수동 측점을 지웁니다(횡단도 같이).\n" +
                     "아래 화살표를 눌러 고릅니다.", null),
             };
+            // ★★[v113.1 · JACK 1104 «종단 방향 변경»] 계획지표면 종단 시점 ↔ 종점 — 계획부지 정지 창에는 종단 단추가 없어(v111.10 리본으로) 측점 묶음에
+            var btnRev = MakeButton(
+                "시점↔\n종점", "DHPROFILEREV ", "계획지표면 종단의 시점과 종점을 바꿉니다 — 모양 그대로 · 측점 0이 반대쪽 끝 · 다시 누르면 처음으로", "측점추가");
+            btnRev.ToolTip = MakeTip("시점↔종점 바꾸기 (DHPROFILEREV)",
+                "**계획지표면** 종단의 방향을 뒤집습니다 — 노선 모양 그대로, 측점 No.0이 반대쪽 끝에서 시작합니다.\n" +
+                "수동 측점 · 지운 측점은 같은 자리로 옮겨지고, 종단도 · 횡단도를 그 자리에 다시 그립니다.\n" +
+                "다시 누르면 처음 방향으로 돌아옵니다.", null);
             splitStn.Items.Add(btnStn);
             splitStn.Items.Add(btnStnFb);
             splitStn.Items.Add(btnStnDel);
+            splitStn.Items.Add(btnRev);
             splitStn.Current = btnStn;
 
             // ★★[v111.6 · JACK 1102 «진입도로 도킹창에 따로 종단 · 횡단 단추가 있어 통일이 안 된다»] [진입도로] 패널 — 창 · 종단도 · 횡단도(도킹창 ■ 도면과 같은 이름 · 같은 명령)
@@ -884,6 +910,15 @@ public sealed class RibbonApp : IExtensionApplication
             pCommon.Items.Add(Spacer());
             pCommon.Items.Add(splitMap);
             pCommon.Items.Add(Spacer());
+            // ★★[v112.1 · JACK 1104 «대안 저장»] 지금 설계를 도면 사본으로 · 대안끼리 수량표
+            var btnAlt = MakeButton("대안", "DHALT ", "지금 설계(계획지표면 + 진입도로)를 도면 사본으로 저장하고 대안끼리 수량을 견줍니다", "대안");
+            btnAlt.ToolTip = MakeTip("대안 (DHALT)",
+                "지금 설계를 **도면 사본**으로 저장합니다(도면 옆 «도면이름_대안» 폴더).\n\n" +
+                "· 대안마다 절토 · 성토 · 순토량 · 옹벽 길이 · 사면 넓이 · 도로 길이 · 메모\n" +
+                "· [열기] = 그 사본을 엽니다\n" +
+                "· 저장할 때 도면에 바뀐 것이 있으면 도면도 저장합니다", null);
+            pCommon.Items.Add(btnAlt);
+            pCommon.Items.Add(Spacer());
 
             tab.Panels.Add(new RibbonPanel { Source = pExport });
             // ★★★[v112.0 · 계획_도면화.md 4.10 · JACK 1103 «도면화 단추 새로»] «내보내기» 맨 앞 — 도킹창 «도면화»(표제란 값 → [작성하기])
@@ -1031,6 +1066,15 @@ public sealed class RibbonApp : IExtensionApplication
                         dc.DrawLine(srv, new Point(21, 23), new Point(16, 28));
                         break;
 
+                    case "등고선작성": // ★[v113.0] 겹친 등고선 고리 + 고르기 네모 — 도면에 있는 선으로 만든다
+                        var ctr = P(0x8d, 0x6e, 0x48);
+                        var ctrThin = P(0xc0, 0xa0, 0x80);
+                        dc.DrawEllipse(null, ctr, new Point(14, 15), 11.0, 9.0);
+                        dc.DrawEllipse(null, ctrThin, new Point(14, 15), 6.5, 5.0);
+                        dc.DrawEllipse(null, ctrThin, new Point(14, 15), 2.2, 1.6);
+                        dc.DrawRectangle(Brushes.Transparent, P(0x9e, 0xb0, 0xc4), new Rect(21, 21, 8, 8));
+                        break;
+
                     case "계획부지": // 다듬어진 평지 + 양쪽 사면 — 만들려는 부지
                         var pad = P(0x3f, 0xa8, 0x5e);
                         dc.DrawLine(pad, new Point(9, 16), new Point(23, 16));   // 평지
@@ -1131,6 +1175,16 @@ public sealed class RibbonApp : IExtensionApplication
                         dc.DrawLine(bk, new Point(3, 22), new Point(25, 22));
                         dc.DrawLine(bk, new Point(16, 22), new Point(16, 27));
                         dc.DrawLine(P(0xf0, 0xa8, 0x3a), new Point(7, 15), new Point(20, 15));
+                        break;
+
+                    case "대안": // ★[v112.1] 겹친 도면 세 장 + 저울 눈금 — 대안 견주기
+                        var alt = P(0x1f, 0x8a, 0x8e);
+                        dc.DrawRectangle(null, P(0xb0, 0xcc, 0xe8), new Rect(11, 3, 17, 14));
+                        dc.DrawRectangle(null, P(0x7f, 0xb3, 0xd9), new Rect(7, 7, 17, 14));
+                        dc.DrawRectangle(Brushes.White, alt, new Rect(3, 11, 17, 14));
+                        dc.DrawLine(P(0xf0, 0xa8, 0x3a), new Point(6, 21), new Point(9, 17));
+                        dc.DrawLine(P(0xf0, 0xa8, 0x3a), new Point(9, 17), new Point(13, 19));
+                        dc.DrawLine(P(0xf0, 0xa8, 0x3a), new Point(13, 19), new Point(17, 15));
                         break;
 
                     case "도면설정": // 도곽 + 톱니 — 도면을 어떻게 그릴지

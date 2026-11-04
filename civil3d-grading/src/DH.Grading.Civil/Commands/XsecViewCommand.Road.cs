@@ -13,6 +13,8 @@ public sealed partial class XsecViewCommand
 {
     /// <summary>단면 종류 이름 — 진입도로 면(계획선 · FGL 밴드) · 부지 정지면(정지면_DH — 가는 점선 · 수량엔 안 씀).</summary>
     internal const string RoadKind = "진입도로", RoadPadKind = "정지면(부지)";
+    /// <summary>★[v112.1 · 가지 도로 횡단 이음매] 가지 도로의 본 도로 면 — 계획선(진입도로와 같은 선) · 계획면에서 가지 다음 · 바탕면 앞.</summary>
+    internal const string RoadMainKind = "본 도로";
     /// <summary>진입도로 횡단의 부지 정지면 선 스타일.</summary>
     internal const string RoadPadStyleName = "DH_횡단면_정지면(진입도로)";
     /// <summary>진입도로 횡단 검토선 숨김 레이어 — «DH도로-»(부지 «DH-» 지우기 · 초기화 «DH-» 훑기에 안 걸리고 진입도로 초기화가 지움).</summary>

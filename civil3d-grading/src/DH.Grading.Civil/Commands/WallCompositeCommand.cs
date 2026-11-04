@@ -206,6 +206,13 @@ public sealed class WallCompositeCommand
     /// 판 1 옹벽(지은 값 모름)은 지금 값으로 짓고 로그에 적는다(검토 v103.1 중간 5).</summary>
     static string RebuildWall(Database db, Transaction tr, WallRec w, string region, IGroundSurface ground, ObjectId groundId, System.Text.StringBuilder log)
     {
+        // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 경계 폴리선 옹벽 — 그린 폴리선 원본을 새 경계로 다시 판정 · 제자리면 같은 번호로 다시 짓는다(움직였으면 안 지우고 까닭)
+        //   ★[v113.0 · 설치 전 검토 M1] 터지면(NTS 위상 예외 등) 합성 전체가 아니라 그 옹벽만 «다시 짓기 실패» 보류 — 손 폴리곤과 같은 꼴
+        if (w.Kind == 1)
+        {
+            try { return WallLineFlow.Rebuild(db, tr, w, region, groundId, log); }
+            catch (System.Exception ex) { return $"폴리선 옹벽 다시 짓다 터졌다({ex.GetType().Name}: {ex.Message})"; }
+        }
         if (w.Poly == null || w.Poly.Count < 3) return "저장한 폴리곤이 없다";
         if (w.IsWall == null || w.IsWall.Count != w.Poly.Count) return $"변 나누기 표가 폴리곤과 안 맞는다({w.IsWall?.Count ?? 0}/{w.Poly.Count})";
         var er = WallTags.Erase(db, tr, (n, r) => n == w.No && (r.Length == 0 || r == region), false, groundId);
@@ -868,14 +875,21 @@ public sealed class WallCompositeCommand
                     var wallTris = wCache.TrianglesIn(mnx, mny, mxx, mxy);
                     // ★[v102.0 · 계획 검토 M3 ①] 기하로 한 번 더 — 옹벽 첫 줄 = 폴리곤 z(머리). 절토면 옹벽이 전부 그 위 · 성토면 전부 그 아래(1mm)
                     double z0 = w.Poly[0].Z; int wrong = 0; double worst = 0;
+                    // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 경계 폴리선 옹벽은 머리가 위(절토 — 안으로 내려간다)라 옛 잣대 대신 뚜껑 높이로 — 절토면 전부 뚜껑 아래 · 성토면 위(1 mm)
+                    if (w.Kind == 1)
+                        foreach (var t in wallTris)
+                            foreach (var q in new[] { t.A, t.B, t.C })
+                            { double dz = w.Up ? q.Z - w.CapZ : w.CapZ - q.Z; if (dz > 1e-3) { wrong++; worst = System.Math.Max(worst, dz); } }
+                    else
                     foreach (var t in wallTris)
                         foreach (var q in new[] { t.A, t.B, t.C })
                         { double dz = w.Up ? z0 - q.Z : q.Z - z0; if (dz > 1e-3) { wrong++; worst = System.Math.Max(worst, dz); } }
-                    if (wrong > 0) bad = $"방향('{w.Side}')과 옹벽 모양이 안 맞는다 — 꼭짓점 {wrong}개가 머리 {z0:F3}m {(w.Up ? "아래" : "위")}(최대 {worst:F3}m)";
+                    if (wrong > 0) bad = w.Kind == 1 ? $"방향('{w.Side}')과 폴리선 옹벽 모양이 안 맞는다 — 꼭짓점 {wrong}개가 뚜껑 {w.CapZ:F3}m {(w.Up ? "위" : "아래")}(최대 {worst:F3}m)"
+                                     : $"방향('{w.Side}')과 옹벽 모양이 안 맞는다 — 꼭짓점 {wrong}개가 머리 {z0:F3}m {(w.Up ? "아래" : "위")}(최대 {worst:F3}m)";
                     else
                     {
                         var groundTris = gCache.TrianglesIn(mnx, mny, mxx, mxy);
-                        inputs.Add(new WallDaylight.WallInput { No = w.No, Poly = w.Poly, WallTris = wallTris, GroundTris = groundTris, Down = !w.Up });
+                        inputs.Add(new WallDaylight.WallInput { No = w.No, Poly = w.Poly, WallTris = wallTris, GroundTris = groundTris, Down = !w.Up, Replace = w.Kind == 1 });
                         useOk.Add(w);
                         // 입력을 떨군다(옹벽마다 — 폴리곤 ±5m 합성 전 면) — 오프라인 재생
                         try

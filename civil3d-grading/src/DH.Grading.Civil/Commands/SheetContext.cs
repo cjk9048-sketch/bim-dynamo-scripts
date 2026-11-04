@@ -66,6 +66,8 @@ internal sealed class XsecTarget
     /// <summary>계획면(수량 · FGL) = FirstOf(진입도로, 도로 바탕면) — 바탕이 정지면_DH면 <see cref="BaseIsPad"/>.</summary>
     internal ObjectId RoadSurfId, BaseSurfId;
     internal bool BaseIsPad;
+    /// <summary>★[v112.1] 가지 도로면 본 도로 면들(가까운 본 도로 먼저 — 계획면 FirstOf 차례 · 없으면 빈 목록).</summary>
+    internal List<ObjectId> MainSurfIds = new();
     internal (double L, double R) Width;
     /// <summary>숨긴 횡단 검토선 그룹 이름 앞머리 «{노선}-횡단»(부지 IsXsecGroupName에 안 걸림).</summary>
     internal string GroupBase = "";

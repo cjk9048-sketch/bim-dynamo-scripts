@@ -30,6 +30,14 @@ internal sealed class RoadDesign
     /// 옛 기록(v110.3 이전)에는 칸이 없다 = 기본값(종단도 없음). [종단도 다시]가 이 핸들들로 이 도로 것만 지운다(검토 M3).</summary>
     public double[] SheetAt = Array.Empty<double>();
     public double SheetScale = 0;
+    /// <summary>★[v113.1 · 계획_종단방향_축척.md 3] 그린 때 V 축척 · 설정 열쇠(도면설정 «2. 진입도로» H · V 칸 — 판 2) · 그린 뒤 도면 주석 축척.
+    /// 옛 기록 · 옛 설정(판 2 앞)으로 그린 것 = null(지금 비교 그대로 · 옛 JSON 바이트 그대로).</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public double? SheetScaleV;
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? SheetScaleKey;
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public double? SheetAnno;
     public List<string> SheetViews = new();
     public string SheetGroup = "", SheetGround = "", SheetChain = "", SheetStamp = "";
 
@@ -129,6 +137,40 @@ internal sealed class RoadDesign
     /// <summary>★★[v110.3 · JACK 1029 «계획부지처럼 소단선을 변환»] 계단선 변환 옹벽 — [s0, s1, 쪽(−1 좌 · +1 우), 몇 번째 단부터(0 = 가장자리), 옹벽 사이 소단 길이](노선 측점).
     /// 옛 <see cref="Walls"/>(가장자리 옹벽)는 읽을 때 [s0, s1, 쪽, 0, 0]으로 옮긴다(Core가 옛 길로 탐).</summary>
     public List<double[]> TierWalls = new();
+
+    /// <summary>★★[v113.0 · JACK 1104 «옹벽 폴리선 — 경계 2점 자르기 + 안쪽 다단»] 폴리선 옹벽 — 경계 두 교점 사이 폴리선(세계 XY · 측점이 아니라 노선을 고쳐도 자리 그대로) · 단높이 · 소단.
+    /// 없으면 null(쓰지 않음 — 옛 기록 JSON 바이트 그대로 · 옛 애드인은 모르는 칸을 버린다: 그쪽에서는 이 옹벽이 안 보이고 다시 저장하면 사라진다 → 설치 알림).
+    /// 칸마다 판(<see cref="BoundWallRec.Ver"/>) — 이 애드인보다 새 판 칸은 엔진에 안 넣고 ⚠(조용히 엉뚱하게 짓지 않는다).</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public List<BoundWallRec>? BoundWalls;
+
+    internal sealed class BoundWallRec
+    {
+        public const int CurVer = 1;
+        public int Ver = CurVer;
+        public int No;
+        /// <summary>경계 두 교점 사이 폴리선(A..B) · 그린 원본(판정을 다시 할 때).</summary>
+        public double[] X = System.Array.Empty<double>(), Y = System.Array.Empty<double>();
+        public double[] SrcX = System.Array.Empty<double>(), SrcY = System.Array.Empty<double>();
+        public double H = 5, T = 1;
+        public string SrcHandle = "";
+    }
+
+    /// <summary>★[v113.0] Core 폴리선 옹벽(이 판이 아는 칸만) · 모르는 판 번호 목록(⚠).</summary>
+    public List<RoadGrade.BoundWall> CoreBoundWalls(out List<int> tooNew)
+    {
+        tooNew = new List<int>();
+        var o = new List<RoadGrade.BoundWall>();
+        if (BoundWalls == null) return o;
+        foreach (var b in BoundWalls)
+        {
+            if (b == null) continue;
+            if (b.Ver > BoundWallRec.CurVer) { tooNew.Add(b.No); continue; }
+            if (b.X == null || b.Y == null || b.X.Length < 2 || b.X.Length != b.Y.Length) continue;
+            o.Add(new RoadGrade.BoundWall(b.No, b.X, b.Y, Pos(b.H, 5), Math.Max(0, b.T)));
+        }
+        return o;
+    }
 
     /// <summary>★[v111 · 계획_v111.md 2.6] 선 판 — 111 = 단면 광선 선(선 끝 = 기록 경계 정확히). 칸이 없는 옛 기록(v110.3~110.4)은 읽을 때 한 번 틈 메움(<see cref="MergeOldGaps"/>).
     /// 판별은 JSON에 칸이 있는지로(필드 기본값은 옛 기록에도 111이 들어가므로 — 계획 검토 L17).</summary>

@@ -60,6 +60,8 @@ public static class StationCommand
     private static void Run(bool frontBack, bool del = false)
     {
         ProfileCommand.WarnOnce = true;
+        // ★[v112.1 검토 H3] 도면이 바뀌었으면 그 도면 설정부터(도면설정 값이 도면마다 — 앞 도면 값으로 다시 그리고 이 도면 기록을 덮지 않게)
+        try { GradingSettings.SyncToDocument(AcadApp.DocumentManager.MdiActiveDocument); } catch { }
         try { RunLoop(frontBack, del); }
         finally { ProfileCommand.WarnOnce = false; }
     }
