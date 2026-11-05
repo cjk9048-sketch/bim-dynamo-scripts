@@ -208,7 +208,7 @@ public sealed class WallCompositeCommand
     {
         // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 경계 폴리선 옹벽 — 그린 폴리선 원본을 새 경계로 다시 판정 · 제자리면 같은 번호로 다시 짓는다(움직였으면 안 지우고 까닭)
         //   ★[v113.0 · 설치 전 검토 M1] 터지면(NTS 위상 예외 등) 합성 전체가 아니라 그 옹벽만 «다시 짓기 실패» 보류 — 손 폴리곤과 같은 꼴
-        if (w.Kind == 1)
+        if (w.Kind != 0)   // ★[v114.0] 선 옹벽(종류 2)
         {
             try { return WallLineFlow.Rebuild(db, tr, w, region, groundId, log); }
             catch (System.Exception ex) { return $"폴리선 옹벽 다시 짓다 터졌다({ex.GetType().Name}: {ex.Message})"; }
@@ -876,21 +876,31 @@ public sealed class WallCompositeCommand
                     // ★[v102.0 · 계획 검토 M3 ①] 기하로 한 번 더 — 옹벽 첫 줄 = 폴리곤 z(머리). 절토면 옹벽이 전부 그 위 · 성토면 전부 그 아래(1mm)
                     double z0 = w.Poly[0].Z; int wrong = 0; double worst = 0;
                     // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 경계 폴리선 옹벽은 머리가 위(절토 — 안으로 내려간다)라 옛 잣대 대신 뚜껑 높이로 — 절토면 전부 뚜껑 아래 · 성토면 위(1 mm)
-                    if (w.Kind == 1)
-                        foreach (var t in wallTris)
-                            foreach (var q in new[] { t.A, t.B, t.C })
-                            { double dz = w.Up ? q.Z - w.CapZ : w.CapZ - q.Z; if (dz > 1e-3) { wrong++; worst = System.Math.Max(worst, dz); } }
-                    else
+                    // ★[v114.0] 선 옹벽(종류 2)은 하나뿐인 방향 · 머리가 없다 — 방향 · 뚜껑 검사를 뺀다(절 · 성은 바꿀 자리 고리로 나눈다)
+                    if (w.Kind == 0)
                     foreach (var t in wallTris)
                         foreach (var q in new[] { t.A, t.B, t.C })
                         { double dz = w.Up ? z0 - q.Z : q.Z - z0; if (dz > 1e-3) { wrong++; worst = System.Math.Max(worst, dz); } }
-                    if (wrong > 0) bad = w.Kind == 1 ? $"방향('{w.Side}')과 폴리선 옹벽 모양이 안 맞는다 — 꼭짓점 {wrong}개가 뚜껑 {w.CapZ:F3}m {(w.Up ? "위" : "아래")}(최대 {worst:F3}m)"
-                                     : $"방향('{w.Side}')과 옹벽 모양이 안 맞는다 — 꼭짓점 {wrong}개가 머리 {z0:F3}m {(w.Up ? "아래" : "위")}(최대 {worst:F3}m)";
+                    if (wrong > 0) bad = $"방향('{w.Side}')과 옹벽 모양이 안 맞는다 — 꼭짓점 {wrong}개가 머리 {z0:F3}m {(w.Up ? "아래" : "위")}(최대 {worst:F3}m)";
                     else
                     {
                         var groundTris = gCache.TrianglesIn(mnx, mny, mxx, mxy);
-                        inputs.Add(new WallDaylight.WallInput { No = w.No, Poly = w.Poly, WallTris = wallTris, GroundTris = groundTris, Down = !w.Up, Replace = w.Kind == 1 });
-                        useOk.Add(w);
+                        var wi = new WallDaylight.WallInput { No = w.No, Poly = w.Poly, WallTris = wallTris, GroundTris = groundTris, Down = !w.Up };
+                        if (w.Kind != 0)
+                        {
+                            // ★[v114.0] 선 옹벽 — 가상옹벽 삼각형을 목록의 바꿀 자리 고리(성토 · 절토)로 나눈다(무게중심 · 고리 밖은 버림 — 합성 규칙 RuleOf는 그 자리에서 G)
+                            var tf = new System.Collections.Generic.List<WallDaylight.Tri>(); var tcL = new System.Collections.Generic.List<WallDaylight.Tri>();
+                            foreach (var t in wallTris)
+                            {
+                                double cx = (t.A.X + t.B.X + t.C.X) / 3, cy = (t.A.Y + t.B.Y + t.C.Y) / 3;
+                                if (w.ZoneF.Any(r => GradingGeometry.PointInRing(r, cx, cy))) tf.Add(t);
+                                else if (w.ZoneC.Any(r => GradingGeometry.PointInRing(r, cx, cy))) tcL.Add(t);
+                            }
+                            wi.WallTrisF = tf; wi.WallTrisC = tcL;
+                            log.AppendLine($"   선 옹벽 {w.No} — 가상옹벽 삼각형 {wallTris.Count} → 성토 자리 {tf.Count} · 절토 자리 {tcL.Count}");
+                            if (tf.Count + tcL.Count == 0) bad = "선 옹벽의 바꿀 자리 안에 가상옹벽 삼각형이 없다";
+                        }
+                        if (bad.Length == 0) { inputs.Add(wi); useOk.Add(w); }
                         // 입력을 떨군다(옹벽마다 — 폴리곤 ±5m 합성 전 면) — 오프라인 재생
                         try
                         {
@@ -1211,6 +1221,9 @@ public sealed class WallCompositeCommand
                 "<b>⚠1cm 넘은 자리</b>(옹벽 {0}): 높이 오차 합 {1:F1}mm(한도 {2:F0}mm) — 옹벽 높이 {3:F1}mm @{4} · Civil이 0.1mm 안 두 점을 반드시 합치는 자리 곁 · ",
                 forcedNo, forcedStep.R.HeightBudget * 1000, res.HeightLimit * 1000, forcedStep.R.Clean!.WallDz * 1000, forcedStep.R.Clean.WallAt)
             : "";
+        // ★[v114.0 · JACK 1105] 선 옹벽 — 평면(노리 · 사면선 · 정지경계 · 옹벽선)을 F에 맞춘다(같은 트랜잭션 · 실패해도 합성은 그대로 · ⚠ 한 줄)
+        try { string pn = WallLinePlan.Apply(db, tr, useOk, head.PlanHandle ?? ""); if (pn.Length > 0) log.AppendLine("   " + pn); }
+        catch (System.Exception px) { log.AppendLine($"   ⚠선 옹벽 평면 맞추기 실패({px.GetType().Name}: {px.Message}) — 노리 · 정지경계는 옛 데이라잇 그대로"); }
         _lastOk = true;
         if (at != null) at.Ok = true;   // ★[v103.1.12] 정식 회도 «됨»(빠뜨리면 부른 쪽이 성공을 «전체 못 함»으로 읽는다 — 화면 없는 시험 D1 1015 첫 판에서 잡음)
         _compId = cTin.ObjectId; _compGround = groundId;

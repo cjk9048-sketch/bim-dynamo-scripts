@@ -217,7 +217,7 @@ public sealed class AltCommand
                 using var tr = db.TransactionManager.StartTransaction();
                 double wall = 0, road = 0; int nw = 0, nr = 0;
                 if (!gid.IsNull)
-                    foreach (var w in PureWithWallsBuilder.CurrentWalls(db, tr, gid, out _)) { wall += w.Kind == 1 ? w.LineLen : Alternatives.LineLength(w.Poly, w.IsWall); nw++; }   // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 경계 폴리선 옹벽 = 폴리선 길이 × 단 수
+                    foreach (var w in PureWithWallsBuilder.CurrentWalls(db, tr, gid, out _)) { wall += w.Kind != 0 ? w.LineLen : Alternatives.LineLength(w.Poly, w.IsWall); nw++; }   // ★[v114.0] 선 옹벽(종류 2) = 앞면 토막 길이 합(Faces)
                 foreach (var id in RoadRanges.Roads(tr, db))
                 {
                     try { road += ((CivilDb.Alignment)tr.GetObject(id, OpenMode.ForRead)).Length; nr++; } catch { }

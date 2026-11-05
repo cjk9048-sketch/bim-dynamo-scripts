@@ -790,7 +790,7 @@ public sealed class CreateGradingCommand
             {
                 var checks = WallPlace.CheckAll(walls.Where(w => w.State == 1 && w.Kind == 0).ToList(), boundary, p, cutZones, fillZones);
                 // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 경계 폴리선 옹벽 — 단 링 자리 재기 대신 다시 합성(DHWALLCOMP)이 새 경계로 판정을 다시 돌린다(제자리면 다시 짓고 · 움직였으면 «다시 짓기 실패» 보류 · 지우지 않음)
-                foreach (var wb in walls.Where(w => w.State == 1 && w.Kind == 1))
+                foreach (var wb in walls.Where(w => w.State == 1 && w.Kind != 0))   // ★[v114.0] 선 옹벽(종류 2)
                 {
                     wb.Hold = ""; keep++;
                     sbL.Append($"  폴리선 옹벽 {wb.No}({wb.Side}) — 다시 합성 때 새 경계로 다시 잰다(제자리면 다시 짓고 · 움직였으면 보류)\n");
@@ -4323,7 +4323,7 @@ public sealed class CreateGradingCommand
                 wHead.Frozen.Add(new FrozenWall { No = w.No, PlanHandle = region, Up = w.Up, H = w.H, SlopeW = w.SlopeW, FaceRun = w.FaceRun,
                                                   Reflected = refl.Contains(w.No), Poly = w.Poly.ToList(),
                                                   IsWall = w.IsWall.ToList(), T = w.T, HeadZ = w.HeadZ,
-                                                  Kind = w.Kind, Line = w.Line.ToList(), PadZ = w.PadZ, Tiers = w.Tiers, CapZ = w.CapZ });   // ★[v113.0] 판 6 — 종류도 굳힌다
+                                                  Kind = w.Kind, Line = w.Line.ToList(), FaceLen = w.FaceLen });   // ★[v114.0] 판 7 — 종류 · 앞면 길이도 굳힌다
             }
             wHead.PlanHandle = "";
             WallListStore.Save(db, tr, wHead, new System.Collections.Generic.List<WallRec>());

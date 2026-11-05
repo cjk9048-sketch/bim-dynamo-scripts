@@ -458,7 +458,7 @@ internal sealed class RoadPanel : UserControl
             // ★[v111.10 · 계획 3.4] 처음 만드는 중에는 [업데이트] 꺼 둠(누르면 ^C^C가 DHROAD를 끊음) — 위 루프가 다시 켜므로 그 뒤에
             _updateBtn.IsEnabled = s != null && !s.Making;
             RefreshReset(s);
-            _title.Text = s == null ? "열린 도로 없음 — [경로 그리기] · [폴리선 선택]" : s.Name;
+            _title.Text = s == null ? "열린 도로 없음 — [진입도로 생성]" : s.Name;
             foreach (var (box, get, _, scale, _, _) in _fields)
             {
                 // ★[설치 전 검토 L7] 같은 도로를 다시 그릴 때 입력 중인 칸은 덮지 않는다
