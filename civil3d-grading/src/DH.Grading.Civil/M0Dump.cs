@@ -103,7 +103,7 @@ internal static class M0Dump
                         sb.AppendLine($"# 옹벽 목록 · 확인된 정지면 {head.VerifiedP0} · 다음 번호 {head.NextNo}");
                         foreach (var w in walls)
                         {
-                            sb.AppendLine($"WALL {w.No} {(w.Up ? "절토" : "성토")} 상태 {w.State} 보류 «{w.Hold}» P0 {w.P0Handle}" + (w.Kind != 0 ? $" 종류 {w.Kind}(폴리선 · 단 {w.Tiers} · 바닥 {w.PadZ:F3} · 뚜껑 {w.CapZ:F2})" : ""));   // ★[v113.0] 판 6 종류
+                            sb.AppendLine($"WALL {w.No} {(w.Up ? "절토" : "성토")} 상태 {w.State} 보류 «{w.Hold}» P0 {w.P0Handle}" + (w.Kind != 0 ? $" 종류 {w.Kind}(선 · 절 H {w.Hc:0.##} T {w.Tc:0.##} · 성 H {w.Hf:0.##} T {w.Tf:0.##} · 선 바깥 {w.FootMax:F3} · 자리 성 {w.ZoneF.Count} 절 {w.ZoneC.Count} · 면 토막 {w.Faces.Count} · 앞면 {w.FaceLen:F2} m)" : ""));   // ★[v114.0] 판 7 종류 2
                             if (w.Kind != 0) sb.AppendLine("LINE " + string.Join(" ", w.Line.Select(p => string.Format(ci, "{0:R},{1:R}", p.X, p.Y))) + " | SRC " + string.Join(" ", w.Src.Select(p => string.Format(ci, "{0:R},{1:R}", p.X, p.Y))));
                             sb.AppendLine("POLY " + string.Join(" ", (w.Poly ?? new System.Collections.Generic.List<Point3>()).Select(p => string.Format(ci, "{0:R},{1:R},{2:R}", p.X, p.Y, p.Z))));
                             sb.AppendLine("SEG " + string.Join(" ", (w.Seg ?? new System.Collections.Generic.List<Point3>()).Select(p => string.Format(ci, "{0:R},{1:R},{2:R}", p.X, p.Y, p.Z))));

@@ -750,7 +750,7 @@ internal static class ZoneEditCommon
             ed.WriteMessage(wallMode
                 ? $"\n[{cmdLabel}] ① 계단선을 클릭(그 선 전체) → ② 단높이·소단길이 정하고 Enter. (전체해제=C · Esc=취소)"
                 : $"\n[{cmdLabel}] ① 계단선을 클릭 → ② 전체구간/구간지정(이미 변환한 자리는 전체만) → ③ 단높이·사면구배·소단길이 정하고 Enter."
-                  + (listWalls.Any(w => w.Kind == 1) ? " (폴리선 옹벽 되돌리기=W · 전체해제=C · Esc=취소)" : " (전체해제=C · Esc=취소)"));
+                  + (listWalls.Any(w => w.Kind != 0) ? " (폴리선 옹벽 되돌리기=W · 전체해제=C · Esc=취소)" : " (전체해제=C · Esc=취소)"));
 
             PickGuard.Enter(doc, "DH-옹벽선");
 
@@ -927,7 +927,7 @@ internal static class ZoneEditCommon
                 //     → <b>매칭용 이름(localName)은 글자 하나</b>로 두고, 한글은 <b>표시용(displayName)</b>에만 쓴다.
                 //     세 인자가 각각 다른 일을 한다: global=코드가 받는 값 · local=사용자가 치는 값 · display=화면.
                 // ★★[v113.0 · JACK 1104 «옹벽 폴리선 — 경계 2점 자르기 + 안쪽 다단»] 옹벽 변환 = 폴리선(L) · 사면 변환 = 폴리선 옹벽 되돌리기(W — 그런 옹벽이 있을 때만)
-                if (!wallMode && listWalls.Any(w => w.Kind == 1)) peo.Keywords.Add("W", "W", "폴리선옹벽(W)");   // 폴리선(L)은 [옹벽 추가]로 옮김(JACK 1104)
+                if (!wallMode && listWalls.Any(w => w.Kind != 0)) peo.Keywords.Add("W", "W", "폴리선옹벽(W)");   // 폴리선(L)은 [옹벽 추가]로 옮김(JACK 1104)
                 peo.Keywords.Add("C", "C", "전체해제(C)");   // ★선을 안 골라도 쓰는 것이라 이 단계에 남긴다
                 var per = ed.GetEntity(peo);
                 if (per.Status == PromptStatus.Cancel) break;
@@ -1955,7 +1955,7 @@ internal static class ZoneEditCommon
     {
         var ed = doc.Editor; var db = doc.Database;
         const string lbl = "옹벽→사면";
-        var bound = listWalls.Where(w => w.Kind == 1).ToList();
+        var bound = listWalls.Where(w => w.Kind != 0).ToList();   // ★[v114.0] 선 옹벽(종류 2)
         if (bound.Count == 0) { ed.WriteMessage($"\n[{lbl}] 폴리선 옹벽이 없습니다."); return; }
         int no = 0;
         while (no == 0)
@@ -2017,7 +2017,7 @@ internal static class ZoneEditCommon
         try { DiagLog.AppendCarry("\n" + line); } catch { }
     }
 
-    private static bool TryReadPick(Transaction tr, ObjectId id, string app,
+    internal static bool TryReadPick(Transaction tr, ObjectId id, string app,
         out (bool up, bool isSlope, int bench, int seg, string plan) pk)
     {
         pk = default;

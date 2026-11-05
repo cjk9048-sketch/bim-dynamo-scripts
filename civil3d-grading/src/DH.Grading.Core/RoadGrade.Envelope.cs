@@ -133,7 +133,7 @@ public static partial class RoadGrade
         double kF = 1.0 / Math.Max(1e-6, inp.Fill.Slope), kC = 1.0 / Math.Max(1e-6, inp.Cut.Slope);
         double gMax = 0;
         for (int i = 0; i + 1 < inp.Z.Length; i++) { double l = Math.Sqrt(Sq(inp.X[i + 1] - inp.X[i]) + Sq(inp.Y[i + 1] - inp.Y[i])); if (l > 1e-9) gMax = Math.Max(gMax, Math.Abs(inp.Z[i + 1] - inp.Z[i]) / l); }
-        int wallSkip = 0, cand = 0, nPts = 0, perpFail0 = 0;   // perpFail0 = 네모 두 끝 점을 이은 마디가 첫 쪼개기에서 가운데 주름을 못 찾음(검토 질문 — 셈)
+        int wallSkip = 0, cand = 0, nPts = 0, perpFail0 = 0;   // perpFail0 = 첫 쪼개기에서 가운데 주름을 못 찾아 두 점 원천으로 바꾼 마디(검토 질문 6 — 셈)
         // ★[v113.3 · 속도] 평가 수는 실마다 따로 세어 끝에 더함(모든 실이 한 칸을 Interlocked로 치면 캐시 줄 다툼으로 병렬이 거의 안 됐다)
         using var evTl = new System.Threading.ThreadLocal<long[]>(() => new long[1], true);
         long Evals() { long t = 0; foreach (var v in evTl.Values) t += v[0]; return t; }
@@ -433,12 +433,13 @@ public static partial class RoadGrade
         {
             double za = lo ? A.ZLo : A.ZHi, zb2 = lo ? B.ZLo : B.ZHi, ka = lo ? A.KLo : A.KHi, kb = lo ? B.KLo : B.KHi;
             double L = Math.Sqrt(Sq(B.X - A.X) + Sq(B.Y - A.Y)), k = Math.Min(ka, kb);   // ★[검토 L9] 두 마디 K가 다르면 무른 쪽
+            bool fail0 = false;   // ★[v113.3 · 설치 전 검토 질문 6] 첫 쪼개기(깊이 0)에서 가운데 주름을 못 찾음
             if (A.Fs && B.Fs && depth < 12 && L > 2e-3)
             {
                 // 측점 뜀 사슬 — 가운데에서 직각으로 측점 뜀 자리를 다시(늘 찾음 · 높이 차가 0 곁이어도) · (값 보간 오차 + K × 처짐) > 1 mm면 쪼갬(사이 높이 차 혹도 여기서 잡힘)
                 double mx = (A.X + B.X) / 2, my = (A.Y + B.Y) / 2, nx = -(B.Y - A.Y) / L, ny = (B.X - A.X) / L;
                 bool okP = Perp(mx, my, nx, ny, L, true, lo, out double cx, out double cy, out var la, out var lb);
-                if (!okP && depth == 0) System.Threading.Interlocked.Increment(ref perpFail0);
+                if (!okP && depth == 0) fail0 = true;
                 if (okP)
                 {
                     var c = Value(cx, cy, new List<PointEval> { la, lb }, lo, !lo);
@@ -455,7 +456,7 @@ public static partial class RoadGrade
             {
                 double mx = (A.X + B.X) / 2, my = (A.Y + B.Y) / 2, nx = -(B.Y - A.Y) / L, ny = (B.X - A.X) / L;
                 bool okP = Perp(mx, my, nx, ny, L, false, lo, out double cx, out double cy, out var la, out var lb);
-                if (!okP && depth == 0) System.Threading.Interlocked.Increment(ref perpFail0);
+                if (!okP && depth == 0) fail0 = true;
                 if (okP)
                 {
                     var c = Value(cx, cy, new List<PointEval> { la, lb }, lo, !lo);
@@ -469,6 +470,15 @@ public static partial class RoadGrade
             }
             // 측점 뜀 사슬 중 두 끝 다 높이 차 1 mm 아래인 토막은 원천이 필요 없음(이미 이어짐 — 쪼개기가 사이 혹을 이미 봄)
             if (A.Fs && B.Fs && Math.Max(lo ? A.JLo : A.JHi, lo ? B.JLo : B.JHi) <= 1e-3) return;
+            // ★[v113.3 · 설치 전 검토 질문 6] 첫 쪼개기에서 두 끝 사이 가운데 주름을 못 찾은 마디(한 네모의 두 끝 점이 다른 주름 · 주름 끝자락)는 이어 붙이지 않고 두 점 원천으로 —
+            //   이은 마디는 사이 주름이 없는 자리에도 선형 높이 원뿔을 세워 감싸기가 땅 · 사면을 괜히 밀 수 있다(셈 = EnvPerpFail · S214 · S212에서 남).
+            if (fail0)
+            {
+                System.Threading.Interlocked.Increment(ref perpFail0);
+                o.Add((A.X, A.Y, za, A.X, A.Y, za, ka));
+                o.Add((B.X, B.Y, zb2, B.X, B.Y, zb2, kb));
+                return;
+            }
             o.Add((A.X, A.Y, za, B.X, B.Y, zb2, k));
         }
         var env = new EnvSet();

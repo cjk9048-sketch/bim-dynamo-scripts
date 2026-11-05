@@ -3,7 +3,7 @@
 //   ① 끊김 0(자격 구역 안) — 바뀐 칸 ± 1칸의 5 cm 마디 이웃 쌍마다 |ΔZ| > K·h + 2 mm면 1 µm까지 반씩(차가 큰 쪽) → 끝 차 > 1 mm = 끊김.
 //      까닭별로 셈(측점 뜀 · 꺾은선 꼭짓점 · 발 표본 · 다른 다리 · 표본 쪽 · 끝 너머) · 자격 밖(벽 면 단면 · 옛 가장자리 옹벽 뒤 · 폴리선 옹벽)은 따로 셈만(범위 밖).
 //   ④ 곧은 길(18 % · 0 %) — 감싸기 켬/끔(EnvOff) 격자 비트 같음(원천은 끝 모서리 몇 mm만).
-//   ⑥ 시간 — 감싸기 켬/끔(셋 중 가장 빠른 값) · 흘러내림 수(감싸기 켬 · 끔) 보고.
+//   ⑥ 시간 — 감싸기 켬/끔(다섯 중 가장 빠른 값) · 흘러내림 수(감싸기 켬 · 끔) 보고.
 using DH.Grading.Core;
 
 static class RoadEnvelopeCheck
@@ -77,6 +77,8 @@ static class RoadEnvelopeCheck
         public int Pairs, In, Out; public double MaxIn, MaxOut; public string AtIn = "";
         public Dictionary<string, (int N, double Max)> Why = new();
         public double Ms;
+        /// <summary>★[v113.3 · 설치 전 검토 M] 5 cm 마디 종류 4(사면 충돌) — 감싸기 켬 · 끝 식 전 값(lo &gt; hi = 끔) · 감싸기 때문에 새로 생긴 것(끔에선 lo ≤ hi).</summary>
+        public int K4On, K4Off, K4New;
     }
 
     static bool Use(in RoadGrade.PointEval p) => p.Kind is 0 or 2 or 3 or 4 && double.IsFinite(p.Zd);
@@ -103,7 +105,19 @@ static class RoadEnvelopeCheck
         for (int j = 0; j < ny; j++)
         {
             double y = r.Y0 + (j + 0.5) * h; int cj = j / sub;
-            System.Threading.Tasks.Parallel.For(0, nx, i => { curOk[i] = reg[cj * W + i / sub]; if (curOk[i]) cur[i] = r.Eval!(r.X0 + (i + 0.5) * h, y); });
+            System.Threading.Tasks.Parallel.For(0, nx, i =>
+            {
+                curOk[i] = reg[cj * W + i / sub];
+                if (!curOk[i]) return;
+                double x = r.X0 + (i + 0.5) * h;
+                cur[i] = r.Eval!(x, y);
+                // ⑦ 마디 사면 충돌 — 끔 = 끝 식 전 lo > hi(Finish와 같은 문턱)
+                var w = r.EvalRaw!(x, y);
+                bool off4 = w.Raw && w.Lo > w.Hi + 1e-6, on4 = cur[i].Kind == 4;
+                if (on4) System.Threading.Interlocked.Increment(ref res.K4On);
+                if (off4) System.Threading.Interlocked.Increment(ref res.K4Off);
+                if (on4 && !off4) System.Threading.Interlocked.Increment(ref res.K4New);
+            });
             System.Threading.Tasks.Parallel.For(0, nx, i =>
             {
                 if (!curOk[i]) return;
@@ -190,12 +204,13 @@ static class RoadEnvelopeCheck
                 s.In == 0, $"끊김 {s.In}(최대 {s.MaxIn:F3} m {s.AtIn}) · 자격 밖(범위 밖 · 셈만) {s.Out}(최대 {s.MaxOut:F3} m) · 이분한 쌍 {s.Pairs} · 원천 마디 {r.EnvSources} · 감싸기 칸 {r.EnvCells} · 자격 밖이라 안 덮은 칸 {r.EnvClip} · 도로 띠 덮음 {r.EnvRoadHit} · 자격 밖 신호 {r.EnvWallSkip} · 첫 쪼개기 못 찾음 {r.EnvPerpFail} · {why} · {s.Ms:F0} ms");
             // ⑦ [설치 전 검토 M] 감싸기가 lo를 hi 위로 밀어 새 «사면 충돌»(종류 4) 칸을 만들지 않음
             int c0 = ConflictsOff(mk);
-            Check($" {tag} — ⑦ 사면 충돌 칸이 감싸기로 늘지 않음", r.Conflicts <= c0, $"충돌 칸 감싸기 켬 {r.Conflicts} · 끔 {c0}");
+            Check($" {tag} — ⑦ 사면 충돌 칸이 감싸기로 늘지 않음(격자 칸 · 5 cm 마디 — 감싸기로 새로 생긴 마디 0)", r.Conflicts <= c0 && s.K4New == 0,
+                $"충돌 칸 감싸기 켬 {r.Conflicts} · 끔 {c0} · 5 cm 마디 켬 {s.K4On} · 끔 {s.K4Off} · 새로 {s.K4New}");
             // ⑥ 시간 · 흘러내림(감싸기 켬 · 끔)
             double TimeOf(bool off)
             {
                 RoadGrade.EnvOff = off;
-                try { double best = double.MaxValue; for (int q = 0; q < 3; q++) { var sw = System.Diagnostics.Stopwatch.StartNew(); RoadGrade.Run(mk()); best = Math.Min(best, sw.Elapsed.TotalMilliseconds); } return best; }
+                try { double best = double.MaxValue; for (int q = 0; q < 5; q++) { var sw = System.Diagnostics.Stopwatch.StartNew(); RoadGrade.Run(mk()); best = Math.Min(best, sw.Elapsed.TotalMilliseconds); } return best; }
                 finally { RoadGrade.EnvOff = false; }
             }
             double tOn = TimeOf(false), tOff = TimeOf(true);
@@ -210,19 +225,24 @@ static class RoadEnvelopeCheck
                 Check($" {tag} — ④ 감싸기 켬/끔 격자 Z · 종류 · F 비트 같음 · 부피 같음(병렬 더하기 차례 탓 끝자리만 — 1e-6 ㎥)", r.Z.Length == r0.Z.Length && diff == 0 && Math.Abs(r.CutVol - r0.CutVol) <= 1e-6 && Math.Abs(r.FillVol - r0.FillVol) <= 1e-6,
                     $"다른 칸 {diff} · 절토 {r.CutVol:F3}/{r0.CutVol:F3} · 성토 {r.FillVol:F3}/{r0.FillVol:F3} · 원천 마디 {r.EnvSources}");
             }
+        }
         // ⑦ S212 BD 급한 굽은 길(같은 입력) — 사면 충돌 칸 감싸기 켬 · 끔
-        foreach (var (tag, mk) in new (string, Func<RoadGrade.Input>)[]
+        foreach (var (tagB, mkB) in new (string, Func<RoadGrade.Input>)[]
         {
             ("S212 ① R 8 · 17 % · 성토 8 m", () => Bend(8, 0.17, 8, false)), ("S212 ② R 11 · 17 % · 성토 8 m", () => Bend(11, 0.17, 8, false)),
             ("S212 ③ R 8 · 17 % · 절토", () => Bend(8, 0.17, 2, false)), ("S212 ④ R 8 · 평평 · 성토 8 m", () => Bend(8, 0, 8, false)),
             ("S212 ⑤ R 30 · 17 % · 성토 8 m", () => Bend(30, 0.17, 8, false)),
             ("S212 ⑪ R 8 · 17 % · 절토 4 m", () => Bend(8, 0.17, -4, true)), ("S212 ⑪ R 8 · 12 % · 성토 8 m", () => Bend(8, 0.12, 8, true)),
+            ("S212 ⑪ R 30 · 17 % · 성토 8 m", () => Bend(30, 0.17, 8, true)), ("S212 ⑨ R 20 · 8 % · 절토", () => Bend(20, 0.08, -6, false)),
+            ("S212 ⑩ R 8 · 17 % · 성토 8 m + 계단선 옹벽", () => { var q = Bend(8, 0.17, 8, false); q.TierWalls.Add(new RoadGrade.TierWall(20, 45, -1, 1, 1)); return q; }),
         })
         {
-            var r = RoadGrade.Run(mk());
-            int c0 = ConflictsOff(mk);
-            Check($" {tag} — ⑦ 사면 충돌 칸이 감싸기로 늘지 않음", r.Error.Length == 0 && r.Conflicts <= c0, $"충돌 칸 감싸기 켬 {r.Conflicts} · 끔 {c0} · 원천 마디 {r.EnvSources} · 감싸기 칸 {r.EnvCells} · 첫 쪼개기 못 찾음 {r.EnvPerpFail}");
-        }
+            var inpB = mkB();
+            var r = RoadGrade.Run(inpB);
+            int c0 = ConflictsOff(mkB);
+            var s = r.Error.Length == 0 ? Run5cm(inpB, r) : new Scan();
+            Check($" {tagB} — ⑦ 사면 충돌 칸이 감싸기로 늘지 않음(격자 칸 · 5 cm 마디 — 감싸기로 새로 생긴 마디 0)", r.Error.Length == 0 && r.Conflicts <= c0 && s.K4New == 0,
+                $"충돌 칸 감싸기 켬 {r.Conflicts} · 끔 {c0} · 5 cm 마디 켬 {s.K4On} · 끔 {s.K4Off} · 새로 {s.K4New} · 원천 마디 {r.EnvSources} · 감싸기 칸 {r.EnvCells} · 첫 쪼개기 못 찾음 {r.EnvPerpFail}");
         }
     }
 }
