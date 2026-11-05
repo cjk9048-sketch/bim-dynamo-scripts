@@ -170,13 +170,14 @@ public sealed class MiscSettingsDialog : Window
                 : System.IO.File.Exists(System.IO.Path.Combine(d.Length > 0 ? d : ForestSettings.DefaultTiles, "index.json")) ? "✓ 타일 있음" : "타일 없음";
         }
         ShowForest();
-        forestDir.TextChanged += (_, __) => ShowForest();
+        // ★[검토 L5] 글자마다 폴더를 찾지 않는다(네트워크 경로면 창이 굳음) — 칸을 떠날 때 · [찾기] 뒤에만
+        forestDir.LostFocus += (_, __) => ShowForest();
         root.Children.Add(forestState);
         forestBrowse.Click += (_, __) =>
         {
             var dlg = new Microsoft.Win32.OpenFolderDialog { Title = "임상도 타일 폴더(index.json)" };
             try { string cur = forestDir.Text.Trim(); if (System.IO.Directory.Exists(cur)) dlg.InitialDirectory = cur; } catch { }
-            if (dlg.ShowDialog(this) == true) forestDir.Text = dlg.FolderName;
+            if (dlg.ShowDialog(this) == true) { forestDir.Text = dlg.FolderName; ShowForest(); }
         };
 
         var ok = new Button { Content = "저장", IsDefault = true, MinWidth = 96 };
@@ -190,6 +191,14 @@ public sealed class MiscSettingsDialog : Window
                 vwState.Foreground = DhBrand.Warn;
                 vwState.Text = "VWorld 키 꼴이 아닙니다(8-4-4-4-12) — 고치거나 비우세요";
                 return;
+            }
+            // ★[v115 · 검토 L4] 임상도 설정을 먼저 쓴다 — 못 쓰면 아무것도 바꾸지 않고 창을 둔다(키 · 좌표계만 바뀌고 수목 설정은 옛것인 반쯤 저장을 막음)
+            string fd = forestDir.Text.Trim();
+            if (fd.Length == 0) fd = ForestSettings.DefaultTiles;
+            if (fs.On != (forestOn.IsChecked == true) || fs.Tiles != fd)
+            {
+                try { fs.On = forestOn.IsChecked == true; fs.Tiles = fd; fs.Save(); }
+                catch (System.Exception ex) { forestState.Foreground = DhBrand.Warn; forestState.Text = "설정을 저장하지 못했습니다 — " + ex.Message; return; }
             }
             if (vk != VWorldKey.User)
             {
@@ -206,14 +215,6 @@ public sealed class MiscSettingsDialog : Window
                 System.Math.Clamp(_coordSys.SelectedIndex, 0, GradingDialog.EpsgCodes.Length - 1)];
             GradingSettings.ShowOnlyResultSurface = _showOnlyResult.IsChecked == true;
             GradingSettings.ParcelObjectData = _parcelOd.IsChecked == true;
-            // ★[v115] 임상도 — 켬 · 폴더(비우면 기본) · 바뀌었을 때만 쓴다
-            string fd = forestDir.Text.Trim();
-            if (fd.Length == 0) fd = ForestSettings.DefaultTiles;
-            if (fs.On != (forestOn.IsChecked == true) || fs.Tiles != fd)
-            {
-                try { fs.On = forestOn.IsChecked == true; fs.Tiles = fd; fs.Save(); }
-                catch (System.Exception ex) { forestState.Foreground = DhBrand.Warn; forestState.Text = "설정을 저장하지 못했습니다 — " + ex.Message; return; }
-            }
             DialogResult = true;
             Close();
         };

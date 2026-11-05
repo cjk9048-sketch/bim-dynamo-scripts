@@ -125,6 +125,19 @@ test('층 — 덩이 상태 · 대리 묶음 다시 채우기(N3) · 밀도', ()
   assert.deepEqual([s2.lod0Trees, s2.lod1Trees, sumLod1()], [2 * 2500, 2 * 2500, 2 * 2500]);
 });
 
+test('그릴 때 고르기에서 오류 → 수목만 숨김 · 층 회색(L16) · 3D는 그대로', () => {
+  const view = fakeView(), L = {};
+  buildForest(view, { forest: fakeHead(50) }, L);
+  const row = { className: 'lay', title: '' }, cb = { checked: true, disabled: false };
+  L.tree.row = row; L.tree.cb = cb;
+  view.controls.target = null;   // distanceTo(null) → 던짐
+  assert.doesNotThrow(() => view.draw());
+  assert.equal(L.tree.obj.visible, false);
+  assert.equal(L.tree.missing, '수목을 못 그렸습니다');
+  assert.deepEqual([row.className, cb.checked, cb.disabled], ['lay miss', false, true]);
+  assert.doesNotThrow(() => view.draw());   // 다음 장부터는 건너뜀
+});
+
 test('없음 · quiet 머리 → 회색 층', () => {
   const L = {};
   buildForest(fakeView(), { forest: { missing: '임상도 타일 없음', quiet: true } }, L);

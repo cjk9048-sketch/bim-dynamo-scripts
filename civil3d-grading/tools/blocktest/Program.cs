@@ -202,7 +202,7 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "bldg")
     return fails == 0 ? 0 : 1;
 }
 
-// ★[v115 · JACK 1105 임상도] BLOCKTEST_ONLY=forest — [3D 보기] 수목(S216 FT — 타일 변환 · 좌표 · 심기 · 빼기 · 한도 · 장면)만 · DH_FOREST_SYNTH=폴더면 그림 시험 페이지도
+// ★[v115 · JACK 1105 임상도] BLOCKTEST_ONLY=forest — [3D 보기] 수목(S235 FT — 타일 변환 · 좌표 · 심기 · 빼기 · 한도 · 장면)만 · DH_FOREST_SYNTH=폴더면 그림 시험 페이지도
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "forest")
 {
     ForestCheck.Run(Check);
@@ -295,7 +295,7 @@ SecretScanCheck.Run(Check);   // ★[v109] S177 — 비밀값 검사(공개 저�
 RoadCheck.Run(Check);   // ★[v110] S178 — 도로 정지(원뿔 감싸기) · 종단 초안
 ParcelCheck.Run(Check);   // ★[v109.1] S179 — VWorld 지적 · 소유(읽기 · 합치기 · 자르기)
 BuildingCheck.Run(Check);   // ★[v111.7] S184 — [3D 보기] 건물(VWorld 건물정보 읽기 · 높이 · 바닥 · 닿음 · 장면 배열)
-ForestCheck.Run(Check);     // ★[v115 · JACK 1105 임상도] S216 FT — [3D 보기] 수목(타일 변환 · 좌표 · 심기 · 빼기 · 한도 · 장면)
+ForestCheck.Run(Check);     // ★[v115 · JACK 1105 임상도] S235 FT — [3D 보기] 수목(타일 변환 · 좌표 · 심기 · 빼기 · 한도 · 장면)
 RoadBandCheck.Run(Check);    // ★[v111.3] S182 — 옹벽 변환 끝면 띠(끝면도 단높이마다 소단)
 RoadMeshCheck.Run(Check);    // ★[v111] S181 — 선 기반 진입도로 면(단면 광선 · 띠 세모 · 계단선 · 기록 경계)
 RoadXsecCheck.Run(Check);    // ★[v111.5] S183 — 진입도로 횡단(합친 계획면 · 복사본 이름 · 측점 이름 · 구간 · 바뀜)

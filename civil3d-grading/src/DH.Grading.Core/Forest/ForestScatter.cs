@@ -35,6 +35,8 @@ public static class ForestScatter
         public double Near = 300;
         /// <summary>밑동 = SurfZ − Sink.</summary>
         public double Sink = 0.3;
+        /// <summary>★[설치 전 검토 L8] 자가검증 기준 — 화면에 보이는 지형 메시의 높이(세모 무게중심 보간 · 없으면 SurfZ로 잼).</summary>
+        public Func<double, double, double?>? MeshZ;
     }
 
     public struct Tree
@@ -60,7 +62,7 @@ public static class ForestScatter
         /// <summary>자가검증 — 표본 그루 «밑동 + Sink ↔ SurfZ» 최대 차(m).</summary>
         public double SelfDz;
         public int SelfN;
-        public string Text => $"수목: 칸 {Tiles:N0} · 폴리곤 {Polys:N0} · 후보 {Cand:N0} · 뺌(설계 {DropDesign:N0} · 건물 {DropBldg:N0} · 급경사 {DropSteep:N0} · 면 없음 {DropNoZ:N0} · 한도 {DropCap:N0}) · 넣음 {Trees.Count:N0} · k {(double.IsFinite(K) ? K.ToString("G4", System.Globalization.CultureInfo.InvariantCulture) : "-")} · {Ms:N0} ms"
+        public string Text => $"수목: 칸 {Tiles:N0} · 폴리곤 {Polys:N0} · 후보 {Cand:N0} · 뺌(설계 {DropDesign:N0} · 건물 {DropBldg:N0} · 급경사 {DropSteep:N0} · 면 없음 {DropNoZ:N0} · 한도에 닿아 안 따짐 {DropCap:N0}) · 넣음 {Trees.Count:N0} · k {(double.IsFinite(K) ? K.ToString("G4", System.Globalization.CultureInfo.InvariantCulture) : "-")} · {Ms:N0} ms"
             + $" · (제지 {DropFrtp0:N0} · 범위 밖 {DropOut:N0} · 겹침 {DropOwner:N0} · 키 00 폴리곤 {PolyH00:N0} · 모르는 수종 {UnknownKind:N0})";
     }
 
@@ -182,26 +184,9 @@ public static class ForestScatter
                 }
         }
         res.Cand = cands.Count;
-        // 빼기(도면 좌표)
-        var kept = new List<Tree>(cands.Count);
-        foreach (var t0 in cands)
-        {
-            var t = t0;
-            double r = 0.7 * t.W;
-            var pts = new[] { (t.X, t.Y), (t.X + r, t.Y), (t.X - r, t.Y), (t.X, t.Y + r), (t.X, t.Y - r) };
-            if (inp.Design != null && pts.Any(q => inp.Design(q.Item1, q.Item2))) { res.DropDesign++; continue; }
-            if (inp.Building != null && pts.Any(q => inp.Building(q.Item1, q.Item2))) { res.DropBldg++; continue; }
-            if (inp.SurfZ(t.X, t.Y) is not double z) { res.DropNoZ++; continue; }
-            double? ze = inp.SurfZ(t.X + 1, t.Y), zw = inp.SurfZ(t.X - 1, t.Y), zn = inp.SurfZ(t.X, t.Y + 1), zs = inp.SurfZ(t.X, t.Y - 1);
-            double gx = ze != null && zw != null ? (ze.Value - zw.Value) / 2 : ze != null ? ze.Value - z : zw != null ? z - zw.Value : 0;
-            double gy = zn != null && zs != null ? (zn.Value - zs.Value) / 2 : zn != null ? zn.Value - z : zs != null ? z - zs.Value : 0;
-            double deg = Math.Atan(Math.Sqrt(gx * gx + gy * gy)) * 180 / Math.PI;
-            double keep = deg <= 35 ? 1 : deg >= 50 ? 0 : 1 - 0.7 * (deg - 35) / 15;
-            if (keep < 1 && U01(t.Hash, 8) >= keep) { res.DropSteep++; continue; }
-            t.Z = z - inp.Sink;
-            kept.Add(t);
-        }
-        // 한도(M4 · N1)
+        // ★[설치 전 검토 M1] 한도 차례로 먼저 줄 세우고(가까운 자리 = (0, U) · 먼 자리 = (1, U·(d/near)²) · 같으면 해시) 그 차례로 빼기를 따져
+        //   남은 수가 한도에 닿으면 멈춘다 — 결과 = «다 빼고 나서 Cap»(아래 Cap)과 같은 나무(가까운 자리만으로 넘치면 가까운 자리 U 순 · 아니면 가까운 자리 다 + 먼 자리 문턱 순).
+        //   넓은 지형에서도 빼기 검사(설계 · 건물 · 면 · 경사 — Civil 쪽이 비싼 것)는 한도 + 뺀 수만큼만 돈다.
         bool hasC = double.IsFinite(inp.CX0);
         double ccx = (inp.X0 + inp.X1) / 2, ccy = (inp.Y0 + inp.Y1) / 2;
         double Dist(Tree t)
@@ -210,21 +195,55 @@ public static class ForestScatter
             double ddx = Math.Max(0, Math.Max(inp.CX0 - t.X, t.X - inp.CX1)), ddy = Math.Max(0, Math.Max(inp.CY0 - t.Y, t.Y - inp.CY1));
             return Math.Sqrt(ddx * ddx + ddy * ddy);
         }
-        var final = Cap(kept, Dist, inp.Near, inp.Max, out double k);
-        res.K = k;
-        res.Capped = final.Count < kept.Count;
-        res.DropCap = kept.Count - final.Count;
+        var order = new (int Band, double Th, ulong Hash, int I)[cands.Count];
+        for (int i = 0; i < cands.Count; i++)
+        {
+            double d = Dist(cands[i]);
+            order[i] = d <= inp.Near ? (0, cands[i].U, cands[i].Hash, i) : (1, cands[i].U * (d / inp.Near) * (d / inp.Near), cands[i].Hash, i);
+        }
+        Array.Sort(order, (a, b) => a.Band != b.Band ? a.Band.CompareTo(b.Band) : a.Th != b.Th ? a.Th.CompareTo(b.Th) : a.Hash.CompareTo(b.Hash));
+        var final = new List<Tree>(Math.Min(cands.Count, Math.Max(0, inp.Max)));
+        int stop = order.Length;
+        (int Band, double Th) last = (0, 0);
+        for (int q = 0; q < order.Length; q++)
+        {
+            var t = cands[order[q].I];
+            if (!Survives(ref t)) continue;
+            if (final.Count >= inp.Max) { res.Capped = true; stop = q; break; }   // 한도 넘는 첫 «남을» 나무 — 여기서 멈춤
+            final.Add(t);
+            last = (order[q].Band, order[q].Th);
+        }
+        res.DropCap = order.Length - stop;   // 한도에 닿아 따지지 않은 후보(멈춘 그 나무 포함)
+        res.K = res.Capped ? (last.Band == 0 ? 0 : last.Th) : double.NaN;
         res.Trees = final;
         foreach (var t in final) res.PerFrtp[t.Frtp]++;
-        // 자가검증 — 표본 1,000그루 밑동 + Sink = SurfZ
+        // 자가검증 — 표본 1,000그루 «밑동 + Sink ↔ 보이는 지형 메시»(MeshZ — 없으면 SurfZ)
         int stepS = Math.Max(1, final.Count / 1000);
+        var check = inp.MeshZ ?? inp.SurfZ;
         for (int i = 0; i < final.Count; i += stepS)
         {
             var t = final[i];
-            if (inp.SurfZ(t.X, t.Y) is double z) { res.SelfDz = Math.Max(res.SelfDz, Math.Abs(t.Z + inp.Sink - z)); res.SelfN++; }
+            if (check(t.X, t.Y) is double z) { res.SelfDz = Math.Max(res.SelfDz, Math.Abs(t.Z + inp.Sink - z)); res.SelfN++; }
         }
         res.Ms = sw.ElapsedMilliseconds;
         return res;
+
+        bool Survives(ref Tree t)
+        {
+            double r = 0.7 * t.W;
+            double x = t.X, y = t.Y;
+            if (inp.Design != null && (inp.Design(x, y) || inp.Design(x + r, y) || inp.Design(x - r, y) || inp.Design(x, y + r) || inp.Design(x, y - r))) { res.DropDesign++; return false; }
+            if (inp.Building != null && (inp.Building(x, y) || inp.Building(x + r, y) || inp.Building(x - r, y) || inp.Building(x, y + r) || inp.Building(x, y - r))) { res.DropBldg++; return false; }
+            if (inp.SurfZ(x, y) is not double z) { res.DropNoZ++; return false; }
+            double? ze = inp.SurfZ(x + 1, y), zw = inp.SurfZ(x - 1, y), zn = inp.SurfZ(x, y + 1), zs = inp.SurfZ(x, y - 1);
+            double gx = ze != null && zw != null ? (ze.Value - zw.Value) / 2 : ze != null ? ze.Value - z : zw != null ? z - zw.Value : 0;
+            double gy = zn != null && zs != null ? (zn.Value - zs.Value) / 2 : zn != null ? zn.Value - z : zs != null ? z - zs.Value : 0;
+            double deg = Math.Atan(Math.Sqrt(gx * gx + gy * gy)) * 180 / Math.PI;
+            double keep = deg <= 35 ? 1 : deg >= 50 ? 0 : 1 - 0.7 * (deg - 35) / 15;
+            if (keep < 1 && U01(t.Hash, 8) >= keep) { res.DropSteep++; return false; }
+            t.Z = z - inp.Sink;
+            return true;
+        }
     }
 
     /// <summary>한도 — 가까운 자리(d ≤ near)는 다 남긴다(그것만으로 넘치면 그 안에서 해시 순위 U가 작은 차례로 한도만큼 · 먼 자리 0).

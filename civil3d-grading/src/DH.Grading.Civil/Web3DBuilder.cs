@@ -451,7 +451,8 @@ internal static class Web3DBuilder
                 bldgHead = new Dictionary<string, object> { ["missing"] = why };
             }
         }
-        Lap("건물", "수목 심는 중");
+        bool forestOn = ForestSettings.Load().On;   // ★[검토 L7] 로딩 창 글은 수목이 켜졌을 때만
+        Lap("건물", forestOn ? "수목 심는 중" : skipSat ? null : "위성사진 받는 중");
 
         // ④f ★★[v115 · JACK 1105 임상도 · 계획 2판 5절] 수목 — 임상도 숲 폴리곤 안 추정 배치(설계 자리 · 건물 + 1 m · 급경사 · 면 없음은 뺌) ·
         //   창고 = [기타 설정] 임상도 타일 폴더(기본 바탕화면\임상도_타일) → 도면 폴더 사본 → 없으면 층만 회색 · 꺼짐이면 열쇠를 안 넣는다(옛 장면 바이트 그대로)
@@ -459,11 +460,11 @@ internal static class Web3DBuilder
         object? forestHead = null;
         try
         {
-            var ft = new Web3DForest.Terrain(inp.X, inp.Y, inp.F, tm.TriCls, mnx, mny, mxx, mxy, tm.CMinX, tm.CMinY, tm.CMaxX, tm.CMaxY);
+            var ft = new Web3DForest.Terrain(inp.X, inp.Y, inp.Z, inp.F, tm.TriCls, mnx, mny, mxx, mxy, tm.CMinX, tm.CMinY, tm.CMaxX, tm.CMaxY);
             forestHead = Web3DForest.Build(c, ft, new[] { inp.Plan, inp.Bench, inp.SlopeCut, inp.SlopeFill, inp.WallMask, inp.WallFoot, inp.RoadArea }, bldgItems, SurfZ, ox, oy, sc, log);
         }
         catch (System.Exception fex) { log.AppendLine("  수목: 실패 — " + fex); forestHead = new Dictionary<string, object> { ["missing"] = "수목을 넣지 못했습니다(진단 로그 참고)" }; }
-        Lap("수목", skipSat ? null : "위성사진 받는 중");
+        if (forestOn) Lap("수목", skipSat ? null : "위성사진 받는 중");
 
         // ⑤ 위성 — 자세히(바뀐 자리 + 50 m · 0.3 m/px) + 바탕(지형 전체 + 30 m)
         object? satHead = null;

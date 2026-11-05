@@ -28,7 +28,7 @@ public static class KoreaTm
     public static (double Lon, double Lat) ToLonLat(double e, double n, double lon0Deg, double fn) => ToLonLat(e, n, lon0Deg, fn, K0, FE);
 
     /// <summary>★[v115 · JACK 1105 임상도] TM → 경도·위도 — 축척 <paramref name="k0"/> · 원점가산 E <paramref name="fe"/>를 받는 겹함수(UTM-K EPSG 5179 = 127.5° · 0.9996 · 1,000,000 · 2,000,000).
-    /// 옛 함수(k0 = 1 · FE = 200000)는 이것을 부른다 — 같은 셈 차례라 비트까지 같다(하네스 S216 ②).</summary>
+    /// 옛 함수(k0 = 1 · FE = 200000)는 이것을 부른다 — 같은 셈 차례라 비트까지 같다(하네스 S235 ②).</summary>
     public static (double Lon, double Lat) ToLonLat(double e, double n, double lon0Deg, double fn, double k0, double fe)
     {
         double lon0 = lon0Deg * Math.PI / 180.0;

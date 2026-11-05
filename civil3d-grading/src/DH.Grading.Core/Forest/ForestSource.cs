@@ -48,42 +48,72 @@ public static class ForestSource
         else if (tiles.Length > 0 && File.Exists(Path.Combine(tiles, "index.json")))
         {
             try { return new Pick(new FolderForestSource(tiles), "", false, false, "창고", false); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or System.Text.Json.JsonException or KeyNotFoundException or InvalidOperationException)
+            catch (Exception ex) when (Bad(ex))
             { why = "창고 index.json을 못 읽음 — " + ex.GetType().Name; }
         }
         else why = "창고 없음";
         // 도면 폴더 사본
-        if (!string.IsNullOrEmpty(dwgDir))
-        {
-            string cp = Path.Combine(dwgDir, CopyDir);
-            if (File.Exists(Path.Combine(cp, "index.json")))
-                try { return new Pick(new FolderForestSource(cp), "", false, false, why + " → 도면 폴더 사본", true); }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or System.Text.Json.JsonException or KeyNotFoundException or InvalidOperationException)
-                { why += " · 사본도 못 읽음 — " + ex.GetType().Name; }
-        }
+        if (OpenCopy(dwgDir, out var copy, out string cwhy)) return new Pick(copy, "", false, false, why + " → 도면 폴더 사본", true);
+        if (cwhy.Length > 0) why += " · " + cwhy;
         if (why.StartsWith("웹 주소", StringComparison.Ordinal)) return new Pick(null, "웹 주소 타일은 아직 지원하지 않습니다(폴더만)", false, true, why, false);
         if (isDefault && !seen) return new Pick(null, "임상도 타일 없음", true, false, why, false);
         return new Pick(null, "임상도 타일 폴더가 없습니다", false, true, why, false);
     }
 
+    /// <summary>읽기 · 풀기에서 «그 파일이 나쁨»으로 보는 예외(그 밖 예외는 위로 — 진단 로그).</summary>
+    static bool Bad(Exception ex) => ex is IOException or UnauthorizedAccessException or InvalidDataException or System.Text.Json.JsonException or KeyNotFoundException
+        or InvalidOperationException or FormatException or ArgumentOutOfRangeException or OverflowException;
+
+    /// <summary>도면 폴더 사본 열기(없으면 false · 못 읽으면 false + 까닭).</summary>
+    public static bool OpenCopy(string? dwgDir, out IForestTileSource? copy, out string why)
+    {
+        copy = null; why = "";
+        if (string.IsNullOrEmpty(dwgDir)) return false;
+        string cp = Path.Combine(dwgDir, CopyDir);
+        if (!File.Exists(Path.Combine(cp, "index.json"))) return false;
+        try { copy = new FolderForestSource(cp); return true; }
+        catch (Exception ex) when (Bad(ex)) { why = "사본도 못 읽음 — " + ex.GetType().Name; return false; }
+    }
+
     /// <summary>칸들을 읽어 푼다 — 없는 칸(숲 없음)은 건너뜀.</summary>
     public static List<ForestTile> Load(IForestTileSource src, IEnumerable<(int Tx, int Ty)> keys, out List<(int Tx, int Ty)> used)
+        => Load(src, keys, null, out used, out _, out _);
+
+    /// <summary>★[설치 전 검토 M3] 칸마다 따로 — 못 읽는 칸(없음 · 잠김 · 깨짐)은 <paramref name="fallback"/>(도면 폴더 사본)에서 한 번 더 · 그래도 안 되면 그 칸만 빼고 셈(층 전체를 죽이지 않음).</summary>
+    public static List<ForestTile> Load(IForestTileSource src, IEnumerable<(int Tx, int Ty)> keys, Func<IForestTileSource?>? fallback,
+                                        out List<(int Tx, int Ty)> used, out int failed, out int fromFallback)
     {
         var o = new List<ForestTile>();
-        used = new();
+        used = new(); failed = 0; fromFallback = 0;
+        IForestTileSource? fb = null; bool fbTried = false;
         foreach (var (tx, ty) in keys)
         {
-            var b = src.Tile(tx, ty);
-            if (b == null) continue;
-            o.Add(ForestTileFormat.DecodeTile(b));
+            ForestTile? t = null;
+            try
+            {
+                var b = src.Tile(tx, ty);
+                if (b == null) continue;   // 숲 없는 칸
+                t = Checked(ForestTileFormat.DecodeTile(b), tx, ty);
+            }
+            catch (Exception ex) when (Bad(ex))
+            {
+                if (!fbTried) { fbTried = true; try { fb = fallback?.Invoke(); } catch (Exception fex) when (Bad(fex)) { fb = null; } }
+                try { if (fb?.Tile(tx, ty) is { } b2) { t = Checked(ForestTileFormat.DecodeTile(b2), tx, ty); fromFallback++; } }
+                catch (Exception ex2) when (Bad(ex2)) { t = null; }
+                if (t == null) { failed++; continue; }
+            }
+            o.Add(t);
             used.Add((tx, ty));
         }
         return o;
     }
 
+    static ForestTile Checked(ForestTile t, int tx, int ty) => t.Tx == tx && t.Ty == ty ? t : throw new InvalidDataException("칸 번호가 다름");
+
     /// <summary>★[M5] 쓴 칸만 도면 폴더 <c>DH_임상도\</c>에 사본 — 칸 파일은 바이트가 같으면 다시 안 씀 · index.json은 사본 칸만(원본 index의 출처 · 이름표는 그대로).
+    /// ★[설치 전 검토 M2] 달라고 한 칸 가운데 창고에도 숲이 없는 칸은 index «empty»에 적는다 — 사본만으로 읽을 때 «모르는 칸»(사본을 만든 범위 밖)을 가려 경고한다.
     /// 돌려준 값 = 새로 쓴 칸 수(-1 = 사본 자체가 원천이라 안 씀).</summary>
-    public static int CopyUsed(IForestTileSource src, IEnumerable<(int Tx, int Ty)> used, string dwgDir)
+    public static int CopyUsed(IForestTileSource src, IEnumerable<(int Tx, int Ty)> requested, IEnumerable<(int Tx, int Ty)> used, string dwgDir)
     {
         string dst = Path.Combine(dwgDir, CopyDir);
         if (src is FolderForestSource fs && string.Equals(Path.GetFullPath(fs.Root).TrimEnd('\\'), Path.GetFullPath(dst).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)) return -1;
@@ -92,7 +122,15 @@ public static class ForestSource
         var ix = new ForestIndex { Made = src.Index.Made, Simplify = src.Index.Simplify, Sources = src.Index.Sources, Codes = src.Index.Codes };
         // 사본에 이미 있던 칸(같은 창고 판) 은 남긴다 — 다른 범위로 [3D 보기]해도 쌓인다
         if (have != null && have.Made == src.Index.Made)
+        {
             foreach (var (k, v) in have.Tiles) if (File.Exists(Path.Combine(dst, ForestTileFormat.RelPath(int.Parse(k.Split('_')[0], System.Globalization.CultureInfo.InvariantCulture), int.Parse(k.Split('_')[1], System.Globalization.CultureInfo.InvariantCulture))))) ix.Tiles[k] = v;
+            foreach (var k in have.Empty) ix.Empty.Add(k);
+        }
+        foreach (var (tx, ty) in requested)
+        {
+            string key = ForestTileFormat.Key(tx, ty);
+            if (!src.Index.Tiles.ContainsKey(key)) ix.Empty.Add(key);
+        }
         int wrote = 0;
         foreach (var (tx, ty) in used)
         {
@@ -111,7 +149,9 @@ public static class ForestSource
             }
             ix.Tiles[key] = meta;
         }
-        bool sameIndex = have != null && have.Made == ix.Made && have.Tiles.Count == ix.Tiles.Count && have.Tiles.All(kv => ix.Tiles.TryGetValue(kv.Key, out var v) && v.SequenceEqual(kv.Value));
+        ix.Empty.ExceptWith(ix.Tiles.Keys);
+        bool sameIndex = have != null && have.Made == ix.Made && have.Tiles.Count == ix.Tiles.Count && have.Tiles.All(kv => ix.Tiles.TryGetValue(kv.Key, out var v) && v.SequenceEqual(kv.Value))
+                         && have.Empty.SetEquals(ix.Empty);
         if (!sameIndex) { Directory.CreateDirectory(dst); ix.Write(Path.Combine(dst, "index.json")); }
         return wrote;
     }

@@ -138,8 +138,24 @@ export function buildForest(view, head, L) {
   };
 
   const cam = new THREE.Vector3(), box = new THREE.Box3(), lo = new THREE.Vector3(), hi = new THREE.Vector3();
+  // ★[설치 전 검토 L16] 그릴 때마다 도는 고르기에서 무슨 일이 나도 3D는 그대로 — 수목만 숨기고 층을 회색 + ⚠
+  let broken = false;
   const update = () => {
-    if (!root.visible) return;
+    if (broken || !root.visible) return;
+    try { pick(); }
+    catch (e) {
+      broken = true;
+      root.visible = false;
+      const T = L.tree;
+      if (T) {
+        T.on = false; T.missing = '수목을 못 그렸습니다';
+        if (T.row) { T.row.className = 'lay miss'; T.row.title = T.missing; }
+        if (T.cb) { T.cb.checked = false; T.cb.disabled = true; }
+        if (T.sl) T.sl.disabled = true;
+      }
+    }
+  };
+  const pick = () => {
     cam.copy(view.camera.position);
     const hide = hideDistance(view.camera.position.distanceTo(view.controls.target));
     const cs = model.chunks.map(c => {

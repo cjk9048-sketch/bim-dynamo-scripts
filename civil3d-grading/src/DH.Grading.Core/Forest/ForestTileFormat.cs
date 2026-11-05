@@ -96,9 +96,12 @@ public static class ForestTileFormat
         if (BinaryPrimitives.ReadUInt16LittleEndian(b[4..]) != Version) throw new InvalidDataException("DHF 판 다름");
         var t = new ForestTile { Tx = BinaryPrimitives.ReadInt32LittleEndian(b[8..]), Ty = BinaryPrimitives.ReadInt32LittleEndian(b[12..]) };
         uint n = BinaryPrimitives.ReadUInt32LittleEndian(b[16..]);
+        // ★[설치 전 검토 L6] 수를 바이트 길이와 먼저 견준다(깨진 칸이 큰 배열을 잡게 하지 않음) — 폴리곤마다 최소 15바이트 · 고리마다 4바이트 · 점마다 4바이트
+        if (n > (uint)((b.Length - 20) / 15)) throw new InvalidDataException("DHF 폴리곤 수가 길이를 넘음");
         int o = 20;
         for (uint i = 0; i < n; i++)
         {
+            if (o + 15 > b.Length) throw new InvalidDataException("DHF 폴리곤 머리가 잘림");
             var p = new ForestPoly
             {
                 Src = BinaryPrimitives.ReadUInt32LittleEndian(b[o..]), Part = BinaryPrimitives.ReadUInt16LittleEndian(b[(o + 4)..]),
@@ -106,9 +109,13 @@ public static class ForestTileFormat
             };
             o += 13;
             int nr = BinaryPrimitives.ReadUInt16LittleEndian(b[o..]); o += 2;
+            if ((long)o + 4L * nr > b.Length) throw new InvalidDataException("DHF 고리 수가 길이를 넘음");
             for (int k = 0; k < nr; k++)
             {
-                int np = (int)BinaryPrimitives.ReadUInt32LittleEndian(b[o..]); o += 4;
+                if (o + 4 > b.Length) throw new InvalidDataException("DHF 고리 머리가 잘림");
+                long npl = BinaryPrimitives.ReadUInt32LittleEndian(b[o..]); o += 4;
+                if (o + 4 * npl > b.Length) throw new InvalidDataException("DHF 점 수가 길이를 넘음");
+                int np = (int)npl;
                 var r = new ushort[2 * np];
                 for (int q = 0; q < r.Length; q++) { r[q] = BinaryPrimitives.ReadUInt16LittleEndian(b[o..]); o += 2; }
                 p.Rings.Add(r);
@@ -171,6 +178,12 @@ public sealed class ForestIndex
     public List<Source> Sources = new();
     public Dictionary<string, Dictionary<string, string>> Codes = new();
     public SortedDictionary<string, long[]> Tiles = new(StringComparer.Ordinal);
+    /// <summary>★[설치 전 검토 M2] 도면 폴더 사본만 — 그 도면이 달라고 했으나 창고에도 숲이 없던 칸(«비어 있음»이 확실한 칸).
+    /// 사본에서 읽을 때 Tiles에도 Empty에도 없는 칸 = 사본을 만들 때 안 달라고 한 칸(숲이 있는지 모름 → 경고).</summary>
+    public SortedSet<string> Empty = new(StringComparer.Ordinal);
+
+    /// <summary>이 칸을 아는가(숲 칸이거나 «비어 있음» 칸).</summary>
+    public bool Knows(string key) => Tiles.ContainsKey(key) || Empty.Contains(key);
 
     public string Hash = "";
 
@@ -204,6 +217,7 @@ public sealed class ForestIndex
             w.WriteStartObject("tiles");
             foreach (var (k, v) in Tiles) { w.WriteStartArray(k); foreach (long x in v) w.WriteNumberValue(x); w.WriteEndArray(); }
             w.WriteEndObject();
+            if (Empty.Count > 0) { w.WriteStartArray("empty"); foreach (var k in Empty) w.WriteStringValue(k); w.WriteEndArray(); }
             w.WriteEndObject();
         }
         string tmp = path + ".tmp";
@@ -243,6 +257,8 @@ public sealed class ForestIndex
         if (r.TryGetProperty("tiles", out var ts))
             foreach (var k in ts.EnumerateObject())
                 ix.Tiles[k.Name] = k.Value.EnumerateArray().Select(v => v.GetInt64()).ToArray();
+        if (r.TryGetProperty("empty", out var es) && es.ValueKind == JsonValueKind.Array)
+            foreach (var e in es.EnumerateArray()) if (e.GetString() is { Length: > 0 } k) ix.Empty.Add(k);
         return ix;
     }
 }
