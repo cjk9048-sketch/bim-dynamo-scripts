@@ -95,6 +95,27 @@ internal sealed class RoadPanel : UserControl
         // ── ■ 도로 설정 — 작은 칸 셋(한 번에 하나 펼침 · 창을 만들 때마다 «노선»이 열린 채로) ──
         // ★★[v111.7 · JACK 1102 «도킹창 묶음 정리»] 작은 칸 «종단» · «옹벽 제안»은 새 큰 칸 ■ 종단 · ■ 옹벽으로 옮김 — 여기는 값만(노선 · 횡단 · 사면)
         const string G = "도로:설정칸";
+        // ★★[v113.3 · JACK 1105 «진입도로 생성을 누르면 진입도로 창이 뜨고, 창에 도로 그리기랑 폴리선 선택 · 별도 팝업은 만들지 말고»] 창 맨 위 — 새 도로 만들기(늘 켜짐 · 아래 ■ 도로 설정 값으로)
+        var mk = new WrapPanel { Margin = new Thickness(0, 2, 0, 6) };
+        Button MakeBtn(string text, string cmd, string tip, bool primary)
+        {
+            var b = new Button { Content = text, Height = 30, MinWidth = 72, Padding = new Thickness(12, 0, 12, 0), Margin = new Thickness(0, 0, 6, 0), VerticalContentAlignment = VerticalAlignment.Center, ToolTip = tip };
+            if (primary) try { if (DhBrand.Skin != null) b.Style = (Style)DhBrand.Skin["DhPrimary"]; } catch { }
+            b.Click += (_, __) =>
+            {
+                var doc = AcadApp.DocumentManager.MdiActiveDocument;
+                if (doc == null) return;
+                Commit();   // 칸에 친 값을 먼저 받음(새 도로가 그 값으로)
+                // ★[C# \x 함정] "\x03\x03" + 명령(붙여 쓰면 \x03D가 '='로 먹힘)
+                try { doc.SendStringToExecute("\x03\x03" + cmd + " ", true, false, false); }
+                catch (System.Exception ex) { _note.Text = text + " 실패 — " + ex.Message; }
+            };
+            mk.Children.Add(b);
+            return b;
+        }
+        MakeBtn("도로 경로 그리기", "DHROADDRAW", "점을 차례로 찍고 Enter — 꺾인 곳은 곡선 반경으로 곡선 · 아래 도로 설정 값으로 만듭니다", true);
+        MakeBtn("폴리선 선택", "DHROAD", "그려 둔 폴리선 · 3D 폴리선 · Civil 노선을 골라 아래 도로 설정 값으로 만듭니다", false);
+        _root.Children.Add(mk);
         GradingDialog.ForgetOpen("도로:노선", "도로:횡단", "도로:사면");
         var secSet = GradingDialog.AddCollapsible(_root, "■ 도로 설정", "노선 · 횡단 · 사면", first: true, open: true, key: "도로:설정");
 
@@ -393,13 +414,28 @@ internal sealed class RoadPanel : UserControl
         if (_loading) return;
         if (_s == null)
         {
-            // ★[v110.2] 열린 도로가 없으면 곡선 반경만 — 다음 [경로 그리기] · [폴리선 선택]이 쓴다
-            if (_curve == null || (_shown.TryGetValue(_curve, out var w0) && _curve.Text.Trim() == w0)) return;
-            if (double.TryParse(_curve.Text.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double cr) && cr >= 3 && cr <= 1000)
-                RoadDesign.LastCurveR = cr;
-            else _note.Text = "범위 밖 값 — 3 ~ 1000";
-            _curve.Text = RoadDesign.LastCurveR.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
-            _shown[_curve] = _curve.Text;
+            // ★★[v113.3 · JACK 1105 «도로 설정을 반영한 도로를 만들 수 있게»] 열린 도로가 없으면 칸 값 = 새 도로 값(이 도면 · 다음 [도로 경로 그리기] · [폴리선 선택]이 씀)
+            var docN = AcadApp.DocumentManager.MdiActiveDocument;
+            if (docN == null) return;
+            var dr = DraftOf(docN);
+            var invN = System.Globalization.CultureInfo.InvariantCulture;
+            string badN = "";
+            foreach (var (box, get, set, scale, lo, hi) in _fields)
+            {
+                if (_shown.TryGetValue(box, out var was) && box.Text.Trim() == was) continue;
+                if (!double.TryParse(box.Text.Trim(), System.Globalization.NumberStyles.Float, invN, out double v) || !double.IsFinite(v) || v < lo - 1e-9 || v > hi + 1e-9)
+                    badN = $"{lo:0.###} ~ {hi:0.###}";
+                else
+                {
+                    // ★ 곡선 반경 칸의 set은 열린 도로 곡선 다시 넣기(_recurve)를 켠다 — 새 도로 값에는 안 씀
+                    if (ReferenceEquals(box, _curve)) { dr.CurveR = v / scale; RoadDesign.LastCurveR = dr.CurveR; }
+                    else set(dr, v / scale);
+                }
+                box.Text = (get(dr) * scale).ToString("0.###", invN);
+                _shown[box] = box.Text;
+            }
+            _recurve = false;
+            if (badN.Length > 0) _note.Text = "범위 밖 값 — " + badN;
             return;
         }
         // ★[v111.2 · 전체 검토 M1] 명령이 도는 중(옹벽 변환 고르기 등)에는 설계를 안 바꿈 — 그 명령이 옛 모양 · 새 기록을 섞지 않게 · 실행 취소 묶음 밖에서 쓰지 않게
@@ -445,6 +481,31 @@ internal sealed class RoadPanel : UserControl
         catch (System.Exception ex) { _note.Text = "저장 실패 — " + ex.Message; }
     }
 
+    /// <summary>★★[v113.3 · JACK 1105 «도면에 마지막 값 저장»] 도면마다 새 도로 값 — 처음 = 이 도면에서 마지막으로 만든 진입도로의 모양 값(없으면 기본값) · 창 칸이 고침.</summary>
+    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Autodesk.AutoCAD.ApplicationServices.Document, RoadDesign> _drafts = new();
+    internal static RoadDesign DraftOf(Autodesk.AutoCAD.ApplicationServices.Document doc)
+    {
+        if (_drafts.TryGetValue(doc, out var d)) return d;
+        try
+        {
+            using var tr = doc.Database.TransactionManager.StartTransaction();
+            d = RoadDesign.LastTemplate(tr, doc.Database);
+            tr.Commit();
+        }
+        catch { d = new RoadDesign { CurveR = RoadDesign.LastCurveR }; }
+        _drafts.AddOrUpdate(doc, d);
+        return d;
+    }
+
+    /// <summary>★[v113.3] 새 도로의 모양 값 — 열린 도로가 있으면 그 도로(창에 보이는 값) · 없으면 창의 새 도로 값. 늘 새 객체(복사).</summary>
+    internal static RoadDesign NewRoadTemplate(Autodesk.AutoCAD.ApplicationServices.Document doc)
+    {
+        var t = new RoadDesign();
+        var s = RoadSession.Of(doc);
+        t.CopyShapeFrom(s != null ? s.Design : DraftOf(doc));
+        return t;
+    }
+
     internal void Show(RoadSession? s)
     {
         bool same = ReferenceEquals(s, _s);
@@ -453,17 +514,21 @@ internal sealed class RoadPanel : UserControl
         try
         {
             // ★[v110.2] 창 전체를 끄지 않는다 — 곡선 반경은 그리기 전에 정할 수 있게(나머지 칸 · 단추만 끔)
-            foreach (var (box, _, _, _, _, _) in _fields) box.IsEnabled = s != null || ReferenceEquals(box, _curve);
+            // ★[v113.3 · JACK 1105] 도로 설정 칸은 늘 켬 — 열린 도로가 없으면 새 도로 값(<see cref="DraftOf"/>)
+            foreach (var (box, _, _, _, _, _) in _fields) box.IsEnabled = true;
+            var docS = AcadApp.DocumentManager.MdiActiveDocument;
+            var draftS = s == null && docS != null ? DraftOf(docS) : null;
             foreach (var el in _needRoad) el.IsEnabled = s != null;
             // ★[v111.10 · 계획 3.4] 처음 만드는 중에는 [업데이트] 꺼 둠(누르면 ^C^C가 DHROAD를 끊음) — 위 루프가 다시 켜므로 그 뒤에
             _updateBtn.IsEnabled = s != null && !s.Making;
             RefreshReset(s);
-            _title.Text = s == null ? "열린 도로 없음 — [경로 그리기] · [폴리선 선택]" : s.Name;
+            _title.Text = s == null ? "열린 도로 없음 — [진입도로 생성]" : s.Name;
             foreach (var (box, get, _, scale, _, _) in _fields)
             {
                 // ★[설치 전 검토 L7] 같은 도로를 다시 그릴 때 입력 중인 칸은 덮지 않는다
                 if (same && box.IsKeyboardFocusWithin) continue;
                 box.Text = s != null ? (get(s.Design) * scale).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)
+                         : draftS != null ? (get(draftS) * scale).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)
                          : ReferenceEquals(box, _curve) ? RoadDesign.LastCurveR.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) : "";
                 _shown[box] = box.Text;
             }

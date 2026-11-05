@@ -6,7 +6,7 @@
   Contents 폴더에 빌드 산출물(DH.Grading.Civil.dll, DH.Grading.Core.dll)과 뷰 LISP를 넣을 것.
 -->
 <ApplicationPackage SchemaVersion="1.0"
-                    AppVersion="113.2.0"
+                    AppVersion="113.2.1"
                     ProductType="Application"
                     Name="DH 정지(절성토)"
                     Description="계단식 정지 비탈면 자동 생성 (distance-field)">
@@ -77,6 +77,10 @@
         <Command Global="DHVIEW" Local="DHVIEW" />
         <Command Global="DHVIEWALL" Local="DHVIEWALL" />
         <Command Global="DHVIEWE" Local="DHVIEWE" />
+        <Command Global="DHVIEWR" Local="DHVIEWR" />
+        <Command Global="DHVIEWF" Local="DHVIEWF" />
+        <Command Global="DHVIEWSTN" Local="DHVIEWSTN" />
+        <Command Global="DHROADNEW" Local="DHROADNEW" />
         <Command Global="DHVIEWG" Local="DHVIEWG" />
         <Command Global="DHVIEWP" Local="DHVIEWP" />
         <Command Global="DHXVIEW" Local="DHXVIEW" />

@@ -133,7 +133,7 @@ internal static class WallLineDraw
             {
                 double snap = SnapTol();
                 bool first = pts.Count == 0;
-                var ppo = new PromptPointOptions(first ? $"\n[{tag}] 시작점 — 경계 위 클릭 [고르기(S)]: " : $"\n[{tag}] 다음 점 — 경계 안 · 경계 위나 밖을 누르면 끝 [되돌리기(U)]: ");
+                var ppo = new PromptPointOptions(first ? $"\n[{tag}] 시작점 — 가장 가까운 경계 점에 붙음 [고르기(S)]: " : $"\n[{tag}] 다음 점 — 사면 띠 안(계획선 밖) · 경계 위나 밖을 누르면 끝 [되돌리기(U)]: ");
                 if (first) ppo.Keywords.Add("S", "S", "고르기(S)");
                 else
                 {
@@ -143,9 +143,12 @@ internal static class WallLineDraw
                 ppo.AllowNone = false;
                 ppo.AppendKeywordsToMessage = false;
                 var drawn = pts.Select(q => (q.X, q.Y)).ToList();
-                BoundaryDraw.Step Try(double x, double y) => first ? BoundaryDraw.First(geo, x, y, snap) : BoundaryDraw.Next(geo, drawn, x, y, snap);
+                // ★★[v113.3 · JACK 1105 «처음 시작부터 안내선이 경계에 닿게»] 시작점은 커서가 어디 있든 가장 가까운 경계 점(붙임 거리 제한 없음) — 안내선 + 네모로 미리 보임
+                BoundaryDraw.Step Try(double x, double y) => first ? BoundaryDraw.First(geo, x, y, double.MaxValue) : BoundaryDraw.Next(geo, drawn, x, y, snap);
+                string? why = null;   // 지금 커서 자리의 거절 까닭(카드 글 — ★[v113.3 · JACK 1105 «다음 점이 클릭이 안 돼»] 누르기 전에 보이게)
                 void Path(WorldDraw wd, Point3d cur, bool has)
                 {
+                    why = null;
                     Ring(wd, bdD, 4);
                     if (flD != null) Ring(wd, flD, 8);
                     wd.SubEntityTraits.Color = 2;
@@ -154,17 +157,24 @@ internal static class WallLineDraw
                     BoundaryDraw.Step st;
                     var cf = Flat(cur, vdir);
                     try { st = Try(cf.X, cf.Y); } catch { return; }
-                    var to = st.Ok ? new Point3d(st.X, st.Y, 0) : cf;
-                    if (drawn.Count > 0)
+                    if (!st.Ok) why = st.Why;
+                    if (drawn.Count == 0)
                     {
-                        wd.SubEntityTraits.Color = (short)(st.Kind == BoundaryDraw.Kind.End ? 3 : st.Ok ? 2 : 1);
-                        wd.Geometry.WorldLine(new Point3d(drawn[^1].X, drawn[^1].Y, 0), to);
+                        // 시작점 안내선: 커서 → 붙을 경계 점(받으면 초록 · 바닥에 붙은 자리면 빨강)
+                        var nb = st.Ok ? (st.X, st.Y) : st.At is (double ax, double ay) ? (ax, ay) : (cf.X, cf.Y);
+                        wd.SubEntityTraits.Color = (short)(st.Ok ? 3 : 1);
+                        wd.Geometry.WorldLine(cf, new Point3d(nb.Item1, nb.Item2, 0));
+                        if (st.Ok) Box(wd, st.X, st.Y, 3); else Cross(wd, nb.Item1, nb.Item2, 1);
+                        return;
                     }
-                    if (st.Kind is BoundaryDraw.Kind.Start or BoundaryDraw.Kind.End) Box(wd, st.X, st.Y, 3);   // 경계 위에 붙는 자리
-                    else if (!st.Ok && st.At != null && drawn.Count > 0) Cross(wd, st.At.Value.X, st.At.Value.Y, 1);
+                    var to = st.Ok ? new Point3d(st.X, st.Y, 0) : cf;
+                    wd.SubEntityTraits.Color = (short)(st.Kind == BoundaryDraw.Kind.End ? 3 : st.Ok ? 2 : 1);
+                    wd.Geometry.WorldLine(new Point3d(drawn[^1].X, drawn[^1].Y, 0), to);
+                    if (st.Kind == BoundaryDraw.Kind.End) Box(wd, st.X, st.Y, 3);   // 경계 위에 붙는 끝 자리
+                    else if (!st.Ok && st.At != null) Cross(wd, st.At.Value.X, st.At.Value.Y, 1);
                 }
-                string label = first ? "시작점 · 경계 위" : "다음 점 · 경계 위·밖 = 끝";
-                var lr = CursorLabel.GetPoint(ed, ppo, label, "", Path);
+                string label = first ? "시작점 · 가까운 경계에 붙음" : "다음 점 · 경계 위·밖 = 끝";
+                var lr = CursorLabel.GetPoint(ed, ppo, label, "", Path, () => why);
                 if (lr.Status == PromptStatus.Keyword)
                 {
                     string kw = (lr.StringResult ?? "").Trim().ToUpperInvariant();

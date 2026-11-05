@@ -383,10 +383,14 @@ public sealed class RibbonApp : IExtensionApplication
             //   품으면, 명령이 중간에 실패하거나 Esc를 누를 때 지표면이 꺼진 채로 남는다("사라졌다"로 보인다).
             //   상태가 눈에 보이고 언제든 되돌릴 수 있는 쪽이 안전하다.
             // ★[JACK 0824] 보기도 스플릿 버튼 — 누를 때마다 묻지 않고 **바로** 바뀐다.
-            var vAll = MakeButton("전부\n보기", "DHVIEWALL ", "원지반·계획지표면·터파기를 모두 표시", "보기전부");
-            var vGnd = MakeButton("원지반\n만", "DHVIEWG ", "원지반만 표시(계획·터파기 숨김)", "보기원지반");
-            var vPln = MakeButton("계획\n지표면", "DHVIEWP ", "계획지표면만 표시", "보기계획");
+            // ★★[v113.3 · JACK 1105 «보기 기능도 진입도로까지 고려해서 · 그 안에 측점 보기 안 보기»] 전부 · 원지반 · 계획지표면 · 진입도로 · 최종지표면 · 터파기 + 측점 보기/숨기기
+            var vAll = MakeButton("전부\n보기", "DHVIEWALL ", "최종지표면(부지 + 진입도로) · 터파기 · 선을 모두 표시", "보기전부");
+            var vGnd = MakeButton("원지반\n만", "DHVIEWG ", "원지반만 표시(계획 · 진입도로 · 터파기 숨김)", "보기원지반");
+            var vPln = MakeButton("계획\n지표면", "DHVIEWP ", "부지 계획지표면만 표시(진입도로 뺌)", "보기계획");
+            var vRoad = MakeButton("진입\n도로", "DHVIEWR ", "진입도로 지표면 + 아래 바탕면 표시", "노리선");
+            var vFin = MakeButton("최종\n지표면", "DHVIEWF ", "부지 + 진입도로를 합친 최종지표면만 표시(선 없이)", "보기계획");
             var vExc = MakeButton("터파기\n만", "DHVIEWE ", "터파기 지표면만 표시", "보기터파기");
+            var vStn = MakeButton("측점\n보기/숨기기", "DHVIEWSTN ", "부지 · 진입도로 검토선과 측점 글자를 켜고 끕니다(다른 보기와 따로)", "측점추가");
 
             // ★★[JACK 0825] <b>없는 것은 누를 수 없게 한다.</b>
             //   JACK: <i>"계획지표면이나 터파기 등을 수행하지 않았을 때는 버튼이 비활성화되게 해주고."</i>
@@ -406,13 +410,17 @@ public sealed class RibbonApp : IExtensionApplication
                 ListStyle = RibbonSplitButtonListStyle.List,
                 ToolTip = MakeTip("지표면 보기",
                     "화면에 **무엇을 보일지**만 바꿉니다 — 지표면 형상은 건드리지 않습니다.\n" +
+                    "전부 · 원지반 · 계획지표면 · 진입도로 · 최종지표면 · 터파기 · **측점 보기/숨기기**(따로 켜고 끔).\n" +
                     "터파기를 만들 때 계획지표면이 겹쳐 보여 헷갈리면 여기서 끄면 됩니다.\n" +
                     "작업용 중간 산물(목표면·가상면)은 언제나 숨겨 둡니다.", null),
             };
             splitView.Items.Add(vAll);
             splitView.Items.Add(vGnd);
             splitView.Items.Add(vPln);
+            splitView.Items.Add(vRoad);
+            splitView.Items.Add(vFin);
             splitView.Items.Add(vExc);
+            splitView.Items.Add(vStn);
             splitView.Current = vAll;
             // [§75 — JACK 0728/0729 개명] 옹벽변환은 부지정지 패널, 정지면 생성 오른쪽(별도 '옹벽' 중분류 없음).
             //   [JACK 0729] 툴팁에 개념도 이미지(확장 툴팁) — 마우스를 올려두면 그림까지 표시.
@@ -467,7 +475,7 @@ public sealed class RibbonApp : IExtensionApplication
             //   횡단은 아직 옆 버튼(DHSECTION)에 있다 — 종단도가 말끔해지면 같은 방식으로 옮긴다.
             // ★★[v111.6 · JACK 1102 «종단 · 횡단 단추가 부지 것인지 도로 것인지 안 보인다»] «종단 생성» → [계획지표면] 패널의 [종단도](진입도로 패널에 같은 이름의 도로 단추)
             var btnProf = MakeButton(
-                "종단도", "DHPROFILE ", "계획지표면 종단도 — 노선을 직접 그리면(노란 선) 그 노선을 따라 종단면도를 만듭니다", "종단");
+                "종단도\n생성", "DHPROFILE ", "계획지표면 종단도 — 노선을 직접 그리면(노란 선) 그 노선을 따라 종단면도를 만듭니다", "종단");
             btnProf.ToolTip = MakeTip("계획지표면 종단도 (DHPROFILE)",
                 "**계획지표면**(정지면)의 종단도입니다 — 진입도로 종단도는 [진입도로] 패널에 있습니다.\n" +
                 "버튼을 누르고 **화면에 노선을 직접 그립니다**.\n" +
@@ -721,20 +729,22 @@ public sealed class RibbonApp : IExtensionApplication
             //     지우지 않는 이유는 툴팁 문구가 나중에 다시 쓰일 수 있어서다.
 
             // ★★[v111.6 · JACK 1102] 옛 [종단] 스플릿(지층 · 종단 생성 · 측점 셋)을 풀었다 — [종단도]는 단추 하나로 · 측점 셋은 [측점] 스플릿 · 지층은 [공통]
+            // ★★[v113.3 · JACK 1105 «계획지표면의 종단도는 스플릿 버튼으로 만들고 그 안에 종단도 생성이랑 지금의 측점 스플릿 버튼을 넣어»] [종단도] 스플릿 = 종단도 생성 · 측점 넷
+            //   (스플릿 안에 스플릿은 못 넣는다 — 측점 스플릿의 항목을 그대로 이 스플릿에 · 머리 = [종단도 생성])
             var splitStn = new RibbonSplitButton
             {
-                Text = "측점",
+                Text = "종단도",
                 ShowText = true,
                 ShowImage = true,
-                LargeImage = MakeGlyph("측점추가"),   // ★스플릿 버튼은 자기 이미지를 따로 줘야 한다(JACK 0824 교훈)
-                Image = MakeGlyph("측점추가"),
+                LargeImage = MakeGlyph("종단"),   // ★스플릿 버튼은 자기 이미지를 따로 줘야 한다(JACK 0824 교훈)
+                Image = MakeGlyph("종단"),
                 Size = RibbonItemSize.Large,
                 Orientation = System.Windows.Controls.Orientation.Vertical,
                 IsSplit = true,
                 IsSynchronizedWithCurrentItem = false,
                 ListStyle = RibbonSplitButtonListStyle.List,
-                ToolTip = MakeTip("계획지표면 측점",
-                    "**계획지표면** 종단도 · 횡단도의 측점입니다.\n" +
+                ToolTip = MakeTip("계획지표면 종단도",
+                    "**종단도 생성** — 노선을 그려 계획지표면 종단도를 만듭니다.\n" +
                     "**측점 추가** — 밸브실처럼 원하는 자리에 측점을 더합니다.\n" +
                     "**전/후 측점** — 횡단만 (전)(후) 두 장으로.\n" +
                     "**측점 삭제** — 찍은 자리의 수동 측점을 지웁니다(횡단도 같이).\n" +
@@ -747,11 +757,12 @@ public sealed class RibbonApp : IExtensionApplication
                 "**계획지표면** 종단의 방향을 뒤집습니다 — 노선 모양 그대로, 측점 No.0이 반대쪽 끝에서 시작합니다.\n" +
                 "수동 측점 · 지운 측점은 같은 자리로 옮겨지고, 종단도 · 횡단도를 그 자리에 다시 그립니다.\n" +
                 "다시 누르면 처음 방향으로 돌아옵니다.", null);
+            splitStn.Items.Add(btnProf);
             splitStn.Items.Add(btnStn);
             splitStn.Items.Add(btnStnFb);
             splitStn.Items.Add(btnStnDel);
             splitStn.Items.Add(btnRev);
-            splitStn.Current = btnStn;
+            splitStn.Current = btnProf;
 
             // ★★[v111.6 · JACK 1102 «진입도로 도킹창에 따로 종단 · 횡단 단추가 있어 통일이 안 된다»] [진입도로] 패널 — 창 · 종단도 · 횡단도(도킹창 ■ 도면과 같은 이름 · 같은 명령)
             //   열린 진입도로가 없으면 명령이 «열린 진입도로가 없습니다»로 물러난다 — 리본에서는 끄지 않는다(도로는 도면이 아니라 세션에 열린다)
@@ -759,7 +770,7 @@ public sealed class RibbonApp : IExtensionApplication
                 "진입도로\n창", "DHROADPANEL ", "열린 진입도로의 도킹창을 엽니다 — 횡단 · 사면 · 종단 · 옹벽 값과 결과", "설정");
             btnRoadPanel.ToolTip = MakeTip("진입도로 창 (DHROADPANEL)",
                 "오른쪽에 **진입도로 도킹창**이 열립니다 — 지금 열린 진입도로의 값 · 결과 · 도면.\n" +
-                "열린 도로가 없으면 창에 «열린 도로 없음»이 뜹니다 — [진입도로]로 노선부터 고르세요.", null);
+                "열린 도로가 없으면 창에 «열린 도로 없음»이 뜹니다 — [진입도로 생성]으로 도로부터 만드세요.", null);
             var btnRoadSheet = MakeButton(
                 "종단도", "DHROADSHEET ", "진입도로 종단도 — 열린 진입도로의 종단도(도곽 · 밴드)를 지우고 새로 그립니다", "종단");
             btnRoadSheet.ToolTip = MakeTip("진입도로 종단도 (DHROADSHEET)",
@@ -842,11 +853,10 @@ public sealed class RibbonApp : IExtensionApplication
             // ★★[v111.6 · JACK 1102] [계획지표면] = 계획부지 생성 · 종단도 · 횡단도 · 측점 · 보기 (원지반 가져오기는 ★[v111.7] 새 첫 패널 [원지반 작성]으로)
             pGrade.Items.Add(splitSurf);
             pGrade.Items.Add(Spacer());
-            pGrade.Items.Add(btnProf);
+            // ★★[v113.3 · JACK 1105] [종단도] 스플릿(종단도 생성 · 측점 넷) — 옛 [종단도] 단추 · [측점] 스플릿 자리를 하나로
+            pGrade.Items.Add(splitStn);
             pGrade.Items.Add(Spacer());
             pGrade.Items.Add(btnXsec);
-            pGrade.Items.Add(Spacer());
-            pGrade.Items.Add(splitStn);
             pGrade.Items.Add(Spacer());
             // ★★[v110 · JACK 1028 «진입도로 — 인프라웍스처럼»] 노선(폴리선 · Civil 노선) → 종단 초안 → 실시간 미리보기 + 도킹창
             // ★★[v110.2 · JACK 1029 «진입도로 버튼은 스플릿버튼 — 첫째 경로 그리기(직접 눌러 그리면 선형) · 둘째 지금처럼 폴리선 선택»]
@@ -880,6 +890,14 @@ public sealed class RibbonApp : IExtensionApplication
             splitRoad.Items.Add(btnRoadDraw);
             splitRoad.Items.Add(btnRoad);
             splitRoad.Current = btnRoadDraw;
+            // ★★[v113.3 · JACK 1105 «스플릿으로 하지 말고 그냥 진입도로 생성 — 누르면 진입도로 창이 뜨고 창에 도로 그리기랑 폴리선 선택 · 별도 팝업 말고 · 기존 진입도로 창 버튼은 없애»]
+            //   리본에는 단추 하나(스플릿 · [진입도로 창]은 만들어만 두고 안 얹음 — 명령 DHROADDRAW · DHROAD · DHROADPANEL은 그대로 산다)
+            var btnRoadNew = MakeButton("진입도로\n생성", "DHROADNEW ", "진입도로 창을 엽니다 — 도로 설정을 정하고 [도로 경로 그리기] 또는 [폴리선 선택]으로 만듭니다", "노리선");
+            btnRoadNew.ToolTip = MakeTip("진입도로 생성 (DHROADNEW)",
+                "**진입도로 창**이 열립니다.\n" +
+                "창의 ■ 도로 설정(곡선 반경 · 횡단 · 사면) · ■ 종단 값을 정한 뒤 창 맨 위\n" +
+                "**도로 경로 그리기**(점을 찍어 노선) 또는 **폴리선 선택**(그려 둔 폴리선 · Civil 노선)으로 만듭니다.\n" +
+                "· 처음 값은 이 도면에서 마지막에 만든 도로의 값입니다", null);
             // ★★[계획 8단계 · JACK 지시 3 "UI에서 사면수정버튼은 없애고"]
             //   사면 수정은 <b>도킹창 안</b>으로 들어갔다 — 정지는 [정지 창], 터파기는 [터파기 창].
             //   ★명령(DHWALL/DHSLOPE)은 <b>그대로 산다</b> — 손에 익은 사람이 있고,
@@ -890,9 +908,7 @@ public sealed class RibbonApp : IExtensionApplication
             // ★★[v111.6 · JACK 1102] [진입도로] = 노선 고르기 · 창 · 종단도 · 횡단도
             tab.Panels.Add(new RibbonPanel { Source = pRoad });
             pRoad.Items.Add(Spacer());
-            pRoad.Items.Add(splitRoad);
-            pRoad.Items.Add(Spacer());
-            pRoad.Items.Add(btnRoadPanel);
+            pRoad.Items.Add(btnRoadNew);
             pRoad.Items.Add(Spacer());
             pRoad.Items.Add(btnRoadSheet);
             pRoad.Items.Add(Spacer());

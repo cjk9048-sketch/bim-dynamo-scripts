@@ -336,6 +336,9 @@ internal static class DhBrand
             //   <c>ResizeMode=NoResize</c>라 늘릴 수도 없다.
             //   → 본문에 스크롤을 두고 창 높이에 <b>화면 상한</b>을 건다.
             //   ([저장]/[취소]는 이미 별도 행이라 잘리지 않는다.)
+            // ★★[v113.3 · JACK 1105 «팝업창이나 도킹창들 전부 너무 왼쪽에 글씨가 붙지 않았는지 검토해서 수정»] 본문 여백이 없는 창([기타 설정] · [3D 웹 공유])은
+            //   글 · 칸이 창 테두리에 붙었다 — 여백을 안 준 본문에는 다른 창([정지 옵션] · [도면 설정])과 같은 여백(좌우 18 · 위아래 14)
+            if (body is FrameworkElement fe && fe.Margin == default) fe.Margin = new Thickness(18, 14, 18, 14);
             var bodyWrap = new Border
             {
                 Background = Wall,

@@ -33,6 +33,9 @@ public static partial class RoadGrade
         public double SlumpMs;
         /// <summary>★[v113.1 · A1] 몰려 한 점으로 합친 광선 끝 수.</summary>
         public int Merged;
+        /// <summary>★[v113.3 · 평가기 연속] 주름 원천 감싸기가 이긴 광선 수 · 끝이 감싸기 안이라 흘러내림에서 뺀 광선(검토 M3 — 광선마다 · 도로 전체로 끄지 않음).</summary>
+        public int EnvRays;
+        public HashSet<Ray> EnvEnd = new(ReferenceEqualityComparer.Instance);
     }
 
     const double PairGap = 0.05;       // 기록 경계 직각 끝면 폭(옹벽 평면폭 꼴)
@@ -151,6 +154,7 @@ public static partial class RoadGrade
         // ── 끝 마구리 사슬 ──
         for (int end = 0; end < 2; end++) set.Caps[end] = CapChain(c, end, end == 0 ? set.X[0] : set.X[^1], set);
         foreach (var cap in set.Caps) for (int i = 0; i + 1 < cap.Count; i++) TrimCross(cap[i], cap[i + 1]);
+        set.EnvRays = EnvRays(c, set);   // ★★[v113.3 · 계획 §1] 감싸기가 이긴 구간 — 현 오차 1 mm까지 점(K −7) · 묻힌 꺾임점은 −7(사면선 · 소단선 역할 없음)
         set.Slumped = Slump(c, set);   // ★★★[v113.1 · B1] 급한 굽은 안쪽 주름 높이 차 → 높은(성토) · 낮은(절토) 단면에서 흘러내린 면이 이김
         set.Merged = MergeEnds(set);   // ★★[v113.1 · A1] 곡선 중심에 몰린 광선 끝 — 한 꼭짓점으로
         set.Ms = sw.Elapsed.TotalMilliseconds;
@@ -167,6 +171,11 @@ public static partial class RoadGrade
     /// <summary>하네스 전용 — 흘러내림을 끈 비교 면(높이 정확도 견줌 · 출하 DLL 밖에서 못 건드리게 internal).</summary>
     internal static bool SlumpOff;
 
+    /// <summary>★[v113.3 · 계획 §1 4단계 — 보류] 광선(선 면)에도 감싸기(Walk.Cone max · min · −7 점 · 흘러내림 빼기)를 걸까 — 기본 끔.
+    /// 켜면 굽은 안쪽 주름에서 두 쪽 광선 끝이 엇갈린 채 남아(흘러내림 ②의 이긴 광선 늘임 · 지퍼 대상(−6 · −4)이 없음) 선 면 검사가 겹침 · 주름 틈으로 못 넘었다
+    /// (S212 ⑪ 겹침 541 · 주름 틈 64 — 1105 실측). 선 면은 옛 길(흘러내림)로 주름 높이를 맞추고, 점 평가기(격자 · 칸 면 · 광선 주인 · 선 따라 TIN)만 감싸기.</summary>
+    internal static bool EnvOnRays;
+
     static int Slump(RayCtx c, SectionSet set)
     {
         if (SlumpOff) return 0;
@@ -178,6 +187,7 @@ public static partial class RoadGrade
         bool SlopeOnly(Ray q)
         {
             if (q.Regime == 0 || q.EdgeWall || q.Pts.Count < 2) return false;
+            if (set.EnvEnd.Contains(q)) return false;   // ★[v113.3 · 검토 M3] 끝이 감싸기 안(높이가 이미 주름 원천에 맞음) — 흘러내림 원천도 대상도 아님
             var pr = (q.Regime > 0 ? c.R.CutProfs : c.R.FillProfs)[Math.Clamp(q.Prof, 0, c.R.CutProfs.Count - 1)];
             foreach (var f in pr.Faces) if (f.Wall) return false;
             return true;
@@ -476,6 +486,75 @@ public static partial class RoadGrade
         }
         set.SlumpMs = swS.Elapsed.TotalMilliseconds;
         return cuts;
+    }
+
+    /// <summary>★★[v113.3 · 계획 2026-11-05 §1 · 검토 M3] 감싸기가 이긴 광선 구간 — 5 cm마다 높이(Walk.Cone과 같은 max · min)를 재어 있는 점 사이 현 오차가 1 mm 넘는 자리에 점(K −7)을 넣고,
+    /// 감싸기가 이긴 자리의 꺾임점(소단 등)은 −7(묻힘 — 사면선 · 소단선 역할 없음). 끝이 감싸기 안(성토 C⁺ ≥ 끝 높이 − 1 cm · 절토 반대)이면 흘러내림에서 뺌.
+    /// 세분 · 줄이기 · 엇갈림 자르기 뒤에 함(같은 꼴 판정이 −7 점 수로 흔들려 횡단이 1 cm까지 쪼개지지 않게 — 흘러내림 점과 같은 자리). 돌려줌 = 바꾼 광선 수.</summary>
+    static int EnvRays(RayCtx c, SectionSet set)
+    {
+        var env = c.R.EnvS;
+        if (env == null || env.Count == 0 || !EnvOnRays) return 0;
+        int changed = 0;
+        var all = set.X.SelectMany(x => new[] { x.L, x.R }).Concat(set.Caps.SelectMany(cp => cp)).Distinct(ReferenceEqualityComparer.Instance).Cast<Ray>().ToList();
+        foreach (var ray in all)
+        {
+            if (ray.Regime == 0 || ray.EdgeWall || ray.Pts.Count < 2) continue;
+            bool cut = ray.Regime > 0;
+            if ((cut ? env.Hi.Count : env.Lo.Count) == 0) continue;
+            var prof = (cut ? c.R.CutProfs : c.R.FillProfs)[Math.Clamp(ray.Prof, 0, c.R.CutProfs.Count - 1)];
+            if (prof.Faces.Any(f => f.Wall)) continue;
+            double sgn = cut ? 1 : -1;
+            double Zp(double d) => ray.Ez + sgn * prof.FAt(d);
+            double Ce(double d, double z) { double x = ray.Ex + ray.Nx * d, y = ray.Ey + ray.Ny * d; return cut ? env.HiAt(x, y, z) : env.LoAt(x, y, z); }
+            bool Wins(double d, out double ze) { double z = Zp(d), ce = Ce(d, z); ze = cut ? Math.Min(z, ce) : Math.Max(z, ce); return cut ? ce < z : ce > z; }
+            var end = ray.Pts[^1];
+            double dEnd = end.D;
+            // 끝이 감싸기 안 — 흘러내림 빼기(1 cm)
+            { double ce = Ce(dEnd, cut ? end.Z + LineTol : end.Z - LineTol); if (cut ? ce <= end.Z + LineTol : ce >= end.Z - LineTol) set.EnvEnd.Add(ray); }
+            int m = Math.Max(1, (int)Math.Ceiling(dEnd / 0.05));
+            var sd = new double[m + 1]; var sz = new double[m + 1]; var sw = new bool[m + 1]; bool any = false;
+            for (int q = 0; q <= m; q++) { sd[q] = dEnd * q / m; sw[q] = Wins(sd[q], out sz[q]); any |= sw[q]; }
+            if (!any) continue;
+            changed++;
+            var o = new List<RayPt>();
+            int qi = 0;
+            for (int i = 0; i < ray.Pts.Count; i++)
+            {
+                var p = ray.Pts[i];
+                // 묻힌 꺾임점
+                if (p.K > 0 && Wins(p.D, out _)) p = p with { K = -7 };
+                if (i > 0)
+                {
+                    var a = o[^1];
+                    // a ~ p 사이 5 cm 표본 — 현 오차 1 mm 넘는 가장 먼 점을 넣고 반씩(더글라스-포이커)
+                    var mid = new List<int>();
+                    while (qi <= m && sd[qi] <= a.D + 1e-9) qi++;
+                    int q0 = qi;
+                    while (qi <= m && sd[qi] < p.D - 1e-9) { mid.Add(qi); qi++; }
+                    if (mid.Count > 0 && mid.Any(q => sw[q]))
+                    {
+                        var keep = new SortedSet<int>();
+                        var st = new Stack<(double D0, double Z0, double D1, double Z1, int A, int B)>();
+                        st.Push((a.D, a.Z, p.D, p.Z, 0, mid.Count - 1));
+                        while (st.Count > 0)
+                        {
+                            var (d0, z0, d1, z1, ia, ib) = st.Pop();
+                            if (ia > ib) continue;
+                            double worst = 0; int wi = -1;
+                            for (int t = ia; t <= ib; t++) { int q = mid[t]; double zl = z0 + (z1 - z0) * (sd[q] - d0) / (d1 - d0), e = Math.Abs(sz[q] - zl); if (e > worst) { worst = e; wi = t; } }
+                            if (worst <= 1e-3) continue;
+                            keep.Add(wi); int qw = mid[wi];
+                            st.Push((d0, z0, sd[qw], sz[qw], ia, wi - 1)); st.Push((sd[qw], sz[qw], d1, z1, wi + 1, ib));
+                        }
+                        foreach (int t in keep) { int q = mid[t]; o.Add(new RayPt(sd[q], ray.Ex + ray.Nx * sd[q], ray.Ey + ray.Ny * sd[q], sz[q], -7)); }
+                    }
+                }
+                o.Add(p);
+            }
+            ray.Pts = o;
+        }
+        return changed;
     }
 
     /// <summary>★★[v113.1 · JACK 1104 A1 «몰린 광선 끝 합치기»] 같은 쪽 이웃 광선 끝이 몇 mm 안에 몰리면(곡선 중심 부채 · 주름 끝) 한 점으로 — 주름 끝은 주인이 바뀌는 자리에서 2 mm 앞(이분 1 mm)이라

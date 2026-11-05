@@ -15,6 +15,16 @@ namespace DH.Grading.Civil.Commands;
 /// 계획 종단의 PVI를 끌어 옮기면(또는 노선 IP · 창 값) 바로 다시 계산한다. 도면에는 노선 · 종단 · 종단뷰만 생긴다(정지면은 [확정] — 다음 판).</para></summary>
 public class RoadCommand
 {
+    /// <summary>★★[v113.3 · JACK 1105 «진입도로 생성을 누르면 진입도로 창이 뜨고, 창에 도로 그리기랑 폴리선 선택 — 별도 팝업은 만들지 말고 · 기존 진입도로 창 버튼은 없애»]
+    /// [진입도로 생성] = 진입도로 도킹창을 연다(창 맨 위 [도로 경로 그리기] · [폴리선 선택] — 창에 보이는 값으로 새 도로).</summary>
+    [CommandMethod("DHROADNEW")]
+    public void RoadNew()
+    {
+        var doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        RoadPalette.Show();
+    }
+
     [CommandMethod("DHROAD")]
     public void Road()
     {
@@ -168,14 +178,21 @@ public class RoadCommand
             // ★[재검토 낮음 1] 바탕면을 노선 만들기 «앞»에서 — 없으면 아무것도 안 만들고 멈춤(주인 없는 DH도로_N이 남지 않게)
             var (bs, bsName) = RoadBuilder.PickBase(db, cdoc);
             if (bs.IsNull) { SectionCommand.Refuse(ed, "바탕면(정지면_DH 또는 원지반)이 없습니다 — 원지반부터 만들어 주세요."); return; }
+            // ★★[v113.3 · JACK 1105 «도로 설정을 반영한 도로를 만들 수 있게»] 새 도로의 모양 값 = 진입도로 창에 보이는 값(열린 도로가 있으면 그 도로 · 없으면 창의 새 도로 값)
+            var tpl = RoadPanel.NewRoadTemplate(doc);
             if (!isAlign)
             {
-                double rad = RoadDesign.LastCurveR;
+                double rad = tpl.CurveR;
                 aid = RoadBuilder.AlignmentFromPolyline(doc, srcId, rad, log);
                 created = aid;
                 d = new RoadDesign { CurveR = rad, EndsOn = true };   // ★[도로 마무리 ① · 계획 5.3] 새 도로 = 끝 맞춤 켬
+                d.CopyShapeFrom(tpl); d.CurveR = rad;
             }
-            d ??= new RoadDesign { OwnCurves = false, EndsOn = true };   // 기존 Civil 노선(사람이 설계한 곡선) — 곡선 반경 칸이 안 바꿈 · 끝은 가상 자르기만
+            if (d == null)
+            {
+                d = new RoadDesign { OwnCurves = false, EndsOn = true };   // 기존 Civil 노선(사람이 설계한 곡선) — 곡선 반경 칸이 안 바꿈 · 끝은 가상 자르기만
+                double keepR = d.CurveR; d.CopyShapeFrom(tpl); d.CurveR = keepR;   // ★[v113.3] 창 값 — 곡선 반경은 사람 노선이라 안 씀
+            }
             d.BaseSurface = bsName;
             var (bp, pp, draft) = RoadBuilder.MakeProfiles(doc, aid, bs, d, log);
             using (var tr = db.TransactionManager.StartTransaction())
@@ -357,7 +374,7 @@ public class RoadCommand
     public void OpenPanel()
     {
         var doc = AcadApp.DocumentManager.MdiActiveDocument; if (doc == null) return;
-        if (RoadSession.Of(doc) == null) doc.Editor.WriteMessage("\n[진입도로] 열린 진입도로가 없습니다 — [진입도로]로 노선을 고르거나 그리세요.");
+        if (RoadSession.Of(doc) == null) doc.Editor.WriteMessage("\n[진입도로] 열린 진입도로가 없습니다 — [진입도로 생성]으로 도로를 만드세요.");
         RoadPalette.Show();
     }
 
@@ -427,7 +444,7 @@ public class RoadCommand
     static RoadSession? Need(Editor ed)
     {
         var s = RoadSession.Of(AcadApp.DocumentManager.MdiActiveDocument);
-        if (s == null) ed.WriteMessage("\n[진입도로] 열린 진입도로가 없습니다 — [진입도로]로 노선을 고르세요.");
+        if (s == null) ed.WriteMessage("\n[진입도로] 열린 진입도로가 없습니다 — [진입도로 생성]으로 도로를 만드세요.");
         // ★[v111.7 · 재검토 낮음] 남은 바뀜(실행 취소 표시 포함)을 먼저 셈 — 이 명령이 고친 결과에 실행 취소 표시가 묻어 저절로 안 그려지는 일이 없게
         else try { s.RecomputeIfDirty(); } catch { }
         return s;
@@ -1209,8 +1226,10 @@ public class RoadCommand
             // [업데이트] — 한 번도 안 놓은 종단도 · 횡단도도 할 일(자리를 물음) · ★[v111.7.2 검토 낮음] 기록한 뷰가 하나도 안 남았으면(모두 지움) 처음과 같이
             //   횡단도는 이 세션에 한 번만 물음(Esc로 안 그리기로 했으면 [업데이트]마다 다시 안 물음 — 리본 [횡단도]는 그대로) · 지표면만 새로(force)는 횡단도와 따로
             bool sheetGone = !RoadSession.AnyAlive(db, d0.SheetViews), xsecGone = !RoadSession.AnyAlive(db, d0.XsecViews);
-            bool mayAskXsec = ask && (!xsecGone || !s.XsecAsked);
-            bool firstSheet = ask && sheetGone, firstXsec = mayAskXsec && xsecGone;
+            // ★[v113.3 · JACK 1105 «설정 바꿔 [업데이트]를 누르면 횡단을 선택해서 배치하라고 나와 — 이게 맞어?» → «안 묻기»] 한 번도 안 그린 횡단도는 [업데이트]가 묻지 않는다(리본 · 창 [횡단도]로만) —
+            //   그린 적 있는 횡단도의 자리를 잃었을 때(지웠거나 일부만 옮김)만 묻는다
+            bool mayAskXsec = ask && !xsecGone;
+            bool firstSheet = ask && sheetGone, firstXsec = false;
             force = surfaceIfFresh && pre.Length == 0 && !firstSheet;
             run = pre.Length > 0 || force || firstSheet || firstXsec;
             if (!run) return;
