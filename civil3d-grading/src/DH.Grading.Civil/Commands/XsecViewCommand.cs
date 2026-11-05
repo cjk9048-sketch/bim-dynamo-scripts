@@ -1347,6 +1347,9 @@ public sealed partial class XsecViewCommand
                         // ★[검토 §50 재발] 호출부가 <b>뷰의 가운데 X</b>를 주는데 왼쪽 정렬이면
                         //   글자가 오른쪽으로 삐져나간다. 같은 파일의 DrawCenterAxis는 가운데 정렬을 쓴다.
                         HorizontalMode = TextHorizontalMode.TextCenter,
+                        // ★[v114.3 · JACK 1105 «측점 문자가 작업영역에서 엄청 떨어진 곳에»] 가운데 정렬은 Position이 아니라
+                        //   AlignmentPoint를 기준으로 놓는다 — 안 주면 (0,0)이라 이름이 모두 원점에 겹쳐 쌓였다
+                        AlignmentPoint = new Point3d(x, y - h * 2.0, 0.0),
                     };
                     if (!lay.IsNull) t.LayerId = lay;
                     if (!kst.IsNull) t.TextStyleId = kst;   // 한글 글꼴

@@ -50,6 +50,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.AltCommand))]                // ★[v112.1] DHALT(대안 — 도면 사본 저장 · 수량표 · 열기 · 지우기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SheetBookCommand))]          // ★[v112.0] DHSHEETBOOK(도킹창 «도면화») · DHSHEETMAKE([작성하기] — 배치탭 · 도곽 · 표제란)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ProfileFlipCommand))]        // ★[v113.1] DHPROFILEREV · DHROADREV(종단 시점 ↔ 종점 바꾸기)
+[assembly: CommandClass(typeof(DH.Grading.Civil.UndoGuard))]                          // ★[v114.2] DHUNDOCLR(명령 뒤 되돌리기 기록 비움 — Civil 결함 회피)
 
 namespace DH.Grading.Civil;
 
@@ -97,6 +98,8 @@ public sealed class RibbonApp : IExtensionApplication
         // ★★★[v103.1.7 · JACK 1014 «최대한 현장확인말고 로그로 확인할수있게 해줘»] 자가점검 세션 — 지난 세션이 정상 종료됐나 · 끝나지 않은 작업(그 도중에 Civil이 죽었다)이 있나를
         //   DH_자가점검.log 첫 줄로 · 어느 빌드가 도는지(DLL 지문)도. 시작 도중이 아니라 첫 Idle에(위 다른 일들과 같은 까닭)
         AcadApp.Idle += OnIdleSelfCheck;
+        // ★[v114.2 · JACK 1105 «명령 뒤 되돌리기 기록 비움»] 화면 없는 Civil은 Idle이 안 와서 HookDoc이 안 불린다 — NETLOAD(도면이 열린 뒤)라 여기서 바로 단다
+        if (SelfCheckLog.Headless) try { foreach (Document d0 in AcadApp.DocumentManager) UndoGuard.Hook(d0); } catch { }
         // ★[v103.1.7 · 검토 열린 물음 2] 끝내기 들머리에서도 세션 끝을 적는다(Terminate가 안 불리는 끝내기가 있어도 «비정상 종료»로 잘못 알리지 않게) · 끝내기를 무르면 지운다
         try
         {
@@ -178,6 +181,7 @@ public sealed class RibbonApp : IExtensionApplication
     private static void HookDoc(Document? d)
     {
         if (d == null) return;
+        UndoGuard.Hook(d);   // ★[v114.2 · JACK 1105 «명령 뒤 되돌리기 기록 비움»]
         try
         {
             d.CommandEnded += (_, e3) =>
