@@ -9,6 +9,7 @@ namespace DH.Grading.Core.Forest;
 public sealed class ForestMask
 {
     readonly double[] _x, _y;
+    readonly double[]? _z;
     readonly int[] _f;
     readonly TerrainMesh.Cls[] _cls;
     readonly IPreparedGeometry[] _design;
@@ -16,9 +17,10 @@ public sealed class ForestMask
     readonly int _w, _h;
     readonly int[] _start, _items;
 
-    public ForestMask(double[] x, double[] y, int[] f, TerrainMesh.Cls[] cls, IEnumerable<Geometry?> design, int maxCells = 4_000_000)
+    /// <param name="z">보이는 지형 메시 높이(있으면 <see cref="ZAt"/> — 수목 자가검증 · 검토 L8).</param>
+    public ForestMask(double[] x, double[] y, int[] f, TerrainMesh.Cls[] cls, IEnumerable<Geometry?> design, double[]? z = null, int maxCells = 4_000_000)
     {
-        _x = x; _y = y; _f = f; _cls = cls;
+        _x = x; _y = y; _z = z; _f = f; _cls = cls;
         _design = design.Where(g => g != null && !g.IsEmpty).Select(g => PreparedGeometryFactory.Prepare(g!)).ToArray();
         int nT = f.Length / 3;
         double mnx = double.MaxValue, mny = double.MaxValue, mxx = double.MinValue, mxy = double.MinValue;
@@ -73,6 +75,19 @@ public sealed class ForestMask
             if (u >= 0 && v >= 0 && u + v <= 1) return t;
         }
         return -1;
+    }
+
+    /// <summary>그 자리 지형 메시 높이(담는 세모 무게중심 보간) — 메시 밖 · 높이 없음이면 null.</summary>
+    public double? ZAt(double px, double py)
+    {
+        if (_z == null) return null;
+        int t = TriAt(px, py);
+        if (t < 0) return null;
+        int a = _f[3 * t], b = _f[3 * t + 1], c = _f[3 * t + 2];
+        double d = (_y[b] - _y[c]) * (_x[a] - _x[c]) + (_x[c] - _x[b]) * (_y[a] - _y[c]);
+        double u = ((_y[b] - _y[c]) * (px - _x[c]) + (_x[c] - _x[b]) * (py - _y[c])) / d;
+        double v = ((_y[c] - _y[a]) * (px - _x[c]) + (_x[a] - _x[c]) * (py - _y[c])) / d;
+        return u * _z[a] + v * _z[b] + (1 - u - v) * _z[c];
     }
 
     public bool IsDesign(double px, double py)

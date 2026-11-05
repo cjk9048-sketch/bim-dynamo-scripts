@@ -56,7 +56,11 @@ internal sealed class ForestSettings
 /// <para>실패해도 3D는 뜬다 — 모든 갈래가 머리(missing · quiet)나 경고 한 줄로 끝난다. 사본은 저장된 도면과 같은 폴더의 <c>DH_임상도\</c>에만(쓴 칸만).</para></summary>
 internal static class Web3DForest
 {
-    internal sealed record Terrain(double[] X, double[] Y, int[] F, TerrainMesh.Cls[] Cls, double MinX, double MinY, double MaxX, double MaxY, double CMinX, double CMinY, double CMaxX, double CMaxY);
+    internal sealed record Terrain(double[] X, double[] Y, double[] Z, int[] F, TerrainMesh.Cls[] Cls, double MinX, double MinY, double MaxX, double MaxY, double CMinX, double CMinY, double CMaxX, double CMaxY);
+
+    /// <summary>★[설치 전 검토 M1] 칸 한도(2 km 칸 64개 ≈ 256 ㎢) · 넘으면 바뀐 자리 + 이만큼(m)으로 줄임.</summary>
+    internal const int MaxTiles = 64;
+    internal const double ShrinkMargin = 2000;
 
     static Dictionary<string, object> Missing(string why, bool quiet) => quiet ? new() { ["missing"] = why, ["quiet"] = true } : new() { ["missing"] = why };
 
@@ -83,14 +87,47 @@ internal static class Web3DForest
             (double X, double Y) FromDwg(double x, double y) { var ll = KoreaTm.ToLonLat(x, y, cm, fn); return KoreaTm.UtmkFromLonLat(ll.Lon, ll.Lat); }
             (double X, double Y) ToDwg(double x, double y) { var ll = KoreaTm.UtmkToLonLat(x, y); var p = KoreaTm.FromLonLat(ll.Lon, ll.Lat, cm, fn); return (p.E, p.N); }
             const double margin = 50;
-            var env = ForestScatter.Region5179(t.MinX, t.MinY, t.MaxX, t.MaxY, margin, FromDwg);
-            var tiles = ForestSource.Load(pick.Source, ForestScatter.TilesFor(env), out var used);
+            // ★[설치 전 검토 M1(a)] 심는 범위 = 지형 전체 · 칸이 64개(≈ 256 ㎢)를 넘으면 바뀐 자리 + 2 km로 줄임 · 그래도 넘거나 바뀐 자리가 없으면 넣지 않음(⚠)
+            //   (멀리 떨어진 TIN 점 하나가 범위를 전국으로 키우는 일 · 서버 원지반 수십 km)
+            double rx0 = t.MinX, ry0 = t.MinY, rx1 = t.MaxX, ry1 = t.MaxY;
+            var env = ForestScatter.Region5179(rx0, ry0, rx1, ry1, margin, FromDwg);
+            var keys = ForestScatter.TilesFor(env).ToList();
+            int keys0 = keys.Count;
+            if (keys.Count > MaxTiles && double.IsFinite(t.CMinX))
+            {
+                rx0 = System.Math.Max(t.MinX, t.CMinX - ShrinkMargin); ry0 = System.Math.Max(t.MinY, t.CMinY - ShrinkMargin);
+                rx1 = System.Math.Min(t.MaxX, t.CMaxX + ShrinkMargin); ry1 = System.Math.Min(t.MaxY, t.CMaxY + ShrinkMargin);
+                env = ForestScatter.Region5179(rx0, ry0, rx1, ry1, margin, FromDwg);
+                keys = ForestScatter.TilesFor(env).ToList();
+                if (keys.Count <= MaxTiles)
+                {
+                    c.Warn.Add($"지형이 넓어 수목은 바뀐 자리 + {ShrinkMargin / 1000:0} km 안에만 넣었습니다");
+                    log.AppendLine($"  수목: 지형이 넓음(칸 {keys0}) → 바뀐 자리 + {ShrinkMargin:0} m(칸 {keys.Count})");
+                }
+            }
+            if (keys.Count > MaxTiles)
+            {
+                log.AppendLine($"  수목: 범위가 너무 넓음 — 칸 {keys0}(줄인 뒤 {keys.Count}) · 한도 {MaxTiles}");
+                c.Warn.Add($"수목 범위가 너무 넓어 넣지 않았습니다(임상도 칸 {keys0:N0}개 · 한도 {MaxTiles})");
+                return Missing("수목 범위가 너무 넓습니다", false);
+            }
+            // ★[M3] 칸마다 따로 읽음 — 창고에서 못 읽은 칸은 도면 폴더 사본에서 한 번 더
+            IForestTileSource? Fallback() => !pick.FromCopy && ForestSource.OpenCopy(dwgDir, out var cp, out _) ? cp : null;
+            var tiles = ForestSource.Load(pick.Source, keys, Fallback, out var used, out int failed, out int fromCopy);
+            if (failed > 0) c.Warn.Add($"임상도 칸 {failed}개 못 읽음 — 그 자리는 수목 없음");
+            if (fromCopy > 0) log.AppendLine($"  수목: 창고에서 못 읽은 칸 {fromCopy}개를 도면 폴더 사본에서 읽음");
+            // ★[M2] 사본만으로 읽는데 사본을 만들 때 달라고 안 한 칸 — 숲이 있는지 모른다(빈 자리가 «숲 없음»으로 보이지 않게 한 번 알림)
+            if (pick.FromCopy)
+            {
+                int unknown = keys.Count(k => !pick.Source.Index.Knows(ForestTileFormat.Key(k.Tx, k.Ty)));
+                if (unknown > 0) { c.Warn.Add($"도면 폴더 임상도 사본에 없는 칸 {unknown}개 — 그 자리는 수목 없음(창고 폴더 확인)"); log.AppendLine($"  수목: 사본이 모르는 칸 {unknown}/{keys.Count}"); }
+            }
             if (tiles.Count == 0 || tiles.All(q => q.Polys.All(p => p.Frtp < 1 || p.Frtp > 4)))
             {
-                log.AppendLine($"  수목: 이 범위에 산림 없음 · 칸 {tiles.Count}({pick.Log})");
-                return Missing("이 범위에 산림이 없습니다", true);
+                log.AppendLine($"  수목: 이 범위에 산림 없음 · 칸 {tiles.Count}/{keys.Count}({pick.Log})");
+                return failed > 0 ? Missing($"임상도 칸 {failed}개 못 읽음", false) : Missing("이 범위에 산림이 없습니다", true);
             }
-            var mask = new ForestMask(t.X, t.Y, t.F, t.Cls, design);
+            var mask = new ForestMask(t.X, t.Y, t.F, t.Cls, design, t.Z);
             Func<double, double, bool>? inBldg = null;
             if (bldgs != null && bldgs.Count > 0)
             {
@@ -106,7 +143,7 @@ internal static class Web3DForest
                             if (!g.IsValid) g = g.Buffer(0);
                             if (!g.IsEmpty) polys.Add(g.Buffer(1.0));
                         }
-                        catch (System.ArgumentException) { }
+                        catch (System.Exception bex) when (bex is System.ArgumentException or TopologyException) { }   // ★[검토 L2] 건물 하나가 이상해도 나머지는 뺌
                 if (polys.Count > 0)
                 {
                     var idx = new NetTopologySuite.Index.Strtree.STRtree<NetTopologySuite.Geometries.Prepared.IPreparedGeometry>();
@@ -115,16 +152,19 @@ internal static class Web3DForest
                     inBldg = (x, y) => { var pt = new Point(x, y); foreach (var pg in idx.Query(new Envelope(x, x, y, y))) if (pg.Covers(pt)) return true; return false; };
                 }
             }
+            // ★[검토 L3] 보이는 지형 메시 밖(세모 없음)이면 «면 없음» — SurfZ(정지면 · 원지반 격자)가 메시보다 넓은 자리에 떠 있는 나무가 없게
+            double? OnMeshZ(double x, double y) => mask.TriAt(x, y) < 0 ? null : surfZ(x, y);
             var fi = new ForestScatter.Input
             {
-                Tiles = tiles, ToDrawing = ToDwg, FromDrawing = FromDwg, X0 = t.MinX, Y0 = t.MinY, X1 = t.MaxX, Y1 = t.MaxY,
-                CX0 = t.CMinX, CY0 = t.CMinY, CX1 = t.CMaxX, CY1 = t.CMaxY, SurfZ = surfZ, Design = mask.IsDesign, Building = inBldg,
-                Max = st.Max, Density = st.Density, Margin = margin,
+                Tiles = tiles, ToDrawing = ToDwg, FromDrawing = FromDwg, X0 = rx0, Y0 = ry0, X1 = rx1, Y1 = ry1,
+                CX0 = t.CMinX, CY0 = t.CMinY, CX1 = t.CMaxX, CY1 = t.CMaxY, SurfZ = OnMeshZ, Design = mask.IsDesign, Building = inBldg,
+                Max = st.Max, Density = st.Density, Margin = margin, MeshZ = mask.ZAt,
             };
             var r = ForestScatter.Run(fi);
-            log.AppendLine("  " + r.Text + $" · 창고 {(pick.FromCopy ? "도면 폴더 사본" : "폴더")} · 칸 파일 {used.Count}");
-            log.AppendLine($"  수목 자가검증: 표본 {r.SelfN:N0}그루 «밑동 + {fi.Sink} m ↔ SurfZ» 최대 차 {r.SelfDz * 1000:F3} mm" + (r.SelfDz > 1e-6 ? " ⚠" : ""));
-            if (r.SelfDz > 1e-6) c.Warn.Add($"수목 자가검증 ⚠ — 밑동 높이가 지형과 {r.SelfDz * 1000:F1} mm 다름");
+            log.AppendLine("  " + r.Text + $" · 창고 {(pick.FromCopy ? "도면 폴더 사본" : "폴더")} · 칸 파일 {used.Count}/{keys.Count}" + (failed > 0 ? $" · 못 읽은 칸 {failed}" : ""));
+            // ★[검토 L8] 자가검증 = 밑동 + 0.3 ↔ 화면에 보이는 지형 메시(세모 보간) — SurfZ(Civil 면 격자)와 메시가 다르면 여기서 드러난다
+            log.AppendLine($"  수목 자가검증: 표본 {r.SelfN:N0}그루 «밑동 + {fi.Sink} m ↔ 보이는 지형 메시» 최대 차 {r.SelfDz * 1000:F3} mm" + (r.SelfDz > 1e-3 ? " ⚠" : ""));
+            if (r.SelfDz > 1e-3) c.Warn.Add($"수목 자가검증 ⚠ — 밑동 높이가 보이는 지형과 최대 {r.SelfDz * 1000:F1} mm 다름");
             if (r.Trees.Count == 0) return Missing("이 범위에 심을 숲 자리가 없습니다", true);
             if (r.Capped) c.Warn.Add($"수목이 많아 {r.Trees.Count:N0}그루만 넣었습니다(한도 {st.Max:N0})");
             // 갱신년도 범위 — 쓴 칸의 원본
@@ -134,7 +174,7 @@ internal static class Web3DForest
             var head = ForestScatter.Head(sc, r, ox, oy, years);
             // 사본(M5) — 저장된 도면만 · 못 써도 로그 한 줄(수목은 그대로)
             if (dwgDir != null && !pick.FromCopy)
-                try { int w = ForestSource.CopyUsed(pick.Source, used, dwgDir); log.AppendLine($"  수목 사본: 도면 폴더 {ForestSource.CopyDir}\\ · 새로 쓴 칸 {w}/{used.Count}"); }
+                try { int w = ForestSource.CopyUsed(pick.Source, keys, used, dwgDir); log.AppendLine($"  수목 사본: 도면 폴더 {ForestSource.CopyDir}\\ · 새로 쓴 칸 {w}/{used.Count} · 달라고 한 칸 {keys.Count}"); }
                 catch (System.Exception ex) { log.AppendLine("  수목 사본: 못 씀 — " + ex.GetType().Name + " " + ex.Message); }
             else log.AppendLine(dwgDir == null ? "  수목 사본: 저장 안 한 도면 — 안 만듦" : "  수목 사본: 사본에서 읽음 — 안 씀");
             return head;

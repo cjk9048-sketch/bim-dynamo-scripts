@@ -69,24 +69,30 @@ export class Ui {
         box.appendChild(row);
         continue;
       }
-      row.className = 'lay' + (l.on ? '' : ' off');
       if (l.title) row.title = l.title;
-      row.innerHTML = `<input type="checkbox" ${l.on ? 'checked' : ''}>${sw ? `<span class="sw" style="background:${sw}"></span>` : ''}<span>${esc(l.label)}</span>`;
-      const cb = row.querySelector('input');
-      cb.onchange = () => { row.classList.toggle('off', !cb.checked); if (this.onLayer) this.onLayer(id, cb.checked); };
-      // ★[v115 · JACK 1105 임상도] 층 줄 막대(수목 밀도 25~100 %) — 막대를 눌러도 체크는 안 바뀜
+      const inner = `<input type="checkbox" ${l.on ? 'checked' : ''}>${sw ? `<span class="sw" style="background:${sw}"></span>` : ''}<span>${esc(l.label)}</span>`;
+      // ★[v115 · JACK 1105 임상도 · 검토 L11] 막대가 있는 줄(수목 밀도 25~100 %)은 줄 = div · 체크 + 이름만 <label> · 막대는 label 밖
+      //   (1106 화면 없는 Edge 실측: 막대가 label 안이면 막대를 눌러도 값이 안 바뀜 · 체크도 그대로 / label 밖이면 값 25 % · 체크 그대로 · 체크를 누르면 끔)
+      let row2 = row;
       if (l.slider) {
+        row2 = document.createElement('div');
+        if (l.title) row2.title = l.title;
+        row.className = 'lay-in';
+        row.innerHTML = inner;
+        row2.appendChild(row);
         const sl = document.createElement('input');
         sl.type = 'range'; sl.className = 'lsl'; sl.min = l.slider.min; sl.max = l.slider.max; sl.step = 5; sl.value = l.slider.value(); sl.title = l.slider.title || '';
         const sv = document.createElement('span');
         sv.className = 'lsv'; sv.textContent = `${sl.value}%`;
-        sl.addEventListener('click', (e) => e.stopPropagation());
         sl.oninput = () => { sv.textContent = `${sl.value}%`; l.slider.set(Number(sl.value)); };
-        row.appendChild(sl); row.appendChild(sv);
+        row2.appendChild(sl); row2.appendChild(sv);
         l.sl = sl; l.sv = sv;
-      }
-      box.appendChild(row);
-      l.row = row; l.cb = cb;
+      } else row.innerHTML = inner;
+      row2.className = 'lay' + (l.on ? '' : ' off');
+      const cb = row2.querySelector('input');
+      cb.onchange = () => { row2.classList.toggle('off', !cb.checked); if (this.onLayer) this.onLayer(id, cb.checked); };
+      box.appendChild(row2);
+      l.row = row2; l.cb = cb;
     }
   }
 
