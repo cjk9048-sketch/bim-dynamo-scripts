@@ -25,11 +25,15 @@ public static class KoreaTm
     private const double Ep2 = E2 / (1 - E2);       // 제2이심률²
 
     /// <summary>TM → 경도·위도(도).</summary>
-    public static (double Lon, double Lat) ToLonLat(double e, double n, double lon0Deg, double fn)
+    public static (double Lon, double Lat) ToLonLat(double e, double n, double lon0Deg, double fn) => ToLonLat(e, n, lon0Deg, fn, K0, FE);
+
+    /// <summary>★[v115 · JACK 1105 임상도] TM → 경도·위도 — 축척 <paramref name="k0"/> · 원점가산 E <paramref name="fe"/>를 받는 겹함수(UTM-K EPSG 5179 = 127.5° · 0.9996 · 1,000,000 · 2,000,000).
+    /// 옛 함수(k0 = 1 · FE = 200000)는 이것을 부른다 — 같은 셈 차례라 비트까지 같다(하네스 S235 ②).</summary>
+    public static (double Lon, double Lat) ToLonLat(double e, double n, double lon0Deg, double fn, double k0, double fe)
     {
         double lon0 = lon0Deg * Math.PI / 180.0;
         double m0 = MeridArc(Lat0);
-        double m = m0 + (n - fn) / K0;
+        double m = m0 + (n - fn) / k0;
         double mu = m / (A * (1 - E2 / 4 - 3 * E2 * E2 / 64 - 5 * E2 * E2 * E2 / 256));
         double e1 = (1 - Math.Sqrt(1 - E2)) / (1 + Math.Sqrt(1 - E2));
 
@@ -44,7 +48,7 @@ public static class KoreaTm
         double t1 = tanp * tanp;
         double n1 = A / Math.Sqrt(1 - E2 * sinp * sinp);
         double r1 = A * (1 - E2) / Math.Pow(1 - E2 * sinp * sinp, 1.5);
-        double d = (e - FE) / (n1 * K0);
+        double d = (e - fe) / (n1 * k0);
 
         double lat = phi1 - (n1 * tanp / r1) * (d * d / 2
             - (5 + 3 * t1 + 10 * c1 - 4 * c1 * c1 - 9 * Ep2) * Math.Pow(d, 4) / 24
@@ -57,7 +61,10 @@ public static class KoreaTm
     }
 
     /// <summary>★ 경도·위도(도) → TM. <b>지도에서 친 박스를 CAD 좌표로 옮기는 자</b>다.</summary>
-    public static (double E, double N) FromLonLat(double lonDeg, double latDeg, double lon0Deg, double fn)
+    public static (double E, double N) FromLonLat(double lonDeg, double latDeg, double lon0Deg, double fn) => FromLonLat(lonDeg, latDeg, lon0Deg, fn, K0, FE);
+
+    /// <summary>★[v115 · JACK 1105 임상도] 경도·위도 → TM 겹함수(<see cref="ToLonLat(double, double, double, double, double, double)"/>와 짝).</summary>
+    public static (double E, double N) FromLonLat(double lonDeg, double latDeg, double lon0Deg, double fn, double k0, double fe)
     {
         double lon = lonDeg * Math.PI / 180.0;
         double lat = latDeg * Math.PI / 180.0;
@@ -71,16 +78,40 @@ public static class KoreaTm
         double m = MeridArc(lat);
         double m0 = MeridArc(Lat0);
 
-        double e = FE + K0 * n1 * (a1
+        double e = fe + k0 * n1 * (a1
             + (1 - t + c) * Math.Pow(a1, 3) / 6
             + (5 - 18 * t + t * t + 72 * c - 58 * Ep2) * Math.Pow(a1, 5) / 120);
 
-        double n = fn + K0 * (m - m0 + n1 * tanp * (a1 * a1 / 2
+        double n = fn + k0 * (m - m0 + n1 * tanp * (a1 * a1 / 2
             + (5 - t + 9 * c + 4 * c * c) * Math.Pow(a1, 4) / 24
             + (61 - 58 * t + t * t + 600 * c - 330 * Ep2) * Math.Pow(a1, 6) / 720));
 
         return (e, n);
     }
+
+    /// <summary>★[v115 · JACK 1105 임상도] UTM-K(EPSG 5179) ↔ 경위도 — 중앙자오선 127.5° · k0 0.9996 · FE 1,000,000 · FN 2,000,000 · 위도 원점 38°(같음).</summary>
+    public const double UtmkLon0 = 127.5, UtmkK0 = 0.9996, UtmkFE = 1000000.0, UtmkFN = 2000000.0;
+    /// <summary>5179 → 경위도 — 급수 역산 뒤 정산(Newton) 두 번: 정산 = 이 정산이 «정방향 <see cref="UtmkFromLonLat"/>으로 되돌렸을 때 제자리»가 되게.
+    /// 1105 실측: 급수 역산만이면 중앙자오선에서 4° 넘는 동쪽(울릉 · 독도 쪽) 왕복이 4.5 mm(정방향은 PROJ와 0.54 mm) — 정산 뒤 왕복 &lt; 0.001 mm.
+    /// 옛 함수 · 겹함수(TM 도면 좌표)는 그대로 둔다(비트 같음).</summary>
+    public static (double Lon, double Lat) UtmkToLonLat(double x, double y)
+    {
+        var (lon, lat) = ToLonLat(x, y, UtmkLon0, UtmkFN, UtmkK0, UtmkFE);
+        const double h = 1e-6;   // 도(≈ 0.1 m) — 편미분 차분
+        for (int it = 0; it < 2; it++)
+        {
+            var p = UtmkFromLonLat(lon, lat);
+            double ex = x - p.X, ey = y - p.Y;
+            if (Math.Abs(ex) < 1e-7 && Math.Abs(ey) < 1e-7) break;
+            var pl = UtmkFromLonLat(lon + h, lat); var pf = UtmkFromLonLat(lon, lat + h);
+            double a = (pl.X - p.X) / h, b = (pf.X - p.X) / h, c = (pl.Y - p.Y) / h, d = (pf.Y - p.Y) / h, det = a * d - b * c;
+            if (det == 0 || !double.IsFinite(det)) break;
+            lon += (d * ex - b * ey) / det;
+            lat += (a * ey - c * ex) / det;
+        }
+        return (lon, lat);
+    }
+    public static (double X, double Y) UtmkFromLonLat(double lon, double lat) => FromLonLat(lon, lat, UtmkLon0, UtmkFN, UtmkK0, UtmkFE);
 
     /// <summary>적도~위도 <paramref name="phi"/> 자오선호 길이.</summary>
     private static double MeridArc(double phi) =>
