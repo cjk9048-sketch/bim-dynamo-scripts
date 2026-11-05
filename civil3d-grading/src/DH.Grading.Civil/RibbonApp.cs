@@ -51,6 +51,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SheetBookCommand))]          // ★[v112.0] DHSHEETBOOK(도킹창 «도면화») · DHSHEETMAKE([작성하기] — 배치탭 · 도곽 · 표제란)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ProfileFlipCommand))]        // ★[v113.1] DHPROFILEREV · DHROADREV(종단 시점 ↔ 종점 바꾸기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.UndoGuard))]                          // ★[v114.2] DHUNDOCLR(명령 뒤 되돌리기 기록 비움 — Civil 결함 회피)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.StructCommand))]             // ★[v115 · JACK 1105] DHSTRUCT · DHSTRUCTUPD · DHSTRUCTOFF(Revit 구조물)
 
 namespace DH.Grading.Civil;
 
@@ -962,6 +963,23 @@ public sealed class RibbonApp : IExtensionApplication
             pMisc.Items.Add(Spacer());
             pMisc.Items.Add(splitParcel);
             pMisc.Items.Add(Spacer());
+            // ★★[v115 · JACK 1105 «Revit 구조물을 투영하는 기능을 [기타]에»] [구조물] 스플릿 — 불러오기 · 다시 반영 · 지우기
+            var splitStruct = new RibbonSplitButton
+            {
+                Text = "구조물", ShowText = true, ShowImage = true, LargeImage = MakeGlyph("구조물"), Image = MakeGlyph("구조물"),
+                Size = RibbonItemSize.Large, Orientation = System.Windows.Controls.Orientation.Vertical,
+                IsSplit = true, IsSynchronizedWithCurrentItem = false, ListStyle = RibbonSplitButtonListStyle.List,
+                ToolTip = MakeTip("구조물", "Revit 3D DWG(공유 좌표)를 xref로 붙이고\n평면 외곽 · 종단 · 횡단에 자른 면을 넣습니다.", null),
+            };
+            var btnStructIn = MakeButton("구조물\n불러오기", "DHSTRUCT ", "Revit 3D DWG 불러오기", "구조물");
+            var btnStructUpd = MakeButton("구조물\n다시 반영", "DHSTRUCTUPD ", "원본이 바뀌었거나 xref를 옮겼으면 다시 그립니다", "구조물");
+            var btnStructOff = MakeButton("구조물\n지우기", "DHSTRUCTOFF ", "그린 것 · xref · 기록을 지웁니다(원본 파일은 그대로)", "구조물");
+            splitStruct.Items.Add(btnStructIn);
+            splitStruct.Items.Add(btnStructUpd);
+            splitStruct.Items.Add(btnStructOff);
+            splitStruct.Current = btnStructIn;
+            pMisc.Items.Add(splitStruct);
+            pMisc.Items.Add(Spacer());
             pMisc.Items.Add(btnReset);           // ★[v111.6] 위성지도는 [공통]으로 옮김
             pMisc.Items.Add(Spacer());
         }
@@ -1322,6 +1340,13 @@ public sealed class RibbonApp : IExtensionApplication
                         var cut = P(0xd8, 0x5a, 0x4a);
                         cut.DashStyle = new DashStyle(new double[] { 2.2, 1.8 }, 0);
                         dc.DrawRectangle(null, cut, new Rect(8, 8, 15, 15));
+                        break;
+
+                    case "구조물": // ★[v115] 땅 위아래로 걸친 상자(회색) + 빈칸 — 자른 구조물
+                        var sg = P(0x9a, 0xa8, 0xb8);
+                        dc.DrawLine(P(0x8d, 0x6e, 0x48), new Point(3, 13), new Point(29, 13));   // 지반선
+                        dc.DrawRectangle(null, sg, new Rect(8, 7, 16, 20));
+                        dc.DrawRectangle(null, P(0xc8, 0xd0, 0xd8), new Rect(12, 12, 8, 10));
                         break;
 
                     case "지적": // 필지 경계(노랑) — 나뉜 땅

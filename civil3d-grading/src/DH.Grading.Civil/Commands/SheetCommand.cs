@@ -638,6 +638,13 @@ public static class SheetCommand
                 //   V «H와 같게» · 한도 없음 · 나눔 없음 = 옛 식 그대로(첫 사다리 ≥ max(폭, 높이) · 고정 = 넘침 검사만).
                 var pk = DH.Grading.Core.ProfileScaleFit.Pick(needW, needH0, Scales, plan.PinH, plan.PinV, plan.HMax, plan.SheetsFor);
                 plan.H = pk.H; plan.V = pk.V; plan.Sheets = pk.Sheets; plan.Over = pk.OverW || pk.OverV; plan.Note = pk.Note; plan.NeedW = needW; plan.NeedV = needH0;
+                // ★[v115 · JACK 1105 Revit 구조물 · D13] 구조물 때문에 축척이 바뀌었으면 한 줄(구조물 뺀 데이터로 다시 고른 것과 견줌) · 옛 규칙은 넘칠 수 있다고
+                if (!noRoom && StructDraw.BareRange(pvId, out double sLo9, out double sHi9))
+                {
+                    double nb9 = System.Math.Max(hM0 * 1000.0 / availMm, System.Math.Max(ElevStepM, System.Math.Ceiling((sHi9 - sLo9) / ElevStepM - 1e-9) * ElevStepM) * 1000.0 / availMm);
+                    var pk9 = DH.Grading.Core.ProfileScaleFit.Pick(needW, plan.Legacy ? needH0 : nb9, Scales, plan.PinH, plan.PinV, plan.HMax, plan.SheetsFor);
+                    StructDraw.ScaleNote("종단", pk9.H, pk9.V, pk.H, pk.V, plan.Legacy, log);
+                }
                 double s0 = pk.H, v0 = pk.V;
                 overflow = pk.OverW || pk.OverV;
                 double pinned = plan.PinH;
@@ -3884,6 +3891,8 @@ public static class SheetCommand
                 tr.Commit();
             }
         }
+        // ★[v115 · JACK 1105 Revit 구조물 · D13] 구조물 바닥 − 0.5 m(윗면 + 0.5)까지 — V 축척 고르기 · 표고 범위가 함께 본다(부지 = 노선 전체 · 도로 = 그 장)
+        StructDraw.ExtendProfileRange(db, pvId, ctx != null, ref lo, ref hi);
     }
 
     private static void FitElevationRangeTail(Database db, ObjectId pvId, double scale, double availMm, System.Text.StringBuilder log, double lo, double hi)
@@ -4442,6 +4451,8 @@ public static class SheetCommand
             // ★[v104.1] 옹벽 단면(종단 · 횡단) — CALS 레이어라 레이어로 안 지운다(손 그림 보호) · 표식(XData)이 있는 것만 · 종단을 다시 그리면 횡단 뷰도 Civil이 지우니 둘 다
             int nWs = WallSectionDraw.EraseTagged(db, tr, null, null);
             if (nWs > 0) { total += nWs; log?.AppendLine($"  종단도 객체 정리: 옹벽 단면 {nWs}개(표식)"); }
+            int nSt = StructDraw.EraseSiteSheets(db, tr, null);   // ★[v115 · JACK 1105 Revit 구조물 · 검토 M1] 종단 · 횡단 구조물 단면만(평면 외곽 · 진입도로 장 것은 안 지움)
+            if (nSt > 0) { total += nSt; log?.AppendLine($"  종단도 객체 정리: 구조물 단면 {nSt}개(표식)"); }
             tr.Commit();
         }
         catch (System.Exception ex) { log?.AppendLine("  종단도 객체 정리 실패 — " + Brief(ex)); }
