@@ -77,13 +77,14 @@ public sealed class ViewSurfaceCommand
     }
 
     // ★[JACK 0824] 스플릿 버튼용 — 누르면 **묻지 않고 바로** 바뀐다.
-    [CommandMethod("DHVIEWALL")] public void ViewAll() => Apply("A");
-    [CommandMethod("DHVIEWG")] public void ViewGround() => Apply("G");
-    [CommandMethod("DHVIEWP")] public void ViewPlan() => Apply("P");
-    [CommandMethod("DHVIEWE")] public void ViewExcav() => Apply("E");
+    // ★[v114.2 · JACK 1105 «명령 뒤 되돌리기 기록 비움»] 보이기만 바꿔도 종단이 따르는 면이면 UNDO에 Civil이 죽는다(1105 실측 DHVIEWG) — 명령 끝에서 비운다
+    [CommandMethod("DHVIEWALL")] public void ViewAll() { Apply("A"); UndoGuard.FlushNow(); }
+    [CommandMethod("DHVIEWG")] public void ViewGround() { Apply("G"); UndoGuard.FlushNow(); }
+    [CommandMethod("DHVIEWP")] public void ViewPlan() { Apply("P"); UndoGuard.FlushNow(); }
+    [CommandMethod("DHVIEWE")] public void ViewExcav() { Apply("E"); UndoGuard.FlushNow(); }
     // ★★[v113.3 · JACK 1105 «보기 기능도 진입도로까지 고려해서 · 그 안에 측점 보기 안 보기»] 진입도로 · 최종지표면 · 측점 켜고 끄기
-    [CommandMethod("DHVIEWR")] public void ViewRoad() => Apply("R");
-    [CommandMethod("DHVIEWF")] public void ViewFinal() => Apply("F");
+    [CommandMethod("DHVIEWR")] public void ViewRoad() { Apply("R"); UndoGuard.FlushNow(); }
+    [CommandMethod("DHVIEWF")] public void ViewFinal() { Apply("F"); UndoGuard.FlushNow(); }
     [CommandMethod("DHVIEWSTN")] public void ViewStations() => ToggleStations();
 
     /// <summary>도면에 진입도로 면 · (맞는) 최종지표면이 있나.</summary>
@@ -116,6 +117,7 @@ public sealed class ViewSurfaceCommand
         var r = ed.GetKeywords(pko);
         if (r.Status != PromptStatus.OK && r.Status != PromptStatus.None) return;
         Apply(r.Status == PromptStatus.None ? "A" : (r.StringResult ?? "A").Trim().ToUpperInvariant());
+        UndoGuard.FlushNow();   // ★[v114.2]
     }
 
     /// <summary>지금 도면에 계획지표면·터파기가 있는가.</summary>

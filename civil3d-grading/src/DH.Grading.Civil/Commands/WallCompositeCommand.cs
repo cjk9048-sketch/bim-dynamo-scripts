@@ -272,6 +272,8 @@ public sealed class WallCompositeCommand
             // ★[v103.2 · 계획 2-6] 그려 둔 종단 · 횡단이 옛 면 기준이면 한 줄 — 관문이 부른 합성(RunFor)은 곧 종단을 그리므로 안 알린다
             if (docJ != null) PureWithWallsBuilder.NotifyStale(docJ);
         }
+        // ★[v114.2 · JACK 1105 «명령 뒤 되돌리기 기록 비움»] 정지면_DH를 바꿔 끼웠고 그것을 따르는 지표면 종단이 있으면 Ctrl+Z 기록을 비운다(Civil 결함 회피 · 명령 끝 · 트랜잭션 밖)
+        UndoGuard.FlushNow(docJ);
     }
 
     /// <summary>★★★[v103.1.12 · 계획 4판 2-5 · 낮음 4] 관문이 부르는 합성 — 명령(Run)과 같은 껍데기(이벤트 뷰어 끄기 · 자가점검 작업 · 앞 상태)로 같은 RunInner를 돌린다.
