@@ -101,7 +101,33 @@ internal static class WallLineFlow
         return (b0, "");
     }
 
-    /// <summary>★[v114.0] 짓기 재료 — 판정 + 기하(질문 없음). P0 · 원지반 삼각형은 경계 + 여유 상자만.</summary>
+    // ★[v114.3 · JACK 1105 소단 높이 · 재검토 M-C] 옛 사면 링 — 열쇠(계획선 핸들 · 전이 단계 · 경계 · 번들 제원 · 링 셈 구간 비트)가 같으면 다시 안 짓는다
+    //   (DHWALLADD 한 번에 BuildGeom이 여러 번 · DHWALLCOMP ③-b가 옹벽마다 부른다 — 모두 같은 링). 지은 수 · 쓴 수 · 한 번 짓는 시간은 로그에
+    static (string Key, WallByLine.OldBench? Cut, WallByLine.OldBench? Fill, string WhyC, string WhyF, long Ms)? _rings;
+    static int _ringBuilt, _ringUsed;
+
+    /// <summary>★[v114.3 · 계획 2판 1절 · 재검토 M-A] 옛 소단 단 표 — 정지면 생성과 같은 부르기(번들 경계 · 제원 · <see cref="CreateGradingCommand.RingZonesOf"/> 구간)로 링을 다시 만든다.</summary>
+    internal static (WallByLine.OldBench? Cut, WallByLine.OldBench? Fill, string Note) OldBenchOf(GradingBundle reg, IGroundSurface g)
+    {
+        var zc = CreateGradingCommand.RingZonesOf(reg.CutWallZones); var zf = CreateGradingCommand.RingZonesOf(reg.FillWallZones);
+        string key = (reg.PlanHandle ?? "") + "|" + GradingSettings.TransitionStage + "|" + WallByLine.OldBench.Fingerprint(reg.Boundary, reg.Params, zc, zf);
+        _ringUsed++;
+        static string Why(string wc, string wf) => (wc.Length > 0 ? " · 절토: " + wc : "") + (wf.Length > 0 ? " · 성토: " + wf : "");
+        if (_rings is { } c && c.Key == key)
+            return (c.Cut, c.Fill, $"링 다시 씀(한 번 짓기 {c.Ms} ms · 지음 {_ringBuilt} · 씀 {_ringUsed}) · 절토 {c.Cut?.K ?? 0}단 · 성토 {c.Fill?.K ?? 0}단" + Why(c.WhyC, c.WhyF));
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        WallByLine.OldBench? oc = null, of = null; string wc = "", wf = "";
+        try { oc = WallByLine.OldBench.Of(GradingGeometry.Build(reg.Boundary, g, reg.Params, true, zc), reg.Params, true, out wc); }
+        catch (System.Exception ex) { wc = $"링을 못 만들었다({ex.GetType().Name}: {ex.Message})"; }
+        try { of = WallByLine.OldBench.Of(GradingGeometry.Build(reg.Boundary, g, reg.Params, false, zf), reg.Params, false, out wf); }
+        catch (System.Exception ex) { wf = $"링을 못 만들었다({ex.GetType().Name}: {ex.Message})"; }
+        _ringBuilt++;
+        _rings = (key, oc, of, wc, wf, sw.ElapsedMilliseconds);
+        return (oc, of, $"링 지음 {sw.ElapsedMilliseconds} ms(지음 {_ringBuilt} · 씀 {_ringUsed}) · 절토 {oc?.K ?? 0}단 · 성토 {of?.K ?? 0}단 · 구간 절 {zc.Count} · 성 {zf.Count}" + Why(wc, wf));
+    }
+
+    /// <summary>★[v114.0] 짓기 재료 — 판정 + 기하(질문 없음). P0 · 원지반 삼각형은 경계 + 여유 상자만.
+    /// ★[v114.3 · JACK 1105 소단 높이] 벽 소단 높이 = 옛 사면 소단 높이(옛 소단 방식 — 링에서 · H는 기하에 안 씀) · 링 꼭짓점이 합성 전 면과 맞는지 먼저 잰다(재검토 M-A).</summary>
     static WallByLine.Built BuildGeom(BoundaryCut.Result cut, IReadOnlyList<Point3> bd, GradingBundle region, List<(string, IReadOnlyList<Point3>)> bl,
         double hc, double tc, double hf, double tf, double slopeW, double faceRun, double grid, double reach, CachedGroundSurface g, CachedGroundSurface p0)
     {
@@ -111,11 +137,39 @@ internal static class WallLineFlow
         var gTris = g.TrianglesIn(sx0, sy0, sx1, sy1);
         System.Func<double, double, double?> gAt = (x, y) => g.TryGetElevation(x, y, out double z) ? z : null;
         System.Func<double, double, double?> pAt = (x, y) => p0.TryGetElevation(x, y, out double z) ? z : null;
-        return WallByLine.Build(new WallByLine.Input
+        var (oc, of, rnote) = OldBenchOf(region, g);
+        // ★[재검토 M-A] 다시 만든 링 = 정지면을 만든 그 링인가 — 상자 안 · 그 쪽 사면 자리(데이라잇 고리 안 1 cm · 계획선 밖 1 cm) 링 꼭짓점이 합성 전 면 꼭짓점과 0.1 mm(평면) · 1 mm(높이) 안에서 겹치는 몫.
+        //   0단계 실측(1105 현장): 136점 중 134점(98.5 %) — 안 겹친 2점은 0.22~0.24 mm 옆에 면 꼭짓점이 있고 그 자리 면 높이 = 링 높이(보조선 교차 끼움 자리로 보임 · 재지 않음).
+        //   90 % 아래면 다른 링(구간 · 제원이 정지면을 만든 때와 다름)이라 짓지 않는다 — 틀린 높이로 짓느니 까닭을 남긴다
+        var gf = NtsSupport.Factory();
+        var vm = new System.Text.StringBuilder();
+        var planB = NtsSupport.ToCleanPolygon(region.Boundary, gf);
+        foreach (var (nm, obx, clip) in new[] { ("절토", oc, region.CutClipRing), ("성토", of, region.FillClipRing) })
+        {
+            if (obx == null) continue;
+            if (clip == null || clip.Count < 3 || planB == null) { vm.Append($" · {nm} 꼭짓점 일치 못 잼(데이라잇 고리 없음)"); continue; }
+            var clipP = NtsSupport.ToCleanPolygon(clip, gf);
+            if (clipP == null) { vm.Append($" · {nm} 꼭짓점 일치 못 잼(데이라잇 고리가 다각형이 아님)"); continue; }
+            var inP = NetTopologySuite.Geometries.Prepared.PreparedGeometryFactory.Prepare(clipP.Buffer(-0.01));
+            var outP = NetTopologySuite.Geometries.Prepared.PreparedGeometryFactory.Prepare(planB.Buffer(0.01));
+            var (n, hit, miss) = obx.VertexMatch(p0Tris, (x, y) => { var pt = gf.CreatePoint(new NetTopologySuite.Geometries.Coordinate(x, y)); return inP.Contains(pt) && !outP.Contains(pt); }, sx0, sy0, sx1, sy1);
+            vm.Append(string.Format(System.Globalization.CultureInfo.InvariantCulture, " · {0} 꼭짓점 일치 {1}/{2}", nm, hit, n));
+            if (n >= 8 && hit < 0.9 * n)
+            {
+                var no = new WallByLine.Built { Ok = false, Code = "옛 소단", Why = string.Format(System.Globalization.CultureInfo.InvariantCulture, "옛 사면 링이 정지면과 다름({0} 꼭짓점 {1}/{2}만 겹침) — 정지면을 다시 만든 뒤 하세요(구간 · 제원이 정지면을 만든 때와 다름)", nm, hit, n) };
+                if (miss is { } m) no.Marks.Add(m);
+                no.Log = $"  ⓪ 옛 소단 링 — {rnote}{vm}\n";
+                return no;
+            }
+        }
+        var b = WallByLine.Build(new WallByLine.Input
         {
             Line = cut.Line, Bd = bd, NewRing = cut.NewRing, CutRing = cut.CutRing, Plan = region.Boundary, Hc = hc, Tc = tc, Hf = hf, Tf = tf, SlopeW = slopeW, FaceRun = faceRun, Grid = grid, Reach = reach,
             Ground = gAt, GroundTris = gTris, P0 = pAt, P0Tris = p0Tris, Blockers = bl,
+            LevelMode = WallByLine.LevelKind.OldBench, CutBench = oc, FillBench = of, RowDens = System.Math.Max(0.3, System.Math.Min(region.Params.VertexSpacing, 1.0)),
         });
+        b.Log = $"  ⓪ 옛 소단 링 — {rnote}{vm}\n" + b.Log;
+        return b;
     }
 
     /// <summary>가상옹벽{번호}_DH · 선 · 폴리곤(이 트랜잭션) — 됐으면 면 핸들 · 아니면 빈 값 + 까닭.</summary>
@@ -270,9 +324,12 @@ internal static class WallLineFlow
         var got = WallLineDraw.Run(doc, Tag, bdF, regF.Boundary, pts => BoundaryCut.Classify(pts, bdF, regF.Boundary, blF));
         if (got == null) return;
         // ★[v114.0 · 0-9] 제원 — 절토 · 성토 따로(Enter = 정지옵션의 그쪽 기본값) · 절 · 성은 자리마다 기하가 가린다
+        // ★[v114.3 · JACK 1105 소단 높이 · 계획 2판 3절(0-9를 바꿈)] 단높이는 옛 사면 링을 따르므로 묻지 않고 보여만 준다(따로 고르면 둘째 소단부터 다시 어긋난다) —
+        //   소단 폭 T만 묻는다(Enter = 그 쪽 사면 소단 폭 · 대소단 단은 그 단 폭). 기본값은 정지면을 만든 번들 제원
         var p = GradingSettings.ToParams();
         double slopeW = System.Math.Max(GradingSettings.MinSlope, 0), faceRun = p.MinFaceRun, grid = System.Math.Max(1.0, p.VertexSpacing), margin = System.Math.Max(0, GradingSettings.WallPolygonMargin);
-        double hc = p.BenchHeightOf(true), tc = p.BenchWidthOf(true), hf = p.BenchHeightOf(false), tf = p.BenchWidthOf(false);
+        var rp = regF.Params;
+        double hc = rp.BenchHeightOf(true), tc = rp.BenchWidthOf(true), hf = rp.BenchHeightOf(false), tf = rp.BenchWidthOf(false);
         var b = BuildGeom(got.Cut, bdF, regF, blF, hc, tc, hf, tf, slopeW, faceRun, grid, margin, gC, pC);
         double mk = System.Math.Max(0.3, System.Math.Sqrt(System.Math.Pow(bdF.Max(q => q.X) - bdF.Min(q => q.X), 2) + System.Math.Pow(bdF.Max(q => q.Y) - bdF.Min(q => q.Y), 2)) * 0.006);
         while (true)
@@ -289,7 +346,7 @@ internal static class WallLineFlow
             }
             else live = WallLineDraw.Show(b.Marks, got.Pts, mk);
             string foot = b.Ok ? string.Format(System.Globalization.CultureInfo.InvariantCulture, " · 선 바깥 최대 {0:F2} m{1}", b.FootMax, b.FootMax > 0 ? " ⚠" : "") : "";
-            string sides = b.Ok ? (b.HasCut ? $"절토 H·T {hc:0.##}·{tc:0.##}" : "") + (b.HasCut && b.HasFill ? " / " : "") + (b.HasFill ? $"성토 H·T {hf:0.##}·{tf:0.##}" : "") : "";
+            string sides = b.Ok ? (b.HasCut ? $"절토 소단 {tc:0.##}" : "") + (b.HasCut && b.HasFill ? " / " : "") + (b.HasFill ? $"성토 소단 {tf:0.##}" : "") + " · 단높이 = 사면" : "";
             string spec = b.Ok ? $"〈{sides}{foot}〉" : $"〈⚠{b.Why}〉";
             PromptResult r;
             try
@@ -307,14 +364,13 @@ internal static class WallLineFlow
             if (kw == "C" || kw == "F")
             {
                 bool c = kw == "C";
-                foreach (bool isH in new[] { true, false })
+                // ★[v114.3 · 계획 2판 3절] 소단 길이만(단높이 = 사면 · 보여만 준다)
+                var pdo = new PromptDoubleOptions($"\n{(c ? "절토" : "성토")} 소단 길이 (m)") { DefaultValue = c ? tc : tf, UseDefaultValue = true, AllowNegative = false, AllowZero = true };
+                var dr = ed.GetDouble(pdo);
+                if (dr.Status == PromptStatus.OK)
                 {
-                    var pdo = new PromptDoubleOptions($"\n{(c ? "절토" : "성토")} {(isH ? "단높이" : "소단 길이")} (m)") { DefaultValue = isH ? (c ? hc : hf) : (c ? tc : tf), UseDefaultValue = true, AllowNegative = false, AllowZero = !isH };
-                    var dr = ed.GetDouble(pdo);
-                    if (dr.Status != PromptStatus.OK) break;
-                    if (isH && (dr.Value < 0.2 || dr.Value > 15)) { ed.WriteMessage("\n → 범위 밖 값입니다(단높이 0.2~15 m)."); break; }
-                    if (!isH && dr.Value > 60) { ed.WriteMessage("\n → 범위 밖 값입니다(소단 0~60 m)."); break; }
-                    if (c) { if (isH) hc = dr.Value; else tc = dr.Value; } else { if (isH) hf = dr.Value; else tf = dr.Value; }
+                    if (dr.Value > 60) ed.WriteMessage("\n → 범위 밖 값입니다(소단 0~60 m).");
+                    else if (c) tc = dr.Value; else tf = dr.Value;
                 }
                 b = BuildGeom(got.Cut, bdF, regF, blF, hc, tc, hf, tf, slopeW, faceRun, grid, margin, gC, pC);
                 continue;
@@ -385,6 +441,12 @@ internal static class WallLineFlow
         var b = BuildGeom(cut, bd, reg, bl, w.Hc, w.Tc, w.Hf, w.Tf, sW, fR, gr, w.Reach, new CachedGroundSurface(gTin), new CachedGroundSurface(p0));
         if (!b.Ok) return $"폴리선 옹벽 — 새 정지면에서 못 지음: {b.Why}";
         string drift = WallByLine.Drift(w, b);   // ★[v114.0 · 설치 전 검토 7] 저장 값과 10 % 넘게 다르면 ⚠(막지 않음)
+        // ★[v114.3 · JACK 1105 소단 높이 · 계획 2판 3절 LOW] 옛 규칙(선기준)으로 지은 옹벽을 새 규칙(옛 소단)으로 다시 지으면 소단 높이가 바뀐다 — 한 줄 남긴다(막지 않음)
+        {
+            static string Lv(IEnumerable<WallByLine.FaceSeg> fs) => string.Join(" · ", fs.Where(f => f.Kind == 0).Select(f => System.Math.Round(f.Level, 2)).Distinct().OrderBy(z => z).Select(z => z.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)));
+            string lo = Lv(w.Faces), ln = Lv(b.Faces);
+            if (lo.Length > 0 && lo != ln) drift += (drift.Length > 0 ? " · " : "") + $"⚠옹벽 {w.No} 모양 바뀜(소단 {lo} → {ln})";
+        }
         string moved = WallByLine.SamePlace(w, cut);
         if (moved.Length > 0) return "폴리선 옹벽 자리가 움직였다 — " + moved + " · [옹벽→사면]으로 되돌리거나 다시 그리세요";
         var er = WallTags.Erase(db, tr, (n, r) => n == w.No && (r.Length == 0 || r == region), false, groundId);
