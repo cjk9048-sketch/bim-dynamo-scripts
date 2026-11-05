@@ -239,8 +239,64 @@ static class PureWallsCheck
         }
     }
 
+    /// <summary>«x,y,z» 띄어 쓴 점들 — ★[v115 · S162/S163 선 옹벽] «x,y»(LINE 줄)는 z = 0.</summary>
     static List<Point3> Pts(string s) => s.Split(' ', StringSplitOptions.RemoveEmptyEntries)
-        .Select(q => { var a = q.Split(','); return new Point3(double.Parse(a[0], Ci), double.Parse(a[1], Ci), double.Parse(a[2], Ci)); }).ToList();
+        .Select(q => { var a = q.Split(','); return new Point3(double.Parse(a[0], Ci), double.Parse(a[1], Ci), a.Length > 2 ? double.Parse(a[2], Ci) : 0); }).ToList();
+
+    /// <summary>★[v115 · S162/S163 선 옹벽] 삼각형 안 표본 일곱(무게중심 + 꼭짓점 쪽 셋 + 변 쪽 셋 · 무게중심 좌표).</summary>
+    static readonly (double U, double V)[] Samples7 = { (1 / 3.0, 1 / 3.0), (0.6, 0.2), (0.2, 0.6), (0.2, 0.2), (0.45, 0.45), (0.45, 0.1), (0.1, 0.45) };
+
+    /// <summary>★[v115 · S162/S163 선 옹벽] 옛 덤프(판 1 — 자리 고리 ZONEF · ZONEC가 없다)의 선 옹벽 자리를 Civil 최종면 높이로 되살린다.
+    /// <para>DHWALLCOMP 규칙(RuleL): 절토 자리 min(G, W_c) · 성토 자리 max(G, W_f) · 자리 밖 G. 그래서 벽(W)과 원지반(G)이 1 mm 넘게 다른 표본에서
+    /// 최종면이 W(0.3 mm 안)면 그 자리(W &lt; G 절토 · W &gt; G 성토) · G면 그 자리가 아니다(W &lt; G면 절토 아님 · W &gt; G면 성토 아님). 한 삼각형의 표본이 갈리면 못 되살림(Conflict).</para>
+    /// <para>표가 없는 삼각형(어디서나 W ≈ G — 자리 안이든 밖이든 높이는 같고 삼각분할만 다르다)은 자리 밖으로 둔다. 이 짐작은 부른 쪽이
+    /// 합성이 Civil 최종면을 그대로 재현하는지로 확인한다(재현 못 하면 판정 불가 — 짐작으로 판정하지 않는다).</para></summary>
+    static (List<Tri> C, List<Tri> F, int Conflict, int Undecided) ZonesFromFinal(IReadOnlyList<Tri> wall, STRtreeZ zG, STRtreeZ zFin)
+    {
+        var c = new List<Tri>(); var f = new List<Tri>(); int conflict = 0, undecided = 0;
+        foreach (var t in wall)
+        {
+            double dd = (t.B.Y - t.C.Y) * (t.A.X - t.C.X) + (t.C.X - t.B.X) * (t.A.Y - t.C.Y);
+            if (Math.Abs(dd) < 1e-18) { undecided++; continue; }
+            int vc = 0, vnc = 0, vf = 0, vnf = 0;
+            foreach (var (u, v) in Samples7)
+            {
+                double x = u * t.A.X + v * t.B.X + (1 - u - v) * t.C.X, y = u * t.A.Y + v * t.B.Y + (1 - u - v) * t.C.Y, w = u * t.A.Z + v * t.B.Z + (1 - u - v) * t.C.Z;
+                var g = zG.At(x, y); var fz = zFin.At(x, y);
+                if (g == null || fz == null || Math.Abs(w - g.Value) <= 1e-3) continue;
+                bool onW = Math.Abs(fz.Value - w) <= 3e-4, onG = Math.Abs(fz.Value - g.Value) <= 3e-4;
+                if (w < g.Value) { if (onW) vc++; else if (onG) vnc++; }
+                else { if (onW) vf++; else if (onG) vnf++; }
+            }
+            if ((vc > 0 && (vnc > 0 || vf > 0)) || (vf > 0 && vnf > 0)) conflict++;
+            else if (vc > 0) c.Add(t);
+            else if (vf > 0) f.Add(t);
+            else if (vnc + vnf == 0) undecided++;
+        }
+        return (c, f, conflict, undecided);
+    }
+
+    /// <summary>★[v115 · S162/S163 선 옹벽] 합성 삼각형마다 무게중심을 품은 Civil 최종면 삼각형이 같은 세 꼭짓점(차례 무관 · 10 µm 안)인가 — (맞은 수, 맞은 것 중 꼭짓점 최대 차).</summary>
+    static (int Same, double Max) SameAsFinal(IReadOnlyList<Tri> a, IReadOnlyList<Tri> fin)
+    {
+        var tr = new NetTopologySuite.Index.Strtree.STRtree<Tri>();
+        foreach (var t in fin)
+            tr.Insert(new Envelope(Math.Min(t.A.X, Math.Min(t.B.X, t.C.X)), Math.Max(t.A.X, Math.Max(t.B.X, t.C.X)), Math.Min(t.A.Y, Math.Min(t.B.Y, t.C.Y)), Math.Max(t.A.Y, Math.Max(t.B.Y, t.C.Y))), t);
+        tr.Build();
+        static double D(Point3 p, Point3 q) => Math.Sqrt((p.X - q.X) * (p.X - q.X) + (p.Y - q.Y) * (p.Y - q.Y) + (p.Z - q.Z) * (p.Z - q.Z));
+        int same = 0; double max = 0;
+        foreach (var t in a)
+        {
+            double cx = (t.A.X + t.B.X + t.C.X) / 3, cy = (t.A.Y + t.B.Y + t.C.Y) / 3, best = double.MaxValue;
+            foreach (var u in tr.Query(new Envelope(cx, cx, cy, cy)))
+            {
+                double d = new[] { t.A, t.B, t.C }.Max(p => Math.Min(D(p, u.A), Math.Min(D(p, u.B), D(p, u.C))));
+                best = Math.Min(best, d);
+            }
+            if (best <= 1e-5) { same++; max = Math.Max(max, best); }
+        }
+        return (same, max);
+    }
 
     static void Field(string dir, bool last, Action<string, bool, string> check0)
     {
@@ -256,16 +312,82 @@ static class PureWallsCheck
         var poly = Pts(lines.First(l => l.StartsWith("POLY ")).Substring(5));
         if (poly.Count > 1 && poly[0].X == poly[^1].X && poly[0].Y == poly[^1].Y) poly.RemoveAt(poly.Count - 1);
         var seg = Pts(lines.First(l => l.StartsWith("SEG ")).Substring(4));
-        Console.WriteLine($"\n  [{tag}] 옹벽 {no} {(down ? "성토" : "절토")} · 합성 전 {pre.Count} · 최종 {fin.Count} · 순수 {pure.Count}");
+        // ★[v115 · S162/S163 선 옹벽] 목록 종류 2(선 옹벽 · [옹벽 추가])면 WALL 줄에 «종류 2(선 …)»가 붙는다 — 합성은 DHWALLCOMP처럼 BuildCompositeLine(바꿀 자리 고리로 나눈 벽 삼각형).
+        //   첫 옹벽의 줄 묶음(WALL ~ 다음 WALL) · 덤프 판(VER — 판 2부터 ZONEF · ZONEC · CAP · 없으면 판 1)
+        var km = System.Text.RegularExpressions.Regex.Match(wl, @" 종류 (\d+)\(");
+        bool lineW = km.Success && km.Groups[1].Value != "0";
+        int w0 = Array.IndexOf(lines, wl), w1 = Array.FindIndex(lines, w0 + 1, l => l.StartsWith("WALL "));
+        var blk = lines[w0..(w1 < 0 ? lines.Length : w1)];
+        var verL = lines.FirstOrDefault(l => l.StartsWith("VER "));
+        int ver = verL != null && int.TryParse(verL.Substring(4).Trim(), NumberStyles.Integer, Ci, out int vv) ? vv : 1;
+        Console.WriteLine($"\n  [{tag}] 옹벽 {no} {(down ? "성토" : "절토")}{(lineW ? $" · 선 옹벽(덤프 판 {ver})" : "")} · 합성 전 {pre.Count} · 최종 {fin.Count} · 순수 {pure.Count}");
+
+        // ★[v115 · S162/S163 선 옹벽] DHWALLCOMP와 같은 입력 — 폴리곤 둘레 ±1 m 상자에 닿는 가상옹벽 · 원지반 삼각형(CachedGroundSurface.TrianglesIn) ·
+        //   가상옹벽 삼각형을 무게중심으로 성토 자리 고리 먼저 · 다음 절토 자리 고리로 나눈다(고리 밖은 버림 — 그 자리 합성 = G)
+        var wallL = wall; var groundL = ground; var tcL = new List<Tri>(); var tfL = new List<Tri>();
+        STRtreeZ zG = new(ground), zP = new(pre), zW = new(wall);
+        if (lineW)
+        {
+            double bx0 = poly.Min(q => q.X) - 1, by0 = poly.Min(q => q.Y) - 1, bx1 = poly.Max(q => q.X) + 1, by1 = poly.Max(q => q.Y) + 1;
+            bool InBox(Tri t) => !(Math.Max(t.A.X, Math.Max(t.B.X, t.C.X)) < bx0 || Math.Min(t.A.X, Math.Min(t.B.X, t.C.X)) > bx1 || Math.Max(t.A.Y, Math.Max(t.B.Y, t.C.Y)) < by0 || Math.Min(t.A.Y, Math.Min(t.B.Y, t.C.Y)) > by1);
+            wallL = wall.Where(InBox).ToList(); groundL = ground.Where(InBox).ToList();
+            if (ver >= 2)
+            {
+                var zf = blk.Where(l => l.StartsWith("ZONEF ")).Select(l => Pts(l.Substring(6))).ToList();
+                var zc = blk.Where(l => l.StartsWith("ZONEC ")).Select(l => Pts(l.Substring(6))).ToList();
+                foreach (var t in wallL)
+                {
+                    double cx = (t.A.X + t.B.X + t.C.X) / 3, cy = (t.A.Y + t.B.Y + t.C.Y) / 3;
+                    if (zf.Any(r => GradingGeometry.PointInRing(r, cx, cy))) tfL.Add(t);
+                    else if (zc.Any(r => GradingGeometry.PointInRing(r, cx, cy))) tcL.Add(t);
+                }
+                Console.WriteLine($"    선 옹벽 자리 — 덤프 고리(성토 {zf.Count} · 절토 {zc.Count}) · 가상옹벽 삼각형 {wallL.Count} → 성토 자리 {tfL.Count} · 절토 자리 {tcL.Count}");
+            }
+            else
+            {
+                var (c0, f0, conflict, undecided) = ZonesFromFinal(wallL, zG, new STRtreeZ(fin));
+                tcL = c0; tfL = f0;
+                Console.WriteLine($"    선 옹벽 자리 — 옛 덤프(고리 없음) · 최종면 높이로 되살림: 가상옹벽 삼각형 {wallL.Count} → 성토 자리 {tfL.Count} · 절토 자리 {tcL.Count} · 표 없음 {undecided}(자리 밖으로) · 표 갈림 {conflict}");
+                if (conflict > 0 || tcL.Count + tfL.Count == 0)
+                {
+                    Console.WriteLine($"판정 불가  S162 [{tag}] ①~⑤ · S163 — 옛 덤프에 자리 고리 없음 · 최종면 높이로 자리를 못 되살림(표 갈림 {conflict} · 자리 {tcL.Count + tfL.Count}) — 실패로 세지 않음");
+                    return;
+                }
+            }
+        }
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var res = WallDaylight.ComposeWalls(pre, new[] { new WallDaylight.WallInput { No = no, Poly = poly, WallTris = wall, GroundTris = ground, Down = down } });
+        var res = lineW
+            ? WallDaylight.ComposeWalls(pre, new[] { new WallDaylight.WallInput { No = no, Poly = poly, WallTris = wallL, GroundTris = groundL, WallTrisC = tcL, WallTrisF = tfL } })
+            : WallDaylight.ComposeWalls(pre, new[] { new WallDaylight.WallInput { No = no, Poly = poly, WallTris = wall, GroundTris = ground, Down = down } });
         long msComp = sw.ElapsedMilliseconds;
         var st = res.Steps.Count > 0 ? res.Steps[0].R : null;
+        // ★[v115 · S162/S163 선 옹벽] 옛 덤프에서 되살린 자리는 짐작이다 — 합성이 Civil 최종면을 삼각형 하나하나 그대로(꼭짓점 10 µm 안) 재현할 때만 그 자리로 판정한다.
+        //   재현 못 하면 판정 불가(출하 자리를 덤프로 알 길이 없다 — 고리 · 자리 밖 꼭짓점이 둘 다 z = G이고, W ≈ G인 삼각형은 안팎이 높이로 안 갈린다)
+        if (lineW && ver < 2)
+        {
+            var (same, maxD) = res.All != null ? SameAsFinal(res.All, fin) : (0, 0.0);
+            int nAll = res.All?.Count ?? 0;
+            Console.WriteLine($"    되살린 자리로 합성(판정 {res.Tier}) → Civil 최종면 재현 {same}/{nAll}(최종면 {fin.Count}) · 꼭짓점 최대 차 {maxD * 1e6:F2} µm");
+            if (res.All == null || same != nAll || nAll != fin.Count)
+            {
+                Console.WriteLine($"판정 불가  S162 [{tag}] ①~⑤ · S163 — 옛 덤프에 자리 고리 없음 · 되살린 자리로 합성이 Civil 최종면을 재현 못 함({same}/{nAll} · 최종면 {fin.Count} · {res.Fail}) — 실패로 세지 않음");
+                return;
+            }
+        }
         check($"S162 [{tag}] 합성 → 뚜껑 삼각형이 있다", res.All != null && st?.CapTris != null && st.CapTris.Count > 0, $"판정 {res.Tier} · {res.Fail} · {msComp}ms · 뚜껑 {st?.CapTris?.Count}");
         if (res.All == null || st?.CapTris == null || st.CapTris.Count == 0) return;
         var capTris = st.CapTris;
         var cap = PureWithWalls.CapOf(capTris);
+        // ★[v115 · S162/S163 선 옹벽] 덤프 판 2에 출하 뚜껑(CAP — DHWALLCOMP가 목록에 적은 값)이 있으면 하네스 합성 뚜껑과 견준다(수 · 넓이 · 테두리 변 · 해시는 참고)
+        var capL = lineW ? blk.FirstOrDefault(l => l.StartsWith("CAP ")) : null;
+        if (capL != null)
+        {
+            var cf = capL.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            int cN = int.Parse(cf[1], Ci), cE = int.Parse(cf[4], Ci); double cA = double.Parse(cf[2], Ci); long cH = long.Parse(cf[3], Ci);
+            check($"S162 [{tag}] 하네스 합성 뚜껑 = 출하 뚜껑(DHWALLCOMP 목록 — 수 · 넓이 · 테두리 변)", cap.Count == cN && Math.Abs(cap.Area - cA) <= 1e-6 + 1e-6 * cA && cap.Edges.Count == cE,
+                  $"수 {cap.Count}/{cN} · 넓이 {cap.Area:F4}/{cA:F4} · 테두리 변 {cap.Edges.Count}/{cE} · 해시 {(cap.Hash == cH ? "같음" : "다름(참고)")}");
+        }
 
         // ① 뚜껑 ⊂ 폴리곤(1cm)
         var gf = new GeometryFactory();
@@ -277,7 +399,8 @@ static class PureWallsCheck
 
         // ② 뚜껑 = 합성 규칙이 기준 지반(G)을 고른 자리 — 무게중심에서 세 면을 따로 읽어 P ≤ G ≤ W(절토 · 성토는 거울) · 뚜껑 표고와 G 차는 합성의 높이 한도(1cm) 안
         //    (합성은 Civil이 합칠 점 쌍을 정리하며 높이를 1cm 한도 안에서 옮긴다 — 1mm 넘은 수는 참고로 적는다)
-        STRtreeZ zG = new(ground), zP = new(pre), zW = new(wall);
+        //    ★[v115 · S162/S163 선 옹벽] 선 옹벽 규칙(RuleL)은 정지면을 후보로 안 본다 — 성토 자리 max(G, W_f)가 G면 G ≥ W_f · 절토 자리 min(G, W_c)가 G면 G ≤ W_c · 자리 밖은 늘 G
+        STRtreeZ? zWF = tfL.Count > 0 ? new(tfL) : null, zWC = tcL.Count > 0 ? new(tcL) : null;
         int noG = 0, farG = 0, over1 = 0, rule = 0; double maxG = 0;
         foreach (var t in capTris)
         {
@@ -287,13 +410,19 @@ static class PureWallsCheck
             double dz = Math.Abs(zg.Value - cz); maxG = Math.Max(maxG, dz);
             if (dz > 1e-2) farG++;
             if (dz > 1e-3) over1++;
+            if (lineW)
+            {
+                var wf = zWF?.At(cx, cy); var wc = wf == null ? zWC?.At(cx, cy) : null;
+                if ((wf != null && zg.Value < wf.Value - 1e-2) || (wc != null && zg.Value > wc.Value + 1e-2)) rule++;
+                continue;
+            }
             var zp = zP.At(cx, cy); var zw = zW.At(cx, cy);
             double s = down ? -1 : 1;   // 성토는 거울: min(P, max(W, G))
             bool okP = zp == null || s * zg.Value >= s * zp.Value - 1e-2;
             bool okW = zw == null || s * zg.Value <= s * zw.Value + 1e-2;
             if (!okP || !okW) rule++;
         }
-        check($"S162 [{tag}] ② 뚜껑 = 규칙이 원지반을 고른 자리(P ≤ G ≤ W · 1cm) · 뚜껑 표고와 원지반 차 1cm 이하", farG == 0 && noG == 0 && rule == 0,
+        check($"S162 [{tag}] ② 뚜껑 = 규칙이 원지반을 고른 자리({(lineW ? "선 옹벽 — 성토 자리 G ≥ W_f · 절토 자리 G ≤ W_c · 자리 밖 G" : "P ≤ G ≤ W")} · 1cm) · 뚜껑 표고와 원지반 차 1cm 이하", farG == 0 && noG == 0 && rule == 0,
               $"1cm 넘음 {farG} · 규칙 어긋남 {rule} · 원지반 없음 {noG} · 1mm 넘음 {over1}(참고) · 최대 {maxG * 1000:F3}mm");
 
         // ③ 홀짝 판정 — 뚜껑 삼각형은 모두 안 · 구역의 나머지는 모두 밖
@@ -317,7 +446,10 @@ static class PureWallsCheck
         if (last)
         {
             static List<Tri> Neg(List<Tri> l) => l.Select(t => new Tri(new Point3(t.A.X, t.A.Y, -t.A.Z), new Point3(t.B.X, t.B.Y, -t.B.Z), new Point3(t.C.X, t.C.Y, -t.C.Z))).ToList();
-            var resM = WallDaylight.ComposeWalls(Neg(pre), new[] { new WallDaylight.WallInput { No = no, Poly = poly, WallTris = Neg(wall), GroundTris = Neg(ground), Down = !down } });
+            // ★[v115 · S162/S163 선 옹벽] 선 옹벽 거울 — 표고를 뒤집으면 절토 자리 min(G, W_c)가 성토 자리 max(−G, −W_c)가 된다(자리 고리를 맞바꿈)
+            var resM = lineW
+                ? WallDaylight.ComposeWalls(Neg(pre), new[] { new WallDaylight.WallInput { No = no, Poly = poly, WallTris = Neg(wallL), GroundTris = Neg(groundL), WallTrisC = Neg(tfL), WallTrisF = Neg(tcL) } })
+                : WallDaylight.ComposeWalls(Neg(pre), new[] { new WallDaylight.WallInput { No = no, Poly = poly, WallTris = Neg(wall), GroundTris = Neg(ground), Down = !down } });
             var capM = PureWithWalls.CapOf(resM.Steps.Count > 0 ? resM.Steps[0].R.CapTris : null);
             static HashSet<(long, long, long)> Vs(IEnumerable<Tri> l, double sz) => new(l.SelectMany(t => new[] { t.A, t.B, t.C }).Select(q => ((long)Math.Round(q.X * 1e6), (long)Math.Round(q.Y * 1e6), (long)Math.Round(sz * q.Z * 1e6))));
             static HashSet<(double, double, double, double)> Es(PureWithWalls.Cap c) => new(c.Edges.Select(e => e.X1 < e.X2 || (e.X1 == e.X2 && e.Y1 <= e.Y2) ? (e.X1, e.Y1, e.X2, e.Y2) : (e.X2, e.Y2, e.X1, e.Y1)));
@@ -329,6 +461,42 @@ static class PureWallsCheck
         // ═════ S163 걷기 — 옹벽면 위 선형 셋(직각 · 30° · 벽과 10°) + 옹벽 없는 순수면 ═════
         var face = sel.Kept;
         var mid = seg[seg.Count / 2]; var a0 = seg[Math.Max(0, seg.Count / 2 - 1)]; var a1 = seg[Math.Min(seg.Count - 1, seg.Count / 2 + 1)];
+        if (lineW)
+        {
+            // ★[v115 · S162/S163 선 옹벽] 선 옹벽의 SEG는 선 끝 A · B뿐이라 가운데 원소가 B(벽 높이 0)였다 — 선 L 위 0.25 m 간격 표본에서
+            //   벽이 서는 구간(합성 전 면과 원지반 차 5 cm 이상 — 입력만 본다) 중 가장 긴 구간의 가운데에서 그 토막 방향에 직각으로 걷는다(벽 끝 마구리를 비껴 걷지 않게)
+            var lp = Pts(blk.First(l => l.StartsWith("LINE ")).Substring(5).Split('|')[0]);
+            var smp = new List<(double S, double D, Point3 P, int K)>();
+            double s0 = 0;
+            for (int k = 0; k + 1 < lp.Count; k++)
+            {
+                double ln0 = Math.Sqrt((lp[k + 1].X - lp[k].X) * (lp[k + 1].X - lp[k].X) + (lp[k + 1].Y - lp[k].Y) * (lp[k + 1].Y - lp[k].Y));
+                int n = Math.Max(1, (int)Math.Ceiling(ln0 / 0.25));
+                for (int q = k == 0 ? 0 : 1; q <= n; q++)
+                {
+                    double u = (double)q / n, x = lp[k].X + u * (lp[k + 1].X - lp[k].X), y = lp[k].Y + u * (lp[k + 1].Y - lp[k].Y);
+                    var zp0 = zP.At(x, y); var zg0 = zG.At(x, y);
+                    smp.Add((s0 + u * ln0, zp0 != null && zg0 != null ? Math.Abs(zp0.Value - zg0.Value) : 0, new Point3(x, y, 0), k));
+                }
+                s0 += ln0;
+            }
+            int r0 = -1, r1 = -1;
+            for (int i = 0; i < smp.Count; i++)
+            {
+                if (smp[i].D < 0.05) continue;
+                int j = i; while (j + 1 < smp.Count && smp[j + 1].D >= 0.05) j++;
+                if (r0 < 0 || smp[j].S - smp[i].S > smp[r1].S - smp[r0].S) { r0 = i; r1 = j; }
+                i = j;
+            }
+            if (r0 >= 0)
+            {
+                double sm = (smp[r0].S + smp[r1].S) / 2;
+                var pk = smp.Skip(r0).Take(r1 - r0 + 1).OrderBy(q => Math.Abs(q.S - sm)).First();
+                mid = pk.P; a0 = lp[pk.K]; a1 = lp[pk.K + 1];
+                Console.WriteLine($"    걷기 자리 — 선 L 위 벽이 서는 가장 긴 구간 {smp[r0].S:F1}~{smp[r1].S:F1} m(선 {s0:F1} m)의 가운데 {pk.S:F1} m · 합성 전 면 − 원지반 {pk.D:F2} m");
+            }
+            else Console.WriteLine($"    걷기 자리 — 선 L 위에 벽이 서는 곳(합성 전 면 − 원지반 5 cm 이상)이 없다 · SEG 가운데로");
+        }
         double dx = a1.X - a0.X, dy = a1.Y - a0.Y, ln = Math.Sqrt(dx * dx + dy * dy); dx /= ln; dy /= ln;
         double pcx = poly.Average(q => q.X), pcy = poly.Average(q => q.Y);
         double nx = -dy, ny = dx; if ((pcx - mid.X) * nx + (pcy - mid.Y) * ny < 0) { nx = -nx; ny = -ny; }

@@ -430,7 +430,14 @@ public static partial class WallDaylight
         {
             if (line)
             {
+                // ★[v115 · 검토 L2] 밖은 정지면만 읽는다(원지반이 없어도 견줌)
+                if (!prepPoly.Contains(gf.CreatePoint(new Coordinate(x, y)))) { ok = P.TryZ(x, y, out double zpo); return ok ? zpo : double.NaN; }
                 ok = G.TryZ(x, y, out double zg1) & P.TryZ(x, y, out double zp1);
+                // ★[v115 · S218] 선 옹벽 규칙은 폴리곤 안에서만 RuleL · 밖은 정지면(P) — 이 판의 정의 그대로(문서: «폴리곤 안 = RuleOf · 밖 = 정지면»).
+                //   손 폴리곤 규칙 max(P, min(W, G))는 테두리에서 = P라 안팎을 안 가려도 같지만, 선 옹벽은 L에서 끊긴다(L 안쪽 벽 = P0 · L 바깥쪽 = 정지면인데
+                //   RuleL을 L 바깥에서 읽으면 G — 벽 높이 δ만큼 다름). 조각은 1 µm 격자 잇기라 µm 조각의 «25 % 안쪽» 표본이 참 폴리곤 밖 0.1 µm에 떨어진다 —
+                //   S218 (c) 0.13 µm 밖 · 27.4 mm · (e) 0.10 µm 밖 · 830.9 mm(둘 다 L 꺾인 점 곁 넓이 5e-11 ㎡ 조각 · 그 자리 합성 = 정지면 = 벽 평면).
+                //   잣대를 느슨하게 한 것이 아니다 — 표본마다 그 자리의 참 정의(안 RuleL · 밖 P)와 견준다
                 return ok ? RuleL(zp1, ZC(x, y), ZF(x, y), zg1) : double.NaN;
             }
             ok = W.TryZ(x, y, out double zw) & G.TryZ(x, y, out double zg) & P.TryZ(x, y, out double zp);

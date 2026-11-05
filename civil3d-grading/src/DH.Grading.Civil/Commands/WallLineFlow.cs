@@ -107,14 +107,14 @@ internal static class WallLineFlow
     static int _ringBuilt, _ringUsed;
 
     /// <summary>★[v114.3 · 계획 2판 1절 · 재검토 M-A] 옛 소단 단 표 — 정지면 생성과 같은 부르기(번들 경계 · 제원 · <see cref="CreateGradingCommand.RingZonesOf"/> 구간)로 링을 다시 만든다.</summary>
-    internal static (WallByLine.OldBench? Cut, WallByLine.OldBench? Fill, string Note) OldBenchOf(GradingBundle reg, IGroundSurface g)
+    internal static (WallByLine.OldBench? Cut, WallByLine.OldBench? Fill, string Note, string WhyC, string WhyF) OldBenchOf(GradingBundle reg, IGroundSurface g)
     {
         var zc = CreateGradingCommand.RingZonesOf(reg.CutWallZones); var zf = CreateGradingCommand.RingZonesOf(reg.FillWallZones);
         string key = (reg.PlanHandle ?? "") + "|" + GradingSettings.TransitionStage + "|" + WallByLine.OldBench.Fingerprint(reg.Boundary, reg.Params, zc, zf);
         _ringUsed++;
         static string Why(string wc, string wf) => (wc.Length > 0 ? " · 절토: " + wc : "") + (wf.Length > 0 ? " · 성토: " + wf : "");
         if (_rings is { } c && c.Key == key)
-            return (c.Cut, c.Fill, $"링 다시 씀(한 번 짓기 {c.Ms} ms · 지음 {_ringBuilt} · 씀 {_ringUsed}) · 절토 {c.Cut?.K ?? 0}단 · 성토 {c.Fill?.K ?? 0}단" + Why(c.WhyC, c.WhyF));
+            return (c.Cut, c.Fill, $"링 다시 씀(한 번 짓기 {c.Ms} ms · 지음 {_ringBuilt} · 씀 {_ringUsed}) · 절토 {c.Cut?.K ?? 0}단 · 성토 {c.Fill?.K ?? 0}단" + Why(c.WhyC, c.WhyF), c.WhyC, c.WhyF);
         var sw = System.Diagnostics.Stopwatch.StartNew();
         WallByLine.OldBench? oc = null, of = null; string wc = "", wf = "";
         try { oc = WallByLine.OldBench.Of(GradingGeometry.Build(reg.Boundary, g, reg.Params, true, zc), reg.Params, true, out wc); }
@@ -123,7 +123,7 @@ internal static class WallLineFlow
         catch (System.Exception ex) { wf = $"링을 못 만들었다({ex.GetType().Name}: {ex.Message})"; }
         _ringBuilt++;
         _rings = (key, oc, of, wc, wf, sw.ElapsedMilliseconds);
-        return (oc, of, $"링 지음 {sw.ElapsedMilliseconds} ms(지음 {_ringBuilt} · 씀 {_ringUsed}) · 절토 {oc?.K ?? 0}단 · 성토 {of?.K ?? 0}단 · 구간 절 {zc.Count} · 성 {zf.Count}" + Why(wc, wf));
+        return (oc, of, $"링 지음 {sw.ElapsedMilliseconds} ms(지음 {_ringBuilt} · 씀 {_ringUsed}) · 절토 {oc?.K ?? 0}단 · 성토 {of?.K ?? 0}단 · 구간 절 {zc.Count} · 성 {zf.Count}" + Why(wc, wf), wc, wf);
     }
 
     /// <summary>★[v114.0] 짓기 재료 — 판정 + 기하(질문 없음). P0 · 원지반 삼각형은 경계 + 여유 상자만.
@@ -137,7 +137,7 @@ internal static class WallLineFlow
         var gTris = g.TrianglesIn(sx0, sy0, sx1, sy1);
         System.Func<double, double, double?> gAt = (x, y) => g.TryGetElevation(x, y, out double z) ? z : null;
         System.Func<double, double, double?> pAt = (x, y) => p0.TryGetElevation(x, y, out double z) ? z : null;
-        var (oc, of, rnote) = OldBenchOf(region, g);
+        var (oc, of, rnote, whyC, whyF) = OldBenchOf(region, g);
         // ★[재검토 M-A] 다시 만든 링 = 정지면을 만든 그 링인가 — 상자 안 · 그 쪽 사면 자리(데이라잇 고리 안 1 cm · 계획선 밖 1 cm) 링 꼭짓점이 합성 전 면 꼭짓점과 0.1 mm(평면) · 1 mm(높이) 안에서 겹치는 몫.
         //   0단계 실측(1105 현장): 136점 중 134점(98.5 %) — 안 겹친 2점은 0.22~0.24 mm 옆에 면 꼭짓점이 있고 그 자리 면 높이 = 링 높이(보조선 교차 끼움 자리로 보임 · 재지 않음).
         //   90 % 아래면 다른 링(구간 · 제원이 정지면을 만든 때와 다름)이라 짓지 않는다 — 틀린 높이로 짓느니 까닭을 남긴다
@@ -167,6 +167,7 @@ internal static class WallLineFlow
             Line = cut.Line, Bd = bd, NewRing = cut.NewRing, CutRing = cut.CutRing, Plan = region.Boundary, Hc = hc, Tc = tc, Hf = hf, Tf = tf, SlopeW = slopeW, FaceRun = faceRun, Grid = grid, Reach = reach,
             Ground = gAt, GroundTris = gTris, P0 = pAt, P0Tris = p0Tris, Blockers = bl,
             LevelMode = WallByLine.LevelKind.OldBench, CutBench = oc, FillBench = of, RowDens = System.Math.Max(0.3, System.Math.Min(region.Params.VertexSpacing, 1.0)),
+            CutBenchWhy = whyC, FillBenchWhy = whyF,   // ★[v115 · 설치 전 검토 S1] 링을 못 만든 까닭을 화면 까닭에
         });
         b.Log = $"  ⓪ 옛 소단 링 — {rnote}{vm}\n" + b.Log;
         return b;

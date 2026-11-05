@@ -48,6 +48,8 @@ public static class WallByLine
         public LevelKind LevelMode = LevelKind.Line;
         /// <summary>★[v114.3] 옛 소단 방식의 단 표(절토 · 성토 — 부지 = GradingGeometry 링 · ★[v114.3 · JACK 1105 진입도로 옹벽 추가] 도로 = 그 시도 면의 광선 묶음).</summary>
         public BenchLevels? CutBench, FillBench;
+        /// <summary>★[v115 · 설치 전 검토 S1] 단 표를 못 만든 까닭(절토 · 성토 — 부지 링 <see cref="OldBench.Of"/>의 why) — 단 표가 없어 거절할 때 화면 까닭에 넣는다.</summary>
+        public string CutBenchWhy = "", FillBenchWhy = "";
         /// <summary>★[v114.3 · 재검토 M2] 옛 소단 방식에서 줄 · 끝 선에 높이를 주기 전에 채우는 점 간격(사면 코드와 같은 clamp(VertexSpacing, 0.3, 1.0)).</summary>
         public double RowDens = 1.0;
     }
@@ -116,6 +118,8 @@ public static class WallByLine
         public int WMinBumped, MergedPts, PairsUnder01, Needles, EndFaceN, EndCliff, EdgeHit, Corners;
         /// <summary>★[v114.1 · 검토 M3] 좁힌 마구리(짧은 줄기 · 부분 — 옛 폭 FaceRun/2까지) 수 · 그 가장 가파른 기울기(H / 폭 : 1) · 마구리를 빼고 남은 선 토막이 면 폭보다 짧은 줄기 수.</summary>
         public int CapNarrow, PieceShort; public double CapSteep;
+        /// <summary>★[v115 · S218 (f)] 마구리 관문 — 끝 선(E · 자리 안 몫) 표본 수 · 벽 면이 그 선 높이를 안 따른 수(1 cm 넘음) · 최대 차 · 자리.</summary>
+        public int EndN, EndMiss; public double EndMax; public (double X, double Y) EndAt;
         /// <summary>★[v114.0 · JACK 1105 소단 높이 관문] 표본 — Kind 0 = 소단(단마다 소단 폭 가운데 ± 0.5 m · 0.5 m 간격 · Z = Z_k) · 1 = F(0.5 m 간격 · Z = G).
         /// 제 바꿀 자리 밖 · 땅이 이기는 자리(절토 꼴 G′ − Z′_k ≤ 1 cm)는 안 넣는다. 합성 뒤 관문(<see cref="BenchGate"/>)도 이것을 쓴다.</summary>
         public List<(double X, double Y, double Z, int Kind)> BenchPts = new();
@@ -308,11 +312,20 @@ public static class WallByLine
             return c;
         }
 
+        /// <summary>★[v115 · 설치 전 검토 S2] <see cref="Level"/> 부른 수 · 걸린 틱(Stopwatch) — Build가 ④-c 로그에 이번 짓기 몫을 적는다(링 점 전부를 훑는 셈이라 재 봄).</summary>
+        internal long Calls, Ticks;
         /// <summary>단 k(1부터)의 옛 소단 높이(실제 z) — 못 읽으면 NaN.</summary>
         public override double Level(int k, double x, double y)
         {
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            try { return LevelCore(k, x, y); }
+            finally { Calls++; Ticks += System.Diagnostics.Stopwatch.GetTimestamp() - t0; }
+        }
+
+        double LevelCore(int k, double x, double y)
+        {
             if (k < 1 || k > _tiers.Count || K < 1) return double.NaN;
-            if (k > K) return Level(K, x, y) + (Up ? 1 : -1) * (_tiers[k - 1].Rise - _tiers[K - 1].Rise);
+            if (k > K) return LevelCore(K, x, y) + (Up ? 1 : -1) * (_tiers[k - 1].Rise - _tiers[K - 1].Rise);
             var t = _tiers[k - 1];
             var gi = _rings[t.In]; var go = _rings[t.Out];
             var (di, zi) = Near(gi, x, y);
@@ -323,6 +336,21 @@ public static class WallByLine
             if (!Inside(gi, x, y) && Inside(go, x, y)) return di + dO < 1e-9 ? zi : (zi * dO + zO * di) / (di + dO);
             return di <= dO ? zi : zO;
         }
+
+        /// <summary>★[v115 · 설치 전 검토 S3] 높이를 못 읽은(NaN) 이웃 점 — 까닭을 남긴다(옛 판은 빈 값이라 «이어지지 않는 자리»만 보였다).</summary>
+        public override double JumpOver(int k, double x0, double y0, double za, double x1, double y1, double zb, double dist)
+        {
+            if (double.IsNaN(za) || double.IsNaN(zb))
+            {
+                _jumpWhy = k < 1 || k > _tiers.Count || K < 1
+                    ? string.Format(Ci, "단 {0}이 옛 사면 단 목록({1}단) 밖", k, _tiers.Count)
+                    : string.Format(Ci, "단 {0} 옛 소단 링에서 높이를 못 읽음(그 단 링 변이 모두 TIN 이음 한도 {1:0.#} m를 넘음)", k, BreaklinePrep.RingSegMaxM);
+                return double.NaN;
+            }
+            return base.JumpOver(k, x0, y0, za, x1, y1, zb, dist);
+        }
+        string _jumpWhy = "";
+        public override string JumpWhy => _jumpWhy;
 
         /// <summary>단 k 소단 띠 안(안쪽 링 밖 · 바깥 링 안 — 대소단 폭 포함)인가.</summary>
         public override bool InBand(int k, double x, double y)
@@ -649,6 +677,9 @@ public static class WallByLine
     {
         var R = new Built();
         var log = new System.Text.StringBuilder();
+        // ★[v115 · 설치 전 검토 S2] 옛 소단 높이 읽기 수 · 시간(이번 짓기 몫 — 링 단 표는 여러 짓기가 함께 씀)
+        var obC0 = inp.CutBench as OldBench; var obF0 = inp.FillBench as OldBench;
+        long lvCalls0 = (obC0?.Calls ?? 0) + (obF0?.Calls ?? 0), lvTicks0 = (obC0?.Ticks ?? 0) + (obF0?.Ticks ?? 0);
         Built No(string code, string why, params (double, double)[] at) { R.Ok = false; R.Code = code; R.Why = why; R.Marks.AddRange(at); R.Log = log.ToString(); return R; }
         var L = inp.Line;
         if (L == null || L.Count < 2) return No("재료", "선이 없습니다");
@@ -777,6 +808,7 @@ public static class WallByLine
         var linesAll = new List<List<Point3>>();
         // ★[v114.0 · 소단 높이 관문] 부분마다 원 벽 삼각형(소단 표본이 바꿀 자리 구멍에 빠졌을 때 읽는다) · 표본마다 그 부분 번호(F = −1)
         var rawByPart = new List<List<Tri>>(); var benchSrc = new List<int>();
+        var eCut = new List<List<Point3>>();   // ★[v115 · S218 (f)] 자리로 자른 끝 선 E(마구리 관문이 잰다)
         int partNo = 0;
         foreach (var part in parts)
         {
@@ -786,7 +818,11 @@ public static class WallByLine
             //   선기준(옛 규칙)은 아래 함수들이 옛 값(zr + k·H · H · T · f)을 그대로 돌려 비트 같다
             BenchLevels? ob = inp.LevelMode == LevelKind.OldBench ? (part.Up ? inp.CutBench : inp.FillBench) : null;
             if (inp.LevelMode == LevelKind.OldBench && ob == null)
-                return No("옛 소단", $"{(part.Up ? "절토" : "성토")} 쪽 옛 사면 링이 없어 옛 소단 높이를 못 읽습니다 — 정지면을 다시 만든 뒤 하세요", Wd(pl.At((part.S0 + part.S1) / 2)));
+            {
+                // ★[v115 · 설치 전 검토 S1] 진짜 까닭(링 rise · 빠진 단 · 링 없음 · 예외)을 화면에도 — 옛 판은 로그에만 남기고 «정지면을 다시 만든 뒤»만 보였다
+                string bw = part.Up ? inp.CutBenchWhy : inp.FillBenchWhy;
+                return No("옛 소단", $"{(part.Up ? "절토" : "성토")} 쪽 옛 사면 링이 없어 옛 소단 높이를 못 읽습니다{(bw.Length > 0 ? "(" + bw + ")" : "")} — 정지면을 다시 만든 뒤 하세요", Wd(pl.At((part.S0 + part.S1) / 2)));
+            }
             double T = part.T;
             double Hk(int k) => ob == null ? part.H : ob.Tier(k).H;
             double Tk(int k) => ob == null ? T : ob.Tier(k).Terrace ? ob.TerraceW : T;
@@ -1141,6 +1177,13 @@ public static class WallByLine
             {
                 var st = stems[k];
                 var rows = new List<(double D, int Kl, List<List<Coordinate>> Pc)>();
+                // ★[v115 · S218 (f) 계측] 소단 가운데 줄을 0.5 m 간격으로 — 가운데 한 줄(T/2)만이면 넓은 소단(T 3 m)에서 줄 사이가 1.5 m라 비틀린 옛 소단(도로 · 굽은 곳 · 오목 꼭짓점 곁)을
+                //   세모가 못 따라가 소단 관문이 1~2 cm로 거절했다(곧은 다리 셋 · 한 줄로 1.1~2 cm). 소단 1 m 이하는 나눔 2(가운데 한 줄 — 옛 판과 비트 같음)
+                void MidRows(List<(double D, int Kl, List<List<Coordinate>> Pc)> rr, double d0, double d1, int kq)
+                {
+                    int m = Math.Max(2, (int)Math.Ceiling((d1 - d0) / 0.5 - 1e-9));
+                    for (int q = 1; q < m; q++) { double dq = m == 2 ? (d0 + d1) / 2 : d0 + (d1 - d0) * q / m; rr.Add((dq, kq, Dn(RowAt(k, dq), kq))); }
+                }
                 int n = 0; double lastF = DF(st.J, 1); int lastK = st.J;
                 for (int t = 1; t <= 200; t++)
                 {
@@ -1154,12 +1197,12 @@ public static class WallByLine
                     if (!more) break;
                     if (t == 200) reachHit = true;
                     // ★[v114.3 · JACK 1105 진입도로 옹벽 추가 · S218 (b) 실측] 소단 가운데 줄 — 도로 옛 소단은 종단 · 굽은 곳을 따라 비틀린 면이라 소단 폭(1 m) 세모 한 장이 가운데에서 1 cm 넘게 벗어났다(소단 관문 거절) · 부지 링(평면에 가까움)은 안 넣음(비트 같음)
-                    if (Tt >= 0.2 && ob != null && ob.MidBench) rows.Add((dF + Tt / 2, kl, Dn(RowAt(k, dF + Tt / 2), kl)));
+                    if (Tt >= 0.2 && ob != null && ob.MidBench) MidRows(rows, dF, dF + Tt, kl);
                     if (Tt > 1e-6) rows.Add((dF + Tt, kl, Dn(RowAt(k, dF + Tt), kl)));
                 }
                 st.Tiers = Math.Max(1, n);
                 dEnd[k] = lastF + Math.Max(Tk(lastK), 0.5);
-                if (ob != null && ob.MidBench && dEnd[k] - lastF >= 0.2) rows.Add(((lastF + dEnd[k]) / 2, lastK, Dn(RowAt(k, (lastF + dEnd[k]) / 2), lastK)));
+                if (ob != null && ob.MidBench && dEnd[k] - lastF >= 0.2) MidRows(rows, lastF, dEnd[k], lastK);
                 rows.Add((dEnd[k], lastK, Dn(RowAt(k, dEnd[k]), lastK)));
                 tierRows.Add(rows);
                 part.Dmax = Math.Max(part.Dmax, dEnd[k]);
@@ -1456,7 +1499,15 @@ public static class WallByLine
             // ⑤ 바꿀 자리 Zone = {W′ < G′} 가운데 L에 붙은 성분(critic 2차 1)
             var pieces = ZonePieces(rawTris, inp, sg, ox, oy, gf, Math.Min(0.5, Math.Max(0.1, inp.Grid / 2)));
             Geometry zu;
-            try { zu = pieces.Count == 0 ? gf.CreatePolygon() : NetTopologySuite.Operation.OverlayNG.UnaryUnionNG.Union(gf.BuildGeometry(pieces), new PrecisionModel(1e9)); }
+            // ★[v115 · S218 (g) 계측] 조각을 먼저 1 nm 격자로 내린 뒤 합친다 — 날 조각(격자 밖)을 차례 합치기(캐스케이드)에 그대로 넣으면 중간 결과만 격자에 올라
+            //   다음 짝 합치기의 스냅 반올림이 L 위 한 꼭짓점을 12 nm 떨어진 두 점으로 갈랐다(입력 6조각은 그 점을 비트 같게 나눔 · 결과 고리 L3a → X → L3b).
+            //   그 틈(나비 12 nm · 길이 28 cm)이 자리 고리에 «L → 원지반 높이 점 → L» 가시로 남아 벽 면 2 cm 안에 G 높이 점을 꽂았다(발 관문 184 cm 거절).
+            //   먼저 내리면 모든 입력이 한 격자 위라 반올림이 꼭짓점을 새로 만들지 않는다(같은 1e9 격자 · 잣대는 그대로)
+            var pm9 = new PrecisionModel(1e9);
+            var pieces9 = new List<Geometry>(pieces.Count);
+            try { foreach (var pc in pieces) { var r9 = NetTopologySuite.Precision.GeometryPrecisionReducer.Reduce(pc, pm9); if (!r9.IsEmpty) pieces9.Add(r9); } }
+            catch (Exception ex) { return No("자리", $"부분 {partNo}의 바꿀 자리 조각을 격자에 못 올렸습니다({ex.GetType().Name})"); }
+            try { zu = pieces9.Count == 0 ? gf.CreatePolygon() : NetTopologySuite.Operation.OverlayNG.UnaryUnionNG.Union(gf.BuildGeometry(pieces9), pm9); }
             catch (Exception ex) { return No("자리", $"부분 {partNo}의 바꿀 자리를 못 합쳤습니다({ex.GetType().Name})"); }
             var partLine = gf.CreateLineString(pl.Sub(part.S0, part.S1));
             var comps = new List<Polygon>();
@@ -1669,6 +1720,7 @@ public static class WallByLine
                         }
                         if (pts.Count < 2) continue;
                         if (isRow) R.Rows.Add(pts); else if (inner) R.EndFaces.Add(pts);
+                        if (isE) eCut.Add(pts);
                         R.Lines.Add(pts);
                     }
                 }
@@ -1918,6 +1970,55 @@ public static class WallByLine
             // F를 못 읽음(자리 테두리 위 수치 부스러기)은 거절하지 않는다 — 소단에 면이 없음(자리 바깥 고리 안 · 구멍)은 거절
             log.Append(string.Format(Ci, "  ④-b 소단 높이 관문 — 소단 {0}점(틀림 {1} · 면 없음 {2}) · F {3}점(턱 {4} · 못 읽음 {5}) · 최대 차 {6:F1} mm @({7:F2},{8:F2})\n",
                 R.BenchN, R.BenchSag, R.BenchMiss, R.FootN, R.FootBad, R.FootMiss, R.BenchMax * 1000, R.BenchAt.X, R.BenchAt.Y));
+            // ★[v115 · S218 (f) 계측] 마구리 관문 — 끝 선 E(자리로 자른 몫)가 벽 면에 들어갔나(선 위 0.25 m마다 · 벽 면 높이 = 선 높이 1 cm).
+            //   U자 선 안쪽에서 양쪽 다리의 줄기 갈림 법선이 가운데 이등분선에 서로 다른 자리(S218 (f) 꼴 21 cm 떨어짐)로 닿으면, 그 사이 이등분선에서는
+            //   단이 다른 두 줄기(j1 · j2 — 5 m 차)가 마주 보는데 줄 끝이 하나도 없어 두 끝 선 E가 모퉁이 점(dc)에서 아무 선과도 안 이어진 채 끝난다.
+            //   벽 세모 잇기(MeshLines — 고리만 제약)는 이어지지 않은 선(꼬리)을 버리므로 마구리가 사라지고 세모가 두 단 사이 5 m를 비스듬히 건넜다(소단 관문 490 cm).
+            //   그 자리에 세울 «세 줄기가 만나는 마구리» 꼴은 지금 짓는 법에 없다(새 기하 — 모양을 정한 뒤 짓기) → 까닭을 밝혀 거절한다(소단 관문보다 먼저 · 같은 1 cm 잣대).
+            //   잰다 = 끝 선 표본이 벽 세모의 <b>변 위</b>(선이 제약으로 들어감 — 그 끝이 자리 고리에 닿아 고리 높이가 이기는 몫도 여기)면 통과 · 세모 <b>안</b>을 지나면(제약이 빠짐) 선 높이와 면 높이를 견준다
+            {
+                var wtAll = R.WallTrisF.Concat(R.WallTrisC).ToList();
+                var wtTree = new STRtree<int>();
+                for (int i = 0; i < wtAll.Count; i++) { var t = wtAll[i]; wtTree.Insert(new Envelope(Math.Min(t.A.X, Math.Min(t.B.X, t.C.X)), Math.Max(t.A.X, Math.Max(t.B.X, t.C.X)), Math.Min(t.A.Y, Math.Min(t.B.Y, t.C.Y)), Math.Max(t.A.Y, Math.Max(t.B.Y, t.C.Y))), i); }
+                if (wtAll.Count > 0) wtTree.Build();
+                static double SegD(double px, double py, Point3 a, Point3 b)
+                {
+                    double ex = b.X - a.X, ey = b.Y - a.Y, l2 = ex * ex + ey * ey;
+                    double t = l2 < 1e-24 ? 0 : Math.Clamp(((px - a.X) * ex + (py - a.Y) * ey) / l2, 0, 1);
+                    double dx = px - a.X - ex * t, dy = py - a.Y - ey * t; return Math.Sqrt(dx * dx + dy * dy);
+                }
+                foreach (var el in eCut)
+                    for (int i = 0; i + 1 < el.Count && wtAll.Count > 0; i++)
+                    {
+                        var a = el[i]; var e = el[i + 1];
+                        int nn = Math.Max(1, (int)Math.Ceiling(Math.Sqrt((e.X - a.X) * (e.X - a.X) + (e.Y - a.Y) * (e.Y - a.Y)) / 0.25));
+                        for (int u = i == 0 ? 0 : 1; u <= nn; u++)
+                        {
+                            double t = (double)u / nn, x = a.X + (e.X - a.X) * t, y = a.Y + (e.Y - a.Y) * t, zl = a.Z + (e.Z - a.Z) * t;
+                            double? zw = null; bool onEdge = false;
+                            foreach (int ti in wtTree.Query(new Envelope(x, x, y, y)))
+                            {
+                                var tr = wtAll[ti];
+                                double d = (tr.B.Y - tr.C.Y) * (tr.A.X - tr.C.X) + (tr.C.X - tr.B.X) * (tr.A.Y - tr.C.Y);
+                                if (Math.Abs(d) < 1e-18) continue;
+                                double l1 = ((tr.B.Y - tr.C.Y) * (x - tr.C.X) + (tr.C.X - tr.B.X) * (y - tr.C.Y)) / d, l2 = ((tr.C.Y - tr.A.Y) * (x - tr.C.X) + (tr.A.X - tr.C.X) * (y - tr.C.Y)) / d, l3 = 1 - l1 - l2;
+                                if (l1 < -1e-9 || l2 < -1e-9 || l3 < -1e-9) continue;
+                                if (Math.Min(SegD(x, y, tr.A, tr.B), Math.Min(SegD(x, y, tr.B, tr.C), SegD(x, y, tr.C, tr.A))) < 1e-6) { onEdge = true; break; }
+                                zw ??= l1 * tr.A.Z + l2 * tr.B.Z + l3 * tr.C.Z;
+                            }
+                            if (onEdge || zw == null) continue;   // 변 위 = 제약으로 들어감 · 면 없음 = 자리 테두리 위 수치 부스러기(소단 관문의 F 못 읽음과 같은 뜻)
+                            R.EndN++;
+                            double dz = Math.Abs(zw.Value - zl);
+                            if (dz > 1e-2) R.EndMiss++;
+                            if (dz > R.EndMax) { R.EndMax = dz; R.EndAt = (x, y); }
+                        }
+                    }
+                log.Append(string.Format(Ci, "  ④-d 마구리 관문 — 끝 선 {0}개 · 표본 {1}점(벽 면이 선을 안 따름 {2}) · 최대 차 {3:F1} mm @({4:F2},{5:F2})\n",
+                    eCut.Count, R.EndN, R.EndMiss, R.EndMax * 1000, R.EndAt.X, R.EndAt.Y));
+                if (R.EndMiss > 0 && !BenchGateOff)
+                    return No("마구리", string.Format(Ci, "벽 면이 끝 선(마구리)을 안 따름({0:F1}, {1:F1} · 차 {2:F0} cm) — 대개 오목한(U자) 선 안쪽에서 단이 다른 두 벽이 만나는 자리 · 소단 폭을 줄이거나 선 안쪽을 넓히세요",
+                        R.EndAt.X, R.EndAt.Y, R.EndMax * 100), R.EndAt);
+            }
             if (R.BenchSag + R.BenchMiss + R.FootBad > 0 && !BenchGateOff)
                 return No("소단 높이", R.BenchSag + R.FootBad == 0
                     ? string.Format(Ci, "옹벽 소단에 벽 면이 없음({0:F1}, {1:F1} · {2}점) — 소단 폭을 줄이거나 선을 펴세요", R.BenchAt.X, R.BenchAt.Y, R.BenchMiss)
@@ -1936,6 +2037,11 @@ public static class WallByLine
                 + " · 이음 S {9}(어긋남 {10} · 옛 소단 없음 {11} · 최대 {12:F1} mm) · 벽 소단 기울기 줄 방향 {13:F1} % · 바깥 {14:F1} %\n",
                 R.RuleN, R.RuleMax * 1000, R.JumpBad, R.JumpN, Math.Max(0, R.JumpMax) * 1000, R.FaceHN > 0 ? R.FaceHMin : 0, R.FaceHMax, R.FaceHN, R.FaceHBad,
                 R.JoinN, R.JoinMiss, R.JoinNone, R.JoinMax * 1000, R.TiltAlong * 100, R.TiltOut * 100));
+            if (obC0 != null || obF0 != null)
+            {
+                long dc = (obC0?.Calls ?? 0) + (obF0?.Calls ?? 0) - lvCalls0, dt = (obC0?.Ticks ?? 0) + (obF0?.Ticks ?? 0) - lvTicks0;
+                log.Append(string.Format(Ci, "  ④-e 옛 소단 높이 읽기(링) {0}번 · {1:F0} ms\n", dc, dt * 1000.0 / System.Diagnostics.Stopwatch.Frequency));
+            }
             if (R.TiltAlong > 0.05 || R.TiltOut > 0.05) R.Warn.Add(string.Format(Ci, "벽 소단이 옛 소단을 따라 기욺(줄 방향 {0:F1} % · 바깥 {1:F1} % — 5 % 넘음)", R.TiltAlong * 100, R.TiltOut * 100));
             if (R.JoinMiss > 0) R.Warn.Add(string.Format(Ci, "옛 소단 이음 어긋남 {0}곳(1 cm 넘음 · 최대 {1:F1} mm @({2:F1}, {3:F1}))", R.JoinMiss, R.JoinMax * 1000, R.JoinAt.X, R.JoinAt.Y));
             if (R.JoinNone > 0) R.Warn.Add($"줄기 갈림 {R.JoinNone}곳 곁에 옛 소단이 없음(이음을 못 잼)");

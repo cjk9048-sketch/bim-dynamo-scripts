@@ -101,10 +101,20 @@ internal static class M0Dump
                         var sb = new System.Text.StringBuilder();
                         var ci = System.Globalization.CultureInfo.InvariantCulture;
                         sb.AppendLine($"# 옹벽 목록 · 확인된 정지면 {head.VerifiedP0} · 다음 번호 {head.NextNo}");
+                        // ★[v115 · S162/S163 선 옹벽] 덤프 판 2 — 선 옹벽(종류 2)마다 바꿀 자리 고리(ZONEF 성토 · ZONEC 절토 — DHWALLCOMP가 가상옹벽 삼각형을 이 고리로 나눈다)와
+                        //   출하 뚜껑(CAP 수 · 넓이 · 해시 · 테두리 변 수)을 더 적는다. 판 1(옛 덤프)에는 이 줄들이 없다 · 옛 판 하네스는 모르는 줄을 건너뛴다
+                        sb.AppendLine("VER 2");
+                        string P3(System.Collections.Generic.IEnumerable<Point3> ps) => string.Join(" ", ps.Select(p => string.Format(ci, "{0:R},{1:R},{2:R}", p.X, p.Y, p.Z)));
                         foreach (var w in walls)
                         {
                             sb.AppendLine($"WALL {w.No} {(w.Up ? "절토" : "성토")} 상태 {w.State} 보류 «{w.Hold}» P0 {w.P0Handle}" + (w.Kind != 0 ? $" 종류 {w.Kind}(선 · 절 H {w.Hc:0.##} T {w.Tc:0.##} · 성 H {w.Hf:0.##} T {w.Tf:0.##} · 선 바깥 {w.FootMax:F3} · 자리 성 {w.ZoneF.Count} 절 {w.ZoneC.Count} · 면 토막 {w.Faces.Count} · 앞면 {w.FaceLen:F2} m)" : ""));   // ★[v114.0] 판 7 종류 2
                             if (w.Kind != 0) sb.AppendLine("LINE " + string.Join(" ", w.Line.Select(p => string.Format(ci, "{0:R},{1:R}", p.X, p.Y))) + " | SRC " + string.Join(" ", w.Src.Select(p => string.Format(ci, "{0:R},{1:R}", p.X, p.Y))));
+                            if (w.Kind != 0)
+                            {
+                                foreach (var r in w.ZoneF) sb.AppendLine("ZONEF " + P3(r));   // ★[v115 · S162/S163 선 옹벽] 판 2
+                                foreach (var r in w.ZoneC) sb.AppendLine("ZONEC " + P3(r));
+                                if (w.Cap != null) sb.AppendLine(string.Format(ci, "CAP {0} {1:R} {2} {3}", w.Cap.Count, w.Cap.Area, w.Cap.Hash, w.Cap.Edges.Count));
+                            }
                             sb.AppendLine("POLY " + string.Join(" ", (w.Poly ?? new System.Collections.Generic.List<Point3>()).Select(p => string.Format(ci, "{0:R},{1:R},{2:R}", p.X, p.Y, p.Z))));
                             sb.AppendLine("SEG " + string.Join(" ", (w.Seg ?? new System.Collections.Generic.List<Point3>()).Select(p => string.Format(ci, "{0:R},{1:R},{2:R}", p.X, p.Y, p.Z))));
                         }

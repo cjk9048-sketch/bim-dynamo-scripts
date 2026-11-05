@@ -31,7 +31,7 @@ public static partial class RoadGrade
         public RoadBench? BenchC, BenchF;
         public double FootMax; public (double X, double Y) FootAt;
         /// <summary>합성 뒤 뺀 R_out∖Zone 세모 · F를 건넌 세모(0이어야) · 관문 흉내(바늘 · 0.1 mm 변 · 세 세모 변) · 다듬기 한 번 더 했나.</summary>
-        public int Removed, Straddle, Thin, GapE, NonManifold; public bool ReCleaned;
+        public int Removed, Straddle, Thin, GapE, NonManifold, Pairs; public bool ReCleaned;
         public string Log = "";
         public long Ms;
         /// <summary>이 벽이 남긴 바꿀 자리 세모(격자 · 하네스).</summary>
@@ -58,6 +58,15 @@ public static partial class RoadGrade
 
     /// <summary>바깥 쪽 가장 큰 다각형 고리(첫 점 반복 없음).</summary>
     static List<Point3> RingOf(LineString l) => l.Coordinates.Take(l.NumPoints - 1).Select(c => new Point3(c.X, c.Y, 0)).ToList();
+
+    /// <summary>★[v115 · 설치 전 검토 R4] 벽을 모두 쉰 결과(받은 P0 · 선 · 데이라잇 그대로) — 짓다 예외가 밖으로 새면 부르는 쪽(Civil)이 이것으로 도로 면을 짓는다.</summary>
+    public static WallSurface Rested(List<Tri> p0, List<TierLine> lines, List<List<(double X, double Y, double Z)>> dl, string path, IReadOnlyList<LineWall> walls, string why)
+    {
+        var ws = new WallSurface { Tris = p0, Lines = lines, DaylightZ = dl, Path = path };
+        foreach (var w in walls) ws.Walls.Add(new WallState { No = w.No, Rest = true, Code = "예외", Why = why });
+        ws.Note = string.Join(" · ", ws.Walls.Select(q => q.Text));
+        return ws;
+    }
 
     /// <summary>★[v114.3 · 계획 2판 4절 «Classify(Bd = 벽 없는 지문)»] 도로 면 세모 → 바깥 고리 · 도로 띠(가장자리 표본 띠 ∩ 고리) · 안 구멍(막을 다각형). 못 하면 까닭.</summary>
     public static (List<Point3>? Bd, List<Point3>? Band, List<(string Name, IReadOnlyList<Point3> Ring)> Holes, string Why) OutlineOf(Result r, IReadOnlyList<Tri> tris)
@@ -121,8 +130,18 @@ public static partial class RoadGrade
         ws.Tris = cur;
         if (ws.Any)
         {
-            ws.Lines = CutLines(lines, ws);
-            ws.DaylightZ = CutDaylight(r.DaylightZ, ws);
+            // ★[v115 · 설치 전 검토 R4] 선 · 데이라잇 자르기(NTS Difference · Buffer)도 벽마다 잡던 예외 밖이었다 — 위상 예외 하나가 MakeSurface를 통째로 죽였다.
+            //   못 자르면 지은 벽을 모두 쉬고(«선 자르기 실패») 받은 P0 · 선 · 데이라잇 그대로
+            try
+            {
+                ws.Lines = CutLines(lines, ws);
+                ws.DaylightZ = CutDaylight(r.DaylightZ, ws);
+            }
+            catch (Exception ex)
+            {
+                foreach (var st in ws.Walls.Where(q => q.Ok)) { st.Ok = false; st.Rest = true; st.Code = "선 자르기"; st.Why = "선 자르기 실패 — " + Why(ex) + " — 이 시도에서 벽을 쉽니다(도로 면은 그대로)"; st.ZoneTris = new(); }
+                ws.Tris = p0; ws.Lines = lines; ws.DaylightZ = r.DaylightZ;
+            }
         }
         ws.Ms = sw.ElapsedMilliseconds;
         ws.Note = string.Join(" · ", ws.Walls.Select(q => q.Text));
@@ -234,8 +253,10 @@ public static partial class RoadGrade
         }
         st.Removed = removed; st.Straddle = straddle;
         // 관문 흉내 — 바늘 · 0.1 mm 변 · 세 세모 변 · F 건넘(0이어야) · 못 넘으면 바뀐 세모만 다듬기 한 번 더(고정 = 안 바뀐 세모와 나누는 점 · 둘레 점)
-        var (thin, gapE, nm) = WallHealth(kept);
-        if (thin + gapE + nm > 0)
+        // ★[v115 · 검토 M2] 점 쌍은 바뀐 세모(합성 · 다듬기가 새로 만든 것) 꼭짓점이 낀 쌍만 — P0에 원래 있던 쌍은 이 벽 탓이 아니다
+        static HashSet<(double, double)> ChangedPts(List<Tri> ts, HashSet<Tri> was) { var o = new HashSet<(double, double)>(); foreach (var t in ts) if (!was.Contains(t)) { o.Add((t.A.X, t.A.Y)); o.Add((t.B.X, t.B.Y)); o.Add((t.C.X, t.C.Y)); } return o; }
+        var (thin, gapE, nm, prs) = WallHealth(kept, ChangedPts(kept, before), out var prAt);
+        if (thin + gapE + nm + prs > 0)
         {
             var changed = kept.Where(t => !before.Contains(t)).ToList(); var same = kept.Where(t => before.Contains(t)).ToList();
             var keyS = new HashSet<(double, double)>(); foreach (var t in same) foreach (var v in new[] { t.A, t.B, t.C }) keyS.Add((v.X, v.Y));
@@ -249,20 +270,20 @@ public static partial class RoadGrade
             if (made != null)
             {
                 var k2 = new List<Tri>(same.Count + made.Count); k2.AddRange(made); k2.AddRange(same);
-                int flips = FlipThin(k2);   // 다듬기가 남긴 안쪽 가는 바늘(높이 < 122 µm · 긴 변을 이웃과 나눔) — Civil이 할 대각선 바꾸기를 먼저(꼭짓점 · 높이 그대로)
+                int flips = FlipThin(k2, out double fDz);   // 다듬기가 남긴 안쪽 가는 바늘(높이 < 125 µm · 긴 변을 이웃과 나눔) — Civil이 할 대각선 바꾸기를 먼저(꼭짓점 · 높이 그대로 · 건넘 높이 차 1 cm 안만)
                 // 대각선을 바꿔도 남으면(네 점이 거의 한 줄 — 바꾼 세모도 가늚) 도로 면 짓기와 같은 법으로 5 mm 안 짧은 변을 접는다(선 따라 TIN의 FoldNeedles · 높이 차 1 cm 안만)
                 int folded = 0;
-                if (WallHealth(k2).Thin > 0) { folded = FoldNeedles(k2); flips += FlipThin(k2); }
+                if (WallHealth(k2).Thin > 0) { folded = FoldNeedles(k2); flips += FlipThin(k2, out double fDz2); fDz = Math.Max(fDz, fDz2); }
                 if (folded > 0) log.Append($"  ⓓ″ 짧은 변 접음 {folded}\n");
-                var h2 = WallHealth(k2);
-                if (flips > 0) log.Append($"  ⓓ′ 안쪽 가는 바늘 대각선 바꿈 {flips}\n");
-                log.Append(string.Format(ci, "  ⓓ 관문 흉내 바늘 {0} · 0.1 mm 변 {1} · 세 세모 변 {2} → 다듬기 한 번 더 → {3} · {4} · {5} ({6})\n", thin, gapE, nm, h2.Thin, h2.Gap, h2.NonManifold, zr.Summary));
-                if (h2.Thin + h2.Gap + h2.NonManifold == 0) { kept = k2; (thin, gapE, nm) = h2; }
+                var h2 = WallHealth(k2, ChangedPts(k2, before), out var prAt2);
+                if (flips > 0) log.Append(string.Format(ci, "  ⓓ′ 안쪽 가는 바늘 대각선 바꿈 {0}(옛 변과 건너는 점 높이 차 최대 {1:F2} mm)\n", flips, fDz * 1000));
+                log.Append(string.Format(ci, "  ⓓ 관문 흉내 바늘 {0} · 0.1 mm 변 {1} · 세 세모 변 {2} · 0.1 mm 점 쌍 {3} → 다듬기 한 번 더 → {4} · {5} · {6} · {7} ({8})\n", thin, gapE, nm, prs, h2.Thin, h2.Gap, h2.NonManifold, h2.Pairs, zr.Summary));
+                if (h2.Thin + h2.Gap + h2.NonManifold + h2.Pairs == 0) { kept = k2; (thin, gapE, nm, prs) = h2; prAt = prAt2; }
             }
-            else log.Append($"  ⓓ 관문 흉내 바늘 {thin} · 0.1 mm 변 {gapE} · 세 세모 변 {nm} → 다듬기 못 함({zr.Fail})\n");
+            else log.Append($"  ⓓ 관문 흉내 바늘 {thin} · 0.1 mm 변 {gapE} · 세 세모 변 {nm} · 0.1 mm 점 쌍 {prs} → 다듬기 못 함({zr.Fail})\n");
         }
-        st.Thin = thin; st.GapE = gapE; st.NonManifold = nm;
-        if (thin + gapE + nm + straddle > 0)
+        st.Thin = thin; st.GapE = gapE; st.NonManifold = nm; st.Pairs = prs;
+        if (thin + gapE + nm + prs + straddle > 0)
         {
             st.Rest = true; st.Code = "관문";
             string at = "";
@@ -272,7 +293,8 @@ public static partial class RoadGrade
                 double h = Math.Abs((t.B.X - t.A.X) * (t.C.Y - t.A.Y) - (t.B.Y - t.A.Y) * (t.C.X - t.A.X)) / Math.Max(l1, Math.Max(l2, l3));
                 if (h < 1.22e-4) { at = string.Format(ci, " @({0:F2}, {1:F2}) 높이 {2:F0} µm · 짧은 변 {3:F1} mm", (t.A.X + t.B.X + t.C.X) / 3, (t.A.Y + t.B.Y + t.C.Y) / 3, h * 1e6, Math.Min(l1, Math.Min(l2, l3)) * 1000); break; }
             }
-            st.Why = $"이음매 바늘 {thin} · 0.1 mm 쌍 {gapE} · 세 세모 변 {nm} · F 건넌 세모 {straddle}{at} — 이 벽은 쉽니다(도로 면은 그대로)";
+            if (at.Length == 0 && prs > 0 && prAt is { } pa) at = string.Format(ci, " @({0:F2}, {1:F2}) 0.1 mm 안 점 쌍", pa.X, pa.Y);   // ★[v115 · 검토 L4]
+            st.Why = $"이음매 바늘 {thin} · 0.1 mm 변 {gapE} · 0.1 mm 점 쌍 {prs} · 세 세모 변 {nm} · F 건넌 세모 {straddle}{at} — 이 벽은 쉽니다(도로 면은 그대로)";
             st.Log = log.ToString(); return;
         }
         log.Append(string.Format(ci, "  ⓔ R_out∖Zone 뺌 {0} · F 건넌 세모 0 · 남은 세모 {1}\n", removed, kept.Count));
@@ -282,9 +304,14 @@ public static partial class RoadGrade
     }
 
     /// <summary>★[v114.3 · 관문 흉내] Civil이 실제로 건드리는 것만 — 바늘 = 가장 긴 변을 이웃 세모와 나누고(테두리 긴 변은 Civil도 못 뒤집음 — 합성 다듬기 ThinLeft와 같은 뜻) 높이 &lt; 122 µm(Civil 뒤집기 문턱 실측 · 부지 합성이 보내는 면과 같은 잣대) ·
-    /// 0.1 mm 합침 네모 안 변 · 세 세모 이상 변. 도로 면 짓기(<see cref="Health"/> — 125 µm · 테두리 포함)보다 느슨한 까닭: 합성이 판정 1로 넘긴 면을 그대로 받기 위해(부지 옹벽과 같은 면).</summary>
-    public static (int Thin, int Gap, int NonManifold) WallHealth(List<Tri> tris)
+    /// 0.1 mm 합침 네모 안 변 · 세 세모 이상 변 · ★[v115 · 설치 전 검토 R5] 0.1 mm 합침 네모 안 점 쌍(변으로 안 이어져도 Civil이 합친다). 도로 면 짓기(<see cref="Health"/> — 125 µm · 테두리 포함)보다 느슨한 까닭: 합성이 판정 1로 넘긴 면을 그대로 받기 위해(부지 옹벽과 같은 면).</summary>
+    public static (int Thin, int Gap, int NonManifold, int Pairs) WallHealth(List<Tri> tris) => WallHealth(tris, null, out _);
+
+    /// <param name="only">★[v115 · 검토 M2] 점 쌍은 둘 중 하나라도 이 점들(바뀐 세모 꼭짓점)일 때만 센다 — 받은 P0에 이미 있던 쌍으로 벽이 늘 쉬지 않게(null = 모두).</param>
+    /// <param name="pairAt">★[v115 · 검토 L4] 센 첫 쌍의 자리(쉴 때 까닭에).</param>
+    public static (int Thin, int Gap, int NonManifold, int Pairs) WallHealth(List<Tri> tris, ISet<(double, double)>? only, out (double X, double Y)? pairAt)
     {
+        pairAt = null;
         static ((double, double), (double, double)) E(Point3 p, Point3 q) { var a = (p.X, p.Y); var b = (q.X, q.Y); return a.CompareTo(b) < 0 ? (a, b) : (b, a); }
         var use = new Dictionary<((double, double), (double, double)), int>();
         foreach (var t in tris) foreach (var (p0, p1) in new[] { (t.A, t.B), (t.B, t.C), (t.C, t.A) }) { var k = E(p0, p1); use[k] = use.GetValueOrDefault(k) + 1; }
@@ -293,22 +320,54 @@ public static partial class RoadGrade
         {
             double l1 = Math.Sqrt(Sq(t.A.X - t.B.X) + Sq(t.A.Y - t.B.Y)), l2 = Math.Sqrt(Sq(t.B.X - t.C.X) + Sq(t.B.Y - t.C.Y)), l3 = Math.Sqrt(Sq(t.C.X - t.A.X) + Sq(t.C.Y - t.A.Y));
             double cr = Math.Abs((t.B.X - t.A.X) * (t.C.Y - t.A.Y) - (t.B.Y - t.A.Y) * (t.C.X - t.A.X)), lm = Math.Max(l1, Math.Max(l2, l3));
-            if (cr / lm >= 1.0e-4) continue;   // 100 µm 아래 = Civil이 틀림없이 뒤집음(실측 ≲ 122 µm) — 100 ~ 125 µm 경계는 Civil 되읽기 대조가 정한다(바뀌면 벽만 쉼)
+            // ★[v115 · 설치 전 검토 R6] 셈 문턱 = Civil 뒤집기 실측 122 µm(옛 100 µm는 100 ~ 122 µm 바늘을 놓쳐 Civil 되읽기에 맡겼다) · 고치는 쪽(FlipThin 후보)은 125 µm(도로 면 Health와 같음)
+            if (lm <= 0 || cr / lm >= NeedleCount) continue;
             var le = l1 >= l2 && l1 >= l3 ? E(t.A, t.B) : l2 >= l3 ? E(t.B, t.C) : E(t.C, t.A);
             if (use[le] >= 2) thin++;
         }
         int nm = use.Count(kv => kv.Value > 2);
         int gapE = use.Keys.Count(k => Math.Max(Math.Abs(k.Item1.Item1 - k.Item2.Item1), Math.Abs(k.Item1.Item2 - k.Item2.Item2)) < CivilSafeMesh.Gap);
-        return (thin, gapE, nm);
+        // ★[v115 · 설치 전 검토 R5] 0.1 mm 안 점 쌍 — 칸 = Gap 해시 · 3×3 이웃(Civil 합침 네모와 같은 잣대 · 변으로 이어진 쌍도 셈)
+        int pairs = 0;
+        var cell = new Dictionary<(long, long), List<(double X, double Y)>>();
+        var seen = new HashSet<(double, double)>();
+        foreach (var t in tris)
+            foreach (var v in new[] { t.A, t.B, t.C })
+            {
+                if (!seen.Add((v.X, v.Y))) continue;
+                long kx = (long)Math.Floor(v.X / CivilSafeMesh.Gap), ky = (long)Math.Floor(v.Y / CivilSafeMesh.Gap);
+                for (long a = kx - 1; a <= kx + 1; a++)
+                    for (long b = ky - 1; b <= ky + 1; b++)
+                        if (cell.TryGetValue((a, b), out var l))
+                            foreach (var o in l)
+                                if (Math.Max(Math.Abs(o.X - v.X), Math.Abs(o.Y - v.Y)) < CivilSafeMesh.Gap && (only == null || only.Contains((v.X, v.Y)) || only.Contains((o.X, o.Y))))
+                                { pairs++; pairAt ??= ((v.X + o.X) / 2, (v.Y + o.Y) / 2); }
+                if (!cell.TryGetValue((kx, ky), out var m)) cell[(kx, ky)] = m = new();
+                m.Add((v.X, v.Y));
+            }
+        return (thin, gapE, nm, pairs);
     }
 
-    /// <summary>★[v114.3 · 관문 흉내 → 고침] 안쪽 가는 바늘(높이 &lt; 122 µm · 가장 긴 변을 이웃과 나눔)의 긴 변을 이웃 세모와 대각선 바꿈 — 바꾼 두 세모가 같은 감김 · 높이 ≥ 125 µm일 때만(꼭짓점 · 높이 그대로 · Civil이 되읽을 때 할 일을 먼저). 돌려줌 = 바꾼 수.</summary>
-    internal static int FlipThin(List<Tri> tris)
+    /// <summary>★[v115 · 설치 전 검토 R6] 바늘 셈 문턱(Civil 뒤집기 실측 ≲ 122 µm) · 대각선 바꾸기 후보 문턱(도로 면 <see cref="Health"/>와 같은 125 µm).</summary>
+    internal const double NeedleCount = 1.22e-4, NeedleFlip = 1.25e-4;
+
+    /// <summary>★[v114.3 · 관문 흉내 → 고침] 안쪽 가는 바늘(높이 &lt; 125 µm · 가장 긴 변을 이웃과 나눔)의 긴 변을 이웃 세모와 대각선 바꿈 — 바꾼 두 세모가 같은 감김 · 높이 ≥ 125 µm일 때만(꼭짓점 · 높이 그대로 · Civil이 되읽을 때 할 일을 먼저). 돌려줌 = 바꾼 수.
+    /// <para>★[v115 · 설치 전 검토 R3] 새 대각선이 옛 변을 건너는 점에서 두 높이(옛 변 · 새 대각선)가 1 cm 넘게 다르면 안 바꾼다(FoldNeedles와 같은 잣대 — 바늘이 수직 면 곁이면 바꾸면 높이가 뛴다) · <paramref name="maxDz"/> = 바꾼 대각선의 그 차 최대.</para></summary>
+    internal static int FlipThin(List<Tri> tris, out double maxDz)
     {
         static double Cr(Point3 o, Point3 a, Point3 b) => (a.X - o.X) * (b.Y - o.Y) - (a.Y - o.Y) * (b.X - o.X);
         static double L(Point3 a, Point3 b) => Math.Sqrt(Sq(a.X - b.X) + Sq(a.Y - b.Y));
-        static double H(Point3 a, Point3 b, Point3 c) => Math.Abs(Cr(a, b, c)) / Math.Max(L(a, b), Math.Max(L(b, c), L(c, a)));
+        static double H(Point3 a, Point3 b, Point3 c) { double lm = Math.Max(L(a, b), Math.Max(L(b, c), L(c, a))); return lm <= 0 ? 0 : Math.Abs(Cr(a, b, c)) / lm; }
         static ((double, double), (double, double)) E(Point3 p, Point3 q) { var a = (p.X, p.Y); var b = (q.X, q.Y); return a.CompareTo(b) < 0 ? (a, b) : (b, a); }
+        // 옛 변 p–q와 새 대각선 o–d가 건너는 점에서 두 높이 차(볼록 네모라 둘은 안에서 건넘)
+        static double CrossDz(Point3 p, Point3 q, Point3 o, Point3 d)
+        {
+            double rx = q.X - p.X, ry = q.Y - p.Y, sx = d.X - o.X, sy = d.Y - o.Y, den = rx * sy - ry * sx;
+            if (Math.Abs(den) < 1e-300) return double.PositiveInfinity;
+            double t = ((o.X - p.X) * sy - (o.Y - p.Y) * sx) / den, u = ((o.X - p.X) * ry - (o.Y - p.Y) * rx) / den;
+            return Math.Abs((p.Z + (q.Z - p.Z) * t) - (o.Z + (d.Z - o.Z) * u));
+        }
+        maxDz = 0;
         int done = 0;
         for (int pass = 0; pass < 5; pass++)
         {
@@ -319,20 +378,27 @@ public static partial class RoadGrade
             {
                 if (dead.Contains(i)) continue;
                 var t = tris[i];
-                if (H(t.A, t.B, t.C) >= 1.0e-4) continue;
+                if (H(t.A, t.B, t.C) >= NeedleFlip) continue;
                 var vs = new[] { t.A, t.B, t.C };
                 int e = Enumerable.Range(0, 3).OrderByDescending(k => L(vs[k], vs[(k + 1) % 3])).First();
                 var p = vs[e]; var q = vs[(e + 1) % 3]; var o = vs[(e + 2) % 3];
                 if (!own.TryGetValue(E(p, q), out var nb) || nb.Count != 2) continue;
                 int j = nb[0] == i ? nb[1] : nb[0];
                 if (dead.Contains(j)) continue;
-                var u = tris[j]; var d = new[] { u.A, u.B, u.C }.First(w => (w.X, w.Y) != (p.X, p.Y) && (w.X, w.Y) != (q.X, q.Y));
+                var u = tris[j];
+                // ★[v115 · 설치 전 검토 R11] 이웃 세모의 맞은 꼭짓점이 없으면(같은 점 둘 — 넓이 0) 건너뜀 — First는 화면에 영어 예외를 냈다
+                var dq = new[] { u.A, u.B, u.C }.Where(w => (w.X, w.Y) != (p.X, p.Y) && (w.X, w.Y) != (q.X, q.Y)).Select(w => (Point3?)w).FirstOrDefault();
+                if (dq == null) continue;
+                var d = dq.Value;
                 // 새 대각선 o–d: 두 세모(o, p, d) · (o, d, q)가 볼록 네모를 같은 감김으로 나눠야(겹침 없음)
                 double s1 = Cr(o, p, d), s2 = Cr(o, d, q);
-                if (!(s1 * s2 > 0) || H(o, p, d) < 1.25e-4 || H(o, d, q) < 1.25e-4) continue;
+                if (!(s1 * s2 > 0) || H(o, p, d) < NeedleFlip || H(o, d, q) < NeedleFlip) continue;
+                double dz = CrossDz(p, q, o, d);
+                if (!(dz <= 0.01)) continue;
                 tris[i] = s1 > 0 ? new Tri(o, p, d) : new Tri(o, d, p);
                 tris[j] = s2 > 0 ? new Tri(o, d, q) : new Tri(o, q, d);
                 dead.Add(i); dead.Add(j); n++;
+                maxDz = Math.Max(maxDz, dz);
             }
             done += n;
             if (n == 0) break;

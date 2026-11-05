@@ -209,12 +209,14 @@ static class WallLineCheck
             // ⑧ 오목 · 볼록 꼭짓점(바깥 쪽에서 (44, 2) 볼록 · (43, 0) · (43, 5) 오목)
             var lcv = new List<Point3> { new(46, -20.0 / 3, 0), new(43, -5, 0), new(43, 0, 0), new(44, 2, 0), new(43, 5, 0), new(46, 20.0 / 3, 0) };
             // ★[v114.0 · 소단 높이 관문 · 알려진 빈자리] 이 꼴은 오목 꼭짓점 (43, 5) 곁 소단이 0.54 m 뜬다(아래 ⑧-b) — 줄 거리 검사는 관문을 끄고(재기만) 잰다
-            WallByLine.BenchGateOff = true;
-            var (_, bv) = Make(lcv, h: 0.5, t: 1, reach: 30);
-            WallByLine.BenchGateOff = false;
+            (BoundaryCut.Result, WallByLine.Built?) gOff0;
+            try { WallByLine.BenchGateOff = true; gOff0 = Make(lcv, h: 0.5, t: 1, reach: 30); } finally { WallByLine.BenchGateOff = false; }   // ★[v115 · 검토 L8]
+            var (_, bv) = gOff0;
             var (_, bvg) = Make(lcv, h: 0.5, t: 1, reach: 30);
-            check("S197 ⑧-b (알려진 빈자리) 오목 · 볼록 꼭짓점 — 소단 높이 관문이 거절(까닭 한 줄 · 소단 틀림 > 0 · 차 > 10 cm)",
-                bvg != null && !bvg.Ok && bvg.Code == "소단 높이" && bvg.Why.Contains("소단 높이가 맞지 않음") && !bvg.Why.Contains('\n') && bvg.BenchSag > 0 && bvg.BenchMax > 0.1,
+            // ★[v115 · S218 (f) 마구리 관문] 같은 알려진 빈자리를 이제 까닭으로 먼저 막는다 — 오목 꼭짓점 안쪽에서 단이 다른 줄기가 만나는 자리의 끝 선 꼬리가 벽 면에 안 들어감(«마구리»).
+            //   소단 관문이 재는 틀림(소단 틀림 > 0 · 차 > 10 cm)은 그대로 잰다(관문 차례만 마구리가 먼저)
+            check("S197 ⑧-b (알려진 빈자리) 오목 · 볼록 꼭짓점 — «마구리» 까닭으로 거절(까닭 한 줄 · 소단 틀림 > 0 · 차 > 10 cm도 잼)",
+                bvg != null && !bvg.Ok && bvg.Code == "마구리" && bvg.EndMiss > 0 && !bvg.Why.Contains('\n') && bvg.BenchSag > 0 && bvg.BenchMax > 0.1,
                 bvg == null ? "" : $"{bvg.Code} · {bvg.Why} · 소단 {bvg.BenchN}점 중 틀림 {bvg.BenchSag} · 최대 {bvg.BenchMax * 1000:F0} mm");
             bool dv = bv != null && bv.Ok;
             string dvt = bv == null ? "판정 거절" : bv.Why;
@@ -241,10 +243,12 @@ static class WallLineCheck
                 var lv = new List<Point3> { new(55, -8, 0), new(46, -5, 0), new(46, -2, 0), new(43, 0, 0), new(46, 2, 0), new(46, 5, 0), new(55, 8, 0) };
                 // ★[v114.0 · 소단 높이 관문 · 알려진 빈자리] 줄기 갈림 S가 볼록 꼭짓점 (46, ±2) 바로 위(P0 = Z_1)라 그 둥근 자리를 두 줄기 줄이 겹쳐 지나 소단이 2 m까지 틀린다(⑨-b) —
                 //   합침 규칙(마구리 수)은 관문을 끄고(재기만) 잰다
-                WallByLine.BenchGateOff = true;
-                var (_, b0) = Make(lv, h: 2, t: 1, g: gF, p0: pF0, bd: bd5, plan: Rect(0, -60, 40, 60, (x, y) => 110), reach: 30);
-                var (_, b1) = Make(lv, h: 2, t: 1, g: gF, p0: pFo, bd: bd5, plan: Rect(0, -60, 40, 60, (x, y) => 110), reach: 30);
-                WallByLine.BenchGateOff = false;
+                (BoundaryCut.Result, WallByLine.Built?) gOff1;
+                (BoundaryCut.Result, WallByLine.Built?) gOff2;
+                try { WallByLine.BenchGateOff = true; gOff1 = Make(lv, h: 2, t: 1, g: gF, p0: pF0, bd: bd5, plan: Rect(0, -60, 40, 60, (x, y) => 110), reach: 30); } finally { WallByLine.BenchGateOff = false; }   // ★[v115 · 검토 L8]
+                var (_, b0) = gOff1;
+                try { WallByLine.BenchGateOff = true; gOff2 = Make(lv, h: 2, t: 1, g: gF, p0: pFo, bd: bd5, plan: Rect(0, -60, 40, 60, (x, y) => 110), reach: 30); } finally { WallByLine.BenchGateOff = false; }   // ★[v115 · 검토 L8]
+                var (_, b1) = gOff2;
                 var (_, b0g) = Make(lv, h: 2, t: 1, g: gF, p0: pF0, bd: bd5, plan: Rect(0, -60, 40, 60, (x, y) => 110), reach: 30);
                 check("S197 ⑨-b (알려진 빈자리) 볼록 꼭짓점 위 줄기 갈림 — 소단 높이 관문이 거절(까닭 한 줄 · 소단 틀림 > 0)",
                     b0g != null && !b0g.Ok && b0g.Code == "소단 높이" && b0g.Why.Contains("소단 높이가 맞지 않음") && b0g.BenchSag > 0,
@@ -281,9 +285,9 @@ static class WallLineCheck
                         && b.BenchSag > 0 && b.BenchMax > 0.1 && b.Marks.Count == 1,
                         b == null ? cut.Why : $"{b.Code} · {b.Why} · 소단 {b.BenchN}점 중 틀림 {b.BenchSag} · 면 없음 {b.BenchMiss} · F {b.FootN}점 중 턱 {b.FootBad} · 최대 {b.BenchMax * 1000:F0} mm @({b.BenchAt.X:F2},{b.BenchAt.Y:F2})");
                     // 관문을 끄면(재기만) 짓기는 되고 — 그 면으로 합성하면 소단이 틀린 채로 남는다(합성 관문 · 같은 표본)
-                    WallByLine.BenchGateOff = true;
-                    var (_, bo) = Make(L0, h: h, t: t, g: g, p0: p0, sz: sz, reach: 30);
-                    WallByLine.BenchGateOff = false;
+                    (BoundaryCut.Result, WallByLine.Built?) gOff3;
+                    try { WallByLine.BenchGateOff = true; gOff3 = Make(L0, h: h, t: t, g: g, p0: p0, sz: sz, reach: 30); } finally { WallByLine.BenchGateOff = false; }   // ★[v115 · 검토 L8]
+                    var (_, bo) = gOff3;
                     if (bo != null && bo.Ok)
                     {
                         var (ro, allo, _) = Comp(bo, g, p0, sz);
@@ -353,9 +357,9 @@ static class WallLineCheck
             {
                 const double szV = -1;
                 var lu = new List<Point3> { new(52, -8, 0), new(43, -3, 0), new(43, 3, 0), new(52, 8, 0) };
-                WallByLine.BenchGateOff = true;
-                var (_, bo) = Make(lu, h: 0.5, t: 3, g: G, p0: P0, sz: szV, reach: 30);
-                WallByLine.BenchGateOff = false;
+                (BoundaryCut.Result, WallByLine.Built?) gOff4;
+                try { WallByLine.BenchGateOff = true; gOff4 = Make(lu, h: 0.5, t: 3, g: G, p0: P0, sz: szV, reach: 30); } finally { WallByLine.BenchGateOff = false; }   // ★[v115 · 검토 L8]
+                var (_, bo) = gOff4;
                 var (_, bg) = Make(lu, h: 0.5, t: 3, g: G, p0: P0, sz: szV, reach: 30);
                 string od = "짓기 못 함";
                 bool silent = false;
@@ -367,8 +371,9 @@ static class WallLineCheck
                     od = $"합성 판정 {ro.Tier} · 합성 면 소단 틀림 {go.BenchBad}/{go.BenchN} · 최대 {go.Max * 1000:F0} mm @({go.X:F2},{go.Y:F2})";
                 }
                 check("S198 (b) 얕은 U · 넓은 소단 — 관문 끄면 합성 판정 ≤ 2로 소단이 틀린 채 지어짐(예전 길 · 조용히)", silent, od);
-                check("S198 (b) 얕은 U · 넓은 소단 — 관문이 짓기를 거절(까닭 한 줄 · 소단 틀림 > 0)",
-                    bg != null && !bg.Ok && bg.Code == "소단 높이" && bg.Why.StartsWith("옹벽 소단 높이가 맞지 않음(") && !bg.Why.Contains('\n') && bg.BenchSag > 0,
+                // ★[v115 · S218 (f) 마구리 관문] 같은 꼴(U자 안쪽을 넓은 소단이 채워 단이 다른 두 줄기가 만남)을 이제 까닭으로 먼저 막는다 — 소단 틀림은 그대로 잰다
+                check("S198 (b) 얕은 U · 넓은 소단 — «마구리» 까닭으로 짓기를 거절(까닭 한 줄 · 소단 틀림 > 0도 잼)",
+                    bg != null && !bg.Ok && bg.Code == "마구리" && bg.Why.StartsWith("벽 면이 끝 선(마구리)을 안 따름(") && !bg.Why.Contains('\n') && bg.EndMiss > 0 && bg.BenchSag > 0,
                     bg == null ? "" : $"{bg.Code} · {bg.Why} · 소단 {bg.BenchN}점 중 틀림 {bg.BenchSag} · 최대 {bg.BenchMax * 1000:F0} mm");
             }
         }
@@ -563,17 +568,23 @@ static class WallLineCheck
                 Func<double, double, double> gm = (x, y) => 100 + 0.25 * (x - 30);
                 Func<double, double, double> pm = (x, y) => gm(x, y) + Math.Max(0, Math.Min(46 - x, 6)) / 6 * 3 * y;
                 var (cut, b) = Make(L0, h: 5, t: 1, hf: 2, g: gm, p0: pm, reach: 30, faceRun: fr, p0Tris: Grid(20, -40, 70, 40, 1, pm), gTris: Grid(20, -40, 70, 40, 1, gm));
-                if (b == null || !b.Ok) check("S215 섞인 선(절 H 5 · 성 H 2) 짓기", false, b?.Why ?? cut.Why);
+                // ★[v115 · S218 (f) 마구리 관문 — 기대 바꿈 · 까닭] 옛 판은 이 선을 «지음»(소단 관문 40점 틀림 0)으로 넘겼지만, 성토 부분(H 2 · 줄기 7개)의 오목 꼭짓점 (43, 5) 안쪽에서
+                //   단이 다른 두 줄기가 이등분선에서 만나는 자리에 끝 선 꼬리가 이어지지 않아 마구리가 빠지고 벽 면이 끝 선과 95 cm 어긋났다((45.2, 3.7) — 소단 표본이 못 짚은 자리 · 조용히 틀린 면).
+                //   «세 줄기가 만나는 마구리»는 지금 짓는 꼴에 없다(새 기하 — 모양을 정한 뒤) → 거절 · 까닭 «마구리»를 보고, 부분마다 벽 세모 기울기(①)는 관문을 끈 같은 기하로 잰다
+                (BoundaryCut.Result, WallByLine.Built?) gOff5;
+                try { WallByLine.BenchGateOff = true; gOff5 = Make(L0, h: 5, t: 1, hf: 2, g: gm, p0: pm, reach: 30, faceRun: fr, p0Tris: Grid(20, -40, 70, 40, 1, pm), gTris: Grid(20, -40, 70, 40, 1, gm)); } finally { WallByLine.BenchGateOff = false; }   // ★[v115 · 검토 L8]
+                var (_, bo) = gOff5;
+                check("S215 섞인 선(절 H 5 · 성 H 2) — 오목 꼭짓점 안쪽 두 줄기 만남 → «마구리» 까닭으로 거절(조용히 틀린 면 0)",
+                    b != null && !b.Ok && b.Code == "마구리" && b.EndMiss > 0 && b.EndMax > 0.1 && !b.Why.Contains('\n'),
+                    b == null ? cut.Why : $"{b.Code} · {b.Why} · 끝 선 표본 {b.EndN} · 틀림 {b.EndMiss} · 최대 {b.EndMax * 1000:F0} mm");
+                if (bo == null || !bo.Ok) check("S215 섞인 선(절 H 5 · 성 H 2) 짓기(관문 끔)", false, bo?.Why ?? cut.Why);
                 else
                 {
-                    var pc = b.Parts.FirstOrDefault(p => p.Up); var pf = b.Parts.FirstOrDefault(p => !p.Up);
-                    double sC = MaxSlope(b.WallTrisC, out int nC, Math.Sqrt(2) / 0.01 * 1.01), sF = MaxSlope(b.WallTrisF, out int nF, Math.Sqrt(2) / 0.01 * 1.01);
-                    check("S215 섞인 선(절 H 5 · 성 H 2) ① 두 부분 · 벽 세모 기울기 ≤ √2 : SlopeW(부분마다) · 0.1 mm 쌍 0",
-                        pc != null && pf != null && nC == 0 && nF == 0 && b.PairsUnder01 == 0,
-                        $"절토 {sC:F0} : 1(넘음 {nC}) · 성토 {sF:F0} : 1(넘음 {nF}) · 쌍 {b.PairsUnder01} · vEps(최대) {b.VEps:F3} · 좁힘 {b.CapNarrow} · {string.Join(" · ", b.Warn)}");
-                    var (r, all, _) = Comp(b, gm, pm, 1);
-                    GateCheck("S215 섞인 선(절 H 5 · 성 H 2)", b, gm, pm, 1, r, all, check);
-                    check("S215 섞인 선(절 H 5 · 성 H 2) ② 합성 판정 1~2 · 높이 오차 합 ≤ 1 cm", r.Zone != null && r.Tier <= 2 && r.HeightBudget <= 1e-2, $"판정 {r.Tier} · {r.Fail} · 오차 합 {r.HeightBudget * 1000:F3} mm");
+                    var pc = bo.Parts.FirstOrDefault(p => p.Up); var pf = bo.Parts.FirstOrDefault(p => !p.Up);
+                    double sC = MaxSlope(bo.WallTrisC, out int nC, Math.Sqrt(2) / 0.01 * 1.01), sF = MaxSlope(bo.WallTrisF, out int nF, Math.Sqrt(2) / 0.01 * 1.01);
+                    check("S215 섞인 선(절 H 5 · 성 H 2) ① 두 부분 · 벽 세모 기울기 ≤ √2 : SlopeW(부분마다) · 0.1 mm 쌍 0(관문 끈 기하)",
+                        pc != null && pf != null && nC == 0 && nF == 0 && bo.PairsUnder01 == 0,
+                        $"절토 {sC:F0} : 1(넘음 {nC}) · 성토 {sF:F0} : 1(넘음 {nF}) · 쌍 {bo.PairsUnder01} · vEps(최대) {bo.VEps:F3} · 좁힘 {bo.CapNarrow} · {string.Join(" · ", bo.Warn)}");
                 }
             }
             // 못 합친 짧은 끝 줄기(2 cm · 검토 M3) — 선 끝 δ = 0 곁 줄기 갈림 δ = ε(끝 줄기 길이 2 cm). 첫 면이 거꾸로라 이웃에 못 합친다(옛 판: ⚠ 짓기).

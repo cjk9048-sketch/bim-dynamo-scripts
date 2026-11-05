@@ -84,7 +84,7 @@ static class RoadWallCheck
     /// <summary>관문 흉내 — 바늘 · 0.1 mm 변 · 세 세모 변 · 0.1 mm 안 점 쌍(Civil 합침).</summary>
     internal static (int Thin, int Gap, int Nm, int Pairs) Gate(List<Tri> tris)
     {
-        var (th, ge, nm) = RoadGrade.WallHealth(tris);   // 짓는 길과 같은 관문(바늘 = 안쪽 긴 변 · 122 µm)
+        var (th, ge, nm, _) = RoadGrade.WallHealth(tris);   // 짓는 길과 같은 관문(바늘 = 안쪽 긴 변 · 122 µm)
         var pts = tris.SelectMany(t => new[] { t.A, t.B, t.C }).Select(q => (q.X, q.Y)).Distinct().ToList();
         var cell = new Dictionary<(long, long), List<(double X, double Y)>>(); int pairs = 0;
         foreach (var q in pts)
@@ -365,7 +365,9 @@ static class RoadWallCheck
             double sStr = 25 + 8.3 * Math.PI / 3 + 12;
             var w = LineOn(4, pD, 1, sStr - 8, sStr + 8, 2.5);
             var ws = Apply(pD, new[] { w }); var s = ws.Walls[0];
-            Check(" (d) 가로경사 12 % 곁 선 → 짓거나 까닭 한 줄", s.Ok || s.Why.Length > 0, St(s) + (s.Ok ? $" · 부분 {s.Built!.Parts.Count}({string.Join("/", s.Built.Parts.Select(p => p.Up ? "절" : "성"))})" : ""));
+            // ★[v115 · S218] 옛 판은 «짓거나 까닭»이었다 — 쉰 까닭이 합성 규칙 대조 2422 mm(참 폴리곤 밖 0.1 µm 표본을 RuleL로 읽은 잣대 탓 · (c) (e)와 같은 뿌리)라 고친 뒤엔 짓기 · 관문 0을 요구한다
+            var g = s.Ok ? Gate(ws.Tris) : (-1, -1, -1, -1);
+            Check(" (d) 가로경사 12 % 곁 선 → 짓기 · 관문 흉내 0(합성 잣대 = 참 폴리곤 안 RuleL · 밖 정지면)", s.Ok && g.Item1 + g.Item2 + g.Item3 + g.Item4 == 0, St(s) + $" · 관문 {g}" + (s.Ok ? $" · 부분 {s.Built!.Parts.Count}({string.Join("/", s.Built.Parts.Select(p => p.Up ? "절" : "성"))})" : ""));
         }
         // (e) 데이라잇 0.5 m 안 — 첫 단 부분단(δ 몇 cm) · w_min · 바늘 0
         {
@@ -377,21 +379,47 @@ static class RoadWallCheck
             var g = s.Ok ? Gate(ws.Tris) : (-1, -1, -1, -1);
             Check(" (e) 데이라잇 0.5 m 안 선 — 짓기 · 바늘 0 · 0.1 mm 쌍 0", s.Ok && g.Item1 == 0 && g.Item4 == 0, St(s) + $" · 관문 {g} · 1 mm로 올린 발 {s.Built?.WMinBumped}");
         }
-        // (f) 넓은 T 3 m
+        // (f) 넓은 T 3 m — U자 안쪽(윗변 10 m · 성토 16 m · 벽 너비 9.15 m씩)
+        //   ★[v115 · S218 (f) 기대 바꿈 — 까닭] 계측: 두 다리의 줄기 갈림(j2|j1 · j1|j2) 법선이 가운데 이등분선에 21 cm 떨어져 닿고, 그 사이에서 단이 다른 두 줄기(5 m 차)가 마주 보는데
+        //   줄 끝이 없어 끝 선 E 두 개가 모퉁이 점에서 이어지지 않은 채 끝난다 → 벽 세모 잇기가 그 꼬리를 버려 마구리가 사라지고 세모가 5 m를 건넜다(옛 판: 소단 관문 490 cm 거절).
+        //   «세 줄기가 만나는 마구리»는 지금 짓는 꼴에 없는 새 기하다(모양을 JACK과 정한 뒤 짓기) — 조용히 틀린 면 대신 «마구리» 까닭으로 거절하는지 본다
         {
-            double sStr = 25 + 8.3 * Math.PI / 3 + 12;
             var w = LineOn(6, pB, 1, 6, 16, 4.0, 3, 3);   // 첫 곧은 곳 오른쪽(굽은 곳 부채와 떨어짐)
             var ws = Apply(pB, new[] { w }); var s = ws.Walls[0];
+            Check(" (f) 넓은 소단 3 m · 좁은 U자 안쪽(두 다리 벽이 단이 달라 만남) → «마구리» 까닭으로 거절(면 그대로)", !s.Ok && s.Code == "마구리" && s.Why.Contains("마구리") && ReferenceEquals(ws.Tris, pB.Tris), St(s));
+        }
+        // (f′) 넓은 T 3 m — 넓은 U자(윗변 20 m — 두 다리 벽이 안 만남)
+        //   ★[v115 · S218 (f) 계측] 옛 판은 소단 가운데 줄이 한 줄(T/2)이라 줄 사이 1.5 m — 오목 꼭짓점 곁 비틀린 옛 소단을 못 따라가 소단 관문이 1.1 cm로 거절했다 → 0.5 m 간격 줄
+        {
+            var w = LineOn(15, pB, 1, 4, 24, 4.0, 3, 3);
+            var ws = Apply(pB, new[] { w }); var s = ws.Walls[0];
             var g = s.Ok ? Gate(ws.Tris) : (-1, -1, -1, -1);
-            Check(" (f) 넓은 소단 3 m — 짓기 · 관문 흉내 0(옛 경계 밖으로 나가면 바탕 위)", s.Ok && g.Item1 + g.Item2 + g.Item3 + g.Item4 == 0, St(s) + $" · 관문 {g} · 선 바깥 최대 {s.FootMax:F2}");
+            Check(" (f′) 넓은 소단 3 m · 넓은 U자 — 짓기 · 소단 관문 1 cm 안 · 관문 흉내 0", s.Ok && s.Built!.BenchSag + s.Built.BenchMiss == 0 && g.Item1 + g.Item2 + g.Item3 + g.Item4 == 0,
+                St(s) + $" · 관문 {g}" + (s.Built != null ? $" · 소단 최대 차 {s.Built.BenchMax * 1000:F1} mm · 마구리 {s.Built.EndMiss}" : ""));
         }
         // (g) 한 쪽 벽 둘(떨어진 두 자리)
+        //   ★[v115 · S218 (g) 계측 · 선 바꿈 — 까닭] 옛 두 선(6~9 · 16~19)은 «떨어진 두 자리»가 아니었다 — 성토 16 m라 데이라잇이 34 m 밖이고 비스듬한 다리가
+        //   d ≈ 30 m에서 서로 건넌다(벽 7이 지어지면 벽 8은 «앞 선 옹벽 7의 바꿀 자리와 겹침»으로 거절 — 맞는 거절). 벽 7은 윗변 3 m의 좁은 U자라 두 다리 벽이
+        //   단이 달라 만나는 자리(마구리 — (f)와 같은 한계)가 있다. 옛 판은 바꿀 자리 합치기가 L 위 한 점을 12 nm 두 점으로 갈라(자리 고리 가시 → 벽 면 2 cm 안
+        //   G 높이 점) 발 관문 184 cm로 먼저 거절해 이 둘이 가려졌다. → 건너지 않고 U자가 넉넉한 두 선(2~10 · 20~24)으로 «둘 다 짓기»를 보고, 옛 두 선은 (g′)에서 까닭을 본다
         {
-            double sStr = 25 + 8.3 * Math.PI / 3 + 12;
-            var w1 = LineOn(7, pB, 1, 6, 9, 4.0); var w2 = LineOn(8, pB, 1, 16, 19, 4.0);
+            var w1 = LineOn(7, pB, 1, 2, 10, 4.0); var w2 = LineOn(8, pB, 1, 20, 24, 4.0);
             var ws = Apply(pB, new[] { w1, w2 });
             var g = ws.Walls.All(q => q.Ok) ? Gate(ws.Tris) : (-1, -1, -1, -1);
-            Check(" (g) 한 쪽 벽 둘 — 둘 다 짓기 · 관문 흉내 0", ws.Walls.All(q => q.Ok) && g.Item1 + g.Item2 + g.Item3 + g.Item4 == 0, string.Join(" / ", ws.Walls.Select(St)) + $" · 관문 {g}");
+            Check(" (g) 한 쪽 벽 둘(건너지 않는 두 선) — 둘 다 짓기 · 관문 흉내 0", ws.Walls.All(q => q.Ok) && g.Item1 + g.Item2 + g.Item3 + g.Item4 == 0, string.Join(" / ", ws.Walls.Select(St)) + $" · 관문 {g}");
+        }
+        // (g′) 옛 (g) 두 선 — 벽 7(좁은 U자) «마구리» 까닭 거절 · 벽 8은 따로 짓기(한 벽의 거절이 다른 벽을 막지 않음)
+        {
+            var w1 = LineOn(7, pB, 1, 6, 9, 4.0); var w2 = LineOn(8, pB, 1, 16, 19, 4.0);
+            var ws = Apply(pB, new[] { w1, w2 });
+            var g = ws.Walls[1].Ok ? Gate(ws.Tris) : (-1, -1, -1, -1);
+            Check(" (g′) 옛 두 선 — 벽 7 «마구리» 거절 · 벽 8 짓기 · 관문 흉내 0", !ws.Walls[0].Ok && ws.Walls[0].Code == "마구리" && ws.Walls[1].Ok && g.Item1 + g.Item2 + g.Item3 + g.Item4 == 0, string.Join(" / ", ws.Walls.Select(St)) + $" · 관문 {g}");
+        }
+        // (g″) 두 선이 건넘 — 앞 벽은 짓고 뒤 벽은 «겹침» 까닭(앞 벽 바꿀 자리를 지남)
+        {
+            var w1 = LineOn(16, pB, 1, 2, 10, 4.0); var w2 = LineOn(17, pB, 1, 5, 13, 4.0);
+            var ws = Apply(pB, new[] { w1, w2 });
+            Check(" (g″) 건너는 두 선 — 앞 벽 짓기 · 뒤 벽 «겹침» 거절", ws.Walls[0].Ok && !ws.Walls[1].Ok && ws.Walls[1].Code == "겹침", string.Join(" / ", ws.Walls.Select(St)));
         }
         // (h) 옛 흘러내림 길(ForceV113) P0 위
         {
