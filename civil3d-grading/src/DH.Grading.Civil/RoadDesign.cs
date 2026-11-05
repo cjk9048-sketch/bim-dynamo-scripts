@@ -22,6 +22,12 @@ internal sealed class RoadDesign
     public string SurfaceSig = "";              // ★[v111.2] 그 면을 만든 입력 지문 — 지금 설계와 다르면 도킹창 알림
     public double SurfaceReach;                 // ★[v111.3] 그 면을 만든 계산의 시작 범위(m) — [노리선]이 같은 입력으로 다시 셈(0 = 40)
     public string SurfaceSigParts = "";         // ★[v111.3.1] 지문 몫(노선 | 종단 | 값 | 바탕면) — 무엇이 바뀌었나 한 줄
+    /// <summary>★[v115 · 설치 전 검토 R1] 그 면에 실제로 지은 선 옹벽 번호 · 실제로 Civil에 보낸 길(선 면 · 선 따라 TIN · 칸 면) — [노리선]이 같은 벽만 같은 길로 다시 얹는다.
+    /// 선 옹벽 기록이 없는 도로 · 옛 기록 = null(옛 JSON 바이트 그대로).</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public int[]? SurfaceWallNos;
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? SurfacePath;
     public List<double[]> Walls = new();         // [s0, s1, 쪽(−1 좌 · +1 우)]
     /// <summary>★[v110.2 · 설치 전 검토 · 중간] 곡선을 우리가 넣었나 — 폴리선 · [경로 그리기]로 만든 노선 = 참 · 기존 Civil 노선으로 연 도로 = 거짓(사람이 설계한 곡선이라 곡선 반경 칸이 안 바꿈).</summary>
     public bool OwnCurves = true;

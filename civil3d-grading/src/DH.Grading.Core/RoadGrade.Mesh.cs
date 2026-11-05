@@ -82,7 +82,6 @@ public static partial class RoadGrade
     /// <summary>★[v111.2 · 전체 검토 L] 병렬 계산의 예외는 AggregateException으로 와서 «One or more errors occurred»만 남음 — 안의 첫 까닭.</summary>
     static string Why(Exception ex) => ex is AggregateException ae && ae.Flatten().InnerExceptions.Count > 0 ? ae.Flatten().InnerExceptions[0].Message : ex.Message;
 
-    /// <summary>★[v111.2 · 전체 검토 L] 세분 한도(횡단 4만 · 마구리 광선 2천)에 걸렸으면 알림 — 꼴 바뀜이 덜 나뉜 자리가 남음.</summary>
     /// <summary>하네스 · 진단 전용 — 빈 사면 늘임이 못 넘어도 늘임 없이 다시 안 함(늘인 면 그대로 칸 면으로).</summary>
     internal static bool OrphanNoRetry;
 
@@ -122,6 +121,7 @@ public static partial class RoadGrade
         return n;
     }
 
+    /// <summary>★[v111.2 · 전체 검토 L] 세분 한도(횡단 4만 · 마구리 광선 2천)에 걸렸으면 알림 — 꼴 바뀜이 덜 나뉜 자리가 남음.</summary>
     static string CapNote(SectionSet set) => set.Capped > 0 ? " · ⚠세분 한도에 걸림(아주 길거나 복잡한 도로 — 몇 군데 덜 나뉨)" : "";
 
     /// <summary>★★★[v111 · 계획 2.5] 선 기반 도로 면 — 횡단 띠 세모 · 검사 통과 못 하면(또는 예외) 옛 칸 세모(<see cref="SurfaceTris"/>)로 물러섬 + 알림.</summary>
@@ -156,8 +156,12 @@ public static partial class RoadGrade
             if (cand != null && pNew > 1 && NewPathPieces(cand, set) == 0) { candNote += $" · 조각 {pNew}(새 길과 무관한 섬)"; pNew = 1; }
             if (newPath && !OrphanNoRetry && (cand == null || pNew > 1))
             {
+                // ★[v115 · 설치 전 검토 R9] 옛 길은 새 길 B1을 입은 격자 위에서 지었다 — 새 길 B1을 걷고(처음 격자) 옛 길 원천으로 입힌 뒤 짓는다(새 길과 같은 차례:
+                //   광선 → 선 → B1 격자 → 면 · 선 따라 TIN). 옛 길을 안 쓰면 아래에서 새 길 B1을 다시 입힌다
+                UnpatchGridB1(r);
                 var set2 = BuildSections(ctx, true, v1143: false);
                 var lines2 = SectionLines(ctx, set2, out var dl2, out var eL2, out var eR2);
+                PatchGridB1(r, set2);
                 var t2 = MeshFromSections(set2, inp.Base, out var rep2);
                 List<WallDaylight.Tri>? old2 = null; string bn2 = "", oldNote = "";
                 if (rep2.Ok && t2.Count > 0) { old2 = t2; oldNote = $"선 면 — 횡단 {set2.X.Count} · {rep2.Text}"; }
@@ -170,11 +174,12 @@ public static partial class RoadGrade
                 int pOld = old2 != null ? Pieces(old2) : int.MaxValue;
                 if (old2 != null && (cand == null || pOld < pNew))
                 {
-                    UnpatchGridB1(r); PatchGridB1(r, set2);   // 격자도 옛 길 원천으로(새 길로 고친 칸은 되돌림)
+                    // 격자는 위에서 이미 옛 길 원천으로(새 길로 고친 칸은 되돌림)
                     r.Sections = set2; r.DaylightZ = dl2; r.Daylight = dl2.Select(l => l.Select(p => (p.X, p.Y)).ToList()).ToList(); r.EdgeL = eL2; r.EdgeR = eR2; lines = lines2;
                     note = oldNote + $" · ⚠굽은 안쪽 새 길(꼬리 {set.SlumpTails} · 빈 사면 늘임 {set.OrphanGrown}){(cand == null ? $"으로는 못 넘음(선 따라 TIN: {bn})" : $" 조각 {pNew} > 옛 길 {pOld}")} → 옛 흘러내림 길" + CapNote(set2);
                     return old2;
                 }
+                UnpatchGridB1(r); PatchGridB1(r, set);   // ★[v115 · R9] 새 길 그대로 — 격자도 새 길 B1로 되돌림
                 if (cand == null) bn += $" / 옛 흘러내림 길로도: {bn2}";
                 else candNote += $" · 조각 {pNew}(옛 길도 {pOld})";
             }

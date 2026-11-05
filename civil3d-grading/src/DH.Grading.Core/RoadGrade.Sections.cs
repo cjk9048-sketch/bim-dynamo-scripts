@@ -174,15 +174,7 @@ public static partial class RoadGrade
         return set;
     }
 
-    /// <summary>★★★[v113.1 · JACK 1104 «도로가 안쪽으로 말리는 부분에 지형 깨짐» · B1 «높은 단면의 사면이 이김 · 이어진 주름»]
-    /// 급한 굽은 안쪽에서 광선이 곡선 중심 · 주름(가장 가까운 측점이 곡선 끝에서 끝으로 뜀)에서 끝나면 두 쪽 높이가 종단경사 × 측점 차(1.7 m)만큼 다르다 — 낭떠러지.
-    /// ① 주름 · 만남으로 끝난 사면 광선의 사면 마디(옹벽 면 · 가장자리 옹벽 · 옹벽 단면 광선은 빼고 — 검토 H1)마다 흘러내린 원뿔(기울기 = √(사면 구배² + 그 자리 종단경사²) — 경사진 단면의
-    /// 옆 아래 기울기를 넘지 않아 곧은 길 이웃은 안 깎음 · 검토 H2)을 세우고, 같은 쪽 · 같은 절성 사면 광선(주름 · 만남 끝이거나 원천 끝 곁 2 × 단면 간격 안)이 그 감싸기보다 1 cm 넘게 낮으면(성토) ·
-    /// 높으면(절토) 두 높이가 같은 자리(이분 · 5 mm 안 꺾임점이면 그 점)에서 자른다.
-    /// ②(v113.1 — 이제 <see cref="SlumpV113"/>에만) 이긴 주름 광선을 옛 주름 너머로 늘임.
-    /// ★★[v114.3 · 계획 굽은안쪽부채 2판] 이 길: 진 광선은 자르지 않고 자른 자리 뒤를 B1 평가기 높이로(꼬리) · 대상 밖 광선도 B1이 이기는 자리면 같은 꼬리 · 빈 사면은 GrowOrphans.
-    /// 주름 높이가 이미 맞으면(1 cm 안) 안 건드림(비트 같음). 돌려줌 = 높이를 바꾼 광선 수.
-    /// 하네스 전용 SlumpOff — 흘러내림을 끈 비교 면(높이 정확도 견줌 · 출하 DLL 밖에서 못 건드리게 internal).</summary> — 흘러내림을 끈 비교 면(높이 정확도 견줌 · 출하 DLL 밖에서 못 건드리게 internal).</summary>
+    /// <summary>하네스 전용 — 흘러내림을 끈 비교 면(높이 정확도 견줌 · 출하 DLL 밖에서 못 건드리게 internal).</summary>
     internal static bool SlumpOff;
 
     /// <summary>★[v113.3 · 계획 §1 4단계 — 보류] 광선(선 면)에도 감싸기(Walk.Cone max · min · −7 점 · 흘러내림 빼기)를 걸까 — 기본 끔.
@@ -190,12 +182,19 @@ public static partial class RoadGrade
     /// (S212 ⑪ 겹침 541 · 주름 틈 64 — 1105 실측). 선 면은 옛 길(흘러내림)로 주름 높이를 맞추고, 점 평가기(격자 · 칸 면 · 광선 주인 · 선 따라 TIN)만 감싸기.</summary>
     internal static bool EnvOnRays;
 
+    /// <summary>★★★[v113.1 · JACK 1104 «도로가 안쪽으로 말리는 부분에 지형 깨짐» · B1 «높은 단면의 사면이 이김 · 이어진 주름»]
+    /// 급한 굽은 안쪽에서 광선이 곡선 중심 · 주름(가장 가까운 측점이 곡선 끝에서 끝으로 뜀)에서 끝나면 두 쪽 높이가 종단경사 × 측점 차(1.7 m)만큼 다르다 — 낭떠러지.
+    /// ① 주름 · 만남으로 끝난 사면 광선의 사면 마디(옹벽 면 · 가장자리 옹벽 · 옹벽 단면 광선은 빼고 — 검토 H1)마다 흘러내린 원뿔(기울기 = √(사면 구배² + 그 자리 종단경사²) — 경사진 단면의
+    /// 옆 아래 기울기를 넘지 않아 곧은 길 이웃은 안 깎음 · 검토 H2)을 세우고, 같은 쪽 · 같은 절성 사면 광선(주름 · 만남 끝이거나 원천 끝 곁 2 × 단면 간격 안)이 그 감싸기보다 1 cm 넘게 낮으면(성토) ·
+    /// 높으면(절토) 두 높이가 같은 자리(이분 · 5 mm 안 꺾임점이면 그 점)에서 자른다.
+    /// ②(v113.1 — 이제 <see cref="SlumpV113"/>에만) 이긴 주름 광선을 옛 주름 너머로 늘임.
+    /// ★★[v114.3 · 계획 굽은안쪽부채 2판] 이 길: 진 광선은 자르지 않고 자른 자리 뒤를 B1 평가기 높이로(꼬리) · 대상 밖 광선도 B1이 이기는 자리면 같은 꼬리 · 빈 사면은 GrowOrphans.
+    /// 주름 높이가 이미 맞으면(1 cm 안) 안 건드림(비트 같음). 돌려줌 = 높이를 바꾼 광선 수.</summary>
     static int Slump(RayCtx c, SectionSet set)
     {
         if (SlumpOff) return 0;
         var swS = System.Diagnostics.Stopwatch.StartNew();
         int cuts = 0;
-        var slumped = new HashSet<Ray>(ReferenceEqualityComparer.Instance);
         var tails = new List<(Ray R, double CutAt, double Zc, bool Fill)>();   // ★[v114.3] 진 광선(자른 자리 · 그 높이) — 높이는 모든 원천을 모은 B1 평가기로
         bool SlopeOnly(Ray q)
         {
@@ -238,7 +237,7 @@ public static partial class RoadGrade
                 int x0 = (int)Math.Floor(Math.Min(s.X0, s.X1) / Cell), x1 = (int)Math.Floor(Math.Max(s.X0, s.X1) / Cell), y0 = (int)Math.Floor(Math.Min(s.Y0, s.Y1) / Cell), y1 = (int)Math.Floor(Math.Max(s.Y0, s.Y1) / Cell);
                 for (int a = x0; a <= x1; a++) for (int b = y0; b <= y1; b++) { if (!grid.TryGetValue((a, b), out var l)) grid[(a, b)] = l = new(); l.Add(i); }
             }
-            double zSrcMax = src.Max(s => Math.Max(s.Z0, s.Z1)), zSrcMin = src.Min(s => Math.Min(s.Z0, s.Z1)), keMin = src.Min(s => s.Ke), keMax = src.Max(s => s.Ke);
+            double zSrcMax = src.Max(s => Math.Max(s.Z0, s.Z1)), zSrcMin = src.Min(s => Math.Min(s.Z0, s.Z1)), keMin = src.Min(s => s.Ke);
             List<int> Query(double minX, double minY, double maxX, double maxY)
             {
                 var seen = new HashSet<int>(); var o = new List<int>();
@@ -250,7 +249,6 @@ public static partial class RoadGrade
             double near = Math.Max(2.0, 2 * c.Inp.SectionGap);
             var egrid = new Dictionary<(int, int), List<int>>();   // ★[검토 Perf] 원천 끝 칸 색인(칸 = near) — 대상마다 모든 끝을 훑지 않게
             for (int i = 0; i < srcEnds.Count; i++) { var k2 = ((int)Math.Floor(srcEnds[i].X / near), (int)Math.Floor(srcEnds[i].Y / near)); if (!egrid.TryGetValue(k2, out var l)) egrid[k2] = l = new(); l.Add(i); }
-            int sideCuts = 0;
             foreach (var r in rays)
             {
                 if (!SlopeOnly(r)) continue;
@@ -317,19 +315,13 @@ public static partial class RoadGrade
                 //   자리(주인 몫)는 그대로 — 끝이 주름 · 만남이면 그 자리 · 땅(데이라잇)인데 흘러내린 면이 아직 땅보다 높으면(성토) · 낮으면(절토) 끝을 주름으로(GrowOrphans가 땅까지).
                 //   비운 자리가 없으니 옛 ② 이긴 광선 늘임은 지움(옛 비운 띠 = 이제 진 광선 제 몫).
                 tails.Add((r, cutAt, zc, fill));   // 높이는 두 쪽 원천을 다 모은 뒤(B1 평가기 하나 — 아래)
-                slumped.Add(r);
                 set.SlumpTails++;
-                cuts++; sideCuts++;
+                cuts++;
             }
-            if (sideCuts == 0) continue;
             // ★[v114.3 · 계획 굽은안쪽부채 2판] 옛 ② 이긴 광선 늘임(자르고 비운 띠로) · ③ 진 광선 땅까지 늘임은 지움 — 진 광선을 자르지 않아 비운 자리가 없고,
             //   주름 끝 너머 빈 사면(곡선 중심 너머 · 옛 데이라잇 너머)은 BuildSections 끝의 GrowOrphans가 B1 평가기로 한 번에 늘인다.
-            for (int pass = 0; pass < 4; pass++)
-            {
-                int cut = 0;
-                for (int i = 0; i + 1 < rays.Count; i++) if (TrimCross(rays[i], rays[i + 1])) cut++;
-                if (cut == 0) break;
-            }
+            // ★[v115 · 설치 전 검토 R12] 여기 있던 이웃 광선 엇갈림 자르기(TrimCross 4번)는 지움 — 진 광선을 안 자르므로(꼬리는 아래에서) 광선이 BuildSections 앞 단계 뒤로
+            //   바뀌지 않아 늘 0번이었다(하네스 rwall · wline · env · mesh · road · bend · wedge 계측 0회)
         }
         if (set.SlumpSrc.Count > 0)
         {
@@ -376,7 +368,7 @@ public static partial class RoadGrade
                 { double f1 = Def(Math.Min(dEnd, cutAt + 0.01)); if (!(f1 <= 2 * LineTol)) continue; }
                 foreach (var p in r.Pts) if (p.D > 1e-6 && Math.Abs(p.D - cutAt) < 0.005) { cutAt = p.D; break; }
                 tails.Add((r, cutAt, RayZ(r, cutAt), fill));
-                slumped.Add(r); set.SlumpTails++; cuts++;
+                set.SlumpTails++; cuts++;
             }
         }
         foreach (var (r, cutAt, zc, fill) in tails)

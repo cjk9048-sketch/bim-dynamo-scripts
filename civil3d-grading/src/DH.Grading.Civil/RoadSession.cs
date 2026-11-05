@@ -44,7 +44,9 @@ internal sealed class RoadSession
     /// <summary>★[v114.3] 이 도면에서 옛 판 1 폴리선 옹벽을 지웠다는 한 줄을 이미 남겼나(도면마다 한 번).</summary>
     bool _oldWallNoted;
     /// <summary>★[v114.3 · 계획 2판 4절 «Classify(Bd = 벽 없는 지문 캐시)»] 벽 없는 면 P0 — 지난 [업데이트] 또는 [옹벽 추가] 판정이 셈(벽 뺀 입력 지문이 같으면 다시 안 셈).</summary>
-    internal (string Key, RoadGrade.Input Inp, RoadGrade.Result R, List<WallDaylight.Tri> P0, List<RoadGrade.TierLine> Lines, string Path)? P0Cache;
+    internal (string Key, RoadGrade.Input Inp, RoadGrade.Result R, List<WallDaylight.Tri> P0, List<RoadGrade.TierLine> Lines, string Path, List<List<(double X, double Y, double Z)>> Dl)? P0Cache;
+    /// <summary>★[v115 · 설치 전 검토 R1] 지금 짓는 면의 벽 번호 · 길 — CreateSurface가 설계 기록에 적는다.</summary>
+    int[]? _pendingWallNos; string? _pendingPath;
 
     /// <summary>벽 뺀 입력 지문(선 옹벽 기록만 바뀌면 P0는 그대로).</summary>
     internal string KeyNoWalls(List<Piece> pcs)
@@ -73,12 +75,18 @@ internal sealed class RoadSession
         var inp = pcs[0].Inp; inp.Cell = SurfCell; inp.Reach = reach; inp.Limit = limit;
         string key = "";
         try { key = KeyNoWalls(pcs); } catch { }
-        if (key.Length > 0 && P0Cache is { } c && c.Key == key) { c.Inp.LineWalls = inp.LineWalls; return (c.Inp, c.R, c.P0, c.Lines, c.Path, ""); }
+        if (key.Length > 0 && P0Cache is { } c && c.Key == key)
+        {
+            c.Inp.LineWalls = inp.LineWalls;
+            // ★[v115 · R7] 캐시한 r의 데이라잇은 Try가 벽 든 것으로 바꿨을 수 있다 — 벽 없는 사본으로 되돌려 넘긴다
+            c.R.DaylightZ = c.Dl.Select(l => l.ToList()).ToList(); c.R.Daylight = c.R.DaylightZ.Select(l => l.Select(q => (q.X, q.Y)).ToList()).ToList();
+            return (c.Inp, c.R, c.P0, c.Lines, c.Path, "");
+        }
         var r = RoadGrade.Run(inp);
         if (r.Error.Length > 0) return (null, null, null, null, "", "도로 계산 실패 — " + r.Error);
         var p0 = RoadGrade.ExactSurface(inp, r, out string note, out var lines);
         string path = note.StartsWith("선 따라 TIN") ? "선 따라 TIN" : note.StartsWith("⚠") ? "칸 면" : "선 면";
-        if (key.Length > 0) P0Cache = (key, inp, r, p0, lines, path);
+        if (key.Length > 0) P0Cache = (key, inp, r, p0, lines, path, r.DaylightZ.Select(l => l.ToList()).ToList());
         return (inp, r, p0, lines, path, "");
     }
 
@@ -542,7 +550,11 @@ internal sealed class RoadSession
                 if (Design.SurfaceSig.Length > 0 && sigNow.Length > 0 && sigNow != Design.SurfaceSig && hasSurf)
                 {
                     var now = SigPartsAll(pcs, BaseSurfId); var was = Design.SurfaceSigParts.Split('|');
-                    surfNote = was.Length != now.Length ? "설계가 바뀌었습니다"
+                    // ★[v115 · 검토 M1] 엔진 판 토큰만 다르면(옛 판 면 · 입력은 그대로) 값이 바뀐 것이 아니다 — 판이 바뀌어 한 번 다시 만들어야 한다고
+                    bool engineOnly = false;
+                    try { engineOnly = SigOfAll(pcs, BaseSurfId, engine: false) == Design.SurfaceSig; } catch { }
+                    surfNote = engineOnly ? EngineNote
+                             : was.Length != now.Length ? "설계가 바뀌었습니다"
                              : was[0] != now[0] ? "노선이 수정되었습니다"
                              : was[1] != now[1] ? "종단이 수정되었습니다"
                              : was[2] != now[2] ? "횡단 · 사면 · 옹벽 값이 바뀌었습니다"
@@ -641,7 +653,7 @@ internal sealed class RoadSession
     bool _retried;
 
     /// <summary>★[v111.2 · 전체 검토 L2] 도로 면 입력 지문 — 중심선 표본(자리 · 계획고) · 횡단 · 사면 · 옹벽 기록 · 해상도 · 바탕면(칸 · 범위는 뺌 — 미리보기 1 m · 면 0.5 m가 같게).</summary>
-    static string SigOf(RoadGrade.Input inp, ObjectId baseSurf)
+    static string SigOf(RoadGrade.Input inp, ObjectId baseSurf, bool engine = true)
     {
         var sb = new System.Text.StringBuilder();
         var ci = System.Globalization.CultureInfo.InvariantCulture;
@@ -651,6 +663,7 @@ internal sealed class RoadSession
         // ★[도로 마무리 ② · 계획 6.1 · 비평 M6] 측구는 있을 때만(측구 없는 도로 지문 = 옛 문자열 그대로)
         if (inp.Ditches.Count > 0) sb.Append("|측구").Append(System.Text.Json.JsonSerializer.Serialize(inp.Ditches, opt));
         if (inp.LineWalls.Count > 0) sb.Append("|선옹벽2").Append(System.Text.Json.JsonSerializer.Serialize(inp.LineWalls, opt));   // ★[v114.3] 있을 때만(판 2 · 여유 포함 — 벽 없는 도로 지문 그대로)
+        if (engine) sb.Append(EngineTag);   // ★[v115 · 설치 전 검토 R8] 엔진이 바뀌면(굽은 안쪽 새 길 · B1 격자 · 선 옹벽) 옛 판 면은 한 번 «수정됨 — [업데이트]»
         sb.Append('|').Append(baseSurf.IsNull ? "" : baseSurf.Handle.ToString());
         // ★[v111.3 · 설치 전 검토 M2] 바탕면 내용도 — 같은 핸들로 고쳐진(정지면 다시 · 원지반 편집) 바탕이면 [노리선]이 면과 안 맞는 노리선을 말없이 그렸다.
         //   중심선 표본 10개마다 양쪽 5 · 15 · 30 · 50 m 바탕 높이(0.1 mm) — 도로 자리 곁 바탕이 바뀌면 지문이 바뀐다(먼 곳 편집은 도로 면과 상관없음)
@@ -666,8 +679,12 @@ internal sealed class RoadSession
             }
         return Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(sb.ToString())));
     }
+    /// <summary>★[v115 · 설치 전 검토 R8] 도로 면 엔진 판 — 지문에 넣어 엔진이 바뀐 판의 옛 면을 한 번 «수정됨»으로(값을 바꿀 때마다 판을 올림).</summary>
+    const string EngineTag = "|엔진 v115";
+    /// <summary>★[v115 · 검토 M1] 엔진 판만 바뀐 옛 면 알림.</summary>
+    const string EngineNote = "애드인 판(v115)이 바뀌어 지표면을 한 번 다시 만들어야 합니다 — [업데이트]";
     /// <summary>★[v111.3.1] 지문을 몫으로 — 노선(X · Y) · 종단(Z) · 값(횡단 · 사면 · 옹벽 기록) · 바탕면(핸들 · 곁 높이). [진입도로 지표면 생성] 아래 «무엇이 바뀌었나» 한 줄용(SigOf 값은 그대로 — 이미 만든 면의 지문이 안 바뀌게).</summary>
-    static string[] SigParts(RoadGrade.Input inp, ObjectId baseSurf)
+    static string[] SigParts(RoadGrade.Input inp, ObjectId baseSurf, bool engine = true)
     {
         var ci = System.Globalization.CultureInfo.InvariantCulture;
         string H(string t) => Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(t))).Substring(0, 16);
@@ -677,6 +694,7 @@ internal sealed class RoadSession
         string vals = System.Text.Json.JsonSerializer.Serialize(new { inp.Sec, inp.Cut, inp.Fill, inp.TierWalls, inp.Walls, inp.MinSlope, inp.SectionGap, inp.EdgeStep }, opt);
         if (inp.Ditches.Count > 0) vals += "|측구" + System.Text.Json.JsonSerializer.Serialize(inp.Ditches, opt);   // ★[도로 마무리 ②] 있을 때만
         if (inp.LineWalls.Count > 0) vals += "|선옹벽2" + System.Text.Json.JsonSerializer.Serialize(inp.LineWalls, opt);   // ★[v114.3] 있을 때만
+        if (engine) vals += EngineTag;   // ★[v115 · R8] «무엇이 바뀌었나»에서는 값 몫으로 보임
         var bs = new System.Text.StringBuilder(baseSurf.IsNull ? "" : baseSurf.Handle.ToString());
         if (inp.Base != null)
             for (int i = 0; i + 1 < inp.X.Length; i += 10)
@@ -689,13 +707,14 @@ internal sealed class RoadSession
         return new[] { H(xy.ToString()), H(z.ToString()), H(vals), H(bs.ToString()) };
     }
     /// <summary>★[도로 마무리 ① · 계획 5.6] 토막이 여럿이면 토막 지문을 이어 한 번 더(하나면 <see cref="SigOf"/> 그대로 — 비트 같음).</summary>
-    internal static string SigOfAll(List<Piece> pcs, ObjectId baseSurf)
-        => pcs.Count == 1 ? SigOf(pcs[0].Inp, baseSurf)
-           : Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes("토막" + string.Join("+", pcs.Select(p => SigOf(p.Inp, baseSurf))))));
-    static string[] SigPartsAll(List<Piece> pcs, ObjectId baseSurf)
+    /// <param name="engine">★[v115 · 검토 M1] 거짓 = 엔진 판 토큰 없이(옛 판 면과 «엔진만 다름»을 가리려고).</param>
+    internal static string SigOfAll(List<Piece> pcs, ObjectId baseSurf, bool engine = true)
+        => pcs.Count == 1 ? SigOf(pcs[0].Inp, baseSurf, engine)
+           : Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes("토막" + string.Join("+", pcs.Select(p => SigOf(p.Inp, baseSurf, engine))))));
+    static string[] SigPartsAll(List<Piece> pcs, ObjectId baseSurf, bool engine = true)
     {
-        if (pcs.Count == 1) return SigParts(pcs[0].Inp, baseSurf);
-        var all = pcs.Select(p => SigParts(p.Inp, baseSurf)).ToList();
+        if (pcs.Count == 1) return SigParts(pcs[0].Inp, baseSurf, engine);
+        var all = pcs.Select(p => SigParts(p.Inp, baseSurf, engine)).ToList();
         return Enumerable.Range(0, all[0].Length).Select(i => string.Join("+", all.Select(a => a[i]))).ToArray();
     }
 
@@ -1195,6 +1214,7 @@ internal sealed class RoadSession
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var d = Fresh();
         EnsureBase();
+        _pendingWallNos = null; _pendingPath = null;   // ★[v115 · R1] 토막 도로 · 앞 호출 값이 남지 않게(선 옹벽 없는 면 = null)
         List<(double, double)>? limit; List<Piece> pcs;
         using (var tr = db.TransactionManager.StartTransaction())
         {
@@ -1237,25 +1257,38 @@ internal sealed class RoadSession
         {
             if (lw.Count == 0) return null;
             r.DaylightZ = dl0; r.Daylight = d0;
-            var ws = RoadGrade.ApplyWalls(inp, r, p0, ls, path, lw, bls, rest);
+            // ★[v115 · 설치 전 검토 R4] 벽 얹기에서 예외가 새도 MakeSurface는 살린다 — 벽을 모두 쉬고 그 길의 벽 없는 면으로
+            RoadGrade.WallSurface ws;
+            try { ws = RoadGrade.ApplyWalls(inp, r, p0, ls, path, lw, bls, rest); }
+            catch (System.Exception exW) { ws = RoadGrade.Rested(p0, ls, dl0, path, lw, "선 옹벽 짓기 예외 — " + exW.Message + " — 이 시도에서 벽을 쉽니다"); }
             try { DiagLog.Append($"\n[진입도로] {Name} — 선 옹벽({path}{(rest != null ? " · 쉼 " + rest.Count : "")}) {ws.Ms} ms — {ws.Note}" + string.Concat(ws.Walls.Select(w => w.Log.Length > 0 ? "\n" + w.Log.TrimEnd() : ""))); } catch { }
             return ws;
         }
-        string Try(List<WallDaylight.Tri> p0, List<RoadGrade.TierLine> ls, string note, RoadGrade.WallSurface? ws, RoadGrade.Result? lineR = null)
+        // ★[v115 · 설치 전 검토 R7] P0 캐시는 Civil이 받은 뒤 · 실제로 보낸 길로(옛 판은 Civil에 보내기 전에 채워, 거절되어 길을 내려도 [옹벽 추가] 판정이 옛 길 P0를 썼다).
+        //   데이라잇은 사본을 둔다(GridSet · Try가 r.DaylightZ를 벽 든 것으로 바꾼다)
+        string keyNW = ""; try { keyNW = KeyNoWalls(pcs); } catch { }
+        var dl0c = dl0.Select(l => l.ToList()).ToList();
+        string Try(List<WallDaylight.Tri> p0, List<RoadGrade.TierLine> ls, string note, RoadGrade.WallSurface? ws, string pathK, RoadGrade.Result? lineR = null)
         {
             bool any = ws != null && ws.Any;
             if (ws != null) RoadGrade.GridSet(r, any ? ws : null);   // 벽 기록이 없는 도로는 격자를 안 건드림(오늘과 비트 같음)
             r.DaylightZ = any ? ws!.DaylightZ : dl0; r.Daylight = r.DaylightZ.Select(l => l.Select(q => (q.X, q.Y)).ToList()).ToList();
             string wn = ws == null ? "" : " · " + string.Join(" · ", ws.Walls.Select(w => w.Text));
+            // ★[v115 · 설치 전 검토 R1] 이 면에 실제로 지은 벽 번호 · 보낸 길을 설계 기록에(SurfaceSig 곁) — [노리선]이 같은 벽 · 같은 길로만 다시 얹는다(벽 기록 없는 도로 = null · 옛 JSON 그대로)
+            _pendingWallNos = lw.Count == 0 ? null : (any ? ws!.Built.Select(w => w.No).ToArray() : Array.Empty<int>());
+            _pendingPath = lw.Count == 0 ? null : pathK;
             string msg = CreateSurface(d, r, any ? ws!.Tris : p0, note, any ? ws!.Lines : ls, sw, lineR, wn);
             Walls = ws; WallsSig = d.SurfaceSig; WallVol = (r.CutVol, r.FillVol, r.MaxCut, r.MaxFill);
+            if (keyNW.Length > 0) P0Cache = (keyNW, inp, r, p0, ls, pathK, dl0c);
             return msg;
         }
         bool Refused(InvalidOperationException e) => e.Message.StartsWith("Civil이 면을 그대로 안 받았습니다");
         string path0 = tnote.StartsWith("선 따라 TIN") ? "선 따라 TIN" : exact ? "선 면" : "칸 면";
-        if (exact) try { P0Cache = (KeyNoWalls(pcs), inp, r, tris, lines, path0); } catch { }
+        P0Cache = null;   // ★[v115 · R7] Civil이 받기 전엔 비움(받은 뒤 Try가 그 길로 채움)
+        // ★[v115 · 설치 전 검토 R10] 굽은 안쪽 «옛 길로 지음» ⚠은 Civil 거절로 길을 내려도 남긴다(내린 길도 같은 옛 길 광선 · 격자)
+        string oldTag = tnote.Contains("→ 옛 흘러내림 길") ? " · (→ 옛 흘러내림 길)" : "";
         var ws1 = Wl(tris, lines, path0, null);
-        try { return Try(tris, lines, tnote, ws1); }
+        try { return Try(tris, lines, tnote, ws1, path0); }
         catch (InvalidOperationException exG) when (exact && Refused(exG))
         {
             r.DaylightZ = dl0; r.Daylight = d0;
@@ -1263,10 +1296,14 @@ internal sealed class RoadSession
             if (ws1 != null && ws1.Any)
             {
                 try { DiagLog.Append($"\n[진입도로] {Name} — ⚠선 옹벽 든 면을 Civil이 못 받음({exG.Message}) → 같은 {path0}로 벽을 쉬고 다시"); } catch { }
-                var restAll = new HashSet<int>(ws1.Built.Select(w => w.No));
+                // ★[v115 · 설치 전 검토 R2] 기록된 벽 모두 쉼(지은 것만 쉬면 못 지은 벽을 다시 짓는다) — 못 지은 벽은 첫 시도 까닭 그대로 보인다
+                var built1 = new HashSet<int>(ws1.Built.Select(w => w.No));
+                var restAll = new HashSet<int>(lw.Select(w => w.No));
                 var ws1b = Wl(tris, lines, path0, restAll);
-                foreach (var w in ws1b!.Walls) if (restAll.Contains(w.No)) w.Why = "Civil 거절(" + exG.Message.Replace("Civil이 면을 그대로 안 받았습니다 — ", "") + ")";
-                try { return Try(tris, lines, tnote, ws1b); }
+                for (int i = 0; i < ws1b!.Walls.Count && i < ws1.Walls.Count; i++)
+                    if (built1.Contains(ws1b.Walls[i].No)) ws1b.Walls[i].Why = "Civil 거절(" + exG.Message.Replace("Civil이 면을 그대로 안 받았습니다 — ", "") + ")";
+                    else if (ws1.Walls[i].No == ws1b.Walls[i].No) ws1b.Walls[i] = ws1.Walls[i];
+                try { return Try(tris, lines, tnote, ws1b, path0); }
                 catch (InvalidOperationException exGb) when (Refused(exGb)) { exG = exGb; r.DaylightZ = dl0; r.Daylight = d0; }
             }
             // ★★[JACK 1104] Civil이 선 면을 안 받으면 칸 면 전에 선 따라 TIN(이미 선 따라 TIN이었으면 바로 칸 면) — 단계마다 까닭을 남김
@@ -1279,7 +1316,7 @@ internal sealed class RoadSession
                 if (bt != null && bt.Count > 0)
                 {
                     var ws2 = Wl(bt, lines, "선 따라 TIN", null);
-                    try { return Try(bt, lines, bn + " · (선 면을 Civil이 못 받음)", ws2); }
+                    try { return Try(bt, lines, bn + " · (선 면을 Civil이 못 받음)" + oldTag, ws2, "선 따라 TIN"); }
                     catch (InvalidOperationException exG2) when (Refused(exG2))
                     {
                         r.DaylightZ = dl0; r.Daylight = d0;
@@ -1287,10 +1324,13 @@ internal sealed class RoadSession
                         if (ws2 != null && ws2.Any)
                         {
                             try { DiagLog.Append($"\n[진입도로] {Name} — ⚠선 옹벽 든 선 따라 TIN을 Civil이 못 받음({exG2.Message}) → 벽을 쉬고 다시"); } catch { }
-                            var rest2 = new HashSet<int>(ws2.Built.Select(w => w.No));
+                            var built2 = new HashSet<int>(ws2.Built.Select(w => w.No));   // ★[v115 · R2] 기록된 벽 모두 쉼 · 못 지은 벽은 제 까닭
+                            var rest2 = new HashSet<int>(lw.Select(w => w.No));
                             var ws2b = Wl(bt, lines, "선 따라 TIN", rest2);
-                            foreach (var w in ws2b!.Walls) if (rest2.Contains(w.No)) w.Why = "Civil 거절(" + exG2.Message.Replace("Civil이 면을 그대로 안 받았습니다 — ", "") + ")";
-                            try { return Try(bt, lines, bn + " · (선 면을 Civil이 못 받음)", ws2b); }
+                            for (int i = 0; i < ws2b!.Walls.Count && i < ws2.Walls.Count; i++)
+                                if (built2.Contains(ws2b.Walls[i].No)) ws2b.Walls[i].Why = "Civil 거절(" + exG2.Message.Replace("Civil이 면을 그대로 안 받았습니다 — ", "") + ")";
+                                else if (ws2.Walls[i].No == ws2b.Walls[i].No) ws2b.Walls[i] = ws2.Walls[i];
+                            try { return Try(bt, lines, bn + " · (선 면을 Civil이 못 받음)" + oldTag, ws2b, "선 따라 TIN"); }
                             catch (InvalidOperationException exG3) when (Refused(exG3)) { again = true; r.DaylightZ = dl0; r.Daylight = d0; try { DiagLog.Append($"\n[진입도로] {Name} — ⚠벽 쉰 선 따라 TIN도 Civil이 못 받음({exG3.Message}) → 칸 면으로 다시"); } catch { } }
                         }
                         if (!again) try { DiagLog.Append($"\n[진입도로] {Name} — ⚠선 따라 TIN도 Civil이 못 받음({exG2.Message}) → 칸 면으로 다시"); } catch { }
@@ -1314,7 +1354,10 @@ internal sealed class RoadSession
             // ★[설치 전 검토 M3] 면만 칸 면 — 선은 단면 광선 선 그대로(미리보기 · [옹벽 변환] 찍기 선과 같게)
             r.DaylightZ = dl0; r.Daylight = d0; Walls = null;
             string wn3 = lw.Count > 0 ? $" · ⚠추가한 옹벽 {lw.Count}개 쉼 — 칸 면 위에는 선 옹벽 안 지음(선 면 · 선 따라 TIN을 Civil이 거절)" : "";
-            return CreateSurface(d, r, old, $"⚠{path1}을 Civil이 못 받음 → 칸 면 · " + t2, lines, sw, lineR, wn3);
+            _pendingWallNos = lw.Count == 0 ? null : Array.Empty<int>(); _pendingPath = lw.Count == 0 ? null : "칸 면";   // ★[v115 · R1]
+            string msg3 = CreateSurface(d, r, old, $"⚠{path1}을 Civil이 못 받음 → 칸 면 · " + t2 + oldTag, lines, sw, lineR, wn3);
+            if (keyNW.Length > 0) P0Cache = (keyNW, inp, r, old, lines, "칸 면", dl0c);   // ★[v115 · R7] 받은 뒤 · 보낸 길
+            return msg3;
         }
     }
 
@@ -1350,6 +1393,7 @@ internal sealed class RoadSession
         if (tris.Count == 0) throw new InvalidOperationException("바뀐 자리가 없어 면을 안 만들었습니다");
         string vol = $"토막 {pcs.Count}(빈 구간) · 절토 {rs.Sum(q => q.CutVol):N0} ㎥ · 성토 {rs.Sum(q => q.FillVol):N0} ㎥";
         string tnote = (exact ? "" : "⚠") + string.Join(" / ", notes);
+        string oldTag = tnote.Contains("→ 옛 흘러내림 길") ? " · (→ 옛 흘러내림 길)" : "";   // ★[v115 · 설치 전 검토 R10] 길을 내려도 «옛 길로 지음» ⚠ 남김
         try { return CreateSurface(d, rs[0], tris, tnote, lines, sw) + " · " + vol; }
         catch (InvalidOperationException exG) when (exact && exG.Message.StartsWith("Civil이 면을 그대로 안 받았습니다"))
         {
@@ -1366,14 +1410,14 @@ internal sealed class RoadSession
                 try { DiagLog.Append($"\n[진입도로] {Name} — ⚠선 면을 Civil이 못 받음({exG.Message}) → " + (okAll ? $"선 따라 TIN으로 다시(토막 {pcs.Count})" : $"선 따라 TIN 못 함({string.Join(" / ", bns)}) → 칸 면으로 다시(토막 {pcs.Count})")); } catch { }
                 if (okAll)
                 {
-                    try { return CreateSurface(d, rs[0], bt, "선 따라 TIN — " + string.Join(" / ", bns) + " · (선 면을 Civil이 못 받음)", lines, sw) + " · " + vol; }
+                    try { return CreateSurface(d, rs[0], bt, "선 따라 TIN — " + string.Join(" / ", bns) + " · (선 면을 Civil이 못 받음)" + oldTag, lines, sw) + " · " + vol; }
                     catch (InvalidOperationException exG2) when (exG2.Message.StartsWith("Civil이 면을 그대로 안 받았습니다"))
                     { try { DiagLog.Append($"\n[진입도로] {Name} — ⚠선 따라 TIN도 Civil이 못 받음({exG2.Message}) → 칸 면으로 다시(토막 {pcs.Count})"); } catch { } }
                 }
             }
             var old = new List<WallDaylight.Tri>(); var t2 = new List<string>();
             foreach (var r in rs) { old.AddRange(RoadGrade.SurfaceTris(r, out string n2)); t2.Add(n2); }
-            return CreateSurface(d, rs[0], old, "⚠선 면을 Civil이 못 받음 → 칸 면 · " + string.Join(" / ", t2), lines, sw) + " · " + vol;
+            return CreateSurface(d, rs[0], old, "⚠선 면을 Civil이 못 받음 → 칸 면 · " + string.Join(" / ", t2) + oldTag, lines, sw) + " · " + vol;
         }
     }
 
@@ -1451,6 +1495,7 @@ internal sealed class RoadSession
                 d.SurfaceSig = _pendingSig;
                 d.SurfaceReach = _pendingReach;
                 d.SurfaceSigParts = _pendingParts;
+                d.SurfaceWallNos = _pendingWallNos; d.SurfacePath = _pendingPath;   // ★[v115 · 설치 전 검토 R1] 실제로 지은 벽 · 보낸 길(벽 기록 없는 도로 = null)
                 d.Write(tr, AlignId);
                 tr.Commit();
                 made = ObjectId.Null;
@@ -1651,20 +1696,27 @@ internal sealed class RoadSession
                 var planId = Handle(db, d.PlanProfile);
                 var baseId = FindSurface(db, cdoc, d.BaseSurface);
                 if (planId.IsNull || baseId.IsNull) { notes.Add($"{name} — ⚠계획 종단 · 바탕면을 못 찾아 건너뜀"); continue; }
-                CachedGroundSurface ground; List<Piece> pcs;
+                CachedGroundSurface ground; List<Piece> pcs; List<(double, double)>? limitT;
                 using (var tr = db.TransactionManager.StartTransaction())
                 {
                     ground = new CachedGroundSurface((CivilDb.TinSurface)tr.GetObject(baseId, OpenMode.ForRead));
                     var gB = BranchBase.For(tr, db, aid, d, ground, null, out string gNote);   // ★[계획 5.5] 가지면 바탕면 + 본 도로 면(면을 지은 바탕과 같게 — 지문이 맞음)
                     if (gNote.StartsWith("⚠")) notes.Add($"{name} — {gNote}");
                     pcs = MakePieces(tr, aid, planId, d, gB, RoadRanges.Of(tr, aid, d));   // ★[도로 마무리 ① · 계획 5.8] 도로 구간 · 토막
+                    limitT = ReadLimitOf(tr, db, d.LimitHandle);
                     tr.Commit();
                 }
-                // MakeSurfaceCore와 같은 입력(칸 0.5 · 해상도 · 시작 범위) — 사업 경계(Limit)는 옹벽 제안만 바꿔 뺌
-                foreach (var pc in pcs) { pc.Inp.Cell = SurfCell; pc.Inp.Reach = d.SurfaceReach > 0 ? d.SurfaceReach : 40; }
+                // MakeSurfaceCore와 같은 입력(칸 0.5 · 해상도 · 시작 범위 · ★[v115 · R1] 사업 경계 Limit도 — 면과 같은 입력)
+                foreach (var pc in pcs) { pc.Inp.Cell = SurfCell; pc.Inp.Reach = d.SurfaceReach > 0 ? d.SurfaceReach : 40; pc.Inp.Limit = limitT; }
                 // 지문이 없으면(v111.2.1 전에 만든 면) 그 면과 맞는지 알 길이 없음 — 말없이 틀린 노리선을 그리지 않고 건너뜀
                 if (d.SurfaceSig.Length == 0) { notes.Add($"{name} — ⚠옛 판에서 만든 진입도로 지표면이라 건너뜀(진입도로 창 [업데이트]로 한 번 다시 만든 뒤 [노리선])"); continue; }
-                if (SigOfAll(pcs, baseId) != d.SurfaceSig) { notes.Add($"{name} — ⚠진입도로 지표면이 지금 설계와 달라 건너뜀(진입도로 창 [업데이트] 뒤 [노리선])"); continue; }
+                if (SigOfAll(pcs, baseId) != d.SurfaceSig)
+                {
+                    bool engineOnly = false;   // ★[v115 · 검토 M1] 엔진 판만 다름 — 같은 말로
+                    try { engineOnly = SigOfAll(pcs, baseId, engine: false) == d.SurfaceSig; } catch { }
+                    notes.Add(engineOnly ? $"{name} — ⚠{EngineNote} 뒤 [노리선]" : $"{name} — ⚠진입도로 지표면이 지금 설계와 달라 건너뜀(진입도로 창 [업데이트] 뒤 [노리선])");
+                    continue;
+                }
                 var ticks = new List<(Point3 A, Point3 B)>(); string tickErr = "";
                 foreach (var pc in pcs)
                 {
@@ -1673,13 +1725,24 @@ internal sealed class RoadSession
                     var lines = RoadGrade.ExactLines(pc.Inp, r, out _);
                     var tk = RoadGrade.Ticks(r, lines, GradingSettings.HatchShort, GradingSettings.HatchLong);
                     // ★[v114.3 · JACK 1105 진입도로 옹벽 추가] 선 옹벽이 있으면 면과 같은 길로 다시 얹어(같은 지문 · 같은 입력) 그 자리 빗금을 뺀다
-                    if (pc.Inp.LineWalls.Count > 0 && pcs.Count == 1)
+                    //   ★[v115 · 설치 전 검토 R1] 면에 실제로 지은 벽만 · 실제로 보낸 길로(기록 SurfaceWallNos · SurfacePath) — Civil 거절로 벽을 쉬었거나 길을 내린 면에
+                    //   옛 판은 ExactSurface 길로 모든 벽을 다시 지어 없는 벽 자리 빗금을 뺐다. 기록이 없는 옛 면은 옛 판처럼(⚠)
+                    bool noWalls = d.SurfaceWallNos != null && (d.SurfaceWallNos.Length == 0 || d.SurfacePath == "칸 면");
+                    if (pc.Inp.LineWalls.Count > 0 && pcs.Count == 1 && !noWalls)
                     {
                         try
                         {
                             var p0 = RoadGrade.ExactSurface(pc.Inp, r, out string tn, out var l0);
                             string path = tn.StartsWith("선 따라 TIN") ? "선 따라 TIN" : tn.StartsWith("⚠") ? "칸 면" : "선 면";
-                            var ws = RoadGrade.ApplyWalls(pc.Inp, r, p0, l0, path, pc.Inp.LineWalls, WallBlockers(db));
+                            if (d.SurfacePath == "선 따라 TIN" && path == "선 면")
+                            {
+                                var btT = RoadGrade.BreakTinSurface(pc.Inp, r, out string bnT, l0);
+                                if (btT != null && btT.Count > 0) { p0 = btT; path = "선 따라 TIN"; }
+                                else notes.Add($"{name} — ⚠면을 지은 길(선 따라 TIN)을 다시 못 지음({bnT}) — 선 면 위 벽으로 빗금을 뺌");
+                            }
+                            ISet<int>? restT = d.SurfaceWallNos == null ? null : new HashSet<int>(pc.Inp.LineWalls.Select(w => w.No).Where(no => !d.SurfaceWallNos.Contains(no)));
+                            if (d.SurfaceWallNos == null) notes.Add($"{name} — ⚠옛 면이라 지은 옹벽 기록이 없음 — 모든 추가 옹벽 자리 빗금을 뺌([업데이트]로 한 번 다시 만들면 맞음)");
+                            var ws = RoadGrade.ApplyWalls(pc.Inp, r, p0, l0, path, pc.Inp.LineWalls, WallBlockers(db), restT);
                             if (ws.Any) tk = RoadGrade.CutTicks(tk, ws);
                         }
                         catch (System.Exception exT) { notes.Add($"{name} — ⚠선 옹벽 자리 빗금을 못 뺌({exT.Message})"); }
@@ -1850,9 +1913,12 @@ internal sealed class RoadSession
         return len;
     }
 
-    List<(double, double)>? ReadLimit(Transaction tr)
+    List<(double, double)>? ReadLimit(Transaction tr) => ReadLimitOf(tr, _doc.Database, Design.LimitHandle);
+
+    /// <summary>★[v115 · 설치 전 검토 R1] 사업 경계 폴리선(핸들) — [노리선]이 도면의 다른 도로에도 면과 같은 입력(Limit 포함)을 주려고 정적으로.</summary>
+    internal static List<(double, double)>? ReadLimitOf(Transaction tr, Database db, string handle)
     {
-        var id = Handle(_doc.Database, Design.LimitHandle);
+        var id = Handle(db, handle);
         if (id.IsNull) return null;
         try
         {
