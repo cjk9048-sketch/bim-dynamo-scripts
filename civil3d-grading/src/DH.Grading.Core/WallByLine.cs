@@ -104,6 +104,8 @@ public static class WallByLine
         public double FootMax; public (double X, double Y) FootAt;
         /// <summary>계수 — 발 폭을 1 mm로 올린 점 · 0.1 mm 안이라 L에 합친 점 · 0.1 mm 안 점 쌍(0이어야) · 바늘 세모(0이어야) · 마구리 · 부분 끝 마구리 · 한도에 닿음.</summary>
         public int WMinBumped, MergedPts, PairsUnder01, Needles, EndFaceN, EndCliff, EdgeHit, Corners;
+        /// <summary>★[v114.1 · 검토 M3] 좁힌 마구리(짧은 줄기 · 부분 — 옛 폭 FaceRun/2까지) 수 · 그 가장 가파른 기울기(H / 폭 : 1) · 마구리를 빼고 남은 선 토막이 면 폭보다 짧은 줄기 수.</summary>
+        public int CapNarrow, PieceShort; public double CapSteep;
         /// <summary>★[v114.0 · JACK 1105 소단 높이 관문] 표본 — Kind 0 = 소단(단마다 소단 폭 가운데 ± 0.5 m · 0.5 m 간격 · Z = Z_k) · 1 = F(0.5 m 간격 · Z = G).
         /// 제 바꿀 자리 밖 · 땅이 이기는 자리(절토 꼴 G′ − Z′_k ≤ 1 cm)는 안 넣는다. 합성 뒤 관문(<see cref="BenchGate"/>)도 이것을 쓴다.</summary>
         public List<(double X, double Y, double Z, int Kind)> BenchPts = new();
@@ -532,6 +534,14 @@ public static class WallByLine
             double H = part.H, T = part.T;
             double f = Math.Max(H * Math.Max(0, inp.SlopeW), Math.Max(1e-4, inp.FaceRun));
             R.Face = Math.Max(R.Face, f);
+            // ★[v114.1 · 현장 합성 거절 계측] 이 부분의 마구리 폭 vE ≥ 면 폭(H · SlopeW) — 줄기 갈림 마구리는 이웃 줄기와 한 단(H) 높이가 달라 폭 vE에서 H를 내린다.
+            //   vEps = FaceRun(출하 MinFaceRun 0.005)이면 5 m를 5 mm에 내려 1000 : 1(설계 면 100 : 1의 열 배 — 현장 성토 · 절토 벽 세모 44 · 21개 1005 : 1)이 되고,
+            //   합성이 그 면을 정지면 변으로 가른 두 점(네모 52 µm)을 Civil이 합치며 51.7 mm가 틀어져 거절했다(하네스는 FaceRun 0.05라 못 봤다). 면과 같은 기울기로 —
+            //   부분마다(검토 M1: 절 · 성 H가 다르면 낮은 부분의 f가 작다). SlopeW = 0(곧은 벽)이면 vE = FaceRun 그대로 — 앞면도 FaceRun 폭이라 합성 쌍 위험은 남는다(알려진 한계)
+            double vE = Math.Max(vEps, H * Math.Max(0, inp.SlopeW));
+            R.VEps = Math.Max(R.VEps, vE);
+            // ★ 가름점 C 쪽 부분 끝도 줄기 갈림처럼 마구리 반 폭을 물린다 — 두 부분 끝 띠가 C 법선에서 만나고(z = G) 서로 겹치지 않게(A · B 쪽은 끝 너머 vE 띠 · 부분마다 제 반 폭)
+            bool cA = part.S0 > 1e-9, cB = part.S1 < pl.Len - 1e-9;
             // 기준 = 절토 꼴 P0′ 최소(성토는 P0 최대)
             var pS = smp.Where(q => q.S >= part.S0 - 1e-12 && q.S <= part.S1 + 1e-12).Select(q => (q.S, P: sg * q.P)).ToList();
             pS.Insert(0, (part.S0, sg * P0At(part.S0))); pS.Add((part.S1, sg * P0At(part.S1)));
@@ -576,11 +586,13 @@ public static class WallByLine
                 {
                     Stem? sh = null;
                     // ★ 짧은 줄기(< f) + 길어도 «P0이 높이 경계 1 cm 안에만 있는» 줄기(이웃 높이로 합쳐도 첫 면 ≤ H + 1 cm) — 삼각망 정지면이 Z_k ± 몇 mm로 흔들려 생기는 줄기 갈림을 마구리 하나로
+                    // ★[v114.1 · 검토 M2] 잣대는 마구리 반 폭을 뺀 L 위 토막 — vE = f이면 두 끝 마구리가 줄기를 거의 다 먹어(5.005 cm 줄기 → 50 µm 토막) 다시 Civil이 합칠 쌍이 된다
+                    double Piece(int si) => stems[si].S1 - stems[si].S0 - (si > 0 || cA ? vE / 2 : 0) - (si + 1 < stems.Count || cB ? vE / 2 : 0);
                     for (int si = 0; si < stems.Count; si++)
                     {
                         var st = stems[si];
                         if (stuck.Contains(st)) continue;
-                        bool cand = st.S1 - st.S0 < f
+                        bool cand = Piece(si) < f
                             || (si > 0 && stems[si - 1].J != st.J && Fits(st, stems[si - 1].J))
                             || (si + 1 < stems.Count && stems[si + 1].J != st.J && Fits(st, stems[si + 1].J));
                         if (cand && (sh == null || st.S1 - st.S0 < sh.S1 - sh.S0)) sh = st;
@@ -610,20 +622,42 @@ public static class WallByLine
             var bufCache = new Dictionary<double, Geometry>();
             Geometry BufB(double d) { if (!bufCache.TryGetValue(d, out var g)) bufCache[d] = g = lpG.Buffer(d, rnd).Boundary; return g; }
             int nSt = stems.Count;
-            // ★ 가름점 C 쪽 부분 끝도 줄기 갈림처럼 vEps/2 물린다 — 두 부분 끝 띠가 C 법선에서 만나고(z = G) 서로 겹치지 않게(A · B 쪽은 끝 너머 vEps 띠)
-            bool cA = part.S0 > 1e-9, cB = part.S1 < pl.Len - 1e-9;
-            double shS(int k) => k > 0 || cA ? vEps / 2 : 0;
-            double shE(int k) => k + 1 < nSt || cB ? vEps / 2 : 0;
+            // ★[v114.1 · 검토 M3] 마구리 반 폭은 줄기마다 — 보통 vE/2. 못 합친 짧은 줄기 · 짧은 부분(2~4 cm)은 L 위 토막이 면 폭 f 이상 남게 좁히되 옛 폭(FaceRun/2)까지만 —
+            //   좁힌 마구리는 가파르다(H / 폭 : 1 — 세고 ⚠). 옛 폭에서도 토막이 없으면(1 µm 안) 예전처럼 거절. 옛 판이 짓던 꼴은 모두 짓는다
+            var half = new double[nSt];
+            int capNarrow = 0, pieceShort = 0; double capSteep = 0;
+            for (int k = 0; k < nSt; k++)
+            {
+                int nc = (k > 0 || cA ? 1 : 0) + (k + 1 < nSt || cB ? 1 : 0);
+                double len = stems[k].S1 - stems[k].S0;
+                half[k] = vE / 2;
+                if (nc == 0 || len - nc * half[k] >= f) continue;
+                half[k] = Math.Max(vEps / 2, Math.Min(vE / 2, (len - f) / nc));
+                if (half[k] < vE / 2 - 1e-12) capNarrow++;
+                if (len - nc * half[k] < f - 1e-12) pieceShort++;
+            }
+            double shS(int k) => k > 0 || cA ? half[k] : 0;
+            double shE(int k) => k + 1 < nSt || cB ? half[k] : 0;
+            // 좁힌 마구리의 기울기(줄기 갈림 = 두 반 폭의 합에서 H · C 쪽 끝 = 제 반 폭에서 최대 H로 잰다)
+            for (int k = 0; k < nSt; k++)
+            {
+                if (k + 1 < nSt) capSteep = Math.Max(capSteep, H / Math.Max(1e-9, shE(k) + shS(k + 1)));
+                if (k == 0 && cA) capSteep = Math.Max(capSteep, H / Math.Max(1e-9, 2 * shS(0)));
+                if (k == nSt - 1 && cB) capSteep = Math.Max(capSteep, H / Math.Max(1e-9, 2 * shE(k)));
+            }
+            if (capNarrow > 0) R.Warn.Add(string.Format(Ci, "부분 {0}: 짧은 줄기 · 부분 {1}곳의 마구리를 좁혔다(가장 가파른 마구리 {2:F0} : 1 · 설계 면 {3:F0} : 1 — 합성이 거절할 수 있다)", partNo, capNarrow, capSteep, H / f));
+            if (pieceShort > 0) R.Warn.Add(string.Format(Ci, "부분 {0}: 마구리를 빼고 남은 선 토막이 면 폭({1:F3} m)보다 짧은 줄기 {2}개(0.1 mm 안 점 쌍이 생길 수 있다)", partNo, f, pieceShort));
+            R.CapNarrow += capNarrow; R.CapSteep = Math.Max(R.CapSteep, capNarrow > 0 ? capSteep : 0); R.PieceShort += pieceShort;
             (double A, double B) Shr(int k) => (stems[k].S0 + shS(k), stems[k].S1 - shE(k));
             (double X, double Y) TanAt(double s, bool atStart) => pl.Tan(atStart ? Math.Min(s + 1e-9, pl.Len) : Math.Max(s - 1e-9, 0));
             var (pt0x, pt0y) = TanAt(part.S0, true); var (pt1x, pt1y) = TanAt(part.S1, false);
             var cP0 = pl.At(part.S0); var cP1 = pl.At(part.S1);
-            var ext0 = cA ? cP0 : new Coordinate(cP0.X - pt0x * vEps, cP0.Y - pt0y * vEps);
-            var ext1 = cB ? cP1 : new Coordinate(cP1.X + pt1x * vEps, cP1.Y + pt1y * vEps);
+            var ext0 = cA ? cP0 : new Coordinate(cP0.X - pt0x * vE, cP0.Y - pt0y * vE);
+            var ext1 = cB ? cP1 : new Coordinate(cP1.X + pt1x * vE, cP1.Y + pt1y * vE);
             for (int k = 0; k < nSt; k++)
             {
                 var (a, b) = Shr(k);
-                if (b - a < 1e-6) return No("줄", string.Format(Ci, "부분 {0}의 줄기 {1}이 마구리 폭({2:F3} m)보다 짧습니다 — 선을 조금 옮기세요", partNo, k + 1, vEps), Wd(pl.At(stems[k].S0)));
+                if (b - a < 1e-6) return No("줄", string.Format(Ci, "부분 {0}의 줄기 {1}({2:F4} m)이 옛 마구리 폭({3:F3} m)보다도 짧아 선 토막이 남지 않습니다 — 선을 조금 옮기세요", partNo, k + 1, stems[k].S1 - stems[k].S0, vEps), Wd(pl.At(stems[k].S0)));
             }
             // 줄 조각 끝이 어느 쪽 경계(−1 = a 쪽 · +1 = b 쪽)에서 끝났나 — 끝 선 E를 모을 때 쓴다
             var tags = new Dictionary<List<Coordinate>, (int A, int B)>(ReferenceEqualityComparer.Instance);
@@ -857,7 +891,7 @@ public static class WallByLine
             //   바깥 띠 O(부분 하나 · 가장 먼 끝 줄 + vEps · z = G)가 있으면 그것으로 닫고, 오목한 선이라 그 거리에 칸이 없으면(줄기끼리 밀어냄) 끝 줄에서 닫는다(자리가 거기 닿으면 «도달»)
             List<Point3>? Oline = null;
             {
-                var oP = RowIn(dMax + vEps, part.S0 - (cA ? 0 : vEps), part.S1 + (cB ? 0 : vEps), 0, 0);
+                var oP = RowIn(dMax + vE, part.S0 - (cA ? 0 : vE), part.S1 + (cB ? 0 : vE), 0, 0);
                 if (oP.Count > 0)
                 {
                     var op = oP.OrderByDescending(q => gf.CreateLineString(q.ToArray()).Length).First();
@@ -912,7 +946,7 @@ public static class WallByLine
             try
             {
                 var gl = raw.Where(l => l.Count >= 2).Select(l => (Geometry)gf.CreateLineString(l.Select(q => new Coordinate(q.X - ox, q.Y - oy)).ToArray())).ToArray();
-                var gb = NtsSupport.LargestPolygon(gf.CreateGeometryCollection(gl).Buffer(vEps * 1.5, new BufferParameters { QuadrantSegments = 4 }));
+                var gb = NtsSupport.LargestPolygon(gf.CreateGeometryCollection(gl).Buffer(vE * 1.5, new BufferParameters { QuadrantSegments = 4 }));
                 if (gb != null)
                 {
                     Geometry guard = gf.CreatePolygon((LinearRing)gb.ExteriorRing.Copy());
@@ -994,11 +1028,11 @@ public static class WallByLine
                     for (int t = 1; t <= stems[k].Tiers; t++)
                     {
                         double dF = (t - 1) * (f + T) + f, lev = Lv(stems[k].J + t - 1);
-                        double w0 = dF + vEps, w1 = (t == stems[k].Tiers ? dEnd[k] : dF + T) - vEps;
+                        double w0 = dF + vE, w1 = (t == stems[k].Tiers ? dEnd[k] : dF + T) - vE;
                         if (w1 - w0 < 1e-6) continue;
                         double mid = (w0 + w1) / 2; int nh = (int)Math.Floor((w1 - w0) / 2 / 0.5 + 1e-9);
                         for (int h = -nh; h <= nh; h++)
-                            foreach (var pc in RowIn(mid + h * 0.5, stems[k].S0, stems[k].S1, shS(k) + vEps, shE(k) + vEps))
+                            foreach (var pc in RowIn(mid + h * 0.5, stems[k].S0, stems[k].S1, shS(k) + vE, shE(k) + vE))
                                 for (int i = 0; i + 1 < pc.Count; i++)
                                 {
                                     int nn = Math.Max(1, (int)Math.Ceiling(pc[i].Distance(pc[i + 1]) / 0.5));
@@ -1093,6 +1127,18 @@ public static class WallByLine
                 if (inp.GroundTris != null && inp.GroundTris.Count > 0)
                 {
                     var dn = new List<Point3>();
+                    // ★[v114.1 · 검토 낮음 (b)] 건넘은 이미 있는 모든 고리 점(칸 해시)과 네모 Gap 넘게 떨어질 때만 — 앞 · 뒤 점만 보면 곁 토막의 점과 쌍이 될 수 있다
+                    var cellD = new Dictionary<(long, long), List<Point3>>();
+                    (long, long) CK(Point3 u) => ((long)Math.Floor((u.X - ox) / CivilSafeMesh.Gap), (long)Math.Floor((u.Y - oy) / CivilSafeMesh.Gap));
+                    void PutD(Point3 u) { var k = CK(u); if (!cellD.TryGetValue(k, out var l)) cellD[k] = l = new(); l.Add(u); }
+                    bool FarAll(Point3 u)
+                    {
+                        var (kx, ky) = CK(u);
+                        for (long a = -1; a <= 1; a++) for (long b = -1; b <= 1; b++)
+                                if (cellD.TryGetValue((kx + a, ky + b), out var l) && l.Any(v => Math.Max(Math.Abs(u.X - v.X), Math.Abs(u.Y - v.Y)) < CivilSafeMesh.Gap)) return false;
+                        return true;
+                    }
+                    foreach (var u in clean) PutD(u);
                     for (int i = 0; i < clean.Count; i++)
                     {
                         var p = clean[i]; var q = clean[(i + 1) % clean.Count];
@@ -1100,7 +1146,9 @@ public static class WallByLine
                         bool pL = pl.Near(p.X - ox, p.Y - oy).D < 1e-9, qL = pl.Near(q.X - ox, q.Y - oy).D < 1e-9;
                         if (pL && qL) continue;
                         var pr = ProfileOnTris(p, q, inp.GroundTris, inp.Ground, 1e9);
-                        if (pr != null) for (int k = 1; k + 1 < pr.Count; k++) dn.Add(pr[k]);
+                        // ★[v114.1 · 현장 0.1 mm 안 점 쌍 계측] 고리 꼭짓점이 이미 원지반 변 위(ZonePieces가 변에서 자름 · 1 nm 격자 합침)면 같은 건넘을 0.1~0.5 nm 곁에 또 넣었고
+                        //   (현장 성토 8쌍 · 절토 2쌍), 1 mm로 올린 발 점 71 µm 곁 건넘은 쌍 + 바늘(높이 73 µm)이 됐다 — Civil과 같은 네모 잣대로 앞 · 뒤 점 곁 건넘은 안 넣는다(높이 차 ≤ 0.1 mm × 땅 기울기 꺾임)
+                        if (pr != null) for (int k = 1; k + 1 < pr.Count; k++) if (FarAll(pr[k])) { dn.Add(pr[k]); PutD(pr[k]); }
                     }
                     clean = dn;
                 }
@@ -1233,7 +1281,22 @@ public static class WallByLine
         if (pu is not Polygon puP) { var lp2 = NtsSupport.LargestPolygon(pu); if (lp2 == null || lp2.Area < pu.Area - 1e-4) return No("자리", $"바꿀 자리 ∪ R_out이 한 다각형이 아닙니다({pu.GeometryType})"); puP = lp2; }
         if (puP.NumInteriorRings > 0) R.Warn.Add(string.Format(Ci, "Poly 구멍 {0}개를 메웠다(옛 경계 밖 · 원지반)", puP.NumInteriorRings));
         var pr0 = puP.ExteriorRing.Coordinates;
-        for (int i = 0; i + 1 < pr0.Length; i++) R.Poly.Add(new Point3(pr0[i].X + ox, pr0[i].Y + oy, 0));
+        // ★[v114.1 · 현장 0.1 mm 안 점 쌍 계측] 합치기가 L 위에서 거의 겹친 두 변(자리 고리의 L 토막 · R_out의 L 변)을 서로 끊어 L 위 새 꼭짓점을 지어냈다(현장 절토 38개 ·
+        //   그중 하나가 자리 고리 L 점과 네모 95 µm — Civil이 합칠 쌍). L 위 꼭짓점은 L 꼭짓점 · 자리 고리 점만 남긴다(앞 · 뒤도 L 위면 L 위 곧은 토막 안이라 모양 그대로)
+        {
+            var keepL = new List<Coordinate>(pl.C);
+            foreach (var r in lfW.Concat(lfC)) foreach (var q in r) keepL.Add(new Coordinate(q.X - ox, q.Y - oy));
+            int m = pr0.Length - 1;
+            bool OnL(Coordinate c) => pl.Near(c.X, c.Y).D < 1e-9;
+            static Coordinate Mid(Coordinate u, Coordinate v) => new((u.X + v.X) / 2, (u.Y + v.Y) / 2);
+            for (int i = 0; i < m; i++)
+            {
+                var c = pr0[i]; var pv = pr0[(i - 1 + m) % m]; var nx = pr0[(i + 1) % m];
+                // ★[v114.1 · 검토 낮음 (c)] 앞 · 뒤 변 가운데도 L 위여야(두 변이 L을 따라갈 때만 — 이웃 점만 L 위이고 변이 L을 벗어나는 꼴은 남긴다)
+                if (OnL(c) && OnL(pv) && OnL(nx) && OnL(Mid(pv, c)) && OnL(Mid(c, nx)) && keepL.All(k => Math.Abs(k.X - c.X) > 1e-8 || Math.Abs(k.Y - c.Y) > 1e-8)) continue;
+                R.Poly.Add(new Point3(c.X + ox, c.Y + oy, 0));
+            }
+        }
         for (int i = 0; i < R.Poly.Count; i++)
         {
             var p = R.Poly[i]; var q = R.Poly[(i + 1) % R.Poly.Count];
@@ -1351,10 +1414,11 @@ public static class WallByLine
         R.Ok = true; R.Code = "통과";
         log.Append(string.Format(Ci, "  ③ 바꿀 자리 성토 {0} · 절토 {1} · Poly {2}점 · 선 {3} · 벽 세모 성토 {4} · 절토 {5} · 마구리 {6} · 부분 끝 마구리 {7} · 선 바깥 최대 {8:F3} m @({9:F1},{10:F1})\n",
             lfW.Count, lfC.Count, R.Poly.Count, R.Lines.Count, R.WallTrisF.Count, R.WallTrisC.Count, R.EndFaceN, R.EndCliff, R.FootMax, R.FootAt.X, R.FootAt.Y));
-        log.Append($"  ④ 자가검증 — 발 폭 1 mm로 올림 {R.WMinBumped} · L에 합친 점 {R.MergedPts} · 0.1 mm 안 점 쌍 {R.PairsUnder01}(0이어야) · 바늘 세모 {R.Needles}(0이어야)\n");
+        log.Append($"  ④ 자가검증 — 발 폭 1 mm로 올림 {R.WMinBumped} · L에 합친 점 {R.MergedPts} · 0.1 mm 안 점 쌍 {R.PairsUnder01}(0이어야) · 바늘 세모 {R.Needles}(0이어야)"
+            + $" · 마구리 폭 {R.VEps:0.###} m · 좁힌 마구리 {R.CapNarrow}{(R.CapNarrow > 0 ? $"(가장 가파름 {R.CapSteep:F0} : 1)" : "")} · 면 폭보다 짧은 선 토막 {R.PieceShort}\n");
         if (R.PairsUnder01 > 0) R.Warn.Add($"0.1 mm 안 점 쌍 {R.PairsUnder01}개(Civil이 합친다)");
         if (R.Needles > 0) R.Warn.Add($"바늘 세모 {R.Needles}개(Civil이 뒤집을 수 있다)");
-        if (R.EndCliff > 0) R.Warn.Add($"부분 끝에서 벽이 원지반과 떨어진 채 끝나 마구리(폭 {vEps:0.###} m)로 내렸다 {R.EndCliff}곳");
+        if (R.EndCliff > 0) R.Warn.Add($"부분 끝에서 벽이 원지반과 떨어진 채 끝나 마구리(폭 {R.VEps:0.###} m)로 내렸다 {R.EndCliff}곳");
         R.Log = log.ToString();
         return R;
     }

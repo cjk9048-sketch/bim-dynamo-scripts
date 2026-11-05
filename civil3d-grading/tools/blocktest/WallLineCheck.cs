@@ -57,14 +57,15 @@ static class WallLineCheck
     static readonly List<Point3> L0 = new() { new(46, -20.0 / 3, 0), new(43, -5, 0), new(43, 5, 0), new(46, 20.0 / 3, 0) };
 
     static (BoundaryCut.Result, WallByLine.Built?) Make(IReadOnlyList<Point3> src, double h = 2, double t = 1, Func<double, double, double>? g = null, Func<double, double, double>? p0 = null,
-        double sz = 1, List<Point3>? bd = null, List<Point3>? plan = null, double reach = 10, double dx = 0, double dy = 0, IEnumerable<(string, IReadOnlyList<Point3>)>? bl = null, List<Tri>? p0Tris = null, List<Tri>? gTris = null)
+        double sz = 1, List<Point3>? bd = null, List<Point3>? plan = null, double reach = 10, double dx = 0, double dy = 0, IEnumerable<(string, IReadOnlyList<Point3>)>? bl = null, List<Tri>? p0Tris = null, List<Tri>? gTris = null,
+        double faceRun = 0.05, double slopeW = 0.01, double? hf = null)
     {
         g ??= G; p0 ??= P0;
         var gg = g; var pp = p0;
         var b0 = (bd ?? Bd).Select(q => new Point3(q.X + dx, q.Y + dy, 0)).ToList();
         var pl = (plan ?? Plan()).Select(q => new Point3(q.X + dx, q.Y + dy, sz * q.Z)).ToList();
         var s = src.Select(q => new Point3(q.X + dx, q.Y + dy, 0)).ToList();
-        return WallByLine.Make(s, b0, pl, bl, h, t, h, t, 0.01, 0.05, 1, reach, (x, y) => sz * gg(x - dx, y - dy), (x, y) => sz * pp(x - dx, y - dy), p0Tris, gTris);
+        return WallByLine.Make(s, b0, pl, bl, h, t, hf ?? h, t, slopeW, faceRun, 1, reach, (x, y) => sz * gg(x - dx, y - dy), (x, y) => sz * pp(x - dx, y - dy), p0Tris, gTris);
     }
 
     /// <summary>합성 한 판 — 정지면 · 원지반 격자(1 m) · 벽 삼각형.</summary>
@@ -471,6 +472,121 @@ static class WallLineCheck
                     check("S200 데이라잇 0.5 m 안쪽 선 — 합성 판정 1~2 · 테두리 턱 ≤ 1 mm · 선 바깥 = f·δ/H", r.Zone != null && r.Tier <= 2 && r.EdgeMax <= 1e-3 && Math.Abs(b.FootMax - f * delta / H) < 1e-6,
                         $"판정 {r.Tier} · {r.Fail} · 턱 {r.EdgeMax * 1000:F3}mm · 선 바깥 {b.FootMax * 1000:F3} mm");
                 }
+            }
+        }
+
+        // ★[v114.1 · 현장 합성 거절 계측] 출하 FaceRun(GradingSettings.MinFaceRun 0.005)으로 — 위 판들은 FaceRun 0.05라 마구리 폭 vEps가 늘 면 폭 f(= H · SlopeW)와 같았다.
+        //   현장 꼴: 선 두 끝이 데이라잇(δ = 0) · 끝 가까이 줄기 갈림(δ 0.45 m) — 마구리가 5 mm에 한 단을 내려 1000 : 1(설계 면 100 : 1의 열 배)이 되고
+        //   합성이 그 면에서 Civil이 반드시 합칠 쌍(네모 52 µm)을 만들어 51.7 mm 틀어져 거절했다. 성토 · 거울(절토) · 현장 크기 좌표로 짓기 잰 값
+        Console.WriteLine("\n== S215 출하 FaceRun 0.005 — 끝 가까운 줄기 갈림 마구리 기울기 ≤ 설계 면(1 : SlopeW) · 합성 ==");
+        {
+            Func<double, double, double> g5 = (x, y) => 100;
+            Func<double, double, double> p5 = (x, y) => x <= 40 ? 110 : Math.Max(100, 110 - (x - 40) / 1.5);
+            var bd5 = Rect(-20, -60, 55, 60);
+            var pl5 = Rect(0, -60, 40, 60, (x, y) => 110);
+            const double H = 5, T = 1, sW = 0.01, fr = 0.005;
+            double xl = 55 - 1.5 * 5.45;   // 선 가운데 δ 5.45 m → 기준 105.45 · Z_1 100.45 → 줄기 갈림 δ 0.45 m(두 다리에 하나씩 · 끝에서 0.7 m)
+            var l = new List<Point3> { new(55, -8, 0), new(xl, -5, 0), new(xl, 5, 0), new(55, 8, 0) };
+            static double MaxSlope(IEnumerable<Tri> ts, out int n, double lim)
+            {
+                double mx = 0; n = 0;
+                foreach (var t in ts)
+                {
+                    double ux = t.B.X - t.A.X, uy = t.B.Y - t.A.Y, uz = t.B.Z - t.A.Z, vx = t.C.X - t.A.X, vy = t.C.Y - t.A.Y, vz = t.C.Z - t.A.Z;
+                    double nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+                    if (Math.Abs(nz) < 1e-18) continue;
+                    double s = Math.Sqrt(nx * nx + ny * ny) / Math.Abs(nz);
+                    if (s > lim) n++;
+                    mx = Math.Max(mx, s);
+                }
+                return mx;
+            }
+            // 넷째 판 — 현장 크기 좌표 + 비뚠 원지반 삼각망(간격 0.7071 m · 0.123 m 밀림): 변이 1 nm 격자에 안 맞아 고리 점이 변에서 0.1~0.5 nm 벗어나고(옛 판 0.1 mm 쌍 2),
+            //   지역 좌표 왕복 반올림으로 L 위 변들이 거의 겹쳐 합치기가 L 위 꼭짓점을 지어냈다(옛 판 51개)
+            foreach (var (nm, sz, dx, dy, gh, go) in new[] { ("성토", 1.0, 0.0, 0.0, 1.0, 0.0), ("거울(절토)", -1.0, 0.0, 0.0, 1.0, 0.0), ("성토 · 현장 크기 좌표", 1.0, 200000.0, 550000.0, 1.0, 0.0),
+                                                              ("성토 · 현장 크기 좌표 · 비뚠 원지반 삼각망", 1.0, 200000.0, 550000.0, 0.7071, 0.123) })
+            {
+                // 출하 길처럼 정지면 · 원지반 삼각형도 넘긴다(Civil은 늘 넘긴다 — 없으면 F 점을 원지반 변 건넘까지 잇는 단계를 건너뛴다)
+                List<Tri> Tr(Func<double, double, double> f, double h = 1, double o = 0) => Grid(20 + o, -40 + o, 70, 40, h, (x, y) => sz * f(x, y)).Select(t => new Tri(new(t.A.X + dx, t.A.Y + dy, t.A.Z), new(t.B.X + dx, t.B.Y + dy, t.B.Z), new(t.C.X + dx, t.C.Y + dy, t.C.Z))).ToList();
+                var (cut, b) = Make(l, h: H, t: T, g: g5, p0: p5, sz: sz, bd: bd5, plan: pl5, reach: 20, dx: dx, dy: dy, faceRun: fr, p0Tris: Tr(p5), gTris: Tr(g5, gh, go));
+                if (b == null || !b.Ok) { check($"S215 {nm} 짓기", false, b?.Why ?? cut.Why); continue; }
+                int nS = b.Points.Count(p => p.Kind == 1);
+                // 앞면(법선 쪽 1 : SlopeW)과 마구리(선 쪽 1 : SlopeW)가 만나는 모서리 세모는 두 기울기를 함께 품어 √2 : SlopeW — 그것이 설계 면끼리의 바닥
+                double lim = Math.Sqrt(2) / sW * 1.01;
+                double mx = MaxSlope(b.WallTrisF.Concat(b.WallTrisC), out int nSteep, lim);
+                MaxSlope(b.WallTrisF.Concat(b.WallTrisC), out int nOver1, 1 / sW * 1.01);
+                check($"S215 {nm} ① 줄기 갈림 2(끝 가까이) · 마구리 폭 vEps ≥ H · SlopeW = {H * sW:F3} m",
+                    nS == 2 && b.EndFaceN == 2 && b.VEps >= H * sW - 1e-12, $"S {nS} · 마구리 {b.EndFaceN} · vEps {b.VEps:F4} m");
+                check($"S215 {nm} ② 벽 세모 기울기 ≤ √2 : SlopeW = {Math.Sqrt(2) / sW:F0} : 1(+1 % · 앞면 · 마구리 모서리) — 마구리도 면과 같은 기울기",
+                    nSteep == 0 && mx > 0, $"가장 가파름 {mx:F0} : 1 · {lim:F0} : 1 넘음 {nSteep}개 · {1 / sW:F0} : 1 넘음 {nOver1}개 · 세모 {b.WallTrisF.Count + b.WallTrisC.Count}");
+                // 바늘은 재기만 — 좁은 띠(마지막 부분 면 f·δ/H = 4.5 mm · 첫 면 f) 양쪽 선의 점이 성글어 생기는 부채꼴(두 선이 곧고 높이가 고르면 뒤집혀도 높이 그대로) · 이 판 밖의 일
+                // Poly의 L 위 꼭짓점 ⊂ L 꼭짓점 ∪ 바꿀 자리 고리 점(합치기가 지어낸 L 위 점 0)
+                var keepL = cut.Line.Concat(b.ZoneF.SelectMany(z => z)).Concat(b.ZoneC.SelectMany(z => z)).ToList();
+                int invented = b.Poly.Count(q => Near(cut.Line, q.X, q.Y).D < 1e-9 && keepL.All(k => Math.Abs(k.X - q.X) > 1e-8 || Math.Abs(k.Y - q.Y) > 1e-8));
+                check($"S215 {nm} ③ 자가검증 — 0.1 mm 안 점 쌍 0(Civil이 합칠 쌍 없음) · Poly L 위 지어낸 꼭짓점 0", b.PairsUnder01 == 0 && invented == 0,
+                    $"쌍 {b.PairsUnder01} · 지어낸 L 점 {invented}/{b.Poly.Count} · 바늘 {b.Needles}(재기만) · 발 폭 올림 {b.WMinBumped}");
+                if (dx != 0) continue;
+                var (r, all, _) = Comp(b, g5, p5, sz);
+                GateCheck($"S215 {nm}", b, g5, p5, sz, r, all, check);
+                check($"S215 {nm} ④ 합성 판정 1~2 · 높이 오차 합 ≤ 1 cm · 테두리 턱 ≤ 1 mm", r.Zone != null && r.Tier <= 2 && r.HeightBudget <= 1e-2 && r.EdgeMax <= 1e-3,
+                    $"판정 {r.Tier} · {r.Fail} · 오차 합 {r.HeightBudget * 1000:F3} mm · 턱 {r.EdgeMax * 1000:F3} mm");
+            }
+
+            // ★[v114.1 · 설치 전 검토] 판 넓히기 — H 8 · SlopeW 0.02 · SlopeW 0(곧은 벽) · 절 H 5 / 성 H 2 섞인 선 · 못 합친 짧은 끝 줄기(2 cm)
+            List<Tri> Tr0(Func<double, double, double> f, double sz) => Grid(20, -40, 70, 40, 1, (x, y) => sz * f(x, y));
+            List<Point3> LineAt(double dMid) { double x = 55 - 1.5 * dMid; return new() { new(55, -8, 0), new(x, -5, 0), new(x, 5, 0), new(55, 8, 0) }; }
+            foreach (var (nm, hh, sw, dMid) in new[] { ("H 8", 8.0, 0.01, 8.45), ("SlopeW 0.02", 5.0, 0.02, 5.45), ("SlopeW 0(곧은 벽)", 5.0, 0.0, 5.45) })
+            {
+                var (cut, b) = Make(LineAt(dMid), h: hh, t: T, g: g5, p0: p5, bd: bd5, plan: pl5, reach: 20, faceRun: fr, slopeW: sw, p0Tris: Tr0(p5, 1), gTris: Tr0(g5, 1));
+                if (b == null || !b.Ok) { check($"S215 {nm} 짓기", false, b?.Why ?? cut.Why); continue; }
+                double fW = Math.Max(hh * sw, fr), vWant = Math.Max(Math.Max(1e-3, fr), hh * sw);
+                double mx = MaxSlope(b.WallTrisF.Concat(b.WallTrisC), out int nSteep, Math.Sqrt(2) * hh / fW * 1.01);
+                var (r, all, _) = Comp(b, g5, p5, 1);
+                if (sw > 0)
+                {
+                    check($"S215 {nm} ① 마구리 폭 = max(FaceRun, H · SlopeW) = {vWant:F3} m · 줄기 갈림 2 · 좁힌 마구리 0", Math.Abs(b.VEps - vWant) < 1e-12 && b.Points.Count(p => p.Kind == 1) == 2 && b.CapNarrow == 0,
+                        $"vEps {b.VEps:F4} · S {b.Points.Count(p => p.Kind == 1)} · 좁힘 {b.CapNarrow}");
+                    check($"S215 {nm} ② 벽 세모 기울기 ≤ √2 · H / f = {Math.Sqrt(2) * hh / fW:F0} : 1 · 0.1 mm 쌍 0", nSteep == 0 && b.PairsUnder01 == 0, $"가장 가파름 {mx:F0} : 1 · 넘음 {nSteep} · 쌍 {b.PairsUnder01}");
+                    GateCheck($"S215 {nm}", b, g5, p5, 1, r, all, check);
+                    check($"S215 {nm} ③ 합성 판정 1~2 · 높이 오차 합 ≤ 1 cm", r.Zone != null && r.Tier <= 2 && r.HeightBudget <= 1e-2, $"판정 {r.Tier} · {r.Fail} · 오차 합 {r.HeightBudget * 1000:F3} mm");
+                }
+                else
+                {
+                    // 알려진 한계 — SlopeW 0이면 설계가 곧은 벽이라 앞면도 마구리도 FaceRun(5 mm) 폭: 5 m / 5 mm = 1000 : 1. 짓기는 되고, 합성이 그 면에서 Civil이 합칠 쌍을 만나면 거절할 수 있다(잰 값만 적는다)
+                    check($"S215 {nm} ① (알려진 한계) 짓기 됨 · 마구리 폭 = FaceRun {fr:F3} m — 앞면과 같은 1000 : 1",
+                        Math.Abs(b.VEps - Math.Max(1e-3, fr)) < 1e-12 && b.CapNarrow == 0,
+                        $"vEps {b.VEps:F4} · 가장 가파름 {mx:F0} : 1 · 합성 판정 {r.Tier} · 오차 합 {r.HeightBudget * 1000:F3} mm {r.Fail}");
+                }
+            }
+            // 섞인 선 — 절토 H 5 · 성토 H 2(부분마다 마구리 폭: 절 0.05 · 성 0.02 — 검토 M1)
+            {
+                Func<double, double, double> gm = (x, y) => 100 + 0.25 * (x - 30);
+                Func<double, double, double> pm = (x, y) => gm(x, y) + Math.Max(0, Math.Min(46 - x, 6)) / 6 * 3 * y;
+                var (cut, b) = Make(L0, h: 5, t: 1, hf: 2, g: gm, p0: pm, reach: 30, faceRun: fr, p0Tris: Grid(20, -40, 70, 40, 1, pm), gTris: Grid(20, -40, 70, 40, 1, gm));
+                if (b == null || !b.Ok) check("S215 섞인 선(절 H 5 · 성 H 2) 짓기", false, b?.Why ?? cut.Why);
+                else
+                {
+                    var pc = b.Parts.FirstOrDefault(p => p.Up); var pf = b.Parts.FirstOrDefault(p => !p.Up);
+                    double sC = MaxSlope(b.WallTrisC, out int nC, Math.Sqrt(2) / 0.01 * 1.01), sF = MaxSlope(b.WallTrisF, out int nF, Math.Sqrt(2) / 0.01 * 1.01);
+                    check("S215 섞인 선(절 H 5 · 성 H 2) ① 두 부분 · 벽 세모 기울기 ≤ √2 : SlopeW(부분마다) · 0.1 mm 쌍 0",
+                        pc != null && pf != null && nC == 0 && nF == 0 && b.PairsUnder01 == 0,
+                        $"절토 {sC:F0} : 1(넘음 {nC}) · 성토 {sF:F0} : 1(넘음 {nF}) · 쌍 {b.PairsUnder01} · vEps(최대) {b.VEps:F3} · 좁힘 {b.CapNarrow} · {string.Join(" · ", b.Warn)}");
+                    var (r, all, _) = Comp(b, gm, pm, 1);
+                    GateCheck("S215 섞인 선(절 H 5 · 성 H 2)", b, gm, pm, 1, r, all, check);
+                    check("S215 섞인 선(절 H 5 · 성 H 2) ② 합성 판정 1~2 · 높이 오차 합 ≤ 1 cm", r.Zone != null && r.Tier <= 2 && r.HeightBudget <= 1e-2, $"판정 {r.Tier} · {r.Fail} · 오차 합 {r.HeightBudget * 1000:F3} mm");
+                }
+            }
+            // 못 합친 짧은 끝 줄기(2 cm · 검토 M3) — 선 끝 δ = 0 곁 줄기 갈림 δ = ε(끝 줄기 길이 2 cm). 첫 면이 거꾸로라 이웃에 못 합친다(옛 판: ⚠ 짓기).
+            //   마구리 반 폭 vE/2 = 25 mm면 토막이 안 남아 거절됐다 → 그 줄기만 옛 폭(FaceRun/2)까지 좁혀 짓고 세고 ⚠(가파른 마구리 · 짧은 토막)
+            {
+                double eps = 0.0125;
+                for (int it = 0; it < 20; it++) { double xm = 55 - 1.5 * (5 + eps), lg = Math.Sqrt((55 - xm) * (55 - xm) + 9); eps = 0.02 * 5 / (lg - 0.02); }
+                var (cut, b) = Make(LineAt(5 + eps), h: 5, t: T, g: g5, p0: p5, bd: bd5, plan: pl5, reach: 20, faceRun: fr, p0Tris: Tr0(p5, 1), gTris: Tr0(g5, 1));
+                var stE = b?.Parts.FirstOrDefault()?.Stems;
+                double lenE = stE == null || stE.Count == 0 ? 0 : Math.Min(stE[0].S1 - stE[0].S0, stE[^1].S1 - stE[^1].S0);
+                check("S215 짧은 끝 줄기 2 cm — 거절하지 않고 지음 · 좁힌 마구리 > 0 · ⚠ 까닭(가파른 마구리 · 짧은 토막)",
+                    b != null && b.Ok && b.CapNarrow > 0 && b.CapSteep > 100 && b.Warn.Any(w => w.Contains("마구리를 좁혔다")) && Math.Abs(lenE - 0.02) < 2e-3,
+                    b == null ? cut.Why : $"{b.Code} {b.Why} · 끝 줄기 {lenE * 100:F2} cm · 좁힘 {b.CapNarrow} · {b.CapSteep:F0} : 1 · 짧은 토막 {b.PieceShort} · {string.Join(" · ", b.Warn)}");
             }
         }
 
