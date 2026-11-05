@@ -87,6 +87,15 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "bend")
     return fails == 0 ? 0 : 1;
 }
 
+// ★[v114.3 · JACK 1105 진입도로 옹벽 추가] BLOCKTEST_ONLY=rwall — 진입도로 선 옹벽(S203~S207 · S214 W · S218 RL)만(개발 중 부분 시험)
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "rwall")
+{
+    RoadWallCheck.RunBound(Check);
+    RoadWallCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
 // ★[v114.3] BLOCKTEST_ONLY=wedge — S217 RW만(개발 중 부분 시험)
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "wedge")
 {
@@ -318,6 +327,7 @@ ProfileFlipCheck.Run(Check);    // ★[v113.1] S210 PF · S211 PS — 종단 방
 RoadBendCheck.Run(Check);       // ★[v113.1 · JACK 1104] S212 BD — 급한 굽은 안쪽 진입도로 면(선 면 검사 통과 · 곡선 중심 낭떠러지 · 섬 · Civil 바늘 접기)
 RoadEnvelopeCheck.Run(Check);   // ★[v113.3] S214 EV — 진입도로 점 평가기 연속(주름 원천 감싸기 · 매끈한 측점 · 마구리 모서리 · 반평면 · 같은 다리 섞음)
 RoadWedgeCheck.Run(Check);      // ★[v114.3 · JACK 1105 오목부] S217 RW — 급한 굽은 안쪽 쐐기(흘러내림 자르지 않기 · 주름 끝 너머 빈 사면 · B1 평가기 하나)
+RoadWallCheck.Run(Check);       // ★[v114.3 · JACK 1105 진입도로 옹벽 추가] S218 RL — 진입도로 선 옹벽(굽은 S자 · 안쪽 · 바깥 · 절토 · 섞임 · 데이라잇 곁 · 넓은 소단 · 벽 둘 · 옛 길 · 호 · 맞은편 다리 · 막음 · 쉼 · 스위치)
 
 const double W = 0.46, H = 0.2, STEP = 5.0, HW = W / 2;
 const double D = 0.5, FS = D / 2; // 깊이·전면 돌출(벽 중심=링, JACK 0720 Z-파이팅 해소): 절토 +FS(안쪽), 성토 −FS

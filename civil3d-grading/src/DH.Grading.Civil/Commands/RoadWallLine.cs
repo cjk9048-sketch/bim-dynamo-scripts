@@ -1,55 +1,31 @@
 using System.Collections.Generic;
 using System.Linq;
 using Autodesk.AutoCAD.ApplicationServices;
-using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using DH.Grading.Core;
-using NetTopologySuite.Geometries;
 
 namespace DH.Grading.Civil.Commands;
 
-/// <summary>★★★[v113.0 · JACK 1104 «옹벽 폴리선 — 경계 2점 자르기 + 안쪽 다단» · 계획 5-4] 진입도로 [옹벽 변환] 폴리선(L) 길.
-/// <para>부지와 같은 그리기 도우미(<see cref="WallLineDraw"/>) → 도로 지표면 바깥 고리(선 면 세모 발자국)와 정확히 두 점 판정(<see cref="BoundaryCut"/> · 바닥 = 도로 띠) →
-/// 단높이 · 소단(Enter = 그쪽 사면 값) — 값마다 시험 계산(<see cref="RoadGrade.Input.WithBounds"/>)으로 단 수 · 쉬는 까닭을 보여 준다 →
-/// <see cref="RoadDesign.BoundWalls"/>에 경계 두 교점 사이 폴리선(세계 XY)을 적고 저장 · 다시 계산(부르는 쪽이 도로 면 · 종단 · 횡단까지 다시).</para>
-/// <para>화면 없는 탐침: <see cref="Make"/>(그린 점 · H · T — 질문 없음).</para></summary>
+/// <summary>★★★[v114.3 · JACK 1105 진입도로 옹벽 추가 · 계획 `2026-11-05_진입도로_옹벽추가_보완.md` 2판 4절] 진입도로 [옹벽 추가](DHROADWALLADD) — 부지와 같은 새 개념.
+/// <para>그리기(<see cref="WallLineDraw"/>) → 판정(지금 경계 = 벽 없는 면 P0에 앞 선 옹벽을 얹은 면의 바깥 고리 · 바닥 = 도로 띠) → 시험 짓기(<see cref="RoadGrade.ApplyWalls"/> — 앞 기록 + 이 선) 미리보기
+/// (바꿀 자리 · 줄 옅게 · F 빨강 · C · S 점 · «선 바깥 최대») → 제원 〈단높이 = 도로 사면 · 절토 T / 성토 T〉 [절토(C)/성토(F)/다시그리기(S)] (Enter = 적용 · H는 묻지 않음 · T는 Enter = 그쪽 소단 폭) →
+/// 판 2 기록(Sig) → SaveDesign → Recompute → 도로 면 · 종단 · 횡단 다시(부르는 쪽).</para>
+/// <para>화면 없는 탐침: <see cref="Make"/>(그린 점 · T — 질문 없음 · 키트 HLRW).</para></summary>
 internal static class RoadWallLine
 {
     const string Tag = "진입도로 옹벽 추가";
 
-    /// <summary>도로 지표면 바깥 고리 · 도로 띠(가장자리 표본 고리) · 막을 다각형(부지 계획선). 빈 구간(토막 둘 이상)은 이번 판에 막는다.</summary>
-    internal static (List<Point3>? Bd, List<Point3>? Band, List<(string Name, IReadOnlyList<Point3> Ring)> Bl, string Why) OutlineOf(Database db, RoadSession s)
+    /// <summary>시험 짓기 — 지금 기록(앞 선 옹벽) + 이 선(번호 <paramref name="no"/>) · 그 선 상태 · 앞 벽을 얹은 «지금 경계»(그리기 판정용).</summary>
+    internal sealed class Trial
+    {
+        public RoadGrade.WallState? St; public RoadGrade.WallSurface? Ws;
+        public List<Point3>? Bd, Band; public List<(string Name, IReadOnlyList<Point3> Ring)> Bl = new();
+        public string Why = "";
+    }
+
+    static List<(string Name, IReadOnlyList<Point3> Ring)> SiteBlockers(Autodesk.AutoCAD.DatabaseServices.Database db)
     {
         var bl = new List<(string, IReadOnlyList<Point3>)>();
-        if (s.Last == null || s.Last.Error.Length > 0) return (null, null, bl, "계산된 도로가 없습니다");
-        if (s.Pieces.Count != 1 || s.Pieces[0].Inp == null) return (null, null, bl, s.Pieces.Count > 1 ? "빈 구간이 있는 도로(토막 둘 이상)는 이번 판에 폴리선 옹벽을 못 합니다" : "도로 입력을 못 찾았습니다");
-        var inp = s.Pieces[0].Inp; var r = s.Last;
-        var gf = NtsSupport.Factory();
-        Polygon? fpP = null;
-        try
-        {
-            var tris = RoadGrade.ExactSurface(inp, r, out _, out _);
-            fpP = NtsSupport.LargestPolygon(RoadFootprint.FromTris(tris) ?? gf.CreatePolygon());
-        }
-        catch { fpP = null; }
-        if (fpP == null || fpP.IsEmpty)
-        {
-            // 선 면을 못 지으면 칸 경계(바뀐 자리 1 · 2 · 3 · 4)로
-            var ol = RoadGrade.Outline(r, k => k is 1 or 2 or 3 or 4).Where(l => l.Count >= 4).OrderByDescending(l => System.Math.Abs(NetTopologySuite.Algorithm.Area.OfRingSigned(l.Select(q => new Coordinate(q.X, q.Y)).ToArray()))).FirstOrDefault();
-            if (ol != null) fpP = NtsSupport.ToCleanPolygon(ol.Select(q => new Point3(q.X, q.Y, 0)).ToList(), gf);
-        }
-        if (fpP == null || fpP.IsEmpty) return (null, null, bl, "도로 지표면 바깥 고리를 못 만들었습니다");
-        List<Point3> R(LineString l) => l.Coordinates.Take(l.NumPoints - 1).Select(c => new Point3(c.X, c.Y, 0)).ToList();
-        var bd = R(fpP.ExteriorRing);
-        for (int i = 0; i < fpP.NumInteriorRings; i++) bl.Add(($"도로 지표면 안 구멍 {i + 1}", R(fpP.GetInteriorRingN(i))));
-        // 도로 띠 — 왼쪽 가장자리 표본 → 오른쪽(거꾸로)
-        var band = r.EdgeL.Select(q => new Point3(q.X, q.Y, 0)).Concat(Enumerable.Reverse(r.EdgeR).Select(q => new Point3(q.X, q.Y, 0))).ToList();
-        var bandP = NtsSupport.ToCleanPolygon(band, gf);
-        if (bandP == null || bandP.IsEmpty) return (null, null, bl, "도로 띠를 다각형으로 못 만들었습니다");
-        // ★[v113.0 · 화면 없는 시험 1104] 띠 = 가장자리 표본 띠 ∩ 지표면 바깥 고리 — 표본 띠가 도로 양 끝에서 삼각형 면보다 튀어나와(JACK 1104 도면 0.12㎡ · 세 조각 · 폭 ≤ 0.28 m)
-        //   판정 ⑥(바닥이 폴리선 한쪽에 통째로 드나)이 어느 폴리선이든 «부지 가름»으로 거절했다. 바닥은 자를 경계 안의 것만 본다.
-        bandP = NtsSupport.LargestPolygon(bandP.Intersection(gf.CreatePolygon(fpP.Shell)));
-        if (bandP == null || bandP.IsEmpty) return (null, null, bl, "도로 띠가 도로 지표면 바깥 고리 밖에 있습니다");
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
@@ -58,46 +34,72 @@ internal static class RoadWallLine
             tr.Commit();
         }
         catch { }
-        return (bd, R(bandP.ExteriorRing), bl, "");
+        return bl;
     }
 
-    /// <summary>시험 계산 — 지금 입력 + 이 폴리선 옹벽(번호 <paramref name="no"/>) · 그 옹벽 상태(엔진).</summary>
-    internal static RoadGrade.BoundState Trial(RoadSession s, IReadOnlyList<Point3> line, int no, double h, double t)
+    /// <summary>지금 경계 — 벽 없는 P0 + 앞 기록 선 옹벽(이 번호는 뺌)을 얹은 면의 바깥 고리 · 도로 띠 · 막을 다각형(부지 계획선 · 앞 벽 바꿀 자리 · 도로 면 안 구멍).</summary>
+    internal static Trial OutlineOf(Document doc, RoadSession s, int exceptNo = 0)
     {
-        var inp = s.Pieces[0].Inp;
-        var bw = new RoadGrade.BoundWall(no, line.Select(q => q.X).ToArray(), line.Select(q => q.Y).ToArray(), h, t);
-        var r = RoadGrade.Run(inp.WithBounds(inp.BoundWalls.Where(b => b.No != no).Append(bw)));
-        if (r.Error.Length > 0) return new RoadGrade.BoundState { No = no, Why = "시험 계산 실패 — " + r.Error };
-        return r.Bounds.LastOrDefault(b => b.No == no) ?? new RoadGrade.BoundState { No = no, Why = "시험 계산에 안 들어감" };
+        var t = new Trial();
+        if (GradingSettings.WallLineOff || WallByLine.Off || RoadGrade.WallOff) { t.Why = "⚠선 옹벽(v114)이 꺼져 있습니다(정지옵션 WallLineOff)"; return t; }
+        var (inp, r, p0, lines, path, why) = s.P0Now();
+        if (inp == null || r == null || p0 == null || lines == null) { t.Why = why; return t; }
+        if (path == "칸 면") { t.Why = "칸 면 위에는 선 옹벽을 안 짓습니다(이 도로는 선 면 · 선 따라 TIN을 못 지음)"; return t; }
+        t.Bl = SiteBlockers(doc.Database);
+        var prev = inp.LineWalls.Where(w => w.No != exceptNo).ToList();
+        var cur = p0;
+        if (prev.Count > 0)
+        {
+            var ws0 = RoadGrade.ApplyWalls(inp, r, p0, lines, path, prev, t.Bl);
+            cur = ws0.Tris;
+            foreach (var w in ws0.Built) foreach (var z in w.Built!.ZoneF.Concat(w.Built.ZoneC)) t.Bl.Add(($"앞 선 옹벽 {w.No}의 바꿀 자리", z));
+        }
+        var (bd, band, holes, why2) = RoadGrade.OutlineOf(r, cur);
+        if (bd == null || band == null) { t.Why = why2; return t; }
+        t.Bd = bd; t.Band = band; t.Bl.AddRange(holes);
+        return t;
+    }
+
+    /// <summary>시험 짓기 — 앞 기록 + 이 선(<paramref name="src"/> · 소단 폭) → 이 선 상태(짓지 못하면 까닭).</summary>
+    internal static Trial Try(Document doc, RoadSession s, IReadOnlyList<Point3> src, int no, double tc, double tf, double reach)
+    {
+        var t = new Trial();
+        var (inp, r, p0, lines, path, why) = s.P0Now();
+        if (inp == null || r == null || p0 == null || lines == null) { t.Why = why; return t; }
+        var all = inp.LineWalls.Where(w => w.No != no).Append(new RoadGrade.LineWall(no, src.Select(q => q.X).ToArray(), src.Select(q => q.Y).ToArray(), tc, tf, reach)).ToList();
+        t.Ws = RoadGrade.ApplyWalls(inp, r, p0, lines, path, all, SiteBlockers(doc.Database));
+        t.St = t.Ws.Walls.LastOrDefault(w => w.No == no);
+        if (t.St == null) t.Why = "시험 짓기에 안 들어감"; else if (!t.St.Ok) t.Why = t.St.Why;
+        return t;
     }
 
     static int NextNo(RoadDesign d) => (d.BoundWalls == null || d.BoundWalls.Count == 0 ? 0 : d.BoundWalls.Max(b => b.No)) + 1;
 
-    /// <summary>★[v113.0 · 화면 없는 탐침 · 대화 끝] 그린 점 · H · T → 판정 · 시험 계산 → 기록 · 저장 · 다시 계산(질문 없음). 번호(0 = 못 함 · 아무것도 안 바꿈) · 글.
-    /// <paramref name="redraw"/>면 끝에 도로 면 · 종단 · 횡단까지 다시(<see cref="RoadCommand.RedrawStale"/> — 명령 [옹벽 변환]은 제 끝에서 한다).</summary>
-    internal static (int No, string Note) Make(Document doc, IReadOnlyList<Point3> src, double h, double t, string srcHandle = "", bool redraw = true)
+    /// <summary>★[v114.3 · 화면 없는 탐침 · 대화 끝] 그린 점 · 소단 폭 → 시험 짓기 → 판 2 기록 · 저장 · 다시 계산(질문 없음). 번호(0 = 못 함 · 아무것도 안 바꿈) · 글.
+    /// <paramref name="redraw"/>면 끝에 도로 면 · 종단 · 횡단까지 다시(<see cref="RoadCommand.RedrawStale"/> — 명령은 제 끝에서 한다).</summary>
+    internal static (int No, string Note) Make(Document doc, IReadOnlyList<Point3> src, double tc, double tf, string srcHandle = "", bool redraw = true, double reach = 40)
     {
         var s = RoadSession.Of(doc);
         if (s == null) return (0, "열린 진입도로가 없습니다(진입도로 창)");
         s.RecomputeIfDirty();
-        var (bd, band, bl, why) = OutlineOf(doc.Database, s);
-        if (bd == null || band == null) return Stop(doc, why);
-        var cut = BoundaryCut.Classify(src, bd, band, bl);
-        if (!cut.Ok) return Stop(doc, $"{BoundaryCut.CodeName(cut.Code)} — {cut.Why}");
         var d = s.Fresh();
         int no = NextNo(d);
-        var st = Trial(s, cut.Line, no, h, t);
-        if (!st.Ok) return Stop(doc, st.Why);
-        d.BoundWalls ??= new List<RoadDesign.BoundWallRec>();
-        d.BoundWalls.Add(new RoadDesign.BoundWallRec
+        var t = Try(doc, s, src, no, tc, tf, reach);
+        if (t.St == null || !t.St.Ok) return Stop(doc, t.Why.Length > 0 ? t.Why : "못 지음");
+        var st = t.St;
+        var rec = new RoadDesign.BoundWallRec
         {
-            No = no, X = cut.Line.Select(q => q.X).ToArray(), Y = cut.Line.Select(q => q.Y).ToArray(),
-            SrcX = src.Select(q => q.X).ToArray(), SrcY = src.Select(q => q.Y).ToArray(), H = h, T = t, SrcHandle = srcHandle ?? "",
-        });
+            No = no, X = st.Cut!.Line.Select(q => q.X).ToArray(), Y = st.Cut.Line.Select(q => q.Y).ToArray(),
+            SrcX = src.Select(q => q.X).ToArray(), SrcY = src.Select(q => q.Y).ToArray(), Side = st.Side, Tc = tc, Tf = tf, Reach = reach, SrcHandle = srcHandle ?? "",
+        };
+        rec.Sig = rec.SigNow();
+        d.BoundWalls ??= new List<RoadDesign.BoundWallRec>();
+        d.BoundWalls.Add(rec);
         s.SaveDesign(); s.Recompute();
-        string note = $"폴리선 옹벽 {no} — {(st.Side < 0 ? "좌" : "우")} · {(st.Up ? "절토" : "성토")} {st.Tiers}단 · 측점 {st.S0 + s.S0:F1} ~ {st.S1 + s.S0:F1} m · 바닥 {st.FloorMin:F2}~{st.FloorMax:F2} m · 단높이 {h:0.##} · 소단 {t:0.##} m"
-                    + $" · 교차각 {cut.AngleA:F0}°/{cut.AngleB:F0}°" + (cut.Warn.Count > 0 ? " · ⚠" + string.Join(" · ⚠", cut.Warn) : "");
-        try { DiagLog.Append($"\n■ {Tag} {System.DateTime.Now:HH:mm:ss} — {note} · 옛 경계 {cut.AreaOld:F1} = 새 {cut.AreaNew:F1} + 잘라낼 {cut.AreaCut:F1}㎡"); } catch { }
+        var b = st.Built!;
+        string note = $"추가한 옹벽 {no} — {(st.Side < 0 ? "좌" : "우")} · {string.Join("+", new[] { b.HasFill ? "성토" : "", b.HasCut ? "절토" : "" }.Where(q => q.Length > 0))} · 선 {b.LineLen:F1} m · 단높이 = 도로 사면 · 소단 절토 {tc:0.##} / 성토 {tf:0.##} m"
+                    + $" · 선 바깥 최대 {b.FootMax:F2} m" + $" · 교차각 {st.Cut.AngleA:F0}°/{st.Cut.AngleB:F0}°" + (b.Warn.Count > 0 ? " · ⚠" + string.Join(" · ⚠", b.Warn) : "") + (st.Cut.Warn.Count > 0 ? " · ⚠" + string.Join(" · ⚠", st.Cut.Warn) : "");
+        try { DiagLog.Append($"\n■ {Tag} {System.DateTime.Now:HH:mm:ss} — {note} · 옛 경계 {st.Cut.AreaOld:F1} = 새 {st.Cut.AreaNew:F1} + 잘라낼 {st.Cut.AreaCut:F1}㎡ · {st.Ms} ms\n{st.Log.TrimEnd()}"); } catch { }
         SelfCheckLog.Line(Tag, true, note, doc.Name);
         if (redraw) RoadCommand.RedrawStale(doc, s);
         return (no, note);
@@ -110,62 +112,76 @@ internal static class RoadWallLine
         return (0, why);
     }
 
-    /// <summary>★[v113.0] 대화 — [옹벽 추가](DHROADWALLADD · JACK 1104 — 옛 [옹벽 변환]의 L). 바꿨으면 참(부르는 쪽이 도로 면 · 종단 · 횡단을 다시).</summary>
+    /// <summary>★[v114.3] 대화 — [옹벽 추가](DHROADWALLADD). 바꿨으면 참(부르는 쪽이 도로 면 · 종단 · 횡단을 다시).</summary>
     internal static bool Run(Document doc, RoadSession s)
     {
         var ed = doc.Editor;
-        var (bd, band, bl, why) = OutlineOf(doc.Database, s);
-        if (bd == null || band == null) { ed.WriteMessage($"\n[{Tag}] {why} — 아무것도 안 바꿨습니다."); return false; }
+        var ol = OutlineOf(doc, s);
+        if (ol.Bd == null || ol.Band == null) { ed.WriteMessage($"\n[{Tag}] {ol.Why} — 아무것도 안 바꿨습니다."); return false; }
+        var bd = ol.Bd; var band = ol.Band; var bl = ol.Bl;
         var got = WallLineDraw.Run(doc, Tag, bd, band, pts => BoundaryCut.Classify(pts, bd, band, bl));
         if (got == null) return false;
         var d = s.Fresh();
         int no = NextNo(d);
-        // 절 · 성은 시험 계산이 정한다(폴리선 위 원지반 − 바닥) — 기본값 = 그쪽 사면 단높이 · 소단
-        var st = Trial(s, got.Cut.Line, no, d.CutBenchH, d.CutBenchW);
-        bool up = st.Ok || st.Tiers > 0 ? st.Up : true;   // 방향을 못 정한 거절(섞임 · 원지반)은 절토 기본값
-        double h = up ? d.CutBenchH : d.FillBenchH, t = up ? d.CutBenchW : d.FillBenchW;
-        if (!up) st = Trial(s, got.Cut.Line, no, h, t);
+        double tc = d.CutBenchW, tf = d.FillBenchW, reach = 40;
+        var t = Try(doc, s, got.Pts, no, tc, tf, reach);
         double mk = System.Math.Max(0.3, System.Math.Sqrt(System.Math.Pow(bd.Max(q => q.X) - bd.Min(q => q.X), 2) + System.Math.Pow(bd.Max(q => q.Y) - bd.Min(q => q.Y), 2)) * 0.006);
         while (true)
         {
-            var live = WallLineDraw.Show(st.Ok ? System.Array.Empty<(double, double)>() : got.Cut.Marks, got.Cut.Line, mk, 2,
-                                         new[] { (IReadOnlyList<Point3>)got.Cut.NewRing.Append(got.Cut.NewRing[0]).ToList(), got.Cut.CutRing.Append(got.Cut.CutRing[0]).ToList() }, 3);
-            string spec = st.Ok ? $"〈단높이 {h:0.##}m · 소단 {t:0.##}m · 수직 · {(st.Up ? "절토" : "성토")} {st.Tiers}단 · 바닥 {st.FloorMin:0.##}~{st.FloorMax:0.##}m〉" : $"〈⚠{st.Why}〉";
+            var st = t.St; var b = st?.Built;
+            bool ok = st != null && st.Ok && b != null;
+            List<Autodesk.AutoCAD.DatabaseServices.Entity> live;
+            if (ok)
+            {
+                var more = new List<IReadOnlyList<Point3>>();
+                foreach (var z in b!.ZoneF.Concat(b.ZoneC)) more.Add(z.Append(z[0]).ToList());
+                live = WallLineDraw.Show(b.Points.Select(q => (q.X, q.Y)), st!.Cut!.Line, mk, 2, more, 3);
+                live.AddRange(WallLineDraw.Show(System.Array.Empty<(double, double)>(), null, mk, 2, b.Rows.Concat(b.EndFaces).Cast<IReadOnlyList<Point3>>(), 8));
+                live.AddRange(WallLineDraw.Show(System.Array.Empty<(double, double)>(), null, mk, 2, b.Foot.Cast<IReadOnlyList<Point3>>(), 1));
+            }
+            else live = WallLineDraw.Show(st?.Cut?.Marks ?? new List<(double, double)>(), got.Pts, mk);
+            string foot = ok ? string.Format(System.Globalization.CultureInfo.InvariantCulture, " · 선 바깥 최대 {0:F2} m{1}", b!.FootMax, b.FootMax > 0 ? " ⚠" : "") : "";
+            string sides = ok ? "단높이 = 도로 사면 · " + (b!.HasCut ? $"절토 소단 {tc:0.##}" : "") + (b.HasCut && b.HasFill ? " / " : "") + (b.HasFill ? $"성토 소단 {tf:0.##}" : "") : "";
+            string spec = ok ? $"〈{sides}{foot}〉" : $"〈⚠{t.Why}〉";
             PromptResult r;
             try
             {
-                var pk = new PromptKeywordOptions($"\n[{Tag}] 제원 {spec} [단높이(H)/소단길이(T)/다시그리기(S)] (Enter = 적용): ");
-                pk.Keywords.Add("H", "H", "단높이(H)"); pk.Keywords.Add("T", "T", "소단길이(T)"); pk.Keywords.Add("S", "S", "다시그리기(S)");
+                bool hc = !ok || b!.HasCut, hf = !ok || b!.HasFill;
+                var pk = new PromptKeywordOptions($"\n[{Tag}] 제원 {spec} [{(hc ? "절토(C)/" : "")}{(hf ? "성토(F)/" : "")}다시그리기(S)] (Enter = 적용): ");
+                if (hc) pk.Keywords.Add("C", "C", "절토(C)");
+                if (hf) pk.Keywords.Add("F", "F", "성토(F)");
+                pk.Keywords.Add("S", "S", "다시그리기(S)");
                 pk.AllowNone = true; pk.AppendKeywordsToMessage = false;
                 r = ed.GetKeywords(pk);
             }
             finally { WallLineDraw.Drop(live); }
             if (r.Status == PromptStatus.Cancel) { ed.WriteMessage($"\n[{Tag}] 그만두었습니다 — 아무것도 안 바꿨습니다."); return false; }
             string kw = r.Status == PromptStatus.None ? "" : (r.StringResult ?? "").Trim().ToUpperInvariant();
-            if (kw == "H" || kw == "T")
+            if (kw == "C" || kw == "F")
             {
-                var pdo = new PromptDoubleOptions(kw == "H" ? "\n단높이 (m)" : "\n소단 길이 (m)") { DefaultValue = kw == "H" ? h : t, UseDefaultValue = true, AllowNegative = false, AllowZero = kw == "T" };
+                bool c = kw == "C";
+                var pdo = new PromptDoubleOptions($"\n{(c ? "절토" : "성토")} 소단 길이 (m)") { DefaultValue = c ? tc : tf, UseDefaultValue = true, AllowNegative = false, AllowZero = true };
                 var dr = ed.GetDouble(pdo);
                 if (dr.Status == PromptStatus.OK)
                 {
-                    if (kw == "H" && dr.Value >= 0.2 && dr.Value <= 15) h = dr.Value;
-                    else if (kw == "T" && dr.Value <= 60) t = dr.Value;
-                    else ed.WriteMessage("\n → 범위 밖 값입니다(단높이 0.2~15 · 소단 0~60 m).");
+                    if (dr.Value > 60) ed.WriteMessage("\n → 범위 밖 값입니다(소단 0~60 m).");
+                    else if (c) tc = dr.Value; else tf = dr.Value;
                 }
-                st = Trial(s, got.Cut.Line, no, h, t);
+                t = Try(doc, s, got.Pts, no, tc, tf, reach);
                 continue;
             }
             if (kw == "S")
             {
                 var g2 = WallLineDraw.Run(doc, Tag, bd, band, pts => BoundaryCut.Classify(pts, bd, band, bl));
                 if (g2 == null) return false;
-                got = g2; st = Trial(s, got.Cut.Line, no, h, t);
+                got = g2; t = Try(doc, s, got.Pts, no, tc, tf, reach);
                 continue;
             }
-            if (!st.Ok) { ed.WriteMessage($"\n[{Tag}] {st.Why} — 값을 바꾸거나(H · T) 다시 그리세요(S)."); continue; }
+            if (!ok) { ed.WriteMessage($"\n[{Tag}] {t.Why} — 값을 바꾸거나(C · F) 다시 그리세요(S)."); continue; }
+            if (b!.FootMax > 0) ed.WriteMessage(string.Format(System.Globalization.CultureInfo.InvariantCulture, "\n[{0}] ⚠선 바깥으로 최대 {1:F2} m 나갑니다({2:F1}, {3:F1}) — 막지 않습니다.", Tag, b.FootMax, b.FootAt.X, b.FootAt.Y));
             break;
         }
-        var (made, note) = Make(doc, got.Pts, h, t, got.SrcHandle, redraw: false);
+        var (made, note) = Make(doc, got.Pts, tc, tf, got.SrcHandle, redraw: false, reach: reach);
         ed.WriteMessage(made > 0 ? $"\n[{Tag}] {note}" : $"\n[{Tag}] ⚠{note} — 아무것도 안 바꿨습니다.");
         return made > 0;
     }

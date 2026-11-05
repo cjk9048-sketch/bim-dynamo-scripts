@@ -354,6 +354,7 @@ public static partial class RoadGrade
     /// 고친 칸은 되돌림 목록에 적음(<see cref="UnpatchGridB1"/> — 옛 길로 물러설 때). 두 번 불러도 같음. 돌려줌 = 바뀐 칸 수.</summary>
     internal static int PatchGridB1(Result r, SectionSet set)
     {
+        UnpatchGridWall(r);   // ★[v114.3 · JACK 1105 진입도로 옹벽 추가] 벽 층은 B1 층 위 — 먼저 걷는다(GridSet 차례)
         var se = set.SlumpEnv;
         if (se == null || se.Count == 0 || r.EvalWith == null || r.Z.Length != r.W * r.H || r.Base.Length != r.Z.Length) return 0;
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -434,6 +435,7 @@ public static partial class RoadGrade
     /// <summary>★[v114.3 · 재검토 M-b] <see cref="PatchGridB1"/>로 고친 칸 · 부피를 처음 값으로(옛 흘러내림 길로 물러설 때).</summary>
     internal static void UnpatchGridB1(Result r)
     {
+        UnpatchGridWall(r);   // ★[v114.3] 벽 층부터(거꾸로 푼다)
         if (r.B1Undo == null || r.B1Undo.Count == 0) return;
         for (int u = r.B1Undo.Count - 1; u >= 0; u--) { var (k, kd, z, f) = r.B1Undo[u]; r.Kind[k] = kd; r.Z[k] = z; r.F[k] = f; }
         (r.CutVol, r.FillVol, r.MaxCut, r.MaxFill) = r.B1Vol0;
@@ -511,7 +513,7 @@ public static partial class RoadGrade
     }
 
     /// <summary>바늘(높이 &lt; ThinH) · 0.1 mm 합침 네모 안 변 · 세 세모 이상 변 수.</summary>
-    static (int Thin, int Gap, int NonManifold) Health(List<WallDaylight.Tri> tris)
+    internal static (int Thin, int Gap, int NonManifold) Health(List<WallDaylight.Tri> tris)
     {
         int thin = 0;
         foreach (var t in tris)

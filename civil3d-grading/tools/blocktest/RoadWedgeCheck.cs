@@ -174,8 +174,9 @@ static class RoadWedgeCheck
             ("(c) 꺾임 60° · 얕은 성토 1.2 m(쐐기가 데이라잇에 닿음)", 60, (x, y, zm) => zm - 1.2, null, true),
             ("(d) 꺾임 60° · 가로경사 12 %(굽은 곳에서 절성 바뀜)", 60, (x, y, zm) => zm + 0.12 * (y - 20), null, false),
             ("(e) 꺾임 60° · 둔덕 땅(성토 3 m ± 0.8 m 물결 · 새 길 못 넘음 → 옛 길 물러섬 — 남은 일)", 60, (x, y, zm) => zm - 3 + 0.8 * Math.Sin(x / 4.0) * Math.Cos(y / 5.0), null, false),
-            ("(f) 꺾임 60° · (a) + 첫 굽은 곳 안쪽 폴리선 옹벽(단 2 m · 소단 1 m)", 60, (x, y, zm) => zm - 3,
-                q => q.BoundWalls.Add(new RoadGrade.BoundWall(1, new[] { OX + 4.0, OX + 22.0 }, new[] { OY + 7.0, OY + 7.0 }, 2, 1)), false),
+            // ★[v114.3 · JACK 1105 진입도로 옹벽 추가] (f)의 v113 폴리선 옹벽은 엔진에서 걷어냈다(벽은 면 뒤에 얹음 — S218) — 기록이 있어도 엔진은 (a)와 비트 같다
+            ("(f) 꺾임 60° · (a) + 선 옹벽 기록(엔진은 벽을 모름 — (a)와 같음)", 60, (x, y, zm) => zm - 3,
+                q => q.LineWalls.Add(new RoadGrade.LineWall(1, new[] { OX + 4.0, OX + 22.0 }, new[] { OY + 7.0, OY + 7.0 }, 1, 1)), false),
             ("(g) 꺾임 90° · 평평한 땅 성토 3 m(곡선 중심 평가기 끊김 — 새 길 못 넘으면 옛 길 물러섬)", 90, (x, y, zm) => zm - 3, null, false),
         };
         foreach (var (tag, turn, ground, edit, better) in cases)

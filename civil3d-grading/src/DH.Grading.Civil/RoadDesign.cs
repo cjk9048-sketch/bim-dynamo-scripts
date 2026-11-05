@@ -160,36 +160,64 @@ internal sealed class RoadDesign
     /// 옛 <see cref="Walls"/>(가장자리 옹벽)는 읽을 때 [s0, s1, 쪽, 0, 0]으로 옮긴다(Core가 옛 길로 탐).</summary>
     public List<double[]> TierWalls = new();
 
-    /// <summary>★★[v113.0 · JACK 1104 «옹벽 폴리선 — 경계 2점 자르기 + 안쪽 다단»] 폴리선 옹벽 — 경계 두 교점 사이 폴리선(세계 XY · 측점이 아니라 노선을 고쳐도 자리 그대로) · 단높이 · 소단.
+    /// <summary>★★[v113.0 → ★v114.3 판 2 선 옹벽] 진입도로 [옹벽 추가] 기록 — 그린 선(세계 XY · 측점이 아니라 노선을 고쳐도 자리 그대로).
     /// 없으면 null(쓰지 않음 — 옛 기록 JSON 바이트 그대로 · 옛 애드인은 모르는 칸을 버린다: 그쪽에서는 이 옹벽이 안 보이고 다시 저장하면 사라진다 → 설치 알림).
     /// 칸마다 판(<see cref="BoundWallRec.Ver"/>) — 이 애드인보다 새 판 칸은 엔진에 안 넣고 ⚠(조용히 엉뚱하게 짓지 않는다).</summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public List<BoundWallRec>? BoundWalls;
 
+    /// <summary>★★[v114.3 · JACK 1105 진입도로 옹벽 추가 · 계획 2판 4절] 선 옹벽 기록 판 2 — 그린 원본(SrcX · SrcY · 세계 XY) · 그릴 때 자른 A..B(X · Y — 표시 · 같은 자리 판정) · 쪽 ·
+    /// 절토 · 성토 소단 폭 · 여유 · 원본 폴리선 핸들 · <see cref="Sig"/>(칸 전부의 해시).
+    /// <para>판 1(v113 폴리선 옹벽 — 바닥 + 0단부터 다단)은 읽을 때 메모리에서 뺀다(<see cref="DroppedOld"/> — 저장은 다음 DH 명령의 SaveDesign). 판 3 이상은 쉰다(tooNew).
+    /// Sig가 없거나 안 맞는 판 2(다른 PC 옛 애드인 v114.2.1이 다시 저장해 모르는 칸이 빠짐)는 쉰다 ⚠(지우지 않음). 이번 판부터 모르는 칸은 <see cref="Extra"/>로 남긴다(앞으로의 판).</para></summary>
     internal sealed class BoundWallRec
     {
-        public const int CurVer = 1;
+        public const int CurVer = 2;
         public int Ver = CurVer;
         public int No;
-        /// <summary>경계 두 교점 사이 폴리선(A..B) · 그린 원본(판정을 다시 할 때).</summary>
+        /// <summary>그릴 때 자른 A..B(표시 · 같은 자리 판정 — 짓기는 원본으로 다시 자른다).</summary>
         public double[] X = System.Array.Empty<double>(), Y = System.Array.Empty<double>();
+        /// <summary>그린 원본(세계 XY — 다시 지을 때 지금 경계로 다시 자른다).</summary>
         public double[] SrcX = System.Array.Empty<double>(), SrcY = System.Array.Empty<double>();
-        public double H = 5, T = 1;
+        /// <summary>쪽(−1 좌 · +1 우 · 그릴 때 잰 값 — 표시용).</summary>
+        public int Side;
+        /// <summary>절토 · 성토 소단 폭(m) · 선에서 벽이 갈 수 있는 여유(m).</summary>
+        public double Tc = 1, Tf = 1, Reach = 40;
         public string SrcHandle = "";
+        /// <summary>칸 전부의 해시(<see cref="SigNow"/>) — 없거나 안 맞으면 쉰다.</summary>
+        public string Sig = "";
+        /// <summary>모르는 칸(앞으로의 판) — 다시 저장해도 남긴다.</summary>
+        [System.Text.Json.Serialization.JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+
+        /// <summary>칸 전부의 해시(판 · 번호 · A..B · 원본 · 쪽 · 소단 폭 · 여유 · 핸들 — 비트 그대로).</summary>
+        public string SigNow()
+        {
+            var sb = new System.Text.StringBuilder();
+            void D(double v) => sb.Append(System.BitConverter.DoubleToInt64Bits(v)).Append(',');
+            sb.Append(Ver).Append('|').Append(No).Append('|');
+            foreach (var a in new[] { X, Y, SrcX, SrcY }) { foreach (var v in a ?? System.Array.Empty<double>()) D(v); sb.Append('|'); }
+            sb.Append(Side).Append('|'); D(Tc); D(Tf); D(Reach); sb.Append('|').Append(SrcHandle ?? "");
+            return Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(sb.ToString())))[..16];
+        }
     }
 
-    /// <summary>★[v113.0] Core 폴리선 옹벽(이 판이 아는 칸만) · 모르는 판 번호 목록(⚠).</summary>
-    public List<RoadGrade.BoundWall> CoreBoundWalls(out List<int> tooNew)
+    /// <summary>★[v114.3] 이번 읽기에서 뺀 옛 판(판 1 · v113 폴리선 옹벽) 수 — 저장 안 함(도면마다 한 번 알림).</summary>
+    [System.Text.Json.Serialization.JsonIgnore] public int DroppedOld;
+
+    /// <summary>★[v114.3] Core 선 옹벽(이 판이 아는 · Sig가 맞는 칸만) · 새 판 번호 · Sig 빠짐 번호(⚠ — 지우지 않음).</summary>
+    public List<RoadGrade.LineWall> CoreLineWalls(out List<int> tooNew, out List<int> sigBad)
     {
-        tooNew = new List<int>();
-        var o = new List<RoadGrade.BoundWall>();
+        tooNew = new List<int>(); sigBad = new List<int>();
+        var o = new List<RoadGrade.LineWall>();
         if (BoundWalls == null) return o;
         foreach (var b in BoundWalls)
         {
             if (b == null) continue;
             if (b.Ver > BoundWallRec.CurVer) { tooNew.Add(b.No); continue; }
-            if (b.X == null || b.Y == null || b.X.Length < 2 || b.X.Length != b.Y.Length) continue;
-            o.Add(new RoadGrade.BoundWall(b.No, b.X, b.Y, Pos(b.H, 5), Math.Max(0, b.T)));
+            if (b.Ver < BoundWallRec.CurVer) continue;   // 판 1은 Read가 이미 뺌
+            if (string.IsNullOrEmpty(b.Sig) || b.Sig != b.SigNow()) { sigBad.Add(b.No); continue; }
+            if (b.SrcX == null || b.SrcY == null || b.SrcX.Length < 2 || b.SrcX.Length != b.SrcY.Length) continue;
+            o.Add(new RoadGrade.LineWall(b.No, b.SrcX, b.SrcY, Math.Max(0, b.Tc), Math.Max(0, b.Tf), Pos(b.Reach, 40)));
         }
         return o;
     }
@@ -264,6 +292,12 @@ internal sealed class RoadDesign
             {
                 foreach (var w in d.Walls) if (w.Length >= 3) d.TierWalls.Insert(0, new[] { w[0], w[1], w[2], 0, 0 });
                 d.Walls.Clear();
+            }
+            // ★[v114.3 · JACK 1105 진입도로 옹벽 추가 · 계획 0-8] 옛 판 1 폴리선 옹벽(v113 — 바닥 + 0단부터 다단)은 메모리에서만 뺀다(확인창 없음 · 한 줄 알림은 세션이 도면마다 한 번 · 저장은 다음 DH 명령)
+            if (d?.BoundWalls != null)
+            {
+                d.DroppedOld = d.BoundWalls.RemoveAll(b => b != null && b.Ver < BoundWallRec.CurVer);
+                if (d.BoundWalls.Count == 0) d.BoundWalls = null;
             }
             // ★[v111 · 계획 2.6] 옛 판 기록(LineVer 칸 없음)의 틈 메움 — 다음 저장 때 LineVer = 111로 써서 다시 안 함
             if (d != null && !sb.ToString().Contains("\"LineVer\"", StringComparison.Ordinal)) d.GapsMerged = d.MergeOldGaps();

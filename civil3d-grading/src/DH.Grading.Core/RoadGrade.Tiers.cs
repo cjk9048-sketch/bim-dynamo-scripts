@@ -16,6 +16,8 @@ public static partial class RoadGrade
         public bool Cut; public int Side; public int K; public LineRole Role; public int Prof;
         /// <summary>★[v111.3] 끝면 선 — 옹벽 변환 끝(띠 경계)의 수직면 옹벽선(노선을 가로지름 · 측점 폭 0 — [옹벽/사면 변환] 고를 선 아님).</summary>
         public bool Cross;
+        /// <summary>★[v114.3 · JACK 1105 진입도로 옹벽 추가] 선 옹벽 번호(0 = 아님) — 그 벽 면 머리 · 마구리 선(<see cref="CutLines"/>).</summary>
+        public int WallNo;
         public List<(double X, double Y, double Z, double S)> Pts = new();
     }
 
@@ -492,16 +494,6 @@ public static partial class RoadGrade
             lo = Math.Min(lo, p.S); hi = Math.Max(hi, p.S);
         }
         return lo <= hi ? (Math.Max(a, lo), Math.Min(b, hi)) : (double.NaN, double.NaN);
-    }
-
-    /// <summary>★[v113.0 · JACK 1104 «옹벽 폴리선»] 이 선을 낸 폴리선 옹벽 번호(−1 = 아님) — 그 옹벽 단면 · 그 방향(절토 옹벽이면 절토 선)일 때만. [사면 변환]이 통째로 지운다.</summary>
-    public static int BoundOfLine(Result r, TierLine line)
-    {
-        int p = line.Prof;
-        if (p < 0 || p >= r.ProfBound.Length) return -1;
-        int bi = r.ProfBound[p];
-        if (bi < 0 || bi >= r.Bounds.Count || !r.Bounds[bi].Ok || r.Bounds[bi].Up != line.Cut) return -1;
-        return r.Bounds[bi].No;
     }
 
     /// <summary>★[v110.3.1 · 설치 전 검토 M2] 옹벽선 → 그 선을 낸 기록 고르기 — 단면 번호 0(도로 가장자리 0단 옹벽선)이면 가장자리 옹벽 기록(0단 · 소단 0) ·
