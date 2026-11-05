@@ -57,6 +57,9 @@
         <Command Global="DHMISCSET" Local="DHMISCSET" />
         <Command Global="DHNGII" Local="DHNGII" />
         <Command Global="DHPARCELOFF" Local="DHPARCELOFF" />
+        <Command Global="DHSTRUCT" Local="DHSTRUCT" />
+        <Command Global="DHSTRUCTUPD" Local="DHSTRUCTUPD" />
+        <Command Global="DHSTRUCTOFF" Local="DHSTRUCTOFF" />
         <Command Global="DHPICKCLEAR" Local="DHPICKCLEAR" />
         <Command Global="DHPICKSTATUS" Local="DHPICKSTATUS" />
         <Command Global="DHPROFILE" Local="DHPROFILE" />

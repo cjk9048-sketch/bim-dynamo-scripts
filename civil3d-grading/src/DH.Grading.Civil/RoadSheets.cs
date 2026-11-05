@@ -463,6 +463,7 @@ internal static class RoadSheets
         }
         (ObjectId PvId, List<ObjectId> PvIds, string SheetAll, int Count) r;
         bool hooked = true;
+        StructImport.ReloadChanged(db, log);   // ★[v115 · JACK 1105 Revit 구조물 · D10] 원본이 바뀌었으면 여기(트랜잭션 밖)서 다시 싣는다 — 그리는 쪽은 안 싣는다
         db.ObjectAppended += OnApp;
         string bake = "";
         double hDone = scale, vDone = scale;
@@ -475,6 +476,7 @@ internal static class RoadSheets
             if (Math.Abs(k - 1) > 1e-9) bake = ProfileScaleStyles.BakeRatio(db, r.PvIds, hDone, vDone, plan.KeepAnno, me, k, log);
             RestoreAnno();   // 평면 검토선 글씨는 부지 주석 축척으로(지금과 같게)
             ProfileCommand.DecorateSampleLines(db, cdoc, aid, iv, w.L, w.R, log, t.Made);   // ⑩ 검토선 꾸미기(부지와 같게)
+            foreach (var pv9 in r.PvIds) StructDraw.IntoProfile(db, pv9, hDone, log);   // ★[v115 · JACK 1105 Revit 구조물] 장마다 자른 면 — 감시 창 안이라 DH_ROADSHEET가 붙어 도로 장과 함께 지워진다
         }
         catch
         {

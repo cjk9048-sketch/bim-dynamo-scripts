@@ -409,6 +409,7 @@ internal static class SheetBookBuilder
                 if (it.IsProfileView) it.StyleId = ((CivilDb.ProfileView)e).StyleId;
                 try { using var rb = e.GetXDataForApplication(SheetTag.App); if (rb != null) it.Tagged = true; } catch { }
                 if (!it.Tagged) try { using var rb2 = e.GetXDataForApplication(WallSectionDraw.App); if (rb2 != null) it.Tagged = true; } catch { }
+                if (!it.Tagged) try { if (StructDraw.TagOf(e, out string sk9, out _, out _) && sk9 != StructDraw.KindPlan) it.Tagged = true; } catch { }   // ★[v115 · JACK 1105 Revit 구조물] 종단 · 횡단 단면 = 장 내용(평면 외곽은 평면)
                 if (!it.ByType) try { it.Box = e.GeometricExtents; it.HasBox = true; } catch { }
                 l.Add(it);
             }

@@ -509,7 +509,10 @@ public sealed partial class XsecViewCommand
         //   (계산은 검토선과 지표면만 있으면 되므로 이 자리에서 돌 수 있다.)
         var qty = CollectQty(db, slIds, alignId, wl, wr, surfs, log, t);
 
-        var mv = MeasureViews(db, viewIds, log);
+        // ★[v115 · JACK 1105 Revit 구조물 · D13] 구조물 바닥까지 넓힌 뷰는 «사용자 지정 범위» — 넓히기 전 크기도 재 둔다(축척 알림)
+        var mv0 = MeasureViews(db, viewIds, log);
+        int nWide9 = StructDraw.WidenSections(db, viewIds.Select(v => v.Id), log);
+        var mv = nWide9 > 0 ? MeasureViews(db, viewIds, log) : mv0;
 
         X9($"뷰 {viewIds.Count}개 만듬 — 배치 {cols}×{rows}");
         // ── ★★축척 고르기 — 종단도 <c>FitSheet</c>과 같은 셈이다.
@@ -658,6 +661,7 @@ public sealed partial class XsecViewCommand
         // ★[v111.5 · 계획 3] 진입도로 = 도면설정 «진입도로 횡단도 축척»(0 = 자동 — 같은 PickScale) · 부지 칸은 안 읽음
         bool fixedScale = t != null ? t.Pin > 0 : GradingSettings.XsecScale > 0;
         double scale = fixedScale ? (t != null ? t.Pin : GradingSettings.XsecScale) : autoScale;
+        if (nWide9 > 0 && !fixedScale) { double s09 = tableRight ? PickScale(mv0.W, mv0.H, gwRight, ghRight) : PickScale(mv0.W, mv0.H, gwBelow, ghBelow); StructDraw.ScaleNote("횡단", s09, s09, scale, scale, false, log); }   // ★[v115 · D13]
         double graphWmm = tableRight ? gwRight : gwBelow;
         double graphHmm = tableRight ? ghRight : ghBelow;
         if (scale <= 0)
@@ -837,6 +841,10 @@ public sealed partial class XsecViewCommand
         X9("옹벽 단면");
         // ★[v111.5 · 계획 2 · 검토 M2] 진입도로 = 옹벽 단면 · 터파기선을 안 그림(도로 옹벽은 지표면 선의 수직면으로만 — 부지 옹벽 기록은 부지 노선 것)
         string wsec = t == null ? DrawWallSections(db, viewIds, alignId, wl, wr, scale, log, qty.X2) : DrawDitchSections(db, viewIds, alignId, wl, wr, scale, log);   // ★★★[v104.1 · JACK 1022] 옹벽 단면 넣기 · ★[v105.3] 2D 터파기선 · 배면 · ★[도로 마무리 ②] 진입도로 = 측구 단면
+        // ★[v115 · JACK 1105 Revit 구조물] 자른 면(진입도로는 BuildRoad 표식이 붙는다) · 부지 축척은 [다시 반영]용으로 적어 둠
+        int nStr9 = StructDraw.IntoSections(db, viewIds.Select(v => v.Id), scale, log);
+        if (t == null && nStr9 > 0) StructDraw.RememberSiteXsecScale(db, scale);
+        if (nStr9 > 0) wsec += (wsec.Length > 0 ? " · " : "") + $"구조물 단면 {nStr9}장";
         X9("밴드 묶기");
         BindBandSections(db, viewIds, kindOf, scale, annoScale, log, t != null ? RoadKind : "정지면");   // ★[v111.5 · 검토 M1] 진입도로 FGL = 진입도로 단면
         X9("측점 밴드");
@@ -5171,6 +5179,7 @@ public sealed partial class XsecViewCommand
             }
             // ★[v104.1] 옹벽 단면 — CALS 레이어라 레이어로 지우지 않는다(손 그림이 있을 수 있다) · 표식(XData «XSEC»)이 있는 것만
             n += WallSectionDraw.EraseTagged(db, tr, WallSectionDraw.KindXsec, null);
+            n += StructDraw.EraseSiteSheets(db, tr, StructDraw.KindXsec);   // ★[v115 · JACK 1105 Revit 구조물 · 검토 M1] 횡단 구조물 단면만(진입도로 표식 · 평면은 안 지움)
             tr.Commit();
         }
         catch (System.Exception ex) { log?.AppendLine("  옛 횡단 지우기 실패 — " + ex.Message); }
