@@ -50,19 +50,31 @@ public sealed class WallRec
     /// <summary>★★[v103.2 · 판 4] 합성이 남긴 뚜껑(옹벽 뒤에 되살아난 원지반 — 종단 · 횡단의 «옹벽이 든 순수면»에서 뺀다). null = 없음.</summary>
     public PureWithWalls.Cap? Cap;
 
-    // ── ★★[v113.0 · 판 6 · JACK 1104 «옹벽 폴리선 — 경계 2점 자르기 + 안쪽 다단»] 경계 폴리선 옹벽 ──
-    /// <summary>0 = 손 폴리곤(옛 · 판 1~5는 늘 0) · 1 = 경계 폴리선(<see cref="WallByLine"/> — Poly = 바꿀 자리 Z · Seg = Line · Bench = −1 · 합성은 바꿔 끼움).</summary>
+    // ── ★★★[v114.0 · 판 7 · JACK 1105 «옹벽 추가 새 개념 — 선에서 바깥으로 수평 계단»] 선 옹벽 ──
+    //   (옛 v113 종류 1 «경계 폴리선 · 안쪽 다단»은 읽을 때 지운다 — JACK 답 4 · 판 6 칸은 읽기만)
+    /// <summary>0 = 손 폴리곤(옛 · 판 1~5는 늘 0) · 2 = 선 옹벽(<see cref="WallByLine"/> — Poly = 바꿀 자리 ∪ R_out · IsWall = L 변 · Seg = Line · Bench = −1 ·
+    /// 합성은 한 판 RuleOf(성토 자리 max(G, W) · 절토 자리 min(G, W) · 나머지 G)). 종류 2에는 하나뿐인 Up · HeadZ가 없다 — 소비처는 <see cref="WallByLine.Faces(WallRec)"/>.</summary>
     public int Kind;
-    /// <summary>Kind 1 — 경계 두 점 사이 폴리선(A..B · 2D · z = 0).</summary>
+    /// <summary>Kind 2 — 경계 두 점 사이 선(A..B · 2D · z = 0).</summary>
     public List<Point3> Line = new();
-    /// <summary>Kind 1 — 그린 폴리선 원본(자르기 전 · 정지면을 다시 지으면 이것으로 다시 판정한다).</summary>
+    /// <summary>Kind 2 — 그린 선 원본(자르기 전 · 정지면을 다시 지으면 이것으로 다시 판정한다).</summary>
     public List<Point3> Src = new();
-    /// <summary>Kind 1 — 바닥 높이(기운 바닥이면 폴리선 위 가장 낮은(절토) · 높은(성토) 바닥) · 단 수 · 뚜껑 높이.</summary>
-    public double PadZ, CapZ;
-    public int Tiers;
-    /// <summary>Kind 1 — 고른 기존 폴리선 핸들(그렸으면 빈 값).</summary>
+    /// <summary>Kind 2 — 고른 기존 폴리선 핸들(그렸으면 빈 값).</summary>
     public string SrcHandle = "";
-    public bool IsBound => Kind == 1;
+    /// <summary>Kind 2 — 절토 · 성토 단높이 · 소단(지은 값) · 벽이 갈 수 있는 거리 여유.</summary>
+    public double Hc, Tc, Hf, Tf, Reach;
+    /// <summary>Kind 2 — 선 바깥 점유 최대(지표면 · m)와 그 자리(계획 1-7 · 늘 보인다).</summary>
+    public double FootMax, FootAtX, FootAtY;
+    /// <summary>Kind 2 — 바꿀 자리 바깥 고리(성토 · 절토) — 합성이 가상옹벽 삼각형을 이 고리로 성토 · 절토에 나눈다.</summary>
+    public List<List<Point3>> ZoneF = new(), ZoneC = new();
+    /// <summary>Kind 2 — 면 토막(토막마다 Up · 단 · 머리 · 발).</summary>
+    public List<WallByLine.FaceSeg> Faces = new();
+    /// <summary>★[v114.0 · 설치 전 검토 4 · 소단 높이 관문] Kind 2 — 지을 때 잰 표본(<see cref="WallByLine.Built.BenchPts"/>) — 소단(z = Z_k) · F(z = G).
+    /// 합성 되읽기 관문이 Civil이 지은 면에서 다시 잰다(<see cref="WallByLine.BenchGate"/>). 비었으면 안 잰다.</summary>
+    public List<Point3> BenchSamples = new(), FootSamples = new();
+    public bool IsLine => Kind == 2;
+    /// <summary>Kind 2 — 앞면 길이 합(대안 옹벽 길이).</summary>
+    public double FaceLen => Faces.Where(f => f.Kind == 0).Sum(f => f.Len);
 
     public string Side => Up ? "절토" : "성토";
     public static string WallSurfaceName(int no) => $"가상옹벽{no}_DH";
@@ -96,17 +108,17 @@ public sealed class FrozenWall
     public List<bool> IsWall = new();
     public double T, HeadZ;
     public bool HasLine => IsWall.Count == Poly.Count && Poly.Count >= 3;
-    /// <summary>★[v113.0 · 판 6 · JACK 1104 «옹벽 폴리선»] 0 = 손 폴리곤 · 1 = 경계 폴리선(굳힐 때 옮긴다 — 앞면 선을 Poly · IsWall로 다시 짓지 못하므로 읽는 쪽은 ⚠로 뺀다).</summary>
+    /// <summary>★[v114.0 · 판 7] 0 = 손 폴리곤 · 2 = 선 옹벽(굳힐 때 옮긴다 — 앞면 선을 Poly · IsWall로 다시 짓지 못하므로 읽는 쪽은 ⚠로 뺀다). 옛 종류 1은 읽을 때 지운다.</summary>
     public int Kind;
     public List<Point3> Line = new();
-    public double PadZ, CapZ;
-    public int Tiers;
+    /// <summary>Kind 2 — 앞면 길이 합.</summary>
+    public double FaceLen;
 }
 
 public static class WallList
 {
     public const string Sign = "DH_WALLS";
-    public const int Version = 6;
+    public const int Version = 7;
 
     /// <summary>(종류, 값) — 'S' 글 · 'I' 정수 · 'D' 실수. Civil이 DxfCode.Text · Int32 · Real로 옮긴다.
     /// <para>★[v103.1.14] 판 3 칸(ReplaceNo2 · KeepNo)은 <b>이어 짓기가 걸려 있을 때만</b> 쓴다 — 둘 다 0인 목록은 판 2 그대로(바이트까지 같음 · 옛 판 애드인도 읽는다).</para>
@@ -115,7 +127,10 @@ public static class WallList
     {
         // ★[v103.3] 판 5 = 옹벽선을 가진 굳은 칸이 있을 때만(없으면 판 4 바이트 그대로 — v103.2 애드인도 읽는다)
         // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 판 6 = 경계 폴리선 옹벽(종류 1)이 하나라도 있을 때만(없으면 판 5 이하 바이트 그대로 — v112 애드인도 읽는다)
-        int ver = walls.Any(w => w.Kind != 0) || head.Frozen.Any(f => f.Kind != 0) ? 6
+        // ★[v114.0 · JACK 1105] 판 7 = 선 옹벽(종류 2)이 하나라도 있을 때만 — 옛 종류 1은 읽을 때 지웠으므로 판 6은 더 쓰지 않는다(없으면 판 5 이하 바이트 그대로)
+        if (walls.Any(w => w.Kind != 0 && w.Kind != 2) || head.Frozen.Any(f => f.Kind != 0 && f.Kind != 2))
+            throw new ArgumentException("옹벽 목록에 이 애드인이 쓰지 않는 종류가 있다(0 · 2만)");
+        int ver = walls.Any(w => w.Kind != 0) || head.Frozen.Any(f => f.Kind != 0) ? 7
                 : head.Frozen.Any(f => f.IsWall.Count > 0) ? 5
                 : walls.Any(w => !string.IsNullOrEmpty(w.CompNonce)) || head.Frozen.Count > 0 ? 4
                 : walls.Any(w => w.ReplaceNo2 != 0 || w.KeepNo != 0) ? 3 : 2;
@@ -161,18 +176,30 @@ public static class WallList
                 }
             }
         }
-        if (ver >= 6)
+        if (ver >= 7)
         {
-            // ★[v113.0 · 판 6] 끝에 붙인다(옛 칸 차례 그대로) — 옹벽마다 종류 + 종류 1 칸 · 굳은 칸마다 종류 + 종류 1 칸
+            // ★[v114.0 · 판 7] 끝에 붙인다(옛 칸 차례 그대로) — 옹벽마다 종류 + 종류 2 칸 · 굳은 칸마다 종류 + 종류 2 칸
             foreach (var w in walls)
             {
                 v.Add(('I', w.Kind));
-                if (w.Kind != 0) { Pts(w.Line); Pts(w.Src); v.Add(('D', w.PadZ)); v.Add(('I', w.Tiers)); v.Add(('D', w.CapZ)); v.Add(('S', w.SrcHandle ?? "")); }
+                if (w.Kind != 2) continue;
+                Pts(w.Line); Pts(w.Src); v.Add(('S', w.SrcHandle ?? ""));
+                v.Add(('D', w.Hc)); v.Add(('D', w.Tc)); v.Add(('D', w.Hf)); v.Add(('D', w.Tf)); v.Add(('D', w.Reach));
+                v.Add(('D', w.FootMax)); v.Add(('D', w.FootAtX)); v.Add(('D', w.FootAtY));
+                v.Add(('I', w.ZoneF.Count)); foreach (var r in w.ZoneF) Pts(r);
+                v.Add(('I', w.ZoneC.Count)); foreach (var r in w.ZoneC) Pts(r);
+                v.Add(('I', w.Faces.Count));
+                foreach (var fs in w.Faces)
+                {
+                    v.Add(('I', fs.Up ? 1 : 0)); v.Add(('I', fs.Tier)); v.Add(('D', fs.Level)); v.Add(('I', fs.Kind)); v.Add(('I', fs.Part)); v.Add(('D', fs.Len)); v.Add(('D', fs.HMax));
+                    Pts(fs.Top); Pts(fs.Foot);
+                }
+                Pts(w.BenchSamples); Pts(w.FootSamples);   // ★[v114.0 · 소단 높이 관문] 판 7 끝(설치 전이라 판 번호는 그대로)
             }
             foreach (var f in head.Frozen)
             {
                 v.Add(('I', f.Kind));
-                if (f.Kind != 0) { Pts(f.Line); v.Add(('D', f.PadZ)); v.Add(('I', f.Tiers)); v.Add(('D', f.CapZ)); }
+                if (f.Kind == 2) { Pts(f.Line); v.Add(('D', f.FaceLen)); }
             }
         }
         return v;
@@ -180,8 +207,16 @@ public static class WallList
 
     /// <summary>되읽기 — 서명 · 판 · 수가 안 맞으면 거짓(까닭). 값의 종류가 어긋나도 거짓(조용히 엉뚱한 값을 읽지 않는다).</summary>
     public static bool TryDecode(IReadOnlyList<(char Kind, object Value)> v, out WallListHead head, out List<WallRec> walls, out string why)
+        => TryDecode(v, out head, out walls, out why, out _);
+
+    /// <param name="dropped">★[v114.0 · JACK 1105 답 4] 읽으며 지운 옛 v113 종류 1 칸 수(지금 목록의 옹벽만 — 굳은 종류 1은 ★[v114.0 · 설치 전 검토 6] 남긴다) — 0보다 크면 부르는 쪽이 한 줄 남기고 합성을 «대기»로 친다.</param>
+    public static bool TryDecode(IReadOnlyList<(char Kind, object Value)> v, out WallListHead head, out List<WallRec> walls, out string why, out int dropped)
+        => TryDecode(v, out head, out walls, out why, out dropped, out _);
+
+    /// <param name="cleared">★[v114.0 · 설치 전 검토 열린 질문] 지운 종류 1 번호를 가리켜 비운 칸 수(ReplaceNo · ReplaceNo2 · KeepNo).</param>
+    public static bool TryDecode(IReadOnlyList<(char Kind, object Value)> v, out WallListHead head, out List<WallRec> walls, out string why, out int dropped, out int cleared)
     {
-        head = new WallListHead(); walls = new List<WallRec>(); why = "";
+        head = new WallListHead(); walls = new List<WallRec>(); why = ""; dropped = 0; cleared = 0;
         int i = 0;
         try
         {
@@ -235,22 +270,61 @@ public static class WallList
                     head.Frozen.Add(f);
                 }
             }
-            if (ver >= 6)
+            if (ver == 6)
             {
+                // ★[v114.0 · JACK 1105 답 4] 판 6 종류 1(v113 «경계 폴리선 · 안쪽 다단»)은 칸을 읽고 버린다 — 부르는 쪽이 한 줄 알리고 다음 쓰기에서 없어진다
                 foreach (var w in walls)
                 {
                     w.Kind = I();
-                    if (w.Kind < 0 || w.Kind > 1) throw new FormatException($"옹벽 {w.No} 종류 {w.Kind}(이 애드인은 0 · 1만 안다)");
-                    if (w.Kind != 0) { w.Line = Pts(); w.Src = Pts(); w.PadZ = D(); w.Tiers = I(); w.CapZ = D(); w.SrcHandle = S(); }
+                    if (w.Kind < 0 || w.Kind > 1) throw new FormatException($"옹벽 {w.No} 종류 {w.Kind}(판 6은 0 · 1만)");
+                    if (w.Kind != 0) { Pts(); Pts(); D(); I(); D(); S(); }
                 }
                 foreach (var f in head.Frozen)
                 {
                     f.Kind = I();
                     if (f.Kind < 0 || f.Kind > 1) throw new FormatException($"굳은 옹벽 {f.No} 종류 {f.Kind}");
-                    if (f.Kind != 0) { f.Line = Pts(); f.PadZ = D(); f.Tiers = I(); f.CapZ = D(); }
+                    if (f.Kind != 0) { f.Line = Pts(); D(); I(); D(); }
+                }
+            }
+            if (ver >= 7)
+            {
+                foreach (var w in walls)
+                {
+                    w.Kind = I();
+                    if (w.Kind != 0 && w.Kind != 2) throw new FormatException($"옹벽 {w.No} 종류 {w.Kind}(이 애드인은 0 · 2만 안다)");
+                    if (w.Kind != 2) continue;
+                    w.Line = Pts(); w.Src = Pts(); w.SrcHandle = S();
+                    w.Hc = D(); w.Tc = D(); w.Hf = D(); w.Tf = D(); w.Reach = D();
+                    w.FootMax = D(); w.FootAtX = D(); w.FootAtY = D();
+                    int nz = I(); if (nz < 0 || nz > 100_000) throw new FormatException($"성토 자리 수 {nz}");
+                    for (int q = 0; q < nz; q++) w.ZoneF.Add(Pts());
+                    nz = I(); if (nz < 0 || nz > 100_000) throw new FormatException($"절토 자리 수 {nz}");
+                    for (int q = 0; q < nz; q++) w.ZoneC.Add(Pts());
+                    int nfs = I(); if (nfs < 0 || nfs > 1_000_000) throw new FormatException($"면 토막 수 {nfs}");
+                    for (int q = 0; q < nfs; q++)
+                        w.Faces.Add(new WallByLine.FaceSeg { Up = I() != 0, Tier = I(), Level = D(), Kind = I(), Part = I(), Len = D(), HMax = D(), Top = Pts(), Foot = Pts() });
+                    w.BenchSamples = Pts(); w.FootSamples = Pts();
+                }
+                foreach (var f in head.Frozen)
+                {
+                    f.Kind = I();
+                    if (f.Kind != 0 && f.Kind != 2) throw new FormatException($"굳은 옹벽 {f.No} 종류 {f.Kind}");
+                    if (f.Kind == 2) { f.Line = Pts(); f.FaceLen = D(); }
                 }
             }
             if (i != v.Count) { why = $"옹벽 목록 끝에 값 {v.Count - i}개가 남았다"; return false; }
+            // ★[v114.0 · 설치 전 검토 6] 굳은 종류 1은 지우지 않는다 — 앞 구역 면에 이미 든 v113 옹벽이라 다시 지을 수 없다.
+            //   종류 2 «앞면 길이 0»(반영 몫 없음)으로 남긴다(막을 다각형 · 측점 가리기는 Poly 그대로). 지우는 것은 지금 목록의 종류 1뿐
+            foreach (var f in head.Frozen) if (f.Kind == 1) { f.Kind = 2; f.FaceLen = 0; }
+            var gone = new HashSet<int>(walls.Where(w => w.Kind == 1).Select(w => w.No));
+            dropped = walls.RemoveAll(w => w.Kind == 1);
+            // 지운 번호를 가리키는 칸(바꿀 옹벽 · 둘째 · 물려받을 번호)은 비운다 — 없는 옹벽을 바꾸거나 그 번호를 물려받지 않게(부른 쪽이 ⚠)
+            foreach (var w in walls)
+            {
+                if (w.ReplaceNo != 0 && gone.Contains(w.ReplaceNo)) { w.ReplaceNo = 0; cleared++; }
+                if (w.ReplaceNo2 != 0 && gone.Contains(w.ReplaceNo2)) { w.ReplaceNo2 = 0; cleared++; }
+                if (w.KeepNo != 0 && gone.Contains(w.KeepNo)) { w.KeepNo = 0; cleared++; }
+            }
             return true;
         }
         catch (Exception ex) when (ex is ArgumentOutOfRangeException || ex is IndexOutOfRangeException)

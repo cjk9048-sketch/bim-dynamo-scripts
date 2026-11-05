@@ -419,9 +419,10 @@ internal static class WallExcavBuilder
         {
             string src = (w.Frozen ? "굳은 옹벽 " : "옹벽 ") + w.No;
             // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 경계 폴리선 옹벽은 앞면 선을 폴리곤 표로 다시 짓지 못한다 — 조용히 틀리지 않게 빼고 ⚠(터파기는 다음 판)
-            if (w.Kind == 1)
+            // ★[v114.0] 선 옹벽(종류 2)도 아직 터파기를 안 짓는다 — Poly는 바꿀 자리 ∪ R_out이라 손 폴리곤 앞면 선으로 다시 지으면 틀린다(조용히 틀리지 않게 빼고 ⚠ · 다음 판 Faces로)
+            if (w.Kind != 0)
             {
-                notes.Add($"⚠폴리선 옹벽 {w.No} — 옹벽 터파기는 아직 안 됨(빠짐 · 다음 판)");
+                notes.Add($"⚠선 옹벽 {w.No} — 옹벽 터파기는 아직 안 됨(빠짐 · 다음 판)");
                 continue;
             }
             if (w.IsWall.Count != w.Poly.Count || w.Poly.Count < 3)

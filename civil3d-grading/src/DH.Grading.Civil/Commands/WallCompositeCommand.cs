@@ -208,7 +208,7 @@ public sealed class WallCompositeCommand
     {
         // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 경계 폴리선 옹벽 — 그린 폴리선 원본을 새 경계로 다시 판정 · 제자리면 같은 번호로 다시 짓는다(움직였으면 안 지우고 까닭)
         //   ★[v113.0 · 설치 전 검토 M1] 터지면(NTS 위상 예외 등) 합성 전체가 아니라 그 옹벽만 «다시 짓기 실패» 보류 — 손 폴리곤과 같은 꼴
-        if (w.Kind == 1)
+        if (w.Kind != 0)   // ★[v114.0] 선 옹벽(종류 2)
         {
             try { return WallLineFlow.Rebuild(db, tr, w, region, groundId, log); }
             catch (System.Exception ex) { return $"폴리선 옹벽 다시 짓다 터졌다({ex.GetType().Name}: {ex.Message})"; }
@@ -838,8 +838,11 @@ public sealed class WallCompositeCommand
         var useOk = new System.Collections.Generic.List<WallRec>();
         var dropped = new System.Collections.Generic.List<string>();
         var droppedNos = new System.Collections.Generic.HashSet<int>();   // ★[4판 H3] ⑨가 지울 «면이 없어진 넣음 옹벽» — 이것만
+        int lineOffN = 0;
         foreach (var w in use)
         {
+            // ★[v114.0 · 설치 전 검토 11] 선 옹벽이 꺼져 있으면(WallLineOff) 종류 2는 합성에 안 넣는다 — 쉰다(지우지 않음 · ⚠ 한 줄)
+            if (w.Kind != 0 && GradingSettings.WallLineOff) { lineOffN++; continue; }
             string bad = "";
             ObjectId wId = NoriCommand.FindByHandle(db, w.WallHandle);
             TinSurface? wTin = null;
@@ -876,21 +879,31 @@ public sealed class WallCompositeCommand
                     // ★[v102.0 · 계획 검토 M3 ①] 기하로 한 번 더 — 옹벽 첫 줄 = 폴리곤 z(머리). 절토면 옹벽이 전부 그 위 · 성토면 전부 그 아래(1mm)
                     double z0 = w.Poly[0].Z; int wrong = 0; double worst = 0;
                     // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 경계 폴리선 옹벽은 머리가 위(절토 — 안으로 내려간다)라 옛 잣대 대신 뚜껑 높이로 — 절토면 전부 뚜껑 아래 · 성토면 위(1 mm)
-                    if (w.Kind == 1)
-                        foreach (var t in wallTris)
-                            foreach (var q in new[] { t.A, t.B, t.C })
-                            { double dz = w.Up ? q.Z - w.CapZ : w.CapZ - q.Z; if (dz > 1e-3) { wrong++; worst = System.Math.Max(worst, dz); } }
-                    else
+                    // ★[v114.0] 선 옹벽(종류 2)은 하나뿐인 방향 · 머리가 없다 — 방향 · 뚜껑 검사를 뺀다(절 · 성은 바꿀 자리 고리로 나눈다)
+                    if (w.Kind == 0)
                     foreach (var t in wallTris)
                         foreach (var q in new[] { t.A, t.B, t.C })
                         { double dz = w.Up ? z0 - q.Z : q.Z - z0; if (dz > 1e-3) { wrong++; worst = System.Math.Max(worst, dz); } }
-                    if (wrong > 0) bad = w.Kind == 1 ? $"방향('{w.Side}')과 폴리선 옹벽 모양이 안 맞는다 — 꼭짓점 {wrong}개가 뚜껑 {w.CapZ:F3}m {(w.Up ? "위" : "아래")}(최대 {worst:F3}m)"
-                                     : $"방향('{w.Side}')과 옹벽 모양이 안 맞는다 — 꼭짓점 {wrong}개가 머리 {z0:F3}m {(w.Up ? "아래" : "위")}(최대 {worst:F3}m)";
+                    if (wrong > 0) bad = $"방향('{w.Side}')과 옹벽 모양이 안 맞는다 — 꼭짓점 {wrong}개가 머리 {z0:F3}m {(w.Up ? "아래" : "위")}(최대 {worst:F3}m)";
                     else
                     {
                         var groundTris = gCache.TrianglesIn(mnx, mny, mxx, mxy);
-                        inputs.Add(new WallDaylight.WallInput { No = w.No, Poly = w.Poly, WallTris = wallTris, GroundTris = groundTris, Down = !w.Up, Replace = w.Kind == 1 });
-                        useOk.Add(w);
+                        var wi = new WallDaylight.WallInput { No = w.No, Poly = w.Poly, WallTris = wallTris, GroundTris = groundTris, Down = !w.Up };
+                        if (w.Kind != 0)
+                        {
+                            // ★[v114.0] 선 옹벽 — 가상옹벽 삼각형을 목록의 바꿀 자리 고리(성토 · 절토)로 나눈다(무게중심 · 고리 밖은 버림 — 합성 규칙 RuleOf는 그 자리에서 G)
+                            var tf = new System.Collections.Generic.List<WallDaylight.Tri>(); var tcL = new System.Collections.Generic.List<WallDaylight.Tri>();
+                            foreach (var t in wallTris)
+                            {
+                                double cx = (t.A.X + t.B.X + t.C.X) / 3, cy = (t.A.Y + t.B.Y + t.C.Y) / 3;
+                                if (w.ZoneF.Any(r => GradingGeometry.PointInRing(r, cx, cy))) tf.Add(t);
+                                else if (w.ZoneC.Any(r => GradingGeometry.PointInRing(r, cx, cy))) tcL.Add(t);
+                            }
+                            wi.WallTrisF = tf; wi.WallTrisC = tcL;
+                            log.AppendLine($"   선 옹벽 {w.No} — 가상옹벽 삼각형 {wallTris.Count} → 성토 자리 {tf.Count} · 절토 자리 {tcL.Count}");
+                            if (tf.Count + tcL.Count == 0) bad = "선 옹벽의 바꿀 자리 안에 가상옹벽 삼각형이 없다";
+                        }
+                        if (bad.Length == 0) { inputs.Add(wi); useOk.Add(w); }
                         // 입력을 떨군다(옹벽마다 — 폴리곤 ±5m 합성 전 면) — 오프라인 재생
                         try
                         {
@@ -930,6 +943,7 @@ public sealed class WallCompositeCommand
             }
         }
         if (dropped.Count > 0) log.AppendLine("   ⚠넣음 옹벽을 뺀다 — " + string.Join(" · ", dropped));
+        if (lineOffN > 0) log.AppendLine($"   ⚠선 옹벽 {lineOffN}개는 쉰다(WallLineOff — 합성에 안 넣음 · 목록은 그대로)");
         if (inputs.Count == 0) { if (at != null) at.Empty = true; return Fail("합성할 수 있는 옹벽이 없다 — " + string.Join(" · ", dropped)); }
         var planAll = planCache.AllTriangles();
         log.AppendLine($"③ 삼각형 — 옹벽 {inputs.Count}개({string.Join(",", inputs.Select(i => $"{i.No}:{i.WallTris.Count}"))}) · 정지면 전체 {planAll.Count} · {sw.ElapsedMilliseconds}ms");
@@ -1020,6 +1034,14 @@ public sealed class WallCompositeCommand
             back = $"Civil 점 {civPts}/{np} · 삼각형 {theirs.Count}/{nf} · {cmp.Summary} · 높이 오차 합 {res.HeightBudget * 1000:F3} + Civil {cmp.MaxDz * 1000:F3}mm(한도 {zTol * 1000:F0}mm)"
                  + (over ? $" · 허용 판 — Civil이 넘긴 면 그대로 {cmp.Same}/{nf}{(exact ? "" : " ⚠아님(허용 판은 그대로여야 받는다)")}" : "")
                  + $" · 가져오기 {tCreate}ms · 대조 {sw.ElapsedMilliseconds}ms";
+            // ★[v114.0 · 설치 전 검토 4 · 소단 높이 관문] 선 옹벽 — Civil이 지은 가상옹벽 면(무게중심으로 나눔)으로 합성한 결과에서 소단 = Z_k · F = G(1 cm)를 다시 잰다.
+            //   Core 벽 삼각형은 지을 때 쟀지만 Civil 들로네가 다른 대각선을 고를 수 있다 — 어긋나면 되읽기 관문 실패와 같은 길(새 면 지움 · 새 옹벽 버림 · 지난 합성 그대로)
+            foreach (var lw in useOk.Where(x => x.Kind == 2 && x.BenchSamples.Count + x.FootSamples.Count > 0))
+            {
+                var bg = WallByLine.BenchGate(lw, theirs);
+                back += $" · 옹벽 {lw.No} 소단 관문 소단 {bg.BenchN}(틀림 {bg.BenchBad}) · F {bg.FootN}(턱 {bg.FootBad}) · 못 읽음 {bg.Miss} · 최대 {bg.Max * 1000:F1}mm";
+                if (bg.Why.Length > 0) { gateOk = false; back += $" · ⚠옹벽 {lw.No}: {bg.Why}"; }
+            }
         }
         catch (System.Exception gx) { Drop(); log.AppendLine(gx.ToString()); return FailNew($"새 합성을 되읽다 터졌다({gx.GetType().Name}) — 새 면은 지웠다"); }
         // ★[v103.1.12] 화면 없는 Civil 시험 칸 — 이 번호 옹벽이 든 회는 되읽기 관문을 못 지난 것으로 친다(«누가 탓인지 모르는 실패» → 하나씩 길을 시험). 화면 있는 Civil에서는 늘 0
@@ -1211,6 +1233,13 @@ public sealed class WallCompositeCommand
                 "<b>⚠1cm 넘은 자리</b>(옹벽 {0}): 높이 오차 합 {1:F1}mm(한도 {2:F0}mm) — 옹벽 높이 {3:F1}mm @{4} · Civil이 0.1mm 안 두 점을 반드시 합치는 자리 곁 · ",
                 forcedNo, forcedStep.R.HeightBudget * 1000, res.HeightLimit * 1000, forcedStep.R.Clean!.WallDz * 1000, forcedStep.R.Clean.WallAt)
             : "";
+        // ★[v114.0 · JACK 1105] 선 옹벽 — 평면(노리 · 사면선 · 정지경계 · 옹벽선)을 F에 맞춘다(같은 트랜잭션 · 실패해도 합성은 그대로 · ⚠ 한 줄)
+        //   ★[v114.0 · 설치 전 검토 2] Apply는 안쪽 트랜잭션 — 중간에 실패하면(잠긴 레이어 등) 안쪽만 되돌려 평면은 하나도 안 바뀐다(합성은 그대로)
+        try { string pn = WallLinePlan.Apply(db, tr, useOk, head.PlanHandle ?? ""); if (pn.Length > 0) log.AppendLine("   " + pn); }
+        catch (System.Exception px) { log.AppendLine($"   ⚠선 옹벽 평면 맞추기 실패({px.GetType().Name}: {px.Message}) — 평면(사면 · 소단 · 정지경계 · 옹벽선)은 하나도 안 바꿨습니다(합성은 됨)"); }
+        // ★[v114.0 · 설치 전 검토 8] 넣었던 선 옹벽이 이번 합성에서 빠졌다(보류 · 쉼) — 지난 합성이 자른 평면(사면 · 소단 · 정지경계)은 그대로 남는다
+        var heldLine = walls.Where(x => x.Kind == 2 && x.State == 1 && !useOk.Any(u => u.No == x.No)).Select(x => x.No).ToList();
+        if (heldLine.Count > 0) log.AppendLine($"   ⚠선 옹벽 {string.Join(",", heldLine)}는 이번 합성에서 빠졌지만 지난 합성이 자른 평면(사면 · 소단 · 정지경계)은 그대로입니다 — 계획지표면을 다시 만들면 풀립니다");
         _lastOk = true;
         if (at != null) at.Ok = true;   // ★[v103.1.12] 정식 회도 «됨»(빠뜨리면 부른 쪽이 성공을 «전체 못 함»으로 읽는다 — 화면 없는 시험 D1 1015 첫 판에서 잡음)
         _compId = cTin.ObjectId; _compGround = groundId;

@@ -25,7 +25,7 @@ public static class GradingSettings
     /// <b>같은 번호를 단 빌드가 여러 개</b>가 되어, 어느 것이 깔렸는지 물으면 답할 수가 없었다.</para>
     /// <para><c>x.0</c> = 화면·명령이 바뀌어 <b>사용자가 다르게 일하게</b> 되는 판 ·
     /// <c>x.y</c> = 같은 화면에서 결함을 고친 판.</para></summary>
-    public const string Version = "v113.2.1 (2026-11-05)";
+    public const string Version = "v114.0.0 (2026-11-05)";
 
     /// <summary>★★[v32.20 · JACK 0812 판단] <b>이력 본문을 비웠다 — 이제 여기는 정본을 가리키는 이정표다.</b>
     /// <para>78,748자 한 줄이 이 파일에 얹혀 있었는데, <b>출력도 참조도 없었다</b>(코드 어디서도 안 읽는다).
@@ -625,6 +625,12 @@ public static class GradingSettings
     /// 코드는 지운 게 아니라 스위치만 내렸다 — 다음에 '판넬이 선을 벗어났나, 선 자체가 이상한가'를
     /// 갈라야 할 때 이 한 줄이면 다시 보인다. 그때 로그 숫자를 늘리는 것보다 이게 빠르다.</summary>
     public static bool WallLineLayer = false;
+    /// <summary>★[v114.0 · JACK 1105 · 계획 2절 «기능 스위치 · 되돌림»] 켜면 [옹벽 추가]의 선 길이 숨고 선 옹벽(종류 2) 기록은 쉰다(⚠ · 지우지 않음) — Core <see cref="DH.Grading.Core.WallByLine.Off"/>와 같이 본다.</summary>
+    public static bool WallLineOff
+    {
+        get => DH.Grading.Core.WallByLine.Off;
+        set => DH.Grading.Core.WallByLine.Off = value;
+    }
 
     // ── [§75 사면→옹벽 부분 전환 — Phase 1-A] ──
     // DHGRADE가 그린 사면선/소단선에 붙이는 XData 앱 이름 — 클릭 시 어느 면인지(방향·단·구간) 식별.

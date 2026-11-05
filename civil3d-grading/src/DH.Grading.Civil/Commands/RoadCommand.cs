@@ -22,6 +22,8 @@ public class RoadCommand
     {
         var doc = AcadApp.DocumentManager.MdiActiveDocument;
         if (doc == null) return;
+        // 화면 없는 Civil은 도킹창을 건드리면 죽음(1105 화면 없는 시험 0xC0000005 — Build 440줄과 같은 법)
+        if (SelfCheckLog.Headless) { doc.Editor.WriteMessage("\n[진입도로] 화면 없음 — 진입도로 창을 띄우지 않습니다."); return; }
         RoadPalette.Show();
     }
 
