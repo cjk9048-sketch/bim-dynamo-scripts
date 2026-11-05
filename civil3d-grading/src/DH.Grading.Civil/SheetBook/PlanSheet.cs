@@ -178,7 +178,7 @@ internal static class PlanSheet
                 else outside.Add(it.LayerId);
             }
             var fz = inSheet.Where(l => !outside.Contains(l)).ToHashSet();
-            foreach (var nm in SheetBookBuilder.AlwaysFreeze.Concat(new[] { MapPickCommand.BoxLayer, "Satellite", BasemapCommand.Layer })) if (lt.Has(nm)) fz.Add(lt[nm]);
+            foreach (var nm in SheetBookBuilder.AlwaysFreeze.Concat(new[] { MapPickCommand.BoxLayer, "Satellite", BasemapCommand.Layer, StructImport.LayXref })) if (lt.Has(nm)) fz.Add(lt[nm]);   // ★[v115 · JACK 1105 Revit 구조물 · D2] 평면 창에서는 원본 3D 얼림(외곽선만)
             // ★[검토 1103 · 2] 못 숨긴 레이어(장 내용과 평면이 같은 레이어 · 0 · 현재 레이어) — 평면 창 안에 든 장 내용만 ⚠(창 밖 장은 어차피 안 보임)
             string LName(ObjectId l) => ((LayerTableRecord)tr.GetObject(l, OpenMode.ForRead)).Name;
             var mixed = inSheetWin.Where(l => !fz.Contains(l)).Select(LName)

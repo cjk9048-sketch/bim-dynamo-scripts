@@ -1056,14 +1056,16 @@ public sealed class ProfileCommand
             // ★★[JACK 0904] <b>장마다 그린다.</b> 종전엔 <c>pvId</c>(첫 장) 하나에만 그려
             //   여러 장에서 <b>첫 장에만 옹벽 막대가 보였다</b>.
             string bars = "";
+            int nStruct9 = 0;
             for (int bi9 = 0; bi9 < pvIds9.Count; bi9++)
             {
                 DrawProfStrataNames(db, pvIds9[bi9], strataProfs, log);   // ★[JACK 0828] 지층·지하수위 이름
                 string b9 = DrawVertBars(db, pvIds9[bi9], alignId, pidGround, pidPad, pidExcav, LastWallSpans, log);
                 if (bi9 == 0) bars = b9;
                 log.AppendLine((pvIds9.Count > 1 ? $"  [{bi9 + 1}/{pvIds9.Count}장] " : "") + b9);
+                nStruct9 += StructDraw.IntoProfile(db, pvIds9[bi9], SheetCommand.CurrentDrawingScale(db), log);   // ★[v115 · JACK 1105 Revit 구조물] 자른 면(불러 둔 xref 그대로 — 다시 싣기는 [구조물 다시 반영])
             }
-            ed.WriteMessage("\n  · " + bars);
+            ed.WriteMessage("\n  · " + bars + (nStruct9 > 0 ? $" · 구조물 단면 {nStruct9}" : ""));
         }
         catch (System.Exception ex)
         {
