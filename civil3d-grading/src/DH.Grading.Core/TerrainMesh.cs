@@ -54,6 +54,8 @@ public static class TerrainMesh
         public readonly int[] Count = new int[Keys.Length];
         /// <summary>바뀐 칸 — 원점 · 칸 · 너비 · 높이 · 표시.</summary>
         public double GX0, GY0, GCell; public int GW, GH; public bool[] GMark = Array.Empty<bool>();
+        /// <summary>★[v115 · JACK 1105 임상도] 입력 세모(<see cref="Input.F"/> 차례)마다 구분.</summary>
+        public Cls[] TriCls = Array.Empty<Cls>();
         /// <summary>바뀐 자리 범위(도면 좌표 · 없으면 NaN) — 위성 «자세히» 범위.</summary>
         public double CMinX = double.NaN, CMinY = double.NaN, CMaxX = double.NaN, CMaxY = double.NaN;
         public int NoGround;
@@ -204,6 +206,7 @@ public static class TerrainMesh
             mny = Math.Min(mny, Math.Min(inp.Y[a], Math.Min(inp.Y[b], inp.Y[c]))); mxy = Math.Max(mxy, Math.Max(inp.Y[a], Math.Max(inp.Y[b], inp.Y[c])));
         }
         if (mnx <= mxx) { o.CMinX = mnx; o.CMinY = mny; o.CMaxX = mxx; o.CMaxY = mxy; }
+        o.TriCls = cls;   // ★[v115 · JACK 1105 임상도] 입력 세모 차례 구분 — 수목 «설계 자리» = 그 자리 세모가 원지반이 아님(N2)
 
         // 바뀐 칸
         if (mnx <= mxx)
