@@ -27,8 +27,16 @@ public static partial class RoadGrade
         public int Refined, Removed, Capped; public double Ms;   // Capped = 세분 한도(횡단 4만 · 마구리 광선 2천)에 걸린 횟수
         /// <summary>★[v113.1 · B1] 급한 굽은 안쪽 주름에서 흘러내린 원뿔 감싸기에 져서 자른 광선 수(0 = 주름 높이가 맞음 · 옛 그대로).</summary>
         public int Slumped;
+        /// <summary>★[v114.3 · JACK 1105 오목부] 그중 꼬리를 흘러내린 높이로 남긴 광선 수(옛 끝 = 주름 · 만남 — 안쪽 호 부채를 광선이 덮음).</summary>
+        public int SlumpTails;
+        /// <summary>★[v114.3] 주름 끝 너머 빈 사면으로 늘인 광선 수(<see cref="GrowOrphans"/> — 0이면 옛 그대로).</summary>
+        public int OrphanGrown;
+        /// <summary>★[v114.3] 새 길이 높이 · 끝을 바꾼 광선(꼬리 · 빈 사면 늘임) — 떨어진 조각이 새 길 탓인지 가릴 때(<see cref="NewPathPieces"/>).</summary>
+        public HashSet<Ray> NewRays = new(ReferenceEqualityComparer.Instance);
         /// <summary>★[검토 2] 흘러내림 원천 마디(사면 원뿔) — 선 따라 TIN 틈 면 높이를 B1 기준으로 잴 때.</summary>
         public List<(double X0, double Y0, double Z0, double X1, double Y1, double Z1, sbyte Reg, double Ke)> SlumpSrc = new();
+        /// <summary>★[v114.3 · 계획 굽은안쪽부채 2판 §3] 흘러내림 원천의 칸 색인(성토 = Lo · 절토 = Hi · 감싸기 원천과 같은 꼴) — B1 평가기(<see cref="EvalB1"/>)의 덧 원천. 없으면 null.</summary>
+        public EnvSet? SlumpEnv;
         /// <summary>★[v113.1 · 검토 성능] 흘러내림 셈에 든 시간(ms).</summary>
         public double SlumpMs;
         /// <summary>★[v113.1 · A1] 몰려 한 점으로 합친 광선 끝 수.</summary>
@@ -42,8 +50,12 @@ public static partial class RoadGrade
     const double LineTol = 0.01;       // 줄이기 · 현 오차 허용(1 cm — 계획 2.3)
     const double MinGap = 0.01;        // 세분 최소 간격(m)
 
-    internal static SectionSet BuildSections(RayCtx c, bool simplify = true)
+    /// <summary>하네스 전용 — v114.3 새 길(진 광선 자르지 않기 · 빈 사면 늘이기)을 끄고 옛 v113.1 흘러내림 길로(S217 바꾸기 전 · 후 견줌).</summary>
+    internal static bool ForceV113;
+
+    internal static SectionSet BuildSections(RayCtx c, bool simplify = true, bool v1143 = true)
     {
+        if (ForceV113) v1143 = false;
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var set = new SectionSet { Sec = c.Sec, Inp = c.Inp };
         double L = c.CL.Length, step = Math.Max(0.1, c.Inp.EdgeStep);
@@ -155,8 +167,9 @@ public static partial class RoadGrade
         for (int end = 0; end < 2; end++) set.Caps[end] = CapChain(c, end, end == 0 ? set.X[0] : set.X[^1], set);
         foreach (var cap in set.Caps) for (int i = 0; i + 1 < cap.Count; i++) TrimCross(cap[i], cap[i + 1]);
         set.EnvRays = EnvRays(c, set);   // ★★[v113.3 · 계획 §1] 감싸기가 이긴 구간 — 현 오차 1 mm까지 점(K −7) · 묻힌 꺾임점은 −7(사면선 · 소단선 역할 없음)
-        set.Slumped = Slump(c, set);   // ★★★[v113.1 · B1] 급한 굽은 안쪽 주름 높이 차 → 높은(성토) · 낮은(절토) 단면에서 흘러내린 면이 이김
+        set.Slumped = v1143 ? Slump(c, set) : SlumpV113(c, set);   // ★★★[v113.1 · B1 · v114.3 자르지 않기 — v1143 = false면 옛 길(물러섬)] 급한 굽은 안쪽 주름 높이 차 → 높은(성토) · 낮은(절토) 단면에서 흘러내린 면이 이김
         set.Merged = MergeEnds(set);   // ★★[v113.1 · A1] 곡선 중심에 몰린 광선 끝 — 한 꼭짓점으로
+        if (v1143) set.OrphanGrown = GrowOrphans(c, set);   // ★★[v114.3 · JACK 1105 오목부] 주름 끝 너머 빈 사면(곡선 중심 너머 · 다른 다리 꼭짓점 원뿔 띠)을 그 광선이 B1 높이로 땅까지
         set.Ms = sw.Elapsed.TotalMilliseconds;
         return set;
     }
@@ -166,9 +179,10 @@ public static partial class RoadGrade
     /// ① 주름 · 만남으로 끝난 사면 광선의 사면 마디(옹벽 면 · 가장자리 옹벽 · 옹벽 단면 광선은 빼고 — 검토 H1)마다 흘러내린 원뿔(기울기 = √(사면 구배² + 그 자리 종단경사²) — 경사진 단면의
     /// 옆 아래 기울기를 넘지 않아 곧은 길 이웃은 안 깎음 · 검토 H2)을 세우고, 같은 쪽 · 같은 절성 사면 광선(주름 · 만남 끝이거나 원천 끝 곁 2 × 단면 간격 안)이 그 감싸기보다 1 cm 넘게 낮으면(성토) ·
     /// 높으면(절토) 두 높이가 같은 자리(이분 · 5 mm 안 꺾임점이면 그 점)에서 자른다.
-    /// ② 이긴(잘리지 않은) 주름 광선은 옛 주름 너머로 감싸기 높이로 이어간다(1 cm 안으로 나눔 · 검토 M1) — 땅 · 다른 광선(끝 마구리 포함)을 건너는 자리 · 남은 띠 · 도로 면까지(검토 M2).
-    /// 주름 높이가 이미 맞으면(1 cm 안) 안 건드림(비트 같음). 돌려줌 = 자른 광선 수.</summary>
-    /// <summary>하네스 전용 — 흘러내림을 끈 비교 면(높이 정확도 견줌 · 출하 DLL 밖에서 못 건드리게 internal).</summary>
+    /// ②(v113.1 — 이제 <see cref="SlumpV113"/>에만) 이긴 주름 광선을 옛 주름 너머로 늘임.
+    /// ★★[v114.3 · 계획 굽은안쪽부채 2판] 이 길: 진 광선은 자르지 않고 자른 자리 뒤를 B1 평가기 높이로(꼬리) · 대상 밖 광선도 B1이 이기는 자리면 같은 꼬리 · 빈 사면은 GrowOrphans.
+    /// 주름 높이가 이미 맞으면(1 cm 안) 안 건드림(비트 같음). 돌려줌 = 높이를 바꾼 광선 수.
+    /// 하네스 전용 SlumpOff — 흘러내림을 끈 비교 면(높이 정확도 견줌 · 출하 DLL 밖에서 못 건드리게 internal).</summary> — 흘러내림을 끈 비교 면(높이 정확도 견줌 · 출하 DLL 밖에서 못 건드리게 internal).</summary>
     internal static bool SlumpOff;
 
     /// <summary>★[v113.3 · 계획 §1 4단계 — 보류] 광선(선 면)에도 감싸기(Walk.Cone max · min · −7 점 · 흘러내림 빼기)를 걸까 — 기본 끔.
@@ -182,8 +196,7 @@ public static partial class RoadGrade
         var swS = System.Diagnostics.Stopwatch.StartNew();
         int cuts = 0;
         var slumped = new HashSet<Ray>(ReferenceEqualityComparer.Instance);
-        var oldEnd = new Dictionary<Ray, (double X, double Y)>(ReferenceEqualityComparer.Instance);   // 자른 광선의 옛 끝(비운 자리)
-        var oldDay = new HashSet<Ray>(ReferenceEqualityComparer.Instance);   // 그 옛 끝이 땅(데이라잇 · 바탕 없음)이었던 광선
+        var tails = new List<(Ray R, double CutAt, double Zc, bool Fill)>();   // ★[v114.3] 진 광선(자른 자리 · 그 높이) — 높이는 모든 원천을 모은 B1 평가기로
         bool SlopeOnly(Ray q)
         {
             if (q.Regime == 0 || q.EdgeWall || q.Pts.Count < 2) return false;
@@ -297,192 +310,106 @@ public static partial class RoadGrade
                 cutAt = Math.Max(cutAt, Math.Min(0.05, dEnd / 2));
                 if (cutAt >= dEnd - 1e-6) continue;
                 double zc = RayZ(r, cutAt);
-                oldEnd[r] = (r.Pts[^1].X, r.Pts[^1].Y);
-                if (r.End is RayEnd.Daylight or RayEnd.NoGround) oldDay.Add(r);
-                while (r.Pts.Count > 1 && r.Pts[^1].D > cutAt + 1e-9) r.Pts.RemoveAt(r.Pts.Count - 1);
-                if (r.Pts[^1].D < cutAt - 1e-9) r.Pts.Add(new RayPt(cutAt, r.Ex + r.Nx * cutAt, r.Ey + r.Ny * cutAt, zc, -6));
-                r.End = RayEnd.Crease;
+                // ★★[v114.3 · JACK 1105 오목부 «여전히 조금씩 뭉개짐 · 오목부에서만» · 계획 2026-11-05_진입도로_굽은안쪽부채] 진 광선은 자르지 않고 높이만 흘러내린 면으로.
+                //   자르면(옛 길) 안쪽 호 광선이 5 ~ 40 cm 토막만 남고 이긴 광선 늘임은 제 방향(곧은 다리 직각)으로만 가서, 호 앞 부채(쐐기)를 아무 선도 못 지나
+                //   선 면 · 선 따라 TIN이 둘레 점만으로 큰 세모를 쳐 흘러내린 면(B1 기준)과 0.3 ~ 0.9 m 어긋났다(1105 실측 — JACK 도면 굽은 안쪽 셋 · S자 R 8.3 만든 꼴도 같음).
+                //   높이 = 성토 max(제 단면, 흘러내림) · 절토 min(자른 자리에서 둘이 같아 이어짐) · 현 오차 LineTol로 나눔 · 그 뒤 점은 −6(사면선 · 소단선 역할 없음) ·
+                //   자리(주인 몫)는 그대로 — 끝이 주름 · 만남이면 그 자리 · 땅(데이라잇)인데 흘러내린 면이 아직 땅보다 높으면(성토) · 낮으면(절토) 끝을 주름으로(GrowOrphans가 땅까지).
+                //   비운 자리가 없으니 옛 ② 이긴 광선 늘임은 지움(옛 비운 띠 = 이제 진 광선 제 몫).
+                tails.Add((r, cutAt, zc, fill));   // 높이는 두 쪽 원천을 다 모은 뒤(B1 평가기 하나 — 아래)
                 slumped.Add(r);
+                set.SlumpTails++;
                 cuts++; sideCuts++;
             }
             if (sideCuts == 0) continue;
-            // ② 이긴 주름 광선 — 옛 주름 너머로 감싸기 높이로(진 광선을 자른 바로 그 면 · 이음매 높이가 맞음).
-            //   멈춤: 땅 · 다른 광선 마디를 건넘(이 쪽 모든 광선 + 끝 마구리 — 엇갈린 띠 · 얇은 띠를 건너뛰지 않게 · 검토 M2) · 남은 띠 안 · 도로 면.
-            //   ★ 엔진 점 평가기 높이로 멈추면 곡선 안쪽 꺾은선 측점 계단(0.1 ~ 0.2 m)만큼 이음매가 어긋났다 — 기하로만 멈춤.
-            var segs = new List<(double X0, double Y0, double X1, double Y1, Ray R)>();
-            foreach (var q in rays.Concat(set.Caps.SelectMany(cp => cp)))
-                for (int i = 0; i + 1 < q.Pts.Count; i++) segs.Add((q.Pts[i].X, q.Pts[i].Y, q.Pts[i + 1].X, q.Pts[i + 1].Y, q));
-            var sgrid = new Dictionary<(int, int), List<int>>();
-            for (int i = 0; i < segs.Count; i++)
-            {
-                var s = segs[i];
-                int x0 = (int)Math.Floor(Math.Min(s.X0, s.X1) / Cell), x1 = (int)Math.Floor(Math.Max(s.X0, s.X1) / Cell), y0 = (int)Math.Floor(Math.Min(s.Y0, s.Y1) / Cell), y1 = (int)Math.Floor(Math.Max(s.Y0, s.Y1) / Cell);
-                for (int a = x0; a <= x1; a++) for (int b = y0; b <= y1; b++) { if (!sgrid.TryGetValue((a, b), out var l)) sgrid[(a, b)] = l = new(); l.Add(i); }
-            }
-            // 마디 (ax, ay)–(bx, by)가 남의 마디를 처음 건너는 매개(0 ~ 1) — 없으면 NaN
-            double FirstCross(double ax, double ay, double bx, double by, Ray self)
-            {
-                double best = double.NaN;
-                var seen = new HashSet<int>();
-                for (int a = (int)Math.Floor(Math.Min(ax, bx) / Cell); a <= (int)Math.Floor(Math.Max(ax, bx) / Cell); a++)
-                    for (int b = (int)Math.Floor(Math.Min(ay, by) / Cell); b <= (int)Math.Floor(Math.Max(ay, by) / Cell); b++)
-                    {
-                        if (!sgrid.TryGetValue((a, b), out var l)) continue;
-                        foreach (int i in l)
-                        {
-                            if (!seen.Add(i)) continue;
-                            var s = segs[i];
-                            if (ReferenceEquals(s.R, self)) continue;
-                            double rx = bx - ax, ry = by - ay, sx = s.X1 - s.X0, sy = s.Y1 - s.Y0, den = rx * sy - ry * sx;
-                            if (Math.Abs(den) < 1e-15) continue;
-                            double qx = s.X0 - ax, qy = s.Y0 - ay, t = (qx * sy - qy * sx) / den, u = (qx * ry - qy * rx) / den;
-                            if (t > 1e-9 && t <= 1 && u >= 0 && u <= 1 && (double.IsNaN(best) || t < best)) best = t;
-                        }
-                    }
-                return best;
-            }
-            // ★[JACK 1104 A안] 비운 자리 = 자른 광선이 내준 띠(새 끝 → 옛 끝) — 이긴 광선은 이 안에서만 늘임(살아남은 남의 주름을 넘지 않음 · 실측 바늘 6 → 0 · T자 8 → 0)
-            var vac = new List<(double[] Px, double[] Py)>();
-            for (int i = 0; i + 1 < rays.Count; i++)
-            {
-                var ra = rays[i]; var rb = rays[i + 1];
-                bool ca = oldEnd.TryGetValue(ra, out var oa), cb = oldEnd.TryGetValue(rb, out var ob);
-                if (!ca && !cb) continue;
-                if (!ca) oa = (ra.Pts[^1].X, ra.Pts[^1].Y);
-                if (!cb) ob = (rb.Pts[^1].X, rb.Pts[^1].Y);
-                vac.Add((new[] { ra.Pts[^1].X, oa.X, ob.X, rb.Pts[^1].X }, new[] { ra.Pts[^1].Y, oa.Y, ob.Y, rb.Pts[^1].Y }));
-                // ★[검토 H] 비운 띠의 바깥 변이 옛 데이라잇(땅)이면 그 너머도 비운 자리(땅까지 감) — 바깥 변에서 멈추면 이긴 광선이 땅 위 공중에서 주름으로 끝나 홈이 평평하게 닫혔다(실측 79곳 중 77곳 1 cm 넘게 뜸 · 최대 1.9 m)
-                bool da = ca ? oldDay.Contains(ra) : ra.End is RayEnd.Daylight or RayEnd.NoGround, db = cb ? oldDay.Contains(rb) : rb.End is RayEnd.Daylight or RayEnd.NoGround;
-                if (da && db)
-                {
-                    double L = c.DMax;
-                    vac.Add((new[] { oa.X, oa.X + ra.Nx * L, ob.X + rb.Nx * L, ob.X }, new[] { oa.Y, oa.Y + ra.Ny * L, ob.Y + rb.Ny * L, ob.Y }));
-                }
-            }
-            var vgrid = new Dictionary<(int, int), List<int>>();
-            for (int vi = 0; vi < vac.Count; vi++)
-                for (int a = (int)Math.Floor(vac[vi].Px.Min() / Cell); a <= (int)Math.Floor(vac[vi].Px.Max() / Cell); a++)
-                    for (int b = (int)Math.Floor(vac[vi].Py.Min() / Cell); b <= (int)Math.Floor(vac[vi].Py.Max() / Cell); b++)
-                    { if (!vgrid.TryGetValue((a, b), out var l)) vgrid[(a, b)] = l = new(); l.Add(vi); }
-            var quads = new List<(int I, double[] Px, double[] Py)>();
-            for (int i = 0; i + 1 < rays.Count; i++)
-            {
-                var ra = rays[i]; var rb = rays[i + 1];
-                if (ra.Pts.Count < 2 || rb.Pts.Count < 2) continue;
-                quads.Add((i, new[] { ra.Ex, ra.Pts[^1].X, rb.Pts[^1].X, rb.Ex }, new[] { ra.Ey, ra.Pts[^1].Y, rb.Pts[^1].Y, rb.Ey }));
-            }
-            // ★[검토 Perf] 띠 둘레 칸 색인(8 m) — 걸음마다 모든 띠를 훑지 않게(긴 도로 N²). 둘레를 고치면 새 칸에도 넣음(옛 칸에 남은 번호는 InPoly가 걸러 같은 답)
-            var qgrid = new Dictionary<(int, int), List<int>>();
-            void IndexQuad(int qi)
-            {
-                var (_, px, py) = quads[qi];
-                for (int a = (int)Math.Floor(px.Min() / Cell); a <= (int)Math.Floor(px.Max() / Cell); a++)
-                    for (int b = (int)Math.Floor(py.Min() / Cell); b <= (int)Math.Floor(py.Max() / Cell); b++)
-                    { if (!qgrid.TryGetValue((a, b), out var l)) qgrid[(a, b)] = l = new(); if (l.Count == 0 || l[^1] != qi) l.Add(qi); }
-            }
-            for (int qi = 0; qi < quads.Count; qi++) IndexQuad(qi);
-            static bool InPoly(double x, double y, double[] px, double[] py)
-            {
-                bool inside = false;
-                for (int a = 0, b = px.Length - 1; a < px.Length; b = a++)
-                    if ((py[a] > y) != (py[b] > y) && x < (px[b] - px[a]) * (y - py[a]) / (py[b] - py[a]) + px[a]) inside = !inside;
-                return inside;
-            }
-            for (int ri = 0; ri < rays.Count; ri++)
-            {
-                var r = rays[ri];
-                if (r.End != RayEnd.Crease || slumped.Contains(r) || !SlopeOnly(r)) continue;
-                bool fill = r.Regime < 0;
-                var e0 = r.Pts[^1];
-                double tMax = Math.Max(0, c.DMax - e0.D);
-                // 이 늘임에 닿을 수 있는 원천만(감싸기 ≥ 끝 높이 − 기울기 × 늘임)
-                var near2 = new List<int>();
-                // ★[검토 Perf] 원천은 칸 색인으로 — 늘임 선에서 (가장 높은 원천 − 늘임 바닥) ÷ 가장 무른 기울기보다 먼 원천은 아래 거름에서 어차피 빠짐(감싸기는 최댓값이라 차례 무관 · 같은 답)
-                double reach2 = Math.Max(0, fill ? zSrcMax - (e0.Z - keMax * tMax) : (e0.Z + keMax * tMax) - zSrcMin) / keMin;
-                double ex1 = e0.X + r.Nx * tMax, ey1 = e0.Y + r.Ny * tMax;
-                foreach (int i in Query(Math.Min(e0.X, ex1) - reach2, Math.Min(e0.Y, ey1) - reach2, Math.Max(e0.X, ex1) + reach2, Math.Max(e0.Y, ey1) + reach2))
-                {
-                    var s = src[i];
-                    if (s.Reg != r.Regime) continue;
-                    double floorZ = fill ? e0.Z - s.Ke * tMax : e0.Z + s.Ke * tMax;
-                    double dz = fill ? Math.Max(s.Z0, s.Z1) - floorZ : floorZ - Math.Min(s.Z0, s.Z1);
-                    if (dz <= 0) continue;
-                    if (SegSegDist(e0.X, e0.Y, e0.X + r.Nx * tMax, e0.Y + r.Ny * tMax, s.X0, s.Y0, s.X1, s.Y1) > dz / s.Ke) continue;
-                    near2.Add(i);
-                }
-                if (near2.Count == 0) continue;
-                double ZS(double x, double y)
-                {
-                    double best = double.NegativeInfinity;
-                    foreach (int i in near2) { var s = src[i]; double cz = SegCone(x, y, s.X0, s.Y0, fill ? s.Z0 : -s.Z0, s.X1, s.Y1, fill ? s.Z1 : -s.Z1, s.Ke); if (cz > best) best = cz; }
-                    return fill ? best : -best;
-                }
-                // 0 = 계속 · 1 = 땅에 닿음 · 2 = 남의 띠 · 도로 면 · 3 = 바탕 없음
-                int Stop(double t)
-                {
-                    double x = e0.X + r.Nx * t, y = e0.Y + r.Ny * t;
-                    if (!c.Inp.Base.TryGetElevation(x, y, out double g)) return 3;
-                    bool inV = false;
-                    if (vgrid.TryGetValue(((int)Math.Floor(x / Cell), (int)Math.Floor(y / Cell)), out var vl))
-                        foreach (int vi in vl) if (InPoly(x, y, vac[vi].Px, vac[vi].Py)) { inV = true; break; }
-                    if (!inV) return 2;
-                    double z = ZS(x, y);
-                    if (!double.IsFinite(z) || (fill ? z <= g : z >= g)) return 1;
-                    if (qgrid.TryGetValue(((int)Math.Floor(x / Cell), (int)Math.Floor(y / Cell)), out var ql))
-                        foreach (int qi in ql) { var q = quads[qi]; if (q.I != ri - 1 && q.I != ri && InPoly(x, y, q.Px, q.Py)) return 2; }
-                    var pe = c.R.Eval!(x, y);
-                    if (pe.Kind == 1 || pe.Kind == 4 || pe.Kind == 255) return 2;
-                    return 0;
-                }
-                const double St = 0.1;
-                double tOk = 0; int why = 0;
-                for (double t = St; t <= tMax + 1e-9; t += St)
-                {
-                    double tc = FirstCross(e0.X + r.Nx * (t - St), e0.Y + r.Ny * (t - St), e0.X + r.Nx * t, e0.Y + r.Ny * t, r);
-                    double tEnd = double.IsNaN(tc) ? t : t - St + St * tc;
-                    int w = Stop(tEnd);
-                    if (w == 0 && !double.IsNaN(tc)) { tOk = Math.Max(0, tEnd - 1e-3); why = 2; break; }
-                    if (w != 0) { double lo = tOk, hi = tEnd; for (int it = 0; it < 40 && hi - lo > 1e-5; it++) { double m = (lo + hi) / 2; if (Stop(m) == 0) lo = m; else hi = m; } tOk = lo; why = w; break; }
-                    tOk = t;
-                }
-                if (tOk < 1e-3) continue;
-                r.Pts[^1] = new RayPt(e0.D, e0.X, e0.Y, e0.Z, -4);   // 옛 주름 끝 — 이제 광선 속 점
-                double xe = e0.X + r.Nx * tOk, ye = e0.Y + r.Ny * tOk, ze = ZS(xe, ye);
-                if (why == 1 && c.Inp.Base.TryGetElevation(xe, ye, out double ge)) ze = ge;
-                // ★[검토 M1] 감싸기를 1 cm 안으로 따라가게 나눔
-                var ext = new List<(double T, double Z)>();
-                void Sub(double t0, double z0, double t1, double z1, int depth)
-                {
-                    if (depth > 12 || t1 - t0 < 0.02) return;
-                    double tm = (t0 + t1) / 2, zm = ZS(e0.X + r.Nx * tm, e0.Y + r.Ny * tm);
-                    if (!double.IsFinite(zm) || Math.Abs(zm - (z0 + z1) / 2) <= LineTol) return;
-                    Sub(t0, z0, tm, zm, depth + 1); ext.Add((tm, zm)); Sub(tm, zm, t1, z1, depth + 1);
-                }
-                Sub(0, e0.Z, tOk, ze, 0);
-                foreach (var (t, z) in ext) r.Pts.Add(new RayPt(e0.D + t, e0.X + r.Nx * t, e0.Y + r.Ny * t, z, -4));
-                r.Pts.Add(new RayPt(e0.D + tOk, xe, ye, ze, -1));
-                r.End = why == 1 ? RayEnd.Daylight : why == 3 ? RayEnd.NoGround : RayEnd.Crease;
-                // ★[검토 M2 마저] 늘인 마디도 뒤 광선의 건넘 검사에 넣고 이 광선 곁 띠 둘레를 새 끝으로 고침 — 늘임끼리 엇갈려 겹치던 자리(급한 곡선 안쪽 두 부채 · 실측 겹침 2,075 → 78)
-                for (int qi = 0; qi < quads.Count; qi++)
-                {
-                    int I = quads[qi].I; if (I != ri - 1 && I != ri) continue;
-                    var ra = rays[I]; var rb = rays[I + 1];
-                    quads[qi] = (I, new[] { ra.Ex, ra.Pts[^1].X, rb.Pts[^1].X, rb.Ex }, new[] { ra.Ey, ra.Pts[^1].Y, rb.Pts[^1].Y, rb.Ey });
-                    IndexQuad(qi);
-                }
-                for (int i = Math.Max(0, r.Pts.Count - 2 - ext.Count); i + 1 < r.Pts.Count; i++)
-                {
-                    var sN = (r.Pts[i].X, r.Pts[i].Y, r.Pts[i + 1].X, r.Pts[i + 1].Y, r); segs.Add(sN); int si = segs.Count - 1;
-                    int x0 = (int)Math.Floor(Math.Min(sN.Item1, sN.Item3) / Cell), x1 = (int)Math.Floor(Math.Max(sN.Item1, sN.Item3) / Cell), y0 = (int)Math.Floor(Math.Min(sN.Item2, sN.Item4) / Cell), y1 = (int)Math.Floor(Math.Max(sN.Item2, sN.Item4) / Cell);
-                    for (int a2 = x0; a2 <= x1; a2++) for (int b2 = y0; b2 <= y1; b2++) { if (!sgrid.TryGetValue((a2, b2), out var l)) sgrid[(a2, b2)] = l = new(); l.Add(si); }
-                }
-            }
+            // ★[v114.3 · 계획 굽은안쪽부채 2판] 옛 ② 이긴 광선 늘임(자르고 비운 띠로) · ③ 진 광선 땅까지 늘임은 지움 — 진 광선을 자르지 않아 비운 자리가 없고,
+            //   주름 끝 너머 빈 사면(곡선 중심 너머 · 옛 데이라잇 너머)은 BuildSections 끝의 GrowOrphans가 B1 평가기로 한 번에 늘인다.
             for (int pass = 0; pass < 4; pass++)
             {
                 int cut = 0;
                 for (int i = 0; i + 1 < rays.Count; i++) if (TrimCross(rays[i], rays[i + 1])) cut++;
                 if (cut == 0) break;
             }
+        }
+        if (set.SlumpSrc.Count > 0)
+        {
+            var se = new EnvSet();
+            foreach (var q in set.SlumpSrc) (q.Reg < 0 ? se.Lo : se.Hi).Add((q.X0, q.Y0, q.Z0, q.X1, q.Y1, q.Z1, q.Ke));
+            se.Build(); set.SlumpEnv = se;
+        }
+        // ★★[v114.3 · 계획 굽은안쪽부채 2판] 진 광선 꼬리 높이 = B1 평가기(EvalB1 — 모든 흘러내림 원천을 감싸기와 같은 법으로) 하나.
+        //   광선마다 제 원천 후보(cand)로 max(제 단면, 원뿔)를 쓰면 곡선 중심에 모인 꼬리 끝이 2 mm 안에서 15 cm씩 갈려(측점 압축 — 제 단면 높이가 광선마다 다름) 바늘이 됐다(S217 실측).
+        //   자른 자리는 제 단면 높이(그 자리에서 원뿔과 같음) · 그 뒤 점 = B1(종류가 그 절성이면 Z · 땅이면 바탕 · 그 밖이면 제 단면) · 현 오차 LineTol로 나눔(−6).
+        // ★[v114.3 · 계획 굽은안쪽부채 2판] 대상 밖 광선(주름 끝 · 원천 끝 곁이 아닌 사면 광선)도 B1(감싸기 + 흘러내림)이 제 단면을 LineTol 넘게 이기는 자리가 있으면 같은 꼬리로 —
+        //   곡선 시작 곁 다리 광선이 곡선 중심을 지나 이어지는데(제 몫) 그 자리 평가기는 감싸기로 14 cm 끊김을 메워(감싸기 전 값은 이긴 표본이 바뀌며 끊김) 모인 꼬리 끝과 15 cm 달랐다(S217 실측 바늘).
+        //   K = √(k² + g²)라 곧은 다리 광선은 원뿔에 안 지고, 감싸기 원천은 주름 곁뿐이라 그 밖 광선은 그대로(S212 ⑨ · S214 비트 같음 확인).
+        if (set.SlumpEnv != null)
+        {
+            var inTail = new HashSet<Ray>(tails.Select(t => t.R), ReferenceEqualityComparer.Instance);
+            foreach (var r in set.X.SelectMany(x => new[] { x.L, x.R }))
+            {
+                if (inTail.Contains(r) || !SlopeOnly(r)) continue;
+                bool fill = r.Regime < 0; var se = set.SlumpEnv;
+                double Def(double d)
+                {
+                    double x = r.Ex + r.Nx * d, y = r.Ey + r.Ny * d, z = RayZ(r, d);
+                    // 흘러내림 원뿔 · 주름 원천 감싸기 둘 다 제 단면을 못 넘는 자리는 평가기를 안 부름(속도 · 같은 답 — B1은 이 둘로만 제 단면 위로 감)
+                    var ev = c.R.EnvS;
+                    bool mayS = double.IsFinite(fill ? se.LoAt(x, y, z) : se.HiAt(x, y, z));
+                    bool mayE = ev != null && ev.Count > 0 && double.IsFinite(fill ? ev.LoAt(x, y, z) : ev.HiAt(x, y, z));
+                    if (!mayS && !mayE) return double.NegativeInfinity;
+                    var pe = EvalB1(c.R, set, x, y);
+                    if (pe.Kind != (fill ? 3 : 2)) return double.NegativeInfinity;
+                    return fill ? pe.Z - z : z - pe.Z;   // B1(평가기 + 원뿔)이 제 단면을 이기는 몫
+                }
+                double dEnd = r.Pts[^1].D, lastOk = 0, cutAt = double.NaN;
+                int nStep = Math.Max(1, (int)Math.Ceiling(dEnd / 0.05));
+                if (Def(0) > LineTol) continue;   // 가장자리부터 지면(높이 차) — 대상 판정 밖(옛 그대로)
+                for (int q = 1; q <= nStep; q++)
+                {
+                    double d = Math.Min(dEnd, q * 0.05), f = Def(d);
+                    if (f <= 0) { lastOk = d; continue; }
+                    if (f > LineTol) { double lo = lastOk, hi = d; for (int it = 0; it < 40 && hi - lo > 1e-5; it++) { double m = (lo + hi) / 2; if (Def(m) <= 0) lo = m; else hi = m; } cutAt = lo; break; }
+                }
+                if (double.IsNaN(cutAt) || cutAt < 1e-3 || cutAt >= dEnd - 1e-6) continue;
+                // 이어지는 자리에서만(자른 자리 1 cm 뒤 B1 − 제 단면 ≤ 2 LineTol) — B1이 그 자리에서 뛰면(종류 4 ↔ 3 경계 · 이긴 표본 바뀜) 꼬리를 붙이면 낭떠러지(S217 실측 1.2 cm에 20 cm)
+                { double f1 = Def(Math.Min(dEnd, cutAt + 0.01)); if (!(f1 <= 2 * LineTol)) continue; }
+                foreach (var p in r.Pts) if (p.D > 1e-6 && Math.Abs(p.D - cutAt) < 0.005) { cutAt = p.D; break; }
+                tails.Add((r, cutAt, RayZ(r, cutAt), fill));
+                slumped.Add(r); set.SlumpTails++; cuts++;
+            }
+        }
+        foreach (var (r, cutAt, zc, fill) in tails)
+        {
+            set.NewRays.Add(r);
+            var old = r.Pts.ToList();
+            double OwnZ(double d)
+            {
+                for (int i = 0; i + 1 < old.Count; i++)
+                    if (d <= old[i + 1].D + 1e-12) { var p = old[i]; var q = old[i + 1]; double w = q.D - p.D; return w < 1e-12 ? q.Z : p.Z + (q.Z - p.Z) * (d - p.D) / w; }
+                return old[^1].Z;
+            }
+            double Hz(double d)
+            {
+                var pe = EvalB1(c.R, set, r.Ex + r.Nx * d, r.Ey + r.Ny * d);
+                if (pe.Kind == (fill ? 3 : 2)) return pe.Z;
+                if (pe.Kind == 0 && pe.HasBase) return pe.Base;
+                return OwnZ(d);
+            }
+            while (r.Pts.Count > 1 && r.Pts[^1].D > cutAt + 1e-9) r.Pts.RemoveAt(r.Pts.Count - 1);
+            if (r.Pts[^1].D < cutAt - 1e-9) r.Pts.Add(new RayPt(cutAt, r.Ex + r.Nx * cutAt, r.Ey + r.Ny * cutAt, zc, -6));
+            var knots = old.Where(p => p.D > cutAt + 1e-6).ToList();   // 옛 꺾임점(자른 자리 뒤) + 옛 끝
+            double dPrev = cutAt, zPrev = r.Pts[^1].Z;
+            for (int ki = 0; ki < knots.Count; ki++)
+            {
+                double dk = knots[ki].D, zk = Hz(dk);
+                SlumpSub(r, Hz, dPrev, zPrev, dk, zk, 0);
+                r.Pts.Add(new RayPt(dk, knots[ki].X, knots[ki].Y, zk, ki == knots.Count - 1 ? -1 : -6));
+                dPrev = dk; zPrev = zk;
+            }
+            // 끝이 땅이었는데 흘러내린 면이 땅을 벗어났으면(1 mm) 그 끝은 이제 땅이 아님 — 주름 끝으로(빈 사면이면 GrowOrphans가 B1 높이로 땅까지 늘임)
+            if (r.End is RayEnd.Daylight && c.Inp.Base.TryGetElevation(r.Pts[^1].X, r.Pts[^1].Y, out double gE) && (fill ? r.Pts[^1].Z > gE + 1e-3 : r.Pts[^1].Z < gE - 1e-3))
+                r.End = RayEnd.Crease;
         }
         set.SlumpMs = swS.Elapsed.TotalMilliseconds;
         return cuts;
@@ -776,6 +703,17 @@ public static partial class RoadGrade
             else { Put(f.A, f.K, cut ? LineRole.Toe : LineRole.Crest, f.Src); Put(f.B, f.K, cut ? LineRole.Crest : LineRole.Toe, f.Src); }
         }
         return map;
+    }
+
+    /// <summary>★[v114.3 · 오목부] 광선 (d0, z0) ~ (d1, z1) 사이를 높이 함수가 현 오차 LineTol 안이 될 때까지 반씩 나눠 점(−6)을 넣음(2 cm · 깊이 12까지 — 흘러내림 늘임 ②의 Sub와 같은 법).</summary>
+    static void SlumpSub(Ray r, Func<double, double> hz, double d0, double z0, double d1, double z1, int depth)
+    {
+        if (depth > 12 || d1 - d0 < 0.02) return;
+        double dm = (d0 + d1) / 2, zm = hz(dm);
+        if (!double.IsFinite(zm) || Math.Abs(zm - (z0 + z1) / 2) <= LineTol) return;
+        SlumpSub(r, hz, d0, z0, dm, zm, depth + 1);
+        r.Pts.Add(new RayPt(dm, r.Ex + r.Nx * dm, r.Ey + r.Ny * dm, zm, -6));
+        SlumpSub(r, hz, dm, zm, d1, z1, depth + 1);
     }
 
     /// <summary>광선 위 거리 d의 설계 높이(꺾은선 보간 · 끝 너머 = 끝 높이).</summary>

@@ -239,6 +239,10 @@ public static partial class RoadGrade
                     for (int j = 1; j <= Math.Min(st.JR[i], aR.Length); j++) { double c = st.B[i] - j * bl; if (c > st.A[i] + 1e-6) yield return c; }            }
         }
         public double CutVol, FillVol, MaxCut, MaxFill, Length;
+        /// <summary>★[v114.3 · 굽은 안쪽] 횡단(흘러내림) 뒤 B1 기준으로 높이를 다시 한 격자 칸 수(<see cref="PatchGridB1"/>).</summary>
+        public int B1Cells, B1Islands; public double B1Ms;
+        /// <summary>★[v114.3] PatchGridB1 되돌림(칸 · 옛 종류 · 높이 · 안쪽 값) · 고치기 전 부피.</summary>
+        internal List<(int K, byte Kind, float Z, float F)>? B1Undo; internal (double Cut, double Fill, double MaxCut, double MaxFill) B1Vol0;
         public List<SlopeAt> Slopes = new();
         public List<(double S0, double S1, int Side, string Why)> Suggest = new();
         public List<List<(double X, double Y)>> Daylight = new();
@@ -261,6 +265,8 @@ public static partial class RoadGrade
         public bool ReachHit; public double ReachUsed;
         /// <summary>★★[v111 · 계획 2.1] 점 평가기(칸 계산과 같은 식 · 이 판의 표본 · 기록 · 단면을 붙잡음) · 가장자리 표본 — 단면 광선이 «이 점의 주인»을 묻는다.</summary>
         internal Func<double, double, PointEval>? Eval;
+        /// <summary>★[v114.3 · 계획 굽은안쪽부채 2판] 감싸기에 덧 원천(횡단 뒤 흘러내림 원뿔)을 같은 법(자격 · 띠)으로 더 넣은 평가기(끝 식 한 번) — <see cref="EvalB1"/>.</summary>
+        internal Func<double, double, EnvSet?, PointEval>? EvalWith;
         internal List<Edge> Edges = new();
         /// <summary>★[v111] 선 기반 횡단(있으면) · 데이라잇 점 높이(횡단 광선 끝 = 땅 높이).</summary>
         internal SectionSet? Sections;
@@ -1258,13 +1264,26 @@ public static partial class RoadGrade
             gN = null;   // ★[v113.3 · 설치 전 검토 M] 1판 칸 값은 여기까지만 — r.Eval이 붙잡아 칸마다 56 B가 남지 않게
         }
         // ★[v113.3] 점 평가기 = 끝 식 전 값 → 감싸기 → 끝 식(격자 2판 · 광선 주인 · 선 따라 TIN이 모두 이 함수)
-        PointEval Env(double x, double y, PointEval o)
+        // ★★[v114.3 · 계획 굽은안쪽부채 2판 §3] 덧 원천(extra — 횡단 뒤 흘러내림 원뿔)도 같은 자리 · 같은 자격(EligLo · EligHi — 벽 면 · 벽 뒤 · 폴리선 옹벽 칸 빼고) · 같은 띠(EnvF)로
+        //   lo · hi에 넣고 끝 식은 한 번 — B1 평가기(EvalWith). extra = null이면 옛 Env와 비트 같음.
+        //   useEnv = false = 주름 원천 감싸기를 뺀 값(비교 · 진단용 — 감싸기 전 값은 곡선 중심에서 14 cm 끊김 · S217 실측).
+        PointEval Env(double x, double y, PointEval o) => EnvWith(x, y, o, null, true);
+        PointEval EnvWith(double x, double y, PointEval o, EnvSet? extra, bool useEnv)
         {
             if (!o.Raw) return o;
-            if (envS == null || envS.Count == 0) return Finish(o, o.Hi, o.Lo, false, false);
+            bool hasX = extra != null && extra.Count > 0, hasE = useEnv && envS != null && envS.Count > 0;
+            if (!hasE && !hasX) return Finish(o, o.Hi, o.Lo, false, false);
             double lo = o.Lo, hi = o.Hi; bool eL = false, eH = false;
-            if (o.EligLo) { double t = Math.Max(lo, Math.Min(o.Zb, hi) - EnvF), c = envS.LoAt(x, y, t); if (c > t) { lo = c; eL = true; } }
-            if (o.EligHi) { double t = Math.Min(hi, Math.Max(o.Zb, o.Lo) + EnvF), c = envS.HiAt(x, y, t); if (c < t) { hi = c; eH = true; } }
+            if (hasE)
+            {
+                if (o.EligLo) { double t = Math.Max(lo, Math.Min(o.Zb, hi) - EnvF), c = envS.LoAt(x, y, t); if (c > t) { lo = c; eL = true; } }
+                if (o.EligHi) { double t = Math.Min(hi, Math.Max(o.Zb, o.Lo) + EnvF), c = envS.HiAt(x, y, t); if (c < t) { hi = c; eH = true; } }
+            }
+            if (hasX)
+            {
+                if (o.EligLo) { double t = Math.Max(lo, Math.Min(o.Zb, hi) - EnvF), c = extra!.LoAt(x, y, t); if (c > t) { lo = c; eL = true; } }
+                if (o.EligHi) { double t = Math.Min(hi, Math.Max(o.Zb, o.Lo) + EnvF), c = extra!.HiAt(x, y, t); if (c < t) { hi = c; eH = true; } }   // 문턱은 감싸기와 같은 o.Lo(올린 lo 아님 — 재검토 LOW)
+            }
             if (!eL && !eH) return Finish(o, o.Hi, o.Lo, false, false);
             // ★★[v113.3 · 1105 선 면 계측] 주인(거리장 · 측점 · 쪽 · 다른 다리)은 감싸기 전 끝 식 그대로 — 감싸기는 높이만 바꾼다.
             //   감싸기 칸에 그 점의 가장 가까운 측점을 그대로 두면 곡선 중심 곁(매끈한 측점의 특이점 — 모든 법선이 모임)에서 광선 주인 판정이 흔들려
@@ -1326,6 +1345,7 @@ public static partial class RoadGrade
             }
         }
         r.Eval = (x, y) => { long e0 = 0; return Env(x, y, EvalAt(x, y, ref e0)); };
+        r.EvalWith = (x, y, ex) => { long e0 = 0; return EnvWith(x, y, EvalAt(x, y, ref e0), ex, true); };   // ★[v114.3] B1 평가기 = 감싸기 + 흘러내림(한 끝 식)
         r.EvalRaw = (x, y) => { long e0 = 0; return EvalAt(x, y, ref e0); };
         r.Edges = edges;
         r.CutVol = cutV; r.FillVol = fillV; r.MaxCut = maxCut; r.MaxFill = maxFill; r.ConeEvals = evals; r.Conflicts = conflicts;

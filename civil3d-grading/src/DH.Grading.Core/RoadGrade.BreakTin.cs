@@ -19,9 +19,11 @@ public static partial class RoadGrade
             // ★[검토 M] ExactSurface가 남긴 횡단 · 선을 그대로(다시 안 셈) — 없으면 새로
             SectionSet set; List<List<(double X, double Y, double Z)>> dl; List<(double X, double Y, double Z)> eL, eR;
             if (r.Sections != null && lines != null && lines.Count > 0) { set = r.Sections; dl = r.DaylightZ; eL = r.EdgeL; eR = r.EdgeR; }
-            else { var ctx = new RayCtx(inp, r); set = BuildSections(ctx); lines = SectionLines(ctx, set, out dl, out eL, out eR); }
+            else { var ctx = new RayCtx(inp, r); set = BuildSections(ctx); lines = SectionLines(ctx, set, out dl, out eL, out eR); PatchGridB1(r, set); }
             var t = BreakTin(inp, r, set, lines, dl, eL, eR, out string bn);
             note = t != null ? $"선 따라 TIN — {bn} · 횡단 {set.X.Count}" : bn;
+            // ★[v114.3 · 재검토 M-b] 새 길(꼬리 · 빈 사면 늘임) 면의 조각 수를 알림(이 길은 부르는 쪽이 그린 선을 그대로 쓰므로 옛 길로 바꾸지 않음 — 바꾸면 선과 면이 어긋남)
+            if (t != null && (set.SlumpTails > 0 || set.OrphanGrown > 0)) { int pc = RoadGrade.Pieces(t); if (pc > 1) note += $" · ⚠조각 {pc}(떨어진 작은 조각 — 옛 길에도 있던 섬일 수 있음)"; }
             return t;
         }
         catch (Exception ex) { note = "예외 — " + Why(ex); return null; }
@@ -101,7 +103,7 @@ public static partial class RoadGrade
             {
                 double mx = cx0 + Cl / 2, my = cy0 + Cl / 2;
                 if (!occ.Contains(((int)Math.Floor(mx / 4), (int)Math.Floor(my / 4)))) continue;   // ★[검토 Perf] 선 곁(4 m 칸 · 이웃 한 칸)만 — 넓은 상자 전체를 평가기로 훑지 않음
-                var pe = r.Eval!(mx, my);
+                var pe = EvalB1(r, set, mx, my);   // ★[v114.3] 바뀐 자리 = B1 평가기(흘러내림이 땅 위로 올린 자리도 사면)
                 if (pe.Kind < 1 || pe.Kind > 4) continue;
                 var pp = gf.CreatePoint(new Coordinate(mx, my)); bool inQ = false;
                 foreach (var z in zt.Query(new Envelope(mx, mx, my, my))) if (z.Covers(pp)) { inQ = true; break; }
@@ -159,20 +161,8 @@ public static partial class RoadGrade
         }
         catch (Exception ex) { note = "면 가르기 못 함 — " + ex.Message; return null; }
         // ★[JACK 1104 결정] B1 기준 높이 — 성토 = max(평가기, 흘러내림 원뿔) · 절토 = min · 그 밖 = 평가기(틈 속 점 높이 · 틈 면 대조가 같은 것을 씀)
-        double ZRef(double x, double y, out double zEval)
-        {
-            var pe = r.Eval!(x, y); double ze = pe.Kind == 0 ? pe.Base : pe.Z; zEval = ze;
-            if (!double.IsFinite(ze) || set.SlumpSrc.Count == 0 || !(pe.Kind == 2 || pe.Kind == 3)) return ze;
-            bool fill = pe.Kind == 3; double best = double.NegativeInfinity;
-            foreach (var q in set.SlumpSrc)
-            {
-                if ((q.Reg < 0) != fill) continue;
-                if (Math.Min(Sq(q.X0 - x) + Sq(q.Y0 - y), Sq(q.X1 - x) + Sq(q.Y1 - y)) > 3600) continue;   // 60 m 밖 원천은 건너뜀(속도)
-                double cz = SegCone(x, y, q.X0, q.Y0, fill ? q.Z0 : -q.Z0, q.X1, q.Y1, fill ? q.Z1 : -q.Z1, q.Ke);
-                if (cz > best) best = cz;
-            }
-            return double.IsFinite(best) ? (fill ? Math.Max(ze, best) : Math.Min(ze, -best)) : ze;
-        }
+        // ★[v114.3 · 계획 굽은안쪽부채 2판 §3] B1 기준 = B1 평가기(EvalB1 — 흘러내림 원뿔을 감싸기와 같은 법 · 자격으로 lo · hi에 넣고 끝 식 한 번) · 틈 속 점 · 둘레 점 · 대조가 모두 이것
+        double ZRef(double x, double y, out double zEval) => B1At(r, set, x, y, out zEval);
         double edgeDz = 0; string edgeAt = ""; int gapPts = 0; var interior = new HashSet<(long, long)>();
         var triList = new List<Coordinate[]>();
         int faceIn = 0, faceFail = 0, gapFaces = 0; var gapTris = new HashSet<(long, long)>();
@@ -257,8 +247,8 @@ public static partial class RoadGrade
                 if (d < bd) { bd = d; best = s.Z0 + (s.Z1 - s.Z0) * t; }
             }
             if (double.IsFinite(best)) { zSeg++; if (zHi - zLo > zSpread) { zSpread = zHi - zLo; zSpreadAt = $"({x:F3}, {y:F3})"; } zAt[Key(x, y)] = best; return best; }
-            var pe = r.Eval!(x, y);
-            double ze = pe.Kind == 0 ? pe.Base : pe.Z;
+            // ★[v114.3] 선 밖 점(틈 둘레 · 틈 칸 모서리) = 틈 속 점 · 대조와 같은 B1 기준(흘러내림 없는 자리는 평가기 그대로 — 비트 같음)
+            double ze = ZRef(x, y, out _);
             if (double.IsFinite(ze)) { zEval++; zAt[Key(x, y)] = ze; return ze; }
             zFail++; return double.NaN;
         }
@@ -343,8 +333,111 @@ public static partial class RoadGrade
             var (th2, ge2, nm2) = Health(tris);   // ★[검토 1] 마지막으로 메운 구멍 세모도 바늘 · 0.1 mm 변 · 세 세모 변 검사
             if (th2 + ge2 + nm2 > 0) { note = $"마지막 구멍 메움 뒤 바늘 {th2} · 0.1 mm 변 {ge2} · 세 세모 변 {nm2}"; return null; }
         }
-        note = $"끊김선 {segs.Count:N0} · 점 {sites.Count:N0} · 세모 {tris.Count:N0}(면 {faceIn:N0}" + (gapFaces > 0 ? $" · 틈 면 {gapFaces}({gapArea:F0} ㎡ · 속 점 {gapPts} · B1 기준과 차 최대 {gapDzB1 * 1000:F0} mm · 평가기와 {gapDz * 1000:F0} mm · 둘레 점과 기준 차 최대 {edgeDz * 1000:F0} mm{(edgeDz > 0.10 ? " @" + edgeAt : "")})" : "") + (holesFilled > 0 ? $" · 작은 속 구멍 메움 {holesFilled}" : "") + (gapMerged > 0 ? $" · 0.1 mm 쌍 합침 {gapMerged}" : "") + $"" + (folded > 0 ? $" · 바늘 접음 {folded}" : "") + (flipped > 0 ? $" · 바늘 대각선 바꿈 {flipped}" : "") + (safeRuns > 0 ? " · Civil 맞춤" : "") + $" · 높이 보간 {zSeg} · 평가기 {zEval}" + (zSpread > 0.001 ? $" · 겹친 선 높이 차 최대 {zSpread * 1000:F0} mm @{zSpreadAt}" : "") + (nDangle + nCut > 0 ? $" · 면 안 된 선 {nDangle + nCut}" : "") + $" · 넓이 {tris.Sum(t => Math.Abs((t.B.X - t.A.X) * (t.C.Y - t.A.Y) - (t.B.Y - t.A.Y) * (t.C.X - t.A.X)) / 2):F1}/{D.Area:F1} ㎡) · {sw.ElapsedMilliseconds} ms";
+        note = $"끊김선 {segs.Count:N0} · 점 {sites.Count:N0} · 세모 {tris.Count:N0}(면 {faceIn:N0}" + (gapFaces > 0 ? $" · 틈 면 {gapFaces}({gapArea:F0} ㎡ · 속 점 {gapPts} · B1 기준과 차 최대 {gapDzB1 * 1000:F0} mm · 평가기와 {gapDz * 1000:F0} mm · 둘레 점과 기준 차 최대 {edgeDz * 1000:F0} mm{(edgeDz > 0.10 ? " @" + edgeAt : "")})" : "") + (gapCells > 0 ? $" · 틈 칸 {gapCells}" : "") + (holesFilled > 0 ? $" · 작은 속 구멍 메움 {holesFilled}" : "") + (gapMerged > 0 ? $" · 0.1 mm 쌍 합침 {gapMerged}" : "") + $"" + (folded > 0 ? $" · 바늘 접음 {folded}" : "") + (flipped > 0 ? $" · 바늘 대각선 바꿈 {flipped}" : "") + (safeRuns > 0 ? " · Civil 맞춤" : "") + $" · 높이 보간 {zSeg} · 평가기 {zEval}" + (zSpread > 0.001 ? $" · 겹친 선 높이 차 최대 {zSpread * 1000:F0} mm @{zSpreadAt}" : "") + (nDangle + nCut > 0 ? $" · 면 안 된 선 {nDangle + nCut}" : "") + $" · 넓이 {tris.Sum(t => Math.Abs((t.B.X - t.A.X) * (t.C.Y - t.A.Y) - (t.B.Y - t.A.Y) * (t.C.X - t.A.X)) / 2):F1}/{D.Area:F1} ㎡) · {sw.ElapsedMilliseconds} ms";
         return tris;
+    }
+
+    /// <summary>★★[v114.3 · JACK 1105 오목부 · 계획 굽은안쪽부채 2판 §3] B1 평가기 — 횡단(흘러내림) 뒤 그 원뿔(<see cref="SectionSet.SlumpEnv"/>)을 감싸기와 같은 자리 · 자격 · 띠로 lo · hi에 넣고 끝 식 한 번.
+    /// 종류 · 높이 · 안쪽 값이 한 함수에서 나옴(흘러내림이 땅 위로 올린 자리 = 성토 칸). 원천이 없으면 r.Eval과 같음.</summary>
+    internal static PointEval EvalB1(Result r, SectionSet? set, double x, double y)
+        => set?.SlumpEnv is { Count: > 0 } se && r.EvalWith != null ? r.EvalWith(x, y, se) : r.Eval!(x, y);
+
+    /// <summary>B1 기준 높이(종류 0 = 바탕) — 선 따라 TIN 틈 · 대조 · 빈 사면 늘이기가 쓰는 하나.</summary>
+    internal static double B1At(Result r, SectionSet set, double x, double y, out double zEval)
+    {
+        var pe = EvalB1(r, set, x, y); double ze = pe.Kind == 0 ? pe.Base : pe.Z; zEval = ze;
+        return ze;
+    }
+
+    /// <summary>★★[v114.3 · 계획 굽은안쪽부채 2판 §3 · 재검토 M-b] 격자도 B1 평가기로 — 흘러내림 원뿔이 닿을 수 있는 칸(원천 칸 색인 · 가지치기 = 감싸기와 같은 문턱)만 다시 끝 식 →
+    /// 종류 · 높이 · 안쪽 값 · 부피 몫(Run과 같은 문턱)을 고침. 땅(종류 0)이던 칸이 새로 바뀐 칸이 되면 이미 바뀐 자리(종류 1 ~ 4)와 네 이웃으로 이어질 때만(둔덕 뒤 원뿔 섬 — Run의 섬 걷기와 같은 뜻) ·
+    /// 고친 칸은 되돌림 목록에 적음(<see cref="UnpatchGridB1"/> — 옛 길로 물러설 때). 두 번 불러도 같음. 돌려줌 = 바뀐 칸 수.</summary>
+    internal static int PatchGridB1(Result r, SectionSet set)
+    {
+        var se = set.SlumpEnv;
+        if (se == null || se.Count == 0 || r.EvalWith == null || r.Z.Length != r.W * r.H || r.Base.Length != r.Z.Length) return 0;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        int W = r.W, H = r.H;
+        var cand = new System.Collections.Concurrent.ConcurrentBag<(int K, byte Kind, float Z, float F)>();
+        System.Threading.Tasks.Parallel.For(0, H, j =>
+        {
+            for (int i = 0; i < W; i++)
+            {
+                int k = j * W + i; byte kd = r.Kind[k];
+                if (kd is 1 or 255) continue;
+                double z0 = r.Z[k], b = r.Base[k];
+                if (!double.IsFinite(b)) continue;
+                double x = r.X0 + (i + 0.5) * r.Cell, y = r.Y0 + (j + 0.5) * r.Cell;
+                // 가지치기 — 원뿔이 (칸 높이 · 땅) − 띠보다 높지(성토) · 낮지(절토) 않으면 이 칸 끝 식은 그대로(EnvWith 문턱 ≥ 이 값)
+                double zc = double.IsFinite(z0) ? z0 : b;
+                if (!double.IsFinite(se.LoAt(x, y, Math.Min(zc, b) - EnvF)) && !double.IsFinite(se.HiAt(x, y, Math.Max(zc, b) + EnvF))) continue;
+                var pe = r.EvalWith!(x, y, se);
+                float z1 = (float)(pe.Kind == 0 ? b : pe.Z);
+                if (pe.Kind == kd && z1 == r.Z[k] && pe.F == r.F[k]) continue;
+                cand.Add((k, pe.Kind, z1, pe.F));
+            }
+        });
+        if (cand.IsEmpty) { r.B1Ms += sw.Elapsed.TotalMilliseconds; return 0; }
+        var nk = new Dictionary<int, (byte Kind, float Z, float F)>(); foreach (var c in cand) nk[c.K] = (c.Kind, c.Z, c.F);
+        // 섬 거르기 — 땅이던 칸이 바뀐 칸이 된 것은 이미 바뀐 자리에서 네 이웃으로 이어진 것만
+        static bool Chg(byte kd) => kd is 1 or 2 or 3 or 4;
+        var keep = new HashSet<int>(); var q = new Queue<int>();
+        foreach (var (k, v) in nk) if (Chg(r.Kind[k]) || !Chg(v.Kind)) keep.Add(k);   // 이미 바뀐 칸 · 땅으로 되는 칸은 그대로 받음
+        foreach (var (k, v) in nk)
+        {
+            if (Chg(r.Kind[k]) || !Chg(v.Kind)) continue;
+            int i = k % W, j = k / W; bool seed = false;
+            foreach (var (di, dj) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+            {
+                int ii = i + di, jj = j + dj; if (ii < 0 || jj < 0 || ii >= W || jj >= H) continue;
+                int kk = jj * W + ii; byte kn = nk.TryGetValue(kk, out var vn) ? vn.Kind : r.Kind[kk];
+                if (Chg(r.Kind[kk]) && Chg(kn)) { seed = true; break; }
+            }
+            if (seed && keep.Add(k)) q.Enqueue(k);
+        }
+        while (q.Count > 0)
+        {
+            int k = q.Dequeue(), i = k % W, j = k / W;
+            foreach (var (di, dj) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+            {
+                int ii = i + di, jj = j + dj; if (ii < 0 || jj < 0 || ii >= W || jj >= H) continue;
+                int kk = jj * W + ii;
+                if (keep.Contains(kk) || !nk.TryGetValue(kk, out var vn) || Chg(r.Kind[kk]) || !Chg(vn.Kind)) continue;
+                keep.Add(kk); q.Enqueue(kk);
+            }
+        }
+        double ca = r.Cell * r.Cell;
+        static (double Cut, double Fill) Part(byte kd, double dz)
+        {
+            if (kd is 0 or 255 || double.IsNaN(dz)) return (0, 0);
+            if (kd is 1 or 4) return dz > 0 ? (0, dz) : (-dz, 0);
+            return dz > 1e-4 ? (0, dz) : dz < -1e-4 ? (-dz, 0) : (0, 0);
+        }
+        r.B1Undo ??= new();
+        if (r.B1Undo.Count == 0) { r.B1Vol0 = (r.CutVol, r.FillVol, r.MaxCut, r.MaxFill); }
+        int changed = 0, islands = 0;
+        foreach (var (k, v) in nk)
+        {
+            if (!keep.Contains(k)) { islands++; continue; }
+            double b = r.Base[k];
+            var (c0, f0) = Part(r.Kind[k], r.Z[k] - b); var (c1, f1) = Part(v.Kind, v.Z - b);
+            r.CutVol += (c1 - c0) * ca; r.FillVol += (f1 - f0) * ca;
+            if (f1 > r.MaxFill) r.MaxFill = f1; if (c1 > r.MaxCut) r.MaxCut = c1;
+            r.B1Undo.Add((k, r.Kind[k], r.Z[k], r.F[k]));
+            r.Kind[k] = v.Kind; r.Z[k] = v.Z; r.F[k] = v.F;
+            changed++;
+        }
+        r.B1Cells += changed; r.B1Islands += islands; r.B1Ms += sw.Elapsed.TotalMilliseconds;
+        return changed;
+    }
+
+    /// <summary>★[v114.3 · 재검토 M-b] <see cref="PatchGridB1"/>로 고친 칸 · 부피를 처음 값으로(옛 흘러내림 길로 물러설 때).</summary>
+    internal static void UnpatchGridB1(Result r)
+    {
+        if (r.B1Undo == null || r.B1Undo.Count == 0) return;
+        for (int u = r.B1Undo.Count - 1; u >= 0; u--) { var (k, kd, z, f) = r.B1Undo[u]; r.Kind[k] = kd; r.Z[k] = z; r.F[k] = f; }
+        (r.CutVol, r.FillVol, r.MaxCut, r.MaxFill) = r.B1Vol0;
+        r.B1Undo.Clear(); r.B1Cells = 0; r.B1Islands = 0;
     }
 
     /// <summary>★[선 따라 TIN] max(|dx|, |dy|) &lt; Gap 인 변의 두 점을 한 점으로(사전 차례 작은 쪽) · 넓이 0이 된 세모는 뺌. 돌려줌 = 합친 쌍 수.</summary>

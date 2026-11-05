@@ -1339,7 +1339,8 @@ internal sealed class RoadSession
                              + (r.ReachHit ? $" · ⚠데이라잇 못 찾음(범위 {r.ReachUsed:F0} m 끝에서 면이 땅에 안 닿음)" : "")
                              + (r.Conflicts > 0 ? $" · ⚠사면 충돌 {r.Conflicts}칸(옹벽 자리 — 가운데 높이로 넣음)" : "")
                              + (frz.Length > 0 ? " · ⚠굳힘 실패 " + frz : "") + " · " + lineNote
-                             + (tnote.StartsWith("⚠") ? " · " + tnote : $" · {(tnote.StartsWith("선 따라 TIN") ? "선 따라 TIN" : "선 면")} · 세모 {tris.Count:N0}");   // ★[JACK 1104] 어느 길로 지었나(선 면 · 선 따라 TIN · 칸 면)
+                             + (tnote.StartsWith("⚠") ? " · " + tnote : $" · {(tnote.StartsWith("선 따라 TIN") ? "선 따라 TIN" : "선 면")} · 세모 {tris.Count:N0}")   // ★[JACK 1104] 어느 길로 지었나(선 면 · 선 따라 TIN · 칸 면)
+                             + (tnote.Contains("→ 옛 흘러내림 길") ? " · ⚠굽은 안쪽 새 길을 못 써 옛 길로 지음(뭉개짐이 남을 수 있음)" : "");   // ★[v114.3 · 재검토 M-a] 물러섬은 화면에도(note 꼬리만이면 안 보임)
                 try { DiagLog.Append($"\n[진입도로] {Name} — {msg} · {tnote} · 격자 {msGrid} · XML {msXml - msGrid} · Civil 면 + 되읽기 {msMake - msXml} · 대조 {msCmp - msMake} ms · 되읽기 {back}"); } catch { }
                 return msg;
             }
