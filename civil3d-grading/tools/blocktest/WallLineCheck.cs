@@ -222,11 +222,14 @@ static class WallLineCheck
                 var (cut, b) = Make(L0, h: h, t: t, g: g, p0: p0, sz: sz, reach: 30);
                 if (b == null || !b.Ok) { check($"S198 {nm} 짓기", false, b?.Why ?? cut.Why); return; }
                 var (r, all, _) = Comp(b, g, p0, sz);
-                // ★[v114.0 · 알려진 빈자리] U자 선 안을 넓은 소단(T 3 m > U 깊이 3 m)이 채우는 꼴 — 이등분선 곁에서 Poly 고리와 바꿀 자리 고리 꼭짓점이 20~80 µm 어긋나
-                //   합성이 «Civil이 반드시 합칠 쌍»으로 거절한다(판정 3 · 정지면_DH 그대로). 지금은 «깨끗이 거절»을 기대하고, 모양 검사는 아래에 꺼 둔다(KnownGapWideU = false)
+                // ★[v114.0 · 알려진 빈자리 · JACK 1105 계측] U자 선 안을 넓은 소단(T 3 m ≥ U 깊이 3 m)이 채우는 꼴 — 합성이 판정 3으로 거절한다(정지면_DH 그대로).
+                //   직접 원인(계측): 틈 닫음 선(짧은 줄기 E 끝 → 긴 줄기 E 끝 · 3.5 m 두 점)이 촘촘한 E 곁 4~6 cm에 붙어 원 면이 한 점 부채꼴(높이 0.5 mm · 높이 차 0.8 m)로 지어지고,
+                //   그 부채꼴 변 넷이 땅 격자 대각선 · 줄과 0.08~0.24 mm 간격으로 겹쳐 옹벽 높이 139.5 mm · 뒤집기 흉내 130 mm가 난다.
+                //   닫음 선을 0.5 m로 촘촘히 하면 판정 2가 되지만 소단이 0.87 m 처진다((45.5, 0) −103.868 / 소단 −103 · ⑥ ⑦ 실패) — 바깥 소단 줄이 이등분선을 따라
+                //   이웃 줄기 법선 너머까지 가서 그 E가 짧은 줄기 E(한 단 아래)를 가로지르기 때문(E 엇갈림은 T 1 정상 판에도 있어 거절 잣대로 못 씀). 그래서 «깨끗이 거절»을 기대하고 모양 검사는 꺼 둔다(KnownGapWideU = false)
                 if (wide && !KnownGapWideU)
                 {
-                    check($"S198 {nm} ① (알려진 빈자리) 합성이 깨끗이 거절 — 판정 3 · 결과 면 없음 · 까닭 한 줄", r.Zone == null && r.Tier == 3 && r.Fail.Length > 0, $"판정 {r.Tier} · {r.Fail.Split('·')[0]}");
+                    check($"S198 {nm} ① (알려진 빈자리) 합성이 깨끗이 거절 — 판정 3 · 결과 면 없음 · 까닭 한 줄", r.Zone == null && r.CapTris == null && r.Tier == 3 && r.Fail.Length > 0 && !r.Fail.Contains('\n'), $"판정 {r.Tier} · {r.Fail.Split('·')[0]}");
                     return;
                 }
                 check($"S198 {nm} ① 성토 · 판정 1~2 · 합성 됨", b.HasFill && !b.HasCut && r.Zone != null && r.Tier <= 2, $"판정 {r.Tier} · {r.Fail}");
