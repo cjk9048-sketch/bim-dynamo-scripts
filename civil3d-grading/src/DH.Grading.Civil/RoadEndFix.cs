@@ -41,7 +41,11 @@ internal static class RoadEndFix
     static double Tangent(double r, double bendDeg) => r * Math.Tan(Math.Clamp(bendDeg, 0, 89) * Math.PI / 360) * 1.05 + 0.01;
 
     /// <summary>끝 맞추기 한 번(같은 트랜잭션) — <paramref name="alignEdits"/> 거짓 = 노선은 그대로(가상 자르기) · PVI 고정만. 1 mm 확인 실패 · API 실패 = 예외.</summary>
-    internal static Report Fix(Transaction tr, ObjectId aid, ObjectId planId, RoadDesign d, RoadEnds.Result res, bool alignEdits)
+    /// <summary>★[v113.3 · JACK 1105 «폴리선을 선택하면 부지와 닿지 않고 끊어져»] 계획 종단이 노선 끝까지 못 가면(이만큼 넘게 남으면) 끝 PVI를 노선 끝으로 옮긴다(m).</summary>
+    internal const double CoverTol = 0.5;
+
+    /// <param name="baseZ">노선 끝 자리 바탕면 높이(x, y) — 종단이 못 덮은 끝을 이을 때 · 없거나 못 재면 종단 끝 경사를 그대로 늘림.</param>
+    internal static Report Fix(Transaction tr, ObjectId aid, ObjectId planId, RoadDesign d, RoadEnds.Result res, bool alignEdits, Func<double, double, double?>? baseZ = null)
     {
         var rep = new Report();
         var al = (CivilDb.Alignment)tr.GetObject(aid, OpenMode.ForWrite);
@@ -187,6 +191,19 @@ internal static class RoadEndFix
         bool extS = st.Kind == RoadEnds.Kind.Extend && startExtended, extF = fi.Kind == RoadEnds.Kind.Extend && endExtended;
         double za = st.Kind is RoadEnds.Kind.Floor or RoadEnds.Kind.Branch || extS ? st.Z : double.NaN;
         double zb = fi.Kind is RoadEnds.Kind.Floor or RoadEnds.Kind.Branch || extF ? fi.Z : double.NaN;
+        // ★[v113.3 · JACK 1105] 자유 끝(· 못 늘린 끝)인데 계획 종단이 노선 끝까지 못 감(노선이 만든 뒤 길어짐 · 바탕면 높이가 없는 끝) — 그 끝 PVI를 노선 끝으로(높이 = 그 자리 바탕면 · 없으면 끝 경사 그대로)
+        //   옛 규칙(종단 범위로 자름)은 남는 노선 끝에 도로가 안 생겨 부지와 끊어졌다
+        double? Bz(double s) { var p = P(al, s); if (p == null || baseZ == null) return null; try { return baseZ(p.Value.X, p.Value.Y); } catch { return null; } }
+        if (!(st.Kind is RoadEnds.Kind.Floor or RoadEnds.Kind.Branch) && !extS && pvS[0].S > sA + CoverTol)
+        {
+            double gap = pvS[0].S - sA; sa = sA; za = Bz(sA) ?? double.NaN;
+            rep.Notes.Add($"종단 시점을 노선 시점까지 {gap:F1} m 이음" + (double.IsFinite(za) ? $"(바탕면 {za:F2})" : "(끝 경사 그대로)"));
+        }
+        if (!(fi.Kind is RoadEnds.Kind.Floor or RoadEnds.Kind.Branch) && !extF && pvS[^1].S < sB - CoverTol)
+        {
+            double gap = sB - pvS[^1].S; sb = sB; zb = Bz(sB) ?? double.NaN;
+            rep.Notes.Add($"종단 종점을 노선 종점까지 {gap:F1} m 이음" + (double.IsFinite(zb) ? $"(바탕면 {zb:F2})" : "(끝 경사 그대로)"));
+        }
         var gaps = res.Gaps.Select(g => g with { A = g.A + delta, B = g.B + delta }).ToList();
         var want = RoadEnds.PinPvis(pvS, sa, za, sb, zb, gaps);
         // 같으면 안 씀(옛 PVI 그대로)

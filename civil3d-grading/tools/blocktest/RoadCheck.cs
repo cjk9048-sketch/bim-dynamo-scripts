@@ -195,7 +195,9 @@ static class RoadCheck
             for (int i = 0; i <= m; i++) { double a = Math.PI * i / m; X[i] = 20 * Math.Cos(a); Y[i] = 20 * Math.Sin(a); Z[i] = 0.08 * L * i / m; }
             var r = RoadGrade.Run(new RoadGrade.Input { X = X, Y = Y, Z = Z, Sec = sec, Base = new G((x, y) => 18), Cell = 0.25, Reach = 40 });
             var p = At(r, 0, 16.5 - 8.0);                                                     // 안쪽 가장자리에서 8 m(첫 소단 7.5~8.5)
-            double want = 0.08 * L / 2 - edgeDrop + 5;
+            // ★[v113.3 · 평가기 연속 A안 ①] 기준 측점 = 그 칸 가운데를 지나는 반지름(매끈한 법선) 측점 s = 20·atan2(y, x) — 칸 가운데가 가운데 반지름에서 0.125 m 비켜(각 0.0147 rad · 측점 0.29 m · 높이 2.3 cm)
+            //   옛 기대값(가운데 측점 L/2)은 꺾은선 가장 가까운 점 측점(0.225 m 비킴)이 우연히 2 cm 안에 들던 값 — 매끈한 측점은 그 칸의 진짜 반지름 단면 높이를 냄
+            double want = 0.08 * 20 * Math.Atan2(p.Cy, p.Cx) - edgeDrop + 5;
             check("S178 ⑫ 기운 곡선(R 20 · 8 %) — 안쪽 소단 높이 = 그 측점 가장자리 + 5(2 cm)", Math.Abs(p.Z - want) < 0.02, $"{p.Z:F3}/{want:F3} · {r.Text}");
         }
 

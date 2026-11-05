@@ -23,11 +23,12 @@ internal static class CursorLabel
     /// <param name="label">카드 첫 줄(흰 글) — 예: «종단도 작성 위치 클릭».</param>
     /// <param name="hint">둘째 줄(작고 흐린 글) — 그 질문에서 듣는 키만(예: «Enter 지난 자리 · Esc 그만») · 빈 글이면 한 줄 카드.</param>
     /// <param name="extra">★[v112.4 · JACK 1104 «경로 찍다가 휠로 줌하면 전에 찍은 게 없어져»] 이름표 밑에 함께 그릴 것(WCS 커서 자리 · 커서를 받았나) — 지그가 화면마다 다시 그려 줌 · 확대 · 축소에도 안 사라짐(DrawVector는 Regen에서 사라짐).</param>
-    internal static Result GetPoint(Editor ed, PromptPointOptions ppo, string label, string hint = "", System.Action<WorldDraw, Point3d, bool>? extra = null)
+    /// <param name="live">★[v113.3 · JACK 1105 «다음 점이 클릭이 안 돼»] 화면마다 카드 글을 바꿀 때(<paramref name="extra"/> 뒤에 불림 — 그 자리의 거절 까닭 등) · null 또는 빈 글이면 <paramref name="label"/>.</param>
+    internal static Result GetPoint(Editor ed, PromptPointOptions ppo, string label, string hint = "", System.Action<WorldDraw, Point3d, bool>? extra = null, System.Func<string?>? live = null)
     {
         if (SelfCheckLog.Headless || ppo.UseBasePoint || string.IsNullOrWhiteSpace(label)) return Plain(ed, ppo);
         LabelJig jig;
-        try { jig = new LabelJig(ed, ppo, label, hint ?? "") { Extra = extra }; }
+        try { jig = new LabelJig(ed, ppo, label, hint ?? "") { Extra = extra, Live = live }; }
         catch (System.Exception ex) { try { DiagLog.Append("\n[커서 이름표] 못 만듦 — 그냥 찍기: " + ex.Message); } catch { } return Plain(ed, ppo); }
         using (jig)
         {
@@ -145,6 +146,8 @@ internal static class CursorLabel
         readonly JigPromptPointOptions _opt;
         readonly string _label, _hint;
         internal System.Action<WorldDraw, Point3d, bool>? Extra;
+        internal System.Func<string?>? Live;
+        string _cur = "";         // 지금 카드에 쓴 글(_ext는 이 글의 범위)
         readonly Vector3d _right = Vector3d.XAxis, _up = Vector3d.YAxis, _normal = Vector3d.ZAxis;
         readonly TextStyle _ts = SharedStyle();
         readonly double _dpi = DpiScale();
@@ -202,7 +205,8 @@ internal static class CursorLabel
         {
             _px = px;
             _ts.TextSize = MainPx * px;
-            _ext = Measure(_ts, _label);
+            if (_cur.Length == 0) _cur = _label;
+            _ext = Measure(_ts, _cur);
             _extH = new Extents2d(0, 0, 0, 0);
         }
 
@@ -226,6 +230,12 @@ internal static class CursorLabel
             if (!_has) return true;
             try
             {
+                if (Live != null)
+                {
+                    string s = _label;
+                    try { var t = Live(); if (!string.IsNullOrWhiteSpace(t)) s = t!; } catch { }
+                    if (s != _cur) { _cur = s; _ext = Measure(_ts, _cur); }
+                }
                 double u = _px;
                 Point3d P(double x, double y) => Point + _right * x + _up * y;
                 Point3dCollection Pc(List<(double X, double Y)> q) { var c = new Point3dCollection(); foreach (var p in q) c.Add(P(p.X, p.Y)); return c; }
@@ -261,7 +271,7 @@ internal static class CursorLabel
                 // 글 — 줄 칸(높이 = 글자 크기) 가운데에 실제 글자 범위의 가운데를 맞춤(글 자리 = 바닥선 왼쪽)
                 tr.TrueColor = new EntityColor(MainRgb.R, MainRgb.G, MainRgb.B);
                 double yM = yT - PadTPx * u - hM;
-                draw.Geometry.Text(P(xT - _ext.MinPoint.X, yM + 0.5 * (hM - _ext.MaxPoint.Y - _ext.MinPoint.Y)), _normal, _right, _label, true, _ts);
+                draw.Geometry.Text(P(xT - _ext.MinPoint.X, yM + 0.5 * (hM - _ext.MaxPoint.Y - _ext.MinPoint.Y)), _normal, _right, _cur, true, _ts);
             }
             catch { }
             return true;

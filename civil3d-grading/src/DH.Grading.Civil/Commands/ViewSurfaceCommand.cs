@@ -81,6 +81,19 @@ public sealed class ViewSurfaceCommand
     [CommandMethod("DHVIEWG")] public void ViewGround() => Apply("G");
     [CommandMethod("DHVIEWP")] public void ViewPlan() => Apply("P");
     [CommandMethod("DHVIEWE")] public void ViewExcav() => Apply("E");
+    // ★★[v113.3 · JACK 1105 «보기 기능도 진입도로까지 고려해서 · 그 안에 측점 보기 안 보기»] 진입도로 · 최종지표면 · 측점 켜고 끄기
+    [CommandMethod("DHVIEWR")] public void ViewRoad() => Apply("R");
+    [CommandMethod("DHVIEWF")] public void ViewFinal() => Apply("F");
+    [CommandMethod("DHVIEWSTN")] public void ViewStations() => ToggleStations();
+
+    /// <summary>도면에 진입도로 면 · (맞는) 최종지표면이 있나.</summary>
+    static (bool Road, bool Final) RoadExists(Database db, Transaction tr)
+    {
+        bool road = false, fin = false;
+        try { road = GradingBuilder.SurfaceExistsByBaseName(tr, RoadSession.SurfBase); } catch { }
+        try { fin = GradingBuilder.SurfaceExistsByBaseName(tr, FinalSurfaceBuilder.Name); } catch { }
+        return (road, fin);
+    }
 
     [CommandMethod("DHVIEW")]
     public void Run()
@@ -95,6 +108,8 @@ public sealed class ViewSurfaceCommand
         pko.Keywords.Add("A", "A", "전부(A)");
         pko.Keywords.Add("G", "G", "원지반만(G)");
         pko.Keywords.Add("P", "P", "계획지표면만(P)");
+        pko.Keywords.Add("R", "R", "진입도로(R)");
+        pko.Keywords.Add("F", "F", "최종지표면(F)");
         pko.Keywords.Add("E", "E", "터파기만(E)");
         pko.AllowNone = true;
         pko.Keywords.Default = "A";
@@ -152,6 +167,7 @@ public sealed class ViewSurfaceCommand
             //     TIN은 한 (X,Y)에 점을 하나만 둘 수 있어 수직 옹벽에서 위아래 점이 서로를 밀어내고,
             //     그래서 벽면이 찢어진 채 "최종 형상"처럼 보였다(JACK 3D 스샷).
             string PlanPick() => GradingBuilder.SurfaceExistsByBaseName(tr, Plan) ? Plan : PurePlan;
+            var (hasRoad, hasFinal) = RoadExists(db, tr);
 
             switch (kw)
             {
@@ -162,17 +178,30 @@ public sealed class ViewSurfaceCommand
                     break;
 
                 case "P":
+                    // ★★[v113.3 · JACK 1105 «보기가 계획지표면 기준 — 진입도로까지 고려»] 계획지표면 = 부지 정지면만(진입도로 뺌 — 진입도로 · 최종지표면은 따로)
                     if (!hasPlan) { ed.WriteMessage("\n[보기] 계획지표면이 아직 없습니다."); tr.Commit(); return; }
-                    {
-                        // ★[v111.8 · 계획 5장] 맞는 최종지표면이 있으면 그것 + 진입도로 면(경계선) — 없으면 종전대로
-                        string res = FinalSurfaceBuilder.ResultName(db, tr);
-                        string pick = res == Plan ? PlanPick() : res;
-                        keeps.Add(pick);          // 합성면 — 원지반을 이미 품고 있다
-                        if (pick != PlanPick()) { keeps.Add(FinalSurfaceBuilder.Name); keeps.Add(RoadSession.SurfBase); }   // 이름 목록은 본 이름(_N 포함)으로 켜고 끈다
-                        msg = $"계획지표면({pick} — 원지반 합성)";
-                    }
+                    keeps.Add(PlanPick());        // 합성면 — 원지반을 이미 품고 있다
+                    msg = $"계획지표면({PlanPick()} — 원지반 합성 · 진입도로 뺌)";
                     showGround = false; lines = false;
                     keep = null;
+                    break;
+
+                case "R":
+                    // ★[v113.3] 진입도로 = 진입도로 면 + 아래 바탕면(정지면_DH · 없으면 원지반)
+                    if (!hasRoad) { ed.WriteMessage("\n[보기] 진입도로 지표면이 아직 없습니다."); tr.Commit(); return; }
+                    keeps.Add(RoadSession.SurfBase);
+                    if (hasPlan) keeps.Add(PlanPick());
+                    showGround = !hasPlan; lines = false; keep = null;
+                    msg = $"진입도로({RoadSession.SurfBase} + 바탕 {(hasPlan ? PlanPick() : "원지반")})";
+                    break;
+
+                case "F":
+                    // ★[v113.3] 최종지표면 = 부지 + 진입도로 합친 면만(선 없이)
+                    if (!hasFinal) { ed.WriteMessage("\n[보기] 최종지표면이 아직 없습니다 — 진입도로 창 [업데이트]가 만듭니다."); tr.Commit(); return; }
+                    keeps.Add(FinalSurfaceBuilder.Name);
+                    showGround = false; lines = false; keep = null;
+                    msg = FinalSurfaceBuilder.ResultName(db, tr) == Commands.WallCompositeCommand.PlanName
+                        ? $"최종지표면({FinalSurfaceBuilder.Name}) · ⚠옛것 — 진입도로 창 [업데이트]" : $"최종지표면({FinalSurfaceBuilder.Name})";
                     break;
 
                 case "E":
@@ -193,12 +222,19 @@ public sealed class ViewSurfaceCommand
                     break;
 
                 default:
-                    if (hasPlan) keeps.Add(PlanPick());
-                    if (hasExc) keeps.Add(Excav);
-                    // 합성면이 원지반을 품으므로 따로 켜지 않는다. 계획면이 없을 때만 원지반을 켠다.
-                    showGround = !hasPlan;
-                    lines = true; keep = null;
-                    msg = keeps.Count > 0 ? $"전부({string.Join(" + ", keeps)})" : "전부(원지반뿐)";
+                    {
+                        // ★★[v113.3 · JACK 1105] 전부 = 맞는 최종지표면(부지 + 진입도로)이 있으면 그것 + 진입도로 면(경계선) · 없으면 정지면 + 진입도로 면 · 터파기 · 선 전부
+                        string res = hasPlan || hasFinal ? FinalSurfaceBuilder.ResultName(db, tr) : Plan;
+                        bool fresh = res != Commands.WallCompositeCommand.PlanName && hasFinal;
+                        if (fresh) keeps.Add(FinalSurfaceBuilder.Name);
+                        else if (hasPlan) keeps.Add(PlanPick());
+                        if (hasRoad) keeps.Add(RoadSession.SurfBase);
+                        if (hasExc) keeps.Add(Excav);
+                        // 합성면이 원지반을 품으므로 따로 켜지 않는다. 계획면 · 최종면이 없을 때만 원지반을 켠다.
+                        showGround = !hasPlan && !fresh;
+                        lines = true; keep = null;
+                        msg = keeps.Count > 0 ? $"전부({string.Join(" + ", keeps)})" : "전부(원지반뿐)";
+                    }
                     break;
             }
 
@@ -221,11 +257,99 @@ public sealed class ViewSurfaceCommand
                 catch { }
 
             SetLayers(db, tr, lines);
+            // ★[v113.3] 측점을 숨겨 두었으면 어느 보기에서도 숨긴 채(전부 보기가 되켜지 않게)
+            if (StationsHidden(db, tr)) SetStationLayers(db, tr, false);
             tr.Commit();
             int nVs = Wireframe(db);
             ed.WriteMessage($"\n[보기] {msg}" + (nVs > 0 ? $" · 뷰 {nVs}개를 2D 와이어프레임으로" : ""));
         }
         catch (System.Exception ex) { ed.WriteMessage("\n[보기 오류] " + ex.Message); }
+    }
+
+    /// <summary>★★[v113.3 · JACK 1105 «보기 안에 측점 보기 안 보기 기능»] 측점(부지 · 진입도로 검토선 · 측점 글자) 켜고 끄기 — 보기 종류와 따로.
+    /// 레이어 = 이름에 «검토선» · «측점»(체인 · 숨김 레이어 빼고 — 횡단용 숨김 검토선은 늘 꺼 둠) + Civil 검토선(SampleLine)이 놓인 레이어 — 도면화 평면 [측점]과 같은 규칙.
+    /// 숨김 상태는 도면에 적어 둔다(다른 보기를 눌러도 숨긴 채).</summary>
+    static void ToggleStations()
+    {
+        Document doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (doc == null) return;
+        var db = doc.Database;
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            bool hide = !StationsHidden(db, tr);
+            int n = SetStationLayers(db, tr, !hide);
+            SaveFlag(db, tr, StnRecName, hide);
+            tr.Commit();
+            doc.Editor.WriteMessage($"\n[보기] 측점 {(hide ? "숨김" : "보임")} — 레이어 {n}개(부지 · 진입도로 검토선 · 측점 글자)");
+        }
+        catch (System.Exception ex) { doc.Editor.WriteMessage("\n[보기 오류] " + ex.Message); }
+    }
+
+    const string StnRecName = "VIEW_STN_OFF";
+
+    static bool StationsHidden(Database db, Transaction tr)
+    {
+        try
+        {
+            var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
+            if (!nod.Contains(OffDictName)) return false;
+            var d = (DBDictionary)tr.GetObject(nod.GetAt(OffDictName), OpenMode.ForRead);
+            return d.Contains(StnRecName);
+        }
+        catch { return false; }
+    }
+
+    static void SaveFlag(Database db, Transaction tr, string rec, bool on)
+    {
+        var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForWrite);
+        DBDictionary d;
+        if (nod.Contains(OffDictName)) d = (DBDictionary)tr.GetObject(nod.GetAt(OffDictName), OpenMode.ForWrite);
+        else { d = new DBDictionary(); nod.SetAt(OffDictName, d); tr.AddNewlyCreatedDBObject(d, true); }
+        if (on && !d.Contains(rec)) { var xr = new Xrecord { Data = new ResultBuffer(new TypedValue((int)DxfCode.Text, "1")) }; d.SetAt(rec, xr); tr.AddNewlyCreatedDBObject(xr, true); }
+        else if (!on && d.Contains(rec)) { var id = d.GetAt(rec); d.Remove(rec); try { tr.GetObject(id, OpenMode.ForWrite).Erase(); } catch { } }
+    }
+
+    /// <summary>측점 레이어를 켜거나 끔(현재 레이어 · 0 레이어는 안 건드림) — 바꾼 레이어 수.</summary>
+    static int SetStationLayers(Database db, Transaction tr, bool on)
+    {
+        var lays = new System.Collections.Generic.HashSet<ObjectId>();
+        var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+        foreach (ObjectId lid in lt)
+            try
+            {
+                string n = ((LayerTableRecord)tr.GetObject(lid, OpenMode.ForRead)).Name;
+                if ((n.Contains("검토선") || n.Contains("측점")) && !n.Contains("체인") && !n.Contains("숨김")
+                    && !n.StartsWith("DH-종단-", System.StringComparison.Ordinal) && !n.StartsWith("DH-횡단-", System.StringComparison.Ordinal)) lays.Add(lid);
+            }
+            catch { }
+        try
+        {
+            var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+            foreach (ObjectId id in ms)
+                if (id.ObjectClass.Name.Contains("SampleLine"))
+                    try
+                    {
+                        if (tr.GetObject(id, OpenMode.ForRead) is Entity e)
+                        {
+                            string ln = ((LayerTableRecord)tr.GetObject(e.LayerId, OpenMode.ForRead)).Name;
+                            if (!ln.Contains("숨김")) lays.Add(e.LayerId);
+                        }
+                    }
+                    catch { }
+        }
+        catch { }
+        lays.Remove(db.LayerZero); lays.Remove(db.Clayer);
+        int c = 0;
+        foreach (var lid in lays)
+            try
+            {
+                var lr = (LayerTableRecord)tr.GetObject(lid, OpenMode.ForRead);
+                if (lr.IsOff == !on) continue;
+                lr.UpgradeOpen(); lr.IsOff = !on; c++;
+            }
+            catch { }
+        return c;
     }
 
     /// <summary>우리가 끈 레이어 이름을 적어 두는 자리 — 전부 보기에서 <b>이것만</b> 되켠다.</summary>
@@ -289,16 +413,28 @@ public sealed class ViewSurfaceCommand
             //   그건 전부 <c>DH-</c>로 시작한다 — 목록을 손으로 관리하지 않아도 새 레이어가 저절로 들어온다.
             var turned = LoadOff(db, tr);                 // 누적 — 연달아 눌러도 첫 기록을 안 잃는다
             var already = new System.Collections.Generic.HashSet<string>(turned);
+            // ★★[v113.3 · 1105 코드 확인] 지표면이 놓인 레이어는 끄지 않는다 — v113부터 원지반이 «DH-원지반»에 있어 «원지반만»이 원지반까지 껐다(보이고 숨기는 것은 SetSurfaceVisible이 쥔다)
+            var surfLayers = new System.Collections.Generic.HashSet<ObjectId>();
+            try
+            {
+                var cd = Autodesk.Civil.ApplicationServices.CivilDocument.GetCivilDocument(db);
+                foreach (ObjectId sid in cd.GetSurfaceIds()) try { if (tr.GetObject(sid, OpenMode.ForRead) is Entity se) surfLayers.Add(se.LayerId); } catch { }
+            }
+            catch { }
             foreach (ObjectId lid in lt)
             {
                 try
                 {
                     var lr = (LayerTableRecord)tr.GetObject(lid, OpenMode.ForRead);
+                    // ★[v113.3 · JACK 1105 «진입도로까지 고려»] 진입도로 선(«DH도로-…» — 사면선 · 소단선 · 옹벽선 · 검토선)도 우리 선
                     bool ours = lr.Name.StartsWith("DH-", System.StringComparison.Ordinal)
+                             || lr.Name.StartsWith("DH도로-", System.StringComparison.Ordinal)
                              || System.Array.IndexOf(PlanLayers, lr.Name) >= 0;
                     // ★[JACK 0826] <b>종단 레이어는 건드리지 않는다</b> — 이 명령은 평면 보기를 다룬다.
                     //   종단도의 옹벽·가시설 막대와 터파기 종단선이 보기 전환 때 사라지면 안 된다.
                     if (lr.Name.StartsWith("DH-종단-", System.StringComparison.Ordinal)) continue;
+                    if (lr.Name.StartsWith("DH도로-종단", System.StringComparison.Ordinal)) continue;   // 진입도로 종단 · 종단뷰
+                    if (surfLayers.Contains(lid)) continue;
                     if (!ours) continue;
                     if (lr.IsOff) continue;               // 이미 꺼져 있다 = 우리가 끈 게 아니다
                     if (lid == db.Clayer) continue;       // 현재 레이어는 끄지 않는다

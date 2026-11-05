@@ -51,6 +51,7 @@ public static partial class RoadGrade
     internal static double? WallCrossT(Result r, int a, int b)
     {
         if (r.D.Length != r.F.Length || r.CutProfs.Count == 0) return null;
+        if (r.EnvCell.Length == r.F.Length && (r.EnvCell[a] || r.EnvCell[b])) return null;   // ★[v113.3 · 검토 H2] 감싸기 칸 = 단면 거리장 아님(옹벽 면 없음)
         float fa = r.F[a], fb = r.F[b], da = r.D[a], db = r.D[b];
         if (!float.IsFinite(fa) || !float.IsFinite(fb) || !float.IsFinite(da) || !float.IsFinite(db) || (fa < 0) == (fb < 0) || Math.Abs(db - da) < 1e-9) return null;
         int inside = fa < 0 ? a : b, outside = inside == a ? b : a;
@@ -150,7 +151,10 @@ public static partial class RoadGrade
         if (r.W < 2 || r.H < 2 || r.D.Length != r.W * r.H || r.CutProfs.Count == 0) return res;
         // 바뀐 자리 중 가장 먼 거리 — 그 밖 꺾임은 안 그림
         double dMax = 0;
-        for (int k = 0; k < r.D.Length; k++) if ((r.Kind[k] == 2 || r.Kind[k] == 3) && float.IsFinite(r.D[k])) dMax = Math.Max(dMax, r.D[k]);
+        // ★[v113.3 · 검토 H2] 감싸기 칸(높이 = 주름 원천 원뿔 · D는 그 점 주인 측점 거리일 뿐)은 사면선 · 소단선을 안 냄(칸 면 SurfaceTris와 같은 규칙)
+        bool envOk = r.EnvCell.Length == r.D.Length;
+        bool Env(int k) => envOk && k >= 0 && r.EnvCell[k];
+        for (int k = 0; k < r.D.Length; k++) if ((r.Kind[k] == 2 || r.Kind[k] == 3) && float.IsFinite(r.D[k]) && !Env(k)) dMax = Math.Max(dMax, r.D[k]);
         foreach (bool cut in new[] { true, false })
         {
             var profs = cut ? r.CutProfs : r.FillProfs;
@@ -197,7 +201,7 @@ public static partial class RoadGrade
                             if (!double.IsFinite(gl) || gl < 1e-9) return (false, -1);
                             double qx = px - gx / gl * 0.3, qy = py - gy / gl * 0.3, fq = Bil(r, r.F, qx, qy);
                             int cq = Cell(r, qx, qy);
-                            return (double.IsFinite(fq) && fq < 0 && cq >= 0 && r.Kind[cq] == kindWant, cq);
+                            return (double.IsFinite(fq) && fq < 0 && cq >= 0 && r.Kind[cq] == kindWant && !Env(cq), cq);
                         }
                         var ia = Inner(a.Item1, a.Item2); var ib = Inner(b.Item1, b.Item2);
                         if (ia.Ok && ib.Ok)
@@ -226,7 +230,7 @@ public static partial class RoadGrade
                     }
                     double mx = (pa.Item1 + pb.Item1) / 2, my = (pa.Item2 + pb.Item2) / 2;
                     int c = Cell(r, mx, my);
-                    if (c < 0 || r.Kind[c] != kindWant) continue;
+                    if (c < 0 || r.Kind[c] != kindWant || Env(c)) continue;
                     int side = r.FSide[c];
                     int prof = ProfAt(r, side, r.FS[c]);
                     foreach (var (p, k, role) in owners)

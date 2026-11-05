@@ -48,14 +48,19 @@ public static partial class RoadGrade
             _vnx = new double[N]; _vny = new double[N];
             for (int i = 0; i < N; i++)
             {
+                // ★[v113.3 · 설치 전 검토 L] 길이 0 선분(겹친 꼭짓점)은 건너 앞 · 뒤 진짜 선분 법선으로 — (0, 1)을 더하면 겹친 꼭짓점 법선이 엉뚱해져 매끈한 측점이 그 자리에서 뛰었다.
+                //   길이 0 선분이 없으면 옛 값 그대로(바로 앞 · 뒤 선분).
                 double ax = 0, ay = 0;
-                if (i > 0) { var (nx, ny) = SegN(i - 1); ax += nx; ay += ny; }
-                if (i + 1 < N) { var (nx, ny) = SegN(i); ax += nx; ay += ny; }
+                int jp = i - 1; while (jp >= 0 && Seg2(jp) < 1e-24) jp--;
+                int jn = i; while (jn + 1 < N && Seg2(jn) < 1e-24) jn++;
+                if (jp >= 0) { var (nx, ny) = SegN(jp); ax += nx; ay += ny; }
+                if (jn + 1 < N) { var (nx, ny) = SegN(jn); ax += nx; ay += ny; }
                 double l = Math.Sqrt(ax * ax + ay * ay);
                 if (l < 1e-12) { var (nx, ny) = SegN(Math.Min(i, N - 2)); ax = nx; ay = ny; l = 1; }
                 _vnx[i] = ax / l; _vny[i] = ay / l;
             }
         }
+        double Seg2(int i) => Sq(X[i + 1] - X[i]) + Sq(Y[i + 1] - Y[i]);
         (double, double) SegN(int i)
         {
             double dx = X[i + 1] - X[i], dy = Y[i + 1] - Y[i], l = Math.Sqrt(dx * dx + dy * dy);
@@ -80,6 +85,8 @@ public static partial class RoadGrade
             if (l < 1e-12) { (nx, ny) = SegN(i); l = 1; }
             return (x, y, z, nx / l, ny / l);
         }
+        /// <summary>★[v113.3 · 평가기 연속 A안 ①] 꼭짓점 i의 매끈한 왼쪽 법선(엔진 점 평가기가 같은 법선으로 측점을 찾는다).</summary>
+        internal (double Nx, double Ny) VN(int i) => (_vnx[i], _vny[i]);
         /// <summary>진행 방향(단위) — 선분 방향.</summary>
         public (double Tx, double Ty) Dir(int i)
         {
@@ -254,7 +261,17 @@ public static partial class RoadGrade
             }
             var prof = (cut ? R.CutProfs : R.FillProfs)[Math.Clamp(ray.Prof, 0, R.CutProfs.Count - 1)];
             double sgn = cut ? 1 : -1;
-            double Cone(double d) => ray.Ez + sgn * prof.FAt(d);
+            // ★★[v113.3 · 계획 §1 Walk.Cone] 주름 원천 감싸기 — 벽 면 없는 단면 광선은 성토 max(단면, C⁺) · 절토 min(단면, C⁻)(점 평가기와 같은 높이 · 데이라잇 이분도 이 높이)
+            var envS = R.EnvS;
+            bool envOk = EnvOnRays && envS != null && (cut ? envS.Hi.Count : envS.Lo.Count) > 0 && !prof.Faces.Any(f => f.Wall);
+            double Cone(double d)
+            {
+                double z = ray.Ez + sgn * prof.FAt(d);
+                if (!envOk) return z;
+                double x = ray.Ex + ray.Nx * d, y = ray.Ey + ray.Ny * d;
+                if (cut) { double c = envS!.HiAt(x, y, z); return c < z ? c : z; }
+                double c2 = envS!.LoAt(x, y, z); return c2 > z ? c2 : z;
+            }
             bool G(double d, out double g) => gnd.TryGetElevation(ray.Ex + ray.Nx * d, ray.Ey + ray.Ny * d, out g);
             // f > 0 = 아직 깎거나 쌓을 자리(바탕이 원뿔 밖)
             double F(double d, out bool ok) { ok = G(d, out double g); return ok ? sgn * (g - Cone(d)) : double.NaN; }
