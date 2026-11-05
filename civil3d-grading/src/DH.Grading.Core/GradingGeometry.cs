@@ -11,6 +11,12 @@ public sealed class VirtualSlope
 {
     /// <summary>계단 모서리 링(평지 경계 + k단 사면끝/소단끝 오프셋). Z=padZ±kH, 원지반 무시·끝까지(클립 없음).</summary>
     public List<List<Point3>> Rings { get; } = new();
+    /// <summary>★[v114.3 · JACK 1105 소단 높이] <see cref="Rings"/>와 나란한 누적 단높이 rise(늘 양수) · 평지 링 = NaN.
+    /// 링 Z = 경계 Z + zOff 뒤 RelaxRingZ — 절토 zOff = +rise · 성토 zOff = −rise(부호는 이 값에 안 싣는다).
+    /// [옹벽 추가]가 옛 사면 소단 높이를 실제 링에서 읽는다(링만 더하는 입구 — 기하는 안 바뀐다).</summary>
+    public List<double> RingRise { get; } = new();
+    /// <summary>★[v114.3 · JACK 1105 소단 높이] 링 Z 완화에 쓴 최대 경사(경계 전환부 · 평평한 계획선 = 0) — [옹벽 추가] 불변식의 기울기 한도.</summary>
+    public double MaxGrad { get; set; }
     /// <summary>코너 능선(힙) — 부지 코너에서 바깥 대각선으로 각 링의 코너 점을 꿰는 열린 브레이크라인.
     /// TIN이 코너를 대각 삼각형으로 깎는(모따기처럼 보이는) 것을 막아 벽·소단이 각지게 딱 떨어지게 한다(직각 모드).</summary>
     public List<List<Point3>> CornerLines { get; } = new();
@@ -123,7 +129,7 @@ public static class GradingGeometry
         // ★[JACK 0911] <c>NoPlatform</c>이면 <b>안쪽 평지 링을 안 넣는다</b> —
         //   가상 폴리곤으로 벽만 칠 때 안쪽이 원지반(또는 앞 구역)으로 남게 하려는 것이다.
         //   바깥으로 쌓는 계단은 그대로다.
-        if (platform.Count >= 3 && !p.NoPlatform) result.Rings.Add(platform);
+        if (platform.Count >= 3 && !p.NoPlatform) { result.Rings.Add(platform); result.RingRise.Add(double.NaN); }
 
         // [같은 레벨 정점 직선 브레이크라인 — 3D 계획선] 경계의 '같은 Z 연속 구간(플래토)' 양 끝 정점을
         // 부지 안쪽 직선으로 연결 → 상단·하단이 각각 평평하게 유지되고 전환 사면이 그 사이 좁은 띠로 갇힘
@@ -217,6 +223,7 @@ public static class GradingGeometry
             if (dl > 1e-6) maxGrad = Math.Max(maxGrad, dz / Math.Max(dl, 0.5));
         }
         dbg.AppendLine($"  완화 최대경사(maxGrad)={maxGrad:F3} ({(maxGrad > 0 ? "전환부 있음" : "평면 계획선 — 완화 없음")})");
+        result.MaxGrad = maxGrad;
 
         // [단차 경계선 레이] 전환변이 시작/끝나는 경계 정점(한쪽 변 평탄+한쪽 변 경사)에서 평탄 변의
         // 바깥 수직 방향으로 레이를 정의 — 각 링과의 교점을 링 정점으로 '삽입'하고 꿰어 브레이크라인으로.
@@ -985,7 +992,7 @@ public static class GradingGeometry
             ringRelax += relaxed; ringN++;
             if (w.Count < 8)
                 dbg.AppendLine($"  ⚠얇은 링 d={dist:F1} rise={rise:F1}: 점{w.Count} Z[{zMin:F2}..{zMax:F2}] 완화 {relaxed}점");
-            if (w.Count >= 3) { result.Rings.Add(w); result.HasSlope = true; ringSeq.Add((e, dist, rise, w)); }
+            if (w.Count >= 3) { result.Rings.Add(w); result.RingRise.Add(rise); result.HasSlope = true; ringSeq.Add((e, dist, rise, w)); }
         }
 
         // [코너 능선(힙/계곡) 브레이크라인] 링 자체는 코너가 한 점으로 정확하지만(NTS 검증됨), 링 사이 TIN
@@ -5212,6 +5219,38 @@ internal sealed class StepProfile
             benchIdx++;                                                   // [§75] 다음 단
         }
         return sp;
+    }
+
+    /// <summary>★[v114.3 · JACK 1105 소단 높이 · 재검토 LOW-G] 단 목록(1단부터) — 누적 rise · 그 단 높이 · 대소단인가.
+    /// 예산 안은 <see cref="Build"/>와 같은 셈(같은 클램프 · 같은 대소단 누적 — 링 rise와 비트 같다) · 예산을 넘은 단은 클램프 없이 이어 센다(잘린 단은 실제 rise 그대로 · 대소단 누적 포함).
+    /// 구간 규칙은 구배 · 소단 폭만 바꾸므로 rise는 구간과 무관하다.</summary>
+    internal static List<(double Rise, double H, bool Terrace)> TierList(GradingParams p, bool up, int count)
+    {
+        var res = new List<(double Rise, double H, bool Terrace)>();
+        double benchH = p.BenchHeightOf(up);
+        double riseBudget = p.RiseFor(up);
+        double maxRise = riseBudget > 1e-9 ? riseBudget : p.MaxBenches * benchH;
+        double interval = p.MountainTerrace ? Math.Max(p.TerraceInterval, 1e-6) : double.PositiveInfinity;
+        int benchBudget = (int)Math.Ceiling(maxRise / Math.Max(p.SmallestBenchHeightOf(up), 1e-6));
+        int guardMax = (int)Math.Min(4000L, benchBudget * 4L + 8);
+        double totalRise = 0, accH = 0;
+        int benchIdx = 0;
+        for (int guard = 0; guard < guardMax + 4 * count + 16; guard++)
+        {
+            bool inBudget = guard < guardMax && totalRise < maxRise - 1e-9;
+            if (!inBudget && res.Count >= count) break;
+            double benchNow = p.BenchHeightAt(up, benchIdx);
+            double remaining = interval - accH;
+            bool terraceHere = p.MountainTerrace && remaining <= benchNow + 1e-9;
+            double rise = terraceHere ? remaining : benchNow;
+            if (rise <= 1e-9) { accH = 0; continue; }
+            if (inBudget && totalRise + rise > maxRise) rise = maxRise - totalRise;
+            totalRise += rise;
+            res.Add((totalRise, rise, terraceHere));
+            if (terraceHere) accH = 0; else accH += rise;
+            benchIdx++;
+        }
+        return res;
     }
 }
 

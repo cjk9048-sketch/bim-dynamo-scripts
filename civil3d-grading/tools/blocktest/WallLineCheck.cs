@@ -1,4 +1,4 @@
-// ── S195 ~ S201 ★★★[v114.0 · JACK 1105 «옹벽 추가 새 개념 — 선에서 바깥으로 수평 계단»] 경계 판정 · 줄 · 줄기 · 끝 가늘어짐 · 합성 한 판 RuleOf · 목록 판 7 ──
+﻿// ── S195 ~ S201 ★★★[v114.0 · JACK 1105 «옹벽 추가 새 개념 — 선에서 바깥으로 수평 계단»] 경계 판정 · 줄 · 줄기 · 끝 가늘어짐 · 합성 한 판 RuleOf · 목록 판 7 ──
 //   (v113 «경계 폴리선 · 안쪽 다단» 기대는 지웠다 — 번호는 그대로 두고 기대를 바꿈 · 계획 6절)
 using DH.Grading.Core;
 using Tri = DH.Grading.Core.WallDaylight.Tri;
@@ -590,6 +590,8 @@ static class WallLineCheck
             }
         }
 
+        S216(check);
+
         Console.WriteLine("\n== S201 옹벽 목록 판 7 ==");
         {
             var head = new WallListHead { PlanHandle = "1A", GroundHandle = "2B", NextNo = 4 };
@@ -649,6 +651,296 @@ static class WallLineCheck
                 if (!WallList.TryDecode(t2, out _, out _, out string wb) && wb.Contains("종류")) { rej = true; break; }
             }
             check("S201 ⑥ 모르는 종류 → 거절(까닭에 «종류»)", rej, "");
+        }
+    }
+
+    // ══ S216 ★★[v114.3 · JACK 1105 «옛 사면 소단 높이에 맞춤» · 계획 `2026-11-05_옹벽소단_사면소단높이.md` 2판 5절 + 재검토] 옛 소단 방식 ══
+    //   재료: P0 = GradingGeometry.Build 링을 선으로 삼각망 짠 비뚤린 TIN(Civil이 링 브레이크라인으로 짓는 꼴 — 대각선은 들로네가 고름) · 만든 좌표(현장 크기 · 만든 값)
+    //   FaceRun 0.005 · SlopeW 0.01(출하 값) · 원지반 = P0 + 4 m(절토 · 데이라잇 없음 — 경계 Bd 안은 모두 옛 사면)
+    sealed class NoGround216 : IGroundSurface { public bool TryGetElevation(double x, double y, out double z) { z = 0; return false; } }
+    sealed class Site216
+    {
+        public List<Point3> Plan = new(); public GradingParams P = new();
+        public VirtualSlope Vc = null!, Vf = null!; public WallByLine.OldBench? Oc, Of;
+        public List<Tri> P0T = new(), GT = new();
+        public Func<double, double, double?> P0 = (_, _) => null, G = (_, _) => null;
+        public double Dx, Dy;
+    }
+    const double Dx216 = 310000, Dy216 = 470000;   // 만든 좌표(현장 크기 · 어느 현장 값도 아님)
+    static Site216 Site(List<Point3> plan, GradingParams p, Func<double, double, double>? gAdd = null, Func<double, double, double>? bump = null, List<SlopeZone>? zones = null)
+    {
+        var s = new Site216 { P = p, Dx = Dx216, Dy = Dy216 };
+        s.Plan = plan.Select(q => new Point3(q.X + s.Dx, q.Y + s.Dy, q.Z)).ToList();
+        var zw = zones?.Select(z => new SlopeZone { T0 = z.T0, T1 = z.T1, Partial = z.Partial, Rules = new(z.Rules) }).ToList();
+        s.Vc = GradingGeometry.Build(s.Plan, new NoGround216(), p, true, zw);
+        s.Vf = GradingGeometry.Build(s.Plan, new NoGround216(), p, false, null);
+        s.Oc = WallByLine.OldBench.Of(s.Vc, p, true, out _); s.Of = WallByLine.OldBench.Of(s.Vf, p, false, out _);
+        // 구간이 든 링은 닫는 점이 없을 수 있다(조각 이음) — 닫아서 삼각망(Civil 링 브레이크라인도 닫는 변을 넣는다)
+        var rings = s.Vc.Rings.Select(r => r.Count >= 2 && (r[0].X != r[^1].X || r[0].Y != r[^1].Y) ? r.Append(r[0]).ToList() : r).ToList();
+        var tin = WallByLine.MeshLines(rings, s.Plan[0].X, s.Plan[0].Y);
+        if (bump != null) { Point3 B(Point3 q) => new(q.X, q.Y, q.Z + bump(q.X - s.Dx, q.Y - s.Dy)); tin = tin.Select(t => new Tri(B(t.A), B(t.B), B(t.C))).ToList(); }
+        s.P0T = tin; s.P0 = WallByLine.TriLookup(tin);
+        gAdd ??= (_, _) => 4;
+        Point3 Gq(Point3 q) => new(q.X, q.Y, q.Z + gAdd(q.X - s.Dx, q.Y - s.Dy));
+        s.GT = tin.Select(t => new Tri(Gq(t.A), Gq(t.B), Gq(t.C))).ToList();
+        s.G = WallByLine.TriLookup(s.GT);
+        return s;
+    }
+    static (BoundaryCut.Result Cut, WallByLine.Built? B) Old(Site216 s, IReadOnlyList<Point3> src, List<Point3> bd, WallByLine.LevelKind lk = WallByLine.LevelKind.OldBench, double t = 1, double reach = 10)
+    {
+        var sr = src.Select(q => new Point3(q.X + s.Dx, q.Y + s.Dy, 0)).ToList(); var b0 = bd.Select(q => new Point3(q.X + s.Dx, q.Y + s.Dy, 0)).ToList();
+        var cut = BoundaryCut.Classify(sr, b0, s.Plan, null);
+        if (!cut.Ok) return (cut, null);
+        var b = WallByLine.Build(new WallByLine.Input
+        {
+            Line = cut.Line, Bd = b0, NewRing = cut.NewRing, CutRing = cut.CutRing, Plan = s.Plan, Hc = s.P.CutBenchHeight, Tc = t, Hf = s.P.FillBenchHeight, Tf = t, SlopeW = 0.01, FaceRun = 0.005, Grid = 1, Reach = reach,
+            Ground = s.G, GroundTris = s.GT, P0 = s.P0, P0Tris = s.P0T, LevelMode = lk, CutBench = s.Oc, FillBench = s.Of, RowDens = 1,
+        });
+        return (cut, b);
+    }
+    static string Brief(WallByLine.Built? b, BoundaryCut.Result c) => b == null ? "판정 " + c.Why : $"{b.Code} {b.Why} · 줄기 {string.Join(",", b.Parts.SelectMany(p => p.Stems).Select(st => $"j{st.J}×{st.Tiers}"))} · 쌍 {b.PairsUnder01} · 바늘 {b.Needles} · 끊김 {b.JumpBad}/{b.JumpN} · 면 h {(b.FaceHN > 0 ? b.FaceHMin : 0):F3}~{b.FaceHMax:F3}({b.FaceHBad}) · 규칙 {b.RuleN}({b.RuleMiss}) · 이음 {b.JoinN}(어긋 {b.JoinMiss} · 없음 {b.JoinNone}) · 기울기 {b.TiltAlong * 100:F1}%/{b.TiltOut * 100:F1}%";
+
+    static void S216(Action<string, bool, string> check)
+    {
+        Console.WriteLine("\n== S216 옛 소단 방식 — 벽 소단 = 옛 사면 링 높이(평평 · 기울기 · 단차 · 단높이 규칙 · 대소단 · 섞인 선 · 오목 · 이등분선 · 구간) ==");
+        var pBase = new GradingParams { CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1, CutSlope = 0.8, FillSlope = 0.8, VertexSpacing = 2, MinSlope = 0.01, MinFaceRun = 0.005, MaxRiseCut = 25, MaxRiseFill = 25 };
+        var bd = Rect(-15, -45, 52, 45);
+        // U자 선 — 동쪽 사면: 바닥(x = 40) · 1단 면(40~44) · 1단 소단 105(44~45) · 2단 면 · 2단 소단 110(49~50) · 3단 면 — 다리가 소단을 비스듬히 건넘(1105 현장 꼴)
+        var U = new List<Point3> { new(53, -12, 0), new(42, -4, 0), new(42, 4, 0), new(53, 12, 0) };
+        static bool OnLevels(IEnumerable<List<Point3>> rows, IEnumerable<double> lv, double tol, out double worst)
+        {
+            worst = 0; bool ok = true;
+            foreach (var r in rows) foreach (var q in r) { double d = lv.Min(z => Math.Abs(q.Z - z)); worst = Math.Max(worst, d); if (d > tol) ok = false; }
+            return ok;
+        }
+
+        // (a) 평평한 바닥 · (b) 부분 첫 단 · (h) 기둥 꼴 — 원지반 = P0 + 0.9·(52 − x)(데이라잇 = 경계 동쪽 변 x = 52 · 합성 한 판이 뜻 있게 · 갈림 자리 윗 줄기 소단도 땅 아래)
+        {
+            var s = Site(Rect(0, -30, 40, 30, (x, y) => 100), pBase, gAdd: (x, y) => 0.9 * (52 - x));
+            var (cut, b) = Old(s, U, bd);
+            var (_, bl) = Old(s, U, bd, WallByLine.LevelKind.Line);
+            if (b == null || !b.Ok) check("S216 (a) 평평한 바닥 짓기", false, Brief(b, cut));
+            else
+            {
+                var lv = Enumerable.Range(1, 6).Select(k => 100 + 5.0 * k).ToList();
+                bool on = OnLevels(b.Rows, lv, 1e-3, out double w);
+                check("S216 (a) ① 평평한 바닥 — 벽 소단 = 옛 소단 105 · 110 · 115(± 1 mm · 줄 점 전부)", on && b.Rows.Count > 0, $"최대 차 {w * 1000:F3} mm · {Brief(b, cut)}");
+                bool lOff = bl != null && bl.Ok && !OnLevels(bl.Rows, lv, 1e-3, out _);
+                check("S216 (a) ② 같은 선 선기준(옛 규칙)은 옛 소단과 어긋남(선 위 P0 최저 + k·H) — 바꾼 까닭", lOff, bl == null ? "" : $"선기준 줄 높이 {string.Join(",", bl.Rows.SelectMany(r => r).Select(q => Math.Round(q.Z, 3)).Distinct().OrderBy(z => z).Take(4))}");
+                // S = 옛 소단 건넘(P0 = 옛 소단 − 1 cm) · 이음 어긋남 0
+                var sp = b.Points.Where(q => q.Kind == 1).ToList();
+                double sw = sp.Count == 0 ? 99 : sp.Max(q => { double z = s.P0(q.X, q.Y) ?? 0; return lv.Min(l => Math.Abs(z - (l - 0.01))); });
+                check("S216 (a) ③ 줄기 갈림 S = 옛 소단 건넘(그 자리 P0 = 옛 소단 − 1 cm ± 2 mm) · 4곳 · 이음 어긋남 0", sp.Count == 4 && sw <= 2e-3 && b.JoinMiss == 0, $"S {sp.Count} · 최대 {sw * 1000:F2} mm · {Brief(b, cut)}");
+                check("S216 (a) ④ 불변식 — 줄 끊김 0 · 면 높이 0 < h ≤ H + 1 cm · 규칙(L 위 소단 띠) 어긋남 0 · 소단 높이 관문 통과", b.JumpBad == 0 && b.FaceHBad == 0 && b.FaceHMin > 0 && b.RuleMiss == 0 && b.RuleN > 0 && b.BenchSag + b.BenchMiss == 0,
+                    Brief(b, cut));
+                // (b) 부분 첫 단 — 가운데(x = 42 · P0 102.5)는 첫 면 h = 2.5 < 5
+                check("S216 (b) 부분 첫 단 — 첫 면 0 < h < H_k(가운데 102.5 → 105)", b.FaceHMin > 0 && b.FaceHMin < 5 - 1e-3 && b.FaceHMax <= 5 + 0.01, $"면 h {b.FaceHMin:F3}~{b.FaceHMax:F3}");
+                // (h) 기둥 꼴 — 줄기 갈림 마구리: 아래 끝 = 옛 소단(105 · 110 ± 1 cm) · 높이 ≤ H_k + 1 cm
+                var caps = b.Faces.Where(f => f.Kind == 1).ToList();
+                // 마구리 발(아래 줄기 쪽) — L에서 0.1 m 넘게 떨어진 점은 옛 소단 높이(105 · 110 · 115 ± 1 cm · 땅이 이기는 자리 빼고) — 그 아래 줄기 소단이 옛 소단과 이어진다
+                bool capOk = caps.Count > 0 && caps.All(f => f.HMax <= 5 + 0.01 && f.Foot.Count > 0);
+                double capWorst = 0; int capN = 0;
+                foreach (var f in caps)
+                    foreach (var q in f.Foot)
+                    {
+                        double dq = Near(cut.Line, q.X, q.Y).D;
+                        if (dq < 0.1 || dq > 1.0) continue;   // 아래 줄기 첫 소단 위(면 폭 0.05 ~ 소단 끝 1.05 m 사이)만
+                        double g0 = s.G(q.X, q.Y) ?? double.MaxValue;
+                        if (g0 < q.Z + 1e-6) continue;
+                        capN++; capWorst = Math.Max(capWorst, lv.Min(l => Math.Abs(q.Z - l)));
+                    }
+                check("S216 (h) 기둥 꼴 — 마구리 높이 ≤ H + 1 cm · 마구리 발 = 옛 소단 높이(± 1 cm · 아래 줄기 소단이 옛 소단과 이어짐)", capOk && capN > 0 && capWorst <= 0.01,
+                    $"마구리 {caps.Count} · 가장 높은 {(caps.Count == 0 ? 0 : caps.Max(f => f.HMax)):F3} m · 발 {capN}점 최대 차 {capWorst * 1000:F1} mm");
+                var (r, all, _) = (WallDaylight.BuildCompositeLine(b.Poly, b.WallTrisC, b.WallTrisF, s.GT, s.P0T), new List<Tri>(), 0);
+                var gc = r.Zone == null ? default : WallByLine.BenchGate(b.BenchPts, r.Zone.Concat(r.Untouched).ToList());
+                check("S216 (a) ⑤ 합성 한 판 — 판정 1~2 · 높이 오차 합 ≤ 1 cm · 합성 뒤 소단 관문 통과", r.Zone != null && r.Tier <= 2 && r.HeightBudget <= 1e-2 && gc.Why.Length == 0,
+                    $"판정 {r.Tier} · {r.Fail} · 오차 합 {r.HeightBudget * 1000:F3} mm · 관문 {(r.Zone == null ? "-" : $"소단 {gc.BenchN}(틀림 {gc.BenchBad}) F {gc.FootN}(턱 {gc.FootBad})")}");
+            }
+        }
+
+        // (c) 기운 바닥(y 방향 8 %) — 벽 소단이 링을 따라 기욺(100 + 0.08·y + rise ± 1 mm) · 기울기 로그 · 5 % 넘으면 ⚠
+        {
+            var s = Site(Rect(0, -30, 40, 30, (x, y) => 100 + 0.08 * y), pBase);
+            var (cut, b) = Old(s, U, bd);
+            if (b == null || !b.Ok) check("S216 (c) 기운 바닥 짓기", false, Brief(b, cut));
+            else
+            {
+                double worst = 0;
+                foreach (var row in b.Rows)
+                    foreach (var q in row)
+                    {
+                        double y = q.Y - s.Dy, d = Enumerable.Range(1, 6).Min(k => Math.Abs(q.Z - (100 + 0.08 * y + 5.0 * k)));
+                        worst = Math.Max(worst, d);
+                    }
+                check("S216 (c) ① 기운 바닥 — 벽 소단 = 100 + 0.08·y + 5k(± 1 mm · 줄 점 전부 — 옛 소단을 따라 기욺)", worst <= 1e-3, $"최대 차 {worst * 1000:F3} mm · {Brief(b, cut)}");
+                check("S216 (c) ② 기울기 기록 ≈ 8 % · 5 % 넘어 ⚠ 한 줄(막지 않음) · 불변식 · 관문 통과", Math.Abs(b.TiltAlong - 0.08) < 5e-3 && b.Warn.Any(w => w.Contains("기욺")) && b.JumpBad == 0 && b.FaceHBad == 0 && b.BenchSag == 0,
+                    $"줄 방향 {b.TiltAlong * 100:F2} % · ⚠ {string.Join(" · ", b.Warn.Where(w => w.Contains("기욺")))}");
+            }
+            var s3 = Site(Rect(0, -30, 40, 30, (x, y) => 100 + 0.03 * y), pBase);
+            var (cut3, b3) = Old(s3, U, bd);
+            check("S216 (c) ③ 3 % 기울기 — ⚠ 없음", b3 != null && b3.Ok && !b3.Warn.Any(w => w.Contains("기욺")), Brief(b3, cut3));
+        }
+
+        // (d) 단차 바닥(서쪽 108 · 동쪽 100 · 남북 변에 전환 12 m — 1105 꼴) — RelaxRingZ 쐐기를 지나는 북쪽 선: 짓기 · 벽 = 링 · 불변식 · 관문
+        {
+            var plan = new List<Point3> { new(0, -30, 108), new(20, -30, 108), new(32, -30, 100), new(40, -30, 100), new(40, 30, 100), new(32, 30, 100), new(20, 30, 108), new(0, 30, 108) };
+            var s = Site(plan, pBase);
+            var bdN = Rect(-15, -45, 55, 47);
+            var Un = new List<Point3> { new(12, 48, 0), new(16, 32, 0), new(36, 32, 0), new(40, 48, 0) };
+            var (cut, b) = Old(s, Un, bdN);
+            if (b == null || !b.Ok) check("S216 (d) 단차 바닥(쐐기 자리) 짓기", false, Brief(b, cut) + $" · maxGrad {s.Oc?.MaxGrad:F3}");
+            else
+            {
+                double worst = 0;
+                foreach (var row in b.Rows) foreach (var q in row) { double d = Enumerable.Range(1, 6).Min(k => Math.Abs(q.Z - s.Oc!.Level(k, q.X, q.Y))); worst = Math.Max(worst, d); }
+                var zr = b.Rows.SelectMany(r => r).Select(q => q.Z).ToList();
+                check("S216 (d) 단차 바닥 — 벽 = 링(± 1 mm) · 소단이 쐐기를 따라 기욺 · 불변식 · 관문 통과", worst <= 1e-3 && b.JumpBad == 0 && b.FaceHBad == 0 && b.RuleMiss == 0 && b.BenchSag + b.BenchMiss == 0 && zr.Max() - zr.Min() > 5,
+                    $"최대 차 {worst * 1000:F3} mm · 줄 높이 {zr.Min():F2}~{zr.Max():F2} · maxGrad {s.Oc!.MaxGrad:F3} · {Brief(b, cut)}");
+            }
+        }
+
+        // (e) 단높이 규칙(2단부터 3 m) · 산지 대소단(간격 8 m · 폭 3 m) — 단 높이 105 · 108(대소단) · 111 … · 대소단 소단 폭 = 3 m
+        {
+            var p = new GradingParams { CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1, CutSlope = 0.8, FillSlope = 0.8, VertexSpacing = 2, MinSlope = 0.01, MinFaceRun = 0.005, MaxRiseCut = 25, MaxRiseFill = 25,
+                                        CutBenchSteps = new() { (1, 3.0) }, MountainTerrace = true, TerraceInterval = 8, TerraceWidth = 3 };
+            var s = Site(Rect(0, -30, 40, 30, (x, y) => 100), p, gAdd: (_, _) => 9);
+            var tiers = Enumerable.Range(1, 12).Select(k => s.Oc!.Tier(k)).ToList();
+            check("S216 (e) ① 단 표 = 링 rise(5 · 8 대소단 · 11 · 14 · 16 대소단 …)", s.Oc != null && tiers.Take(5).Select(t => t.Rise).SequenceEqual(new[] { 5.0, 8, 11, 14, 16 }) && tiers[1].Terrace && tiers[4].Terrace && !tiers[0].Terrace,
+                string.Join(" · ", tiers.Select(t => $"{t.Rise:0.##}{(t.Terrace ? "대" : "")}")));
+            // 곧은 선(북동 모퉁이를 비스듬히 가름) — 넓은 대소단(3 m)이 U자 선 안쪽을 채우면 아래 단 점이 소단에 끼어드는 것은 S197 ⑧-b · S198 (b)의 알려진 빈자리(옛 규칙도 같음)
+            var lE = new List<Point3> { new(53, 18.86, 0), new(29.1, 46, 0) };
+            var (cut, b) = Old(s, lE, bd, reach: 20);
+            if (b == null || !b.Ok) check("S216 (e) 단높이 규칙 · 대소단 짓기", false, Brief(b, cut));
+            else
+            {
+                var lv = tiers.Select(t => 100 + t.Rise).ToList();
+                bool on = OnLevels(b.Rows, lv, 1e-3, out double w);
+                // 대소단(108) 줄 — L에서 거리(곧은 선이라 줄마다 하나): 면 머리 줄과 소단 끝 줄의 거리 차 = 대소단 폭 3 m
+                var dl = b.Rows.Where(r => r.All(q => Math.Abs(q.Z - 108) < 1e-3)).Select(r => Near(cut.Line, r[r.Count / 2].X, r[r.Count / 2].Y).D).OrderBy(d => d).ToList();
+                double gap = 99;
+                for (int i = 0; i < dl.Count; i++) for (int j = i + 1; j < dl.Count; j++) if (Math.Abs(dl[j] - dl[i] - 3) < Math.Abs(gap - 3)) gap = dl[j] - dl[i];
+                check("S216 (e) ② 벽 소단 = 링 높이(± 1 mm) · 대소단 단의 소단 폭 = 대소단 폭 3 m(± 5 cm)", on && Math.Abs(gap - 3) < 0.05, $"최대 차 {w * 1000:F3} mm · 108 두 줄 사이 {gap:F3} m · {Brief(b, cut)}");
+            }
+        }
+
+        // (f) L이 옛 소단 위를 길게 지남(P0 = 105 ± 5 mm 흔들림) — 높이 0인 면 0 · 0.1 mm 쌍 0 · 바늘 0
+        {
+            var s = Site(Rect(0, -30, 40, 30, (x, y) => 100), pBase, bump: (x, y) => 0.005 * Math.Sin(2 * Math.PI * y / 3));
+            var (cut, b) = Old(s, new List<Point3> { new(53, -12, 0), new(44.5, -6, 0), new(44.5, 6, 0), new(53, 12, 0) }, bd);
+            check("S216 (f) L이 옛 소단 위(± 5 mm) — 짓기 · 첫 면 h > 0(높이 0 면 0) · 0.1 mm 쌍 0 · 바늘 0 · 관문 통과",
+                b != null && b.Ok && b.FaceHMin > 1e-3 && b.PairsUnder01 == 0 && b.Needles == 0 && b.BenchSag + b.BenchMiss == 0, Brief(b, cut));
+        }
+
+        // (g) 섞인 선 — 북쪽 절토(P0 = 절토 링 · 원지반 + 3) · 남쪽 성토(P0 = 성토 링 · 원지반 − 3) · 가운데 띠에서 바뀜: 부분마다 제 쪽 링
+        {
+            var s = Site(Rect(0, -30, 40, 30, (x, y) => 100), pBase);
+            static double Prof(double d, bool up)
+            {
+                // 동쪽 사면 단면(링과 같은 거리 · 높이): 면 4 m / 5 m · 소단 1 m
+                double z = 0; double x = Math.Max(0, d);
+                for (int k = 0; k < 6; k++) { double s0 = 5 * k; if (x <= s0 + 4) { z = 5 * k + 1.25 * Math.Max(0, x - s0); break; } if (x <= s0 + 5) { z = 5 * (k + 1); break; } }
+                return 100 + (up ? z : -z);
+            }
+            double P0m(double x, double y) { double c = Prof(x - 40, true), f = Prof(x - 40, false); return y >= 1 ? c : y <= -1 ? f : f + (c - f) * (y + 1) / 2; }
+            double Gm(double x, double y) => y >= 1 ? P0m(x, y) + 3 : y <= -1 ? P0m(x, y) - 3 : P0m(x, y) + 3 * y;
+            var pT = Grid(38, -40, 60, 40, 0.5, P0m).Select(t => new Tri(new(t.A.X + s.Dx, t.A.Y + s.Dy, t.A.Z), new(t.B.X + s.Dx, t.B.Y + s.Dy, t.B.Z), new(t.C.X + s.Dx, t.C.Y + s.Dy, t.C.Z))).ToList();
+            var gT = Grid(38, -40, 60, 40, 0.5, Gm).Select(t => new Tri(new(t.A.X + s.Dx, t.A.Y + s.Dy, t.A.Z), new(t.B.X + s.Dx, t.B.Y + s.Dy, t.B.Z), new(t.C.X + s.Dx, t.C.Y + s.Dy, t.C.Z))).ToList();
+            s.P0T = pT; s.P0 = (x, y) => P0m(x - s.Dx, y - s.Dy); s.GT = gT; s.G = (x, y) => Gm(x - s.Dx, y - s.Dy);
+            var (cut, b) = Old(s, new List<Point3> { new(53, -12, 0), new(42.5, -8, 0), new(42.5, 8, 0), new(53, 12, 0) }, bd);
+            if (b == null || !b.Ok) check("S216 (g) 섞인 선 짓기", false, Brief(b, cut));
+            else
+            {
+                var pc = b.Parts.FirstOrDefault(p => p.Up); var pf = b.Parts.FirstOrDefault(p => !p.Up);
+                bool cOn = b.ZoneC.Count > 0, fOn = b.ZoneF.Count > 0;
+                double wc = 0, wf = 0;
+                foreach (var row in b.Rows)
+                    foreach (var q in row)
+                    {
+                        double y = q.Y - s.Dy;
+                        if (y > 1) wc = Math.Max(wc, Enumerable.Range(1, 5).Min(k => Math.Abs(q.Z - (100 + 5.0 * k))));
+                        if (y < -1) wf = Math.Max(wf, Enumerable.Range(1, 5).Min(k => Math.Abs(q.Z - (100 - 5.0 * k))));
+                    }
+                check("S216 (g) 섞인 선 — 절토 · 성토 두 부분 · 절토 줄 = 절토 링(105 …) · 성토 줄 = 성토 링(95 …) ± 1 mm", pc != null && pf != null && cOn && fOn && wc <= 1e-3 && wf <= 1e-3,
+                    $"절토 최대 차 {wc * 1000:F3} · 성토 {wf * 1000:F3} mm · {Brief(b, cut)}");
+            }
+        }
+
+        // (i) 오목 꼭짓점 + 전환 변(RelaxRingZ가 일하는 자리) — 짓거나, 불변식 · 규칙이 거절(까닭 한 줄) · 조용히 틀리지 않음
+        {
+            // ㄱ자 부지 — 오목 꼭짓점 (20, 20) · 북쪽 블록 동쪽 변이 100 → 108로 오름(전환 변)
+            var plan = new List<Point3> { new(0, 0, 100), new(40, 0, 100), new(40, 20, 100), new(20, 20, 100), new(20, 40, 108), new(0, 40, 108) };
+            var pL = new GradingParams { CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 1, FillBenchWidth = 1, CutSlope = 0.8, FillSlope = 0.8, VertexSpacing = 2, MinSlope = 0.01, MinFaceRun = 0.005, MaxRiseCut = 45, MaxRiseFill = 25 };
+            var s = Site(plan, pL);
+            var bdL = new List<Point3> { new(-15, -15, 0), new(55, -15, 0), new(55, 45, 0), new(45, 55, 0), new(-15, 55, 0) };
+            var (ci, bi) = Old(s, new List<Point3> { new(56, 33, 0), new(26, 27, 0), new(33, 56, 0) }, bdL);
+            bool okI = bi != null && (bi.Ok ? bi.JumpBad == 0 && bi.FaceHBad == 0 && bi.BenchSag + bi.BenchMiss == 0 : bi.Code == "옛 소단" && bi.Why.Length > 0);
+            check("S216 (i) 오목 꼭짓점 + 전환 변 — 짓거나 불변식 · 규칙이 거절(까닭 한 줄)", okI, Brief(bi, ci));
+        }
+
+        // (j) 링이 뛰는 자리(접힘 · 이등분선 뜀 꼴)를 건너는 줄 — 불변식이 거절(접힌 면 안 지음 · 까닭 한 줄). 링을 일부러 고친 판(P0도 그 링으로 — 규칙 검사는 통과하고 불변식만 걸리게):
+        //   (j1) 1단 링이 y = 0에서 0.5 m 뜀(1 mm 사이) → 1단 줄이 그 자리를 건넘 → 줄 안 끊김 · (j2) 2단 링이 단 표보다 0.3 m 높음 → 1단 소단 끝 → 2단 면 머리 사이 h = 5.3 > H + 1 cm → 면 높이
+        //   (오목 꼭짓점의 진짜 이등분선 뜀은 (i)가 끊김으로 잡는다 · 이등분선과 나란한 V자는 두 다리 벽이 V 안에서 겹쳐 소단 관문이 먼저 거절 — S197 ⑧-b 알려진 빈자리라 여기서 안 씀)
+        foreach (var (nm, jump, lift) in new[] { ("(j1) 1단 링 0.5 m 뜀 → 줄 끊김", 0.5, 0.0), ("(j2) 2단 링 0.3 m 높음 → 줄 사이 면 높이", 0.0, 0.3) })
+        {
+            var s = Site(Rect(0, -30, 40, 30, (x, y) => 100), pBase);
+            var vs = new VirtualSlope { MaxGrad = s.Vc.MaxGrad };
+            for (int i = 0; i < s.Vc.Rings.Count; i++)
+            {
+                double rr = s.Vc.RingRise[i];
+                var r = s.Vc.Rings[i].ToList();
+                if (Math.Abs(rr - 5) < 1e-9 && jump > 0)
+                {
+                    // 동쪽 다리에서 y = 0을 건너는 변에 1 mm 사이 두 점(아래 · 위) — 북쪽 반(y > 0)은 + jump
+                    var o = new List<Point3>();
+                    for (int k = 0; k < r.Count; k++)
+                    {
+                        var a = r[k]; o.Add(a.Y - s.Dy > 0 ? new Point3(a.X, a.Y, a.Z + jump) : a);
+                        if (k + 1 < r.Count && a.X - s.Dx > 40)
+                        {
+                            var b = r[k + 1];
+                            double ya = a.Y - s.Dy, yb = b.Y - s.Dy;
+                            if ((ya < -1e-3 && yb > 1e-3) || (ya > 1e-3 && yb < -1e-3))
+                            {
+                                double tA = (-0.0005 * Math.Sign(yb - ya) - ya) / (yb - ya), tB = (0.0005 * Math.Sign(yb - ya) - ya) / (yb - ya);
+                                Point3 At(double t, double dz) => new(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t, a.Z + (b.Z - a.Z) * t + dz);
+                                o.Add(At(tA, ya < 0 ? 0 : jump)); o.Add(At(tB, ya < 0 ? jump : 0));
+                            }
+                        }
+                    }
+                    r = o;
+                }
+                if (Math.Abs(rr - 10) < 1e-9 && lift > 0) r = r.Select(q => new Point3(q.X, q.Y, q.Z + lift)).ToList();
+                vs.Rings.Add(r); vs.RingRise.Add(rr);
+            }
+            s.Oc = WallByLine.OldBench.Of(vs, pBase, true, out _);
+            var tin = WallByLine.MeshLines(vs.Rings, s.Plan[0].X, s.Plan[0].Y);
+            s.P0T = tin; s.P0 = WallByLine.TriLookup(tin);
+            s.GT = tin.Select(t => new Tri(new(t.A.X, t.A.Y, t.A.Z + 4), new(t.B.X, t.B.Y, t.B.Z + 4), new(t.C.X, t.C.Y, t.C.Z + 4))).ToList(); s.G = WallByLine.TriLookup(s.GT);
+            var (cj, bj) = Old(s, new List<Point3> { new(53, -12, 0), new(42, -6, 0), new(42, 6, 0), new(53, 12, 0) }, bd);
+            bool okJ = bj != null && !bj.Ok && bj.Code == "옛 소단" && (jump > 0 ? bj.JumpBad > 0 : bj.FaceHBad > 0 && bj.JumpBad == 0) && bj.RuleMiss == 0;
+            check($"S216 {nm} — 불변식이 거절(접힌 면 안 지음 · 까닭 한 줄 · 규칙 검사는 통과)", okJ, Brief(bj, cj));
+        }
+
+        // (k) 번들 꼴 제원 — 사면 구간(동쪽 변 가운데 1:0.3 · 소단 2 m — 링 거리가 구간에서 바뀜 · 구간 끝은 2.5 m 넘는 이음 변) · 벽 = 그 링
+        {
+            var zones = new List<SlopeZone> { new SlopeZone { T0 = 55, T1 = 85, Rules = new() { (0, 0.3, 2.0) } } };
+            var s = Site(Rect(0, -30, 40, 30, (x, y) => 100), pBase, zones: zones);
+            var (cut, b) = Old(s, new List<Point3> { new(53, -10, 0), new(41, -4, 0), new(41, 4, 0), new(53, 10, 0) }, bd);
+            if (b == null || !b.Ok) check("S216 (k) 사면 구간 든 링 짓기", false, Brief(b, cut) + $" · P0(52,-9.5) {s.P0(s.Dx + 52, s.Dy - 9.5)} P0(46,0) {s.P0(s.Dx + 46, s.Dy)} · 링 {s.Vc.Rings.Count} 점 {string.Join(",", s.Vc.Rings.Select(r => r.Count))} · TIN {s.P0T.Count} · 잃은 조각 {WallByLine.LastMeshLost}");
+            else
+            {
+                bool on = OnLevels(b.Rows, Enumerable.Range(1, 6).Select(k => 100 + 5.0 * k), 1e-3, out double w);
+                check("S216 (k) 사면 구간(링 거리 바뀜) — 벽 소단 = 링 높이(± 1 mm) · 규칙(L 위 띠 · 구간 거리) 어긋남 0 · 불변식", on && b.RuleMiss == 0 && b.JumpBad == 0 && b.FaceHBad == 0, $"최대 차 {w * 1000:F3} mm · {Brief(b, cut)}");
+            }
+        }
+
+        // LOW-F · LOW-G — 소단 폭 0(링 두 줄이 겹침 · 0 나눔 없음) · 예산 위 단 = 마지막 링 ± 단높이(대소단 누적 이어 셈)
+        {
+            var p0w = new GradingParams { CutBenchHeight = 5, FillBenchHeight = 5, CutBenchWidth = 0, FillBenchWidth = 0, CutSlope = 0.8, FillSlope = 0.8, VertexSpacing = 2, MinSlope = 0.01, MinFaceRun = 0.005, MaxRiseCut = 12, MaxRiseFill = 12 };
+            var s = Site(Rect(0, -30, 40, 30, (x, y) => 100), p0w);
+            double l1 = s.Oc!.Level(1, s.Dx + 44, s.Dy), l3 = s.Oc.Level(3, s.Dx + 47, s.Dy), l4 = s.Oc.Level(4, s.Dx + 47, s.Dy);
+            check("S216 LOW-F 소단 폭 0 — 옛 소단 높이 유한(0 나눔 없음) · LOW-G 예산(12 m) 위 단 = 마지막 링 + 단높이(잘린 3단 112 → 4단 117)",
+                double.IsFinite(l1) && Math.Abs(l1 - 105) < 1e-9 && s.Oc.K == 3 && Math.Abs(l3 - 112) < 1e-9 && Math.Abs(l4 - 117) < 1e-9, $"K {s.Oc.K} · L1 {l1:F3} · L3 {l3:F3} · L4 {l4:F3}");
         }
     }
 }

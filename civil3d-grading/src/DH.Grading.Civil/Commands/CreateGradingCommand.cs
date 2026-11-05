@@ -226,6 +226,11 @@ public sealed class CreateGradingCommand
     internal static bool IsPartialWallZone(SlopeZone z) =>
         z.Partial && z.Rules.Count > 0 && z.Rules[0].Slope <= GradingSettings.WallGateSlope + 1e-9;
 
+    /// <summary>★[v114.3 · JACK 1105 소단 높이 · 재검토 M-A] <b>링 셈에 넣는 구간</b> — 정지면 생성(cutZonesR · fillZonesR) · 재생성 전 옹벽 자리 재기 · [옹벽 추가] 옛 소단 링이 <b>같은 함수</b>로 고른다
+    /// (부분 지정 옹벽 구간은 TransitionStage ≥ 1이면 링 셈에서 뺀다 — 번들에는 남는다). 같은 번들 · 같은 정지옵션이면 정지면을 만든 그 링이 다시 나온다(TransitionSteps · SeamLines는 BuildParams가 안 싣는 기본값 0 · 거짓).</summary>
+    internal static System.Collections.Generic.List<SlopeZone> RingZonesOf(System.Collections.Generic.IEnumerable<SlopeZone>? zones) =>
+        zones == null ? new() : GradingSettings.TransitionStage >= 1 ? zones.Where(z => !IsPartialWallZone(z)).ToList() : zones.ToList();
+
     /// <summary>★[v103.1.9] 이번 정지면 생성이 쓸 구간(부분 지정 옹벽 구간을 떼기 전) — <b>1단계와 «재생성 전 묻기»가 같이 부른다</b>(한 벌 — 같은 입력이면 같은 값).
     /// 사면/옹벽 변환이 넘긴 구간(zoneOverride)이 있으면 그것 · 없으면 옛 옹벽 선택(WallPicks)에서 + «다시»면 번들 마지막 구역의 구간과 합친다(새 선택이 이긴다).
     /// (AddC, AddF) = 합치기 전 새 선택 수(-1 = zoneOverride) — 1단계 명령줄 글에 쓴다.</summary>
@@ -285,11 +290,8 @@ public sealed class CreateGradingCommand
             var p = BuildParams(boundary, ground, rz.Cut, rz.Fill);   // ★[v113.1] 부지 둘레 땅 예산이 구간 구배를 본다 — 1단계(정지면 만들기)와 같은 구간
             var cut = rz.Cut; var fill = rz.Fill;
             // 1단계와 같다 — 부분 지정 옹벽 구간은 링 셈에서 뺀다(더하기 명세가 없을 때는 번들에서도 뺀다 · 1단계 «옛 판 부분 지정 옹벽 구간»)
-            if (GradingSettings.TransitionStage >= 1)
-            {
-                cut = cut.Where(z => !IsPartialWallZone(z)).ToList();
-                fill = fill.Where(z => !IsPartialWallZone(z)).ToList();
-            }
+            //   ★[v114.3 · 재검토 M-A] 1단계 · [옹벽 추가]와 같은 함수
+            cut = RingZonesOf(cut); fill = RingZonesOf(fill);
             long t1 = sw.ElapsedMilliseconds;
             var res = WallPlace.CheckAll(cl, boundary, p, cut, fill);
             long msR = sw.ElapsedMilliseconds - t1;
@@ -1635,7 +1637,7 @@ public sealed class CreateGradingCommand
                     if (addSpec == null && (wallZoneCut.Count > 0 || wallZoneFill.Count > 0))
                     {
                         int nOld = wallZoneCut.Count + wallZoneFill.Count;
-                        cutZones = cR; fillZones = fR; cutZonesR = cR; fillZonesR = fR;
+                        cutZones = cR; fillZones = fR;
                         wallZoneCut.Clear(); wallZoneFill.Clear();
                         string oldNote = $"⚠번들에 남은 옛 판 부분 지정 옹벽 구간 {nOld}개를 뺐다 — 옹벽 목록에 없는 옹벽이다(옹벽 변환에서 다시 지정하세요)";
                         DiagLog.Append("\n  " + oldNote + "\n");
@@ -1643,7 +1645,6 @@ public sealed class CreateGradingCommand
                     }
                     if (wallZoneCut.Count > 0 || wallZoneFill.Count > 0)
                     {
-                        cutZonesR = cR; fillZonesR = fR;
                         DiagLog.Append($"\n  ★옹벽 구간을 <b>정지면에서 뗐다</b> — 절토 {wallZoneCut.Count}개"
                             + $" · 성토 {wallZoneFill.Count}개(링 셈에서 뺌 · 번들에는 남긴다)."
                             + " 정지면은 그 자리도 <b>사면</b>으로 만들어지고, 옹벽은 '가상옹벽_DH'로 따로 나온다.\n");
@@ -1652,6 +1653,8 @@ public sealed class CreateGradingCommand
                             + " 정지면에서 떼고 '가상옹벽_DH'로 따로 만듭니다(전체 구간 변환은 종전대로).");
                     }
                 }
+                // ★[v114.3 · 재검토 M-A] 링 셈 구간은 한 함수로(재생성 전 자리 재기 · [옹벽 추가] 옛 소단 링과 같은 고르기 — 번들에는 cutZones가 남는다)
+                cutZonesR = RingZonesOf(cutZones); fillZonesR = RingZonesOf(fillZones);
 
                 // ══ ★★★[JACK 0916 <i>"폴리곤만 생성하는 건데 왜 이렇게 처리속도가 오래 걸리는 거야?"</i>]
                 //   <b>맞는 말이라 재 봤다 — 폴리곤은 공짜였다.</b>
