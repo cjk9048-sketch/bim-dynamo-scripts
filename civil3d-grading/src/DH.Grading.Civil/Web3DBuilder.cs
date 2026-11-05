@@ -395,6 +395,7 @@ internal static class Web3DBuilder
         //   못 받아도(키 · 인터넷) 3D는 그대로 — 층 목록에 회색 + ⚠ · 장면에만(도면 · InfraWorks 파일에는 안 넣음) · 화면 없는 시험(skipSat)은 인터넷을 안 쓴다
         //   ★[검토 M · 보안] 페이지(경고 · 층 글)에는 정해 둔 짧은 글만 — 받은 글 · 예외 글은 진단 로그에만(키를 지우고)
         object? bldgHead = null;
+        IReadOnlyList<Web3DBuildings.Bldg>? bldgItems = null;   // ★[v115 · JACK 1105 임상도] 수목 빼기(건물 + 1 m)
         if (skipSat) log.AppendLine("  건물: 시험 — 건너뜀");
         else
         {
@@ -422,6 +423,7 @@ internal static class Web3DBuilder
                     // 바닥 — 원지반(없으면 보이는 지형) · 원지반이 있어도 그 건물 밑에 없으면 보이는 지형으로 다시(검토 M)
                     Func<double, double, double?> baseZ = c.Ground != null ? (x, y) => c.Ground.TryGetElevation(x, y, out double z) ? z : null : SurfZ;
                     var pr = Web3DBuildings.Place(got.Raws, baseZ, tm.InChanged, c.Ground != null ? SurfZ : null);
+                    bldgItems = pr.Items;
                     log.AppendLine($"  건물: {pr.Text} · {got.Diag}");
                     if (got.Shrunk)
                         c.Warn.Add($"건물이 많아(지형 전체 약 {got.Total0:N0}동) {got.Box.W:N0}×{got.Box.H:N0} m 범위만 3D에 넣었습니다({got.Label} · 한도 {MaxBuildings:N0}동)");
@@ -449,7 +451,19 @@ internal static class Web3DBuilder
                 bldgHead = new Dictionary<string, object> { ["missing"] = why };
             }
         }
-        Lap("건물", skipSat ? null : "위성사진 받는 중");
+        Lap("건물", "수목 심는 중");
+
+        // ④f ★★[v115 · JACK 1105 임상도 · 계획 2판 5절] 수목 — 임상도 숲 폴리곤 안 추정 배치(설계 자리 · 건물 + 1 m · 급경사 · 면 없음은 뺌) ·
+        //   창고 = [기타 설정] 임상도 타일 폴더(기본 바탕화면\임상도_타일) → 도면 폴더 사본 → 없으면 층만 회색 · 꺼짐이면 열쇠를 안 넣는다(옛 장면 바이트 그대로)
+        //   화면 없는 시험(skipSat)에서도 폴더 창고면 돈다
+        object? forestHead = null;
+        try
+        {
+            var ft = new Web3DForest.Terrain(inp.X, inp.Y, inp.F, tm.TriCls, mnx, mny, mxx, mxy, tm.CMinX, tm.CMinY, tm.CMaxX, tm.CMaxY);
+            forestHead = Web3DForest.Build(c, ft, new[] { inp.Plan, inp.Bench, inp.SlopeCut, inp.SlopeFill, inp.WallMask, inp.WallFoot, inp.RoadArea }, bldgItems, SurfZ, ox, oy, sc, log);
+        }
+        catch (System.Exception fex) { log.AppendLine("  수목: 실패 — " + fex); forestHead = new Dictionary<string, object> { ["missing"] = "수목을 넣지 못했습니다(진단 로그 참고)" }; }
+        Lap("수목", skipSat ? null : "위성사진 받는 중");
 
         // ⑤ 위성 — 자세히(바뀐 자리 + 50 m · 0.3 m/px) + 바탕(지형 전체 + 30 m)
         object? satHead = null;
@@ -526,6 +540,7 @@ internal static class Web3DBuilder
         if (ditchHead != null) H["ditches"] = ditchHead;   // ★[도로 마무리 ②] 측구가 있을 때만
         if (strataHead != null) H["strata"] = strataHead;
         if (roadAlignHead != null) H["roadAlign"] = roadAlignHead;
+        if (forestHead != null) H["forest"] = forestHead;   // ★[v115] 수목(꺼짐이면 열쇠 없음)
         if (c.Ground != null && c.GroundOfName.Length > 0 && c.GroundOfName != c.GroundName)
             c.Warn.Add($"원지반이 둘입니다 — 토공량 · 절성토 색은 «{c.GroundName}», 옹벽 변환 자리 · 단면은 «{c.GroundOfName}»");
         H["warn"] = c.Warn.Select(NoPath).Distinct().ToList();

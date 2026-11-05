@@ -5,6 +5,7 @@ import { loadScene } from './data.js';
 import { View } from './view.js';
 import { buildLayers, applyTerrainMode } from './layers.js';
 import { buildDrain, buildCad, buildStations, buildRoadStations, buildSlope, buildBldg } from './extras.js';
+import { buildForest } from './forest.js';
 import { Picker } from './pick.js';
 import { Ui, Dock } from './ui.js';
 import { Section } from './section.js';
@@ -14,7 +15,8 @@ import { photo, video, download, fileName } from './capture.js';
 import { inHost, post, onHost } from './host.js';
 
 // ★[JACK 1103] 'align' = 부지 측점 · 'ralign' = 진입도로 측점(도로가 있을 때만)
-const ORDER = ['terrain', 'sat', 'cutfill', 'ground', 'wall', 'pattern', 'ditch', 'excav', 'drain', 'slope', 'cad', 'bldg', 'align', 'ralign'];
+// ★[v115 · JACK 1105 임상도] 'tree' = 수목(임상도) — 건물 다음
+const ORDER = ['terrain', 'sat', 'cutfill', 'ground', 'wall', 'pattern', 'ditch', 'excav', 'drain', 'slope', 'cad', 'bldg', 'tree', 'align', 'ralign'];
 const KEEP = 'dh3d.layers.v1';
 
 function loadKeep() { try { return JSON.parse(localStorage.getItem(KEEP) || '{}'); } catch { return {}; } }
@@ -52,6 +54,8 @@ async function main() {
     buildCad(view, head, L);
     // ★[v111.7 검토 L] 건물을 못 그려도 3D는 뜬다 — 층만 회색 + ⚠
     try { buildBldg(view, head, L); } catch { L.bldg = { label: '건물', on: false, missing: '건물을 못 그렸습니다' }; }
+    // ★[v115 · JACK 1105 임상도] 수목을 못 그려도 3D는 뜬다 — 층만 회색 + ⚠
+    try { buildForest(view, head, L); } catch { L.tree = { label: '수목', on: false, missing: '수목을 못 그렸습니다' }; }
     buildStations(view, head, L);
     buildRoadStations(view, head, L);
     buildSlope(view, head, L);
@@ -257,7 +261,11 @@ async function main() {
     clearTimeout(poseTimer);
     poseTimer = setTimeout(() => { try { localStorage.setItem(poseKey, JSON.stringify({ o: o0, ...view.pose() })); } catch { /* 기억 못 해도 그만 */ } }, 400);
   });
-  if (head.sat && (head.sat.base || head.sat.detail)) document.getElementById('attrib').style.display = 'block';
+  // 출처 — 위성(VWorld) · ★[v115] 수목(임상도 © 산림청)
+  const credits = [];
+  if (head.sat && (head.sat.base || head.sat.detail)) credits.push('위성 © VWorld');
+  if (L.tree && !L.tree.missing) credits.push('임상도 © 산림청');
+  if (credits.length) { const at = document.getElementById('attrib'); at.textContent = credits.join(' · '); at.style.display = 'block'; }
   ui.busy(null);
   view.draw();
   const ms = Math.round(performance.now() - t0);
@@ -279,6 +287,7 @@ async function main() {
       origin: head.origin, bbox: b, walls: (head.walls || []).length, patterns: (head.patterns || []).length, warn: head.warn || [],
       drain: L.drain ? L.drain.summary : null, slope: L.slope ? { n: L.slope.n, step: L.slope.step } : null, cad: L.cad ? (L.cad.missing ? 'missing' : (head.cad.labels || []).length) : null,
       bldg: L.bldg ? (L.bldg.missing ? { missing: L.bldg.missing, quiet: !!L.bldg.quiet } : { n: L.bldg.n, hit: L.bldg.hit }) : null,
+      forest: L.tree ? (L.tree.missing ? { missing: L.tree.missing, quiet: !!L.tree.quiet } : { n: L.tree.n, note: L.tree.note, legend: L.tree.legend }) : null,
       align: L.align ? { name: L.align.name, st: L.align.st.length, views: L.align.views } : null, build: !!head.build, geo: head.geo || null,
       ralign: L.ralign ? L.ralign.roads.map(a => ({ name: a.name, st: a.st.length, views: a.views })) : null,
     },
@@ -321,6 +330,11 @@ async function main() {
     photo: async () => { const bl = await photo(view); return { bytes: bl.size, type: bl.type, ...(await (async () => { const bm = await createImageBitmap(bl); const r = { w: bm.width, h: bm.height }; bm.close(); return r; })()) }; },
     video: async (frames) => { const t = performance.now(); const r = await video(view, { focus, frames: frames || 30 }); return r ? { bytes: r.blob.size, ext: r.ext, codec: r.codec, frames: r.frames, ms: Math.round(performance.now() - t) } : null; },
     dock: () => dock.kind,
+    // ★[v115] 수목 — 덩이 상태 수(자세히 · 대리 · 숨김) · 그린 호출 · 세모(마지막 장 · 그림자 포함) · 밀도
+    forest: () => (L.tree && L.tree.stats ? { ...L.tree.stats(), calls: view.renderer.info.render.calls, tris: view.renderer.info.render.triangles, on: !!L.tree.on } : null),
+    // 나무 i의 밑동(도면 좌표) — 시험이 숲 안 보기 자리를 고를 때
+    forestTree: (i) => { const F = head.forest, o = head.origin || [0, 0]; if (!F || !F.xy || !F.n) return null; const k = Math.max(0, Math.min(F.n - 1, i | 0)); return [F.xy[2 * k] + o[0], F.xy[2 * k + 1] + o[1], F.z[k]]; },
+    forestDensity: (f) => { if (!L.tree || !L.tree.setDensity) return null; L.tree.setDensity(f); ui.setLayerSlider && ui.setLayerSlider(L, 'tree', f); view.draw(); return window.DH3D.forest(); },
     frames: () => view.renderer.info.render.frame,     // 그린 장 수(빗물 움직임이 꺼지면 늘지 않아야)
     // 도면 좌표 → 화면 px(시험이 측점 선을 진짜로 누를 때)
     screen: (at) => {

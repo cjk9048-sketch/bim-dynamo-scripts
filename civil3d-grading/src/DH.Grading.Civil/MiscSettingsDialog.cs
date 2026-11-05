@@ -148,6 +148,37 @@ public sealed class MiscSettingsDialog : Window
             finally { test.IsEnabled = true; }
         };
 
+        // ── 4. 임상도(3D 보기 수목) ── ★[v115 · JACK 1105 임상도] 타일 폴더 · 켬(기본: 바탕화면\임상도_타일 · 켬)
+        var fs = ForestSettings.Load();
+        GradingDialog.AddSection(root, "4. 임상도 타일", "[3D 보기] 산림 수목(임상도 © 산림청)");
+        var forestOn = new CheckBox { Content = "수목 넣기", IsChecked = fs.On, Margin = new Thickness(0, 0, 0, 6) };
+        root.Children.Add(forestOn);
+        var forestDir = new TextBox
+        {
+            Text = fs.Tiles, Width = 330, Height = 26, VerticalContentAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Left,
+            ToolTip = "index.json이 든 폴더(변환기 tools\\ForestTiles가 만든 것) · 비우면 기본 경로",
+        };
+        var forestBrowse = new Button { Content = "찾기", MinWidth = 60, Margin = new Thickness(6, 0, 0, 0) };
+        var forestRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
+        forestRow.Children.Add(forestDir); forestRow.Children.Add(forestBrowse);
+        root.Children.Add(forestRow);
+        var forestState = new TextBlock { FontSize = 11, Foreground = DhBrand.Sub, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 4) };
+        void ShowForest()
+        {
+            string d = forestDir.Text.Trim();
+            forestState.Text = d.StartsWith("http", System.StringComparison.OrdinalIgnoreCase) ? "웹 주소 — 아직(폴더만)"
+                : System.IO.File.Exists(System.IO.Path.Combine(d.Length > 0 ? d : ForestSettings.DefaultTiles, "index.json")) ? "✓ 타일 있음" : "타일 없음";
+        }
+        ShowForest();
+        forestDir.TextChanged += (_, __) => ShowForest();
+        root.Children.Add(forestState);
+        forestBrowse.Click += (_, __) =>
+        {
+            var dlg = new Microsoft.Win32.OpenFolderDialog { Title = "임상도 타일 폴더(index.json)" };
+            try { string cur = forestDir.Text.Trim(); if (System.IO.Directory.Exists(cur)) dlg.InitialDirectory = cur; } catch { }
+            if (dlg.ShowDialog(this) == true) forestDir.Text = dlg.FolderName;
+        };
+
         var ok = new Button { Content = "저장", IsDefault = true, MinWidth = 96 };
         var cancel = new Button { Content = "취소", IsCancel = true, MinWidth = 80 };
         ok.Click += (_, __) =>
@@ -175,10 +206,18 @@ public sealed class MiscSettingsDialog : Window
                 System.Math.Clamp(_coordSys.SelectedIndex, 0, GradingDialog.EpsgCodes.Length - 1)];
             GradingSettings.ShowOnlyResultSurface = _showOnlyResult.IsChecked == true;
             GradingSettings.ParcelObjectData = _parcelOd.IsChecked == true;
+            // ★[v115] 임상도 — 켬 · 폴더(비우면 기본) · 바뀌었을 때만 쓴다
+            string fd = forestDir.Text.Trim();
+            if (fd.Length == 0) fd = ForestSettings.DefaultTiles;
+            if (fs.On != (forestOn.IsChecked == true) || fs.Tiles != fd)
+            {
+                try { fs.On = forestOn.IsChecked == true; fs.Tiles = fd; fs.Save(); }
+                catch (System.Exception ex) { forestState.Foreground = DhBrand.Warn; forestState.Text = "설정을 저장하지 못했습니다 — " + ex.Message; return; }
+            }
             DialogResult = true;
             Close();
         };
 
-        DhBrand.Dress(this, "기타 설정", "좌표계 · 표시 · VWorld 키", root, ok, cancel);
+        DhBrand.Dress(this, "기타 설정", "좌표계 · 표시 · VWorld 키 · 임상도", root, ok, cancel);
     }
 }

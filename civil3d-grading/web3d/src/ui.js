@@ -74,9 +74,28 @@ export class Ui {
       row.innerHTML = `<input type="checkbox" ${l.on ? 'checked' : ''}>${sw ? `<span class="sw" style="background:${sw}"></span>` : ''}<span>${esc(l.label)}</span>`;
       const cb = row.querySelector('input');
       cb.onchange = () => { row.classList.toggle('off', !cb.checked); if (this.onLayer) this.onLayer(id, cb.checked); };
+      // ★[v115 · JACK 1105 임상도] 층 줄 막대(수목 밀도 25~100 %) — 막대를 눌러도 체크는 안 바뀜
+      if (l.slider) {
+        const sl = document.createElement('input');
+        sl.type = 'range'; sl.className = 'lsl'; sl.min = l.slider.min; sl.max = l.slider.max; sl.step = 5; sl.value = l.slider.value(); sl.title = l.slider.title || '';
+        const sv = document.createElement('span');
+        sv.className = 'lsv'; sv.textContent = `${sl.value}%`;
+        sl.addEventListener('click', (e) => e.stopPropagation());
+        sl.oninput = () => { sv.textContent = `${sl.value}%`; l.slider.set(Number(sl.value)); };
+        row.appendChild(sl); row.appendChild(sv);
+        l.sl = sl; l.sv = sv;
+      }
       box.appendChild(row);
       l.row = row; l.cb = cb;
     }
+  }
+
+  // 층 줄 막대 값 맞추기(시험 훅이 밀도를 바꿨을 때)
+  setLayerSlider(L, id, f) {
+    const l = L[id];
+    if (!l || !l.sl) return;
+    l.sl.value = Math.round(f * 100);
+    l.sv.textContent = `${l.sl.value}%`;
   }
 
   setLayerChecked(L, id, on) {
@@ -214,6 +233,7 @@ const SWATCH = {
   terrain: CLASS_STYLE.plan.color, sat: '#4f6b3a', cutfill: 'linear-gradient(90deg,#cc2a1f,#f4f4f0,#265ccc)',
   ground: '#5f7a45', excav: '#9b7b52', wall: '#c2bfb8', pattern: '#a8a090', ditch: '#3b3d40', drain: '#1e7bff', cad: '#ffd400', align: '#ff4d4d', ralign: '#ff5ad2',
   bldg: 'linear-gradient(90deg,#e4e2dc 50%,#e8392e 50%)',
+  tree: '#3d7a35',
   slope: SLOPE_GRAD,
 };
 
