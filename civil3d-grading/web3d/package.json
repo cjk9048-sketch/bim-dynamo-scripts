@@ -4,7 +4,8 @@
   "description": "DH.Grading [3D 보기] viewer — bundled into one IIFE (dist/viewer.js) and embedded in the Civil DLL.",
   "scripts": {
     "build": "node tools/build.mjs",
-    "check": "node tools/build.mjs --check"
+    "check": "node tools/build.mjs --check",
+    "test": "node --test test/*.test.mjs"
   },
   "devDependencies": {
     "esbuild": "0.28.2",
