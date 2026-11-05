@@ -12,6 +12,9 @@ public static class WallListStore
     private const string RecName = "WALLS";
 
     /// <summary>목록을 읽는다 — 없으면 빈 목록(참) · 못 읽으면 거짓과 까닭(쓰는 쪽은 옛 목록을 덮지 말고 멈춘다).</summary>
+    /// <summary>★[v114.0] 옛 종류 1을 지웠다는 한 줄은 도면 · 수마다 한 번만(목록을 읽는 곳이 많다).</summary>
+    static readonly HashSet<string> _droppedSaid = new();
+
     public static bool TryLoad(Database db, Transaction tr, out WallListHead head, out List<WallRec> walls, out string why)
     {
         head = new WallListHead(); walls = new List<WallRec>(); why = "";
@@ -34,7 +37,16 @@ public static class WallListStore
                     default: why = $"옹벽 목록에 모르는 값 종류 {tv.TypeCode}"; return false;
                 }
             }
-            return WallList.TryDecode(vals, out head, out walls, out why);
+            bool ok = WallList.TryDecode(vals, out head, out walls, out why, out int dropped);
+            // ★[v114.0 · JACK 1105 답 4] 옛 v113 [옹벽 추가](종류 1) 기록은 읽으며 지웠다 — 확인창 없이 명령줄 · DiagLog 한 줄(다음 쓰기에서 없어진다).
+            //   합성 표지에는 그 번호가 남아 있어 CompositeState가 «낡은 표지 → 합성 필요»로 잡는다(읽는 명령이 옛 합성을 그대로 쓰지 않게 관문이 다시 합성을 묻는다)
+            if (ok && dropped > 0 && _droppedSaid.Add(db.Filename + "|" + dropped))
+            {
+                string msg = $"옛 방식 폴리선 옹벽 {dropped}개를 지웠습니다(v114 새 방식으로 다시 그리세요)";
+                try { Autodesk.AutoCAD.ApplicationServices.Core.Application.DocumentManager.MdiActiveDocument?.Editor.WriteMessage("\n[옹벽 목록] " + msg); } catch { }
+                try { DiagLog.AppendCarry("\n[옹벽 목록] " + msg); } catch { }
+            }
+            return ok;
         }
         catch (System.Exception ex) { why = $"옹벽 목록을 못 읽었다 {ex.GetType().Name}: {ex.Message}"; return false; }
     }

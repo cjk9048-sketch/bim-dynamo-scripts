@@ -157,9 +157,48 @@ public static class BoundaryCut
             if (ringLs.Distance(pt) < onTol) return 0;      // 위
             return prepBd.Contains(pt) ? 1 : -1;            // 안 · 밖
         }
-        // 끝 점은 밖이어야 한다
-        if (State(lc[0]) != -1) return No(Code.EndInside, "폴리선의 첫 점이 경계 안(또는 위)에 있습니다 — 양 끝이 모두 경계 밖에 있어야 합니다", W(lc[0]));
-        if (State(lc[^1]) != -1) return No(Code.EndInside, "폴리선의 끝 점이 경계 안(또는 위)에 있습니다 — 양 끝이 모두 경계 밖에 있어야 합니다", W(lc[^1]));
+        // ★[v114.0 · JACK 1105 · critic L11] 끝 점이 경계에서 onTol(1 mm) 안이면 고리 위 가장 가까운 점으로 <b>정확히</b> 옮겨 교점으로 친다(그린 선 = 경계 위 시작 · 끝)
+        //   — 그 밖은 종전처럼 밖이어야 한다(기존 폴리선 S는 첫 교차에서 자른다)
+        Coordinate OnRingPt(Coordinate c)
+        {
+            Coordinate best = c; double bd2 = double.MaxValue;
+            for (int j = 0; j < m; j++)
+            {
+                double ex = ring[j + 1].X - ring[j].X, ey = ring[j + 1].Y - ring[j].Y, l2 = ex * ex + ey * ey;
+                double t = l2 < 1e-18 ? 0 : Math.Clamp(((c.X - ring[j].X) * ex + (c.Y - ring[j].Y) * ey) / l2, 0, 1);
+                var p = t <= 0 ? ring[j] : t >= 1 ? ring[j + 1] : new Coordinate(ring[j].X + ex * t, ring[j].Y + ey * t);
+                double d2 = (c.X - p.X) * (c.X - p.X) + (c.Y - p.Y) * (c.Y - p.Y);
+                if (d2 < bd2) { bd2 = d2; best = p.Copy(); }
+            }
+            return best;
+        }
+        bool onA = State(lc[0]) == 0, onB = State(lc[^1]) == 0;
+        if (onA || onB)
+        {
+            if (onA) { lc[0] = OnRingPt(lc[0]); R.Clean[0] = new Point3(lc[0].X + ox, lc[0].Y + oy, 0); }
+            if (onB) { lc[^1] = OnRingPt(lc[^1]); R.Clean[^1] = new Point3(lc[^1].X + ox, lc[^1].Y + oy, 0); }
+            for (int i = 1; i < lc.Length; i++) cum[i] = cum[i - 1] + lc[i - 1].Distance(lc[i]);
+            total = cum[^1]; R.LineLen = total;
+            ls = gf.CreateLineString(lc);
+            ev.Clear();
+            var li2 = new RobustLineIntersector();
+            for (int i = 0; i + 1 < lc.Length; i++)
+            {
+                var e = new Envelope(lc[i], lc[i + 1]); e.ExpandBy(onTol);
+                double L = cum[i + 1] - cum[i];
+                for (int j = 0; j < m; j++)
+                {
+                    if (!e.Intersects(new Envelope(ring[j], ring[j + 1]))) continue;
+                    li2.ComputeIntersection(lc[i], lc[i + 1], ring[j], ring[j + 1]);
+                    for (int q = 0; q < li2.IntersectionNum; q++) { var c = li2.GetIntersection(q); ev.Add(cum[i] + (L < 1e-15 ? 0 : Math.Clamp(lc[i].Distance(c) / L, 0, 1)) * L); }
+                }
+            }
+            ev.Sort();
+            evs.Clear();
+            foreach (double s in ev) if (evs.Count == 0 || s - evs[^1] > 1e-6) evs.Add(s);
+        }
+        if (!onA && State(lc[0]) != -1) return No(Code.EndInside, "폴리선의 첫 점이 경계 안에 있습니다 — 경계 위(1 mm 안)나 밖에서 시작해야 합니다", W(lc[0]));
+        if (!onB && State(lc[^1]) != -1) return No(Code.EndInside, "폴리선의 끝 점이 경계 안에 있습니다 — 경계 위(1 mm 안)나 밖에서 끝나야 합니다", W(lc[^1]));
         // 토막마다 상태(가운데 점) — 경계를 따라 1 mm 넘게 가면 거절
         var cuts = new List<double> { 0 }; cuts.AddRange(evs.Where(s => s > 1e-9 && s < total - 1e-9)); cuts.Add(total);
         var seq = new List<(int St, double S0, double S1)>();
@@ -183,6 +222,9 @@ public static class BoundaryCut
             if (seq[k].St != seq[k + 1].St) cross.Add(s);
             else return No(Code.Touch, string.Format(ci, "폴리선이 경계에 닿기만 하는 자리가 있습니다 ({0:F1}, {1:F1}) — 지나가거나 떨어지게 그리세요", At(s).X + ox, At(s).Y + oy), W(At(s)));
         }
+        // ★[v114.0] 경계 위로 옮긴 끝 점 — 그 곁 토막이 안이면 교점(밖이면 밖 끝처럼)
+        if (onA && seq.Count > 0 && seq[0].St == 1) cross.Insert(0, 0.0);
+        if (onB && seq.Count > 0 && seq[^1].St == 1) cross.Add(total);
         R.Crossings = cross.Count;
         if (cross.Count != 2)
         {

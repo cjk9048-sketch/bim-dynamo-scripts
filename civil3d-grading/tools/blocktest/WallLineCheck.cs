@@ -1,10 +1,13 @@
-// ── S195 ~ S199 · S201 ★★★[v113.0 · JACK 1104 «옹벽 폴리선 — 경계 2점 자르기 + 안쪽 다단»] 경계 판정 · 띠 · 줄 · 합성 «바꿔 끼움» · 목록 판 6 ──
+// ── S195 ~ S201 ★★★[v114.0 · JACK 1105 «옹벽 추가 새 개념 — 선에서 바깥으로 수평 계단»] 경계 판정 · 줄 · 줄기 · 끝 가늘어짐 · 합성 한 판 RuleOf · 목록 판 7 ──
+//   (v113 «경계 폴리선 · 안쪽 다단» 기대는 지웠다 — 번호는 그대로 두고 기대를 바꿈 · 계획 6절)
 using DH.Grading.Core;
 using Tri = DH.Grading.Core.WallDaylight.Tri;
 
 static class WallLineCheck
 {
-    // 합성 시험 판 — 부지 [0,40]×[−60,60] z = 100 · 원지반 100 + 0.25(x − 30) · 동쪽 절토 1:1.5 → 데이라잇 x = 46
+    /// <summary>★[v114.0 · 알려진 빈자리] 참이면 S198 넓은 소단(U자 선)의 모양 검사를 켠다 — 지금은 합성이 거절하므로 꺼 두고 «깨끗이 거절»만 잰다.</summary>
+    const bool KnownGapWideU = false;
+    // 절토 판 — 부지 [0,40]×[−60,60] z = 100 · 원지반 100 + 0.25(x − 30) · 동쪽 절토 1:1.5 → 데이라잇 x = 46
     static double G(double x, double y) => 100 + 0.25 * (x - 30);
     static double P0(double x, double y) => x <= 40 ? 100 : x < 46 ? 100 + (x - 40) / 1.5 : G(x, y);
     static List<Point3> Rect(double x0, double y0, double x1, double y1, Func<double, double, double>? z = null)
@@ -35,21 +38,45 @@ static class WallLineCheck
         }
         return null;
     }
+    static (double S, double D) Near(IReadOnlyList<Point3> l, double x, double y)
+    {
+        double bd = double.MaxValue, bs = 0, cum = 0;
+        for (int i = 0; i + 1 < l.Count; i++)
+        {
+            double ex = l[i + 1].X - l[i].X, ey = l[i + 1].Y - l[i].Y, l2 = ex * ex + ey * ey, len = Math.Sqrt(l2);
+            double t = l2 < 1e-24 ? 0 : Math.Clamp(((x - l[i].X) * ex + (y - l[i].Y) * ey) / l2, 0, 1);
+            double d = Math.Sqrt((x - l[i].X - ex * t) * (x - l[i].X - ex * t) + (y - l[i].Y - ey * t) * (y - l[i].Y - ey * t));
+            if (d < bd) { bd = d; bs = cum + t * len; }
+            cum += len;
+        }
+        return (bs, bd);
+    }
 
     static readonly List<Point3> Bd = Rect(-20, -60, 46, 60);
     static List<Point3> Plan(double zx = 0) => Rect(0, -60, 40, 60, (x, y) => 100 + zx * y);
     static readonly List<Point3> Ok = new() { new(52, -10, 0), new(43, -5, 0), new(43, 5, 0), new(52, 10, 0) };
+    /// <summary>경계 위에서 시작 · 끝(그린 선 꼴) — Ok와 같은 A · B.</summary>
+    static readonly List<Point3> L0 = new() { new(46, -20.0 / 3, 0), new(43, -5, 0), new(43, 5, 0), new(46, 20.0 / 3, 0) };
 
-    static (BoundaryCut.Result, WallByLine.Built?) MakeCut(IReadOnlyList<Point3> src, double h = 2, double t = 1, List<Point3>? plan = null,
-        Func<double, double, double>? g = null, List<Tri>? p0 = null, double margin = 10, double dx = 0, double dy = 0, double sz = 1,
-        Func<double, double, double?>? p0f = null, List<IReadOnlyList<Point3>>? clip = null)
+    static (BoundaryCut.Result, WallByLine.Built?) Make(IReadOnlyList<Point3> src, double h = 2, double t = 1, Func<double, double, double>? g = null, Func<double, double, double>? p0 = null,
+        double sz = 1, List<Point3>? bd = null, List<Point3>? plan = null, double reach = 10, double dx = 0, double dy = 0, IEnumerable<(string, IReadOnlyList<Point3>)>? bl = null, List<Tri>? p0Tris = null, List<Tri>? gTris = null)
     {
-        g ??= G;
+        g ??= G; p0 ??= P0;
+        var gg = g; var pp = p0;
+        var b0 = (bd ?? Bd).Select(q => new Point3(q.X + dx, q.Y + dy, 0)).ToList();
         var pl = (plan ?? Plan()).Select(q => new Point3(q.X + dx, q.Y + dy, sz * q.Z)).ToList();
-        var bd = Bd.Select(q => new Point3(q.X + dx, q.Y + dy, 0)).ToList();
         var s = src.Select(q => new Point3(q.X + dx, q.Y + dy, 0)).ToList();
-        return WallByLine.Make(s, bd, pl, null, h, t, 0.01, 0.05, 1, margin,
-            (x, y) => sz * g(x - dx, y - dy), p0f ?? ((x, y) => sz * P0(x - dx, y - dy)), p0, clip);
+        return WallByLine.Make(s, b0, pl, bl, h, t, h, t, 0.01, 0.05, 1, reach, (x, y) => sz * gg(x - dx, y - dy), (x, y) => sz * pp(x - dx, y - dy), p0Tris, gTris);
+    }
+
+    /// <summary>합성 한 판 — 정지면 · 원지반 격자(1 m) · 벽 삼각형.</summary>
+    static (WallDaylight.CompositeResult R, List<Tri> All, List<Tri> P) Comp(WallByLine.Built b, Func<double, double, double> g, Func<double, double, double> p0, double sz = 1, double x0 = 20, double x1 = 70)
+    {
+        var pT = Grid(x0, -40, x1, 40, 1, (x, y) => sz * p0(x, y));
+        var gT = Grid(x0, -40, x1, 40, 1, (x, y) => sz * g(x, y));
+        var r = WallDaylight.BuildCompositeLine(b.Poly, b.WallTrisC, b.WallTrisF, gT, pT);
+        var all = r.Zone == null ? new List<Tri>() : r.Zone.Concat(r.Untouched).ToList();
+        return (r, all, pT);
     }
 
     public static void Run(Action<string, bool, string> check)
@@ -63,7 +90,7 @@ static class WallLineCheck
         }
         Case("① 두 번 지남 — 통과 · A(46, −6.667) · B(46, 6.667)", Ok, r => r.Ok && Math.Abs(r.A.X - 46) < 1e-9 && Math.Abs(r.A.Y + 20.0 / 3) < 1e-6 && Math.Abs(r.B.Y - 20.0 / 3) < 1e-6 && r.Crossings == 2);
         Case("② 0회(밖에서만)", new() { new(60, -10, 0), new(60, 10, 0) }, r => r.Code == BoundaryCut.Code.Zero);
-        Case("③ 끝이 안", new() { new(52, 0, 0), new(43, 0, 0) }, r => r.Code == BoundaryCut.Code.EndInside);
+        Case("③ 끝이 안(경계에서 1 mm 넘게)", new() { new(52, 0, 0), new(43, 0, 0) }, r => r.Code == BoundaryCut.Code.EndInside);
         Case("④ 4회", new() { new(52, -10, 0), new(43, -8, 0), new(52, -6, 0), new(43, -4, 0), new(52, -2, 0) }, r => r.Code == BoundaryCut.Code.Many && r.Crossings == 4);
         Case("⑤ 꼭짓점이 경계 위 — 닿기만", new() { new(52, -10, 0), new(46, 0, 0), new(52, 10, 0) }, r => r.Code == BoundaryCut.Code.Touch);
         Case("⑥ 꼭짓점이 경계 위 — 지나감(교차로 셈)", new() { new(52, -10, 0), new(46, -5, 0), new(43, 0, 0), new(52, 5, 0) }, r => r.Ok && r.Crossings == 2);
@@ -74,149 +101,342 @@ static class WallLineCheck
         Case("⑪ 바닥 0.1 m 안", new() { new(52, -10, 0), new(40.05, -5, 0), new(40.05, 5, 0), new(52, 10, 0) }, r => r.Code == BoundaryCut.Code.Floor);
         Case("⑫ 막을 다각형과 겹침", Ok, r => r.Code == BoundaryCut.Code.Blocked, new[] { ("옹벽 7", (IReadOnlyList<Point3>)Rect(44, -2, 48, 2)) });
         Case("⑭ 닫힌 폴리선 → 거절(설치 전 검토 L2)", new() { new(52, -10, 0), new(43, -5, 0), new(43, 5, 0), new(52, 10, 0), new(52, -10, 0) }, r => r.Code == BoundaryCut.Code.Closed);
+        // ★[v114.0 · critic L11] 그린 선 — 끝이 경계에서 1 mm 안이면 고리 위로 정확히(거리 0) 옮겨 교점
+        Case("⑮ 끝이 경계 1 mm 안(0.4 · 0.5 mm 어긋남) → 고리 위로 정확히 · 교차 2", new() { new(46.0004, -20.0 / 3, 0), new(43, -5, 0), new(43, 5, 0), new(45.9995, 20.0 / 3, 0) },
+            r => r.Ok && r.Crossings == 2 && r.A.X == 46 && r.B.X == 46 && r.Line[0].X == 46 && r.Line[^1].X == 46 && Math.Abs(r.AreaOld - r.AreaNew - r.AreaCut) <= 1e-6 * r.AreaOld);
+        Case("⑯ 끝이 경계 안 2 mm → 끝이 안(거절)", new() { new(45.998, -20.0 / 3, 0), new(43, -5, 0), new(43, 5, 0), new(46, 20.0 / 3, 0) }, r => r.Code == BoundaryCut.Code.EndInside);
+        Case("⑰ 경계 위 시작 · 밖 끝(섞음)", new() { new(46, -20.0 / 3, 0), new(43, -5, 0), new(43, 5, 0), new(52, 10, 0) }, r => r.Ok && r.Crossings == 2 && r.A.X == 46 && Math.Abs(r.B.Y - 20.0 / 3) < 1e-6);
         {
-            // 현장 크기 좌표(5186 · 20만대)
             double dx = 200000, dy = 550000;
             var r = BoundaryCut.Classify(Ok.Select(q => new Point3(q.X + dx, q.Y + dy, 0)).ToList(), Bd.Select(q => new Point3(q.X + dx, q.Y + dy, 0)).ToList(), floor.Select(q => new Point3(q.X + dx, q.Y + dy, q.Z)).ToList());
             check("S195 ⑬ 현장 크기 좌표 — 같은 답(A · B 1µm)", r.Ok && Math.Abs(r.A.X - dx - 46) < 1e-6 && Math.Abs(r.A.Y - dy + 20.0 / 3) < 1e-6 && Math.Abs(r.B.Y - dy - 20.0 / 3) < 1e-6, $"{BoundaryCut.CodeName(r.Code)} A({r.A.X - dx:F7},{r.A.Y - dy:F7})");
+            var r2 = BoundaryCut.Classify(new List<Point3> { new(46.0003 + dx, -20.0 / 3 + dy, 0), new(43 + dx, -5 + dy, 0), new(43 + dx, 5 + dy, 0), new(46 + dx, 20.0 / 3 + dy, 0) },
+                Bd.Select(q => new Point3(q.X + dx, q.Y + dy, 0)).ToList(), floor.Select(q => new Point3(q.X + dx, q.Y + dy, q.Z)).ToList());
+            check("S195 ⑬-b 현장 크기 좌표 — 1 mm 안 끝을 고리 위로(x = 46 정확)", r2.Ok && r2.A.X == 46 + dx && r2.B.X == 46 + dx, $"{BoundaryCut.CodeName(r2.Code)} A.X − 46 = {r2.A.X - dx - 46:E2}");
         }
 
-        Console.WriteLine("\n== S196 새 경계 · R_out · 띠 · Z ==");
+        Console.WriteLine("\n== S196 새 경계 · R_out ==");
         {
             var r = BoundaryCut.Classify(Ok, Bd, floor);
             double sum = r.AreaNew + r.AreaCut;
             check("S196 ① 넓이 옛 = 새 + R_out(1e-6 상대)", Math.Abs(r.AreaOld - sum) <= 1e-6 * r.AreaOld, $"{r.AreaOld:F6} vs {sum:F6}");
-            double expCut = (3 * (40.0 / 3) + 3 * 10) / 2;   // 사다리꼴: x 43 → 46 · 길이 10 → 13.333
+            double expCut = (3 * (40.0 / 3) + 3 * 10) / 2;
             check("S196 ② R_out 넓이 = 사다리꼴 " + expCut.ToString("F4"), Math.Abs(r.AreaCut - expCut) < 1e-6, $"{r.AreaCut:F6}");
-            var (_, b) = MakeCut(Ok);
-            check("S196 ③ 짓기 통과 · 띠 단순 · Z 한 다각형", b != null && b.Ok && GradingGeometry.RingIsSimple(b.Strip) && GradingGeometry.RingIsSimple(b.Zone), b == null ? "" : $"{b.Code} {b.Why} · {b.Log}");
-            if (b != null && b.Ok)
+            var r0 = BoundaryCut.Classify(L0, Bd, floor);
+            check("S196 ③ 경계 위 선(그린 꼴)도 같은 R_out · 넓이 자가검증", r0.Ok && Math.Abs(r0.AreaCut - expCut) < 1e-6 && Math.Abs(r0.AreaOld - r0.AreaNew - r0.AreaCut) <= 1e-6 * r0.AreaOld, $"{BoundaryCut.CodeName(r0.Code)} {r0.AreaCut:F6}");
+            double outF = 0;
+            try
             {
-                double sA = GradingGeometry.RingAreaNts(b.Strip);
-                double expS = (3 + 3) / 2.0 * 0 + 3 * 10 + 2 * ((6 + 3) / 2.0 * (20.0 / 3 - 5));   // x 40 → 43 · y −5..5 + 끝 두 사다리꼴(x 40..43~46)
-                check("S196 ④ 띠 넓이(손셈)", Math.Abs(sA - expS) < 1e-6, $"{sA:F6} vs {expS:F6}");
-                check("S196 ⑤ A′ · B′ = 계획선 위 가장 가까운 점", Math.Abs(b.A2.X - 40) < 1e-9 && Math.Abs(b.A2.Y + 20.0 / 3) < 1e-6 && Math.Abs(b.B2.X - 40) < 1e-9, $"A′({b.A2.X},{b.A2.Y}) B′({b.B2.X},{b.B2.Y})");
-                check("S196 ⑥ 여유 R_out(경계 밖 10 m까지)", b.MarginUsed && b.CutExt.Max(q => q.X) > 55, $"여유 {b.MarginUsed} · 최대 x {b.CutExt.Max(q => q.X):F2}");
-                // ⑦ 열린 질문 — A · B(경계 x = 46 위)가 정지면 삼각망 바깥에 떨어질 때: 1 mm 안쪽으로 읽고 · 그래도 못 읽으면 원지반
-                var (_, bN) = MakeCut(Ok, p0f: (x, y) => x >= 46 - 1e-12 ? null : P0(x, y));
-                var (_, bG) = MakeCut(Ok, p0f: (x, y) => x > 45.9 ? null : P0(x, y));
-                check("S196 ⑦ 경계 위 A · B 정지면 못 읽음 — 1 mm 안쪽(로그 없음) · 그래도 없으면 원지반(로그) · 둘 다 지음", bN != null && bN.Ok && !bN.Log.Contains("⑨-b") && bG != null && bG.Ok && bG.Log.Contains("⑨-b"),
-                      $"{bN?.Code} {bN?.Why} / {bG?.Code} {bG?.Why}");
-                // ⑧ 여유가 다른 옹벽 폴리곤을 비켜 감(설치 전 검토 M5) — 경계 밖 [48, 60] × [−30, −9] 를 빼고 R_out은 그대로
-                var clipR = new List<IReadOnlyList<Point3>> { Rect(48, -30, 60, -9) };
-                var (_, bC) = MakeCut(Ok, clip: clipR);
-                double ovC = bC != null && bC.Ok ? GradingGeometry.RingAreaNts(bC.CutExt) : 0;
-                bool noOv = bC != null && bC.Ok && bC.CutExt.All(q => !(q.X > 48 + 1e-6 && q.X < 60 - 1e-6 && q.Y > -30 + 1e-6 && q.Y < -9 - 1e-6));
-                check("S196 ⑧ 여유가 다른 옹벽 자리를 비켜 감 — 넓이 줄고 그 자리 안 꼭짓점 없음", noOv && ovC < GradingGeometry.RingAreaNts(b.CutExt) - 1, $"{bC?.Code} {bC?.Why} · 여유 R_out {ovC:F1} / {GradingGeometry.RingAreaNts(b.CutExt):F1}㎡");
+                var gf = new NetTopologySuite.Geometries.GeometryFactory();
+                NetTopologySuite.Geometries.Polygon Pg(IReadOnlyList<Point3> q) => gf.CreatePolygon(q.Select(p => new NetTopologySuite.Geometries.Coordinate(p.X, p.Y)).Append(new NetTopologySuite.Geometries.Coordinate(q[0].X, q[0].Y)).ToArray());
+                outF = Pg(floor).Difference(Pg(r0.NewRing)).Area;
             }
+            catch { outF = double.NaN; }
+            check("S196 ④ 바닥 ⊂ N(바닥 − N = 0)", outF < 1e-9, $"{outF:E2}㎡");
         }
 
-        Console.WriteLine("\n== S197 줄(절토) · 폭 모자람 · 기운 바닥 · 섞임 ==");
+        Console.WriteLine("\n== S197 줄(수평 Z_k · 거리) · 줄기 갈림 마구리 · 오목/볼록 · 흔들리는 P0 ==");
         {
-            var (_, b) = MakeCut(Ok);
-            if (b == null || !b.Ok) { check("S197 짓기", false, b?.Why ?? "판정 거절"); }
+            var (_, b) = Make(L0, h: 0.5, t: 1, reach: 30);
+            if (b == null || !b.Ok) check("S197 짓기", false, b?.Why ?? "판정 거절");
             else
             {
-                check("S197 ① 절토 · 단 3개(원지반 − 바닥 최대 4.0 = 2단 딱 → 한 단 더)", b.Up && b.Tiers == 3, $"{(b.Up ? "절토" : "성토")} {b.Tiers}단");
-                check("S197 ② 줄 수 = 2n(0번 + 면 끝 n + 소단 끝 n−1)", b.Rows.Count == 6, $"{b.Rows.Count}");
-                double[] zs = { 106, 104, 104, 102, 102, 100 };
-                double[] ds = { 0, 0.05, 1.05, 1.10, 2.10, 2.15 };
-                bool zOk = true, dOk = true; string det = "";
-                for (int i = 0; i < Math.Min(6, b.Rows.Count); i++)
+                var part = b.Parts.Count == 1 ? b.Parts[0] : null;
+                check("S197 ① 절토 한 부분 · 기준 Zbot = 선 위 P0 최소 102", part != null && part.Up && Math.Abs(part.Zref - 102) < 1e-9, part == null ? $"부분 {b.Parts.Count}" : $"{part.Zref:F6}");
+                // 줄마다 수평(점마다 같은 z) · 그 z = 어떤 Z_k(±1 mm) · L에서 거리 = 기대 거리 중 하나(±1 mm)
+                double f = 0.05, T = 1;
+                var dSet = new List<double>();
+                for (int k = 1; k <= 40; k++) { dSet.Add((k - 1) * (f + T) + f); dSet.Add(k * (f + T)); }
+                bool flat = true, onLevel = true, dist = true; string det = "";
+                foreach (var row in b.Rows)
                 {
-                    var row = b.Rows[i];
-                    double zMax = row.Max(q => Math.Abs(q.Z - zs[i]));
-                    var mid = row.OrderBy(q => Math.Abs(q.Y)).First();
-                    double d = 43 - mid.X;
-                    if (zMax > 1e-9) zOk = false;
-                    if (Math.Abs(d - ds[i]) > 1e-3) dOk = false;
-                    det += $" [{i}] z {row[0].Z:F3} 물러남 {d:F3}";
+                    double z0 = row[0].Z;
+                    if (row.Any(q => Math.Abs(q.Z - z0) > 1e-9)) flat = false;
+                    double kk = (z0 - 102) / 0.5;
+                    if (Math.Abs(kk - Math.Round(kk)) * 0.5 > 1e-3 || Math.Round(kk) < 1) { onLevel = false; det += $" z {z0:F4}"; }
+                    foreach (var q in row)
+                    {
+                        var (_, dl) = Near(b.Parts.Count > 0 ? L0 : L0, q.X, q.Y);
+                        if (dl > 1e-3 && dSet.All(d => Math.Abs(d - dl) > 1e-3) && dl < part!.Dmax - 1e-3) { dist = false; det += $" ({q.X:F3},{q.Y:F3}) 거리 {dl:F4}"; break; }
+                    }
                 }
-                check("S197 ③ 줄 높이 = 바닥 + (n − k)·H(1e-9)", zOk, det);
-                check("S197 ④ 물러난 거리(가운데) = 기대 ± 1 mm", dOk, det);
-                check("S197 ⑤ 측선 안 단면 · 뚜껑 줄이 있다(선 ≥ 1 + 6 + 2 + 1) · 경고 없음(줄 끝 = 측선 안 단면 점)", b.Lines.Count >= 10 && b.Warn.Count == 0, $"선 {b.Lines.Count} · 경고 {string.Join(" · ", b.Warn)}");
-                check("S197 ⑥ 뚜껑 = R_out 원지반 최고 + 1 ≥ 머리 + 1", b.CapZ >= 107 - 1e-9, $"{b.CapZ:F3}");
+                check("S197 ② 줄마다 수평(1e-9)", flat && b.Rows.Count > 0, $"줄 {b.Rows.Count}");
+                check("S197 ③ 줄 높이 = Z_k = 102 + k·0.5(± 1 mm)", onLevel, det);
+                check("S197 ④ 줄 거리 = 0 · f · f+T · 2f+T …(± 1 mm) — lp가 A..B 밖으로 안 나감", dist, det);
+                int nS = b.Points.Count(p => p.Kind == 1);
+                check("S197 ⑤ 비스듬한 다리가 높이를 가로지름 → 줄기 갈림 S마다 마구리(다리 둘 × 3)", nS == b.EndFaceN && nS >= 4, $"S {nS} · 마구리 {b.EndFaceN}");
+                // 마구리 폭 = vEps — 갈림마다 두 끝 선의 L 위 첫 점 사이 거리
+                var starts = b.EndFaces.Select(e => e[0]).Where(q => Near(L0, q.X, q.Y).D < 1e-6).ToList();
+                int good = 0;
+                foreach (var a in starts)
+                    if (starts.Any(c => !(c.X == a.X && c.Y == a.Y) && Math.Abs(Math.Sqrt((c.X - a.X) * (c.X - a.X) + (c.Y - a.Y) * (c.Y - a.Y)) - b.VEps) < 1e-6)) good++;
+                check("S197 ⑥ 마구리 폭 = vEps(L 위 두 끝 선 사이 = 0.05 m ± 1µm)", starts.Count >= 2 && good == starts.Count, $"끝 선 {starts.Count} · 짝 맞음 {good}");
+                check("S197 ⑦ 계수 — 0.1 mm 안 점 쌍 0 · 바늘 0", b.PairsUnder01 == 0 && b.Needles == 0, $"쌍 {b.PairsUnder01} · 바늘 {b.Needles} · 경고 {string.Join(" · ", b.Warn)}");
             }
-            var (_, bn) = MakeCut(Ok, h: 1);
-            check("S197 ⑦ 폭 모자람 → 거절 + 필요 폭", bn != null && !bn.Ok && bn.Code == "폭" && bn.Why.Contains("필요한 폭"), bn?.Why ?? "판정 거절");
-            var (_, bs) = MakeCut(Ok, plan: Plan(0.02));
-            bool sOk = bs != null && bs.Ok;
-            double sErr = 0;
-            if (sOk) foreach (var row in bs!.Rows.Take(1)) foreach (var q in row) sErr = Math.Max(sErr, Math.Abs(q.Z - (100 + 0.02 * q.Y + 6)));
-            check("S197 ⑧ 기운 바닥 — 0번 줄이 바닥을 따라 기움(z = 100 + 0.02y + 3·2)", sOk && sErr < 1e-6, sOk ? $"최대 차 {sErr:E2} · 바닥 {bs!.PadMin:F3}~{bs.PadMax:F3}" : bs?.Why ?? "");
-            var (_, bm) = MakeCut(Ok, g: (x, y) => 100 + 0.5 * y);
-            check("S197 ⑨ 절 · 성 섞임 → 거절(자리)", bm != null && !bm.Ok && bm.Code == "섞임" && bm.Marks.Count > 0, bm?.Why ?? "");
-            // ⑩ 폴리선 위는 절토인데 띠 안(계획선 곁)이 성토 — 거절(설치 전 검토 M2)
-            var (_, bf) = MakeCut(Ok, g: (x, y) => x < 41 ? 99.5 : G(x, y));
-            check("S197 ⑩ 띠 안 성토 섞임 → 거절(자리 · 띠 안)", bf != null && !bf.Ok && bf.Code == "섞임" && bf.Why.Contains("띠") && bf.Marks.Count > 0 && bf.Marks[0].X < 41, bf?.Why ?? "");
-            // ⑪ 소단 0 — 소단 끝 줄을 안 넣음(겹친 브레이크라인 없음 · 설치 전 검토 L3): 줄 = 0번 + 면 끝 n
-            var (_, b0) = MakeCut(Ok, t: 0);
-            check("S197 ⑪ 소단 0 — 줄 n + 1개 · 경고 없음", b0 != null && b0.Ok && b0.Rows.Count == b0.Tiers + 1 && b0.Warn.Count == 0, b0 == null ? "" : $"{b0.Code} {b0.Why} · 줄 {b0.Rows.Count} · 단 {b0.Tiers} · {string.Join(" · ", b0.Warn)}");
-        }
-
-        Console.WriteLine("\n== S198 합성 «바꿔 끼움» 절토 · S199 성토 거울 ==");
-        foreach (bool fill in new[] { false, true })
-        {
-            string sec = fill ? "S199" : "S198";
-            double sz = fill ? -1 : 1;
-            var pT = Grid(20, -40, 70, 40, 1, (x, y) => sz * P0(x, y));
-            var gT = Grid(20, -40, 70, 40, 1, (x, y) => sz * G(x, y));
-            var (cut, b) = MakeCut(Ok, p0: pT, sz: sz);
-            if (b == null || !b.Ok) { check($"{sec} 짓기", false, b?.Why ?? cut.Why); continue; }
-            check($"{sec} ⓪ 방향 {(fill ? "성토" : "절토")}", b.Up == !fill, "");
-            var W = WallByLine.Mesh(b);
-            var r = WallDaylight.BuildComposite(b.Zone, W, gT, pT, down: fill, replace: true);
-            check($"{sec} ① 판정 1~2 · 합성 됨", r.Zone != null && r.Tier <= 2, $"판정 {r.Tier} · {r.Fail} · W {W.Count}면");
-            if (r.Zone == null) { Console.WriteLine("    " + r.Summary); continue; }
-            var all = r.Zone.Concat(r.Untouched).ToList();
-            string det = ""; bool ok = true;
-            void Probe(string nm, double x, double y, double want)
+            // ⑧ 오목 · 볼록 꼭짓점(바깥 쪽에서 (44, 2) 볼록 · (43, 0) · (43, 5) 오목)
+            var lcv = new List<Point3> { new(46, -20.0 / 3, 0), new(43, -5, 0), new(43, 0, 0), new(44, 2, 0), new(43, 5, 0), new(46, 20.0 / 3, 0) };
+            var (_, bv) = Make(lcv, h: 0.5, t: 1, reach: 30);
+            bool dv = bv != null && bv.Ok;
+            string dvt = bv == null ? "판정 거절" : bv.Why;
+            if (dv)
             {
-                var z = At(all, x, y);
-                bool good = z != null && Math.Abs(z.Value - sz * want) <= 1e-3;
-                if (!good) ok = false;
-                det += $" {nm}({x},{y}) {z:F4}/{sz * want:F4}{(good ? "" : "✗")}";
+                foreach (var row in bv!.Rows)
+                    foreach (var q in row)
+                    {
+                        var (_, dl) = Near(lcv, q.X, q.Y);
+                        bool okD = dl < 1e-3 || Enumerable.Range(1, 40).Any(k => Math.Abs((k - 1) * 1.05 + 0.05 - dl) < 1e-3 || Math.Abs(k * 1.05 - dl) < 1e-3) || dl > bv.Parts.Max(p => p.Dmax) - 1e-3;
+                        if (!okD) { dv = false; dvt = $"({q.X:F3},{q.Y:F3}) 거리 {dl:F4}"; break; }
+                    }
             }
-            Probe("R_out", 45, 0, G(45, 0));
-            Probe("여유", 50, -1, G(50, -1));
-            Probe("바닥", 40.5, 0, 100);
-            Probe("소단2", 41.5, 0, 102);
-            Probe("묻힌 위 단", 42.5, 0, G(42.5, 0));
-            Probe("Z 밖 사면", 42, -20, P0(42, -20));
-            check($"{sec} ② 자리마다 높이(1 mm) — R_out = 원지반 · 바닥 = 부지 · 소단 · 묻힌 단 = 원지반 · Z 밖 그대로", ok, det);
-            check($"{sec} ③ 테두리 턱 ≤ 1 mm", r.EdgeMax <= 1e-3, $"{r.EdgeMax * 1000:F3}mm @{r.EdgeAt}");
-            check($"{sec} ④ 뚜껑(원지반 조각)이 있다", r.CapTris != null && r.CapTris.Count > 0, $"{r.CapTris?.Count}");
+            check("S197 ⑧ 오목 · 볼록 꼭짓점 — 짓기 통과 · 줄 거리 ± 1 mm · 끝 선 경고 없음", dv && !bv!.Warn.Any(w => w.Contains("끝 선 점")), dvt + (bv == null ? "" : " · " + string.Join(" · ", bv.Warn)));
+            // ⑨ ★[critic 2차 5] P0이 Z_k ± 5 mm로 흔들린다(주기 6 cm < 2f) — 짧은 줄기를 합쳐 흔들림이 없을 때와 마구리 수가 같다
+            {
+                Func<double, double, double> gF = (x, y) => 100;
+                Func<double, double, double> pF0 = (x, y) => x <= 40 ? 110 : Math.Max(100, 110 - (x - 40) / 1.5);
+                Func<double, double, double> pFo = (x, y) => pF0(x, y) + (x > 45.9 && x < 46.1 && Math.Abs(y) > 2.04 && Math.Abs(y) < 4.95 ? 0.005 * Math.Sin(2 * Math.PI * y / 0.06) : 0);   // x = 46 토막(P0 ≈ Z_1)만 흔든다
+                var bd5 = Rect(-20, -60, 55, 60);
+                var lv = new List<Point3> { new(55, -8, 0), new(46, -5, 0), new(46, -2, 0), new(43, 0, 0), new(46, 2, 0), new(46, 5, 0), new(55, 8, 0) };
+                var (_, b0) = Make(lv, h: 2, t: 1, g: gF, p0: pF0, bd: bd5, plan: Rect(0, -60, 40, 60, (x, y) => 110), reach: 30);
+                var (_, b1) = Make(lv, h: 2, t: 1, g: gF, p0: pFo, bd: bd5, plan: Rect(0, -60, 40, 60, (x, y) => 110), reach: 30);
+                check("S197 ⑨ 흔들리는 P0(Z_k ± 5 mm) — 짧은 줄기 합침 · 마구리 수 = 흔들림 없을 때",
+                    b0 != null && b0.Ok && b1 != null && b1.Ok && b1.EndFaceN == b0.EndFaceN && b0.EndFaceN > 0,
+                    $"없음 {b0?.Code} 마구리 {b0?.EndFaceN} · 흔들림 {b1?.Code} 마구리 {b1?.EndFaceN} · {b1?.Why} · {string.Join(" · ", b1?.Warn ?? new())}");
+                // 합친 줄기의 첫 면 0 < h ≤ H + 1 cm
+                bool hOk = b1 != null && b1.Ok && b1.Faces.Where(fz => fz.Kind == 0 && fz.Tier == 1).All(fz => fz.Top.Zip(fz.Top.Select(q => fz.Level)).All(p => p.First.Z - p.Second > -1e-9 && p.First.Z - p.Second <= 2 + 0.01 + 1e-9));
+                check("S197 ⑩ 합친 줄기 첫 면 높이 0 < h ≤ H + 1 cm", hOk, "");
+            }
+            // ⑪ 소단 0 — 면 끝 줄만(겹친 소단 끝 줄 없음) · 짓기 통과
+            var (_, bt0) = Make(L0, h: 0.5, t: 0, reach: 30);
+            check("S197 ⑪ 소단 0 — 짓기 통과 · 줄 높이 수평", bt0 != null && bt0.Ok && bt0.Rows.All(r => r.All(q => Math.Abs(q.Z - r[0].Z) < 1e-9)), bt0 == null ? "" : $"{bt0.Code} {bt0.Why}");
+            // ⑫ 절 · 성이 섞인 선은 이제 받는다(가름점 C) — 옛 «섞임» 거절은 없다
+            var (_, bm) = Make(L0, g: (x, y) => 100 + 0.25 * (x - 30), p0: (x, y) => 100 + 0.25 * (x - 30) + Math.Max(0, 46 - x) / 6 * 0.3 * y, reach: 30);
+            check("S197 ⑫ 섞인 선 — 두 부분(성토 · 절토) · 가름점 C 하나", bm != null && bm.Ok && bm.Parts.Count == 2 && bm.Parts.Any(p => p.Up) && bm.Parts.Any(p => !p.Up) && bm.Points.Count(p => p.Kind == 0) == 1,
+                bm == null ? "" : $"{bm.Code} {bm.Why} · 부분 {bm.Parts.Count} · C {bm.Points.Count(p => p.Kind == 0)}");
         }
 
-        Console.WriteLine("\n== S201 옹벽 목록 판 6 ==");
+        Console.WriteLine("\n== S198 성토(거울) — 합성 한 판 RuleOf · 소단 평평 · F 바깥 = G · L 턱 · 넓은 소단 · 땅이 바깥으로 g = 0.3~0.6 떨어짐 ==");
+        {
+            void Fill(string nm, double h, double t, Func<double, double, double> g, Func<double, double, double> p0, bool wide)
+            {
+                const double sz = -1;
+                var (cut, b) = Make(L0, h: h, t: t, g: g, p0: p0, sz: sz, reach: 30);
+                if (b == null || !b.Ok) { check($"S198 {nm} 짓기", false, b?.Why ?? cut.Why); return; }
+                var (r, all, _) = Comp(b, g, p0, sz);
+                // ★[v114.0 · 알려진 빈자리] U자 선 안을 넓은 소단(T 3 m > U 깊이 3 m)이 채우는 꼴 — 이등분선 곁에서 Poly 고리와 바꿀 자리 고리 꼭짓점이 20~80 µm 어긋나
+                //   합성이 «Civil이 반드시 합칠 쌍»으로 거절한다(판정 3 · 정지면_DH 그대로). 지금은 «깨끗이 거절»을 기대하고, 모양 검사는 아래에 꺼 둔다(KnownGapWideU = false)
+                if (wide && !KnownGapWideU)
+                {
+                    check($"S198 {nm} ① (알려진 빈자리) 합성이 깨끗이 거절 — 판정 3 · 결과 면 없음 · 까닭 한 줄", r.Zone == null && r.Tier == 3 && r.Fail.Length > 0, $"판정 {r.Tier} · {r.Fail.Split('·')[0]}");
+                    return;
+                }
+                check($"S198 {nm} ① 성토 · 판정 1~2 · 합성 됨", b.HasFill && !b.HasCut && r.Zone != null && r.Tier <= 2, $"판정 {r.Tier} · {r.Fail}");
+                if (r.Zone == null) { Console.WriteLine("    " + r.Summary); return; }
+                check($"S198 {nm} ② 테두리 턱 ≤ 1 mm(L · 옛 경계 · F)", r.EdgeMax <= 1e-3, $"{r.EdgeMax * 1000:F3}mm @{r.EdgeAt}");
+                // N 쪽(선 안쪽 사면 · 바닥)은 정지면 그대로(비트)
+                bool nSame = true; string nd = "";
+                foreach (var (x, y) in new[] { (41.5, 0.0), (42.9, 1.0), (42.0, -20.0), (44.0, -30.0), (30.0, 0.0) })
+                {
+                    var z = At(all, x, y); double want = sz * p0(x, y);
+                    if (z == null || Math.Abs(z.Value - want) > 1e-9) { nSame = false; nd += $" ({x},{y}) {z:F6}/{want:F6}"; }
+                }
+                check($"S198 {nm} ③ N 쪽 = 정지면(1e-9)", nSame, nd);
+                // F 바깥(Poly 안) = G · F 위 = G(1 mm)
+                double fOut = 0; int nF = 0;
+                foreach (var fl in b.Foot)
+                    foreach (var q in fl)
+                    {
+                        var (_, dl) = Near(L0, q.X, q.Y); if (dl < 1e-6) continue;
+                        var z = At(all, q.X, q.Y); if (z == null) continue;
+                        nF++; fOut = Math.Max(fOut, Math.Abs(z.Value - sz * g(q.X, q.Y)));
+                    }
+                check($"S198 {nm} ④ F 위 합성 = 원지반(1 mm) — Zone 테두리 턱", nF > 0 && fOut <= 1e-3, $"{nF}점 최대 {fOut * 1000:F3}mm");
+                var rOut = At(all, 45.5, -20.0 / 3 + 0.3);
+                // L 위 합성 = P0(턱 없음)
+                double lMax = 0;
+                for (double y = -4.9; y <= 4.9; y += 0.7) { var z = At(all, 43, y); if (z != null) lMax = Math.Max(lMax, Math.Abs(z.Value - sz * p0(43, y))); }
+                check($"S198 {nm} ⑤ L 위 합성 = P0(1 mm)", lMax <= 1e-3, $"{lMax * 1000:F3}mm");
+                // 소단 평평 — 첫 소단 가운데(줄기 j)
+                var part = b.Parts[0];
+                var st = part.Stems.OrderByDescending(s => s.S1 - s.S0).First();
+                double f = 0.05;
+                {
+                    // 첫 소단 가운데 — 바꿀 자리 안이면 Z_j(평평 · 옛 사면으로 덮지 않음) · 밖이면 원지반(땅에 먼저 닿은 부분단)
+                    double xb = wide ? 45.5 : 43 + f + t / 2;
+                    var z = At(all, xb, 0);
+                    bool inZ = b.ZoneF.Concat(b.ZoneC).Any(r => GradingGeometry.PointInRing(r, xb, 0));
+                    // 성토 자리 규칙 max(G, W) — 자리 안 소단이면 Z_j · 묻힌 섬(구멍) · 자리 밖이면 G
+                    double want = inZ ? Math.Max(sz * g(xb, 0), part.Level(st.J)) : sz * g(xb, 0);
+                    check($"S198 {nm} ⑥ 첫 소단 자리 = max(G, Z_{st.J}){(wide ? "(넓은 소단 — Z_j)" : "")}", z != null && Math.Abs(z.Value - want) <= 1e-5 && (!wide || Math.Abs(z.Value - part.Level(st.J)) <= 1e-5), $"({xb:F2},0) {z:F6}/{want:F6} · 자리 {inZ}");
+                }
+                if (wide)
+                {
+                    var z = At(all, 46.03, 0); double want = part.Level(st.J);
+                    check($"S198 {nm} ⑦ 넓은 소단이 옛 경계(x = 46) 밖까지 그대로 넓음", z != null && Math.Abs(z.Value - want) <= 1e-6 && b.FootMax > 3, $"(46.03,0) {z:F6}/{want:F6} · 선 바깥 {b.FootMax:F2} m");
+                }
+            }
+            Fill("거울 H 0.5 · T 1", 0.5, 1, G, P0, false);
+            Fill("넓은 소단 H 1 · T 3", 1, 3, G, P0, true);
+            foreach (double gg in new[] { 0.3, 0.45, 0.6 })
+            {
+                Func<double, double, double> g2 = (x, y) => 104 + gg * (x - 46);
+                Func<double, double, double> p2 = (x, y) => x <= 40 ? 100 : x < 46 ? 100 + (x - 40) / 1.5 : g2(x, y);
+                Fill($"g {gg:0.##} · H 1 · T 1(δ가 h를 가로지름)", 1, 1, g2, p2, false);
+            }
+        }
+
+        Console.WriteLine("\n== S199 절토 + 섞인 선(성 → 절) — C · A · B 턱 · Zone끼리 C에서만 ==");
+        {
+            // 절토(그대로)
+            var (_, bc) = Make(L0, h: 0.5, t: 1, reach: 30);
+            if (bc == null || !bc.Ok) check("S199 절토 짓기", false, bc?.Why ?? "");
+            else
+            {
+                var (r, all, _) = Comp(bc, G, P0);
+                check("S199 ① 절토 — 판정 1~2 · 테두리 턱 ≤ 1 mm", r.Zone != null && r.Tier <= 2 && r.EdgeMax <= 1e-3, $"판정 {r.Tier} · {r.Fail} · 턱 {r.EdgeMax * 1000:F3}mm");
+                var z = At(all, 43 + 0.05 + 0.5, 0);
+                check("S199 ② 절토 첫 소단 = 102.5", z != null && Math.Abs(z.Value - 102.5) <= 1e-6, $"{z:F6}");
+            }
+            // 섞인 선 — 땅 100 + 0.25(x − 30) · 정지면 = 땅 + (46 − x)/6 · 0.3y(데이라잇 x = 46에서 δ = 0 · y > 0 성토 · y < 0 절토 · C = (43, 0))
+            Func<double, double, double> gm = (x, y) => 100 + 0.25 * (x - 30);
+            Func<double, double, double> pm = (x, y) => gm(x, y) + Math.Max(0, Math.Min(46 - x, 6)) / 6 * 0.3 * y;
+            var (_, bm) = Make(L0, h: 0.5, t: 1, g: gm, p0: pm, reach: 30, p0Tris: Grid(20, -40, 70, 40, 1, pm), gTris: Grid(20, -40, 70, 40, 1, gm));   // 정지면이 1차가 아니다 — 합성과 같은 삼각망으로 읽는다
+            if (bm == null || !bm.Ok) check("S199 섞인 선 짓기", false, bm?.Why ?? "");
+            else
+            {
+                var c = bm.Points.FirstOrDefault(p => p.Kind == 0);
+                check("S199 ③ 섞인 선 — 성토 · 절토 둘 · C ≈ (43, 0)(1 mm)", bm.HasCut && bm.HasFill && Math.Abs(c.X - 43) < 1e-3 && Math.Abs(c.Y) < 1e-3, $"C ({c.X:F4},{c.Y:F4})");
+                double ov = 0;
+                try
+                {
+                    var gf = new NetTopologySuite.Geometries.GeometryFactory();
+                    NetTopologySuite.Geometries.Polygon Pg(IReadOnlyList<Point3> q) => gf.CreatePolygon(q.Select(p => new NetTopologySuite.Geometries.Coordinate(p.X, p.Y)).Append(new NetTopologySuite.Geometries.Coordinate(q[0].X, q[0].Y)).ToArray());
+                    foreach (var zf in bm.ZoneF) foreach (var zc in bm.ZoneC) ov += Pg(zf).Intersection(Pg(zc)).Area;
+                }
+                catch { ov = double.NaN; }
+                check("S199 ④ 성토 · 절토 Zone이 C에서만 만남(겹친 넓이 0)", ov < 1e-9, $"{ov:E2}㎡");
+                var (r, all, pT) = Comp(bm, gm, pm);
+                check("S199 ⑤ 섞인 선 합성 — 판정 1~2 · 테두리 턱 ≤ 1 mm", r.Zone != null && r.Tier <= 2 && r.EdgeMax <= 1e-3, $"판정 {r.Tier} · {r.Fail} · 턱 {r.EdgeMax * 1000:F3}mm @{r.EdgeAt}");
+                // C · A · B — L 바로 안쪽(정지면)과 바깥(합성) 높이 차(L 위 점에서) ≤ 1 mm
+                double worst = 0; string wat = "";
+                foreach (var (x, y) in new[] { (43.0, 0.0), (43.0, 0.002), (43.0, -0.002), (46.0, -20.0 / 3), (46.0, 20.0 / 3), (45.9, -6.6), (45.9, 6.6) })
+                {
+                    var (_, dl) = Near(L0, x, y);
+                    double px = x, py = y;
+                    if (dl > 1e-6) { /* 선 위로 */ var nn = WallByLine.Nearest(L0.Append(L0[^1]).ToList(), x, y); px = nn.X; py = nn.Y; }
+                    var z = At(all, px, py);
+                    if (z == null) continue;
+                    double d = Math.Abs(z.Value - (At(pT, px, py) ?? pm(px, py)));   // 정지면 삼각망(1차 아닌 함수를 1 m 격자로)
+                    if (d > worst) { worst = d; wat = $"({px:F3},{py:F3})"; }
+                }
+                check("S199 ⑥ C · A · B 곁 L 위 합성 = 정지면(턱 ≤ 1 mm)", worst <= 1e-3, $"{worst * 1000:F3}mm {wat}");
+                double fOut = 0;
+                foreach (var fl in bm.Foot) foreach (var q in fl) { if (Near(L0, q.X, q.Y).D < 1e-6) continue; var z = At(all, q.X, q.Y); if (z != null) fOut = Math.Max(fOut, Math.Abs(z.Value - gm(q.X, q.Y))); }
+                check("S199 ⑦ F 위 합성 = 원지반(1 mm)", fOut <= 1e-3, $"{fOut * 1000:F3}mm");
+            }
+        }
+
+        Console.WriteLine("\n== S200 1단 · 부분단(땅 수평 100 · 선 = 정지면 등고선 · H = 5) — 끝 가늘어짐 규칙 ==");
+        {
+            Func<double, double, double> g5 = (x, y) => 100;
+            Func<double, double, double> p5 = (x, y) => x <= 40 ? 110 : Math.Max(100, 110 - (x - 40) / 1.5);
+            var bd5 = Rect(-20, -60, 55, 60);
+            var pl5 = Rect(0, -60, 40, 60, (x, y) => 110);
+            const double f = 0.05, T = 1, H = 5;
+            (WallByLine.Built? B, string Why) At5(double delta)
+            {
+                double xl = 55 - 1.5 * delta;
+                var l = new List<Point3> { new(55, -8, 0), new(xl, -5, 0), new(xl, 5, 0), new(55, 8, 0) };
+                var (c, b) = Make(l, h: H, t: T, g: g5, p0: p5, bd: bd5, plan: pl5, reach: 20);
+                return (b, b == null ? c.Why : b.Why);
+            }
+            foreach (double dl in new[] { 0.005, 0.01, 0.02 })
+            {
+                var (b, why) = At5(dl);
+                check($"S200 δ = {dl * 1000:0} mm — 발 폭 1 mm(w_min) · 바늘 0 · 0.1 mm 쌍 0", b != null && b.Ok && Math.Abs(b.FootMax - 1e-3) < 1e-7 && b.Needles == 0 && b.PairsUnder01 == 0 && b.WMinBumped > 0,
+                    b == null ? why : $"{b.Code} {b.Why} · 선 바깥 {b.FootMax * 1000:F4} mm · 올림 {b.WMinBumped} · 합침 {b.MergedPts} · 바늘 {b.Needles} · 쌍 {b.PairsUnder01}");
+            }
+            foreach (double dl in new[] { 0.3, 2.0, 4.9 })
+            {
+                var (b, why) = At5(dl);
+                double want = f * dl / H;
+                check($"S200 δ = {dl} m — 선 바깥 = f·δ/H = {want * 1000:F3} mm(± 1µm)", b != null && b.Ok && Math.Abs(b.FootMax - want) < 1e-6 && b.Needles == 0,
+                    b == null ? why : $"{b.Code} {b.Why} · {b.FootMax * 1000:F4} mm · 바늘 {b.Needles} · 쌍 {b.PairsUnder01}");
+            }
+            {
+                var (b, why) = At5(5.0);
+                check("S200 δ = 5.0 m — 선 바깥 = f(면 끝에서 땅)", b != null && b.Ok && Math.Abs(b.FootMax - f) < 1e-6, b == null ? why : $"{b.Code} {b.Why} · {b.FootMax:F6}");
+                var (b2, why2) = At5(5.1);
+                double want = f + T + f * 0.1 / H;
+                check($"S200 δ = 5.1 m — 선 바깥 = f + T + f·0.1/5 = {want:F4} m", b2 != null && b2.Ok && Math.Abs(b2.FootMax - want) < 1e-6, b2 == null ? why2 : $"{b2.Code} {b2.Why} · {b2.FootMax:F6}");
+            }
+            {
+                // 데이라잇 0.5 m 안쪽 선(대피소 꼴) — 짓기 · 합성 · 턱
+                double delta = 0.5 / 1.5;
+                var (b, why) = At5(delta);
+                if (b == null || !b.Ok) check("S200 대피소 꼴 짓기", false, why);
+                else
+                {
+                    var (r, all, _) = Comp(b, g5, p5, 1, 20, 70);
+                    check("S200 데이라잇 0.5 m 안쪽 선 — 합성 판정 1~2 · 테두리 턱 ≤ 1 mm · 선 바깥 = f·δ/H", r.Zone != null && r.Tier <= 2 && r.EdgeMax <= 1e-3 && Math.Abs(b.FootMax - f * delta / H) < 1e-6,
+                        $"판정 {r.Tier} · {r.Fail} · 턱 {r.EdgeMax * 1000:F3}mm · 선 바깥 {b.FootMax * 1000:F3} mm");
+                }
+            }
+        }
+
+        Console.WriteLine("\n== S201 옹벽 목록 판 7 ==");
         {
             var head = new WallListHead { PlanHandle = "1A", GroundHandle = "2B", NextNo = 4 };
             var w0 = new WallRec { No = 1, State = 1, Up = true, Bench = 0, H = 5, T = 1, HeadZ = 105, Seg = new() { new(0, 0, 0), new(1, 0, 0) }, Poly = Rect(0, 0, 1, 1), IsWall = new() { true, true, false, false } };
             var v5 = WallList.Encode(head, new List<WallRec> { w0 });
-            check("S201 ① 종류 0뿐이면 판 6을 안 쓴다(옛 바이트 그대로)", (int)v5[1].Value <= 5, $"판 {v5[1].Value}");
-            var w1 = new WallRec
+            check("S201 ① 종류 0뿐이면 판 7을 안 쓴다(옛 바이트 그대로)", (int)v5[1].Value <= 5, $"판 {v5[1].Value}");
+            var w2 = new WallRec
             {
-                No = 2, State = 0, Up = false, Bench = -1, H = 3, T = 1.5, HeadZ = 91, Kind = 1, Seg = new() { new(5, 5, 0), new(6, 6, 0) }, Poly = Rect(5, 5, 9, 9), IsWall = new() { true, false, false, true },
-                Line = new() { new(5, 5, 0), new(6, 6, 0), new(7, 5, 0) }, Src = new() { new(4, 4, 0), new(8, 4, 0) }, PadZ = 100.25, Tiers = 3, CapZ = 80.5, SrcHandle = "3C",
+                No = 2, State = 0, Up = false, Bench = -1, H = 3, T = 1.5, HeadZ = 91, Kind = 2, Seg = new() { new(5, 5, 0), new(6, 6, 0) }, Poly = Rect(5, 5, 9, 9), IsWall = new() { true, false, false, true },
+                Line = new() { new(5, 5, 0), new(6, 6, 0), new(7, 5, 0) }, Src = new() { new(4, 4, 0), new(8, 4, 0) }, SrcHandle = "3C", Hc = 4, Tc = 1.5, Hf = 3, Tf = 2, Reach = 12, FootMax = 2.25, FootAtX = 7.5, FootAtY = 6.5,
+                ZoneF = new() { Rect(5, 5, 6, 6) }, ZoneC = new() { Rect(6, 5, 7, 6), Rect(7, 7, 8, 8) },
+                Faces = new() { new WallByLine.FaceSeg { Up = true, Tier = 2, Level = 103.5, Kind = 0, Part = 1, Len = 7.25, HMax = 4, Top = new() { new(1, 2, 3) }, Foot = new() { new(1, 2.05, -1) } },
+                                new WallByLine.FaceSeg { Up = false, Tier = 0, Level = 99, Kind = 1, Part = 2, Len = 1.5, HMax = 2 } },
             };
-            head.Frozen.Add(new FrozenWall { No = 3, Up = true, H = 2, Poly = Rect(0, 0, 2, 2), IsWall = new() { true, true, true, true }, Kind = 1, Line = new() { new(1, 1, 0), new(2, 2, 0) }, PadZ = 99, Tiers = 2, CapZ = 120 });
-            var v6 = WallList.Encode(head, new List<WallRec> { w0, w1 });
-            bool dec = WallList.TryDecode(v6, out var h2, out var l2, out string why);
+            head.Frozen.Add(new FrozenWall { No = 3, Up = true, H = 2, Poly = Rect(0, 0, 2, 2), IsWall = new() { true, true, true, true }, Kind = 2, Line = new() { new(1, 1, 0), new(2, 2, 0) }, FaceLen = 12.5 });
+            var v7 = WallList.Encode(head, new List<WallRec> { w0, w2 });
+            bool dec = WallList.TryDecode(v7, out var h2, out var l2, out string why, out int drop7);
             var r1 = dec ? l2.First(w => w.No == 2) : null; var r0 = dec ? l2.First(w => w.No == 1) : null;
-            bool same = dec && (int)v6[1].Value == 6 && r0!.Kind == 0 && r1!.Kind == 1 && r1.Line.Count == 3 && r1.Line[2].X == 7 && r1.Src.Count == 2 && r1.PadZ == 100.25 && r1.Tiers == 3 && r1.CapZ == 80.5 && r1.SrcHandle == "3C"
-                        && h2.Frozen.Count == 1 && h2.Frozen[0].Kind == 1 && h2.Frozen[0].Line.Count == 2 && h2.Frozen[0].Tiers == 2 && h2.Frozen[0].CapZ == 120;
-            check("S201 ② 판 6 왕복(종류 1 칸 전부 · 굳은 칸)", same, dec ? $"판 {v6[1].Value}" : why);
+            bool same = dec && drop7 == 0 && (int)v7[1].Value == 7 && r0!.Kind == 0 && r1!.Kind == 2 && r1.Line.Count == 3 && r1.Line[2].X == 7 && r1.Src.Count == 2 && r1.SrcHandle == "3C"
+                        && r1.Hc == 4 && r1.Tc == 1.5 && r1.Hf == 3 && r1.Tf == 2 && r1.Reach == 12 && r1.FootMax == 2.25 && r1.FootAtX == 7.5 && r1.FootAtY == 6.5
+                        && r1.ZoneF.Count == 1 && r1.ZoneC.Count == 2 && r1.ZoneC[1][2].X == 8 && r1.Faces.Count == 2 && r1.Faces[0].Up && r1.Faces[0].Tier == 2 && r1.Faces[0].Level == 103.5 && r1.Faces[0].Foot[0].Y == 2.05
+                        && r1.Faces[1].Kind == 1 && r1.Faces[1].Top.Count == 0 && r1.FaceLen == 7.25
+                        && h2.Frozen.Count == 1 && h2.Frozen[0].Kind == 2 && h2.Frozen[0].Line.Count == 2 && h2.Frozen[0].FaceLen == 12.5;
+            check("S201 ② 판 7 왕복(종류 2 칸 전부 · 굳은 칸)", same, dec ? $"판 {v7[1].Value} · 지움 {drop7}" : why);
             bool dec5 = WallList.TryDecode(v5, out _, out var l5, out string w5);
-            check("S201 ③ 판 5 이하 바이트 → 읽기 → 종류 0 · 다른 칸 같음", dec5 && l5.Count == 1 && l5[0].Kind == 0 && l5[0].HeadZ == 105 && l5[0].IsWall.Count == 4, w5);
-            // 모르는 종류(2)는 거절 — 조용히 엉뚱하게 읽지 않는다
-            bool rej = false;
-            for (int i = 0; i < v6.Count; i++)
+            var v5b = WallList.Encode(new WallListHead { PlanHandle = "1A", GroundHandle = "2B", NextNo = 4 }, l5);
+            check("S201 ③ 판 5 이하 바이트 → 읽기 → 다시 쓰기 = 바이트 그대로", dec5 && l5.Count == 1 && l5[0].Kind == 0 && v5b.Count == v5.Count && v5b.Zip(v5).All(p => p.First.Kind == p.Second.Kind && Equals(p.First.Value, p.Second.Value)), w5);
+            // ④ 판 6(v113) 종류 1 → 읽으면 빠짐(지운 수 · 다른 칸 그대로)
             {
-                if (v6[i].Kind != 'I' || (int)v6[i].Value != 1) continue;
-                var t2 = new List<(char, object)>(v6); t2[i] = ('I', 2);
+                var h6 = new WallListHead { PlanHandle = "1A", GroundHandle = "2B", NextNo = 5 };
+                h6.Frozen.Add(new FrozenWall { No = 3, Up = true, H = 2, Poly = Rect(0, 0, 2, 2), IsWall = new() { true, true, true, true } });
+                var w6 = new WallRec { No = 4, State = 1, Up = true, Bench = -1, H = 2, T = 1, HeadZ = 99, Seg = new() { new(0, 0, 0), new(1, 0, 0) }, Poly = Rect(3, 3, 4, 4), IsWall = new() { true, false, true, false } };
+                var v = WallList.Encode(h6, new List<WallRec> { w0, w6 });   // 판 5(굳은 칸에 옹벽선)
+                var t6 = new List<(char, object)>(v); t6[1] = ('I', 6);
+                t6.Add(('I', 0));                                                   // 옹벽 1 종류 0
+                t6.Add(('I', 1)); t6.Add(('I', 2)); t6.Add(('D', 1.0)); t6.Add(('D', 2.0)); t6.Add(('D', 0.0)); t6.Add(('D', 3.0)); t6.Add(('D', 4.0)); t6.Add(('D', 0.0));   // 옹벽 4 종류 1 · Line 2점
+                t6.Add(('I', 1)); t6.Add(('D', 1.0)); t6.Add(('D', 1.0)); t6.Add(('D', 0.0));                           // Src 1점
+                t6.Add(('D', 100.25)); t6.Add(('I', 3)); t6.Add(('D', 80.5)); t6.Add(('S', "3C"));                       // PadZ · Tiers · CapZ · SrcHandle
+                t6.Add(('I', 1)); t6.Add(('I', 0)); t6.Add(('D', 99.0)); t6.Add(('I', 2)); t6.Add(('D', 120.0));        // 굳은 3 종류 1 · Line 0점 · PadZ · Tiers · CapZ
+                bool d6 = WallList.TryDecode(t6, out var hh6, out var ll6, out string why6, out int drop6);
+                check("S201 ④ 판 6 종류 1 → 읽으면 빠짐(옹벽 · 굳은 칸 = 2 · 종류 0 칸 그대로)", d6 && drop6 == 2 && ll6.Count == 1 && ll6[0].No == 1 && ll6[0].Kind == 0 && hh6.Frozen.Count == 0,
+                    d6 ? $"지움 {drop6} · 남은 {ll6.Count} · 굳은 {hh6.Frozen.Count}" : why6);
+                var again = WallList.Encode(hh6, ll6);
+                check("S201 ⑤ 빠진 뒤 다시 쓰면 판 6 아님(종류 1 칸 없음)", (int)again[1].Value <= 5, $"판 {again[1].Value}");
+            }
+            // ⑥ 모르는 종류(3)는 거절 — 조용히 엉뚱하게 읽지 않는다
+            bool rej = false;
+            for (int i = 0; i < v7.Count; i++)
+            {
+                if (v7[i].Kind != 'I' || (int)v7[i].Value != 2) continue;
+                var t2 = new List<(char, object)>(v7); t2[i] = ('I', 3);
                 if (!WallList.TryDecode(t2, out _, out _, out string wb) && wb.Contains("종류")) { rej = true; break; }
             }
-            check("S201 ④ 모르는 종류 → 거절(까닭에 «종류»)", rej, "");
+            check("S201 ⑥ 모르는 종류 → 거절(까닭에 «종류»)", rej, "");
         }
     }
 }

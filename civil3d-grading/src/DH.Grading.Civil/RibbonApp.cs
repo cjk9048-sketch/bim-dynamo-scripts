@@ -759,7 +759,7 @@ public sealed class RibbonApp : IExtensionApplication
                 "진입도로\n창", "DHROADPANEL ", "열린 진입도로의 도킹창을 엽니다 — 횡단 · 사면 · 종단 · 옹벽 값과 결과", "설정");
             btnRoadPanel.ToolTip = MakeTip("진입도로 창 (DHROADPANEL)",
                 "오른쪽에 **진입도로 도킹창**이 열립니다 — 지금 열린 진입도로의 값 · 결과 · 도면.\n" +
-                "열린 도로가 없으면 창에 «열린 도로 없음»이 뜹니다 — [진입도로]로 노선부터 고르세요.", null);
+                "열린 도로가 없으면 창에 «열린 도로 없음»이 뜹니다 — [진입도로 생성]으로 도로부터 만드세요.", null);
             var btnRoadSheet = MakeButton(
                 "종단도", "DHROADSHEET ", "진입도로 종단도 — 열린 진입도로의 종단도(도곽 · 밴드)를 지우고 새로 그립니다", "종단");
             btnRoadSheet.ToolTip = MakeTip("진입도로 종단도 (DHROADSHEET)",
@@ -880,6 +880,13 @@ public sealed class RibbonApp : IExtensionApplication
             splitRoad.Items.Add(btnRoadDraw);
             splitRoad.Items.Add(btnRoad);
             splitRoad.Current = btnRoadDraw;
+            // ★★[v113.3 · JACK 1105 «스플릿으로 하지 말고 그냥 진입도로 생성 — 누르면 팝업 · 안에 도로 경로 그리기 · 폴리선 선택 · 도로 설정을 반영한 도로를 만들 수 있게»]
+            //   리본에는 단추 하나(스플릿은 만들어만 두고 안 얹음 — 명령 DHROADDRAW · DHROAD는 그대로 산다)
+            var btnRoadNew = MakeButton("진입도로\n생성", "DHROADNEW ", "진입도로 설정을 정하고 [도로 경로 그리기] 또는 [폴리선 선택]으로 만듭니다", "노리선");
+            btnRoadNew.ToolTip = MakeTip("진입도로 생성 (DHROADNEW)",
+                "창에서 곡선 반경 · 횡단 · 사면 · 종단 값을 정한 뒤\n" +
+                "**도로 경로 그리기**(점을 찍어 노선) 또는 **폴리선 선택**(그려 둔 폴리선 · Civil 노선)으로 만듭니다.\n" +
+                "· 값은 이 도면에서 마지막에 만든 도로의 값으로 채워집니다", null);
             // ★★[계획 8단계 · JACK 지시 3 "UI에서 사면수정버튼은 없애고"]
             //   사면 수정은 <b>도킹창 안</b>으로 들어갔다 — 정지는 [정지 창], 터파기는 [터파기 창].
             //   ★명령(DHWALL/DHSLOPE)은 <b>그대로 산다</b> — 손에 익은 사람이 있고,
@@ -890,7 +897,7 @@ public sealed class RibbonApp : IExtensionApplication
             // ★★[v111.6 · JACK 1102] [진입도로] = 노선 고르기 · 창 · 종단도 · 횡단도
             tab.Panels.Add(new RibbonPanel { Source = pRoad });
             pRoad.Items.Add(Spacer());
-            pRoad.Items.Add(splitRoad);
+            pRoad.Items.Add(btnRoadNew);
             pRoad.Items.Add(Spacer());
             pRoad.Items.Add(btnRoadPanel);
             pRoad.Items.Add(Spacer());

@@ -95,7 +95,7 @@ internal static class WallFaceMarks
         foreach (var w in walls)
         {
             // ★[v113.0 · JACK 1104 «옹벽 폴리선»] 경계 폴리선 옹벽의 Poly는 바꿀 자리(R_out 포함)라 측점 가리기 · 걷기에 쓰면 원지반 자리까지 가린다 — 빼고 로그에 적는다
-            if (w.Kind == 1) { boundSkip++; continue; }
+            if (w.Kind != 0) { boundSkip++; continue; }   // ★[v114.0] 선 옹벽(종류 2)도 — Poly(바꿀 자리 ∪ R_out)로 가리면 원지반 자리까지 가린다
             if (w.Poly == null || w.Poly.Count < 3) continue;
             var ring = w.Poly.Select(q => new Coordinate(q.X, q.Y)).ToList(); ring.Add(ring[0].Copy());
             Geometry pg = gf.CreatePolygon(ring.ToArray());

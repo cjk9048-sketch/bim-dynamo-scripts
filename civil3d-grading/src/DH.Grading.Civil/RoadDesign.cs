@@ -121,6 +121,28 @@ internal sealed class RoadDesign
     /// <summary>★[v110.2 · JACK 1029 «곡선 반경 = 도킹창 값 하나»] 다음 노선의 곡선 반경 — 도킹창 칸이 바꾼다(열린 도로가 있으면 그 도로에도 · 세션 동안 기억).</summary>
     internal static double LastCurveR = 30;
 
+    /// <summary>★★[v113.3 · JACK 1105 «[진입도로 생성] 팝업 — 도로 설정을 반영한 도로를 만들 수 있게»] 도로 모양 값(곡선 반경 · 횡단 · 사면 · 종단 한도)만 옮겨 받음 — 기록(종단 · 면 · 옹벽 · 도면)은 안 옮김.</summary>
+    internal void CopyShapeFrom(RoadDesign t)
+    {
+        HalfL = t.HalfL; HalfR = t.HalfR; CrossSlope = t.CrossSlope; ShoulderL = t.ShoulderL; ShoulderR = t.ShoulderR; ShoulderSlope = t.ShoulderSlope;
+        CutSlope = t.CutSlope; CutBenchH = t.CutBenchH; CutBenchW = t.CutBenchW; FillSlope = t.FillSlope; FillBenchH = t.FillBenchH; FillBenchW = t.FillBenchW;
+        MaxGrade = t.MaxGrade; MinPviLen = t.MinPviLen; CurveR = t.CurveR;
+    }
+
+    /// <summary>★[v113.3 · JACK 1105 «도면에 마지막 값 저장»] 새 도로 창의 첫 값 = 이 도면에서 마지막으로 만든 진입도로(핸들이 가장 큰 설계 기록)의 모양 값 · 없으면 기본값(곡선 반경은 이번 세션 값).</summary>
+    internal static RoadDesign LastTemplate(Transaction tr, Database db)
+    {
+        var t = new RoadDesign { CurveR = LastCurveR };
+        try
+        {
+            ObjectId best = ObjectId.Null;
+            foreach (var id in RoadRanges.Roads(tr, db)) if (best.IsNull || id.Handle.Value > best.Handle.Value) best = id;
+            if (!best.IsNull && Read(tr, best) is RoadDesign d) t.CopyShapeFrom(d);
+        }
+        catch { }
+        return t;
+    }
+
     const string Key = "DH_ROAD";
     /// <summary>★[v111.7.2] 옛 기본 최대 경사(12 %) — 이 값 그대로인 옛 기록만 15 %로 옮김.</summary>
     internal const double OldMaxGrade = 0.12;

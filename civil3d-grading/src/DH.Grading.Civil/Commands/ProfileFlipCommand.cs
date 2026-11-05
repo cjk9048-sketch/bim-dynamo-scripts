@@ -22,7 +22,7 @@ public sealed class ProfileFlipCommand
         var doc = AcadApp.DocumentManager.MdiActiveDocument; if (doc == null) return;
         var ed = doc.Editor;
         var s = RoadSession.Of(doc);
-        if (s == null) { ed.WriteMessage("\n[진입도로] 열린 진입도로가 없습니다 — [진입도로]로 노선을 고르세요."); return; }
+        if (s == null) { ed.WriteMessage("\n[진입도로] 열린 진입도로가 없습니다 — [진입도로 생성]으로 도로를 만드세요."); return; }
         try { s.RecomputeIfDirty(); } catch { }
         string r;
         using (BusyPopup.Scope("시점 ↔ 종점을 바꾸는 중입니다.")) r = RoadFlip.Run(s);

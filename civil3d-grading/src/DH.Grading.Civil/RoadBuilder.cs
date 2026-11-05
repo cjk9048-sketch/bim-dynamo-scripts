@@ -254,6 +254,17 @@ internal static class RoadBuilder
             tr.Commit();
         }
         if (s.Count < 2) throw new InvalidOperationException("바탕면에서 종단을 읽지 못했습니다(노선이 면 밖?)");
+        // ★[v113.3 · JACK 1105] 바탕면 높이가 없는 노선 끝 — 종단이 거기서 멈춘다(그 끝은 도로가 안 생김) · 알림만(끝 맞추기 [업데이트]가 종단 끝을 노선 끝으로 잇는다)
+        try
+        {
+            using var trC = db.TransactionManager.StartTransaction();
+            var alC = (CivilDb.Alignment)trC.GetObject(aid, OpenMode.ForRead);
+            double ha = s[0] - alC.StartingStation, hb = alC.EndingStation - s[^1];
+            if (ha > RoadEndFix.CoverTol) log.AppendLine($"  [도로 끝] ⚠시점 쪽 {ha:F1} m는 바탕면 높이가 없어 종단이 못 감 — [업데이트]가 노선 시점까지 잇습니다");
+            if (hb > RoadEndFix.CoverTol) log.AppendLine($"  [도로 끝] ⚠종점 쪽 {hb:F1} m는 바탕면 높이가 없어 종단이 못 감 — [업데이트]가 노선 종점까지 잇습니다");
+            trC.Commit();
+        }
+        catch { }
         // ★★[도로 마무리 ① · 계획 5.4 · 5.5 · 5.6] 끝 높이 고정 — 바닥 끝 = 바탕(정지면) 높이(= g 끝 그대로) · 가지 끝 = 본 도로 포장 높이 · 빈 구간 두 자리도 바닥 높이
         double zS = g[0], zE = g[^1]; RoadEnds.Result? ends = null;
         if (d.EndsOn)

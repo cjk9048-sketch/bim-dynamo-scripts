@@ -678,6 +678,21 @@ internal sealed class RoadSession
     internal static List<RoadGrade.TierLine> ShiftLines(List<RoadGrade.TierLine> ls, double ds)
         => ls.Select(l => new RoadGrade.TierLine { Cut = l.Cut, Side = l.Side, K = l.K, Role = l.Role, Prof = l.Prof, Cross = l.Cross, Pts = l.Pts.Select(p => (p.X, p.Y, p.Z, p.S + ds)).ToList() }).ToList();
 
+    /// <summary>★[v113.3] 계획 종단이 노선 시점 · 종점을 <see cref="RoadEndFix.CoverTol"/> 넘게 못 덮으면 «종단 끝 N m»(아니면 빈 글).</summary>
+    string ProfileShort(Transaction tr, CivilDb.Alignment al)
+    {
+        try
+        {
+            var pr = (CivilDb.Profile)tr.GetObject(PlanId, OpenMode.ForRead);
+            double a = pr.StartingStation - al.StartingStation, b = al.EndingStation - pr.EndingStation;
+            var w = new List<string>();
+            if (a > RoadEndFix.CoverTol) w.Add($"시점 {a:F1} m");
+            if (b > RoadEndFix.CoverTol) w.Add($"종점 {b:F1} m");
+            return w.Count > 0 ? "종단이 노선 끝까지 못 감(" + string.Join(" · ", w) + ")" : "";
+        }
+        catch { return ""; }
+    }
+
     /// <summary>★★[도로 마무리 ① · 계획 5.3] 끝 판정 · 도로 구간 · 제안 글 · 끝 맞춤 필요(읽기만). 바닥 캐시는 바탕 바뀜 때만 다시.</summary>
     void ComputeEnds(Transaction tr, Database db)
     {
@@ -716,6 +731,8 @@ internal sealed class RoadSession
             }
             catch { }
         }
+        // ★[v113.3 · JACK 1105 «폴리선 선택 → 부지와 끊어짐»] 계획 종단이 노선 끝까지 못 감(노선이 만든 뒤 길어짐 · 바탕면 높이 없는 끝) — 끝 맞추기가 종단 끝을 노선 끝으로 잇는다
+        if (ProfileShort(tr, al) is { Length: > 0 } sh) why.Add(sh);
         EndsStale = why.Count > 0 ? prop + (prop.Length > 0 ? " · " : "") + string.Join("+", why) : "";
     }
 
@@ -759,6 +776,14 @@ internal sealed class RoadSession
                 if (_floors == null) _floors = PadFloors.Load(db, tr0, out _floorNote);
                 res = d0 == null ? null : RoadRanges.Solve(tr0, db, AlignId, _floors, (x, y) => _base != null && _base.TryGetElevation(x, y, out double z) ? z : null, true,
                                                            new RoadEnds.Options { CurveR = d0.CurveR > 0 ? d0.CurveR : 30 });
+                // ★[v113.3] 바닥 · 다른 도로가 없어도 종단이 노선 끝까지 못 가면 두 끝 «자유»로 — 끝 맞추기가 종단 끝만 노선 끝으로 잇는다
+                if (res == null && d0 != null && ProfileShort(tr0, (CivilDb.Alignment)tr0.GetObject(AlignId, OpenMode.ForRead)).Length > 0)
+                {
+                    var al0 = (CivilDb.Alignment)tr0.GetObject(AlignId, OpenMode.ForRead);
+                    RoadEnds.End Free(int w, double s) => new(w, RoadEnds.Kind.Free, s, 0, 0, double.NaN, 0, -1, null, "");
+                    res = new RoadEnds.Result { Handle = AlignId.Handle.Value, Start = Free(0, al0.StartingStation), Finish = Free(1, al0.EndingStation) };
+                    res.Ranges.Add((al0.StartingStation, al0.EndingStation));
+                }
                 tr0.Commit();
             }
             if (d0 == null) return "⚠설계 기록이 없습니다";
@@ -772,7 +797,7 @@ internal sealed class RoadSession
                     try
                     {
                         var d = RoadDesign.Read(tr, AlignId)!;
-                        var rep = RoadEndFix.Fix(tr, AlignId, PlanId, d, res, edits);
+                        var rep = RoadEndFix.Fix(tr, AlignId, PlanId, d, res, edits, (x, y) => _base != null && _base.TryGetElevation(x, y, out double z) && double.IsFinite(z) ? z : null);
                         d.EndsOn = true;
                         d.Write(tr, AlignId);
                         tr.Commit();
