@@ -8,7 +8,7 @@ namespace DH.Grading.Civil;
 /// 표고를 조회한다. ray-march 루프마다 Surface.FindElevationAtXY를 호출하는 비용을 제거(JACK 성능 최적화).
 /// 격자 버킷 인덱스로 후보 삼각형만 검사 → O(1)에 가깝게 조회.
 /// </summary>
-public sealed class CachedGroundSurface : IGroundSurface, IGroundBreaks
+public sealed class CachedGroundSurface : IGroundSurface, IGroundBreaks, IGroundTris
 {
     // 삼각형 정점 XY/Z (정점 3개 평탄 배열)
     private readonly double[] _ax, _ay, _az, _bx, _by, _bz, _cx, _cy, _cz;

@@ -569,11 +569,16 @@ internal sealed class RoadPanel : UserControl
             }
             // ★[도로 마무리 ① · 계획 5.6] 빈 구간이면 토막 합(하나면 그대로)
             var rs = s.Pieces.Count > 1 && ReferenceEquals(s.Pieces[0].R, r) ? s.Pieces.Where(p => p.R != null && p.R.Error.Length == 0).Select(p => p.R!).ToList() : new List<RoadGrade.Result> { r };
-            double cutV = rs.Sum(q => q.CutVol), fillV = rs.Sum(q => q.FillVol);
-            L($"절토  {cutV:N0} ㎥");
-            L($"성토  {fillV:N0} ㎥");
-            L($"순토량  {Math.Abs(fillV - cutV):N0} ㎥ {(fillV >= cutV ? "반입" : "반출")}");
-            L($"최대 절토고  {rs.Max(q => q.MaxCut):F1} m · 성토고  {rs.Max(q => q.MaxFill):F1} m");
+            double cutV = rs.Sum(q => q.CutVol), fillV = rs.Sum(q => q.FillVol), mxC = rs.Max(q => q.MaxCut), mxF = rs.Max(q => q.MaxFill);
+            // ★[v114.3 · JACK 1105 진입도로 옹벽 추가 · 계획 2판 4절 M4] 끌기 미리보기 결과에는 벽이 없다 — 지문이 [업데이트] 때와 같으면 그때 GridSet 뒤 부피(벽 반영) · 다르면 «(벽 반영 전)» 꼬리표(벽 기록이 있을 때만)
+            string wTag = "";
+            if (s.Walls != null && s.Walls.Any && rs.Count == 1 && s.WallsSig.Length > 0 && s.WallsSig == s.Design.SurfaceSig && s.SurfaceStale.Length == 0 && !s.SurfaceMissing)
+                (cutV, fillV, mxC, mxF) = s.WallVol;
+            else if ((s.Design.BoundWalls?.Count ?? 0) > 0) wTag = " (벽 반영 전)";
+            L($"절토  {cutV:N0} ㎥{wTag}");
+            L($"성토  {fillV:N0} ㎥{wTag}");
+            L($"순토량  {Math.Abs(fillV - cutV):N0} ㎥ {(fillV >= cutV ? "반입" : "반출")}{wTag}");
+            L($"최대 절토고  {mxC:F1} m · 성토고  {mxF:F1} m");
             if (double.IsFinite(s.GradeNow)) L($"최대 종단경사  {s.GradeNow * 100:F1} %", over);
             if (s.GradeWarn.Length > 0) L(s.GradeWarn, true);
             L($"옹벽  {wl.Count}구간 {wallLen:F0} m · 제안  {rs.Sum(q => q.Suggest.Count)}구간");

@@ -783,6 +783,19 @@ public class RoadCommand
                 if (selId != hitId) { Paint(selId, false); selId = hitId; Paint(selId, true); }
                 var line = cands[li];
                 if (pieceSnap != null) { lastSnap = pieceSnap[candP[li]].R; s0Snap = pieceSnap[candP[li]].S0; }
+                // ★★[v113.0 → ★v114.3 · JACK 1105 진입도로 옹벽 추가] 사면 변환 — [옹벽 추가]로 지은 옹벽선(TierLine.WallNo)이면 그 기록을 통째로 지운다(구간지정 안 받음 · 측점 구간 셈보다 먼저)
+                int boundNo = wallMode ? -1 : line.WallNo > 0 ? line.WallNo : -1;
+                if (boundNo >= 0)
+                {
+                    var db2 = s.Fresh();
+                    int rm = db2.BoundWalls?.RemoveAll(b => b.No == boundNo) ?? 0;
+                    if (rm == 0) { ed.WriteMessage($"\n → 추가한 옹벽 {boundNo}의 기록을 못 찾았습니다."); Paint(selId, false); selId = ObjectId.Null; continue; }
+                    if (db2.BoundWalls != null && db2.BoundWalls.Count == 0) db2.BoundWalls = null;
+                    s.SaveDesign(); changed = true; s.Recompute();
+                    ed.WriteMessage($"\n[{label}] 추가한 옹벽 {boundNo}를 지우고 사면으로 되돌렸습니다.");
+                    try { DiagLog.Append($"\n■ [{label}] 추가한 옹벽(선 옹벽) {boundNo} 통째로 지움"); } catch { }
+                    return (changed, s);
+                }
                 var (w0, w1) = RoadGrade.RangeOnLine(line, null, null);
                 // ★[v111.3 · 계획 검토 M3] 이웃 사면선이 끝면 띠로 옹벽 구간 안까지 이어 들어간 몫은 뺌(그 선을 낸 단면이 주인인 자리만 — 안 빼면 변환할 때마다 옆 옹벽 구간이 띠만큼 먹힘)
                 (w0, w1) = RoadGrade.OwnerRange(lastSnap, line, w0, w1);
@@ -791,19 +804,6 @@ public class RoadCommand
                 // ★[v111.3 · 설치 전 검토 L3] 고른 선이 모두 옹벽 구간 끝면 띠 안(그 선의 주인 구간이 없음)이면 «NaN m» 대신 까닭
                 if (!double.IsFinite(span)) { ed.WriteMessage("\n → 이 선은 옹벽 구간 끝면 띠 안이라 고를 수 없습니다 — 띠 밖(사면 구간)의 선을 클릭하세요."); Paint(selId, false); selId = ObjectId.Null; continue; }
                 if (!double.IsFinite(span) || span < 0.5) { ed.WriteMessage($"\n → 이 선은 {span:0.##}m로 너무 짧습니다 — 다른 선을 클릭하세요."); Paint(selId, false); selId = ObjectId.Null; continue; }
-                // ★★[v113.0 · JACK 1104 «옹벽 폴리선» · 계획 5-4] 사면 변환 — 폴리선 옹벽의 옹벽선이면 그 기록을 통째로 지운다(구간지정 안 받음)
-                int boundNo = wallMode ? -1 : RoadGrade.BoundOfLine(lastSnap, line);
-                if (boundNo >= 0)
-                {
-                    var db2 = s.Fresh();
-                    int rm = db2.BoundWalls?.RemoveAll(b => b.No == boundNo) ?? 0;
-                    if (rm == 0) { ed.WriteMessage($"\n → 폴리선 옹벽 {boundNo}의 기록을 못 찾았습니다."); Paint(selId, false); selId = ObjectId.Null; continue; }
-                    if (db2.BoundWalls != null && db2.BoundWalls.Count == 0) db2.BoundWalls = null;
-                    s.SaveDesign(); changed = true; s.Recompute();
-                    ed.WriteMessage($"\n[{label}] 폴리선 옹벽 {boundNo}를 지우고 사면으로 되돌렸습니다.");
-                    try { DiagLog.Append($"\n■ [{label}] 폴리선 옹벽 {boundNo} 통째로 지움"); } catch { }
-                    return (changed, s);
-                }
                 // ② 전체구간 / 구간지정 — 부지와 같은 글 · ★[v113.0 · JACK 1104] 옹벽 변환은 묻지 않고 그 선 전체(일부는 폴리선 L)
                 string kw = "A";
                 if (!wallMode)

@@ -46,8 +46,8 @@ public static class WallByLine
         /// <summary>★[v114.3 · JACK 1105 소단 높이 · 계획 2판 2절 «방식 칸»] 높이 방식 — 기본 <see cref="LevelKind.Line"/>(선기준 · 옛 규칙 · 도로 대기 · 옛 하네스).
         /// 부지 흐름은 <see cref="LevelKind.OldBench"/>를 넘기고 그 쪽 단 표(<see cref="CutBench"/> · <see cref="FillBench"/>)가 없으면 거절한다.</summary>
         public LevelKind LevelMode = LevelKind.Line;
-        /// <summary>★[v114.3] 옛 소단 방식의 단 표(절토 · 성토 — GradingGeometry 링에서).</summary>
-        public OldBench? CutBench, FillBench;
+        /// <summary>★[v114.3] 옛 소단 방식의 단 표(절토 · 성토 — 부지 = GradingGeometry 링 · ★[v114.3 · JACK 1105 진입도로 옹벽 추가] 도로 = 그 시도 면의 광선 묶음).</summary>
+        public BenchLevels? CutBench, FillBench;
         /// <summary>★[v114.3 · 재검토 M2] 옛 소단 방식에서 줄 · 끝 선에 높이를 주기 전에 채우는 점 간격(사면 코드와 같은 clamp(VertexSpacing, 0.3, 1.0)).</summary>
         public double RowDens = 1.0;
     }
@@ -126,6 +126,8 @@ public static class WallByLine
         public int JumpN, JumpBad, FaceHN, FaceHBad, RuleN, RuleMiss, JoinN, JoinMiss, JoinNone;
         public double JumpMax, FaceHMin = double.MaxValue, FaceHMax, RuleMax, JoinMax, TiltAlong, TiltOut;
         public (double X, double Y) JumpAt, FaceHAt, RuleAt, JoinAt;
+        /// <summary>★[v114.3 · JACK 1105 진입도로 옹벽 추가] 단 표가 «이어지지 않음»(NaN)이라 한 이웃 점 쌍 수 · 첫 자리 · 까닭(도로: 다른 다리 · 광선 안 건넘).</summary>
+        public int JumpLeg; public (double X, double Y) JumpLegAt; public string JumpLegWhy = "";
         public List<FaceSeg> Faces = new();
         public bool HasCut => ZoneC.Count > 0; public bool HasFill => ZoneF.Count > 0;
         public List<string> Warn = new();
@@ -136,11 +138,42 @@ public static class WallByLine
 
     static readonly CultureInfo Ci = CultureInfo.InvariantCulture;
 
+    /// <summary>★★[v114.3 · JACK 1105 진입도로 옹벽 추가 · 계획 `2026-11-05_진입도로_옹벽추가_보완.md` 2판 2절] 옛 소단 높이 단 표의 바탕 —
+    /// <see cref="Build"/>가 옛 소단 방식에서 읽는 것은 이것뿐이다. 부지 = <see cref="OldBench"/>(사면 링) · 도로 = <see cref="RoadGrade.RoadBench"/>(그 시도 면의 광선 묶음).</summary>
+    public abstract class BenchLevels
+    {
+        /// <summary>절토(위로)인가.</summary>
+        public abstract bool Up { get; }
+        /// <summary>줄 안 이웃 점 높이 차 한도의 기울기(부지 = 링 Z 완화 최대 경사 · 도로 = 그 자리 종단 경사) · 줄 사이 면 높이 여유(H_k + MaxGrad·f_k + 1 cm).</summary>
+        public abstract double MaxGrad { get; }
+        /// <summary>옛 소단이 실제로 있는 단 수.</summary>
+        public abstract int K { get; }
+        public abstract double TerraceW { get; }
+        public abstract double BenchW { get; }
+        public abstract int TierCount { get; }
+        /// <summary>단 k(1부터)의 누적 rise · 단 간격 · 대소단.</summary>
+        public abstract (double Rise, double H, bool Terrace) Tier(int k);
+        /// <summary>단 k의 옛 소단 높이(실제 z) — 못 읽으면 NaN.</summary>
+        public abstract double Level(int k, double x, double y);
+        /// <summary>단 k 옛 소단 띠 안인가(규칙 검사 범위).</summary>
+        public abstract bool InBand(int k, double x, double y);
+        /// <summary>줄 안 이웃 두 점(실제 좌표 · 단 k 높이 za · zb)의 높이 차가 한도를 넘은 양(m · ≤ 0.01이면 이어짐).
+        /// 부지 = |Δz| − MaxGrad·거리(옛 판 그대로). NaN = 이어지지 않음(도로: 다른 다리 · 광선을 안 건넘 — 까닭은 부르는 쪽이 <see cref="JumpWhy"/>로).</summary>
+        public virtual double JumpOver(int k, double x0, double y0, double za, double x1, double y1, double zb, double dist)
+            => Math.Abs(zb - za) - MaxGrad * dist;
+        /// <summary>마지막 NaN 까닭(«다른 다리» · «광선 안 건넘» 등) — 기본 빈 값.</summary>
+        public virtual string JumpWhy => "";
+        /// <summary>로그 이름.</summary>
+        public virtual string Name => "링";
+        /// <summary>★[v114.3 · S218 (b)] 소단 가운데에도 줄을 넣는가(높이가 비틀린 단 표 — 도로). 부지 링은 거짓(옛 판 비트 같음).</summary>
+        public virtual bool MidBench => false;
+    }
+
     /// <summary>★★[v114.3 · JACK 1105 «옛 사면 소단 높이에 맞춤» · 계획 `2026-11-05_옹벽소단_사면소단높이.md` 2판 1절] 옛 사면 소단 높이 —
     /// 사면 만드는 코드(<see cref="GradingGeometry.Build"/>)가 실제로 만든 링(<see cref="VirtualSlope.RingRise"/>)에서 읽는다(그 셈을 따로 다시 하면 RelaxRingZ · 이등분선 뜀이 말없이 어긋난다).
     /// <para>단 k(1부터) = rise가 rise_k인 링들 — 안쪽(사면 끝) · 바깥(소단 끝 · 대소단이면 그 끝). 점마다 링 위 2D 가장 가까운 점의 Z(변 두 끝 1차 · TIN에 없는 2.5 m 넘는 이음 변은 건너뜀 — 재검토 LOW-E) ·
     /// 두 링 사이(소단 띠)면 거리 비로(폭 0이면 안쪽 링 — LOW-F) · 밖이면 가까운 링. 링이 없는 단(예산 위)은 마지막 링 Z ± (rise_k − rise_K)(LOW-G).</para></summary>
-    public sealed class OldBench
+    public sealed class OldBench : BenchLevels
     {
         sealed class RingG
         {
@@ -151,23 +184,24 @@ public static class WallByLine
         }
         readonly List<RingG> _rings = new();
         readonly List<(double Rise, double H, bool Terrace, int In, int Out)> _tiers = new();
+        bool _up; double _maxGrad, _terraceW, _benchW; int _k;
         /// <summary>절토(위로)인가.</summary>
-        public bool Up { get; private set; }
+        public override bool Up => _up;
         /// <summary>링 Z 완화 최대 경사(평평한 계획선 = 0).</summary>
-        public double MaxGrad { get; private set; }
+        public override double MaxGrad => _maxGrad;
         /// <summary>링이 있는 단 수(그 위는 예산 밖 — 마지막 링 ± rise 차).</summary>
-        public int K { get; private set; }
+        public override int K => _k;
         /// <summary>대소단 폭(대소단 단의 소단 폭).</summary>
-        public double TerraceW { get; private set; }
+        public override double TerraceW => _terraceW;
         /// <summary>그 쪽 사면 소단 폭(전역 · 옛 소단 이음 잴 때).</summary>
-        public double BenchW { get; private set; }
+        public override double BenchW => _benchW;
         /// <summary>단 k(1부터)의 누적 rise · 높이 · 대소단.</summary>
-        public (double Rise, double H, bool Terrace) Tier(int k)
+        public override (double Rise, double H, bool Terrace) Tier(int k)
         {
             var t = _tiers[Math.Clamp(k, 1, _tiers.Count) - 1];
             return (t.Rise, t.H, t.Terrace);
         }
-        public int TierCount => _tiers.Count;
+        public override int TierCount => _tiers.Count;
         /// <summary>단 k 링 두 줄(안쪽 · 바깥 — 없으면 null) — 하네스 · 로그.</summary>
         public (IReadOnlyList<Point3>? In, IReadOnlyList<Point3>? Out) RingsOf(int k)
         {
@@ -206,7 +240,7 @@ public static class WallByLine
         public static OldBench? Of(VirtualSlope vs, GradingParams p, bool up, out string why)
         {
             why = "";
-            var ob = new OldBench { Up = up, MaxGrad = Math.Max(0, vs.MaxGrad), TerraceW = Math.Max(0, p.TerraceWidth), BenchW = Math.Max(0, p.BenchWidthOf(up)) };
+            var ob = new OldBench { _up = up, _maxGrad = Math.Max(0, vs.MaxGrad), _terraceW = Math.Max(0, p.TerraceWidth), _benchW = Math.Max(0, p.BenchWidthOf(up)) };
             if (vs.RingRise.Count != vs.Rings.Count) { why = "링 rise 목록이 링과 나란하지 않다"; return null; }
             var groups = new List<(double Rise, int In, int Out)>();
             for (int i = 0; i < vs.Rings.Count; i++)
@@ -224,7 +258,7 @@ public static class WallByLine
             for (int k = 0; k < tl.Count; k++)
             {
                 int iIn = -1, iOut = -1;
-                if (gk < groups.Count && Math.Abs(groups[gk].Rise - tl[k].Rise) <= 1e-6) { iIn = groups[gk].In; iOut = groups[gk].Out; gk++; ob.K = k + 1; }
+                if (gk < groups.Count && Math.Abs(groups[gk].Rise - tl[k].Rise) <= 1e-6) { iIn = groups[gk].In; iOut = groups[gk].Out; gk++; ob._k = k + 1; }
                 else if (gk < groups.Count) { why = string.Format(Ci, "{0} 링 rise {1:F3}가 단 목록({2}단 {3:F3})과 다르다 — 링을 다시 못 만든다", up ? "절토" : "성토", groups[gk].Rise, k + 1, tl[k].Rise); return null; }
                 ob._tiers.Add((tl[k].Rise, tl[k].H, tl[k].Terrace, iIn, iOut));
             }
@@ -275,7 +309,7 @@ public static class WallByLine
         }
 
         /// <summary>단 k(1부터)의 옛 소단 높이(실제 z) — 못 읽으면 NaN.</summary>
-        public double Level(int k, double x, double y)
+        public override double Level(int k, double x, double y)
         {
             if (k < 1 || k > _tiers.Count || K < 1) return double.NaN;
             if (k > K) return Level(K, x, y) + (Up ? 1 : -1) * (_tiers[k - 1].Rise - _tiers[K - 1].Rise);
@@ -291,7 +325,7 @@ public static class WallByLine
         }
 
         /// <summary>단 k 소단 띠 안(안쪽 링 밖 · 바깥 링 안 — 대소단 폭 포함)인가.</summary>
-        public bool InBand(int k, double x, double y)
+        public override bool InBand(int k, double x, double y)
         {
             if (k < 1 || k > K) return false;
             var t = _tiers[k - 1];
@@ -750,7 +784,7 @@ public static class WallByLine
             double sg = part.Up ? 1.0 : -1.0;
             // ★[v114.3 · JACK 1105 «옛 사면 소단 높이에 맞춤» · 계획 2판 2절] 옛 소단 방식이면 단 k의 높이 · 단 간격 H_k · 소단 폭 T_k(대소단 = 그 단 폭) · 면 폭 f_k를 옛 사면 링에서 —
             //   선기준(옛 규칙)은 아래 함수들이 옛 값(zr + k·H · H · T · f)을 그대로 돌려 비트 같다
-            OldBench? ob = inp.LevelMode == LevelKind.OldBench ? (part.Up ? inp.CutBench : inp.FillBench) : null;
+            BenchLevels? ob = inp.LevelMode == LevelKind.OldBench ? (part.Up ? inp.CutBench : inp.FillBench) : null;
             if (inp.LevelMode == LevelKind.OldBench && ob == null)
                 return No("옛 소단", $"{(part.Up ? "절토" : "성토")} 쪽 옛 사면 링이 없어 옛 소단 높이를 못 읽습니다 — 정지면을 다시 만든 뒤 하세요", Wd(pl.At((part.S0 + part.S1) / 2)));
             double T = part.T;
@@ -1119,10 +1153,13 @@ public static class WallByLine
                     bool more = Buried(RowAt(k, dS), kl) || (Tt > 1e-6 && (Buried(RowAt(k, dF + Tt / 2), kl) || Buried(RowAt(k, dF + Tt), kl)));
                     if (!more) break;
                     if (t == 200) reachHit = true;
+                    // ★[v114.3 · JACK 1105 진입도로 옹벽 추가 · S218 (b) 실측] 소단 가운데 줄 — 도로 옛 소단은 종단 · 굽은 곳을 따라 비틀린 면이라 소단 폭(1 m) 세모 한 장이 가운데에서 1 cm 넘게 벗어났다(소단 관문 거절) · 부지 링(평면에 가까움)은 안 넣음(비트 같음)
+                    if (Tt >= 0.2 && ob != null && ob.MidBench) rows.Add((dF + Tt / 2, kl, Dn(RowAt(k, dF + Tt / 2), kl)));
                     if (Tt > 1e-6) rows.Add((dF + Tt, kl, Dn(RowAt(k, dF + Tt), kl)));
                 }
                 st.Tiers = Math.Max(1, n);
                 dEnd[k] = lastF + Math.Max(Tk(lastK), 0.5);
+                if (ob != null && ob.MidBench && dEnd[k] - lastF >= 0.2) rows.Add(((lastF + dEnd[k]) / 2, lastK, Dn(RowAt(k, (lastF + dEnd[k]) / 2), lastK)));
                 rows.Add((dEnd[k], lastK, Dn(RowAt(k, dEnd[k]), lastK)));
                 tierRows.Add(rows);
                 part.Dmax = Math.Max(part.Dmax, dEnd[k]);
@@ -1160,7 +1197,14 @@ public static class WallByLine
                             {
                                 double dsl = pc[i].Distance(pc[i + 1]), za = ZL(kl, pc[i].X, pc[i].Y), zb = ZL(kl, pc[i + 1].X, pc[i + 1].Y), dz = Math.Abs(zb - za);
                                 R.JumpN++;
-                                double over = dz - mg * dsl;
+                                // ★[v114.3 · JACK 1105 진입도로 옹벽 추가] 한도는 단 표가 정한다(부지 = |Δz| − maxGrad·거리 옛 그대로 · 도로 = 다른 다리 · 광선 안 건넘이면 NaN)
+                                double over = ob.JumpOver(kl, pc[i].X + ox, pc[i].Y + oy, sg * za, pc[i + 1].X + ox, pc[i + 1].Y + oy, sg * zb, dsl);
+                                if (double.IsNaN(over))
+                                {
+                                    if (R.JumpLeg++ == 0) { R.JumpLegAt = Wd(pc[i]); R.JumpLegWhy = ob.JumpWhy; }
+                                    R.JumpBad++;
+                                    continue;
+                                }
                                 if (over > R.JumpMax) { R.JumpMax = over; R.JumpAt = Wd(pc[i]); }
                                 if (over > 0.01) R.JumpBad++;
                                 if (dsl >= 0.1) R.TiltAlong = Math.Max(R.TiltAlong, dz / dsl);
@@ -1209,6 +1253,9 @@ public static class WallByLine
                         });
                     }
                 }
+                if (R.JumpLeg > 0)
+                    return No("옛 소단", string.Format(Ci, "옛 소단 높이를 이어 읽지 못함 ({0:F1}, {1:F1}) — {2}(이웃 점 {3}쌍 중 {4}쌍) — 선을 옮기세요",
+                        R.JumpLegAt.X, R.JumpLegAt.Y, R.JumpLegWhy.Length > 0 ? R.JumpLegWhy : "이어지지 않는 자리", R.JumpN, R.JumpLeg), R.JumpLegAt);
                 if (R.JumpBad > 0)
                     return No("옛 소단", string.Format(Ci, "옛 소단 높이가 이 자리에서 끊김 ({0:F1}, {1:F1}) Δ {2:F2} m(한도 maxGrad·거리 + 0.01 · 이웃 점 {3}쌍 중 {4}쌍) — 선을 옮기세요(링 이등분선 · 접힘 곁)",
                         R.JumpAt.X, R.JumpAt.Y, R.JumpMax + 0.01, R.JumpN, R.JumpBad), R.JumpAt);

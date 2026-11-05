@@ -117,15 +117,17 @@ static class ProfileFlipCheck
             bool ok = a.Count == b.Count && a.Zip(b.AsEnumerable().Reverse()).All(q => q.First.GradePct == -q.Second.GradePct || (q.First.GradePct == 0 && q.Second.GradePct == 0));
             check("S210 PF⑥ 구배 칸 — 뒤집으면 구간 차례 반대 · 구배 부호 반대", ok, string.Join(",", a.Select(x => x.GradePct.ToString(Ci))) + " / " + string.Join(",", b.Select(x => x.GradePct.ToString(Ci))));
         }
-        // ⑦ 폴리선 옹벽 — 기록은 그대로(세계 XY) · 뒤집은 중심선에서 측점 = 거꾸로 · 쪽 반대
+        // ⑦ ★[v114.3 · JACK 1105 진입도로 옹벽 추가] 선 옹벽 — 기록은 그대로(세계 XY) · 쪽 · 측점은 지을 때 그 시도 면의 광선에서 잼 → 뒤집은 노선에서 쪽 반대 · 측점 [L − s]
         {
-            double[] sx = { OX, OX + 50, OX + 100 }, sy = { OY, OY, OY };
-            double Outer(int side, double s) => 3.5;
-            var line = new List<Point3> { new(OX + 20, OY + 10, 0), new(OX + 60, OY + 10, 0) };
-            var m = RoadBound.Build(sx, sy, Outer, line);
-            var mr = RoadBound.Build(sx.Reverse().ToArray(), sy, Outer, line);
-            bool ok = m.Ok && mr.Ok && mr.Side == -m.Side && Math.Abs(mr.S0 - (100 - m.S1)) < 1e-9 && Math.Abs(mr.S1 - (100 - m.S0)) < 1e-9;
-            check("S210 PF⑦ 폴리선 옹벽 = 기록 안 바꿈 — 뒤집은 노선에서 측점 [100−s1, 100−s0] · 쪽 반대(엔진이 그때 잼)", ok, $"{m.Side} {m.S0:F3}~{m.S1:F3} → {mr.Side} {mr.S0:F3}~{mr.S1:F3}");
+            var pf = RoadWallCheck.Make(RoadWallCheck.Straight(0.0, (x, y, zc) => zc - 4));
+            int n0 = pf.Inp.X.Length; var inpR = RoadWallCheck.Straight(0.0, (x, y, zc) => zc - 4);
+            inpR.X = inpR.X.Reverse().ToArray(); inpR.Y = inpR.Y.Reverse().ToArray(); inpR.Z = inpR.Z.Reverse().ToArray();
+            var pr = RoadWallCheck.Make(inpR);
+            double px = RoadWallCheck.OX + 40, py = RoadWallCheck.OY + 8;
+            var bL = RoadGrade.RoadBench.Of(pf.R.Sections!, pf.R, pf.Inp, -1, false); var bR = RoadGrade.RoadBench.Of(pr.R.Sections!, pr.R, pr.Inp, 1, false);
+            var a = bL.OwnBand(px, py); var b = bR.OwnBand(px, py);
+            bool ok = a.I >= 0 && b.I >= 0 && Math.Abs(a.S - 40) < 1e-6 && Math.Abs(b.S - (120 - 40)) < 1e-6 && Math.Abs(a.D - b.D) < 1e-9 && Math.Abs(bL.Level(1, px, py) - bR.Level(1, px, py)) < 1e-9;
+            check("S210 PF⑦ 선 옹벽 = 기록 안 바꿈 — 뒤집은 노선에서 같은 점이 반대 쪽 · 측점 L − s · 옛 소단 높이 같음(지을 때 잼)", ok, $"좌 s {a.S:F3} d {a.D:F3} → 우 s {b.S:F3} d {b.D:F3}");
         }
         // ⑧ 도로 엔진 — 뒤집은 입력(중심선 · 계획고 차례 반대 · 좌우 반폭 맞바꿈 · 옹벽 · 측구 기록 뒤집음)도 절토 · 성토 · 사면이 같다
         {

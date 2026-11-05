@@ -123,13 +123,15 @@ public static partial class WallDaylight
     /// 폴리곤(= 바꿀 자리 ∪ R_out) 안 = <b>RuleOf(zp, zwc, zwf, zg)</b>: 성토 벽 삼각형이 있는 자리 max(G, W_f) · 절토 벽 삼각형이 있는 자리 min(G, W_c) · 나머지 G(원지반으로 돌아감) · 밖 = 정지면.
     /// 벽 삼각형은 바꿀 자리 안에만 있다(Core <see cref="WallByLine.Built.WallTrisF"/> · Civil은 가상옹벽 면을 목록의 바꿀 자리 고리로 나눈다). 넓은 소단은 옛 사면으로 덮지 않는다(JACK 답 3).
     /// 미리 맞추기 · 높이 예산 · 옹벽이 안 드러남 관문 · 앞 옹벽 건드림 불변식은 손 폴리곤과 같다.</summary>
-    public static CompositeResult BuildCompositeLine(IReadOnlyList<Point3> poly, IReadOnlyList<Tri> wallTrisC, IReadOnlyList<Tri> wallTrisF, IReadOnlyList<Tri> groundTris, IReadOnlyList<Tri> planAll)
-        => BuildCompositeCore(poly, Array.Empty<Tri>(), groundTris, planAll, false, wallTrisC ?? Array.Empty<Tri>(), wallTrisF ?? Array.Empty<Tri>());
+    /// <param name="edgeFree">★[v114.3 · JACK 1105 진입도로 옹벽 추가 · 계획 2판 3절] 테두리 턱 관문에서 뺄 자리(세계 좌표) — 진입도로: R_out∖Zone 바깥 호(그 세모는 합성 뒤 도로 면에서 빼므로 바깥과 이어질 필요가 없다 · 그 자리 최종면 = 바탕). null = 모두 잼(부지 · 옛 판 그대로).</param>
+    public static CompositeResult BuildCompositeLine(IReadOnlyList<Point3> poly, IReadOnlyList<Tri> wallTrisC, IReadOnlyList<Tri> wallTrisF, IReadOnlyList<Tri> groundTris, IReadOnlyList<Tri> planAll,
+        Func<double, double, bool>? edgeFree = null)
+        => BuildCompositeCore(poly, Array.Empty<Tri>(), groundTris, planAll, false, wallTrisC ?? Array.Empty<Tri>(), wallTrisF ?? Array.Empty<Tri>(), edgeFree);
 
     /// <param name="down">사람에게 보이는 높이(EdgeAt·ZOneAt)만 되뒤집어 적는다 — 입력은 이미 뒤집혀 왔다.</param>
     /// <param name="wallC">★[v114.0] 선 옹벽 — 절토 벽 삼각형(null이면 손 폴리곤 길 · 종전과 비트 같다).</param>
     static CompositeResult BuildCompositeCore(IReadOnlyList<Point3> poly, IReadOnlyList<Tri> wallTris, IReadOnlyList<Tri> groundTris, IReadOnlyList<Tri> planAll,
-        bool down, IReadOnlyList<Tri>? wallC = null, IReadOnlyList<Tri>? wallF = null)
+        bool down, IReadOnlyList<Tri>? wallC = null, IReadOnlyList<Tri>? wallF = null, Func<double, double, bool>? edgeFree = null)
     {
         bool line = wallC != null || wallF != null;
         // 규칙 한 곳 — 손 폴리곤 max(P, min(W, G)) · ★[v114.0] 선 옹벽 RuleOf(zp, zwc, zwf, zg)
@@ -355,6 +357,7 @@ public static partial class WallDaylight
                 {
                     double t = (double)q / n, x = a.X + t * (b.X - a.X) - ox, y = a.Y + t * (b.Y - a.Y) - oy;
                     double zw = 0;
+                    if (edgeFree != null && edgeFree(x + ox, y + oy)) continue;   // ★[v114.3 · JACK 1105 진입도로 옹벽 추가] 뺄 바깥 호
                     if (!line && !W.TryZNear(x, y, 1e-5, out zw)) continue;
                     if (!G.TryZNear(x, y, 1e-5, out double zg) || !P.TryZNear(x, y, 1e-5, out double zp)) continue;
                     R.EdgeSamples++;
@@ -665,6 +668,8 @@ public static partial class WallDaylight
         /// <summary>★[v114.0 · JACK 1105] 선 옹벽(목록 종류 2) — 절토 · 성토 벽 삼각형(각자 그 바꿀 자리 안만). 둘 중 하나라도 null이 아니면 <see cref="BuildCompositeLine"/> 한 판(<see cref="WallTris"/> · <see cref="Down"/>은 안 쓴다).</summary>
         public IReadOnlyList<Tri>? WallTrisC, WallTrisF;
         public bool Line => WallTrisC != null || WallTrisF != null;
+        /// <summary>★[v114.3 · JACK 1105 진입도로 옹벽 추가] 선 옹벽 테두리 턱 관문에서 뺄 자리(<see cref="BuildCompositeLine"/> edgeFree) — 부지는 null.</summary>
+        public Func<double, double, bool>? EdgeFree;
     }
 
     /// <summary>한 옹벽의 합성 단계 — 결과 · 앞 옹벽 폴리곤 안을 건드린 삼각형 수(0이어야 한다) · 앞 단계가 다시 지은 삼각형을 건드린 수.</summary>
@@ -769,7 +774,7 @@ public static partial class WallDaylight
                 }
             }
             var sw = Stopwatch.StartNew();
-            var r = w.Line ? BuildCompositeLine(w.Poly, w.WallTrisC!, w.WallTrisF!, w.GroundTris, cur) : BuildComposite(w.Poly, w.WallTris, w.GroundTris, cur, w.Down);
+            var r = w.Line ? BuildCompositeLine(w.Poly, w.WallTrisC!, w.WallTrisF!, w.GroundTris, cur, w.EdgeFree) : BuildComposite(w.Poly, w.WallTris, w.GroundTris, cur, w.Down);
             var st = new ComposeStep { No = w.No, R = r, Ms = sw.ElapsedMilliseconds };
             res.Steps.Add(st);
             if (r.Zone == null) { res.FailIndex = k; res.Fail = $"옹벽 {w.No} — {r.Fail}"; return res; }

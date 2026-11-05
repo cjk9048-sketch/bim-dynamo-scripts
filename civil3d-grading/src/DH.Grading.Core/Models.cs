@@ -13,6 +13,12 @@ public interface IGroundSurface
     bool TryGetElevation(double x, double y, out double z);
 }
 
+/// <summary>★[v114.3 · JACK 1105 진입도로 옹벽 추가] 바탕 세모를 상자로 꺼낼 수 있는 바탕 — 진입도로 선 옹벽의 원지반 세모(F · 합성 G). 못 하면 선 옹벽은 쉰다.</summary>
+public interface IGroundTris
+{
+    List<WallDaylight.Tri> TrianglesIn(double minX, double minY, double maxX, double maxY);
+}
+
 /// <summary>
 /// [구간 구배 0804 — JACK] 계획경계 둘레의 한 구간에서 '이 단부터는 이 구배' 규칙 묶음.
 /// 옹벽·사면 복귀·구배 변경이 전부 이 하나로 표현된다:
