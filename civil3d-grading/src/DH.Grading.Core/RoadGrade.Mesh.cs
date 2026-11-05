@@ -65,6 +65,7 @@ public static partial class RoadGrade
             var set = BuildSections(ctx);
             var lines = SectionLines(ctx, set, out var dl, out var eL, out var eR);
             r.Sections = set;
+            PatchGridB1(r, set);   // ★[v114.3] 격자도 B1 면(선과 같은 높이)
             r.Daylight = dl.Select(l => l.Select(p => (p.X, p.Y)).ToList()).ToList();
             r.DaylightZ = dl;
             r.EdgeL = eL; r.EdgeR = eR;
@@ -82,6 +83,45 @@ public static partial class RoadGrade
     static string Why(Exception ex) => ex is AggregateException ae && ae.Flatten().InnerExceptions.Count > 0 ? ae.Flatten().InnerExceptions[0].Message : ex.Message;
 
     /// <summary>★[v111.2 · 전체 검토 L] 세분 한도(횡단 4만 · 마구리 광선 2천)에 걸렸으면 알림 — 꼴 바뀜이 덜 나뉜 자리가 남음.</summary>
+    /// <summary>하네스 · 진단 전용 — 빈 사면 늘임이 못 넘어도 늘임 없이 다시 안 함(늘인 면 그대로 칸 면으로).</summary>
+    internal static bool OrphanNoRetry;
+
+    /// <summary>★[v114.3] 세모 조각 수 — 변을 나누는 세모끼리 한 조각(평면 좌표 비트로 변 열쇠).</summary>
+    internal static int Pieces(List<WallDaylight.Tri> tris)
+    {
+        var parent = new int[tris.Count]; for (int i = 0; i < parent.Length; i++) parent[i] = i;
+        int F(int i) { while (parent[i] != i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; }
+        static ((double, double), (double, double)) E(Point3 p, Point3 q) { var a = (p.X, p.Y); var b = (q.X, q.Y); return a.CompareTo(b) < 0 ? (a, b) : (b, a); }
+        var owner = new Dictionary<((double, double), (double, double)), int>();
+        for (int i = 0; i < tris.Count; i++) { var t = tris[i]; foreach (var (p, q) in new[] { (t.A, t.B), (t.B, t.C), (t.C, t.A) }) { var k = E(p, q); if (owner.TryGetValue(k, out int j)) parent[F(i)] = F(j); else owner[k] = i; } }
+        var roots = new HashSet<int>(); for (int i = 0; i < tris.Count; i++) roots.Add(F(i));
+        return roots.Count;
+    }
+
+    /// <summary>★[v114.3 · 시간] 떨어진 조각(가장 큰 조각 말고) 중 새 길 광선(꼬리 · 빈 사면 늘임) 곁(1 m 칸 · 이웃 칸)에 닿는 조각 수 — 0이면 그 조각은 새 길과 무관(옛 길에도 있던 먼 섬).</summary>
+    internal static int NewPathPieces(List<WallDaylight.Tri> tris, SectionSet set)
+    {
+        if (set.NewRays.Count == 0 || tris.Count == 0) return 0;
+        // 새 길 광선 마디가 지나는 1 m 칸(마디를 0.25 m마다 짚음) — 그 칸 · 이웃 칸에 닿는 조각은 새 길 탓으로 봄(선 따라 TIN 틈 칸 0.5 m 두 칸 안 — 그 선이 틈 칸 모양을 바꿀 수 있는 거리)
+        var keys = new HashSet<(long, long)>();
+        foreach (var q in set.NewRays)
+            for (int i = 0; i + 1 < q.Pts.Count; i++)
+            {
+                var a0 = q.Pts[i]; var b0 = q.Pts[i + 1]; double L = Math.Sqrt(Sq(b0.X - a0.X) + Sq(b0.Y - a0.Y)); int m = Math.Max(1, (int)Math.Ceiling(L / 0.25));
+                for (int k = 0; k <= m; k++) { double t = (double)k / m; keys.Add(((long)Math.Floor(a0.X + (b0.X - a0.X) * t), (long)Math.Floor(a0.Y + (b0.Y - a0.Y) * t))); }
+            }
+        bool Hit(Point3 v) { long kx = (long)Math.Floor(v.X), ky = (long)Math.Floor(v.Y); for (long a = kx - 1; a <= kx + 1; a++) for (long b = ky - 1; b <= ky + 1; b++) if (keys.Contains((a, b))) return true; return false; }
+        var parent = new int[tris.Count]; for (int i = 0; i < parent.Length; i++) parent[i] = i;
+        int F(int i) { while (parent[i] != i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; }
+        static ((double, double), (double, double)) E(Point3 p, Point3 q) { var a = (p.X, p.Y); var b = (q.X, q.Y); return a.CompareTo(b) < 0 ? (a, b) : (b, a); }
+        var owner = new Dictionary<((double, double), (double, double)), int>();
+        for (int i = 0; i < tris.Count; i++) { var t = tris[i]; foreach (var (p, q) in new[] { (t.A, t.B), (t.B, t.C), (t.C, t.A) }) { var k = E(p, q); if (owner.TryGetValue(k, out int j)) parent[F(i)] = F(j); else owner[k] = i; } }
+        var groups = Enumerable.Range(0, tris.Count).GroupBy(F).OrderByDescending(g => g.Count()).ToList();
+        int n = 0;
+        foreach (var g in groups.Skip(1)) if (g.Any(i => Hit(tris[i].A) || Hit(tris[i].B) || Hit(tris[i].C))) n++;
+        return n;
+    }
+
     static string CapNote(SectionSet set) => set.Capped > 0 ? " · ⚠세분 한도에 걸림(아주 길거나 복잡한 도로 — 몇 군데 덜 나뉨)" : "";
 
     /// <summary>★★★[v111 · 계획 2.5] 선 기반 도로 면 — 횡단 띠 세모 · 검사 통과 못 하면(또는 예외) 옛 칸 세모(<see cref="SurfaceTris"/>)로 물러섬 + 알림.</summary>
@@ -95,21 +135,50 @@ public static partial class RoadGrade
             var set = BuildSections(ctx);
             lines = SectionLines(ctx, set, out var dl, out var eL, out var eR);
             r.Sections = set; r.DaylightZ = dl; r.Daylight = dl.Select(l => l.Select(p => (p.X, p.Y)).ToList()).ToList(); r.EdgeL = eL; r.EdgeR = eR;
+            PatchGridB1(r, set);   // ★[v114.3 · 계획 굽은안쪽부채 §3] 격자 · 부피도 선과 같은 B1 면
             var tris = MeshFromSections(set, inp.Base, out var rep);
-            if (rep.Ok && tris.Count > 0)
+            bool newPath = set.SlumpTails > 0 || set.OrphanGrown > 0;
+            List<WallDaylight.Tri>? cand = null; string candNote = "";
+            string why = rep.Text, bn = "";
+            if (rep.Ok && tris.Count > 0) { cand = tris; candNote = $"선 면 — 횡단 {set.X.Count}(세분 {set.Refined} · 뺌 {set.Removed}) · {rep.Text} · {set.Ms:F0} ms" + CapNote(set); }
+            else
             {
-                note = $"선 면 — 횡단 {set.X.Count}(세분 {set.Refined} · 뺌 {set.Removed}) · {rep.Text} · {set.Ms:F0} ms" + CapNote(set);
-                return tris;
+                // ★★★[JACK 1104] 선 면이 못 넘으면 선 따라 TIN(부지 정지면처럼 끊김선 · 들로네) — 칸 면(0.5 m 모자이크)은 그것도 못 할 때만
+                List<WallDaylight.Tri>? bt = null;
+                try { bt = BreakTin(inp, r, set, lines, dl, eL, eR, out bn); } catch (Exception exB) { bn = "예외 — " + Why(exB); }
+                if (bt != null && bt.Count > 0) { cand = bt; candNote = $"선 따라 TIN — {bn} · 횡단 {set.X.Count} · (선 면 검사 못 넘음: {why})" + CapNote(set); }
             }
-            // ★★★[JACK 1104] 선 면이 못 넘으면 선 따라 TIN(부지 정지면처럼 끊김선 · 들로네) — 칸 면(0.5 m 모자이크)은 그것도 못 할 때만
-            string why = rep.Text;
-            List<WallDaylight.Tri>? bt = null; string bn = "";
-            try { bt = BreakTin(inp, r, set, lines, dl, eL, eR, out bn); } catch (Exception exB) { bn = "예외 — " + Why(exB); }
-            if (bt != null && bt.Count > 0)
+            // ★[v114.3 · 계획 굽은안쪽부채 2판 §4 물러섬] 새 길(진 광선 자르지 않기 · 빈 사면 늘이기)로 지은 면이 없거나 조각이 둘 이상이면 옛 길(v113.1 흘러내림)로도 지어
+            //   못 지었거나 조각이 더 많을 때만 옛 길 면을 씀(알림). 옛 길에도 있던 떨어진 조각(옛 섬 · JACK 도면 폴리선 옹벽 끝 0.75 ㎡)은 새 길 탓이 아님 — 조각 수로 견줌.
+            //   물러서는 까닭(S217 실측): 곡선 중심(측점 특이점)에서 평가기가 감싸기로도 14 ~ 15 cm 끊기는 자리를 지나는 광선끼리 한 자리 두 높이.
+            int pNew = cand != null && newPath ? Pieces(cand) : 1;
+            // ★[v114.3 · 시간] 떨어진 조각이 새 길 광선 점을 하나도 안 품으면(옛 길에도 있던 섬) 옛 길을 짓지 않음 — JACK 도면 폴리선 옹벽 끝 섬 0.75 ㎡ 때문에 늘 두 번 지어 2배 걸렸다
+            if (cand != null && pNew > 1 && NewPathPieces(cand, set) == 0) { candNote += $" · 조각 {pNew}(새 길과 무관한 섬)"; pNew = 1; }
+            if (newPath && !OrphanNoRetry && (cand == null || pNew > 1))
             {
-                note = $"선 따라 TIN — {bn} · 횡단 {set.X.Count} · (선 면 검사 못 넘음: {why})" + CapNote(set);
-                return bt;
+                var set2 = BuildSections(ctx, true, v1143: false);
+                var lines2 = SectionLines(ctx, set2, out var dl2, out var eL2, out var eR2);
+                var t2 = MeshFromSections(set2, inp.Base, out var rep2);
+                List<WallDaylight.Tri>? old2 = null; string bn2 = "", oldNote = "";
+                if (rep2.Ok && t2.Count > 0) { old2 = t2; oldNote = $"선 면 — 횡단 {set2.X.Count} · {rep2.Text}"; }
+                else
+                {
+                    try { old2 = BreakTin(inp, r, set2, lines2, dl2, eL2, eR2, out bn2); } catch (Exception exB2) { bn2 = "예외 — " + Why(exB2); }
+                    if (old2 != null && old2.Count > 0) oldNote = $"선 따라 TIN — {bn2} · 횡단 {set2.X.Count} · (선 면 검사 못 넘음: {rep2.Text})";
+                    else old2 = null;
+                }
+                int pOld = old2 != null ? Pieces(old2) : int.MaxValue;
+                if (old2 != null && (cand == null || pOld < pNew))
+                {
+                    UnpatchGridB1(r); PatchGridB1(r, set2);   // 격자도 옛 길 원천으로(새 길로 고친 칸은 되돌림)
+                    r.Sections = set2; r.DaylightZ = dl2; r.Daylight = dl2.Select(l => l.Select(p => (p.X, p.Y)).ToList()).ToList(); r.EdgeL = eL2; r.EdgeR = eR2; lines = lines2;
+                    note = oldNote + $" · ⚠굽은 안쪽 새 길(꼬리 {set.SlumpTails} · 빈 사면 늘임 {set.OrphanGrown}){(cand == null ? $"으로는 못 넘음(선 따라 TIN: {bn})" : $" 조각 {pNew} > 옛 길 {pOld}")} → 옛 흘러내림 길" + CapNote(set2);
+                    return old2;
+                }
+                if (cand == null) bn += $" / 옛 흘러내림 길로도: {bn2}";
+                else candNote += $" · 조각 {pNew}(옛 길도 {pOld})";
             }
+            if (cand != null) { note = candNote; return cand; }
             note = $"⚠선 면 검사 못 넘음({why}) · 선 따라 TIN 못 함({bn}) → 칸 면";
         }
         catch (Exception ex) { note = "⚠선 면 실패 → 칸 면 — " + Why(ex); }

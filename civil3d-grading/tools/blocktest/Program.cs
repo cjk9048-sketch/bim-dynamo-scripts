@@ -87,11 +87,20 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "bend")
     return fails == 0 ? 0 : 1;
 }
 
+// ★[v114.3] BLOCKTEST_ONLY=wedge — S217 RW만(개발 중 부분 시험)
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "wedge")
+{
+    RoadWedgeCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
+
 // ★[v113.3] BLOCKTEST_ONLY=env — 진입도로 점 평가기 연속(S214 EV) · 굽은 안쪽 면(S212 BD)만
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "env")
 {
     RoadEnvelopeCheck.Run(Check);
     RoadBendCheck.Run(Check);
+    RoadWedgeCheck.Run(Check);   // ★[v114.3] S217 RW — 급한 굽은 안쪽 쐐기
     Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
     return fails == 0 ? 0 : 1;
 }
@@ -308,6 +317,7 @@ BoundaryDrawCheck.Run(Check);   // ★[v113.0] S208 — [옹벽 추가] 찍는 �
 ProfileFlipCheck.Run(Check);    // ★[v113.1] S210 PF · S211 PS — 종단 방향 바꾸기(측점 기록 · 되돌림 기록 · 엔진 대칭) · 종단 축척 H · V(옛 규칙 · 전수 · 나눔)
 RoadBendCheck.Run(Check);       // ★[v113.1 · JACK 1104] S212 BD — 급한 굽은 안쪽 진입도로 면(선 면 검사 통과 · 곡선 중심 낭떠러지 · 섬 · Civil 바늘 접기)
 RoadEnvelopeCheck.Run(Check);   // ★[v113.3] S214 EV — 진입도로 점 평가기 연속(주름 원천 감싸기 · 매끈한 측점 · 마구리 모서리 · 반평면 · 같은 다리 섞음)
+RoadWedgeCheck.Run(Check);      // ★[v114.3 · JACK 1105 오목부] S217 RW — 급한 굽은 안쪽 쐐기(흘러내림 자르지 않기 · 주름 끝 너머 빈 사면 · B1 평가기 하나)
 
 const double W = 0.46, H = 0.2, STEP = 5.0, HW = W / 2;
 const double D = 0.5, FS = D / 2; // 깊이·전면 돌출(벽 중심=링, JACK 0720 Z-파이팅 해소): 절토 +FS(안쪽), 성토 −FS

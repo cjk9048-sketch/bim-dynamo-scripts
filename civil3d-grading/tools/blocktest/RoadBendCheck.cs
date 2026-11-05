@@ -145,8 +145,12 @@ static class RoadBendCheck
         {
             var inp = Bend(R, g, drop); inp.Cut = new RoadGrade.SlopeRule { Slope = 1.5 };
             var r = RoadGrade.Run(inp);
-            var set = RoadGrade.BuildSections(new RoadGrade.RayCtx(inp, r));
-            var mt = RoadGrade.MeshFromSections(set, inp.Base, out var rep);
+            // ★[v114.3 · 굽은안쪽부채 2판] 주름 지퍼는 옛 흘러내림 길(진 광선 자르기 — SlumpV113)의 선 면 장치 — 지퍼 · 선 면 검사는 그 길로 재고,
+            //   면 결과(조각 · 이웃 높이 차 · ⚠ 아님)는 지금 길(자르지 않기 · 빈 사면 늘이기 → 선 따라 TIN 또는 옛 길 물러섬)로 잰다(새 길은 이 꼴에서 선 면을 안 씀)
+            RoadGrade.SectionSet set; RoadGrade.MeshReport rep;
+            RoadGrade.ForceV113 = true;
+            try { set = RoadGrade.BuildSections(new RoadGrade.RayCtx(inp, r)); RoadGrade.MeshFromSections(set, inp.Base, out rep); }
+            finally { RoadGrade.ForceV113 = false; }
             var tris = RoadGrade.ExactSurface(inp, r, out string note, out _);
             var (j, jx, jy) = Jump(tris);
             bool zipOk = wantZip ? rep.Zipped > 0 : rep.Zipped == 0 && set.Slumped == 0;
