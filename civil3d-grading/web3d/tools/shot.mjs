@@ -7,6 +7,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, mkdtempSync, rmSync
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
+import { inflateSync, deflateSync } from 'node:zlib';
 
 const [, , html, outDir, viewsFile] = process.argv;
 if (!html || !outDir) { console.error('쓰는 법: node tools/shot.mjs <html> <out> [views.json]'); process.exit(2); }
@@ -30,6 +31,54 @@ async function evaluate(expr) {
   const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
   if (r.exceptionDetails) throw new Error(r.exceptionDetails.text + ' ' + (r.exceptionDetails.exception?.description || ''));
   return r.result.value;
+}
+
+// ★[v116 · 1109] 화면 한 장을 PNG로 통째 찍으면 잎이 자잘한 숲 그림(PNG ≈ 3 MB 넘음)에서 화면 없는 Edge가 멈춘다(GPU · CPU 놀고 CDP 답 없음 —
+//   JPEG · WebP · 반 높이 PNG는 됨 · 1109 실측). 그래서 가로 띠 넷으로 찍어(PNG · 무손실) 이어 붙인다.
+const SHOT_STRIPS = 4;
+function pngRows(buf) {   // 8비트 RGB/RGBA · 비월 없음(Edge 출력) → { w, h, bpp, rows: Buffer[] }
+  let o = 8, w = 0, h = 0, bpp = 0;
+  const idat = [];
+  while (o < buf.length) {
+    const len = buf.readUInt32BE(o), type = buf.toString('ascii', o + 4, o + 8), d = buf.subarray(o + 8, o + 8 + len);
+    if (type === 'IHDR') { w = d.readUInt32BE(0); h = d.readUInt32BE(4); if (d[8] !== 8 || d[12] !== 0 || (d[9] !== 2 && d[9] !== 6)) throw new Error('PNG 꼴이 다름'); bpp = d[9] === 6 ? 4 : 3; }
+    else if (type === 'IDAT') idat.push(d);
+    else if (type === 'IEND') break;
+    o += 12 + len;
+  }
+  const raw = inflateSync(Buffer.concat(idat)), stride = w * bpp, rows = [];
+  let prev = Buffer.alloc(stride);
+  for (let y = 0; y < h; y++) {
+    const f = raw[y * (stride + 1)], src = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1)), row = Buffer.alloc(stride);
+    for (let x = 0; x < stride; x++) {
+      const a = x >= bpp ? row[x - bpp] : 0, b = prev[x], c = x >= bpp ? prev[x - bpp] : 0;
+      let p = 0;
+      if (f === 1) p = a; else if (f === 2) p = b; else if (f === 3) p = (a + b) >> 1;
+      else if (f === 4) { const q = a + b - c, pa = Math.abs(q - a), pb = Math.abs(q - b), pc = Math.abs(q - c); p = pa <= pb && pa <= pc ? a : pb <= pc ? b : c; }
+      row[x] = (src[x] + p) & 255;
+    }
+    rows.push(row); prev = row;
+  }
+  return { w, h, bpp, rows };
+}
+function pngEncode(w, bpp, rows) {
+  const tab = new Int32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; tab[n] = c; }
+  const crc = (b) => { let x = -1; for (let i = 0; i < b.length; i++) x = tab[(x ^ b[i]) & 255] ^ (x >>> 8); return (x ^ -1) >>> 0; };
+  const chunk = (t, d) => { const l = Buffer.alloc(4), c = Buffer.alloc(4), td = Buffer.concat([Buffer.from(t, 'ascii'), d]); l.writeUInt32BE(d.length); c.writeUInt32BE(crc(td)); return Buffer.concat([l, td, c]); };
+  const ih = Buffer.alloc(13); ih.writeUInt32BE(w, 0); ih.writeUInt32BE(rows.length, 4); ih[8] = 8; ih[9] = bpp === 4 ? 6 : 2;
+  const raw = Buffer.concat(rows.flatMap(r => [Buffer.from([0]), r]));
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ih), chunk('IDAT', deflateSync(raw, { level: 6 })), chunk('IEND', Buffer.alloc(0))]);
+}
+async function screenshot() {
+  const parts = [];
+  for (let i = 0; i < SHOT_STRIPS; i++) {
+    const y0 = Math.round((i * H) / SHOT_STRIPS), y1 = Math.round(((i + 1) * H) / SHOT_STRIPS);
+    const r = await send('Page.captureScreenshot', { format: 'png', clip: { x: 0, y: y0, width: W, height: y1 - y0, scale: 1 } });
+    parts.push(pngRows(Buffer.from(r.data, 'base64')));
+  }
+  if (parts.some(p => p.w !== parts[0].w || p.bpp !== parts[0].bpp)) throw new Error('띠 그림 크기가 다름');
+  return pngEncode(parts[0].w, parts[0].bpp, parts.flatMap(p => p.rows));
 }
 try {
   let target;
@@ -92,13 +141,11 @@ try {
       if (v.text) log.push(`글 ${v.name}: ` + JSON.stringify(await evaluate(`[...document.querySelectorAll(${JSON.stringify(v.text)})].filter(e => e.offsetParent).map(e => e.innerText).join(' | ')`)));
       if (v.wait) await sleep(v.wait);
       await sleep(300);
-      const shot = await send('Page.captureScreenshot', { format: 'png' });
-      writeFileSync(join(outDir, `${v.name}.png`), Buffer.from(shot.data, 'base64'));
+      writeFileSync(join(outDir, `${v.name}.png`), await screenshot());
       log.push(`그림 ${v.name}.png`);
     }
   else {
-    const shot = await send('Page.captureScreenshot', { format: 'png' });
-    writeFileSync(join(outDir, 'fail.png'), Buffer.from(shot.data, 'base64'));
+    writeFileSync(join(outDir, 'fail.png'), await screenshot());
   }
 } catch (e) {
   log.push('시험 실패 ' + e.message);

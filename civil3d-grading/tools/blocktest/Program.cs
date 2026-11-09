@@ -62,6 +62,13 @@ if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "web3d")
     return fails == 0 ? 0 : 1;
 }
 
+// ★[v116] BLOCKTEST_ONLY=ring — 고리 엔진(S236)만
+if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "ring")
+{
+    RoadRingCheck.Run(Check);
+    Console.WriteLine(fails == 0 ? "\n== 전부 통과 ==" : $"\n== 실패 {fails}건 ==");
+    return fails == 0 ? 0 : 1;
+}
 // ★[v115 · JACK 1105 Revit 구조물] BLOCKTEST_ONLY=struct — 구조물 커튼 자르기 · 평면 외곽 · 목록(S220~S234)만
 if (Environment.GetEnvironmentVariable("BLOCKTEST_ONLY") == "struct")
 {
@@ -343,6 +350,7 @@ BoundaryDrawCheck.Run(Check);   // ★[v113.0] S208 — [옹벽 추가] 찍는 �
 ProfileFlipCheck.Run(Check);    // ★[v113.1] S210 PF · S211 PS — 종단 방향 바꾸기(측점 기록 · 되돌림 기록 · 엔진 대칭) · 종단 축척 H · V(옛 규칙 · 전수 · 나눔)
 RoadBendCheck.Run(Check);       // ★[v113.1 · JACK 1104] S212 BD — 급한 굽은 안쪽 진입도로 면(선 면 검사 통과 · 곡선 중심 낭떠러지 · 섬 · Civil 바늘 접기)
 RoadEnvelopeCheck.Run(Check);   // ★[v113.3] S214 EV — 진입도로 점 평가기 연속(주름 원천 감싸기 · 매끈한 측점 · 마구리 모서리 · 반평면 · 같은 다리 섞음)
+RoadRingCheck.Run(Check);       // ★[v116 · JACK 1109 고리 엔진] S236 RR — 옹벽 없는 진입도로 고리 엔진(곧은 길 = 횡단 · V 굽이 · 헤어핀 · 세모 겹침 0 · 턱 0)
 RoadWedgeCheck.Run(Check);      // ★[v114.3 · JACK 1105 오목부] S217 RW — 급한 굽은 안쪽 쐐기(흘러내림 자르지 않기 · 주름 끝 너머 빈 사면 · B1 평가기 하나)
 RoadWallCheck.Run(Check);       // ★[v114.3 · JACK 1105 진입도로 옹벽 추가] S218 RL — 진입도로 선 옹벽(굽은 S자 · 안쪽 · 바깥 · 절토 · 섞임 · 데이라잇 곁 · 넓은 소단 · 벽 둘 · 옛 길 · 호 · 맞은편 다리 · 막음 · 쉼 · 스위치)
 StructCheck.Run(Check);         // ★[v115 · JACK 1105 Revit 구조물] S220~S234 — 구조물 커튼 자르기 · 평면 외곽 · 목록 · 단위

@@ -17,7 +17,11 @@ public static partial class RoadGrade
     public static bool WallOff;
 
     /// <summary>★[v114.3] 진입도로 선 옹벽 기록(Core) — 번호 · 그린 원본(세계 XY) · 절토 · 성토 소단 폭 · 선에서 벽이 갈 수 있는 여유(m). 단높이는 묻지 않는다(도로 사면 단높이 · 옛 소단).</summary>
-    public sealed record LineWall(int No, double[] SrcX, double[] SrcY, double Tc, double Tf, double Reach = 40);
+    /// <summary>★[v116.3 · JACK 1109 옹벽 천단 선택] <paramref name="TopStep"/> = 계단 천단 · <paramref name="BlockLen"/> = 블록 길이(0 = 9 m).
+    /// 둘 다 기본값이면 JSON에 안 씀 — 도로 지문(<c>RoadSession.SigOf</c>가 이 목록을 직렬화)이 옛 판과 같다(계획 2판 M6).</summary>
+    public sealed record LineWall(int No, double[] SrcX, double[] SrcY, double Tc, double Tf, double Reach = 40,
+        [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool TopStep = false,
+        [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] double BlockLen = 0);
 
     /// <summary>★[v114.3] 선 옹벽 하나의 이번 시도 상태.</summary>
     public sealed class WallState
@@ -215,6 +219,7 @@ public static partial class RoadGrade
             Hc = inp.Cut.BenchH, Tc = Math.Max(0, w.Tc), Hf = inp.Fill.BenchH, Tf = Math.Max(0, w.Tf), SlopeW = Math.Clamp(inp.MinSlope, 0.001, 0.2), FaceRun = faceRun, Grid = Math.Min(0.5, inp.Cell), Reach = reach,
             Ground = Ground, GroundTris = gn, P0 = (x, y) => p0at(x, y) ?? Ground(x, y), P0Tris = p0n, Blockers = bls,
             LevelMode = WallByLine.LevelKind.OldBench, CutBench = bc, FillBench = bf, RowDens = Math.Clamp(inp.EdgeStep, 0.3, 1.0),
+            TopStep = w.TopStep, BlockLen = w.BlockLen > 0 ? w.BlockLen : 9,   // ★[v116.3 · JACK 1109 옹벽 천단 선택]
         };
         var built = WallByLine.Build(bi);
         st.Built = built;

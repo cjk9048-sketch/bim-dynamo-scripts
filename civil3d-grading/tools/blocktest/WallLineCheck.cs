@@ -628,6 +628,25 @@ static class WallLineCheck
                         && r1.Faces[1].Kind == 1 && r1.Faces[1].Top.Count == 0 && r1.FaceLen == 7.25 && r1.BenchSamples.Count == 1 && r1.BenchSamples[0].Z == 103 && r1.FootSamples.Count == 2 && r1.FootSamples[1].Z == 100.5
                         && h2.Frozen.Count == 1 && h2.Frozen[0].Kind == 2 && h2.Frozen[0].Line.Count == 2 && h2.Frozen[0].FaceLen == 12.5;
             check("S201 ② 판 7 왕복(종류 2 칸 전부 · 굳은 칸)", same, dec ? $"판 {v7[1].Value} · 지움 {drop7}" : why);
+            // ★[v116.3 · JACK 1109 옹벽 천단 선택] 판 8 = 계단 천단 옹벽이 있을 때만 · 끔이면 판 7 바이트 그대로 · 왕복
+            {
+                w2.TopStep = false; w2.BlockLen = 9;
+                var v7b = WallList.Encode(head, new List<WallRec> { w0, w2 });
+                bool same7 = v7b.Count == v7.Count && v7b.Zip(v7).All(z => z.First.Kind == z.Second.Kind && Equals(z.First.Value, z.Second.Value));
+                w2.TopStep = true; w2.BlockLen = 7.5;
+                var v8 = WallList.Encode(head, new List<WallRec> { w0, w2 });
+                bool dec8 = WallList.TryDecode(v8, out _, out var l8, out string why8);
+                var r8 = dec8 ? l8.First(w => w.No == 2) : null;
+                check("S201 ⑦ 판 8 — 끔이면 판 7 바이트 그대로 · 켜면 판 8(끝에 켬 · 블록 길이) 왕복 · 옛 칸 그대로", same7 && (int)v8[1].Value == 8 && dec8 && r8!.TopStep && r8.BlockLen == 7.5 && r8.Hc == 4 && r8.Faces.Count == 2 && r8.FootSamples.Count == 2 && v8.Count == v7.Count + 2,
+                    $"끔 같음 {same7} · 판 {v8[1].Value} · {(dec8 ? $"켬 {r8!.TopStep} 블록 {r8.BlockLen}" : why8)}");
+                w2.TopStep = false; w2.BlockLen = 9;
+                // 진입도로 선 옹벽 기록 — 끔이면 JSON(도로 지문)이 옛 판과 같음 · 켜면 칸이 들어감
+                var o = new System.Text.Json.JsonSerializerOptions { IncludeFields = true };
+                string j0 = System.Text.Json.JsonSerializer.Serialize(new List<RoadGrade.LineWall> { new(1, new[] { 1.0, 2 }, new[] { 3.0, 4 }, 1, 1.5) }, o);
+                string j1 = System.Text.Json.JsonSerializer.Serialize(new List<RoadGrade.LineWall> { new(1, new[] { 1.0, 2 }, new[] { 3.0, 4 }, 1, 1.5, 40, true, 7.5) }, o);
+                const string old = "[{\"No\":1,\"SrcX\":[1,2],\"SrcY\":[3,4],\"Tc\":1,\"Tf\":1.5,\"Reach\":40}]";
+                check("S201 ⑧ 진입도로 선 옹벽 지문 — 끔 = 옛 JSON 그대로(옛 도로가 «수정됨»이 안 됨) · 켬 = 칸 들어감", j0 == old && j1.Contains("\"TopStep\":true") && j1.Contains("\"BlockLen\":7.5"), $"끔 {j0} · 켬 {j1}");
+            }
             bool dec5 = WallList.TryDecode(v5, out _, out var l5, out string w5);
             var v5b = WallList.Encode(new WallListHead { PlanHandle = "1A", GroundHandle = "2B", NextNo = 4 }, l5);
             check("S201 ③ 판 5 이하 바이트 → 읽기 → 다시 쓰기 = 바이트 그대로", dec5 && l5.Count == 1 && l5[0].Kind == 0 && v5b.Count == v5.Count && v5b.Zip(v5).All(p => p.First.Kind == p.Second.Kind && Equals(p.First.Value, p.Second.Value)), w5);
@@ -697,7 +716,7 @@ static class WallLineCheck
         s.G = WallByLine.TriLookup(s.GT);
         return s;
     }
-    static (BoundaryCut.Result Cut, WallByLine.Built? B) Old(Site216 s, IReadOnlyList<Point3> src, List<Point3> bd, WallByLine.LevelKind lk = WallByLine.LevelKind.OldBench, double t = 1, double reach = 10)
+    static (BoundaryCut.Result Cut, WallByLine.Built? B) Old(Site216 s, IReadOnlyList<Point3> src, List<Point3> bd, WallByLine.LevelKind lk = WallByLine.LevelKind.OldBench, double t = 1, double reach = 10, bool step = false, double blockLen = 9)
     {
         var sr = src.Select(q => new Point3(q.X + s.Dx, q.Y + s.Dy, 0)).ToList(); var b0 = bd.Select(q => new Point3(q.X + s.Dx, q.Y + s.Dy, 0)).ToList();
         var cut = BoundaryCut.Classify(sr, b0, s.Plan, null);
@@ -705,7 +724,7 @@ static class WallLineCheck
         var b = WallByLine.Build(new WallByLine.Input
         {
             Line = cut.Line, Bd = b0, NewRing = cut.NewRing, CutRing = cut.CutRing, Plan = s.Plan, Hc = s.P.CutBenchHeight, Tc = t, Hf = s.P.FillBenchHeight, Tf = t, SlopeW = 0.01, FaceRun = 0.005, Grid = 1, Reach = reach,
-            Ground = s.G, GroundTris = s.GT, P0 = s.P0, P0Tris = s.P0T, LevelMode = lk, CutBench = s.Oc, FillBench = s.Of, RowDens = 1,
+            Ground = s.G, GroundTris = s.GT, P0 = s.P0, P0Tris = s.P0T, LevelMode = lk, CutBench = s.Oc, FillBench = s.Of, RowDens = 1, TopStep = step, BlockLen = blockLen,
         });
         return (cut, b);
     }
@@ -790,6 +809,61 @@ static class WallLineCheck
             var s3 = Site(Rect(0, -30, 40, 30, (x, y) => 100 + 0.03 * y), pBase);
             var (cut3, b3) = Old(s3, U, bd);
             check("S216 (c) ③ 3 % 기울기 — ⚠ 없음", b3 != null && b3.Ok && !b3.Warn.Any(w => w.Contains("기욺")), Brief(b3, cut3));
+        }
+
+        // (k) ★[v116.3 · JACK 1109 옹벽 천단 계단] 기운 바닥 8 % · U자 선(절토) — 계단 블록 9 m · 4 m: 줄(소단 · 벽 윗선)마다 수평(± 1 mm) · 높이 = 그 줄기 안 옛 소단 최대(가장 높은 곳)
+        //     · 블록 경계 마구리가 더 생김 · 입력 관문(줄 이음 · 면 높이 · 소단) 통과 · 바늘 0 · 0.1 mm 쌍 0 · 합성 한 판 + 합성 뒤 소단 관문 · 끔 = 옛 (c) 그대로(기욺)
+        {
+            var s = Site(Rect(0, -30, 40, 30, (x, y) => 100 + 0.08 * y), pBase, gAdd: (x, y) => 0.9 * (52 - x));   // 데이라잇 = 동쪽 변(합성 한 판이 뜻 있게 — (a)와 같은 땅)
+            var (_, b0) = Old(s, U, bd);
+            foreach (double B in new[] { 9.0, 4.0 })
+            {
+                var (cut, b) = Old(s, U, bd, step: true, blockLen: B);
+                string nm = $"S216 (k) 계단 {B:F0} m";
+                if (b == null || !b.Ok)
+                {
+                    check($"{nm} 짓기", false, Brief(b, cut));
+                    if (b != null && Environment.GetEnvironmentVariable("BLOCKTEST_STEPDIAG") == "1")
+                    {
+                        var at = b.Marks.Count > 0 ? b.Marks[0] : (0.0, 0.0);
+                        foreach (var bp in b.BenchPts.Where(q => Math.Abs(q.X - at.Item1) < 0.6 && Math.Abs(q.Y - at.Item2) < 0.6))
+                        {
+                            double zt = double.NaN;
+                            foreach (var t in b.WallTrisC.Concat(b.WallTrisF))
+                            {
+                                double d0 = (t.B.Y - t.C.Y) * (t.A.X - t.C.X) + (t.C.X - t.B.X) * (t.A.Y - t.C.Y); if (Math.Abs(d0) < 1e-14) continue;
+                                double w1 = ((t.B.Y - t.C.Y) * (bp.X - t.C.X) + (t.C.X - t.B.X) * (bp.Y - t.C.Y)) / d0, w2 = ((t.C.Y - t.A.Y) * (bp.X - t.C.X) + (t.A.X - t.C.X) * (bp.Y - t.C.Y)) / d0, w3 = 1 - w1 - w2;
+                                if (w1 >= -1e-9 && w2 >= -1e-9 && w3 >= -1e-9) { zt = w1 * t.A.Z + w2 * t.B.Z + w3 * t.C.Z; break; }
+                            }
+                            Console.WriteLine($"   [계단 진단] 표본 ({bp.X - s.Dx:F2}, {bp.Y - s.Dy:F2}) Z {bp.Z:F3} 종류 {bp.Kind} · 벽 세모 {zt:F3} · 차 {(zt - bp.Z) * 100:F1} cm");
+                        }
+                        foreach (var row in b.RawRows.Where(r => r.Any(q => Math.Abs(q.X - at.Item1) < 1.5 && Math.Abs(q.Y - at.Item2) < 1.5)).Take(8))
+                            Console.WriteLine($"   [계단 진단] 줄 {row.Count}점 z {row.Min(q => q.Z):F3}~{row.Max(q => q.Z):F3} · ({row[0].X - s.Dx:F2},{row[0].Y - s.Dy:F2})→({row[^1].X - s.Dx:F2},{row[^1].Y - s.Dy:F2})");
+                    }
+                    continue;
+                }
+                double flat = 0, fracLo = double.MaxValue, fracHi = double.MinValue;
+                foreach (var row in b.Rows)
+                {
+                    if (row.Count < 2) continue;
+                    double zr = row.Average(q => q.Z);
+                    flat = Math.Max(flat, row.Max(q => q.Z) - row.Min(q => q.Z));
+                    double m = row.Min(q => zr - (100 + 0.08 * (q.Y - s.Dy)));
+                    double fr = m - 5.0 * Math.Round(m / 5.0);
+                    fracLo = Math.Min(fracLo, fr); fracHi = Math.Max(fracHi, fr);
+                }
+                check($"{nm} ① 줄(소단 · 벽 윗선)마다 수평(± 1 mm) · 줄 높이 = 그 줄 가장 높은 곳의 옛 소단(+1 cm 안 — 줄기 끝 반 마구리 몫 · 오목 꼭짓점 곁 줄기는 이등분선 안쪽 가장 높은 단면이라 10 cm 안 낮을 수 있음) · 블록으로 가른 줄기 > 0",
+                    flat <= 1e-3 && fracLo >= -0.10 && fracHi <= 0.01 && b.StepCuts > 0, $"줄 기울기 최대 {flat * 1000:F2} mm · 가장 높은 곳 차 {fracLo * 1000:F2}~{fracHi * 1000:F2} mm · 가른 줄기 {b.StepCuts} · 옛 높이로 둔 점 {b.StepFallback} · {Brief(b, cut)}");
+                int cap0 = b0 == null ? 0 : b0.Faces.Count(f => f.Kind == 1), cap1 = b.Faces.Count(f => f.Kind == 1);
+                check($"{nm} ② 블록 경계 마구리가 더 생김 · 입력 관문(줄 이음 · 면 높이 · 규칙 · 소단) 통과 · 0.1 mm 쌍 0(바늘은 합성 · Civil 맞춤이 다룸 — 끔 {b0?.Needles})", cap1 > cap0 && b.JumpBad == 0 && b.FaceHBad == 0 && b.RuleMiss == 0 && b.BenchSag + b.BenchMiss == 0 && b.PairsUnder01 == 0,
+                    $"마구리 {cap0} → {cap1} · {Brief(b, cut)}");
+                var r = WallDaylight.BuildCompositeLine(b.Poly, b.WallTrisC, b.WallTrisF, s.GT, s.P0T);
+                var gc = r.Zone == null ? default : WallByLine.BenchGate(b.BenchPts, r.Zone.Concat(r.Untouched).ToList());
+                check($"{nm} ③ 합성 한 판 — 판정 1~2 · 높이 오차 합 ≤ 1 cm · 합성 뒤 소단 관문 통과", r.Zone != null && r.Tier <= 2 && r.HeightBudget <= 1e-2 && gc.Why.Length == 0,
+                    $"판정 {r.Tier} · {r.Fail} · 오차 합 {r.HeightBudget * 1000:F3} mm · 관문 {(r.Zone == null ? "-" : $"소단 {gc.BenchN}(틀림 {gc.BenchBad}) F {gc.FootN}(턱 {gc.FootBad})")}{gc.Why}");
+            }
+            double tilt0 = 0; if (b0 != null) foreach (var row in b0.Rows) if (row.Count > 1) tilt0 = Math.Max(tilt0, row.Max(q => q.Z) - row.Min(q => q.Z));
+            check("S216 (k) ④ 계단 끔 = 옛 경사(줄이 기욺 · 가른 줄기 0)", b0 != null && b0.Ok && b0.StepCuts == 0 && tilt0 > 0.1, $"끔 줄 높이 차 최대 {tilt0:F3} m");
         }
 
         // (d) 단차 바닥(서쪽 108 · 동쪽 100 · 남북 변에 전환 12 m — 1105 꼴) — RelaxRingZ 쐐기를 지나는 북쪽 선: 짓기 · 벽 = 링 · 불변식 · 관문

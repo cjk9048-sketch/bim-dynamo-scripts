@@ -63,6 +63,8 @@ public sealed class WallRec
     public string SrcHandle = "";
     /// <summary>Kind 2 — 절토 · 성토 단높이 · 소단(지은 값) · 벽이 갈 수 있는 거리 여유.</summary>
     public double Hc, Tc, Hf, Tf, Reach;
+    /// <summary>★[v116.3 · JACK 1109 옹벽 천단 선택] Kind 2 — 계단 천단(블록마다 수평 · <see cref="WallByLine.Input.TopStep"/>) · 블록 길이(m · 0 이하 = 9). 끔 = 경사(옛 판).</summary>
+    public bool TopStep; public double BlockLen = 9;
     /// <summary>Kind 2 — 선 바깥 점유 최대(지표면 · m)와 그 자리(계획 1-7 · 늘 보인다).</summary>
     public double FootMax, FootAtX, FootAtY;
     /// <summary>Kind 2 — 바꿀 자리 바깥 고리(성토 · 절토) — 합성이 가상옹벽 삼각형을 이 고리로 성토 · 절토에 나눈다.</summary>
@@ -118,7 +120,7 @@ public sealed class FrozenWall
 public static class WallList
 {
     public const string Sign = "DH_WALLS";
-    public const int Version = 7;
+    public const int Version = 8;
 
     /// <summary>(종류, 값) — 'S' 글 · 'I' 정수 · 'D' 실수. Civil이 DxfCode.Text · Int32 · Real로 옮긴다.
     /// <para>★[v103.1.14] 판 3 칸(ReplaceNo2 · KeepNo)은 <b>이어 짓기가 걸려 있을 때만</b> 쓴다 — 둘 다 0인 목록은 판 2 그대로(바이트까지 같음 · 옛 판 애드인도 읽는다).</para>
@@ -130,7 +132,9 @@ public static class WallList
         // ★[v114.0 · JACK 1105] 판 7 = 선 옹벽(종류 2)이 하나라도 있을 때만 — 옛 종류 1은 읽을 때 지웠으므로 판 6은 더 쓰지 않는다(없으면 판 5 이하 바이트 그대로)
         if (walls.Any(w => w.Kind != 0 && w.Kind != 2) || head.Frozen.Any(f => f.Kind != 0 && f.Kind != 2))
             throw new ArgumentException("옹벽 목록에 이 애드인이 쓰지 않는 종류가 있다(0 · 2만)");
-        int ver = walls.Any(w => w.Kind != 0) || head.Frozen.Any(f => f.Kind != 0) ? 7
+        // ★[v116.3 · JACK 1109 옹벽 천단 선택] 판 8 = 계단 천단 옹벽(종류 2)이 하나라도 있을 때만 — 끝에 옹벽마다 (켬, 블록 길이). 없으면 판 7 바이트 그대로(v116.2 애드인도 읽는다)
+        int ver = walls.Any(w => w.Kind == 2 && w.TopStep) ? 8
+                : walls.Any(w => w.Kind != 0) || head.Frozen.Any(f => f.Kind != 0) ? 7
                 : head.Frozen.Any(f => f.IsWall.Count > 0) ? 5
                 : walls.Any(w => !string.IsNullOrEmpty(w.CompNonce)) || head.Frozen.Count > 0 ? 4
                 : walls.Any(w => w.ReplaceNo2 != 0 || w.KeepNo != 0) ? 3 : 2;
@@ -202,6 +206,8 @@ public static class WallList
                 if (f.Kind == 2) { Pts(f.Line); v.Add(('D', f.FaceLen)); }
             }
         }
+        if (ver >= 8)
+            foreach (var w in walls) { if (w.Kind != 2) continue; v.Add(('I', w.TopStep ? 1 : 0)); v.Add(('D', w.BlockLen)); }
         return v;
     }
 
@@ -312,6 +318,8 @@ public static class WallList
                     if (f.Kind == 2) { f.Line = Pts(); f.FaceLen = D(); }
                 }
             }
+            if (ver >= 8)
+                foreach (var w in walls) { if (w.Kind != 2) continue; w.TopStep = I() != 0; w.BlockLen = D(); }
             if (i != v.Count) { why = $"옹벽 목록 끝에 값 {v.Count - i}개가 남았다"; return false; }
             // ★[v114.0 · 설치 전 검토 6] 굳은 종류 1은 지우지 않는다 — 앞 구역 면에 이미 든 v113 옹벽이라 다시 지을 수 없다.
             //   종류 2 «앞면 길이 0»(반영 몫 없음)으로 남긴다(막을 다각형 · 측점 가리기는 Poly 그대로). 지우는 것은 지금 목록의 종류 1뿐

@@ -2,8 +2,12 @@
 //   LOD0 = 덩이(250 m) × 모양마다 InstancedMesh(그림자 냄) · LOD1 = 1 km 묶음 × 대리 모양마다 InstancedMesh 하나(호출 수를 줄임 · 재검토 M3).
 //   고르기 = view.onDraw(그리기 바로 앞 · 사진 · 영상의 사진기도 따름): 가까운 덩이부터 세모 예산 1.5백만까지 자세히 · 나머지 대리 · max(3 km, 1.5 × 사진기–목표 거리) 밖 숨김.
 //   밀도 막대(25~100 %) = 무리마다 해시 순위 앞 ⌈f·n⌉(C#가 순위 차례로 보냄) · 대리 묶음은 원래 무리에서 다시 채움(재검토 N3).
+// ★[v116 · JACK 1109 «조감도 품질»] 잎 카드 뭉치 + 껍질 줄기(treegeo.js) · 코드로 그린 잎 그림 아틀라스(treetex.js — 파일 0 바이트) ·
+//   재료 하나(LOD0 · LOD1 같이 — 멀리 바뀌어도 색 · 질감이 이어짐) · 뭉치 네모는 셰이더가 사진기 쪽으로 벌림(그림자 패스에서는 해 쪽 — 그림자가 수관 꼴) ·
+//   알파 투 커버리지(가장자리 매끈 · 잎 사이 구멍) · 그림자 깊이 재료도 같은 벌림 + 알파로 오림 · 인스턴스 색 = 밝기 ±10 % + 노랑 ↔ 푸름 흔들림.
 import * as THREE from 'three';
 import { treeGeo, proxyGeo, proxyOf, proxyColor, pickLod, hideDistance, keepCount, KIND_COUNT } from './treegeo.js';
+import { makeTreeAtlas } from './treetex.js';
 
 export const TRI_BUDGET = 1_500_000;
 export const LOD0_MAX = 800;   // m — 이 밖 덩이는 늘 대리 모양
@@ -12,9 +16,80 @@ const BLOCK = 1000;
 function toGeometry(g) {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(g.pos, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(g.nrm, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(g.uv, 2));
+  geo.setAttribute('bb', new THREE.BufferAttribute(g.bb, 2));
   geo.setAttribute('color', new THREE.BufferAttribute(g.col, 3));
-  geo.computeVertexNormals();
+  // 뭉치 네모는 가운데에서 bb × W(세로는 × 최대 1.8)만큼 벌어진다 — 화면 밖 자르기 · 광선이 놓치지 않게 구를 그만큼 키움
+  geo.computeBoundingSphere();
+  geo.boundingSphere.radius += g.bbMax * 2;
   return geo;
+}
+
+// 잎 그림 아틀라스(한 번 만들어 둠 · 덩어리 크기 5.6 MB GPU)
+let atlasTex = null;
+function treeAtlas(renderer) {
+  if (atlasTex) return atlasTex;
+  const A = makeTreeAtlas();
+  const t = new THREE.DataTexture(A.levels[0].data, A.size, A.size, THREE.RGBAFormat, THREE.UnsignedByteType);
+  t.mipmaps = A.levels;
+  t.generateMipmaps = false;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.magFilter = THREE.LinearFilter;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = Math.min(4, renderer ? renderer.capabilities.getMaxAnisotropy() : 1);
+  t.needsUpdate = true;
+  atlasTex = t;
+  return t;
+}
+
+// 뭉치 벌리기 — 가운데(인스턴스 · 모델 행렬) + (사진기 오른쪽 × bb.x + 위 × bb.y) × W · 세로 성분은 × clamp(√(H/W), 1, 1.8)(키 큰 침엽이 층 사이 비지 않게)
+//   worldPosition도 벌린 자리(그림자 받기 · 하늘빛 반사가 맞게) · 줄기 점은 bb = 0이라 그대로
+const BB_PARS = 'attribute vec2 bb;';
+const BB_PROJECT = `
+#ifdef USE_INSTANCING
+	vec4 dhW = modelMatrix * ( instanceMatrix * vec4( transformed, 1.0 ) );
+	float dhS = length( instanceMatrix[ 0 ].xyz );
+	float dhK = clamp( sqrt( length( instanceMatrix[ 2 ].xyz ) / max( dhS, 1e-4 ) ), 1.0, 1.8 );
+#else
+	vec4 dhW = modelMatrix * vec4( transformed, 1.0 );
+	float dhS = 1.0;
+	float dhK = 1.0;
+#endif
+	vec3 dhOff = vec3( viewMatrix[ 0 ][ 0 ], viewMatrix[ 1 ][ 0 ], viewMatrix[ 2 ][ 0 ] ) * bb.x + vec3( viewMatrix[ 0 ][ 1 ], viewMatrix[ 1 ][ 1 ], viewMatrix[ 2 ][ 1 ] ) * bb.y;
+	dhOff.z *= dhK;
+	dhW.xyz += dhOff * dhS * length( modelMatrix[ 0 ].xyz );
+	vec4 mvPosition = viewMatrix * dhW;
+	gl_Position = projectionMatrix * mvPosition;
+`;
+const BB_WORLDPOS = `
+#if defined( USE_ENVMAP ) || defined( DISTANCE ) || defined ( USE_SHADOWMAP ) || defined ( USE_TRANSMISSION ) || NUM_SPOT_LIGHT_COORDS > 0
+	vec4 worldPosition = dhW;
+#endif
+`;
+// 뭉치 안에서 법선을 모서리 쪽으로 기울임(뭉치 하나도 둥글게 보이게 · 사진기 공간)
+const BB_NORMAL = `
+	if ( dot( bb, bb ) > 0.0 ) transformedNormal = normalize( transformedNormal + vec3( normalize( bb ) * 0.55, 0.0 ) );
+`;
+function billboard(sh, withNormal) {
+  sh.vertexShader = sh.vertexShader
+    .replace('#include <common>', `#include <common>\n${BB_PARS}`)
+    .replace('#include <project_vertex>', BB_PROJECT)
+    .replace('#include <worldpos_vertex>', BB_WORLDPOS);
+  if (withNormal) sh.vertexShader = sh.vertexShader.replace('#include <defaultnormal_vertex>', `#include <defaultnormal_vertex>\n${BB_NORMAL}`);
+}
+
+// 나무 재료 — 잎 · 껍질 그림 × 정점색(모양 색 · 그늘) × 인스턴스 색 · 해 · 하늘빛은 다른 층과 같은 물리 재질
+export function treeMaterials(renderer) {
+  const map = treeAtlas(renderer);
+  const mat = new THREE.MeshStandardMaterial({ map, vertexColors: true, roughness: 0.82, metalness: 0, alphaTest: 0.5, alphaToCoverage: true, side: THREE.FrontSide, shadowSide: THREE.DoubleSide });
+  mat.color.setScalar(1.75);   // 잎 그림은 밝은 회녹색(평균 ≈ 0.55 선형) — 모양 색이 그대로 나오게
+  mat.onBeforeCompile = (sh) => billboard(sh, true);
+  mat.customProgramCacheKey = () => 'dh3d-tree-bb';
+  const depth = new THREE.MeshDepthMaterial();
+  depth.onBeforeCompile = (sh) => billboard(sh, false);
+  depth.customProgramCacheKey = () => 'dh3d-tree-bb-depth';
+  return { mat, depth };
 }
 
 // 머리 → 무리 · 덩이 · 행렬(순수 — 시험이 부른다)
@@ -39,9 +114,11 @@ export function forestModel(F) {
       s.set(W, W, H);
       m4.compose(p, q, s);
       m4.toArray(mat, 16 * j);
-      const b = 0.92 + 0.16 * (t[i] / 255);   // 밝기 ±8 %
-      col[3 * j] = col[3 * j + 1] = col[3 * j + 2] = b;
-      pcol[3 * j] = pc[0] * b; pcol[3 * j + 1] = pc[1] * b; pcol[3 * j + 2] = pc[2] * b;
+      // ★[v116] 밝기 ±10 % + 노랑 ↔ 푸름(그루마다 · 해시 t · r에서) — 같은 숲도 한 덩이 초록이 아니게
+      const b = 0.90 + 0.20 * (t[i] / 255), hv = (((t[i] * 37) ^ (r[i] * 11)) & 255) / 255 - 0.5;
+      const cr = b * (1 + 0.16 * hv), cg = b * (1 + 0.04 * hv), cb = b * (1 - 0.22 * hv);
+      col[3 * j] = cr; col[3 * j + 1] = cg; col[3 * j + 2] = cb;
+      pcol[3 * j] = pc[0] * cr; pcol[3 * j + 1] = pc[1] * cg; pcol[3 * j + 2] = pc[2] * cb;
     }
     const G = { start, count, chunk: ch, kind, proxy: proxyOf(kind), mat, col, pcol };
     groups.push(G);
@@ -62,15 +139,15 @@ export function buildForest(view, head, L) {
   const geos = [], tris = [];
   for (let kd = 0; kd < KIND_COUNT; kd++) { const g = treeGeo(kd); geos.push(toGeometry(g)); tris.push(g.tris); }
   const pgeos = [toGeometry(proxyGeo(0)), toGeometry(proxyGeo(1))], ptris = [proxyGeo(0).tris, proxyGeo(1).tris];
-  const mat0 = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.9, metalness: 0 });
-  const mat1 = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.95, metalness: 0 });
+  const { mat, depth } = treeMaterials(view.renderer);
   const root = new THREE.Group();
   root.userData = { layer: 'tree' };
   // LOD0 — 무리마다 하나(행렬 배열을 그대로 씀)
   for (const G of model.groups) {
-    const mesh = new THREE.InstancedMesh(geos[G.kind], mat0, G.count);
+    const mesh = new THREE.InstancedMesh(geos[G.kind], mat, G.count);
     mesh.instanceMatrix = new THREE.InstancedBufferAttribute(G.mat, 16);
     mesh.instanceColor = new THREE.InstancedBufferAttribute(G.col, 3);
+    mesh.customDepthMaterial = depth;   // 그림자도 뭉치 벌림 + 잎 알파로
     mesh.castShadow = true;
     mesh.receiveShadow = false;
     mesh.visible = false;
@@ -93,7 +170,8 @@ export function buildForest(view, head, L) {
     for (let pz = 0; pz < 2; pz++) {
       const cap = B.chunks.reduce((a, c) => a + c.groups.filter(G => G.proxy === pz).reduce((s, G) => s + G.count, 0), 0);
       if (!cap) continue;
-      const mesh = new THREE.InstancedMesh(pgeos[pz], mat1, cap);
+      const mesh = new THREE.InstancedMesh(pgeos[pz], mat, cap);
+      mesh.customDepthMaterial = depth;
       mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(3 * cap), 3);
       mesh.count = 0;
       mesh.visible = false;

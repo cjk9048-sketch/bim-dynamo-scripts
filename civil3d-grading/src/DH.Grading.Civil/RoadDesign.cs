@@ -26,6 +26,8 @@ internal sealed class RoadDesign
     /// 선 옹벽 기록이 없는 도로 · 옛 기록 = null(옛 JSON 바이트 그대로).</summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public int[]? SurfaceWallNos;
+    /// <summary>★[v116 · 고리 엔진 계획 3판 §4 M5a] 길 — 고리 면이 든 면은 토막 차례 «|» 목록(«고리 면|선 면») · 옛 기록(길 하나)은 모든 토막에 · 읽기는 <see cref="RoadSession.PathAt"/>.
+    /// 옛 엔진만으로 지은 선 옹벽 없는 면 = null(옛 JSON 바이트 그대로).</summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? SurfacePath;
     public List<double[]> Walls = new();         // [s0, s1, 쪽(−1 좌 · +1 우)]
@@ -189,6 +191,8 @@ internal sealed class RoadDesign
         public int Side;
         /// <summary>절토 · 성토 소단 폭(m) · 선에서 벽이 갈 수 있는 여유(m).</summary>
         public double Tc = 1, Tf = 1, Reach = 40;
+        /// <summary>★[v116.3 · JACK 1109 옹벽 천단 선택] 계단 천단 · 블록 길이(0 = 9 m). 판(CurVer)은 안 올림 — 옛 기록은 끔으로 읽고 해시도 그대로(계획 2판 L11).</summary>
+        public bool TopStep; public double BlockLen;
         public string SrcHandle = "";
         /// <summary>칸 전부의 해시(<see cref="SigNow"/>) — 없거나 안 맞으면 쉰다.</summary>
         public string Sig = "";
@@ -203,6 +207,7 @@ internal sealed class RoadDesign
             sb.Append(Ver).Append('|').Append(No).Append('|');
             foreach (var a in new[] { X, Y, SrcX, SrcY }) { foreach (var v in a ?? System.Array.Empty<double>()) D(v); sb.Append('|'); }
             sb.Append(Side).Append('|'); D(Tc); D(Tf); D(Reach); sb.Append('|').Append(SrcHandle ?? "");
+            if (TopStep) { sb.Append("|계단"); D(BlockLen); }   // ★[v116.3] 켰을 때만(옛 기록 해시 그대로)
             return Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(sb.ToString())))[..16];
         }
     }
@@ -223,7 +228,7 @@ internal sealed class RoadDesign
             if (b.Ver < BoundWallRec.CurVer) continue;   // 판 1은 Read가 이미 뺌
             if (string.IsNullOrEmpty(b.Sig) || b.Sig != b.SigNow()) { sigBad.Add(b.No); continue; }
             if (b.SrcX == null || b.SrcY == null || b.SrcX.Length < 2 || b.SrcX.Length != b.SrcY.Length) continue;
-            o.Add(new RoadGrade.LineWall(b.No, b.SrcX, b.SrcY, Math.Max(0, b.Tc), Math.Max(0, b.Tf), Pos(b.Reach, 40)));
+            o.Add(new RoadGrade.LineWall(b.No, b.SrcX, b.SrcY, Math.Max(0, b.Tc), Math.Max(0, b.Tf), Pos(b.Reach, 40), b.TopStep, b.TopStep ? (b.BlockLen > 0 ? b.BlockLen : 9) : 0));
         }
         return o;
     }

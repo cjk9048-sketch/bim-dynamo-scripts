@@ -73,7 +73,8 @@ static class RoadWallCheck
     {
         var r = RoadGrade.Run(inp);
         var t = RoadGrade.ExactSurface(inp, r, out string note, out var lines);
-        return new P0 { Inp = inp, R = r, Tris = t, Lines = lines, Note = note, Path = note.StartsWith("선 따라 TIN") ? "선 따라 TIN" : note.StartsWith("⚠") ? "칸 면" : "선 면" };
+        // ★[v116] 길 판정 = RoadSession.PathOf와 같은 꼴(고리 면 · 선 따라 TIN · 칸 면 · 선 면 — 옛 노트는 옛 판정 그대로)
+        return new P0 { Inp = inp, R = r, Tris = t, Lines = lines, Note = note, Path = note.StartsWith("고리 면") ? "고리 면" : note.StartsWith("선 따라 TIN") ? "선 따라 TIN" : note.StartsWith("⚠") ? "칸 면" : "선 면" };
     }
 
     internal static RoadGrade.LineWall W(int no, double tc, double tf, params (double X, double Y)[] p) => new(no, p.Select(q => q.X + OX).ToArray(), p.Select(q => q.Y + OY).ToArray(), tc, tf);
@@ -368,6 +369,21 @@ static class RoadWallCheck
             // ★[v115 · S218] 옛 판은 «짓거나 까닭»이었다 — 쉰 까닭이 합성 규칙 대조 2422 mm(참 폴리곤 밖 0.1 µm 표본을 RuleL로 읽은 잣대 탓 · (c) (e)와 같은 뿌리)라 고친 뒤엔 짓기 · 관문 0을 요구한다
             var g = s.Ok ? Gate(ws.Tris) : (-1, -1, -1, -1);
             Check(" (d) 가로경사 12 % 곁 선 → 짓기 · 관문 흉내 0(합성 잣대 = 참 폴리곤 안 RuleL · 밖 정지면)", s.Ok && g.Item1 + g.Item2 + g.Item3 + g.Item4 == 0, St(s) + $" · 관문 {g}" + (s.Ok ? $" · 부분 {s.Built!.Parts.Count}({string.Join("/", s.Built.Parts.Select(p => p.Up ? "절" : "성"))})" : ""));
+        }
+        // (k) ★[v116.3 · JACK 1109 옹벽 천단 계단] (b) 굽은 바깥 성토 · (c) 절토 다리를 계단(블록 4 m)으로 — 짓기 · 관문 흉내 0 · 줄(성토 = 벽 아랫선 · 절토 = 윗선 · 소단)마다 수평 · 가른 줄기 > 0
+        {
+            double sStrK = 25 + 8.3 * Math.PI / 3 + 12;
+            foreach (var (nm, pk, wk) in new[] { ("굽은 바깥 성토 6", pB, LineOn(2, pB, 1, sMid1 - 5, sMid1 + 5, 6.0)), ("절토 다리", pC, LineOn(3, pC, -1, sStrK - 12, sStrK + 12, 5.0)) })
+            {
+                var w = wk with { TopStep = true, BlockLen = 4 };
+                var ws = Apply(pk, new[] { w }); var s = ws.Walls[0];
+                var g = s.Ok ? Gate(ws.Tris) : (-1, -1, -1, -1);
+                double flat = 0; if (s.Ok) foreach (var row in s.Built!.Rows) if (row.Count > 1) flat = Math.Max(flat, row.Max(q => q.Z) - row.Min(q => q.Z));
+                var w0 = Apply(pk, new[] { wk }).Walls[0];
+                double tilt0 = 0; if (w0.Ok) foreach (var row in w0.Built!.Rows) if (row.Count > 1) tilt0 = Math.Max(tilt0, row.Max(q => q.Z) - row.Min(q => q.Z));
+                Check($" (k) 계단 천단 {nm}(블록 4 m) — 짓기 · 관문 흉내 0 · 줄마다 수평(± 1 mm) · 가른 줄기 > 0 · 끔은 기욺", s.Ok && g.Item1 + g.Item2 + g.Item3 + g.Item4 == 0 && flat <= 1e-3 && s.Built!.StepCuts > 0 && tilt0 > 0.05,
+                    St(s) + $" · 관문 {g} · 줄 {(s.Ok ? s.Built!.Rows.Count : -1)}개 · 줄 기울기 {flat * 1000:F2} mm(끔 {tilt0:F2} m) · 가른 줄기 {(s.Ok ? s.Built!.StepCuts : -1)} · 옛 높이로 둔 점 {(s.Ok ? s.Built!.StepFallback : -1)}");
+            }
         }
         // (e) 데이라잇 0.5 m 안 — 첫 단 부분단(δ 몇 cm) · w_min · 바늘 0
         {
