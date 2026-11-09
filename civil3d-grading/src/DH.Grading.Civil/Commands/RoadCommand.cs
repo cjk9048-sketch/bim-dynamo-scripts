@@ -650,6 +650,9 @@ public class RoadCommand
             double s0Snap = s.S0; var lastSnap = s.Last;
             // ★[도로 마무리 ① · 계획 5.6] 빈 구간이면 토막마다 선 · 결과 · Core 측점 0(고른 선의 토막으로 셈)
             var pieceSnap = s.Pieces.Count > 1 ? s.Pieces.ToList() : null;
+            // ★[v116 · 고리 엔진 §5] 한 토막 도로의 토막(고리 엔진이면 주인 구간 · 기록 고르기에 옛 엔진 결과를 씀) · 고르기 전 고리 엔진이었나(옹벽을 넣으면 옛 엔진 — 안내 한 줄)
+            var pc0Snap = s.Pieces.Count > 0 && ReferenceEquals(s.Pieces[0].R, s.Last) ? s.Pieces[0] : null;
+            bool ringWas = s.Pieces.Any(p => p.Ring != null);
             // ★[설치 전 검토 L8] 배치 공간(모형 뷰포트 밖)에서는 잠깐 그린 선을 못 고른다
             try
             {
@@ -783,6 +786,9 @@ public class RoadCommand
                 if (selId != hitId) { Paint(selId, false); selId = hitId; Paint(selId, true); }
                 var line = cands[li];
                 if (pieceSnap != null) { lastSnap = pieceSnap[candP[li]].R; s0Snap = pieceSnap[candP[li]].S0; }
+                // ★★[v116 · 고리 엔진 계획 3판 §5] 고리 토막 결과에는 단면 기록(ProfMain · Trans · Recs · RecProf)이 없다 — OwnerRange · WallLineMatch는 그 토막 입력의 옛 엔진 결과로(한 번 셈 · 고르기는 고리 선 그대로)
+                var pcSel = pieceSnap != null ? pieceSnap[candP[li]] : pc0Snap;
+                var ownR = pcSel != null && pcSel.Ring != null ? pcSel.OldRun() : lastSnap;
                 // ★★[v113.0 → ★v114.3 · JACK 1105 진입도로 옹벽 추가] 사면 변환 — [옹벽 추가]로 지은 옹벽선(TierLine.WallNo)이면 그 기록을 통째로 지운다(구간지정 안 받음 · 측점 구간 셈보다 먼저)
                 int boundNo = wallMode ? -1 : line.WallNo > 0 ? line.WallNo : -1;
                 if (boundNo >= 0)
@@ -798,7 +804,7 @@ public class RoadCommand
                 }
                 var (w0, w1) = RoadGrade.RangeOnLine(line, null, null);
                 // ★[v111.3 · 계획 검토 M3] 이웃 사면선이 끝면 띠로 옹벽 구간 안까지 이어 들어간 몫은 뺌(그 선을 낸 단면이 주인인 자리만 — 안 빼면 변환할 때마다 옆 옹벽 구간이 띠만큼 먹힘)
-                (w0, w1) = RoadGrade.OwnerRange(lastSnap, line, w0, w1);
+                (w0, w1) = RoadGrade.OwnerRange(ownR, line, w0, w1);
                 double span = w1 - w0;
                 string what = $"{(line.Side < 0 ? "좌" : "우")} · {(line.Cut ? "절토" : "성토")} {line.K + 1}단 {(line.Role == RoadGrade.LineRole.Crest ? "사면선" : line.Role == RoadGrade.LineRole.Toe ? "소단선" : "옹벽선")}";
                 // ★[v111.3 · 설치 전 검토 L3] 고른 선이 모두 옹벽 구간 끝면 띠 안(그 선의 주인 구간이 없음)이면 «NaN m» 대신 까닭
@@ -827,7 +833,7 @@ public class RoadCommand
                     var r2 = PickOnLine(ed, "\n끝점 선택: ", ruler, ta, out double tb);
                     if (r2.Status != PromptStatus.OK) { ed.WriteMessage("\n → 구간지정 취소."); Paint(selId, false); selId = ObjectId.Null; continue; }
                     (c0, c1) = ruler.SRange(ta, tb);   // ★[전체 검토 M4] 두 찍은 점만이 아니라 그 사이 선의 측점 모두(빨간 띠와 같은 구간)
-                    if (double.IsFinite(c0) && double.IsFinite(c1)) (c0, c1) = RoadGrade.OwnerRange(lastSnap, line, c0, c1);   // ★[v111.3 · M3]
+                    if (double.IsFinite(c0) && double.IsFinite(c1)) (c0, c1) = RoadGrade.OwnerRange(ownR, line, c0, c1);   // ★[v111.3 · M3]
                     if (!double.IsFinite(c0) || !double.IsFinite(c1) || c1 - c0 < 0.5) { ed.WriteMessage("\n → 구간이 0.5 m보다 짧습니다 — 선을 다시 클릭하세요."); Paint(selId, false); selId = ObjectId.Null; continue; }
                     ed.WriteMessage($"\n → 구간지정 {c1 - c0:0.#}m (전체 {span:0.#}m 중)");
                 }
@@ -844,11 +850,13 @@ public class RoadCommand
                     d.TierWalls.Add(new[] { a0, a1, (double)line.Side, line.K, pdr.Value });
                     s.SaveDesign(); changed = true; s.Recompute();   // ★[검토 L6] 기록이 저장되면 바뀐 것(다시 계산이 실패해도 도로 면은 다시)
                     ed.WriteMessage($"\n[{label}] {what} — {a0:F1} ~ {a1:F1} m({a1 - a0:F1} m) · {line.K + 1}단부터 옹벽 · 소단 {pdr.Value:0.##} m");
+                    // ★[v116 · 고리 엔진 §5 · D2] 벽 기록이 생겨 이 도로는 옛 엔진으로 넘어감 — 한 줄
+                    if (ringWas && s.Last != null && s.Pieces.All(p => p.Ring == null)) ed.WriteMessage($"\n[{label}] 이 도로는 옹벽이 있어 옛 방식으로 다시 지었습니다");
                 }
                 else
                 {
                     // ★[설치 전 검토 M2] 전체구간 = 고른 옹벽선을 낸 기록만 통째로(옆 단 · 옆 구간 기록은 그대로) · 구간지정 = 그 구간의 옹벽을 모두 잘라 냄
-                    int n = RoadGrade.CutWallRecords(d.TierWalls, line.Side, a0, a1, whole: !part, match: part ? null : RoadGrade.WallLineMatch(lastSnap, line));
+                    int n = RoadGrade.CutWallRecords(d.TierWalls, line.Side, a0, a1, whole: !part, match: part ? null : RoadGrade.WallLineMatch(ownR, line));
                     if (n == 0) { ed.WriteMessage("\n → 이 자리에는 옹벽 기록이 없습니다 — 다른 옹벽선을 클릭하세요."); Paint(selId, false); selId = ObjectId.Null; continue; }
                     s.SaveDesign(); changed = true; s.Recompute();   // ★[검토 L6] 기록이 저장되면 바뀐 것(다시 계산이 실패해도 도로 면은 다시)
                     ed.WriteMessage($"\n[{label}] {(line.Side < 0 ? "좌" : "우")} {a0:F1} ~ {a1:F1} m — 옹벽 {n}구간을 사면으로" + (part ? "(고른 구간만)" : ""));
@@ -944,28 +952,7 @@ public class RoadCommand
         return r;
     }
 
-    /// <summary>사업 경계(닫힌 폴리선) — 사면이 밖으로 나가는 구간을 옹벽으로 제안.</summary>
-    [CommandMethod("DHROADLIMIT")]
-    public void Limit()
-    {
-        var ed = AcadApp.DocumentManager.MdiActiveDocument.Editor;
-        try
-        {
-            var s = Need(ed); if (s == null) return;
-            var peo = new PromptEntityOptions("\n[진입도로] 사업 경계 폴리선(Enter = 지우기): ") { AllowNone = true };
-            peo.SetRejectMessage("\n폴리선만 됩니다."); peo.AddAllowedClass(typeof(Polyline), true);
-            var per = ed.GetEntity(peo);
-            if (per.Status == PromptStatus.None) s.Fresh().LimitHandle = "";
-            else if (per.Status == PromptStatus.OK) s.Fresh().LimitHandle = per.ObjectId.Handle.ToString();
-            else return;
-            s.SaveDesign(); s.Recompute();
-        }
-        catch (System.Exception ex)
-        {
-            ed.WriteMessage("\n[진입도로] 사업 경계 실패 — " + ex.Message);
-            try { DiagLog.Append("\n[진입도로] 사업 경계 실패 — " + ex); } catch { }
-        }
-    }
+    // ★[v116.4 · JACK 1109 «옹벽 제안 기능은 필요 없으니 없앨 것»] DHROADLIMIT(사업 경계 — 옹벽 제안용) 명령 없앰
 
     /// <summary>[종단 자동으로 다시](옛 [종단 초안 다시]) — 계획 종단 PVI를 모두 지우고 바탕면을 따라 처음부터(노선이 바뀌어 끝 측점이 달라졌을 때 등).
     /// <para>★[v111.7 · JACK 1102] 손으로 옮긴 PVI가 사라지므로 한 번 묻는다(기본 = 아니오).</para></summary>

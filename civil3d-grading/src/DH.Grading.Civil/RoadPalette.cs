@@ -147,24 +147,12 @@ internal sealed class RoadPanel : UserControl
 
         // ── ■ 옹벽 ──
         // ★★[v111.7 · JACK 1102] [옹벽 변환] [사면 변환](옛 ■ 진입도로 수정에서 옮김 — 전체 해제는 명령 안 C · 부지와 같음) → 옹벽 제안 한 줄(제안 높이 · [사업 경계]) · 풍선 글은 쉬운 말로
-        _host = GradingDialog.AddCollapsible(_root, "■ 옹벽", "사면 → 옹벽 · 옹벽 → 사면 · 옹벽 추가 · 옹벽 제안", open: true, key: "도로:옹벽");
+        _host = GradingDialog.AddCollapsible(_root, "■ 옹벽", "사면 → 옹벽 · 옹벽 → 사면 · 옹벽 추가", open: true, key: "도로:옹벽");
         // ★★[v113.0 · JACK 1104 «옹벽 변환은 소단선 변형 · 폴리선 옹벽 추가는 별도 단추»] [사면→옹벽] · [옹벽→사면] · [옹벽 추가](풍선 글 짧게)
         Buttons(("사면→옹벽", "DHROADWALLCONV", "고른 사면선 · 소단선부터 바깥을 옹벽으로 바꿉니다.", false),
                 ("옹벽→사면", "DHROADSLOPECONV", "옹벽선을 골라 다시 사면으로 되돌립니다. 추가한 옹벽은 W로 지웁니다.", false),
                 ("옹벽 추가", "DHROADWALLADD", "경계에서 경계까지 폴리선을 그려 옹벽을 추가합니다.", false));
-        // 옹벽 제안 한 줄 — 이름 · 제안 높이 칸 · [사업 경계](좁으면 아래로 접힘)
-        var sug = new WrapPanel { Margin = new Thickness(0, 4, 0, 0) };
-        sug.Children.Add(new TextBlock
-        {
-            Text = "옹벽 제안", FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = DhBrand.Ink, Margin = new Thickness(2, 0, 10, 8),
-            ToolTip = "사면 높이가 «제안 높이»보다 높거나 사면이 사업 경계 밖으로 나가는 구간을 분홍빛 보라(자홍) 선으로 표시합니다 — 그 자리에 옹벽을 세우라는 제안입니다(제안 높이 0 = 높이로는 제안 안 함).",
-        });
-        _host.Children.Add(sug);
-        var hostKeep = _host; _host = sug;
-        Row(("제안 높이 m", d => d.SuggestH, (d, v) => d.SuggestH = v, 1, 0, 50));
-        Buttons(("사업 경계", "DHROADLIMIT", "사업 경계가 되는 닫힌 폴리선을 고릅니다 — 사면이 이 선 밖으로 나가는 구간을 분홍빛 보라(자홍) 선으로 표시해 옹벽을 제안합니다(Enter = 경계 지우기)", false));
-        _host = hostKeep;
-        foreach (UIElement c in sug.Children) if (c is FrameworkElement fe) fe.VerticalAlignment = VerticalAlignment.Center;
+        // ★[v116.4 · JACK 1109 «옹벽 제안 기능은 필요 없으니 없앨 것»] 옹벽 제안 한 줄(제안 높이 · [사업 경계]) 없앰 — 옛 기록 칸(SuggestH · LimitHandle)은 읽기만 하고 안 씀
 
         // ── ■ 측구 ★★[도로 마무리 ② · 계획 6.3 · JACK 1102 «드롭박스 · 대표단면 + 치수»] 형식 → 그 형식 치수(mm) → [구간 지정](두 점 · 쪽 = 첫 점) ──
         _host = GradingDialog.AddCollapsible(_root, "■ 측구", "U형 · L형 · 치수 · 구간 지정", open: false, key: "도로:측구");
@@ -557,7 +545,6 @@ internal sealed class RoadPanel : UserControl
             if (r.Error.Length > 0) { _result.Text = r.Error; return; }
             var wl = s!.Design.TierWalls.Where(w => w.Length >= 2).ToList();
             double wallLen = wl.Sum(w => Math.Abs(w[1] - w[0]));
-            double outLen = RoadSession.OutOfLimitLength(r);
             // ★★[v111.7.2 · JACK 1102 «20 %까지는 문제없이 — 그 이상이면 경고»] 최대 종단경사가 20 %(고정)를 넘으면 그 줄을 빨갛게 + 어디인지 한 줄
             bool over = double.IsFinite(s.GradeNow) && s.GradeNow > ProfileSheetRules.WarnGrade + 1e-6;
             void L(string t, bool red = false)
@@ -581,9 +568,8 @@ internal sealed class RoadPanel : UserControl
             L($"최대 절토고  {mxC:F1} m · 성토고  {mxF:F1} m");
             if (double.IsFinite(s.GradeNow)) L($"최대 종단경사  {s.GradeNow * 100:F1} %", over);
             if (s.GradeWarn.Length > 0) L(s.GradeWarn, true);
-            L($"옹벽  {wl.Count}구간 {wallLen:F0} m · 제안  {rs.Sum(q => q.Suggest.Count)}구간");
+            L($"옹벽  {wl.Count}구간 {wallLen:F0} m");
             if (s.DitchQty.Length > 0) L("측구  " + s.DitchQty);
-            if (outLen > 0) L($"⚠ 사업 경계 밖 사면  {outLen:F0} m");
             if (r.Conflicts > 0) L($"⚠ 사면 충돌  {r.Conflicts}칸(옹벽 자리)");
             if (r.ReachHit) L("⚠ 데이라잇 못 찾음(범위 밖)");
             // ★[도로 마무리 ① · 계획 5.8] 도로 길이 = 도로 구간 합(잘린 끝 · 빈 구간 뺌)

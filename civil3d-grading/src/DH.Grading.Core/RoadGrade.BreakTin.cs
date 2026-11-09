@@ -472,7 +472,7 @@ public static partial class RoadGrade
     }
 
     /// <summary>★[틈 면] 면의 제약 들로네 세모에 속 점을 하나씩 넣음(담은 세모를 셋으로 · 면 둘레 변은 안 뒤집고 안쪽 변만 들로네로 뒤집음).</summary>
-    static List<Coordinate[]> InsertPoints(List<Coordinate[]> tris, List<Coordinate> pts, Geometry face)
+    internal static List<Coordinate[]> InsertPoints(List<Coordinate[]> tris, List<Coordinate> pts, Geometry face)
     {
         var T = tris.Select(t => new[] { t[0], t[1], t[2] }).ToList();
         static double Cr(Coordinate o, Coordinate a, Coordinate b) => (a.X - o.X) * (b.Y - o.Y) - (a.Y - o.Y) * (b.X - o.X);

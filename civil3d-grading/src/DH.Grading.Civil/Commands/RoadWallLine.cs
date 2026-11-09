@@ -61,12 +61,12 @@ internal static class RoadWallLine
     }
 
     /// <summary>시험 짓기 — 앞 기록 + 이 선(<paramref name="src"/> · 소단 폭) → 이 선 상태(짓지 못하면 까닭).</summary>
-    internal static Trial Try(Document doc, RoadSession s, IReadOnlyList<Point3> src, int no, double tc, double tf, double reach)
+    internal static Trial Try(Document doc, RoadSession s, IReadOnlyList<Point3> src, int no, double tc, double tf, double reach, bool topStep = false, double blockLen = 9)
     {
         var t = new Trial();
         var (inp, r, p0, lines, path, why) = s.P0Now();
         if (inp == null || r == null || p0 == null || lines == null) { t.Why = why; return t; }
-        var all = inp.LineWalls.Where(w => w.No != no).Append(new RoadGrade.LineWall(no, src.Select(q => q.X).ToArray(), src.Select(q => q.Y).ToArray(), tc, tf, reach)).ToList();
+        var all = inp.LineWalls.Where(w => w.No != no).Append(new RoadGrade.LineWall(no, src.Select(q => q.X).ToArray(), src.Select(q => q.Y).ToArray(), tc, tf, reach, topStep, topStep ? blockLen : 0)).ToList();
         t.Ws = RoadGrade.ApplyWalls(inp, r, p0, lines, path, all, SiteBlockers(doc.Database));
         t.St = t.Ws.Walls.LastOrDefault(w => w.No == no);
         if (t.St == null) t.Why = "시험 짓기에 안 들어감"; else if (!t.St.Ok) t.Why = t.St.Why;
@@ -77,20 +77,22 @@ internal static class RoadWallLine
 
     /// <summary>★[v114.3 · 화면 없는 탐침 · 대화 끝] 그린 점 · 소단 폭 → 시험 짓기 → 판 2 기록 · 저장 · 다시 계산(질문 없음). 번호(0 = 못 함 · 아무것도 안 바꿈) · 글.
     /// <paramref name="redraw"/>면 끝에 도로 면 · 종단 · 횡단까지 다시(<see cref="RoadCommand.RedrawStale"/> — 명령은 제 끝에서 한다).</summary>
-    internal static (int No, string Note) Make(Document doc, IReadOnlyList<Point3> src, double tc, double tf, string srcHandle = "", bool redraw = true, double reach = 40)
+    internal static (int No, string Note) Make(Document doc, IReadOnlyList<Point3> src, double tc, double tf, string srcHandle = "", bool redraw = true, double reach = 40, bool topStep = false, double blockLen = 9)
     {
         var s = RoadSession.Of(doc);
         if (s == null) return (0, "열린 진입도로가 없습니다(진입도로 창)");
         s.RecomputeIfDirty();
+        bool ringWas = s.Pieces.Any(p => p.Ring != null);   // ★[v116 · 고리 엔진 §5] 벽을 넣기 전 고리 엔진이었나(넣으면 옛 엔진 — 안내 한 줄)
         var d = s.Fresh();
         int no = NextNo(d);
-        var t = Try(doc, s, src, no, tc, tf, reach);
+        var t = Try(doc, s, src, no, tc, tf, reach, topStep, blockLen);
         if (t.St == null || !t.St.Ok) return Stop(doc, t.Why.Length > 0 ? t.Why : "못 지음");
         var st = t.St;
         var rec = new RoadDesign.BoundWallRec
         {
             No = no, X = st.Cut!.Line.Select(q => q.X).ToArray(), Y = st.Cut.Line.Select(q => q.Y).ToArray(),
             SrcX = src.Select(q => q.X).ToArray(), SrcY = src.Select(q => q.Y).ToArray(), Side = st.Side, Tc = tc, Tf = tf, Reach = reach, SrcHandle = srcHandle ?? "",
+            TopStep = topStep, BlockLen = topStep ? blockLen : 0,
         };
         rec.Sig = rec.SigNow();
         d.BoundWalls ??= new List<RoadDesign.BoundWallRec>();
@@ -98,7 +100,9 @@ internal static class RoadWallLine
         s.SaveDesign(); s.Recompute();
         var b = st.Built!;
         string note = $"추가한 옹벽 {no} — {(st.Side < 0 ? "좌" : "우")} · {string.Join("+", new[] { b.HasFill ? "성토" : "", b.HasCut ? "절토" : "" }.Where(q => q.Length > 0))} · 선 {b.LineLen:F1} m · 단높이 = 도로 사면 · 소단 절토 {tc:0.##} / 성토 {tf:0.##} m"
-                    + $" · 선 바깥 최대 {b.FootMax:F2} m" + $" · 교차각 {st.Cut.AngleA:F0}°/{st.Cut.AngleB:F0}°" + (b.Warn.Count > 0 ? " · ⚠" + string.Join(" · ⚠", b.Warn) : "") + (st.Cut.Warn.Count > 0 ? " · ⚠" + string.Join(" · ⚠", st.Cut.Warn) : "");
+                    + (topStep ? string.Format(System.Globalization.CultureInfo.InvariantCulture, " · 천단 계단 {0:0.##} m", blockLen) : "")
+                    + $" · 선 바깥 최대 {b.FootMax:F2} m" + $" · 교차각 {st.Cut.AngleA:F0}°/{st.Cut.AngleB:F0}°" + (b.Warn.Count > 0 ? " · ⚠" + string.Join(" · ⚠", b.Warn) : "") + (st.Cut.Warn.Count > 0 ? " · ⚠" + string.Join(" · ⚠", st.Cut.Warn) : "")
+                    + (ringWas && s.Last != null && s.Pieces.All(p => p.Ring == null) ? " · 이 도로는 옹벽이 있어 옛 방식으로 다시 지었습니다" : "");   // ★[v116 · D2] 벽 기록 → 옛 엔진
         try { DiagLog.Append($"\n■ {Tag} {System.DateTime.Now:HH:mm:ss} — {note} · 옛 경계 {st.Cut.AreaOld:F1} = 새 {st.Cut.AreaNew:F1} + 잘라낼 {st.Cut.AreaCut:F1}㎡ · {st.Ms} ms\n{st.Log.TrimEnd()}"); } catch { }
         SelfCheckLog.Line(Tag, true, note, doc.Name);
         if (redraw) RoadCommand.RedrawStale(doc, s);
@@ -124,7 +128,8 @@ internal static class RoadWallLine
         var d = s.Fresh();
         int no = NextNo(d);
         double tc = d.CutBenchW, tf = d.FillBenchW, reach = 40;
-        var t = Try(doc, s, got.Pts, no, tc, tf, reach);
+        bool topStep = false; double blockLen = 9;   // ★[v116.3 · JACK 1109 옹벽 천단 선택] 기본 = 경사
+        var t = Try(doc, s, got.Pts, no, tc, tf, reach, topStep, blockLen);
         double mk = System.Math.Max(0.3, System.Math.Sqrt(System.Math.Pow(bd.Max(q => q.X) - bd.Min(q => q.X), 2) + System.Math.Pow(bd.Max(q => q.Y) - bd.Min(q => q.Y), 2)) * 0.006);
         while (true)
         {
@@ -142,14 +147,16 @@ internal static class RoadWallLine
             else live = WallLineDraw.Show(st?.Cut?.Marks ?? new List<(double, double)>(), got.Pts, mk);
             string foot = ok ? string.Format(System.Globalization.CultureInfo.InvariantCulture, " · 선 바깥 최대 {0:F2} m{1}", b!.FootMax, b.FootMax > 0 ? " ⚠" : "") : "";
             string sides = ok ? "단높이 = 도로 사면 · " + (b!.HasCut ? $"절토 소단 {tc:0.##}" : "") + (b.HasCut && b.HasFill ? " / " : "") + (b.HasFill ? $"성토 소단 {tf:0.##}" : "") : "";
-            string spec = ok ? $"〈{sides}{foot}〉" : $"〈⚠{t.Why}〉";
+            string top = topStep ? string.Format(System.Globalization.CultureInfo.InvariantCulture, " · 천단 계단 {0:0.##} m", blockLen) : " · 천단 경사";
+            string spec = ok ? $"〈{sides}{top}{foot}〉" : $"〈⚠{t.Why}〉";
             PromptResult r;
             try
             {
                 bool hc = !ok || b!.HasCut, hf = !ok || b!.HasFill;
-                var pk = new PromptKeywordOptions($"\n[{Tag}] 제원 {spec} [{(hc ? "절토(C)/" : "")}{(hf ? "성토(F)/" : "")}다시그리기(S)] (Enter = 적용): ");
+                var pk = new PromptKeywordOptions($"\n[{Tag}] 제원 {spec} [{(hc ? "절토(C)/" : "")}{(hf ? "성토(F)/" : "")}천단(P)/다시그리기(S)] (Enter = 적용): ");
                 if (hc) pk.Keywords.Add("C", "C", "절토(C)");
                 if (hf) pk.Keywords.Add("F", "F", "성토(F)");
+                pk.Keywords.Add("P", "P", "천단(P)");
                 pk.Keywords.Add("S", "S", "다시그리기(S)");
                 pk.AllowNone = true; pk.AppendKeywordsToMessage = false;
                 r = ed.GetKeywords(pk);
@@ -167,21 +174,27 @@ internal static class RoadWallLine
                     if (dr.Value > 60) ed.WriteMessage("\n → 범위 밖 값입니다(소단 0~60 m).");
                     else if (c) tc = dr.Value; else tf = dr.Value;
                 }
-                t = Try(doc, s, got.Pts, no, tc, tf, reach);
+                t = Try(doc, s, got.Pts, no, tc, tf, reach, topStep, blockLen);
+                continue;
+            }
+            if (kw == "P")
+            {
+                (topStep, blockLen) = WallLineFlow.AskTop(ed, topStep, blockLen);   // ★[v116.3 · JACK 1109 옹벽 천단 선택]
+                t = Try(doc, s, got.Pts, no, tc, tf, reach, topStep, blockLen);
                 continue;
             }
             if (kw == "S")
             {
                 var g2 = WallLineDraw.Run(doc, Tag, bd, band, pts => BoundaryCut.Classify(pts, bd, band, bl));
                 if (g2 == null) return false;
-                got = g2; t = Try(doc, s, got.Pts, no, tc, tf, reach);
+                got = g2; t = Try(doc, s, got.Pts, no, tc, tf, reach, topStep, blockLen);
                 continue;
             }
             if (!ok) { ed.WriteMessage($"\n[{Tag}] {t.Why} — 값을 바꾸거나(C · F) 다시 그리세요(S)."); continue; }
             if (b!.FootMax > 0) ed.WriteMessage(string.Format(System.Globalization.CultureInfo.InvariantCulture, "\n[{0}] ⚠선 바깥으로 최대 {1:F2} m 나갑니다({2:F1}, {3:F1}) — 막지 않습니다.", Tag, b.FootMax, b.FootAt.X, b.FootAt.Y));
             break;
         }
-        var (made, note) = Make(doc, got.Pts, tc, tf, got.SrcHandle, redraw: false, reach: reach);
+        var (made, note) = Make(doc, got.Pts, tc, tf, got.SrcHandle, redraw: false, reach: reach, topStep: topStep, blockLen: blockLen);
         ed.WriteMessage(made > 0 ? $"\n[{Tag}] {note}" : $"\n[{Tag}] ⚠{note} — 아무것도 안 바꿨습니다.");
         return made > 0;
     }

@@ -46,7 +46,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.GroundContourCommand))]      // ★[v113.0] DHGNDCONTOUR(도면의 등고선 → 원지반)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.CropGroundCommand))]         // DHCROP(원지형 자르기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SelfCheckCommand))]          // DHSELFCHECK(자가점검 — 읽기만 · v103.1.7)
-[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.RoadCommand))]               // ★[v110] DHROAD · DHROADWALL · DHROADLIMIT · DHROADREDRAFT · DHROADOFF(진입도로) · ★[v111.6] DHROADPANEL(진입도로 창)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.RoadCommand))]               // ★[v110] DHROAD · DHROADWALL · DHROADREDRAFT · DHROADOFF(진입도로) · ★[v111.6] DHROADPANEL(진입도로 창)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.AltCommand))]                // ★[v112.1] DHALT(대안 — 도면 사본 저장 · 수량표 · 열기 · 지우기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SheetBookCommand))]          // ★[v112.0] DHSHEETBOOK(도킹창 «도면화») · DHSHEETMAKE([작성하기] — 배치탭 · 도곽 · 표제란)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ProfileFlipCommand))]        // ★[v113.1] DHPROFILEREV · DHROADREV(종단 시점 ↔ 종점 바꾸기)
@@ -874,7 +874,7 @@ public sealed class RibbonApp : IExtensionApplication
             btnRoad.ToolTip = MakeTip("폴리선 선택 (DHROAD)",
                 "폴리선(또는 Civil 노선)을 고르면 노선 · 종단도를 만들고 사면 · 옹벽 · 토공량을 바로 보여 줍니다.\n" +
                 "· 종단뷰에서 계획 종단 PVI를 옮기거나 노선 · 창 값을 바꾸면 바로 다시 계산\n" +
-                "· 자홍 = 옹벽 제안 · 빨강 = 옹벽 · 사면 충돌 · 회색 = 사면선 · 소단선", null);
+                "· 빨강 = 옹벽 · 사면 충돌 · 회색 = 사면선 · 소단선", null);
             var splitRoad = new RibbonSplitButton
             {
                 Text = "진입도로",

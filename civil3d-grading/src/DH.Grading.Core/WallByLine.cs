@@ -52,6 +52,11 @@ public static class WallByLine
         public string CutBenchWhy = "", FillBenchWhy = "";
         /// <summary>★[v114.3 · 재검토 M2] 옛 소단 방식에서 줄 · 끝 선에 높이를 주기 전에 채우는 점 간격(사면 코드와 같은 clamp(VertexSpacing, 0.3, 1.0)).</summary>
         public double RowDens = 1.0;
+        /// <summary>★[v116.3 · JACK 1109 옹벽 천단 선택] 계단 — 단 높이(절토 = 벽 윗선 · 뒤 소단 / 성토 = 벽 아랫선)를 블록(<see cref="BlockLen"/>)마다 수평(절토 꼴 블록 안 최대 —
+        /// 절토 = 가장 높은 곳 · 성토 = 가장 낮은 곳) · 블록 경계에 가로 마구리. 끔(기본) = 옛 경사(비트 같음). 옛 소단 방식에서만 뜻이 있다(선기준 높이는 이미 수평).</summary>
+        public bool TopStep;
+        /// <summary>계단 블록 길이(m · 선 위 호 길이) — 0 이하면 9.</summary>
+        public double BlockLen = 9;
     }
 
     /// <summary>★[v114.3 · JACK 1105 소단 높이] 벽 소단 높이 방식 — 선기준(부분마다 선 위 P0 최저 · 최고에서 H씩 수평) · 옛소단(옛 사면 소단 높이 — 바닥이 기울면 따라 기욺).</summary>
@@ -123,6 +128,9 @@ public static class WallByLine
         /// <summary>★[v114.0 · JACK 1105 소단 높이 관문] 표본 — Kind 0 = 소단(단마다 소단 폭 가운데 ± 0.5 m · 0.5 m 간격 · Z = Z_k) · 1 = F(0.5 m 간격 · Z = G).
         /// 제 바꿀 자리 밖 · 땅이 이기는 자리(절토 꼴 G′ − Z′_k ≤ 1 cm)는 안 넣는다. 합성 뒤 관문(<see cref="BenchGate"/>)도 이것을 쓴다.</summary>
         public List<(double X, double Y, double Z, int Kind)> BenchPts = new();
+        /// <summary>★[v116.3 · 계단 천단] 블록 경계로 가른 줄기 수 · 가장 높은 자리 단면을 못 써 그 자리 옛 높이로 둔 수(오목 꼭짓점 이등분선 너머).</summary>
+        public int StepCuts, StepFallback, StepFaceBad, StepRowBad;
+        public double StepRowMax;
         /// <summary>★[v114.0 · 소단 높이 관문] 계수(까닭별) — 소단 표본 · 소단 높이 틀림(1 cm 넘음) · 소단에 벽 면 없음 · F 표본 · F 턱(1 cm 넘음) · F 못 읽음 · 가장 큰 차와 그 자리.</summary>
         public int BenchN, BenchSag, BenchMiss, FootN, FootBad, FootMiss; public double BenchMax; public (double X, double Y) BenchAt;
         /// <summary>★[v114.3 · JACK 1105 소단 높이 · 계획 2판 1절 불변식 · 재검토 M-B] 옛 소단 방식 계수 — 줄 안 이웃 점 뜀(|ΔZ| &gt; maxGrad·Δs + 1 cm) ·
@@ -847,7 +855,10 @@ public static class WallByLine
             part.Zref = sg * zr;
             double Lv(int k) => zr + k * H;   // 절토 꼴 높이(선기준)
             // ★[v114.3] 단 k의 높이(절토 꼴 · 지역 좌표 점마다) — 옛 소단 = 링에서 · 선기준 = Lv(k)
-            double ZL(int k, double lx, double ly) => ob == null ? Lv(k) : sg * ob.Level(k, lx + ox, ly + oy);
+            double ZL0(int k, double lx, double ly) => ob == null ? Lv(k) : sg * ob.Level(k, lx + ox, ly + oy);
+            // ★[v116.3 · 계단 천단 · 계획 2판 H1] 계단 높이는 줄기를 정하고 블록으로 가른 뒤에만 켠다(줄기 판정 · 합치기 · 입력 관문은 ZL0)
+            Func<int, double, double, double>? zlStep = null;
+            double ZL(int k, double lx, double ly) => zlStep != null ? zlStep(k, lx, ly) : ZL0(k, lx, ly);
             // 선 위 s에서 바깥으로 d 민 점(지역 좌표)
             (double X, double Y) RowPt(double s, double d) { var c = pl.At(s); var (tx, ty) = pl.Tan(s); return (c.X - ty * side * d, c.Y + tx * side * d); }
             // ★[v114.3 · 계획 2판 2절 «줄기» · 재검토 M-B] P0′ ≥ Thr(k)면 단 k를 넘어 다음 단 — 옛 소단은 «그 단 ±1 cm 안(옛 소단 위)이면 다음 단»(첫 면 h = H_k)이고
@@ -964,6 +975,26 @@ public static class WallByLine
                 }
                 if (stuck.Count > 0) R.Warn.Add($"부분 {partNo}: 면 폭보다 짧은 줄기 {stuck.Count}개를 못 합쳤다(첫 면 높이가 H + 1 cm를 넘는다)");
             }
+            // ★[v116.3 · 계단 천단 · 계획 2판 H3 · M5] 블록 경계에서 줄기를 가름(옛 소단만 — 선기준 높이는 이미 수평) · 줄기 경계 · 부분 끝 곁(max(1 m, 2·max(f, vE)) 안)은 안 가름 · 마지막 토막 < B/3이면 앞 블록에 붙임
+            bool stepOn = inp.TopStep && ob != null;
+            if (stepOn)
+            {
+                double B = inp.BlockLen > 0 ? Math.Max(1.0, inp.BlockLen) : 9.0;
+                double tolB = Math.Max(1.0, 2 * Math.Max(f, vE));
+                var cutsB = new List<double>();
+                for (double sc = part.S0 + B; sc < part.S1 - 1e-9; sc += B) cutsB.Add(sc);
+                if (cutsB.Count > 0 && part.S1 - cutsB[^1] < B / 3) cutsB.RemoveAt(cutsB.Count - 1);
+                var bnds = stems.Skip(1).Select(st => st.S0).Concat(new[] { part.S0, part.S1 }).ToList();
+                foreach (double sc in cutsB)
+                {
+                    if (bnds.Any(bd => Math.Abs(bd - sc) < tolB)) continue;
+                    int si = stems.FindIndex(st => st.S0 < sc && st.S1 > sc);
+                    if (si < 0) continue;
+                    var st0 = stems[si];
+                    stems.Insert(si + 1, new Stem { S0 = sc, S1 = st0.S1, J = st0.J });
+                    st0.S1 = sc; bnds.Add(sc); R.StepCuts++;
+                }
+            }
             part.Stems = stems;
             if (ob != null) part.H = Hk(stems.Min(s => s.J));   // 표시용(첫 단 간격)
             for (int k = 1; k < stems.Count; k++) { var c = pl.At(stems[k].S0); R.Points.Add((c.X + ox, c.Y + oy, 1)); }
@@ -1033,6 +1064,53 @@ public static class WallByLine
             var lpx = new PL(lpExt.Select(q => new Coordinate(q.X, q.Y)).ToArray());
             double sOff = lpx.Near(subPart[0].X, subPart[0].Y).S;
             (double S, double Side) SOn(double x, double y) { var nr = lpx.Near(x, y); return (nr.S - sOff + part.S0, nr.Side); }
+            // ★[v116.3 · 계단 천단 · 계획 2판 M4] 계단 높이 = 그 점이 든 줄기의 «가장 높은 자리» s*의 옛 단면을 줄기 따라 수평으로 민 것 —
+            //   s* = 그 단 면 끝 거리(DF)에서 0.25 m 표본 중 ZL0(절토 꼴) 최대 · 높이 = ZL0(그 단, RowPt(s*, 그 점 거리 d)).
+            //   거리마다 따로 최대를 잡으면 소단 띠 안에서 최대 자리가 바뀌어 줄 사이 세모와 1 cm 어긋났다(S216 (k) 4 m) — 한 자리 단면이면 줄 사이가 곧다.
+            //   표본의 SOn이 줄기 밖(오목 꼭짓점 이등분선 너머 = 남의 다리)이거나 NaN이면 버림 · 못 쓰면 그 자리 ZL0.
+            //   줄기를 아는 곳(줄 · 끝 선 · 소단 표본 · 면 — 줄기마다 도는 고리)은 curStem으로 바로 넘김(오목 꼭짓점 곁 끝 선 점의 SOn이 이웃 줄기로 넘어갔다)
+            int curStem = -1;
+            if (stepOn)
+            {
+                var sStar = new Dictionary<(int, int), double>();
+                zlStep = (kq, x, y) =>
+                {
+                    int q = curStem;
+                    if (q < 0 || q >= stems.Count)
+                    {
+                        double sq = Math.Clamp(SOn(x, y).S, part.S0, part.S1);
+                        q = stems.Count - 1; for (int i = 0; i < stems.Count; i++) if (sq <= stems[i].S1 + 1e-9) { q = i; break; }
+                    }
+                    var st = stems[q];
+                    if (!sStar.TryGetValue((q, kq), out double sb))
+                    {
+                        double dRef = DF(st.J, Math.Max(1, kq - st.J + 1)), dChk = dRef + Tk(kq) + 0.5;
+                        // s* 후보 = 그 단 소단 끝(+0.5 m)까지 민 점도 줄기 안(오목 꼭짓점 이등분선 안)인 자리 — 거기서 단면을 밀면 그 단의 모든 거리에서 같은 단면(S216 (k) 4 m: 꼭짓점 곁 s*의 소단 끝 줄이 이등분선을 넘어 옛 높이로 떨어졌다)
+                        double bestA = double.NegativeInfinity, bestB = double.NegativeInfinity, sA = double.NaN, sB2 = double.NaN;
+                        int n = Math.Max(2, (int)Math.Ceiling((st.S1 - st.S0) / 0.25));
+                        bool In(double s1, double d0) { var (px, py) = RowPt(s1, d0); double ss = SOn(px, py).S; return ss >= st.S0 - 0.05 && ss <= st.S1 + 0.05; }
+                        for (int i = 0; i <= n; i++)
+                        {
+                            double s1 = st.S0 + (st.S1 - st.S0) * i / n;
+                            if (!In(s1, dRef)) continue;
+                            var (px, py) = RowPt(s1, dRef);
+                            double z = ZL0(kq, px, py); if (double.IsNaN(z)) continue;
+                            if (z > bestB) { bestB = z; sB2 = s1; }
+                            if (In(s1, dChk) && z > bestA) { bestA = z; sA = s1; }
+                        }
+                        sb = !double.IsNaN(sA) ? sA : sB2;
+                        sStar[(q, kq)] = sb;
+                    }
+                    if (!double.IsNaN(sb))
+                    {
+                        var (px, py) = RowPt(sb, lpx.Near(x, y).D);
+                        double ss = SOn(px, py).S;
+                        if (ss >= st.S0 - 0.05 && ss <= st.S1 + 0.05) { double z = ZL0(kq, px, py); if (!double.IsNaN(z)) return z; }
+                    }
+                    R.StepFallback++;
+                    return ZL0(kq, x, y);
+                };
+            }
             List<List<Coordinate>> RowIn(double d, double a, double b, double shA, double shB)
             {
                 var res = new List<(List<Coordinate> P, int A, int B)>();
@@ -1175,6 +1253,7 @@ public static class WallByLine
             bool reachHit = false;
             for (int k = 0; k < nSt; k++)
             {
+                curStem = k;
                 var st = stems[k];
                 var rows = new List<(double D, int Kl, List<List<Coordinate>> Pc)>();
                 // ★[v115 · S218 (f) 계측] 소단 가운데 줄을 0.5 m 간격으로 — 가운데 한 줄(T/2)만이면 넓은 소단(T 3 m)에서 줄 사이가 1.5 m라 비틀린 옛 소단(도로 · 굽은 곳 · 오목 꼭짓점 곁)을
@@ -1233,12 +1312,24 @@ public static class WallByLine
                 }
                 for (int k = 0; k < nSt; k++)
                 {
+                    curStem = k;
                     var rr = tierRows[k];
+                    // ★[v116.3 설치 전 검토 M1] 계단이면 지은 높이(ZL)도 잰다 — 줄마다 수평(1 cm) · 첫 면 h > 0(오목 꼭짓점 곁 옛 높이로 떨어진 점 · 이등분선 안 최고 단면이 옛 높이보다 낮은 자리)
+                    if (stepOn)
+                        foreach (var (_, kl, pcs) in rr)
+                            foreach (var pc in pcs)
+                            {
+                                if (pc.Count < 2) continue;
+                                double zmin = double.MaxValue, zmax = double.MinValue;
+                                foreach (var c in pc) { double z = ZL(kl, c.X, c.Y); zmin = Math.Min(zmin, z); zmax = Math.Max(zmax, z); }
+                                R.StepRowMax = Math.Max(R.StepRowMax, zmax - zmin);
+                                if (zmax - zmin > 0.01) { if (R.StepRowBad == 0) R.FaceHAt = Wd(pc[0]); R.StepRowBad++; }
+                            }
                     foreach (var (_, kl, pcs) in rr)
                         foreach (var pc in pcs)
                             for (int i = 0; i + 1 < pc.Count; i++)
                             {
-                                double dsl = pc[i].Distance(pc[i + 1]), za = ZL(kl, pc[i].X, pc[i].Y), zb = ZL(kl, pc[i + 1].X, pc[i + 1].Y), dz = Math.Abs(zb - za);
+                                double dsl = pc[i].Distance(pc[i + 1]), za = ZL0(kl, pc[i].X, pc[i].Y), zb = ZL0(kl, pc[i + 1].X, pc[i + 1].Y), dz = Math.Abs(zb - za);   // ★[v116.3 계획 2판 H2] 입력 관문 = 옛 높이
                                 R.JumpN++;
                                 // ★[v114.3 · JACK 1105 진입도로 옹벽 추가] 한도는 단 표가 정한다(부지 = |Δz| − maxGrad·거리 옛 그대로 · 도로 = 다른 다리 · 광선 안 건넘이면 NaN)
                                 double over = ob.JumpOver(kl, pc[i].X + ox, pc[i].Y + oy, sg * za, pc[i + 1].X + ox, pc[i + 1].Y + oy, sg * zb, dsl);
@@ -1264,13 +1355,20 @@ public static class WallByLine
                             {
                                 var (zl, _) = lo(c.X, c.Y);
                                 if (double.IsNaN(zl)) continue;
-                                double h = ZL(kHi, c.X, c.Y) - zl;
+                                double h = ZL0(kHi, c.X, c.Y) - zl;   // ★[v116.3 계획 2판 H2] 입력 관문 = 옛 높이(계단 면은 h + Δ ≥ h)
                                 R.FaceHN++;
                                 R.FaceHMin = Math.Min(R.FaceHMin, h); R.FaceHMax = Math.Max(R.FaceHMax, h);
                                 if (!(h > Eps && h <= lim)) { if (R.FaceHBad == 0) R.FaceHAt = Wd(c); R.FaceHBad++; }
                             }
                     }
                     if (rr.Count > 0) Face(rr[0].Pc, rr[0].Kl, (x, y) => (p0L(x, y), 0));
+                    if (stepOn && rr.Count > 0)
+                        foreach (var pc in rr[0].Pc)
+                            foreach (var c in pc)
+                            {
+                                double hs = ZL(rr[0].Kl, c.X, c.Y) - p0L(c.X, c.Y);
+                                if (!(hs > Eps)) { if (R.StepFaceBad == 0) R.FaceHAt = Wd(c); R.StepFaceBad++; }
+                            }
                     for (int i = 0; i + 1 < rr.Count; i++)
                     {
                         var lo = rr[i]; var hi = rr[i + 1];
@@ -1283,15 +1381,15 @@ public static class WallByLine
                                 foreach (var c in pc)
                                 {
                                     (double Z, double D) nb = (double.NaN, double.MaxValue);
-                                    foreach (var lp in lo.Pc) { var r0 = NearZ(lp, (x, y) => ZL(lo.Kl, x, y), c.X, c.Y); if (r0.D < nb.D) nb = r0; }
-                                    if (!double.IsNaN(nb.Z) && nb.D < w * 1.5) R.TiltOut = Math.Max(R.TiltOut, Math.Abs(ZL(hi.Kl, c.X, c.Y) - nb.Z) / nb.D);
+                                    foreach (var lp in lo.Pc) { var r0 = NearZ(lp, (x, y) => ZL0(lo.Kl, x, y), c.X, c.Y); if (r0.D < nb.D) nb = r0; }
+                                    if (!double.IsNaN(nb.Z) && nb.D < w * 1.5) R.TiltOut = Math.Max(R.TiltOut, Math.Abs(ZL0(hi.Kl, c.X, c.Y) - nb.Z) / nb.D);
                                 }
                             continue;
                         }
                         Face(hi.Pc, hi.Kl, (x, y) =>
                         {
                             (double Z, double D) best = (double.NaN, double.MaxValue);
-                            foreach (var lp in lo.Pc) { var r = NearZ(lp, (u, v) => ZL(lo.Kl, u, v), x, y); if (r.D < best.D) best = r; }
+                            foreach (var lp in lo.Pc) { var r = NearZ(lp, (u, v) => ZL0(lo.Kl, u, v), x, y); if (r.D < best.D) best = r; }
                             return best;
                         });
                     }
@@ -1305,6 +1403,10 @@ public static class WallByLine
                 if (R.FaceHBad > 0)
                     return No("옛 소단", string.Format(Ci, "옛 소단 사이 벽 면 높이가 맞지 않음 ({0:F1}, {1:F1}) h {2:F3}~{3:F3} m(0 < h ≤ 단 간격 + maxGrad·면 폭 + 1 cm · {4}점 중 {5}점) — 선을 옮기세요",
                         R.FaceHAt.X, R.FaceHAt.Y, R.FaceHMin, R.FaceHMax, R.FaceHN, R.FaceHBad), R.FaceHAt);
+                if (R.StepFaceBad > 0 || R.StepRowBad > 0)
+                    return No("계단", string.Format(Ci, "계단 천단을 이 선에 못 맞춤 ({0:F1}, {1:F1}) — {2}{3} — 블록 길이를 바꾸거나 천단 경사로 하세요",
+                        R.FaceHAt.X, R.FaceHAt.Y, R.StepFaceBad > 0 ? $"첫 벽 면 높이가 0 이하인 점 {R.StepFaceBad}" : "",
+                        R.StepRowBad > 0 ? string.Format(Ci, "{0}수평이 아닌 줄 {1}(최대 {2:F2} m · 오목 꼭짓점 곁)", R.StepFaceBad > 0 ? " · " : "", R.StepRowBad, R.StepRowMax) : ""), R.FaceHAt);
             }
             // 원(raw) 선 — L(부분 · S ± vEps/2) · 줄 · 끝 선 E · 틈 닫음 · 바깥 띠 O(줄기마다 끝 줄 + vEps · z = G) · 부분 끝 띠 E′(z = G)
             var raw = new List<List<Point3>>();
@@ -1331,6 +1433,7 @@ public static class WallByLine
             int eShort = 0;
             for (int k = 0; k < nSt; k++)
             {
+                curStem = k;
                 foreach (var (dd, kl, pcs) in tierRows[k])
                     foreach (var pc in pcs) { var l = pc.Select(c => new Point3(c.X + ox, c.Y + oy, sg * ZL(kl, c.X, c.Y))).ToList(); raw.Add(l); rowSet.Add(l); R.RawRows.Add(l); }
                 var (a, b) = Shr(k);
@@ -1524,6 +1627,7 @@ public static class WallByLine
                 foreach (var pg in comps)
                 {
                     var prep = NetTopologySuite.Geometries.Prepared.PreparedGeometryFactory.Prepare(pg);
+                    curStem = -1;
                     foreach (var (dd, kl, pcs) in oRows)
                         foreach (var pc in pcs)
                             foreach (var c in pc)
@@ -1553,6 +1657,7 @@ public static class WallByLine
                 for (int k = 0; k < nSt; k++)
                     for (int t = 1; t <= stems[k].Tiers; t++)
                     {
+                        curStem = k;
                         int lev = stems[k].J + t - 1;
                         double dF = DF(stems[k].J, t);
                         double w0 = dF + vE, w1 = (t == stems[k].Tiers ? dEnd[k] : dF + Tk(lev)) - vE;
@@ -1765,6 +1870,7 @@ public static class WallByLine
                 }
                 // 로그 ②-e — 쓴 단마다 벽 소단 높이 폭(줄 위 · 실제 z)
                 var lvTxt = new List<string>();
+                curStem = -1;
                 foreach (int kl in tierRows.SelectMany(r => r.Select(q => q.Kl)).Distinct().OrderBy(q => q))
                 {
                     var zs = tierRows.SelectMany(r => r.Where(q => q.Kl == kl)).SelectMany(q => q.Pc).SelectMany(pc => pc).Select(c => sg * ZL(kl, c.X, c.Y)).ToList();
@@ -1773,7 +1879,10 @@ public static class WallByLine
                 log.Append(string.Format(Ci, "  ②-e 부분 {0} 옛 소단(링 · {1}단까지 · maxGrad {2:F3}) {3}\n", partNo, ob.K, ob.MaxGrad, string.Join(" · ", lvTxt)));
             }
             // 면 토막(Faces)
-            BuildFaces(R, part, partNo, tierRows, eLines, pl, ox, oy, sg, side, ZL, DF, Fk, Tk, P0At, Gw, gf, (part.Up ? lfC : lfW));
+            curStem = -1;
+            BuildFaces(R, part, partNo, tierRows, eLines, pl, ox, oy, sg, side, ZL, DF, Fk, Tk, P0At, Gw, gf, (part.Up ? lfC : lfW), k2 => curStem = k2, stepOn);
+            if (stepOn && R.StepFallback > 0) R.Warn.Add($"부분 {partNo}: 계단 천단 — 오목 꼭짓점 곁 {R.StepFallback}점은 그 자리 옛 높이(가장 높은 단면이 이등분선을 넘음)");
+            curStem = -1;
         }
         R.ZoneF = lfW; R.ZoneC = lfC;
         foreach (var p in parts) if (p.FootMax > R.FootMax) { R.FootMax = p.FootMax; R.FootAt = p.FootAt; }
@@ -2194,7 +2303,7 @@ public static class WallByLine
     static void BuildFaces(Built R, Part part, int partNo, List<List<(double D, int Kl, List<List<Coordinate>> Pc)>> tierRows,
         List<(int Stem, bool AtStart, bool Inner, List<Point3> E)> eLines, PL pl, double ox, double oy, double sg, double side,
         Func<int, double, double, double> zlv, Func<int, int, double> dfOf, Func<int, double> fOf, Func<int, double> tOf,
-        Func<double, double> p0At, Func<double, double, double?> gw, GeometryFactory gf, List<List<Point3>> zones)
+        Func<double, double> p0At, Func<double, double, double?> gw, GeometryFactory gf, List<List<Point3>> zones, Action<int>? setStem = null, bool step = false)
     {
         var zp = zones.Select(r => BoundaryCutPoly(gf, r, ox, oy)).Where(p => p != null).Cast<Geometry>().ToList();
         if (zp.Count == 0) return;
@@ -2212,6 +2321,7 @@ public static class WallByLine
         }
         for (int k = 0; k < part.Stems.Count; k++)
         {
+            setStem?.Invoke(k);   // ★[v116.3 · 계단 천단] 계단 높이는 이 줄기 블록에서
             var st = part.Stems[k];
             for (int t = 1; t <= st.Tiers; t++)
             {
@@ -2249,11 +2359,13 @@ public static class WallByLine
                     }
             }
         }
+        setStem?.Invoke(-1);
         // 가로 마구리(줄기 갈림 S마다) — 절토 꼴로 높은 쪽(J가 큰 쪽) 끝 선이 머리 · 발 = 낮은 쪽 끝 선과 땅 중 (절토 꼴) 낮은 것
         for (int k = 0; k + 1 < part.Stems.Count; k++)
         {
             var ea = eLines.First(e => e.Stem == k && !e.AtStart).E; var eb = eLines.First(e => e.Stem == k + 1 && e.AtStart).E;
-            bool aHi = part.Stems[k].J > part.Stems[k + 1].J;
+            // ★[v116.3 · 계단 천단 · 계획 2판 L8] J가 같으면(블록 경계) 끝 선 높이(절토 꼴 평균) 큰 쪽이 머리
+            bool aHi = !step || part.Stems[k].J != part.Stems[k + 1].J ? part.Stems[k].J > part.Stems[k + 1].J : ea.Average(q => sg * q.Z) > eb.Average(q => sg * q.Z);   // 끔 = 옛 규칙 그대로(검토 L1)
             var hi = aHi ? ea : eb; var lo = aHi ? eb : ea;
             foreach (var ls in Clip(hi.Select(q => new Coordinate(q.X - ox, q.Y - oy)).ToArray()))
             {
