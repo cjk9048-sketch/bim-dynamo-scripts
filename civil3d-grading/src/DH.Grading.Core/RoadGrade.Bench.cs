@@ -297,7 +297,7 @@ public static partial class RoadGrade
         }
 
         /// <summary>한 줄 — 단 표 · 셈.</summary>
-        public string Text => string.Format(System.Globalization.CultureInfo.InvariantCulture,
+        public override string Text => string.Format(System.Globalization.CultureInfo.InvariantCulture,
             "{0} {1} · 광선 {2} · 단 {3}(R {4}) · 꼬리 광선 {5} · 단 전에 끝난 광선 {6} · 이어짐 쌍 {7}(안 건넘 {8} · 다리 다름 {9} · 띠 밖 {10} · 1 cm 넘음 {11})",
             _side < 0 ? "좌" : "우", _up ? "절토" : "성토", Rays, _rise.Length, string.Join("/", _rise.Take(4).Select(v => v.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))),
             TailRays, BeyondRays, JumpPairs, JumpNoCross, JumpLegDiff, JumpNoBand, JumpOverN);

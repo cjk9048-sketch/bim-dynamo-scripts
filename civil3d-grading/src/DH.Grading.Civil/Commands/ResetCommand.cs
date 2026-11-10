@@ -62,7 +62,7 @@ public sealed class ResetCommand
     /// <summary>★[v111.10 · 계획_초기화.md 2장 · JACK 1103 Q1 «남기기»] [계획지표면 초기화]가 남기는 «DH-» 레이어 — 계획지표면의 결과가 아닌 입력 · 바탕 자료(남김 목록은 여기 한 곳).
     /// 보링공 표식(지층 입력) · 가져온 지적 셋 · 배경지도 · 지도 범위 상자. 원지반 재료(등고선 · 계곡선 · 표고점 · 범위 밖 자료)는 늘 남김(<see cref="GroundKeepLayers"/>).</summary>
     internal static readonly string[] SiteKeepLayers =
-        new[] { StrataPalette.MarkLayer, BasemapCommand.Layer, MapPickCommand.BoxLayer, StructImport.LayXref, StructImport.LayPlan }.Concat(ImportGisCommand.ParcelLayers).ToArray();   // ★[v115 · JACK 1105 Revit 구조물] 구조물 원본 xref · 평면 외곽은 가져온 자료
+        new[] { StrataPalette.MarkLayer, BasemapCommand.Layer, MapPickCommand.BoxLayer, StructImport.LayXref, StructImport.LayPlan, StructSolids.Layer }.Concat(ImportGisCommand.ParcelLayers).ToArray();   // ★[v115 · JACK 1105 Revit 구조물] 구조물 원본 xref · 평면 외곽은 가져온 자료
 
     /// <summary>원지반 정의가 물고 있는 재료 레이어 — 지우면 원지반 정의에 느낌표(CropGroundCommand.CutAwayLayer 설명 · JACK 0902).</summary>
     private static string[] GroundKeepLayers => ImportGisCommand.GroundImportLayers.Concat(new[] { CropGroundCommand.CutAwayLayer }).ToArray();

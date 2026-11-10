@@ -18,6 +18,8 @@ public static partial class RoadGrade
         public bool Cross;
         /// <summary>★[v114.3 · JACK 1105 진입도로 옹벽 추가] 선 옹벽 번호(0 = 아님) — 그 벽 면 머리 · 마구리 선(<see cref="CutLines"/>).</summary>
         public int WallNo;
+        /// <summary>★[v116.9 · 4-1] 그림 전용 소단 턱 선(<see cref="RoadRing.DisplayLines"/>가 더함) — [사면→옹벽] 고르기 · 면 짓기에는 안 씀.</summary>
+        public bool DisplayOnly;
         public List<(double X, double Y, double Z, double S)> Pts = new();
     }
 

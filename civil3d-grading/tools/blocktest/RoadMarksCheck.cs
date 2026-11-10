@@ -123,5 +123,19 @@ static class RoadMarksCheck
                 Math.Abs(xmin - sa) < 1e-9 && Math.Abs(xmax - sb) < 1e-9 && lines.Count == 1 && left.Side < 0 && Math.Abs(at40 - 3.7) < 1e-9 && r.Lines == 1 && r.Dropped == 0,
                 $"{r.Text} · x {xmin:F6} ~ {xmax:F6} · 측점 40 바깥 선 {at40:F6}");
         }
+
+        // ⑥ ★[v116.5 · JACK 1110] 가운데 흰 점선 — 직선 0~50 · 좌 3 · 우 4(가운데 = 오른쪽 0.5) · 칠 3 · 빈 5 · 폭 0.15 → 토막 [0,3] [8,11] … [48,50] · 넓이 = 칠 길이 합 × 0.15
+        {
+            (double X, double Y)? P(double s, double o) => (OX + s, OY - o);
+            var c = RoadMarks.CenterDashes(new[] { (0.0, 50.0) }, P, _ => (3.0, 4.0), Z);
+            double area = 0; for (int i = 0; i < c.Idx.Count; i += 3) { var a = c.Pos[c.Idx[i]]; var b = c.Pos[c.Idx[i + 1]]; var d = c.Pos[c.Idx[i + 2]]; area += Math.Abs((b.X - a.X) * (d.Y - a.Y) - (b.Y - a.Y) * (d.X - a.X)) / 2; }
+            double want = (3 * 6 + 2) * 0.15;
+            double yMin = c.Pos.Min(p => p.Y - OY), yMax = c.Pos.Max(p => p.Y - OY);
+            bool gapsEmpty = c.Pos.All(p => { double x = p.X - OX, m = x % 8; return m <= 3 + 1e-9 || m >= 8 - 1e-9; });
+            var e = RoadMarks.Lanes(Stations(0, 50), P, _ => (3.0, 4.0), Z, centerSpans: new[] { (0.0, 50.0) });
+            check("S187 SL⑥ 가운데 흰 점선 — 칠 3 m · 빈 5 m · 폭 0.15 m · 비대칭 차로 가운데(오른쪽 0.5) · 넓이 = 칠 길이 × 폭 · 빈 자리에 점 없음 · 반시계 · 양쪽 차선과 한 묶음(3줄)",
+                Math.Abs(area - want) < 1e-6 && Math.Abs(yMin - (-0.575)) < 1e-9 && Math.Abs(yMax - (-0.425)) < 1e-9 && gapsEmpty && Ccw(c) && c.Dropped == 0 && c.Lines == 1 && e.Lines == 3,
+                $"{c.Text} · 넓이 {area:F4} / {want:F4} ㎡ · y {yMin:F3} ~ {yMax:F3} · 묶음 {e.Text}");
+        }
     }
 }

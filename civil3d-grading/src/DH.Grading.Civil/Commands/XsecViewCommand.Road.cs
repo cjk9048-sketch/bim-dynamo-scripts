@@ -125,6 +125,140 @@ public sealed partial class XsecViewCommand
         return nSec > 0 ? $"측구 단면 {nSec}" : "";
     }
 
+    /// <summary>★★[v116.8 · JACK 1110 «포장 아스팔트 · 콘크리트 — 횡단에도 표현» · 계획 `2026-11-10_진입도로_포장종류.md` §4] 진입도로 횡단 — 마감면(계획 종단 + 횡단 경사) 아래
+    /// 차로 양 끝 사이 포장 층(<see cref="RoadPave.Rings"/>) · 층마다 윤곽 + 비연관 해치(종이 1 mm보다 얇으면 윤곽만) · 뷰마다 지시선 하나에 층 이름 · 두께를 쌓은 글.
+    /// 토공 · 도로 면은 그대로(표시만). 표식은 <see cref="BuildRoad"/>가 그린 것 모두에(«XSEC» — 다시 그릴 때 · 초기화가 지움).
+    /// 자가 점검: 차로 세 점(−좌 반폭 · 0 · +우 반폭)에서 설계 윗선 − 진입도로 면 높이(10 mm 넘으면 ⚠ · 그리기는 설계 그대로 — 측구와 같은 법).</summary>
+    static string DrawPaveSections(Database db, List<(ObjectId Id, double St, string Name)> views, ObjectId alignId, double wl, double wr, double scale, System.Text.StringBuilder log)
+    {
+        if (views == null || views.Count == 0) return "";
+        int nView = 0, nEnt = 0, nMap = 0, nHatch = 0, nThin = 0, nFail = 0, nChk = 0; double dzMax = 0; string dzAt = "", failWhy = "";
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var dash = WallSectionDraw.Prepare(db);
+        string kindTxt = "", drawnKey = "";
+        PaveDrawn.TryRemove(alignId, out _);
+        try
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            var d = RoadDesign.Read(tr, alignId);
+            if (d == null || d.PlanProfile.Length == 0 || !db.TryGetObjectId(new Handle(System.Convert.ToInt64(d.PlanProfile, 16)), out var pid) || pid.IsErased) { tr.Commit(); return ""; }
+            drawnKey = d.PaveKey;   // ★[설치 전 검토 L] 도면 기록(그린 값) — 도장도 이 값으로(창 저장이 실패해 메모리와 기록이 다르면 «포장이 바뀌었습니다»가 남게)
+            var layers = RoadPave.Layers(d.PaveK, d.PaveA, d.PaveC);
+            if (layers.Count == 0) { tr.Commit(); return ""; }
+            kindTxt = d.PaveK == RoadPave.Kind.Concrete ? "콘크리트" : "아스팔트";
+            var pr = (CivilDb.Profile)tr.GetObject(pid, OpenMode.ForRead);
+            var al = tr.GetObject(alignId, OpenMode.ForRead) as CivilDb.Alignment;
+            var rg = RoadRanges.Of(tr, alignId, d);
+            var sec = d.Section();
+            var rings = RoadPave.Rings(sec, layers);
+            double totalT = layers.Sum(l => l.T);
+            CivilDb.TinSurface? rs = null;
+            try { if (d.SurfaceHandle.Length > 0 && db.TryGetObjectId(new Handle(System.Convert.ToInt64(d.SurfaceHandle, 16)), out var sid) && !sid.IsErased) rs = tr.GetObject(sid, OpenMode.ForRead) as CivilDb.TinSurface; } catch { }
+            var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+            var L = WallSectionDraw.XsecLayers(db, tr, dash);
+            var lp = WallSectionDraw.PaveLayer(db, tr);
+            var kst = ImportGisCommand.EnsureKoreanTextStyle(db, tr);
+            double txtH = WallSectionDraw.LabelMm / 1000.0 * scale;
+            double patUnit = db.Measurement == MeasurementValue.Metric ? 1.0 : 1.0 / 25.4;   // acadiso(mm) · acad(인치) 기본 칸
+            void Put(Entity e, ObjectId lay) { e.SetDatabaseDefaults(db); e.LayerId = lay; ms.AppendEntity(e); tr.AddNewlyCreatedDBObject(e, true); nEnt++; }
+            foreach (var (vid, _, _) in views)
+            {
+                try
+                {
+                    if (tr.GetObject(vid, OpenMode.ForRead) is not CivilDb.SectionView sv) continue;
+                    if (tr.GetObject(sv.SampleLineId, OpenMode.ForRead) is not CivilDb.SampleLine ln) continue;
+                    double st = ln.Station;
+                    if (rg.Count > 0 && !RoadRanges.Inside(rg, st)) continue;
+                    double zc;
+                    try { zc = pr.ElevationAt(st); } catch { continue; }
+                    var map = WallSectionDraw.Affine(-wl, wr, sv.ElevationMin, sv.ElevationMax,
+                        (o, z) => { double x = 0, y = 0; return sv.FindXYAtOffsetAndElevation(o, z, ref x, ref y) ? new Point2d(x, y) : (Point2d?)null; });
+                    if (map == null) { nMap++; continue; }
+                    Point2d P(double O, double Z) => map(O, zc + Z);
+                    for (int i = 0; i < rings.Count; i++)
+                    {
+                        var ring = rings[i]; var ly = layers[i];
+                        var pts = ring.Select(q => P(q.O, q.Z)).ToList();
+                        var pl = new Polyline();
+                        for (int k = 0; k < pts.Count; k++) pl.AddVertexAt(k, pts[k], 0, 0, 0);
+                        pl.Closed = true;
+                        Put(pl, lp);
+                        // 해치 — 종이 위 두께가 얇으면 윤곽만(결정 D5) · 무늬 크기 · 각은 무늬를 걸기 전에도 · 건 뒤에도(지적도 해치와 같은 차례 — 다시 걸어야 먹음)
+                        // 종이 위 두께 = 그려진 두께(뷰 세로 과장 포함 — 크라운에서 위 · 밑 점 사이) ÷ 축척
+                        double drawnT = System.Math.Abs(P(0, ring[4].Z).Y - P(0, ring[1].Z).Y);
+                        if (drawnT * 1000.0 / scale < RoadPave.ThinPaperMm) { nThin++; continue; }
+                        Hatch? h = null;
+                        try
+                        {
+                            h = new Hatch { Associative = false };
+                            Put(h, lp);
+                            double ps = ly.PaperMm * scale / 1000.0 / (ly.PatMm * patUnit);
+                            h.SetHatchPattern(HatchPatternType.PreDefined, ly.Pattern);
+                            h.PatternAngle = 0; h.PatternScale = ps;
+                            h.SetHatchPattern(HatchPatternType.PreDefined, ly.Pattern);
+                            var pc = new Point2dCollection();
+                            foreach (var q in pts) if (pc.Count == 0 || (q - pc[pc.Count - 1]).Length > 1e-9) pc.Add(q);
+                            if (pc.Count >= 3 && (pc[0] - pc[pc.Count - 1]).Length > 1e-9) pc.Add(pc[0]);
+                            var bc = new DoubleCollection(); for (int k = 0; k < pc.Count; k++) bc.Add(0);
+                            h.AppendLoop(HatchLoopTypes.External | HatchLoopTypes.Polyline, pc, bc);
+                            h.EvaluateHatch(true);
+                            nHatch++;
+                        }
+                        catch (System.Exception exH)
+                        {
+                            nFail++; if (failWhy.Length == 0) failWhy = $"{ly.Pattern} {exH.GetType().Name}: {exH.Message}";
+                            try { if (h != null && !h.IsErased) { h.Erase(); nEnt--; } } catch { }
+                        }
+                    }
+                    // 이름 글 — 왼 차로 가운데 · 층 묶음 가운데 높이에서 위 · 안쪽(중심 쪽 — 측구 글은 바깥)으로 꺾어 층 차례대로 쌓음
+                    double oA = -sec.HalfL / 2;
+                    var A = P(oA, sec.Drop(oA) - totalT / 2);
+                    double fx = P(0, 0).X - P(-sec.HalfL, 0).X >= 0 ? 1 : -1;
+                    var lines = layers.Select(l => $"{l.Name} t={l.T * 1000:0}").ToList();
+                    double wMax = lines.Max(s => s.Length) * txtH * 0.95 + 0.6 * txtH, gapY = 1.5 * txtH;
+                    // ★[설치 전 검토 M] 글 묶음은 가운데 표고축 · 그 숫자를 넘어서(축 + 6 글자 높이) · 측구 글 줄(3.2 글자 높이)보다 위(6.5)에서 시작 — 지시선만 축을 건넘
+                    var P1 = new Point2d(P(0, 0).X + fx * 6 * txtH, A.Y + 6.5 * txtH);
+                    var P2 = new Point2d(P1.X + fx * wMax, P1.Y);
+                    var ld = new Polyline(); ld.AddVertexAt(0, A, 0, 0, 0); ld.AddVertexAt(1, P1, 0, 0, 0); ld.AddVertexAt(2, P2, 0, 0, 0);
+                    Put(ld, L.Leal);
+                    for (int i = 0; i < lines.Count; i++)
+                    {
+                        var t = new DBText { TextString = lines[i], Height = txtH, HorizontalMode = fx > 0 ? TextHorizontalMode.TextLeft : TextHorizontalMode.TextRight, VerticalMode = TextVerticalMode.TextBottom };
+                        t.SetDatabaseDefaults(db);
+                        if (!kst.IsNull) t.TextStyleId = kst;
+                        t.AlignmentPoint = new Point3d(P1.X + fx * 0.3 * txtH, P1.Y + 0.25 * txtH + (lines.Count - 1 - i) * gapY, 0);
+                        t.LayerId = L.Leat; ms.AppendEntity(t); tr.AddNewlyCreatedDBObject(t, true); nEnt++;
+                    }
+                    nView++;
+                    // 자가 점검 — 설계 윗선(= 마감면) vs 진입도로 면
+                    if (rs != null && al != null)
+                        foreach (double o in new[] { -sec.HalfL, 0, sec.HalfR })
+                        {
+                            try
+                            {
+                                double x = 0, y = 0; al.PointLocation(st, o, ref x, ref y);
+                                double zs = rs.FindElevationAtXY(x, y), dz = System.Math.Abs(zc + sec.Drop(o) - zs);
+                                nChk++;
+                                if (dz > dzMax) { dzMax = dz; dzAt = $"측점 {st:F2} 옵셋 {o:F2}"; }
+                            }
+                            catch { }
+                        }
+                }
+                catch (System.Exception exV) { log?.AppendLine("  포장 단면 — 뷰 하나 못 그림: " + exV.Message); }
+            }
+            tr.Commit();
+        }
+        catch (System.Exception ex) { log?.AppendLine("  포장 단면 — 실패: " + ex.Message); return "⚠포장 단면 못 넣음 — " + ex.Message; }
+        string chk = nChk > 0 ? $" · 윗선 − 도로 면 최대 {dzMax * 1000:F1} mm{(dzMax > 0.01 ? " ⚠ " + dzAt : "")}" : "";
+        PaveDrawn[alignId] = drawnKey;
+        log?.AppendLine($"  포장 단면({kindTxt}) — 뷰 {nView} · 객체 {nEnt} · 해치 {nHatch}(얇아 뺌 {nThin} · 실패 {nFail}{(failWhy.Length > 0 ? " — " + failWhy : "")}){chk}" + (nMap > 0 ? $" · ⚠뷰 좌표를 못 잰 뷰 {nMap}" : "") + $" · {sw.ElapsedMilliseconds} ms");
+        try { DiagLog.Append($"\n[진입도로 횡단] 포장 단면({kindTxt}) — 뷰 {nView} · 해치 {nHatch}(얇아 뺌 {nThin} · 실패 {nFail}){chk}"); } catch { }
+        return nView > 0 ? $"포장 단면 {nView}" + (nFail > 0 ? $"(⚠해치 실패 {nFail})" : "") + (dzMax > 0.01 ? $"(⚠윗선 − 도로 면 {dzMax * 1000:F0} mm)" : "") : "";
+    }
+
+    /// <summary>★[v116.8 · 설치 전 검토 L] 노선마다 마지막 횡단 포장 단면을 그린 포장 토큰(도면 기록 값) — 횡단 도장이 씀.</summary>
+    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<ObjectId, string> PaveDrawn = new();
+
     static int TagRoadXsec(Database db, XsecTarget t, List<ObjectId> appended)
     {
         int n = 0;

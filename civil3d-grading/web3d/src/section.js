@@ -44,7 +44,7 @@ export class Section {
     const set = new Set();
     const add = (m) => { if (!m) return; for (const x of (Array.isArray(m) ? m : [m])) set.add(x); };
     const L = this.L;
-    if (L.terrain) { L.terrain.mats.forEach(add); add(L.terrain.cfMat); add(L.terrain.laneMat); }
+    if (L.terrain) { L.terrain.mats.forEach(add); add(L.terrain.cfMat); add(L.terrain.laneMat); add(L.terrain.jointMat); }   // ★[v116.8 · 검토 M] 줄눈도
     for (const id of ['ground', 'excav', 'wall', 'pattern', 'drain', 'cad', 'slope', 'bldg', 'tree']) {   // ★[v115] 수목도 잘림
       const l = L[id];
       if (!l || !l.obj) continue;

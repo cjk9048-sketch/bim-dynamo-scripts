@@ -664,10 +664,11 @@ public class RoadCommand
             //   ★[v111.3] 끝면 선(Cross — 노선을 가로지르는 수직면 옹벽선 · 측점 폭 0)도 뺀다
             var candP = new List<int>();
             var cands = new List<RoadGrade.TierLine>();
-            if (pieceSnap == null) { cands = s.Lines.Where(l => l.Side != 0 && !l.Cross && (l.Role == RoadGrade.LineRole.Wall) != wallMode).ToList(); candP.AddRange(cands.Select(_ => 0)); }
+            //   ★[v116.9 · 4-1] 그림 전용 소단 턱 선(DisplayOnly)도 뺀다
+            if (pieceSnap == null) { cands = s.Lines.Where(l => l.Side != 0 && !l.Cross && !l.DisplayOnly && (l.Role == RoadGrade.LineRole.Wall) != wallMode).ToList(); candP.AddRange(cands.Select(_ => 0)); }
             else
                 for (int pk = 0; pk < pieceSnap.Count; pk++)
-                    foreach (var l in pieceSnap[pk].Lines.Where(l => l.Side != 0 && !l.Cross && (l.Role == RoadGrade.LineRole.Wall) != wallMode)) { cands.Add(l); candP.Add(pk); }
+                    foreach (var l in pieceSnap[pk].Lines.Where(l => l.Side != 0 && !l.Cross && !l.DisplayOnly && (l.Role == RoadGrade.LineRole.Wall) != wallMode)) { cands.Add(l); candP.Add(pk); }
             if (cands.Count == 0)
             {
                 // ★[v113.0 · 설치 전 검토 M4] 옹벽선이 없어도(폴리선 옹벽이 모두 쉬는 중) 사면 변환은 폴리선 옹벽을 번호로 지울 수 있게
@@ -1400,6 +1401,8 @@ public class RoadCommand
         "지표면이 없어" => "지표면이 없어",
         "옛 판에서 만든 지표면입니다" => "옛 판에서 만든 지표면이라",
         "횡단도 배치가 바뀌었습니다" => "횡단도 배치가 바뀌어",   // ★[v111.7.2]
+        "포장이 바뀌었습니다" => "포장이 바뀌어",                 // ★[v116.8]
+        "포장 층 없이 그린 횡단도입니다" => "포장 층을 넣으려고",   // ★[v116.8]
         "종단도가 없어" => "종단도가 없어",                       // ★[v111.7.2] [업데이트]가 처음 놓음
         "횡단도가 없어" => "횡단도가 없어",
         "최종지표면이 없어" => "최종지표면이 없어",            // ★[v111.8]

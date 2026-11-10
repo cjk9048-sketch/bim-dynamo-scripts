@@ -314,7 +314,7 @@ static class RoadWallCheck
         return (q.Ex + q.Nx * d - OX, q.Ey + q.Ny * d - OY);
     }
 
-    static string St(RoadGrade.WallState w) => w.Ok ? $"지음 · {w.Text} · 이어짐 {w.Built!.JumpN}(거절 {w.Built.JumpBad}) · 꼬리 광선 {w.BenchF?.TailRays}/{w.BenchC?.TailRays} · {w.Ms} ms" : $"{(w.Rest ? "쉼" : "거절")} {w.Code} — {w.Why}";
+    static string St(RoadGrade.WallState w) => w.Ok ? $"지음 · {w.Text} · 이어짐 {w.Built!.JumpN}(거절 {w.Built.JumpBad}) · 꼬리 광선 {(w.BenchF as RoadGrade.RoadBench)?.TailRays}/{(w.BenchC as RoadGrade.RoadBench)?.TailRays} · {w.Ms} ms" : $"{(w.Rest ? "쉼" : "거절")} {w.Code} — {w.Why}";
 
     /// <summary>안쪽 · 바깥 광선을 따라 그린 선 — 측점 s0..s1 · 데이라잇 바깥(경계 밖)에서 들어와 광선 거리 d에서 나란히 가다 다시 나감.</summary>
     static RoadGrade.LineWall LineOn(int no, P0 p, int side, double s0, double s1, double d, double tc = 1, double tf = 1)

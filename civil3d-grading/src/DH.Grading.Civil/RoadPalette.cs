@@ -116,8 +116,8 @@ internal sealed class RoadPanel : UserControl
         MakeBtn("도로 경로 그리기", "DHROADDRAW", "점을 차례로 찍고 Enter — 꺾인 곳은 곡선 반경으로 곡선 · 아래 도로 설정 값으로 만듭니다", true);
         MakeBtn("폴리선 선택", "DHROAD", "그려 둔 폴리선 · 3D 폴리선 · Civil 노선을 골라 아래 도로 설정 값으로 만듭니다", false);
         _root.Children.Add(mk);
-        GradingDialog.ForgetOpen("도로:노선", "도로:횡단", "도로:사면");
-        var secSet = GradingDialog.AddCollapsible(_root, "■ 도로 설정", "노선 · 횡단 · 사면", first: true, open: true, key: "도로:설정");
+        GradingDialog.ForgetOpen("도로:노선", "도로:횡단", "도로:포장", "도로:사면");
+        var secSet = GradingDialog.AddCollapsible(_root, "■ 도로 설정", "노선 · 횡단 · 포장 · 사면", first: true, open: true, key: "도로:설정");
 
         _host = GradingDialog.AddCollapsible(secSet, "노선", "꺾인 곳 곡선 반경 — [경로 그리기] · [폴리선 선택] 둘 다 · 바꾸면 열린 도로의 곡선도 바뀝니다", open: true, key: "도로:노선", group: G, level: 2);
         _curve = Row(("곡선 반경 m", d => d.CurveR, (d, v) => { d.CurveR = v; RoadDesign.LastCurveR = v; _recurve = true; }, 1, 3, 1000))[0];
@@ -127,6 +127,22 @@ internal sealed class RoadPanel : UserControl
         Row(("차로 반폭 좌", d => d.HalfL, (d, v) => d.HalfL = v, 1, 1, 20), ("우", d => d.HalfR, (d, v) => d.HalfR = v, 1, 1, 20));
         Row(("횡단경사 %", d => d.CrossSlope, (d, v) => d.CrossSlope = v, 100, 0, 10), ("길어깨", d => d.ShoulderL, (d, v) => { d.ShoulderL = v; d.ShoulderR = v; }, 1, 0, 5),
             ("길어깨 경사 %", d => d.ShoulderSlope, (d, v) => d.ShoulderSlope = v, 100, 0, 10));
+
+        // ★★[v116.8 · JACK 1110 «도로 설정에 포장 — 아스팔트 · 콘크리트 고르고 횡단 · 3D에 따라 표현»] 종류(늘 켜짐 · 열린 도로 없으면 새 도로 값) → 그 종류 층 두께(mm) · 콘크리트는 줄눈 간격
+        _host = GradingDialog.AddCollapsible(secSet, "포장", "아스팔트 · 콘크리트 · 층 두께", open: false, key: "도로:포장", group: G, level: 2);
+        var paveRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(2, 2, 0, 6) };
+        paveRow.Children.Add(new TextBlock { Text = "종류", FontSize = 11, Foreground = DhBrand.Sub, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
+        _paveKind = new ComboBox { Width = 96, Height = 26, ToolTip = "횡단도 포장 층 · 3D 질감 — 도로 면 · 토공은 그대로 · 두께 첫 값은 예시" };
+        foreach (var k in new[] { "아스팔트", "콘크리트" }) _paveKind.Items.Add(k);
+        _paveKind.SelectionChanged += (_, __) => PaveKindChanged();
+        paveRow.Children.Add(_paveKind);
+        _host.Children.Add(paveRow);
+        var hostP = _host;
+        _paveA = new StackPanel(); _host = _paveA; hostP.Children.Add(_paveA);
+        Row(("표층 mm", d => d.PaveA[0], (d, v) => d.PaveA[0] = v, 1000, 10, 300), ("기층", d => d.PaveA[1], (d, v) => d.PaveA[1] = v, 1000, 0, 600), ("보조기층", d => d.PaveA[2], (d, v) => d.PaveA[2] = v, 1000, 0, 1000));
+        _paveC = new StackPanel { Visibility = Visibility.Collapsed }; _host = _paveC; hostP.Children.Add(_paveC);
+        Row(("슬래브 mm", d => d.PaveC[0], (d, v) => d.PaveC[0] = v, 1000, 100, 600), ("보조기층", d => d.PaveC[1], (d, v) => d.PaveC[1] = v, 1000, 0, 1000));
+        Row(("줄눈 간격 m", d => d.JointGap, (d, v) => d.JointGap = v, 1, 2, 20));
 
         _host = GradingDialog.AddCollapsible(secSet, "사면", "절토 · 성토 구배(1:n) · 단높이 · 소단폭", open: false, key: "도로:사면", group: G, level: 2);
         Row(("절토 1:", d => d.CutSlope, (d, v) => d.CutSlope = v, 1, 0.1, 10), ("단높이", d => d.CutBenchH, (d, v) => d.CutBenchH = v, 1, 0.5, 50), ("소단", d => d.CutBenchW, (d, v) => d.CutBenchW = v, 1, 0, 10));
@@ -215,7 +231,32 @@ internal sealed class RoadPanel : UserControl
     Button _resetBtn = null!;
     Button _endsBtn = null!;
     TextBlock _endsLine = null!, _ditchWarn = null!;
-    ComboBox _ditchKind = null!;
+    ComboBox _ditchKind = null!, _paveKind = null!;
+    StackPanel _paveA = null!, _paveC = null!;
+
+    /// <summary>★[v116.8] 포장 종류 — 그 종류 칸만 보임 · 설계에 적고 다시 계산(횡단도 «포장이 바뀌었습니다» · 도로 면은 그대로) · 열린 도로 없으면 새 도로 값.</summary>
+    void PaveKindChanged()
+    {
+        int k = Math.Clamp(_paveKind.SelectedIndex, 0, 1);
+        _paveA.Visibility = k == 0 ? Visibility.Visible : Visibility.Collapsed;
+        _paveC.Visibility = k == 1 ? Visibility.Visible : Visibility.Collapsed;
+        if (_loading) return;
+        var doc = AcadApp.DocumentManager.MdiActiveDocument;
+        if (_s == null) { if (doc != null) DraftOf(doc).PaveKind = k; return; }
+        if (Busy(_s.Doc))
+        {
+            // ★[검토 L8] 되돌릴 때 _loading 먼저(되돌림이 이 처리기를 다시 부르지 않게)
+            _loading = true;
+            try { int w = Math.Clamp(_s.Design.PaveKind, 0, 1); _paveKind.SelectedIndex = w; _paveA.Visibility = w == 0 ? Visibility.Visible : Visibility.Collapsed; _paveC.Visibility = w == 1 ? Visibility.Visible : Visibility.Collapsed; }
+            finally { _loading = false; }
+            _note.Text = "명령 중에는 값을 바꾸지 않습니다 — 명령을 끝낸(Esc) 뒤 다시 넣으세요";
+            return;
+        }
+        var d = _s.Fresh();
+        if (d.PaveKind == k) return;
+        d.PaveKind = k;
+        try { _s.SaveDesign(); _s.Recompute(); } catch (System.Exception ex) { _note.Text = "저장 실패 — " + ex.Message; }
+    }
     CheckBox _ditchLid = null!;
     StackPanel _ditchU = null!, _ditchL = null!;
 
@@ -519,6 +560,13 @@ internal sealed class RoadPanel : UserControl
                          : draftS != null ? (get(draftS) * scale).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)
                          : ReferenceEquals(box, _curve) ? RoadDesign.LastCurveR.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) : "";
                 _shown[box] = box.Text;
+            }
+            // ★[v116.8] 포장 종류 · 그 칸 보임
+            {
+                int pk = Math.Clamp((s?.Design ?? draftS)?.PaveKind ?? 0, 0, 1);
+                _paveKind.SelectedIndex = pk;
+                _paveA.Visibility = pk == 0 ? Visibility.Visible : Visibility.Collapsed;
+                _paveC.Visibility = pk == 1 ? Visibility.Visible : Visibility.Collapsed;
             }
             var r = s?.Last;
             _note.Text = s == null ? "" : s.Note;

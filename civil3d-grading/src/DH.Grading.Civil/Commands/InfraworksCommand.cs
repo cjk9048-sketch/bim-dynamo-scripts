@@ -874,7 +874,7 @@ public sealed class InfraworksCommand
                     if (fpick.Tris != null) { (web.MeshPts, web.MeshFaces) = LandXmlExport.Weld(fpick.Tris); web.MeshTris = fpick.Tris; }
                     else web.TerrainId = fpick.Id;
                     web.TerrainName = fpick.Source;
-                    web.RoadArea = fpick.RoadArea; web.RoadPave = fpick.RoadPave; web.RoadLane = fpick.RoadLane; web.RoadBench = fpick.RoadBench; web.BaseZ = fpick.Base;
+                    web.RoadArea = fpick.RoadArea; web.RoadPave = fpick.RoadPave; web.RoadLane = fpick.RoadLane; web.RoadLaneConc = fpick.RoadLaneConc; web.RoadBench = fpick.RoadBench; web.BaseZ = fpick.Base;
                     web.Lanes.AddRange(fpick.Roads);
                 }
                 else if (fpick.Tris != null)

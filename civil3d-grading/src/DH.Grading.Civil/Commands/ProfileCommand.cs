@@ -221,7 +221,10 @@ public sealed class ProfileCommand
     /// ②에서는 반대로 <b>꼭 다시 그려야</b> 한다.</para></summary>
     /// <param name="started">종단도를 <b>실제로 건드리기 시작</b>했으면 참
     /// (곧 <b>횡단도 딸려 지워졌을 수 있다</b>는 뜻).</param>
-    internal static bool Rebuild(Document doc, out bool started)
+    internal static bool Rebuild(Document doc, out bool started) => Rebuild(doc, out started, "도면 설정");
+
+    /// <param name="who">★[v116.10 · JACK 1110 «부지를 고쳐도 종단이 안 따라옴»] 명령줄 머리말 — 도면 설정 · 측점 · 종단 갱신(부지를 고친 뒤 저절로).</param>
+    internal static bool Rebuild(Document doc, out bool started, string who)
     {
         started = false;
         Database db = doc.Database;
@@ -232,21 +235,21 @@ public sealed class ProfileCommand
         {
             if (!ReadExistingRoute(db, out var pts, out var viewPt))
             {
-                ed.WriteMessage("\n[도면 설정] 다시 그릴 종단도가 없습니다 — 계획지표면 [종단도]로 먼저 만드세요."
+                ed.WriteMessage($"\n[{who}] 다시 그릴 종단도가 없습니다 — 계획지표면 [종단도]로 먼저 만드세요."
                                 + "\n  ※v32.29 이전에 만든 종단도라면 '어디에 놓았는지'가 기록돼 있지 않습니다."
                                 + " 한 번만 계획지표면 [종단도]로 새로 만들면 그 뒤로는 저장할 때마다 자동으로 갱신됩니다.");
                 return false;   // ★started는 거짓 그대로 — 손을 안 댔다
             }
             started = true;     // ★여기서부터는 부술 수 있다 — 실패해도 복구가 필요하다
-            ed.WriteMessage($"\n[도면 설정] 종단도를 그 자리에 다시 그립니다(노선 {pts.Count}점 재사용)...");
+            ed.WriteMessage($"\n[{who}] 종단도를 그 자리에 다시 그립니다(노선 {pts.Count}점 재사용)...");
             BusyPopup.Show(BusyText);   // ★[v103.3.1] 다시 그리기도 같은 창 — 아래 finally가 닫는다
             // ★[v103.2 · 4판 검토 중간 3] 조용한 다시 그리기 — 관문 없이 옹벽면만(빠진 옹벽은 ⚠ 한 줄)
             var wfPrev = CurrentWallFace;
             var wxPrev = CurrentExcav;
             CurrentWallFace = PrepareWallFace(doc, interactive: false);
             if (CurrentWallFace != null && CurrentWallFace.Missing.Length > 0)
-                Say(ed, $"\n[도면 설정] ⚠옹벽 {string.Join(",", CurrentWallFace.Missing)}이(가) 정지면_DH에 없어 종단 · 횡단에 안 들어갑니다(정지 창 [옹벽 합성] 뒤 종단을 다시 그리세요).");
-            CurrentExcav = PrepareExcav(doc, CurrentWallFace, "도면 설정");   // ★[v103.3] 다시 그리기도 옹벽 터파기를 짓거나 되쓴다
+                Say(ed, $"\n[{who}] ⚠옹벽 {string.Join(",", CurrentWallFace.Missing)}이(가) 정지면_DH에 없어 종단 · 횡단에 안 들어갑니다(정지 창 [옹벽 합성] 뒤 종단을 다시 그리세요).");
+            CurrentExcav = PrepareExcav(doc, CurrentWallFace, who);   // ★[v103.3] 다시 그리기도 옹벽 터파기를 짓거나 되쓴다
             // ★[검토 반영] <see cref="Body"/>가 <b>중간에 포기했는지</b>를 그대로 넘긴다 —
             //   종전엔 무조건 참이라 부른 쪽이 성공과 실패를 구분할 수 없었다.
             try { return Body(db, ed, pts, viewPt); }
@@ -254,7 +257,7 @@ public sealed class ProfileCommand
         }
         catch (System.Exception ex)
         {
-            ed.WriteMessage("\n[도면 설정] 종단도 다시 그리기 실패 — " + ex.Message);
+            ed.WriteMessage($"\n[{who}] 종단도 다시 그리기 실패 — " + ex.Message);
             try { DiagLog.Append($"\n■ 종단도 재생성 예외 — {ex}\n"); } catch { }
             return false;
         }

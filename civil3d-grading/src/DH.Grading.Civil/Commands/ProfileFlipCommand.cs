@@ -51,8 +51,9 @@ public sealed class ProfileFlipCommand
         }
         if (!ok) { ed.WriteMessage("\n[종단 방향] ⚠종단도를 다시 그리다 멈췄습니다 — U로 되돌리거나 계획지표면 [종단도]를 다시 누르세요(노선 · 측점은 새 방향)."); return; }
         bool xs = false;
-        try { if (touched && XsecViewCommand.LastAt != null) xs = XsecViewCommand.Refresh(doc); } catch (System.Exception ex) { ed.WriteMessage("\n[종단 방향] 횡단도 다시 그리기 실패 — " + ex.Message); }
-        if (touched && XsecViewCommand.LastAt == null) ed.WriteMessage("\n[종단 방향] 횡단도는 이 세션에서 그린 자리를 몰라 지워진 채입니다 — 계획지표면 [횡단도]를 다시 누르세요.");
+        bool knows = XsecViewCommand.KnowsSiteAt(doc.Database);   // ★[v116.10] 도면에 적은 자리도(Civil을 다시 켠 뒤)
+        try { if (touched && knows) xs = XsecViewCommand.Refresh(doc); } catch (System.Exception ex) { ed.WriteMessage("\n[종단 방향] 횡단도 다시 그리기 실패 — " + ex.Message); }
+        if (touched && !knows) ed.WriteMessage("\n[종단 방향] 횡단도는 이 세션에서 그린 자리를 몰라 지워진 채입니다 — 계획지표면 [횡단도]를 다시 누르세요.");
         else if (touched) ed.WriteMessage(xs ? "\n[종단 방향] 횡단도도 같은 자리에 다시 그렸습니다." : "\n[종단 방향] ⚠횡단도를 다시 그리지 못했습니다 — 계획지표면 [횡단도]");
         var rs = RoadSession.Of(doc);
         if (rs != null) RoadCommand.RedrawStale(doc, rs);

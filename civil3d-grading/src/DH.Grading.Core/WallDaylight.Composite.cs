@@ -27,9 +27,13 @@ public static partial class WallDaylight
     {
         /// <summary>다듬은 손댄 구역 삼각형(세계 좌표). 판정 3이면 null.</summary>
         public List<Tri>? Zone;
+        /// <summary>★[v116.6 · 진단] 판정 3으로 버린 다듬은 구역(쓰지 않음 — 키트 · 하네스가 못 한 자리를 잴 때만).</summary>
+        public List<Tri>? FailedZone;
         /// <summary>그대로 옮길 정지면 삼각형(받은 그대로).</summary>
         public List<Tri> Untouched = new();
         public CivilSafeMesh.Report? Clean;
+        /// <summary>★[v116.6] 고정 점 중 정지면 바깥 테두리 점(진입도로 면 데이라잇 — 부지는 0).</summary>
+        public int FixedBorder;
         public int PlanTotal, Touched, TouchRisk, FixedPts, PreSnapPlan, LineCount, Pieces, PiecesPoly, PiecesPlan, UnknownPieces, TriFail, AreaMis;
         public double UnknownArea;
         public int RuleSamples, RuleOver1, RuleOver10; public double RuleMax; public string RuleAt = "";
@@ -223,6 +227,23 @@ public static partial class WallDaylight
         foreach (var t in R.Untouched) { untouchedV.Add((t.A.X, t.A.Y)); untouchedV.Add((t.B.X, t.B.Y)); untouchedV.Add((t.C.X, t.C.Y)); }
         var fixedW = new Dictionary<(double, double), Point3>();
         foreach (var t in touchedTris) foreach (var q in new[] { t.A, t.B, t.C }) if (untouchedV.Contains((q.X, q.Y))) fixedW[(q.X, q.Y)] = q;
+        // ★★[v116.6 · JACK 1110 진입도로 옹벽 추가 · 키트 rwring] 정지면 <b>바깥 테두리</b>(면 하나만 쓰는 변) 꼭짓점도 고정 — 구역 다듬기(CivilSafeMesh 구역 모드)는
+        //   «테두리 = 고정 점뿐»을 전제로 테두리 점을 재지 않고 합친다. 진입도로 면(고리 면)은 데이라잇에서 끝나 선 옹벽 바꿀 자리가 그 테두리에 닿고,
+        //   테두리 점이 0.13 mm 안쪽 교선 점으로 합쳐져 테두리가 안으로 들어갔다(구멍 8곳 2.56 cm² → «합성 넓이 ≠ 손댄 정지면 넓이»).
+        //   부지 정지면은 옹벽이 테두리에 안 닿아 이 점이 없다(비트 같음). 높이는 받은 정지면 값(데이라잇 = 원지반) — 규칙과 다르면 «한 점 한 높이»가 잰다
+        int fixBorder = 0;
+        for (int i = 0; i < planAll.Count; i++)
+        {
+            if (!touched[i]) continue;
+            var t = planAll[i];
+            foreach (var (a, b) in new[] { (t.A, t.B), (t.B, t.C), (t.C, t.A) })
+                if (eMap.TryGetValue(EK(a, b), out var l) && l.Count == 1)
+                {
+                    if (fixedW.TryAdd((a.X, a.Y), a)) fixBorder++;
+                    if (fixedW.TryAdd((b.X, b.Y), b)) fixBorder++;
+                }
+        }
+        R.FixedBorder = fixBorder;
         R.FixedPts = fixedW.Count;
         R.MsTouch = sw.ElapsedMilliseconds; sw.Restart();
 
@@ -584,7 +605,7 @@ public static partial class WallDaylight
         // ★[v102.0 · 코드 검토 중간 2] 다듬기에 합성 높이 예산(1cm − 미리 맞춤 − 규칙 대조 − 한 점 한 높이)을 넘긴다 — 판정이 같은 길 중 예산을 지키는 쪽을 고른다
         // ★[v102.1 · JACK 0930 ③] 허용 위 끝 = 1.5cm − 나머지(넘은 오차가 전부 Civil이 반드시 합칠 쌍 곁일 때만 — CivilSafeMesh.Judge)
         double rest = R.PreSnapDz + R.RuleMax + R.ZOneMax + DebugRestAdd;
-        R.Zone = CivilSafeMesh.MakeZone(raw, fixedW.Values, out var cr, wallTol2: 1e-2 - rest, wallCap: CivilSafeMesh.ForcedCap - rest);
+        R.Zone = CivilSafeMesh.MakeZone(raw, fixedW.Values, out var cr, wallTol2: 1e-2 - rest, wallCap: CivilSafeMesh.ForcedCap - rest, borderSlide: true, microNeedle: true);
         R.Clean = cr;
         // ⑦-a ★[v103.2 · 계획 2-2] 뚜껑 — 다듬은 Zone 삼각형 가운데 무게중심이 G를 고른 조각 안인 것(다듬기가 조각 경계를 넘긴 양은 m4가 잰다)
         if (R.Zone != null)
@@ -660,7 +681,7 @@ public static partial class WallDaylight
         if (R.Fail.Length > 0) { tier = 3; why.Add(R.Fail); }
         R.Tier = tier;
         if (why.Count > 0) R.Fail = string.Join(" · ", why);
-        if (tier == 3) { R.Zone = null; R.CapTris = null; }
+        if (tier == 3) { R.FailedZone = R.Zone; R.Zone = null; R.CapTris = null; }
         return R;
     }
 

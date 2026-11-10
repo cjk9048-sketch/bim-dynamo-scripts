@@ -15,6 +15,8 @@ internal static class StructDraw
 {
     internal const string App = "DH_STRUCTDRAW";
     internal const string KindPlan = "PLAN", KindProf = "PROF", KindXsec = "XSEC";
+    /// <summary>★[v116.5 · JACK 1110] Civil 기본 투영용 도면 안 3D 솔리드(<see cref="StructSolids"/>) — 평면 · 종단 · 횡단 장 내용 아님(모형 객체).</summary>
+    internal const string KindSolid = "SOLID";
     /// <summary>★[D13 스위치] 구조물 바닥까지 뷰 표고 범위를 넓힌다(끄면 «잘림 n»만 남김 — JACK이 싫다 하면).</summary>
     internal static bool Widen = true;
     internal const double HatchGapMm = 2.0, JoinTol = 0.002, CloseEps = 0.005, BottomPad = 0.5;
@@ -35,6 +37,20 @@ internal static class StructDraw
                                    new TypedValue((int)DxfCode.ExtendedDataAsciiString, view),
                                    new TypedValue((int)DxfCode.ExtendedDataInteger32, id));
     }
+
+    internal static void TagSolid(Database db, Transaction tr, Entity e, int id, string key) => Tag(db, tr, e, KindSolid, key, id);
+
+    /// <summary>꼬리표가 맞는 우리 그림 — 자리 · 뷰 칸(<paramref name="pred"/>(종류, 뷰, 번호)).</summary>
+    internal static List<(ObjectId Id, string View)> FindTagged(Database db, Transaction tr, System.Func<string, string, int, bool> pred)
+    {
+        var o = new List<(ObjectId, string)>();
+        if (!((RegAppTable)tr.GetObject(db.RegAppTableId, OpenMode.ForRead)).Has(App)) return o;
+        var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
+        foreach (ObjectId id in ms)
+            try { if (tr.GetObject(id, OpenMode.ForRead) is Entity e && TagOf(e, out string k, out string v, out int sid) && pred(k, v, sid)) o.Add((id, v)); } catch { }
+        return o;
+    }
+    internal static ObjectId EnsureLayer(Database db, Transaction tr, string name, short aci) => Ensure(db, tr, name, aci);
 
     internal static bool TagOf(Entity e, out string kind, out string view, out int id)
     {
@@ -73,7 +89,7 @@ internal static class StructDraw
 
     /// <summary>부지 [종단도] · [횡단도] · 초기화가 지울 때 — 종단 · 횡단 그림만(평면은 안 지움 · 검토 M1) · 진입도로 표식은 건너뜀. <paramref name="kind"/> null = 둘 다.</summary>
     internal static int EraseSiteSheets(Database db, Transaction tr, string? kind)
-        => EraseTagged(db, tr, (k, _, _, road) => !road && k != KindPlan && (kind == null || k == kind));
+        => EraseTagged(db, tr, (k, _, _, road) => !road && k != KindPlan && k != KindSolid && (kind == null || k == kind));
 
     // ── 커튼 ─────────────────────────────
 
@@ -355,7 +371,7 @@ internal static class StructDraw
             c.TxtH = WallSectionDraw.LabelMm / 1000.0 * c.N;
             foreach (var L in all)
             {
-                if (StructImport.LooksChanged(db, tr, L.Rec, L.Btr)) Notes.Add($"⚠원본이 바뀜: {L.Rec.Name} — [구조물 다시 반영]");
+                if (StructImport.LooksChanged(db, tr, L.Rec, L.Btr)) Notes.Add($"⚠원본이 바뀜: {L.Rec.Name} — [구조물 불러오기]로 같은 파일을 다시 고르세요");
                 c.Id = L.Rec.Id;
                 var cut = StructSlice.Cut(L.Model, cur, new StructSlice.Window(a, b, z0, z1), JoinTol, CloseEps);
                 ClipU += cut.ClipU; ClipZ += cut.ClipZ;
@@ -535,21 +551,24 @@ internal static class StructDraw
     // ── 다시 반영 ─────────────────────────────
 
     /// <summary>★[계획 5.2 다시 반영] 바뀜 검사 · 다시 싣기(D10 — 명령 머리) → 다시 읽기에 성공한 구조물 것만 지움 → 평면 → 우리 종단뷰(부지 · 도로 장) · 횡단뷰(부지 · 도로) 모두. 알림 한 줄.</summary>
-    internal static string Reflect(Database db, System.Text.StringBuilder log, bool reload = true)
+    internal static string Reflect(Database db, System.Text.StringBuilder log)
     {
+        // ★[v116.9 · JACK 1110] [구조물 다시 반영] 없앰 — 지금은 [구조물 불러오기]만 부름(다시 싣기 없음 · 같은 파일 다시 고르기 = 바꿔치기)
         var missing = new HashSet<int>();
-        var msgs = reload ? StructImport.ReloadChanged(db, log, missing) : new List<string>();
+        var msgs = new List<string>();
         var all = StructImport.LoadAll(db, log, out var warn).Where(x => !missing.Contains(x.Rec.Id)).ToList();   // 원본 없음 = 지우지도 그리지도 않음
         msgs.AddRange(warn);
         if (all.Count == 0) return string.Join(" · ", msgs.DefaultIfEmpty("구조물 없음"));
         var ids = all.Select(x => x.Rec.Id).ToHashSet();
         var profs = new List<(ObjectId Id, double N, string Road)>(); var xsecs = new List<(ObjectId Id, double N, string Road)>();
-        int nPlan = 0;
+        int nPlan = 0, nSolid = 0, nSolidFail = 0;
         try
         {
             using var tr = db.TransactionManager.StartTransaction();
-            EraseTagged(db, tr, (_, _, id, _) => ids.Contains(id));
+            EraseTagged(db, tr, (k, _, id, _) => ids.Contains(id) && k != KindSolid);   // ★[v116.5 · 검토 H1] Civil 투영용 솔리드는 바뀐 것만 다시(핸들 유지 — Civil 투영이 물고 있음)
             foreach (var L in all) nPlan += DrawPlan(db, tr, L, log);
+            // ★[v116.5 · JACK 1110 «Civil 투영 기능에 맞추기»] Civil [객체를 횡단/종단 뷰에 투영]용 도면 안 3D 솔리드
+            foreach (var L in all) { try { var (mk, fl) = StructSolids.Draw(db, tr, L, log); nSolid += mk; nSolidFail += fl; } catch (System.Exception exS) { log.AppendLine("  [구조물] 솔리드 못 만듦 — " + exS.Message); } }
             TryLoadHead(db, tr, out var head);
             double site = Commands.SheetCommand.CurrentDrawingScale(db);
             var cdoc = Autodesk.Civil.ApplicationServices.CivilDocument.GetCivilDocument(db);
@@ -591,7 +610,8 @@ internal static class StructDraw
         finally { Skip.Clear(); }
         int parts = all.Sum(x => x.Model.Parts.Count(p => !p.Excluded)), open = all.Sum(x => x.Model.OpenParts);
         string names = string.Join(", ", all.Select(x => x.Rec.Name));
-        return $"{names} · 부재 {parts} · 평면 {nPlan} · 종단 {nP}장 · 횡단 {nX}장" + (ClipU + ClipZ > 0 ? $" · 잘림 측점 {ClipU} · 표고 {ClipZ}" : "") + (open > 0 ? $" · ⚠열린 {open}" : "") + (msgs.Count > 0 ? " · " + string.Join(" · ", msgs) : "");
+        return $"{names} · 부재 {parts} · 평면 {nPlan} · 종단 {nP}장 · 횡단 {nX}장"
+            + (nSolid > 0 ? $" · Civil 투영용 솔리드 {nSolid}(«{StructSolids.Layer}» — Civil [객체를 횡단/종단 뷰에 투영]에서 고르세요)" : "") + (nSolidFail > 0 ? $" · ⚠솔리드로 못 바꾼 메시 {nSolidFail}" : "") + (ClipU + ClipZ > 0 ? $" · 잘림 측점 {ClipU} · 표고 {ClipZ}" : "") + (open > 0 ? $" · ⚠열린 {open}" : "") + (msgs.Count > 0 ? " · " + string.Join(" · ", msgs) : "");
     }
 
     static void TryLoadHead(Database db, Transaction tr, out StructHead head)

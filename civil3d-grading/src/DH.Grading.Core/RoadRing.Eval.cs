@@ -140,6 +140,28 @@ public static partial class RoadRing
             return double.NaN;
         }
 
+        /// <summary>★[v116.5 · JACK 1110 «노리선이 이상하게»] 원천에서 멀어지는 거리 기울기(단위) — 변 발 = 그 변 바깥 법선 · 꼭짓점 · 이어 받는 원뿔 = 그 점에서 방사.
+        /// 사면 꺾임선(윗선 · 아랫선)은 원천 거리 d가 같은 줄이라 이 방향이 곧 꺾임선에 직각(곧은 길 = 횡단 · 볼록 모서리 = 부채). 모르면 (NaN, NaN).</summary>
+        public (double X, double Y) SourceGrad(int src, double x, double y)
+        {
+            if (src < 0) return (double.NaN, double.NaN);
+            if (src < _m) return (D.NX[src], D.NY[src]);
+            double cx, cy;
+            if (src < 2 * _m) { cx = _bx[src - _m]; cy = _by[src - _m]; }
+            else { int k = src - 2 * _m; if (k >= _relays.Count) return (double.NaN, double.NaN); cx = _relays[k].X; cy = _relays[k].Y; }
+            double dx = x - cx, dy = y - cy, r = Math.Sqrt(dx * dx + dy * dy);
+            return r < 1e-9 ? (double.NaN, double.NaN) : (dx / r, dy / r);
+        }
+
+        /// <summary>★[v116.6] 원천의 둘레 쪽(−1 좌 · +1 우 · 0 마구리) — 변 = 시작 점 쪽 · 꼭짓점 · 이어 받는 원뿔 = 그 꼭짓점 쪽.</summary>
+        public int SourceSide(int src)
+        {
+            if (src < 0) return 0;
+            if (src < _m) { int j = src, jn = (j + 1) % _m; return D.BSide[j] == D.BSide[jn] ? D.BSide[j] : 0; }
+            if (src < 2 * _m) return D.BSide[src - _m];
+            int k = src - 2 * _m; return k < _relays.Count ? D.BSide[_relays[k].V] : 0;
+        }
+
         /// <summary>a → b 선분이 도로 둘레와 처음 만나는 점(a 쪽에서) — 자리 · 변 · 변 위 비율.</summary>
         public bool FirstBoundaryHit(double ax, double ay, double bx, double by, out double hx, out double hy, out int seg, out double u)
             => _grid.FirstHit(ax, ay, bx, by, out hx, out hy, out seg, out u);
@@ -209,16 +231,17 @@ public static partial class RoadRing
                     double ex = x - rl.X, ey = y - rl.Y, rr = Math.Sqrt(ex * ex + ey * ey); if (rr > Reach || rr < 1e-9) continue;
                     if (rl.LoZMax - Pf.F(rl.AMin + rr) <= lo && rl.HiZMin + Pc.F(rl.AMin + rr) >= hi) continue;
                     double ux = ex / rr, uy = ey / rr;
-                    double bl = double.NegativeInfinity, bh = double.PositiveInfinity, gl = double.NaN, gh = double.NaN;
+                    double bl = double.NegativeInfinity, bh = double.PositiveInfinity, gl = double.NaN, gh = double.NaN, al = 0, ah = 0;
                     double Bend((double Z, double A, double Pen, double Sig, double DX, double DY) q)
                     { double c = q.DX * ux + q.DY * uy; if (c <= 0) return rr; double sn = Math.Sqrt(Math.Max(0, 1 - c * c)); return rr * sn; }
-                    foreach (var q in rl.Lo) { double v = q.Z - Pf.F(q.A + rr) - q.Pen - Mu * Bend(q); if (v > bl) { bl = v; gl = q.Sig; } }
-                    foreach (var q in rl.Hi) { double v = q.Z + Pc.F(q.A + rr) + q.Pen + Mu * Bend(q); if (v < bh) { bh = v; gh = q.Sig; } }
+                    foreach (var q in rl.Lo) { double v = q.Z - Pf.F(q.A + rr) - q.Pen - Mu * Bend(q); if (v > bl) { bl = v; gl = q.Sig; al = q.A; } }
+                    foreach (var q in rl.Hi) { double v = q.Z + Pc.F(q.A + rr) + q.Pen + Mu * Bend(q); if (v < bh) { bh = v; gh = q.Sig; ah = q.A; } }
                     if (bl <= lo && bh >= hi) continue;
                     if (Blocked(rl.X, rl.Y, x, y, -1, rl.V)) continue;
                     Interlocked.Increment(ref RelayUses);
-                    if (bl > lo) { lo = bl; wl = new Win { V = bl, Src = 2 * _m + k, Sigma = gl, Dist = rr }; }
-                    if (bh < hi) { hi = bh; wh = new Win { V = bh, Src = 2 * _m + k, Sigma = gh, Dist = rr }; }
+                    // ★[v116.6] 이어 받는 원뿔의 거리 = 측지 거리(원천 → 꼭짓점 A + 꼭짓점 → 점 rr) — 단면 F가 쓰는 그 거리(변 · 꼭짓점과 같은 뜻 · 단 높이 · 소단 띠가 씀)
+                    if (bl > lo) { lo = bl; wl = new Win { V = bl, Src = 2 * _m + k, Sigma = gl, Dist = al + rr }; }
+                    if (bh < hi) { hi = bh; wh = new Win { V = bh, Src = 2 * _m + k, Sigma = gh, Dist = ah + rr }; }
                 }
             }
             pt.Lo = lo; pt.Hi = hi; pt.WLo = wl; pt.WHi = wh;

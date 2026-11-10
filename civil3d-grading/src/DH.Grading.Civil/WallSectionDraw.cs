@@ -55,6 +55,9 @@ internal static class WallSectionDraw
         return L;
     }
 
+    /// <summary>★[v116.8 · JACK 1110 포장 종류] 횡단 포장층 구분선(CALS □C-PAVE-BORD · 색 1) — 층 윤곽 · 해치(결정 D6).</summary>
+    internal static ObjectId PaveLayer(Database db, Transaction tr) => Ensure(db, tr, "CC-PAVE-BORD", 1, null, out _, out _);
+
     /// <summary>종단 □R — «신규 구조물 파선» 칸이 없어 비구조물도 CR-STRU-NEWC에 개체 선종류 파선(계획 1 · 내 판단) · 버림도 같은 레이어(□R에 린 칸 없음).</summary>
     internal static Layers ProfLayers(Database db, Transaction tr, (string? Lt, double Lts) dash)
     {

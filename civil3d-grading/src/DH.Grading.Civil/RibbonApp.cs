@@ -51,7 +51,7 @@ using AcadApp = Autodesk.AutoCAD.ApplicationServices.Application;
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.SheetBookCommand))]          // ★[v112.0] DHSHEETBOOK(도킹창 «도면화») · DHSHEETMAKE([작성하기] — 배치탭 · 도곽 · 표제란)
 [assembly: CommandClass(typeof(DH.Grading.Civil.Commands.ProfileFlipCommand))]        // ★[v113.1] DHPROFILEREV · DHROADREV(종단 시점 ↔ 종점 바꾸기)
 [assembly: CommandClass(typeof(DH.Grading.Civil.UndoGuard))]                          // ★[v114.2] DHUNDOCLR(명령 뒤 되돌리기 기록 비움 — Civil 결함 회피)
-[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.StructCommand))]             // ★[v115 · JACK 1105] DHSTRUCT · DHSTRUCTUPD · DHSTRUCTOFF(Revit 구조물)
+[assembly: CommandClass(typeof(DH.Grading.Civil.Commands.StructCommand))]             // ★[v115 · JACK 1105] DHSTRUCT · DHSTRUCTPTS(v116.9 좌표계 내보내기) · DHSTRUCTOFF(Revit 구조물)
 
 namespace DH.Grading.Civil;
 
@@ -963,7 +963,7 @@ public sealed class RibbonApp : IExtensionApplication
             pMisc.Items.Add(Spacer());
             pMisc.Items.Add(splitParcel);
             pMisc.Items.Add(Spacer());
-            // ★★[v115 · JACK 1105 «Revit 구조물을 투영하는 기능을 [기타]에»] [구조물] 스플릿 — 불러오기 · 다시 반영 · 지우기
+            // ★★[v115 · JACK 1105 «Revit 구조물을 투영하는 기능을 [기타]에»] [구조물] 스플릿 — 불러오기 · 좌표계 내보내기(v116.9) · 지우기
             var splitStruct = new RibbonSplitButton
             {
                 Text = "구조물", ShowText = true, ShowImage = true, LargeImage = MakeGlyph("구조물"), Image = MakeGlyph("구조물"),
@@ -972,10 +972,11 @@ public sealed class RibbonApp : IExtensionApplication
                 ToolTip = MakeTip("구조물", "Revit 3D DWG(공유 좌표)를 xref로 붙이고\n평면 외곽 · 종단 · 횡단에 자른 면을 넣습니다.", null),
             };
             var btnStructIn = MakeButton("구조물\n불러오기", "DHSTRUCT ", "Revit 3D DWG 불러오기", "구조물");
-            var btnStructUpd = MakeButton("구조물\n다시 반영", "DHSTRUCTUPD ", "원본이 바뀌었거나 xref를 옮겼으면 다시 그립니다", "구조물");
+            // ★[v116.9 · JACK 1110 «구조물 좌표계 내보내기 단추 만들고 다시 반영은 없애»] 원본이 바뀌면 [구조물 불러오기]로 같은 파일을 다시 고름(같은 경로 = 바꿔치기)
+            var btnStructPts = MakeButton("구조물\n좌표계 내보내기", "DHSTRUCTPTS ", "두 점을 찍어 Revit 애드인이 읽는 기준점 파일(JSON · m · WCS)로 저장합니다", "구조물");
             var btnStructOff = MakeButton("구조물\n지우기", "DHSTRUCTOFF ", "그린 것 · xref · 기록을 지웁니다(원본 파일은 그대로)", "구조물");
             splitStruct.Items.Add(btnStructIn);
-            splitStruct.Items.Add(btnStructUpd);
+            splitStruct.Items.Add(btnStructPts);
             splitStruct.Items.Add(btnStructOff);
             splitStruct.Current = btnStructIn;
             pMisc.Items.Add(splitStruct);

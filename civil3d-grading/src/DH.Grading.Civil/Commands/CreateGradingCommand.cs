@@ -193,7 +193,8 @@ public sealed class CreateGradingCommand
         string stage3Prev = _stage3Warn; _stage3Warn = "";
         string blendPrev = _blendWarn; _blendWarn = "";
         var undoPrev = _appendUndo; _appendUndo = null;
-        try { DoGradeInner(doc, planPolyId, groundId, mode); }
+        bool gradeOk = false;   // ★[v116.10] 끝까지 돌았나 — 예외로 빠질 때는 종단을 다시 그리지 않는다(알림만)
+        try { DoGradeInner(doc, planPolyId, groundId, mode); gradeOk = true; }
         catch (System.Exception ex) { job.Done(false, $"예외 — {ex.GetType().Name}: {ex.Message}"); throw; }
         finally
         {
@@ -203,8 +204,13 @@ public sealed class CreateGradingCommand
             _appendUndo = undoPrev;
             _job = jobPrev; _issuesBefore = issuesPrev; _stage3Warn = stage3Prev; _blendWarn = blendPrev;
             // ★[v103.2 · 계획 2-6] 그려 둔 종단 · 횡단이 옛 면 기준이면 한 줄 — 옹벽 합성을 줄 세웠으면 그 끝에서 한 번(낮음 1)
+            //   ★★[v116.10 · JACK 1110 «부지를 고쳐도 종단이 업데이트가 안 돼» · 인터뷰 «자동으로 그 자리에»] 알림 대신 그려 둔 종단(· 횡단)을 같은 자리에 다시 그린다
             if (!string.Equals(GradingSettings.AutoCompDoc, doc.Name, System.StringComparison.OrdinalIgnoreCase))
-                PureWithWallsBuilder.NotifyStale(doc);
+            {
+                // ★[설치 전 검토 중간] 예외가 없어도 «아니오»로 멈췄거나(아무것도 안 바뀜 약속) 자체 판정이 실패한 판이면 다시 그리지 않는다(알림만)
+                if (gradeOk && GradingSettings.LastGradeOk && !GradingSettings.LastGradeDeclined) SiteSheetsRefresh.Run(doc, "계획부지 생성");
+                else PureWithWallsBuilder.NotifyStale(doc);
+            }
         }
     }
 

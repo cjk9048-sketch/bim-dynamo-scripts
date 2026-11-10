@@ -58,13 +58,57 @@ public static class RoadMarks
         return res;
     }
 
-    /// <summary>양쪽 차선 띠를 한 묶음으로 — <see cref="LaneLines"/> → 쪽마다 <see cref="Ribbon"/>.</summary>
+    /// <summary>양쪽 차선 띠를 한 묶음으로 — <see cref="LaneLines"/> → 쪽마다 <see cref="Ribbon"/>.
+    /// <paramref name="centerSpans"/>가 있으면 차로 가운데 흰 점선(<see cref="CenterDashes"/>)도 더한다.</summary>
     public static RibbonResult Lanes(IReadOnlyList<double> stations, Func<double, double, (double X, double Y)?> pointAt, Func<double, (double L, double R)> halfAt,
-        Func<double, double, double?> zAt, double inset = Inset, double width = Width, double lift = Lift, double minRadius = MinRadius)
+        Func<double, double, double?> zAt, double inset = Inset, double width = Width, double lift = Lift, double minRadius = MinRadius,
+        IReadOnlyList<(double A, double B)>? centerSpans = null)
     {
         var all = new RibbonResult();
         foreach (var (_, outer, inner, center) in LaneLines(stations, pointAt, halfAt, inset, width))
             all.Append(Ribbon(outer, inner, zAt, lift, minRadius, center));
+        if (centerSpans != null) all.Append(CenterDashes(centerSpans, pointAt, halfAt, zAt, lift: lift, minRadius: minRadius));
+        return all;
+    }
+
+    /// <summary>★[v116.5 · JACK 1110 «차로는 중간에 흰색 점선 차선»] 가운데 점선 — 칠 길이 · 빈 길이 · 폭(m). 일반도로에서 흔히 쓰는 3 m · 5 m · 0.15 m.</summary>
+    public const double DashLen = 3.0, DashGap = 5.0, CenterWidth = 0.15;
+
+    /// <summary>차로 가운데(좌 · 우 차로 끝의 한가운데 — 비대칭이면 (우 − 좌)/2 오프셋) 흰 점선 띠 — 도로 구간마다 구간 시작에서 칠 <paramref name="dash"/> · 빈 <paramref name="gap"/> 되풀이.
+    /// 칠 토막마다 측점 <paramref name="step"/>마다 + 토막 끝 · 높이 = 지형 + <paramref name="lift"/> · 토막마다 <see cref="Ribbon"/>(버림 까닭도 같음).
+    /// 그 측점 차로 전체 폭이 양쪽 차선(끝 안 inset + width)과 점선 폭을 다 담지 못하면 그 측점은 자리 없음. 결과 줄 수 = 칸을 하나라도 남긴 가운데 선 1.</summary>
+    public static RibbonResult CenterDashes(IReadOnlyList<(double A, double B)> spans, Func<double, double, (double X, double Y)?> pointAt, Func<double, (double L, double R)> halfAt,
+        Func<double, double, double?> zAt, double dash = DashLen, double gap = DashGap, double width = CenterWidth, double lift = Lift, double minRadius = MinRadius, double step = 0.5)
+    {
+        var all = new RibbonResult();
+        double period = dash + gap;
+        if (!(dash > 0) || !(period > 0) || !(width > 0)) return all;
+        foreach (var (A, B) in spans)
+        {
+            if (!(B > A)) continue;
+            for (int k = 0; ; k++)
+            {
+                double s0 = A + k * period; if (s0 >= B - 1e-6) break;
+                double s1 = Math.Min(s0 + dash, B);
+                if (s1 - s0 < 0.5) continue;   // 구간 끝 0.5 m 아래 자투리는 안 칠함
+                var st = new List<double>();
+                for (int j = 0; s0 + j * step < s1 - 1e-6; j++) st.Add(s0 + j * step);
+                st.Add(s1);
+                var a = new List<(double X, double Y)>(st.Count); var b = new List<(double X, double Y)>(st.Count); var c = new List<(double X, double Y)>(st.Count);
+                foreach (double s in st)
+                {
+                    var (hl, hr) = halfAt(s);
+                    double oc = (hr - hl) / 2;
+                    bool room = hl + hr - 2 * (Inset + Width) > width + 1e-9;
+                    var pa = room ? pointAt(s, oc - width / 2) : null; var pb = room ? pointAt(s, oc + width / 2) : null; var pc = pointAt(s, 0);
+                    a.Add(pa ?? (double.NaN, double.NaN)); b.Add(pb ?? (double.NaN, double.NaN)); c.Add(pc ?? (double.NaN, double.NaN));
+                }
+                var r = Ribbon(a, b, zAt, lift, minRadius, c);
+                r.Lines = 0;
+                all.Append(r);
+            }
+        }
+        all.Lines = all.Kept > 0 ? 1 : 0;
         return all;
     }
 

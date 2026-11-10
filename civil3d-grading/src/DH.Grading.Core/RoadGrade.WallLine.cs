@@ -32,7 +32,8 @@ public static partial class RoadGrade
         /// <summary>쉼(관문 흉내 · Civil 거절 · 칸 면 · 스위치) — 거절(판정 · 짓기 실패)과 따로.</summary>
         public bool Rest;
         public BoundaryCut.Result? Cut; public WallByLine.Built? Built;
-        public RoadBench? BenchC, BenchF;
+        /// <summary>단 표 — 옛 엔진 면 = <see cref="RoadBench"/>(광선) · ★[v116.6] 고리 면 = <see cref="RoadRing.RingBench"/>(셈 E2).</summary>
+        public WallByLine.BenchLevels? BenchC, BenchF;
         public double FootMax; public (double X, double Y) FootAt;
         /// <summary>합성 뒤 뺀 R_out∖Zone 세모 · F를 건넌 세모(0이어야) · 관문 흉내(바늘 · 0.1 mm 변 · 세 세모 변) · 다듬기 한 번 더 했나.</summary>
         public int Removed, Straddle, Thin, GapE, NonManifold, Pairs; public bool ReCleaned;
@@ -41,7 +42,7 @@ public static partial class RoadGrade
         /// <summary>이 벽이 남긴 바꿀 자리 세모(격자 · 하네스).</summary>
         public List<Tri> ZoneTris = new();
         public string Text => Ok
-            ? string.Format(CultureInfo.InvariantCulture, "선 옹벽 {0} — {1} · {2} · 선 {3:F1} m · 선 바깥 최대 {4:F2} m{5}", No, Side < 0 ? "좌" : "우",
+            ? string.Format(CultureInfo.InvariantCulture, "선 옹벽 {0} — {1} · {2} · 선 {3:F1} m · 선 바깥 최대 {4:F2} m{5}", No, Side < 0 ? "좌" : Side > 0 ? "우" : "끝",
                 Built == null ? "" : string.Join("+", new[] { Built.HasFill ? "성토" : "", Built.HasCut ? "절토" : "" }.Where(s => s.Length > 0)), Built?.LineLen ?? 0, FootMax,
                 Built != null && Built.Warn.Count > 0 ? " · ⚠" + string.Join(" · ⚠", Built.Warn) : "")
             : $"⚠선 옹벽 {No} {(Rest ? "쉼" : "못 지음")} — {Why}";
@@ -101,31 +102,42 @@ public static partial class RoadGrade
     /// <para>벽마다: 판정(지금 경계 = 앞 벽 F로 고친 발자국 · 앞 Zone은 막을 다각형) → 쪽(L 표본의 주인 광선 쪽 — 갈리거나 끝 마구리면 거절) → 주인 광선 거절(가장자리 옹벽 · 벽 면 단면 · 끝면 띠) →
     /// 단 표(<see cref="RoadBench"/> — 그 시도 면의 광선) → 짓기 → 합성(L 테두리만 턱 관문) → R_out∖Zone 빼기 → 관문 흉내(바늘 · 0.1 mm 변 · 세 세모 변) ≠ 0이면 다듬기 한 번 더 → 그래도면 그 벽만 쉼.</para>
     /// <para><paramref name="rest"/>의 번호는 쉰다(Civil 거절 뒤 같은 P0로 한 번 더 — 도로 길은 그대로). 아무것도 안 바꾼다(r · p0 읽기만).</para></summary>
+    /// <param name="ring">★★[v116.6 · JACK 1110 «어디든 폴리선을 그으면 작성이 되어야» · 계획 `2026-11-10_진입도로_옹벽2단계_고리면.md`] 고리 면 P0이면 그 꾸러미 —
+    /// 단 표 = <see cref="RoadRing.RingBench"/>(면을 만든 셈) · 쪽은 막지 않음(원천마다 단 높이 · 끝 마구리 둘레도) · 주인 광선 거절 · 단면 광선 검사 없음(고리 도로엔 벽 · 광선이 없다).
+    /// null = 옛 엔진 면(비트 그대로).</param>
     public static WallSurface ApplyWalls(Input inp, Result r, List<Tri> p0, List<TierLine> lines, string path, IReadOnlyList<LineWall> walls,
-        IEnumerable<(string Name, IReadOnlyList<Point3> Ring)>? blockers = null, ISet<int>? rest = null, double faceRun = 0.005)
+        IEnumerable<(string Name, IReadOnlyList<Point3> Ring)>? blockers = null, ISet<int>? rest = null, double faceRun = 0.005, RoadRing.Built? ring = null)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var ws = new WallSurface { Tris = p0, Lines = lines, DaylightZ = r.DaylightZ, Path = path };
         if (walls == null || walls.Count == 0) return ws;
         string allRest = WallOff || WallByLine.Off ? "선 옹벽 스위치가 꺼짐(WallLineOff)"
                        : path.StartsWith("칸", StringComparison.Ordinal) || path.StartsWith("⚠", StringComparison.Ordinal) ? "칸 면 위에는 선 옹벽 안 지음 — 선 면 · 선 따라 TIN을 Civil이 거절"
-                       : r.Error.Length > 0 ? "도로 계산 실패" : r.Sections == null || r.Eval == null ? "단면 광선이 없습니다(선 면 · 선 따라 TIN이 아님)"
-                       : inp.Base is not IGroundTris ? "바탕 세모를 못 읽습니다(가지 바탕 위 선 옹벽은 이번 판에 안 지음)" : "";
+                       : r.Error.Length > 0 ? "도로 계산 실패"
+                       : inp.Base is not IGroundTris ? "바탕 세모를 못 읽습니다(가지 바탕 위 선 옹벽은 이번 판에 안 지음)"   // ★[v116.7 · 검토 M] 두 엔진 다
+                       : ring != null ? (ring.Ev == null ? "고리 면 셈이 없습니다" : "")
+                       : r.Sections == null || r.Eval == null ? "단면 광선이 없습니다(선 면 · 선 따라 TIN이 아님)" : "";
         var gtr = inp.Base as IGroundTris;
         var cur = p0;
         var bl0 = blockers?.ToList() ?? new List<(string, IReadOnlyList<Point3>)>();
         var prevZones = new List<(string, IReadOnlyList<Point3>)>();
-        var benchCache = new Dictionary<(int, bool), RoadBench>();
-        RoadBench Bench(int side, bool up) => benchCache.TryGetValue((side, up), out var b) ? b : benchCache[(side, up)] = RoadBench.Of(r.Sections!, r, inp, side, up);
+        var benchCache = new Dictionary<(int, bool), WallByLine.BenchLevels>();
+        WallByLine.BenchLevels Bench(int side, bool up)
+        {
+            var key = ring != null ? (0, up) : (side, up);
+            if (benchCache.TryGetValue(key, out var b)) return b;
+            return benchCache[key] = ring != null ? new RoadRing.RingBench(ring, up ? inp.Cut : inp.Fill, up) : RoadBench.Of(r.Sections!, r, inp, side, up);
+        }
         foreach (var w in walls)
         {
             var st = new WallState { No = w.No };
             ws.Walls.Add(st);
+            if (ring != null) benchCache.Clear();   // ★[v116.7 · 검토 L] 고리 단 표는 벽마다 새로(셈 · 로그가 앞 벽 것과 안 섞이게 — 만들기 싸다)
             var swW = System.Diagnostics.Stopwatch.StartNew();
             if (allRest.Length > 0) { st.Rest = true; st.Why = allRest; continue; }
             if (rest != null && rest.Contains(w.No)) { st.Rest = true; st.Why = "Civil이 벽 든 면을 거절해 이 시도에서 쉼"; continue; }
             if (w.SrcX == null || w.SrcY == null || w.SrcX.Length < 2 || w.SrcX.Length != w.SrcY.Length) { st.Why = "그린 선이 없습니다"; continue; }
-            try { Make1(inp, r, ref cur, w, st, gtr!, bl0, prevZones, Bench, faceRun); }
+            try { Make1(inp, r, ref cur, w, st, gtr!, bl0, prevZones, Bench, faceRun, ring != null); }
             catch (Exception ex) { st.Ok = false; st.Code = "예외"; st.Why = "짓다 예외 — " + Why(ex); }
             st.Ms = swW.ElapsedMilliseconds;
             if (st.Ok && st.Built != null)
@@ -153,7 +165,7 @@ public static partial class RoadGrade
     }
 
     static void Make1(Input inp, Result r, ref List<Tri> cur, LineWall w, WallState st, IGroundTris gtr, List<(string, IReadOnlyList<Point3>)> bl0,
-        List<(string, IReadOnlyList<Point3>)> prevZones, Func<int, bool, RoadBench> bench, double faceRun)
+        List<(string, IReadOnlyList<Point3>)> prevZones, Func<int, bool, WallByLine.BenchLevels> bench, double faceRun, bool ringP0 = false)
     {
         var ci = CultureInfo.InvariantCulture;
         var log = new System.Text.StringBuilder();
@@ -174,7 +186,22 @@ public static partial class RoadGrade
         }
         lPts.Add((cut.Line[^1].X, cut.Line[^1].Y));
         int nL = 0, nR = 0, nBoth = 0, nNone = 0; (double, double)? noneAt = null, bothAt = null;
-        var bLc = bench(-1, true); var bRc = bench(1, true);
+        if (ringP0)
+        {
+            // ★[v116.6] 고리 면 — 단 높이는 점마다 이긴 원천에서(쪽 · 끝 마구리 상관없음) · 쪽은 표시 · 기록용(많은 쪽 · 마구리만이면 0)
+            var gc = (RoadRing.RingBench)bench(0, true); var gfl = (RoadRing.RingBench)bench(0, false);
+            foreach (var (x, y) in lPts)
+            {
+                int sd = gc.SideAt(x, y); if (sd == 0) sd = gfl.SideAt(x, y);
+                if (sd < 0) nL++; else if (sd > 0) nR++; else nNone++;
+            }
+            log.Append(string.Format(ci, "  ⓪ 쪽(고리 면 · 막지 않음) — L 표본 {0} · 좌 {1} · 우 {2} · 마구리 · 원천 없음 {3}\n", lPts.Count, nL, nR, nNone));
+            st.Side = nR > nL ? 1 : -1;   // ★[v116.7 · 검토 L] 표시 · 기록용(0이면 [옹벽→사면] 고르기에서 빠짐) — 마구리만이면 좌
+            st.BenchC = gc; st.BenchF = gfl;
+        }
+        else
+        {
+        var bLc = (RoadBench)bench(-1, true); var bRc = (RoadBench)bench(1, true);
         foreach (var (x, y) in lPts)
         {
             bool a = bLc.OwnBand(x, y).I >= 0, b = bRc.OwnBand(x, y).I >= 0;
@@ -186,14 +213,14 @@ public static partial class RoadGrade
         { st.Code = "끝 마구리"; st.Why = string.Format(ci, "선이 도로 끝 마구리 · 끝면 곁을 지납니다(주인 광선 없음 {0}/{1}) — 옆 사면에만 그리세요", nNone + nBoth, lPts.Count); Mark(cut, st, noneAt ?? bothAt); return; }
         int side = nL > 0 ? -1 : 1;
         st.Side = side;
-        var bc = bench(side, true); var bf = bench(side, false);
-        st.BenchC = bc; st.BenchF = bf;
+        var bc0 = (RoadBench)bench(side, true);
+        st.BenchC = bc0; st.BenchF = bench(side, false);
         // 주인 광선 거절 — 가장자리 옹벽 · [사면→옹벽] 벽 면 · 끝면 띠(기본 단면 아님) · 끝 마구리
         foreach (var (x, y) in lPts)
         {
-            var bb = bc.OwnBand(x, y);
+            var bb = bc0.OwnBand(x, y);
             if (bb.I < 0) continue;
-            var rays = bc.RaysOf(bb.I);
+            var rays = bc0.RaysOf(bb.I);
             if (rays == null) continue;
             foreach (var q in new[] { rays.Value.A, rays.Value.B })
             {
@@ -203,6 +230,8 @@ public static partial class RoadGrade
                 if (bad.Length > 0) { st.Code = "주인 광선"; st.Why = $"선이 {bad} 구간을 지납니다 — 그 구간은 [옹벽→사면]으로 되돌린 뒤 그리세요"; Mark(cut, st, (x, y)); return; }
             }
         }
+        }
+        var bc = st.BenchC!; var bf = st.BenchF!;
         // 짓기 — P0 = 이 시도 세모(밖은 바탕 — 넓은 소단 · 끝 띠가 도로 면 끝을 넘는 자리) · 원지반 = 바탕 세모
         double reach = Math.Max(5, double.IsFinite(w.Reach) ? w.Reach : 40);
         double mnx = cut.CutRing.Min(q => q.X) - reach - 5, mny = cut.CutRing.Min(q => q.Y) - reach - 5, mxx = cut.CutRing.Max(q => q.X) + reach + 5, mxy = cut.CutRing.Max(q => q.Y) + reach + 5;
@@ -430,7 +459,7 @@ public static partial class RoadGrade
             for (int i = 0; i < g.NumGeometries; i++)
             {
                 if (g.GetGeometryN(i) is not LineString ls || ls.Length < 1e-3) continue;
-                var nt = new TierLine { Cut = tl.Cut, Side = tl.Side, K = tl.K, Role = tl.Role, Prof = tl.Prof, Cross = tl.Cross };
+                var nt = new TierLine { Cut = tl.Cut, Side = tl.Side, K = tl.K, Role = tl.Role, Prof = tl.Prof, Cross = tl.Cross, DisplayOnly = tl.DisplayOnly };
                 foreach (var c in ls.Coordinates) { var (z, s) = AlongZS(tl.Pts, c.X, c.Y); nt.Pts.Add((c.X, c.Y, z, s)); }
                 o.Add(nt);
             }
@@ -443,7 +472,7 @@ public static partial class RoadGrade
             {
                 if (f.Top.Count < 2) continue;
                 var nt = new TierLine { Cut = f.Up, Side = w.Side, K = Math.Max(0, f.Tier - 1), Role = LineRole.Wall, Prof = 0, Cross = f.Kind == 1, WallNo = w.No };
-                foreach (var q in f.Top) nt.Pts.Add((q.X, q.Y, q.Z, b?.Band(q.X, q.Y).S ?? double.NaN));
+                foreach (var q in f.Top) nt.Pts.Add((q.X, q.Y, q.Z, b switch { RoadBench rb => rb.Band(q.X, q.Y).S, RoadRing.RingBench gb => gb.StationAt(q.X, q.Y), _ => double.NaN }));
                 o.Add(nt);
             }
         }

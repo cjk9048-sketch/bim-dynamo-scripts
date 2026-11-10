@@ -76,6 +76,23 @@ internal sealed class RoadDesign
     public int DitchKind = 1;
     public double[] DitchU = UArr(new DitchSection.UDims()), DitchL = LArr(new DitchSection.LDims());
 
+    /// <summary>★[v116.8 · JACK 1110 «도로 설정에 포장 — 아스팔트 · 콘크리트»] 포장 종류(0 아스팔트 · 1 콘크리트) · 층 두께(m · 예시 값 — 표준 아님) · 3D 가로 줄눈 간격(m).
+    /// 표시만(횡단 층 · 3D 질감) — 도로 면 지문(<see cref="RoadSession"/> SigOf)에 안 넣음(JACK 결정 3 · 바꿔도 면 다시 안 만듦). 옛 기록 = 칸 없음 = 첫 값(아스팔트).</summary>
+    public int PaveKind = 0;
+    public double[] PaveA = (double[])RoadPave.DefaultA.Clone();
+    public double[] PaveC = (double[])RoadPave.DefaultC.Clone();
+    public double JointGap = RoadPave.DefaultJointGap;
+    internal RoadPave.Kind PaveK => PaveKind == 1 ? RoadPave.Kind.Concrete : RoadPave.Kind.Asphalt;
+    /// <summary>횡단 도장 토큰(<see cref="RoadPave.Key"/>).</summary>
+    internal string PaveKey => RoadPave.Key(PaveK, PaveA, PaveC);
+    /// <summary>읽은 값 바로잡기 — 종류 0/1 · 배열 길이 · 유한 · 범위(깨지면 첫 값) · 줄눈 2 ~ 20 m.</summary>
+    internal void FixPave()
+    {
+        if (PaveKind is not (0 or 1)) PaveKind = 0;
+        PaveA = RoadPave.Clean(PaveA, RoadPave.DefaultA); PaveC = RoadPave.Clean(PaveC, RoadPave.DefaultC);
+        if (!(double.IsFinite(JointGap) && JointGap >= 2 && JointGap <= 20)) JointGap = RoadPave.DefaultJointGap;
+    }
+
     internal static double[] UArr(DitchSection.UDims u) => new[] { u.B, u.H, u.Tw, u.Tb, u.Tf, u.Pf, u.Sw, u.Sd, u.Lid ? 1 : 0 };
     internal static double[] LArr(DitchSection.LDims l) => new[] { l.Wg, l.Sg, l.Wc, l.Hc, l.Reveal, l.Tb, l.Wb, l.Hb, l.Te };
     internal static DitchSection.UDims UOf(IReadOnlyList<double> a, int o = 0) => a.Count >= o + 9
@@ -135,6 +152,9 @@ internal sealed class RoadDesign
         HalfL = t.HalfL; HalfR = t.HalfR; CrossSlope = t.CrossSlope; ShoulderL = t.ShoulderL; ShoulderR = t.ShoulderR; ShoulderSlope = t.ShoulderSlope;
         CutSlope = t.CutSlope; CutBenchH = t.CutBenchH; CutBenchW = t.CutBenchW; FillSlope = t.FillSlope; FillBenchH = t.FillBenchH; FillBenchW = t.FillBenchW;
         MaxGrade = t.MaxGrade; MinPviLen = t.MinPviLen; CurveR = t.CurveR;
+        // ★[v116.8] 포장도 물려받음(배열은 사본 — 새 도로 · 창 초안 · 열린 도로가 같은 배열을 나눠 쓰지 않게)
+        PaveKind = t.PaveKind; PaveA = (double[])t.PaveA.Clone(); PaveC = (double[])t.PaveC.Clone(); JointGap = t.JointGap;
+        FixPave();
     }
 
     /// <summary>★[v113.3 · JACK 1105 «도면에 마지막 값 저장»] 새 도로 창의 첫 값 = 이 도면에서 마지막으로 만든 진입도로(핸들이 가장 큰 설계 기록)의 모양 값 · 없으면 기본값(곡선 반경은 이번 세션 값).</summary>
@@ -315,6 +335,7 @@ internal sealed class RoadDesign
             // ★[v111.7.2 · JACK 1102 «모두 15 %»] 옛 기본값 12 %(정확히 0.12)만 15 %로 — 사람이 친 다른 값은 그대로 · 한도만(종단은 그대로)
             //   ★[v111.7.2 검토 중간 1] 한 번만 — GradeVer 칸이 없는 옛 기록(v111.7.1 이전)만 옮긴다. 다음 저장 때 GradeVer = 1로 써서 그 뒤 사람이 고른 12 %는 그대로 남는다
             if (d != null && !sb.ToString().Contains("\"GradeVer\"", StringComparison.Ordinal) && Math.Abs(d.MaxGrade - OldMaxGrade) < 1e-12) d.MaxGrade = 0.15;
+            d?.FixPave();   // ★[v116.8] 포장 칸 바로잡기(옛 기록 = 칸 없음 = 첫 값 · 깨진 배열 · 짧은 배열)
             return d;
         }
         catch { return null; }
